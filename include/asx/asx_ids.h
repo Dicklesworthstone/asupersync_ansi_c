@@ -90,6 +90,31 @@ static inline int asx_handle_state_allowed(uint64_t h, uint16_t allowed_mask)
     return (asx_handle_state_mask(h) & allowed_mask) != 0;
 }
 
+/*
+ * Generation-safe handle decomposition.
+ *
+ * The 32-bit index field is a composite: [generation:16 | slot_index:16].
+ * This enables stale-handle detection: when a slot is recycled, its
+ * generation counter increments. Old handles carry the old generation
+ * and will fail validation against the new slot generation.
+ */
+static inline uint16_t asx_handle_slot(uint64_t h)
+{
+    return (uint16_t)(h & 0xFFFF);
+}
+
+static inline uint16_t asx_handle_generation(uint64_t h)
+{
+    return (uint16_t)((h >> 16) & 0xFFFF);
+}
+
+/* Pack a composite index from generation + slot index */
+static inline uint32_t asx_handle_pack_index(uint16_t generation,
+                                              uint16_t slot_index)
+{
+    return ((uint32_t)generation << 16) | (uint32_t)slot_index;
+}
+
 /* ------------------------------------------------------------------ */
 /* Time representation                                                */
 /* ------------------------------------------------------------------ */

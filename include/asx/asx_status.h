@@ -11,7 +11,9 @@
 #ifndef ASX_STATUS_H
 #define ASX_STATUS_H
 
+#include <stdint.h>
 #include <asx/asx_export.h>
+#include <asx/asx_ids.h>
 
 typedef enum {
     /* Success */
@@ -89,11 +91,92 @@ typedef enum {
 } asx_status;
 
 /* Returns a human-readable string for a status code. Never returns NULL. */
-ASX_API const char *asx_status_str(asx_status s);
+ASX_API ASX_MUST_USE const char *asx_status_str(asx_status s);
 
 /* Returns nonzero if the status represents an error. */
 static inline int asx_is_error(asx_status s) {
     return s != ASX_OK;
 }
+
+/* ------------------------------------------------------------------ */
+/* Deterministic task-local error ledger (zero-allocation)            */
+/* ------------------------------------------------------------------ */
+
+#define ASX_ERROR_LEDGER_DEPTH      16u
+#define ASX_ERROR_LEDGER_TASK_SLOTS 64u
+
+typedef struct asx_error_ledger_entry {
+    asx_task_id task_id;
+    asx_status  status;
+    const char *operation;
+    const char *file;
+    uint32_t    line;
+    uint32_t    sequence;
+} asx_error_ledger_entry;
+
+/* Reset all ledger state. Primarily for tests and deterministic replay setup. */
+ASX_API void asx_error_ledger_reset(void);
+
+/* Bind the implicit task context used by ASX_TRY(). */
+ASX_API void asx_error_ledger_bind_task(asx_task_id task_id);
+
+/* Return the currently bound task id (ASX_INVALID_ID if unbound). */
+ASX_API ASX_MUST_USE asx_task_id asx_error_ledger_bound_task(void);
+
+/* Record an error under the currently bound task context. */
+ASX_API void asx_error_ledger_record_current(asx_status status,
+                                             const char *operation,
+                                             const char *file,
+                                             uint32_t line);
+
+/* Record an error for an explicit task id. */
+ASX_API void asx_error_ledger_record_for_task(asx_task_id task_id,
+                                              asx_status status,
+                                              const char *operation,
+                                              const char *file,
+                                              uint32_t line);
+
+/* Query entry count for a task-local ledger. */
+ASX_API ASX_MUST_USE uint32_t asx_error_ledger_count(asx_task_id task_id);
+
+/* Query whether a ledger has overwritten older entries (ring overflow). */
+ASX_API ASX_MUST_USE int asx_error_ledger_overflowed(asx_task_id task_id);
+
+/* Read entry i in chronological order (0 oldest). Returns nonzero on success. */
+ASX_API ASX_MUST_USE int asx_error_ledger_get(asx_task_id task_id,
+                                              uint32_t index,
+                                              asx_error_ledger_entry *out_entry);
+
+/* ------------------------------------------------------------------ */
+/* Must-use coverage manifest                                         */
+/* ------------------------------------------------------------------ */
+
+ASX_API ASX_MUST_USE uint32_t asx_must_use_surface_count(void);
+ASX_API ASX_MUST_USE const char *asx_must_use_surface_name(uint32_t index);
+
+/* ------------------------------------------------------------------ */
+/* Ergonomic propagation helpers                                      */
+/* ------------------------------------------------------------------ */
+
+#define ASX_TRY(EXPR)                                                      \
+    do {                                                                   \
+        asx_status _asx_try_status = (EXPR);                               \
+        if (_asx_try_status != ASX_OK) {                                   \
+            asx_error_ledger_record_current(_asx_try_status, #EXPR,        \
+                                            __FILE__, (uint32_t)__LINE__); \
+            return _asx_try_status;                                        \
+        }                                                                  \
+    } while (0)
+
+#define ASX_TRY_TASK(TASK_ID, EXPR)                                        \
+    do {                                                                    \
+        asx_status _asx_try_status = (EXPR);                                \
+        if (_asx_try_status != ASX_OK) {                                    \
+            asx_error_ledger_record_for_task((TASK_ID), _asx_try_status,    \
+                                             #EXPR, __FILE__,               \
+                                             (uint32_t)__LINE__);           \
+            return _asx_try_status;                                         \
+        }                                                                   \
+    } while (0)
 
 #endif /* ASX_STATUS_H */

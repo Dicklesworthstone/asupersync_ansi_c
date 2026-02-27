@@ -35,6 +35,7 @@
 #include <asx/core/outcome.h>
 #include <asx/core/cancel.h>
 #include <asx/core/transition.h>
+#include <asx/core/cleanup.h>
 
 /* Runtime (walking skeleton — bd-ix8.8) */
 #include <asx/runtime/runtime.h>

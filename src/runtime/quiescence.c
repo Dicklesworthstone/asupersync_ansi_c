@@ -13,6 +13,7 @@
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
 #include <asx/core/transition.h>
+#include <asx/core/cleanup.h>
 #include "runtime_internal.h"
 
 /* -------------------------------------------------------------------
@@ -21,18 +22,17 @@
 
 asx_status asx_quiescence_check(asx_region_id id)
 {
-    uint32_t idx;
+    asx_region_slot *r;
+    asx_status st;
 
-    if (!asx_handle_is_valid(id)) return ASX_E_NOT_FOUND;
-    idx = asx_handle_index(id);
-    if (idx >= ASX_MAX_REGIONS) return ASX_E_NOT_FOUND;
-    if (!g_regions[idx].alive) return ASX_E_NOT_FOUND;
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
 
     /* Quiescent iff region is CLOSED and no live tasks remain */
-    if (g_regions[idx].state != ASX_REGION_CLOSED) {
+    if (r->state != ASX_REGION_CLOSED) {
         return ASX_E_QUIESCENCE_NOT_REACHED;
     }
-    if (g_regions[idx].task_count > 0) {
+    if (r->task_count > 0) {
         return ASX_E_QUIESCENCE_TASKS_LIVE;
     }
 
@@ -45,59 +45,62 @@ asx_status asx_quiescence_check(asx_region_id id)
  * Drives the region through its full shutdown sequence:
  *   1. Close (Open → Closing)
  *   2. Run scheduler to completion
- *   3. Drain (Closing → Draining → Finalizing → Closed)
+ *   3. Drain cleanup stack (Finalizing)
+ *   4. Advance (Closing → Draining → Finalizing → Closed)
  * ------------------------------------------------------------------- */
 
 asx_status asx_region_drain(asx_region_id id, asx_budget *budget)
 {
-    uint32_t idx;
+    asx_region_slot *r;
     asx_status st;
 
     if (budget == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (!asx_handle_is_valid(id)) return ASX_E_NOT_FOUND;
-    idx = asx_handle_index(id);
-    if (idx >= ASX_MAX_REGIONS) return ASX_E_NOT_FOUND;
-    if (!g_regions[idx].alive) return ASX_E_NOT_FOUND;
+
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
 
     /* Step 1: Close the region if still open */
-    if (g_regions[idx].state == ASX_REGION_OPEN) {
+    if (r->state == ASX_REGION_OPEN) {
         st = asx_region_transition_check(ASX_REGION_OPEN, ASX_REGION_CLOSING);
         if (st != ASX_OK) return st;
-        g_regions[idx].state = ASX_REGION_CLOSING;
+        r->state = ASX_REGION_CLOSING;
     }
 
     /* Step 2: Run scheduler to drain tasks */
-    if (g_regions[idx].task_count > 0) {
+    if (r->task_count > 0) {
         st = asx_scheduler_run(id, budget);
         if (st != ASX_OK && st != ASX_E_POLL_BUDGET_EXHAUSTED) {
             return st;
         }
-        if (g_regions[idx].task_count > 0) {
+        if (r->task_count > 0) {
             return ASX_E_QUIESCENCE_TASKS_LIVE;
         }
     }
 
     /* Step 3: Advance through closing protocol */
-    if (g_regions[idx].state == ASX_REGION_CLOSING) {
-        /* No children (walking skeleton) → fast path: skip Draining */
+    if (r->state == ASX_REGION_CLOSING) {
+        /* No children (walking skeleton) — fast path: skip Draining */
         st = asx_region_transition_check(ASX_REGION_CLOSING,
                                          ASX_REGION_FINALIZING);
         if (st != ASX_OK) return st;
-        g_regions[idx].state = ASX_REGION_FINALIZING;
+        r->state = ASX_REGION_FINALIZING;
     }
 
-    if (g_regions[idx].state == ASX_REGION_DRAINING) {
+    if (r->state == ASX_REGION_DRAINING) {
         st = asx_region_transition_check(ASX_REGION_DRAINING,
                                          ASX_REGION_FINALIZING);
         if (st != ASX_OK) return st;
-        g_regions[idx].state = ASX_REGION_FINALIZING;
+        r->state = ASX_REGION_FINALIZING;
     }
 
-    if (g_regions[idx].state == ASX_REGION_FINALIZING) {
+    if (r->state == ASX_REGION_FINALIZING) {
+        /* Drain cleanup stack in LIFO order before closing */
+        asx_cleanup_drain(&r->cleanup);
+
         st = asx_region_transition_check(ASX_REGION_FINALIZING,
                                          ASX_REGION_CLOSED);
         if (st != ASX_OK) return st;
-        g_regions[idx].state = ASX_REGION_CLOSED;
+        r->state = ASX_REGION_CLOSED;
     }
 
     return ASX_OK;

@@ -46,14 +46,14 @@ typedef asx_status (*asx_task_poll_fn)(void *user_data, asx_task_id self);
  * ------------------------------------------------------------------- */
 
 /* Open a new region. Returns ASX_OK and sets *out_id on success. */
-ASX_API asx_status asx_region_open(asx_region_id *out_id);
+ASX_API ASX_MUST_USE asx_status asx_region_open(asx_region_id *out_id);
 
 /* Initiate region close. Transitions: Open → Closing. */
-ASX_API asx_status asx_region_close(asx_region_id id);
+ASX_API ASX_MUST_USE asx_status asx_region_close(asx_region_id id);
 
 /* Query the current state of a region. */
-ASX_API asx_status asx_region_get_state(asx_region_id id,
-                                        asx_region_state *out_state);
+ASX_API ASX_MUST_USE asx_status asx_region_get_state(asx_region_id id,
+                                                     asx_region_state *out_state);
 
 /* -------------------------------------------------------------------
  * Task lifecycle
@@ -61,18 +61,18 @@ ASX_API asx_status asx_region_get_state(asx_region_id id,
 
 /* Spawn a task within a region. The poll_fn will be called by the
  * scheduler until it returns ASX_OK or an error. */
-ASX_API asx_status asx_task_spawn(asx_region_id region,
-                                  asx_task_poll_fn poll_fn,
-                                  void *user_data,
-                                  asx_task_id *out_id);
+ASX_API ASX_MUST_USE asx_status asx_task_spawn(asx_region_id region,
+                                               asx_task_poll_fn poll_fn,
+                                               void *user_data,
+                                               asx_task_id *out_id);
 
 /* Query the current state of a task. */
-ASX_API asx_status asx_task_get_state(asx_task_id id,
-                                      asx_task_state *out_state);
+ASX_API ASX_MUST_USE asx_status asx_task_get_state(asx_task_id id,
+                                                   asx_task_state *out_state);
 
 /* Query the outcome of a completed task. */
-ASX_API asx_status asx_task_get_outcome(asx_task_id id,
-                                        asx_outcome *out_outcome);
+ASX_API ASX_MUST_USE asx_status asx_task_get_outcome(asx_task_id id,
+                                                     asx_outcome *out_outcome);
 
 /* -------------------------------------------------------------------
  * Scheduler
@@ -80,8 +80,8 @@ ASX_API asx_status asx_task_get_outcome(asx_task_id id,
 
 /* Run the scheduler loop until all tasks in the region complete or
  * the budget is exhausted. Returns ASX_OK when quiescent. */
-ASX_API asx_status asx_scheduler_run(asx_region_id region,
-                                     asx_budget *budget);
+ASX_API ASX_MUST_USE asx_status asx_scheduler_run(asx_region_id region,
+                                                  asx_budget *budget);
 
 /* -------------------------------------------------------------------
  * Quiescence
@@ -89,12 +89,12 @@ ASX_API asx_status asx_scheduler_run(asx_region_id region,
 
 /* Check if a region has reached quiescence (all tasks completed,
  * region is CLOSED). Returns ASX_OK if quiescent. */
-ASX_API asx_status asx_quiescence_check(asx_region_id id);
+ASX_API ASX_MUST_USE asx_status asx_quiescence_check(asx_region_id id);
 
 /* Drain a region: run scheduler then close through to CLOSED.
  * This is the high-level "shut down cleanly" operation. */
-ASX_API asx_status asx_region_drain(asx_region_id id,
-                                    asx_budget *budget);
+ASX_API ASX_MUST_USE asx_status asx_region_drain(asx_region_id id,
+                                                 asx_budget *budget);
 
 /* Reset all runtime state (test support only).
  * Clears all regions and tasks. Not for production use. */

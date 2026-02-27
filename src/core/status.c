@@ -6,7 +6,125 @@
 
 #include <asx/asx.h>
 
-const char *asx_status_str(asx_status s) {
+typedef struct asx_task_ledger {
+    asx_task_id            owner;
+    uint32_t               used;
+    uint32_t               write_index;
+    uint32_t               next_sequence;
+    int                    overflowed;
+    asx_error_ledger_entry entries[ASX_ERROR_LEDGER_DEPTH];
+} asx_task_ledger;
+
+static asx_task_ledger g_task_ledgers[ASX_ERROR_LEDGER_TASK_SLOTS];
+static asx_task_ledger g_fallback_ledger;
+static asx_task_id     g_bound_task = ASX_INVALID_ID;
+
+static const char *g_must_use_surfaces[] = {
+    "asx_region_transition_check",
+    "asx_task_transition_check",
+    "asx_obligation_transition_check",
+    "asx_region_slot_lookup",
+    "asx_task_slot_lookup",
+    "asx_region_open",
+    "asx_region_close",
+    "asx_region_get_state",
+    "asx_task_spawn",
+    "asx_task_get_state",
+    "asx_task_get_outcome",
+    "asx_scheduler_run",
+    "asx_quiescence_check",
+    "asx_region_drain",
+    "asx_cleanup_push",
+    "asx_cleanup_pop",
+    "asx_error_ledger_get"
+};
+
+static void asx_task_ledger_clear(asx_task_ledger *ledger, asx_task_id owner)
+{
+    uint32_t i;
+
+    ledger->owner = owner;
+    ledger->used = 0;
+    ledger->write_index = 0;
+    ledger->next_sequence = 0;
+    ledger->overflowed = 0;
+    for (i = 0; i < ASX_ERROR_LEDGER_DEPTH; i++) {
+        ledger->entries[i].task_id = owner;
+        ledger->entries[i].status = ASX_OK;
+        ledger->entries[i].operation = "";
+        ledger->entries[i].file = "";
+        ledger->entries[i].line = 0;
+        ledger->entries[i].sequence = 0;
+    }
+}
+
+static int asx_error_ledger_is_task_id(asx_task_id task_id)
+{
+    return asx_handle_is_valid(task_id) && asx_handle_type_tag(task_id) == ASX_TYPE_TASK;
+}
+
+static asx_task_ledger *asx_error_ledger_slot_for_task(asx_task_id task_id)
+{
+    uint16_t slot;
+
+    if (!asx_error_ledger_is_task_id(task_id)) {
+        return &g_fallback_ledger;
+    }
+
+    slot = asx_handle_slot(task_id);
+    if (slot >= ASX_ERROR_LEDGER_TASK_SLOTS) {
+        return &g_fallback_ledger;
+    }
+    return &g_task_ledgers[slot];
+}
+
+static const asx_task_ledger *asx_error_ledger_readonly(asx_task_id task_id)
+{
+    const asx_task_ledger *ledger;
+
+    ledger = asx_error_ledger_slot_for_task(task_id);
+    if (ledger->owner != task_id) {
+        return NULL;
+    }
+    return ledger;
+}
+
+static void asx_error_ledger_record_impl(asx_task_id task_id,
+                                         asx_status status,
+                                         const char *operation,
+                                         const char *file,
+                                         uint32_t line)
+{
+    asx_task_ledger *ledger;
+    uint32_t index;
+
+    if (status == ASX_OK) {
+        return;
+    }
+
+    ledger = asx_error_ledger_slot_for_task(task_id);
+    if (ledger->owner != task_id) {
+        asx_task_ledger_clear(ledger, task_id);
+    }
+
+    index = ledger->write_index;
+    ledger->entries[index].task_id = task_id;
+    ledger->entries[index].status = status;
+    ledger->entries[index].operation = (operation != NULL) ? operation : "";
+    ledger->entries[index].file = (file != NULL) ? file : "";
+    ledger->entries[index].line = line;
+    ledger->entries[index].sequence = ledger->next_sequence++;
+
+    ledger->write_index = (index + 1u) % ASX_ERROR_LEDGER_DEPTH;
+    if (ledger->used < ASX_ERROR_LEDGER_DEPTH) {
+        ledger->used++;
+    } else {
+        ledger->overflowed = 1;
+    }
+}
+
+const char *asx_status_str(asx_status s)
+{
     switch (s) {
     case ASX_OK:                          return "OK";
     case ASX_E_PENDING:                   return "pending";
@@ -54,4 +172,102 @@ const char *asx_status_str(asx_status s) {
     case ASX_E_ALLOCATOR_SEALED:          return "allocator is sealed";
     default:                              return "unknown status";
     }
+}
+
+void asx_error_ledger_reset(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < ASX_ERROR_LEDGER_TASK_SLOTS; i++) {
+        asx_task_ledger_clear(&g_task_ledgers[i], ASX_INVALID_ID);
+    }
+    asx_task_ledger_clear(&g_fallback_ledger, ASX_INVALID_ID);
+    g_bound_task = ASX_INVALID_ID;
+}
+
+void asx_error_ledger_bind_task(asx_task_id task_id)
+{
+    g_bound_task = task_id;
+}
+
+asx_task_id asx_error_ledger_bound_task(void)
+{
+    return g_bound_task;
+}
+
+void asx_error_ledger_record_current(asx_status status,
+                                     const char *operation,
+                                     const char *file,
+                                     uint32_t line)
+{
+    asx_error_ledger_record_impl(g_bound_task, status, operation, file, line);
+}
+
+void asx_error_ledger_record_for_task(asx_task_id task_id,
+                                      asx_status status,
+                                      const char *operation,
+                                      const char *file,
+                                      uint32_t line)
+{
+    asx_error_ledger_record_impl(task_id, status, operation, file, line);
+}
+
+uint32_t asx_error_ledger_count(asx_task_id task_id)
+{
+    const asx_task_ledger *ledger;
+
+    ledger = asx_error_ledger_readonly(task_id);
+    if (ledger == NULL) {
+        return 0;
+    }
+    return ledger->used;
+}
+
+int asx_error_ledger_overflowed(asx_task_id task_id)
+{
+    const asx_task_ledger *ledger;
+
+    ledger = asx_error_ledger_readonly(task_id);
+    if (ledger == NULL) {
+        return 0;
+    }
+    return ledger->overflowed;
+}
+
+int asx_error_ledger_get(asx_task_id task_id,
+                         uint32_t index,
+                         asx_error_ledger_entry *out_entry)
+{
+    const asx_task_ledger *ledger;
+    uint32_t oldest;
+    uint32_t logical_index;
+
+    if (out_entry == NULL) {
+        return 0;
+    }
+
+    ledger = asx_error_ledger_readonly(task_id);
+    if (ledger == NULL || index >= ledger->used) {
+        return 0;
+    }
+
+    oldest = (ledger->used < ASX_ERROR_LEDGER_DEPTH)
+        ? 0u
+        : ledger->write_index;
+    logical_index = (oldest + index) % ASX_ERROR_LEDGER_DEPTH;
+    *out_entry = ledger->entries[logical_index];
+    return 1;
+}
+
+uint32_t asx_must_use_surface_count(void)
+{
+    return (uint32_t)(sizeof(g_must_use_surfaces) / sizeof(g_must_use_surfaces[0]));
+}
+
+const char *asx_must_use_surface_name(uint32_t index)
+{
+    if (index >= asx_must_use_surface_count()) {
+        return NULL;
+    }
+    return g_must_use_surfaces[index];
 }

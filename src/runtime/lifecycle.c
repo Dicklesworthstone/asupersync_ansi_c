@@ -1,8 +1,8 @@
 /*
  * lifecycle.c — region/task/obligation lifecycle engine (walking skeleton)
  *
- * Minimal implementation for bd-ix8.8: proves layer wiring between
- * handle packing, transition tables, and runtime API.
+ * Provides generation-safe handle validation, cleanup-stack primitives,
+ * and region/task lifecycle operations.
  *
  * Uses fixed-size static arenas. Phase 3 will replace with
  * hook-backed dynamic allocation (bd-hwb.3, bd-2cw.1).
@@ -36,50 +36,72 @@ void asx_runtime_reset(void)
         g_regions[i].state      = ASX_REGION_OPEN;
         g_regions[i].task_count = 0;
         g_regions[i].task_total = 0;
+        g_regions[i].generation = 0;
         g_regions[i].alive      = 0;
+        asx_cleanup_init(&g_regions[i].cleanup);
     }
     g_region_count = 0;
     for (i = 0; i < ASX_MAX_TASKS; i++) {
-        g_tasks[i].state     = ASX_TASK_CREATED;
-        g_tasks[i].region    = ASX_INVALID_ID;
-        g_tasks[i].poll_fn   = NULL;
-        g_tasks[i].user_data = NULL;
-        g_tasks[i].outcome   = asx_outcome_make(ASX_OUTCOME_OK);
-        g_tasks[i].alive     = 0;
+        g_tasks[i].state      = ASX_TASK_CREATED;
+        g_tasks[i].region     = ASX_INVALID_ID;
+        g_tasks[i].poll_fn    = NULL;
+        g_tasks[i].user_data  = NULL;
+        g_tasks[i].outcome    = asx_outcome_make(ASX_OUTCOME_OK);
+        g_tasks[i].generation = 0;
+        g_tasks[i].alive      = 0;
     }
     g_task_count = 0;
+    asx_error_ledger_reset();
 }
 
 /* -------------------------------------------------------------------
- * Internal helpers
+ * Generation-safe lookup helpers (shared across TUs)
+ *
+ * Returns ASX_OK on success, ASX_E_STALE_HANDLE when the slot is
+ * alive but the handle's generation doesn't match, or ASX_E_NOT_FOUND
+ * for all other failures (invalid handle, wrong type tag, dead slot).
  * ------------------------------------------------------------------- */
 
-static asx_region_slot *region_lookup(asx_region_id id)
+asx_status asx_region_slot_lookup(asx_region_id id, asx_region_slot **out)
 {
-    uint16_t tag;
-    uint32_t idx;
+    uint16_t tag, slot_idx, handle_gen;
 
-    if (!asx_handle_is_valid(id)) return NULL;
+    *out = NULL;
+    if (!asx_handle_is_valid(id)) return ASX_E_NOT_FOUND;
+
     tag = asx_handle_type_tag(id);
-    if (tag != ASX_TYPE_REGION) return NULL;
-    idx = asx_handle_index(id);
-    if (idx >= ASX_MAX_REGIONS) return NULL;
-    if (!g_regions[idx].alive) return NULL;
-    return &g_regions[idx];
+    if (tag != ASX_TYPE_REGION) return ASX_E_NOT_FOUND;
+
+    slot_idx = asx_handle_slot(id);
+    if (slot_idx >= ASX_MAX_REGIONS) return ASX_E_NOT_FOUND;
+    if (!g_regions[slot_idx].alive) return ASX_E_NOT_FOUND;
+
+    handle_gen = asx_handle_generation(id);
+    if (handle_gen != g_regions[slot_idx].generation) return ASX_E_STALE_HANDLE;
+
+    *out = &g_regions[slot_idx];
+    return ASX_OK;
 }
 
-static asx_task_slot *task_lookup(asx_task_id id)
+asx_status asx_task_slot_lookup(asx_task_id id, asx_task_slot **out)
 {
-    uint16_t tag;
-    uint32_t idx;
+    uint16_t tag, slot_idx, handle_gen;
 
-    if (!asx_handle_is_valid(id)) return NULL;
+    *out = NULL;
+    if (!asx_handle_is_valid(id)) return ASX_E_NOT_FOUND;
+
     tag = asx_handle_type_tag(id);
-    if (tag != ASX_TYPE_TASK) return NULL;
-    idx = asx_handle_index(id);
-    if (idx >= ASX_MAX_TASKS) return NULL;
-    if (!g_tasks[idx].alive) return NULL;
-    return &g_tasks[idx];
+    if (tag != ASX_TYPE_TASK) return ASX_E_NOT_FOUND;
+
+    slot_idx = asx_handle_slot(id);
+    if (slot_idx >= ASX_MAX_TASKS) return ASX_E_NOT_FOUND;
+    if (!g_tasks[slot_idx].alive) return ASX_E_NOT_FOUND;
+
+    handle_gen = asx_handle_generation(id);
+    if (handle_gen != g_tasks[slot_idx].generation) return ASX_E_STALE_HANDLE;
+
+    *out = &g_tasks[slot_idx];
+    return ASX_OK;
 }
 
 /* -------------------------------------------------------------------
@@ -89,23 +111,37 @@ static asx_task_slot *task_lookup(asx_task_id id)
 asx_status asx_region_open(asx_region_id *out_id)
 {
     uint32_t idx;
+    int reclaim;
 
     if (out_id == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    /* Scan for a recyclable slot: unused (alive=0) or CLOSED with no tasks */
+    /* Scan for a recyclable slot: unused (alive=0) or CLOSED with no tasks.
+     * When ASX_DEBUG_QUARANTINE is defined, CLOSED slots are never recycled
+     * so that any stale-handle dereference surfaces as RESOURCE_EXHAUSTED
+     * instead of silently aliasing a new region. Zero-cost when disabled. */
+    reclaim = 0;
     for (idx = 0; idx < ASX_MAX_REGIONS; idx++) {
         if (!g_regions[idx].alive) break;
+#ifndef ASX_DEBUG_QUARANTINE
         if (g_regions[idx].state == ASX_REGION_CLOSED
             && g_regions[idx].task_count == 0) {
+            reclaim = 1;
             break;
         }
+#endif
     }
     if (idx >= ASX_MAX_REGIONS) return ASX_E_RESOURCE_EXHAUSTED;
+
+    /* Increment generation on slot reclaim to invalidate stale handles */
+    if (reclaim) {
+        g_regions[idx].generation++;
+    }
 
     g_regions[idx].state      = ASX_REGION_OPEN;
     g_regions[idx].task_count = 0;
     g_regions[idx].task_total = 0;
     g_regions[idx].alive      = 1;
+    asx_cleanup_init(&g_regions[idx].cleanup);
 
     if (idx >= g_region_count) {
         g_region_count = idx + 1;
@@ -113,18 +149,21 @@ asx_status asx_region_open(asx_region_id *out_id)
 
     *out_id = asx_handle_pack(ASX_TYPE_REGION,
                               (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
-                              idx);
+                              asx_handle_pack_index(
+                                  g_regions[idx].generation,
+                                  (uint16_t)idx));
     return ASX_OK;
 }
 
 asx_status asx_region_close(asx_region_id id)
 {
-    asx_region_slot *r = region_lookup(id);
+    asx_region_slot *r;
     asx_status st;
 
-    if (r == NULL) return ASX_E_NOT_FOUND;
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
 
-    /* Transition Open → Closing */
+    /* Transition Open -> Closing */
     st = asx_region_transition_check(r->state, ASX_REGION_CLOSING);
     if (st != ASX_OK) return st;
 
@@ -136,10 +175,12 @@ asx_status asx_region_get_state(asx_region_id id,
                                 asx_region_state *out_state)
 {
     asx_region_slot *r;
+    asx_status st;
 
     if (out_state == NULL) return ASX_E_INVALID_ARGUMENT;
-    r = region_lookup(id);
-    if (r == NULL) return ASX_E_NOT_FOUND;
+
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
 
     *out_state = r->state;
     return ASX_OK;
@@ -155,13 +196,14 @@ asx_status asx_task_spawn(asx_region_id region,
                           asx_task_id *out_id)
 {
     asx_region_slot *r;
+    asx_status st;
     uint32_t idx;
 
     if (out_id == NULL) return ASX_E_INVALID_ARGUMENT;
     if (poll_fn == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    r = region_lookup(region);
-    if (r == NULL) return ASX_E_NOT_FOUND;
+    st = asx_region_slot_lookup(region, &r);
+    if (st != ASX_OK) return st;
 
     /* Only open regions can spawn tasks */
     if (!asx_region_can_spawn(r->state)) return ASX_E_REGION_NOT_OPEN;
@@ -169,19 +211,22 @@ asx_status asx_task_spawn(asx_region_id region,
     if (g_task_count >= ASX_MAX_TASKS) return ASX_E_RESOURCE_EXHAUSTED;
 
     idx = g_task_count++;
-    g_tasks[idx].state     = ASX_TASK_CREATED;
-    g_tasks[idx].region    = region;
-    g_tasks[idx].poll_fn   = poll_fn;
-    g_tasks[idx].user_data = user_data;
-    g_tasks[idx].outcome   = asx_outcome_make(ASX_OUTCOME_OK);
-    g_tasks[idx].alive     = 1;
+    g_tasks[idx].state      = ASX_TASK_CREATED;
+    g_tasks[idx].region     = region;
+    g_tasks[idx].poll_fn    = poll_fn;
+    g_tasks[idx].user_data  = user_data;
+    g_tasks[idx].outcome    = asx_outcome_make(ASX_OUTCOME_OK);
+    g_tasks[idx].generation = 0;
+    g_tasks[idx].alive      = 1;
 
     r->task_count++;
     r->task_total++;
 
     *out_id = asx_handle_pack(ASX_TYPE_TASK,
                               (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
-                              idx);
+                              asx_handle_pack_index(
+                                  g_tasks[idx].generation,
+                                  (uint16_t)idx));
     return ASX_OK;
 }
 
@@ -189,10 +234,12 @@ asx_status asx_task_get_state(asx_task_id id,
                               asx_task_state *out_state)
 {
     asx_task_slot *t;
+    asx_status st;
 
     if (out_state == NULL) return ASX_E_INVALID_ARGUMENT;
-    t = task_lookup(id);
-    if (t == NULL) return ASX_E_NOT_FOUND;
+
+    st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
 
     *out_state = t->state;
     return ASX_OK;
@@ -202,12 +249,19 @@ asx_status asx_task_get_outcome(asx_task_id id,
                                 asx_outcome *out_outcome)
 {
     asx_task_slot *t;
+    asx_status st;
 
     if (out_outcome == NULL) return ASX_E_INVALID_ARGUMENT;
-    t = task_lookup(id);
-    if (t == NULL) return ASX_E_NOT_FOUND;
+
+    st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
     if (!asx_task_is_terminal(t->state)) return ASX_E_TASK_NOT_COMPLETED;
 
     *out_outcome = t->outcome;
     return ASX_OK;
 }
+
+/* Cleanup-stack integration is provided by asx/core/cleanup.h.
+ * Region slots embed an asx_cleanup_stack which is initialized
+ * in asx_region_open() and drained during region finalization
+ * (quiescence.c). See src/core/cleanup.c for the implementation. */

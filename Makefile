@@ -112,7 +112,8 @@ CORE_SRC := \
 	src/core/transition_tables.c \
 	src/core/outcome.c \
 	src/core/budget.c \
-	src/core/cancel.c
+	src/core/cancel.c \
+	src/core/cleanup.c
 
 RUNTIME_SRC := \
 	src/runtime/hooks.c \

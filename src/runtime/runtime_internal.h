@@ -13,6 +13,7 @@
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
 #include <asx/core/outcome.h>
+#include <asx/core/cleanup.h>
 #include <asx/runtime/runtime.h>
 
 /* -------------------------------------------------------------------
@@ -20,10 +21,12 @@
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    asx_region_state state;
-    uint32_t         task_count;     /* live (non-completed) tasks */
-    uint32_t         task_total;     /* total spawned tasks */
-    int              alive;          /* 1 if slot in use */
+    asx_region_state   state;
+    uint32_t           task_count;     /* live (non-completed) tasks */
+    uint32_t           task_total;     /* total spawned tasks */
+    uint16_t           generation;     /* increments on slot reclaim */
+    int                alive;          /* 1 if slot in use */
+    asx_cleanup_stack  cleanup;        /* LIFO cleanup for finalization */
 } asx_region_slot;
 
 typedef struct {
@@ -32,6 +35,7 @@ typedef struct {
     asx_task_poll_fn poll_fn;
     void            *user_data;
     asx_outcome      outcome;
+    uint16_t         generation;     /* increments on slot reclaim */
     int              alive;
 } asx_task_slot;
 
@@ -44,5 +48,12 @@ extern uint32_t        g_region_count;
 
 extern asx_task_slot   g_tasks[ASX_MAX_TASKS];
 extern uint32_t        g_task_count;
+
+/* -------------------------------------------------------------------
+ * Shared lookup functions (generation-safe, used across TUs)
+ * ------------------------------------------------------------------- */
+
+ASX_MUST_USE asx_status asx_region_slot_lookup(asx_region_id id, asx_region_slot **out);
+ASX_MUST_USE asx_status asx_task_slot_lookup(asx_task_id id, asx_task_slot **out);
 
 #endif /* ASX_RUNTIME_INTERNAL_H */
