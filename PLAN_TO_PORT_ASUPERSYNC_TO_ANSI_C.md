@@ -52,6 +52,32 @@ Upstream drift is handled by explicit rebase protocol:
 3. classify deltas as either intentional upstream semantic changes or C regressions/spec defects,
 4. update C parity target only after classification is complete.
 
+Milestone baseline inventory is recorded in machine-readable form:
+
+- inventory artifact: `docs/rust_baseline_inventory.json`
+- governance/spec artifact: `docs/RUST_BASELINE_PROVENANCE.md`
+
+Pinned planning baseline snapshot (`M0-spec-foundation`, captured `2026-02-27T04:09:54Z`):
+
+- `rust_repo_url`: `https://github.com/Dicklesworthstone/asupersync`
+- `rust_baseline_commit`: `38c152405bd03e2bd9eecf178bfbbe9472fed861`
+- `rust_baseline_commit_ts`: `2026-02-26T21:33:22-05:00`
+- `rust_baseline_subject`: `Fix io_uring reactor spurious ERROR events from poll cancellations and stale fds`
+- `rust_toolchain_release`: `1.95.0-nightly`
+- `rust_toolchain_commit_hash`: `7f99507f57e6c4aa0dce3daf6a13cca8cd4dd312`
+- `rust_toolchain_host`: `x86_64-unknown-linux-gnu`
+- `cargo_lock_sha256`: `77f4bfaedfe5b8572dfca3181119f9432825ea3d868ee8f5d2793a6c5cdeffdc`
+- `cargo_lock_bytes`: `70834`
+- `cargo_lock_tracked_by_git`: `false` (workspace snapshot still required for auditable fixture provenance)
+
+Baseline change control (required for every milestone rebase):
+
+1. open a rebase record with both old/new baseline inventories,
+2. regenerate fixtures and parity results for both baselines,
+3. classify each delta as `intentional_upstream`, `c_regression`, `spec_defect`, or `harness_defect`,
+4. require explicit owner sign-off for all non-regression classifications,
+5. update parity target baseline only after all deltas are classified and linked to artifacts.
+
 Scale snapshot used for planning:
 
 - `516` Rust source files under `src/`
@@ -952,6 +978,23 @@ Rule:
   - binary mode,
   - and cross-checks semantic equivalence.
 
+Parity report schema (minimum required fields):
+
+- `scenario_id`
+- `codec`
+- `profile`
+- `parity`
+- `semantic_digest`
+- `rust_baseline_commit`
+- `rust_toolchain_commit_hash`
+- `cargo_lock_sha256`
+- `fixture_schema_version`
+- `scenario_dsl_version`
+- `delta_classification` (`none|intentional_upstream|c_regression|spec_defect|harness_defect`)
+- `classification_record_id` (required when `delta_classification != none`)
+
+Report records must reject missing provenance fields and must reference one baseline inventory entry from `docs/rust_baseline_inventory.json`.
+
 ## 9.4 Parity Tracking
 
 `FEATURE_PARITY.md` must track each semantic unit:
@@ -965,7 +1008,12 @@ No phase can close with unknown parity status for in-scope items.
 Every fixture/parity report must carry:
 
 - `rust_baseline_commit`,
-- `rust_toolchain_hash` (from `rustc -Vv` snapshot),
+- `rust_toolchain_commit_hash` (from `rustc -Vv` snapshot),
+- `rust_toolchain_release`,
+- `rust_toolchain_host`,
+- `cargo_lock_sha256`,
+- `cargo_lock_bytes`,
+- `cargo_lock_tracked_by_git`,
 - `fixture_schema_version`,
 - `scenario_dsl_version`.
 
@@ -973,6 +1021,8 @@ Runner enforcement:
 
 - parity evaluation is bound to one pinned Rust baseline per milestone,
 - provenance mismatch is hard-fail (no silent mixing of fixture generations).
+- parity reports with non-`none` delta classifications must include `classification_record_id` and reviewer metadata.
+- baseline field definitions and rebase governance are normative in `docs/RUST_BASELINE_PROVENANCE.md`.
 
 ## 10. Testing and Quality Program
 
@@ -1591,6 +1641,7 @@ Remaining open decisions:
 - `docs/EMBEDDED_TARGET_PROFILES.md`
 - `docs/HFT_PROFILE.md`
 - `docs/AUTOMOTIVE_PROFILE.md`
+- `docs/WAVE_GATING_PROTOCOL.md`
 
 This plan is intentionally strict: no implementation phase opens without spec and parity gates for that phase.
 
