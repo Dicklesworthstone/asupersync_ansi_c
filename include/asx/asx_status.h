@@ -38,6 +38,7 @@ typedef enum {
     ASX_E_REGION_NOT_OPEN      = 303,
     ASX_E_ADMISSION_CLOSED     = 304,
     ASX_E_ADMISSION_LIMIT      = 305,
+    ASX_E_REGION_POISONED      = 306,  /* region poisoned after safety violation */
 
     /* Task errors (4xx) */
     ASX_E_TASK_NOT_FOUND       = 400,
@@ -86,7 +87,17 @@ typedef enum {
     ASX_E_HOOK_MISSING         = 1200,
     ASX_E_HOOK_INVALID         = 1201,
     ASX_E_DETERMINISM_VIOLATION = 1202,
-    ASX_E_ALLOCATOR_SEALED     = 1203
+    ASX_E_ALLOCATOR_SEALED     = 1203,
+
+    /* Thread-affinity errors (13xx) */
+    ASX_E_AFFINITY_VIOLATION   = 1300,  /* access from wrong domain */
+    ASX_E_AFFINITY_NOT_BOUND   = 1301,  /* entity has no domain binding */
+    ASX_E_AFFINITY_ALREADY_BOUND = 1302, /* entity already bound to a domain */
+    ASX_E_AFFINITY_TRANSFER_REQUIRED = 1303, /* cross-domain access without transfer */
+    ASX_E_AFFINITY_TABLE_FULL  = 1304,  /* tracking table exhausted */
+
+    /* Codec equivalence errors (14xx) */
+    ASX_E_EQUIVALENCE_MISMATCH = 1400   /* cross-codec semantic mismatch */
 
 } asx_status;
 

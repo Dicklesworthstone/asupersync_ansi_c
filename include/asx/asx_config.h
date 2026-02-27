@@ -36,10 +36,79 @@
   #define ASX_DEBUG 1
 #endif
 
+/* Ghost monitors: enabled by default when ASX_DEBUG is set.
+ * Override with -DASX_DEBUG_GHOST=0 to disable ghost monitors in debug builds. */
+#if defined(ASX_DEBUG) && ASX_DEBUG && !defined(ASX_DEBUG_GHOST)
+  #define ASX_DEBUG_GHOST 1
+#endif
+
 /* Deterministic mode: stable ordering, replay identity for fixed input/seed */
 #ifndef ASX_DETERMINISTIC
   #define ASX_DETERMINISTIC 1
 #endif
+
+/* ------------------------------------------------------------------ */
+/* Safety profiles                                                     */
+/*                                                                     */
+/* Orthogonal to platform profiles (ASX_PROFILE_*). Safety profiles    */
+/* control invariant-checking overhead and ghost monitor activation.    */
+/*                                                                     */
+/* ASX_SAFETY_DEBUG    — full ghost monitors, error ledger, linearity  */
+/*                       tracking. Intended for development and test.   */
+/* ASX_SAFETY_HARDENED — error ledger active, must-use enforced,       */
+/*                       ghost monitors disabled, allocator sealable.  */
+/*                       Intended for production with diagnostics.     */
+/* ASX_SAFETY_RELEASE  — zero-cost stubs for all monitors, minimal    */
+/*                       overhead. Intended for performance-critical.   */
+/* ------------------------------------------------------------------ */
+
+typedef enum {
+    ASX_SAFETY_DEBUG    = 0,
+    ASX_SAFETY_HARDENED = 1,
+    ASX_SAFETY_RELEASE  = 2
+} asx_safety_profile;
+
+/* Auto-select safety profile from compile-time flags if not explicit */
+#ifndef ASX_SAFETY_PROFILE_SELECTED
+  #if defined(ASX_DEBUG) && ASX_DEBUG
+    #define ASX_SAFETY_PROFILE_SELECTED ASX_SAFETY_DEBUG
+  #elif defined(NDEBUG)
+    #define ASX_SAFETY_PROFILE_SELECTED ASX_SAFETY_RELEASE
+  #else
+    #define ASX_SAFETY_PROFILE_SELECTED ASX_SAFETY_HARDENED
+  #endif
+#endif
+
+/* Query the active safety profile at runtime */
+ASX_API asx_safety_profile asx_safety_profile_active(void);
+ASX_API const char *asx_safety_profile_str(asx_safety_profile profile);
+
+/* ------------------------------------------------------------------ */
+/* Fault injection (deterministic-mode only)                           */
+/*                                                                     */
+/* Injects controlled faults into clock, entropy, and allocator paths  */
+/* for testing exhaustion/anomaly handling. Active only when            */
+/* ASX_DETERMINISTIC is set. No-op stubs in non-deterministic builds.  */
+/* ------------------------------------------------------------------ */
+
+typedef enum {
+    ASX_FAULT_NONE          = 0,
+    ASX_FAULT_CLOCK_SKEW    = 1,  /* adds param ns to each clock read */
+    ASX_FAULT_CLOCK_REVERSE = 2,  /* subtracts param ns (simulates reversal) */
+    ASX_FAULT_ENTROPY_CONST = 3,  /* returns param as constant entropy value */
+    ASX_FAULT_ALLOC_FAIL    = 4   /* allocation returns NULL after trigger */
+} asx_fault_kind;
+
+typedef struct {
+    asx_fault_kind kind;
+    uint64_t       param;         /* kind-specific parameter */
+    uint32_t       trigger_after; /* inject after N calls (0 = immediate) */
+    uint32_t       trigger_count; /* deactivate after N injections (0 = permanent) */
+} asx_fault_injection;
+
+ASX_API asx_status asx_fault_inject(const asx_fault_injection *fault);
+ASX_API asx_status asx_fault_clear(void);
+ASX_API uint32_t   asx_fault_injection_count(void);
 
 /* ------------------------------------------------------------------ */
 /* Runtime hook contracts                                              */

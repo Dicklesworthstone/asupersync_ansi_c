@@ -139,6 +139,7 @@ const char *asx_status_str(asx_status s)
     case ASX_E_REGION_NOT_OPEN:           return "region not open";
     case ASX_E_ADMISSION_CLOSED:          return "admission closed";
     case ASX_E_ADMISSION_LIMIT:           return "admission limit reached";
+    case ASX_E_REGION_POISONED:           return "region poisoned";
     case ASX_E_TASK_NOT_FOUND:            return "task not found";
     case ASX_E_SCHEDULER_UNAVAILABLE:     return "scheduler unavailable";
     case ASX_E_NAME_CONFLICT:             return "name conflict";
@@ -170,6 +171,12 @@ const char *asx_status_str(asx_status s)
     case ASX_E_HOOK_INVALID:              return "runtime hook contract invalid";
     case ASX_E_DETERMINISM_VIOLATION:     return "deterministic mode hook violation";
     case ASX_E_ALLOCATOR_SEALED:          return "allocator is sealed";
+    case ASX_E_AFFINITY_VIOLATION:        return "affinity domain violation";
+    case ASX_E_AFFINITY_NOT_BOUND:        return "entity not bound to affinity domain";
+    case ASX_E_AFFINITY_ALREADY_BOUND:    return "entity already bound to different domain";
+    case ASX_E_AFFINITY_TRANSFER_REQUIRED: return "cross-domain transfer required";
+    case ASX_E_AFFINITY_TABLE_FULL:       return "affinity tracking table full";
+    case ASX_E_EQUIVALENCE_MISMATCH:     return "cross-codec semantic equivalence mismatch";
     default:                              return "unknown status";
     }
 }

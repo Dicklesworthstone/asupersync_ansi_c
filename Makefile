@@ -113,14 +113,17 @@ CORE_SRC := \
 	src/core/outcome.c \
 	src/core/budget.c \
 	src/core/cancel.c \
-	src/core/cleanup.c
+	src/core/cleanup.c \
+	src/core/ghost.c \
+	src/core/affinity.c
 
 RUNTIME_SRC := \
 	src/runtime/hooks.c \
 	src/runtime/lifecycle.c \
 	src/runtime/scheduler.c \
 	src/runtime/cancellation.c \
-	src/runtime/quiescence.c
+	src/runtime/quiescence.c \
+	src/runtime/resource.c
 
 CHANNEL_SRC := \
 	src/channel/mpsc.c
