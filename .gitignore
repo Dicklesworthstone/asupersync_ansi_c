@@ -57,6 +57,11 @@ artifacts/
 *.min
 *.seed
 
+# Ephemeral diff/patch files
+diff.txt
+*.diff
+*.patch
+
 # Local issue-tracking state
 .beads/
 
