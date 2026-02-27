@@ -6,6 +6,7 @@
 
 #include "../test_harness.h"
 #include <asx/asx.h>
+#include <string.h>
 
 TEST(canonical_fixture_decode_encode_smoke) {
     const char *fixture_json =
@@ -31,18 +32,39 @@ TEST(canonical_fixture_decode_encode_smoke) {
         "\"semantic_digest\":\"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\""
         "}";
     asx_canonical_fixture fixture;
+    asx_canonical_fixture decoded_bin;
     asx_codec_buffer encoded;
+    asx_codec_buffer encoded_bin;
 
     asx_canonical_fixture_init(&fixture);
+    asx_canonical_fixture_init(&decoded_bin);
     asx_codec_buffer_init(&encoded);
+    asx_codec_buffer_init(&encoded_bin);
 
-    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_JSON, fixture_json, &fixture), ASX_OK);
+    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_JSON,
+                                       fixture_json,
+                                       strlen(fixture_json),
+                                       &fixture),
+              ASX_OK);
     ASSERT_EQ(asx_codec_encode_fixture(ASX_CODEC_KIND_JSON, &fixture, &encoded), ASX_OK);
     ASSERT_NE(encoded.data, NULL);
     ASSERT_TRUE(encoded.len > 0u);
     ASSERT_STR_EQ(asx_codec_kind_str(fixture.codec), "json");
 
+    fixture.codec = ASX_CODEC_KIND_BIN;
+    ASSERT_EQ(asx_codec_encode_fixture(ASX_CODEC_KIND_BIN, &fixture, &encoded_bin), ASX_OK);
+    ASSERT_TRUE(encoded_bin.len > 0u);
+    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_BIN,
+                                       encoded_bin.data,
+                                       encoded_bin.len,
+                                       &decoded_bin),
+              ASX_OK);
+    ASSERT_STR_EQ(decoded_bin.scenario_id, fixture.scenario_id);
+    ASSERT_EQ(decoded_bin.codec, ASX_CODEC_KIND_BIN);
+
+    asx_codec_buffer_reset(&encoded_bin);
     asx_codec_buffer_reset(&encoded);
+    asx_canonical_fixture_reset(&decoded_bin);
     asx_canonical_fixture_reset(&fixture);
 }
 
