@@ -16,6 +16,7 @@
 
 #include "test_harness.h"
 #include <asx/asx.h>
+#include "runtime/runtime_internal.h"
 
 /* -------------------------------------------------------------------
  * Test poll functions
@@ -352,6 +353,85 @@ TEST(multiple_tasks_in_region)
 }
 
 /* -------------------------------------------------------------------
+ * Cleanup integration: verify region drain calls cleanup handlers
+ * ------------------------------------------------------------------- */
+
+static int g_cleanup_called;
+static int g_cleanup_order[4];
+static int g_cleanup_idx;
+
+static void cleanup_set_flag(void *user_data)
+{
+    (void)user_data;
+    g_cleanup_called = 1;
+}
+
+static void cleanup_record_order(void *user_data)
+{
+    int id = *(int *)user_data;
+    if (g_cleanup_idx < 4) {
+        g_cleanup_order[g_cleanup_idx++] = id;
+    }
+}
+
+TEST(region_drain_calls_cleanup)
+{
+    asx_region_id rid;
+    asx_region_slot *r;
+    asx_cleanup_handle ch;
+    asx_budget budget;
+    asx_status st;
+
+    g_cleanup_called = 0;
+
+    st = asx_region_open(&rid);
+    ASSERT_EQ(st, ASX_OK);
+
+    /* Access internal slot to push cleanup */
+    st = asx_region_slot_lookup(rid, &r);
+    ASSERT_EQ(st, ASX_OK);
+    ASSERT_EQ(asx_cleanup_push(&r->cleanup, cleanup_set_flag, NULL, &ch), ASX_OK);
+
+    /* Drain should call cleanup during finalization */
+    budget = asx_budget_infinite();
+    st = asx_region_drain(rid, &budget);
+    ASSERT_EQ(st, ASX_OK);
+    ASSERT_EQ(g_cleanup_called, 1);
+}
+
+TEST(region_drain_cleanup_lifo_order)
+{
+    asx_region_id rid;
+    asx_region_slot *r;
+    asx_cleanup_handle ch;
+    asx_budget budget;
+    asx_status st;
+    int ids[3] = {10, 20, 30};
+
+    g_cleanup_idx = 0;
+
+    st = asx_region_open(&rid);
+    ASSERT_EQ(st, ASX_OK);
+
+    st = asx_region_slot_lookup(rid, &r);
+    ASSERT_EQ(st, ASX_OK);
+
+    ASSERT_EQ(asx_cleanup_push(&r->cleanup, cleanup_record_order, &ids[0], &ch), ASX_OK);
+    ASSERT_EQ(asx_cleanup_push(&r->cleanup, cleanup_record_order, &ids[1], &ch), ASX_OK);
+    ASSERT_EQ(asx_cleanup_push(&r->cleanup, cleanup_record_order, &ids[2], &ch), ASX_OK);
+
+    budget = asx_budget_infinite();
+    st = asx_region_drain(rid, &budget);
+    ASSERT_EQ(st, ASX_OK);
+
+    /* Verify LIFO: 30, 20, 10 */
+    ASSERT_EQ(g_cleanup_idx, 3);
+    ASSERT_EQ(g_cleanup_order[0], 30);
+    ASSERT_EQ(g_cleanup_order[1], 20);
+    ASSERT_EQ(g_cleanup_order[2], 10);
+}
+
+/* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
 
@@ -370,6 +450,8 @@ int main(void)
     asx_runtime_reset(); RUN_TEST(quiescence_fails_before_close);
     asx_runtime_reset(); RUN_TEST(spawn_rejected_after_close);
     asx_runtime_reset(); RUN_TEST(multiple_tasks_in_region);
+    asx_runtime_reset(); RUN_TEST(region_drain_calls_cleanup);
+    asx_runtime_reset(); RUN_TEST(region_drain_cleanup_lifo_order);
 
     TEST_REPORT();
     return test_failures;
