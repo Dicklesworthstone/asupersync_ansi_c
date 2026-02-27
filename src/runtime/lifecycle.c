@@ -51,7 +51,13 @@ void asx_runtime_reset(void)
         g_tasks[i].alive      = 0;
     }
     g_task_count = 0;
-    asx_error_ledger_reset();
+    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
+        g_obligations[i].state      = ASX_OBLIGATION_RESERVED;
+        g_obligations[i].region     = ASX_INVALID_ID;
+        g_obligations[i].generation = 0;
+        g_obligations[i].alive      = 0;
+    }
+    g_obligation_count = 0;
 }
 
 /* -------------------------------------------------------------------
@@ -261,7 +267,106 @@ asx_status asx_task_get_outcome(asx_task_id id,
     return ASX_OK;
 }
 
-/* Cleanup-stack integration is provided by asx/core/cleanup.h.
- * Region slots embed an asx_cleanup_stack which is initialized
- * in asx_region_open() and drained during region finalization
- * (quiescence.c). See src/core/cleanup.c for the implementation. */
+/* -------------------------------------------------------------------
+ * Obligation lifecycle
+ * ------------------------------------------------------------------- */
+
+asx_status asx_obligation_slot_lookup(asx_obligation_id id,
+                                       asx_obligation_slot **out)
+{
+    uint16_t tag, slot_idx, handle_gen;
+
+    *out = NULL;
+    if (!asx_handle_is_valid(id)) return ASX_E_NOT_FOUND;
+
+    tag = asx_handle_type_tag(id);
+    if (tag != ASX_TYPE_OBLIGATION) return ASX_E_NOT_FOUND;
+
+    slot_idx = asx_handle_slot(id);
+    if (slot_idx >= ASX_MAX_OBLIGATIONS) return ASX_E_NOT_FOUND;
+    if (!g_obligations[slot_idx].alive) return ASX_E_NOT_FOUND;
+
+    handle_gen = asx_handle_generation(id);
+    if (handle_gen != g_obligations[slot_idx].generation)
+        return ASX_E_STALE_HANDLE;
+
+    *out = &g_obligations[slot_idx];
+    return ASX_OK;
+}
+
+asx_status asx_obligation_reserve(asx_region_id region,
+                                   asx_obligation_id *out_id)
+{
+    asx_region_slot *r;
+    asx_status st;
+    uint32_t idx;
+
+    if (out_id == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    st = asx_region_slot_lookup(region, &r);
+    if (st != ASX_OK) return st;
+
+    /* Only open regions can reserve obligations */
+    if (!asx_region_can_spawn(r->state)) return ASX_E_REGION_NOT_OPEN;
+
+    if (g_obligation_count >= ASX_MAX_OBLIGATIONS)
+        return ASX_E_RESOURCE_EXHAUSTED;
+
+    idx = g_obligation_count++;
+    g_obligations[idx].state      = ASX_OBLIGATION_RESERVED;
+    g_obligations[idx].region     = region;
+    g_obligations[idx].generation = 0;
+    g_obligations[idx].alive      = 1;
+
+    *out_id = asx_handle_pack(ASX_TYPE_OBLIGATION,
+                               (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
+                               asx_handle_pack_index(
+                                   g_obligations[idx].generation,
+                                   (uint16_t)idx));
+    return ASX_OK;
+}
+
+asx_status asx_obligation_commit(asx_obligation_id id)
+{
+    asx_obligation_slot *o;
+    asx_status st;
+
+    st = asx_obligation_slot_lookup(id, &o);
+    if (st != ASX_OK) return st;
+
+    st = asx_obligation_transition_check(o->state, ASX_OBLIGATION_COMMITTED);
+    if (st != ASX_OK) return st;
+
+    o->state = ASX_OBLIGATION_COMMITTED;
+    return ASX_OK;
+}
+
+asx_status asx_obligation_abort(asx_obligation_id id)
+{
+    asx_obligation_slot *o;
+    asx_status st;
+
+    st = asx_obligation_slot_lookup(id, &o);
+    if (st != ASX_OK) return st;
+
+    st = asx_obligation_transition_check(o->state, ASX_OBLIGATION_ABORTED);
+    if (st != ASX_OK) return st;
+
+    o->state = ASX_OBLIGATION_ABORTED;
+    return ASX_OK;
+}
+
+asx_status asx_obligation_get_state(asx_obligation_id id,
+                                     asx_obligation_state *out_state)
+{
+    asx_obligation_slot *o;
+    asx_status st;
+
+    if (out_state == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    st = asx_obligation_slot_lookup(id, &o);
+    if (st != ASX_OK) return st;
+
+    *out_state = o->state;
+    return ASX_OK;
+}

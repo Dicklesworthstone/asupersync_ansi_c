@@ -27,8 +27,9 @@ extern "C" {
  * Phase 3 will replace with dynamic hook-backed allocation.
  * ------------------------------------------------------------------- */
 
-#define ASX_MAX_REGIONS  8
-#define ASX_MAX_TASKS    64
+#define ASX_MAX_REGIONS      8
+#define ASX_MAX_TASKS        64
+#define ASX_MAX_OBLIGATIONS  128
 
 /* -------------------------------------------------------------------
  * Task poll function signature
@@ -73,6 +74,25 @@ ASX_API ASX_MUST_USE asx_status asx_task_get_state(asx_task_id id,
 /* Query the outcome of a completed task. */
 ASX_API ASX_MUST_USE asx_status asx_task_get_outcome(asx_task_id id,
                                                      asx_outcome *out_outcome);
+
+/* -------------------------------------------------------------------
+ * Obligation lifecycle
+ * ------------------------------------------------------------------- */
+
+/* Reserve an obligation within a region. The obligation starts in
+ * the RESERVED state and must eventually be committed or aborted. */
+ASX_API ASX_MUST_USE asx_status asx_obligation_reserve(asx_region_id region,
+                                                        asx_obligation_id *out_id);
+
+/* Commit a reserved obligation. Transitions: Reserved → Committed. */
+ASX_API ASX_MUST_USE asx_status asx_obligation_commit(asx_obligation_id id);
+
+/* Abort a reserved obligation. Transitions: Reserved → Aborted. */
+ASX_API ASX_MUST_USE asx_status asx_obligation_abort(asx_obligation_id id);
+
+/* Query the current state of an obligation. */
+ASX_API ASX_MUST_USE asx_status asx_obligation_get_state(asx_obligation_id id,
+                                                          asx_obligation_state *out_state);
 
 /* -------------------------------------------------------------------
  * Scheduler
