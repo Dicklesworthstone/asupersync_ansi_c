@@ -1,0 +1,61 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+._*
+*.swp
+*.swo
+*~
+
+# Local env files
+.env
+.env.*
+!.env.example
+
+# C/C++ build outputs
+build/
+dist/
+out/
+bin/
+obj/
+target/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.d
+
+# CMake / Ninja / Meson outputs
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+build.ninja
+.ninja_deps
+.ninja_log
+meson-private/
+meson-logs/
+
+# Coverage / profiling / sanitizer artifacts
+coverage/
+*.gcno
+*.gcda
+*.gcov
+*.profraw
+*.profdata
+*.stackdump
+
+# Runtime traces / generated artifacts
+artifacts/
+*.trace
+*.trace.json
+*.trace.bin
+*.fuzz
+*.min
+*.seed
+
+# Local issue-tracking state
+.beads/
