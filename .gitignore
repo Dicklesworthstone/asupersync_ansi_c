@@ -63,7 +63,13 @@ diff.txt
 *.patch
 
 # Local issue-tracking state
-.beads/
+# Keep canonical beads artifacts in git, but ignore local DB/cache/locks.
+.beads/*.db
+.beads/*.db-shm
+.beads/*.db-wal
+.beads/*.lock
+.beads/last-touched
+.beads/*.tmp
 
 # bv (beads viewer) local config and caches
 .bv/
