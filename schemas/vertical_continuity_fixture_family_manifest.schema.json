@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "asx-vertical-continuity-fixture-family-manifest",
+  "description": "Manifest schema for vertical profile and crash/restart continuity fixture-family capture runs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "run_id",
+    "family_id",
+    "rust_baseline_commit",
+    "scenario_dsl_version",
+    "fixture_schema_version",
+    "e2e_lane_id",
+    "scenarios"
+  ],
+  "properties": {
+    "manifest_version": {
+      "type": "string",
+      "const": "vertical-continuity-fixture-family-manifest-v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 8
+    },
+    "family_id": {
+      "type": "string",
+      "enum": [
+        "VERT-HFT-MICROBURST",
+        "VERT-AUTOMOTIVE-WATCHDOG",
+        "CONT-CRASH-RESTART"
+      ]
+    },
+    "rust_baseline_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "scenario_dsl_version": {
+      "type": "string"
+    },
+    "fixture_schema_version": {
+      "type": "string"
+    },
+    "e2e_lane_id": {
+      "type": "string",
+      "enum": [
+        "E2E-VERT-HFT",
+        "E2E-VERT-AUTO",
+        "E2E-CONT-RESTART"
+      ]
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "fixture_id",
+          "prov_ids",
+          "core_family_links",
+          "profiles",
+          "codecs",
+          "expected_outcome_class",
+          "semantic_digest",
+          "artifact_manifest_path"
+        ],
+        "properties": {
+          "scenario_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fixture_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "prov_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "core_family_links": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "CORE-LIFECYCLE",
+                "CORE-OUTCOME",
+                "CORE-BUDGET",
+                "CORE-CANCEL",
+                "CORE-CHANNEL",
+                "CORE-TIMER"
+              ]
+            }
+          },
+          "profiles": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "ASX_PROFILE_CORE",
+                "ASX_PROFILE_FREESTANDING",
+                "ASX_PROFILE_EMBEDDED_ROUTER",
+                "ASX_PROFILE_HFT",
+                "ASX_PROFILE_AUTOMOTIVE"
+              ]
+            }
+          },
+          "codecs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": ["json", "bin"]
+            }
+          },
+          "expected_outcome_class": {
+            "type": "string",
+            "enum": [
+              "success",
+              "classified_error",
+              "cancelled",
+              "degraded_mode",
+              "restart_recovered"
+            ]
+          },
+          "semantic_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "parity_targets": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["rust_vs_c", "codec_equivalence", "profile_parity"]
+            }
+          },
+          "evidence_tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "artifact_manifest_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "first_failure_pointer": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "asx-fixture-capture-manifest",
+  "description": "Schema for deterministic Rust reference fixture capture run metadata and output index.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "capture_run_id",
+    "generated_at",
+    "generator",
+    "baseline",
+    "schema_versions",
+    "scenarios"
+  ],
+  "properties": {
+    "manifest_version": {
+      "type": "string",
+      "const": "capture-manifest-v1"
+    },
+    "capture_run_id": {
+      "type": "string",
+      "minLength": 8
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "version", "command", "seed_mode"],
+      "properties": {
+        "tool": {"type": "string"},
+        "version": {"type": "string"},
+        "command": {"type": "string"},
+        "seed_mode": {
+          "type": "string",
+          "enum": ["explicit", "derive_from_scenario"]
+        }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rust_baseline_commit",
+        "rust_toolchain_commit_hash",
+        "rust_toolchain_release",
+        "rust_toolchain_host",
+        "cargo_lock_sha256",
+        "cargo_lock_bytes"
+      ],
+      "properties": {
+        "rust_baseline_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "rust_toolchain_commit_hash": {
+          "type": "string",
+          "minLength": 8
+        },
+        "rust_toolchain_release": {"type": "string"},
+        "rust_toolchain_host": {"type": "string"},
+        "cargo_lock_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "cargo_lock_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "schema_versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixture_schema_version", "scenario_dsl_version"],
+      "properties": {
+        "fixture_schema_version": {"type": "string"},
+        "scenario_dsl_version": {"type": "string"}
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "profile",
+          "codec",
+          "seed",
+          "fixture_path",
+          "semantic_digest"
+        ],
+        "properties": {
+          "scenario_id": {"type": "string", "minLength": 1},
+          "profile": {"type": "string"},
+          "codec": {"type": "string", "enum": ["json", "bin"]},
+          "seed": {"type": "integer", "minimum": 0},
+          "fixture_path": {"type": "string", "minLength": 1},
+          "semantic_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  }
+}

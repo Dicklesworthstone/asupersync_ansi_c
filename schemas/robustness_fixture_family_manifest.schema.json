@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "asx-robustness-fixture-family-manifest",
+  "description": "Manifest schema for robustness fixture-family capture and triage artifacts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "run_id",
+    "family_id",
+    "rust_baseline_commit",
+    "fixture_schema_version",
+    "scenario_dsl_version",
+    "e2e_lane_id",
+    "scenarios"
+  ],
+  "properties": {
+    "manifest_version": {
+      "type": "string",
+      "const": "robustness-fixture-family-manifest-v1"
+    },
+    "run_id": {"type": "string", "minLength": 8},
+    "family_id": {
+      "type": "string",
+      "enum": [
+        "ROBUST-EXHAUSTION",
+        "ROBUST-ENDIAN-UNALIGNED",
+        "ROBUST-FAULT-INJECTION"
+      ]
+    },
+    "rust_baseline_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "fixture_schema_version": {"type": "string"},
+    "scenario_dsl_version": {"type": "string"},
+    "e2e_lane_id": {"type": "string", "minLength": 1},
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "fixture_id",
+          "boundary_class",
+          "expected_failure_class",
+          "prov_ids",
+          "first_failure_pointer",
+          "semantic_digest"
+        ],
+        "properties": {
+          "scenario_id": {"type": "string", "minLength": 1},
+          "fixture_id": {"type": "string", "minLength": 1},
+          "boundary_class": {
+            "type": "string",
+            "enum": [
+              "resource_exhaustion",
+              "endian_decode",
+              "unaligned_access",
+              "fault_time",
+              "fault_entropy",
+              "fault_jitter"
+            ]
+          },
+          "expected_failure_class": {"type": "string", "minLength": 1},
+          "failure_atomic_expected": {"type": "boolean"},
+          "prov_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "first_failure_pointer": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["failure_stage", "scenario_id"],
+            "properties": {
+              "failure_stage": {
+                "type": "string",
+                "enum": ["capture", "validate", "replay-check", "conformance", "e2e"]
+              },
+              "scenario_id": {"type": "string", "minLength": 1},
+              "op_id": {"type": "integer", "minimum": 0},
+              "recommended_owner_bead": {"type": "string"}
+            }
+          },
+          "semantic_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  }
+}

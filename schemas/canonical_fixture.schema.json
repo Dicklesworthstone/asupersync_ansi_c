@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "asx-canonical-fixture",
+  "description": "Canonical fixture schema emitted by Rust reference capture for C conformance/parity runners.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scenario_id",
+    "fixture_schema_version",
+    "scenario_dsl_version",
+    "profile",
+    "codec",
+    "seed",
+    "input",
+    "expected_events",
+    "expected_final_snapshot",
+    "expected_error_codes",
+    "semantic_digest",
+    "provenance"
+  ],
+  "properties": {
+    "scenario_id": {"type": "string", "minLength": 1},
+    "fixture_schema_version": {"type": "string"},
+    "scenario_dsl_version": {"type": "string"},
+    "profile": {"type": "string"},
+    "codec": {"type": "string", "enum": ["json", "bin"]},
+    "seed": {"type": "integer", "minimum": 0},
+    "input": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["ops"],
+      "properties": {
+        "ops": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["id", "op", "args"],
+            "properties": {
+              "id": {"type": "integer", "minimum": 0},
+              "op": {"type": "string", "minLength": 1},
+              "args": {"type": "object"},
+              "expect": {"type": "object"}
+            }
+          }
+        }
+      }
+    },
+    "expected_events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "expected_final_snapshot": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "expected_error_codes": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "semantic_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rust_baseline_commit",
+        "rust_toolchain_commit_hash",
+        "rust_toolchain_release",
+        "rust_toolchain_host",
+        "cargo_lock_sha256",
+        "capture_run_id"
+      ],
+      "properties": {
+        "rust_baseline_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "rust_toolchain_commit_hash": {"type": "string", "minLength": 8},
+        "rust_toolchain_release": {"type": "string"},
+        "rust_toolchain_host": {"type": "string"},
+        "cargo_lock_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "capture_run_id": {"type": "string", "minLength": 8}
+      }
+    }
+  }
+}

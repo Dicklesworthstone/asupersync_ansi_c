@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "asx-core-fixture-family-manifest",
+  "description": "Manifest schema for core semantic fixture-family capture runs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "run_id",
+    "family_id",
+    "rust_baseline_commit",
+    "scenario_dsl_version",
+    "fixture_schema_version",
+    "e2e_lane_id",
+    "scenarios"
+  ],
+  "properties": {
+    "manifest_version": {
+      "type": "string",
+      "const": "core-fixture-family-manifest-v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 8
+    },
+    "family_id": {
+      "type": "string",
+      "enum": [
+        "CORE-LIFECYCLE",
+        "CORE-OUTCOME",
+        "CORE-BUDGET",
+        "CORE-CANCEL",
+        "CORE-CHANNEL",
+        "CORE-TIMER"
+      ]
+    },
+    "rust_baseline_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "scenario_dsl_version": {"type": "string"},
+    "fixture_schema_version": {"type": "string"},
+    "e2e_lane_id": {"type": "string", "minLength": 1},
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "fixture_id",
+          "prov_ids",
+          "profile",
+          "codec",
+          "semantic_digest",
+          "artifact_manifest_path"
+        ],
+        "properties": {
+          "scenario_id": {"type": "string", "minLength": 1},
+          "fixture_id": {"type": "string", "minLength": 1},
+          "prov_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "profile": {"type": "string"},
+          "codec": {"type": "string", "enum": ["json", "bin"]},
+          "semantic_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "parity_targets": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["rust_vs_c", "codec_equivalence", "profile_parity"]
+            }
+          },
+          "artifact_manifest_path": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}
