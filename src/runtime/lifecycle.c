@@ -239,6 +239,32 @@ asx_status asx_region_get_state(asx_region_id id,
     return ASX_OK;
 }
 
+asx_status asx_region_poison(asx_region_id id)
+{
+    asx_region_slot *r;
+    asx_status st;
+
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
+
+    r->poisoned = 1;
+    return ASX_OK;
+}
+
+asx_status asx_region_is_poisoned(asx_region_id id, int *out)
+{
+    asx_region_slot *r;
+    asx_status st;
+
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
+
+    *out = r->poisoned;
+    return ASX_OK;
+}
+
 /* -------------------------------------------------------------------
  * Task lifecycle
  * ------------------------------------------------------------------- */
