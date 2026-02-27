@@ -65,3 +65,16 @@ int asx_budget_is_past_deadline(const asx_budget *b, asx_time now) {
     if (b->deadline == 0) return 0; /* no deadline */
     return now >= b->deadline;
 }
+
+uint32_t asx_budget_polls(const asx_budget *b) {
+    return b->poll_quota;
+}
+
+asx_budget asx_budget_from_polls(uint32_t polls) {
+    asx_budget b;
+    b.deadline   = 0;
+    b.poll_quota = polls;
+    b.cost_quota = UINT64_MAX;
+    b.priority   = 255;
+    return b;
+}

@@ -84,6 +84,30 @@ ASX_API asx_safety_profile asx_safety_profile_active(void);
 ASX_API const char *asx_safety_profile_str(asx_safety_profile profile);
 
 /* ------------------------------------------------------------------ */
+/* Fault containment policy                                            */
+/*                                                                     */
+/* Determines how the runtime responds to invariant violations:        */
+/*   FAIL_FAST     — abort immediately (debug builds)                  */
+/*   POISON_REGION — poison the owning region, continue others         */
+/*   ERROR_ONLY    — return error code, no containment overhead        */
+/*                                                                     */
+/* The default policy is derived from the active safety profile.       */
+/* ------------------------------------------------------------------ */
+
+typedef enum {
+    ASX_CONTAIN_FAIL_FAST     = 0,  /* debug: halt on first violation */
+    ASX_CONTAIN_POISON_REGION = 1,  /* hardened: poison region, continue */
+    ASX_CONTAIN_ERROR_ONLY    = 2   /* release: return error, minimal overhead */
+} asx_containment_policy;
+
+/* Return the default containment policy for a safety profile. */
+ASX_API asx_containment_policy asx_containment_policy_for_profile(
+    asx_safety_profile profile);
+
+/* Return the active containment policy (derived from active profile). */
+ASX_API asx_containment_policy asx_containment_policy_active(void);
+
+/* ------------------------------------------------------------------ */
 /* Fault injection (deterministic-mode only)                           */
 /*                                                                     */
 /* Injects controlled faults into clock, entropy, and allocator paths  */

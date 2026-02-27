@@ -14,6 +14,7 @@
 #include <asx/asx_status.h>
 #include <asx/core/outcome.h>
 #include <asx/core/cleanup.h>
+#include <asx/core/cancel.h>
 #include <asx/runtime/runtime.h>
 
 /* -------------------------------------------------------------------
@@ -43,6 +44,12 @@ typedef struct {
     void            *captured_state;
     uint32_t         captured_size;
     asx_task_state_dtor_fn captured_dtor;
+    /* Cancellation tracking (bd-2cw.3) */
+    asx_cancel_phase   cancel_phase;
+    asx_cancel_reason  cancel_reason;
+    uint32_t           cancel_epoch;
+    uint32_t           cleanup_polls_remaining;
+    int                cancel_pending;  /* 1 if cancel signal delivered */
 } asx_task_slot;
 
 typedef struct {

@@ -50,4 +50,10 @@ ASX_API int asx_budget_is_exhausted(const asx_budget *b);
 /* Check if deadline exceeded */
 ASX_API int asx_budget_is_past_deadline(const asx_budget *b, asx_time now);
 
+/* Query remaining poll quota */
+ASX_API uint32_t asx_budget_polls(const asx_budget *b);
+
+/* Construct a budget from a poll count (other fields infinite/unconstrained) */
+ASX_API asx_budget asx_budget_from_polls(uint32_t polls);
+
 #endif /* ASX_CORE_BUDGET_H */
