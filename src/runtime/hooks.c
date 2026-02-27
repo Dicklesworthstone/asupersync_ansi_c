@@ -11,6 +11,7 @@
  */
 
 #include <asx/asx_config.h>
+#include <asx/codec/codec.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>

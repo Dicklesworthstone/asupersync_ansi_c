@@ -37,6 +37,10 @@
 #include <asx/core/transition.h>
 #include <asx/core/cleanup.h>
 
+/* Codec abstraction and canonical fixture schema */
+#include <asx/codec/schema.h>
+#include <asx/codec/codec.h>
+
 /* Runtime (walking skeleton — bd-ix8.8) */
 #include <asx/runtime/runtime.h>
 
