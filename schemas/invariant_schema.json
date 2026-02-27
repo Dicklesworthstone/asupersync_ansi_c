@@ -1,0 +1,446 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "asx-invariant-schema",
+  "description": "Machine-readable invariant schema for asupersync ANSI C lifecycle state machines, transition legality, forbidden behaviors, and postconditions. Generated from bd-296.4.",
+  "version": "1.0.0",
+  "rust_baseline_commit": "38c152405bd03e2bd9eecf178bfbbe9472fed861",
+  "provenance": {
+    "extraction_beads": ["bd-296.15", "bd-296.16", "bd-296.17", "bd-296.18", "bd-296.19"],
+    "source_documents": [
+      "docs/LIFECYCLE_TRANSITION_TABLES.md",
+      "docs/EXISTING_ASUPERSYNC_STRUCTURE.md",
+      "docs/CHANNEL_TIMER_SEMANTICS.md",
+      "docs/QUIESCENCE_FINALIZATION_INVARIANTS.md"
+    ]
+  },
+
+  "domains": {
+    "region": {
+      "states": [
+        {"id": "Open", "enum_value": "ASX_REGION_OPEN", "ordinal": 0, "terminal": false},
+        {"id": "Closing", "enum_value": "ASX_REGION_CLOSING", "ordinal": 1, "terminal": false},
+        {"id": "Draining", "enum_value": "ASX_REGION_DRAINING", "ordinal": 2, "terminal": false},
+        {"id": "Finalizing", "enum_value": "ASX_REGION_FINALIZING", "ordinal": 3, "terminal": false},
+        {"id": "Closed", "enum_value": "ASX_REGION_CLOSED", "ordinal": 4, "terminal": true}
+      ],
+      "legal_transitions": [
+        {
+          "id": "R1", "from": "Open", "to": "Closing",
+          "trigger": "begin_close(reason)",
+          "preconditions": ["state == Open"],
+          "postconditions": ["admission_closed = true", "cancel_reason set if provided"],
+          "fixture_ids": ["region-lifecycle-001"]
+        },
+        {
+          "id": "R1a", "from": "Open", "to": "Closing",
+          "trigger": "parent_closing",
+          "preconditions": ["parent transitions to Closing/Draining"],
+          "postconditions": ["cascading close propagated to child regions"],
+          "fixture_ids": ["region-lifecycle-002"]
+        },
+        {
+          "id": "R1b", "from": "Open", "to": "Closing",
+          "trigger": "parent_cancel_propagated",
+          "preconditions": ["parent cancel reaches this region"],
+          "postconditions": ["cancel signal forwarded to child tasks"],
+          "fixture_ids": ["region-lifecycle-003"]
+        },
+        {
+          "id": "R2", "from": "Closing", "to": "Draining",
+          "trigger": "begin_drain()",
+          "preconditions": ["state == Closing"],
+          "postconditions": ["child cancellation requests issued", "scheduler drives completion"],
+          "fixture_ids": ["region-lifecycle-004"]
+        },
+        {
+          "id": "R_SKIP", "from": "Closing", "to": "Finalizing",
+          "trigger": "begin_finalize()",
+          "preconditions": ["state == Closing", "child_task_count == 0", "child_region_count == 0"],
+          "postconditions": ["drain phase skipped", "finalizer execution begins (LIFO)"],
+          "fixture_ids": ["region-lifecycle-009"]
+        },
+        {
+          "id": "R3", "from": "Draining", "to": "Finalizing",
+          "trigger": "all_children_completed",
+          "preconditions": ["child_task_count == 0", "all child regions Closed", "no pending work"],
+          "postconditions": ["finalizer execution begins (LIFO)"],
+          "fixture_ids": ["region-lifecycle-005"]
+        },
+        {
+          "id": "R4", "from": "Finalizing", "to": "Closed",
+          "trigger": "finalization_complete",
+          "preconditions": [
+            "all obligations resolved (committed or aborted)",
+            "all tasks completed",
+            "all children closed",
+            "finalizer stack drained",
+            "ghost_linearity_monitor confirms zero outstanding"
+          ],
+          "postconditions": ["arena reclaimed", "close waiters notified", "parent notified"],
+          "fixture_ids": ["region-lifecycle-006"]
+        }
+      ],
+      "forbidden_transitions": [
+        {"from": "Closing", "to": "Open", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_reopen"},
+        {"from": "Draining", "to": "Open", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_reopen"},
+        {"from": "Draining", "to": "Closing", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_regress"},
+        {"from": "Finalizing", "to": "Open", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_reopen"},
+        {"from": "Finalizing", "to": "Closing", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_regress"},
+        {"from": "Finalizing", "to": "Draining", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_regress"},
+        {"from": "Closed", "to": "Open", "error": "ASX_E_INVALID_TRANSITION", "reason": "terminal"},
+        {"from": "Closed", "to": "Closing", "error": "ASX_E_INVALID_TRANSITION", "reason": "terminal"},
+        {"from": "Closed", "to": "Draining", "error": "ASX_E_INVALID_TRANSITION", "reason": "terminal"},
+        {"from": "Closed", "to": "Finalizing", "error": "ASX_E_INVALID_TRANSITION", "reason": "terminal"},
+        {"from": "Open", "to": "Draining", "error": "ASX_E_INVALID_TRANSITION", "reason": "skip_closing"},
+        {"from": "Open", "to": "Finalizing", "error": "ASX_E_INVALID_TRANSITION", "reason": "skip_closing"},
+        {"from": "Open", "to": "Closed", "error": "ASX_E_INVALID_TRANSITION", "reason": "skip_sequence"},
+        {"from": "Closing", "to": "Closed", "error": "ASX_E_INVALID_TRANSITION", "reason": "skip_finalize"},
+        {"from": "Draining", "to": "Closed", "error": "ASX_E_INVALID_TRANSITION", "reason": "skip_finalize"}
+      ],
+      "admission_gates": [
+        {"operation": "create_child_task", "allowed_states": ["Open", "Finalizing"], "error": "ASX_E_REGION_NOT_OPEN"},
+        {"operation": "create_child_region", "allowed_states": ["Open"], "error": "ASX_E_REGION_NOT_OPEN"},
+        {"operation": "create_obligation", "allowed_states": ["Open"], "error": "ASX_E_REGION_NOT_OPEN"},
+        {"operation": "close_region", "allowed_states": ["Open"], "error": "ASX_E_INVALID_TRANSITION"},
+        {"operation": "query_status", "allowed_states": ["Open", "Closing", "Draining", "Finalizing", "Closed"], "error": null},
+        {"operation": "access_arena", "allowed_states": ["Open", "Closing", "Draining", "Finalizing"], "error": "ASX_E_REGION_CLOSED"}
+      ],
+      "invariants": [
+        {"id": "INV-RG-01", "rule": "Region state transitions are monotone (ordinal only increases)", "category": "monotonicity"},
+        {"id": "INV-RG-02", "rule": "Closed is absorbing (no transitions out)", "category": "terminal"},
+        {"id": "INV-RG-03", "rule": "Closing->Finalizing skip requires child_count == 0", "category": "skip_path"},
+        {"id": "INV-RG-04", "rule": "Finalizing->Closed requires all obligations resolved", "category": "quiescence"},
+        {"id": "INV-RG-05", "rule": "Finalizers execute in LIFO order", "category": "ordering"}
+      ]
+    },
+
+    "task": {
+      "states": [
+        {"id": "Created", "enum_value": "ASX_TASK_CREATED", "ordinal": 0, "terminal": false},
+        {"id": "Running", "enum_value": "ASX_TASK_RUNNING", "ordinal": 1, "terminal": false},
+        {"id": "CancelRequested", "enum_value": "ASX_TASK_CANCEL_REQUESTED", "ordinal": 2, "terminal": false},
+        {"id": "Cancelling", "enum_value": "ASX_TASK_CANCELLING", "ordinal": 3, "terminal": false},
+        {"id": "Finalizing", "enum_value": "ASX_TASK_FINALIZING", "ordinal": 4, "terminal": false},
+        {"id": "Completed", "enum_value": "ASX_TASK_COMPLETED", "ordinal": 5, "terminal": true}
+      ],
+      "legal_transitions": [
+        {"id": "T1", "from": "Created", "to": "Running", "trigger": "start_running()", "fixture_ids": ["task-lifecycle-001"]},
+        {"id": "T2", "from": "Created", "to": "CancelRequested", "trigger": "request_cancel()", "fixture_ids": ["task-lifecycle-002"],
+         "postconditions": ["cancel_epoch incremented"]},
+        {"id": "T3", "from": "Created", "to": "Completed", "trigger": "complete(outcome)", "fixture_ids": ["task-lifecycle-003"],
+         "postconditions": ["error/panic at spawn time"]},
+        {"id": "T4", "from": "Running", "to": "CancelRequested", "trigger": "request_cancel()", "fixture_ids": ["task-lifecycle-004"],
+         "postconditions": ["cancel_epoch incremented"]},
+        {"id": "T5", "from": "Running", "to": "Completed", "trigger": "complete(outcome)", "fixture_ids": ["task-lifecycle-005"]},
+        {"id": "T6", "from": "CancelRequested", "to": "CancelRequested", "trigger": "request_cancel()", "fixture_ids": ["task-lifecycle-006"],
+         "postconditions": ["reason.strengthen()", "budget.combine()", "returns false"],
+         "self_transition": true, "semantics": "strengthening"},
+        {"id": "T7", "from": "CancelRequested", "to": "Cancelling", "trigger": "acknowledge_cancel()", "fixture_ids": ["task-lifecycle-007"],
+         "postconditions": ["cleanup budget applied", "polls_remaining set"]},
+        {"id": "T8", "from": "CancelRequested", "to": "Completed", "trigger": "complete(outcome)", "fixture_ids": ["task-lifecycle-008"]},
+        {"id": "T9", "from": "Cancelling", "to": "Cancelling", "trigger": "request_cancel()", "fixture_ids": ["task-lifecycle-009"],
+         "postconditions": ["reason/budget updated", "returns false"],
+         "self_transition": true, "semantics": "strengthening"},
+        {"id": "T10", "from": "Cancelling", "to": "Finalizing", "trigger": "cleanup_done()", "fixture_ids": ["task-lifecycle-010"]},
+        {"id": "T11", "from": "Cancelling", "to": "Completed", "trigger": "complete(outcome)", "fixture_ids": ["task-lifecycle-011"]},
+        {"id": "T12", "from": "Finalizing", "to": "Finalizing", "trigger": "request_cancel()", "fixture_ids": ["task-lifecycle-012"],
+         "postconditions": ["reason/budget updated", "returns false"],
+         "self_transition": true, "semantics": "strengthening"},
+        {"id": "T13", "from": "Finalizing", "to": "Completed", "trigger": "finalize_done()", "fixture_ids": ["task-lifecycle-013"],
+         "postconditions": ["produces CancelWitness", "outcome is Cancelled(reason)"]}
+      ],
+      "forbidden_transitions": [
+        {"from": "Running", "to": "Created", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_backward"},
+        {"from": "CancelRequested", "to": "Running", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_uncancel"},
+        {"from": "CancelRequested", "to": "Created", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_regress"},
+        {"from": "Cancelling", "to": "CancelRequested", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_regress"},
+        {"from": "Cancelling", "to": "Running", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_regress"},
+        {"from": "Cancelling", "to": "Created", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_regress"},
+        {"from": "Finalizing", "to": "Cancelling", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_regress"},
+        {"from": "Finalizing", "to": "CancelRequested", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_regress"},
+        {"from": "Finalizing", "to": "Running", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_regress"},
+        {"from": "Finalizing", "to": "Created", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_regress"},
+        {"from": "Created", "to": "Cancelling", "error": "ASX_E_INVALID_TRANSITION", "reason": "skip_cancel_requested"},
+        {"from": "Created", "to": "Finalizing", "error": "ASX_E_INVALID_TRANSITION", "reason": "skip_phases"},
+        {"from": "Running", "to": "Cancelling", "error": "ASX_E_INVALID_TRANSITION", "reason": "skip_cancel_requested"},
+        {"from": "Running", "to": "Finalizing", "error": "ASX_E_INVALID_TRANSITION", "reason": "skip_phases"},
+        {"from": "CancelRequested", "to": "Finalizing", "error": "ASX_E_INVALID_TRANSITION", "reason": "skip_cancelling"},
+        {"from": "Created", "to": "Created", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_self_loop"},
+        {"from": "Running", "to": "Running", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_self_loop"},
+        {"from": "Completed", "to": "Created", "error": "ASX_E_INVALID_TRANSITION", "reason": "terminal"},
+        {"from": "Completed", "to": "Running", "error": "ASX_E_INVALID_TRANSITION", "reason": "terminal"},
+        {"from": "Completed", "to": "CancelRequested", "error": "ASX_E_INVALID_TRANSITION", "reason": "terminal"},
+        {"from": "Completed", "to": "Cancelling", "error": "ASX_E_INVALID_TRANSITION", "reason": "terminal"},
+        {"from": "Completed", "to": "Finalizing", "error": "ASX_E_INVALID_TRANSITION", "reason": "terminal"},
+        {"from": "Completed", "to": "Completed", "error": "ASX_E_INVALID_TRANSITION", "reason": "terminal"}
+      ],
+      "transition_matrix_6x6": {
+        "description": "row=from, col=to. L=legal, F=forbidden, S=self-transition(strengthening)",
+        "states_order": ["Created", "Running", "CancelRequested", "Cancelling", "Finalizing", "Completed"],
+        "matrix": [
+          ["F", "L", "L", "F", "F", "L"],
+          ["F", "F", "L", "F", "F", "L"],
+          ["F", "F", "S", "L", "F", "L"],
+          ["F", "F", "F", "S", "L", "L"],
+          ["F", "F", "F", "F", "S", "L"],
+          ["F", "F", "F", "F", "F", "F"]
+        ]
+      },
+      "invariants": [
+        {"id": "INV-TK-01", "rule": "cancel_epoch increments only on first cancel (T2/T4), constant on strengthening (T6/T9/T12)", "category": "cancel_epoch"},
+        {"id": "INV-TK-02", "rule": "Strengthening: higher severity wins, deterministic tie-break (earlier timestamp, then smaller message)", "category": "strengthening"},
+        {"id": "INV-TK-03", "rule": "Completed is absorbing (no transitions out)", "category": "terminal"},
+        {"id": "INV-TK-04", "rule": "Only CancelRequested/Cancelling/Finalizing allow self-transitions", "category": "self_transition"}
+      ]
+    },
+
+    "obligation": {
+      "states": [
+        {"id": "Reserved", "enum_value": "ASX_OBLIGATION_RESERVED", "ordinal": 0, "terminal": false},
+        {"id": "Committed", "enum_value": "ASX_OBLIGATION_COMMITTED", "ordinal": 1, "terminal": true},
+        {"id": "Aborted", "enum_value": "ASX_OBLIGATION_ABORTED", "ordinal": 2, "terminal": true},
+        {"id": "Leaked", "enum_value": "ASX_OBLIGATION_LEAKED", "ordinal": 3, "terminal": true}
+      ],
+      "legal_transitions": [
+        {"id": "O1", "from": "Reserved", "to": "Committed", "trigger": "commit()", "fixture_ids": ["obligation-lifecycle-001"]},
+        {"id": "O2", "from": "Reserved", "to": "Aborted", "trigger": "abort(reason)", "fixture_ids": ["obligation-lifecycle-002"],
+         "postconditions": ["abort_reason recorded (Cancel|Error|Explicit)"]},
+        {"id": "O3", "from": "Reserved", "to": "Leaked", "trigger": "finalization_leak_sweep()", "fixture_ids": ["obligation-lifecycle-003"],
+         "postconditions": ["leak explicitly reported", "linearity violation flagged"]}
+      ],
+      "forbidden_transitions": [
+        {"from": "Committed", "to": "Reserved", "error": "ASX_E_OBLIGATION_ALREADY_RESOLVED", "reason": "terminal"},
+        {"from": "Committed", "to": "Aborted", "error": "ASX_E_OBLIGATION_ALREADY_RESOLVED", "reason": "terminal"},
+        {"from": "Committed", "to": "Leaked", "error": "ASX_E_OBLIGATION_ALREADY_RESOLVED", "reason": "terminal"},
+        {"from": "Committed", "to": "Committed", "error": "ASX_E_OBLIGATION_ALREADY_RESOLVED", "reason": "double_resolve_panic"},
+        {"from": "Aborted", "to": "Reserved", "error": "ASX_E_OBLIGATION_ALREADY_RESOLVED", "reason": "terminal"},
+        {"from": "Aborted", "to": "Committed", "error": "ASX_E_OBLIGATION_ALREADY_RESOLVED", "reason": "terminal"},
+        {"from": "Aborted", "to": "Leaked", "error": "ASX_E_OBLIGATION_ALREADY_RESOLVED", "reason": "terminal"},
+        {"from": "Aborted", "to": "Aborted", "error": "ASX_E_OBLIGATION_ALREADY_RESOLVED", "reason": "double_resolve_panic"},
+        {"from": "Leaked", "to": "Reserved", "error": "ASX_E_OBLIGATION_ALREADY_RESOLVED", "reason": "terminal"},
+        {"from": "Leaked", "to": "Committed", "error": "ASX_E_OBLIGATION_ALREADY_RESOLVED", "reason": "terminal"},
+        {"from": "Leaked", "to": "Aborted", "error": "ASX_E_OBLIGATION_ALREADY_RESOLVED", "reason": "terminal"},
+        {"from": "Leaked", "to": "Leaked", "error": "ASX_E_OBLIGATION_ALREADY_RESOLVED", "reason": "terminal"},
+        {"from": "Reserved", "to": "Reserved", "error": "ASX_E_INVALID_TRANSITION", "reason": "no_self_loop"}
+      ],
+      "obligation_kinds": ["SendPermit", "Ack", "Lease", "IoOp"],
+      "abort_reasons": ["Cancel", "Error", "Explicit"],
+      "invariants": [
+        {"id": "INV-OB-01", "rule": "Exactly-once resolution: each obligation resolves to exactly one terminal state", "category": "linearity"},
+        {"id": "INV-OB-02", "rule": "Double resolution PANICS with 'obligation already resolved'", "category": "panic"},
+        {"id": "INV-OB-03", "rule": "Linearity ledger: reserve sets bit, commit/abort clears bit, finalization checks popcnt == 0", "category": "ledger"},
+        {"id": "INV-OB-04", "rule": "Drop without resolution produces Leaked state (session layer panics)", "category": "leak"}
+      ]
+    },
+
+    "cancellation": {
+      "phases": [
+        {"id": "Requested", "ordinal": 0},
+        {"id": "Cancelling", "ordinal": 1},
+        {"id": "Finalizing", "ordinal": 2},
+        {"id": "Completed", "ordinal": 3}
+      ],
+      "cancel_kinds": [
+        {"kind": "User", "severity": 0, "cleanup_poll_quota": 1000, "cleanup_priority": 200},
+        {"kind": "Timeout", "severity": 1, "cleanup_poll_quota": 500, "cleanup_priority": 210},
+        {"kind": "Deadline", "severity": 1, "cleanup_poll_quota": 500, "cleanup_priority": 210},
+        {"kind": "PollQuota", "severity": 2, "cleanup_poll_quota": 300, "cleanup_priority": 215},
+        {"kind": "CostBudget", "severity": 2, "cleanup_poll_quota": 300, "cleanup_priority": 215},
+        {"kind": "FailFast", "severity": 3, "cleanup_poll_quota": 200, "cleanup_priority": 220},
+        {"kind": "RaceLost", "severity": 3, "cleanup_poll_quota": 200, "cleanup_priority": 220},
+        {"kind": "ParentCancelled", "severity": 3, "cleanup_poll_quota": 200, "cleanup_priority": 220},
+        {"kind": "ResourceUnavailable", "severity": 3, "cleanup_poll_quota": 200, "cleanup_priority": 220},
+        {"kind": "LinkedExit", "severity": 3, "cleanup_poll_quota": 200, "cleanup_priority": 220},
+        {"kind": "Shutdown", "severity": 5, "cleanup_poll_quota": 50, "cleanup_priority": 255}
+      ],
+      "strengthen_rules": {
+        "primary": "higher severity wins",
+        "tiebreak_1": "earlier timestamp wins",
+        "tiebreak_2": "lexicographically smaller message wins"
+      },
+      "cancel_witness_errors": [
+        "TaskMismatch", "RegionMismatch", "EpochMismatch", "PhaseRegression", "ReasonWeakened"
+      ],
+      "attribution_chain": {
+        "max_depth": 16,
+        "max_memory_bytes": 4096,
+        "bytes_per_level": 88
+      },
+      "invariants": [
+        {"id": "INV-CX-01", "rule": "Phase progression is monotone (ordinal only increases)", "category": "monotonicity"},
+        {"id": "INV-CX-02", "rule": "Strengthening never weakens: severity(new) >= severity(old)", "category": "strengthening"},
+        {"id": "INV-CX-03", "rule": "Attribution chain bounded: depth <= 16, memory <= 4096 bytes", "category": "bounded"}
+      ]
+    },
+
+    "outcome": {
+      "variants": [
+        {"id": "Ok", "severity": 0},
+        {"id": "Err", "severity": 1},
+        {"id": "Cancelled", "severity": 2},
+        {"id": "Panicked", "severity": 3}
+      ],
+      "join_operator": {
+        "rule": "join(a, b) = a if severity(a) >= severity(b), else b",
+        "left_bias": true,
+        "laws": ["severity_commutative", "severity_associative", "severity_idempotent", "Ok_is_minimal", "Panicked_is_maximal"]
+      },
+      "invariants": [
+        {"id": "INV-OC-01", "rule": "Severity order is total: Ok(0) < Err(1) < Cancelled(2) < Panicked(3)", "category": "lattice"},
+        {"id": "INV-OC-02", "rule": "Join is left-biased for equal severity", "category": "bias"},
+        {"id": "INV-OC-03", "rule": "Cancelled-vs-cancelled uses reason strengthening", "category": "strengthening"}
+      ]
+    },
+
+    "budget": {
+      "components": ["deadline", "poll_quota", "cost_quota", "priority"],
+      "meet_operator": {
+        "deadline": "min_finite (None is unconstrained)",
+        "poll_quota": "min",
+        "cost_quota": "min_finite (None is unconstrained)",
+        "priority": "min (lower is tighter)"
+      },
+      "identities": {
+        "INFINITE": {"deadline": null, "poll_quota": 4294967295, "cost_quota": null, "priority": 255},
+        "ZERO": {"deadline": 0, "poll_quota": 0, "cost_quota": 0, "priority": 0}
+      },
+      "laws": ["commutative", "associative", "idempotent", "identity_INFINITE", "absorbing_ZERO", "monotone_narrowing"],
+      "exhaustion_predicates": {
+        "structural": "poll_quota == 0 || cost_quota == Some(0)",
+        "temporal": "now >= deadline"
+      },
+      "invariants": [
+        {"id": "INV-BG-01", "rule": "meet(a, INFINITE) = a", "category": "identity"},
+        {"id": "INV-BG-02", "rule": "meet(a, ZERO) yields zeroed quotas and immediate deadline", "category": "absorbing"},
+        {"id": "INV-BG-03", "rule": "Consumption is failure-atomic: insufficient cost_quota does not mutate", "category": "atomicity"}
+      ]
+    },
+
+    "channel": {
+      "implicit_states": [
+        {"id": "Open", "condition": "receiver_dropped == false AND sender_count > 0"},
+        {"id": "HalfClosedRx", "condition": "receiver_dropped == true AND sender_count > 0"},
+        {"id": "HalfClosedTx", "condition": "receiver_dropped == false AND sender_count == 0"},
+        {"id": "Closed", "condition": "receiver_dropped == true AND sender_count == 0"}
+      ],
+      "send_errors": ["Disconnected", "Cancelled", "Full"],
+      "recv_errors": ["Disconnected", "Cancelled", "Empty"],
+      "invariants": [
+        {"id": "INV-CH-01", "rule": "used_slots = queue.len + reserved <= capacity", "category": "capacity"},
+        {"id": "INV-CH-02", "rule": "Messages delivered in FIFO order (VecDeque)", "category": "ordering"},
+        {"id": "INV-CH-03", "rule": "Waiters serviced in FIFO order (monotonic ID)", "category": "fairness"},
+        {"id": "INV-CH-04", "rule": "try_reserve returns Full when waiter queue non-empty", "category": "fairness"},
+        {"id": "INV-CH-05", "rule": "Cancelled reserve does not consume capacity", "category": "cancel_safety"},
+        {"id": "INV-CH-06", "rule": "Cancelled recv does not consume message", "category": "cancel_safety"},
+        {"id": "INV-CH-07", "rule": "receiver_dropped is monotone: false -> true", "category": "monotonicity"},
+        {"id": "INV-CH-08", "rule": "sender_count only decrements after creation", "category": "monotonicity"},
+        {"id": "INV-CH-09", "rule": "Permit Drop without send/abort decrements reserved and cascades wake", "category": "raii"},
+        {"id": "INV-CH-10", "rule": "Session TrackedPermit leaked -> panic (obligation linearity)", "category": "obligation"}
+      ]
+    },
+
+    "timer": {
+      "structure": {
+        "type": "hierarchical_4_level",
+        "slots_per_level": 256,
+        "levels": [
+          {"level": 0, "resolution_ms": 1, "range_ms": 256},
+          {"level": 1, "resolution_ms": 256, "range_ms": 65536},
+          {"level": 2, "resolution_ms": 65536, "range_ms": 16777216},
+          {"level": 3, "resolution_ms": 16777216, "range_ms": 4294967296}
+        ],
+        "overflow": "BinaryHeap for durations beyond wheel range"
+      },
+      "handle": {
+        "fields": ["id: u64", "generation: u64"],
+        "wrap_safety": "wrapping_add(1) for both, HashMap-based tracking"
+      },
+      "invariants": [
+        {"id": "INV-TM-01", "rule": "Cancel requires exact (id, generation) match", "category": "handle_safety"},
+        {"id": "INV-TM-02", "rule": "Cancelled timers silently skipped at fire time via is_live()", "category": "lazy_deletion"},
+        {"id": "INV-TM-03", "rule": "Same-deadline timers fire in insertion order", "category": "ordering"},
+        {"id": "INV-TM-04", "rule": "try_register rejects duration > max_timer_duration", "category": "validation"},
+        {"id": "INV-TM-05", "rule": "All-cancelled triggers purge_inactive_storage()", "category": "cleanup"},
+        {"id": "INV-TM-06", "rule": "u64 ID/generation wrap is collision-safe", "category": "wrap_safety"},
+        {"id": "INV-TM-07", "rule": "Cascade respects generation: dead entries dropped during level promotion", "category": "cascade"},
+        {"id": "INV-TM-08", "rule": "Fire criterion: entry.deadline <= now (inclusive)", "category": "fire_semantics"}
+      ]
+    },
+
+    "scheduler": {
+      "lanes": [
+        {"name": "Cancel", "priority": 0, "ordering": "priority_then_generation_fifo"},
+        {"name": "Timed", "priority": 1, "ordering": "edf_then_generation_fifo"},
+        {"name": "Ready", "priority": 2, "ordering": "priority_then_generation_fifo"}
+      ],
+      "governor_suggestions": [
+        {"name": "NoPreference", "lane_order": ["Cancel", "Timed", "Ready"], "cancel_streak_multiplier": 1},
+        {"name": "MeetDeadlines", "lane_order": ["Timed", "Cancel", "Ready"], "cancel_streak_multiplier": 1},
+        {"name": "DrainObligations", "lane_order": ["Cancel", "Timed", "Ready"], "cancel_streak_multiplier": 2},
+        {"name": "DrainRegions", "lane_order": ["Cancel", "Timed", "Ready"], "cancel_streak_multiplier": 2}
+      ],
+      "fairness": {
+        "cancel_streak_base_limit": 16,
+        "adaptive_arms": [4, 8, 16, 32, 64]
+      },
+      "determinism": {
+        "rng_seed_source": "worker_id",
+        "tie_break": "rng_hint % count for equal priority",
+        "work_steal": "rng-seeded circular scan"
+      },
+      "invariants": [
+        {"id": "INV-SC-01", "rule": "Cancel lane dispatched before timed before ready (default)", "category": "lane_priority"},
+        {"id": "INV-SC-02", "rule": "Equal-priority entries dispatched in generation (FIFO) order", "category": "ordering"},
+        {"id": "INV-SC-03", "rule": "Equal-deadline timed entries dispatched in generation (FIFO) order", "category": "edf"},
+        {"id": "INV-SC-04", "rule": "Cancel-streak limit prevents cancellation starvation", "category": "fairness"},
+        {"id": "INV-SC-05", "rule": "Same seed -> same work-steal scan order", "category": "determinism"},
+        {"id": "INV-SC-06", "rule": "Identical dispatch traces produce identical witness hash", "category": "replay"},
+        {"id": "INV-SC-07", "rule": "Phase 0 (timers) executes before task dispatch", "category": "phase_ordering"},
+        {"id": "INV-SC-08", "rule": "Governor suggestion affects lane order but not correctness", "category": "safety"}
+      ]
+    },
+
+    "quiescence": {
+      "conditions": [
+        "active_task_count == 0",
+        "reserved_obligation_count == 0",
+        "all regions Closed",
+        "timer structures drained (no pending expirations)",
+        "channel structures drained (no deliverable buffered work)"
+      ],
+      "diagnostics": [
+        "ASX_E_TASKS_STILL_ACTIVE",
+        "ASX_E_OBLIGATIONS_UNRESOLVED",
+        "ASX_E_REGIONS_NOT_CLOSED",
+        "ASX_E_TIMERS_PENDING",
+        "ASX_E_CHANNEL_NOT_DRAINED"
+      ],
+      "invariants": [
+        {"id": "INV-QU-01", "rule": "Quiescence requires ALL five conditions simultaneously", "category": "completeness"},
+        {"id": "INV-QU-02", "rule": "Failure to reach quiescence produces specific diagnostic", "category": "diagnostics"},
+        {"id": "INV-QU-03", "rule": "Cleanup budget overrun yields deterministic force-complete, not undefined stalling", "category": "bounded"}
+      ]
+    }
+  },
+
+  "schema_meta": {
+    "total_domains": 8,
+    "total_states": 23,
+    "total_legal_transitions": 25,
+    "total_forbidden_transitions": 50,
+    "total_invariants": 44,
+    "total_admission_gates": 6,
+    "schema_evolution_policy": {
+      "versioning": "semver on schema version field",
+      "backward_compat": "additive changes (new domains/states/transitions) are minor bumps; removal/rename is major bump",
+      "drift_gate": "CI compares schema hash against committed baseline; any difference blocks merge until reviewed",
+      "update_protocol": [
+        "1. Update source extraction documents first",
+        "2. Regenerate schema from extraction (never hand-edit schema to diverge from docs)",
+        "3. Run invariant test generator against new schema",
+        "4. Verify all generated tests pass",
+        "5. Commit schema + generated tests atomically"
+      ]
+    }
+  }
+}
