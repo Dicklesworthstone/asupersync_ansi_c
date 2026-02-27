@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0.0",
+  "milestone_id": "M0-spec-foundation",
+  "captured_at_utc": "2026-02-27T04:09:54Z",
+  "source_repo": {
+    "url": "https://github.com/Dicklesworthstone/asupersync",
+    "commit": "38c152405bd03e2bd9eecf178bfbbe9472fed861",
+    "commit_short": "38c152405bd0",
+    "commit_timestamp": "2026-02-26T21:33:22-05:00",
+    "commit_subject": "Fix io_uring reactor spurious ERROR events from poll cancellations and stale fds",
+    "working_tree_clean": true
+  },
+  "rust_toolchain": {
+    "rustc_version": "rustc 1.95.0-nightly (7f99507f5 2026-02-19)",
+    "release": "1.95.0-nightly",
+    "commit_hash": "7f99507f57e6c4aa0dce3daf6a13cca8cd4dd312",
+    "commit_date": "2026-02-19",
+    "host": "x86_64-unknown-linux-gnu",
+    "llvm_version": "22.1.0"
+  },
+  "cargo_lock": {
+    "path": "/data/projects/asupersync/Cargo.lock",
+    "sha256": "77f4bfaedfe5b8572dfca3181119f9432825ea3d868ee8f5d2793a6c5cdeffdc",
+    "bytes": 70834,
+    "tracked_by_git": false,
+    "tracking_note": "Workspace snapshot is recorded for parity provenance even when Cargo.lock is not tracked in git."
+  },
+  "provenance_policy": {
+    "single_baseline_per_milestone": true,
+    "dual_baseline_rebase_required": true,
+    "allowed_delta_classifications": [
+      "none",
+      "intentional_upstream",
+      "c_regression",
+      "spec_defect",
+      "harness_defect"
+    ],
+    "parity_target_update_rule": "Update baseline only after dual-baseline regeneration and complete delta classification with owner sign-off."
+  }
+}
