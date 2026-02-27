@@ -47,5 +47,6 @@
 
 /* Runtime (walking skeleton — bd-ix8.8) */
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/trace.h>
 
 #endif /* ASX_ASX_H */

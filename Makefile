@@ -123,7 +123,8 @@ RUNTIME_SRC := \
 	src/runtime/scheduler.c \
 	src/runtime/cancellation.c \
 	src/runtime/quiescence.c \
-	src/runtime/resource.c
+	src/runtime/resource.c \
+	src/runtime/trace.c
 
 CHANNEL_SRC := \
 	src/channel/mpsc.c
