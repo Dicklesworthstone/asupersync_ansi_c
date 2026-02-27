@@ -2,7 +2,7 @@
 
 > **Bead:** `bd-296.3`
 > **Status:** Semantic-unit parity tracker with acceptance-test mapping
-> **Last updated:** 2026-02-27 by CopperSpire
+> **Last updated:** 2026-02-27 by CopperSpire, updated by PearlSwan
 
 This matrix tracks canonical semantic units, their source-of-truth extraction status, and required acceptance coverage before parity can be declared complete.
 
@@ -39,8 +39,8 @@ This matrix tracks canonical semantic units, their source-of-truth extraction st
 | `U-C-PORTABILITY-UB` | Portable C subset + UB elimination policy | `docs/C_PORTABILITY_RULES.md` | compiler/static-analysis + UB-focused tests | UB-prone constructs in core forbidden | `spec-reviewed` | `bd-296.29`, `bd-66l.10` |
 | `U-GUARANTEE-SUBSTITUTION` | Rust guarantee -> C mechanism mapping | `docs/GUARANTEE_SUBSTITUTION_MATRIX.md` | proof artifact checklist + fixture links | missing substitution evidence forbidden | `spec-reviewed` | `bd-296.6` |
 | `U-CODEC-EQUIVALENCE` | JSON/BIN canonical semantic equivalence | plan + future conformance docs | codec-equivalence conformance suite | semantic drift between codecs forbidden | `impl-pending` | `bd-2n0.1`, `bd-1md.11` |
-| `U-PROFILE-PARITY` | Cross-profile canonical digest equivalence | plan profile parity contract | profile parity suite across shared fixtures | profile-only semantic forks forbidden | `impl-pending` | `bd-j4m.7`, `bd-1md.10` |
-| `U-REPLAY-CONTINUITY` | Deterministic replay + continuity under restart | plan + future trace/replay docs | replay identity and crash/restart continuity tests | digest mismatch on same input forbidden | `impl-pending` | `bd-2n0.4`, `bd-j4m.8` |
+| `U-PROFILE-PARITY` | Cross-profile canonical digest equivalence | `docs/VERTICAL_CONTINUITY_FIXTURE_FAMILIES.md`, `docs/HFT_PROFILE.md`, `docs/AUTOMOTIVE_PROFILE.md` | profile parity suite across shared fixtures + vertical fixture lanes (`E2E-VERT-HFT`, `E2E-VERT-AUTO`) | profile-only semantic forks and hidden degraded-mode behavior forbidden | `impl-pending` | `bd-1md.15`, `bd-j4m.7`, `bd-1md.10` |
+| `U-REPLAY-CONTINUITY` | Deterministic replay + continuity under restart | `docs/VERTICAL_CONTINUITY_FIXTURE_FAMILIES.md` + trace/replay docs | replay identity and crash/restart continuity tests (`E2E-CONT-RESTART`) | digest mismatch or duplicated side effects on restart forbidden | `impl-pending` | `bd-1md.15`, `bd-2n0.4`, `bd-j4m.8` |
 
 ## 3. Phase 1 Exit Review Gate Checklist
 

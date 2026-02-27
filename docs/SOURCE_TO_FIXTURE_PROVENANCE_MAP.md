@@ -118,6 +118,6 @@ When upstream Rust baseline changes:
 
 ## 7. Known Gaps (Current Session)
 
-- `docs/FEATURE_PARITY.md` is not yet available, so row-to-parity-table links currently use `prov_id` as the canonical key.
+- `docs/FEATURE_PARITY.md` is now available; row-to-parity-table links use `prov_id` as the canonical key and can be cross-referenced against `FEATURE_PARITY.md` unit IDs.
 - Finalization fixture IDs are mapped from `bd-296.18` candidate extensions and should be kept stable when they are materialized in conformance assets.
 - Scheduler provenance rows reference `docs/CHANNEL_TIMER_SEMANTICS.md` which provides deeper Rust source analysis of the three-lane scheduler, work stealing, and fairness certificate semantics not covered in `CHANNEL_TIMER_DETERMINISM.md`.
