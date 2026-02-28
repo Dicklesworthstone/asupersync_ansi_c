@@ -77,6 +77,7 @@ echo "=== test_harness_smoke (e2e harness) ==="
 export ASX_E2E_SEED=99
 export ASX_E2E_PROFILE=CORE
 export ASX_E2E_CODEC=json
+export ASX_E2E_RESOURCE_CLASS=R2
 export ASX_E2E_RUN_ID="smoke-test-001"
 export ASX_E2E_ARTIFACT_DIR="${WORK_DIR}/artifacts"
 export ASX_E2E_LOG_DIR="${WORK_DIR}/logs"
@@ -91,6 +92,7 @@ assert_eq "lane_id set" "E2E-SMOKE" "$_E2E_LANE_ID"
 assert_eq "seed from env" "99" "$E2E_SEED"
 assert_eq "profile from env" "CORE" "$E2E_PROFILE"
 assert_eq "codec from env" "json" "$E2E_CODEC"
+assert_eq "resource class from env" "R2" "$E2E_RESOURCE_CLASS"
 assert_dir_exists "artifact dir created" "${WORK_DIR}/artifacts"
 assert_dir_exists "log dir created" "${WORK_DIR}/logs"
 
@@ -154,6 +156,7 @@ assert_contains "summary has fail count" "$SUMMARY_FILE" '"fail": 1'
 RERUN="$(e2e_rerun_command "smoke.fail.example" "tests/e2e/my_script.sh")"
 assert_contains "rerun has seed" <(echo "$RERUN") "ASX_E2E_SEED=99"
 assert_contains "rerun has profile" <(echo "$RERUN") "ASX_E2E_PROFILE=CORE"
+assert_contains "rerun has class" <(echo "$RERUN") "ASX_E2E_RESOURCE_CLASS=R2"
 assert_contains "rerun has scenario" <(echo "$RERUN") "ASX_E2E_SCENARIO_PACK=smoke.fail.example"
 
 # -------------------------------------------------------------------

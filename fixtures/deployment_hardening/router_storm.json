@@ -1,0 +1,35 @@
+{
+  "scenario_id": "deploy.router_storm.golden",
+  "fixture_schema_version": "fixture-v1",
+  "scenario_dsl_version": "dsl-v1",
+  "profile": "ASX_PROFILE_EMBEDDED_ROUTER",
+  "codec": "json",
+  "seed": 42,
+  "resource_class": "R2",
+  "gate_id": "GATE-E2E-DEPLOY-ROUTER",
+  "policy_id": "DEPLOY-ROUTER-STORM",
+  "scenario_count": 7,
+  "scenarios": [
+    "router-storm-001.region_churn",
+    "router-storm-002.multi_region_saturation",
+    "router-storm-003.exhaustion_handling",
+    "router-storm-004.obligation_churn",
+    "router-storm-005.poison_isolation",
+    "router-storm-006.cancel_under_load",
+    "router-storm-007.trace_deterministic"
+  ],
+  "expected_final_snapshot": {
+    "all_scenarios_pass": true,
+    "trace_digest_stable": true
+  },
+  "evidence_linkage": {
+    "unit_tests": ["test_profile_compat", "test_overload_catalog"],
+    "invariant_tests": ["test_lifecycle_legality"],
+    "e2e_gate": "GATE-E2E-DEPLOY-ROUTER",
+    "parity_gates": ["profile-parity", "codec-equivalence"]
+  },
+  "provenance": {
+    "created_by": "bd-j4m.6",
+    "created_at": "2026-02-28"
+  }
+}

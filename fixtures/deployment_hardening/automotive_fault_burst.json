@@ -1,0 +1,35 @@
+{
+  "scenario_id": "deploy.automotive_fault_burst.golden",
+  "fixture_schema_version": "fixture-v1",
+  "scenario_dsl_version": "dsl-v1",
+  "profile": "ASX_PROFILE_AUTOMOTIVE",
+  "codec": "json",
+  "seed": 42,
+  "resource_class": "R2",
+  "gate_id": "GATE-E2E-DEPLOY-AUTO",
+  "policy_id": "DEPLOY-AUTO-FAULT",
+  "scenario_count": 7,
+  "scenarios": [
+    "auto-fault-burst-001.clock_skew",
+    "auto-fault-burst-002.clock_reversal",
+    "auto-fault-burst-003.entropy_const",
+    "auto-fault-burst-004.multi_fault_cascade",
+    "auto-fault-burst-005.fault_containment",
+    "auto-fault-burst-006.deadline_under_fault",
+    "auto-fault-burst-007.trace_deterministic"
+  ],
+  "expected_final_snapshot": {
+    "all_scenarios_pass": true,
+    "trace_digest_stable": true
+  },
+  "evidence_linkage": {
+    "unit_tests": ["test_automotive_instrument", "test_profile_compat"],
+    "invariant_tests": ["test_lifecycle_legality"],
+    "e2e_gate": "GATE-E2E-DEPLOY-AUTO",
+    "parity_gates": ["profile-parity", "codec-equivalence"]
+  },
+  "provenance": {
+    "created_by": "bd-j4m.6",
+    "created_at": "2026-02-28"
+  }
+}

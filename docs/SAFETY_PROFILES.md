@@ -154,3 +154,60 @@ make conformance
 make codec-equivalence
 make profile-parity
 ```
+
+## Deployment Hardening Playbook Lanes (`bd-j4m.6`)
+
+These lanes are the operational hardening surface for router/HFT/automotive
+deployment stress and must remain runnable in CI and local environments.
+
+### Canonical Lane Commands
+
+```bash
+rch exec -- tests/e2e/router_storm.sh
+rch exec -- tests/e2e/market_open_burst.sh
+rch exec -- tests/e2e/automotive_fault_burst.sh
+rch exec -- tests/e2e/continuity_restart.sh
+rch exec -- tests/e2e/run_all.sh
+```
+
+Lane IDs:
+
+- `E2E-DEPLOY-ROUTER` -> `tests/e2e/router_storm.sh`
+- `E2E-DEPLOY-HFT` -> `tests/e2e/market_open_burst.sh`
+- `E2E-DEPLOY-AUTO` -> `tests/e2e/automotive_fault_burst.sh`
+- `E2E-CONT-RESTART` -> `tests/e2e/continuity_restart.sh`
+
+### Profile-Specific Watchdog / Restart / Safe-Upgrade Guidance
+
+| Profile | Watchdog / fault policy | Restart semantics | Safe-upgrade guidance |
+|---|---|---|---|
+| `ASX_PROFILE_EMBEDDED_ROUTER` | `router_storm` validates churn, saturation, exhaustion, poison isolation, cancel under load | restart continuity must preserve deterministic digest for shared fixtures | validate package/install with `tests/e2e/openwrt_package.sh`, then run `router_storm` + `continuity_restart` before and after upgrade |
+| `ASX_PROFILE_HFT` | `market_open_burst` validates overload pressure and deterministic recovery | restart must preserve event ordering/digest identity on fixed seed | quiesce ingress, drain, deploy, restart, then verify `market_open_burst` and digest parity (`conformance` + `profile-parity`) |
+| `ASX_PROFILE_AUTOMOTIVE` | `automotive_fault_burst` validates clock/entropy faults, containment, and deadline-cancel behavior | degraded-mode transitions and restart path must remain deterministic and classified | run `automotive_fault_burst` and `continuity_restart`; reject release if deadline/watchdog evidence drifts or unclassified deltas appear |
+
+### Low-Overhead Remote Diagnostics Framing
+
+Use harness-native structured outputs only; do not add ad-hoc instrumentation on constrained links.
+
+- stream JSONL records from `build/test-logs/e2e-*.jsonl`,
+- ship family summaries from `build/e2e-artifacts/<run_id>/*.summary.json`,
+- include rerun pointers from the `run_manifest.json` first-failure block.
+
+Minimum remote frame fields:
+
+`run_id`, `suite`, `test`, `status`, `profile`, `codec`, `seed`, `digest`, `error.message`, `rerun_command`.
+
+Transport recommendation:
+
+- compress JSONL + summaries (`tar` + `gzip`),
+- attach `sha256` for bundle integrity,
+- preserve file paths so first-failure rerun commands remain copy/paste valid.
+
+### Evidence Linkage Matrix (Lane -> Unit/Invariant/Parity)
+
+| Lane | Unit evidence | Invariant/model evidence | Parity evidence |
+|---|---|---|---|
+| `E2E-DEPLOY-ROUTER` (`router_storm`) | `tests/unit/runtime/test_profile_compat.c`, `tests/unit/runtime/test_adapter.c`, `tests/unit/runtime/test_overload_catalog.c` | `tests/invariant/lifecycle/test_lifecycle_legality.c`, `tests/invariant/model_check/test_bounded_model.c` | `make conformance`, `make profile-parity`, `tests/e2e/run_all.sh` |
+| `E2E-DEPLOY-HFT` (`market_open_burst`) | `tests/unit/runtime/test_hft_microburst.c`, `tests/unit/runtime/test_hft_instrument.c`, `tests/unit/runtime/test_overload_catalog.c` | `tests/invariant/lifecycle/test_lifecycle_legality.c`, `tests/invariant/model_check/test_bounded_model.c` | `make conformance`, `make profile-parity`, `tests/e2e/run_all.sh` |
+| `E2E-DEPLOY-AUTO` (`automotive_fault_burst`) | `tests/unit/runtime/test_automotive_fixtures.c`, `tests/unit/runtime/test_automotive_instrument.c`, `tests/unit/runtime/test_adapter.c` | `tests/invariant/lifecycle/test_lifecycle_legality.c`, `tests/invariant/model_check/test_bounded_model.c` | `make conformance`, `make profile-parity`, `tests/e2e/run_all.sh` |
+| `E2E-CONT-RESTART` (`continuity_restart`) | `tests/unit/runtime/test_continuity.c`, `tests/unit/runtime/test_trace.c` | `tests/invariant/lifecycle/test_lifecycle_legality.c`, `tests/invariant/model_check/test_bounded_model.c` | `make conformance`, `make codec-equivalence`, `make profile-parity`, `tests/e2e/run_all.sh` |

@@ -1,0 +1,29 @@
+#!/bin/sh /etc/rc.common
+#
+# asx.init — OpenWrt startup smoke hook for asx package (bd-j4m.7)
+#
+# asx currently ships as a runtime library package. This init script
+# intentionally does not launch a daemon; it exists so install/enable/
+# restart operations remain testable in packaging e2e lanes.
+#
+# SPDX-License-Identifier: MIT
+#
+
+START=95
+STOP=10
+USE_PROCD=1
+
+boot() {
+    logger -t asx "asx package boot hook (library-only package)"
+    return 0
+}
+
+start_service() {
+    logger -t asx "asx package start requested (no daemon to launch)"
+    return 0
+}
+
+stop_service() {
+    logger -t asx "asx package stop requested"
+    return 0
+}

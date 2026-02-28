@@ -29,6 +29,10 @@
 #   GATE-E2E-VERTICAL-HFT  hft_microburst.sh
 #   GATE-E2E-VERTICAL-AUTO automotive_watchdog.sh
 #   GATE-E2E-CONTINUITY    continuity.sh, continuity_restart.sh
+#   GATE-E2E-DEPLOY-ROUTER router_storm.sh
+#   GATE-E2E-DEPLOY-HFT   market_open_burst.sh
+#   GATE-E2E-DEPLOY-AUTO   automotive_fault_burst.sh
+#   GATE-E2E-PACKAGE       openwrt_package.sh
 #
 # SPDX-License-Identifier: MIT
 
@@ -75,6 +79,7 @@ TARGET="$(detect_target)"
 SEED="${ASX_E2E_SEED:-42}"
 PROFILE="${ASX_E2E_PROFILE:-CORE}"
 CODEC="${ASX_E2E_CODEC:-json}"
+RESOURCE_CLASS="${ASX_E2E_RESOURCE_CLASS:-R3}"
 
 # -------------------------------------------------------------------
 # Artifact directories
@@ -103,6 +108,10 @@ E2E_FAMILIES=(
     "GATE-E2E-VERTICAL-AUTO:automotive_watchdog.sh"
     "GATE-E2E-CONTINUITY:continuity.sh"
     "GATE-E2E-CONTINUITY:continuity_restart.sh"
+    "GATE-E2E-DEPLOY-ROUTER:router_storm.sh"
+    "GATE-E2E-DEPLOY-HFT:market_open_burst.sh"
+    "GATE-E2E-DEPLOY-AUTO:automotive_fault_burst.sh"
+    "GATE-E2E-PACKAGE:openwrt_package.sh"
 )
 
 # -------------------------------------------------------------------
@@ -126,6 +135,7 @@ echo "  target:    ${TARGET}"
 echo "  profile:   ${PROFILE}"
 echo "  codec:     ${CODEC}"
 echo "  seed:      ${SEED}"
+echo "  class:     ${RESOURCE_CLASS}"
 echo "  artifacts: ${SUITE_ARTIFACT_DIR}"
 echo "================================================================="
 echo ""
@@ -206,7 +216,7 @@ MANIFEST_FILE="${SUITE_ARTIFACT_DIR}/run_manifest.json"
     printf '  "profile": %s,\n' "$(json_str "$PROFILE")"
     printf '  "codec": %s,\n' "$(json_str "$CODEC")"
     printf '  "seed": %d,\n' "$SEED"
-    printf '  "resource_class": %s,\n' "$(json_str "${ASX_E2E_RESOURCE_CLASS:-R3}")"
+    printf '  "resource_class": %s,\n' "$(json_str "$RESOURCE_CLASS")"
     printf '  "scenario_pack": %s,\n' "$(json_str "${ASX_E2E_SCENARIO_PACK:-all}")"
     printf '  "total_families": %d,\n' "$total_families"
     printf '  "passed_families": %d,\n' "$passed_families"
@@ -219,7 +229,7 @@ MANIFEST_FILE="${SUITE_ARTIFACT_DIR}/run_manifest.json"
         printf '  "first_failure": {\n'
         printf '    "family": %s,\n' "$(json_str "$first_failure_family")"
         printf '    "log": %s,\n' "$(json_str "$first_failure_log")"
-        printf '    "rerun": %s\n' "$(json_str "ASX_E2E_SEED=${SEED} ASX_E2E_PROFILE=${PROFILE} ASX_E2E_CODEC=${CODEC} ${SCRIPT_DIR}/${first_failure_family}")"
+        printf '    "rerun": %s\n' "$(json_str "ASX_E2E_SEED=${SEED} ASX_E2E_PROFILE=${PROFILE} ASX_E2E_CODEC=${CODEC} ASX_E2E_RESOURCE_CLASS=${RESOURCE_CLASS} ${SCRIPT_DIR}/${first_failure_family}")"
         printf '  },\n'
     fi
     printf '  "family_summaries": [\n'
@@ -247,7 +257,7 @@ if [ -n "$first_failure_family" ]; then
     echo ""
     echo "  FIRST FAILURE: ${first_failure_family}"
     echo "    log: ${first_failure_log}"
-    echo "    rerun: ASX_E2E_SEED=${SEED} ASX_E2E_PROFILE=${PROFILE} ASX_E2E_CODEC=${CODEC} ${SCRIPT_DIR}/${first_failure_family}"
+    echo "    rerun: ASX_E2E_SEED=${SEED} ASX_E2E_PROFILE=${PROFILE} ASX_E2E_CODEC=${CODEC} ASX_E2E_RESOURCE_CLASS=${RESOURCE_CLASS} ${SCRIPT_DIR}/${first_failure_family}"
 fi
 
 echo "================================================================="

@@ -1,0 +1,35 @@
+{
+  "scenario_id": "deploy.market_open_burst.golden",
+  "fixture_schema_version": "fixture-v1",
+  "scenario_dsl_version": "dsl-v1",
+  "profile": "ASX_PROFILE_HFT",
+  "codec": "json",
+  "seed": 42,
+  "resource_class": "R2",
+  "gate_id": "GATE-E2E-DEPLOY-HFT",
+  "policy_id": "DEPLOY-MARKET-BURST",
+  "scenario_count": 7,
+  "scenarios": [
+    "market-open-burst-001.admission_spike",
+    "market-open-burst-002.burst_obligations",
+    "market-open-burst-003.partial_drain",
+    "market-open-burst-004.burst_recovery",
+    "market-open-burst-005.mass_cancel_burst",
+    "market-open-burst-006.multi_region_isolation",
+    "market-open-burst-007.trace_deterministic"
+  ],
+  "expected_final_snapshot": {
+    "all_scenarios_pass": true,
+    "trace_digest_stable": true
+  },
+  "evidence_linkage": {
+    "unit_tests": ["test_hft_instrument", "test_profile_compat"],
+    "invariant_tests": ["test_lifecycle_legality"],
+    "e2e_gate": "GATE-E2E-DEPLOY-HFT",
+    "parity_gates": ["profile-parity", "codec-equivalence"]
+  },
+  "provenance": {
+    "created_by": "bd-j4m.6",
+    "created_at": "2026-02-28"
+  }
+}

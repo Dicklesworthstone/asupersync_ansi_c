@@ -298,7 +298,7 @@ e2e_rerun_command() {
     local scenario_id="$1"
     local script_path="${2:-$0}"
 
-    echo "ASX_E2E_SEED=${E2E_SEED} ASX_E2E_PROFILE=${E2E_PROFILE} ASX_E2E_CODEC=${E2E_CODEC} ASX_E2E_SCENARIO_PACK=${scenario_id} ${script_path}"
+    echo "ASX_E2E_SEED=${E2E_SEED} ASX_E2E_PROFILE=${E2E_PROFILE} ASX_E2E_CODEC=${E2E_CODEC} ASX_E2E_RESOURCE_CLASS=${E2E_RESOURCE_CLASS} ASX_E2E_SCENARIO_PACK=${scenario_id} ${script_path}"
 }
 
 # -------------------------------------------------------------------
