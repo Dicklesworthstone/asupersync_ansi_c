@@ -75,6 +75,19 @@ Default trace behavior for embedded profile:
 - optional spill-to-persistent path when configured,
 - deterministic event ordering and digest generation retained.
 
+Low-flash behavior contract:
+
+- persistent spill is opt-in; default mode remains RAM ring only,
+- when persistent spill is enabled, writes must stay bounded by configured flush cadence and retention limits,
+- persistent I/O failure must not corrupt runtime state; diagnostics degrade to RAM ring with explicit failure records,
+- trace retention may shrink under pressure, but semantic digest behavior for shared fixtures must remain unchanged.
+
+Operator guidance for constrained flash targets:
+
+- prefer `R1`/`R2` with RAM ring unless incident capture explicitly requires spill,
+- only enable persistent spill on storage with known write-endurance headroom,
+- keep artifact rotation external to runtime so trace retention policy remains deterministic.
+
 ## 6. Failure and Exhaustion Behavior
 
 When envelopes are exceeded:
@@ -92,7 +105,8 @@ Embedded companion profile is considered ready when these are green:
 1. embedded matrix build gate,
 2. QEMU scenario/replay gate,
 3. profile-parity semantic digest gate for shared fixtures,
-4. exhaustion/failure-atomic fixture set.
+4. exhaustion/failure-atomic fixture set,
+5. e2e manifests include `resource_class` and first-failure rerun commands that preserve class/profile/codec/seed context.
 
 ## 8. Downstream Bead Links
 

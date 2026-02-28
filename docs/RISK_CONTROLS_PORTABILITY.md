@@ -225,6 +225,7 @@ Escalation: project owner.
 5. **Exception process**: If a genuine semantic divergence is needed for a vertical:
    - Requires explicit project owner approval.
    - Semantic delta budget exception documented in ADR.
+   - `docs/SEMANTIC_DELTA_EXCEPTIONS.json` updated with approved fixture-scoped record.
    - Both old and new behavior must have fixture coverage.
    - `FEATURE_PARITY.md` updated with exception row.
 6. **Escalate**: Unresolvable conflicts between vertical requirements go to project owner for ADR.
@@ -232,7 +233,9 @@ Escalation: project owner.
 ### CI Integration Points
 
 - `make profile-parity` with full profile set (CORE, POSIX, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE).
-- `make conformance` includes semantic delta budget check.
+- `make conformance` includes semantic delta budget check and emits
+  `build/conformance/semantic_delta_*.json` using
+  `docs/SEMANTIC_DELTA_EXCEPTIONS.json` for approved exceptions.
 - Vertical scenario packs in dedicated CI jobs (`perf-tail-deadline`).
 - Profile-conditional code audit in CI `check` job.
 - All gates are blocking (perf gates may be warn-then-block per threshold config).

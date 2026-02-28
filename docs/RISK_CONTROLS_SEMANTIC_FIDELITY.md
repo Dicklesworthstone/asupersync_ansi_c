@@ -219,8 +219,11 @@ Escalation: project owner.
 ### CI Integration Points
 
 - Schema-generated tests run as part of `make test-invariants`.
-- Semantic delta budget gate runs in `make conformance`.
-- Anti-butchering gate runs on PRs touching `src/core/` or `src/runtime/`.
+- Semantic delta budget gate runs in `make conformance`, emits
+  `build/conformance/semantic_delta_*.json`, and applies approved
+  fixture-scoped exceptions from `docs/SEMANTIC_DELTA_EXCEPTIONS.json`.
+- Anti-butchering gate runs in CI `check` via `make lint-anti-butchering`
+  and emits `build/conformance/anti_butcher_*.json`.
 - FEATURE_PARITY.md freshness check runs in CI `check` job.
 - All gates are blocking.
 
