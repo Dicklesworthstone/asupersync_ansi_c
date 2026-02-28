@@ -127,7 +127,12 @@ RUNTIME_SRC := \
 	src/runtime/resource.c \
 	src/runtime/trace.c \
 	src/runtime/hindsight.c \
-	src/runtime/telemetry.c
+	src/runtime/telemetry.c \
+	src/runtime/profile_compat.c \
+	src/runtime/hft_instrument.c \
+	src/runtime/automotive_instrument.c \
+	src/runtime/overload_catalog.c \
+	src/runtime/parallel.c
 
 CHANNEL_SRC := \
 	src/channel/mpsc.c
@@ -216,7 +221,7 @@ E2E_VERTICAL_SCRIPTS := \
 # ===================================================================
 
 .PHONY: all build clean install uninstall
-.PHONY: format-check lint lint-docs
+.PHONY: format-check lint lint-docs lint-checkpoint
 .PHONY: test test-unit test-invariants test-e2e test-e2e-vertical
 .PHONY: conformance codec-equivalence profile-parity
 .PHONY: fuzz-smoke ci-embedded-matrix
@@ -298,6 +303,13 @@ lint-docs:
 	@./tools/ci/check_api_docs.sh
 
 # ---------------------------------------------------------------------------
+# lint-checkpoint — checkpoint-coverage gate for kernel loops (bd-66l.6)
+# ---------------------------------------------------------------------------
+lint-checkpoint:
+	@echo "[asx] lint-checkpoint: checking kernel loop checkpoint coverage..."
+	@./tools/ci/check_checkpoint_coverage.sh
+
+# ---------------------------------------------------------------------------
 # test — run all test suites
 # ---------------------------------------------------------------------------
 test: test-unit test-invariants
@@ -330,6 +342,22 @@ test-unit: $(UNIT_TEST_BIN)
 		echo "[asx] test-unit: $$pass passed, $$fail failed"; \
 		[ $$fail -eq 0 ] || exit 1; \
 	fi
+
+# Profile compat test needs extra source (profile_compat.c not yet in LIB_A)
+$(TEST_DIR)/unit/runtime/test_profile_compat: tests/unit/runtime/test_profile_compat.c src/runtime/profile_compat.c $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< src/runtime/profile_compat.c $(LIB_A) $(ALL_LDFLAGS)
+
+# HFT instrumentation test needs extra source (bd-j4m.3)
+$(TEST_DIR)/unit/runtime/test_hft_instrument: tests/unit/runtime/test_hft_instrument.c src/runtime/hft_instrument.c $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< src/runtime/hft_instrument.c $(LIB_A) $(ALL_LDFLAGS)
+
+# Automotive instrumentation test needs extra source (bd-j4m.4)
+$(TEST_DIR)/unit/runtime/test_automotive_instrument: tests/unit/runtime/test_automotive_instrument.c src/runtime/automotive_instrument.c $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< src/runtime/automotive_instrument.c $(LIB_A) $(ALL_LDFLAGS)
+
+# Overload catalog test needs extra sources (bd-j4m.8)
+$(TEST_DIR)/unit/runtime/test_overload_catalog: tests/unit/runtime/test_overload_catalog.c src/runtime/overload_catalog.c src/runtime/hft_instrument.c $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< src/runtime/overload_catalog.c src/runtime/hft_instrument.c $(LIB_A) $(ALL_LDFLAGS)
 
 # Link individual unit tests
 $(TEST_DIR)/unit/%: tests/unit/%.c $(LIB_A) | test-dirs
@@ -400,6 +428,18 @@ test-e2e-vertical:
 	done; \
 	echo "[asx] test-e2e-vertical: $$pass passed, $$fail failed"; \
 	[ $$fail -eq 0 ] || exit 1
+
+# ---------------------------------------------------------------------------
+# test-e2e-suite — run ALL e2e families via canonical aggregation script
+#
+# Emits unified run manifest with git rev, compiler/target, seed,
+# profile/codec matrix, per-family results, and first-failure triage.
+# Maps to hard gates: GATE-E2E-LIFECYCLE, GATE-E2E-CODEC,
+# GATE-E2E-ROBUSTNESS, GATE-E2E-VERTICAL-{HFT,AUTO}, GATE-E2E-CONTINUITY.
+# ---------------------------------------------------------------------------
+test-e2e-suite: $(LIB_A)
+	@chmod +x $(E2E_SCRIPT_DIR)/run_all.sh $(E2E_SCRIPT_DIR)/harness.sh $(E2E_ALL_SCRIPTS) 2>/dev/null || true
+	@$(E2E_SCRIPT_DIR)/run_all.sh
 
 $(TEST_DIR)/invariant/%: tests/invariant/%.c $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
@@ -670,10 +710,10 @@ qemu-smoke:
 # check — combined gate for PR/push CI
 # ---------------------------------------------------------------------------
 .PHONY: check check-ci
-check: format-check lint lint-docs build test
+check: format-check lint lint-docs lint-checkpoint build test
 
 check-ci: CI=1
-check-ci: format-check lint build test test-e2e-vertical conformance codec-equivalence profile-parity fuzz-smoke ci-embedded-matrix
+check-ci: format-check lint lint-checkpoint build test test-e2e-vertical conformance codec-equivalence profile-parity fuzz-smoke ci-embedded-matrix
 
 # ---------------------------------------------------------------------------
 # clean
@@ -693,11 +733,13 @@ help:
 	@echo "  format-check       Verify source formatting"
 	@echo "  lint               Static analysis gate"
 	@echo "  lint-docs          Public API documentation coverage gate"
+	@echo "  lint-checkpoint    Checkpoint coverage gate for kernel loops"
 	@echo "  test               Run all tests (unit + invariant)"
 	@echo "  test-unit          Unit tests per module"
 	@echo "  test-invariants    Lifecycle invariant tests"
 	@echo "  test-e2e           Run all e2e scenario lanes"
 	@echo "  test-e2e-vertical  Run HFT/automotive/continuity e2e lanes"
+	@echo "  test-e2e-suite     Run ALL e2e families with unified manifest"
 	@echo "  conformance        Rust fixture parity verification"
 	@echo "  codec-equivalence  JSON vs BIN codec equivalence"
 	@echo "  profile-parity     Cross-profile semantic digest parity"

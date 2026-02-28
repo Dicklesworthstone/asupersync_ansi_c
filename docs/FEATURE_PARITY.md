@@ -38,8 +38,8 @@ This matrix tracks canonical semantic units, their source-of-truth extraction st
 | `U-ARCH-LAYERING` | C architecture boundaries from semantics | `docs/PROPOSED_ANSI_C_ARCHITECTURE.md` | architecture conformance review + scaffold checks | transliteration-only or hidden coupling forbidden | `spec-reviewed` | `bd-296.2`, `bd-ix8.1` |
 | `U-C-PORTABILITY-UB` | Portable C subset + UB elimination policy | `docs/C_PORTABILITY_RULES.md` | compiler/static-analysis + UB-focused tests | UB-prone constructs in core forbidden | `spec-reviewed` | `bd-296.29`, `bd-66l.10` |
 | `U-GUARANTEE-SUBSTITUTION` | Rust guarantee -> C mechanism mapping | `docs/GUARANTEE_SUBSTITUTION_MATRIX.md` | proof artifact checklist + fixture links | missing substitution evidence forbidden | `spec-reviewed` | `bd-296.6` |
-| `U-CODEC-EQUIVALENCE` | JSON/BIN canonical semantic equivalence | plan + future conformance docs | codec-equivalence conformance suite | semantic drift between codecs forbidden | `impl-pending` | `bd-2n0.1`, `bd-1md.11` |
-| `U-PROFILE-PARITY` | Cross-profile canonical digest equivalence | `docs/VERTICAL_CONTINUITY_FIXTURE_FAMILIES.md`, `docs/HFT_PROFILE.md`, `docs/AUTOMOTIVE_PROFILE.md` | profile parity suite across shared fixtures + vertical fixture lanes (`E2E-VERT-HFT`, `E2E-VERT-AUTO`) | profile-only semantic forks and hidden degraded-mode behavior forbidden | `impl-pending` | `bd-1md.15`, `bd-j4m.7`, `bd-1md.10` |
+| `U-CODEC-EQUIVALENCE` | JSON/BIN canonical semantic equivalence | `tools/ci/run_conformance.sh`, `schemas/canonical_fixture.schema.json` | codec-equivalence conformance suite | semantic drift between codecs forbidden | `impl-in-progress` | `bd-2n0.1`, `bd-1md.11`, `bd-j4m.1` |
+| `U-PROFILE-PARITY` | Cross-profile canonical digest equivalence | `docs/VERTICAL_CONTINUITY_FIXTURE_FAMILIES.md`, `docs/HFT_PROFILE.md`, `docs/AUTOMOTIVE_PROFILE.md`, `tools/ci/run_conformance.sh` | profile parity suite across shared fixtures + vertical fixture lanes (`E2E-VERT-HFT`, `E2E-VERT-AUTO`) | profile-only semantic forks and hidden degraded-mode behavior forbidden | `impl-in-progress` | `bd-1md.15`, `bd-j4m.7`, `bd-1md.10`, `bd-j4m.1` |
 | `U-REPLAY-CONTINUITY` | Deterministic replay + continuity under restart | `docs/VERTICAL_CONTINUITY_FIXTURE_FAMILIES.md` + trace/replay docs | replay identity and crash/restart continuity tests (`E2E-CONT-RESTART`) | digest mismatch or duplicated side effects on restart forbidden | `impl-pending` | `bd-1md.15`, `bd-2n0.4`, `bd-j4m.8` |
 
 ## 3. Phase 1 Exit Review Gate Checklist
@@ -77,7 +77,8 @@ All kernel-scope semantic units (U-REG-TRANSITIONS through U-GUARANTEE-SUBSTITUT
 | Unit Status | Count |
 |-------------|-------|
 | `spec-reviewed` | 19 |
-| `impl-pending` | 3 (codec, profile parity, replay — Phase 2+) |
+| `impl-in-progress` | 2 (codec + profile parity baseline landed; fixture families expanding) |
+| `impl-pending` | 1 (replay continuity) |
 | **Total** | 22 |
 
 ## 6. Immediate Follow-On Dependencies

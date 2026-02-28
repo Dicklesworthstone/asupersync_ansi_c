@@ -167,6 +167,8 @@ if [[ -z "$baseline_commit" || -z "$baseline_toolchain_hash" || -z "$baseline_ca
 fi
 
 fixture_runner_bin=""
+cc_bin="${CC:-cc}"
+read -r -a cflags_arr <<<"${CONFORMANCE_CFLAGS:- -std=c99 -Wall -Wextra -Wpedantic}"
 
 echo "[asx] conformance[$MODE]: build + smoke gate..." >&2
 if ! make -C "$REPO_ROOT" build >"$BUILD_LOG" 2>&1; then
@@ -179,8 +181,6 @@ if ! make -C "$REPO_ROOT" build >"$BUILD_LOG" 2>&1; then
 else
   smoke_bin="$REPO_ROOT/build/tests/conformance/codec_json_baseline_test"
   mkdir -p "$(dirname "$smoke_bin")"
-  cc_bin="${CC:-cc}"
-  read -r -a cflags_arr <<<"${CONFORMANCE_CFLAGS:- -std=c99 -Wall -Wextra -Wpedantic}"
   smoke_cmd=(
     "$cc_bin"
     "${cflags_arr[@]}"

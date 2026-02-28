@@ -115,3 +115,42 @@ Platform profiles (`ASX_PROFILE_*`) control resource-plane adaptation (memory li
 | `ASX_PROFILE_EMBEDDED_ROUTER` | `BUSY_SPIN` | Hardened           |
 | `ASX_PROFILE_HFT`      | `BUSY_SPIN`        | Release            |
 | `ASX_PROFILE_AUTOMOTIVE` | `SLEEP`           | Hardened           |
+
+## Cross-Profile Compatibility Contract
+
+This project allows profile-specific operational tuning, but forbids profile-specific semantic behavior. The compatibility boundary is enforced by parity fixtures and CI gates.
+
+### Allowed Operational Differences (Tuning Plane)
+
+| Category | Allowed Difference | Why Allowed |
+|----------|--------------------|-------------|
+| Wait policy | `BUSY_SPIN` vs `YIELD` vs `SLEEP` defaults | Scheduling efficiency and host integration |
+| Resource ceilings | Memory/queue/timer limits by profile/resource class | Hardware-fit and deterministic exhaustion behavior |
+| Telemetry level | Trace verbosity and diagnostics depth | Observability cost control |
+| Integration hooks | Platform adapter wiring (POSIX/WIN32/freestanding hooks) | OS/runtime boundary adaptation |
+
+### Forbidden Semantic Differences (Behavior Plane)
+
+| Category | Forbidden Drift | Enforcement Signal |
+|----------|-----------------|--------------------|
+| Lifecycle legality | Any profile accepts/denies a transition differently | Invariant suites + conformance mismatch |
+| Cancellation semantics | Different cancel phase progression or witness ordering | cancel fixtures + parity diff |
+| Channel semantics | Profile-specific reserve/send/abort ordering behavior | channel fixtures + parity diff |
+| Timer ordering | Non-identical equal-deadline ordering or stale-handle behavior | timer fixtures + parity diff |
+| Replay identity | Same scenario produces different canonical digest | replay/profile parity failure |
+
+### Machine-Checkable Gate
+
+For shared fixture sets, the following must hold:
+
+1. Same `scenario_id` + same semantic inputs -> identical canonical digest across participating profiles.
+2. Any parity mismatch is classified as `c_regression` unless explicitly approved by decision log.
+3. Empty fixture/parity sets fail closed in strict mode.
+
+Operational verification commands:
+
+```bash
+make conformance
+make codec-equivalence
+make profile-parity
+```

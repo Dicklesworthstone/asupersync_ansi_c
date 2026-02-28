@@ -60,6 +60,34 @@ E2E_TIMESTAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
 E2E_RUN_ID="${ASX_E2E_RUN_ID:-e2e-${E2E_TIMESTAMP}}"
 
 # -------------------------------------------------------------------
+# Environment detection (git rev, compiler, target)
+# -------------------------------------------------------------------
+
+_e2e_detect_git_rev() {
+    if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
+        git -C "$E2E_PROJECT_ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo "unknown"
+    else
+        echo "unknown"
+    fi
+}
+
+_e2e_detect_compiler() {
+    local cc="${CC:-gcc}"
+    local ver=""
+    ver="$($cc --version 2>/dev/null | head -1)" || ver="unknown"
+    echo "$cc ($ver)"
+}
+
+_e2e_detect_target() {
+    local cc="${CC:-gcc}"
+    $cc -dumpmachine 2>/dev/null || uname -m 2>/dev/null || echo "unknown"
+}
+
+E2E_GIT_REV="$(_e2e_detect_git_rev)"
+E2E_COMPILER="$(_e2e_detect_compiler)"
+E2E_TARGET="$(_e2e_detect_target)"
+
+# -------------------------------------------------------------------
 # Artifact and log directories
 # -------------------------------------------------------------------
 
@@ -293,10 +321,22 @@ _e2e_first_failure_summary() {
 e2e_finish() {
     local exit_status=0
 
-    # Emit summary JSON
+    # Build first-failure block for manifest
+    local _ff_scenario="" _ff_diag="" _ff_rerun=""
+    if [ -n "$_E2E_FIRST_FAILURE_SCENARIO" ]; then
+        _ff_scenario="$_E2E_FIRST_FAILURE_SCENARIO"
+        _ff_diag="$_E2E_FIRST_FAILURE"
+        _ff_rerun="$(e2e_rerun_command "$_E2E_FIRST_FAILURE_SCENARIO")"
+    fi
+
+    # Emit summary JSON (enhanced run manifest)
     {
         printf '{\n'
         printf '  "run_id": %s,\n' "$(_e2e_json_str "$E2E_RUN_ID")"
+        printf '  "timestamp": %s,\n' "$(_e2e_json_str "$E2E_TIMESTAMP")"
+        printf '  "git_rev": %s,\n' "$(_e2e_json_str "$E2E_GIT_REV")"
+        printf '  "compiler": %s,\n' "$(_e2e_json_str "$E2E_COMPILER")"
+        printf '  "target": %s,\n' "$(_e2e_json_str "$E2E_TARGET")"
         printf '  "family_id": %s,\n' "$(_e2e_json_str "$_E2E_FAMILY_ID")"
         printf '  "lane_id": %s,\n' "$(_e2e_json_str "$_E2E_LANE_ID")"
         if [ -n "$E2E_POLICY_ID" ]; then
@@ -305,10 +345,20 @@ e2e_finish() {
         printf '  "profile": %s,\n' "$(_e2e_json_str "$E2E_PROFILE")"
         printf '  "codec": %s,\n' "$(_e2e_json_str "$E2E_CODEC")"
         printf '  "seed": %d,\n' "$E2E_SEED"
+        printf '  "resource_class": %s,\n' "$(_e2e_json_str "$E2E_RESOURCE_CLASS")"
+        printf '  "scenario_pack": %s,\n' "$(_e2e_json_str "$E2E_SCENARIO_PACK")"
         printf '  "total": %d,\n' "$_E2E_TOTAL"
         printf '  "pass": %d,\n' "$_E2E_PASS"
         printf '  "fail": %d,\n' "$_E2E_FAIL"
         printf '  "skip": %d,\n' "$_E2E_SKIP"
+        printf '  "status": %s,\n' "$(_e2e_json_str "$([ "$_E2E_FAIL" -gt 0 ] && echo "fail" || echo "pass")")"
+        if [ -n "$_ff_scenario" ]; then
+            printf '  "first_failure": {\n'
+            printf '    "scenario": %s,\n' "$(_e2e_json_str "$_ff_scenario")"
+            printf '    "diagnostic": %s,\n' "$(_e2e_json_str "$_ff_diag")"
+            printf '    "rerun": %s\n' "$(_e2e_json_str "$_ff_rerun")"
+            printf '  },\n'
+        fi
         printf '  "report_file": %s,\n' "$(_e2e_json_str "$_E2E_REPORT_FILE")"
         printf '  "artifact_dir": %s\n' "$(_e2e_json_str "$E2E_ARTIFACT_DIR")"
         printf '}\n'

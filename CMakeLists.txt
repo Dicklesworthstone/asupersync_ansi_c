@@ -78,13 +78,23 @@ set(ASX_CORE_SRC
     src/core/outcome.c
     src/core/budget.c
     src/core/cancel.c
+    src/core/cleanup.c
+    src/core/ghost.c
+    src/core/affinity.c
+    src/core/adaptive.c
 )
 
 set(ASX_RUNTIME_SRC
+    src/runtime/hooks.c
     src/runtime/lifecycle.c
     src/runtime/scheduler.c
     src/runtime/cancellation.c
     src/runtime/quiescence.c
+    src/runtime/resource.c
+    src/runtime/trace.c
+    src/runtime/hindsight.c
+    src/runtime/telemetry.c
+    src/runtime/profile_compat.c
 )
 
 set(ASX_CHANNEL_SRC

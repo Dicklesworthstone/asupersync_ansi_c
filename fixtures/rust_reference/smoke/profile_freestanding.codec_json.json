@@ -1,0 +1,34 @@
+{
+  "scenario_id": "smoke.profile_parity.baseline",
+  "fixture_schema_version": "fixture-v1",
+  "scenario_dsl_version": "dsl-v1",
+  "profile": "ASX_PROFILE_FREESTANDING",
+  "codec": "json",
+  "seed": 42,
+  "input": {
+    "ops": [
+      {
+        "id": 0,
+        "op": "noop",
+        "args": {}
+      }
+    ]
+  },
+  "expected_events": [],
+  "expected_final_snapshot": {
+    "regions": 0,
+    "tasks": 0,
+    "obligations": 0
+  },
+  "expected_error_codes": [],
+  "semantic_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "provenance": {
+    "rust_baseline_commit": "38c152405bd03e2bd9eecf178bfbbe9472fed861",
+    "rust_toolchain_commit_hash": "7f99507f57e6c4aa0dce3daf6a13cca8cd4dd312",
+    "rust_toolchain_release": "1.95.0-nightly",
+    "rust_toolchain_host": "x86_64-unknown-linux-gnu",
+    "cargo_lock_sha256": "77f4bfaedfe5b8572dfca3181119f9432825ea3d868ee8f5d2793a6c5cdeffdc",
+    "capture_run_id": "capture-smoke-20260227"
+  }
+}
+
