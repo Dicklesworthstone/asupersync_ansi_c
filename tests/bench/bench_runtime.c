@@ -24,6 +24,7 @@
 #include <asx/runtime/runtime.h>
 #include <asx/time/timer_wheel.h>
 #include <asx/core/channel.h>
+#include <asx/core/adaptive.h>
 #include <asx/core/budget.h>
 
 /* -------------------------------------------------------------------
@@ -700,6 +701,152 @@ static bench_deadline_report bench_deadline_miss(void)
 }
 
 /* -------------------------------------------------------------------
+ * BENCH 13: Adaptive evidence/fallback metrics
+ *
+ * Exercises the adaptive decision surface with deterministic posterior
+ * regimes so CI can trend confidence/fallback behavior over time.
+ * ------------------------------------------------------------------- */
+
+#define BENCH_ADAPTIVE_DECISIONS 2048u
+
+typedef struct {
+    uint32_t decisions_total;
+    uint32_t fallback_exercise_count;
+    double fallback_rate;
+    uint32_t confidence_threshold_fp32;
+    uint32_t mean_confidence_fp32;
+    uint32_t mean_expected_loss_fp16;
+    uint64_t ledger_digest;
+    uint32_t ledger_count;
+    int ledger_overflowed;
+} bench_adaptive_report;
+
+typedef struct {
+    uint32_t table[3][3];
+} bench_adaptive_loss_ctx;
+
+static uint32_t bench_adaptive_loss_fn(void *ctx,
+                                       asx_adaptive_action action,
+                                       uint8_t state_index)
+{
+    const bench_adaptive_loss_ctx *loss = (const bench_adaptive_loss_ctx *)ctx;
+    if (loss == NULL || action >= 3u || state_index >= 3u) {
+        return UINT32_C(0xFFFFFFFF);
+    }
+    return loss->table[action][state_index];
+}
+
+static bench_adaptive_report bench_adaptive_metrics(void)
+{
+    bench_adaptive_report rpt;
+    bench_adaptive_loss_ctx loss_ctx;
+    asx_adaptive_surface surface;
+    asx_adaptive_policy policy;
+    uint64_t confidence_sum = 0;
+    uint64_t expected_loss_sum = 0;
+    uint32_t i;
+
+    memset(&rpt, 0, sizeof(rpt));
+    memset(&loss_ctx, 0, sizeof(loss_ctx));
+    memset(&surface, 0, sizeof(surface));
+    memset(&policy, 0, sizeof(policy));
+
+    /* Loss table is fixed-point 16.16. */
+    loss_ctx.table[0][0] = UINT32_C(163840); /* 2.5 */
+    loss_ctx.table[0][1] = UINT32_C(131072); /* 2.0 */
+    loss_ctx.table[0][2] = UINT32_C(98304);  /* 1.5 */
+
+    loss_ctx.table[1][0] = UINT32_C(85196);  /* 1.3 */
+    loss_ctx.table[1][1] = UINT32_C(91750);  /* 1.4 */
+    loss_ctx.table[1][2] = UINT32_C(104857); /* 1.6 */
+
+    loss_ctx.table[2][0] = UINT32_C(52428);  /* 0.8 */
+    loss_ctx.table[2][1] = UINT32_C(78643);  /* 1.2 */
+    loss_ctx.table[2][2] = UINT32_C(235929); /* 3.6 */
+
+    surface.name = "bench_adaptive_surface";
+    surface.action_count = 3u;
+    surface.state_count = 3u;
+    surface.loss_fn = bench_adaptive_loss_fn;
+    surface.loss_ctx = &loss_ctx;
+    surface.fallback = 0u;
+
+    policy.confidence_threshold_fp32 = UINT32_C(2576980377); /* 0.60 */
+    policy.budget_remaining = 0u;
+
+    asx_adaptive_reset();
+    (void)asx_adaptive_set_policy(&policy);
+
+    for (i = 0; i < BENCH_ADAPTIVE_DECISIONS; i++) {
+        asx_adaptive_posterior posterior;
+        asx_adaptive_evidence_term evidence[2];
+        asx_adaptive_decision decision;
+        asx_status st;
+
+        memset(&posterior, 0, sizeof(posterior));
+        memset(&decision, 0, sizeof(decision));
+        posterior.state_count = 3u;
+
+        switch (i & 3u) {
+        case 0u:
+            posterior.posterior[0] = UINT32_C(3006477107); /* 0.70 */
+            posterior.posterior[1] = UINT32_C(858993459);  /* 0.20 */
+            posterior.posterior[2] = UINT32_C(429496729);  /* 0.10 */
+            posterior.confidence_fp32 = UINT32_C(3951369912); /* 0.92 */
+            break;
+        case 1u:
+            posterior.posterior[0] = UINT32_C(858993459);  /* 0.20 */
+            posterior.posterior[1] = UINT32_C(2362232012); /* 0.55 */
+            posterior.posterior[2] = UINT32_C(1073741824); /* 0.25 */
+            posterior.confidence_fp32 = UINT32_C(3092376453); /* 0.72 */
+            break;
+        case 2u:
+            posterior.posterior[0] = UINT32_C(429496729);  /* 0.10 */
+            posterior.posterior[1] = UINT32_C(1073741824); /* 0.25 */
+            posterior.posterior[2] = UINT32_C(2791728742); /* 0.65 */
+            posterior.confidence_fp32 = UINT32_C(2018634629); /* 0.47 */
+            break;
+        default:
+            posterior.posterior[0] = UINT32_C(2147483648); /* 0.50 */
+            posterior.posterior[1] = UINT32_C(1503238553); /* 0.35 */
+            posterior.posterior[2] = UINT32_C(644245094);  /* 0.15 */
+            posterior.confidence_fp32 = UINT32_C(1503238553); /* 0.35 */
+            break;
+        }
+
+        evidence[0].label = "confidence_fp32";
+        evidence[0].value_fp32 = posterior.confidence_fp32;
+        evidence[1].label = "synthetic_load_fp32";
+        evidence[1].value_fp32 = (uint32_t)(((uint64_t)(i % 100u) * UINT32_C(4294967295)) / 100u);
+
+        st = asx_adaptive_decide(&surface, &posterior, evidence, 2u, &decision);
+        if (st != ASX_OK) {
+            continue;
+        }
+
+        rpt.decisions_total++;
+        confidence_sum += decision.confidence_fp32;
+        expected_loss_sum += decision.expected_loss_fp16;
+    }
+
+    rpt.fallback_exercise_count = asx_adaptive_fallback_count();
+    rpt.confidence_threshold_fp32 = policy.confidence_threshold_fp32;
+    rpt.ledger_digest = asx_adaptive_ledger_digest();
+    rpt.ledger_count = asx_adaptive_ledger_count();
+    rpt.ledger_overflowed = asx_adaptive_ledger_overflowed();
+
+    if (rpt.decisions_total > 0u) {
+        rpt.fallback_rate = (double)rpt.fallback_exercise_count / (double)rpt.decisions_total;
+        rpt.mean_confidence_fp32 =
+            (uint32_t)(confidence_sum / (uint64_t)rpt.decisions_total);
+        rpt.mean_expected_loss_fp16 =
+            (uint32_t)(expected_loss_sum / (uint64_t)rpt.decisions_total);
+    }
+
+    return rpt;
+}
+
+/* -------------------------------------------------------------------
  * Main — run all benchmarks and emit JSON report
  * ------------------------------------------------------------------- */
 
@@ -707,6 +854,7 @@ int main(int argc, char **argv)
 {
     bench_stats st;
     bench_deadline_report dlr;
+    bench_adaptive_report adr;
     int json_only = 0;
 
     (void)argc;
@@ -834,6 +982,32 @@ int main(int argc, char **argv)
            dlr.max_overshoot_ns);
     printf("    \"mean_overshoot_ns\": %" PRIu64 "\n",
            dlr.mean_overshoot_ns);
+    printf("  },\n");
+
+    if (!json_only) fprintf(stderr, "  adaptive_decision_surface... ");
+    adr = bench_adaptive_metrics();
+    if (!json_only) {
+        fprintf(stderr,
+                "done (fallback=%" PRIu32 "/%" PRIu32 ", confidence_fp32=%" PRIu32 ")\n",
+                adr.fallback_exercise_count, adr.decisions_total,
+                adr.mean_confidence_fp32);
+    }
+
+    printf("  \"adaptive_report\": {\n");
+    printf("    \"decisions_total\": %" PRIu32 ",\n", adr.decisions_total);
+    printf("    \"fallback_exercise_count\": %" PRIu32 ",\n",
+           adr.fallback_exercise_count);
+    printf("    \"fallback_rate\": %.6f,\n", adr.fallback_rate);
+    printf("    \"confidence_threshold_fp32\": %" PRIu32 ",\n",
+           adr.confidence_threshold_fp32);
+    printf("    \"mean_confidence_fp32\": %" PRIu32 ",\n",
+           adr.mean_confidence_fp32);
+    printf("    \"mean_expected_loss_fp16\": %" PRIu32 ",\n",
+           adr.mean_expected_loss_fp16);
+    printf("    \"ledger_digest\": \"0x%016" PRIx64 "\",\n", adr.ledger_digest);
+    printf("    \"ledger_count\": %" PRIu32 ",\n", adr.ledger_count);
+    printf("    \"ledger_overflowed\": %s\n",
+           adr.ledger_overflowed ? "true" : "false");
     printf("  }\n");
 
     printf("}\n");

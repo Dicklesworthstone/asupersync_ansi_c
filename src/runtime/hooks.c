@@ -414,7 +414,13 @@ void asx_runtime_config_init(asx_runtime_config *cfg) {
     if (!cfg) return;
     memset(cfg, 0, sizeof(*cfg));
     cfg->size = (uint32_t)sizeof(*cfg);
+#if defined(ASX_PROFILE_EMBEDDED_ROUTER) || defined(ASX_PROFILE_HFT)
+    cfg->wait_policy = ASX_WAIT_BUSY_SPIN;
+#elif defined(ASX_PROFILE_AUTOMOTIVE)
+    cfg->wait_policy = ASX_WAIT_SLEEP;
+#else
     cfg->wait_policy = ASX_WAIT_YIELD;
+#endif
     cfg->leak_response = ASX_LEAK_LOG;
     cfg->finalizer_poll_budget = 100;
     cfg->finalizer_time_budget_ns = (uint64_t)5000000000ULL; /* 5 seconds */
