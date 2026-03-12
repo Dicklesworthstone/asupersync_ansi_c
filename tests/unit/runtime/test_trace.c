@@ -9,6 +9,9 @@
 
 #include "../../test_harness.h"
 #include <asx/asx.h>
+#include <asx/runtime/parallel.h>
+#include <asx/runtime/telemetry.h>
+#include <asx/runtime/hindsight.h>
 #include <asx/runtime/trace.h>
 #include <asx/time/timer_wheel.h>
 #include <asx/core/ghost.h>
@@ -591,6 +594,53 @@ TEST(trace_timer_events_emitted_by_runtime) {
     ASSERT_EQ(ev.aux, (uint64_t)100);
 }
 
+TEST(runtime_reset_clears_global_support_state) {
+    asx_parallel_config cfg = {0};
+    asx_budget budget = asx_budget_infinite();
+    asx_region_id rid;
+    asx_channel_id ch;
+    asx_send_permit permit;
+    asx_timer_handle timer_handle;
+    uint64_t value;
+
+    cfg.worker_count = 1u;
+    cfg.fairness = ASX_FAIRNESS_ROUND_ROBIN;
+    cfg.lane_weights[0] = 1u;
+    cfg.lane_weights[1] = 1u;
+    cfg.lane_weights[2] = 1u;
+    cfg.starvation_limit = 8u;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_channel_create(rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&permit, 55u), ASX_OK);
+    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(), 100, (void *)0x1,
+                                 &timer_handle), ASX_OK);
+    ASSERT_EQ(asx_telemetry_set_tier(ASX_TELEMETRY_OPS_LIGHT), ASX_OK);
+    asx_telemetry_emit(ASX_TRACE_SCHED_COMPLETE, 1u, 0u);
+    asx_hindsight_log(ASX_ND_CLOCK_READ, 1u, 99u);
+
+    ASSERT_TRUE(asx_trace_event_count() > (uint32_t)0);
+    ASSERT_TRUE(asx_timer_active_count(asx_timer_wheel_global()) > (uint32_t)0);
+    ASSERT_EQ(asx_telemetry_emitted_count(), (uint32_t)1);
+    ASSERT_EQ(asx_hindsight_total_count(), (uint32_t)1);
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_trace_event_count(), (uint32_t)0);
+    ASSERT_EQ(asx_timer_active_count(asx_timer_wheel_global()), (uint32_t)0);
+    ASSERT_EQ(asx_telemetry_get_tier(), ASX_TELEMETRY_FORENSIC);
+    ASSERT_EQ(asx_telemetry_emitted_count(), (uint32_t)0);
+    ASSERT_EQ(asx_telemetry_filtered_count(), (uint32_t)0);
+    ASSERT_EQ(asx_hindsight_total_count(), (uint32_t)0);
+    ASSERT_EQ(asx_hindsight_readable_count(), (uint32_t)0);
+    ASSERT_EQ(asx_parallel_run(ASX_INVALID_ID, &budget), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_try_recv(ch, &value), ASX_E_NOT_FOUND);
+}
+
 /* ---- Aux mismatch detection ---- */
 
 TEST(replay_detects_aux_mismatch) {
@@ -770,6 +820,7 @@ int main(void) {
     RUN_TEST(trace_task_transitions_emitted_by_cancel_api);
     RUN_TEST(trace_channel_events_emitted_by_runtime);
     RUN_TEST(trace_timer_events_emitted_by_runtime);
+    RUN_TEST(runtime_reset_clears_global_support_state);
     RUN_TEST(replay_detects_aux_mismatch);
     RUN_TEST(trace_ring_drops_beyond_capacity);
     RUN_TEST(trace_digest_sensitive_to_aux);

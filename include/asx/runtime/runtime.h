@@ -458,7 +458,9 @@ ASX_API ASX_MUST_USE asx_status asx_region_drain(asx_region_id id,
                                                  asx_budget *budget);
 
 /* Reset all runtime state (test support only).
- * Clears all regions and tasks. Not for production use. */
+ * Clears lifecycle arenas plus global scheduler/parallel/channel/timer/
+ * trace/telemetry/adapter/fault-injection diagnostic state.
+ * Not for production use. */
 ASX_API void asx_runtime_reset(void);
 
 #ifdef __cplusplus

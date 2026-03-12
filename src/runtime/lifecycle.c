@@ -12,6 +12,14 @@
 
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/parallel.h>
+#include <asx/runtime/telemetry.h>
+#include <asx/runtime/hindsight.h>
+#include <asx/runtime/hft_instrument.h>
+#include <asx/runtime/automotive_instrument.h>
+#include <asx/runtime/vertical_adapter.h>
+#include <asx/runtime/event.h>
+#include <asx/time/timer_wheel.h>
 #include <asx/core/transition.h>
 #include <asx/core/ghost.h>
 #include <string.h>
@@ -75,6 +83,17 @@ void asx_runtime_reset(void)
 
     /* Reset ghost safety monitors */
     asx_ghost_reset();
+    asx_scheduler_event_reset();
+    asx_parallel_reset();
+    asx_channel_reset();
+    asx_timer_wheel_reset(asx_timer_wheel_global());
+    asx_trace_reset();
+    asx_telemetry_reset();
+    asx_hindsight_reset();
+    asx_adapter_reset_all();
+    asx_fault_clear();
+    asx_event_log_reset();
+    asx_error_ledger_reset();
 }
 
 /* -------------------------------------------------------------------
