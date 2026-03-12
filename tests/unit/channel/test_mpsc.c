@@ -10,6 +10,7 @@
 
 #include <asx/asx.h>
 #include <asx/core/channel.h>
+#include <asx/runtime/trace.h>
 #include "test_harness.h"
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
@@ -244,6 +245,35 @@ TEST(fifo_ordering)
     ASSERT_EQ(val, 200u);
     ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_OK);
     ASSERT_EQ(val, 300u);
+}
+
+TEST(trace_emits_send_and_recv)
+{
+    asx_channel_id ch;
+    asx_send_permit permit;
+    asx_trace_event ev;
+    uint64_t value;
+
+    setup();
+    asx_trace_reset();
+
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&permit, 42u), ASX_OK);
+    ASSERT_EQ(asx_channel_try_recv(ch, &value), ASX_OK);
+    ASSERT_EQ(value, 42u);
+
+    ASSERT_EQ(asx_trace_event_count(), (uint32_t)2);
+
+    ASSERT_TRUE(asx_trace_event_get(0, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_CHANNEL_SEND);
+    ASSERT_EQ(ev.entity_id, (uint64_t)ch);
+    ASSERT_EQ(ev.aux, (uint64_t)42);
+
+    ASSERT_TRUE(asx_trace_event_get(1, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_CHANNEL_RECV);
+    ASSERT_EQ(ev.entity_id, (uint64_t)ch);
+    ASSERT_EQ(ev.aux, (uint64_t)42);
 }
 
 TEST(capacity_enforcement)
@@ -690,6 +720,7 @@ int main(void)
 
     RUN_TEST(reserve_and_send_basic);
     RUN_TEST(fifo_ordering);
+    RUN_TEST(trace_emits_send_and_recv);
     RUN_TEST(capacity_enforcement);
     RUN_TEST(capacity_mixed_reserved_and_queued);
 

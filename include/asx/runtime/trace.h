@@ -84,8 +84,9 @@ typedef struct {
 /* -------------------------------------------------------------------
  * Trace emission API
  *
- * Events are recorded into a global ring buffer. The trace is
- * automatically reset at the start of each asx_scheduler_run call.
+ * Events are recorded into a global ring buffer. Scheduler and
+ * parallel-run invocations append to the current trace until the
+ * caller explicitly resets it with asx_trace_reset().
  * ------------------------------------------------------------------- */
 
 /* Emit a trace event. Thread-safe: none (single-threaded runtime). */
@@ -99,7 +100,7 @@ ASX_API uint32_t asx_trace_event_count(void);
 /* Read event at index (0 = oldest). Returns 1 on success, 0 on OOB. */
 ASX_API int asx_trace_event_get(uint32_t index, asx_trace_event *out);
 
-/* Reset trace state. Called automatically by scheduler_run. */
+/* Reset trace state before starting a fresh scenario or replay window. */
 ASX_API void asx_trace_reset(void);
 
 /* -------------------------------------------------------------------

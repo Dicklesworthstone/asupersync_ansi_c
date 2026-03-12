@@ -157,6 +157,7 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget)
                                          ASX_REGION_CLOSED);
         if (st != ASX_OK) return st;
         r->state = ASX_REGION_CLOSED;
+        asx_trace_emit(ASX_TRACE_REGION_CLOSED, id, 0);
     }
 
     return ASX_OK;

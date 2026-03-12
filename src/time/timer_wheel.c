@@ -14,6 +14,7 @@
 
 #include <asx/time/timer_wheel.h>
 #include <asx/asx_config.h>
+#include <asx/runtime/trace.h>
 #include <string.h>
 
 /* -------------------------------------------------------------------
@@ -55,6 +56,11 @@ static uint32_t asx_timer_next_generation(uint32_t current)
         current = 1u;
     }
     return current;
+}
+
+static uint64_t asx_timer_trace_entity_id(const asx_timer_handle *handle)
+{
+    return ((uint64_t)handle->slot << 32) | (uint64_t)handle->generation;
 }
 
 asx_timer_wheel *asx_timer_wheel_global(void)
@@ -163,6 +169,9 @@ asx_status asx_timer_register(asx_timer_wheel *wheel,
 
     out_handle->slot = idx;
     out_handle->generation = wheel->slots[idx].generation;
+    asx_trace_emit(ASX_TRACE_TIMER_SET,
+                   asx_timer_trace_entity_id(out_handle),
+                   deadline);
 
     return ASX_OK;
 }
@@ -188,6 +197,9 @@ int asx_timer_cancel(asx_timer_wheel *wheel,
     /* Logical cancel: mark dead */
     s->alive = 0;
     if (wheel->active_count > 0) wheel->active_count--;
+    asx_trace_emit(ASX_TRACE_TIMER_CANCEL,
+                   asx_timer_trace_entity_id(handle),
+                   s->deadline);
 
     return 1;
 }
@@ -260,7 +272,13 @@ uint32_t asx_timer_collect_expired(asx_timer_wheel *wheel,
     for (i = 0; i < count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: count <= max_wakers <= ASX_MAX_TIMERS");
         asx_timer_slot *s = &wheel->slots[cand_idx[i]];
+        asx_timer_handle fired_handle;
+        fired_handle.slot = cand_idx[i];
+        fired_handle.generation = s->generation;
         out_wakers[i] = s->waker_data;
+        asx_trace_emit(ASX_TRACE_TIMER_FIRE,
+                       asx_timer_trace_entity_id(&fired_handle),
+                       s->deadline);
         s->alive = 0;
         if (wheel->active_count > 0) wheel->active_count--;
     }

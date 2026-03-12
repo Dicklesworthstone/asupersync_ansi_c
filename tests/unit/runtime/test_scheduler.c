@@ -340,6 +340,37 @@ TEST(scheduler_no_tasks_is_quiescent) {
     ASSERT_EQ(ev.kind, ASX_SCHED_EVENT_QUIESCENT);
 }
 
+TEST(scheduler_trace_emits_round_markers) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_trace_event ev;
+    int counter = 1; /* round 0 pending, round 1 complete + quiescent */
+    uint32_t round_count = 0;
+    uint32_t i;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    asx_trace_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &counter, &tid), ASX_OK);
+
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    for (i = 0; i < asx_trace_event_count(); i++) {
+        ASSERT_TRUE(asx_trace_event_get(i, &ev));
+        if (ev.kind != ASX_TRACE_SCHED_ROUND) continue;
+
+        ASSERT_EQ(ev.entity_id, (uint64_t)ASX_INVALID_ID);
+        ASSERT_EQ(ev.aux, (uint64_t)round_count);
+        round_count++;
+    }
+
+    ASSERT_EQ(round_count, (uint32_t)2);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_scheduler ===\n");
 
@@ -353,6 +384,7 @@ int main(void) {
     RUN_TEST(scheduler_event_reset_clears);
     RUN_TEST(scheduler_round_tracking_multi_round);
     RUN_TEST(scheduler_no_tasks_is_quiescent);
+    RUN_TEST(scheduler_trace_emits_round_markers);
 
     TEST_REPORT();
     return test_failures;

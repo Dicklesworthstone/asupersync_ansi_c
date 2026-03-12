@@ -18,6 +18,12 @@
 #include <asx/core/ghost.h>
 #include "runtime_internal.h"
 
+static uint64_t asx_trace_task_transition_aux(asx_task_state from,
+                                              asx_task_state to)
+{
+    return ((uint64_t)(uint32_t)from << 32) | (uint64_t)(uint32_t)to;
+}
+
 /* -------------------------------------------------------------------
  * Task cancel request
  * ------------------------------------------------------------------- */
@@ -58,12 +64,21 @@ asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind)
 
     /* If task hasn't been polled yet (Created), move to Running first */
     if (t->state == ASX_TASK_CREATED) {
+        asx_task_state from = t->state;
         (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_RUNNING);
         t->state = ASX_TASK_RUNNING;
+        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
+                       asx_trace_task_transition_aux(from, ASX_TASK_RUNNING));
     }
 
+    {
+        asx_task_state from = t->state;
     (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_CANCEL_REQUESTED);
     t->state = ASX_TASK_CANCEL_REQUESTED;
+        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
+                       asx_trace_task_transition_aux(from,
+                                                    ASX_TASK_CANCEL_REQUESTED));
+    }
 
     t->cancel_pending = 1;
     t->cancel_reason.kind = kind;
@@ -174,9 +189,12 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out)
 
     /* Transition CancelRequested → Cancelling on first checkpoint */
     if (t->state == ASX_TASK_CANCEL_REQUESTED) {
+        asx_task_state from = t->state;
         (void)asx_ghost_check_task_transition(self, t->state, ASX_TASK_CANCELLING);
         t->state = ASX_TASK_CANCELLING;
         t->cancel_phase = ASX_CANCEL_PHASE_CANCELLING;
+        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)self,
+                       asx_trace_task_transition_aux(from, ASX_TASK_CANCELLING));
     }
 
     out->cancelled = 1;
@@ -206,9 +224,14 @@ asx_status asx_task_finalize(asx_task_id id)
         return ASX_E_INVALID_STATE;
     }
 
+    {
+        asx_task_state from = t->state;
     (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_FINALIZING);
     t->state = ASX_TASK_FINALIZING;
     t->cancel_phase = ASX_CANCEL_PHASE_FINALIZING;
+        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
+                       asx_trace_task_transition_aux(from, ASX_TASK_FINALIZING));
+    }
 
     return ASX_OK;
 }

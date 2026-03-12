@@ -20,6 +20,7 @@
 
 #include <asx/asx.h>
 #include <asx/core/channel.h>
+#include <asx/runtime/trace.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -413,6 +414,7 @@ asx_status asx_send_permit_send(asx_send_permit *permit, uint64_t value)
     write_pos = (s->queue_head + s->queue_len) % s->capacity;
     s->queue[write_pos] = value;
     s->queue_len++;
+    asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)permit->channel_id, value);
 
     return ASX_OK;
 }
@@ -462,6 +464,7 @@ asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value)
         *out_value = s->queue[s->queue_head];
         s->queue_head = (s->queue_head + 1u) % s->capacity;
         s->queue_len--;
+        asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)id, *out_value);
         return ASX_OK;
     }
 

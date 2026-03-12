@@ -10,7 +10,32 @@
 #include "../../test_harness.h"
 #include <asx/asx.h>
 #include <asx/runtime/trace.h>
+#include <asx/time/timer_wheel.h>
 #include <asx/core/ghost.h>
+
+static asx_status poll_complete(void *data, asx_task_id self)
+{
+    (void)data;
+    (void)self;
+    return ASX_OK;
+}
+
+static asx_status poll_pending(void *data, asx_task_id self)
+{
+    (void)data;
+    (void)self;
+    return ASX_E_PENDING;
+}
+
+static uint64_t task_transition_aux(asx_task_state from, asx_task_state to)
+{
+    return ((uint64_t)(uint32_t)from << 32) | (uint64_t)(uint32_t)to;
+}
+
+static uint64_t timer_trace_entity_id(const asx_timer_handle *handle)
+{
+    return ((uint64_t)handle->slot << 32) | (uint64_t)handle->generation;
+}
 
 /* ---- Trace emission ---- */
 
@@ -386,6 +411,186 @@ TEST(trace_continuity_check_match) {
     asx_replay_clear_reference();
 }
 
+TEST(trace_obligation_abort_emitted_by_runtime) {
+    asx_region_id rid;
+    asx_obligation_id oid;
+    asx_trace_event ev;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    asx_trace_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
+
+    ASSERT_TRUE(asx_trace_event_get(asx_trace_event_count() - 1u, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_OBLIGATION_ABORT);
+    ASSERT_EQ(ev.entity_id, (uint64_t)oid);
+}
+
+TEST(trace_region_closed_emitted_by_drain) {
+    asx_region_id rid;
+    asx_budget budget;
+    asx_trace_event ev;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    asx_trace_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+
+    ASSERT_TRUE(asx_trace_event_get(asx_trace_event_count() - 1u, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_REGION_CLOSED);
+    ASSERT_EQ(ev.entity_id, (uint64_t)rid);
+}
+
+TEST(trace_task_transitions_emitted_by_scheduler) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_trace_event ev;
+    uint32_t i;
+    int saw_created_running = 0;
+    int saw_running_completed = 0;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    asx_trace_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+
+    for (i = 0; i < asx_trace_event_count(); i++) {
+        ASSERT_TRUE(asx_trace_event_get(i, &ev));
+        if (ev.kind != ASX_TRACE_TASK_TRANSITION) continue;
+        if (ev.entity_id != (uint64_t)tid) continue;
+
+        if (ev.aux == task_transition_aux(ASX_TASK_CREATED, ASX_TASK_RUNNING)) {
+            saw_created_running = 1;
+        }
+        if (ev.aux == task_transition_aux(ASX_TASK_RUNNING, ASX_TASK_COMPLETED)) {
+            saw_running_completed = 1;
+        }
+    }
+
+    ASSERT_TRUE(saw_created_running);
+    ASSERT_TRUE(saw_running_completed);
+}
+
+TEST(trace_task_transitions_emitted_by_cancel_api) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_trace_event ev;
+    uint32_t i;
+    int saw_created_running = 0;
+    int saw_running_cancel_requested = 0;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    asx_trace_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
+
+    for (i = 0; i < asx_trace_event_count(); i++) {
+        ASSERT_TRUE(asx_trace_event_get(i, &ev));
+        if (ev.kind != ASX_TRACE_TASK_TRANSITION) continue;
+        if (ev.entity_id != (uint64_t)tid) continue;
+
+        if (ev.aux == task_transition_aux(ASX_TASK_CREATED, ASX_TASK_RUNNING)) {
+            saw_created_running = 1;
+        }
+        if (ev.aux == task_transition_aux(ASX_TASK_RUNNING,
+                                          ASX_TASK_CANCEL_REQUESTED)) {
+            saw_running_cancel_requested = 1;
+        }
+    }
+
+    ASSERT_TRUE(saw_created_running);
+    ASSERT_TRUE(saw_running_cancel_requested);
+}
+
+TEST(trace_channel_events_emitted_by_runtime) {
+    asx_region_id rid;
+    asx_channel_id ch;
+    asx_send_permit permit;
+    asx_trace_event ev;
+    uint64_t value;
+
+    asx_runtime_reset();
+    asx_channel_reset();
+    asx_trace_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    asx_trace_reset();
+
+    ASSERT_EQ(asx_channel_create(rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&permit, 77u), ASX_OK);
+    ASSERT_EQ(asx_channel_try_recv(ch, &value), ASX_OK);
+    ASSERT_EQ(value, 77u);
+
+    ASSERT_EQ(asx_trace_event_count(), (uint32_t)2);
+
+    ASSERT_TRUE(asx_trace_event_get(0, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_CHANNEL_SEND);
+    ASSERT_EQ(ev.entity_id, (uint64_t)ch);
+    ASSERT_EQ(ev.aux, (uint64_t)77);
+
+    ASSERT_TRUE(asx_trace_event_get(1, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_CHANNEL_RECV);
+    ASSERT_EQ(ev.entity_id, (uint64_t)ch);
+    ASSERT_EQ(ev.aux, (uint64_t)77);
+}
+
+TEST(trace_timer_events_emitted_by_runtime) {
+    asx_timer_wheel *wheel;
+    asx_timer_handle fire_h, cancel_h;
+    asx_trace_event ev;
+    void *wakers[2];
+    uint32_t count;
+
+    wheel = asx_timer_wheel_global();
+    asx_timer_wheel_reset(wheel);
+    asx_trace_reset();
+
+    ASSERT_EQ(asx_timer_register(wheel, 100, (void *)0x11, &fire_h), ASX_OK);
+    ASSERT_EQ(asx_timer_register(wheel, 200, (void *)0x22, &cancel_h), ASX_OK);
+    ASSERT_TRUE(asx_timer_cancel(wheel, &cancel_h));
+
+    count = asx_timer_collect_expired(wheel, 100, wakers, 2);
+    ASSERT_EQ(count, (uint32_t)1);
+    ASSERT_EQ(wakers[0], (void *)0x11);
+
+    ASSERT_EQ(asx_trace_event_count(), (uint32_t)4);
+
+    ASSERT_TRUE(asx_trace_event_get(0, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_TIMER_SET);
+    ASSERT_EQ(ev.entity_id, timer_trace_entity_id(&fire_h));
+    ASSERT_EQ(ev.aux, (uint64_t)100);
+
+    ASSERT_TRUE(asx_trace_event_get(1, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_TIMER_SET);
+    ASSERT_EQ(ev.entity_id, timer_trace_entity_id(&cancel_h));
+    ASSERT_EQ(ev.aux, (uint64_t)200);
+
+    ASSERT_TRUE(asx_trace_event_get(2, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_TIMER_CANCEL);
+    ASSERT_EQ(ev.entity_id, timer_trace_entity_id(&cancel_h));
+    ASSERT_EQ(ev.aux, (uint64_t)200);
+
+    ASSERT_TRUE(asx_trace_event_get(3, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_TIMER_FIRE);
+    ASSERT_EQ(ev.entity_id, timer_trace_entity_id(&fire_h));
+    ASSERT_EQ(ev.aux, (uint64_t)100);
+}
+
 /* ---- Aux mismatch detection ---- */
 
 TEST(replay_detects_aux_mismatch) {
@@ -559,6 +764,12 @@ int main(void) {
     RUN_TEST(trace_binary_import_null_rejects);
     RUN_TEST(trace_binary_import_truncated);
     RUN_TEST(trace_continuity_check_match);
+    RUN_TEST(trace_obligation_abort_emitted_by_runtime);
+    RUN_TEST(trace_region_closed_emitted_by_drain);
+    RUN_TEST(trace_task_transitions_emitted_by_scheduler);
+    RUN_TEST(trace_task_transitions_emitted_by_cancel_api);
+    RUN_TEST(trace_channel_events_emitted_by_runtime);
+    RUN_TEST(trace_timer_events_emitted_by_runtime);
     RUN_TEST(replay_detects_aux_mismatch);
     RUN_TEST(trace_ring_drops_beyond_capacity);
     RUN_TEST(trace_digest_sensitive_to_aux);

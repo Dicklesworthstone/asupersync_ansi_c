@@ -46,6 +46,12 @@ static void sched_emit(asx_scheduler_event_kind kind,
     }
 }
 
+static uint64_t asx_trace_task_transition_aux(asx_task_state from,
+                                              asx_task_state to)
+{
+    return ((uint64_t)(uint32_t)from << 32) | (uint64_t)(uint32_t)to;
+}
+
 uint32_t asx_scheduler_event_count(void)
 {
     return g_event_count;
@@ -93,6 +99,8 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget)
     for (round = 0; ; round++) {
         ASX_CHECKPOINT_WAIVER("kernel-scheduler: this IS the scheduler event loop; "
                               "budget exhaustion provides bounded termination");
+        asx_trace_emit(ASX_TRACE_SCHED_ROUND, ASX_INVALID_ID, round);
+
         /* Check budget exhaustion */
         if (asx_budget_is_exhausted(budget)) {
             sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, round);
@@ -131,10 +139,14 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget)
              * CANCELLED outcome. This ensures bounded cleanup.
              * ---------------------------------------------------------- */
             if (t->state == ASX_TASK_FINALIZING) {
+                asx_task_state from = t->state;
                 (void)asx_ghost_check_task_transition(tid, t->state,
                                                       ASX_TASK_COMPLETED);
                 t->state = ASX_TASK_COMPLETED;
                 t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
+                asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
+                               asx_trace_task_transition_aux(from,
+                                                            ASX_TASK_COMPLETED));
                 t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
                 asx_task_release_capture_internal(t);
                 if (rslot->task_count > 0) rslot->task_count--;
@@ -152,16 +164,32 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget)
                  * either never called checkpoint (CANCEL_REQUESTED)
                  * or ran out of cleanup polls (CANCELLING). */
                 if (t->state == ASX_TASK_CANCEL_REQUESTED) {
+                    asx_task_state from = t->state;
                     (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_CANCELLING);
                     t->state = ASX_TASK_CANCELLING;
                     t->cancel_phase = ASX_CANCEL_PHASE_CANCELLING;
+                    asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
+                                   asx_trace_task_transition_aux(from,
+                                                                ASX_TASK_CANCELLING));
                 }
+                {
+                    asx_task_state from = t->state;
                 (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_FINALIZING);
                 t->state = ASX_TASK_FINALIZING;
                 t->cancel_phase = ASX_CANCEL_PHASE_FINALIZING;
+                    asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
+                                   asx_trace_task_transition_aux(from,
+                                                                ASX_TASK_FINALIZING));
+                }
+                {
+                    asx_task_state from = t->state;
                 (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                 t->state = ASX_TASK_COMPLETED;
                 t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
+                    asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
+                                   asx_trace_task_transition_aux(from,
+                                                                ASX_TASK_COMPLETED));
+                }
                 t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
                 asx_task_release_capture_internal(t);
                 if (rslot->task_count > 0) rslot->task_count--;
@@ -180,9 +208,13 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget)
 
             /* Transition Created → Running on first poll */
             if (t->state == ASX_TASK_CREATED) {
+                asx_task_state from = t->state;
                 (void)asx_ghost_check_task_transition(tid, t->state,
                                                       ASX_TASK_RUNNING);
                 t->state = ASX_TASK_RUNNING;
+                asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
+                               asx_trace_task_transition_aux(from,
+                                                            ASX_TASK_RUNNING));
             }
 
             /* Emit poll event */
@@ -196,6 +228,7 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget)
 
             if (poll_result == ASX_OK) {
                 /* Task completed — set outcome based on cancel state */
+                asx_task_state from = t->state;
                 (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                 t->state = ASX_TASK_COMPLETED;
                 if (t->cancel_pending) {
@@ -204,6 +237,9 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget)
                 } else {
                     t->outcome = asx_outcome_make(ASX_OUTCOME_OK);
                 }
+                asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
+                               asx_trace_task_transition_aux(from,
+                                                            ASX_TASK_COMPLETED));
                 asx_task_release_capture_internal(t);
                 if (rslot->task_count > 0) rslot->task_count--;
                 active--;
@@ -213,6 +249,7 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget)
                 /* Task failed — mark as completed with error.
                  * If cancel was pending, outcome joins to CANCELLED
                  * since CANCELLED > ERR in the severity lattice. */
+                asx_task_state from = t->state;
                 (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                 t->state = ASX_TASK_COMPLETED;
                 if (t->cancel_pending) {
@@ -221,6 +258,9 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget)
                 } else {
                     t->outcome = asx_outcome_make(ASX_OUTCOME_ERR);
                 }
+                asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
+                               asx_trace_task_transition_aux(from,
+                                                            ASX_TASK_COMPLETED));
                 asx_task_release_capture_internal(t);
                 if (rslot->task_count > 0) rslot->task_count--;
                 active--;

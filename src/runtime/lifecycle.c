@@ -550,6 +550,8 @@ asx_status asx_obligation_abort(asx_obligation_id id)
     /* Ghost linearity monitor: track obligation resolution */
     asx_ghost_obligation_resolved(id);
 
+    asx_trace_emit(ASX_TRACE_OBLIGATION_ABORT, id, 0);
+
     return ASX_OK;
 }
 
