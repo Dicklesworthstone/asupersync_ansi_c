@@ -70,6 +70,7 @@ diff.txt
 .beads/*.lock
 .beads/last-touched
 .beads/*.tmp
+.beads/.br_history/
 
 # bv (beads viewer) local config and caches
 .bv/
