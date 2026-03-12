@@ -10,11 +10,13 @@
 #include "../../test_harness.h"
 #include <asx/asx.h>
 #include <asx/runtime/parallel.h>
+#include <asx/runtime/snapshot.h>
 #include <asx/runtime/telemetry.h>
 #include <asx/runtime/hindsight.h>
 #include <asx/runtime/trace.h>
 #include <asx/time/timer_wheel.h>
 #include <asx/core/ghost.h>
+#include <string.h>
 
 static asx_status poll_complete(void *data, asx_task_id self)
 {
@@ -298,6 +300,43 @@ TEST(snapshot_capture_with_region) {
 
     /* Should mention regions */
     ASSERT_TRUE(snap.len > (uint32_t)20);
+}
+
+TEST(snapshot_capture_uses_runtime_snapshot_entities) {
+    asx_snapshot_buffer legacy;
+    asx_runtime_snapshot typed;
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_obligation_id oid;
+    char needle[64];
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    asx_trace_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+
+    ASSERT_EQ(asx_runtime_snapshot_capture(&typed), ASX_OK);
+    ASSERT_EQ(typed.region_count, (uint32_t)1);
+    ASSERT_EQ(typed.task_count, (uint32_t)1);
+    ASSERT_EQ(typed.obligation_count, (uint32_t)1);
+
+    ASSERT_EQ(asx_snapshot_capture(&legacy), ASX_OK);
+
+    snprintf(needle, sizeof(needle), "\"slot\":%u",
+             (unsigned)asx_handle_slot(typed.regions[0].id));
+    ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
+    snprintf(needle, sizeof(needle), "\"tasks\":%u",
+             (unsigned)typed.regions[0].task_count);
+    ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
+    snprintf(needle, sizeof(needle), "\"gen\":%u",
+             (unsigned)asx_handle_generation(typed.tasks[0].id));
+    ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
+    snprintf(needle, sizeof(needle), "\"state\":%u",
+             (unsigned)typed.obligations[0].state);
+    ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
 }
 
 TEST(snapshot_digest_deterministic) {
@@ -805,6 +844,7 @@ int main(void) {
     RUN_TEST(replay_reference_rejects_over_capacity);
     RUN_TEST(snapshot_capture_empty);
     RUN_TEST(snapshot_capture_with_region);
+    RUN_TEST(snapshot_capture_uses_runtime_snapshot_entities);
     RUN_TEST(snapshot_digest_deterministic);
     RUN_TEST(snapshot_null_returns_error);
     RUN_TEST(trace_binary_export_basic);

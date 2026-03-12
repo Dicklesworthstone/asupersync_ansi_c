@@ -18,6 +18,7 @@
 #include <asx/asx.h>
 #include <asx/portable.h>
 #include <asx/runtime/trace.h>
+#include <asx/runtime/snapshot.h>
 #include <string.h>
 #include "runtime_internal.h"
 
@@ -297,58 +298,63 @@ static void snap_u32(asx_snapshot_buffer *buf, uint32_t val)
 
 asx_status asx_snapshot_capture(asx_snapshot_buffer *out)
 {
+    asx_runtime_snapshot snap;
+    asx_status status;
     uint32_t i;
     int first;
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    status = asx_runtime_snapshot_capture(&snap);
+    if (status != ASX_OK) return status;
 
     out->len = 0;
     out->data[0] = '\0';
 
     snap_str(out, "{\"regions\":[");
     first = 1;
-    for (i = 0; i < g_region_count; i++) {
-        if (!g_regions[i].alive) continue;
+    for (i = 0; i < snap.region_count; i++) {
+        const asx_snapshot_region *region = &snap.regions[i];
         if (!first) snap_str(out, ",");
         first = 0;
         snap_str(out, "{\"slot\":");
-        snap_u32(out, i);
+        snap_u32(out, (uint32_t)asx_handle_slot(region->id));
         snap_str(out, ",\"state\":");
-        snap_u32(out, (uint32_t)g_regions[i].state);
+        snap_u32(out, (uint32_t)region->state);
         snap_str(out, ",\"tasks\":");
-        snap_u32(out, g_regions[i].task_count);
+        snap_u32(out, region->task_count);
         snap_str(out, ",\"gen\":");
-        snap_u32(out, (uint32_t)g_regions[i].generation);
+        snap_u32(out, (uint32_t)asx_handle_generation(region->id));
         snap_str(out, "}");
     }
 
     snap_str(out, "],\"tasks\":[");
     first = 1;
-    for (i = 0; i < g_task_count; i++) {
-        if (!g_tasks[i].alive) continue;
+    for (i = 0; i < snap.task_count; i++) {
+        const asx_snapshot_task *task = &snap.tasks[i];
         if (!first) snap_str(out, ",");
         first = 0;
         snap_str(out, "{\"slot\":");
-        snap_u32(out, i);
+        snap_u32(out, (uint32_t)asx_handle_slot(task->id));
         snap_str(out, ",\"state\":");
-        snap_u32(out, (uint32_t)g_tasks[i].state);
+        snap_u32(out, (uint32_t)task->state);
         snap_str(out, ",\"gen\":");
-        snap_u32(out, (uint32_t)g_tasks[i].generation);
+        snap_u32(out, (uint32_t)asx_handle_generation(task->id));
         snap_str(out, "}");
     }
 
     snap_str(out, "],\"obligations\":[");
     first = 1;
-    for (i = 0; i < g_obligation_count; i++) {
-        if (!g_obligations[i].alive) continue;
+    for (i = 0; i < snap.obligation_count; i++) {
+        const asx_snapshot_obligation *obligation = &snap.obligations[i];
         if (!first) snap_str(out, ",");
         first = 0;
         snap_str(out, "{\"slot\":");
-        snap_u32(out, i);
+        snap_u32(out, (uint32_t)asx_handle_slot(obligation->id));
         snap_str(out, ",\"state\":");
-        snap_u32(out, (uint32_t)g_obligations[i].state);
+        snap_u32(out, (uint32_t)obligation->state);
         snap_str(out, ",\"gen\":");
-        snap_u32(out, (uint32_t)g_obligations[i].generation);
+        snap_u32(out, (uint32_t)asx_handle_generation(obligation->id));
         snap_str(out, "}");
     }
 
