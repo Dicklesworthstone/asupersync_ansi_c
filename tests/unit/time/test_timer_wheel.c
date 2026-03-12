@@ -8,11 +8,17 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/runtime/trace.h>
 #include <asx/time/timer_wheel.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
 #define REGISTER_IGNORE(w, dl, data, h) \
     do { asx_status s_ = asx_timer_register((w), (dl), (data), (h)); (void)s_; } while (0)
+
+static uint64_t timer_trace_entity_id(const asx_timer_handle *handle)
+{
+    return ((uint64_t)handle->slot << 32) | (uint64_t)handle->generation;
+}
 
 /* -------------------------------------------------------------------
  * Test: register and fire a single timer
@@ -78,6 +84,47 @@ TEST(timer_cancel_prevents_fire) {
     /* Advance past deadline — should collect nothing */
     count = asx_timer_collect_expired(w, 200, wakers, 4);
     ASSERT_EQ(count, (uint32_t)0);
+}
+
+TEST(timer_trace_emits_set_fire_and_cancel) {
+    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_handle fire_h, cancel_h;
+    asx_trace_event ev;
+    void *wakers[4];
+    uint32_t count;
+
+    asx_timer_wheel_reset(w);
+    asx_trace_reset();
+
+    ASSERT_EQ(asx_timer_register(w, 100, (void *)0xAABB, &fire_h), ASX_OK);
+    ASSERT_EQ(asx_timer_register(w, 200, (void *)0xCCDD, &cancel_h), ASX_OK);
+    ASSERT_TRUE(asx_timer_cancel(w, &cancel_h));
+
+    count = asx_timer_collect_expired(w, 100, wakers, 4);
+    ASSERT_EQ(count, (uint32_t)1);
+    ASSERT_EQ(wakers[0], (void *)0xAABB);
+
+    ASSERT_EQ(asx_trace_event_count(), (uint32_t)4);
+
+    ASSERT_TRUE(asx_trace_event_get(0, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_TIMER_SET);
+    ASSERT_EQ(ev.entity_id, timer_trace_entity_id(&fire_h));
+    ASSERT_EQ(ev.aux, (uint64_t)100);
+
+    ASSERT_TRUE(asx_trace_event_get(1, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_TIMER_SET);
+    ASSERT_EQ(ev.entity_id, timer_trace_entity_id(&cancel_h));
+    ASSERT_EQ(ev.aux, (uint64_t)200);
+
+    ASSERT_TRUE(asx_trace_event_get(2, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_TIMER_CANCEL);
+    ASSERT_EQ(ev.entity_id, timer_trace_entity_id(&cancel_h));
+    ASSERT_EQ(ev.aux, (uint64_t)200);
+
+    ASSERT_TRUE(asx_trace_event_get(3, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_TIMER_FIRE);
+    ASSERT_EQ(ev.entity_id, timer_trace_entity_id(&fire_h));
+    ASSERT_EQ(ev.aux, (uint64_t)100);
 }
 
 /* -------------------------------------------------------------------
@@ -580,6 +627,7 @@ int main(void) {
     RUN_TEST(timer_register_and_fire);
     RUN_TEST(timer_does_not_fire_early);
     RUN_TEST(timer_cancel_prevents_fire);
+    RUN_TEST(timer_trace_emits_set_fire_and_cancel);
     RUN_TEST(timer_stale_handle_cancel_returns_false);
     RUN_TEST(timer_cancel_after_fire_returns_false);
     RUN_TEST(timer_tiebreak_insertion_order);
