@@ -147,7 +147,9 @@ RUNTIME_SRC := \
 	src/runtime/vertical_adapter.c \
 	src/runtime/virtual_time.c \
 	src/runtime/config_reload.c \
-	src/runtime/regression_localize.c
+	src/runtime/regression_localize.c \
+	src/runtime/event_log.c \
+	src/runtime/snapshot.c
 
 CHANNEL_SRC := \
 	src/channel/mpsc.c
