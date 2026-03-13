@@ -22,9 +22,9 @@
 #ifndef ASX_RUNTIME_CONFIG_RELOAD_H
 #define ASX_RUNTIME_CONFIG_RELOAD_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
-#include <asx/asx_config.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,10 +35,10 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 
 typedef enum {
-    ASX_CONFIG_FROZEN_COMPILE    = 0,  /* Compile-time only */
-    ASX_CONFIG_FROZEN_INIT       = 1,  /* Set once at hook install */
-    ASX_CONFIG_RELOADABLE        = 2,  /* Safe to change mid-run */
-    ASX_CONFIG_RESTART_REQUIRED  = 3   /* Needs runtime reset */
+    ASX_CONFIG_FROZEN_COMPILE = 0,  /* Compile-time only */
+    ASX_CONFIG_FROZEN_INIT = 1,     /* Set once at hook install */
+    ASX_CONFIG_RELOADABLE = 2,      /* Safe to change mid-run */
+    ASX_CONFIG_RESTART_REQUIRED = 3 /* Needs runtime reset */
 } asx_config_reload_class;
 
 /* ------------------------------------------------------------------ */
@@ -50,7 +50,7 @@ typedef enum {
 typedef struct {
     const char *name;
     asx_config_reload_class reload_class;
-    uint32_t offset;    /* byte offset in asx_runtime_config */
+    uint32_t offset;     /* byte offset in asx_runtime_config */
     uint32_t field_size; /* sizeof(field) */
 } asx_config_field_desc;
 
@@ -59,8 +59,8 @@ typedef struct {
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    asx_runtime_config active;   /* Currently active config */
-    int                loaded;   /* 1 if config has been loaded */
+    asx_runtime_config active; /* Currently active config */
+    int loaded;                /* 1 if config has been loaded */
 } asx_config_state;
 
 /* ------------------------------------------------------------------ */
@@ -73,8 +73,7 @@ ASX_API void asx_config_state_init(asx_config_state *state);
 
 /* Load initial config (sets active config + marks as loaded).
  * Returns ASX_OK or ASX_E_INVALID_ARGUMENT. */
-ASX_API asx_status asx_config_load(asx_config_state *state,
-                                    const asx_runtime_config *cfg);
+ASX_API asx_status asx_config_load(asx_config_state *state, const asx_runtime_config *cfg);
 
 /* Reload config atomically with validation.
  * Only RELOADABLE fields may differ from the active config.
@@ -88,12 +87,10 @@ ASX_API asx_status asx_config_load(asx_config_state *state,
  *   ASX_E_CONFIG_FROZEN       — attempted to change frozen field
  *   ASX_E_CONFIG_RESTART_REQ  — field requires restart to change
  */
-ASX_API asx_status asx_config_reload(asx_config_state *state,
-                                      const asx_runtime_config *new_cfg);
+ASX_API asx_status asx_config_reload(asx_config_state *state, const asx_runtime_config *new_cfg);
 
 /* Query the currently active config (read-only view). */
-ASX_API const asx_runtime_config *asx_config_active(
-    const asx_config_state *state);
+ASX_API const asx_runtime_config *asx_config_active(const asx_config_state *state);
 
 /* Query the reload classification of a named field.
  * Returns the classification or ASX_CONFIG_FROZEN_COMPILE if unknown. */
@@ -107,10 +104,9 @@ ASX_API const asx_config_field_desc *asx_config_field_table(uint32_t *count);
  * Fills rejection_field with the name of the first offending field
  * (or NULL if all pass). Returns ASX_OK if reloadable.
  * Does NOT apply any changes. */
-ASX_API asx_status asx_config_validate_reload(
-    const asx_config_state *state,
-    const asx_runtime_config *proposed,
-    const char **rejection_field);
+ASX_API asx_status asx_config_validate_reload(const asx_config_state *state,
+                                              const asx_runtime_config *proposed,
+                                              const char **rejection_field);
 
 #ifdef __cplusplus
 }

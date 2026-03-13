@@ -146,8 +146,7 @@ TEST(tag_single_bit_flip_fails) {
         for (bit_idx = 0; bit_idx < 8u; bit_idx++) {
             asx_auth_tag flipped = good;
             flipped.bytes[byte_idx] ^= (uint8_t)(1u << bit_idx);
-            ASSERT_TRUE(!asx_auth_tag_verify(
-                &flipped, &key, data, sizeof(data)));
+            ASSERT_TRUE(!asx_auth_tag_verify(&flipped, &key, data, sizeof(data)));
         }
     }
 }
@@ -163,8 +162,7 @@ TEST(context_sign_and_verify) {
     uint8_t data[] = {1, 2, 3};
     asx_security_context_for_testing(&ctx, 123);
     asx_security_context_sign(&ctx, data, sizeof(data), &tag);
-    ASSERT_EQ(asx_security_context_verify(
-        &ctx, data, sizeof(data), &tag, &verified), ASX_OK);
+    ASSERT_EQ(asx_security_context_verify(&ctx, data, sizeof(data), &tag, &verified), ASX_OK);
     ASSERT_TRUE(verified);
     ASSERT_EQ(ctx.stats.signed_count, 1u);
     ASSERT_EQ(ctx.stats.verified_ok, 1u);
@@ -178,9 +176,8 @@ TEST(context_strict_mode_rejects_bad_tag) {
     asx_security_context_for_testing(&ctx, 123);
     asx_security_context_set_mode(&ctx, ASX_AUTH_MODE_STRICT);
     asx_auth_tag_zero(&bad_tag);
-    ASSERT_EQ(asx_security_context_verify(
-        &ctx, data, sizeof(data), &bad_tag, &verified),
-        ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_security_context_verify(&ctx, data, sizeof(data), &bad_tag, &verified),
+              ASX_E_PERMISSION_DENIED);
     ASSERT_TRUE(!verified);
     ASSERT_EQ(ctx.stats.verified_fail, 1u);
 }
@@ -193,8 +190,7 @@ TEST(context_permissive_mode_allows_bad_tag) {
     asx_security_context_for_testing(&ctx, 123);
     asx_security_context_set_mode(&ctx, ASX_AUTH_MODE_PERMISSIVE);
     asx_auth_tag_zero(&bad_tag);
-    ASSERT_EQ(asx_security_context_verify(
-        &ctx, data, sizeof(data), &bad_tag, &verified), ASX_OK);
+    ASSERT_EQ(asx_security_context_verify(&ctx, data, sizeof(data), &bad_tag, &verified), ASX_OK);
     ASSERT_TRUE(!verified);
     ASSERT_EQ(ctx.stats.verified_fail, 1u);
     ASSERT_EQ(ctx.stats.failures_allowed, 1u);
@@ -208,8 +204,7 @@ TEST(context_permissive_mode_valid_tag_marks_verified) {
     asx_security_context_for_testing(&ctx, 42);
     asx_security_context_set_mode(&ctx, ASX_AUTH_MODE_PERMISSIVE);
     asx_security_context_sign(&ctx, data, sizeof(data), &tag);
-    ASSERT_EQ(asx_security_context_verify(
-        &ctx, data, sizeof(data), &tag, &verified), ASX_OK);
+    ASSERT_EQ(asx_security_context_verify(&ctx, data, sizeof(data), &tag, &verified), ASX_OK);
     ASSERT_TRUE(verified);
     ASSERT_EQ(ctx.stats.verified_ok, 1u);
     ASSERT_EQ(ctx.stats.failures_allowed, 0u);
@@ -223,9 +218,8 @@ TEST(context_disabled_mode_skips) {
     asx_security_context_for_testing(&ctx, 123);
     asx_security_context_set_mode(&ctx, ASX_AUTH_MODE_DISABLED);
     asx_auth_tag_zero(&bad_tag);
-    ASSERT_EQ(asx_security_context_verify(
-        &ctx, data, sizeof(data), &bad_tag, &verified), ASX_OK);
-    ASSERT_TRUE(!verified);  /* disabled does not mark verified */
+    ASSERT_EQ(asx_security_context_verify(&ctx, data, sizeof(data), &bad_tag, &verified), ASX_OK);
+    ASSERT_TRUE(!verified); /* disabled does not mark verified */
     ASSERT_EQ(ctx.stats.skipped, 1u);
 }
 
@@ -236,24 +230,21 @@ TEST(context_cross_context_isolation) {
     uint8_t data[] = {10, 20, 30};
 
     asx_security_context_for_testing(&primary, 99);
-    asx_security_context_derive(&transport_ctx, &primary,
-        (const uint8_t *)"transport", 9);
-    asx_security_context_derive(&storage_ctx, &primary,
-        (const uint8_t *)"storage", 7);
+    asx_security_context_derive(&transport_ctx, &primary, (const uint8_t *)"transport", 9);
+    asx_security_context_derive(&storage_ctx, &primary, (const uint8_t *)"storage", 7);
 
     /* Sign with transport context */
     asx_security_context_sign(&transport_ctx, data, sizeof(data), &tag);
 
     /* Verify under storage context must fail (strict mode) */
-    ASSERT_EQ(asx_security_context_verify(
-        &storage_ctx, data, sizeof(data), &tag, &verified),
-        ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_security_context_verify(&storage_ctx, data, sizeof(data), &tag, &verified),
+              ASX_E_PERMISSION_DENIED);
     ASSERT_TRUE(!verified);
 
     /* Verify under same transport context must succeed */
     verified = 0;
-    ASSERT_EQ(asx_security_context_verify(
-        &transport_ctx, data, sizeof(data), &tag, &verified), ASX_OK);
+    ASSERT_EQ(asx_security_context_verify(&transport_ctx, data, sizeof(data), &tag, &verified),
+              ASX_OK);
     ASSERT_TRUE(verified);
 }
 
@@ -263,8 +254,7 @@ TEST(context_derived_has_independent_stats) {
     uint8_t data[] = {1};
 
     asx_security_context_for_testing(&primary, 42);
-    asx_security_context_derive(&child, &primary,
-        (const uint8_t *)"child", 5);
+    asx_security_context_derive(&child, &primary, (const uint8_t *)"child", 5);
 
     asx_security_context_sign(&primary, data, sizeof(data), &tag);
     ASSERT_EQ(asx_security_context_stats(&primary)->signed_count, 1u);
@@ -307,8 +297,7 @@ TEST(authenticated_symbol_verify_roundtrip) {
     ASSERT_TRUE(asx_authenticated_symbol_is_verified(&signed_sym));
 
     /* Simulate receiving: same data+tag, but unverified */
-    asx_authenticated_symbol_from_parts(
-        &received, data, sizeof(data), &signed_sym.tag);
+    asx_authenticated_symbol_from_parts(&received, data, sizeof(data), &signed_sym.tag);
     ASSERT_TRUE(!asx_authenticated_symbol_is_verified(&received));
 
     /* Verify */
@@ -327,8 +316,7 @@ TEST(authenticated_symbol_verify_bad_tag_strict) {
     asx_auth_tag_zero(&bad_tag);
     asx_authenticated_symbol_from_parts(&sym, data, sizeof(data), &bad_tag);
 
-    ASSERT_EQ(asx_authenticated_symbol_verify(&sym, &ctx),
-              ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_authenticated_symbol_verify(&sym, &ctx), ASX_E_PERMISSION_DENIED);
     ASSERT_TRUE(!asx_authenticated_symbol_is_verified(&sym));
 }
 
@@ -364,12 +352,10 @@ TEST(authority_flow_sign_transmit_verify) {
     asx_security_context_for_testing(&receiver, 77);
 
     /* Sender signs */
-    asx_authenticated_symbol_sign(
-        &sent, &sender, payload, sizeof(payload));
+    asx_authenticated_symbol_sign(&sent, &sender, payload, sizeof(payload));
 
     /* Simulate network: receiver gets data + tag */
-    asx_authenticated_symbol_from_parts(
-        &received, payload, sizeof(payload), &sent.tag);
+    asx_authenticated_symbol_from_parts(&received, payload, sizeof(payload), &sent.tag);
 
     /* Receiver verifies */
     ASSERT_EQ(asx_authenticated_symbol_verify(&received, &receiver), ASX_OK);
@@ -386,16 +372,13 @@ TEST(authority_flow_wrong_key_rejected) {
     uint8_t payload[] = "wrong key test";
 
     asx_security_context_for_testing(&sender, 77);
-    asx_security_context_for_testing(&receiver, 88);  /* different key */
+    asx_security_context_for_testing(&receiver, 88); /* different key */
 
-    asx_authenticated_symbol_sign(
-        &sent, &sender, payload, sizeof(payload));
+    asx_authenticated_symbol_sign(&sent, &sender, payload, sizeof(payload));
 
-    asx_authenticated_symbol_from_parts(
-        &received, payload, sizeof(payload), &sent.tag);
+    asx_authenticated_symbol_from_parts(&received, payload, sizeof(payload), &sent.tag);
 
-    ASSERT_EQ(asx_authenticated_symbol_verify(&received, &receiver),
-              ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_authenticated_symbol_verify(&received, &receiver), ASX_E_PERMISSION_DENIED);
     ASSERT_TRUE(!asx_authenticated_symbol_is_verified(&received));
 }
 
@@ -410,22 +393,17 @@ TEST(authority_flow_derived_context_isolation) {
     uint8_t payload[] = "isolation test";
 
     asx_security_context_for_testing(&primary, 42);
-    asx_security_context_derive(&ctx_a, &primary,
-        (const uint8_t *)"purpose_a", 9);
-    asx_security_context_derive(&ctx_b, &primary,
-        (const uint8_t *)"purpose_b", 9);
+    asx_security_context_derive(&ctx_a, &primary, (const uint8_t *)"purpose_a", 9);
+    asx_security_context_derive(&ctx_b, &primary, (const uint8_t *)"purpose_b", 9);
 
     asx_authenticated_symbol_sign(&sent, &ctx_a, payload, sizeof(payload));
-    asx_authenticated_symbol_from_parts(
-        &received, payload, sizeof(payload), &sent.tag);
+    asx_authenticated_symbol_from_parts(&received, payload, sizeof(payload), &sent.tag);
 
     /* Cross-context verification must fail */
-    ASSERT_EQ(asx_authenticated_symbol_verify(&received, &ctx_b),
-              ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_authenticated_symbol_verify(&received, &ctx_b), ASX_E_PERMISSION_DENIED);
 
     /* Same-context verification must succeed */
-    asx_authenticated_symbol_from_parts(
-        &received, payload, sizeof(payload), &sent.tag);
+    asx_authenticated_symbol_from_parts(&received, payload, sizeof(payload), &sent.tag);
     ASSERT_EQ(asx_authenticated_symbol_verify(&received, &ctx_a), ASX_OK);
     ASSERT_TRUE(asx_authenticated_symbol_is_verified(&received));
 }
@@ -437,17 +415,15 @@ TEST(authority_flow_tampered_data_rejected) {
     asx_security_context ctx;
     asx_authenticated_symbol sym;
     uint8_t payload[] = {0xDE, 0xAD, 0xBE, 0xEF};
-    uint8_t tampered[] = {0xDE, 0xAD, 0xBE, 0x00};  /* last byte changed */
+    uint8_t tampered[] = {0xDE, 0xAD, 0xBE, 0x00}; /* last byte changed */
 
     asx_security_context_for_testing(&ctx, 42);
     asx_authenticated_symbol_sign(&sym, &ctx, payload, sizeof(payload));
 
     /* Replace data pointer with tampered copy, keep original tag */
-    asx_authenticated_symbol_from_parts(
-        &sym, tampered, sizeof(tampered), &sym.tag);
+    asx_authenticated_symbol_from_parts(&sym, tampered, sizeof(tampered), &sym.tag);
 
-    ASSERT_EQ(asx_authenticated_symbol_verify(&sym, &ctx),
-              ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_authenticated_symbol_verify(&sym, &ctx), ASX_E_PERMISSION_DENIED);
     ASSERT_TRUE(!asx_authenticated_symbol_is_verified(&sym));
 }
 
@@ -455,8 +431,7 @@ TEST(authority_flow_tampered_data_rejected) {
 /* main                                                                */
 /* ================================================================== */
 
-int main(void)
-{
+int main(void) {
     /* AuthKey */
     RUN_TEST(key_from_seed_deterministic);
     RUN_TEST(key_different_seeds_differ);

@@ -15,7 +15,7 @@
 #include "test_harness.h"
 
 #ifndef ASX_DEBUG_GHOST
-  #define ASX_DEBUG_GHOST 1
+#define ASX_DEBUG_GHOST 1
 #endif
 
 #include <asx/asx.h>
@@ -189,12 +189,9 @@ TEST(borrow_independent_entities) {
 /* ================================================================== */
 
 TEST(borrow_kind_strings) {
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_BORROW_EXCLUSIVE),
-                  "borrow_exclusive");
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_BORROW_SHARED),
-                  "borrow_shared");
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_DETERMINISM_DRIFT),
-                  "determinism_drift");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_BORROW_EXCLUSIVE), "borrow_exclusive");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_BORROW_SHARED), "borrow_shared");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_DETERMINISM_DRIFT), "determinism_drift");
 }
 
 /* ================================================================== */
@@ -296,8 +293,8 @@ TEST(determinism_seal_and_replay_drift) {
 
     /* Second run: different order */
     asx_ghost_determinism_record(10);
-    asx_ghost_determinism_record(30);  /* swapped */
-    asx_ghost_determinism_record(20);  /* swapped */
+    asx_ghost_determinism_record(30); /* swapped */
+    asx_ghost_determinism_record(20); /* swapped */
 
     drift = asx_ghost_determinism_check();
     ASSERT_TRUE(drift > 0u);

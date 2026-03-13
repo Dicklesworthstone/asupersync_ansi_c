@@ -11,8 +11,8 @@
  */
 
 #include "../../test_harness.h"
-#include <asx/cx/cx.h>
 #include <asx/core/budget.h>
+#include <asx/cx/cx.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -20,14 +20,11 @@
 /* ------------------------------------------------------------------ */
 
 static asx_task_state g_stub_task_state = ASX_TASK_RUNNING;
-static asx_task_id    g_stub_task_id    = ASX_INVALID_ID;
+static asx_task_id g_stub_task_id = ASX_INVALID_ID;
 
-asx_status asx_task_get_state(asx_task_id id, asx_task_state *out_state)
-{
-    if (out_state == NULL)
-        return ASX_E_INVALID_ARGUMENT;
-    if (id == ASX_INVALID_ID || id != g_stub_task_id)
-        return ASX_E_NOT_FOUND;
+asx_status asx_task_get_state(asx_task_id id, asx_task_state *out_state) {
+    if (out_state == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (id == ASX_INVALID_ID || id != g_stub_task_id) return ASX_E_NOT_FOUND;
     *out_state = g_stub_task_state;
     return ASX_OK;
 }
@@ -42,14 +39,12 @@ TEST(init_null_returns_invalid_argument) {
 
 TEST(init_invalid_region_returns_invalid_argument) {
     asx_cx cx;
-    ASSERT_EQ(asx_cx_init(&cx, ASX_INVALID_ID, 1, ASX_CAP_NONE),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cx_init(&cx, ASX_INVALID_ID, 1, ASX_CAP_NONE), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(init_sets_fields) {
     asx_cx cx;
-    ASSERT_EQ(asx_cx_init(&cx, 42, 7, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY),
-              ASX_OK);
+    ASSERT_EQ(asx_cx_init(&cx, 42, 7, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY), ASX_OK);
     ASSERT_EQ(asx_cx_region(&cx), (asx_region_id)42);
     ASSERT_EQ(asx_cx_task(&cx), (asx_task_id)7);
     ASSERT_TRUE(asx_cx_has_cap(&cx, ASX_CAP_CLOCK_READ));
@@ -84,33 +79,23 @@ TEST(invalidate_null_safe) {
     asx_cx_invalidate(NULL);
 }
 
-TEST(is_valid_null) {
-    ASSERT_FALSE(asx_cx_is_valid(NULL));
-}
+TEST(is_valid_null) { ASSERT_FALSE(asx_cx_is_valid(NULL)); }
 
 /* ------------------------------------------------------------------ */
 /* Identity accessor tests                                             */
 /* ------------------------------------------------------------------ */
 
-TEST(region_null_returns_invalid) {
-    ASSERT_EQ(asx_cx_region(NULL), ASX_INVALID_ID);
-}
+TEST(region_null_returns_invalid) { ASSERT_EQ(asx_cx_region(NULL), ASX_INVALID_ID); }
 
-TEST(task_null_returns_invalid) {
-    ASSERT_EQ(asx_cx_task(NULL), ASX_INVALID_ID);
-}
+TEST(task_null_returns_invalid) { ASSERT_EQ(asx_cx_task(NULL), ASX_INVALID_ID); }
 
 /* ------------------------------------------------------------------ */
 /* Capability query tests                                              */
 /* ------------------------------------------------------------------ */
 
-TEST(has_cap_null_returns_zero) {
-    ASSERT_FALSE(asx_cx_has_cap(NULL, ASX_CAP_SPAWN));
-}
+TEST(has_cap_null_returns_zero) { ASSERT_FALSE(asx_cx_has_cap(NULL, ASX_CAP_SPAWN)); }
 
-TEST(caps_null_returns_none) {
-    ASSERT_EQ(asx_cx_caps(NULL), ASX_CAP_NONE);
-}
+TEST(caps_null_returns_none) { ASSERT_EQ(asx_cx_caps(NULL), ASX_CAP_NONE); }
 
 TEST(caps_returns_all_set) {
     asx_cx cx;
@@ -132,22 +117,19 @@ TEST(has_cap_multi_flag_check) {
 
 TEST(narrow_null_parent_fails) {
     asx_cx child;
-    ASSERT_EQ(asx_cx_narrow(NULL, &child, ASX_CAP_NONE),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cx_narrow(NULL, &child, ASX_CAP_NONE), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(narrow_null_child_fails) {
     asx_cx parent;
     asx_cx_init(&parent, 1, 1, ASX_CAP_ALL);
-    ASSERT_EQ(asx_cx_narrow(&parent, NULL, ASX_CAP_NONE),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cx_narrow(&parent, NULL, ASX_CAP_NONE), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(narrow_invalid_parent_fails) {
     asx_cx parent, child;
     memset(&parent, 0, sizeof(parent));
-    ASSERT_EQ(asx_cx_narrow(&parent, &child, ASX_CAP_NONE),
-              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_cx_narrow(&parent, &child, ASX_CAP_NONE), ASX_E_INVALID_STATE);
 }
 
 TEST(narrow_escalation_fails) {
@@ -168,8 +150,7 @@ TEST(narrow_subset_succeeds) {
     asx_cx_bind_clock(&parent, &clock);
     asx_cx_bind_entropy(&parent, &entropy);
 
-    ASSERT_EQ(asx_cx_narrow(&parent, &child, ASX_CAP_CLOCK_READ),
-              ASX_OK);
+    ASSERT_EQ(asx_cx_narrow(&parent, &child, ASX_CAP_CLOCK_READ), ASX_OK);
     ASSERT_EQ(asx_cx_region(&child), (asx_region_id)5);
     ASSERT_EQ(asx_cx_task(&child), (asx_task_id)3);
     ASSERT_TRUE(asx_cx_has_cap(&child, ASX_CAP_CLOCK_READ));
@@ -220,9 +201,7 @@ TEST(bind_budget_and_read) {
     ASSERT_EQ(asx_budget_polls(asx_cx_budget(&cx)), 10u);
 }
 
-TEST(budget_null_cx_returns_null) {
-    ASSERT_TRUE(asx_cx_budget(NULL) == NULL);
-}
+TEST(budget_null_cx_returns_null) { ASSERT_TRUE(asx_cx_budget(NULL) == NULL); }
 
 TEST(budget_no_read_cap_returns_null) {
     asx_cx cx;
@@ -235,9 +214,7 @@ TEST(budget_no_read_cap_returns_null) {
 /* Consume poll tests                                                  */
 /* ------------------------------------------------------------------ */
 
-TEST(consume_poll_null_fails) {
-    ASSERT_EQ(asx_cx_consume_poll(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(consume_poll_null_fails) { ASSERT_EQ(asx_cx_consume_poll(NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(consume_poll_no_cap_fails) {
     asx_cx cx;
@@ -301,9 +278,7 @@ TEST(now_no_clock_returns_zero) {
     ASSERT_EQ(asx_cx_now(&cx), (asx_time)0);
 }
 
-TEST(now_null_returns_zero) {
-    ASSERT_EQ(asx_cx_now(NULL), (asx_time)0);
-}
+TEST(now_null_returns_zero) { ASSERT_EQ(asx_cx_now(NULL), (asx_time)0); }
 
 TEST(now_no_cap_returns_zero) {
     asx_cx cx;
@@ -350,9 +325,7 @@ TEST(random_u64_draws_nonzero) {
     ASSERT_NE(entropy, (uint64_t)0xCAFEBABE);
 }
 
-TEST(random_u64_null_returns_zero) {
-    ASSERT_EQ(asx_cx_random_u64(NULL), 0u);
-}
+TEST(random_u64_null_returns_zero) { ASSERT_EQ(asx_cx_random_u64(NULL), 0u); }
 
 TEST(random_u64_no_cap_returns_zero) {
     asx_cx cx;
@@ -370,9 +343,7 @@ TEST(random_u64_no_state_returns_zero) {
 /* Cancellation tests                                                  */
 /* ------------------------------------------------------------------ */
 
-TEST(is_cancelled_null_returns_zero) {
-    ASSERT_FALSE(asx_cx_is_cancelled(NULL));
-}
+TEST(is_cancelled_null_returns_zero) { ASSERT_FALSE(asx_cx_is_cancelled(NULL)); }
 
 TEST(is_cancelled_no_cap_returns_zero) {
     asx_cx cx;
@@ -414,9 +385,7 @@ TEST(is_cancelled_cancelling_returns_nonzero) {
 /* Checkpoint tests                                                    */
 /* ------------------------------------------------------------------ */
 
-TEST(checkpoint_null_fails) {
-    ASSERT_EQ(asx_cx_checkpoint(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(checkpoint_null_fails) { ASSERT_EQ(asx_cx_checkpoint(NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(checkpoint_ok_no_cancel_no_budget) {
     asx_cx cx;
@@ -439,8 +408,7 @@ TEST(checkpoint_budget_exhaustion) {
     asx_budget b = asx_budget_from_polls(1);
     g_stub_task_id = 22;
     g_stub_task_state = ASX_TASK_RUNNING;
-    asx_cx_init(&cx, 1, 22,
-                ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME);
+    asx_cx_init(&cx, 1, 22, ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME);
     asx_cx_bind_budget(&cx, &b);
     /* First checkpoint consumes the one poll */
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_OK);
@@ -453,8 +421,7 @@ TEST(checkpoint_cancel_takes_priority_over_budget) {
     asx_budget b = asx_budget_from_polls(0);
     g_stub_task_id = 23;
     g_stub_task_state = ASX_TASK_CANCEL_REQUESTED;
-    asx_cx_init(&cx, 1, 23,
-                ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME);
+    asx_cx_init(&cx, 1, 23, ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME);
     asx_cx_bind_budget(&cx, &b);
     /* Cancel should be checked before budget */
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
@@ -465,16 +432,14 @@ TEST(checkpoint_cancel_takes_priority_over_budget) {
 /* ------------------------------------------------------------------ */
 
 TEST(permission_denied_status_str) {
-    ASSERT_STR_EQ(asx_status_str(ASX_E_PERMISSION_DENIED),
-                  "capability not granted");
+    ASSERT_STR_EQ(asx_status_str(ASX_E_PERMISSION_DENIED), "capability not granted");
 }
 
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_cx ===\n");
 
     /* Lifecycle */

@@ -17,24 +17,36 @@ TEST(region_legal_forward) {
 }
 
 TEST(region_forbidden_backward) {
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSING, ASX_REGION_OPEN), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_DRAINING, ASX_REGION_OPEN), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_FINALIZING, ASX_REGION_OPEN), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_OPEN), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSING, ASX_REGION_OPEN),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_DRAINING, ASX_REGION_OPEN),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_FINALIZING, ASX_REGION_OPEN),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_OPEN),
+              ASX_E_INVALID_TRANSITION);
 }
 
 TEST(region_forbidden_skip) {
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_OPEN, ASX_REGION_DRAINING), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_OPEN, ASX_REGION_FINALIZING), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_OPEN, ASX_REGION_CLOSED), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_OPEN, ASX_REGION_DRAINING),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_OPEN, ASX_REGION_FINALIZING),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_OPEN, ASX_REGION_CLOSED),
+              ASX_E_INVALID_TRANSITION);
 }
 
 TEST(region_closed_absorbing) {
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_OPEN), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_CLOSING), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_DRAINING), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_FINALIZING), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_CLOSED), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_OPEN),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_CLOSING),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_DRAINING),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_FINALIZING),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_CLOSED),
+              ASX_E_INVALID_TRANSITION);
 }
 
 TEST(region_predicates) {
@@ -67,33 +79,48 @@ TEST(task_legal_cancel_path) {
 
 TEST(task_self_transitions) {
     /* Strengthening (self-transitions) */
-    ASSERT_EQ(asx_task_transition_check(ASX_TASK_CANCEL_REQUESTED, ASX_TASK_CANCEL_REQUESTED), ASX_OK);
+    ASSERT_EQ(asx_task_transition_check(ASX_TASK_CANCEL_REQUESTED, ASX_TASK_CANCEL_REQUESTED),
+              ASX_OK);
     ASSERT_EQ(asx_task_transition_check(ASX_TASK_CANCELLING, ASX_TASK_CANCELLING), ASX_OK);
     ASSERT_EQ(asx_task_transition_check(ASX_TASK_FINALIZING, ASX_TASK_FINALIZING), ASX_OK);
 }
 
 TEST(task_completed_absorbing) {
-    ASSERT_EQ(asx_task_transition_check(ASX_TASK_COMPLETED, ASX_TASK_CREATED), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_task_transition_check(ASX_TASK_COMPLETED, ASX_TASK_RUNNING), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_task_transition_check(ASX_TASK_COMPLETED, ASX_TASK_CANCEL_REQUESTED), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_task_transition_check(ASX_TASK_COMPLETED, ASX_TASK_CANCELLING), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_task_transition_check(ASX_TASK_COMPLETED, ASX_TASK_FINALIZING), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_task_transition_check(ASX_TASK_COMPLETED, ASX_TASK_COMPLETED), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_task_transition_check(ASX_TASK_COMPLETED, ASX_TASK_CREATED),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_task_transition_check(ASX_TASK_COMPLETED, ASX_TASK_RUNNING),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_task_transition_check(ASX_TASK_COMPLETED, ASX_TASK_CANCEL_REQUESTED),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_task_transition_check(ASX_TASK_COMPLETED, ASX_TASK_CANCELLING),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_task_transition_check(ASX_TASK_COMPLETED, ASX_TASK_FINALIZING),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_task_transition_check(ASX_TASK_COMPLETED, ASX_TASK_COMPLETED),
+              ASX_E_INVALID_TRANSITION);
 }
 
 /* Obligation transitions */
 TEST(obligation_legal) {
-    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_COMMITTED), ASX_OK);
-    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_ABORTED), ASX_OK);
-    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_LEAKED), ASX_OK);
+    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_COMMITTED),
+              ASX_OK);
+    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_ABORTED),
+              ASX_OK);
+    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_LEAKED),
+              ASX_OK);
 }
 
 TEST(obligation_terminal_absorbing) {
-    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_RESERVED), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_COMMITTED), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_ABORTED), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_COMMITTED), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_LEAKED, ASX_OBLIGATION_COMMITTED), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_RESERVED),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_COMMITTED),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_ABORTED),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_COMMITTED),
+              ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_LEAKED, ASX_OBLIGATION_COMMITTED),
+              ASX_E_INVALID_TRANSITION);
 }
 
 /* State string functions */
@@ -135,18 +162,24 @@ TEST(obligation_state_str_out_of_range) {
 
 /* Out-of-range transition checks */
 TEST(region_transition_out_of_range) {
-    ASSERT_EQ(asx_region_transition_check((asx_region_state)99, ASX_REGION_OPEN), ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_region_transition_check(ASX_REGION_OPEN, (asx_region_state)99), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_transition_check((asx_region_state)99, ASX_REGION_OPEN),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_OPEN, (asx_region_state)99),
+              ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(task_transition_out_of_range) {
-    ASSERT_EQ(asx_task_transition_check((asx_task_state)99, ASX_TASK_CREATED), ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_task_transition_check(ASX_TASK_CREATED, (asx_task_state)99), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_task_transition_check((asx_task_state)99, ASX_TASK_CREATED),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_task_transition_check(ASX_TASK_CREATED, (asx_task_state)99),
+              ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(obligation_transition_out_of_range) {
-    ASSERT_EQ(asx_obligation_transition_check((asx_obligation_state)99, ASX_OBLIGATION_RESERVED), ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_RESERVED, (asx_obligation_state)99), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_obligation_transition_check((asx_obligation_state)99, ASX_OBLIGATION_RESERVED),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_obligation_transition_check(ASX_OBLIGATION_RESERVED, (asx_obligation_state)99),
+              ASX_E_INVALID_ARGUMENT);
 }
 
 /* Terminal predicates (exhaustive) */

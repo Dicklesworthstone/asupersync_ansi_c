@@ -13,16 +13,14 @@
 #include "../../test_harness.h"
 #include <asx/asx.h>
 
-static asx_outcome make_outcome(asx_outcome_severity sev)
-{
+static asx_outcome make_outcome(asx_outcome_severity sev) {
     asx_outcome o;
     o.severity = sev;
     return o;
 }
 
 /* --- Commutativity: severity(join(a,b)) == severity(join(b,a)) --- */
-TEST(outcome_join_commutativity)
-{
+TEST(outcome_join_commutativity) {
     int a, b;
     for (a = 0; a <= 3; a++) {
         for (b = 0; b <= 3; b++) {
@@ -36,8 +34,7 @@ TEST(outcome_join_commutativity)
 }
 
 /* --- Associativity: severity(join(join(a,b),c)) == severity(join(a,join(b,c))) --- */
-TEST(outcome_join_associativity)
-{
+TEST(outcome_join_associativity) {
     int a, b, c;
     for (a = 0; a <= 3; a++) {
         for (b = 0; b <= 3; b++) {
@@ -56,8 +53,7 @@ TEST(outcome_join_associativity)
 }
 
 /* --- Idempotence: join(a,a) == a --- */
-TEST(outcome_join_idempotence)
-{
+TEST(outcome_join_idempotence) {
     int a;
     for (a = 0; a <= 3; a++) {
         asx_outcome oa = make_outcome((asx_outcome_severity)a);
@@ -67,8 +63,7 @@ TEST(outcome_join_idempotence)
 }
 
 /* --- Identity: join(OK, x) == x --- */
-TEST(outcome_join_identity)
-{
+TEST(outcome_join_identity) {
     int x;
     asx_outcome ok = make_outcome(ASX_OUTCOME_OK);
     for (x = 0; x <= 3; x++) {
@@ -79,8 +74,7 @@ TEST(outcome_join_identity)
 }
 
 /* --- Absorption: join(PANICKED, x).severity == PANICKED --- */
-TEST(outcome_join_absorption)
-{
+TEST(outcome_join_absorption) {
     int x;
     asx_outcome panicked = make_outcome(ASX_OUTCOME_PANICKED);
     for (x = 0; x <= 3; x++) {
@@ -91,8 +85,7 @@ TEST(outcome_join_absorption)
 }
 
 /* --- Monotonicity: severity(join(a,b)) >= max(severity(a), severity(b)) --- */
-TEST(outcome_join_monotonicity)
-{
+TEST(outcome_join_monotonicity) {
     int a, b;
     for (a = 0; a <= 3; a++) {
         for (b = 0; b <= 3; b++) {
@@ -106,8 +99,7 @@ TEST(outcome_join_monotonicity)
 }
 
 /* --- Exactness: severity(join(a,b)) == max(severity(a), severity(b)) --- */
-TEST(outcome_join_is_max)
-{
+TEST(outcome_join_is_max) {
     int a, b;
     for (a = 0; a <= 3; a++) {
         for (b = 0; b <= 3; b++) {
@@ -121,8 +113,7 @@ TEST(outcome_join_is_max)
 }
 
 /* --- NULL handling: join(NULL, x) == x, join(x, NULL) == x, join(NULL,NULL) == OK --- */
-TEST(outcome_join_null_handling)
-{
+TEST(outcome_join_null_handling) {
     int x;
     for (x = 0; x <= 3; x++) {
         asx_outcome ox = make_outcome((asx_outcome_severity)x);
@@ -137,8 +128,7 @@ TEST(outcome_join_null_handling)
     }
 }
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "[formal] outcome lattice algebraic properties\n");
 
     RUN_TEST(outcome_join_commutativity);

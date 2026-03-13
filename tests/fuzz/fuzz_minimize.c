@@ -25,10 +25,10 @@
 
 #define _POSIX_C_SOURCE 199309L
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
 #include <time.h>
 
 #include <asx/asx.h>
@@ -42,12 +42,12 @@
  * Configuration
  * =================================================================== */
 
-#define MIN_MAX_OPS           128u
-#define MIN_MAX_REGIONS       ASX_MAX_REGIONS
-#define MIN_MAX_TASKS         ASX_MAX_TASKS
-#define MIN_MAX_OBLIGATIONS   64u
-#define MIN_MAX_CHANNELS      ASX_MAX_CHANNELS
-#define MIN_MAX_TIMERS        32u
+#define MIN_MAX_OPS 128u
+#define MIN_MAX_REGIONS ASX_MAX_REGIONS
+#define MIN_MAX_TASKS ASX_MAX_TASKS
+#define MIN_MAX_OBLIGATIONS 64u
+#define MIN_MAX_CHANNELS ASX_MAX_CHANNELS
+#define MIN_MAX_TIMERS 32u
 
 /* ===================================================================
  * PRNG (same as fuzz_differential.c for reproducibility)
@@ -57,13 +57,9 @@ typedef struct {
     uint64_t s[4];
 } min_rng;
 
-static uint64_t min_rotl(uint64_t x, int k)
-{
-    return (x << k) | (x >> (64 - k));
-}
+static uint64_t min_rotl(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
 
-static uint64_t min_rng_next(min_rng *rng)
-{
+static uint64_t min_rng_next(min_rng *rng) {
     uint64_t result = min_rotl(rng->s[1] * 5u, 7) * 9u;
     uint64_t t = rng->s[1] << 17;
     rng->s[2] ^= rng->s[0];
@@ -75,8 +71,7 @@ static uint64_t min_rng_next(min_rng *rng)
     return result;
 }
 
-static void min_rng_seed(min_rng *rng, uint64_t seed)
-{
+static void min_rng_seed(min_rng *rng, uint64_t seed) {
     uint64_t z = seed;
     int i;
     for (i = 0; i < 4; i++) {
@@ -87,8 +82,7 @@ static void min_rng_seed(min_rng *rng, uint64_t seed)
     }
 }
 
-static uint32_t min_rng_u32(min_rng *rng, uint32_t bound)
-{
+static uint32_t min_rng_u32(min_rng *rng, uint32_t bound) {
     if (bound == 0u) return 0u;
     return (uint32_t)(min_rng_next(rng) % (uint64_t)bound);
 }
@@ -101,109 +95,92 @@ typedef struct {
     uint64_t hash;
 } min_hasher;
 
-static void min_hasher_init(min_hasher *h)
-{
-    h->hash = 0xcbf29ce484222325ULL;
-}
+static void min_hasher_init(min_hasher *h) { h->hash = 0xcbf29ce484222325ULL; }
 
-static void min_hasher_u8(min_hasher *h, uint8_t b)
-{
+static void min_hasher_u8(min_hasher *h, uint8_t b) {
     h->hash ^= (uint64_t)b;
     h->hash *= 0x100000001b3ULL;
 }
 
-static void min_hasher_u32(min_hasher *h, uint32_t v)
-{
+static void min_hasher_u32(min_hasher *h, uint32_t v) {
     min_hasher_u8(h, (uint8_t)(v & 0xFFu));
     min_hasher_u8(h, (uint8_t)((v >> 8) & 0xFFu));
     min_hasher_u8(h, (uint8_t)((v >> 16) & 0xFFu));
     min_hasher_u8(h, (uint8_t)((v >> 24) & 0xFFu));
 }
 
-static void min_hasher_i32(min_hasher *h, int32_t v)
-{
-    min_hasher_u32(h, (uint32_t)v);
-}
+static void min_hasher_i32(min_hasher *h, int32_t v) { min_hasher_u32(h, (uint32_t)v); }
 
-static void min_hasher_u64(min_hasher *h, uint64_t v)
-{
+static void min_hasher_u64(min_hasher *h, uint64_t v) {
     min_hasher_u32(h, (uint32_t)(v & 0xFFFFFFFFu));
     min_hasher_u32(h, (uint32_t)(v >> 32));
 }
 
-static uint64_t min_hasher_finish(const min_hasher *h)
-{
-    return h->hash;
-}
+static uint64_t min_hasher_finish(const min_hasher *h) { return h->hash; }
 
 /* ===================================================================
  * Scenario operation types (same as fuzz_differential.c)
  * =================================================================== */
 
 typedef enum {
-    MIN_OP_SPAWN_REGION        = 0,
-    MIN_OP_CLOSE_REGION        = 1,
-    MIN_OP_POISON_REGION       = 2,
-    MIN_OP_SPAWN_TASK          = 3,
-    MIN_OP_CANCEL_TASK         = 4,
-    MIN_OP_RESERVE_OBLIGATION  = 5,
-    MIN_OP_COMMIT_OBLIGATION   = 6,
-    MIN_OP_ABORT_OBLIGATION    = 7,
-    MIN_OP_CHANNEL_CREATE      = 8,
-    MIN_OP_CHANNEL_RESERVE     = 9,
-    MIN_OP_CHANNEL_SEND        = 10,
-    MIN_OP_CHANNEL_ABORT       = 11,
-    MIN_OP_CHANNEL_RECV        = 12,
-    MIN_OP_CHANNEL_CLOSE_TX    = 13,
-    MIN_OP_CHANNEL_CLOSE_RX    = 14,
-    MIN_OP_TIMER_REGISTER      = 15,
-    MIN_OP_TIMER_CANCEL        = 16,
-    MIN_OP_ADVANCE_TIME        = 17,
-    MIN_OP_SCHEDULER_RUN       = 18,
-    MIN_OP_REGION_DRAIN        = 19,
-    MIN_OP_QUIESCENCE_CHECK    = 20,
-    MIN_OP_KIND_COUNT          = 21
+    MIN_OP_SPAWN_REGION = 0,
+    MIN_OP_CLOSE_REGION = 1,
+    MIN_OP_POISON_REGION = 2,
+    MIN_OP_SPAWN_TASK = 3,
+    MIN_OP_CANCEL_TASK = 4,
+    MIN_OP_RESERVE_OBLIGATION = 5,
+    MIN_OP_COMMIT_OBLIGATION = 6,
+    MIN_OP_ABORT_OBLIGATION = 7,
+    MIN_OP_CHANNEL_CREATE = 8,
+    MIN_OP_CHANNEL_RESERVE = 9,
+    MIN_OP_CHANNEL_SEND = 10,
+    MIN_OP_CHANNEL_ABORT = 11,
+    MIN_OP_CHANNEL_RECV = 12,
+    MIN_OP_CHANNEL_CLOSE_TX = 13,
+    MIN_OP_CHANNEL_CLOSE_RX = 14,
+    MIN_OP_TIMER_REGISTER = 15,
+    MIN_OP_TIMER_CANCEL = 16,
+    MIN_OP_ADVANCE_TIME = 17,
+    MIN_OP_SCHEDULER_RUN = 18,
+    MIN_OP_REGION_DRAIN = 19,
+    MIN_OP_QUIESCENCE_CHECK = 20,
+    MIN_OP_KIND_COUNT = 21
 } min_op_kind;
 
-static const char *min_op_name(min_op_kind kind)
-{
-    static const char *names[] = {
-        "SpawnRegion", "CloseRegion", "PoisonRegion",
-        "SpawnTask", "CancelTask",
-        "ReserveObligation", "CommitObligation", "AbortObligation",
-        "ChannelCreate", "ChannelReserve", "ChannelSend",
-        "ChannelAbort", "ChannelRecv", "ChannelCloseTx", "ChannelCloseRx",
-        "TimerRegister", "TimerCancel", "AdvanceTime",
-        "SchedulerRun", "RegionDrain", "QuiescenceCheck"
-    };
+static const char *min_op_name(min_op_kind kind) {
+    static const char *names[] = {"SpawnRegion",      "CloseRegion",     "PoisonRegion",
+                                  "SpawnTask",        "CancelTask",      "ReserveObligation",
+                                  "CommitObligation", "AbortObligation", "ChannelCreate",
+                                  "ChannelReserve",   "ChannelSend",     "ChannelAbort",
+                                  "ChannelRecv",      "ChannelCloseTx",  "ChannelCloseRx",
+                                  "TimerRegister",    "TimerCancel",     "AdvanceTime",
+                                  "SchedulerRun",     "RegionDrain",     "QuiescenceCheck"};
     if ((int)kind < 0 || (int)kind >= MIN_OP_KIND_COUNT) return "Unknown";
     return names[(int)kind];
 }
 
 typedef struct {
     min_op_kind kind;
-    uint32_t    idx_a;
-    uint32_t    idx_b;
-    uint32_t    arg_u32;
-    uint64_t    arg_u64;
+    uint32_t idx_a;
+    uint32_t idx_b;
+    uint32_t arg_u32;
+    uint64_t arg_u64;
 } min_op;
 
 typedef struct {
     uint64_t seed;
     uint32_t op_count;
-    min_op   ops[MIN_MAX_OPS];
+    min_op ops[MIN_MAX_OPS];
 } min_scenario;
 
 /* ===================================================================
  * Scenario generation (same as fuzz_differential.c)
  * =================================================================== */
 
-static const uint32_t MIN_OP_WEIGHTS[MIN_OP_KIND_COUNT] = {
-    12,8,3,15,10,8,7,5,6,5,5,3,5,3,3,6,4,5,12,5,4
-};
+static const uint32_t MIN_OP_WEIGHTS[MIN_OP_KIND_COUNT] = {12, 8, 3, 15, 10, 8, 7, 5,  6, 5, 5,
+                                                           3,  5, 3, 3,  6,  4, 5, 12, 5, 4};
 
-static min_op_kind min_pick_op(min_rng *rng)
-{
+static min_op_kind min_pick_op(min_rng *rng) {
     uint32_t total = 0u, r, acc;
     int i;
     for (i = 0; i < MIN_OP_KIND_COUNT; i++) total += MIN_OP_WEIGHTS[i];
@@ -216,16 +193,17 @@ static min_op_kind min_pick_op(min_rng *rng)
     return MIN_OP_SPAWN_REGION;
 }
 
-static void min_generate_scenario(min_rng *rng, min_scenario *sc, uint32_t max_ops)
-{
+static void min_generate_scenario(min_rng *rng, min_scenario *sc, uint32_t max_ops) {
     uint32_t n, i;
     sc->seed = min_rng_next(rng);
     n = 4u + min_rng_u32(rng, max_ops > 4u ? max_ops - 4u : 1u);
     if (n > MIN_MAX_OPS) n = MIN_MAX_OPS;
     sc->op_count = n;
     sc->ops[0].kind = MIN_OP_SPAWN_REGION;
-    sc->ops[0].idx_a = 0u; sc->ops[0].idx_b = 0u;
-    sc->ops[0].arg_u32 = 0u; sc->ops[0].arg_u64 = 0u;
+    sc->ops[0].idx_a = 0u;
+    sc->ops[0].idx_b = 0u;
+    sc->ops[0].arg_u32 = 0u;
+    sc->ops[0].arg_u64 = 0u;
     for (i = 1u; i < n; i++) {
         sc->ops[i].kind = min_pick_op(rng);
         sc->ops[i].idx_a = min_rng_u32(rng, MIN_MAX_REGIONS);
@@ -238,8 +216,7 @@ static void min_generate_scenario(min_rng *rng, min_scenario *sc, uint32_t max_o
 /* Read a scenario from stdin in text format:
  * "scenario_seed op_count kind0 a0 b0 u32_0 u64_0 kind1 ..."
  * Returns 0 on success, -1 on failure/EOF. */
-static int min_read_scenario_stdin(min_scenario *sc)
-{
+static int min_read_scenario_stdin(min_scenario *sc) {
     char line[8192];
     char *p;
     uint32_t i;
@@ -249,8 +226,7 @@ static int min_read_scenario_stdin(min_scenario *sc)
     if (fgets(line, sizeof(line), stdin) == NULL) return -1;
     p = line;
 
-    if (sscanf(p, "%llu %u%n", &seed_ull, &op_count_u,
-               (int[]){0}) < 2) return -1;
+    if (sscanf(p, "%llu %u%n", &seed_ull, &op_count_u, (int[]){0}) < 2) return -1;
     sc->seed = (uint64_t)seed_ull;
     sc->op_count = op_count_u;
     if (sc->op_count > MIN_MAX_OPS) sc->op_count = MIN_MAX_OPS;
@@ -266,8 +242,7 @@ static int min_read_scenario_stdin(min_scenario *sc)
         unsigned long long u64_ull;
         int n_read = 0;
 
-        if (sscanf(p, " %u %u %u %u %llu%n",
-                   &kind_u, &a_u, &b_u, &u32_u, &u64_ull, &n_read) < 5)
+        if (sscanf(p, " %u %u %u %u %llu%n", &kind_u, &a_u, &b_u, &u32_u, &u64_ull, &n_read) < 5)
             break;
 
         sc->ops[i].kind = (min_op_kind)kind_u;
@@ -286,19 +261,19 @@ static int min_read_scenario_stdin(min_scenario *sc)
  * =================================================================== */
 
 typedef struct {
-    asx_region_id     regions[MIN_MAX_REGIONS];
-    uint32_t          region_count;
-    asx_task_id       tasks[MIN_MAX_TASKS];
-    uint32_t          task_count;
+    asx_region_id regions[MIN_MAX_REGIONS];
+    uint32_t region_count;
+    asx_task_id tasks[MIN_MAX_TASKS];
+    uint32_t task_count;
     asx_obligation_id obligations[MIN_MAX_OBLIGATIONS];
-    uint32_t          obligation_count;
-    asx_channel_id    channels[MIN_MAX_CHANNELS];
-    uint32_t          channel_count;
-    asx_send_permit   permits[MIN_MAX_CHANNELS];
-    uint32_t          permit_count;
-    asx_timer_handle  timers[MIN_MAX_TIMERS];
-    uint32_t          timer_count;
-    uint64_t          sim_time;
+    uint32_t obligation_count;
+    asx_channel_id channels[MIN_MAX_CHANNELS];
+    uint32_t channel_count;
+    asx_send_permit permits[MIN_MAX_CHANNELS];
+    uint32_t permit_count;
+    asx_timer_handle timers[MIN_MAX_TIMERS];
+    uint32_t timer_count;
+    uint64_t sim_time;
 } min_handle_state;
 
 /* ===================================================================
@@ -310,8 +285,7 @@ typedef struct {
     asx_co_state co;
 } min_task_state;
 
-static asx_status min_task_poll(void *user_data, asx_task_id self)
-{
+static asx_status min_task_poll(void *user_data, asx_task_id self) {
     min_task_state *st = (min_task_state *)user_data;
     (void)self;
     if (st->polls_remaining > 0u) {
@@ -324,8 +298,7 @@ static asx_status min_task_poll(void *user_data, asx_task_id self)
 static min_task_state g_min_task_states[MIN_MAX_TASKS];
 static uint32_t g_min_task_state_next = 0u;
 
-static min_task_state *min_alloc_task_state(uint32_t polls)
-{
+static min_task_state *min_alloc_task_state(uint32_t polls) {
     min_task_state *st;
     if (g_min_task_state_next >= MIN_MAX_TASKS) return NULL;
     st = &g_min_task_states[g_min_task_state_next++];
@@ -334,10 +307,7 @@ static min_task_state *min_alloc_task_state(uint32_t polls)
     return st;
 }
 
-static void min_reset_task_states(void)
-{
-    g_min_task_state_next = 0u;
-}
+static void min_reset_task_states(void) { g_min_task_state_next = 0u; }
 
 /* ===================================================================
  * Scenario executor helpers
@@ -350,8 +320,7 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs);
  * Execute a single op against handle state
  * =================================================================== */
 
-static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs)
-{
+static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs) {
     asx_status st = ASX_OK;
 
     switch (op->kind) {
@@ -360,19 +329,25 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs)
         if (hs->region_count < MIN_MAX_REGIONS) {
             st = asx_region_open(&rid);
             if (st == ASX_OK) hs->regions[hs->region_count++] = rid;
-        } else { st = ASX_E_REGION_AT_CAPACITY; }
+        } else {
+            st = ASX_E_REGION_AT_CAPACITY;
+        }
         break;
     }
     case MIN_OP_CLOSE_REGION: {
         if (hs->region_count > 0u) {
             st = asx_region_close(hs->regions[op->idx_a % hs->region_count]);
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_POISON_REGION: {
         if (hs->region_count > 0u) {
             st = asx_region_poison(hs->regions[op->idx_a % hs->region_count]);
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_SPAWN_TASK: {
@@ -383,15 +358,21 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs)
             if (tst != NULL) {
                 st = asx_task_spawn(hs->regions[ridx], min_task_poll, tst, &tid);
                 if (st == ASX_OK) hs->tasks[hs->task_count++] = tid;
-            } else { st = ASX_E_RESOURCE_EXHAUSTED; }
-        } else { st = ASX_E_NOT_FOUND; }
+            } else {
+                st = ASX_E_RESOURCE_EXHAUSTED;
+            }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_CANCEL_TASK: {
         if (hs->task_count > 0u) {
             st = asx_task_cancel(hs->tasks[op->idx_b % hs->task_count],
                                  (asx_cancel_kind)(op->arg_u32 % 11u));
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_RESERVE_OBLIGATION: {
@@ -399,19 +380,25 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs)
             asx_obligation_id oid = ASX_INVALID_ID;
             st = asx_obligation_reserve(hs->regions[op->idx_a % hs->region_count], &oid);
             if (st == ASX_OK) hs->obligations[hs->obligation_count++] = oid;
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_COMMIT_OBLIGATION: {
         if (hs->obligation_count > 0u) {
             st = asx_obligation_commit(hs->obligations[op->idx_a % hs->obligation_count]);
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_ABORT_OBLIGATION: {
         if (hs->obligation_count > 0u) {
             st = asx_obligation_abort(hs->obligations[op->idx_a % hs->obligation_count]);
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_CHANNEL_CREATE: {
@@ -420,7 +407,9 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs)
             st = asx_channel_create(hs->regions[op->idx_a % hs->region_count],
                                     1u + (op->arg_u32 % (ASX_CHANNEL_MAX_CAPACITY - 1u)), &cid);
             if (st == ASX_OK) hs->channels[hs->channel_count++] = cid;
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_CHANNEL_RESERVE: {
@@ -429,38 +418,50 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs)
             memset(&permit, 0, sizeof(permit));
             st = asx_channel_try_reserve(hs->channels[op->idx_a % hs->channel_count], &permit);
             if (st == ASX_OK) hs->permits[hs->permit_count++] = permit;
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_CHANNEL_SEND: {
         if (hs->permit_count > 0u) {
             st = asx_send_permit_send(&hs->permits[op->idx_a % hs->permit_count], op->arg_u64);
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_CHANNEL_ABORT: {
         if (hs->permit_count > 0u) {
             asx_send_permit_abort(&hs->permits[op->idx_a % hs->permit_count]);
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_CHANNEL_RECV: {
         if (hs->channel_count > 0u) {
             uint64_t val = 0u;
             st = asx_channel_try_recv(hs->channels[op->idx_a % hs->channel_count], &val);
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_CHANNEL_CLOSE_TX: {
         if (hs->channel_count > 0u) {
             st = asx_channel_close_sender(hs->channels[op->idx_a % hs->channel_count]);
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_CHANNEL_CLOSE_RX: {
         if (hs->channel_count > 0u) {
             st = asx_channel_close_receiver(hs->channels[op->idx_a % hs->channel_count]);
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_TIMER_REGISTER: {
@@ -470,7 +471,9 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs)
             st = asx_timer_register(asx_timer_wheel_global(),
                                     hs->sim_time + 1u + (op->arg_u64 % 5000u), NULL, &th);
             if (st == ASX_OK) hs->timers[hs->timer_count++] = th;
-        } else { st = ASX_E_RESOURCE_EXHAUSTED; }
+        } else {
+            st = ASX_E_RESOURCE_EXHAUSTED;
+        }
         break;
     }
     case MIN_OP_TIMER_CANCEL: {
@@ -478,7 +481,9 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs)
             int c = asx_timer_cancel(asx_timer_wheel_global(),
                                      &hs->timers[op->idx_a % hs->timer_count]);
             st = c ? ASX_OK : ASX_E_TIMER_NOT_FOUND;
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_ADVANCE_TIME: {
@@ -492,7 +497,9 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs)
             asx_budget budget = asx_budget_infinite();
             budget.poll_quota = 1u + (op->arg_u32 % 64u);
             st = asx_scheduler_run(hs->regions[op->idx_a % hs->region_count], &budget);
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_REGION_DRAIN: {
@@ -500,18 +507,20 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs)
             asx_budget budget = asx_budget_infinite();
             budget.poll_quota = 256u;
             st = asx_region_drain(hs->regions[op->idx_a % hs->region_count], &budget);
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
     case MIN_OP_QUIESCENCE_CHECK: {
         if (hs->region_count > 0u) {
             st = asx_quiescence_check(hs->regions[op->idx_a % hs->region_count]);
-        } else { st = ASX_E_NOT_FOUND; }
+        } else {
+            st = ASX_E_NOT_FOUND;
+        }
         break;
     }
-    default:
-        st = ASX_E_INVALID_ARGUMENT;
-        break;
+    default: st = ASX_E_INVALID_ARGUMENT; break;
     }
 
     return st;
@@ -521,8 +530,7 @@ static asx_status min_execute_one_op(const min_op *op, min_handle_state *hs)
  * Scenario executor (produces semantic digest)
  * =================================================================== */
 
-static uint64_t min_execute_digest(const min_scenario *sc)
-{
+static uint64_t min_execute_digest(const min_scenario *sc) {
     min_handle_state hs;
     min_hasher hasher;
     uint32_t i;
@@ -590,17 +598,16 @@ typedef enum {
 } min_mode;
 
 typedef struct {
-    min_mode         mode;
-    uint64_t         target_digest;   /* for DIGEST_MATCH mode */
-    min_predicate_fn predicate;       /* for PREDICATE mode */
-    void            *predicate_data;  /* for PREDICATE mode */
-    uint32_t         max_rounds;
-    int              verbose;
+    min_mode mode;
+    uint64_t target_digest;     /* for DIGEST_MATCH mode */
+    min_predicate_fn predicate; /* for PREDICATE mode */
+    void *predicate_data;       /* for PREDICATE mode */
+    uint32_t max_rounds;
+    int verbose;
 } min_config;
 
 /* Check if a scenario preserves the failure property */
-static int min_preserves_failure(const min_scenario *sc, const min_config *cfg)
-{
+static int min_preserves_failure(const min_scenario *sc, const min_config *cfg) {
     uint64_t d1, d2;
 
     switch (cfg->mode) {
@@ -617,9 +624,7 @@ static int min_preserves_failure(const min_scenario *sc, const min_config *cfg)
 
     case MIN_MODE_PREDICATE:
         /* Failure = user predicate says so */
-        if (cfg->predicate != NULL) {
-            return cfg->predicate(sc, cfg->predicate_data);
-        }
+        if (cfg->predicate != NULL) { return cfg->predicate(sc, cfg->predicate_data); }
         return 0;
     }
 
@@ -627,8 +632,7 @@ static int min_preserves_failure(const min_scenario *sc, const min_config *cfg)
 }
 
 /* Strategy 1: Try removing individual ops */
-static uint32_t min_try_remove_singles(min_scenario *sc, const min_config *cfg)
-{
+static uint32_t min_try_remove_singles(min_scenario *sc, const min_config *cfg) {
     uint32_t removed = 0u;
     uint32_t i;
 
@@ -650,8 +654,8 @@ static uint32_t min_try_remove_singles(min_scenario *sc, const min_config *cfg)
             memcpy(sc, &candidate, sizeof(min_scenario));
             removed++;
             if (cfg->verbose) {
-                fprintf(stderr, "[minimize] removed op %u (%s), now %u ops\n",
-                        target, min_op_name(sc->ops[target < sc->op_count ? target : 0].kind),
+                fprintf(stderr, "[minimize] removed op %u (%s), now %u ops\n", target,
+                        min_op_name(sc->ops[target < sc->op_count ? target : 0].kind),
                         sc->op_count);
             }
         }
@@ -661,8 +665,7 @@ static uint32_t min_try_remove_singles(min_scenario *sc, const min_config *cfg)
 }
 
 /* Strategy 2: Delta debugging — try removing chunks */
-static uint32_t min_delta_debug(min_scenario *sc, const min_config *cfg)
-{
+static uint32_t min_delta_debug(min_scenario *sc, const min_config *cfg) {
     uint32_t removed = 0u;
     uint32_t chunk_size;
 
@@ -680,8 +683,7 @@ static uint32_t min_delta_debug(min_scenario *sc, const min_config *cfg)
 
             memcpy(&candidate, sc, sizeof(min_scenario));
             if (tail > 0u) {
-                memmove(&candidate.ops[start], &candidate.ops[end],
-                        (size_t)tail * sizeof(min_op));
+                memmove(&candidate.ops[start], &candidate.ops[end], (size_t)tail * sizeof(min_op));
             }
             candidate.op_count = sc->op_count - (end - start);
 
@@ -689,8 +691,8 @@ static uint32_t min_delta_debug(min_scenario *sc, const min_config *cfg)
                 memcpy(sc, &candidate, sizeof(min_scenario));
                 removed += (end - start);
                 if (cfg->verbose) {
-                    fprintf(stderr, "[minimize] removed chunk [%u..%u), now %u ops\n",
-                            start, end, sc->op_count);
+                    fprintf(stderr, "[minimize] removed chunk [%u..%u), now %u ops\n", start, end,
+                            sc->op_count);
                 }
                 /* Don't advance start — try same position again */
             } else {
@@ -705,8 +707,7 @@ static uint32_t min_delta_debug(min_scenario *sc, const min_config *cfg)
 }
 
 /* Strategy 3: Try simplifying op arguments */
-static uint32_t min_simplify_args(min_scenario *sc, const min_config *cfg)
-{
+static uint32_t min_simplify_args(min_scenario *sc, const min_config *cfg) {
     uint32_t simplified = 0u;
     uint32_t i;
 
@@ -767,12 +768,11 @@ typedef struct {
     uint32_t rounds;
     uint32_t ops_removed;
     uint32_t args_simplified;
-    double   duration_sec;
+    double duration_sec;
     uint64_t final_digest;
 } min_result;
 
-static void min_minimize(min_scenario *sc, const min_config *cfg, min_result *result)
-{
+static void min_minimize(min_scenario *sc, const min_config *cfg, min_result *result) {
     uint32_t round;
     struct timespec start_ts, end_ts;
     double start_sec, end_sec;
@@ -785,9 +785,7 @@ static void min_minimize(min_scenario *sc, const min_config *cfg, min_result *re
     result->args_simplified = 0u;
     result->rounds = 0u;
 
-    if (cfg->verbose) {
-        fprintf(stderr, "[minimize] starting with %u ops\n", sc->op_count);
-    }
+    if (cfg->verbose) { fprintf(stderr, "[minimize] starting with %u ops\n", sc->op_count); }
 
     /* Verify the scenario actually fails before minimizing */
     if (!min_preserves_failure(sc, cfg)) {
@@ -822,8 +820,8 @@ static void min_minimize(min_scenario *sc, const min_config *cfg, min_result *re
         }
 
         if (cfg->verbose) {
-            fprintf(stderr, "[minimize] round %u: %u -> %u ops\n",
-                    round + 1u, prev_ops, sc->op_count);
+            fprintf(stderr, "[minimize] round %u: %u -> %u ops\n", round + 1u, prev_ops,
+                    sc->op_count);
         }
     }
 
@@ -839,8 +837,7 @@ static void min_minimize(min_scenario *sc, const min_config *cfg, min_result *re
  * JSON output for minimized scenario
  * =================================================================== */
 
-static void min_emit_json(FILE *out, const min_scenario *sc, const min_result *result)
-{
+static void min_emit_json(FILE *out, const min_scenario *sc, const min_result *result) {
     uint32_t i;
 
     fprintf(out, "{\"kind\":\"minimized_scenario\",");
@@ -856,10 +853,8 @@ static void min_emit_json(FILE *out, const min_scenario *sc, const min_result *r
     for (i = 0u; i < sc->op_count; i++) {
         if (i > 0u) fprintf(out, ",");
         fprintf(out, "{\"op\":\"%s\",\"idx_a\":%u,\"idx_b\":%u,\"arg_u32\":%u,\"arg_u64\":%llu}",
-                min_op_name(sc->ops[i].kind),
-                sc->ops[i].idx_a, sc->ops[i].idx_b,
-                sc->ops[i].arg_u32,
-                (unsigned long long)sc->ops[i].arg_u64);
+                min_op_name(sc->ops[i].kind), sc->ops[i].idx_a, sc->ops[i].idx_b,
+                sc->ops[i].arg_u32, (unsigned long long)sc->ops[i].arg_u64);
     }
     fprintf(out, "]}\n");
     fflush(out);
@@ -870,8 +865,7 @@ static void min_emit_json(FILE *out, const min_scenario *sc, const min_result *r
  * Used by self-test 3 to demonstrate op removal.
  * =================================================================== */
 
-static int min_predicate_has_poisoned_spawn(const min_scenario *sc, void *user_data)
-{
+static int min_predicate_has_poisoned_spawn(const min_scenario *sc, void *user_data) {
     min_handle_state hs;
     uint32_t i;
     (void)user_data;
@@ -894,8 +888,7 @@ static int min_predicate_has_poisoned_spawn(const min_scenario *sc, void *user_d
  * Self-test: generate a scenario that differs and minimize it
  * =================================================================== */
 
-static int min_selftest(int verbose)
-{
+static int min_selftest(int verbose) {
     min_rng rng;
     min_scenario sc;
     min_config cfg;
@@ -911,8 +904,10 @@ static int min_selftest(int verbose)
     sc.seed = 9999u;
     sc.op_count = 20u;
     sc.ops[0].kind = MIN_OP_SPAWN_REGION;
-    sc.ops[0].idx_a = 0u; sc.ops[0].idx_b = 0u;
-    sc.ops[0].arg_u32 = 0u; sc.ops[0].arg_u64 = 0u;
+    sc.ops[0].idx_a = 0u;
+    sc.ops[0].idx_b = 0u;
+    sc.ops[0].arg_u32 = 0u;
+    sc.ops[0].arg_u64 = 0u;
 
     for (i = 1u; i < sc.op_count; i++) {
         sc.ops[i].kind = (min_op_kind)(min_rng_next(&rng) % MIN_OP_KIND_COUNT);
@@ -930,10 +925,8 @@ static int min_selftest(int verbose)
 
     min_minimize(&sc, &cfg, &result);
 
-    fprintf(stderr,
-        "[minimize] self-test: %u -> %u ops in %u rounds (%.3fs)\n",
-        result.original_ops, result.minimized_ops,
-        result.rounds, result.duration_sec);
+    fprintf(stderr, "[minimize] self-test: %u -> %u ops in %u rounds (%.3fs)\n",
+            result.original_ops, result.minimized_ops, result.rounds, result.duration_sec);
 
     /* Verify minimized scenario still produces the target digest */
     if (min_execute_digest(&sc) != cfg.target_digest) {
@@ -949,9 +942,7 @@ static int min_selftest(int verbose)
 
     fprintf(stderr, "[minimize] self-test PASS\n");
 
-    if (verbose) {
-        min_emit_json(stderr, &sc, &result);
-    }
+    if (verbose) { min_emit_json(stderr, &sc, &result); }
 
     /* ---- Self-test 2: verify argument simplification on structured scenario ---- */
     /*
@@ -970,14 +961,19 @@ static int min_selftest(int verbose)
     memset(sc.ops, 0, sizeof(sc.ops));
 
     sc.ops[0].kind = MIN_OP_SPAWN_REGION;
-    sc.ops[0].arg_u32 = 999u; sc.ops[0].arg_u64 = 12345u;
+    sc.ops[0].arg_u32 = 999u;
+    sc.ops[0].arg_u64 = 12345u;
     sc.ops[1].kind = MIN_OP_SPAWN_TASK;
-    sc.ops[1].idx_a = 7u; sc.ops[1].idx_b = 15u;
-    sc.ops[1].arg_u32 = 30u; sc.ops[1].arg_u64 = 4999u;
+    sc.ops[1].idx_a = 7u;
+    sc.ops[1].idx_b = 15u;
+    sc.ops[1].arg_u32 = 30u;
+    sc.ops[1].arg_u64 = 4999u;
     sc.ops[2].kind = MIN_OP_SCHEDULER_RUN;
-    sc.ops[2].idx_a = 5u; sc.ops[2].arg_u32 = 60u;
+    sc.ops[2].idx_a = 5u;
+    sc.ops[2].arg_u32 = 60u;
     sc.ops[3].kind = MIN_OP_CHANNEL_CREATE;
-    sc.ops[3].idx_a = 3u; sc.ops[3].arg_u32 = 15u;
+    sc.ops[3].idx_a = 3u;
+    sc.ops[3].arg_u32 = 15u;
     sc.ops[4].kind = MIN_OP_TIMER_REGISTER;
     sc.ops[4].arg_u64 = 3000u;
     sc.ops[5].kind = MIN_OP_ADVANCE_TIME;
@@ -985,7 +981,8 @@ static int min_selftest(int verbose)
     sc.ops[6].kind = MIN_OP_QUIESCENCE_CHECK;
     sc.ops[6].idx_a = 4u;
     sc.ops[7].kind = MIN_OP_REGION_DRAIN;
-    sc.ops[7].idx_a = 2u; sc.ops[7].arg_u32 = 20u;
+    sc.ops[7].idx_a = 2u;
+    sc.ops[7].arg_u32 = 20u;
 
     cfg.mode = MIN_MODE_DIGEST_MATCH;
     cfg.target_digest = min_execute_digest(&sc);
@@ -994,10 +991,8 @@ static int min_selftest(int verbose)
 
     min_minimize(&sc, &cfg, &result);
 
-    fprintf(stderr,
-        "[minimize] self-test 2: %u ops, %u args simplified in %u rounds (%.3fs)\n",
-        result.minimized_ops, result.args_simplified,
-        result.rounds, result.duration_sec);
+    fprintf(stderr, "[minimize] self-test 2: %u ops, %u args simplified in %u rounds (%.3fs)\n",
+            result.minimized_ops, result.args_simplified, result.rounds, result.duration_sec);
 
     if (min_execute_digest(&sc) != cfg.target_digest) {
         fprintf(stderr, "[minimize] self-test 2 FAIL: digest changed\n");
@@ -1009,11 +1004,8 @@ static int min_selftest(int verbose)
         return 1;
     }
 
-    fprintf(stderr, "[minimize] self-test 2 PASS (%u args simplified)\n",
-            result.args_simplified);
-    if (verbose) {
-        min_emit_json(stderr, &sc, &result);
-    }
+    fprintf(stderr, "[minimize] self-test 2 PASS (%u args simplified)\n", result.args_simplified);
+    if (verbose) { min_emit_json(stderr, &sc, &result); }
 
     /* ---- Self-test 3: predicate mode with actual op removal ---- */
     /*
@@ -1032,7 +1024,7 @@ static int min_selftest(int verbose)
 
     sc.ops[0].kind = MIN_OP_SPAWN_REGION;
     sc.ops[1].kind = MIN_OP_POISON_REGION;
-    sc.ops[2].kind = MIN_OP_SPAWN_TASK;       /* produces POISONED */
+    sc.ops[2].kind = MIN_OP_SPAWN_TASK; /* produces POISONED */
     sc.ops[2].arg_u32 = 1u;
     /* Padding ops that don't affect the poison status */
     sc.ops[3].kind = MIN_OP_ADVANCE_TIME;
@@ -1062,10 +1054,8 @@ static int min_selftest(int verbose)
 
     min_minimize(&sc, &cfg, &result);
 
-    fprintf(stderr,
-        "[minimize] self-test 3: %u -> %u ops in %u rounds (%.3fs)\n",
-        result.original_ops, result.minimized_ops,
-        result.rounds, result.duration_sec);
+    fprintf(stderr, "[minimize] self-test 3: %u -> %u ops in %u rounds (%.3fs)\n",
+            result.original_ops, result.minimized_ops, result.rounds, result.duration_sec);
 
     if (!min_preserves_failure(&sc, &cfg)) {
         fprintf(stderr, "[minimize] self-test 3 FAIL: predicate no longer holds\n");
@@ -1077,11 +1067,9 @@ static int min_selftest(int verbose)
         return 1;
     }
 
-    fprintf(stderr, "[minimize] self-test 3 PASS (reduced %u -> %u ops)\n",
-            result.original_ops, result.minimized_ops);
-    if (verbose) {
-        min_emit_json(stderr, &sc, &result);
-    }
+    fprintf(stderr, "[minimize] self-test 3 PASS (reduced %u -> %u ops)\n", result.original_ops,
+            result.minimized_ops);
+    if (verbose) { min_emit_json(stderr, &sc, &result); }
 
     return 0;
 }
@@ -1090,8 +1078,7 @@ static int min_selftest(int verbose)
  * CLI
  * =================================================================== */
 
-static uint64_t parse_u64(const char *s)
-{
+static uint64_t parse_u64(const char *s) {
     uint64_t v = 0u;
     while (*s >= '0' && *s <= '9') {
         v = v * 10u + (uint64_t)(*s - '0');
@@ -1100,21 +1087,22 @@ static uint64_t parse_u64(const char *s)
     return v;
 }
 
-static uint64_t parse_hex64(const char *s)
-{
+static uint64_t parse_hex64(const char *s) {
     uint64_t v = 0u;
     while ((*s >= '0' && *s <= '9') || (*s >= 'a' && *s <= 'f') || (*s >= 'A' && *s <= 'F')) {
         v <<= 4;
-        if (*s >= '0' && *s <= '9') v |= (uint64_t)(*s - '0');
-        else if (*s >= 'a' && *s <= 'f') v |= (uint64_t)(*s - 'a' + 10);
-        else v |= (uint64_t)(*s - 'A' + 10);
+        if (*s >= '0' && *s <= '9')
+            v |= (uint64_t)(*s - '0');
+        else if (*s >= 'a' && *s <= 'f')
+            v |= (uint64_t)(*s - 'a' + 10);
+        else
+            v |= (uint64_t)(*s - 'A' + 10);
         s++;
     }
     return v;
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     int i;
     int run_selftest = 0;
     int verbose = 0;
@@ -1157,17 +1145,17 @@ int main(int argc, char **argv)
             output_path = argv[++i];
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             fprintf(stderr,
-                "Usage: fuzz_minimize [options]\n"
-                "  --selftest                Run built-in self-test\n"
-                "  --failure-digest <hex>    Target digest to preserve\n"
-                "  --initial-seed <n>        Master seed (with --iteration)\n"
-                "  --iteration <n>           Iteration index within seed\n"
-                "  --stdin-scenario          Read scenario from stdin (text format)\n"
-                "  --max-ops <n>             Max ops per scenario (default: 64)\n"
-                "  --mutations <n>           Mutations per scenario for RNG sync (default: 4)\n"
-                "  --output <path>           Write minimized result to file\n"
-                "  --max-rounds <n>          Max minimization rounds (default: 50)\n"
-                "  --verbose                 Print progress\n");
+                    "Usage: fuzz_minimize [options]\n"
+                    "  --selftest                Run built-in self-test\n"
+                    "  --failure-digest <hex>    Target digest to preserve\n"
+                    "  --initial-seed <n>        Master seed (with --iteration)\n"
+                    "  --iteration <n>           Iteration index within seed\n"
+                    "  --stdin-scenario          Read scenario from stdin (text format)\n"
+                    "  --max-ops <n>             Max ops per scenario (default: 64)\n"
+                    "  --mutations <n>           Mutations per scenario for RNG sync (default: 4)\n"
+                    "  --output <path>           Write minimized result to file\n"
+                    "  --max-rounds <n>          Max minimization rounds (default: 50)\n"
+                    "  --verbose                 Print progress\n");
             return 0;
         } else {
             fprintf(stderr, "[minimize] unknown argument: %s\n", argv[i]);
@@ -1175,9 +1163,7 @@ int main(int argc, char **argv)
         }
     }
 
-    if (run_selftest) {
-        return min_selftest(verbose);
-    }
+    if (run_selftest) { return min_selftest(verbose); }
 
     if (!has_target && !stdin_scenario && !has_initial_seed) {
         /* Default to self-test mode if no target specified */
@@ -1211,18 +1197,18 @@ int main(int argc, char **argv)
             }
         }
         min_generate_scenario(&gen_rng, &sc, max_ops);
-        fprintf(stderr, "[minimize] generated scenario from seed=%llu iter=%llu: "
+        fprintf(stderr,
+                "[minimize] generated scenario from seed=%llu iter=%llu: "
                 "%u ops, scenario_seed=%llu\n",
-                (unsigned long long)initial_seed,
-                (unsigned long long)target_iteration,
-                sc.op_count,
+                (unsigned long long)initial_seed, (unsigned long long)target_iteration, sc.op_count,
                 (unsigned long long)sc.seed);
     } else if (stdin_scenario) {
         if (min_read_scenario_stdin(&sc) != 0) {
             fprintf(stderr, "[minimize] error: failed to read scenario from stdin\n");
             return 1;
         }
-        fprintf(stderr, "[minimize] read scenario from stdin: "
+        fprintf(stderr,
+                "[minimize] read scenario from stdin: "
                 "%u ops, scenario_seed=%llu\n",
                 sc.op_count, (unsigned long long)sc.seed);
     } else {
@@ -1251,10 +1237,8 @@ int main(int argc, char **argv)
 
         min_minimize(&sc, &cfg, &result);
 
-        fprintf(stderr,
-            "[minimize] result: %u -> %u ops in %u rounds (%.3fs)\n",
-            result.original_ops, result.minimized_ops,
-            result.rounds, result.duration_sec);
+        fprintf(stderr, "[minimize] result: %u -> %u ops in %u rounds (%.3fs)\n",
+                result.original_ops, result.minimized_ops, result.rounds, result.duration_sec);
 
         /* Output JSONL to stdout */
         min_emit_json(stdout, &sc, &result);

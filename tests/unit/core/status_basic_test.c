@@ -7,9 +7,7 @@
 #include "../../test_harness.h"
 #include <asx/asx_status.h>
 
-TEST(ok_is_not_error) {
-    ASSERT_FALSE(asx_is_error(ASX_OK));
-}
+TEST(ok_is_not_error) { ASSERT_FALSE(asx_is_error(ASX_OK)); }
 
 TEST(errors_are_errors) {
     ASSERT_TRUE(asx_is_error(ASX_E_INVALID_ARGUMENT));
@@ -19,9 +17,7 @@ TEST(errors_are_errors) {
     ASSERT_TRUE(asx_is_error(ASX_E_RESOURCE_EXHAUSTED));
 }
 
-TEST(status_str_ok) {
-    ASSERT_STR_EQ(asx_status_str(ASX_OK), "OK");
-}
+TEST(status_str_ok) { ASSERT_STR_EQ(asx_status_str(ASX_OK), "OK"); }
 
 TEST(status_str_errors_not_null) {
     /* Every known error code must produce a non-"unknown" string */

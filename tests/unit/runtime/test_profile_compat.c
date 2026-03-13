@@ -14,8 +14,8 @@
 
 #include "test_harness.h"
 #include <asx/runtime/profile_compat.h>
-#include <asx/runtime/telemetry.h>
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/telemetry.h>
 #include <asx/time/timer_wheel.h>
 #include <string.h>
 
@@ -23,15 +23,13 @@
  * Profile identity tests
  * ------------------------------------------------------------------- */
 
-TEST(profile_active_is_core)
-{
+TEST(profile_active_is_core) {
     /* Default build uses ASX_PROFILE_CORE */
     asx_profile_id id = asx_profile_active();
     ASSERT_EQ((int)id, (int)ASX_PROFILE_ID_CORE);
 }
 
-TEST(profile_name_all_valid)
-{
+TEST(profile_name_all_valid) {
     int i;
     for (i = 0; i < (int)ASX_PROFILE_ID_COUNT; i++) {
         const char *name = asx_profile_name((asx_profile_id)i);
@@ -40,26 +38,22 @@ TEST(profile_name_all_valid)
     }
 }
 
-TEST(profile_name_core)
-{
+TEST(profile_name_core) {
     const char *name = asx_profile_name(ASX_PROFILE_ID_CORE);
     ASSERT_STR_EQ(name, "CORE");
 }
 
-TEST(profile_name_hft)
-{
+TEST(profile_name_hft) {
     const char *name = asx_profile_name(ASX_PROFILE_ID_HFT);
     ASSERT_STR_EQ(name, "HFT");
 }
 
-TEST(profile_name_automotive)
-{
+TEST(profile_name_automotive) {
     const char *name = asx_profile_name(ASX_PROFILE_ID_AUTOMOTIVE);
     ASSERT_STR_EQ(name, "AUTOMOTIVE");
 }
 
-TEST(profile_name_out_of_range)
-{
+TEST(profile_name_out_of_range) {
     const char *name = asx_profile_name((asx_profile_id)99);
     ASSERT_STR_EQ(name, "UNKNOWN");
 }
@@ -68,21 +62,18 @@ TEST(profile_name_out_of_range)
  * Profile descriptor tests
  * ------------------------------------------------------------------- */
 
-TEST(descriptor_null_returns_error)
-{
+TEST(descriptor_null_returns_error) {
     asx_status s = asx_profile_get_descriptor(ASX_PROFILE_ID_CORE, NULL);
     ASSERT_EQ((int)s, (int)ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(descriptor_invalid_id_returns_error)
-{
+TEST(descriptor_invalid_id_returns_error) {
     asx_profile_descriptor desc;
     asx_status s = asx_profile_get_descriptor((asx_profile_id)99, &desc);
     ASSERT_EQ((int)s, (int)ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(descriptor_core_values)
-{
+TEST(descriptor_core_values) {
     asx_profile_descriptor desc;
     asx_status s = asx_profile_get_descriptor(ASX_PROFILE_ID_CORE, &desc);
     ASSERT_EQ((int)s, (int)ASX_OK);
@@ -95,8 +86,7 @@ TEST(descriptor_core_values)
     ASSERT_TRUE(desc.max_timers > 0);
 }
 
-TEST(descriptor_hft_busy_spin)
-{
+TEST(descriptor_hft_busy_spin) {
     asx_profile_descriptor desc;
     asx_status s = asx_profile_get_descriptor(ASX_PROFILE_ID_HFT, &desc);
     ASSERT_EQ((int)s, (int)ASX_OK);
@@ -105,16 +95,14 @@ TEST(descriptor_hft_busy_spin)
     ASSERT_EQ(desc.ghost_monitors, 0);
 }
 
-TEST(descriptor_automotive_sleep_wait)
-{
+TEST(descriptor_automotive_sleep_wait) {
     asx_profile_descriptor desc;
     asx_status s = asx_profile_get_descriptor(ASX_PROFILE_ID_AUTOMOTIVE, &desc);
     ASSERT_EQ((int)s, (int)ASX_OK);
     ASSERT_EQ((int)desc.default_wait, (int)ASX_WAIT_SLEEP);
 }
 
-TEST(descriptor_freestanding_defaults)
-{
+TEST(descriptor_freestanding_defaults) {
     asx_profile_descriptor desc;
     asx_status s = asx_profile_get_descriptor(ASX_PROFILE_ID_FREESTANDING, &desc);
     ASSERT_EQ((int)s, (int)ASX_OK);
@@ -122,8 +110,7 @@ TEST(descriptor_freestanding_defaults)
     ASSERT_EQ(desc.allocator_sealable, 1);
 }
 
-TEST(descriptor_embedded_router_defaults)
-{
+TEST(descriptor_embedded_router_defaults) {
     asx_profile_descriptor desc;
     asx_status s = asx_profile_get_descriptor(ASX_PROFILE_ID_EMBEDDED_ROUTER, &desc);
     ASSERT_EQ((int)s, (int)ASX_OK);
@@ -131,8 +118,7 @@ TEST(descriptor_embedded_router_defaults)
     ASSERT_EQ(desc.allocator_sealable, 1);
 }
 
-TEST(descriptor_limits_align_runtime_capacities)
-{
+TEST(descriptor_limits_align_runtime_capacities) {
     int i;
     for (i = 0; i < (int)ASX_PROFILE_ID_COUNT; i++) {
         asx_profile_descriptor desc;
@@ -145,8 +131,7 @@ TEST(descriptor_limits_align_runtime_capacities)
     }
 }
 
-TEST(active_profile_wait_matches_runtime_config_default)
-{
+TEST(active_profile_wait_matches_runtime_config_default) {
     asx_profile_descriptor desc;
     asx_runtime_config cfg;
 
@@ -155,8 +140,7 @@ TEST(active_profile_wait_matches_runtime_config_default)
     ASSERT_EQ((int)cfg.wait_policy, (int)desc.default_wait);
 }
 
-TEST(descriptor_all_profiles_nonzero_limits)
-{
+TEST(descriptor_all_profiles_nonzero_limits) {
     int i;
     for (i = 0; i < (int)ASX_PROFILE_ID_COUNT; i++) {
         asx_profile_descriptor desc;
@@ -174,8 +158,7 @@ TEST(descriptor_all_profiles_nonzero_limits)
  * Property classification tests
  * ------------------------------------------------------------------- */
 
-TEST(all_properties_are_operational)
-{
+TEST(all_properties_are_operational) {
     int i;
     for (i = 0; i < (int)ASX_PPROP_COUNT; i++) {
         asx_property_class cls = asx_profile_property_class((asx_profile_property)i);
@@ -183,8 +166,7 @@ TEST(all_properties_are_operational)
     }
 }
 
-TEST(property_names_all_valid)
-{
+TEST(property_names_all_valid) {
     int i;
     for (i = 0; i < (int)ASX_PPROP_COUNT; i++) {
         const char *name = asx_profile_property_name((asx_profile_property)i);
@@ -193,8 +175,7 @@ TEST(property_names_all_valid)
     }
 }
 
-TEST(property_name_out_of_range)
-{
+TEST(property_name_out_of_range) {
     const char *name = asx_profile_property_name((asx_profile_property)99);
     ASSERT_STR_EQ(name, "unknown");
 }
@@ -203,8 +184,7 @@ TEST(property_name_out_of_range)
  * Semantic rule enforcement tests
  * ------------------------------------------------------------------- */
 
-TEST(all_semantic_rules_enforced)
-{
+TEST(all_semantic_rules_enforced) {
     int i;
     for (i = 0; i < (int)ASX_SRULE_COUNT; i++) {
         int enforced = asx_profile_semantic_rule_enforced((asx_semantic_rule)i);
@@ -212,15 +192,13 @@ TEST(all_semantic_rules_enforced)
     }
 }
 
-TEST(semantic_rule_count)
-{
+TEST(semantic_rule_count) {
     uint32_t count = asx_profile_semantic_rule_count();
     ASSERT_EQ((int)count, (int)ASX_SRULE_COUNT);
     ASSERT_EQ((int)count, 8);
 }
 
-TEST(semantic_rule_names_all_valid)
-{
+TEST(semantic_rule_names_all_valid) {
     int i;
     for (i = 0; i < (int)ASX_SRULE_COUNT; i++) {
         const char *name = asx_semantic_rule_name((asx_semantic_rule)i);
@@ -229,20 +207,17 @@ TEST(semantic_rule_names_all_valid)
     }
 }
 
-TEST(semantic_rule_name_out_of_range)
-{
+TEST(semantic_rule_name_out_of_range) {
     const char *name = asx_semantic_rule_name((asx_semantic_rule)99);
     ASSERT_STR_EQ(name, "unknown");
 }
 
-TEST(semantic_rule_lifecycle)
-{
+TEST(semantic_rule_lifecycle) {
     const char *name = asx_semantic_rule_name(ASX_SRULE_LIFECYCLE_TRANSITIONS);
     ASSERT_STR_EQ(name, "lifecycle_transitions");
 }
 
-TEST(semantic_rule_cancel)
-{
+TEST(semantic_rule_cancel) {
     const char *name = asx_semantic_rule_name(ASX_SRULE_CANCEL_PROTOCOL);
     ASSERT_STR_EQ(name, "cancel_protocol");
 }
@@ -251,47 +226,34 @@ TEST(semantic_rule_cancel)
  * Digest comparison tests
  * ------------------------------------------------------------------- */
 
-TEST(digest_compare_same_passes)
-{
+TEST(digest_compare_same_passes) {
     asx_parity_result result;
-    int ok = asx_profile_digest_compare(
-        0x1234567890ABCDEFULL, ASX_PROFILE_ID_CORE,
-        0x1234567890ABCDEFULL, ASX_PROFILE_ID_HFT,
-        &result);
+    int ok = asx_profile_digest_compare(0x1234567890ABCDEFULL, ASX_PROFILE_ID_CORE,
+                                        0x1234567890ABCDEFULL, ASX_PROFILE_ID_HFT, &result);
     ASSERT_EQ(ok, 1);
     ASSERT_EQ(result.pass, 1);
     ASSERT_EQ((int)result.profile_a, (int)ASX_PROFILE_ID_CORE);
     ASSERT_EQ((int)result.profile_b, (int)ASX_PROFILE_ID_HFT);
 }
 
-TEST(digest_compare_different_fails)
-{
+TEST(digest_compare_different_fails) {
     asx_parity_result result;
-    int ok = asx_profile_digest_compare(
-        0xAAAAAAAAAAAAAAAAULL, ASX_PROFILE_ID_CORE,
-        0xBBBBBBBBBBBBBBBBULL, ASX_PROFILE_ID_AUTOMOTIVE,
-        &result);
+    int ok = asx_profile_digest_compare(0xAAAAAAAAAAAAAAAAULL, ASX_PROFILE_ID_CORE,
+                                        0xBBBBBBBBBBBBBBBBULL, ASX_PROFILE_ID_AUTOMOTIVE, &result);
     ASSERT_EQ(ok, 0);
     ASSERT_EQ(result.pass, 0);
     ASSERT_TRUE(result.digest_a != result.digest_b);
 }
 
-TEST(digest_compare_null_out_returns_zero)
-{
-    int ok = asx_profile_digest_compare(
-        0x1111ULL, ASX_PROFILE_ID_CORE,
-        0x1111ULL, ASX_PROFILE_ID_CORE,
-        NULL);
+TEST(digest_compare_null_out_returns_zero) {
+    int ok = asx_profile_digest_compare(0x1111ULL, ASX_PROFILE_ID_CORE, 0x1111ULL,
+                                        ASX_PROFILE_ID_CORE, NULL);
     ASSERT_EQ(ok, 0);
 }
 
-TEST(digest_compare_zero_digests_pass)
-{
+TEST(digest_compare_zero_digests_pass) {
     asx_parity_result result;
-    int ok = asx_profile_digest_compare(
-        0, ASX_PROFILE_ID_CORE,
-        0, ASX_PROFILE_ID_POSIX,
-        &result);
+    int ok = asx_profile_digest_compare(0, ASX_PROFILE_ID_CORE, 0, ASX_PROFILE_ID_POSIX, &result);
     ASSERT_EQ(ok, 1);
     ASSERT_EQ(result.pass, 1);
 }
@@ -300,15 +262,13 @@ TEST(digest_compare_zero_digests_pass)
  * Self-parity test (via telemetry)
  * ------------------------------------------------------------------- */
 
-static asx_status noop_poll(void *data, asx_task_id self)
-{
+static asx_status noop_poll(void *data, asx_task_id self) {
     (void)data;
     (void)self;
     return ASX_OK;
 }
 
-TEST(self_parity_after_scenario)
-{
+TEST(self_parity_after_scenario) {
     asx_region_id rid;
     asx_task_id tid;
     asx_budget budget;
@@ -339,8 +299,7 @@ TEST(self_parity_after_scenario)
     ASSERT_EQ(result.pass, 1);
 }
 
-TEST(self_parity_divergence_detected)
-{
+TEST(self_parity_divergence_detected) {
     asx_parity_result result;
     uint64_t wrong_digest;
 
@@ -357,10 +316,7 @@ TEST(self_parity_divergence_detected)
     ASSERT_EQ(result.pass, 0);
 }
 
-TEST(self_parity_null_out_returns_zero)
-{
-    ASSERT_EQ(asx_profile_check_parity(0, NULL), 0);
-}
+TEST(self_parity_null_out_returns_zero) { ASSERT_EQ(asx_profile_check_parity(0, NULL), 0); }
 
 /* -------------------------------------------------------------------
  * Resource class scaling tests (bd-j4m.2)
@@ -369,37 +325,30 @@ TEST(self_parity_null_out_returns_zero)
  * resource limits by class: R1 = half, R2 = baseline, R3 = double.
  * ------------------------------------------------------------------- */
 
-TEST(descriptor_for_class_null_returns_error)
-{
-    asx_status s = asx_profile_get_descriptor_for_class(
-        ASX_PROFILE_ID_CORE, ASX_CLASS_R2, NULL);
+TEST(descriptor_for_class_null_returns_error) {
+    asx_status s = asx_profile_get_descriptor_for_class(ASX_PROFILE_ID_CORE, ASX_CLASS_R2, NULL);
     ASSERT_EQ((int)s, (int)ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(descriptor_for_class_invalid_id_returns_error)
-{
+TEST(descriptor_for_class_invalid_id_returns_error) {
     asx_profile_descriptor desc;
-    asx_status s = asx_profile_get_descriptor_for_class(
-        (asx_profile_id)99, ASX_CLASS_R2, &desc);
+    asx_status s = asx_profile_get_descriptor_for_class((asx_profile_id)99, ASX_CLASS_R2, &desc);
     ASSERT_EQ((int)s, (int)ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(descriptor_for_class_invalid_class_returns_error)
-{
+TEST(descriptor_for_class_invalid_class_returns_error) {
     asx_profile_descriptor desc;
-    asx_status s = asx_profile_get_descriptor_for_class(
-        ASX_PROFILE_ID_CORE, (asx_resource_class)99, &desc);
+    asx_status s =
+        asx_profile_get_descriptor_for_class(ASX_PROFILE_ID_CORE, (asx_resource_class)99, &desc);
     ASSERT_EQ((int)s, (int)ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(descriptor_for_class_r2_matches_baseline)
-{
+TEST(descriptor_for_class_r2_matches_baseline) {
     asx_profile_descriptor base, scaled;
     asx_status s1, s2;
 
     s1 = asx_profile_get_descriptor(ASX_PROFILE_ID_CORE, &base);
-    s2 = asx_profile_get_descriptor_for_class(
-             ASX_PROFILE_ID_CORE, ASX_CLASS_R2, &scaled);
+    s2 = asx_profile_get_descriptor_for_class(ASX_PROFILE_ID_CORE, ASX_CLASS_R2, &scaled);
 
     ASSERT_EQ((int)s1, (int)ASX_OK);
     ASSERT_EQ((int)s2, (int)ASX_OK);
@@ -413,14 +362,12 @@ TEST(descriptor_for_class_r2_matches_baseline)
     ASSERT_EQ((int)scaled.resource_class, (int)ASX_CLASS_R2);
 }
 
-TEST(descriptor_for_class_r1_halves_limits)
-{
+TEST(descriptor_for_class_r1_halves_limits) {
     asx_profile_descriptor base, r1;
     asx_status s1, s2;
 
     s1 = asx_profile_get_descriptor(ASX_PROFILE_ID_CORE, &base);
-    s2 = asx_profile_get_descriptor_for_class(
-             ASX_PROFILE_ID_CORE, ASX_CLASS_R1, &r1);
+    s2 = asx_profile_get_descriptor_for_class(ASX_PROFILE_ID_CORE, ASX_CLASS_R1, &r1);
 
     ASSERT_EQ((int)s1, (int)ASX_OK);
     ASSERT_EQ((int)s2, (int)ASX_OK);
@@ -441,14 +388,12 @@ TEST(descriptor_for_class_r1_halves_limits)
     ASSERT_TRUE(r1.trace_capacity > 0);
 }
 
-TEST(descriptor_for_class_r3_doubles_limits)
-{
+TEST(descriptor_for_class_r3_doubles_limits) {
     asx_profile_descriptor base, r3;
     asx_status s1, s2;
 
     s1 = asx_profile_get_descriptor(ASX_PROFILE_ID_CORE, &base);
-    s2 = asx_profile_get_descriptor_for_class(
-             ASX_PROFILE_ID_CORE, ASX_CLASS_R3, &r3);
+    s2 = asx_profile_get_descriptor_for_class(ASX_PROFILE_ID_CORE, ASX_CLASS_R3, &r3);
 
     ASSERT_EQ((int)s1, (int)ASX_OK);
     ASSERT_EQ((int)s2, (int)ASX_OK);
@@ -462,13 +407,12 @@ TEST(descriptor_for_class_r3_doubles_limits)
     ASSERT_EQ((int)r3.resource_class, (int)ASX_CLASS_R3);
 }
 
-TEST(descriptor_for_class_preserves_non_limit_fields)
-{
+TEST(descriptor_for_class_preserves_non_limit_fields) {
     asx_profile_descriptor base, r1;
 
     ASSERT_EQ((int)asx_profile_get_descriptor(ASX_PROFILE_ID_HFT, &base), (int)ASX_OK);
-    ASSERT_EQ((int)asx_profile_get_descriptor_for_class(
-        ASX_PROFILE_ID_HFT, ASX_CLASS_R1, &r1), (int)ASX_OK);
+    ASSERT_EQ((int)asx_profile_get_descriptor_for_class(ASX_PROFILE_ID_HFT, ASX_CLASS_R1, &r1),
+              (int)ASX_OK);
 
     /* Resource class scaling must not change non-limit fields */
     ASSERT_EQ((int)r1.id, (int)base.id);
@@ -478,14 +422,13 @@ TEST(descriptor_for_class_preserves_non_limit_fields)
     ASSERT_EQ(r1.allocator_sealable, base.allocator_sealable);
 }
 
-TEST(descriptor_for_class_embedded_router_r1)
-{
+TEST(descriptor_for_class_embedded_router_r1) {
     asx_profile_descriptor base, r1;
 
-    ASSERT_EQ((int)asx_profile_get_descriptor(
-        ASX_PROFILE_ID_EMBEDDED_ROUTER, &base), (int)ASX_OK);
-    ASSERT_EQ((int)asx_profile_get_descriptor_for_class(
-        ASX_PROFILE_ID_EMBEDDED_ROUTER, ASX_CLASS_R1, &r1), (int)ASX_OK);
+    ASSERT_EQ((int)asx_profile_get_descriptor(ASX_PROFILE_ID_EMBEDDED_ROUTER, &base), (int)ASX_OK);
+    ASSERT_EQ((int)asx_profile_get_descriptor_for_class(ASX_PROFILE_ID_EMBEDDED_ROUTER,
+                                                        ASX_CLASS_R1, &r1),
+              (int)ASX_OK);
 
     /* Embedded router R1: very constrained but all limits > 0 */
     ASSERT_EQ(r1.max_regions, base.max_regions / 2);
@@ -496,13 +439,11 @@ TEST(descriptor_for_class_embedded_router_r1)
     ASSERT_EQ(r1.allocator_sealable, 1);
 }
 
-TEST(descriptor_for_class_all_profiles_r1_nonzero)
-{
+TEST(descriptor_for_class_all_profiles_r1_nonzero) {
     int i;
     for (i = 0; i < (int)ASX_PROFILE_ID_COUNT; i++) {
         asx_profile_descriptor desc;
-        asx_status s = asx_profile_get_descriptor_for_class(
-            (asx_profile_id)i, ASX_CLASS_R1, &desc);
+        asx_status s = asx_profile_get_descriptor_for_class((asx_profile_id)i, ASX_CLASS_R1, &desc);
         ASSERT_EQ((int)s, (int)ASX_OK);
         /* Even at R1, no limit may be zero */
         ASSERT_TRUE(desc.max_regions > 0);
@@ -513,23 +454,13 @@ TEST(descriptor_for_class_all_profiles_r1_nonzero)
     }
 }
 
-TEST(resource_class_name_r1)
-{
-    ASSERT_STR_EQ(asx_resource_class_name(ASX_CLASS_R1), "R1");
-}
+TEST(resource_class_name_r1) { ASSERT_STR_EQ(asx_resource_class_name(ASX_CLASS_R1), "R1"); }
 
-TEST(resource_class_name_r2)
-{
-    ASSERT_STR_EQ(asx_resource_class_name(ASX_CLASS_R2), "R2");
-}
+TEST(resource_class_name_r2) { ASSERT_STR_EQ(asx_resource_class_name(ASX_CLASS_R2), "R2"); }
 
-TEST(resource_class_name_r3)
-{
-    ASSERT_STR_EQ(asx_resource_class_name(ASX_CLASS_R3), "R3");
-}
+TEST(resource_class_name_r3) { ASSERT_STR_EQ(asx_resource_class_name(ASX_CLASS_R3), "R3"); }
 
-TEST(resource_class_name_out_of_range)
-{
+TEST(resource_class_name_out_of_range) {
     ASSERT_STR_EQ(asx_resource_class_name((asx_resource_class)99), "UNKNOWN");
 }
 
@@ -539,21 +470,18 @@ TEST(resource_class_name_out_of_range)
  * Verifies per-resource-class trace defaults.
  * ------------------------------------------------------------------- */
 
-TEST(trace_config_null_returns_error)
-{
+TEST(trace_config_null_returns_error) {
     asx_status s = asx_trace_config_init(NULL, ASX_CLASS_R2);
     ASSERT_EQ((int)s, (int)ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(trace_config_invalid_class_returns_error)
-{
+TEST(trace_config_invalid_class_returns_error) {
     asx_trace_config cfg;
     asx_status s = asx_trace_config_init(&cfg, (asx_resource_class)99);
     ASSERT_EQ((int)s, (int)ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(trace_config_r1_defaults)
-{
+TEST(trace_config_r1_defaults) {
     asx_trace_config cfg;
     ASSERT_EQ((int)asx_trace_config_init(&cfg, ASX_CLASS_R1), (int)ASX_OK);
     ASSERT_EQ((int)cfg.mode, (int)ASX_TRACE_MODE_RAM_RING);
@@ -562,8 +490,7 @@ TEST(trace_config_r1_defaults)
     ASSERT_EQ(cfg.flush_interval_ms, (uint32_t)0);
 }
 
-TEST(trace_config_r2_defaults)
-{
+TEST(trace_config_r2_defaults) {
     asx_trace_config cfg;
     ASSERT_EQ((int)asx_trace_config_init(&cfg, ASX_CLASS_R2), (int)ASX_OK);
     ASSERT_EQ((int)cfg.mode, (int)ASX_TRACE_MODE_RAM_RING);
@@ -572,8 +499,7 @@ TEST(trace_config_r2_defaults)
     ASSERT_EQ(cfg.flush_interval_ms, (uint32_t)0);
 }
 
-TEST(trace_config_r3_defaults)
-{
+TEST(trace_config_r3_defaults) {
     asx_trace_config cfg;
     ASSERT_EQ((int)asx_trace_config_init(&cfg, ASX_CLASS_R3), (int)ASX_OK);
     ASSERT_EQ((int)cfg.mode, (int)ASX_TRACE_MODE_RAM_RING);
@@ -582,8 +508,7 @@ TEST(trace_config_r3_defaults)
     ASSERT_EQ(cfg.flush_interval_ms, (uint32_t)0);
 }
 
-TEST(trace_config_r1_smallest_ring)
-{
+TEST(trace_config_r1_smallest_ring) {
     asx_trace_config r1, r2, r3;
 
     ASSERT_EQ((int)asx_trace_config_init(&r1, ASX_CLASS_R1), (int)ASX_OK);
@@ -595,8 +520,7 @@ TEST(trace_config_r1_smallest_ring)
     ASSERT_TRUE(r2.ring_capacity < r3.ring_capacity);
 }
 
-TEST(trace_config_all_classes_ram_ring)
-{
+TEST(trace_config_all_classes_ram_ring) {
     int i;
     for (i = 0; i < ASX_CLASS_COUNT; i++) {
         asx_trace_config cfg;
@@ -616,8 +540,7 @@ TEST(trace_config_all_classes_ram_ring)
  * compile-time limits.
  * ------------------------------------------------------------------- */
 
-TEST(profiles_differ_on_wait_policy)
-{
+TEST(profiles_differ_on_wait_policy) {
     asx_profile_descriptor core, hft, auto_desc;
 
     ASSERT_EQ((int)asx_profile_get_descriptor(ASX_PROFILE_ID_CORE, &core), (int)ASX_OK);
@@ -629,12 +552,12 @@ TEST(profiles_differ_on_wait_policy)
     ASSERT_TRUE((int)hft.default_wait != (int)auto_desc.default_wait);
 }
 
-TEST(profiles_share_runtime_capacity_limits)
-{
+TEST(profiles_share_runtime_capacity_limits) {
     asx_profile_descriptor core, freestanding;
 
     ASSERT_EQ((int)asx_profile_get_descriptor(ASX_PROFILE_ID_CORE, &core), (int)ASX_OK);
-    ASSERT_EQ((int)asx_profile_get_descriptor(ASX_PROFILE_ID_FREESTANDING, &freestanding), (int)ASX_OK);
+    ASSERT_EQ((int)asx_profile_get_descriptor(ASX_PROFILE_ID_FREESTANDING, &freestanding),
+              (int)ASX_OK);
 
     ASSERT_EQ(freestanding.max_regions, core.max_regions);
     ASSERT_EQ(freestanding.max_tasks, core.max_tasks);
@@ -642,8 +565,7 @@ TEST(profiles_share_runtime_capacity_limits)
     ASSERT_EQ(freestanding.max_timers, core.max_timers);
 }
 
-TEST(all_profiles_share_semantic_rule_count)
-{
+TEST(all_profiles_share_semantic_rule_count) {
     /* Semantic rules are universal — count is the same regardless
      * of which profile is active. */
     uint32_t count = asx_profile_semantic_rule_count();
@@ -654,8 +576,7 @@ TEST(all_profiles_share_semantic_rule_count)
  * Runner
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     /* Identity */
     RUN_TEST(profile_active_is_core);
     RUN_TEST(profile_name_all_valid);

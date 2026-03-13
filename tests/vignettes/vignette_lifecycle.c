@@ -22,8 +22,7 @@
  * ------------------------------------------------------------------- */
 
 /* A simple task that completes immediately. */
-static asx_status poll_hello(void *ud, asx_task_id self)
-{
+static asx_status poll_hello(void *ud, asx_task_id self) {
     (void)ud;
     (void)self;
     printf("  task polled: completing immediately\n");
@@ -33,11 +32,10 @@ static asx_status poll_hello(void *ud, asx_task_id self)
 /* A task that takes 3 polls to complete using the coroutine macros. */
 typedef struct {
     asx_co_state co;
-    int          step;
+    int step;
 } multi_step_state;
 
-static asx_status poll_multi_step(void *ud, asx_task_id self)
-{
+static asx_status poll_multi_step(void *ud, asx_task_id self) {
     multi_step_state *s = (multi_step_state *)ud;
     (void)self;
 
@@ -64,8 +62,7 @@ static asx_status poll_multi_step(void *ud, asx_task_id self)
 /* -------------------------------------------------------------------
  * Scenario 1: Minimal lifecycle — open region, spawn task, drain
  * ------------------------------------------------------------------- */
-static int scenario_minimal(void)
-{
+static int scenario_minimal(void) {
     asx_status st;
     asx_region_id region;
     asx_task_id task;
@@ -117,8 +114,7 @@ static int scenario_minimal(void)
 /* -------------------------------------------------------------------
  * Scenario 2: Multi-task with captured state
  * ------------------------------------------------------------------- */
-static int scenario_captured_state(void)
-{
+static int scenario_captured_state(void) {
     asx_status st;
     asx_region_id region;
     asx_task_id t1, t2;
@@ -141,10 +137,9 @@ static int scenario_captured_state(void)
      * Also, the out_state is void** which requires a cast — unavoidable
      * in C but still a minor paper cut.
      */
-    st = asx_task_spawn_captured(region, poll_multi_step,
-                                  (uint32_t)sizeof(multi_step_state),
-                                  NULL,   /* no destructor */
-                                  &t1, &state_ptr);
+    st = asx_task_spawn_captured(region, poll_multi_step, (uint32_t)sizeof(multi_step_state),
+                                 NULL, /* no destructor */
+                                 &t1, &state_ptr);
     if (st != ASX_OK) {
         printf("  FAIL: spawn_captured returned %s\n", asx_status_str(st));
         return 1;
@@ -193,8 +188,7 @@ static int scenario_captured_state(void)
 /* -------------------------------------------------------------------
  * Scenario 3: Quiescence check (manual path)
  * ------------------------------------------------------------------- */
-static int scenario_quiescence_manual(void)
-{
+static int scenario_quiescence_manual(void) {
     asx_status st;
     asx_region_id region;
     asx_task_id task;
@@ -255,8 +249,7 @@ static int scenario_quiescence_manual(void)
 /* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
-int main(void)
-{
+int main(void) {
     int failures = 0;
 
     printf("=== vignette: lifecycle ===\n\n");

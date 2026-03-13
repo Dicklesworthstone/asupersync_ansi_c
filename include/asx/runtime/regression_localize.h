@@ -28,13 +28,13 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 
 typedef enum {
-    ASX_SUBSYS_SCHEDULER    = 0,
-    ASX_SUBSYS_LIFECYCLE    = 1,
-    ASX_SUBSYS_OBLIGATION   = 2,
-    ASX_SUBSYS_CHANNEL      = 3,
-    ASX_SUBSYS_TIMER        = 4,
-    ASX_SUBSYS_CANCEL       = 5,
-    ASX_SUBSYS_UNKNOWN      = 6
+    ASX_SUBSYS_SCHEDULER = 0,
+    ASX_SUBSYS_LIFECYCLE = 1,
+    ASX_SUBSYS_OBLIGATION = 2,
+    ASX_SUBSYS_CHANNEL = 3,
+    ASX_SUBSYS_TIMER = 4,
+    ASX_SUBSYS_CANCEL = 5,
+    ASX_SUBSYS_UNKNOWN = 6
 } asx_subsystem_id;
 
 #define ASX_SUBSYS_COUNT 7u
@@ -44,14 +44,14 @@ typedef enum {
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    uint32_t event_count;    /* trace events attributed to this subsystem */
-    uint64_t total_aux;      /* sum of aux payloads (subsystem-specific) */
+    uint32_t event_count; /* trace events attributed to this subsystem */
+    uint64_t total_aux;   /* sum of aux payloads (subsystem-specific) */
 } asx_subsys_counters;
 
 typedef struct {
     asx_subsys_counters subsystems[ASX_SUBSYS_COUNT];
-    uint32_t            total_events;
-    uint64_t            trace_digest;
+    uint32_t total_events;
+    uint64_t trace_digest;
 } asx_perf_snapshot;
 
 /* ------------------------------------------------------------------ */
@@ -62,17 +62,17 @@ typedef struct {
 
 typedef struct {
     asx_subsystem_id id;
-    int32_t          event_delta;      /* positive = more events than baseline */
-    int64_t          aux_delta;        /* positive = higher aux sum */
-    uint32_t         blame_score;      /* 0-100, higher = more likely cause */
+    int32_t event_delta;  /* positive = more events than baseline */
+    int64_t aux_delta;    /* positive = higher aux sum */
+    uint32_t blame_score; /* 0-100, higher = more likely cause */
 } asx_regression_suspect;
 
 typedef struct {
-    int                     regressed;  /* 1 if regression detected */
-    uint32_t                suspect_count;
-    asx_regression_suspect  suspects[ASX_MAX_SUSPECTS];
-    uint32_t                divergence_index; /* first divergent trace event */
-    asx_replay_result_kind  divergence_kind;
+    int regressed; /* 1 if regression detected */
+    uint32_t suspect_count;
+    asx_regression_suspect suspects[ASX_MAX_SUSPECTS];
+    uint32_t divergence_index; /* first divergent trace event */
+    asx_replay_result_kind divergence_kind;
 } asx_regression_report;
 
 /* ------------------------------------------------------------------ */
@@ -80,24 +80,24 @@ typedef struct {
 /* ------------------------------------------------------------------ */
 
 typedef enum {
-    ASX_CB_CLOSED     = 0,  /* Normal: all requests pass through */
-    ASX_CB_OPEN       = 1,  /* Tripped: reject/shed until recovery */
-    ASX_CB_HALF_OPEN  = 2   /* Probing: allow limited traffic */
+    ASX_CB_CLOSED = 0,   /* Normal: all requests pass through */
+    ASX_CB_OPEN = 1,     /* Tripped: reject/shed until recovery */
+    ASX_CB_HALF_OPEN = 2 /* Probing: allow limited traffic */
 } asx_cb_state;
 
 typedef struct {
-    uint32_t failure_threshold;   /* failures before trip (e.g., 3) */
-    uint32_t recovery_probes;    /* successful probes to close (e.g., 2) */
-    uint32_t cooldown_events;    /* events to wait in OPEN before HALF_OPEN */
+    uint32_t failure_threshold; /* failures before trip (e.g., 3) */
+    uint32_t recovery_probes;   /* successful probes to close (e.g., 2) */
+    uint32_t cooldown_events;   /* events to wait in OPEN before HALF_OPEN */
 } asx_cb_config;
 
 typedef struct {
     asx_cb_state state;
-    uint32_t     consecutive_failures;
-    uint32_t     consecutive_successes;  /* in HALF_OPEN only */
-    uint32_t     events_since_trip;
-    uint32_t     total_trips;
-    uint32_t     total_recoveries;
+    uint32_t consecutive_failures;
+    uint32_t consecutive_successes; /* in HALF_OPEN only */
+    uint32_t events_since_trip;
+    uint32_t total_trips;
+    uint32_t total_recoveries;
 } asx_cb_context;
 
 /* ------------------------------------------------------------------ */
@@ -112,9 +112,9 @@ ASX_API void asx_perf_snapshot_build(asx_perf_snapshot *snap);
  * baseline = known-good snapshot, current = potentially regressed.
  * Optionally uses replay divergence info if available. */
 ASX_API void asx_regression_localize(const asx_perf_snapshot *baseline,
-                                      const asx_perf_snapshot *current,
-                                      const asx_replay_result *replay,
-                                      asx_regression_report *report);
+                                     const asx_perf_snapshot *current,
+                                     const asx_replay_result *replay,
+                                     asx_regression_report *report);
 
 /* Classify a trace event kind into a subsystem. */
 ASX_API asx_subsystem_id asx_trace_event_subsystem(asx_trace_event_kind kind);

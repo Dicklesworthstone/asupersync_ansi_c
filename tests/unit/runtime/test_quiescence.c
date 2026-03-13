@@ -7,42 +7,39 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../../../src/runtime/runtime_internal.h"
 #include "../../test_harness.h"
 #include <asx/asx.h>
 #include <asx/core/cleanup.h>
 #include <asx/core/ghost.h>
 #include <asx/runtime/trace.h>
-#include "../../../src/runtime/runtime_internal.h"
 
 /* Suppress warn_unused_result for intentionally-ignored scheduler calls. */
-#define SCHED_RUN_IGNORE(rid, bud) \
-    do { asx_status s_ = asx_scheduler_run((rid), (bud)); (void)s_; } while (0)
+#define SCHED_RUN_IGNORE(rid, bud)                                                                 \
+    do {                                                                                           \
+        asx_status s_ = asx_scheduler_run((rid), (bud));                                           \
+        (void)s_;                                                                                  \
+    } while (0)
 
-static asx_status poll_pending(void *data, asx_task_id self)
-{
+static asx_status poll_pending(void *data, asx_task_id self) {
     (void)data;
     (void)self;
     return ASX_E_PENDING;
 }
 
-static asx_status poll_checkpoint_then_complete(void *data, asx_task_id self)
-{
+static asx_status poll_checkpoint_then_complete(void *data, asx_task_id self) {
     asx_checkpoint_result cr;
     (void)data;
-    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) {
-        return ASX_OK;
-    }
+    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) { return ASX_OK; }
     return ASX_E_PENDING;
 }
 
-static void cleanup_mark(void *ctx)
-{
+static void cleanup_mark(void *ctx) {
     int *flag = (int *)ctx;
     *flag += 1;
 }
 
-TEST(quiescence_closed_region_with_live_tasks_reports_tasks_live)
-{
+TEST(quiescence_closed_region_with_live_tasks_reports_tasks_live) {
     asx_region_id rid;
     asx_region_slot *region = NULL;
 
@@ -57,8 +54,7 @@ TEST(quiescence_closed_region_with_live_tasks_reports_tasks_live)
     ASSERT_EQ(asx_quiescence_check(rid), ASX_E_QUIESCENCE_TASKS_LIVE);
 }
 
-TEST(quiescence_closed_region_with_unresolved_obligation_reports_error)
-{
+TEST(quiescence_closed_region_with_unresolved_obligation_reports_error) {
     asx_region_id rid;
     asx_obligation_id oid;
     asx_region_slot *region = NULL;
@@ -75,8 +71,7 @@ TEST(quiescence_closed_region_with_unresolved_obligation_reports_error)
     ASSERT_EQ(asx_quiescence_check(rid), ASX_E_OBLIGATIONS_UNRESOLVED);
 }
 
-TEST(region_drain_advances_draining_region_to_closed_and_runs_cleanup)
-{
+TEST(region_drain_advances_draining_region_to_closed_and_runs_cleanup) {
     asx_region_id rid;
     asx_region_slot *region = NULL;
     asx_cleanup_handle handle = ASX_CLEANUP_INVALID;
@@ -107,8 +102,7 @@ TEST(region_drain_advances_draining_region_to_closed_and_runs_cleanup)
     ASSERT_EQ(ev.entity_id, rid);
 }
 
-TEST(region_drain_recancels_uncancelled_tasks_before_scheduler_run)
-{
+TEST(region_drain_recancels_uncancelled_tasks_before_scheduler_run) {
     asx_region_id rid;
     asx_task_id tid;
     asx_task_state state;
@@ -131,8 +125,7 @@ TEST(region_drain_recancels_uncancelled_tasks_before_scheduler_run)
     ASSERT_EQ(asx_quiescence_check(rid), ASX_OK);
 }
 
-TEST(region_drain_budget_exhaustion_leaves_region_closing)
-{
+TEST(region_drain_budget_exhaustion_leaves_region_closing) {
     asx_region_id rid;
     asx_task_id tid;
     asx_region_slot *region = NULL;
@@ -152,8 +145,7 @@ TEST(region_drain_budget_exhaustion_leaves_region_closing)
 
 /* --- New tests covering additional branches --- */
 
-TEST(quiescence_invalid_handle_returns_not_found)
-{
+TEST(quiescence_invalid_handle_returns_not_found) {
     asx_region_id bad = 0xDEADBEEFu;
 
     asx_runtime_reset();
@@ -161,8 +153,7 @@ TEST(quiescence_invalid_handle_returns_not_found)
     ASSERT_EQ(asx_quiescence_check(bad), ASX_E_NOT_FOUND);
 }
 
-TEST(quiescence_open_region_returns_not_reached)
-{
+TEST(quiescence_open_region_returns_not_reached) {
     asx_region_id rid;
 
     asx_runtime_reset();
@@ -171,8 +162,7 @@ TEST(quiescence_open_region_returns_not_reached)
     ASSERT_EQ(asx_quiescence_check(rid), ASX_E_QUIESCENCE_NOT_REACHED);
 }
 
-TEST(quiescence_success_after_drain_no_tasks)
-{
+TEST(quiescence_success_after_drain_no_tasks) {
     asx_region_id rid;
     asx_region_slot *region = NULL;
 
@@ -187,8 +177,7 @@ TEST(quiescence_success_after_drain_no_tasks)
     ASSERT_EQ(asx_quiescence_check(rid), ASX_OK);
 }
 
-TEST(quiescence_success_with_committed_obligation)
-{
+TEST(quiescence_success_with_committed_obligation) {
     asx_region_id rid;
     asx_obligation_id oid;
     asx_region_slot *region = NULL;
@@ -206,8 +195,7 @@ TEST(quiescence_success_with_committed_obligation)
     ASSERT_EQ(asx_quiescence_check(rid), ASX_OK);
 }
 
-TEST(quiescence_success_with_aborted_obligation)
-{
+TEST(quiescence_success_with_aborted_obligation) {
     asx_region_id rid;
     asx_obligation_id oid;
     asx_region_slot *region = NULL;
@@ -225,8 +213,7 @@ TEST(quiescence_success_with_aborted_obligation)
     ASSERT_EQ(asx_quiescence_check(rid), ASX_OK);
 }
 
-TEST(drain_null_budget_returns_invalid_argument)
-{
+TEST(drain_null_budget_returns_invalid_argument) {
     asx_region_id rid;
 
     asx_runtime_reset();
@@ -235,8 +222,7 @@ TEST(drain_null_budget_returns_invalid_argument)
     ASSERT_EQ(asx_region_drain(rid, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(drain_invalid_handle_returns_not_found)
-{
+TEST(drain_invalid_handle_returns_not_found) {
     asx_region_id bad = 0xDEADBEEFu;
     asx_budget budget;
 
@@ -246,8 +232,7 @@ TEST(drain_invalid_handle_returns_not_found)
     ASSERT_EQ(asx_region_drain(bad, &budget), ASX_E_NOT_FOUND);
 }
 
-TEST(drain_multiple_tasks_all_complete)
-{
+TEST(drain_multiple_tasks_all_complete) {
     asx_region_id rid;
     asx_task_id t1, t2, t3;
     asx_task_state state;
@@ -277,8 +262,7 @@ TEST(drain_multiple_tasks_all_complete)
     ASSERT_EQ(asx_quiescence_check(rid), ASX_OK);
 }
 
-TEST(drain_cleanup_lifo_multiple)
-{
+TEST(drain_cleanup_lifo_multiple) {
     asx_region_id rid;
     asx_region_slot *region = NULL;
     asx_cleanup_handle h1 = ASX_CLEANUP_INVALID;
@@ -306,8 +290,272 @@ TEST(drain_cleanup_lifo_multiple)
     ASSERT_EQ(c3, 1);
 }
 
-TEST(drain_already_closed_is_idempotent)
-{
+/* --- Drain progress snapshot tests (bd-1eqo.5.2) --- */
+
+TEST(drain_progress_null_out_returns_invalid_argument) {
+    asx_region_id rid;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_drain_progress(rid, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(drain_progress_invalid_handle_returns_not_found) {
+    asx_region_id bad = 0xDEADBEEFu;
+    asx_drain_progress prog;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_drain_progress(bad, &prog), ASX_E_NOT_FOUND);
+}
+
+TEST(drain_progress_open_region_with_tasks) {
+    asx_region_id rid;
+    asx_task_id t1, t2;
+    asx_drain_progress prog;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t2), ASX_OK);
+
+    ASSERT_EQ(asx_region_drain_progress(rid, &prog), ASX_OK);
+    ASSERT_EQ(prog.region_state, ASX_REGION_OPEN);
+    ASSERT_EQ(prog.tasks_total, 2u);
+    ASSERT_EQ(prog.tasks_live, 2u);
+    ASSERT_EQ(prog.tasks_completed, 0u);
+    ASSERT_EQ(prog.tasks_cancelled, 0u);
+    ASSERT_EQ(prog.obligations_total, 0u);
+    ASSERT_EQ(prog.poisoned, 0);
+}
+
+TEST(drain_progress_with_obligations) {
+    asx_region_id rid;
+    asx_obligation_id o1, o2, o3;
+    asx_drain_progress prog;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(rid, &o1), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(rid, &o2), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(rid, &o3), ASX_OK);
+    ASSERT_EQ(asx_obligation_commit(o1), ASX_OK);
+
+    ASSERT_EQ(asx_region_drain_progress(rid, &prog), ASX_OK);
+    ASSERT_EQ(prog.obligations_total, 3u);
+    ASSERT_EQ(prog.obligations_reserved, 2u);
+    ASSERT_EQ(prog.obligations_resolved, 1u);
+}
+
+TEST(drain_progress_after_partial_drain) {
+    asx_region_id rid;
+    asx_task_id t1, t2;
+    asx_budget budget;
+    asx_drain_progress prog;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t2), ASX_OK);
+
+    /* Prime both tasks */
+    budget = asx_budget_from_polls(2);
+    SCHED_RUN_IGNORE(rid, &budget);
+
+    /* Start drain — t1 will complete (checkpoint-aware), t2 stays pending */
+    budget = asx_budget_from_polls(8);
+    {
+        asx_status drain_st = asx_region_drain(rid, &budget);
+        (void)drain_st;
+    }
+
+    ASSERT_EQ(asx_region_drain_progress(rid, &prog), ASX_OK);
+    /* t1 completed, t2 still live with cancel_pending */
+    ASSERT_TRUE(prog.tasks_completed > 0u);
+    ASSERT_TRUE(prog.tasks_total >= prog.tasks_live + prog.tasks_completed);
+}
+
+TEST(drain_progress_cleanup_drained_flag) {
+    asx_region_id rid;
+    asx_region_slot *region = NULL;
+    asx_cleanup_handle h = ASX_CLEANUP_INVALID;
+    asx_drain_progress prog;
+    int cleaned = 0;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    asx_cleanup_init(&region->cleanup);
+    ASSERT_EQ(asx_cleanup_push(&region->cleanup, cleanup_mark, &cleaned, &h), ASX_OK);
+
+    /* Before drain: cleanup not drained */
+    ASSERT_EQ(asx_region_drain_progress(rid, &prog), ASX_OK);
+    ASSERT_EQ(prog.cleanup_drained, 0);
+
+    /* Pop cleanup manually */
+    asx_cleanup_drain(&region->cleanup);
+
+    ASSERT_EQ(asx_region_drain_progress(rid, &prog), ASX_OK);
+    ASSERT_EQ(prog.cleanup_drained, 1);
+    ASSERT_EQ(cleaned, 1);
+}
+
+/* --- Quiescence check detailed tests (bd-1eqo.5.2) --- */
+
+TEST(quiescence_detailed_null_out_returns_invalid_argument) {
+    asx_region_id rid;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_quiescence_check_detailed(rid, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(quiescence_detailed_invalid_handle_returns_not_found) {
+    asx_region_id bad = 0xDEADBEEFu;
+    asx_quiescence_report report;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_quiescence_check_detailed(bad, &report), ASX_E_NOT_FOUND);
+}
+
+TEST(quiescence_detailed_fully_quiescent) {
+    asx_region_id rid;
+    asx_region_slot *region = NULL;
+    asx_quiescence_report report;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    region->state = ASX_REGION_CLOSED;
+    region->task_count = 0;
+    asx_cleanup_init(&region->cleanup);
+
+    ASSERT_EQ(asx_quiescence_check_detailed(rid, &report), ASX_OK);
+    ASSERT_EQ(report.quiescent, 1);
+    ASSERT_EQ(report.q1_tasks_complete, 1);
+    ASSERT_EQ(report.q2_children_closed, 1);
+    ASSERT_EQ(report.q3_obligations_resolved, 1);
+    ASSERT_EQ(report.q4_cleanup_drained, 1);
+    ASSERT_EQ(report.region_state, ASX_REGION_CLOSED);
+}
+
+TEST(quiescence_detailed_live_tasks_q1_fails) {
+    asx_region_id rid;
+    asx_region_slot *region = NULL;
+    asx_quiescence_report report;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    region->state = ASX_REGION_CLOSED;
+    region->task_count = 3;
+    asx_cleanup_init(&region->cleanup);
+
+    ASSERT_EQ(asx_quiescence_check_detailed(rid, &report), ASX_OK);
+    ASSERT_EQ(report.quiescent, 0);
+    ASSERT_EQ(report.q1_tasks_complete, 0);
+    ASSERT_EQ(report.q2_children_closed, 1);
+    ASSERT_EQ(report.q3_obligations_resolved, 1);
+    ASSERT_EQ(report.q4_cleanup_drained, 1);
+}
+
+TEST(quiescence_detailed_unresolved_obligations_q3_fails) {
+    asx_region_id rid;
+    asx_obligation_id oid;
+    asx_region_slot *region = NULL;
+    asx_quiescence_report report;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    region->state = ASX_REGION_CLOSED;
+    region->task_count = 0;
+    asx_cleanup_init(&region->cleanup);
+
+    ASSERT_EQ(asx_quiescence_check_detailed(rid, &report), ASX_OK);
+    ASSERT_EQ(report.quiescent, 0);
+    ASSERT_EQ(report.q1_tasks_complete, 1);
+    ASSERT_EQ(report.q3_obligations_resolved, 0);
+    ASSERT_EQ(report.progress.obligations_reserved, 1u);
+}
+
+TEST(quiescence_detailed_undrained_cleanup_q4_fails) {
+    asx_region_id rid;
+    asx_region_slot *region = NULL;
+    asx_cleanup_handle h = ASX_CLEANUP_INVALID;
+    asx_quiescence_report report;
+    int cleaned = 0;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    region->state = ASX_REGION_CLOSED;
+    region->task_count = 0;
+    asx_cleanup_init(&region->cleanup);
+    ASSERT_EQ(asx_cleanup_push(&region->cleanup, cleanup_mark, &cleaned, &h), ASX_OK);
+
+    ASSERT_EQ(asx_quiescence_check_detailed(rid, &report), ASX_OK);
+    ASSERT_EQ(report.quiescent, 0);
+    ASSERT_EQ(report.q1_tasks_complete, 1);
+    ASSERT_EQ(report.q4_cleanup_drained, 0);
+}
+
+TEST(quiescence_detailed_not_closed_not_quiescent) {
+    asx_region_id rid;
+    asx_quiescence_report report;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+
+    ASSERT_EQ(asx_quiescence_check_detailed(rid, &report), ASX_OK);
+    ASSERT_EQ(report.quiescent, 0);
+    ASSERT_EQ(report.region_state, ASX_REGION_OPEN);
+}
+
+TEST(drain_progress_monotonicity_during_drain) {
+    asx_region_id rid;
+    asx_task_id t1, t2, t3;
+    asx_budget budget;
+    asx_drain_progress before, after;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &t2), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &t3), ASX_OK);
+
+    /* Prime tasks */
+    budget = asx_budget_from_polls(3);
+    SCHED_RUN_IGNORE(rid, &budget);
+
+    ASSERT_EQ(asx_region_drain_progress(rid, &before), ASX_OK);
+
+    /* Full drain */
+    budget = asx_budget_from_polls(64);
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(asx_region_drain_progress(rid, &after), ASX_OK);
+
+    /* Monotonicity: tasks_live decreased, tasks_completed increased */
+    ASSERT_TRUE(after.tasks_live <= before.tasks_live);
+    ASSERT_TRUE(after.tasks_completed >= before.tasks_completed);
+}
+
+TEST(drain_already_closed_is_idempotent) {
     asx_region_id rid;
     asx_region_slot *region = NULL;
     asx_budget budget;
@@ -325,8 +573,7 @@ TEST(drain_already_closed_is_idempotent)
     ASSERT_EQ(region->state, ASX_REGION_CLOSED);
 }
 
-TEST(drain_full_lifecycle_tasks_obligations_cleanup)
-{
+TEST(drain_full_lifecycle_tasks_obligations_cleanup) {
     asx_region_id rid;
     asx_task_id tid;
     asx_obligation_id oid;
@@ -356,26 +603,69 @@ TEST(drain_full_lifecycle_tasks_obligations_cleanup)
     ASSERT_EQ(asx_quiescence_check(rid), ASX_OK);
 }
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_quiescence ===\n");
 
-    asx_runtime_reset(); RUN_TEST(quiescence_closed_region_with_live_tasks_reports_tasks_live);
-    asx_runtime_reset(); RUN_TEST(quiescence_closed_region_with_unresolved_obligation_reports_error);
-    asx_runtime_reset(); RUN_TEST(region_drain_advances_draining_region_to_closed_and_runs_cleanup);
-    asx_runtime_reset(); RUN_TEST(region_drain_recancels_uncancelled_tasks_before_scheduler_run);
-    asx_runtime_reset(); RUN_TEST(region_drain_budget_exhaustion_leaves_region_closing);
-    asx_runtime_reset(); RUN_TEST(quiescence_invalid_handle_returns_not_found);
-    asx_runtime_reset(); RUN_TEST(quiescence_open_region_returns_not_reached);
-    asx_runtime_reset(); RUN_TEST(quiescence_success_after_drain_no_tasks);
-    asx_runtime_reset(); RUN_TEST(quiescence_success_with_committed_obligation);
-    asx_runtime_reset(); RUN_TEST(quiescence_success_with_aborted_obligation);
-    asx_runtime_reset(); RUN_TEST(drain_null_budget_returns_invalid_argument);
-    asx_runtime_reset(); RUN_TEST(drain_invalid_handle_returns_not_found);
-    asx_runtime_reset(); RUN_TEST(drain_multiple_tasks_all_complete);
-    asx_runtime_reset(); RUN_TEST(drain_cleanup_lifo_multiple);
-    asx_runtime_reset(); RUN_TEST(drain_already_closed_is_idempotent);
-    asx_runtime_reset(); RUN_TEST(drain_full_lifecycle_tasks_obligations_cleanup);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_closed_region_with_live_tasks_reports_tasks_live);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_closed_region_with_unresolved_obligation_reports_error);
+    asx_runtime_reset();
+    RUN_TEST(region_drain_advances_draining_region_to_closed_and_runs_cleanup);
+    asx_runtime_reset();
+    RUN_TEST(region_drain_recancels_uncancelled_tasks_before_scheduler_run);
+    asx_runtime_reset();
+    RUN_TEST(region_drain_budget_exhaustion_leaves_region_closing);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_invalid_handle_returns_not_found);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_open_region_returns_not_reached);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_success_after_drain_no_tasks);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_success_with_committed_obligation);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_success_with_aborted_obligation);
+    asx_runtime_reset();
+    RUN_TEST(drain_null_budget_returns_invalid_argument);
+    asx_runtime_reset();
+    RUN_TEST(drain_invalid_handle_returns_not_found);
+    asx_runtime_reset();
+    RUN_TEST(drain_multiple_tasks_all_complete);
+    asx_runtime_reset();
+    RUN_TEST(drain_cleanup_lifo_multiple);
+    asx_runtime_reset();
+    RUN_TEST(drain_progress_null_out_returns_invalid_argument);
+    asx_runtime_reset();
+    RUN_TEST(drain_progress_invalid_handle_returns_not_found);
+    asx_runtime_reset();
+    RUN_TEST(drain_progress_open_region_with_tasks);
+    asx_runtime_reset();
+    RUN_TEST(drain_progress_with_obligations);
+    asx_runtime_reset();
+    RUN_TEST(drain_progress_after_partial_drain);
+    asx_runtime_reset();
+    RUN_TEST(drain_progress_cleanup_drained_flag);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_detailed_null_out_returns_invalid_argument);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_detailed_invalid_handle_returns_not_found);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_detailed_fully_quiescent);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_detailed_live_tasks_q1_fails);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_detailed_unresolved_obligations_q3_fails);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_detailed_undrained_cleanup_q4_fails);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_detailed_not_closed_not_quiescent);
+    asx_runtime_reset();
+    RUN_TEST(drain_progress_monotonicity_during_drain);
+    asx_runtime_reset();
+    RUN_TEST(drain_already_closed_is_idempotent);
+    asx_runtime_reset();
+    RUN_TEST(drain_full_lifecycle_tasks_obligations_cleanup);
 
     TEST_REPORT();
     return test_failures;

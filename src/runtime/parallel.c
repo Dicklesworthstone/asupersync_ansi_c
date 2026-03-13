@@ -9,14 +9,14 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "runtime_internal.h"
+#include <asx/asx_config.h>
+#include <asx/core/cancel.h>
+#include <asx/core/ghost.h>
+#include <asx/core/transition.h>
 #include <asx/runtime/parallel.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
-#include <asx/asx_config.h>
-#include <asx/core/transition.h>
-#include <asx/core/cancel.h>
-#include <asx/core/ghost.h>
-#include "runtime_internal.h"
 #include <string.h>
 
 /* -------------------------------------------------------------------
@@ -24,31 +24,30 @@
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    asx_task_id  tasks[ASX_LANE_TASK_CAPACITY];
-    uint32_t     count;
-    uint32_t     polls_this_round;
-    uint32_t     starvation_count;
+    asx_task_id tasks[ASX_LANE_TASK_CAPACITY];
+    uint32_t count;
+    uint32_t polls_this_round;
+    uint32_t starvation_count;
 } lane_internal;
 
 /* -------------------------------------------------------------------
  * Global parallel scheduler state
  * ------------------------------------------------------------------- */
 
-static int               g_initialized;
+static int g_initialized;
 static asx_parallel_config g_config;
-static lane_internal     g_lanes[ASX_MAX_LANES];
-static asx_worker_state  g_workers[ASX_MAX_WORKERS];
+static lane_internal g_lanes[ASX_MAX_LANES];
+static asx_worker_state g_workers[ASX_MAX_WORKERS];
 
 /* Cancel-streak fairness state */
-static uint32_t          g_cancel_streak_limit = 16u;
+static uint32_t g_cancel_streak_limit = 16u;
 static asx_scheduling_metrics g_metrics;
 
 /* -------------------------------------------------------------------
  * Init / Reset
  * ------------------------------------------------------------------- */
 
-asx_status asx_parallel_init(const asx_parallel_config *cfg)
-{
+asx_status asx_parallel_init(const asx_parallel_config *cfg) {
     uint32_t i;
 
     if (cfg == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -59,12 +58,11 @@ asx_status asx_parallel_init(const asx_parallel_config *cfg)
     g_config = *cfg;
 
     /* Initialize lanes */
-    for (i = 0; i < ASX_MAX_LANES; i++) {
-        memset(&g_lanes[i], 0, sizeof(lane_internal));
-    }
+    for (i = 0; i < ASX_MAX_LANES; i++) { memset(&g_lanes[i], 0, sizeof(lane_internal)); }
 
     /* Initialize workers */
-    for (i = 0; i < cfg->worker_count; i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_MAX_WORKERS checked above") */
+    for (i = 0; i < cfg->worker_count;
+         i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_MAX_WORKERS checked above") */
         g_workers[i].id = i;
         g_workers[i].domain = ASX_AFFINITY_DOMAIN_ANY;
         g_workers[i].active = 1;
@@ -76,8 +74,7 @@ asx_status asx_parallel_init(const asx_parallel_config *cfg)
     return ASX_OK;
 }
 
-void asx_parallel_reset(void)
-{
+void asx_parallel_reset(void) {
     memset(g_lanes, 0, sizeof(g_lanes));
     memset(g_workers, 0, sizeof(g_workers));
     memset(&g_config, 0, sizeof(g_config));
@@ -90,35 +87,31 @@ void asx_parallel_reset(void)
  * Lane management
  * ------------------------------------------------------------------- */
 
-asx_status asx_lane_assign(asx_task_id tid, asx_lane_class lane)
-{
+asx_status asx_lane_assign(asx_task_id tid, asx_lane_class lane) {
     lane_internal *l;
 
-    if ((int)lane < 0 || (int)lane >= (int)ASX_MAX_LANES) {
-        return ASX_E_INVALID_ARGUMENT;
-    }
+    if ((int)lane < 0 || (int)lane >= (int)ASX_MAX_LANES) { return ASX_E_INVALID_ARGUMENT; }
 
     l = &g_lanes[(int)lane];
-    if (l->count >= ASX_LANE_TASK_CAPACITY) {
-        return ASX_E_RESOURCE_EXHAUSTED;
-    }
+    if (l->count >= ASX_LANE_TASK_CAPACITY) { return ASX_E_RESOURCE_EXHAUSTED; }
 
     l->tasks[l->count] = tid;
     l->count++;
     return ASX_OK;
 }
 
-asx_status asx_lane_remove(asx_task_id tid)
-{
+asx_status asx_lane_remove(asx_task_id tid) {
     uint32_t i, j;
 
     for (i = 0; i < ASX_MAX_LANES; i++) {
         lane_internal *l = &g_lanes[i];
-        for (j = 0; j < l->count; j++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
+        for (j = 0; j < l->count;
+             j++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
             if (l->tasks[j] == tid) {
                 /* Shift remaining tasks down */
                 uint32_t k;
-                for (k = j; k + 1 < l->count; k++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
+                for (k = j; k + 1 < l->count;
+                     k++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
                     l->tasks[k] = l->tasks[k + 1];
                 }
                 l->count--;
@@ -130,14 +123,11 @@ asx_status asx_lane_remove(asx_task_id tid)
     return ASX_E_NOT_FOUND;
 }
 
-asx_status asx_lane_get_state(asx_lane_class lane, asx_lane_state *out)
-{
+asx_status asx_lane_get_state(asx_lane_class lane, asx_lane_state *out) {
     lane_internal *l;
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
-    if ((int)lane < 0 || (int)lane >= (int)ASX_MAX_LANES) {
-        return ASX_E_INVALID_ARGUMENT;
-    }
+    if ((int)lane < 0 || (int)lane >= (int)ASX_MAX_LANES) { return ASX_E_INVALID_ARGUMENT; }
 
     l = &g_lanes[(int)lane];
     out->lane_class = lane;
@@ -150,13 +140,10 @@ asx_status asx_lane_get_state(asx_lane_class lane, asx_lane_state *out)
     return ASX_OK;
 }
 
-uint32_t asx_lane_total_tasks(void)
-{
+uint32_t asx_lane_total_tasks(void) {
     uint32_t total = 0;
     uint32_t i;
-    for (i = 0; i < ASX_MAX_LANES; i++) {
-        total += g_lanes[i].count;
-    }
+    for (i = 0; i < ASX_MAX_LANES; i++) { total += g_lanes[i].count; }
     return total;
 }
 
@@ -164,31 +151,22 @@ uint32_t asx_lane_total_tasks(void)
  * Worker queries
  * ------------------------------------------------------------------- */
 
-asx_status asx_worker_get_state(uint32_t worker_index,
-                                 asx_worker_state *out)
-{
+asx_status asx_worker_get_state(uint32_t worker_index, asx_worker_state *out) {
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (worker_index >= g_config.worker_count) {
-        return ASX_E_INVALID_ARGUMENT;
-    }
+    if (worker_index >= g_config.worker_count) { return ASX_E_INVALID_ARGUMENT; }
 
     *out = g_workers[worker_index];
     return ASX_OK;
 }
 
-uint32_t asx_parallel_worker_count(void)
-{
-    return g_config.worker_count;
-}
+uint32_t asx_parallel_worker_count(void) { return g_config.worker_count; }
 
 /* -------------------------------------------------------------------
  * Budget distribution helpers
  * ------------------------------------------------------------------- */
 
 /* Compute per-lane poll quota for this round based on fairness policy */
-static void compute_lane_quotas(uint32_t total_budget,
-                                 uint32_t quotas[ASX_MAX_LANES])
-{
+static void compute_lane_quotas(uint32_t total_budget, uint32_t quotas[ASX_MAX_LANES]) {
     uint32_t i;
 
     switch (g_config.fairness) {
@@ -199,24 +177,19 @@ static void compute_lane_quotas(uint32_t total_budget,
             if (g_lanes[i].count > 0) active_lanes++;
         }
         per_lane = (active_lanes > 0) ? total_budget / active_lanes : 0;
-        for (i = 0; i < ASX_MAX_LANES; i++) {
-            quotas[i] = (g_lanes[i].count > 0) ? per_lane : 0;
-        }
+        for (i = 0; i < ASX_MAX_LANES; i++) { quotas[i] = (g_lanes[i].count > 0) ? per_lane : 0; }
         break;
     }
 
     case ASX_FAIRNESS_WEIGHTED: {
         uint32_t total_weight = 0;
         for (i = 0; i < ASX_MAX_LANES; i++) {
-            if (g_lanes[i].count > 0) {
-                total_weight += g_config.lane_weights[i];
-            }
+            if (g_lanes[i].count > 0) { total_weight += g_config.lane_weights[i]; }
         }
         for (i = 0; i < ASX_MAX_LANES; i++) {
             if (g_lanes[i].count > 0 && total_weight > 0) {
-                quotas[i] = (uint32_t)(
-                    (uint64_t)total_budget * g_config.lane_weights[i]
-                    / total_weight);
+                quotas[i] =
+                    (uint32_t)((uint64_t)total_budget * g_config.lane_weights[i] / total_weight);
             } else {
                 quotas[i] = 0;
             }
@@ -227,53 +200,45 @@ static void compute_lane_quotas(uint32_t total_budget,
     case ASX_FAIRNESS_PRIORITY:
         /* Cancel lane gets full budget first, then ready, then timed */
         quotas[ASX_LANE_CANCEL] = total_budget;
-        quotas[ASX_LANE_READY]  = total_budget;
-        quotas[ASX_LANE_TIMED]  = total_budget;
+        quotas[ASX_LANE_READY] = total_budget;
+        quotas[ASX_LANE_TIMED] = total_budget;
         break;
 
     default:
-        for (i = 0; i < ASX_MAX_LANES; i++) {
-            quotas[i] = total_budget / ASX_MAX_LANES;
-        }
+        for (i = 0; i < ASX_MAX_LANES; i++) { quotas[i] = total_budget / ASX_MAX_LANES; }
         break;
     }
 }
 
 /* Priority-ordered lane indices for scheduling */
 static const int g_priority_order[ASX_MAX_LANES] = {
-    ASX_LANE_CANCEL,  /* cancel tasks drain first */
-    ASX_LANE_READY,   /* then ready tasks */
-    ASX_LANE_TIMED    /* timed tasks last */
+    ASX_LANE_CANCEL, /* cancel tasks drain first */
+    ASX_LANE_READY,  /* then ready tasks */
+    ASX_LANE_TIMED   /* timed tasks last */
 };
 
 /* Internal lane wrappers (scheduler context, return values consumed) */
-static void lane_remove_internal(asx_task_id tid)
-{
+static void lane_remove_internal(asx_task_id tid) {
     asx_status st_ = asx_lane_remove(tid);
     (void)st_;
 }
 
-static void lane_assign_internal(asx_task_id tid, asx_lane_class lc)
-{
+static void lane_assign_internal(asx_task_id tid, asx_lane_class lc) {
     asx_status st_ = asx_lane_assign(tid, lc);
     (void)st_;
 }
 
-static asx_status parallel_return_budget(uint32_t round)
-{
+static asx_status parallel_return_budget(uint32_t round) {
     asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
     return ASX_E_POLL_BUDGET_EXHAUSTED;
 }
 
-static asx_status parallel_return_quiescent(uint32_t round)
-{
+static asx_status parallel_return_quiescent(uint32_t round) {
     asx_trace_emit(ASX_TRACE_SCHED_QUIESCENT, ASX_INVALID_ID, round);
     return ASX_OK;
 }
 
-static uint64_t asx_trace_task_transition_aux(asx_task_state from,
-                                              asx_task_state to)
-{
+static uint64_t asx_trace_task_transition_aux(asx_task_state from, asx_task_state to) {
     return ((uint64_t)(uint32_t)from << 32) | (uint64_t)(uint32_t)to;
 }
 
@@ -284,8 +249,7 @@ static uint64_t asx_trace_task_transition_aux(asx_task_state from,
  * In single-worker mode, produces deterministic event streams.
  * ------------------------------------------------------------------- */
 
-asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
-{
+asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
     asx_region_slot *rslot;
     asx_status st;
     uint32_t round;
@@ -301,9 +265,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
     {
         uint32_t i;
         /* Clear lanes first */
-        for (i = 0; i < ASX_MAX_LANES; i++) {
-            g_lanes[i].count = 0;
-        }
+        for (i = 0; i < ASX_MAX_LANES; i++) { g_lanes[i].count = 0; }
         /* Scan task arena and assign to lanes */
         for (i = 0; i < g_task_count; i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_MAX_TASKS") */
             asx_task_slot *t = &g_tasks[i];
@@ -314,10 +276,8 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
             if (t->region != region) continue;
             if (asx_task_is_terminal(t->state)) continue;
 
-            tid = asx_handle_pack(ASX_TYPE_TASK,
-                                  (uint16_t)(1u << (unsigned)t->state),
-                                  asx_handle_pack_index(t->generation,
-                                                         (uint16_t)i));
+            tid = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+                                  asx_handle_pack_index(t->generation, (uint16_t)i));
 
             /* Classify by cancel state */
             if (t->cancel_pending) {
@@ -333,7 +293,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
     }
 
     /* Scheduler loop */
-    for (round = 0; ; round++) {
+    for (round = 0;; round++) {
         uint32_t total_active;
         uint32_t quotas[ASX_MAX_LANES];
         uint32_t lane_order_idx;
@@ -344,14 +304,10 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
 
         asx_trace_emit(ASX_TRACE_SCHED_ROUND, ASX_INVALID_ID, round);
 
-        if (asx_budget_is_exhausted(budget)) {
-            return parallel_return_budget(round);
-        }
+        if (asx_budget_is_exhausted(budget)) { return parallel_return_budget(round); }
 
         total_active = asx_lane_total_tasks();
-        if (total_active == 0) {
-            return parallel_return_quiescent(round);
-        }
+        if (total_active == 0) { return parallel_return_quiescent(round); }
 
         /* Compute per-lane budgets for this round */
         compute_lane_quotas(asx_budget_polls(budget), quotas);
@@ -364,8 +320,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
         any_polled = 0;
 
         /* Poll each lane in priority order */
-        for (lane_order_idx = 0; lane_order_idx < ASX_MAX_LANES;
-             lane_order_idx++) {
+        for (lane_order_idx = 0; lane_order_idx < ASX_MAX_LANES; lane_order_idx++) {
             int li = g_priority_order[lane_order_idx];
             lane_internal *lane = &g_lanes[li];
             uint32_t quota = quotas[li];
@@ -379,12 +334,10 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
 
             /* Cancel-streak fairness: skip cancel lane if streak
              * limit reached and other lanes have work */
-            if (li == (int)ASX_LANE_CANCEL &&
-                g_cancel_streak_limit > 0 &&
+            if (li == (int)ASX_LANE_CANCEL && g_cancel_streak_limit > 0 &&
                 g_metrics.cancel_streak >= g_cancel_streak_limit) {
                 /* Check if any other lane has tasks */
-                if (g_lanes[ASX_LANE_READY].count > 0 ||
-                    g_lanes[ASX_LANE_TIMED].count > 0) {
+                if (g_lanes[ASX_LANE_READY].count > 0 || g_lanes[ASX_LANE_TIMED].count > 0) {
                     g_metrics.fairness_yields++;
                     continue;
                 }
@@ -402,9 +355,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
                 ASX_CHECKPOINT_WAIVER("kernel-parallel-scheduler: inner poll "
                                       "bounded by lane count and quota");
 
-                if (asx_budget_is_exhausted(budget)) {
-                    return parallel_return_budget(round);
-                }
+                if (asx_budget_is_exhausted(budget)) { return parallel_return_budget(round); }
 
                 tid = lane->tasks[j];
                 slot_idx = asx_handle_slot(tid);
@@ -421,89 +372,73 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
                 }
 
                 /* Refresh handle from live slot to avoid stale state masks. */
-                tid = asx_handle_pack(ASX_TYPE_TASK,
-                                      (uint16_t)(1u << (unsigned)t->state),
+                tid = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
                                       asx_handle_pack_index(t->generation, slot_idx));
                 lane->tasks[j] = tid;
 
                 /* Handle cancel force-completion */
                 if (t->cancel_pending &&
-                    (t->state == ASX_TASK_CANCELLING ||
-                     t->state == ASX_TASK_CANCEL_REQUESTED) &&
+                    (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED) &&
                     t->cleanup_polls_remaining == 0) {
                     if (t->state == ASX_TASK_CANCEL_REQUESTED) {
                         asx_task_state from = t->state;
-                        (void)asx_ghost_check_task_transition(tid, t->state,
-                                                              ASX_TASK_CANCELLING);
+                        (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_CANCELLING);
                         t->state = ASX_TASK_CANCELLING;
                         t->cancel_phase = ASX_CANCEL_PHASE_CANCELLING;
                         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
-                                       asx_trace_task_transition_aux(from,
-                                                                    ASX_TASK_CANCELLING));
+                                       asx_trace_task_transition_aux(from, ASX_TASK_CANCELLING));
                     }
                     {
                         asx_task_state from = t->state;
-                    (void)asx_ghost_check_task_transition(tid, t->state,
-                                                          ASX_TASK_FINALIZING);
-                    t->state = ASX_TASK_FINALIZING;
-                    t->cancel_phase = ASX_CANCEL_PHASE_FINALIZING;
+                        (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_FINALIZING);
+                        t->state = ASX_TASK_FINALIZING;
+                        t->cancel_phase = ASX_CANCEL_PHASE_FINALIZING;
                         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
-                                       asx_trace_task_transition_aux(from,
-                                                                    ASX_TASK_FINALIZING));
+                                       asx_trace_task_transition_aux(from, ASX_TASK_FINALIZING));
                     }
                     {
                         asx_task_state from = t->state;
-                    (void)asx_ghost_check_task_transition(tid, t->state,
-                                                          ASX_TASK_COMPLETED);
-                    t->state = ASX_TASK_COMPLETED;
-                    t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
+                        (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
+                        t->state = ASX_TASK_COMPLETED;
+                        t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
                         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
-                                       asx_trace_task_transition_aux(from,
-                                                                    ASX_TASK_COMPLETED));
+                                       asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     }
                     t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
                     asx_task_release_capture_internal(t);
                     if (rslot->task_count > 0) rslot->task_count--;
                     lane_remove_internal(tid);
                     g_workers[0].tasks_completed++;
-                    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE,
-                                   (uint64_t)tid, round);
+                    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
                     continue;
                 }
 
                 if (t->state == ASX_TASK_FINALIZING) {
                     asx_task_state from = t->state;
-                    (void)asx_ghost_check_task_transition(tid, t->state,
-                                                          ASX_TASK_COMPLETED);
+                    (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                     t->state = ASX_TASK_COMPLETED;
                     t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
-                                   asx_trace_task_transition_aux(from,
-                                                                ASX_TASK_COMPLETED));
+                                   asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
                     asx_task_release_capture_internal(t);
                     if (rslot->task_count > 0) rslot->task_count--;
                     lane_remove_internal(tid);
                     g_workers[0].tasks_completed++;
-                    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE,
-                                   (uint64_t)tid, round);
+                    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
                     continue;
                 }
 
                 /* Consume budget */
-                if (asx_budget_consume_poll(budget) == 0) {
-                    return parallel_return_budget(round);
-                }
+                if (asx_budget_consume_poll(budget) == 0) { return parallel_return_budget(round); }
 
                 /* Transition Created → Running */
                 if (t->state == ASX_TASK_CREATED) {
                     asx_task_state from = t->state;
-                    (void)asx_ghost_check_task_transition(tid, t->state,
-                                                          ASX_TASK_RUNNING);
+                    (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_RUNNING);
                     t->state = ASX_TASK_RUNNING;
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
-                                   asx_trace_task_transition_aux(from,
-                                                                ASX_TASK_RUNNING));
+                                   asx_trace_task_transition_aux(from, ASX_TASK_RUNNING));
                 }
 
                 asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)tid, round);
@@ -530,45 +465,33 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
 
                 if (poll_result == ASX_OK) {
                     asx_task_state from = t->state;
-                    (void)asx_ghost_check_task_transition(tid, t->state,
-                                                          ASX_TASK_COMPLETED);
+                    (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                     t->state = ASX_TASK_COMPLETED;
-                    if (t->cancel_pending) {
-                        t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
-                    }
-                    t->outcome = asx_outcome_make(
-                        t->cancel_pending ? ASX_OUTCOME_CANCELLED
-                                          : ASX_OUTCOME_OK);
+                    if (t->cancel_pending) { t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED; }
+                    t->outcome = asx_outcome_make(t->cancel_pending ? ASX_OUTCOME_CANCELLED
+                                                                    : ASX_OUTCOME_OK);
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
-                                   asx_trace_task_transition_aux(from,
-                                                                ASX_TASK_COMPLETED));
+                                   asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     asx_task_release_capture_internal(t);
                     if (rslot->task_count > 0) rslot->task_count--;
                     lane_remove_internal(tid);
                     g_workers[0].tasks_completed++;
-                    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE,
-                                   (uint64_t)tid, round);
+                    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
                     continue;
                 } else if (poll_result != ASX_E_PENDING) {
                     asx_task_state from = t->state;
-                    (void)asx_ghost_check_task_transition(tid, t->state,
-                                                          ASX_TASK_COMPLETED);
+                    (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                     t->state = ASX_TASK_COMPLETED;
-                    if (t->cancel_pending) {
-                        t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
-                    }
-                    t->outcome = asx_outcome_make(
-                        t->cancel_pending ? ASX_OUTCOME_CANCELLED
-                                          : ASX_OUTCOME_ERR);
+                    if (t->cancel_pending) { t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED; }
+                    t->outcome = asx_outcome_make(t->cancel_pending ? ASX_OUTCOME_CANCELLED
+                                                                    : ASX_OUTCOME_ERR);
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
-                                   asx_trace_task_transition_aux(from,
-                                                                ASX_TASK_COMPLETED));
+                                   asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     asx_task_release_capture_internal(t);
                     if (rslot->task_count > 0) rslot->task_count--;
                     lane_remove_internal(tid);
                     g_workers[0].tasks_completed++;
-                    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE,
-                                   (uint64_t)tid, round);
+                    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
 
                     {
                         asx_status fc_ = asx_region_contain_fault(region, poll_result);
@@ -598,9 +521,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
             }
         }
 
-        if (asx_lane_total_tasks() == 0) {
-            return parallel_return_quiescent(round);
-        }
+        if (asx_lane_total_tasks() == 0) { return parallel_return_quiescent(round); }
 
         if (!any_polled) {
             /* All tasks in lanes are either completed or no budget */
@@ -615,86 +536,55 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
  * Fairness queries
  * ------------------------------------------------------------------- */
 
-int asx_parallel_starvation_detected(void)
-{
+int asx_parallel_starvation_detected(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_LANES; i++) {
-        if (g_lanes[i].count > 0 &&
-            g_lanes[i].starvation_count > g_config.starvation_limit) {
+        if (g_lanes[i].count > 0 && g_lanes[i].starvation_count > g_config.starvation_limit) {
             return 1;
         }
     }
     return 0;
 }
 
-uint32_t asx_parallel_max_starvation(void)
-{
+uint32_t asx_parallel_max_starvation(void) {
     uint32_t max_val = 0;
     uint32_t i;
     for (i = 0; i < ASX_MAX_LANES; i++) {
-        if (g_lanes[i].starvation_count > max_val) {
-            max_val = g_lanes[i].starvation_count;
-        }
+        if (g_lanes[i].starvation_count > max_val) { max_val = g_lanes[i].starvation_count; }
     }
     return max_val;
 }
 
-asx_fairness_policy asx_parallel_fairness_policy(void)
-{
-    return g_config.fairness;
-}
+asx_fairness_policy asx_parallel_fairness_policy(void) { return g_config.fairness; }
 
-int asx_parallel_is_initialized(void)
-{
-    return g_initialized;
-}
+int asx_parallel_is_initialized(void) { return g_initialized; }
 
 /* -------------------------------------------------------------------
  * Global injector
  * ------------------------------------------------------------------- */
 
-asx_status asx_inject_cancel(asx_task_id tid)
-{
-    return asx_lane_assign(tid, ASX_LANE_CANCEL);
-}
+asx_status asx_inject_cancel(asx_task_id tid) { return asx_lane_assign(tid, ASX_LANE_CANCEL); }
 
-asx_status asx_inject_timed(asx_task_id tid)
-{
-    return asx_lane_assign(tid, ASX_LANE_TIMED);
-}
+asx_status asx_inject_timed(asx_task_id tid) { return asx_lane_assign(tid, ASX_LANE_TIMED); }
 
-asx_status asx_inject_ready(asx_task_id tid)
-{
-    return asx_lane_assign(tid, ASX_LANE_READY);
-}
+asx_status asx_inject_ready(asx_task_id tid) { return asx_lane_assign(tid, ASX_LANE_READY); }
 
 /* -------------------------------------------------------------------
  * Scheduling metrics
  * ------------------------------------------------------------------- */
 
-asx_status asx_parallel_get_metrics(asx_scheduling_metrics *out)
-{
-    if (out == NULL)
-        return ASX_E_INVALID_ARGUMENT;
+asx_status asx_parallel_get_metrics(asx_scheduling_metrics *out) {
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     *out = g_metrics;
     return ASX_OK;
 }
 
-void asx_parallel_reset_metrics(void)
-{
-    memset(&g_metrics, 0, sizeof(g_metrics));
-}
+void asx_parallel_reset_metrics(void) { memset(&g_metrics, 0, sizeof(g_metrics)); }
 
 /* -------------------------------------------------------------------
  * Cancel-streak fairness configuration
  * ------------------------------------------------------------------- */
 
-void asx_parallel_set_cancel_streak_limit(uint32_t limit)
-{
-    g_cancel_streak_limit = limit;
-}
+void asx_parallel_set_cancel_streak_limit(uint32_t limit) { g_cancel_streak_limit = limit; }
 
-uint32_t asx_parallel_cancel_streak_limit(void)
-{
-    return g_cancel_streak_limit;
-}
+uint32_t asx_parallel_cancel_streak_limit(void) { return g_cancel_streak_limit; }

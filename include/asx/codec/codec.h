@@ -10,10 +10,10 @@
 #ifndef ASX_CODEC_CODEC_H
 #define ASX_CODEC_CODEC_H
 
-#include <stddef.h>
-#include <stdint.h>
 #include <asx/asx_export.h>
 #include <asx/codec/schema.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,10 +55,8 @@ typedef struct {
 
 typedef struct asx_codec_vtable {
     asx_codec_kind codec;
-    asx_status (*encode_fixture)(const asx_canonical_fixture *fixture,
-                                 asx_codec_buffer *out_json);
-    asx_status (*decode_fixture)(const void *payload,
-                                 size_t payload_len,
+    asx_status (*encode_fixture)(const asx_canonical_fixture *fixture, asx_codec_buffer *out_json);
+    asx_status (*decode_fixture)(const void *payload, size_t payload_len,
                                  asx_canonical_fixture *out_fixture);
 } asx_codec_vtable;
 
@@ -67,7 +65,8 @@ ASX_API void asx_codec_buffer_init(asx_codec_buffer *buf);
 ASX_API void asx_codec_buffer_reset(asx_codec_buffer *buf);
 
 /* Buffer append primitives */
-ASX_API asx_status asx_codec_buffer_append_bytes(asx_codec_buffer *buf, const char *bytes, size_t len);
+ASX_API asx_status asx_codec_buffer_append_bytes(asx_codec_buffer *buf, const char *bytes,
+                                                 size_t len);
 ASX_API asx_status asx_codec_buffer_append_cstr(asx_codec_buffer *buf, const char *text);
 ASX_API asx_status asx_codec_buffer_append_char(asx_codec_buffer *buf, char ch);
 ASX_API asx_status asx_codec_buffer_append_u64(asx_codec_buffer *buf, uint64_t value);
@@ -75,9 +74,11 @@ ASX_API asx_status asx_codec_buffer_append_json_string(asx_codec_buffer *buf, co
 /* Append JSON field separator (comma unless first field). */
 ASX_API asx_status asx_codec_buffer_append_field_prefix(asx_codec_buffer *buf, int *is_first);
 /* Append a key-value string field in JSON format. */
-ASX_API asx_status asx_codec_buffer_append_string_field(asx_codec_buffer *buf, int *is_first, const char *key, const char *value);
+ASX_API asx_status asx_codec_buffer_append_string_field(asx_codec_buffer *buf, int *is_first,
+                                                        const char *key, const char *value);
 /* Append a key-value uint64 field in JSON format. */
-ASX_API asx_status asx_codec_buffer_append_u64_field(asx_codec_buffer *buf, int *is_first, const char *key, uint64_t value);
+ASX_API asx_status asx_codec_buffer_append_u64_field(asx_codec_buffer *buf, int *is_first,
+                                                     const char *key, uint64_t value);
 
 /* Codec dispatch table lookup */
 ASX_API ASX_MUST_USE const asx_codec_vtable *asx_codec_vtable_for(asx_codec_kind codec);
@@ -86,8 +87,7 @@ ASX_API ASX_MUST_USE const asx_codec_vtable *asx_codec_vtable_for(asx_codec_kind
 ASX_API ASX_MUST_USE asx_status asx_codec_encode_fixture(asx_codec_kind codec,
                                                          const asx_canonical_fixture *fixture,
                                                          asx_codec_buffer *out_payload);
-ASX_API ASX_MUST_USE asx_status asx_codec_decode_fixture(asx_codec_kind codec,
-                                                         const void *payload,
+ASX_API ASX_MUST_USE asx_status asx_codec_decode_fixture(asx_codec_kind codec, const void *payload,
                                                          size_t payload_len,
                                                          asx_canonical_fixture *out_fixture);
 
@@ -100,9 +100,7 @@ ASX_API ASX_MUST_USE asx_status asx_codec_decode_fixture_json(const char *json,
 /* Binary decode view helper for safe zero-copy payload inspection. */
 ASX_API void asx_codec_bin_fixture_view_init(asx_codec_bin_fixture_view *view);
 ASX_API ASX_MUST_USE asx_status asx_codec_decode_fixture_bin_view(
-    const void *payload,
-    size_t payload_len,
-    asx_codec_bin_fixture_view *out_view);
+    const void *payload, size_t payload_len, asx_codec_bin_fixture_view *out_view);
 
 /* Build deterministic replay key from canonical semantic fields. */
 ASX_API ASX_MUST_USE asx_status asx_codec_fixture_replay_key(const asx_canonical_fixture *fixture,

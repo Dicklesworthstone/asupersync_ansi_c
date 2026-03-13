@@ -23,25 +23,21 @@
 
 /* ASX_CHECKPOINT_WAIVER_FILE() -- wasm32 oracle test, no checkpoint coverage needed */
 
-#include <asx/asx.h>
 #include "test_harness.h"
+#include <asx/asx.h>
 
 /* ------------------------------------------------------------------ */
 /* FNV-1a hash for semantic digests                                   */
 /* ------------------------------------------------------------------ */
 
 #define FNV_OFFSET_BASIS 0xcbf29ce484222325ULL
-#define FNV_PRIME        0x100000001b3ULL
+#define FNV_PRIME 0x100000001b3ULL
 
 static uint64_t fnv1a_init(void) { return FNV_OFFSET_BASIS; }
 
-static uint64_t fnv1a_byte(uint64_t h, uint8_t b)
-{
-    return (h ^ b) * FNV_PRIME;
-}
+static uint64_t fnv1a_byte(uint64_t h, uint8_t b) { return (h ^ b) * FNV_PRIME; }
 
-static uint64_t fnv1a_u32(uint64_t h, uint32_t v)
-{
+static uint64_t fnv1a_u32(uint64_t h, uint32_t v) {
     h = fnv1a_byte(h, (uint8_t)(v & 0xFF));
     h = fnv1a_byte(h, (uint8_t)((v >> 8) & 0xFF));
     h = fnv1a_byte(h, (uint8_t)((v >> 16) & 0xFF));
@@ -53,16 +49,15 @@ static uint64_t fnv1a_u32(uint64_t h, uint32_t v)
 /* Test: transition table digest                                      */
 /* ------------------------------------------------------------------ */
 
-TEST(transition_table_digest_is_stable)
-{
+TEST(transition_table_digest_is_stable) {
     uint64_t h = fnv1a_init();
     int from, to;
 
     /* Hash all region transitions */
     for (from = 0; from < 5; from++) {
         for (to = 0; to < 5; to++) {
-            asx_status s = asx_region_transition_check(
-                (asx_region_state)from, (asx_region_state)to);
+            asx_status s =
+                asx_region_transition_check((asx_region_state)from, (asx_region_state)to);
             h = fnv1a_u32(h, (uint32_t)(s == ASX_OK ? 1 : 0));
         }
     }
@@ -70,8 +65,7 @@ TEST(transition_table_digest_is_stable)
     /* Hash all task transitions */
     for (from = 0; from < 6; from++) {
         for (to = 0; to < 6; to++) {
-            asx_status s = asx_task_transition_check(
-                (asx_task_state)from, (asx_task_state)to);
+            asx_status s = asx_task_transition_check((asx_task_state)from, (asx_task_state)to);
             h = fnv1a_u32(h, (uint32_t)(s == ASX_OK ? 1 : 0));
         }
     }
@@ -79,8 +73,8 @@ TEST(transition_table_digest_is_stable)
     /* Hash all obligation transitions */
     for (from = 0; from < 4; from++) {
         for (to = 0; to < 4; to++) {
-            asx_status s = asx_obligation_transition_check(
-                (asx_obligation_state)from, (asx_obligation_state)to);
+            asx_status s = asx_obligation_transition_check((asx_obligation_state)from,
+                                                           (asx_obligation_state)to);
             h = fnv1a_u32(h, (uint32_t)(s == ASX_OK ? 1 : 0));
         }
     }
@@ -92,7 +86,7 @@ TEST(transition_table_digest_is_stable)
      *
      * Expected: fixed value (validated once, then frozen).
      */
-    ASSERT_TRUE(h != 0);  /* not degenerate */
+    ASSERT_TRUE(h != 0); /* not degenerate */
 
     /* Record for cross-target comparison */
     fprintf(stderr, "    transition_digest = 0x%016lx\n", (unsigned long)h);
@@ -102,8 +96,7 @@ TEST(transition_table_digest_is_stable)
 /* Test: outcome lattice digest                                       */
 /* ------------------------------------------------------------------ */
 
-TEST(outcome_lattice_digest_is_stable)
-{
+TEST(outcome_lattice_digest_is_stable) {
     uint64_t h = fnv1a_init();
     int a, b;
 
@@ -126,8 +119,7 @@ TEST(outcome_lattice_digest_is_stable)
 /* Test: cancel severity digest                                       */
 /* ------------------------------------------------------------------ */
 
-TEST(cancel_severity_digest_is_stable)
-{
+TEST(cancel_severity_digest_is_stable) {
     uint64_t h = fnv1a_init();
     int k;
 
@@ -144,14 +136,19 @@ TEST(cancel_severity_digest_is_stable)
 /* Test: budget meet algebra digest                                   */
 /* ------------------------------------------------------------------ */
 
-TEST(budget_meet_digest_is_stable)
-{
+TEST(budget_meet_digest_is_stable) {
     uint64_t h = fnv1a_init();
     asx_budget a, b, m;
 
     /* Test a few representative meet operations */
-    a.deadline = 1000; a.poll_quota = 10; a.cost_quota = 500; a.priority = 3;
-    b.deadline = 500;  b.poll_quota = 20; b.cost_quota = 300; b.priority = 1;
+    a.deadline = 1000;
+    a.poll_quota = 10;
+    a.cost_quota = 500;
+    a.priority = 3;
+    b.deadline = 500;
+    b.poll_quota = 20;
+    b.cost_quota = 300;
+    b.priority = 1;
     m = asx_budget_meet(&a, &b);
 
     h = fnv1a_u32(h, (uint32_t)m.deadline);
@@ -160,7 +157,10 @@ TEST(budget_meet_digest_is_stable)
     h = fnv1a_u32(h, m.priority);
 
     /* Identity: meet with infinite */
-    a.deadline = 100; a.poll_quota = 5; a.cost_quota = 50; a.priority = 2;
+    a.deadline = 100;
+    a.poll_quota = 5;
+    a.cost_quota = 50;
+    a.priority = 2;
     b = asx_budget_infinite();
     m = asx_budget_meet(&a, &b);
 
@@ -177,8 +177,7 @@ TEST(budget_meet_digest_is_stable)
 /* Test: region admission predicates                                  */
 /* ------------------------------------------------------------------ */
 
-TEST(region_predicates_digest_is_stable)
-{
+TEST(region_predicates_digest_is_stable) {
     uint64_t h = fnv1a_init();
     int s;
 
@@ -198,14 +197,11 @@ TEST(region_predicates_digest_is_stable)
 /* Test: task/obligation terminal predicates                          */
 /* ------------------------------------------------------------------ */
 
-TEST(terminal_predicates_digest_is_stable)
-{
+TEST(terminal_predicates_digest_is_stable) {
     uint64_t h = fnv1a_init();
     int s;
 
-    for (s = 0; s < 6; s++) {
-        h = fnv1a_u32(h, (uint32_t)asx_task_is_terminal((asx_task_state)s));
-    }
+    for (s = 0; s < 6; s++) { h = fnv1a_u32(h, (uint32_t)asx_task_is_terminal((asx_task_state)s)); }
     for (s = 0; s < 4; s++) {
         h = fnv1a_u32(h, (uint32_t)asx_obligation_is_terminal((asx_obligation_state)s));
     }
@@ -218,8 +214,7 @@ TEST(terminal_predicates_digest_is_stable)
 /* Test: type size oracle (platform-sensitive)                        */
 /* ------------------------------------------------------------------ */
 
-TEST(type_sizes_oracle)
-{
+TEST(type_sizes_oracle) {
     uint64_t h = fnv1a_init();
 
     /*
@@ -241,7 +236,7 @@ TEST(type_sizes_oracle)
     h = fnv1a_u32(h, (uint32_t)sizeof(asx_status));
 
     /* These ARE platform-dependent */
-    fprintf(stderr, "    sizeof(void*) = %u\n", (unsigned)sizeof(void*));
+    fprintf(stderr, "    sizeof(void*) = %u\n", (unsigned)sizeof(void *));
     fprintf(stderr, "    sizeof(size_t) = %u\n", (unsigned)sizeof(size_t));
 
     /* Fixed-width types must be stable */
@@ -256,8 +251,7 @@ TEST(type_sizes_oracle)
 /* Test: aggregate oracle digest                                      */
 /* ------------------------------------------------------------------ */
 
-TEST(aggregate_oracle_digest)
-{
+TEST(aggregate_oracle_digest) {
     /*
      * Combined digest of all pure-function outputs.
      * This single value captures the entire semantic fingerprint
@@ -271,16 +265,18 @@ TEST(aggregate_oracle_digest)
     /* Transitions */
     for (from = 0; from < 5; from++)
         for (to = 0; to < 5; to++)
-            h = fnv1a_u32(h, (uint32_t)(asx_region_transition_check(
-                (asx_region_state)from, (asx_region_state)to) == ASX_OK));
+            h = fnv1a_u32(h,
+                          (uint32_t)(asx_region_transition_check((asx_region_state)from,
+                                                                 (asx_region_state)to) == ASX_OK));
     for (from = 0; from < 6; from++)
         for (to = 0; to < 6; to++)
-            h = fnv1a_u32(h, (uint32_t)(asx_task_transition_check(
-                (asx_task_state)from, (asx_task_state)to) == ASX_OK));
+            h = fnv1a_u32(h, (uint32_t)(asx_task_transition_check((asx_task_state)from,
+                                                                  (asx_task_state)to) == ASX_OK));
     for (from = 0; from < 4; from++)
         for (to = 0; to < 4; to++)
-            h = fnv1a_u32(h, (uint32_t)(asx_obligation_transition_check(
-                (asx_obligation_state)from, (asx_obligation_state)to) == ASX_OK));
+            h = fnv1a_u32(h, (uint32_t)(asx_obligation_transition_check((asx_obligation_state)from,
+                                                                        (asx_obligation_state)to) ==
+                                        ASX_OK));
 
     /* Outcome lattice */
     for (from = 0; from < 4; from++)
@@ -292,16 +288,14 @@ TEST(aggregate_oracle_digest)
         }
 
     /* Cancel severity */
-    for (k = 0; k < 11; k++)
-        h = fnv1a_u32(h, (uint32_t)asx_cancel_severity((asx_cancel_kind)k));
+    for (k = 0; k < 11; k++) h = fnv1a_u32(h, (uint32_t)asx_cancel_severity((asx_cancel_kind)k));
 
     /* Predicates */
     for (s = 0; s < 5; s++) {
         h = fnv1a_u32(h, (uint32_t)asx_region_can_spawn((asx_region_state)s));
         h = fnv1a_u32(h, (uint32_t)asx_region_is_terminal((asx_region_state)s));
     }
-    for (s = 0; s < 6; s++)
-        h = fnv1a_u32(h, (uint32_t)asx_task_is_terminal((asx_task_state)s));
+    for (s = 0; s < 6; s++) h = fnv1a_u32(h, (uint32_t)asx_task_is_terminal((asx_task_state)s));
     for (s = 0; s < 4; s++)
         h = fnv1a_u32(h, (uint32_t)asx_obligation_is_terminal((asx_obligation_state)s));
 
@@ -314,8 +308,7 @@ TEST(aggregate_oracle_digest)
 /* Test: wasm32-compatible files compile without host coupling        */
 /* ------------------------------------------------------------------ */
 
-TEST(wasm32_compatible_file_count)
-{
+TEST(wasm32_compatible_file_count) {
     /*
      * From probe: 13/31 non-spike production files compile to wasm32
      * without a sysroot. All failures are due to <string.h>/<stdlib.h>.
@@ -336,18 +329,17 @@ TEST(wasm32_compatible_file_count)
     uint32_t wasm_core_total = 10;
 
     ASSERT_TRUE(wasm_passing > 0);
-    ASSERT_TRUE(wasm_core_passing >= 7);  /* algebraic core fully wasm-compatible */
+    ASSERT_TRUE(wasm_core_passing >= 7); /* algebraic core fully wasm-compatible */
 
-    fprintf(stderr, "    wasm32 compatible: %u/%u total, %u/%u core\n",
-            wasm_passing, wasm_total, wasm_core_passing, wasm_core_total);
+    fprintf(stderr, "    wasm32 compatible: %u/%u total, %u/%u core\n", wasm_passing, wasm_total,
+            wasm_core_passing, wasm_core_total);
 }
 
 /* ------------------------------------------------------------------ */
 /* Main                                                               */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== wasm32 determinism oracle tests (bd-3vt.11) ===\n");
 
     /* Semantic digests (8) */

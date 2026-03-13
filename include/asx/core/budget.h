@@ -11,22 +11,22 @@
 #ifndef ASX_CORE_BUDGET_H
 #define ASX_CORE_BUDGET_H
 
-#include <stdint.h>
 #include <asx/asx_export.h>
-#include <asx/asx_status.h>
 #include <asx/asx_ids.h>
+#include <asx/asx_status.h>
+#include <stdint.h>
 
 /* asx_time is defined in asx_ids.h. */
 
-#define ASX_TIME_ZERO     ((asx_time)0)
+#define ASX_TIME_ZERO ((asx_time)0)
 #define ASX_TIME_INFINITE ((asx_time)UINT64_MAX)
 
 /* Budget structure */
 typedef struct {
-    asx_time deadline;       /* 0 = unconstrained */
+    asx_time deadline; /* 0 = unconstrained */
     uint32_t poll_quota;
-    uint64_t cost_quota;     /* UINT64_MAX = unconstrained */
-    uint8_t  priority;       /* lower = tighter */
+    uint64_t cost_quota; /* UINT64_MAX = unconstrained */
+    uint8_t priority;    /* lower = tighter */
 } asx_budget;
 
 /* Identity element for meet (unconstrained) */

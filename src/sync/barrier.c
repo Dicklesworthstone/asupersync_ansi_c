@@ -12,29 +12,28 @@
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    int      active;
-    int      released;      /* barrier has tripped */
-    int      is_leader;
+    int active;
+    int released; /* barrier has tripped */
+    int is_leader;
 } barrier_waiter_slot;
 
 typedef struct {
-    uint16_t             generation;
-    int                  alive;
-    uint32_t             threshold;   /* N tasks required */
-    uint32_t             arrived;     /* tasks currently waiting */
-    int                  tripped;     /* barrier released */
-    barrier_waiter_slot  waiters[ASX_BARRIER_MAX * 4]; /* up to 4x threshold */
-    uint32_t             waiter_count;
+    uint16_t generation;
+    int alive;
+    uint32_t threshold;                               /* N tasks required */
+    uint32_t arrived;                                 /* tasks currently waiting */
+    int tripped;                                      /* barrier released */
+    barrier_waiter_slot waiters[ASX_BARRIER_MAX * 4]; /* up to 4x threshold */
+    uint32_t waiter_count;
 } barrier_slot;
 
 /* Use a generous waiter limit per barrier */
 #define BARRIER_MAX_WAITERS (ASX_BARRIER_MAX * 4u)
 
 static barrier_slot g_slots[ASX_BARRIER_MAX];
-static uint32_t     g_slot_count;
+static uint32_t g_slot_count;
 
-static uint16_t next_gen(uint16_t g)
-{
+static uint16_t next_gen(uint16_t g) {
     g++;
     if (g == 0) g = 1;
     return g;
@@ -44,10 +43,7 @@ static uint16_t next_gen(uint16_t g)
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_barrier_create(
-    uint32_t count,
-    asx_barrier_handle *out)
-{
+asx_status asx_barrier_create(uint32_t count, asx_barrier_handle *out) {
     uint32_t i;
     if (out == NULL || count == 0) return ASX_E_INVALID_ARGUMENT;
 
@@ -69,18 +65,14 @@ asx_status asx_barrier_create(
     return ASX_E_RESOURCE_EXHAUSTED;
 }
 
-asx_status asx_barrier_close(asx_barrier_handle handle)
-{
+asx_status asx_barrier_close(asx_barrier_handle handle) {
     barrier_slot *s;
     uint32_t i;
     if (handle.slot >= ASX_BARRIER_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[handle.slot];
-    if (!s->alive || s->generation != handle.generation)
-        return ASX_E_STALE_HANDLE;
+    if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
-    for (i = 0; i < BARRIER_MAX_WAITERS; i++) {
-        s->waiters[i].active = 0;
-    }
+    for (i = 0; i < BARRIER_MAX_WAITERS; i++) { s->waiters[i].active = 0; }
 
     s->alive = 0;
     s->waiter_count = 0;
@@ -91,17 +83,13 @@ asx_status asx_barrier_close(asx_barrier_handle handle)
 /* Wait                                                                */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_barrier_wait_begin(
-    asx_barrier_handle handle,
-    asx_barrier_waiter *out)
-{
+asx_status asx_barrier_wait_begin(asx_barrier_handle handle, asx_barrier_waiter *out) {
     barrier_slot *s;
     uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     if (handle.slot >= ASX_BARRIER_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[handle.slot];
-    if (!s->alive || s->generation != handle.generation)
-        return ASX_E_STALE_HANDLE;
+    if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     for (i = 0; i < BARRIER_MAX_WAITERS; i++) {
         if (!s->waiters[i].active) {
@@ -123,9 +111,7 @@ asx_status asx_barrier_wait_begin(
                 s->waiters[i].is_leader = 1;
                 /* Release all waiters */
                 for (j = 0; j < BARRIER_MAX_WAITERS; j++) {
-                    if (s->waiters[j].active) {
-                        s->waiters[j].released = 1;
-                    }
+                    if (s->waiters[j].active) { s->waiters[j].released = 1; }
                 }
             }
 
@@ -135,10 +121,7 @@ asx_status asx_barrier_wait_begin(
     return ASX_E_RESOURCE_EXHAUSTED;
 }
 
-asx_status asx_barrier_poll_wait(
-    asx_barrier_waiter *waiter,
-    asx_cx *cx)
-{
+asx_status asx_barrier_poll_wait(asx_barrier_waiter *waiter, asx_cx *cx) {
     barrier_slot *s;
     barrier_waiter_slot *w;
 
@@ -146,8 +129,7 @@ asx_status asx_barrier_poll_wait(
     if (waiter->barrier_slot >= ASX_BARRIER_MAX) return ASX_E_INVALID_ARGUMENT;
 
     s = &g_slots[waiter->barrier_slot];
-    if (!s->alive || s->generation != waiter->generation)
-        return ASX_E_DISCONNECTED;
+    if (!s->alive || s->generation != waiter->generation) return ASX_E_DISCONNECTED;
 
     w = &s->waiters[waiter->waiter_slot];
     if (!w->active) return ASX_E_INVALID_STATE;
@@ -173,14 +155,12 @@ asx_status asx_barrier_poll_wait(
     return ASX_E_PENDING;
 }
 
-asx_status asx_barrier_wait_cancel(asx_barrier_waiter *waiter)
-{
+asx_status asx_barrier_wait_cancel(asx_barrier_waiter *waiter) {
     barrier_slot *s;
     if (waiter == NULL) return ASX_E_INVALID_ARGUMENT;
     if (waiter->barrier_slot >= ASX_BARRIER_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[waiter->barrier_slot];
-    if (!s->alive || s->generation != waiter->generation)
-        return ASX_OK;
+    if (!s->alive || s->generation != waiter->generation) return ASX_OK;
 
     if (s->waiters[waiter->waiter_slot].active) {
         s->waiters[waiter->waiter_slot].active = 0;
@@ -194,11 +174,10 @@ asx_status asx_barrier_wait_cancel(asx_barrier_waiter *waiter)
 /* Queries                                                             */
 /* ------------------------------------------------------------------ */
 
-uint32_t asx_barrier_waiting_count(asx_barrier_handle handle)
-{
+uint32_t asx_barrier_waiting_count(asx_barrier_handle handle) {
     if (handle.slot >= ASX_BARRIER_MAX) return 0;
-    if (!g_slots[handle.slot].alive ||
-        g_slots[handle.slot].generation != handle.generation) return 0;
+    if (!g_slots[handle.slot].alive || g_slots[handle.slot].generation != handle.generation)
+        return 0;
     return g_slots[handle.slot].arrived;
 }
 
@@ -206,8 +185,7 @@ uint32_t asx_barrier_waiting_count(asx_barrier_handle handle)
 /* Arena management                                                    */
 /* ------------------------------------------------------------------ */
 
-void asx_barrier_reset(void)
-{
+void asx_barrier_reset(void) {
     uint32_t i;
     for (i = 0; i < g_slot_count; i++) {
         g_slots[i].generation = next_gen(g_slots[i].generation);

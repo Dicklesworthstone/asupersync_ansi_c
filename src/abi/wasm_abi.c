@@ -14,8 +14,7 @@
 /* ABI version and signature                                           */
 /* ------------------------------------------------------------------ */
 
-asx_abi_version asx_abi_version_current(void)
-{
+asx_abi_version asx_abi_version_current(void) {
     asx_abi_version v;
     v.major = ASX_WASM_ABI_VERSION_MAJOR;
     v.minor = ASX_WASM_ABI_VERSION_MINOR;
@@ -44,32 +43,25 @@ asx_abi_version asx_abi_version_current(void)
     return v;
 }
 
-asx_abi_signature asx_abi_signature_compute(void)
-{
+asx_abi_signature asx_abi_signature_compute(void) {
     asx_abi_version v = asx_abi_version_current();
     /* Pack: major[63:56] minor[55:48] patch[47:32] features[31:0] */
-    return ((uint64_t)v.major << 56)
-         | ((uint64_t)v.minor << 48)
-         | ((uint64_t)v.patch << 32)
-         | (uint64_t)v.feature_flags;
+    return ((uint64_t)v.major << 56) | ((uint64_t)v.minor << 48) | ((uint64_t)v.patch << 32) |
+           (uint64_t)v.feature_flags;
 }
 
 /* ------------------------------------------------------------------ */
 /* Compatibility checking                                              */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_abi_check_compat(
-    const asx_abi_version *local,
-    const asx_abi_version *remote,
-    asx_abi_compat_result *out)
-{
-    if (local == NULL || remote == NULL || out == NULL)
-        return ASX_E_INVALID_ARGUMENT;
+asx_status asx_abi_check_compat(const asx_abi_version *local, const asx_abi_version *remote,
+                                asx_abi_compat_result *out) {
+    if (local == NULL || remote == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    out->local  = *local;
+    out->local = *local;
     out->remote = *remote;
     out->missing_features = remote->feature_flags & ~local->feature_flags;
-    out->extra_features   = local->feature_flags & ~remote->feature_flags;
+    out->extra_features = local->feature_flags & ~remote->feature_flags;
 
     /* Major version mismatch → incompatible */
     if (local->major != remote->major) {
@@ -87,13 +79,12 @@ asx_status asx_abi_check_compat(
     return ASX_OK;
 }
 
-const char *asx_abi_compat_str(asx_abi_compat compat)
-{
+const char *asx_abi_compat_str(asx_abi_compat compat) {
     switch (compat) {
-    case ASX_ABI_COMPATIBLE:   return "compatible";
-    case ASX_ABI_DEGRADED:     return "degraded";
+    case ASX_ABI_COMPATIBLE: return "compatible";
+    case ASX_ABI_DEGRADED: return "degraded";
     case ASX_ABI_INCOMPATIBLE: return "incompatible";
-    default:                   return "unknown";
+    default: return "unknown";
     }
 }
 
@@ -124,23 +115,19 @@ static const uint16_t g_boot_legal[ASX_BOOT_PHASE_COUNT] = {
     /* FAILED        */ (1u << ASX_BOOT_PHASE_UNINITIALIZED),
 };
 
-asx_status asx_boot_transition_check(asx_boot_phase from, asx_boot_phase to)
-{
-    if ((int)from < 0 || (int)from >= ASX_BOOT_PHASE_COUNT
-        || (int)to < 0 || (int)to >= ASX_BOOT_PHASE_COUNT)
+asx_status asx_boot_transition_check(asx_boot_phase from, asx_boot_phase to) {
+    if ((int)from < 0 || (int)from >= ASX_BOOT_PHASE_COUNT || (int)to < 0 ||
+        (int)to >= ASX_BOOT_PHASE_COUNT)
         return ASX_E_INVALID_ARGUMENT;
 
-    if (g_boot_legal[(int)from] & (1u << (int)to))
-        return ASX_OK;
+    if (g_boot_legal[(int)from] & (1u << (int)to)) return ASX_OK;
     return ASX_E_INVALID_TRANSITION;
 }
 
-const char *asx_boot_phase_str(asx_boot_phase phase)
-{
-    static const char *names[] = {
-        "uninitialized", "abi_check", "hooks_bind", "provider_init",
-        "runtime_init", "ready", "shutdown", "terminated", "failed"
-    };
+const char *asx_boot_phase_str(asx_boot_phase phase) {
+    static const char *names[] = {"uninitialized", "abi_check",    "hooks_bind",
+                                  "provider_init", "runtime_init", "ready",
+                                  "shutdown",      "terminated",   "failed"};
     if ((int)phase < 0 || (int)phase >= ASX_BOOT_PHASE_COUNT) return "unknown";
     return names[(int)phase];
 }
@@ -169,23 +156,18 @@ static const uint8_t g_provider_legal[ASX_PROVIDER_STATE_COUNT] = {
     /* FAILED       */ (1u << ASX_PROVIDER_UNREGISTERED),
 };
 
-asx_status asx_provider_transition_check(asx_provider_state from, asx_provider_state to)
-{
-    if ((int)from < 0 || (int)from >= ASX_PROVIDER_STATE_COUNT
-        || (int)to < 0 || (int)to >= ASX_PROVIDER_STATE_COUNT)
+asx_status asx_provider_transition_check(asx_provider_state from, asx_provider_state to) {
+    if ((int)from < 0 || (int)from >= ASX_PROVIDER_STATE_COUNT || (int)to < 0 ||
+        (int)to >= ASX_PROVIDER_STATE_COUNT)
         return ASX_E_INVALID_ARGUMENT;
 
-    if (g_provider_legal[(int)from] & (1u << (int)to))
-        return ASX_OK;
+    if (g_provider_legal[(int)from] & (1u << (int)to)) return ASX_OK;
     return ASX_E_INVALID_TRANSITION;
 }
 
-const char *asx_provider_state_str(asx_provider_state state)
-{
-    static const char *names[] = {
-        "unregistered", "registering", "active", "suspending",
-        "suspended", "removing", "removed", "failed"
-    };
+const char *asx_provider_state_str(asx_provider_state state) {
+    static const char *names[] = {"unregistered", "registering", "active",  "suspending",
+                                  "suspended",    "removing",    "removed", "failed"};
     if ((int)state < 0 || (int)state >= ASX_PROVIDER_STATE_COUNT) return "unknown";
     return names[(int)state];
 }
@@ -208,22 +190,17 @@ static const uint8_t g_hook_legal[ASX_HOOK_STATE_COUNT] = {
     /* UNBOUND_FAILED*/ (1u << ASX_HOOK_BINDING),
 };
 
-asx_status asx_hook_transition_check(asx_hook_state from, asx_hook_state to)
-{
-    if ((int)from < 0 || (int)from >= ASX_HOOK_STATE_COUNT
-        || (int)to < 0 || (int)to >= ASX_HOOK_STATE_COUNT)
+asx_status asx_hook_transition_check(asx_hook_state from, asx_hook_state to) {
+    if ((int)from < 0 || (int)from >= ASX_HOOK_STATE_COUNT || (int)to < 0 ||
+        (int)to >= ASX_HOOK_STATE_COUNT)
         return ASX_E_INVALID_ARGUMENT;
 
-    if (g_hook_legal[(int)from] & (1u << (int)to))
-        return ASX_OK;
+    if (g_hook_legal[(int)from] & (1u << (int)to)) return ASX_OK;
     return ASX_E_INVALID_TRANSITION;
 }
 
-const char *asx_hook_state_str(asx_hook_state state)
-{
-    static const char *names[] = {
-        "unbound", "binding", "bound", "replacing", "unbound_failed"
-    };
+const char *asx_hook_state_str(asx_hook_state state) {
+    static const char *names[] = {"unbound", "binding", "bound", "replacing", "unbound_failed"};
     if ((int)state < 0 || (int)state >= ASX_HOOK_STATE_COUNT) return "unknown";
     return names[(int)state];
 }
@@ -232,13 +209,12 @@ const char *asx_hook_state_str(asx_hook_state state)
 /* Recoverability                                                      */
 /* ------------------------------------------------------------------ */
 
-const char *asx_recoverability_str(asx_recoverability r)
-{
+const char *asx_recoverability_str(asx_recoverability r) {
     switch (r) {
-    case ASX_RECOVER_NONE:      return "none";
-    case ASX_RECOVER_RETRY:     return "retry";
-    case ASX_RECOVER_DEGRADE:   return "degrade";
+    case ASX_RECOVER_NONE: return "none";
+    case ASX_RECOVER_RETRY: return "retry";
+    case ASX_RECOVER_DEGRADE: return "degrade";
     case ASX_RECOVER_RECONNECT: return "reconnect";
-    default:                    return "unknown";
+    default: return "unknown";
     }
 }

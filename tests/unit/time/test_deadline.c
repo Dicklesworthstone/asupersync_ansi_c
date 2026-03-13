@@ -13,14 +13,18 @@
  */
 
 #include "../../test_harness.h"
-#include <asx/time/deadline.h>
-#include <asx/runtime/virtual_time.h>
 #include <asx/runtime/rt.h>
+#include <asx/runtime/virtual_time.h>
+#include <asx/time/deadline.h>
 #include <string.h>
 
 /* Suppress warn_unused_result */
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -29,8 +33,7 @@ static asx_status st_sink_;
 static asx_runtime g_rt;
 static asx_vtime_state g_vt;
 
-static void setup(void)
-{
+static void setup(void) {
     const asx_runtime_hooks *orig;
     asx_runtime_hooks hooks;
 
@@ -45,18 +48,13 @@ static void setup(void)
     MUST_OK(asx_runtime_set_hooks(&hooks));
 }
 
-static void teardown(void)
-{
-    asx_runtime_shutdown(&g_rt);
-}
+static void teardown(void) { asx_runtime_shutdown(&g_rt); }
 
 /* ------------------------------------------------------------------ */
 /* Init tests                                                          */
 /* ------------------------------------------------------------------ */
 
-TEST(init_null_fails) {
-    ASSERT_EQ(asx_deadline_init(NULL, 100), ASX_E_INVALID_ARGUMENT);
-}
+TEST(init_null_fails) { ASSERT_EQ(asx_deadline_init(NULL, 100), ASX_E_INVALID_ARGUMENT); }
 
 TEST(init_sets_target) {
     asx_deadline dl;
@@ -66,9 +64,7 @@ TEST(init_sets_target) {
     ASSERT_EQ(dl.expired, 0);
 }
 
-TEST(after_null_fails) {
-    ASSERT_EQ(asx_deadline_after(NULL, 100), ASX_E_INVALID_ARGUMENT);
-}
+TEST(after_null_fails) { ASSERT_EQ(asx_deadline_after(NULL, 100), ASX_E_INVALID_ARGUMENT); }
 
 TEST(after_computes_target_from_now) {
     asx_deadline dl;
@@ -88,9 +84,7 @@ TEST(after_computes_target_from_now) {
 /* Arm / Disarm tests                                                  */
 /* ------------------------------------------------------------------ */
 
-TEST(arm_null_fails) {
-    ASSERT_EQ(asx_deadline_arm(NULL, NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(arm_null_fails) { ASSERT_EQ(asx_deadline_arm(NULL, NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(arm_registers_timer) {
     asx_deadline dl;
@@ -112,9 +106,7 @@ TEST(arm_double_arm_fails) {
     teardown();
 }
 
-TEST(disarm_null_fails) {
-    ASSERT_EQ(asx_deadline_disarm(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(disarm_null_fails) { ASSERT_EQ(asx_deadline_disarm(NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(disarm_cancels_timer) {
     asx_deadline dl;
@@ -133,7 +125,7 @@ TEST(disarm_unarmed_is_noop) {
     asx_deadline dl;
     setup();
     MUST_OK(asx_deadline_init(&dl, 5000000ULL));
-    MUST_OK(asx_deadline_disarm(&dl));  /* should not fail */
+    MUST_OK(asx_deadline_disarm(&dl)); /* should not fail */
     teardown();
 }
 
@@ -195,28 +187,21 @@ TEST(remaining_after_target) {
     ASSERT_EQ(asx_deadline_remaining_ns(&dl, 15000000ULL), (uint64_t)0);
 }
 
-TEST(remaining_null_returns_zero) {
-    ASSERT_EQ(asx_deadline_remaining_ns(NULL, 100), (uint64_t)0);
-}
+TEST(remaining_null_returns_zero) { ASSERT_EQ(asx_deadline_remaining_ns(NULL, 100), (uint64_t)0); }
 
 /* ------------------------------------------------------------------ */
 /* Target query tests                                                  */
 /* ------------------------------------------------------------------ */
 
-TEST(target_null_returns_zero) {
-    ASSERT_EQ(asx_deadline_target(NULL), (asx_time)0);
-}
+TEST(target_null_returns_zero) { ASSERT_EQ(asx_deadline_target(NULL), (asx_time)0); }
 
-TEST(armed_null_returns_false) {
-    ASSERT_FALSE(asx_deadline_is_armed(NULL));
-}
+TEST(armed_null_returns_false) { ASSERT_FALSE(asx_deadline_is_armed(NULL)); }
 
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_deadline ===\n");
 
     /* Init */

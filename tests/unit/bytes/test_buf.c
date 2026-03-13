@@ -8,7 +8,11 @@
 #include <asx/bytes/buf.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* asx_buf tests                                                       */
@@ -118,7 +122,7 @@ TEST(buf_mut_compact) {
     MUST_OK(asx_buf_mut_put_u8(&buf, 1));
     MUST_OK(asx_buf_mut_put_u8(&buf, 2));
     MUST_OK(asx_buf_mut_put_u8(&buf, 3));
-    MUST_OK(asx_buf_mut_get_u8(&buf, &val));  /* consume byte 1 */
+    MUST_OK(asx_buf_mut_get_u8(&buf, &val)); /* consume byte 1 */
     ASSERT_EQ(val, 1);
     ASSERT_EQ(buf.rd_pos, 1u);
     asx_buf_mut_compact(&buf);
@@ -285,8 +289,7 @@ TEST(buf_mut_null_safety) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_buf ===\n");
 
     RUN_TEST(buf_from_data);

@@ -16,8 +16,8 @@
 #define ASX_RUNTIME_IO_DRIVER_H
 
 #include <asx/asx_export.h>
-#include <asx/asx_status.h>
 #include <asx/asx_ids.h>
+#include <asx/asx_status.h>
 #include <asx/runtime/waker.h>
 
 #ifdef __cplusplus
@@ -31,9 +31,9 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_IO_READABLE  = 0x01,
-    ASX_IO_WRITABLE  = 0x02,
-    ASX_IO_ERROR     = 0x04
+    ASX_IO_READABLE = 0x01,
+    ASX_IO_WRITABLE = 0x02,
+    ASX_IO_ERROR = 0x04
 } asx_io_interest;
 
 /* -------------------------------------------------------------------
@@ -50,8 +50,8 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    asx_io_token    token;
-    asx_io_interest ready;    /* bitmask of ready interests */
+    asx_io_token token;
+    asx_io_interest ready; /* bitmask of ready interests */
 } asx_io_event;
 
 /* -------------------------------------------------------------------
@@ -74,19 +74,14 @@ ASX_API void asx_io_driver_shutdown(void);
  * interest is a bitmask of ASX_IO_READABLE|WRITABLE|ERROR.
  * waker will be signaled when the interest is ready.
  * Returns ASX_OK on success. */
-ASX_API ASX_MUST_USE asx_status asx_io_register(
-    int fd,
-    asx_io_interest interest,
-    const asx_waker *waker,
-    asx_io_token *out_token);
+ASX_API ASX_MUST_USE asx_status asx_io_register(int fd, asx_io_interest interest,
+                                                const asx_waker *waker, asx_io_token *out_token);
 
 /* Deregister an IO token. */
 ASX_API void asx_io_deregister(asx_io_token *token);
 
 /* Update the interest mask for an existing registration. */
-ASX_API ASX_MUST_USE asx_status asx_io_set_interest(
-    asx_io_token *token,
-    asx_io_interest interest);
+ASX_API ASX_MUST_USE asx_status asx_io_set_interest(asx_io_token *token, asx_io_interest interest);
 
 /* -------------------------------------------------------------------
  * API: IO driver poll
@@ -95,10 +90,8 @@ ASX_API ASX_MUST_USE asx_status asx_io_set_interest(
 /* Poll the reactor for IO events. Non-blocking in walking skeleton.
  * Collects ready events and signals associated wakers.
  * Returns the number of events collected. */
-ASX_API uint32_t asx_io_driver_poll(
-    asx_io_event *out_events,
-    uint32_t max_events,
-    uint32_t timeout_ms);
+ASX_API uint32_t asx_io_driver_poll(asx_io_event *out_events, uint32_t max_events,
+                                    uint32_t timeout_ms);
 
 /* Get the count of active IO registrations. */
 ASX_API uint32_t asx_io_active_count(void);

@@ -11,31 +11,37 @@
 #include "../../test_harness.h"
 #include <asx/asx.h>
 #include <asx/asx_config.h>
-#include <asx/runtime/runtime.h>
 #include <asx/core/cancel.h>
 #include <asx/core/ghost.h>
+#include <asx/runtime/runtime.h>
 
 /* Suppress warn_unused_result for intentionally-ignored scheduler calls. */
-#define SCHED_RUN_IGNORE(rid, bud) \
-    do { asx_status s_ = asx_scheduler_run((rid), (bud)); (void)s_; } while (0)
+#define SCHED_RUN_IGNORE(rid, bud)                                                                 \
+    do {                                                                                           \
+        asx_status s_ = asx_scheduler_run((rid), (bud));                                           \
+        (void)s_;                                                                                  \
+    } while (0)
 
 /* -------------------------------------------------------------------
  * Test poll functions
  * ------------------------------------------------------------------- */
 
 static asx_status poll_pending(void *data, asx_task_id self) {
-    (void)data; (void)self;
+    (void)data;
+    (void)self;
     return ASX_E_PENDING;
 }
 
 static asx_status poll_complete(void *data, asx_task_id self) {
-    (void)data; (void)self;
+    (void)data;
+    (void)self;
     return ASX_OK;
 }
 
 /* Fails immediately with an error */
 static asx_status poll_fail(void *data, asx_task_id self) {
-    (void)data; (void)self;
+    (void)data;
+    (void)self;
     return ASX_E_INVALID_STATE;
 }
 
@@ -94,8 +100,7 @@ TEST(poisoned_region_blocks_spawn_allows_query) {
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
 
     /* Spawn should be blocked */
-    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid),
-              ASX_E_REGION_POISONED);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_E_REGION_POISONED);
 
     /* State query should still work */
     ASSERT_EQ(asx_region_get_state(rid, &state), ASX_OK);
@@ -237,8 +242,7 @@ TEST(spawn_rejected_during_poisoned_drain) {
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
 
     /* New spawn should fail even though the region is still OPEN */
-    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid2),
-              ASX_E_REGION_POISONED);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid2), ASX_E_REGION_POISONED);
 
     /* Cancel existing task so scheduler can quiesce */
     ASSERT_EQ(asx_task_cancel(tid1, ASX_CANCEL_SHUTDOWN), ASX_OK);
@@ -271,8 +275,7 @@ TEST(active_policy_is_debug_in_test_builds) {
     ASSERT_EQ((int)prof, (int)ASX_SAFETY_DEBUG);
 
     /* And containment policy is FAIL_FAST */
-    ASSERT_EQ((int)asx_containment_policy_active(),
-              (int)ASX_CONTAIN_FAIL_FAST);
+    ASSERT_EQ((int)asx_containment_policy_active(), (int)ASX_CONTAIN_FAIL_FAST);
 }
 
 /* -------------------------------------------------------------------
@@ -289,8 +292,7 @@ TEST(contain_fault_fail_fast_does_not_poison) {
 
     /* Under DEBUG/FAIL_FAST, contain_fault returns the fault
      * but does NOT poison the region */
-    ASSERT_EQ(asx_region_contain_fault(rid, ASX_E_INVALID_STATE),
-              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_region_contain_fault(rid, ASX_E_INVALID_STATE), ASX_E_INVALID_STATE);
 
     ASSERT_EQ(asx_region_is_poisoned(rid, &poisoned), ASX_OK);
     ASSERT_EQ(poisoned, 0);
@@ -515,8 +517,7 @@ TEST(poison_plus_cancel_propagation_resolves_tasks) {
     /* No new spawns allowed */
     {
         asx_task_id tid_new;
-        ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid_new),
-                  ASX_E_REGION_POISONED);
+        ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid_new), ASX_E_REGION_POISONED);
     }
 }
 
@@ -581,8 +582,7 @@ TEST(containment_event_ordering_is_deterministic) {
 
         /* Compare event streams */
         for (i = 0; i < event_count_1 && i < 256u; i++) {
-            if (events_1[i].kind != events_2[i].kind ||
-                events_1[i].round != events_2[i].round ||
+            if (events_1[i].kind != events_2[i].kind || events_1[i].round != events_2[i].round ||
                 events_1[i].sequence != events_2[i].sequence) {
                 events_match = 0;
                 break;

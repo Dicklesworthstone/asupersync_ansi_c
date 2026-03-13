@@ -20,8 +20,11 @@
 #include <string.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
-#define IGNORE_RC(expr) \
-    do { asx_status ignore_rc_ = (expr); (void)ignore_rc_; } while (0)
+#define IGNORE_RC(expr)                                                                            \
+    do {                                                                                           \
+        asx_status ignore_rc_ = (expr);                                                            \
+        (void)ignore_rc_;                                                                          \
+    } while (0)
 
 /* -------------------------------------------------------------------
  * Helpers
@@ -30,31 +33,34 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
-#define SCENARIO_BEGIN(id) \
-    do { const char *_scenario_id = (id); int _scenario_ok = 1; (void)0
+#define SCENARIO_BEGIN(id)                                                                         \
+    do {                                                                                           \
+        const char *_scenario_id = (id);                                                           \
+        int _scenario_ok = 1;                                                                      \
+    (void)0
 
-#define SCENARIO_CHECK(cond, msg)                         \
-    do {                                                  \
-        if (!(cond)) {                                    \
-            printf("SCENARIO %s fail %s\n",               \
-                   _scenario_id, (msg));                  \
-            _scenario_ok = 0;                             \
-            g_fail++;                                     \
-            goto _scenario_end;                           \
-        }                                                 \
+#define SCENARIO_CHECK(cond, msg)                                                                  \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("SCENARIO %s fail %s\n", _scenario_id, (msg));                                  \
+            _scenario_ok = 0;                                                                      \
+            g_fail++;                                                                              \
+            goto _scenario_end;                                                                    \
+        }                                                                                          \
     } while (0)
 
-#define SCENARIO_END()                                    \
-    _scenario_end:                                        \
-    if (_scenario_ok) {                                   \
-        printf("SCENARIO %s pass\n", _scenario_id);      \
-        g_pass++;                                         \
-    }                                                     \
-    } while (0)
+#define SCENARIO_END()                                                                             \
+    _scenario_end:                                                                                 \
+    if (_scenario_ok) {                                                                            \
+        printf("SCENARIO %s pass\n", _scenario_id);                                                \
+        g_pass++;                                                                                  \
+    }                                                                                              \
+    }                                                                                              \
+    while (0)
 
-static asx_status poll_complete(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_complete(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_OK;
 }
 
@@ -64,8 +70,7 @@ typedef struct {
 } yield_state;
 
 /* Cancel-aware poll for drain tests */
-static asx_status poll_cancel_aware(void *ud, asx_task_id self)
-{
+static asx_status poll_cancel_aware(void *ud, asx_task_id self) {
     yield_state *s = (yield_state *)ud;
     asx_checkpoint_result cp;
     ASX_CO_BEGIN(&s->co);
@@ -84,8 +89,7 @@ static asx_status poll_cancel_aware(void *ud, asx_task_id self)
  * ------------------------------------------------------------------- */
 
 /* market-open-burst-001: extreme admission spike */
-static void scenario_admission_spike(void)
-{
+static void scenario_admission_spike(void) {
     SCENARIO_BEGIN("market-open-burst-001.admission_spike");
     asx_runtime_reset();
 
@@ -118,8 +122,7 @@ static void scenario_admission_spike(void)
 }
 
 /* market-open-burst-002: burst with interleaved obligations */
-static void scenario_burst_obligations(void)
-{
+static void scenario_burst_obligations(void) {
     SCENARIO_BEGIN("market-open-burst-002.burst_obligations");
     asx_runtime_reset();
 
@@ -139,11 +142,9 @@ static void scenario_burst_obligations(void)
         if (rc == ASX_OK) {
             /* Commit every other, abort the rest — tests linearity */
             if (i % 2 == 0) {
-                SCENARIO_CHECK(asx_obligation_commit(oid) == ASX_OK,
-                               "obligation_commit");
+                SCENARIO_CHECK(asx_obligation_commit(oid) == ASX_OK, "obligation_commit");
             } else {
-                SCENARIO_CHECK(asx_obligation_abort(oid) == ASX_OK,
-                               "obligation_abort");
+                SCENARIO_CHECK(asx_obligation_abort(oid) == ASX_OK, "obligation_abort");
             }
         }
     }
@@ -156,8 +157,7 @@ static void scenario_burst_obligations(void)
 }
 
 /* market-open-burst-003: partial budget drain under spike */
-static void scenario_partial_drain(void)
-{
+static void scenario_partial_drain(void) {
     SCENARIO_BEGIN("market-open-burst-003.partial_drain");
     asx_runtime_reset();
 
@@ -179,8 +179,7 @@ static void scenario_partial_drain(void)
     /* Tight budget: fewer polls than tasks */
     asx_budget budget = asx_budget_from_polls(2);
     asx_status rc = asx_scheduler_run(rid, &budget);
-    SCENARIO_CHECK(rc == ASX_E_POLL_BUDGET_EXHAUSTED,
-                   "expected budget exhaustion");
+    SCENARIO_CHECK(rc == ASX_E_POLL_BUDGET_EXHAUSTED, "expected budget exhaustion");
 
     /* Second pass drains remaining */
     budget = asx_budget_from_polls(500);
@@ -191,8 +190,7 @@ static void scenario_partial_drain(void)
 }
 
 /* market-open-burst-004: burst recovery and graceful degradation */
-static void scenario_burst_recovery(void)
-{
+static void scenario_burst_recovery(void) {
     SCENARIO_BEGIN("market-open-burst-004.burst_recovery");
     asx_runtime_reset();
 
@@ -212,16 +210,16 @@ static void scenario_burst_recovery(void)
 
     /* Region stays healthy despite overload */
     asx_region_state rs;
-    SCENARIO_CHECK(asx_region_get_state(rid, &rs) == ASX_OK &&
-                   rs == ASX_REGION_OPEN, "region healthy during overload");
+    SCENARIO_CHECK(asx_region_get_state(rid, &rs) == ASX_OK && rs == ASX_REGION_OPEN,
+                   "region healthy during overload");
 
     /* Phase 2: drain to quiescence */
     asx_budget budget = asx_budget_from_polls(500);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
 
     /* Phase 3: region still clean after burst */
-    SCENARIO_CHECK(asx_region_get_state(rid, &rs) == ASX_OK &&
-                   rs == ASX_REGION_OPEN, "region healthy after burst drain");
+    SCENARIO_CHECK(asx_region_get_state(rid, &rs) == ASX_OK && rs == ASX_REGION_OPEN,
+                   "region healthy after burst drain");
 
     /* Clean close verifies no dangling state */
     SCENARIO_CHECK(asx_region_close(rid) == ASX_OK, "clean_close");
@@ -230,8 +228,7 @@ static void scenario_burst_recovery(void)
 }
 
 /* market-open-burst-005: mass cancel during burst */
-static void scenario_mass_cancel_burst(void)
-{
+static void scenario_mass_cancel_burst(void) {
     SCENARIO_BEGIN("market-open-burst-005.mass_cancel_burst");
     asx_runtime_reset();
 
@@ -246,9 +243,9 @@ static void scenario_mass_cancel_burst(void)
 
     /* Spawn cancel-aware tasks */
     for (i = 0; i < 8; i++) {
-        asx_status rc = asx_task_spawn_captured(rid, poll_cancel_aware,
-                       (uint32_t)sizeof(yield_state), NULL,
-                       &tids[i], &states[i]);
+        asx_status rc =
+            asx_task_spawn_captured(rid, poll_cancel_aware, (uint32_t)sizeof(yield_state), NULL,
+                                    &tids[i], &states[i]);
         if (rc != ASX_OK) break;
         ys = (yield_state *)states[i];
         ys->co.line = 0;
@@ -262,8 +259,7 @@ static void scenario_mass_cancel_burst(void)
 
     /* Mass cancel */
     uint32_t cancelled = asx_cancel_propagate(rid, ASX_CANCEL_SHUTDOWN);
-    SCENARIO_CHECK(cancelled == spawned,
-                   "all tasks should receive cancel");
+    SCENARIO_CHECK(cancelled == spawned, "all tasks should receive cancel");
 
     /* Drain */
     budget = asx_budget_from_polls(200);
@@ -272,16 +268,15 @@ static void scenario_mass_cancel_burst(void)
     /* All should be completed */
     for (i = 0; i < spawned; i++) {
         asx_task_state ts;
-        SCENARIO_CHECK(asx_task_get_state(tids[i], &ts) == ASX_OK &&
-                       ts == ASX_TASK_COMPLETED, "task must complete post-cancel");
+        SCENARIO_CHECK(asx_task_get_state(tids[i], &ts) == ASX_OK && ts == ASX_TASK_COMPLETED,
+                       "task must complete post-cancel");
     }
 
     SCENARIO_END();
 }
 
 /* market-open-burst-006: multi-region burst isolation */
-static void scenario_multi_region_burst(void)
-{
+static void scenario_multi_region_burst(void) {
     SCENARIO_BEGIN("market-open-burst-006.multi_region_isolation");
     asx_runtime_reset();
 
@@ -311,8 +306,7 @@ static void scenario_multi_region_burst(void)
 }
 
 /* market-open-burst-007: deterministic trace digest */
-static void scenario_trace_digest(void)
-{
+static void scenario_trace_digest(void) {
     SCENARIO_BEGIN("market-open-burst-007.trace_deterministic");
 
     /* Run 1 */
@@ -325,8 +319,7 @@ static void scenario_trace_digest(void)
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_1");
     for (i = 0; i < 6; i++) {
-        SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                       "spawn_1");
+        SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_1");
     }
     asx_budget budget = asx_budget_from_polls(30);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
@@ -338,8 +331,7 @@ static void scenario_trace_digest(void)
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
     for (i = 0; i < 6; i++) {
-        SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                       "spawn_2");
+        SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_2");
     }
     budget = asx_budget_from_polls(30);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
@@ -356,8 +348,7 @@ static void scenario_trace_digest(void)
  * Main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     scenario_admission_spike();
     scenario_burst_obligations();
     scenario_partial_drain();
@@ -366,7 +357,6 @@ int main(void)
     scenario_multi_region_burst();
     scenario_trace_digest();
 
-    fprintf(stderr, "[e2e] market_open_burst: %d passed, %d failed\n",
-            g_pass, g_fail);
+    fprintf(stderr, "[e2e] market_open_burst: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
 }

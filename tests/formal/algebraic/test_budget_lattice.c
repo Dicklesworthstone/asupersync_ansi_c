@@ -17,8 +17,7 @@
 static asx_budget samples[6];
 static int n_samples;
 
-static void init_samples(void)
-{
+static void init_samples(void) {
     /* 0: infinite (identity) */
     samples[0] = asx_budget_infinite();
     /* 1: zero (absorbing) */
@@ -40,17 +39,13 @@ static void init_samples(void)
     n_samples = 6;
 }
 
-static int budget_eq(const asx_budget *a, const asx_budget *b)
-{
-    return a->deadline == b->deadline
-        && a->poll_quota == b->poll_quota
-        && a->cost_quota == b->cost_quota
-        && a->priority == b->priority;
+static int budget_eq(const asx_budget *a, const asx_budget *b) {
+    return a->deadline == b->deadline && a->poll_quota == b->poll_quota &&
+           a->cost_quota == b->cost_quota && a->priority == b->priority;
 }
 
 /* --- Identity: meet(infinite, x) == x --- */
-TEST(budget_meet_identity)
-{
+TEST(budget_meet_identity) {
     int i;
     asx_budget inf = asx_budget_infinite();
     for (i = 0; i < n_samples; i++) {
@@ -60,8 +55,7 @@ TEST(budget_meet_identity)
 }
 
 /* --- Identity (right): meet(x, infinite) == x --- */
-TEST(budget_meet_identity_right)
-{
+TEST(budget_meet_identity_right) {
     int i;
     asx_budget inf = asx_budget_infinite();
     for (i = 0; i < n_samples; i++) {
@@ -71,8 +65,7 @@ TEST(budget_meet_identity_right)
 }
 
 /* --- Absorption: meet(zero, x) is exhausted --- */
-TEST(budget_meet_absorption)
-{
+TEST(budget_meet_absorption) {
     int i;
     asx_budget zero = asx_budget_zero();
     for (i = 0; i < n_samples; i++) {
@@ -82,8 +75,7 @@ TEST(budget_meet_absorption)
 }
 
 /* --- Commutativity: meet(a,b) == meet(b,a) --- */
-TEST(budget_meet_commutativity)
-{
+TEST(budget_meet_commutativity) {
     int i, j;
     for (i = 0; i < n_samples; i++) {
         for (j = 0; j < n_samples; j++) {
@@ -95,8 +87,7 @@ TEST(budget_meet_commutativity)
 }
 
 /* --- Associativity: meet(meet(a,b),c) == meet(a,meet(b,c)) --- */
-TEST(budget_meet_associativity)
-{
+TEST(budget_meet_associativity) {
     int i, j, k;
     for (i = 0; i < n_samples; i++) {
         for (j = 0; j < n_samples; j++) {
@@ -112,8 +103,7 @@ TEST(budget_meet_associativity)
 }
 
 /* --- Idempotence: meet(a,a) == a --- */
-TEST(budget_meet_idempotence)
-{
+TEST(budget_meet_idempotence) {
     int i;
     for (i = 0; i < n_samples; i++) {
         asx_budget result = asx_budget_meet(&samples[i], &samples[i]);
@@ -122,8 +112,7 @@ TEST(budget_meet_idempotence)
 }
 
 /* --- Narrowing: meet(a,b) is at least as tight as each operand --- */
-TEST(budget_meet_narrowing)
-{
+TEST(budget_meet_narrowing) {
     int i, j;
     for (i = 0; i < n_samples; i++) {
         for (j = 0; j < n_samples; j++) {
@@ -138,8 +127,7 @@ TEST(budget_meet_narrowing)
 }
 
 /* --- Exhaustion propagation: if either is exhausted, result is exhausted --- */
-TEST(budget_meet_exhaustion_propagation)
-{
+TEST(budget_meet_exhaustion_propagation) {
     int i;
     asx_budget zero = asx_budget_zero();
     for (i = 0; i < n_samples; i++) {
@@ -150,8 +138,7 @@ TEST(budget_meet_exhaustion_propagation)
     }
 }
 
-int main(void)
-{
+int main(void) {
     init_samples();
 
     fprintf(stderr, "[formal] budget meet lattice algebraic properties\n");

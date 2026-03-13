@@ -7,9 +7,7 @@
 #include "../../test_harness.h"
 #include <asx/asx_status.h>
 
-TEST(status_ok_str) {
-    ASSERT_STR_EQ(asx_status_str(ASX_OK), "OK");
-}
+TEST(status_ok_str) { ASSERT_STR_EQ(asx_status_str(ASX_OK), "OK"); }
 
 TEST(status_error_strs) {
     ASSERT_STR_EQ(asx_status_str(ASX_E_INVALID_TRANSITION), "invalid state transition");
@@ -26,9 +24,7 @@ TEST(status_is_error) {
     ASSERT_TRUE(asx_is_error(ASX_E_RESOURCE_EXHAUSTED));
 }
 
-TEST(status_unknown) {
-    ASSERT_STR_EQ(asx_status_str((asx_status)99999), "unknown status");
-}
+TEST(status_unknown) { ASSERT_STR_EQ(asx_status_str((asx_status)99999), "unknown status"); }
 
 int main(void) {
     fprintf(stderr, "=== test_status ===\n");

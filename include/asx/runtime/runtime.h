@@ -13,10 +13,10 @@
 #define ASX_RUNTIME_H
 
 #include <asx/asx_export.h>
-#include <asx/asx_status.h>
 #include <asx/asx_ids.h>
-#include <asx/core/outcome.h>
+#include <asx/asx_status.h>
 #include <asx/core/budget.h>
+#include <asx/core/outcome.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,9 +27,9 @@ extern "C" {
  * Phase 3 will replace with dynamic hook-backed allocation.
  * ------------------------------------------------------------------- */
 
-#define ASX_MAX_REGIONS      8
-#define ASX_MAX_TASKS        64
-#define ASX_MAX_OBLIGATIONS  128
+#define ASX_MAX_REGIONS 8
+#define ASX_MAX_TASKS 64
+#define ASX_MAX_OBLIGATIONS 128
 #define ASX_REGION_CAPTURE_ARENA_BYTES 16384u
 
 /* -------------------------------------------------------------------
@@ -51,26 +51,26 @@ typedef struct asx_co_state {
     uint32_t line;
 } asx_co_state;
 
-#define ASX_CO_STATE_INIT { 0u }
+#define ASX_CO_STATE_INIT {0u}
 
 /* Protothread helpers:
  *  - ASX_CO_BEGIN must be paired with ASX_CO_END in the same function.
  *  - ASX_CO_YIELD returns ASX_E_PENDING and resumes at the next call.
  *  - State must live in region-owned captured task memory. */
-#define ASX_CO_BEGIN(CO_STATE_PTR)                 \
-    switch ((CO_STATE_PTR)->line) {                \
+#define ASX_CO_BEGIN(CO_STATE_PTR)                                                                 \
+    switch ((CO_STATE_PTR)->line) {                                                                \
     case 0u:
 
-#define ASX_CO_YIELD(CO_STATE_PTR)                 \
-    do {                                           \
-        (CO_STATE_PTR)->line = (uint32_t)__LINE__; \
-        return ASX_E_PENDING;                      \
-        case __LINE__:;                            \
+#define ASX_CO_YIELD(CO_STATE_PTR)                                                                 \
+    do {                                                                                           \
+        (CO_STATE_PTR)->line = (uint32_t)__LINE__;                                                 \
+        return ASX_E_PENDING;                                                                      \
+    case __LINE__:;                                                                                \
     } while (0)
 
-#define ASX_CO_END(CO_STATE_PTR)                   \
-    }                                              \
-    (CO_STATE_PTR)->line = 0u;                     \
+#define ASX_CO_END(CO_STATE_PTR)                                                                   \
+    }                                                                                              \
+    (CO_STATE_PTR)->line = 0u;                                                                     \
     return ASX_OK
 
 /* -------------------------------------------------------------------
@@ -109,8 +109,7 @@ ASX_API ASX_MUST_USE asx_status asx_region_close(asx_region_id id);
  *   ASX_E_STALE_HANDLE if generation mismatch.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Region Lifecycle. */
-ASX_API ASX_MUST_USE asx_status asx_region_get_state(asx_region_id id,
-                                                     asx_region_state *out_state);
+ASX_API ASX_MUST_USE asx_status asx_region_get_state(asx_region_id id, asx_region_state *out_state);
 
 /* -------------------------------------------------------------------
  * Region poison / containment
@@ -141,8 +140,7 @@ ASX_API ASX_MUST_USE asx_status asx_region_poison(asx_region_id id);
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out is NULL,
  *   ASX_E_NOT_FOUND if id is invalid.
  * Thread-safety: not thread-safe; single-threaded mode only. */
-ASX_API ASX_MUST_USE asx_status asx_region_is_poisoned(asx_region_id id,
-                                                        int *out);
+ASX_API ASX_MUST_USE asx_status asx_region_is_poisoned(asx_region_id id, int *out);
 
 /* Apply the active containment policy to a region after a fault.
  *
@@ -156,8 +154,7 @@ ASX_API ASX_MUST_USE asx_status asx_region_is_poisoned(asx_region_id id,
  * Returns the fault status (always non-OK).
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Containment After Misuse. */
-ASX_API ASX_MUST_USE asx_status asx_region_contain_fault(
-    asx_region_id id, asx_status fault);
+ASX_API ASX_MUST_USE asx_status asx_region_contain_fault(asx_region_id id, asx_status fault);
 
 /* -------------------------------------------------------------------
  * Task lifecycle
@@ -179,10 +176,8 @@ ASX_API ASX_MUST_USE asx_status asx_region_contain_fault(
  * Ownership: user_data is borrowed (caller retains ownership).
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Task Lifecycle. */
-ASX_API ASX_MUST_USE asx_status asx_task_spawn(asx_region_id region,
-                                               asx_task_poll_fn poll_fn,
-                                               void *user_data,
-                                               asx_task_id *out_id);
+ASX_API ASX_MUST_USE asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn,
+                                               void *user_data, asx_task_id *out_id);
 
 /* Spawn a task with captured state allocated from the region arena.
  * The returned state pointer is stable for the task lifetime and is
@@ -204,8 +199,7 @@ ASX_API ASX_MUST_USE asx_status asx_task_spawn_captured(asx_region_id region,
                                                         asx_task_poll_fn poll_fn,
                                                         uint32_t state_size,
                                                         asx_task_state_dtor_fn state_dtor,
-                                                        asx_task_id *out_id,
-                                                        void **out_state);
+                                                        asx_task_id *out_id, void **out_state);
 
 /* Query the current state of a task.
  *
@@ -214,8 +208,7 @@ ASX_API ASX_MUST_USE asx_status asx_task_spawn_captured(asx_region_id region,
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out_state is NULL,
  *   ASX_E_NOT_FOUND if id is invalid or wrong type tag.
  * Thread-safety: not thread-safe; single-threaded mode only. */
-ASX_API ASX_MUST_USE asx_status asx_task_get_state(asx_task_id id,
-                                                   asx_task_state *out_state);
+ASX_API ASX_MUST_USE asx_status asx_task_get_state(asx_task_id id, asx_task_state *out_state);
 
 /* Query the outcome of a completed task.
  *
@@ -226,8 +219,7 @@ ASX_API ASX_MUST_USE asx_status asx_task_get_state(asx_task_id id,
  *   ASX_E_TASK_NOT_COMPLETED if the task has not finished.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Task Lifecycle. */
-ASX_API ASX_MUST_USE asx_status asx_task_get_outcome(asx_task_id id,
-                                                     asx_outcome *out_outcome);
+ASX_API ASX_MUST_USE asx_status asx_task_get_outcome(asx_task_id id, asx_outcome *out_outcome);
 
 /* -------------------------------------------------------------------
  * Cancellation (bd-2cw.3)
@@ -242,10 +234,10 @@ ASX_API ASX_MUST_USE asx_status asx_task_get_outcome(asx_task_id id,
 
 /* Result from asx_checkpoint(): tells the task its cancel status. */
 typedef struct {
-    asx_cancel_phase  phase;           /* current phase (or 0 if not cancelled) */
-    int               cancelled;       /* nonzero if cancel is active */
-    uint32_t          polls_remaining; /* cleanup budget left */
-    asx_cancel_kind   kind;            /* cancel kind (if cancelled) */
+    asx_cancel_phase phase;   /* current phase (or 0 if not cancelled) */
+    int cancelled;            /* nonzero if cancel is active */
+    uint32_t polls_remaining; /* cleanup budget left */
+    asx_cancel_kind kind;     /* cancel kind (if cancelled) */
 } asx_checkpoint_result;
 
 /* Request cancellation of a task. Transitions Running → CancelRequested.
@@ -257,8 +249,7 @@ typedef struct {
  *   ASX_E_NOT_FOUND if id is invalid.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Task Lifecycle. */
-ASX_API ASX_MUST_USE asx_status asx_task_cancel(asx_task_id id,
-                                                 asx_cancel_kind kind);
+ASX_API ASX_MUST_USE asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind);
 
 /* Cancel with explicit origin attribution (for propagation tracing).
  *
@@ -266,11 +257,9 @@ ASX_API ASX_MUST_USE asx_status asx_task_cancel(asx_task_id id,
  * Postconditions: same as asx_task_cancel; origin recorded for tracing.
  * Returns ASX_OK on success, ASX_E_NOT_FOUND if id is invalid.
  * Thread-safety: not thread-safe; single-threaded mode only. */
-ASX_API ASX_MUST_USE asx_status asx_task_cancel_with_origin(
-    asx_task_id id,
-    asx_cancel_kind kind,
-    asx_region_id origin_region,
-    asx_task_id origin_task);
+ASX_API ASX_MUST_USE asx_status asx_task_cancel_with_origin(asx_task_id id, asx_cancel_kind kind,
+                                                            asx_region_id origin_region,
+                                                            asx_task_id origin_task);
 
 /* Propagate cancellation to all tasks in a region.
  *
@@ -278,8 +267,7 @@ ASX_API ASX_MUST_USE asx_status asx_task_cancel_with_origin(
  * Postconditions: all running tasks in the region enter CancelRequested.
  * Returns the number of tasks that received the cancel signal.
  * Thread-safety: not thread-safe; single-threaded mode only. */
-ASX_API uint32_t asx_cancel_propagate(asx_region_id region,
-                                       asx_cancel_kind kind);
+ASX_API uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind);
 
 /* Task checkpoint: observe cancel status and advance phase.
  * If in CancelRequested, transitions to Cancelling and applies
@@ -291,8 +279,7 @@ ASX_API uint32_t asx_cancel_propagate(asx_region_id region,
  *   ASX_E_NOT_FOUND if self is invalid.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Task Lifecycle. */
-ASX_API ASX_MUST_USE asx_status asx_checkpoint(asx_task_id self,
-                                                asx_checkpoint_result *out);
+ASX_API ASX_MUST_USE asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out);
 
 /* Advance from Cancelling → Finalizing. Call when cleanup is done.
  *
@@ -312,8 +299,7 @@ ASX_API ASX_MUST_USE asx_status asx_task_finalize(asx_task_id id);
  *   ASX_E_NOT_FOUND if id is invalid.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Task Lifecycle. */
-ASX_API ASX_MUST_USE asx_status asx_task_get_cancel_phase(asx_task_id id,
-                                                           asx_cancel_phase *out);
+ASX_API ASX_MUST_USE asx_status asx_task_get_cancel_phase(asx_task_id id, asx_cancel_phase *out);
 
 /* -------------------------------------------------------------------
  * Obligation lifecycle
@@ -334,7 +320,7 @@ ASX_API ASX_MUST_USE asx_status asx_task_get_cancel_phase(asx_task_id id,
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Obligation Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_obligation_reserve(asx_region_id region,
-                                                        asx_obligation_id *out_id);
+                                                       asx_obligation_id *out_id);
 
 /* Commit a reserved obligation. Transitions: Reserved → Committed.
  *
@@ -364,7 +350,7 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_abort(asx_obligation_id id);
  *   ASX_E_NOT_FOUND if id is invalid.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_obligation_get_state(asx_obligation_id id,
-                                                          asx_obligation_state *out_state);
+                                                         asx_obligation_state *out_state);
 
 /* -------------------------------------------------------------------
  * Scheduler
@@ -384,8 +370,7 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_get_state(asx_obligation_id id,
  *   ASX_E_INVALID_ARGUMENT if budget is NULL.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Scheduler. */
-ASX_API ASX_MUST_USE asx_status asx_scheduler_run(asx_region_id region,
-                                                  asx_budget *budget);
+ASX_API ASX_MUST_USE asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget);
 
 /* -------------------------------------------------------------------
  * Scheduler event sequencing (deterministic replay support)
@@ -400,18 +385,18 @@ ASX_API ASX_MUST_USE asx_status asx_scheduler_run(asx_region_id region,
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_SCHED_EVENT_POLL          = 0,  /* task polled */
-    ASX_SCHED_EVENT_COMPLETE      = 1,  /* task completed (OK or error) */
-    ASX_SCHED_EVENT_BUDGET        = 2,  /* budget exhausted */
-    ASX_SCHED_EVENT_QUIESCENT     = 3,  /* all tasks complete */
-    ASX_SCHED_EVENT_CANCEL_FORCED = 4   /* task force-completed: cleanup budget exhausted */
+    ASX_SCHED_EVENT_POLL = 0,         /* task polled */
+    ASX_SCHED_EVENT_COMPLETE = 1,     /* task completed (OK or error) */
+    ASX_SCHED_EVENT_BUDGET = 2,       /* budget exhausted */
+    ASX_SCHED_EVENT_QUIESCENT = 3,    /* all tasks complete */
+    ASX_SCHED_EVENT_CANCEL_FORCED = 4 /* task force-completed: cleanup budget exhausted */
 } asx_scheduler_event_kind;
 
 typedef struct {
     asx_scheduler_event_kind kind;
-    asx_task_id              task_id;   /* ASX_INVALID_ID for non-task events */
-    uint32_t                 sequence;  /* monotonic per scheduler_run call */
-    uint32_t                 round;     /* scheduler round (0-based) */
+    asx_task_id task_id; /* ASX_INVALID_ID for non-task events */
+    uint32_t sequence;   /* monotonic per scheduler_run call */
+    uint32_t round;      /* scheduler round (0-based) */
 } asx_scheduler_event;
 
 /* Read the total event count from the last scheduler_run call.
@@ -454,8 +439,65 @@ ASX_API ASX_MUST_USE asx_status asx_quiescence_check(asx_region_id id);
  *   ASX_E_BUDGET_EXHAUSTED if not all tasks completed within budget.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Region Lifecycle. */
-ASX_API ASX_MUST_USE asx_status asx_region_drain(asx_region_id id,
-                                                 asx_budget *budget);
+ASX_API ASX_MUST_USE asx_status asx_region_drain(asx_region_id id, asx_budget *budget);
+
+/* -------------------------------------------------------------------
+ * Drain progress and quiescence evidence (bd-1eqo.5.2)
+ *
+ * Provides structured observability into drain/close sequences.
+ * asx_drain_progress is a point-in-time snapshot; asx_quiescence_report
+ * decomposes the quiescence check into its four conjuncts (Q1-Q4).
+ * ------------------------------------------------------------------- */
+
+/* Drain progress snapshot: live counters during region drain. */
+typedef struct {
+    asx_region_state region_state;     /* current region state */
+    uint32_t tasks_total;              /* total tasks spawned in region */
+    uint32_t tasks_live;               /* non-completed tasks */
+    uint32_t tasks_cancelled;          /* tasks in cancel phase >= REQUESTED */
+    uint32_t tasks_completed;          /* tasks in COMPLETED state */
+    uint32_t obligations_total;        /* total obligations in region */
+    uint32_t obligations_reserved;     /* still-reserved (unresolved) */
+    uint32_t obligations_resolved;     /* committed + aborted */
+    int cleanup_drained;               /* 1 if cleanup stack is empty */
+    int poisoned;                      /* 1 if region is poisoned */
+} asx_drain_progress;
+
+/* Quiescence conjunct evidence: each field is 1 if the condition holds. */
+typedef struct {
+    int q1_tasks_complete;       /* Q1: all tasks reached COMPLETED */
+    int q2_children_closed;      /* Q2: all child regions closed (always 1 in walking skeleton) */
+    int q3_obligations_resolved; /* Q3: no obligations in RESERVED state */
+    int q4_cleanup_drained;      /* Q4: cleanup stack fully drained */
+    int quiescent;               /* 1 iff all Q1-Q4 hold and region is CLOSED */
+    asx_region_state region_state; /* current region state */
+    asx_drain_progress progress; /* full progress snapshot */
+} asx_quiescence_report;
+
+/* Query the drain progress of a region.
+ *
+ * Preconditions: out must not be NULL; id must be a valid region handle.
+ * Postconditions: on success, *out holds a point-in-time progress snapshot.
+ * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out is NULL,
+ *   ASX_E_NOT_FOUND if id is invalid.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_region_drain_progress(asx_region_id id,
+                                                           asx_drain_progress *out);
+
+/* Detailed quiescence check with decomposed Q1-Q4 evidence.
+ *
+ * Unlike asx_quiescence_check() which returns a single status code,
+ * this function populates a report showing which conjuncts hold and
+ * which are blocking quiescence. Always returns ASX_OK (the report
+ * itself carries the quiescence verdict).
+ *
+ * Preconditions: out must not be NULL; id must be a valid region handle.
+ * Postconditions: *out contains the decomposed quiescence evidence.
+ * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out is NULL,
+ *   ASX_E_NOT_FOUND if id is invalid.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_quiescence_check_detailed(asx_region_id id,
+                                                               asx_quiescence_report *out);
 
 /* Reset all runtime state (test support only).
  * Clears lifecycle arenas plus global scheduler/parallel/channel/timer/

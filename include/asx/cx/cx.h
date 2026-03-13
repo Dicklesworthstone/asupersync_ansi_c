@@ -24,13 +24,13 @@
 #ifndef ASX_CX_CX_H
 #define ASX_CX_CX_H
 
-#include <stdint.h>
-#include <asx/asx_export.h>
-#include <asx/asx_status.h>
-#include <asx/asx_ids.h>
 #include <asx/asx_config.h>
-#include <asx/core/cancel.h>
+#include <asx/asx_export.h>
+#include <asx/asx_ids.h>
+#include <asx/asx_status.h>
 #include <asx/core/budget.h>
+#include <asx/core/cancel.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,34 +45,34 @@ extern "C" {
 
 typedef uint32_t asx_cap_flags;
 
-#define ASX_CAP_NONE            ((asx_cap_flags)0)
-#define ASX_CAP_CANCEL_CHECK    ((asx_cap_flags)(1u << 0))  /* can check cancellation */
-#define ASX_CAP_CANCEL_REQUEST  ((asx_cap_flags)(1u << 1))  /* can request cancellation */
-#define ASX_CAP_BUDGET_READ     ((asx_cap_flags)(1u << 2))  /* can read budget */
-#define ASX_CAP_BUDGET_CONSUME  ((asx_cap_flags)(1u << 3))  /* can consume budget */
-#define ASX_CAP_CLOCK_READ      ((asx_cap_flags)(1u << 4))  /* can read clock */
-#define ASX_CAP_ENTROPY         ((asx_cap_flags)(1u << 5))  /* can draw entropy */
-#define ASX_CAP_SPAWN           ((asx_cap_flags)(1u << 6))  /* can spawn tasks */
-#define ASX_CAP_CHANNEL         ((asx_cap_flags)(1u << 7))  /* can use channels */
-#define ASX_CAP_TIMER           ((asx_cap_flags)(1u << 8))  /* can register timers */
-#define ASX_CAP_OBLIGATION      ((asx_cap_flags)(1u << 9))  /* can create obligations */
-#define ASX_CAP_TRACE           ((asx_cap_flags)(1u << 10)) /* can emit trace events */
+#define ASX_CAP_NONE ((asx_cap_flags)0)
+#define ASX_CAP_CANCEL_CHECK ((asx_cap_flags)(1u << 0))   /* can check cancellation */
+#define ASX_CAP_CANCEL_REQUEST ((asx_cap_flags)(1u << 1)) /* can request cancellation */
+#define ASX_CAP_BUDGET_READ ((asx_cap_flags)(1u << 2))    /* can read budget */
+#define ASX_CAP_BUDGET_CONSUME ((asx_cap_flags)(1u << 3)) /* can consume budget */
+#define ASX_CAP_CLOCK_READ ((asx_cap_flags)(1u << 4))     /* can read clock */
+#define ASX_CAP_ENTROPY ((asx_cap_flags)(1u << 5))        /* can draw entropy */
+#define ASX_CAP_SPAWN ((asx_cap_flags)(1u << 6))          /* can spawn tasks */
+#define ASX_CAP_CHANNEL ((asx_cap_flags)(1u << 7))        /* can use channels */
+#define ASX_CAP_TIMER ((asx_cap_flags)(1u << 8))          /* can register timers */
+#define ASX_CAP_OBLIGATION ((asx_cap_flags)(1u << 9))     /* can create obligations */
+#define ASX_CAP_TRACE ((asx_cap_flags)(1u << 10))         /* can emit trace events */
 
 /* All capabilities */
-#define ASX_CAP_ALL             ((asx_cap_flags)0x7FFu)
+#define ASX_CAP_ALL ((asx_cap_flags)0x7FFu)
 
 /* ------------------------------------------------------------------ */
 /* Cx type                                                             */
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    asx_region_id   region_id;    /* owning region */
-    asx_task_id     task_id;      /* owning task (0 if region-level) */
-    asx_cap_flags   caps;         /* granted capabilities */
-    asx_budget     *budget;       /* borrowed budget (NULL if none) */
-    asx_time       *clock;        /* borrowed logical clock (NULL = wall clock) */
-    uint64_t       *entropy_state;/* borrowed entropy state (NULL = system) */
-    uint32_t        generation;   /* context generation (for stale detection) */
+    asx_region_id region_id; /* owning region */
+    asx_task_id task_id;     /* owning task (0 if region-level) */
+    asx_cap_flags caps;      /* granted capabilities */
+    asx_budget *budget;      /* borrowed budget (NULL if none) */
+    asx_time *clock;         /* borrowed logical clock (NULL = wall clock) */
+    uint64_t *entropy_state; /* borrowed entropy state (NULL = system) */
+    uint32_t generation;     /* context generation (for stale detection) */
 } asx_cx;
 
 /* ------------------------------------------------------------------ */
@@ -82,19 +82,13 @@ typedef struct {
 /* Initialize a Cx with identity and capabilities.
  * Does NOT allocate — all pointers borrow from caller-owned storage.
  * Returns ASX_OK on success. */
-ASX_API asx_status asx_cx_init(
-    asx_cx *cx,
-    asx_region_id region_id,
-    asx_task_id task_id,
-    asx_cap_flags caps);
+ASX_API asx_status asx_cx_init(asx_cx *cx, asx_region_id region_id, asx_task_id task_id,
+                               asx_cap_flags caps);
 
 /* Create a child Cx with restricted capabilities (capability narrowing).
  * The child inherits identity but can only have a subset of parent caps.
  * Returns ASX_E_INVALID_ARGUMENT if child_caps contains caps not in parent. */
-ASX_API asx_status asx_cx_narrow(
-    const asx_cx *parent,
-    asx_cx *child,
-    asx_cap_flags child_caps);
+ASX_API asx_status asx_cx_narrow(const asx_cx *parent, asx_cx *child, asx_cap_flags child_caps);
 
 /* Invalidate a Cx (sets generation to 0, clears all fields). */
 ASX_API void asx_cx_invalidate(asx_cx *cx);

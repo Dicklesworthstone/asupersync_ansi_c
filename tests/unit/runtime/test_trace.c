@@ -9,36 +9,32 @@
 
 #include "../../test_harness.h"
 #include <asx/asx.h>
+#include <asx/core/ghost.h>
+#include <asx/runtime/hindsight.h>
 #include <asx/runtime/parallel.h>
 #include <asx/runtime/snapshot.h>
 #include <asx/runtime/telemetry.h>
-#include <asx/runtime/hindsight.h>
 #include <asx/runtime/trace.h>
 #include <asx/time/timer_wheel.h>
-#include <asx/core/ghost.h>
 #include <string.h>
 
-static asx_status poll_complete(void *data, asx_task_id self)
-{
+static asx_status poll_complete(void *data, asx_task_id self) {
     (void)data;
     (void)self;
     return ASX_OK;
 }
 
-static asx_status poll_pending(void *data, asx_task_id self)
-{
+static asx_status poll_pending(void *data, asx_task_id self) {
     (void)data;
     (void)self;
     return ASX_E_PENDING;
 }
 
-static uint64_t task_transition_aux(asx_task_state from, asx_task_state to)
-{
+static uint64_t task_transition_aux(asx_task_state from, asx_task_state to) {
     return ((uint64_t)(uint32_t)from << 32) | (uint64_t)(uint32_t)to;
 }
 
-static uint64_t timer_trace_entity_id(const asx_timer_handle *handle)
-{
+static uint64_t timer_trace_entity_id(const asx_timer_handle *handle) {
     return ((uint64_t)handle->slot << 32) | (uint64_t)handle->generation;
 }
 
@@ -268,8 +264,7 @@ TEST(replay_reference_rejects_over_capacity) {
     ref[0].entity_id = 1;
     ref[0].aux = 0;
 
-    ASSERT_EQ(asx_replay_load_reference(ref, ASX_TRACE_CAPACITY + 1u),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_replay_load_reference(ref, ASX_TRACE_CAPACITY + 1u), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ---- Snapshot export ---- */
@@ -325,17 +320,14 @@ TEST(snapshot_capture_uses_runtime_snapshot_entities) {
 
     ASSERT_EQ(asx_snapshot_capture(&legacy), ASX_OK);
 
-    snprintf(needle, sizeof(needle), "\"slot\":%u",
-             (unsigned)asx_handle_slot(typed.regions[0].id));
+    snprintf(needle, sizeof(needle), "\"slot\":%u", (unsigned)asx_handle_slot(typed.regions[0].id));
     ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
-    snprintf(needle, sizeof(needle), "\"tasks\":%u",
-             (unsigned)typed.regions[0].task_count);
+    snprintf(needle, sizeof(needle), "\"tasks\":%u", (unsigned)typed.regions[0].task_count);
     ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
     snprintf(needle, sizeof(needle), "\"gen\":%u",
              (unsigned)asx_handle_generation(typed.tasks[0].id));
     ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
-    snprintf(needle, sizeof(needle), "\"state\":%u",
-             (unsigned)typed.obligations[0].state);
+    snprintf(needle, sizeof(needle), "\"state\":%u", (unsigned)typed.obligations[0].state);
     ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
 }
 
@@ -361,9 +353,7 @@ TEST(snapshot_digest_deterministic) {
     ASSERT_EQ(d1, d2);
 }
 
-TEST(snapshot_null_returns_error) {
-    ASSERT_EQ(asx_snapshot_capture(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(snapshot_null_returns_error) { ASSERT_EQ(asx_snapshot_capture(NULL), ASX_E_INVALID_ARGUMENT); }
 
 /* ---- Binary export/import ---- */
 
@@ -384,10 +374,8 @@ TEST(trace_binary_export_null_rejects) {
     uint32_t written = 0;
     uint8_t buf[128];
 
-    ASSERT_EQ(asx_trace_export_binary(NULL, 128, &written),
-              ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_trace_export_binary(buf, 128, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_trace_export_binary(NULL, 128, &written), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_trace_export_binary(buf, 128, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(trace_binary_export_too_small) {
@@ -397,8 +385,7 @@ TEST(trace_binary_export_too_small) {
     asx_trace_reset();
     asx_trace_emit(ASX_TRACE_SCHED_POLL, 1, 0);
 
-    ASSERT_EQ(asx_trace_export_binary(buf, sizeof(buf), &written),
-              ASX_E_BUFFER_TOO_SMALL);
+    ASSERT_EQ(asx_trace_export_binary(buf, sizeof(buf), &written), ASX_E_BUFFER_TOO_SMALL);
 }
 
 TEST(trace_binary_roundtrip) {
@@ -548,8 +535,7 @@ TEST(trace_task_transitions_emitted_by_cancel_api) {
         if (ev.aux == task_transition_aux(ASX_TASK_CREATED, ASX_TASK_RUNNING)) {
             saw_created_running = 1;
         }
-        if (ev.aux == task_transition_aux(ASX_TASK_RUNNING,
-                                          ASX_TASK_CANCEL_REQUESTED)) {
+        if (ev.aux == task_transition_aux(ASX_TASK_RUNNING, ASX_TASK_CANCEL_REQUESTED)) {
             saw_running_cancel_requested = 1;
         }
     }
@@ -656,8 +642,8 @@ TEST(runtime_reset_clears_global_support_state) {
     ASSERT_EQ(asx_channel_create(rid, 2, &ch), ASX_OK);
     ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
     ASSERT_EQ(asx_send_permit_send(&permit, 55u), ASX_OK);
-    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(), 100, (void *)0x1,
-                                 &timer_handle), ASX_OK);
+    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(), 100, (void *)0x1, &timer_handle),
+              ASX_OK);
     ASSERT_EQ(asx_telemetry_set_tier(ASX_TELEMETRY_OPS_LIGHT), ASX_OK);
     asx_telemetry_emit(ASX_TRACE_SCHED_COMPLETE, 1u, 0u);
     asx_hindsight_log(ASX_ND_CLOCK_READ, 1u, 99u);

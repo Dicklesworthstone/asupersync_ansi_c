@@ -14,7 +14,7 @@
 TEST(handle_pack_unpack_roundtrip) {
     uint16_t type = ASX_TYPE_TASK;
     uint16_t mask = 0x0007;
-    uint32_t idx  = 42;
+    uint32_t idx = 42;
     uint64_t h = asx_handle_pack(type, mask, idx);
     ASSERT_EQ(asx_handle_type_tag(h), type);
     ASSERT_EQ(asx_handle_state_mask(h), mask);
@@ -40,9 +40,7 @@ TEST(handle_pack_zero) {
 /* Validity checks                                                     */
 /* ------------------------------------------------------------------ */
 
-TEST(handle_invalid_id) {
-    ASSERT_FALSE(asx_handle_is_valid(ASX_INVALID_ID));
-}
+TEST(handle_invalid_id) { ASSERT_FALSE(asx_handle_is_valid(ASX_INVALID_ID)); }
 
 TEST(handle_valid_nonzero) {
     uint64_t h = asx_handle_pack(ASX_TYPE_REGION, 0x0001, 1);

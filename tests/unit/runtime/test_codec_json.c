@@ -9,28 +9,25 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ASSERT_SLICE_EQ(slice_value, expected_text) do { \
-    size_t _expected_len = strlen((expected_text)); \
-    ASSERT_EQ((slice_value).len, _expected_len); \
-    ASSERT_TRUE(memcmp((slice_value).ptr, (expected_text), _expected_len) == 0); \
-} while (0)
+#define ASSERT_SLICE_EQ(slice_value, expected_text)                                                \
+    do {                                                                                           \
+        size_t _expected_len = strlen((expected_text));                                            \
+        ASSERT_EQ((slice_value).len, _expected_len);                                               \
+        ASSERT_TRUE(memcmp((slice_value).ptr, (expected_text), _expected_len) == 0);               \
+    } while (0)
 
-static char *dup_text(const char *text)
-{
+static char *dup_text(const char *text) {
     size_t len;
     char *copy;
 
     len = strlen(text);
     copy = (char *)malloc(len + 1u);
-    if (copy == NULL) {
-        return NULL;
-    }
+    if (copy == NULL) { return NULL; }
     memcpy(copy, text, len + 1u);
     return copy;
 }
 
-static void populate_fixture(asx_canonical_fixture *fixture)
-{
+static void populate_fixture(asx_canonical_fixture *fixture) {
     fixture->scenario_id = dup_text("scenario.codec.json.001");
     fixture->fixture_schema_version = dup_text("fixture-v1");
     fixture->scenario_dsl_version = dup_text("dsl-v1");
@@ -41,19 +38,18 @@ static void populate_fixture(asx_canonical_fixture *fixture)
     fixture->expected_events_json = dup_text("[]");
     fixture->expected_final_snapshot_json = dup_text("{}");
     fixture->expected_error_codes_json = dup_text("[]");
-    fixture->semantic_digest = dup_text(
-        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    fixture->semantic_digest =
+        dup_text("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     fixture->provenance.rust_baseline_commit = dup_text("0123456789abcdef0123456789abcdef01234567");
     fixture->provenance.rust_toolchain_commit_hash = dup_text("toolchain-abcdef12");
     fixture->provenance.rust_toolchain_release = dup_text("rustc 1.90.0");
     fixture->provenance.rust_toolchain_host = dup_text("x86_64-unknown-linux-gnu");
-    fixture->provenance.cargo_lock_sha256 = dup_text(
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    fixture->provenance.cargo_lock_sha256 =
+        dup_text("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     fixture->provenance.capture_run_id = dup_text("capture-run-0001");
 }
 
-static uint32_t load_be32_at(const unsigned char *bytes, size_t offset)
-{
+static uint32_t load_be32_at(const unsigned char *bytes, size_t offset) {
     uint32_t v = 0u;
     v |= ((uint32_t)bytes[offset]) << 24;
     v |= ((uint32_t)bytes[offset + 1u]) << 16;
@@ -80,7 +76,8 @@ TEST(json_round_trip_is_stable) {
     ASSERT_NE(json_a.data, NULL);
     ASSERT_TRUE(json_a.len > 0u);
 
-    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_JSON, json_a.data, json_a.len, &decoded), ASX_OK);
+    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_JSON, json_a.data, json_a.len, &decoded),
+              ASX_OK);
     ASSERT_STR_EQ(decoded.scenario_id, fixture.scenario_id);
     ASSERT_STR_EQ(decoded.profile, fixture.profile);
     ASSERT_EQ(decoded.seed, fixture.seed);
@@ -106,24 +103,24 @@ TEST(decode_rejects_missing_required_field) {
         "\"input\":{\"ops\":[]},"
         "\"profile\":\"ASX_PROFILE_CORE\","
         "\"provenance\":{"
-          "\"cargo_lock_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
-          "\"capture_run_id\":\"capture-run-0001\","
-          "\"rust_baseline_commit\":\"0123456789abcdef0123456789abcdef01234567\","
-          "\"rust_toolchain_commit_hash\":\"toolchain-abcdef12\","
-          "\"rust_toolchain_host\":\"x86_64-unknown-linux-gnu\","
-          "\"rust_toolchain_release\":\"rustc 1.90.0\""
+        "\"cargo_lock_sha256\":"
+        "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
+        "\"capture_run_id\":\"capture-run-0001\","
+        "\"rust_baseline_commit\":\"0123456789abcdef0123456789abcdef01234567\","
+        "\"rust_toolchain_commit_hash\":\"toolchain-abcdef12\","
+        "\"rust_toolchain_host\":\"x86_64-unknown-linux-gnu\","
+        "\"rust_toolchain_release\":\"rustc 1.90.0\""
         "},"
         "\"scenario_dsl_version\":\"dsl-v1\","
         "\"seed\":42,"
-        "\"semantic_digest\":\"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\""
+        "\"semantic_digest\":\"sha256:"
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\""
         "}";
     asx_canonical_fixture fixture;
 
     asx_canonical_fixture_init(&fixture);
-    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_JSON,
-                                       missing_scenario,
-                                       strlen(missing_scenario),
-                                       &fixture),
+    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_JSON, missing_scenario,
+                                       strlen(missing_scenario), &fixture),
               ASX_E_INVALID_ARGUMENT);
     asx_canonical_fixture_reset(&fixture);
 }
@@ -139,12 +136,13 @@ TEST(decode_rejects_invalid_digest_pattern) {
         "\"input\":{\"ops\":[]},"
         "\"profile\":\"ASX_PROFILE_CORE\","
         "\"provenance\":{"
-          "\"cargo_lock_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
-          "\"capture_run_id\":\"capture-run-0001\","
-          "\"rust_baseline_commit\":\"0123456789abcdef0123456789abcdef01234567\","
-          "\"rust_toolchain_commit_hash\":\"toolchain-abcdef12\","
-          "\"rust_toolchain_host\":\"x86_64-unknown-linux-gnu\","
-          "\"rust_toolchain_release\":\"rustc 1.90.0\""
+        "\"cargo_lock_sha256\":"
+        "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
+        "\"capture_run_id\":\"capture-run-0001\","
+        "\"rust_baseline_commit\":\"0123456789abcdef0123456789abcdef01234567\","
+        "\"rust_toolchain_commit_hash\":\"toolchain-abcdef12\","
+        "\"rust_toolchain_host\":\"x86_64-unknown-linux-gnu\","
+        "\"rust_toolchain_release\":\"rustc 1.90.0\""
         "},"
         "\"scenario_dsl_version\":\"dsl-v1\","
         "\"scenario_id\":\"scenario.codec.json.001\","
@@ -154,9 +152,7 @@ TEST(decode_rejects_invalid_digest_pattern) {
     asx_canonical_fixture fixture;
 
     asx_canonical_fixture_init(&fixture);
-    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_JSON,
-                                       bad_digest,
-                                       strlen(bad_digest),
+    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_JSON, bad_digest, strlen(bad_digest),
                                        &fixture),
               ASX_E_INVALID_ARGUMENT);
     asx_canonical_fixture_reset(&fixture);
@@ -364,7 +360,8 @@ TEST(bin_decode_accepts_unaligned_input_pointer) {
     ASSERT_NE(padded, NULL);
     memcpy(padded + 1u, bin_out.data, bin_out.len);
 
-    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_BIN, padded + 1u, bin_out.len, &decoded), ASX_OK);
+    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_BIN, padded + 1u, bin_out.len, &decoded),
+              ASX_OK);
     ASSERT_STR_EQ(decoded.semantic_digest, fixture.semantic_digest);
 
     free(padded);

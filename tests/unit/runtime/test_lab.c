@@ -9,7 +9,11 @@
 #include <asx/runtime/runtime.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Config tests                                                        */
@@ -49,9 +53,7 @@ TEST(init_null_config_fails) {
     ASSERT_EQ(asx_lab_init(&lab, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(shutdown_null_safe) {
-    asx_lab_shutdown(NULL);  /* should not crash */
-}
+TEST(shutdown_null_safe) { asx_lab_shutdown(NULL); /* should not crash */ }
 
 TEST(double_shutdown_safe) {
     asx_lab lab;
@@ -59,7 +61,7 @@ TEST(double_shutdown_safe) {
     asx_lab_config_init(&cfg);
     MUST_OK(asx_lab_init(&lab, &cfg));
     asx_lab_shutdown(&lab);
-    asx_lab_shutdown(&lab);  /* safe to call twice */
+    asx_lab_shutdown(&lab); /* safe to call twice */
 }
 
 /* ------------------------------------------------------------------ */
@@ -79,7 +81,7 @@ TEST(time_starts_at_custom) {
     asx_lab lab;
     asx_lab_config cfg;
     asx_lab_config_init(&cfg);
-    cfg.start_time_ns = 5000000000ULL;  /* 5 seconds */
+    cfg.start_time_ns = 5000000000ULL; /* 5 seconds */
     MUST_OK(asx_lab_init(&lab, &cfg));
     ASSERT_EQ(asx_lab_now(&lab), 5000000000ULL);
     asx_lab_shutdown(&lab);
@@ -89,10 +91,10 @@ TEST(advance_time) {
     asx_lab lab;
     asx_lab_config cfg;
     asx_lab_config_init(&cfg);
-    cfg.tick_ns = 1000000ULL;  /* 1ms per tick */
+    cfg.tick_ns = 1000000ULL; /* 1ms per tick */
     MUST_OK(asx_lab_init(&lab, &cfg));
     asx_lab_advance_time(&lab, 10);
-    ASSERT_EQ(asx_lab_now(&lab), 10000000ULL);  /* 10ms */
+    ASSERT_EQ(asx_lab_now(&lab), 10000000ULL); /* 10ms */
     asx_lab_shutdown(&lab);
 }
 
@@ -188,27 +190,25 @@ TEST(reset_restores_state) {
 /* Scenario execution tests                                            */
 /* ------------------------------------------------------------------ */
 
-static asx_status step_noop(asx_lab *lab, void *user_data)
-{
-    (void)lab; (void)user_data;
+static asx_status step_noop(asx_lab *lab, void *user_data) {
+    (void)lab;
+    (void)user_data;
     return ASX_OK;
 }
 
-static asx_status step_advance_5(asx_lab *lab, void *user_data)
-{
+static asx_status step_advance_5(asx_lab *lab, void *user_data) {
     (void)user_data;
     asx_lab_advance_time(lab, 5);
     return ASX_OK;
 }
 
-static asx_status step_fail(asx_lab *lab, void *user_data)
-{
-    (void)lab; (void)user_data;
+static asx_status step_fail(asx_lab *lab, void *user_data) {
+    (void)lab;
+    (void)user_data;
     return ASX_E_INVALID_STATE;
 }
 
-static asx_status step_open_close_region(asx_lab *lab, void *user_data)
-{
+static asx_status step_open_close_region(asx_lab *lab, void *user_data) {
     asx_region_id rid;
     asx_status st;
     (void)user_data;
@@ -287,7 +287,7 @@ TEST(scenario_stops_on_failure) {
     MUST_OK(asx_lab_scenario_add_step(&sc, step_noop, NULL));
 
     ASSERT_EQ(asx_lab_run_scenario(&lab, &sc, &result), ASX_E_INVALID_STATE);
-    ASSERT_EQ(result.steps_completed, 2u);  /* ran 2, stopped at failure */
+    ASSERT_EQ(result.steps_completed, 2u); /* ran 2, stopped at failure */
     ASSERT_EQ(result.steps_total, 3u);
     ASSERT_EQ(result.last_status, ASX_E_INVALID_STATE);
 
@@ -318,8 +318,7 @@ TEST(scenario_overflow) {
     for (i = 0; i < ASX_LAB_MAX_STEPS; i++) {
         MUST_OK(asx_lab_scenario_add_step(&sc, step_noop, NULL));
     }
-    ASSERT_EQ(asx_lab_scenario_add_step(&sc, step_noop, NULL),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_lab_scenario_add_step(&sc, step_noop, NULL), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 /* ------------------------------------------------------------------ */
@@ -385,8 +384,7 @@ TEST(open_region_null_fails) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_lab ===\n");
 
     RUN_TEST(config_init_defaults);

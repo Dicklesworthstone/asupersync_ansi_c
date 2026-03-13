@@ -26,10 +26,9 @@
  * ------------------------------------------------------------------- */
 
 #define FNV_OFFSET 14695981039346656037ULL
-#define FNV_PRIME  1099511628211ULL
+#define FNV_PRIME 1099511628211ULL
 
-static uint64_t fnv_hash_u32(uint64_t h, uint32_t val)
-{
+static uint64_t fnv_hash_u32(uint64_t h, uint32_t val) {
     const unsigned char *p = (const unsigned char *)&val;
     int i;
     for (i = 0; i < 4; i++) {
@@ -39,8 +38,7 @@ static uint64_t fnv_hash_u32(uint64_t h, uint32_t val)
     return h;
 }
 
-static uint64_t decision_hash(const asx_adapter_decision *d)
-{
+static uint64_t decision_hash(const asx_adapter_decision *d) {
     uint64_t h = FNV_OFFSET;
     h = fnv_hash_u32(h, (uint32_t)d->triggered);
     h = fnv_hash_u32(h, (uint32_t)d->mode);
@@ -50,43 +48,31 @@ static uint64_t decision_hash(const asx_adapter_decision *d)
     return h;
 }
 
-static uint32_t percent_load_u32(uint32_t used, uint32_t capacity)
-{
+static uint32_t percent_load_u32(uint32_t used, uint32_t capacity) {
     uint64_t pct;
 
-    if (capacity == 0) {
-        return 100u;
-    }
+    if (capacity == 0) { return 100u; }
 
     pct = ((uint64_t)used * 100u) / (uint64_t)capacity;
-    if (pct > UINT32_MAX) {
-        return UINT32_MAX;
-    }
+    if (pct > UINT32_MAX) { return UINT32_MAX; }
     return (uint32_t)pct;
 }
 
-static uint32_t scale_capacity_for_class(uint32_t capacity,
-                                          asx_resource_class rclass)
-{
+static uint32_t scale_capacity_for_class(uint32_t capacity, asx_resource_class rclass) {
     switch (rclass) {
     case ASX_CLASS_R1:
-        if (capacity == 0u) {
-            return 0u;
-        }
+        if (capacity == 0u) { return 0u; }
         /* R1 is stricter, but never collapse non-zero capacity to zero. */
         return capacity > 1u ? (capacity / 2u) : 1u;
 
     case ASX_CLASS_R3:
         /* Saturate instead of overflowing on large capacities. */
-        if (capacity > (UINT32_MAX / 2u)) {
-            return UINT32_MAX;
-        }
+        if (capacity > (UINT32_MAX / 2u)) { return UINT32_MAX; }
         return capacity * 2u;
 
     case ASX_CLASS_R2:
     case ASX_CLASS_COUNT:
-    default:
-        return capacity;
+    default: return capacity;
     }
 }
 
@@ -96,9 +82,7 @@ static uint32_t scale_capacity_for_class(uint32_t capacity,
  * CORE profile: REJECT at 90% threshold.
  * ------------------------------------------------------------------- */
 
-static void core_fallback_decide(uint32_t used, uint32_t capacity,
-                                 asx_adapter_decision *out)
-{
+static void core_fallback_decide(uint32_t used, uint32_t capacity, asx_adapter_decision *out) {
     uint32_t load_pct;
 
     memset(out, 0, sizeof(*out));
@@ -133,9 +117,7 @@ static void core_fallback_decide(uint32_t used, uint32_t capacity,
  * Fallback: REJECT at 90% (CORE-equivalent)
  * ------------------------------------------------------------------- */
 
-void asx_adapter_hft_decide(uint32_t used, uint32_t capacity,
-                             asx_adapter_decision *out)
-{
+void asx_adapter_hft_decide(uint32_t used, uint32_t capacity, asx_adapter_decision *out) {
     uint32_t load_pct;
 
     memset(out, 0, sizeof(*out));
@@ -165,9 +147,7 @@ void asx_adapter_hft_decide(uint32_t used, uint32_t capacity,
     out->decision_hash = decision_hash(out);
 }
 
-void asx_adapter_hft_fallback(uint32_t used, uint32_t capacity,
-                               asx_adapter_decision *out)
-{
+void asx_adapter_hft_fallback(uint32_t used, uint32_t capacity, asx_adapter_decision *out) {
     core_fallback_decide(used, capacity, out);
 }
 
@@ -178,10 +158,8 @@ void asx_adapter_hft_fallback(uint32_t used, uint32_t capacity,
  * Fallback: REJECT at 90% (CORE-equivalent)
  * ------------------------------------------------------------------- */
 
-void asx_adapter_auto_decide(uint32_t used, uint32_t capacity,
-                              const asx_auto_deadline_tracker *dt,
-                              asx_adapter_decision *out)
-{
+void asx_adapter_auto_decide(uint32_t used, uint32_t capacity, const asx_auto_deadline_tracker *dt,
+                             asx_adapter_decision *out) {
     uint32_t load_pct;
 
     memset(out, 0, sizeof(*out));
@@ -220,9 +198,7 @@ void asx_adapter_auto_decide(uint32_t used, uint32_t capacity,
     out->decision_hash = decision_hash(out);
 }
 
-void asx_adapter_auto_fallback(uint32_t used, uint32_t capacity,
-                                asx_adapter_decision *out)
-{
+void asx_adapter_auto_fallback(uint32_t used, uint32_t capacity, asx_adapter_decision *out) {
     core_fallback_decide(used, capacity, out);
 }
 
@@ -233,10 +209,8 @@ void asx_adapter_auto_fallback(uint32_t used, uint32_t capacity,
  * Fallback: REJECT at 90% (CORE-equivalent)
  * ------------------------------------------------------------------- */
 
-void asx_adapter_router_decide(uint32_t used, uint32_t capacity,
-                                asx_resource_class rclass,
-                                asx_adapter_decision *out)
-{
+void asx_adapter_router_decide(uint32_t used, uint32_t capacity, asx_resource_class rclass,
+                               asx_adapter_decision *out) {
     uint32_t scaled_capacity;
     uint32_t load_pct;
 
@@ -281,9 +255,7 @@ void asx_adapter_router_decide(uint32_t used, uint32_t capacity,
     out->decision_hash = decision_hash(out);
 }
 
-void asx_adapter_router_fallback(uint32_t used, uint32_t capacity,
-                                  asx_adapter_decision *out)
-{
+void asx_adapter_router_fallback(uint32_t used, uint32_t capacity, asx_adapter_decision *out) {
     core_fallback_decide(used, capacity, out);
 }
 
@@ -291,38 +263,26 @@ void asx_adapter_router_fallback(uint32_t used, uint32_t capacity,
  * Unified dispatch
  * ------------------------------------------------------------------- */
 
-void asx_adapter_dispatch(asx_adapter_domain domain,
-                           asx_adapter_mode mode,
-                           uint32_t used,
-                           uint32_t capacity,
-                           const void *domain_ctx,
-                           asx_adapter_decision *out)
-{
+void asx_adapter_dispatch(asx_adapter_domain domain, asx_adapter_mode mode, uint32_t used,
+                          uint32_t capacity, const void *domain_ctx, asx_adapter_decision *out) {
     if (mode == ASX_ADAPTER_FALLBACK) {
         core_fallback_decide(used, capacity, out);
         return;
     }
 
     switch (domain) {
-    case ASX_ADAPTER_DOMAIN_HFT:
-        asx_adapter_hft_decide(used, capacity, out);
-        break;
+    case ASX_ADAPTER_DOMAIN_HFT: asx_adapter_hft_decide(used, capacity, out); break;
     case ASX_ADAPTER_DOMAIN_AUTOMOTIVE:
-        asx_adapter_auto_decide(used, capacity,
-            (const asx_auto_deadline_tracker *)domain_ctx, out);
+        asx_adapter_auto_decide(used, capacity, (const asx_auto_deadline_tracker *)domain_ctx, out);
         break;
     case ASX_ADAPTER_DOMAIN_ROUTER: {
         asx_resource_class rc = ASX_CLASS_R2;
-        if (domain_ctx != NULL) {
-            rc = *(const asx_resource_class *)domain_ctx;
-        }
+        if (domain_ctx != NULL) { rc = *(const asx_resource_class *)domain_ctx; }
         asx_adapter_router_decide(used, capacity, rc, out);
         break;
     }
     case ASX_ADAPTER_DOMAIN_COUNT:
-    default:
-        core_fallback_decide(used, capacity, out);
-        break;
+    default: core_fallback_decide(used, capacity, out); break;
     }
 }
 
@@ -340,12 +300,8 @@ void asx_adapter_dispatch(asx_adapter_domain domain,
  * OR when the load is at or above the maximum threshold.
  * ------------------------------------------------------------------- */
 
-void asx_adapter_prove_isomorphism(asx_adapter_domain domain,
-                                    uint32_t load,
-                                    uint32_t capacity,
-                                    const void *domain_ctx,
-                                    asx_adapter_isomorphism *proof)
-{
+void asx_adapter_prove_isomorphism(asx_adapter_domain domain, uint32_t load, uint32_t capacity,
+                                   const void *domain_ctx, asx_adapter_isomorphism *proof) {
     asx_adapter_decision accel, fallback;
 
     memset(proof, 0, sizeof(*proof));
@@ -354,11 +310,9 @@ void asx_adapter_prove_isomorphism(asx_adapter_domain domain,
     proof->test_capacity = capacity;
 
     /* Run accelerated path */
-    asx_adapter_dispatch(domain, ASX_ADAPTER_ACCELERATED,
-                         load, capacity, domain_ctx, &accel);
+    asx_adapter_dispatch(domain, ASX_ADAPTER_ACCELERATED, load, capacity, domain_ctx, &accel);
     /* Run fallback path */
-    asx_adapter_dispatch(domain, ASX_ADAPTER_FALLBACK,
-                         load, capacity, domain_ctx, &fallback);
+    asx_adapter_dispatch(domain, ASX_ADAPTER_FALLBACK, load, capacity, domain_ctx, &fallback);
 
     proof->accel_decision = accel;
     proof->fallback_decision = fallback;
@@ -382,21 +336,16 @@ void asx_adapter_prove_isomorphism(asx_adapter_domain domain,
     }
 }
 
-int asx_adapter_prove_isomorphism_sweep(asx_adapter_domain domain,
-                                         uint32_t capacity,
-                                         const void *domain_ctx,
-                                         asx_adapter_isomorphism *failed_proof)
-{
+int asx_adapter_prove_isomorphism_sweep(asx_adapter_domain domain, uint32_t capacity,
+                                        const void *domain_ctx,
+                                        asx_adapter_isomorphism *failed_proof) {
     uint32_t load;
 
     for (load = 0; load <= capacity; load++) {
         asx_adapter_isomorphism proof;
-        asx_adapter_prove_isomorphism(domain, load, capacity,
-                                       domain_ctx, &proof);
+        asx_adapter_prove_isomorphism(domain, load, capacity, domain_ctx, &proof);
         if (!proof.pass) {
-            if (failed_proof != NULL) {
-                *failed_proof = proof;
-            }
+            if (failed_proof != NULL) { *failed_proof = proof; }
             return 0;
         }
         /* Prevent infinite loop when capacity == UINT32_MAX:
@@ -411,13 +360,12 @@ int asx_adapter_prove_isomorphism_sweep(asx_adapter_domain domain,
  * Diagnostics
  * ------------------------------------------------------------------- */
 
-const char *asx_adapter_domain_str(asx_adapter_domain domain)
-{
+const char *asx_adapter_domain_str(asx_adapter_domain domain) {
     switch (domain) {
-    case ASX_ADAPTER_DOMAIN_HFT:       return "HFT";
+    case ASX_ADAPTER_DOMAIN_HFT: return "HFT";
     case ASX_ADAPTER_DOMAIN_AUTOMOTIVE: return "Automotive";
-    case ASX_ADAPTER_DOMAIN_ROUTER:     return "Router";
-    case ASX_ADAPTER_DOMAIN_COUNT:      break;
+    case ASX_ADAPTER_DOMAIN_ROUTER: return "Router";
+    case ASX_ADAPTER_DOMAIN_COUNT: break;
     }
     return "Unknown";
 }
@@ -425,7 +373,4 @@ const char *asx_adapter_domain_str(asx_adapter_domain domain)
 /* asx_adapter_mode_str is defined in vertical_adapter.c — removed here
  * to fix duplicate symbol linker error (ODR violation). */
 
-uint32_t asx_adapter_version(void)
-{
-    return ASX_ADAPTER_VERSION;
-}
+uint32_t asx_adapter_version(void) { return ASX_ADAPTER_VERSION; }

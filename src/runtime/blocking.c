@@ -15,13 +15,13 @@
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    asx_blocking_fn    fn;
-    void              *user_data;
-    asx_waker          completion_waker;
-    int                has_waker;
-    uint16_t           generation;
+    asx_blocking_fn fn;
+    void *user_data;
+    asx_waker completion_waker;
+    int has_waker;
+    uint16_t generation;
     asx_blocking_state state;
-    uint64_t           result;
+    uint64_t result;
 } asx_blocking_slot;
 
 /* ------------------------------------------------------------------ */
@@ -33,8 +33,7 @@ static uint32_t g_slot_count = 0;
 static uint32_t g_active_count = 0;
 static int g_initialized = 0;
 
-static uint16_t next_gen(uint16_t g)
-{
+static uint16_t next_gen(uint16_t g) {
     g++;
     if (g == 0) g = 1;
     return g;
@@ -44,20 +43,17 @@ static uint16_t next_gen(uint16_t g)
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_blocking_pool_init(void)
-{
+asx_status asx_blocking_pool_init(void) {
     g_initialized = 1;
     return ASX_OK;
 }
 
-void asx_blocking_pool_shutdown(void)
-{
+void asx_blocking_pool_shutdown(void) {
     asx_blocking_pool_reset();
     g_initialized = 0;
 }
 
-void asx_blocking_pool_reset(void)
-{
+void asx_blocking_pool_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_BLOCKING_TASKS; i++) {
         g_slots[i].generation = next_gen(g_slots[i].generation);
@@ -75,16 +71,12 @@ void asx_blocking_pool_reset(void)
 /* Spawn blocking                                                      */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_spawn_blocking(asx_blocking_fn fn,
-                               void *user_data,
-                               const asx_waker *completion_waker,
-                               asx_blocking_handle *out_handle)
-{
+asx_status asx_spawn_blocking(asx_blocking_fn fn, void *user_data,
+                              const asx_waker *completion_waker, asx_blocking_handle *out_handle) {
     uint32_t idx;
     asx_blocking_slot *s;
 
-    if (fn == NULL || out_handle == NULL)
-        return ASX_E_INVALID_ARGUMENT;
+    if (fn == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!g_initialized) return ASX_E_INVALID_STATE;
 
     /* Find free slot */
@@ -100,8 +92,7 @@ asx_status asx_spawn_blocking(asx_blocking_fn fn,
     }
 
     if (idx == ASX_MAX_BLOCKING_TASKS) {
-        if (g_slot_count >= ASX_MAX_BLOCKING_TASKS)
-            return ASX_E_RESOURCE_EXHAUSTED;
+        if (g_slot_count >= ASX_MAX_BLOCKING_TASKS) return ASX_E_RESOURCE_EXHAUSTED;
         idx = g_slot_count++;
     }
 
@@ -144,22 +135,17 @@ asx_status asx_spawn_blocking(asx_blocking_fn fn,
 /* Query                                                               */
 /* ------------------------------------------------------------------ */
 
-asx_blocking_state asx_blocking_get_state(const asx_blocking_handle *handle)
-{
+asx_blocking_state asx_blocking_get_state(const asx_blocking_handle *handle) {
     if (handle == NULL) return ASX_BLOCKING_COMPLETED;
     if (handle->slot >= g_slot_count) return ASX_BLOCKING_COMPLETED;
-    if (g_slots[handle->slot].generation != handle->generation)
-        return ASX_BLOCKING_COMPLETED;
+    if (g_slots[handle->slot].generation != handle->generation) return ASX_BLOCKING_COMPLETED;
     return g_slots[handle->slot].state;
 }
 
-asx_status asx_blocking_get_result(const asx_blocking_handle *handle,
-                                    uint64_t *out_result)
-{
+asx_status asx_blocking_get_result(const asx_blocking_handle *handle, uint64_t *out_result) {
     const asx_blocking_slot *s;
 
-    if (handle == NULL || out_result == NULL)
-        return ASX_E_INVALID_ARGUMENT;
+    if (handle == NULL || out_result == NULL) return ASX_E_INVALID_ARGUMENT;
     if (handle->slot >= g_slot_count) return ASX_E_NOT_FOUND;
 
     s = &g_slots[handle->slot];
@@ -170,7 +156,4 @@ asx_status asx_blocking_get_result(const asx_blocking_handle *handle,
     return ASX_OK;
 }
 
-uint32_t asx_blocking_active_count(void)
-{
-    return g_active_count;
-}
+uint32_t asx_blocking_active_count(void) { return g_active_count; }

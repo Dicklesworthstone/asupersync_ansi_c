@@ -4,15 +4,15 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "runtime_internal.h"
+#include <asx/core/ghost.h>
 #include <asx/runtime/diagnostic.h>
+#include <asx/runtime/event.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
-#include <asx/runtime/trace.h>
 #include <asx/runtime/telemetry.h>
-#include <asx/runtime/event.h>
-#include <asx/core/ghost.h>
+#include <asx/runtime/trace.h>
 #include <string.h>
-#include "runtime_internal.h"
 
 /* ------------------------------------------------------------------ */
 /* Diagnostic context stack                                            */
@@ -23,13 +23,11 @@
 #endif
 
 static asx_diagnostic_ctx g_diag_stack[ASX_DIAGNOSTIC_STACK_DEPTH];
-static uint32_t           g_diag_depth;
+static uint32_t g_diag_depth;
 
-asx_status asx_diagnostic_push(const asx_diagnostic_ctx *ctx)
-{
+asx_status asx_diagnostic_push(const asx_diagnostic_ctx *ctx) {
     if (ctx == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (g_diag_depth >= ASX_DIAGNOSTIC_STACK_DEPTH)
-        return ASX_E_RESOURCE_EXHAUSTED;
+    if (g_diag_depth >= ASX_DIAGNOSTIC_STACK_DEPTH) return ASX_E_RESOURCE_EXHAUSTED;
 
     g_diag_stack[g_diag_depth] = *ctx;
     g_diag_stack[g_diag_depth].depth = g_diag_depth;
@@ -37,19 +35,16 @@ asx_status asx_diagnostic_push(const asx_diagnostic_ctx *ctx)
     return ASX_OK;
 }
 
-void asx_diagnostic_pop(void)
-{
+void asx_diagnostic_pop(void) {
     if (g_diag_depth > 0) g_diag_depth--;
 }
 
-const asx_diagnostic_ctx *asx_diagnostic_current(void)
-{
+const asx_diagnostic_ctx *asx_diagnostic_current(void) {
     if (g_diag_depth == 0) return NULL;
     return &g_diag_stack[g_diag_depth - 1];
 }
 
-void asx_diagnostic_reset(void)
-{
+void asx_diagnostic_reset(void) {
     memset(g_diag_stack, 0, sizeof(g_diag_stack));
     g_diag_depth = 0;
 }
@@ -58,8 +53,7 @@ void asx_diagnostic_reset(void)
 /* Runtime inspection                                                  */
 /* ------------------------------------------------------------------ */
 
-static uint32_t count_alive_regions(void)
-{
+static uint32_t count_alive_regions(void) {
     uint32_t i, n = 0;
     for (i = 0; i < g_region_count; i++) {
         if (g_regions[i].alive) n++;
@@ -67,8 +61,7 @@ static uint32_t count_alive_regions(void)
     return n;
 }
 
-static uint32_t count_alive_tasks(void)
-{
+static uint32_t count_alive_tasks(void) {
     uint32_t i, n = 0;
     for (i = 0; i < g_task_count; i++) {
         if (g_tasks[i].alive) n++;
@@ -76,8 +69,7 @@ static uint32_t count_alive_tasks(void)
     return n;
 }
 
-static uint32_t count_alive_obligations(void)
-{
+static uint32_t count_alive_obligations(void) {
     uint32_t i, n = 0;
     for (i = 0; i < g_obligation_count; i++) {
         if (g_obligations[i].alive) n++;
@@ -85,8 +77,7 @@ static uint32_t count_alive_obligations(void)
     return n;
 }
 
-static int any_region_poisoned(void)
-{
+static int any_region_poisoned(void) {
     uint32_t i;
     for (i = 0; i < g_region_count; i++) {
         if (g_regions[i].alive && g_regions[i].poisoned) return 1;
@@ -94,8 +85,7 @@ static int any_region_poisoned(void)
     return 0;
 }
 
-asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out)
-{
+asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
     if (rt == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(out, 0, sizeof(*out));
@@ -161,24 +151,17 @@ asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out)
 /* Evidence sink                                                       */
 /* ------------------------------------------------------------------ */
 
-void asx_evidence_sink_init(asx_evidence_sink *sink)
-{
+void asx_evidence_sink_init(asx_evidence_sink *sink) {
     if (sink == NULL) return;
     memset(sink, 0, sizeof(*sink));
 }
 
-asx_status asx_evidence_record(
-    asx_evidence_sink *sink,
-    const char *source,
-    asx_evidence_level level,
-    const char *message,
-    uint64_t entity_id)
-{
+asx_status asx_evidence_record(asx_evidence_sink *sink, const char *source,
+                               asx_evidence_level level, const char *message, uint64_t entity_id) {
     asx_evidence_entry *e;
 
     if (sink == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (sink->count >= ASX_EVIDENCE_SINK_CAPACITY)
-        return ASX_E_RESOURCE_EXHAUSTED;
+    if (sink->count >= ASX_EVIDENCE_SINK_CAPACITY) return ASX_E_RESOURCE_EXHAUSTED;
 
     e = &sink->entries[sink->count];
     e->source = source;
@@ -198,22 +181,19 @@ asx_status asx_evidence_record(
     return ASX_OK;
 }
 
-asx_evidence_level asx_evidence_verdict(const asx_evidence_sink *sink)
-{
+asx_evidence_level asx_evidence_verdict(const asx_evidence_sink *sink) {
     if (sink == NULL) return ASX_EVIDENCE_FAIL;
     if (sink->fail_count > 0) return ASX_EVIDENCE_FAIL;
     if (sink->warn_count > 0) return ASX_EVIDENCE_WARN;
     return ASX_EVIDENCE_PASS;
 }
 
-int asx_evidence_sink_has_room(const asx_evidence_sink *sink)
-{
+int asx_evidence_sink_has_room(const asx_evidence_sink *sink) {
     if (sink == NULL) return 0;
     return sink->count < ASX_EVIDENCE_SINK_CAPACITY;
 }
 
-void asx_evidence_sink_reset(asx_evidence_sink *sink)
-{
+void asx_evidence_sink_reset(asx_evidence_sink *sink) {
     if (sink == NULL) return;
     memset(sink, 0, sizeof(*sink));
 }
@@ -222,9 +202,7 @@ void asx_evidence_sink_reset(asx_evidence_sink *sink)
 /* Inspect-to-evidence pipeline                                        */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_inspect_to_evidence(
-    const asx_runtime *rt, asx_evidence_sink *sink)
-{
+asx_status asx_inspect_to_evidence(const asx_runtime *rt, asx_evidence_sink *sink) {
     asx_inspection_report rpt;
     asx_status st;
 
@@ -234,10 +212,10 @@ asx_status asx_inspect_to_evidence(
     if (st != ASX_OK) return st;
 
     /* Runtime initialization */
-    st = asx_evidence_record(sink, "inspect:runtime",
-        rpt.initialized ? ASX_EVIDENCE_PASS : ASX_EVIDENCE_FAIL,
-        rpt.initialized ? "runtime initialized" : "runtime not initialized",
-        0);
+    st =
+        asx_evidence_record(sink, "inspect:runtime",
+                            rpt.initialized ? ASX_EVIDENCE_PASS : ASX_EVIDENCE_FAIL,
+                            rpt.initialized ? "runtime initialized" : "runtime not initialized", 0);
     if (st != ASX_OK) return st;
 
     /* Region utilization */
@@ -287,25 +265,21 @@ asx_status asx_inspect_to_evidence(
 
     /* Poisoned regions */
     if (rpt.any_poisoned) {
-        st = asx_evidence_record(sink, "inspect:poison",
-            ASX_EVIDENCE_WARN,
-            "one or more regions poisoned", 0);
+        st = asx_evidence_record(sink, "inspect:poison", ASX_EVIDENCE_WARN,
+                                 "one or more regions poisoned", 0);
         if (st != ASX_OK) return st;
     }
 
     /* Ghost violations */
     if (rpt.ghosts.violation_count > 0) {
-        st = asx_evidence_record(sink, "inspect:ghosts",
-            ASX_EVIDENCE_FAIL,
-            "ghost safety violations detected", 0);
+        st = asx_evidence_record(sink, "inspect:ghosts", ASX_EVIDENCE_FAIL,
+                                 "ghost safety violations detected", 0);
         if (st != ASX_OK) return st;
     }
 
     /* Trace digest (informational) */
-    st = asx_evidence_record(sink, "inspect:trace",
-        ASX_EVIDENCE_INFO,
-        "trace digest captured",
-        rpt.trace.digest);
+    st = asx_evidence_record(sink, "inspect:trace", ASX_EVIDENCE_INFO, "trace digest captured",
+                             rpt.trace.digest);
     if (st != ASX_OK) return st;
 
     return ASX_OK;

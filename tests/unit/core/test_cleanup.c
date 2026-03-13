@@ -12,25 +12,18 @@
 static int g_call_order[ASX_CLEANUP_STACK_CAPACITY];
 static int g_call_count;
 
-static void reset_tracker(void)
-{
+static void reset_tracker(void) {
     int i;
     g_call_count = 0;
-    for (i = 0; i < ASX_CLEANUP_STACK_CAPACITY; i++) {
-        g_call_order[i] = -1;
-    }
+    for (i = 0; i < ASX_CLEANUP_STACK_CAPACITY; i++) { g_call_order[i] = -1; }
 }
 
-static void track_cleanup(void *user_data)
-{
+static void track_cleanup(void *user_data) {
     int id = *(int *)user_data;
-    if (g_call_count < ASX_CLEANUP_STACK_CAPACITY) {
-        g_call_order[g_call_count++] = id;
-    }
+    if (g_call_count < ASX_CLEANUP_STACK_CAPACITY) { g_call_order[g_call_count++] = id; }
 }
 
-static void increment_counter(void *user_data)
-{
+static void increment_counter(void *user_data) {
     int *counter = (int *)user_data;
     (*counter)++;
 }
@@ -57,12 +50,9 @@ TEST(cleanup_push_null_args) {
     asx_cleanup_stack s;
     asx_cleanup_handle h;
     asx_cleanup_init(&s);
-    ASSERT_EQ(asx_cleanup_push(NULL, increment_counter, NULL, &h),
-              ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_cleanup_push(&s, NULL, NULL, &h),
-              ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_cleanup_push(&s, increment_counter, NULL, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cleanup_push(NULL, increment_counter, NULL, &h), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cleanup_push(&s, NULL, NULL, &h), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cleanup_push(&s, increment_counter, NULL, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(cleanup_pop_resolves) {
@@ -220,13 +210,10 @@ TEST(cleanup_capacity_exhaustion) {
     ASSERT_EQ(asx_cleanup_pending(&s), (uint32_t)ASX_CLEANUP_STACK_CAPACITY);
 
     /* One more should fail */
-    ASSERT_EQ(asx_cleanup_push(&s, increment_counter, NULL, &h),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_cleanup_push(&s, increment_counter, NULL, &h), ASX_E_RESOURCE_EXHAUSTED);
 }
 
-TEST(cleanup_pending_null) {
-    ASSERT_EQ(asx_cleanup_pending(NULL), (uint32_t)0);
-}
+TEST(cleanup_pending_null) { ASSERT_EQ(asx_cleanup_pending(NULL), (uint32_t)0); }
 
 TEST(cleanup_init_null_is_safe) {
     /* Should not crash */
@@ -244,9 +231,7 @@ TEST(cleanup_user_data_passed_through) {
     ASSERT_EQ(counter, 1);
 }
 
-TEST(cleanup_pop_null_stack) {
-    ASSERT_EQ(asx_cleanup_pop(NULL, 0), ASX_E_INVALID_ARGUMENT);
-}
+TEST(cleanup_pop_null_stack) { ASSERT_EQ(asx_cleanup_pop(NULL, 0), ASX_E_INVALID_ARGUMENT); }
 
 int main(void) {
     fprintf(stderr, "=== test_cleanup ===\n");

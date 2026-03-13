@@ -8,7 +8,11 @@
 #include <asx/bytes/codec.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Length-delimited codec tests                                        */
@@ -30,8 +34,7 @@ TEST(ld_init_with_valid) {
 
 TEST(ld_init_with_invalid_size) {
     asx_length_delimited_codec c;
-    ASSERT_EQ(asx_length_delimited_codec_init_with(&c, 3, 0),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_length_delimited_codec_init_with(&c, 3, 0), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(ld_encode_decode_u32) {
@@ -45,7 +48,7 @@ TEST(ld_encode_decode_u32) {
 
     /* Encode "hello" */
     MUST_OK(asx_length_delimited_encode(&c, "hello", 5, &buf));
-    ASSERT_EQ(asx_buf_mut_remaining(&buf), 9u);  /* 4 + 5 */
+    ASSERT_EQ(asx_buf_mut_remaining(&buf), 9u); /* 4 + 5 */
 
     /* Decode */
     dr = asx_length_delimited_decode(&c, &buf, &frame);
@@ -65,9 +68,8 @@ TEST(ld_encode_decode_u16) {
     asx_buf_mut_init(&buf);
 
     MUST_OK(asx_length_delimited_encode(&c, "ab", 2, &buf));
-    ASSERT_EQ(asx_buf_mut_remaining(&buf), 4u);  /* 2 + 2 */
-    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(asx_buf_mut_remaining(&buf), 4u); /* 2 + 2 */
+    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
     ASSERT_EQ(frame.len, 2u);
 }
 
@@ -80,9 +82,8 @@ TEST(ld_encode_decode_u8) {
     asx_buf_mut_init(&buf);
 
     MUST_OK(asx_length_delimited_encode(&c, "x", 1, &buf));
-    ASSERT_EQ(asx_buf_mut_remaining(&buf), 2u);  /* 1 + 1 */
-    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(asx_buf_mut_remaining(&buf), 2u); /* 1 + 1 */
+    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
     ASSERT_EQ(frame.len, 1u);
     ASSERT_EQ(frame.data[0], (uint8_t)'x');
 }
@@ -127,8 +128,7 @@ TEST(ld_max_frame_exceeded) {
 
     /* Write length=100, exceeds max_frame_len=8 */
     MUST_OK(asx_buf_mut_put_u32_be(&buf, 100));
-    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_ERROR);
+    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_ERROR);
 }
 
 TEST(ld_encode_empty_frame) {
@@ -140,9 +140,8 @@ TEST(ld_encode_empty_frame) {
     asx_buf_mut_init(&buf);
 
     MUST_OK(asx_length_delimited_encode(&c, NULL, 0, &buf));
-    ASSERT_EQ(asx_buf_mut_remaining(&buf), 4u);  /* just the length field */
-    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(asx_buf_mut_remaining(&buf), 4u); /* just the length field */
+    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
     ASSERT_EQ(frame.len, 0u);
 }
 
@@ -157,12 +156,10 @@ TEST(ld_multiple_frames) {
     MUST_OK(asx_length_delimited_encode(&c, "aa", 2, &buf));
     MUST_OK(asx_length_delimited_encode(&c, "bbb", 3, &buf));
 
-    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
     ASSERT_EQ(frame.len, 2u);
 
-    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
     ASSERT_EQ(frame.len, 3u);
     ASSERT_EQ(frame.data[0], (uint8_t)'b');
 }
@@ -178,8 +175,7 @@ TEST(ld_as_codec) {
     asx_buf_mut_init(&buf);
 
     MUST_OK(codec.encode(codec.state, "test", 4, &buf));
-    ASSERT_EQ(codec.decode(codec.state, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(codec.decode(codec.state, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
     ASSERT_EQ(frame.len, 4u);
 }
 
@@ -196,13 +192,11 @@ TEST(lines_decode_basic) {
     asx_buf_mut_init(&buf);
     MUST_OK(asx_buf_mut_put(&buf, "hello\nworld\n", 12));
 
-    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
-    ASSERT_EQ(frame.len, 5u);  /* "hello" */
+    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(frame.len, 5u); /* "hello" */
 
-    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
-    ASSERT_EQ(frame.len, 5u);  /* "world" */
+    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(frame.len, 5u); /* "world" */
 }
 
 TEST(lines_decode_crlf) {
@@ -214,9 +208,8 @@ TEST(lines_decode_crlf) {
     asx_buf_mut_init(&buf);
     MUST_OK(asx_buf_mut_put(&buf, "line\r\n", 6));
 
-    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
-    ASSERT_EQ(frame.len, 4u);  /* "line" without \r */
+    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(frame.len, 4u); /* "line" without \r */
 }
 
 TEST(lines_decode_need_more) {
@@ -228,8 +221,7 @@ TEST(lines_decode_need_more) {
     asx_buf_mut_init(&buf);
     MUST_OK(asx_buf_mut_put(&buf, "no-newline", 10));
 
-    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_NEED_MORE);
+    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_NEED_MORE);
 }
 
 TEST(lines_decode_empty_line) {
@@ -241,8 +233,7 @@ TEST(lines_decode_empty_line) {
     asx_buf_mut_init(&buf);
     MUST_OK(asx_buf_mut_put(&buf, "\n", 1));
 
-    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
     ASSERT_EQ(frame.len, 0u);
 }
 
@@ -255,8 +246,7 @@ TEST(lines_max_exceeded) {
     asx_buf_mut_init(&buf);
     MUST_OK(asx_buf_mut_put(&buf, "toolong\n", 8));
 
-    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_ERROR);
+    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_ERROR);
 }
 
 TEST(lines_encode) {
@@ -268,10 +258,9 @@ TEST(lines_encode) {
     asx_buf_mut_init(&buf);
 
     MUST_OK(asx_lines_encode(&c, "hello", 5, &buf));
-    ASSERT_EQ(asx_buf_mut_remaining(&buf), 6u);  /* "hello\n" */
+    ASSERT_EQ(asx_buf_mut_remaining(&buf), 6u); /* "hello\n" */
 
-    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(asx_lines_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
     ASSERT_EQ(frame.len, 5u);
 }
 
@@ -286,8 +275,7 @@ TEST(lines_as_codec) {
     asx_buf_mut_init(&buf);
 
     MUST_OK(codec.encode(codec.state, "test", 4, &buf));
-    ASSERT_EQ(codec.decode(codec.state, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(codec.decode(codec.state, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
     ASSERT_EQ(frame.len, 4u);
 }
 
@@ -302,8 +290,7 @@ TEST(bytes_decode_returns_all) {
     asx_buf_mut_init(&buf);
     MUST_OK(asx_buf_mut_put(&buf, "abcde", 5));
 
-    ASSERT_EQ(asx_bytes_decode(NULL, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(asx_bytes_decode(NULL, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
     ASSERT_EQ(frame.len, 5u);
     ASSERT_EQ(asx_buf_mut_remaining(&buf), 0u);
 }
@@ -313,8 +300,7 @@ TEST(bytes_decode_empty_need_more) {
     asx_frame frame;
 
     asx_buf_mut_init(&buf);
-    ASSERT_EQ(asx_bytes_decode(NULL, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_NEED_MORE);
+    ASSERT_EQ(asx_bytes_decode(NULL, &buf, &frame), (asx_decode_result)ASX_DECODE_NEED_MORE);
 }
 
 TEST(bytes_encode) {
@@ -333,8 +319,7 @@ TEST(bytes_as_codec) {
     asx_buf_mut_init(&buf);
 
     MUST_OK(codec.encode(codec.state, "data", 4, &buf));
-    ASSERT_EQ(codec.decode(codec.state, &buf, &frame),
-              (asx_decode_result)ASX_DECODE_FRAME);
+    ASSERT_EQ(codec.decode(codec.state, &buf, &frame), (asx_decode_result)ASX_DECODE_FRAME);
     ASSERT_EQ(frame.len, 4u);
 }
 
@@ -342,8 +327,7 @@ TEST(bytes_as_codec) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_codec ===\n");
 
     RUN_TEST(ld_init_defaults);

@@ -8,8 +8,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include "test_log.h"
 #include "test_harness.h"
+#include "test_log.h"
 #include <asx/asx.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
@@ -20,8 +20,7 @@
  * Helpers
  * ------------------------------------------------------------------- */
 
-static void reset_all(void)
-{
+static void reset_all(void) {
     asx_runtime_reset();
     asx_ghost_reset();
     asx_trace_reset();
@@ -29,24 +28,25 @@ static void reset_all(void)
 }
 
 /* Immediate-complete poll */
-static asx_status poll_ok(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_ok(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_OK;
 }
 
 /* Always-pending poll */
-static asx_status poll_pending(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_pending(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_E_PENDING;
 }
 
 /* Countdown poll: completes after N polls */
-typedef struct { uint32_t remaining; } countdown_state;
+typedef struct {
+    uint32_t remaining;
+} countdown_state;
 
-static asx_status poll_countdown(void *ud, asx_task_id self)
-{
+static asx_status poll_countdown(void *ud, asx_task_id self) {
     countdown_state *s = (countdown_state *)ud;
     (void)self;
     if (s->remaining == 0) return ASX_OK;
@@ -55,9 +55,9 @@ static asx_status poll_countdown(void *ud, asx_task_id self)
 }
 
 /* Fail-once poll */
-static asx_status poll_fail(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_fail(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_E_CANCELLED;
 }
 
@@ -65,8 +65,7 @@ static asx_status poll_fail(void *ud, asx_task_id self)
  * Task arena exhaustion
  * ------------------------------------------------------------------- */
 
-TEST(task_arena_full_exhaustion)
-{
+TEST(task_arena_full_exhaustion) {
     asx_region_id rid;
     asx_task_id tid;
     uint32_t i;
@@ -80,12 +79,10 @@ TEST(task_arena_full_exhaustion)
     }
 
     /* Next spawn should fail with RESOURCE_EXHAUSTED */
-    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_E_RESOURCE_EXHAUSTED);
 }
 
-TEST(task_arena_exhaustion_then_complete_then_respawn)
-{
+TEST(task_arena_exhaustion_then_complete_then_respawn) {
     asx_region_id rid;
     asx_task_id tids[ASX_MAX_TASKS];
     uint32_t i;
@@ -113,17 +110,14 @@ TEST(task_arena_exhaustion_then_complete_then_respawn)
  * Region arena exhaustion
  * ------------------------------------------------------------------- */
 
-TEST(region_arena_full_exhaustion)
-{
+TEST(region_arena_full_exhaustion) {
     asx_region_id rids[ASX_MAX_REGIONS];
     asx_region_id extra;
     uint32_t i;
 
     reset_all();
 
-    for (i = 0; i < ASX_MAX_REGIONS; i++) {
-        ASSERT_EQ(asx_region_open(&rids[i]), ASX_OK);
-    }
+    for (i = 0; i < ASX_MAX_REGIONS; i++) { ASSERT_EQ(asx_region_open(&rids[i]), ASX_OK); }
 
     /* Next region should fail */
     ASSERT_EQ(asx_region_open(&extra), ASX_E_RESOURCE_EXHAUSTED);
@@ -133,8 +127,7 @@ TEST(region_arena_full_exhaustion)
  * Obligation arena exhaustion
  * ------------------------------------------------------------------- */
 
-TEST(obligation_arena_full_exhaustion)
-{
+TEST(obligation_arena_full_exhaustion) {
     asx_region_id rid;
     asx_obligation_id oids[ASX_MAX_OBLIGATIONS];
     asx_obligation_id extra;
@@ -155,8 +148,7 @@ TEST(obligation_arena_full_exhaustion)
  * Cancellation storms
  * ------------------------------------------------------------------- */
 
-TEST(cancel_all_tasks_in_region)
-{
+TEST(cancel_all_tasks_in_region) {
     asx_region_id rid;
     asx_task_id tids[16];
     uint32_t i;
@@ -196,8 +188,7 @@ TEST(cancel_all_tasks_in_region)
     }
 }
 
-TEST(cancel_storm_rapid_cancel_propagate)
-{
+TEST(cancel_storm_rapid_cancel_propagate) {
     asx_region_id rid;
     asx_task_id tid;
     uint32_t i;
@@ -231,8 +222,7 @@ TEST(cancel_storm_rapid_cancel_propagate)
  * Multi-region interleaved scheduling
  * ------------------------------------------------------------------- */
 
-TEST(multi_region_independent_scheduling)
-{
+TEST(multi_region_independent_scheduling) {
     asx_region_id r1, r2;
     asx_task_id t1, t2, t3;
     countdown_state s1, s2, s3;
@@ -278,8 +268,7 @@ TEST(multi_region_independent_scheduling)
     }
 }
 
-TEST(multi_region_cancel_one_leaves_other_intact)
-{
+TEST(multi_region_cancel_one_leaves_other_intact) {
     asx_region_id r1, r2;
     asx_task_id t1, t2;
 
@@ -326,8 +315,7 @@ TEST(multi_region_cancel_one_leaves_other_intact)
  * Timer churn
  * ------------------------------------------------------------------- */
 
-TEST(timer_rapid_register_cancel_churn)
-{
+TEST(timer_rapid_register_cancel_churn) {
     asx_timer_wheel *wheel = asx_timer_wheel_global();
     asx_timer_handle handles[64];
     uint32_t i;
@@ -336,26 +324,18 @@ TEST(timer_rapid_register_cancel_churn)
 
     /* Register 64 timers */
     for (i = 0; i < 64; i++) {
-        ASSERT_EQ(asx_timer_register(wheel,
-                                      (asx_time)(1000 + i * 10),
-                                      NULL, &handles[i]),
-                  ASX_OK);
+        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(1000 + i * 10), NULL, &handles[i]), ASX_OK);
     }
     ASSERT_EQ(asx_timer_active_count(wheel), 64u);
 
     /* Cancel every other one */
-    for (i = 0; i < 64; i += 2) {
-        ASSERT_TRUE(asx_timer_cancel(wheel, &handles[i]));
-    }
+    for (i = 0; i < 64; i += 2) { ASSERT_TRUE(asx_timer_cancel(wheel, &handles[i])); }
     ASSERT_EQ(asx_timer_active_count(wheel), 32u);
 
     /* Register 32 more in the freed slots */
     for (i = 0; i < 32; i++) {
         asx_timer_handle h;
-        ASSERT_EQ(asx_timer_register(wheel,
-                                      (asx_time)(2000 + i * 10),
-                                      NULL, &h),
-                  ASX_OK);
+        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(2000 + i * 10), NULL, &h), ASX_OK);
     }
     ASSERT_EQ(asx_timer_active_count(wheel), 64u);
 
@@ -368,8 +348,7 @@ TEST(timer_rapid_register_cancel_churn)
     ASSERT_EQ(asx_timer_active_count(wheel), 0u);
 }
 
-TEST(timer_exhaustion_then_fire_then_reuse)
-{
+TEST(timer_exhaustion_then_fire_then_reuse) {
     asx_timer_wheel *wheel = asx_timer_wheel_global();
     asx_timer_handle handles[ASX_MAX_TIMERS];
     asx_timer_handle extra;
@@ -380,19 +359,15 @@ TEST(timer_exhaustion_then_fire_then_reuse)
 
     /* Fill to capacity */
     for (i = 0; i < ASX_MAX_TIMERS; i++) {
-        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(100 + i),
-                                      NULL, &handles[i]),
-                  ASX_OK);
+        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(100 + i), NULL, &handles[i]), ASX_OK);
     }
 
     /* Next should fail */
-    ASSERT_EQ(asx_timer_register(wheel, 9999, NULL, &extra),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_timer_register(wheel, 9999, NULL, &extra), ASX_E_RESOURCE_EXHAUSTED);
 
     /* Fire all */
     {
-        uint32_t fired = asx_timer_collect_expired(wheel, 99999, wakers,
-                                                    ASX_MAX_TIMERS);
+        uint32_t fired = asx_timer_collect_expired(wheel, 99999, wakers, ASX_MAX_TIMERS);
         ASSERT_EQ(fired, ASX_MAX_TIMERS);
     }
 
@@ -405,8 +380,7 @@ TEST(timer_exhaustion_then_fire_then_reuse)
  * Budget exhaustion patterns
  * ------------------------------------------------------------------- */
 
-TEST(budget_exhaustion_with_many_pending_tasks)
-{
+TEST(budget_exhaustion_with_many_pending_tasks) {
     asx_region_id rid;
     asx_task_id tid;
     uint32_t i;
@@ -415,27 +389,22 @@ TEST(budget_exhaustion_with_many_pending_tasks)
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Spawn 16 always-pending tasks */
-    for (i = 0; i < 16; i++) {
-        ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
-    }
+    for (i = 0; i < 16; i++) { ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK); }
 
     /* Give a very small budget — should exhaust quickly */
     {
         asx_budget budget = asx_budget_from_polls(3);
-        ASSERT_EQ(asx_scheduler_run(rid, &budget),
-                  ASX_E_POLL_BUDGET_EXHAUSTED);
+        ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     }
 
     /* Give more budget — still pending, should exhaust again */
     {
         asx_budget budget = asx_budget_from_polls(10);
-        ASSERT_EQ(asx_scheduler_run(rid, &budget),
-                  ASX_E_POLL_BUDGET_EXHAUSTED);
+        ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     }
 }
 
-TEST(tight_budget_one_poll_per_call)
-{
+TEST(tight_budget_one_poll_per_call) {
     asx_region_id rid;
     asx_task_id tid;
     countdown_state cs;
@@ -471,17 +440,14 @@ TEST(tight_budget_one_poll_per_call)
  * Trace ring pressure
  * ------------------------------------------------------------------- */
 
-TEST(trace_ring_high_event_volume)
-{
+TEST(trace_ring_high_event_volume) {
     uint32_t i;
     uint64_t digest;
 
     reset_all();
 
     /* Emit events up to near capacity */
-    for (i = 0; i < 500; i++) {
-        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0);
-    }
+    for (i = 0; i < 500; i++) { asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0); }
 
     ASSERT_EQ(asx_trace_event_count(), 500u);
 
@@ -499,8 +465,7 @@ TEST(trace_ring_high_event_volume)
     }
 }
 
-TEST(trace_digest_deterministic_across_resets)
-{
+TEST(trace_digest_deterministic_across_resets) {
     uint64_t d1, d2;
     uint32_t i;
 
@@ -525,8 +490,7 @@ TEST(trace_digest_deterministic_across_resets)
  * Obligation churn
  * ------------------------------------------------------------------- */
 
-TEST(obligation_rapid_reserve_commit_cycle)
-{
+TEST(obligation_rapid_reserve_commit_cycle) {
     asx_region_id rid;
     asx_obligation_id oid;
     uint32_t i;
@@ -546,8 +510,7 @@ TEST(obligation_rapid_reserve_commit_cycle)
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_RESOURCE_EXHAUSTED);
 }
 
-TEST(obligation_mixed_commit_abort_pattern)
-{
+TEST(obligation_mixed_commit_abort_pattern) {
     asx_region_id rid;
     asx_obligation_id oids[32];
     uint32_t i;
@@ -556,9 +519,7 @@ TEST(obligation_mixed_commit_abort_pattern)
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Reserve 32 obligations */
-    for (i = 0; i < 32; i++) {
-        ASSERT_EQ(asx_obligation_reserve(rid, &oids[i]), ASX_OK);
-    }
+    for (i = 0; i < 32; i++) { ASSERT_EQ(asx_obligation_reserve(rid, &oids[i]), ASX_OK); }
 
     /* Commit even-indexed, abort odd-indexed */
     for (i = 0; i < 32; i++) {
@@ -585,8 +546,7 @@ TEST(obligation_mixed_commit_abort_pattern)
  * Fault containment under pressure
  * ------------------------------------------------------------------- */
 
-TEST(fault_containment_multiple_failures_same_region)
-{
+TEST(fault_containment_multiple_failures_same_region) {
     asx_region_id rid;
     asx_task_id t1, t2, t3;
     int poisoned;
@@ -625,8 +585,7 @@ TEST(fault_containment_multiple_failures_same_region)
  * Main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     test_log_open("unit", "runtime/stress", "test_stress");
 
     /* Arena exhaustion */

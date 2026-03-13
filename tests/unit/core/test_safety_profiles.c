@@ -50,9 +50,7 @@ TEST(safety_profile_active_matches_compile_flag) {
     ASSERT_EQ(p, (asx_safety_profile)ASX_SAFETY_PROFILE_SELECTED);
 }
 
-TEST(safety_profile_str_debug) {
-    ASSERT_STR_EQ(asx_safety_profile_str(ASX_SAFETY_DEBUG), "debug");
-}
+TEST(safety_profile_str_debug) { ASSERT_STR_EQ(asx_safety_profile_str(ASX_SAFETY_DEBUG), "debug"); }
 
 TEST(safety_profile_str_hardened) {
     ASSERT_STR_EQ(asx_safety_profile_str(ASX_SAFETY_HARDENED), "hardened");

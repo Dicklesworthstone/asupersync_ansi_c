@@ -92,12 +92,10 @@ TEST(region_stale_handle_different_generation) {
     ASSERT_EQ(asx_region_open(&second_id), ASX_OK);
 
     /* Verify generations differ */
-    ASSERT_NE(asx_handle_generation(first_id),
-              asx_handle_generation(second_id));
+    ASSERT_NE(asx_handle_generation(first_id), asx_handle_generation(second_id));
 
     /* But same slot */
-    ASSERT_EQ(asx_handle_slot(first_id),
-              asx_handle_slot(second_id));
+    ASSERT_EQ(asx_handle_slot(first_id), asx_handle_slot(second_id));
 }
 
 TEST(region_fresh_handle_generation_zero) {
@@ -129,9 +127,9 @@ TEST(region_reclaimed_handle_generation_increments) {
 
 /* ---- Task handle uses generation from spawn ---- */
 
-static asx_status noop_poll(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status noop_poll(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_OK;
 }
 
@@ -160,10 +158,8 @@ TEST(task_lookup_validates_generation) {
 
     /* Forge a handle with wrong generation — should fail */
     {
-        uint64_t forged = asx_handle_pack(
-            ASX_TYPE_TASK,
-            asx_handle_state_mask(tid),
-            asx_handle_pack_index(99, asx_handle_slot(tid)));
+        uint64_t forged = asx_handle_pack(ASX_TYPE_TASK, asx_handle_state_mask(tid),
+                                          asx_handle_pack_index(99, asx_handle_slot(tid)));
         ASSERT_EQ(asx_task_get_state(forged, &state), ASX_E_STALE_HANDLE);
     }
 }

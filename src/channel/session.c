@@ -22,16 +22,14 @@ typedef struct {
     uint32_t capacity;
 } asx_session_queue;
 
-static void queue_init(asx_session_queue *q, uint32_t capacity)
-{
+static void queue_init(asx_session_queue *q, uint32_t capacity) {
     memset(q->buf, 0, sizeof(q->buf));
     q->head = 0;
     q->len = 0;
     q->capacity = capacity;
 }
 
-static int queue_push(asx_session_queue *q, uint64_t value)
-{
+static int queue_push(asx_session_queue *q, uint64_t value) {
     uint32_t tail;
     if (q->len >= q->capacity) return 0;
     tail = (q->head + q->len) % q->capacity;
@@ -40,8 +38,7 @@ static int queue_push(asx_session_queue *q, uint64_t value)
     return 1;
 }
 
-static int queue_pop(asx_session_queue *q, uint64_t *out)
-{
+static int queue_pop(asx_session_queue *q, uint64_t *out) {
     if (q->len == 0) return 0;
     *out = q->buf[q->head];
     q->head = (q->head + 1) % q->capacity;
@@ -54,14 +51,14 @@ static int queue_pop(asx_session_queue *q, uint64_t *out)
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    uint16_t           generation;
-    asx_session_state  state;
-    asx_region_id      region;
-    int                initiator_alive;
-    int                responder_alive;
-    asx_session_queue  i2r;           /* initiator → responder */
-    asx_session_queue  r2i;           /* responder → initiator */
-    uint32_t           obligations;   /* outstanding request count */
+    uint16_t generation;
+    asx_session_state state;
+    asx_region_id region;
+    int initiator_alive;
+    int responder_alive;
+    asx_session_queue i2r; /* initiator → responder */
+    asx_session_queue r2i; /* responder → initiator */
+    uint32_t obligations;  /* outstanding request count */
 } asx_session_slot;
 
 /* ------------------------------------------------------------------ */
@@ -71,15 +68,13 @@ typedef struct {
 static asx_session_slot g_slots[ASX_MAX_SESSIONS];
 static uint32_t g_slot_count = 0;
 
-static uint16_t next_gen(uint16_t g)
-{
+static uint16_t next_gen(uint16_t g) {
     g++;
     if (g == 0) g = 1;
     return g;
 }
 
-void asx_session_reset(void)
-{
+void asx_session_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_SESSIONS; i++) {
         g_slots[i].generation = next_gen(g_slots[i].generation);
@@ -95,26 +90,22 @@ void asx_session_reset(void)
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_session_create(asx_region_id region,
-                               uint32_t capacity,
-                               asx_session_endpoint *out_initiator,
-                               asx_session_endpoint *out_responder)
-{
+asx_status asx_session_create(asx_region_id region, uint32_t capacity,
+                              asx_session_endpoint *out_initiator,
+                              asx_session_endpoint *out_responder) {
     uint32_t idx;
     asx_session_slot *s;
 
-    if (out_initiator == NULL || out_responder == NULL)
-        return ASX_E_INVALID_ARGUMENT;
-    if (capacity == 0 || capacity > ASX_SESSION_MAX_CAPACITY)
-        return ASX_E_INVALID_ARGUMENT;
+    if (out_initiator == NULL || out_responder == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (capacity == 0 || capacity > ASX_SESSION_MAX_CAPACITY) return ASX_E_INVALID_ARGUMENT;
 
     /* Find free slot */
     idx = ASX_MAX_SESSIONS;
     {
         uint32_t i;
         for (i = 0; i < g_slot_count; i++) {
-            if (g_slots[i].state == ASX_SESSION_CLOSED &&
-                !g_slots[i].initiator_alive && !g_slots[i].responder_alive) {
+            if (g_slots[i].state == ASX_SESSION_CLOSED && !g_slots[i].initiator_alive &&
+                !g_slots[i].responder_alive) {
                 idx = i;
                 break;
             }
@@ -122,8 +113,7 @@ asx_status asx_session_create(asx_region_id region,
     }
 
     if (idx == ASX_MAX_SESSIONS) {
-        if (g_slot_count >= ASX_MAX_SESSIONS)
-            return ASX_E_RESOURCE_EXHAUSTED;
+        if (g_slot_count >= ASX_MAX_SESSIONS) return ASX_E_RESOURCE_EXHAUSTED;
         idx = g_slot_count++;
     }
 
@@ -148,8 +138,7 @@ asx_status asx_session_create(asx_region_id region,
     return ASX_OK;
 }
 
-void asx_session_endpoint_drop(asx_session_endpoint *ep)
-{
+void asx_session_endpoint_drop(asx_session_endpoint *ep) {
     asx_session_slot *s;
     if (ep == NULL) return;
     if (ep->slot >= g_slot_count) return;
@@ -173,8 +162,7 @@ void asx_session_endpoint_drop(asx_session_endpoint *ep)
 /* Send / Receive                                                      */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_session_send(asx_session_endpoint *ep, uint64_t value)
-{
+asx_status asx_session_send(asx_session_endpoint *ep, uint64_t value) {
     asx_session_slot *s;
     asx_session_queue *q;
 
@@ -195,28 +183,22 @@ asx_status asx_session_send(asx_session_endpoint *ep, uint64_t value)
     /* Select direction */
     q = ep->is_initiator ? &s->i2r : &s->r2i;
 
-    if (!queue_push(q, value))
-        return ASX_E_CHANNEL_FULL;
+    if (!queue_push(q, value)) return ASX_E_CHANNEL_FULL;
 
     /* Initiator sends are requests: increment obligations */
-    if (ep->is_initiator) {
-        s->obligations++;
-    }
+    if (ep->is_initiator) { s->obligations++; }
 
-    asx_trace_emit(ASX_TRACE_CHANNEL_SEND,
-                   (uint64_t)ep->slot, value);
+    asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)ep->slot, value);
 
     return ASX_OK;
 }
 
-asx_status asx_session_try_recv(asx_session_endpoint *ep, uint64_t *out_value)
-{
+asx_status asx_session_try_recv(asx_session_endpoint *ep, uint64_t *out_value) {
     asx_session_slot *s;
     asx_session_queue *q;
     int peer_alive;
 
-    if (ep == NULL || out_value == NULL)
-        return ASX_E_INVALID_ARGUMENT;
+    if (ep == NULL || out_value == NULL) return ASX_E_INVALID_ARGUMENT;
     if (ep->slot >= g_slot_count) return ASX_E_NOT_FOUND;
 
     s = &g_slots[ep->slot];
@@ -231,8 +213,7 @@ asx_status asx_session_try_recv(asx_session_endpoint *ep, uint64_t *out_value)
         if (!ep->is_initiator) {
             if (s->obligations > 0) s->obligations--;
         }
-        asx_trace_emit(ASX_TRACE_CHANNEL_RECV,
-                       (uint64_t)ep->slot, *out_value);
+        asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)ep->slot, *out_value);
         return ASX_OK;
     }
 
@@ -244,22 +225,19 @@ asx_status asx_session_try_recv(asx_session_endpoint *ep, uint64_t *out_value)
 /* Query                                                               */
 /* ------------------------------------------------------------------ */
 
-asx_session_state asx_session_get_state(uint32_t slot, uint16_t gen)
-{
+asx_session_state asx_session_get_state(uint32_t slot, uint16_t gen) {
     if (slot >= g_slot_count) return ASX_SESSION_CLOSED;
     if (g_slots[slot].generation != gen) return ASX_SESSION_CLOSED;
     return g_slots[slot].state;
 }
 
-uint32_t asx_session_obligations(uint32_t slot, uint16_t gen)
-{
+uint32_t asx_session_obligations(uint32_t slot, uint16_t gen) {
     if (slot >= g_slot_count) return 0;
     if (g_slots[slot].generation != gen) return 0;
     return g_slots[slot].obligations;
 }
 
-int asx_session_peer_alive(const asx_session_endpoint *ep)
-{
+int asx_session_peer_alive(const asx_session_endpoint *ep) {
     const asx_session_slot *s;
     if (ep == NULL) return 0;
     if (ep->slot >= g_slot_count) return 0;

@@ -14,8 +14,7 @@
 #include <asx/asx.h>
 #include <string.h>
 
-static asx_cancel_reason make_reason(asx_cancel_kind kind, asx_time ts)
-{
+static asx_cancel_reason make_reason(asx_cancel_kind kind, asx_time ts) {
     asx_cancel_reason r;
     memset(&r, 0, sizeof(r));
     r.kind = kind;
@@ -24,8 +23,7 @@ static asx_cancel_reason make_reason(asx_cancel_kind kind, asx_time ts)
 }
 
 /* --- Severity is monotone non-decreasing with enum order --- */
-TEST(cancel_severity_monotone)
-{
+TEST(cancel_severity_monotone) {
     int k;
     int prev_sev = -1;
     for (k = 0; k <= 10; k++) {
@@ -36,8 +34,7 @@ TEST(cancel_severity_monotone)
 }
 
 /* --- Severity is bounded [0, 5] --- */
-TEST(cancel_severity_bounded)
-{
+TEST(cancel_severity_bounded) {
     int k;
     for (k = 0; k <= 10; k++) {
         int sev = asx_cancel_severity((asx_cancel_kind)k);
@@ -47,16 +44,14 @@ TEST(cancel_severity_bounded)
 }
 
 /* --- Out-of-range severity returns 5 (max) --- */
-TEST(cancel_severity_out_of_range)
-{
+TEST(cancel_severity_out_of_range) {
     ASSERT_EQ(asx_cancel_severity((asx_cancel_kind)(-1)), 5);
     ASSERT_EQ(asx_cancel_severity((asx_cancel_kind)11), 5);
     ASSERT_EQ(asx_cancel_severity((asx_cancel_kind)99), 5);
 }
 
 /* --- Strengthen: result severity >= max(severity(a), severity(b)) --- */
-TEST(cancel_strengthen_monotone_severity)
-{
+TEST(cancel_strengthen_monotone_severity) {
     int a, b;
     for (a = 0; a <= 10; a++) {
         for (b = 0; b <= 10; b++) {
@@ -73,8 +68,7 @@ TEST(cancel_strengthen_monotone_severity)
 }
 
 /* --- Strengthen: equal severity uses earlier timestamp --- */
-TEST(cancel_strengthen_deterministic_tiebreak)
-{
+TEST(cancel_strengthen_deterministic_tiebreak) {
     int a, b;
     for (a = 0; a <= 10; a++) {
         for (b = 0; b <= 10; b++) {
@@ -98,8 +92,7 @@ TEST(cancel_strengthen_deterministic_tiebreak)
 }
 
 /* --- Strengthen: idempotent (strengthen(x,x) == x) --- */
-TEST(cancel_strengthen_idempotent)
-{
+TEST(cancel_strengthen_idempotent) {
     int k;
     for (k = 0; k <= 10; k++) {
         asx_cancel_reason r = make_reason((asx_cancel_kind)k, 42);
@@ -110,8 +103,7 @@ TEST(cancel_strengthen_idempotent)
 }
 
 /* --- Strengthen: higher severity always wins regardless of timestamp --- */
-TEST(cancel_strengthen_higher_severity_wins)
-{
+TEST(cancel_strengthen_higher_severity_wins) {
     int a, b;
     for (a = 0; a <= 10; a++) {
         for (b = 0; b <= 10; b++) {
@@ -134,9 +126,28 @@ TEST(cancel_strengthen_higher_severity_wins)
     }
 }
 
+/* --- Associativity: strengthen(strengthen(a,b),c) == strengthen(a,strengthen(b,c)) --- */
+TEST(cancel_strengthen_associative) {
+    int a, b, c;
+    for (a = 0; a <= 10; a++) {
+        for (b = 0; b <= 10; b++) {
+            for (c = 0; c <= 10; c++) {
+                asx_cancel_reason ra = make_reason((asx_cancel_kind)a, 100);
+                asx_cancel_reason rb = make_reason((asx_cancel_kind)b, 200);
+                asx_cancel_reason rc = make_reason((asx_cancel_kind)c, 300);
+                asx_cancel_reason ab = asx_cancel_strengthen(&ra, &rb);
+                asx_cancel_reason ab_c = asx_cancel_strengthen(&ab, &rc);
+                asx_cancel_reason bc = asx_cancel_strengthen(&rb, &rc);
+                asx_cancel_reason a_bc = asx_cancel_strengthen(&ra, &bc);
+                /* Severity of result must match */
+                ASSERT_EQ(asx_cancel_severity(ab_c.kind), asx_cancel_severity(a_bc.kind));
+            }
+        }
+    }
+}
+
 /* --- Cleanup budget: quota monotone decreasing with severity --- */
-TEST(cancel_cleanup_budget_monotone_quota)
-{
+TEST(cancel_cleanup_budget_monotone_quota) {
     int k;
     uint32_t prev_quota = UINT32_MAX;
     int prev_sev = -1;
@@ -152,8 +163,7 @@ TEST(cancel_cleanup_budget_monotone_quota)
 }
 
 /* --- Cleanup budget: priority monotone increasing with severity --- */
-TEST(cancel_cleanup_budget_monotone_priority)
-{
+TEST(cancel_cleanup_budget_monotone_priority) {
     int k;
     uint8_t prev_priority = 0;
     int prev_sev = -1;
@@ -168,8 +178,7 @@ TEST(cancel_cleanup_budget_monotone_priority)
     }
 }
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "[formal] cancel severity/strengthen algebraic properties\n");
 
     RUN_TEST(cancel_severity_monotone);
@@ -179,6 +188,7 @@ int main(void)
     RUN_TEST(cancel_strengthen_deterministic_tiebreak);
     RUN_TEST(cancel_strengthen_idempotent);
     RUN_TEST(cancel_strengthen_higher_severity_wins);
+    RUN_TEST(cancel_strengthen_associative);
     RUN_TEST(cancel_cleanup_budget_monotone_quota);
     RUN_TEST(cancel_cleanup_budget_monotone_priority);
 

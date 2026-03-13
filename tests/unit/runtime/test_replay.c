@@ -10,25 +10,27 @@
 #include <asx/runtime/runtime.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Test step functions                                                  */
 /* ------------------------------------------------------------------ */
 
-static asx_status step_noop(asx_lab *lab, void *user_data)
-{
-    (void)lab; (void)user_data;
+static asx_status step_noop(asx_lab *lab, void *user_data) {
+    (void)lab;
+    (void)user_data;
     return ASX_OK;
 }
 
-static asx_status step_advance_5(asx_lab *lab, void *user_data)
-{
+static asx_status step_advance_5(asx_lab *lab, void *user_data) {
     (void)user_data;
     asx_lab_advance_time(lab, 5);
     return ASX_OK;
 }
-
 
 
 /* ================================================================== */
@@ -106,14 +108,10 @@ TEST(snapshot_exhaustion) {
     asx_lab_config_init(&cfg);
     MUST_OK(asx_lab_init(&lab, &cfg));
 
-    for (i = 0; i < ASX_SNAPSHOT_MAX; i++) {
-        MUST_OK(asx_snapshot_take(&lab, &sids[i]));
-    }
+    for (i = 0; i < ASX_SNAPSHOT_MAX; i++) { MUST_OK(asx_snapshot_take(&lab, &sids[i])); }
     ASSERT_EQ(asx_snapshot_take(&lab, &extra), ASX_E_RESOURCE_EXHAUSTED);
 
-    for (i = 0; i < ASX_SNAPSHOT_MAX; i++) {
-        MUST_OK(asx_snapshot_discard(sids[i]));
-    }
+    for (i = 0; i < ASX_SNAPSHOT_MAX; i++) { MUST_OK(asx_snapshot_discard(sids[i])); }
     asx_lab_shutdown(&lab);
 }
 
@@ -308,8 +306,7 @@ TEST(oracle_suite_overflow) {
     for (i = 0; i < ASX_ORACLE_SUITE_MAX; i++) {
         MUST_OK(asx_oracle_suite_add(&suite, asx_oracle_quiescence, NULL));
     }
-    ASSERT_EQ(asx_oracle_suite_add(&suite, asx_oracle_quiescence, NULL),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_oracle_suite_add(&suite, asx_oracle_quiescence, NULL), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 /* ================================================================== */
@@ -317,12 +314,11 @@ TEST(oracle_suite_overflow) {
 /* ================================================================== */
 
 /* Oracle that always says FAIL (for testing minimization) */
-static asx_oracle_result oracle_always_fail(const asx_lab *lab, void *ctx)
-{
-    (void)lab; (void)ctx;
+static asx_oracle_result oracle_always_fail(const asx_lab *lab, void *ctx) {
+    (void)lab;
+    (void)ctx;
     return (asx_oracle_result){ASX_ORACLE_FAIL, "always_fail", "always fails", 0};
 }
-
 
 
 TEST(minimize_shrinks_scenario) {
@@ -345,9 +341,7 @@ TEST(minimize_shrinks_scenario) {
     MUST_OK(asx_minimize_init(&ms, &cfg, &sc, oracle_always_fail, NULL, 10));
 
     /* Run minimization steps */
-    do {
-        st = asx_minimize_step(&ms);
-    } while (st == ASX_E_PENDING);
+    do { st = asx_minimize_step(&ms); } while (st == ASX_E_PENDING);
 
     result = asx_minimize_result(&ms);
     /* Should have shrunk — fewer steps than original */
@@ -395,9 +389,7 @@ TEST(minimize_max_attempts_respected) {
     MUST_OK(asx_minimize_init(&ms, &cfg, &sc, oracle_always_fail, NULL, 2));
 
     st = asx_minimize_step(&ms);
-    if (st == ASX_E_PENDING) {
-        st = asx_minimize_step(&ms);
-    }
+    if (st == ASX_E_PENDING) { st = asx_minimize_step(&ms); }
     /* After 2 attempts, should stop */
     ASSERT_EQ(st, ASX_OK);
     ASSERT_EQ(asx_minimize_attempts(&ms), 2u);
@@ -446,8 +438,7 @@ TEST(snapshot_replay_integration) {
 /* Main                                                                */
 /* ================================================================== */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_replay ===\n");
 
     /* Snapshot */

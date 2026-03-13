@@ -19,17 +19,16 @@
 
 #include "test_harness.h"
 #include <asx/asx.h>
-#include <asx/runtime/runtime.h>
-#include <asx/core/resource.h>
 #include <asx/core/channel.h>
-#include <asx/time/timer_wheel.h>
+#include <asx/core/resource.h>
+#include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
+#include <asx/time/timer_wheel.h>
 #include <string.h>
 
 /* ---- Helpers ---- */
 
-static void reset_all(void)
-{
+static void reset_all(void) {
     asx_runtime_reset();
     asx_ghost_reset();
     asx_trace_reset();
@@ -37,15 +36,15 @@ static void reset_all(void)
     asx_replay_clear_reference();
 }
 
-static asx_status poll_ok(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_ok(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_OK;
 }
 
-static asx_status poll_pending(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_pending(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_E_PENDING;
 }
 
@@ -53,8 +52,7 @@ static asx_status poll_pending(void *ud, asx_task_id self)
  * Cross-arena simultaneous exhaustion
  * ==================================================================== */
 
-TEST(cross_arena_task_and_obligation_both_exhausted)
-{
+TEST(cross_arena_task_and_obligation_both_exhausted) {
     asx_region_id rid;
     asx_task_id tid;
     asx_obligation_id oid;
@@ -76,19 +74,15 @@ TEST(cross_arena_task_and_obligation_both_exhausted)
     ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_OBLIGATION), (uint32_t)0);
 
     /* Both should fail independently with correct errors */
-    ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid),
-              ASX_E_RESOURCE_EXHAUSTED);
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_RESOURCE_EXHAUSTED);
 
     /* State should be consistent */
     ASSERT_EQ(asx_resource_used(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_OBLIGATION),
-              (uint32_t)ASX_MAX_OBLIGATIONS);
+    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_OBLIGATION), (uint32_t)ASX_MAX_OBLIGATIONS);
 }
 
-TEST(cross_arena_region_full_but_tasks_available)
-{
+TEST(cross_arena_region_full_but_tasks_available) {
     asx_region_id rids[ASX_MAX_REGIONS];
     asx_region_id overflow;
     asx_task_id tid;
@@ -97,21 +91,17 @@ TEST(cross_arena_region_full_but_tasks_available)
     reset_all();
 
     /* Fill all region slots */
-    for (i = 0; i < ASX_MAX_REGIONS; i++) {
-        ASSERT_EQ(asx_region_open(&rids[i]), ASX_OK);
-    }
+    for (i = 0; i < ASX_MAX_REGIONS; i++) { ASSERT_EQ(asx_region_open(&rids[i]), ASX_OK); }
 
     /* Region arena is full */
     ASSERT_EQ(asx_region_open(&overflow), ASX_E_RESOURCE_EXHAUSTED);
 
     /* But tasks are still available within existing regions */
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK),
-              (uint32_t)ASX_MAX_TASKS);
+    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
     ASSERT_EQ(asx_task_spawn(rids[0], poll_ok, NULL, &tid), ASX_OK);
 }
 
-TEST(cross_arena_tasks_exhausted_regions_ok)
-{
+TEST(cross_arena_tasks_exhausted_regions_ok) {
     asx_region_id r1, r2;
     asx_task_id tid;
     uint32_t i;
@@ -128,16 +118,14 @@ TEST(cross_arena_tasks_exhausted_regions_ok)
     ASSERT_EQ(asx_region_open(&r2), ASX_OK);
 
     /* Cannot spawn in new region either (task arena shared) */
-    ASSERT_EQ(asx_task_spawn(r2, poll_ok, NULL, &tid),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_task_spawn(r2, poll_ok, NULL, &tid), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 /* ====================================================================
  * Multi-region obligation arena competition
  * ==================================================================== */
 
-TEST(multi_region_obligation_competition)
-{
+TEST(multi_region_obligation_competition) {
     asx_region_id r1, r2;
     asx_obligation_id oid;
     uint32_t i;
@@ -148,9 +136,7 @@ TEST(multi_region_obligation_competition)
     ASSERT_EQ(asx_region_open(&r2), ASX_OK);
 
     /* Region 1 takes half the arena */
-    for (i = 0; i < half; i++) {
-        ASSERT_EQ(asx_obligation_reserve(r1, &oid), ASX_OK);
-    }
+    for (i = 0; i < half; i++) { ASSERT_EQ(asx_obligation_reserve(r1, &oid), ASX_OK); }
 
     /* Region 2 takes the other half */
     for (i = 0; i < ASX_MAX_OBLIGATIONS - half; i++) {
@@ -160,12 +146,10 @@ TEST(multi_region_obligation_competition)
     /* Both regions now fail on new reservations */
     ASSERT_EQ(asx_obligation_reserve(r1, &oid), ASX_E_RESOURCE_EXHAUSTED);
     ASSERT_EQ(asx_obligation_reserve(r2, &oid), ASX_E_RESOURCE_EXHAUSTED);
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_OBLIGATION),
-              (uint32_t)ASX_MAX_OBLIGATIONS);
+    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_OBLIGATION), (uint32_t)ASX_MAX_OBLIGATIONS);
 }
 
-TEST(multi_region_task_competition)
-{
+TEST(multi_region_task_competition) {
     asx_region_id r1, r2;
     asx_task_id tid;
     uint32_t i;
@@ -176,9 +160,7 @@ TEST(multi_region_task_competition)
     ASSERT_EQ(asx_region_open(&r2), ASX_OK);
 
     /* Region 1 takes half */
-    for (i = 0; i < half; i++) {
-        ASSERT_EQ(asx_task_spawn(r1, poll_ok, NULL, &tid), ASX_OK);
-    }
+    for (i = 0; i < half; i++) { ASSERT_EQ(asx_task_spawn(r1, poll_ok, NULL, &tid), ASX_OK); }
 
     /* Region 2 takes the rest */
     for (i = 0; i < ASX_MAX_TASKS - half; i++) {
@@ -186,18 +168,15 @@ TEST(multi_region_task_competition)
     }
 
     /* Both regions fail on spawn */
-    ASSERT_EQ(asx_task_spawn(r1, poll_ok, NULL, &tid),
-              ASX_E_RESOURCE_EXHAUSTED);
-    ASSERT_EQ(asx_task_spawn(r2, poll_ok, NULL, &tid),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_task_spawn(r1, poll_ok, NULL, &tid), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_task_spawn(r2, poll_ok, NULL, &tid), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 /* ====================================================================
  * Channel backpressure edge cases
  * ==================================================================== */
 
-TEST(channel_reserve_at_capacity_boundary)
-{
+TEST(channel_reserve_at_capacity_boundary) {
     asx_region_id rid;
     asx_channel_id ch;
     asx_send_permit permits[4];
@@ -210,9 +189,7 @@ TEST(channel_reserve_at_capacity_boundary)
     ASSERT_EQ(asx_channel_create(rid, 4, &ch), ASX_OK);
 
     /* Reserve all 4 slots */
-    for (i = 0; i < 4; i++) {
-        ASSERT_EQ(asx_channel_try_reserve(ch, &permits[i]), ASX_OK);
-    }
+    for (i = 0; i < 4; i++) { ASSERT_EQ(asx_channel_try_reserve(ch, &permits[i]), ASX_OK); }
 
     /* 5th reserve should fail */
     ASSERT_EQ(asx_channel_try_reserve(ch, &extra), ASX_E_CHANNEL_FULL);
@@ -230,8 +207,7 @@ TEST(channel_reserve_at_capacity_boundary)
     ASSERT_EQ(rcount, (uint32_t)4);
 }
 
-TEST(channel_sender_close_mid_reservation)
-{
+TEST(channel_sender_close_mid_reservation) {
     asx_region_id rid;
     asx_channel_id ch;
     asx_send_permit permit;
@@ -251,12 +227,10 @@ TEST(channel_sender_close_mid_reservation)
     ASSERT_EQ(asx_send_permit_send(&permit, 42), ASX_OK);
 
     /* But new reservations fail */
-    ASSERT_EQ(asx_channel_try_reserve(ch, &post_close),
-              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &post_close), ASX_E_INVALID_STATE);
 }
 
-TEST(channel_receiver_close_with_pending_permits)
-{
+TEST(channel_receiver_close_with_pending_permits) {
     asx_region_id rid;
     asx_channel_id ch;
     asx_send_permit permit;
@@ -275,8 +249,7 @@ TEST(channel_receiver_close_with_pending_permits)
     ASSERT_EQ(asx_send_permit_send(&permit, 42), ASX_E_DISCONNECTED);
 }
 
-TEST(channel_full_send_then_recv_frees_capacity)
-{
+TEST(channel_full_send_then_recv_frees_capacity) {
     asx_region_id rid;
     asx_channel_id ch;
     asx_send_permit p;
@@ -303,8 +276,7 @@ TEST(channel_full_send_then_recv_frees_capacity)
     ASSERT_EQ(asx_send_permit_send(&p, 999), ASX_OK);
 }
 
-TEST(channel_arena_exhaustion)
-{
+TEST(channel_arena_exhaustion) {
     asx_region_id rid;
     asx_channel_id ch;
     asx_channel_id overflow;
@@ -314,21 +286,17 @@ TEST(channel_arena_exhaustion)
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Create all 16 channels */
-    for (i = 0; i < ASX_MAX_CHANNELS; i++) {
-        ASSERT_EQ(asx_channel_create(rid, 4, &ch), ASX_OK);
-    }
+    for (i = 0; i < ASX_MAX_CHANNELS; i++) { ASSERT_EQ(asx_channel_create(rid, 4, &ch), ASX_OK); }
 
     /* 17th should fail */
-    ASSERT_EQ(asx_channel_create(rid, 4, &overflow),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_channel_create(rid, 4, &overflow), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 /* ====================================================================
  * Timer wheel exhaustion with cancel+re-register
  * ==================================================================== */
 
-TEST(timer_exhaust_cancel_all_reregister)
-{
+TEST(timer_exhaust_cancel_all_reregister) {
     asx_timer_wheel *wheel = asx_timer_wheel_global();
     asx_timer_handle handles[ASX_MAX_TIMERS];
     asx_timer_handle fresh;
@@ -338,33 +306,25 @@ TEST(timer_exhaust_cancel_all_reregister)
 
     /* Fill to capacity */
     for (i = 0; i < ASX_MAX_TIMERS; i++) {
-        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(1000 + i),
-                                      NULL, &handles[i]),
-                  ASX_OK);
+        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(1000 + i), NULL, &handles[i]), ASX_OK);
     }
     ASSERT_EQ(asx_timer_active_count(wheel), (uint32_t)ASX_MAX_TIMERS);
 
     /* Overflow fails */
-    ASSERT_EQ(asx_timer_register(wheel, 9999, NULL, &fresh),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_timer_register(wheel, 9999, NULL, &fresh), ASX_E_RESOURCE_EXHAUSTED);
 
     /* Cancel ALL timers */
-    for (i = 0; i < ASX_MAX_TIMERS; i++) {
-        ASSERT_TRUE(asx_timer_cancel(wheel, &handles[i]));
-    }
+    for (i = 0; i < ASX_MAX_TIMERS; i++) { ASSERT_TRUE(asx_timer_cancel(wheel, &handles[i])); }
     ASSERT_EQ(asx_timer_active_count(wheel), (uint32_t)0);
 
     /* Re-register all slots — should succeed (recycled) */
     for (i = 0; i < ASX_MAX_TIMERS; i++) {
-        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(2000 + i),
-                                      NULL, &handles[i]),
-                  ASX_OK);
+        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(2000 + i), NULL, &handles[i]), ASX_OK);
     }
     ASSERT_EQ(asx_timer_active_count(wheel), (uint32_t)ASX_MAX_TIMERS);
 }
 
-TEST(timer_cancel_reregister_interleaved)
-{
+TEST(timer_cancel_reregister_interleaved) {
     asx_timer_wheel *wheel = asx_timer_wheel_global();
     asx_timer_handle handles[ASX_MAX_TIMERS];
     asx_timer_handle fresh;
@@ -374,32 +334,24 @@ TEST(timer_cancel_reregister_interleaved)
 
     /* Fill to capacity */
     for (i = 0; i < ASX_MAX_TIMERS; i++) {
-        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(1000 + i),
-                                      NULL, &handles[i]),
-                  ASX_OK);
+        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(1000 + i), NULL, &handles[i]), ASX_OK);
     }
 
     /* Cancel even-indexed, then re-register into freed slots */
-    for (i = 0; i < ASX_MAX_TIMERS; i += 2) {
-        ASSERT_TRUE(asx_timer_cancel(wheel, &handles[i]));
-    }
+    for (i = 0; i < ASX_MAX_TIMERS; i += 2) { ASSERT_TRUE(asx_timer_cancel(wheel, &handles[i])); }
     ASSERT_EQ(asx_timer_active_count(wheel), (uint32_t)(ASX_MAX_TIMERS / 2));
 
     /* Fill freed slots */
     for (i = 0; i < ASX_MAX_TIMERS / 2; i++) {
-        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(5000 + i),
-                                      NULL, &fresh),
-                  ASX_OK);
+        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(5000 + i), NULL, &fresh), ASX_OK);
     }
     ASSERT_EQ(asx_timer_active_count(wheel), (uint32_t)ASX_MAX_TIMERS);
 
     /* Should be full again */
-    ASSERT_EQ(asx_timer_register(wheel, 9999, NULL, &fresh),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_timer_register(wheel, 9999, NULL, &fresh), ASX_E_RESOURCE_EXHAUSTED);
 }
 
-TEST(timer_fire_frees_slots_for_reregister)
-{
+TEST(timer_fire_frees_slots_for_reregister) {
     asx_timer_wheel *wheel = asx_timer_wheel_global();
     asx_timer_handle handles[ASX_MAX_TIMERS];
     asx_timer_handle fresh;
@@ -411,9 +363,7 @@ TEST(timer_fire_frees_slots_for_reregister)
 
     /* Fill to capacity with deadlines at t=100..227 */
     for (i = 0; i < ASX_MAX_TIMERS; i++) {
-        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(100 + i),
-                                      NULL, &handles[i]),
-                  ASX_OK);
+        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(100 + i), NULL, &handles[i]), ASX_OK);
     }
 
     /* Fire half (deadlines 100..163) */
@@ -423,9 +373,7 @@ TEST(timer_fire_frees_slots_for_reregister)
 
     /* Re-register into freed slots */
     for (i = 0; i < 64; i++) {
-        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(10000 + i),
-                                      NULL, &fresh),
-                  ASX_OK);
+        ASSERT_EQ(asx_timer_register(wheel, (asx_time)(10000 + i), NULL, &fresh), ASX_OK);
     }
     ASSERT_EQ(asx_timer_active_count(wheel), (uint32_t)ASX_MAX_TIMERS);
 }
@@ -434,8 +382,7 @@ TEST(timer_fire_frees_slots_for_reregister)
  * Capture arena multi-task consumption
  * ==================================================================== */
 
-TEST(capture_arena_multi_task_boundary)
-{
+TEST(capture_arena_multi_task_boundary) {
     asx_region_id rid;
     asx_task_id tid;
     void *state;
@@ -449,9 +396,7 @@ TEST(capture_arena_multi_task_boundary)
     /* Allocate 4 tasks each consuming 1/4 of the capture arena */
     chunk_size = ASX_REGION_CAPTURE_ARENA_BYTES / 4u;
     for (i = 0; i < 4; i++) {
-        ASSERT_EQ(asx_task_spawn_captured(rid, poll_ok, chunk_size,
-                                           NULL, &tid, &state),
-                  ASX_OK);
+        ASSERT_EQ(asx_task_spawn_captured(rid, poll_ok, chunk_size, NULL, &tid, &state), ASX_OK);
     }
 
     /* Check remaining — should be near zero (alignment overhead) */
@@ -459,13 +404,11 @@ TEST(capture_arena_multi_task_boundary)
     ASSERT_TRUE(remaining < chunk_size);
 
     /* One more should fail */
-    ASSERT_EQ(asx_task_spawn_captured(rid, poll_ok, chunk_size,
-                                       NULL, &tid, &state),
+    ASSERT_EQ(asx_task_spawn_captured(rid, poll_ok, chunk_size, NULL, &tid, &state),
               ASX_E_RESOURCE_EXHAUSTED);
 }
 
-TEST(capture_arena_exact_boundary_allocation)
-{
+TEST(capture_arena_exact_boundary_allocation) {
     asx_region_id rid;
     asx_task_id tid;
     void *state;
@@ -475,9 +418,8 @@ TEST(capture_arena_exact_boundary_allocation)
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Allocate most of the arena */
-    ASSERT_EQ(asx_task_spawn_captured(rid, poll_ok,
-              ASX_REGION_CAPTURE_ARENA_BYTES - 64u,
-              NULL, &tid, &state),
+    ASSERT_EQ(asx_task_spawn_captured(rid, poll_ok, ASX_REGION_CAPTURE_ARENA_BYTES - 64u, NULL,
+                                      &tid, &state),
               ASX_OK);
 
     ASSERT_EQ(asx_resource_region_capture_remaining(rid, &remaining), ASX_OK);
@@ -485,14 +427,12 @@ TEST(capture_arena_exact_boundary_allocation)
 
     /* Allocation of remaining + 1 should fail */
     if (remaining > 0) {
-        ASSERT_EQ(asx_task_spawn_captured(rid, poll_ok,
-                  remaining + 1u, NULL, &tid, &state),
+        ASSERT_EQ(asx_task_spawn_captured(rid, poll_ok, remaining + 1u, NULL, &tid, &state),
                   ASX_E_RESOURCE_EXHAUSTED);
     }
 }
 
-TEST(capture_arena_independent_per_region)
-{
+TEST(capture_arena_independent_per_region) {
     asx_region_id r1, r2;
     asx_task_id tid;
     void *state;
@@ -503,15 +443,13 @@ TEST(capture_arena_independent_per_region)
     ASSERT_EQ(asx_region_open(&r2), ASX_OK);
 
     /* Consume half of region 1's capture arena */
-    ASSERT_EQ(asx_task_spawn_captured(r1, poll_ok,
-              ASX_REGION_CAPTURE_ARENA_BYTES / 2u,
-              NULL, &tid, &state), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_captured(r1, poll_ok, ASX_REGION_CAPTURE_ARENA_BYTES / 2u, NULL, &tid,
+                                      &state),
+              ASX_OK);
 
     /* Region 2's capture arena should be untouched */
-    ASSERT_EQ(asx_resource_region_capture_remaining(r1, &r1_remaining),
-              ASX_OK);
-    ASSERT_EQ(asx_resource_region_capture_remaining(r2, &r2_remaining),
-              ASX_OK);
+    ASSERT_EQ(asx_resource_region_capture_remaining(r1, &r1_remaining), ASX_OK);
+    ASSERT_EQ(asx_resource_region_capture_remaining(r2, &r2_remaining), ASX_OK);
 
     ASSERT_TRUE(r1_remaining < ASX_REGION_CAPTURE_ARENA_BYTES);
     ASSERT_EQ(r2_remaining, (uint32_t)ASX_REGION_CAPTURE_ARENA_BYTES);
@@ -521,8 +459,7 @@ TEST(capture_arena_independent_per_region)
  * Obligation edge cases at exhaustion
  * ==================================================================== */
 
-TEST(obligation_exhaust_then_commit_no_free_slots)
-{
+TEST(obligation_exhaust_then_commit_no_free_slots) {
     asx_region_id rid;
     asx_obligation_id oids[ASX_MAX_OBLIGATIONS];
     asx_obligation_id extra;
@@ -540,9 +477,7 @@ TEST(obligation_exhaust_then_commit_no_free_slots)
     ASSERT_EQ(asx_obligation_reserve(rid, &extra), ASX_E_RESOURCE_EXHAUSTED);
 
     /* Commit all — arena stays full (no recycling in walking skeleton) */
-    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
-        ASSERT_EQ(asx_obligation_commit(oids[i]), ASX_OK);
-    }
+    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) { ASSERT_EQ(asx_obligation_commit(oids[i]), ASX_OK); }
 
     /* Still exhausted */
     ASSERT_EQ(asx_obligation_reserve(rid, &extra), ASX_E_RESOURCE_EXHAUSTED);
@@ -555,8 +490,7 @@ TEST(obligation_exhaust_then_commit_no_free_slots)
     }
 }
 
-TEST(obligation_exhaust_mixed_commit_abort)
-{
+TEST(obligation_exhaust_mixed_commit_abort) {
     asx_region_id rid;
     asx_obligation_id oids[ASX_MAX_OBLIGATIONS];
     asx_obligation_id extra;
@@ -598,8 +532,7 @@ TEST(obligation_exhaust_mixed_commit_abort)
  * Determinism of exhaustion failures
  * ==================================================================== */
 
-TEST(determinism_task_exhaustion_twice)
-{
+TEST(determinism_task_exhaustion_twice) {
     uint32_t run;
     asx_status results[2];
 
@@ -623,8 +556,7 @@ TEST(determinism_task_exhaustion_twice)
     ASSERT_EQ(results[0], ASX_E_RESOURCE_EXHAUSTED);
 }
 
-TEST(determinism_channel_full_twice)
-{
+TEST(determinism_channel_full_twice) {
     uint32_t run;
     asx_status results[2];
 
@@ -650,8 +582,7 @@ TEST(determinism_channel_full_twice)
     ASSERT_EQ(results[0], ASX_E_CHANNEL_FULL);
 }
 
-TEST(determinism_timer_exhaustion_twice)
-{
+TEST(determinism_timer_exhaustion_twice) {
     uint32_t run;
     asx_status results[2];
 
@@ -663,8 +594,7 @@ TEST(determinism_timer_exhaustion_twice)
         asx_timer_wheel_reset(wheel);
 
         for (i = 0; i < ASX_MAX_TIMERS; i++) {
-            ASSERT_EQ(asx_timer_register(wheel, (asx_time)(100 + i),
-                                          NULL, &h), ASX_OK);
+            ASSERT_EQ(asx_timer_register(wheel, (asx_time)(100 + i), NULL, &h), ASX_OK);
         }
 
         results[run] = asx_timer_register(wheel, 9999, NULL, &h);
@@ -674,8 +604,7 @@ TEST(determinism_timer_exhaustion_twice)
     ASSERT_EQ(results[0], ASX_E_RESOURCE_EXHAUSTED);
 }
 
-TEST(determinism_obligation_exhaustion_twice)
-{
+TEST(determinism_obligation_exhaustion_twice) {
     uint32_t run;
     asx_status results[2];
 
@@ -702,8 +631,7 @@ TEST(determinism_obligation_exhaustion_twice)
  * Scheduler with exhaustion boundary conditions
  * ==================================================================== */
 
-TEST(scheduler_drains_full_task_arena)
-{
+TEST(scheduler_drains_full_task_arena) {
     asx_region_id rid;
     asx_task_id tids[ASX_MAX_TASKS];
     uint32_t i;
@@ -732,8 +660,7 @@ TEST(scheduler_drains_full_task_arena)
     }
 }
 
-TEST(scheduler_partial_drain_budget_boundary)
-{
+TEST(scheduler_partial_drain_budget_boundary) {
     asx_region_id rid;
     asx_task_id tid;
     uint32_t i;
@@ -742,22 +669,18 @@ TEST(scheduler_partial_drain_budget_boundary)
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* 16 always-pending tasks */
-    for (i = 0; i < 16; i++) {
-        ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
-    }
+    for (i = 0; i < 16; i++) { ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK); }
 
     /* Budget of exactly 16 = one round */
     {
         asx_budget budget = asx_budget_from_polls(16);
-        ASSERT_EQ(asx_scheduler_run(rid, &budget),
-                  ASX_E_POLL_BUDGET_EXHAUSTED);
+        ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     }
 
     /* Budget of exactly 1 = partial round */
     {
         asx_budget budget = asx_budget_from_polls(1);
-        ASSERT_EQ(asx_scheduler_run(rid, &budget),
-                  ASX_E_POLL_BUDGET_EXHAUSTED);
+        ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     }
 }
 
@@ -765,8 +688,7 @@ TEST(scheduler_partial_drain_budget_boundary)
  * No partial state corruption invariants
  * ==================================================================== */
 
-TEST(no_corruption_after_task_spawn_failure)
-{
+TEST(no_corruption_after_task_spawn_failure) {
     asx_region_id rid;
     asx_task_id tid;
     asx_task_id last_valid;
@@ -784,8 +706,7 @@ TEST(no_corruption_after_task_spawn_failure)
     }
 
     /* Failed spawn should not corrupt existing tasks */
-    ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_E_RESOURCE_EXHAUSTED);
 
     /* Run scheduler — existing tasks should still complete fine */
     {
@@ -799,8 +720,7 @@ TEST(no_corruption_after_task_spawn_failure)
     ASSERT_EQ(sev, ASX_OUTCOME_OK);
 }
 
-TEST(no_corruption_after_obligation_reserve_failure)
-{
+TEST(no_corruption_after_obligation_reserve_failure) {
     asx_region_id rid;
     asx_obligation_id oids[ASX_MAX_OBLIGATIONS];
     asx_obligation_id extra;
@@ -832,8 +752,7 @@ TEST(no_corruption_after_obligation_reserve_failure)
  * Main
  * ==================================================================== */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_boundary_exhaustion ===\n");
 
     /* Cross-arena simultaneous exhaustion */

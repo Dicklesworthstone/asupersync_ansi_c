@@ -11,32 +11,35 @@
 
 /* Suppress warn_unused_result in test helpers */
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Poll functions for testing                                          */
 /* ------------------------------------------------------------------ */
 
-static asx_status poll_immediate_ok(void *data, asx_task_id self)
-{
-    (void)data; (void)self;
+static asx_status poll_immediate_ok(void *data, asx_task_id self) {
+    (void)data;
+    (void)self;
     return ASX_OK;
 }
 
 static int g_poll_count = 0;
 
-static asx_status poll_count_twice(void *data, asx_task_id self)
-{
-    (void)data; (void)self;
+static asx_status poll_count_twice(void *data, asx_task_id self) {
+    (void)data;
+    (void)self;
     g_poll_count++;
-    if (g_poll_count < 2)
-        return ASX_E_PENDING;
+    if (g_poll_count < 2) return ASX_E_PENDING;
     return ASX_OK;
 }
 
-static asx_status poll_always_pending(void *data, asx_task_id self)
-{
-    (void)data; (void)self;
+static asx_status poll_always_pending(void *data, asx_task_id self) {
+    (void)data;
+    (void)self;
     return ASX_E_PENDING;
 }
 
@@ -48,38 +51,29 @@ static asx_runtime g_rt;
 static asx_region_id g_rid;
 static asx_cx g_cx;
 
-static void setup(void)
-{
+static void setup(void) {
     MUST_OK(asx_runtime_init_default(&g_rt));
     MUST_OK(asx_region_open(&g_rid));
     MUST_OK(asx_cx_init(&g_cx, g_rid, ASX_INVALID_ID, ASX_CAP_ALL));
     g_poll_count = 0;
 }
 
-static void teardown(void)
-{
-    asx_runtime_shutdown(&g_rt);
-}
+static void teardown(void) { asx_runtime_shutdown(&g_rt); }
 
 /* ------------------------------------------------------------------ */
 /* Join error string tests                                             */
 /* ------------------------------------------------------------------ */
 
-TEST(join_error_str_ok) {
-    ASSERT_STR_EQ(asx_join_error_str(ASX_JOIN_OK), "ok");
-}
+TEST(join_error_str_ok) { ASSERT_STR_EQ(asx_join_error_str(ASX_JOIN_OK), "ok"); }
 
 TEST(join_error_str_cancelled) {
     ASSERT_STR_EQ(asx_join_error_str(ASX_JOIN_CANCELLED), "cancelled");
 }
 
-TEST(join_error_str_panicked) {
-    ASSERT_STR_EQ(asx_join_error_str(ASX_JOIN_PANICKED), "panicked");
-}
+TEST(join_error_str_panicked) { ASSERT_STR_EQ(asx_join_error_str(ASX_JOIN_PANICKED), "panicked"); }
 
 TEST(join_error_str_polled_after) {
-    ASSERT_STR_EQ(asx_join_error_str(ASX_JOIN_POLLED_AFTER_COMPLETE),
-                  "polled after completion");
+    ASSERT_STR_EQ(asx_join_error_str(ASX_JOIN_POLLED_AFTER_COMPLETE), "polled after completion");
 }
 
 /* ------------------------------------------------------------------ */
@@ -88,16 +82,14 @@ TEST(join_error_str_polled_after) {
 
 TEST(scope_init_null_scope_fails) {
     setup();
-    ASSERT_EQ(asx_scope_init(NULL, g_rid, &g_cx, asx_budget_infinite()),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_scope_init(NULL, g_rid, &g_cx, asx_budget_infinite()), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
 
 TEST(scope_init_null_cx_fails) {
     asx_scope scope;
     setup();
-    ASSERT_EQ(asx_scope_init(&scope, g_rid, NULL, asx_budget_infinite()),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_scope_init(&scope, g_rid, NULL, asx_budget_infinite()), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
 
@@ -122,8 +114,7 @@ TEST(scope_init_no_spawn_cap_fails) {
 TEST(scope_init_success) {
     asx_scope scope;
     setup();
-    ASSERT_EQ(asx_scope_init(&scope, g_rid, &g_cx, asx_budget_infinite()),
-              ASX_OK);
+    ASSERT_EQ(asx_scope_init(&scope, g_rid, &g_cx, asx_budget_infinite()), ASX_OK);
     ASSERT_EQ(asx_scope_region(&scope), g_rid);
     ASSERT_EQ(asx_scope_spawned_count(&scope), 0u);
     teardown();
@@ -135,8 +126,7 @@ TEST(scope_init_success) {
 
 TEST(scope_spawn_null_scope_fails) {
     asx_task_handle h;
-    ASSERT_EQ(asx_scope_spawn(NULL, poll_immediate_ok, NULL, &h),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_scope_spawn(NULL, poll_immediate_ok, NULL, &h), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(scope_spawn_null_poll_fails) {
@@ -144,8 +134,7 @@ TEST(scope_spawn_null_poll_fails) {
     asx_task_handle h;
     setup();
     MUST_OK(asx_scope_init(&scope, g_rid, &g_cx, asx_budget_infinite()));
-    ASSERT_EQ(asx_scope_spawn(&scope, NULL, NULL, &h),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_scope_spawn(&scope, NULL, NULL, &h), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
 
@@ -153,8 +142,7 @@ TEST(scope_spawn_null_handle_fails) {
     asx_scope scope;
     setup();
     MUST_OK(asx_scope_init(&scope, g_rid, &g_cx, asx_budget_infinite()));
-    ASSERT_EQ(asx_scope_spawn(&scope, poll_immediate_ok, NULL, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_scope_spawn(&scope, poll_immediate_ok, NULL, NULL), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
 
@@ -307,13 +295,10 @@ TEST(try_join_double_consume_fails) {
 /* Abort tests                                                         */
 /* ------------------------------------------------------------------ */
 
-TEST(handle_abort_null_fails) {
-    ASSERT_EQ(asx_task_handle_abort(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(handle_abort_null_fails) { ASSERT_EQ(asx_task_handle_abort(NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(handle_abort_with_kind_null_fails) {
-    ASSERT_EQ(asx_task_handle_abort_with_kind(NULL, ASX_CANCEL_USER),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_task_handle_abort_with_kind(NULL, ASX_CANCEL_USER), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ------------------------------------------------------------------ */
@@ -340,36 +325,25 @@ TEST(join_error_panicked_outcome) {
     ASSERT_EQ(asx_task_handle_join_error(&o), ASX_JOIN_PANICKED);
 }
 
-TEST(join_error_null_returns_ok) {
-    ASSERT_EQ(asx_task_handle_join_error(NULL), ASX_JOIN_OK);
-}
+TEST(join_error_null_returns_ok) { ASSERT_EQ(asx_task_handle_join_error(NULL), ASX_JOIN_OK); }
 
 /* ------------------------------------------------------------------ */
 /* Scope query tests                                                   */
 /* ------------------------------------------------------------------ */
 
-TEST(scope_region_null_returns_invalid) {
-    ASSERT_EQ(asx_scope_region(NULL), ASX_INVALID_ID);
-}
+TEST(scope_region_null_returns_invalid) { ASSERT_EQ(asx_scope_region(NULL), ASX_INVALID_ID); }
 
-TEST(scope_spawned_count_null_returns_zero) {
-    ASSERT_EQ(asx_scope_spawned_count(NULL), 0u);
-}
+TEST(scope_spawned_count_null_returns_zero) { ASSERT_EQ(asx_scope_spawned_count(NULL), 0u); }
 
-TEST(scope_run_null_fails) {
-    ASSERT_EQ(asx_scope_run(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(scope_run_null_fails) { ASSERT_EQ(asx_scope_run(NULL), ASX_E_INVALID_ARGUMENT); }
 
-TEST(scope_drain_null_fails) {
-    ASSERT_EQ(asx_scope_drain(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(scope_drain_null_fails) { ASSERT_EQ(asx_scope_drain(NULL), ASX_E_INVALID_ARGUMENT); }
 
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_scope ===\n");
 
     /* Join error strings */

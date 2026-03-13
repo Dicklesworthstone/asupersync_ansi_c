@@ -11,21 +11,18 @@
 #ifndef ASX_CODEC_EQUIVALENCE_H
 #define ASX_CODEC_EQUIVALENCE_H
 
-#include <stddef.h>
-#include <stdint.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
-#include <asx/codec/schema.h>
 #include <asx/codec/codec.h>
+#include <asx/codec/schema.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-enum {
-    ASX_EQUIV_MAX_FIELD_NAME = 48u,
-    ASX_EQUIV_MAX_DIFFS      = 16u
-};
+enum { ASX_EQUIV_MAX_FIELD_NAME = 48u, ASX_EQUIV_MAX_DIFFS = 16u };
 
 /* A single field-level mismatch between two fixtures. */
 typedef struct {
@@ -48,10 +45,9 @@ ASX_API void asx_codec_equiv_report_init(asx_codec_equiv_report *report);
  * fields match, ASX_E_EQUIVALENCE_MISMATCH if any differ. When report
  * is non-NULL, mismatched field names are recorded for diagnostics.
  */
-ASX_API ASX_MUST_USE asx_status asx_codec_fixture_semantic_eq(
-    const asx_canonical_fixture *a,
-    const asx_canonical_fixture *b,
-    asx_codec_equiv_report *report);
+ASX_API ASX_MUST_USE asx_status asx_codec_fixture_semantic_eq(const asx_canonical_fixture *a,
+                                                              const asx_canonical_fixture *b,
+                                                              asx_codec_equiv_report *report);
 
 /*
  * Compute a codec-agnostic canonical key from semantic fixture fields.
@@ -59,9 +55,8 @@ ASX_API ASX_MUST_USE asx_status asx_codec_fixture_semantic_eq(
  * Like asx_codec_fixture_replay_key() but excludes the codec field,
  * producing a key that is identical regardless of encoding format.
  */
-ASX_API ASX_MUST_USE asx_status asx_codec_fixture_semantic_key(
-    const asx_canonical_fixture *fixture,
-    asx_codec_buffer *out_key);
+ASX_API ASX_MUST_USE asx_status asx_codec_fixture_semantic_key(const asx_canonical_fixture *fixture,
+                                                               asx_codec_buffer *out_key);
 
 /*
  * Cross-codec round-trip verification.
@@ -73,9 +68,8 @@ ASX_API ASX_MUST_USE asx_status asx_codec_fixture_semantic_key(
  *
  * When report is non-NULL, any mismatched fields are recorded.
  */
-ASX_API ASX_MUST_USE asx_status asx_codec_cross_codec_verify(
-    const asx_canonical_fixture *fixture,
-    asx_codec_equiv_report *report);
+ASX_API ASX_MUST_USE asx_status asx_codec_cross_codec_verify(const asx_canonical_fixture *fixture,
+                                                             asx_codec_equiv_report *report);
 
 #ifdef __cplusplus
 }

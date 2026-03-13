@@ -23,27 +23,23 @@ static uint64_t g_entropy_sequence;
 static int g_alloc_fail_after;
 static int g_alloc_call_count;
 
-static asx_time fault_clock(void *ctx)
-{
+static asx_time fault_clock(void *ctx) {
     (void)ctx;
     return g_clock_value;
 }
 
-static asx_time fault_logical_clock(void *ctx)
-{
+static asx_time fault_logical_clock(void *ctx) {
     (void)ctx;
     return g_clock_value;
 }
 
-static uint64_t fault_entropy(void *ctx)
-{
+static uint64_t fault_entropy(void *ctx) {
     (void)ctx;
     g_entropy_sequence++;
     return g_entropy_value;
 }
 
-static uint64_t seeded_entropy(void *ctx)
-{
+static uint64_t seeded_entropy(void *ctx) {
     (void)ctx;
     /* Simple LCG matching default PRNG for determinism verification */
     g_entropy_value = g_entropy_value * 6364136223846793005ULL + 1442695040888963407ULL;
@@ -51,34 +47,26 @@ static uint64_t seeded_entropy(void *ctx)
     return g_entropy_value;
 }
 
-static void *failing_malloc(void *ctx, size_t size)
-{
+static void *failing_malloc(void *ctx, size_t size) {
     (void)ctx;
     g_alloc_call_count++;
-    if (g_alloc_fail_after >= 0 && g_alloc_call_count > g_alloc_fail_after) {
-        return NULL;
-    }
+    if (g_alloc_fail_after >= 0 && g_alloc_call_count > g_alloc_fail_after) { return NULL; }
     return malloc(size);
 }
 
-static void *failing_realloc(void *ctx, void *ptr, size_t size)
-{
+static void *failing_realloc(void *ctx, void *ptr, size_t size) {
     (void)ctx;
     g_alloc_call_count++;
-    if (g_alloc_fail_after >= 0 && g_alloc_call_count > g_alloc_fail_after) {
-        return NULL;
-    }
+    if (g_alloc_fail_after >= 0 && g_alloc_call_count > g_alloc_fail_after) { return NULL; }
     return realloc(ptr, size);
 }
 
-static void passthrough_free(void *ctx, void *ptr)
-{
+static void passthrough_free(void *ctx, void *ptr) {
     (void)ctx;
     free(ptr);
 }
 
-static void install_fault_hooks(void)
-{
+static void install_fault_hooks(void) {
     asx_runtime_hooks hooks;
     asx_runtime_hooks_init(&hooks);
     hooks.clock.now_ns_fn = fault_clock;
@@ -91,8 +79,7 @@ static void install_fault_hooks(void)
     (void)asx_runtime_set_hooks(&hooks);
 }
 
-static void reset_fault_state(void)
-{
+static void reset_fault_state(void) {
     g_clock_value = 1000000000ULL; /* 1 second */
     g_entropy_value = 42;
     g_entropy_sequence = 0;
@@ -254,8 +241,7 @@ TEST(fault_allocator_realloc_failure) {
     ASSERT_EQ(asx_runtime_alloc(32, &ptr), ASX_OK);
     ASSERT_TRUE(ptr != NULL);
 
-    ASSERT_EQ(asx_runtime_realloc(ptr, 128, &new_ptr),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_runtime_realloc(ptr, 128, &new_ptr), ASX_E_RESOURCE_EXHAUSTED);
 
     /* Original pointer still valid — caller must free */
     (void)asx_runtime_free(ptr);
@@ -293,8 +279,7 @@ TEST(fault_determinism_rejects_unseeded_entropy) {
     hooks.entropy.random_u64_fn = fault_entropy;
     hooks.deterministic_seeded_prng = 0; /* NOT seeded */
 
-    ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 1),
-              ASX_E_DETERMINISM_VIOLATION);
+    ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 1), ASX_E_DETERMINISM_VIOLATION);
 }
 
 TEST(fault_determinism_rejects_missing_logical_clock) {
@@ -304,8 +289,7 @@ TEST(fault_determinism_rejects_missing_logical_clock) {
     asx_runtime_hooks_init(&hooks);
     hooks.clock.logical_now_ns_fn = NULL; /* missing logical clock */
 
-    ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 1),
-              ASX_E_DETERMINISM_VIOLATION);
+    ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 1), ASX_E_DETERMINISM_VIOLATION);
 }
 
 TEST(fault_determinism_accepts_valid_config) {
@@ -340,8 +324,7 @@ TEST(fault_error_ledger_captures_alloc_failure) {
     {
         asx_status st = asx_runtime_alloc(64, &ptr);
         if (st != ASX_OK) {
-            asx_error_ledger_record_current(st, "asx_runtime_alloc",
-                                             __FILE__, (uint32_t)__LINE__);
+            asx_error_ledger_record_current(st, "asx_runtime_alloc", __FILE__, (uint32_t)__LINE__);
         }
     }
 
@@ -358,8 +341,7 @@ TEST(fault_error_ledger_captures_alloc_failure) {
 
 /* ---- Lifecycle operations under fault conditions ---- */
 
-static asx_status noop_poll(void *user_data, asx_task_id self)
-{
+static asx_status noop_poll(void *user_data, asx_task_id self) {
     (void)user_data;
     (void)self;
     return ASX_OK;
@@ -393,8 +375,7 @@ TEST(fault_lifecycle_spawn_succeeds_without_alloc) {
     ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_OK);
 }
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_fault_injection ===\n");
 
     /* Clock fault injection */

@@ -8,14 +8,18 @@
  */
 
 #include "../../test_harness.h"
-#include <asx/time/sleep.h>
-#include <asx/runtime/virtual_time.h>
 #include <asx/runtime/rt.h>
+#include <asx/runtime/virtual_time.h>
+#include <asx/time/sleep.h>
 #include <string.h>
 
 /* Suppress warn_unused_result */
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -24,8 +28,7 @@ static asx_status st_sink_;
 static asx_runtime g_rt;
 static asx_vtime_state g_vt;
 
-static void setup(void)
-{
+static void setup(void) {
     const asx_runtime_hooks *orig;
     asx_runtime_hooks hooks;
 
@@ -40,28 +43,24 @@ static void setup(void)
     MUST_OK(asx_runtime_set_hooks(&hooks));
 }
 
-static void teardown(void)
-{
-    asx_runtime_shutdown(&g_rt);
-}
+static void teardown(void) { asx_runtime_shutdown(&g_rt); }
 
 /* A poll function that returns PENDING n times then OK */
 static int g_inner_count;
 static int g_inner_limit;
 
-static asx_status poll_n_then_ok(void *data, asx_task_id self)
-{
-    (void)data; (void)self;
+static asx_status poll_n_then_ok(void *data, asx_task_id self) {
+    (void)data;
+    (void)self;
     g_inner_count++;
-    if (g_inner_count < g_inner_limit)
-        return ASX_E_PENDING;
+    if (g_inner_count < g_inner_limit) return ASX_E_PENDING;
     return ASX_OK;
 }
 
 /* A poll function that never completes */
-static asx_status poll_forever(void *data, asx_task_id self)
-{
-    (void)data; (void)self;
+static asx_status poll_forever(void *data, asx_task_id self) {
+    (void)data;
+    (void)self;
     return ASX_E_PENDING;
 }
 
@@ -69,9 +68,7 @@ static asx_status poll_forever(void *data, asx_task_id self)
 /* Sleep init tests                                                    */
 /* ------------------------------------------------------------------ */
 
-TEST(sleep_init_null_fails) {
-    ASSERT_EQ(asx_sleep_init(NULL, 1000), ASX_E_INVALID_ARGUMENT);
-}
+TEST(sleep_init_null_fails) { ASSERT_EQ(asx_sleep_init(NULL, 1000), ASX_E_INVALID_ARGUMENT); }
 
 TEST(sleep_init_success) {
     asx_sleep_state s;
@@ -106,7 +103,7 @@ TEST(sleep_completes_after_duration) {
     do {
         st = asx_sleep_poll(&s, ASX_INVALID_ID);
         polls++;
-        if (polls > 100) break;  /* safety */
+        if (polls > 100) break; /* safety */
     } while (st == ASX_E_PENDING);
     ASSERT_EQ(st, ASX_OK);
     /* Should take a few polls (first poll sets up, subsequent check time) */
@@ -118,7 +115,7 @@ TEST(sleep_completes_after_duration) {
 TEST(sleep_returns_pending_before_done) {
     asx_sleep_state s;
     setup();
-    MUST_OK(asx_sleep_init(&s, 10000000ULL));  /* 10ms */
+    MUST_OK(asx_sleep_init(&s, 10000000ULL)); /* 10ms */
     /* First poll should return PENDING (sets up deadline) */
     ASSERT_EQ(asx_sleep_poll(&s, ASX_INVALID_ID), ASX_E_PENDING);
     /* Second poll: time is ~2ms, deadline is ~11ms, still pending */
@@ -131,14 +128,12 @@ TEST(sleep_returns_pending_before_done) {
 /* ------------------------------------------------------------------ */
 
 TEST(timeout_init_null_state_fails) {
-    ASSERT_EQ(asx_timeout_init(NULL, 1000, poll_forever, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_timeout_init(NULL, 1000, poll_forever, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(timeout_init_null_poll_fails) {
     asx_timeout_state ts;
-    ASSERT_EQ(asx_timeout_init(&ts, 1000, NULL, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_timeout_init(&ts, 1000, NULL, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(timeout_init_success) {
@@ -164,8 +159,8 @@ TEST(timeout_inner_completes_before_deadline) {
     int polls = 0;
     setup();
     g_inner_count = 0;
-    g_inner_limit = 2;  /* inner completes after 2 polls */
-    MUST_OK(asx_timeout_init(&ts, 50000000ULL, poll_n_then_ok, NULL));  /* 50ms timeout */
+    g_inner_limit = 2; /* inner completes after 2 polls */
+    MUST_OK(asx_timeout_init(&ts, 50000000ULL, poll_n_then_ok, NULL)); /* 50ms timeout */
     do {
         st = asx_timeout_poll(&ts, ASX_INVALID_ID);
         polls++;
@@ -217,9 +212,7 @@ TEST(interval_init_success) {
 /* Interval poll tests                                                 */
 /* ------------------------------------------------------------------ */
 
-TEST(interval_ticks_null_returns_zero) {
-    ASSERT_EQ(asx_interval_ticks(NULL), 0u);
-}
+TEST(interval_ticks_null_returns_zero) { ASSERT_EQ(asx_interval_ticks(NULL), 0u); }
 
 TEST(interval_poll_null_fails) {
     ASSERT_EQ(asx_interval_poll(NULL, ASX_INVALID_ID), ASX_E_INVALID_ARGUMENT);
@@ -262,8 +255,7 @@ TEST(interval_ticks_increment) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_sleep ===\n");
 
     /* Sleep init */

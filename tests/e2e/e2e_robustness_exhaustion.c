@@ -18,8 +18,11 @@
 #include <string.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
-#define IGNORE_RC(expr) \
-    do { asx_status ignore_rc_ = (expr); (void)ignore_rc_; } while (0)
+#define IGNORE_RC(expr)                                                                            \
+    do {                                                                                           \
+        asx_status ignore_rc_ = (expr);                                                            \
+        (void)ignore_rc_;                                                                          \
+    } while (0)
 
 /* -------------------------------------------------------------------
  * Helpers
@@ -28,37 +31,40 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
-#define SCENARIO_BEGIN(id) \
-    do { const char *_scenario_id = (id); int _scenario_ok = 1; (void)0
+#define SCENARIO_BEGIN(id)                                                                         \
+    do {                                                                                           \
+        const char *_scenario_id = (id);                                                           \
+        int _scenario_ok = 1;                                                                      \
+    (void)0
 
-#define SCENARIO_CHECK(cond, msg)                         \
-    do {                                                  \
-        if (!(cond)) {                                    \
-            printf("SCENARIO %s fail %s\n",               \
-                   _scenario_id, (msg));                  \
-            _scenario_ok = 0;                             \
-            g_fail++;                                     \
-            goto _scenario_end;                           \
-        }                                                 \
+#define SCENARIO_CHECK(cond, msg)                                                                  \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("SCENARIO %s fail %s\n", _scenario_id, (msg));                                  \
+            _scenario_ok = 0;                                                                      \
+            g_fail++;                                                                              \
+            goto _scenario_end;                                                                    \
+        }                                                                                          \
     } while (0)
 
-#define SCENARIO_END()                                    \
-    _scenario_end:                                        \
-    if (_scenario_ok) {                                   \
-        printf("SCENARIO %s pass\n", _scenario_id);      \
-        g_pass++;                                         \
-    }                                                     \
-    } while (0)
+#define SCENARIO_END()                                                                             \
+    _scenario_end:                                                                                 \
+    if (_scenario_ok) {                                                                            \
+        printf("SCENARIO %s pass\n", _scenario_id);                                                \
+        g_pass++;                                                                                  \
+    }                                                                                              \
+    }                                                                                              \
+    while (0)
 
-static asx_status poll_pending(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_pending(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_E_PENDING;
 }
 
-static asx_status poll_complete(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_complete(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_OK;
 }
 
@@ -67,8 +73,7 @@ static asx_status poll_complete(void *ud, asx_task_id self)
  * ------------------------------------------------------------------- */
 
 /* robust-exhaustion-001: task arena exhaustion returns deterministic error */
-static void scenario_task_arena_exhaustion(void)
-{
+static void scenario_task_arena_exhaustion(void) {
     SCENARIO_BEGIN("robust-exhaustion-001.task_arena_full");
     asx_runtime_reset();
 
@@ -92,16 +97,14 @@ static void scenario_task_arena_exhaustion(void)
 
     /* Verify region state is still queryable (no corruption) */
     asx_region_state rs;
-    SCENARIO_CHECK(asx_region_get_state(rid, &rs) == ASX_OK,
-                   "region state query after exhaustion");
+    SCENARIO_CHECK(asx_region_get_state(rid, &rs) == ASX_OK, "region state query after exhaustion");
     SCENARIO_CHECK(rs == ASX_REGION_OPEN, "region should still be OPEN");
 
     SCENARIO_END();
 }
 
 /* robust-exhaustion-002: region arena exhaustion returns deterministic error */
-static void scenario_region_arena_exhaustion(void)
-{
+static void scenario_region_arena_exhaustion(void) {
     SCENARIO_BEGIN("robust-exhaustion-002.region_arena_full");
     asx_runtime_reset();
 
@@ -124,8 +127,7 @@ static void scenario_region_arena_exhaustion(void)
 }
 
 /* robust-exhaustion-003: channel capacity exhaustion */
-static void scenario_channel_capacity_exhaustion(void)
-{
+static void scenario_channel_capacity_exhaustion(void) {
     SCENARIO_BEGIN("robust-exhaustion-003.channel_full");
     asx_runtime_reset();
     asx_channel_reset();
@@ -154,16 +156,14 @@ static void scenario_channel_capacity_exhaustion(void)
 
     /* Verify channel still functional after exhaustion */
     uint64_t value;
-    SCENARIO_CHECK(asx_channel_try_recv(cid, &value) == ASX_OK,
-                   "recv after channel full");
+    SCENARIO_CHECK(asx_channel_try_recv(cid, &value) == ASX_OK, "recv after channel full");
     SCENARIO_CHECK(value == 1, "first recv should be 1 (FIFO)");
 
     SCENARIO_END();
 }
 
 /* robust-exhaustion-004: timer wheel exhaustion */
-static void scenario_timer_wheel_exhaustion(void)
-{
+static void scenario_timer_wheel_exhaustion(void) {
     SCENARIO_BEGIN("robust-exhaustion-004.timer_wheel_full");
 
     asx_timer_wheel *wheel = asx_timer_wheel_global();
@@ -188,8 +188,7 @@ static void scenario_timer_wheel_exhaustion(void)
 }
 
 /* robust-exhaustion-005: obligation arena exhaustion */
-static void scenario_obligation_arena_exhaustion(void)
-{
+static void scenario_obligation_arena_exhaustion(void) {
     SCENARIO_BEGIN("robust-exhaustion-005.obligation_arena_full");
     asx_runtime_reset();
 
@@ -215,8 +214,7 @@ static void scenario_obligation_arena_exhaustion(void)
 }
 
 /* robust-exhaustion-006: poll budget exhaustion is deterministic */
-static void scenario_budget_exhaustion_deterministic(void)
-{
+static void scenario_budget_exhaustion_deterministic(void) {
     SCENARIO_BEGIN("robust-exhaustion-006.budget_deterministic");
     asx_runtime_reset();
 
@@ -224,27 +222,23 @@ static void scenario_budget_exhaustion_deterministic(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_pending, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_pending, NULL, &tid) == ASX_OK, "task_spawn");
 
     /* Run with tight budget — should exhaust deterministically */
     asx_budget b1 = asx_budget_from_polls(5);
     asx_status rc1 = asx_scheduler_run(rid, &b1);
-    SCENARIO_CHECK(rc1 == ASX_E_POLL_BUDGET_EXHAUSTED,
-                   "first run: expected BUDGET_EXHAUSTED");
+    SCENARIO_CHECK(rc1 == ASX_E_POLL_BUDGET_EXHAUSTED, "first run: expected BUDGET_EXHAUSTED");
 
     uint32_t events1 = asx_scheduler_event_count();
 
     /* Replay same scenario — event count must match */
     asx_runtime_reset();
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_pending, NULL, &tid) == ASX_OK,
-                   "task_spawn_2");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_pending, NULL, &tid) == ASX_OK, "task_spawn_2");
 
     asx_budget b2 = asx_budget_from_polls(5);
     asx_status rc2 = asx_scheduler_run(rid, &b2);
-    SCENARIO_CHECK(rc2 == ASX_E_POLL_BUDGET_EXHAUSTED,
-                   "replay: expected BUDGET_EXHAUSTED");
+    SCENARIO_CHECK(rc2 == ASX_E_POLL_BUDGET_EXHAUSTED, "replay: expected BUDGET_EXHAUSTED");
 
     uint32_t events2 = asx_scheduler_event_count();
     SCENARIO_CHECK(events1 == events2, "event counts must match across runs");
@@ -253,8 +247,7 @@ static void scenario_budget_exhaustion_deterministic(void)
 }
 
 /* robust-exhaustion-007: exhaustion does not corrupt partial state */
-static void scenario_exhaustion_no_partial_mutation(void)
-{
+static void scenario_exhaustion_no_partial_mutation(void) {
     SCENARIO_BEGIN("robust-exhaustion-007.no_partial_mutation");
     asx_runtime_reset();
 
@@ -263,16 +256,15 @@ static void scenario_exhaustion_no_partial_mutation(void)
     asx_budget budget;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &t1) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &t1) == ASX_OK, "task_spawn");
 
     /* Complete t1 first */
     budget = asx_budget_from_polls(10);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
 
     asx_task_state ts;
-    SCENARIO_CHECK(asx_task_get_state(t1, &ts) == ASX_OK &&
-                   ts == ASX_TASK_COMPLETED, "t1 should complete");
+    SCENARIO_CHECK(asx_task_get_state(t1, &ts) == ASX_OK && ts == ASX_TASK_COMPLETED,
+                   "t1 should complete");
 
     /* Now exhaust task arena — t1's outcome must remain stable */
     asx_task_id dummy;
@@ -293,8 +285,7 @@ static void scenario_exhaustion_no_partial_mutation(void)
 }
 
 /* robust-exhaustion-008: quiescence check on region with exhausted budget */
-static void scenario_quiescence_budget_exhausted(void)
-{
+static void scenario_quiescence_budget_exhausted(void) {
     SCENARIO_BEGIN("robust-exhaustion-008.quiescence_budget");
     asx_runtime_reset();
 
@@ -302,8 +293,7 @@ static void scenario_quiescence_budget_exhausted(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_pending, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_pending, NULL, &tid) == ASX_OK, "task_spawn");
 
     /* Quiescence should fail with active tasks */
     asx_status rc = asx_quiescence_check(rid);
@@ -316,8 +306,7 @@ static void scenario_quiescence_budget_exhausted(void)
  * Main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     scenario_task_arena_exhaustion();
     scenario_region_arena_exhaustion();
     scenario_channel_capacity_exhaustion();
@@ -327,7 +316,6 @@ int main(void)
     scenario_exhaustion_no_partial_mutation();
     scenario_quiescence_budget_exhausted();
 
-    fprintf(stderr, "[e2e] robustness_exhaustion: %d passed, %d failed\n",
-            g_pass, g_fail);
+    fprintf(stderr, "[e2e] robustness_exhaustion: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
 }

@@ -5,8 +5,8 @@
  */
 
 #include <asx/actor/actor.h>
-#include <asx/runtime/runtime.h>
 #include <asx/core/budget.h>
+#include <asx/runtime/runtime.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -16,33 +16,39 @@
 
 static int g_pass, g_fail;
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
-#define ASSERT(cond, msg) do {                                           \
-    if (!(cond)) {                                                       \
-        printf("  FAIL: %s (line %d)\n", msg, __LINE__);                 \
-        g_fail++; return;                                                \
-    }                                                                    \
-} while (0)
+#define ASSERT(cond, msg)                                                                          \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("  FAIL: %s (line %d)\n", msg, __LINE__);                                       \
+            g_fail++;                                                                              \
+            return;                                                                                \
+        }                                                                                          \
+    } while (0)
 
-#define RUN(fn) do {                                                     \
-    printf("  " #fn "...\n");                                            \
-    fn(); g_pass++;                                                      \
-} while (0)
+#define RUN(fn)                                                                                    \
+    do {                                                                                           \
+        printf("  " #fn "...\n");                                                                  \
+        fn();                                                                                      \
+        g_pass++;                                                                                  \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Helpers: region + scheduler                                         */
 /* ------------------------------------------------------------------ */
 
-static asx_region_id make_region(void)
-{
+static asx_region_id make_region(void) {
     asx_region_id r;
     MUST_OK(asx_region_open(&r));
     return r;
 }
 
-static void pump_region(asx_region_id region, uint32_t rounds)
-{
+static void pump_region(asx_region_id region, uint32_t rounds) {
     asx_budget budget = asx_budget_infinite();
     uint32_t i;
     budget.poll_quota = 1000;
@@ -53,8 +59,7 @@ static void pump_region(asx_region_id region, uint32_t rounds)
 }
 
 /* Single-poll: advance exactly one poll unit */
-static void pump_one_poll(asx_region_id region)
-{
+static void pump_one_poll(asx_region_id region) {
     asx_budget b = asx_budget_infinite();
     b.poll_quota = 1;
     st_sink_ = asx_scheduler_run(region, &b);
@@ -69,21 +74,19 @@ static void pump_one_poll(asx_region_id region)
 typedef struct {
     uint64_t last_msg;
     uint32_t msg_count;
-    int      init_called;
-    int      term_called;
+    int init_called;
+    int term_called;
     asx_status term_reason;
 } echo_state;
 
-static asx_status echo_init(void *state, asx_actor_handle self)
-{
+static asx_status echo_init(void *state, asx_actor_handle self) {
     echo_state *s = (echo_state *)state;
     (void)self;
     s->init_called = 1;
     return ASX_OK;
 }
 
-static asx_status echo_cast(void *state, uint64_t msg, asx_actor_handle self)
-{
+static asx_status echo_cast(void *state, uint64_t msg, asx_actor_handle self) {
     echo_state *s = (echo_state *)state;
     (void)self;
     s->last_msg = msg;
@@ -91,9 +94,7 @@ static asx_status echo_cast(void *state, uint64_t msg, asx_actor_handle self)
     return ASX_OK;
 }
 
-static asx_status echo_call(void *state, uint64_t request,
-                            uint64_t *reply, asx_actor_handle self)
-{
+static asx_status echo_call(void *state, uint64_t request, uint64_t *reply, asx_actor_handle self) {
     (void)state;
     (void)self;
     /* Echo back the request doubled */
@@ -101,17 +102,14 @@ static asx_status echo_call(void *state, uint64_t request,
     return ASX_OK;
 }
 
-static void echo_terminate(void *state, asx_status reason,
-                           asx_actor_handle self)
-{
+static void echo_terminate(void *state, asx_status reason, asx_actor_handle self) {
     echo_state *s = (echo_state *)state;
     (void)self;
     s->term_called = 1;
     s->term_reason = reason;
 }
 
-static asx_actor_behavior echo_behavior(void)
-{
+static asx_actor_behavior echo_behavior(void) {
     asx_actor_behavior b;
     b.init = echo_init;
     b.handle_cast = echo_cast;
@@ -121,14 +119,14 @@ static asx_actor_behavior echo_behavior(void)
 }
 
 /* Minimal actor: cast only, no init/call/terminate */
-static asx_status noop_cast(void *state, uint64_t msg, asx_actor_handle self)
-{
-    (void)state; (void)msg; (void)self;
+static asx_status noop_cast(void *state, uint64_t msg, asx_actor_handle self) {
+    (void)state;
+    (void)msg;
+    (void)self;
     return ASX_OK;
 }
 
-static asx_actor_behavior minimal_behavior(void)
-{
+static asx_actor_behavior minimal_behavior(void) {
     asx_actor_behavior b;
     b.init = NULL;
     b.handle_cast = noop_cast;
@@ -138,9 +136,9 @@ static asx_actor_behavior minimal_behavior(void)
 }
 
 /* Failing init actor */
-static asx_status fail_init(void *state, asx_actor_handle self)
-{
-    (void)state; (void)self;
+static asx_status fail_init(void *state, asx_actor_handle self) {
+    (void)state;
+    (void)self;
     return ASX_E_INVALID_STATE;
 }
 
@@ -148,13 +146,12 @@ static asx_status fail_init(void *state, asx_actor_handle self)
 static uint32_t g_fail_after_count;
 static uint32_t g_fail_cast_count;
 
-static asx_status fail_cast(void *state, uint64_t msg, asx_actor_handle self)
-{
-    (void)state; (void)msg; (void)self;
+static asx_status fail_cast(void *state, uint64_t msg, asx_actor_handle self) {
+    (void)state;
+    (void)msg;
+    (void)self;
     g_fail_cast_count++;
-    if (g_fail_cast_count >= g_fail_after_count) {
-        return ASX_E_INVALID_STATE;
-    }
+    if (g_fail_cast_count >= g_fail_after_count) { return ASX_E_INVALID_STATE; }
     return ASX_OK;
 }
 
@@ -163,8 +160,7 @@ typedef struct {
     uint64_t sum;
 } accum_state;
 
-static asx_status accum_cast(void *state, uint64_t msg, asx_actor_handle self)
-{
+static asx_status accum_cast(void *state, uint64_t msg, asx_actor_handle self) {
     accum_state *s = (accum_state *)state;
     (void)self;
     s->sum += msg;
@@ -175,8 +171,7 @@ static asx_status accum_cast(void *state, uint64_t msg, asx_actor_handle self)
 /* Tests: Spawn and lifecycle                                          */
 /* ------------------------------------------------------------------ */
 
-static void test_spawn_basic(void)
-{
+static void test_spawn_basic(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -193,8 +188,7 @@ static void test_spawn_basic(void)
     ASSERT(h.generation != 0, "generation should be non-zero");
 }
 
-static void test_spawn_null_args(void)
-{
+static void test_spawn_null_args(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     asx_region_id r;
@@ -217,13 +211,11 @@ static void test_spawn_null_args(void)
         bad.handle_call = NULL;
         bad.terminate = NULL;
         st = asx_actor_spawn(&h, r, &bad, NULL);
-        ASSERT(st == ASX_E_INVALID_ARGUMENT,
-               "null handle_cast should fail");
+        ASSERT(st == ASX_E_INVALID_ARGUMENT, "null handle_cast should fail");
     }
 }
 
-static void test_spawn_arena_exhaustion(void)
-{
+static void test_spawn_arena_exhaustion(void) {
     asx_actor_handle handles[ASX_MAX_ACTORS + 1];
     asx_actor_behavior b = minimal_behavior();
     asx_region_id r;
@@ -239,12 +231,10 @@ static void test_spawn_arena_exhaustion(void)
     }
 
     st = asx_actor_spawn(&handles[ASX_MAX_ACTORS], r, &b, NULL);
-    ASSERT(st == ASX_E_RESOURCE_EXHAUSTED,
-           "spawn beyond limit should fail");
+    ASSERT(st == ASX_E_RESOURCE_EXHAUSTED, "spawn beyond limit should fail");
 }
 
-static void test_init_callback(void)
-{
+static void test_init_callback(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -261,8 +251,7 @@ static void test_init_callback(void)
     ASSERT(state.init_called, "init should be called on first poll");
 }
 
-static void test_init_failure_terminates(void)
-{
+static void test_init_failure_terminates(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -277,13 +266,11 @@ static void test_init_failure_terminates(void)
     pump_region(r, 2);
 
     ASSERT(state.term_called, "terminate should be called on init failure");
-    ASSERT(state.term_reason == ASX_E_INVALID_STATE,
-           "terminate reason should be init error");
+    ASSERT(state.term_reason == ASX_E_INVALID_STATE, "terminate reason should be init error");
     ASSERT(!asx_actor_is_alive(h), "actor should be dead after init failure");
 }
 
-static void test_minimal_no_init_no_terminate(void)
-{
+static void test_minimal_no_init_no_terminate(void) {
     asx_actor_handle h;
     asx_actor_behavior b = minimal_behavior();
     asx_region_id r;
@@ -304,8 +291,7 @@ static void test_minimal_no_init_no_terminate(void)
 /* Tests: Cast (fire-and-forget)                                       */
 /* ------------------------------------------------------------------ */
 
-static void test_cast_basic(void)
-{
+static void test_cast_basic(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -328,8 +314,7 @@ static void test_cast_basic(void)
     ASSERT(state.msg_count == 1, "should have processed 1 message");
 }
 
-static void test_cast_ordering(void)
-{
+static void test_cast_ordering(void) {
     asx_actor_handle h;
     asx_actor_behavior b;
     accum_state state;
@@ -348,9 +333,7 @@ static void test_cast_ordering(void)
     pump_region(r, 1); /* init */
 
     /* Send multiple messages */
-    for (i = 1; i <= 5; i++) {
-        MUST_OK(asx_actor_cast(h, (uint64_t)i));
-    }
+    for (i = 1; i <= 5; i++) { MUST_OK(asx_actor_cast(h, (uint64_t)i)); }
     ASSERT(asx_actor_mailbox_count(h) == 5, "mailbox should have 5 messages");
 
     /* Process all (one per poll) */
@@ -358,8 +341,7 @@ static void test_cast_ordering(void)
     ASSERT(state.sum == 15, "sum should be 1+2+3+4+5=15");
 }
 
-static void test_cast_mailbox_full(void)
-{
+static void test_cast_mailbox_full(void) {
     asx_actor_handle h;
     asx_actor_behavior b = minimal_behavior();
     asx_region_id r;
@@ -383,8 +365,7 @@ static void test_cast_mailbox_full(void)
     ASSERT(st == ASX_E_WOULD_BLOCK, "cast to full mailbox should block");
 }
 
-static void test_cast_to_dead_actor(void)
-{
+static void test_cast_to_dead_actor(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -407,8 +388,7 @@ static void test_cast_to_dead_actor(void)
 /* Tests: Call (request/reply)                                         */
 /* ------------------------------------------------------------------ */
 
-static void test_call_basic(void)
-{
+static void test_call_basic(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -438,8 +418,7 @@ static void test_call_basic(void)
     ASSERT(reply == 42, "reply should be 21*2=42");
 }
 
-static void test_call_multiple(void)
-{
+static void test_call_multiple(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -455,21 +434,17 @@ static void test_call_multiple(void)
     MUST_OK(asx_actor_spawn(&h, r, &b, &state));
     pump_region(r, 1); /* init */
 
-    for (i = 0; i < 3; i++) {
-        MUST_OK(asx_actor_call(h, (uint64_t)(i + 1), &tokens[i]));
-    }
+    for (i = 0; i < 3; i++) { MUST_OK(asx_actor_call(h, (uint64_t)(i + 1), &tokens[i])); }
 
     pump_region(r, 3); /* process all 3 calls */
 
     for (i = 0; i < 3; i++) {
         MUST_OK(asx_call_token_poll(tokens[i], &reply));
-        ASSERT(reply == (uint64_t)(i + 1) * 2,
-               "each reply should be request*2");
+        ASSERT(reply == (uint64_t)(i + 1) * 2, "each reply should be request*2");
     }
 }
 
-static void test_call_pending_exhaustion(void)
-{
+static void test_call_pending_exhaustion(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -491,12 +466,10 @@ static void test_call_pending_exhaustion(void)
     }
 
     st = asx_actor_call(h, 999, &tokens[ASX_ACTOR_MAX_PENDING_CALLS]);
-    ASSERT(st == ASX_E_RESOURCE_EXHAUSTED,
-           "call beyond pending limit should fail");
+    ASSERT(st == ASX_E_RESOURCE_EXHAUSTED, "call beyond pending limit should fail");
 }
 
-static void test_call_null_handler(void)
-{
+static void test_call_null_handler(void) {
     asx_actor_handle h;
     asx_actor_behavior b = minimal_behavior(); /* no call handler */
     asx_region_id r;
@@ -514,16 +487,14 @@ static void test_call_null_handler(void)
     pump_region(r, 1); /* process — no handler, slot released */
 
     st = asx_call_token_poll(token, &reply);
-    ASSERT(st == ASX_E_INVALID_STATE,
-           "call with no handler should return invalid state");
+    ASSERT(st == ASX_E_INVALID_STATE, "call with no handler should return invalid state");
 }
 
 /* ------------------------------------------------------------------ */
 /* Tests: Stop (graceful shutdown)                                     */
 /* ------------------------------------------------------------------ */
 
-static void test_stop_basic(void)
-{
+static void test_stop_basic(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -545,8 +516,7 @@ static void test_stop_basic(void)
     ASSERT(state.term_reason == ASX_OK, "graceful stop reason should be OK");
 }
 
-static void test_stop_processes_remaining_messages(void)
-{
+static void test_stop_processes_remaining_messages(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -575,8 +545,7 @@ static void test_stop_processes_remaining_messages(void)
 /* Tests: Error handling                                               */
 /* ------------------------------------------------------------------ */
 
-static void test_cast_handler_failure(void)
-{
+static void test_cast_handler_failure(void) {
     asx_actor_handle h;
     asx_actor_behavior b;
     echo_state state;
@@ -604,13 +573,11 @@ static void test_cast_handler_failure(void)
 
     ASSERT(!asx_actor_is_alive(h), "should be dead after handler failure");
     ASSERT(state.term_called, "terminate should be called");
-    ASSERT(state.term_reason == ASX_E_INVALID_STATE,
-           "terminate reason should be handler error");
+    ASSERT(state.term_reason == ASX_E_INVALID_STATE, "terminate reason should be handler error");
     ASSERT(g_fail_cast_count == 2, "should have processed 2 messages before failure");
 }
 
-static void test_stale_handle(void)
-{
+static void test_stale_handle(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -635,8 +602,7 @@ static void test_stale_handle(void)
     b.init = echo_init;
     MUST_OK(asx_actor_spawn(&h, r, &b, &state));
     ASSERT(h.slot == stale.slot, "should reuse same slot");
-    ASSERT(h.generation != stale.generation,
-           "generation should differ");
+    ASSERT(h.generation != stale.generation, "generation should differ");
 
     /* Stale handle should not work */
     ASSERT(!asx_actor_is_alive(stale), "stale handle should not find new actor");
@@ -648,8 +614,7 @@ static void test_stale_handle(void)
 /* Tests: Task integration                                             */
 /* ------------------------------------------------------------------ */
 
-static void test_task_id_retrieval(void)
-{
+static void test_task_id_retrieval(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -670,8 +635,7 @@ static void test_task_id_retrieval(void)
 /* Tests: Reset                                                        */
 /* ------------------------------------------------------------------ */
 
-static void test_reset(void)
-{
+static void test_reset(void) {
     asx_actor_handle h;
     asx_actor_behavior b = minimal_behavior();
     asx_region_id r;
@@ -694,17 +658,14 @@ static void test_reset(void)
 static uint64_t g_order_log[16];
 static uint32_t g_order_count;
 
-static asx_status order_cast(void *state, uint64_t msg, asx_actor_handle self)
-{
-    (void)state; (void)self;
-    if (g_order_count < 16) {
-        g_order_log[g_order_count++] = msg;
-    }
+static asx_status order_cast(void *state, uint64_t msg, asx_actor_handle self) {
+    (void)state;
+    (void)self;
+    if (g_order_count < 16) { g_order_log[g_order_count++] = msg; }
     return ASX_OK;
 }
 
-static void test_law_fifo_ordering(void)
-{
+static void test_law_fifo_ordering(void) {
     asx_actor_handle h;
     asx_actor_behavior b;
     asx_region_id r;
@@ -721,22 +682,18 @@ static void test_law_fifo_ordering(void)
     MUST_OK(asx_actor_spawn(&h, r, &b, NULL));
     pump_region(r, 1); /* init */
 
-    for (i = 0; i < 8; i++) {
-        MUST_OK(asx_actor_cast(h, (uint64_t)(i * 10)));
-    }
+    for (i = 0; i < 8; i++) { MUST_OK(asx_actor_cast(h, (uint64_t)(i * 10))); }
 
     pump_region(r, 8);
 
     ASSERT(g_order_count == 8, "should have received 8 messages");
     for (i = 0; i < 8; i++) {
-        ASSERT(g_order_log[i] == (uint64_t)(i * 10),
-               "messages should be in FIFO order");
+        ASSERT(g_order_log[i] == (uint64_t)(i * 10), "messages should be in FIFO order");
     }
 }
 
 /* Law: call reply is consumed exactly once */
-static void test_law_call_consumed_once(void)
-{
+static void test_law_call_consumed_once(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -762,13 +719,11 @@ static void test_law_call_consumed_once(void)
 
     /* Second poll fails (slot released) */
     st = asx_call_token_poll(token, &reply);
-    ASSERT(st == ASX_E_INVALID_STATE,
-           "second poll should fail (consumed)");
+    ASSERT(st == ASX_E_INVALID_STATE, "second poll should fail (consumed)");
 }
 
 /* Law: terminate is always called (even on error) */
-static void test_law_terminate_always_called(void)
-{
+static void test_law_terminate_always_called(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -797,8 +752,7 @@ static void test_law_terminate_always_called(void)
 }
 
 /* Law: mailbox count is accurate */
-static void test_law_mailbox_count(void)
-{
+static void test_law_mailbox_count(void) {
     asx_actor_handle h;
     asx_actor_behavior b = minimal_behavior();
     asx_region_id r;
@@ -825,8 +779,7 @@ static void test_law_mailbox_count(void)
 /* Tests: Interleaved cast and call                                    */
 /* ------------------------------------------------------------------ */
 
-static void test_interleaved_cast_call(void)
-{
+static void test_interleaved_cast_call(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
     echo_state state;
@@ -858,8 +811,7 @@ static void test_interleaved_cast_call(void)
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     printf("test_actor:\n");
 
     /* Spawn and lifecycle */

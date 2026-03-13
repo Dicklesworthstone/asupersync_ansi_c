@@ -15,7 +15,11 @@ static void setup(void) { asx_oneshot_reset(); }
 
 /* Suppress warn_unused_result */
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Create tests                                                        */
@@ -113,9 +117,7 @@ TEST(receiver_drop_gives_disconnected_send) {
 /* Null argument tests                                                 */
 /* ------------------------------------------------------------------ */
 
-TEST(send_null_fails) {
-    ASSERT_EQ(asx_oneshot_try_send(NULL, 1), ASX_E_INVALID_ARGUMENT);
-}
+TEST(send_null_fails) { ASSERT_EQ(asx_oneshot_try_send(NULL, 1), ASX_E_INVALID_ARGUMENT); }
 
 TEST(recv_null_fails) {
     uint64_t val;
@@ -193,8 +195,7 @@ TEST(arena_exhaustion) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_oneshot ===\n");
 
     RUN_TEST(create_null_sender_fails);

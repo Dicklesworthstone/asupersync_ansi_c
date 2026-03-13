@@ -8,19 +8,19 @@
 #include <asx/runtime/io_driver.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
-static void setup(void)
-{
+static void setup(void) {
     asx_waker_reset();
     asx_io_driver_reset();
     MUST_OK(asx_io_driver_init());
 }
 
-static void teardown(void)
-{
-    asx_io_driver_shutdown();
-}
+static void teardown(void) { asx_io_driver_shutdown(); }
 
 /* ------------------------------------------------------------------ */
 /* Registration tests                                                  */
@@ -31,16 +31,14 @@ TEST(register_null_token_fails) {
     setup();
     asx_waker_reset();
     MUST_OK(asx_waker_register(1, &w));
-    ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, NULL), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
 
 TEST(register_null_waker_fails) {
     asx_io_token tok;
     setup();
-    ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, NULL, &tok),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, NULL, &tok), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
 
@@ -51,8 +49,7 @@ TEST(register_before_init_fails) {
     asx_io_driver_shutdown();
     asx_waker_reset();
     MUST_OK(asx_waker_register(1, &w));
-    ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok),
-              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_E_INVALID_STATE);
 }
 
 TEST(register_success) {
@@ -79,7 +76,7 @@ TEST(deregister_decrements_count) {
 
 TEST(deregister_null_safe) {
     setup();
-    asx_io_deregister(NULL);  /* should not crash */
+    asx_io_deregister(NULL); /* should not crash */
     teardown();
 }
 
@@ -112,8 +109,7 @@ TEST(set_interest_success) {
 
 TEST(set_interest_null_fails) {
     setup();
-    ASSERT_EQ(asx_io_set_interest(NULL, ASX_IO_READABLE),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_io_set_interest(NULL, ASX_IO_READABLE), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
 
@@ -185,8 +181,7 @@ TEST(multiple_registrations) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_io_driver ===\n");
 
     RUN_TEST(register_null_token_fails);

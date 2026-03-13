@@ -18,8 +18,11 @@
 #include <string.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
-#define IGNORE_RC(expr) \
-    do { asx_status ignore_rc_ = (expr); (void)ignore_rc_; } while (0)
+#define IGNORE_RC(expr)                                                                            \
+    do {                                                                                           \
+        asx_status ignore_rc_ = (expr);                                                            \
+        (void)ignore_rc_;                                                                          \
+    } while (0)
 
 /* -------------------------------------------------------------------
  * Helpers
@@ -28,27 +31,30 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
-#define SCENARIO_BEGIN(id) \
-    do { const char *_scenario_id = (id); int _scenario_ok = 1; (void)0
+#define SCENARIO_BEGIN(id)                                                                         \
+    do {                                                                                           \
+        const char *_scenario_id = (id);                                                           \
+        int _scenario_ok = 1;                                                                      \
+    (void)0
 
-#define SCENARIO_CHECK(cond, msg)                         \
-    do {                                                  \
-        if (!(cond)) {                                    \
-            printf("SCENARIO %s fail %s\n",               \
-                   _scenario_id, (msg));                  \
-            _scenario_ok = 0;                             \
-            g_fail++;                                     \
-            goto _scenario_end;                           \
-        }                                                 \
+#define SCENARIO_CHECK(cond, msg)                                                                  \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("SCENARIO %s fail %s\n", _scenario_id, (msg));                                  \
+            _scenario_ok = 0;                                                                      \
+            g_fail++;                                                                              \
+            goto _scenario_end;                                                                    \
+        }                                                                                          \
     } while (0)
 
-#define SCENARIO_END()                                    \
-    _scenario_end:                                        \
-    if (_scenario_ok) {                                   \
-        printf("SCENARIO %s pass\n", _scenario_id);      \
-        g_pass++;                                         \
-    }                                                     \
-    } while (0)
+#define SCENARIO_END()                                                                             \
+    _scenario_end:                                                                                 \
+    if (_scenario_ok) {                                                                            \
+        printf("SCENARIO %s pass\n", _scenario_id);                                                \
+        g_pass++;                                                                                  \
+    }                                                                                              \
+    }                                                                                              \
+    while (0)
 
 /* ---- Fault injection hook state ---- */
 
@@ -58,61 +64,49 @@ static uint64_t g_entropy_sequence;
 static int g_alloc_fail_after;
 static int g_alloc_call_count;
 
-static asx_time fault_clock(void *ctx)
-{
+static asx_time fault_clock(void *ctx) {
     (void)ctx;
     return g_clock_value;
 }
 
-static asx_time fault_logical_clock(void *ctx)
-{
+static asx_time fault_logical_clock(void *ctx) {
     (void)ctx;
     return g_clock_value;
 }
 
-static uint64_t fault_entropy(void *ctx)
-{
+static uint64_t fault_entropy(void *ctx) {
     (void)ctx;
     g_entropy_sequence++;
     return g_entropy_value;
 }
 
-static uint64_t seeded_entropy(void *ctx)
-{
+static uint64_t seeded_entropy(void *ctx) {
     (void)ctx;
     g_entropy_value = g_entropy_value * 6364136223846793005ULL + 1442695040888963407ULL;
     g_entropy_sequence++;
     return g_entropy_value;
 }
 
-static void *failing_malloc(void *ctx, size_t size)
-{
+static void *failing_malloc(void *ctx, size_t size) {
     (void)ctx;
     g_alloc_call_count++;
-    if (g_alloc_fail_after >= 0 && g_alloc_call_count > g_alloc_fail_after) {
-        return NULL;
-    }
+    if (g_alloc_fail_after >= 0 && g_alloc_call_count > g_alloc_fail_after) { return NULL; }
     return malloc(size);
 }
 
-static void *failing_realloc(void *ctx, void *ptr, size_t size)
-{
+static void *failing_realloc(void *ctx, void *ptr, size_t size) {
     (void)ctx;
     g_alloc_call_count++;
-    if (g_alloc_fail_after >= 0 && g_alloc_call_count > g_alloc_fail_after) {
-        return NULL;
-    }
+    if (g_alloc_fail_after >= 0 && g_alloc_call_count > g_alloc_fail_after) { return NULL; }
     return realloc(ptr, size);
 }
 
-static void passthrough_free(void *ctx, void *ptr)
-{
+static void passthrough_free(void *ctx, void *ptr) {
     (void)ctx;
     free(ptr);
 }
 
-static void install_fault_hooks(void)
-{
+static void install_fault_hooks(void) {
     asx_runtime_hooks hooks;
     asx_runtime_hooks_init(&hooks);
     hooks.clock.now_ns_fn = fault_clock;
@@ -125,8 +119,7 @@ static void install_fault_hooks(void)
     IGNORE_RC(asx_runtime_set_hooks(&hooks));
 }
 
-static void reset_fault_state(void)
-{
+static void reset_fault_state(void) {
     g_clock_value = 1000000000ULL; /* 1 second */
     g_entropy_value = 42;
     g_entropy_sequence = 0;
@@ -134,9 +127,9 @@ static void reset_fault_state(void)
     g_alloc_call_count = 0;
 }
 
-static asx_status poll_complete_fn(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_complete_fn(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_OK;
 }
 
@@ -146,8 +139,7 @@ static asx_status poll_complete_fn(void *ud, asx_task_id self)
  * ------------------------------------------------------------------- */
 
 /* robust-fault-time-001: clock backward jump does not corrupt state */
-static void scenario_clock_backward(void)
-{
+static void scenario_clock_backward(void) {
     SCENARIO_BEGIN("robust-fault-time-001.clock_backward");
     asx_runtime_reset();
     reset_fault_state();
@@ -159,8 +151,7 @@ static void scenario_clock_backward(void)
     g_clock_value = 2000000000ULL; /* 2 seconds */
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
 
     /* Jump clock backward */
     g_clock_value = 500000000ULL; /* 0.5 seconds */
@@ -170,15 +161,14 @@ static void scenario_clock_backward(void)
     SCENARIO_CHECK(rc == ASX_OK, "scheduler should complete despite clock jump");
 
     asx_task_state ts;
-    SCENARIO_CHECK(asx_task_get_state(tid, &ts) == ASX_OK &&
-                   ts == ASX_TASK_COMPLETED, "task should complete");
+    SCENARIO_CHECK(asx_task_get_state(tid, &ts) == ASX_OK && ts == ASX_TASK_COMPLETED,
+                   "task should complete");
 
     SCENARIO_END();
 }
 
 /* robust-fault-time-002: clock at zero does not crash */
-static void scenario_clock_zero(void)
-{
+static void scenario_clock_zero(void) {
     SCENARIO_BEGIN("robust-fault-time-002.clock_zero");
     asx_runtime_reset();
     reset_fault_state();
@@ -190,8 +180,7 @@ static void scenario_clock_zero(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
     asx_status rc = asx_scheduler_run(rid, &budget);
@@ -201,8 +190,7 @@ static void scenario_clock_zero(void)
 }
 
 /* robust-fault-time-003: clock overflow (max uint64) */
-static void scenario_clock_overflow(void)
-{
+static void scenario_clock_overflow(void) {
     SCENARIO_BEGIN("robust-fault-time-003.clock_overflow");
     asx_runtime_reset();
     reset_fault_state();
@@ -214,8 +202,7 @@ static void scenario_clock_overflow(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
     asx_status rc = asx_scheduler_run(rid, &budget);
@@ -225,8 +212,7 @@ static void scenario_clock_overflow(void)
 }
 
 /* robust-fault-entropy-001: seeded entropy is deterministic across runs */
-static void scenario_entropy_deterministic(void)
-{
+static void scenario_entropy_deterministic(void) {
     SCENARIO_BEGIN("robust-fault-entropy-001.seeded_deterministic");
     asx_runtime_reset();
     reset_fault_state();
@@ -246,9 +232,7 @@ static void scenario_entropy_deterministic(void)
     /* Generate sequence */
     uint64_t vals1[4];
     uint32_t i;
-    for (i = 0; i < 4; i++) {
-        IGNORE_RC(asx_runtime_random_u64(&vals1[i]));
-    }
+    for (i = 0; i < 4; i++) { IGNORE_RC(asx_runtime_random_u64(&vals1[i])); }
     uint64_t seq1 = g_entropy_sequence;
 
     /* Reset and replay */
@@ -256,22 +240,17 @@ static void scenario_entropy_deterministic(void)
     g_entropy_sequence = 0;
 
     uint64_t vals2[4];
-    for (i = 0; i < 4; i++) {
-        IGNORE_RC(asx_runtime_random_u64(&vals2[i]));
-    }
+    for (i = 0; i < 4; i++) { IGNORE_RC(asx_runtime_random_u64(&vals2[i])); }
     uint64_t seq2 = g_entropy_sequence;
 
     SCENARIO_CHECK(seq1 == seq2, "sequence counts must match");
-    for (i = 0; i < 4; i++) {
-        SCENARIO_CHECK(vals1[i] == vals2[i], "entropy values must match");
-    }
+    for (i = 0; i < 4; i++) { SCENARIO_CHECK(vals1[i] == vals2[i], "entropy values must match"); }
 
     SCENARIO_END();
 }
 
 /* robust-fault-entropy-002: constant entropy does not cause infinite loops */
-static void scenario_entropy_constant(void)
-{
+static void scenario_entropy_constant(void) {
     SCENARIO_BEGIN("robust-fault-entropy-002.constant_entropy");
     asx_runtime_reset();
     reset_fault_state();
@@ -284,8 +263,7 @@ static void scenario_entropy_constant(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
     asx_status rc = asx_scheduler_run(rid, &budget);
@@ -295,8 +273,7 @@ static void scenario_entropy_constant(void)
 }
 
 /* robust-fault-alloc-001: allocator seal blocks new allocations */
-static void scenario_allocator_seal(void)
-{
+static void scenario_allocator_seal(void) {
     SCENARIO_BEGIN("robust-fault-alloc-001.seal_blocks_alloc");
     asx_runtime_reset();
     reset_fault_state();
@@ -316,8 +293,7 @@ static void scenario_allocator_seal(void)
 }
 
 /* robust-fault-alloc-002: task completion survives allocator failure */
-static void scenario_allocator_failure_during_run(void)
-{
+static void scenario_allocator_failure_during_run(void) {
     SCENARIO_BEGIN("robust-fault-alloc-002.alloc_fail_during_run");
     asx_runtime_reset();
     reset_fault_state();
@@ -330,8 +306,7 @@ static void scenario_allocator_failure_during_run(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
     asx_status rc = asx_scheduler_run(rid, &budget);
@@ -339,15 +314,14 @@ static void scenario_allocator_failure_during_run(void)
     SCENARIO_CHECK(rc == ASX_OK, "scheduler should complete under alloc pressure");
 
     asx_task_state ts;
-    SCENARIO_CHECK(asx_task_get_state(tid, &ts) == ASX_OK &&
-                   ts == ASX_TASK_COMPLETED, "task should complete");
+    SCENARIO_CHECK(asx_task_get_state(tid, &ts) == ASX_OK && ts == ASX_TASK_COMPLETED,
+                   "task should complete");
 
     SCENARIO_END();
 }
 
 /* robust-fault-trace-001: trace digest stable under fault hooks */
-static void scenario_trace_digest_stable_under_faults(void)
-{
+static void scenario_trace_digest_stable_under_faults(void) {
     SCENARIO_BEGIN("robust-fault-trace-001.digest_stable");
     asx_runtime_reset();
     asx_trace_reset();
@@ -359,8 +333,7 @@ static void scenario_trace_digest_stable_under_faults(void)
     asx_budget budget;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
     budget = asx_budget_from_polls(10);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
 
@@ -373,8 +346,7 @@ static void scenario_trace_digest_stable_under_faults(void)
     install_fault_hooks();
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK,
-                   "task_spawn_2");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn_2");
     budget = asx_budget_from_polls(10);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
 
@@ -389,8 +361,7 @@ static void scenario_trace_digest_stable_under_faults(void)
 }
 
 /* robust-fault-containment-001: poisoned region blocks spawn but allows query */
-static void scenario_fault_containment_poison(void)
-{
+static void scenario_fault_containment_poison(void) {
     SCENARIO_BEGIN("robust-fault-containment-001.poison_isolation");
     asx_runtime_reset();
 
@@ -408,8 +379,7 @@ static void scenario_fault_containment_poison(void)
     SCENARIO_CHECK(rc == ASX_E_REGION_POISONED, "spawn blocked on poisoned r1");
 
     asx_region_state rs;
-    SCENARIO_CHECK(asx_region_get_state(r1, &rs) == ASX_OK,
-                   "state query on poisoned r1");
+    SCENARIO_CHECK(asx_region_get_state(r1, &rs) == ASX_OK, "state query on poisoned r1");
 
     /* r2: unaffected by r1's poison */
     SCENARIO_CHECK(asx_task_spawn(r2, poll_complete_fn, NULL, &tid) == ASX_OK,
@@ -419,8 +389,7 @@ static void scenario_fault_containment_poison(void)
 }
 
 /* robust-fault-containment-002: scheduler drains existing tasks on poisoned region */
-static void scenario_fault_containment_drain_poisoned(void)
-{
+static void scenario_fault_containment_drain_poisoned(void) {
     SCENARIO_BEGIN("robust-fault-containment-002.drain_poisoned");
     asx_runtime_reset();
 
@@ -428,8 +397,7 @@ static void scenario_fault_containment_drain_poisoned(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete_fn, NULL, &tid) == ASX_OK, "task_spawn");
 
     /* Poison region — existing task should still be schedulable */
     SCENARIO_CHECK(asx_region_poison(rid) == ASX_OK, "poison_region");
@@ -439,8 +407,8 @@ static void scenario_fault_containment_drain_poisoned(void)
     SCENARIO_CHECK(rc == ASX_OK, "scheduler drains tasks on poisoned region");
 
     asx_task_state ts;
-    SCENARIO_CHECK(asx_task_get_state(tid, &ts) == ASX_OK &&
-                   ts == ASX_TASK_COMPLETED, "task should complete");
+    SCENARIO_CHECK(asx_task_get_state(tid, &ts) == ASX_OK && ts == ASX_TASK_COMPLETED,
+                   "task should complete");
 
     SCENARIO_END();
 }
@@ -449,8 +417,7 @@ static void scenario_fault_containment_drain_poisoned(void)
  * Main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     scenario_clock_backward();
     scenario_clock_zero();
     scenario_clock_overflow();
@@ -462,7 +429,6 @@ int main(void)
     scenario_fault_containment_poison();
     scenario_fault_containment_drain_poisoned();
 
-    fprintf(stderr, "[e2e] robustness_fault: %d passed, %d failed\n",
-            g_pass, g_fail);
+    fprintf(stderr, "[e2e] robustness_fault: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
 }

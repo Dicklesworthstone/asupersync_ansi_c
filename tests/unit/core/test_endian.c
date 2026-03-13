@@ -10,8 +10,8 @@
 
 #include "../../test_harness.h"
 #include <asx/portable.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* ---- Little-endian roundtrip tests ---- */
 
@@ -127,7 +127,7 @@ TEST(be_u64_zero_and_max) {
 
 TEST(le_u32_unaligned_offset_1) {
     uint8_t raw[8];
-    uint8_t *p = raw + 1;  /* misaligned by 1 byte */
+    uint8_t *p = raw + 1; /* misaligned by 1 byte */
 
     memset(raw, 0, sizeof(raw));
     asx_store_le_u32(p, 0xDEADBEEFu);
@@ -136,7 +136,7 @@ TEST(le_u32_unaligned_offset_1) {
 
 TEST(le_u64_unaligned_offset_3) {
     uint8_t raw[16];
-    uint8_t *p = raw + 3;  /* misaligned by 3 bytes */
+    uint8_t *p = raw + 3; /* misaligned by 3 bytes */
 
     memset(raw, 0, sizeof(raw));
     asx_store_le_u64(p, 0xCAFEBABE12345678ULL);
@@ -167,7 +167,7 @@ TEST(unaligned_heap_buffer) {
     uint8_t *p;
 
     ASSERT_TRUE(heap != NULL);
-    p = heap + 1;  /* likely misaligned on most platforms */
+    p = heap + 1; /* likely misaligned on most platforms */
 
     asx_store_le_u32(p, 0x11223344u);
     ASSERT_EQ(asx_load_le_u32(p), (uint32_t)0x11223344u);
@@ -226,7 +226,7 @@ TEST(endian_canary_corruption_detected) {
     uint8_t buf[4];
 
     asx_store_endian_canary_le(buf);
-    buf[2] = 0xFF;  /* corrupt one byte */
+    buf[2] = 0xFF; /* corrupt one byte */
     ASSERT_FALSE(asx_verify_endian_canary_le(buf));
 }
 
@@ -244,10 +244,10 @@ TEST(le_known_vector_trace_magic) {
     /* Trace format uses LE magic 0x41535874 = "ASXt" */
     uint8_t buf[4];
     asx_store_le_u32(buf, 0x41535874u);
-    ASSERT_EQ(buf[0], (uint8_t)0x74);  /* 't' */
-    ASSERT_EQ(buf[1], (uint8_t)0x58);  /* 'X' */
-    ASSERT_EQ(buf[2], (uint8_t)0x53);  /* 'S' */
-    ASSERT_EQ(buf[3], (uint8_t)0x41);  /* 'A' */
+    ASSERT_EQ(buf[0], (uint8_t)0x74); /* 't' */
+    ASSERT_EQ(buf[1], (uint8_t)0x58); /* 'X' */
+    ASSERT_EQ(buf[2], (uint8_t)0x53); /* 'S' */
+    ASSERT_EQ(buf[3], (uint8_t)0x41); /* 'A' */
 }
 
 TEST(be_known_vector_fixture_length) {

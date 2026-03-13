@@ -28,59 +28,51 @@ static int g_log_count;
 static int g_log_level;
 static char g_log_buf[256];
 
-static void *test_malloc(void *ctx, size_t size)
-{
+static void *test_malloc(void *ctx, size_t size) {
     (void)ctx;
     g_alloc_count++;
     return malloc(size);
 }
 
-static void *test_realloc(void *ctx, void *ptr, size_t size)
-{
+static void *test_realloc(void *ctx, void *ptr, size_t size) {
     (void)ctx;
     g_realloc_count++;
     return realloc(ptr, size);
 }
 
-static void test_free(void *ctx, void *ptr)
-{
+static void test_free(void *ctx, void *ptr) {
     (void)ctx;
     g_free_count++;
     free(ptr);
 }
 
-static asx_time test_wall_clock(void *ctx)
-{
+static asx_time test_wall_clock(void *ctx) {
     (void)ctx;
     g_clock_count++;
     return 1000000;
 }
 
-static asx_time test_logical_clock(void *ctx)
-{
+static asx_time test_logical_clock(void *ctx) {
     (void)ctx;
     g_clock_count++;
     return 42;
 }
 
-static uint64_t test_entropy(void *ctx)
-{
+static uint64_t test_entropy(void *ctx) {
     (void)ctx;
     g_entropy_count++;
     return 0xCAFEBABEu;
 }
 
-static asx_status test_ghost_reactor(void *ctx, uint64_t logical_step,
-                                      uint32_t *ready_count)
-{
-    (void)ctx; (void)logical_step;
+static asx_status test_ghost_reactor(void *ctx, uint64_t logical_step, uint32_t *ready_count) {
+    (void)ctx;
+    (void)logical_step;
     g_reactor_count++;
     *ready_count = 3;
     return ASX_OK;
 }
 
-static void test_log_sink(void *ctx, int level, const char *message)
-{
+static void test_log_sink(void *ctx, int level, const char *message) {
     (void)ctx;
     g_log_count++;
     g_log_level = level;
@@ -90,8 +82,7 @@ static void test_log_sink(void *ctx, int level, const char *message)
     }
 }
 
-static void reset_counters(void)
-{
+static void reset_counters(void) {
     g_alloc_count = 0;
     g_free_count = 0;
     g_realloc_count = 0;
@@ -103,20 +94,19 @@ static void reset_counters(void)
     g_log_buf[0] = '\0';
 }
 
-static asx_status install_test_hooks(void)
-{
+static asx_status install_test_hooks(void) {
     asx_runtime_hooks hooks;
     asx_status st = asx_runtime_hooks_init(&hooks);
     if (st != ASX_OK) return st;
 
-    hooks.allocator.malloc_fn  = test_malloc;
+    hooks.allocator.malloc_fn = test_malloc;
     hooks.allocator.realloc_fn = test_realloc;
-    hooks.allocator.free_fn    = test_free;
-    hooks.clock.now_ns_fn      = test_wall_clock;
+    hooks.allocator.free_fn = test_free;
+    hooks.clock.now_ns_fn = test_wall_clock;
     hooks.clock.logical_now_ns_fn = test_logical_clock;
     hooks.entropy.random_u64_fn = test_entropy;
     hooks.reactor.ghost_wait_fn = test_ghost_reactor;
-    hooks.log.write_fn          = test_log_sink;
+    hooks.log.write_fn = test_log_sink;
     hooks.deterministic_seeded_prng = 1;
 
     return asx_runtime_set_hooks(&hooks);
@@ -126,13 +116,11 @@ static asx_status install_test_hooks(void)
 /* Hook init                                                           */
 /* ------------------------------------------------------------------ */
 
-TEST(hooks_init_null_returns_error)
-{
+TEST(hooks_init_null_returns_error) {
     ASSERT_EQ(asx_runtime_hooks_init(NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(hooks_init_sets_defaults)
-{
+TEST(hooks_init_sets_defaults) {
     asx_runtime_hooks hooks;
     memset(&hooks, 0xFF, sizeof(hooks));
 
@@ -150,46 +138,40 @@ TEST(hooks_init_sets_defaults)
 /* Hook validation                                                     */
 /* ------------------------------------------------------------------ */
 
-TEST(hooks_validate_null_returns_error)
-{
+TEST(hooks_validate_null_returns_error) {
     ASSERT_EQ(asx_runtime_hooks_validate(NULL, 0), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_runtime_hooks_validate(NULL, 1), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(hooks_validate_default_passes)
-{
+TEST(hooks_validate_default_passes) {
     asx_runtime_hooks hooks;
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 1), ASX_OK);
     ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 0), ASX_OK);
 }
 
-TEST(hooks_validate_no_malloc_fails)
-{
+TEST(hooks_validate_no_malloc_fails) {
     asx_runtime_hooks hooks;
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.allocator.malloc_fn = NULL;
     ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 0), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(hooks_validate_no_free_fails)
-{
+TEST(hooks_validate_no_free_fails) {
     asx_runtime_hooks hooks;
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.allocator.free_fn = NULL;
     ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 0), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(hooks_validate_deterministic_no_logical_clock_fails)
-{
+TEST(hooks_validate_deterministic_no_logical_clock_fails) {
     asx_runtime_hooks hooks;
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.clock.logical_now_ns_fn = NULL;
     ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 1), ASX_E_DETERMINISM_VIOLATION);
 }
 
-TEST(hooks_validate_deterministic_unseeded_entropy_fails)
-{
+TEST(hooks_validate_deterministic_unseeded_entropy_fails) {
     asx_runtime_hooks hooks;
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.deterministic_seeded_prng = 0;
@@ -197,8 +179,7 @@ TEST(hooks_validate_deterministic_unseeded_entropy_fails)
     ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 1), ASX_E_DETERMINISM_VIOLATION);
 }
 
-TEST(hooks_validate_live_no_wall_clock_fails)
-{
+TEST(hooks_validate_live_no_wall_clock_fails) {
     asx_runtime_hooks hooks;
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.clock.now_ns_fn = NULL;
@@ -209,13 +190,11 @@ TEST(hooks_validate_live_no_wall_clock_fails)
 /* Hook install and retrieval                                          */
 /* ------------------------------------------------------------------ */
 
-TEST(set_hooks_null_returns_error)
-{
+TEST(set_hooks_null_returns_error) {
     ASSERT_EQ(asx_runtime_set_hooks(NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(set_hooks_installs_and_get_retrieves)
-{
+TEST(set_hooks_installs_and_get_retrieves) {
     const asx_runtime_hooks *retrieved;
 
     asx_runtime_reset();
@@ -232,15 +211,13 @@ TEST(set_hooks_installs_and_get_retrieves)
 /* Allocator seal                                                      */
 /* ------------------------------------------------------------------ */
 
-TEST(seal_without_hooks_returns_invalid_state)
-{
+TEST(seal_without_hooks_returns_invalid_state) {
     asx_runtime_reset();
     /* No hooks installed after reset */
     ASSERT_EQ(asx_runtime_seal_allocator(), ASX_E_INVALID_STATE);
 }
 
-TEST(seal_then_alloc_returns_sealed)
-{
+TEST(seal_then_alloc_returns_sealed) {
     void *ptr = NULL;
 
     asx_runtime_reset();
@@ -250,8 +227,7 @@ TEST(seal_then_alloc_returns_sealed)
     ASSERT_TRUE(ptr == NULL);
 }
 
-TEST(seal_then_realloc_returns_sealed)
-{
+TEST(seal_then_realloc_returns_sealed) {
     void *ptr = NULL;
 
     asx_runtime_reset();
@@ -260,8 +236,7 @@ TEST(seal_then_realloc_returns_sealed)
     ASSERT_EQ(asx_runtime_realloc(NULL, 64, &ptr), ASX_E_ALLOCATOR_SEALED);
 }
 
-TEST(double_seal_returns_invalid_state)
-{
+TEST(double_seal_returns_invalid_state) {
     asx_runtime_reset();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_seal_allocator(), ASX_OK);
@@ -272,22 +247,19 @@ TEST(double_seal_returns_invalid_state)
 /* Hook-backed allocator dispatch                                      */
 /* ------------------------------------------------------------------ */
 
-TEST(alloc_null_out_returns_error)
-{
+TEST(alloc_null_out_returns_error) {
     asx_runtime_reset();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_alloc(64, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(alloc_no_hooks_returns_invalid_state)
-{
+TEST(alloc_no_hooks_returns_invalid_state) {
     void *ptr = NULL;
     asx_runtime_reset();
     ASSERT_EQ(asx_runtime_alloc(64, &ptr), ASX_E_INVALID_STATE);
 }
 
-TEST(alloc_dispatches_to_hook)
-{
+TEST(alloc_dispatches_to_hook) {
     void *ptr = NULL;
 
     asx_runtime_reset();
@@ -301,8 +273,7 @@ TEST(alloc_dispatches_to_hook)
     ASSERT_EQ(asx_runtime_free(ptr), ASX_OK);
 }
 
-TEST(realloc_dispatches_to_hook)
-{
+TEST(realloc_dispatches_to_hook) {
     void *ptr = NULL;
     void *ptr2 = NULL;
 
@@ -317,14 +288,12 @@ TEST(realloc_dispatches_to_hook)
     ASSERT_EQ(asx_runtime_free(ptr2), ASX_OK);
 }
 
-TEST(free_no_hooks_returns_invalid_state)
-{
+TEST(free_no_hooks_returns_invalid_state) {
     asx_runtime_reset();
     ASSERT_EQ(asx_runtime_free(NULL), ASX_E_INVALID_STATE);
 }
 
-TEST(free_dispatches_to_hook)
-{
+TEST(free_dispatches_to_hook) {
     void *ptr = NULL;
 
     asx_runtime_reset();
@@ -339,22 +308,19 @@ TEST(free_dispatches_to_hook)
 /* Clock dispatch                                                      */
 /* ------------------------------------------------------------------ */
 
-TEST(now_ns_null_returns_error)
-{
+TEST(now_ns_null_returns_error) {
     asx_runtime_reset();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_now_ns(NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(now_ns_no_hooks_returns_invalid_state)
-{
+TEST(now_ns_no_hooks_returns_invalid_state) {
     asx_time t;
     asx_runtime_reset();
     ASSERT_EQ(asx_runtime_now_ns(&t), ASX_E_INVALID_STATE);
 }
 
-TEST(now_ns_dispatches_to_logical_clock)
-{
+TEST(now_ns_dispatches_to_logical_clock) {
     asx_time t = 0;
 
     asx_runtime_reset();
@@ -371,22 +337,19 @@ TEST(now_ns_dispatches_to_logical_clock)
 /* Entropy dispatch                                                    */
 /* ------------------------------------------------------------------ */
 
-TEST(random_u64_null_returns_error)
-{
+TEST(random_u64_null_returns_error) {
     asx_runtime_reset();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_random_u64(NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(random_u64_no_hooks_returns_invalid_state)
-{
+TEST(random_u64_no_hooks_returns_invalid_state) {
     uint64_t v;
     asx_runtime_reset();
     ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_INVALID_STATE);
 }
 
-TEST(random_u64_dispatches_to_hook)
-{
+TEST(random_u64_dispatches_to_hook) {
     uint64_t v = 0;
 
     asx_runtime_reset();
@@ -402,22 +365,19 @@ TEST(random_u64_dispatches_to_hook)
 /* Reactor dispatch                                                    */
 /* ------------------------------------------------------------------ */
 
-TEST(reactor_wait_null_returns_error)
-{
+TEST(reactor_wait_null_returns_error) {
     asx_runtime_reset();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_reactor_wait(100, NULL, 0), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(reactor_wait_no_hooks_returns_invalid_state)
-{
+TEST(reactor_wait_no_hooks_returns_invalid_state) {
     uint32_t ready = 0;
     asx_runtime_reset();
     ASSERT_EQ(asx_runtime_reactor_wait(100, &ready, 0), ASX_E_INVALID_STATE);
 }
 
-TEST(reactor_wait_dispatches_to_ghost_hook)
-{
+TEST(reactor_wait_dispatches_to_ghost_hook) {
     uint32_t ready = 0;
 
     asx_runtime_reset();
@@ -433,14 +393,12 @@ TEST(reactor_wait_dispatches_to_ghost_hook)
 /* Log dispatch                                                        */
 /* ------------------------------------------------------------------ */
 
-TEST(log_write_no_hooks_returns_invalid_state)
-{
+TEST(log_write_no_hooks_returns_invalid_state) {
     asx_runtime_reset();
     ASSERT_EQ(asx_runtime_log_write(1, "test"), ASX_E_INVALID_STATE);
 }
 
-TEST(log_write_dispatches_to_hook)
-{
+TEST(log_write_dispatches_to_hook) {
     asx_runtime_reset();
     reset_counters();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
@@ -451,8 +409,7 @@ TEST(log_write_dispatches_to_hook)
     ASSERT_EQ(strcmp(g_log_buf, "hello world"), 0);
 }
 
-TEST(log_write_no_sink_is_silent)
-{
+TEST(log_write_no_sink_is_silent) {
     asx_runtime_hooks hooks;
 
     asx_runtime_reset();
@@ -468,21 +425,16 @@ TEST(log_write_no_sink_is_silent)
 /* Fault injection                                                     */
 /* ------------------------------------------------------------------ */
 
-TEST(fault_inject_null_returns_error)
-{
-    ASSERT_EQ(asx_fault_inject(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(fault_inject_null_returns_error) { ASSERT_EQ(asx_fault_inject(NULL), ASX_E_INVALID_ARGUMENT); }
 
-TEST(fault_inject_none_kind_returns_error)
-{
+TEST(fault_inject_none_kind_returns_error) {
     asx_fault_injection fi;
     memset(&fi, 0, sizeof(fi));
     fi.kind = ASX_FAULT_NONE;
     ASSERT_EQ(asx_fault_inject(&fi), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(fault_inject_and_count)
-{
+TEST(fault_inject_and_count) {
     asx_fault_injection fi;
 
     asx_runtime_reset();
@@ -499,8 +451,7 @@ TEST(fault_inject_and_count)
     ASSERT_EQ(asx_fault_injection_count(), 0u);
 }
 
-TEST(fault_inject_exhaustion)
-{
+TEST(fault_inject_exhaustion) {
     asx_fault_injection fi;
     uint32_t i;
 
@@ -509,17 +460,14 @@ TEST(fault_inject_exhaustion)
     memset(&fi, 0, sizeof(fi));
     fi.kind = ASX_FAULT_ALLOC_FAIL;
     /* Fill all 8 slots */
-    for (i = 0; i < 8; i++) {
-        ASSERT_EQ(asx_fault_inject(&fi), ASX_OK);
-    }
+    for (i = 0; i < 8; i++) { ASSERT_EQ(asx_fault_inject(&fi), ASX_OK); }
     /* 9th should fail */
     ASSERT_EQ(asx_fault_inject(&fi), ASX_E_RESOURCE_EXHAUSTED);
 
     ASSERT_EQ(asx_fault_clear(), ASX_OK);
 }
 
-TEST(fault_alloc_fail_triggers)
-{
+TEST(fault_alloc_fail_triggers) {
     asx_fault_injection fi;
     void *ptr = NULL;
 
@@ -539,8 +487,7 @@ TEST(fault_alloc_fail_triggers)
     ASSERT_EQ(asx_fault_clear(), ASX_OK);
 }
 
-TEST(fault_clock_skew_adds_offset)
-{
+TEST(fault_clock_skew_adds_offset) {
     asx_fault_injection fi;
     asx_time t = 0;
 
@@ -560,8 +507,7 @@ TEST(fault_clock_skew_adds_offset)
     ASSERT_EQ(asx_fault_clear(), ASX_OK);
 }
 
-TEST(fault_entropy_const_overrides)
-{
+TEST(fault_entropy_const_overrides) {
     asx_fault_injection fi;
     uint64_t v = 0;
 
@@ -584,14 +530,12 @@ TEST(fault_entropy_const_overrides)
 /* Config init                                                         */
 /* ------------------------------------------------------------------ */
 
-TEST(config_init_null_safe)
-{
+TEST(config_init_null_safe) {
     /* Should not crash */
     asx_runtime_config_init(NULL);
 }
 
-TEST(config_init_sets_defaults)
-{
+TEST(config_init_sets_defaults) {
     asx_runtime_config cfg;
     memset(&cfg, 0xFF, sizeof(cfg));
 
@@ -609,16 +553,12 @@ TEST(config_init_sets_defaults)
 /* Safety profile queries                                              */
 /* ------------------------------------------------------------------ */
 
-TEST(safety_profile_active_returns_valid)
-{
+TEST(safety_profile_active_returns_valid) {
     asx_safety_profile p = asx_safety_profile_active();
-    ASSERT_TRUE(p == ASX_SAFETY_DEBUG ||
-                p == ASX_SAFETY_HARDENED ||
-                p == ASX_SAFETY_RELEASE);
+    ASSERT_TRUE(p == ASX_SAFETY_DEBUG || p == ASX_SAFETY_HARDENED || p == ASX_SAFETY_RELEASE);
 }
 
-TEST(safety_profile_str_returns_known_strings)
-{
+TEST(safety_profile_str_returns_known_strings) {
     ASSERT_EQ(strcmp(asx_safety_profile_str(ASX_SAFETY_DEBUG), "debug"), 0);
     ASSERT_EQ(strcmp(asx_safety_profile_str(ASX_SAFETY_HARDENED), "hardened"), 0);
     ASSERT_EQ(strcmp(asx_safety_profile_str(ASX_SAFETY_RELEASE), "release"), 0);
@@ -628,18 +568,13 @@ TEST(safety_profile_str_returns_known_strings)
 /* Containment policy                                                  */
 /* ------------------------------------------------------------------ */
 
-TEST(containment_policy_for_profile_maps_correctly)
-{
-    ASSERT_EQ(asx_containment_policy_for_profile(ASX_SAFETY_DEBUG),
-              ASX_CONTAIN_FAIL_FAST);
-    ASSERT_EQ(asx_containment_policy_for_profile(ASX_SAFETY_HARDENED),
-              ASX_CONTAIN_POISON_REGION);
-    ASSERT_EQ(asx_containment_policy_for_profile(ASX_SAFETY_RELEASE),
-              ASX_CONTAIN_ERROR_ONLY);
+TEST(containment_policy_for_profile_maps_correctly) {
+    ASSERT_EQ(asx_containment_policy_for_profile(ASX_SAFETY_DEBUG), ASX_CONTAIN_FAIL_FAST);
+    ASSERT_EQ(asx_containment_policy_for_profile(ASX_SAFETY_HARDENED), ASX_CONTAIN_POISON_REGION);
+    ASSERT_EQ(asx_containment_policy_for_profile(ASX_SAFETY_RELEASE), ASX_CONTAIN_ERROR_ONLY);
 }
 
-TEST(containment_policy_active_matches_profile)
-{
+TEST(containment_policy_active_matches_profile) {
     asx_safety_profile p = asx_safety_profile_active();
     asx_containment_policy expected = asx_containment_policy_for_profile(p);
     ASSERT_EQ(asx_containment_policy_active(), expected);
@@ -649,8 +584,7 @@ TEST(containment_policy_active_matches_profile)
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_hooks ===\n");
 
     /* --- Run "no hooks installed" tests FIRST, before any hook install --- */
@@ -679,43 +613,63 @@ int main(void)
 
     /* Hook install/retrieval */
     RUN_TEST(set_hooks_null_returns_error);
-    asx_runtime_reset(); RUN_TEST(set_hooks_installs_and_get_retrieves);
+    asx_runtime_reset();
+    RUN_TEST(set_hooks_installs_and_get_retrieves);
 
     /* Allocator seal */
-    asx_runtime_reset(); RUN_TEST(seal_then_alloc_returns_sealed);
-    asx_runtime_reset(); RUN_TEST(seal_then_realloc_returns_sealed);
-    asx_runtime_reset(); RUN_TEST(double_seal_returns_invalid_state);
+    asx_runtime_reset();
+    RUN_TEST(seal_then_alloc_returns_sealed);
+    asx_runtime_reset();
+    RUN_TEST(seal_then_realloc_returns_sealed);
+    asx_runtime_reset();
+    RUN_TEST(double_seal_returns_invalid_state);
 
     /* Allocator dispatch */
-    asx_runtime_reset(); RUN_TEST(alloc_null_out_returns_error);
-    asx_runtime_reset(); RUN_TEST(alloc_dispatches_to_hook);
-    asx_runtime_reset(); RUN_TEST(realloc_dispatches_to_hook);
-    asx_runtime_reset(); RUN_TEST(free_dispatches_to_hook);
+    asx_runtime_reset();
+    RUN_TEST(alloc_null_out_returns_error);
+    asx_runtime_reset();
+    RUN_TEST(alloc_dispatches_to_hook);
+    asx_runtime_reset();
+    RUN_TEST(realloc_dispatches_to_hook);
+    asx_runtime_reset();
+    RUN_TEST(free_dispatches_to_hook);
 
     /* Clock dispatch */
-    asx_runtime_reset(); RUN_TEST(now_ns_null_returns_error);
-    asx_runtime_reset(); RUN_TEST(now_ns_dispatches_to_logical_clock);
+    asx_runtime_reset();
+    RUN_TEST(now_ns_null_returns_error);
+    asx_runtime_reset();
+    RUN_TEST(now_ns_dispatches_to_logical_clock);
 
     /* Entropy dispatch */
-    asx_runtime_reset(); RUN_TEST(random_u64_null_returns_error);
-    asx_runtime_reset(); RUN_TEST(random_u64_dispatches_to_hook);
+    asx_runtime_reset();
+    RUN_TEST(random_u64_null_returns_error);
+    asx_runtime_reset();
+    RUN_TEST(random_u64_dispatches_to_hook);
 
     /* Reactor dispatch */
-    asx_runtime_reset(); RUN_TEST(reactor_wait_null_returns_error);
-    asx_runtime_reset(); RUN_TEST(reactor_wait_dispatches_to_ghost_hook);
+    asx_runtime_reset();
+    RUN_TEST(reactor_wait_null_returns_error);
+    asx_runtime_reset();
+    RUN_TEST(reactor_wait_dispatches_to_ghost_hook);
 
     /* Log dispatch */
-    asx_runtime_reset(); RUN_TEST(log_write_dispatches_to_hook);
-    asx_runtime_reset(); RUN_TEST(log_write_no_sink_is_silent);
+    asx_runtime_reset();
+    RUN_TEST(log_write_dispatches_to_hook);
+    asx_runtime_reset();
+    RUN_TEST(log_write_no_sink_is_silent);
 
     /* Fault injection */
     RUN_TEST(fault_inject_null_returns_error);
     RUN_TEST(fault_inject_none_kind_returns_error);
-    asx_runtime_reset(); RUN_TEST(fault_inject_and_count);
+    asx_runtime_reset();
+    RUN_TEST(fault_inject_and_count);
     RUN_TEST(fault_inject_exhaustion);
-    asx_runtime_reset(); RUN_TEST(fault_alloc_fail_triggers);
-    asx_runtime_reset(); RUN_TEST(fault_clock_skew_adds_offset);
-    asx_runtime_reset(); RUN_TEST(fault_entropy_const_overrides);
+    asx_runtime_reset();
+    RUN_TEST(fault_alloc_fail_triggers);
+    asx_runtime_reset();
+    RUN_TEST(fault_clock_skew_adds_offset);
+    asx_runtime_reset();
+    RUN_TEST(fault_entropy_const_overrides);
 
     /* Config init */
     RUN_TEST(config_init_null_safe);

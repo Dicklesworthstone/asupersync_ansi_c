@@ -39,9 +39,9 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 
 typedef enum {
-    ASX_VTIME_ANOMALY_JITTER  = 0, /* Additive offset (±param ns) */
-    ASX_VTIME_ANOMALY_STALL   = 1, /* Hold time constant for N queries */
-    ASX_VTIME_ANOMALY_JUMP    = 2  /* Forward leap of param ns */
+    ASX_VTIME_ANOMALY_JITTER = 0, /* Additive offset (±param ns) */
+    ASX_VTIME_ANOMALY_STALL = 1,  /* Hold time constant for N queries */
+    ASX_VTIME_ANOMALY_JUMP = 2    /* Forward leap of param ns */
 } asx_vtime_anomaly_kind;
 
 /* ------------------------------------------------------------------ */
@@ -52,9 +52,9 @@ typedef enum {
 
 typedef struct {
     asx_vtime_anomaly_kind kind;
-    uint32_t trigger_query;   /* Fire at this query index (0-based) */
-    int64_t  param;           /* Kind-dependent: offset/hold-count/leap */
-    uint32_t duration;        /* STALL: number of queries to hold */
+    uint32_t trigger_query; /* Fire at this query index (0-based) */
+    int64_t param;          /* Kind-dependent: offset/hold-count/leap */
+    uint32_t duration;      /* STALL: number of queries to hold */
 } asx_vtime_anomaly;
 
 /* ------------------------------------------------------------------ */
@@ -62,17 +62,17 @@ typedef struct {
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    asx_time  base_time;       /* Starting time (ns) */
-    asx_time  current_time;    /* Current virtual time */
-    uint64_t  tick_ns;         /* Nanoseconds per query advance */
-    uint32_t  query_count;     /* Total queries served */
+    asx_time base_time;    /* Starting time (ns) */
+    asx_time current_time; /* Current virtual time */
+    uint64_t tick_ns;      /* Nanoseconds per query advance */
+    uint32_t query_count;  /* Total queries served */
 
     /* Anomaly schedule */
     asx_vtime_anomaly anomalies[ASX_VTIME_MAX_ANOMALIES];
     uint32_t anomaly_count;
 
     /* Stall tracking */
-    uint32_t stall_remaining;  /* Queries remaining in current stall */
+    uint32_t stall_remaining; /* Queries remaining in current stall */
 } asx_vtime_state;
 
 /* ------------------------------------------------------------------ */
@@ -82,9 +82,7 @@ typedef struct {
 /* Initialize virtual-time state.
  * base_ns: starting time in nanoseconds
  * tick_ns: time advance per query (0 = no auto-advance) */
-ASX_API void asx_vtime_init(asx_vtime_state *vt,
-                             asx_time base_ns,
-                             uint64_t tick_ns);
+ASX_API void asx_vtime_init(asx_vtime_state *vt, asx_time base_ns, uint64_t tick_ns);
 
 /* Reset to initial state (preserves anomaly schedule). */
 ASX_API void asx_vtime_reset(asx_vtime_state *vt);
@@ -92,22 +90,19 @@ ASX_API void asx_vtime_reset(asx_vtime_state *vt);
 /* Add a jitter anomaly: at query trigger_query, offset time by delta_ns.
  * delta_ns can be negative (clock reversal simulation).
  * Returns ASX_OK or ASX_E_RESOURCE_EXHAUSTED if schedule is full. */
-ASX_API asx_status asx_vtime_add_jitter(asx_vtime_state *vt,
-                                         uint32_t trigger_query,
-                                         int64_t delta_ns);
+ASX_API asx_status asx_vtime_add_jitter(asx_vtime_state *vt, uint32_t trigger_query,
+                                        int64_t delta_ns);
 
 /* Add a stall anomaly: at query trigger_query, hold time constant
  * for hold_queries queries.
  * Returns ASX_OK or ASX_E_RESOURCE_EXHAUSTED if schedule is full. */
-ASX_API asx_status asx_vtime_add_stall(asx_vtime_state *vt,
-                                        uint32_t trigger_query,
-                                        uint32_t hold_queries);
+ASX_API asx_status asx_vtime_add_stall(asx_vtime_state *vt, uint32_t trigger_query,
+                                       uint32_t hold_queries);
 
 /* Add a jump anomaly: at query trigger_query, leap forward by jump_ns.
  * Returns ASX_OK or ASX_E_RESOURCE_EXHAUSTED if schedule is full. */
-ASX_API asx_status asx_vtime_add_jump(asx_vtime_state *vt,
-                                       uint32_t trigger_query,
-                                       uint64_t jump_ns);
+ASX_API asx_status asx_vtime_add_jump(asx_vtime_state *vt, uint32_t trigger_query,
+                                      uint64_t jump_ns);
 
 /* Query virtual time (intended as logical_now_ns_fn callback).
  * Advances time by tick_ns and applies any matching anomalies.

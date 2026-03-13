@@ -5,11 +5,11 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/runtime/diagnostic.h>
-#include <asx/runtime/runtime.h>
-#include <asx/runtime/rt.h>
-#include <asx/runtime/trace.h>
 #include <asx/core/budget.h>
+#include <asx/runtime/diagnostic.h>
+#include <asx/runtime/rt.h>
+#include <asx/runtime/runtime.h>
+#include <asx/runtime/trace.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -19,27 +19,34 @@
 
 static int g_pass, g_fail;
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
-#define ASSERT(cond, msg) do {                                           \
-    if (!(cond)) {                                                       \
-        printf("  FAIL: %s (line %d)\n", msg, __LINE__);                 \
-        g_fail++; return;                                                \
-    }                                                                    \
-} while (0)
+#define ASSERT(cond, msg)                                                                          \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("  FAIL: %s (line %d)\n", msg, __LINE__);                                       \
+            g_fail++;                                                                              \
+            return;                                                                                \
+        }                                                                                          \
+    } while (0)
 
-#define RUN(fn) do {                                                     \
-    printf("  " #fn "...\n");                                            \
-    asx_runtime_reset();                                                 \
-    fn(); g_pass++;                                                      \
-} while (0)
+#define RUN(fn)                                                                                    \
+    do {                                                                                           \
+        printf("  " #fn "...\n");                                                                  \
+        asx_runtime_reset();                                                                       \
+        fn();                                                                                      \
+        g_pass++;                                                                                  \
+    } while (0)
 
 /* ================================================================== */
 /* Diagnostic context tests                                           */
 /* ================================================================== */
 
-static void test_diag_push_pop(void)
-{
+static void test_diag_push_pop(void) {
     asx_diagnostic_ctx ctx;
     const asx_diagnostic_ctx *cur;
 
@@ -60,8 +67,7 @@ static void test_diag_push_pop(void)
     ASSERT(asx_diagnostic_current() == NULL, "null after pop");
 }
 
-static void test_diag_nesting(void)
-{
+static void test_diag_nesting(void) {
     asx_diagnostic_ctx outer, inner;
     const asx_diagnostic_ctx *cur;
 
@@ -88,8 +94,7 @@ static void test_diag_nesting(void)
     ASSERT(asx_diagnostic_current() == NULL, "empty after all pops");
 }
 
-static void test_diag_stack_exhaustion(void)
-{
+static void test_diag_stack_exhaustion(void) {
     asx_diagnostic_ctx ctx;
     uint32_t i;
     asx_status st;
@@ -107,26 +112,21 @@ static void test_diag_stack_exhaustion(void)
     ASSERT(st == ASX_E_RESOURCE_EXHAUSTED, "push when full");
 
     /* Pop all */
-    for (i = 0; i < 8; i++) {
-        asx_diagnostic_pop();
-    }
+    for (i = 0; i < 8; i++) { asx_diagnostic_pop(); }
     ASSERT(asx_diagnostic_current() == NULL, "empty after pop all");
 }
 
-static void test_diag_null_arg(void)
-{
+static void test_diag_null_arg(void) {
     ASSERT(asx_diagnostic_push(NULL) == ASX_E_INVALID_ARGUMENT, "null push");
 }
 
-static void test_diag_pop_empty(void)
-{
+static void test_diag_pop_empty(void) {
     /* Pop on empty stack should not crash */
     asx_diagnostic_pop();
     ASSERT(asx_diagnostic_current() == NULL, "still null");
 }
 
-static void test_diag_reset(void)
-{
+static void test_diag_reset(void) {
     asx_diagnostic_ctx ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.operation = "pre_reset";
@@ -142,8 +142,7 @@ static void test_diag_reset(void)
 /* Runtime inspection tests                                           */
 /* ================================================================== */
 
-static void test_inspect_initialized(void)
-{
+static void test_inspect_initialized(void) {
     asx_runtime rt;
     asx_inspection_report rpt;
 
@@ -160,8 +159,7 @@ static void test_inspect_initialized(void)
     asx_runtime_shutdown(&rt);
 }
 
-static void test_inspect_with_entities(void)
-{
+static void test_inspect_with_entities(void) {
     asx_runtime rt;
     asx_inspection_report rpt;
     asx_region_id region;
@@ -177,8 +175,7 @@ static void test_inspect_with_entities(void)
     asx_runtime_shutdown(&rt);
 }
 
-static void test_inspect_null_args(void)
-{
+static void test_inspect_null_args(void) {
     asx_runtime rt;
     asx_inspection_report rpt;
 
@@ -186,8 +183,7 @@ static void test_inspect_null_args(void)
     ASSERT(asx_inspect(&rt, NULL) == ASX_E_INVALID_ARGUMENT, "null out");
 }
 
-static void test_inspect_uninitialized(void)
-{
+static void test_inspect_uninitialized(void) {
     asx_runtime rt;
     asx_inspection_report rpt;
 
@@ -200,8 +196,7 @@ static void test_inspect_uninitialized(void)
 /* Evidence sink tests                                                */
 /* ================================================================== */
 
-static void test_evidence_init(void)
-{
+static void test_evidence_init(void) {
     asx_evidence_sink sink;
     asx_evidence_sink_init(&sink);
 
@@ -212,17 +207,13 @@ static void test_evidence_init(void)
     ASSERT(asx_evidence_verdict(&sink) == ASX_EVIDENCE_PASS, "empty verdict pass");
 }
 
-static void test_evidence_record(void)
-{
+static void test_evidence_record(void) {
     asx_evidence_sink sink;
     asx_evidence_sink_init(&sink);
 
-    MUST_OK(asx_evidence_record(&sink, "test:a", ASX_EVIDENCE_PASS,
-                                "all good", 0));
-    MUST_OK(asx_evidence_record(&sink, "test:b", ASX_EVIDENCE_WARN,
-                                "something off", 123));
-    MUST_OK(asx_evidence_record(&sink, "test:c", ASX_EVIDENCE_INFO,
-                                "note", 0));
+    MUST_OK(asx_evidence_record(&sink, "test:a", ASX_EVIDENCE_PASS, "all good", 0));
+    MUST_OK(asx_evidence_record(&sink, "test:b", ASX_EVIDENCE_WARN, "something off", 123));
+    MUST_OK(asx_evidence_record(&sink, "test:c", ASX_EVIDENCE_INFO, "note", 0));
 
     ASSERT(sink.count == 3, "3 entries");
     ASSERT(sink.pass_count == 1, "1 pass");
@@ -238,8 +229,7 @@ static void test_evidence_record(void)
     ASSERT(sink.entries[1].entity_id == 123, "entity b");
 }
 
-static void test_evidence_verdict(void)
-{
+static void test_evidence_verdict(void) {
     asx_evidence_sink sink;
     asx_evidence_sink_init(&sink);
 
@@ -256,8 +246,7 @@ static void test_evidence_verdict(void)
     ASSERT(asx_evidence_verdict(&sink) == ASX_EVIDENCE_FAIL, "fail verdict");
 }
 
-static void test_evidence_exhaustion(void)
-{
+static void test_evidence_exhaustion(void) {
     asx_evidence_sink sink;
     uint32_t i;
     asx_status st;
@@ -273,11 +262,10 @@ static void test_evidence_exhaustion(void)
     ASSERT(st == ASX_E_RESOURCE_EXHAUSTED, "exhausted");
 }
 
-static void test_evidence_null_args(void)
-{
+static void test_evidence_null_args(void) {
     asx_evidence_sink sink;
-    ASSERT(asx_evidence_record(NULL, "a", ASX_EVIDENCE_INFO, "x", 0)
-           == ASX_E_INVALID_ARGUMENT, "null sink");
+    ASSERT(asx_evidence_record(NULL, "a", ASX_EVIDENCE_INFO, "x", 0) == ASX_E_INVALID_ARGUMENT,
+           "null sink");
     ASSERT(asx_evidence_verdict(NULL) == ASX_EVIDENCE_FAIL, "null verdict");
     ASSERT(!asx_evidence_sink_has_room(NULL), "null no room");
 
@@ -287,8 +275,7 @@ static void test_evidence_null_args(void)
     (void)sink;
 }
 
-static void test_evidence_reset(void)
-{
+static void test_evidence_reset(void) {
     asx_evidence_sink sink;
     asx_evidence_sink_init(&sink);
 
@@ -304,8 +291,7 @@ static void test_evidence_reset(void)
 /* Inspect-to-evidence pipeline tests                                 */
 /* ================================================================== */
 
-static void test_inspect_to_evidence_healthy(void)
-{
+static void test_inspect_to_evidence_healthy(void) {
     asx_runtime rt;
     asx_evidence_sink sink;
 
@@ -320,15 +306,13 @@ static void test_inspect_to_evidence_healthy(void)
     ASSERT(asx_evidence_verdict(&sink) == ASX_EVIDENCE_PASS, "healthy verdict");
 
     /* First entry should be runtime check */
-    ASSERT(strcmp(sink.entries[0].source, "inspect:runtime") == 0,
-           "first entry is runtime");
+    ASSERT(strcmp(sink.entries[0].source, "inspect:runtime") == 0, "first entry is runtime");
     ASSERT(sink.entries[0].level == ASX_EVIDENCE_PASS, "runtime passes");
 
     asx_runtime_shutdown(&rt);
 }
 
-static void test_inspect_to_evidence_uninitialized(void)
-{
+static void test_inspect_to_evidence_uninitialized(void) {
     asx_runtime rt;
     asx_evidence_sink sink;
 
@@ -341,23 +325,19 @@ static void test_inspect_to_evidence_uninitialized(void)
     ASSERT(asx_evidence_verdict(&sink) == ASX_EVIDENCE_FAIL, "fail verdict");
 }
 
-static void test_inspect_to_evidence_null_args(void)
-{
+static void test_inspect_to_evidence_null_args(void) {
     asx_runtime rt;
     asx_evidence_sink sink;
 
-    ASSERT(asx_inspect_to_evidence(NULL, &sink) == ASX_E_INVALID_ARGUMENT,
-           "null rt");
-    ASSERT(asx_inspect_to_evidence(&rt, NULL) == ASX_E_INVALID_ARGUMENT,
-           "null sink");
+    ASSERT(asx_inspect_to_evidence(NULL, &sink) == ASX_E_INVALID_ARGUMENT, "null rt");
+    ASSERT(asx_inspect_to_evidence(&rt, NULL) == ASX_E_INVALID_ARGUMENT, "null sink");
 }
 
 /* ================================================================== */
 /* End-to-end: diagnostic context + inspection + evidence             */
 /* ================================================================== */
 
-static void test_e2e_diagnostic_workflow(void)
-{
+static void test_e2e_diagnostic_workflow(void) {
     asx_runtime rt;
     asx_diagnostic_ctx ctx;
     asx_evidence_sink sink;
@@ -395,8 +375,7 @@ static void test_e2e_diagnostic_workflow(void)
 /* Main                                                               */
 /* ================================================================== */
 
-int main(void)
-{
+int main(void) {
     printf("test_diagnostic:\n");
 
     /* Diagnostic context */

@@ -37,7 +37,7 @@ extern "C" {
 
 typedef struct {
     const uint8_t *ptr;
-    uint32_t       len;
+    uint32_t len;
 } asx_buf;
 
 /* Create a buf from a pointer and length. */
@@ -67,7 +67,7 @@ ASX_API int asx_buf_eq(asx_buf a, asx_buf b);
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint8_t  data[ASX_BUF_CAPACITY];
+    uint8_t data[ASX_BUF_CAPACITY];
     uint32_t rd_pos;
     uint32_t wr_pos;
     uint32_t capacity;
@@ -88,9 +88,7 @@ ASX_API void asx_buf_mut_compact(asx_buf_mut *buf);
 
 /* Write bytes into the buffer. Returns ASX_E_RESOURCE_EXHAUSTED if
  * there isn't enough writable space. */
-ASX_API ASX_MUST_USE asx_status asx_buf_mut_put(asx_buf_mut *buf,
-                                                  const void *data,
-                                                  uint32_t len);
+ASX_API ASX_MUST_USE asx_status asx_buf_mut_put(asx_buf_mut *buf, const void *data, uint32_t len);
 
 /* Write a single byte. */
 ASX_API ASX_MUST_USE asx_status asx_buf_mut_put_u8(asx_buf_mut *buf, uint8_t val);
@@ -135,9 +133,7 @@ ASX_API ASX_MUST_USE asx_status asx_buf_mut_get_u64_be(asx_buf_mut *buf, uint64_
 
 /* Copy n bytes from readable region into dest without consuming.
  * Returns ASX_E_INVALID_ARGUMENT if n > remaining. */
-ASX_API ASX_MUST_USE asx_status asx_buf_mut_peek(const asx_buf_mut *buf,
-                                                   void *dest,
-                                                   uint32_t n);
+ASX_API ASX_MUST_USE asx_status asx_buf_mut_peek(const asx_buf_mut *buf, void *dest, uint32_t n);
 
 /* -------------------------------------------------------------------
  * Freeze: convert mutable buffer contents to immutable buf

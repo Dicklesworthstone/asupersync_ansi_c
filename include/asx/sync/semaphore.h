@@ -11,10 +11,10 @@
 #ifndef ASX_SYNC_SEMAPHORE_H
 #define ASX_SYNC_SEMAPHORE_H
 
-#include <asx/asx_export.h>
-#include <asx/asx_status.h>
-#include <asx/asx_ids.h>
 #include <asx/asx_config.h>
+#include <asx/asx_export.h>
+#include <asx/asx_ids.h>
+#include <asx/asx_status.h>
 #include <asx/cx/cx.h>
 
 #ifdef __cplusplus
@@ -58,9 +58,8 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 /* Create a counting semaphore with initial permits. */
-ASX_API ASX_MUST_USE asx_status asx_semaphore_create(
-    uint32_t initial_permits,
-    asx_semaphore_handle *out);
+ASX_API ASX_MUST_USE asx_status asx_semaphore_create(uint32_t initial_permits,
+                                                     asx_semaphore_handle *out);
 
 /* Close a semaphore, waking all waiters with ASX_E_DISCONNECTED. */
 ASX_API asx_status asx_semaphore_close(asx_semaphore_handle handle);
@@ -71,29 +70,24 @@ ASX_API asx_status asx_semaphore_close(asx_semaphore_handle handle);
 
 /* Try to acquire a permit immediately. Returns ASX_OK + permit if
  * available, ASX_E_WOULD_BLOCK if none available. */
-ASX_API asx_status asx_semaphore_try_acquire(
-    asx_semaphore_handle handle,
-    asx_semaphore_permit *out);
+ASX_API asx_status asx_semaphore_try_acquire(asx_semaphore_handle handle,
+                                             asx_semaphore_permit *out);
 
 /* -------------------------------------------------------------------
  * Acquire (async / poll-based)
  * ------------------------------------------------------------------- */
 
 /* Begin async acquire. Must be followed by poll_acquire calls. */
-ASX_API ASX_MUST_USE asx_status asx_semaphore_acquire_begin(
-    asx_semaphore_handle handle,
-    asx_semaphore_waiter *out);
+ASX_API ASX_MUST_USE asx_status asx_semaphore_acquire_begin(asx_semaphore_handle handle,
+                                                            asx_semaphore_waiter *out);
 
 /* Poll for permit. Returns ASX_OK + permit when acquired,
  * ASX_E_PENDING when waiting. */
-ASX_API asx_status asx_semaphore_poll_acquire(
-    asx_semaphore_waiter *waiter,
-    asx_semaphore_permit *out,
-    asx_cx *cx);
+ASX_API asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter,
+                                              asx_semaphore_permit *out, asx_cx *cx);
 
 /* Cancel an async acquire (safe even if already acquired). */
-ASX_API asx_status asx_semaphore_acquire_cancel(
-    asx_semaphore_waiter *waiter);
+ASX_API asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter);
 
 /* -------------------------------------------------------------------
  * Release

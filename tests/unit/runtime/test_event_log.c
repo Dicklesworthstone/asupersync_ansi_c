@@ -5,9 +5,9 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/codec/codec.h>
 #include <asx/runtime/event.h>
 #include <asx/runtime/runtime.h>
-#include <asx/codec/codec.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -140,9 +140,7 @@ TEST(event_kind_str_known) {
     ASSERT_STR_EQ(asx_event_kind_str(ASX_EVENT_DRAIN_END), "drain_end");
 }
 
-TEST(event_kind_str_unknown) {
-    ASSERT_STR_EQ(asx_event_kind_str(ASX_EVENT_KIND_COUNT), "unknown");
-}
+TEST(event_kind_str_unknown) { ASSERT_STR_EQ(asx_event_kind_str(ASX_EVENT_KIND_COUNT), "unknown"); }
 
 /* ------------------------------------------------------------------ */
 /* Replay verification                                                 */
@@ -281,28 +279,45 @@ TEST(runtime_reset_clears_event_log) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== event_log unit tests ===\n");
 
-    asx_runtime_reset(); RUN_TEST(event_log_reset_clears_state);
-    asx_runtime_reset(); RUN_TEST(event_emit_increments_count);
-    asx_runtime_reset(); RUN_TEST(event_emit_returns_sequence);
-    asx_runtime_reset(); RUN_TEST(event_log_get_reads_back);
-    asx_runtime_reset(); RUN_TEST(event_log_get_oob_returns_zero);
-    asx_runtime_reset(); RUN_TEST(event_log_get_null_returns_zero);
-    asx_runtime_reset(); RUN_TEST(hash_chain_is_deterministic);
-    asx_runtime_reset(); RUN_TEST(hash_chain_differs_for_different_events);
-    asx_runtime_reset(); RUN_TEST(event_kind_str_known);
-    asx_runtime_reset(); RUN_TEST(event_kind_str_unknown);
-    asx_runtime_reset(); RUN_TEST(replay_verify_identical);
-    asx_runtime_reset(); RUN_TEST(replay_verify_count_mismatch);
-    asx_runtime_reset(); RUN_TEST(replay_verify_content_mismatch);
-    asx_runtime_reset(); RUN_TEST(replay_verify_null_divergence_returns_error);
-    asx_runtime_reset(); RUN_TEST(event_log_to_json_empty);
-    asx_runtime_reset(); RUN_TEST(event_log_to_json_with_events);
-    asx_runtime_reset(); RUN_TEST(event_log_to_json_null_returns_error);
-    asx_runtime_reset(); RUN_TEST(runtime_reset_clears_event_log);
+    asx_runtime_reset();
+    RUN_TEST(event_log_reset_clears_state);
+    asx_runtime_reset();
+    RUN_TEST(event_emit_increments_count);
+    asx_runtime_reset();
+    RUN_TEST(event_emit_returns_sequence);
+    asx_runtime_reset();
+    RUN_TEST(event_log_get_reads_back);
+    asx_runtime_reset();
+    RUN_TEST(event_log_get_oob_returns_zero);
+    asx_runtime_reset();
+    RUN_TEST(event_log_get_null_returns_zero);
+    asx_runtime_reset();
+    RUN_TEST(hash_chain_is_deterministic);
+    asx_runtime_reset();
+    RUN_TEST(hash_chain_differs_for_different_events);
+    asx_runtime_reset();
+    RUN_TEST(event_kind_str_known);
+    asx_runtime_reset();
+    RUN_TEST(event_kind_str_unknown);
+    asx_runtime_reset();
+    RUN_TEST(replay_verify_identical);
+    asx_runtime_reset();
+    RUN_TEST(replay_verify_count_mismatch);
+    asx_runtime_reset();
+    RUN_TEST(replay_verify_content_mismatch);
+    asx_runtime_reset();
+    RUN_TEST(replay_verify_null_divergence_returns_error);
+    asx_runtime_reset();
+    RUN_TEST(event_log_to_json_empty);
+    asx_runtime_reset();
+    RUN_TEST(event_log_to_json_with_events);
+    asx_runtime_reset();
+    RUN_TEST(event_log_to_json_null_returns_error);
+    asx_runtime_reset();
+    RUN_TEST(runtime_reset_clears_event_log);
 
     TEST_REPORT();
     return test_failures;

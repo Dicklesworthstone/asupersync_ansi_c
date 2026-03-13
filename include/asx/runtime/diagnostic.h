@@ -17,8 +17,8 @@
 #define ASX_RUNTIME_DIAGNOSTIC_H
 
 #include <asx/asx_export.h>
-#include <asx/asx_status.h>
 #include <asx/asx_ids.h>
+#include <asx/asx_status.h>
 #include <asx/runtime/rt.h>
 #include <stdint.h>
 
@@ -31,16 +31,15 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    asx_task_id        task;        /* active task (0 = none) */
-    asx_region_id      region;      /* active region (0 = none) */
-    const char        *operation;   /* current operation name */
-    uint32_t           depth;       /* nesting depth */
+    asx_task_id task;      /* active task (0 = none) */
+    asx_region_id region;  /* active region (0 = none) */
+    const char *operation; /* current operation name */
+    uint32_t depth;        /* nesting depth */
 } asx_diagnostic_ctx;
 
 /* Push a diagnostic context onto the thread-local stack.
  * Returns ASX_OK on success, ASX_E_RESOURCE_EXHAUSTED if stack full. */
-ASX_API ASX_MUST_USE asx_status asx_diagnostic_push(
-    const asx_diagnostic_ctx *ctx);
+ASX_API ASX_MUST_USE asx_status asx_diagnostic_push(const asx_diagnostic_ctx *ctx);
 
 /* Pop the most recent diagnostic context. */
 ASX_API void asx_diagnostic_pop(void);
@@ -60,20 +59,20 @@ ASX_API void asx_diagnostic_reset(void);
 typedef struct {
     uint32_t active_count;
     uint32_t capacity;
-    uint32_t peak_count;      /* high water mark since last reset */
+    uint32_t peak_count; /* high water mark since last reset */
 } asx_subsystem_gauge;
 
 /* Trace subsystem summary */
 typedef struct {
     uint32_t event_count;
     uint32_t capacity;
-    uint64_t digest;          /* FNV-1a trace digest */
+    uint64_t digest; /* FNV-1a trace digest */
 } asx_trace_gauge;
 
 /* Error ledger summary */
 typedef struct {
-    uint32_t total_errors;    /* across all tasks */
-    uint32_t overflowed;      /* 1 if any task ring overflowed */
+    uint32_t total_errors; /* across all tasks */
+    uint32_t overflowed;   /* 1 if any task ring overflowed */
 } asx_error_gauge;
 
 /* Ghost monitor summary (debug builds only) */
@@ -91,15 +90,15 @@ typedef struct {
     asx_subsystem_gauge obligations;
 
     /* Subsystem gauges */
-    asx_trace_gauge     trace;
-    asx_error_gauge     errors;
-    asx_ghost_gauge     ghosts;
+    asx_trace_gauge trace;
+    asx_error_gauge errors;
+    asx_ghost_gauge ghosts;
 
     /* Runtime state */
-    asx_safety_profile     safety_profile;
+    asx_safety_profile safety_profile;
     asx_containment_policy containment_policy;
-    int                    initialized;
-    int                    any_poisoned;     /* 1 if any region poisoned */
+    int initialized;
+    int any_poisoned; /* 1 if any region poisoned */
 
     /* Telemetry */
     uint32_t telemetry_emitted;
@@ -113,8 +112,7 @@ typedef struct {
 
 /* Capture a full runtime inspection report.
  * Reads state from all subsystems without mutation. */
-ASX_API ASX_MUST_USE asx_status asx_inspect(
-    const asx_runtime *rt, asx_inspection_report *out);
+ASX_API ASX_MUST_USE asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out);
 
 /* -------------------------------------------------------------------
  * Evidence sink — structured output for lab/oracle/doctor findings
@@ -130,11 +128,11 @@ typedef enum {
 
 /* Evidence entry */
 typedef struct {
-    const char        *source;     /* emitter name (e.g., "oracle:leak") */
+    const char *source; /* emitter name (e.g., "oracle:leak") */
     asx_evidence_level level;
-    const char        *message;
-    uint64_t           entity_id;  /* related entity (0 = none) */
-    uint32_t           sequence;   /* monotonic within sink */
+    const char *message;
+    uint64_t entity_id; /* related entity (0 = none) */
+    uint32_t sequence;  /* monotonic within sink */
 } asx_evidence_entry;
 
 /* Evidence sink capacity */
@@ -158,17 +156,13 @@ ASX_API void asx_evidence_sink_init(asx_evidence_sink *sink);
 
 /* Record an evidence entry.
  * Returns ASX_OK on success, ASX_E_RESOURCE_EXHAUSTED if full. */
-ASX_API ASX_MUST_USE asx_status asx_evidence_record(
-    asx_evidence_sink *sink,
-    const char *source,
-    asx_evidence_level level,
-    const char *message,
-    uint64_t entity_id);
+ASX_API ASX_MUST_USE asx_status asx_evidence_record(asx_evidence_sink *sink, const char *source,
+                                                    asx_evidence_level level, const char *message,
+                                                    uint64_t entity_id);
 
 /* Query the overall verdict: PASS if no FAILs, WARN if warns but no fails,
  * FAIL if any fails. INFO-only returns PASS. */
-ASX_API asx_evidence_level asx_evidence_verdict(
-    const asx_evidence_sink *sink);
+ASX_API asx_evidence_level asx_evidence_verdict(const asx_evidence_sink *sink);
 
 /* Check if sink has capacity for at least one more entry. */
 ASX_API int asx_evidence_sink_has_room(const asx_evidence_sink *sink);
@@ -182,8 +176,8 @@ ASX_API void asx_evidence_sink_reset(asx_evidence_sink *sink);
 
 /* Run inspection and automatically record findings to an evidence sink.
  * Records one entry per subsystem with appropriate severity. */
-ASX_API ASX_MUST_USE asx_status asx_inspect_to_evidence(
-    const asx_runtime *rt, asx_evidence_sink *sink);
+ASX_API ASX_MUST_USE asx_status asx_inspect_to_evidence(const asx_runtime *rt,
+                                                        asx_evidence_sink *sink);
 
 #ifdef __cplusplus
 }

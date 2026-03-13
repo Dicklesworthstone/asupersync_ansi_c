@@ -19,8 +19,8 @@
  */
 
 #include <asx/asx.h>
-#include <string.h>
 #include <stdint.h>
+#include <string.h>
 
 /* ------------------------------------------------------------------ */
 /* Portable atomic abstraction                                        */
@@ -47,19 +47,12 @@ typedef struct {
 
 #if ASX_LOCKFREE_SINGLE_THREAD
 
-static uint32_t asx_atomic_load(const asx_atomic_u32 *a)
-{
-    return a->value;
-}
+static uint32_t asx_atomic_load(const asx_atomic_u32 *a) { return a->value; }
 
-static void asx_atomic_store(asx_atomic_u32 *a, uint32_t v)
-{
-    a->value = v;
-}
+static void asx_atomic_store(asx_atomic_u32 *a, uint32_t v) { a->value = v; }
 
 /* Returns 1 on success (old value matched expected), 0 on failure */
-static int asx_atomic_cas(asx_atomic_u32 *a, uint32_t expected, uint32_t desired)
-{
+static int asx_atomic_cas(asx_atomic_u32 *a, uint32_t expected, uint32_t desired) {
     if (a->value == expected) {
         a->value = desired;
         return 1;
@@ -86,28 +79,27 @@ static int asx_atomic_cas(asx_atomic_u32 *a, uint32_t expected, uint32_t desired
 
 typedef struct {
     asx_atomic_u32 sequence;
-    uint64_t       value;
+    uint64_t value;
 } asx_lockfree_cell;
 
 typedef struct {
     asx_lockfree_cell cells[LOCKFREE_MAX_CAPACITY];
-    uint32_t          capacity;
-    uint32_t          mask;       /* capacity - 1 (requires power of 2) */
+    uint32_t capacity;
+    uint32_t mask; /* capacity - 1 (requires power of 2) */
 
     /* Producer side: shared among multiple producers (would be atomic) */
-    asx_atomic_u32    enqueue_pos;
+    asx_atomic_u32 enqueue_pos;
 
     /* Consumer side: single consumer only */
-    uint32_t          dequeue_pos;
+    uint32_t dequeue_pos;
 
     /* Metadata */
-    uint32_t          len;        /* tracking for single-threaded equiv */
-    int               alive;
+    uint32_t len; /* tracking for single-threaded equiv */
+    int alive;
 } asx_lockfree_queue;
 
 /* Round up to next power of 2 */
-static uint32_t next_pow2(uint32_t v)
-{
+static uint32_t next_pow2(uint32_t v) {
     v--;
     v |= v >> 1;
     v |= v >> 2;
@@ -118,17 +110,14 @@ static uint32_t next_pow2(uint32_t v)
     return v;
 }
 
-void asx_lockfree_queue_init(asx_lockfree_queue *q, uint32_t capacity)
-{
+void asx_lockfree_queue_init(asx_lockfree_queue *q, uint32_t capacity) {
     uint32_t i;
     uint32_t actual_cap;
 
     if (q == NULL || capacity == 0) return;
 
     actual_cap = next_pow2(capacity);
-    if (actual_cap > LOCKFREE_MAX_CAPACITY) {
-        actual_cap = LOCKFREE_MAX_CAPACITY;
-    }
+    if (actual_cap > LOCKFREE_MAX_CAPACITY) { actual_cap = LOCKFREE_MAX_CAPACITY; }
 
     q->capacity = actual_cap;
     q->mask = actual_cap - 1u;
@@ -144,8 +133,7 @@ void asx_lockfree_queue_init(asx_lockfree_queue *q, uint32_t capacity)
     }
 }
 
-void asx_lockfree_queue_destroy(asx_lockfree_queue *q)
-{
+void asx_lockfree_queue_destroy(asx_lockfree_queue *q) {
     if (q == NULL) return;
     q->alive = 0;
     q->len = 0;
@@ -162,16 +150,13 @@ void asx_lockfree_queue_destroy(asx_lockfree_queue *q)
  * Returns: ASX_OK on success
  *          ASX_E_CHANNEL_FULL if ring is full
  */
-asx_status asx_lockfree_enqueue(asx_lockfree_queue *q, uint64_t value)
-{
+asx_status asx_lockfree_enqueue(asx_lockfree_queue *q, uint64_t value) {
     uint32_t pos;
     asx_lockfree_cell *cell;
     uint32_t seq;
     int32_t diff;
 
-    if (q == NULL || !q->alive) {
-        return ASX_E_INVALID_ARGUMENT;
-    }
+    if (q == NULL || !q->alive) { return ASX_E_INVALID_ARGUMENT; }
 
     /* In the real multi-threaded version this is a CAS loop */
     pos = asx_atomic_load(&q->enqueue_pos);
@@ -210,18 +195,13 @@ asx_status asx_lockfree_enqueue(asx_lockfree_queue *q, uint64_t value)
  * Returns: ASX_OK on success
  *          ASX_E_WOULD_BLOCK if queue is empty
  */
-asx_status asx_lockfree_dequeue(asx_lockfree_queue *q, uint64_t *out_value)
-{
+asx_status asx_lockfree_dequeue(asx_lockfree_queue *q, uint64_t *out_value) {
     asx_lockfree_cell *cell;
     uint32_t seq;
     int32_t diff;
 
-    if (q == NULL || out_value == NULL) {
-        return ASX_E_INVALID_ARGUMENT;
-    }
-    if (!q->alive) {
-        return ASX_E_DISCONNECTED;
-    }
+    if (q == NULL || out_value == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (!q->alive) { return ASX_E_DISCONNECTED; }
 
     cell = &q->cells[q->dequeue_pos & q->mask];
     seq = asx_atomic_load(&cell->sequence);
@@ -242,15 +222,13 @@ asx_status asx_lockfree_dequeue(asx_lockfree_queue *q, uint64_t *out_value)
 }
 
 /* Query: current length (single-threaded only — not meaningful under contention) */
-uint32_t asx_lockfree_queue_len(const asx_lockfree_queue *q)
-{
+uint32_t asx_lockfree_queue_len(const asx_lockfree_queue *q) {
     if (q == NULL) return 0;
     return q->len;
 }
 
 /* Query: is queue full? */
-int asx_lockfree_queue_is_full(const asx_lockfree_queue *q)
-{
+int asx_lockfree_queue_is_full(const asx_lockfree_queue *q) {
     if (q == NULL) return 1;
     return q->len >= q->capacity;
 }

@@ -14,17 +14,16 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "runtime/runtime_internal.h"
 #include "test_harness.h"
 #include <asx/asx.h>
-#include "runtime/runtime_internal.h"
 
 /* -------------------------------------------------------------------
  * Test poll functions
  * ------------------------------------------------------------------- */
 
 /* Immediately completes (no-op task) */
-static asx_status noop_poll(void *user_data, asx_task_id self)
-{
+static asx_status noop_poll(void *user_data, asx_task_id self) {
     (void)user_data;
     (void)self;
     return ASX_OK;
@@ -35,8 +34,7 @@ typedef struct {
     int remaining;
 } countdown_ctx;
 
-static asx_status countdown_poll(void *user_data, asx_task_id self)
-{
+static asx_status countdown_poll(void *user_data, asx_task_id self) {
     countdown_ctx *ctx = (countdown_ctx *)user_data;
     (void)self;
     if (ctx->remaining > 0) {
@@ -47,8 +45,7 @@ static asx_status countdown_poll(void *user_data, asx_task_id self)
 }
 
 /* Always fails */
-static asx_status failing_poll(void *user_data, asx_task_id self)
-{
+static asx_status failing_poll(void *user_data, asx_task_id self) {
     (void)user_data;
     (void)self;
     return ASX_E_INVALID_STATE;
@@ -58,8 +55,7 @@ static asx_status failing_poll(void *user_data, asx_task_id self)
  * Tests
  * ------------------------------------------------------------------- */
 
-TEST(region_open_close)
-{
+TEST(region_open_close) {
     asx_region_id rid;
     asx_region_state state;
     asx_status st;
@@ -81,8 +77,7 @@ TEST(region_open_close)
     ASSERT_EQ(state, ASX_REGION_CLOSING);
 }
 
-TEST(task_spawn_in_open_region)
-{
+TEST(task_spawn_in_open_region) {
     asx_region_id rid;
     asx_task_id tid;
     asx_task_state tstate;
@@ -101,8 +96,7 @@ TEST(task_spawn_in_open_region)
     ASSERT_EQ(tstate, ASX_TASK_CREATED);
 }
 
-TEST(noop_task_scheduler_run)
-{
+TEST(noop_task_scheduler_run) {
     asx_region_id rid;
     asx_task_id tid;
     asx_task_state tstate;
@@ -131,8 +125,7 @@ TEST(noop_task_scheduler_run)
     ASSERT_EQ(asx_outcome_severity_of(&outcome), ASX_OUTCOME_OK);
 }
 
-TEST(countdown_task_multiple_polls)
-{
+TEST(countdown_task_multiple_polls) {
     asx_region_id rid;
     asx_task_id tid;
     asx_task_state tstate;
@@ -140,7 +133,7 @@ TEST(countdown_task_multiple_polls)
     asx_status st;
     countdown_ctx ctx;
 
-    ctx.remaining = 3;  /* needs 4 polls total (3 pending + 1 ok) */
+    ctx.remaining = 3; /* needs 4 polls total (3 pending + 1 ok) */
 
     st = asx_region_open(&rid);
     ASSERT_EQ(st, ASX_OK);
@@ -159,8 +152,7 @@ TEST(countdown_task_multiple_polls)
     ASSERT_EQ(ctx.remaining, 0);
 }
 
-TEST(failing_task_outcome_err)
-{
+TEST(failing_task_outcome_err) {
     asx_region_id rid;
     asx_task_id tid;
     asx_outcome outcome;
@@ -188,8 +180,7 @@ TEST(failing_task_outcome_err)
     ASSERT_EQ(asx_outcome_severity_of(&outcome), ASX_OUTCOME_ERR);
 }
 
-TEST(budget_exhaustion_stops_scheduler)
-{
+TEST(budget_exhaustion_stops_scheduler) {
     asx_region_id rid;
     asx_task_id tid;
     asx_task_state tstate;
@@ -218,8 +209,7 @@ TEST(budget_exhaustion_stops_scheduler)
     ASSERT_NE(tstate, ASX_TASK_COMPLETED);
 }
 
-TEST(region_drain_full_lifecycle)
-{
+TEST(region_drain_full_lifecycle) {
     asx_region_id rid;
     asx_task_id tid;
     asx_region_state rstate;
@@ -252,8 +242,7 @@ TEST(region_drain_full_lifecycle)
     ASSERT_EQ(tstate, ASX_TASK_COMPLETED);
 }
 
-TEST(region_drain_propagates_budget_exhaustion)
-{
+TEST(region_drain_propagates_budget_exhaustion) {
     asx_region_id rid;
     asx_task_id tid;
     asx_budget budget;
@@ -273,8 +262,7 @@ TEST(region_drain_propagates_budget_exhaustion)
     ASSERT_EQ(st, ASX_E_POLL_BUDGET_EXHAUSTED);
 }
 
-TEST(region_drain_blocks_unresolved_obligations)
-{
+TEST(region_drain_blocks_unresolved_obligations) {
     asx_region_id rid;
     asx_obligation_id oid;
     asx_region_state rstate;
@@ -302,8 +290,7 @@ TEST(region_drain_blocks_unresolved_obligations)
     ASSERT_EQ(rstate, ASX_REGION_CLOSED);
 }
 
-TEST(quiescence_after_drain)
-{
+TEST(quiescence_after_drain) {
     asx_region_id rid;
     asx_task_id tid;
     asx_budget budget;
@@ -324,8 +311,7 @@ TEST(quiescence_after_drain)
     ASSERT_EQ(st, ASX_OK);
 }
 
-TEST(quiescence_fails_before_close)
-{
+TEST(quiescence_fails_before_close) {
     asx_region_id rid;
     asx_status st;
 
@@ -337,8 +323,7 @@ TEST(quiescence_fails_before_close)
     ASSERT_EQ(st, ASX_E_QUIESCENCE_NOT_REACHED);
 }
 
-TEST(spawn_rejected_after_close)
-{
+TEST(spawn_rejected_after_close) {
     asx_region_id rid;
     asx_task_id tid;
     asx_budget budget;
@@ -356,8 +341,7 @@ TEST(spawn_rejected_after_close)
     ASSERT_EQ(st, ASX_E_REGION_NOT_OPEN);
 }
 
-TEST(multiple_tasks_in_region)
-{
+TEST(multiple_tasks_in_region) {
     asx_region_id rid;
     asx_task_id tid1, tid2, tid3;
     asx_task_state ts1, ts2, ts3;
@@ -416,22 +400,17 @@ static int g_cleanup_called;
 static int g_cleanup_order[4];
 static int g_cleanup_idx;
 
-static void cleanup_set_flag(void *user_data)
-{
+static void cleanup_set_flag(void *user_data) {
     (void)user_data;
     g_cleanup_called = 1;
 }
 
-static void cleanup_record_order(void *user_data)
-{
+static void cleanup_record_order(void *user_data) {
     int id = *(int *)user_data;
-    if (g_cleanup_idx < 4) {
-        g_cleanup_order[g_cleanup_idx++] = id;
-    }
+    if (g_cleanup_idx < 4) { g_cleanup_order[g_cleanup_idx++] = id; }
 }
 
-TEST(region_drain_calls_cleanup)
-{
+TEST(region_drain_calls_cleanup) {
     asx_region_id rid;
     asx_region_slot *r;
     asx_cleanup_handle ch;
@@ -455,8 +434,7 @@ TEST(region_drain_calls_cleanup)
     ASSERT_EQ(g_cleanup_called, 1);
 }
 
-TEST(region_drain_cleanup_lifo_order)
-{
+TEST(region_drain_cleanup_lifo_order) {
     asx_region_id rid;
     asx_region_slot *r;
     asx_cleanup_handle ch;
@@ -491,25 +469,39 @@ TEST(region_drain_cleanup_lifo_order)
  * Main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== skeleton_test (walking skeleton e2e lifecycle) ===\n");
 
-    asx_runtime_reset(); RUN_TEST(region_open_close);
-    asx_runtime_reset(); RUN_TEST(task_spawn_in_open_region);
-    asx_runtime_reset(); RUN_TEST(noop_task_scheduler_run);
-    asx_runtime_reset(); RUN_TEST(countdown_task_multiple_polls);
-    asx_runtime_reset(); RUN_TEST(failing_task_outcome_err);
-    asx_runtime_reset(); RUN_TEST(budget_exhaustion_stops_scheduler);
-    asx_runtime_reset(); RUN_TEST(region_drain_full_lifecycle);
-    asx_runtime_reset(); RUN_TEST(region_drain_propagates_budget_exhaustion);
-    asx_runtime_reset(); RUN_TEST(region_drain_blocks_unresolved_obligations);
-    asx_runtime_reset(); RUN_TEST(quiescence_after_drain);
-    asx_runtime_reset(); RUN_TEST(quiescence_fails_before_close);
-    asx_runtime_reset(); RUN_TEST(spawn_rejected_after_close);
-    asx_runtime_reset(); RUN_TEST(multiple_tasks_in_region);
-    asx_runtime_reset(); RUN_TEST(region_drain_calls_cleanup);
-    asx_runtime_reset(); RUN_TEST(region_drain_cleanup_lifo_order);
+    asx_runtime_reset();
+    RUN_TEST(region_open_close);
+    asx_runtime_reset();
+    RUN_TEST(task_spawn_in_open_region);
+    asx_runtime_reset();
+    RUN_TEST(noop_task_scheduler_run);
+    asx_runtime_reset();
+    RUN_TEST(countdown_task_multiple_polls);
+    asx_runtime_reset();
+    RUN_TEST(failing_task_outcome_err);
+    asx_runtime_reset();
+    RUN_TEST(budget_exhaustion_stops_scheduler);
+    asx_runtime_reset();
+    RUN_TEST(region_drain_full_lifecycle);
+    asx_runtime_reset();
+    RUN_TEST(region_drain_propagates_budget_exhaustion);
+    asx_runtime_reset();
+    RUN_TEST(region_drain_blocks_unresolved_obligations);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_after_drain);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_fails_before_close);
+    asx_runtime_reset();
+    RUN_TEST(spawn_rejected_after_close);
+    asx_runtime_reset();
+    RUN_TEST(multiple_tasks_in_region);
+    asx_runtime_reset();
+    RUN_TEST(region_drain_calls_cleanup);
+    asx_runtime_reset();
+    RUN_TEST(region_drain_cleanup_lifo_order);
 
     TEST_REPORT();
     return test_failures;

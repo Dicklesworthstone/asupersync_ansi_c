@@ -25,22 +25,18 @@ extern "C" {
  * Check severity
  * ------------------------------------------------------------------- */
 
-typedef enum {
-    ASX_DOCTOR_OK   = 0,
-    ASX_DOCTOR_WARN = 1,
-    ASX_DOCTOR_FAIL = 2
-} asx_doctor_severity;
+typedef enum { ASX_DOCTOR_OK = 0, ASX_DOCTOR_WARN = 1, ASX_DOCTOR_FAIL = 2 } asx_doctor_severity;
 
 /* -------------------------------------------------------------------
  * Individual check result
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    const char         *name;
+    const char *name;
     asx_doctor_severity severity;
-    const char         *message;
-    uint32_t            value;      /* diagnostic value (e.g., count) */
-    uint32_t            capacity;   /* capacity limit */
+    const char *message;
+    uint32_t value;    /* diagnostic value (e.g., count) */
+    uint32_t capacity; /* capacity limit */
 } asx_doctor_check_result;
 
 /* -------------------------------------------------------------------
@@ -66,15 +62,13 @@ typedef struct {
 /* Run all diagnostic checks and populate the report.
  * Checks include: runtime initialized, region/task/obligation
  * utilization, safety profile, containment policy. */
-ASX_API ASX_MUST_USE asx_status asx_doctor_run(
-    const asx_runtime *rt, asx_doctor_report *report);
+ASX_API ASX_MUST_USE asx_status asx_doctor_run(const asx_runtime *rt, asx_doctor_report *report);
 
 /* Check if the report indicates a healthy runtime (no FAILs). */
 ASX_API int asx_doctor_is_healthy(const asx_doctor_report *report);
 
 /* Get the overall severity (worst across all checks). */
-ASX_API asx_doctor_severity asx_doctor_overall(
-    const asx_doctor_report *report);
+ASX_API asx_doctor_severity asx_doctor_overall(const asx_doctor_report *report);
 
 #ifdef __cplusplus
 }

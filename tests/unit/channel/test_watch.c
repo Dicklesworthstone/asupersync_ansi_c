@@ -8,7 +8,11 @@
 #include <asx/core/watch.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 static void setup(void) { asx_watch_reset(); }
 
@@ -78,7 +82,7 @@ TEST(send_updates_value) {
     uint64_t val;
     setup();
     MUST_OK(asx_watch_create(0, &tx, &rx));
-    MUST_OK(asx_watch_recv(&rx, &val));  /* read initial */
+    MUST_OK(asx_watch_recv(&rx, &val)); /* read initial */
     MUST_OK(asx_watch_send(&tx, 77));
     ASSERT_TRUE(asx_watch_has_changed(&rx));
     MUST_OK(asx_watch_recv(&rx, &val));
@@ -96,7 +100,7 @@ TEST(latest_value_wins) {
     MUST_OK(asx_watch_send(&tx, 2));
     MUST_OK(asx_watch_send(&tx, 3));
     MUST_OK(asx_watch_recv(&rx, &val));
-    ASSERT_EQ(val, (uint64_t)3);  /* only latest survives */
+    ASSERT_EQ(val, (uint64_t)3); /* only latest survives */
 }
 
 /* ------------------------------------------------------------------ */
@@ -134,9 +138,9 @@ TEST(independent_changed_tracking) {
     MUST_OK(asx_watch_create(0, &tx, &rx1));
     MUST_OK(asx_watch_subscribe(&tx, &rx2));
     MUST_OK(asx_watch_send(&tx, 10));
-    MUST_OK(asx_watch_recv(&rx1, &val));  /* rx1 reads */
+    MUST_OK(asx_watch_recv(&rx1, &val)); /* rx1 reads */
     ASSERT_FALSE(asx_watch_has_changed(&rx1));
-    ASSERT_TRUE(asx_watch_has_changed(&rx2));  /* rx2 hasn't read yet */
+    ASSERT_TRUE(asx_watch_has_changed(&rx2)); /* rx2 hasn't read yet */
 }
 
 /* ------------------------------------------------------------------ */
@@ -187,13 +191,9 @@ TEST(receiver_drop_decrements_count) {
 /* Null safety                                                         */
 /* ------------------------------------------------------------------ */
 
-TEST(has_changed_null_false) {
-    ASSERT_FALSE(asx_watch_has_changed(NULL));
-}
+TEST(has_changed_null_false) { ASSERT_FALSE(asx_watch_has_changed(NULL)); }
 
-TEST(receiver_count_null_zero) {
-    ASSERT_EQ(asx_watch_receiver_count(NULL), 0u);
-}
+TEST(receiver_count_null_zero) { ASSERT_EQ(asx_watch_receiver_count(NULL), 0u); }
 
 TEST(recv_null_fails) {
     uint64_t val;
@@ -204,8 +204,7 @@ TEST(recv_null_fails) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_watch ===\n");
 
     RUN_TEST(create_null_sender_fails);

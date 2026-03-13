@@ -12,9 +12,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <asx/core/ghost.h>
 #include <asx/runtime/hindsight.h>
 #include <asx/runtime/trace.h>
-#include <asx/core/ghost.h>
 #include <string.h>
 
 /* -------------------------------------------------------------------
@@ -27,33 +27,26 @@ static uint32_t g_total_count;   /* total events ever logged */
 static uint32_t g_next_sequence; /* monotonic per-event sequence */
 
 /* Default flush policy: both triggers enabled */
-static asx_hindsight_policy g_policy = { 1, 1 };
+static asx_hindsight_policy g_policy = {1, 1};
 
 /* -------------------------------------------------------------------
  * Init / Reset
  * ------------------------------------------------------------------- */
 
-void asx_hindsight_init(void)
-{
+void asx_hindsight_init(void) {
     memset(g_ring, 0, sizeof(g_ring));
     g_write_index = 0;
     g_total_count = 0;
     g_next_sequence = 0;
 }
 
-void asx_hindsight_reset(void)
-{
-    asx_hindsight_init();
-}
+void asx_hindsight_reset(void) { asx_hindsight_init(); }
 
 /* -------------------------------------------------------------------
  * Event logging
  * ------------------------------------------------------------------- */
 
-void asx_hindsight_log(asx_nd_event_kind kind,
-                        uint64_t entity_id,
-                        uint64_t observed_value)
-{
+void asx_hindsight_log(asx_nd_event_kind kind, uint64_t entity_id, uint64_t observed_value) {
     uint32_t idx = g_write_index % ASX_HINDSIGHT_CAPACITY;
     asx_hindsight_event *e = &g_ring[idx];
 
@@ -72,26 +65,16 @@ void asx_hindsight_log(asx_nd_event_kind kind,
  * Queries
  * ------------------------------------------------------------------- */
 
-uint32_t asx_hindsight_total_count(void)
-{
-    return g_total_count;
-}
+uint32_t asx_hindsight_total_count(void) { return g_total_count; }
 
-uint32_t asx_hindsight_readable_count(void)
-{
-    if (g_total_count <= ASX_HINDSIGHT_CAPACITY) {
-        return g_total_count;
-    }
+uint32_t asx_hindsight_readable_count(void) {
+    if (g_total_count <= ASX_HINDSIGHT_CAPACITY) { return g_total_count; }
     return ASX_HINDSIGHT_CAPACITY;
 }
 
-int asx_hindsight_overflowed(void)
-{
-    return g_total_count > ASX_HINDSIGHT_CAPACITY;
-}
+int asx_hindsight_overflowed(void) { return g_total_count > ASX_HINDSIGHT_CAPACITY; }
 
-int asx_hindsight_get(uint32_t index, asx_hindsight_event *out)
-{
+int asx_hindsight_get(uint32_t index, asx_hindsight_event *out) {
     uint32_t readable;
     uint32_t oldest_slot;
     uint32_t actual_slot;
@@ -118,9 +101,7 @@ int asx_hindsight_get(uint32_t index, asx_hindsight_event *out)
  * JSON flush helpers (zero-allocation, inline serialization)
  * ------------------------------------------------------------------- */
 
-static uint32_t flush_append(asx_hindsight_flush_buffer *buf,
-                              const char *text, uint32_t text_len)
-{
+static uint32_t flush_append(asx_hindsight_flush_buffer *buf, const char *text, uint32_t text_len) {
     uint32_t avail;
     uint32_t copy;
 
@@ -133,15 +114,13 @@ static uint32_t flush_append(asx_hindsight_flush_buffer *buf,
     return copy;
 }
 
-static void flush_str(asx_hindsight_flush_buffer *buf, const char *s)
-{
+static void flush_str(asx_hindsight_flush_buffer *buf, const char *s) {
     uint32_t len = 0;
     while (s[len] != '\0') len++;
     flush_append(buf, s, len);
 }
 
-static void flush_u32(asx_hindsight_flush_buffer *buf, uint32_t val)
-{
+static void flush_u32(asx_hindsight_flush_buffer *buf, uint32_t val) {
     char digits[16];
     int n = 0;
     int i;
@@ -155,14 +134,11 @@ static void flush_u32(asx_hindsight_flush_buffer *buf, uint32_t val)
         digits[n++] = (char)('0' + (int)(val % 10u));
         val /= 10u;
     }
-    for (i = n - 1; i >= 0; i--) {
-        tmp[n - 1 - i] = digits[i];
-    }
+    for (i = n - 1; i >= 0; i--) { tmp[n - 1 - i] = digits[i]; }
     flush_append(buf, tmp, (uint32_t)n);
 }
 
-static void flush_u64(asx_hindsight_flush_buffer *buf, uint64_t val)
-{
+static void flush_u64(asx_hindsight_flush_buffer *buf, uint64_t val) {
     char digits[24];
     int n = 0;
     int i;
@@ -176,14 +152,11 @@ static void flush_u64(asx_hindsight_flush_buffer *buf, uint64_t val)
         digits[n++] = (char)('0' + (int)(val % 10u));
         val /= 10u;
     }
-    for (i = n - 1; i >= 0; i--) {
-        tmp[n - 1 - i] = digits[i];
-    }
+    for (i = n - 1; i >= 0; i--) { tmp[n - 1 - i] = digits[i]; }
     flush_append(buf, tmp, (uint32_t)n);
 }
 
-static void flush_hex64(asx_hindsight_flush_buffer *buf, uint64_t val)
-{
+static void flush_hex64(asx_hindsight_flush_buffer *buf, uint64_t val) {
     static const char hextab[] = "0123456789abcdef";
     char hex[1];
     int h;
@@ -200,8 +173,7 @@ static void flush_hex64(asx_hindsight_flush_buffer *buf, uint64_t val)
  * JSON flush
  * ------------------------------------------------------------------- */
 
-asx_status asx_hindsight_flush_json(asx_hindsight_flush_buffer *out)
-{
+asx_status asx_hindsight_flush_json(asx_hindsight_flush_buffer *out) {
     uint32_t readable;
     uint32_t i;
     asx_hindsight_event ev;
@@ -251,8 +223,7 @@ asx_status asx_hindsight_flush_json(asx_hindsight_flush_buffer *out)
  * FNV-1a digest
  * ------------------------------------------------------------------- */
 
-static uint64_t hs_fnv1a_mix(uint64_t hash, const void *data, uint32_t len)
-{
+static uint64_t hs_fnv1a_mix(uint64_t hash, const void *data, uint32_t len) {
     const uint8_t *p = (const uint8_t *)data;
     uint32_t i;
 
@@ -263,8 +234,7 @@ static uint64_t hs_fnv1a_mix(uint64_t hash, const void *data, uint32_t len)
     return hash;
 }
 
-static uint64_t hs_fnv1a_mix_u32(uint64_t hash, uint32_t v)
-{
+static uint64_t hs_fnv1a_mix_u32(uint64_t hash, uint32_t v) {
     uint8_t bytes[4];
     bytes[0] = (uint8_t)(v & 0xFFu);
     bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
@@ -273,8 +243,7 @@ static uint64_t hs_fnv1a_mix_u32(uint64_t hash, uint32_t v)
     return hs_fnv1a_mix(hash, bytes, 4);
 }
 
-static uint64_t hs_fnv1a_mix_u64(uint64_t hash, uint64_t v)
-{
+static uint64_t hs_fnv1a_mix_u64(uint64_t hash, uint64_t v) {
     uint8_t bytes[8];
     bytes[0] = (uint8_t)(v & 0xFFu);
     bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
@@ -287,8 +256,7 @@ static uint64_t hs_fnv1a_mix_u64(uint64_t hash, uint64_t v)
     return hs_fnv1a_mix(hash, bytes, 8);
 }
 
-uint64_t asx_hindsight_digest(void)
-{
+uint64_t asx_hindsight_digest(void) {
     uint64_t hash = 0x517cc1b727220a95ULL;
     uint32_t readable;
     uint32_t i;
@@ -314,23 +282,17 @@ uint64_t asx_hindsight_digest(void)
  * Flush on divergence
  * ------------------------------------------------------------------- */
 
-asx_status asx_hindsight_flush_on_divergence(
-    const asx_hindsight_flush_buffer *replay_ctx,
-    asx_hindsight_flush_buffer *out)
-{
+asx_status asx_hindsight_flush_on_divergence(const asx_hindsight_flush_buffer *replay_ctx,
+                                             asx_hindsight_flush_buffer *out) {
     (void)replay_ctx;
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
     /* Only flush if there are events to report */
-    if (g_total_count == 0) {
-        return ASX_E_PENDING;
-    }
+    if (g_total_count == 0) { return ASX_E_PENDING; }
 
     /* Respect flush policy */
-    if (!g_policy.flush_on_divergence) {
-        return ASX_E_PENDING;
-    }
+    if (!g_policy.flush_on_divergence) { return ASX_E_PENDING; }
 
     return asx_hindsight_flush_json(out);
 }
@@ -339,19 +301,18 @@ asx_status asx_hindsight_flush_on_divergence(
  * String helpers
  * ------------------------------------------------------------------- */
 
-const char *asx_nd_event_kind_str(asx_nd_event_kind kind)
-{
+const char *asx_nd_event_kind_str(asx_nd_event_kind kind) {
     switch (kind) {
-    case ASX_ND_CLOCK_READ:       return "clock_read";
-    case ASX_ND_CLOCK_SKEW:       return "clock_skew";
-    case ASX_ND_ENTROPY_READ:     return "entropy_read";
-    case ASX_ND_IO_READY:         return "io_ready";
-    case ASX_ND_IO_TIMEOUT:       return "io_timeout";
-    case ASX_ND_SIGNAL_ARRIVAL:   return "signal_arrival";
+    case ASX_ND_CLOCK_READ: return "clock_read";
+    case ASX_ND_CLOCK_SKEW: return "clock_skew";
+    case ASX_ND_ENTROPY_READ: return "entropy_read";
+    case ASX_ND_IO_READY: return "io_ready";
+    case ASX_ND_IO_TIMEOUT: return "io_timeout";
+    case ASX_ND_SIGNAL_ARRIVAL: return "signal_arrival";
     case ASX_ND_SCHED_TIE_BREAK: return "sched_tie_break";
-    case ASX_ND_TIMER_COALESCE:   return "timer_coalesce";
-    case ASX_ND_KIND_COUNT:       return "unknown";
-    default:                      return "unknown";
+    case ASX_ND_TIMER_COALESCE: return "timer_coalesce";
+    case ASX_ND_KIND_COUNT: return "unknown";
+    default: return "unknown";
     }
 }
 
@@ -359,35 +320,24 @@ const char *asx_nd_event_kind_str(asx_nd_event_kind kind)
  * Flush policy
  * ------------------------------------------------------------------- */
 
-void asx_hindsight_set_policy(const asx_hindsight_policy *policy)
-{
-    if (policy != NULL) {
-        g_policy = *policy;
-    }
+void asx_hindsight_set_policy(const asx_hindsight_policy *policy) {
+    if (policy != NULL) { g_policy = *policy; }
 }
 
-asx_hindsight_policy asx_hindsight_policy_active(void)
-{
-    return g_policy;
-}
+asx_hindsight_policy asx_hindsight_policy_active(void) { return g_policy; }
 
 /* -------------------------------------------------------------------
  * Invariant-failure flush
  * ------------------------------------------------------------------- */
 
-asx_status asx_hindsight_flush_on_invariant(asx_hindsight_flush_buffer *out)
-{
+asx_status asx_hindsight_flush_on_invariant(asx_hindsight_flush_buffer *out) {
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
     /* Check whether ghost safety monitors have recorded violations */
-    if (asx_ghost_violation_count() == 0) {
-        return ASX_E_PENDING;
-    }
+    if (asx_ghost_violation_count() == 0) { return ASX_E_PENDING; }
 
     /* Only flush if policy allows it */
-    if (!g_policy.flush_on_invariant) {
-        return ASX_E_PENDING;
-    }
+    if (!g_policy.flush_on_invariant) { return ASX_E_PENDING; }
 
     return asx_hindsight_flush_json(out);
 }
@@ -396,7 +346,6 @@ asx_status asx_hindsight_flush_on_invariant(asx_hindsight_flush_buffer *out)
  * Divergence detection
  * ------------------------------------------------------------------- */
 
-int asx_hindsight_check_divergence(uint64_t expected_digest)
-{
+int asx_hindsight_check_divergence(uint64_t expected_digest) {
     return asx_hindsight_digest() != expected_digest;
 }

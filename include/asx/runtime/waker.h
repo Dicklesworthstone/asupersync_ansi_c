@@ -15,8 +15,8 @@
 #define ASX_RUNTIME_WAKER_H
 
 #include <asx/asx_export.h>
-#include <asx/asx_status.h>
 #include <asx/asx_ids.h>
+#include <asx/asx_status.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -41,9 +41,7 @@ typedef struct {
  * to indicate the task should be re-polled.
  * Returns ASX_OK on success.
  * Returns ASX_E_RESOURCE_EXHAUSTED if waker arena is full. */
-ASX_API ASX_MUST_USE asx_status asx_waker_register(
-    asx_task_id task,
-    asx_waker *out_waker);
+ASX_API ASX_MUST_USE asx_status asx_waker_register(asx_task_id task, asx_waker *out_waker);
 
 /* Deregister a waker. Safe to call on already-deregistered wakers. */
 ASX_API void asx_waker_deregister(asx_waker *waker);
@@ -59,9 +57,7 @@ ASX_API ASX_MUST_USE asx_status asx_waker_wake(const asx_waker *waker);
 
 /* Clone a waker (both refer to the same task).
  * Returns ASX_OK on success. */
-ASX_API ASX_MUST_USE asx_status asx_waker_clone(
-    const asx_waker *src,
-    asx_waker *out_clone);
+ASX_API ASX_MUST_USE asx_status asx_waker_clone(const asx_waker *src, asx_waker *out_clone);
 
 /* -------------------------------------------------------------------
  * API: Query
@@ -88,9 +84,7 @@ ASX_API uint32_t asx_waker_active_count(void);
 /* Collect all signaled task IDs into the output buffer.
  * Clears the signaled state for collected wakers.
  * Returns the number of tasks collected. */
-ASX_API uint32_t asx_waker_drain_signaled(
-    asx_task_id *out_tasks,
-    uint32_t max_tasks);
+ASX_API uint32_t asx_waker_drain_signaled(asx_task_id *out_tasks, uint32_t max_tasks);
 
 /* -------------------------------------------------------------------
  * Reset (test support)

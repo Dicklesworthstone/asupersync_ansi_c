@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/actor/supervisor.h>
 #include <asx/actor/actor.h>
-#include <asx/runtime/runtime.h>
+#include <asx/actor/supervisor.h>
 #include <asx/core/budget.h>
+#include <asx/runtime/runtime.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -17,33 +17,39 @@
 
 static int g_pass, g_fail;
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
-#define ASSERT(cond, msg) do {                                           \
-    if (!(cond)) {                                                       \
-        printf("  FAIL: %s (line %d)\n", msg, __LINE__);                 \
-        g_fail++; return;                                                \
-    }                                                                    \
-} while (0)
+#define ASSERT(cond, msg)                                                                          \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("  FAIL: %s (line %d)\n", msg, __LINE__);                                       \
+            g_fail++;                                                                              \
+            return;                                                                                \
+        }                                                                                          \
+    } while (0)
 
-#define RUN(fn) do {                                                     \
-    printf("  " #fn "...\n");                                            \
-    fn(); g_pass++;                                                      \
-} while (0)
+#define RUN(fn)                                                                                    \
+    do {                                                                                           \
+        printf("  " #fn "...\n");                                                                  \
+        fn();                                                                                      \
+        g_pass++;                                                                                  \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-static asx_region_id make_region(void)
-{
+static asx_region_id make_region(void) {
     asx_region_id r;
     MUST_OK(asx_region_open(&r));
     return r;
 }
 
-static void pump(asx_region_id region, uint32_t polls)
-{
+static void pump(asx_region_id region, uint32_t polls) {
     asx_budget budget = asx_budget_infinite();
     budget.poll_quota = polls;
     st_sink_ = asx_scheduler_run(region, &budget);
@@ -55,14 +61,14 @@ static void pump(asx_region_id region, uint32_t polls)
 /* ------------------------------------------------------------------ */
 
 /* Simple stable actor: never dies unless stopped */
-static asx_status stable_cast(void *state, uint64_t msg, asx_actor_handle self)
-{
-    (void)state; (void)msg; (void)self;
+static asx_status stable_cast(void *state, uint64_t msg, asx_actor_handle self) {
+    (void)state;
+    (void)msg;
+    (void)self;
     return ASX_OK;
 }
 
-static asx_actor_behavior stable_behavior(void)
-{
+static asx_actor_behavior stable_behavior(void) {
     asx_actor_behavior b;
     b.init = NULL;
     b.handle_cast = stable_cast;
@@ -71,23 +77,20 @@ static asx_actor_behavior stable_behavior(void)
     return b;
 }
 
-static asx_status stable_start(void *user_data, asx_region_id region,
-                               asx_actor_handle *out)
-{
+static asx_status stable_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
     asx_actor_behavior b = stable_behavior();
     return asx_actor_spawn(out, region, &b, user_data);
 }
 
 /* Fragile actor: dies on first cast message */
-static asx_status fragile_cast(void *state, uint64_t msg,
-                               asx_actor_handle self)
-{
-    (void)state; (void)msg; (void)self;
+static asx_status fragile_cast(void *state, uint64_t msg, asx_actor_handle self) {
+    (void)state;
+    (void)msg;
+    (void)self;
     return ASX_E_INVALID_STATE; /* always fails */
 }
 
-static asx_actor_behavior fragile_behavior(void)
-{
+static asx_actor_behavior fragile_behavior(void) {
     asx_actor_behavior b;
     b.init = NULL;
     b.handle_cast = fragile_cast;
@@ -99,9 +102,7 @@ static asx_actor_behavior fragile_behavior(void)
 /* Counting actor: tracks how many times it was started */
 static uint32_t g_start_count;
 
-static asx_status counting_start(void *user_data, asx_region_id region,
-                                 asx_actor_handle *out)
-{
+static asx_status counting_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
     asx_actor_behavior b = fragile_behavior();
     (void)user_data;
     g_start_count++;
@@ -109,10 +110,10 @@ static asx_status counting_start(void *user_data, asx_region_id region,
 }
 
 /* Failing start function */
-static asx_status fail_start(void *user_data, asx_region_id region,
-                             asx_actor_handle *out)
-{
-    (void)user_data; (void)region; (void)out;
+static asx_status fail_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
+    (void)user_data;
+    (void)region;
+    (void)out;
     return ASX_E_INVALID_STATE;
 }
 
@@ -126,14 +127,10 @@ typedef struct {
 
 static tagged_data g_tags[8];
 
-static asx_status ordered_start(void *user_data, asx_region_id region,
-                                asx_actor_handle *out)
-{
+static asx_status ordered_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
     tagged_data *tag = (tagged_data *)user_data;
     asx_actor_behavior b = fragile_behavior();
-    if (g_start_order_count < 16) {
-        g_start_order[g_start_order_count++] = tag->id;
-    }
+    if (g_start_order_count < 16) { g_start_order[g_start_order_count++] = tag->id; }
     return asx_actor_spawn(out, region, &b, user_data);
 }
 
@@ -141,8 +138,7 @@ static asx_status ordered_start(void *user_data, asx_region_id region,
 /* Tests: Basic lifecycle                                              */
 /* ------------------------------------------------------------------ */
 
-static void test_start_basic(void)
-{
+static void test_start_basic(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec specs[2];
@@ -175,8 +171,7 @@ static void test_start_basic(void)
     ASSERT(asx_supervisor_child_alive(sup, 1), "child 1 should be alive");
 }
 
-static void test_start_null_args(void)
-{
+static void test_start_null_args(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec spec;
@@ -201,8 +196,7 @@ static void test_start_null_args(void)
     ASSERT(st == ASX_E_INVALID_ARGUMENT, "null start_fn should fail");
 }
 
-static void test_start_zero_children(void)
-{
+static void test_start_zero_children(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_region_id r;
@@ -218,8 +212,7 @@ static void test_start_zero_children(void)
     ASSERT(asx_supervisor_child_count(sup) == 0, "should have 0 children");
 }
 
-static void test_start_child_failure(void)
-{
+static void test_start_child_failure(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec specs[2];
@@ -241,16 +234,14 @@ static void test_start_child_failure(void)
     MUST_OK(asx_supervisor_start(&sup, r, &cfg, specs, 2));
     pump(r, 200); /* init phase: child 1 fails, shutdown */
 
-    ASSERT(!asx_supervisor_is_alive(sup),
-           "supervisor should die when child start fails");
+    ASSERT(!asx_supervisor_is_alive(sup), "supervisor should die when child start fails");
 }
 
 /* ------------------------------------------------------------------ */
 /* Tests: Graceful stop                                                */
 /* ------------------------------------------------------------------ */
 
-static void test_stop_basic(void)
-{
+static void test_stop_basic(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec spec;
@@ -280,8 +271,7 @@ static void test_stop_basic(void)
 /* Tests: one_for_one restart strategy                                 */
 /* ------------------------------------------------------------------ */
 
-static void test_one_for_one_restart(void)
-{
+static void test_one_for_one_restart(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec specs[2];
@@ -328,8 +318,7 @@ static void test_one_for_one_restart(void)
      * make the child die differently. Let me test with a self-dying actor. */
 
     /* For now, test that restart count starts at 0 */
-    ASSERT(asx_supervisor_restart_count(sup) == 0,
-           "restart count should be 0 initially");
+    ASSERT(asx_supervisor_restart_count(sup) == 0, "restart count should be 0 initially");
     ASSERT(asx_supervisor_child_alive(sup, 1), "child 1 should be alive");
 }
 
@@ -337,25 +326,22 @@ static void test_one_for_one_restart(void)
 static uint32_t g_die_on_poll;
 static uint32_t g_poll_counter;
 
-static asx_status dying_cast(void *state, uint64_t msg, asx_actor_handle self)
-{
-    (void)state; (void)msg; (void)self;
+static asx_status dying_cast(void *state, uint64_t msg, asx_actor_handle self) {
+    (void)state;
+    (void)msg;
+    (void)self;
     return ASX_OK;
 }
 
-static asx_status dying_init(void *state, asx_actor_handle self)
-{
-    (void)state; (void)self;
+static asx_status dying_init(void *state, asx_actor_handle self) {
+    (void)state;
+    (void)self;
     g_poll_counter++;
-    if (g_poll_counter <= g_die_on_poll) {
-        return ASX_E_INVALID_STATE; /* die during init */
-    }
+    if (g_poll_counter <= g_die_on_poll) { return ASX_E_INVALID_STATE; /* die during init */ }
     return ASX_OK;
 }
 
-static asx_status dying_start(void *user_data, asx_region_id region,
-                              asx_actor_handle *out)
-{
+static asx_status dying_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
     asx_actor_behavior b;
     (void)user_data;
     b.init = dying_init;
@@ -366,8 +352,7 @@ static asx_status dying_start(void *user_data, asx_region_id region,
     return asx_actor_spawn(out, region, &b, NULL);
 }
 
-static void test_one_for_one_child_dies_and_restarts(void)
-{
+static void test_one_for_one_child_dies_and_restarts(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec specs[2];
@@ -397,18 +382,14 @@ static void test_one_for_one_child_dies_and_restarts(void)
 
     /* Child 0 started initially and restarted once (total 2 starts) */
     ASSERT(g_start_count == 2, "child 0 should have been restarted once");
-    ASSERT(asx_supervisor_restart_count(sup) == 1,
-           "restart count should be 1");
-    ASSERT(asx_supervisor_is_alive(sup),
-           "supervisor should still be alive");
+    ASSERT(asx_supervisor_restart_count(sup) == 1, "restart count should be 1");
+    ASSERT(asx_supervisor_is_alive(sup), "supervisor should still be alive");
 
     /* Child 1 should still be alive (one_for_one doesn't touch it) */
-    ASSERT(asx_supervisor_child_alive(sup, 1),
-           "child 1 should be alive (one_for_one)");
+    ASSERT(asx_supervisor_child_alive(sup, 1), "child 1 should be alive (one_for_one)");
 }
 
-static void test_one_for_one_max_restarts_escalation(void)
-{
+static void test_one_for_one_max_restarts_escalation(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec spec;
@@ -430,16 +411,14 @@ static void test_one_for_one_max_restarts_escalation(void)
     MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1));
     pump(r, 1000);
 
-    ASSERT(!asx_supervisor_is_alive(sup),
-           "supervisor should die after max restarts exceeded");
+    ASSERT(!asx_supervisor_is_alive(sup), "supervisor should die after max restarts exceeded");
 }
 
 /* ------------------------------------------------------------------ */
 /* Tests: one_for_all restart strategy                                 */
 /* ------------------------------------------------------------------ */
 
-static void test_one_for_all_restarts_all(void)
-{
+static void test_one_for_all_restarts_all(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec specs[3];
@@ -487,8 +466,7 @@ static void test_one_for_all_restarts_all(void)
 /* Tests: Restart policies                                             */
 /* ------------------------------------------------------------------ */
 
-static void test_temporary_never_restarts(void)
-{
+static void test_temporary_never_restarts(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec spec;
@@ -512,14 +490,11 @@ static void test_temporary_never_restarts(void)
 
     /* Temporary child should have been started once but never restarted */
     ASSERT(g_start_count == 1, "temporary child should only start once");
-    ASSERT(asx_supervisor_restart_count(sup) == 0,
-           "no restarts for temporary child");
-    ASSERT(asx_supervisor_is_alive(sup),
-           "supervisor should stay alive");
+    ASSERT(asx_supervisor_restart_count(sup) == 0, "no restarts for temporary child");
+    ASSERT(asx_supervisor_is_alive(sup), "supervisor should stay alive");
 }
 
-static void test_transient_no_restart_on_normal_exit(void)
-{
+static void test_transient_no_restart_on_normal_exit(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec spec;
@@ -552,8 +527,7 @@ static void test_transient_no_restart_on_normal_exit(void)
 /* Tests: Reset                                                        */
 /* ------------------------------------------------------------------ */
 
-static void test_reset(void)
-{
+static void test_reset(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec spec;
@@ -579,8 +553,7 @@ static void test_reset(void)
 /* Tests: Arena exhaustion                                             */
 /* ------------------------------------------------------------------ */
 
-static void test_arena_exhaustion(void)
-{
+static void test_arena_exhaustion(void) {
     asx_supervisor_handle handles[ASX_MAX_SUPERVISORS + 1];
     asx_supervisor_config cfg;
     asx_child_spec spec;
@@ -602,10 +575,8 @@ static void test_arena_exhaustion(void)
         ASSERT(st == ASX_OK, "start within limit should succeed");
     }
 
-    st = asx_supervisor_start(&handles[ASX_MAX_SUPERVISORS], r,
-                               &cfg, &spec, 1);
-    ASSERT(st == ASX_E_RESOURCE_EXHAUSTED,
-           "start beyond limit should fail");
+    st = asx_supervisor_start(&handles[ASX_MAX_SUPERVISORS], r, &cfg, &spec, 1);
+    ASSERT(st == ASX_E_RESOURCE_EXHAUSTED, "start beyond limit should fail");
 }
 
 /* ------------------------------------------------------------------ */
@@ -613,8 +584,7 @@ static void test_arena_exhaustion(void)
 /* ------------------------------------------------------------------ */
 
 /* Law: children start in spec order */
-static void test_law_start_order(void)
-{
+static void test_law_start_order(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec specs[3];
@@ -654,8 +624,7 @@ static void test_law_start_order(void)
 }
 
 /* Law: escalation on max restarts */
-static void test_law_escalation(void)
-{
+static void test_law_escalation(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
     asx_child_spec spec;
@@ -678,15 +647,13 @@ static void test_law_escalation(void)
     pump(r, 1000);
 
     /* Supervisor should have died due to restart limit */
-    ASSERT(!asx_supervisor_is_alive(sup),
-           "supervisor should escalate after max restarts");
+    ASSERT(!asx_supervisor_is_alive(sup), "supervisor should escalate after max restarts");
     /* Child was started: initial + up to max_restarts */
     ASSERT(g_start_count >= 2, "child should have been started multiple times");
 }
 
 /* Law: stale supervisor handle */
-static void test_law_stale_handle(void)
-{
+static void test_law_stale_handle(void) {
     asx_supervisor_handle sup;
     asx_supervisor_handle stale;
     asx_supervisor_config cfg;
@@ -713,18 +680,15 @@ static void test_law_stale_handle(void)
     /* Spawn new supervisor in same slot */
     MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1));
     ASSERT(sup.slot == stale.slot, "should reuse same slot");
-    ASSERT(sup.generation != stale.generation,
-           "generation should differ");
-    ASSERT(!asx_supervisor_is_alive(stale),
-           "stale handle should not find new supervisor");
+    ASSERT(sup.generation != stale.generation, "generation should differ");
+    ASSERT(!asx_supervisor_is_alive(stale), "stale handle should not find new supervisor");
 }
 
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     printf("test_supervisor:\n");
 
     /* Basic lifecycle */

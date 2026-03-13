@@ -8,7 +8,11 @@
 #include <asx/core/broadcast.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 static void setup(void) { asx_broadcast_reset(); }
 
@@ -145,9 +149,7 @@ TEST(lagging_receiver_gets_lagged) {
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
     /* Send more than capacity without rx reading */
-    for (i = 0; i < 8; i++) {
-        MUST_OK(asx_broadcast_send(&tx, i + 1));
-    }
+    for (i = 0; i < 8; i++) { MUST_OK(asx_broadcast_send(&tx, i + 1)); }
     /* Receiver has lagged */
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_E_LAGGED);
     /* After lag, cursor is advanced — next recv should succeed */
@@ -198,22 +200,16 @@ TEST(receiver_drop_decrements_count) {
 /* Null safety                                                         */
 /* ------------------------------------------------------------------ */
 
-TEST(send_null_fails) {
-    ASSERT_EQ(asx_broadcast_send(NULL, 1), ASX_E_INVALID_ARGUMENT);
-}
+TEST(send_null_fails) { ASSERT_EQ(asx_broadcast_send(NULL, 1), ASX_E_INVALID_ARGUMENT); }
 
 TEST(recv_null_fails) {
     uint64_t val;
     ASSERT_EQ(asx_broadcast_try_recv(NULL, &val), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(receiver_count_null_zero) {
-    ASSERT_EQ(asx_broadcast_receiver_count(NULL), 0u);
-}
+TEST(receiver_count_null_zero) { ASSERT_EQ(asx_broadcast_receiver_count(NULL), 0u); }
 
-TEST(total_sent_null_zero) {
-    ASSERT_EQ(asx_broadcast_total_sent(NULL), 0u);
-}
+TEST(total_sent_null_zero) { ASSERT_EQ(asx_broadcast_total_sent(NULL), 0u); }
 
 /* ------------------------------------------------------------------ */
 /* Total sent tracking                                                 */
@@ -233,8 +229,7 @@ TEST(total_sent_increments) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_broadcast ===\n");
 
     RUN_TEST(create_null_sender_fails);

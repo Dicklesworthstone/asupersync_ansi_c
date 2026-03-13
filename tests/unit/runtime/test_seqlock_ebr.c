@@ -14,19 +14,19 @@
 
 /* ASX_CHECKPOINT_WAIVER_FILE() -- seqlock/EBR test, no checkpoint coverage needed */
 
-#include <asx/asx.h>
 #include "test_harness.h"
+#include <asx/asx.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
 /* Types from spike (not in public headers)                           */
 /* ------------------------------------------------------------------ */
 
-#define ASX_SEQLOCK_MAX_DATA   64u
-#define ASX_EBR_EPOCH_COUNT    3u
-#define ASX_EBR_MAX_READERS   16u
+#define ASX_SEQLOCK_MAX_DATA 64u
+#define ASX_EBR_EPOCH_COUNT 3u
+#define ASX_EBR_MAX_READERS 16u
 #define ASX_EBR_DEFER_CAPACITY 32u
-#define ASX_EBR_INACTIVE       UINT32_MAX
+#define ASX_EBR_INACTIVE UINT32_MAX
 
 typedef struct {
     uint32_t value;
@@ -34,14 +34,14 @@ typedef struct {
 
 typedef struct {
     asx_seqlock_atomic_u32 sequence;
-    uint8_t                data[ASX_SEQLOCK_MAX_DATA];
-    uint32_t               data_size;
+    uint8_t data[ASX_SEQLOCK_MAX_DATA];
+    uint32_t data_size;
 } asx_seqlock;
 
 typedef struct {
     uint32_t state;
     uint16_t generation;
-    int      alive;
+    int alive;
     uint32_t cancel_epoch;
 } asx_task_metadata;
 
@@ -53,16 +53,15 @@ typedef struct {
 typedef struct {
     asx_seqlock_atomic_u32 global_epoch;
     asx_seqlock_atomic_u32 reader_epoch[ASX_EBR_MAX_READERS];
-    uint32_t               reader_count;
-    asx_ebr_deferred_item  defer_ring[ASX_EBR_EPOCH_COUNT][ASX_EBR_DEFER_CAPACITY];
-    uint32_t               defer_count[ASX_EBR_EPOCH_COUNT];
+    uint32_t reader_count;
+    asx_ebr_deferred_item defer_ring[ASX_EBR_EPOCH_COUNT][ASX_EBR_DEFER_CAPACITY];
+    uint32_t defer_count[ASX_EBR_EPOCH_COUNT];
     uint32_t total_deferred;
     uint32_t total_reclaimed;
     uint32_t epoch_advances;
 } asx_ebr_state;
 
-typedef void (*asx_ebr_reclaim_fn)(uint32_t slot_index, uint32_t generation,
-                                    void *user_data);
+typedef void (*asx_ebr_reclaim_fn)(uint32_t slot_index, uint32_t generation, void *user_data);
 
 typedef struct {
     asx_seqlock_atomic_u32 locked;
@@ -83,29 +82,28 @@ typedef struct {
 } asx_concurrency_bench;
 
 /* Forward declarations for spike functions */
-void     asx_seqlock_init(asx_seqlock *sl, uint32_t data_size);
-void     asx_seqlock_write_begin(asx_seqlock *sl);
-void     asx_seqlock_write_end(asx_seqlock *sl);
-int      asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size);
+void asx_seqlock_init(asx_seqlock *sl, uint32_t data_size);
+void asx_seqlock_write_begin(asx_seqlock *sl);
+void asx_seqlock_write_end(asx_seqlock *sl);
+int asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size);
 uint32_t asx_seqlock_sequence(const asx_seqlock *sl);
-void     asx_seqlock_write(asx_seqlock *sl, const void *src, uint32_t size);
+void asx_seqlock_write(asx_seqlock *sl, const void *src, uint32_t size);
 
-void     asx_ebr_init(asx_ebr_state *ebr, uint32_t reader_count);
+void asx_ebr_init(asx_ebr_state *ebr, uint32_t reader_count);
 uint32_t asx_ebr_reader_enter(asx_ebr_state *ebr, uint32_t reader_id);
-void     asx_ebr_reader_leave(asx_ebr_state *ebr, uint32_t reader_id);
-int      asx_ebr_defer(asx_ebr_state *ebr, uint32_t slot_index, uint32_t generation);
-int      asx_ebr_try_advance(asx_ebr_state *ebr, asx_ebr_reclaim_fn reclaim_fn,
-                              void *user_data);
+void asx_ebr_reader_leave(asx_ebr_state *ebr, uint32_t reader_id);
+int asx_ebr_defer(asx_ebr_state *ebr, uint32_t slot_index, uint32_t generation);
+int asx_ebr_try_advance(asx_ebr_state *ebr, asx_ebr_reclaim_fn reclaim_fn, void *user_data);
 uint32_t asx_ebr_current_epoch(const asx_ebr_state *ebr);
 uint32_t asx_ebr_pending_count(const asx_ebr_state *ebr);
 
-void     asx_spinlock_init(asx_spinlock *lock);
-int      asx_spinlock_try_lock(asx_spinlock *lock);
-void     asx_spinlock_lock(asx_spinlock *lock);
-void     asx_spinlock_unlock(asx_spinlock *lock);
+void asx_spinlock_init(asx_spinlock *lock);
+int asx_spinlock_try_lock(asx_spinlock *lock);
+void asx_spinlock_lock(asx_spinlock *lock);
+void asx_spinlock_unlock(asx_spinlock *lock);
 
-void     asx_concurrency_bench_init(asx_concurrency_bench *bench);
-void     asx_concurrency_bench_run(asx_concurrency_bench *bench, uint32_t rounds);
+void asx_concurrency_bench_init(asx_concurrency_bench *bench);
+void asx_concurrency_bench_run(asx_concurrency_bench *bench, uint32_t rounds);
 
 /* ------------------------------------------------------------------ */
 /* Test reclaim callback state                                        */
@@ -115,9 +113,7 @@ static uint32_t reclaim_log[64];
 static uint32_t reclaim_gen[64];
 static uint32_t reclaim_count = 0;
 
-static void test_reclaim_fn(uint32_t slot_index, uint32_t generation,
-                             void *user_data)
-{
+static void test_reclaim_fn(uint32_t slot_index, uint32_t generation, void *user_data) {
     (void)user_data;
     if (reclaim_count < 64) {
         reclaim_log[reclaim_count] = slot_index;
@@ -126,8 +122,7 @@ static void test_reclaim_fn(uint32_t slot_index, uint32_t generation,
     }
 }
 
-static void reset_reclaim_log(void)
-{
+static void reset_reclaim_log(void) {
     memset(reclaim_log, 0, sizeof(reclaim_log));
     memset(reclaim_gen, 0, sizeof(reclaim_gen));
     reclaim_count = 0;
@@ -137,30 +132,24 @@ static void reset_reclaim_log(void)
 /* SEQLOCK TESTS                                                      */
 /* ================================================================== */
 
-TEST(seqlock_init_zeros)
-{
+TEST(seqlock_init_zeros) {
     asx_seqlock sl;
     asx_seqlock_init(&sl, sizeof(asx_task_metadata));
     ASSERT_EQ(asx_seqlock_sequence(&sl), (uint32_t)0);
     ASSERT_EQ(sl.data_size, (uint32_t)sizeof(asx_task_metadata));
 }
 
-TEST(seqlock_init_clamps_size)
-{
+TEST(seqlock_init_clamps_size) {
     asx_seqlock sl;
     asx_seqlock_init(&sl, 1000);
     ASSERT_EQ(sl.data_size, (uint32_t)ASX_SEQLOCK_MAX_DATA);
 }
 
-TEST(seqlock_init_null_safety)
-{
-    asx_seqlock_init(NULL, 8); /* should not crash */
-}
+TEST(seqlock_init_null_safety) { asx_seqlock_init(NULL, 8); /* should not crash */ }
 
-TEST(seqlock_write_advances_sequence)
-{
+TEST(seqlock_write_advances_sequence) {
     asx_seqlock sl;
-    asx_task_metadata md = { 1, 42, 1, 100 };
+    asx_task_metadata md = {1, 42, 1, 100};
 
     asx_seqlock_init(&sl, sizeof(asx_task_metadata));
     ASSERT_EQ(asx_seqlock_sequence(&sl), (uint32_t)0);
@@ -170,10 +159,9 @@ TEST(seqlock_write_advances_sequence)
     ASSERT_EQ(asx_seqlock_sequence(&sl), (uint32_t)2);
 }
 
-TEST(seqlock_consistent_read)
-{
+TEST(seqlock_consistent_read) {
     asx_seqlock sl;
-    asx_task_metadata md = { 3, 10, 1, 500 };
+    asx_task_metadata md = {3, 10, 1, 500};
     asx_task_metadata snap;
     int consistent;
 
@@ -190,8 +178,7 @@ TEST(seqlock_consistent_read)
     ASSERT_EQ(snap.cancel_epoch, (uint32_t)500);
 }
 
-TEST(seqlock_read_fails_during_write)
-{
+TEST(seqlock_read_fails_during_write) {
     asx_seqlock sl;
     asx_task_metadata snap;
     int ok;
@@ -208,8 +195,7 @@ TEST(seqlock_read_fails_during_write)
     ASSERT_TRUE(!ok); /* could not get consistent read */
 }
 
-TEST(seqlock_multiple_writes)
-{
+TEST(seqlock_multiple_writes) {
     asx_seqlock sl;
     asx_task_metadata md;
     asx_task_metadata snap;
@@ -235,8 +221,7 @@ TEST(seqlock_multiple_writes)
     ASSERT_EQ(snap.cancel_epoch, (uint32_t)190);
 }
 
-TEST(seqlock_read_null_safety)
-{
+TEST(seqlock_read_null_safety) {
     asx_seqlock sl;
     asx_task_metadata snap;
 
@@ -245,9 +230,8 @@ TEST(seqlock_read_null_safety)
     ASSERT_TRUE(!asx_seqlock_read(&sl, NULL, sizeof(snap)));
 }
 
-TEST(seqlock_write_null_safety)
-{
-    asx_task_metadata md = { 0, 0, 0, 0 };
+TEST(seqlock_write_null_safety) {
+    asx_task_metadata md = {0, 0, 0, 0};
     asx_seqlock sl;
 
     asx_seqlock_init(&sl, sizeof(asx_task_metadata));
@@ -259,8 +243,7 @@ TEST(seqlock_write_null_safety)
 /* EBR TESTS                                                          */
 /* ================================================================== */
 
-TEST(ebr_init_clears_state)
-{
+TEST(ebr_init_clears_state) {
     asx_ebr_state ebr;
     asx_ebr_init(&ebr, 4);
 
@@ -271,20 +254,15 @@ TEST(ebr_init_clears_state)
     ASSERT_EQ(asx_ebr_pending_count(&ebr), (uint32_t)0);
 }
 
-TEST(ebr_init_clamps_readers)
-{
+TEST(ebr_init_clamps_readers) {
     asx_ebr_state ebr;
     asx_ebr_init(&ebr, 1000);
     ASSERT_EQ(ebr.reader_count, (uint32_t)ASX_EBR_MAX_READERS);
 }
 
-TEST(ebr_init_null_safety)
-{
-    asx_ebr_init(NULL, 4); /* should not crash */
-}
+TEST(ebr_init_null_safety) { asx_ebr_init(NULL, 4); /* should not crash */ }
 
-TEST(ebr_reader_enter_leave)
-{
+TEST(ebr_reader_enter_leave) {
     asx_ebr_state ebr;
     uint32_t entered_epoch;
 
@@ -297,8 +275,7 @@ TEST(ebr_reader_enter_leave)
     ASSERT_EQ(ebr.reader_epoch[0].value, ASX_EBR_INACTIVE);
 }
 
-TEST(ebr_defer_tracks_items)
-{
+TEST(ebr_defer_tracks_items) {
     asx_ebr_state ebr;
 
     asx_ebr_init(&ebr, 2);
@@ -309,24 +286,20 @@ TEST(ebr_defer_tracks_items)
     ASSERT_EQ(ebr.total_deferred, (uint32_t)2);
 }
 
-TEST(ebr_defer_rejects_when_full)
-{
+TEST(ebr_defer_rejects_when_full) {
     asx_ebr_state ebr;
     uint32_t i;
 
     asx_ebr_init(&ebr, 2);
 
     /* Fill defer ring for epoch 0 */
-    for (i = 0; i < ASX_EBR_DEFER_CAPACITY; i++) {
-        ASSERT_TRUE(asx_ebr_defer(&ebr, i, i));
-    }
+    for (i = 0; i < ASX_EBR_DEFER_CAPACITY; i++) { ASSERT_TRUE(asx_ebr_defer(&ebr, i, i)); }
 
     /* 33rd should fail */
     ASSERT_TRUE(!asx_ebr_defer(&ebr, 99, 99));
 }
 
-TEST(ebr_advance_without_readers)
-{
+TEST(ebr_advance_without_readers) {
     asx_ebr_state ebr;
 
     asx_ebr_init(&ebr, 2);
@@ -336,8 +309,7 @@ TEST(ebr_advance_without_readers)
     ASSERT_EQ(ebr.epoch_advances, (uint32_t)1);
 }
 
-TEST(ebr_advance_blocked_by_reader)
-{
+TEST(ebr_advance_blocked_by_reader) {
     asx_ebr_state ebr;
 
     asx_ebr_init(&ebr, 2);
@@ -363,8 +335,7 @@ TEST(ebr_advance_blocked_by_reader)
     ASSERT_TRUE(!asx_ebr_try_advance(&ebr, NULL, NULL));
 }
 
-TEST(ebr_reclaim_fires_callback)
-{
+TEST(ebr_reclaim_fires_callback) {
     asx_ebr_state ebr;
 
     reset_reclaim_log();
@@ -391,8 +362,7 @@ TEST(ebr_reclaim_fires_callback)
     ASSERT_EQ(ebr.total_reclaimed, (uint32_t)2);
 }
 
-TEST(ebr_full_lifecycle)
-{
+TEST(ebr_full_lifecycle) {
     asx_ebr_state ebr;
     uint32_t epoch;
 
@@ -420,8 +390,7 @@ TEST(ebr_full_lifecycle)
     ASSERT_EQ(reclaim_gen[0], (uint32_t)5);
 }
 
-TEST(ebr_null_safety)
-{
+TEST(ebr_null_safety) {
     asx_ebr_init(NULL, 4);
     ASSERT_EQ(asx_ebr_current_epoch(NULL), (uint32_t)0);
     ASSERT_EQ(asx_ebr_pending_count(NULL), (uint32_t)0);
@@ -434,16 +403,14 @@ TEST(ebr_null_safety)
 /* SPINLOCK TESTS                                                     */
 /* ================================================================== */
 
-TEST(spinlock_init_unlocked)
-{
+TEST(spinlock_init_unlocked) {
     asx_spinlock lock;
     asx_spinlock_init(&lock);
     ASSERT_EQ(lock.locked.value, (uint32_t)0);
     ASSERT_EQ(lock.acquisitions, (uint32_t)0);
 }
 
-TEST(spinlock_lock_unlock)
-{
+TEST(spinlock_lock_unlock) {
     asx_spinlock lock;
     asx_spinlock_init(&lock);
 
@@ -455,8 +422,7 @@ TEST(spinlock_lock_unlock)
     ASSERT_EQ(lock.locked.value, (uint32_t)0);
 }
 
-TEST(spinlock_try_lock)
-{
+TEST(spinlock_try_lock) {
     asx_spinlock lock;
     asx_spinlock_init(&lock);
 
@@ -471,8 +437,7 @@ TEST(spinlock_try_lock)
     ASSERT_TRUE(asx_spinlock_try_lock(&lock));
 }
 
-TEST(spinlock_null_safety)
-{
+TEST(spinlock_null_safety) {
     asx_spinlock_init(NULL); /* should not crash */
     asx_spinlock_lock(NULL);
     asx_spinlock_unlock(NULL);
@@ -483,11 +448,10 @@ TEST(spinlock_null_safety)
 /* PARITY TESTS — Same result through all three strategies            */
 /* ================================================================== */
 
-TEST(parity_all_strategies_read_same_data)
-{
+TEST(parity_all_strategies_read_same_data) {
     asx_seqlock sl;
     asx_spinlock lock;
-    asx_task_metadata md = { 5, 99, 1, 12345 };
+    asx_task_metadata md = {5, 99, 1, 12345};
     asx_task_metadata snap_seq, snap_spin, snap_raw;
 
     /* Seqlock path */
@@ -515,8 +479,7 @@ TEST(parity_all_strategies_read_same_data)
     ASSERT_EQ(snap_seq.cancel_epoch, snap_raw.cancel_epoch);
 }
 
-TEST(parity_write_update_read_cycle)
-{
+TEST(parity_write_update_read_cycle) {
     asx_seqlock sl;
     asx_spinlock lock;
     asx_task_metadata md;
@@ -553,8 +516,7 @@ TEST(parity_write_update_read_cycle)
 /* BENCHMARK                                                          */
 /* ================================================================== */
 
-TEST(benchmark_runs_without_crash)
-{
+TEST(benchmark_runs_without_crash) {
     asx_concurrency_bench bench;
     asx_concurrency_bench_init(&bench);
     asx_concurrency_bench_run(&bench, 10000);
@@ -567,8 +529,7 @@ TEST(benchmark_runs_without_crash)
     ASSERT_EQ(bench.seqlock_retries, (uint32_t)0);
 }
 
-TEST(benchmark_cycles_nonzero)
-{
+TEST(benchmark_cycles_nonzero) {
     asx_concurrency_bench bench;
     asx_concurrency_bench_init(&bench);
     asx_concurrency_bench_run(&bench, 1000);
@@ -586,8 +547,7 @@ TEST(benchmark_cycles_nonzero)
 /* DETERMINISM                                                        */
 /* ================================================================== */
 
-TEST(seqlock_deterministic_trajectory)
-{
+TEST(seqlock_deterministic_trajectory) {
     asx_seqlock s1, s2;
     asx_task_metadata md;
     asx_task_metadata snap1, snap2;
@@ -617,8 +577,7 @@ TEST(seqlock_deterministic_trajectory)
     ASSERT_EQ(asx_seqlock_sequence(&s1), asx_seqlock_sequence(&s2));
 }
 
-TEST(ebr_deterministic_trajectory)
-{
+TEST(ebr_deterministic_trajectory) {
     asx_ebr_state e1, e2;
     uint32_t i;
 
@@ -645,8 +604,7 @@ TEST(ebr_deterministic_trajectory)
 /* INTEGRATION: Seqlock + EBR workflow                                */
 /* ================================================================== */
 
-TEST(integration_seqlock_protects_slot_during_ebr_reclaim)
-{
+TEST(integration_seqlock_protects_slot_during_ebr_reclaim) {
     asx_seqlock sl;
     asx_ebr_state ebr;
     asx_task_metadata md;
@@ -697,8 +655,7 @@ TEST(integration_seqlock_protects_slot_during_ebr_reclaim)
 /* Main                                                               */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== seqlock/EBR/spinlock tests (bd-3vt.7) ===\n");
 
     /* Seqlock (9) */

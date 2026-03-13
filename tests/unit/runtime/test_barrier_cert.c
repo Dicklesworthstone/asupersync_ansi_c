@@ -14,8 +14,8 @@
 
 /* ASX_CHECKPOINT_WAIVER_FILE() -- barrier cert test, no checkpoint coverage needed */
 
-#include <asx/asx.h>
 #include "test_harness.h"
+#include <asx/asx.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -36,9 +36,9 @@ typedef struct {
 } asx_barrier_config;
 
 typedef struct {
-    int32_t  value;
-    int      safe;
-    int      decreasing;
+    int32_t value;
+    int safe;
+    int decreasing;
     uint32_t max_wait;
     uint32_t violator_index;
 } asx_barrier_result;
@@ -46,20 +46,16 @@ typedef struct {
 void asx_barrier_state_init(asx_barrier_state *state, uint32_t task_count);
 void asx_barrier_record_poll(asx_barrier_state *state, uint32_t task_index);
 void asx_barrier_advance_round(asx_barrier_state *state);
-void asx_barrier_evaluate(const asx_barrier_state *state,
-                           const asx_barrier_config *cfg,
-                           int32_t prev_value,
-                           asx_barrier_result *result);
+void asx_barrier_evaluate(const asx_barrier_state *state, const asx_barrier_config *cfg,
+                          int32_t prev_value, asx_barrier_result *result);
 uint32_t asx_barrier_max_wait(const asx_barrier_state *state);
-int asx_barrier_admits_bound(const asx_barrier_config *cfg,
-                              uint32_t task_count);
+int asx_barrier_admits_bound(const asx_barrier_config *cfg, uint32_t task_count);
 
 /* ------------------------------------------------------------------ */
 /* Test: initialization                                               */
 /* ------------------------------------------------------------------ */
 
-TEST(init_clears_state)
-{
+TEST(init_clears_state) {
     asx_barrier_state state;
     asx_barrier_state_init(&state, 8);
 
@@ -68,27 +64,22 @@ TEST(init_clears_state)
     ASSERT_EQ(asx_barrier_max_wait(&state), (uint32_t)0);
 }
 
-TEST(init_clamps_to_max)
-{
+TEST(init_clamps_to_max) {
     asx_barrier_state state;
     asx_barrier_state_init(&state, 1000);
 
     ASSERT_EQ(state.task_count, (uint32_t)ASX_BARRIER_MAX_TASKS);
 }
 
-TEST(init_null_safety)
-{
-    asx_barrier_state_init(NULL, 8);  /* should not crash */
-}
+TEST(init_null_safety) { asx_barrier_state_init(NULL, 8); /* should not crash */ }
 
 /* ------------------------------------------------------------------ */
 /* Test: barrier function B(x) = K - max(wait)                        */
 /* ------------------------------------------------------------------ */
 
-TEST(barrier_value_initially_equals_bound)
-{
+TEST(barrier_value_initially_equals_bound) {
     asx_barrier_state state;
-    asx_barrier_config cfg = { 5, 4 };
+    asx_barrier_config cfg = {5, 4};
     asx_barrier_result result;
 
     asx_barrier_state_init(&state, 4);
@@ -99,10 +90,9 @@ TEST(barrier_value_initially_equals_bound)
     ASSERT_TRUE(result.safe);
 }
 
-TEST(barrier_decreases_after_round_without_polling)
-{
+TEST(barrier_decreases_after_round_without_polling) {
     asx_barrier_state state;
-    asx_barrier_config cfg = { 5, 4 };
+    asx_barrier_config cfg = {5, 4};
     asx_barrier_result r1, r2;
 
     asx_barrier_state_init(&state, 4);
@@ -118,10 +108,9 @@ TEST(barrier_decreases_after_round_without_polling)
     ASSERT_TRUE(r2.safe);
 }
 
-TEST(barrier_violation_when_wait_exceeds_bound)
-{
+TEST(barrier_violation_when_wait_exceeds_bound) {
     asx_barrier_state state;
-    asx_barrier_config cfg = { 3, 4 };
+    asx_barrier_config cfg = {3, 4};
     asx_barrier_result result;
     uint32_t i;
 
@@ -149,10 +138,9 @@ TEST(barrier_violation_when_wait_exceeds_bound)
 /* Test: round-robin guarantees safety                                 */
 /* ------------------------------------------------------------------ */
 
-TEST(round_robin_maintains_safety)
-{
+TEST(round_robin_maintains_safety) {
     asx_barrier_state state;
-    asx_barrier_config cfg = { 2, 8 };  /* K=2, must poll all within 2 rounds */
+    asx_barrier_config cfg = {2, 8}; /* K=2, must poll all within 2 rounds */
     asx_barrier_result result;
     uint32_t round;
     uint32_t i;
@@ -165,9 +153,7 @@ TEST(round_robin_maintains_safety)
     /* Simulate 20 rounds of round-robin (all tasks polled each round) */
     for (round = 0; round < 20; round++) {
         asx_barrier_advance_round(&state);
-        for (i = 0; i < 8; i++) {
-            asx_barrier_record_poll(&state, i);
-        }
+        for (i = 0; i < 8; i++) { asx_barrier_record_poll(&state, i); }
         asx_barrier_evaluate(&state, &cfg, prev, &result);
         ASSERT_TRUE(result.safe);
         prev = result.value;
@@ -177,10 +163,9 @@ TEST(round_robin_maintains_safety)
     ASSERT_EQ(result.max_wait, (uint32_t)0);
 }
 
-TEST(partial_round_robin_violates_with_tight_bound)
-{
+TEST(partial_round_robin_violates_with_tight_bound) {
     asx_barrier_state state;
-    asx_barrier_config cfg = { 1, 4 };  /* K=1, very tight */
+    asx_barrier_config cfg = {1, 4}; /* K=1, very tight */
     asx_barrier_result result;
 
     asx_barrier_state_init(&state, 4);
@@ -201,10 +186,9 @@ TEST(partial_round_robin_violates_with_tight_bound)
 /* Test: weighted polling with starvation detection                    */
 /* ------------------------------------------------------------------ */
 
-TEST(weighted_causes_starvation)
-{
+TEST(weighted_causes_starvation) {
     asx_barrier_state state;
-    asx_barrier_config cfg = { 5, 4 };
+    asx_barrier_config cfg = {5, 4};
     asx_barrier_result result;
     uint32_t round;
 
@@ -214,7 +198,7 @@ TEST(weighted_causes_starvation)
      * task 3 only every 4th round */
     for (round = 0; round < 8; round++) {
         asx_barrier_advance_round(&state);
-        asx_barrier_record_poll(&state, 0);  /* always */
+        asx_barrier_record_poll(&state, 0); /* always */
         if (round % 2 == 0) asx_barrier_record_poll(&state, 1);
         if (round % 3 == 0) asx_barrier_record_poll(&state, 2);
         if (round % 4 == 0) asx_barrier_record_poll(&state, 3);
@@ -226,42 +210,35 @@ TEST(weighted_causes_starvation)
     /* But after record_poll resets to 0, then advances increment */
     /* Task 3 polled at rounds 0,4 → after round 7: wait = 8-4-1 = 3 rounds since last poll */
     ASSERT_TRUE(result.max_wait > 0);
-    ASSERT_TRUE(result.safe);  /* Still within bound of 5 */
+    ASSERT_TRUE(result.safe); /* Still within bound of 5 */
 }
 
 /* ------------------------------------------------------------------ */
 /* Test: bound admissibility                                          */
 /* ------------------------------------------------------------------ */
 
-TEST(admits_positive_bound)
-{
-    asx_barrier_config cfg = { 5, 4 };
+TEST(admits_positive_bound) {
+    asx_barrier_config cfg = {5, 4};
     ASSERT_TRUE(asx_barrier_admits_bound(&cfg, 8));
 }
 
-TEST(rejects_zero_bound)
-{
-    asx_barrier_config cfg = { 0, 4 };
+TEST(rejects_zero_bound) {
+    asx_barrier_config cfg = {0, 4};
     ASSERT_TRUE(!asx_barrier_admits_bound(&cfg, 8));
 }
 
-TEST(rejects_alive_exceeds_total)
-{
-    asx_barrier_config cfg = { 5, 100 };
+TEST(rejects_alive_exceeds_total) {
+    asx_barrier_config cfg = {5, 100};
     ASSERT_TRUE(!asx_barrier_admits_bound(&cfg, 8));
 }
 
-TEST(admits_null_rejects)
-{
-    ASSERT_TRUE(!asx_barrier_admits_bound(NULL, 8));
-}
+TEST(admits_null_rejects) { ASSERT_TRUE(!asx_barrier_admits_bound(NULL, 8)); }
 
 /* ------------------------------------------------------------------ */
 /* Test: polling resets wait counter                                   */
 /* ------------------------------------------------------------------ */
 
-TEST(poll_resets_wait)
-{
+TEST(poll_resets_wait) {
     asx_barrier_state state;
 
     asx_barrier_state_init(&state, 4);
@@ -279,10 +256,9 @@ TEST(poll_resets_wait)
 /* Test: evaluate null safety                                         */
 /* ------------------------------------------------------------------ */
 
-TEST(evaluate_null_safety)
-{
+TEST(evaluate_null_safety) {
     asx_barrier_result result;
-    asx_barrier_config cfg = { 5, 4 };
+    asx_barrier_config cfg = {5, 4};
     asx_barrier_state state;
 
     asx_barrier_state_init(&state, 4);
@@ -293,15 +269,14 @@ TEST(evaluate_null_safety)
     asx_barrier_evaluate(&state, NULL, 0, &result);
     ASSERT_EQ(result.value, 0);
 
-    asx_barrier_evaluate(&state, &cfg, 0, NULL);  /* should not crash */
+    asx_barrier_evaluate(&state, &cfg, 0, NULL); /* should not crash */
 }
 
 /* ------------------------------------------------------------------ */
 /* Test: max_wait query                                               */
 /* ------------------------------------------------------------------ */
 
-TEST(max_wait_tracks_highest)
-{
+TEST(max_wait_tracks_highest) {
     asx_barrier_state state;
 
     asx_barrier_state_init(&state, 4);
@@ -329,10 +304,9 @@ TEST(max_wait_tracks_highest)
 /* Test: deterministic trajectory                                      */
 /* ------------------------------------------------------------------ */
 
-TEST(deterministic_trajectory)
-{
+TEST(deterministic_trajectory) {
     asx_barrier_state s1, s2;
-    asx_barrier_config cfg = { 10, 4 };
+    asx_barrier_config cfg = {10, 4};
     asx_barrier_result r1, r2;
     uint32_t round;
     int32_t prev1 = 0, prev2 = 0;
@@ -364,8 +338,7 @@ TEST(deterministic_trajectory)
 /* Main                                                               */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== barrier certificate tests (bd-3vt.6) ===\n");
 
     /* Initialization */

@@ -19,8 +19,11 @@
 #include <string.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
-#define IGNORE_RC(expr) \
-    do { asx_status ignore_rc_ = (expr); (void)ignore_rc_; } while (0)
+#define IGNORE_RC(expr)                                                                            \
+    do {                                                                                           \
+        asx_status ignore_rc_ = (expr);                                                            \
+        (void)ignore_rc_;                                                                          \
+    } while (0)
 
 /* -------------------------------------------------------------------
  * Helpers
@@ -29,31 +32,34 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
-#define SCENARIO_BEGIN(id) \
-    do { const char *_scenario_id = (id); int _scenario_ok = 1; (void)0
+#define SCENARIO_BEGIN(id)                                                                         \
+    do {                                                                                           \
+        const char *_scenario_id = (id);                                                           \
+        int _scenario_ok = 1;                                                                      \
+    (void)0
 
-#define SCENARIO_CHECK(cond, msg)                         \
-    do {                                                  \
-        if (!(cond)) {                                    \
-            printf("SCENARIO %s fail %s\n",               \
-                   _scenario_id, (msg));                  \
-            _scenario_ok = 0;                             \
-            g_fail++;                                     \
-            goto _scenario_end;                           \
-        }                                                 \
+#define SCENARIO_CHECK(cond, msg)                                                                  \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("SCENARIO %s fail %s\n", _scenario_id, (msg));                                  \
+            _scenario_ok = 0;                                                                      \
+            g_fail++;                                                                              \
+            goto _scenario_end;                                                                    \
+        }                                                                                          \
     } while (0)
 
-#define SCENARIO_END()                                    \
-    _scenario_end:                                        \
-    if (_scenario_ok) {                                   \
-        printf("SCENARIO %s pass\n", _scenario_id);      \
-        g_pass++;                                         \
-    }                                                     \
-    } while (0)
+#define SCENARIO_END()                                                                             \
+    _scenario_end:                                                                                 \
+    if (_scenario_ok) {                                                                            \
+        printf("SCENARIO %s pass\n", _scenario_id);                                                \
+        g_pass++;                                                                                  \
+    }                                                                                              \
+    }                                                                                              \
+    while (0)
 
-static asx_status poll_complete(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_complete(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_OK;
 }
 
@@ -62,8 +68,7 @@ typedef struct {
     asx_co_state co;
 } yield_state;
 
-static asx_status poll_yield_once(void *ud, asx_task_id self)
-{
+static asx_status poll_yield_once(void *ud, asx_task_id self) {
     yield_state *s = (yield_state *)ud;
     (void)self;
     ASX_CO_BEGIN(&s->co);
@@ -71,8 +76,7 @@ static asx_status poll_yield_once(void *ud, asx_task_id self)
     ASX_CO_END(&s->co);
 }
 
-static void emit_restart_signature(uint64_t scenario_tag, uint32_t task_count)
-{
+static void emit_restart_signature(uint64_t scenario_tag, uint32_t task_count) {
     uint32_t i;
 
     IGNORE_RC(asx_telemetry_set_tier(ASX_TELEMETRY_FORENSIC));
@@ -91,8 +95,7 @@ static void emit_restart_signature(uint64_t scenario_tag, uint32_t task_count)
  * ------------------------------------------------------------------- */
 
 /* continuity-crash-midflight-001: trace export → import → continuity check */
-static void scenario_crash_restart_simple(void)
-{
+static void scenario_crash_restart_simple(void) {
     SCENARIO_BEGIN("continuity-crash-midflight-001.simple_restart");
 
     /* Phase 1: run a scenario and export trace */
@@ -103,8 +106,7 @@ static void scenario_crash_restart_simple(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run");
@@ -116,9 +118,7 @@ static void scenario_crash_restart_simple(void)
     /* Export trace to binary */
     uint8_t trace_buf[8192];
     uint32_t trace_len = 0;
-    asx_status rc = asx_trace_export_binary(trace_buf,
-                                             (uint32_t)sizeof(trace_buf),
-                                             &trace_len);
+    asx_status rc = asx_trace_export_binary(trace_buf, (uint32_t)sizeof(trace_buf), &trace_len);
     SCENARIO_CHECK(rc == ASX_OK, "trace_export");
     SCENARIO_CHECK(trace_len > 0, "exported trace should not be empty");
 
@@ -131,8 +131,7 @@ static void scenario_crash_restart_simple(void)
 
     /* Replay identical scenario */
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                   "task_spawn_2");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_2");
 
     budget = asx_budget_from_polls(10);
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run_2");
@@ -140,16 +139,14 @@ static void scenario_crash_restart_simple(void)
 
     {
         asx_status continuity_rc = asx_trace_continuity_check(trace_buf, trace_len);
-        SCENARIO_CHECK(continuity_rc == ASX_OK,
-                       "post-restart continuity should match");
+        SCENARIO_CHECK(continuity_rc == ASX_OK, "post-restart continuity should match");
     }
 
     SCENARIO_END();
 }
 
 /* continuity-checkpoint-rollback-002: continuity check detects matching trace */
-static void scenario_continuity_check_matching(void)
-{
+static void scenario_continuity_check_matching(void) {
     SCENARIO_BEGIN("continuity-checkpoint-rollback-002.matching_check");
 
     /* Run scenario and capture trace */
@@ -160,8 +157,7 @@ static void scenario_continuity_check_matching(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run");
@@ -170,8 +166,8 @@ static void scenario_continuity_check_matching(void)
     /* Export trace */
     uint8_t trace_buf[8192];
     uint32_t trace_len = 0;
-    SCENARIO_CHECK(asx_trace_export_binary(trace_buf,
-                   (uint32_t)sizeof(trace_buf), &trace_len) == ASX_OK,
+    SCENARIO_CHECK(asx_trace_export_binary(trace_buf, (uint32_t)sizeof(trace_buf), &trace_len) ==
+                       ASX_OK,
                    "trace_export");
 
     /* Reset and replay same scenario */
@@ -179,8 +175,7 @@ static void scenario_continuity_check_matching(void)
     asx_trace_reset();
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                   "task_spawn_2");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_2");
 
     budget = asx_budget_from_polls(10);
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run_2");
@@ -194,8 +189,7 @@ static void scenario_continuity_check_matching(void)
 }
 
 /* continuity-replay-identity-003: different scenario detected as mismatch */
-static void scenario_continuity_mismatch_detected(void)
-{
+static void scenario_continuity_mismatch_detected(void) {
     SCENARIO_BEGIN("continuity-replay-identity-003.mismatch_detected");
 
     /* Run scenario A: single task */
@@ -206,8 +200,7 @@ static void scenario_continuity_mismatch_detected(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_a");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                   "task_spawn_a");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_a");
 
     asx_budget budget = asx_budget_from_polls(10);
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_a");
@@ -216,8 +209,8 @@ static void scenario_continuity_mismatch_detected(void)
     /* Export trace A */
     uint8_t trace_buf_a[8192];
     uint32_t trace_len_a = 0;
-    SCENARIO_CHECK(asx_trace_export_binary(trace_buf_a,
-                   (uint32_t)sizeof(trace_buf_a), &trace_len_a) == ASX_OK,
+    SCENARIO_CHECK(asx_trace_export_binary(trace_buf_a, (uint32_t)sizeof(trace_buf_a),
+                                           &trace_len_a) == ASX_OK,
                    "export_a");
 
     /* Run scenario B: two tasks (different event sequence) */
@@ -225,10 +218,8 @@ static void scenario_continuity_mismatch_detected(void)
     asx_trace_reset();
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_b");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                   "task_spawn_b1");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                   "task_spawn_b2");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_b1");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_b2");
 
     budget = asx_budget_from_polls(10);
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_b");
@@ -242,8 +233,7 @@ static void scenario_continuity_mismatch_detected(void)
 }
 
 /* Multi-task trace round-trip */
-static void scenario_multi_task_roundtrip(void)
-{
+static void scenario_multi_task_roundtrip(void) {
     SCENARIO_BEGIN("continuity-multi-task.trace_roundtrip");
 
     asx_runtime_reset();
@@ -255,15 +245,15 @@ static void scenario_multi_task_roundtrip(void)
     yield_state *ys;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn_captured(rid, poll_yield_once,
-                   (uint32_t)sizeof(yield_state), NULL,
-                   &t1, &s1) == ASX_OK, "spawn_t1");
+    SCENARIO_CHECK(asx_task_spawn_captured(rid, poll_yield_once, (uint32_t)sizeof(yield_state),
+                                           NULL, &t1, &s1) == ASX_OK,
+                   "spawn_t1");
     ys = (yield_state *)s1;
     ys->co.line = 0;
 
-    SCENARIO_CHECK(asx_task_spawn_captured(rid, poll_yield_once,
-                   (uint32_t)sizeof(yield_state), NULL,
-                   &t2, &s2) == ASX_OK, "spawn_t2");
+    SCENARIO_CHECK(asx_task_spawn_captured(rid, poll_yield_once, (uint32_t)sizeof(yield_state),
+                                           NULL, &t2, &s2) == ASX_OK,
+                   "spawn_t2");
     ys = (yield_state *)s2;
     ys->co.line = 0;
 
@@ -277,15 +267,14 @@ static void scenario_multi_task_roundtrip(void)
     /* Export and reimport */
     uint8_t trace_buf[8192];
     uint32_t trace_len = 0;
-    SCENARIO_CHECK(asx_trace_export_binary(trace_buf,
-                   (uint32_t)sizeof(trace_buf), &trace_len) == ASX_OK,
+    SCENARIO_CHECK(asx_trace_export_binary(trace_buf, (uint32_t)sizeof(trace_buf), &trace_len) ==
+                       ASX_OK,
                    "trace_export");
 
     /* Verify digest consistency after import as replay reference */
     uint64_t digest_before = asx_trace_digest();
 
-    SCENARIO_CHECK(asx_trace_import_binary(trace_buf, trace_len) == ASX_OK,
-                   "trace_import");
+    SCENARIO_CHECK(asx_trace_import_binary(trace_buf, trace_len) == ASX_OK, "trace_import");
     {
         asx_replay_result rr = asx_replay_verify();
         SCENARIO_CHECK(rr.result == ASX_REPLAY_MATCH,
@@ -299,8 +288,7 @@ static void scenario_multi_task_roundtrip(void)
 }
 
 /* Corrupted trace detection */
-static void scenario_corrupted_trace_detected(void)
-{
+static void scenario_corrupted_trace_detected(void) {
     SCENARIO_BEGIN("continuity-corruption.detected");
 
     asx_runtime_reset();
@@ -310,8 +298,7 @@ static void scenario_corrupted_trace_detected(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run");
@@ -320,27 +307,23 @@ static void scenario_corrupted_trace_detected(void)
     /* Export trace */
     uint8_t trace_buf[8192];
     uint32_t trace_len = 0;
-    SCENARIO_CHECK(asx_trace_export_binary(trace_buf,
-                   (uint32_t)sizeof(trace_buf), &trace_len) == ASX_OK,
+    SCENARIO_CHECK(asx_trace_export_binary(trace_buf, (uint32_t)sizeof(trace_buf), &trace_len) ==
+                       ASX_OK,
                    "trace_export");
 
     /* Corrupt a byte in the middle of the trace */
-    if (trace_len > 30) {
-        trace_buf[30] ^= 0xFF;
-    }
+    if (trace_len > 30) { trace_buf[30] ^= 0xFF; }
 
     /* Import must fail validation for corrupted binary trace. */
     asx_trace_reset();
     asx_status rc = asx_trace_import_binary(trace_buf, trace_len);
-    SCENARIO_CHECK(rc == ASX_E_INVALID_ARGUMENT,
-                   "corrupt trace should fail import validation");
+    SCENARIO_CHECK(rc == ASX_E_INVALID_ARGUMENT, "corrupt trace should fail import validation");
 
     SCENARIO_END();
 }
 
 /* Snapshot capture and digest */
-static void scenario_snapshot_capture(void)
-{
+static void scenario_snapshot_capture(void) {
     SCENARIO_BEGIN("continuity-snapshot.capture_digest");
 
     asx_runtime_reset();
@@ -350,8 +333,7 @@ static void scenario_snapshot_capture(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                   "task_spawn");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn");
 
     asx_budget budget = asx_budget_from_polls(10);
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_run");
@@ -372,8 +354,7 @@ static void scenario_snapshot_capture(void)
     asx_trace_reset();
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                   "task_spawn_2");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "task_spawn_2");
 
     budget = asx_budget_from_polls(10);
     SCENARIO_CHECK(asx_scheduler_run(rid, &budget) == ASX_OK, "scheduler_2");
@@ -383,8 +364,7 @@ static void scenario_snapshot_capture(void)
     SCENARIO_CHECK(asx_snapshot_capture(&snap2) == ASX_OK, "snapshot_capture_2");
 
     uint64_t snap_digest2 = asx_snapshot_digest(&snap2);
-    SCENARIO_CHECK(snap_digest == snap_digest2,
-                   "snapshot digest should be deterministic");
+    SCENARIO_CHECK(snap_digest == snap_digest2, "snapshot digest should be deterministic");
 
     printf("DIGEST %016llx\n", (unsigned long long)snap_digest);
 
@@ -395,8 +375,7 @@ static void scenario_snapshot_capture(void)
  * Main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     scenario_crash_restart_simple();
     scenario_continuity_check_matching();
     scenario_continuity_mismatch_detected();
@@ -404,7 +383,6 @@ int main(void)
     scenario_corrupted_trace_detected();
     scenario_snapshot_capture();
 
-    fprintf(stderr, "[e2e] continuity_restart: %d passed, %d failed\n",
-            g_pass, g_fail);
+    fprintf(stderr, "[e2e] continuity_restart: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
 }

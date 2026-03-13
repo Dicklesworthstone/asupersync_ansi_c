@@ -5,19 +5,22 @@
  */
 
 #include "../../test_harness.h"
-#include <asx/sync/notify.h>
-#include <asx/sync/semaphore.h>
-#include <asx/sync/mutex.h>
-#include <asx/sync/barrier.h>
-#include <asx/sync/once.h>
-#include <asx/cx/cx.h>
 #include <asx/core/budget.h>
+#include <asx/cx/cx.h>
+#include <asx/sync/barrier.h>
+#include <asx/sync/mutex.h>
+#include <asx/sync/notify.h>
+#include <asx/sync/once.h>
+#include <asx/sync/semaphore.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
-static void setup(void)
-{
+static void setup(void) {
     asx_notify_reset();
     asx_semaphore_reset();
     asx_barrier_reset();
@@ -148,13 +151,9 @@ TEST(notify_exhaustion) {
     asx_notify_handle extra;
     uint32_t i;
     setup();
-    for (i = 0; i < ASX_NOTIFY_MAX; i++) {
-        MUST_OK(asx_notify_create(&handles[i]));
-    }
+    for (i = 0; i < ASX_NOTIFY_MAX; i++) { MUST_OK(asx_notify_create(&handles[i])); }
     ASSERT_EQ(asx_notify_create(&extra), ASX_E_RESOURCE_EXHAUSTED);
-    for (i = 0; i < ASX_NOTIFY_MAX; i++) {
-        MUST_OK(asx_notify_close(handles[i]));
-    }
+    for (i = 0; i < ASX_NOTIFY_MAX; i++) { MUST_OK(asx_notify_close(handles[i])); }
 }
 
 /* ================================================================== */
@@ -467,21 +466,18 @@ TEST(barrier_close_disconnects) {
 /* OnceCell tests                                                      */
 /* ================================================================== */
 
-static asx_status init_42(void *user_data, uint64_t *out)
-{
+static asx_status init_42(void *user_data, uint64_t *out) {
     (void)user_data;
     *out = 42;
     return ASX_OK;
 }
 
-static asx_status init_from_ptr(void *user_data, uint64_t *out)
-{
+static asx_status init_from_ptr(void *user_data, uint64_t *out) {
     *out = *(uint64_t *)user_data;
     return ASX_OK;
 }
 
-static asx_status init_fail(void *user_data, uint64_t *out)
-{
+static asx_status init_fail(void *user_data, uint64_t *out) {
     (void)user_data;
     (void)out;
     return ASX_E_INVALID_STATE;
@@ -548,8 +544,7 @@ TEST(once_init_fail_retryable) {
     setup();
     MUST_OK(asx_once_create(&h));
     /* First init fails */
-    ASSERT_EQ(asx_once_get_or_init(h, init_fail, NULL, &val),
-              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_once_get_or_init(h, init_fail, NULL, &val), ASX_E_INVALID_STATE);
     ASSERT_FALSE(asx_once_is_initialized(h));
 
     /* Can retry with different init fn */
@@ -572,13 +567,9 @@ TEST(once_exhaustion) {
     asx_once_handle extra;
     uint32_t i;
     setup();
-    for (i = 0; i < ASX_ONCE_MAX; i++) {
-        MUST_OK(asx_once_create(&handles[i]));
-    }
+    for (i = 0; i < ASX_ONCE_MAX; i++) { MUST_OK(asx_once_create(&handles[i])); }
     ASSERT_EQ(asx_once_create(&extra), ASX_E_RESOURCE_EXHAUSTED);
-    for (i = 0; i < ASX_ONCE_MAX; i++) {
-        MUST_OK(asx_once_close(handles[i]));
-    }
+    for (i = 0; i < ASX_ONCE_MAX; i++) { MUST_OK(asx_once_close(handles[i])); }
 }
 
 /* ================================================================== */
@@ -634,8 +625,7 @@ TEST(sem_cx_budget_exhaustion) {
 /* Main                                                                */
 /* ================================================================== */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_sync ===\n");
 
     /* Notify */

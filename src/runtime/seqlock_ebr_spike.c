@@ -37,20 +37,12 @@ typedef struct {
 
 #if ASX_LOCKFREE_SINGLE_THREAD
 
-static uint32_t seqlock_atomic_load(const asx_seqlock_atomic_u32 *a)
-{
-    return a->value;
-}
+static uint32_t seqlock_atomic_load(const asx_seqlock_atomic_u32 *a) { return a->value; }
 
-static void seqlock_atomic_store(asx_seqlock_atomic_u32 *a, uint32_t v)
-{
-    a->value = v;
-}
+static void seqlock_atomic_store(asx_seqlock_atomic_u32 *a, uint32_t v) { a->value = v; }
 
 /* Returns 1 on success, 0 on failure (CAS) */
-static int seqlock_atomic_cas(asx_seqlock_atomic_u32 *a,
-                              uint32_t expected, uint32_t desired)
-{
+static int seqlock_atomic_cas(asx_seqlock_atomic_u32 *a, uint32_t expected, uint32_t desired) {
     if (a->value == expected) {
         a->value = desired;
         return 1;
@@ -114,14 +106,14 @@ static void asx_fence_release(void) { /* no-op */ }
 
 typedef struct {
     asx_seqlock_atomic_u32 sequence;
-    uint8_t                data[ASX_SEQLOCK_MAX_DATA];
-    uint32_t               data_size;
+    uint8_t data[ASX_SEQLOCK_MAX_DATA];
+    uint32_t data_size;
 } asx_seqlock;
 
 void asx_seqlock_init(asx_seqlock *sl, uint32_t data_size);
 void asx_seqlock_write_begin(asx_seqlock *sl);
 void asx_seqlock_write_end(asx_seqlock *sl);
-int  asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size);
+int asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size);
 uint32_t asx_seqlock_sequence(const asx_seqlock *sl);
 void asx_seqlock_write(asx_seqlock *sl, const void *src, uint32_t size);
 
@@ -129,20 +121,17 @@ void asx_seqlock_write(asx_seqlock *sl, const void *src, uint32_t size);
 typedef struct {
     uint32_t state;
     uint16_t generation;
-    int      alive;
+    int alive;
     uint32_t cancel_epoch;
 } asx_task_metadata;
 
-void asx_seqlock_init(asx_seqlock *sl, uint32_t data_size)
-{
+void asx_seqlock_init(asx_seqlock *sl, uint32_t data_size) {
     if (sl == NULL) return;
     memset(sl, 0, sizeof(*sl));
-    sl->data_size = (data_size > ASX_SEQLOCK_MAX_DATA)
-                  ? ASX_SEQLOCK_MAX_DATA : data_size;
+    sl->data_size = (data_size > ASX_SEQLOCK_MAX_DATA) ? ASX_SEQLOCK_MAX_DATA : data_size;
 }
 
-void asx_seqlock_write_begin(asx_seqlock *sl)
-{
+void asx_seqlock_write_begin(asx_seqlock *sl) {
     uint32_t seq;
     if (sl == NULL) return;
     seq = seqlock_atomic_load(&sl->sequence);
@@ -150,8 +139,7 @@ void asx_seqlock_write_begin(asx_seqlock *sl)
     asx_fence_release();
 }
 
-void asx_seqlock_write_end(asx_seqlock *sl)
-{
+void asx_seqlock_write_end(asx_seqlock *sl) {
     uint32_t seq;
     if (sl == NULL) return;
     asx_fence_release();
@@ -167,8 +155,7 @@ void asx_seqlock_write_end(asx_seqlock *sl)
  * In single-threaded mode, always returns 1 unless sequence is
  * artificially made odd (simulating a concurrent write).
  */
-int asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size)
-{
+int asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size) {
     uint32_t s1, s2;
     uint32_t read_size;
     int retries = 0;
@@ -199,15 +186,13 @@ int asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size)
     return (retries == 0) ? 1 : 0;
 }
 
-uint32_t asx_seqlock_sequence(const asx_seqlock *sl)
-{
+uint32_t asx_seqlock_sequence(const asx_seqlock *sl) {
     if (sl == NULL) return 0;
     return seqlock_atomic_load(&sl->sequence);
 }
 
 /* Convenience: full write-begin + memcpy + write-end */
-void asx_seqlock_write(asx_seqlock *sl, const void *src, uint32_t size)
-{
+void asx_seqlock_write(asx_seqlock *sl, const void *src, uint32_t size) {
     uint32_t write_size;
     if (sl == NULL || src == NULL) return;
     write_size = (size < sl->data_size) ? size : sl->data_size;
@@ -249,15 +234,15 @@ void asx_seqlock_write(asx_seqlock *sl, const void *src, uint32_t size)
  *   2. Item will be reclaimed when epoch advances past E+2
  */
 
-#define ASX_EBR_EPOCH_COUNT   3u
-#define ASX_EBR_MAX_READERS  16u
+#define ASX_EBR_EPOCH_COUNT 3u
+#define ASX_EBR_MAX_READERS 16u
 #define ASX_EBR_DEFER_CAPACITY 32u
 
-#define ASX_EBR_INACTIVE     UINT32_MAX
+#define ASX_EBR_INACTIVE UINT32_MAX
 
 typedef struct {
-    uint32_t slot_index;  /* arena index to reclaim */
-    uint32_t generation;  /* generation at deferral time */
+    uint32_t slot_index; /* arena index to reclaim */
+    uint32_t generation; /* generation at deferral time */
 } asx_ebr_deferred_item;
 
 typedef struct {
@@ -266,11 +251,11 @@ typedef struct {
 
     /* Per-reader announced epoch (or ASX_EBR_INACTIVE) */
     asx_seqlock_atomic_u32 reader_epoch[ASX_EBR_MAX_READERS];
-    uint32_t               reader_count;
+    uint32_t reader_count;
 
     /* Deferred reclamation ring per epoch */
-    asx_ebr_deferred_item  defer_ring[ASX_EBR_EPOCH_COUNT][ASX_EBR_DEFER_CAPACITY];
-    uint32_t               defer_count[ASX_EBR_EPOCH_COUNT];
+    asx_ebr_deferred_item defer_ring[ASX_EBR_EPOCH_COUNT][ASX_EBR_DEFER_CAPACITY];
+    uint32_t defer_count[ASX_EBR_EPOCH_COUNT];
 
     /* Statistics */
     uint32_t total_deferred;
@@ -279,32 +264,27 @@ typedef struct {
 } asx_ebr_state;
 
 /* Callback for reclaiming an item */
-typedef void (*asx_ebr_reclaim_fn)(uint32_t slot_index, uint32_t generation,
-                                    void *user_data);
+typedef void (*asx_ebr_reclaim_fn)(uint32_t slot_index, uint32_t generation, void *user_data);
 
 void asx_ebr_init(asx_ebr_state *ebr, uint32_t reader_count);
 uint32_t asx_ebr_reader_enter(asx_ebr_state *ebr, uint32_t reader_id);
 void asx_ebr_reader_leave(asx_ebr_state *ebr, uint32_t reader_id);
-int  asx_ebr_defer(asx_ebr_state *ebr, uint32_t slot_index, uint32_t generation);
-int  asx_ebr_try_advance(asx_ebr_state *ebr, asx_ebr_reclaim_fn reclaim_fn,
-                          void *user_data);
+int asx_ebr_defer(asx_ebr_state *ebr, uint32_t slot_index, uint32_t generation);
+int asx_ebr_try_advance(asx_ebr_state *ebr, asx_ebr_reclaim_fn reclaim_fn, void *user_data);
 uint32_t asx_ebr_current_epoch(const asx_ebr_state *ebr);
 uint32_t asx_ebr_pending_count(const asx_ebr_state *ebr);
 
-void asx_ebr_init(asx_ebr_state *ebr, uint32_t reader_count)
-{
+void asx_ebr_init(asx_ebr_state *ebr, uint32_t reader_count) {
     uint32_t i;
     if (ebr == NULL) return;
     memset(ebr, 0, sizeof(*ebr));
-    ebr->reader_count = (reader_count > ASX_EBR_MAX_READERS)
-                       ? ASX_EBR_MAX_READERS : reader_count;
+    ebr->reader_count = (reader_count > ASX_EBR_MAX_READERS) ? ASX_EBR_MAX_READERS : reader_count;
     for (i = 0; i < ASX_EBR_MAX_READERS; i++) {
         seqlock_atomic_store(&ebr->reader_epoch[i], ASX_EBR_INACTIVE);
     }
 }
 
-uint32_t asx_ebr_reader_enter(asx_ebr_state *ebr, uint32_t reader_id)
-{
+uint32_t asx_ebr_reader_enter(asx_ebr_state *ebr, uint32_t reader_id) {
     uint32_t epoch;
     if (ebr == NULL || reader_id >= ebr->reader_count) return 0;
     epoch = seqlock_atomic_load(&ebr->global_epoch);
@@ -313,15 +293,13 @@ uint32_t asx_ebr_reader_enter(asx_ebr_state *ebr, uint32_t reader_id)
     return epoch;
 }
 
-void asx_ebr_reader_leave(asx_ebr_state *ebr, uint32_t reader_id)
-{
+void asx_ebr_reader_leave(asx_ebr_state *ebr, uint32_t reader_id) {
     if (ebr == NULL || reader_id >= ebr->reader_count) return;
     asx_fence_release();
     seqlock_atomic_store(&ebr->reader_epoch[reader_id], ASX_EBR_INACTIVE);
 }
 
-int asx_ebr_defer(asx_ebr_state *ebr, uint32_t slot_index, uint32_t generation)
-{
+int asx_ebr_defer(asx_ebr_state *ebr, uint32_t slot_index, uint32_t generation) {
     uint32_t epoch;
     uint32_t count;
 
@@ -343,8 +321,7 @@ int asx_ebr_defer(asx_ebr_state *ebr, uint32_t slot_index, uint32_t generation)
  * Check if all readers have left a given epoch.
  * Returns 1 if safe to reclaim, 0 if readers still present.
  */
-static int ebr_epoch_quiesced(const asx_ebr_state *ebr, uint32_t epoch)
-{
+static int ebr_epoch_quiesced(const asx_ebr_state *ebr, uint32_t epoch) {
     uint32_t i;
     for (i = 0; i < ebr->reader_count; i++) {
         uint32_t re = seqlock_atomic_load(&ebr->reader_epoch[i]);
@@ -357,9 +334,7 @@ static int ebr_epoch_quiesced(const asx_ebr_state *ebr, uint32_t epoch)
  * Try to advance the global epoch and reclaim deferred items.
  * Returns 1 if epoch advanced, 0 if readers blocked advancement.
  */
-int asx_ebr_try_advance(asx_ebr_state *ebr, asx_ebr_reclaim_fn reclaim_fn,
-                         void *user_data)
-{
+int asx_ebr_try_advance(asx_ebr_state *ebr, asx_ebr_reclaim_fn reclaim_fn, void *user_data) {
     uint32_t current;
     uint32_t reclaim_epoch;
     uint32_t i;
@@ -383,34 +358,28 @@ int asx_ebr_try_advance(asx_ebr_state *ebr, asx_ebr_reclaim_fn reclaim_fn,
     for (i = 0; i < count; i++) {
         if (reclaim_fn != NULL) {
             reclaim_fn(ebr->defer_ring[reclaim_epoch][i].slot_index,
-                       ebr->defer_ring[reclaim_epoch][i].generation,
-                       user_data);
+                       ebr->defer_ring[reclaim_epoch][i].generation, user_data);
         }
         ebr->total_reclaimed++;
     }
     ebr->defer_count[reclaim_epoch] = 0;
 
     /* Advance global epoch */
-    seqlock_atomic_store(&ebr->global_epoch,
-                          (current + 1u) % ASX_EBR_EPOCH_COUNT);
+    seqlock_atomic_store(&ebr->global_epoch, (current + 1u) % ASX_EBR_EPOCH_COUNT);
     ebr->epoch_advances++;
     return 1;
 }
 
-uint32_t asx_ebr_current_epoch(const asx_ebr_state *ebr)
-{
+uint32_t asx_ebr_current_epoch(const asx_ebr_state *ebr) {
     if (ebr == NULL) return 0;
     return seqlock_atomic_load(&ebr->global_epoch);
 }
 
-uint32_t asx_ebr_pending_count(const asx_ebr_state *ebr)
-{
+uint32_t asx_ebr_pending_count(const asx_ebr_state *ebr) {
     uint32_t total = 0;
     uint32_t i;
     if (ebr == NULL) return 0;
-    for (i = 0; i < ASX_EBR_EPOCH_COUNT; i++) {
-        total += ebr->defer_count[i];
-    }
+    for (i = 0; i < ASX_EBR_EPOCH_COUNT; i++) { total += ebr->defer_count[i]; }
     return total;
 }
 
@@ -436,18 +405,16 @@ typedef struct {
 } asx_spinlock;
 
 void asx_spinlock_init(asx_spinlock *lock);
-int  asx_spinlock_try_lock(asx_spinlock *lock);
+int asx_spinlock_try_lock(asx_spinlock *lock);
 void asx_spinlock_lock(asx_spinlock *lock);
 void asx_spinlock_unlock(asx_spinlock *lock);
 
-void asx_spinlock_init(asx_spinlock *lock)
-{
+void asx_spinlock_init(asx_spinlock *lock) {
     if (lock == NULL) return;
     memset(lock, 0, sizeof(*lock));
 }
 
-int asx_spinlock_try_lock(asx_spinlock *lock)
-{
+int asx_spinlock_try_lock(asx_spinlock *lock) {
     if (lock == NULL) return 0;
     if (seqlock_atomic_cas(&lock->locked, 0, 1)) {
         lock->acquisitions++;
@@ -457,8 +424,7 @@ int asx_spinlock_try_lock(asx_spinlock *lock)
     return 0;
 }
 
-void asx_spinlock_lock(asx_spinlock *lock)
-{
+void asx_spinlock_lock(asx_spinlock *lock) {
     int spins = 0;
     int max_spins = 1000;
     if (lock == NULL) return;
@@ -470,8 +436,7 @@ void asx_spinlock_lock(asx_spinlock *lock)
     lock->acquisitions++;
 }
 
-void asx_spinlock_unlock(asx_spinlock *lock)
-{
+void asx_spinlock_unlock(asx_spinlock *lock) {
     if (lock == NULL) return;
     seqlock_atomic_store(&lock->locked, 0);
 }
@@ -495,31 +460,28 @@ typedef struct {
     uint64_t seqlock_write_cycles;
     uint64_t spinlock_read_cycles;
     uint64_t spinlock_write_cycles;
-    uint64_t raw_read_cycles;     /* unprotected (baseline lower bound) */
+    uint64_t raw_read_cycles; /* unprotected (baseline lower bound) */
     uint64_t raw_write_cycles;
     uint32_t read_ops;
     uint32_t write_ops;
-    uint32_t seqlock_retries;     /* times reader had to retry */
+    uint32_t seqlock_retries; /* times reader had to retry */
 } asx_concurrency_bench;
 
 void asx_concurrency_bench_init(asx_concurrency_bench *bench);
 
-void asx_concurrency_bench_init(asx_concurrency_bench *bench)
-{
+void asx_concurrency_bench_init(asx_concurrency_bench *bench) {
     if (bench == NULL) return;
     memset(bench, 0, sizeof(*bench));
 }
 
 #if defined(__x86_64__) || defined(__i386__)
-static uint64_t bench_rdtsc(void)
-{
+static uint64_t bench_rdtsc(void) {
     uint32_t lo, hi;
     __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
     return ((uint64_t)hi << 32) | lo;
 }
 #else
-static uint64_t bench_rdtsc(void)
-{
+static uint64_t bench_rdtsc(void) {
     static uint64_t counter = 0;
     return ++counter;
 }
@@ -527,8 +489,7 @@ static uint64_t bench_rdtsc(void)
 
 void asx_concurrency_bench_run(asx_concurrency_bench *bench, uint32_t rounds);
 
-void asx_concurrency_bench_run(asx_concurrency_bench *bench, uint32_t rounds)
-{
+void asx_concurrency_bench_run(asx_concurrency_bench *bench, uint32_t rounds) {
     asx_seqlock sl;
     asx_spinlock lock;
     asx_task_metadata md;

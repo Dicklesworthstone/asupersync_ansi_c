@@ -7,10 +7,10 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include "test_log.h"
 #include "test_harness.h"
-#include <asx/runtime/overload_catalog.h>
+#include "test_log.h"
 #include <asx/runtime/hft_instrument.h>
+#include <asx/runtime/overload_catalog.h>
 #include <asx/runtime/profile_compat.h>
 #include <string.h>
 
@@ -18,18 +18,13 @@
  * Catalog structure tests
  * =================================================================== */
 
-TEST(catalog_version_nonzero)
-{
-    ASSERT_TRUE(asx_overload_catalog_version() > 0);
-}
+TEST(catalog_version_nonzero) { ASSERT_TRUE(asx_overload_catalog_version() > 0); }
 
-TEST(catalog_count_matches_profiles)
-{
+TEST(catalog_count_matches_profiles) {
     ASSERT_EQ(asx_overload_catalog_count(), (uint32_t)ASX_PROFILE_ID_COUNT);
 }
 
-TEST(catalog_every_profile_has_entry)
-{
+TEST(catalog_every_profile_has_entry) {
     int i;
     for (i = 0; i < ASX_PROFILE_ID_COUNT; i++) {
         const asx_overload_catalog_entry *entry = NULL;
@@ -40,32 +35,26 @@ TEST(catalog_every_profile_has_entry)
     }
 }
 
-TEST(catalog_invalid_profile_rejected)
-{
+TEST(catalog_invalid_profile_rejected) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_status s = asx_overload_catalog_get((asx_profile_id)99, &entry);
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(catalog_null_out_rejected)
-{
+TEST(catalog_null_out_rejected) {
     asx_status s = asx_overload_catalog_get(ASX_PROFILE_ID_CORE, NULL);
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(catalog_full_validation_passes)
-{
+TEST(catalog_full_validation_passes) {
     asx_catalog_validation_result result;
     asx_overload_catalog_validate(&result);
-    if (!result.valid) {
-        fprintf(stderr, "    validation failure: %s\n", result.first_violation);
-    }
+    if (!result.valid) { fprintf(stderr, "    validation failure: %s\n", result.first_violation); }
     ASSERT_TRUE(result.valid);
     ASSERT_EQ(result.violation_count, 0u);
 }
 
-TEST(catalog_every_entry_structurally_valid)
-{
+TEST(catalog_every_entry_structurally_valid) {
     int i;
     for (i = 0; i < ASX_PROFILE_ID_COUNT; i++) {
         const asx_overload_catalog_entry *entry = NULL;
@@ -74,17 +63,13 @@ TEST(catalog_every_entry_structurally_valid)
     }
 }
 
-TEST(catalog_null_entry_invalid)
-{
-    ASSERT_TRUE(!asx_overload_catalog_entry_valid(NULL));
-}
+TEST(catalog_null_entry_invalid) { ASSERT_TRUE(!asx_overload_catalog_entry_valid(NULL)); }
 
 /* ===================================================================
  * Per-profile policy tests
  * =================================================================== */
 
-TEST(core_profile_rejects_at_90)
-{
+TEST(core_profile_rejects_at_90) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_catalog_get(ASX_PROFILE_ID_CORE, &entry);
     ASSERT_EQ((int)entry->mode, (int)ASX_OVERLOAD_REJECT);
@@ -93,8 +78,7 @@ TEST(core_profile_rejects_at_90)
     ASSERT_EQ((int)entry->degrade, (int)ASX_DEGRADE_NONE);
 }
 
-TEST(hft_profile_sheds_oldest)
-{
+TEST(hft_profile_sheds_oldest) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_catalog_get(ASX_PROFILE_ID_HFT, &entry);
     ASSERT_EQ((int)entry->mode, (int)ASX_OVERLOAD_SHED_OLDEST);
@@ -103,8 +87,7 @@ TEST(hft_profile_sheds_oldest)
     ASSERT_EQ((int)entry->degrade, (int)ASX_DEGRADE_SHED_TAIL);
 }
 
-TEST(automotive_profile_backpressure)
-{
+TEST(automotive_profile_backpressure) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_catalog_get(ASX_PROFILE_ID_AUTOMOTIVE, &entry);
     ASSERT_EQ((int)entry->mode, (int)ASX_OVERLOAD_BACKPRESSURE);
@@ -112,16 +95,14 @@ TEST(automotive_profile_backpressure)
     ASSERT_EQ((int)entry->degrade, (int)ASX_DEGRADE_WATCHDOG_TRIP);
 }
 
-TEST(embedded_router_rejects_aggressively)
-{
+TEST(embedded_router_rejects_aggressively) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_catalog_get(ASX_PROFILE_ID_EMBEDDED_ROUTER, &entry);
     ASSERT_EQ((int)entry->mode, (int)ASX_OVERLOAD_REJECT);
     ASSERT_TRUE(entry->threshold_pct < 90u);
 }
 
-TEST(freestanding_rejects_earlier_than_core)
-{
+TEST(freestanding_rejects_earlier_than_core) {
     const asx_overload_catalog_entry *core = NULL;
     const asx_overload_catalog_entry *free_entry = NULL;
     asx_overload_catalog_get(ASX_PROFILE_ID_CORE, &core);
@@ -129,8 +110,7 @@ TEST(freestanding_rejects_earlier_than_core)
     ASSERT_TRUE(free_entry->threshold_pct < core->threshold_pct);
 }
 
-TEST(parallel_inherits_core_policy)
-{
+TEST(parallel_inherits_core_policy) {
     const asx_overload_catalog_entry *core = NULL;
     const asx_overload_catalog_entry *par = NULL;
     asx_overload_catalog_get(ASX_PROFILE_ID_CORE, &core);
@@ -143,8 +123,7 @@ TEST(parallel_inherits_core_policy)
  * Forbidden behavior tests
  * =================================================================== */
 
-TEST(all_profiles_forbid_nondeterministic)
-{
+TEST(all_profiles_forbid_nondeterministic) {
     int i;
     for (i = 0; i < ASX_PROFILE_ID_COUNT; i++) {
         const asx_overload_catalog_entry *entry = NULL;
@@ -153,22 +132,19 @@ TEST(all_profiles_forbid_nondeterministic)
     }
 }
 
-TEST(automotive_forbids_deadline_miss)
-{
+TEST(automotive_forbids_deadline_miss) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_catalog_get(ASX_PROFILE_ID_AUTOMOTIVE, &entry);
     ASSERT_TRUE(entry->forbidden & ASX_FORBID_DEADLINE_MISS);
 }
 
-TEST(hft_forbids_latency_spike)
-{
+TEST(hft_forbids_latency_spike) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_catalog_get(ASX_PROFILE_ID_HFT, &entry);
     ASSERT_TRUE(entry->forbidden & ASX_FORBID_LATENCY_SPIKE);
 }
 
-TEST(embedded_forbids_unbounded_queue)
-{
+TEST(embedded_forbids_unbounded_queue) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_catalog_get(ASX_PROFILE_ID_EMBEDDED_ROUTER, &entry);
     ASSERT_TRUE(entry->forbidden & ASX_FORBID_UNBOUNDED_QUEUE);
@@ -178,8 +154,7 @@ TEST(embedded_forbids_unbounded_queue)
  * to_policy conversion tests
  * =================================================================== */
 
-TEST(to_policy_core_matches_catalog)
-{
+TEST(to_policy_core_matches_catalog) {
     asx_overload_policy pol;
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_catalog_get(ASX_PROFILE_ID_CORE, &entry);
@@ -189,8 +164,7 @@ TEST(to_policy_core_matches_catalog)
     ASSERT_EQ(pol.shed_max, entry->shed_max);
 }
 
-TEST(to_policy_hft_matches_catalog)
-{
+TEST(to_policy_hft_matches_catalog) {
     asx_overload_policy pol;
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_catalog_get(ASX_PROFILE_ID_HFT, &entry);
@@ -200,14 +174,12 @@ TEST(to_policy_hft_matches_catalog)
     ASSERT_EQ(pol.shed_max, entry->shed_max);
 }
 
-TEST(to_policy_null_rejected)
-{
+TEST(to_policy_null_rejected) {
     asx_status s = asx_overload_catalog_to_policy(ASX_PROFILE_ID_CORE, NULL);
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(to_policy_invalid_profile_rejected)
-{
+TEST(to_policy_invalid_profile_rejected) {
     asx_overload_policy pol;
     asx_status s = asx_overload_catalog_to_policy((asx_profile_id)99, &pol);
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
@@ -217,8 +189,7 @@ TEST(to_policy_invalid_profile_rejected)
  * Decision consistency tests
  * =================================================================== */
 
-TEST(decision_consistent_reject_below_threshold)
-{
+TEST(decision_consistent_reject_below_threshold) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_policy pol;
     asx_overload_decision dec;
@@ -230,8 +201,7 @@ TEST(decision_consistent_reject_below_threshold)
     ASSERT_TRUE(asx_overload_catalog_decision_consistent(entry, &dec));
 }
 
-TEST(decision_consistent_reject_above_threshold)
-{
+TEST(decision_consistent_reject_above_threshold) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_policy pol;
     asx_overload_decision dec;
@@ -245,8 +215,7 @@ TEST(decision_consistent_reject_above_threshold)
     ASSERT_TRUE(asx_overload_catalog_decision_consistent(entry, &dec));
 }
 
-TEST(decision_consistent_shed_oldest)
-{
+TEST(decision_consistent_shed_oldest) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_policy pol;
     asx_overload_decision dec;
@@ -260,8 +229,7 @@ TEST(decision_consistent_shed_oldest)
     ASSERT_TRUE(asx_overload_catalog_decision_consistent(entry, &dec));
 }
 
-TEST(decision_consistent_backpressure)
-{
+TEST(decision_consistent_backpressure) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_policy pol;
     asx_overload_decision dec;
@@ -275,8 +243,7 @@ TEST(decision_consistent_backpressure)
     ASSERT_TRUE(asx_overload_catalog_decision_consistent(entry, &dec));
 }
 
-TEST(decision_inconsistent_wrong_mode)
-{
+TEST(decision_inconsistent_wrong_mode) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_decision dec;
 
@@ -292,8 +259,7 @@ TEST(decision_inconsistent_wrong_mode)
     ASSERT_TRUE(!asx_overload_catalog_decision_consistent(entry, &dec));
 }
 
-TEST(decision_null_safety)
-{
+TEST(decision_null_safety) {
     asx_overload_decision dec;
     memset(&dec, 0, sizeof(dec));
     dec.mode = ASX_OVERLOAD_REJECT;
@@ -307,8 +273,7 @@ TEST(decision_null_safety)
  * Fixture traceability tests
  * =================================================================== */
 
-TEST(every_entry_has_fixtures)
-{
+TEST(every_entry_has_fixtures) {
     int i;
     for (i = 0; i < ASX_PROFILE_ID_COUNT; i++) {
         const asx_overload_catalog_entry *entry = NULL;
@@ -319,8 +284,7 @@ TEST(every_entry_has_fixtures)
     }
 }
 
-TEST(every_entry_has_rationale)
-{
+TEST(every_entry_has_rationale) {
     int i;
     for (i = 0; i < ASX_PROFILE_ID_COUNT; i++) {
         const asx_overload_catalog_entry *entry = NULL;
@@ -330,8 +294,7 @@ TEST(every_entry_has_rationale)
     }
 }
 
-TEST(hft_fixtures_include_microburst)
-{
+TEST(hft_fixtures_include_microburst) {
     const asx_overload_catalog_entry *entry = NULL;
     uint32_t i;
     int found = 0;
@@ -346,16 +309,14 @@ TEST(hft_fixtures_include_microburst)
     ASSERT_TRUE(found);
 }
 
-TEST(automotive_fixtures_include_watchdog)
-{
+TEST(automotive_fixtures_include_watchdog) {
     const asx_overload_catalog_entry *entry = NULL;
     uint32_t i;
     int found = 0;
 
     asx_overload_catalog_get(ASX_PROFILE_ID_AUTOMOTIVE, &entry);
     for (i = 0; i < entry->fixtures.fixture_count; i++) {
-        if (entry->fixtures.fixture_ids[i] &&
-            strstr(entry->fixtures.fixture_ids[i], "watchdog")) {
+        if (entry->fixtures.fixture_ids[i] && strstr(entry->fixtures.fixture_ids[i], "watchdog")) {
             found = 1;
         }
     }
@@ -366,8 +327,7 @@ TEST(automotive_fixtures_include_watchdog)
  * String helper tests
  * =================================================================== */
 
-TEST(degrade_class_str_all_variants)
-{
+TEST(degrade_class_str_all_variants) {
     ASSERT_TRUE(strcmp(asx_degrade_class_str(ASX_DEGRADE_NONE), "NONE") == 0);
     ASSERT_TRUE(strcmp(asx_degrade_class_str(ASX_DEGRADE_SHED_TAIL), "SHED_TAIL") == 0);
     ASSERT_TRUE(strcmp(asx_degrade_class_str(ASX_DEGRADE_BACKPRESSURE), "BACKPRESSURE") == 0);
@@ -379,8 +339,7 @@ TEST(degrade_class_str_all_variants)
  * Deterministic replay test
  * =================================================================== */
 
-TEST(overload_decisions_are_deterministic)
-{
+TEST(overload_decisions_are_deterministic) {
     int i;
     for (i = 0; i < ASX_PROFILE_ID_COUNT; i++) {
         asx_overload_policy pol;
@@ -404,10 +363,8 @@ TEST(overload_decisions_are_deterministic)
  * main
  * =================================================================== */
 
-int main(void)
-{
-    test_log_open("unit", "runtime/overload_catalog",
-                  "overload-catalog");
+int main(void) {
+    test_log_open("unit", "runtime/overload_catalog", "overload-catalog");
 
     /* Catalog structure */
     RUN_TEST(catalog_version_nonzero);

@@ -16,11 +16,10 @@
 /* A long-running task that yields many times. */
 typedef struct {
     asx_co_state co;
-    int          polls_seen;
+    int polls_seen;
 } long_runner_state;
 
-static asx_status poll_long_runner(void *ud, asx_task_id self)
-{
+static asx_status poll_long_runner(void *ud, asx_task_id self) {
     long_runner_state *s = (long_runner_state *)ud;
     (void)self;
 
@@ -35,8 +34,7 @@ static asx_status poll_long_runner(void *ud, asx_task_id self)
 /* -------------------------------------------------------------------
  * Scenario 1: Budget construction and query
  * ------------------------------------------------------------------- */
-static int scenario_construction(void)
-{
+static int scenario_construction(void) {
     asx_budget b;
 
     printf("--- scenario: budget construction ---\n");
@@ -82,8 +80,7 @@ static int scenario_construction(void)
 /* -------------------------------------------------------------------
  * Scenario 2: Poll consumption
  * ------------------------------------------------------------------- */
-static int scenario_poll_consumption(void)
-{
+static int scenario_poll_consumption(void) {
     asx_budget b;
     uint32_t old_quota;
 
@@ -102,8 +99,7 @@ static int scenario_poll_consumption(void)
      * want to know remaining quota, but most callers just check != 0.
      */
     old_quota = asx_budget_consume_poll(&b);
-    printf("  consume_poll: old_quota=%u, remaining=%u\n",
-           old_quota, asx_budget_polls(&b));
+    printf("  consume_poll: old_quota=%u, remaining=%u\n", old_quota, asx_budget_polls(&b));
 
     old_quota = asx_budget_consume_poll(&b);
     old_quota = asx_budget_consume_poll(&b);
@@ -129,8 +125,7 @@ static int scenario_poll_consumption(void)
 /* -------------------------------------------------------------------
  * Scenario 3: Cost consumption
  * ------------------------------------------------------------------- */
-static int scenario_cost_consumption(void)
-{
+static int scenario_cost_consumption(void) {
     asx_budget b;
     int ok;
 
@@ -150,8 +145,7 @@ static int scenario_cost_consumption(void)
         printf("  FAIL: consume_cost(60) should succeed\n");
         return 1;
     }
-    printf("  consume_cost(60): ok=%d, remaining=%lu\n",
-           ok, (unsigned long)b.cost_quota);
+    printf("  consume_cost(60): ok=%d, remaining=%lu\n", ok, (unsigned long)b.cost_quota);
 
     /* Over-consume should fail without mutation. */
     ok = asx_budget_consume_cost(&b, 100);
@@ -168,8 +162,7 @@ static int scenario_cost_consumption(void)
 /* -------------------------------------------------------------------
  * Scenario 4: Budget meet (componentwise tightening)
  * ------------------------------------------------------------------- */
-static int scenario_meet(void)
-{
+static int scenario_meet(void) {
     asx_budget a, b, m;
 
     printf("--- scenario: budget meet ---\n");
@@ -196,8 +189,7 @@ static int scenario_meet(void)
         return 1;
     }
 
-    printf("  meet result: polls=%u cost=%lu\n",
-           asx_budget_polls(&m), (unsigned long)m.cost_quota);
+    printf("  meet result: polls=%u cost=%lu\n", asx_budget_polls(&m), (unsigned long)m.cost_quota);
     printf("  PASS: budget meet\n");
     return 0;
 }
@@ -205,8 +197,7 @@ static int scenario_meet(void)
 /* -------------------------------------------------------------------
  * Scenario 5: Scheduler budget exhaustion
  * ------------------------------------------------------------------- */
-static int scenario_scheduler_exhaustion(void)
-{
+static int scenario_scheduler_exhaustion(void) {
     asx_status st;
     asx_region_id region;
     asx_task_id task;
@@ -221,9 +212,8 @@ static int scenario_scheduler_exhaustion(void)
     st = asx_region_open(&region);
     if (st != ASX_OK) return 1;
 
-    st = asx_task_spawn_captured(region, poll_long_runner,
-                                  (uint32_t)sizeof(long_runner_state),
-                                  NULL, &task, &state_ptr);
+    st = asx_task_spawn_captured(region, poll_long_runner, (uint32_t)sizeof(long_runner_state),
+                                 NULL, &task, &state_ptr);
     if (st != ASX_OK) return 1;
 
     ls = (long_runner_state *)state_ptr;
@@ -242,8 +232,7 @@ static int scenario_scheduler_exhaustion(void)
      * completion or undefined behavior.
      */
     if (st != ASX_E_POLL_BUDGET_EXHAUSTED) {
-        printf("  FAIL: expected BUDGET_EXHAUSTED, got %s\n",
-               asx_status_str(st));
+        printf("  FAIL: expected BUDGET_EXHAUSTED, got %s\n", asx_status_str(st));
         return 1;
     }
     printf("  scheduler correctly returned: %s\n", asx_status_str(st));
@@ -264,8 +253,7 @@ static int scenario_scheduler_exhaustion(void)
 /* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
-int main(void)
-{
+int main(void) {
     int failures = 0;
 
     printf("=== vignette: budgets ===\n\n");

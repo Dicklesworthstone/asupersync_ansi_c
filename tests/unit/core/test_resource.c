@@ -14,8 +14,7 @@
 #include <asx/runtime/runtime.h>
 
 /* Trivial poll function for spawning tasks */
-static asx_status noop_poll(void *user_data, asx_task_id self)
-{
+static asx_status noop_poll(void *user_data, asx_task_id self) {
     (void)user_data;
     (void)self;
     return ASX_OK;
@@ -24,18 +23,15 @@ static asx_status noop_poll(void *user_data, asx_task_id self)
 /* ---- Resource query accuracy ---- */
 
 TEST(resource_capacity_region) {
-    ASSERT_EQ(asx_resource_capacity(ASX_RESOURCE_REGION),
-              (uint32_t)ASX_MAX_REGIONS);
+    ASSERT_EQ(asx_resource_capacity(ASX_RESOURCE_REGION), (uint32_t)ASX_MAX_REGIONS);
 }
 
 TEST(resource_capacity_task) {
-    ASSERT_EQ(asx_resource_capacity(ASX_RESOURCE_TASK),
-              (uint32_t)ASX_MAX_TASKS);
+    ASSERT_EQ(asx_resource_capacity(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
 }
 
 TEST(resource_capacity_obligation) {
-    ASSERT_EQ(asx_resource_capacity(ASX_RESOURCE_OBLIGATION),
-              (uint32_t)ASX_MAX_OBLIGATIONS);
+    ASSERT_EQ(asx_resource_capacity(ASX_RESOURCE_OBLIGATION), (uint32_t)ASX_MAX_OBLIGATIONS);
 }
 
 TEST(resource_capacity_unknown) {
@@ -53,13 +49,11 @@ TEST(resource_remaining_matches_capacity_minus_used) {
     asx_region_id rid;
     asx_runtime_reset();
 
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_REGION),
-              (uint32_t)ASX_MAX_REGIONS);
+    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_REGION), (uint32_t)ASX_MAX_REGIONS);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_resource_used(ASX_RESOURCE_REGION), (uint32_t)1);
-    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_REGION),
-              (uint32_t)(ASX_MAX_REGIONS - 1));
+    ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_REGION), (uint32_t)(ASX_MAX_REGIONS - 1));
 }
 
 /* ---- Snapshot consistency ---- */
@@ -79,14 +73,12 @@ TEST(resource_snapshot_matches_queries) {
 }
 
 TEST(resource_snapshot_null_output) {
-    ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_REGION, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_REGION, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(resource_snapshot_invalid_kind) {
     asx_resource_snapshot snap;
-    ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_KIND_COUNT, &snap),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_snapshot_get(ASX_RESOURCE_KIND_COUNT, &snap), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ---- Admission gate ---- */
@@ -109,20 +101,16 @@ TEST(resource_admit_tracks_allocation) {
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     /* One region used, so can only admit MAX-1 more */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, ASX_MAX_REGIONS),
-              ASX_E_RESOURCE_EXHAUSTED);
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, ASX_MAX_REGIONS - 1u),
-              ASX_OK);
+    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, ASX_MAX_REGIONS), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, ASX_MAX_REGIONS - 1u), ASX_OK);
 }
 
 TEST(resource_admit_zero_count) {
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, 0),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_REGION, 0), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(resource_admit_invalid_kind) {
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_KIND_COUNT, 1),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_KIND_COUNT, 1), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ---- Region arena exhaustion ---- */
@@ -134,17 +122,14 @@ TEST(resource_region_arena_exhaustion) {
     asx_runtime_reset();
 
     /* Fill all region slots */
-    for (i = 0; i < ASX_MAX_REGIONS; i++) {
-        ASSERT_EQ(asx_region_open(&ids[i]), ASX_OK);
-    }
+    for (i = 0; i < ASX_MAX_REGIONS; i++) { ASSERT_EQ(asx_region_open(&ids[i]), ASX_OK); }
     ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_REGION), (uint32_t)0);
 
     /* Next allocation should fail */
     ASSERT_EQ(asx_region_open(&overflow), ASX_E_RESOURCE_EXHAUSTED);
 
     /* State should be consistent: still exactly MAX_REGIONS in use */
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_REGION),
-              (uint32_t)ASX_MAX_REGIONS);
+    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_REGION), (uint32_t)ASX_MAX_REGIONS);
 }
 
 TEST(resource_region_reclaim_after_drain) {
@@ -155,9 +140,7 @@ TEST(resource_region_reclaim_after_drain) {
     asx_runtime_reset();
 
     /* Fill all region slots */
-    for (i = 0; i < ASX_MAX_REGIONS; i++) {
-        ASSERT_EQ(asx_region_open(&ids[i]), ASX_OK);
-    }
+    for (i = 0; i < ASX_MAX_REGIONS; i++) { ASSERT_EQ(asx_region_open(&ids[i]), ASX_OK); }
 
     /* Drain one region to make it reclaimable */
     budget = asx_budget_infinite();
@@ -188,8 +171,7 @@ TEST(resource_task_arena_exhaustion) {
     ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_TASK), (uint32_t)0);
 
     /* Next spawn should fail */
-    ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &overflow),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &overflow), ASX_E_RESOURCE_EXHAUSTED);
 
     /* Counter should not have advanced */
     ASSERT_EQ(asx_resource_used(ASX_RESOURCE_TASK), (uint32_t)ASX_MAX_TASKS);
@@ -213,20 +195,15 @@ TEST(resource_obligation_arena_exhaustion) {
     ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_OBLIGATION), (uint32_t)0);
 
     /* Next reservation should fail */
-    ASSERT_EQ(asx_obligation_reserve(rid, &overflow),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_obligation_reserve(rid, &overflow), ASX_E_RESOURCE_EXHAUSTED);
 
     /* Counter should not have advanced */
-    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_OBLIGATION),
-              (uint32_t)ASX_MAX_OBLIGATIONS);
+    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_OBLIGATION), (uint32_t)ASX_MAX_OBLIGATIONS);
 }
 
 /* ---- Cleanup stack exhaustion ---- */
 
-static void dummy_cleanup(void *data)
-{
-    (void)data;
-}
+static void dummy_cleanup(void *data) { (void)data; }
 
 TEST(resource_cleanup_stack_exhaustion) {
     asx_region_id rid;
@@ -244,8 +221,7 @@ TEST(resource_cleanup_stack_exhaustion) {
     }
 
     /* Next push should fail */
-    ASSERT_EQ(asx_cleanup_push(&stack, dummy_cleanup, NULL, &h),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_cleanup_push(&stack, dummy_cleanup, NULL, &h), ASX_E_RESOURCE_EXHAUSTED);
 
     /* Query remaining via region API */
     ASSERT_EQ(asx_resource_region_cleanup_remaining(rid, &remaining), ASX_OK);
@@ -264,23 +240,20 @@ TEST(resource_capture_arena_exhaustion) {
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Check initial capture remaining */
-    ASSERT_EQ(asx_resource_region_capture_remaining(rid, &capture_remaining),
-              ASX_OK);
+    ASSERT_EQ(asx_resource_region_capture_remaining(rid, &capture_remaining), ASX_OK);
     ASSERT_EQ(capture_remaining, (uint32_t)ASX_REGION_CAPTURE_ARENA_BYTES);
 
     /* Allocate a large chunk from the capture arena */
-    ASSERT_EQ(asx_task_spawn_captured(rid, noop_poll,
-              ASX_REGION_CAPTURE_ARENA_BYTES / 2u, NULL, &tid, &state),
+    ASSERT_EQ(asx_task_spawn_captured(rid, noop_poll, ASX_REGION_CAPTURE_ARENA_BYTES / 2u, NULL,
+                                      &tid, &state),
               ASX_OK);
 
     /* Check reduced remaining */
-    ASSERT_EQ(asx_resource_region_capture_remaining(rid, &capture_remaining),
-              ASX_OK);
+    ASSERT_EQ(asx_resource_region_capture_remaining(rid, &capture_remaining), ASX_OK);
     ASSERT_TRUE(capture_remaining <= ASX_REGION_CAPTURE_ARENA_BYTES / 2u);
 
     /* Try to allocate more than remaining — should fail */
-    ASSERT_EQ(asx_task_spawn_captured(rid, noop_poll,
-              capture_remaining + 1u, NULL, &tid, &state),
+    ASSERT_EQ(asx_task_spawn_captured(rid, noop_poll, capture_remaining + 1u, NULL, &tid, &state),
               ASX_E_RESOURCE_EXHAUSTED);
 }
 
@@ -302,20 +275,16 @@ TEST(resource_capture_rollback_on_task_exhaustion) {
     }
 
     /* Use the last task slot with a captured spawn */
-    ASSERT_EQ(asx_resource_region_capture_remaining(rid, &capture_before),
-              ASX_OK);
-    ASSERT_EQ(asx_task_spawn_captured(rid, noop_poll, 64u, NULL, &tid, &state),
-              ASX_OK);
+    ASSERT_EQ(asx_resource_region_capture_remaining(rid, &capture_before), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_captured(rid, noop_poll, 64u, NULL, &tid, &state), ASX_OK);
 
     /* Now tasks are exhausted. Try another captured spawn. */
-    ASSERT_EQ(asx_resource_region_capture_remaining(rid, &capture_before),
-              ASX_OK);
+    ASSERT_EQ(asx_resource_region_capture_remaining(rid, &capture_before), ASX_OK);
     ASSERT_EQ(asx_task_spawn_captured(rid, noop_poll, 64u, NULL, &tid, &state),
               ASX_E_RESOURCE_EXHAUSTED);
 
     /* Capture arena should be rolled back — no bytes consumed */
-    ASSERT_EQ(asx_resource_region_capture_remaining(rid, &capture_after),
-              ASX_OK);
+    ASSERT_EQ(asx_resource_region_capture_remaining(rid, &capture_after), ASX_OK);
     ASSERT_EQ(capture_after, capture_before);
 }
 
@@ -325,8 +294,7 @@ TEST(resource_region_capture_remaining_invalid_region) {
     uint32_t remaining;
     asx_runtime_reset();
 
-    ASSERT_NE(asx_resource_region_capture_remaining(ASX_INVALID_ID,
-                                                      &remaining), ASX_OK);
+    ASSERT_NE(asx_resource_region_capture_remaining(ASX_INVALID_ID, &remaining), ASX_OK);
 }
 
 TEST(resource_region_cleanup_remaining_fresh) {
@@ -343,16 +311,14 @@ TEST(resource_region_capture_remaining_null_output) {
     asx_region_id rid;
     asx_runtime_reset();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_resource_region_capture_remaining(rid, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_region_capture_remaining(rid, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(resource_region_cleanup_remaining_null_output) {
     asx_region_id rid;
     asx_runtime_reset();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_resource_region_cleanup_remaining(rid, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resource_region_cleanup_remaining(rid, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ---- Diagnostic ---- */
@@ -375,9 +341,7 @@ TEST(resource_exhaustion_deterministic) {
     for (i = 0; i < 2u; i++) {
         uint32_t j;
         asx_runtime_reset();
-        for (j = 0; j < ASX_MAX_REGIONS; j++) {
-            ASSERT_EQ(asx_region_open(&ids[j]), ASX_OK);
-        }
+        for (j = 0; j < ASX_MAX_REGIONS; j++) { ASSERT_EQ(asx_region_open(&ids[j]), ASX_OK); }
         ASSERT_EQ(asx_region_open(&overflow), ASX_E_RESOURCE_EXHAUSTED);
         ASSERT_EQ(asx_resource_remaining(ASX_RESOURCE_REGION), (uint32_t)0);
     }
@@ -403,14 +367,11 @@ TEST(resource_admit_then_allocate) {
     }
 
     /* Admit check should predict failure */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, 1),
-              ASX_E_RESOURCE_EXHAUSTED);
-    ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, 1), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_E_RESOURCE_EXHAUSTED);
 }
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_resource ===\n");
 
     /* Resource query accuracy */

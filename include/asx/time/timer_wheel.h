@@ -12,10 +12,10 @@
 #ifndef ASX_TIME_TIMER_WHEEL_H
 #define ASX_TIME_TIMER_WHEEL_H
 
-#include <stdint.h>
 #include <asx/asx_export.h>
-#include <asx/asx_status.h>
 #include <asx/asx_ids.h>
+#include <asx/asx_status.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,8 +35,8 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint32_t slot;        /* arena slot index */
-    uint32_t generation;  /* generation at registration time */
+    uint32_t slot;       /* arena slot index */
+    uint32_t generation; /* generation at registration time */
 } asx_timer_handle;
 
 /* -------------------------------------------------------------------
@@ -60,11 +60,8 @@ ASX_API void asx_timer_wheel_reset(asx_timer_wheel *wheel);
  * Returns ASX_OK on success and fills *out_handle.
  * Returns ASX_E_TIMER_DURATION_EXCEEDED if deadline - now > max duration.
  * Returns ASX_E_RESOURCE_EXHAUSTED if no slots available. */
-ASX_API ASX_MUST_USE asx_status asx_timer_register(
-    asx_timer_wheel *wheel,
-    asx_time deadline,
-    void *waker_data,
-    asx_timer_handle *out_handle);
+ASX_API ASX_MUST_USE asx_status asx_timer_register(asx_timer_wheel *wheel, asx_time deadline,
+                                                   void *waker_data, asx_timer_handle *out_handle);
 
 /* -------------------------------------------------------------------
  * Timer cancellation (O(1) logical cancel)
@@ -79,8 +76,7 @@ ASX_API ASX_MUST_USE asx_status asx_timer_register(
  * Preconditions: wheel and handle must not be NULL.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Timer. */
-ASX_API int asx_timer_cancel(asx_timer_wheel *wheel,
-                              const asx_timer_handle *handle);
+ASX_API int asx_timer_cancel(asx_timer_wheel *wheel, const asx_timer_handle *handle);
 
 /* -------------------------------------------------------------------
  * Timer collection (fire expired timers)
@@ -97,11 +93,8 @@ ASX_API int asx_timer_cancel(asx_timer_wheel *wheel,
  *
  * Preconditions: wheel and out_wakers must not be NULL.
  * Thread-safety: not thread-safe; single-threaded mode only. */
-ASX_API uint32_t asx_timer_collect_expired(
-    asx_timer_wheel *wheel,
-    asx_time now,
-    void **out_wakers,
-    uint32_t max_wakers);
+ASX_API uint32_t asx_timer_collect_expired(asx_timer_wheel *wheel, asx_time now, void **out_wakers,
+                                           uint32_t max_wakers);
 
 /* -------------------------------------------------------------------
  * Timer update (cancel + re-register)
@@ -118,12 +111,10 @@ ASX_API uint32_t asx_timer_collect_expired(
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if NULL params,
  *   ASX_E_RESOURCE_EXHAUSTED if timer arena is full.
  * Thread-safety: not thread-safe; single-threaded mode only. */
-ASX_API ASX_MUST_USE asx_status asx_timer_update(
-    asx_timer_wheel *wheel,
-    const asx_timer_handle *old_handle,
-    asx_time new_deadline,
-    void *waker_data,
-    asx_timer_handle *out_handle);
+ASX_API ASX_MUST_USE asx_status asx_timer_update(asx_timer_wheel *wheel,
+                                                 const asx_timer_handle *old_handle,
+                                                 asx_time new_deadline, void *waker_data,
+                                                 asx_timer_handle *out_handle);
 
 /* -------------------------------------------------------------------
  * Queries
@@ -133,8 +124,7 @@ ASX_API ASX_MUST_USE asx_status asx_timer_update(
 ASX_API uint32_t asx_timer_active_count(const asx_timer_wheel *wheel);
 
 /* Set the maximum allowed timer duration in nanoseconds. */
-ASX_API void asx_timer_set_max_duration(asx_timer_wheel *wheel,
-                                         uint64_t max_duration_ns);
+ASX_API void asx_timer_set_max_duration(asx_timer_wheel *wheel, uint64_t max_duration_ns);
 
 /* Advance the wheel's current time without collecting. */
 ASX_API void asx_timer_advance(asx_timer_wheel *wheel, asx_time now);

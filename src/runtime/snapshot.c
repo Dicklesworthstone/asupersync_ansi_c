@@ -8,18 +8,17 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "runtime_internal.h"
+#include <asx/runtime/event.h>
 #include <asx/runtime/snapshot.h>
 #include <asx/runtime/trace.h>
-#include <asx/runtime/event.h>
 #include <string.h>
-#include "runtime_internal.h"
 
 /* ------------------------------------------------------------------ */
 /* Init                                                                */
 /* ------------------------------------------------------------------ */
 
-void asx_runtime_snapshot_init(asx_runtime_snapshot *snap)
-{
+void asx_runtime_snapshot_init(asx_runtime_snapshot *snap) {
     if (snap == NULL) return;
     memset(snap, 0, sizeof(*snap));
 }
@@ -28,8 +27,7 @@ void asx_runtime_snapshot_init(asx_runtime_snapshot *snap)
 /* Capture                                                             */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap)
-{
+asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
     uint32_t i;
     uint32_t ri = 0;
     uint32_t ti = 0;
@@ -42,13 +40,13 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap)
     /* Capture live regions */
     for (i = 0; i < ASX_MAX_REGIONS && ri < ASX_SNAPSHOT_MAX_REGIONS; i++) {
         if (!g_regions[i].alive) continue;
-        snap->regions[ri].id         = asx_handle_pack(
-            ASX_TYPE_REGION, 0,
-            asx_handle_pack_index(g_regions[i].generation, (uint16_t)i));
-        snap->regions[ri].state      = g_regions[i].state;
+        snap->regions[ri].id =
+            asx_handle_pack(ASX_TYPE_REGION, 0,
+                            asx_handle_pack_index(g_regions[i].generation, (uint16_t)i));
+        snap->regions[ri].state = g_regions[i].state;
         snap->regions[ri].task_count = g_regions[i].task_count;
         snap->regions[ri].task_total = g_regions[i].task_total;
-        snap->regions[ri].poisoned   = g_regions[i].poisoned;
+        snap->regions[ri].poisoned = g_regions[i].poisoned;
         ri++;
     }
     snap->region_count = ri;
@@ -56,11 +54,11 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap)
     /* Capture live tasks */
     for (i = 0; i < ASX_MAX_TASKS && ti < ASX_SNAPSHOT_MAX_TASKS; i++) {
         if (!g_tasks[i].alive) continue;
-        snap->tasks[ti].id             = asx_handle_pack(
-            ASX_TYPE_TASK, 0,
-            asx_handle_pack_index(g_tasks[i].generation, (uint16_t)i));
-        snap->tasks[ti].state          = g_tasks[i].state;
-        snap->tasks[ti].region         = g_tasks[i].region;
+        snap->tasks[ti].id =
+            asx_handle_pack(ASX_TYPE_TASK, 0,
+                            asx_handle_pack_index(g_tasks[i].generation, (uint16_t)i));
+        snap->tasks[ti].state = g_tasks[i].state;
+        snap->tasks[ti].region = g_tasks[i].region;
         snap->tasks[ti].outcome_status = (asx_status)g_tasks[i].outcome.severity;
         ti++;
     }
@@ -69,10 +67,10 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap)
     /* Capture live obligations */
     for (i = 0; i < ASX_MAX_OBLIGATIONS && oi < ASX_SNAPSHOT_MAX_OBLIGATIONS; i++) {
         if (!g_obligations[i].alive) continue;
-        snap->obligations[oi].id     = asx_handle_pack(
-            ASX_TYPE_OBLIGATION, 0,
-            asx_handle_pack_index(g_obligations[i].generation, (uint16_t)i));
-        snap->obligations[oi].state  = g_obligations[i].state;
+        snap->obligations[oi].id =
+            asx_handle_pack(ASX_TYPE_OBLIGATION, 0,
+                            asx_handle_pack_index(g_obligations[i].generation, (uint16_t)i));
+        snap->obligations[oi].state = g_obligations[i].state;
         snap->obligations[oi].region = g_obligations[i].region;
         oi++;
     }
@@ -88,46 +86,40 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap)
 /* JSON serialization                                                  */
 /* ------------------------------------------------------------------ */
 
-static const char *region_state_str(asx_region_state s)
-{
+static const char *region_state_str(asx_region_state s) {
     switch (s) {
-        case ASX_REGION_OPEN:       return "open";
-        case ASX_REGION_CLOSING:    return "closing";
-        case ASX_REGION_DRAINING:   return "draining";
-        case ASX_REGION_FINALIZING: return "finalizing";
-        case ASX_REGION_CLOSED:     return "closed";
+    case ASX_REGION_OPEN: return "open";
+    case ASX_REGION_CLOSING: return "closing";
+    case ASX_REGION_DRAINING: return "draining";
+    case ASX_REGION_FINALIZING: return "finalizing";
+    case ASX_REGION_CLOSED: return "closed";
     }
     return "unknown";
 }
 
-static const char *task_state_str(asx_task_state s)
-{
+static const char *task_state_str(asx_task_state s) {
     switch (s) {
-        case ASX_TASK_CREATED:          return "created";
-        case ASX_TASK_RUNNING:          return "running";
-        case ASX_TASK_CANCEL_REQUESTED: return "cancel_requested";
-        case ASX_TASK_CANCELLING:       return "cancelling";
-        case ASX_TASK_FINALIZING:       return "finalizing";
-        case ASX_TASK_COMPLETED:        return "completed";
+    case ASX_TASK_CREATED: return "created";
+    case ASX_TASK_RUNNING: return "running";
+    case ASX_TASK_CANCEL_REQUESTED: return "cancel_requested";
+    case ASX_TASK_CANCELLING: return "cancelling";
+    case ASX_TASK_FINALIZING: return "finalizing";
+    case ASX_TASK_COMPLETED: return "completed";
     }
     return "unknown";
 }
 
-static const char *obligation_state_str(asx_obligation_state s)
-{
+static const char *obligation_state_str(asx_obligation_state s) {
     switch (s) {
-        case ASX_OBLIGATION_RESERVED:  return "reserved";
-        case ASX_OBLIGATION_COMMITTED: return "committed";
-        case ASX_OBLIGATION_ABORTED:   return "aborted";
-        case ASX_OBLIGATION_LEAKED:    return "leaked";
+    case ASX_OBLIGATION_RESERVED: return "reserved";
+    case ASX_OBLIGATION_COMMITTED: return "committed";
+    case ASX_OBLIGATION_ABORTED: return "aborted";
+    case ASX_OBLIGATION_LEAKED: return "leaked";
     }
     return "unknown";
 }
 
-asx_status asx_runtime_snapshot_to_json(
-    const asx_runtime_snapshot *snap,
-    asx_codec_buffer *out)
-{
+asx_status asx_runtime_snapshot_to_json(const asx_runtime_snapshot *snap, asx_codec_buffer *out) {
     asx_status s;
     uint32_t i;
     int first;
@@ -140,8 +132,7 @@ asx_status asx_runtime_snapshot_to_json(
     first = 1;
 
     /* event_hash */
-    s = asx_codec_buffer_append_u64_field(out, &first, "event_hash",
-                                           snap->event_hash);
+    s = asx_codec_buffer_append_u64_field(out, &first, "event_hash", snap->event_hash);
     if (s != ASX_OK) return s;
 
     /* regions array */
@@ -161,17 +152,13 @@ asx_status asx_runtime_snapshot_to_json(
         if (s != ASX_OK) return s;
         s = asx_codec_buffer_append_u64_field(out, &rf, "id", r->id);
         if (s != ASX_OK) return s;
-        s = asx_codec_buffer_append_string_field(out, &rf, "state",
-                                                  region_state_str(r->state));
+        s = asx_codec_buffer_append_string_field(out, &rf, "state", region_state_str(r->state));
         if (s != ASX_OK) return s;
-        s = asx_codec_buffer_append_u64_field(out, &rf, "task_count",
-                                               (uint64_t)r->task_count);
+        s = asx_codec_buffer_append_u64_field(out, &rf, "task_count", (uint64_t)r->task_count);
         if (s != ASX_OK) return s;
-        s = asx_codec_buffer_append_u64_field(out, &rf, "task_total",
-                                               (uint64_t)r->task_total);
+        s = asx_codec_buffer_append_u64_field(out, &rf, "task_total", (uint64_t)r->task_total);
         if (s != ASX_OK) return s;
-        s = asx_codec_buffer_append_u64_field(out, &rf, "poisoned",
-                                               (uint64_t)r->poisoned);
+        s = asx_codec_buffer_append_u64_field(out, &rf, "poisoned", (uint64_t)r->poisoned);
         if (s != ASX_OK) return s;
         s = asx_codec_buffer_append_char(out, '}');
         if (s != ASX_OK) return s;
@@ -197,13 +184,12 @@ asx_status asx_runtime_snapshot_to_json(
         if (s != ASX_OK) return s;
         s = asx_codec_buffer_append_u64_field(out, &tf, "id", t->id);
         if (s != ASX_OK) return s;
-        s = asx_codec_buffer_append_string_field(out, &tf, "state",
-                                                  task_state_str(t->state));
+        s = asx_codec_buffer_append_string_field(out, &tf, "state", task_state_str(t->state));
         if (s != ASX_OK) return s;
         s = asx_codec_buffer_append_u64_field(out, &tf, "region", t->region);
         if (s != ASX_OK) return s;
         s = asx_codec_buffer_append_u64_field(out, &tf, "outcome_status",
-                                               (uint64_t)(uint32_t)t->outcome_status);
+                                              (uint64_t)(uint32_t)t->outcome_status);
         if (s != ASX_OK) return s;
         s = asx_codec_buffer_append_char(out, '}');
         if (s != ASX_OK) return s;
@@ -229,8 +215,7 @@ asx_status asx_runtime_snapshot_to_json(
         if (s != ASX_OK) return s;
         s = asx_codec_buffer_append_u64_field(out, &of, "id", o->id);
         if (s != ASX_OK) return s;
-        s = asx_codec_buffer_append_string_field(out, &of, "state",
-                                                  obligation_state_str(o->state));
+        s = asx_codec_buffer_append_string_field(out, &of, "state", obligation_state_str(o->state));
         if (s != ASX_OK) return s;
         s = asx_codec_buffer_append_u64_field(out, &of, "region", o->region);
         if (s != ASX_OK) return s;
@@ -249,10 +234,7 @@ asx_status asx_runtime_snapshot_to_json(
 /* Equality comparison                                                 */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_runtime_snapshot_eq(
-    const asx_runtime_snapshot *a,
-    const asx_runtime_snapshot *b)
-{
+asx_status asx_runtime_snapshot_eq(const asx_runtime_snapshot *a, const asx_runtime_snapshot *b) {
     uint32_t i;
 
     if (a == NULL || b == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -274,7 +256,8 @@ asx_status asx_runtime_snapshot_eq(
         if (a->tasks[i].id != b->tasks[i].id) return ASX_E_EQUIVALENCE_MISMATCH;
         if (a->tasks[i].state != b->tasks[i].state) return ASX_E_EQUIVALENCE_MISMATCH;
         if (a->tasks[i].region != b->tasks[i].region) return ASX_E_EQUIVALENCE_MISMATCH;
-        if (a->tasks[i].outcome_status != b->tasks[i].outcome_status) return ASX_E_EQUIVALENCE_MISMATCH;
+        if (a->tasks[i].outcome_status != b->tasks[i].outcome_status)
+            return ASX_E_EQUIVALENCE_MISMATCH;
     }
 
     for (i = 0; i < a->obligation_count; i++) {

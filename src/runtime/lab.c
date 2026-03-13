@@ -12,8 +12,7 @@
 /* Seeded PRNG (splitmix64)                                            */
 /* ------------------------------------------------------------------ */
 
-static uint64_t splitmix64(uint64_t *state)
-{
+static uint64_t splitmix64(uint64_t *state) {
     uint64_t z;
     *state += 0x9e3779b97f4a7c15ULL;
     z = *state;
@@ -23,8 +22,7 @@ static uint64_t splitmix64(uint64_t *state)
 }
 
 /* Entropy hook callback */
-static uint64_t lab_entropy_u64(void *ctx)
-{
+static uint64_t lab_entropy_u64(void *ctx) {
     asx_lab *lab = (asx_lab *)ctx;
     return splitmix64(&lab->entropy_state);
 }
@@ -33,11 +31,10 @@ static uint64_t lab_entropy_u64(void *ctx)
 /* Lab config                                                          */
 /* ------------------------------------------------------------------ */
 
-void asx_lab_config_init(asx_lab_config *cfg)
-{
+void asx_lab_config_init(asx_lab_config *cfg) {
     if (cfg == NULL) return;
     cfg->seed = 0;
-    cfg->tick_ns = 1000000ULL;   /* 1ms default tick */
+    cfg->tick_ns = 1000000ULL; /* 1ms default tick */
     cfg->start_time_ns = 0;
     cfg->max_polls = 1024;
 }
@@ -46,8 +43,7 @@ void asx_lab_config_init(asx_lab_config *cfg)
 /* Lab lifecycle                                                       */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_lab_init(asx_lab *lab, const asx_lab_config *cfg)
-{
+asx_status asx_lab_init(asx_lab *lab, const asx_lab_config *cfg) {
     asx_runtime_config rt_cfg;
     asx_runtime_hooks hooks;
     asx_status st;
@@ -58,10 +54,8 @@ asx_status asx_lab_init(asx_lab *lab, const asx_lab_config *cfg)
     lab->config = *cfg;
 
     /* Apply defaults */
-    if (lab->config.tick_ns == 0)
-        lab->config.tick_ns = 1000000ULL;
-    if (lab->config.max_polls == 0)
-        lab->config.max_polls = 1024;
+    if (lab->config.tick_ns == 0) lab->config.tick_ns = 1000000ULL;
+    if (lab->config.max_polls == 0) lab->config.max_polls = 1024;
 
     /* Initialize seeded PRNG */
     lab->entropy_state = lab->config.seed;
@@ -88,8 +82,7 @@ asx_status asx_lab_init(asx_lab *lab, const asx_lab_config *cfg)
     return ASX_OK;
 }
 
-void asx_lab_shutdown(asx_lab *lab)
-{
+void asx_lab_shutdown(asx_lab *lab) {
     if (lab == NULL) return;
     if (lab->initialized) {
         asx_runtime_shutdown(&lab->rt);
@@ -97,8 +90,7 @@ void asx_lab_shutdown(asx_lab *lab)
     }
 }
 
-void asx_lab_reset(asx_lab *lab)
-{
+void asx_lab_reset(asx_lab *lab) {
     if (lab == NULL || !lab->initialized) return;
     asx_runtime_reset();
     asx_vtime_init(&lab->vtime, lab->config.start_time_ns, lab->config.tick_ns);
@@ -109,8 +101,7 @@ void asx_lab_reset(asx_lab *lab)
 /* Time control                                                        */
 /* ------------------------------------------------------------------ */
 
-void asx_lab_advance_time(asx_lab *lab, uint32_t ticks)
-{
+void asx_lab_advance_time(asx_lab *lab, uint32_t ticks) {
     uint64_t delta;
     if (lab == NULL) return;
     delta = (uint64_t)ticks * lab->vtime.tick_ns;
@@ -121,8 +112,7 @@ void asx_lab_advance_time(asx_lab *lab, uint32_t ticks)
     }
 }
 
-asx_time asx_lab_now(const asx_lab *lab)
-{
+asx_time asx_lab_now(const asx_lab *lab) {
     if (lab == NULL) return 0;
     return asx_vtime_current(&lab->vtime);
 }
@@ -131,17 +121,14 @@ asx_time asx_lab_now(const asx_lab *lab)
 /* Scenario                                                            */
 /* ------------------------------------------------------------------ */
 
-void asx_lab_scenario_init(asx_lab_scenario *sc, const char *name)
-{
+void asx_lab_scenario_init(asx_lab_scenario *sc, const char *name) {
     if (sc == NULL) return;
     memset(sc, 0, sizeof(*sc));
     sc->name = name;
 }
 
-asx_status asx_lab_scenario_add_step(asx_lab_scenario *sc,
-                                      asx_lab_step_fn step_fn,
-                                      void *user_data)
-{
+asx_status asx_lab_scenario_add_step(asx_lab_scenario *sc, asx_lab_step_fn step_fn,
+                                     void *user_data) {
     if (sc == NULL || step_fn == NULL) return ASX_E_INVALID_ARGUMENT;
     if (sc->step_count >= ASX_LAB_MAX_STEPS) return ASX_E_RESOURCE_EXHAUSTED;
     sc->steps[sc->step_count] = step_fn;
@@ -150,16 +137,13 @@ asx_status asx_lab_scenario_add_step(asx_lab_scenario *sc,
     return ASX_OK;
 }
 
-asx_status asx_lab_run_scenario(asx_lab *lab,
-                                 const asx_lab_scenario *scenario,
-                                 asx_lab_result *out_result)
-{
+asx_status asx_lab_run_scenario(asx_lab *lab, const asx_lab_scenario *scenario,
+                                asx_lab_result *out_result) {
     uint32_t i;
     asx_status st;
     asx_time start_time;
 
-    if (lab == NULL || scenario == NULL || out_result == NULL)
-        return ASX_E_INVALID_ARGUMENT;
+    if (lab == NULL || scenario == NULL || out_result == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!lab->initialized) return ASX_E_INVALID_STATE;
 
     memset(out_result, 0, sizeof(*out_result));
@@ -185,8 +169,7 @@ asx_status asx_lab_run_scenario(asx_lab *lab,
 /* Seeded entropy                                                      */
 /* ------------------------------------------------------------------ */
 
-uint64_t asx_lab_random_u64(asx_lab *lab)
-{
+uint64_t asx_lab_random_u64(asx_lab *lab) {
     if (lab == NULL) return 0;
     return splitmix64(&lab->entropy_state);
 }
@@ -195,8 +178,7 @@ uint64_t asx_lab_random_u64(asx_lab *lab)
 /* Convenience                                                         */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_lab_open_region(asx_lab *lab, asx_region_id *out_id)
-{
+asx_status asx_lab_open_region(asx_lab *lab, asx_region_id *out_id) {
     if (lab == NULL || out_id == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!lab->initialized) return ASX_E_INVALID_STATE;
     return asx_region_open(out_id);

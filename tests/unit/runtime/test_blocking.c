@@ -8,32 +8,30 @@
 #include <asx/runtime/blocking.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
-static void setup(void)
-{
+static void setup(void) {
     asx_waker_reset();
     asx_blocking_pool_reset();
     MUST_OK(asx_blocking_pool_init());
 }
 
-static void teardown(void)
-{
-    asx_blocking_pool_shutdown();
-}
+static void teardown(void) { asx_blocking_pool_shutdown(); }
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-static uint64_t add_42(void *user_data)
-{
+static uint64_t add_42(void *user_data) {
     uint64_t val = *(uint64_t *)user_data;
     return val + 42;
 }
 
-static uint64_t return_zero(void *user_data)
-{
+static uint64_t return_zero(void *user_data) {
     (void)user_data;
     return 0;
 }
@@ -45,15 +43,13 @@ static uint64_t return_zero(void *user_data)
 TEST(spawn_null_fn_fails) {
     asx_blocking_handle h;
     setup();
-    ASSERT_EQ(asx_spawn_blocking(NULL, NULL, NULL, &h),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_spawn_blocking(NULL, NULL, NULL, &h), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
 
 TEST(spawn_null_handle_fails) {
     setup();
-    ASSERT_EQ(asx_spawn_blocking(return_zero, NULL, NULL, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_spawn_blocking(return_zero, NULL, NULL, NULL), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
 
@@ -61,8 +57,7 @@ TEST(spawn_before_init_fails) {
     asx_blocking_handle h;
     asx_blocking_pool_reset();
     asx_blocking_pool_shutdown();
-    ASSERT_EQ(asx_spawn_blocking(return_zero, NULL, NULL, &h),
-              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_spawn_blocking(return_zero, NULL, NULL, &h), ASX_E_INVALID_STATE);
 }
 
 TEST(spawn_success) {
@@ -129,8 +124,7 @@ TEST(get_state_stale_handle_returns_completed) {
 
 TEST(get_result_null_handle_fails) {
     uint64_t result;
-    ASSERT_EQ(asx_blocking_get_result(NULL, &result),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_blocking_get_result(NULL, &result), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(get_result_null_out_fails) {
@@ -190,7 +184,7 @@ TEST(arena_exhaustion) {
     /* Completed slots can be reused — walking skeleton marks as COMPLETED
      * and the allocator reclaims completed slots */
     st = asx_spawn_blocking(return_zero, NULL, NULL, &h);
-    ASSERT_EQ(st, ASX_OK);  /* Should succeed via slot reuse */
+    ASSERT_EQ(st, ASX_OK); /* Should succeed via slot reuse */
     teardown();
 }
 
@@ -218,8 +212,7 @@ TEST(multiple_tasks_different_results) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_blocking ===\n");
 
     RUN_TEST(spawn_null_fn_fails);

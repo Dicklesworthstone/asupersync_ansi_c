@@ -22,14 +22,13 @@
 
 /* A task that reserves an obligation, does work, then commits it. */
 typedef struct {
-    asx_co_state      co;
-    asx_region_id     region;
+    asx_co_state co;
+    asx_region_id region;
     asx_obligation_id obligation;
-    int               committed;
+    int committed;
 } obligated_state;
 
-static asx_status poll_with_obligation(void *ud, asx_task_id self)
-{
+static asx_status poll_with_obligation(void *ud, asx_task_id self) {
     obligated_state *s = (obligated_state *)ud;
     asx_status st;
     (void)self;
@@ -56,8 +55,7 @@ static asx_status poll_with_obligation(void *ud, asx_task_id self)
 }
 
 /* A task that reserves then aborts its obligation. */
-static asx_status poll_abort_obligation(void *ud, asx_task_id self)
-{
+static asx_status poll_abort_obligation(void *ud, asx_task_id self) {
     obligated_state *s = (obligated_state *)ud;
     asx_status st;
     (void)self;
@@ -85,8 +83,7 @@ static asx_status poll_abort_obligation(void *ud, asx_task_id self)
 /* -------------------------------------------------------------------
  * Scenario 1: Happy path — reserve, commit, quiesce
  * ------------------------------------------------------------------- */
-static int scenario_commit(void)
-{
+static int scenario_commit(void) {
     asx_status st;
     asx_region_id region;
     asx_task_id task;
@@ -101,9 +98,8 @@ static int scenario_commit(void)
     st = asx_region_open(&region);
     if (st != ASX_OK) return 1;
 
-    st = asx_task_spawn_captured(region, poll_with_obligation,
-                                  (uint32_t)sizeof(obligated_state),
-                                  NULL, &task, &state_ptr);
+    st = asx_task_spawn_captured(region, poll_with_obligation, (uint32_t)sizeof(obligated_state),
+                                 NULL, &task, &state_ptr);
     if (st != ASX_OK) return 1;
 
     os = (obligated_state *)state_ptr;
@@ -148,8 +144,7 @@ static int scenario_commit(void)
 /* -------------------------------------------------------------------
  * Scenario 2: Abort path
  * ------------------------------------------------------------------- */
-static int scenario_abort(void)
-{
+static int scenario_abort(void) {
     asx_status st;
     asx_region_id region;
     asx_task_id task;
@@ -165,9 +160,8 @@ static int scenario_abort(void)
     st = asx_region_open(&region);
     if (st != ASX_OK) return 1;
 
-    st = asx_task_spawn_captured(region, poll_abort_obligation,
-                                  (uint32_t)sizeof(obligated_state),
-                                  NULL, &task, &state_ptr);
+    st = asx_task_spawn_captured(region, poll_abort_obligation, (uint32_t)sizeof(obligated_state),
+                                 NULL, &task, &state_ptr);
     if (st != ASX_OK) return 1;
 
     os = (obligated_state *)state_ptr;
@@ -217,8 +211,7 @@ static int scenario_abort(void)
 /* -------------------------------------------------------------------
  * Scenario 3: State query
  * ------------------------------------------------------------------- */
-static int scenario_state_query(void)
-{
+static int scenario_state_query(void) {
     asx_status st;
     asx_region_id region;
     asx_obligation_id obl;
@@ -246,8 +239,7 @@ static int scenario_state_query(void)
         printf("  FAIL: expected RESERVED, got %d\n", (int)ostate);
         return 1;
     }
-    printf("  obligation state: %s\n",
-           asx_obligation_state_str(ostate));
+    printf("  obligation state: %s\n", asx_obligation_state_str(ostate));
 
     /* Commit and verify terminal state. */
     st = asx_obligation_commit(obl);
@@ -260,8 +252,7 @@ static int scenario_state_query(void)
         printf("  FAIL: expected COMMITTED, got %d\n", (int)ostate);
         return 1;
     }
-    printf("  obligation state: %s\n",
-           asx_obligation_state_str(ostate));
+    printf("  obligation state: %s\n", asx_obligation_state_str(ostate));
 
     /*
      * ERGO: Double-commit returns ASX_E_INVALID_TRANSITION — clear
@@ -270,7 +261,8 @@ static int scenario_state_query(void)
     st = asx_obligation_commit(obl);
     if (st != ASX_E_INVALID_TRANSITION) {
         printf("  FAIL: double commit should return INVALID_TRANSITION, "
-               "got %s\n", asx_status_str(st));
+               "got %s\n",
+               asx_status_str(st));
         return 1;
     }
     printf("  double-commit correctly returns: %s\n", asx_status_str(st));
@@ -290,8 +282,7 @@ static int scenario_state_query(void)
 /* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
-int main(void)
-{
+int main(void) {
     int failures = 0;
 
     printf("=== vignette: obligations ===\n\n");

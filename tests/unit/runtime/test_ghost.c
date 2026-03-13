@@ -16,21 +16,20 @@
 
 /* Ensure ghost monitors are active for these tests */
 #ifndef ASX_DEBUG_GHOST
-  #define ASX_DEBUG_GHOST 1
+#define ASX_DEBUG_GHOST 1
 #endif
 
 #include <asx/asx.h>
+#include <asx/core/budget.h>
 #include <asx/core/ghost.h>
 #include <asx/core/transition.h>
-#include <asx/core/budget.h>
 #include <asx/runtime/runtime.h>
 
 /* ------------------------------------------------------------------ */
 /* Budget helper                                                       */
 /* ------------------------------------------------------------------ */
 
-static asx_budget make_budget(uint32_t poll_quota)
-{
+static asx_budget make_budget(uint32_t poll_quota) {
     asx_budget b = asx_budget_infinite();
     b.poll_quota = poll_quota;
     return b;
@@ -52,8 +51,8 @@ TEST(ghost_legal_region_transition_no_violation) {
     asx_ghost_reset();
 
     /* Open -> Closing is legal */
-    st = asx_ghost_check_region_transition(0x0001000100010000ULL,
-                                            ASX_REGION_OPEN, ASX_REGION_CLOSING);
+    st = asx_ghost_check_region_transition(0x0001000100010000ULL, ASX_REGION_OPEN,
+                                           ASX_REGION_CLOSING);
     ASSERT_EQ(st, ASX_OK);
     ASSERT_EQ(asx_ghost_violation_count(), 0u);
 }
@@ -65,8 +64,8 @@ TEST(ghost_illegal_region_transition_records_violation) {
     asx_ghost_reset();
 
     /* Closed -> Open is illegal */
-    st = asx_ghost_check_region_transition(0x0001001000010000ULL,
-                                            ASX_REGION_CLOSED, ASX_REGION_OPEN);
+    st = asx_ghost_check_region_transition(0x0001001000010000ULL, ASX_REGION_CLOSED,
+                                           ASX_REGION_OPEN);
     ASSERT_NE(st, ASX_OK);
     ASSERT_EQ(asx_ghost_violation_count(), 1u);
 
@@ -84,8 +83,8 @@ TEST(ghost_illegal_task_transition_records_violation) {
     asx_ghost_reset();
 
     /* Completed -> Running is illegal */
-    st = asx_ghost_check_task_transition(0x0002002000020000ULL,
-                                          ASX_TASK_COMPLETED, ASX_TASK_RUNNING);
+    st = asx_ghost_check_task_transition(0x0002002000020000ULL, ASX_TASK_COMPLETED,
+                                         ASX_TASK_RUNNING);
     ASSERT_NE(st, ASX_OK);
     ASSERT_EQ(asx_ghost_violation_count(), 1u);
 
@@ -102,9 +101,8 @@ TEST(ghost_illegal_obligation_transition_records_violation) {
     asx_ghost_reset();
 
     /* Committed -> Reserved is illegal */
-    st = asx_ghost_check_obligation_transition(0x0003000200030000ULL,
-                                                ASX_OBLIGATION_COMMITTED,
-                                                ASX_OBLIGATION_RESERVED);
+    st = asx_ghost_check_obligation_transition(0x0003000200030000ULL, ASX_OBLIGATION_COMMITTED,
+                                               ASX_OBLIGATION_RESERVED);
     ASSERT_NE(st, ASX_OK);
     ASSERT_EQ(asx_ghost_violation_count(), 1u);
 
@@ -118,8 +116,7 @@ TEST(ghost_legal_task_transition_no_violation) {
     asx_ghost_reset();
 
     /* Created -> Running is legal */
-    st = asx_ghost_check_task_transition(0x0002000100020000ULL,
-                                          ASX_TASK_CREATED, ASX_TASK_RUNNING);
+    st = asx_ghost_check_task_transition(0x0002000100020000ULL, ASX_TASK_CREATED, ASX_TASK_RUNNING);
     ASSERT_EQ(st, ASX_OK);
     ASSERT_EQ(asx_ghost_violation_count(), 0u);
 }
@@ -224,13 +221,13 @@ TEST(ghost_violation_count_increments) {
     ASSERT_EQ(asx_ghost_violation_count(), 0u);
 
     /* Record an illegal transition */
-    (void)asx_ghost_check_region_transition(0x0001001000010000ULL,
-                                             ASX_REGION_CLOSED, ASX_REGION_OPEN);
+    (void)asx_ghost_check_region_transition(0x0001001000010000ULL, ASX_REGION_CLOSED,
+                                            ASX_REGION_OPEN);
     ASSERT_EQ(asx_ghost_violation_count(), 1u);
 
     /* Record another */
-    (void)asx_ghost_check_task_transition(0x0002002000020000ULL,
-                                           ASX_TASK_COMPLETED, ASX_TASK_CREATED);
+    (void)asx_ghost_check_task_transition(0x0002002000020000ULL, ASX_TASK_COMPLETED,
+                                          ASX_TASK_CREATED);
     ASSERT_EQ(asx_ghost_violation_count(), 2u);
 }
 
@@ -239,10 +236,10 @@ TEST(ghost_violation_sequence_monotonic) {
 
     asx_ghost_reset();
 
-    (void)asx_ghost_check_region_transition(0x0001001000010000ULL,
-                                             ASX_REGION_CLOSED, ASX_REGION_OPEN);
-    (void)asx_ghost_check_task_transition(0x0002002000020000ULL,
-                                           ASX_TASK_COMPLETED, ASX_TASK_CREATED);
+    (void)asx_ghost_check_region_transition(0x0001001000010000ULL, ASX_REGION_CLOSED,
+                                            ASX_REGION_OPEN);
+    (void)asx_ghost_check_task_transition(0x0002002000020000ULL, ASX_TASK_COMPLETED,
+                                          ASX_TASK_CREATED);
 
     ASSERT_TRUE(asx_ghost_violation_get(0, &v1));
     ASSERT_TRUE(asx_ghost_violation_get(1, &v2));
@@ -259,9 +256,8 @@ TEST(ghost_ring_overflow) {
 
     /* Fill beyond ring capacity (64) */
     for (i = 0; i < ASX_GHOST_RING_CAPACITY + 10u; i++) {
-        (void)asx_ghost_check_region_transition(
-            0x0001001000010000ULL + (uint64_t)i,
-            ASX_REGION_CLOSED, ASX_REGION_OPEN);
+        (void)asx_ghost_check_region_transition(0x0001001000010000ULL + (uint64_t)i,
+                                                ASX_REGION_CLOSED, ASX_REGION_OPEN);
     }
 
     ASSERT_TRUE(asx_ghost_ring_overflowed());
@@ -282,9 +278,8 @@ TEST(ghost_no_overflow_within_capacity) {
 
     /* Fill exactly to capacity */
     for (i = 0; i < ASX_GHOST_RING_CAPACITY; i++) {
-        (void)asx_ghost_check_region_transition(
-            0x0001001000010000ULL,
-            ASX_REGION_CLOSED, ASX_REGION_OPEN);
+        (void)asx_ghost_check_region_transition(0x0001001000010000ULL, ASX_REGION_CLOSED,
+                                                ASX_REGION_OPEN);
     }
 
     /* At capacity but not overflowed */
@@ -297,21 +292,16 @@ TEST(ghost_no_overflow_within_capacity) {
 /* ================================================================== */
 
 TEST(ghost_kind_str_valid) {
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_PROTOCOL_REGION),
-                  "protocol_region");
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_PROTOCOL_TASK),
-                  "protocol_task");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_PROTOCOL_REGION), "protocol_region");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_PROTOCOL_TASK), "protocol_task");
     ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_PROTOCOL_OBLIGATION),
                   "protocol_obligation");
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_LINEARITY_DOUBLE),
-                  "linearity_double");
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_LINEARITY_LEAK),
-                  "linearity_leak");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_LINEARITY_DOUBLE), "linearity_double");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_LINEARITY_LEAK), "linearity_leak");
 }
 
 TEST(ghost_kind_str_unknown) {
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str((asx_ghost_violation_kind)99),
-                  "unknown");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str((asx_ghost_violation_kind)99), "unknown");
 }
 
 /* ================================================================== */

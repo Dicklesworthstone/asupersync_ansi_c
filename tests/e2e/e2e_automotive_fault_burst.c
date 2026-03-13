@@ -20,8 +20,11 @@
 #include <string.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
-#define IGNORE_RC(expr) \
-    do { asx_status ignore_rc_ = (expr); (void)ignore_rc_; } while (0)
+#define IGNORE_RC(expr)                                                                            \
+    do {                                                                                           \
+        asx_status ignore_rc_ = (expr);                                                            \
+        (void)ignore_rc_;                                                                          \
+    } while (0)
 
 /* -------------------------------------------------------------------
  * Helpers
@@ -30,37 +33,39 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
-#define SCENARIO_BEGIN(id) \
-    do { const char *_scenario_id = (id); int _scenario_ok = 1; (void)0
+#define SCENARIO_BEGIN(id)                                                                         \
+    do {                                                                                           \
+        const char *_scenario_id = (id);                                                           \
+        int _scenario_ok = 1;                                                                      \
+    (void)0
 
-#define SCENARIO_CHECK(cond, msg)                         \
-    do {                                                  \
-        if (!(cond)) {                                    \
-            printf("SCENARIO %s fail %s\n",               \
-                   _scenario_id, (msg));                  \
-            _scenario_ok = 0;                             \
-            g_fail++;                                     \
-            goto _scenario_end;                           \
-        }                                                 \
+#define SCENARIO_CHECK(cond, msg)                                                                  \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("SCENARIO %s fail %s\n", _scenario_id, (msg));                                  \
+            _scenario_ok = 0;                                                                      \
+            g_fail++;                                                                              \
+            goto _scenario_end;                                                                    \
+        }                                                                                          \
     } while (0)
 
-#define SCENARIO_END()                                    \
-    _scenario_end:                                        \
-    if (_scenario_ok) {                                   \
-        printf("SCENARIO %s pass\n", _scenario_id);      \
-        g_pass++;                                         \
-    }                                                     \
-    } while (0)
+#define SCENARIO_END()                                                                             \
+    _scenario_end:                                                                                 \
+    if (_scenario_ok) {                                                                            \
+        printf("SCENARIO %s pass\n", _scenario_id);                                                \
+        g_pass++;                                                                                  \
+    }                                                                                              \
+    }                                                                                              \
+    while (0)
 
-static asx_status poll_complete(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_complete(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_OK;
 }
 
 /* Checkpoint-cooperative poll */
-static asx_status poll_checkpoint_cooperative(void *ud, asx_task_id self)
-{
+static asx_status poll_checkpoint_cooperative(void *ud, asx_task_id self) {
     asx_checkpoint_result cp;
     (void)ud;
 
@@ -76,17 +81,16 @@ static asx_status poll_checkpoint_cooperative(void *ud, asx_task_id self)
  * ------------------------------------------------------------------- */
 
 /* auto-fault-burst-001: clock skew fault injection and recovery */
-static void scenario_clock_skew_fault(void)
-{
+static void scenario_clock_skew_fault(void) {
     SCENARIO_BEGIN("auto-fault-burst-001.clock_skew");
     asx_runtime_reset();
 
     asx_fault_injection fault;
     memset(&fault, 0, sizeof(fault));
     fault.kind = ASX_FAULT_CLOCK_SKEW;
-    fault.param = 5000;          /* 5000 ns skew per read */
+    fault.param = 5000; /* 5000 ns skew per read */
     fault.trigger_after = 0;
-    fault.trigger_count = 10;    /* inject for 10 reads then deactivate */
+    fault.trigger_count = 10; /* inject for 10 reads then deactivate */
 
     asx_status rc = asx_fault_inject(&fault);
     SCENARIO_CHECK(rc == ASX_OK, "fault_inject_clock_skew");
@@ -108,8 +112,7 @@ static void scenario_clock_skew_fault(void)
     SCENARIO_CHECK(asx_fault_injection_count() == 0, "faults_cleared");
 
     /* Post-fault operations */
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                   "spawn_after_clear");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_after_clear");
     budget = asx_budget_from_polls(10);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
 
@@ -117,17 +120,16 @@ static void scenario_clock_skew_fault(void)
 }
 
 /* auto-fault-burst-002: clock reversal fault */
-static void scenario_clock_reversal(void)
-{
+static void scenario_clock_reversal(void) {
     SCENARIO_BEGIN("auto-fault-burst-002.clock_reversal");
     asx_runtime_reset();
 
     asx_fault_injection fault;
     memset(&fault, 0, sizeof(fault));
     fault.kind = ASX_FAULT_CLOCK_REVERSE;
-    fault.param = 2000;          /* subtract 2000 ns per read */
-    fault.trigger_after = 2;     /* after 2 normal reads */
-    fault.trigger_count = 5;     /* inject for 5 reads */
+    fault.param = 2000;      /* subtract 2000 ns per read */
+    fault.trigger_after = 2; /* after 2 normal reads */
+    fault.trigger_count = 5; /* inject for 5 reads */
 
     SCENARIO_CHECK(asx_fault_inject(&fault) == ASX_OK, "inject_reversal");
 
@@ -146,17 +148,16 @@ static void scenario_clock_reversal(void)
 }
 
 /* auto-fault-burst-003: constant entropy fault */
-static void scenario_entropy_const(void)
-{
+static void scenario_entropy_const(void) {
     SCENARIO_BEGIN("auto-fault-burst-003.entropy_const");
     asx_runtime_reset();
 
     asx_fault_injection fault;
     memset(&fault, 0, sizeof(fault));
     fault.kind = ASX_FAULT_ENTROPY_CONST;
-    fault.param = 0xDEADBEEF;   /* constant entropy value */
+    fault.param = 0xDEADBEEF; /* constant entropy value */
     fault.trigger_after = 0;
-    fault.trigger_count = 0;     /* permanent until cleared */
+    fault.trigger_count = 0; /* permanent until cleared */
 
     SCENARIO_CHECK(asx_fault_inject(&fault) == ASX_OK, "inject_entropy");
 
@@ -180,8 +181,7 @@ static void scenario_entropy_const(void)
 }
 
 /* auto-fault-burst-004: multi-fault cascade */
-static void scenario_multi_fault_cascade(void)
-{
+static void scenario_multi_fault_cascade(void) {
     SCENARIO_BEGIN("auto-fault-burst-004.multi_fault_cascade");
     asx_runtime_reset();
 
@@ -229,8 +229,7 @@ static void scenario_multi_fault_cascade(void)
 }
 
 /* auto-fault-burst-005: poison containment after fault-induced degradation */
-static void scenario_fault_containment(void)
-{
+static void scenario_fault_containment(void) {
     SCENARIO_BEGIN("auto-fault-burst-005.fault_containment");
     asx_runtime_reset();
 
@@ -241,10 +240,8 @@ static void scenario_fault_containment(void)
     SCENARIO_CHECK(asx_region_open(&r_healthy) == ASX_OK, "open_healthy");
 
     /* Spawn work in both regions */
-    SCENARIO_CHECK(asx_task_spawn(r_faulty, poll_complete, NULL, &tid) == ASX_OK,
-                   "spawn_faulty");
-    SCENARIO_CHECK(asx_task_spawn(r_healthy, poll_complete, NULL, &tid) == ASX_OK,
-                   "spawn_healthy");
+    SCENARIO_CHECK(asx_task_spawn(r_faulty, poll_complete, NULL, &tid) == ASX_OK, "spawn_faulty");
+    SCENARIO_CHECK(asx_task_spawn(r_healthy, poll_complete, NULL, &tid) == ASX_OK, "spawn_healthy");
 
     /* Simulate fault detection -> poison the faulty region */
     SCENARIO_CHECK(asx_region_poison(r_faulty) == ASX_OK, "poison_faulty");
@@ -258,15 +255,13 @@ static void scenario_fault_containment(void)
                    "healthy_unaffected");
 
     asx_budget budget = asx_budget_from_polls(50);
-    SCENARIO_CHECK(asx_scheduler_run(r_healthy, &budget) == ASX_OK,
-                   "drain_healthy");
+    SCENARIO_CHECK(asx_scheduler_run(r_healthy, &budget) == ASX_OK, "drain_healthy");
 
     SCENARIO_END();
 }
 
 /* auto-fault-burst-006: deadline cancel under active fault */
-static void scenario_deadline_under_fault(void)
-{
+static void scenario_deadline_under_fault(void) {
     SCENARIO_BEGIN("auto-fault-burst-006.deadline_under_fault");
     asx_runtime_reset();
 
@@ -284,24 +279,22 @@ static void scenario_deadline_under_fault(void)
     asx_task_id tid;
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid)
-                   == ASX_OK, "spawn_cooperative");
+    SCENARIO_CHECK(asx_task_spawn(rid, poll_checkpoint_cooperative, NULL, &tid) == ASX_OK,
+                   "spawn_cooperative");
 
     /* Run to get RUNNING */
     asx_budget budget = asx_budget_from_polls(1);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
 
     /* Issue deadline cancel */
-    SCENARIO_CHECK(asx_task_cancel(tid, ASX_CANCEL_DEADLINE) == ASX_OK,
-                   "cancel_deadline");
+    SCENARIO_CHECK(asx_task_cancel(tid, ASX_CANCEL_DEADLINE) == ASX_OK, "cancel_deadline");
 
     /* Drain — task should cooperate despite clock skew */
     budget = asx_budget_from_polls(50);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
 
     asx_task_state ts;
-    SCENARIO_CHECK(asx_task_get_state(tid, &ts) == ASX_OK &&
-                   ts == ASX_TASK_COMPLETED,
+    SCENARIO_CHECK(asx_task_get_state(tid, &ts) == ASX_OK && ts == ASX_TASK_COMPLETED,
                    "task should complete under fault pressure");
 
     SCENARIO_CHECK(asx_fault_clear() == ASX_OK, "clear_faults");
@@ -310,8 +303,7 @@ static void scenario_deadline_under_fault(void)
 }
 
 /* auto-fault-burst-007: deterministic trace digest across fault sequences */
-static void scenario_fault_trace_digest(void)
-{
+static void scenario_fault_trace_digest(void) {
     SCENARIO_BEGIN("auto-fault-burst-007.trace_deterministic");
 
     /* Run 1 */
@@ -324,8 +316,7 @@ static void scenario_fault_trace_digest(void)
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_1");
     for (i = 0; i < 4; i++) {
-        SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                       "spawn_1");
+        SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_1");
     }
     asx_budget budget = asx_budget_from_polls(20);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
@@ -337,8 +328,7 @@ static void scenario_fault_trace_digest(void)
 
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open_2");
     for (i = 0; i < 4; i++) {
-        SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK,
-                       "spawn_2");
+        SCENARIO_CHECK(asx_task_spawn(rid, poll_complete, NULL, &tid) == ASX_OK, "spawn_2");
     }
     budget = asx_budget_from_polls(20);
     IGNORE_RC(asx_scheduler_run(rid, &budget));
@@ -355,8 +345,7 @@ static void scenario_fault_trace_digest(void)
  * Main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     scenario_clock_skew_fault();
     scenario_clock_reversal();
     scenario_entropy_const();
@@ -365,7 +354,6 @@ int main(void)
     scenario_deadline_under_fault();
     scenario_fault_trace_digest();
 
-    fprintf(stderr, "[e2e] automotive_fault_burst: %d passed, %d failed\n",
-            g_pass, g_fail);
+    fprintf(stderr, "[e2e] automotive_fault_burst: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
 }

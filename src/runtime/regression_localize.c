@@ -16,8 +16,7 @@
 /* Subsystem classification                                           */
 /* ------------------------------------------------------------------ */
 
-asx_subsystem_id asx_trace_event_subsystem(asx_trace_event_kind kind)
-{
+asx_subsystem_id asx_trace_event_subsystem(asx_trace_event_kind kind) {
     uint32_t k = (uint32_t)kind;
 
     if (k <= 0x0Fu) return ASX_SUBSYS_SCHEDULER;
@@ -29,16 +28,15 @@ asx_subsystem_id asx_trace_event_subsystem(asx_trace_event_kind kind)
     return ASX_SUBSYS_UNKNOWN;
 }
 
-const char *asx_subsystem_name(asx_subsystem_id id)
-{
+const char *asx_subsystem_name(asx_subsystem_id id) {
     switch (id) {
-    case ASX_SUBSYS_SCHEDULER:  return "scheduler";
-    case ASX_SUBSYS_LIFECYCLE:  return "lifecycle";
+    case ASX_SUBSYS_SCHEDULER: return "scheduler";
+    case ASX_SUBSYS_LIFECYCLE: return "lifecycle";
     case ASX_SUBSYS_OBLIGATION: return "obligation";
-    case ASX_SUBSYS_CHANNEL:    return "channel";
-    case ASX_SUBSYS_TIMER:      return "timer";
-    case ASX_SUBSYS_CANCEL:     return "cancel";
-    case ASX_SUBSYS_UNKNOWN:    return "unknown";
+    case ASX_SUBSYS_CHANNEL: return "channel";
+    case ASX_SUBSYS_TIMER: return "timer";
+    case ASX_SUBSYS_CANCEL: return "cancel";
+    case ASX_SUBSYS_UNKNOWN: return "unknown";
     }
     return "unknown";
 }
@@ -47,8 +45,7 @@ const char *asx_subsystem_name(asx_subsystem_id id)
 /* Performance snapshot                                               */
 /* ------------------------------------------------------------------ */
 
-void asx_perf_snapshot_build(asx_perf_snapshot *snap)
-{
+void asx_perf_snapshot_build(asx_perf_snapshot *snap) {
     uint32_t count;
     uint32_t i;
 
@@ -78,17 +75,13 @@ void asx_perf_snapshot_build(asx_perf_snapshot *snap)
 /* Regression localization                                            */
 /* ------------------------------------------------------------------ */
 
-static uint32_t abs_i32(int32_t v)
-{
+static uint32_t abs_i32(int32_t v) {
     /* Widen to int64_t before negation to avoid UB when v == INT32_MIN */
     return (v < 0) ? (uint32_t)(-(int64_t)v) : (uint32_t)v;
 }
 
-void asx_regression_localize(const asx_perf_snapshot *baseline,
-                              const asx_perf_snapshot *current,
-                              const asx_replay_result *replay,
-                              asx_regression_report *report)
-{
+void asx_regression_localize(const asx_perf_snapshot *baseline, const asx_perf_snapshot *current,
+                             const asx_replay_result *replay, asx_regression_report *report) {
     uint32_t i;
     uint32_t max_delta;
     uint32_t total_delta;
@@ -115,8 +108,8 @@ void asx_regression_localize(const asx_perf_snapshot *baseline,
     /* Compute per-subsystem deltas and blame scores */
     total_delta = 0;
     for (i = 0; i < ASX_SUBSYS_COUNT; i++) {
-        int32_t ed = (int32_t)current->subsystems[i].event_count
-                   - (int32_t)baseline->subsystems[i].event_count;
+        int32_t ed = (int32_t)current->subsystems[i].event_count -
+                     (int32_t)baseline->subsystems[i].event_count;
         total_delta += abs_i32(ed);
     }
 
@@ -125,10 +118,10 @@ void asx_regression_localize(const asx_perf_snapshot *baseline,
     report->suspect_count = 0;
 
     for (i = 0; i < ASX_SUBSYS_COUNT && report->suspect_count < ASX_MAX_SUSPECTS; i++) {
-        int32_t ed = (int32_t)current->subsystems[i].event_count
-                   - (int32_t)baseline->subsystems[i].event_count;
-        int64_t ad = (int64_t)current->subsystems[i].total_aux
-                   - (int64_t)baseline->subsystems[i].total_aux;
+        int32_t ed = (int32_t)current->subsystems[i].event_count -
+                     (int32_t)baseline->subsystems[i].event_count;
+        int64_t ad =
+            (int64_t)current->subsystems[i].total_aux - (int64_t)baseline->subsystems[i].total_aux;
         uint32_t score;
 
         if (ed == 0 && ad == 0) continue;
@@ -166,37 +159,32 @@ void asx_regression_localize(const asx_perf_snapshot *baseline,
 /* ------------------------------------------------------------------ */
 
 static const asx_cb_config g_cb_defaults = {
-    3,   /* failure_threshold */
-    2,   /* recovery_probes */
-    10   /* cooldown_events */
+    3, /* failure_threshold */
+    2, /* recovery_probes */
+    10 /* cooldown_events */
 };
 
-void asx_cb_init(asx_cb_context *ctx)
-{
+void asx_cb_init(asx_cb_context *ctx) {
     if (ctx == NULL) return;
     memset(ctx, 0, sizeof(*ctx));
     ctx->state = ASX_CB_CLOSED;
 }
 
-void asx_cb_configure(asx_cb_context *ctx, const asx_cb_config *cfg)
-{
+void asx_cb_configure(asx_cb_context *ctx, const asx_cb_config *cfg) {
     (void)ctx;
     (void)cfg;
     /* Config is passed per-call; this is a no-op placeholder for
      * potential future state-level config caching. */
 }
 
-void asx_cb_record_success(asx_cb_context *ctx, const asx_cb_config *cfg)
-{
+void asx_cb_record_success(asx_cb_context *ctx, const asx_cb_config *cfg) {
     const asx_cb_config *c;
 
     if (ctx == NULL) return;
     c = (cfg != NULL) ? cfg : &g_cb_defaults;
 
     switch (ctx->state) {
-    case ASX_CB_CLOSED:
-        ctx->consecutive_failures = 0;
-        break;
+    case ASX_CB_CLOSED: ctx->consecutive_failures = 0; break;
 
     case ASX_CB_OPEN:
         /* Successes in OPEN are ignored (traffic shouldn't reach here) */
@@ -214,8 +202,7 @@ void asx_cb_record_success(asx_cb_context *ctx, const asx_cb_config *cfg)
     }
 }
 
-void asx_cb_record_failure(asx_cb_context *ctx, const asx_cb_config *cfg)
-{
+void asx_cb_record_failure(asx_cb_context *ctx, const asx_cb_config *cfg) {
     const asx_cb_config *c;
 
     if (ctx == NULL) return;
@@ -245,8 +232,7 @@ void asx_cb_record_failure(asx_cb_context *ctx, const asx_cb_config *cfg)
     }
 }
 
-void asx_cb_tick(asx_cb_context *ctx, const asx_cb_config *cfg)
-{
+void asx_cb_tick(asx_cb_context *ctx, const asx_cb_config *cfg) {
     const asx_cb_config *c;
 
     if (ctx == NULL) return;
@@ -261,17 +247,15 @@ void asx_cb_tick(asx_cb_context *ctx, const asx_cb_config *cfg)
     }
 }
 
-int asx_cb_allows(const asx_cb_context *ctx)
-{
+int asx_cb_allows(const asx_cb_context *ctx) {
     if (ctx == NULL) return 0;
     return ctx->state != ASX_CB_OPEN;
 }
 
-const char *asx_cb_state_name(asx_cb_state state)
-{
+const char *asx_cb_state_name(asx_cb_state state) {
     switch (state) {
-    case ASX_CB_CLOSED:    return "closed";
-    case ASX_CB_OPEN:      return "open";
+    case ASX_CB_CLOSED: return "closed";
+    case ASX_CB_OPEN: return "open";
     case ASX_CB_HALF_OPEN: return "half-open";
     }
     return "unknown";

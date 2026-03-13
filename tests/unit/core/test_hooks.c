@@ -55,7 +55,9 @@ static uint64_t test_entropy(void *ctx) {
 }
 
 static void test_log(void *ctx, int level, const char *message) {
-    (void)ctx; (void)level; (void)message;
+    (void)ctx;
+    (void)level;
+    (void)message;
     log_count++;
 }
 
@@ -83,9 +85,7 @@ TEST(hooks_init_defaults) {
     ASSERT_EQ(hooks.allocator_sealed, (uint8_t)0);
 }
 
-TEST(hooks_init_null_rejected) {
-    ASSERT_EQ(asx_runtime_hooks_init(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(hooks_init_null_rejected) { ASSERT_EQ(asx_runtime_hooks_init(NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(hooks_validate_live_needs_clock) {
     asx_runtime_hooks hooks;

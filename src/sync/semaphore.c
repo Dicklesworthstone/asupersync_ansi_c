@@ -12,24 +12,23 @@
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    int      active;
-    int      acquired;      /* permit was granted to this waiter */
+    int active;
+    int acquired; /* permit was granted to this waiter */
 } sem_waiter_slot;
 
 typedef struct {
-    uint16_t        generation;
-    int             alive;
-    uint32_t        permits;        /* available permits */
-    uint32_t        max_permits;    /* initial capacity (for queries) */
+    uint16_t generation;
+    int alive;
+    uint32_t permits;     /* available permits */
+    uint32_t max_permits; /* initial capacity (for queries) */
     sem_waiter_slot waiters[ASX_SEMAPHORE_MAX_WAITERS];
-    uint32_t        waiter_count;
+    uint32_t waiter_count;
 } sem_slot;
 
-static sem_slot  g_slots[ASX_SEMAPHORE_MAX];
-static uint32_t  g_slot_count;
+static sem_slot g_slots[ASX_SEMAPHORE_MAX];
+static uint32_t g_slot_count;
 
-static uint16_t next_gen(uint16_t g)
-{
+static uint16_t next_gen(uint16_t g) {
     g++;
     if (g == 0) g = 1;
     return g;
@@ -39,10 +38,7 @@ static uint16_t next_gen(uint16_t g)
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_semaphore_create(
-    uint32_t initial_permits,
-    asx_semaphore_handle *out)
-{
+asx_status asx_semaphore_create(uint32_t initial_permits, asx_semaphore_handle *out) {
     uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
@@ -63,19 +59,15 @@ asx_status asx_semaphore_create(
     return ASX_E_RESOURCE_EXHAUSTED;
 }
 
-asx_status asx_semaphore_close(asx_semaphore_handle handle)
-{
+asx_status asx_semaphore_close(asx_semaphore_handle handle) {
     sem_slot *s;
     uint32_t i;
     if (handle.slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[handle.slot];
-    if (!s->alive || s->generation != handle.generation)
-        return ASX_E_STALE_HANDLE;
+    if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     /* Wake all waiters as disconnected */
-    for (i = 0; i < ASX_SEMAPHORE_MAX_WAITERS; i++) {
-        s->waiters[i].active = 0;
-    }
+    for (i = 0; i < ASX_SEMAPHORE_MAX_WAITERS; i++) { s->waiters[i].active = 0; }
 
     s->alive = 0;
     s->waiter_count = 0;
@@ -86,16 +78,12 @@ asx_status asx_semaphore_close(asx_semaphore_handle handle)
 /* Acquire (non-blocking)                                              */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_semaphore_try_acquire(
-    asx_semaphore_handle handle,
-    asx_semaphore_permit *out)
-{
+asx_status asx_semaphore_try_acquire(asx_semaphore_handle handle, asx_semaphore_permit *out) {
     sem_slot *s;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     if (handle.slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[handle.slot];
-    if (!s->alive || s->generation != handle.generation)
-        return ASX_E_STALE_HANDLE;
+    if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     if (s->permits > 0) {
         s->permits--;
@@ -110,17 +98,13 @@ asx_status asx_semaphore_try_acquire(
 /* Acquire (async)                                                     */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_semaphore_acquire_begin(
-    asx_semaphore_handle handle,
-    asx_semaphore_waiter *out)
-{
+asx_status asx_semaphore_acquire_begin(asx_semaphore_handle handle, asx_semaphore_waiter *out) {
     sem_slot *s;
     uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     if (handle.slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[handle.slot];
-    if (!s->alive || s->generation != handle.generation)
-        return ASX_E_STALE_HANDLE;
+    if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     for (i = 0; i < ASX_SEMAPHORE_MAX_WAITERS; i++) {
         if (!s->waiters[i].active) {
@@ -136,11 +120,8 @@ asx_status asx_semaphore_acquire_begin(
     return ASX_E_RESOURCE_EXHAUSTED;
 }
 
-asx_status asx_semaphore_poll_acquire(
-    asx_semaphore_waiter *waiter,
-    asx_semaphore_permit *out,
-    asx_cx *cx)
-{
+asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphore_permit *out,
+                                      asx_cx *cx) {
     sem_slot *s;
     sem_waiter_slot *w;
 
@@ -148,8 +129,7 @@ asx_status asx_semaphore_poll_acquire(
     if (waiter->sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
 
     s = &g_slots[waiter->sem_slot];
-    if (!s->alive || s->generation != waiter->generation)
-        return ASX_E_DISCONNECTED;
+    if (!s->alive || s->generation != waiter->generation) return ASX_E_DISCONNECTED;
 
     w = &s->waiters[waiter->waiter_slot];
     if (!w->active) return ASX_E_INVALID_STATE;
@@ -187,20 +167,16 @@ asx_status asx_semaphore_poll_acquire(
     return ASX_E_PENDING;
 }
 
-asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter)
-{
+asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter) {
     sem_slot *s;
     if (waiter == NULL) return ASX_E_INVALID_ARGUMENT;
     if (waiter->sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[waiter->sem_slot];
-    if (!s->alive || s->generation != waiter->generation)
-        return ASX_OK;
+    if (!s->alive || s->generation != waiter->generation) return ASX_OK;
 
     if (s->waiters[waiter->waiter_slot].active) {
         /* If a permit was already granted, return it */
-        if (s->waiters[waiter->waiter_slot].acquired) {
-            s->permits++;
-        }
+        if (s->waiters[waiter->waiter_slot].acquired) { s->permits++; }
         s->waiters[waiter->waiter_slot].active = 0;
         s->waiter_count--;
     }
@@ -211,14 +187,12 @@ asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter)
 /* Release                                                             */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_semaphore_release(asx_semaphore_permit permit)
-{
+asx_status asx_semaphore_release(asx_semaphore_permit permit) {
     sem_slot *s;
     uint32_t i;
     if (permit.sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[permit.sem_slot];
-    if (!s->alive || s->generation != permit.generation)
-        return ASX_E_STALE_HANDLE;
+    if (!s->alive || s->generation != permit.generation) return ASX_E_STALE_HANDLE;
 
     /* FIFO: grant permit to first waiting waiter */
     for (i = 0; i < ASX_SEMAPHORE_MAX_WAITERS; i++) {
@@ -237,11 +211,10 @@ asx_status asx_semaphore_release(asx_semaphore_permit permit)
 /* Queries                                                             */
 /* ------------------------------------------------------------------ */
 
-uint32_t asx_semaphore_available(asx_semaphore_handle handle)
-{
+uint32_t asx_semaphore_available(asx_semaphore_handle handle) {
     if (handle.slot >= ASX_SEMAPHORE_MAX) return 0;
-    if (!g_slots[handle.slot].alive ||
-        g_slots[handle.slot].generation != handle.generation) return 0;
+    if (!g_slots[handle.slot].alive || g_slots[handle.slot].generation != handle.generation)
+        return 0;
     return g_slots[handle.slot].permits;
 }
 
@@ -249,8 +222,7 @@ uint32_t asx_semaphore_available(asx_semaphore_handle handle)
 /* Arena management                                                    */
 /* ------------------------------------------------------------------ */
 
-void asx_semaphore_reset(void)
-{
+void asx_semaphore_reset(void) {
     uint32_t i;
     for (i = 0; i < g_slot_count; i++) {
         g_slots[i].generation = next_gen(g_slots[i].generation);

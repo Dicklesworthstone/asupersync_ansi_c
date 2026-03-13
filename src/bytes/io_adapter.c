@@ -11,11 +11,8 @@
 /* Memory read adapter                                                 */
 /* ------------------------------------------------------------------ */
 
-static asx_read_result mem_poll_read(void *adapter_state,
-                                      asx_buf_mut *dst,
-                                      const asx_waker *waker,
-                                      uint32_t *out_bytes_read)
-{
+static asx_read_result mem_poll_read(void *adapter_state, asx_buf_mut *dst, const asx_waker *waker,
+                                     uint32_t *out_bytes_read) {
     asx_mem_read_state *s = (asx_mem_read_state *)adapter_state;
     uint32_t avail;
     uint32_t space;
@@ -24,8 +21,7 @@ static asx_read_result mem_poll_read(void *adapter_state,
 
     (void)waker;
 
-    if (s == NULL || dst == NULL || out_bytes_read == NULL)
-        return ASX_READ_ERROR;
+    if (s == NULL || dst == NULL || out_bytes_read == NULL) return ASX_READ_ERROR;
 
     if (s->eof) return ASX_READ_EOF;
     if (s->source == NULL) return ASX_READ_EOF;
@@ -53,15 +49,13 @@ static asx_read_result mem_poll_read(void *adapter_state,
     return ASX_READ_READY;
 }
 
-void asx_mem_read_init(asx_mem_read_state *s, asx_buf_mut *source)
-{
+void asx_mem_read_init(asx_mem_read_state *s, asx_buf_mut *source) {
     if (s == NULL) return;
     s->source = source;
     s->eof = 0;
 }
 
-asx_read_adapter asx_mem_read_adapter(asx_mem_read_state *s)
-{
+asx_read_adapter asx_mem_read_adapter(asx_mem_read_state *s) {
     asx_read_adapter a;
     a.poll_read = mem_poll_read;
     a.state = s;
@@ -72,11 +66,8 @@ asx_read_adapter asx_mem_read_adapter(asx_mem_read_state *s)
 /* Memory write adapter                                                */
 /* ------------------------------------------------------------------ */
 
-static asx_write_result mem_poll_write(void *adapter_state,
-                                        const asx_buf *src,
-                                        const asx_waker *waker,
-                                        uint32_t *out_bytes_written)
-{
+static asx_write_result mem_poll_write(void *adapter_state, const asx_buf *src,
+                                       const asx_waker *waker, uint32_t *out_bytes_written) {
     asx_mem_write_state *s = (asx_mem_write_state *)adapter_state;
     uint32_t space;
     uint32_t to_copy;
@@ -84,8 +75,7 @@ static asx_write_result mem_poll_write(void *adapter_state,
 
     (void)waker;
 
-    if (s == NULL || src == NULL || out_bytes_written == NULL)
-        return ASX_WRITE_ERROR;
+    if (s == NULL || src == NULL || out_bytes_written == NULL) return ASX_WRITE_ERROR;
 
     if (s->closed) return ASX_WRITE_CLOSED;
     if (s->sink == NULL) return ASX_WRITE_CLOSED;
@@ -104,32 +94,26 @@ static asx_write_result mem_poll_write(void *adapter_state,
     return ASX_WRITE_READY;
 }
 
-static asx_write_result mem_poll_flush(void *adapter_state,
-                                        const asx_waker *waker)
-{
+static asx_write_result mem_poll_flush(void *adapter_state, const asx_waker *waker) {
     (void)adapter_state;
     (void)waker;
-    return ASX_WRITE_READY;  /* memory adapter is always flushed */
+    return ASX_WRITE_READY; /* memory adapter is always flushed */
 }
 
-static asx_write_result mem_poll_shutdown(void *adapter_state,
-                                           const asx_waker *waker)
-{
+static asx_write_result mem_poll_shutdown(void *adapter_state, const asx_waker *waker) {
     asx_mem_write_state *s = (asx_mem_write_state *)adapter_state;
     (void)waker;
     if (s != NULL) s->closed = 1;
     return ASX_WRITE_READY;
 }
 
-void asx_mem_write_init(asx_mem_write_state *s, asx_buf_mut *sink)
-{
+void asx_mem_write_init(asx_mem_write_state *s, asx_buf_mut *sink) {
     if (s == NULL) return;
     s->sink = sink;
     s->closed = 0;
 }
 
-asx_write_adapter asx_mem_write_adapter(asx_mem_write_state *s)
-{
+asx_write_adapter asx_mem_write_adapter(asx_mem_write_state *s) {
     asx_write_adapter a;
     a.poll_write = mem_poll_write;
     a.poll_flush = mem_poll_flush;

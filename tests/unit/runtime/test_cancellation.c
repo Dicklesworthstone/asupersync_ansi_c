@@ -7,17 +7,20 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../../../src/runtime/runtime_internal.h"
 #include "../../test_harness.h"
 #include <asx/asx.h>
-#include <asx/runtime/runtime.h>
 #include <asx/core/cancel.h>
 #include <asx/core/ghost.h>
-#include "../../../src/runtime/runtime_internal.h"
+#include <asx/runtime/runtime.h>
 
 /* Suppress warn_unused_result for intentionally-ignored scheduler calls.
  * GCC's (void) cast does not silence warn_unused_result under -Werror. */
-#define SCHED_RUN_IGNORE(rid, bud) \
-    do { asx_status s_ = asx_scheduler_run((rid), (bud)); (void)s_; } while (0)
+#define SCHED_RUN_IGNORE(rid, bud)                                                                 \
+    do {                                                                                           \
+        asx_status s_ = asx_scheduler_run((rid), (bud));                                           \
+        (void)s_;                                                                                  \
+    } while (0)
 
 /* -------------------------------------------------------------------
  * Test poll functions
@@ -25,13 +28,15 @@
 
 /* Always yields (never completes on its own) */
 static asx_status poll_pending(void *data, asx_task_id self) {
-    (void)data; (void)self;
+    (void)data;
+    (void)self;
     return ASX_E_PENDING;
 }
 
 /* Completes immediately */
 static asx_status poll_complete(void *data, asx_task_id self) {
-    (void)data; (void)self;
+    (void)data;
+    (void)self;
     return ASX_OK;
 }
 
@@ -39,9 +44,7 @@ static asx_status poll_complete(void *data, asx_task_id self) {
 static asx_status poll_checkpoint_then_complete(void *data, asx_task_id self) {
     asx_checkpoint_result cr;
     (void)data;
-    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) {
-        return ASX_OK;
-    }
+    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) { return ASX_OK; }
     return ASX_E_PENDING;
 }
 
@@ -570,9 +573,7 @@ TEST(cancel_storm_all_tasks_resolve) {
     SCHED_RUN_IGNORE(rid, &budget);
 
     /* Cancel all with SHUTDOWN */
-    for (k = 0; k < 8; k++) {
-        ASSERT_EQ(asx_task_cancel(tids[k], ASX_CANCEL_SHUTDOWN), ASX_OK);
-    }
+    for (k = 0; k < 8; k++) { ASSERT_EQ(asx_task_cancel(tids[k], ASX_CANCEL_SHUTDOWN), ASX_OK); }
 
     /* Checkpoint all to advance to Cancelling */
     for (k = 0; k < 8; k++) {
@@ -616,8 +617,8 @@ TEST(cancel_propagate_preserves_stronger_origin) {
     SCHED_RUN_IGNORE(rid, &budget);
 
     /* First: strong cancel (SHUTDOWN) with origin from rid_other */
-    ASSERT_EQ(asx_task_cancel_with_origin(tid, ASX_CANCEL_SHUTDOWN,
-                                           rid_other, ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_task_cancel_with_origin(tid, ASX_CANCEL_SHUTDOWN, rid_other, ASX_INVALID_ID),
+              ASX_OK);
 
     /* Now propagate a weaker cancel (PARENT) from rid */
     (void)asx_cancel_propagate(rid, ASX_CANCEL_PARENT);

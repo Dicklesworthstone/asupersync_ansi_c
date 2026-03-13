@@ -23,13 +23,13 @@
 #ifndef ASX_RUNTIME_LAB_H
 #define ASX_RUNTIME_LAB_H
 
-#include <asx/asx_export.h>
-#include <asx/asx_status.h>
-#include <asx/asx_ids.h>
 #include <asx/asx_config.h>
+#include <asx/asx_export.h>
+#include <asx/asx_ids.h>
+#include <asx/asx_status.h>
+#include <asx/core/outcome.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/virtual_time.h>
-#include <asx/core/outcome.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,10 +40,10 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint64_t seed;           /* PRNG seed for deterministic entropy */
-    uint64_t tick_ns;        /* Virtual time tick (ns per query), 0 = 1ms default */
-    asx_time start_time_ns;  /* Virtual time start (0 = default) */
-    uint32_t max_polls;      /* Max polls per scenario step (0 = 1024 default) */
+    uint64_t seed;          /* PRNG seed for deterministic entropy */
+    uint64_t tick_ns;       /* Virtual time tick (ns per query), 0 = 1ms default */
+    asx_time start_time_ns; /* Virtual time start (0 = default) */
+    uint32_t max_polls;     /* Max polls per scenario step (0 = 1024 default) */
 } asx_lab_config;
 
 /* Initialize config with defaults. */
@@ -54,17 +54,16 @@ ASX_API void asx_lab_config_init(asx_lab_config *cfg);
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    asx_runtime      rt;
-    asx_vtime_state  vtime;
-    asx_lab_config   config;
-    uint64_t         entropy_state;  /* seeded PRNG state */
-    int              initialized;
+    asx_runtime rt;
+    asx_vtime_state vtime;
+    asx_lab_config config;
+    uint64_t entropy_state; /* seeded PRNG state */
+    int initialized;
 } asx_lab;
 
 /* Initialize the lab runtime with deterministic config.
  * Sets up virtual time, seeded entropy, and runtime hooks. */
-ASX_API ASX_MUST_USE asx_status asx_lab_init(asx_lab *lab,
-                                               const asx_lab_config *cfg);
+ASX_API ASX_MUST_USE asx_status asx_lab_init(asx_lab *lab, const asx_lab_config *cfg);
 
 /* Shut down the lab runtime and restore hooks. */
 ASX_API void asx_lab_shutdown(asx_lab *lab);
@@ -95,41 +94,37 @@ typedef asx_status (*asx_lab_step_fn)(asx_lab *lab, void *user_data);
 #endif
 
 typedef struct {
-    const char     *name;
+    const char *name;
     asx_lab_step_fn steps[ASX_LAB_MAX_STEPS];
-    void           *step_data[ASX_LAB_MAX_STEPS];
-    uint32_t        step_count;
+    void *step_data[ASX_LAB_MAX_STEPS];
+    uint32_t step_count;
 } asx_lab_scenario;
 
 /* Initialize a scenario. */
 ASX_API void asx_lab_scenario_init(asx_lab_scenario *sc, const char *name);
 
 /* Add a step to a scenario. */
-ASX_API ASX_MUST_USE asx_status asx_lab_scenario_add_step(
-    asx_lab_scenario *sc,
-    asx_lab_step_fn step_fn,
-    void *user_data);
+ASX_API ASX_MUST_USE asx_status asx_lab_scenario_add_step(asx_lab_scenario *sc,
+                                                          asx_lab_step_fn step_fn, void *user_data);
 
 /* -------------------------------------------------------------------
  * Scenario result
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    const char  *scenario_name;
-    uint32_t     steps_completed;
-    uint32_t     steps_total;
-    asx_status   last_status;     /* status of last step run */
-    asx_time     elapsed_ns;      /* virtual time elapsed */
-    uint64_t     polls_total;     /* total polls across all steps */
+    const char *scenario_name;
+    uint32_t steps_completed;
+    uint32_t steps_total;
+    asx_status last_status; /* status of last step run */
+    asx_time elapsed_ns;    /* virtual time elapsed */
+    uint64_t polls_total;   /* total polls across all steps */
 } asx_lab_result;
 
 /* Run a scenario in the lab runtime.
  * Executes each step in order. Stops on first error.
  * Returns ASX_OK if all steps succeed. */
-ASX_API ASX_MUST_USE asx_status asx_lab_run_scenario(
-    asx_lab *lab,
-    const asx_lab_scenario *scenario,
-    asx_lab_result *out_result);
+ASX_API ASX_MUST_USE asx_status asx_lab_run_scenario(asx_lab *lab, const asx_lab_scenario *scenario,
+                                                     asx_lab_result *out_result);
 
 /* -------------------------------------------------------------------
  * Seeded entropy
@@ -142,8 +137,7 @@ ASX_API uint64_t asx_lab_random_u64(asx_lab *lab);
  * Convenience: open region in lab context
  * ------------------------------------------------------------------- */
 
-ASX_API ASX_MUST_USE asx_status asx_lab_open_region(asx_lab *lab,
-                                                      asx_region_id *out_id);
+ASX_API ASX_MUST_USE asx_status asx_lab_open_region(asx_lab *lab, asx_region_id *out_id);
 
 #ifdef __cplusplus
 }

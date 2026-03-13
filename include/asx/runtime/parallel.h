@@ -18,12 +18,12 @@
 #ifndef ASX_RUNTIME_PARALLEL_H
 #define ASX_RUNTIME_PARALLEL_H
 
-#include <stdint.h>
 #include <asx/asx_export.h>
-#include <asx/asx_status.h>
 #include <asx/asx_ids.h>
-#include <asx/core/budget.h>
+#include <asx/asx_status.h>
 #include <asx/core/affinity.h>
+#include <asx/core/budget.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,8 +33,8 @@ extern "C" {
  * Lane capacity limits
  * ------------------------------------------------------------------- */
 
-#define ASX_MAX_WORKERS       4u
-#define ASX_MAX_LANES         3u  /* READY, CANCEL, TIMED */
+#define ASX_MAX_WORKERS 4u
+#define ASX_MAX_LANES 3u /* READY, CANCEL, TIMED */
 #define ASX_LANE_TASK_CAPACITY 64u
 
 /* -------------------------------------------------------------------
@@ -46,11 +46,7 @@ extern "C" {
  *   TIMED  — tasks blocked on timer deadlines
  * ------------------------------------------------------------------- */
 
-typedef enum {
-    ASX_LANE_READY  = 0,
-    ASX_LANE_CANCEL = 1,
-    ASX_LANE_TIMED  = 2
-} asx_lane_class;
+typedef enum { ASX_LANE_READY = 0, ASX_LANE_CANCEL = 1, ASX_LANE_TIMED = 2 } asx_lane_class;
 
 /* -------------------------------------------------------------------
  * Fairness policy
@@ -63,8 +59,8 @@ typedef enum {
 
 typedef enum {
     ASX_FAIRNESS_ROUND_ROBIN = 0,
-    ASX_FAIRNESS_WEIGHTED    = 1,
-    ASX_FAIRNESS_PRIORITY    = 2
+    ASX_FAIRNESS_WEIGHTED = 1,
+    ASX_FAIRNESS_PRIORITY = 2
 } asx_fairness_policy;
 
 /* -------------------------------------------------------------------
@@ -72,12 +68,12 @@ typedef enum {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    asx_lane_class  lane_class;
-    uint32_t        weight;           /* relative budget weight (1-100) */
-    uint32_t        task_count;       /* current tasks assigned */
-    uint32_t        polls_this_round; /* polls consumed in current round */
-    uint32_t        starvation_count; /* consecutive rounds with no polls */
-    uint32_t        max_starvation;   /* starvation threshold for alerts */
+    asx_lane_class lane_class;
+    uint32_t weight;           /* relative budget weight (1-100) */
+    uint32_t task_count;       /* current tasks assigned */
+    uint32_t polls_this_round; /* polls consumed in current round */
+    uint32_t starvation_count; /* consecutive rounds with no polls */
+    uint32_t max_starvation;   /* starvation threshold for alerts */
 } asx_lane_state;
 
 /* -------------------------------------------------------------------
@@ -85,11 +81,11 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint32_t            id;
-    asx_affinity_domain domain;       /* affinity domain for this worker */
-    int                 active;       /* 1 if worker is running */
-    uint32_t            polls_total;  /* lifetime poll count */
-    uint32_t            tasks_completed; /* lifetime completions */
+    uint32_t id;
+    asx_affinity_domain domain; /* affinity domain for this worker */
+    int active;                 /* 1 if worker is running */
+    uint32_t polls_total;       /* lifetime poll count */
+    uint32_t tasks_completed;   /* lifetime completions */
 } asx_worker_state;
 
 /* -------------------------------------------------------------------
@@ -97,10 +93,10 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint32_t            worker_count;   /* number of workers (1 = single-threaded) */
+    uint32_t worker_count; /* number of workers (1 = single-threaded) */
     asx_fairness_policy fairness;
-    uint32_t            lane_weights[ASX_MAX_LANES]; /* per-lane weights */
-    uint32_t            starvation_limit; /* max rounds without polls before alert */
+    uint32_t lane_weights[ASX_MAX_LANES]; /* per-lane weights */
+    uint32_t starvation_limit;            /* max rounds without polls before alert */
 } asx_parallel_config;
 
 /* -------------------------------------------------------------------
@@ -111,8 +107,7 @@ typedef struct {
  * Must be called before asx_parallel_run().
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if cfg is NULL
  * or worker_count is 0 or exceeds ASX_MAX_WORKERS. */
-ASX_API ASX_MUST_USE asx_status asx_parallel_init(
-    const asx_parallel_config *cfg);
+ASX_API ASX_MUST_USE asx_status asx_parallel_init(const asx_parallel_config *cfg);
 
 /* Reset all parallel scheduler state (test support). */
 ASX_API void asx_parallel_reset(void);
@@ -123,9 +118,7 @@ ASX_API void asx_parallel_reset(void);
 
 /* Assign a task to a lane based on its work class.
  * Returns ASX_OK on success, ASX_E_RESOURCE_EXHAUSTED if lane is full. */
-ASX_API ASX_MUST_USE asx_status asx_lane_assign(
-    asx_task_id tid,
-    asx_lane_class lane);
+ASX_API ASX_MUST_USE asx_status asx_lane_assign(asx_task_id tid, asx_lane_class lane);
 
 /* Remove a task from its lane (on completion or reclassification).
  * Returns ASX_OK on success, ASX_E_NOT_FOUND if task not in any lane. */
@@ -133,9 +126,7 @@ ASX_API ASX_MUST_USE asx_status asx_lane_remove(asx_task_id tid);
 
 /* Query the lane state for a given lane class.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out is NULL. */
-ASX_API ASX_MUST_USE asx_status asx_lane_get_state(
-    asx_lane_class lane,
-    asx_lane_state *out);
+ASX_API ASX_MUST_USE asx_status asx_lane_get_state(asx_lane_class lane, asx_lane_state *out);
 
 /* Query the total task count across all lanes. */
 ASX_API uint32_t asx_lane_total_tasks(void);
@@ -147,9 +138,7 @@ ASX_API uint32_t asx_lane_total_tasks(void);
 /* Query the state of a worker by index.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out is NULL
  * or index exceeds configured worker_count. */
-ASX_API ASX_MUST_USE asx_status asx_worker_get_state(
-    uint32_t worker_index,
-    asx_worker_state *out);
+ASX_API ASX_MUST_USE asx_status asx_worker_get_state(uint32_t worker_index, asx_worker_state *out);
 
 /* Query the configured worker count. */
 ASX_API uint32_t asx_parallel_worker_count(void);
@@ -169,9 +158,7 @@ ASX_API uint32_t asx_parallel_worker_count(void);
  *
  * Fairness guarantee: no lane is starved for more than
  * starvation_limit consecutive rounds. */
-ASX_API ASX_MUST_USE asx_status asx_parallel_run(
-    asx_region_id region,
-    asx_budget *budget);
+ASX_API ASX_MUST_USE asx_status asx_parallel_run(asx_region_id region, asx_budget *budget);
 
 /* -------------------------------------------------------------------
  * API: Fairness queries
@@ -212,17 +199,16 @@ ASX_API ASX_MUST_USE asx_status asx_inject_ready(asx_task_id tid);
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint32_t cancel_dispatches;   /* total cancel-lane polls */
-    uint32_t timed_dispatches;    /* total timed-lane polls */
-    uint32_t ready_dispatches;    /* total ready-lane polls */
-    uint32_t cancel_streak;       /* current consecutive cancel polls */
-    uint32_t cancel_streak_max;   /* peak cancel streak observed */
-    uint32_t fairness_yields;     /* times cancel was skipped for fairness */
+    uint32_t cancel_dispatches; /* total cancel-lane polls */
+    uint32_t timed_dispatches;  /* total timed-lane polls */
+    uint32_t ready_dispatches;  /* total ready-lane polls */
+    uint32_t cancel_streak;     /* current consecutive cancel polls */
+    uint32_t cancel_streak_max; /* peak cancel streak observed */
+    uint32_t fairness_yields;   /* times cancel was skipped for fairness */
 } asx_scheduling_metrics;
 
 /* Read the current scheduling metrics. */
-ASX_API ASX_MUST_USE asx_status asx_parallel_get_metrics(
-    asx_scheduling_metrics *out);
+ASX_API ASX_MUST_USE asx_status asx_parallel_get_metrics(asx_scheduling_metrics *out);
 
 /* Reset scheduling metrics to zero. */
 ASX_API void asx_parallel_reset_metrics(void);

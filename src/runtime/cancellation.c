@@ -11,16 +11,14 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "runtime_internal.h"
 #include <asx/asx.h>
-#include <asx/runtime/runtime.h>
-#include <asx/core/transition.h>
 #include <asx/core/cancel.h>
 #include <asx/core/ghost.h>
-#include "runtime_internal.h"
+#include <asx/core/transition.h>
+#include <asx/runtime/runtime.h>
 
-static uint64_t asx_trace_task_transition_aux(asx_task_state from,
-                                              asx_task_state to)
-{
+static uint64_t asx_trace_task_transition_aux(asx_task_state from, asx_task_state to) {
     return ((uint64_t)(uint32_t)from << 32) | (uint64_t)(uint32_t)to;
 }
 
@@ -28,8 +26,7 @@ static uint64_t asx_trace_task_transition_aux(asx_task_state from,
  * Task cancel request
  * ------------------------------------------------------------------- */
 
-asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind)
-{
+asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind) {
     asx_task_slot *t;
     asx_status st;
     asx_budget cleanup;
@@ -38,9 +35,7 @@ asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind)
     if (st != ASX_OK) return st;
 
     /* Already cancelled or terminal — strengthen if in cancel phase */
-    if (asx_task_is_terminal(t->state)) {
-        return ASX_OK; /* no-op for completed tasks */
-    }
+    if (asx_task_is_terminal(t->state)) { return ASX_OK; /* no-op for completed tasks */ }
 
     if (t->cancel_pending) {
         /* Strengthen: if new cancel is higher severity, upgrade */
@@ -57,8 +52,7 @@ asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind)
     }
 
     /* First cancel signal — transition Running → CancelRequested */
-    if (t->state != ASX_TASK_RUNNING &&
-        t->state != ASX_TASK_CREATED) {
+    if (t->state != ASX_TASK_RUNNING && t->state != ASX_TASK_CREATED) {
         return ASX_E_INVALID_STATE;
     }
 
@@ -73,11 +67,10 @@ asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind)
 
     {
         asx_task_state from = t->state;
-    (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_CANCEL_REQUESTED);
-    t->state = ASX_TASK_CANCEL_REQUESTED;
+        (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_CANCEL_REQUESTED);
+        t->state = ASX_TASK_CANCEL_REQUESTED;
         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
-                       asx_trace_task_transition_aux(from,
-                                                    ASX_TASK_CANCEL_REQUESTED));
+                       asx_trace_task_transition_aux(from, ASX_TASK_CANCEL_REQUESTED));
     }
 
     t->cancel_pending = 1;
@@ -100,11 +93,8 @@ asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind)
  * Cancel with origin attribution (for propagation traceability)
  * ------------------------------------------------------------------- */
 
-asx_status asx_task_cancel_with_origin(asx_task_id id,
-                                       asx_cancel_kind kind,
-                                       asx_region_id origin_region,
-                                       asx_task_id origin_task)
-{
+asx_status asx_task_cancel_with_origin(asx_task_id id, asx_cancel_kind kind,
+                                       asx_region_id origin_region, asx_task_id origin_task) {
     asx_task_slot *t;
     asx_status st;
     int was_pending;
@@ -123,8 +113,7 @@ asx_status asx_task_cancel_with_origin(asx_task_id id,
     /* Only set origin if this was the first cancel or if the cancel
      * was actually strengthened (higher severity). Otherwise, the
      * existing stronger cancel's origin attribution is preserved. */
-    if (!was_pending ||
-        asx_cancel_severity(kind) > asx_cancel_severity(old_kind)) {
+    if (!was_pending || asx_cancel_severity(kind) > asx_cancel_severity(old_kind)) {
         t->cancel_reason.origin_region = origin_region;
         t->cancel_reason.origin_task = origin_task;
     }
@@ -136,8 +125,7 @@ asx_status asx_task_cancel_with_origin(asx_task_id id,
  * Region-wide propagation
  * ------------------------------------------------------------------- */
 
-uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind)
-{
+uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind) {
     uint32_t i;
     uint32_t count = 0;
 
@@ -151,14 +139,10 @@ uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind)
         if (t->region != region) continue;
         if (asx_task_is_terminal(t->state)) continue;
 
-        tid = asx_handle_pack(ASX_TYPE_TASK,
-                              (uint16_t)(1u << (unsigned)t->state),
+        tid = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
                               asx_handle_pack_index(t->generation, (uint16_t)i));
 
-        if (asx_task_cancel_with_origin(tid, kind, region,
-                                        ASX_INVALID_ID) == ASX_OK) {
-            count++;
-        }
+        if (asx_task_cancel_with_origin(tid, kind, region, ASX_INVALID_ID) == ASX_OK) { count++; }
     }
 
     return count;
@@ -168,8 +152,7 @@ uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind)
  * Task checkpoint
  * ------------------------------------------------------------------- */
 
-asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out)
-{
+asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
     asx_task_slot *t;
     asx_status st;
 
@@ -212,23 +195,20 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out)
  * Task finalize (Cancelling → Finalizing)
  * ------------------------------------------------------------------- */
 
-asx_status asx_task_finalize(asx_task_id id)
-{
+asx_status asx_task_finalize(asx_task_id id) {
     asx_task_slot *t;
     asx_status st;
 
     st = asx_task_slot_lookup(id, &t);
     if (st != ASX_OK) return st;
 
-    if (t->state != ASX_TASK_CANCELLING) {
-        return ASX_E_INVALID_STATE;
-    }
+    if (t->state != ASX_TASK_CANCELLING) { return ASX_E_INVALID_STATE; }
 
     {
         asx_task_state from = t->state;
-    (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_FINALIZING);
-    t->state = ASX_TASK_FINALIZING;
-    t->cancel_phase = ASX_CANCEL_PHASE_FINALIZING;
+        (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_FINALIZING);
+        t->state = ASX_TASK_FINALIZING;
+        t->cancel_phase = ASX_CANCEL_PHASE_FINALIZING;
         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
                        asx_trace_task_transition_aux(from, ASX_TASK_FINALIZING));
     }
@@ -240,8 +220,7 @@ asx_status asx_task_finalize(asx_task_id id)
  * Cancel phase query
  * ------------------------------------------------------------------- */
 
-asx_status asx_task_get_cancel_phase(asx_task_id id, asx_cancel_phase *out)
-{
+asx_status asx_task_get_cancel_phase(asx_task_id id, asx_cancel_phase *out) {
     asx_task_slot *t;
     asx_status st;
 

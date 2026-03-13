@@ -8,7 +8,11 @@
 #include <asx/runtime/waker.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 static void setup(void) { asx_waker_reset(); }
 
@@ -37,9 +41,7 @@ TEST(deregister_decrements_count) {
     ASSERT_EQ(asx_waker_active_count(), 0u);
 }
 
-TEST(deregister_null_safe) {
-    asx_waker_deregister(NULL);  /* should not crash */
-}
+TEST(deregister_null_safe) { asx_waker_deregister(NULL); /* should not crash */ }
 
 /* ------------------------------------------------------------------ */
 /* Signaling tests                                                     */
@@ -77,9 +79,7 @@ TEST(wake_deregistered_fails) {
     ASSERT_EQ(asx_waker_wake(&w), ASX_E_NOT_FOUND);
 }
 
-TEST(wake_null_fails) {
-    ASSERT_EQ(asx_waker_wake(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(wake_null_fails) { ASSERT_EQ(asx_waker_wake(NULL), ASX_E_INVALID_ARGUMENT); }
 
 /* ------------------------------------------------------------------ */
 /* Clone tests                                                         */
@@ -128,21 +128,15 @@ TEST(drain_collects_signaled) {
     ASSERT_FALSE(asx_waker_is_signaled(&w3));
 }
 
-TEST(drain_null_returns_zero) {
-    ASSERT_EQ(asx_waker_drain_signaled(NULL, 4), 0u);
-}
+TEST(drain_null_returns_zero) { ASSERT_EQ(asx_waker_drain_signaled(NULL, 4), 0u); }
 
 /* ------------------------------------------------------------------ */
 /* Query null safety                                                   */
 /* ------------------------------------------------------------------ */
 
-TEST(signaled_null_false) {
-    ASSERT_FALSE(asx_waker_is_signaled(NULL));
-}
+TEST(signaled_null_false) { ASSERT_FALSE(asx_waker_is_signaled(NULL)); }
 
-TEST(task_null_invalid) {
-    ASSERT_EQ(asx_waker_task(NULL), ASX_INVALID_ID);
-}
+TEST(task_null_invalid) { ASSERT_EQ(asx_waker_task(NULL), ASX_INVALID_ID); }
 
 /* ------------------------------------------------------------------ */
 /* Exhaustion                                                          */
@@ -165,8 +159,7 @@ TEST(arena_exhaustion) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_waker ===\n");
 
     RUN_TEST(register_null_out_fails);

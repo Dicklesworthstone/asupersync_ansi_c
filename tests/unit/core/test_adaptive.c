@@ -22,13 +22,11 @@
  * In fp 16.16: multiply by 65536.
  */
 static uint32_t loss_table[2][2] = {
-    { 10u << 16, 30u << 16 },  /* action 0 */
-    {  5u << 16, 50u << 16 }   /* action 1 */
+    {10u << 16, 30u << 16}, /* action 0 */
+    {5u << 16, 50u << 16}   /* action 1 */
 };
 
-static uint32_t test_loss_fn(void *ctx, asx_adaptive_action action,
-                              uint8_t state_index)
-{
+static uint32_t test_loss_fn(void *ctx, asx_adaptive_action action, uint8_t state_index) {
     (void)ctx;
     return loss_table[action][state_index];
 }
@@ -37,8 +35,7 @@ static uint32_t test_loss_fn(void *ctx, asx_adaptive_action action,
 /* Tests                                                              */
 /* ------------------------------------------------------------------ */
 
-TEST(init_reset)
-{
+TEST(init_reset) {
     asx_adaptive_init();
     ASSERT_EQ(asx_adaptive_ledger_count(), 0u);
     ASSERT_EQ(asx_adaptive_fallback_count(), 0u);
@@ -46,8 +43,7 @@ TEST(init_reset)
     ASSERT_EQ(asx_adaptive_ledger_overflowed(), 0);
 }
 
-TEST(policy_set_get)
-{
+TEST(policy_set_get) {
     asx_adaptive_policy p;
     asx_adaptive_policy got;
 
@@ -62,14 +58,12 @@ TEST(policy_set_get)
     ASSERT_EQ(got.budget_remaining, 50u);
 }
 
-TEST(policy_null_returns_error)
-{
+TEST(policy_null_returns_error) {
     asx_adaptive_init();
     ASSERT_EQ(asx_adaptive_set_policy(NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(decide_selects_min_expected_loss)
-{
+TEST(decide_selects_min_expected_loss) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
@@ -79,16 +73,16 @@ TEST(decide_selects_min_expected_loss)
     memset(&surface, 0, sizeof(surface));
     surface.name = "test-surface";
     surface.action_count = 2;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.loss_ctx     = NULL;
-    surface.fallback     = 0;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.loss_ctx = NULL;
+    surface.fallback = 0;
 
     memset(&posterior, 0, sizeof(posterior));
     /* P(state0) = 0.7, P(state1) = 0.3 in fp 0.32 */
     posterior.posterior[0] = (uint32_t)(0.7 * 4294967296.0);
     posterior.posterior[1] = (uint32_t)(0.3 * 4294967296.0);
-    posterior.state_count  = 2;
+    posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX; /* high confidence */
 
     ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result), ASX_OK);
@@ -101,8 +95,7 @@ TEST(decide_selects_min_expected_loss)
     ASSERT_EQ(result.used_fallback, 0);
 }
 
-TEST(decide_selects_aggressive_when_favorable)
-{
+TEST(decide_selects_aggressive_when_favorable) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
@@ -112,16 +105,16 @@ TEST(decide_selects_aggressive_when_favorable)
     memset(&surface, 0, sizeof(surface));
     surface.name = "test-surface";
     surface.action_count = 2;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.loss_ctx     = NULL;
-    surface.fallback     = 0;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.loss_ctx = NULL;
+    surface.fallback = 0;
 
     memset(&posterior, 0, sizeof(posterior));
     /* P(state0) = 0.95, P(state1) = 0.05 */
     posterior.posterior[0] = (uint32_t)(0.95 * 4294967296.0);
     posterior.posterior[1] = (uint32_t)(0.05 * 4294967296.0);
-    posterior.state_count  = 2;
+    posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX;
 
     ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result), ASX_OK);
@@ -133,8 +126,7 @@ TEST(decide_selects_aggressive_when_favorable)
     ASSERT_EQ(result.counterfactual, 0u);
 }
 
-TEST(fallback_on_low_confidence)
-{
+TEST(fallback_on_low_confidence) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
@@ -150,28 +142,27 @@ TEST(fallback_on_low_confidence)
     memset(&surface, 0, sizeof(surface));
     surface.name = "test-surface";
     surface.action_count = 2;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.loss_ctx     = NULL;
-    surface.fallback     = 0;  /* cautious is fallback */
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.loss_ctx = NULL;
+    surface.fallback = 0; /* cautious is fallback */
 
     memset(&posterior, 0, sizeof(posterior));
     posterior.posterior[0] = (uint32_t)(0.5 * 4294967296.0);
     posterior.posterior[1] = (uint32_t)(0.5 * 4294967296.0);
-    posterior.state_count  = 2;
+    posterior.state_count = 2;
     /* Low confidence: 0.3 < threshold 0.5 */
     posterior.confidence_fp32 = (uint32_t)(0.3 * 4294967296.0);
 
     ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result), ASX_OK);
 
-    ASSERT_EQ(result.selected, 0u);    /* fallback action */
+    ASSERT_EQ(result.selected, 0u); /* fallback action */
     ASSERT_EQ(result.used_fallback, 1);
     ASSERT_EQ(asx_adaptive_in_fallback(), 1);
     ASSERT_EQ(asx_adaptive_fallback_count(), 1u);
 }
 
-TEST(fallback_on_budget_exhaustion)
-{
+TEST(fallback_on_budget_exhaustion) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
@@ -188,15 +179,15 @@ TEST(fallback_on_budget_exhaustion)
     memset(&surface, 0, sizeof(surface));
     surface.name = "test-surface";
     surface.action_count = 2;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.loss_ctx     = NULL;
-    surface.fallback     = 0;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.loss_ctx = NULL;
+    surface.fallback = 0;
 
     memset(&posterior, 0, sizeof(posterior));
     posterior.posterior[0] = (uint32_t)(0.5 * 4294967296.0);
     posterior.posterior[1] = (uint32_t)(0.5 * 4294967296.0);
-    posterior.state_count  = 2;
+    posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX;
 
     /* First 3 decisions should be adaptive */
@@ -210,8 +201,7 @@ TEST(fallback_on_budget_exhaustion)
     ASSERT_EQ(result.used_fallback, 1);
 }
 
-TEST(evidence_ledger_records_decisions)
-{
+TEST(evidence_ledger_records_decisions) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
@@ -223,15 +213,15 @@ TEST(evidence_ledger_records_decisions)
     memset(&surface, 0, sizeof(surface));
     surface.name = "cancel-lane";
     surface.action_count = 2;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.loss_ctx     = NULL;
-    surface.fallback     = 0;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.loss_ctx = NULL;
+    surface.fallback = 0;
 
     memset(&posterior, 0, sizeof(posterior));
     posterior.posterior[0] = (uint32_t)(0.7 * 4294967296.0);
     posterior.posterior[1] = (uint32_t)(0.3 * 4294967296.0);
-    posterior.state_count  = 2;
+    posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX;
 
     ev[0].label = "drain_rate";
@@ -249,8 +239,7 @@ TEST(evidence_ledger_records_decisions)
     ASSERT_EQ(entry.decision.selected, result.selected);
 }
 
-TEST(ledger_overflow_wraps)
-{
+TEST(ledger_overflow_wraps) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
@@ -262,15 +251,15 @@ TEST(ledger_overflow_wraps)
     memset(&surface, 0, sizeof(surface));
     surface.name = "wrap-test";
     surface.action_count = 2;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.loss_ctx     = NULL;
-    surface.fallback     = 0;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.loss_ctx = NULL;
+    surface.fallback = 0;
 
     memset(&posterior, 0, sizeof(posterior));
     posterior.posterior[0] = (uint32_t)(0.5 * 4294967296.0);
     posterior.posterior[1] = (uint32_t)(0.5 * 4294967296.0);
-    posterior.state_count  = 2;
+    posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX;
 
     /* Write more than LEDGER_DEPTH entries */
@@ -286,8 +275,7 @@ TEST(ledger_overflow_wraps)
     ASSERT_EQ(entry.sequence, 10u);
 }
 
-TEST(digest_deterministic)
-{
+TEST(digest_deterministic) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
@@ -298,15 +286,15 @@ TEST(digest_deterministic)
     memset(&surface, 0, sizeof(surface));
     surface.name = "digest-test";
     surface.action_count = 2;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.loss_ctx     = NULL;
-    surface.fallback     = 0;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.loss_ctx = NULL;
+    surface.fallback = 0;
 
     memset(&posterior, 0, sizeof(posterior));
     posterior.posterior[0] = (uint32_t)(0.6 * 4294967296.0);
     posterior.posterior[1] = (uint32_t)(0.4 * 4294967296.0);
-    posterior.state_count  = 2;
+    posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX;
 
     ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result), ASX_OK);
@@ -320,19 +308,16 @@ TEST(digest_deterministic)
     ASSERT_EQ(d1, d2);
 }
 
-TEST(decide_null_surface_returns_error)
-{
+TEST(decide_null_surface_returns_error) {
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
 
     asx_adaptive_init();
     memset(&posterior, 0, sizeof(posterior));
-    ASSERT_EQ(asx_adaptive_decide(NULL, &posterior, NULL, 0, &result),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_adaptive_decide(NULL, &posterior, NULL, 0, &result), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(decide_null_posterior_returns_error)
-{
+TEST(decide_null_posterior_returns_error) {
     asx_adaptive_surface surface;
     asx_adaptive_decision result;
 
@@ -340,15 +325,13 @@ TEST(decide_null_posterior_returns_error)
     memset(&surface, 0, sizeof(surface));
     surface.name = "null-test";
     surface.action_count = 2;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.fallback     = 0;
-    ASSERT_EQ(asx_adaptive_decide(&surface, NULL, NULL, 0, &result),
-              ASX_E_INVALID_ARGUMENT);
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.fallback = 0;
+    ASSERT_EQ(asx_adaptive_decide(&surface, NULL, NULL, 0, &result), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(decide_null_output_returns_error)
-{
+TEST(decide_null_output_returns_error) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
 
@@ -356,18 +339,16 @@ TEST(decide_null_output_returns_error)
     memset(&surface, 0, sizeof(surface));
     surface.name = "null-test";
     surface.action_count = 2;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.fallback     = 0;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.fallback = 0;
     memset(&posterior, 0, sizeof(posterior));
     posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX;
-    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(decide_zero_actions_returns_error)
-{
+TEST(decide_zero_actions_returns_error) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
@@ -376,18 +357,16 @@ TEST(decide_zero_actions_returns_error)
     memset(&surface, 0, sizeof(surface));
     surface.name = "bad-surface";
     surface.action_count = 0;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.fallback     = 0;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.fallback = 0;
     memset(&posterior, 0, sizeof(posterior));
     posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX;
-    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(decide_state_count_mismatch_returns_error)
-{
+TEST(decide_state_count_mismatch_returns_error) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
@@ -396,18 +375,16 @@ TEST(decide_state_count_mismatch_returns_error)
     memset(&surface, 0, sizeof(surface));
     surface.name = "mismatch";
     surface.action_count = 2;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.fallback     = 0;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.fallback = 0;
     memset(&posterior, 0, sizeof(posterior));
-    posterior.state_count = 3;  /* mismatch */
+    posterior.state_count = 3; /* mismatch */
     posterior.confidence_fp32 = UINT32_MAX;
-    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(decide_null_loss_fn_returns_error)
-{
+TEST(decide_null_loss_fn_returns_error) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
@@ -416,26 +393,23 @@ TEST(decide_null_loss_fn_returns_error)
     memset(&surface, 0, sizeof(surface));
     surface.name = "no-loss";
     surface.action_count = 2;
-    surface.state_count  = 2;
-    surface.loss_fn      = NULL;
-    surface.fallback     = 0;
+    surface.state_count = 2;
+    surface.loss_fn = NULL;
+    surface.fallback = 0;
     memset(&posterior, 0, sizeof(posterior));
     posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX;
-    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(ledger_get_out_of_bounds_returns_zero)
-{
+TEST(ledger_get_out_of_bounds_returns_zero) {
     asx_adaptive_ledger_entry entry;
 
     asx_adaptive_init();
     ASSERT_EQ(asx_adaptive_ledger_get(0, &entry), 0);
 }
 
-TEST(single_action_surface)
-{
+TEST(single_action_surface) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
@@ -445,15 +419,15 @@ TEST(single_action_surface)
     memset(&surface, 0, sizeof(surface));
     surface.name = "single-action";
     surface.action_count = 1;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.loss_ctx     = NULL;
-    surface.fallback     = 0;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.loss_ctx = NULL;
+    surface.fallback = 0;
 
     memset(&posterior, 0, sizeof(posterior));
     posterior.posterior[0] = (uint32_t)(0.5 * 4294967296.0);
     posterior.posterior[1] = (uint32_t)(0.5 * 4294967296.0);
-    posterior.state_count  = 2;
+    posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX;
 
     ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result), ASX_OK);
@@ -461,8 +435,7 @@ TEST(single_action_surface)
     ASSERT_EQ(result.counterfactual, 0u); /* only one action */
 }
 
-TEST(high_confidence_uses_adaptive_not_fallback)
-{
+TEST(high_confidence_uses_adaptive_not_fallback) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
     asx_adaptive_decision result;
@@ -477,15 +450,15 @@ TEST(high_confidence_uses_adaptive_not_fallback)
     memset(&surface, 0, sizeof(surface));
     surface.name = "high-conf";
     surface.action_count = 2;
-    surface.state_count  = 2;
-    surface.loss_fn      = test_loss_fn;
-    surface.loss_ctx     = NULL;
-    surface.fallback     = 0;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.loss_ctx = NULL;
+    surface.fallback = 0;
 
     memset(&posterior, 0, sizeof(posterior));
     posterior.posterior[0] = (uint32_t)(0.95 * 4294967296.0);
     posterior.posterior[1] = (uint32_t)(0.05 * 4294967296.0);
-    posterior.state_count  = 2;
+    posterior.state_count = 2;
     posterior.confidence_fp32 = (uint32_t)(0.9 * 4294967296.0); /* above threshold */
 
     ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result), ASX_OK);
@@ -496,8 +469,7 @@ TEST(high_confidence_uses_adaptive_not_fallback)
 /* Test runner                                                        */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_adaptive ===\n");
 
     RUN_TEST(init_reset);

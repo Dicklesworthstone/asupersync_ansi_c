@@ -7,52 +7,38 @@
 #include "../../test_harness.h"
 #include <asx/asx.h>
 
-static asx_status leaf_failure(void)
-{
-    return ASX_E_INVALID_TRANSITION;
-}
+static asx_status leaf_failure(void) { return ASX_E_INVALID_TRANSITION; }
 
-static asx_status mid_failure(void)
-{
+static asx_status mid_failure(void) {
     ASX_TRY(leaf_failure());
     return ASX_OK;
 }
 
-static asx_status top_failure(void)
-{
+static asx_status top_failure(void) {
     ASX_TRY(mid_failure());
     return ASX_OK;
 }
 
-static asx_status explicit_leaf_failure(void)
-{
-    return ASX_E_CANCELLED;
-}
+static asx_status explicit_leaf_failure(void) { return ASX_E_CANCELLED; }
 
-static asx_status explicit_mid_failure(asx_task_id task_id)
-{
+static asx_status explicit_mid_failure(asx_task_id task_id) {
     ASX_TRY_TASK(task_id, explicit_leaf_failure());
     return ASX_OK;
 }
 
-static int manifest_contains(const char *needle)
-{
+static int manifest_contains(const char *needle) {
     uint32_t i;
     uint32_t n = asx_must_use_surface_count();
     for (i = 0; i < n; i++) {
         const char *name = asx_must_use_surface_name(i);
-        if (name != NULL && strcmp(name, needle) == 0) {
-            return 1;
-        }
+        if (name != NULL && strcmp(name, needle) == 0) { return 1; }
     }
     return 0;
 }
 
 TEST(ledger_records_bound_task_context) {
     asx_error_ledger_entry entry;
-    asx_task_id tid = asx_handle_pack(
-        ASX_TYPE_TASK, 0, asx_handle_pack_index(1u, 3u)
-    );
+    asx_task_id tid = asx_handle_pack(ASX_TYPE_TASK, 0, asx_handle_pack_index(1u, 3u));
 
     asx_error_ledger_reset();
     asx_error_ledger_bind_task(tid);
@@ -71,9 +57,7 @@ TEST(ledger_records_bound_task_context) {
 TEST(try_captures_multi_hop_breadcrumbs) {
     asx_error_ledger_entry first;
     asx_error_ledger_entry second;
-    asx_task_id tid = asx_handle_pack(
-        ASX_TYPE_TASK, 0, asx_handle_pack_index(2u, 4u)
-    );
+    asx_task_id tid = asx_handle_pack(ASX_TYPE_TASK, 0, asx_handle_pack_index(2u, 4u));
     asx_status st;
 
     asx_error_ledger_reset();
@@ -92,9 +76,7 @@ TEST(try_captures_multi_hop_breadcrumbs) {
 
 TEST(try_task_uses_explicit_task_context) {
     asx_error_ledger_entry entry;
-    asx_task_id tid = asx_handle_pack(
-        ASX_TYPE_TASK, 0, asx_handle_pack_index(7u, 9u)
-    );
+    asx_task_id tid = asx_handle_pack(ASX_TYPE_TASK, 0, asx_handle_pack_index(7u, 9u));
     asx_status st;
 
     asx_error_ledger_reset();
@@ -110,18 +92,14 @@ TEST(try_task_uses_explicit_task_context) {
 TEST(ledger_overflow_is_deterministic_ring) {
     asx_error_ledger_entry oldest;
     asx_error_ledger_entry newest;
-    asx_task_id tid = asx_handle_pack(
-        ASX_TYPE_TASK, 0, asx_handle_pack_index(5u, 1u)
-    );
+    asx_task_id tid = asx_handle_pack(ASX_TYPE_TASK, 0, asx_handle_pack_index(5u, 1u));
     uint32_t i;
     const uint32_t extra = 3u;
     const uint32_t total = ASX_ERROR_LEDGER_DEPTH + extra;
 
     asx_error_ledger_reset();
     for (i = 0; i < total; i++) {
-        asx_error_ledger_record_for_task(
-            tid, ASX_E_INVALID_STATE, "overflow_step", "ring", i + 1u
-        );
+        asx_error_ledger_record_for_task(tid, ASX_E_INVALID_STATE, "overflow_step", "ring", i + 1u);
     }
 
     ASSERT_EQ(asx_error_ledger_count(tid), ASX_ERROR_LEDGER_DEPTH);

@@ -21,24 +21,28 @@
 
 #include "../../test_harness.h"
 #include <asx/asx.h>
-#include <asx/runtime/runtime.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
-#include <asx/core/resource.h>
 #include <asx/core/outcome.h>
+#include <asx/core/resource.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
-#define IGNORE(expr) do { asx_status s_ = (expr); (void)s_; } while (0)
+#define IGNORE(expr)                                                                               \
+    do {                                                                                           \
+        asx_status s_ = (expr);                                                                    \
+        (void)s_;                                                                                  \
+    } while (0)
 
 /* -------------------------------------------------------------------
  * Poll functions for various task behaviors
  * ------------------------------------------------------------------- */
 
 /* Completes immediately (single poll) */
-static asx_status poll_immediate(void *ctx, asx_task_id id)
-{
-    (void)ctx; (void)id;
+static asx_status poll_immediate(void *ctx, asx_task_id id) {
+    (void)ctx;
+    (void)id;
     return ASX_OK;
 }
 
@@ -48,8 +52,7 @@ typedef struct {
     int polls_done;
 } yield_ctx;
 
-static asx_status poll_yield_n(void *user_data, asx_task_id id)
-{
+static asx_status poll_yield_n(void *user_data, asx_task_id id) {
     yield_ctx *ctx = (yield_ctx *)user_data;
     (void)id;
     ctx->polls_done++;
@@ -58,8 +61,7 @@ static asx_status poll_yield_n(void *user_data, asx_task_id id)
 }
 
 /* Checkpoint-aware: completes when cancelled */
-static asx_status poll_checkpoint_comply(void *ctx, asx_task_id id)
-{
+static asx_status poll_checkpoint_comply(void *ctx, asx_task_id id) {
     asx_checkpoint_result cr;
     asx_status st;
     (void)ctx;
@@ -70,14 +72,13 @@ static asx_status poll_checkpoint_comply(void *ctx, asx_task_id id)
 }
 
 /* Fails with an error */
-static asx_status poll_fail(void *ctx, asx_task_id id)
-{
-    (void)ctx; (void)id;
+static asx_status poll_fail(void *ctx, asx_task_id id) {
+    (void)ctx;
+    (void)id;
     return ASX_E_INVALID_STATE;
 }
 
-static void reset_all(void)
-{
+static void reset_all(void) {
     asx_runtime_reset();
     asx_ghost_reset();
     asx_scheduler_event_reset();
@@ -90,8 +91,7 @@ static void reset_all(void)
  * Verifies all slots are filled and capacity query is consistent.
  * ------------------------------------------------------------------- */
 
-TEST(hft_burst_admission_fills_capacity)
-{
+TEST(hft_burst_admission_fills_capacity) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id tids[ASX_MAX_TASKS];
     uint32_t i;
@@ -121,8 +121,7 @@ TEST(hft_burst_admission_fills_capacity)
  * without corrupting existing task state.
  * ------------------------------------------------------------------- */
 
-TEST(hft_burst_overload_rejected_cleanly)
-{
+TEST(hft_burst_overload_rejected_cleanly) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id tid;
     asx_task_id overflow_tid = ASX_INVALID_ID;
@@ -138,16 +137,14 @@ TEST(hft_burst_overload_rejected_cleanly)
     }
 
     /* Overflow spawn must fail */
-    ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &overflow_tid),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &overflow_tid), ASX_E_RESOURCE_EXHAUSTED);
 
     /* Existing tasks must still run successfully */
     budget = asx_budget_from_polls(ASX_MAX_TASKS * 2);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
 }
 
-TEST(hft_burst_admission_gate_precheck)
-{
+TEST(hft_burst_admission_gate_precheck) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id tid;
     uint32_t i;
@@ -159,13 +156,10 @@ TEST(hft_burst_admission_gate_precheck)
     ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, 32), ASX_OK);
 
     /* Spawn 32 */
-    for (i = 0; i < 32; i++) {
-        ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK);
-    }
+    for (i = 0; i < 32; i++) { ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK); }
 
     /* Pre-check: can we admit 33 more? No (32 + 33 = 65 > 64) */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, 33),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, 33), ASX_E_RESOURCE_EXHAUSTED);
 
     /* But 32 more is OK */
     ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, 32), ASX_OK);
@@ -181,8 +175,7 @@ TEST(hft_burst_admission_gate_precheck)
 
 static yield_ctx g_fairness_ctx[32];
 
-TEST(hft_burst_fairness_no_starvation)
-{
+TEST(hft_burst_fairness_no_starvation) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id tids[32];
     asx_budget budget;
@@ -196,8 +189,7 @@ TEST(hft_burst_fairness_no_starvation)
     for (i = 0; i < 32; i++) {
         g_fairness_ctx[i].target_polls = 2;
         g_fairness_ctx[i].polls_done = 0;
-        ASSERT_EQ(asx_task_spawn(rid, poll_yield_n,
-                                  &g_fairness_ctx[i], &tids[i]), ASX_OK);
+        ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &g_fairness_ctx[i], &tids[i]), ASX_OK);
     }
 
     /* Budget: 32 tasks * 2 polls each + headroom */
@@ -214,13 +206,10 @@ TEST(hft_burst_fairness_no_starvation)
     ASSERT_EQ(completed, 32u);
 
     /* Each task should have been polled exactly its target number */
-    for (i = 0; i < 32; i++) {
-        ASSERT_EQ(g_fairness_ctx[i].polls_done, 2);
-    }
+    for (i = 0; i < 32; i++) { ASSERT_EQ(g_fairness_ctx[i].polls_done, 2); }
 }
 
-TEST(hft_burst_fairness_round_robin_order)
-{
+TEST(hft_burst_fairness_round_robin_order) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id tids[4];
     asx_budget budget;
@@ -235,8 +224,7 @@ TEST(hft_burst_fairness_round_robin_order)
     for (i = 0; i < 4; i++) {
         g_fairness_ctx[i].target_polls = 2;
         g_fairness_ctx[i].polls_done = 0;
-        ASSERT_EQ(asx_task_spawn(rid, poll_yield_n,
-                                  &g_fairness_ctx[i], &tids[i]), ASX_OK);
+        ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &g_fairness_ctx[i], &tids[i]), ASX_OK);
     }
 
     budget = asx_budget_from_polls(50);
@@ -268,8 +256,7 @@ TEST(hft_burst_fairness_round_robin_order)
  * exhaust budget. Remaining tasks stay non-terminal.
  * ------------------------------------------------------------------- */
 
-TEST(hft_burst_tight_budget_partial_completion)
-{
+TEST(hft_burst_tight_budget_partial_completion) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id tids[16];
     asx_budget budget;
@@ -318,8 +305,7 @@ TEST(hft_burst_tight_budget_partial_completion)
 
 static yield_ctx g_mixed_ctx[24];
 
-TEST(hft_burst_mixed_completion_times)
-{
+TEST(hft_burst_mixed_completion_times) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id tids[24];
     asx_budget budget;
@@ -336,14 +322,12 @@ TEST(hft_burst_mixed_completion_times)
     for (i = 8; i < 16; i++) {
         g_mixed_ctx[i].target_polls = 2;
         g_mixed_ctx[i].polls_done = 0;
-        ASSERT_EQ(asx_task_spawn(rid, poll_yield_n,
-                                  &g_mixed_ctx[i], &tids[i]), ASX_OK);
+        ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &g_mixed_ctx[i], &tids[i]), ASX_OK);
     }
     for (i = 16; i < 24; i++) {
         g_mixed_ctx[i].target_polls = 5;
         g_mixed_ctx[i].polls_done = 0;
-        ASSERT_EQ(asx_task_spawn(rid, poll_yield_n,
-                                  &g_mixed_ctx[i], &tids[i]), ASX_OK);
+        ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &g_mixed_ctx[i], &tids[i]), ASX_OK);
     }
 
     /* Generous budget */
@@ -376,8 +360,7 @@ TEST(hft_burst_mixed_completion_times)
  * checkpoint-compliant tasks should resolve to CANCELLED outcome.
  * ------------------------------------------------------------------- */
 
-TEST(hft_burst_cancel_storm_resolves_all)
-{
+TEST(hft_burst_cancel_storm_resolves_all) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id tids[16];
     asx_budget budget;
@@ -390,8 +373,7 @@ TEST(hft_burst_cancel_storm_resolves_all)
 
     /* Spawn 16 checkpoint-compliant tasks */
     for (i = 0; i < 16; i++) {
-        ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_comply, NULL, &tids[i]),
-                  ASX_OK);
+        ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_comply, NULL, &tids[i]), ASX_OK);
     }
 
     /* Propagate cancel to entire region */
@@ -411,9 +393,7 @@ TEST(hft_burst_cancel_storm_resolves_all)
         if (state == ASX_TASK_COMPLETED) {
             completed++;
             ASSERT_EQ(asx_task_get_outcome(tids[i], &out), ASX_OK);
-            if (out.severity == ASX_OUTCOME_CANCELLED) {
-                cancelled_count++;
-            }
+            if (out.severity == ASX_OUTCOME_CANCELLED) { cancelled_count++; }
         }
     }
     ASSERT_EQ(completed, 16u);
@@ -430,8 +410,7 @@ TEST(hft_burst_cancel_storm_resolves_all)
 static yield_ctx g_replay_ctx_a[8];
 static yield_ctx g_replay_ctx_b[8];
 
-static void run_replay_scenario(yield_ctx *ctxs, asx_task_id *tids)
-{
+static void run_replay_scenario(yield_ctx *ctxs, asx_task_id *tids) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_budget budget;
     uint32_t i;
@@ -446,8 +425,7 @@ static void run_replay_scenario(yield_ctx *ctxs, asx_task_id *tids)
     IGNORE(asx_scheduler_run(rid, &budget));
 }
 
-static uint64_t capture_event_digest(void)
-{
+static uint64_t capture_event_digest(void) {
     uint64_t hash = 0x517cc1b727220a95ULL;
     uint32_t i;
     uint32_t ev_count = asx_scheduler_event_count();
@@ -482,8 +460,7 @@ static uint64_t capture_event_digest(void)
     return hash;
 }
 
-TEST(hft_burst_replay_deterministic)
-{
+TEST(hft_burst_replay_deterministic) {
     asx_task_id tids_a[8];
     asx_task_id tids_b[8];
     uint64_t digest_a;
@@ -517,8 +494,7 @@ TEST(hft_burst_replay_deterministic)
  * drainable and quiescence check should pass.
  * ------------------------------------------------------------------- */
 
-TEST(hft_burst_drain_quiescence)
-{
+TEST(hft_burst_drain_quiescence) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id tid;
     asx_budget budget;
@@ -528,9 +504,7 @@ TEST(hft_burst_drain_quiescence)
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Spawn 32 immediate tasks */
-    for (i = 0; i < 32; i++) {
-        ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK);
-    }
+    for (i = 0; i < 32; i++) { ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK); }
 
     /* Run to completion */
     budget = asx_budget_from_polls(100);
@@ -551,8 +525,7 @@ TEST(hft_burst_drain_quiescence)
  * produce ERR outcomes and don't corrupt succeeding tasks.
  * ------------------------------------------------------------------- */
 
-TEST(hft_burst_errors_do_not_corrupt_peers)
-{
+TEST(hft_burst_errors_do_not_corrupt_peers) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id ok_tids[8];
     asx_task_id fail_tids[8];
@@ -569,10 +542,8 @@ TEST(hft_burst_errors_do_not_corrupt_peers)
 
     /* 8 successful tasks + 8 failing tasks interleaved */
     for (i = 0; i < 8; i++) {
-        ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &ok_tids[i]),
-                  ASX_OK);
-        ASSERT_EQ(asx_task_spawn(rid, poll_fail, NULL, &fail_tids[i]),
-                  ASX_OK);
+        ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &ok_tids[i]), ASX_OK);
+        ASSERT_EQ(asx_task_spawn(rid, poll_fail, NULL, &fail_tids[i]), ASX_OK);
     }
 
     budget = asx_budget_from_polls(200);
@@ -601,8 +572,7 @@ TEST(hft_burst_errors_do_not_corrupt_peers)
         if (state == ASX_TASK_COMPLETED) {
             fail_completed++;
             ASSERT_EQ(asx_task_get_outcome(fail_tids[i], &out), ASX_OK);
-            if (out.severity == ASX_OUTCOME_ERR ||
-                out.severity == ASX_OUTCOME_CANCELLED) {
+            if (out.severity == ASX_OUTCOME_ERR || out.severity == ASX_OUTCOME_CANCELLED) {
                 fail_non_ok_outcome++;
             }
         }
@@ -626,8 +596,7 @@ TEST(hft_burst_errors_do_not_corrupt_peers)
  * monotonic sequencing — a key HFT requirement.
  * ------------------------------------------------------------------- */
 
-TEST(hft_burst_event_monotonicity)
-{
+TEST(hft_burst_event_monotonicity) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id tid;
     asx_budget budget;
@@ -638,9 +607,7 @@ TEST(hft_burst_event_monotonicity)
     reset_all();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
-    for (i = 0; i < 32; i++) {
-        ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK);
-    }
+    for (i = 0; i < 32; i++) { ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK); }
 
     budget = asx_budget_from_polls(200);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
@@ -653,9 +620,7 @@ TEST(hft_burst_event_monotonicity)
     for (i = 0; i < ev_count; i++) {
         asx_scheduler_event ev;
         ASSERT_TRUE(asx_scheduler_event_get(i, &ev));
-        if (i > 0) {
-            ASSERT_TRUE(ev.sequence > prev_seq);
-        }
+        if (i > 0) { ASSERT_TRUE(ev.sequence > prev_seq); }
         prev_seq = ev.sequence;
     }
 }
@@ -664,8 +629,7 @@ TEST(hft_burst_event_monotonicity)
  * hft-burst-resource-snapshot: capacity tracking under load
  * ------------------------------------------------------------------- */
 
-TEST(hft_burst_resource_snapshot_consistent)
-{
+TEST(hft_burst_resource_snapshot_consistent) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id tid;
     asx_resource_snapshot snap;
@@ -688,8 +652,7 @@ TEST(hft_burst_resource_snapshot_consistent)
  * Main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_hft_microburst (VERT-HFT-MICROBURST) ===\n");
 
     /* Admission and overload */

@@ -10,23 +10,20 @@
 #ifndef ASX_CODEC_SCHEMA_H
 #define ASX_CODEC_SCHEMA_H
 
-#include <stdint.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef enum {
-    ASX_CODEC_KIND_JSON = 0,
-    ASX_CODEC_KIND_BIN  = 1
-} asx_codec_kind;
+typedef enum { ASX_CODEC_KIND_JSON = 0, ASX_CODEC_KIND_BIN = 1 } asx_codec_kind;
 
 enum {
     ASX_CODEC_BIN_FRAME_SCHEMA_VERSION_V1 = 1u,
-    ASX_CODEC_BIN_FRAME_MESSAGE_FIXTURE   = 1u,
-    ASX_CODEC_BIN_FLAG_CHECKSUM_FOOTER    = 1u
+    ASX_CODEC_BIN_FRAME_MESSAGE_FIXTURE = 1u,
+    ASX_CODEC_BIN_FLAG_CHECKSUM_FOOTER = 1u
 };
 
 typedef struct {
@@ -60,7 +57,8 @@ ASX_API void asx_canonical_fixture_init(asx_canonical_fixture *fixture);
 ASX_API void asx_canonical_fixture_reset(asx_canonical_fixture *fixture);
 
 /* Validate required canonical schema fields and deterministic constraints. */
-ASX_API ASX_MUST_USE asx_status asx_canonical_fixture_validate(const asx_canonical_fixture *fixture);
+ASX_API ASX_MUST_USE asx_status
+asx_canonical_fixture_validate(const asx_canonical_fixture *fixture);
 
 /* Map enum to canonical codec string ("json" / "bin"). */
 ASX_API ASX_MUST_USE const char *asx_codec_kind_str(asx_codec_kind codec);

@@ -8,26 +8,22 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include "test_log.h"
 #include "test_harness.h"
-#include <asx/runtime/vertical_adapter.h>
-#include <asx/runtime/hft_instrument.h>
+#include "test_log.h"
 #include <asx/runtime/automotive_instrument.h>
+#include <asx/runtime/hft_instrument.h>
 #include <asx/runtime/overload_catalog.h>
 #include <asx/runtime/profile_compat.h>
+#include <asx/runtime/vertical_adapter.h>
 #include <string.h>
 
 /* ===================================================================
  * Adapter descriptor tests
  * =================================================================== */
 
-TEST(adapter_count_is_three)
-{
-    ASSERT_EQ(asx_adapter_count(), 3u);
-}
+TEST(adapter_count_is_three) { ASSERT_EQ(asx_adapter_count(), 3u); }
 
-TEST(adapter_descriptor_hft)
-{
+TEST(adapter_descriptor_hft) {
     asx_adapter_descriptor desc;
     asx_status s = asx_adapter_get_descriptor(ASX_ADAPTER_HFT, &desc);
     ASSERT_EQ(s, ASX_OK);
@@ -37,8 +33,7 @@ TEST(adapter_descriptor_hft)
     ASSERT_TRUE(desc.description != NULL);
 }
 
-TEST(adapter_descriptor_automotive)
-{
+TEST(adapter_descriptor_automotive) {
     asx_adapter_descriptor desc;
     asx_status s = asx_adapter_get_descriptor(ASX_ADAPTER_AUTOMOTIVE, &desc);
     ASSERT_EQ(s, ASX_OK);
@@ -47,8 +42,7 @@ TEST(adapter_descriptor_automotive)
     ASSERT_TRUE(desc.name != NULL);
 }
 
-TEST(adapter_descriptor_router)
-{
+TEST(adapter_descriptor_router) {
     asx_adapter_descriptor desc;
     asx_status s = asx_adapter_get_descriptor(ASX_ADAPTER_ROUTER, &desc);
     ASSERT_EQ(s, ASX_OK);
@@ -57,82 +51,59 @@ TEST(adapter_descriptor_router)
     ASSERT_TRUE(desc.name != NULL);
 }
 
-TEST(adapter_descriptor_null_rejected)
-{
+TEST(adapter_descriptor_null_rejected) {
     asx_status s = asx_adapter_get_descriptor(ASX_ADAPTER_HFT, NULL);
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(adapter_descriptor_invalid_id_rejected)
-{
+TEST(adapter_descriptor_invalid_id_rejected) {
     asx_adapter_descriptor desc;
     asx_status s = asx_adapter_get_descriptor((asx_adapter_id)99, &desc);
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(adapter_name_hft)
-{
-    ASSERT_STR_EQ(asx_adapter_name(ASX_ADAPTER_HFT), "HFT_LATENCY");
-}
+TEST(adapter_name_hft) { ASSERT_STR_EQ(asx_adapter_name(ASX_ADAPTER_HFT), "HFT_LATENCY"); }
 
-TEST(adapter_name_automotive)
-{
+TEST(adapter_name_automotive) {
     ASSERT_STR_EQ(asx_adapter_name(ASX_ADAPTER_AUTOMOTIVE), "AUTO_COMPLIANCE");
 }
 
-TEST(adapter_name_router)
-{
-    ASSERT_STR_EQ(asx_adapter_name(ASX_ADAPTER_ROUTER), "ROUTER_QUEUE");
-}
+TEST(adapter_name_router) { ASSERT_STR_EQ(asx_adapter_name(ASX_ADAPTER_ROUTER), "ROUTER_QUEUE"); }
 
-TEST(adapter_name_invalid)
-{
-    ASSERT_STR_EQ(asx_adapter_name((asx_adapter_id)99), "UNKNOWN");
-}
+TEST(adapter_name_invalid) { ASSERT_STR_EQ(asx_adapter_name((asx_adapter_id)99), "UNKNOWN"); }
 
-TEST(adapter_mode_str_fallback)
-{
+TEST(adapter_mode_str_fallback) {
     ASSERT_STR_EQ(asx_adapter_mode_str(ASX_ADAPTER_MODE_FALLBACK), "FALLBACK");
 }
 
-TEST(adapter_mode_str_accelerated)
-{
+TEST(adapter_mode_str_accelerated) {
     ASSERT_STR_EQ(asx_adapter_mode_str(ASX_ADAPTER_MODE_ACCELERATED), "ACCELERATED");
 }
 
-TEST(adapter_mode_str_invalid)
-{
+TEST(adapter_mode_str_invalid) {
     ASSERT_STR_EQ(asx_adapter_mode_str((asx_adapter_mode)99), "UNKNOWN");
 }
 
-TEST(adapter_profile_mapping)
-{
-    ASSERT_EQ((int)asx_adapter_profile(ASX_ADAPTER_HFT),
-              (int)ASX_PROFILE_ID_HFT);
-    ASSERT_EQ((int)asx_adapter_profile(ASX_ADAPTER_AUTOMOTIVE),
-              (int)ASX_PROFILE_ID_AUTOMOTIVE);
-    ASSERT_EQ((int)asx_adapter_profile(ASX_ADAPTER_ROUTER),
-              (int)ASX_PROFILE_ID_EMBEDDED_ROUTER);
+TEST(adapter_profile_mapping) {
+    ASSERT_EQ((int)asx_adapter_profile(ASX_ADAPTER_HFT), (int)ASX_PROFILE_ID_HFT);
+    ASSERT_EQ((int)asx_adapter_profile(ASX_ADAPTER_AUTOMOTIVE), (int)ASX_PROFILE_ID_AUTOMOTIVE);
+    ASSERT_EQ((int)asx_adapter_profile(ASX_ADAPTER_ROUTER), (int)ASX_PROFILE_ID_EMBEDDED_ROUTER);
 }
 
-TEST(adapter_profile_invalid)
-{
-    ASSERT_EQ((int)asx_adapter_profile((asx_adapter_id)99),
-              (int)ASX_PROFILE_ID_COUNT);
+TEST(adapter_profile_invalid) {
+    ASSERT_EQ((int)asx_adapter_profile((asx_adapter_id)99), (int)ASX_PROFILE_ID_COUNT);
 }
 
 /* ===================================================================
  * Evaluation tests — fallback mode
  * =================================================================== */
 
-TEST(evaluate_fallback_hft_below_threshold)
-{
+TEST(evaluate_fallback_hft_below_threshold) {
     asx_adapter_result res;
     asx_status s;
 
     asx_adapter_reset_all();
-    s = asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_FALLBACK,
-                               50, 100, &res);
+    s = asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_FALLBACK, 50, 100, &res);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_EQ((int)res.adapter, (int)ASX_ADAPTER_HFT);
     ASSERT_EQ((int)res.mode, (int)ASX_ADAPTER_MODE_FALLBACK);
@@ -141,14 +112,12 @@ TEST(evaluate_fallback_hft_below_threshold)
     ASSERT_FALSE(res.has_annotations);
 }
 
-TEST(evaluate_fallback_hft_above_threshold)
-{
+TEST(evaluate_fallback_hft_above_threshold) {
     asx_adapter_result res;
     asx_status s;
 
     asx_adapter_reset_all();
-    s = asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_FALLBACK,
-                               90, 100, &res);
+    s = asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_FALLBACK, 90, 100, &res);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_TRUE(res.decision.triggered);
     /* HFT uses SHED_OLDEST at 85% */
@@ -156,28 +125,24 @@ TEST(evaluate_fallback_hft_above_threshold)
     ASSERT_FALSE(res.has_annotations);
 }
 
-TEST(evaluate_fallback_automotive_backpressure)
-{
+TEST(evaluate_fallback_automotive_backpressure) {
     asx_adapter_result res;
     asx_status s;
 
     asx_adapter_reset_all();
-    s = asx_adapter_evaluate(ASX_ADAPTER_AUTOMOTIVE, ASX_ADAPTER_MODE_FALLBACK,
-                               95, 100, &res);
+    s = asx_adapter_evaluate(ASX_ADAPTER_AUTOMOTIVE, ASX_ADAPTER_MODE_FALLBACK, 95, 100, &res);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_TRUE(res.decision.triggered);
     ASSERT_EQ(res.decision.admit_status, ASX_E_WOULD_BLOCK);
     ASSERT_FALSE(res.has_annotations);
 }
 
-TEST(evaluate_fallback_router_reject)
-{
+TEST(evaluate_fallback_router_reject) {
     asx_adapter_result res;
     asx_status s;
 
     asx_adapter_reset_all();
-    s = asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_FALLBACK,
-                               80, 100, &res);
+    s = asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_FALLBACK, 80, 100, &res);
     ASSERT_EQ(s, ASX_OK);
     /* EMBEDDED_ROUTER rejects at 75% */
     ASSERT_TRUE(res.decision.triggered);
@@ -185,20 +150,15 @@ TEST(evaluate_fallback_router_reject)
     ASSERT_FALSE(res.has_annotations);
 }
 
-TEST(evaluate_null_result_rejected)
-{
-    asx_status s = asx_adapter_evaluate(ASX_ADAPTER_HFT,
-                                          ASX_ADAPTER_MODE_FALLBACK,
-                                          50, 100, NULL);
+TEST(evaluate_null_result_rejected) {
+    asx_status s = asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_FALLBACK, 50, 100, NULL);
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(evaluate_invalid_adapter_rejected)
-{
+TEST(evaluate_invalid_adapter_rejected) {
     asx_adapter_result res;
-    asx_status s = asx_adapter_evaluate((asx_adapter_id)99,
-                                          ASX_ADAPTER_MODE_FALLBACK,
-                                          50, 100, &res);
+    asx_status s =
+        asx_adapter_evaluate((asx_adapter_id)99, ASX_ADAPTER_MODE_FALLBACK, 50, 100, &res);
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
 }
 
@@ -206,8 +166,7 @@ TEST(evaluate_invalid_adapter_rejected)
  * Evaluation tests — accelerated mode (with annotations)
  * =================================================================== */
 
-TEST(evaluate_accelerated_hft_has_annotations)
-{
+TEST(evaluate_accelerated_hft_has_annotations) {
     asx_adapter_result res;
     asx_status s;
 
@@ -217,17 +176,14 @@ TEST(evaluate_accelerated_hft_has_annotations)
     asx_hft_record_poll_latency(200);
     asx_hft_record_poll_latency(500);
 
-    s = asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_ACCELERATED,
-                               50, 100, &res);
+    s = asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_ACCELERATED, 50, 100, &res);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_TRUE(res.has_annotations);
     /* p99 should be nonzero since we recorded samples */
-    ASSERT_TRUE(res.annotations.hft.p99_ns > 0 ||
-                res.annotations.hft.overflow_count == 0);
+    ASSERT_TRUE(res.annotations.hft.p99_ns > 0 || res.annotations.hft.overflow_count == 0);
 }
 
-TEST(evaluate_accelerated_automotive_has_annotations)
-{
+TEST(evaluate_accelerated_automotive_has_annotations) {
     asx_adapter_result res;
     asx_status s;
 
@@ -236,9 +192,7 @@ TEST(evaluate_accelerated_automotive_has_annotations)
     asx_auto_record_deadline(1000, 900, 1);  /* hit */
     asx_auto_record_deadline(1000, 1100, 2); /* miss */
 
-    s = asx_adapter_evaluate(ASX_ADAPTER_AUTOMOTIVE,
-                               ASX_ADAPTER_MODE_ACCELERATED,
-                               50, 100, &res);
+    s = asx_adapter_evaluate(ASX_ADAPTER_AUTOMOTIVE, ASX_ADAPTER_MODE_ACCELERATED, 50, 100, &res);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_TRUE(res.has_annotations);
     /* Should have a nonzero miss rate (1 miss out of 2) */
@@ -246,41 +200,34 @@ TEST(evaluate_accelerated_automotive_has_annotations)
     ASSERT_TRUE(res.annotations.automotive.audit_count > 0);
 }
 
-TEST(evaluate_accelerated_router_has_annotations)
-{
+TEST(evaluate_accelerated_router_has_annotations) {
     asx_adapter_result res;
     asx_status s;
 
     asx_adapter_reset_all();
-    s = asx_adapter_evaluate(ASX_ADAPTER_ROUTER,
-                               ASX_ADAPTER_MODE_ACCELERATED,
-                               50, 100, &res);
+    s = asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED, 50, 100, &res);
     ASSERT_EQ(s, ASX_OK);
     ASSERT_TRUE(res.has_annotations);
     ASSERT_EQ(res.annotations.router.queue_depth, 50u);
     ASSERT_EQ(res.annotations.router.headroom, 50u);
 }
 
-TEST(evaluate_accelerated_router_reject_streak)
-{
+TEST(evaluate_accelerated_router_reject_streak) {
     asx_adapter_result res;
 
     asx_adapter_reset_all();
 
     /* Trigger overload (75% threshold for router) */
-    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED,
-                           80, 100, &res);
+    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED, 80, 100, &res);
     ASSERT_TRUE(res.decision.triggered);
     ASSERT_EQ(res.annotations.router.reject_streak, 1u);
 
     /* Trigger again */
-    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED,
-                           80, 100, &res);
+    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED, 80, 100, &res);
     ASSERT_EQ(res.annotations.router.reject_streak, 2u);
 
     /* Drop below threshold — streak resets */
-    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED,
-                           50, 100, &res);
+    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED, 50, 100, &res);
     ASSERT_EQ(res.annotations.router.reject_streak, 0u);
 }
 
@@ -288,8 +235,7 @@ TEST(evaluate_accelerated_router_reject_streak)
  * Decision digest invariance tests
  * =================================================================== */
 
-TEST(digest_matches_between_modes_hft)
-{
+TEST(digest_matches_between_modes_hft) {
     asx_adapter_result fb, ac;
 
     asx_adapter_reset_all();
@@ -297,8 +243,7 @@ TEST(digest_matches_between_modes_hft)
     ASSERT_EQ(fb.decision_digest, ac.decision_digest);
 }
 
-TEST(digest_matches_between_modes_automotive)
-{
+TEST(digest_matches_between_modes_automotive) {
     asx_adapter_result fb, ac;
 
     asx_adapter_reset_all();
@@ -306,8 +251,7 @@ TEST(digest_matches_between_modes_automotive)
     ASSERT_EQ(fb.decision_digest, ac.decision_digest);
 }
 
-TEST(digest_matches_between_modes_router)
-{
+TEST(digest_matches_between_modes_router) {
     asx_adapter_result fb, ac;
 
     asx_adapter_reset_all();
@@ -315,21 +259,17 @@ TEST(digest_matches_between_modes_router)
     ASSERT_EQ(fb.decision_digest, ac.decision_digest);
 }
 
-TEST(digest_differs_for_different_load)
-{
+TEST(digest_differs_for_different_load) {
     asx_adapter_result low, high;
 
     asx_adapter_reset_all();
-    asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_FALLBACK,
-                           50, 100, &low);
-    asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_FALLBACK,
-                           90, 100, &high);
+    asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_FALLBACK, 50, 100, &low);
+    asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_FALLBACK, 90, 100, &high);
     /* Decisions differ (not triggered vs triggered) so digests differ */
     ASSERT_NE(low.decision_digest, high.decision_digest);
 }
 
-TEST(evaluate_both_null_safety)
-{
+TEST(evaluate_both_null_safety) {
     asx_adapter_result fb, ac;
     asx_status s;
 
@@ -344,8 +284,7 @@ TEST(evaluate_both_null_safety)
  * Isomorphism verification tests
  * =================================================================== */
 
-TEST(isomorphism_hft_builtin_passes)
-{
+TEST(isomorphism_hft_builtin_passes) {
     asx_isomorphism_result res;
     int pass;
 
@@ -358,8 +297,7 @@ TEST(isomorphism_hft_builtin_passes)
     ASSERT_EQ(res.matches, res.evaluations);
 }
 
-TEST(isomorphism_automotive_builtin_passes)
-{
+TEST(isomorphism_automotive_builtin_passes) {
     asx_isomorphism_result res;
     int pass;
 
@@ -370,8 +308,7 @@ TEST(isomorphism_automotive_builtin_passes)
     ASSERT_EQ(res.matches, res.evaluations);
 }
 
-TEST(isomorphism_router_builtin_passes)
-{
+TEST(isomorphism_router_builtin_passes) {
     asx_isomorphism_result res;
     int pass;
 
@@ -382,55 +319,39 @@ TEST(isomorphism_router_builtin_passes)
     ASSERT_EQ(res.matches, res.evaluations);
 }
 
-TEST(isomorphism_custom_scenarios)
-{
-    asx_adapter_scenario scenarios[] = {
-        {  0,  64 },
-        { 32,  64 },
-        { 48,  64 },
-        { 56,  64 },
-        { 60,  64 },
-        { 64,  64 }
-    };
+TEST(isomorphism_custom_scenarios) {
+    asx_adapter_scenario scenarios[] = {{0, 64}, {32, 64}, {48, 64}, {56, 64}, {60, 64}, {64, 64}};
     asx_isomorphism_result res;
     int pass;
 
     asx_adapter_reset_all();
-    pass = asx_adapter_isomorphism_check(ASX_ADAPTER_HFT,
-                                           scenarios, 6, &res);
+    pass = asx_adapter_isomorphism_check(ASX_ADAPTER_HFT, scenarios, 6, &res);
     ASSERT_TRUE(pass);
     ASSERT_EQ(res.evaluations, 6u);
     ASSERT_EQ(res.matches, 6u);
 }
 
-TEST(isomorphism_null_result_returns_zero)
-{
-    asx_adapter_scenario sc = { 50, 100 };
-    int pass = asx_adapter_isomorphism_check(ASX_ADAPTER_HFT,
-                                               &sc, 1, NULL);
+TEST(isomorphism_null_result_returns_zero) {
+    asx_adapter_scenario sc = {50, 100};
+    int pass = asx_adapter_isomorphism_check(ASX_ADAPTER_HFT, &sc, 1, NULL);
     ASSERT_FALSE(pass);
 }
 
-TEST(isomorphism_null_scenarios_returns_zero)
-{
+TEST(isomorphism_null_scenarios_returns_zero) {
     asx_isomorphism_result res;
-    int pass = asx_adapter_isomorphism_check(ASX_ADAPTER_HFT,
-                                               NULL, 0, &res);
+    int pass = asx_adapter_isomorphism_check(ASX_ADAPTER_HFT, NULL, 0, &res);
     ASSERT_FALSE(pass);
     ASSERT_FALSE(res.pass);
 }
 
-TEST(isomorphism_invalid_adapter_returns_zero)
-{
-    asx_adapter_scenario sc = { 50, 100 };
+TEST(isomorphism_invalid_adapter_returns_zero) {
+    asx_adapter_scenario sc = {50, 100};
     asx_isomorphism_result res;
-    int pass = asx_adapter_isomorphism_check((asx_adapter_id)99,
-                                               &sc, 1, &res);
+    int pass = asx_adapter_isomorphism_check((asx_adapter_id)99, &sc, 1, &res);
     ASSERT_FALSE(pass);
 }
 
-TEST(isomorphism_all_adapters_builtin)
-{
+TEST(isomorphism_all_adapters_builtin) {
     int i;
     for (i = 0; i < ASX_ADAPTER_COUNT; i++) {
         asx_isomorphism_result res;
@@ -440,8 +361,7 @@ TEST(isomorphism_all_adapters_builtin)
         pass = asx_adapter_isomorphism_builtin((asx_adapter_id)i, &res);
         if (!pass) {
             fprintf(stderr, "    adapter %s diverged at scenario %u\n",
-                    asx_adapter_name((asx_adapter_id)i),
-                    res.divergence_index);
+                    asx_adapter_name((asx_adapter_id)i), res.divergence_index);
         }
         ASSERT_TRUE(pass);
     }
@@ -451,8 +371,7 @@ TEST(isomorphism_all_adapters_builtin)
  * Adapter-catalog consistency tests
  * =================================================================== */
 
-TEST(adapter_profile_matches_catalog)
-{
+TEST(adapter_profile_matches_catalog) {
     int i;
     for (i = 0; i < ASX_ADAPTER_COUNT; i++) {
         asx_adapter_descriptor desc;
@@ -466,8 +385,7 @@ TEST(adapter_profile_matches_catalog)
     }
 }
 
-TEST(adapter_decision_consistent_with_catalog)
-{
+TEST(adapter_decision_consistent_with_catalog) {
     int i;
     for (i = 0; i < ASX_ADAPTER_COUNT; i++) {
         asx_adapter_descriptor desc;
@@ -479,11 +397,9 @@ TEST(adapter_decision_consistent_with_catalog)
         asx_overload_catalog_get(desc.profile, &entry);
 
         /* Evaluate above any profile's threshold */
-        asx_adapter_evaluate((asx_adapter_id)i, ASX_ADAPTER_MODE_FALLBACK,
-                               95, 100, &res);
+        asx_adapter_evaluate((asx_adapter_id)i, ASX_ADAPTER_MODE_FALLBACK, 95, 100, &res);
 
-        ASSERT_TRUE(asx_overload_catalog_decision_consistent(
-            entry, &res.decision));
+        ASSERT_TRUE(asx_overload_catalog_decision_consistent(entry, &res.decision));
     }
 }
 
@@ -491,27 +407,23 @@ TEST(adapter_decision_consistent_with_catalog)
  * Reset and isolation tests
  * =================================================================== */
 
-TEST(reset_clears_state)
-{
+TEST(reset_clears_state) {
     asx_adapter_result res;
 
     /* Generate some state */
     asx_hft_record_poll_latency(1000);
     asx_auto_record_deadline(2000, 3000, 1);
-    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED,
-                           80, 100, &res);
+    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED, 80, 100, &res);
 
     /* Reset should clear everything */
     asx_adapter_reset_all();
 
     /* Router reject streak should be zero */
-    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED,
-                           50, 100, &res);
+    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED, 50, 100, &res);
     ASSERT_EQ(res.annotations.router.reject_streak, 0u);
 
     /* HFT histogram should be empty */
-    asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_ACCELERATED,
-                           50, 100, &res);
+    asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_ACCELERATED, 50, 100, &res);
     ASSERT_EQ(res.annotations.hft.p99_ns, 0u);
     ASSERT_EQ(res.annotations.hft.overflow_count, 0u);
 }
@@ -520,8 +432,7 @@ TEST(reset_clears_state)
  * Annotation detail tests
  * =================================================================== */
 
-TEST(hft_annotations_reflect_histogram)
-{
+TEST(hft_annotations_reflect_histogram) {
     asx_adapter_result res;
 
     asx_adapter_reset_all();
@@ -530,14 +441,12 @@ TEST(hft_annotations_reflect_histogram)
     asx_hft_record_poll_latency(200);
     asx_hft_record_poll_latency(50000); /* overflow */
 
-    asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_ACCELERATED,
-                           50, 100, &res);
+    asx_adapter_evaluate(ASX_ADAPTER_HFT, ASX_ADAPTER_MODE_ACCELERATED, 50, 100, &res);
     ASSERT_TRUE(res.has_annotations);
     ASSERT_EQ(res.annotations.hft.overflow_count, 1u);
 }
 
-TEST(automotive_annotations_reflect_tracker)
-{
+TEST(automotive_annotations_reflect_tracker) {
     asx_adapter_result res;
 
     asx_adapter_reset_all();
@@ -547,9 +456,7 @@ TEST(automotive_annotations_reflect_tracker)
     asx_auto_record_deadline(1000, 950, 3);
     asx_auto_record_deadline(1000, 1100, 4); /* miss */
 
-    asx_adapter_evaluate(ASX_ADAPTER_AUTOMOTIVE,
-                           ASX_ADAPTER_MODE_ACCELERATED,
-                           50, 100, &res);
+    asx_adapter_evaluate(ASX_ADAPTER_AUTOMOTIVE, ASX_ADAPTER_MODE_ACCELERATED, 50, 100, &res);
     ASSERT_TRUE(res.has_annotations);
     /* 1 miss out of 4 = 25% = 2500 in pct*100 */
     ASSERT_EQ(res.annotations.automotive.miss_rate_pct100, 2500u);
@@ -557,25 +464,21 @@ TEST(automotive_annotations_reflect_tracker)
     ASSERT_TRUE(res.annotations.automotive.audit_count >= 1u);
 }
 
-TEST(router_annotations_headroom)
-{
+TEST(router_annotations_headroom) {
     asx_adapter_result res;
 
     asx_adapter_reset_all();
-    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED,
-                           30, 100, &res);
+    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED, 30, 100, &res);
     ASSERT_TRUE(res.has_annotations);
     ASSERT_EQ(res.annotations.router.queue_depth, 30u);
     ASSERT_EQ(res.annotations.router.headroom, 70u);
 }
 
-TEST(router_annotations_zero_headroom_at_capacity)
-{
+TEST(router_annotations_zero_headroom_at_capacity) {
     asx_adapter_result res;
 
     asx_adapter_reset_all();
-    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED,
-                           100, 100, &res);
+    asx_adapter_evaluate(ASX_ADAPTER_ROUTER, ASX_ADAPTER_MODE_ACCELERATED, 100, 100, &res);
     ASSERT_EQ(res.annotations.router.queue_depth, 100u);
     ASSERT_EQ(res.annotations.router.headroom, 0u);
 }
@@ -584,10 +487,8 @@ TEST(router_annotations_zero_headroom_at_capacity)
  * main
  * =================================================================== */
 
-int main(void)
-{
-    test_log_open("unit", "runtime/vertical_adapter",
-                  "vertical-adapter");
+int main(void) {
+    test_log_open("unit", "runtime/vertical_adapter", "vertical-adapter");
 
     /* Adapter descriptors */
     RUN_TEST(adapter_count_is_three);

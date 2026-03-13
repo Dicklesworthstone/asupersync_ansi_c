@@ -10,74 +10,76 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/asx.h>
-#include <asx/runtime/runtime.h>
-#include <asx/runtime/parallel.h>
-#include <asx/runtime/telemetry.h>
-#include <asx/runtime/hindsight.h>
-#include <asx/runtime/hft_instrument.h>
-#include <asx/runtime/automotive_instrument.h>
-#include <asx/runtime/vertical_adapter.h>
-#include <asx/runtime/event.h>
-#include <asx/time/timer_wheel.h>
-#include <asx/core/oneshot.h>
-#include <asx/core/watch.h>
-#include <asx/core/broadcast.h>
-#include <asx/core/session.h>
-#include <asx/core/transition.h>
-#include <asx/core/ghost.h>
-#include <asx/runtime/waker.h>
-#include <asx/runtime/io_driver.h>
-#include <asx/runtime/blocking.h>
-#include <asx/sync/notify.h>
-#include <asx/sync/semaphore.h>
-#include <asx/sync/barrier.h>
-#include <asx/sync/once.h>
+#include "runtime_internal.h"
 #include <asx/actor/actor.h>
 #include <asx/actor/supervisor.h>
+#include <asx/asx.h>
+#include <asx/core/broadcast.h>
+#include <asx/core/ghost.h>
+#include <asx/core/oneshot.h>
+#include <asx/core/session.h>
+#include <asx/core/transition.h>
+#include <asx/core/watch.h>
+#include <asx/fs/fs.h>
 #include <asx/net/net.h>
+#include <asx/process/process.h>
+#include <asx/runtime/automotive_instrument.h>
+#include <asx/runtime/blocking.h>
 #include <asx/runtime/diagnostic.h>
+#include <asx/runtime/event.h>
+#include <asx/runtime/hft_instrument.h>
+#include <asx/runtime/hindsight.h>
+#include <asx/runtime/io_driver.h>
+#include <asx/runtime/parallel.h>
+#include <asx/runtime/runtime.h>
+#include <asx/runtime/telemetry.h>
+#include <asx/runtime/vertical_adapter.h>
+#include <asx/runtime/waker.h>
+#include <asx/signal/signal.h>
+#include <asx/sync/barrier.h>
+#include <asx/sync/notify.h>
+#include <asx/sync/once.h>
+#include <asx/sync/semaphore.h>
+#include <asx/time/timer_wheel.h>
 #include <string.h>
-#include "runtime_internal.h"
 
 /* -------------------------------------------------------------------
  * Global arenas (walking skeleton: fixed-size, no dynamic allocation)
  * ------------------------------------------------------------------- */
 
 asx_region_slot g_regions[ASX_MAX_REGIONS];
-uint32_t        g_region_count;
+uint32_t g_region_count;
 
-asx_task_slot   g_tasks[ASX_MAX_TASKS];
-uint32_t        g_task_count;
+asx_task_slot g_tasks[ASX_MAX_TASKS];
+uint32_t g_task_count;
 
 asx_obligation_slot g_obligations[ASX_MAX_OBLIGATIONS];
-uint32_t            g_obligation_count;
+uint32_t g_obligation_count;
 
 /* -------------------------------------------------------------------
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
-void asx_runtime_reset(void)
-{
+void asx_runtime_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_REGIONS; i++) {
-        g_regions[i].state      = ASX_REGION_OPEN;
+        g_regions[i].state = ASX_REGION_OPEN;
         g_regions[i].task_count = 0;
         g_regions[i].task_total = 0;
         g_regions[i].generation = 0;
-        g_regions[i].alive      = 0;
+        g_regions[i].alive = 0;
         asx_cleanup_init(&g_regions[i].cleanup);
         g_regions[i].capture_used = 0;
     }
     g_region_count = 0;
     for (i = 0; i < ASX_MAX_TASKS; i++) {
-        g_tasks[i].state      = ASX_TASK_CREATED;
-        g_tasks[i].region     = ASX_INVALID_ID;
-        g_tasks[i].poll_fn    = NULL;
-        g_tasks[i].user_data  = NULL;
-        g_tasks[i].outcome    = asx_outcome_make(ASX_OUTCOME_OK);
+        g_tasks[i].state = ASX_TASK_CREATED;
+        g_tasks[i].region = ASX_INVALID_ID;
+        g_tasks[i].poll_fn = NULL;
+        g_tasks[i].user_data = NULL;
+        g_tasks[i].outcome = asx_outcome_make(ASX_OUTCOME_OK);
         g_tasks[i].generation = 0;
-        g_tasks[i].alive      = 0;
+        g_tasks[i].alive = 0;
         g_tasks[i].captured_state = NULL;
         g_tasks[i].captured_size = 0;
         g_tasks[i].captured_dtor = NULL;
@@ -89,10 +91,10 @@ void asx_runtime_reset(void)
     }
     g_task_count = 0;
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
-        g_obligations[i].state      = ASX_OBLIGATION_RESERVED;
-        g_obligations[i].region     = ASX_INVALID_ID;
+        g_obligations[i].state = ASX_OBLIGATION_RESERVED;
+        g_obligations[i].region = ASX_INVALID_ID;
         g_obligations[i].generation = 0;
-        g_obligations[i].alive      = 0;
+        g_obligations[i].alive = 0;
     }
     g_obligation_count = 0;
 
@@ -123,6 +125,9 @@ void asx_runtime_reset(void)
     asx_actor_reset();
     asx_supervisor_reset();
     asx_net_reset();
+    asx_fs_reset();
+    asx_process_reset();
+    asx_signal_reset();
     asx_diagnostic_reset();
 }
 
@@ -134,8 +139,7 @@ void asx_runtime_reset(void)
  * for all other failures (invalid handle, wrong type tag, dead slot).
  * ------------------------------------------------------------------- */
 
-asx_status asx_region_slot_lookup(asx_region_id id, asx_region_slot **out)
-{
+asx_status asx_region_slot_lookup(asx_region_id id, asx_region_slot **out) {
     uint16_t tag, slot_idx, handle_gen;
 
     *out = NULL;
@@ -155,8 +159,7 @@ asx_status asx_region_slot_lookup(asx_region_id id, asx_region_slot **out)
     return ASX_OK;
 }
 
-asx_status asx_task_slot_lookup(asx_task_id id, asx_task_slot **out)
-{
+asx_status asx_task_slot_lookup(asx_task_id id, asx_task_slot **out) {
     uint16_t tag, slot_idx, handle_gen;
 
     *out = NULL;
@@ -176,15 +179,14 @@ asx_status asx_task_slot_lookup(asx_task_id id, asx_task_slot **out)
     return ASX_OK;
 }
 
-static uint32_t asx_align_up_u32(uint32_t value, uint32_t align)
-{
+static uint32_t asx_align_up_u32(uint32_t value, uint32_t align) {
     uint32_t rem = value % align;
     if (rem == 0u) return value;
     return value + (align - rem);
 }
 
-static void *asx_region_capture_alloc(asx_region_slot *region, uint32_t size, uint32_t *old_used_out)
-{
+static void *asx_region_capture_alloc(asx_region_slot *region, uint32_t size,
+                                      uint32_t *old_used_out) {
     uint32_t start;
     uint32_t aligned_size;
     uint32_t end;
@@ -211,8 +213,7 @@ static void *asx_region_capture_alloc(asx_region_slot *region, uint32_t size, ui
  * Region lifecycle
  * ------------------------------------------------------------------- */
 
-asx_status asx_region_open(asx_region_id *out_id)
-{
+asx_status asx_region_open(asx_region_id *out_id) {
     uint32_t idx;
     int reclaim;
 
@@ -226,8 +227,7 @@ asx_status asx_region_open(asx_region_id *out_id)
     for (idx = 0; idx < ASX_MAX_REGIONS; idx++) {
         if (!g_regions[idx].alive) break;
 #ifndef ASX_DEBUG_QUARANTINE
-        if (g_regions[idx].state == ASX_REGION_CLOSED
-            && g_regions[idx].task_count == 0) {
+        if (g_regions[idx].state == ASX_REGION_CLOSED && g_regions[idx].task_count == 0) {
             reclaim = 1;
             break;
         }
@@ -236,34 +236,26 @@ asx_status asx_region_open(asx_region_id *out_id)
     if (idx >= ASX_MAX_REGIONS) return ASX_E_RESOURCE_EXHAUSTED;
 
     /* Increment generation on slot reclaim to invalidate stale handles */
-    if (reclaim) {
-        g_regions[idx].generation++;
-    }
+    if (reclaim) { g_regions[idx].generation++; }
 
-    g_regions[idx].state      = ASX_REGION_OPEN;
+    g_regions[idx].state = ASX_REGION_OPEN;
     g_regions[idx].task_count = 0;
     g_regions[idx].task_total = 0;
-    g_regions[idx].alive      = 1;
-    g_regions[idx].poisoned   = 0;
+    g_regions[idx].alive = 1;
+    g_regions[idx].poisoned = 0;
     asx_cleanup_init(&g_regions[idx].cleanup);
     g_regions[idx].capture_used = 0;
 
-    if (idx >= g_region_count) {
-        g_region_count = idx + 1;
-    }
+    if (idx >= g_region_count) { g_region_count = idx + 1; }
 
-    *out_id = asx_handle_pack(ASX_TYPE_REGION,
-                              (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
-                              asx_handle_pack_index(
-                                  g_regions[idx].generation,
-                                  (uint16_t)idx));
+    *out_id = asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
+                              asx_handle_pack_index(g_regions[idx].generation, (uint16_t)idx));
 
     asx_trace_emit(ASX_TRACE_REGION_OPEN, *out_id, 0);
     return ASX_OK;
 }
 
-asx_status asx_region_close(asx_region_id id)
-{
+asx_status asx_region_close(asx_region_id id) {
     asx_region_slot *r;
     asx_status st;
 
@@ -283,9 +275,7 @@ asx_status asx_region_close(asx_region_id id)
     return ASX_OK;
 }
 
-asx_status asx_region_get_state(asx_region_id id,
-                                asx_region_state *out_state)
-{
+asx_status asx_region_get_state(asx_region_id id, asx_region_state *out_state) {
     asx_region_slot *r;
     asx_status st;
 
@@ -298,8 +288,7 @@ asx_status asx_region_get_state(asx_region_id id,
     return ASX_OK;
 }
 
-asx_status asx_region_poison(asx_region_id id)
-{
+asx_status asx_region_poison(asx_region_id id) {
     asx_region_slot *r;
     asx_status st;
 
@@ -310,8 +299,7 @@ asx_status asx_region_poison(asx_region_id id)
     return ASX_OK;
 }
 
-asx_status asx_region_is_poisoned(asx_region_id id, int *out)
-{
+asx_status asx_region_is_poisoned(asx_region_id id, int *out) {
     asx_region_slot *r;
     asx_status st;
 
@@ -324,16 +312,14 @@ asx_status asx_region_is_poisoned(asx_region_id id, int *out)
     return ASX_OK;
 }
 
-asx_status asx_region_contain_fault(asx_region_id id, asx_status fault)
-{
+asx_status asx_region_contain_fault(asx_region_id id, asx_status fault) {
     asx_containment_policy policy;
 
     if (fault == ASX_OK) return ASX_OK;
 
     policy = asx_containment_policy_active();
     switch (policy) {
-    case ASX_CONTAIN_FAIL_FAST:
-        return fault;
+    case ASX_CONTAIN_FAIL_FAST: return fault;
     case ASX_CONTAIN_POISON_REGION: {
         asx_status ps_ = asx_region_poison(id);
         (void)ps_;
@@ -345,13 +331,11 @@ asx_status asx_region_contain_fault(asx_region_id id, asx_status fault)
         return fault;
     }
     case ASX_CONTAIN_ERROR_ONLY:
-    default:
-        return fault;
+    default: return fault;
     }
 }
 
-void asx_task_release_capture_internal(asx_task_slot *task)
-{
+void asx_task_release_capture_internal(asx_task_slot *task) {
     if (task == NULL) return;
 
     if (task->captured_dtor != NULL && task->captured_state != NULL) {
@@ -367,11 +351,8 @@ void asx_task_release_capture_internal(asx_task_slot *task)
  * Task lifecycle
  * ------------------------------------------------------------------- */
 
-asx_status asx_task_spawn(asx_region_id region,
-                          asx_task_poll_fn poll_fn,
-                          void *user_data,
-                          asx_task_id *out_id)
-{
+asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *user_data,
+                          asx_task_id *out_id) {
     asx_region_slot *r;
     asx_status st;
     uint32_t idx;
@@ -389,13 +370,13 @@ asx_status asx_task_spawn(asx_region_id region,
     if (g_task_count >= ASX_MAX_TASKS) return ASX_E_RESOURCE_EXHAUSTED;
 
     idx = g_task_count++;
-    g_tasks[idx].state      = ASX_TASK_CREATED;
-    g_tasks[idx].region     = region;
-    g_tasks[idx].poll_fn    = poll_fn;
-    g_tasks[idx].user_data  = user_data;
-    g_tasks[idx].outcome    = asx_outcome_make(ASX_OUTCOME_OK);
+    g_tasks[idx].state = ASX_TASK_CREATED;
+    g_tasks[idx].region = region;
+    g_tasks[idx].poll_fn = poll_fn;
+    g_tasks[idx].user_data = user_data;
+    g_tasks[idx].outcome = asx_outcome_make(ASX_OUTCOME_OK);
     g_tasks[idx].generation = 0;
-    g_tasks[idx].alive      = 1;
+    g_tasks[idx].alive = 1;
     g_tasks[idx].captured_state = NULL;
     g_tasks[idx].captured_size = 0;
     g_tasks[idx].captured_dtor = NULL;
@@ -408,23 +389,16 @@ asx_status asx_task_spawn(asx_region_id region,
     r->task_count++;
     r->task_total++;
 
-    *out_id = asx_handle_pack(ASX_TYPE_TASK,
-                              (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
-                              asx_handle_pack_index(
-                                  g_tasks[idx].generation,
-                                  (uint16_t)idx));
+    *out_id = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
+                              asx_handle_pack_index(g_tasks[idx].generation, (uint16_t)idx));
 
     asx_trace_emit(ASX_TRACE_TASK_SPAWN, *out_id, (uint64_t)region);
     return ASX_OK;
 }
 
-asx_status asx_task_spawn_captured(asx_region_id region,
-                                   asx_task_poll_fn poll_fn,
-                                   uint32_t state_size,
-                                   asx_task_state_dtor_fn state_dtor,
-                                   asx_task_id *out_id,
-                                   void **out_state)
-{
+asx_status asx_task_spawn_captured(asx_region_id region, asx_task_poll_fn poll_fn,
+                                   uint32_t state_size, asx_task_state_dtor_fn state_dtor,
+                                   asx_task_id *out_id, void **out_state) {
     asx_region_slot *r;
     asx_task_slot *t;
     asx_status st;
@@ -461,9 +435,7 @@ asx_status asx_task_spawn_captured(asx_region_id region,
     return ASX_OK;
 }
 
-asx_status asx_task_get_state(asx_task_id id,
-                              asx_task_state *out_state)
-{
+asx_status asx_task_get_state(asx_task_id id, asx_task_state *out_state) {
     asx_task_slot *t;
     asx_status st;
 
@@ -476,9 +448,7 @@ asx_status asx_task_get_state(asx_task_id id,
     return ASX_OK;
 }
 
-asx_status asx_task_get_outcome(asx_task_id id,
-                                asx_outcome *out_outcome)
-{
+asx_status asx_task_get_outcome(asx_task_id id, asx_outcome *out_outcome) {
     asx_task_slot *t;
     asx_status st;
 
@@ -496,9 +466,7 @@ asx_status asx_task_get_outcome(asx_task_id id,
  * Obligation lifecycle
  * ------------------------------------------------------------------- */
 
-asx_status asx_obligation_slot_lookup(asx_obligation_id id,
-                                       asx_obligation_slot **out)
-{
+asx_status asx_obligation_slot_lookup(asx_obligation_id id, asx_obligation_slot **out) {
     uint16_t tag, slot_idx, handle_gen;
 
     *out = NULL;
@@ -512,16 +480,13 @@ asx_status asx_obligation_slot_lookup(asx_obligation_id id,
     if (!g_obligations[slot_idx].alive) return ASX_E_NOT_FOUND;
 
     handle_gen = asx_handle_generation(id);
-    if (handle_gen != g_obligations[slot_idx].generation)
-        return ASX_E_STALE_HANDLE;
+    if (handle_gen != g_obligations[slot_idx].generation) return ASX_E_STALE_HANDLE;
 
     *out = &g_obligations[slot_idx];
     return ASX_OK;
 }
 
-asx_status asx_obligation_reserve(asx_region_id region,
-                                   asx_obligation_id *out_id)
-{
+asx_status asx_obligation_reserve(asx_region_id region, asx_obligation_id *out_id) {
     asx_region_slot *r;
     asx_status st;
     uint32_t idx;
@@ -535,20 +500,17 @@ asx_status asx_obligation_reserve(asx_region_id region,
     /* Only open regions can reserve obligations */
     if (!asx_region_can_spawn(r->state)) return ASX_E_REGION_NOT_OPEN;
 
-    if (g_obligation_count >= ASX_MAX_OBLIGATIONS)
-        return ASX_E_RESOURCE_EXHAUSTED;
+    if (g_obligation_count >= ASX_MAX_OBLIGATIONS) return ASX_E_RESOURCE_EXHAUSTED;
 
     idx = g_obligation_count++;
-    g_obligations[idx].state      = ASX_OBLIGATION_RESERVED;
-    g_obligations[idx].region     = region;
+    g_obligations[idx].state = ASX_OBLIGATION_RESERVED;
+    g_obligations[idx].region = region;
     g_obligations[idx].generation = 0;
-    g_obligations[idx].alive      = 1;
+    g_obligations[idx].alive = 1;
 
-    *out_id = asx_handle_pack(ASX_TYPE_OBLIGATION,
-                               (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
-                               asx_handle_pack_index(
-                                   g_obligations[idx].generation,
-                                   (uint16_t)idx));
+    *out_id =
+        asx_handle_pack(ASX_TYPE_OBLIGATION, (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
+                        asx_handle_pack_index(g_obligations[idx].generation, (uint16_t)idx));
 
     /* Ghost linearity monitor: track obligation reservation */
     asx_ghost_obligation_reserved(*out_id);
@@ -557,8 +519,7 @@ asx_status asx_obligation_reserve(asx_region_id region,
     return ASX_OK;
 }
 
-asx_status asx_obligation_commit(asx_obligation_id id)
-{
+asx_status asx_obligation_commit(asx_obligation_id id) {
     asx_obligation_slot *o;
     asx_status st;
 
@@ -580,8 +541,7 @@ asx_status asx_obligation_commit(asx_obligation_id id)
     return ASX_OK;
 }
 
-asx_status asx_obligation_abort(asx_obligation_id id)
-{
+asx_status asx_obligation_abort(asx_obligation_id id) {
     asx_obligation_slot *o;
     asx_status st;
 
@@ -604,9 +564,7 @@ asx_status asx_obligation_abort(asx_obligation_id id)
     return ASX_OK;
 }
 
-asx_status asx_obligation_get_state(asx_obligation_id id,
-                                     asx_obligation_state *out_state)
-{
+asx_status asx_obligation_get_state(asx_obligation_id id, asx_obligation_state *out_state) {
     asx_obligation_slot *o;
     asx_status st;
 

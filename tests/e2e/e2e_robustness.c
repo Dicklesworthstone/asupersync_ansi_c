@@ -17,8 +17,11 @@
 #include <string.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
-#define IGNORE_RC(expr) \
-    do { asx_status ignore_rc_ = (expr); (void)ignore_rc_; } while (0)
+#define IGNORE_RC(expr)                                                                            \
+    do {                                                                                           \
+        asx_status ignore_rc_ = (expr);                                                            \
+        (void)ignore_rc_;                                                                          \
+    } while (0)
 
 /* -------------------------------------------------------------------
  * Scenario macros
@@ -27,32 +30,35 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
-#define SCENARIO_BEGIN(id) \
-    do { const char *_scenario_id = (id); int _scenario_ok = 1; (void)0
+#define SCENARIO_BEGIN(id)                                                                         \
+    do {                                                                                           \
+        const char *_scenario_id = (id);                                                           \
+        int _scenario_ok = 1;                                                                      \
+    (void)0
 
-#define SCENARIO_CHECK(cond, msg)                         \
-    do {                                                  \
-        if (!(cond)) {                                    \
-            printf("SCENARIO %s fail %s\n",               \
-                   _scenario_id, (msg));                  \
-            _scenario_ok = 0;                             \
-            g_fail++;                                     \
-            goto _scenario_end;                           \
-        }                                                 \
+#define SCENARIO_CHECK(cond, msg)                                                                  \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("SCENARIO %s fail %s\n", _scenario_id, (msg));                                  \
+            _scenario_ok = 0;                                                                      \
+            g_fail++;                                                                              \
+            goto _scenario_end;                                                                    \
+        }                                                                                          \
     } while (0)
 
-#define SCENARIO_END()                                    \
-    _scenario_end:                                        \
-    if (_scenario_ok) {                                   \
-        printf("SCENARIO %s pass\n", _scenario_id);      \
-        g_pass++;                                         \
-    }                                                     \
-    } while (0)
+#define SCENARIO_END()                                                                             \
+    _scenario_end:                                                                                 \
+    if (_scenario_ok) {                                                                            \
+        printf("SCENARIO %s pass\n", _scenario_id);                                                \
+        g_pass++;                                                                                  \
+    }                                                                                              \
+    }                                                                                              \
+    while (0)
 
 /* Simple poll: completes immediately */
-static asx_status poll_complete(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_complete(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_OK;
 }
 
@@ -60,8 +66,7 @@ static asx_status poll_complete(void *ud, asx_task_id self)
  * Scenario: Region arena exhaustion
  * ------------------------------------------------------------------- */
 
-static void scenario_region_exhaustion(void)
-{
+static void scenario_region_exhaustion(void) {
     SCENARIO_BEGIN("exhaustion.region_arena");
     asx_runtime_reset();
 
@@ -87,8 +92,7 @@ static void scenario_region_exhaustion(void)
  * Scenario: Task arena exhaustion
  * ------------------------------------------------------------------- */
 
-static void scenario_task_exhaustion(void)
-{
+static void scenario_task_exhaustion(void) {
     SCENARIO_BEGIN("exhaustion.task_arena");
     asx_runtime_reset();
 
@@ -107,8 +111,7 @@ static void scenario_task_exhaustion(void)
 
     /* Next spawn should fail */
     rc = asx_task_spawn(rid, poll_complete, NULL, &tid);
-    SCENARIO_CHECK(rc == ASX_E_RESOURCE_EXHAUSTED,
-                   "expected RESOURCE_EXHAUSTED on task overflow");
+    SCENARIO_CHECK(rc == ASX_E_RESOURCE_EXHAUSTED, "expected RESOURCE_EXHAUSTED on task overflow");
 
     SCENARIO_END();
 }
@@ -117,8 +120,7 @@ static void scenario_task_exhaustion(void)
  * Scenario: Obligation arena exhaustion
  * ------------------------------------------------------------------- */
 
-static void scenario_obligation_exhaustion(void)
-{
+static void scenario_obligation_exhaustion(void) {
     SCENARIO_BEGIN("exhaustion.obligation_arena");
     asx_runtime_reset();
 
@@ -147,8 +149,7 @@ static void scenario_obligation_exhaustion(void)
  * Scenario: Timer arena exhaustion
  * ------------------------------------------------------------------- */
 
-static void scenario_timer_exhaustion(void)
-{
+static void scenario_timer_exhaustion(void) {
     SCENARIO_BEGIN("exhaustion.timer_arena");
 
     asx_timer_wheel *wheel = asx_timer_wheel_global();
@@ -167,8 +168,7 @@ static void scenario_timer_exhaustion(void)
 
     /* Next register should fail */
     rc = asx_timer_register(wheel, 9999, &marker, &h);
-    SCENARIO_CHECK(rc == ASX_E_RESOURCE_EXHAUSTED,
-                   "expected RESOURCE_EXHAUSTED on timer overflow");
+    SCENARIO_CHECK(rc == ASX_E_RESOURCE_EXHAUSTED, "expected RESOURCE_EXHAUSTED on timer overflow");
 
     SCENARIO_END();
 }
@@ -177,8 +177,7 @@ static void scenario_timer_exhaustion(void)
  * Scenario: Channel capacity exhaustion
  * ------------------------------------------------------------------- */
 
-static void scenario_channel_full(void)
-{
+static void scenario_channel_full(void) {
     SCENARIO_BEGIN("exhaustion.channel_full");
     asx_runtime_reset();
     asx_channel_reset();
@@ -202,8 +201,7 @@ static void scenario_channel_full(void)
 
     /* Next reserve should fail with channel full */
     rc = asx_channel_try_reserve(cid, &p);
-    SCENARIO_CHECK(rc == ASX_E_CHANNEL_FULL,
-                   "expected CHANNEL_FULL on capacity overflow");
+    SCENARIO_CHECK(rc == ASX_E_CHANNEL_FULL, "expected CHANNEL_FULL on capacity overflow");
 
     SCENARIO_END();
 }
@@ -212,8 +210,7 @@ static void scenario_channel_full(void)
  * Scenario: Stale region handle rejection
  * ------------------------------------------------------------------- */
 
-static void scenario_stale_region_handle(void)
-{
+static void scenario_stale_region_handle(void) {
     SCENARIO_BEGIN("stale.region_handle");
     asx_runtime_reset();
 
@@ -241,8 +238,7 @@ static void scenario_stale_region_handle(void)
  * Scenario: Region poison blocks mutations
  * ------------------------------------------------------------------- */
 
-static void scenario_poison_blocks_mutations(void)
-{
+static void scenario_poison_blocks_mutations(void) {
     SCENARIO_BEGIN("poison.blocks_mutations");
     asx_runtime_reset();
 
@@ -254,8 +250,8 @@ static void scenario_poison_blocks_mutations(void)
     SCENARIO_CHECK(asx_region_open(&rid) == ASX_OK, "region_open");
     SCENARIO_CHECK(asx_region_poison(rid) == ASX_OK, "region_poison");
 
-    SCENARIO_CHECK(asx_region_is_poisoned(rid, &poisoned) == ASX_OK &&
-                   poisoned == 1, "region should be poisoned");
+    SCENARIO_CHECK(asx_region_is_poisoned(rid, &poisoned) == ASX_OK && poisoned == 1,
+                   "region should be poisoned");
 
     /* All mutating operations should fail */
     asx_status rc = asx_task_spawn(rid, poll_complete, NULL, &tid);
@@ -277,8 +273,7 @@ static void scenario_poison_blocks_mutations(void)
  * Scenario: Fault containment isolates regions
  * ------------------------------------------------------------------- */
 
-static void scenario_fault_containment_isolation(void)
-{
+static void scenario_fault_containment_isolation(void) {
     SCENARIO_BEGIN("fault.containment_isolation");
     asx_runtime_reset();
 
@@ -300,8 +295,8 @@ static void scenario_fault_containment_isolation(void)
     rc = asx_task_spawn(r2, poll_complete, NULL, &tid);
     SCENARIO_CHECK(rc == ASX_OK, "r2 spawn should succeed");
 
-    SCENARIO_CHECK(asx_region_is_poisoned(r2, &poisoned) == ASX_OK &&
-                   poisoned == 0, "r2 should not be poisoned");
+    SCENARIO_CHECK(asx_region_is_poisoned(r2, &poisoned) == ASX_OK && poisoned == 0,
+                   "r2 should not be poisoned");
 
     SCENARIO_END();
 }
@@ -310,8 +305,7 @@ static void scenario_fault_containment_isolation(void)
  * Scenario: Double obligation commit rejected
  * ------------------------------------------------------------------- */
 
-static void scenario_double_commit_rejected(void)
-{
+static void scenario_double_commit_rejected(void) {
     SCENARIO_BEGIN("misuse.double_commit");
     asx_runtime_reset();
 
@@ -328,8 +322,8 @@ static void scenario_double_commit_rejected(void)
     SCENARIO_CHECK(rc != ASX_OK, "double commit should fail");
 
     /* State should remain COMMITTED */
-    SCENARIO_CHECK(asx_obligation_get_state(oid, &os) == ASX_OK &&
-                   os == ASX_OBLIGATION_COMMITTED, "should stay COMMITTED");
+    SCENARIO_CHECK(asx_obligation_get_state(oid, &os) == ASX_OK && os == ASX_OBLIGATION_COMMITTED,
+                   "should stay COMMITTED");
 
     SCENARIO_END();
 }
@@ -338,8 +332,7 @@ static void scenario_double_commit_rejected(void)
  * Scenario: Double obligation abort rejected
  * ------------------------------------------------------------------- */
 
-static void scenario_double_abort_rejected(void)
-{
+static void scenario_double_abort_rejected(void) {
     SCENARIO_BEGIN("misuse.double_abort");
     asx_runtime_reset();
 
@@ -361,8 +354,7 @@ static void scenario_double_abort_rejected(void)
  * Scenario: Resource query accuracy
  * ------------------------------------------------------------------- */
 
-static void scenario_resource_query_accuracy(void)
-{
+static void scenario_resource_query_accuracy(void) {
     SCENARIO_BEGIN("resource.query_accuracy");
     asx_runtime_reset();
 
@@ -387,8 +379,7 @@ static void scenario_resource_query_accuracy(void)
  * Scenario: Recv on empty channel returns WOULD_BLOCK
  * ------------------------------------------------------------------- */
 
-static void scenario_recv_empty_would_block(void)
-{
+static void scenario_recv_empty_would_block(void) {
     SCENARIO_BEGIN("misuse.recv_empty");
     asx_runtime_reset();
     asx_channel_reset();
@@ -410,8 +401,7 @@ static void scenario_recv_empty_would_block(void)
  * Scenario: Close sender then try reserve
  * ------------------------------------------------------------------- */
 
-static void scenario_reserve_after_sender_closed(void)
-{
+static void scenario_reserve_after_sender_closed(void) {
     SCENARIO_BEGIN("misuse.reserve_after_close");
     asx_runtime_reset();
     asx_channel_reset();
@@ -425,8 +415,7 @@ static void scenario_reserve_after_sender_closed(void)
     SCENARIO_CHECK(asx_channel_close_sender(cid) == ASX_OK, "close_sender");
 
     asx_status rc = asx_channel_try_reserve(cid, &p);
-    SCENARIO_CHECK(rc == ASX_E_INVALID_STATE,
-                   "reserve should fail after sender closed");
+    SCENARIO_CHECK(rc == ASX_E_INVALID_STATE, "reserve should fail after sender closed");
 
     SCENARIO_END();
 }
@@ -435,8 +424,7 @@ static void scenario_reserve_after_sender_closed(void)
  * Scenario: Fault injection — controlled clock behavior
  * ------------------------------------------------------------------- */
 
-static void scenario_fault_injection_clock(void)
-{
+static void scenario_fault_injection_clock(void) {
     SCENARIO_BEGIN("fault.injection_clock");
     asx_runtime_reset();
 
@@ -466,8 +454,7 @@ static void scenario_fault_injection_clock(void)
  * Scenario: Ghost violation recording
  * ------------------------------------------------------------------- */
 
-static void scenario_ghost_violation_recording(void)
-{
+static void scenario_ghost_violation_recording(void) {
     SCENARIO_BEGIN("ghost.violation_recording");
     asx_runtime_reset();
     asx_ghost_reset();
@@ -477,8 +464,7 @@ static void scenario_ghost_violation_recording(void)
      * transition — e.g., close a region that was never opened.
      * The ghost monitor records this as ASX_GHOST_PROTOCOL_REGION.
      */
-    (void)asx_ghost_check_region_transition(0,
-        ASX_REGION_OPEN, ASX_REGION_CLOSED);
+    (void)asx_ghost_check_region_transition(0, ASX_REGION_OPEN, ASX_REGION_CLOSED);
 
     uint32_t count = asx_ghost_violation_count();
     SCENARIO_CHECK(count >= 1, "violation count should be >= 1");
@@ -486,8 +472,7 @@ static void scenario_ghost_violation_recording(void)
     asx_ghost_violation v;
     int ok = asx_ghost_violation_get(0, &v);
     SCENARIO_CHECK(ok == 1, "violation_get should return 1");
-    SCENARIO_CHECK(v.kind == ASX_GHOST_PROTOCOL_REGION,
-                   "violation kind mismatch");
+    SCENARIO_CHECK(v.kind == ASX_GHOST_PROTOCOL_REGION, "violation kind mismatch");
 
     asx_ghost_reset();
     count = asx_ghost_violation_count();
@@ -500,8 +485,7 @@ static void scenario_ghost_violation_recording(void)
  * Scenario: Capture arena exhaustion with failure-atomic rollback
  * ------------------------------------------------------------------- */
 
-static void scenario_capture_arena_rollback(void)
-{
+static void scenario_capture_arena_rollback(void) {
     SCENARIO_BEGIN("exhaustion.capture_arena_rollback");
     asx_runtime_reset();
 
@@ -519,9 +503,7 @@ static void scenario_capture_arena_rollback(void)
 
     /* Try to allocate more than remaining */
     if (remaining < ASX_REGION_CAPTURE_ARENA_BYTES) {
-        rc = asx_task_spawn_captured(rid, poll_complete,
-                                     remaining + 1, NULL,
-                                     &tid, &state);
+        rc = asx_task_spawn_captured(rid, poll_complete, remaining + 1, NULL, &tid, &state);
         SCENARIO_CHECK(rc == ASX_E_RESOURCE_EXHAUSTED,
                        "expected RESOURCE_EXHAUSTED on capture overflow");
     }
@@ -537,8 +519,7 @@ static void scenario_capture_arena_rollback(void)
  * Scenario: Deterministic exhaustion outcome
  * ------------------------------------------------------------------- */
 
-static void scenario_deterministic_exhaustion(void)
-{
+static void scenario_deterministic_exhaustion(void) {
     SCENARIO_BEGIN("determinism.exhaustion_outcome");
 
     /* Run exhaustion sequence twice — outcomes must match */
@@ -557,8 +538,7 @@ static void scenario_deterministic_exhaustion(void)
     /* All results must match between passes */
     uint32_t i;
     for (i = 0; i <= ASX_MAX_REGIONS; i++) {
-        SCENARIO_CHECK(results[0][i] == results[1][i],
-                       "exhaustion outcome not deterministic");
+        SCENARIO_CHECK(results[0][i] == results[1][i], "exhaustion outcome not deterministic");
     }
 
     SCENARIO_END();
@@ -568,8 +548,7 @@ static void scenario_deterministic_exhaustion(void)
  * Main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     scenario_region_exhaustion();
     scenario_task_exhaustion();
     scenario_obligation_exhaustion();
@@ -588,7 +567,6 @@ int main(void)
     scenario_capture_arena_rollback();
     scenario_deterministic_exhaustion();
 
-    fprintf(stderr, "[e2e] robustness: %d passed, %d failed\n",
-            g_pass, g_fail);
+    fprintf(stderr, "[e2e] robustness: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
 }

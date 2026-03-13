@@ -17,8 +17,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#define IGNORE_RC(expr) \
-    do { asx_status rc_ = (expr); (void)rc_; } while (0)
+#define IGNORE_RC(expr)                                                                            \
+    do {                                                                                           \
+        asx_status rc_ = (expr);                                                                   \
+        (void)rc_;                                                                                 \
+    } while (0)
 
 /* -------------------------------------------------------------------
  * Scenario macros
@@ -27,35 +30,38 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
-#define SCENARIO_BEGIN(id) \
-    do { const char *_scenario_id = (id); int _scenario_ok = 1; (void)0
+#define SCENARIO_BEGIN(id)                                                                         \
+    do {                                                                                           \
+        const char *_scenario_id = (id);                                                           \
+        int _scenario_ok = 1;                                                                      \
+    (void)0
 
-#define SCENARIO_CHECK(cond, msg)                         \
-    do {                                                  \
-        if (!(cond)) {                                    \
-            printf("SCENARIO %s fail %s\n",               \
-                   _scenario_id, (msg));                  \
-            _scenario_ok = 0;                             \
-            g_fail++;                                     \
-            goto _scenario_end;                           \
-        }                                                 \
+#define SCENARIO_CHECK(cond, msg)                                                                  \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("SCENARIO %s fail %s\n", _scenario_id, (msg));                                  \
+            _scenario_ok = 0;                                                                      \
+            g_fail++;                                                                              \
+            goto _scenario_end;                                                                    \
+        }                                                                                          \
     } while (0)
 
-#define SCENARIO_END()                                    \
-    _scenario_end:                                        \
-    if (_scenario_ok) {                                   \
-        printf("SCENARIO %s pass\n", _scenario_id);      \
-        g_pass++;                                         \
-    }                                                     \
-    } while (0)
+#define SCENARIO_END()                                                                             \
+    _scenario_end:                                                                                 \
+    if (_scenario_ok) {                                                                            \
+        printf("SCENARIO %s pass\n", _scenario_id);                                                \
+        g_pass++;                                                                                  \
+    }                                                                                              \
+    }                                                                                              \
+    while (0)
 
 /* -------------------------------------------------------------------
  * Poll functions
  * ------------------------------------------------------------------- */
 
-static asx_status poll_complete(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status poll_complete(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_OK;
 }
 
@@ -64,8 +70,7 @@ typedef struct {
     int done;
 } yield_state;
 
-static asx_status poll_yield_once(void *ud, asx_task_id self)
-{
+static asx_status poll_yield_once(void *ud, asx_task_id self) {
     yield_state *s = (yield_state *)ud;
     (void)self;
     ASX_CO_BEGIN(&s->co);
@@ -73,8 +78,7 @@ static asx_status poll_yield_once(void *ud, asx_task_id self)
     ASX_CO_END(&s->co);
 }
 
-static void emit_continuity_signature(uint64_t scenario_tag, uint32_t task_count)
-{
+static void emit_continuity_signature(uint64_t scenario_tag, uint32_t task_count) {
     uint32_t i;
 
     IGNORE_RC(asx_telemetry_set_tier(ASX_TELEMETRY_FORENSIC));
@@ -92,8 +96,7 @@ static void emit_continuity_signature(uint64_t scenario_tag, uint32_t task_count
  * Helper: run a canonical scenario and capture trace
  * ------------------------------------------------------------------- */
 
-static void run_canonical_scenario(void)
-{
+static void run_canonical_scenario(void) {
     asx_region_id rid;
     asx_task_id tid;
     asx_budget budget;
@@ -111,8 +114,7 @@ static void run_canonical_scenario(void)
  * Scenario: binary trace export round-trip
  * ------------------------------------------------------------------- */
 
-static void scenario_export_import_roundtrip(void)
-{
+static void scenario_export_import_roundtrip(void) {
     uint8_t buf[8192];
     uint32_t len = 0;
 
@@ -148,8 +150,7 @@ static void scenario_export_import_roundtrip(void)
  * Scenario: continuity check across simulated restart
  * ------------------------------------------------------------------- */
 
-static void scenario_continuity_across_restart(void)
-{
+static void scenario_continuity_across_restart(void) {
     uint8_t buf[8192];
     uint32_t len = 0;
 
@@ -171,8 +172,7 @@ static void scenario_continuity_across_restart(void)
     uint64_t post_restart_digest = asx_trace_digest();
 
     /* Digests should match (deterministic) */
-    SCENARIO_CHECK(pre_crash_digest == post_restart_digest,
-                   "digest should match across restart");
+    SCENARIO_CHECK(pre_crash_digest == post_restart_digest, "digest should match across restart");
 
     /* Continuity check should pass */
     rc = asx_trace_continuity_check(buf, len);
@@ -185,8 +185,7 @@ static void scenario_continuity_across_restart(void)
  * Scenario: replay divergence detection
  * ------------------------------------------------------------------- */
 
-static void scenario_divergence_detection(void)
-{
+static void scenario_divergence_detection(void) {
     uint8_t buf[8192];
     uint32_t len = 0;
 
@@ -228,8 +227,7 @@ static void scenario_divergence_detection(void)
  * Scenario: digest stability across multiple replays
  * ------------------------------------------------------------------- */
 
-static void scenario_digest_stability(void)
-{
+static void scenario_digest_stability(void) {
     uint64_t digests[4];
     int i;
 
@@ -256,8 +254,7 @@ static void scenario_digest_stability(void)
  * Scenario: export buffer too small
  * ------------------------------------------------------------------- */
 
-static void scenario_export_buffer_too_small(void)
-{
+static void scenario_export_buffer_too_small(void) {
     uint8_t tiny[4];
     uint32_t len = 0;
 
@@ -277,8 +274,7 @@ static void scenario_export_buffer_too_small(void)
  * Scenario: import with corrupted magic
  * ------------------------------------------------------------------- */
 
-static void scenario_import_bad_magic(void)
-{
+static void scenario_import_bad_magic(void) {
     uint8_t buf[8192];
     uint32_t len = 0;
 
@@ -305,8 +301,7 @@ static void scenario_import_bad_magic(void)
  * Scenario: empty trace export/import
  * ------------------------------------------------------------------- */
 
-static void scenario_empty_trace(void)
-{
+static void scenario_empty_trace(void) {
     uint8_t buf[8192];
     uint32_t len = 0;
 
@@ -337,8 +332,7 @@ static void scenario_empty_trace(void)
  * Scenario: replay verification with captured-state tasks
  * ------------------------------------------------------------------- */
 
-static void scenario_captured_state_replay(void)
-{
+static void scenario_captured_state_replay(void) {
     uint8_t buf[8192];
     uint32_t len = 0;
 
@@ -355,8 +349,8 @@ static void scenario_captured_state_replay(void)
         asx_budget budget;
 
         IGNORE_RC(asx_region_open(&rid));
-        IGNORE_RC(asx_task_spawn_captured(rid, poll_yield_once,
-                  (uint32_t)sizeof(yield_state), NULL, &tid, &st));
+        IGNORE_RC(asx_task_spawn_captured(rid, poll_yield_once, (uint32_t)sizeof(yield_state), NULL,
+                                          &tid, &st));
         ys = (yield_state *)st;
         ys->co.line = 0;
         ys->done = 0;
@@ -379,8 +373,8 @@ static void scenario_captured_state_replay(void)
         asx_budget budget;
 
         IGNORE_RC(asx_region_open(&rid));
-        IGNORE_RC(asx_task_spawn_captured(rid, poll_yield_once,
-                  (uint32_t)sizeof(yield_state), NULL, &tid, &st));
+        IGNORE_RC(asx_task_spawn_captured(rid, poll_yield_once, (uint32_t)sizeof(yield_state), NULL,
+                                          &tid, &st));
         ys = (yield_state *)st;
         ys->co.line = 0;
         ys->done = 0;
@@ -401,8 +395,7 @@ static void scenario_captured_state_replay(void)
  * Main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     scenario_export_import_roundtrip();
     scenario_continuity_across_restart();
     scenario_divergence_detection();
@@ -412,7 +405,6 @@ int main(void)
     scenario_empty_trace();
     scenario_captured_state_replay();
 
-    fprintf(stderr, "[e2e] continuity: %d passed, %d failed\n",
-            g_pass, g_fail);
+    fprintf(stderr, "[e2e] continuity: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
 }

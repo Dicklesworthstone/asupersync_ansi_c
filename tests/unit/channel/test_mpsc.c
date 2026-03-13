@@ -8,14 +8,17 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "test_harness.h"
 #include <asx/asx.h>
 #include <asx/core/channel.h>
 #include <asx/runtime/trace.h>
-#include "test_harness.h"
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
-#define CH_IGNORE(expr) \
-    do { volatile asx_status _ch_ign = (expr); (void)_ch_ign; } while (0)
+#define CH_IGNORE(expr)                                                                            \
+    do {                                                                                           \
+        volatile asx_status _ch_ign = (expr);                                                      \
+        (void)_ch_ign;                                                                             \
+    } while (0)
 
 /* -------------------------------------------------------------------
  * Helpers
@@ -23,8 +26,7 @@
 
 static asx_region_id g_rid;
 
-static void setup(void)
-{
+static void setup(void) {
     asx_runtime_reset();
     asx_channel_reset();
     CH_IGNORE(asx_region_open(&g_rid));
@@ -34,54 +36,44 @@ static void setup(void)
  * Lifecycle tests
  * ------------------------------------------------------------------- */
 
-TEST(create_basic)
-{
+TEST(create_basic) {
     asx_channel_id ch;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
 }
 
-TEST(create_null_out)
-{
+TEST(create_null_out) {
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(create_zero_capacity)
-{
+TEST(create_zero_capacity) {
     asx_channel_id ch;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 0, &ch), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(create_over_max_capacity)
-{
+TEST(create_over_max_capacity) {
     asx_channel_id ch;
     setup();
-    ASSERT_EQ(asx_channel_create(g_rid, ASX_CHANNEL_MAX_CAPACITY + 1, &ch),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_create(g_rid, ASX_CHANNEL_MAX_CAPACITY + 1, &ch), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(create_max_capacity)
-{
+TEST(create_max_capacity) {
     asx_channel_id ch;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, ASX_CHANNEL_MAX_CAPACITY, &ch), ASX_OK);
 }
 
-TEST(create_exhaustion)
-{
+TEST(create_exhaustion) {
     asx_channel_id ch;
     uint32_t i;
     setup();
-    for (i = 0; i < ASX_MAX_CHANNELS; i++) {
-        ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
-    }
+    for (i = 0; i < ASX_MAX_CHANNELS; i++) { ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK); }
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_E_RESOURCE_EXHAUSTED);
 }
 
-TEST(create_rejects_non_region_handle)
-{
+TEST(create_rejects_non_region_handle) {
     asx_channel_id ch;
     asx_region_id not_region;
     setup();
@@ -90,8 +82,7 @@ TEST(create_rejects_non_region_handle)
     ASSERT_EQ(asx_channel_create(not_region, 4, &ch), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(create_rejects_closed_region)
-{
+TEST(create_rejects_closed_region) {
     asx_channel_id ch;
     asx_region_id rid;
     asx_budget budget;
@@ -103,8 +94,7 @@ TEST(create_rejects_closed_region)
     ASSERT_EQ(asx_channel_create(rid, 4, &ch), ASX_E_INVALID_STATE);
 }
 
-TEST(initial_state_is_open)
-{
+TEST(initial_state_is_open) {
     asx_channel_id ch;
     asx_channel_state st;
     setup();
@@ -113,8 +103,7 @@ TEST(initial_state_is_open)
     ASSERT_EQ(st, ASX_CHANNEL_OPEN);
 }
 
-TEST(initial_queue_empty)
-{
+TEST(initial_queue_empty) {
     asx_channel_id ch;
     uint32_t len;
     setup();
@@ -123,8 +112,7 @@ TEST(initial_queue_empty)
     ASSERT_EQ(len, 0u);
 }
 
-TEST(initial_reserved_zero)
-{
+TEST(initial_reserved_zero) {
     asx_channel_id ch;
     uint32_t res;
     setup();
@@ -137,8 +125,7 @@ TEST(initial_reserved_zero)
  * Close lifecycle tests
  * ------------------------------------------------------------------- */
 
-TEST(close_sender_from_open)
-{
+TEST(close_sender_from_open) {
     asx_channel_id ch;
     asx_channel_state st;
     setup();
@@ -148,8 +135,7 @@ TEST(close_sender_from_open)
     ASSERT_EQ(st, ASX_CHANNEL_SENDER_CLOSED);
 }
 
-TEST(close_receiver_from_open)
-{
+TEST(close_receiver_from_open) {
     asx_channel_id ch;
     asx_channel_state st;
     setup();
@@ -159,8 +145,7 @@ TEST(close_receiver_from_open)
     ASSERT_EQ(st, ASX_CHANNEL_RECEIVER_CLOSED);
 }
 
-TEST(close_sender_then_receiver)
-{
+TEST(close_sender_then_receiver) {
     asx_channel_id ch;
     asx_channel_state st;
     setup();
@@ -171,8 +156,7 @@ TEST(close_sender_then_receiver)
     ASSERT_EQ(st, ASX_CHANNEL_FULLY_CLOSED);
 }
 
-TEST(close_receiver_then_sender)
-{
+TEST(close_receiver_then_sender) {
     asx_channel_id ch;
     asx_channel_state st;
     setup();
@@ -183,8 +167,7 @@ TEST(close_receiver_then_sender)
     ASSERT_EQ(st, ASX_CHANNEL_FULLY_CLOSED);
 }
 
-TEST(double_close_sender)
-{
+TEST(double_close_sender) {
     asx_channel_id ch;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
@@ -192,8 +175,7 @@ TEST(double_close_sender)
     ASSERT_EQ(asx_channel_close_sender(ch), ASX_E_INVALID_STATE);
 }
 
-TEST(double_close_receiver)
-{
+TEST(double_close_receiver) {
     asx_channel_id ch;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
@@ -205,8 +187,7 @@ TEST(double_close_receiver)
  * Two-phase send: reserve + send
  * ------------------------------------------------------------------- */
 
-TEST(reserve_and_send_basic)
-{
+TEST(reserve_and_send_basic) {
     asx_channel_id ch;
     asx_send_permit permit;
     uint64_t val;
@@ -223,8 +204,7 @@ TEST(reserve_and_send_basic)
     ASSERT_EQ(val, 42u);
 }
 
-TEST(fifo_ordering)
-{
+TEST(fifo_ordering) {
     asx_channel_id ch;
     asx_send_permit p1, p2, p3;
     uint64_t val;
@@ -247,8 +227,7 @@ TEST(fifo_ordering)
     ASSERT_EQ(val, 300u);
 }
 
-TEST(trace_emits_send_and_recv)
-{
+TEST(trace_emits_send_and_recv) {
     asx_channel_id ch;
     asx_send_permit permit;
     asx_trace_event ev;
@@ -276,8 +255,7 @@ TEST(trace_emits_send_and_recv)
     ASSERT_EQ(ev.aux, (uint64_t)42);
 }
 
-TEST(capacity_enforcement)
-{
+TEST(capacity_enforcement) {
     asx_channel_id ch;
     asx_send_permit permits[4];
     asx_send_permit overflow;
@@ -286,22 +264,17 @@ TEST(capacity_enforcement)
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
 
-    for (i = 0; i < 4; i++) {
-        ASSERT_EQ(asx_channel_try_reserve(ch, &permits[i]), ASX_OK);
-    }
+    for (i = 0; i < 4; i++) { ASSERT_EQ(asx_channel_try_reserve(ch, &permits[i]), ASX_OK); }
 
     ASSERT_EQ(asx_channel_try_reserve(ch, &overflow), ASX_E_CHANNEL_FULL);
 
     ASSERT_EQ(asx_channel_reserved_count(ch, &res), ASX_OK);
     ASSERT_EQ(res, 4u);
 
-    for (i = 0; i < 4; i++) {
-        asx_send_permit_abort(&permits[i]);
-    }
+    for (i = 0; i < 4; i++) { asx_send_permit_abort(&permits[i]); }
 }
 
-TEST(capacity_mixed_reserved_and_queued)
-{
+TEST(capacity_mixed_reserved_and_queued) {
     asx_channel_id ch;
     asx_send_permit p1, p2, p3, overflow;
     setup();
@@ -323,8 +296,7 @@ TEST(capacity_mixed_reserved_and_queued)
  * Two-phase send: abort
  * ------------------------------------------------------------------- */
 
-TEST(abort_returns_capacity)
-{
+TEST(abort_returns_capacity) {
     asx_channel_id ch;
     asx_send_permit p1, p2;
     uint32_t res;
@@ -342,14 +314,12 @@ TEST(abort_returns_capacity)
     asx_send_permit_abort(&p2);
 }
 
-TEST(abort_null_is_safe)
-{
+TEST(abort_null_is_safe) {
     asx_send_permit_abort(NULL);
     ASSERT_TRUE(1);
 }
 
-TEST(abort_consumed_is_noop)
-{
+TEST(abort_consumed_is_noop) {
     asx_channel_id ch;
     asx_send_permit p;
     setup();
@@ -366,8 +336,7 @@ TEST(abort_consumed_is_noop)
  * Receive
  * ------------------------------------------------------------------- */
 
-TEST(recv_empty_returns_would_block)
-{
+TEST(recv_empty_returns_would_block) {
     asx_channel_id ch;
     uint64_t val;
     setup();
@@ -375,16 +344,14 @@ TEST(recv_empty_returns_would_block)
     ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_E_WOULD_BLOCK);
 }
 
-TEST(recv_null_out)
-{
+TEST(recv_null_out) {
     asx_channel_id ch;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
     ASSERT_EQ(asx_channel_try_recv(ch, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(recv_after_sender_closed_with_data)
-{
+TEST(recv_after_sender_closed_with_data) {
     asx_channel_id ch;
     asx_send_permit p;
     uint64_t val;
@@ -401,8 +368,7 @@ TEST(recv_after_sender_closed_with_data)
     ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_E_DISCONNECTED);
 }
 
-TEST(recv_after_sender_closed_empty)
-{
+TEST(recv_after_sender_closed_empty) {
     asx_channel_id ch;
     uint64_t val;
     setup();
@@ -411,8 +377,7 @@ TEST(recv_after_sender_closed_empty)
     ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_E_DISCONNECTED);
 }
 
-TEST(recv_sender_closed_with_pending_reserve)
-{
+TEST(recv_sender_closed_with_pending_reserve) {
     /* When sender is closed but a reserved permit is still outstanding,
      * recv should return WOULD_BLOCK (not DISCONNECTED) because the
      * permit holder may still call send. */
@@ -439,8 +404,7 @@ TEST(recv_sender_closed_with_pending_reserve)
     ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_E_DISCONNECTED);
 }
 
-TEST(recv_sender_closed_pending_reserve_abort)
-{
+TEST(recv_sender_closed_pending_reserve_abort) {
     /* When the pending reserve is aborted (not sent), recv should
      * transition to DISCONNECTED once reserved count hits zero. */
     asx_channel_id ch;
@@ -462,8 +426,7 @@ TEST(recv_sender_closed_pending_reserve_abort)
     ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_E_DISCONNECTED);
 }
 
-TEST(recv_after_receiver_closed)
-{
+TEST(recv_after_receiver_closed) {
     /* Recv after the receiver side is closed → DISCONNECTED */
     asx_channel_id ch;
     uint64_t val;
@@ -473,8 +436,7 @@ TEST(recv_after_receiver_closed)
     ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_E_DISCONNECTED);
 }
 
-TEST(recv_after_fully_closed)
-{
+TEST(recv_after_fully_closed) {
     /* Recv after both sides closed → DISCONNECTED */
     asx_channel_id ch;
     uint64_t val;
@@ -489,8 +451,7 @@ TEST(recv_after_fully_closed)
  * Ring buffer wraparound
  * ------------------------------------------------------------------- */
 
-TEST(ring_buffer_wraparound)
-{
+TEST(ring_buffer_wraparound) {
     asx_channel_id ch;
     asx_send_permit p;
     uint64_t val;
@@ -506,8 +467,7 @@ TEST(ring_buffer_wraparound)
     }
 }
 
-TEST(ring_buffer_batch_wraparound)
-{
+TEST(ring_buffer_batch_wraparound) {
     asx_channel_id ch;
     asx_send_permit permits[4];
     uint64_t val;
@@ -518,8 +478,7 @@ TEST(ring_buffer_batch_wraparound)
     for (round = 0; round < 5; round++) {
         for (i = 0; i < 4; i++) {
             ASSERT_EQ(asx_channel_try_reserve(ch, &permits[i]), ASX_OK);
-            ASSERT_EQ(asx_send_permit_send(&permits[i],
-                       (uint64_t)(round * 100 + i)), ASX_OK);
+            ASSERT_EQ(asx_send_permit_send(&permits[i], (uint64_t)(round * 100 + i)), ASX_OK);
         }
         for (i = 0; i < 4; i++) {
             ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_OK);
@@ -532,8 +491,7 @@ TEST(ring_buffer_batch_wraparound)
  * Disconnect scenarios
  * ------------------------------------------------------------------- */
 
-TEST(reserve_after_sender_closed)
-{
+TEST(reserve_after_sender_closed) {
     asx_channel_id ch;
     asx_send_permit p;
     setup();
@@ -542,8 +500,7 @@ TEST(reserve_after_sender_closed)
     ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_E_INVALID_STATE);
 }
 
-TEST(reserve_after_receiver_closed)
-{
+TEST(reserve_after_receiver_closed) {
     asx_channel_id ch;
     asx_send_permit p;
     setup();
@@ -552,8 +509,7 @@ TEST(reserve_after_receiver_closed)
     ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_E_DISCONNECTED);
 }
 
-TEST(send_after_receiver_closed)
-{
+TEST(send_after_receiver_closed) {
     asx_channel_id ch;
     asx_send_permit p;
     setup();
@@ -563,8 +519,7 @@ TEST(send_after_receiver_closed)
     ASSERT_EQ(asx_send_permit_send(&p, 123), ASX_E_DISCONNECTED);
 }
 
-TEST(close_receiver_discards_queued_messages)
-{
+TEST(close_receiver_discards_queued_messages) {
     asx_channel_id ch;
     asx_send_permit p;
     uint32_t len;
@@ -585,45 +540,37 @@ TEST(close_receiver_discards_queued_messages)
  * Query NULL safety
  * ------------------------------------------------------------------- */
 
-TEST(get_state_null_out)
-{
+TEST(get_state_null_out) {
     asx_channel_id ch;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
     ASSERT_EQ(asx_channel_get_state(ch, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(queue_len_null_out)
-{
+TEST(queue_len_null_out) {
     asx_channel_id ch;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
     ASSERT_EQ(asx_channel_queue_len(ch, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(reserved_count_null_out)
-{
+TEST(reserved_count_null_out) {
     asx_channel_id ch;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
     ASSERT_EQ(asx_channel_reserved_count(ch, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(reserve_null_out)
-{
+TEST(reserve_null_out) {
     asx_channel_id ch;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
     ASSERT_EQ(asx_channel_try_reserve(ch, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(send_null_permit)
-{
-    ASSERT_EQ(asx_send_permit_send(NULL, 0), ASX_E_INVALID_ARGUMENT);
-}
+TEST(send_null_permit) { ASSERT_EQ(asx_send_permit_send(NULL, 0), ASX_E_INVALID_ARGUMENT); }
 
-TEST(double_send_same_permit)
-{
+TEST(double_send_same_permit) {
     asx_channel_id ch;
     asx_send_permit p;
     setup();
@@ -633,8 +580,7 @@ TEST(double_send_same_permit)
     ASSERT_EQ(asx_send_permit_send(&p, 2), ASX_E_INVALID_STATE);
 }
 
-TEST(forged_permit_send_rejected)
-{
+TEST(forged_permit_send_rejected) {
     asx_channel_id ch;
     asx_send_permit forged;
     uint32_t len;
@@ -654,8 +600,7 @@ TEST(forged_permit_send_rejected)
     ASSERT_EQ(res, 0u);
 }
 
-TEST(stale_permit_copy_cannot_send)
-{
+TEST(stale_permit_copy_cannot_send) {
     asx_channel_id ch;
     asx_send_permit original;
     asx_send_permit stale_copy;
@@ -679,8 +624,7 @@ TEST(stale_permit_copy_cannot_send)
  * Reset
  * ------------------------------------------------------------------- */
 
-TEST(reset_clears_all)
-{
+TEST(reset_clears_all) {
     asx_channel_id ch;
     asx_channel_state st;
     setup();
@@ -695,8 +639,7 @@ TEST(reset_clears_all)
  * main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== MPSC Channel Tests ===\n");
 
     RUN_TEST(create_basic);

@@ -105,8 +105,7 @@ TEST(obligation_get_state_null_out) {
 TEST(obligation_invalid_handle) {
     asx_obligation_state state;
     asx_runtime_reset();
-    ASSERT_EQ(asx_obligation_get_state(ASX_INVALID_ID, &state),
-              ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_obligation_get_state(ASX_INVALID_ID, &state), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_obligation_commit(ASX_INVALID_ID), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_obligation_abort(ASX_INVALID_ID), ASX_E_NOT_FOUND);
 }

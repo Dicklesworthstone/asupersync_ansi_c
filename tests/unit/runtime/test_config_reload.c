@@ -15,9 +15,9 @@
 
 /* ASX_CHECKPOINT_WAIVER_FILE() -- config reload test, no checkpoint coverage needed */
 
+#include "test_harness.h"
 #include <asx/asx.h>
 #include <asx/runtime/config_reload.h>
-#include "test_harness.h"
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -27,8 +27,7 @@
 static asx_config_state g_state;
 static asx_runtime_config g_cfg;
 
-static void cr_setup(void)
-{
+static void cr_setup(void) {
     asx_config_state_init(&g_state);
     asx_runtime_config_init(&g_cfg);
 }
@@ -37,48 +36,39 @@ static void cr_setup(void)
 /* Test: field classification                                          */
 /* ------------------------------------------------------------------ */
 
-TEST(field_class_size_is_frozen)
-{
+TEST(field_class_size_is_frozen) {
     ASSERT_EQ(asx_config_field_class("size"), ASX_CONFIG_FROZEN_INIT);
 }
 
-TEST(field_class_wait_policy_is_reloadable)
-{
+TEST(field_class_wait_policy_is_reloadable) {
     ASSERT_EQ(asx_config_field_class("wait_policy"), ASX_CONFIG_RELOADABLE);
 }
 
-TEST(field_class_leak_response_is_reloadable)
-{
+TEST(field_class_leak_response_is_reloadable) {
     ASSERT_EQ(asx_config_field_class("leak_response"), ASX_CONFIG_RELOADABLE);
 }
 
-TEST(field_class_finalizer_poll_budget_is_reloadable)
-{
+TEST(field_class_finalizer_poll_budget_is_reloadable) {
     ASSERT_EQ(asx_config_field_class("finalizer_poll_budget"), ASX_CONFIG_RELOADABLE);
 }
 
-TEST(field_class_finalizer_time_budget_is_reloadable)
-{
+TEST(field_class_finalizer_time_budget_is_reloadable) {
     ASSERT_EQ(asx_config_field_class("finalizer_time_budget_ns"), ASX_CONFIG_RELOADABLE);
 }
 
-TEST(field_class_finalizer_escalation_is_reloadable)
-{
+TEST(field_class_finalizer_escalation_is_reloadable) {
     ASSERT_EQ(asx_config_field_class("finalizer_escalation"), ASX_CONFIG_RELOADABLE);
 }
 
-TEST(field_class_cancel_chain_depth_is_restart_required)
-{
+TEST(field_class_cancel_chain_depth_is_restart_required) {
     ASSERT_EQ(asx_config_field_class("max_cancel_chain_depth"), ASX_CONFIG_RESTART_REQUIRED);
 }
 
-TEST(field_class_cancel_chain_memory_is_restart_required)
-{
+TEST(field_class_cancel_chain_memory_is_restart_required) {
     ASSERT_EQ(asx_config_field_class("max_cancel_chain_memory"), ASX_CONFIG_RESTART_REQUIRED);
 }
 
-TEST(field_class_unknown_is_frozen)
-{
+TEST(field_class_unknown_is_frozen) {
     ASSERT_EQ(asx_config_field_class("nonexistent_field"), ASX_CONFIG_FROZEN_COMPILE);
 }
 
@@ -86,21 +76,18 @@ TEST(field_class_unknown_is_frozen)
 /* Test: initial load                                                  */
 /* ------------------------------------------------------------------ */
 
-TEST(load_succeeds)
-{
+TEST(load_succeeds) {
     cr_setup();
     ASSERT_EQ(asx_config_load(&g_state, &g_cfg), ASX_OK);
     ASSERT_TRUE(asx_config_active(&g_state) != NULL);
 }
 
-TEST(load_null_state_fails)
-{
+TEST(load_null_state_fails) {
     cr_setup();
     ASSERT_EQ(asx_config_load(NULL, &g_cfg), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(load_null_cfg_fails)
-{
+TEST(load_null_cfg_fails) {
     cr_setup();
     ASSERT_EQ(asx_config_load(&g_state, NULL), ASX_E_INVALID_ARGUMENT);
 }
@@ -109,8 +96,7 @@ TEST(load_null_cfg_fails)
 /* Test: reload reloadable fields succeeds                             */
 /* ------------------------------------------------------------------ */
 
-TEST(reload_wait_policy_succeeds)
-{
+TEST(reload_wait_policy_succeeds) {
     asx_runtime_config new_cfg;
 
     cr_setup();
@@ -123,8 +109,7 @@ TEST(reload_wait_policy_succeeds)
     ASSERT_EQ(asx_config_active(&g_state)->wait_policy, ASX_WAIT_BUSY_SPIN);
 }
 
-TEST(reload_leak_response_succeeds)
-{
+TEST(reload_leak_response_succeeds) {
     asx_runtime_config new_cfg;
 
     cr_setup();
@@ -137,8 +122,7 @@ TEST(reload_leak_response_succeeds)
     ASSERT_EQ(asx_config_active(&g_state)->leak_response, ASX_LEAK_PANIC);
 }
 
-TEST(reload_finalizer_budget_succeeds)
-{
+TEST(reload_finalizer_budget_succeeds) {
     asx_runtime_config new_cfg;
 
     cr_setup();
@@ -156,8 +140,7 @@ TEST(reload_finalizer_budget_succeeds)
 /* Test: reload frozen fields rejected                                 */
 /* ------------------------------------------------------------------ */
 
-TEST(reload_size_field_rejected)
-{
+TEST(reload_size_field_rejected) {
     asx_runtime_config new_cfg;
     const char *rejected = NULL;
 
@@ -165,7 +148,7 @@ TEST(reload_size_field_rejected)
     ASSERT_EQ(asx_config_load(&g_state, &g_cfg), ASX_OK);
 
     memcpy(&new_cfg, &g_cfg, sizeof(new_cfg));
-    new_cfg.size = 999;  /* Tamper with frozen size field */
+    new_cfg.size = 999; /* Tamper with frozen size field */
 
     ASSERT_EQ(asx_config_reload(&g_state, &new_cfg), ASX_E_CONFIG_FROZEN);
 
@@ -179,8 +162,7 @@ TEST(reload_size_field_rejected)
 /* Test: reload restart-required fields rejected                       */
 /* ------------------------------------------------------------------ */
 
-TEST(reload_cancel_depth_rejected)
-{
+TEST(reload_cancel_depth_rejected) {
     asx_runtime_config new_cfg;
     const char *rejected = NULL;
 
@@ -188,7 +170,7 @@ TEST(reload_cancel_depth_rejected)
     ASSERT_EQ(asx_config_load(&g_state, &g_cfg), ASX_OK);
 
     memcpy(&new_cfg, &g_cfg, sizeof(new_cfg));
-    new_cfg.max_cancel_chain_depth = 32;  /* Change restart-required field */
+    new_cfg.max_cancel_chain_depth = 32; /* Change restart-required field */
 
     ASSERT_EQ(asx_config_reload(&g_state, &new_cfg), ASX_E_CONFIG_RESTART_REQ);
 
@@ -197,8 +179,7 @@ TEST(reload_cancel_depth_rejected)
     ASSERT_STR_EQ(rejected, "max_cancel_chain_depth");
 }
 
-TEST(reload_cancel_memory_rejected)
-{
+TEST(reload_cancel_memory_rejected) {
     asx_runtime_config new_cfg;
     const char *rejected = NULL;
 
@@ -218,8 +199,7 @@ TEST(reload_cancel_memory_rejected)
 /* Test: rollback on invalid update                                    */
 /* ------------------------------------------------------------------ */
 
-TEST(rollback_preserves_active_config)
-{
+TEST(rollback_preserves_active_config) {
     asx_runtime_config new_cfg;
     asx_wait_policy original_policy;
 
@@ -230,8 +210,8 @@ TEST(rollback_preserves_active_config)
 
     /* Try to change both a reloadable and a frozen field */
     memcpy(&new_cfg, &g_cfg, sizeof(new_cfg));
-    new_cfg.wait_policy = ASX_WAIT_BUSY_SPIN;  /* Reloadable */
-    new_cfg.size = 42;                          /* Frozen — should reject */
+    new_cfg.wait_policy = ASX_WAIT_BUSY_SPIN; /* Reloadable */
+    new_cfg.size = 42;                        /* Frozen — should reject */
 
     ASSERT_EQ(asx_config_reload(&g_state, &new_cfg), ASX_E_CONFIG_FROZEN);
 
@@ -243,8 +223,7 @@ TEST(rollback_preserves_active_config)
 /* Test: reload before load fails                                      */
 /* ------------------------------------------------------------------ */
 
-TEST(reload_before_load_fails)
-{
+TEST(reload_before_load_fails) {
     asx_runtime_config new_cfg;
 
     cr_setup();
@@ -257,8 +236,7 @@ TEST(reload_before_load_fails)
 /* Test: validate before load fails                                    */
 /* ------------------------------------------------------------------ */
 
-TEST(validate_before_load_fails)
-{
+TEST(validate_before_load_fails) {
     asx_runtime_config new_cfg;
 
     cr_setup();
@@ -271,8 +249,7 @@ TEST(validate_before_load_fails)
 /* Test: identical config reload succeeds                              */
 /* ------------------------------------------------------------------ */
 
-TEST(identical_reload_succeeds)
-{
+TEST(identical_reload_succeeds) {
     cr_setup();
     ASSERT_EQ(asx_config_load(&g_state, &g_cfg), ASX_OK);
 
@@ -284,17 +261,15 @@ TEST(identical_reload_succeeds)
 /* Test: field table consistency                                       */
 /* ------------------------------------------------------------------ */
 
-TEST(field_table_has_all_config_fields)
-{
+TEST(field_table_has_all_config_fields) {
     uint32_t count = 0;
     const asx_config_field_desc *table = asx_config_field_table(&count);
 
     ASSERT_TRUE(table != NULL);
-    ASSERT_EQ(count, (uint32_t)9);  /* 9 fields in asx_runtime_config */
+    ASSERT_EQ(count, (uint32_t)9); /* 9 fields in asx_runtime_config */
 }
 
-TEST(field_table_covers_struct_range)
-{
+TEST(field_table_covers_struct_range) {
     uint32_t count = 0;
     uint32_t i;
     const asx_config_field_desc *table = asx_config_field_table(&count);
@@ -311,9 +286,8 @@ TEST(field_table_covers_struct_range)
 /* Test: null safety                                                   */
 /* ------------------------------------------------------------------ */
 
-TEST(null_safety)
-{
-    asx_config_state_init(NULL);  /* should not crash */
+TEST(null_safety) {
+    asx_config_state_init(NULL); /* should not crash */
     ASSERT_EQ(asx_config_load(NULL, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_config_reload(NULL, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_TRUE(asx_config_active(NULL) == NULL);
@@ -324,8 +298,7 @@ TEST(null_safety)
 /* Test: multiple sequential reloads                                   */
 /* ------------------------------------------------------------------ */
 
-TEST(sequential_reloads)
-{
+TEST(sequential_reloads) {
     asx_runtime_config new_cfg;
 
     cr_setup();
@@ -357,8 +330,7 @@ TEST(sequential_reloads)
 /* Test: error code string coverage                                    */
 /* ------------------------------------------------------------------ */
 
-TEST(error_code_strings)
-{
+TEST(error_code_strings) {
     ASSERT_STR_EQ(asx_status_str(ASX_E_CONFIG_FROZEN), "config field is frozen");
     ASSERT_STR_EQ(asx_status_str(ASX_E_CONFIG_RESTART_REQ), "config field requires restart");
 }
@@ -367,8 +339,7 @@ TEST(error_code_strings)
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== config reload tests (bd-3vt.9) ===\n");
 
     /* Field classification */

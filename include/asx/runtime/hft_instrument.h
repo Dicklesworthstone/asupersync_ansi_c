@@ -42,16 +42,16 @@ extern "C" {
  * No floating point: bin index = floor(log2(sample + 1))
  * ------------------------------------------------------------------- */
 
-#define ASX_HFT_HISTOGRAM_BINS     16u
-#define ASX_HFT_HISTOGRAM_MAX_NS   32768u  /* 2^15 */
+#define ASX_HFT_HISTOGRAM_BINS 16u
+#define ASX_HFT_HISTOGRAM_MAX_NS 32768u /* 2^15 */
 
 typedef struct {
     uint32_t bins[ASX_HFT_HISTOGRAM_BINS];
-    uint32_t overflow;     /* samples >= ASX_HFT_HISTOGRAM_MAX_NS */
-    uint32_t total;        /* total samples recorded */
-    uint64_t sum_ns;       /* running sum for mean calculation */
-    uint64_t min_ns;       /* minimum sample observed */
-    uint64_t max_ns;       /* maximum sample observed */
+    uint32_t overflow; /* samples >= ASX_HFT_HISTOGRAM_MAX_NS */
+    uint32_t total;    /* total samples recorded */
+    uint64_t sum_ns;   /* running sum for mean calculation */
+    uint64_t min_ns;   /* minimum sample observed */
+    uint64_t max_ns;   /* maximum sample observed */
 } asx_hft_histogram;
 
 /* Initialize a histogram (zero all bins). */
@@ -63,8 +63,7 @@ ASX_API void asx_hft_histogram_record(asx_hft_histogram *h, uint64_t ns);
 /* Read the approximate percentile value from the histogram.
  * pct is in [0, 100]. Returns the lower bound of the bin that
  * contains the percentile. */
-ASX_API uint64_t asx_hft_histogram_percentile(const asx_hft_histogram *h,
-                                               uint32_t pct);
+ASX_API uint64_t asx_hft_histogram_percentile(const asx_hft_histogram *h, uint32_t pct);
 
 /* Compute mean latency in nanoseconds. Returns 0 if no samples. */
 ASX_API uint64_t asx_hft_histogram_mean(const asx_hft_histogram *h);
@@ -89,16 +88,15 @@ ASX_API void asx_hft_histogram_reset(asx_hft_histogram *h);
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    asx_hft_histogram  hist;            /* underlying histogram */
-    uint64_t           mad_ns;          /* last computed MAD */
-    uint32_t           recompute_every; /* recompute MAD every N samples */
-    uint32_t           samples_since;   /* samples since last recompute */
+    asx_hft_histogram hist;   /* underlying histogram */
+    uint64_t mad_ns;          /* last computed MAD */
+    uint32_t recompute_every; /* recompute MAD every N samples */
+    uint32_t samples_since;   /* samples since last recompute */
 } asx_hft_jitter_tracker;
 
 /* Initialize a jitter tracker. recompute_interval controls how often
  * MAD is recalculated (0 = every sample, expensive). */
-ASX_API void asx_hft_jitter_init(asx_hft_jitter_tracker *jt,
-                                  uint32_t recompute_interval);
+ASX_API void asx_hft_jitter_init(asx_hft_jitter_tracker *jt, uint32_t recompute_interval);
 
 /* Record a latency sample and possibly recompute jitter. */
 ASX_API void asx_hft_jitter_record(asx_hft_jitter_tracker *jt, uint64_t ns);
@@ -127,24 +125,24 @@ ASX_API void asx_hft_jitter_reset(asx_hft_jitter_tracker *jt);
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_OVERLOAD_REJECT       = 0,  /* hard reject excess work */
-    ASX_OVERLOAD_SHED_OLDEST  = 1,  /* evict oldest task */
-    ASX_OVERLOAD_BACKPRESSURE = 2   /* caller retries */
+    ASX_OVERLOAD_REJECT = 0,      /* hard reject excess work */
+    ASX_OVERLOAD_SHED_OLDEST = 1, /* evict oldest task */
+    ASX_OVERLOAD_BACKPRESSURE = 2 /* caller retries */
 } asx_overload_mode;
 
 typedef struct {
     asx_overload_mode mode;
-    uint32_t          threshold_pct;  /* load% that triggers overload (0-100) */
-    uint32_t          shed_max;       /* max tasks to shed per decision (SHED mode) */
+    uint32_t threshold_pct; /* load% that triggers overload (0-100) */
+    uint32_t shed_max;      /* max tasks to shed per decision (SHED mode) */
 } asx_overload_policy;
 
 /* Overload decision result */
 typedef struct {
-    int               triggered;     /* 1 if overload was detected */
-    asx_overload_mode mode;          /* policy that was applied */
-    uint32_t          load_pct;      /* current load percentage */
-    uint32_t          shed_count;    /* tasks shed (SHED mode only) */
-    asx_status        admit_status;  /* ASX_OK or rejection status */
+    int triggered;           /* 1 if overload was detected */
+    asx_overload_mode mode;  /* policy that was applied */
+    uint32_t load_pct;       /* current load percentage */
+    uint32_t shed_count;     /* tasks shed (SHED mode only) */
+    asx_status admit_status; /* ASX_OK or rejection status */
 } asx_overload_decision;
 
 /* Initialize a default overload policy (REJECT at 90%). */
@@ -153,10 +151,8 @@ ASX_API void asx_overload_policy_init(asx_overload_policy *pol);
 /* Evaluate the overload policy given current load state.
  * used: current task count, capacity: max tasks.
  * Fills *decision with the deterministic outcome. */
-ASX_API void asx_overload_evaluate(const asx_overload_policy *pol,
-                                    uint32_t used,
-                                    uint32_t capacity,
-                                    asx_overload_decision *decision);
+ASX_API void asx_overload_evaluate(const asx_overload_policy *pol, uint32_t used, uint32_t capacity,
+                                   asx_overload_decision *decision);
 
 /* Return human-readable name for an overload mode. */
 ASX_API const char *asx_overload_mode_str(asx_overload_mode mode);
@@ -169,26 +165,26 @@ ASX_API const char *asx_overload_mode_str(asx_overload_mode mode);
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint64_t p99_ns;       /* p99 must be <= this value */
-    uint64_t p99_9_ns;     /* p99.9 must be <= this value (0 = skip) */
-    uint64_t p99_99_ns;    /* p99.99 must be <= this value (0 = skip) */
-    uint64_t jitter_ns;    /* MAD must be <= this value (0 = skip) */
+    uint64_t p99_ns;    /* p99 must be <= this value */
+    uint64_t p99_9_ns;  /* p99.9 must be <= this value (0 = skip) */
+    uint64_t p99_99_ns; /* p99.99 must be <= this value (0 = skip) */
+    uint64_t jitter_ns; /* MAD must be <= this value (0 = skip) */
 } asx_hft_gate;
 
 typedef struct {
-    int      pass;           /* 1 if all thresholds met */
-    uint64_t actual_p99;     /* actual p99 value */
-    uint64_t actual_p99_9;   /* actual p99.9 value */
-    uint64_t actual_p99_99;  /* actual p99.99 value */
-    uint64_t actual_jitter;  /* actual MAD */
-    uint32_t violations;     /* bitmask of which thresholds failed */
+    int pass;               /* 1 if all thresholds met */
+    uint64_t actual_p99;    /* actual p99 value */
+    uint64_t actual_p99_9;  /* actual p99.9 value */
+    uint64_t actual_p99_99; /* actual p99.99 value */
+    uint64_t actual_jitter; /* actual MAD */
+    uint32_t violations;    /* bitmask of which thresholds failed */
 } asx_hft_gate_result;
 
 /* Violation bitmask bits */
-#define ASX_GATE_VIOLATION_P99     (1u << 0)
-#define ASX_GATE_VIOLATION_P99_9   (1u << 1)
-#define ASX_GATE_VIOLATION_P99_99  (1u << 2)
-#define ASX_GATE_VIOLATION_JITTER  (1u << 3)
+#define ASX_GATE_VIOLATION_P99 (1u << 0)
+#define ASX_GATE_VIOLATION_P99_9 (1u << 1)
+#define ASX_GATE_VIOLATION_P99_99 (1u << 2)
+#define ASX_GATE_VIOLATION_JITTER (1u << 3)
 
 /* Initialize a gate with default HFT thresholds. */
 ASX_API void asx_hft_gate_init(asx_hft_gate *gate);
@@ -196,10 +192,8 @@ ASX_API void asx_hft_gate_init(asx_hft_gate *gate);
 /* Evaluate a gate against a histogram and jitter tracker.
  * Either hist or jt may be NULL if the corresponding thresholds
  * are zeroed in the gate. */
-ASX_API void asx_hft_gate_evaluate(const asx_hft_gate *gate,
-                                    const asx_hft_histogram *hist,
-                                    const asx_hft_jitter_tracker *jt,
-                                    asx_hft_gate_result *result);
+ASX_API void asx_hft_gate_evaluate(const asx_hft_gate *gate, const asx_hft_histogram *hist,
+                                   const asx_hft_jitter_tracker *jt, asx_hft_gate_result *result);
 
 /* -------------------------------------------------------------------
  * Global HFT instrumentation state

@@ -21,15 +21,14 @@
 
 #include "../../test_harness.h"
 #include <asx/asx.h>
-#include <string.h>
 #include <limits.h>
+#include <string.h>
 
 /* -----------------------------------------------------------------------
  * LITMUS-1: Type sizes match ABI contract
  * Assumption: handle types are exactly 8 bytes, status is 4 bytes
  * ----------------------------------------------------------------------- */
-TEST(litmus_type_sizes)
-{
+TEST(litmus_type_sizes) {
     ASSERT_EQ((int)sizeof(asx_region_id), 8);
     ASSERT_EQ((int)sizeof(asx_task_id), 8);
     ASSERT_EQ((int)sizeof(asx_obligation_id), 8);
@@ -43,8 +42,7 @@ TEST(litmus_type_sizes)
  * LITMUS-2: Unsigned integer overflow wraps (C99 guarantees this)
  * Assumption: unsigned arithmetic wraps modulo 2^N
  * ----------------------------------------------------------------------- */
-TEST(litmus_unsigned_wrap)
-{
+TEST(litmus_unsigned_wrap) {
     uint32_t a = UINT32_MAX;
     uint32_t b = a + 1;
     ASSERT_EQ((int)b, 0);
@@ -62,18 +60,15 @@ TEST(litmus_unsigned_wrap)
  * LITMUS-3: Handle packing is endian-agnostic via shift/mask
  * Assumption: bit-field packing via shifts produces portable results
  * ----------------------------------------------------------------------- */
-TEST(litmus_handle_pack_unpack)
-{
+TEST(litmus_handle_pack_unpack) {
     /* Pack: [type_tag:16][state_mask:16][gen:16][slot:16] */
     uint16_t type_tag = 0x1234;
     uint16_t state_mask = 0x5678;
     uint16_t gen = 0x9ABC;
     uint16_t slot = 0xDEF0;
 
-    uint64_t packed = ((uint64_t)type_tag << 48)
-                    | ((uint64_t)state_mask << 32)
-                    | ((uint64_t)gen << 16)
-                    | (uint64_t)slot;
+    uint64_t packed = ((uint64_t)type_tag << 48) | ((uint64_t)state_mask << 32) |
+                      ((uint64_t)gen << 16) | (uint64_t)slot;
 
     /* Unpack */
     uint16_t out_type = (uint16_t)(packed >> 48);
@@ -91,8 +86,7 @@ TEST(litmus_handle_pack_unpack)
  * LITMUS-4: Enum representation is int-compatible
  * Assumption: enums fit in int, values match explicit assignments
  * ----------------------------------------------------------------------- */
-TEST(litmus_enum_representation)
-{
+TEST(litmus_enum_representation) {
     /* Region states are contiguous 0..4 */
     ASSERT_EQ((int)ASX_REGION_OPEN, 0);
     ASSERT_EQ((int)ASX_REGION_CLOSED, 4);
@@ -115,8 +109,7 @@ TEST(litmus_enum_representation)
  * Assumption: casting between signed and unsigned of same width
  * preserves bit pattern (C99 guarantees for two's complement)
  * ----------------------------------------------------------------------- */
-TEST(litmus_signed_unsigned_cast)
-{
+TEST(litmus_signed_unsigned_cast) {
     int32_t neg = -1;
     uint32_t as_uint = (uint32_t)neg;
     ASSERT_EQ(as_uint, UINT32_MAX);
@@ -131,8 +124,7 @@ TEST(litmus_signed_unsigned_cast)
  * Assumption: memset(0) yields all-bits-zero which is a valid
  * representation for integers, pointers, and enums
  * ----------------------------------------------------------------------- */
-TEST(litmus_memset_zero_init)
-{
+TEST(litmus_memset_zero_init) {
     asx_budget b;
     memset(&b, 0, sizeof(b));
     ASSERT_EQ((int)b.poll_quota, 0);
@@ -154,14 +146,13 @@ TEST(litmus_memset_zero_init)
  * Assumption: function pointers are comparable and non-NULL when
  * pointing to real functions
  * ----------------------------------------------------------------------- */
-static asx_status dummy_poll(void *ud, asx_task_id self)
-{
-    (void)ud; (void)self;
+static asx_status dummy_poll(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
     return ASX_OK;
 }
 
-TEST(litmus_function_pointer_identity)
-{
+TEST(litmus_function_pointer_identity) {
     asx_status (*p1)(void *, asx_task_id) = dummy_poll;
     asx_status (*p2)(void *, asx_task_id) = dummy_poll;
 
@@ -177,11 +168,8 @@ TEST(litmus_function_pointer_identity)
  * Assumption: using enum values directly as array indices is safe
  * when values are contiguous and bounded
  * ----------------------------------------------------------------------- */
-TEST(litmus_enum_as_array_index)
-{
-    static const char *region_names[] = {
-        "Open", "Closing", "Draining", "Finalizing", "Closed"
-    };
+TEST(litmus_enum_as_array_index) {
+    static const char *region_names[] = {"Open", "Closing", "Draining", "Finalizing", "Closed"};
 
     int i;
     for (i = (int)ASX_REGION_OPEN; i <= (int)ASX_REGION_CLOSED; i++) {
@@ -198,8 +186,7 @@ TEST(litmus_enum_as_array_index)
  * LITMUS-9: Struct size-field pattern for forward compatibility
  * Assumption: sizeof(struct) is stable per compilation unit
  * ----------------------------------------------------------------------- */
-TEST(litmus_size_field_pattern)
-{
+TEST(litmus_size_field_pattern) {
     asx_runtime_config cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.size = (uint32_t)sizeof(cfg);
@@ -208,8 +195,7 @@ TEST(litmus_size_field_pattern)
     ASSERT_EQ(cfg.size, (uint32_t)sizeof(asx_runtime_config));
 
     /* Size is stable across multiple evaluations */
-    ASSERT_EQ((uint32_t)sizeof(asx_runtime_config),
-              (uint32_t)sizeof(asx_runtime_config));
+    ASSERT_EQ((uint32_t)sizeof(asx_runtime_config), (uint32_t)sizeof(asx_runtime_config));
 }
 
 /* -----------------------------------------------------------------------
@@ -217,8 +203,7 @@ TEST(litmus_size_field_pattern)
  * Assumption: calling transition_check with same inputs always
  * returns the same result (no hidden state, no optimization clobber)
  * ----------------------------------------------------------------------- */
-TEST(litmus_transition_determinism)
-{
+TEST(litmus_transition_determinism) {
     int i;
     /* Call the same transition check 100 times — must be identical */
     for (i = 0; i < 100; i++) {
@@ -233,8 +218,7 @@ TEST(litmus_transition_determinism)
  * LITMUS-11: NULL pointer is detectable
  * Assumption: NULL == 0 and is always false in boolean context
  * ----------------------------------------------------------------------- */
-TEST(litmus_null_pointer)
-{
+TEST(litmus_null_pointer) {
     void *p = NULL;
     ASSERT_TRUE(p == NULL);
     ASSERT_TRUE(!p);
@@ -246,8 +230,7 @@ TEST(litmus_null_pointer)
  * Assumption: bitwise OR, AND, XOR, and shifts work correctly
  * on 64-bit types across all targets
  * ----------------------------------------------------------------------- */
-TEST(litmus_bitwise_uint64)
-{
+TEST(litmus_bitwise_uint64) {
     uint64_t a = 0xDEADBEEFCAFEBABEull;
     uint64_t b = 0x1234567890ABCDEFull;
 
@@ -272,8 +255,7 @@ TEST(litmus_bitwise_uint64)
  * LITMUS-13: CHAR_BIT is 8
  * Assumption: the codebase assumes 8-bit bytes throughout
  * ----------------------------------------------------------------------- */
-TEST(litmus_char_bit_is_8)
-{
+TEST(litmus_char_bit_is_8) {
     ASSERT_EQ(CHAR_BIT, 8);
     ASSERT_EQ((int)sizeof(uint8_t), 1);
     ASSERT_EQ((int)sizeof(uint16_t), 2);
@@ -286,8 +268,7 @@ TEST(litmus_char_bit_is_8)
  * Assumption: compiler optimization doesn't change observable behavior
  * of the outcome join operation
  * ----------------------------------------------------------------------- */
-TEST(litmus_outcome_join_stability)
-{
+TEST(litmus_outcome_join_stability) {
     asx_outcome a, b, result;
     int i;
 
@@ -307,8 +288,7 @@ TEST(litmus_outcome_join_stability)
  * Assumption: asx_cancel_severity() is a pure function with no side
  * effects — same input always gives same output
  * ----------------------------------------------------------------------- */
-TEST(litmus_cancel_severity_purity)
-{
+TEST(litmus_cancel_severity_purity) {
     int k, i;
     for (k = 0; k <= 10; k++) {
         int first = asx_cancel_severity((asx_cancel_kind)k);
@@ -321,11 +301,9 @@ TEST(litmus_cancel_severity_purity)
 
 /* --- Main --- */
 
-int main(void)
-{
-    fprintf(stderr,
-        "[formal] memory-model litmus suite (bd-3vt.4)\n"
-        "[formal] verifying C99 assumptions across compiler/target\n");
+int main(void) {
+    fprintf(stderr, "[formal] memory-model litmus suite (bd-3vt.4)\n"
+                    "[formal] verifying C99 assumptions across compiler/target\n");
 
     RUN_TEST(litmus_type_sizes);
     RUN_TEST(litmus_unsigned_wrap);

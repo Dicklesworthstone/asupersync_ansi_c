@@ -49,14 +49,14 @@ typedef struct {
 } asx_barrier_state;
 
 typedef struct {
-    uint32_t starvation_bound;  /* K: max allowed wait rounds */
-    uint32_t alive_count;       /* tasks that should be polled */
+    uint32_t starvation_bound; /* K: max allowed wait rounds */
+    uint32_t alive_count;      /* tasks that should be polled */
 } asx_barrier_config;
 
 typedef struct {
-    int32_t  value;          /* B(x) = K - max(wait) */
-    int      safe;           /* 1 if B(x) > 0 */
-    int      decreasing;     /* 1 if B decreased since last eval */
+    int32_t value;           /* B(x) = K - max(wait) */
+    int safe;                /* 1 if B(x) > 0 */
+    int decreasing;          /* 1 if B decreased since last eval */
     uint32_t max_wait;       /* current max wait across all tasks */
     uint32_t violator_index; /* task with highest wait (or 0) */
 } asx_barrier_result;
@@ -68,65 +68,50 @@ typedef struct {
 void asx_barrier_state_init(asx_barrier_state *state, uint32_t task_count);
 void asx_barrier_record_poll(asx_barrier_state *state, uint32_t task_index);
 void asx_barrier_advance_round(asx_barrier_state *state);
-void asx_barrier_evaluate(const asx_barrier_state *state,
-                           const asx_barrier_config *cfg,
-                           int32_t prev_value,
-                           asx_barrier_result *result);
+void asx_barrier_evaluate(const asx_barrier_state *state, const asx_barrier_config *cfg,
+                          int32_t prev_value, asx_barrier_result *result);
 uint32_t asx_barrier_max_wait(const asx_barrier_state *state);
-int asx_barrier_admits_bound(const asx_barrier_config *cfg,
-                              uint32_t task_count);
+int asx_barrier_admits_bound(const asx_barrier_config *cfg, uint32_t task_count);
 
 /* ------------------------------------------------------------------ */
 /* Implementation                                                     */
 /* ------------------------------------------------------------------ */
 
-void asx_barrier_state_init(asx_barrier_state *state, uint32_t task_count)
-{
+void asx_barrier_state_init(asx_barrier_state *state, uint32_t task_count) {
     if (state == NULL) return;
     memset(state, 0, sizeof(*state));
-    state->task_count = (task_count > ASX_BARRIER_MAX_TASKS)
-                      ? ASX_BARRIER_MAX_TASKS : task_count;
+    state->task_count = (task_count > ASX_BARRIER_MAX_TASKS) ? ASX_BARRIER_MAX_TASKS : task_count;
 }
 
-void asx_barrier_record_poll(asx_barrier_state *state, uint32_t task_index)
-{
+void asx_barrier_record_poll(asx_barrier_state *state, uint32_t task_index) {
     if (state == NULL || task_index >= state->task_count) return;
     state->wait_counts[task_index] = 0;
 }
 
-void asx_barrier_advance_round(asx_barrier_state *state)
-{
+void asx_barrier_advance_round(asx_barrier_state *state) {
     uint32_t i;
     if (state == NULL) return;
 
     for (i = 0; i < state->task_count; i++) {
-        if (state->wait_counts[i] < UINT32_MAX) {
-            state->wait_counts[i]++;
-        }
+        if (state->wait_counts[i] < UINT32_MAX) { state->wait_counts[i]++; }
     }
     state->round++;
 }
 
-uint32_t asx_barrier_max_wait(const asx_barrier_state *state)
-{
+uint32_t asx_barrier_max_wait(const asx_barrier_state *state) {
     uint32_t i;
     uint32_t max_w = 0;
 
     if (state == NULL) return 0;
 
     for (i = 0; i < state->task_count; i++) {
-        if (state->wait_counts[i] > max_w) {
-            max_w = state->wait_counts[i];
-        }
+        if (state->wait_counts[i] > max_w) { max_w = state->wait_counts[i]; }
     }
     return max_w;
 }
 
-void asx_barrier_evaluate(const asx_barrier_state *state,
-                           const asx_barrier_config *cfg,
-                           int32_t prev_value,
-                           asx_barrier_result *result)
-{
+void asx_barrier_evaluate(const asx_barrier_state *state, const asx_barrier_config *cfg,
+                          int32_t prev_value, asx_barrier_result *result) {
     uint32_t i;
     uint32_t max_w = 0;
     uint32_t violator = 0;
@@ -150,9 +135,7 @@ void asx_barrier_evaluate(const asx_barrier_state *state,
     result->decreasing = (result->value < prev_value) ? 1 : 0;
 }
 
-int asx_barrier_admits_bound(const asx_barrier_config *cfg,
-                              uint32_t task_count)
-{
+int asx_barrier_admits_bound(const asx_barrier_config *cfg, uint32_t task_count) {
     /*
      * For round-robin scheduling with N tasks and budget >= N,
      * each task is guaranteed a poll every round. So the starvation

@@ -12,13 +12,16 @@
 
 /* ASX_CHECKPOINT_WAIVER_FILE() -- spike equivalence test, no checkpoint coverage needed */
 
+#include "test_harness.h"
 #include <asx/asx.h>
 #include <asx/core/channel.h>
-#include "test_harness.h"
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
-#define EQ_IGNORE(expr) \
-    do { volatile asx_status _eq_ign = (expr); (void)_eq_ign; } while (0)
+#define EQ_IGNORE(expr)                                                                            \
+    do {                                                                                           \
+        volatile asx_status _eq_ign = (expr);                                                      \
+        (void)_eq_ign;                                                                             \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Inline the lock-free spike (self-contained test)                    */
@@ -26,40 +29,47 @@
 
 #define LOCKFREE_MAX_CAPACITY 64u
 
-typedef struct { uint32_t value; } spike_atomic_u32;
+typedef struct {
+    uint32_t value;
+} spike_atomic_u32;
 
 static uint32_t spike_atomic_load(const spike_atomic_u32 *a) { return a->value; }
 static void spike_atomic_store(spike_atomic_u32 *a, uint32_t v) { a->value = v; }
-static int spike_atomic_cas(spike_atomic_u32 *a, uint32_t expected, uint32_t desired)
-{
-    if (a->value == expected) { a->value = desired; return 1; }
+static int spike_atomic_cas(spike_atomic_u32 *a, uint32_t expected, uint32_t desired) {
+    if (a->value == expected) {
+        a->value = desired;
+        return 1;
+    }
     return 0;
 }
 
 typedef struct {
     spike_atomic_u32 sequence;
-    uint64_t         value;
+    uint64_t value;
 } spike_cell;
 
 typedef struct {
-    spike_cell       cells[LOCKFREE_MAX_CAPACITY];
-    uint32_t         capacity;
-    uint32_t         mask;
+    spike_cell cells[LOCKFREE_MAX_CAPACITY];
+    uint32_t capacity;
+    uint32_t mask;
     spike_atomic_u32 enqueue_pos;
-    uint32_t         dequeue_pos;
-    uint32_t         len;
-    int              alive;
+    uint32_t dequeue_pos;
+    uint32_t len;
+    int alive;
 } spike_queue;
 
-static uint32_t spike_next_pow2(uint32_t v)
-{
-    v--; v |= v >> 1; v |= v >> 2; v |= v >> 4;
-    v |= v >> 8; v |= v >> 16; v++;
+static uint32_t spike_next_pow2(uint32_t v) {
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v++;
     return v;
 }
 
-static void spike_init(spike_queue *q, uint32_t cap)
-{
+static void spike_init(spike_queue *q, uint32_t cap) {
     uint32_t i, actual;
     actual = spike_next_pow2(cap);
     if (actual > LOCKFREE_MAX_CAPACITY) actual = LOCKFREE_MAX_CAPACITY;
@@ -75,8 +85,7 @@ static void spike_init(spike_queue *q, uint32_t cap)
     }
 }
 
-static asx_status spike_enqueue(spike_queue *q, uint64_t value)
-{
+static asx_status spike_enqueue(spike_queue *q, uint64_t value) {
     uint32_t pos;
     spike_cell *cell;
     uint32_t seq;
@@ -88,8 +97,7 @@ static asx_status spike_enqueue(spike_queue *q, uint64_t value)
     diff = (int32_t)(seq - pos);
     if (diff < 0) return ASX_E_CHANNEL_FULL;
     if (diff == 0) {
-        if (!spike_atomic_cas(&q->enqueue_pos, pos, pos + 1u))
-            return ASX_E_CHANNEL_FULL;
+        if (!spike_atomic_cas(&q->enqueue_pos, pos, pos + 1u)) return ASX_E_CHANNEL_FULL;
     }
     cell->value = value;
     spike_atomic_store(&cell->sequence, pos + 1u);
@@ -97,8 +105,7 @@ static asx_status spike_enqueue(spike_queue *q, uint64_t value)
     return ASX_OK;
 }
 
-static asx_status spike_dequeue(spike_queue *q, uint64_t *out)
-{
+static asx_status spike_dequeue(spike_queue *q, uint64_t *out) {
     spike_cell *cell;
     uint32_t seq;
     int32_t diff;
@@ -121,8 +128,7 @@ static asx_status spike_dequeue(spike_queue *q, uint64_t *out)
 
 static asx_region_id g_rid;
 
-static void eq_setup(void)
-{
+static void eq_setup(void) {
     asx_runtime_reset();
     asx_channel_reset();
     EQ_IGNORE(asx_region_open(&g_rid));
@@ -132,8 +138,7 @@ static void eq_setup(void)
 /* Test: FIFO ordering equivalence                                     */
 /* ------------------------------------------------------------------ */
 
-TEST(fifo_ordering_equivalence)
-{
+TEST(fifo_ordering_equivalence) {
     uint32_t cap = 16;
     uint32_t i;
     asx_channel_id cid;
@@ -151,18 +156,12 @@ TEST(fifo_ordering_equivalence)
         ASSERT_EQ(asx_channel_try_reserve(cid, &p), ASX_OK);
         ASSERT_EQ(asx_send_permit_send(&p, (uint64_t)i), ASX_OK);
     }
-    for (i = 0; i < cap; i++) {
-        ASSERT_EQ(asx_channel_try_recv(cid, &baseline_recv[i]), ASX_OK);
-    }
+    for (i = 0; i < cap; i++) { ASSERT_EQ(asx_channel_try_recv(cid, &baseline_recv[i]), ASX_OK); }
 
     /* Spike: send 0..15, recv should produce 0..15 */
     spike_init(&sq, cap);
-    for (i = 0; i < cap; i++) {
-        ASSERT_EQ(spike_enqueue(&sq, (uint64_t)i), ASX_OK);
-    }
-    for (i = 0; i < cap; i++) {
-        ASSERT_EQ(spike_dequeue(&sq, &spike_recv[i]), ASX_OK);
-    }
+    for (i = 0; i < cap; i++) { ASSERT_EQ(spike_enqueue(&sq, (uint64_t)i), ASX_OK); }
+    for (i = 0; i < cap; i++) { ASSERT_EQ(spike_dequeue(&sq, &spike_recv[i]), ASX_OK); }
 
     /* Compare */
     for (i = 0; i < cap; i++) {
@@ -175,8 +174,7 @@ TEST(fifo_ordering_equivalence)
 /* Test: capacity limit equivalence                                    */
 /* ------------------------------------------------------------------ */
 
-TEST(capacity_limit_equivalence)
-{
+TEST(capacity_limit_equivalence) {
     uint32_t cap = 8;
     uint32_t i;
     asx_channel_id cid;
@@ -199,9 +197,7 @@ TEST(capacity_limit_equivalence)
 
     /* Spike: fill to capacity, next should fail */
     spike_init(&sq, cap);
-    for (i = 0; i < cap; i++) {
-        ASSERT_EQ(spike_enqueue(&sq, (uint64_t)(i + 100)), ASX_OK);
-    }
+    for (i = 0; i < cap; i++) { ASSERT_EQ(spike_enqueue(&sq, (uint64_t)(i + 100)), ASX_OK); }
     ASSERT_EQ(spike_enqueue(&sq, 999), ASX_E_CHANNEL_FULL);
 }
 
@@ -209,8 +205,7 @@ TEST(capacity_limit_equivalence)
 /* Test: empty dequeue equivalence                                     */
 /* ------------------------------------------------------------------ */
 
-TEST(empty_dequeue_equivalence)
-{
+TEST(empty_dequeue_equivalence) {
     uint32_t cap = 4;
     uint64_t val;
     asx_channel_id cid;
@@ -229,8 +224,7 @@ TEST(empty_dequeue_equivalence)
 /* Test: wraparound equivalence (multiple fill/drain cycles)           */
 /* ------------------------------------------------------------------ */
 
-TEST(wraparound_equivalence)
-{
+TEST(wraparound_equivalence) {
     uint32_t cap = 4;
     uint32_t cycles = 20;
     uint32_t c, i;
@@ -268,8 +262,7 @@ TEST(wraparound_equivalence)
 /* Test: interleaved send/recv equivalence                             */
 /* ------------------------------------------------------------------ */
 
-TEST(interleaved_equivalence)
-{
+TEST(interleaved_equivalence) {
     uint32_t cap = 8;
     asx_channel_id cid;
     spike_queue sq;
@@ -328,8 +321,7 @@ TEST(interleaved_equivalence)
 /* Test: power-of-2 rounding for spike capacity                        */
 /* ------------------------------------------------------------------ */
 
-TEST(power_of_2_capacity)
-{
+TEST(power_of_2_capacity) {
     spike_queue sq;
 
     spike_init(&sq, 1);
@@ -357,10 +349,9 @@ TEST(power_of_2_capacity)
 
 /* Portable cycle counter */
 #if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
-static uint64_t rdtsc_val(void)
-{
+static uint64_t rdtsc_val(void) {
     uint32_t lo, hi;
-    __asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
     return ((uint64_t)hi << 32) | lo;
 }
 #define HAS_RDTSC 1
@@ -369,8 +360,7 @@ static uint64_t rdtsc_val(void)
 static uint64_t rdtsc_val(void) { return 0; }
 #endif
 
-TEST(throughput_comparison)
-{
+TEST(throughput_comparison) {
 #if HAS_RDTSC
     uint32_t cap = 64;
     uint32_t rounds = 1000;
@@ -404,9 +394,7 @@ TEST(throughput_comparison)
     spike_init(&sq, cap);
     spike_start = rdtsc_val();
     for (r = 0; r < rounds; r++) {
-        for (i = 0; i < cap; i++) {
-            EQ_IGNORE(spike_enqueue(&sq, (uint64_t)i));
-        }
+        for (i = 0; i < cap; i++) { EQ_IGNORE(spike_enqueue(&sq, (uint64_t)i)); }
         for (i = 0; i < cap; i++) {
             uint64_t val;
             EQ_IGNORE(spike_dequeue(&sq, &val));
@@ -420,8 +408,8 @@ TEST(throughput_comparison)
 
     fprintf(stderr, "    baseline: %.1f cycles/op (%lu ops)\n",
             (double)baseline_cycles / (double)ops, (unsigned long)ops);
-    fprintf(stderr, "    spike:    %.1f cycles/op (%lu ops)\n",
-            (double)spike_cycles / (double)ops, (unsigned long)ops);
+    fprintf(stderr, "    spike:    %.1f cycles/op (%lu ops)\n", (double)spike_cycles / (double)ops,
+            (unsigned long)ops);
     fprintf(stderr, "    ratio:    %.2fx (spike/baseline, <1 = spike faster)\n",
             (double)spike_cycles / (double)baseline_cycles);
 
@@ -437,8 +425,7 @@ TEST(throughput_comparison)
 /* Test: two-phase vs direct enqueue trade-off analysis                */
 /* ------------------------------------------------------------------ */
 
-TEST(two_phase_tradeoff)
-{
+TEST(two_phase_tradeoff) {
     /*
      * Key architectural finding:
      *
@@ -460,15 +447,14 @@ TEST(two_phase_tradeoff)
      * add multi-threading, extend baseline with atomic wrappers
      * rather than replacing with a different queue architecture.
      */
-    ASSERT_TRUE(1);  /* Analysis documented; test passes by construction */
+    ASSERT_TRUE(1); /* Analysis documented; test passes by construction */
 }
 
 /* ------------------------------------------------------------------ */
 /* Test: spike memory overhead vs baseline                             */
 /* ------------------------------------------------------------------ */
 
-TEST(memory_overhead_comparison)
-{
+TEST(memory_overhead_comparison) {
     /*
      * Baseline slot: ~1160 bytes (queue[64] * 8 + permit_tokens[64] * 4 + metadata)
      * Spike slot:    ~1040 bytes (cells[64] * 12 + metadata)
@@ -487,8 +473,7 @@ TEST(memory_overhead_comparison)
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== MPSC equivalence tests (bd-3vt.2) ===\n");
 
     RUN_TEST(fifo_ordering_equivalence);

@@ -13,33 +13,36 @@
 
 #include "../../test_harness.h"
 #include <asx/runtime/parallel.h>
-#include <asx/runtime/runtime.h>
 #include <asx/runtime/rt.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
 
 /* Suppress warn_unused_result */
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Poll functions                                                      */
 /* ------------------------------------------------------------------ */
 
-static asx_status poll_ok(void *data, asx_task_id self)
-{
-    (void)data; (void)self;
+static asx_status poll_ok(void *data, asx_task_id self) {
+    (void)data;
+    (void)self;
     return ASX_OK;
 }
 
 static int g_pending_count = 0;
 static int g_pending_limit = 2;
 
-static asx_status poll_n_pending(void *data, asx_task_id self)
-{
-    (void)data; (void)self;
+static asx_status poll_n_pending(void *data, asx_task_id self) {
+    (void)data;
+    (void)self;
     g_pending_count++;
-    if (g_pending_count < g_pending_limit)
-        return ASX_E_PENDING;
+    if (g_pending_count < g_pending_limit) return ASX_E_PENDING;
     return ASX_OK;
 }
 
@@ -49,8 +52,7 @@ static asx_status poll_n_pending(void *data, asx_task_id self)
 
 static asx_runtime g_rt;
 
-static void setup(void)
-{
+static void setup(void) {
     asx_parallel_config pcfg;
     MUST_OK(asx_runtime_init_default(&g_rt));
     memset(&pcfg, 0, sizeof(pcfg));
@@ -65,10 +67,7 @@ static void setup(void)
     g_pending_limit = 2;
 }
 
-static void teardown(void)
-{
-    asx_runtime_shutdown(&g_rt);
-}
+static void teardown(void) { asx_runtime_shutdown(&g_rt); }
 
 /* ------------------------------------------------------------------ */
 /* Injector API tests                                                  */
@@ -117,9 +116,7 @@ TEST(inject_timed_assigns_to_timed_lane) {
 /* Metrics tests                                                       */
 /* ------------------------------------------------------------------ */
 
-TEST(metrics_null_out_fails) {
-    ASSERT_EQ(asx_parallel_get_metrics(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(metrics_null_out_fails) { ASSERT_EQ(asx_parallel_get_metrics(NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(metrics_zero_after_reset) {
     asx_scheduling_metrics m;
@@ -228,8 +225,7 @@ TEST(capacity_queries) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_scheduler_enhanced ===\n");
 
     /* Injector */

@@ -9,8 +9,8 @@
 
 #include "../../test_harness.h"
 #include <asx/asx.h>
-#include <asx/runtime/trace.h>
 #include <asx/runtime/telemetry.h>
+#include <asx/runtime/trace.h>
 
 /* ---- Tier configuration ---- */
 
@@ -317,9 +317,7 @@ TEST(telemetry_high_volume_filtered) {
     st = asx_telemetry_set_tier(ASX_TELEMETRY_ULTRA_MIN);
     ASSERT_EQ(st, ASX_OK);
 
-    for (i = 0; i < 1000; i++) {
-        asx_telemetry_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0);
-    }
+    for (i = 0; i < 1000; i++) { asx_telemetry_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0); }
 
     ASSERT_EQ(asx_telemetry_emitted_count(), (uint32_t)1000);
     ASSERT_EQ(asx_telemetry_filtered_count(), (uint32_t)1000);

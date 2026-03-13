@@ -13,8 +13,8 @@
 
 /* ASX_CHECKPOINT_WAIVER_FILE() -- arena locality spike, no checkpoint coverage needed */
 
-#include <asx/asx.h>
 #include "test_harness.h"
+#include <asx/asx.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -25,62 +25,62 @@
 
 /* AoS */
 typedef struct {
-    asx_task_state   state;
-    asx_region_id    region;
+    asx_task_state state;
+    asx_region_id region;
     asx_task_poll_fn poll_fn;
-    void            *user_data;
-    asx_outcome      outcome;
-    uint16_t         generation;
-    int              alive;
-    void            *captured_state;
-    uint32_t         captured_size;
+    void *user_data;
+    asx_outcome outcome;
+    uint16_t generation;
+    int alive;
+    void *captured_state;
+    uint32_t captured_size;
     asx_task_state_dtor_fn captured_dtor;
-    asx_cancel_phase   cancel_phase;
-    asx_cancel_reason  cancel_reason;
-    uint32_t           cancel_epoch;
-    uint32_t           cleanup_polls_remaining;
-    int                cancel_pending;
+    asx_cancel_phase cancel_phase;
+    asx_cancel_reason cancel_reason;
+    uint32_t cancel_epoch;
+    uint32_t cleanup_polls_remaining;
+    int cancel_pending;
 } spike_task_slot_aos;
 
 /* Hot/cold */
 typedef struct {
-    asx_task_state   state;
-    int              alive;
-    asx_region_id    region;
+    asx_task_state state;
+    int alive;
+    asx_region_id region;
     asx_task_poll_fn poll_fn;
-    void            *user_data;
+    void *user_data;
 } spike_task_hot;
 
 typedef struct {
-    asx_outcome      outcome;
-    uint16_t         generation;
-    void            *captured_state;
-    uint32_t         captured_size;
+    asx_outcome outcome;
+    uint16_t generation;
+    void *captured_state;
+    uint32_t captured_size;
     asx_task_state_dtor_fn captured_dtor;
-    asx_cancel_phase   cancel_phase;
-    asx_cancel_reason  cancel_reason;
-    uint32_t           cancel_epoch;
-    uint32_t           cleanup_polls_remaining;
-    int                cancel_pending;
+    asx_cancel_phase cancel_phase;
+    asx_cancel_reason cancel_reason;
+    uint32_t cancel_epoch;
+    uint32_t cleanup_polls_remaining;
+    int cancel_pending;
 } spike_task_cold;
 
 /* SoA */
 typedef struct {
-    asx_task_state   states[SPIKE_MAX_TASKS];
-    int              alive[SPIKE_MAX_TASKS];
-    asx_region_id    regions[SPIKE_MAX_TASKS];
+    asx_task_state states[SPIKE_MAX_TASKS];
+    int alive[SPIKE_MAX_TASKS];
+    asx_region_id regions[SPIKE_MAX_TASKS];
     asx_task_poll_fn poll_fns[SPIKE_MAX_TASKS];
-    void            *user_data[SPIKE_MAX_TASKS];
-    asx_outcome      outcomes[SPIKE_MAX_TASKS];
-    uint16_t         generations[SPIKE_MAX_TASKS];
-    void            *captured_states[SPIKE_MAX_TASKS];
-    uint32_t         captured_sizes[SPIKE_MAX_TASKS];
+    void *user_data[SPIKE_MAX_TASKS];
+    asx_outcome outcomes[SPIKE_MAX_TASKS];
+    uint16_t generations[SPIKE_MAX_TASKS];
+    void *captured_states[SPIKE_MAX_TASKS];
+    uint32_t captured_sizes[SPIKE_MAX_TASKS];
     asx_task_state_dtor_fn captured_dtors[SPIKE_MAX_TASKS];
-    asx_cancel_phase   cancel_phases[SPIKE_MAX_TASKS];
-    asx_cancel_reason  cancel_reasons[SPIKE_MAX_TASKS];
-    uint32_t           cancel_epochs[SPIKE_MAX_TASKS];
-    uint32_t           cleanup_polls[SPIKE_MAX_TASKS];
-    int                cancel_pendings[SPIKE_MAX_TASKS];
+    asx_cancel_phase cancel_phases[SPIKE_MAX_TASKS];
+    asx_cancel_reason cancel_reasons[SPIKE_MAX_TASKS];
+    uint32_t cancel_epochs[SPIKE_MAX_TASKS];
+    uint32_t cleanup_polls[SPIKE_MAX_TASKS];
+    int cancel_pendings[SPIKE_MAX_TASKS];
 } spike_task_soa;
 
 /* Functions from spike */
@@ -100,16 +100,15 @@ uint32_t spike_cachelines_soa(uint32_t count);
 /* ------------------------------------------------------------------ */
 
 static spike_task_slot_aos g_aos[SPIKE_MAX_TASKS];
-static spike_task_hot      g_hot[SPIKE_MAX_TASKS];
-static spike_task_cold     g_cold[SPIKE_MAX_TASKS];
-static spike_task_soa      g_soa;
+static spike_task_hot g_hot[SPIKE_MAX_TASKS];
+static spike_task_cold g_cold[SPIKE_MAX_TASKS];
+static spike_task_soa g_soa;
 
 /* Sentinel region IDs for testing */
 #define TEST_REGION_A ((asx_region_id)0x00010001u)
 #define TEST_REGION_B ((asx_region_id)0x00010002u)
 
-static void fixture_init(void)
-{
+static void fixture_init(void) {
     uint32_t i;
 
     memset(g_aos, 0, sizeof(g_aos));
@@ -131,10 +130,14 @@ static void fixture_init(void)
         if (i < 32) {
             region = TEST_REGION_A;
             alive = 1;
-            if (i < 16)      state = ASX_TASK_CREATED;
-            else if (i < 24) state = ASX_TASK_RUNNING;
-            else if (i < 28) state = ASX_TASK_COMPLETED;
-            else              state = ASX_TASK_CANCELLING;
+            if (i < 16)
+                state = ASX_TASK_CREATED;
+            else if (i < 24)
+                state = ASX_TASK_RUNNING;
+            else if (i < 28)
+                state = ASX_TASK_COMPLETED;
+            else
+                state = ASX_TASK_CANCELLING;
         } else if (i < 48) {
             region = TEST_REGION_B;
             alive = 1;
@@ -166,22 +169,19 @@ static void fixture_init(void)
 /* Test: size accounting                                              */
 /* ------------------------------------------------------------------ */
 
-TEST(aos_slot_size)
-{
+TEST(aos_slot_size) {
     /* AoS slot should contain all fields including cancel_reason */
     ASSERT_TRUE(spike_sizeof_aos() > 100);
     fprintf(stderr, "    AoS slot: %u bytes\n", spike_sizeof_aos());
 }
 
-TEST(hot_slot_smaller_than_cacheline)
-{
+TEST(hot_slot_smaller_than_cacheline) {
     /* Hot slot should fit in a cache line (64 bytes) */
     ASSERT_TRUE(spike_sizeof_hot() <= 64);
     fprintf(stderr, "    Hot slot: %u bytes\n", spike_sizeof_hot());
 }
 
-TEST(hot_plus_cold_equals_aos)
-{
+TEST(hot_plus_cold_equals_aos) {
     /* Hot + cold should roughly equal AoS (modulo padding) */
     uint32_t combined = spike_sizeof_hot() + spike_sizeof_cold();
     /* Allow some padding difference */
@@ -189,8 +189,7 @@ TEST(hot_plus_cold_equals_aos)
     fprintf(stderr, "    Hot+Cold: %u bytes (AoS: %u)\n", combined, spike_sizeof_aos());
 }
 
-TEST(soa_total_reasonable)
-{
+TEST(soa_total_reasonable) {
     /* SoA total should be roughly 64 * sizeof(all fields) */
     ASSERT_TRUE(spike_sizeof_soa_total() > 0);
     fprintf(stderr, "    SoA total: %u bytes\n", spike_sizeof_soa_total());
@@ -200,14 +199,13 @@ TEST(soa_total_reasonable)
 /* Test: scan equivalence                                             */
 /* ------------------------------------------------------------------ */
 
-TEST(scan_region_a_equivalent)
-{
+TEST(scan_region_a_equivalent) {
     uint32_t aos_count, hc_count, soa_count;
 
     fixture_init();
 
     aos_count = spike_scan_aos(g_aos, 64, TEST_REGION_A);
-    hc_count  = spike_scan_hotcold(g_hot, 64, TEST_REGION_A);
+    hc_count = spike_scan_hotcold(g_hot, 64, TEST_REGION_A);
     soa_count = spike_scan_soa(&g_soa, 64, TEST_REGION_A);
 
     /* 16 CREATED + 8 RUNNING + 4 CANCELLING = 28 non-completed in region A */
@@ -216,14 +214,13 @@ TEST(scan_region_a_equivalent)
     ASSERT_EQ(soa_count, (uint32_t)28);
 }
 
-TEST(scan_region_b_equivalent)
-{
+TEST(scan_region_b_equivalent) {
     uint32_t aos_count, hc_count, soa_count;
 
     fixture_init();
 
     aos_count = spike_scan_aos(g_aos, 64, TEST_REGION_B);
-    hc_count  = spike_scan_hotcold(g_hot, 64, TEST_REGION_B);
+    hc_count = spike_scan_hotcold(g_hot, 64, TEST_REGION_B);
     soa_count = spike_scan_soa(&g_soa, 64, TEST_REGION_B);
 
     /* 16 READY in region B */
@@ -232,15 +229,14 @@ TEST(scan_region_b_equivalent)
     ASSERT_EQ(soa_count, (uint32_t)16);
 }
 
-TEST(scan_empty_equivalent)
-{
+TEST(scan_empty_equivalent) {
     uint32_t aos_count, hc_count, soa_count;
 
     fixture_init();
 
     /* Region C doesn't exist */
     aos_count = spike_scan_aos(g_aos, 64, (asx_region_id)0x00010099u);
-    hc_count  = spike_scan_hotcold(g_hot, 64, (asx_region_id)0x00010099u);
+    hc_count = spike_scan_hotcold(g_hot, 64, (asx_region_id)0x00010099u);
     soa_count = spike_scan_soa(&g_soa, 64, (asx_region_id)0x00010099u);
 
     ASSERT_EQ(aos_count, (uint32_t)0);
@@ -248,8 +244,7 @@ TEST(scan_empty_equivalent)
     ASSERT_EQ(soa_count, (uint32_t)0);
 }
 
-TEST(scan_zero_tasks)
-{
+TEST(scan_zero_tasks) {
     fixture_init();
     ASSERT_EQ(spike_scan_aos(g_aos, 0, TEST_REGION_A), (uint32_t)0);
     ASSERT_EQ(spike_scan_hotcold(g_hot, 0, TEST_REGION_A), (uint32_t)0);
@@ -260,10 +255,9 @@ TEST(scan_zero_tasks)
 /* Test: cache line analysis                                          */
 /* ------------------------------------------------------------------ */
 
-TEST(cacheline_reduction_hotcold)
-{
+TEST(cacheline_reduction_hotcold) {
     uint32_t aos_lines = spike_cachelines_aos(64);
-    uint32_t hc_lines  = spike_cachelines_hotcold(64);
+    uint32_t hc_lines = spike_cachelines_hotcold(64);
 
     fprintf(stderr, "    AoS cache lines: %u\n", aos_lines);
     fprintf(stderr, "    Hot/cold lines:  %u\n", hc_lines);
@@ -272,8 +266,7 @@ TEST(cacheline_reduction_hotcold)
     ASSERT_TRUE(hc_lines < aos_lines);
 }
 
-TEST(cacheline_reduction_soa)
-{
+TEST(cacheline_reduction_soa) {
     uint32_t aos_lines = spike_cachelines_aos(64);
     uint32_t soa_lines = spike_cachelines_soa(64);
 
@@ -284,9 +277,8 @@ TEST(cacheline_reduction_soa)
     ASSERT_TRUE(soa_lines < aos_lines);
 }
 
-TEST(soa_fewer_lines_than_hotcold)
-{
-    uint32_t hc_lines  = spike_cachelines_hotcold(64);
+TEST(soa_fewer_lines_than_hotcold) {
+    uint32_t hc_lines = spike_cachelines_hotcold(64);
     uint32_t soa_lines = spike_cachelines_soa(64);
 
     fprintf(stderr, "    Hot/cold lines:  %u\n", hc_lines);
@@ -300,13 +292,11 @@ TEST(soa_fewer_lines_than_hotcold)
 /* Test: working set comparison                                       */
 /* ------------------------------------------------------------------ */
 
-TEST(working_set_sizes)
-{
-    uint32_t aos_ws   = 64 * spike_sizeof_aos();
-    uint32_t hc_hot   = 64 * spike_sizeof_hot();
-    uint32_t soa_scan = 64 * ((uint32_t)sizeof(asx_task_state)
-                            + (uint32_t)sizeof(int)
-                            + (uint32_t)sizeof(asx_region_id));
+TEST(working_set_sizes) {
+    uint32_t aos_ws = 64 * spike_sizeof_aos();
+    uint32_t hc_hot = 64 * spike_sizeof_hot();
+    uint32_t soa_scan = 64 * ((uint32_t)sizeof(asx_task_state) + (uint32_t)sizeof(int) +
+                              (uint32_t)sizeof(asx_region_id));
 
     fprintf(stderr, "    AoS working set:      %u bytes\n", aos_ws);
     fprintf(stderr, "    Hot/cold scan set:     %u bytes\n", hc_hot);
@@ -322,16 +312,14 @@ TEST(working_set_sizes)
 /* ------------------------------------------------------------------ */
 
 #if defined(__x86_64__) || defined(_M_X64)
-static inline uint64_t rdtsc_spike(void)
-{
+static inline uint64_t rdtsc_spike(void) {
     uint32_t lo, hi;
     __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
     return ((uint64_t)hi << 32) | lo;
 }
 #define HAS_RDTSC 1
 #elif defined(__aarch64__)
-static inline uint64_t rdtsc_spike(void)
-{
+static inline uint64_t rdtsc_spike(void) {
     uint64_t val;
     __asm__ volatile("mrs %0, cntvct_el0" : "=r"(val));
     return val;
@@ -344,8 +332,7 @@ static inline uint64_t rdtsc_spike(void)
 #if HAS_RDTSC
 #define BENCH_ITERS 100000u
 
-TEST(throughput_benchmark)
-{
+TEST(throughput_benchmark) {
     uint64_t t0, t1;
     uint32_t i;
     volatile uint32_t sink = 0;
@@ -362,25 +349,19 @@ TEST(throughput_benchmark)
 
     /* AoS benchmark */
     t0 = rdtsc_spike();
-    for (i = 0; i < BENCH_ITERS; i++) {
-        sink += spike_scan_aos(g_aos, 64, TEST_REGION_A);
-    }
+    for (i = 0; i < BENCH_ITERS; i++) { sink += spike_scan_aos(g_aos, 64, TEST_REGION_A); }
     t1 = rdtsc_spike();
     aos_cycles = (t1 - t0) / BENCH_ITERS;
 
     /* Hot/cold benchmark */
     t0 = rdtsc_spike();
-    for (i = 0; i < BENCH_ITERS; i++) {
-        sink += spike_scan_hotcold(g_hot, 64, TEST_REGION_A);
-    }
+    for (i = 0; i < BENCH_ITERS; i++) { sink += spike_scan_hotcold(g_hot, 64, TEST_REGION_A); }
     t1 = rdtsc_spike();
     hc_cycles = (t1 - t0) / BENCH_ITERS;
 
     /* SoA benchmark */
     t0 = rdtsc_spike();
-    for (i = 0; i < BENCH_ITERS; i++) {
-        sink += spike_scan_soa(&g_soa, 64, TEST_REGION_A);
-    }
+    for (i = 0; i < BENCH_ITERS; i++) { sink += spike_scan_soa(&g_soa, 64, TEST_REGION_A); }
     t1 = rdtsc_spike();
     soa_cycles = (t1 - t0) / BENCH_ITERS;
 
@@ -401,8 +382,7 @@ TEST(throughput_benchmark)
 /* Test: portability analysis                                         */
 /* ------------------------------------------------------------------ */
 
-TEST(alignment_requirements)
-{
+TEST(alignment_requirements) {
     /* All layouts should be naturally aligned */
     ASSERT_TRUE((sizeof(spike_task_slot_aos) % sizeof(void *)) == 0 ||
                 sizeof(spike_task_slot_aos) >= sizeof(void *));
@@ -410,8 +390,7 @@ TEST(alignment_requirements)
                 sizeof(spike_task_hot) >= sizeof(void *));
 }
 
-TEST(determinism_preserved)
-{
+TEST(determinism_preserved) {
     uint32_t r1, r2;
 
     fixture_init();
@@ -434,8 +413,7 @@ TEST(determinism_preserved)
 /* Main                                                               */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== arena locality tests (bd-3vt.3) ===\n");
 
     /* Size accounting */

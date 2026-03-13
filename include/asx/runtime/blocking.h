@@ -16,8 +16,8 @@
 #define ASX_RUNTIME_BLOCKING_H
 
 #include <asx/asx_export.h>
-#include <asx/asx_status.h>
 #include <asx/asx_ids.h>
+#include <asx/asx_status.h>
 #include <asx/runtime/waker.h>
 
 #ifdef __cplusplus
@@ -39,9 +39,9 @@ typedef uint64_t (*asx_blocking_fn)(void *user_data);
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_BLOCKING_PENDING    = 0,
-    ASX_BLOCKING_RUNNING    = 1,
-    ASX_BLOCKING_COMPLETED  = 2
+    ASX_BLOCKING_PENDING = 0,
+    ASX_BLOCKING_RUNNING = 1,
+    ASX_BLOCKING_COMPLETED = 2
 } asx_blocking_state;
 
 /* -------------------------------------------------------------------
@@ -72,27 +72,23 @@ ASX_API void asx_blocking_pool_shutdown(void);
  * Walking skeleton: executes fn synchronously and signals waker
  * immediately.
  * Returns ASX_OK on success. */
-ASX_API ASX_MUST_USE asx_status asx_spawn_blocking(
-    asx_blocking_fn fn,
-    void *user_data,
-    const asx_waker *completion_waker,
-    asx_blocking_handle *out_handle);
+ASX_API ASX_MUST_USE asx_status asx_spawn_blocking(asx_blocking_fn fn, void *user_data,
+                                                   const asx_waker *completion_waker,
+                                                   asx_blocking_handle *out_handle);
 
 /* -------------------------------------------------------------------
  * API: Query
  * ------------------------------------------------------------------- */
 
 /* Get the state of a blocking task. */
-ASX_API asx_blocking_state asx_blocking_get_state(
-    const asx_blocking_handle *handle);
+ASX_API asx_blocking_state asx_blocking_get_state(const asx_blocking_handle *handle);
 
 /* Get the result of a completed blocking task.
  * Returns ASX_OK and fills *out_result on success.
  * Returns ASX_E_PENDING if task hasn't completed.
  * Returns ASX_E_INVALID_ARGUMENT if handle or out_result is NULL. */
-ASX_API ASX_MUST_USE asx_status asx_blocking_get_result(
-    const asx_blocking_handle *handle,
-    uint64_t *out_result);
+ASX_API ASX_MUST_USE asx_status asx_blocking_get_result(const asx_blocking_handle *handle,
+                                                        uint64_t *out_result);
 
 /* Get the number of active (pending + running) blocking tasks. */
 ASX_API uint32_t asx_blocking_active_count(void);

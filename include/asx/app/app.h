@@ -15,9 +15,13 @@
 
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
+#include <asx/core/budget.h>
+#include <asx/fs/fs.h>
+#include <asx/process/process.h>
+#include <asx/signal/signal.h>
+#include <asx/app/report.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
-#include <asx/core/budget.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,11 +32,11 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_EXIT_OK            = 0,
-    ASX_EXIT_ERROR         = 1,
-    ASX_EXIT_USAGE         = 2,
-    ASX_EXIT_INIT_FAILED   = 3,
-    ASX_EXIT_TASK_FAILED   = 4,
+    ASX_EXIT_OK = 0,
+    ASX_EXIT_ERROR = 1,
+    ASX_EXIT_USAGE = 2,
+    ASX_EXIT_INIT_FAILED = 3,
+    ASX_EXIT_TASK_FAILED = 4,
     ASX_EXIT_DOCTOR_FAILED = 5
 } asx_exit_code;
 
@@ -41,9 +45,10 @@ typedef enum {
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_APP_CMD_RUN    = 0,   /* run the main task */
-    ASX_APP_CMD_DOCTOR = 1,   /* run diagnostic checks */
-    ASX_APP_CMD_REPLAY = 2    /* replay a recorded scenario */
+    ASX_APP_CMD_RUN = 0,    /* run the main task */
+    ASX_APP_CMD_DOCTOR = 1, /* run diagnostic checks */
+    ASX_APP_CMD_REPLAY = 2, /* replay a recorded scenario */
+    ASX_APP_CMD_SERVER = 3  /* run managed server/bootstrap flow */
 } asx_app_command;
 
 /* -------------------------------------------------------------------
@@ -52,10 +57,10 @@ typedef enum {
 
 typedef struct {
     asx_app_command command;
-    const char     *scenario;    /* replay scenario name (for REPLAY) */
-    uint64_t        seed;        /* PRNG seed (0 = default) */
-    int             verbose;     /* verbosity level */
-    int             help;        /* 1 if --help requested */
+    const char *scenario; /* replay scenario name (for REPLAY) */
+    uint64_t seed;        /* PRNG seed (0 = default) */
+    int verbose;          /* verbosity level */
+    int help;             /* 1 if --help requested */
 } asx_app_args;
 
 /* -------------------------------------------------------------------
@@ -63,8 +68,8 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    const char        *name;     /* application name for diagnostics */
-    uint32_t           poll_budget; /* max polls per run (0 = 10000) */
+    const char *name;     /* application name for diagnostics */
+    uint32_t poll_budget; /* max polls per run (0 = 10000) */
 } asx_app_config;
 
 /* -------------------------------------------------------------------
@@ -72,12 +77,34 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    asx_app_config     config;
-    asx_runtime        runtime;
-    asx_region_id      region;
-    int                initialized;
-    asx_exit_code      exit_code;
+    asx_app_config config;
+    asx_runtime runtime;
+    asx_region_id region;
+    int initialized;
+    asx_exit_code exit_code;
 } asx_app;
+
+typedef struct {
+    const asx_fs_path *config_path;
+    const char *bootstrap_process_name;
+    asx_signal_kind shutdown_signal;
+    uint32_t run_poll_budget;
+    uint32_t bootstrap_polls_until_exit;
+    int32_t bootstrap_exit_code;
+    int require_config;
+} asx_app_server_config;
+
+typedef struct {
+    int config_loaded;
+    int bootstrap_process_spawned;
+    int signal_subscription_active;
+    int shutdown_requested;
+    int bootstrap_process_exited;
+    int main_task_spawned;
+    int32_t bootstrap_process_exit_code;
+    asx_status last_status;
+    asx_exit_code exit_code;
+} asx_app_server_report;
 
 /* -------------------------------------------------------------------
  * Application lifecycle
@@ -86,27 +113,35 @@ typedef struct {
 /* Initialize an application with the given config.
  * Sets up the runtime, opens a root region, and prepares for
  * task execution. */
-ASX_API ASX_MUST_USE asx_status asx_app_init(
-    asx_app *app, const asx_app_config *config);
+ASX_API ASX_MUST_USE asx_status asx_app_init(asx_app *app, const asx_app_config *config);
 
 /* Parse CLI arguments into an args struct.
  * Recognizes: run, doctor, replay, --seed=N, --verbose, --help.
  * Returns ASX_OK on success. */
-ASX_API ASX_MUST_USE asx_status asx_app_parse_args(
-    asx_app_args *args, int argc, const char **argv);
+ASX_API ASX_MUST_USE asx_status asx_app_parse_args(asx_app_args *args, int argc, const char **argv);
 
 /* Run the application's main task.
  * Spawns the user's poll function as a task in the app's region,
  * drives the scheduler until the task completes or budget is exhausted,
  * then shuts down. Returns the exit code. */
-ASX_API asx_exit_code asx_app_run(
-    asx_app *app, asx_task_poll_fn main_fn, void *user_data);
+ASX_API asx_exit_code asx_app_run(asx_app *app, asx_task_poll_fn main_fn, void *user_data);
 
 /* Shut down the application and release resources. */
 ASX_API void asx_app_shutdown(asx_app *app);
 
 /* Get the app's root region (for spawning additional tasks). */
 ASX_API asx_region_id asx_app_region(const asx_app *app);
+
+/* Run a managed native server/bootstrap flow.
+ * Loads config from ghost fs when configured, optionally spawns a bootstrap
+ * sidecar process, subscribes to a shutdown signal, runs the main task, and
+ * emits a human-readable summary into out_summary when provided. */
+ASX_API asx_exit_code asx_app_run_server(asx_app *app,
+                                         const asx_app_server_config *server_config,
+                                         asx_task_poll_fn main_fn,
+                                         void *user_data,
+                                         asx_app_server_report *out_report,
+                                         asx_report_buf *out_summary);
 
 #ifdef __cplusplus
 }

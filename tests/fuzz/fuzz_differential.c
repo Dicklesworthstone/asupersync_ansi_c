@@ -30,14 +30,14 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
-#include <time.h>
-#include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
 
 #include <asx/asx.h>
 #include <asx/time/timer_wheel.h>
@@ -46,14 +46,14 @@
  * Configuration
  * =================================================================== */
 
-#define FUZZ_MAX_OPS           128u
-#define FUZZ_MAX_REGIONS       ASX_MAX_REGIONS
-#define FUZZ_MAX_TASKS         ASX_MAX_TASKS
-#define FUZZ_MAX_OBLIGATIONS   64u
-#define FUZZ_MAX_CHANNELS      ASX_MAX_CHANNELS
-#define FUZZ_MAX_TIMERS        32u
-#define FUZZ_MAX_RESULTS       FUZZ_MAX_OPS
-#define FUZZ_DIGEST_LEN        32u
+#define FUZZ_MAX_OPS 128u
+#define FUZZ_MAX_REGIONS ASX_MAX_REGIONS
+#define FUZZ_MAX_TASKS ASX_MAX_TASKS
+#define FUZZ_MAX_OBLIGATIONS 64u
+#define FUZZ_MAX_CHANNELS ASX_MAX_CHANNELS
+#define FUZZ_MAX_TIMERS 32u
+#define FUZZ_MAX_RESULTS FUZZ_MAX_OPS
+#define FUZZ_DIGEST_LEN 32u
 
 /* ===================================================================
  * PRNG (xoshiro256** — deterministic, fast, high quality)
@@ -63,13 +63,9 @@ typedef struct {
     uint64_t s[4];
 } fuzz_rng;
 
-static uint64_t fuzz_rotl(uint64_t x, int k)
-{
-    return (x << k) | (x >> (64 - k));
-}
+static uint64_t fuzz_rotl(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
 
-static uint64_t fuzz_rng_next(fuzz_rng *rng)
-{
+static uint64_t fuzz_rng_next(fuzz_rng *rng) {
     uint64_t result = fuzz_rotl(rng->s[1] * 5u, 7) * 9u;
     uint64_t t = rng->s[1] << 17;
     rng->s[2] ^= rng->s[0];
@@ -81,8 +77,7 @@ static uint64_t fuzz_rng_next(fuzz_rng *rng)
     return result;
 }
 
-static void fuzz_rng_seed(fuzz_rng *rng, uint64_t seed)
-{
+static void fuzz_rng_seed(fuzz_rng *rng, uint64_t seed) {
     /* splitmix64 to initialize state from a single seed */
     uint64_t z = seed;
     int i;
@@ -94,8 +89,7 @@ static void fuzz_rng_seed(fuzz_rng *rng, uint64_t seed)
     }
 }
 
-static uint32_t fuzz_rng_u32(fuzz_rng *rng, uint32_t bound)
-{
+static uint32_t fuzz_rng_u32(fuzz_rng *rng, uint32_t bound) {
     if (bound == 0u) return 0u;
     return (uint32_t)(fuzz_rng_next(rng) % (uint64_t)bound);
 }
@@ -108,91 +102,76 @@ typedef struct {
     uint64_t hash;
 } fuzz_hasher;
 
-static void fuzz_hasher_init(fuzz_hasher *h)
-{
-    h->hash = 0xcbf29ce484222325ULL;
-}
+static void fuzz_hasher_init(fuzz_hasher *h) { h->hash = 0xcbf29ce484222325ULL; }
 
-static void fuzz_hasher_u8(fuzz_hasher *h, uint8_t b)
-{
+static void fuzz_hasher_u8(fuzz_hasher *h, uint8_t b) {
     h->hash ^= (uint64_t)b;
     h->hash *= 0x100000001b3ULL;
 }
 
-static void fuzz_hasher_u32(fuzz_hasher *h, uint32_t v)
-{
+static void fuzz_hasher_u32(fuzz_hasher *h, uint32_t v) {
     fuzz_hasher_u8(h, (uint8_t)(v & 0xFFu));
     fuzz_hasher_u8(h, (uint8_t)((v >> 8) & 0xFFu));
     fuzz_hasher_u8(h, (uint8_t)((v >> 16) & 0xFFu));
     fuzz_hasher_u8(h, (uint8_t)((v >> 24) & 0xFFu));
 }
 
-static void fuzz_hasher_i32(fuzz_hasher *h, int32_t v)
-{
-    fuzz_hasher_u32(h, (uint32_t)v);
-}
+static void fuzz_hasher_i32(fuzz_hasher *h, int32_t v) { fuzz_hasher_u32(h, (uint32_t)v); }
 
-static void fuzz_hasher_u64(fuzz_hasher *h, uint64_t v)
-{
+static void fuzz_hasher_u64(fuzz_hasher *h, uint64_t v) {
     fuzz_hasher_u32(h, (uint32_t)(v & 0xFFFFFFFFu));
     fuzz_hasher_u32(h, (uint32_t)(v >> 32));
 }
 
-static uint64_t fuzz_hasher_finish(const fuzz_hasher *h)
-{
-    return h->hash;
-}
+static uint64_t fuzz_hasher_finish(const fuzz_hasher *h) { return h->hash; }
 
 /* ===================================================================
  * Scenario operation types
  * =================================================================== */
 
 typedef enum {
-    FUZZ_OP_SPAWN_REGION        = 0,
-    FUZZ_OP_CLOSE_REGION        = 1,
-    FUZZ_OP_POISON_REGION       = 2,
-    FUZZ_OP_SPAWN_TASK          = 3,
-    FUZZ_OP_CANCEL_TASK         = 4,
-    FUZZ_OP_RESERVE_OBLIGATION  = 5,
-    FUZZ_OP_COMMIT_OBLIGATION   = 6,
-    FUZZ_OP_ABORT_OBLIGATION    = 7,
-    FUZZ_OP_CHANNEL_CREATE      = 8,
-    FUZZ_OP_CHANNEL_RESERVE     = 9,
-    FUZZ_OP_CHANNEL_SEND        = 10,
-    FUZZ_OP_CHANNEL_ABORT       = 11,
-    FUZZ_OP_CHANNEL_RECV        = 12,
-    FUZZ_OP_CHANNEL_CLOSE_TX    = 13,
-    FUZZ_OP_CHANNEL_CLOSE_RX    = 14,
-    FUZZ_OP_TIMER_REGISTER      = 15,
-    FUZZ_OP_TIMER_CANCEL        = 16,
-    FUZZ_OP_ADVANCE_TIME        = 17,
-    FUZZ_OP_SCHEDULER_RUN       = 18,
-    FUZZ_OP_REGION_DRAIN        = 19,
-    FUZZ_OP_QUIESCENCE_CHECK    = 20,
-    FUZZ_OP_KIND_COUNT          = 21
+    FUZZ_OP_SPAWN_REGION = 0,
+    FUZZ_OP_CLOSE_REGION = 1,
+    FUZZ_OP_POISON_REGION = 2,
+    FUZZ_OP_SPAWN_TASK = 3,
+    FUZZ_OP_CANCEL_TASK = 4,
+    FUZZ_OP_RESERVE_OBLIGATION = 5,
+    FUZZ_OP_COMMIT_OBLIGATION = 6,
+    FUZZ_OP_ABORT_OBLIGATION = 7,
+    FUZZ_OP_CHANNEL_CREATE = 8,
+    FUZZ_OP_CHANNEL_RESERVE = 9,
+    FUZZ_OP_CHANNEL_SEND = 10,
+    FUZZ_OP_CHANNEL_ABORT = 11,
+    FUZZ_OP_CHANNEL_RECV = 12,
+    FUZZ_OP_CHANNEL_CLOSE_TX = 13,
+    FUZZ_OP_CHANNEL_CLOSE_RX = 14,
+    FUZZ_OP_TIMER_REGISTER = 15,
+    FUZZ_OP_TIMER_CANCEL = 16,
+    FUZZ_OP_ADVANCE_TIME = 17,
+    FUZZ_OP_SCHEDULER_RUN = 18,
+    FUZZ_OP_REGION_DRAIN = 19,
+    FUZZ_OP_QUIESCENCE_CHECK = 20,
+    FUZZ_OP_KIND_COUNT = 21
 } fuzz_op_kind;
 
-static const char *fuzz_op_name(fuzz_op_kind kind)
-{
-    static const char *names[] = {
-        "SpawnRegion", "CloseRegion", "PoisonRegion",
-        "SpawnTask", "CancelTask",
-        "ReserveObligation", "CommitObligation", "AbortObligation",
-        "ChannelCreate", "ChannelReserve", "ChannelSend",
-        "ChannelAbort", "ChannelRecv", "ChannelCloseTx", "ChannelCloseRx",
-        "TimerRegister", "TimerCancel", "AdvanceTime",
-        "SchedulerRun", "RegionDrain", "QuiescenceCheck"
-    };
+static const char *fuzz_op_name(fuzz_op_kind kind) {
+    static const char *names[] = {"SpawnRegion",      "CloseRegion",     "PoisonRegion",
+                                  "SpawnTask",        "CancelTask",      "ReserveObligation",
+                                  "CommitObligation", "AbortObligation", "ChannelCreate",
+                                  "ChannelReserve",   "ChannelSend",     "ChannelAbort",
+                                  "ChannelRecv",      "ChannelCloseTx",  "ChannelCloseRx",
+                                  "TimerRegister",    "TimerCancel",     "AdvanceTime",
+                                  "SchedulerRun",     "RegionDrain",     "QuiescenceCheck"};
     if ((int)kind < 0 || (int)kind >= FUZZ_OP_KIND_COUNT) return "Unknown";
     return names[(int)kind];
 }
 
 typedef struct {
     fuzz_op_kind kind;
-    uint32_t     idx_a;    /* primary handle index (region/task/etc) */
-    uint32_t     idx_b;    /* secondary handle index */
-    uint32_t     arg_u32;  /* capacity, cancel_kind, poll_quota, etc */
-    uint64_t     arg_u64;  /* time, deadline, value */
+    uint32_t idx_a;   /* primary handle index (region/task/etc) */
+    uint32_t idx_b;   /* secondary handle index */
+    uint32_t arg_u32; /* capacity, cancel_kind, poll_quota, etc */
+    uint64_t arg_u64; /* time, deadline, value */
 } fuzz_op;
 
 /* ===================================================================
@@ -202,7 +181,7 @@ typedef struct {
 typedef struct {
     uint64_t seed;
     uint32_t op_count;
-    fuzz_op  ops[FUZZ_MAX_OPS];
+    fuzz_op ops[FUZZ_MAX_OPS];
 } fuzz_scenario;
 
 typedef struct {
@@ -210,11 +189,11 @@ typedef struct {
 } fuzz_op_result;
 
 typedef struct {
-    uint32_t       op_count;
+    uint32_t op_count;
     fuzz_op_result results[FUZZ_MAX_RESULTS];
-    uint32_t       event_count;
-    uint64_t       digest;
-    int            crashed;  /* set via signal handler if needed */
+    uint32_t event_count;
+    uint64_t digest;
+    int crashed; /* set via signal handler if needed */
 } fuzz_execution;
 
 /* ===================================================================
@@ -222,25 +201,25 @@ typedef struct {
  * =================================================================== */
 
 typedef struct {
-    asx_region_id     regions[FUZZ_MAX_REGIONS];
-    uint32_t          region_count;
+    asx_region_id regions[FUZZ_MAX_REGIONS];
+    uint32_t region_count;
 
-    asx_task_id       tasks[FUZZ_MAX_TASKS];
-    uint32_t          task_count;
+    asx_task_id tasks[FUZZ_MAX_TASKS];
+    uint32_t task_count;
 
     asx_obligation_id obligations[FUZZ_MAX_OBLIGATIONS];
-    uint32_t          obligation_count;
+    uint32_t obligation_count;
 
-    asx_channel_id    channels[FUZZ_MAX_CHANNELS];
-    uint32_t          channel_count;
+    asx_channel_id channels[FUZZ_MAX_CHANNELS];
+    uint32_t channel_count;
 
-    asx_send_permit   permits[FUZZ_MAX_CHANNELS];
-    uint32_t          permit_count;
+    asx_send_permit permits[FUZZ_MAX_CHANNELS];
+    uint32_t permit_count;
 
-    asx_timer_handle  timers[FUZZ_MAX_TIMERS];
-    uint32_t          timer_count;
+    asx_timer_handle timers[FUZZ_MAX_TIMERS];
+    uint32_t timer_count;
 
-    uint64_t          sim_time;
+    uint64_t sim_time;
 } fuzz_handle_state;
 
 /* ===================================================================
@@ -255,8 +234,7 @@ typedef struct {
     asx_co_state co;
 } fuzz_task_state;
 
-static asx_status fuzz_task_poll(void *user_data, asx_task_id self)
-{
+static asx_status fuzz_task_poll(void *user_data, asx_task_id self) {
     fuzz_task_state *st = (fuzz_task_state *)user_data;
     (void)self;
 
@@ -271,8 +249,7 @@ static asx_status fuzz_task_poll(void *user_data, asx_task_id self)
 static fuzz_task_state g_task_states[FUZZ_MAX_TASKS];
 static uint32_t g_task_state_next = 0u;
 
-static fuzz_task_state *fuzz_alloc_task_state(uint32_t polls)
-{
+static fuzz_task_state *fuzz_alloc_task_state(uint32_t polls) {
     fuzz_task_state *st;
     if (g_task_state_next >= FUZZ_MAX_TASKS) return NULL;
     st = &g_task_states[g_task_state_next++];
@@ -281,10 +258,7 @@ static fuzz_task_state *fuzz_alloc_task_state(uint32_t polls)
     return st;
 }
 
-static void fuzz_reset_task_states(void)
-{
-    g_task_state_next = 0u;
-}
+static void fuzz_reset_task_states(void) { g_task_state_next = 0u; }
 
 /* ===================================================================
  * Scenario generation
@@ -293,38 +267,34 @@ static void fuzz_reset_task_states(void)
 /* Weight table for op kind selection.
  * Biased toward lifecycle and cancellation for coverage. */
 static const uint32_t OP_WEIGHTS[FUZZ_OP_KIND_COUNT] = {
-    /* SpawnRegion */    12,
-    /* CloseRegion */     8,
-    /* PoisonRegion */    3,
-    /* SpawnTask */      15,
-    /* CancelTask */     10,
-    /* ReserveObl */      8,
-    /* CommitObl */       7,
-    /* AbortObl */        5,
-    /* ChCreate */        6,
-    /* ChReserve */       5,
-    /* ChSend */          5,
-    /* ChAbort */         3,
-    /* ChRecv */          5,
-    /* ChCloseTx */       3,
-    /* ChCloseRx */       3,
-    /* TimerReg */        6,
-    /* TimerCancel */     4,
-    /* AdvanceTime */     5,
-    /* SchedRun */       12,
-    /* RegionDrain */     5,
-    /* QuiesCheck */      4
-};
+    /* SpawnRegion */ 12,
+    /* CloseRegion */ 8,
+    /* PoisonRegion */ 3,
+    /* SpawnTask */ 15,
+    /* CancelTask */ 10,
+    /* ReserveObl */ 8,
+    /* CommitObl */ 7,
+    /* AbortObl */ 5,
+    /* ChCreate */ 6,
+    /* ChReserve */ 5,
+    /* ChSend */ 5,
+    /* ChAbort */ 3,
+    /* ChRecv */ 5,
+    /* ChCloseTx */ 3,
+    /* ChCloseRx */ 3,
+    /* TimerReg */ 6,
+    /* TimerCancel */ 4,
+    /* AdvanceTime */ 5,
+    /* SchedRun */ 12,
+    /* RegionDrain */ 5,
+    /* QuiesCheck */ 4};
 
-static fuzz_op_kind fuzz_pick_op(fuzz_rng *rng)
-{
+static fuzz_op_kind fuzz_pick_op(fuzz_rng *rng) {
     uint32_t total = 0u;
     uint32_t r, acc;
     int i;
 
-    for (i = 0; i < FUZZ_OP_KIND_COUNT; i++) {
-        total += OP_WEIGHTS[i];
-    }
+    for (i = 0; i < FUZZ_OP_KIND_COUNT; i++) { total += OP_WEIGHTS[i]; }
     r = fuzz_rng_u32(rng, total);
     acc = 0u;
     for (i = 0; i < FUZZ_OP_KIND_COUNT; i++) {
@@ -334,9 +304,7 @@ static fuzz_op_kind fuzz_pick_op(fuzz_rng *rng)
     return FUZZ_OP_SPAWN_REGION;
 }
 
-static void fuzz_generate_scenario(fuzz_rng *rng, fuzz_scenario *sc,
-                                   uint32_t max_ops)
-{
+static void fuzz_generate_scenario(fuzz_rng *rng, fuzz_scenario *sc, uint32_t max_ops) {
     uint32_t n, i;
 
     sc->seed = fuzz_rng_next(rng);
@@ -369,34 +337,30 @@ static void fuzz_generate_scenario(fuzz_rng *rng, fuzz_scenario *sc,
  * =================================================================== */
 
 typedef enum {
-    FUZZ_MUT_REMOVE_OP    = 0,
+    FUZZ_MUT_REMOVE_OP = 0,
     FUZZ_MUT_DUPLICATE_OP = 1,
-    FUZZ_MUT_SWAP_OPS     = 2,
-    FUZZ_MUT_CHANGE_KIND  = 3,
-    FUZZ_MUT_TWEAK_ARG    = 4,
-    FUZZ_MUT_INSERT_OP    = 5,
-    FUZZ_MUT_CHANGE_IDX   = 6,
-    FUZZ_MUT_COUNT        = 7
+    FUZZ_MUT_SWAP_OPS = 2,
+    FUZZ_MUT_CHANGE_KIND = 3,
+    FUZZ_MUT_TWEAK_ARG = 4,
+    FUZZ_MUT_INSERT_OP = 5,
+    FUZZ_MUT_CHANGE_IDX = 6,
+    FUZZ_MUT_COUNT = 7
 } fuzz_mutation_kind;
 
-static const char *fuzz_mutation_name(fuzz_mutation_kind kind)
-{
-    static const char *names[] = {
-        "remove_op", "duplicate_op", "swap_ops",
-        "change_kind", "tweak_arg", "insert_op", "change_idx"
-    };
+static const char *fuzz_mutation_name(fuzz_mutation_kind kind) {
+    static const char *names[] = {"remove_op", "duplicate_op", "swap_ops",  "change_kind",
+                                  "tweak_arg", "insert_op",    "change_idx"};
     if ((int)kind < 0 || (int)kind >= FUZZ_MUT_COUNT) return "unknown";
     return names[(int)kind];
 }
 
 typedef struct {
     fuzz_mutation_kind kind;
-    uint32_t           target_idx;
-    uint32_t           secondary;
+    uint32_t target_idx;
+    uint32_t secondary;
 } fuzz_mutation_record;
 
-static fuzz_mutation_record fuzz_mutate(fuzz_rng *rng, fuzz_scenario *sc)
-{
+static fuzz_mutation_record fuzz_mutate(fuzz_rng *rng, fuzz_scenario *sc) {
     fuzz_mutation_record rec;
     fuzz_mutation_kind mut;
     uint32_t idx, idx2;
@@ -407,9 +371,7 @@ static fuzz_mutation_record fuzz_mutate(fuzz_rng *rng, fuzz_scenario *sc)
         /* Can't mutate a trivial scenario meaningfully */
         rec.kind = FUZZ_MUT_TWEAK_ARG;
         rec.target_idx = 0u;
-        if (sc->op_count > 0u) {
-            sc->ops[0].arg_u32 = fuzz_rng_u32(rng, 64u);
-        }
+        if (sc->op_count > 0u) { sc->ops[0].arg_u32 = fuzz_rng_u32(rng, 64u); }
         return rec;
     }
 
@@ -430,8 +392,7 @@ static fuzz_mutation_record fuzz_mutate(fuzz_rng *rng, fuzz_scenario *sc)
         if (sc->op_count < FUZZ_MAX_OPS) {
             idx = fuzz_rng_u32(rng, sc->op_count);
             rec.target_idx = idx;
-            memmove(&sc->ops[sc->op_count + 1u], &sc->ops[sc->op_count],
-                    0u); /* just need space */
+            memmove(&sc->ops[sc->op_count + 1u], &sc->ops[sc->op_count], 0u); /* just need space */
             /* Insert copy at end */
             sc->ops[sc->op_count] = sc->ops[idx];
             sc->op_count++;
@@ -460,15 +421,9 @@ static fuzz_mutation_record fuzz_mutate(fuzz_rng *rng, fuzz_scenario *sc)
         idx = fuzz_rng_u32(rng, sc->op_count);
         rec.target_idx = idx;
         switch (fuzz_rng_u32(rng, 3u)) {
-        case 0u:
-            sc->ops[idx].arg_u32 = fuzz_rng_u32(rng, 128u);
-            break;
-        case 1u:
-            sc->ops[idx].arg_u64 = fuzz_rng_next(rng) % 100000u;
-            break;
-        default:
-            sc->ops[idx].arg_u32 ^= (1u << fuzz_rng_u32(rng, 32u));
-            break;
+        case 0u: sc->ops[idx].arg_u32 = fuzz_rng_u32(rng, 128u); break;
+        case 1u: sc->ops[idx].arg_u64 = fuzz_rng_next(rng) % 100000u; break;
+        default: sc->ops[idx].arg_u32 ^= (1u << fuzz_rng_u32(rng, 32u)); break;
         }
         break;
 
@@ -498,8 +453,7 @@ static fuzz_mutation_record fuzz_mutate(fuzz_rng *rng, fuzz_scenario *sc)
         }
         break;
 
-    default:
-        break;
+    default: break;
     }
 
     return rec;
@@ -512,8 +466,7 @@ static fuzz_mutation_record fuzz_mutate(fuzz_rng *rng, fuzz_scenario *sc)
  * codes and computing a semantic digest.
  * =================================================================== */
 
-static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec)
-{
+static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec) {
     fuzz_handle_state hs;
     fuzz_hasher hasher;
     uint32_t i;
@@ -543,9 +496,7 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec)
             asx_region_id rid = ASX_INVALID_ID;
             if (hs.region_count < FUZZ_MAX_REGIONS) {
                 st = asx_region_open(&rid);
-                if (st == ASX_OK) {
-                    hs.regions[hs.region_count++] = rid;
-                }
+                if (st == ASX_OK) { hs.regions[hs.region_count++] = rid; }
             } else {
                 st = ASX_E_REGION_AT_CAPACITY;
             }
@@ -579,11 +530,8 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec)
                 fuzz_task_state *tst = fuzz_alloc_task_state(polls);
                 asx_task_id tid = ASX_INVALID_ID;
                 if (tst != NULL) {
-                    st = asx_task_spawn(hs.regions[ridx], fuzz_task_poll,
-                                        tst, &tid);
-                    if (st == ASX_OK) {
-                        hs.tasks[hs.task_count++] = tid;
-                    }
+                    st = asx_task_spawn(hs.regions[ridx], fuzz_task_poll, tst, &tid);
+                    if (st == ASX_OK) { hs.tasks[hs.task_count++] = tid; }
                 } else {
                     st = ASX_E_RESOURCE_EXHAUSTED;
                 }
@@ -609,9 +557,7 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec)
                 uint32_t ridx = op->idx_a % hs.region_count;
                 asx_obligation_id oid = ASX_INVALID_ID;
                 st = asx_obligation_reserve(hs.regions[ridx], &oid);
-                if (st == ASX_OK) {
-                    hs.obligations[hs.obligation_count++] = oid;
-                }
+                if (st == ASX_OK) { hs.obligations[hs.obligation_count++] = oid; }
             } else {
                 st = ASX_E_NOT_FOUND;
             }
@@ -644,9 +590,7 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec)
                 uint32_t cap = 1u + (op->arg_u32 % (ASX_CHANNEL_MAX_CAPACITY - 1u));
                 asx_channel_id cid = ASX_INVALID_ID;
                 st = asx_channel_create(hs.regions[ridx], cap, &cid);
-                if (st == ASX_OK) {
-                    hs.channels[hs.channel_count++] = cid;
-                }
+                if (st == ASX_OK) { hs.channels[hs.channel_count++] = cid; }
             } else {
                 st = ASX_E_NOT_FOUND;
             }
@@ -659,9 +603,7 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec)
                 asx_send_permit permit;
                 memset(&permit, 0, sizeof(permit));
                 st = asx_channel_try_reserve(hs.channels[cidx], &permit);
-                if (st == ASX_OK) {
-                    hs.permits[hs.permit_count++] = permit;
-                }
+                if (st == ASX_OK) { hs.permits[hs.permit_count++] = permit; }
             } else {
                 st = ASX_E_NOT_FOUND;
             }
@@ -725,11 +667,8 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec)
                 asx_timer_handle th;
                 asx_time deadline = hs.sim_time + 1u + (op->arg_u64 % 5000u);
                 memset(&th, 0, sizeof(th));
-                st = asx_timer_register(asx_timer_wheel_global(),
-                                        deadline, NULL, &th);
-                if (st == ASX_OK) {
-                    hs.timers[hs.timer_count++] = th;
-                }
+                st = asx_timer_register(asx_timer_wheel_global(), deadline, NULL, &th);
+                if (st == ASX_OK) { hs.timers[hs.timer_count++] = th; }
             } else {
                 st = ASX_E_RESOURCE_EXHAUSTED;
             }
@@ -739,8 +678,7 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec)
         case FUZZ_OP_TIMER_CANCEL: {
             if (hs.timer_count > 0u) {
                 uint32_t tidx = op->idx_a % hs.timer_count;
-                int cancelled = asx_timer_cancel(asx_timer_wheel_global(),
-                                                  &hs.timers[tidx]);
+                int cancelled = asx_timer_cancel(asx_timer_wheel_global(), &hs.timers[tidx]);
                 st = cancelled ? ASX_OK : ASX_E_TIMER_NOT_FOUND;
             } else {
                 st = ASX_E_NOT_FOUND;
@@ -752,9 +690,7 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec)
             uint64_t advance = 1u + (op->arg_u64 % 2000u);
             void *wakers[16];
             hs.sim_time += advance;
-            asx_timer_collect_expired(asx_timer_wheel_global(),
-                                      hs.sim_time,
-                                      wakers, 16u);
+            asx_timer_collect_expired(asx_timer_wheel_global(), hs.sim_time, wakers, 16u);
             st = ASX_OK;
             break;
         }
@@ -796,9 +732,7 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec)
             break;
         }
 
-        default:
-            st = ASX_E_INVALID_ARGUMENT;
-            break;
+        default: st = ASX_E_INVALID_ARGUMENT; break;
         }
 
         exec->results[i].result = st;
@@ -827,8 +761,7 @@ static void fuzz_execute(const fuzz_scenario *sc, fuzz_execution *exec)
  * Time helpers
  * =================================================================== */
 
-static double fuzz_clock_sec(void)
-{
+static double fuzz_clock_sec(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
@@ -838,89 +771,63 @@ static double fuzz_clock_sec(void)
  * JSONL reporting
  * =================================================================== */
 
-static void fuzz_dump_scenario_ops(FILE *out, const fuzz_scenario *sc,
-                                   const fuzz_execution *exec)
-{
+static void fuzz_dump_scenario_ops(FILE *out, const fuzz_scenario *sc, const fuzz_execution *exec) {
     uint32_t i;
     fprintf(out, ",\"ops\":[");
     for (i = 0u; i < sc->op_count; i++) {
         if (i > 0u) fprintf(out, ",");
         fprintf(out,
-            "{\"op\":\"%s\",\"idx_a\":%u,\"idx_b\":%u,"
-            "\"arg_u32\":%u,\"arg_u64\":%llu,\"result\":%d}",
-            fuzz_op_name(sc->ops[i].kind),
-            sc->ops[i].idx_a, sc->ops[i].idx_b,
-            sc->ops[i].arg_u32,
-            (unsigned long long)sc->ops[i].arg_u64,
-            i < exec->op_count ? (int)exec->results[i].result : -1);
+                "{\"op\":\"%s\",\"idx_a\":%u,\"idx_b\":%u,"
+                "\"arg_u32\":%u,\"arg_u64\":%llu,\"result\":%d}",
+                fuzz_op_name(sc->ops[i].kind), sc->ops[i].idx_a, sc->ops[i].idx_b,
+                sc->ops[i].arg_u32, (unsigned long long)sc->ops[i].arg_u64,
+                i < exec->op_count ? (int)exec->results[i].result : -1);
     }
     fprintf(out, "]");
 }
 
-static void fuzz_report_mismatch(FILE *out,
-                                 const char *kind,
-                                 uint64_t iteration,
-                                 uint64_t seed,
-                                 uint64_t digest_a,
-                                 uint64_t digest_b,
-                                 const fuzz_scenario *sc,
-                                 const fuzz_execution *exec,
-                                 const fuzz_mutation_record *mutations,
-                                 uint32_t mutation_count)
-{
+static void fuzz_report_mismatch(FILE *out, const char *kind, uint64_t iteration, uint64_t seed,
+                                 uint64_t digest_a, uint64_t digest_b, const fuzz_scenario *sc,
+                                 const fuzz_execution *exec, const fuzz_mutation_record *mutations,
+                                 uint32_t mutation_count) {
     uint32_t m;
     fprintf(out,
-        "{\"kind\":\"%s\","
-        "\"iteration\":%llu,"
-        "\"seed\":%llu,"
-        "\"digest_a\":\"%016llx\","
-        "\"digest_b\":\"%016llx\","
-        "\"mutations\":[",
-        kind,
-        (unsigned long long)iteration,
-        (unsigned long long)seed,
-        (unsigned long long)digest_a,
-        (unsigned long long)digest_b);
+            "{\"kind\":\"%s\","
+            "\"iteration\":%llu,"
+            "\"seed\":%llu,"
+            "\"digest_a\":\"%016llx\","
+            "\"digest_b\":\"%016llx\","
+            "\"mutations\":[",
+            kind, (unsigned long long)iteration, (unsigned long long)seed,
+            (unsigned long long)digest_a, (unsigned long long)digest_b);
     for (m = 0u; m < mutation_count; m++) {
         if (m > 0u) fprintf(out, ",");
-        fprintf(out,
-            "{\"kind\":\"%s\",\"target\":%u,\"secondary\":%u}",
-            fuzz_mutation_name(mutations[m].kind),
-            mutations[m].target_idx,
-            mutations[m].secondary);
+        fprintf(out, "{\"kind\":\"%s\",\"target\":%u,\"secondary\":%u}",
+                fuzz_mutation_name(mutations[m].kind), mutations[m].target_idx,
+                mutations[m].secondary);
     }
     fprintf(out, "]");
-    if (sc != NULL && exec != NULL) {
-        fuzz_dump_scenario_ops(out, sc, exec);
-    }
+    if (sc != NULL && exec != NULL) { fuzz_dump_scenario_ops(out, sc, exec); }
     fprintf(out, "}\n");
     fflush(out);
 }
 
-static void fuzz_report_summary(FILE *out,
-                                uint64_t initial_seed,
-                                uint64_t iterations,
-                                uint64_t determinism_failures,
-                                uint64_t crash_count,
-                                uint64_t rust_divergences,
-                                double duration_sec)
-{
+static void fuzz_report_summary(FILE *out, uint64_t initial_seed, uint64_t iterations,
+                                uint64_t determinism_failures, uint64_t crash_count,
+                                uint64_t rust_divergences, double duration_sec) {
     fprintf(out,
-        "{\"kind\":\"summary\","
-        "\"initial_seed\":%llu,"
-        "\"iterations\":%llu,"
-        "\"determinism_failures\":%llu,"
-        "\"crashes\":%llu,"
-        "\"rust_divergences\":%llu,"
-        "\"duration_sec\":%.3f,"
-        "\"iterations_per_sec\":%.1f}\n",
-        (unsigned long long)initial_seed,
-        (unsigned long long)iterations,
-        (unsigned long long)determinism_failures,
-        (unsigned long long)crash_count,
-        (unsigned long long)rust_divergences,
-        duration_sec,
-        iterations > 0 ? (double)iterations / duration_sec : 0.0);
+            "{\"kind\":\"summary\","
+            "\"initial_seed\":%llu,"
+            "\"iterations\":%llu,"
+            "\"determinism_failures\":%llu,"
+            "\"crashes\":%llu,"
+            "\"rust_divergences\":%llu,"
+            "\"duration_sec\":%.3f,"
+            "\"iterations_per_sec\":%.1f}\n",
+            (unsigned long long)initial_seed, (unsigned long long)iterations,
+            (unsigned long long)determinism_failures, (unsigned long long)crash_count,
+            (unsigned long long)rust_divergences, duration_sec,
+            iterations > 0 ? (double)iterations / duration_sec : 0.0);
     fflush(out);
 }
 
@@ -935,22 +842,20 @@ static uint64_t parse_u64(const char *s);
  * =================================================================== */
 
 typedef struct {
-    uint64_t *scenario_seeds;    /* scenario_seed from Rust output */
-    uint64_t *rust_digests;      /* digest from Rust output */
+    uint64_t *scenario_seeds; /* scenario_seed from Rust output */
+    uint64_t *rust_digests;   /* digest from Rust output */
     uint64_t count;
     uint64_t capacity;
 } fuzz_rust_digests;
 
-static void fuzz_rust_digests_init(fuzz_rust_digests *rd, uint64_t cap)
-{
+static void fuzz_rust_digests_init(fuzz_rust_digests *rd, uint64_t cap) {
     rd->scenario_seeds = (uint64_t *)malloc(cap * sizeof(uint64_t));
     rd->rust_digests = (uint64_t *)malloc(cap * sizeof(uint64_t));
     rd->count = 0u;
     rd->capacity = cap;
 }
 
-static void fuzz_rust_digests_free(fuzz_rust_digests *rd)
-{
+static void fuzz_rust_digests_free(fuzz_rust_digests *rd) {
     free(rd->scenario_seeds);
     free(rd->rust_digests);
     rd->scenario_seeds = NULL;
@@ -958,15 +863,18 @@ static void fuzz_rust_digests_free(fuzz_rust_digests *rd)
     rd->count = 0u;
 }
 
-static uint64_t parse_hex_u64(const char *s)
-{
+static uint64_t parse_hex_u64(const char *s) {
     uint64_t v = 0u;
     while (*s != '\0' && *s != '\n' && *s != '\r') {
         uint64_t d;
-        if (*s >= '0' && *s <= '9') d = (uint64_t)(*s - '0');
-        else if (*s >= 'a' && *s <= 'f') d = (uint64_t)(*s - 'a' + 10);
-        else if (*s >= 'A' && *s <= 'F') d = (uint64_t)(*s - 'A' + 10);
-        else break;
+        if (*s >= '0' && *s <= '9')
+            d = (uint64_t)(*s - '0');
+        else if (*s >= 'a' && *s <= 'f')
+            d = (uint64_t)(*s - 'a' + 10);
+        else if (*s >= 'A' && *s <= 'F')
+            d = (uint64_t)(*s - 'A' + 10);
+        else
+            break;
         v = (v << 4) | d;
         s++;
     }
@@ -976,24 +884,18 @@ static uint64_t parse_hex_u64(const char *s)
 /* Write a scenario to the Rust binary's stdin in text format:
  * "scenario_seed op_count kind0 a0 b0 u32_0 u64_0 kind1 a1 b1 u32_1 u64_1 ...\n"
  */
-static void fuzz_write_scenario(FILE *pipe, const fuzz_scenario *sc)
-{
+static void fuzz_write_scenario(FILE *pipe, const fuzz_scenario *sc) {
     uint32_t i;
     fprintf(pipe, "%llu %u", (unsigned long long)sc->seed, sc->op_count);
     for (i = 0u; i < sc->op_count; i++) {
-        fprintf(pipe, " %u %u %u %u %llu",
-                (uint32_t)sc->ops[i].kind,
-                sc->ops[i].idx_a, sc->ops[i].idx_b,
-                sc->ops[i].arg_u32,
-                (unsigned long long)sc->ops[i].arg_u64);
+        fprintf(pipe, " %u %u %u %u %llu", (uint32_t)sc->ops[i].kind, sc->ops[i].idx_a,
+                sc->ops[i].idx_b, sc->ops[i].arg_u32, (unsigned long long)sc->ops[i].arg_u64);
     }
     fprintf(pipe, "\n");
 }
 
 /* Read one digest line from the Rust binary's stdout: "seed\tdigest_hex\n" */
-static int fuzz_read_rust_digest(FILE *pipe, uint64_t *seed_out,
-                                  uint64_t *digest_out)
-{
+static int fuzz_read_rust_digest(FILE *pipe, uint64_t *seed_out, uint64_t *digest_out) {
     char line[256];
     char *tab;
     if (fgets(line, sizeof(line), pipe) == NULL) return -1;
@@ -1007,11 +909,8 @@ static int fuzz_read_rust_digest(FILE *pipe, uint64_t *seed_out,
 
 /* Batch-invoke Rust binary: write all scenarios, read all digests.
  * Uses a pre-generated array of scenarios. */
-static int fuzz_invoke_rust_binary(const char *binary_path,
-                                   const fuzz_scenario *scenarios,
-                                   uint64_t count,
-                                   fuzz_rust_digests *out)
-{
+static int fuzz_invoke_rust_binary(const char *binary_path, const fuzz_scenario *scenarios,
+                                   uint64_t count, fuzz_rust_digests *out) {
     char cmd[1024];
     FILE *pipe_in;
     FILE *pipe_out;
@@ -1033,10 +932,10 @@ static int fuzz_invoke_rust_binary(const char *binary_path,
 
     if (pid == 0) {
         /* Child: Rust binary */
-        close(in_fd[1]);   /* close write end of stdin pipe */
-        close(out_fd[0]);  /* close read end of stdout pipe */
-        dup2(in_fd[0], 0);   /* stdin from pipe */
-        dup2(out_fd[1], 1);  /* stdout to pipe */
+        close(in_fd[1]);    /* close write end of stdin pipe */
+        close(out_fd[0]);   /* close read end of stdout pipe */
+        dup2(in_fd[0], 0);  /* stdin from pipe */
+        dup2(out_fd[1], 1); /* stdout to pipe */
         close(in_fd[0]);
         close(out_fd[1]);
 
@@ -1047,8 +946,8 @@ static int fuzz_invoke_rust_binary(const char *binary_path,
     }
 
     /* Parent */
-    close(in_fd[0]);   /* close read end of stdin pipe */
-    close(out_fd[1]);  /* close write end of stdout pipe */
+    close(in_fd[0]);  /* close read end of stdin pipe */
+    close(out_fd[1]); /* close write end of stdout pipe */
 
     pipe_in = fdopen(in_fd[1], "w");
     pipe_out = fdopen(out_fd[0], "r");
@@ -1061,10 +960,8 @@ static int fuzz_invoke_rust_binary(const char *binary_path,
     }
 
     /* Write all scenarios to Rust stdin */
-    for (i = 0u; i < count; i++) {
-        fuzz_write_scenario(pipe_in, &scenarios[i]);
-    }
-    fclose(pipe_in);  /* signal EOF to Rust */
+    for (i = 0u; i < count; i++) { fuzz_write_scenario(pipe_in, &scenarios[i]); }
+    fclose(pipe_in); /* signal EOF to Rust */
 
     /* Read all digests from Rust stdout */
     for (i = 0u; i < count && out->count < out->capacity; i++) {
@@ -1088,27 +985,18 @@ static int fuzz_invoke_rust_binary(const char *binary_path,
     return 0;
 }
 
-static void fuzz_report_rust_divergence(FILE *out,
-                                        uint64_t iteration,
-                                        uint64_t scenario_seed,
-                                        uint64_t c_digest,
-                                        uint64_t rust_digest,
-                                        const fuzz_scenario *sc,
-                                        const fuzz_execution *exec)
-{
+static void fuzz_report_rust_divergence(FILE *out, uint64_t iteration, uint64_t scenario_seed,
+                                        uint64_t c_digest, uint64_t rust_digest,
+                                        const fuzz_scenario *sc, const fuzz_execution *exec) {
     fprintf(out,
-        "{\"kind\":\"rust_divergence\","
-        "\"iteration\":%llu,"
-        "\"seed\":%llu,"
-        "\"c_digest\":\"%016llx\","
-        "\"rust_digest\":\"%016llx\"",
-        (unsigned long long)iteration,
-        (unsigned long long)scenario_seed,
-        (unsigned long long)c_digest,
-        (unsigned long long)rust_digest);
-    if (sc != NULL && exec != NULL) {
-        fuzz_dump_scenario_ops(out, sc, exec);
-    }
+            "{\"kind\":\"rust_divergence\","
+            "\"iteration\":%llu,"
+            "\"seed\":%llu,"
+            "\"c_digest\":\"%016llx\","
+            "\"rust_digest\":\"%016llx\"",
+            (unsigned long long)iteration, (unsigned long long)scenario_seed,
+            (unsigned long long)c_digest, (unsigned long long)rust_digest);
+    if (sc != NULL && exec != NULL) { fuzz_dump_scenario_ops(out, sc, exec); }
     fprintf(out, "}\n");
     fflush(out);
 }
@@ -1117,36 +1005,27 @@ static void fuzz_report_rust_divergence(FILE *out,
  * Auto-minimize: save scenario and invoke minimizer
  * =================================================================== */
 
-static void fuzz_save_and_minimize(const fuzz_scenario *sc,
-                                   const fuzz_execution *exec,
-                                   uint64_t c_digest,
-                                   const char *minimize_binary,
-                                   const char *findings_dir,
-                                   int verbose)
-{
+static void fuzz_save_and_minimize(const fuzz_scenario *sc, const fuzz_execution *exec,
+                                   uint64_t c_digest, const char *minimize_binary,
+                                   const char *findings_dir, int verbose) {
     char path[512];
     FILE *f;
     uint32_t i;
 
     /* Save scenario as text file for minimizer stdin */
-    snprintf(path, sizeof(path), "%s/seed_%llu.scenario",
-             findings_dir, (unsigned long long)sc->seed);
+    snprintf(path, sizeof(path), "%s/seed_%llu.scenario", findings_dir,
+             (unsigned long long)sc->seed);
     f = fopen(path, "w");
     if (f == NULL) {
-        if (verbose) {
-            fprintf(stderr, "[fuzz] warning: cannot write scenario to %s\n", path);
-        }
+        if (verbose) { fprintf(stderr, "[fuzz] warning: cannot write scenario to %s\n", path); }
         return;
     }
 
     /* Write in text format: "seed op_count kind0 a0 b0 u32_0 u64_0 ..." */
     fprintf(f, "%llu %u", (unsigned long long)sc->seed, sc->op_count);
     for (i = 0u; i < sc->op_count; i++) {
-        fprintf(f, " %u %u %u %u %llu",
-                (uint32_t)sc->ops[i].kind,
-                sc->ops[i].idx_a, sc->ops[i].idx_b,
-                sc->ops[i].arg_u32,
-                (unsigned long long)sc->ops[i].arg_u64);
+        fprintf(f, " %u %u %u %u %llu", (uint32_t)sc->ops[i].kind, sc->ops[i].idx_a,
+                sc->ops[i].idx_b, sc->ops[i].arg_u32, (unsigned long long)sc->ops[i].arg_u64);
     }
     fprintf(f, "\n");
     fclose(f);
@@ -1156,25 +1035,19 @@ static void fuzz_save_and_minimize(const fuzz_scenario *sc,
         char cmd[2048];
         char out_path[512];
 
-        snprintf(out_path, sizeof(out_path), "%s/seed_%llu.minimized.json",
-                 findings_dir, (unsigned long long)sc->seed);
+        snprintf(out_path, sizeof(out_path), "%s/seed_%llu.minimized.json", findings_dir,
+                 (unsigned long long)sc->seed);
         snprintf(cmd, sizeof(cmd),
-            "%s --stdin-scenario --failure-digest %016llx --output %s %s < %s",
-            minimize_binary,
-            (unsigned long long)c_digest,
-            out_path,
-            verbose ? "--verbose" : "",
-            path);
+                 "%s --stdin-scenario --failure-digest %016llx --output %s %s < %s",
+                 minimize_binary, (unsigned long long)c_digest, out_path,
+                 verbose ? "--verbose" : "", path);
 
         if (verbose) {
-            fprintf(stderr, "[fuzz] minimizing seed=%llu...\n",
-                    (unsigned long long)sc->seed);
+            fprintf(stderr, "[fuzz] minimizing seed=%llu...\n", (unsigned long long)sc->seed);
         }
 
         if (system(cmd) == 0) {
-            if (verbose) {
-                fprintf(stderr, "[fuzz] minimized saved to %s\n", out_path);
-            }
+            if (verbose) { fprintf(stderr, "[fuzz] minimized saved to %s\n", out_path); }
         }
     }
 
@@ -1198,8 +1071,7 @@ typedef struct {
     int verbose;
 } fuzz_config;
 
-static void fuzz_config_defaults(fuzz_config *cfg)
-{
+static void fuzz_config_defaults(fuzz_config *cfg) {
     cfg->initial_seed = 0u;
     cfg->iterations = 1000u;
     cfg->max_ops = 64u;
@@ -1212,8 +1084,7 @@ static void fuzz_config_defaults(fuzz_config *cfg)
     cfg->verbose = 0;
 }
 
-static int fuzz_run(const fuzz_config *cfg)
-{
+static int fuzz_run(const fuzz_config *cfg) {
     fuzz_rng rng;
     FILE *report;
     uint64_t iter;
@@ -1233,27 +1104,23 @@ static int fuzz_run(const fuzz_config *cfg)
     if (cfg->report_path != NULL) {
         report = fopen(cfg->report_path, "w");
         if (report == NULL) {
-            fprintf(stderr, "[fuzz] error: cannot open report file: %s\n",
-                    cfg->report_path);
+            fprintf(stderr, "[fuzz] error: cannot open report file: %s\n", cfg->report_path);
             return 1;
         }
     }
 
     fprintf(stderr,
-        "[fuzz] differential fuzz harness (bd-1md.3)\n"
-        "[fuzz] seed=%llu iterations=%llu max_ops=%u mutations=%u\n",
-        (unsigned long long)cfg->initial_seed,
-        (unsigned long long)cfg->iterations,
-        cfg->max_ops,
-        cfg->mutations_per_scenario);
+            "[fuzz] differential fuzz harness (bd-1md.3)\n"
+            "[fuzz] seed=%llu iterations=%llu max_ops=%u mutations=%u\n",
+            (unsigned long long)cfg->initial_seed, (unsigned long long)cfg->iterations,
+            cfg->max_ops, cfg->mutations_per_scenario);
 
     /* ---- Create findings directory if --minimize specified ---- */
     if (cfg->minimize_binary != NULL) {
         char mkdir_cmd[512];
         snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p %s", cfg->findings_dir);
         if (system(mkdir_cmd) != 0) {
-            fprintf(stderr, "[fuzz] warning: cannot create findings dir: %s\n",
-                    cfg->findings_dir);
+            fprintf(stderr, "[fuzz] warning: cannot create findings dir: %s\n", cfg->findings_dir);
         }
     }
 
@@ -1265,8 +1132,7 @@ static int fuzz_run(const fuzz_config *cfg)
         fprintf(stderr, "[fuzz] pre-generating %llu scenarios for Rust comparison...\n",
                 (unsigned long long)cfg->iterations);
 
-        pre_scenarios = (fuzz_scenario *)malloc(
-            (size_t)cfg->iterations * sizeof(fuzz_scenario));
+        pre_scenarios = (fuzz_scenario *)malloc((size_t)cfg->iterations * sizeof(fuzz_scenario));
         if (pre_scenarios == NULL) {
             fprintf(stderr, "[fuzz] error: cannot allocate scenario buffer\n");
             if (report != stdout) fclose(report);
@@ -1296,9 +1162,7 @@ static int fuzz_run(const fuzz_config *cfg)
 
         fprintf(stderr, "[fuzz] invoking rust binary: %s\n", cfg->rust_binary);
         fuzz_rust_digests_init(&rust_digests, cfg->iterations);
-        if (fuzz_invoke_rust_binary(cfg->rust_binary,
-                                    pre_scenarios,
-                                    cfg->iterations,
+        if (fuzz_invoke_rust_binary(cfg->rust_binary, pre_scenarios, cfg->iterations,
                                     &rust_digests) == 0) {
             have_rust = 1;
             fprintf(stderr, "[fuzz] got %llu Rust digests\n",
@@ -1331,24 +1195,18 @@ static int fuzz_run(const fuzz_config *cfg)
 
         if (exec_a.digest != exec_b.digest) {
             determinism_failures++;
-            fuzz_report_mismatch(report, "determinism_failure",
-                                 iter, base_scenario.seed,
-                                 exec_a.digest, exec_b.digest,
-                                 &base_scenario, &exec_a,
-                                 NULL, 0u);
+            fuzz_report_mismatch(report, "determinism_failure", iter, base_scenario.seed,
+                                 exec_a.digest, exec_b.digest, &base_scenario, &exec_a, NULL, 0u);
             if (cfg->verbose) {
                 fprintf(stderr,
-                    "[fuzz] DETERMINISM FAILURE iter=%llu seed=%llu "
-                    "digest_a=%016llx digest_b=%016llx\n",
-                    (unsigned long long)iter,
-                    (unsigned long long)base_scenario.seed,
-                    (unsigned long long)exec_a.digest,
-                    (unsigned long long)exec_b.digest);
+                        "[fuzz] DETERMINISM FAILURE iter=%llu seed=%llu "
+                        "digest_a=%016llx digest_b=%016llx\n",
+                        (unsigned long long)iter, (unsigned long long)base_scenario.seed,
+                        (unsigned long long)exec_a.digest, (unsigned long long)exec_b.digest);
             }
             if (cfg->minimize_binary != NULL) {
-                fuzz_save_and_minimize(&base_scenario, &exec_a,
-                    exec_a.digest, cfg->minimize_binary,
-                    cfg->findings_dir, cfg->verbose);
+                fuzz_save_and_minimize(&base_scenario, &exec_a, exec_a.digest, cfg->minimize_binary,
+                                       cfg->findings_dir, cfg->verbose);
             }
         }
 
@@ -1370,15 +1228,12 @@ static int fuzz_run(const fuzz_config *cfg)
             fuzz_execute(&mutated, &exec_verify);
             if (exec_b.digest != exec_verify.digest) {
                 determinism_failures++;
-                fuzz_report_mismatch(report, "mutant_determinism_failure",
-                                     iter, mutated.seed,
-                                     exec_b.digest, exec_verify.digest,
-                                     &mutated, &exec_b,
+                fuzz_report_mismatch(report, "mutant_determinism_failure", iter, mutated.seed,
+                                     exec_b.digest, exec_verify.digest, &mutated, &exec_b,
                                      mutations, mut_count);
                 if (cfg->verbose) {
-                    fprintf(stderr,
-                        "[fuzz] MUTANT DETERMINISM FAILURE iter=%llu\n",
-                        (unsigned long long)iter);
+                    fprintf(stderr, "[fuzz] MUTANT DETERMINISM FAILURE iter=%llu\n",
+                            (unsigned long long)iter);
                 }
             }
         }
@@ -1388,27 +1243,23 @@ static int fuzz_run(const fuzz_config *cfg)
             /* Verify scenario seeds match (grammar determinism) */
             if (rust_digests.scenario_seeds[iter] != base_scenario.seed) {
                 fprintf(stderr,
-                    "[fuzz] GRAMMAR MISMATCH iter=%llu: "
-                    "C_seed=%llu Rust_seed=%llu\n",
-                    (unsigned long long)iter,
-                    (unsigned long long)base_scenario.seed,
-                    (unsigned long long)rust_digests.scenario_seeds[iter]);
+                        "[fuzz] GRAMMAR MISMATCH iter=%llu: "
+                        "C_seed=%llu Rust_seed=%llu\n",
+                        (unsigned long long)iter, (unsigned long long)base_scenario.seed,
+                        (unsigned long long)rust_digests.scenario_seeds[iter]);
                 rust_divergences++;
             } else if (exec_a.digest != rust_digests.rust_digests[iter]) {
                 rust_divergences++;
-                fuzz_report_rust_divergence(report, iter,
-                    base_scenario.seed,
-                    exec_a.digest,
-                    rust_digests.rust_digests[iter],
-                    &base_scenario, &exec_a);
+                fuzz_report_rust_divergence(report, iter, base_scenario.seed, exec_a.digest,
+                                            rust_digests.rust_digests[iter], &base_scenario,
+                                            &exec_a);
                 if (cfg->verbose) {
                     fprintf(stderr,
-                        "[fuzz] RUST DIVERGENCE iter=%llu seed=%llu "
-                        "c=%016llx rust=%016llx\n",
-                        (unsigned long long)iter,
-                        (unsigned long long)base_scenario.seed,
-                        (unsigned long long)exec_a.digest,
-                        (unsigned long long)rust_digests.rust_digests[iter]);
+                            "[fuzz] RUST DIVERGENCE iter=%llu seed=%llu "
+                            "c=%016llx rust=%016llx\n",
+                            (unsigned long long)iter, (unsigned long long)base_scenario.seed,
+                            (unsigned long long)exec_a.digest,
+                            (unsigned long long)rust_digests.rust_digests[iter]);
                 }
             }
         }
@@ -1416,31 +1267,25 @@ static int fuzz_run(const fuzz_config *cfg)
         /* Progress reporting */
         if (cfg->verbose && (iter % 100u == 0u)) {
             double elapsed = fuzz_clock_sec() - start_time;
-            fprintf(stderr,
-                "[fuzz] progress: %llu/%llu (%.1f/s) det_fail=%llu\n",
-                (unsigned long long)iter,
-                (unsigned long long)cfg->iterations,
-                iter > 0u ? (double)iter / elapsed : 0.0,
-                (unsigned long long)determinism_failures);
+            fprintf(stderr, "[fuzz] progress: %llu/%llu (%.1f/s) det_fail=%llu\n",
+                    (unsigned long long)iter, (unsigned long long)cfg->iterations,
+                    iter > 0u ? (double)iter / elapsed : 0.0,
+                    (unsigned long long)determinism_failures);
         }
     }
 
     end_time = fuzz_clock_sec();
 
-    fuzz_report_summary(report, cfg->initial_seed, cfg->iterations,
-                        determinism_failures, crash_count,
-                        rust_divergences,
-                        end_time - start_time);
+    fuzz_report_summary(report, cfg->initial_seed, cfg->iterations, determinism_failures,
+                        crash_count, rust_divergences, end_time - start_time);
 
     fprintf(stderr,
-        "[fuzz] complete: %llu iterations in %.3fs (%.1f/s)\n"
-        "[fuzz] determinism_failures=%llu crashes=%llu rust_divergences=%llu\n",
-        (unsigned long long)cfg->iterations,
-        end_time - start_time,
-        (double)cfg->iterations / (end_time - start_time),
-        (unsigned long long)determinism_failures,
-        (unsigned long long)crash_count,
-        (unsigned long long)rust_divergences);
+            "[fuzz] complete: %llu iterations in %.3fs (%.1f/s)\n"
+            "[fuzz] determinism_failures=%llu crashes=%llu rust_divergences=%llu\n",
+            (unsigned long long)cfg->iterations, end_time - start_time,
+            (double)cfg->iterations / (end_time - start_time),
+            (unsigned long long)determinism_failures, (unsigned long long)crash_count,
+            (unsigned long long)rust_divergences);
 
     if (determinism_failures > 0u || crash_count > 0u) {
         fprintf(stderr, "[fuzz] FAIL: issues detected\n");
@@ -1453,13 +1298,9 @@ static int fuzz_run(const fuzz_config *cfg)
         fprintf(stderr, "[fuzz] PASS: no issues detected\n");
     }
 
-    if (have_rust) {
-        fuzz_rust_digests_free(&rust_digests);
-    }
+    if (have_rust) { fuzz_rust_digests_free(&rust_digests); }
 
-    if (report != stdout) {
-        fclose(report);
-    }
+    if (report != stdout) { fclose(report); }
 
     return exit_code;
 }
@@ -1468,8 +1309,7 @@ static int fuzz_run(const fuzz_config *cfg)
  * CLI argument parsing
  * =================================================================== */
 
-static uint64_t parse_u64(const char *s)
-{
+static uint64_t parse_u64(const char *s) {
     uint64_t v = 0u;
     while (*s >= '0' && *s <= '9') {
         v = v * 10u + (uint64_t)(*s - '0');
@@ -1478,8 +1318,7 @@ static uint64_t parse_u64(const char *s)
     return v;
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     fuzz_config cfg;
     int i;
 
@@ -1514,7 +1353,8 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--verbose") == 0) {
             cfg.verbose = 1;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            fprintf(stderr,
+            fprintf(
+                stderr,
                 "Usage: fuzz_differential [options]\n"
                 "  --seed <u64>          Initial PRNG seed (default: 0)\n"
                 "  --iterations <n>      Number of fuzz iterations (default: 1000)\n"
@@ -1523,7 +1363,8 @@ int main(int argc, char **argv)
                 "  --fixtures-dir <dir>  Path to Rust reference fixtures\n"
                 "  --rust-binary <path>  Path to Rust fuzz target for live comparison\n"
                 "  --minimize <path>     Path to fuzz_minimize binary (auto-minimize divergences)\n"
-                "  --findings-dir <dir>  Directory for minimized scenarios (default: fuzz_findings)\n"
+                "  --findings-dir <dir>  Directory for minimized scenarios (default: "
+                "fuzz_findings)\n"
                 "  --report <path>       JSONL report output path\n"
                 "  --smoke               CI smoke mode (100 iterations)\n"
                 "  --nightly             Nightly mode (100000 iterations)\n"

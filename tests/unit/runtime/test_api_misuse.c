@@ -15,18 +15,23 @@
 
 #include "../../test_harness.h"
 #include <asx/asx.h>
-#include <asx/runtime/runtime.h>
-#include <asx/core/cancel.h>
 #include <asx/core/budget.h>
-#include <asx/core/outcome.h>
+#include <asx/core/cancel.h>
 #include <asx/core/channel.h>
+#include <asx/core/outcome.h>
+#include <asx/runtime/runtime.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls. */
-#define IGNORE(expr) do { asx_status s_ = (expr); (void)s_; } while (0)
+#define IGNORE(expr)                                                                               \
+    do {                                                                                           \
+        asx_status s_ = (expr);                                                                    \
+        (void)s_;                                                                                  \
+    } while (0)
 
 /* Simple poll: yields forever */
 static asx_status poll_pending(void *data, asx_task_id self) {
-    (void)data; (void)self;
+    (void)data;
+    (void)self;
     return ASX_E_PENDING;
 }
 
@@ -41,8 +46,7 @@ TEST(channel_create_invalid_region) {
     asx_channel_reset();
 
     /* Channel slot lookup returns INVALID_ARGUMENT for bad handles */
-    ASSERT_EQ(asx_channel_create(ASX_INVALID_ID, 16, &cid),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_create(ASX_INVALID_ID, 16, &cid), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(channel_create_zero_capacity) {
@@ -74,8 +78,7 @@ TEST(channel_create_exceeds_max_capacity) {
     asx_channel_reset();
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_channel_create(rid, ASX_CHANNEL_MAX_CAPACITY + 1, &cid),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_create(rid, ASX_CHANNEL_MAX_CAPACITY + 1, &cid), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ===================================================================
@@ -231,8 +234,7 @@ TEST(channel_reserve_invalid_handle) {
     asx_runtime_reset();
     asx_channel_reset();
 
-    ASSERT_EQ(asx_channel_try_reserve(ASX_INVALID_ID, &permit),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_try_reserve(ASX_INVALID_ID, &permit), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(channel_capacity_exhaustion) {
@@ -263,14 +265,13 @@ TEST(channel_capacity_exhaustion) {
 
 TEST(cancel_invalid_handle) {
     asx_runtime_reset();
-    ASSERT_EQ(asx_task_cancel(ASX_INVALID_ID, ASX_CANCEL_USER),
-              ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_task_cancel(ASX_INVALID_ID, ASX_CANCEL_USER), ASX_E_NOT_FOUND);
 }
 
 TEST(cancel_with_origin_invalid_handle) {
     asx_runtime_reset();
-    ASSERT_EQ(asx_task_cancel_with_origin(ASX_INVALID_ID, ASX_CANCEL_USER,
-                                           ASX_INVALID_ID, ASX_INVALID_ID),
+    ASSERT_EQ(asx_task_cancel_with_origin(ASX_INVALID_ID, ASX_CANCEL_USER, ASX_INVALID_ID,
+                                          ASX_INVALID_ID),
               ASX_E_NOT_FOUND);
 }
 
@@ -288,8 +289,7 @@ TEST(finalize_invalid_handle) {
 TEST(cancel_phase_invalid_handle) {
     asx_cancel_phase phase;
     asx_runtime_reset();
-    ASSERT_EQ(asx_task_get_cancel_phase(ASX_INVALID_ID, &phase),
-              ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_task_get_cancel_phase(ASX_INVALID_ID, &phase), ASX_E_NOT_FOUND);
 }
 
 /* ===================================================================
@@ -392,9 +392,7 @@ TEST(region_arena_exhaustion) {
 
     asx_runtime_reset();
 
-    for (i = 0; i < ASX_MAX_REGIONS; i++) {
-        ASSERT_EQ(asx_region_open(&rids[i]), ASX_OK);
-    }
+    for (i = 0; i < ASX_MAX_REGIONS; i++) { ASSERT_EQ(asx_region_open(&rids[i]), ASX_OK); }
 
     /* One more should fail */
     ASSERT_NE(asx_region_open(&overflow), ASX_OK);
@@ -407,7 +405,7 @@ TEST(region_arena_exhaustion) {
 TEST(cancel_strengthen_equal_severity) {
     asx_cancel_reason a, b, result;
 
-    a.kind = ASX_CANCEL_TIMEOUT;   /* severity 1 */
+    a.kind = ASX_CANCEL_TIMEOUT; /* severity 1 */
     a.origin_region = ASX_INVALID_ID;
     a.origin_task = ASX_INVALID_ID;
     a.timestamp = 100;
@@ -415,7 +413,7 @@ TEST(cancel_strengthen_equal_severity) {
     a.cause = NULL;
     a.truncated = 0;
 
-    b.kind = ASX_CANCEL_DEADLINE;  /* severity 1 */
+    b.kind = ASX_CANCEL_DEADLINE; /* severity 1 */
     b.origin_region = ASX_INVALID_ID;
     b.origin_task = ASX_INVALID_ID;
     b.timestamp = 200;

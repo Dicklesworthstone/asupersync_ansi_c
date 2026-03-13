@@ -22,13 +22,13 @@
 #define ASX_CORE_GHOST_H
 
 #include <asx/asx_export.h>
-#include <asx/asx_status.h>
 #include <asx/asx_ids.h>
+#include <asx/asx_status.h>
 
 /* Auto-enable ghost monitors in debug builds unless explicitly disabled.
  * Define ASX_DEBUG_GHOST_DISABLE to suppress this auto-enable. */
-#if defined(ASX_DEBUG) && ASX_DEBUG && !defined(ASX_DEBUG_GHOST) \
-    && !defined(ASX_DEBUG_GHOST_DISABLE)
+#if defined(ASX_DEBUG) && ASX_DEBUG && !defined(ASX_DEBUG_GHOST) &&                                \
+    !defined(ASX_DEBUG_GHOST_DISABLE)
 #define ASX_DEBUG_GHOST
 #endif
 
@@ -37,14 +37,14 @@
 /* ------------------------------------------------------------------ */
 
 typedef enum {
-    ASX_GHOST_PROTOCOL_REGION     = 0,  /* illegal region transition */
-    ASX_GHOST_PROTOCOL_TASK       = 1,  /* illegal task transition */
-    ASX_GHOST_PROTOCOL_OBLIGATION = 2,  /* illegal obligation transition */
-    ASX_GHOST_LINEARITY_DOUBLE    = 3,  /* obligation resolved twice */
-    ASX_GHOST_LINEARITY_LEAK      = 4,  /* obligation never resolved */
-    ASX_GHOST_BORROW_EXCLUSIVE    = 5,  /* exclusive borrow while shared active */
-    ASX_GHOST_BORROW_SHARED       = 6,  /* shared borrow while exclusive active */
-    ASX_GHOST_DETERMINISM_DRIFT   = 7   /* scheduler event ordering changed */
+    ASX_GHOST_PROTOCOL_REGION = 0,     /* illegal region transition */
+    ASX_GHOST_PROTOCOL_TASK = 1,       /* illegal task transition */
+    ASX_GHOST_PROTOCOL_OBLIGATION = 2, /* illegal obligation transition */
+    ASX_GHOST_LINEARITY_DOUBLE = 3,    /* obligation resolved twice */
+    ASX_GHOST_LINEARITY_LEAK = 4,      /* obligation never resolved */
+    ASX_GHOST_BORROW_EXCLUSIVE = 5,    /* exclusive borrow while shared active */
+    ASX_GHOST_BORROW_SHARED = 6,       /* shared borrow while exclusive active */
+    ASX_GHOST_DETERMINISM_DRIFT = 7    /* scheduler event ordering changed */
 } asx_ghost_violation_kind;
 
 /* ------------------------------------------------------------------ */
@@ -55,10 +55,10 @@ typedef enum {
 
 typedef struct {
     asx_ghost_violation_kind kind;
-    uint64_t                 entity_id;     /* handle of violating entity */
-    int                      from_state;    /* state before attempted transition */
-    int                      to_state;      /* attempted target state */
-    uint32_t                 sequence;      /* monotonic violation counter */
+    uint64_t entity_id; /* handle of violating entity */
+    int from_state;     /* state before attempted transition */
+    int to_state;       /* attempted target state */
+    uint32_t sequence;  /* monotonic violation counter */
 } asx_ghost_violation;
 
 /* ------------------------------------------------------------------ */
@@ -77,16 +77,17 @@ ASX_API void asx_ghost_reset(void);
  * ASX_E_INVALID_TRANSITION if not.
  * Note: no ASX_MUST_USE — these are primarily side-effect operations
  * for recording violations. Callers may check or ignore the result. */
-ASX_API asx_status asx_ghost_check_region_transition(
-    asx_region_id id, asx_region_state from, asx_region_state to);
+ASX_API asx_status asx_ghost_check_region_transition(asx_region_id id, asx_region_state from,
+                                                     asx_region_state to);
 
 /* Record and validate a task state transition. */
-ASX_API asx_status asx_ghost_check_task_transition(
-    asx_task_id id, asx_task_state from, asx_task_state to);
+ASX_API asx_status asx_ghost_check_task_transition(asx_task_id id, asx_task_state from,
+                                                   asx_task_state to);
 
 /* Record and validate an obligation state transition. */
-ASX_API asx_status asx_ghost_check_obligation_transition(
-    asx_obligation_id id, asx_obligation_state from, asx_obligation_state to);
+ASX_API asx_status asx_ghost_check_obligation_transition(asx_obligation_id id,
+                                                         asx_obligation_state from,
+                                                         asx_obligation_state to);
 
 /* --- Linearity monitor --- */
 
@@ -108,15 +109,13 @@ ASX_API uint32_t asx_ghost_check_obligation_leaks(asx_region_id region);
 ASX_API ASX_MUST_USE uint32_t asx_ghost_violation_count(void);
 
 /* Retrieve violation at index (0 = oldest). Returns nonzero on success. */
-ASX_API ASX_MUST_USE int asx_ghost_violation_get(uint32_t index,
-                                                  asx_ghost_violation *out);
+ASX_API ASX_MUST_USE int asx_ghost_violation_get(uint32_t index, asx_ghost_violation *out);
 
 /* Check if the ring buffer has overflowed (older entries lost). */
 ASX_API ASX_MUST_USE int asx_ghost_ring_overflowed(void);
 
 /* Return human-readable name for a violation kind. Never returns NULL. */
-ASX_API ASX_MUST_USE const char *asx_ghost_violation_kind_str(
-    asx_ghost_violation_kind kind);
+ASX_API ASX_MUST_USE const char *asx_ghost_violation_kind_str(asx_ghost_violation_kind kind);
 
 /* --- Borrow ledger --- */
 
@@ -173,29 +172,29 @@ ASX_API ASX_MUST_USE uint32_t asx_ghost_determinism_event_count(void);
 #else /* !ASX_DEBUG_GHOST */
 
 /* Zero-overhead stubs when ghost monitors are disabled. */
-#define asx_ghost_reset()                           ((void)0)
-#define asx_ghost_check_region_transition(id,f,t)   (ASX_OK)
-#define asx_ghost_check_task_transition(id,f,t)     (ASX_OK)
-#define asx_ghost_check_obligation_transition(id,f,t) (ASX_OK)
-#define asx_ghost_obligation_reserved(id)           ((void)0)
-#define asx_ghost_obligation_resolved(id)           ((void)0)
-#define asx_ghost_check_obligation_leaks(r)         ((uint32_t)0)
-#define asx_ghost_violation_count()                  ((uint32_t)0)
-#define asx_ghost_violation_get(i,o)                ((int)0)
-#define asx_ghost_ring_overflowed()                 ((int)0)
-#define asx_ghost_violation_kind_str(k)             ("ghost_disabled")
-#define asx_ghost_borrow_shared(id)                 ((void)(id), (uint32_t)0)
-#define asx_ghost_borrow_exclusive(id)              ((void)(id), (int)1)
-#define asx_ghost_borrow_release(id)                ((void)(id))
-#define asx_ghost_borrow_release_all(id)            ((void)(id))
-#define asx_ghost_borrow_shared_count(id)           ((void)(id), (uint32_t)0)
-#define asx_ghost_borrow_is_exclusive(id)           ((void)(id), (int)0)
-#define asx_ghost_determinism_reset()               ((void)0)
-#define asx_ghost_determinism_record(k)             ((void)(k))
-#define asx_ghost_determinism_seal()                ((void)0)
-#define asx_ghost_determinism_check()               ((uint32_t)0)
-#define asx_ghost_determinism_digest()              ((uint64_t)0)
-#define asx_ghost_determinism_event_count()         ((uint32_t)0)
+#define asx_ghost_reset() ((void)0)
+#define asx_ghost_check_region_transition(id, f, t) (ASX_OK)
+#define asx_ghost_check_task_transition(id, f, t) (ASX_OK)
+#define asx_ghost_check_obligation_transition(id, f, t) (ASX_OK)
+#define asx_ghost_obligation_reserved(id) ((void)0)
+#define asx_ghost_obligation_resolved(id) ((void)0)
+#define asx_ghost_check_obligation_leaks(r) ((uint32_t)0)
+#define asx_ghost_violation_count() ((uint32_t)0)
+#define asx_ghost_violation_get(i, o) ((int)0)
+#define asx_ghost_ring_overflowed() ((int)0)
+#define asx_ghost_violation_kind_str(k) ("ghost_disabled")
+#define asx_ghost_borrow_shared(id) ((void)(id), (uint32_t)0)
+#define asx_ghost_borrow_exclusive(id) ((void)(id), (int)1)
+#define asx_ghost_borrow_release(id) ((void)(id))
+#define asx_ghost_borrow_release_all(id) ((void)(id))
+#define asx_ghost_borrow_shared_count(id) ((void)(id), (uint32_t)0)
+#define asx_ghost_borrow_is_exclusive(id) ((void)(id), (int)0)
+#define asx_ghost_determinism_reset() ((void)0)
+#define asx_ghost_determinism_record(k) ((void)(k))
+#define asx_ghost_determinism_seal() ((void)0)
+#define asx_ghost_determinism_check() ((uint32_t)0)
+#define asx_ghost_determinism_digest() ((uint64_t)0)
+#define asx_ghost_determinism_event_count() ((uint32_t)0)
 
 #endif /* ASX_DEBUG_GHOST */
 

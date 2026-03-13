@@ -4,16 +4,15 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/time/sleep.h>
 #include <asx/asx_config.h>
+#include <asx/time/sleep.h>
 #include <string.h>
 
 /* ===================================================================
  * Sleep
  * =================================================================== */
 
-asx_status asx_sleep_init(asx_sleep_state *state, uint64_t duration_ns)
-{
+asx_status asx_sleep_init(asx_sleep_state *state, uint64_t duration_ns) {
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(state, 0, sizeof(*state));
@@ -22,8 +21,7 @@ asx_status asx_sleep_init(asx_sleep_state *state, uint64_t duration_ns)
     return ASX_OK;
 }
 
-asx_status asx_sleep_poll(void *user_data, asx_task_id self)
-{
+asx_status asx_sleep_poll(void *user_data, asx_task_id self) {
     asx_sleep_state *s = (asx_sleep_state *)user_data;
     asx_time now;
     asx_status st;
@@ -43,9 +41,7 @@ asx_status asx_sleep_poll(void *user_data, asx_task_id self)
         s->initialized = 1;
 
         /* Zero-duration sleep completes immediately */
-        if (s->duration_ns == 0) {
-            return ASX_OK;
-        }
+        if (s->duration_ns == 0) { return ASX_OK; }
         return ASX_E_PENDING;
     }
 
@@ -53,9 +49,7 @@ asx_status asx_sleep_poll(void *user_data, asx_task_id self)
     st = asx_runtime_now_ns(&now);
     if (st != ASX_OK) return st;
 
-    if (asx_deadline_is_expired_at(&s->deadline, now)) {
-        return ASX_OK;
-    }
+    if (asx_deadline_is_expired_at(&s->deadline, now)) { return ASX_OK; }
 
     return ASX_E_PENDING;
 }
@@ -64,11 +58,8 @@ asx_status asx_sleep_poll(void *user_data, asx_task_id self)
  * Timeout
  * =================================================================== */
 
-asx_status asx_timeout_init(asx_timeout_state *state,
-                             uint64_t timeout_ns,
-                             asx_task_poll_fn inner_poll,
-                             void *inner_data)
-{
+asx_status asx_timeout_init(asx_timeout_state *state, uint64_t timeout_ns,
+                            asx_task_poll_fn inner_poll, void *inner_data) {
     if (state == NULL || inner_poll == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(state, 0, sizeof(*state));
@@ -80,8 +71,7 @@ asx_status asx_timeout_init(asx_timeout_state *state,
     return ASX_OK;
 }
 
-asx_status asx_timeout_poll(void *user_data, asx_task_id self)
-{
+asx_status asx_timeout_poll(void *user_data, asx_task_id self) {
     asx_timeout_state *s = (asx_timeout_state *)user_data;
     asx_time now;
     asx_status st;
@@ -105,9 +95,7 @@ asx_status asx_timeout_poll(void *user_data, asx_task_id self)
     if (st != ASX_OK) return st;
 
     if (asx_deadline_is_expired_at(&s->deadline, now)) {
-        if (!s->inner_done) {
-            return ASX_E_TIMED_OUT;
-        }
+        if (!s->inner_done) { return ASX_E_TIMED_OUT; }
         return ASX_OK;
     }
 
@@ -133,10 +121,7 @@ asx_status asx_timeout_poll(void *user_data, asx_task_id self)
  * Interval
  * =================================================================== */
 
-asx_status asx_interval_init(asx_interval_state *state,
-                              uint64_t period_ns,
-                              uint32_t max_ticks)
-{
+asx_status asx_interval_init(asx_interval_state *state, uint64_t period_ns, uint32_t max_ticks) {
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     if (period_ns == 0) return ASX_E_INVALID_ARGUMENT;
 
@@ -148,8 +133,7 @@ asx_status asx_interval_init(asx_interval_state *state,
     return ASX_OK;
 }
 
-asx_status asx_interval_poll(void *user_data, asx_task_id self)
-{
+asx_status asx_interval_poll(void *user_data, asx_task_id self) {
     asx_interval_state *s = (asx_interval_state *)user_data;
     asx_time now;
     asx_status st;
@@ -178,9 +162,7 @@ asx_status asx_interval_poll(void *user_data, asx_task_id self)
         s->ticks++;
 
         /* Check if we've reached max ticks */
-        if (s->max_ticks > 0 && s->ticks >= s->max_ticks) {
-            return ASX_OK;
-        }
+        if (s->max_ticks > 0 && s->ticks >= s->max_ticks) { return ASX_OK; }
 
         /* Re-arm for next period */
         s->deadline.expired = 0;
@@ -194,8 +176,7 @@ asx_status asx_interval_poll(void *user_data, asx_task_id self)
     return ASX_E_PENDING;
 }
 
-uint32_t asx_interval_ticks(const asx_interval_state *state)
-{
+uint32_t asx_interval_ticks(const asx_interval_state *state) {
     if (state == NULL) return 0;
     return state->ticks;
 }

@@ -14,10 +14,10 @@
 #ifndef ASX_CORE_RESOURCE_H
 #define ASX_CORE_RESOURCE_H
 
-#include <stdint.h>
 #include <asx/asx_export.h>
-#include <asx/asx_status.h>
 #include <asx/asx_ids.h>
+#include <asx/asx_status.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,8 +28,8 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 
 typedef enum {
-    ASX_RESOURCE_REGION     = 0,
-    ASX_RESOURCE_TASK       = 1,
+    ASX_RESOURCE_REGION = 0,
+    ASX_RESOURCE_TASK = 1,
     ASX_RESOURCE_OBLIGATION = 2,
     ASX_RESOURCE_KIND_COUNT = 3
 } asx_resource_kind;
@@ -40,9 +40,9 @@ typedef enum {
 
 typedef struct {
     asx_resource_kind kind;
-    uint32_t capacity;      /* hard ceiling (compile-time constant) */
-    uint32_t used;          /* currently allocated count */
-    uint32_t remaining;     /* capacity - used */
+    uint32_t capacity;  /* hard ceiling (compile-time constant) */
+    uint32_t used;      /* currently allocated count */
+    uint32_t remaining; /* capacity - used */
 } asx_resource_snapshot;
 
 /* ------------------------------------------------------------------ */
@@ -60,8 +60,8 @@ ASX_API ASX_MUST_USE uint32_t asx_resource_remaining(asx_resource_kind kind);
 
 /* Take a point-in-time snapshot of a resource kind.
  * Returns ASX_E_INVALID_ARGUMENT for NULL output or unknown kind. */
-ASX_API ASX_MUST_USE asx_status asx_resource_snapshot_get(
-    asx_resource_kind kind, asx_resource_snapshot *out);
+ASX_API ASX_MUST_USE asx_status asx_resource_snapshot_get(asx_resource_kind kind,
+                                                          asx_resource_snapshot *out);
 
 /* ------------------------------------------------------------------ */
 /* Admission gate                                                      */
@@ -73,8 +73,7 @@ ASX_API ASX_MUST_USE asx_status asx_resource_snapshot_get(
  * Returns ASX_E_INVALID_ARGUMENT for count==0 or unknown kind.
  *
  * This is a pure query — no side effects, no reservation. */
-ASX_API ASX_MUST_USE asx_status asx_resource_admit(
-    asx_resource_kind kind, uint32_t count);
+ASX_API ASX_MUST_USE asx_status asx_resource_admit(asx_resource_kind kind, uint32_t count);
 
 /* ------------------------------------------------------------------ */
 /* Per-region resource queries                                         */
@@ -82,12 +81,12 @@ ASX_API ASX_MUST_USE asx_status asx_resource_admit(
 
 /* Remaining capture arena bytes for a specific region.
  * Returns ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE on invalid region. */
-ASX_API ASX_MUST_USE asx_status asx_resource_region_capture_remaining(
-    asx_region_id region, uint32_t *out_bytes);
+ASX_API ASX_MUST_USE asx_status asx_resource_region_capture_remaining(asx_region_id region,
+                                                                      uint32_t *out_bytes);
 
 /* Remaining cleanup stack entries for a specific region. */
-ASX_API ASX_MUST_USE asx_status asx_resource_region_cleanup_remaining(
-    asx_region_id region, uint32_t *out_slots);
+ASX_API ASX_MUST_USE asx_status asx_resource_region_cleanup_remaining(asx_region_id region,
+                                                                      uint32_t *out_slots);
 
 /* ------------------------------------------------------------------ */
 /* Diagnostic                                                          */

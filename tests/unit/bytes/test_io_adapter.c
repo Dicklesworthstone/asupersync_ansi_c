@@ -8,7 +8,11 @@
 #include <asx/bytes/io_adapter.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Memory read adapter tests                                           */
@@ -41,7 +45,7 @@ TEST(mem_read_eof_when_empty) {
     asx_buf_mut dst;
     uint32_t bytes_read;
 
-    asx_buf_mut_init(&source);  /* empty source */
+    asx_buf_mut_init(&source); /* empty source */
     asx_mem_read_init(&rs, &source);
     reader = asx_mem_read_adapter(&rs);
 
@@ -129,8 +133,7 @@ TEST(mem_write_flush) {
     writer = asx_mem_write_adapter(&ws);
 
     /* Flush always succeeds for memory adapter */
-    ASSERT_EQ(writer.poll_flush(writer.state, NULL),
-              (asx_write_result)ASX_WRITE_READY);
+    ASSERT_EQ(writer.poll_flush(writer.state, NULL), (asx_write_result)ASX_WRITE_READY);
 }
 
 TEST(mem_write_shutdown) {
@@ -144,8 +147,7 @@ TEST(mem_write_shutdown) {
     asx_mem_write_init(&ws, &sink);
     writer = asx_mem_write_adapter(&ws);
 
-    ASSERT_EQ(writer.poll_shutdown(writer.state, NULL),
-              (asx_write_result)ASX_WRITE_READY);
+    ASSERT_EQ(writer.poll_shutdown(writer.state, NULL), (asx_write_result)ASX_WRITE_READY);
 
     /* Write after shutdown returns CLOSED */
     data = asx_buf_from_cstr("data");
@@ -170,7 +172,7 @@ TEST(mem_write_partial) {
     data = asx_buf_from_cstr("hello");
     ASSERT_EQ(writer.poll_write(writer.state, &data, NULL, &bytes_written),
               (asx_write_result)ASX_WRITE_READY);
-    ASSERT_EQ(bytes_written, 2u);  /* only 2 bytes of space */
+    ASSERT_EQ(bytes_written, 2u); /* only 2 bytes of space */
 }
 
 /* ------------------------------------------------------------------ */
@@ -212,16 +214,14 @@ TEST(roundtrip_read_write) {
     ASSERT_EQ(bytes_written, 9u);
 
     /* Verify sink contents match */
-    ASSERT_TRUE(asx_buf_eq(asx_buf_mut_freeze(&sink),
-                            asx_buf_from_cstr("roundtrip")));
+    ASSERT_TRUE(asx_buf_eq(asx_buf_mut_freeze(&sink), asx_buf_from_cstr("roundtrip")));
 }
 
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_io_adapter ===\n");
 
     RUN_TEST(mem_read_basic);

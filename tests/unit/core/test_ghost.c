@@ -22,9 +22,7 @@ TEST(ghost_protocol_region_valid_transition) {
     asx_runtime_reset();
 
     /* Valid transition: Open -> Closing */
-    st = asx_ghost_check_region_transition(ASX_INVALID_ID,
-                                           ASX_REGION_OPEN,
-                                           ASX_REGION_CLOSING);
+    st = asx_ghost_check_region_transition(ASX_INVALID_ID, ASX_REGION_OPEN, ASX_REGION_CLOSING);
     ASSERT_EQ(st, ASX_OK);
     ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)0);
 }
@@ -34,9 +32,7 @@ TEST(ghost_protocol_region_invalid_transition) {
     asx_runtime_reset();
 
     /* Invalid: Open -> Closed (skips intermediate states) */
-    st = asx_ghost_check_region_transition(ASX_INVALID_ID,
-                                           ASX_REGION_OPEN,
-                                           ASX_REGION_CLOSED);
+    st = asx_ghost_check_region_transition(ASX_INVALID_ID, ASX_REGION_OPEN, ASX_REGION_CLOSED);
     ASSERT_EQ(st, ASX_E_INVALID_TRANSITION);
     ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)1);
 
@@ -58,9 +54,7 @@ TEST(ghost_protocol_task_valid_transition) {
     asx_runtime_reset();
 
     /* Valid: Created -> Running */
-    st = asx_ghost_check_task_transition(ASX_INVALID_ID,
-                                         ASX_TASK_CREATED,
-                                         ASX_TASK_RUNNING);
+    st = asx_ghost_check_task_transition(ASX_INVALID_ID, ASX_TASK_CREATED, ASX_TASK_RUNNING);
     ASSERT_EQ(st, ASX_OK);
     ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)0);
 }
@@ -70,9 +64,7 @@ TEST(ghost_protocol_task_invalid_transition) {
     asx_runtime_reset();
 
     /* Invalid: Completed -> Running (terminal state, no outgoing edges) */
-    st = asx_ghost_check_task_transition(ASX_INVALID_ID,
-                                         ASX_TASK_COMPLETED,
-                                         ASX_TASK_RUNNING);
+    st = asx_ghost_check_task_transition(ASX_INVALID_ID, ASX_TASK_COMPLETED, ASX_TASK_RUNNING);
     ASSERT_EQ(st, ASX_E_INVALID_TRANSITION);
     ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)1);
 
@@ -91,8 +83,7 @@ TEST(ghost_protocol_obligation_valid_transition) {
     asx_runtime_reset();
 
     /* Valid: Reserved -> Committed */
-    st = asx_ghost_check_obligation_transition(ASX_INVALID_ID,
-                                               ASX_OBLIGATION_RESERVED,
+    st = asx_ghost_check_obligation_transition(ASX_INVALID_ID, ASX_OBLIGATION_RESERVED,
                                                ASX_OBLIGATION_COMMITTED);
     ASSERT_EQ(st, ASX_OK);
     ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)0);
@@ -103,8 +94,7 @@ TEST(ghost_protocol_obligation_invalid_transition) {
     asx_runtime_reset();
 
     /* Invalid: Committed -> Reserved (terminal state) */
-    st = asx_ghost_check_obligation_transition(ASX_INVALID_ID,
-                                               ASX_OBLIGATION_COMMITTED,
+    st = asx_ghost_check_obligation_transition(ASX_INVALID_ID, ASX_OBLIGATION_COMMITTED,
                                                ASX_OBLIGATION_RESERVED);
     ASSERT_EQ(st, ASX_E_INVALID_TRANSITION);
     ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)1);
@@ -254,12 +244,8 @@ TEST(ghost_ring_sequential_access) {
     asx_runtime_reset();
 
     /* Record two violations (both genuinely invalid transitions) */
-    (void)asx_ghost_check_region_transition(ASX_INVALID_ID,
-                                            ASX_REGION_OPEN,
-                                            ASX_REGION_CLOSED);
-    (void)asx_ghost_check_task_transition(ASX_INVALID_ID,
-                                          ASX_TASK_COMPLETED,
-                                          ASX_TASK_CREATED);
+    (void)asx_ghost_check_region_transition(ASX_INVALID_ID, ASX_REGION_OPEN, ASX_REGION_CLOSED);
+    (void)asx_ghost_check_task_transition(ASX_INVALID_ID, ASX_TASK_COMPLETED, ASX_TASK_CREATED);
 
     ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)2);
 
@@ -291,10 +277,7 @@ TEST(ghost_ring_overflow_wraps) {
 
     /* Fill ring beyond capacity */
     for (i = 0; i < ASX_GHOST_RING_CAPACITY + 10u; i++) {
-        (void)asx_ghost_check_region_transition(
-            (uint64_t)i,
-            ASX_REGION_OPEN,
-            ASX_REGION_CLOSED);
+        (void)asx_ghost_check_region_transition((uint64_t)i, ASX_REGION_OPEN, ASX_REGION_CLOSED);
     }
 
     ASSERT_EQ(asx_ghost_violation_count(), ASX_GHOST_RING_CAPACITY + 10u);
@@ -305,27 +288,22 @@ TEST(ghost_ring_overflow_wraps) {
         asx_ghost_violation oldest;
         ASSERT_TRUE(asx_ghost_violation_get(0, &oldest));
         /* The oldest surviving entry has sequence = total - capacity */
-        ASSERT_EQ(oldest.sequence, (uint32_t)(ASX_GHOST_RING_CAPACITY + 10u
-                                               - ASX_GHOST_RING_CAPACITY));
+        ASSERT_EQ(oldest.sequence,
+                  (uint32_t)(ASX_GHOST_RING_CAPACITY + 10u - ASX_GHOST_RING_CAPACITY));
     }
 }
 
 /* ---- Query interface ---- */
 
 TEST(ghost_violation_kind_str_coverage) {
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_PROTOCOL_REGION),
-                  "protocol_region");
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_PROTOCOL_TASK),
-                  "protocol_task");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_PROTOCOL_REGION), "protocol_region");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_PROTOCOL_TASK), "protocol_task");
     ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_PROTOCOL_OBLIGATION),
                   "protocol_obligation");
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_LINEARITY_DOUBLE),
-                  "linearity_double");
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_LINEARITY_LEAK),
-                  "linearity_leak");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_LINEARITY_DOUBLE), "linearity_double");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str(ASX_GHOST_LINEARITY_LEAK), "linearity_leak");
     /* Unknown kind */
-    ASSERT_STR_EQ(asx_ghost_violation_kind_str((asx_ghost_violation_kind)99),
-                  "unknown");
+    ASSERT_STR_EQ(asx_ghost_violation_kind_str((asx_ghost_violation_kind)99), "unknown");
 }
 
 /* ---- Integration: ghost reset clears state ---- */
@@ -334,9 +312,7 @@ TEST(ghost_reset_clears_violations) {
     asx_runtime_reset();
 
     /* Generate a violation */
-    (void)asx_ghost_check_region_transition(ASX_INVALID_ID,
-                                            ASX_REGION_OPEN,
-                                            ASX_REGION_CLOSED);
+    (void)asx_ghost_check_region_transition(ASX_INVALID_ID, ASX_REGION_OPEN, ASX_REGION_CLOSED);
     ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)1);
 
     /* Reset should clear */

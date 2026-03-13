@@ -22,7 +22,7 @@
 #include "test_harness.h"
 
 #ifndef ASX_DEBUG_AFFINITY
-  #define ASX_DEBUG_AFFINITY
+#define ASX_DEBUG_AFFINITY
 #endif
 
 #include <asx/asx.h>
@@ -293,7 +293,8 @@ TEST(affinity_table_capacity) {
 
     /* One more should fail */
     {
-        uint64_t overflow_eid = 0x0001000100010000ULL + (uint64_t)(ASX_AFFINITY_TABLE_CAPACITY + 1u);
+        uint64_t overflow_eid =
+            0x0001000100010000ULL + (uint64_t)(ASX_AFFINITY_TABLE_CAPACITY + 1u);
         ASSERT_EQ(asx_affinity_bind(overflow_eid, 10u), ASX_E_AFFINITY_TABLE_FULL);
     }
 }
@@ -325,16 +326,13 @@ TEST(affinity_unbind_frees_slot) {
 /* ================================================================== */
 
 TEST(affinity_status_strings) {
-    ASSERT_STR_EQ(asx_status_str(ASX_E_AFFINITY_VIOLATION),
-                  "affinity domain violation");
-    ASSERT_STR_EQ(asx_status_str(ASX_E_AFFINITY_NOT_BOUND),
-                  "entity not bound to affinity domain");
+    ASSERT_STR_EQ(asx_status_str(ASX_E_AFFINITY_VIOLATION), "affinity domain violation");
+    ASSERT_STR_EQ(asx_status_str(ASX_E_AFFINITY_NOT_BOUND), "entity not bound to affinity domain");
     ASSERT_STR_EQ(asx_status_str(ASX_E_AFFINITY_ALREADY_BOUND),
                   "entity already bound to different domain");
     ASSERT_STR_EQ(asx_status_str(ASX_E_AFFINITY_TRANSFER_REQUIRED),
                   "cross-domain transfer required");
-    ASSERT_STR_EQ(asx_status_str(ASX_E_AFFINITY_TABLE_FULL),
-                  "affinity tracking table full");
+    ASSERT_STR_EQ(asx_status_str(ASX_E_AFFINITY_TABLE_FULL), "affinity tracking table full");
 }
 
 /* ================================================================== */

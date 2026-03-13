@@ -11,29 +11,27 @@
 
 /* ASX_CHECKPOINT_WAIVER_FILE("CBMC harness — formal verification only") */
 
-#include <stdio.h>
-#include <asx/asx.h>
 #include "cbmc_compat.h"
+#include <asx/asx.h>
+#include <stdio.h>
 
 static const int expected[4][4] = {
     /* To:    Res   Comm  Abort Leaked */
-    /*Res*/   {0,    1,    1,    1},
-    /*Comm*/  {0,    0,    0,    0},
-    /*Abort*/ {0,    0,    0,    0},
-    /*Leaked*/{0,    0,    0,    0}
-};
+    /*Res*/ {0, 1, 1, 1},
+    /*Comm*/ {0, 0, 0, 0},
+    /*Abort*/ {0, 0, 0, 0},
+    /*Leaked*/ {0, 0, 0, 0}};
 
 #ifdef CBMC
 
-int main(void)
-{
+int main(void) {
     unsigned from = NONDET_UINT();
-    unsigned to   = NONDET_UINT();
+    unsigned to = NONDET_UINT();
 
     /* Transition table agreement */
     if (from <= 3 && to <= 3) {
-        asx_status st = asx_obligation_transition_check(
-            (asx_obligation_state)from, (asx_obligation_state)to);
+        asx_status st =
+            asx_obligation_transition_check((asx_obligation_state)from, (asx_obligation_state)to);
         if (expected[from][to]) {
             VERIFY(st == ASX_OK);
         } else {
@@ -45,10 +43,10 @@ int main(void)
     {
         unsigned term = NONDET_UINT();
         unsigned t = NONDET_UINT();
-        ASSUME(term >= 1 && term <= 3);  /* COMMITTED, ABORTED, LEAKED */
+        ASSUME(term >= 1 && term <= 3); /* COMMITTED, ABORTED, LEAKED */
         ASSUME(t <= 3);
-        asx_status st = asx_obligation_transition_check(
-            (asx_obligation_state)term, (asx_obligation_state)t);
+        asx_status st =
+            asx_obligation_transition_check((asx_obligation_state)term, (asx_obligation_state)t);
         VERIFY(st != ASX_OK);
     }
 
@@ -69,8 +67,7 @@ int main(void)
 static int passes = 0;
 static int failures = 0;
 
-static void check(int cond, const char *msg, unsigned from, unsigned to)
-{
+static void check(int cond, const char *msg, unsigned from, unsigned to) {
     if (!cond) {
         fprintf(stderr, "  FAIL: %s (from=%u, to=%u)\n", msg, from, to);
         failures++;
@@ -79,8 +76,7 @@ static void check(int cond, const char *msg, unsigned from, unsigned to)
     }
 }
 
-int main(void)
-{
+int main(void) {
     unsigned from, to;
 
     fprintf(stderr, "[obligation-linearity-harness] CBMC-compatible verification\n");
@@ -88,13 +84,12 @@ int main(void)
     /* Exhaustive transition table */
     for (from = 0; from <= 3; from++) {
         for (to = 0; to <= 3; to++) {
-            asx_status st = asx_obligation_transition_check(
-                (asx_obligation_state)from, (asx_obligation_state)to);
+            asx_status st = asx_obligation_transition_check((asx_obligation_state)from,
+                                                            (asx_obligation_state)to);
             if (expected[from][to]) {
                 check(st == ASX_OK, "legal transition accepted", from, to);
             } else {
-                check(st == ASX_E_INVALID_TRANSITION,
-                      "forbidden transition rejected", from, to);
+                check(st == ASX_E_INVALID_TRANSITION, "forbidden transition rejected", from, to);
             }
         }
     }
@@ -102,8 +97,8 @@ int main(void)
     /* Linearity: each terminal state is absorbing */
     for (from = 1; from <= 3; from++) {
         for (to = 0; to <= 3; to++) {
-            asx_status st = asx_obligation_transition_check(
-                (asx_obligation_state)from, (asx_obligation_state)to);
+            asx_status st = asx_obligation_transition_check((asx_obligation_state)from,
+                                                            (asx_obligation_state)to);
             check(st != ASX_OK, "terminal absorbing", from, to);
         }
     }
@@ -112,8 +107,8 @@ int main(void)
     {
         int reachable = 0;
         for (to = 0; to <= 3; to++) {
-            if (asx_obligation_transition_check(
-                    ASX_OBLIGATION_RESERVED, (asx_obligation_state)to) == ASX_OK) {
+            if (asx_obligation_transition_check(ASX_OBLIGATION_RESERVED,
+                                                (asx_obligation_state)to) == ASX_OK) {
                 reachable++;
             }
         }
@@ -123,12 +118,10 @@ int main(void)
     /* Terminal predicate consistency */
     for (from = 0; from <= 3; from++) {
         int is_term = asx_obligation_is_terminal((asx_obligation_state)from);
-        check(is_term == (from != 0),
-              "terminal predicate matches", from, 0);
+        check(is_term == (from != 0), "terminal predicate matches", from, 0);
     }
 
-    fprintf(stderr, "[obligation-linearity-harness] %d passed, %d failed\n",
-            passes, failures);
+    fprintf(stderr, "[obligation-linearity-harness] %d passed, %d failed\n", passes, failures);
     return failures > 0 ? 1 : 0;
 }
 

@@ -23,10 +23,10 @@
 #ifndef ASX_RUNTIME_RT_H
 #define ASX_RUNTIME_RT_H
 
-#include <asx/asx_export.h>
-#include <asx/asx_status.h>
-#include <asx/asx_ids.h>
 #include <asx/asx_config.h>
+#include <asx/asx_export.h>
+#include <asx/asx_ids.h>
+#include <asx/asx_status.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,9 +38,9 @@ extern "C" {
 
 typedef struct {
     asx_runtime_config config;
-    asx_runtime_hooks  hooks;
-    uint32_t           generation;    /* nonzero when initialized */
-    int                initialized;   /* guard flag */
+    asx_runtime_hooks hooks;
+    uint32_t generation; /* nonzero when initialized */
+    int initialized;     /* guard flag */
 } asx_runtime;
 
 /* ------------------------------------------------------------------ */
@@ -64,10 +64,8 @@ typedef struct {
  *   ASX_E_HOOK_INVALID if hook validation fails.
  *
  * Thread-safety: not thread-safe. */
-ASX_API ASX_MUST_USE asx_status asx_runtime_init(
-    asx_runtime *rt,
-    const asx_runtime_config *config,
-    const asx_runtime_hooks *hooks);
+ASX_API ASX_MUST_USE asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
+                                                 const asx_runtime_hooks *hooks);
 
 /* Initialize a runtime with all defaults (profile-appropriate config,
  * safe default hooks). Convenience wrapper over asx_runtime_init.
@@ -101,22 +99,19 @@ ASX_API int asx_runtime_is_initialized(const asx_runtime *rt);
 /* Get the active configuration from a runtime.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if NULL,
  *   ASX_E_INVALID_STATE if runtime is not initialized. */
-ASX_API ASX_MUST_USE asx_status asx_runtime_get_config(
-    const asx_runtime *rt,
-    asx_runtime_config *out);
+ASX_API ASX_MUST_USE asx_status asx_runtime_get_config(const asx_runtime *rt,
+                                                       asx_runtime_config *out);
 
 /* Get the active hooks from a runtime.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if NULL,
  *   ASX_E_INVALID_STATE if runtime is not initialized. */
-ASX_API ASX_MUST_USE asx_status asx_runtime_get_hooks_from(
-    const asx_runtime *rt,
-    asx_runtime_hooks *out);
+ASX_API ASX_MUST_USE asx_status asx_runtime_get_hooks_from(const asx_runtime *rt,
+                                                           asx_runtime_hooks *out);
 
 /* Validate a runtime config without initializing.
  * Checks size field, bounds on fields (cancel chain depth, etc.).
  * Returns ASX_OK if valid, ASX_E_INVALID_ARGUMENT if NULL or invalid. */
-ASX_API ASX_MUST_USE asx_status asx_runtime_config_validate(
-    const asx_runtime_config *config);
+ASX_API ASX_MUST_USE asx_status asx_runtime_config_validate(const asx_runtime_config *config);
 
 /* ------------------------------------------------------------------ */
 /* State queries                                                       */
@@ -136,8 +131,7 @@ ASX_API uint32_t asx_runtime_obligation_capacity(void);
 
 /* Query the runtime's profile and resource class. */
 ASX_API asx_safety_profile asx_runtime_safety_profile(const asx_runtime *rt);
-ASX_API asx_containment_policy asx_runtime_containment_policy(
-    const asx_runtime *rt);
+ASX_API asx_containment_policy asx_runtime_containment_policy(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }

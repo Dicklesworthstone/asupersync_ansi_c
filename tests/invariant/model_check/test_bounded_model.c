@@ -21,16 +21,16 @@
 
 #include "test_harness.h"
 #include <asx/asx.h>
-#include <asx/core/transition.h>
 #include <asx/core/cancel.h>
+#include <asx/core/transition.h>
 
 /* -------------------------------------------------------------------
  * State count constants
  * ------------------------------------------------------------------- */
 
-#define REGION_STATE_COUNT   5  /* OPEN..CLOSED */
-#define TASK_STATE_COUNT     6  /* CREATED..COMPLETED */
-#define OBLIG_STATE_COUNT    4  /* RESERVED..LEAKED */
+#define REGION_STATE_COUNT 5 /* OPEN..CLOSED */
+#define TASK_STATE_COUNT 6   /* CREATED..COMPLETED */
+#define OBLIG_STATE_COUNT 4  /* RESERVED..LEAKED */
 
 /* -------------------------------------------------------------------
  * Invariant 1: Terminal states have no legal outgoing transitions
@@ -39,12 +39,10 @@
  * must reject all transitions to any state.
  * ------------------------------------------------------------------- */
 
-TEST(region_terminal_no_outgoing)
-{
+TEST(region_terminal_no_outgoing) {
     int to;
     for (to = 0; to < REGION_STATE_COUNT; to++) {
-        asx_status st = asx_region_transition_check(ASX_REGION_CLOSED,
-                                                     (asx_region_state)to);
+        asx_status st = asx_region_transition_check(ASX_REGION_CLOSED, (asx_region_state)to);
         if (to == ASX_REGION_CLOSED) {
             /* Self-transition on terminal is also illegal */
             ASSERT_NE(st, ASX_OK);
@@ -54,29 +52,22 @@ TEST(region_terminal_no_outgoing)
     }
 }
 
-TEST(task_terminal_no_outgoing)
-{
+TEST(task_terminal_no_outgoing) {
     int to;
     for (to = 0; to < TASK_STATE_COUNT; to++) {
-        asx_status st = asx_task_transition_check(ASX_TASK_COMPLETED,
-                                                    (asx_task_state)to);
+        asx_status st = asx_task_transition_check(ASX_TASK_COMPLETED, (asx_task_state)to);
         ASSERT_NE(st, ASX_OK);
     }
 }
 
-TEST(obligation_terminal_no_outgoing)
-{
+TEST(obligation_terminal_no_outgoing) {
     /* COMMITTED, ABORTED, and LEAKED are terminal */
-    asx_obligation_state terminals[] = {
-        ASX_OBLIGATION_COMMITTED,
-        ASX_OBLIGATION_ABORTED,
-        ASX_OBLIGATION_LEAKED
-    };
+    asx_obligation_state terminals[] = {ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_ABORTED,
+                                        ASX_OBLIGATION_LEAKED};
     int t, to;
     for (t = 0; t < 3; t++) {
         for (to = 0; to < OBLIG_STATE_COUNT; to++) {
-            asx_status st = asx_obligation_transition_check(
-                terminals[t], (asx_obligation_state)to);
+            asx_status st = asx_obligation_transition_check(terminals[t], (asx_obligation_state)to);
             ASSERT_NE(st, ASX_OK);
         }
     }
@@ -90,13 +81,12 @@ TEST(obligation_terminal_no_outgoing)
  * All legal transitions have to > from.
  * ------------------------------------------------------------------- */
 
-TEST(region_transitions_always_forward)
-{
+TEST(region_transitions_always_forward) {
     int from, to;
     for (from = 0; from < REGION_STATE_COUNT; from++) {
         for (to = 0; to < REGION_STATE_COUNT; to++) {
-            asx_status st = asx_region_transition_check(
-                (asx_region_state)from, (asx_region_state)to);
+            asx_status st =
+                asx_region_transition_check((asx_region_state)from, (asx_region_state)to);
             if (st == ASX_OK) {
                 /* Legal transitions must go forward */
                 ASSERT_TRUE(to > from);
@@ -116,13 +106,11 @@ TEST(region_transitions_always_forward)
  *   CANCELLING(3) → FINALIZING(4) → COMPLETED(5)
  * ------------------------------------------------------------------- */
 
-TEST(task_transitions_never_regress)
-{
+TEST(task_transitions_never_regress) {
     int from, to;
     for (from = 0; from < TASK_STATE_COUNT; from++) {
         for (to = 0; to < TASK_STATE_COUNT; to++) {
-            asx_status st = asx_task_transition_check(
-                (asx_task_state)from, (asx_task_state)to);
+            asx_status st = asx_task_transition_check((asx_task_state)from, (asx_task_state)to);
             if (st == ASX_OK) {
                 /* Legal transitions must go forward or self-loop (strengthen) */
                 ASSERT_TRUE(to >= from);
@@ -136,14 +124,13 @@ TEST(task_transitions_never_regress)
  * one of {COMMITTED, ABORTED, LEAKED}. No double-resolve.
  * ------------------------------------------------------------------- */
 
-TEST(obligation_exactly_one_terminal)
-{
+TEST(obligation_exactly_one_terminal) {
     /* RESERVED can transition to COMMITTED or ABORTED (or LEAKED on cleanup) */
     int to;
     int legal_count = 0;
     for (to = 0; to < OBLIG_STATE_COUNT; to++) {
-        asx_status st = asx_obligation_transition_check(
-            ASX_OBLIGATION_RESERVED, (asx_obligation_state)to);
+        asx_status st =
+            asx_obligation_transition_check(ASX_OBLIGATION_RESERVED, (asx_obligation_state)to);
         if (st == ASX_OK) {
             legal_count++;
             /* Must transition to a terminal state */
@@ -155,26 +142,21 @@ TEST(obligation_exactly_one_terminal)
     ASSERT_TRUE(legal_count <= 3); /* COMMITTED, ABORTED, optionally LEAKED */
 }
 
-TEST(obligation_no_double_resolve)
-{
+TEST(obligation_no_double_resolve) {
     /* Once in COMMITTED, cannot go to ABORTED and vice versa */
     asx_status st;
-    st = asx_obligation_transition_check(ASX_OBLIGATION_COMMITTED,
-                                          ASX_OBLIGATION_ABORTED);
+    st = asx_obligation_transition_check(ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_ABORTED);
     ASSERT_NE(st, ASX_OK);
 
-    st = asx_obligation_transition_check(ASX_OBLIGATION_ABORTED,
-                                          ASX_OBLIGATION_COMMITTED);
+    st = asx_obligation_transition_check(ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_COMMITTED);
     ASSERT_NE(st, ASX_OK);
 
     /* No transition from COMMITTED back to RESERVED */
-    st = asx_obligation_transition_check(ASX_OBLIGATION_COMMITTED,
-                                          ASX_OBLIGATION_RESERVED);
+    st = asx_obligation_transition_check(ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_RESERVED);
     ASSERT_NE(st, ASX_OK);
 
     /* No transition from ABORTED back to RESERVED */
-    st = asx_obligation_transition_check(ASX_OBLIGATION_ABORTED,
-                                          ASX_OBLIGATION_RESERVED);
+    st = asx_obligation_transition_check(ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_RESERVED);
     ASSERT_NE(st, ASX_OK);
 }
 
@@ -185,8 +167,7 @@ TEST(obligation_no_double_resolve)
  * All other states must reject spawn.
  * ------------------------------------------------------------------- */
 
-TEST(region_spawn_only_in_open)
-{
+TEST(region_spawn_only_in_open) {
     int s;
     for (s = 0; s < REGION_STATE_COUNT; s++) {
         int can = asx_region_can_spawn((asx_region_state)s);
@@ -198,8 +179,7 @@ TEST(region_spawn_only_in_open)
     }
 }
 
-TEST(region_work_acceptance)
-{
+TEST(region_work_acceptance) {
     /* Work is accepted in OPEN (normal) and FINALIZING (late arrivals) */
     int s;
     for (s = 0; s < REGION_STATE_COUNT; s++) {
@@ -219,37 +199,33 @@ TEST(region_work_acceptance)
  * ASX_E_INVALID_TRANSITION. No other status codes allowed.
  * ------------------------------------------------------------------- */
 
-TEST(region_table_completeness)
-{
+TEST(region_table_completeness) {
     int from, to;
     for (from = 0; from < REGION_STATE_COUNT; from++) {
         for (to = 0; to < REGION_STATE_COUNT; to++) {
-            asx_status st = asx_region_transition_check(
-                (asx_region_state)from, (asx_region_state)to);
+            asx_status st =
+                asx_region_transition_check((asx_region_state)from, (asx_region_state)to);
             ASSERT_TRUE(st == ASX_OK || st == ASX_E_INVALID_TRANSITION);
         }
     }
 }
 
-TEST(task_table_completeness)
-{
+TEST(task_table_completeness) {
     int from, to;
     for (from = 0; from < TASK_STATE_COUNT; from++) {
         for (to = 0; to < TASK_STATE_COUNT; to++) {
-            asx_status st = asx_task_transition_check(
-                (asx_task_state)from, (asx_task_state)to);
+            asx_status st = asx_task_transition_check((asx_task_state)from, (asx_task_state)to);
             ASSERT_TRUE(st == ASX_OK || st == ASX_E_INVALID_TRANSITION);
         }
     }
 }
 
-TEST(obligation_table_completeness)
-{
+TEST(obligation_table_completeness) {
     int from, to;
     for (from = 0; from < OBLIG_STATE_COUNT; from++) {
         for (to = 0; to < OBLIG_STATE_COUNT; to++) {
-            asx_status st = asx_obligation_transition_check(
-                (asx_obligation_state)from, (asx_obligation_state)to);
+            asx_status st = asx_obligation_transition_check((asx_obligation_state)from,
+                                                            (asx_obligation_state)to);
             ASSERT_TRUE(st == ASX_OK || st == ASX_E_INVALID_TRANSITION);
         }
     }
@@ -262,16 +238,14 @@ TEST(obligation_table_completeness)
  * If is_terminal(s) is false, at least one outgoing transition exists.
  * ------------------------------------------------------------------- */
 
-TEST(region_terminal_predicate_consistent)
-{
+TEST(region_terminal_predicate_consistent) {
     int s;
     for (s = 0; s < REGION_STATE_COUNT; s++) {
         int is_term = asx_region_is_terminal((asx_region_state)s);
         int has_outgoing = 0;
         int to;
         for (to = 0; to < REGION_STATE_COUNT; to++) {
-            if (asx_region_transition_check((asx_region_state)s,
-                                             (asx_region_state)to) == ASX_OK) {
+            if (asx_region_transition_check((asx_region_state)s, (asx_region_state)to) == ASX_OK) {
                 has_outgoing = 1;
             }
         }
@@ -283,16 +257,14 @@ TEST(region_terminal_predicate_consistent)
     }
 }
 
-TEST(task_terminal_predicate_consistent)
-{
+TEST(task_terminal_predicate_consistent) {
     int s;
     for (s = 0; s < TASK_STATE_COUNT; s++) {
         int is_term = asx_task_is_terminal((asx_task_state)s);
         int has_outgoing = 0;
         int to;
         for (to = 0; to < TASK_STATE_COUNT; to++) {
-            if (asx_task_transition_check((asx_task_state)s,
-                                           (asx_task_state)to) == ASX_OK) {
+            if (asx_task_transition_check((asx_task_state)s, (asx_task_state)to) == ASX_OK) {
                 has_outgoing = 1;
             }
         }
@@ -304,8 +276,7 @@ TEST(task_terminal_predicate_consistent)
     }
 }
 
-TEST(obligation_terminal_predicate_consistent)
-{
+TEST(obligation_terminal_predicate_consistent) {
     int s;
     for (s = 0; s < OBLIG_STATE_COUNT; s++) {
         int is_term = asx_obligation_is_terminal((asx_obligation_state)s);
@@ -313,7 +284,7 @@ TEST(obligation_terminal_predicate_consistent)
         int to;
         for (to = 0; to < OBLIG_STATE_COUNT; to++) {
             if (asx_obligation_transition_check((asx_obligation_state)s,
-                                                 (asx_obligation_state)to) == ASX_OK) {
+                                                (asx_obligation_state)to) == ASX_OK) {
                 has_outgoing = 1;
             }
         }
@@ -333,8 +304,7 @@ TEST(obligation_terminal_predicate_consistent)
  * after a higher-severity one was already in effect.
  * ------------------------------------------------------------------- */
 
-TEST(cancel_severity_monotonic_property)
-{
+TEST(cancel_severity_monotonic_property) {
     /* Verify severity ordering matches enum ordering */
     int i;
     for (i = 0; i < (int)ASX_CANCEL_SHUTDOWN; i++) {
@@ -349,8 +319,7 @@ TEST(cancel_severity_monotonic_property)
  * Invariant 9: State name strings are non-null for all valid states
  * ------------------------------------------------------------------- */
 
-TEST(state_names_complete)
-{
+TEST(state_names_complete) {
     int s;
     for (s = 0; s < REGION_STATE_COUNT; s++) {
         const char *name = asx_region_state_str((asx_region_state)s);
@@ -374,8 +343,7 @@ TEST(state_names_complete)
  * from the initial state via legal transitions.
  * ------------------------------------------------------------------- */
 
-TEST(region_all_states_reachable)
-{
+TEST(region_all_states_reachable) {
     int reached[REGION_STATE_COUNT] = {0};
     int queue[REGION_STATE_COUNT];
     int head = 0, tail = 0;
@@ -389,22 +357,18 @@ TEST(region_all_states_reachable)
         int from = queue[head++];
         int to;
         for (to = 0; to < REGION_STATE_COUNT; to++) {
-            if (!reached[to] &&
-                asx_region_transition_check((asx_region_state)from,
-                                             (asx_region_state)to) == ASX_OK) {
+            if (!reached[to] && asx_region_transition_check((asx_region_state)from,
+                                                            (asx_region_state)to) == ASX_OK) {
                 reached[to] = 1;
                 queue[tail++] = to;
             }
         }
     }
 
-    for (s = 0; s < REGION_STATE_COUNT; s++) {
-        ASSERT_TRUE(reached[s]);
-    }
+    for (s = 0; s < REGION_STATE_COUNT; s++) { ASSERT_TRUE(reached[s]); }
 }
 
-TEST(task_all_states_reachable)
-{
+TEST(task_all_states_reachable) {
     int reached[TASK_STATE_COUNT] = {0};
     int queue[TASK_STATE_COUNT];
     int head = 0, tail = 0;
@@ -419,25 +383,21 @@ TEST(task_all_states_reachable)
         int to;
         for (to = 0; to < TASK_STATE_COUNT; to++) {
             if (!reached[to] &&
-                asx_task_transition_check((asx_task_state)from,
-                                           (asx_task_state)to) == ASX_OK) {
+                asx_task_transition_check((asx_task_state)from, (asx_task_state)to) == ASX_OK) {
                 reached[to] = 1;
                 queue[tail++] = to;
             }
         }
     }
 
-    for (s = 0; s < TASK_STATE_COUNT; s++) {
-        ASSERT_TRUE(reached[s]);
-    }
+    for (s = 0; s < TASK_STATE_COUNT; s++) { ASSERT_TRUE(reached[s]); }
 }
 
 /* -------------------------------------------------------------------
  * Test runner
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     /* Invariant 1: Terminal no-outgoing */
     RUN_TEST(region_terminal_no_outgoing);
     RUN_TEST(task_terminal_no_outgoing);

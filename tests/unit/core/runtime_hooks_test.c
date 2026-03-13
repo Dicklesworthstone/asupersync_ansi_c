@@ -11,13 +11,9 @@ static int g_wait_calls = 0;
 static int g_ghost_wait_calls = 0;
 static int g_log_calls = 0;
 
-static asx_time test_now_ns(void *ctx) {
-    return *(asx_time *)ctx;
-}
+static asx_time test_now_ns(void *ctx) { return *(asx_time *)ctx; }
 
-static uint64_t test_entropy_u64(void *ctx) {
-    return *(uint64_t *)ctx;
-}
+static uint64_t test_entropy_u64(void *ctx) { return *(uint64_t *)ctx; }
 
 static asx_status test_wait(void *ctx, uint32_t timeout_ms, uint32_t *ready_count) {
     (void)ctx;
@@ -149,4 +145,3 @@ int main(void) {
     TEST_REPORT();
     return test_failures;
 }
-

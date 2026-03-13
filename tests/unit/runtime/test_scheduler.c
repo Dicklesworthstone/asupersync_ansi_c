@@ -9,14 +9,15 @@
 
 #include "../../test_harness.h"
 #include <asx/asx.h>
-#include <asx/runtime/runtime.h>
 #include <asx/core/ghost.h>
+#include <asx/runtime/runtime.h>
 
 /* ---- Test poll functions ---- */
 
 /* Completes immediately */
 static asx_status poll_complete(void *data, asx_task_id self) {
-    (void)data; (void)self;
+    (void)data;
+    (void)self;
     return ASX_OK;
 }
 
@@ -33,13 +34,15 @@ static asx_status poll_yield_n(void *data, asx_task_id self) {
 
 /* Always pending (never completes) */
 static asx_status poll_forever(void *data, asx_task_id self) {
-    (void)data; (void)self;
+    (void)data;
+    (void)self;
     return ASX_E_PENDING;
 }
 
 /* Fails immediately */
 static asx_status poll_fail(void *data, asx_task_id self) {
-    (void)data; (void)self;
+    (void)data;
+    (void)self;
     return ASX_E_INVALID_STATE;
 }
 
@@ -224,7 +227,8 @@ TEST(scheduler_replay_identity) {
     /* --- Run 1 --- */
     asx_runtime_reset();
     asx_ghost_reset();
-    c1 = 1; c2 = 0;
+    c1 = 1;
+    c2 = 0;
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);
@@ -235,14 +239,13 @@ TEST(scheduler_replay_identity) {
 
     count1 = asx_scheduler_event_count();
     ASSERT_TRUE(count1 <= 16u);
-    for (i = 0; i < count1 && i < 16u; i++) {
-        asx_scheduler_event_get(i, &events_run1[i]);
-    }
+    for (i = 0; i < count1 && i < 16u; i++) { asx_scheduler_event_get(i, &events_run1[i]); }
 
     /* --- Run 2 (identical setup) --- */
     asx_runtime_reset();
     asx_ghost_reset();
-    c1 = 1; c2 = 0;
+    c1 = 1;
+    c2 = 0;
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);

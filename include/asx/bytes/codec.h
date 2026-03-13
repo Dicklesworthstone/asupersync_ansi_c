@@ -27,15 +27,15 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_DECODE_FRAME    = 0,  /* a complete frame was decoded */
+    ASX_DECODE_FRAME = 0,     /* a complete frame was decoded */
     ASX_DECODE_NEED_MORE = 1, /* not enough data, need more input */
-    ASX_DECODE_ERROR    = 2   /* decode error */
+    ASX_DECODE_ERROR = 2      /* decode error */
 } asx_decode_result;
 
 /* A decoded frame: pointer into the source buffer + length. */
 typedef struct {
     const uint8_t *data;
-    uint32_t       len;
+    uint32_t len;
 } asx_frame;
 
 /* -------------------------------------------------------------------
@@ -47,21 +47,18 @@ typedef struct {
  * the consumed bytes.
  * On ASX_DECODE_NEED_MORE, src is not modified.
  * On ASX_DECODE_ERROR, the codec is in an error state. */
-typedef asx_decode_result (*asx_decode_fn)(void *codec_state,
-                                            asx_buf_mut *src,
-                                            asx_frame *out_frame);
+typedef asx_decode_result (*asx_decode_fn)(void *codec_state, asx_buf_mut *src,
+                                           asx_frame *out_frame);
 
 /* Encoder: encode a frame (data + len) into dst buffer.
  * Returns ASX_OK on success, ASX_E_RESOURCE_EXHAUSTED if dst is full. */
-typedef asx_status (*asx_encode_fn)(void *codec_state,
-                                     const void *data,
-                                     uint32_t len,
-                                     asx_buf_mut *dst);
+typedef asx_status (*asx_encode_fn)(void *codec_state, const void *data, uint32_t len,
+                                    asx_buf_mut *dst);
 
 typedef struct {
-    asx_decode_fn  decode;
-    asx_encode_fn  encode;
-    void          *state;
+    asx_decode_fn decode;
+    asx_encode_fn encode;
+    void *state;
 } asx_codec;
 
 /* -------------------------------------------------------------------
@@ -72,27 +69,23 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint8_t  length_field_size;  /* 1, 2, or 4 */
-    uint32_t max_frame_len;      /* 0 = no limit (up to buffer capacity) */
+    uint8_t length_field_size; /* 1, 2, or 4 */
+    uint32_t max_frame_len;    /* 0 = no limit (up to buffer capacity) */
 } asx_length_delimited_codec;
 
 /* Initialize a length-delimited codec with default settings (4-byte length). */
 ASX_API void asx_length_delimited_codec_init(asx_length_delimited_codec *c);
 
 /* Initialize with specific length field size (1, 2, or 4). */
-ASX_API ASX_MUST_USE asx_status asx_length_delimited_codec_init_with(
-    asx_length_delimited_codec *c,
-    uint8_t length_field_size,
-    uint32_t max_frame_len);
+ASX_API ASX_MUST_USE asx_status asx_length_delimited_codec_init_with(asx_length_delimited_codec *c,
+                                                                     uint8_t length_field_size,
+                                                                     uint32_t max_frame_len);
 
 /* Decode/encode functions for use in asx_codec. */
-ASX_API asx_decode_result asx_length_delimited_decode(void *codec_state,
-                                                       asx_buf_mut *src,
-                                                       asx_frame *out_frame);
-ASX_API asx_status asx_length_delimited_encode(void *codec_state,
-                                                const void *data,
-                                                uint32_t len,
-                                                asx_buf_mut *dst);
+ASX_API asx_decode_result asx_length_delimited_decode(void *codec_state, asx_buf_mut *src,
+                                                      asx_frame *out_frame);
+ASX_API asx_status asx_length_delimited_encode(void *codec_state, const void *data, uint32_t len,
+                                               asx_buf_mut *dst);
 
 /* Convenience: build an asx_codec from a length_delimited_codec. */
 ASX_API asx_codec asx_length_delimited_as_codec(asx_length_delimited_codec *c);
@@ -104,7 +97,7 @@ ASX_API asx_codec asx_length_delimited_as_codec(asx_length_delimited_codec *c);
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint32_t max_line_len;  /* 0 = no limit */
+    uint32_t max_line_len; /* 0 = no limit */
 } asx_lines_codec;
 
 /* Initialize a lines codec. */
@@ -114,13 +107,10 @@ ASX_API void asx_lines_codec_init(asx_lines_codec *c);
 ASX_API void asx_lines_codec_init_with(asx_lines_codec *c, uint32_t max_line_len);
 
 /* Decode/encode functions. */
-ASX_API asx_decode_result asx_lines_decode(void *codec_state,
-                                            asx_buf_mut *src,
-                                            asx_frame *out_frame);
-ASX_API asx_status asx_lines_encode(void *codec_state,
-                                     const void *data,
-                                     uint32_t len,
-                                     asx_buf_mut *dst);
+ASX_API asx_decode_result asx_lines_decode(void *codec_state, asx_buf_mut *src,
+                                           asx_frame *out_frame);
+ASX_API asx_status asx_lines_encode(void *codec_state, const void *data, uint32_t len,
+                                    asx_buf_mut *dst);
 
 /* Convenience: build an asx_codec from a lines_codec. */
 ASX_API asx_codec asx_lines_as_codec(asx_lines_codec *c);
@@ -132,13 +122,10 @@ ASX_API asx_codec asx_lines_as_codec(asx_lines_codec *c);
  * Each encode writes bytes directly.
  * ------------------------------------------------------------------- */
 
-ASX_API asx_decode_result asx_bytes_decode(void *codec_state,
-                                            asx_buf_mut *src,
-                                            asx_frame *out_frame);
-ASX_API asx_status asx_bytes_encode(void *codec_state,
-                                     const void *data,
-                                     uint32_t len,
-                                     asx_buf_mut *dst);
+ASX_API asx_decode_result asx_bytes_decode(void *codec_state, asx_buf_mut *src,
+                                           asx_frame *out_frame);
+ASX_API asx_status asx_bytes_encode(void *codec_state, const void *data, uint32_t len,
+                                    asx_buf_mut *dst);
 
 /* Build a pass-through codec (no state needed). */
 ASX_API asx_codec asx_bytes_as_codec(void);

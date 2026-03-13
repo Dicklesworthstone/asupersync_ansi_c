@@ -17,11 +17,10 @@
 /* Deterministic task: always does the same thing for same input. */
 typedef struct {
     asx_co_state co;
-    int          value;
+    int value;
 } det_state;
 
-static asx_status poll_deterministic(void *ud, asx_task_id self)
-{
+static asx_status poll_deterministic(void *ud, asx_task_id self) {
     det_state *s = (det_state *)ud;
     (void)self;
 
@@ -35,8 +34,7 @@ static asx_status poll_deterministic(void *ud, asx_task_id self)
 }
 
 /* Helper: run a standard scenario and return the trace digest. */
-static int run_scenario(uint64_t *out_digest)
-{
+static int run_scenario(uint64_t *out_digest) {
     asx_status st;
     asx_region_id region;
     asx_task_id task;
@@ -50,9 +48,8 @@ static int run_scenario(uint64_t *out_digest)
     st = asx_region_open(&region);
     if (st != ASX_OK) return 1;
 
-    st = asx_task_spawn_captured(region, poll_deterministic,
-                                  (uint32_t)sizeof(det_state),
-                                  NULL, &task, &state_ptr);
+    st = asx_task_spawn_captured(region, poll_deterministic, (uint32_t)sizeof(det_state), NULL,
+                                 &task, &state_ptr);
     if (st != ASX_OK) return 1;
 
     ds = (det_state *)state_ptr;
@@ -75,8 +72,7 @@ static int run_scenario(uint64_t *out_digest)
 /* -------------------------------------------------------------------
  * Scenario 1: Trace capture and digest
  * ------------------------------------------------------------------- */
-static int scenario_trace_digest(void)
-{
+static int scenario_trace_digest(void) {
     uint64_t digest1, digest2;
 
     printf("--- scenario: trace digest ---\n");
@@ -110,8 +106,7 @@ static int scenario_trace_digest(void)
 /* -------------------------------------------------------------------
  * Scenario 2: Trace event inspection
  * ------------------------------------------------------------------- */
-static int scenario_event_inspection(void)
-{
+static int scenario_event_inspection(void) {
     uint64_t digest;
     uint32_t count;
     asx_trace_event ev;
@@ -145,10 +140,8 @@ static int scenario_event_inspection(void)
              * name. Good for diagnostics. Naming is consistent with
              * other _str() functions across the API.
              */
-            printf("  [%u] %s entity=0x%llx aux=%llu\n",
-                   ev.sequence,
-                   asx_trace_event_kind_str(ev.kind),
-                   (unsigned long long)ev.entity_id,
+            printf("  [%u] %s entity=0x%llx aux=%llu\n", ev.sequence,
+                   asx_trace_event_kind_str(ev.kind), (unsigned long long)ev.entity_id,
                    (unsigned long long)ev.aux);
         }
     }
@@ -160,8 +153,7 @@ static int scenario_event_inspection(void)
 /* -------------------------------------------------------------------
  * Scenario 3: Binary trace export and import
  * ------------------------------------------------------------------- */
-static int scenario_binary_roundtrip(void)
-{
+static int scenario_binary_roundtrip(void) {
     uint64_t digest;
     asx_status st;
     uint8_t buf[8192];
@@ -217,8 +209,7 @@ static int scenario_binary_roundtrip(void)
         return 1;
     }
     rr = asx_replay_verify();
-    printf("  replay_verify result=%s index=%u\n",
-           asx_replay_result_kind_str(rr.result),
+    printf("  replay_verify result=%s index=%u\n", asx_replay_result_kind_str(rr.result),
            rr.divergence_index);
     if (rr.result != ASX_REPLAY_MATCH) {
         printf("  FAIL: replay_verify expected match\n");
@@ -232,8 +223,7 @@ static int scenario_binary_roundtrip(void)
 /* -------------------------------------------------------------------
  * Scenario 4: Snapshot capture
  * ------------------------------------------------------------------- */
-static int scenario_snapshot(void)
-{
+static int scenario_snapshot(void) {
     uint64_t digest;
     asx_snapshot_buffer snap1, snap2;
     uint64_t snap_digest1, snap_digest2;
@@ -296,8 +286,7 @@ static int scenario_snapshot(void)
 /* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
-int main(void)
-{
+int main(void) {
     int failures = 0;
 
     setvbuf(stdout, NULL, _IONBF, 0);

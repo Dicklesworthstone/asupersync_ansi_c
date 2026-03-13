@@ -35,18 +35,18 @@
 
 /* Core semantic types */
 #include <asx/core/budget.h>
-#include <asx/core/outcome.h>
 #include <asx/core/cancel.h>
-#include <asx/core/transition.h>
+#include <asx/core/channel.h>
 #include <asx/core/cleanup.h>
 #include <asx/core/ghost.h>
+#include <asx/core/outcome.h>
 #include <asx/core/resource.h>
-#include <asx/core/channel.h>
+#include <asx/core/transition.h>
 
 /* Codec abstraction and canonical fixture schema */
-#include <asx/codec/schema.h>
 #include <asx/codec/codec.h>
 #include <asx/codec/equivalence.h>
+#include <asx/codec/schema.h>
 
 /* Runtime (walking skeleton — bd-ix8.8) */
 #include <asx/runtime/runtime.h>

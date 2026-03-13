@@ -12,11 +12,11 @@
 #ifndef ASX_RUNTIME_EVENT_H
 #define ASX_RUNTIME_EVENT_H
 
-#include <stdint.h>
 #include <asx/asx_export.h>
-#include <asx/asx_status.h>
 #include <asx/asx_ids.h>
+#include <asx/asx_status.h>
 #include <asx/codec/codec.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,19 +27,19 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 
 typedef enum {
-    ASX_EVENT_REGION_OPEN        = 0,
-    ASX_EVENT_REGION_CLOSE       = 1,
-    ASX_EVENT_TASK_SPAWN         = 2,
-    ASX_EVENT_TASK_POLL          = 3,
-    ASX_EVENT_TASK_COMPLETE      = 4,
-    ASX_EVENT_OBLIGATION_CREATE  = 5,
-    ASX_EVENT_OBLIGATION_COMMIT  = 6,
-    ASX_EVENT_OBLIGATION_ABORT   = 7,
-    ASX_EVENT_BUDGET_EXHAUSTED   = 8,
-    ASX_EVENT_QUIESCENT          = 9,
-    ASX_EVENT_DRAIN_BEGIN        = 10,
-    ASX_EVENT_DRAIN_END          = 11,
-    ASX_EVENT_KIND_COUNT         = 12
+    ASX_EVENT_REGION_OPEN = 0,
+    ASX_EVENT_REGION_CLOSE = 1,
+    ASX_EVENT_TASK_SPAWN = 2,
+    ASX_EVENT_TASK_POLL = 3,
+    ASX_EVENT_TASK_COMPLETE = 4,
+    ASX_EVENT_OBLIGATION_CREATE = 5,
+    ASX_EVENT_OBLIGATION_COMMIT = 6,
+    ASX_EVENT_OBLIGATION_ABORT = 7,
+    ASX_EVENT_BUDGET_EXHAUSTED = 8,
+    ASX_EVENT_QUIESCENT = 9,
+    ASX_EVENT_DRAIN_BEGIN = 10,
+    ASX_EVENT_DRAIN_END = 11,
+    ASX_EVENT_KIND_COUNT = 12
 } asx_event_kind;
 
 /* ------------------------------------------------------------------ */
@@ -48,15 +48,13 @@ typedef enum {
 
 typedef struct {
     asx_event_kind kind;
-    uint64_t       entity_id;    /* region, task, or obligation handle */
-    uint64_t       parent_id;    /* parent entity (region for task, etc.) */
-    uint32_t       sequence;     /* global monotonic sequence */
-    asx_status     status;       /* ASX_OK for success events */
+    uint64_t entity_id; /* region, task, or obligation handle */
+    uint64_t parent_id; /* parent entity (region for task, etc.) */
+    uint32_t sequence;  /* global monotonic sequence */
+    asx_status status;  /* ASX_OK for success events */
 } asx_event_record;
 
-enum {
-    ASX_EVENT_LOG_CAPACITY = 512u
-};
+enum { ASX_EVENT_LOG_CAPACITY = 512u };
 
 /* ------------------------------------------------------------------ */
 /* Event log API                                                       */
@@ -66,9 +64,7 @@ enum {
 ASX_API void asx_event_log_reset(void);
 
 /* Emit an event into the log. Returns the sequence number assigned. */
-ASX_API uint32_t asx_event_emit(asx_event_kind kind,
-                                uint64_t entity_id,
-                                uint64_t parent_id,
+ASX_API uint32_t asx_event_emit(asx_event_kind kind, uint64_t entity_id, uint64_t parent_id,
                                 asx_status status);
 
 /* Total events emitted since last reset. */
@@ -100,13 +96,13 @@ ASX_API const char *asx_event_kind_str(asx_event_kind kind);
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    uint32_t first_divergence_index;   /* index of first mismatched event */
-    asx_event_record expected;          /* what was expected */
-    asx_event_record actual;            /* what was observed */
-    int              diverged;          /* 1 if mismatch found */
-    int              count_mismatch;    /* 1 if event counts differ */
-    uint32_t         expected_count;
-    uint32_t         actual_count;
+    uint32_t first_divergence_index; /* index of first mismatched event */
+    asx_event_record expected;       /* what was expected */
+    asx_event_record actual;         /* what was observed */
+    int diverged;                    /* 1 if mismatch found */
+    int count_mismatch;              /* 1 if event counts differ */
+    uint32_t expected_count;
+    uint32_t actual_count;
 } asx_replay_divergence;
 
 /*
@@ -114,10 +110,9 @@ typedef struct {
  * Returns ASX_OK if identical, ASX_E_EQUIVALENCE_MISMATCH if not.
  * Populates divergence with first-divergence diagnostics.
  */
-ASX_API ASX_MUST_USE asx_status asx_event_replay_verify(
-    const asx_event_record *expected,
-    uint32_t expected_count,
-    asx_replay_divergence *divergence);
+ASX_API ASX_MUST_USE asx_status asx_event_replay_verify(const asx_event_record *expected,
+                                                        uint32_t expected_count,
+                                                        asx_replay_divergence *divergence);
 
 #ifdef __cplusplus
 }

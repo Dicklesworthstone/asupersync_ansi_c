@@ -12,11 +12,13 @@
 #include <asx/time/timer_wheel.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
-#define REGISTER_IGNORE(w, dl, data, h) \
-    do { asx_status s_ = asx_timer_register((w), (dl), (data), (h)); (void)s_; } while (0)
+#define REGISTER_IGNORE(w, dl, data, h)                                                            \
+    do {                                                                                           \
+        asx_status s_ = asx_timer_register((w), (dl), (data), (h));                                \
+        (void)s_;                                                                                  \
+    } while (0)
 
-static uint64_t timer_trace_entity_id(const asx_timer_handle *handle)
-{
+static uint64_t timer_trace_entity_id(const asx_timer_handle *handle) {
     return ((uint64_t)handle->slot << 32) | (uint64_t)handle->generation;
 }
 
@@ -214,9 +216,9 @@ TEST(timer_mixed_deadline_ordering) {
     /* Collect all at once */
     count = asx_timer_collect_expired(w, 300, wakers, 8);
     ASSERT_EQ(count, (uint32_t)3);
-    ASSERT_EQ(wakers[0], (void *)1);  /* deadline 100 first */
-    ASSERT_EQ(wakers[1], (void *)2);  /* deadline 200 second */
-    ASSERT_EQ(wakers[2], (void *)3);  /* deadline 300 third */
+    ASSERT_EQ(wakers[0], (void *)1); /* deadline 100 first */
+    ASSERT_EQ(wakers[1], (void *)2); /* deadline 200 second */
+    ASSERT_EQ(wakers[2], (void *)3); /* deadline 300 third */
 }
 
 /* -------------------------------------------------------------------
@@ -243,11 +245,11 @@ TEST(timer_deadline_plus_seq_tiebreak) {
     count = asx_timer_collect_expired(w, 100, wakers, 8);
     ASSERT_EQ(count, (uint32_t)5);
     /* Expected order: deadline 50 first, then deadline 100 in insertion order */
-    ASSERT_EQ(wakers[0], (void *)5);   /* deadline 50 */
-    ASSERT_EQ(wakers[1], (void *)10);  /* deadline 100, seq 0 */
-    ASSERT_EQ(wakers[2], (void *)20);  /* deadline 100, seq 1 */
-    ASSERT_EQ(wakers[3], (void *)30);  /* deadline 100, seq 2 */
-    ASSERT_EQ(wakers[4], (void *)40);  /* deadline 100, seq 4 */
+    ASSERT_EQ(wakers[0], (void *)5);  /* deadline 50 */
+    ASSERT_EQ(wakers[1], (void *)10); /* deadline 100, seq 0 */
+    ASSERT_EQ(wakers[2], (void *)20); /* deadline 100, seq 1 */
+    ASSERT_EQ(wakers[3], (void *)30); /* deadline 100, seq 2 */
+    ASSERT_EQ(wakers[4], (void *)40); /* deadline 100, seq 4 */
 }
 
 /* -------------------------------------------------------------------
@@ -314,8 +316,7 @@ TEST(timer_duration_exceeded) {
     asx_timer_set_max_duration(w, 1000);
 
     /* Try to register timer with duration > max */
-    ASSERT_EQ(asx_timer_register(w, 2000, NULL, &h),
-              ASX_E_TIMER_DURATION_EXCEEDED);
+    ASSERT_EQ(asx_timer_register(w, 2000, NULL, &h), ASX_E_TIMER_DURATION_EXCEEDED);
 
     /* Timer within max should succeed */
     ASSERT_EQ(asx_timer_register(w, 500, NULL, &h), ASX_OK);
@@ -334,9 +335,7 @@ TEST(timer_collect_respects_max_wakers) {
     asx_timer_wheel_reset(w);
 
     /* Register 5 timers all at same deadline */
-    for (i = 0; i < 5; i++) {
-        REGISTER_IGNORE(w, 100, (void *)(uintptr_t)(i + 1), &h);
-    }
+    for (i = 0; i < 5; i++) { REGISTER_IGNORE(w, 100, (void *)(uintptr_t)(i + 1), &h); }
 
     /* Collect only 2 */
     count = asx_timer_collect_expired(w, 100, wakers, 2);

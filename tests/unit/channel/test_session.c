@@ -6,24 +6,24 @@
 
 #include "../../test_harness.h"
 #include <asx/core/session.h>
-#include <asx/runtime/runtime.h>
 #include <asx/runtime/rt.h>
+#include <asx/runtime/runtime.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 static asx_runtime g_rt;
 
-static void setup(void)
-{
+static void setup(void) {
     MUST_OK(asx_runtime_init_default(&g_rt));
     asx_session_reset();
 }
 
-static void teardown(void)
-{
-    asx_runtime_shutdown(&g_rt);
-}
+static void teardown(void) { asx_runtime_shutdown(&g_rt); }
 
 /* ------------------------------------------------------------------ */
 /* Create tests                                                        */
@@ -176,8 +176,7 @@ TEST(initiator_drop_half_closes) {
     MUST_OK(asx_region_open(&rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     asx_session_endpoint_drop(&init);
-    ASSERT_EQ(asx_session_get_state(resp.slot, resp.generation),
-              ASX_SESSION_HALF_CLOSED);
+    ASSERT_EQ(asx_session_get_state(resp.slot, resp.generation), ASX_SESSION_HALF_CLOSED);
     teardown();
 }
 
@@ -189,8 +188,7 @@ TEST(both_drop_closes) {
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     asx_session_endpoint_drop(&init);
     asx_session_endpoint_drop(&resp);
-    ASSERT_EQ(asx_session_get_state(resp.slot, resp.generation),
-              ASX_SESSION_CLOSED);
+    ASSERT_EQ(asx_session_get_state(resp.slot, resp.generation), ASX_SESSION_CLOSED);
     teardown();
 }
 
@@ -257,7 +255,7 @@ TEST(peer_alive_false_after_drop) {
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
     asx_session_endpoint_drop(&resp);
     ASSERT_FALSE(asx_session_peer_alive(&init));
-    ASSERT_TRUE(asx_session_peer_alive(&resp));  /* initiator still alive from resp's POV... wait */
+    ASSERT_TRUE(asx_session_peer_alive(&resp)); /* initiator still alive from resp's POV... wait */
     teardown();
 }
 
@@ -265,18 +263,14 @@ TEST(peer_alive_false_after_drop) {
 /* Null safety                                                         */
 /* ------------------------------------------------------------------ */
 
-TEST(send_null_fails) {
-    ASSERT_EQ(asx_session_send(NULL, 1), ASX_E_INVALID_ARGUMENT);
-}
+TEST(send_null_fails) { ASSERT_EQ(asx_session_send(NULL, 1), ASX_E_INVALID_ARGUMENT); }
 
 TEST(recv_null_fails) {
     uint64_t val;
     ASSERT_EQ(asx_session_try_recv(NULL, &val), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(peer_alive_null_false) {
-    ASSERT_FALSE(asx_session_peer_alive(NULL));
-}
+TEST(peer_alive_null_false) { ASSERT_FALSE(asx_session_peer_alive(NULL)); }
 
 /* ------------------------------------------------------------------ */
 /* Capacity                                                            */
@@ -289,9 +283,7 @@ TEST(channel_full_on_capacity) {
     setup();
     MUST_OK(asx_region_open(&rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
-    for (i = 0; i < 4; i++) {
-        MUST_OK(asx_session_send(&init, i));
-    }
+    for (i = 0; i < 4; i++) { MUST_OK(asx_session_send(&init, i)); }
     ASSERT_EQ(asx_session_send(&init, 99), ASX_E_CHANNEL_FULL);
     teardown();
 }
@@ -315,8 +307,7 @@ TEST(recv_empty_would_block) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_session ===\n");
 
     RUN_TEST(create_null_initiator_fails);

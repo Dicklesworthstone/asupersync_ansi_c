@@ -20,14 +20,17 @@
 
 /* Suppress warn_unused_result in test helpers where we don't check */
 static asx_status rt_test_sink_;
-#define MUST_OK(expr) do { rt_test_sink_ = (expr); (void)rt_test_sink_; } while(0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        rt_test_sink_ = (expr);                                                                    \
+        (void)rt_test_sink_;                                                                       \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Dummy poll function for task spawn tests                            */
 /* ------------------------------------------------------------------ */
 
-static asx_status dummy_poll(void *user_data, asx_task_id self)
-{
+static asx_status dummy_poll(void *user_data, asx_task_id self) {
     (void)user_data;
     (void)self;
     return ASX_OK;
@@ -37,15 +40,9 @@ static asx_status dummy_poll(void *user_data, asx_task_id self)
 /* Helper: create a valid config                                       */
 /* ------------------------------------------------------------------ */
 
-static void make_valid_config(asx_runtime_config *cfg)
-{
-    asx_runtime_config_init(cfg);
-}
+static void make_valid_config(asx_runtime_config *cfg) { asx_runtime_config_init(cfg); }
 
-static void make_valid_hooks(asx_runtime_hooks *hooks)
-{
-    asx_runtime_hooks_init(hooks);
-}
+static void make_valid_hooks(asx_runtime_hooks *hooks) { asx_runtime_hooks_init(hooks); }
 
 /* ------------------------------------------------------------------ */
 /* Config validation tests                                             */
@@ -161,9 +158,7 @@ TEST(shutdown_clears_state) {
     ASSERT_EQ(rt.generation, 0u);
 }
 
-TEST(shutdown_null_safe) {
-    asx_runtime_shutdown(NULL);
-}
+TEST(shutdown_null_safe) { asx_runtime_shutdown(NULL); }
 
 TEST(shutdown_double_safe) {
     asx_runtime rt;
@@ -187,9 +182,7 @@ TEST(shutdown_uninitialized_safe) {
 /* Default initialization tests                                        */
 /* ------------------------------------------------------------------ */
 
-TEST(init_default_null_fails) {
-    ASSERT_EQ(asx_runtime_init_default(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(init_default_null_fails) { ASSERT_EQ(asx_runtime_init_default(NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(init_default_success) {
     asx_runtime rt;
@@ -208,9 +201,7 @@ TEST(init_default_success) {
 /* is_initialized tests                                                */
 /* ------------------------------------------------------------------ */
 
-TEST(is_initialized_null_returns_false) {
-    ASSERT_FALSE(asx_runtime_is_initialized(NULL));
-}
+TEST(is_initialized_null_returns_false) { ASSERT_FALSE(asx_runtime_is_initialized(NULL)); }
 
 TEST(is_initialized_zeroed_returns_false) {
     asx_runtime rt;
@@ -278,17 +269,11 @@ TEST(get_hooks_uninitialized_fails) {
 /* State query tests                                                   */
 /* ------------------------------------------------------------------ */
 
-TEST(region_count_null_returns_zero) {
-    ASSERT_EQ(asx_runtime_region_count(NULL), 0u);
-}
+TEST(region_count_null_returns_zero) { ASSERT_EQ(asx_runtime_region_count(NULL), 0u); }
 
-TEST(task_count_null_returns_zero) {
-    ASSERT_EQ(asx_runtime_task_count(NULL), 0u);
-}
+TEST(task_count_null_returns_zero) { ASSERT_EQ(asx_runtime_task_count(NULL), 0u); }
 
-TEST(obligation_count_null_returns_zero) {
-    ASSERT_EQ(asx_runtime_obligation_count(NULL), 0u);
-}
+TEST(obligation_count_null_returns_zero) { ASSERT_EQ(asx_runtime_obligation_count(NULL), 0u); }
 
 TEST(counts_zero_after_init) {
     asx_runtime rt;
@@ -339,9 +324,7 @@ TEST(region_capacity_returns_max) {
     ASSERT_EQ(asx_runtime_region_capacity(), (uint32_t)ASX_MAX_REGIONS);
 }
 
-TEST(task_capacity_returns_max) {
-    ASSERT_EQ(asx_runtime_task_capacity(), (uint32_t)ASX_MAX_TASKS);
-}
+TEST(task_capacity_returns_max) { ASSERT_EQ(asx_runtime_task_capacity(), (uint32_t)ASX_MAX_TASKS); }
 
 TEST(obligation_capacity_returns_max) {
     ASSERT_EQ(asx_runtime_obligation_capacity(), (uint32_t)ASX_MAX_OBLIGATIONS);
@@ -404,8 +387,7 @@ TEST(full_roundtrip) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_rt ===\n");
 
     /* Config validation */

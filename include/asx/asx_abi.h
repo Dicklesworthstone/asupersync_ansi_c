@@ -66,10 +66,8 @@ extern "C" {
 
 /* Composite ABI version for single-value comparisons.
  * Format: (MAJOR * 1000000) + (MINOR * 1000) + PATCH */
-#define ASX_ABI_VERSION \
-    ((ASX_ABI_VERSION_MAJOR * 1000000) + \
-     (ASX_ABI_VERSION_MINOR * 1000) + \
-     ASX_ABI_VERSION_PATCH)
+#define ASX_ABI_VERSION                                                                            \
+    ((ASX_ABI_VERSION_MAJOR * 1000000) + (ASX_ABI_VERSION_MINOR * 1000) + ASX_ABI_VERSION_PATCH)
 
 /* -----------------------------------------------------------------------
  * Deprecation macro — marks functions/types scheduled for removal
@@ -80,17 +78,17 @@ extern "C" {
  * ----------------------------------------------------------------------- */
 
 #ifndef ASX_DEPRECATED
-  #if defined(__cplusplus) && __cplusplus >= 201402L
-    #define ASX_DEPRECATED(msg) [[deprecated(msg)]]
-  #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
-    #define ASX_DEPRECATED(msg) [[deprecated(msg)]]
-  #elif defined(__GNUC__) || defined(__clang__)
-    #define ASX_DEPRECATED(msg) __attribute__((deprecated(msg)))
-  #elif defined(_MSC_VER)
-    #define ASX_DEPRECATED(msg) __declspec(deprecated(msg))
-  #else
-    #define ASX_DEPRECATED(msg)
-  #endif
+#if defined(__cplusplus) && __cplusplus >= 201402L
+#define ASX_DEPRECATED(msg) [[deprecated(msg)]]
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+#define ASX_DEPRECATED(msg) [[deprecated(msg)]]
+#elif defined(__GNUC__) || defined(__clang__)
+#define ASX_DEPRECATED(msg) __attribute__((deprecated(msg)))
+#elif defined(_MSC_VER)
+#define ASX_DEPRECATED(msg) __declspec(deprecated(msg))
+#else
+#define ASX_DEPRECATED(msg)
+#endif
 #endif
 
 /* -----------------------------------------------------------------------
@@ -108,7 +106,7 @@ extern "C" {
 /* Compile-time ABI version assertion (works at file or function scope).
  * Uses sizeof of a negative-size array to produce a compile error on
  * mismatch, wrapped in (void) to suppress unused warnings. */
-#define ASX_ABI_CHECK(expected_major) \
+#define ASX_ABI_CHECK(expected_major)                                                              \
     (void)sizeof(char[(ASX_ABI_VERSION_MAJOR == (expected_major)) ? 1 : -1])
 
 /* -----------------------------------------------------------------------
@@ -119,13 +117,13 @@ extern "C" {
  * ----------------------------------------------------------------------- */
 
 /* Expected sizes (in bytes) for 64-bit targets */
-#define ASX_ABI_SIZEOF_REGION_ID     8u
-#define ASX_ABI_SIZEOF_TASK_ID       8u
+#define ASX_ABI_SIZEOF_REGION_ID 8u
+#define ASX_ABI_SIZEOF_TASK_ID 8u
 #define ASX_ABI_SIZEOF_OBLIGATION_ID 8u
-#define ASX_ABI_SIZEOF_TIMER_ID      8u
-#define ASX_ABI_SIZEOF_CHANNEL_ID    8u
-#define ASX_ABI_SIZEOF_STATUS        4u
-#define ASX_ABI_SIZEOF_TIME          8u
+#define ASX_ABI_SIZEOF_TIMER_ID 8u
+#define ASX_ABI_SIZEOF_CHANNEL_ID 8u
+#define ASX_ABI_SIZEOF_STATUS 4u
+#define ASX_ABI_SIZEOF_TIME 8u
 
 /* -----------------------------------------------------------------------
  * ABI-frozen enum sentinel values
@@ -135,12 +133,12 @@ extern "C" {
  * existing values is an ABI break.
  * ----------------------------------------------------------------------- */
 
-#define ASX_ABI_REGION_STATE_LAST       4u  /* ASX_REGION_CLOSED */
-#define ASX_ABI_TASK_STATE_LAST         5u  /* ASX_TASK_COMPLETED */
-#define ASX_ABI_OBLIGATION_STATE_LAST   3u  /* ASX_OBLIGATION_LEAKED */
-#define ASX_ABI_OUTCOME_SEVERITY_LAST   3u  /* ASX_OUTCOME_PANICKED */
-#define ASX_ABI_CANCEL_KIND_LAST       10u  /* ASX_CANCEL_SHUTDOWN */
-#define ASX_ABI_CANCEL_PHASE_LAST       3u  /* ASX_CANCEL_PHASE_COMPLETED */
+#define ASX_ABI_REGION_STATE_LAST 4u     /* ASX_REGION_CLOSED */
+#define ASX_ABI_TASK_STATE_LAST 5u       /* ASX_TASK_COMPLETED */
+#define ASX_ABI_OBLIGATION_STATE_LAST 3u /* ASX_OBLIGATION_LEAKED */
+#define ASX_ABI_OUTCOME_SEVERITY_LAST 3u /* ASX_OUTCOME_PANICKED */
+#define ASX_ABI_CANCEL_KIND_LAST 10u     /* ASX_CANCEL_SHUTDOWN */
+#define ASX_ABI_CANCEL_PHASE_LAST 3u     /* ASX_CANCEL_PHASE_COMPLETED */
 
 /* -----------------------------------------------------------------------
  * Runtime ABI identity query

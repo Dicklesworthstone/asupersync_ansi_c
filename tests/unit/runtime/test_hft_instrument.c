@@ -20,8 +20,7 @@
  * Histogram tests
  * =================================================================== */
 
-TEST(histogram_init_zeroed)
-{
+TEST(histogram_init_zeroed) {
     asx_hft_histogram h;
     uint32_t i;
 
@@ -30,13 +29,10 @@ TEST(histogram_init_zeroed)
     ASSERT_EQ(h.overflow, 0u);
     ASSERT_EQ(h.sum_ns, (uint64_t)0);
     ASSERT_EQ(h.max_ns, (uint64_t)0);
-    for (i = 0; i < ASX_HFT_HISTOGRAM_BINS; i++) {
-        ASSERT_EQ(h.bins[i], 0u);
-    }
+    for (i = 0; i < ASX_HFT_HISTOGRAM_BINS; i++) { ASSERT_EQ(h.bins[i], 0u); }
 }
 
-TEST(histogram_single_sample)
-{
+TEST(histogram_single_sample) {
     asx_hft_histogram h;
 
     asx_hft_histogram_init(&h);
@@ -49,8 +45,7 @@ TEST(histogram_single_sample)
     ASSERT_EQ(asx_hft_histogram_mean(&h), (uint64_t)100);
 }
 
-TEST(histogram_zero_sample)
-{
+TEST(histogram_zero_sample) {
     asx_hft_histogram h;
 
     asx_hft_histogram_init(&h);
@@ -61,8 +56,7 @@ TEST(histogram_zero_sample)
     ASSERT_EQ(h.min_ns, (uint64_t)0);
 }
 
-TEST(histogram_overflow_sample)
-{
+TEST(histogram_overflow_sample) {
     asx_hft_histogram h;
 
     asx_hft_histogram_init(&h);
@@ -73,8 +67,7 @@ TEST(histogram_overflow_sample)
     ASSERT_EQ(h.max_ns, (uint64_t)100000);
 }
 
-TEST(histogram_bin_assignment)
-{
+TEST(histogram_bin_assignment) {
     asx_hft_histogram h;
 
     asx_hft_histogram_init(&h);
@@ -98,8 +91,7 @@ TEST(histogram_bin_assignment)
     ASSERT_EQ(h.total, 4u);
 }
 
-TEST(histogram_percentile_uniform)
-{
+TEST(histogram_percentile_uniform) {
     asx_hft_histogram h;
     uint32_t i;
     uint64_t p50;
@@ -107,17 +99,14 @@ TEST(histogram_percentile_uniform)
     asx_hft_histogram_init(&h);
 
     /* Record 100 samples at value 50 */
-    for (i = 0; i < 100; i++) {
-        asx_hft_histogram_record(&h, 50);
-    }
+    for (i = 0; i < 100; i++) { asx_hft_histogram_record(&h, 50); }
 
     p50 = asx_hft_histogram_percentile(&h, 50);
     /* All samples in same bin, so any percentile returns that bin's lower bound */
-    ASSERT_TRUE(p50 <= 64);  /* bin boundary */
+    ASSERT_TRUE(p50 <= 64); /* bin boundary */
 }
 
-TEST(histogram_percentile_bimodal)
-{
+TEST(histogram_percentile_bimodal) {
     asx_hft_histogram h;
     uint32_t i;
     uint64_t p50;
@@ -126,13 +115,9 @@ TEST(histogram_percentile_bimodal)
     asx_hft_histogram_init(&h);
 
     /* 90 samples at value 10 (low latency) */
-    for (i = 0; i < 90; i++) {
-        asx_hft_histogram_record(&h, 10);
-    }
+    for (i = 0; i < 90; i++) { asx_hft_histogram_record(&h, 10); }
     /* 10 samples at value 10000 (high latency) */
-    for (i = 0; i < 10; i++) {
-        asx_hft_histogram_record(&h, 10000);
-    }
+    for (i = 0; i < 10; i++) { asx_hft_histogram_record(&h, 10000); }
 
     p50 = asx_hft_histogram_percentile(&h, 50);
     p99 = asx_hft_histogram_percentile(&h, 99);
@@ -143,8 +128,7 @@ TEST(histogram_percentile_bimodal)
     ASSERT_TRUE(p99 > 100);
 }
 
-TEST(histogram_mean_multiple)
-{
+TEST(histogram_mean_multiple) {
     asx_hft_histogram h;
 
     asx_hft_histogram_init(&h);
@@ -155,16 +139,14 @@ TEST(histogram_mean_multiple)
     ASSERT_EQ(asx_hft_histogram_mean(&h), (uint64_t)200);
 }
 
-TEST(histogram_mean_empty)
-{
+TEST(histogram_mean_empty) {
     asx_hft_histogram h;
 
     asx_hft_histogram_init(&h);
     ASSERT_EQ(asx_hft_histogram_mean(&h), (uint64_t)0);
 }
 
-TEST(histogram_reset)
-{
+TEST(histogram_reset) {
     asx_hft_histogram h;
 
     asx_hft_histogram_init(&h);
@@ -176,8 +158,7 @@ TEST(histogram_reset)
     ASSERT_EQ(h.sum_ns, (uint64_t)0);
 }
 
-TEST(histogram_min_max_tracked)
-{
+TEST(histogram_min_max_tracked) {
     asx_hft_histogram h;
 
     asx_hft_histogram_init(&h);
@@ -193,8 +174,7 @@ TEST(histogram_min_max_tracked)
  * Jitter tracker tests
  * =================================================================== */
 
-TEST(jitter_init_zero)
-{
+TEST(jitter_init_zero) {
     asx_hft_jitter_tracker jt;
 
     asx_hft_jitter_init(&jt, 0);
@@ -202,54 +182,43 @@ TEST(jitter_init_zero)
     ASSERT_EQ(jt.hist.total, 0u);
 }
 
-TEST(jitter_uniform_low)
-{
+TEST(jitter_uniform_low) {
     asx_hft_jitter_tracker jt;
     uint32_t i;
 
-    asx_hft_jitter_init(&jt, 0);  /* recompute every sample */
+    asx_hft_jitter_init(&jt, 0); /* recompute every sample */
 
     /* All same value (0) — bin midpoint equals mean, so MAD = 0 */
-    for (i = 0; i < 100; i++) {
-        asx_hft_jitter_record(&jt, 0);
-    }
+    for (i = 0; i < 100; i++) { asx_hft_jitter_record(&jt, 0); }
 
     /* All samples in bin 0 (midpoint=0), mean=0, MAD=0 */
     ASSERT_EQ(asx_hft_jitter_get(&jt), (uint64_t)0);
 }
 
-TEST(jitter_bimodal_nonzero)
-{
+TEST(jitter_bimodal_nonzero) {
     asx_hft_jitter_tracker jt;
     uint32_t i;
 
     asx_hft_jitter_init(&jt, 0);
 
     /* Half at 10ns, half at 10000ns — should have nonzero jitter */
-    for (i = 0; i < 50; i++) {
-        asx_hft_jitter_record(&jt, 10);
-    }
-    for (i = 0; i < 50; i++) {
-        asx_hft_jitter_record(&jt, 10000);
-    }
+    for (i = 0; i < 50; i++) { asx_hft_jitter_record(&jt, 10); }
+    for (i = 0; i < 50; i++) { asx_hft_jitter_record(&jt, 10000); }
 
     ASSERT_TRUE(asx_hft_jitter_get(&jt) > 0);
 }
 
-TEST(jitter_recompute_interval)
-{
+TEST(jitter_recompute_interval) {
     asx_hft_jitter_tracker jt;
     uint32_t i;
     uint64_t jitter_before;
 
-    asx_hft_jitter_init(&jt, 10);  /* recompute every 10 samples */
+    asx_hft_jitter_init(&jt, 10); /* recompute every 10 samples */
 
     /* First 9 samples at value 0: jitter not yet recomputed */
-    for (i = 0; i < 9; i++) {
-        asx_hft_jitter_record(&jt, 0);
-    }
+    for (i = 0; i < 9; i++) { asx_hft_jitter_record(&jt, 0); }
     jitter_before = asx_hft_jitter_get(&jt);
-    ASSERT_EQ(jitter_before, (uint64_t)0);  /* not yet triggered */
+    ASSERT_EQ(jitter_before, (uint64_t)0); /* not yet triggered */
 
     /* 10th sample (also 0) triggers recompute */
     asx_hft_jitter_record(&jt, 0);
@@ -257,8 +226,7 @@ TEST(jitter_recompute_interval)
     ASSERT_EQ(asx_hft_jitter_get(&jt), (uint64_t)0);
 }
 
-TEST(jitter_reset)
-{
+TEST(jitter_reset) {
     asx_hft_jitter_tracker jt;
 
     asx_hft_jitter_init(&jt, 0);
@@ -274,8 +242,7 @@ TEST(jitter_reset)
  * Overload policy tests
  * =================================================================== */
 
-TEST(overload_default_reject_at_90)
-{
+TEST(overload_default_reject_at_90) {
     asx_overload_policy pol;
 
     asx_overload_policy_init(&pol);
@@ -283,8 +250,7 @@ TEST(overload_default_reject_at_90)
     ASSERT_EQ(pol.threshold_pct, 90u);
 }
 
-TEST(overload_below_threshold_admits)
-{
+TEST(overload_below_threshold_admits) {
     asx_overload_policy pol;
     asx_overload_decision dec;
 
@@ -296,8 +262,7 @@ TEST(overload_below_threshold_admits)
     ASSERT_EQ(dec.load_pct, 50u);
 }
 
-TEST(overload_at_threshold_rejects)
-{
+TEST(overload_at_threshold_rejects) {
     asx_overload_policy pol;
     asx_overload_decision dec;
 
@@ -309,8 +274,7 @@ TEST(overload_at_threshold_rejects)
     ASSERT_EQ(dec.load_pct, 90u);
 }
 
-TEST(overload_above_threshold_rejects)
-{
+TEST(overload_above_threshold_rejects) {
     asx_overload_policy pol;
     asx_overload_decision dec;
 
@@ -321,8 +285,7 @@ TEST(overload_above_threshold_rejects)
     ASSERT_EQ((int)dec.admit_status, (int)ASX_E_ADMISSION_CLOSED);
 }
 
-TEST(overload_shed_oldest_reports_count)
-{
+TEST(overload_shed_oldest_reports_count) {
     asx_overload_policy pol;
     asx_overload_decision dec;
 
@@ -339,24 +302,22 @@ TEST(overload_shed_oldest_reports_count)
     ASSERT_EQ((int)dec.admit_status, (int)ASX_OK);
 }
 
-TEST(overload_shed_clamped_to_used)
-{
+TEST(overload_shed_clamped_to_used) {
     asx_overload_policy pol;
     asx_overload_decision dec;
 
     asx_overload_policy_init(&pol);
     pol.mode = ASX_OVERLOAD_SHED_OLDEST;
-    pol.shed_max = 100;  /* more than used */
+    pol.shed_max = 100; /* more than used */
     pol.threshold_pct = 50;
 
     asx_overload_evaluate(&pol, 2, 3, &dec);
 
     ASSERT_EQ(dec.triggered, 1);
-    ASSERT_EQ(dec.shed_count, 2u);  /* clamped to used */
+    ASSERT_EQ(dec.shed_count, 2u); /* clamped to used */
 }
 
-TEST(overload_backpressure_would_block)
-{
+TEST(overload_backpressure_would_block) {
     asx_overload_policy pol;
     asx_overload_decision dec;
 
@@ -370,8 +331,7 @@ TEST(overload_backpressure_would_block)
     ASSERT_EQ((int)dec.admit_status, (int)ASX_E_WOULD_BLOCK);
 }
 
-TEST(overload_zero_capacity)
-{
+TEST(overload_zero_capacity) {
     asx_overload_policy pol;
     asx_overload_decision dec;
 
@@ -383,8 +343,7 @@ TEST(overload_zero_capacity)
     ASSERT_EQ((int)dec.admit_status, (int)ASX_E_RESOURCE_EXHAUSTED);
 }
 
-TEST(overload_large_values_do_not_wrap)
-{
+TEST(overload_large_values_do_not_wrap) {
     asx_overload_policy pol;
     asx_overload_decision dec;
 
@@ -396,16 +355,14 @@ TEST(overload_large_values_do_not_wrap)
     ASSERT_EQ((int)dec.admit_status, (int)ASX_E_ADMISSION_CLOSED);
 }
 
-TEST(overload_mode_str)
-{
+TEST(overload_mode_str) {
     ASSERT_STR_EQ(asx_overload_mode_str(ASX_OVERLOAD_REJECT), "REJECT");
     ASSERT_STR_EQ(asx_overload_mode_str(ASX_OVERLOAD_SHED_OLDEST), "SHED_OLDEST");
     ASSERT_STR_EQ(asx_overload_mode_str(ASX_OVERLOAD_BACKPRESSURE), "BACKPRESSURE");
     ASSERT_STR_EQ(asx_overload_mode_str((asx_overload_mode)99), "UNKNOWN");
 }
 
-TEST(overload_deterministic_replay)
-{
+TEST(overload_deterministic_replay) {
     asx_overload_policy pol;
     asx_overload_decision dec1;
     asx_overload_decision dec2;
@@ -426,8 +383,7 @@ TEST(overload_deterministic_replay)
  * Metric gate tests
  * =================================================================== */
 
-TEST(gate_default_init)
-{
+TEST(gate_default_init) {
     asx_hft_gate gate;
 
     asx_hft_gate_init(&gate);
@@ -437,8 +393,7 @@ TEST(gate_default_init)
     ASSERT_EQ(gate.jitter_ns, (uint64_t)0);
 }
 
-TEST(gate_passes_low_latency)
-{
+TEST(gate_passes_low_latency) {
     asx_hft_gate gate;
     asx_hft_histogram h;
     asx_hft_gate_result result;
@@ -448,41 +403,33 @@ TEST(gate_passes_low_latency)
     asx_hft_histogram_init(&h);
 
     /* All samples at 100ns — well under 10us p99 threshold */
-    for (i = 0; i < 1000; i++) {
-        asx_hft_histogram_record(&h, 100);
-    }
+    for (i = 0; i < 1000; i++) { asx_hft_histogram_record(&h, 100); }
 
     asx_hft_gate_evaluate(&gate, &h, NULL, &result);
     ASSERT_EQ(result.pass, 1);
     ASSERT_EQ(result.violations, 0u);
 }
 
-TEST(gate_fails_high_p99)
-{
+TEST(gate_fails_high_p99) {
     asx_hft_gate gate;
     asx_hft_histogram h;
     asx_hft_gate_result result;
     uint32_t i;
 
     asx_hft_gate_init(&gate);
-    gate.p99_ns = 100;  /* tight threshold */
+    gate.p99_ns = 100; /* tight threshold */
     asx_hft_histogram_init(&h);
 
     /* 50% of samples at high latency — p99 will be high */
-    for (i = 0; i < 50; i++) {
-        asx_hft_histogram_record(&h, 10);
-    }
-    for (i = 0; i < 50; i++) {
-        asx_hft_histogram_record(&h, 20000);
-    }
+    for (i = 0; i < 50; i++) { asx_hft_histogram_record(&h, 10); }
+    for (i = 0; i < 50; i++) { asx_hft_histogram_record(&h, 20000); }
 
     asx_hft_gate_evaluate(&gate, &h, NULL, &result);
     ASSERT_EQ(result.pass, 0);
     ASSERT_TRUE(result.violations & ASX_GATE_VIOLATION_P99);
 }
 
-TEST(gate_jitter_threshold)
-{
+TEST(gate_jitter_threshold) {
     asx_hft_gate gate;
     asx_hft_histogram h;
     asx_hft_jitter_tracker jt;
@@ -490,25 +437,20 @@ TEST(gate_jitter_threshold)
     uint32_t i;
 
     asx_hft_gate_init(&gate);
-    gate.jitter_ns = 10;  /* very tight jitter threshold */
+    gate.jitter_ns = 10; /* very tight jitter threshold */
     asx_hft_histogram_init(&h);
     asx_hft_jitter_init(&jt, 0);
 
     /* Bimodal distribution = high jitter */
-    for (i = 0; i < 50; i++) {
-        asx_hft_jitter_record(&jt, 10);
-    }
-    for (i = 0; i < 50; i++) {
-        asx_hft_jitter_record(&jt, 10000);
-    }
+    for (i = 0; i < 50; i++) { asx_hft_jitter_record(&jt, 10); }
+    for (i = 0; i < 50; i++) { asx_hft_jitter_record(&jt, 10000); }
 
     asx_hft_gate_evaluate(&gate, &h, &jt, &result);
     ASSERT_EQ(result.pass, 0);
     ASSERT_TRUE(result.violations & ASX_GATE_VIOLATION_JITTER);
 }
 
-TEST(gate_null_hist_and_jt)
-{
+TEST(gate_null_hist_and_jt) {
     asx_hft_gate gate;
     asx_hft_gate_result result;
 
@@ -524,8 +466,7 @@ TEST(gate_null_hist_and_jt)
  * Global instrumentation tests
  * =================================================================== */
 
-TEST(global_instrument_reset)
-{
+TEST(global_instrument_reset) {
     asx_hft_histogram *h;
     asx_hft_jitter_tracker *jt;
 
@@ -540,8 +481,7 @@ TEST(global_instrument_reset)
     ASSERT_EQ(asx_hft_jitter_get(jt), (uint64_t)0);
 }
 
-TEST(global_record_poll_latency)
-{
+TEST(global_record_poll_latency) {
     asx_hft_histogram *h;
 
     asx_hft_instrument_reset();
@@ -554,17 +494,14 @@ TEST(global_record_poll_latency)
     ASSERT_EQ(h->max_ns, (uint64_t)1000);
 }
 
-TEST(global_record_updates_jitter)
-{
+TEST(global_record_updates_jitter) {
     asx_hft_jitter_tracker *jt;
     uint32_t i;
 
     asx_hft_instrument_reset();
 
     /* Record enough samples to trigger jitter recompute (every 64) */
-    for (i = 0; i < 64; i++) {
-        asx_hft_record_poll_latency(0);
-    }
+    for (i = 0; i < 64; i++) { asx_hft_record_poll_latency(0); }
 
     jt = asx_hft_sched_jitter();
     /* All same value (0) in bin 0 = zero MAD */
@@ -575,8 +512,7 @@ TEST(global_record_updates_jitter)
  * Runner
  * =================================================================== */
 
-int main(void)
-{
+int main(void) {
     /* Histogram */
     RUN_TEST(histogram_init_zeroed);
     RUN_TEST(histogram_single_sample);

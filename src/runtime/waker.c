@@ -15,9 +15,9 @@
 
 typedef struct {
     asx_task_id task;
-    uint16_t    generation;
-    int         alive;
-    int         signaled;
+    uint16_t generation;
+    int alive;
+    int signaled;
 } asx_waker_slot;
 
 /* ------------------------------------------------------------------ */
@@ -28,15 +28,13 @@ static asx_waker_slot g_slots[ASX_MAX_WAKERS];
 static uint32_t g_slot_count = 0;
 static uint32_t g_active_count = 0;
 
-static uint16_t next_gen(uint16_t g)
-{
+static uint16_t next_gen(uint16_t g) {
     g++;
     if (g == 0) g = 1;
     return g;
 }
 
-void asx_waker_reset(void)
-{
+void asx_waker_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_WAKERS; i++) {
         g_slots[i].generation = next_gen(g_slots[i].generation);
@@ -52,8 +50,7 @@ void asx_waker_reset(void)
 /* Registration                                                        */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_waker_register(asx_task_id task, asx_waker *out_waker)
-{
+asx_status asx_waker_register(asx_task_id task, asx_waker *out_waker) {
     uint32_t idx;
 
     if (out_waker == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -71,8 +68,7 @@ asx_status asx_waker_register(asx_task_id task, asx_waker *out_waker)
     }
 
     if (idx == ASX_MAX_WAKERS) {
-        if (g_slot_count >= ASX_MAX_WAKERS)
-            return ASX_E_RESOURCE_EXHAUSTED;
+        if (g_slot_count >= ASX_MAX_WAKERS) return ASX_E_RESOURCE_EXHAUSTED;
         idx = g_slot_count++;
     }
 
@@ -88,8 +84,7 @@ asx_status asx_waker_register(asx_task_id task, asx_waker *out_waker)
     return ASX_OK;
 }
 
-void asx_waker_deregister(asx_waker *waker)
-{
+void asx_waker_deregister(asx_waker *waker) {
     if (waker == NULL) return;
     if (waker->slot >= g_slot_count) return;
     if (g_slots[waker->slot].generation != waker->generation) return;
@@ -104,8 +99,7 @@ void asx_waker_deregister(asx_waker *waker)
 /* Signaling                                                           */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_waker_wake(const asx_waker *waker)
-{
+asx_status asx_waker_wake(const asx_waker *waker) {
     if (waker == NULL) return ASX_E_INVALID_ARGUMENT;
     if (waker->slot >= g_slot_count) return ASX_E_NOT_FOUND;
     if (g_slots[waker->slot].generation != waker->generation) return ASX_E_NOT_FOUND;
@@ -115,10 +109,8 @@ asx_status asx_waker_wake(const asx_waker *waker)
     return ASX_OK;
 }
 
-asx_status asx_waker_clone(const asx_waker *src, asx_waker *out_clone)
-{
-    if (src == NULL || out_clone == NULL)
-        return ASX_E_INVALID_ARGUMENT;
+asx_status asx_waker_clone(const asx_waker *src, asx_waker *out_clone) {
+    if (src == NULL || out_clone == NULL) return ASX_E_INVALID_ARGUMENT;
     if (src->slot >= g_slot_count) return ASX_E_NOT_FOUND;
     if (g_slots[src->slot].generation != src->generation) return ASX_E_NOT_FOUND;
     if (!g_slots[src->slot].alive) return ASX_E_NOT_FOUND;
@@ -133,8 +125,7 @@ asx_status asx_waker_clone(const asx_waker *src, asx_waker *out_clone)
 /* Query                                                               */
 /* ------------------------------------------------------------------ */
 
-int asx_waker_is_signaled(const asx_waker *waker)
-{
+int asx_waker_is_signaled(const asx_waker *waker) {
     if (waker == NULL) return 0;
     if (waker->slot >= g_slot_count) return 0;
     if (g_slots[waker->slot].generation != waker->generation) return 0;
@@ -142,16 +133,14 @@ int asx_waker_is_signaled(const asx_waker *waker)
     return g_slots[waker->slot].signaled;
 }
 
-void asx_waker_clear(asx_waker *waker)
-{
+void asx_waker_clear(asx_waker *waker) {
     if (waker == NULL) return;
     if (waker->slot >= g_slot_count) return;
     if (g_slots[waker->slot].generation != waker->generation) return;
     g_slots[waker->slot].signaled = 0;
 }
 
-asx_task_id asx_waker_task(const asx_waker *waker)
-{
+asx_task_id asx_waker_task(const asx_waker *waker) {
     if (waker == NULL) return ASX_INVALID_ID;
     if (waker->slot >= g_slot_count) return ASX_INVALID_ID;
     if (g_slots[waker->slot].generation != waker->generation) return ASX_INVALID_ID;
@@ -159,17 +148,13 @@ asx_task_id asx_waker_task(const asx_waker *waker)
     return g_slots[waker->slot].task;
 }
 
-uint32_t asx_waker_active_count(void)
-{
-    return g_active_count;
-}
+uint32_t asx_waker_active_count(void) { return g_active_count; }
 
 /* ------------------------------------------------------------------ */
 /* Drain signaled                                                      */
 /* ------------------------------------------------------------------ */
 
-uint32_t asx_waker_drain_signaled(asx_task_id *out_tasks, uint32_t max_tasks)
-{
+uint32_t asx_waker_drain_signaled(asx_task_id *out_tasks, uint32_t max_tasks) {
     uint32_t i, count = 0;
 
     if (out_tasks == NULL || max_tasks == 0) return 0;

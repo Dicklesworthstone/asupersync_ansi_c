@@ -24,37 +24,32 @@
 
 /* Allocator: wraps malloc/free (a real embedded target would use a
  * static pool or arena allocator). */
-static void *custom_malloc(void *ctx, size_t size)
-{
+static void *custom_malloc(void *ctx, size_t size) {
     (void)ctx;
     return malloc(size);
 }
 
-static void *custom_realloc(void *ctx, void *ptr, size_t size)
-{
+static void *custom_realloc(void *ctx, void *ptr, size_t size) {
     (void)ctx;
     return realloc(ptr, size);
 }
 
-static void custom_free(void *ctx, void *ptr)
-{
+static void custom_free(void *ctx, void *ptr) {
     (void)ctx;
     free(ptr);
 }
 
 /* Clock: deterministic monotonic counter (no real time). */
 static uint64_t g_clock_ns = 0;
-static asx_time custom_clock_now(void *ctx)
-{
+static asx_time custom_clock_now(void *ctx) {
     (void)ctx;
-    g_clock_ns += 1000000;  /* advance 1ms per call */
+    g_clock_ns += 1000000; /* advance 1ms per call */
     return g_clock_ns;
 }
 
 /* Entropy: deterministic PRNG (xorshift64). */
 static uint64_t g_prng_state = 42;
-static uint64_t custom_random(void *ctx)
-{
+static uint64_t custom_random(void *ctx) {
     (void)ctx;
     g_prng_state ^= g_prng_state << 13;
     g_prng_state ^= g_prng_state >> 7;
@@ -63,15 +58,13 @@ static uint64_t custom_random(void *ctx)
 }
 
 /* Log sink: print to stderr. */
-static void custom_log(void *ctx, int level, const char *message)
-{
+static void custom_log(void *ctx, int level, const char *message) {
     (void)ctx;
     fprintf(stderr, "[asx-log L%d] %s\n", level, message);
 }
 
 /* Minimal task used by the end-to-end hook scenario. */
-static asx_status poll_hook_smoke(void *ud, asx_task_id self)
-{
+static asx_status poll_hook_smoke(void *ud, asx_task_id self) {
     (void)ud;
     (void)self;
     return ASX_OK;
@@ -80,8 +73,7 @@ static asx_status poll_hook_smoke(void *ud, asx_task_id self)
 /* -------------------------------------------------------------------
  * Scenario 1: Hook installation and validation
  * ------------------------------------------------------------------- */
-static int scenario_hook_setup(void)
-{
+static int scenario_hook_setup(void) {
     asx_status st;
     asx_runtime_hooks hooks;
 
@@ -110,20 +102,20 @@ static int scenario_hook_setup(void)
      * a single context pointer and applies it to all vtable categories:
      *   asx_runtime_hooks_set_ctx(&hooks, my_platform);
      */
-    hooks.allocator.malloc_fn  = custom_malloc;
+    hooks.allocator.malloc_fn = custom_malloc;
     hooks.allocator.realloc_fn = custom_realloc;
-    hooks.allocator.free_fn    = custom_free;
-    hooks.allocator.ctx        = NULL;
+    hooks.allocator.free_fn = custom_free;
+    hooks.allocator.ctx = NULL;
 
-    hooks.clock.now_ns_fn         = custom_clock_now;
+    hooks.clock.now_ns_fn = custom_clock_now;
     hooks.clock.logical_now_ns_fn = custom_clock_now;
-    hooks.clock.ctx               = NULL;
+    hooks.clock.ctx = NULL;
 
     hooks.entropy.random_u64_fn = custom_random;
-    hooks.entropy.ctx           = NULL;
+    hooks.entropy.ctx = NULL;
 
     hooks.log.write_fn = custom_log;
-    hooks.log.ctx      = NULL;
+    hooks.log.ctx = NULL;
 
     hooks.deterministic_seeded_prng = 1;
 
@@ -171,8 +163,7 @@ static int scenario_hook_setup(void)
 /* -------------------------------------------------------------------
  * Scenario 2: Use hooks through the runtime API
  * ------------------------------------------------------------------- */
-static int scenario_hook_usage(void)
-{
+static int scenario_hook_usage(void) {
     asx_status st;
     asx_time now = 0;
     uint64_t rval = 0;
@@ -213,8 +204,7 @@ static int scenario_hook_usage(void)
 /* -------------------------------------------------------------------
  * Scenario 3: Runtime configuration
  * ------------------------------------------------------------------- */
-static int scenario_config(void)
-{
+static int scenario_config(void) {
     asx_runtime_config cfg;
 
     printf("--- scenario: runtime config ---\n");
@@ -249,8 +239,7 @@ static int scenario_config(void)
 /* -------------------------------------------------------------------
  * Scenario 4: Allocator sealing
  * ------------------------------------------------------------------- */
-static int scenario_allocator_seal(void)
-{
+static int scenario_allocator_seal(void) {
     asx_status st;
     void *ptr = NULL;
 
@@ -290,7 +279,8 @@ static int scenario_allocator_seal(void)
     st = asx_runtime_alloc(64, &ptr);
     if (st != ASX_E_ALLOCATOR_SEALED) {
         printf("  FAIL: alloc after seal should return ALLOCATOR_SEALED, "
-               "got %s\n", asx_status_str(st));
+               "got %s\n",
+               asx_status_str(st));
         return 1;
     }
     printf("  alloc after seal correctly returned: %s\n", asx_status_str(st));
@@ -302,8 +292,7 @@ static int scenario_allocator_seal(void)
 /* -------------------------------------------------------------------
  * Scenario 5: End-to-end with custom hooks
  * ------------------------------------------------------------------- */
-static int scenario_end_to_end(void)
-{
+static int scenario_end_to_end(void) {
     asx_status st;
     asx_region_id region;
     asx_task_id task;
@@ -318,10 +307,10 @@ static int scenario_end_to_end(void)
     {
         asx_runtime_hooks hooks;
         asx_runtime_hooks_init(&hooks);
-        hooks.allocator.malloc_fn  = custom_malloc;
+        hooks.allocator.malloc_fn = custom_malloc;
         hooks.allocator.realloc_fn = custom_realloc;
-        hooks.allocator.free_fn    = custom_free;
-        hooks.clock.now_ns_fn         = custom_clock_now;
+        hooks.allocator.free_fn = custom_free;
+        hooks.clock.now_ns_fn = custom_clock_now;
         hooks.clock.logical_now_ns_fn = custom_clock_now;
         hooks.entropy.random_u64_fn = custom_random;
         hooks.log.write_fn = custom_log;
@@ -355,8 +344,7 @@ static int scenario_end_to_end(void)
 /* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
-int main(void)
-{
+int main(void) {
     int failures = 0;
 
     printf("=== vignette: freestanding hooks ===\n\n");

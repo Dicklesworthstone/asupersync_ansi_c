@@ -11,8 +11,8 @@
 #include "../../test_harness.h"
 #include <asx/asx.h>
 #include <asx/asx_config.h>
-#include <asx/runtime/trace.h>
 #include <asx/runtime/hindsight.h>
+#include <asx/runtime/trace.h>
 #include <string.h>
 
 /* ---- Basic ring operations ---- */
@@ -83,9 +83,7 @@ TEST(hindsight_monotonic_sequence) {
     asx_hindsight_reset();
     asx_trace_reset();
 
-    for (i = 0; i < 10; i++) {
-        asx_hindsight_log(ASX_ND_CLOCK_READ, 0, (uint64_t)i);
-    }
+    for (i = 0; i < 10; i++) { asx_hindsight_log(ASX_ND_CLOCK_READ, 0, (uint64_t)i); }
 
     ASSERT_TRUE(asx_hindsight_get(0, &ev0));
     ASSERT_TRUE(asx_hindsight_get(1, &ev1));
@@ -306,7 +304,7 @@ TEST(hindsight_flush_json_with_events) {
     ASSERT_TRUE(strstr(buf.data, "\"kind\":\"entropy_read\"") != NULL);
     ASSERT_TRUE(strstr(buf.data, "\"observed_value\":42") != NULL);
     ASSERT_TRUE(strstr(buf.data, "\"observed_value\":99") != NULL);
-    ASSERT_TRUE(strstr(buf.data, "\"entity_id\":4660") != NULL);  /* 0x1234 */
+    ASSERT_TRUE(strstr(buf.data, "\"entity_id\":4660") != NULL); /* 0x1234 */
 }
 
 TEST(hindsight_flush_json_null_rejected) {
@@ -545,7 +543,7 @@ TEST(hindsight_policy_disables_invariant_flush) {
     asx_hindsight_set_policy(&pol);
 
     st = asx_hindsight_flush_on_invariant(&out);
-    ASSERT_EQ(st, ASX_E_PENDING);  /* no ghost violations */
+    ASSERT_EQ(st, ASX_E_PENDING); /* no ghost violations */
 }
 
 /* ---- Divergence detection ---- */

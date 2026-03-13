@@ -11,9 +11,7 @@
 /* Per-kind severity lookup                                            */
 /* ------------------------------------------------------------------ */
 
-TEST(cancel_severity_user) {
-    ASSERT_EQ(asx_cancel_severity(ASX_CANCEL_USER), (int)0);
-}
+TEST(cancel_severity_user) { ASSERT_EQ(asx_cancel_severity(ASX_CANCEL_USER), (int)0); }
 
 TEST(cancel_severity_monotone) {
     /* Severity is non-decreasing with kind ordinal */

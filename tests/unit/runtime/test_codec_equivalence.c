@@ -15,8 +15,7 @@
 
 /* ---- Fixture population helpers ---- */
 
-static char *dup_text(const char *text)
-{
+static char *dup_text(const char *text) {
     size_t len;
     char *copy;
 
@@ -27,8 +26,7 @@ static char *dup_text(const char *text)
     return copy;
 }
 
-static void populate_fixture(asx_canonical_fixture *f, const char *scenario_id)
-{
+static void populate_fixture(asx_canonical_fixture *f, const char *scenario_id) {
     f->scenario_id = dup_text(scenario_id);
     f->fixture_schema_version = dup_text("fixture-v1");
     f->scenario_dsl_version = dup_text("dsl-v1");
@@ -39,16 +37,14 @@ static void populate_fixture(asx_canonical_fixture *f, const char *scenario_id)
     f->expected_events_json = dup_text("[]");
     f->expected_final_snapshot_json = dup_text("{}");
     f->expected_error_codes_json = dup_text("[]");
-    f->semantic_digest = dup_text(
-        "sha256:0123456789abcdef0123456789abcdef"
-        "0123456789abcdef0123456789abcdef");
-    f->provenance.rust_baseline_commit = dup_text(
-        "0123456789abcdef0123456789abcdef01234567");
+    f->semantic_digest = dup_text("sha256:0123456789abcdef0123456789abcdef"
+                                  "0123456789abcdef0123456789abcdef");
+    f->provenance.rust_baseline_commit = dup_text("0123456789abcdef0123456789abcdef01234567");
     f->provenance.rust_toolchain_commit_hash = dup_text("toolchain-abcdef12");
     f->provenance.rust_toolchain_release = dup_text("rustc 1.90.0");
     f->provenance.rust_toolchain_host = dup_text("x86_64-unknown-linux-gnu");
-    f->provenance.cargo_lock_sha256 = dup_text(
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    f->provenance.cargo_lock_sha256 =
+        dup_text("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     f->provenance.capture_run_id = dup_text("capture-run-0001");
 }
 
@@ -207,8 +203,7 @@ TEST(equiv_semantic_eq_detects_seed_mismatch) {
     populate_fixture(&b, "scenario.equiv.eq.003");
     b.seed = 999u;
 
-    ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, &report),
-              ASX_E_EQUIVALENCE_MISMATCH);
+    ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, &report), ASX_E_EQUIVALENCE_MISMATCH);
     ASSERT_EQ(report.count, (uint32_t)1);
     ASSERT_STR_EQ(report.diffs[0].field_name, "seed");
 
@@ -226,8 +221,7 @@ TEST(equiv_semantic_eq_detects_scenario_id_mismatch) {
     populate_fixture(&a, "scenario.equiv.eq.004a");
     populate_fixture(&b, "scenario.equiv.eq.004b");
 
-    ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, &report),
-              ASX_E_EQUIVALENCE_MISMATCH);
+    ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, &report), ASX_E_EQUIVALENCE_MISMATCH);
     ASSERT_EQ(report.count, (uint32_t)1);
     ASSERT_STR_EQ(report.diffs[0].field_name, "scenario_id");
 
@@ -246,11 +240,10 @@ TEST(equiv_semantic_eq_detects_digest_mismatch) {
     populate_fixture(&b, "scenario.equiv.eq.005");
 
     free(b.semantic_digest);
-    b.semantic_digest = dup_text(
-        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    b.semantic_digest =
+        dup_text("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
 
-    ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, &report),
-              ASX_E_EQUIVALENCE_MISMATCH);
+    ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, &report), ASX_E_EQUIVALENCE_MISMATCH);
     ASSERT_EQ(report.count, (uint32_t)1);
     ASSERT_STR_EQ(report.diffs[0].field_name, "semantic_digest");
 
@@ -271,8 +264,7 @@ TEST(equiv_semantic_eq_detects_multiple_mismatches) {
     free(b.profile);
     b.profile = dup_text("ASX_PROFILE_HFT");
 
-    ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, &report),
-              ASX_E_EQUIVALENCE_MISMATCH);
+    ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, &report), ASX_E_EQUIVALENCE_MISMATCH);
     /* scenario_id + profile + seed = 3 mismatches */
     ASSERT_TRUE(report.count >= (uint32_t)3);
 
@@ -293,8 +285,7 @@ TEST(equiv_semantic_eq_detects_provenance_mismatch) {
     free(b.provenance.capture_run_id);
     b.provenance.capture_run_id = dup_text("capture-run-9999");
 
-    ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, &report),
-              ASX_E_EQUIVALENCE_MISMATCH);
+    ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, &report), ASX_E_EQUIVALENCE_MISMATCH);
     ASSERT_EQ(report.count, (uint32_t)1);
     ASSERT_STR_EQ(report.diffs[0].field_name, "provenance.capture_run_id");
 
@@ -311,10 +302,8 @@ TEST(equiv_semantic_eq_rejects_null) {
     asx_canonical_fixture_init(&f);
     populate_fixture(&f, "scenario.equiv.null.001");
 
-    ASSERT_EQ(asx_codec_fixture_semantic_eq(NULL, &f, &report),
-              ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_codec_fixture_semantic_eq(&f, NULL, &report),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_codec_fixture_semantic_eq(NULL, &f, &report), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_codec_fixture_semantic_eq(&f, NULL, &report), ASX_E_INVALID_ARGUMENT);
 
     asx_canonical_fixture_reset(&f);
 }
@@ -323,15 +312,13 @@ TEST(equiv_semantic_key_rejects_null) {
     asx_codec_buffer buf;
     asx_codec_buffer_init(&buf);
 
-    ASSERT_EQ(asx_codec_fixture_semantic_key(NULL, &buf),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_codec_fixture_semantic_key(NULL, &buf), ASX_E_INVALID_ARGUMENT);
 
     asx_codec_buffer_reset(&buf);
 }
 
 TEST(equiv_cross_codec_verify_rejects_null) {
-    ASSERT_EQ(asx_codec_cross_codec_verify(NULL, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_codec_cross_codec_verify(NULL, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ---- Report without report pointer ---- */
@@ -349,8 +336,7 @@ TEST(equiv_semantic_eq_works_without_report) {
     ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, NULL), ASX_OK);
 
     b.seed = 999u;
-    ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, NULL),
-              ASX_E_EQUIVALENCE_MISMATCH);
+    ASSERT_EQ(asx_codec_fixture_semantic_eq(&a, &b, NULL), ASX_E_EQUIVALENCE_MISMATCH);
 
     asx_canonical_fixture_reset(&b);
     asx_canonical_fixture_reset(&a);
@@ -359,11 +345,8 @@ TEST(equiv_semantic_eq_works_without_report) {
 /* ---- Multiple scenario cross-codec verification ---- */
 
 TEST(equiv_multi_scenario_cross_codec) {
-    static const char *scenarios[] = {
-        "scenario.multi.001",
-        "scenario.multi.002",
-        "scenario.multi.003"
-    };
+    static const char *scenarios[] = {"scenario.multi.001", "scenario.multi.002",
+                                      "scenario.multi.003"};
     uint32_t i;
     uint32_t n = sizeof(scenarios) / sizeof(scenarios[0]);
 
@@ -400,13 +383,14 @@ TEST(equiv_digest_identity_across_codecs) {
 
     /* Encode and decode through JSON */
     ASSERT_EQ(asx_codec_encode_fixture(ASX_CODEC_KIND_JSON, &fixture, &json_buf), ASX_OK);
-    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_JSON, json_buf.data,
-                                       json_buf.len, &from_json), ASX_OK);
+    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_JSON, json_buf.data, json_buf.len,
+                                       &from_json),
+              ASX_OK);
 
     /* Encode and decode through BIN */
     ASSERT_EQ(asx_codec_encode_fixture(ASX_CODEC_KIND_BIN, &fixture, &bin_buf), ASX_OK);
-    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_BIN, bin_buf.data,
-                                       bin_buf.len, &from_bin), ASX_OK);
+    ASSERT_EQ(asx_codec_decode_fixture(ASX_CODEC_KIND_BIN, bin_buf.data, bin_buf.len, &from_bin),
+              ASX_OK);
 
     /* Semantic digest must survive both codecs identically */
     ASSERT_STR_EQ(from_json.semantic_digest, from_bin.semantic_digest);
@@ -425,8 +409,7 @@ TEST(equiv_digest_identity_across_codecs) {
     asx_canonical_fixture_reset(&fixture);
 }
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== test_codec_equivalence ===\n");
 
     /* Cross-codec round-trip */

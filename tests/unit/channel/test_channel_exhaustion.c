@@ -9,18 +9,17 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include "test_log.h"
 #include "test_harness.h"
+#include "test_log.h"
 #include <asx/asx.h>
-#include <asx/runtime/runtime.h>
 #include <asx/core/channel.h>
+#include <asx/runtime/runtime.h>
 
 /* -------------------------------------------------------------------
  * Helpers
  * ------------------------------------------------------------------- */
 
-static void reset_all(void)
-{
+static void reset_all(void) {
     asx_runtime_reset();
     asx_channel_reset();
 }
@@ -29,8 +28,7 @@ static void reset_all(void)
  * Capacity boundary: reserve at capacity, verify FULL
  * ------------------------------------------------------------------- */
 
-TEST(reserve_at_capacity_returns_full)
-{
+TEST(reserve_at_capacity_returns_full) {
     asx_region_id rid;
     asx_channel_id cid;
     asx_send_permit permits[4];
@@ -42,25 +40,20 @@ TEST(reserve_at_capacity_returns_full)
     ASSERT_EQ(asx_channel_create(rid, 4, &cid), ASX_OK);
 
     /* Reserve all 4 slots */
-    for (i = 0; i < 4; i++) {
-        ASSERT_EQ(asx_channel_try_reserve(cid, &permits[i]), ASX_OK);
-    }
+    for (i = 0; i < 4; i++) { ASSERT_EQ(asx_channel_try_reserve(cid, &permits[i]), ASX_OK); }
 
     /* Next reserve should fail */
     ASSERT_EQ(asx_channel_try_reserve(cid, &extra), ASX_E_CHANNEL_FULL);
 
     /* Clean up permits */
-    for (i = 0; i < 4; i++) {
-        asx_send_permit_abort(&permits[i]);
-    }
+    for (i = 0; i < 4; i++) { asx_send_permit_abort(&permits[i]); }
 }
 
 /* -------------------------------------------------------------------
  * Backpressure recovery: abort frees capacity
  * ------------------------------------------------------------------- */
 
-TEST(abort_frees_capacity_for_new_reserve)
-{
+TEST(abort_frees_capacity_for_new_reserve) {
     asx_region_id rid;
     asx_channel_id cid;
     asx_send_permit permits[4];
@@ -72,9 +65,7 @@ TEST(abort_frees_capacity_for_new_reserve)
     ASSERT_EQ(asx_channel_create(rid, 4, &cid), ASX_OK);
 
     /* Fill capacity */
-    for (i = 0; i < 4; i++) {
-        ASSERT_EQ(asx_channel_try_reserve(cid, &permits[i]), ASX_OK);
-    }
+    for (i = 0; i < 4; i++) { ASSERT_EQ(asx_channel_try_reserve(cid, &permits[i]), ASX_OK); }
 
     /* Abort one permit */
     asx_send_permit_abort(&permits[2]);
@@ -99,8 +90,7 @@ TEST(abort_frees_capacity_for_new_reserve)
  * Recv frees capacity for new reserves
  * ------------------------------------------------------------------- */
 
-TEST(recv_frees_capacity_for_new_reserve)
-{
+TEST(recv_frees_capacity_for_new_reserve) {
     asx_region_id rid;
     asx_channel_id cid;
     asx_send_permit p;
@@ -136,8 +126,7 @@ TEST(recv_frees_capacity_for_new_reserve)
  * Rapid reserve-abort churn at boundary
  * ------------------------------------------------------------------- */
 
-TEST(rapid_reserve_abort_churn_at_boundary)
-{
+TEST(rapid_reserve_abort_churn_at_boundary) {
     asx_region_id rid;
     asx_channel_id cid;
     asx_send_permit p;
@@ -163,8 +152,7 @@ TEST(rapid_reserve_abort_churn_at_boundary)
  * Interleaved send-recv at capacity
  * ------------------------------------------------------------------- */
 
-TEST(interleaved_send_recv_at_capacity)
-{
+TEST(interleaved_send_recv_at_capacity) {
     asx_region_id rid;
     asx_channel_id cid;
     asx_send_permit p;
@@ -202,8 +190,7 @@ TEST(interleaved_send_recv_at_capacity)
  * Queue + reserved invariant at capacity
  * ------------------------------------------------------------------- */
 
-TEST(queue_plus_reserved_equals_capacity_invariant)
-{
+TEST(queue_plus_reserved_equals_capacity_invariant) {
     asx_region_id rid;
     asx_channel_id cid;
     asx_send_permit p1, p2;
@@ -242,8 +229,7 @@ TEST(queue_plus_reserved_equals_capacity_invariant)
  * Channel-slot exhaustion and recovery
  * ------------------------------------------------------------------- */
 
-TEST(channel_slot_exhaustion_and_recovery)
-{
+TEST(channel_slot_exhaustion_and_recovery) {
     asx_region_id rid;
     asx_channel_id cids[ASX_MAX_CHANNELS];
     asx_channel_id extra;
@@ -278,8 +264,7 @@ TEST(channel_slot_exhaustion_and_recovery)
  * Max capacity channel stress
  * ------------------------------------------------------------------- */
 
-TEST(max_capacity_channel_fill_and_drain)
-{
+TEST(max_capacity_channel_fill_and_drain) {
     asx_region_id rid;
     asx_channel_id cid;
     asx_send_permit p;
@@ -325,8 +310,7 @@ TEST(max_capacity_channel_fill_and_drain)
  * Disconnected channel backpressure
  * ------------------------------------------------------------------- */
 
-TEST(disconnect_during_reserve_storm)
-{
+TEST(disconnect_during_reserve_storm) {
     asx_region_id rid;
     asx_channel_id cid;
     asx_send_permit permits[4];
@@ -337,9 +321,7 @@ TEST(disconnect_during_reserve_storm)
     ASSERT_EQ(asx_channel_create(rid, 4, &cid), ASX_OK);
 
     /* Reserve all slots */
-    for (i = 0; i < 4; i++) {
-        ASSERT_EQ(asx_channel_try_reserve(cid, &permits[i]), ASX_OK);
-    }
+    for (i = 0; i < 4; i++) { ASSERT_EQ(asx_channel_try_reserve(cid, &permits[i]), ASX_OK); }
 
     /* Close receiver while permits outstanding */
     ASSERT_EQ(asx_channel_close_receiver(cid), ASX_OK);
@@ -354,17 +336,14 @@ TEST(disconnect_during_reserve_storm)
     }
 
     /* Clean up remaining permits */
-    for (i = 1; i < 4; i++) {
-        asx_send_permit_abort(&permits[i]);
-    }
+    for (i = 1; i < 4; i++) { asx_send_permit_abort(&permits[i]); }
 }
 
 /* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     test_log_open("unit", "channel/exhaustion", "test_channel_exhaustion");
 
     RUN_TEST(reserve_at_capacity_returns_full);

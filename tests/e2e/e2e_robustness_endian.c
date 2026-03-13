@@ -22,35 +22,37 @@
 static int g_pass = 0;
 static int g_fail = 0;
 
-#define SCENARIO_BEGIN(id) \
-    do { const char *_scenario_id = (id); int _scenario_ok = 1; (void)0
+#define SCENARIO_BEGIN(id)                                                                         \
+    do {                                                                                           \
+        const char *_scenario_id = (id);                                                           \
+        int _scenario_ok = 1;                                                                      \
+    (void)0
 
-#define SCENARIO_CHECK(cond, msg)                         \
-    do {                                                  \
-        if (!(cond)) {                                    \
-            printf("SCENARIO %s fail %s\n",               \
-                   _scenario_id, (msg));                  \
-            _scenario_ok = 0;                             \
-            g_fail++;                                     \
-            goto _scenario_end;                           \
-        }                                                 \
+#define SCENARIO_CHECK(cond, msg)                                                                  \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("SCENARIO %s fail %s\n", _scenario_id, (msg));                                  \
+            _scenario_ok = 0;                                                                      \
+            g_fail++;                                                                              \
+            goto _scenario_end;                                                                    \
+        }                                                                                          \
     } while (0)
 
-#define SCENARIO_END()                                    \
-    _scenario_end:                                        \
-    if (_scenario_ok) {                                   \
-        printf("SCENARIO %s pass\n", _scenario_id);      \
-        g_pass++;                                         \
-    }                                                     \
-    } while (0)
+#define SCENARIO_END()                                                                             \
+    _scenario_end:                                                                                 \
+    if (_scenario_ok) {                                                                            \
+        printf("SCENARIO %s pass\n", _scenario_id);                                                \
+        g_pass++;                                                                                  \
+    }                                                                                              \
+    }                                                                                              \
+    while (0)
 
 /* -------------------------------------------------------------------
  * Scenarios
  * ------------------------------------------------------------------- */
 
 /* robust-endian-001: LE u16 round-trip */
-static void scenario_le_u16_roundtrip(void)
-{
+static void scenario_le_u16_roundtrip(void) {
     SCENARIO_BEGIN("robust-endian-001.le_u16_roundtrip");
 
     uint16_t test_vals[] = {0, 1, 0x00FF, 0xFF00, 0x1234, 0xFFFF};
@@ -67,8 +69,7 @@ static void scenario_le_u16_roundtrip(void)
 }
 
 /* robust-endian-002: LE u32 round-trip */
-static void scenario_le_u32_roundtrip(void)
-{
+static void scenario_le_u32_roundtrip(void) {
     SCENARIO_BEGIN("robust-endian-002.le_u32_roundtrip");
 
     uint32_t test_vals[] = {0, 1, 0x000000FFu, 0xFF000000u, 0x12345678u, 0xFFFFFFFFu};
@@ -85,12 +86,15 @@ static void scenario_le_u32_roundtrip(void)
 }
 
 /* robust-endian-003: LE u64 round-trip */
-static void scenario_le_u64_roundtrip(void)
-{
+static void scenario_le_u64_roundtrip(void) {
     SCENARIO_BEGIN("robust-endian-003.le_u64_roundtrip");
 
-    uint64_t test_vals[] = {0, 1, 0x00000000000000FFULL, 0xFF00000000000000ULL,
-                            0x123456789ABCDEF0ULL, 0xFFFFFFFFFFFFFFFFULL};
+    uint64_t test_vals[] = {0,
+                            1,
+                            0x00000000000000FFULL,
+                            0xFF00000000000000ULL,
+                            0x123456789ABCDEF0ULL,
+                            0xFFFFFFFFFFFFFFFFULL};
     uint8_t buf[8];
     uint32_t i;
 
@@ -104,8 +108,7 @@ static void scenario_le_u64_roundtrip(void)
 }
 
 /* robust-endian-004: BE u16 round-trip */
-static void scenario_be_u16_roundtrip(void)
-{
+static void scenario_be_u16_roundtrip(void) {
     SCENARIO_BEGIN("robust-endian-004.be_u16_roundtrip");
 
     uint16_t test_vals[] = {0, 1, 0x00FF, 0xFF00, 0x1234, 0xFFFF};
@@ -122,8 +125,7 @@ static void scenario_be_u16_roundtrip(void)
 }
 
 /* robust-endian-005: BE u32 round-trip */
-static void scenario_be_u32_roundtrip(void)
-{
+static void scenario_be_u32_roundtrip(void) {
     SCENARIO_BEGIN("robust-endian-005.be_u32_roundtrip");
 
     uint32_t test_vals[] = {0, 1, 0x000000FFu, 0xFF000000u, 0x12345678u, 0xFFFFFFFFu};
@@ -140,12 +142,15 @@ static void scenario_be_u32_roundtrip(void)
 }
 
 /* robust-endian-006: BE u64 round-trip */
-static void scenario_be_u64_roundtrip(void)
-{
+static void scenario_be_u64_roundtrip(void) {
     SCENARIO_BEGIN("robust-endian-006.be_u64_roundtrip");
 
-    uint64_t test_vals[] = {0, 1, 0x00000000000000FFULL, 0xFF00000000000000ULL,
-                            0x123456789ABCDEF0ULL, 0xFFFFFFFFFFFFFFFFULL};
+    uint64_t test_vals[] = {0,
+                            1,
+                            0x00000000000000FFULL,
+                            0xFF00000000000000ULL,
+                            0x123456789ABCDEF0ULL,
+                            0xFFFFFFFFFFFFFFFFULL};
     uint8_t buf[8];
     uint32_t i;
 
@@ -159,8 +164,7 @@ static void scenario_be_u64_roundtrip(void)
 }
 
 /* robust-endian-007: unaligned buffer access via offset */
-static void scenario_unaligned_access(void)
-{
+static void scenario_unaligned_access(void) {
     SCENARIO_BEGIN("robust-endian-007.unaligned_access");
 
     /* Buffer with odd alignment offset */
@@ -176,13 +180,11 @@ static void scenario_unaligned_access(void)
 
         /* LE u32 at unaligned offset */
         asx_store_le_u32(unaligned, 0xDEADBEEFu);
-        SCENARIO_CHECK(asx_load_le_u32(unaligned) == 0xDEADBEEFu,
-                       "unaligned LE u32 failed");
+        SCENARIO_CHECK(asx_load_le_u32(unaligned) == 0xDEADBEEFu, "unaligned LE u32 failed");
 
         /* BE u32 at unaligned offset */
         asx_store_be_u32(unaligned, 0xCAFEBABEu);
-        SCENARIO_CHECK(asx_load_be_u32(unaligned) == 0xCAFEBABEu,
-                       "unaligned BE u32 failed");
+        SCENARIO_CHECK(asx_load_be_u32(unaligned) == 0xCAFEBABEu, "unaligned BE u32 failed");
 
         /* LE u64 at unaligned offset */
         asx_store_le_u64(unaligned, 0x0102030405060708ULL);
@@ -199,8 +201,7 @@ static void scenario_unaligned_access(void)
 }
 
 /* robust-endian-008: LE/BE cross-format wire byte verification */
-static void scenario_cross_format_wire_bytes(void)
-{
+static void scenario_cross_format_wire_bytes(void) {
     SCENARIO_BEGIN("robust-endian-008.cross_format_wire_bytes");
 
     uint8_t le_buf[4], be_buf[4];
@@ -210,13 +211,11 @@ static void scenario_cross_format_wire_bytes(void)
     asx_store_be_u32(be_buf, val);
 
     /* LE: least significant byte first */
-    SCENARIO_CHECK(le_buf[0] == 0x04 && le_buf[1] == 0x03 &&
-                   le_buf[2] == 0x02 && le_buf[3] == 0x01,
+    SCENARIO_CHECK(le_buf[0] == 0x04 && le_buf[1] == 0x03 && le_buf[2] == 0x02 && le_buf[3] == 0x01,
                    "LE wire bytes incorrect");
 
     /* BE: most significant byte first */
-    SCENARIO_CHECK(be_buf[0] == 0x01 && be_buf[1] == 0x02 &&
-                   be_buf[2] == 0x03 && be_buf[3] == 0x04,
+    SCENARIO_CHECK(be_buf[0] == 0x01 && be_buf[1] == 0x02 && be_buf[2] == 0x03 && be_buf[3] == 0x04,
                    "BE wire bytes incorrect");
 
     /* Cross-load: LE bytes read as BE should differ */
@@ -227,19 +226,16 @@ static void scenario_cross_format_wire_bytes(void)
 }
 
 /* robust-endian-009: endian canary store and verify */
-static void scenario_endian_canary(void)
-{
+static void scenario_endian_canary(void) {
     SCENARIO_BEGIN("robust-endian-009.endian_canary");
 
     uint8_t le_canary[4], be_canary[4];
 
     asx_store_endian_canary_le(le_canary);
-    SCENARIO_CHECK(asx_verify_endian_canary_le(le_canary) == 1,
-                   "LE canary verification failed");
+    SCENARIO_CHECK(asx_verify_endian_canary_le(le_canary) == 1, "LE canary verification failed");
 
     asx_store_endian_canary_be(be_canary);
-    SCENARIO_CHECK(asx_verify_endian_canary_be(be_canary) == 1,
-                   "BE canary verification failed");
+    SCENARIO_CHECK(asx_verify_endian_canary_be(be_canary) == 1, "BE canary verification failed");
 
     /* Mismatched canary should fail */
     SCENARIO_CHECK(asx_verify_endian_canary_be(le_canary) == 0,
@@ -251,8 +247,7 @@ static void scenario_endian_canary(void)
 }
 
 /* robust-endian-010: byte pattern identity (all bytes distinct) */
-static void scenario_byte_pattern_identity(void)
-{
+static void scenario_byte_pattern_identity(void) {
     SCENARIO_BEGIN("robust-endian-010.byte_pattern_identity");
 
     /* Store u64 with all distinct bytes, verify no byte swizzling */
@@ -276,8 +271,7 @@ static void scenario_byte_pattern_identity(void)
  * Main
  * ------------------------------------------------------------------- */
 
-int main(void)
-{
+int main(void) {
     scenario_le_u16_roundtrip();
     scenario_le_u32_roundtrip();
     scenario_le_u64_roundtrip();
@@ -289,7 +283,6 @@ int main(void)
     scenario_endian_canary();
     scenario_byte_pattern_identity();
 
-    fprintf(stderr, "[e2e] robustness_endian: %d passed, %d failed\n",
-            g_pass, g_fail);
+    fprintf(stderr, "[e2e] robustness_endian: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
 }

@@ -14,15 +14,18 @@
 
 #include "../../test_harness.h"
 #include <asx/asx.h>
-#include <asx/runtime/runtime.h>
-#include <asx/core/cancel.h>
 #include <asx/core/budget.h>
+#include <asx/core/cancel.h>
 #include <asx/core/outcome.h>
+#include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
 
 /* Suppress warn_unused_result for intentionally-ignored scheduler calls. */
-#define SCHED_RUN_IGNORE(rid, bud) \
-    do { asx_status s_ = asx_scheduler_run((rid), (bud)); (void)s_; } while (0)
+#define SCHED_RUN_IGNORE(rid, bud)                                                                 \
+    do {                                                                                           \
+        asx_status s_ = asx_scheduler_run((rid), (bud));                                           \
+        (void)s_;                                                                                  \
+    } while (0)
 
 /* ===================================================================
  * Poll functions for automotive scenarios
@@ -30,13 +33,15 @@
 
 /* Completes immediately */
 static asx_status poll_complete(void *data, asx_task_id self) {
-    (void)data; (void)self;
+    (void)data;
+    (void)self;
     return ASX_OK;
 }
 
 /* Always yields (never completes on its own) */
 static asx_status poll_pending(void *data, asx_task_id self) {
-    (void)data; (void)self;
+    (void)data;
+    (void)self;
     return ASX_E_PENDING;
 }
 
@@ -45,9 +50,7 @@ static asx_status poll_pending(void *data, asx_task_id self) {
 static asx_status poll_checkpoint_cooperative(void *data, asx_task_id self) {
     asx_checkpoint_result cr;
     (void)data;
-    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) {
-        return ASX_OK;
-    }
+    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) { return ASX_OK; }
     return ASX_E_PENDING;
 }
 
@@ -166,8 +169,7 @@ TEST(auto_watchdog_checkpoint_001_scheduler_quiescent) {
     /* Verify QUIESCENT event emitted */
     for (i = 0; i < asx_scheduler_event_count(); i++) {
         asx_scheduler_event ev;
-        if (asx_scheduler_event_get(i, &ev) &&
-            ev.kind == ASX_SCHED_EVENT_QUIESCENT) {
+        if (asx_scheduler_event_get(i, &ev) && ev.kind == ASX_SCHED_EVENT_QUIESCENT) {
             found_quiescent = 1;
             break;
         }
@@ -306,8 +308,7 @@ TEST(auto_degraded_transition_002_deadline_severity) {
     ASSERT_EQ(asx_cancel_severity(ASX_CANCEL_TIMEOUT), 1);
 
     /* Severity ordering: USER(0) < DEADLINE(1) < POLL_QUOTA(2) < SHUTDOWN(5) */
-    ASSERT_TRUE(asx_cancel_severity(ASX_CANCEL_USER) <
-                asx_cancel_severity(ASX_CANCEL_DEADLINE));
+    ASSERT_TRUE(asx_cancel_severity(ASX_CANCEL_USER) < asx_cancel_severity(ASX_CANCEL_DEADLINE));
     ASSERT_TRUE(asx_cancel_severity(ASX_CANCEL_DEADLINE) <
                 asx_cancel_severity(ASX_CANCEL_POLL_QUOTA));
 }
@@ -319,8 +320,7 @@ TEST(auto_degraded_transition_002_cleanup_budget_adequate) {
     ASSERT_TRUE(deadline_b.poll_quota > 0);
 
     /* DEADLINE budget should be more generous than SHUTDOWN */
-    ASSERT_TRUE(deadline_b.poll_quota >=
-                asx_cancel_cleanup_budget(ASX_CANCEL_SHUTDOWN).poll_quota);
+    ASSERT_TRUE(deadline_b.poll_quota >= asx_cancel_cleanup_budget(ASX_CANCEL_SHUTDOWN).poll_quota);
 }
 
 /* ===================================================================
@@ -415,8 +415,7 @@ TEST(auto_deadline_miss_003_cancel_forced_event) {
     /* Verify CANCEL_FORCED event in scheduler log */
     for (i = 0; i < asx_scheduler_event_count(); i++) {
         asx_scheduler_event ev;
-        if (asx_scheduler_event_get(i, &ev) &&
-            ev.kind == ASX_SCHED_EVENT_CANCEL_FORCED) {
+        if (asx_scheduler_event_get(i, &ev) && ev.kind == ASX_SCHED_EVENT_CANCEL_FORCED) {
             found_forced = 1;
             break;
         }
@@ -587,8 +586,7 @@ TEST(watchdog_region_containment_after_deadline) {
     /* Further spawn should fail with REGION_POISONED */
     {
         asx_task_id tid2;
-        ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid2),
-                  ASX_E_REGION_POISONED);
+        ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid2), ASX_E_REGION_POISONED);
     }
 
     /* But querying state still works (read-only operations survive poison) */
@@ -617,8 +615,7 @@ TEST(scheduler_budget_event_on_exhaustion) {
     /* Verify BUDGET event emitted */
     for (i = 0; i < asx_scheduler_event_count(); i++) {
         asx_scheduler_event ev;
-        if (asx_scheduler_event_get(i, &ev) &&
-            ev.kind == ASX_SCHED_EVENT_BUDGET) {
+        if (asx_scheduler_event_get(i, &ev) && ev.kind == ASX_SCHED_EVENT_BUDGET) {
             found_budget = 1;
             break;
         }

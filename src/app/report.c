@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/app/report.h>
 #include <asx/app/doctor.h>
+#include <asx/app/report.h>
 #include <asx/runtime/diagnostic.h>
 #include <asx/runtime/rt.h>
 #include <string.h>
@@ -14,15 +14,13 @@
 /* Report buffer                                                       */
 /* ------------------------------------------------------------------ */
 
-void asx_report_buf_init(asx_report_buf *buf)
-{
+void asx_report_buf_init(asx_report_buf *buf) {
     if (buf == NULL) return;
     memset(buf->data, 0, ASX_REPORT_BUF_SIZE);
     buf->len = 0;
 }
 
-void asx_report_buf_append(asx_report_buf *buf, const char *str)
-{
+void asx_report_buf_append(asx_report_buf *buf, const char *str) {
     uint32_t slen, avail;
     if (buf == NULL || str == NULL) return;
 
@@ -36,8 +34,7 @@ void asx_report_buf_append(asx_report_buf *buf, const char *str)
     buf->data[buf->len] = '\0';
 }
 
-void asx_report_buf_append_u32(asx_report_buf *buf, uint32_t val)
-{
+void asx_report_buf_append_u32(asx_report_buf *buf, uint32_t val) {
     char tmp[12];
     uint32_t i = 0;
     uint32_t v = val;
@@ -57,16 +54,13 @@ void asx_report_buf_append_u32(asx_report_buf *buf, uint32_t val)
     {
         char rev[12];
         uint32_t j;
-        for (j = 0; j < i; j++) {
-            rev[j] = tmp[i - 1 - j];
-        }
+        for (j = 0; j < i; j++) { rev[j] = tmp[i - 1 - j]; }
         rev[i] = '\0';
         asx_report_buf_append(buf, rev);
     }
 }
 
-void asx_report_buf_append_hex64(asx_report_buf *buf, uint64_t val)
-{
+void asx_report_buf_append_hex64(asx_report_buf *buf, uint64_t val) {
     static const char hex[] = "0123456789abcdef";
     char tmp[17];
     int i;
@@ -83,8 +77,7 @@ void asx_report_buf_append_hex64(asx_report_buf *buf, uint64_t val)
     asx_report_buf_append(buf, tmp);
 }
 
-const char *asx_report_buf_cstr(const asx_report_buf *buf)
-{
+const char *asx_report_buf_cstr(const asx_report_buf *buf) {
     if (buf == NULL) return "";
     return buf->data;
 }
@@ -93,18 +86,16 @@ const char *asx_report_buf_cstr(const asx_report_buf *buf)
 /* Severity/level strings                                              */
 /* ------------------------------------------------------------------ */
 
-static const char *severity_str(asx_doctor_severity sev)
-{
+static const char *severity_str(asx_doctor_severity sev) {
     switch (sev) {
-    case ASX_DOCTOR_OK:   return "OK";
+    case ASX_DOCTOR_OK: return "OK";
     case ASX_DOCTOR_WARN: return "WARN";
     case ASX_DOCTOR_FAIL: return "FAIL";
     }
     return "??";
 }
 
-static const char *evidence_level_str(asx_evidence_level lev)
-{
+static const char *evidence_level_str(asx_evidence_level lev) {
     switch (lev) {
     case ASX_EVIDENCE_INFO: return "INFO";
     case ASX_EVIDENCE_PASS: return "PASS";
@@ -118,9 +109,7 @@ static const char *evidence_level_str(asx_evidence_level lev)
 /* Doctor report rendering                                             */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_report_doctor_text(
-    const asx_doctor_report *report, asx_report_buf *out)
-{
+asx_status asx_report_doctor_text(const asx_doctor_report *report, asx_report_buf *out) {
     uint32_t i;
 
     if (report == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -153,9 +142,7 @@ asx_status asx_report_doctor_text(
     return ASX_OK;
 }
 
-asx_status asx_report_doctor_json(
-    const asx_doctor_report *report, asx_report_buf *out)
-{
+asx_status asx_report_doctor_json(const asx_doctor_report *report, asx_report_buf *out) {
     uint32_t i;
 
     if (report == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -195,9 +182,7 @@ asx_status asx_report_doctor_json(
 /* Evidence sink rendering                                             */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_report_evidence_text(
-    const asx_evidence_sink *sink, asx_report_buf *out)
-{
+asx_status asx_report_evidence_text(const asx_evidence_sink *sink, asx_report_buf *out) {
     uint32_t i;
 
     if (sink == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -228,9 +213,7 @@ asx_status asx_report_evidence_text(
     return ASX_OK;
 }
 
-asx_status asx_report_evidence_json(
-    const asx_evidence_sink *sink, asx_report_buf *out)
-{
+asx_status asx_report_evidence_json(const asx_evidence_sink *sink, asx_report_buf *out) {
     uint32_t i;
 
     if (sink == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -270,9 +253,7 @@ asx_status asx_report_evidence_json(
 /* Inspection report rendering                                         */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_report_inspection_text(
-    const asx_inspection_report *report, asx_report_buf *out)
-{
+asx_status asx_report_inspection_text(const asx_inspection_report *report, asx_report_buf *out) {
     if (report == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
 
     asx_report_buf_append(out, "Runtime Inspection:\n");
@@ -315,9 +296,7 @@ asx_status asx_report_inspection_text(
     asx_report_buf_append(out, "\n  ghosts:      ");
     asx_report_buf_append_u32(out, report->ghosts.violation_count);
     asx_report_buf_append(out, " violations");
-    if (report->ghosts.overflowed) {
-        asx_report_buf_append(out, " (overflowed)");
-    }
+    if (report->ghosts.overflowed) { asx_report_buf_append(out, " (overflowed)"); }
 
     asx_report_buf_append(out, "\n  telemetry:   ");
     asx_report_buf_append_u32(out, report->telemetry_emitted);
@@ -338,27 +317,24 @@ asx_status asx_report_inspection_text(
 /* Structured logging                                                  */
 /* ------------------------------------------------------------------ */
 
-static asx_log_fn   g_log_fn;
-static void         *g_log_user_data;
+static asx_log_fn g_log_fn;
+static void *g_log_user_data;
 
-void asx_log_set_callback(asx_log_fn fn, void *user_data)
-{
+void asx_log_set_callback(asx_log_fn fn, void *user_data) {
     g_log_fn = fn;
     g_log_user_data = user_data;
 }
 
-void asx_log_emit(asx_log_level level, const char *source, const char *message)
-{
+void asx_log_emit(asx_log_level level, const char *source, const char *message) {
     if (g_log_fn == NULL) return;
     g_log_fn(level, source, message, g_log_user_data);
 }
 
-const char *asx_log_level_str(asx_log_level level)
-{
+const char *asx_log_level_str(asx_log_level level) {
     switch (level) {
     case ASX_LOG_DEBUG: return "DEBUG";
-    case ASX_LOG_INFO:  return "INFO";
-    case ASX_LOG_WARN:  return "WARN";
+    case ASX_LOG_INFO: return "INFO";
+    case ASX_LOG_WARN: return "WARN";
     case ASX_LOG_ERROR: return "ERROR";
     }
     return "??";
@@ -368,9 +344,7 @@ const char *asx_log_level_str(asx_log_level level)
 /* Failure artifact                                                    */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_report_failure_artifact(
-    const asx_runtime *rt, asx_report_buf *out)
-{
+asx_status asx_report_failure_artifact(const asx_runtime *rt, asx_report_buf *out) {
     asx_doctor_report doctor;
     asx_inspection_report inspection;
     asx_evidence_sink sink;

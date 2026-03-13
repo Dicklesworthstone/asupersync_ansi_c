@@ -9,30 +9,27 @@
 
 /* ASX_CHECKPOINT_WAIVER_FILE("CBMC harness — formal verification only") */
 
-#include <stdio.h>
-#include <asx/asx.h>
 #include "cbmc_compat.h"
+#include <asx/asx.h>
+#include <stdio.h>
 
 static const int expected[6][6] = {
     /* To:   Creat  Run   CanR  Cling Final Comp */
-    /*Creat*/ {0,    1,    1,    0,    0,    1},
-    /*Run*/   {0,    0,    1,    0,    0,    1},
-    /*CanR*/  {0,    0,    1,    1,    0,    1},
-    /*Cling*/ {0,    0,    0,    1,    1,    1},
-    /*Final*/ {0,    0,    0,    0,    1,    1},
-    /*Comp*/  {0,    0,    0,    0,    0,    0}
-};
+    /*Creat*/ {0, 1, 1, 0, 0, 1},
+    /*Run*/ {0, 0, 1, 0, 0, 1},
+    /*CanR*/ {0, 0, 1, 1, 0, 1},
+    /*Cling*/ {0, 0, 0, 1, 1, 1},
+    /*Final*/ {0, 0, 0, 0, 1, 1},
+    /*Comp*/ {0, 0, 0, 0, 0, 0}};
 
 #ifdef CBMC
 
-int main(void)
-{
+int main(void) {
     unsigned from = NONDET_UINT();
-    unsigned to   = NONDET_UINT();
+    unsigned to = NONDET_UINT();
 
     if (from <= 5 && to <= 5) {
-        asx_status st = asx_task_transition_check(
-            (asx_task_state)from, (asx_task_state)to);
+        asx_status st = asx_task_transition_check((asx_task_state)from, (asx_task_state)to);
         if (expected[from][to]) {
             VERIFY(st == ASX_OK);
         } else {
@@ -42,8 +39,7 @@ int main(void)
 
     if (from > 5 || to > 5) {
         ASSUME(from <= 100 && to <= 100);
-        asx_status st = asx_task_transition_check(
-            (asx_task_state)from, (asx_task_state)to);
+        asx_status st = asx_task_transition_check((asx_task_state)from, (asx_task_state)to);
         VERIFY(st == ASX_E_INVALID_ARGUMENT);
     }
 
@@ -51,8 +47,7 @@ int main(void)
     {
         unsigned t = NONDET_UINT();
         ASSUME(t <= 5);
-        asx_status st = asx_task_transition_check(
-            ASX_TASK_COMPLETED, (asx_task_state)t);
+        asx_status st = asx_task_transition_check(ASX_TASK_COMPLETED, (asx_task_state)t);
         VERIFY(st != ASX_OK);
     }
 
@@ -64,8 +59,7 @@ int main(void)
 static int passes = 0;
 static int failures = 0;
 
-static void check(int cond, const char *msg, unsigned from, unsigned to)
-{
+static void check(int cond, const char *msg, unsigned from, unsigned to) {
     if (!cond) {
         fprintf(stderr, "  FAIL: %s (from=%u, to=%u)\n", msg, from, to);
         failures++;
@@ -74,8 +68,7 @@ static void check(int cond, const char *msg, unsigned from, unsigned to)
     }
 }
 
-int main(void)
-{
+int main(void) {
     unsigned from, to;
 
     fprintf(stderr, "[task-transition-harness] CBMC-compatible verification\n");
@@ -83,35 +76,28 @@ int main(void)
     /* Exhaustive in-range */
     for (from = 0; from <= 5; from++) {
         for (to = 0; to <= 5; to++) {
-            asx_status st = asx_task_transition_check(
-                (asx_task_state)from, (asx_task_state)to);
+            asx_status st = asx_task_transition_check((asx_task_state)from, (asx_task_state)to);
             if (expected[from][to]) {
                 check(st == ASX_OK, "legal transition accepted", from, to);
             } else {
-                check(st == ASX_E_INVALID_TRANSITION,
-                      "forbidden transition rejected", from, to);
+                check(st == ASX_E_INVALID_TRANSITION, "forbidden transition rejected", from, to);
             }
         }
     }
 
     /* Out-of-range */
     for (from = 6; from <= 10; from++) {
-        asx_status st = asx_task_transition_check(
-            (asx_task_state)from, (asx_task_state)0);
-        check(st == ASX_E_INVALID_ARGUMENT,
-              "out-of-range from rejected", from, 0);
+        asx_status st = asx_task_transition_check((asx_task_state)from, (asx_task_state)0);
+        check(st == ASX_E_INVALID_ARGUMENT, "out-of-range from rejected", from, 0);
     }
     for (to = 6; to <= 10; to++) {
-        asx_status st = asx_task_transition_check(
-            (asx_task_state)0, (asx_task_state)to);
-        check(st == ASX_E_INVALID_ARGUMENT,
-              "out-of-range to rejected", 0, to);
+        asx_status st = asx_task_transition_check((asx_task_state)0, (asx_task_state)to);
+        check(st == ASX_E_INVALID_ARGUMENT, "out-of-range to rejected", 0, to);
     }
 
     /* Terminal no-exit */
     for (to = 0; to <= 5; to++) {
-        asx_status st = asx_task_transition_check(
-            ASX_TASK_COMPLETED, (asx_task_state)to);
+        asx_status st = asx_task_transition_check(ASX_TASK_COMPLETED, (asx_task_state)to);
         check(st != ASX_OK, "terminal state has no outgoing", 5, to);
     }
 
@@ -124,8 +110,7 @@ int main(void)
         }
     }
 
-    fprintf(stderr, "[task-transition-harness] %d passed, %d failed\n",
-            passes, failures);
+    fprintf(stderr, "[task-transition-harness] %d passed, %d failed\n", passes, failures);
     return failures > 0 ? 1 : 0;
 }
 

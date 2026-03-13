@@ -13,12 +13,15 @@
 
 #include "../../test_harness.h"
 #include <asx/asx.h>
-#include <asx/runtime/runtime.h>
 #include <asx/core/cancel.h>
+#include <asx/runtime/runtime.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
-#define SCHED_RUN_IGNORE(rid, bud) \
-    do { asx_status s_ = asx_scheduler_run((rid), (bud)); (void)s_; } while (0)
+#define SCHED_RUN_IGNORE(rid, bud)                                                                 \
+    do {                                                                                           \
+        asx_status s_ = asx_scheduler_run((rid), (bud));                                           \
+        (void)s_;                                                                                  \
+    } while (0)
 
 /* -------------------------------------------------------------------
  * Task behavior enum — determines what the poll function does
@@ -53,8 +56,7 @@ typedef struct {
     int polls_done;
 } task_ctx;
 
-static asx_status configurable_poll(void *user_data, asx_task_id self)
-{
+static asx_status configurable_poll(void *user_data, asx_task_id self) {
     task_ctx *ctx = (task_ctx *)user_data;
     asx_checkpoint_result cr;
     asx_status st;
@@ -62,15 +64,13 @@ static asx_status configurable_poll(void *user_data, asx_task_id self)
     ctx->polls_done++;
 
     switch (ctx->behavior) {
-    case BEHAV_IMMEDIATE:
-        return ASX_OK;
+    case BEHAV_IMMEDIATE: return ASX_OK;
 
     case BEHAV_YIELD_THEN_OK:
         if (ctx->polls_done <= 1) return ASX_E_PENDING;
         return ASX_OK;
 
-    case BEHAV_ALWAYS_PENDING:
-        return ASX_E_PENDING;
+    case BEHAV_ALWAYS_PENDING: return ASX_E_PENDING;
 
     case BEHAV_CHECKPOINT_OK:
         st = asx_checkpoint(self, &cr);
@@ -82,8 +82,7 @@ static asx_status configurable_poll(void *user_data, asx_task_id self)
         (void)st;
         return ASX_E_PENDING;
 
-    case BEHAV_COUNT:
-        break;
+    case BEHAV_COUNT: break;
     }
 
     return ASX_E_PENDING;
@@ -93,9 +92,7 @@ static asx_status configurable_poll(void *user_data, asx_task_id self)
  * Invariant: every completed task has a valid outcome
  * ------------------------------------------------------------------- */
 
-static int check_outcomes(asx_task_id *tids, cancel_timing *timings,
-                           uint32_t ntasks)
-{
+static int check_outcomes(asx_task_id *tids, cancel_timing *timings, uint32_t ntasks) {
     uint32_t i;
     for (i = 0; i < ntasks; i++) {
         asx_task_state state;
@@ -111,8 +108,7 @@ static int check_outcomes(asx_task_id *tids, cancel_timing *timings,
 
         /* If cancelled, outcome must be CANCELLED */
         if (timings[i] != CANCEL_NONE) {
-            if (out.severity != ASX_OUTCOME_CANCELLED &&
-                out.severity != ASX_OUTCOME_OK) {
+            if (out.severity != ASX_OUTCOME_CANCELLED && out.severity != ASX_OUTCOME_OK) {
                 /* OK is allowed if task completed before cancel took effect */
             }
         }
@@ -124,8 +120,7 @@ static int check_outcomes(asx_task_id *tids, cancel_timing *timings,
  * Invariant: event sequence is monotonically increasing
  * ------------------------------------------------------------------- */
 
-static int check_event_monotonicity(void)
-{
+static int check_event_monotonicity(void) {
     uint32_t count = asx_scheduler_event_count();
     uint32_t i;
     uint32_t prev_seq = 0;
@@ -134,8 +129,8 @@ static int check_event_monotonicity(void)
         asx_scheduler_event ev;
         if (!asx_scheduler_event_get(i, &ev)) continue;
         if (i > 0 && ev.sequence <= prev_seq) {
-            fprintf(stderr, "    [CHECKER] event %u: sequence %u <= prev %u\n",
-                    i, ev.sequence, prev_seq);
+            fprintf(stderr, "    [CHECKER] event %u: sequence %u <= prev %u\n", i, ev.sequence,
+                    prev_seq);
             return 0;
         }
         prev_seq = ev.sequence;
@@ -147,8 +142,7 @@ static int check_event_monotonicity(void)
  * Invariant: round numbers are non-decreasing
  * ------------------------------------------------------------------- */
 
-static int check_round_nondecreasing(void)
-{
+static int check_round_nondecreasing(void) {
     uint32_t count = asx_scheduler_event_count();
     uint32_t i;
     uint32_t prev_round = 0;
@@ -157,8 +151,8 @@ static int check_round_nondecreasing(void)
         asx_scheduler_event ev;
         if (!asx_scheduler_event_get(i, &ev)) continue;
         if (ev.round < prev_round) {
-            fprintf(stderr, "    [CHECKER] event %u: round %u < prev %u\n",
-                    i, ev.round, prev_round);
+            fprintf(stderr, "    [CHECKER] event %u: round %u < prev %u\n", i, ev.round,
+                    prev_round);
             return 0;
         }
         prev_round = ev.round;
@@ -170,8 +164,7 @@ static int check_round_nondecreasing(void)
  * Invariant: all tasks reach terminal state (no starvation)
  * ------------------------------------------------------------------- */
 
-static int check_no_starvation(asx_task_id *tids, uint32_t ntasks)
-{
+static int check_no_starvation(asx_task_id *tids, uint32_t ntasks) {
     uint32_t i;
     for (i = 0; i < ntasks; i++) {
         asx_task_state state;
@@ -191,10 +184,8 @@ static int check_no_starvation(asx_task_id *tids, uint32_t ntasks)
  * Invariant: quiescent event emitted iff all tasks completed
  * ------------------------------------------------------------------- */
 
-static int check_quiescence_consistency(asx_status sched_result,
-                                         asx_task_id *tids,
-                                         uint32_t ntasks)
-{
+static int check_quiescence_consistency(asx_status sched_result, asx_task_id *tids,
+                                        uint32_t ntasks) {
     int all_complete = 1;
     uint32_t i;
     int found_quiescent = 0;
@@ -202,8 +193,7 @@ static int check_quiescence_consistency(asx_status sched_result,
 
     for (i = 0; i < ntasks; i++) {
         asx_task_state state;
-        if (asx_task_get_state(tids[i], &state) != ASX_OK ||
-            state != ASX_TASK_COMPLETED) {
+        if (asx_task_get_state(tids[i], &state) != ASX_OK || state != ASX_TASK_COMPLETED) {
             all_complete = 0;
             break;
         }
@@ -236,8 +226,7 @@ static int check_quiescence_consistency(asx_status sched_result,
  * produces identical event trace digests
  * ------------------------------------------------------------------- */
 
-static uint32_t compute_event_digest(void)
-{
+static uint32_t compute_event_digest(void) {
     /* Simple FNV-1a-like hash of the event trace */
     uint32_t hash = 0x811c9dc5u;
     uint32_t count = asx_scheduler_event_count();
@@ -268,8 +257,7 @@ typedef struct {
     cancel_timing timings[3];
 } scenario;
 
-static int run_scenario(const scenario *sc, uint32_t budget_polls)
-{
+static int run_scenario(const scenario *sc, uint32_t budget_polls) {
     asx_region_id rid;
     asx_task_id tids[3];
     task_ctx ctxs[3];
@@ -286,9 +274,7 @@ static int run_scenario(const scenario *sc, uint32_t budget_polls)
     for (i = 0; i < sc->ntasks; i++) {
         ctxs[i].behavior = sc->behaviors[i];
         ctxs[i].polls_done = 0;
-        if (asx_task_spawn(rid, configurable_poll, &ctxs[i], &tids[i]) != ASX_OK) {
-            return 0;
-        }
+        if (asx_task_spawn(rid, configurable_poll, &ctxs[i], &tids[i]) != ASX_OK) { return 0; }
     }
 
     /* Apply pre-schedule cancellations */
@@ -395,9 +381,7 @@ TEST(checker_exhaustive_2task) {
                     sc.timings[0] = (cancel_timing)t0;
                     sc.timings[1] = (cancel_timing)t1;
                     total++;
-                    if (run_scenario(&sc, 200)) {
-                        passed++;
-                    }
+                    if (run_scenario(&sc, 200)) { passed++; }
                 }
             }
         }
@@ -423,7 +407,8 @@ TEST(checker_3task_adversarial_mix) {
     sc.timings[0] = CANCEL_NONE;
     sc.timings[1] = CANCEL_BEFORE_SCHED;
     sc.timings[2] = CANCEL_AFTER_ONE_POLL;
-    total++; if (run_scenario(&sc, 200)) passed++;
+    total++;
+    if (run_scenario(&sc, 200)) passed++;
 
     /* Scenario: all checkpoint-pending with cancel storm */
     sc.behaviors[0] = BEHAV_CHECKPOINT_PEND;
@@ -432,7 +417,8 @@ TEST(checker_3task_adversarial_mix) {
     sc.timings[0] = CANCEL_BEFORE_SCHED;
     sc.timings[1] = CANCEL_AFTER_ONE_POLL;
     sc.timings[2] = CANCEL_BEFORE_SCHED;
-    total++; if (run_scenario(&sc, 200)) passed++;
+    total++;
+    if (run_scenario(&sc, 200)) passed++;
 
     /* Scenario: all immediate with no cancel */
     sc.behaviors[0] = BEHAV_IMMEDIATE;
@@ -441,7 +427,8 @@ TEST(checker_3task_adversarial_mix) {
     sc.timings[0] = CANCEL_NONE;
     sc.timings[1] = CANCEL_NONE;
     sc.timings[2] = CANCEL_NONE;
-    total++; if (run_scenario(&sc, 200)) passed++;
+    total++;
+    if (run_scenario(&sc, 200)) passed++;
 
     /* Scenario: mixed yields with all-cancel */
     sc.behaviors[0] = BEHAV_YIELD_THEN_OK;
@@ -450,7 +437,8 @@ TEST(checker_3task_adversarial_mix) {
     sc.timings[0] = CANCEL_AFTER_ONE_POLL;
     sc.timings[1] = CANCEL_AFTER_ONE_POLL;
     sc.timings[2] = CANCEL_AFTER_ONE_POLL;
-    total++; if (run_scenario(&sc, 200)) passed++;
+    total++;
+    if (run_scenario(&sc, 200)) passed++;
 
     /* Scenario: checkpoint tasks racing finalization */
     sc.behaviors[0] = BEHAV_CHECKPOINT_OK;
@@ -459,7 +447,8 @@ TEST(checker_3task_adversarial_mix) {
     sc.timings[0] = CANCEL_BEFORE_SCHED;
     sc.timings[1] = CANCEL_BEFORE_SCHED;
     sc.timings[2] = CANCEL_NONE;
-    total++; if (run_scenario(&sc, 200)) passed++;
+    total++;
+    if (run_scenario(&sc, 200)) passed++;
 
     ASSERT_EQ(passed, total);
 }

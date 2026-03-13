@@ -7,8 +7,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/runtime/io_driver.h>
 #include <asx/asx_config.h>
+#include <asx/runtime/io_driver.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -16,11 +16,11 @@
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    int               fd;
-    asx_io_interest   interest;
-    asx_waker         waker;
-    uint16_t          generation;
-    int               alive;
+    int fd;
+    asx_io_interest interest;
+    asx_waker waker;
+    uint16_t generation;
+    int alive;
 } asx_io_reg;
 
 /* ------------------------------------------------------------------ */
@@ -32,8 +32,7 @@ static uint32_t g_reg_count = 0;
 static uint32_t g_active_count = 0;
 static int g_initialized = 0;
 
-static uint16_t next_gen(uint16_t g)
-{
+static uint16_t next_gen(uint16_t g) {
     g++;
     if (g == 0) g = 1;
     return g;
@@ -43,20 +42,17 @@ static uint16_t next_gen(uint16_t g)
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_io_driver_init(void)
-{
+asx_status asx_io_driver_init(void) {
     g_initialized = 1;
     return ASX_OK;
 }
 
-void asx_io_driver_shutdown(void)
-{
+void asx_io_driver_shutdown(void) {
     asx_io_driver_reset();
     g_initialized = 0;
 }
 
-void asx_io_driver_reset(void)
-{
+void asx_io_driver_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_IO_TOKENS; i++) {
         g_regs[i].generation = next_gen(g_regs[i].generation);
@@ -72,15 +68,11 @@ void asx_io_driver_reset(void)
 /* Registration                                                        */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_io_register(int fd,
-                            asx_io_interest interest,
-                            const asx_waker *waker,
-                            asx_io_token *out_token)
-{
+asx_status asx_io_register(int fd, asx_io_interest interest, const asx_waker *waker,
+                           asx_io_token *out_token) {
     uint32_t idx;
 
-    if (out_token == NULL || waker == NULL)
-        return ASX_E_INVALID_ARGUMENT;
+    if (out_token == NULL || waker == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!g_initialized) return ASX_E_INVALID_STATE;
 
     /* Find free slot */
@@ -96,8 +88,7 @@ asx_status asx_io_register(int fd,
     }
 
     if (idx == ASX_MAX_IO_TOKENS) {
-        if (g_reg_count >= ASX_MAX_IO_TOKENS)
-            return ASX_E_RESOURCE_EXHAUSTED;
+        if (g_reg_count >= ASX_MAX_IO_TOKENS) return ASX_E_RESOURCE_EXHAUSTED;
         idx = g_reg_count++;
     }
 
@@ -114,8 +105,7 @@ asx_status asx_io_register(int fd,
     return ASX_OK;
 }
 
-void asx_io_deregister(asx_io_token *token)
-{
+void asx_io_deregister(asx_io_token *token) {
     if (token == NULL) return;
     if (token->slot >= g_reg_count) return;
     if (g_regs[token->slot].generation != token->generation) return;
@@ -125,8 +115,7 @@ void asx_io_deregister(asx_io_token *token)
     if (g_active_count > 0) g_active_count--;
 }
 
-asx_status asx_io_set_interest(asx_io_token *token, asx_io_interest interest)
-{
+asx_status asx_io_set_interest(asx_io_token *token, asx_io_interest interest) {
     if (token == NULL) return ASX_E_INVALID_ARGUMENT;
     if (token->slot >= g_reg_count) return ASX_E_NOT_FOUND;
     if (g_regs[token->slot].generation != token->generation) return ASX_E_NOT_FOUND;
@@ -140,10 +129,7 @@ asx_status asx_io_set_interest(asx_io_token *token, asx_io_interest interest)
 /* IO driver poll                                                      */
 /* ------------------------------------------------------------------ */
 
-uint32_t asx_io_driver_poll(asx_io_event *out_events,
-                             uint32_t max_events,
-                             uint32_t timeout_ms)
-{
+uint32_t asx_io_driver_poll(asx_io_event *out_events, uint32_t max_events, uint32_t timeout_ms) {
     uint32_t ready_count = 0;
 
     (void)out_events;
@@ -171,7 +157,4 @@ uint32_t asx_io_driver_poll(asx_io_event *out_events,
 /* Query                                                               */
 /* ------------------------------------------------------------------ */
 
-uint32_t asx_io_active_count(void)
-{
-    return g_active_count;
-}
+uint32_t asx_io_active_count(void) { return g_active_count; }

@@ -19,10 +19,10 @@
 
 /* ASX_CHECKPOINT_WAIVER_FILE("Consumer shim — no runtime loops") */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
 
 /* Only public headers — simulates an external consumer */
 #include <asx/asx.h>
@@ -30,20 +30,19 @@
 static int failures = 0;
 static int passes = 0;
 
-#define SHIM_CHECK(cond, msg) \
-    do { \
-        if (!(cond)) { \
-            fprintf(stderr, "  FAIL: %s\n", msg); \
-            failures++; \
-        } else { \
-            passes++; \
-        } \
+#define SHIM_CHECK(cond, msg)                                                                      \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            fprintf(stderr, "  FAIL: %s\n", msg);                                                  \
+            failures++;                                                                            \
+        } else {                                                                                   \
+            passes++;                                                                              \
+        }                                                                                          \
     } while (0)
 
 /* --- ABI version checks --- */
 
-static void test_abi_version(void)
-{
+static void test_abi_version(void) {
     fprintf(stderr, "--- ABI version ---\n");
 
     /* Compile-time version macros exist */
@@ -73,30 +72,23 @@ static void test_abi_version(void)
 
 /* --- Handle type sizes --- */
 
-static void test_handle_sizes(void)
-{
+static void test_handle_sizes(void) {
     fprintf(stderr, "--- Handle type sizes ---\n");
 
-    SHIM_CHECK(sizeof(asx_region_id) == ASX_ABI_SIZEOF_REGION_ID,
-               "asx_region_id size matches ABI");
-    SHIM_CHECK(sizeof(asx_task_id) == ASX_ABI_SIZEOF_TASK_ID,
-               "asx_task_id size matches ABI");
+    SHIM_CHECK(sizeof(asx_region_id) == ASX_ABI_SIZEOF_REGION_ID, "asx_region_id size matches ABI");
+    SHIM_CHECK(sizeof(asx_task_id) == ASX_ABI_SIZEOF_TASK_ID, "asx_task_id size matches ABI");
     SHIM_CHECK(sizeof(asx_obligation_id) == ASX_ABI_SIZEOF_OBLIGATION_ID,
                "asx_obligation_id size matches ABI");
-    SHIM_CHECK(sizeof(asx_timer_id) == ASX_ABI_SIZEOF_TIMER_ID,
-               "asx_timer_id size matches ABI");
+    SHIM_CHECK(sizeof(asx_timer_id) == ASX_ABI_SIZEOF_TIMER_ID, "asx_timer_id size matches ABI");
     SHIM_CHECK(sizeof(asx_channel_id) == ASX_ABI_SIZEOF_CHANNEL_ID,
                "asx_channel_id size matches ABI");
-    SHIM_CHECK(sizeof(asx_status) == ASX_ABI_SIZEOF_STATUS,
-               "asx_status size matches ABI");
-    SHIM_CHECK(sizeof(asx_time) == ASX_ABI_SIZEOF_TIME,
-               "asx_time size matches ABI");
+    SHIM_CHECK(sizeof(asx_status) == ASX_ABI_SIZEOF_STATUS, "asx_status size matches ABI");
+    SHIM_CHECK(sizeof(asx_time) == ASX_ABI_SIZEOF_TIME, "asx_time size matches ABI");
 }
 
 /* --- Frozen enum values --- */
 
-static void test_frozen_enums(void)
-{
+static void test_frozen_enums(void) {
     fprintf(stderr, "--- Frozen enum values ---\n");
 
     /* Region states */
@@ -138,8 +130,7 @@ static void test_frozen_enums(void)
 
 /* --- Config-struct size-field pattern --- */
 
-static void test_config_pattern(void)
-{
+static void test_config_pattern(void) {
     asx_runtime_config cfg;
 
     fprintf(stderr, "--- Config size-field pattern ---\n");
@@ -147,15 +138,13 @@ static void test_config_pattern(void)
     memset(&cfg, 0, sizeof(cfg));
     cfg.size = (uint32_t)sizeof(cfg);
 
-    SHIM_CHECK(cfg.size == sizeof(asx_runtime_config),
-               "config size-field roundtrip");
+    SHIM_CHECK(cfg.size == sizeof(asx_runtime_config), "config size-field roundtrip");
     SHIM_CHECK(cfg.size > 0, "config size nonzero");
 }
 
 /* --- Function symbol resolution --- */
 
-static void test_symbol_resolution(void)
-{
+static void test_symbol_resolution(void) {
     fprintf(stderr, "--- Symbol resolution ---\n");
 
     /* Core lifecycle functions resolve */
@@ -171,21 +160,18 @@ static void test_symbol_resolution(void)
     SHIM_CHECK(asx_abi_version_major != NULL, "asx_abi_version_major resolves");
 
     /* Handle helpers */
-    SHIM_CHECK(asx_handle_is_valid(ASX_INVALID_ID) == 0,
-               "invalid handle not valid");
+    SHIM_CHECK(asx_handle_is_valid(ASX_INVALID_ID) == 0, "invalid handle not valid");
 }
 
 /* --- Smoke: basic lifecycle works --- */
 
-static asx_status noop_poll(void *user_data, asx_task_id self)
-{
+static asx_status noop_poll(void *user_data, asx_task_id self) {
     (void)user_data;
     (void)self;
     return ASX_OK;
 }
 
-static void test_lifecycle_smoke(void)
-{
+static void test_lifecycle_smoke(void) {
     asx_region_id rid;
     asx_task_id tid;
     asx_budget budget;
@@ -208,8 +194,7 @@ static void test_lifecycle_smoke(void)
 
 /* --- Main --- */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "[asx-consumer-shim] ABI/API stability consumer shim test (bd-56t.4)\n\n");
 
     test_abi_version();
@@ -219,8 +204,7 @@ int main(void)
     test_symbol_resolution();
     test_lifecycle_smoke();
 
-    fprintf(stderr, "\n[asx-consumer-shim] %d passed, %d failed\n",
-            passes, failures);
+    fprintf(stderr, "\n[asx-consumer-shim] %d passed, %d failed\n", passes, failures);
 
     return failures > 0 ? 1 : 0;
 }

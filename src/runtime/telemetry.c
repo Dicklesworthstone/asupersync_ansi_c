@@ -28,8 +28,7 @@ static uint32_t g_rolling_sequence;
  * FNV-1a helpers (local copy to avoid cross-TU dependency)
  * ------------------------------------------------------------------- */
 
-static uint64_t telem_fnv1a_mix(uint64_t hash, const void *data, uint32_t len)
-{
+static uint64_t telem_fnv1a_mix(uint64_t hash, const void *data, uint32_t len) {
     const uint8_t *p = (const uint8_t *)data;
     uint32_t i;
 
@@ -42,8 +41,7 @@ static uint64_t telem_fnv1a_mix(uint64_t hash, const void *data, uint32_t len)
 
 /* Endian-safe FNV-1a helpers — serialize to little-endian bytes before
  * hashing so that digests are identical on LE and BE platforms (bd-3h6). */
-static uint64_t telem_fnv1a_mix_u32(uint64_t hash, uint32_t v)
-{
+static uint64_t telem_fnv1a_mix_u32(uint64_t hash, uint32_t v) {
     uint8_t bytes[4];
     bytes[0] = (uint8_t)(v & 0xFFu);
     bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
@@ -52,8 +50,7 @@ static uint64_t telem_fnv1a_mix_u32(uint64_t hash, uint32_t v)
     return telem_fnv1a_mix(hash, bytes, 4);
 }
 
-static uint64_t telem_fnv1a_mix_u64(uint64_t hash, uint64_t v)
-{
+static uint64_t telem_fnv1a_mix_u64(uint64_t hash, uint64_t v) {
     uint8_t bytes[8];
     bytes[0] = (uint8_t)(v & 0xFFu);
     bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
@@ -74,16 +71,10 @@ static uint64_t telem_fnv1a_mix_u64(uint64_t hash, uint64_t v)
  * ULTRA_MIN: no events retained (digest-only)
  * ------------------------------------------------------------------- */
 
-int asx_telemetry_retains(asx_telemetry_tier tier,
-                           asx_trace_event_kind kind)
-{
-    if (tier == ASX_TELEMETRY_FORENSIC) {
-        return 1;
-    }
+int asx_telemetry_retains(asx_telemetry_tier tier, asx_trace_event_kind kind) {
+    if (tier == ASX_TELEMETRY_FORENSIC) { return 1; }
 
-    if (tier == ASX_TELEMETRY_ULTRA_MIN) {
-        return 0;
-    }
+    if (tier == ASX_TELEMETRY_ULTRA_MIN) { return 0; }
 
     /* OPS_LIGHT: retain lifecycle and scheduler terminal events */
     switch (kind) {
@@ -94,8 +85,7 @@ int asx_telemetry_retains(asx_telemetry_tier tier,
     case ASX_TRACE_TASK_TRANSITION:
     case ASX_TRACE_SCHED_COMPLETE:
     case ASX_TRACE_SCHED_QUIESCENT:
-    case ASX_TRACE_SCHED_BUDGET:
-        return 1;
+    case ASX_TRACE_SCHED_BUDGET: return 1;
 
     case ASX_TRACE_SCHED_POLL:
     case ASX_TRACE_SCHED_ROUND:
@@ -106,11 +96,9 @@ int asx_telemetry_retains(asx_telemetry_tier tier,
     case ASX_TRACE_CHANNEL_RECV:
     case ASX_TRACE_TIMER_SET:
     case ASX_TRACE_TIMER_FIRE:
-    case ASX_TRACE_TIMER_CANCEL:
-        return 0;
+    case ASX_TRACE_TIMER_CANCEL: return 0;
 
-    default:
-        return 0;
+    default: return 0;
     }
 }
 
@@ -118,10 +106,8 @@ int asx_telemetry_retains(asx_telemetry_tier tier,
  * Tier configuration
  * ------------------------------------------------------------------- */
 
-asx_status asx_telemetry_set_tier(asx_telemetry_tier tier)
-{
-    if (tier != ASX_TELEMETRY_FORENSIC &&
-        tier != ASX_TELEMETRY_OPS_LIGHT &&
+asx_status asx_telemetry_set_tier(asx_telemetry_tier tier) {
+    if (tier != ASX_TELEMETRY_FORENSIC && tier != ASX_TELEMETRY_OPS_LIGHT &&
         tier != ASX_TELEMETRY_ULTRA_MIN) {
         return ASX_E_INVALID_ARGUMENT;
     }
@@ -129,18 +115,14 @@ asx_status asx_telemetry_set_tier(asx_telemetry_tier tier)
     return ASX_OK;
 }
 
-asx_telemetry_tier asx_telemetry_get_tier(void)
-{
-    return g_tier;
-}
+asx_telemetry_tier asx_telemetry_get_tier(void) { return g_tier; }
 
-const char *asx_telemetry_tier_str(asx_telemetry_tier tier)
-{
+const char *asx_telemetry_tier_str(asx_telemetry_tier tier) {
     switch (tier) {
-    case ASX_TELEMETRY_FORENSIC:  return "forensic";
+    case ASX_TELEMETRY_FORENSIC: return "forensic";
     case ASX_TELEMETRY_OPS_LIGHT: return "ops_light";
     case ASX_TELEMETRY_ULTRA_MIN: return "ultra_min";
-    default:                      return "unknown";
+    default: return "unknown";
     }
 }
 
@@ -148,10 +130,7 @@ const char *asx_telemetry_tier_str(asx_telemetry_tier tier)
  * Tier-aware emission
  * ------------------------------------------------------------------- */
 
-void asx_telemetry_emit(asx_trace_event_kind kind,
-                         uint64_t entity_id,
-                         uint64_t aux)
-{
+void asx_telemetry_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux) {
     uint32_t k;
 
     /* Always update rolling digest (tier-independent).
@@ -176,13 +155,9 @@ void asx_telemetry_emit(asx_trace_event_kind kind,
  * Rolling digest
  * ------------------------------------------------------------------- */
 
-uint64_t asx_telemetry_digest(void)
-{
-    return g_rolling_digest;
-}
+uint64_t asx_telemetry_digest(void) { return g_rolling_digest; }
 
-void asx_telemetry_digest_reset(void)
-{
+void asx_telemetry_digest_reset(void) {
     g_rolling_digest = 0x517cc1b727220a95ULL;
     g_rolling_sequence = 0;
 }
@@ -191,22 +166,15 @@ void asx_telemetry_digest_reset(void)
  * Statistics
  * ------------------------------------------------------------------- */
 
-uint32_t asx_telemetry_emitted_count(void)
-{
-    return g_emitted_count;
-}
+uint32_t asx_telemetry_emitted_count(void) { return g_emitted_count; }
 
-uint32_t asx_telemetry_filtered_count(void)
-{
-    return g_filtered_count;
-}
+uint32_t asx_telemetry_filtered_count(void) { return g_filtered_count; }
 
 /* -------------------------------------------------------------------
  * Reset
  * ------------------------------------------------------------------- */
 
-void asx_telemetry_reset(void)
-{
+void asx_telemetry_reset(void) {
     g_tier = ASX_TELEMETRY_FORENSIC;
     g_rolling_digest = 0x517cc1b727220a95ULL;
     g_emitted_count = 0;

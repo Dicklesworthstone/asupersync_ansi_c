@@ -25,11 +25,11 @@
 #ifndef ASX_TEST_LOG_H
 #define ASX_TEST_LOG_H
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <stdint.h>
 
 /* -------------------------------------------------------------------
  * Configuration
@@ -55,9 +55,7 @@ static char tlog_ts_buf[64];
  * Timestamp helper
  * ------------------------------------------------------------------- */
 
-__attribute__((unused))
-static void tlog_now(void)
-{
+__attribute__((unused)) static void tlog_now(void) {
     time_t t = time(NULL);
     struct tm *gm = gmtime(&t);
     if (gm != NULL) {
@@ -72,19 +70,17 @@ static void tlog_now(void)
  * JSON string escaping (minimal: handles \, ", newlines)
  * ------------------------------------------------------------------- */
 
-__attribute__((unused))
-static void tlog_write_json_str(FILE *f, const char *s)
-{
+__attribute__((unused)) static void tlog_write_json_str(FILE *f, const char *s) {
     fputc('"', f);
     if (s != NULL) {
         while (*s) {
             switch (*s) {
-            case '"':  fputs("\\\"", f); break;
+            case '"': fputs("\\\"", f); break;
             case '\\': fputs("\\\\", f); break;
-            case '\n': fputs("\\n", f);  break;
-            case '\r': fputs("\\r", f);  break;
-            case '\t': fputs("\\t", f);  break;
-            default:   fputc(*s, f);     break;
+            case '\n': fputs("\\n", f); break;
+            case '\r': fputs("\\r", f); break;
+            case '\t': fputs("\\t", f); break;
+            default: fputc(*s, f); break;
             }
             s++;
         }
@@ -96,10 +92,8 @@ static void tlog_write_json_str(FILE *f, const char *s)
  * Open / close
  * ------------------------------------------------------------------- */
 
-__attribute__((unused))
-static void test_log_open(const char *layer, const char *subsystem,
-                          const char *suite)
-{
+__attribute__((unused)) static void test_log_open(const char *layer, const char *subsystem,
+                                                  const char *suite) {
     char path[512];
     char run_id_buf[128];
 
@@ -135,20 +129,15 @@ static void test_log_open(const char *layer, const char *subsystem,
         const char *env_dir = NULL;
         /* Check environment override */
         env_dir = getenv("ASX_TEST_LOG_DIR");
-        if (env_dir != NULL && env_dir[0] != '\0') {
-            log_dir = env_dir;
-        }
+        if (env_dir != NULL && env_dir[0] != '\0') { log_dir = env_dir; }
 
-        snprintf(path, sizeof(path), "%s/%s-%s.jsonl",
-                 log_dir, layer, suite);
+        snprintf(path, sizeof(path), "%s/%s-%s.jsonl", log_dir, layer, suite);
         tlog_fp = fopen(path, "a");
         /* Silently skip if directory doesn't exist (no failure) */
     }
 }
 
-__attribute__((unused))
-static void test_log_close(void)
-{
+__attribute__((unused)) static void test_log_close(void) {
     if (tlog_fp != NULL) {
         fclose(tlog_fp);
         tlog_fp = NULL;
@@ -159,11 +148,9 @@ static void test_log_close(void)
  * Record emission: test result
  * ------------------------------------------------------------------- */
 
-__attribute__((unused))
-static void test_log_result(const char *test_name, const char *status,
-                            const char *err_file, int err_line,
-                            const char *err_assertion)
-{
+__attribute__((unused)) static void test_log_result(const char *test_name, const char *status,
+                                                    const char *err_file, int err_line,
+                                                    const char *err_assertion) {
     if (tlog_fp == NULL) return;
 
     tlog_now();
@@ -204,9 +191,7 @@ static void test_log_result(const char *test_name, const char *status,
  * Record emission: suite summary
  * ------------------------------------------------------------------- */
 
-__attribute__((unused))
-static void test_log_summary(int total, int passed, int failed)
-{
+__attribute__((unused)) static void test_log_summary(int total, int passed, int failed) {
     if (tlog_fp == NULL) return;
 
     tlog_now();

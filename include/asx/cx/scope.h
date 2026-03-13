@@ -26,8 +26,8 @@
 #define ASX_CX_SCOPE_H
 
 #include <asx/asx_export.h>
-#include <asx/asx_status.h>
 #include <asx/asx_ids.h>
+#include <asx/asx_status.h>
 #include <asx/core/budget.h>
 #include <asx/core/outcome.h>
 #include <asx/cx/cx.h>
@@ -42,10 +42,10 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 
 typedef enum {
-    ASX_JOIN_OK                     = 0,  /* task completed normally */
-    ASX_JOIN_CANCELLED              = 1,  /* task was cancelled */
-    ASX_JOIN_PANICKED               = 2,  /* task panicked (error outcome) */
-    ASX_JOIN_POLLED_AFTER_COMPLETE  = 3   /* handle polled after terminal */
+    ASX_JOIN_OK = 0,                   /* task completed normally */
+    ASX_JOIN_CANCELLED = 1,            /* task was cancelled */
+    ASX_JOIN_PANICKED = 2,             /* task panicked (error outcome) */
+    ASX_JOIN_POLLED_AFTER_COMPLETE = 3 /* handle polled after terminal */
 } asx_join_error;
 
 /* Return string for join error. Never returns NULL. */
@@ -59,9 +59,9 @@ ASX_API const char *asx_join_error_str(asx_join_error err);
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    asx_task_id    task_id;       /* handle to the spawned task */
-    asx_region_id  region_id;     /* owning region */
-    int            joined;        /* 1 if outcome already consumed */
+    asx_task_id task_id;     /* handle to the spawned task */
+    asx_region_id region_id; /* owning region */
+    int joined;              /* 1 if outcome already consumed */
 } asx_task_handle;
 
 /* Check if the task referenced by this handle has finished. */
@@ -75,9 +75,7 @@ ASX_API asx_task_id asx_task_handle_task_id(const asx_task_handle *h);
  * Returns ASX_E_PENDING if the task is still running.
  * Returns ASX_E_INVALID_ARGUMENT if h or out is NULL.
  * Marks the handle as joined on success. */
-ASX_API ASX_MUST_USE asx_status asx_task_handle_try_join(
-    asx_task_handle *h,
-    asx_outcome *out);
+ASX_API ASX_MUST_USE asx_status asx_task_handle_try_join(asx_task_handle *h, asx_outcome *out);
 
 /* Classify a join result into a join error category.
  * Returns ASX_JOIN_OK for successful outcomes. */
@@ -87,9 +85,7 @@ ASX_API asx_join_error asx_task_handle_join_error(const asx_outcome *outcome);
 ASX_API asx_status asx_task_handle_abort(asx_task_handle *h);
 
 /* Request cancellation with explicit cancel kind. */
-ASX_API asx_status asx_task_handle_abort_with_kind(
-    asx_task_handle *h,
-    asx_cancel_kind kind);
+ASX_API asx_status asx_task_handle_abort_with_kind(asx_task_handle *h, asx_cancel_kind kind);
 
 /* ------------------------------------------------------------------ */
 /* Scope                                                               */
@@ -100,10 +96,10 @@ ASX_API asx_status asx_task_handle_abort_with_kind(
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    asx_region_id  region_id;     /* owning region */
-    asx_cx         cx;            /* capability context for spawned tasks */
-    asx_budget     budget;        /* execution budget for this scope */
-    uint32_t       spawned;       /* count of tasks spawned in this scope */
+    asx_region_id region_id; /* owning region */
+    asx_cx cx;               /* capability context for spawned tasks */
+    asx_budget budget;       /* execution budget for this scope */
+    uint32_t spawned;        /* count of tasks spawned in this scope */
 } asx_scope;
 
 /* Initialize a scope.
@@ -112,11 +108,8 @@ typedef struct {
  * The cx must have ASX_CAP_SPAWN.
  * Postconditions: scope is ready for spawning tasks.
  * Returns ASX_OK on success. */
-ASX_API ASX_MUST_USE asx_status asx_scope_init(
-    asx_scope *scope,
-    asx_region_id region,
-    const asx_cx *cx,
-    asx_budget budget);
+ASX_API ASX_MUST_USE asx_status asx_scope_init(asx_scope *scope, asx_region_id region,
+                                               const asx_cx *cx, asx_budget budget);
 
 /* Spawn a task within this scope.
  *
@@ -126,24 +119,19 @@ ASX_API ASX_MUST_USE asx_status asx_scope_init(
  * Returns ASX_OK on success,
  *   ASX_E_PERMISSION_DENIED if cx lacks ASX_CAP_SPAWN,
  *   ASX_E_RESOURCE_EXHAUSTED if arena is full. */
-ASX_API ASX_MUST_USE asx_status asx_scope_spawn(
-    asx_scope *scope,
-    asx_task_poll_fn poll_fn,
-    void *user_data,
-    asx_task_handle *out_handle);
+ASX_API ASX_MUST_USE asx_status asx_scope_spawn(asx_scope *scope, asx_task_poll_fn poll_fn,
+                                                void *user_data, asx_task_handle *out_handle);
 
 /* Spawn a task with captured state (region-arena allocated).
  *
  * Same as asx_scope_spawn but allocates state_size bytes from the
  * region's capture arena. The returned *out_state pointer is stable
  * for the task's lifetime and automatically passed as user_data. */
-ASX_API ASX_MUST_USE asx_status asx_scope_spawn_captured(
-    asx_scope *scope,
-    asx_task_poll_fn poll_fn,
-    uint32_t state_size,
-    asx_task_state_dtor_fn state_dtor,
-    asx_task_handle *out_handle,
-    void **out_state);
+ASX_API ASX_MUST_USE asx_status asx_scope_spawn_captured(asx_scope *scope, asx_task_poll_fn poll_fn,
+                                                         uint32_t state_size,
+                                                         asx_task_state_dtor_fn state_dtor,
+                                                         asx_task_handle *out_handle,
+                                                         void **out_state);
 
 /* Run the scope's region to completion (or budget exhaustion).
  *

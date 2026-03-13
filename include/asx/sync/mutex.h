@@ -13,12 +13,12 @@
 #ifndef ASX_SYNC_MUTEX_H
 #define ASX_SYNC_MUTEX_H
 
-#include <asx/asx_export.h>
-#include <asx/asx_status.h>
-#include <asx/asx_ids.h>
 #include <asx/asx_config.h>
-#include <asx/sync/semaphore.h>
+#include <asx/asx_export.h>
+#include <asx/asx_ids.h>
+#include <asx/asx_status.h>
 #include <asx/cx/cx.h>
+#include <asx/sync/semaphore.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,25 +56,20 @@ ASX_API asx_status asx_mutex_close(asx_mutex_handle handle);
 
 /* Try to lock immediately. Returns ASX_OK + guard if unlocked,
  * ASX_E_WOULD_BLOCK if locked. */
-ASX_API asx_status asx_mutex_try_lock(
-    asx_mutex_handle handle,
-    asx_mutex_guard *out);
+ASX_API asx_status asx_mutex_try_lock(asx_mutex_handle handle, asx_mutex_guard *out);
 
 /* -------------------------------------------------------------------
  * Lock (async / poll-based)
  * ------------------------------------------------------------------- */
 
 /* Begin async lock. Must be followed by poll_lock calls. */
-ASX_API ASX_MUST_USE asx_status asx_mutex_lock_begin(
-    asx_mutex_handle handle,
-    asx_mutex_lock_waiter *out);
+ASX_API ASX_MUST_USE asx_status asx_mutex_lock_begin(asx_mutex_handle handle,
+                                                     asx_mutex_lock_waiter *out);
 
 /* Poll for lock. Returns ASX_OK + guard when acquired,
  * ASX_E_PENDING when waiting. */
-ASX_API asx_status asx_mutex_poll_lock(
-    asx_mutex_lock_waiter *waiter,
-    asx_mutex_guard *out,
-    asx_cx *cx);
+ASX_API asx_status asx_mutex_poll_lock(asx_mutex_lock_waiter *waiter, asx_mutex_guard *out,
+                                       asx_cx *cx);
 
 /* Cancel an async lock (safe even if already acquired). */
 ASX_API asx_status asx_mutex_lock_cancel(asx_mutex_lock_waiter *waiter);

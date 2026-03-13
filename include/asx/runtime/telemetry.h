@@ -32,9 +32,9 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_TELEMETRY_FORENSIC  = 0,  /* full: all events recorded */
-    ASX_TELEMETRY_OPS_LIGHT = 1,  /* reduced: key lifecycle only */
-    ASX_TELEMETRY_ULTRA_MIN = 2   /* minimal: rolling digest only */
+    ASX_TELEMETRY_FORENSIC = 0,  /* full: all events recorded */
+    ASX_TELEMETRY_OPS_LIGHT = 1, /* reduced: key lifecycle only */
+    ASX_TELEMETRY_ULTRA_MIN = 2  /* minimal: rolling digest only */
 } asx_telemetry_tier;
 
 /* -------------------------------------------------------------------
@@ -65,9 +65,7 @@ ASX_API const char *asx_telemetry_tier_str(asx_telemetry_tier tier);
 /* Emit an event through the telemetry filter.
  * The event is always included in the rolling digest.
  * Whether it is recorded in the trace ring depends on the active tier. */
-ASX_API void asx_telemetry_emit(asx_trace_event_kind kind,
-                                 uint64_t entity_id,
-                                 uint64_t aux);
+ASX_API void asx_telemetry_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux);
 
 /* -------------------------------------------------------------------
  * Rolling digest (tier-independent)
@@ -93,8 +91,7 @@ ASX_API void asx_telemetry_digest_reset(void);
 
 /* Returns 1 if the event kind is retained in the trace ring under
  * the given tier, 0 if filtered out. */
-ASX_API int asx_telemetry_retains(asx_telemetry_tier tier,
-                                   asx_trace_event_kind kind);
+ASX_API int asx_telemetry_retains(asx_telemetry_tier tier, asx_trace_event_kind kind);
 
 /* -------------------------------------------------------------------
  * Statistics

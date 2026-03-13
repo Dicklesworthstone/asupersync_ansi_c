@@ -7,24 +7,22 @@
  * Bead: bd-rkql.6
  */
 
-#include <stdio.h>
 #include <stdint.h>
+#include <stdio.h>
 
-#define FUZZ_MAX_OPS      128u
-#define FUZZ_MAX_REGIONS  8u
-#define FUZZ_MAX_TASKS    64u
+#define FUZZ_MAX_OPS 128u
+#define FUZZ_MAX_REGIONS 8u
+#define FUZZ_MAX_TASKS 64u
 #define FUZZ_OP_KIND_COUNT 21
 
 /* PRNG: xoshiro256** (identical to fuzz_differential.c) */
-typedef struct { uint64_t s[4]; } fuzz_rng;
+typedef struct {
+    uint64_t s[4];
+} fuzz_rng;
 
-static uint64_t fuzz_rotl(uint64_t x, int k)
-{
-    return (x << k) | (x >> (64 - k));
-}
+static uint64_t fuzz_rotl(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
 
-static uint64_t fuzz_rng_next(fuzz_rng *rng)
-{
+static uint64_t fuzz_rng_next(fuzz_rng *rng) {
     uint64_t result = fuzz_rotl(rng->s[1] * 5u, 7) * 9u;
     uint64_t t = rng->s[1] << 17;
     rng->s[2] ^= rng->s[0];
@@ -36,8 +34,7 @@ static uint64_t fuzz_rng_next(fuzz_rng *rng)
     return result;
 }
 
-static void fuzz_rng_seed(fuzz_rng *rng, uint64_t seed)
-{
+static void fuzz_rng_seed(fuzz_rng *rng, uint64_t seed) {
     uint64_t z = seed;
     int i;
     for (i = 0; i < 4; i++) {
@@ -48,36 +45,46 @@ static void fuzz_rng_seed(fuzz_rng *rng, uint64_t seed)
     }
 }
 
-static uint32_t fuzz_rng_u32(fuzz_rng *rng, uint32_t bound)
-{
+static uint32_t fuzz_rng_u32(fuzz_rng *rng, uint32_t bound) {
     if (bound == 0u) return 0u;
     return (uint32_t)(fuzz_rng_next(rng) % (uint64_t)bound);
 }
 
 /* Op types */
 typedef enum {
-    FUZZ_OP_SPAWN_REGION=0, FUZZ_OP_CLOSE_REGION=1, FUZZ_OP_POISON_REGION=2,
-    FUZZ_OP_SPAWN_TASK=3, FUZZ_OP_CANCEL_TASK=4,
-    FUZZ_OP_RESERVE_OBLIGATION=5, FUZZ_OP_COMMIT_OBLIGATION=6, FUZZ_OP_ABORT_OBLIGATION=7,
-    FUZZ_OP_CHANNEL_CREATE=8, FUZZ_OP_CHANNEL_RESERVE=9, FUZZ_OP_CHANNEL_SEND=10,
-    FUZZ_OP_CHANNEL_ABORT=11, FUZZ_OP_CHANNEL_RECV=12, FUZZ_OP_CHANNEL_CLOSE_TX=13,
-    FUZZ_OP_CHANNEL_CLOSE_RX=14, FUZZ_OP_TIMER_REGISTER=15, FUZZ_OP_TIMER_CANCEL=16,
-    FUZZ_OP_ADVANCE_TIME=17, FUZZ_OP_SCHEDULER_RUN=18, FUZZ_OP_REGION_DRAIN=19,
-    FUZZ_OP_QUIESCENCE_CHECK=20
+    FUZZ_OP_SPAWN_REGION = 0,
+    FUZZ_OP_CLOSE_REGION = 1,
+    FUZZ_OP_POISON_REGION = 2,
+    FUZZ_OP_SPAWN_TASK = 3,
+    FUZZ_OP_CANCEL_TASK = 4,
+    FUZZ_OP_RESERVE_OBLIGATION = 5,
+    FUZZ_OP_COMMIT_OBLIGATION = 6,
+    FUZZ_OP_ABORT_OBLIGATION = 7,
+    FUZZ_OP_CHANNEL_CREATE = 8,
+    FUZZ_OP_CHANNEL_RESERVE = 9,
+    FUZZ_OP_CHANNEL_SEND = 10,
+    FUZZ_OP_CHANNEL_ABORT = 11,
+    FUZZ_OP_CHANNEL_RECV = 12,
+    FUZZ_OP_CHANNEL_CLOSE_TX = 13,
+    FUZZ_OP_CHANNEL_CLOSE_RX = 14,
+    FUZZ_OP_TIMER_REGISTER = 15,
+    FUZZ_OP_TIMER_CANCEL = 16,
+    FUZZ_OP_ADVANCE_TIME = 17,
+    FUZZ_OP_SCHEDULER_RUN = 18,
+    FUZZ_OP_REGION_DRAIN = 19,
+    FUZZ_OP_QUIESCENCE_CHECK = 20
 } fuzz_op_kind;
 
-static const char *fuzz_op_names[] = {
-    "SpawnRegion","CloseRegion","PoisonRegion","SpawnTask","CancelTask",
-    "ReserveObligation","CommitObligation","AbortObligation",
-    "ChannelCreate","ChannelReserve","ChannelSend","ChannelAbort",
-    "ChannelRecv","ChannelCloseTx","ChannelCloseRx",
-    "TimerRegister","TimerCancel","AdvanceTime",
-    "SchedulerRun","RegionDrain","QuiescenceCheck"
-};
+static const char *fuzz_op_names[] = {"SpawnRegion",      "CloseRegion",     "PoisonRegion",
+                                      "SpawnTask",        "CancelTask",      "ReserveObligation",
+                                      "CommitObligation", "AbortObligation", "ChannelCreate",
+                                      "ChannelReserve",   "ChannelSend",     "ChannelAbort",
+                                      "ChannelRecv",      "ChannelCloseTx",  "ChannelCloseRx",
+                                      "TimerRegister",    "TimerCancel",     "AdvanceTime",
+                                      "SchedulerRun",     "RegionDrain",     "QuiescenceCheck"};
 
-static const uint32_t OP_WEIGHTS[FUZZ_OP_KIND_COUNT] = {
-    12,8,3,15,10,8,7,5,6,5,5,3,5,3,3,6,4,5,12,5,4
-};
+static const uint32_t OP_WEIGHTS[FUZZ_OP_KIND_COUNT] = {12, 8, 3, 15, 10, 8, 7, 5,  6, 5, 5,
+                                                        3,  5, 3, 3,  6,  4, 5, 12, 5, 4};
 
 typedef struct {
     fuzz_op_kind kind;
@@ -91,8 +98,7 @@ typedef struct {
     fuzz_op ops[FUZZ_MAX_OPS];
 } fuzz_scenario;
 
-static fuzz_op_kind fuzz_pick_op(fuzz_rng *rng)
-{
+static fuzz_op_kind fuzz_pick_op(fuzz_rng *rng) {
     uint32_t total = 0u, r, acc;
     int i;
     for (i = 0; i < FUZZ_OP_KIND_COUNT; i++) total += OP_WEIGHTS[i];
@@ -105,16 +111,17 @@ static fuzz_op_kind fuzz_pick_op(fuzz_rng *rng)
     return FUZZ_OP_SPAWN_REGION;
 }
 
-static void fuzz_generate_scenario(fuzz_rng *rng, fuzz_scenario *sc, uint32_t max_ops)
-{
+static void fuzz_generate_scenario(fuzz_rng *rng, fuzz_scenario *sc, uint32_t max_ops) {
     uint32_t n, i;
     sc->seed = fuzz_rng_next(rng);
     n = 4u + fuzz_rng_u32(rng, max_ops > 4u ? max_ops - 4u : 1u);
     if (n > FUZZ_MAX_OPS) n = FUZZ_MAX_OPS;
     sc->op_count = n;
     sc->ops[0].kind = FUZZ_OP_SPAWN_REGION;
-    sc->ops[0].idx_a = 0u; sc->ops[0].idx_b = 0u;
-    sc->ops[0].arg_u32 = 0u; sc->ops[0].arg_u64 = 0u;
+    sc->ops[0].idx_a = 0u;
+    sc->ops[0].idx_b = 0u;
+    sc->ops[0].arg_u32 = 0u;
+    sc->ops[0].arg_u64 = 0u;
     for (i = 1u; i < n; i++) {
         sc->ops[i].kind = fuzz_pick_op(rng);
         sc->ops[i].idx_a = fuzz_rng_u32(rng, FUZZ_MAX_REGIONS);
@@ -125,8 +132,7 @@ static void fuzz_generate_scenario(fuzz_rng *rng, fuzz_scenario *sc, uint32_t ma
 }
 
 /* FNV-1a (same as harness) */
-static uint64_t fnv1a_scenario(const fuzz_scenario *sc)
-{
+static uint64_t fnv1a_scenario(const fuzz_scenario *sc) {
     uint64_t hash = 0xcbf29ce484222325ULL;
     uint32_t i;
     uint8_t *ptr;
@@ -147,16 +153,19 @@ static uint64_t fnv1a_scenario(const fuzz_scenario *sc)
     for (i = 0u; i < sc->op_count; i++) {
         uint32_t k = (uint32_t)sc->ops[i].kind;
         ptr = (uint8_t *)&k;
-        hash ^= (uint64_t)ptr[0]; hash *= 0x100000001b3ULL;
-        hash ^= (uint64_t)ptr[1]; hash *= 0x100000001b3ULL;
-        hash ^= (uint64_t)ptr[2]; hash *= 0x100000001b3ULL;
-        hash ^= (uint64_t)ptr[3]; hash *= 0x100000001b3ULL;
+        hash ^= (uint64_t)ptr[0];
+        hash *= 0x100000001b3ULL;
+        hash ^= (uint64_t)ptr[1];
+        hash *= 0x100000001b3ULL;
+        hash ^= (uint64_t)ptr[2];
+        hash *= 0x100000001b3ULL;
+        hash ^= (uint64_t)ptr[3];
+        hash *= 0x100000001b3ULL;
     }
     return hash;
 }
 
-int main(void)
-{
+int main(void) {
     fuzz_rng rng;
     uint32_t initial_seed;
 
@@ -169,21 +178,18 @@ int main(void)
         fuzz_generate_scenario(&rng, &sc, 64u);
 
         if (initial_seed > 0u) printf(",\n");
-        printf("  {\"initial_seed\":%u,\"scenario_seed\":%llu,\"op_count\":%u,\"grammar_hash\":\"%016llx\",\"first_op\":\"%s\",\"last_op\":\"%s\",\"ops\":[",
-               initial_seed,
-               (unsigned long long)sc.seed,
-               sc.op_count,
-               (unsigned long long)fnv1a_scenario(&sc),
-               fuzz_op_names[(int)sc.ops[0].kind],
+        printf("  "
+               "{\"initial_seed\":%u,\"scenario_seed\":%llu,\"op_count\":%u,\"grammar_hash\":\"%"
+               "016llx\",\"first_op\":\"%s\",\"last_op\":\"%s\",\"ops\":[",
+               initial_seed, (unsigned long long)sc.seed, sc.op_count,
+               (unsigned long long)fnv1a_scenario(&sc), fuzz_op_names[(int)sc.ops[0].kind],
                fuzz_op_names[(int)sc.ops[sc.op_count - 1u].kind]);
 
         for (i = 0u; i < sc.op_count; i++) {
             if (i > 0u) printf(",");
             printf("{\"op\":\"%s\",\"a\":%u,\"b\":%u,\"u32\":%u,\"u64\":%llu}",
-                   fuzz_op_names[(int)sc.ops[i].kind],
-                   sc.ops[i].idx_a, sc.ops[i].idx_b,
-                   sc.ops[i].arg_u32,
-                   (unsigned long long)sc.ops[i].arg_u64);
+                   fuzz_op_names[(int)sc.ops[i].kind], sc.ops[i].idx_a, sc.ops[i].idx_b,
+                   sc.ops[i].arg_u32, (unsigned long long)sc.ops[i].arg_u64);
         }
         printf("]}");
     }

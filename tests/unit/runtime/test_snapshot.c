@@ -5,15 +5,15 @@
  */
 
 #include "../../test_harness.h"
-#include <asx/runtime/snapshot.h>
-#include <asx/runtime/runtime.h>
 #include <asx/codec/codec.h>
+#include <asx/runtime/runtime.h>
+#include <asx/runtime/snapshot.h>
 #include <string.h>
 
 /* Dummy poll function for task spawn */
-static asx_status dummy_poll(void *user_data, asx_task_id self)
-{
-    (void)user_data; (void)self;
+static asx_status dummy_poll(void *user_data, asx_task_id self) {
+    (void)user_data;
+    (void)self;
     return ASX_OK;
 }
 
@@ -237,24 +237,37 @@ TEST(snapshot_to_json_null_returns_error) {
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
-int main(void)
-{
+int main(void) {
     fprintf(stderr, "=== snapshot unit tests ===\n");
 
-    asx_runtime_reset(); RUN_TEST(snapshot_init_zeroes);
-    asx_runtime_reset(); RUN_TEST(snapshot_init_null_safe);
-    asx_runtime_reset(); RUN_TEST(snapshot_capture_empty);
-    asx_runtime_reset(); RUN_TEST(snapshot_capture_null_returns_error);
-    asx_runtime_reset(); RUN_TEST(snapshot_capture_with_region);
-    asx_runtime_reset(); RUN_TEST(snapshot_capture_with_task);
-    asx_runtime_reset(); RUN_TEST(snapshot_capture_with_obligation);
-    asx_runtime_reset(); RUN_TEST(snapshot_eq_identical);
-    asx_runtime_reset(); RUN_TEST(snapshot_eq_different_counts);
-    asx_runtime_reset(); RUN_TEST(snapshot_eq_null_returns_error);
-    asx_runtime_reset(); RUN_TEST(snapshot_capture_deterministic);
-    asx_runtime_reset(); RUN_TEST(snapshot_to_json_empty);
-    asx_runtime_reset(); RUN_TEST(snapshot_to_json_with_entities);
-    asx_runtime_reset(); RUN_TEST(snapshot_to_json_null_returns_error);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_init_zeroes);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_init_null_safe);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_capture_empty);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_capture_null_returns_error);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_capture_with_region);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_capture_with_task);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_capture_with_obligation);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_eq_identical);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_eq_different_counts);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_eq_null_returns_error);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_capture_deterministic);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_to_json_empty);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_to_json_with_entities);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_to_json_null_returns_error);
 
     TEST_REPORT();
     return test_failures;
