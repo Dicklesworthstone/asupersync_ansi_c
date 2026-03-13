@@ -185,6 +185,61 @@ ASX_API int asx_parallel_starvation_detected(void);
 ASX_API uint32_t asx_parallel_max_starvation(void);
 
 /* -------------------------------------------------------------------
+ * API: Global injector
+ *
+ * Inject tasks into the scheduler by work class. These provide
+ * the cross-boundary submission interface for structured concurrency.
+ * In single-threaded mode, injection is immediate lane assignment.
+ * ------------------------------------------------------------------- */
+
+/* Inject a task into the cancel lane (highest priority).
+ * Used when a task transitions to cancel-requested or cancelling. */
+ASX_API ASX_MUST_USE asx_status asx_inject_cancel(asx_task_id tid);
+
+/* Inject a task into the timed lane (deadline-ordered).
+ * Used for tasks blocked on timer deadlines. */
+ASX_API ASX_MUST_USE asx_status asx_inject_timed(asx_task_id tid);
+
+/* Inject a task into the ready lane (default work class).
+ * Used for newly spawned tasks and tasks that become runnable. */
+ASX_API ASX_MUST_USE asx_status asx_inject_ready(asx_task_id tid);
+
+/* -------------------------------------------------------------------
+ * API: Scheduling metrics
+ *
+ * Per-lane dispatch counters and cancel-streak tracking for
+ * fairness analysis and observability.
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    uint32_t cancel_dispatches;   /* total cancel-lane polls */
+    uint32_t timed_dispatches;    /* total timed-lane polls */
+    uint32_t ready_dispatches;    /* total ready-lane polls */
+    uint32_t cancel_streak;       /* current consecutive cancel polls */
+    uint32_t cancel_streak_max;   /* peak cancel streak observed */
+    uint32_t fairness_yields;     /* times cancel was skipped for fairness */
+} asx_scheduling_metrics;
+
+/* Read the current scheduling metrics. */
+ASX_API ASX_MUST_USE asx_status asx_parallel_get_metrics(
+    asx_scheduling_metrics *out);
+
+/* Reset scheduling metrics to zero. */
+ASX_API void asx_parallel_reset_metrics(void);
+
+/* -------------------------------------------------------------------
+ * API: Cancel-streak fairness configuration
+ * ------------------------------------------------------------------- */
+
+/* Set the cancel-streak limit. When the scheduler dispatches this
+ * many consecutive cancel-lane tasks, it yields to other lanes.
+ * Default is 16. Set to 0 to disable (unlimited cancel streak). */
+ASX_API void asx_parallel_set_cancel_streak_limit(uint32_t limit);
+
+/* Get the current cancel-streak limit. */
+ASX_API uint32_t asx_parallel_cancel_streak_limit(void);
+
+/* -------------------------------------------------------------------
  * API: Configuration queries
  * ------------------------------------------------------------------- */
 

@@ -1,74 +1,121 @@
 {
-  "scenario_id": "cancel-severity-strengthen-002",
-  "fixture_schema_version": "fixture-v1",
-  "scenario_dsl_version": "dsl-v1",
-  "profile": "ASX_PROFILE_CORE",
   "codec": "bin",
-  "seed": 42,
+  "expected_error_codes": [
+    "1 tasks leaked",
+    "refinement_firewall:RFW-QUIESCE-001",
+    "refinement_firewall:minimal_counterexample_prefix_len=6"
+  ],
+  "expected_events": [
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "RegionCreated",
+      "seq": 0,
+      "time_ns": 0
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "Spawn",
+      "seq": 1,
+      "time_ns": 0
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "RegionCancelled",
+      "seq": 2,
+      "time_ns": 0
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "RegionCloseBegin",
+      "seq": 3,
+      "time_ns": 0
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "RegionCancelled",
+      "seq": 4,
+      "time_ns": 0
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "RegionCloseComplete",
+      "seq": 5,
+      "time_ns": 0
+    }
+  ],
+  "expected_final_snapshot": {
+    "obligations": 0,
+    "regions": 0,
+    "tasks": 1
+  },
+  "fixture_schema_version": "fixture-v1",
   "input": {
     "ops": [
       {
+        "args": {},
         "id": 0,
-        "op": "region_open",
-        "args": {}
+        "op": "region_open"
       },
       {
+        "args": {
+          "poll_fn": "yield_forever",
+          "region_ref": 0
+        },
         "id": 1,
-        "op": "task_spawn",
-        "args": {
-          "region_ref": 0,
-          "poll_fn": "yield_forever"
-        }
+        "op": "task_spawn"
       },
       {
-        "id": 2,
-        "op": "task_cancel",
         "args": {
-          "task_ref": 1,
           "kind": "USER",
-          "severity": 0
-        }
+          "severity": 0,
+          "task_ref": 1
+        },
+        "id": 2,
+        "op": "task_cancel"
       },
       {
-        "id": 3,
-        "op": "task_cancel",
         "args": {
-          "task_ref": 1,
           "kind": "SHUTDOWN",
-          "severity": 5
-        }
+          "severity": 5,
+          "task_ref": 1
+        },
+        "id": 3,
+        "op": "task_cancel"
       },
       {
-        "id": 4,
-        "op": "scheduler_run",
         "args": {
-          "region_ref": 0,
-          "budget_polls": 5
-        }
+          "budget_polls": 5,
+          "region_ref": 0
+        },
+        "id": 4,
+        "op": "scheduler_run"
       },
       {
-        "id": 5,
-        "op": "region_close",
         "args": {
           "region_ref": 0
-        }
+        },
+        "id": 5,
+        "op": "region_close"
       }
     ]
   },
-  "expected_events": [],
-  "expected_final_snapshot": {
-    "regions": 0,
-    "tasks": 0,
-    "obligations": 0
-  },
-  "expected_error_codes": [],
-  "semantic_digest": "sha256:2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c",
+  "profile": "ASX_PROFILE_CORE",
   "provenance": {
-    "rust_baseline_commit": "38c152405bd03e2bd9eecf178bfbbe9472fed861",
-    "rust_toolchain_commit_hash": "7f99507f57e6c4aa0dce3daf6a13cca8cd4dd312",
-    "rust_toolchain_release": "1.95.0-nightly",
+    "capture_run_id": "3a2efd02-1ae2-4f82-a1d3-2e2115452bd8",
+    "cargo_lock_sha256": "ddf46a437b62698175bdc96183436813a4a81c220a55ed94c7eb766fe4f20ac9",
+    "rust_baseline_commit": "a9e737d869c04c2f6aa4222fe38be66b28628227",
+    "rust_toolchain_commit_hash": "3b1b0ef4d80d3117924d91352c8b6ca528708b3c",
     "rust_toolchain_host": "x86_64-unknown-linux-gnu",
-    "cargo_lock_sha256": "77f4bfaedfe5b8572dfca3181119f9432825ea3d868ee8f5d2793a6c5cdeffdc",
-    "capture_run_id": "capture-core-families-20260302"
-  }
+    "rust_toolchain_release": "1.96.0-nightly"
+  },
+  "scenario_dsl_version": "dsl-v1",
+  "scenario_id": "cancel-severity-strengthen-002",
+  "seed": 42,
+  "semantic_digest": "sha256:b8f440a52bc91e0164f2103e39483a0398e9318c44581a4a3fede8225da2de0a"
 }

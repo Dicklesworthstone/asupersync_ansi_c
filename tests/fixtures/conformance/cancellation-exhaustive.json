@@ -1,0 +1,38 @@
+{
+  "codec": "json",
+  "expected_error_codes": [],
+  "expected_events": [],
+  "expected_final_snapshot": {
+    "quiescent": true,
+    "steps_total": 0,
+    "trace_fingerprint": 16732658632908851881
+  },
+  "fixture_schema_version": "1.0.0",
+  "input": {
+    "ops": [
+      {
+        "args": {
+          "max_steps": 50000,
+          "scenario_id": "cancellation-exhaustive",
+          "seed": 42,
+          "worker_count": 1
+        },
+        "id": 0,
+        "op": "run_scenario"
+      }
+    ]
+  },
+  "profile": "lab",
+  "provenance": {
+    "capture_run_id": "012f3c9a-37ae-4ec3-a291-01c2c623a59f",
+    "cargo_lock_sha256": "ddf46a437b62698175bdc96183436813a4a81c220a55ed94c7eb766fe4f20ac9",
+    "rust_baseline_commit": "a9e737d869c04c2f6aa4222fe38be66b28628227",
+    "rust_toolchain_commit_hash": "3b1b0ef4d80d3117924d91352c8b6ca528708b3c",
+    "rust_toolchain_host": "x86_64-unknown-linux-gnu",
+    "rust_toolchain_release": "1.96.0-nightly"
+  },
+  "scenario_dsl_version": "1",
+  "scenario_id": "cancellation-exhaustive",
+  "seed": 42,
+  "semantic_digest": "sha256:b2e58410a74436e24461f791e63675473646841d66d0ac31abc22f0299e13806"
+}

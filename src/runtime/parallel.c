@@ -39,6 +39,10 @@ static asx_parallel_config g_config;
 static lane_internal     g_lanes[ASX_MAX_LANES];
 static asx_worker_state  g_workers[ASX_MAX_WORKERS];
 
+/* Cancel-streak fairness state */
+static uint32_t          g_cancel_streak_limit = 16u;
+static asx_scheduling_metrics g_metrics;
+
 /* -------------------------------------------------------------------
  * Init / Reset
  * ------------------------------------------------------------------- */
@@ -77,6 +81,8 @@ void asx_parallel_reset(void)
     memset(g_lanes, 0, sizeof(g_lanes));
     memset(g_workers, 0, sizeof(g_workers));
     memset(&g_config, 0, sizeof(g_config));
+    memset(&g_metrics, 0, sizeof(g_metrics));
+    g_cancel_streak_limit = 16u;
     g_initialized = 0;
 }
 
@@ -371,6 +377,20 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
 
             if (lane->count == 0) continue;
 
+            /* Cancel-streak fairness: skip cancel lane if streak
+             * limit reached and other lanes have work */
+            if (li == (int)ASX_LANE_CANCEL &&
+                g_cancel_streak_limit > 0 &&
+                g_metrics.cancel_streak >= g_cancel_streak_limit) {
+                /* Check if any other lane has tasks */
+                if (g_lanes[ASX_LANE_READY].count > 0 ||
+                    g_lanes[ASX_LANE_TIMED].count > 0) {
+                    g_metrics.fairness_yields++;
+                    continue;
+                }
+                /* Fallback: only cancel work remains, allow it */
+            }
+
             /* Poll tasks in this lane up to quota */
             j = 0;
             while (j < lane->count && polls_this_lane < quota) {
@@ -494,6 +514,20 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget)
                 g_workers[0].polls_total++;
                 any_polled = 1;
 
+                /* Update per-lane dispatch metrics and cancel streak */
+                if (li == (int)ASX_LANE_CANCEL) {
+                    g_metrics.cancel_dispatches++;
+                    g_metrics.cancel_streak++;
+                    if (g_metrics.cancel_streak > g_metrics.cancel_streak_max)
+                        g_metrics.cancel_streak_max = g_metrics.cancel_streak;
+                } else {
+                    g_metrics.cancel_streak = 0;
+                    if (li == (int)ASX_LANE_TIMED)
+                        g_metrics.timed_dispatches++;
+                    else
+                        g_metrics.ready_dispatches++;
+                }
+
                 if (poll_result == ASX_OK) {
                     asx_task_state from = t->state;
                     (void)asx_ghost_check_task_transition(tid, t->state,
@@ -613,4 +647,54 @@ asx_fairness_policy asx_parallel_fairness_policy(void)
 int asx_parallel_is_initialized(void)
 {
     return g_initialized;
+}
+
+/* -------------------------------------------------------------------
+ * Global injector
+ * ------------------------------------------------------------------- */
+
+asx_status asx_inject_cancel(asx_task_id tid)
+{
+    return asx_lane_assign(tid, ASX_LANE_CANCEL);
+}
+
+asx_status asx_inject_timed(asx_task_id tid)
+{
+    return asx_lane_assign(tid, ASX_LANE_TIMED);
+}
+
+asx_status asx_inject_ready(asx_task_id tid)
+{
+    return asx_lane_assign(tid, ASX_LANE_READY);
+}
+
+/* -------------------------------------------------------------------
+ * Scheduling metrics
+ * ------------------------------------------------------------------- */
+
+asx_status asx_parallel_get_metrics(asx_scheduling_metrics *out)
+{
+    if (out == NULL)
+        return ASX_E_INVALID_ARGUMENT;
+    *out = g_metrics;
+    return ASX_OK;
+}
+
+void asx_parallel_reset_metrics(void)
+{
+    memset(&g_metrics, 0, sizeof(g_metrics));
+}
+
+/* -------------------------------------------------------------------
+ * Cancel-streak fairness configuration
+ * ------------------------------------------------------------------- */
+
+void asx_parallel_set_cancel_streak_limit(uint32_t limit)
+{
+    g_cancel_streak_limit = limit;
+}
+
+uint32_t asx_parallel_cancel_streak_limit(void)
+{
+    return g_cancel_streak_limit;
 }

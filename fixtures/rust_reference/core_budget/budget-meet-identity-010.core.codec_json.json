@@ -1,56 +1,88 @@
 {
-  "scenario_id": "budget-meet-identity-010",
-  "fixture_schema_version": "fixture-v1",
-  "scenario_dsl_version": "dsl-v1",
-  "profile": "ASX_PROFILE_CORE",
   "codec": "json",
-  "seed": 42,
+  "expected_error_codes": [
+    "refinement_firewall:RFW-REGION-004",
+    "refinement_firewall:minimal_counterexample_prefix_len=4"
+  ],
+  "expected_events": [
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "RegionCreated",
+      "seq": 0,
+      "time_ns": 0
+    },
+    {
+      "aux": 0,
+      "entity_id": 1,
+      "kind": "RegionCreated",
+      "seq": 1,
+      "time_ns": 0
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "UserTrace",
+      "seq": 2,
+      "time_ns": 0
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "RegionCloseComplete",
+      "seq": 3,
+      "time_ns": 0
+    }
+  ],
+  "expected_final_snapshot": {
+    "obligations": 0,
+    "regions": 1,
+    "tasks": 0
+  },
+  "fixture_schema_version": "fixture-v1",
   "input": {
     "ops": [
       {
+        "args": {},
         "id": 0,
-        "op": "region_open",
-        "args": {}
+        "op": "region_open"
       },
       {
+        "args": {
+          "cost": 1000,
+          "polls": 100
+        },
         "id": 1,
-        "op": "budget_set",
-        "args": {
-          "polls": 100,
-          "cost": 1000
-        }
+        "op": "budget_set"
       },
       {
+        "args": {
+          "cost": 0,
+          "polls": 0
+        },
         "id": 2,
-        "op": "budget_meet",
-        "args": {
-          "polls": 0,
-          "cost": 0
-        }
+        "op": "budget_meet"
       },
       {
-        "id": 3,
-        "op": "region_close",
         "args": {
           "region_ref": 0
-        }
+        },
+        "id": 3,
+        "op": "region_close"
       }
     ]
   },
-  "expected_events": [],
-  "expected_final_snapshot": {
-    "regions": 0,
-    "tasks": 0,
-    "obligations": 0
-  },
-  "expected_error_codes": [],
-  "semantic_digest": "sha256:4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e",
+  "profile": "ASX_PROFILE_CORE",
   "provenance": {
-    "rust_baseline_commit": "38c152405bd03e2bd9eecf178bfbbe9472fed861",
-    "rust_toolchain_commit_hash": "7f99507f57e6c4aa0dce3daf6a13cca8cd4dd312",
-    "rust_toolchain_release": "1.95.0-nightly",
+    "capture_run_id": "d1cf661a-c221-436c-926a-9b1efe3fee0f",
+    "cargo_lock_sha256": "ddf46a437b62698175bdc96183436813a4a81c220a55ed94c7eb766fe4f20ac9",
+    "rust_baseline_commit": "a9e737d869c04c2f6aa4222fe38be66b28628227",
+    "rust_toolchain_commit_hash": "3b1b0ef4d80d3117924d91352c8b6ca528708b3c",
     "rust_toolchain_host": "x86_64-unknown-linux-gnu",
-    "cargo_lock_sha256": "77f4bfaedfe5b8572dfca3181119f9432825ea3d868ee8f5d2793a6c5cdeffdc",
-    "capture_run_id": "capture-core-families-20260302"
-  }
+    "rust_toolchain_release": "1.96.0-nightly"
+  },
+  "scenario_dsl_version": "dsl-v1",
+  "scenario_id": "budget-meet-identity-010",
+  "seed": 42,
+  "semantic_digest": "sha256:8fc6c6d57e11cf9ae2d35a8f71c83269f1d5105838d900b3fb01e8896936b39f"
 }

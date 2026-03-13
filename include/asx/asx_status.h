@@ -65,11 +65,13 @@ typedef enum {
     ASX_E_WOULD_BLOCK          = 701,
     ASX_E_CHANNEL_FULL         = 702,
     ASX_E_CHANNEL_NOT_DRAINED  = 703,
+    ASX_E_LAGGED               = 704,   /* broadcast receiver fell behind */
 
     /* Timer errors (8xx) */
     ASX_E_TIMER_NOT_FOUND      = 800,
     ASX_E_TIMERS_PENDING       = 801,
     ASX_E_TIMER_DURATION_EXCEEDED = 802,
+    ASX_E_TIMED_OUT            = 803,   /* operation exceeded deadline */
 
     /* Quiescence errors (9xx) */
     ASX_E_TASKS_STILL_ACTIVE     = 900,
@@ -106,7 +108,10 @@ typedef enum {
 
     /* 16xx: config reload errors */
     ASX_E_CONFIG_FROZEN        = 1600,  /* attempted to change frozen field */
-    ASX_E_CONFIG_RESTART_REQ   = 1601   /* field requires restart to change */
+    ASX_E_CONFIG_RESTART_REQ   = 1601,  /* field requires restart to change */
+
+    /* Permission / capability errors (17xx) */
+    ASX_E_PERMISSION_DENIED    = 1700   /* capability not granted */
 
 } asx_status;
 

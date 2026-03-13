@@ -87,6 +87,12 @@ static void min_rng_seed(min_rng *rng, uint64_t seed)
     }
 }
 
+static uint32_t min_rng_u32(min_rng *rng, uint32_t bound)
+{
+    if (bound == 0u) return 0u;
+    return (uint32_t)(min_rng_next(rng) % (uint64_t)bound);
+}
+
 /* ===================================================================
  * FNV-1a hash (same as fuzz harness)
  * =================================================================== */
@@ -187,6 +193,93 @@ typedef struct {
     uint32_t op_count;
     min_op   ops[MIN_MAX_OPS];
 } min_scenario;
+
+/* ===================================================================
+ * Scenario generation (same as fuzz_differential.c)
+ * =================================================================== */
+
+static const uint32_t MIN_OP_WEIGHTS[MIN_OP_KIND_COUNT] = {
+    12,8,3,15,10,8,7,5,6,5,5,3,5,3,3,6,4,5,12,5,4
+};
+
+static min_op_kind min_pick_op(min_rng *rng)
+{
+    uint32_t total = 0u, r, acc;
+    int i;
+    for (i = 0; i < MIN_OP_KIND_COUNT; i++) total += MIN_OP_WEIGHTS[i];
+    r = min_rng_u32(rng, total);
+    acc = 0u;
+    for (i = 0; i < MIN_OP_KIND_COUNT; i++) {
+        acc += MIN_OP_WEIGHTS[i];
+        if (r < acc) return (min_op_kind)i;
+    }
+    return MIN_OP_SPAWN_REGION;
+}
+
+static void min_generate_scenario(min_rng *rng, min_scenario *sc, uint32_t max_ops)
+{
+    uint32_t n, i;
+    sc->seed = min_rng_next(rng);
+    n = 4u + min_rng_u32(rng, max_ops > 4u ? max_ops - 4u : 1u);
+    if (n > MIN_MAX_OPS) n = MIN_MAX_OPS;
+    sc->op_count = n;
+    sc->ops[0].kind = MIN_OP_SPAWN_REGION;
+    sc->ops[0].idx_a = 0u; sc->ops[0].idx_b = 0u;
+    sc->ops[0].arg_u32 = 0u; sc->ops[0].arg_u64 = 0u;
+    for (i = 1u; i < n; i++) {
+        sc->ops[i].kind = min_pick_op(rng);
+        sc->ops[i].idx_a = min_rng_u32(rng, MIN_MAX_REGIONS);
+        sc->ops[i].idx_b = min_rng_u32(rng, MIN_MAX_TASKS);
+        sc->ops[i].arg_u32 = min_rng_u32(rng, 32u);
+        sc->ops[i].arg_u64 = min_rng_next(rng) % 10000u;
+    }
+}
+
+/* Read a scenario from stdin in text format:
+ * "scenario_seed op_count kind0 a0 b0 u32_0 u64_0 kind1 ..."
+ * Returns 0 on success, -1 on failure/EOF. */
+static int min_read_scenario_stdin(min_scenario *sc)
+{
+    char line[8192];
+    char *p;
+    uint32_t i;
+    unsigned long long seed_ull;
+    unsigned int op_count_u;
+
+    if (fgets(line, sizeof(line), stdin) == NULL) return -1;
+    p = line;
+
+    if (sscanf(p, "%llu %u%n", &seed_ull, &op_count_u,
+               (int[]){0}) < 2) return -1;
+    sc->seed = (uint64_t)seed_ull;
+    sc->op_count = op_count_u;
+    if (sc->op_count > MIN_MAX_OPS) sc->op_count = MIN_MAX_OPS;
+
+    /* Skip past seed and op_count */
+    while (*p == ' ') p++;
+    while (*p && *p != ' ') p++; /* skip seed */
+    while (*p == ' ') p++;
+    while (*p && *p != ' ') p++; /* skip op_count */
+
+    for (i = 0u; i < sc->op_count; i++) {
+        unsigned int kind_u, a_u, b_u, u32_u;
+        unsigned long long u64_ull;
+        int n_read = 0;
+
+        if (sscanf(p, " %u %u %u %u %llu%n",
+                   &kind_u, &a_u, &b_u, &u32_u, &u64_ull, &n_read) < 5)
+            break;
+
+        sc->ops[i].kind = (min_op_kind)kind_u;
+        sc->ops[i].idx_a = a_u;
+        sc->ops[i].idx_b = b_u;
+        sc->ops[i].arg_u32 = u32_u;
+        sc->ops[i].arg_u64 = (uint64_t)u64_ull;
+        p += n_read;
+    }
+
+    return 0;
+}
 
 /* ===================================================================
  * Handle tracking during execution (same as fuzz harness)
@@ -1025,10 +1118,19 @@ int main(int argc, char **argv)
     int i;
     int run_selftest = 0;
     int verbose = 0;
+    int stdin_scenario = 0;
+    int has_initial_seed = 0;
     uint32_t max_rounds = 50u;
+    uint32_t max_ops = 64u;
+    uint32_t mutations_per_scenario = 4u;
+    uint64_t initial_seed = 0u;
+    uint64_t target_iteration = 0u;
     uint64_t target_digest = 0u;
     int has_target = 0;
     const char *output_path = NULL;
+    min_scenario sc;
+
+    memset(&sc, 0, sizeof(sc));
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--selftest") == 0) {
@@ -1037,9 +1139,20 @@ int main(int argc, char **argv)
             verbose = 1;
         } else if (strcmp(argv[i], "--max-rounds") == 0 && i + 1 < argc) {
             max_rounds = (uint32_t)parse_u64(argv[++i]);
+        } else if (strcmp(argv[i], "--max-ops") == 0 && i + 1 < argc) {
+            max_ops = (uint32_t)parse_u64(argv[++i]);
+        } else if (strcmp(argv[i], "--mutations") == 0 && i + 1 < argc) {
+            mutations_per_scenario = (uint32_t)parse_u64(argv[++i]);
         } else if (strcmp(argv[i], "--failure-digest") == 0 && i + 1 < argc) {
             target_digest = parse_hex64(argv[++i]);
             has_target = 1;
+        } else if (strcmp(argv[i], "--initial-seed") == 0 && i + 1 < argc) {
+            initial_seed = parse_u64(argv[++i]);
+            has_initial_seed = 1;
+        } else if (strcmp(argv[i], "--iteration") == 0 && i + 1 < argc) {
+            target_iteration = parse_u64(argv[++i]);
+        } else if (strcmp(argv[i], "--stdin-scenario") == 0) {
+            stdin_scenario = 1;
         } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
             output_path = argv[++i];
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -1047,6 +1160,11 @@ int main(int argc, char **argv)
                 "Usage: fuzz_minimize [options]\n"
                 "  --selftest                Run built-in self-test\n"
                 "  --failure-digest <hex>    Target digest to preserve\n"
+                "  --initial-seed <n>        Master seed (with --iteration)\n"
+                "  --iteration <n>           Iteration index within seed\n"
+                "  --stdin-scenario          Read scenario from stdin (text format)\n"
+                "  --max-ops <n>             Max ops per scenario (default: 64)\n"
+                "  --mutations <n>           Mutations per scenario for RNG sync (default: 4)\n"
                 "  --output <path>           Write minimized result to file\n"
                 "  --max-rounds <n>          Max minimization rounds (default: 50)\n"
                 "  --verbose                 Print progress\n");
@@ -1061,19 +1179,98 @@ int main(int argc, char **argv)
         return min_selftest(verbose);
     }
 
-    if (!has_target) {
+    if (!has_target && !stdin_scenario && !has_initial_seed) {
         /* Default to self-test mode if no target specified */
         fprintf(stderr, "[minimize] no --failure-digest specified, running self-test\n");
         return min_selftest(verbose);
     }
 
-    (void)output_path;
-    (void)max_rounds;
+    /* Generate or read scenario */
+    if (has_initial_seed) {
+        /* Generate scenario from master seed + iteration, matching
+         * fuzz_differential.c's RNG sequence exactly. */
+        min_rng gen_rng;
+        uint64_t skip;
+        min_rng_seed(&gen_rng, initial_seed);
+        /* Skip to the target iteration by generating + discarding
+         * preceding scenarios. Each iteration consumes generation RNG
+         * plus mutation RNG (4 mutations by default). */
+        for (skip = 0u; skip < target_iteration; skip++) {
+            min_scenario skip_sc;
+            uint32_t m;
+            min_generate_scenario(&gen_rng, &skip_sc, max_ops);
+            /* Skip mutation RNG draws to stay in sync */
+            for (m = 0u; m < mutations_per_scenario && m < 16u; m++) {
+                /* Each mutation draws 2-4 RNG values depending on type.
+                 * For simplicity, we do the actual mutation on a throw-away copy. */
+                /* TODO: when fuzz_common.h is created, use the real mutate.
+                 * For now, just advance the RNG by the average mutation cost. */
+                min_rng_next(&gen_rng);
+                min_rng_next(&gen_rng);
+                min_rng_next(&gen_rng);
+            }
+        }
+        min_generate_scenario(&gen_rng, &sc, max_ops);
+        fprintf(stderr, "[minimize] generated scenario from seed=%llu iter=%llu: "
+                "%u ops, scenario_seed=%llu\n",
+                (unsigned long long)initial_seed,
+                (unsigned long long)target_iteration,
+                sc.op_count,
+                (unsigned long long)sc.seed);
+    } else if (stdin_scenario) {
+        if (min_read_scenario_stdin(&sc) != 0) {
+            fprintf(stderr, "[minimize] error: failed to read scenario from stdin\n");
+            return 1;
+        }
+        fprintf(stderr, "[minimize] read scenario from stdin: "
+                "%u ops, scenario_seed=%llu\n",
+                sc.op_count, (unsigned long long)sc.seed);
+    } else {
+        fprintf(stderr, "[minimize] error: no scenario source specified\n");
+        fprintf(stderr, "[minimize] use --initial-seed, --stdin-scenario, or --selftest\n");
+        return 1;
+    }
 
-    fprintf(stderr, "[minimize] target digest: %016llx\n",
-            (unsigned long long)target_digest);
-    fprintf(stderr, "[minimize] scenario input from stdin not yet implemented\n");
-    fprintf(stderr, "[minimize] use --selftest to verify minimizer functionality\n");
+    /* Set up minimization */
+    {
+        min_config cfg;
+        min_result result;
+        FILE *out_file;
+
+        memset(&result, 0, sizeof(result));
+        cfg.mode = MIN_MODE_DIGEST_MATCH;
+        cfg.target_digest = has_target ? target_digest : min_execute_digest(&sc);
+        cfg.max_rounds = max_rounds;
+        cfg.verbose = verbose;
+        cfg.predicate = NULL;
+        cfg.predicate_data = NULL;
+
+        fprintf(stderr, "[minimize] target digest: %016llx\n",
+                (unsigned long long)cfg.target_digest);
+        fprintf(stderr, "[minimize] starting with %u ops\n", sc.op_count);
+
+        min_minimize(&sc, &cfg, &result);
+
+        fprintf(stderr,
+            "[minimize] result: %u -> %u ops in %u rounds (%.3fs)\n",
+            result.original_ops, result.minimized_ops,
+            result.rounds, result.duration_sec);
+
+        /* Output JSONL to stdout */
+        min_emit_json(stdout, &sc, &result);
+
+        /* Optionally save to file */
+        if (output_path != NULL) {
+            out_file = fopen(output_path, "w");
+            if (out_file != NULL) {
+                min_emit_json(out_file, &sc, &result);
+                fclose(out_file);
+                fprintf(stderr, "[minimize] saved to: %s\n", output_path);
+            } else {
+                fprintf(stderr, "[minimize] error: cannot write to %s\n", output_path);
+            }
+        }
+    }
 
     return 0;
 }

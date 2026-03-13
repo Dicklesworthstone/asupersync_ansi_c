@@ -158,9 +158,11 @@ const char *asx_status_str(asx_status s)
     case ASX_E_WOULD_BLOCK:               return "would block";
     case ASX_E_CHANNEL_FULL:              return "channel full";
     case ASX_E_CHANNEL_NOT_DRAINED:       return "channel not drained";
+    case ASX_E_LAGGED:                    return "broadcast receiver fell behind";
     case ASX_E_TIMER_NOT_FOUND:           return "timer not found";
     case ASX_E_TIMERS_PENDING:            return "timers pending";
     case ASX_E_TIMER_DURATION_EXCEEDED:   return "timer duration exceeded";
+    case ASX_E_TIMED_OUT:                 return "operation exceeded deadline";
     case ASX_E_TASKS_STILL_ACTIVE:        return "tasks still active";
     case ASX_E_OBLIGATIONS_UNRESOLVED:    return "obligations unresolved";
     case ASX_E_REGIONS_NOT_CLOSED:        return "regions not closed";
@@ -182,6 +184,7 @@ const char *asx_status_str(asx_status s)
     case ASX_E_REPLAY_MISMATCH:          return "replay continuity mismatch";
     case ASX_E_CONFIG_FROZEN:            return "config field is frozen";
     case ASX_E_CONFIG_RESTART_REQ:       return "config field requires restart";
+    case ASX_E_PERMISSION_DENIED:        return "capability not granted";
     default:                              return "unknown status";
     }
 }

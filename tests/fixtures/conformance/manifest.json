@@ -1,0 +1,86 @@
+{
+  "capture_run_id": "d04a3944-4286-49aa-99a1-57ed7b9ec9d8",
+  "fixture_schema_version": "1.0.0",
+  "scenarios": [
+    {
+      "codec": "json",
+      "fixture_path": "cancellation-exhaustive.json",
+      "profile": "lab",
+      "scenario_id": "cancellation-exhaustive",
+      "seed": 42,
+      "semantic_digest": "sha256:b2e58410a74436e24461f791e63675473646841d66d0ac31abc22f0299e13806"
+    },
+    {
+      "codec": "json",
+      "fixture_path": "chaos-sendpermit-ack.json",
+      "profile": "lab",
+      "scenario_id": "chaos-sendpermit-ack",
+      "seed": 7,
+      "semantic_digest": "sha256:aaeec21a1c03c7453475ee4085f31de9d03b421bca63478d5d522277812aaba1"
+    },
+    {
+      "codec": "json",
+      "fixture_path": "clock-skew-lease.json",
+      "profile": "lab",
+      "scenario_id": "clock-skew-lease",
+      "seed": 2718,
+      "semantic_digest": "sha256:4ed6284be9fcff20259800b0189ae457656d6823048398b7f60c0a33781e768f"
+    },
+    {
+      "codec": "json",
+      "fixture_path": "base-ci.json",
+      "profile": "lab",
+      "scenario_id": "base-ci",
+      "seed": 42,
+      "semantic_digest": "sha256:b2e58410a74436e24461f791e63675473646841d66d0ac31abc22f0299e13806"
+    },
+    {
+      "codec": "json",
+      "fixture_path": "composed-partition-test.json",
+      "profile": "lab",
+      "scenario_id": "composed-partition-test",
+      "seed": 55555,
+      "semantic_digest": "sha256:f6ad2e2cca7de0418619ee95e81f6dedcdf35b234846259270f809b287e2ed5e"
+    },
+    {
+      "codec": "json",
+      "fixture_path": "custom-latency-topology.json",
+      "profile": "lab",
+      "scenario_id": "custom-latency-topology",
+      "seed": 42,
+      "semantic_digest": "sha256:b2e58410a74436e24461f791e63675473646841d66d0ac31abc22f0299e13806"
+    },
+    {
+      "codec": "json",
+      "fixture_path": "host-crash-restart.json",
+      "profile": "lab",
+      "scenario_id": "host-crash-restart",
+      "seed": 8675309,
+      "semantic_digest": "sha256:c2ce4e4ec16b86504962085327ebfac6af788bfba89e22aea0e3c7ac83bcc148"
+    },
+    {
+      "codec": "json",
+      "fixture_path": "partition-heal-saga.json",
+      "profile": "lab",
+      "scenario_id": "partition-heal-saga",
+      "seed": 314159,
+      "semantic_digest": "sha256:3aedcbff2f42cc690efb09f06b0b18b14287a5c21427fb1d3dcd5d11e6853415"
+    },
+    {
+      "codec": "json",
+      "fixture_path": "smoke-happy-path.json",
+      "profile": "lab",
+      "scenario_id": "smoke-happy-path",
+      "seed": 42,
+      "semantic_digest": "sha256:b2e58410a74436e24461f791e63675473646841d66d0ac31abc22f0299e13806"
+    },
+    {
+      "codec": "json",
+      "fixture_path": "stress-10k-tasks.json",
+      "profile": "lab",
+      "scenario_id": "stress-10k-tasks",
+      "seed": 999,
+      "semantic_digest": "sha256:29d4c8b03287364ba37ef57946b9775c0b0640fa0a18938cfc2e3650f189d056"
+    }
+  ]
+}

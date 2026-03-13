@@ -112,3 +112,9 @@ storage.sqlite3.bak
 storage.sqlite3.corrupt-*
 storage.sqlite3-shm.corrupt-*
 storage.sqlite3-wal.corrupt-*
+tests/fuzz/generate_grammar_vectors
+tests/fuzz/generate_grammar_vectors_jsonl
+tests/unit/fuzz/test_grammar_determinism
+tests/fuzz/fuzz_differential
+tests/fuzz/fuzz_minimize
+fuzz_findings/

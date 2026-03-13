@@ -1,57 +1,86 @@
 {
-  "scenario_id": "channel-two-phase-send-recv-001",
-  "fixture_schema_version": "fixture-v1",
-  "scenario_dsl_version": "dsl-v1",
-  "profile": "ASX_PROFILE_CORE",
   "codec": "json",
-  "seed": 42,
+  "expected_error_codes": [],
+  "expected_events": [
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "UserTrace",
+      "seq": 0,
+      "time_ns": 0
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "UserTrace",
+      "seq": 1,
+      "time_ns": 0
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "UserTrace",
+      "seq": 2,
+      "time_ns": 0
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "UserTrace",
+      "seq": 3,
+      "time_ns": 0
+    }
+  ],
+  "expected_final_snapshot": {
+    "obligations": 0,
+    "regions": 0,
+    "tasks": 0
+  },
+  "fixture_schema_version": "fixture-v1",
   "input": {
     "ops": [
       {
-        "id": 0,
-        "op": "channel_create",
         "args": {
           "capacity": 4
-        }
+        },
+        "id": 0,
+        "op": "channel_create"
       },
       {
+        "args": {
+          "channel_ref": 0
+        },
         "id": 1,
-        "op": "channel_reserve",
-        "args": {
-          "channel_ref": 0
-        }
+        "op": "channel_reserve"
       },
       {
+        "args": {
+          "payload": "msg1",
+          "reservation_ref": 1
+        },
         "id": 2,
-        "op": "channel_send",
-        "args": {
-          "reservation_ref": 1,
-          "payload": "msg1"
-        }
+        "op": "channel_send"
       },
       {
-        "id": 3,
-        "op": "channel_recv",
         "args": {
           "channel_ref": 0
-        }
+        },
+        "id": 3,
+        "op": "channel_recv"
       }
     ]
   },
-  "expected_events": [],
-  "expected_final_snapshot": {
-    "regions": 0,
-    "tasks": 0,
-    "obligations": 0
-  },
-  "expected_error_codes": [],
-  "semantic_digest": "sha256:6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a",
+  "profile": "ASX_PROFILE_CORE",
   "provenance": {
-    "rust_baseline_commit": "38c152405bd03e2bd9eecf178bfbbe9472fed861",
-    "rust_toolchain_commit_hash": "7f99507f57e6c4aa0dce3daf6a13cca8cd4dd312",
-    "rust_toolchain_release": "1.95.0-nightly",
+    "capture_run_id": "8e53ac49-ae7a-4a89-848d-374d854270e0",
+    "cargo_lock_sha256": "ddf46a437b62698175bdc96183436813a4a81c220a55ed94c7eb766fe4f20ac9",
+    "rust_baseline_commit": "a9e737d869c04c2f6aa4222fe38be66b28628227",
+    "rust_toolchain_commit_hash": "3b1b0ef4d80d3117924d91352c8b6ca528708b3c",
     "rust_toolchain_host": "x86_64-unknown-linux-gnu",
-    "cargo_lock_sha256": "77f4bfaedfe5b8572dfca3181119f9432825ea3d868ee8f5d2793a6c5cdeffdc",
-    "capture_run_id": "capture-core-families-20260302"
-  }
+    "rust_toolchain_release": "1.96.0-nightly"
+  },
+  "scenario_dsl_version": "dsl-v1",
+  "scenario_id": "channel-two-phase-send-recv-001",
+  "seed": 42,
+  "semantic_digest": "sha256:e991ca473c4d513491beec3cb4edfaf520ad60f23fa85a855c6bd638bc75f85f"
 }

@@ -157,6 +157,9 @@ CHANNEL_SRC := \
 TIME_SRC := \
 	src/time/timer_wheel.c
 
+SECURITY_SRC := \
+	src/security/security.c
+
 # Platform sources selected by profile
 ifeq ($(PROFILE),POSIX)
   PLATFORM_SRC := src/platform/posix/hooks.c
@@ -170,7 +173,7 @@ else
   PLATFORM_SRC :=
 endif
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(PLATFORM_SRC)
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(SECURITY_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -195,7 +198,9 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/channel/*_test.c) \
                  $(wildcard tests/unit/channel/test_*.c) \
                  $(wildcard tests/unit/time/*_test.c) \
-                 $(wildcard tests/unit/time/test_*.c)
+                 $(wildcard tests/unit/time/test_*.c) \
+                 $(wildcard tests/unit/security/*_test.c) \
+                 $(wildcard tests/unit/security/test_*.c)
 UNIT_TEST_SRC := $(sort $(UNIT_TEST_SRC))
 
 INVARIANT_TEST_SRC := $(wildcard tests/invariant/lifecycle/*_test.c) \
@@ -281,7 +286,7 @@ $(OBJ_DIR)/%.o: src/%.c | obj-dirs
 
 obj-dirs:
 	@mkdir -p $(OBJ_DIR)/core $(OBJ_DIR)/runtime $(OBJ_DIR)/channel \
-	          $(OBJ_DIR)/time $(OBJ_DIR)/platform/posix \
+	          $(OBJ_DIR)/time $(OBJ_DIR)/security $(OBJ_DIR)/platform/posix \
 	          $(OBJ_DIR)/platform/win32 $(OBJ_DIR)/platform/freestanding
 
 $(LIB_DIR):
@@ -711,6 +716,7 @@ $(TEST_DIR)/vignettes/%: tests/vignettes/%.c $(LIB_A) | test-dirs
 test-dirs:
 	@mkdir -p $(TEST_DIR)/unit/core $(TEST_DIR)/unit/runtime \
 	          $(TEST_DIR)/unit/channel $(TEST_DIR)/unit/time \
+	          $(TEST_DIR)/unit/security \
 	          $(TEST_DIR)/invariant/lifecycle $(TEST_DIR)/invariant/quiescence \
 	          $(TEST_DIR)/invariant/model_check \
 	          $(TEST_DIR)/vignettes
@@ -851,11 +857,14 @@ profile-parity:
 #   make fuzz-smoke              # CI smoke (100 iterations)
 #   make fuzz-nightly            # Nightly (100000 iterations)
 #   make fuzz-run FUZZ_ARGS="--seed 42 --iterations 5000"
+#   make fuzz-smoke RUST_FUZZ_BINARY=path/to/rust_fuzz_target  # With Rust comparison
 # ---------------------------------------------------------------------------
 FUZZ_DIR := $(BUILD_DIR)/fuzz
 FUZZ_SRC := tests/fuzz/fuzz_differential.c
 FUZZ_BIN := $(FUZZ_DIR)/fuzz_differential
 FUZZ_ARGS ?=
+RUST_FUZZ_BINARY ?=
+FUZZ_RUST_FLAG := $(if $(RUST_FUZZ_BINARY),--rust-binary $(RUST_FUZZ_BINARY),)
 
 FUZZ_CFLAGS := -std=c99 -Wall -Wextra -Wpedantic -Werror \
                -Wno-unused-parameter -Wno-unused-result \
@@ -876,14 +885,14 @@ $(FUZZ_DIR):
 
 fuzz-smoke: fuzz-build
 	@echo "[asx] fuzz-smoke: differential fuzzing smoke test..."
-	@$(FUZZ_BIN) --smoke
+	@$(FUZZ_BIN) --smoke $(FUZZ_RUST_FLAG)
 
 fuzz-nightly: fuzz-build
 	@echo "[asx] fuzz-nightly: differential fuzzing nightly run..."
-	@$(FUZZ_BIN) --nightly --verbose
+	@$(FUZZ_BIN) --nightly --verbose $(FUZZ_RUST_FLAG)
 
 fuzz-run: fuzz-build
-	@$(FUZZ_BIN) $(FUZZ_ARGS)
+	@$(FUZZ_BIN) $(FUZZ_ARGS) $(FUZZ_RUST_FLAG)
 
 # ---------------------------------------------------------------------------
 # minimize — deterministic counterexample minimizer (bd-1md.4)

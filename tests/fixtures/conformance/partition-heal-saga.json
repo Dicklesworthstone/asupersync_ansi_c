@@ -1,0 +1,67 @@
+{
+  "codec": "json",
+  "expected_error_codes": [],
+  "expected_events": [
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "UserTrace",
+      "seq": 0,
+      "time_ns": 100000000
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "UserTrace",
+      "seq": 1,
+      "time_ns": 100000000
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "UserTrace",
+      "seq": 2,
+      "time_ns": 500000000
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "UserTrace",
+      "seq": 3,
+      "time_ns": 500000000
+    }
+  ],
+  "expected_final_snapshot": {
+    "quiescent": true,
+    "steps_total": 0,
+    "trace_fingerprint": 8803692923376868535
+  },
+  "fixture_schema_version": "1.0.0",
+  "input": {
+    "ops": [
+      {
+        "args": {
+          "max_steps": 500000,
+          "scenario_id": "partition-heal-saga",
+          "seed": 314159,
+          "worker_count": 4
+        },
+        "id": 0,
+        "op": "run_scenario"
+      }
+    ]
+  },
+  "profile": "lab",
+  "provenance": {
+    "capture_run_id": "1b38f2c5-da58-4e11-a6d8-d154cda9a145",
+    "cargo_lock_sha256": "ddf46a437b62698175bdc96183436813a4a81c220a55ed94c7eb766fe4f20ac9",
+    "rust_baseline_commit": "a9e737d869c04c2f6aa4222fe38be66b28628227",
+    "rust_toolchain_commit_hash": "3b1b0ef4d80d3117924d91352c8b6ca528708b3c",
+    "rust_toolchain_host": "x86_64-unknown-linux-gnu",
+    "rust_toolchain_release": "1.96.0-nightly"
+  },
+  "scenario_dsl_version": "1",
+  "scenario_id": "partition-heal-saga",
+  "seed": 314159,
+  "semantic_digest": "sha256:3aedcbff2f42cc690efb09f06b0b18b14287a5c21427fb1d3dcd5d11e6853415"
+}

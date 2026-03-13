@@ -20,8 +20,23 @@
 #include <asx/runtime/vertical_adapter.h>
 #include <asx/runtime/event.h>
 #include <asx/time/timer_wheel.h>
+#include <asx/core/oneshot.h>
+#include <asx/core/watch.h>
+#include <asx/core/broadcast.h>
+#include <asx/core/session.h>
 #include <asx/core/transition.h>
 #include <asx/core/ghost.h>
+#include <asx/runtime/waker.h>
+#include <asx/runtime/io_driver.h>
+#include <asx/runtime/blocking.h>
+#include <asx/sync/notify.h>
+#include <asx/sync/semaphore.h>
+#include <asx/sync/barrier.h>
+#include <asx/sync/once.h>
+#include <asx/actor/actor.h>
+#include <asx/actor/supervisor.h>
+#include <asx/net/net.h>
+#include <asx/runtime/diagnostic.h>
 #include <string.h>
 #include "runtime_internal.h"
 
@@ -86,7 +101,14 @@ void asx_runtime_reset(void)
     asx_scheduler_event_reset();
     asx_parallel_reset();
     asx_channel_reset();
+    asx_oneshot_reset();
+    asx_watch_reset();
+    asx_broadcast_reset();
+    asx_session_reset();
     asx_timer_wheel_reset(asx_timer_wheel_global());
+    asx_waker_reset();
+    asx_io_driver_reset();
+    asx_blocking_pool_reset();
     asx_trace_reset();
     asx_telemetry_reset();
     asx_hindsight_reset();
@@ -94,6 +116,14 @@ void asx_runtime_reset(void)
     asx_fault_clear();
     asx_event_log_reset();
     asx_error_ledger_reset();
+    asx_notify_reset();
+    asx_semaphore_reset();
+    asx_barrier_reset();
+    asx_once_reset();
+    asx_actor_reset();
+    asx_supervisor_reset();
+    asx_net_reset();
+    asx_diagnostic_reset();
 }
 
 /* -------------------------------------------------------------------

@@ -1,0 +1,13 @@
+[package]
+name = "rust-fuzz-target"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "rust_fuzz_target"
+path = "src/main.rs"
+
+[dependencies]
+asupersync = { path = "/data/projects/asupersync", features = ["test-internals"] }
+serde_json = "1"

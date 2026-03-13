@@ -82,6 +82,8 @@ All kernel-scope semantic units (U-REG-TRANSITIONS through U-GUARANTEE-SUBSTITUT
 
 **Status audit 2026-03-02 (WildCondor):** All 19 kernel units advanced from `spec-reviewed` to `impl-complete` based on passing unit tests (59 suites), invariant tests (2 suites/33 scenarios), formal gates (CBMC + algebraic + litmus), e2e lanes (14 families/85+ scenarios), and clean build with `-Werror`. `U-PROVENANCE-MAP` remains `spec-reviewed` as it is a static traceability artifact.
 
+**Rust-vs-C conformance run 2026-03-12 (AmberCrane):** First full conformance run against 66 Rust reference fixtures (6 families: core_budget, core_cancel, core_channel, core_lifecycle, core_timer, smoke). Results: **133/133 pass, 0 fail, 0 semantic deltas, 0 provenance mismatches.** Baseline commit: `a9e737d8`. Run ID: `conformance-20260312T233136Z`. Summary artifact: `tools/ci/artifacts/conformance/conformance-20260312T233136Z-conformance.summary.json`.
+
 ## 6. Immediate Follow-On Dependencies
 
 This file directly feeds:

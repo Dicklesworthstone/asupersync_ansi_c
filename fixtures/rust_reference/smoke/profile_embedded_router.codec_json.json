@@ -1,34 +1,33 @@
 {
-  "scenario_id": "smoke.profile_parity.baseline",
-  "fixture_schema_version": "fixture-v1",
-  "scenario_dsl_version": "dsl-v1",
-  "profile": "ASX_PROFILE_EMBEDDED_ROUTER",
   "codec": "json",
-  "seed": 42,
+  "expected_error_codes": [],
+  "expected_events": [],
+  "expected_final_snapshot": {
+    "obligations": 0,
+    "regions": 0,
+    "tasks": 0
+  },
+  "fixture_schema_version": "fixture-v1",
   "input": {
     "ops": [
       {
+        "args": {},
         "id": 0,
-        "op": "noop",
-        "args": {}
+        "op": "noop"
       }
     ]
   },
-  "expected_events": [],
-  "expected_final_snapshot": {
-    "regions": 0,
-    "tasks": 0,
-    "obligations": 0
-  },
-  "expected_error_codes": [],
-  "semantic_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile": "ASX_PROFILE_EMBEDDED_ROUTER",
   "provenance": {
-    "rust_baseline_commit": "38c152405bd03e2bd9eecf178bfbbe9472fed861",
-    "rust_toolchain_commit_hash": "7f99507f57e6c4aa0dce3daf6a13cca8cd4dd312",
-    "rust_toolchain_release": "1.95.0-nightly",
+    "capture_run_id": "d19ffb40-8a97-4c8e-bbd1-fed00303fd07",
+    "cargo_lock_sha256": "ddf46a437b62698175bdc96183436813a4a81c220a55ed94c7eb766fe4f20ac9",
+    "rust_baseline_commit": "a9e737d869c04c2f6aa4222fe38be66b28628227",
+    "rust_toolchain_commit_hash": "3b1b0ef4d80d3117924d91352c8b6ca528708b3c",
     "rust_toolchain_host": "x86_64-unknown-linux-gnu",
-    "cargo_lock_sha256": "77f4bfaedfe5b8572dfca3181119f9432825ea3d868ee8f5d2793a6c5cdeffdc",
-    "capture_run_id": "capture-smoke-20260227"
-  }
+    "rust_toolchain_release": "1.96.0-nightly"
+  },
+  "scenario_dsl_version": "dsl-v1",
+  "scenario_id": "smoke.profile_parity.baseline",
+  "seed": 42,
+  "semantic_digest": "sha256:a0108c97c4d453acaa0f914b3eb1622fdf1494e6d7ed7f04c09dba8fb99240b4"
 }
-

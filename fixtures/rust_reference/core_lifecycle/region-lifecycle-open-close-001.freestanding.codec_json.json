@@ -1,40 +1,58 @@
 {
-  "scenario_id": "region-lifecycle-open-close-001",
-  "fixture_schema_version": "fixture-v1",
-  "scenario_dsl_version": "dsl-v1",
-  "profile": "ASX_PROFILE_FREESTANDING",
   "codec": "json",
-  "seed": 42,
+  "expected_error_codes": [
+    "refinement_firewall:RFW-REGION-004",
+    "refinement_firewall:minimal_counterexample_prefix_len=2"
+  ],
+  "expected_events": [
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "RegionCreated",
+      "seq": 0,
+      "time_ns": 0
+    },
+    {
+      "aux": 0,
+      "entity_id": 0,
+      "kind": "RegionCloseComplete",
+      "seq": 1,
+      "time_ns": 0
+    }
+  ],
+  "expected_final_snapshot": {
+    "obligations": 0,
+    "regions": 0,
+    "tasks": 0
+  },
+  "fixture_schema_version": "fixture-v1",
   "input": {
     "ops": [
       {
+        "args": {},
         "id": 0,
-        "op": "region_open",
-        "args": {}
+        "op": "region_open"
       },
       {
-        "id": 1,
-        "op": "region_close",
         "args": {
           "region_ref": 0
-        }
+        },
+        "id": 1,
+        "op": "region_close"
       }
     ]
   },
-  "expected_events": [],
-  "expected_final_snapshot": {
-    "regions": 0,
-    "tasks": 0,
-    "obligations": 0
-  },
-  "expected_error_codes": [],
-  "semantic_digest": "sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "profile": "ASX_PROFILE_FREESTANDING",
   "provenance": {
-    "rust_baseline_commit": "38c152405bd03e2bd9eecf178bfbbe9472fed861",
-    "rust_toolchain_commit_hash": "7f99507f57e6c4aa0dce3daf6a13cca8cd4dd312",
-    "rust_toolchain_release": "1.95.0-nightly",
+    "capture_run_id": "f8a6d688-82ed-4098-a446-8f886795545f",
+    "cargo_lock_sha256": "ddf46a437b62698175bdc96183436813a4a81c220a55ed94c7eb766fe4f20ac9",
+    "rust_baseline_commit": "a9e737d869c04c2f6aa4222fe38be66b28628227",
+    "rust_toolchain_commit_hash": "3b1b0ef4d80d3117924d91352c8b6ca528708b3c",
     "rust_toolchain_host": "x86_64-unknown-linux-gnu",
-    "cargo_lock_sha256": "77f4bfaedfe5b8572dfca3181119f9432825ea3d868ee8f5d2793a6c5cdeffdc",
-    "capture_run_id": "capture-core-families-20260302"
-  }
+    "rust_toolchain_release": "1.96.0-nightly"
+  },
+  "scenario_dsl_version": "dsl-v1",
+  "scenario_id": "region-lifecycle-open-close-001",
+  "seed": 42,
+  "semantic_digest": "sha256:f7d2d3f3d8e9aac94f290616da038eb7cb09ee59e50c7baf760a34c5972f13cb"
 }
