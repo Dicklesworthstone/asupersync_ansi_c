@@ -1,0 +1,60 @@
+# .clang-format — C99 formatting rules for asupersync_ansi_c
+#
+# Style derived from sampling src/ and include/ files.
+# BasedOnStyle: LLVM chosen as closest match (smallest diff vs existing code).
+# Tuned with IndentWidth 4, Attach braces, and short-statement allowances
+# to match project conventions.
+#
+# SPDX-License-Identifier: MIT
+
+BasedOnStyle: LLVM
+
+# Indent: project uses 4-space indentation throughout
+IndentWidth: 4
+ContinuationIndentWidth: 4
+IndentCaseLabels: false
+
+# Braces: Kernighan & Ritchie style (opening brace on same line)
+BreakBeforeBraces: Attach
+
+# Columns: project lines stay under ~100 chars
+ColumnLimit: 100
+
+# Pointers: right-aligned (e.g., `const char *name`)
+PointerAlignment: Right
+
+# No space after casts: (void)x, (uint32_t)val
+SpaceAfterCStyleCast: false
+
+# Allow compact one-line constructs matching project style:
+#   if (x) return y;
+#   static int foo(void) { return 0; }
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortFunctionsOnASingleLine: All
+AllowShortBlocksOnASingleLine: Always
+AllowShortLoopsOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: true
+
+# Sort includes but keep asx/ group together
+SortIncludes: CaseInsensitive
+IncludeBlocks: Preserve
+
+# Align: do not force column alignment of consecutive assignments
+# (project uses it manually in some places but not consistently)
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignConsecutiveMacros: None
+AlignTrailingComments: true
+AlignOperands: Align
+
+# Spaces in parentheses and brackets
+SpacesInParentheses: false
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyBlock: false
+
+# Keep empty lines as-is (project uses blank lines for section breaks)
+MaxEmptyLinesToKeep: 2
+
+# Penalty tuning: prefer not to break after return type
+PenaltyReturnTypeOnItsOwnLine: 200
+PenaltyBreakBeforeFirstCallParameter: 100

@@ -158,7 +158,23 @@ TIME_SRC := \
 	src/time/timer_wheel.c
 
 SECURITY_SRC := \
-	src/security/security.c
+	src/security/security.c \
+	src/security/audit.c
+
+STREAM_SRC := \
+	src/stream/stream.c
+
+FS_SRC := \
+	src/fs/fs.c
+
+PROCESS_SRC := \
+	src/process/process.c
+
+SIGNAL_SRC := \
+	src/signal/signal.c
+
+PLAN_SRC := \
+	src/plan/plan.c
 
 # Platform sources selected by profile
 ifeq ($(PROFILE),POSIX)
@@ -173,7 +189,7 @@ else
   PLATFORM_SRC :=
 endif
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(SECURITY_SRC) $(PLATFORM_SRC)
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -200,7 +216,17 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/time/*_test.c) \
                  $(wildcard tests/unit/time/test_*.c) \
                  $(wildcard tests/unit/security/*_test.c) \
-                 $(wildcard tests/unit/security/test_*.c)
+                 $(wildcard tests/unit/security/test_*.c) \
+                 $(wildcard tests/unit/fs/*_test.c) \
+                 $(wildcard tests/unit/fs/test_*.c) \
+                 $(wildcard tests/unit/process/*_test.c) \
+                 $(wildcard tests/unit/process/test_*.c) \
+                 $(wildcard tests/unit/signal/*_test.c) \
+                 $(wildcard tests/unit/signal/test_*.c) \
+                 $(wildcard tests/unit/stream/*_test.c) \
+                 $(wildcard tests/unit/stream/test_*.c) \
+                 $(wildcard tests/unit/plan/*_test.c) \
+                 $(wildcard tests/unit/plan/test_*.c)
 UNIT_TEST_SRC := $(sort $(UNIT_TEST_SRC))
 
 INVARIANT_TEST_SRC := $(wildcard tests/invariant/lifecycle/*_test.c) \
@@ -237,10 +263,15 @@ E2E_ALL_SCRIPTS := \
 	$(E2E_SCRIPT_DIR)/automotive_watchdog.sh \
 	$(E2E_SCRIPT_DIR)/continuity.sh \
 	$(E2E_SCRIPT_DIR)/continuity_restart.sh \
+	$(E2E_SCRIPT_DIR)/native_host.sh \
+	$(E2E_SCRIPT_DIR)/server_shutdown.sh \
 	$(E2E_SCRIPT_DIR)/router_storm.sh \
 	$(E2E_SCRIPT_DIR)/market_open_burst.sh \
 	$(E2E_SCRIPT_DIR)/automotive_fault_burst.sh \
-	$(E2E_SCRIPT_DIR)/openwrt_package.sh
+	$(E2E_SCRIPT_DIR)/openwrt_package.sh \
+	$(E2E_SCRIPT_DIR)/foundational_contracts.sh \
+	$(E2E_SCRIPT_DIR)/examples_smoke.sh \
+	$(E2E_SCRIPT_DIR)/browser_smoke.sh
 
 E2E_VERTICAL_SCRIPTS := \
 	$(E2E_SCRIPT_DIR)/hft_microburst.sh \
@@ -266,6 +297,11 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: release release-artifacts bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
 .PHONY: build-embedded-mipsel build-embedded-armv7 build-embedded-aarch64
+.PHONY: cross-baremetal-arm-m4-free cross-baremetal-arm-m0-free
+.PHONY: cross-baremetal-riscv32-free cross-baremetal-riscv64-free
+.PHONY: cross-baremetal-arm-m4-router cross-baremetal-arm-m0-router
+.PHONY: cross-baremetal-riscv32-router cross-baremetal-riscv64-router
+.PHONY: cross-baremetal-all
 .PHONY: qemu-smoke
 
 all: build
@@ -286,7 +322,10 @@ $(OBJ_DIR)/%.o: src/%.c | obj-dirs
 
 obj-dirs:
 	@mkdir -p $(OBJ_DIR)/core $(OBJ_DIR)/runtime $(OBJ_DIR)/channel \
-	          $(OBJ_DIR)/time $(OBJ_DIR)/security $(OBJ_DIR)/platform/posix \
+	          $(OBJ_DIR)/time $(OBJ_DIR)/security $(OBJ_DIR)/stream \
+	          $(OBJ_DIR)/fs $(OBJ_DIR)/process $(OBJ_DIR)/signal \
+	          $(OBJ_DIR)/plan \
+	          $(OBJ_DIR)/platform/posix \
 	          $(OBJ_DIR)/platform/win32 $(OBJ_DIR)/platform/freestanding
 
 $(LIB_DIR):
@@ -446,6 +485,14 @@ test-unit: $(UNIT_TEST_BIN)
 $(TEST_DIR)/unit/runtime/test_profile_compat: tests/unit/runtime/test_profile_compat.c src/runtime/profile_compat.c $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< src/runtime/profile_compat.c $(LIB_A) $(ALL_LDFLAGS)
 
+# Browser boundary test needs extra sources (bd-1eqo.16.1)
+$(TEST_DIR)/unit/runtime/test_browser_boundary: tests/unit/runtime/test_browser_boundary.c src/runtime/browser_boundary.c src/runtime/profile_compat.c $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< src/runtime/browser_boundary.c src/runtime/profile_compat.c $(LIB_A) $(ALL_LDFLAGS)
+
+# Browser diagnostic test needs extra sources (bd-1eqo.16.3)
+$(TEST_DIR)/unit/runtime/test_browser_diagnostic: tests/unit/runtime/test_browser_diagnostic.c src/runtime/browser_diagnostic.c src/runtime/browser_boundary.c src/runtime/profile_compat.c $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< src/runtime/browser_diagnostic.c src/runtime/browser_boundary.c src/runtime/profile_compat.c $(LIB_A) $(ALL_LDFLAGS)
+
 # HFT instrumentation test needs extra source (bd-j4m.3)
 $(TEST_DIR)/unit/runtime/test_hft_instrument: tests/unit/runtime/test_hft_instrument.c src/runtime/hft_instrument.c $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< src/runtime/hft_instrument.c $(LIB_A) $(ALL_LDFLAGS)
@@ -602,7 +649,10 @@ $(TEST_DIR)/formal/test_cancel_monotone: $(FORMAL_ALG_DIR)/test_cancel_monotone.
 $(TEST_DIR)/formal/test_budget_lattice: $(FORMAL_ALG_DIR)/test_budget_lattice.c src/core/budget.c | $(TEST_DIR)/formal
 	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< src/core/budget.c
 
-FORMAL_ALG_BINS := $(TEST_DIR)/formal/test_outcome_lattice $(TEST_DIR)/formal/test_cancel_monotone $(TEST_DIR)/formal/test_budget_lattice
+$(TEST_DIR)/formal/test_foundational_parity: $(FORMAL_ALG_DIR)/test_foundational_parity.c src/core/cancel.c src/core/budget.c src/core/outcome.c src/core/status.c src/core/transition_tables.c | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< src/core/cancel.c src/core/budget.c src/core/outcome.c src/core/status.c src/core/transition_tables.c
+
+FORMAL_ALG_BINS := $(TEST_DIR)/formal/test_outcome_lattice $(TEST_DIR)/formal/test_cancel_monotone $(TEST_DIR)/formal/test_budget_lattice $(TEST_DIR)/formal/test_foundational_parity
 
 formal-algebraic: $(FORMAL_ALG_BINS)
 	@echo "[asx] formal-algebraic: running $(words $(FORMAL_ALG_BINS)) algebraic property suite(s)..."
@@ -716,7 +766,9 @@ $(TEST_DIR)/vignettes/%: tests/vignettes/%.c $(LIB_A) | test-dirs
 test-dirs:
 	@mkdir -p $(TEST_DIR)/unit/core $(TEST_DIR)/unit/runtime \
 	          $(TEST_DIR)/unit/channel $(TEST_DIR)/unit/time \
-	          $(TEST_DIR)/unit/security \
+	          $(TEST_DIR)/unit/security $(TEST_DIR)/unit/fs \
+	          $(TEST_DIR)/unit/process $(TEST_DIR)/unit/signal \
+	          $(TEST_DIR)/unit/stream $(TEST_DIR)/unit/plan \
 	          $(TEST_DIR)/invariant/lifecycle $(TEST_DIR)/invariant/quiescence \
 	          $(TEST_DIR)/invariant/model_check \
 	          $(TEST_DIR)/vignettes
@@ -1033,6 +1085,87 @@ build-embedded-aarch64:
 	fi
 
 # ---------------------------------------------------------------------------
+# Bare-metal cross-compilation targets (bd-aw69.4)
+#
+# These targets build static libraries for bare-metal ARM and RISC-V
+# microcontrollers using arm-none-eabi-gcc and riscv64-unknown-elf-gcc.
+# Each target gets a separate build directory under build/cross/<name>/.
+# ---------------------------------------------------------------------------
+
+# Generic bare-metal build recipe.
+# Usage: $(call baremetal-build,<name>,<cc>,<ar>,<arch-flags>,<specs>,<profile>)
+define baremetal-build
+	@echo "[asx] cross-baremetal: building $(1) (profile=$(6))..."
+	@if command -v $(2) >/dev/null 2>&1; then \
+		bm_build="$(BUILD_DIR)/cross/$(1)"; \
+		bm_obj="$$bm_build/obj"; \
+		bm_lib="$$bm_build/lib"; \
+		mkdir -p $$bm_obj/core $$bm_obj/runtime $$bm_obj/channel \
+		         $$bm_obj/time $$bm_obj/security $$bm_obj/stream \
+		         $$bm_obj/fs $$bm_obj/process $$bm_obj/signal \
+		         $$bm_obj/plan \
+		         $$bm_obj/platform/freestanding \
+		         $$bm_lib; \
+		for src in $(LIB_SRC); do \
+			obj="$$bm_obj/$${src#src/}"; \
+			obj="$${obj%.c}.o"; \
+			$(2) $(STD_FLAGS) $(WARN_FLAGS) -Wno-type-limits -Wno-unused-value -Wno-format -O2 -DNDEBUG \
+			     $(INC_FLAGS) -DASX_PROFILE_$(6) $(CODEC_DEF) $(DET_DEF) \
+			     $(4) $(5) \
+			     -c -o "$$obj" "$$src" || exit 1; \
+		done; \
+		$(3) rcs "$$bm_lib/libasx.a" $$(find "$$bm_obj" -name '*.o') && \
+		echo "[asx] cross-baremetal: $(1) OK — $$bm_lib/libasx.a" && \
+		size=$$(wc -c < "$$bm_lib/libasx.a") && \
+		echo "[asx] cross-baremetal: $(1) size: $$size bytes"; \
+	elif [ "$(FAIL_ON_MISSING_CROSS_TOOLCHAINS)" = "1" ]; then \
+		echo "[asx] cross-baremetal: $(1) FAIL (toolchain not found; strict mode)"; \
+		exit 1; \
+	else \
+		echo "[asx] cross-baremetal: $(1) SKIP (toolchain not found)"; \
+	fi
+endef
+
+# ARM Cortex-M4 — FREESTANDING
+cross-baremetal-arm-m4-free:
+	$(call baremetal-build,arm-m4-free,arm-none-eabi-gcc,arm-none-eabi-ar,-mcpu=cortex-m4 -mthumb,--specs=nosys.specs,FREESTANDING)
+
+# ARM Cortex-M0 — FREESTANDING
+cross-baremetal-arm-m0-free:
+	$(call baremetal-build,arm-m0-free,arm-none-eabi-gcc,arm-none-eabi-ar,-mcpu=cortex-m0 -mthumb,--specs=nosys.specs,FREESTANDING)
+
+# RISC-V 32-bit — FREESTANDING
+cross-baremetal-riscv32-free:
+	$(call baremetal-build,riscv32-free,riscv64-unknown-elf-gcc,riscv64-unknown-elf-ar,-march=rv32imac -mabi=ilp32,--specs=picolibc.specs,FREESTANDING)
+
+# RISC-V 64-bit — FREESTANDING
+cross-baremetal-riscv64-free:
+	$(call baremetal-build,riscv64-free,riscv64-unknown-elf-gcc,riscv64-unknown-elf-ar,-march=rv64imac -mabi=lp64 -mcmodel=medany,--specs=picolibc.specs,FREESTANDING)
+
+# ARM Cortex-M4 — EMBEDDED_ROUTER
+cross-baremetal-arm-m4-router:
+	$(call baremetal-build,arm-m4-router,arm-none-eabi-gcc,arm-none-eabi-ar,-mcpu=cortex-m4 -mthumb,--specs=nosys.specs,EMBEDDED_ROUTER)
+
+# ARM Cortex-M0 — EMBEDDED_ROUTER
+cross-baremetal-arm-m0-router:
+	$(call baremetal-build,arm-m0-router,arm-none-eabi-gcc,arm-none-eabi-ar,-mcpu=cortex-m0 -mthumb,--specs=nosys.specs,EMBEDDED_ROUTER)
+
+# RISC-V 32-bit — EMBEDDED_ROUTER
+cross-baremetal-riscv32-router:
+	$(call baremetal-build,riscv32-router,riscv64-unknown-elf-gcc,riscv64-unknown-elf-ar,-march=rv32imac -mabi=ilp32,--specs=picolibc.specs,EMBEDDED_ROUTER)
+
+# RISC-V 64-bit — EMBEDDED_ROUTER
+cross-baremetal-riscv64-router:
+	$(call baremetal-build,riscv64-router,riscv64-unknown-elf-gcc,riscv64-unknown-elf-ar,-march=rv64imac -mabi=lp64 -mcmodel=medany,--specs=picolibc.specs,EMBEDDED_ROUTER)
+
+# All 8 bare-metal targets
+cross-baremetal-all: cross-baremetal-arm-m4-free cross-baremetal-arm-m0-free \
+                     cross-baremetal-riscv32-free cross-baremetal-riscv64-free \
+                     cross-baremetal-arm-m4-router cross-baremetal-arm-m0-router \
+                     cross-baremetal-riscv32-router cross-baremetal-riscv64-router
+	@echo "[asx] cross-baremetal-all: all 8 bare-metal targets complete"
+
+# ---------------------------------------------------------------------------
 # QEMU smoke test
 # ---------------------------------------------------------------------------
 qemu-smoke:
@@ -1049,11 +1182,15 @@ qemu-smoke:
 # ---------------------------------------------------------------------------
 # check — combined gate for PR/push CI
 # ---------------------------------------------------------------------------
-.PHONY: check check-ci
+.PHONY: check check-ci ci-embedded-baremetal
 check: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build test model-check abi-check test-abi-shim formal-check
 
 check-ci: CI=1
-check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build test model-check test-e2e-vertical conformance codec-equivalence profile-parity fuzz-smoke ci-embedded-matrix
+check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build test model-check test-e2e-vertical conformance codec-equivalence profile-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
+
+ci-embedded-baremetal:
+	@echo "[asx] ci-embedded-baremetal: bare-metal gate..."
+	@./tools/ci/gate_embedded_baremetal.sh
 
 # ---------------------------------------------------------------------------
 # clean
@@ -1090,7 +1227,8 @@ help:
 	@echo "  profile-parity     Cross-profile semantic digest parity"
 	@echo "  fuzz-smoke         Differential fuzzing smoke test"
 	@echo "  minimize-selftest  Counterexample minimizer self-test"
-	@echo "  ci-embedded-matrix Cross-target embedded builds"
+	@echo "  ci-embedded-matrix Cross-target embedded builds (Linux-musl)"
+	@echo "  cross-baremetal-all All 8 bare-metal ARM/RISC-V targets"
 	@echo "  bench              Performance benchmarks (JSON output)"
 	@echo "  bench-json         Benchmarks (JSON-only to stdout)"
 	@echo "  release            Optimized production build"

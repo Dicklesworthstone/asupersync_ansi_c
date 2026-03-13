@@ -1,0 +1,51 @@
+# .clang-tidy — Static analysis configuration for asupersync_ansi_c
+#
+# C99 project — all C++-specific checks disabled.
+# Triage: ran full check suite on all src/*.c, categorized findings,
+# disabled checks producing >10 false positives with <2 real bugs.
+#
+# SPDX-License-Identifier: MIT
+
+Checks: >
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  readability-implicit-bool-conversion,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-assignment-in-if-condition,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+
+# Only check project headers, not system headers
+HeaderFilterRegex: 'include/asx/.*'
+
+# Treat critical checks as errors
+WarningsAsErrors: >
+  clang-analyzer-core.NullDereference,
+  clang-analyzer-core.UndefinedBinaryOperatorResult,
+  clang-analyzer-unix.Malloc
+
+# Check options
+CheckOptions:
+  - key:   readability-implicit-bool-conversion.AllowPointerConditions
+    value: true
+  - key:   readability-implicit-bool-conversion.AllowIntegerConditions
+    value: true
+
+# Rationale for disabled checks:
+#
+# bugprone-easily-swappable-parameters:
+#   Too noisy for callback-heavy C API where most functions take
+#   (id, status) pairs that are typedef'd integers.
+#
+# bugprone-assignment-in-if-condition:
+#   Project uses intentional `if ((st = func()) != OK)` patterns.
+#
+# cert-dcl37-c / cert-dcl51-cpp:
+#   Flags identifiers starting with underscore — false positive on
+#   _sbrk and other libc-mandated names in bare-metal stubs.
+#
+# clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling:
+#   Flags memcpy/memset which are fundamental in zero-alloc C99.
+#   The project does not use user-controlled sizes unsafely.
