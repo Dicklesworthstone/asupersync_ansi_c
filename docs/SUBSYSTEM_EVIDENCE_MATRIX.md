@@ -237,7 +237,65 @@ Required evidence patterns:
 - seeded lab scenarios for recovery behavior,
 - human-usable evidence that explains restart decisions and failure ancestry.
 
-## 7. Closure Rules for Future Implementation Beads
+## 7. Reopened Crate-Level Verification Contract (`bd-yx9r.3`)
+
+The reopened crate-level parity stream (`bd-yx9r.*`) needs a stricter
+pre-implementation contract than the earlier kernel-only closure. The inventory
+and profile-matrix work now make clear that many higher-surface families are
+either absent, stub-only, or present in-tree but not actually shipped through
+the default umbrella/archive build.
+
+Before any `bd-yx9r.*` implementation bead starts, it should declare the
+default evidence bundle for its family using the rules below.
+
+### 7.1 Family-Level Default Lanes
+
+| Reopened family | unit | law | lab | conformance | profile | e2e | artifacts | Minimum extra rule |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Public-type/config/error/cancel expansion (`bd-yx9r.4*`) | R | R | S | S | R | S | R | Must prove shipped surface matches header/build story |
+| Capability/security/obligation/evidence (`bd-yx9r.5*`) | R | R | R | S | S | R | R | Must include must-fail authority and leak-path evidence |
+| Runtime/trace/lab/util completion (`bd-yx9r.6*`) | R | R | R | S | S | R | R | Must emit replay hints and first-failure localization artifacts |
+| Combinator/service/transport/remote/spork (`bd-yx9r.7*`) | R | R | R | S | S | R | R | Must show winner/loser behavior and cancellation propagation in user flows |
+| Networking substrate (`bd-yx9r.8*`, `bd-yx9r.9*`) | R | R | S | S | R | R | R | Must include degraded-path and unsupported-platform behavior, not only happy-path I/O |
+| HTTP/web/gRPC/application surfaces (`bd-yx9r.10*`) | R | S | S | S | R | R | R | Browser/native and protocol/version matrix must be explicit |
+| Data/messaging/distributed surfaces (`bd-yx9r.11*`) | R | R | R | R | R | R | R | Differential or semantic-fixture lanes are required unless a written exclusion is approved |
+| Developer/operator/acceptance surfaces (`bd-yx9r.12*`) | R | S | S | S | R | R | R | Docs/examples/smokes must point back to retained artifacts and rerun commands |
+| Final crate-level gate (`bd-yx9r.12.3`) | N | N | S | R | R | R | R | Closure requires evidence references from all reopened families, not just summary prose |
+
+Legend:
+
+- `R` = required by default for that family
+- `S` = required for a meaningful subset; bead must say why if omitted
+- `N` = not normally required at the final acceptance-gate row itself
+
+### 7.2 Reopened-Surface E2E Contract
+
+For reopened crate-level families, `e2e` means more than "binary runs":
+
+1. one named happy-path scenario proving the user-facing workflow works,
+2. one degraded-path scenario proving bounded/diagnosable fallback behavior,
+3. one failure or rejection scenario proving fail-closed behavior where
+   browser/native/feature/profile rules matter,
+4. a structured summary JSON plus JSONL records under the shared harness
+   contract,
+5. a copy-paste rerun command and any replay hint or retained seed needed to
+   reproduce the first failure.
+
+### 7.3 Allowed Exclusions
+
+Some reopened families will not have meaningful Rust-vs-C differential fixtures
+on day one. That is allowed only when the bead records one of these explicit
+reasons:
+
+- no upstream semantic fixture exists yet for the family,
+- the surface is purely operator/documentation-facing and is instead covered by
+  e2e + artifact evidence,
+- the feature is intentionally unsupported in the current profile/platform and
+  the required proof is a fail-closed rejection test rather than a parity run.
+
+"Too expensive right now" is not an acceptable exclusion reason.
+
+## 8. Closure Rules for Future Implementation Beads
 
 An implementation bead under `bd-1eqo.*` should not close unless it includes:
 
@@ -252,7 +310,7 @@ An implementation bead under `bd-1eqo.*` should not close unless it includes:
 This rule is intentionally stricter than "tests passed." The roadmap is trying
 to preserve product behavior, not just code coverage.
 
-## 8. Review Checklist
+## 9. Review Checklist
 
 For every new `bd-1eqo.*` implementation bead or closure:
 
@@ -262,7 +320,7 @@ For every new `bd-1eqo.*` implementation bead or closure:
 4. define expected logs/artifacts before implementation begins,
 5. refuse closure if the lane mix does not match the promise being made.
 
-## 9. Relationship to Existing Contracts
+## 10. Relationship to Existing Contracts
 
 - `docs/TEST_COMPLETENESS_MATRIX.md` remains the low-level module completeness
   authority.

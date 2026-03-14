@@ -536,6 +536,47 @@ Roadmap owners:
 - `bd-1eqo.8.*`
 - `bd-1eqo.11.*`
 
+### 4.12 Reopened Crate-Level Surface Completion Loops (`bd-yx9r.*`)
+
+Representative upstream signals:
+
+- the broad export surface in `/dp/asupersync/src/lib.rs`
+- README claims around Browser Edition, service adoption, diagnostics, and
+  fail-closed behavior
+- the 2026-03-14 reopened truth-table and profile-matrix audits
+
+Primary personas:
+
+- runtime integrator
+- operator / diagnostic user
+- browser / framework consumer
+- advanced platform / distributed user
+
+Minimum acceptance slice:
+
+- a contributor can point to a named happy-path flow for every newly reopened
+  family before implementation starts,
+- the flow identifies whether the surface is expected to run on native,
+  browser, or both,
+- the flow names the retained artifact/report/replay output that will prove the
+  implementation worked.
+
+Failure slice:
+
+- unsupported browser/native/profile/feature combinations fail closed with a
+  user-visible diagnostic,
+- degraded or partial implementations state what fallback or rejection the user
+  should see,
+- failure artifacts are rich enough that downstream beads do not have to invent
+  a new operator story from scratch.
+
+Roadmap owners:
+
+- `bd-yx9r.1`
+- `bd-yx9r.2`
+- `bd-yx9r.3`
+- all downstream `bd-yx9r.[4-12].*` implementation beads
+
 ## 5. Workflow-to-Track Matrix
 
 | Workflow family | Primary roadmap tracks |
@@ -551,6 +592,7 @@ Roadmap owners:
 | Service/middleware/application wiring | `bd-1eqo.13.*`, `bd-1eqo.9.*` |
 | Messaging/remote/distributed | `bd-1eqo.9.*`, `bd-1eqo.10.*` and future deferred tracks |
 | Actor/gen_server/supervision | `bd-1eqo.10.*`, `bd-1eqo.8.*`, `bd-1eqo.11.*` |
+| Reopened crate-level parity surfaces | `bd-yx9r.1`, `bd-yx9r.2`, `bd-yx9r.3`, then `bd-yx9r.[4-12].*` |
 
 ## 6. What “Technically Present but User-Hostile” Looks Like
 
@@ -602,3 +644,21 @@ In short:
 - this document says what users are actually trying to do with it.
 - [`docs/SUBSYSTEM_EVIDENCE_MATRIX.md`](./SUBSYSTEM_EVIDENCE_MATRIX.md) says
   how we prove those workflows really work.
+
+## 9. Reopened-Surface Acceptance Template (`bd-yx9r.3`)
+
+Any reopened crate-level implementation bead under `bd-yx9r.[4-12].*` should be
+able to fill this mini-template before coding begins:
+
+1. **Persona:** which user is blocked by this missing or misleading surface?
+2. **Happy path:** what is the minimum real workflow that should succeed?
+3. **Degraded path:** what fallback, partial behavior, or reduced mode is
+   acceptable and observable?
+4. **Failure path:** what fail-closed rejection or diagnostic must exist when
+   the feature is unsupported?
+5. **Artifact path:** which summary JSON, JSONL log, replay hint, smoke output,
+   or doctor report will a reviewer inspect?
+6. **Environment split:** does the workflow apply to native, browser, or both?
+
+If a bead cannot answer those six questions, it is not ready to claim
+crate-level parity for that surface.
