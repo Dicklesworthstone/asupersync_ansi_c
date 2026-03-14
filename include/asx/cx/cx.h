@@ -75,6 +75,36 @@ typedef struct {
     uint32_t generation;     /* context generation (for stale detection) */
 } asx_cx;
 
+typedef struct {
+    asx_region_id region_id;
+    asx_task_id task_id;
+    asx_cap_flags caps;
+    uint32_t parent_generation;
+} asx_cx_wrapper;
+
+typedef struct {
+    asx_cap_flags caps;
+    uint32_t parent_generation;
+    uint32_t caveat_count;
+} asx_cx_macaroon;
+
+typedef struct {
+    uint32_t slot;
+    uint32_t generation;
+} asx_cx_grant;
+
+typedef struct {
+    uint32_t generation;
+    asx_cap_flags caps;
+    int alive;
+} asx_cx_registry_entry;
+
+typedef struct {
+    asx_cx_registry_entry *entries;
+    uint32_t capacity;
+    uint32_t next_generation;
+} asx_cx_registry;
+
 /* ------------------------------------------------------------------ */
 /* Cx lifecycle                                                        */
 /* ------------------------------------------------------------------ */
@@ -89,6 +119,9 @@ ASX_API asx_status asx_cx_init(asx_cx *cx, asx_region_id region_id, asx_task_id 
  * The child inherits identity but can only have a subset of parent caps.
  * Returns ASX_E_INVALID_ARGUMENT if child_caps contains caps not in parent. */
 ASX_API asx_status asx_cx_narrow(const asx_cx *parent, asx_cx *child, asx_cap_flags child_caps);
+
+/* Create a child Cx with the parent's current authority attenuated by cap_mask. */
+ASX_API asx_status asx_cx_attenuate(const asx_cx *parent, asx_cx *child, asx_cap_flags cap_mask);
 
 /* Invalidate a Cx (sets generation to 0, clears all fields). */
 ASX_API void asx_cx_invalidate(asx_cx *cx);
@@ -115,6 +148,46 @@ ASX_API int asx_cx_has_cap(const asx_cx *cx, asx_cap_flags cap);
 
 /* Get the capability flags from a context. Returns ASX_CAP_NONE if cx is NULL. */
 ASX_API asx_cap_flags asx_cx_caps(const asx_cx *cx);
+
+/* ------------------------------------------------------------------ */
+/* Explicit wrapper / registry / attenuation tokens                    */
+/* ------------------------------------------------------------------ */
+
+/* Capture an explicit wrapper for a subset of the parent's authority. */
+ASX_API asx_status asx_cx_wrap(const asx_cx *parent, asx_cap_flags child_caps,
+                               asx_cx_wrapper *out_wrapper);
+
+/* Materialize a wrapped authority back into a child Cx. */
+ASX_API asx_status asx_cx_unwrap(const asx_cx *parent, const asx_cx_wrapper *wrapper,
+                                 asx_cx *out_child);
+
+/* Initialize a fixed-capacity zero-allocation registry of grants. */
+ASX_API asx_status asx_cx_registry_init(asx_cx_registry *registry,
+                                        asx_cx_registry_entry *entries, uint32_t capacity);
+
+/* Issue a revocable grant for a subset of the parent's authority. */
+ASX_API asx_status asx_cx_registry_issue(const asx_cx *parent, asx_cx_registry *registry,
+                                         asx_cap_flags child_caps, asx_cx_grant *out_grant);
+
+/* Revoke a previously issued grant. */
+ASX_API asx_status asx_cx_registry_revoke(asx_cx_registry *registry, asx_cx_grant grant);
+
+/* Materialize a live grant into a child Cx. */
+ASX_API asx_status asx_cx_registry_materialize(const asx_cx *parent,
+                                               const asx_cx_registry *registry,
+                                               asx_cx_grant grant, asx_cx *out_child);
+
+/* Capture an attenuated macaroon-like token for later rebinding. */
+ASX_API asx_status asx_cx_macaroon_issue(const asx_cx *parent, asx_cap_flags child_caps,
+                                         asx_cx_macaroon *out_macaroon);
+
+/* Apply an additional attenuation caveat to a macaroon. */
+ASX_API asx_status asx_cx_macaroon_attenuate(asx_cx_macaroon *macaroon,
+                                             asx_cap_flags caveat_caps);
+
+/* Rebind a macaroon against its parent context, failing closed on mismatch. */
+ASX_API asx_status asx_cx_macaroon_bind(const asx_cx *parent, const asx_cx_macaroon *macaroon,
+                                        asx_cx *out_child);
 
 /* ------------------------------------------------------------------ */
 /* Budget access                                                       */

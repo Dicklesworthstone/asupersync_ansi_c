@@ -8,6 +8,7 @@
  */
 
 #include <asx/asx_config.h>
+#include <asx/runtime/browser_boundary.h>
 #include <asx/runtime/io_driver.h>
 #include <string.h>
 
@@ -43,6 +44,8 @@ static uint16_t next_gen(uint16_t g) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_io_driver_init(void) {
+    asx_status st = asx_surface_gate(ASX_SURFACE_IO_DRIVER);
+    if (st != ASX_OK) return st;
     g_initialized = 1;
     return ASX_OK;
 }
@@ -71,8 +74,11 @@ void asx_io_driver_reset(void) {
 asx_status asx_io_register(int fd, asx_io_interest interest, const asx_waker *waker,
                            asx_io_token *out_token) {
     uint32_t idx;
+    asx_status st;
 
     if (out_token == NULL || waker == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_surface_gate(ASX_SURFACE_IO_DRIVER);
+    if (st != ASX_OK) return st;
     if (!g_initialized) return ASX_E_INVALID_STATE;
 
     /* Find free slot */
@@ -116,6 +122,8 @@ void asx_io_deregister(asx_io_token *token) {
 }
 
 asx_status asx_io_set_interest(asx_io_token *token, asx_io_interest interest) {
+    asx_status st = asx_surface_gate(ASX_SURFACE_IO_DRIVER);
+    if (st != ASX_OK) return st;
     if (token == NULL) return ASX_E_INVALID_ARGUMENT;
     if (token->slot >= g_reg_count) return ASX_E_NOT_FOUND;
     if (g_regs[token->slot].generation != token->generation) return ASX_E_NOT_FOUND;

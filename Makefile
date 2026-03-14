@@ -129,6 +129,7 @@ CORE_SRC := \
 
 RUNTIME_SRC := \
 	src/runtime/hooks.c \
+	src/runtime/rt.c \
 	src/runtime/equivalence.c \
 	src/runtime/lifecycle.c \
 	src/runtime/scheduler.c \
@@ -139,17 +140,22 @@ RUNTIME_SRC := \
 	src/runtime/hindsight.c \
 	src/runtime/telemetry.c \
 	src/runtime/profile_compat.c \
+	src/runtime/browser_boundary.c \
+	src/runtime/browser_diagnostic.c \
 	src/runtime/hft_instrument.c \
 	src/runtime/automotive_instrument.c \
 	src/runtime/overload_catalog.c \
+	src/runtime/blocking.c \
 	src/runtime/parallel.c \
 	src/runtime/adapter.c \
 	src/runtime/vertical_adapter.c \
 	src/runtime/virtual_time.c \
+	src/runtime/io_driver.c \
 	src/runtime/config_reload.c \
 	src/runtime/regression_localize.c \
 	src/runtime/event_log.c \
-	src/runtime/snapshot.c
+	src/runtime/snapshot.c \
+	src/runtime/waker.c
 
 CHANNEL_SRC := \
 	src/channel/mpsc.c

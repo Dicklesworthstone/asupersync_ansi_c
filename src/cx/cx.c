@@ -20,11 +20,46 @@ static uint64_t cx_entropy_step(uint64_t *state) {
     return z ^ (z >> 31);
 }
 
+static uint32_t g_cx_generation = 1u;
+
+static int cx_caps_subset(asx_cap_flags have, asx_cap_flags want) {
+    return (want & ~have) == 0u;
+}
+
+static asx_status cx_copy_with_caps(const asx_cx *parent, asx_cx *child, asx_cap_flags child_caps) {
+    if (parent == NULL || child == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
+    if (!cx_caps_subset(parent->caps, child_caps)) return ASX_E_INVALID_ARGUMENT;
+
+    memset(child, 0, sizeof(*child));
+    child->region_id = parent->region_id;
+    child->task_id = parent->task_id;
+    child->caps = child_caps;
+    child->budget = parent->budget;
+    child->clock = parent->clock;
+    child->entropy_state = parent->entropy_state;
+    child->generation = g_cx_generation++;
+    return ASX_OK;
+}
+
+static int cx_grant_valid(const asx_cx_registry *registry, asx_cx_grant grant,
+                          const asx_cx_registry_entry **out_entry) {
+    const asx_cx_registry_entry *entry;
+
+    if (registry == NULL || registry->entries == NULL) return 0;
+    if (grant.slot >= registry->capacity) return 0;
+
+    entry = &registry->entries[grant.slot];
+    if (!entry->alive) return 0;
+    if (entry->generation != grant.generation) return 0;
+
+    if (out_entry != NULL) *out_entry = entry;
+    return 1;
+}
+
 /* ------------------------------------------------------------------ */
 /* Cx lifecycle                                                        */
 /* ------------------------------------------------------------------ */
-
-static uint32_t g_cx_generation = 1u;
 
 asx_status asx_cx_init(asx_cx *cx, asx_region_id region_id, asx_task_id task_id,
                        asx_cap_flags caps) {
@@ -43,21 +78,13 @@ asx_status asx_cx_init(asx_cx *cx, asx_region_id region_id, asx_task_id task_id,
 }
 
 asx_status asx_cx_narrow(const asx_cx *parent, asx_cx *child, asx_cap_flags child_caps) {
+    return cx_copy_with_caps(parent, child, child_caps);
+}
+
+asx_status asx_cx_attenuate(const asx_cx *parent, asx_cx *child, asx_cap_flags cap_mask) {
     if (parent == NULL || child == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
-
-    /* Child cannot have caps that parent doesn't */
-    if ((child_caps & ~parent->caps) != 0u) return ASX_E_INVALID_ARGUMENT;
-
-    memset(child, 0, sizeof(*child));
-    child->region_id = parent->region_id;
-    child->task_id = parent->task_id;
-    child->caps = child_caps;
-    child->budget = parent->budget;
-    child->clock = parent->clock;
-    child->entropy_state = parent->entropy_state;
-    child->generation = g_cx_generation++;
-    return ASX_OK;
+    return cx_copy_with_caps(parent, child, parent->caps & cap_mask);
 }
 
 void asx_cx_invalidate(asx_cx *cx) {
@@ -96,6 +123,123 @@ int asx_cx_has_cap(const asx_cx *cx, asx_cap_flags cap) {
 asx_cap_flags asx_cx_caps(const asx_cx *cx) {
     if (cx == NULL) return ASX_CAP_NONE;
     return cx->caps;
+}
+
+asx_status asx_cx_wrap(const asx_cx *parent, asx_cap_flags child_caps, asx_cx_wrapper *out_wrapper) {
+    if (parent == NULL || out_wrapper == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
+    if (!cx_caps_subset(parent->caps, child_caps)) return ASX_E_INVALID_ARGUMENT;
+
+    out_wrapper->region_id = parent->region_id;
+    out_wrapper->task_id = parent->task_id;
+    out_wrapper->caps = child_caps;
+    out_wrapper->parent_generation = parent->generation;
+    return ASX_OK;
+}
+
+asx_status asx_cx_unwrap(const asx_cx *parent, const asx_cx_wrapper *wrapper, asx_cx *out_child) {
+    if (parent == NULL || wrapper == NULL || out_child == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
+    if (wrapper->parent_generation != parent->generation) return ASX_E_STALE_HANDLE;
+    if (wrapper->region_id != parent->region_id || wrapper->task_id != parent->task_id) {
+        return ASX_E_PERMISSION_DENIED;
+    }
+
+    return cx_copy_with_caps(parent, out_child, wrapper->caps);
+}
+
+asx_status asx_cx_registry_init(asx_cx_registry *registry, asx_cx_registry_entry *entries,
+                                uint32_t capacity) {
+    uint32_t i;
+
+    if (registry == NULL || entries == NULL || capacity == 0u) return ASX_E_INVALID_ARGUMENT;
+
+    registry->entries = entries;
+    registry->capacity = capacity;
+    registry->next_generation = 1u;
+
+    for (i = 0; i < capacity; ++i) {
+        registry->entries[i].generation = 0u;
+        registry->entries[i].caps = ASX_CAP_NONE;
+        registry->entries[i].alive = 0;
+    }
+
+    return ASX_OK;
+}
+
+asx_status asx_cx_registry_issue(const asx_cx *parent, asx_cx_registry *registry,
+                                 asx_cap_flags child_caps, asx_cx_grant *out_grant) {
+    uint32_t i;
+
+    if (parent == NULL || registry == NULL || out_grant == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
+    if (!cx_caps_subset(parent->caps, child_caps)) return ASX_E_INVALID_ARGUMENT;
+
+    for (i = 0; i < registry->capacity; ++i) {
+        asx_cx_registry_entry *entry = &registry->entries[i];
+        if (entry->alive) continue;
+
+        entry->generation = registry->next_generation++;
+        if (entry->generation == 0u) entry->generation = registry->next_generation++;
+        entry->caps = child_caps;
+        entry->alive = 1;
+
+        out_grant->slot = i;
+        out_grant->generation = entry->generation;
+        return ASX_OK;
+    }
+
+    return ASX_E_RESOURCE_EXHAUSTED;
+}
+
+asx_status asx_cx_registry_revoke(asx_cx_registry *registry, asx_cx_grant grant) {
+    if (registry == NULL || registry->entries == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (grant.slot >= registry->capacity) return ASX_E_NOT_FOUND;
+    if (!cx_grant_valid(registry, grant, NULL)) return ASX_E_NOT_FOUND;
+
+    registry->entries[grant.slot].alive = 0;
+    registry->entries[grant.slot].caps = ASX_CAP_NONE;
+    return ASX_OK;
+}
+
+asx_status asx_cx_registry_materialize(const asx_cx *parent, const asx_cx_registry *registry,
+                                       asx_cx_grant grant, asx_cx *out_child) {
+    const asx_cx_registry_entry *entry = NULL;
+
+    if (parent == NULL || registry == NULL || out_child == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
+    if (!cx_grant_valid(registry, grant, &entry)) return ASX_E_NOT_FOUND;
+
+    return cx_copy_with_caps(parent, out_child, entry->caps);
+}
+
+asx_status asx_cx_macaroon_issue(const asx_cx *parent, asx_cap_flags child_caps,
+                                 asx_cx_macaroon *out_macaroon) {
+    if (parent == NULL || out_macaroon == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
+    if (!cx_caps_subset(parent->caps, child_caps)) return ASX_E_INVALID_ARGUMENT;
+
+    out_macaroon->caps = child_caps;
+    out_macaroon->parent_generation = parent->generation;
+    out_macaroon->caveat_count = 0u;
+    return ASX_OK;
+}
+
+asx_status asx_cx_macaroon_attenuate(asx_cx_macaroon *macaroon, asx_cap_flags caveat_caps) {
+    if (macaroon == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    macaroon->caps &= caveat_caps;
+    macaroon->caveat_count++;
+    return ASX_OK;
+}
+
+asx_status asx_cx_macaroon_bind(const asx_cx *parent, const asx_cx_macaroon *macaroon,
+                                asx_cx *out_child) {
+    if (parent == NULL || macaroon == NULL || out_child == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
+    if (macaroon->parent_generation != parent->generation) return ASX_E_STALE_HANDLE;
+
+    return cx_copy_with_caps(parent, out_child, macaroon->caps);
 }
 
 /* ------------------------------------------------------------------ */

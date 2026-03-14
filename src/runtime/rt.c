@@ -8,6 +8,8 @@
  */
 
 #include <asx/asx_config.h>
+#include <asx/runtime/blocking.h>
+#include <asx/runtime/io_driver.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <stddef.h>
@@ -58,6 +60,22 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
     st = asx_runtime_set_hooks(hooks);
     if (st != ASX_OK) return st;
 
+    /* Step 4a: initialize shipped runtime subsystems.
+     * Browser profile builds fail closed for native-only surfaces, which is
+     * expected and should not prevent the runtime object itself from starting. */
+    st = asx_io_driver_init();
+    if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
+        asx_runtime_reset();
+        return st;
+    }
+
+    st = asx_blocking_pool_init();
+    if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
+        asx_io_driver_shutdown();
+        asx_runtime_reset();
+        return st;
+    }
+
     /* Step 5: store config and mark initialized */
     memset(rt, 0, sizeof(*rt));
     rt->config = *config;
@@ -85,7 +103,11 @@ asx_status asx_runtime_init_default(asx_runtime *rt) {
 
 void asx_runtime_shutdown(asx_runtime *rt) {
     if (rt == NULL) return;
-    if (rt->initialized) { asx_runtime_reset(); }
+    if (rt->initialized) {
+        asx_io_driver_shutdown();
+        asx_blocking_pool_shutdown();
+        asx_runtime_reset();
+    }
     memset(rt, 0, sizeof(*rt));
 }
 

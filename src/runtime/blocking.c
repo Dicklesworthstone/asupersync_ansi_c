@@ -8,6 +8,7 @@
  */
 
 #include <asx/runtime/blocking.h>
+#include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -44,6 +45,8 @@ static uint16_t next_gen(uint16_t g) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_blocking_pool_init(void) {
+    asx_status st = asx_surface_gate(ASX_SURFACE_BLOCKING);
+    if (st != ASX_OK) return st;
     g_initialized = 1;
     return ASX_OK;
 }
@@ -75,8 +78,11 @@ asx_status asx_spawn_blocking(asx_blocking_fn fn, void *user_data,
                               const asx_waker *completion_waker, asx_blocking_handle *out_handle) {
     uint32_t idx;
     asx_blocking_slot *s;
+    asx_status st;
 
     if (fn == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_surface_gate(ASX_SURFACE_BLOCKING);
+    if (st != ASX_OK) return st;
     if (!g_initialized) return ASX_E_INVALID_STATE;
 
     /* Find free slot */

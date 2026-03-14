@@ -50,6 +50,13 @@
 
 /* Runtime (walking skeleton — bd-ix8.8) */
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/rt.h>
+#include <asx/runtime/blocking.h>
+#include <asx/runtime/io_driver.h>
+#include <asx/runtime/profile_compat.h>
+#include <asx/runtime/browser_boundary.h>
+#include <asx/runtime/browser_diagnostic.h>
 #include <asx/runtime/trace.h>
+#include <asx/runtime/waker.h>
 
 #endif /* ASX_ASX_H */
