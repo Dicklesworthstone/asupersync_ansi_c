@@ -268,6 +268,57 @@ This register ensures that deferred work is:
 
 ---
 
+## Crate-Level Truth Table Audit (bd-yx9r.1)
+
+This appendix records the gap that reopened crate-level parity planning on
+2026-03-14: the local tree is broader than the kernel-only story, but much of
+that breadth is either not shipped through the umbrella header, not compiled
+into `libasx.a`, or still only a walking-skeleton/stub implementation.
+
+### Audit Rules
+
+Classification used below:
+
+- `substantive`: implemented and aligned with the currently shipped kernel/API story.
+- `partial`: meaningful local surface exists, but the upstream contract is still materially broader.
+- `stub-only`: local files primarily preserve API shape or ghost handles, not the real behavior.
+- `absent`: no meaningful local public surface corresponding to the upstream family.
+
+Additional shipping notes:
+
+- `umbrella`: whether [`include/asx/asx.h`](/data/projects/asupersync_ansi_c/include/asx/asx.h) exposes the family.
+- `archive`: whether the current [`Makefile`](/data/projects/asupersync_ansi_c/Makefile) compiles the implementation into `libasx.a`.
+
+### Truth Table
+
+| Upstream family / promise | Upstream evidence | Local evidence | Umbrella | Archive | Classification | Gap / dependency note |
+|---|---|---|---|---|---|---|
+| Kernel semantics: outcomes, budgets, cancellation, lifecycle, scheduler, timer wheel, quiescence | `/dp/asupersync/src/lib.rs` core guarantees and portable modules; local Phase 1 parity docs | [`include/asx/asx.h`](/data/projects/asupersync_ansi_c/include/asx/asx.h), [`src/runtime/scheduler.c`](/data/projects/asupersync_ansi_c/src/runtime/scheduler.c), [`src/runtime/lifecycle.c`](/data/projects/asupersync_ansi_c/src/runtime/lifecycle.c), [`src/time/timer_wheel.c`](/data/projects/asupersync_ansi_c/src/time/timer_wheel.c) | yes | yes | substantive | This is the part of the project that actually matches the earlier "kernel parity" closure. |
+| Runtime object/config/bootstrap beyond kernel loop | `/dp/asupersync/src/lib.rs` re-exports `Config*`, `RuntimeProfile`, `Cx`, `Scope`, lab/runtime families | [`include/asx/runtime/rt.h`](/data/projects/asupersync_ansi_c/include/asx/runtime/rt.h), [`src/runtime/rt.c`](/data/projects/asupersync_ansi_c/src/runtime/rt.c), [`include/asx/runtime/runtime.h`](/data/projects/asupersync_ansi_c/include/asx/runtime/runtime.h) | partial | no for `rt.c` | partial | Public runtime-object API exists locally, but the current archive build omits `src/runtime/rt.c`; shipped behavior is narrower than the header tree suggests. |
+| Capability / structured-concurrency surface (`cx`, `scope`, explicit authority flow) | `/dp/asupersync/src/lib.rs` exports `cx`; upstream README centers `Cx` as capability boundary | [`include/asx/cx/cx.h`](/data/projects/asupersync_ansi_c/include/asx/cx/cx.h), [`include/asx/cx/scope.h`](/data/projects/asupersync_ansi_c/include/asx/cx/scope.h), [`src/cx/cx.c`](/data/projects/asupersync_ansi_c/src/cx/cx.c), [`src/cx/scope.c`](/data/projects/asupersync_ansi_c/src/cx/scope.c) | no | no | partial | The family exists in-tree but is neither exposed by the umbrella header nor compiled into `libasx.a`; upstream treats it as central rather than optional. |
+| App / operator surfaces (`app`, `doctor`, `report`) | `/dp/asupersync/src/lib.rs` exports `app`; upstream README presents user-facing app/workflow surfaces | [`include/asx/app/app.h`](/data/projects/asupersync_ansi_c/include/asx/app/app.h), [`src/app/app.c`](/data/projects/asupersync_ansi_c/src/app/app.c), [`src/app/doctor.c`](/data/projects/asupersync_ansi_c/src/app/doctor.c), [`src/app/report.c`](/data/projects/asupersync_ansi_c/src/app/report.c) | no | no | partial | There is real implementation here, but it is not part of the current built library or umbrella include story. |
+| Actor / supervision / gen_server | `/dp/asupersync/src/lib.rs` exports `actor`, `gen_server`, `supervision` | [`include/asx/actor/actor.h`](/data/projects/asupersync_ansi_c/include/asx/actor/actor.h), [`include/asx/actor/supervisor.h`](/data/projects/asupersync_ansi_c/include/asx/actor/supervisor.h), [`src/actor/actor.c`](/data/projects/asupersync_ansi_c/src/actor/actor.c), [`src/actor/supervisor.c`](/data/projects/asupersync_ansi_c/src/actor/supervisor.c) | no | no | partial | Local code implements a mailbox/task-backed actor loop, but it is not shipped today and does not yet establish crate-level parity with the full upstream actor/gen_server/supervision contract. |
+| Networking core (`net`) | `/dp/asupersync/src/lib.rs` exports `net`; upstream README and reopened epic treat transport families as part of crate-level promise | [`include/asx/net/net.h`](/data/projects/asupersync_ansi_c/include/asx/net/net.h), [`src/net/net.c`](/data/projects/asupersync_ansi_c/src/net/net.c) | no | no | stub-only | The header and implementation explicitly describe themselves as a walking skeleton; accept/read/write stay at ghost-handle level with `ASX_E_PENDING`. |
+| Bytes / codec / async I/O data plane | `/dp/asupersync/src/lib.rs` exports `bytes`, `codec`, `io`, `encoding`, `decoding` and re-exports related types | [`include/asx/bytes/*.h`](/data/projects/asupersync_ansi_c/include/asx/bytes/buf.h), [`include/asx/codec/*.h`](/data/projects/asupersync_ansi_c/include/asx/codec/codec.h), [`src/bytes/buf.c`](/data/projects/asupersync_ansi_c/src/bytes/buf.c), [`src/bytes/codec.c`](/data/projects/asupersync_ansi_c/src/bytes/codec.c), [`src/bytes/io_adapter.c`](/data/projects/asupersync_ansi_c/src/bytes/io_adapter.c) | codec yes, bytes no | no for bytes | partial | Codec parity is in the shipped story, but the broader upstream byte/encoding/decoding/I/O surface is still incomplete and only partly built locally. |
+| Channels and sync family beyond core MPSC | `/dp/asupersync/src/lib.rs` exports `channel` and `sync` families | [`src/channel/mpsc.c`](/data/projects/asupersync_ansi_c/src/channel/mpsc.c), [`src/channel/oneshot.c`](/data/projects/asupersync_ansi_c/src/channel/oneshot.c), [`src/channel/broadcast.c`](/data/projects/asupersync_ansi_c/src/channel/broadcast.c), [`src/channel/watch.c`](/data/projects/asupersync_ansi_c/src/channel/watch.c), [`src/sync/mutex.c`](/data/projects/asupersync_ansi_c/src/sync/mutex.c), [`src/sync/semaphore.c`](/data/projects/asupersync_ansi_c/src/sync/semaphore.c) | core channel yes, sync no | only `mpsc.c` yes | partial | The repository contains additional channel/sync implementations, but the shipped archive currently includes only `src/channel/mpsc.c`. |
+| Trace / replay / lab / diagnostics | `/dp/asupersync/src/lib.rs` exports `trace`, `lab`, `observability`, `monitor`; upstream README promises deterministic testing and replay | [`src/runtime/trace.c`](/data/projects/asupersync_ansi_c/src/runtime/trace.c), [`src/runtime/replay.c`](/data/projects/asupersync_ansi_c/src/runtime/replay.c), [`src/runtime/lab.c`](/data/projects/asupersync_ansi_c/src/runtime/lab.c), [`src/runtime/diagnostic.c`](/data/projects/asupersync_ansi_c/src/runtime/diagnostic.c) | trace yes, lab/diagnostic no | trace yes, replay/lab/diagnostic no | partial | Minimal trace is shipped, but replay/lab/diagnostic surfaces remain broader in-tree than in the built artifact. |
+| HTTP / web / gRPC / transport / service / remote / distributed / messaging / server / TLS / database | `/dp/asupersync/src/lib.rs` portable, feature-gated, and platform-gated modules | Local tree has `browser_boundary`, `browser_diagnostic`, `net`, `process`, `fs`, `signal`, but no corresponding public `http`, `grpc`, `service`, `transport`, `remote`, `distributed`, `messaging`, `server`, `tls`, or `database` module families | no | no | absent | This is the largest reopened parity gap: upstream exports these families, while the ANSI C tree mostly stops at kernel + a few preparatory seams. |
+| Browser / wasm profile and fail-closed compatibility matrix | `/dp/asupersync/src/lib.rs` compile-time wasm feature/profile guards | [`src/runtime/browser_boundary.c`](/data/projects/asupersync_ansi_c/src/runtime/browser_boundary.c), [`src/runtime/browser_diagnostic.c`](/data/projects/asupersync_ansi_c/src/runtime/browser_diagnostic.c), [`include/asx/runtime/browser_boundary.h`](/data/projects/asupersync_ansi_c/include/asx/runtime/browser_boundary.h) | no | yes | partial | Some browser-specific diagnostics exist, but the upstream-style fail-closed profile matrix is not mirrored at crate/root build-contract level. |
+
+### Key Findings
+
+1. The current repository contains more higher-surface code than the umbrella
+   header and archive build actually ship.
+2. Crate-level parity cannot be inferred from tree presence alone; `umbrella`
+   and `archive` exposure must be tracked separately from raw source presence.
+3. The reopened backlog was justified by three distinct gap classes:
+   `absent` families, `stub-only` families, and `partial but not shipped`
+   families.
+4. Downstream work should treat `bd-yx9r.2` as the feature/profile/build-matrix
+   follow-on to this appendix, and `bd-yx9r.3` as the evidence/gating follow-on.
+
+---
+
 ## Register Maintenance Rules
 
 1. **Adding items:** Any feature explicitly deferred during implementation must be added to this register with rationale and unblock criteria.

@@ -440,3 +440,128 @@ When creating or refining any new `bd-1eqo.*` bead, confirm:
 If a future contributor cannot answer those questions from this document, the
 inventory is incomplete and should be extended before more implementation beads
 are added.
+
+## 11. Current ANSI C Truth Table (2026-03-14, `bd-yx9r.1`)
+
+This section answers the missing question that the earlier inventory did not:
+
+> Which upstream exported families are actually present in the current ANSI C
+> tree, and which ones are still absent, skeletal, or materially narrower than
+> the Rust crate contract?
+
+Status terms used below:
+
+- `substantive`: dedicated public headers and source exist, plus tests/examples
+  show a real user-facing surface.
+- `partial`: meaningful public API exists, but it is materially narrower than
+  the upstream family or missing major subfamilies/contracts.
+- `stub-only`: a named surface exists, but the implementation is explicitly
+  skeletal, ghost-backed, or in-memory placeholder logic.
+- `absent`: no comparable public module family exists in the ANSI C tree today.
+
+One more nuance matters for roadmap truth-maintenance: some families exist in
+the repository tree but are not part of the default shipped surface because the
+current umbrella header (`include/asx/asx.h`) and archive build (`LIB_SRC` in
+`Makefile`) still center the kernel slice. In other words, "present in-tree"
+and "shipped by default" are not yet the same thing.
+
+### 11.1 Portable and Always-Exported Upstream Families
+
+| Upstream family | Current ANSI C state | Evidence in this repo | Gap / dependency note |
+|---|---|---|---|
+| `actor` | `partial` | `include/asx/actor/actor.h`, `src/actor/actor.c`, actor task/mailbox/call loop | Real actor API exists, but far smaller than the upstream actor ecosystem |
+| `app` | `partial` | `include/asx/app/app.h`, `include/asx/app/doctor.h`, `include/asx/app/report.h`, `src/app/*.c` | Bootstrap/doctor/report surface exists; not a full crate-level application stack |
+| `audit` | `partial` | `include/asx/security/audit.h`, `src/security/audit.c` | Audit/evidence helpers exist, but not the broader upstream audit + operator story |
+| `bytes` | `substantive` | `include/asx/bytes/*.h`, `src/bytes/*.c`, buffer/codec APIs | Strong local byte/buffer surface with tests; still much smaller than full upstream ecosystem |
+| `cancel` | `substantive` | `include/asx/core/cancel.h`, runtime cancellation integration, lifecycle tests/docs | Core cancel protocol is implemented and heavily verified |
+| `channel` | `substantive` | `include/asx/core/channel.h`, `broadcast.h`, `oneshot.h`, `session.h`, `watch.h`; `src/channel/*.c`; unit tests | MPSC plus related channel families are real, not placeholders |
+| `codec` | `partial` | `include/asx/codec/*.h`, `include/asx/bytes/codec.h`, `src/runtime/equivalence.c`, `src/bytes/codec.c` | Canonical fixture and framing codecs exist; far narrower than all upstream codec/application encoding surfaces |
+| `combinator` | `partial` | `include/asx/core/combinator.h`, `src/core/combinator*.c` | Join/race/select/timeout-style APIs exist, but not the broader upstream orchestration family |
+| `config` | `partial` | `include/asx/asx_config.h`, runtime/app config structs | Compile-time/runtime config exists, but not the richer upstream config module and loaders |
+| `conformance` | `partial` | `tests/conformance/`, `fixtures/rust_reference/`, `tools/ci/run_conformance.sh`, docs | Strong verification infrastructure exists, but no matching public `include/asx/conformance/...` family |
+| `console` | `absent` | No `include/asx/console/` or `src/console/` | No comparable public console/operator module |
+| `cx` | `partial` | `include/asx/cx/cx.h`, `include/asx/cx/scope.h`, `src/cx/*.c` | Capability context and scopes are present, but narrower than the upstream `Cx` ecosystem |
+| `decoding` | `absent` | No `include/asx/decoding/` or `src/decoding/` | Upstream decoding pipeline has no comparable C family |
+| `distributed` | `absent` | No `include/asx/distributed/` or `src/distributed/` | Entire distributed runtime family is missing |
+| `encoding` | `absent` | No `include/asx/encoding/` or `src/encoding/` | No public encoding pipeline or symbol-generation family |
+| `epoch` | `absent` | No `include/asx/epoch/` or `src/epoch/` | Barrier/epoch/circuit-breaker surface is missing |
+| `error` | `partial` | `include/asx/asx_status.h`, runtime error ledger, docs | Status/error taxonomy exists, but not the richer upstream `error` module and re-export set |
+| `evidence` | `partial` | `include/asx/runtime/diagnostic.h`, `include/asx/app/report.h`, `src/runtime/diagnostic.c` | Evidence collection exists, but not as a dedicated public family matching upstream scope |
+| `evidence_sink` | `partial` | `asx_evidence_sink` in `include/asx/runtime/diagnostic.h`, renderers in `src/app/report.c` | Structured sink exists, but it is embedded inside diagnostics rather than a full standalone module |
+| `gen_server` | `partial` | `include/asx/actor/actor.h`, `src/actor/actor.c` comment and behavior callbacks | Gen-server semantics are folded into actor behavior callbacks, not a distinct public family |
+| `http` | `absent` | No `include/asx/http/` or `src/http/` | Entire HTTP surface remains missing |
+| `io` | `partial` | `include/asx/bytes/io_adapter.h`, `include/asx/runtime/io_driver.h`, `src/runtime/io_driver.c` | Some I/O adapters exist, but no broad public async-IO module matching upstream |
+| `lab` | `partial` | `include/asx/runtime/lab.h`, `include/asx/runtime/replay.h`, `include/asx/runtime/snapshot.h`, `src/runtime/replay.c` | Deterministic lab/replay exists, but much narrower than upstream lab/oracle/explorer tooling |
+| `link` | `absent` | No `include/asx/link/` or `src/link/` | No comparable public linkage family |
+| `migration` | `absent` | No `include/asx/migration/` or `src/migration/` | Migration surfaces are missing |
+| `monitor` | `absent` | No `include/asx/monitor/` or `src/monitor/` | Monitoring family is absent apart from generic diagnostics |
+| `net` | `stub-only` | `include/asx/net/net.h`, `src/net/net.c` explicitly says "Walking skeleton: ghost stubs" | Public names exist, but listener/stream logic is skeletal and non-OS-backed |
+| `obligation` | `partial` | Obligation lifecycle is inside runtime/core headers and docs, not a dedicated `include/asx/obligation/` family | Semantics exist, but the exported module family is not mirrored directly |
+| `observability` | `partial` | diagnostics, telemetry, hindsight, report/evidence headers and sources | Useful diagnostics exist, but not the broader upstream observability surface |
+| `plan` | `partial` | `include/asx/plan/plan.h`, `src/plan/plan.c` | Plan DAG/IR surface exists in reduced form |
+| `raptorq` | `absent` | No `include/asx/raptorq/` or `src/raptorq/` | Entire erasure-coding family is missing |
+| `record` | `absent` | No public `include/asx/record/` family | Internal lifecycle state exists, but not as an exported record module |
+| `remote` | `absent` | No `include/asx/remote/` or `src/remote/` | Remote/idempotency/saga surfaces are missing |
+| `runtime` | `substantive` | `include/asx/runtime/*.h`, `src/runtime/*.c`, extensive runtime tests/docs | This is the strongest implemented family after core/channel/time/trace |
+| `security` | `partial` | `include/asx/security/*.h`, `src/security/*.c` | Security/audit primitives exist, but not the full upstream security scope |
+| `service` | `absent` | No `include/asx/service/` or `src/service/` | No service-builder/service-stack family |
+| `session` | `partial` | `include/asx/core/session.h`, `src/channel/session.c` | Session-related channel semantics exist, but not a broad standalone session module |
+| `spork` | `absent` | No `include/asx/spork/` or `src/spork/` | No comparable orchestration/operator family |
+| `stream` | `partial` | `include/asx/stream/stream.h`, `src/stream/stream.c` | Stream utilities exist, but not the full upstream streaming ecosystem |
+| `supervision` | `partial` | `include/asx/actor/supervisor.h`, `src/actor/supervisor.c` | Real supervisor logic exists, but still much smaller than upstream supervision families |
+| `sync` | `partial` | `include/asx/sync/*.h`, `src/sync/*.c` | Mutex/once/semaphore/barrier/notify exist, but not the full upstream sync surface |
+| `time` | `substantive` | `include/asx/time/*.h`, `src/time/*.c`, timer tests/docs | Timer wheel, deadline, and sleep surfaces are real and verified |
+| `trace` | `substantive` | `include/asx/runtime/trace.h`, event log/telemetry/hindsight/reporting, conformance docs/tests | Trace/replay evidence is a real product surface here |
+| `tracing_compat` | `absent` | No `include/asx/tracing_compat/` or equivalent | No optional tracing integration family |
+| `transport` | `absent` | No `include/asx/transport/` or `src/transport/` | No reusable transport abstraction layer |
+| `types` | `partial` | `include/asx/asx_ids.h`, `asx_status.h`, `asx_config.h`, `asx_abi.h`, `abi/wasm_abi.h` | Many foundational value types exist, but not the broad upstream `types` export set |
+| `util` | `absent` | No public `include/asx/util/` family | Internal helpers exist, but no exported util module |
+| `web` | `absent` | No `include/asx/web/` or `src/web/` | Entire web/browser/server framework family is missing |
+
+### 11.2 Feature-Gated and Platform-Gated Upstream Families
+
+| Upstream family | Current ANSI C state | Evidence in this repo | Gap / dependency note |
+|---|---|---|---|
+| `cli` | `absent` | No `include/asx/cli/`, no standalone CLI binary source tree | README/plan mention CLI-like workflows, but crate-style CLI surface is missing |
+| `database` | `absent` | No `include/asx/database/` or `src/database/` | Entire database client family is missing |
+| `tls` | `absent` | No `include/asx/tls/` or `src/tls/` | No transport-security family today |
+| `fs` | `partial` | `include/asx/fs/fs.h`, `src/fs/fs.c` deterministic in-memory host surface | Useful API exists, but it is not a native OS filesystem integration layer |
+| `grpc` | `absent` | No `include/asx/grpc/` or `src/grpc/` | Entire gRPC family is missing |
+| `messaging` | `absent` | No `include/asx/messaging/` or `src/messaging/` | Entire broker/client family is missing |
+| `process` | `partial` | `include/asx/process/process.h`, `src/process/process.c` deterministic child-process model | Public process API exists, but it is not a full host-process integration layer |
+| `server` | `partial` | `asx_app_run_server` in `include/asx/app/app.h`, no `include/asx/server/` family | Some server bootstrap entry points exist, but no standalone server substrate |
+| `signal` | `partial` | `include/asx/signal/signal.h`, `src/signal/signal.c` deterministic signal subscription/raise logic | Real API exists, but it is not native signal integration |
+
+### 11.3 Adjacent Contract Surfaces That Still Exceed the C Tree
+
+| Upstream contract surface | Current ANSI C state | Evidence in this repo | Gap / dependency note |
+|---|---|---|---|
+| Browser/WASM product surface | `partial` | `include/asx/abi/wasm_abi.h`, `include/asx/runtime/browser_boundary.h`, `browser_diagnostic.h`, examples `ex_browser_*` | Some ABI/boundary tooling exists, but no `web` family or upstream-style fail-closed browser feature matrix |
+| Examples and smoke paths | `partial` | `examples/*.c`, `tests/e2e/*.sh`, `README.md` examples | Good kernel/lab/browser-boundary examples exist; HTTP/web/grpc/database/distributed example families do not |
+| Doctor/report/evidence workflow | `partial` | `include/asx/app/report.h`, `app/doctor.h`, `runtime/diagnostic.h`, `src/app/*.c` | Strong diagnostic story locally, but still narrower than upstream evidence/observability contract |
+| Test-helper / artifact surface | `partial` | `tests/test_log.h`, `tests/test_harness.h`, `tools/fixture_capture`, `fixtures/rust_reference/` | Verification tooling is strong, but not mirrored as public `test_logging` / `test_ndjson` / `test_utils` modules |
+
+### 11.4 Bottom-Line Roadmap Implications
+
+The current ANSI C tree is no longer just a tiny kernel spike. It already has
+substantive runtime, channel, time, trace, byte-buffer, and selected actor/app
+surfaces. That said, crate-level parity is still nowhere close to closure:
+
+- the implementation is strongest in kernel semantics, deterministic replay,
+  diagnostics, and a handful of host-style facades;
+- several named families exist only in narrowed form (`cx`, `lab`, `plan`,
+  `sync`, `stream`, `actor`, `supervision`, `app`, `security`);
+- some tree-present families are also not shipped by the default umbrella
+  header/archive build today, including representative surfaces such as
+  `actor`, `supervision`, `app`, `cx`, `sync`, `stream`, and parts of the lab
+  and diagnostics stack;
+- networking is still explicitly skeletal rather than production-capable;
+- major exported families remain entirely absent, including `http`, `web`,
+  `grpc`, `database`, `tls`, `messaging`, `distributed`, `remote`, `service`,
+  `transport`, `encoding`, `decoding`, `epoch`, `migration`, and `spork`.
+
+This is the truth-maintenance result that the reopened `bd-yx9r.*` roadmap
+needs to preserve: earlier deferred-surface documents correctly explained why
+many families were postponed, but they did not themselves prove that crate-level
+parity claims had become misleading relative to the current upstream export
+surface.

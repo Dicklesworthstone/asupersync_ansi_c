@@ -60,24 +60,25 @@ tested via canonical digest comparison, and queryable at runtime via
 | 5 | HFT | High-frequency trading | Busy spin | `-DASX_PROFILE_HFT` |
 | 6 | AUTOMOTIVE | Safety-critical / deadline | Sleep | `-DASX_PROFILE_AUTOMOTIVE` |
 | 7 | PARALLEL | Multi-threaded lane scheduler | Yield | `-DASX_PROFILE_PARALLEL` |
+| 8 | BROWSER | Sandboxed browser/WASM boundary profile | Yield | `-DASX_PROFILE_BROWSER` |
 
 ### 3.2 Operational Parameters (R2 defaults)
 
-| Property | CORE | POSIX | WIN32 | FREE | ROUTER | HFT | AUTO | PARALLEL |
-|----------|------|-------|-------|------|--------|-----|------|----------|
-| Max regions | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |
-| Max tasks | 64 | 64 | 64 | 64 | 64 | 64 | 64 | 64 |
-| Max obligations | 128 | 128 | 128 | 128 | 128 | 128 | 128 | 128 |
-| Max timers | 128 | 128 | 128 | 128 | 128 | 128 | 128 | 128 |
-| Trace capacity | 1024 | 1024 | 1024 | 256 | 256 | 1024 | 1024 | 1024 |
-| Ghost monitors | debug | debug | debug | debug | debug | **no** | debug | debug |
-| Allocator sealable | no | no | no | **yes** | **yes** | no | no | no |
-| Default resource class | R2 | R2 | R2 | R2 | R2 | R2 | R2 | R2 |
+| Property | CORE | POSIX | WIN32 | FREE | ROUTER | HFT | AUTO | PARALLEL | BROWSER |
+|----------|------|-------|-------|------|--------|-----|------|----------|---------|
+| Max regions | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 | 8 |
+| Max tasks | 64 | 64 | 64 | 64 | 64 | 64 | 64 | 64 | 64 |
+| Max obligations | 128 | 128 | 128 | 128 | 128 | 128 | 128 | 128 | 128 |
+| Max timers | 128 | 128 | 128 | 128 | 128 | 128 | 128 | 128 | 128 |
+| Trace capacity | 1024 | 1024 | 1024 | 256 | 256 | 1024 | 1024 | 1024 | 256 |
+| Ghost monitors | debug | debug | debug | debug | debug | **no** | debug | debug | debug |
+| Allocator sealable | no | no | no | **yes** | **yes** | no | no | no | **yes** |
+| Default resource class | R2 | R2 | R2 | R2 | R2 | R2 | R2 | R2 | R2 |
 
 **Key distinctions:**
 - **HFT** disables ghost monitors entirely (even in debug) to eliminate jitter.
-- **FREESTANDING** and **EMBEDDED_ROUTER** enable allocator sealing for static-memory-first operation.
-- **FREESTANDING** and **EMBEDDED_ROUTER** reduce trace capacity to 256 for constrained memory.
+- **FREESTANDING**, **EMBEDDED_ROUTER**, and **BROWSER** enable allocator sealing.
+- **FREESTANDING**, **EMBEDDED_ROUTER**, and **BROWSER** reduce trace capacity to 256.
 
 ### 3.3 Wait Policy Semantics
 
@@ -222,6 +223,7 @@ All combinations are supported. Recommended pairings marked with **★**:
 | HFT | ✓ | ✓ | **★** |
 | AUTOMOTIVE | ✓ | **★** | ✓ |
 | PARALLEL | ✓ | ✓ | **★** |
+| BROWSER | **★** | ✓ | ✓ |
 
 ### 7.2 Profile × Safety Level
 
@@ -237,6 +239,7 @@ All combinations are supported:
 | HFT | ✓* | ✓ | **★** |
 | AUTOMOTIVE | ✓ | **★** | ✓ |
 | PARALLEL | **★** | ✓ | ✓ |
+| BROWSER | ✓ | **★** | ✓ |
 
 *HFT + DEBUG: ghost monitors remain disabled (HFT override), but error ledger
 and transition checks remain active.
@@ -256,7 +259,41 @@ boundaries that produce compile errors or deterministic runtime failures:
 
 ---
 
-## 8. User-Visible Limits Summary
+## 8. Upstream Crate-Contract Drift Audit (`bd-yx9r.2`)
+
+The upstream Rust crate contract is broader than the current C profile matrix.
+The table below maps the crate-root feature/platform restrictions from
+`/dp/asupersync/src/lib.rs` to the current ANSI C state.
+
+| Upstream contract | Current ANSI C equivalent | State | Evidence / gap |
+|---|---|---|---|
+| `wasm32` must choose exactly one canonical browser profile | `ASX_PROFILE_BROWSER` exists in `include/asx/asx_config.h` and `src/runtime/profile_compat.c` | `gap` | The runtime knows about a browser profile, but the documented profile matrix and `Makefile` do not expose a browser build lane or mutually-exclusive browser subprofiles |
+| `native-runtime` forbidden on browser builds | Browser boundary gates native surfaces | `partial` | `include/asx/runtime/browser_boundary.h` fail-closes filesystem/process/signal/io/blocking surfaces, but there is no compile-time `native-runtime`-style feature gate model |
+| `browser-io` forbidden with upstream minimal browser profile | Native I/O blocked under browser boundary | `partial` | `ASX_SURFACE_IO_DRIVER` is denied in browser mode, but there is no separate browser-IO feature flag or profile-minimal compile check |
+| `browser-trace` forbidden with upstream minimal browser profile | No separate browser trace feature | `gap` | The C tree has browser diagnostics and trace support, but no compile-time browser trace subprofile split |
+| `cli` unsupported on browser builds | No `cli` module in C | `gap` | The C port currently lacks a public CLI family entirely, so there is no feature-gated fail-closed browser rule to enforce |
+| `io-uring` unsupported on browser builds | No io_uring feature surface in C | `mapped-by-absence` | No equivalent feature exists yet; once native reactor features expand, browser incompatibility must become explicit |
+| `tls`, `tls-native-roots`, `tls-webpki-roots` unsupported on browser builds | No TLS family in C | `mapped-by-absence` | Entire TLS feature family is absent, so the contract is currently unmet rather than enforced |
+| `sqlite`, `postgres`, `mysql` unsupported on browser builds | No database family in C | `mapped-by-absence` | Entire database feature family is absent, so there is no profile/target gate to enforce yet |
+| `kafka` unsupported on browser builds | No messaging family in C | `mapped-by-absence` | Messaging/broker family is absent, so the upstream restriction is not yet represented |
+| Native-only modules (`fs`, `grpc`, `messaging`, `process`, `server`, `signal`) excluded from wasm32 | Browser boundary exists for some native surfaces | `partial` | The boundary currently covers filesystem/process/signal/io/blocking, but not a full native-vs-browser public module matrix across grpc/messaging/server families |
+
+### 8.1 Missing Fail-Closed Checks Before Parity Claims
+
+The current C tree still needs these explicit fail-closed controls before it
+can honestly claim equivalence with the upstream feature/platform matrix:
+
+1. A documented and buildable browser profile lane in `Makefile` and CI.
+2. Compile-time mutual exclusion for browser-specific subprofiles if the C port
+   adopts more than one browser mode.
+3. Explicit compile-time or runtime gating for future native-only module
+   families such as TLS, database, messaging, gRPC, and server substrate work.
+4. A single compatibility matrix that states which combinations are supported,
+   denied, or currently unimplemented rather than leaving absence implicit.
+
+---
+
+## 9. User-Visible Limits Summary
 
 ### What users should expect:
 
@@ -284,7 +321,7 @@ boundaries that produce compile errors or deterministic runtime failures:
 
 ---
 
-## 9. Parity Obligations for Downstream Beads
+## 10. Parity Obligations for Downstream Beads
 
 | Downstream Bead | What This Matrix Provides |
 |-----------------|--------------------------|
@@ -299,7 +336,7 @@ boundaries that produce compile errors or deterministic runtime failures:
 
 ---
 
-## 10. E2E Test Lanes by Profile
+## 11. E2E Test Lanes by Profile
 
 | Profile | E2E Script | Focus |
 |---------|-----------|-------|
@@ -311,11 +348,13 @@ boundaries that produce compile errors or deterministic runtime failures:
 
 ---
 
-## 11. Open Questions
+## 12. Open Questions
 
-1. **Browser profile:** The Rust upstream defines browser/wasm-facing feature
-   rules. The C port does not yet have `ASX_PROFILE_BROWSER`. This should be
-   addressed by bd-1eqo.16 when it becomes unblocked.
+1. **Browser profile lane:** The runtime and diagnostics already know about
+   `ASX_PROFILE_BROWSER`, but the build matrix and public docs still understate
+   it. We need an explicit decision on whether to formalize a real browser
+   build lane now or keep it as a partial internal boundary scaffold until the
+   broader `web`/WASM surface is unblocked.
 
 2. **Resource class R0 (micro):** Some IoT targets may need even tighter limits
    than R1 (e.g., 2 regions, 8 tasks). Not currently planned — evaluate when
