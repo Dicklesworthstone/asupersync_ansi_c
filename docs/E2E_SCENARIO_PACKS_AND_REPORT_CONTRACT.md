@@ -503,7 +503,89 @@ The following packs are presumptively golden-log sensitive:
 | `PACK-SERVICE-COMPOSITION` | `bd-1eqo.13.*`, `bd-1eqo.9.*` |
 | `PACK-ADVANCED-DISTRIBUTED` | `bd-1eqo.9.*`, `bd-1eqo.10.*`, future distributed follow-ons |
 
-## 10. What This Bead Must Prevent
+## 10. Reopened Crate-Level Surface Contract (`bd-yx9r.3`)
+
+The earlier `bd-1eqo.*` scenario-pack contract covered the kernel-centered
+roadmap. The reopened crate-parity pass needs one more rule:
+
+> no reopened subsystem family may begin implementation work without a default
+> end-to-end evidence shape that names its happy path, degraded path, failure
+> path, emitted artifacts, and any required differential-fixture lane.
+
+This section defines that default shape so `bd-yx9r.*` child beads do not
+recreate the old failure mode where a surface was "present" but had no honest
+crate-level acceptance contract.
+
+### 10.1 Default Family-to-Pack Mapping
+
+| Reopened family | Default pack(s) | Minimum named paths before coding starts | Required artifacts beyond the shared minimum |
+|---|---|---|---|
+| Core public/runtime completion (`bd-yx9r.4`, `bd-yx9r.6`) | `PACK-STRUCTURED-RUNTIME`, `PACK-LAB-REPLAY` | happy: clean bootstrap/use/close; degraded: constrained-resource or compatibility fallback; failure: invalid transition, exhausted budget, or replay drift | replay pointer, transition summary, failure-classification object |
+| Capability/security/evidence (`bd-yx9r.5`) | `PACK-STRUCTURED-RUNTIME`, `PACK-DOCTOR-DIAGNOSTICS` | happy: authority flow accepted; degraded: reduced-authority or audit-only mode; failure: fail-closed authority breach or evidence sink refusal | audit artifact, evidence manifest, remediation recipe when non-pass |
+| Combinator/service/transport/remote/spork (`bd-yx9r.7`) | `PACK-SERVICE-COMPOSITION`, `PACK-ADVANCED-DISTRIBUTED` | happy: composed workflow succeeds; degraded: retry/discovery/backpressure fallback; failure: winner/loser mismatch, exhausted retries, or remote contract break | policy-decision trace, composition summary, remote inspection hint |
+| Network core and advanced transport (`bd-yx9r.8`, `bd-yx9r.9`) | `PACK-NATIVE-HOST`, `PACK-ADVANCED-DISTRIBUTED` | happy: connect/exchange/shutdown flow; degraded: fallback transport, timeout, or partial capability mode; failure: connection refusal, protocol mismatch, lease expiry, or shutdown stall | transport transcript, shutdown report, network failure digest |
+| HTTP/web/gRPC application surfaces (`bd-yx9r.10`) | `PACK-SERVICE-COMPOSITION`, `PACK-NATIVE-HOST`, `PACK-BROWSER-CORE` when browser-facing | happy: request/response or route flow; degraded: middleware fallback, downgraded protocol, or unsupported feature report; failure: routing/marshal/auth rejection with retained context | request-flow summary, route/middleware trace, compatibility matrix output when browser/native boundaries matter |
+| Data, messaging, and distributed systems (`bd-yx9r.11`) | `PACK-ADVANCED-DISTRIBUTED`, `PACK-DOCTOR-DIAGNOSTICS` | happy: client/broker/store round-trip; degraded: retry, rebalance, or read-only/snapshot mode; failure: dedup conflict, compensation failure, consistency breach, or broker disconnect | transition log, state snapshot pointer, operator-facing failure recipe |
+| Developer/operator/acceptance surfaces (`bd-yx9r.12`) | `PACK-ONBOARD-CORE`, `PACK-DOCTOR-DIAGNOSTICS`, `PACK-BROWSER-CORE` or `PACK-NATIVE-HOST` as applicable | happy: documented example or tool run succeeds; degraded: partial workspace or limited profile still yields actionable output; failure: unsupported profile, malformed input, or missing artifact is explained | tutorial-quality summary, rerun command, docs-safe artifact bundle |
+| Actor/gen_server/supervision (`bd-yx9r.19`) | `PACK-ADVANCED-DISTRIBUTED`, `PACK-LAB-REPLAY` | happy: supervised workflow converges; degraded: restart with bounded service loss; failure: escalation, mailbox violation, or non-replayable recovery | ancestry/restart report, mailbox trace, replay manifest |
+
+### 10.2 Differential-Fixture Rules
+
+Differential fixtures are required when a reopened family claims any of the
+following:
+
+- semantic equivalence to the Rust reference for a user-visible flow,
+- identical canonical digest across codecs or profiles for a shared scenario,
+- browser/native parity for the same workflow family,
+- deterministic replay or trace stability across repeated executions.
+
+At minimum, those beads must define:
+
+- one canonical scenario ID shared between Rust and C when Rust coverage exists,
+- the profile and codec matrix being compared,
+- the exact digest, summary, or event-shape fields that must remain equal,
+- where minimized counterexamples or first-failure artifacts are retained.
+
+### 10.3 Feature-Gated and Platform-Specific Exclusion Rules
+
+Justified exclusions are acceptable only when all of the following are true:
+
+1. the excluded surface is explicitly absent, stub-only, or platform-forbidden
+   in [`docs/RUST_EXPORTED_SURFACE_INVENTORY.md`](./RUST_EXPORTED_SURFACE_INVENTORY.md)
+   or
+   [`docs/PROFILE_RESOURCE_CLASS_CAPABILITY_MATRIX.md`](./PROFILE_RESOURCE_CLASS_CAPABILITY_MATRIX.md),
+2. the bead records which scenario pack would have applied if the surface were
+   implemented,
+3. the pack still includes an unsupported/degraded scenario proving the boundary
+   fails closed with actionable diagnostics,
+4. the artifact manifest preserves the exclusion rationale and the exact gate
+   that triggered it.
+
+Examples that normally require an exclusion record rather than silent omission:
+
+- browser builds rejecting native host, filesystem, process, signal, or other
+  native-only surfaces,
+- browser or minimal-profile builds rejecting TLS, database, messaging, or web
+  surfaces,
+- native builds rejecting browser-only cookbook or compatibility scenarios,
+- partial-in-tree but not-shipped modules where the pack must document why the
+  source is insufficient for crate-level acceptance.
+
+### 10.4 Closure Implication
+
+No `bd-yx9r.*` child bead that reopens a crate-level family should close
+without pointing back to this section and naming:
+
+- the governing scenario pack(s),
+- at least one happy, degraded, and failure scenario,
+- required emitted artifacts,
+- whether a differential fixture is required or explicitly excluded with
+  rationale.
+
+That rule is what makes final crate-level parity acceptance auditable instead of
+implicit.
+
+## 11. What This Bead Must Prevent
 
 This scenario-pack contract exists to prevent:
 
@@ -515,7 +597,7 @@ This scenario-pack contract exists to prevent:
 - e2e suites that only prove “did not crash” rather than “is usable and
   explainable.”
 
-## 11. Review Checklist
+## 12. Review Checklist
 
 Before closing a future implementation bead that touches user-facing workflows,
 contributors should confirm:
