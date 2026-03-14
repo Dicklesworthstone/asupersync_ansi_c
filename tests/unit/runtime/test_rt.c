@@ -371,22 +371,47 @@ TEST(reload_config_rejects_restart_required_change_without_mutation) {
     asx_runtime_shutdown(&rt);
 }
 
-TEST(umbrella_exposes_state_deadline_and_lab_surfaces) {
+TEST(umbrella_exposes_runtime_support_surfaces) {
     asx_runtime_snapshot snap;
     asx_auto_deadline_tracker dt;
     asx_lab_config lab_cfg;
     asx_vtime_state vt;
+    asx_adapter_decision adapter_decision;
+    asx_hindsight_policy hindsight_policy;
+    asx_perf_snapshot perf_snapshot;
 
     asx_runtime_snapshot_init(&snap);
     asx_auto_deadline_init(&dt);
     asx_lab_config_init(&lab_cfg);
     asx_vtime_init(&vt, 0u, 1000u);
+    asx_event_log_reset();
+    asx_hindsight_init();
+    asx_telemetry_reset();
+    asx_parallel_reset();
+    memset(&adapter_decision, 0, sizeof(adapter_decision));
+    memset(&hindsight_policy, 0, sizeof(hindsight_policy));
+    memset(&perf_snapshot, 0, sizeof(perf_snapshot));
 
     ASSERT_EQ(snap.region_count, 0u);
     ASSERT_EQ(asx_auto_deadline_miss_rate(&dt), 0u);
     ASSERT_EQ(lab_cfg.max_polls, 1024u);
     ASSERT_EQ(asx_vtime_current(&vt), (asx_time)0u);
     ASSERT_EQ(dt.total_deadlines, 0u);
+    ASSERT_EQ(asx_event_log_count(), 0u);
+    ASSERT_EQ(asx_parallel_cancel_streak_limit(), 16u);
+    ASSERT_EQ(asx_parallel_is_initialized(), 0);
+    ASSERT_EQ(asx_telemetry_get_tier(), ASX_TELEMETRY_FORENSIC);
+    ASSERT_EQ(asx_hindsight_readable_count(), 0u);
+    ASSERT_STR_EQ(asx_adapter_domain_str(ASX_ADAPTER_DOMAIN_AUTOMOTIVE), "Automotive");
+    ASSERT_STR_EQ(asx_event_kind_str(ASX_EVENT_TASK_SPAWN), "task_spawn");
+    ASSERT_STR_EQ(asx_nd_event_kind_str(ASX_ND_IO_READY), "io_ready");
+    ASSERT_STR_EQ(asx_telemetry_tier_str(ASX_TELEMETRY_ULTRA_MIN), "ultra_min");
+    ASSERT_STR_EQ(asx_adapter_name(ASX_ADAPTER_HFT), "HFT_LATENCY");
+    ASSERT_STR_EQ(asx_subsystem_name(ASX_SUBSYS_TIMER), "timer");
+    ASSERT_EQ(adapter_decision.triggered, 0);
+    ASSERT_EQ(perf_snapshot.total_events, 0u);
+    ASSERT_EQ(hindsight_policy.flush_on_invariant, 0);
+    ASSERT_EQ(hindsight_policy.flush_on_divergence, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -555,7 +580,7 @@ int main(void) {
     RUN_TEST(validate_reload_reports_restart_required_field);
     RUN_TEST(reload_config_updates_reloadable_fields);
     RUN_TEST(reload_config_rejects_restart_required_change_without_mutation);
-    RUN_TEST(umbrella_exposes_state_deadline_and_lab_surfaces);
+    RUN_TEST(umbrella_exposes_runtime_support_surfaces);
 
     /* State queries */
     RUN_TEST(region_count_null_returns_zero);

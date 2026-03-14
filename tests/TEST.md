@@ -75,6 +75,8 @@ Use `rch exec -- make <target>` to offload compilation to remote workers.
 | test_stress | runtime | 17 | Arena exhaustion, cancel storms, timer churn |
 | test_hft_instrument | runtime | 34 | HFT instrumentation |
 | test_mpsc | channel | 39 | MPSC bounded two-phase channel |
+| test_link | link | 3 | Public link request/response coordination |
+| test_record | record | 3 | Public record snapshot/event summary surface |
 | test_timer_wheel | time | 22 | Hierarchical timer wheel |
 
 ### Invariant Tests (`tests/invariant/`)
@@ -95,6 +97,7 @@ before API/ABI freeze (`make test-vignettes`):
 - `vignette_replay.c` — deterministic trace/replay and snapshot flows
 - `vignette_hooks.c` — freestanding runtime hook integration
 - `vignette_security.c` — authenticated symbol, derived-context rejection, and audit/evidence flows
+- `vignette_link.c` — public link/session round-trip with obligation and record capture
 
 ### End-to-End Tests (`tests/e2e/`)
 

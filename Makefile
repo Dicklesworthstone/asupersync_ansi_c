@@ -160,7 +160,8 @@ RUNTIME_SRC := \
 	src/runtime/waker.c
 
 CHANNEL_SRC := \
-	src/channel/mpsc.c
+	src/channel/mpsc.c \
+	src/channel/session.c
 
 TIME_SRC := \
 	src/time/timer_wheel.c
@@ -188,6 +189,9 @@ CX_SRC := \
 	src/cx/cx.c \
 	src/cx/scope.c
 
+LINK_SRC := \
+	src/link/link.c
+
 # Platform sources selected by profile
 ifeq ($(PROFILE),POSIX)
   PLATFORM_SRC := src/platform/posix/hooks.c
@@ -201,7 +205,7 @@ else
   PLATFORM_SRC :=
 endif
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(PLATFORM_SRC)
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -225,6 +229,10 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/runtime/test_*.c) \
                  $(wildcard tests/unit/channel/*_test.c) \
                  $(wildcard tests/unit/channel/test_*.c) \
+                 $(wildcard tests/unit/link/*_test.c) \
+                 $(wildcard tests/unit/link/test_*.c) \
+                 $(wildcard tests/unit/record/*_test.c) \
+                 $(wildcard tests/unit/record/test_*.c) \
                  $(wildcard tests/unit/time/*_test.c) \
                  $(wildcard tests/unit/time/test_*.c) \
                  $(wildcard tests/unit/cx/*_test.c) \
@@ -266,7 +274,6 @@ CX_TEST_EXTRA_SRC := \
 	src/bytes/buf.c \
 	src/runtime/diagnostic.c \
 	src/channel/oneshot.c \
-	src/channel/session.c \
 	src/channel/broadcast.c \
 	src/channel/watch.c \
 	src/sync/notify.c \
@@ -279,6 +286,7 @@ CX_TEST_EXTRA_SRC := \
 
 SECURITY_VIGNETTE_EXTRA_SRC := $(CX_TEST_EXTRA_SRC)
 SECURITY_AUDIT_TEST_EXTRA_SRC := $(CX_TEST_EXTRA_SRC)
+PUBLIC_FAMILY_TEST_EXTRA_SRC := $(CX_TEST_EXTRA_SRC)
 
 # ---------------------------------------------------------------------------
 # E2E scripts
@@ -358,6 +366,7 @@ obj-dirs:
 	@mkdir -p $(OBJ_DIR)/core $(OBJ_DIR)/runtime $(OBJ_DIR)/channel \
 	          $(OBJ_DIR)/time $(OBJ_DIR)/security $(OBJ_DIR)/stream \
 	          $(OBJ_DIR)/fs $(OBJ_DIR)/process $(OBJ_DIR)/signal \
+	          $(OBJ_DIR)/link \
 	          $(OBJ_DIR)/plan $(OBJ_DIR)/cx \
 	          $(OBJ_DIR)/platform/posix \
 	          $(OBJ_DIR)/platform/win32 $(OBJ_DIR)/platform/freestanding
@@ -565,6 +574,15 @@ $(TEST_DIR)/unit/cx/test_scope: tests/unit/cx/test_scope.c $(CX_TEST_EXTRA_SRC) 
 
 $(TEST_DIR)/unit/security/test_security_audit: tests/unit/security/test_security_audit.c $(SECURITY_AUDIT_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(SECURITY_AUDIT_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
+$(TEST_DIR)/unit/channel/test_session: tests/unit/channel/test_session.c $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
+$(TEST_DIR)/unit/link/test_link: tests/unit/link/test_link.c $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
+$(TEST_DIR)/unit/record/test_record: tests/unit/record/test_record.c $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
 $(TEST_DIR)/unit/%: tests/unit/%.c $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
@@ -809,9 +827,13 @@ $(TEST_DIR)/vignettes/vignette_lifecycle: tests/vignettes/vignette_lifecycle.c $
 $(TEST_DIR)/vignettes/vignette_security: tests/vignettes/vignette_security.c $(SECURITY_VIGNETTE_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(SECURITY_VIGNETTE_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
+$(TEST_DIR)/vignettes/vignette_link: tests/vignettes/vignette_link.c $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
 test-dirs:
 	@mkdir -p $(TEST_DIR)/unit/core $(TEST_DIR)/unit/runtime \
-	          $(TEST_DIR)/unit/channel $(TEST_DIR)/unit/time \
+	          $(TEST_DIR)/unit/channel $(TEST_DIR)/unit/link \
+	          $(TEST_DIR)/unit/record $(TEST_DIR)/unit/time \
 	          $(TEST_DIR)/unit/security $(TEST_DIR)/unit/fs \
 	          $(TEST_DIR)/unit/process $(TEST_DIR)/unit/signal \
 	          $(TEST_DIR)/unit/stream $(TEST_DIR)/unit/plan \

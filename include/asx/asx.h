@@ -69,7 +69,16 @@
 #include <asx/runtime/lab.h>
 #include <asx/runtime/virtual_time.h>
 #include <asx/runtime/snapshot.h>
+#include <asx/runtime/event.h>
+#include <asx/runtime/hindsight.h>
+#include <asx/runtime/telemetry.h>
+#include <asx/runtime/parallel.h>
 #include <asx/runtime/automotive_instrument.h>
+#include <asx/runtime/hft_instrument.h>
+#include <asx/runtime/overload_catalog.h>
+#include <asx/runtime/adapter.h>
+#include <asx/runtime/vertical_adapter.h>
+#include <asx/runtime/regression_localize.h>
 #include <asx/runtime/trace.h>
 #include <asx/runtime/waker.h>
 

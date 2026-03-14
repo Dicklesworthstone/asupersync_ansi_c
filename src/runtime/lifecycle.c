@@ -251,6 +251,7 @@ asx_status asx_region_open(asx_region_id *out_id) {
     *out_id = asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
                               asx_handle_pack_index(g_regions[idx].generation, (uint16_t)idx));
 
+    (void)asx_event_emit(ASX_EVENT_REGION_OPEN, *out_id, 0u, ASX_OK);
     asx_trace_emit(ASX_TRACE_REGION_OPEN, *out_id, 0);
     return ASX_OK;
 }
@@ -271,6 +272,7 @@ asx_status asx_region_close(asx_region_id id) {
     if (st != ASX_OK) return st;
 
     r->state = ASX_REGION_CLOSING;
+    (void)asx_event_emit(ASX_EVENT_REGION_CLOSE, id, 0u, ASX_OK);
     asx_trace_emit(ASX_TRACE_REGION_CLOSE, id, 0);
     return ASX_OK;
 }
@@ -392,6 +394,7 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     *out_id = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
                               asx_handle_pack_index(g_tasks[idx].generation, (uint16_t)idx));
 
+    (void)asx_event_emit(ASX_EVENT_TASK_SPAWN, *out_id, (uint64_t)region, ASX_OK);
     asx_trace_emit(ASX_TRACE_TASK_SPAWN, *out_id, (uint64_t)region);
     return ASX_OK;
 }
@@ -515,6 +518,7 @@ asx_status asx_obligation_reserve(asx_region_id region, asx_obligation_id *out_i
     /* Ghost linearity monitor: track obligation reservation */
     asx_ghost_obligation_reserved(*out_id);
 
+    (void)asx_event_emit(ASX_EVENT_OBLIGATION_CREATE, *out_id, (uint64_t)region, ASX_OK);
     asx_trace_emit(ASX_TRACE_OBLIGATION_RESERVE, *out_id, (uint64_t)region);
     return ASX_OK;
 }
@@ -537,6 +541,7 @@ asx_status asx_obligation_commit(asx_obligation_id id) {
     /* Ghost linearity monitor: track obligation resolution */
     asx_ghost_obligation_resolved(id);
 
+    (void)asx_event_emit(ASX_EVENT_OBLIGATION_COMMIT, id, 0u, ASX_OK);
     asx_trace_emit(ASX_TRACE_OBLIGATION_COMMIT, id, 0);
     return ASX_OK;
 }
@@ -559,6 +564,7 @@ asx_status asx_obligation_abort(asx_obligation_id id) {
     /* Ghost linearity monitor: track obligation resolution */
     asx_ghost_obligation_resolved(id);
 
+    (void)asx_event_emit(ASX_EVENT_OBLIGATION_ABORT, id, 0u, ASX_OK);
     asx_trace_emit(ASX_TRACE_OBLIGATION_ABORT, id, 0);
 
     return ASX_OK;

@@ -492,20 +492,20 @@ and "shipped by default" are not yet the same thing.
 | `http` | `absent` | No `include/asx/http/` or `src/http/` | Entire HTTP surface remains missing |
 | `io` | `partial` | `include/asx/bytes/io_adapter.h`, `include/asx/runtime/io_driver.h`, `src/runtime/io_driver.c` | Some I/O adapters exist, but no broad public async-IO module matching upstream |
 | `lab` | `partial` | `include/asx/runtime/lab.h`, `include/asx/runtime/replay.h`, `include/asx/runtime/snapshot.h`, `src/runtime/replay.c` | Deterministic lab/replay exists, but much narrower than upstream lab/oracle/explorer tooling |
-| `link` | `absent` | No `include/asx/link/` or `src/link/` | No comparable public linkage family |
+| `link` | `partial` | `include/asx/link/link.h`, `src/link/link.c`, `tests/unit/link/test_link.c`, `tests/vignettes/vignette_link.c` | Public coordination link now exists on top of shipped sessions, but it is still far smaller than upstream cross-runtime/linkage scope |
 | `migration` | `absent` | No `include/asx/migration/` or `src/migration/` | Migration surfaces are missing |
 | `monitor` | `absent` | No `include/asx/monitor/` or `src/monitor/` | Monitoring family is absent apart from generic diagnostics |
 | `net` | `stub-only` | `include/asx/net/net.h`, `src/net/net.c` explicitly says "Walking skeleton: ghost stubs" | Public names exist, but listener/stream logic is skeletal and non-OS-backed |
-| `obligation` | `partial` | Obligation lifecycle is inside runtime/core headers and docs, not a dedicated `include/asx/obligation/` family | Semantics exist, but the exported module family is not mirrored directly |
+| `obligation` | `partial` | `include/asx/obligation/obligation.h`, runtime obligation lifecycle, `tests/vignettes/vignette_obligations.c`, `tests/vignettes/vignette_link.c` | Dedicated public helpers now mirror the obligation family, but the broader upstream proof/lifecycle surface is still richer |
 | `observability` | `partial` | diagnostics, telemetry, hindsight, report/evidence headers and sources | Useful diagnostics exist, but not the broader upstream observability surface |
 | `plan` | `partial` | `include/asx/plan/plan.h`, `src/plan/plan.c` | Plan DAG/IR surface exists in reduced form |
 | `raptorq` | `absent` | No `include/asx/raptorq/` or `src/raptorq/` | Entire erasure-coding family is missing |
-| `record` | `absent` | No public `include/asx/record/` family | Internal lifecycle state exists, but not as an exported record module |
+| `record` | `partial` | `include/asx/record/record.h`, runtime event/snapshot capture, `tests/unit/record/test_record.c`, `tests/vignettes/vignette_link.c` | Public record helpers now expose snapshot and event-log summaries, but not the full upstream record/history ecosystem |
 | `remote` | `absent` | No `include/asx/remote/` or `src/remote/` | Remote/idempotency/saga surfaces are missing |
 | `runtime` | `substantive` | `include/asx/runtime/*.h`, `src/runtime/*.c`, extensive runtime tests/docs | This is the strongest implemented family after core/channel/time/trace |
 | `security` | `partial` | `include/asx/security/*.h`, `src/security/*.c`, `tests/vignettes/vignette_security.c` | Security/audit primitives and logged authenticated flows exist, but the full upstream security scope is still broader |
 | `service` | `absent` | No `include/asx/service/` or `src/service/` | No service-builder/service-stack family |
-| `session` | `partial` | `include/asx/core/session.h`, `src/channel/session.c` | Session-related channel semantics exist, but not a broad standalone session module |
+| `session` | `partial` | `include/asx/session/session.h`, `include/asx/core/session.h`, `src/channel/session.c`, `tests/unit/channel/test_session.c`, `tests/vignettes/vignette_link.c` | Session is now a shipped standalone public family, but it remains a reduced subset of the upstream session/orchestration story |
 | `spork` | `absent` | No `include/asx/spork/` or `src/spork/` | No comparable orchestration/operator family |
 | `stream` | `partial` | `include/asx/stream/stream.h`, `src/stream/stream.c` | Stream utilities exist, but not the full upstream streaming ecosystem |
 | `supervision` | `partial` | `include/asx/actor/supervisor.h`, `src/actor/supervisor.c` | Real supervisor logic exists, but still much smaller than upstream supervision families |

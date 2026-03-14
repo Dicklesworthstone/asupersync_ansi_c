@@ -20,6 +20,7 @@
 
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
+#include <asx/runtime/adapter.h>
 #include <asx/runtime/automotive_instrument.h>
 #include <asx/runtime/hft_instrument.h>
 #include <asx/runtime/overload_catalog.h>
@@ -41,7 +42,10 @@ typedef enum {
     ASX_ADAPTER_COUNT = 3
 } asx_adapter_id;
 
-typedef enum { ASX_ADAPTER_MODE_FALLBACK = 0, ASX_ADAPTER_MODE_ACCELERATED = 1 } asx_adapter_mode;
+/* Reuse the shared adapter mode type from adapter.h. Keep the older
+ * vertical-adapter spellings as aliases so existing call sites remain valid. */
+#define ASX_ADAPTER_MODE_FALLBACK ASX_ADAPTER_FALLBACK
+#define ASX_ADAPTER_MODE_ACCELERATED ASX_ADAPTER_ACCELERATED
 
 /* -------------------------------------------------------------------
  * Adapter descriptor
