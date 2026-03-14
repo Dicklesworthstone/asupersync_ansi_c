@@ -480,7 +480,7 @@ and "shipped by default" are not yet the same thing.
 | `config` | `partial` | `include/asx/asx_config.h`, runtime/app config structs | Compile-time/runtime config exists, but not the richer upstream config module and loaders |
 | `conformance` | `partial` | `tests/conformance/`, `fixtures/rust_reference/`, `tools/ci/run_conformance.sh`, docs | Strong verification infrastructure exists, but no matching public `include/asx/conformance/...` family |
 | `console` | `absent` | No `include/asx/console/` or `src/console/` | No comparable public console/operator module |
-| `cx` | `partial` | `include/asx/cx/cx.h`, `include/asx/cx/scope.h`, `src/cx/*.c` | Capability context and scopes are present, but narrower than the upstream `Cx` ecosystem |
+| `cx` | `partial` | `include/asx/cx/cx.h`, `include/asx/cx/scope.h`, `src/cx/*.c`, umbrella/header + archive build exposure | Capability context and scopes now ship publicly, but the broader upstream `Cx` ecosystem and more propagation points are still missing |
 | `decoding` | `absent` | No `include/asx/decoding/` or `src/decoding/` | Upstream decoding pipeline has no comparable C family |
 | `distributed` | `absent` | No `include/asx/distributed/` or `src/distributed/` | Entire distributed runtime family is missing |
 | `encoding` | `absent` | No `include/asx/encoding/` or `src/encoding/` | No public encoding pipeline or symbol-generation family |
