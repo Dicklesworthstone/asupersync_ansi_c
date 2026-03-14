@@ -319,7 +319,9 @@ build: $(LIB_A)
 	@echo "[asx] build complete (profile=$(PROFILE) codec=$(CODEC) det=$(DETERMINISTIC))"
 
 $(LIB_A): $(LIB_OBJ) | $(LIB_DIR)
-	$(AR) rcs $@ $^
+	@tmp="$@.$$$$.tmp"; \
+	$(AR) rcs "$$tmp" $^ && \
+	mv "$$tmp" "$@"
 
 $(OBJ_DIR)/%.o: src/%.c | obj-dirs
 	$(CC) $(ALL_CFLAGS) $(DEP_FLAGS) -c -o $@ $<

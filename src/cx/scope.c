@@ -92,9 +92,12 @@ asx_status asx_scope_init(asx_scope *scope, asx_region_id region, const asx_cx *
     if (scope == NULL || cx == NULL) return ASX_E_INVALID_ARGUMENT;
     if (region == ASX_INVALID_ID) return ASX_E_INVALID_ARGUMENT;
     if (!asx_cx_has_cap(cx, ASX_CAP_SPAWN)) return ASX_E_PERMISSION_DENIED;
+    if (cx->region_id != region) return ASX_E_PERMISSION_DENIED;
 
     scope->region_id = region;
     scope->cx = *cx;
+    scope->cx.region_id = region;
+    scope->cx.task_id = ASX_INVALID_ID;
     scope->budget = budget;
     scope->spawned = 0;
     return ASX_OK;
@@ -104,8 +107,29 @@ asx_status asx_scope_init(asx_scope *scope, asx_region_id region, const asx_cx *
 /* Scope spawn                                                         */
 /* ------------------------------------------------------------------ */
 
+static asx_status scope_bind_spawned_cx(const asx_scope *scope, asx_task_id tid,
+                                        asx_cap_flags child_caps, asx_cx *out_cx) {
+    asx_status st;
+
+    if (out_cx == NULL) return ASX_OK;
+
+    st = asx_cx_narrow(&scope->cx, out_cx, child_caps);
+    if (st != ASX_OK) return st;
+
+    out_cx->region_id = scope->region_id;
+    out_cx->task_id = tid;
+    return ASX_OK;
+}
+
 asx_status asx_scope_spawn(asx_scope *scope, asx_task_poll_fn poll_fn, void *user_data,
                            asx_task_handle *out_handle) {
+    return asx_scope_spawn_with_cx(scope, scope != NULL ? scope->cx.caps : ASX_CAP_NONE, poll_fn,
+                                   user_data, out_handle, NULL);
+}
+
+asx_status asx_scope_spawn_with_cx(asx_scope *scope, asx_cap_flags child_caps,
+                                   asx_task_poll_fn poll_fn, void *user_data,
+                                   asx_task_handle *out_handle, asx_cx *out_cx) {
     asx_task_id tid;
     asx_status st;
 
@@ -118,6 +142,8 @@ asx_status asx_scope_spawn(asx_scope *scope, asx_task_poll_fn poll_fn, void *use
     out_handle->task_id = tid;
     out_handle->region_id = scope->region_id;
     out_handle->joined = 0;
+    st = scope_bind_spawned_cx(scope, tid, child_caps, out_cx);
+    if (st != ASX_OK) return st;
     scope->spawned++;
     return ASX_OK;
 }
