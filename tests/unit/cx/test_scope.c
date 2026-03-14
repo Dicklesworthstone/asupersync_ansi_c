@@ -111,6 +111,25 @@ TEST(scope_init_no_spawn_cap_fails) {
     teardown();
 }
 
+TEST(scope_init_region_mismatch_fails_closed) {
+    asx_scope scope;
+    asx_cx wrong_region;
+    setup();
+    MUST_OK(asx_cx_init(&wrong_region, g_rid + 1u, ASX_INVALID_ID, ASX_CAP_ALL));
+    ASSERT_EQ(asx_scope_init(&scope, g_rid, &wrong_region, asx_budget_infinite()),
+              ASX_E_PERMISSION_DENIED);
+    teardown();
+}
+
+TEST(scope_init_invalid_cx_fails) {
+    asx_scope scope;
+    asx_cx invalid;
+    memset(&invalid, 0, sizeof(invalid));
+    setup();
+    ASSERT_EQ(asx_scope_init(&scope, g_rid, &invalid, asx_budget_infinite()), ASX_E_INVALID_STATE);
+    teardown();
+}
+
 TEST(scope_init_success) {
     asx_scope scope;
     setup();
@@ -170,6 +189,54 @@ TEST(scope_spawn_multiple) {
     ASSERT_EQ(asx_scope_spawned_count(&scope), 3u);
     ASSERT_NE(h1.task_id, h2.task_id);
     ASSERT_NE(h2.task_id, h3.task_id);
+    teardown();
+}
+
+TEST(scope_spawn_with_cx_binds_spawned_task) {
+    asx_scope scope;
+    asx_task_handle h;
+    asx_cx child_cx;
+    setup();
+    MUST_OK(asx_scope_init(&scope, g_rid, &g_cx, asx_budget_infinite()));
+    ASSERT_EQ(asx_scope_spawn_with_cx(&scope, ASX_CAP_CLOCK_READ | ASX_CAP_CANCEL_CHECK,
+                                      poll_immediate_ok, NULL, &h, &child_cx),
+              ASX_OK);
+    ASSERT_EQ(asx_cx_region(&child_cx), g_rid);
+    ASSERT_EQ(asx_cx_task(&child_cx), h.task_id);
+    ASSERT_TRUE(asx_cx_has_cap(&child_cx, ASX_CAP_CLOCK_READ));
+    ASSERT_TRUE(asx_cx_has_cap(&child_cx, ASX_CAP_CANCEL_CHECK));
+    ASSERT_FALSE(asx_cx_has_cap(&child_cx, ASX_CAP_SPAWN));
+    teardown();
+}
+
+TEST(scope_spawn_with_cx_escalation_fails) {
+    asx_scope scope;
+    asx_task_handle h;
+    asx_cx child_cx;
+    asx_cx limited;
+    setup();
+    MUST_OK(asx_cx_init(&limited, g_rid, ASX_INVALID_ID, ASX_CAP_SPAWN | ASX_CAP_CLOCK_READ));
+    MUST_OK(asx_scope_init(&scope, g_rid, &limited, asx_budget_infinite()));
+    ASSERT_EQ(asx_scope_spawn_with_cx(&scope, ASX_CAP_SPAWN | ASX_CAP_ENTROPY, poll_immediate_ok,
+                                      NULL, &h, &child_cx),
+              ASX_E_INVALID_ARGUMENT);
+    teardown();
+}
+
+TEST(scope_spawn_with_cx_escalation_does_not_spawn_task) {
+    asx_scope scope;
+    asx_task_handle h;
+    asx_cx child_cx;
+    asx_cx limited;
+    setup();
+    MUST_OK(asx_cx_init(&limited, g_rid, ASX_INVALID_ID, ASX_CAP_SPAWN | ASX_CAP_CLOCK_READ));
+    MUST_OK(asx_scope_init(&scope, g_rid, &limited, asx_budget_infinite()));
+    h.task_id = ASX_INVALID_ID;
+    ASSERT_EQ(asx_scope_spawn_with_cx(&scope, ASX_CAP_SPAWN | ASX_CAP_ENTROPY, poll_immediate_ok,
+                                      NULL, &h, &child_cx),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_scope_spawned_count(&scope), 0u);
+    ASSERT_EQ(h.task_id, ASX_INVALID_ID);
     teardown();
 }
 
@@ -357,6 +424,8 @@ int main(void) {
     RUN_TEST(scope_init_null_cx_fails);
     RUN_TEST(scope_init_invalid_region_fails);
     RUN_TEST(scope_init_no_spawn_cap_fails);
+    RUN_TEST(scope_init_region_mismatch_fails_closed);
+    RUN_TEST(scope_init_invalid_cx_fails);
     RUN_TEST(scope_init_success);
 
     /* Scope spawn */
@@ -365,6 +434,9 @@ int main(void) {
     RUN_TEST(scope_spawn_null_handle_fails);
     RUN_TEST(scope_spawn_success);
     RUN_TEST(scope_spawn_multiple);
+    RUN_TEST(scope_spawn_with_cx_binds_spawned_task);
+    RUN_TEST(scope_spawn_with_cx_escalation_fails);
+    RUN_TEST(scope_spawn_with_cx_escalation_does_not_spawn_task);
 
     /* Task handle */
     RUN_TEST(handle_null_returns_invalid);

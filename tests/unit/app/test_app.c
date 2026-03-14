@@ -338,6 +338,59 @@ static void test_app_run_noop(void) {
     asx_app_shutdown(&app);
 }
 
+static void test_app_run_with_cx_noop(void) {
+    asx_app app;
+    asx_app_config config;
+    asx_exit_code ec;
+    asx_cx cx;
+
+    memset(&config, 0, sizeof(config));
+    config.name = "test_app";
+    config.poll_budget = 100;
+
+    MUST_OK(asx_app_init(&app, &config));
+    MUST_OK(asx_cx_init(&cx, asx_app_region(&app), ASX_INVALID_ID, ASX_CAP_SPAWN));
+
+    ec = asx_app_run_with_cx(&app, &cx, noop_poll, NULL);
+    ASSERT(ec == ASX_EXIT_OK, "noop run with cx ok");
+
+    asx_app_shutdown(&app);
+}
+
+static void test_app_run_with_cx_permission_denied(void) {
+    asx_app app;
+    asx_app_config config;
+    asx_cx cx;
+
+    memset(&config, 0, sizeof(config));
+    config.name = "test_app";
+
+    MUST_OK(asx_app_init(&app, &config));
+    MUST_OK(asx_cx_init(&cx, asx_app_region(&app), ASX_INVALID_ID, ASX_CAP_CLOCK_READ));
+
+    ASSERT(asx_app_run_with_cx(&app, &cx, noop_poll, NULL) == ASX_EXIT_TASK_FAILED,
+           "run with cx no spawn denied");
+
+    asx_app_shutdown(&app);
+}
+
+static void test_app_run_with_cx_region_mismatch(void) {
+    asx_app app;
+    asx_app_config config;
+    asx_cx cx;
+
+    memset(&config, 0, sizeof(config));
+    config.name = "test_app";
+
+    MUST_OK(asx_app_init(&app, &config));
+    MUST_OK(asx_cx_init(&cx, asx_app_region(&app) + 1u, ASX_INVALID_ID, ASX_CAP_SPAWN));
+
+    ASSERT(asx_app_run_with_cx(&app, &cx, noop_poll, NULL) == ASX_EXIT_TASK_FAILED,
+           "run with cx wrong region denied");
+
+    asx_app_shutdown(&app);
+}
+
 static void test_app_region(void) {
     asx_app app;
     asx_app_config config;
@@ -360,9 +413,16 @@ static void test_app_null_args(void) {
     ASSERT(asx_app_init(NULL, &config) == ASX_E_INVALID_ARGUMENT, "null app");
     ASSERT(asx_app_init(&app, NULL) == ASX_E_INVALID_ARGUMENT, "null config");
     ASSERT(asx_app_run(NULL, noop_poll, NULL) == ASX_EXIT_ERROR, "null app run");
+    ASSERT(asx_app_run_with_cx(NULL, NULL, noop_poll, NULL) == ASX_EXIT_ERROR, "null app run cx");
+    ASSERT(asx_app_run_server_with_cx(NULL, NULL, NULL, noop_poll, NULL, NULL, NULL) == ASX_EXIT_ERROR,
+           "null app run server cx");
 
     memset(&app, 0, sizeof(app));
     ASSERT(asx_app_run(&app, noop_poll, NULL) == ASX_EXIT_INIT_FAILED, "uninit app run");
+    ASSERT(asx_app_run_with_cx(&app, NULL, noop_poll, NULL) == ASX_EXIT_ERROR, "null cx run");
+    ASSERT(asx_app_run_server_with_cx(&app, NULL, NULL, noop_poll, NULL, NULL, NULL)
+               == ASX_EXIT_ERROR,
+           "null server cx run");
     ASSERT(asx_app_region(NULL) == 0, "null app region");
 }
 
@@ -405,6 +465,35 @@ static void test_app_run_server_happy_path(void) {
     asx_app_shutdown(&app);
 }
 
+static void test_app_run_server_with_cx_happy_path(void) {
+    asx_app app;
+    asx_app_config config;
+    asx_app_server_config server;
+    asx_app_server_report report;
+    asx_cx cx;
+
+    memset(&config, 0, sizeof(config));
+    memset(&server, 0, sizeof(server));
+    config.name = "srv";
+    config.poll_budget = 20;
+    server.shutdown_signal = ASX_SIGNAL_TERM;
+    server.bootstrap_process_name = "sidecar";
+    server.run_poll_budget = 20;
+
+    MUST_OK(asx_app_init(&app, &config));
+    MUST_OK(asx_cx_init(&cx, asx_app_region(&app), ASX_INVALID_ID, ASX_CAP_SPAWN));
+
+    ASSERT(asx_app_run_server_with_cx(&app, &cx, &server, noop_poll, NULL, &report, NULL)
+               == ASX_EXIT_OK,
+           "server run with cx ok");
+    ASSERT(app.exit_code == ASX_EXIT_OK, "app exit code updated");
+    ASSERT(report.bootstrap_process_spawned == 1, "bootstrap spawned");
+    ASSERT(report.signal_subscription_active == 1, "signal subscribed");
+    ASSERT(report.main_task_spawned == 1, "main task spawned");
+
+    asx_app_shutdown(&app);
+}
+
 static void test_app_run_server_requires_config(void) {
     asx_app app;
     asx_app_config config;
@@ -428,6 +517,7 @@ static void test_app_run_server_requires_config(void) {
         ASSERT(asx_app_run_server(&app, &server, noop_poll, NULL, &report, NULL)
                    == ASX_EXIT_INIT_FAILED,
                "missing required config fails");
+        ASSERT(app.exit_code == ASX_EXIT_INIT_FAILED, "app exit code updated on init failure");
         ASSERT(report.last_status == ASX_E_NOT_FOUND, "missing config status");
     }
 
@@ -476,6 +566,62 @@ static void test_app_run_server_bootstrap_failure(void) {
            "unexpected bootstrap failure bubbles");
     ASSERT(report.bootstrap_process_exited == 1, "bootstrap exited");
     ASSERT(report.bootstrap_process_exit_code == 23, "non-zero code preserved");
+    asx_app_shutdown(&app);
+}
+
+static void test_app_run_server_with_cx_permission_denied_fails_closed(void) {
+    asx_app app;
+    asx_app_config config;
+    asx_app_server_config server;
+    asx_app_server_report report;
+    asx_cx cx;
+
+    memset(&config, 0, sizeof(config));
+    memset(&server, 0, sizeof(server));
+    config.name = "srv";
+    server.shutdown_signal = ASX_SIGNAL_TERM;
+    server.bootstrap_process_name = "sidecar";
+
+    MUST_OK(asx_app_init(&app, &config));
+    MUST_OK(asx_cx_init(&cx, asx_app_region(&app), ASX_INVALID_ID, ASX_CAP_CLOCK_READ));
+
+    ASSERT(asx_app_run_server_with_cx(&app, &cx, &server, noop_poll, NULL, &report, NULL)
+               == ASX_EXIT_TASK_FAILED,
+           "server run without spawn denied");
+    ASSERT(app.exit_code == ASX_EXIT_TASK_FAILED, "app exit code updated on deny");
+    ASSERT(report.last_status == ASX_E_PERMISSION_DENIED, "permission denied reported");
+    ASSERT(report.config_loaded == 0, "config not touched");
+    ASSERT(report.bootstrap_process_spawned == 0, "bootstrap not spawned");
+    ASSERT(report.signal_subscription_active == 0, "signal not subscribed");
+    ASSERT(report.main_task_spawned == 0, "main task not spawned");
+
+    asx_app_shutdown(&app);
+}
+
+static void test_app_run_server_with_cx_region_mismatch_fails_closed(void) {
+    asx_app app;
+    asx_app_config config;
+    asx_app_server_config server;
+    asx_app_server_report report;
+    asx_cx cx;
+
+    memset(&config, 0, sizeof(config));
+    memset(&server, 0, sizeof(server));
+    config.name = "srv";
+    server.shutdown_signal = ASX_SIGNAL_TERM;
+    server.bootstrap_process_name = "sidecar";
+
+    MUST_OK(asx_app_init(&app, &config));
+    MUST_OK(asx_cx_init(&cx, asx_app_region(&app) + 1u, ASX_INVALID_ID, ASX_CAP_SPAWN));
+
+    ASSERT(asx_app_run_server_with_cx(&app, &cx, &server, noop_poll, NULL, &report, NULL)
+               == ASX_EXIT_TASK_FAILED,
+           "server run wrong region denied");
+    ASSERT(report.last_status == ASX_E_PERMISSION_DENIED, "region mismatch reported");
+    ASSERT(report.bootstrap_process_spawned == 0, "bootstrap not spawned");
+    ASSERT(report.signal_subscription_active == 0, "signal not subscribed");
+    ASSERT(report.main_task_spawned == 0, "main task not spawned");
+
     asx_app_shutdown(&app);
 }
 
@@ -585,12 +731,18 @@ int main(void) {
     /* App: lifecycle */
     RUN(test_app_init_shutdown);
     RUN(test_app_run_noop);
+    RUN(test_app_run_with_cx_noop);
+    RUN(test_app_run_with_cx_permission_denied);
+    RUN(test_app_run_with_cx_region_mismatch);
     RUN(test_app_region);
     RUN(test_app_null_args);
     RUN(test_app_run_server_happy_path);
+    RUN(test_app_run_server_with_cx_happy_path);
     RUN(test_app_run_server_requires_config);
     RUN(test_app_run_server_signal_shutdown);
     RUN(test_app_run_server_bootstrap_failure);
+    RUN(test_app_run_server_with_cx_permission_denied_fails_closed);
+    RUN(test_app_run_server_with_cx_region_mismatch_fails_closed);
 
     /* Doctor */
     RUN(test_doctor_initialized_runtime);

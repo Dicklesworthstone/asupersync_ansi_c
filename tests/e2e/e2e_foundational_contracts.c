@@ -411,6 +411,49 @@ static void scenario_full_lifecycle_composition(void) {
 }
 
 /* -------------------------------------------------------------------
+ * Scenario 9: Public error taxonomy drives retry/escalation policy
+ *
+ * Exercises the user-facing status taxonomy helpers in a realistic
+ * decision loop instead of only checking literal strings in unit tests.
+ * ------------------------------------------------------------------- */
+
+static void scenario_error_taxonomy_recovery_planning(void) {
+    SCENARIO_BEGIN("foundational.error_taxonomy_recovery");
+
+    asx_status transient = ASX_E_CHANNEL_FULL;
+    asx_status permanent = ASX_E_PERMISSION_DENIED;
+    asx_status contextual = ASX_E_RESOURCE_EXHAUSTED;
+    asx_backoff_hint hint = asx_status_backoff_hint(transient);
+
+    SCENARIO_CHECK(asx_status_category(transient) == ASX_ERROR_CATEGORY_CHANNEL,
+                   "channel_full should classify as channel");
+    SCENARIO_CHECK(asx_status_recoverability(transient) == ASX_RECOVERABILITY_TRANSIENT,
+                   "channel_full should be transient");
+    SCENARIO_CHECK(asx_status_recovery_action(transient) == ASX_RECOVERY_RETRY_IMMEDIATELY,
+                   "channel_full should retry immediately");
+    SCENARIO_CHECK(asx_status_is_retryable(transient), "channel_full should be retryable");
+    SCENARIO_CHECK(hint.max_attempts > 0, "retryable status should have backoff guidance");
+
+    SCENARIO_CHECK(asx_status_category(permanent) == ASX_ERROR_CATEGORY_PERMISSION,
+                   "permission_denied should classify as permission");
+    SCENARIO_CHECK(asx_status_recoverability(permanent) == ASX_RECOVERABILITY_PERMANENT,
+                   "permission_denied should be permanent");
+    SCENARIO_CHECK(asx_status_recovery_action(permanent) == ASX_RECOVERY_PROPAGATE,
+                   "permission_denied should propagate");
+    SCENARIO_CHECK(!asx_status_is_retryable(permanent),
+                   "permission_denied should not be retryable");
+
+    SCENARIO_CHECK(asx_status_recoverability(contextual) == ASX_RECOVERABILITY_CONTEXT_DEPENDENT,
+                   "resource_exhausted should remain context-dependent");
+    SCENARIO_CHECK(asx_status_recovery_action(contextual) == ASX_RECOVERY_RETRY_WITH_BACKOFF,
+                   "resource_exhausted should suggest backoff");
+    SCENARIO_CHECK(strcmp(asx_error_category_str(asx_status_category(contextual)), "resource") == 0,
+                   "resource_exhausted category string should be stable");
+
+    SCENARIO_END();
+}
+
+/* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
 
@@ -423,6 +466,7 @@ int main(void) {
     scenario_policy_driven_containment();
     scenario_cancel_chain_budget_interaction();
     scenario_full_lifecycle_composition();
+    scenario_error_taxonomy_recovery_planning();
 
     printf("SCENARIO _summary %s total=%d pass=%d fail=%d\n", g_fail > 0 ? "fail" : "pass",
            g_pass + g_fail, g_pass, g_fail);
