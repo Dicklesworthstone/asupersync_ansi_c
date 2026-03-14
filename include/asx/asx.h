@@ -62,6 +62,10 @@
 #include <asx/runtime/profile_compat.h>
 #include <asx/runtime/browser_boundary.h>
 #include <asx/runtime/browser_diagnostic.h>
+#include <asx/runtime/lab.h>
+#include <asx/runtime/virtual_time.h>
+#include <asx/runtime/snapshot.h>
+#include <asx/runtime/automotive_instrument.h>
 #include <asx/runtime/trace.h>
 #include <asx/runtime/waker.h>
 

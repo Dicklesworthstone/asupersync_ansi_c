@@ -14,11 +14,7 @@
  */
 
 #include "../../test_harness.h"
-#include <asx/runtime/blocking.h>
-#include <asx/runtime/browser_boundary.h>
-#include <asx/runtime/io_driver.h>
-#include <asx/runtime/rt.h>
-#include <asx/runtime/runtime.h>
+#include <asx/asx.h>
 #include <string.h>
 
 /* Suppress warn_unused_result in test helpers where we don't check */
@@ -375,6 +371,24 @@ TEST(reload_config_rejects_restart_required_change_without_mutation) {
     asx_runtime_shutdown(&rt);
 }
 
+TEST(umbrella_exposes_state_deadline_and_lab_surfaces) {
+    asx_runtime_snapshot snap;
+    asx_auto_deadline_tracker dt;
+    asx_lab_config lab_cfg;
+    asx_vtime_state vt;
+
+    asx_runtime_snapshot_init(&snap);
+    asx_auto_deadline_init(&dt);
+    asx_lab_config_init(&lab_cfg);
+    asx_vtime_init(&vt, 0u, 1000u);
+
+    ASSERT_EQ(snap.region_count, 0u);
+    ASSERT_EQ(asx_auto_deadline_miss_rate(&dt), 0u);
+    ASSERT_EQ(lab_cfg.max_polls, 1024u);
+    ASSERT_EQ(asx_vtime_current(&vt), (asx_time)0u);
+    ASSERT_EQ(dt.total_deadlines, 0u);
+}
+
 /* ------------------------------------------------------------------ */
 /* State query tests                                                   */
 /* ------------------------------------------------------------------ */
@@ -541,6 +555,7 @@ int main(void) {
     RUN_TEST(validate_reload_reports_restart_required_field);
     RUN_TEST(reload_config_updates_reloadable_fields);
     RUN_TEST(reload_config_rejects_restart_required_change_without_mutation);
+    RUN_TEST(umbrella_exposes_state_deadline_and_lab_surfaces);
 
     /* State queries */
     RUN_TEST(region_count_null_returns_zero);
