@@ -129,6 +129,7 @@ CORE_SRC := \
 
 RUNTIME_SRC := \
 	src/runtime/hooks.c \
+	src/runtime/builder.c \
 	src/runtime/rt.c \
 	src/runtime/equivalence.c \
 	src/runtime/lifecycle.c \

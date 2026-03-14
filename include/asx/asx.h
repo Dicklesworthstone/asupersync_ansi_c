@@ -50,6 +50,7 @@
 
 /* Runtime (walking skeleton — bd-ix8.8) */
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/builder.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/io_driver.h>
