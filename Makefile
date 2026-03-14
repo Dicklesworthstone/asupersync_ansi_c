@@ -183,6 +183,10 @@ SIGNAL_SRC := \
 PLAN_SRC := \
 	src/plan/plan.c
 
+CX_SRC := \
+	src/cx/cx.c \
+	src/cx/scope.c
+
 # Platform sources selected by profile
 ifeq ($(PROFILE),POSIX)
   PLATFORM_SRC := src/platform/posix/hooks.c
@@ -196,7 +200,7 @@ else
   PLATFORM_SRC :=
 endif
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(PLATFORM_SRC)
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -222,6 +226,8 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/channel/test_*.c) \
                  $(wildcard tests/unit/time/*_test.c) \
                  $(wildcard tests/unit/time/test_*.c) \
+                 $(wildcard tests/unit/cx/*_test.c) \
+                 $(wildcard tests/unit/cx/test_*.c) \
                  $(wildcard tests/unit/security/*_test.c) \
                  $(wildcard tests/unit/security/test_*.c) \
                  $(wildcard tests/unit/fs/*_test.c) \
@@ -254,6 +260,21 @@ VIGNETTE_TEST_BIN := $(patsubst tests/%.c,$(TEST_DIR)/%,$(VIGNETTE_TEST_SRC))
 TEST_CFLAGS := $(ALL_CFLAGS) -I$(CURDIR)/tests -I$(CURDIR)/src
 VIGNETTE_CFLAGS := $(STD_FLAGS) $(WARN_FLAGS) $(OPT_FLAGS) $(BITS_FLAGS) \
                    $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) $(CFLAGS)
+
+CX_TEST_EXTRA_SRC := \
+	src/bytes/buf.c \
+	src/runtime/diagnostic.c \
+	src/channel/oneshot.c \
+	src/channel/session.c \
+	src/channel/broadcast.c \
+	src/channel/watch.c \
+	src/sync/notify.c \
+	src/sync/semaphore.c \
+	src/sync/barrier.c \
+	src/sync/once.c \
+	src/actor/actor.c \
+	src/actor/supervisor.c \
+	src/net/net.c
 
 # ---------------------------------------------------------------------------
 # E2E scripts
@@ -333,7 +354,7 @@ obj-dirs:
 	@mkdir -p $(OBJ_DIR)/core $(OBJ_DIR)/runtime $(OBJ_DIR)/channel \
 	          $(OBJ_DIR)/time $(OBJ_DIR)/security $(OBJ_DIR)/stream \
 	          $(OBJ_DIR)/fs $(OBJ_DIR)/process $(OBJ_DIR)/signal \
-	          $(OBJ_DIR)/plan \
+	          $(OBJ_DIR)/plan $(OBJ_DIR)/cx \
 	          $(OBJ_DIR)/platform/posix \
 	          $(OBJ_DIR)/platform/win32 $(OBJ_DIR)/platform/freestanding
 
@@ -535,6 +556,9 @@ $(TEST_DIR)/unit/runtime/test_seqlock_ebr: tests/unit/runtime/test_seqlock_ebr.c
 	$(CC) $(TEST_CFLAGS) -o $@ $< src/runtime/seqlock_ebr_spike.c $(LIB_A) $(ALL_LDFLAGS)
 
 # Link individual unit tests
+$(TEST_DIR)/unit/cx/test_scope: tests/unit/cx/test_scope.c $(CX_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(CX_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
 $(TEST_DIR)/unit/%: tests/unit/%.c $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
 
@@ -771,6 +795,9 @@ $(TEST_DIR)/invariant/%: tests/invariant/%.c $(LIB_A) | test-dirs
 
 $(TEST_DIR)/vignettes/%: tests/vignettes/%.c $(LIB_A) | test-dirs
 	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
+
+$(TEST_DIR)/vignettes/vignette_lifecycle: tests/vignettes/vignette_lifecycle.c $(CX_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(CX_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
 test-dirs:
 	@mkdir -p $(TEST_DIR)/unit/core $(TEST_DIR)/unit/runtime \

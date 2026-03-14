@@ -310,6 +310,71 @@ TEST(get_hooks_uninitialized_fails) {
     ASSERT_EQ(asx_runtime_get_hooks_from(&rt, &out), ASX_E_INVALID_STATE);
 }
 
+TEST(validate_reload_uninitialized_fails) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+
+    memset(&rt, 0, sizeof(rt));
+    make_valid_config(&cfg);
+    ASSERT_EQ(asx_runtime_validate_reload_config(&rt, &cfg, NULL), ASX_E_INVALID_STATE);
+}
+
+TEST(validate_reload_reports_restart_required_field) {
+    asx_runtime rt;
+    asx_runtime_config cfg, proposed;
+    const char *rejection = NULL;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_runtime_get_config(&rt, &cfg), ASX_OK);
+    proposed = cfg;
+    proposed.max_cancel_chain_depth = (uint16_t)(cfg.max_cancel_chain_depth + 1u);
+
+    ASSERT_EQ(asx_runtime_validate_reload_config(&rt, &proposed, &rejection),
+              ASX_E_CONFIG_RESTART_REQ);
+    ASSERT_TRUE(rejection != NULL);
+    ASSERT_STR_EQ(rejection, "max_cancel_chain_depth");
+    asx_runtime_shutdown(&rt);
+}
+
+TEST(reload_config_updates_reloadable_fields) {
+    asx_runtime rt;
+    asx_runtime_config cfg, proposed, out;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_runtime_get_config(&rt, &cfg), ASX_OK);
+    proposed = cfg;
+    proposed.wait_policy = ASX_WAIT_BUSY_SPIN;
+    proposed.finalizer_poll_budget = 222u;
+    proposed.finalizer_time_budget_ns = (uint64_t)2222222u;
+
+    ASSERT_EQ(asx_runtime_reload_config(&rt, &proposed, NULL), ASX_OK);
+    ASSERT_EQ(asx_runtime_get_config(&rt, &out), ASX_OK);
+    ASSERT_EQ(out.wait_policy, ASX_WAIT_BUSY_SPIN);
+    ASSERT_EQ(out.finalizer_poll_budget, 222u);
+    ASSERT_EQ(out.finalizer_time_budget_ns, (uint64_t)2222222u);
+    asx_runtime_shutdown(&rt);
+}
+
+TEST(reload_config_rejects_restart_required_change_without_mutation) {
+    asx_runtime rt;
+    asx_runtime_config cfg, proposed, out;
+    const char *rejection = NULL;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_runtime_get_config(&rt, &cfg), ASX_OK);
+    proposed = cfg;
+    proposed.wait_policy = ASX_WAIT_BUSY_SPIN;
+    proposed.max_cancel_chain_memory = cfg.max_cancel_chain_memory + 512u;
+
+    ASSERT_EQ(asx_runtime_reload_config(&rt, &proposed, &rejection), ASX_E_CONFIG_RESTART_REQ);
+    ASSERT_TRUE(rejection != NULL);
+    ASSERT_STR_EQ(rejection, "max_cancel_chain_memory");
+    ASSERT_EQ(asx_runtime_get_config(&rt, &out), ASX_OK);
+    ASSERT_EQ(out.wait_policy, cfg.wait_policy);
+    ASSERT_EQ(out.max_cancel_chain_memory, cfg.max_cancel_chain_memory);
+    asx_runtime_shutdown(&rt);
+}
+
 /* ------------------------------------------------------------------ */
 /* State query tests                                                   */
 /* ------------------------------------------------------------------ */
@@ -472,6 +537,10 @@ int main(void) {
     RUN_TEST(get_hooks_null_rt_fails);
     RUN_TEST(get_hooks_null_out_fails);
     RUN_TEST(get_hooks_uninitialized_fails);
+    RUN_TEST(validate_reload_uninitialized_fails);
+    RUN_TEST(validate_reload_reports_restart_required_field);
+    RUN_TEST(reload_config_updates_reloadable_fields);
+    RUN_TEST(reload_config_rejects_restart_required_change_without_mutation);
 
     /* State queries */
     RUN_TEST(region_count_null_returns_zero);

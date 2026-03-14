@@ -27,6 +27,7 @@
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
+#include <asx/runtime/config_reload.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -107,6 +108,29 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_get_config(const asx_runtime *rt,
  *   ASX_E_INVALID_STATE if runtime is not initialized. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_get_hooks_from(const asx_runtime *rt,
                                                            asx_runtime_hooks *out);
+
+/* Validate whether a proposed config can be applied to an initialized runtime.
+ * Only RELOADABLE fields may differ from the current config.
+ * If rejection_field is non-NULL, it is set to the first offending field name.
+ * Returns ASX_OK if the config is reloadable, ASX_E_INVALID_ARGUMENT for
+ * invalid pointers/config, ASX_E_INVALID_STATE if the runtime is not initialized,
+ * ASX_E_CONFIG_FROZEN for frozen-field changes, or ASX_E_CONFIG_RESTART_REQ for
+ * restart-required field changes. */
+ASX_API ASX_MUST_USE asx_status
+asx_runtime_validate_reload_config(const asx_runtime *rt, const asx_runtime_config *proposed,
+                                   const char **rejection_field);
+
+/* Apply a validated config reload to an initialized runtime object.
+ * Only RELOADABLE fields may differ from the current config.
+ * If rejection_field is non-NULL, it is set to the first offending field name.
+ * Returns the same status codes as asx_runtime_validate_reload_config().
+ *
+ * Walking skeleton note: this updates the runtime object's stored config for
+ * subsequent queries and future subsystem decisions. Hook families and
+ * restart-required limits still require a full runtime restart. */
+ASX_API ASX_MUST_USE asx_status
+asx_runtime_reload_config(asx_runtime *rt, const asx_runtime_config *proposed,
+                          const char **rejection_field);
 
 /* Validate a runtime config without initializing.
  * Checks size field, bounds on fields (cancel chain depth, etc.).

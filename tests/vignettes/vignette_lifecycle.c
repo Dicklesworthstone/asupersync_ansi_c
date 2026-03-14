@@ -247,6 +247,92 @@ static int scenario_quiescence_manual(void) {
 }
 
 /* -------------------------------------------------------------------
+ * Scenario 4: capability-wrapped scope authority
+ * ------------------------------------------------------------------- */
+static int scenario_capability_wrapped_scope(void) {
+    asx_status st;
+    asx_region_id region;
+    asx_budget scope_budget;
+    asx_cx root_cx;
+    asx_cx scope_cx;
+    asx_cx child_cx;
+    asx_cx_wrapper wrapper;
+    asx_scope scope;
+    asx_task_handle handle;
+
+    printf("--- scenario: capability-wrapped scope ---\n");
+
+    asx_runtime_reset();
+
+    st = asx_region_open(&region);
+    if (st != ASX_OK) {
+        printf("  FAIL: region_open returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_cx_init(&root_cx, region, ASX_INVALID_ID,
+                     ASX_CAP_SPAWN | ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_cx_init returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_cx_wrap(&root_cx, ASX_CAP_SPAWN | ASX_CAP_CLOCK_READ, &wrapper);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_cx_wrap returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_cx_unwrap(&root_cx, &wrapper, &scope_cx);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_cx_unwrap returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    scope_budget = asx_budget_from_polls(64);
+    st = asx_scope_init(&scope, region, &scope_cx, scope_budget);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_scope_init returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_scope_spawn_with_cx(&scope, ASX_CAP_CLOCK_READ, poll_hello, NULL, &handle, &child_cx);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_scope_spawn_with_cx returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    printf("  child caps: clock=%d entropy=%d spawn=%d\n",
+           asx_cx_has_cap(&child_cx, ASX_CAP_CLOCK_READ),
+           asx_cx_has_cap(&child_cx, ASX_CAP_ENTROPY),
+           asx_cx_has_cap(&child_cx, ASX_CAP_SPAWN));
+
+    if (!asx_cx_has_cap(&child_cx, ASX_CAP_CLOCK_READ) ||
+        asx_cx_has_cap(&child_cx, ASX_CAP_ENTROPY) ||
+        asx_cx_has_cap(&child_cx, ASX_CAP_SPAWN)) {
+        printf("  FAIL: child authority was not narrowed correctly\n");
+        return 1;
+    }
+
+    st = asx_scope_spawn_with_cx(&scope, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY, poll_hello, NULL,
+                                 &handle, NULL);
+    if (st != ASX_E_INVALID_ARGUMENT) {
+        printf("  FAIL: widened child caps should fail closed, got %s\n", asx_status_str(st));
+        return 1;
+    }
+    printf("  widened child caps correctly rejected: %s\n", asx_status_str(st));
+
+    st = asx_scope_run(&scope);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_scope_run returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    printf("  PASS: capability-wrapped scope\n");
+    return 0;
+}
+
+/* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
 int main(void) {
@@ -257,6 +343,7 @@ int main(void) {
     failures += scenario_minimal();
     failures += scenario_captured_state();
     failures += scenario_quiescence_manual();
+    failures += scenario_capability_wrapped_scope();
 
     printf("\n=== lifecycle: %d failures ===\n", failures);
     return failures;

@@ -9,6 +9,7 @@
 
 #include <asx/asx_config.h>
 #include <asx/runtime/blocking.h>
+#include <asx/runtime/config_reload.h>
 #include <asx/runtime/io_driver.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
@@ -131,6 +132,38 @@ asx_status asx_runtime_get_hooks_from(const asx_runtime *rt, asx_runtime_hooks *
     if (rt == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!asx_runtime_is_initialized(rt)) return ASX_E_INVALID_STATE;
     *out = rt->hooks;
+    return ASX_OK;
+}
+
+asx_status asx_runtime_validate_reload_config(const asx_runtime *rt,
+                                              const asx_runtime_config *proposed,
+                                              const char **rejection_field) {
+    asx_config_state state;
+    asx_status st;
+
+    if (rt == NULL || proposed == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_runtime_is_initialized(rt)) return ASX_E_INVALID_STATE;
+
+    st = asx_runtime_config_validate(proposed);
+    if (st != ASX_OK) return st;
+
+    asx_config_state_init(&state);
+    st = asx_config_load(&state, &rt->config);
+    if (st != ASX_OK) return st;
+
+    return asx_config_validate_reload(&state, proposed, rejection_field);
+}
+
+asx_status asx_runtime_reload_config(asx_runtime *rt, const asx_runtime_config *proposed,
+                                     const char **rejection_field) {
+    asx_status st;
+
+    if (rt == NULL || proposed == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    st = asx_runtime_validate_reload_config(rt, proposed, rejection_field);
+    if (st != ASX_OK) return st;
+
+    rt->config = *proposed;
     return ASX_OK;
 }
 

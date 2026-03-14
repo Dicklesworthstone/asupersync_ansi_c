@@ -33,6 +33,10 @@
 /* Handle types and packing helpers */
 #include <asx/asx_ids.h>
 
+/* Capability context and structured concurrency */
+#include <asx/cx/cx.h>
+#include <asx/cx/scope.h>
+
 /* Core semantic types */
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
@@ -52,6 +56,7 @@
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/builder.h>
 #include <asx/runtime/rt.h>
+#include <asx/runtime/config_reload.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/io_driver.h>
 #include <asx/runtime/profile_compat.h>
