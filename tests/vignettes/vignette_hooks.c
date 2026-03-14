@@ -49,12 +49,22 @@ static asx_time custom_clock_now(void *ctx) {
 
 /* Entropy: deterministic PRNG (xorshift64). */
 static uint64_t g_prng_state = 42;
+static int g_reactor_waits = 0;
+
 static uint64_t custom_random(void *ctx) {
     (void)ctx;
     g_prng_state ^= g_prng_state << 13;
     g_prng_state ^= g_prng_state >> 7;
     g_prng_state ^= g_prng_state << 17;
     return g_prng_state;
+}
+
+static asx_status custom_ghost_reactor(void *ctx, uint64_t logical_step, uint32_t *ready_count) {
+    (void)ctx;
+    (void)logical_step;
+    g_reactor_waits++;
+    *ready_count = 2;
+    return ASX_OK;
 }
 
 /* Log sink: print to stderr. */
@@ -70,38 +80,18 @@ static asx_status poll_hook_smoke(void *ud, asx_task_id self) {
     return ASX_OK;
 }
 
-/* -------------------------------------------------------------------
- * Scenario 1: Hook installation and validation
- * ------------------------------------------------------------------- */
-static int scenario_hook_setup(void) {
-    asx_status st;
+static uint64_t blocking_add_seven(void *user_data) {
+    uint64_t input = *(uint64_t *)user_data;
+    return input + 7u;
+}
+
+static asx_status install_custom_hooks(void) {
     asx_runtime_hooks hooks;
+    asx_status st;
 
-    printf("--- scenario: hook setup ---\n");
-
-    /*
-     * ERGO: asx_runtime_hooks_init(&hooks) zero-initializes the hooks
-     * struct with safe defaults. This is the recommended starting point.
-     * Without it, the user would need to memset or manually initialize
-     * all 5 vtable structs — error-prone.
-     */
     st = asx_runtime_hooks_init(&hooks);
-    if (st != ASX_OK) {
-        printf("  FAIL: hooks_init returned %s\n", asx_status_str(st));
-        return 1;
-    }
+    if (st != ASX_OK) { return st; }
 
-    /*
-     * ERGO: Wiring up hooks requires setting function pointers on nested
-     * structs. The nesting (hooks.allocator.malloc_fn, hooks.clock.now_ns_fn)
-     * is logical but verbose. Each vtable category has its own .ctx pointer,
-     * which allows different contexts per category — powerful but adds
-     * boilerplate for the common case where all hooks share one context.
-     *
-     * SUGGESTION: Consider a convenience macro or function that takes
-     * a single context pointer and applies it to all vtable categories:
-     *   asx_runtime_hooks_set_ctx(&hooks, my_platform);
-     */
     hooks.allocator.malloc_fn = custom_malloc;
     hooks.allocator.realloc_fn = custom_realloc;
     hooks.allocator.free_fn = custom_free;
@@ -114,36 +104,40 @@ static int scenario_hook_setup(void) {
     hooks.entropy.random_u64_fn = custom_random;
     hooks.entropy.ctx = NULL;
 
+    hooks.reactor.ghost_wait_fn = custom_ghost_reactor;
+    hooks.reactor.ctx = NULL;
+
     hooks.log.write_fn = custom_log;
     hooks.log.ctx = NULL;
 
     hooks.deterministic_seeded_prng = 1;
 
+    st = asx_runtime_hooks_validate(&hooks, 1);
+    if (st != ASX_OK) { return st; }
+
+    return asx_runtime_set_hooks(&hooks);
+}
+
+/* -------------------------------------------------------------------
+ * Scenario 1: Hook installation and validation
+ * ------------------------------------------------------------------- */
+static int scenario_hook_setup(void) {
+    asx_status st;
+
+    printf("--- scenario: hook setup ---\n");
+
     /*
-     * ERGO: asx_runtime_hooks_validate checks that all required hooks
-     * are present for the given mode (deterministic vs non-deterministic).
-     * This is a valuable safety net — catches misconfiguration before
-     * runtime failures. The deterministic_mode parameter is explicit
-     * rather than read from global state — good for testing.
+     * ERGO: asx_runtime_hooks_init(&hooks) zero-initializes the hooks
+     * struct with safe defaults. This is the recommended starting point.
+     * Without it, the user would need to memset or manually initialize
+     * all 5 vtable structs — error-prone.
      */
-    st = asx_runtime_hooks_validate(&hooks, 1 /* deterministic */);
+    st = install_custom_hooks();
     if (st != ASX_OK) {
-        printf("  FAIL: hooks_validate returned %s\n", asx_status_str(st));
+        printf("  FAIL: install_custom_hooks returned %s\n", asx_status_str(st));
         return 1;
     }
     printf("  hook validation: PASS\n");
-
-    /*
-     * ERGO: asx_runtime_set_hooks installs the hooks globally.
-     * The hooks struct is copied internally, so the caller can let
-     * the local variable go out of scope. This is documented but
-     * could surprise users who expect pointer-based registration.
-     */
-    st = asx_runtime_set_hooks(&hooks);
-    if (st != ASX_OK) {
-        printf("  FAIL: set_hooks returned %s\n", asx_status_str(st));
-        return 1;
-    }
 
     /* Verify we can read back the installed hooks. */
     const asx_runtime_hooks *active = asx_runtime_get_hooks();
@@ -153,6 +147,10 @@ static int scenario_hook_setup(void) {
     }
     if (active->allocator.malloc_fn != custom_malloc) {
         printf("  FAIL: hooks not correctly installed\n");
+        return 1;
+    }
+    if (active->reactor.ghost_wait_fn != custom_ghost_reactor) {
+        printf("  FAIL: ghost reactor hook not installed\n");
         return 1;
     }
 
@@ -290,7 +288,79 @@ static int scenario_allocator_seal(void) {
 }
 
 /* -------------------------------------------------------------------
- * Scenario 5: End-to-end with custom hooks
+ * Scenario 5: Reactor and blocking seams
+ * ------------------------------------------------------------------- */
+static int scenario_reactor_and_blocking(void) {
+    asx_status st;
+    uint32_t ready = 0;
+    asx_waker waker;
+    asx_blocking_handle handle;
+    uint64_t input = 35;
+    uint64_t result = 0;
+
+    printf("--- scenario: reactor and blocking ---\n");
+
+    asx_runtime_reset();
+    asx_waker_reset();
+    g_reactor_waits = 0;
+
+    st = install_custom_hooks();
+    if (st != ASX_OK) {
+        printf("  FAIL: install_custom_hooks returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_runtime_reactor_wait(25, &ready, 7);
+    if (st != ASX_OK) {
+        printf("  FAIL: reactor_wait returned %s\n", asx_status_str(st));
+        return 1;
+    }
+    if (ready != 2u || g_reactor_waits != 1) {
+        printf("  FAIL: ghost reactor did not report expected readiness\n");
+        return 1;
+    }
+    printf("  reactor wait returned %u ready events\n", ready);
+
+    st = asx_blocking_pool_init();
+    if (st != ASX_OK) {
+        printf("  FAIL: blocking_pool_init returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_waker_register(1, &waker);
+    if (st != ASX_OK) {
+        printf("  FAIL: waker_register returned %s\n", asx_status_str(st));
+        asx_blocking_pool_shutdown();
+        return 1;
+    }
+
+    st = asx_spawn_blocking(blocking_add_seven, &input, &waker, &handle);
+    if (st != ASX_OK) {
+        printf("  FAIL: spawn_blocking returned %s\n", asx_status_str(st));
+        asx_blocking_pool_shutdown();
+        return 1;
+    }
+
+    st = asx_blocking_get_result(&handle, &result);
+    if (st != ASX_OK) {
+        printf("  FAIL: blocking_get_result returned %s\n", asx_status_str(st));
+        asx_blocking_pool_shutdown();
+        return 1;
+    }
+    if (result != 42u || !asx_waker_is_signaled(&waker)) {
+        printf("  FAIL: blocking completion did not produce expected result/wake\n");
+        asx_blocking_pool_shutdown();
+        return 1;
+    }
+    printf("  spawn_blocking completed with result=%llu\n", (unsigned long long)result);
+
+    asx_blocking_pool_shutdown();
+    printf("  PASS: reactor and blocking\n");
+    return 0;
+}
+
+/* -------------------------------------------------------------------
+ * Scenario 6: End-to-end with custom hooks
  * ------------------------------------------------------------------- */
 static int scenario_end_to_end(void) {
     asx_status st;
@@ -305,17 +375,11 @@ static int scenario_end_to_end(void) {
 
     /* Re-install hooks (reset clears them). */
     {
-        asx_runtime_hooks hooks;
-        asx_runtime_hooks_init(&hooks);
-        hooks.allocator.malloc_fn = custom_malloc;
-        hooks.allocator.realloc_fn = custom_realloc;
-        hooks.allocator.free_fn = custom_free;
-        hooks.clock.now_ns_fn = custom_clock_now;
-        hooks.clock.logical_now_ns_fn = custom_clock_now;
-        hooks.entropy.random_u64_fn = custom_random;
-        hooks.log.write_fn = custom_log;
-        hooks.deterministic_seeded_prng = 1;
-        asx_runtime_set_hooks(&hooks);
+        st = install_custom_hooks();
+        if (st != ASX_OK) {
+            printf("  FAIL: install_custom_hooks returned %s\n", asx_status_str(st));
+            return 1;
+        }
     }
 
     st = asx_region_open(&region);
@@ -353,6 +417,7 @@ int main(void) {
     failures += scenario_hook_usage();
     failures += scenario_config();
     failures += scenario_allocator_seal();
+    failures += scenario_reactor_and_blocking();
     failures += scenario_end_to_end();
 
     printf("\n=== hooks: %d failures ===\n", failures);

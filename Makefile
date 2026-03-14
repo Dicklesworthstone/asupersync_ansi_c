@@ -143,6 +143,7 @@ RUNTIME_SRC := \
 	src/runtime/profile_compat.c \
 	src/runtime/browser_boundary.c \
 	src/runtime/browser_diagnostic.c \
+	src/runtime/diagnostic.c \
 	src/runtime/hft_instrument.c \
 	src/runtime/automotive_instrument.c \
 	src/runtime/overload_catalog.c \
@@ -155,6 +156,7 @@ RUNTIME_SRC := \
 	src/runtime/io_driver.c \
 	src/runtime/config_reload.c \
 	src/runtime/regression_localize.c \
+	src/runtime/replay.c \
 	src/runtime/event_log.c \
 	src/runtime/snapshot.c \
 	src/runtime/waker.c
@@ -527,6 +529,14 @@ test-unit: $(UNIT_TEST_BIN)
 # Profile compat test needs extra source (profile_compat.c not yet in LIB_A)
 $(TEST_DIR)/unit/runtime/test_profile_compat: tests/unit/runtime/test_profile_compat.c src/runtime/profile_compat.c $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< src/runtime/profile_compat.c $(LIB_A) $(ALL_LDFLAGS)
+
+# Diagnostic/replay tests still need explicit helper objects because
+# lifecycle reset reaches non-shipped provider surfaces.
+$(TEST_DIR)/unit/runtime/test_diagnostic: tests/unit/runtime/test_diagnostic.c $(CX_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(CX_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
+$(TEST_DIR)/unit/runtime/test_replay: tests/unit/runtime/test_replay.c $(CX_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(CX_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
 # Browser boundary test needs extra sources (bd-1eqo.16.1)
 $(TEST_DIR)/unit/runtime/test_browser_boundary: tests/unit/runtime/test_browser_boundary.c src/runtime/browser_boundary.c src/runtime/profile_compat.c $(LIB_A) | test-dirs

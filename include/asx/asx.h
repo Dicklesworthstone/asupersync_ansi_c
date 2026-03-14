@@ -56,6 +56,12 @@
 #include <asx/security/security.h>
 #include <asx/security/audit.h>
 
+/* Obligation, session, record, and link public families */
+#include <asx/obligation/obligation.h>
+#include <asx/session/session.h>
+#include <asx/record/record.h>
+#include <asx/link/link.h>
+
 /* Runtime (walking skeleton — bd-ix8.8) */
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/builder.h>
@@ -66,9 +72,11 @@
 #include <asx/runtime/profile_compat.h>
 #include <asx/runtime/browser_boundary.h>
 #include <asx/runtime/browser_diagnostic.h>
+#include <asx/runtime/diagnostic.h>
 #include <asx/runtime/lab.h>
 #include <asx/runtime/virtual_time.h>
 #include <asx/runtime/snapshot.h>
+#include <asx/runtime/replay.h>
 #include <asx/runtime/event.h>
 #include <asx/runtime/hindsight.h>
 #include <asx/runtime/telemetry.h>

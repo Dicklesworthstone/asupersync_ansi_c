@@ -9,11 +9,7 @@
  */
 /* ASX_CHECKPOINT_WAIVER_FILE("vignette: no kernel loops") */
 
-#include <asx/codec/codec.h>
-#include <asx/link/link.h>
-#include <asx/obligation/obligation.h>
-#include <asx/record/record.h>
-#include <asx/runtime/runtime.h>
+#include <asx/asx.h>
 #include <stdio.h>
 
 static int scenario_link_roundtrip(void) {

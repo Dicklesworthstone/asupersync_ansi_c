@@ -379,6 +379,8 @@ TEST(umbrella_exposes_runtime_support_surfaces) {
     asx_adapter_decision adapter_decision;
     asx_hindsight_policy hindsight_policy;
     asx_perf_snapshot perf_snapshot;
+    asx_evidence_sink evidence_sink;
+    asx_oracle_suite oracle_suite;
 
     asx_runtime_snapshot_init(&snap);
     asx_auto_deadline_init(&dt);
@@ -391,6 +393,8 @@ TEST(umbrella_exposes_runtime_support_surfaces) {
     memset(&adapter_decision, 0, sizeof(adapter_decision));
     memset(&hindsight_policy, 0, sizeof(hindsight_policy));
     memset(&perf_snapshot, 0, sizeof(perf_snapshot));
+    asx_evidence_sink_init(&evidence_sink);
+    asx_oracle_suite_init(&oracle_suite);
 
     ASSERT_EQ(snap.region_count, 0u);
     ASSERT_EQ(asx_auto_deadline_miss_rate(&dt), 0u);
@@ -409,6 +413,9 @@ TEST(umbrella_exposes_runtime_support_surfaces) {
     ASSERT_STR_EQ(asx_adapter_name(ASX_ADAPTER_HFT), "HFT_LATENCY");
     ASSERT_STR_EQ(asx_subsystem_name(ASX_SUBSYS_TIMER), "timer");
     ASSERT_EQ(adapter_decision.triggered, 0);
+    ASSERT_EQ(evidence_sink.count, 0u);
+    ASSERT_EQ(asx_evidence_verdict(&evidence_sink), ASX_EVIDENCE_PASS);
+    ASSERT_EQ(oracle_suite.count, 0u);
     ASSERT_EQ(perf_snapshot.total_events, 0u);
     ASSERT_EQ(hindsight_policy.flush_on_invariant, 0);
     ASSERT_EQ(hindsight_policy.flush_on_divergence, 0);
