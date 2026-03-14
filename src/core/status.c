@@ -103,6 +103,33 @@ static void asx_error_ledger_record_impl(asx_task_id task_id, asx_status status,
     }
 }
 
+static asx_backoff_hint asx_backoff_hint_none(void) {
+    asx_backoff_hint hint;
+
+    hint.initial_delay_ms = 0;
+    hint.max_delay_ms = 0;
+    hint.max_attempts = 0;
+    return hint;
+}
+
+static asx_backoff_hint asx_backoff_hint_quick(void) {
+    asx_backoff_hint hint;
+
+    hint.initial_delay_ms = 10;
+    hint.max_delay_ms = 1000;
+    hint.max_attempts = 3;
+    return hint;
+}
+
+static asx_backoff_hint asx_backoff_hint_default(void) {
+    asx_backoff_hint hint;
+
+    hint.initial_delay_ms = 100;
+    hint.max_delay_ms = 30000;
+    hint.max_attempts = 5;
+    return hint;
+}
+
 const char *asx_status_str(asx_status s) {
     switch (s) {
     case ASX_OK: return "OK";
@@ -166,6 +193,323 @@ const char *asx_status_str(asx_status s) {
     case ASX_E_PERMISSION_DENIED: return "capability not granted";
     default: return "unknown status";
     }
+}
+
+asx_error_category asx_status_category(asx_status s) {
+    switch (s) {
+    case ASX_OK:
+    case ASX_E_PENDING: return ASX_ERROR_CATEGORY_NONE;
+    case ASX_E_INVALID_ARGUMENT:
+    case ASX_E_INVALID_STATE:
+    case ASX_E_NOT_FOUND:
+    case ASX_E_ALREADY_EXISTS:
+    case ASX_E_BUFFER_TOO_SMALL: return ASX_ERROR_CATEGORY_GENERAL;
+    case ASX_E_INVALID_TRANSITION: return ASX_ERROR_CATEGORY_TRANSITION;
+    case ASX_E_REGION_NOT_FOUND:
+    case ASX_E_REGION_CLOSED:
+    case ASX_E_REGION_AT_CAPACITY:
+    case ASX_E_REGION_NOT_OPEN:
+    case ASX_E_ADMISSION_CLOSED:
+    case ASX_E_ADMISSION_LIMIT:
+    case ASX_E_REGION_POISONED: return ASX_ERROR_CATEGORY_REGION;
+    case ASX_E_TASK_NOT_FOUND:
+    case ASX_E_SCHEDULER_UNAVAILABLE:
+    case ASX_E_NAME_CONFLICT:
+    case ASX_E_TASK_NOT_COMPLETED:
+    case ASX_E_POLL_BUDGET_EXHAUSTED: return ASX_ERROR_CATEGORY_TASK;
+    case ASX_E_OBLIGATION_ALREADY_RESOLVED:
+    case ASX_E_UNRESOLVED_OBLIGATIONS: return ASX_ERROR_CATEGORY_OBLIGATION;
+    case ASX_E_CANCELLED:
+    case ASX_E_WITNESS_PHASE_REGRESSION:
+    case ASX_E_WITNESS_REASON_WEAKENED:
+    case ASX_E_WITNESS_TASK_MISMATCH:
+    case ASX_E_WITNESS_REGION_MISMATCH:
+    case ASX_E_WITNESS_EPOCH_MISMATCH: return ASX_ERROR_CATEGORY_CANCELLATION;
+    case ASX_E_DISCONNECTED:
+    case ASX_E_WOULD_BLOCK:
+    case ASX_E_CHANNEL_FULL:
+    case ASX_E_CHANNEL_NOT_DRAINED:
+    case ASX_E_LAGGED: return ASX_ERROR_CATEGORY_CHANNEL;
+    case ASX_E_TIMER_NOT_FOUND:
+    case ASX_E_TIMERS_PENDING:
+    case ASX_E_TIMER_DURATION_EXCEEDED:
+    case ASX_E_TIMED_OUT: return ASX_ERROR_CATEGORY_TIMER;
+    case ASX_E_TASKS_STILL_ACTIVE:
+    case ASX_E_OBLIGATIONS_UNRESOLVED:
+    case ASX_E_REGIONS_NOT_CLOSED:
+    case ASX_E_INCOMPLETE_CHILDREN:
+    case ASX_E_QUIESCENCE_NOT_REACHED:
+    case ASX_E_QUIESCENCE_TASKS_LIVE: return ASX_ERROR_CATEGORY_QUIESCENCE;
+    case ASX_E_RESOURCE_EXHAUSTED: return ASX_ERROR_CATEGORY_RESOURCE;
+    case ASX_E_STALE_HANDLE: return ASX_ERROR_CATEGORY_HANDLE;
+    case ASX_E_HOOK_MISSING:
+    case ASX_E_HOOK_INVALID:
+    case ASX_E_DETERMINISM_VIOLATION:
+    case ASX_E_ALLOCATOR_SEALED: return ASX_ERROR_CATEGORY_HOOK;
+    case ASX_E_AFFINITY_VIOLATION:
+    case ASX_E_AFFINITY_NOT_BOUND:
+    case ASX_E_AFFINITY_ALREADY_BOUND:
+    case ASX_E_AFFINITY_TRANSFER_REQUIRED:
+    case ASX_E_AFFINITY_TABLE_FULL: return ASX_ERROR_CATEGORY_AFFINITY;
+    case ASX_E_EQUIVALENCE_MISMATCH: return ASX_ERROR_CATEGORY_EQUIVALENCE;
+    case ASX_E_REPLAY_MISMATCH: return ASX_ERROR_CATEGORY_REPLAY;
+    case ASX_E_CONFIG_FROZEN:
+    case ASX_E_CONFIG_RESTART_REQ: return ASX_ERROR_CATEGORY_CONFIG;
+    case ASX_E_PERMISSION_DENIED: return ASX_ERROR_CATEGORY_PERMISSION;
+    default: return ASX_ERROR_CATEGORY_GENERAL;
+    }
+}
+
+const char *asx_error_category_str(asx_error_category category) {
+    switch (category) {
+    case ASX_ERROR_CATEGORY_NONE: return "none";
+    case ASX_ERROR_CATEGORY_GENERAL: return "general";
+    case ASX_ERROR_CATEGORY_TRANSITION: return "transition";
+    case ASX_ERROR_CATEGORY_REGION: return "region";
+    case ASX_ERROR_CATEGORY_TASK: return "task";
+    case ASX_ERROR_CATEGORY_OBLIGATION: return "obligation";
+    case ASX_ERROR_CATEGORY_CANCELLATION: return "cancellation";
+    case ASX_ERROR_CATEGORY_CHANNEL: return "channel";
+    case ASX_ERROR_CATEGORY_TIMER: return "timer";
+    case ASX_ERROR_CATEGORY_QUIESCENCE: return "quiescence";
+    case ASX_ERROR_CATEGORY_RESOURCE: return "resource";
+    case ASX_ERROR_CATEGORY_HANDLE: return "handle";
+    case ASX_ERROR_CATEGORY_HOOK: return "hook";
+    case ASX_ERROR_CATEGORY_AFFINITY: return "affinity";
+    case ASX_ERROR_CATEGORY_EQUIVALENCE: return "equivalence";
+    case ASX_ERROR_CATEGORY_REPLAY: return "replay";
+    case ASX_ERROR_CATEGORY_CONFIG: return "config";
+    case ASX_ERROR_CATEGORY_PERMISSION: return "permission";
+    default: return "unknown";
+    }
+}
+
+asx_recoverability asx_status_recoverability(asx_status s) {
+    switch (s) {
+    case ASX_OK:
+    case ASX_E_PENDING: return ASX_RECOVERABILITY_NONE;
+    case ASX_E_WOULD_BLOCK:
+    case ASX_E_CHANNEL_FULL:
+    case ASX_E_TIMERS_PENDING:
+    case ASX_E_SCHEDULER_UNAVAILABLE:
+    case ASX_E_ADMISSION_CLOSED:
+    case ASX_E_ADMISSION_LIMIT: return ASX_RECOVERABILITY_TRANSIENT;
+    case ASX_E_INVALID_ARGUMENT:
+    case ASX_E_NOT_FOUND:
+    case ASX_E_ALREADY_EXISTS:
+    case ASX_E_INVALID_TRANSITION:
+    case ASX_E_REGION_NOT_FOUND:
+    case ASX_E_REGION_CLOSED:
+    case ASX_E_REGION_NOT_OPEN:
+    case ASX_E_REGION_POISONED:
+    case ASX_E_TASK_NOT_FOUND:
+    case ASX_E_NAME_CONFLICT:
+    case ASX_E_TASK_NOT_COMPLETED:
+    case ASX_E_OBLIGATION_ALREADY_RESOLVED:
+    case ASX_E_UNRESOLVED_OBLIGATIONS:
+    case ASX_E_CANCELLED:
+    case ASX_E_WITNESS_PHASE_REGRESSION:
+    case ASX_E_WITNESS_REASON_WEAKENED:
+    case ASX_E_WITNESS_TASK_MISMATCH:
+    case ASX_E_WITNESS_REGION_MISMATCH:
+    case ASX_E_WITNESS_EPOCH_MISMATCH:
+    case ASX_E_DISCONNECTED:
+    case ASX_E_CHANNEL_NOT_DRAINED:
+    case ASX_E_TIMER_NOT_FOUND:
+    case ASX_E_TASKS_STILL_ACTIVE:
+    case ASX_E_OBLIGATIONS_UNRESOLVED:
+    case ASX_E_REGIONS_NOT_CLOSED:
+    case ASX_E_INCOMPLETE_CHILDREN:
+    case ASX_E_QUIESCENCE_NOT_REACHED:
+    case ASX_E_QUIESCENCE_TASKS_LIVE:
+    case ASX_E_STALE_HANDLE:
+    case ASX_E_HOOK_MISSING:
+    case ASX_E_HOOK_INVALID:
+    case ASX_E_DETERMINISM_VIOLATION:
+    case ASX_E_ALLOCATOR_SEALED:
+    case ASX_E_AFFINITY_VIOLATION:
+    case ASX_E_AFFINITY_NOT_BOUND:
+    case ASX_E_AFFINITY_ALREADY_BOUND:
+    case ASX_E_AFFINITY_TRANSFER_REQUIRED:
+    case ASX_E_AFFINITY_TABLE_FULL:
+    case ASX_E_EQUIVALENCE_MISMATCH:
+    case ASX_E_REPLAY_MISMATCH:
+    case ASX_E_PERMISSION_DENIED: return ASX_RECOVERABILITY_PERMANENT;
+    case ASX_E_INVALID_STATE:
+    case ASX_E_BUFFER_TOO_SMALL:
+    case ASX_E_REGION_AT_CAPACITY:
+    case ASX_E_POLL_BUDGET_EXHAUSTED:
+    case ASX_E_LAGGED:
+    case ASX_E_TIMER_DURATION_EXCEEDED:
+    case ASX_E_TIMED_OUT:
+    case ASX_E_RESOURCE_EXHAUSTED:
+    case ASX_E_CONFIG_FROZEN:
+    case ASX_E_CONFIG_RESTART_REQ: return ASX_RECOVERABILITY_CONTEXT_DEPENDENT;
+    default: return ASX_RECOVERABILITY_CONTEXT_DEPENDENT;
+    }
+}
+
+const char *asx_recoverability_str(asx_recoverability recoverability) {
+    switch (recoverability) {
+    case ASX_RECOVERABILITY_NONE: return "none";
+    case ASX_RECOVERABILITY_TRANSIENT: return "transient";
+    case ASX_RECOVERABILITY_PERMANENT: return "permanent";
+    case ASX_RECOVERABILITY_CONTEXT_DEPENDENT: return "context-dependent";
+    default: return "unknown";
+    }
+}
+
+asx_recovery_action asx_status_recovery_action(asx_status s) {
+    switch (s) {
+    case ASX_OK:
+    case ASX_E_PENDING: return ASX_RECOVERY_NONE;
+    case ASX_E_INVALID_ARGUMENT:
+    case ASX_E_INVALID_STATE:
+    case ASX_E_NOT_FOUND:
+    case ASX_E_ALREADY_EXISTS:
+    case ASX_E_BUFFER_TOO_SMALL:
+    case ASX_E_REGION_NOT_FOUND:
+    case ASX_E_REGION_CLOSED:
+    case ASX_E_REGION_AT_CAPACITY:
+    case ASX_E_REGION_NOT_OPEN:
+    case ASX_E_TASK_NOT_FOUND:
+    case ASX_E_NAME_CONFLICT:
+    case ASX_E_TASK_NOT_COMPLETED:
+    case ASX_E_POLL_BUDGET_EXHAUSTED:
+    case ASX_E_CANCELLED:
+    case ASX_E_WITNESS_PHASE_REGRESSION:
+    case ASX_E_WITNESS_REASON_WEAKENED:
+    case ASX_E_WITNESS_TASK_MISMATCH:
+    case ASX_E_WITNESS_REGION_MISMATCH:
+    case ASX_E_WITNESS_EPOCH_MISMATCH:
+    case ASX_E_DISCONNECTED:
+    case ASX_E_CHANNEL_NOT_DRAINED:
+    case ASX_E_LAGGED:
+    case ASX_E_TIMER_NOT_FOUND:
+    case ASX_E_TIMER_DURATION_EXCEEDED:
+    case ASX_E_TIMED_OUT:
+    case ASX_E_TASKS_STILL_ACTIVE:
+    case ASX_E_OBLIGATIONS_UNRESOLVED:
+    case ASX_E_REGIONS_NOT_CLOSED:
+    case ASX_E_INCOMPLETE_CHILDREN:
+    case ASX_E_QUIESCENCE_NOT_REACHED:
+    case ASX_E_QUIESCENCE_TASKS_LIVE:
+    case ASX_E_AFFINITY_VIOLATION:
+    case ASX_E_AFFINITY_ALREADY_BOUND:
+    case ASX_E_AFFINITY_TABLE_FULL:
+    case ASX_E_PERMISSION_DENIED: return ASX_RECOVERY_PROPAGATE;
+    case ASX_E_WOULD_BLOCK:
+    case ASX_E_CHANNEL_FULL:
+    case ASX_E_TIMERS_PENDING: return ASX_RECOVERY_RETRY_IMMEDIATELY;
+    case ASX_E_SCHEDULER_UNAVAILABLE:
+    case ASX_E_ADMISSION_CLOSED:
+    case ASX_E_ADMISSION_LIMIT:
+    case ASX_E_RESOURCE_EXHAUSTED: return ASX_RECOVERY_RETRY_WITH_BACKOFF;
+    case ASX_E_HOOK_MISSING:
+    case ASX_E_HOOK_INVALID:
+    case ASX_E_DETERMINISM_VIOLATION:
+    case ASX_E_ALLOCATOR_SEALED:
+    case ASX_E_CONFIG_FROZEN:
+    case ASX_E_CONFIG_RESTART_REQ: return ASX_RECOVERY_INSPECT_CONFIGURATION;
+    case ASX_E_STALE_HANDLE:
+    case ASX_E_AFFINITY_TRANSFER_REQUIRED:
+    case ASX_E_AFFINITY_NOT_BOUND: return ASX_RECOVERY_REINITIALIZE_CONTEXT;
+    case ASX_E_INVALID_TRANSITION:
+    case ASX_E_REGION_POISONED:
+    case ASX_E_OBLIGATION_ALREADY_RESOLVED:
+    case ASX_E_UNRESOLVED_OBLIGATIONS:
+    case ASX_E_EQUIVALENCE_MISMATCH:
+    case ASX_E_REPLAY_MISMATCH: return ASX_RECOVERY_ESCALATE;
+    }
+
+    return ASX_RECOVERY_PROPAGATE;
+}
+
+const char *asx_recovery_action_str(asx_recovery_action action) {
+    switch (action) {
+    case ASX_RECOVERY_NONE: return "none";
+    case ASX_RECOVERY_RETRY_IMMEDIATELY: return "retry-immediately";
+    case ASX_RECOVERY_RETRY_WITH_BACKOFF: return "retry-with-backoff";
+    case ASX_RECOVERY_REINITIALIZE_CONTEXT: return "reinitialize-context";
+    case ASX_RECOVERY_PROPAGATE: return "propagate";
+    case ASX_RECOVERY_ESCALATE: return "escalate";
+    case ASX_RECOVERY_INSPECT_CONFIGURATION: return "inspect-configuration";
+    default: return "unknown";
+    }
+}
+
+asx_backoff_hint asx_status_backoff_hint(asx_status s) {
+    switch (s) {
+    case ASX_OK:
+    case ASX_E_PENDING:
+    case ASX_E_INVALID_ARGUMENT:
+    case ASX_E_INVALID_STATE:
+    case ASX_E_NOT_FOUND:
+    case ASX_E_ALREADY_EXISTS:
+    case ASX_E_BUFFER_TOO_SMALL:
+    case ASX_E_INVALID_TRANSITION:
+    case ASX_E_REGION_NOT_FOUND:
+    case ASX_E_REGION_CLOSED:
+    case ASX_E_REGION_AT_CAPACITY:
+    case ASX_E_REGION_NOT_OPEN:
+    case ASX_E_REGION_POISONED:
+    case ASX_E_TASK_NOT_FOUND:
+    case ASX_E_NAME_CONFLICT:
+    case ASX_E_TASK_NOT_COMPLETED:
+    case ASX_E_POLL_BUDGET_EXHAUSTED:
+    case ASX_E_OBLIGATION_ALREADY_RESOLVED:
+    case ASX_E_UNRESOLVED_OBLIGATIONS:
+    case ASX_E_CANCELLED:
+    case ASX_E_WITNESS_PHASE_REGRESSION:
+    case ASX_E_WITNESS_REASON_WEAKENED:
+    case ASX_E_WITNESS_TASK_MISMATCH:
+    case ASX_E_WITNESS_REGION_MISMATCH:
+    case ASX_E_WITNESS_EPOCH_MISMATCH:
+    case ASX_E_DISCONNECTED:
+    case ASX_E_CHANNEL_NOT_DRAINED:
+    case ASX_E_LAGGED:
+    case ASX_E_TIMER_NOT_FOUND:
+    case ASX_E_TIMER_DURATION_EXCEEDED:
+    case ASX_E_TIMED_OUT:
+    case ASX_E_TASKS_STILL_ACTIVE:
+    case ASX_E_OBLIGATIONS_UNRESOLVED:
+    case ASX_E_REGIONS_NOT_CLOSED:
+    case ASX_E_INCOMPLETE_CHILDREN:
+    case ASX_E_QUIESCENCE_NOT_REACHED:
+    case ASX_E_QUIESCENCE_TASKS_LIVE:
+    case ASX_E_STALE_HANDLE:
+    case ASX_E_HOOK_MISSING:
+    case ASX_E_HOOK_INVALID:
+    case ASX_E_DETERMINISM_VIOLATION:
+    case ASX_E_ALLOCATOR_SEALED:
+    case ASX_E_AFFINITY_VIOLATION:
+    case ASX_E_AFFINITY_NOT_BOUND:
+    case ASX_E_AFFINITY_ALREADY_BOUND:
+    case ASX_E_AFFINITY_TRANSFER_REQUIRED:
+    case ASX_E_AFFINITY_TABLE_FULL:
+    case ASX_E_EQUIVALENCE_MISMATCH:
+    case ASX_E_REPLAY_MISMATCH:
+    case ASX_E_CONFIG_FROZEN:
+    case ASX_E_CONFIG_RESTART_REQ:
+    case ASX_E_PERMISSION_DENIED: return asx_backoff_hint_none();
+    case ASX_E_WOULD_BLOCK:
+    case ASX_E_CHANNEL_FULL:
+    case ASX_E_TIMERS_PENDING: return asx_backoff_hint_quick();
+    case ASX_E_SCHEDULER_UNAVAILABLE:
+    case ASX_E_ADMISSION_CLOSED:
+    case ASX_E_ADMISSION_LIMIT:
+    case ASX_E_RESOURCE_EXHAUSTED: return asx_backoff_hint_default();
+    }
+
+    return asx_backoff_hint_none();
+}
+
+int asx_status_is_retryable(asx_status s) {
+    return asx_status_recoverability(s) == ASX_RECOVERABILITY_TRANSIENT;
+}
+
+int asx_status_is_cancel(asx_status s) {
+    return asx_status_category(s) == ASX_ERROR_CATEGORY_CANCELLATION;
 }
 
 void asx_error_ledger_reset(void) {

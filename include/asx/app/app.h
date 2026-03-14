@@ -16,6 +16,7 @@
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/core/budget.h>
+#include <asx/cx/cx.h>
 #include <asx/fs/fs.h>
 #include <asx/process/process.h>
 #include <asx/signal/signal.h>
@@ -123,8 +124,15 @@ ASX_API ASX_MUST_USE asx_status asx_app_parse_args(asx_app_args *args, int argc,
 /* Run the application's main task.
  * Spawns the user's poll function as a task in the app's region,
  * drives the scheduler until the task completes or budget is exhausted,
- * then shuts down. Returns the exit code. */
+ * and returns the exit code. The caller remains responsible for
+ * asx_app_shutdown(). */
 ASX_API asx_exit_code asx_app_run(asx_app *app, asx_task_poll_fn main_fn, void *user_data);
+
+/* Run the application's main task under explicit authority.
+ * Fails closed if app_cx is invalid, bound to a different region, or
+ * lacks ASX_CAP_SPAWN. */
+ASX_API asx_exit_code asx_app_run_with_cx(asx_app *app, const asx_cx *app_cx,
+                                          asx_task_poll_fn main_fn, void *user_data);
 
 /* Shut down the application and release resources. */
 ASX_API void asx_app_shutdown(asx_app *app);
@@ -142,6 +150,17 @@ ASX_API asx_exit_code asx_app_run_server(asx_app *app,
                                          void *user_data,
                                          asx_app_server_report *out_report,
                                          asx_report_buf *out_summary);
+
+/* Run a managed native server/bootstrap flow under explicit authority.
+ * Fails closed before side effects if app_cx is invalid, bound to a
+ * different region, or lacks ASX_CAP_SPAWN. */
+ASX_API asx_exit_code asx_app_run_server_with_cx(asx_app *app,
+                                                 const asx_cx *app_cx,
+                                                 const asx_app_server_config *server_config,
+                                                 asx_task_poll_fn main_fn,
+                                                 void *user_data,
+                                                 asx_app_server_report *out_report,
+                                                 asx_report_buf *out_summary);
 
 #ifdef __cplusplus
 }

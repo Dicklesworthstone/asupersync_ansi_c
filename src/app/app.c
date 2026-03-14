@@ -42,6 +42,15 @@ static void asx_app_note_cleanup_status(asx_app_server_report *report, asx_statu
     if (report->last_status == ASX_OK && cleanup_st != ASX_OK) { report->last_status = cleanup_st; }
 }
 
+static asx_status asx_app_validate_cx(const asx_app *app, const asx_cx *app_cx) {
+    if (app == NULL || app_cx == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!app->initialized) return ASX_E_INVALID_STATE;
+    if (!asx_cx_is_valid(app_cx)) return ASX_E_INVALID_STATE;
+    if (asx_cx_region(app_cx) != app->region) return ASX_E_PERMISSION_DENIED;
+    if (!asx_cx_has_cap(app_cx, ASX_CAP_SPAWN)) return ASX_E_PERMISSION_DENIED;
+    return ASX_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* CLI argument parsing                                                */
 /* ------------------------------------------------------------------ */
@@ -120,12 +129,34 @@ asx_status asx_app_init(asx_app *app, const asx_app_config *config) {
 }
 
 asx_exit_code asx_app_run(asx_app *app, asx_task_poll_fn main_fn, void *user_data) {
-    asx_task_id tid;
-    asx_budget budget;
+    asx_cx root_cx;
     asx_status st;
 
     if (app == NULL || main_fn == NULL) return ASX_EXIT_ERROR;
     if (!app->initialized) return ASX_EXIT_INIT_FAILED;
+
+    st = asx_cx_init(&root_cx, app->region, ASX_INVALID_ID, ASX_CAP_SPAWN);
+    if (st != ASX_OK) {
+        app->exit_code = ASX_EXIT_INIT_FAILED;
+        return app->exit_code;
+    }
+
+    return asx_app_run_with_cx(app, &root_cx, main_fn, user_data);
+}
+
+asx_exit_code asx_app_run_with_cx(asx_app *app, const asx_cx *app_cx, asx_task_poll_fn main_fn,
+                                  void *user_data) {
+    asx_task_id tid;
+    asx_budget budget;
+    asx_status st;
+
+    if (app == NULL || app_cx == NULL || main_fn == NULL) return ASX_EXIT_ERROR;
+    if (!app->initialized) return ASX_EXIT_INIT_FAILED;
+    st = asx_app_validate_cx(app, app_cx);
+    if (st != ASX_OK) {
+        app->exit_code = ASX_EXIT_TASK_FAILED;
+        return app->exit_code;
+    }
 
     /* Spawn main task */
     st = asx_task_spawn(app->region, main_fn, user_data, &tid);
@@ -170,6 +201,29 @@ asx_exit_code asx_app_run_server(asx_app *app,
                                  void *user_data,
                                  asx_app_server_report *out_report,
                                  asx_report_buf *out_summary) {
+    asx_cx root_cx;
+    asx_status st;
+
+    if (app == NULL || main_fn == NULL) return ASX_EXIT_ERROR;
+    if (!app->initialized) return ASX_EXIT_INIT_FAILED;
+
+    st = asx_cx_init(&root_cx, app->region, ASX_INVALID_ID, ASX_CAP_SPAWN);
+    if (st != ASX_OK) {
+        app->exit_code = ASX_EXIT_INIT_FAILED;
+        return app->exit_code;
+    }
+
+    return asx_app_run_server_with_cx(app, &root_cx, server_config, main_fn, user_data, out_report,
+                                      out_summary);
+}
+
+asx_exit_code asx_app_run_server_with_cx(asx_app *app,
+                                         const asx_cx *app_cx,
+                                         const asx_app_server_config *server_config,
+                                         asx_task_poll_fn main_fn,
+                                         void *user_data,
+                                         asx_app_server_report *out_report,
+                                         asx_report_buf *out_summary) {
     asx_app_server_config defaults;
     asx_app_server_report local_report;
     asx_app_server_report *report;
@@ -184,7 +238,7 @@ asx_exit_code asx_app_run_server(asx_app *app,
     uint32_t signal_count = 0;
     asx_doctor_report doctor;
 
-    if (app == NULL || main_fn == NULL) return ASX_EXIT_ERROR;
+    if (app == NULL || app_cx == NULL || main_fn == NULL) return ASX_EXIT_ERROR;
     if (!app->initialized) return ASX_EXIT_INIT_FAILED;
 
     memset(&defaults, 0, sizeof(defaults));
@@ -198,6 +252,15 @@ asx_exit_code asx_app_run_server(asx_app *app,
 
     if (server_config == NULL) server_config = &defaults;
 
+    st = asx_app_validate_cx(app, app_cx);
+    if (st != ASX_OK) {
+        report->last_status = st;
+        report->exit_code = ASX_EXIT_TASK_FAILED;
+        app->exit_code = report->exit_code;
+        asx_app_server_summary(out_summary, report);
+        return report->exit_code;
+    }
+
     if (server_config->config_path != NULL) {
         asx_fs_metadata meta;
         st = asx_fs_metadata_query(server_config->config_path, &meta);
@@ -205,6 +268,7 @@ asx_exit_code asx_app_run_server(asx_app *app,
             if (server_config->require_config) {
                 report->last_status = st;
                 report->exit_code = ASX_EXIT_INIT_FAILED;
+                app->exit_code = report->exit_code;
                 asx_app_server_summary(out_summary, report);
                 return report->exit_code;
             }
@@ -224,6 +288,7 @@ asx_exit_code asx_app_run_server(asx_app *app,
         if (st != ASX_OK) {
             report->last_status = st;
             report->exit_code = ASX_EXIT_INIT_FAILED;
+            app->exit_code = report->exit_code;
             asx_app_server_summary(out_summary, report);
             return report->exit_code;
         }
@@ -238,6 +303,7 @@ asx_exit_code asx_app_run_server(asx_app *app,
     } else {
         report->last_status = st;
         report->exit_code = ASX_EXIT_INIT_FAILED;
+        app->exit_code = report->exit_code;
         asx_app_server_summary(out_summary, report);
         return report->exit_code;
     }
@@ -252,6 +318,7 @@ asx_exit_code asx_app_run_server(asx_app *app,
             asx_app_note_cleanup_status(report, cleanup_st);
             asx_signal_clear_shutdown();
         }
+        app->exit_code = report->exit_code;
         asx_app_server_summary(out_summary, report);
         return report->exit_code;
     }
@@ -297,6 +364,8 @@ asx_exit_code asx_app_run_server(asx_app *app,
     } else {
         report->exit_code = ASX_EXIT_TASK_FAILED;
     }
+
+    app->exit_code = report->exit_code;
 
     if (out_summary != NULL) {
         asx_app_server_summary(out_summary, report);

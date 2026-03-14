@@ -91,6 +91,7 @@ asx_status asx_scope_init(asx_scope *scope, asx_region_id region, const asx_cx *
                           asx_budget budget) {
     if (scope == NULL || cx == NULL) return ASX_E_INVALID_ARGUMENT;
     if (region == ASX_INVALID_ID) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_cx_is_valid(cx)) return ASX_E_INVALID_STATE;
     if (!asx_cx_has_cap(cx, ASX_CAP_SPAWN)) return ASX_E_PERMISSION_DENIED;
     if (cx->region_id != region) return ASX_E_PERMISSION_DENIED;
 
@@ -111,6 +112,7 @@ static asx_status scope_bind_spawned_cx(const asx_scope *scope, asx_task_id tid,
                                         asx_cap_flags child_caps, asx_cx *out_cx) {
     asx_status st;
 
+    if ((child_caps & ~asx_cx_caps(&scope->cx)) != 0u) return ASX_E_INVALID_ARGUMENT;
     if (out_cx == NULL) return ASX_OK;
 
     st = asx_cx_narrow(&scope->cx, out_cx, child_caps);
@@ -135,6 +137,8 @@ asx_status asx_scope_spawn_with_cx(asx_scope *scope, asx_cap_flags child_caps,
 
     if (scope == NULL || poll_fn == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!asx_cx_has_cap(&scope->cx, ASX_CAP_SPAWN)) return ASX_E_PERMISSION_DENIED;
+    st = scope_bind_spawned_cx(scope, ASX_INVALID_ID, child_caps, NULL);
+    if (st != ASX_OK) return st;
 
     st = asx_task_spawn(scope->region_id, poll_fn, user_data, &tid);
     if (st != ASX_OK) return st;

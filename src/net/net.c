@@ -10,6 +10,19 @@
 #include <asx/net/net.h>
 #include <string.h>
 
+static asx_status net_require_channel_cx(const asx_cx *cx) {
+    if (cx == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_cx_is_valid(cx)) return ASX_E_INVALID_STATE;
+    if (!asx_cx_has_cap(cx, ASX_CAP_CHANNEL)) return ASX_E_PERMISSION_DENIED;
+    return ASX_OK;
+}
+
+static asx_status net_poll_checkpoint(asx_cx *cx) {
+    asx_status st = net_require_channel_cx(cx);
+    if (st != ASX_OK) return st;
+    return asx_cx_checkpoint(cx);
+}
+
 /* ------------------------------------------------------------------ */
 /* Socket address                                                      */
 /* ------------------------------------------------------------------ */
@@ -66,10 +79,19 @@ static tcp_listener_slot *listener_lookup(asx_tcp_listener h) {
 }
 
 asx_status asx_tcp_listener_bind(asx_tcp_listener *out, const asx_socket_addr *addr) {
+    return asx_tcp_listener_bind_with_cx(out, addr, NULL);
+}
+
+asx_status asx_tcp_listener_bind_with_cx(asx_tcp_listener *out, const asx_socket_addr *addr,
+                                         const asx_cx *cx) {
     uint32_t idx;
     tcp_listener_slot *s;
 
     if (out == NULL || addr == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (cx != NULL) {
+        asx_status st = net_require_channel_cx(cx);
+        if (st != ASX_OK) return st;
+    }
 
     for (idx = 0; idx < ASX_MAX_TCP_LISTENERS; idx++) {
         if (!g_listeners[idx].alive) break;
@@ -90,8 +112,18 @@ asx_status asx_tcp_listener_bind(asx_tcp_listener *out, const asx_socket_addr *a
 
 asx_status asx_tcp_listener_poll_accept(asx_tcp_listener listener, asx_tcp_stream *out,
                                         asx_socket_addr *peer_addr) {
+    return asx_tcp_listener_poll_accept_with_cx(listener, out, peer_addr, NULL);
+}
+
+asx_status asx_tcp_listener_poll_accept_with_cx(asx_tcp_listener listener, asx_tcp_stream *out,
+                                                asx_socket_addr *peer_addr, asx_cx *cx) {
     tcp_listener_slot *s;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    if (cx != NULL) {
+        asx_status st = net_poll_checkpoint(cx);
+        if (st != ASX_OK) return st;
+    }
 
     s = listener_lookup(listener);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -144,10 +176,19 @@ static tcp_stream_slot *stream_lookup(asx_tcp_stream h) {
 }
 
 asx_status asx_tcp_connect(asx_tcp_stream *out, const asx_socket_addr *addr) {
+    return asx_tcp_connect_with_cx(out, addr, NULL);
+}
+
+asx_status asx_tcp_connect_with_cx(asx_tcp_stream *out, const asx_socket_addr *addr,
+                                   const asx_cx *cx) {
     uint32_t idx;
     tcp_stream_slot *s;
 
     if (out == NULL || addr == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (cx != NULL) {
+        asx_status st = net_require_channel_cx(cx);
+        if (st != ASX_OK) return st;
+    }
 
     for (idx = 0; idx < ASX_MAX_TCP_STREAMS; idx++) {
         if (!g_streams[idx].alive) break;
@@ -167,8 +208,18 @@ asx_status asx_tcp_connect(asx_tcp_stream *out, const asx_socket_addr *addr) {
 }
 
 asx_status asx_tcp_stream_poll_read(asx_tcp_stream stream, asx_buf_mut *dst, uint32_t *bytes_read) {
+    return asx_tcp_stream_poll_read_with_cx(stream, dst, bytes_read, NULL);
+}
+
+asx_status asx_tcp_stream_poll_read_with_cx(asx_tcp_stream stream, asx_buf_mut *dst,
+                                            uint32_t *bytes_read, asx_cx *cx) {
     tcp_stream_slot *s;
     if (dst == NULL || bytes_read == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    if (cx != NULL) {
+        asx_status st = net_poll_checkpoint(cx);
+        if (st != ASX_OK) return st;
+    }
 
     s = stream_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -179,8 +230,18 @@ asx_status asx_tcp_stream_poll_read(asx_tcp_stream stream, asx_buf_mut *dst, uin
 
 asx_status asx_tcp_stream_poll_write(asx_tcp_stream stream, const asx_buf *src,
                                      uint32_t *bytes_written) {
+    return asx_tcp_stream_poll_write_with_cx(stream, src, bytes_written, NULL);
+}
+
+asx_status asx_tcp_stream_poll_write_with_cx(asx_tcp_stream stream, const asx_buf *src,
+                                             uint32_t *bytes_written, asx_cx *cx) {
     tcp_stream_slot *s;
     if (src == NULL || bytes_written == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    if (cx != NULL) {
+        asx_status st = net_poll_checkpoint(cx);
+        if (st != ASX_OK) return st;
+    }
 
     s = stream_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;

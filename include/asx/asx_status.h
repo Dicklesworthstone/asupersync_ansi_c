@@ -122,6 +122,64 @@ ASX_API ASX_MUST_USE const char *asx_status_str(asx_status s);
 static inline int asx_is_error(asx_status s) { return s != ASX_OK; }
 
 /* ------------------------------------------------------------------ */
+/* Public error taxonomy                                              */
+/* ------------------------------------------------------------------ */
+
+typedef enum {
+    ASX_ERROR_CATEGORY_NONE = 0,
+    ASX_ERROR_CATEGORY_GENERAL = 1,
+    ASX_ERROR_CATEGORY_TRANSITION = 2,
+    ASX_ERROR_CATEGORY_REGION = 3,
+    ASX_ERROR_CATEGORY_TASK = 4,
+    ASX_ERROR_CATEGORY_OBLIGATION = 5,
+    ASX_ERROR_CATEGORY_CANCELLATION = 6,
+    ASX_ERROR_CATEGORY_CHANNEL = 7,
+    ASX_ERROR_CATEGORY_TIMER = 8,
+    ASX_ERROR_CATEGORY_QUIESCENCE = 9,
+    ASX_ERROR_CATEGORY_RESOURCE = 10,
+    ASX_ERROR_CATEGORY_HANDLE = 11,
+    ASX_ERROR_CATEGORY_HOOK = 12,
+    ASX_ERROR_CATEGORY_AFFINITY = 13,
+    ASX_ERROR_CATEGORY_EQUIVALENCE = 14,
+    ASX_ERROR_CATEGORY_REPLAY = 15,
+    ASX_ERROR_CATEGORY_CONFIG = 16,
+    ASX_ERROR_CATEGORY_PERMISSION = 17
+} asx_error_category;
+
+typedef enum {
+    ASX_RECOVERABILITY_NONE = 0,
+    ASX_RECOVERABILITY_TRANSIENT = 1,
+    ASX_RECOVERABILITY_PERMANENT = 2,
+    ASX_RECOVERABILITY_CONTEXT_DEPENDENT = 3
+} asx_recoverability;
+
+typedef enum {
+    ASX_RECOVERY_NONE = 0,
+    ASX_RECOVERY_RETRY_IMMEDIATELY = 1,
+    ASX_RECOVERY_RETRY_WITH_BACKOFF = 2,
+    ASX_RECOVERY_REINITIALIZE_CONTEXT = 3,
+    ASX_RECOVERY_PROPAGATE = 4,
+    ASX_RECOVERY_ESCALATE = 5,
+    ASX_RECOVERY_INSPECT_CONFIGURATION = 6
+} asx_recovery_action;
+
+typedef struct asx_backoff_hint {
+    uint32_t initial_delay_ms;
+    uint32_t max_delay_ms;
+    uint8_t max_attempts;
+} asx_backoff_hint;
+
+ASX_API ASX_MUST_USE asx_error_category asx_status_category(asx_status s);
+ASX_API ASX_MUST_USE const char *asx_error_category_str(asx_error_category category);
+ASX_API ASX_MUST_USE asx_recoverability asx_status_recoverability(asx_status s);
+ASX_API ASX_MUST_USE const char *asx_recoverability_str(asx_recoverability recoverability);
+ASX_API ASX_MUST_USE asx_recovery_action asx_status_recovery_action(asx_status s);
+ASX_API ASX_MUST_USE const char *asx_recovery_action_str(asx_recovery_action action);
+ASX_API ASX_MUST_USE asx_backoff_hint asx_status_backoff_hint(asx_status s);
+ASX_API ASX_MUST_USE int asx_status_is_retryable(asx_status s);
+ASX_API ASX_MUST_USE int asx_status_is_cancel(asx_status s);
+
+/* ------------------------------------------------------------------ */
 /* Deterministic task-local error ledger (zero-allocation)            */
 /* ------------------------------------------------------------------ */
 
