@@ -123,6 +123,37 @@ static void test_tcp_listener_poll_accept_pending(void) {
     asx_tcp_listener_close(listener);
 }
 
+static void test_tcp_listener_bind_with_cx_permission_denied(void) {
+    asx_tcp_listener listener;
+    asx_socket_addr addr = asx_socket_addr_loopback(8181);
+    asx_cx cx;
+
+    MUST_OK(asx_cx_init(&cx, 1, ASX_INVALID_ID, ASX_CAP_CLOCK_READ));
+    ASSERT(asx_tcp_listener_bind_with_cx(&listener, &addr, &cx) == ASX_E_PERMISSION_DENIED,
+           "bind with cx requires channel cap");
+}
+
+static void test_tcp_listener_poll_accept_with_cx_budget_checkpoint(void) {
+    asx_tcp_listener listener;
+    asx_tcp_stream stream;
+    asx_socket_addr addr = asx_socket_addr_loopback(7071);
+    asx_cx cx;
+    asx_budget budget = asx_budget_from_polls(1);
+
+    MUST_OK(asx_tcp_listener_bind(&listener, &addr));
+    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
+                                     ASX_CAP_BUDGET_CONSUME));
+    MUST_OK(asx_cx_bind_budget(&cx, &budget));
+
+    ASSERT(asx_tcp_listener_poll_accept_with_cx(listener, &stream, NULL, &cx) == ASX_E_PENDING,
+           "first accept poll pending");
+    ASSERT(asx_tcp_listener_poll_accept_with_cx(listener, &stream, NULL, &cx)
+               == ASX_E_POLL_BUDGET_EXHAUSTED,
+           "second accept poll exhausts budget");
+
+    asx_tcp_listener_close(listener);
+}
+
 static void test_tcp_listener_null_args(void) {
     asx_socket_addr addr = asx_socket_addr_loopback(80);
     asx_tcp_listener listener;
@@ -166,6 +197,16 @@ static void test_tcp_connect_close(void) {
     ASSERT(!asx_tcp_stream_is_alive(stream), "stream dead");
 }
 
+static void test_tcp_connect_with_cx_permission_denied(void) {
+    asx_tcp_stream stream;
+    asx_socket_addr addr = asx_socket_addr_loopback(4001);
+    asx_cx cx;
+
+    MUST_OK(asx_cx_init(&cx, 1, ASX_INVALID_ID, ASX_CAP_SPAWN));
+    ASSERT(asx_tcp_connect_with_cx(&stream, &addr, &cx) == ASX_E_PERMISSION_DENIED,
+           "connect with cx requires channel cap");
+}
+
 static void test_tcp_stream_peer_addr(void) {
     asx_tcp_stream stream;
     asx_socket_addr addr = asx_socket_addr_ipv4(10, 0, 0, 5, 443);
@@ -194,6 +235,62 @@ static void test_tcp_stream_poll_pending(void) {
     src = asx_buf_from_cstr("hello");
     ASSERT(asx_tcp_stream_poll_write(stream, &src, &n) == ASX_E_PENDING, "poll_write pending");
     ASSERT(n == 0, "no bytes written");
+
+    asx_tcp_stream_close(stream);
+}
+
+static void test_tcp_stream_poll_with_cx_budget_checkpoint(void) {
+    asx_tcp_stream stream;
+    asx_socket_addr addr = asx_socket_addr_loopback(2001);
+    asx_buf_mut dst;
+    asx_buf src;
+    uint32_t n;
+    asx_cx cx;
+    asx_budget budget = asx_budget_from_polls(1);
+
+    MUST_OK(asx_tcp_connect(&stream, &addr));
+    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
+                                     ASX_CAP_BUDGET_CONSUME));
+    MUST_OK(asx_cx_bind_budget(&cx, &budget));
+
+    asx_buf_mut_init(&dst);
+    ASSERT(asx_tcp_stream_poll_read_with_cx(stream, &dst, &n, &cx) == ASX_E_PENDING,
+           "first poll_read pending");
+    ASSERT(asx_tcp_stream_poll_read_with_cx(stream, &dst, &n, &cx) == ASX_E_POLL_BUDGET_EXHAUSTED,
+           "second poll_read exhausts budget");
+
+    src = asx_buf_from_cstr("hello");
+    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
+                                     ASX_CAP_BUDGET_CONSUME));
+    budget = asx_budget_from_polls(1);
+    MUST_OK(asx_cx_bind_budget(&cx, &budget));
+    ASSERT(asx_tcp_stream_poll_write_with_cx(stream, &src, &n, &cx) == ASX_E_PENDING,
+           "first poll_write pending");
+    ASSERT(asx_tcp_stream_poll_write_with_cx(stream, &src, &n, &cx)
+               == ASX_E_POLL_BUDGET_EXHAUSTED,
+           "second poll_write exhausts budget");
+
+    asx_tcp_stream_close(stream);
+}
+
+static void test_tcp_stream_poll_with_cx_permission_denied(void) {
+    asx_tcp_stream stream;
+    asx_socket_addr addr = asx_socket_addr_loopback(2002);
+    asx_buf_mut dst;
+    asx_buf src;
+    uint32_t n;
+    asx_cx cx;
+
+    MUST_OK(asx_tcp_connect(&stream, &addr));
+    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CANCEL_CHECK));
+
+    asx_buf_mut_init(&dst);
+    ASSERT(asx_tcp_stream_poll_read_with_cx(stream, &dst, &n, &cx) == ASX_E_PERMISSION_DENIED,
+           "poll_read with cx requires channel cap");
+
+    src = asx_buf_from_cstr("hello");
+    ASSERT(asx_tcp_stream_poll_write_with_cx(stream, &src, &n, &cx) == ASX_E_PERMISSION_DENIED,
+           "poll_write with cx requires channel cap");
 
     asx_tcp_stream_close(stream);
 }
@@ -708,13 +805,18 @@ int main(void) {
     RUN(test_tcp_listener_bind_close);
     RUN(test_tcp_listener_local_addr);
     RUN(test_tcp_listener_poll_accept_pending);
+    RUN(test_tcp_listener_bind_with_cx_permission_denied);
+    RUN(test_tcp_listener_poll_accept_with_cx_budget_checkpoint);
     RUN(test_tcp_listener_null_args);
     RUN(test_tcp_listener_arena_exhaustion);
 
     /* Net: TCP stream */
     RUN(test_tcp_connect_close);
+    RUN(test_tcp_connect_with_cx_permission_denied);
     RUN(test_tcp_stream_peer_addr);
     RUN(test_tcp_stream_poll_pending);
+    RUN(test_tcp_stream_poll_with_cx_budget_checkpoint);
+    RUN(test_tcp_stream_poll_with_cx_permission_denied);
     RUN(test_tcp_stream_stale_handle);
     RUN(test_net_reset);
 
