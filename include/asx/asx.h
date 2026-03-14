@@ -52,6 +52,10 @@
 #include <asx/codec/equivalence.h>
 #include <asx/codec/schema.h>
 
+/* Security and audit surface */
+#include <asx/security/security.h>
+#include <asx/security/audit.h>
+
 /* Runtime (walking skeleton — bd-ix8.8) */
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/builder.h>

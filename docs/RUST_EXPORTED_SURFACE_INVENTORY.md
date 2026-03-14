@@ -471,7 +471,7 @@ and "shipped by default" are not yet the same thing.
 |---|---|---|---|
 | `actor` | `partial` | `include/asx/actor/actor.h`, `src/actor/actor.c`, actor task/mailbox/call loop | Real actor API exists, but far smaller than the upstream actor ecosystem |
 | `app` | `partial` | `include/asx/app/app.h`, `include/asx/app/doctor.h`, `include/asx/app/report.h`, `src/app/*.c` | Bootstrap/doctor/report surface exists; not a full crate-level application stack |
-| `audit` | `partial` | `include/asx/security/audit.h`, `src/security/audit.c` | Audit/evidence helpers exist, but not the broader upstream audit + operator story |
+| `audit` | `partial` | `include/asx/security/audit.h`, `src/security/audit.c`, `tests/vignettes/vignette_security.c` | Audit/evidence helpers now have a logged public usage flow, but the broader upstream audit + operator story is still narrower here |
 | `bytes` | `substantive` | `include/asx/bytes/*.h`, `src/bytes/*.c`, buffer/codec APIs | Strong local byte/buffer surface with tests; still much smaller than full upstream ecosystem |
 | `cancel` | `substantive` | `include/asx/core/cancel.h`, runtime cancellation integration, lifecycle tests/docs | Core cancel protocol is implemented and heavily verified |
 | `channel` | `substantive` | `include/asx/core/channel.h`, `broadcast.h`, `oneshot.h`, `session.h`, `watch.h`; `src/channel/*.c`; unit tests | MPSC plus related channel families are real, not placeholders |
@@ -503,7 +503,7 @@ and "shipped by default" are not yet the same thing.
 | `record` | `absent` | No public `include/asx/record/` family | Internal lifecycle state exists, but not as an exported record module |
 | `remote` | `absent` | No `include/asx/remote/` or `src/remote/` | Remote/idempotency/saga surfaces are missing |
 | `runtime` | `substantive` | `include/asx/runtime/*.h`, `src/runtime/*.c`, extensive runtime tests/docs | This is the strongest implemented family after core/channel/time/trace |
-| `security` | `partial` | `include/asx/security/*.h`, `src/security/*.c` | Security/audit primitives exist, but not the full upstream security scope |
+| `security` | `partial` | `include/asx/security/*.h`, `src/security/*.c`, `tests/vignettes/vignette_security.c` | Security/audit primitives and logged authenticated flows exist, but the full upstream security scope is still broader |
 | `service` | `absent` | No `include/asx/service/` or `src/service/` | No service-builder/service-stack family |
 | `session` | `partial` | `include/asx/core/session.h`, `src/channel/session.c` | Session-related channel semantics exist, but not a broad standalone session module |
 | `spork` | `absent` | No `include/asx/spork/` or `src/spork/` | No comparable orchestration/operator family |

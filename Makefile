@@ -151,6 +151,7 @@ RUNTIME_SRC := \
 	src/runtime/adapter.c \
 	src/runtime/vertical_adapter.c \
 	src/runtime/virtual_time.c \
+	src/runtime/lab.c \
 	src/runtime/io_driver.c \
 	src/runtime/config_reload.c \
 	src/runtime/regression_localize.c \
@@ -275,6 +276,9 @@ CX_TEST_EXTRA_SRC := \
 	src/actor/actor.c \
 	src/actor/supervisor.c \
 	src/net/net.c
+
+SECURITY_VIGNETTE_EXTRA_SRC := $(CX_TEST_EXTRA_SRC)
+SECURITY_AUDIT_TEST_EXTRA_SRC := $(CX_TEST_EXTRA_SRC)
 
 # ---------------------------------------------------------------------------
 # E2E scripts
@@ -559,6 +563,9 @@ $(TEST_DIR)/unit/runtime/test_seqlock_ebr: tests/unit/runtime/test_seqlock_ebr.c
 $(TEST_DIR)/unit/cx/test_scope: tests/unit/cx/test_scope.c $(CX_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(CX_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
+$(TEST_DIR)/unit/security/test_security_audit: tests/unit/security/test_security_audit.c $(SECURITY_AUDIT_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(SECURITY_AUDIT_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
 $(TEST_DIR)/unit/%: tests/unit/%.c $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
 
@@ -798,6 +805,9 @@ $(TEST_DIR)/vignettes/%: tests/vignettes/%.c $(LIB_A) | test-dirs
 
 $(TEST_DIR)/vignettes/vignette_lifecycle: tests/vignettes/vignette_lifecycle.c $(CX_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(CX_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
+$(TEST_DIR)/vignettes/vignette_security: tests/vignettes/vignette_security.c $(SECURITY_VIGNETTE_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(SECURITY_VIGNETTE_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
 test-dirs:
 	@mkdir -p $(TEST_DIR)/unit/core $(TEST_DIR)/unit/runtime \

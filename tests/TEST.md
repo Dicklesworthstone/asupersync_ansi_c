@@ -94,6 +94,7 @@ before API/ABI freeze (`make test-vignettes`):
 - `vignette_budgets.c` — budget construction and exhaustion handling
 - `vignette_replay.c` — deterministic trace/replay and snapshot flows
 - `vignette_hooks.c` — freestanding runtime hook integration
+- `vignette_security.c` — authenticated symbol, derived-context rejection, and audit/evidence flows
 
 ### End-to-End Tests (`tests/e2e/`)
 
