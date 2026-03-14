@@ -62,6 +62,13 @@
 #include <asx/record/record.h>
 #include <asx/link/link.h>
 
+/* Operator and testing support */
+#include <asx/app/app.h>
+#include <asx/app/doctor.h>
+#include <asx/app/report.h>
+#include <asx/console/console.h>
+#include <asx/tracing_compat/tracing_compat.h>
+
 /* Runtime (walking skeleton — bd-ix8.8) */
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/builder.h>

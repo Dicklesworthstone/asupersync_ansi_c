@@ -194,6 +194,17 @@ CX_SRC := \
 LINK_SRC := \
 	src/link/link.c
 
+APP_SRC := \
+	src/app/app.c \
+	src/app/doctor.c \
+	src/app/report.c
+
+CONSOLE_SRC := \
+	src/console/console.c
+
+TRACING_COMPAT_SRC := \
+	src/tracing_compat/tracing_compat.c
+
 # Platform sources selected by profile
 ifeq ($(PROFILE),POSIX)
   PLATFORM_SRC := src/platform/posix/hooks.c
@@ -207,7 +218,7 @@ else
   PLATFORM_SRC :=
 endif
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(PLATFORM_SRC)
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -250,7 +261,13 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/stream/*_test.c) \
                  $(wildcard tests/unit/stream/test_*.c) \
                  $(wildcard tests/unit/plan/*_test.c) \
-                 $(wildcard tests/unit/plan/test_*.c)
+                 $(wildcard tests/unit/plan/test_*.c) \
+                 $(wildcard tests/unit/app/*_test.c) \
+                 $(wildcard tests/unit/app/test_*.c) \
+                 $(wildcard tests/unit/console/*_test.c) \
+                 $(wildcard tests/unit/console/test_*.c) \
+                 $(wildcard tests/unit/tracing_compat/*_test.c) \
+                 $(wildcard tests/unit/tracing_compat/test_*.c)
 UNIT_TEST_SRC := $(sort $(UNIT_TEST_SRC))
 
 INVARIANT_TEST_SRC := $(wildcard tests/invariant/lifecycle/*_test.c) \
@@ -289,6 +306,8 @@ CX_TEST_EXTRA_SRC := \
 SECURITY_VIGNETTE_EXTRA_SRC := $(CX_TEST_EXTRA_SRC)
 SECURITY_AUDIT_TEST_EXTRA_SRC := $(CX_TEST_EXTRA_SRC)
 PUBLIC_FAMILY_TEST_EXTRA_SRC := $(CX_TEST_EXTRA_SRC)
+APP_TEST_EXTRA_SRC := $(PUBLIC_FAMILY_TEST_EXTRA_SRC)
+OPERATOR_TEST_EXTRA_SRC := $(PUBLIC_FAMILY_TEST_EXTRA_SRC)
 
 # ---------------------------------------------------------------------------
 # E2E scripts
@@ -368,7 +387,8 @@ obj-dirs:
 	@mkdir -p $(OBJ_DIR)/core $(OBJ_DIR)/runtime $(OBJ_DIR)/channel \
 	          $(OBJ_DIR)/time $(OBJ_DIR)/security $(OBJ_DIR)/stream \
 	          $(OBJ_DIR)/fs $(OBJ_DIR)/process $(OBJ_DIR)/signal \
-	          $(OBJ_DIR)/link \
+	          $(OBJ_DIR)/link $(OBJ_DIR)/app $(OBJ_DIR)/console \
+	          $(OBJ_DIR)/tracing_compat \
 	          $(OBJ_DIR)/plan $(OBJ_DIR)/cx \
 	          $(OBJ_DIR)/platform/posix \
 	          $(OBJ_DIR)/platform/win32 $(OBJ_DIR)/platform/freestanding
@@ -593,6 +613,18 @@ $(TEST_DIR)/unit/link/test_link: tests/unit/link/test_link.c $(PUBLIC_FAMILY_TES
 
 $(TEST_DIR)/unit/record/test_record: tests/unit/record/test_record.c $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
+$(TEST_DIR)/unit/app/test_app: tests/unit/app/test_app.c $(APP_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(APP_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
+$(TEST_DIR)/unit/app/test_report: tests/unit/app/test_report.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
+$(TEST_DIR)/unit/console/test_console: tests/unit/console/test_console.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
+$(TEST_DIR)/unit/tracing_compat/test_tracing_compat: tests/unit/tracing_compat/test_tracing_compat.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
 $(TEST_DIR)/unit/%: tests/unit/%.c $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
@@ -834,16 +866,24 @@ $(TEST_DIR)/vignettes/%: tests/vignettes/%.c $(LIB_A) | test-dirs
 $(TEST_DIR)/vignettes/vignette_lifecycle: tests/vignettes/vignette_lifecycle.c $(CX_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(CX_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
+$(TEST_DIR)/vignettes/vignette_hooks: tests/vignettes/vignette_hooks.c $(CX_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(CX_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
 $(TEST_DIR)/vignettes/vignette_security: tests/vignettes/vignette_security.c $(SECURITY_VIGNETTE_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(SECURITY_VIGNETTE_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
 $(TEST_DIR)/vignettes/vignette_link: tests/vignettes/vignette_link.c $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(PUBLIC_FAMILY_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
+$(TEST_DIR)/vignettes/vignette_console: tests/vignettes/vignette_console.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
 test-dirs:
 	@mkdir -p $(TEST_DIR)/unit/core $(TEST_DIR)/unit/runtime \
 	          $(TEST_DIR)/unit/channel $(TEST_DIR)/unit/link \
 	          $(TEST_DIR)/unit/record $(TEST_DIR)/unit/time \
+	          $(TEST_DIR)/unit/app $(TEST_DIR)/unit/console \
+	          $(TEST_DIR)/unit/tracing_compat \
 	          $(TEST_DIR)/unit/security $(TEST_DIR)/unit/fs \
 	          $(TEST_DIR)/unit/process $(TEST_DIR)/unit/signal \
 	          $(TEST_DIR)/unit/stream $(TEST_DIR)/unit/plan \

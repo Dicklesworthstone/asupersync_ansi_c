@@ -387,6 +387,29 @@ static void test_parse_args_help(void) {
     ASSERT(args.help == 1, "help flag");
 }
 
+static void test_parse_args_unknown_rejected(void) {
+    asx_app_args args;
+    const char *argv[] = {"myapp", "--mystery"};
+
+    ASSERT(asx_app_parse_args(&args, 2, argv) == ASX_E_INVALID_ARGUMENT, "unknown rejected");
+}
+
+static void test_parse_args_replay_requires_scenario(void) {
+    asx_app_args args;
+    const char *argv[] = {"myapp", "replay"};
+
+    ASSERT(asx_app_parse_args(&args, 2, argv) == ASX_E_INVALID_ARGUMENT,
+           "replay requires scenario");
+}
+
+static void test_parse_args_seed_requires_decimal(void) {
+    asx_app_args args;
+    const char *argv[] = {"myapp", "--seed=12x"};
+
+    ASSERT(asx_app_parse_args(&args, 2, argv) == ASX_E_INVALID_ARGUMENT,
+           "seed requires decimal");
+}
+
 static void test_parse_args_null(void) {
     ASSERT(asx_app_parse_args(NULL, 0, NULL) == ASX_E_INVALID_ARGUMENT, "null args rejected");
 }
@@ -828,6 +851,9 @@ int main(void) {
     RUN(test_parse_args_verbose);
     RUN(test_parse_args_seed);
     RUN(test_parse_args_help);
+    RUN(test_parse_args_unknown_rejected);
+    RUN(test_parse_args_replay_requires_scenario);
+    RUN(test_parse_args_seed_requires_decimal);
     RUN(test_parse_args_null);
 
     /* App: lifecycle */

@@ -170,3 +170,12 @@ The `make check` target runs the full gate sequence:
 
 Test logs can optionally emit structured JSONL via `test_log.h` for
 automated analysis. Schema: `schemas/test_log.schema.json`.
+
+For public/operator-facing verification helpers, the same JSONL pattern is now
+available via `include/asx/testing/log.h` with the `asx_test_log_*` API. The
+CLI/operator slice also adds:
+- `tests/unit/app/test_app.c`
+- `tests/unit/app/test_report.c`
+- `tests/unit/console/test_console.c`
+- `tests/unit/tracing_compat/test_tracing_compat.c`
+- `tests/vignettes/vignette_console.c`

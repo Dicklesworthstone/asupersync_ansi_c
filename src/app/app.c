@@ -76,7 +76,11 @@ asx_status asx_app_parse_args(asx_app_args *args, int argc, const char **argv) {
             args->command = ASX_APP_CMD_DOCTOR;
         } else if (strcmp(argv[i], "replay") == 0) {
             args->command = ASX_APP_CMD_REPLAY;
-            if (i + 1 < argc) { args->scenario = argv[++i]; }
+            if (i + 1 < argc && argv[i + 1] != NULL && argv[i + 1][0] != '-') {
+                args->scenario = argv[++i];
+            } else {
+                return ASX_E_INVALID_ARGUMENT;
+            }
         } else if (strcmp(argv[i], "server") == 0) {
             args->command = ASX_APP_CMD_SERVER;
         } else if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) {
@@ -87,11 +91,15 @@ asx_status asx_app_parse_args(asx_app_args *args, int argc, const char **argv) {
             /* Simple decimal parse */
             const char *p = argv[i] + 7;
             uint64_t val = 0;
+            if (*p == '\0') return ASX_E_INVALID_ARGUMENT;
             while (*p >= '0' && *p <= '9') {
                 val = val * 10 + (uint64_t)(*p - '0');
                 p++;
             }
+            if (*p != '\0') return ASX_E_INVALID_ARGUMENT;
             args->seed = val;
+        } else {
+            return ASX_E_INVALID_ARGUMENT;
         }
     }
 

@@ -85,34 +85,40 @@ static uint64_t blocking_add_seven(void *user_data) {
     return input + 7u;
 }
 
+static asx_status populate_custom_hooks(asx_runtime_hooks *hooks) {
+    asx_status st;
+
+    st = asx_runtime_hooks_init(hooks);
+    if (st != ASX_OK) { return st; }
+
+    hooks->allocator.malloc_fn = custom_malloc;
+    hooks->allocator.realloc_fn = custom_realloc;
+    hooks->allocator.free_fn = custom_free;
+    hooks->allocator.ctx = NULL;
+
+    hooks->clock.now_ns_fn = custom_clock_now;
+    hooks->clock.logical_now_ns_fn = custom_clock_now;
+    hooks->clock.ctx = NULL;
+
+    hooks->entropy.random_u64_fn = custom_random;
+    hooks->entropy.ctx = NULL;
+
+    hooks->reactor.ghost_wait_fn = custom_ghost_reactor;
+    hooks->reactor.ctx = NULL;
+
+    hooks->log.write_fn = custom_log;
+    hooks->log.ctx = NULL;
+
+    hooks->deterministic_seeded_prng = 1;
+
+    return asx_runtime_hooks_validate(hooks, 1);
+}
+
 static asx_status install_custom_hooks(void) {
     asx_runtime_hooks hooks;
     asx_status st;
 
-    st = asx_runtime_hooks_init(&hooks);
-    if (st != ASX_OK) { return st; }
-
-    hooks.allocator.malloc_fn = custom_malloc;
-    hooks.allocator.realloc_fn = custom_realloc;
-    hooks.allocator.free_fn = custom_free;
-    hooks.allocator.ctx = NULL;
-
-    hooks.clock.now_ns_fn = custom_clock_now;
-    hooks.clock.logical_now_ns_fn = custom_clock_now;
-    hooks.clock.ctx = NULL;
-
-    hooks.entropy.random_u64_fn = custom_random;
-    hooks.entropy.ctx = NULL;
-
-    hooks.reactor.ghost_wait_fn = custom_ghost_reactor;
-    hooks.reactor.ctx = NULL;
-
-    hooks.log.write_fn = custom_log;
-    hooks.log.ctx = NULL;
-
-    hooks.deterministic_seeded_prng = 1;
-
-    st = asx_runtime_hooks_validate(&hooks, 1);
+    st = populate_custom_hooks(&hooks);
     if (st != ASX_OK) { return st; }
 
     return asx_runtime_set_hooks(&hooks);
@@ -360,7 +366,104 @@ static int scenario_reactor_and_blocking(void) {
 }
 
 /* -------------------------------------------------------------------
- * Scenario 6: End-to-end with custom hooks
+ * Scenario 6: Builder and deadline/watchdog surfaces
+ * ------------------------------------------------------------------- */
+static int scenario_builder_and_deadlines(void) {
+    asx_status st;
+    asx_runtime_builder builder;
+    asx_runtime rt;
+    asx_runtime_hooks hooks;
+    asx_runtime_config cfg;
+    asx_auto_compliance_gate gate;
+    asx_auto_compliance_result result;
+    asx_auto_deadline_tracker *dt;
+    asx_auto_watchdog *wd;
+    asx_auto_audit_ring *ring;
+    const asx_audit_entry *entry;
+
+    printf("--- scenario: builder and deadline monitors ---\n");
+
+    memset(&rt, 0, sizeof(rt));
+    asx_runtime_reset();
+    asx_auto_instrument_reset();
+
+    st = asx_runtime_builder_init_current_thread(&builder);
+    if (st != ASX_OK) {
+        printf("  FAIL: builder_init_current_thread returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = populate_custom_hooks(&hooks);
+    if (st != ASX_OK) {
+        printf("  FAIL: populate_custom_hooks returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_runtime_builder_set_hooks(&builder, &hooks);
+    if (st != ASX_OK) {
+        printf("  FAIL: builder_set_hooks returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_runtime_builder_set_finalizer_poll_budget(&builder, 48u);
+    if (st != ASX_OK) {
+        printf("  FAIL: builder_set_finalizer_poll_budget returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_runtime_builder_build(&builder, &rt);
+    if (st != ASX_OK) {
+        printf("  FAIL: builder_build returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_runtime_get_config(&rt, &cfg);
+    if (st != ASX_OK) {
+        printf("  FAIL: runtime_get_config returned %s\n", asx_status_str(st));
+        asx_runtime_shutdown(&rt);
+        return 1;
+    }
+    if (cfg.wait_policy != ASX_WAIT_BUSY_SPIN || cfg.finalizer_poll_budget != 48u) {
+        printf("  FAIL: builder-built runtime config was not applied\n");
+        asx_runtime_shutdown(&rt);
+        return 1;
+    }
+    printf("  builder preset produced wait_policy=%d finalizer_poll_budget=%u\n",
+           (int)cfg.wait_policy, cfg.finalizer_poll_budget);
+
+    dt = asx_auto_deadline_global();
+    wd = asx_auto_watchdog_global();
+    ring = asx_auto_audit_global();
+    asx_auto_watchdog_init(wd, 1000u);
+
+    asx_auto_record_deadline(1000u, 900u, 11u);
+    asx_auto_record_deadline(1000u, 1300u, 11u);
+    asx_auto_record_checkpoint(100u, 11u);
+    asx_auto_record_checkpoint(1400u, 11u);
+
+    asx_auto_compliance_gate_init(&gate);
+    asx_auto_compliance_evaluate(&gate, dt, wd, &result);
+    entry = asx_auto_audit_get(ring, 0u);
+
+    if (result.pass || dt->deadline_misses != 1u || wd->violations != 1u || entry == NULL) {
+        printf("  FAIL: deadline/watchdog evidence did not accumulate as expected\n");
+        asx_runtime_shutdown(&rt);
+        return 1;
+    }
+
+    printf("  deadline miss rate=%u watchdog violations=%u checkpoints=%u\n",
+           result.actual_miss_rate, result.actual_violations, result.actual_checkpoints);
+    printf("  first audit event=%s total_events=%u\n", asx_audit_kind_str(entry->kind),
+           asx_auto_audit_total(ring));
+    printf("  compliance gate pass=%d mask=0x%x\n", result.pass, result.violation_mask);
+
+    asx_runtime_shutdown(&rt);
+    printf("  PASS: builder and deadline monitors\n");
+    return 0;
+}
+
+/* -------------------------------------------------------------------
+ * Scenario 7: End-to-end with custom hooks
  * ------------------------------------------------------------------- */
 static int scenario_end_to_end(void) {
     asx_status st;
@@ -418,6 +521,7 @@ int main(void) {
     failures += scenario_config();
     failures += scenario_allocator_seal();
     failures += scenario_reactor_and_blocking();
+    failures += scenario_builder_and_deadlines();
     failures += scenario_end_to_end();
 
     printf("\n=== hooks: %d failures ===\n", failures);

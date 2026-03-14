@@ -470,7 +470,7 @@ and "shipped by default" are not yet the same thing.
 | Upstream family | Current ANSI C state | Evidence in this repo | Gap / dependency note |
 |---|---|---|---|
 | `actor` | `partial` | `include/asx/actor/actor.h`, `src/actor/actor.c`, actor task/mailbox/call loop | Real actor API exists, but far smaller than the upstream actor ecosystem |
-| `app` | `partial` | `include/asx/app/app.h`, `include/asx/app/doctor.h`, `include/asx/app/report.h`, `src/app/*.c` | Bootstrap/doctor/report surface exists; not a full crate-level application stack |
+| `app` | `partial` | `include/asx/app/app.h`, `include/asx/app/doctor.h`, `include/asx/app/report.h`, `src/app/*.c`, umbrella/header + archive build exposure | Bootstrap/doctor/report surface now ships through the umbrella and archive, but it is still not a full crate-level application stack |
 | `audit` | `partial` | `include/asx/security/audit.h`, `src/security/audit.c`, `tests/vignettes/vignette_security.c` | Audit/evidence helpers now have a logged public usage flow, but the broader upstream audit + operator story is still narrower here |
 | `bytes` | `substantive` | `include/asx/bytes/*.h`, `src/bytes/*.c`, buffer/codec APIs | Strong local byte/buffer surface with tests; still much smaller than full upstream ecosystem |
 | `cancel` | `substantive` | `include/asx/core/cancel.h`, runtime cancellation integration, lifecycle tests/docs | Core cancel protocol is implemented and heavily verified |
@@ -479,7 +479,7 @@ and "shipped by default" are not yet the same thing.
 | `combinator` | `partial` | `include/asx/core/combinator.h`, `src/core/combinator*.c` | Join/race/select/timeout-style APIs exist, but not the broader upstream orchestration family |
 | `config` | `partial` | `include/asx/asx_config.h`, runtime/app config structs | Compile-time/runtime config exists, but not the richer upstream config module and loaders |
 | `conformance` | `partial` | `tests/conformance/`, `fixtures/rust_reference/`, `tools/ci/run_conformance.sh`, docs | Strong verification infrastructure exists, but no matching public `include/asx/conformance/...` family |
-| `console` | `absent` | No `include/asx/console/` or `src/console/` | No comparable public console/operator module |
+| `console` | `partial` | `include/asx/console/console.h`, `src/console/console.c`, `tests/unit/console/test_console.c`, `tests/vignettes/vignette_console.c` | A thin public operator/console family now ships over doctor/report surfaces, but it is still much smaller than upstream console/operator scope |
 | `cx` | `partial` | `include/asx/cx/cx.h`, `include/asx/cx/scope.h`, `src/cx/*.c`, umbrella/header + archive build exposure | Capability context and scopes now ship publicly, but the broader upstream `Cx` ecosystem and more propagation points are still missing |
 | `decoding` | `absent` | No `include/asx/decoding/` or `src/decoding/` | Upstream decoding pipeline has no comparable C family |
 | `distributed` | `absent` | No `include/asx/distributed/` or `src/distributed/` | Entire distributed runtime family is missing |
@@ -512,7 +512,7 @@ and "shipped by default" are not yet the same thing.
 | `sync` | `partial` | `include/asx/sync/*.h`, `src/sync/*.c` | Mutex/once/semaphore/barrier/notify exist, but not the full upstream sync surface |
 | `time` | `substantive` | `include/asx/time/*.h`, `src/time/*.c`, timer tests/docs | Timer wheel, deadline, and sleep surfaces are real and verified |
 | `trace` | `substantive` | `include/asx/runtime/trace.h`, event log/telemetry/hindsight/reporting, conformance docs/tests | Trace/replay evidence is a real product surface here |
-| `tracing_compat` | `absent` | No `include/asx/tracing_compat/` or equivalent | No optional tracing integration family |
+| `tracing_compat` | `partial` | `include/asx/tracing_compat/tracing_compat.h`, `src/tracing_compat/tracing_compat.c`, `tests/unit/tracing_compat/test_tracing_compat.c` | A lightweight compatibility export over the deterministic trace ring now exists, but it is not a full upstream tracing integration ecosystem |
 | `transport` | `absent` | No `include/asx/transport/` or `src/transport/` | No reusable transport abstraction layer |
 | `types` | `partial` | `include/asx/asx_ids.h`, `asx_status.h`, `asx_config.h`, `asx_abi.h`, `abi/wasm_abi.h` | Many foundational value types exist, but not the broad upstream `types` export set |
 | `util` | `absent` | No public `include/asx/util/` family | Internal helpers exist, but no exported util module |
@@ -522,7 +522,7 @@ and "shipped by default" are not yet the same thing.
 
 | Upstream family | Current ANSI C state | Evidence in this repo | Gap / dependency note |
 |---|---|---|---|
-| `cli` | `absent` | No `include/asx/cli/`, no standalone CLI binary source tree | README/plan mention CLI-like workflows, but crate-style CLI surface is missing |
+| `cli` | `partial` | `asx_app_parse_args` / command dispatch in `include/asx/app/app.h`, shipped through `include/asx/asx.h`, plus `tests/unit/app/test_app.c` | A real CLI/operator parsing surface now ships, but there is still no standalone `include/asx/cli/` family or full upstream CLI ecosystem |
 | `database` | `absent` | No `include/asx/database/` or `src/database/` | Entire database client family is missing |
 | `tls` | `absent` | No `include/asx/tls/` or `src/tls/` | No transport-security family today |
 | `fs` | `partial` | `include/asx/fs/fs.h`, `src/fs/fs.c` deterministic in-memory host surface | Useful API exists, but it is not a native OS filesystem integration layer |
@@ -538,8 +538,8 @@ and "shipped by default" are not yet the same thing.
 |---|---|---|---|
 | Browser/WASM product surface | `partial` | `include/asx/abi/wasm_abi.h`, `include/asx/runtime/browser_boundary.h`, `browser_diagnostic.h`, examples `ex_browser_*` | Some ABI/boundary tooling exists, but no `web` family or upstream-style fail-closed browser feature matrix |
 | Examples and smoke paths | `partial` | `examples/*.c`, `tests/e2e/*.sh`, `README.md` examples | Good kernel/lab/browser-boundary examples exist; HTTP/web/grpc/database/distributed example families do not |
-| Doctor/report/evidence workflow | `partial` | `include/asx/app/report.h`, `app/doctor.h`, `runtime/diagnostic.h`, `src/app/*.c` | Strong diagnostic story locally, but still narrower than upstream evidence/observability contract |
-| Test-helper / artifact surface | `partial` | `tests/test_log.h`, `tests/test_harness.h`, `tools/fixture_capture`, `fixtures/rust_reference/` | Verification tooling is strong, but not mirrored as public `test_logging` / `test_ndjson` / `test_utils` modules |
+| Doctor/report/evidence workflow | `partial` | `include/asx/app/report.h`, `app/doctor.h`, `runtime/diagnostic.h`, `src/app/*.c`, `include/asx/console/console.h`, `tests/vignettes/vignette_console.c` | Strong diagnostic story locally, now with a shipped operator-facing console wrapper, but still narrower than upstream evidence/observability contract |
+| Test-helper / artifact surface | `partial` | `tests/test_log.h`, `tests/test_harness.h`, `include/asx/testing/log.h`, `tools/fixture_capture`, `fixtures/rust_reference/` | Verification tooling is strong and now has a public test-log helper, but it still is not a full public `test_logging` / `test_ndjson` / `test_utils` module family |
 
 ### 11.4 Bottom-Line Roadmap Implications
 
@@ -553,8 +553,7 @@ surfaces. That said, crate-level parity is still nowhere close to closure:
   `sync`, `stream`, `actor`, `supervision`, `app`, `security`);
 - some tree-present families are also not shipped by the default umbrella
   header/archive build today, including representative surfaces such as
-  `actor`, `supervision`, `app`, `cx`, `sync`, `stream`, and parts of the lab
-  and diagnostics stack;
+  `actor`, `supervision`, `sync`, `stream`, and parts of the lab stack;
 - networking is still explicitly skeletal rather than production-capable;
 - major exported families remain entirely absent, including `http`, `web`,
   `grpc`, `database`, `tls`, `messaging`, `distributed`, `remote`, `service`,
