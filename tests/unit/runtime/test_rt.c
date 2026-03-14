@@ -14,6 +14,9 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/runtime/blocking.h>
+#include <asx/runtime/browser_boundary.h>
+#include <asx/runtime/io_driver.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <string.h>
@@ -34,6 +37,11 @@ static asx_status dummy_poll(void *user_data, asx_task_id self) {
     (void)user_data;
     (void)self;
     return ASX_OK;
+}
+
+static uint64_t add_one(void *user_data) {
+    uint64_t value = *(uint64_t *)user_data;
+    return value + 1u;
 }
 
 /* ------------------------------------------------------------------ */
@@ -193,6 +201,43 @@ TEST(init_default_success) {
     ASSERT_EQ(rt.config.leak_response, ASX_LEAK_LOG);
     ASSERT_EQ(rt.config.finalizer_poll_budget, 100u);
     ASSERT_EQ(rt.config.max_cancel_chain_depth, 16u);
+
+    asx_runtime_shutdown(&rt);
+}
+
+TEST(init_default_wires_blocking_surface) {
+    asx_runtime rt;
+    asx_blocking_handle h;
+    uint64_t input = 9;
+    uint64_t result = 0;
+
+    ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
+
+    if (asx_surface_available_active(ASX_SURFACE_BLOCKING)) {
+        ASSERT_EQ(asx_spawn_blocking(add_one, &input, NULL, &h), ASX_OK);
+        ASSERT_EQ(asx_blocking_get_result(&h, &result), ASX_OK);
+        ASSERT_EQ(result, (uint64_t)10);
+    } else {
+        ASSERT_EQ(asx_spawn_blocking(add_one, &input, NULL, &h), ASX_E_PERMISSION_DENIED);
+    }
+
+    asx_runtime_shutdown(&rt);
+}
+
+TEST(init_default_wires_io_surface) {
+    asx_runtime rt;
+    asx_waker w;
+    asx_io_token tok;
+
+    ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
+    ASSERT_EQ(asx_waker_register(1, &w), ASX_OK);
+
+    if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
+        ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_OK);
+        asx_io_deregister(&tok);
+    } else {
+        ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_E_PERMISSION_DENIED);
+    }
 
     asx_runtime_shutdown(&rt);
 }
@@ -412,6 +457,8 @@ int main(void) {
     /* Default init */
     RUN_TEST(init_default_null_fails);
     RUN_TEST(init_default_success);
+    RUN_TEST(init_default_wires_blocking_surface);
+    RUN_TEST(init_default_wires_io_surface);
 
     /* is_initialized */
     RUN_TEST(is_initialized_null_returns_false);

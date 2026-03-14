@@ -22,6 +22,8 @@
 static asx_task_state g_stub_task_state = ASX_TASK_RUNNING;
 static asx_task_id g_stub_task_id = ASX_INVALID_ID;
 
+asx_status asx_task_get_state(asx_task_id id, asx_task_state *out_state);
+
 asx_status asx_task_get_state(asx_task_id id, asx_task_state *out_state) {
     if (out_state == NULL) return ASX_E_INVALID_ARGUMENT;
     if (id == ASX_INVALID_ID || id != g_stub_task_id) return ASX_E_NOT_FOUND;
@@ -168,6 +170,115 @@ TEST(narrow_to_none_succeeds) {
     asx_cx_init(&parent, 1, 1, ASX_CAP_ALL);
     ASSERT_EQ(asx_cx_narrow(&parent, &child, ASX_CAP_NONE), ASX_OK);
     ASSERT_EQ(asx_cx_caps(&child), ASX_CAP_NONE);
+}
+
+TEST(attenuate_masks_parent_caps) {
+    asx_cx parent, child;
+    asx_cap_flags caps = ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY | ASX_CAP_SPAWN;
+
+    asx_cx_init(&parent, 9, 4, caps);
+    ASSERT_EQ(asx_cx_attenuate(&parent, &child, ASX_CAP_CLOCK_READ | ASX_CAP_SPAWN), ASX_OK);
+    ASSERT_EQ(asx_cx_caps(&child), (asx_cap_flags)(ASX_CAP_CLOCK_READ | ASX_CAP_SPAWN));
+}
+
+/* ------------------------------------------------------------------ */
+/* Wrapper / registry / macaroon tests                                */
+/* ------------------------------------------------------------------ */
+
+TEST(wrap_and_unwrap_subset_succeeds) {
+    asx_cx parent, child;
+    asx_cx_wrapper wrapper;
+
+    asx_cx_init(&parent, 5, 8, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY | ASX_CAP_SPAWN);
+    ASSERT_EQ(asx_cx_wrap(&parent, ASX_CAP_CLOCK_READ | ASX_CAP_SPAWN, &wrapper), ASX_OK);
+    ASSERT_EQ(asx_cx_unwrap(&parent, &wrapper, &child), ASX_OK);
+    ASSERT_EQ(asx_cx_region(&child), (asx_region_id)5);
+    ASSERT_EQ(asx_cx_task(&child), (asx_task_id)8);
+    ASSERT_TRUE(asx_cx_has_cap(&child, ASX_CAP_CLOCK_READ));
+    ASSERT_TRUE(asx_cx_has_cap(&child, ASX_CAP_SPAWN));
+    ASSERT_FALSE(asx_cx_has_cap(&child, ASX_CAP_ENTROPY));
+}
+
+TEST(wrap_escalation_fails) {
+    asx_cx parent;
+    asx_cx_wrapper wrapper;
+
+    asx_cx_init(&parent, 5, 8, ASX_CAP_CLOCK_READ);
+    ASSERT_EQ(asx_cx_wrap(&parent, ASX_CAP_CLOCK_READ | ASX_CAP_SPAWN, &wrapper),
+              ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(unwrap_stale_wrapper_fails_closed) {
+    asx_cx parent, child;
+    asx_cx_wrapper wrapper;
+
+    asx_cx_init(&parent, 5, 8, ASX_CAP_CLOCK_READ | ASX_CAP_SPAWN);
+    ASSERT_EQ(asx_cx_wrap(&parent, ASX_CAP_CLOCK_READ, &wrapper), ASX_OK);
+    wrapper.parent_generation++;
+    ASSERT_EQ(asx_cx_unwrap(&parent, &wrapper, &child), ASX_E_STALE_HANDLE);
+}
+
+TEST(registry_issue_materialize_and_revoke) {
+    asx_cx parent, child;
+    asx_cx_registry registry;
+    asx_cx_registry_entry entries[2];
+    asx_cx_grant grant;
+
+    asx_cx_init(&parent, 7, 3, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY | ASX_CAP_SPAWN);
+    ASSERT_EQ(asx_cx_registry_init(&registry, entries, 2u), ASX_OK);
+    ASSERT_EQ(asx_cx_registry_issue(&parent, &registry, ASX_CAP_ENTROPY, &grant), ASX_OK);
+    ASSERT_EQ(asx_cx_registry_materialize(&parent, &registry, grant, &child), ASX_OK);
+    ASSERT_EQ(asx_cx_caps(&child), ASX_CAP_ENTROPY);
+    ASSERT_EQ(asx_cx_registry_revoke(&registry, grant), ASX_OK);
+    ASSERT_EQ(asx_cx_registry_materialize(&parent, &registry, grant, &child), ASX_E_NOT_FOUND);
+}
+
+TEST(registry_capacity_exhaustion_fails) {
+    asx_cx parent;
+    asx_cx_registry registry;
+    asx_cx_registry_entry entries[1];
+    asx_cx_grant grant_a, grant_b;
+
+    asx_cx_init(&parent, 7, 3, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY);
+    ASSERT_EQ(asx_cx_registry_init(&registry, entries, 1u), ASX_OK);
+    ASSERT_EQ(asx_cx_registry_issue(&parent, &registry, ASX_CAP_CLOCK_READ, &grant_a), ASX_OK);
+    ASSERT_EQ(asx_cx_registry_issue(&parent, &registry, ASX_CAP_ENTROPY, &grant_b),
+              ASX_E_RESOURCE_EXHAUSTED);
+}
+
+TEST(registry_issue_escalation_fails) {
+    asx_cx parent;
+    asx_cx_registry registry;
+    asx_cx_registry_entry entries[1];
+    asx_cx_grant grant;
+
+    asx_cx_init(&parent, 7, 3, ASX_CAP_CLOCK_READ);
+    ASSERT_EQ(asx_cx_registry_init(&registry, entries, 1u), ASX_OK);
+    ASSERT_EQ(asx_cx_registry_issue(&parent, &registry, ASX_CAP_CLOCK_READ | ASX_CAP_SPAWN, &grant),
+              ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(macaroon_issue_attenuate_and_bind) {
+    asx_cx parent, child;
+    asx_cx_macaroon macaroon;
+
+    asx_cx_init(&parent, 11, 13, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY | ASX_CAP_SPAWN);
+    ASSERT_EQ(asx_cx_macaroon_issue(&parent, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY, &macaroon),
+              ASX_OK);
+    ASSERT_EQ(asx_cx_macaroon_attenuate(&macaroon, ASX_CAP_CLOCK_READ), ASX_OK);
+    ASSERT_EQ(macaroon.caveat_count, 1u);
+    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &macaroon, &child), ASX_OK);
+    ASSERT_EQ(asx_cx_caps(&child), ASX_CAP_CLOCK_READ);
+}
+
+TEST(macaroon_bind_stale_parent_fails_closed) {
+    asx_cx parent, child;
+    asx_cx_macaroon macaroon;
+
+    asx_cx_init(&parent, 11, 13, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY);
+    ASSERT_EQ(asx_cx_macaroon_issue(&parent, ASX_CAP_CLOCK_READ, &macaroon), ASX_OK);
+    macaroon.parent_generation++;
+    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &macaroon, &child), ASX_E_STALE_HANDLE);
 }
 
 /* ------------------------------------------------------------------ */
@@ -468,6 +579,15 @@ int main(void) {
     RUN_TEST(narrow_escalation_fails);
     RUN_TEST(narrow_subset_succeeds);
     RUN_TEST(narrow_to_none_succeeds);
+    RUN_TEST(attenuate_masks_parent_caps);
+    RUN_TEST(wrap_and_unwrap_subset_succeeds);
+    RUN_TEST(wrap_escalation_fails);
+    RUN_TEST(unwrap_stale_wrapper_fails_closed);
+    RUN_TEST(registry_issue_materialize_and_revoke);
+    RUN_TEST(registry_capacity_exhaustion_fails);
+    RUN_TEST(registry_issue_escalation_fails);
+    RUN_TEST(macaroon_issue_attenuate_and_bind);
+    RUN_TEST(macaroon_bind_stale_parent_fails_closed);
 
     /* Budget */
     RUN_TEST(bind_budget_null_cx_fails);
