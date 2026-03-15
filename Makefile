@@ -125,6 +125,7 @@ CORE_SRC := \
 	src/core/ghost.c \
 	src/core/affinity.c \
 	src/core/adaptive.c \
+	src/core/symbol.c \
 	src/core/abi.c
 
 RUNTIME_SRC := \
@@ -163,7 +164,26 @@ RUNTIME_SRC := \
 
 CHANNEL_SRC := \
 	src/channel/mpsc.c \
-	src/channel/session.c
+	src/channel/session.c \
+	src/channel/oneshot.c \
+	src/channel/broadcast.c \
+	src/channel/watch.c
+
+SYNC_SRC := \
+	src/sync/notify.c \
+	src/sync/semaphore.c \
+	src/sync/barrier.c \
+	src/sync/once.c
+
+ACTOR_SRC := \
+	src/actor/actor.c \
+	src/actor/supervisor.c
+
+NET_SRC := \
+	src/net/net.c
+
+BYTES_SRC := \
+	src/bytes/buf.c
 
 TIME_SRC := \
 	src/time/timer_wheel.c
@@ -230,7 +250,7 @@ else
   PLATFORM_SRC :=
 endif
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(PLATFORM_SRC)
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -401,6 +421,8 @@ $(OBJ_DIR)/%.o: src/%.c | obj-dirs
 
 obj-dirs:
 	@mkdir -p $(OBJ_DIR)/core $(OBJ_DIR)/runtime $(OBJ_DIR)/channel \
+	          $(OBJ_DIR)/sync $(OBJ_DIR)/actor $(OBJ_DIR)/net \
+	          $(OBJ_DIR)/bytes \
 	          $(OBJ_DIR)/time $(OBJ_DIR)/security $(OBJ_DIR)/stream \
 	          $(OBJ_DIR)/fs $(OBJ_DIR)/process $(OBJ_DIR)/signal \
 	          $(OBJ_DIR)/link $(OBJ_DIR)/app $(OBJ_DIR)/console \

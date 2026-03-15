@@ -38,6 +38,7 @@
 #include <asx/cx/scope.h>
 
 /* Core semantic types */
+#include <asx/core/symbol.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
 #include <asx/core/channel.h>

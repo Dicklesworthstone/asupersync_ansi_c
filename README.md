@@ -189,20 +189,43 @@ asx conformance rust-parity --fixtures fixtures/rust_reference
 ```c
 #include <asx/asx.h>
 
-int main(void) {
-    asx_runtime_config cfg = asx_runtime_config_default();
-    cfg.profile = ASX_PROFILE_EMBEDDED_ROUTER;
-    cfg.resource_class = ASX_CLASS_R2;
-    cfg.deterministic = 1;
-    cfg.seed = 42;
-    cfg.codec = ASX_CODEC_BIN;
+static asx_status noop_poll(void *user_data, asx_task_id self) {
+    (void)user_data;
+    (void)self;
+    return ASX_OK;
+}
 
-    asx_runtime* rt = NULL;
-    asx_status st = asx_runtime_create(&cfg, &rt);
+int main(void) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_status st;
+
+    asx_runtime_config_init(&cfg);
+    st = asx_runtime_hooks_init(&hooks);
     if (st != ASX_OK) return 1;
 
-    st = asx_runtime_run(rt);
-    asx_runtime_destroy(rt);
+    st = asx_runtime_init(&rt, &cfg, &hooks);
+    if (st != ASX_OK) return 1;
+
+    st = asx_region_open(&rid);
+    if (st != ASX_OK) {
+        asx_runtime_shutdown(&rt);
+        return 1;
+    }
+
+    st = asx_task_spawn(rid, noop_poll, NULL, &tid);
+    if (st != ASX_OK) {
+        asx_runtime_shutdown(&rt);
+        return 1;
+    }
+
+    budget = asx_budget_from_polls(64u);
+    st = asx_scheduler_run(rid, &budget);
+    asx_runtime_shutdown(&rt);
     return st == ASX_OK ? 0 : 2;
 }
 ```

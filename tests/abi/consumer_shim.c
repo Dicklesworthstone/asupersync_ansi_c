@@ -140,6 +140,10 @@ static void test_config_pattern(void) {
 
     SHIM_CHECK(cfg.size == sizeof(asx_runtime_config), "config size-field roundtrip");
     SHIM_CHECK(cfg.size > 0, "config size nonzero");
+
+    asx_runtime_config_init(&cfg);
+    SHIM_CHECK(cfg.size == sizeof(asx_runtime_config), "config init sets size field");
+    SHIM_CHECK(cfg.finalizer_poll_budget > 0u, "config init seeds finalizer budget");
 }
 
 /* --- Function symbol resolution --- */
@@ -161,6 +165,48 @@ static void test_symbol_resolution(void) {
 
     /* Handle helpers */
     SHIM_CHECK(asx_handle_is_valid(ASX_INVALID_ID) == 0, "invalid handle not valid");
+
+    /* Runtime object surface */
+    SHIM_CHECK(asx_runtime_init != NULL, "asx_runtime_init resolves");
+    SHIM_CHECK(asx_runtime_init_default != NULL, "asx_runtime_init_default resolves");
+    SHIM_CHECK(asx_runtime_shutdown != NULL, "asx_runtime_shutdown resolves");
+    SHIM_CHECK(asx_runtime_config_init != NULL, "asx_runtime_config_init resolves");
+
+    /* Typed symbol surface */
+    SHIM_CHECK(asx_typed_symbol_register != NULL, "asx_typed_symbol_register resolves");
+    SHIM_CHECK(asx_typed_symbol_lookup != NULL, "asx_typed_symbol_lookup resolves");
+    SHIM_CHECK(asx_type_kind_str != NULL, "asx_type_kind_str resolves");
+}
+
+/* --- Public typed-symbol surface works via umbrella header --- */
+
+static void test_typed_symbol_surface(void) {
+    asx_typed_symbol symbol;
+    asx_typed_symbol lookup;
+    asx_symbol_set exported;
+    asx_status st;
+
+    fprintf(stderr, "--- Typed symbol surface ---\n");
+
+    asx_symbol_registry_reset();
+    asx_symbol_set_init(&exported);
+
+    st = asx_typed_symbol_register("consumer.latency_ns", ASX_TYPE_KIND_U64, 8u, 8u, &symbol);
+    SHIM_CHECK(st == ASX_OK, "typed symbol register succeeds");
+    SHIM_CHECK(symbol.symbol != ASX_SYMBOL_INVALID, "typed symbol id valid");
+    SHIM_CHECK(symbol.kind == ASX_TYPE_KIND_U64, "typed symbol kind preserved");
+
+    st = asx_typed_symbol_lookup("consumer.latency_ns", &lookup);
+    SHIM_CHECK(st == ASX_OK, "typed symbol lookup succeeds");
+    SHIM_CHECK(lookup.symbol == symbol.symbol, "typed symbol lookup roundtrip");
+    SHIM_CHECK(strcmp(asx_symbol_name(symbol.symbol), "consumer.latency_ns") == 0,
+               "typed symbol name roundtrip");
+
+    asx_symbol_set_insert(&exported, symbol.symbol);
+    SHIM_CHECK(asx_symbol_set_contains(&exported, symbol.symbol), "symbol set contains symbol");
+    SHIM_CHECK(asx_symbol_set_count(&exported) == 1u, "symbol set count tracks insert");
+    SHIM_CHECK(strcmp(asx_type_kind_str(ASX_TYPE_KIND_COUNT), "count") == 0,
+               "type kind count string exported");
 }
 
 /* --- Smoke: basic lifecycle works --- */
@@ -202,6 +248,7 @@ int main(void) {
     test_frozen_enums();
     test_config_pattern();
     test_symbol_resolution();
+    test_typed_symbol_surface();
     test_lifecycle_smoke();
 
     fprintf(stderr, "\n[asx-consumer-shim] %d passed, %d failed\n", passes, failures);

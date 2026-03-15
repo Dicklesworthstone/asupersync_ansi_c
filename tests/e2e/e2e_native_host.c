@@ -21,6 +21,15 @@ static uint64_t blocking_add_seven(void *user_data) {
     return *value + 7u;
 }
 
+static asx_status lab_region_roundtrip(asx_lab *lab, void *user_data) {
+    asx_region_id region;
+
+    (void)user_data;
+    asx_lab_advance_time(lab, 3u);
+    if (asx_lab_open_region(lab, &region) != ASX_OK) { return ASX_E_INVALID_STATE; }
+    return asx_region_close(region);
+}
+
 #if defined(__unix__) || defined(__APPLE__)
 typedef struct {
     int read_fd;
@@ -61,6 +70,10 @@ int main(void) {
     asx_runtime runtime;
     asx_runtime_config runtime_cfg;
     asx_blocking_handle blocking_handle;
+    asx_lab lab;
+    asx_lab_config lab_cfg;
+    asx_lab_scenario lab_scenario;
+    asx_lab_result lab_result;
     asx_fs_path dir_path, file_path;
     asx_file_handle file;
     asx_fs_metadata meta;
@@ -71,6 +84,10 @@ int main(void) {
     asx_signal_subscription subscription;
     uint64_t blocking_input = 35u;
     uint64_t blocking_result = 0u;
+    uint64_t lab_random = 0u;
+    uint32_t region_capacity = 0u;
+    uint32_t task_capacity = 0u;
+    uint32_t obligation_capacity = 0u;
     uint32_t count = 0u;
     uint32_t n = 0u;
     uint32_t ready = 0u;
@@ -166,6 +183,23 @@ int main(void) {
     printf("SCENARIO native_host.builder pass\n");
     digest = mix_u64(digest, (unsigned long long)runtime_cfg.finalizer_poll_budget);
 
+    region_capacity = asx_runtime_region_capacity();
+    task_capacity = asx_runtime_task_capacity();
+    obligation_capacity = asx_runtime_obligation_capacity();
+    if (asx_runtime_region_count(&runtime) != 0u || asx_runtime_task_count(&runtime) != 0u ||
+        asx_runtime_obligation_count(&runtime) != 0u || region_capacity == 0u ||
+        task_capacity == 0u || obligation_capacity == 0u ||
+        asx_runtime_safety_profile(&runtime) != asx_safety_profile_active() ||
+        asx_runtime_containment_policy(&runtime) != asx_containment_policy_active()) {
+        printf("SCENARIO native_host.runtime_state fail state_contract\n");
+        asx_runtime_shutdown(&runtime);
+        return 1;
+    }
+    printf("SCENARIO native_host.runtime_state pass\n");
+    digest = mix_u64(digest, (unsigned long long)region_capacity);
+    digest = mix_u64(digest, (unsigned long long)task_capacity);
+    digest = mix_u64(digest, (unsigned long long)obligation_capacity);
+
     if (asx_spawn_blocking(blocking_add_seven, &blocking_input, NULL, &blocking_handle) != ASX_OK ||
         asx_blocking_get_state(&blocking_handle) != ASX_BLOCKING_COMPLETED ||
         asx_blocking_get_result(&blocking_handle, &blocking_result) != ASX_OK ||
@@ -178,6 +212,30 @@ int main(void) {
     digest = mix_u64(digest, (unsigned long long)blocking_result);
 
     asx_runtime_shutdown(&runtime);
+
+    asx_lab_config_init(&lab_cfg);
+    lab_cfg.seed = 42u;
+    lab_cfg.tick_ns = 1000u;
+
+    if (asx_lab_init(&lab, &lab_cfg) != ASX_OK) {
+        printf("SCENARIO native_host.lab fail init_failed\n");
+        return 1;
+    }
+
+    lab_random = asx_lab_random_u64(&lab);
+    asx_lab_scenario_init(&lab_scenario, "native_host.lab");
+    if (asx_lab_scenario_add_step(&lab_scenario, lab_region_roundtrip, NULL) != ASX_OK ||
+        asx_lab_run_scenario(&lab, &lab_scenario, &lab_result) != ASX_OK ||
+        lab_result.steps_completed != 1u || lab_result.steps_total != 1u ||
+        lab_result.elapsed_ns != 3000u || asx_lab_now(&lab) != 3000u || lab_random == 0u) {
+        printf("SCENARIO native_host.lab fail scenario_contract\n");
+        asx_lab_shutdown(&lab);
+        return 1;
+    }
+    printf("SCENARIO native_host.lab pass\n");
+    digest = mix_u64(digest, (unsigned long long)lab_random);
+
+    asx_lab_shutdown(&lab);
 
 #if defined(__unix__) || defined(__APPLE__)
     {

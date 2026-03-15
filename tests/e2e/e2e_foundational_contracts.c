@@ -454,6 +454,47 @@ static void scenario_error_taxonomy_recovery_planning(void) {
 }
 
 /* -------------------------------------------------------------------
+ * Scenario 10: Typed-symbol public contract through umbrella surface
+ *
+ * Exercises the shipped typed-symbol/value-contract API via <asx/asx.h>
+ * instead of leaf headers. This keeps the foundational lane honest
+ * about the public surface that downstream users actually see.
+ * ------------------------------------------------------------------- */
+
+static void scenario_typed_symbol_public_contract(void) {
+    SCENARIO_BEGIN("foundational.typed_symbol_public_contract");
+
+    asx_typed_symbol latency;
+    asx_typed_symbol lookup;
+    asx_symbol_set exported;
+
+    asx_symbol_registry_reset();
+    asx_symbol_set_init(&exported);
+
+    SCENARIO_CHECK(asx_typed_symbol_register("runtime.latency_ns", ASX_TYPE_KIND_U64, 8u, 8u,
+                                             &latency) == ASX_OK,
+                   "typed symbol should register");
+    SCENARIO_CHECK(latency.symbol != ASX_SYMBOL_INVALID, "typed symbol id should be valid");
+    SCENARIO_CHECK(asx_type_kind_str(latency.kind) != NULL, "type kind string should exist");
+
+    SCENARIO_CHECK(asx_typed_symbol_lookup("runtime.latency_ns", &lookup) == ASX_OK,
+                   "typed symbol should look up by name");
+    SCENARIO_CHECK(lookup.symbol == latency.symbol, "lookup should preserve symbol id");
+    SCENARIO_CHECK(lookup.kind == ASX_TYPE_KIND_U64, "lookup should preserve type kind");
+    SCENARIO_CHECK(lookup.size == 8u && lookup.alignment == 8u,
+                   "lookup should preserve size/alignment");
+
+    asx_symbol_set_insert(&exported, latency.symbol);
+    SCENARIO_CHECK(asx_symbol_set_contains(&exported, latency.symbol),
+                   "symbol set should contain exported typed symbol");
+    SCENARIO_CHECK(asx_symbol_set_count(&exported) == 1u, "symbol set count should be stable");
+    SCENARIO_CHECK(strcmp(asx_symbol_name(latency.symbol), "runtime.latency_ns") == 0,
+                   "registered name should round-trip");
+
+    SCENARIO_END();
+}
+
+/* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
 
@@ -467,6 +508,7 @@ int main(void) {
     scenario_cancel_chain_budget_interaction();
     scenario_full_lifecycle_composition();
     scenario_error_taxonomy_recovery_planning();
+    scenario_typed_symbol_public_contract();
 
     printf("SCENARIO _summary %s total=%d pass=%d fail=%d\n", g_fail > 0 ? "fail" : "pass",
            g_pass + g_fail, g_pass, g_fail);
