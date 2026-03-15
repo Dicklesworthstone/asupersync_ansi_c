@@ -28,6 +28,7 @@ EXAMPLE_SOURCES=(
     ex_quickstart.c
     ex_cancel_drain.c
     ex_channel_flow.c
+    ex_network_surface.c
     ex_timeout_deadline.c
     ex_lab_replay.c
 )

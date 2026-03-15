@@ -40,6 +40,16 @@ static uint64_t add_one(void *user_data) {
     return value + 1u;
 }
 
+static uint32_t g_rt_ready_count;
+
+static asx_status rt_fixed_ready_reactor(void *ctx, uint64_t logical_step, uint32_t *ready_count) {
+    (void)ctx;
+    (void)logical_step;
+    if (ready_count == NULL) return ASX_E_INVALID_ARGUMENT;
+    *ready_count = g_rt_ready_count;
+    return ASX_OK;
+}
+
 static asx_status lab_noop_step(asx_lab *lab, void *user_data) {
     (void)user_data;
     return asx_lab_open_region(lab, (asx_region_id *)user_data);
@@ -235,6 +245,38 @@ TEST(init_default_wires_io_surface) {
 
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
         ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_OK);
+        asx_io_deregister(&tok);
+    } else {
+        ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_E_PERMISSION_DENIED);
+    }
+
+    asx_runtime_shutdown(&rt);
+}
+
+TEST(init_default_io_poll_wakes_registered_task) {
+    asx_runtime rt;
+    asx_runtime_hooks hooks;
+    asx_waker w;
+    asx_io_token tok;
+    asx_io_event event;
+
+    ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
+    ASSERT_EQ(asx_runtime_get_hooks_from(&rt, &hooks), ASX_OK);
+    hooks.reactor.ghost_wait_fn = rt_fixed_ready_reactor;
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+    g_rt_ready_count = 0u;
+
+    ASSERT_EQ(asx_waker_register(7, &w), ASX_OK);
+
+    if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
+        ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_OK);
+        ASSERT_FALSE(asx_waker_is_signaled(&w));
+        g_rt_ready_count = 1u;
+        ASSERT_EQ(asx_io_driver_poll(&event, 1u, 5u), 1u);
+        ASSERT_EQ(event.token.slot, tok.slot);
+        ASSERT_EQ(event.token.generation, tok.generation);
+        ASSERT_EQ(event.ready, ASX_IO_READABLE);
+        ASSERT_TRUE(asx_waker_is_signaled(&w));
         asx_io_deregister(&tok);
     } else {
         ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_E_PERMISSION_DENIED);
@@ -627,6 +669,7 @@ int main(void) {
     RUN_TEST(init_default_success);
     RUN_TEST(init_default_wires_blocking_surface);
     RUN_TEST(init_default_wires_io_surface);
+    RUN_TEST(init_default_io_poll_wakes_registered_task);
 
     /* is_initialized */
     RUN_TEST(is_initialized_null_returns_false);
