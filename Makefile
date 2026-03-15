@@ -125,6 +125,8 @@ CORE_SRC := \
 	src/core/ghost.c \
 	src/core/affinity.c \
 	src/core/adaptive.c \
+	src/core/combinator.c \
+	src/core/combinator2.c \
 	src/core/symbol.c \
 	src/core/abi.c
 
@@ -187,6 +189,8 @@ BYTES_SRC := \
 	src/bytes/buf.c
 
 TIME_SRC := \
+	src/time/deadline.c \
+	src/time/sleep.c \
 	src/time/timer_wheel.c
 
 SECURITY_SRC := \

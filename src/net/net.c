@@ -54,6 +54,33 @@ static int parse_ipv4_host(const char *host, uint8_t out[4]) {
     return 1;
 }
 
+static int resolve_options_eq(const asx_resolve_options *a, const asx_resolve_options *b) {
+    if (a == NULL || b == NULL) return 0;
+    return a->port == b->port && a->preferred_family == b->preferred_family &&
+           a->allow_ipv4 == b->allow_ipv4 && a->allow_ipv6 == b->allow_ipv6;
+}
+
+static size_t bounded_host_len(const char *host) {
+    size_t len;
+
+    if (host == NULL) return 0u;
+    for (len = 0u; len < ASX_RESOLVER_HOST_CAPACITY; len++) {
+        if (host[len] == '\0') return len;
+    }
+    return ASX_RESOLVER_HOST_CAPACITY;
+}
+
+static int resolver_host_eq(const char *a, const char *b) {
+    size_t len_a;
+    size_t len_b;
+
+    if (a == NULL || b == NULL) return 0;
+    len_a = bounded_host_len(a);
+    len_b = bounded_host_len(b);
+    if (len_a != len_b || len_a == ASX_RESOLVER_HOST_CAPACITY) return 0;
+    return memcmp(a, b, len_a + 1u) == 0;
+}
+
 static asx_status net_require_channel_cx(const asx_cx *cx) {
     if (cx == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!asx_cx_is_valid(cx)) return ASX_E_INVALID_STATE;
@@ -67,6 +94,61 @@ static asx_status net_poll_checkpoint(asx_cx *cx) {
     st = net_require_channel_cx(cx);
     if (st != ASX_OK) return st;
     return asx_cx_checkpoint(cx);
+}
+
+static int resolver_entry_matches(const asx_resolver_cache_entry *entry, const char *host,
+                                  const asx_resolve_options *options) {
+    if (entry == NULL || !entry->occupied || host == NULL || options == NULL) return 0;
+    return resolver_host_eq(entry->host, host) && resolve_options_eq(&entry->options, options);
+}
+
+static asx_resolver_cache_entry *resolver_find_mut(asx_resolver *resolver, const char *host,
+                                                   const asx_resolve_options *options) {
+    uint32_t i;
+
+    if (resolver == NULL) return NULL;
+    for (i = 0u; i < ASX_RESOLVER_CACHE_CAPACITY; i++) {
+        if (resolver_entry_matches(&resolver->entries[i], host, options))
+            return &resolver->entries[i];
+    }
+    return NULL;
+}
+
+static const asx_resolver_cache_entry *resolver_find(const asx_resolver *resolver, const char *host,
+                                                     const asx_resolve_options *options) {
+    uint32_t i;
+
+    if (resolver == NULL) return NULL;
+    for (i = 0u; i < ASX_RESOLVER_CACHE_CAPACITY; i++) {
+        if (resolver_entry_matches(&resolver->entries[i], host, options))
+            return &resolver->entries[i];
+    }
+    return NULL;
+}
+
+static asx_status resolver_store(asx_resolver *resolver, const char *host,
+                                 const asx_resolve_options *options,
+                                 const asx_resolve_result *result, asx_status status) {
+    asx_resolver_cache_entry *entry;
+    size_t len;
+
+    if (resolver == NULL || host == NULL || options == NULL) return ASX_E_INVALID_ARGUMENT;
+    len = bounded_host_len(host);
+    if (len == ASX_RESOLVER_HOST_CAPACITY) return ASX_E_INVALID_ARGUMENT;
+
+    entry = resolver_find_mut(resolver, host, options);
+    if (entry == NULL) {
+        entry = &resolver->entries[resolver->next_slot % ASX_RESOLVER_CACHE_CAPACITY];
+        resolver->next_slot = (resolver->next_slot + 1u) % ASX_RESOLVER_CACHE_CAPACITY;
+    }
+
+    memset(entry, 0, sizeof(*entry));
+    memcpy(entry->host, host, len + 1u);
+    entry->options = *options;
+    if (result != NULL) entry->result = *result;
+    entry->status = status;
+    entry->occupied = 1u;
+    return ASX_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -175,7 +257,8 @@ static uint32_t next_gen(uint32_t g) {
 }
 
 static asx_socket_addr net_make_loopback(asx_addr_family family, uint16_t port) {
-    return family == ASX_AF_INET6 ? asx_socket_addr_ipv6_loopback(port) : asx_socket_addr_loopback(port);
+    return family == ASX_AF_INET6 ? asx_socket_addr_ipv6_loopback(port)
+                                  : asx_socket_addr_loopback(port);
 }
 
 static asx_socket_addr net_ephemeral_addr(asx_addr_family family) {
@@ -312,7 +395,8 @@ static udp_socket_slot *udp_lookup(asx_udp_socket h) {
     return s;
 }
 
-static asx_status udp_enqueue(udp_socket_slot *dst, const asx_socket_addr *from, const asx_buf *src) {
+static asx_status udp_enqueue(udp_socket_slot *dst, const asx_socket_addr *from,
+                              const asx_buf *src) {
     uint32_t tail;
     udp_datagram *packet;
 
@@ -428,7 +512,9 @@ asx_status asx_tcp_listener_local_addr(asx_tcp_listener listener, asx_socket_add
     return ASX_OK;
 }
 
-int asx_tcp_listener_is_alive(asx_tcp_listener listener) { return listener_lookup(listener) != NULL; }
+int asx_tcp_listener_is_alive(asx_tcp_listener listener) {
+    return listener_lookup(listener) != NULL;
+}
 
 /* ------------------------------------------------------------------ */
 /* TCP stream API                                                      */
@@ -821,6 +907,63 @@ asx_status asx_resolve_host(asx_resolve_result *out, const char *host,
     return asx_happy_eyeballs_order(out, &unordered, opts.preferred_family);
 }
 
+void asx_resolver_init(asx_resolver *out) {
+    if (out == NULL) return;
+    memset(out, 0, sizeof(*out));
+}
+
+void asx_resolver_reset(asx_resolver *resolver) { asx_resolver_init(resolver); }
+
+uint32_t asx_resolver_cached_count(const asx_resolver *resolver) {
+    uint32_t i;
+    uint32_t count;
+
+    if (resolver == NULL) return 0u;
+    count = 0u;
+    for (i = 0u; i < ASX_RESOLVER_CACHE_CAPACITY; i++) {
+        if (resolver->entries[i].occupied) count++;
+    }
+    return count;
+}
+
+asx_status asx_resolver_lookup(asx_resolver *resolver, const char *host,
+                               const asx_resolve_options *options, asx_resolve_result *out,
+                               uint8_t *cache_hit) {
+    asx_resolve_options opts;
+    const asx_resolver_cache_entry *entry;
+    asx_status st;
+
+    if (resolver == NULL || host == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (options != NULL) {
+        opts = *options;
+    } else {
+        asx_resolve_options_init(&opts, 0u);
+    }
+
+    entry = resolver_find(resolver, host, &opts);
+    if (entry != NULL) {
+        *out = entry->result;
+        if (cache_hit != NULL) *cache_hit = 1u;
+        return entry->status;
+    }
+
+    st = asx_resolve_host(out, host, &opts);
+    if (cache_hit != NULL) *cache_hit = 0u;
+    (void)resolver_store(resolver, host, &opts, out, st);
+    return st;
+}
+
+void asx_resolver_invalidate(asx_resolver *resolver, const char *host) {
+    uint32_t i;
+
+    if (resolver == NULL || host == NULL) return;
+    for (i = 0u; i < ASX_RESOLVER_CACHE_CAPACITY; i++) {
+        if (resolver->entries[i].occupied && resolver_host_eq(resolver->entries[i].host, host)) {
+            memset(&resolver->entries[i], 0, sizeof(resolver->entries[i]));
+        }
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Reset                                                               */
 /* ------------------------------------------------------------------ */
@@ -832,4 +975,36 @@ void asx_net_reset(void) {
     g_stream_count = 0u;
     memset(g_udp_sockets, 0, sizeof(g_udp_sockets));
     g_next_ephemeral_port = 49152u;
+}
+
+asx_status asx_tcp_connect_host(asx_tcp_stream *out, asx_resolver *resolver, const char *host,
+                                const asx_resolve_options *options, asx_socket_addr *selected_addr,
+                                uint8_t *cache_hit) {
+    asx_resolve_result resolved;
+    asx_status st;
+
+    if (out == NULL || resolver == NULL || host == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(&resolved, 0, sizeof(resolved));
+
+    st = asx_resolver_lookup(resolver, host, options, &resolved, cache_hit);
+    if (st != ASX_OK) return st;
+    if (resolved.count == 0u) return ASX_E_NOT_FOUND;
+    if (selected_addr != NULL) *selected_addr = resolved.addrs[0];
+    return asx_tcp_connect(out, &resolved.addrs[0]);
+}
+
+asx_status asx_udp_connect_host(asx_udp_socket socket, asx_resolver *resolver, const char *host,
+                                const asx_resolve_options *options, asx_socket_addr *selected_addr,
+                                uint8_t *cache_hit) {
+    asx_resolve_result resolved;
+    asx_status st;
+
+    if (resolver == NULL || host == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(&resolved, 0, sizeof(resolved));
+
+    st = asx_resolver_lookup(resolver, host, options, &resolved, cache_hit);
+    if (st != ASX_OK) return st;
+    if (resolved.count == 0u) return ASX_E_NOT_FOUND;
+    if (selected_addr != NULL) *selected_addr = resolved.addrs[0];
+    return asx_udp_connect(socket, &resolved.addrs[0]);
 }

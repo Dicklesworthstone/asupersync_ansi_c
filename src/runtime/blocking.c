@@ -47,6 +47,10 @@ static uint16_t next_gen(uint16_t g) {
 asx_status asx_blocking_pool_init(void) {
     asx_status st = asx_surface_gate(ASX_SURFACE_BLOCKING);
     if (st != ASX_OK) return st;
+
+    /* Re-initialization must start from a fresh pool state so stale handles
+     * and completed results cannot leak across runtime lifecycles. */
+    asx_blocking_pool_reset();
     g_initialized = 1;
     return ASX_OK;
 }

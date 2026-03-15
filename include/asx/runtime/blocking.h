@@ -57,7 +57,8 @@ typedef struct {
  * API: Lifecycle
  * ------------------------------------------------------------------- */
 
-/* Initialize the blocking pool. */
+/* Initialize the blocking pool.
+ * Re-initialization resets all prior slot state and invalidates old handles. */
 ASX_API ASX_MUST_USE asx_status asx_blocking_pool_init(void);
 
 /* Shut down the blocking pool, completing all pending tasks. */

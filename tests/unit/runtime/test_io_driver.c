@@ -96,6 +96,21 @@ TEST(register_success) {
     teardown();
 }
 
+TEST(reinit_clears_registrations_and_invalidates_tokens) {
+    asx_waker w;
+    asx_io_token tok;
+    if (!setup()) return;
+    MUST_OK(asx_waker_register(1, &w));
+    MUST_OK(asx_io_register(42, ASX_IO_READABLE, &w, &tok));
+    ASSERT_EQ(asx_io_active_count(), 1u);
+
+    MUST_OK(asx_io_driver_init());
+    ASSERT_EQ(asx_io_active_count(), 0u);
+    ASSERT_EQ(asx_io_set_interest(&tok, ASX_IO_WRITABLE), ASX_E_NOT_FOUND);
+
+    teardown();
+}
+
 TEST(deregister_decrements_count) {
     asx_waker w;
     asx_io_token tok;
@@ -124,6 +139,25 @@ TEST(deregister_stale_token_safe) {
     /* Second deregister on stale token — should be harmless */
     asx_io_deregister(&tok);
     ASSERT_EQ(asx_io_active_count(), 0u);
+    teardown();
+}
+
+TEST(reinit_then_register_uses_fresh_generation) {
+    asx_waker w;
+    asx_io_token stale_tok;
+    asx_io_token fresh_tok;
+    if (!setup()) return;
+    MUST_OK(asx_waker_register(1, &w));
+    MUST_OK(asx_io_register(42, ASX_IO_READABLE, &w, &stale_tok));
+
+    MUST_OK(asx_io_driver_init());
+    MUST_OK(asx_io_register(42, ASX_IO_READABLE, &w, &fresh_tok));
+
+    ASSERT_EQ(stale_tok.slot, fresh_tok.slot);
+    ASSERT_NE(stale_tok.generation, fresh_tok.generation);
+    ASSERT_EQ(asx_io_set_interest(&stale_tok, ASX_IO_WRITABLE), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_io_set_interest(&fresh_tok, ASX_IO_WRITABLE), ASX_OK);
+
     teardown();
 }
 
@@ -291,9 +325,11 @@ int main(void) {
     RUN_TEST(register_null_waker_fails);
     RUN_TEST(register_before_init_fails);
     RUN_TEST(register_success);
+    RUN_TEST(reinit_clears_registrations_and_invalidates_tokens);
     RUN_TEST(deregister_decrements_count);
     RUN_TEST(deregister_null_safe);
     RUN_TEST(deregister_stale_token_safe);
+    RUN_TEST(reinit_then_register_uses_fresh_generation);
 
     RUN_TEST(set_interest_success);
     RUN_TEST(set_interest_null_fails);

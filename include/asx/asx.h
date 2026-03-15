@@ -43,6 +43,8 @@
 #include <asx/core/cancel.h>
 #include <asx/core/channel.h>
 #include <asx/core/cleanup.h>
+#include <asx/core/combinator.h>
+#include <asx/core/combinator2.h>
 #include <asx/core/ghost.h>
 #include <asx/core/outcome.h>
 #include <asx/core/resource.h>

@@ -59,7 +59,8 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 /* Initialize the IO driver. Must be called after runtime hooks
- * are installed. Uses the reactor hooks from runtime config. */
+ * are installed. Uses the reactor hooks from runtime config.
+ * Re-initialization resets all prior registrations and invalidates old tokens. */
 ASX_API ASX_MUST_USE asx_status asx_io_driver_init(void);
 
 /* Shut down the IO driver, deregistering all tokens. */

@@ -19,7 +19,9 @@ static int require_status(asx_status st, const char *label) {
 int main(void) {
     asx_runtime_builder builder;
     asx_runtime runtime;
+    asx_resolver resolver;
     asx_resolve_options resolve_opts;
+    asx_resolve_options udp_resolve_opts;
     asx_resolve_result resolved;
     asx_resolve_result ordered;
     asx_socket_addr listen_addr;
@@ -34,6 +36,7 @@ int main(void) {
     asx_udp_socket socket;
     asx_buf payload;
     asx_buf_mut dst;
+    uint8_t cache_hit = 0u;
     uint32_t io_n = 0u;
 
     if (!require_status(asx_runtime_builder_init_current_thread(&builder), "builder init") ||
@@ -43,8 +46,15 @@ int main(void) {
         return 1;
     }
 
+    asx_resolver_init(&resolver);
     asx_resolve_options_init(&resolve_opts, 7000u);
-    if (!require_status(asx_resolve_host(&resolved, "localhost", &resolve_opts), "resolve_host") ||
+    asx_resolve_options_init(&udp_resolve_opts, 7000u);
+    udp_resolve_opts.preferred_family = ASX_AF_INET4;
+    udp_resolve_opts.allow_ipv6 = 0u;
+    if (!require_status(asx_resolver_lookup(&resolver, "localhost", &resolve_opts, &resolved,
+                                            &cache_hit),
+                        "resolve_lookup") ||
+        cache_hit != 0u ||
         !require_status(asx_happy_eyeballs_order(&ordered, &resolved, ASX_AF_INET6),
                         "happy_eyeballs")) {
         asx_runtime_shutdown(&runtime);
@@ -60,13 +70,18 @@ int main(void) {
 
     listen_addr = ordered.addrs[0];
     if (!require_status(asx_tcp_listener_bind(&listener, &listen_addr), "listener bind") ||
-        !require_status(asx_tcp_connect(&stream, &ordered.addrs[0]), "tcp connect") ||
+        !require_status(asx_tcp_connect_host(&stream, &resolver, "localhost", &resolve_opts,
+                                             &stream_peer, &cache_hit),
+                        "tcp connect host") ||
+        cache_hit != 1u ||
         !require_status(asx_tcp_listener_poll_accept(listener, &accepted, &accept_peer),
                         "listener accept") ||
-        !require_status(asx_tcp_stream_peer_addr(stream, &stream_peer), "stream peer addr") ||
         !require_status(asx_udp_bind(&socket, &listen_addr), "udp bind") ||
         !require_status(asx_udp_bind(&receiver, &ordered.addrs[1]), "udp bind peer") ||
-        !require_status(asx_udp_connect(socket, &ordered.addrs[1]), "udp connect") ||
+        !require_status(asx_udp_connect_host(socket, &resolver, "localhost", &udp_resolve_opts,
+                                             &udp_peer, &cache_hit),
+                        "udp connect host") ||
+        cache_hit != 0u ||
         !require_status(asx_udp_local_addr(socket, &udp_local), "udp local addr") ||
         !require_status(asx_udp_peer_addr(socket, &udp_peer), "udp peer addr")) {
         asx_runtime_shutdown(&runtime);

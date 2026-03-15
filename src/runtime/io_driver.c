@@ -46,6 +46,10 @@ static uint16_t next_gen(uint16_t g) {
 asx_status asx_io_driver_init(void) {
     asx_status st = asx_surface_gate(ASX_SURFACE_IO_DRIVER);
     if (st != ASX_OK) return st;
+
+    /* Re-initialization must start from a clean registration arena so
+     * old tokens cannot survive across runtime/bootstrap boundaries. */
+    asx_io_driver_reset();
     g_initialized = 1;
     return ASX_OK;
 }

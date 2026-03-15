@@ -74,6 +74,14 @@ ASX_API int asx_socket_addr_eq(const asx_socket_addr *a, const asx_socket_addr *
 #define ASX_RESOLVE_MAX_RESULTS 4u
 #endif
 
+#ifndef ASX_RESOLVER_CACHE_CAPACITY
+#define ASX_RESOLVER_CACHE_CAPACITY 8u
+#endif
+
+#ifndef ASX_RESOLVER_HOST_CAPACITY
+#define ASX_RESOLVER_HOST_CAPACITY 64u
+#endif
+
 /* -------------------------------------------------------------------
  * TCP handle types (forward declarations for cross-references)
  * ------------------------------------------------------------------- */
@@ -104,6 +112,19 @@ typedef struct {
     asx_socket_addr addrs[ASX_RESOLVE_MAX_RESULTS];
     uint32_t count;
 } asx_resolve_result;
+
+typedef struct {
+    char host[ASX_RESOLVER_HOST_CAPACITY];
+    asx_resolve_options options;
+    asx_resolve_result result;
+    asx_status status;
+    uint8_t occupied;
+} asx_resolver_cache_entry;
+
+typedef struct {
+    asx_resolver_cache_entry entries[ASX_RESOLVER_CACHE_CAPACITY];
+    uint32_t next_slot;
+} asx_resolver;
 
 /* -------------------------------------------------------------------
  * TCP listener API
@@ -252,10 +273,39 @@ ASX_API void asx_resolve_options_init(asx_resolve_options *out, uint16_t port);
 ASX_API ASX_MUST_USE asx_status asx_resolve_host(asx_resolve_result *out, const char *host,
                                                  const asx_resolve_options *options);
 
+/* Initialize or clear a resolver cache. */
+ASX_API void asx_resolver_init(asx_resolver *out);
+ASX_API void asx_resolver_reset(asx_resolver *resolver);
+
+/* Return the number of occupied resolver cache entries. */
+ASX_API uint32_t asx_resolver_cached_count(const asx_resolver *resolver);
+
+/* Resolve through the deterministic cache. `cache_hit` is set to 1 when reused. */
+ASX_API ASX_MUST_USE asx_status asx_resolver_lookup(asx_resolver *resolver, const char *host,
+                                                    const asx_resolve_options *options,
+                                                    asx_resolve_result *out, uint8_t *cache_hit);
+
+/* Remove cached entries for a host. */
+ASX_API void asx_resolver_invalidate(asx_resolver *resolver, const char *host);
+
 /* Deterministically reorder resolved endpoints using a happy-eyeballs style family preference. */
 ASX_API ASX_MUST_USE asx_status asx_happy_eyeballs_order(asx_resolve_result *out,
                                                          const asx_resolve_result *in,
                                                          asx_addr_family preferred_family);
+
+/* Resolve a host and connect to the first ordered TCP endpoint. */
+ASX_API ASX_MUST_USE asx_status asx_tcp_connect_host(asx_tcp_stream *out, asx_resolver *resolver,
+                                                     const char *host,
+                                                     const asx_resolve_options *options,
+                                                     asx_socket_addr *selected_addr,
+                                                     uint8_t *cache_hit);
+
+/* Resolve a host and connect a UDP socket to the first ordered endpoint. */
+ASX_API ASX_MUST_USE asx_status asx_udp_connect_host(asx_udp_socket socket, asx_resolver *resolver,
+                                                     const char *host,
+                                                     const asx_resolve_options *options,
+                                                     asx_socket_addr *selected_addr,
+                                                     uint8_t *cache_hit);
 
 /* -------------------------------------------------------------------
  * Reset (test support)

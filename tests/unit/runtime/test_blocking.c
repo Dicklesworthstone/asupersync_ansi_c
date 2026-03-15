@@ -78,6 +78,20 @@ TEST(spawn_before_init_fails) {
     ASSERT_EQ(asx_spawn_blocking(return_zero, NULL, NULL, &h), ASX_E_INVALID_STATE);
 }
 
+TEST(reinit_invalidates_old_handles) {
+    asx_blocking_handle h;
+    uint64_t result = 0;
+
+    if (!setup()) return;
+    MUST_OK(asx_spawn_blocking(return_zero, NULL, NULL, &h));
+    ASSERT_EQ(asx_blocking_get_result(&h, &result), ASX_OK);
+
+    MUST_OK(asx_blocking_pool_init());
+    ASSERT_EQ(asx_blocking_get_state(&h), ASX_BLOCKING_COMPLETED);
+    ASSERT_EQ(asx_blocking_get_result(&h, &result), ASX_E_NOT_FOUND);
+    teardown();
+}
+
 TEST(spawn_success) {
     asx_blocking_handle h;
     if (!setup()) return;
@@ -248,6 +262,7 @@ int main(void) {
     RUN_TEST(spawn_null_fn_fails);
     RUN_TEST(spawn_null_handle_fails);
     RUN_TEST(spawn_before_init_fails);
+    RUN_TEST(reinit_invalidates_old_handles);
     RUN_TEST(spawn_success);
     RUN_TEST(spawn_returns_result);
     RUN_TEST(spawn_signals_completion_waker);
