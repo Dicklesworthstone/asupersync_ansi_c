@@ -53,14 +53,17 @@
 #include <asx/codec/schema.h>
 
 /* Security and audit surface */
-#include <asx/security/security.h>
 #include <asx/security/audit.h>
+#include <asx/security/security.h>
+
+/* Network surface */
+#include <asx/net/net.h>
 
 /* Obligation, session, record, and link public families */
-#include <asx/obligation/obligation.h>
-#include <asx/session/session.h>
-#include <asx/record/record.h>
 #include <asx/link/link.h>
+#include <asx/obligation/obligation.h>
+#include <asx/record/record.h>
+#include <asx/session/session.h>
 
 /* Observability, evidence, and monitor families */
 #include <asx/evidence/evidence.h>
@@ -76,31 +79,31 @@
 #include <asx/tracing_compat/tracing_compat.h>
 
 /* Runtime (walking skeleton — bd-ix8.8) */
-#include <asx/runtime/runtime.h>
-#include <asx/runtime/builder.h>
-#include <asx/runtime/rt.h>
-#include <asx/runtime/config_reload.h>
+#include <asx/runtime/adapter.h>
+#include <asx/runtime/automotive_instrument.h>
 #include <asx/runtime/blocking.h>
-#include <asx/runtime/io_driver.h>
-#include <asx/runtime/profile_compat.h>
 #include <asx/runtime/browser_boundary.h>
 #include <asx/runtime/browser_diagnostic.h>
+#include <asx/runtime/builder.h>
+#include <asx/runtime/config_reload.h>
 #include <asx/runtime/diagnostic.h>
-#include <asx/runtime/lab.h>
-#include <asx/runtime/virtual_time.h>
-#include <asx/runtime/snapshot.h>
-#include <asx/runtime/replay.h>
 #include <asx/runtime/event.h>
-#include <asx/runtime/hindsight.h>
-#include <asx/runtime/telemetry.h>
-#include <asx/runtime/parallel.h>
-#include <asx/runtime/automotive_instrument.h>
 #include <asx/runtime/hft_instrument.h>
+#include <asx/runtime/hindsight.h>
+#include <asx/runtime/io_driver.h>
+#include <asx/runtime/lab.h>
 #include <asx/runtime/overload_catalog.h>
-#include <asx/runtime/adapter.h>
-#include <asx/runtime/vertical_adapter.h>
+#include <asx/runtime/parallel.h>
+#include <asx/runtime/profile_compat.h>
 #include <asx/runtime/regression_localize.h>
+#include <asx/runtime/replay.h>
+#include <asx/runtime/rt.h>
+#include <asx/runtime/runtime.h>
+#include <asx/runtime/snapshot.h>
+#include <asx/runtime/telemetry.h>
 #include <asx/runtime/trace.h>
+#include <asx/runtime/vertical_adapter.h>
+#include <asx/runtime/virtual_time.h>
 #include <asx/runtime/waker.h>
 
 #endif /* ASX_ASX_H */

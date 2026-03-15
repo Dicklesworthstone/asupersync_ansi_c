@@ -9,8 +9,8 @@
 #include <asx/core/budget.h>
 #include <asx/fs/fs.h>
 #include <asx/net/net.h>
-#include <asx/signal/signal.h>
 #include <asx/runtime/runtime.h>
+#include <asx/signal/signal.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -64,6 +64,13 @@ static void test_socket_addr_loopback(void) {
     ASSERT(sa.addr[2] == 0, "loopback addr[2]");
     ASSERT(sa.addr[3] == 1, "loopback addr[3]");
     ASSERT(sa.port == 3000, "loopback port");
+}
+
+static void test_socket_addr_ipv6_loopback(void) {
+    asx_socket_addr sa = asx_socket_addr_ipv6_loopback(3001);
+    ASSERT(sa.family == ASX_AF_INET6, "ipv6 family");
+    ASSERT(sa.port == 3001, "ipv6 port");
+    ASSERT(sa.addr[15] == 1, "ipv6 loopback tail");
 }
 
 static void test_socket_addr_eq(void) {
@@ -141,14 +148,15 @@ static void test_tcp_listener_poll_accept_with_cx_budget_checkpoint(void) {
     asx_budget budget = asx_budget_from_polls(1);
 
     MUST_OK(asx_tcp_listener_bind(&listener, &addr));
-    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
-                                     ASX_CAP_BUDGET_CONSUME));
+    MUST_OK(asx_cx_init(&cx, 1, 1,
+                        ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
+                            ASX_CAP_BUDGET_CONSUME));
     MUST_OK(asx_cx_bind_budget(&cx, &budget));
 
     ASSERT(asx_tcp_listener_poll_accept_with_cx(listener, &stream, NULL, &cx) == ASX_E_PENDING,
            "first accept poll pending");
-    ASSERT(asx_tcp_listener_poll_accept_with_cx(listener, &stream, NULL, &cx)
-               == ASX_E_POLL_BUDGET_EXHAUSTED,
+    ASSERT(asx_tcp_listener_poll_accept_with_cx(listener, &stream, NULL, &cx) ==
+               ASX_E_POLL_BUDGET_EXHAUSTED,
            "second accept poll exhausts budget");
 
     asx_tcp_listener_close(listener);
@@ -249,8 +257,9 @@ static void test_tcp_stream_poll_with_cx_budget_checkpoint(void) {
     asx_budget budget = asx_budget_from_polls(1);
 
     MUST_OK(asx_tcp_connect(&stream, &addr));
-    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
-                                     ASX_CAP_BUDGET_CONSUME));
+    MUST_OK(asx_cx_init(&cx, 1, 1,
+                        ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
+                            ASX_CAP_BUDGET_CONSUME));
     MUST_OK(asx_cx_bind_budget(&cx, &budget));
 
     asx_buf_mut_init(&dst);
@@ -260,14 +269,14 @@ static void test_tcp_stream_poll_with_cx_budget_checkpoint(void) {
            "second poll_read exhausts budget");
 
     src = asx_buf_from_cstr("hello");
-    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
-                                     ASX_CAP_BUDGET_CONSUME));
+    MUST_OK(asx_cx_init(&cx, 1, 1,
+                        ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
+                            ASX_CAP_BUDGET_CONSUME));
     budget = asx_budget_from_polls(1);
     MUST_OK(asx_cx_bind_budget(&cx, &budget));
     ASSERT(asx_tcp_stream_poll_write_with_cx(stream, &src, &n, &cx) == ASX_E_PENDING,
            "first poll_write pending");
-    ASSERT(asx_tcp_stream_poll_write_with_cx(stream, &src, &n, &cx)
-               == ASX_E_POLL_BUDGET_EXHAUSTED,
+    ASSERT(asx_tcp_stream_poll_write_with_cx(stream, &src, &n, &cx) == ASX_E_POLL_BUDGET_EXHAUSTED,
            "second poll_write exhausts budget");
 
     asx_tcp_stream_close(stream);
@@ -319,6 +328,164 @@ static void test_net_reset(void) {
 
     ASSERT(!asx_tcp_listener_is_alive(listener), "listener dead after reset");
     ASSERT(!asx_tcp_stream_is_alive(stream), "stream dead after reset");
+}
+
+/* ================================================================== */
+/* NET: UDP tests                                                     */
+/* ================================================================== */
+
+static void test_udp_bind_connect_and_addrs(void) {
+    asx_udp_socket socket;
+    asx_socket_addr local = asx_socket_addr_loopback(6100);
+    asx_socket_addr peer = asx_socket_addr_ipv4(10, 0, 0, 42, 5353);
+    asx_socket_addr out;
+
+    MUST_OK(asx_udp_bind(&socket, &local));
+    ASSERT(asx_udp_is_alive(socket), "udp alive");
+    ASSERT(asx_udp_local_addr(socket, &out) == ASX_OK, "udp local addr ok");
+    ASSERT(asx_socket_addr_eq(&local, &out), "udp local addr matches");
+
+    MUST_OK(asx_udp_connect(socket, &peer));
+    ASSERT(asx_udp_peer_addr(socket, &out) == ASX_OK, "udp peer addr ok");
+    ASSERT(asx_socket_addr_eq(&peer, &out), "udp peer addr matches");
+
+    ASSERT(asx_udp_close(socket) == ASX_OK, "udp close ok");
+    ASSERT(!asx_udp_is_alive(socket), "udp dead after close");
+}
+
+static void test_udp_poll_pending(void) {
+    asx_udp_socket socket;
+    asx_socket_addr local = asx_socket_addr_loopback(6101);
+    asx_socket_addr peer = asx_socket_addr_ipv4(10, 0, 0, 99, 5353);
+    asx_socket_addr from;
+    asx_buf_mut dst;
+    asx_buf src;
+    uint32_t n = 999u;
+
+    MUST_OK(asx_udp_bind(&socket, &local));
+    MUST_OK(asx_udp_connect(socket, &peer));
+
+    asx_buf_mut_init(&dst);
+    ASSERT(asx_udp_poll_recv(socket, &dst, &n, &from) == ASX_E_PENDING, "udp recv pending");
+    ASSERT(n == 0u, "udp recv zero bytes");
+    ASSERT(asx_socket_addr_eq(&from, &peer), "udp recv reports peer");
+
+    src = asx_buf_from_cstr("ping");
+    n = 999u;
+    ASSERT(asx_udp_poll_send(socket, &src, &n, NULL) == ASX_E_PENDING, "udp send pending");
+    ASSERT(n == 0u, "udp send zero bytes");
+
+    asx_udp_close(socket);
+}
+
+static void test_udp_poll_requires_peer_or_destination(void) {
+    asx_udp_socket socket;
+    asx_socket_addr local = asx_socket_addr_loopback(6102);
+    asx_buf src = asx_buf_from_cstr("ping");
+    uint32_t n = 0u;
+
+    MUST_OK(asx_udp_bind(&socket, &local));
+    ASSERT(asx_udp_poll_send(socket, &src, &n, NULL) == ASX_E_INVALID_ARGUMENT,
+           "udp send requires peer or explicit destination");
+    asx_udp_close(socket);
+}
+
+static void test_udp_with_cx_budget_and_permission(void) {
+    asx_udp_socket socket;
+    asx_socket_addr local = asx_socket_addr_loopback(6103);
+    asx_socket_addr peer = asx_socket_addr_loopback(6104);
+    asx_buf_mut dst;
+    asx_buf src = asx_buf_from_cstr("hello");
+    asx_cx cx;
+    asx_budget budget = asx_budget_from_polls(1);
+    uint32_t n = 0u;
+
+    MUST_OK(asx_udp_bind(&socket, &local));
+    MUST_OK(asx_udp_connect(socket, &peer));
+
+    MUST_OK(asx_cx_init(&cx, 1, 1,
+                        ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
+                            ASX_CAP_BUDGET_CONSUME));
+    MUST_OK(asx_cx_bind_budget(&cx, &budget));
+    asx_buf_mut_init(&dst);
+    ASSERT(asx_udp_poll_recv_with_cx(socket, &dst, &n, NULL, &cx) == ASX_E_PENDING,
+           "udp recv with cx pending");
+    ASSERT(asx_udp_poll_recv_with_cx(socket, &dst, &n, NULL, &cx) == ASX_E_POLL_BUDGET_EXHAUSTED,
+           "udp recv checkpoint budget");
+
+    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CANCEL_CHECK));
+    ASSERT(asx_udp_poll_send_with_cx(socket, &src, &n, NULL, &cx) == ASX_E_PERMISSION_DENIED,
+           "udp send with cx requires channel cap");
+
+    asx_udp_close(socket);
+}
+
+static void test_udp_arena_exhaustion(void) {
+    asx_udp_socket sockets[ASX_MAX_UDP_SOCKETS];
+    asx_socket_addr addr = asx_socket_addr_loopback(6200);
+    uint32_t i;
+
+    for (i = 0; i < ASX_MAX_UDP_SOCKETS; i++) {
+        addr.port = (uint16_t)(6200 + i);
+        ASSERT(asx_udp_bind(&sockets[i], &addr) == ASX_OK, "udp bind within capacity");
+    }
+    ASSERT(asx_udp_bind(&sockets[0], &addr) == ASX_E_RESOURCE_EXHAUSTED, "udp arena exhausted");
+    for (i = 0; i < ASX_MAX_UDP_SOCKETS; i++) { asx_udp_close(sockets[i]); }
+}
+
+/* ================================================================== */
+/* NET: resolve / happy-eyeballs tests                                */
+/* ================================================================== */
+
+static void test_resolve_localhost_prefers_ipv6(void) {
+    asx_resolve_options opts;
+    asx_resolve_result out;
+
+    asx_resolve_options_init(&opts, 8080);
+    opts.preferred_family = ASX_AF_INET6;
+
+    ASSERT(asx_resolve_host(&out, "localhost", &opts) == ASX_OK, "resolve localhost");
+    ASSERT(out.count == 2u, "dual stack localhost");
+    ASSERT(out.addrs[0].family == ASX_AF_INET6, "ipv6 first");
+    ASSERT(out.addrs[1].family == ASX_AF_INET4, "ipv4 second");
+}
+
+static void test_resolve_ipv4_literal(void) {
+    asx_resolve_options opts;
+    asx_resolve_result out;
+
+    asx_resolve_options_init(&opts, 53);
+    opts.allow_ipv6 = 0u;
+    ASSERT(asx_resolve_host(&out, "203.0.113.7", &opts) == ASX_OK, "resolve ipv4 literal");
+    ASSERT(out.count == 1u, "single ipv4 result");
+    ASSERT(out.addrs[0].family == ASX_AF_INET4, "ipv4 family");
+    ASSERT(out.addrs[0].addr[0] == 203, "ipv4 octet 0");
+    ASSERT(out.addrs[0].addr[1] == 0, "ipv4 octet 1");
+    ASSERT(out.addrs[0].addr[2] == 113, "ipv4 octet 2");
+    ASSERT(out.addrs[0].addr[3] == 7, "ipv4 octet 3");
+    ASSERT(out.addrs[0].port == 53, "resolved port");
+}
+
+static void test_resolve_rejects_unknown_host(void) {
+    asx_resolve_result out;
+    ASSERT(asx_resolve_host(&out, "not-a-known-host", NULL) == ASX_E_NOT_FOUND,
+           "unknown host rejected");
+}
+
+static void test_happy_eyeballs_reorders_preference(void) {
+    asx_resolve_result in;
+    asx_resolve_result out;
+
+    memset(&in, 0, sizeof(in));
+    in.addrs[0] = asx_socket_addr_loopback(80);
+    in.addrs[1] = asx_socket_addr_ipv6_loopback(80);
+    in.count = 2u;
+
+    ASSERT(asx_happy_eyeballs_order(&out, &in, ASX_AF_INET6) == ASX_OK,
+           "happy eyeballs reorder ok");
+    ASSERT(out.count == 2u, "reordered count");
+    ASSERT(out.addrs[0].family == ASX_AF_INET6, "ipv6 promoted first");
+    ASSERT(out.addrs[1].family == ASX_AF_INET4, "ipv4 follows");
 }
 
 /* ================================================================== */
@@ -406,8 +573,7 @@ static void test_parse_args_seed_requires_decimal(void) {
     asx_app_args args;
     const char *argv[] = {"myapp", "--seed=12x"};
 
-    ASSERT(asx_app_parse_args(&args, 2, argv) == ASX_E_INVALID_ARGUMENT,
-           "seed requires decimal");
+    ASSERT(asx_app_parse_args(&args, 2, argv) == ASX_E_INVALID_ARGUMENT, "seed requires decimal");
 }
 
 static void test_parse_args_null(void) {
@@ -534,14 +700,15 @@ static void test_app_null_args(void) {
     ASSERT(asx_app_init(&app, NULL) == ASX_E_INVALID_ARGUMENT, "null config");
     ASSERT(asx_app_run(NULL, noop_poll, NULL) == ASX_EXIT_ERROR, "null app run");
     ASSERT(asx_app_run_with_cx(NULL, NULL, noop_poll, NULL) == ASX_EXIT_ERROR, "null app run cx");
-    ASSERT(asx_app_run_server_with_cx(NULL, NULL, NULL, noop_poll, NULL, NULL, NULL) == ASX_EXIT_ERROR,
+    ASSERT(asx_app_run_server_with_cx(NULL, NULL, NULL, noop_poll, NULL, NULL, NULL) ==
+               ASX_EXIT_ERROR,
            "null app run server cx");
 
     memset(&app, 0, sizeof(app));
     ASSERT(asx_app_run(&app, noop_poll, NULL) == ASX_EXIT_INIT_FAILED, "uninit app run");
     ASSERT(asx_app_run_with_cx(&app, NULL, noop_poll, NULL) == ASX_EXIT_ERROR, "null cx run");
-    ASSERT(asx_app_run_server_with_cx(&app, NULL, NULL, noop_poll, NULL, NULL, NULL)
-               == ASX_EXIT_ERROR,
+    ASSERT(asx_app_run_server_with_cx(&app, NULL, NULL, noop_poll, NULL, NULL, NULL) ==
+               ASX_EXIT_ERROR,
            "null server cx run");
     ASSERT(asx_app_region(NULL) == 0, "null app region");
 }
@@ -603,8 +770,8 @@ static void test_app_run_server_with_cx_happy_path(void) {
     MUST_OK(asx_app_init(&app, &config));
     MUST_OK(asx_cx_init(&cx, asx_app_region(&app), ASX_INVALID_ID, ASX_CAP_SPAWN));
 
-    ASSERT(asx_app_run_server_with_cx(&app, &cx, &server, noop_poll, NULL, &report, NULL)
-               == ASX_EXIT_OK,
+    ASSERT(asx_app_run_server_with_cx(&app, &cx, &server, noop_poll, NULL, &report, NULL) ==
+               ASX_EXIT_OK,
            "server run with cx ok");
     ASSERT(app.exit_code == ASX_EXIT_OK, "app exit code updated");
     ASSERT(report.bootstrap_process_spawned == 1, "bootstrap spawned");
@@ -634,8 +801,8 @@ static void test_app_run_server_requires_config(void) {
         asx_fs_path path;
         MUST_OK(asx_fs_path_from_cstr(&path, "/missing.cfg"));
         server.config_path = &path;
-        ASSERT(asx_app_run_server(&app, &server, noop_poll, NULL, &report, NULL)
-                   == ASX_EXIT_INIT_FAILED,
+        ASSERT(asx_app_run_server(&app, &server, noop_poll, NULL, &report, NULL) ==
+                   ASX_EXIT_INIT_FAILED,
                "missing required config fails");
         ASSERT(app.exit_code == ASX_EXIT_INIT_FAILED, "app exit code updated on init failure");
         ASSERT(report.last_status == ASX_E_NOT_FOUND, "missing config status");
@@ -681,8 +848,8 @@ static void test_app_run_server_bootstrap_failure(void) {
     server.bootstrap_exit_code = 23;
 
     MUST_OK(asx_app_init(&app, &config));
-    ASSERT(asx_app_run_server(&app, &server, noop_poll, NULL, &report, NULL)
-               == ASX_EXIT_TASK_FAILED,
+    ASSERT(asx_app_run_server(&app, &server, noop_poll, NULL, &report, NULL) ==
+               ASX_EXIT_TASK_FAILED,
            "unexpected bootstrap failure bubbles");
     ASSERT(report.bootstrap_process_exited == 1, "bootstrap exited");
     ASSERT(report.bootstrap_process_exit_code == 23, "non-zero code preserved");
@@ -705,8 +872,8 @@ static void test_app_run_server_with_cx_permission_denied_fails_closed(void) {
     MUST_OK(asx_app_init(&app, &config));
     MUST_OK(asx_cx_init(&cx, asx_app_region(&app), ASX_INVALID_ID, ASX_CAP_CLOCK_READ));
 
-    ASSERT(asx_app_run_server_with_cx(&app, &cx, &server, noop_poll, NULL, &report, NULL)
-               == ASX_EXIT_TASK_FAILED,
+    ASSERT(asx_app_run_server_with_cx(&app, &cx, &server, noop_poll, NULL, &report, NULL) ==
+               ASX_EXIT_TASK_FAILED,
            "server run without spawn denied");
     ASSERT(app.exit_code == ASX_EXIT_TASK_FAILED, "app exit code updated on deny");
     ASSERT(report.last_status == ASX_E_PERMISSION_DENIED, "permission denied reported");
@@ -734,8 +901,8 @@ static void test_app_run_server_with_cx_region_mismatch_fails_closed(void) {
     MUST_OK(asx_app_init(&app, &config));
     MUST_OK(asx_cx_init(&cx, asx_app_region(&app) + 1u, ASX_INVALID_ID, ASX_CAP_SPAWN));
 
-    ASSERT(asx_app_run_server_with_cx(&app, &cx, &server, noop_poll, NULL, &report, NULL)
-               == ASX_EXIT_TASK_FAILED,
+    ASSERT(asx_app_run_server_with_cx(&app, &cx, &server, noop_poll, NULL, &report, NULL) ==
+               ASX_EXIT_TASK_FAILED,
            "server run wrong region denied");
     ASSERT(report.last_status == ASX_E_PERMISSION_DENIED, "region mismatch reported");
     ASSERT(report.bootstrap_process_spawned == 0, "bootstrap not spawned");
@@ -822,6 +989,7 @@ int main(void) {
     /* Net: socket address */
     RUN(test_socket_addr_ipv4);
     RUN(test_socket_addr_loopback);
+    RUN(test_socket_addr_ipv6_loopback);
     RUN(test_socket_addr_eq);
 
     /* Net: TCP listener */
@@ -842,6 +1010,17 @@ int main(void) {
     RUN(test_tcp_stream_poll_with_cx_permission_denied);
     RUN(test_tcp_stream_stale_handle);
     RUN(test_net_reset);
+
+    /* Net: UDP + resolve */
+    RUN(test_udp_bind_connect_and_addrs);
+    RUN(test_udp_poll_pending);
+    RUN(test_udp_poll_requires_peer_or_destination);
+    RUN(test_udp_with_cx_budget_and_permission);
+    RUN(test_udp_arena_exhaustion);
+    RUN(test_resolve_localhost_prefers_ipv6);
+    RUN(test_resolve_ipv4_literal);
+    RUN(test_resolve_rejects_unknown_host);
+    RUN(test_happy_eyeballs_reorders_preference);
 
     /* App: CLI parsing */
     RUN(test_parse_args_defaults);

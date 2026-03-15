@@ -5,15 +5,55 @@
  */
 
 #include <asx/bytes/buf.h>
+#include <asx/asx_config.h>
 #include <asx/fs/fs.h>
 #include <asx/process/process.h>
 #include <asx/signal/signal.h>
 #include <stdio.h>
+#if defined(__unix__) || defined(__APPLE__)
+#include <poll.h>
+#include <unistd.h>
+#endif
 
 static unsigned long long mix_u64(unsigned long long state, unsigned long long v) {
     state ^= v + 0x9e3779b97f4a7c15ULL + (state << 6) + (state >> 2);
     return state;
 }
+
+#if defined(__unix__) || defined(__APPLE__)
+typedef struct {
+    int read_fd;
+} native_reactor_ctx;
+
+static asx_time native_wall_clock(void *ctx) {
+    uint64_t *now_ns = (uint64_t *)ctx;
+    *now_ns += 1000000u;
+    return *now_ns;
+}
+
+static asx_status native_poll_wait(void *ctx, uint32_t timeout_ms, uint32_t *ready_count) {
+    native_reactor_ctx *native = (native_reactor_ctx *)ctx;
+    struct pollfd pfd;
+    int rc;
+
+    if (native == NULL || ready_count == NULL || native->read_fd < 0) { return ASX_E_INVALID_ARGUMENT; }
+
+    pfd.fd = native->read_fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+
+    rc = poll(&pfd, 1, (int)timeout_ms);
+    if (rc < 0) { return ASX_E_INVALID_STATE; }
+
+    *ready_count = (rc > 0 && (pfd.revents & POLLIN) != 0) ? 1u : 0u;
+    return ASX_OK;
+}
+
+static asx_status native_poll_ghost(void *ctx, uint64_t logical_step, uint32_t *ready_count) {
+    (void)logical_step;
+    return native_poll_wait(ctx, 0u, ready_count);
+}
+#endif
 
 int main(void) {
     asx_fs_path dir_path, file_path;
@@ -26,6 +66,7 @@ int main(void) {
     asx_signal_subscription subscription;
     uint32_t count = 0u;
     uint32_t n = 0u;
+    uint32_t ready = 0u;
     int32_t exit_code = -1;
     unsigned long long digest = 0xcbf29ce484222325ULL;
 
@@ -97,6 +138,65 @@ int main(void) {
     }
     printf("SCENARIO native_host.signal_shutdown pass\n");
     digest = mix_u64(digest, (unsigned long long)count);
+
+#if defined(__unix__) || defined(__APPLE__)
+    {
+        asx_runtime_hooks hooks;
+        native_reactor_ctx reactor_ctx;
+        uint64_t now_ns = 0u;
+        int pipe_fds[2] = {-1, -1};
+        const char byte = 'r';
+
+        if (pipe(pipe_fds) != 0) {
+            printf("SCENARIO native_host.reactor fail pipe_setup_failed\n");
+            return 1;
+        }
+
+        if (asx_runtime_hooks_init(&hooks) != ASX_OK) {
+            printf("SCENARIO native_host.reactor fail hooks_init_failed\n");
+            close(pipe_fds[0]);
+            close(pipe_fds[1]);
+            return 1;
+        }
+
+        reactor_ctx.read_fd = pipe_fds[0];
+        hooks.clock.ctx = &now_ns;
+        hooks.clock.now_ns_fn = native_wall_clock;
+        hooks.clock.logical_now_ns_fn = native_wall_clock;
+        hooks.reactor.ctx = &reactor_ctx;
+        hooks.reactor.wait_fn = native_poll_wait;
+        hooks.reactor.ghost_wait_fn = native_poll_ghost;
+
+        if (asx_runtime_set_hooks(&hooks) != ASX_OK) {
+            printf("SCENARIO native_host.reactor fail hook_install_failed\n");
+            close(pipe_fds[0]);
+            close(pipe_fds[1]);
+            return 1;
+        }
+
+        if (write(pipe_fds[1], &byte, 1u) != 1) {
+            printf("SCENARIO native_host.reactor fail pipe_write_failed\n");
+            close(pipe_fds[0]);
+            close(pipe_fds[1]);
+            return 1;
+        }
+
+        if (asx_runtime_reactor_wait(0u, &ready, 0u) != ASX_OK || ready != 1u) {
+            printf("SCENARIO native_host.reactor fail readiness_not_observed\n");
+            close(pipe_fds[0]);
+            close(pipe_fds[1]);
+            return 1;
+        }
+
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+        printf("SCENARIO native_host.reactor pass\n");
+        digest = mix_u64(digest, (unsigned long long)ready);
+    }
+#else
+    printf("SCENARIO native_host.reactor pass unsupported_platform_skip\n");
+    digest = mix_u64(digest, 6u);
+#endif
 
     if (asx_fs_file_close(file) != ASX_OK) {
         printf("SCENARIO native_host.fs_close fail close_failed\n");
