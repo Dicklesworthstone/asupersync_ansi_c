@@ -1,9 +1,10 @@
 /*
- * asx/net/net.h — minimal network types and socket primitives
+ * asx/net/net.h — deterministic network types and in-memory socket primitives
  *
- * Walking-skeleton network surface: address types, TCP/UDP handle
- * types, and poll-based I/O. Platform socket integration is deferred
- * to Phase 3; this layer provides the API shape and ghost stubs.
+ * Portable network surface: address types, TCP/UDP handle types, and poll-based
+ * I/O. Platform socket integration is still deferred, but the core now ships a
+ * deterministic in-memory loopback transport so tests and higher-level modules
+ * can exercise real connection and datagram flows without OS dependencies.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -109,7 +110,7 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 /* Bind a TCP listener to the given address.
- * Walking skeleton: records the address but does not create a real socket. */
+ * Deterministic core transport: records the address and accepts in-memory loopback connects. */
 ASX_API ASX_MUST_USE asx_status asx_tcp_listener_bind(asx_tcp_listener *out,
                                                       const asx_socket_addr *addr);
 
@@ -120,7 +121,7 @@ ASX_API ASX_MUST_USE asx_status asx_tcp_listener_bind_with_cx(asx_tcp_listener *
                                                               const asx_cx *cx);
 
 /* Poll for incoming connections.
- * Walking skeleton: always returns ASX_E_PENDING (no real accept). */
+ * Returns ASX_OK when a loopback connection is queued, otherwise ASX_E_PENDING. */
 ASX_API ASX_MUST_USE asx_status asx_tcp_listener_poll_accept(asx_tcp_listener listener,
                                                              asx_tcp_stream *out,
                                                              asx_socket_addr *peer_addr);
@@ -146,7 +147,7 @@ ASX_API int asx_tcp_listener_is_alive(asx_tcp_listener listener);
  * ------------------------------------------------------------------- */
 
 /* Initiate a TCP connection.
- * Walking skeleton: creates the handle but does not open a real socket. */
+ * Loopback connects against a bound listener become readable/writable in-memory streams. */
 ASX_API ASX_MUST_USE asx_status asx_tcp_connect(asx_tcp_stream *out, const asx_socket_addr *addr);
 
 /* Initiate a TCP connection under explicit communication authority.
@@ -156,7 +157,7 @@ ASX_API ASX_MUST_USE asx_status asx_tcp_connect_with_cx(asx_tcp_stream *out,
                                                         const asx_cx *cx);
 
 /* Poll-read from a TCP stream.
- * Walking skeleton: always returns ASX_E_PENDING. */
+ * Returns ASX_OK when buffered bytes are available, otherwise ASX_E_PENDING. */
 ASX_API ASX_MUST_USE asx_status asx_tcp_stream_poll_read(asx_tcp_stream stream, asx_buf_mut *dst,
                                                          uint32_t *bytes_read);
 
@@ -167,7 +168,7 @@ ASX_API ASX_MUST_USE asx_status asx_tcp_stream_poll_read_with_cx(asx_tcp_stream 
                                                                  uint32_t *bytes_read, asx_cx *cx);
 
 /* Poll-write to a TCP stream.
- * Walking skeleton: always returns ASX_E_PENDING. */
+ * Returns ASX_OK when bytes are delivered to the linked peer, otherwise ASX_E_PENDING. */
 ASX_API ASX_MUST_USE asx_status asx_tcp_stream_poll_write(asx_tcp_stream stream, const asx_buf *src,
                                                           uint32_t *bytes_written);
 
@@ -208,7 +209,8 @@ ASX_API ASX_MUST_USE asx_status asx_udp_connect_with_cx(asx_udp_socket socket,
                                                         const asx_cx *cx);
 
 /* Poll-send a datagram.
- * With no explicit destination, uses the connected peer. */
+ * With no explicit destination, uses the connected peer. Deterministic loopback delivery is
+ * performed when the destination matches a bound local socket. */
 ASX_API ASX_MUST_USE asx_status asx_udp_poll_send(asx_udp_socket socket, const asx_buf *src,
                                                   uint32_t *bytes_written,
                                                   const asx_socket_addr *to);
@@ -246,7 +248,7 @@ ASX_API int asx_udp_is_alive(asx_udp_socket socket);
 /* Initialize resolve options to a deterministic dual-stack localhost-friendly default. */
 ASX_API void asx_resolve_options_init(asx_resolve_options *out, uint16_t port);
 
-/* Resolve a host string into deterministic ghost endpoints. */
+/* Resolve a host string into deterministic endpoints. */
 ASX_API ASX_MUST_USE asx_status asx_resolve_host(asx_resolve_result *out, const char *host,
                                                  const asx_resolve_options *options);
 

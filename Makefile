@@ -154,6 +154,7 @@ RUNTIME_SRC := \
 	src/runtime/vertical_adapter.c \
 	src/runtime/virtual_time.c \
 	src/runtime/lab.c \
+	src/runtime/local.c \
 	src/runtime/io_driver.c \
 	src/runtime/config_reload.c \
 	src/runtime/regression_localize.c \

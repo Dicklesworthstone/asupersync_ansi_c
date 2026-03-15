@@ -93,6 +93,7 @@
 #include <asx/runtime/hindsight.h>
 #include <asx/runtime/io_driver.h>
 #include <asx/runtime/lab.h>
+#include <asx/runtime/local.h>
 #include <asx/runtime/overload_catalog.h>
 #include <asx/runtime/parallel.h>
 #include <asx/runtime/profile_compat.h>

@@ -123,10 +123,29 @@ static void test_tcp_listener_poll_accept_pending(void) {
 
     MUST_OK(asx_tcp_listener_bind(&listener, &addr));
 
-    /* Ghost stub: always pending */
     ASSERT(asx_tcp_listener_poll_accept(listener, &stream, NULL) == ASX_E_PENDING,
            "poll_accept pending");
 
+    asx_tcp_listener_close(listener);
+}
+
+static void test_tcp_listener_poll_accept_ready_for_loopback_connect(void) {
+    asx_tcp_listener listener;
+    asx_tcp_stream client;
+    asx_tcp_stream accepted;
+    asx_socket_addr addr = asx_socket_addr_loopback(7072);
+    asx_socket_addr peer;
+
+    MUST_OK(asx_tcp_listener_bind(&listener, &addr));
+    MUST_OK(asx_tcp_connect(&client, &addr));
+
+    ASSERT(asx_tcp_listener_poll_accept(listener, &accepted, &peer) == ASX_OK,
+           "accept returns ready stream");
+    ASSERT(asx_socket_addr_eq(&peer, &addr) == 0, "accepted peer uses client ephemeral addr");
+    ASSERT(asx_tcp_stream_is_alive(accepted), "accepted stream alive");
+
+    asx_tcp_stream_close(accepted);
+    asx_tcp_stream_close(client);
     asx_tcp_listener_close(listener);
 }
 
@@ -245,6 +264,36 @@ static void test_tcp_stream_poll_pending(void) {
     ASSERT(n == 0, "no bytes written");
 
     asx_tcp_stream_close(stream);
+}
+
+static void test_tcp_stream_loopback_transfer(void) {
+    asx_tcp_listener listener;
+    asx_tcp_stream client;
+    asx_tcp_stream accepted;
+    asx_socket_addr addr = asx_socket_addr_loopback(2003);
+    asx_buf src;
+    asx_buf_mut dst;
+    asx_buf readable;
+    uint32_t n = 0u;
+
+    MUST_OK(asx_tcp_listener_bind(&listener, &addr));
+    MUST_OK(asx_tcp_connect(&client, &addr));
+    MUST_OK(asx_tcp_listener_poll_accept(listener, &accepted, NULL));
+
+    src = asx_buf_from_cstr("hello-loopback");
+    ASSERT(asx_tcp_stream_poll_write(client, &src, &n) == ASX_OK, "loopback write ok");
+    ASSERT(n == src.len, "loopback write length");
+
+    asx_buf_mut_init(&dst);
+    ASSERT(asx_tcp_stream_poll_read(accepted, &dst, &n) == ASX_OK, "loopback read ok");
+    ASSERT(n == src.len, "loopback read length");
+    readable = asx_buf_mut_readable(&dst);
+    ASSERT(readable.len == src.len, "readable len matches");
+    ASSERT(memcmp(readable.ptr, src.ptr, src.len) == 0, "loopback payload matches");
+
+    asx_tcp_stream_close(accepted);
+    asx_tcp_stream_close(client);
+    asx_tcp_listener_close(listener);
 }
 
 static void test_tcp_stream_poll_with_cx_budget_checkpoint(void) {
@@ -376,6 +425,37 @@ static void test_udp_poll_pending(void) {
     ASSERT(n == 0u, "udp send zero bytes");
 
     asx_udp_close(socket);
+}
+
+static void test_udp_loopback_delivery(void) {
+    asx_udp_socket sender;
+    asx_udp_socket receiver;
+    asx_socket_addr sender_addr = asx_socket_addr_loopback(6105);
+    asx_socket_addr receiver_addr = asx_socket_addr_loopback(6106);
+    asx_socket_addr from;
+    asx_buf src;
+    asx_buf_mut dst;
+    asx_buf readable;
+    uint32_t n = 0u;
+
+    MUST_OK(asx_udp_bind(&sender, &sender_addr));
+    MUST_OK(asx_udp_bind(&receiver, &receiver_addr));
+    MUST_OK(asx_udp_connect(sender, &receiver_addr));
+
+    src = asx_buf_from_cstr("udp-loopback");
+    ASSERT(asx_udp_poll_send(sender, &src, &n, NULL) == ASX_OK, "udp loopback send ok");
+    ASSERT(n == src.len, "udp loopback send length");
+
+    asx_buf_mut_init(&dst);
+    ASSERT(asx_udp_poll_recv(receiver, &dst, &n, &from) == ASX_OK, "udp loopback recv ok");
+    ASSERT(n == src.len, "udp loopback recv length");
+    ASSERT(asx_socket_addr_eq(&from, &sender_addr) != 0, "udp loopback sender addr");
+    readable = asx_buf_mut_readable(&dst);
+    ASSERT(readable.len == src.len, "udp readable len matches");
+    ASSERT(memcmp(readable.ptr, src.ptr, src.len) == 0, "udp payload matches");
+
+    asx_udp_close(receiver);
+    asx_udp_close(sender);
 }
 
 static void test_udp_poll_requires_peer_or_destination(void) {
@@ -996,6 +1076,7 @@ int main(void) {
     RUN(test_tcp_listener_bind_close);
     RUN(test_tcp_listener_local_addr);
     RUN(test_tcp_listener_poll_accept_pending);
+    RUN(test_tcp_listener_poll_accept_ready_for_loopback_connect);
     RUN(test_tcp_listener_bind_with_cx_permission_denied);
     RUN(test_tcp_listener_poll_accept_with_cx_budget_checkpoint);
     RUN(test_tcp_listener_null_args);
@@ -1006,6 +1087,7 @@ int main(void) {
     RUN(test_tcp_connect_with_cx_permission_denied);
     RUN(test_tcp_stream_peer_addr);
     RUN(test_tcp_stream_poll_pending);
+    RUN(test_tcp_stream_loopback_transfer);
     RUN(test_tcp_stream_poll_with_cx_budget_checkpoint);
     RUN(test_tcp_stream_poll_with_cx_permission_denied);
     RUN(test_tcp_stream_stale_handle);
@@ -1014,6 +1096,7 @@ int main(void) {
     /* Net: UDP + resolve */
     RUN(test_udp_bind_connect_and_addrs);
     RUN(test_udp_poll_pending);
+    RUN(test_udp_loopback_delivery);
     RUN(test_udp_poll_requires_peer_or_destination);
     RUN(test_udp_with_cx_budget_and_permission);
     RUN(test_udp_arena_exhaustion);

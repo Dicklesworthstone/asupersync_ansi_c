@@ -6,6 +6,7 @@
 
 #include <asx/asx.h>
 #include <stdio.h>
+#include <string.h>
 
 static unsigned long long mix_u64(unsigned long long state, unsigned long long value) {
     state ^= value + 0x9e3779b97f4a7c15ULL + (state << 6) + (state >> 2);
@@ -19,13 +20,17 @@ int main(void) {
     asx_resolve_result resolved;
     asx_resolve_result ordered;
     asx_socket_addr listen_addr;
+    asx_socket_addr accept_peer;
     asx_socket_addr stream_peer;
     asx_socket_addr udp_peer;
+    asx_tcp_stream accepted;
     asx_tcp_listener listener;
     asx_tcp_stream stream;
+    asx_udp_socket receiver;
     asx_udp_socket socket;
     asx_buf payload;
     asx_buf_mut dst;
+    asx_buf readable;
     uint32_t io_n = 0u;
     unsigned long long digest = 0xcbf29ce484222325ULL;
 
@@ -71,8 +76,10 @@ int main(void) {
     digest = mix_u64(digest, (unsigned long long)listen_addr.port);
 
     if (asx_tcp_connect(&stream, &ordered.addrs[0]) != ASX_OK ||
+        asx_tcp_listener_poll_accept(listener, &accepted, &accept_peer) != ASX_OK ||
         asx_tcp_stream_peer_addr(stream, &stream_peer) != ASX_OK ||
-        stream_peer.port != 8123u || !asx_tcp_stream_is_alive(stream)) {
+        stream_peer.port != 8123u || !asx_tcp_stream_is_alive(stream) ||
+        !asx_tcp_stream_is_alive(accepted) || accept_peer.port == 0u) {
         printf("SCENARIO network.stream_setup fail connect_contract\n");
         asx_runtime_shutdown(&runtime);
         return 1;
@@ -82,9 +89,15 @@ int main(void) {
 
     payload = asx_buf_from_cstr("network-surface");
     asx_buf_mut_init(&dst);
-    if (asx_tcp_stream_poll_write(stream, &payload, &io_n) != ASX_E_PENDING ||
-        asx_tcp_stream_poll_read(stream, &dst, &io_n) != ASX_E_PENDING) {
+    if (asx_tcp_stream_poll_write(stream, &payload, &io_n) != ASX_OK || io_n != payload.len ||
+        asx_tcp_stream_poll_read(accepted, &dst, &io_n) != ASX_OK || io_n != payload.len) {
         printf("SCENARIO network.stream_io fail pending_contract\n");
+        asx_runtime_shutdown(&runtime);
+        return 1;
+    }
+    readable = asx_buf_mut_readable(&dst);
+    if (readable.len != payload.len || memcmp(readable.ptr, payload.ptr, payload.len) != 0) {
+        printf("SCENARIO network.stream_io fail payload_mismatch\n");
         asx_runtime_shutdown(&runtime);
         return 1;
     }
@@ -92,18 +105,31 @@ int main(void) {
     digest = mix_u64(digest, (unsigned long long)payload.len);
 
     if (asx_udp_bind(&socket, &listen_addr) != ASX_OK ||
+        asx_udp_bind(&receiver, &ordered.addrs[1]) != ASX_OK ||
         asx_udp_connect(socket, &ordered.addrs[1]) != ASX_OK ||
         asx_udp_peer_addr(socket, &udp_peer) != ASX_OK ||
-        asx_udp_poll_send(socket, &payload, &io_n, NULL) != ASX_E_PENDING ||
-        asx_udp_poll_recv(socket, &dst, &io_n, NULL) != ASX_E_PENDING) {
+        asx_udp_poll_send(socket, &payload, &io_n, NULL) != ASX_OK || io_n != payload.len) {
         printf("SCENARIO network.udp fail udp_contract\n");
+        asx_runtime_shutdown(&runtime);
+        return 1;
+    }
+    asx_buf_mut_clear(&dst);
+    if (asx_udp_poll_recv(receiver, &dst, &io_n, NULL) != ASX_OK || io_n != payload.len) {
+        printf("SCENARIO network.udp fail udp_recv_contract\n");
+        asx_runtime_shutdown(&runtime);
+        return 1;
+    }
+    readable = asx_buf_mut_readable(&dst);
+    if (readable.len != payload.len || memcmp(readable.ptr, payload.ptr, payload.len) != 0) {
+        printf("SCENARIO network.udp fail payload_mismatch\n");
         asx_runtime_shutdown(&runtime);
         return 1;
     }
     printf("SCENARIO network.udp pass\n");
     digest = mix_u64(digest, (unsigned long long)udp_peer.family);
 
-    if (asx_udp_close(socket) != ASX_OK || asx_tcp_stream_close(stream) != ASX_OK ||
+    if (asx_udp_close(receiver) != ASX_OK || asx_udp_close(socket) != ASX_OK ||
+        asx_tcp_stream_close(accepted) != ASX_OK || asx_tcp_stream_close(stream) != ASX_OK ||
         asx_tcp_listener_close(listener) != ASX_OK) {
         printf("SCENARIO network.close fail close_contract\n");
         asx_runtime_shutdown(&runtime);
