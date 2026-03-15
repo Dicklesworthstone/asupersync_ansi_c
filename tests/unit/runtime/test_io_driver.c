@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/asx_config.h>
 #include <asx/runtime/io_driver.h>
 #include <asx/runtime/browser_boundary.h>
 
@@ -15,10 +16,25 @@ static asx_status st_sink_;
         (void)st_sink_;                                                                            \
     } while (0)
 
+static uint32_t g_ready_count;
+
+static asx_status fixed_ready_reactor(void *ctx, uint64_t logical_step, uint32_t *ready_count) {
+    (void)ctx;
+    (void)logical_step;
+    if (ready_count == NULL) return ASX_E_INVALID_ARGUMENT;
+    *ready_count = g_ready_count;
+    return ASX_OK;
+}
+
 static int setup(void) {
     asx_status st;
+    asx_runtime_hooks hooks;
+
     asx_waker_reset();
     asx_io_driver_reset();
+    g_ready_count = 0u;
+    MUST_OK(asx_runtime_hooks_init(&hooks));
+    MUST_OK(asx_runtime_set_hooks(&hooks));
     st = asx_io_driver_init();
     if (!asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
         if (st != ASX_E_PERMISSION_DENIED) {
@@ -154,6 +170,63 @@ TEST(poll_returns_zero_ghost_reactor) {
     teardown();
 }
 
+TEST(poll_collects_ready_events_and_wakes_registrations) {
+    asx_runtime_hooks hooks;
+    asx_waker w1, w2;
+    asx_io_token tok1, tok2;
+    asx_io_event events[4];
+
+    if (!setup()) return;
+
+    MUST_OK(asx_runtime_hooks_init(&hooks));
+    hooks.reactor.ghost_wait_fn = fixed_ready_reactor;
+    MUST_OK(asx_runtime_set_hooks(&hooks));
+
+    MUST_OK(asx_waker_register(1, &w1));
+    MUST_OK(asx_waker_register(2, &w2));
+    MUST_OK(asx_io_register(10, ASX_IO_READABLE, &w1, &tok1));
+    MUST_OK(asx_io_register(20, ASX_IO_WRITABLE, &w2, &tok2));
+
+    g_ready_count = 2u;
+    ASSERT_EQ(asx_io_driver_poll(events, 4, 17u), 2u);
+    ASSERT_EQ(events[0].token.slot, tok1.slot);
+    ASSERT_EQ(events[0].token.generation, tok1.generation);
+    ASSERT_EQ(events[0].ready, ASX_IO_READABLE);
+    ASSERT_EQ(events[1].token.slot, tok2.slot);
+    ASSERT_EQ(events[1].token.generation, tok2.generation);
+    ASSERT_EQ(events[1].ready, ASX_IO_WRITABLE);
+    ASSERT_TRUE(asx_waker_is_signaled(&w1));
+    ASSERT_TRUE(asx_waker_is_signaled(&w2));
+
+    teardown();
+}
+
+TEST(poll_caps_ready_delivery_to_max_events) {
+    asx_runtime_hooks hooks;
+    asx_waker w1, w2;
+    asx_io_token tok1, tok2;
+    asx_io_event event;
+
+    if (!setup()) return;
+
+    MUST_OK(asx_runtime_hooks_init(&hooks));
+    hooks.reactor.ghost_wait_fn = fixed_ready_reactor;
+    MUST_OK(asx_runtime_set_hooks(&hooks));
+
+    MUST_OK(asx_waker_register(1, &w1));
+    MUST_OK(asx_waker_register(2, &w2));
+    MUST_OK(asx_io_register(10, ASX_IO_READABLE, &w1, &tok1));
+    MUST_OK(asx_io_register(20, ASX_IO_WRITABLE, &w2, &tok2));
+
+    g_ready_count = 2u;
+    ASSERT_EQ(asx_io_driver_poll(&event, 1u, 0u), 1u);
+    ASSERT_EQ(event.token.slot, tok1.slot);
+    ASSERT_TRUE(asx_waker_is_signaled(&w1));
+    ASSERT_FALSE(asx_waker_is_signaled(&w2));
+
+    teardown();
+}
+
 /* ------------------------------------------------------------------ */
 /* Exhaustion                                                          */
 /* ------------------------------------------------------------------ */
@@ -227,6 +300,8 @@ int main(void) {
     RUN_TEST(set_interest_stale_fails);
 
     RUN_TEST(poll_returns_zero_ghost_reactor);
+    RUN_TEST(poll_collects_ready_events_and_wakes_registrations);
+    RUN_TEST(poll_caps_ready_delivery_to_max_events);
 
     RUN_TEST(arena_exhaustion);
     RUN_TEST(multiple_registrations);

@@ -100,6 +100,7 @@ export ASX_E2E_LOG_DIR="$SUITE_LOG_DIR"
 E2E_FAMILIES=(
     "GATE-E2E-LIFECYCLE:core_lifecycle.sh"
     "GATE-E2E-CODEC:codec_parity.sh"
+    "GATE-E2E-NETWORK:network_surface.sh"
     "GATE-E2E-ROBUSTNESS:robustness.sh"
     "GATE-E2E-ROBUSTNESS:robustness_fault.sh"
     "GATE-E2E-ROBUSTNESS:robustness_endian.sh"

@@ -352,6 +352,7 @@ E2E_SCRIPT_DIR := tests/e2e
 E2E_ALL_SCRIPTS := \
 	$(E2E_SCRIPT_DIR)/core_lifecycle.sh \
 	$(E2E_SCRIPT_DIR)/codec_parity.sh \
+	$(E2E_SCRIPT_DIR)/network_surface.sh \
 	$(E2E_SCRIPT_DIR)/robustness.sh \
 	$(E2E_SCRIPT_DIR)/robustness_fault.sh \
 	$(E2E_SCRIPT_DIR)/robustness_endian.sh \

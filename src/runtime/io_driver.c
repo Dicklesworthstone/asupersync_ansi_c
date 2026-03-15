@@ -139,26 +139,38 @@ asx_status asx_io_set_interest(asx_io_token *token, asx_io_interest interest) {
 
 uint32_t asx_io_driver_poll(asx_io_event *out_events, uint32_t max_events, uint32_t timeout_ms) {
     uint32_t ready_count = 0;
+    uint32_t collected = 0;
+    uint32_t i;
 
-    (void)out_events;
-    (void)max_events;
-    (void)timeout_ms;
+    if (!g_initialized || out_events == NULL || max_events == 0u) return 0u;
 
     /* Walking skeleton: delegate to ghost reactor via runtime hook.
-     * Ghost reactor returns 0 ready events, so no wakers are signaled.
-     * Real reactor integration will poll the platform reactor and
-     * match ready FDs to registered tokens. */
+     * The hook only reports a readiness count, so we deterministically map
+     * those ready slots onto the oldest active registrations. This keeps the
+     * registration/poll/waker contract usable without pretending to have a
+     * full fd-backed reactor yet. */
     {
         asx_status st;
         st = asx_runtime_reactor_wait(timeout_ms, &ready_count, 0);
-        (void)st;
+        if (st != ASX_OK || ready_count == 0u) return 0u;
     }
 
-    /* In walking skeleton mode, ghost reactor returns 0 events.
-     * Future: match reactor results to registered tokens and fill
-     * out_events, signal associated wakers. */
+    for (i = 0; i < g_reg_count && collected < ready_count && collected < max_events; i++) {
+        asx_status wake_st;
 
-    return 0;
+        if (!g_regs[i].alive) continue;
+
+        out_events[collected].token.slot = i;
+        out_events[collected].token.generation = g_regs[i].generation;
+        out_events[collected].ready = g_regs[i].interest;
+
+        wake_st = asx_waker_wake(&g_regs[i].waker);
+        (void)wake_st;
+
+        collected++;
+    }
+
+    return collected;
 }
 
 /* ------------------------------------------------------------------ */
