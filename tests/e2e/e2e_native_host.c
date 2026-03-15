@@ -4,11 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/bytes/buf.h>
-#include <asx/asx_config.h>
-#include <asx/fs/fs.h>
-#include <asx/process/process.h>
-#include <asx/signal/signal.h>
+#include <asx/asx.h>
 #include <stdio.h>
 #if defined(__unix__) || defined(__APPLE__)
 #include <poll.h>
@@ -18,6 +14,11 @@
 static unsigned long long mix_u64(unsigned long long state, unsigned long long v) {
     state ^= v + 0x9e3779b97f4a7c15ULL + (state << 6) + (state >> 2);
     return state;
+}
+
+static uint64_t blocking_add_seven(void *user_data) {
+    uint64_t *value = (uint64_t *)user_data;
+    return *value + 7u;
 }
 
 #if defined(__unix__) || defined(__APPLE__)
@@ -56,6 +57,10 @@ static asx_status native_poll_ghost(void *ctx, uint64_t logical_step, uint32_t *
 #endif
 
 int main(void) {
+    asx_runtime_builder builder;
+    asx_runtime runtime;
+    asx_runtime_config runtime_cfg;
+    asx_blocking_handle blocking_handle;
     asx_fs_path dir_path, file_path;
     asx_file_handle file;
     asx_fs_metadata meta;
@@ -64,6 +69,8 @@ int main(void) {
     asx_process_handle process;
     asx_process_spawn_options opts;
     asx_signal_subscription subscription;
+    uint64_t blocking_input = 35u;
+    uint64_t blocking_result = 0u;
     uint32_t count = 0u;
     uint32_t n = 0u;
     uint32_t ready = 0u;
@@ -113,6 +120,13 @@ int main(void) {
     printf("SCENARIO native_host.fs_metadata pass\n");
     digest = mix_u64(digest, (unsigned long long)meta.size);
 
+    if (asx_fs_file_close(file) != ASX_OK) {
+        printf("SCENARIO native_host.fs_close fail close_failed\n");
+        return 1;
+    }
+    printf("SCENARIO native_host.fs_close pass\n");
+    digest = mix_u64(digest, 5u);
+
     opts.program = "native-worker";
     opts.polls_until_exit = 1u;
     opts.exit_code = 7;
@@ -138,6 +152,32 @@ int main(void) {
     }
     printf("SCENARIO native_host.signal_shutdown pass\n");
     digest = mix_u64(digest, (unsigned long long)count);
+
+    if (asx_runtime_builder_init_current_thread(&builder) != ASX_OK ||
+        asx_runtime_builder_set_finalizer_poll_budget(&builder, 48u) != ASX_OK ||
+        asx_runtime_builder_build(&builder, &runtime) != ASX_OK ||
+        !asx_runtime_is_initialized(&runtime) ||
+        asx_runtime_get_config(&runtime, &runtime_cfg) != ASX_OK ||
+        runtime_cfg.wait_policy != ASX_WAIT_BUSY_SPIN ||
+        runtime_cfg.finalizer_poll_budget != 48u) {
+        printf("SCENARIO native_host.builder fail builder_contract\n");
+        return 1;
+    }
+    printf("SCENARIO native_host.builder pass\n");
+    digest = mix_u64(digest, (unsigned long long)runtime_cfg.finalizer_poll_budget);
+
+    if (asx_spawn_blocking(blocking_add_seven, &blocking_input, NULL, &blocking_handle) != ASX_OK ||
+        asx_blocking_get_state(&blocking_handle) != ASX_BLOCKING_COMPLETED ||
+        asx_blocking_get_result(&blocking_handle, &blocking_result) != ASX_OK ||
+        blocking_result != 42u || asx_blocking_active_count() != 0u) {
+        printf("SCENARIO native_host.spawn_blocking fail blocking_contract\n");
+        asx_runtime_shutdown(&runtime);
+        return 1;
+    }
+    printf("SCENARIO native_host.spawn_blocking pass\n");
+    digest = mix_u64(digest, (unsigned long long)blocking_result);
+
+    asx_runtime_shutdown(&runtime);
 
 #if defined(__unix__) || defined(__APPLE__)
     {
@@ -197,13 +237,6 @@ int main(void) {
     printf("SCENARIO native_host.reactor pass unsupported_platform_skip\n");
     digest = mix_u64(digest, 6u);
 #endif
-
-    if (asx_fs_file_close(file) != ASX_OK) {
-        printf("SCENARIO native_host.fs_close fail close_failed\n");
-        return 1;
-    }
-    printf("SCENARIO native_host.fs_close pass\n");
-    digest = mix_u64(digest, 5u);
 
     printf("DIGEST %016llx\n", digest);
     return 0;
