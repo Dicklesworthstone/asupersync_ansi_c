@@ -14,6 +14,11 @@ static uint64_t fake_time(void *ctx) {
     return *value;
 }
 
+static uint64_t fake_entropy(void *ctx) {
+    uint64_t *value = (uint64_t *)ctx;
+    return *value;
+}
+
 TEST(init_null_fails) { ASSERT_EQ(asx_runtime_builder_init(NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(init_defaults_ok) {
@@ -119,6 +124,39 @@ TEST(hook_setters_replace_hook_families) {
     ASSERT_EQ(hooks.clock.now_ns_fn(hooks.clock.ctx), (uint64_t)99);
 }
 
+TEST(set_hooks_rejects_invalid_full_hook_table) {
+    asx_runtime_builder builder;
+    asx_runtime_hooks hooks;
+
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+
+    hooks.clock.logical_now_ns_fn = NULL;
+    ASSERT_EQ(asx_runtime_builder_set_hooks(&builder, &hooks), ASX_E_DETERMINISM_VIOLATION);
+}
+
+TEST(set_hooks_accepts_valid_full_hook_table) {
+    asx_runtime_builder builder;
+    asx_runtime_hooks hooks;
+    uint64_t now = 123u;
+    uint64_t entropy = 456u;
+
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+
+    hooks.clock.now_ns_fn = fake_time;
+    hooks.clock.logical_now_ns_fn = fake_time;
+    hooks.clock.ctx = &now;
+    hooks.entropy.random_u64_fn = fake_entropy;
+    hooks.entropy.ctx = &entropy;
+    hooks.deterministic_seeded_prng = 1;
+
+    ASSERT_EQ(asx_runtime_builder_set_hooks(&builder, &hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_get_hooks(&builder, &hooks), ASX_OK);
+    ASSERT_EQ(hooks.clock.logical_now_ns_fn(hooks.clock.ctx), (uint64_t)123);
+    ASSERT_EQ(hooks.entropy.random_u64_fn(hooks.entropy.ctx), (uint64_t)456);
+}
+
 TEST(validate_rejects_bad_builder_config) {
     asx_runtime_builder builder;
 
@@ -161,6 +199,8 @@ int main(void) {
     RUN_TEST(setters_override_preset_values);
     RUN_TEST(invalid_setter_inputs_fail);
     RUN_TEST(hook_setters_replace_hook_families);
+    RUN_TEST(set_hooks_rejects_invalid_full_hook_table);
+    RUN_TEST(set_hooks_accepts_valid_full_hook_table);
     RUN_TEST(validate_rejects_bad_builder_config);
     RUN_TEST(build_roundtrip_works);
     RUN_TEST(build_null_fails);

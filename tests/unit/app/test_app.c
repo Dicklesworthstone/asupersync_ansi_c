@@ -552,6 +552,48 @@ static void test_resolve_rejects_unknown_host(void) {
            "unknown host rejected");
 }
 
+static void test_resolver_cache_round_trip(void) {
+    asx_resolver resolver;
+    asx_resolve_options opts;
+    asx_resolve_result out;
+    uint8_t cache_hit = 9u;
+
+    asx_resolver_init(&resolver);
+    asx_resolve_options_init(&opts, 8123u);
+
+    ASSERT(asx_resolver_lookup(&resolver, "localhost", &opts, &out, &cache_hit) == ASX_OK,
+           "resolver first lookup ok");
+    ASSERT(cache_hit == 0u, "first lookup is miss");
+    ASSERT(asx_resolver_cached_count(&resolver) == 1u, "one resolver cache entry");
+
+    ASSERT(asx_resolver_lookup(&resolver, "localhost", &opts, &out, &cache_hit) == ASX_OK,
+           "resolver second lookup ok");
+    ASSERT(cache_hit == 1u, "second lookup is hit");
+    ASSERT(out.count == 2u, "resolver cached dual-stack localhost");
+}
+
+static void test_resolver_negative_cache_and_invalidate(void) {
+    asx_resolver resolver;
+    asx_resolve_result out;
+    uint8_t cache_hit = 9u;
+
+    asx_resolver_init(&resolver);
+
+    ASSERT(asx_resolver_lookup(&resolver, "not-a-known-host", NULL, &out, &cache_hit) ==
+               ASX_E_NOT_FOUND,
+           "resolver caches negative lookup");
+    ASSERT(cache_hit == 0u, "negative first lookup is miss");
+    ASSERT(asx_resolver_cached_count(&resolver) == 1u, "negative result cached");
+
+    ASSERT(asx_resolver_lookup(&resolver, "not-a-known-host", NULL, &out, &cache_hit) ==
+               ASX_E_NOT_FOUND,
+           "negative cache hit preserves status");
+    ASSERT(cache_hit == 1u, "negative second lookup is hit");
+
+    asx_resolver_invalidate(&resolver, "not-a-known-host");
+    ASSERT(asx_resolver_cached_count(&resolver) == 0u, "invalidate drops cached host");
+}
+
 static void test_happy_eyeballs_reorders_preference(void) {
     asx_resolve_result in;
     asx_resolve_result out;
@@ -566,6 +608,68 @@ static void test_happy_eyeballs_reorders_preference(void) {
     ASSERT(out.count == 2u, "reordered count");
     ASSERT(out.addrs[0].family == ASX_AF_INET6, "ipv6 promoted first");
     ASSERT(out.addrs[1].family == ASX_AF_INET4, "ipv4 follows");
+}
+
+static void test_tcp_connect_host_uses_resolver_cache(void) {
+    asx_resolver resolver;
+    asx_resolve_options opts;
+    asx_tcp_listener listener;
+    asx_tcp_stream client;
+    asx_tcp_stream accepted;
+    asx_socket_addr listen_addr;
+    asx_socket_addr selected;
+    uint8_t cache_hit = 9u;
+
+    asx_resolver_init(&resolver);
+    asx_resolve_options_init(&opts, 7011u);
+    opts.preferred_family = ASX_AF_INET6;
+
+    listen_addr = asx_socket_addr_ipv6_loopback(7011u);
+    MUST_OK(asx_tcp_listener_bind(&listener, &listen_addr));
+    ASSERT(asx_tcp_connect_host(&client, &resolver, "localhost", &opts, &selected, &cache_hit) ==
+               ASX_OK,
+           "tcp connect host ok");
+    ASSERT(cache_hit == 0u, "tcp connect host first lookup miss");
+    ASSERT(selected.family == ASX_AF_INET6, "tcp connect host selects preferred family");
+    ASSERT(asx_tcp_listener_poll_accept(listener, &accepted, NULL) == ASX_OK,
+           "listener accepts resolved stream");
+
+    asx_tcp_stream_close(accepted);
+    asx_tcp_stream_close(client);
+    asx_tcp_listener_close(listener);
+
+    ASSERT(asx_tcp_connect_host(&client, &resolver, "localhost", &opts, &selected, &cache_hit) ==
+               ASX_OK,
+           "tcp connect host second lookup ok");
+    ASSERT(cache_hit == 1u, "tcp connect host second lookup hit");
+    asx_tcp_stream_close(client);
+}
+
+static void test_udp_connect_host_uses_resolver_cache(void) {
+    asx_resolver resolver;
+    asx_resolve_options opts;
+    asx_udp_socket socket;
+    asx_socket_addr bind_addr;
+    asx_socket_addr selected;
+    uint8_t cache_hit = 9u;
+
+    asx_resolver_init(&resolver);
+    asx_resolve_options_init(&opts, 6107u);
+    opts.allow_ipv6 = 0u;
+
+    bind_addr = asx_socket_addr_loopback(6108u);
+    MUST_OK(asx_udp_bind(&socket, &bind_addr));
+    ASSERT(asx_udp_connect_host(socket, &resolver, "localhost", &opts, &selected, &cache_hit) ==
+               ASX_OK,
+           "udp connect host ok");
+    ASSERT(cache_hit == 0u, "udp connect host first lookup miss");
+    ASSERT(selected.family == ASX_AF_INET4, "udp connect host selects ipv4 endpoint");
+
+    ASSERT(asx_udp_connect_host(socket, &resolver, "localhost", &opts, &selected, &cache_hit) ==
+               ASX_OK,
+           "udp connect host second lookup ok");
+    ASSERT(cache_hit == 1u, "udp connect host second lookup hit");
+    asx_udp_close(socket);
 }
 
 /* ================================================================== */
@@ -1103,7 +1207,11 @@ int main(void) {
     RUN(test_resolve_localhost_prefers_ipv6);
     RUN(test_resolve_ipv4_literal);
     RUN(test_resolve_rejects_unknown_host);
+    RUN(test_resolver_cache_round_trip);
+    RUN(test_resolver_negative_cache_and_invalidate);
     RUN(test_happy_eyeballs_reorders_preference);
+    RUN(test_tcp_connect_host_uses_resolver_cache);
+    RUN(test_udp_connect_host_uses_resolver_cache);
 
     /* App: CLI parsing */
     RUN(test_parse_args_defaults);

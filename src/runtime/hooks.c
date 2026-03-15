@@ -258,9 +258,9 @@ asx_status asx_runtime_alloc(size_t size, void **out_ptr) {
     uint32_t i;
 
     if (!out_ptr) return ASX_E_INVALID_ARGUMENT;
-    if (!g_hooks_installed) return ASX_E_INVALID_STATE;
+    if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
     if (g_hooks.allocator_sealed) return ASX_E_ALLOCATOR_SEALED;
-    if (!g_hooks.allocator.malloc_fn) return ASX_E_INVALID_STATE;
+    if (!g_hooks.allocator.malloc_fn) return ASX_E_HOOK_MISSING;
 
     /* Check for allocation fault injection */
     for (i = 0; i < g_fault_count; i++) {
@@ -281,9 +281,9 @@ asx_status asx_runtime_alloc(size_t size, void **out_ptr) {
 asx_status asx_runtime_realloc(void *ptr, size_t size, void **out_ptr) {
     void *p;
     if (!out_ptr) return ASX_E_INVALID_ARGUMENT;
-    if (!g_hooks_installed) return ASX_E_INVALID_STATE;
+    if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
     if (g_hooks.allocator_sealed) return ASX_E_ALLOCATOR_SEALED;
-    if (!g_hooks.allocator.realloc_fn) return ASX_E_INVALID_STATE;
+    if (!g_hooks.allocator.realloc_fn) return ASX_E_HOOK_MISSING;
 
     p = g_hooks.allocator.realloc_fn(g_hooks.allocator.ctx, ptr, size);
     if (!p && size > 0) return ASX_E_RESOURCE_EXHAUSTED;
@@ -292,8 +292,8 @@ asx_status asx_runtime_realloc(void *ptr, size_t size, void **out_ptr) {
 }
 
 asx_status asx_runtime_free(void *ptr) {
-    if (!g_hooks_installed) return ASX_E_INVALID_STATE;
-    if (!g_hooks.allocator.free_fn) return ASX_E_INVALID_STATE;
+    if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
+    if (!g_hooks.allocator.free_fn) return ASX_E_HOOK_MISSING;
     g_hooks.allocator.free_fn(g_hooks.allocator.ctx, ptr);
     return ASX_OK;
 }
@@ -303,7 +303,7 @@ asx_status asx_runtime_now_ns(asx_time *out_now) {
     uint32_t i;
 
     if (!out_now) return ASX_E_INVALID_ARGUMENT;
-    if (!g_hooks_installed) return ASX_E_INVALID_STATE;
+    if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
 
 #if ASX_DETERMINISTIC
     if (g_hooks.clock.logical_now_ns_fn) {
@@ -313,7 +313,7 @@ asx_status asx_runtime_now_ns(asx_time *out_now) {
         if (g_hooks.clock.now_ns_fn) {
         raw = g_hooks.clock.now_ns_fn(g_hooks.clock.ctx);
     } else {
-        return ASX_E_INVALID_STATE;
+        return ASX_E_HOOK_MISSING;
     }
 
     /* Apply clock fault injection */
@@ -343,13 +343,13 @@ asx_status asx_runtime_random_u64(uint64_t *out_value) {
     uint32_t i;
 
     if (!out_value) return ASX_E_INVALID_ARGUMENT;
-    if (!g_hooks_installed) return ASX_E_INVALID_STATE;
+    if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
 
 #if ASX_DETERMINISTIC
     /* In deterministic mode, entropy is forbidden unless seeded PRNG */
     if (!g_hooks.deterministic_seeded_prng) return ASX_E_INVALID_STATE;
 #endif
-    if (!g_hooks.entropy.random_u64_fn) return ASX_E_INVALID_STATE;
+    if (!g_hooks.entropy.random_u64_fn) return ASX_E_HOOK_MISSING;
     *out_value = g_hooks.entropy.random_u64_fn(g_hooks.entropy.ctx);
 
     /* Apply entropy fault injection */
@@ -370,7 +370,7 @@ asx_status asx_runtime_random_u64(uint64_t *out_value) {
 asx_status asx_runtime_reactor_wait(uint32_t timeout_ms, uint32_t *out_ready_count,
                                     uint64_t logical_step) {
     if (!out_ready_count) return ASX_E_INVALID_ARGUMENT;
-    if (!g_hooks_installed) return ASX_E_INVALID_STATE;
+    if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
 
 #if ASX_DETERMINISTIC
     if (g_hooks.reactor.ghost_wait_fn) {
@@ -391,11 +391,11 @@ asx_status asx_runtime_reactor_wait(uint32_t timeout_ms, uint32_t *out_ready_cou
         }
         return rs_;
     }
-    return ASX_E_INVALID_STATE;
+    return ASX_E_HOOK_MISSING;
 }
 
 asx_status asx_runtime_log_write(int level, const char *message) {
-    if (!g_hooks_installed) return ASX_E_INVALID_STATE;
+    if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
     if (!g_hooks.log.write_fn) return ASX_OK; /* silent if no log hook */
     g_hooks.log.write_fn(g_hooks.log.ctx, level, message);
     return ASX_OK;

@@ -352,7 +352,8 @@ ASX_API asx_status asx_runtime_random_u64(uint64_t *out_value);
 ASX_API asx_status asx_runtime_reactor_wait(uint32_t timeout_ms, uint32_t *out_ready_count,
                                             uint64_t logical_step);
 /* Write a log message at the given severity level.
- * Returns ASX_E_HOOK_MISSING if no log hook installed. */
+ * Returns ASX_E_HOOK_MISSING if the runtime hook table is not installed.
+ * Returns ASX_OK with no side effects when hooks are installed but no log sink is configured. */
 ASX_API asx_status asx_runtime_log_write(int level, const char *message);
 
 #endif /* ASX_CONFIG_H */

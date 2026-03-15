@@ -59,7 +59,7 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
                             asx_handle_pack_index(g_tasks[i].generation, (uint16_t)i));
         snap->tasks[ti].state = g_tasks[i].state;
         snap->tasks[ti].region = g_tasks[i].region;
-        snap->tasks[ti].outcome_status = (asx_status)g_tasks[i].outcome.severity;
+        snap->tasks[ti].outcome_severity = g_tasks[i].outcome.severity;
         ti++;
     }
     snap->task_count = ti;
@@ -188,8 +188,8 @@ asx_status asx_runtime_snapshot_to_json(const asx_runtime_snapshot *snap, asx_co
         if (s != ASX_OK) return s;
         s = asx_codec_buffer_append_u64_field(out, &tf, "region", t->region);
         if (s != ASX_OK) return s;
-        s = asx_codec_buffer_append_u64_field(out, &tf, "outcome_status",
-                                              (uint64_t)(uint32_t)t->outcome_status);
+        s = asx_codec_buffer_append_u64_field(out, &tf, "outcome_severity",
+                                              (uint64_t)(uint32_t)t->outcome_severity);
         if (s != ASX_OK) return s;
         s = asx_codec_buffer_append_char(out, '}');
         if (s != ASX_OK) return s;
@@ -256,7 +256,7 @@ asx_status asx_runtime_snapshot_eq(const asx_runtime_snapshot *a, const asx_runt
         if (a->tasks[i].id != b->tasks[i].id) return ASX_E_EQUIVALENCE_MISMATCH;
         if (a->tasks[i].state != b->tasks[i].state) return ASX_E_EQUIVALENCE_MISMATCH;
         if (a->tasks[i].region != b->tasks[i].region) return ASX_E_EQUIVALENCE_MISMATCH;
-        if (a->tasks[i].outcome_status != b->tasks[i].outcome_status)
+        if (a->tasks[i].outcome_severity != b->tasks[i].outcome_severity)
             return ASX_E_EQUIVALENCE_MISMATCH;
     }
 

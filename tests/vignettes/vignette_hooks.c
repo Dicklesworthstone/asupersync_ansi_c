@@ -212,7 +212,7 @@ static int scenario_hook_usage(void) {
      * ERGO: Runtime hook wrappers (asx_runtime_now_ns, asx_runtime_random_u64)
      * provide a clean, uniform interface. The user doesn't call hook
      * function pointers directly — the runtime handles dispatch and
-     * error checking (ASX_E_HOOK_MISSING if not installed).
+     * error checking (ASX_E_HOOK_MISSING when the hook family is absent).
      */
     st = asx_runtime_now_ns(&now);
     if (st != ASX_OK) {

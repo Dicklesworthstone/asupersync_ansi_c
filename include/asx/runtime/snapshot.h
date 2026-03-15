@@ -39,7 +39,7 @@ typedef struct {
     asx_task_id id;
     asx_task_state state;
     asx_region_id region;
-    asx_status outcome_status;
+    asx_outcome_severity outcome_severity;
 } asx_snapshot_task;
 
 typedef struct {

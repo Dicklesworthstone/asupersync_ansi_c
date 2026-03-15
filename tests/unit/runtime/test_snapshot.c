@@ -17,6 +17,12 @@ static asx_status dummy_poll(void *user_data, asx_task_id self) {
     return ASX_OK;
 }
 
+static asx_status failing_poll(void *user_data, asx_task_id self) {
+    (void)user_data;
+    (void)self;
+    return ASX_E_INVALID_STATE;
+}
+
 /* ------------------------------------------------------------------ */
 /* Init                                                                */
 /* ------------------------------------------------------------------ */
@@ -95,6 +101,31 @@ TEST(snapshot_capture_with_task) {
     ASSERT_EQ(snap.region_count, 1u);
     ASSERT_EQ(snap.task_count, 1u);
     ASSERT_EQ(snap.regions[0].task_count, 1u);
+    ASSERT_EQ(snap.tasks[0].outcome_severity, ASX_OUTCOME_OK);
+}
+
+TEST(snapshot_capture_completed_task_preserves_outcome_severity) {
+    asx_runtime_snapshot snap;
+    asx_budget budget;
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_status s;
+
+    asx_runtime_reset();
+    s = asx_region_open(&rid);
+    ASSERT_EQ(s, ASX_OK);
+    s = asx_task_spawn(rid, failing_poll, NULL, &tid);
+    ASSERT_EQ(s, ASX_OK);
+
+    budget = asx_budget_from_polls(4u);
+    s = asx_scheduler_run(rid, &budget);
+    ASSERT_EQ(s, ASX_E_INVALID_STATE);
+
+    s = asx_runtime_snapshot_capture(&snap);
+    ASSERT_EQ(s, ASX_OK);
+    ASSERT_EQ(snap.task_count, 1u);
+    ASSERT_EQ(snap.tasks[0].state, ASX_TASK_COMPLETED);
+    ASSERT_EQ(snap.tasks[0].outcome_severity, ASX_OUTCOME_ERR);
 }
 
 TEST(snapshot_capture_with_obligation) {
@@ -252,6 +283,8 @@ int main(void) {
     RUN_TEST(snapshot_capture_with_region);
     asx_runtime_reset();
     RUN_TEST(snapshot_capture_with_task);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_capture_completed_task_preserves_outcome_severity);
     asx_runtime_reset();
     RUN_TEST(snapshot_capture_with_obligation);
     asx_runtime_reset();

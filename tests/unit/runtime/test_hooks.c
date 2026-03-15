@@ -253,10 +253,10 @@ TEST(alloc_null_out_returns_error) {
     ASSERT_EQ(asx_runtime_alloc(64, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(alloc_no_hooks_returns_invalid_state) {
+TEST(alloc_no_hooks_returns_hook_missing) {
     void *ptr = NULL;
     asx_runtime_reset();
-    ASSERT_EQ(asx_runtime_alloc(64, &ptr), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_alloc(64, &ptr), ASX_E_HOOK_MISSING);
 }
 
 TEST(alloc_dispatches_to_hook) {
@@ -288,9 +288,9 @@ TEST(realloc_dispatches_to_hook) {
     ASSERT_EQ(asx_runtime_free(ptr2), ASX_OK);
 }
 
-TEST(free_no_hooks_returns_invalid_state) {
+TEST(free_no_hooks_returns_hook_missing) {
     asx_runtime_reset();
-    ASSERT_EQ(asx_runtime_free(NULL), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_free(NULL), ASX_E_HOOK_MISSING);
 }
 
 TEST(free_dispatches_to_hook) {
@@ -314,10 +314,10 @@ TEST(now_ns_null_returns_error) {
     ASSERT_EQ(asx_runtime_now_ns(NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(now_ns_no_hooks_returns_invalid_state) {
+TEST(now_ns_no_hooks_returns_hook_missing) {
     asx_time t;
     asx_runtime_reset();
-    ASSERT_EQ(asx_runtime_now_ns(&t), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_now_ns(&t), ASX_E_HOOK_MISSING);
 }
 
 TEST(now_ns_dispatches_to_logical_clock) {
@@ -343,10 +343,10 @@ TEST(random_u64_null_returns_error) {
     ASSERT_EQ(asx_runtime_random_u64(NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(random_u64_no_hooks_returns_invalid_state) {
+TEST(random_u64_no_hooks_returns_hook_missing) {
     uint64_t v;
     asx_runtime_reset();
-    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_HOOK_MISSING);
 }
 
 TEST(random_u64_dispatches_to_hook) {
@@ -371,10 +371,10 @@ TEST(reactor_wait_null_returns_error) {
     ASSERT_EQ(asx_runtime_reactor_wait(100, NULL, 0), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(reactor_wait_no_hooks_returns_invalid_state) {
+TEST(reactor_wait_no_hooks_returns_hook_missing) {
     uint32_t ready = 0;
     asx_runtime_reset();
-    ASSERT_EQ(asx_runtime_reactor_wait(100, &ready, 0), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_reactor_wait(100, &ready, 0), ASX_E_HOOK_MISSING);
 }
 
 TEST(reactor_wait_dispatches_to_ghost_hook) {
@@ -393,9 +393,9 @@ TEST(reactor_wait_dispatches_to_ghost_hook) {
 /* Log dispatch                                                        */
 /* ------------------------------------------------------------------ */
 
-TEST(log_write_no_hooks_returns_invalid_state) {
+TEST(log_write_no_hooks_returns_hook_missing) {
     asx_runtime_reset();
-    ASSERT_EQ(asx_runtime_log_write(1, "test"), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_log_write(1, "test"), ASX_E_HOOK_MISSING);
 }
 
 TEST(log_write_dispatches_to_hook) {
@@ -591,12 +591,12 @@ int main(void) {
     /* g_hooks_installed is sticky (not cleared by asx_runtime_reset),       */
     /* so these must run before the first asx_runtime_set_hooks() call.      */
     RUN_TEST(seal_without_hooks_returns_invalid_state);
-    RUN_TEST(alloc_no_hooks_returns_invalid_state);
-    RUN_TEST(free_no_hooks_returns_invalid_state);
-    RUN_TEST(now_ns_no_hooks_returns_invalid_state);
-    RUN_TEST(random_u64_no_hooks_returns_invalid_state);
-    RUN_TEST(reactor_wait_no_hooks_returns_invalid_state);
-    RUN_TEST(log_write_no_hooks_returns_invalid_state);
+    RUN_TEST(alloc_no_hooks_returns_hook_missing);
+    RUN_TEST(free_no_hooks_returns_hook_missing);
+    RUN_TEST(now_ns_no_hooks_returns_hook_missing);
+    RUN_TEST(random_u64_no_hooks_returns_hook_missing);
+    RUN_TEST(reactor_wait_no_hooks_returns_hook_missing);
+    RUN_TEST(log_write_no_hooks_returns_hook_missing);
 
     /* Hook init */
     RUN_TEST(hooks_init_null_returns_error);

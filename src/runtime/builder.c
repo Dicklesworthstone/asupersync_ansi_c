@@ -149,7 +149,11 @@ asx_status asx_runtime_builder_set_max_cancel_chain_memory(asx_runtime_builder *
 }
 
 asx_status asx_runtime_builder_set_hooks(asx_runtime_builder *builder, const asx_runtime_hooks *hooks) {
+    asx_status st;
+
     if (builder == NULL || hooks == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_runtime_hooks_validate(hooks, ASX_DETERMINISTIC);
+    if (st != ASX_OK) return st;
     builder->hooks = *hooks;
     return ASX_OK;
 }
