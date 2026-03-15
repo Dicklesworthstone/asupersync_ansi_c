@@ -40,6 +40,11 @@ static uint64_t add_one(void *user_data) {
     return value + 1u;
 }
 
+static asx_status lab_noop_step(asx_lab *lab, void *user_data) {
+    (void)user_data;
+    return asx_lab_open_region(lab, (asx_region_id *)user_data);
+}
+
 /* ------------------------------------------------------------------ */
 /* Helper: create a valid config                                       */
 /* ------------------------------------------------------------------ */
@@ -508,6 +513,58 @@ TEST(containment_policy_returns_active) {
     asx_runtime_shutdown(&rt);
 }
 
+TEST(umbrella_runtime_lab_deadline_roundtrip) {
+    asx_lab lab;
+    asx_lab_config cfg;
+    asx_lab_scenario scenario;
+    asx_lab_result result;
+    asx_auto_deadline_tracker *deadline;
+    asx_auto_audit_ring *audit;
+    asx_region_id rid = ASX_INVALID_ID;
+
+    asx_auto_instrument_reset();
+    deadline = asx_auto_deadline_global();
+    audit = asx_auto_audit_global();
+    ASSERT_TRUE(deadline != NULL);
+    ASSERT_TRUE(audit != NULL);
+    ASSERT_EQ(asx_auto_audit_count(audit), 0u);
+
+    asx_auto_record_deadline(1000u, 800u, 1u);
+    asx_auto_record_deadline(1000u, 1200u, 2u);
+    ASSERT_EQ(deadline->total_deadlines, 2u);
+    ASSERT_EQ(deadline->deadline_hits, 1u);
+    ASSERT_EQ(deadline->deadline_misses, 1u);
+    ASSERT_EQ(asx_auto_deadline_miss_rate(deadline), 5000u);
+    ASSERT_EQ(asx_auto_audit_count(audit), 1u);
+    ASSERT_STR_EQ(asx_audit_kind_str(ASX_AUDIT_DEADLINE_MISS), "DEADLINE_MISS");
+
+    asx_lab_config_init(&cfg);
+    cfg.seed = 42u;
+    cfg.tick_ns = 100u;
+    MUST_OK(asx_lab_init(&lab, &cfg));
+    ASSERT_EQ(asx_runtime_region_count(&lab.rt), 0u);
+    ASSERT_EQ(asx_runtime_task_count(&lab.rt), 0u);
+    ASSERT_EQ(asx_lab_now(&lab), (asx_time)0u);
+
+    asx_lab_scenario_init(&scenario, "runtime-lab-deadline-roundtrip");
+    MUST_OK(asx_lab_scenario_add_step(&scenario, lab_noop_step, &rid));
+    asx_lab_advance_time(&lab, 3u);
+    MUST_OK(asx_lab_run_scenario(&lab, &scenario, &result));
+
+    ASSERT_TRUE(rid != ASX_INVALID_ID);
+    ASSERT_EQ(result.steps_completed, 1u);
+    ASSERT_EQ(result.steps_total, 1u);
+    ASSERT_EQ(result.last_status, ASX_OK);
+    ASSERT_EQ(result.elapsed_ns, (asx_time)0u);
+    ASSERT_EQ(asx_lab_now(&lab), (asx_time)300u);
+    ASSERT_EQ(asx_runtime_region_count(&lab.rt), 1u);
+    ASSERT_EQ(asx_runtime_safety_profile(&lab.rt), asx_safety_profile_active());
+    ASSERT_EQ(asx_runtime_containment_policy(&lab.rt), asx_containment_policy_active());
+
+    asx_lab_shutdown(&lab);
+    asx_auto_instrument_reset();
+}
+
 /* ------------------------------------------------------------------ */
 /* Integration: init → use → shutdown round-trip                       */
 /* ------------------------------------------------------------------ */
@@ -606,6 +663,7 @@ int main(void) {
     /* Safety/containment */
     RUN_TEST(safety_profile_returns_active);
     RUN_TEST(containment_policy_returns_active);
+    RUN_TEST(umbrella_runtime_lab_deadline_roundtrip);
 
     /* Integration */
     RUN_TEST(full_roundtrip);
