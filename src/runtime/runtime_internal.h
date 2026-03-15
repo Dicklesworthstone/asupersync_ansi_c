@@ -83,4 +83,7 @@ ASX_MUST_USE asx_status asx_obligation_slot_lookup(asx_obligation_id id, asx_obl
 /* Release captured state for a task exactly once. */
 void asx_task_release_capture_internal(asx_task_slot *task);
 
+/* Reset private hook installation state during runtime teardown. */
+void asx_runtime_hooks_reset_internal(void);
+
 #endif /* ASX_RUNTIME_INTERNAL_H */

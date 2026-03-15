@@ -344,8 +344,10 @@ ASX_API asx_status asx_runtime_free(void *ptr);
  * ASX_E_HOOK_MISSING if no clock hook installed. */
 ASX_API asx_status asx_runtime_now_ns(asx_time *out_now);
 
-/* Read random u64 via entropy hook. Returns ASX_OK on success,
- * ASX_E_HOOK_MISSING if no entropy hook installed. */
+/* Read random u64 via the configured deterministic entropy stream.
+ * Returns ASX_OK on success, ASX_E_HOOK_MISSING if hooks are not installed,
+ * and ASX_E_INVALID_STATE when the active hook table does not provide a
+ * deterministic entropy source. */
 ASX_API asx_status asx_runtime_random_u64(uint64_t *out_value);
 /* Wait for reactor readiness. Returns ready count via out_ready_count.
  * Returns ASX_E_HOOK_MISSING if no reactor hook installed. */

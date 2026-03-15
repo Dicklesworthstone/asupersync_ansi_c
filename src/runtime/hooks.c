@@ -18,6 +18,7 @@
  */
 
 #include "codec_internal.h"
+#include "runtime_internal.h"
 #include <asx/asx_config.h>
 #include <asx/codec/codec.h>
 #include <asx/codec/equivalence.h>
@@ -84,6 +85,11 @@ static asx_status default_ghost_reactor_wait(void *ctx, uint64_t logical_step,
 
 static asx_runtime_hooks g_hooks;
 static int g_hooks_installed = 0;
+
+void asx_runtime_hooks_reset_internal(void) {
+    memset(&g_hooks, 0, sizeof(g_hooks));
+    g_hooks_installed = 0;
+}
 
 /* ------------------------------------------------------------------ */
 /* Safety profile queries                                             */
@@ -346,10 +352,14 @@ asx_status asx_runtime_random_u64(uint64_t *out_value) {
     if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
 
 #if ASX_DETERMINISTIC
-    /* In deterministic mode, entropy is forbidden unless seeded PRNG */
-    if (!g_hooks.deterministic_seeded_prng) return ASX_E_INVALID_STATE;
-#endif
+    /* Deterministic builds require an explicit seeded entropy stream.
+     * Missing or unseeded entropy is a runtime configuration error, not a
+     * simple absent optional hook. */
+    if (!g_hooks.deterministic_seeded_prng || !g_hooks.entropy.random_u64_fn)
+        return ASX_E_INVALID_STATE;
+#else
     if (!g_hooks.entropy.random_u64_fn) return ASX_E_HOOK_MISSING;
+#endif
     *out_value = g_hooks.entropy.random_u64_fn(g_hooks.entropy.ctx);
 
     /* Apply entropy fault injection */

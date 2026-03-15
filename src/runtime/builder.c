@@ -5,6 +5,11 @@
  */
 
 #include <asx/runtime/builder.h>
+#include <ctype.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static asx_status builder_init_common(asx_runtime_builder *builder, asx_runtime_preset preset) {
@@ -23,6 +28,142 @@ static asx_status builder_init_common(asx_runtime_builder *builder, asx_runtime_
 static asx_status builder_copy_in(void *dst, size_t dst_size, const void *src, size_t src_size) {
     if (dst == NULL || src == NULL || dst_size != src_size) return ASX_E_INVALID_ARGUMENT;
     memcpy(dst, src, src_size);
+    return ASX_OK;
+}
+
+static int ascii_streq_ignore_case(const char *lhs, const char *rhs) {
+    if (lhs == NULL || rhs == NULL) return 0;
+    while (*lhs != '\0' && *rhs != '\0') {
+        if (tolower((unsigned char)*lhs) != tolower((unsigned char)*rhs)) return 0;
+        lhs++;
+        rhs++;
+    }
+    return *lhs == '\0' && *rhs == '\0';
+}
+
+static const char *builder_env_value(const char *prefix, const char *key, char *name_buf,
+                                     size_t name_buf_size) {
+    const char *effective_prefix = prefix;
+    int written;
+
+    if (key == NULL || name_buf == NULL || name_buf_size == 0u) return NULL;
+    if (effective_prefix == NULL || effective_prefix[0] == '\0') effective_prefix = "ASX_RUNTIME_";
+
+    written = snprintf(name_buf, name_buf_size, "%s%s", effective_prefix, key);
+    if (written < 0 || (size_t)written >= name_buf_size) return NULL;
+    return getenv(name_buf);
+}
+
+static asx_status parse_u32(const char *text, uint32_t *out_value) {
+    unsigned long value;
+    char *end = NULL;
+
+    if (text == NULL || out_value == NULL || text[0] == '\0') return ASX_E_INVALID_ARGUMENT;
+    errno = 0;
+    value = strtoul(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || value > (unsigned long)UINT32_MAX) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    *out_value = (uint32_t)value;
+    return ASX_OK;
+}
+
+static asx_status parse_u16(const char *text, uint16_t *out_value) {
+    uint32_t value;
+    asx_status st;
+
+    st = parse_u32(text, &value);
+    if (st != ASX_OK || value > (uint32_t)UINT16_MAX) return ASX_E_INVALID_ARGUMENT;
+    *out_value = (uint16_t)value;
+    return ASX_OK;
+}
+
+static asx_status parse_u64(const char *text, uint64_t *out_value) {
+    unsigned long long value;
+    char *end = NULL;
+
+    if (text == NULL || out_value == NULL || text[0] == '\0') return ASX_E_INVALID_ARGUMENT;
+    errno = 0;
+    value = strtoull(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0') return ASX_E_INVALID_ARGUMENT;
+    *out_value = (uint64_t)value;
+    return ASX_OK;
+}
+
+static asx_status parse_preset(const char *text, asx_runtime_preset *out_preset) {
+    if (text == NULL || out_preset == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (ascii_streq_ignore_case(text, "default")) {
+        *out_preset = ASX_RUNTIME_PRESET_DEFAULT;
+    } else if (ascii_streq_ignore_case(text, "current-thread") ||
+               ascii_streq_ignore_case(text, "current_thread")) {
+        *out_preset = ASX_RUNTIME_PRESET_CURRENT_THREAD;
+    } else if (ascii_streq_ignore_case(text, "low-latency") ||
+               ascii_streq_ignore_case(text, "low_latency")) {
+        *out_preset = ASX_RUNTIME_PRESET_LOW_LATENCY;
+    } else if (ascii_streq_ignore_case(text, "high-throughput") ||
+               ascii_streq_ignore_case(text, "high_throughput")) {
+        *out_preset = ASX_RUNTIME_PRESET_HIGH_THROUGHPUT;
+    } else {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    return ASX_OK;
+}
+
+static asx_status builder_apply_preset(asx_runtime_builder *builder, asx_runtime_preset preset) {
+    switch (preset) {
+    case ASX_RUNTIME_PRESET_DEFAULT: return asx_runtime_builder_init(builder);
+    case ASX_RUNTIME_PRESET_CURRENT_THREAD: return asx_runtime_builder_init_current_thread(builder);
+    case ASX_RUNTIME_PRESET_LOW_LATENCY: return asx_runtime_builder_init_low_latency(builder);
+    case ASX_RUNTIME_PRESET_HIGH_THROUGHPUT:
+        return asx_runtime_builder_init_high_throughput(builder);
+    default: return ASX_E_INVALID_ARGUMENT;
+    }
+}
+
+static asx_status parse_wait_policy(const char *text, asx_wait_policy *out_policy) {
+    if (text == NULL || out_policy == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (ascii_streq_ignore_case(text, "busy_spin") || ascii_streq_ignore_case(text, "busy-spin")) {
+        *out_policy = ASX_WAIT_BUSY_SPIN;
+    } else if (ascii_streq_ignore_case(text, "yield")) {
+        *out_policy = ASX_WAIT_YIELD;
+    } else if (ascii_streq_ignore_case(text, "sleep")) {
+        *out_policy = ASX_WAIT_SLEEP;
+    } else {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    return ASX_OK;
+}
+
+static asx_status parse_leak_response(const char *text, asx_leak_response *out_response) {
+    if (text == NULL || out_response == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (ascii_streq_ignore_case(text, "panic")) {
+        *out_response = ASX_LEAK_PANIC;
+    } else if (ascii_streq_ignore_case(text, "log")) {
+        *out_response = ASX_LEAK_LOG;
+    } else if (ascii_streq_ignore_case(text, "silent")) {
+        *out_response = ASX_LEAK_SILENT;
+    } else if (ascii_streq_ignore_case(text, "recover")) {
+        *out_response = ASX_LEAK_RECOVER;
+    } else {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    return ASX_OK;
+}
+
+static asx_status parse_finalizer_escalation(const char *text,
+                                             asx_finalizer_escalation *out_escalation) {
+    if (text == NULL || out_escalation == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (ascii_streq_ignore_case(text, "soft")) {
+        *out_escalation = ASX_FINALIZER_SOFT;
+    } else if (ascii_streq_ignore_case(text, "bounded_log") ||
+               ascii_streq_ignore_case(text, "bounded-log")) {
+        *out_escalation = ASX_FINALIZER_BOUNDED_LOG;
+    } else if (ascii_streq_ignore_case(text, "bounded_panic") ||
+               ascii_streq_ignore_case(text, "bounded-panic")) {
+        *out_escalation = ASX_FINALIZER_BOUNDED_PANIC;
+    } else {
+        return ASX_E_INVALID_ARGUMENT;
+    }
     return ASX_OK;
 }
 
@@ -94,13 +235,15 @@ asx_status asx_runtime_builder_get_config(const asx_runtime_builder *builder,
     return ASX_OK;
 }
 
-asx_status asx_runtime_builder_get_hooks(const asx_runtime_builder *builder, asx_runtime_hooks *out) {
+asx_status asx_runtime_builder_get_hooks(const asx_runtime_builder *builder,
+                                         asx_runtime_hooks *out) {
     if (builder == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
     *out = builder->hooks;
     return ASX_OK;
 }
 
-asx_status asx_runtime_builder_set_wait_policy(asx_runtime_builder *builder, asx_wait_policy policy) {
+asx_status asx_runtime_builder_set_wait_policy(asx_runtime_builder *builder,
+                                               asx_wait_policy policy) {
     if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
     builder->config.wait_policy = policy;
     return ASX_OK;
@@ -148,7 +291,8 @@ asx_status asx_runtime_builder_set_max_cancel_chain_memory(asx_runtime_builder *
     return ASX_OK;
 }
 
-asx_status asx_runtime_builder_set_hooks(asx_runtime_builder *builder, const asx_runtime_hooks *hooks) {
+asx_status asx_runtime_builder_set_hooks(asx_runtime_builder *builder,
+                                         const asx_runtime_hooks *hooks) {
     asx_status st;
 
     if (builder == NULL || hooks == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -186,7 +330,8 @@ asx_status asx_runtime_builder_set_reactor_hooks(asx_runtime_builder *builder,
                            sizeof(*reactor));
 }
 
-asx_status asx_runtime_builder_set_log_hooks(asx_runtime_builder *builder, const asx_log_hooks *log) {
+asx_status asx_runtime_builder_set_log_hooks(asx_runtime_builder *builder,
+                                             const asx_log_hooks *log) {
     if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
     return builder_copy_in(&builder->hooks.log, sizeof(builder->hooks.log), log, sizeof(*log));
 }
@@ -200,6 +345,87 @@ asx_status asx_runtime_builder_validate(const asx_runtime_builder *builder) {
     if (st != ASX_OK) return st;
 
     return asx_runtime_hooks_validate(&builder->hooks, ASX_DETERMINISTIC);
+}
+
+asx_status asx_runtime_builder_apply_env(asx_runtime_builder *builder, const char *prefix) {
+    asx_runtime_builder candidate;
+    const char *value;
+    char env_name[96];
+    asx_runtime_preset preset;
+    asx_wait_policy wait_policy;
+    asx_leak_response leak_response;
+    asx_finalizer_escalation escalation;
+    uint32_t u32_value;
+    uint16_t u16_value;
+    uint64_t u64_value;
+    asx_status st;
+
+    if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    candidate = *builder;
+
+    value = builder_env_value(prefix, "PRESET", env_name, sizeof(env_name));
+    if (value != NULL) {
+        st = parse_preset(value, &preset);
+        if (st != ASX_OK) return st;
+        st = builder_apply_preset(&candidate, preset);
+        if (st != ASX_OK) return st;
+    }
+
+    value = builder_env_value(prefix, "WAIT_POLICY", env_name, sizeof(env_name));
+    if (value != NULL) {
+        st = parse_wait_policy(value, &wait_policy);
+        if (st != ASX_OK) return st;
+        candidate.config.wait_policy = wait_policy;
+    }
+
+    value = builder_env_value(prefix, "LEAK_RESPONSE", env_name, sizeof(env_name));
+    if (value != NULL) {
+        st = parse_leak_response(value, &leak_response);
+        if (st != ASX_OK) return st;
+        candidate.config.leak_response = leak_response;
+    }
+
+    value = builder_env_value(prefix, "FINALIZER_POLL_BUDGET", env_name, sizeof(env_name));
+    if (value != NULL) {
+        st = parse_u32(value, &u32_value);
+        if (st != ASX_OK || u32_value == 0u) return ASX_E_INVALID_ARGUMENT;
+        candidate.config.finalizer_poll_budget = u32_value;
+    }
+
+    value = builder_env_value(prefix, "FINALIZER_TIME_BUDGET_NS", env_name, sizeof(env_name));
+    if (value != NULL) {
+        st = parse_u64(value, &u64_value);
+        if (st != ASX_OK || u64_value == 0u) return ASX_E_INVALID_ARGUMENT;
+        candidate.config.finalizer_time_budget_ns = u64_value;
+    }
+
+    value = builder_env_value(prefix, "FINALIZER_ESCALATION", env_name, sizeof(env_name));
+    if (value != NULL) {
+        st = parse_finalizer_escalation(value, &escalation);
+        if (st != ASX_OK) return st;
+        candidate.config.finalizer_escalation = escalation;
+    }
+
+    value = builder_env_value(prefix, "MAX_CANCEL_CHAIN_DEPTH", env_name, sizeof(env_name));
+    if (value != NULL) {
+        st = parse_u16(value, &u16_value);
+        if (st != ASX_OK || u16_value == 0u) return ASX_E_INVALID_ARGUMENT;
+        candidate.config.max_cancel_chain_depth = u16_value;
+    }
+
+    value = builder_env_value(prefix, "MAX_CANCEL_CHAIN_MEMORY", env_name, sizeof(env_name));
+    if (value != NULL) {
+        st = parse_u32(value, &u32_value);
+        if (st != ASX_OK || u32_value == 0u) return ASX_E_INVALID_ARGUMENT;
+        candidate.config.max_cancel_chain_memory = u32_value;
+    }
+
+    st = asx_runtime_builder_validate(&candidate);
+    if (st != ASX_OK) return st;
+
+    *builder = candidate;
+    return ASX_OK;
 }
 
 asx_status asx_runtime_builder_build(const asx_runtime_builder *builder, asx_runtime *out_runtime) {

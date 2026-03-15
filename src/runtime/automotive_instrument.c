@@ -32,6 +32,16 @@ static uint64_t asx_margin_abs(uint64_t deadline_ns, uint64_t actual_ns) {
     return deadline_ns >= actual_ns ? (deadline_ns - actual_ns) : (actual_ns - deadline_ns);
 }
 
+static uint64_t asx_u64_saturating_add(uint64_t a, uint64_t b) {
+    if (UINT64_MAX - a < b) return UINT64_MAX;
+    return a + b;
+}
+
+static uint64_t asx_watchdog_interval_clamped(uint64_t last_checkpoint_ns, uint64_t now_ns) {
+    if (now_ns <= last_checkpoint_ns) return 0u;
+    return now_ns - last_checkpoint_ns;
+}
+
 /* -------------------------------------------------------------------
  * Deadline tracker
  * ------------------------------------------------------------------- */
@@ -60,7 +70,8 @@ void asx_auto_deadline_record(asx_auto_deadline_tracker *dt, uint64_t deadline_n
     if (margin > dt->best_margin_ns || dt->total_deadlines == 1) { dt->best_margin_ns = margin; }
 
     /* Accumulate absolute margin for mean computation */
-    dt->total_margin_ns += asx_margin_abs(deadline_ns, actual_ns);
+    dt->total_margin_ns = asx_u64_saturating_add(dt->total_margin_ns,
+                                                 asx_margin_abs(deadline_ns, actual_ns));
     dt->total_margin_count++;
 }
 
@@ -88,7 +99,7 @@ void asx_auto_watchdog_checkpoint(asx_auto_watchdog *wd, uint64_t now_ns) {
     wd->total_checkpoints++;
 
     if (wd->armed) {
-        uint64_t interval = now_ns - wd->last_checkpoint_ns;
+        uint64_t interval = asx_watchdog_interval_clamped(wd->last_checkpoint_ns, now_ns);
         if (interval > wd->worst_interval_ns) { wd->worst_interval_ns = interval; }
         if (wd->watchdog_period_ns > 0 && interval > wd->watchdog_period_ns) { wd->violations++; }
     }
@@ -100,7 +111,7 @@ void asx_auto_watchdog_checkpoint(asx_auto_watchdog *wd, uint64_t now_ns) {
 int asx_auto_watchdog_would_trigger(const asx_auto_watchdog *wd, uint64_t now_ns) {
     uint64_t interval;
     if (!wd || !wd->armed || wd->watchdog_period_ns == 0) return 0;
-    interval = now_ns - wd->last_checkpoint_ns;
+    interval = asx_watchdog_interval_clamped(wd->last_checkpoint_ns, now_ns);
     return interval > wd->watchdog_period_ns ? 1 : 0;
 }
 
@@ -293,7 +304,7 @@ void asx_auto_record_checkpoint(uint64_t now_ns, uint64_t entity_id) {
 
     /* Auto-log violations to audit ring */
     if (would_trigger) {
-        uint64_t interval = now_ns - prev_checkpoint_ns;
+        uint64_t interval = asx_watchdog_interval_clamped(prev_checkpoint_ns, now_ns);
         asx_auto_audit_record(&g_audit, ASX_AUDIT_WATCHDOG_VIOLATION, now_ns, entity_id,
                               (int64_t)interval);
     }

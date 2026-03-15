@@ -78,6 +78,20 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_init(asx_runtime *rt, const asx_runt
  * Thread-safety: not thread-safe. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_init_default(asx_runtime *rt);
 
+/* Initialize a runtime from builder defaults plus environment overrides.
+ *
+ * Reads the same environment keys supported by
+ * asx_runtime_builder_apply_env(), using prefix or the default
+ * "ASX_RUNTIME_" namespace when prefix is NULL/empty.
+ *
+ * Preconditions: rt must not be NULL.
+ * Postconditions: on success, runtime is initialized with the resolved
+ * builder config/hooks. Invalid environment values fail atomically and do
+ * not initialize the runtime object.
+ *
+ * Thread-safety: not thread-safe. */
+ASX_API ASX_MUST_USE asx_status asx_runtime_init_from_env(asx_runtime *rt, const char *prefix);
+
 /* Shut down a runtime, resetting all internal state.
  * After shutdown, the runtime must be re-initialized before use.
  *
@@ -116,9 +130,8 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_get_hooks_from(const asx_runtime *rt
  * invalid pointers/config, ASX_E_INVALID_STATE if the runtime is not initialized,
  * ASX_E_CONFIG_FROZEN for frozen-field changes, or ASX_E_CONFIG_RESTART_REQ for
  * restart-required field changes. */
-ASX_API ASX_MUST_USE asx_status
-asx_runtime_validate_reload_config(const asx_runtime *rt, const asx_runtime_config *proposed,
-                                   const char **rejection_field);
+ASX_API ASX_MUST_USE asx_status asx_runtime_validate_reload_config(
+    const asx_runtime *rt, const asx_runtime_config *proposed, const char **rejection_field);
 
 /* Apply a validated config reload to an initialized runtime object.
  * Only RELOADABLE fields may differ from the current config.
@@ -128,9 +141,9 @@ asx_runtime_validate_reload_config(const asx_runtime *rt, const asx_runtime_conf
  * Walking skeleton note: this updates the runtime object's stored config for
  * subsequent queries and future subsystem decisions. Hook families and
  * restart-required limits still require a full runtime restart. */
-ASX_API ASX_MUST_USE asx_status
-asx_runtime_reload_config(asx_runtime *rt, const asx_runtime_config *proposed,
-                          const char **rejection_field);
+ASX_API ASX_MUST_USE asx_status asx_runtime_reload_config(asx_runtime *rt,
+                                                          const asx_runtime_config *proposed,
+                                                          const char **rejection_field);
 
 /* Validate a runtime config without initializing.
  * Checks size field, bounds on fields (cancel chain depth, etc.).

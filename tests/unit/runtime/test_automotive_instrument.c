@@ -114,6 +114,18 @@ TEST(deadline_margin_saturates_large_hit_delta) {
     ASSERT_EQ(dt.total_margin_ns, UINT64_MAX);
 }
 
+TEST(deadline_total_margin_accumulation_saturates) {
+    asx_auto_deadline_tracker dt;
+    asx_auto_deadline_init(&dt);
+
+    asx_auto_deadline_record(&dt, UINT64_MAX, 0u);
+    asx_auto_deadline_record(&dt, UINT64_MAX, 0u);
+
+    ASSERT_EQ(dt.total_deadlines, 2u);
+    ASSERT_EQ(dt.total_margin_ns, UINT64_MAX);
+    ASSERT_EQ(dt.total_margin_count, 2u);
+}
+
 TEST(deadline_null_safety) {
     asx_auto_deadline_init(NULL);
     asx_auto_deadline_record(NULL, 100, 200);
@@ -209,6 +221,19 @@ TEST(watchdog_reset_preserves_period) {
     ASSERT_EQ(wd.watchdog_period_ns, (uint64_t)5000);
     ASSERT_EQ(wd.violations, 0u);
     ASSERT_EQ(wd.armed, 0);
+}
+
+TEST(watchdog_clock_reversal_does_not_underflow_or_violate) {
+    asx_auto_watchdog wd;
+    asx_auto_watchdog_init(&wd, 5000);
+
+    asx_auto_watchdog_checkpoint(&wd, 10000);
+    ASSERT_EQ(asx_auto_watchdog_would_trigger(&wd, 9000), 0);
+
+    asx_auto_watchdog_checkpoint(&wd, 9000);
+    ASSERT_EQ(wd.violations, 0u);
+    ASSERT_EQ(wd.worst_interval_ns, (uint64_t)0);
+    ASSERT_EQ(wd.last_checkpoint_ns, (uint64_t)9000);
 }
 
 /* -------------------------------------------------------------------
@@ -489,6 +514,24 @@ TEST(global_record_checkpoint_auto_logs_violation) {
     ASSERT_EQ(wd->violations, 1u);
 }
 
+TEST(global_record_checkpoint_clock_reversal_does_not_log_violation) {
+    asx_auto_watchdog *wd;
+    asx_auto_audit_ring *ring;
+
+    asx_auto_instrument_reset();
+    wd = asx_auto_watchdog_global();
+    ring = asx_auto_audit_global();
+
+    wd->watchdog_period_ns = 500;
+
+    asx_auto_record_checkpoint(1000, 10);
+    asx_auto_record_checkpoint(900, 10);
+
+    ASSERT_EQ(wd->violations, 0u);
+    ASSERT_EQ(asx_auto_audit_count(ring), 0u);
+    ASSERT_EQ(wd->last_checkpoint_ns, (uint64_t)900);
+}
+
 /* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
@@ -505,6 +548,7 @@ int main(void) {
     RUN_TEST(deadline_worst_margin_tracks_misses);
     RUN_TEST(deadline_margin_saturates_large_miss_delta);
     RUN_TEST(deadline_margin_saturates_large_hit_delta);
+    RUN_TEST(deadline_total_margin_accumulation_saturates);
     RUN_TEST(deadline_null_safety);
 
     /* Watchdog monitor */
@@ -516,6 +560,7 @@ int main(void) {
     RUN_TEST(watchdog_first_checkpoint_no_violation);
     RUN_TEST(watchdog_null_safety);
     RUN_TEST(watchdog_reset_preserves_period);
+    RUN_TEST(watchdog_clock_reversal_does_not_underflow_or_violate);
 
     /* Audit ring */
     RUN_TEST(audit_init_empty);
@@ -537,6 +582,7 @@ int main(void) {
     RUN_TEST(global_record_deadline_auto_logs_miss);
     RUN_TEST(global_record_deadline_saturates_audit_margin);
     RUN_TEST(global_record_checkpoint_auto_logs_violation);
+    RUN_TEST(global_record_checkpoint_clock_reversal_does_not_log_violation);
 
     TEST_REPORT();
     test_log_close();

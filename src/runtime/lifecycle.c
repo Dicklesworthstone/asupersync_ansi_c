@@ -116,6 +116,7 @@ void asx_runtime_reset(void) {
     asx_hindsight_reset();
     asx_adapter_reset_all();
     asx_fault_clear();
+    asx_runtime_hooks_reset_internal();
     asx_event_log_reset();
     asx_error_ledger_reset();
     asx_notify_reset();

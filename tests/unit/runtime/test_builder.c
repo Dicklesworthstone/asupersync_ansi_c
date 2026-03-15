@@ -7,7 +7,13 @@
 #include "../../test_harness.h"
 #include <asx/runtime/builder.h>
 #include <asx/runtime/rt.h>
+#include <stdlib.h>
 #include <string.h>
+
+#if !defined(_WIN32)
+extern int setenv(const char *name, const char *value, int overwrite);
+extern int unsetenv(const char *name);
+#endif
 
 static uint64_t fake_time(void *ctx) {
     uint64_t *value = (uint64_t *)ctx;
@@ -17,6 +23,41 @@ static uint64_t fake_time(void *ctx) {
 static uint64_t fake_entropy(void *ctx) {
     uint64_t *value = (uint64_t *)ctx;
     return *value;
+}
+
+static void test_set_env(const char *name, const char *value) {
+#if defined(_WIN32)
+    ASSERT_EQ(_putenv_s(name, value), 0);
+#else
+    ASSERT_EQ(setenv(name, value, 1), 0);
+#endif
+}
+
+static void test_unset_env(const char *name) {
+#if defined(_WIN32)
+    ASSERT_EQ(_putenv_s(name, ""), 0);
+#else
+    ASSERT_EQ(unsetenv(name), 0);
+#endif
+}
+
+static void clear_builder_test_env(void) {
+    test_unset_env("ASX_RUNTIME_PRESET");
+    test_unset_env("ASX_RUNTIME_WAIT_POLICY");
+    test_unset_env("ASX_RUNTIME_LEAK_RESPONSE");
+    test_unset_env("ASX_RUNTIME_FINALIZER_POLL_BUDGET");
+    test_unset_env("ASX_RUNTIME_FINALIZER_TIME_BUDGET_NS");
+    test_unset_env("ASX_RUNTIME_FINALIZER_ESCALATION");
+    test_unset_env("ASX_RUNTIME_MAX_CANCEL_CHAIN_DEPTH");
+    test_unset_env("ASX_RUNTIME_MAX_CANCEL_CHAIN_MEMORY");
+    test_unset_env("TESTRT_PRESET");
+    test_unset_env("TESTRT_WAIT_POLICY");
+    test_unset_env("TESTRT_LEAK_RESPONSE");
+    test_unset_env("TESTRT_FINALIZER_POLL_BUDGET");
+    test_unset_env("TESTRT_FINALIZER_TIME_BUDGET_NS");
+    test_unset_env("TESTRT_FINALIZER_ESCALATION");
+    test_unset_env("TESTRT_MAX_CANCEL_CHAIN_DEPTH");
+    test_unset_env("TESTRT_MAX_CANCEL_CHAIN_MEMORY");
 }
 
 TEST(init_null_fails) { ASSERT_EQ(asx_runtime_builder_init(NULL), ASX_E_INVALID_ARGUMENT); }
@@ -188,6 +229,93 @@ TEST(build_null_fails) {
     ASSERT_EQ(asx_runtime_builder_build(&builder, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(apply_env_null_builder_fails) {
+    clear_builder_test_env();
+    ASSERT_EQ(asx_runtime_builder_apply_env(NULL, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(apply_env_no_variables_is_noop) {
+    asx_runtime_builder builder;
+    asx_runtime_config before;
+    asx_runtime_config after;
+
+    clear_builder_test_env();
+    ASSERT_EQ(asx_runtime_builder_init_low_latency(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_get_config(&builder, &before), ASX_OK);
+
+    ASSERT_EQ(asx_runtime_builder_apply_env(&builder, NULL), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_get_config(&builder, &after), ASX_OK);
+    ASSERT_EQ(memcmp(&before, &after, sizeof(before)), 0);
+    ASSERT_EQ(asx_runtime_builder_preset(&builder), ASX_RUNTIME_PRESET_LOW_LATENCY);
+}
+
+TEST(apply_env_uses_default_prefix_and_overrides_config) {
+    asx_runtime_builder builder;
+    asx_runtime_config cfg;
+
+    clear_builder_test_env();
+    test_set_env("ASX_RUNTIME_PRESET", "high-throughput");
+    test_set_env("ASX_RUNTIME_WAIT_POLICY", "yield");
+    test_set_env("ASX_RUNTIME_LEAK_RESPONSE", "recover");
+    test_set_env("ASX_RUNTIME_FINALIZER_POLL_BUDGET", "321");
+    test_set_env("ASX_RUNTIME_FINALIZER_TIME_BUDGET_NS", "654321");
+    test_set_env("ASX_RUNTIME_FINALIZER_ESCALATION", "bounded-panic");
+    test_set_env("ASX_RUNTIME_MAX_CANCEL_CHAIN_DEPTH", "21");
+    test_set_env("ASX_RUNTIME_MAX_CANCEL_CHAIN_MEMORY", "7000");
+
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_apply_env(&builder, NULL), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_get_config(&builder, &cfg), ASX_OK);
+
+    ASSERT_EQ(asx_runtime_builder_preset(&builder), ASX_RUNTIME_PRESET_HIGH_THROUGHPUT);
+    ASSERT_EQ(cfg.wait_policy, ASX_WAIT_YIELD);
+    ASSERT_EQ(cfg.leak_response, ASX_LEAK_RECOVER);
+    ASSERT_EQ(cfg.finalizer_poll_budget, 321u);
+    ASSERT_EQ(cfg.finalizer_time_budget_ns, (uint64_t)654321);
+    ASSERT_EQ(cfg.finalizer_escalation, ASX_FINALIZER_BOUNDED_PANIC);
+    ASSERT_EQ(cfg.max_cancel_chain_depth, 21u);
+    ASSERT_EQ(cfg.max_cancel_chain_memory, 7000u);
+
+    clear_builder_test_env();
+}
+
+TEST(apply_env_accepts_custom_prefix) {
+    asx_runtime_builder builder;
+    asx_runtime_config cfg;
+
+    clear_builder_test_env();
+    test_set_env("TESTRT_PRESET", "current_thread");
+    test_set_env("TESTRT_FINALIZER_POLL_BUDGET", "88");
+
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_apply_env(&builder, "TESTRT_"), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_get_config(&builder, &cfg), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_preset(&builder), ASX_RUNTIME_PRESET_CURRENT_THREAD);
+    ASSERT_EQ(cfg.finalizer_poll_budget, 88u);
+
+    clear_builder_test_env();
+}
+
+TEST(apply_env_invalid_value_is_atomic) {
+    asx_runtime_builder builder;
+    asx_runtime_config before;
+    asx_runtime_config after;
+
+    clear_builder_test_env();
+    ASSERT_EQ(asx_runtime_builder_init_low_latency(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_get_config(&builder, &before), ASX_OK);
+
+    test_set_env("ASX_RUNTIME_PRESET", "high-throughput");
+    test_set_env("ASX_RUNTIME_FINALIZER_POLL_BUDGET", "not-a-number");
+
+    ASSERT_EQ(asx_runtime_builder_apply_env(&builder, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_builder_get_config(&builder, &after), ASX_OK);
+    ASSERT_EQ(memcmp(&before, &after, sizeof(before)), 0);
+    ASSERT_EQ(asx_runtime_builder_preset(&builder), ASX_RUNTIME_PRESET_LOW_LATENCY);
+
+    clear_builder_test_env();
+}
+
 int main(void) {
     fprintf(stderr, "=== test_builder ===\n");
     RUN_TEST(init_null_fails);
@@ -204,6 +332,11 @@ int main(void) {
     RUN_TEST(validate_rejects_bad_builder_config);
     RUN_TEST(build_roundtrip_works);
     RUN_TEST(build_null_fails);
+    RUN_TEST(apply_env_null_builder_fails);
+    RUN_TEST(apply_env_no_variables_is_noop);
+    RUN_TEST(apply_env_uses_default_prefix_and_overrides_config);
+    RUN_TEST(apply_env_accepts_custom_prefix);
+    RUN_TEST(apply_env_invalid_value_is_atomic);
     TEST_REPORT();
     return test_failures;
 }

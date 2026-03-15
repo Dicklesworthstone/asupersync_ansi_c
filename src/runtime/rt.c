@@ -9,6 +9,7 @@
 
 #include <asx/asx_config.h>
 #include <asx/runtime/blocking.h>
+#include <asx/runtime/builder.h>
 #include <asx/runtime/config_reload.h>
 #include <asx/runtime/io_driver.h>
 #include <asx/runtime/rt.h>
@@ -100,6 +101,21 @@ asx_status asx_runtime_init_default(asx_runtime *rt) {
     if (st != ASX_OK) return st;
 
     return asx_runtime_init(rt, &config, &hooks);
+}
+
+asx_status asx_runtime_init_from_env(asx_runtime *rt, const char *prefix) {
+    asx_runtime_builder builder;
+    asx_status st;
+
+    if (rt == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    st = asx_runtime_builder_init(&builder);
+    if (st != ASX_OK) return st;
+
+    st = asx_runtime_builder_apply_env(&builder, prefix);
+    if (st != ASX_OK) return st;
+
+    return asx_runtime_builder_build(&builder, rt);
 }
 
 void asx_runtime_shutdown(asx_runtime *rt) {

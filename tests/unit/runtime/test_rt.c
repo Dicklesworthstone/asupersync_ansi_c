@@ -17,6 +17,18 @@
 #include <asx/asx.h>
 #include <string.h>
 
+#if defined(_WIN32)
+#include <stdlib.h>
+static void rt_setenv(const char *name, const char *value) { _putenv_s(name, value); }
+static void rt_unsetenv(const char *name) { _putenv_s(name, ""); }
+#else
+#include <stdlib.h>
+extern int setenv(const char *name, const char *value, int overwrite);
+extern int unsetenv(const char *name);
+static void rt_setenv(const char *name, const char *value) { (void)setenv(name, value, 1); }
+static void rt_unsetenv(const char *name) { (void)unsetenv(name); }
+#endif
+
 /* Suppress warn_unused_result in test helpers where we don't check */
 static asx_status rt_test_sink_;
 #define MUST_OK(expr)                                                                              \
@@ -53,6 +65,26 @@ static asx_status rt_fixed_ready_reactor(void *ctx, uint64_t logical_step, uint3
 static asx_status lab_noop_step(asx_lab *lab, void *user_data) {
     (void)user_data;
     return asx_lab_open_region(lab, (asx_region_id *)user_data);
+}
+
+static void clear_rt_test_env(void) {
+    rt_unsetenv("ASX_RUNTIME_PRESET");
+    rt_unsetenv("ASX_RUNTIME_WAIT_POLICY");
+    rt_unsetenv("ASX_RUNTIME_LEAK_RESPONSE");
+    rt_unsetenv("ASX_RUNTIME_FINALIZER_POLL_BUDGET");
+    rt_unsetenv("ASX_RUNTIME_FINALIZER_TIME_BUDGET_NS");
+    rt_unsetenv("ASX_RUNTIME_FINALIZER_ESCALATION");
+    rt_unsetenv("ASX_RUNTIME_MAX_CANCEL_CHAIN_DEPTH");
+    rt_unsetenv("ASX_RUNTIME_MAX_CANCEL_CHAIN_MEMORY");
+
+    rt_unsetenv("TESTRT_PRESET");
+    rt_unsetenv("TESTRT_WAIT_POLICY");
+    rt_unsetenv("TESTRT_LEAK_RESPONSE");
+    rt_unsetenv("TESTRT_FINALIZER_POLL_BUDGET");
+    rt_unsetenv("TESTRT_FINALIZER_TIME_BUDGET_NS");
+    rt_unsetenv("TESTRT_FINALIZER_ESCALATION");
+    rt_unsetenv("TESTRT_MAX_CANCEL_CHAIN_DEPTH");
+    rt_unsetenv("TESTRT_MAX_CANCEL_CHAIN_MEMORY");
 }
 
 /* ------------------------------------------------------------------ */
@@ -203,6 +235,11 @@ TEST(shutdown_uninitialized_safe) {
 
 TEST(init_default_null_fails) { ASSERT_EQ(asx_runtime_init_default(NULL), ASX_E_INVALID_ARGUMENT); }
 
+TEST(init_from_env_null_rt_fails) {
+    clear_rt_test_env();
+    ASSERT_EQ(asx_runtime_init_from_env(NULL, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
 TEST(init_default_success) {
     asx_runtime rt;
     ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
@@ -214,6 +251,57 @@ TEST(init_default_success) {
     ASSERT_EQ(rt.config.max_cancel_chain_depth, 16u);
 
     asx_runtime_shutdown(&rt);
+}
+
+TEST(init_from_env_applies_default_prefix_overrides) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+
+    clear_rt_test_env();
+    rt_setenv("ASX_RUNTIME_PRESET", "high-throughput");
+    rt_setenv("ASX_RUNTIME_WAIT_POLICY", "yield");
+    rt_setenv("ASX_RUNTIME_FINALIZER_POLL_BUDGET", "77");
+
+    ASSERT_EQ(asx_runtime_init_from_env(&rt, NULL), ASX_OK);
+    ASSERT_EQ(asx_runtime_get_config(&rt, &cfg), ASX_OK);
+    ASSERT_EQ(cfg.wait_policy, ASX_WAIT_YIELD);
+    ASSERT_EQ(cfg.finalizer_poll_budget, 77u);
+    ASSERT_EQ(cfg.max_cancel_chain_depth, 32u);
+
+    asx_runtime_shutdown(&rt);
+    clear_rt_test_env();
+}
+
+TEST(init_from_env_applies_custom_prefix_overrides) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+
+    clear_rt_test_env();
+    rt_setenv("TESTRT_PRESET", "current-thread");
+    rt_setenv("TESTRT_FINALIZER_TIME_BUDGET_NS", "4444");
+    rt_setenv("TESTRT_MAX_CANCEL_CHAIN_MEMORY", "12345");
+
+    ASSERT_EQ(asx_runtime_init_from_env(&rt, "TESTRT_"), ASX_OK);
+    ASSERT_EQ(asx_runtime_get_config(&rt, &cfg), ASX_OK);
+    ASSERT_EQ(cfg.wait_policy, ASX_WAIT_BUSY_SPIN);
+    ASSERT_EQ(cfg.finalizer_time_budget_ns, (uint64_t)4444u);
+    ASSERT_EQ(cfg.max_cancel_chain_memory, 12345u);
+
+    asx_runtime_shutdown(&rt);
+    clear_rt_test_env();
+}
+
+TEST(init_from_env_rejects_invalid_env_without_initializing) {
+    asx_runtime rt;
+
+    memset(&rt, 0, sizeof(rt));
+    clear_rt_test_env();
+    rt_setenv("ASX_RUNTIME_MAX_CANCEL_CHAIN_DEPTH", "0");
+
+    ASSERT_EQ(asx_runtime_init_from_env(&rt, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_FALSE(asx_runtime_is_initialized(&rt));
+
+    clear_rt_test_env();
 }
 
 TEST(init_default_wires_blocking_surface) {
@@ -666,7 +754,11 @@ int main(void) {
 
     /* Default init */
     RUN_TEST(init_default_null_fails);
+    RUN_TEST(init_from_env_null_rt_fails);
     RUN_TEST(init_default_success);
+    RUN_TEST(init_from_env_applies_default_prefix_overrides);
+    RUN_TEST(init_from_env_applies_custom_prefix_overrides);
+    RUN_TEST(init_from_env_rejects_invalid_env_without_initializing);
     RUN_TEST(init_default_wires_blocking_surface);
     RUN_TEST(init_default_wires_io_surface);
     RUN_TEST(init_default_io_poll_wakes_registered_task);

@@ -84,11 +84,15 @@ typedef struct {
 /* Initialize a watchdog monitor with the given period. */
 ASX_API void asx_auto_watchdog_init(asx_auto_watchdog *wd, uint64_t period_ns);
 
-/* Record a checkpoint at the given timestamp. */
+/* Record a checkpoint at the given timestamp.
+ * If time moves backwards relative to the previous checkpoint, the
+ * interval is clamped to zero so watchdog accounting does not turn a
+ * clock anomaly into a fabricated large violation. */
 ASX_API void asx_auto_watchdog_checkpoint(asx_auto_watchdog *wd, uint64_t now_ns);
 
 /* Check if the watchdog would trigger at the given time
- * (without recording a checkpoint). Returns 1 if violation. */
+ * (without recording a checkpoint). Returns 1 if violation.
+ * Reverse-time observations are clamped to zero interval. */
 ASX_API int asx_auto_watchdog_would_trigger(const asx_auto_watchdog *wd, uint64_t now_ns);
 
 /* Reset the watchdog monitor. Preserves the period. */

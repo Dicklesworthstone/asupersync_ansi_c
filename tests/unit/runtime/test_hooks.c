@@ -207,6 +207,15 @@ TEST(set_hooks_installs_and_get_retrieves) {
     ASSERT_TRUE(retrieved->log.write_fn == test_log_sink);
 }
 
+TEST(runtime_reset_clears_installed_hooks) {
+    asx_runtime_reset();
+    ASSERT_EQ(install_test_hooks(), ASX_OK);
+    ASSERT_TRUE(asx_runtime_get_hooks() != NULL);
+
+    asx_runtime_reset();
+    ASSERT_TRUE(asx_runtime_get_hooks() == NULL);
+}
+
 /* ------------------------------------------------------------------ */
 /* Allocator seal                                                      */
 /* ------------------------------------------------------------------ */
@@ -347,6 +356,18 @@ TEST(random_u64_no_hooks_returns_hook_missing) {
     uint64_t v;
     asx_runtime_reset();
     ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_HOOK_MISSING);
+}
+
+TEST(random_u64_missing_entropy_stream_returns_invalid_state) {
+    asx_runtime_hooks hooks;
+    uint64_t v = 0;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.entropy.random_u64_fn = NULL;
+    hooks.deterministic_seeded_prng = 1;
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_INVALID_STATE);
 }
 
 TEST(random_u64_dispatches_to_hook) {
@@ -587,9 +608,7 @@ TEST(containment_policy_active_matches_profile) {
 int main(void) {
     fprintf(stderr, "=== test_hooks ===\n");
 
-    /* --- Run "no hooks installed" tests FIRST, before any hook install --- */
-    /* g_hooks_installed is sticky (not cleared by asx_runtime_reset),       */
-    /* so these must run before the first asx_runtime_set_hooks() call.      */
+    /* --- Run "no hooks installed" tests first to exercise pristine state --- */
     RUN_TEST(seal_without_hooks_returns_invalid_state);
     RUN_TEST(alloc_no_hooks_returns_hook_missing);
     RUN_TEST(free_no_hooks_returns_hook_missing);
@@ -615,6 +634,8 @@ int main(void) {
     RUN_TEST(set_hooks_null_returns_error);
     asx_runtime_reset();
     RUN_TEST(set_hooks_installs_and_get_retrieves);
+    asx_runtime_reset();
+    RUN_TEST(runtime_reset_clears_installed_hooks);
 
     /* Allocator seal */
     asx_runtime_reset();
@@ -643,6 +664,10 @@ int main(void) {
     /* Entropy dispatch */
     asx_runtime_reset();
     RUN_TEST(random_u64_null_returns_error);
+    asx_runtime_reset();
+    RUN_TEST(random_u64_no_hooks_returns_hook_missing);
+    asx_runtime_reset();
+    RUN_TEST(random_u64_missing_entropy_stream_returns_invalid_state);
     asx_runtime_reset();
     RUN_TEST(random_u64_dispatches_to_hook);
 
