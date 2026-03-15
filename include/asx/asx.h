@@ -62,6 +62,12 @@
 #include <asx/record/record.h>
 #include <asx/link/link.h>
 
+/* Observability, evidence, and monitor families */
+#include <asx/evidence/evidence.h>
+#include <asx/evidence_sink/evidence_sink.h>
+#include <asx/monitor/monitor.h>
+#include <asx/observability/observability.h>
+
 /* Operator and testing support */
 #include <asx/app/app.h>
 #include <asx/app/doctor.h>

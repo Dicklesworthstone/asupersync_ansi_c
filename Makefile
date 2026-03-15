@@ -194,6 +194,18 @@ CX_SRC := \
 LINK_SRC := \
 	src/link/link.c
 
+EVIDENCE_SRC := \
+	src/evidence/evidence.c
+
+EVIDENCE_SINK_SRC := \
+	src/evidence_sink/evidence_sink.c
+
+MONITOR_SRC := \
+	src/monitor/monitor.c
+
+OBSERVABILITY_SRC := \
+	src/observability/observability.c
+
 APP_SRC := \
 	src/app/app.c \
 	src/app/doctor.c \
@@ -218,7 +230,7 @@ else
   PLATFORM_SRC :=
 endif
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(PLATFORM_SRC)
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -266,6 +278,10 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/app/test_*.c) \
                  $(wildcard tests/unit/console/*_test.c) \
                  $(wildcard tests/unit/console/test_*.c) \
+                 $(wildcard tests/unit/evidence/*_test.c) \
+                 $(wildcard tests/unit/evidence/test_*.c) \
+                 $(wildcard tests/unit/monitor/*_test.c) \
+                 $(wildcard tests/unit/monitor/test_*.c) \
                  $(wildcard tests/unit/tracing_compat/*_test.c) \
                  $(wildcard tests/unit/tracing_compat/test_*.c)
 UNIT_TEST_SRC := $(sort $(UNIT_TEST_SRC))
@@ -388,7 +404,9 @@ obj-dirs:
 	          $(OBJ_DIR)/time $(OBJ_DIR)/security $(OBJ_DIR)/stream \
 	          $(OBJ_DIR)/fs $(OBJ_DIR)/process $(OBJ_DIR)/signal \
 	          $(OBJ_DIR)/link $(OBJ_DIR)/app $(OBJ_DIR)/console \
-	          $(OBJ_DIR)/tracing_compat \
+	          $(OBJ_DIR)/tracing_compat $(OBJ_DIR)/evidence \
+	          $(OBJ_DIR)/evidence_sink $(OBJ_DIR)/monitor \
+	          $(OBJ_DIR)/observability \
 	          $(OBJ_DIR)/plan $(OBJ_DIR)/cx \
 	          $(OBJ_DIR)/platform/posix \
 	          $(OBJ_DIR)/platform/win32 $(OBJ_DIR)/platform/freestanding
@@ -624,6 +642,12 @@ $(TEST_DIR)/unit/console/test_console: tests/unit/console/test_console.c $(OPERA
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
 $(TEST_DIR)/unit/tracing_compat/test_tracing_compat: tests/unit/tracing_compat/test_tracing_compat.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
+$(TEST_DIR)/unit/evidence/test_evidence: tests/unit/evidence/test_evidence.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
+$(TEST_DIR)/unit/monitor/test_monitor: tests/unit/monitor/test_monitor.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
 $(TEST_DIR)/unit/%: tests/unit/%.c $(LIB_A) | test-dirs
@@ -878,11 +902,15 @@ $(TEST_DIR)/vignettes/vignette_link: tests/vignettes/vignette_link.c $(PUBLIC_FA
 $(TEST_DIR)/vignettes/vignette_console: tests/vignettes/vignette_console.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
 	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
+$(TEST_DIR)/vignettes/vignette_observability: tests/vignettes/vignette_observability.c $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
+	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
+
 test-dirs:
 	@mkdir -p $(TEST_DIR)/unit/core $(TEST_DIR)/unit/runtime \
 	          $(TEST_DIR)/unit/channel $(TEST_DIR)/unit/link \
 	          $(TEST_DIR)/unit/record $(TEST_DIR)/unit/time \
 	          $(TEST_DIR)/unit/app $(TEST_DIR)/unit/console \
+	          $(TEST_DIR)/unit/evidence $(TEST_DIR)/unit/monitor \
 	          $(TEST_DIR)/unit/tracing_compat \
 	          $(TEST_DIR)/unit/security $(TEST_DIR)/unit/fs \
 	          $(TEST_DIR)/unit/process $(TEST_DIR)/unit/signal \

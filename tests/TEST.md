@@ -179,3 +179,8 @@ CLI/operator slice also adds:
 - `tests/unit/console/test_console.c`
 - `tests/unit/tracing_compat/test_tracing_compat.c`
 - `tests/vignettes/vignette_console.c`
+
+The observability/evidence slice adds:
+- `tests/unit/evidence/test_evidence.c`
+- `tests/unit/monitor/test_monitor.c`
+- `tests/vignettes/vignette_observability.c`

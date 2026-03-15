@@ -17,6 +17,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__unix__) || defined(__APPLE__)
+#include <poll.h>
+#include <unistd.h>
+#endif
 
 /* -------------------------------------------------------------------
  * Custom platform hooks — minimal freestanding implementation
@@ -50,6 +54,9 @@ static asx_time custom_clock_now(void *ctx) {
 /* Entropy: deterministic PRNG (xorshift64). */
 static uint64_t g_prng_state = 42;
 static int g_reactor_waits = 0;
+#if defined(__unix__) || defined(__APPLE__)
+static int g_native_reactor_waits = 0;
+#endif
 
 static uint64_t custom_random(void *ctx) {
     (void)ctx;
@@ -66,6 +73,33 @@ static asx_status custom_ghost_reactor(void *ctx, uint64_t logical_step, uint32_
     *ready_count = 2;
     return ASX_OK;
 }
+
+#if defined(__unix__) || defined(__APPLE__)
+typedef struct {
+    int read_fd;
+} native_reactor_ctx;
+
+static asx_status native_poll_reactor(void *ctx, uint64_t logical_step, uint32_t *ready_count) {
+    native_reactor_ctx *native = (native_reactor_ctx *)ctx;
+    struct pollfd pfd;
+    int rc;
+
+    (void)logical_step;
+
+    if (native == NULL || ready_count == NULL || native->read_fd < 0) { return ASX_E_INVALID_ARGUMENT; }
+
+    pfd.fd = native->read_fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+
+    g_native_reactor_waits++;
+    rc = poll(&pfd, 1, 0);
+    if (rc < 0) { return ASX_E_INVALID_STATE; }
+
+    *ready_count = (rc > 0 && (pfd.revents & POLLIN) != 0) ? 1u : 0u;
+    return ASX_OK;
+}
+#endif
 
 /* Log sink: print to stderr. */
 static void custom_log(void *ctx, int level, const char *message) {
@@ -366,7 +400,82 @@ static int scenario_reactor_and_blocking(void) {
 }
 
 /* -------------------------------------------------------------------
- * Scenario 6: Builder and deadline/watchdog surfaces
+ * Scenario 6: Native-host reactor path
+ * ------------------------------------------------------------------- */
+static int scenario_native_reactor(void) {
+#if defined(__unix__) || defined(__APPLE__)
+    asx_status st;
+    asx_runtime_hooks hooks;
+    native_reactor_ctx native;
+    uint32_t ready = 0;
+    int pipe_fds[2] = {-1, -1};
+    const char byte = 'x';
+
+    printf("--- scenario: native reactor path ---\n");
+
+    if (pipe(pipe_fds) != 0) {
+        printf("  FAIL: pipe setup failed\n");
+        return 1;
+    }
+
+    asx_runtime_reset();
+    g_native_reactor_waits = 0;
+    native.read_fd = pipe_fds[0];
+
+    st = populate_custom_hooks(&hooks);
+    if (st != ASX_OK) {
+        printf("  FAIL: populate_custom_hooks returned %s\n", asx_status_str(st));
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+        return 1;
+    }
+
+    hooks.reactor.ghost_wait_fn = native_poll_reactor;
+    hooks.reactor.ctx = &native;
+
+    st = asx_runtime_set_hooks(&hooks);
+    if (st != ASX_OK) {
+        printf("  FAIL: runtime_set_hooks returned %s\n", asx_status_str(st));
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+        return 1;
+    }
+
+    if (write(pipe_fds[1], &byte, 1u) != 1) {
+        printf("  FAIL: native readiness write failed\n");
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+        return 1;
+    }
+
+    st = asx_runtime_reactor_wait(0, &ready, 19);
+    if (st != ASX_OK) {
+        printf("  FAIL: runtime_reactor_wait returned %s\n", asx_status_str(st));
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+        return 1;
+    }
+    if (ready != 1u || g_native_reactor_waits != 1) {
+        printf("  FAIL: native reactor did not surface readiness\n");
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+        return 1;
+    }
+
+    printf("  native reactor reported %u ready event via poll-backed hook\n", ready);
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
+    printf("  PASS: native reactor path\n");
+    return 0;
+#else
+    printf("--- scenario: native reactor path ---\n");
+    printf("  SKIP: native reactor smoke requires Unix poll/pipe support\n");
+    return 0;
+#endif
+}
+
+/* -------------------------------------------------------------------
+ * Scenario 7: Builder and deadline/watchdog surfaces
  * ------------------------------------------------------------------- */
 static int scenario_builder_and_deadlines(void) {
     asx_status st;
@@ -463,7 +572,7 @@ static int scenario_builder_and_deadlines(void) {
 }
 
 /* -------------------------------------------------------------------
- * Scenario 7: End-to-end with custom hooks
+ * Scenario 8: End-to-end with custom hooks
  * ------------------------------------------------------------------- */
 static int scenario_end_to_end(void) {
     asx_status st;
@@ -521,6 +630,7 @@ int main(void) {
     failures += scenario_config();
     failures += scenario_allocator_seal();
     failures += scenario_reactor_and_blocking();
+    failures += scenario_native_reactor();
     failures += scenario_builder_and_deadlines();
     failures += scenario_end_to_end();
 

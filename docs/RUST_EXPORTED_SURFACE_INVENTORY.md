@@ -486,18 +486,18 @@ and "shipped by default" are not yet the same thing.
 | `encoding` | `absent` | No `include/asx/encoding/` or `src/encoding/` | No public encoding pipeline or symbol-generation family |
 | `epoch` | `absent` | No `include/asx/epoch/` or `src/epoch/` | Barrier/epoch/circuit-breaker surface is missing |
 | `error` | `partial` | `include/asx/asx_status.h`, runtime error ledger, docs | Status/error taxonomy exists, but not the richer upstream `error` module and re-export set |
-| `evidence` | `partial` | `include/asx/runtime/diagnostic.h`, `include/asx/app/report.h`, `src/runtime/diagnostic.c` | Evidence collection exists, but not as a dedicated public family matching upstream scope |
-| `evidence_sink` | `partial` | `asx_evidence_sink` in `include/asx/runtime/diagnostic.h`, renderers in `src/app/report.c` | Structured sink exists, but it is embedded inside diagnostics rather than a full standalone module |
+| `evidence` | `partial` | `include/asx/evidence/evidence.h`, `src/evidence/evidence.c`, `include/asx/runtime/diagnostic.h` | Evidence helpers now ship as a dedicated public family, but the broader upstream evidence ecosystem is still richer |
+| `evidence_sink` | `partial` | `include/asx/evidence_sink/evidence_sink.h`, `src/evidence_sink/evidence_sink.c`, `src/app/report.c` | Structured sink helpers now ship publicly with summary and NDJSON rendering, but the sink story is still narrower than upstream scope |
 | `gen_server` | `partial` | `include/asx/actor/actor.h`, `src/actor/actor.c` comment and behavior callbacks | Gen-server semantics are folded into actor behavior callbacks, not a distinct public family |
 | `http` | `absent` | No `include/asx/http/` or `src/http/` | Entire HTTP surface remains missing |
 | `io` | `partial` | `include/asx/bytes/io_adapter.h`, `include/asx/runtime/io_driver.h`, `src/runtime/io_driver.c` | Some I/O adapters exist, but no broad public async-IO module matching upstream |
 | `lab` | `partial` | `include/asx/runtime/lab.h`, `include/asx/runtime/replay.h`, `include/asx/runtime/snapshot.h`, `src/runtime/replay.c` | Deterministic lab/replay exists, but much narrower than upstream lab/oracle/explorer tooling |
 | `link` | `partial` | `include/asx/link/link.h`, `src/link/link.c`, `tests/unit/link/test_link.c`, `tests/vignettes/vignette_link.c` | Public coordination link now exists on top of shipped sessions, but it is still far smaller than upstream cross-runtime/linkage scope |
 | `migration` | `absent` | No `include/asx/migration/` or `src/migration/` | Migration surfaces are missing |
-| `monitor` | `absent` | No `include/asx/monitor/` or `src/monitor/` | Monitoring family is absent apart from generic diagnostics |
+| `monitor` | `partial` | `include/asx/monitor/monitor.h`, `src/monitor/monitor.c`, `tests/unit/monitor/test_monitor.c`, `tests/vignettes/vignette_observability.c` | Threshold-based monitor evaluation now exists over runtime inspection and watchdog state, but it is still a reduced public monitor family |
 | `net` | `stub-only` | `include/asx/net/net.h`, `src/net/net.c` explicitly says "Walking skeleton: ghost stubs" | Public names exist, but listener/stream logic is skeletal and non-OS-backed |
 | `obligation` | `partial` | `include/asx/obligation/obligation.h`, runtime obligation lifecycle, `tests/vignettes/vignette_obligations.c`, `tests/vignettes/vignette_link.c` | Dedicated public helpers now mirror the obligation family, but the broader upstream proof/lifecycle surface is still richer |
-| `observability` | `partial` | diagnostics, telemetry, hindsight, report/evidence headers and sources | Useful diagnostics exist, but not the broader upstream observability surface |
+| `observability` | `partial` | `include/asx/observability/observability.h`, `src/observability/observability.c`, diagnostics/telemetry/reporting sources | Useful diagnostics now have an explicit observability snapshot family, but the broader upstream observability surface is still larger |
 | `plan` | `partial` | `include/asx/plan/plan.h`, `src/plan/plan.c` | Plan DAG/IR surface exists in reduced form |
 | `raptorq` | `absent` | No `include/asx/raptorq/` or `src/raptorq/` | Entire erasure-coding family is missing |
 | `record` | `partial` | `include/asx/record/record.h`, runtime event/snapshot capture, `tests/unit/record/test_record.c`, `tests/vignettes/vignette_link.c` | Public record helpers now expose snapshot and event-log summaries, but not the full upstream record/history ecosystem |
@@ -538,7 +538,7 @@ and "shipped by default" are not yet the same thing.
 |---|---|---|---|
 | Browser/WASM product surface | `partial` | `include/asx/abi/wasm_abi.h`, `include/asx/runtime/browser_boundary.h`, `browser_diagnostic.h`, examples `ex_browser_*` | Some ABI/boundary tooling exists, but no `web` family or upstream-style fail-closed browser feature matrix |
 | Examples and smoke paths | `partial` | `examples/*.c`, `tests/e2e/*.sh`, `README.md` examples | Good kernel/lab/browser-boundary examples exist; HTTP/web/grpc/database/distributed example families do not |
-| Doctor/report/evidence workflow | `partial` | `include/asx/app/report.h`, `app/doctor.h`, `runtime/diagnostic.h`, `src/app/*.c`, `include/asx/console/console.h`, `tests/vignettes/vignette_console.c` | Strong diagnostic story locally, now with a shipped operator-facing console wrapper, but still narrower than upstream evidence/observability contract |
+| Doctor/report/evidence workflow | `partial` | `include/asx/app/report.h`, `app/doctor.h`, `runtime/diagnostic.h`, `include/asx/evidence*.h`, `include/asx/monitor/monitor.h`, `src/app/*.c`, `tests/vignettes/vignette_console.c`, `tests/vignettes/vignette_observability.c` | Strong diagnostic story locally, now with explicit evidence/monitor families and logged observability flows, but still narrower than upstream evidence/observability contract |
 | Test-helper / artifact surface | `partial` | `tests/test_log.h`, `tests/test_harness.h`, `include/asx/testing/log.h`, `tools/fixture_capture`, `fixtures/rust_reference/` | Verification tooling is strong and now has a public test-log helper, but it still is not a full public `test_logging` / `test_ndjson` / `test_utils` module family |
 
 ### 11.4 Bottom-Line Roadmap Implications
