@@ -58,7 +58,7 @@ int main(void) {
         return 1;
     }
 
-    listen_addr = asx_socket_addr_loopback(7000u);
+    listen_addr = ordered.addrs[0];
     if (!require_status(asx_tcp_listener_bind(&listener, &listen_addr), "listener bind") ||
         !require_status(asx_tcp_connect(&stream, &ordered.addrs[0]), "tcp connect") ||
         !require_status(asx_tcp_listener_poll_accept(listener, &accepted, &accept_peer),

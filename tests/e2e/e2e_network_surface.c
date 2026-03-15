@@ -64,7 +64,7 @@ int main(void) {
     printf("SCENARIO network.resolve_failure pass\n");
     digest = mix_u64(digest, 2u);
 
-    listen_addr = asx_socket_addr_loopback(8123u);
+    listen_addr = ordered.addrs[0];
     if (asx_tcp_listener_bind(&listener, &listen_addr) != ASX_OK ||
         !asx_tcp_listener_is_alive(listener) ||
         asx_tcp_listener_poll_accept(listener, &stream, NULL) != ASX_E_PENDING) {

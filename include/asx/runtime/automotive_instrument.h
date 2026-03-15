@@ -33,6 +33,8 @@ extern "C" {
  * Tracks deadline hits/misses, worst-case margin, and running
  * statistics for compliance reporting. Margin is defined as
  * (deadline - completion_time) in nanoseconds; negative = miss.
+ * Stored signed margins saturate to the int64_t range if the raw
+ * uint64_t delta exceeds what int64_t can represent.
  * ------------------------------------------------------------------- */
 
 typedef struct {

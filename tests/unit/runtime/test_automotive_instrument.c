@@ -10,6 +10,7 @@
 #include "test_harness.h"
 #include "test_log.h"
 #include <asx/runtime/automotive_instrument.h>
+#include <limits.h>
 
 /* -------------------------------------------------------------------
  * Deadline tracker tests
@@ -85,6 +86,32 @@ TEST(deadline_worst_margin_tracks_misses) {
 
     ASSERT_TRUE(dt.worst_margin_ns < 0);
     ASSERT_TRUE(dt.best_margin_ns > 0);
+}
+
+TEST(deadline_margin_saturates_large_miss_delta) {
+    asx_auto_deadline_tracker dt;
+    asx_auto_deadline_init(&dt);
+
+    asx_auto_deadline_record(&dt, 0u, UINT64_MAX);
+
+    ASSERT_EQ(dt.total_deadlines, 1u);
+    ASSERT_EQ(dt.deadline_misses, 1u);
+    ASSERT_EQ(dt.worst_margin_ns, (int64_t)INT64_MIN);
+    ASSERT_EQ(dt.best_margin_ns, (int64_t)INT64_MIN);
+    ASSERT_EQ(dt.total_margin_ns, UINT64_MAX);
+}
+
+TEST(deadline_margin_saturates_large_hit_delta) {
+    asx_auto_deadline_tracker dt;
+    asx_auto_deadline_init(&dt);
+
+    asx_auto_deadline_record(&dt, UINT64_MAX, 0u);
+
+    ASSERT_EQ(dt.total_deadlines, 1u);
+    ASSERT_EQ(dt.deadline_hits, 1u);
+    ASSERT_EQ(dt.worst_margin_ns, (int64_t)INT64_MAX);
+    ASSERT_EQ(dt.best_margin_ns, (int64_t)INT64_MAX);
+    ASSERT_EQ(dt.total_margin_ns, UINT64_MAX);
 }
 
 TEST(deadline_null_safety) {
@@ -423,6 +450,21 @@ TEST(global_record_deadline_auto_logs_miss) {
     ASSERT_EQ(e->entity_id, (uint64_t)2);
 }
 
+TEST(global_record_deadline_saturates_audit_margin) {
+    asx_auto_audit_ring *ring;
+    const asx_audit_entry *e;
+
+    asx_auto_instrument_reset();
+    ring = asx_auto_audit_global();
+
+    asx_auto_record_deadline(0u, UINT64_MAX, 99u);
+    ASSERT_EQ(asx_auto_audit_count(ring), 1u);
+    e = asx_auto_audit_get(ring, 0);
+    ASSERT_TRUE(e != NULL);
+    ASSERT_EQ(e->entity_id, (uint64_t)99);
+    ASSERT_EQ(e->detail, (int64_t)INT64_MIN);
+}
+
 TEST(global_record_checkpoint_auto_logs_violation) {
     asx_auto_watchdog *wd;
     asx_auto_audit_ring *ring;
@@ -461,6 +503,8 @@ int main(void) {
     RUN_TEST(deadline_exact_is_hit);
     RUN_TEST(deadline_miss_rate_mixed);
     RUN_TEST(deadline_worst_margin_tracks_misses);
+    RUN_TEST(deadline_margin_saturates_large_miss_delta);
+    RUN_TEST(deadline_margin_saturates_large_hit_delta);
     RUN_TEST(deadline_null_safety);
 
     /* Watchdog monitor */
@@ -491,6 +535,7 @@ int main(void) {
     /* Global state */
     RUN_TEST(global_reset_clears_state);
     RUN_TEST(global_record_deadline_auto_logs_miss);
+    RUN_TEST(global_record_deadline_saturates_audit_margin);
     RUN_TEST(global_record_checkpoint_auto_logs_violation);
 
     TEST_REPORT();

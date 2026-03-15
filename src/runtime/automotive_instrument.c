@@ -11,7 +11,26 @@
  */
 
 #include <asx/runtime/automotive_instrument.h>
+#include <limits.h>
 #include <string.h>
+
+static int64_t asx_signed_margin_clamped(uint64_t deadline_ns, uint64_t actual_ns) {
+    uint64_t delta;
+
+    if (deadline_ns >= actual_ns) {
+        delta = deadline_ns - actual_ns;
+        if (delta > (uint64_t)INT64_MAX) return INT64_MAX;
+        return (int64_t)delta;
+    }
+
+    delta = actual_ns - deadline_ns;
+    if (delta > (uint64_t)INT64_MAX) return INT64_MIN;
+    return -(int64_t)delta;
+}
+
+static uint64_t asx_margin_abs(uint64_t deadline_ns, uint64_t actual_ns) {
+    return deadline_ns >= actual_ns ? (deadline_ns - actual_ns) : (actual_ns - deadline_ns);
+}
 
 /* -------------------------------------------------------------------
  * Deadline tracker
@@ -29,7 +48,7 @@ void asx_auto_deadline_record(asx_auto_deadline_tracker *dt, uint64_t deadline_n
     if (!dt) return;
 
     dt->total_deadlines++;
-    margin = (int64_t)(deadline_ns - actual_ns);
+    margin = asx_signed_margin_clamped(deadline_ns, actual_ns);
 
     if (actual_ns <= deadline_ns) {
         dt->deadline_hits++;
@@ -41,11 +60,8 @@ void asx_auto_deadline_record(asx_auto_deadline_tracker *dt, uint64_t deadline_n
     if (margin > dt->best_margin_ns || dt->total_deadlines == 1) { dt->best_margin_ns = margin; }
 
     /* Accumulate absolute margin for mean computation */
-    {
-        uint64_t abs_margin = margin >= 0 ? (uint64_t)margin : (uint64_t)(-margin);
-        dt->total_margin_ns += abs_margin;
-        dt->total_margin_count++;
-    }
+    dt->total_margin_ns += asx_margin_abs(deadline_ns, actual_ns);
+    dt->total_margin_count++;
 }
 
 uint32_t asx_auto_deadline_miss_rate(const asx_auto_deadline_tracker *dt) {
@@ -249,12 +265,14 @@ asx_auto_audit_ring *asx_auto_audit_global(void) {
 }
 
 void asx_auto_record_deadline(uint64_t deadline_ns, uint64_t actual_ns, uint64_t entity_id) {
+    int64_t margin;
+
     ensure_auto_init();
     asx_auto_deadline_record(&g_deadline, deadline_ns, actual_ns);
 
     /* Auto-log misses to audit ring */
     if (actual_ns > deadline_ns) {
-        int64_t margin = (int64_t)(deadline_ns - actual_ns);
+        margin = asx_signed_margin_clamped(deadline_ns, actual_ns);
         asx_auto_audit_record(&g_audit, ASX_AUDIT_DEADLINE_MISS, actual_ns, entity_id, margin);
     }
 }
