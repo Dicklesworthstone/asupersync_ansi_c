@@ -488,6 +488,27 @@ static asx_status echo_call(void *state, const void *request, void *response) {
     return ASX_OK;
 }
 
+typedef struct {
+    int ready_flag;
+    int call_count;
+    int bias;
+} service_stack_state;
+
+static asx_service_readiness stack_poll_ready(void *state) {
+    service_stack_state *stack = (service_stack_state *)state;
+    return stack->ready_flag ? ASX_SERVICE_READY : ASX_SERVICE_NOT_READY;
+}
+
+static asx_status stack_call(void *state, const void *request, void *response) {
+    const int *req = (const int *)request;
+    int *resp = (int *)response;
+    service_stack_state *stack = (service_stack_state *)state;
+
+    stack->call_count++;
+    *resp = *req + stack->bias;
+    return ASX_OK;
+}
+
 TEST(service_basic_call) {
     asx_service svc;
     int req = 42, resp = 0;
@@ -590,6 +611,35 @@ TEST(service_composition_timeout_over_load_shed) {
     ASSERT_EQ(resp, 55);
 }
 
+TEST(service_composition_load_shed_over_timeout_transitions) {
+    asx_service base_svc, timeout_svc, wrapped_svc;
+    asx_timeout_service_state ts;
+    asx_load_shed_service_state ls;
+    service_stack_state state;
+    int req = 12, resp = 0;
+
+    memset(&state, 0, sizeof(state));
+    state.bias = 5;
+
+    base_svc.poll_ready = stack_poll_ready;
+    base_svc.call = stack_call;
+    base_svc.state = &state;
+
+    asx_timeout_layer_init(&timeout_svc, &ts, base_svc, 2500);
+    asx_load_shed_layer_init(&wrapped_svc, &ls, timeout_svc);
+
+    state.ready_flag = 0;
+    ASSERT_EQ(asx_service_poll_ready(&wrapped_svc), ASX_SERVICE_NOT_READY);
+    ASSERT_EQ(asx_service_call(&wrapped_svc, &req, &resp), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(state.call_count, 0);
+
+    state.ready_flag = 1;
+    ASSERT_EQ(asx_service_poll_ready(&wrapped_svc), ASX_SERVICE_READY);
+    ASSERT_EQ(asx_service_call(&wrapped_svc, &req, &resp), ASX_OK);
+    ASSERT_EQ(resp, 17);
+    ASSERT_EQ(state.call_count, 1);
+}
+
 /* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
@@ -641,6 +691,7 @@ int main(void) {
     RUN_TEST(service_load_shed_rejects_when_not_ready);
     RUN_TEST(service_load_shed_passes_when_ready);
     RUN_TEST(service_composition_timeout_over_load_shed);
+    RUN_TEST(service_composition_load_shed_over_timeout_transitions);
 
     TEST_REPORT();
     return test_failures;
