@@ -156,6 +156,20 @@ TEST(notify_exhaustion) {
     for (i = 0; i < ASX_NOTIFY_MAX; i++) { MUST_OK(asx_notify_close(handles[i])); }
 }
 
+TEST(notify_waiter_slot_bounds_checked) {
+    asx_notify_handle h;
+    asx_notify_waiter w;
+    setup();
+    MUST_OK(asx_notify_create(&h));
+    MUST_OK(asx_notify_wait_begin(h, &w));
+
+    w.waiter_slot = ASX_NOTIFY_MAX_WAITERS;
+    ASSERT_EQ(asx_notify_poll_wait(&w, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_notify_wait_cancel(&w), ASX_E_INVALID_ARGUMENT);
+
+    ASSERT_EQ(asx_notify_close(h), ASX_OK);
+}
+
 /* ================================================================== */
 /* Semaphore tests                                                     */
 /* ================================================================== */
@@ -640,6 +654,7 @@ int main(void) {
     RUN_TEST(notify_close_disconnects_waiters);
     RUN_TEST(notify_stale_handle);
     RUN_TEST(notify_exhaustion);
+    RUN_TEST(notify_waiter_slot_bounds_checked);
 
     /* Semaphore */
     RUN_TEST(sem_create_close);

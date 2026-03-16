@@ -86,6 +86,26 @@ TEST(register_before_init_fails) {
     ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_E_INVALID_STATE);
 }
 
+TEST(register_zero_interest_fails) {
+    asx_waker w;
+    asx_io_token tok;
+    if (!setup()) return;
+    MUST_OK(asx_waker_register(1, &w));
+    ASSERT_EQ(asx_io_register(42, (asx_io_interest)0, &w, &tok), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_io_active_count(), 0u);
+    teardown();
+}
+
+TEST(register_unknown_interest_bits_fail) {
+    asx_waker w;
+    asx_io_token tok;
+    if (!setup()) return;
+    MUST_OK(asx_waker_register(1, &w));
+    ASSERT_EQ(asx_io_register(42, (asx_io_interest)0x08, &w, &tok), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_io_active_count(), 0u);
+    teardown();
+}
+
 TEST(register_success) {
     asx_waker w;
     asx_io_token tok;
@@ -197,6 +217,32 @@ TEST(set_interest_stale_fails) {
     MUST_OK(asx_io_register(42, ASX_IO_READABLE, &w, &tok));
     asx_io_deregister(&tok);
     ASSERT_EQ(asx_io_set_interest(&tok, ASX_IO_WRITABLE), ASX_E_NOT_FOUND);
+    teardown();
+}
+
+TEST(set_interest_zero_fails) {
+    asx_waker w;
+    asx_io_token tok;
+    asx_io_interest interest = 0;
+    if (!setup()) return;
+    MUST_OK(asx_waker_register(1, &w));
+    MUST_OK(asx_io_register(42, ASX_IO_READABLE, &w, &tok));
+    ASSERT_EQ(asx_io_set_interest(&tok, (asx_io_interest)0), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_io_get_registration(&tok, NULL, &interest), ASX_OK);
+    ASSERT_EQ(interest, ASX_IO_READABLE);
+    teardown();
+}
+
+TEST(set_interest_unknown_bits_fail) {
+    asx_waker w;
+    asx_io_token tok;
+    asx_io_interest interest = 0;
+    if (!setup()) return;
+    MUST_OK(asx_waker_register(1, &w));
+    MUST_OK(asx_io_register(42, ASX_IO_READABLE, &w, &tok));
+    ASSERT_EQ(asx_io_set_interest(&tok, (asx_io_interest)0x08), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_io_get_registration(&tok, NULL, &interest), ASX_OK);
+    ASSERT_EQ(interest, ASX_IO_READABLE);
     teardown();
 }
 
@@ -367,6 +413,8 @@ int main(void) {
     RUN_TEST(register_null_token_fails);
     RUN_TEST(register_null_waker_fails);
     RUN_TEST(register_before_init_fails);
+    RUN_TEST(register_zero_interest_fails);
+    RUN_TEST(register_unknown_interest_bits_fail);
     RUN_TEST(register_success);
     RUN_TEST(reinit_clears_registrations_and_invalidates_tokens);
     RUN_TEST(deregister_decrements_count);
@@ -377,6 +425,8 @@ int main(void) {
     RUN_TEST(set_interest_success);
     RUN_TEST(set_interest_null_fails);
     RUN_TEST(set_interest_stale_fails);
+    RUN_TEST(set_interest_zero_fails);
+    RUN_TEST(set_interest_unknown_bits_fail);
     RUN_TEST(get_registration_null_token_fails);
     RUN_TEST(get_registration_requires_output);
     RUN_TEST(get_registration_stale_token_fails);

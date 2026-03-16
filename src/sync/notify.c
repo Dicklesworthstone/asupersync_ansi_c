@@ -138,6 +138,7 @@ asx_status asx_notify_poll_wait(asx_notify_waiter *waiter, asx_cx *cx) {
 
     if (waiter == NULL) return ASX_E_INVALID_ARGUMENT;
     if (waiter->notify_slot >= ASX_NOTIFY_MAX) return ASX_E_INVALID_ARGUMENT;
+    if (waiter->waiter_slot >= ASX_NOTIFY_MAX_WAITERS) return ASX_E_INVALID_ARGUMENT;
 
     s = &g_slots[waiter->notify_slot];
 
@@ -171,6 +172,7 @@ asx_status asx_notify_wait_cancel(asx_notify_waiter *waiter) {
     notify_slot *s;
     if (waiter == NULL) return ASX_E_INVALID_ARGUMENT;
     if (waiter->notify_slot >= ASX_NOTIFY_MAX) return ASX_E_INVALID_ARGUMENT;
+    if (waiter->waiter_slot >= ASX_NOTIFY_MAX_WAITERS) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[waiter->notify_slot];
     if (!s->alive || s->generation != waiter->generation)
         return ASX_OK; /* already closed, nothing to cancel */

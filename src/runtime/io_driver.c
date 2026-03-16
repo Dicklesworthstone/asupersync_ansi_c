@@ -39,6 +39,15 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
+static int io_interest_valid(asx_io_interest interest) {
+    uint32_t valid_mask =
+        (uint32_t)ASX_IO_READABLE | (uint32_t)ASX_IO_WRITABLE | (uint32_t)ASX_IO_ERROR;
+    uint32_t value = (uint32_t)interest;
+
+    if (value == 0u) return 0;
+    return (value & ~valid_mask) == 0u;
+}
+
 /* ------------------------------------------------------------------ */
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
@@ -86,6 +95,7 @@ asx_status asx_io_register(int fd, asx_io_interest interest, const asx_waker *wa
     st = asx_surface_gate(ASX_SURFACE_IO_DRIVER);
     if (st != ASX_OK) return st;
     if (!g_initialized) return ASX_E_INVALID_STATE;
+    if (!io_interest_valid(interest)) return ASX_E_INVALID_ARGUMENT;
 
     /* Find free slot */
     idx = ASX_MAX_IO_TOKENS;
@@ -131,6 +141,7 @@ asx_status asx_io_set_interest(asx_io_token *token, asx_io_interest interest) {
     asx_status st = asx_surface_gate(ASX_SURFACE_IO_DRIVER);
     if (st != ASX_OK) return st;
     if (token == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!io_interest_valid(interest)) return ASX_E_INVALID_ARGUMENT;
     if (token->slot >= g_reg_count) return ASX_E_NOT_FOUND;
     if (g_regs[token->slot].generation != token->generation) return ASX_E_NOT_FOUND;
     if (!g_regs[token->slot].alive) return ASX_E_NOT_FOUND;

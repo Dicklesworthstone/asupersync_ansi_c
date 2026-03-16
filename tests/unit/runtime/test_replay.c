@@ -42,7 +42,8 @@ TEST(snapshot_take_restore) {
     asx_lab_config cfg;
     asx_snapshot_id sid;
     asx_time now = 0;
-    uint64_t r1, r2;
+    uint64_t expected_runtime_entropy;
+    uint64_t restored_runtime_entropy = 0;
 
     asx_snapshot_reset();
     asx_lab_config_init(&cfg);
@@ -52,12 +53,12 @@ TEST(snapshot_take_restore) {
 
     /* Advance time and consume entropy */
     asx_lab_advance_time(&lab, 10);
-    r1 = asx_lab_random_u64(&lab);
-    (void)r1;
+    (void)asx_lab_random_u64(&lab);
 
     /* Take snapshot */
     MUST_OK(asx_snapshot_take(&lab, &sid));
     ASSERT_TRUE(asx_snapshot_is_valid(sid));
+    expected_runtime_entropy = asx_lab_random_u64(&lab);
 
     /* Advance more */
     asx_lab_advance_time(&lab, 20);
@@ -70,11 +71,8 @@ TEST(snapshot_take_restore) {
     ASSERT_EQ(asx_lab_now(&lab), 10000000ULL);
     ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
     ASSERT_EQ(now, (asx_time)10000000ULL);
-    ASSERT_EQ(asx_runtime_random_u64(&r2), ASX_OK);
-    r2 = asx_lab_random_u64(&lab);
-    /* After restore, entropy state matches snapshot, so same draw */
-    /* (The exact value depends on snapshot state, just verify it works) */
-    (void)r2;
+    ASSERT_EQ(asx_runtime_random_u64(&restored_runtime_entropy), ASX_OK);
+    ASSERT_EQ(restored_runtime_entropy, expected_runtime_entropy);
 
     asx_lab_shutdown(&lab);
     MUST_OK(asx_snapshot_discard(sid));

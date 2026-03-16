@@ -120,6 +120,32 @@ TEST(fs_reset_invalidates_handles) {
     ASSERT_FALSE(asx_fs_file_is_alive(file));
 }
 
+TEST(fs_reset_reuse_bumps_generation) {
+    asx_fs_path first_path, second_path;
+    asx_file_handle stale_file, fresh_file;
+    asx_buf payload;
+    uint32_t written;
+
+    asx_fs_reset();
+    ASSERT_EQ(asx_fs_path_from_cstr(&first_path, "/tmp/first"), ASX_OK);
+    ASSERT_EQ(asx_fs_file_open(&stale_file, &first_path, ASX_FS_OPEN_CREATE | ASX_FS_OPEN_READ),
+              ASX_OK);
+
+    asx_fs_reset();
+
+    ASSERT_EQ(asx_fs_path_from_cstr(&second_path, "/tmp/second"), ASX_OK);
+    ASSERT_EQ(asx_fs_file_open(&fresh_file, &second_path,
+                               ASX_FS_OPEN_CREATE | ASX_FS_OPEN_READ | ASX_FS_OPEN_WRITE),
+              ASX_OK);
+    ASSERT_EQ(stale_file.slot, fresh_file.slot);
+    ASSERT_NE(stale_file.generation, fresh_file.generation);
+    ASSERT_FALSE(asx_fs_file_is_alive(stale_file));
+
+    payload = asx_buf_from_cstr("ok");
+    ASSERT_EQ(asx_fs_file_poll_write(stale_file, &payload, &written), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_fs_file_close(fresh_file), ASX_OK);
+}
+
 int main(void) {
     RUN_TEST(path_from_cstr_roundtrip);
     RUN_TEST(path_eq_rejects_mismatch);
@@ -129,6 +155,7 @@ int main(void) {
     RUN_TEST(file_read_at_eof_is_pending);
     RUN_TEST(file_capacity_is_enforced);
     RUN_TEST(fs_reset_invalidates_handles);
+    RUN_TEST(fs_reset_reuse_bumps_generation);
     TEST_REPORT();
     return test_failures;
 }

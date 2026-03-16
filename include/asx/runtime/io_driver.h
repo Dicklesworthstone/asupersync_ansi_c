@@ -75,7 +75,8 @@ ASX_API int asx_io_driver_is_initialized(void);
 
 /* Register interest in IO events for a resource.
  * fd is an opaque file descriptor (platform-dependent).
- * interest is a bitmask of ASX_IO_READABLE|WRITABLE|ERROR.
+ * interest must be a nonzero bitmask composed only of
+ * ASX_IO_READABLE|WRITABLE|ERROR.
  * waker will be signaled when the interest is ready.
  * Returns ASX_OK on success. */
 ASX_API ASX_MUST_USE asx_status asx_io_register(int fd, asx_io_interest interest,
@@ -84,7 +85,9 @@ ASX_API ASX_MUST_USE asx_status asx_io_register(int fd, asx_io_interest interest
 /* Deregister an IO token. */
 ASX_API void asx_io_deregister(asx_io_token *token);
 
-/* Update the interest mask for an existing registration. */
+/* Update the interest mask for an existing registration.
+ * interest must be a nonzero mask composed only of
+ * ASX_IO_READABLE|WRITABLE|ERROR. */
 ASX_API ASX_MUST_USE asx_status asx_io_set_interest(asx_io_token *token, asx_io_interest interest);
 
 /* Query the stored registration state for an existing token.

@@ -265,6 +265,14 @@ asx_status asx_fs_file_path(asx_file_handle file, asx_fs_path *out) {
 int asx_fs_file_is_alive(asx_file_handle file) { return asx_fs_lookup_open_file(file) != NULL; }
 
 void asx_fs_reset(void) {
+    uint32_t i;
+
     memset(g_entries, 0, sizeof(g_entries));
-    memset(g_open_files, 0, sizeof(g_open_files));
+    for (i = 0; i < ASX_MAX_OPEN_FILES; i++) {
+        g_open_files[i].generation = asx_fs_next_generation(g_open_files[i].generation);
+        g_open_files[i].entry_slot = 0u;
+        g_open_files[i].offset = 0u;
+        g_open_files[i].flags = 0u;
+        g_open_files[i].alive = 0;
+    }
 }

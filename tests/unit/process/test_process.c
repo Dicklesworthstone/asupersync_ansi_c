@@ -103,6 +103,32 @@ TEST(process_reset_invalidates_handles) {
     ASSERT_FALSE(asx_process_is_alive(process));
 }
 
+TEST(process_reset_reuse_bumps_generation) {
+    asx_process_handle old_process;
+    asx_process_handle new_process;
+    asx_process_spawn_options opts;
+    const char *program = NULL;
+
+    asx_process_reset();
+    opts.program = "first";
+    opts.polls_until_exit = 0u;
+    opts.exit_code = 0;
+    opts.auto_exit = 1;
+    ASSERT_EQ(asx_process_spawn(&old_process, &opts), ASX_OK);
+
+    asx_process_reset();
+
+    opts.program = "second";
+    ASSERT_EQ(asx_process_spawn(&new_process, &opts), ASX_OK);
+
+    ASSERT_TRUE(new_process.slot == old_process.slot);
+    ASSERT_TRUE(new_process.generation != old_process.generation);
+    ASSERT_FALSE(asx_process_is_alive(old_process));
+    ASSERT_EQ(asx_process_program(old_process, &program), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_process_program(new_process, &program), ASX_OK);
+    ASSERT_STR_EQ(program, "second");
+}
+
 int main(void) {
     RUN_TEST(spawn_and_query_program);
     RUN_TEST(poll_wait_counts_down_then_exits);
@@ -110,6 +136,7 @@ int main(void) {
     RUN_TEST(kill_marks_terminated);
     RUN_TEST(process_capacity_is_enforced);
     RUN_TEST(process_reset_invalidates_handles);
+    RUN_TEST(process_reset_reuse_bumps_generation);
     TEST_REPORT();
     return test_failures;
 }

@@ -76,7 +76,11 @@ void asx_config_state_init(asx_config_state *state) {
 }
 
 asx_status asx_config_load(asx_config_state *state, const asx_runtime_config *cfg) {
+    asx_status st;
+
     if (state == NULL || cfg == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    st = asx_runtime_config_validate(cfg);
+    if (st != ASX_OK) return st;
 
     memcpy(&state->active, cfg, sizeof(asx_runtime_config));
     state->loaded = 1;
@@ -113,6 +117,8 @@ asx_status asx_config_validate_reload(const asx_config_state *state,
         case ASX_CONFIG_RELOADABLE: break; /* OK to change */
         }
     }
+
+    if (asx_runtime_config_validate(proposed) != ASX_OK) { return ASX_E_INVALID_ARGUMENT; }
 
     return ASX_OK;
 }

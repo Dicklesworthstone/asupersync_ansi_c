@@ -72,6 +72,8 @@ typedef struct {
 ASX_API void asx_config_state_init(asx_config_state *state);
 
 /* Load initial config (sets active config + marks as loaded).
+ * The config must also satisfy the structural runtime-config contract
+ * (`size`, nonzero budgets, etc).
  * Returns ASX_OK or ASX_E_INVALID_ARGUMENT. */
 ASX_API asx_status asx_config_load(asx_config_state *state, const asx_runtime_config *cfg);
 
@@ -82,7 +84,7 @@ ASX_API asx_status asx_config_load(asx_config_state *state, const asx_runtime_co
  *
  * Returns:
  *   ASX_OK                    — reload succeeded
- *   ASX_E_INVALID_ARGUMENT    — NULL argument
+ *   ASX_E_INVALID_ARGUMENT    — NULL argument or structurally invalid config
  *   ASX_E_INVALID_STATE       — config not yet loaded
  *   ASX_E_CONFIG_FROZEN       — attempted to change frozen field
  *   ASX_E_CONFIG_RESTART_REQ  — field requires restart to change

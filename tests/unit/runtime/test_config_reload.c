@@ -92,6 +92,16 @@ TEST(load_null_cfg_fails) {
     ASSERT_EQ(asx_config_load(&g_state, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(load_invalid_cfg_rejected) {
+    asx_runtime_config bad_cfg;
+
+    cr_setup();
+    memcpy(&bad_cfg, &g_cfg, sizeof(bad_cfg));
+    bad_cfg.size = 0u;
+    ASSERT_EQ(asx_config_load(&g_state, &bad_cfg), ASX_E_INVALID_ARGUMENT);
+    ASSERT_TRUE(asx_config_active(&g_state) == NULL);
+}
+
 /* ------------------------------------------------------------------ */
 /* Test: reload reloadable fields succeeds                             */
 /* ------------------------------------------------------------------ */
@@ -245,6 +255,17 @@ TEST(validate_before_load_fails) {
     ASSERT_EQ(asx_config_validate_reload(&g_state, &new_cfg, NULL), ASX_E_INVALID_STATE);
 }
 
+TEST(validate_rejects_structurally_invalid_proposed_config) {
+    asx_runtime_config bad_cfg;
+
+    cr_setup();
+    ASSERT_EQ(asx_config_load(&g_state, &g_cfg), ASX_OK);
+
+    memcpy(&bad_cfg, &g_cfg, sizeof(bad_cfg));
+    bad_cfg.finalizer_poll_budget = 0u;
+    ASSERT_EQ(asx_config_validate_reload(&g_state, &bad_cfg, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
 /* ------------------------------------------------------------------ */
 /* Test: identical config reload succeeds                              */
 /* ------------------------------------------------------------------ */
@@ -357,6 +378,7 @@ int main(void) {
     RUN_TEST(load_succeeds);
     RUN_TEST(load_null_state_fails);
     RUN_TEST(load_null_cfg_fails);
+    RUN_TEST(load_invalid_cfg_rejected);
 
     /* Reload success */
     RUN_TEST(reload_wait_policy_succeeds);
@@ -374,6 +396,7 @@ int main(void) {
     /* Edge cases */
     RUN_TEST(reload_before_load_fails);
     RUN_TEST(validate_before_load_fails);
+    RUN_TEST(validate_rejects_structurally_invalid_proposed_config);
     RUN_TEST(identical_reload_succeeds);
 
     /* Field table */

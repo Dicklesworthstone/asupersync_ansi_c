@@ -36,6 +36,7 @@ static asx_process_slot *asx_process_lookup(asx_process_handle process) {
 asx_status asx_process_spawn(asx_process_handle *out, const asx_process_spawn_options *options) {
     uint32_t i;
     asx_process_slot *slot;
+    uint32_t generation;
     size_t len;
 
     if (out == NULL || options == NULL || options->program == NULL) {
@@ -48,9 +49,10 @@ asx_status asx_process_spawn(asx_process_handle *out, const asx_process_spawn_op
     for (i = 0; i < ASX_MAX_PROCESSES; i++) {
         if (!g_processes[i].alive) {
             slot = &g_processes[i];
+            generation = asx_process_next_generation(slot->generation);
             memset(slot, 0, sizeof(*slot));
             memcpy(slot->program, options->program, len + 1u);
-            slot->generation = asx_process_next_generation(slot->generation);
+            slot->generation = generation;
             slot->polls_remaining = options->polls_until_exit;
             slot->exit_code = options->exit_code;
             slot->state = ASX_PROCESS_RUNNING;
@@ -123,4 +125,12 @@ asx_status asx_process_state_query(asx_process_handle process, asx_process_state
 
 int asx_process_is_alive(asx_process_handle process) { return asx_process_lookup(process) != NULL; }
 
-void asx_process_reset(void) { memset(g_processes, 0, sizeof(g_processes)); }
+void asx_process_reset(void) {
+    uint32_t i;
+
+    for (i = 0; i < ASX_MAX_PROCESSES; i++) {
+        uint32_t generation = g_processes[i].generation;
+        memset(&g_processes[i], 0, sizeof(g_processes[i]));
+        g_processes[i].generation = generation;
+    }
+}
