@@ -186,7 +186,9 @@ NET_SRC := \
 	src/net/net.c
 
 BYTES_SRC := \
-	src/bytes/buf.c
+	src/bytes/buf.c \
+	src/bytes/codec.c \
+	src/bytes/io_adapter.c
 
 TIME_SRC := \
 	src/time/deadline.c \
@@ -308,7 +310,9 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/monitor/*_test.c) \
                  $(wildcard tests/unit/monitor/test_*.c) \
                  $(wildcard tests/unit/tracing_compat/*_test.c) \
-                 $(wildcard tests/unit/tracing_compat/test_*.c)
+                 $(wildcard tests/unit/tracing_compat/test_*.c) \
+                 $(wildcard tests/unit/bytes/*_test.c) \
+                 $(wildcard tests/unit/bytes/test_*.c)
 UNIT_TEST_SRC := $(sort $(UNIT_TEST_SRC))
 
 INVARIANT_TEST_SRC := $(wildcard tests/invariant/lifecycle/*_test.c) \
@@ -679,6 +683,7 @@ $(TEST_DIR)/unit/monitor/test_monitor: tests/unit/monitor/test_monitor.c $(OPERA
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(OPERATOR_TEST_EXTRA_SRC) $(LIB_A) $(ALL_LDFLAGS)
 
 $(TEST_DIR)/unit/%: tests/unit/%.c $(LIB_A) | test-dirs
+	@mkdir -p $(@D)
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
 
 # ---------------------------------------------------------------------------
@@ -910,9 +915,11 @@ test-e2e-suite: $(LIB_A)
 	@$(E2E_SCRIPT_DIR)/run_all.sh
 
 $(TEST_DIR)/invariant/%: tests/invariant/%.c $(LIB_A) | test-dirs
+	@mkdir -p $(@D)
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
 
 $(TEST_DIR)/vignettes/%: tests/vignettes/%.c $(LIB_A) | test-dirs
+	@mkdir -p $(@D)
 	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
 
 $(TEST_DIR)/vignettes/vignette_lifecycle: tests/vignettes/vignette_lifecycle.c $(CX_TEST_EXTRA_SRC) $(LIB_A) | test-dirs
@@ -937,6 +944,7 @@ test-dirs:
 	@mkdir -p $(TEST_DIR)/unit/core $(TEST_DIR)/unit/runtime \
 	          $(TEST_DIR)/unit/channel $(TEST_DIR)/unit/link \
 	          $(TEST_DIR)/unit/record $(TEST_DIR)/unit/time \
+	          $(TEST_DIR)/unit/bytes $(TEST_DIR)/unit/cx \
 	          $(TEST_DIR)/unit/app $(TEST_DIR)/unit/console \
 	          $(TEST_DIR)/unit/evidence $(TEST_DIR)/unit/monitor \
 	          $(TEST_DIR)/unit/tracing_compat \

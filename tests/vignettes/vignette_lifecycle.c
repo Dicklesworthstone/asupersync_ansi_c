@@ -59,6 +59,33 @@ static asx_status poll_multi_step(void *ud, asx_task_id self) {
     ASX_CO_END(&s->co);
 }
 
+static asx_status poll_count_pending(void *ud, asx_task_id self) {
+    uint32_t *count = (uint32_t *)ud;
+    (void)self;
+    (*count)++;
+    return ASX_E_PENDING;
+}
+
+static asx_status poll_fail_twice_then_ok(void *ud, asx_task_id self) {
+    int *remaining_failures = (int *)ud;
+    (void)self;
+    if (*remaining_failures > 0) {
+        (*remaining_failures)--;
+        return ASX_E_INVALID_STATE;
+    }
+    return ASX_OK;
+}
+
+static asx_status poll_pending_then_ok_vignette(void *ud, asx_task_id self) {
+    int *remaining_pending = (int *)ud;
+    (void)self;
+    if (*remaining_pending > 0) {
+        (*remaining_pending)--;
+        return ASX_E_PENDING;
+    }
+    return ASX_OK;
+}
+
 /* -------------------------------------------------------------------
  * Scenario 1: Minimal lifecycle — open region, spawn task, drain
  * ------------------------------------------------------------------- */
@@ -333,6 +360,119 @@ static int scenario_capability_wrapped_scope(void) {
 }
 
 /* -------------------------------------------------------------------
+ * Scenario 5: combinator orchestration
+ * ------------------------------------------------------------------- */
+static int scenario_combinator_orchestration(void) {
+    asx_status st;
+    asx_retry_state retry;
+    asx_pipeline_state pipeline;
+    asx_join_state join;
+    asx_select_state select;
+    int retry_failures = 2;
+    int pipeline_pending = 1;
+    uint32_t loser_polls = 0;
+
+    printf("--- scenario: combinator orchestration ---\n");
+
+    asx_runtime_reset();
+
+    st = asx_retry_init(&retry, poll_fail_twice_then_ok, &retry_failures, 5);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_retry_init returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_pipeline_init(&pipeline);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_pipeline_init returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_pipeline_add_stage(&pipeline, poll_pending_then_ok_vignette, &pipeline_pending);
+    if (st != ASX_OK) {
+        printf("  FAIL: pipeline_add_stage(stage1) returned %s\n", asx_status_str(st));
+        return 1;
+    }
+    st = asx_pipeline_add_stage(&pipeline, poll_hello, NULL);
+    if (st != ASX_OK) {
+        printf("  FAIL: pipeline_add_stage(stage2) returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_join_init(&join);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_join_init returned %s\n", asx_status_str(st));
+        return 1;
+    }
+    st = asx_join_add(&join, asx_retry_poll, &retry);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_join_add(retry) returned %s\n", asx_status_str(st));
+        return 1;
+    }
+    st = asx_join_add(&join, asx_pipeline_poll, &pipeline);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_join_add(pipeline) returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_join_poll(&join, 0);
+    if (st != ASX_E_PENDING) {
+        printf("  FAIL: first join_poll returned %s\n", asx_status_str(st));
+        return 1;
+    }
+    st = asx_join_poll(&join, 0);
+    if (st != ASX_E_PENDING) {
+        printf("  FAIL: second join_poll returned %s\n", asx_status_str(st));
+        return 1;
+    }
+    st = asx_join_poll(&join, 0);
+    if (st != ASX_OK) {
+        printf("  FAIL: final join_poll returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    printf("  join: retry_attempts=%u pipeline_stages=%u outcome=%d\n",
+           asx_retry_attempts(&retry),
+           asx_pipeline_completed_stages(&pipeline),
+           (int)asx_join_outcome(&join).severity);
+
+    st = asx_select_init(&select);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_select_init returned %s\n", asx_status_str(st));
+        return 1;
+    }
+    st = asx_select_add(&select, poll_hello, NULL);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_select_add(winner) returned %s\n", asx_status_str(st));
+        return 1;
+    }
+    st = asx_select_add(&select, poll_count_pending, &loser_polls);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_select_add(loser) returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    st = asx_select_poll(&select, 0);
+    if (st != ASX_OK) {
+        printf("  FAIL: asx_select_poll returned %s\n", asx_status_str(st));
+        return 1;
+    }
+
+    printf("  select: winner=%d loser_polls=%u drained=%u\n", asx_select_winner(&select),
+           loser_polls, select.drained);
+
+    if (asx_retry_attempts(&retry) != 3u || asx_pipeline_completed_stages(&pipeline) != 2u ||
+        asx_join_outcome(&join).severity != ASX_OUTCOME_OK || asx_select_winner(&select) != 0 ||
+        loser_polls != 1u || select.drained != 1u) {
+        printf("  FAIL: combinator orchestration produced unexpected state\n");
+        return 1;
+    }
+
+    printf("  PASS: combinator orchestration\n");
+    return 0;
+}
+
+/* -------------------------------------------------------------------
  * Main
  * ------------------------------------------------------------------- */
 int main(void) {
@@ -344,6 +484,7 @@ int main(void) {
     failures += scenario_captured_state();
     failures += scenario_quiescence_manual();
     failures += scenario_capability_wrapped_scope();
+    failures += scenario_combinator_orchestration();
 
     printf("\n=== lifecycle: %d failures ===\n", failures);
     return failures;
