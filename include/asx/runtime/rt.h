@@ -160,6 +160,13 @@ ASX_API uint32_t asx_runtime_region_count(const asx_runtime *rt);
 ASX_API uint32_t asx_runtime_task_count(const asx_runtime *rt);
 ASX_API uint32_t asx_runtime_obligation_count(const asx_runtime *rt);
 
+/* Query state for runtime-owned reactor and blocking subsystems.
+ * Returns 0 if rt is NULL or not initialized. */
+ASX_API int asx_runtime_io_driver_initialized(const asx_runtime *rt);
+ASX_API uint32_t asx_runtime_io_registration_count(const asx_runtime *rt);
+ASX_API int asx_runtime_blocking_pool_initialized(const asx_runtime *rt);
+ASX_API uint32_t asx_runtime_blocking_active_count(const asx_runtime *rt);
+
 /* Query arena capacities (compile-time constants, but useful for
  * downstream tracks to check without hardcoding). */
 ASX_API uint32_t asx_runtime_region_capacity(void);

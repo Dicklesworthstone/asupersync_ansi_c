@@ -75,7 +75,15 @@ TEST(spawn_before_init_fails) {
     asx_blocking_handle h;
     asx_blocking_pool_reset();
     asx_blocking_pool_shutdown();
+    ASSERT_FALSE(asx_blocking_pool_is_initialized());
     ASSERT_EQ(asx_spawn_blocking(return_zero, NULL, NULL, &h), ASX_E_INVALID_STATE);
+}
+
+TEST(init_state_tracks_lifecycle) {
+    if (!setup()) return;
+    ASSERT_TRUE(asx_blocking_pool_is_initialized());
+    teardown();
+    ASSERT_FALSE(asx_blocking_pool_is_initialized());
 }
 
 TEST(reinit_invalidates_old_handles) {
@@ -262,6 +270,7 @@ int main(void) {
     RUN_TEST(spawn_null_fn_fails);
     RUN_TEST(spawn_null_handle_fails);
     RUN_TEST(spawn_before_init_fails);
+    RUN_TEST(init_state_tracks_lifecycle);
     RUN_TEST(reinit_invalidates_old_handles);
     RUN_TEST(spawn_success);
     RUN_TEST(spawn_returns_result);

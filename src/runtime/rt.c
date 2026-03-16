@@ -202,6 +202,26 @@ uint32_t asx_runtime_obligation_count(const asx_runtime *rt) {
     return g_obligation_count;
 }
 
+int asx_runtime_io_driver_initialized(const asx_runtime *rt) {
+    if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0;
+    return asx_io_driver_is_initialized();
+}
+
+uint32_t asx_runtime_io_registration_count(const asx_runtime *rt) {
+    if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0u;
+    return asx_io_active_count();
+}
+
+int asx_runtime_blocking_pool_initialized(const asx_runtime *rt) {
+    if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0;
+    return asx_blocking_pool_is_initialized();
+}
+
+uint32_t asx_runtime_blocking_active_count(const asx_runtime *rt) {
+    if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0u;
+    return asx_blocking_active_count();
+}
+
 uint32_t asx_runtime_region_capacity(void) { return ASX_MAX_REGIONS; }
 
 uint32_t asx_runtime_task_capacity(void) { return ASX_MAX_TASKS; }

@@ -566,6 +566,22 @@ TEST(task_count_null_returns_zero) { ASSERT_EQ(asx_runtime_task_count(NULL), 0u)
 
 TEST(obligation_count_null_returns_zero) { ASSERT_EQ(asx_runtime_obligation_count(NULL), 0u); }
 
+TEST(io_registration_count_null_returns_zero) {
+    ASSERT_EQ(asx_runtime_io_registration_count(NULL), 0u);
+}
+
+TEST(blocking_active_count_null_returns_zero) {
+    ASSERT_EQ(asx_runtime_blocking_active_count(NULL), 0u);
+}
+
+TEST(io_driver_initialized_null_returns_false) {
+    ASSERT_FALSE(asx_runtime_io_driver_initialized(NULL));
+}
+
+TEST(blocking_pool_initialized_null_returns_false) {
+    ASSERT_FALSE(asx_runtime_blocking_pool_initialized(NULL));
+}
+
 TEST(counts_zero_after_init) {
     asx_runtime rt;
     MUST_OK(asx_runtime_init_default(&rt));
@@ -605,6 +621,49 @@ TEST(counts_uninitialized_returns_zero) {
     ASSERT_EQ(asx_runtime_region_count(&rt), 0u);
     ASSERT_EQ(asx_runtime_task_count(&rt), 0u);
     ASSERT_EQ(asx_runtime_obligation_count(&rt), 0u);
+    ASSERT_EQ(asx_runtime_io_registration_count(&rt), 0u);
+    ASSERT_EQ(asx_runtime_blocking_active_count(&rt), 0u);
+    ASSERT_FALSE(asx_runtime_io_driver_initialized(&rt));
+    ASSERT_FALSE(asx_runtime_blocking_pool_initialized(&rt));
+}
+
+TEST(runtime_subsystem_queries_track_live_state) {
+    asx_runtime rt;
+    asx_waker w;
+    asx_io_token tok;
+    asx_blocking_handle blocking;
+    uint64_t blocking_input = 5u;
+
+    ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
+
+    if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
+        ASSERT_TRUE(asx_runtime_io_driver_initialized(&rt));
+        ASSERT_EQ(asx_runtime_io_registration_count(&rt), 0u);
+        ASSERT_EQ(asx_waker_register(77, &w), ASX_OK);
+        ASSERT_EQ(asx_io_register(77, ASX_IO_READABLE, &w, &tok), ASX_OK);
+        ASSERT_EQ(asx_runtime_io_registration_count(&rt), 1u);
+        asx_io_deregister(&tok);
+        ASSERT_EQ(asx_runtime_io_registration_count(&rt), 0u);
+    } else {
+        ASSERT_FALSE(asx_runtime_io_driver_initialized(&rt));
+        ASSERT_EQ(asx_runtime_io_registration_count(&rt), 0u);
+    }
+
+    if (asx_surface_available_active(ASX_SURFACE_BLOCKING)) {
+        ASSERT_TRUE(asx_runtime_blocking_pool_initialized(&rt));
+        ASSERT_EQ(asx_runtime_blocking_active_count(&rt), 0u);
+        ASSERT_EQ(asx_spawn_blocking(add_one, &blocking_input, NULL, &blocking), ASX_OK);
+        ASSERT_EQ(asx_runtime_blocking_active_count(&rt), 0u);
+    } else {
+        ASSERT_FALSE(asx_runtime_blocking_pool_initialized(&rt));
+        ASSERT_EQ(asx_runtime_blocking_active_count(&rt), 0u);
+    }
+
+    asx_runtime_shutdown(&rt);
+    ASSERT_FALSE(asx_runtime_io_driver_initialized(&rt));
+    ASSERT_FALSE(asx_runtime_blocking_pool_initialized(&rt));
+    ASSERT_EQ(asx_runtime_io_registration_count(&rt), 0u);
+    ASSERT_EQ(asx_runtime_blocking_active_count(&rt), 0u);
 }
 
 /* ------------------------------------------------------------------ */
@@ -785,10 +844,15 @@ int main(void) {
     RUN_TEST(region_count_null_returns_zero);
     RUN_TEST(task_count_null_returns_zero);
     RUN_TEST(obligation_count_null_returns_zero);
+    RUN_TEST(io_registration_count_null_returns_zero);
+    RUN_TEST(blocking_active_count_null_returns_zero);
+    RUN_TEST(io_driver_initialized_null_returns_false);
+    RUN_TEST(blocking_pool_initialized_null_returns_false);
     RUN_TEST(counts_zero_after_init);
     RUN_TEST(counts_reflect_opened_region);
     RUN_TEST(counts_reflect_spawned_task);
     RUN_TEST(counts_uninitialized_returns_zero);
+    RUN_TEST(runtime_subsystem_queries_track_live_state);
 
     /* Capacity queries */
     RUN_TEST(region_capacity_returns_max);

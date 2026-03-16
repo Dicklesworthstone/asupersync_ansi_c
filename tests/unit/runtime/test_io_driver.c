@@ -6,8 +6,8 @@
 
 #include "../../test_harness.h"
 #include <asx/asx_config.h>
-#include <asx/runtime/io_driver.h>
 #include <asx/runtime/browser_boundary.h>
+#include <asx/runtime/io_driver.h>
 
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
@@ -89,10 +89,15 @@ TEST(register_before_init_fails) {
 TEST(register_success) {
     asx_waker w;
     asx_io_token tok;
+    int fd = -1;
+    asx_io_interest interest = 0;
     if (!setup()) return;
     MUST_OK(asx_waker_register(1, &w));
     ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_OK);
     ASSERT_EQ(asx_io_active_count(), 1u);
+    ASSERT_EQ(asx_io_get_registration(&tok, &fd, &interest), ASX_OK);
+    ASSERT_EQ(fd, 42);
+    ASSERT_EQ(interest, ASX_IO_READABLE);
     teardown();
 }
 
@@ -168,10 +173,13 @@ TEST(reinit_then_register_uses_fresh_generation) {
 TEST(set_interest_success) {
     asx_waker w;
     asx_io_token tok;
+    asx_io_interest interest = 0;
     if (!setup()) return;
     MUST_OK(asx_waker_register(1, &w));
     MUST_OK(asx_io_register(42, ASX_IO_READABLE, &w, &tok));
     ASSERT_EQ(asx_io_set_interest(&tok, ASX_IO_WRITABLE), ASX_OK);
+    ASSERT_EQ(asx_io_get_registration(&tok, NULL, &interest), ASX_OK);
+    ASSERT_EQ(interest, ASX_IO_WRITABLE);
     teardown();
 }
 
@@ -189,6 +197,33 @@ TEST(set_interest_stale_fails) {
     MUST_OK(asx_io_register(42, ASX_IO_READABLE, &w, &tok));
     asx_io_deregister(&tok);
     ASSERT_EQ(asx_io_set_interest(&tok, ASX_IO_WRITABLE), ASX_E_NOT_FOUND);
+    teardown();
+}
+
+TEST(get_registration_null_token_fails) {
+    int fd = -1;
+    ASSERT_EQ(asx_io_get_registration(NULL, &fd, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(get_registration_requires_output) {
+    asx_waker w;
+    asx_io_token tok;
+    if (!setup()) return;
+    MUST_OK(asx_waker_register(1, &w));
+    MUST_OK(asx_io_register(42, ASX_IO_READABLE, &w, &tok));
+    ASSERT_EQ(asx_io_get_registration(&tok, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    teardown();
+}
+
+TEST(get_registration_stale_token_fails) {
+    asx_waker w;
+    asx_io_token tok;
+    int fd = -1;
+    if (!setup()) return;
+    MUST_OK(asx_waker_register(1, &w));
+    MUST_OK(asx_io_register(42, ASX_IO_READABLE, &w, &tok));
+    asx_io_deregister(&tok);
+    ASSERT_EQ(asx_io_get_registration(&tok, &fd, NULL), ASX_E_NOT_FOUND);
     teardown();
 }
 
@@ -302,6 +337,14 @@ TEST(multiple_registrations) {
     teardown();
 }
 
+TEST(init_state_tracks_lifecycle) {
+    ASSERT_FALSE(asx_io_driver_is_initialized());
+    if (!setup()) return;
+    ASSERT_TRUE(asx_io_driver_is_initialized());
+    teardown();
+    ASSERT_FALSE(asx_io_driver_is_initialized());
+}
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -334,6 +377,9 @@ int main(void) {
     RUN_TEST(set_interest_success);
     RUN_TEST(set_interest_null_fails);
     RUN_TEST(set_interest_stale_fails);
+    RUN_TEST(get_registration_null_token_fails);
+    RUN_TEST(get_registration_requires_output);
+    RUN_TEST(get_registration_stale_token_fails);
 
     RUN_TEST(poll_returns_zero_ghost_reactor);
     RUN_TEST(poll_collects_ready_events_and_wakes_registrations);
@@ -341,6 +387,7 @@ int main(void) {
 
     RUN_TEST(arena_exhaustion);
     RUN_TEST(multiple_registrations);
+    RUN_TEST(init_state_tracks_lifecycle);
     RUN_TEST(init_denied_when_io_surface_unavailable);
 
     TEST_REPORT();

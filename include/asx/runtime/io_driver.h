@@ -66,6 +66,9 @@ ASX_API ASX_MUST_USE asx_status asx_io_driver_init(void);
 /* Shut down the IO driver, deregistering all tokens. */
 ASX_API void asx_io_driver_shutdown(void);
 
+/* Query whether the IO driver is initialized and accepting registrations. */
+ASX_API int asx_io_driver_is_initialized(void);
+
 /* -------------------------------------------------------------------
  * API: IO registration
  * ------------------------------------------------------------------- */
@@ -83,6 +86,13 @@ ASX_API void asx_io_deregister(asx_io_token *token);
 
 /* Update the interest mask for an existing registration. */
 ASX_API ASX_MUST_USE asx_status asx_io_set_interest(asx_io_token *token, asx_io_interest interest);
+
+/* Query the stored registration state for an existing token.
+ * Returns ASX_OK on success and fills any non-NULL outputs.
+ * Returns ASX_E_INVALID_ARGUMENT if token is NULL or all outputs are NULL.
+ * Returns ASX_E_NOT_FOUND for stale or unknown tokens. */
+ASX_API ASX_MUST_USE asx_status asx_io_get_registration(const asx_io_token *token, int *out_fd,
+                                                        asx_io_interest *out_interest);
 
 /* -------------------------------------------------------------------
  * API: IO driver poll

@@ -60,6 +60,8 @@ void asx_blocking_pool_shutdown(void) {
     g_initialized = 0;
 }
 
+int asx_blocking_pool_is_initialized(void) { return g_initialized; }
+
 void asx_blocking_pool_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_BLOCKING_TASKS; i++) {

@@ -59,6 +59,8 @@ void asx_io_driver_shutdown(void) {
     g_initialized = 0;
 }
 
+int asx_io_driver_is_initialized(void) { return g_initialized; }
+
 void asx_io_driver_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_IO_TOKENS; i++) {
@@ -134,6 +136,19 @@ asx_status asx_io_set_interest(asx_io_token *token, asx_io_interest interest) {
     if (!g_regs[token->slot].alive) return ASX_E_NOT_FOUND;
 
     g_regs[token->slot].interest = interest;
+    return ASX_OK;
+}
+
+asx_status asx_io_get_registration(const asx_io_token *token, int *out_fd,
+                                   asx_io_interest *out_interest) {
+    if (token == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (out_fd == NULL && out_interest == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (token->slot >= g_reg_count) return ASX_E_NOT_FOUND;
+    if (g_regs[token->slot].generation != token->generation) return ASX_E_NOT_FOUND;
+    if (!g_regs[token->slot].alive) return ASX_E_NOT_FOUND;
+
+    if (out_fd != NULL) *out_fd = g_regs[token->slot].fd;
+    if (out_interest != NULL) *out_interest = g_regs[token->slot].interest;
     return ASX_OK;
 }
 

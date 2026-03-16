@@ -64,6 +64,9 @@ ASX_API ASX_MUST_USE asx_status asx_blocking_pool_init(void);
 /* Shut down the blocking pool, completing all pending tasks. */
 ASX_API void asx_blocking_pool_shutdown(void);
 
+/* Query whether the blocking pool is initialized and accepting work. */
+ASX_API int asx_blocking_pool_is_initialized(void);
+
 /* -------------------------------------------------------------------
  * API: Spawn blocking work
  * ------------------------------------------------------------------- */
