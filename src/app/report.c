@@ -105,6 +105,46 @@ static const char *evidence_level_str(asx_evidence_level lev) {
     return "??";
 }
 
+static void append_json_escaped(asx_report_buf *buf, const char *str) {
+    const unsigned char *p;
+
+    if (buf == NULL) return;
+    if (str == NULL) return;
+
+    p = (const unsigned char *)str;
+    while (*p != '\0') {
+        switch (*p) {
+        case '\"': asx_report_buf_append(buf, "\\\""); break;
+        case '\\': asx_report_buf_append(buf, "\\\\"); break;
+        case '\b': asx_report_buf_append(buf, "\\b"); break;
+        case '\f': asx_report_buf_append(buf, "\\f"); break;
+        case '\n': asx_report_buf_append(buf, "\\n"); break;
+        case '\r': asx_report_buf_append(buf, "\\r"); break;
+        case '\t': asx_report_buf_append(buf, "\\t"); break;
+        default:
+            if (*p < 0x20u) {
+                static const char hex[] = "0123456789abcdef";
+                char esc[7];
+                esc[0] = '\\';
+                esc[1] = 'u';
+                esc[2] = '0';
+                esc[3] = '0';
+                esc[4] = hex[(*p >> 4) & 0x0fu];
+                esc[5] = hex[*p & 0x0fu];
+                esc[6] = '\0';
+                asx_report_buf_append(buf, esc);
+            } else {
+                char ch[2];
+                ch[0] = (char)*p;
+                ch[1] = '\0';
+                asx_report_buf_append(buf, ch);
+            }
+            break;
+        }
+        p++;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Doctor report rendering                                             */
 /* ------------------------------------------------------------------ */
@@ -153,11 +193,11 @@ asx_status asx_report_doctor_json(const asx_doctor_report *report, asx_report_bu
         const asx_doctor_check_result *c = &report->checks[i];
         if (i > 0) asx_report_buf_append(out, ",");
         asx_report_buf_append(out, "{\"name\":\"");
-        asx_report_buf_append(out, c->name);
+        append_json_escaped(out, c->name);
         asx_report_buf_append(out, "\",\"severity\":\"");
         asx_report_buf_append(out, severity_str(c->severity));
         asx_report_buf_append(out, "\",\"message\":\"");
-        asx_report_buf_append(out, c->message);
+        append_json_escaped(out, c->message);
         asx_report_buf_append(out, "\",\"value\":");
         asx_report_buf_append_u32(out, c->value);
         asx_report_buf_append(out, ",\"capacity\":");
@@ -224,11 +264,11 @@ asx_status asx_report_evidence_json(const asx_evidence_sink *sink, asx_report_bu
         const asx_evidence_entry *e = &sink->entries[i];
         if (i > 0) asx_report_buf_append(out, ",");
         asx_report_buf_append(out, "{\"source\":\"");
-        asx_report_buf_append(out, e->source ? e->source : "");
+        append_json_escaped(out, e->source ? e->source : "");
         asx_report_buf_append(out, "\",\"level\":\"");
         asx_report_buf_append(out, evidence_level_str(e->level));
         asx_report_buf_append(out, "\",\"message\":\"");
-        asx_report_buf_append(out, e->message ? e->message : "");
+        append_json_escaped(out, e->message ? e->message : "");
         asx_report_buf_append(out, "\",\"seq\":");
         asx_report_buf_append_u32(out, e->sequence);
         asx_report_buf_append(out, "}");
@@ -284,6 +324,22 @@ asx_status asx_report_inspection_text(const asx_inspection_report *report, asx_r
     asx_report_buf_append_u32(out, report->obligations.capacity);
     asx_report_buf_append(out, " (peak ");
     asx_report_buf_append_u32(out, report->obligations.peak_count);
+    asx_report_buf_append(out, ")");
+
+    asx_report_buf_append(out, "\n  io_driver:   ");
+    asx_report_buf_append_u32(out, report->io_driver.active_count);
+    asx_report_buf_append(out, "/");
+    asx_report_buf_append_u32(out, report->io_driver.capacity);
+    asx_report_buf_append(out, " (peak ");
+    asx_report_buf_append_u32(out, report->io_driver.peak_count);
+    asx_report_buf_append(out, ")");
+
+    asx_report_buf_append(out, "\n  blocking:    ");
+    asx_report_buf_append_u32(out, report->blocking.active_count);
+    asx_report_buf_append(out, "/");
+    asx_report_buf_append_u32(out, report->blocking.capacity);
+    asx_report_buf_append(out, " (peak ");
+    asx_report_buf_append_u32(out, report->blocking.peak_count);
     asx_report_buf_append(out, ")");
 
     asx_report_buf_append(out, "\n  trace:       ");

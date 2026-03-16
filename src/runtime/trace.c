@@ -274,7 +274,15 @@ asx_status asx_snapshot_capture(asx_snapshot_buffer *out) {
     out->len = 0;
     out->data[0] = '\0';
 
-    snap_str(out, "{\"regions\":[");
+    snap_str(out, "{\"io_driver_initialized\":");
+    snap_u32(out, (uint32_t)snap.io_driver_initialized);
+    snap_str(out, ",\"io_registration_count\":");
+    snap_u32(out, snap.io_registration_count);
+    snap_str(out, ",\"blocking_pool_initialized\":");
+    snap_u32(out, (uint32_t)snap.blocking_pool_initialized);
+    snap_str(out, ",\"blocking_active_count\":");
+    snap_u32(out, snap.blocking_active_count);
+    snap_str(out, ",\"regions\":[");
     first = 1;
     for (i = 0; i < snap.region_count; i++) {
         const asx_snapshot_region *region = &snap.regions[i];

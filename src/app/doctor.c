@@ -5,6 +5,9 @@
  */
 
 #include <asx/app/doctor.h>
+#include <asx/runtime/browser_boundary.h>
+#include <asx/runtime/blocking.h>
+#include <asx/runtime/io_driver.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <string.h>
@@ -107,6 +110,68 @@ static void check_obligation_utilization(const asx_runtime *rt, asx_doctor_repor
               count, cap);
 }
 
+static void check_io_driver_state(const asx_runtime *rt, asx_doctor_report *r) {
+    uint32_t count = asx_runtime_io_registration_count(rt);
+    uint32_t cap = ASX_MAX_IO_TOKENS;
+    asx_doctor_severity sev;
+    const char *msg;
+
+    if (!asx_runtime_is_initialized(rt)) {
+        sev = ASX_DOCTOR_FAIL;
+        msg = "runtime not initialized";
+        count = 0u;
+        cap = 1u;
+    } else if (!asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
+        sev = ASX_DOCTOR_OK;
+        msg = "io driver inactive or unsupported";
+    } else if (!asx_runtime_io_driver_initialized(rt)) {
+        sev = ASX_DOCTOR_FAIL;
+        msg = "io driver not initialized";
+    } else if (count >= cap) {
+        sev = ASX_DOCTOR_FAIL;
+        msg = "io registration arena exhausted";
+    } else if (count > cap * 3u / 4u) {
+        sev = ASX_DOCTOR_WARN;
+        msg = "io registration arena >75% utilized";
+    } else {
+        sev = ASX_DOCTOR_OK;
+        msg = "io driver initialized";
+    }
+
+    add_check(r, "io_driver", sev, msg, count, cap);
+}
+
+static void check_blocking_pool_state(const asx_runtime *rt, asx_doctor_report *r) {
+    uint32_t count = asx_runtime_blocking_active_count(rt);
+    uint32_t cap = ASX_MAX_BLOCKING_TASKS;
+    asx_doctor_severity sev;
+    const char *msg;
+
+    if (!asx_runtime_is_initialized(rt)) {
+        sev = ASX_DOCTOR_FAIL;
+        msg = "runtime not initialized";
+        count = 0u;
+        cap = 1u;
+    } else if (!asx_surface_available_active(ASX_SURFACE_BLOCKING)) {
+        sev = ASX_DOCTOR_OK;
+        msg = "blocking pool inactive or unsupported";
+    } else if (!asx_runtime_blocking_pool_initialized(rt)) {
+        sev = ASX_DOCTOR_FAIL;
+        msg = "blocking pool not initialized";
+    } else if (count >= cap) {
+        sev = ASX_DOCTOR_FAIL;
+        msg = "blocking task arena exhausted";
+    } else if (count > cap * 3u / 4u) {
+        sev = ASX_DOCTOR_WARN;
+        msg = "blocking task arena >75% utilized";
+    } else {
+        sev = ASX_DOCTOR_OK;
+        msg = "blocking pool initialized";
+    }
+
+    add_check(r, "blocking", sev, msg, count, cap);
+}
+
 static void check_safety_profile(const asx_runtime *rt, asx_doctor_report *r) {
     asx_safety_profile prof = asx_runtime_safety_profile(rt);
 
@@ -140,6 +205,8 @@ asx_status asx_doctor_run(const asx_runtime *rt, asx_doctor_report *report) {
     check_region_utilization(rt, report);
     check_task_utilization(rt, report);
     check_obligation_utilization(rt, report);
+    check_io_driver_state(rt, report);
+    check_blocking_pool_state(rt, report);
     check_safety_profile(rt, report);
     check_containment_policy(rt, report);
 

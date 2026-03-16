@@ -59,6 +59,10 @@ enum {
 };
 
 typedef struct {
+    int io_driver_initialized;
+    uint32_t io_registration_count;
+    int blocking_pool_initialized;
+    uint32_t blocking_active_count;
     uint32_t region_count;
     asx_snapshot_region regions[ASX_SNAPSHOT_MAX_REGIONS];
     uint32_t task_count;

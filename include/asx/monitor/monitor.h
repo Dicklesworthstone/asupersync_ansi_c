@@ -20,11 +20,15 @@ extern "C" {
 #define ASX_MONITOR_GHOSTS_PRESENT (1u << 3)
 #define ASX_MONITOR_DEADLINE_MISS_RATE (1u << 4)
 #define ASX_MONITOR_WATCHDOG_VIOLATIONS (1u << 5)
+#define ASX_MONITOR_IO_HIGH (1u << 6)
+#define ASX_MONITOR_BLOCKING_HIGH (1u << 7)
 
 typedef struct {
     uint32_t max_region_utilization_pct;
     uint32_t max_task_utilization_pct;
     uint32_t max_obligation_utilization_pct;
+    uint32_t max_io_utilization_pct;
+    uint32_t max_blocking_utilization_pct;
     uint32_t max_ghost_violations;
     uint32_t max_deadline_miss_rate_pct100;
     uint32_t max_watchdog_violations;

@@ -72,7 +72,10 @@ asx_runtime_builder_set_max_cancel_chain_depth(asx_runtime_builder *builder, uin
 ASX_API ASX_MUST_USE asx_status
 asx_runtime_builder_set_max_cancel_chain_memory(asx_runtime_builder *builder, uint32_t bytes);
 
-/* Hook setters. */
+/* Hook setters.
+ *
+ * Each setter validates the resulting full hook table atomically. Rejected
+ * hook families leave the builder unchanged. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_hooks(asx_runtime_builder *builder,
                                                               const asx_runtime_hooks *hooks);
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_allocator_hooks(
@@ -103,7 +106,9 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_builder_validate(const asx_runtime_b
  *   MAX_CANCEL_CHAIN_MEMORY=<u32>
  *
  * Unset keys leave the builder unchanged. Parsing is atomic: malformed values
- * return ASX_E_INVALID_ARGUMENT and preserve the original builder state. */
+ * return ASX_E_INVALID_ARGUMENT and preserve the original builder state.
+ * Preset overrides update the builder's config/preset while preserving any
+ * hook families already configured on the builder. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_apply_env(asx_runtime_builder *builder,
                                                               const char *prefix);
 

@@ -51,6 +51,14 @@ TEST(local_scope_init_null_scope_fails) {
     teardown();
 }
 
+TEST(local_scope_init_null_cx_fails) {
+    asx_local_scope scope;
+    setup();
+    ASSERT_EQ(asx_local_scope_init(&scope, g_rid, NULL, asx_budget_infinite()),
+              ASX_E_INVALID_ARGUMENT);
+    teardown();
+}
+
 TEST(local_scope_init_success) {
     asx_local_scope scope;
     setup();
@@ -68,6 +76,28 @@ TEST(local_scope_spawn_success) {
     ASSERT_EQ(asx_local_scope_spawn(&scope, poll_immediate_ok, NULL, &handle), ASX_OK);
     ASSERT_NE(asx_local_task_handle_task_id(&handle), ASX_INVALID_ID);
     ASSERT_EQ(asx_local_scope_spawned_count(&scope), 1u);
+    teardown();
+}
+
+TEST(local_scope_spawn_null_scope_fails) {
+    asx_local_task_handle handle;
+    ASSERT_EQ(asx_local_scope_spawn(NULL, poll_immediate_ok, NULL, &handle), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(local_scope_spawn_null_poll_fails) {
+    asx_local_scope scope;
+    asx_local_task_handle handle;
+    setup();
+    MUST_OK(asx_local_scope_init(&scope, g_rid, &g_cx, asx_budget_infinite()));
+    ASSERT_EQ(asx_local_scope_spawn(&scope, NULL, NULL, &handle), ASX_E_INVALID_ARGUMENT);
+    teardown();
+}
+
+TEST(local_scope_spawn_null_handle_fails) {
+    asx_local_scope scope;
+    setup();
+    MUST_OK(asx_local_scope_init(&scope, g_rid, &g_cx, asx_budget_infinite()));
+    ASSERT_EQ(asx_local_scope_spawn(&scope, poll_immediate_ok, NULL, NULL), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
 
@@ -101,6 +131,20 @@ TEST(local_scope_run_and_join) {
     teardown();
 }
 
+TEST(local_scope_drain_completes_pending_task) {
+    asx_local_scope scope;
+    asx_local_task_handle handle;
+    asx_outcome out;
+    setup();
+    MUST_OK(asx_local_scope_init(&scope, g_rid, &g_cx, asx_budget_from_polls(8u)));
+    MUST_OK(asx_local_scope_spawn(&scope, poll_count_twice, NULL, &handle));
+    ASSERT_EQ(asx_local_scope_drain(&scope), ASX_OK);
+    ASSERT_TRUE(asx_local_task_handle_is_finished(&handle));
+    ASSERT_EQ(asx_local_task_handle_try_join(&handle, &out), ASX_OK);
+    ASSERT_EQ(asx_local_task_handle_join_error(&out), ASX_JOIN_CANCELLED);
+    teardown();
+}
+
 TEST(local_scope_spawn_captured_success) {
     asx_local_scope scope;
     asx_local_task_handle handle;
@@ -118,6 +162,11 @@ TEST(local_handle_abort_null_fails) {
     ASSERT_EQ(asx_local_task_handle_abort(NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(local_handle_abort_with_kind_null_fails) {
+    ASSERT_EQ(asx_local_task_handle_abort_with_kind(NULL, ASX_CANCEL_USER),
+              ASX_E_INVALID_ARGUMENT);
+}
+
 TEST(local_handle_try_join_null_fails) {
     asx_local_task_handle handle;
     memset(&handle, 0, sizeof(handle));
@@ -125,16 +174,37 @@ TEST(local_handle_try_join_null_fails) {
     ASSERT_EQ(asx_local_task_handle_try_join(&handle, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(local_handle_query_nulls_are_safe) {
+    ASSERT_FALSE(asx_local_task_handle_is_finished(NULL));
+    ASSERT_EQ(asx_local_task_handle_task_id(NULL), ASX_INVALID_ID);
+    ASSERT_EQ(asx_local_task_handle_join_error(NULL), ASX_JOIN_OK);
+}
+
+TEST(local_scope_query_nulls_are_safe) {
+    ASSERT_EQ(asx_local_scope_region(NULL), ASX_INVALID_ID);
+    ASSERT_EQ(asx_local_scope_spawned_count(NULL), 0u);
+    ASSERT_EQ(asx_local_scope_run(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_local_scope_drain(NULL), ASX_E_INVALID_ARGUMENT);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_local ===\n");
     RUN_TEST(local_scope_init_null_scope_fails);
+    RUN_TEST(local_scope_init_null_cx_fails);
     RUN_TEST(local_scope_init_success);
     RUN_TEST(local_scope_spawn_success);
+    RUN_TEST(local_scope_spawn_null_scope_fails);
+    RUN_TEST(local_scope_spawn_null_poll_fails);
+    RUN_TEST(local_scope_spawn_null_handle_fails);
     RUN_TEST(local_scope_spawn_with_cx_binds_child);
     RUN_TEST(local_scope_run_and_join);
+    RUN_TEST(local_scope_drain_completes_pending_task);
     RUN_TEST(local_scope_spawn_captured_success);
     RUN_TEST(local_handle_abort_null_fails);
+    RUN_TEST(local_handle_abort_with_kind_null_fails);
     RUN_TEST(local_handle_try_join_null_fails);
+    RUN_TEST(local_handle_query_nulls_are_safe);
+    RUN_TEST(local_scope_query_nulls_are_safe);
     TEST_REPORT();
     return test_failures;
 }

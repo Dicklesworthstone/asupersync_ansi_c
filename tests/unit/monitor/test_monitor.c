@@ -6,6 +6,8 @@
 
 #include <asx/monitor/monitor.h>
 #include <asx/observability/observability.h>
+#include <asx/runtime/browser_boundary.h>
+#include <asx/runtime/io_driver.h>
 #include <asx/runtime/runtime.h>
 #include <stdio.h>
 #include <string.h>
@@ -73,6 +75,34 @@ static void test_monitor_watchdog_trigger(void) {
     asx_runtime_shutdown(&rt);
 }
 
+static void test_monitor_io_threshold_trigger(void) {
+    asx_runtime rt;
+    asx_monitor_policy policy;
+    asx_monitor_report report;
+    asx_evidence_sink sink;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    asx_monitor_policy_init_default(&policy);
+    policy.max_io_utilization_pct = 0u;
+
+    if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
+        asx_waker w;
+        asx_io_token tok;
+        MUST_OK(asx_waker_register(88u, &w));
+        MUST_OK(asx_io_register(88, ASX_IO_READABLE, &w, &tok));
+        MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
+        ASSERT((report.triggered_mask & ASX_MONITOR_IO_HIGH) != 0u, "io mask");
+        ASSERT(report.verdict == ASX_EVIDENCE_WARN, "io threshold warns");
+        ASSERT(strcmp(sink.entries[0].source, "monitor:io_driver") == 0, "io evidence source");
+        asx_io_deregister(&tok);
+    } else {
+        MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
+        ASSERT((report.triggered_mask & ASX_MONITOR_IO_HIGH) == 0u, "no io mask when unsupported");
+    }
+
+    asx_runtime_shutdown(&rt);
+}
+
 static void test_observability_capture(void) {
     asx_runtime rt;
     asx_evidence_sink sink;
@@ -85,6 +115,8 @@ static void test_observability_capture(void) {
 
     ASSERT(snapshot.evidence.verdict == ASX_EVIDENCE_WARN, "snapshot verdict");
     ASSERT(snapshot.trace_digest == snapshot.inspection.trace.digest, "trace digest mirrored");
+    ASSERT(snapshot.inspection.io_driver.capacity > 0u, "io capacity mirrored");
+    ASSERT(snapshot.inspection.blocking.capacity > 0u, "blocking capacity mirrored");
     asx_runtime_shutdown(&rt);
 }
 
@@ -93,6 +125,7 @@ int main(void) {
 
     RUN(test_monitor_healthy);
     RUN(test_monitor_watchdog_trigger);
+    RUN(test_monitor_io_threshold_trigger);
     RUN(test_observability_capture);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);

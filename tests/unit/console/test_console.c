@@ -44,6 +44,8 @@ static void test_console_run_doctor_text(void) {
     MUST_OK(asx_console_run_doctor(&rt, ASX_CONSOLE_FORMAT_TEXT, &out));
 
     ASSERT(strstr(asx_report_buf_cstr(&out), "Overall: OK") != NULL, "doctor text rendered");
+    ASSERT(strstr(asx_report_buf_cstr(&out), "io_driver") != NULL, "io driver rendered");
+    ASSERT(strstr(asx_report_buf_cstr(&out), "blocking") != NULL, "blocking rendered");
     asx_runtime_shutdown(&rt);
 }
 
@@ -55,6 +57,34 @@ static void test_console_run_doctor_json(void) {
     MUST_OK(asx_console_run_doctor(&rt, ASX_CONSOLE_FORMAT_JSON, &out));
 
     ASSERT(strstr(asx_report_buf_cstr(&out), "\"overall\":\"OK\"") != NULL, "doctor json rendered");
+    ASSERT(strstr(asx_report_buf_cstr(&out), "\"name\":\"io_driver\"") != NULL,
+           "io driver json rendered");
+    ASSERT(strstr(asx_report_buf_cstr(&out), "\"name\":\"blocking\"") != NULL,
+           "blocking json rendered");
+    asx_runtime_shutdown(&rt);
+}
+
+static void test_console_run_inspection_text(void) {
+    asx_runtime rt;
+    asx_report_buf out;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    MUST_OK(asx_console_run_inspection(&rt, ASX_CONSOLE_FORMAT_TEXT, &out));
+
+    ASSERT(strstr(asx_report_buf_cstr(&out), "Runtime Inspection:") != NULL,
+           "inspection text rendered");
+    ASSERT(strstr(asx_report_buf_cstr(&out), "io_driver") != NULL, "inspection io rendered");
+    ASSERT(strstr(asx_report_buf_cstr(&out), "blocking") != NULL, "inspection blocking rendered");
+    asx_runtime_shutdown(&rt);
+}
+
+static void test_console_run_inspection_json_rejected(void) {
+    asx_runtime rt;
+    asx_report_buf out;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT(asx_console_run_inspection(&rt, ASX_CONSOLE_FORMAT_JSON, &out) == ASX_E_INVALID_ARGUMENT,
+           "inspection json rejected");
     asx_runtime_shutdown(&rt);
 }
 
@@ -79,6 +109,9 @@ static void test_console_null_args(void) {
 
     ASSERT(asx_console_run_doctor(NULL, ASX_CONSOLE_FORMAT_TEXT, &out) == ASX_E_INVALID_ARGUMENT,
            "doctor null runtime rejected");
+    ASSERT(asx_console_run_inspection(NULL, ASX_CONSOLE_FORMAT_TEXT, &out) ==
+               ASX_E_INVALID_ARGUMENT,
+           "inspection null runtime rejected");
     ASSERT(asx_console_emit_log_record(ASX_LOG_INFO, NULL, "x", &out) == ASX_E_INVALID_ARGUMENT,
            "null source rejected");
 }
@@ -88,6 +121,8 @@ int main(void) {
 
     RUN(test_console_run_doctor_text);
     RUN(test_console_run_doctor_json);
+    RUN(test_console_run_inspection_text);
+    RUN(test_console_run_inspection_json_rejected);
     RUN(test_console_emit_log_record);
     RUN(test_public_test_log_header_compiles_and_noops);
     RUN(test_console_null_args);

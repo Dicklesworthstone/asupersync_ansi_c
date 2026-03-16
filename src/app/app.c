@@ -245,6 +245,7 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app,
     int32_t process_exit_code = 0;
     uint32_t signal_count = 0;
     asx_doctor_report doctor;
+    asx_inspection_report inspection;
 
     if (app == NULL || app_cx == NULL || main_fn == NULL) return ASX_EXIT_ERROR;
     if (!app->initialized) return ASX_EXIT_INIT_FAILED;
@@ -384,6 +385,15 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app,
             if (doctor_st != ASX_OK) {
                 asx_app_note_cleanup_status(report, doctor_st);
                 asx_report_buf_append(out_summary, "  <doctor render failed>\n");
+            }
+        }
+        if (asx_inspect(&app->runtime, &inspection) == ASX_OK) {
+            asx_status inspection_st;
+            asx_report_buf_append(out_summary, "\n");
+            inspection_st = asx_report_inspection_text(&inspection, out_summary);
+            if (inspection_st != ASX_OK) {
+                asx_app_note_cleanup_status(report, inspection_st);
+                asx_report_buf_append(out_summary, "  <inspection render failed>\n");
             }
         }
     }

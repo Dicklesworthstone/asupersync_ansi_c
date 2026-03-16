@@ -46,7 +46,8 @@ typedef struct {
 /* Take a snapshot of the current lab state. */
 ASX_API ASX_MUST_USE asx_status asx_snapshot_take(const asx_lab *lab, asx_snapshot_id *out);
 
-/* Restore a lab to a previously saved snapshot. */
+/* Restore a lab to a previously saved snapshot, including rebuilding the
+ * embedded deterministic runtime hooks before reinstating saved lab state. */
 ASX_API asx_status asx_snapshot_restore(asx_lab *lab, asx_snapshot_id id);
 
 /* Discard a snapshot. */

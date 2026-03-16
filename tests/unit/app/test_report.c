@@ -127,6 +127,8 @@ static void test_doctor_text_healthy(void) {
     /* Should contain OK for runtime */
     ASSERT(strstr(asx_report_buf_cstr(&buf), "[OK]") != NULL, "contains OK");
     ASSERT(strstr(asx_report_buf_cstr(&buf), "runtime") != NULL, "mentions runtime");
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "io_driver") != NULL, "mentions io driver");
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "blocking") != NULL, "mentions blocking");
     ASSERT(strstr(asx_report_buf_cstr(&buf), "Overall: OK") != NULL, "overall OK");
 
     asx_runtime_shutdown(&rt);
@@ -158,9 +160,35 @@ static void test_doctor_json_healthy(void) {
 
     /* Basic JSON structure */
     ASSERT(strstr(asx_report_buf_cstr(&buf), "{\"checks\":[") != NULL, "starts with checks array");
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "\"name\":\"io_driver\"") != NULL,
+           "io driver in JSON");
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "\"name\":\"blocking\"") != NULL,
+           "blocking in JSON");
     ASSERT(strstr(asx_report_buf_cstr(&buf), "\"overall\":\"OK\"") != NULL, "overall OK in JSON");
 
     asx_runtime_shutdown(&rt);
+}
+
+static void test_doctor_json_escapes_strings(void) {
+    asx_doctor_report doctor;
+    asx_report_buf buf;
+
+    memset(&doctor, 0, sizeof(doctor));
+    doctor.check_count = 1u;
+    doctor.pass_count = 1u;
+    doctor.checks[0].severity = ASX_DOCTOR_OK;
+    doctor.checks[0].name = "clock\"path\\A";
+    doctor.checks[0].message = "line1\nline2\tready";
+    doctor.checks[0].value = 1u;
+    doctor.checks[0].capacity = 2u;
+
+    asx_report_buf_init(&buf);
+    MUST_OK(asx_report_doctor_json(&doctor, &buf));
+
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "\"name\":\"clock\\\"path\\\\A\"") != NULL,
+           "doctor name escaped");
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "\"message\":\"line1\\nline2\\tready\"") != NULL,
+           "doctor message escaped");
 }
 
 static void test_doctor_render_null_args(void) {
@@ -207,6 +235,23 @@ static void test_evidence_json(void) {
     ASSERT(strstr(asx_report_buf_cstr(&buf), "\"verdict\":\"FAIL\"") != NULL, "verdict FAIL");
 }
 
+static void test_evidence_json_escapes_strings(void) {
+    asx_evidence_sink sink;
+    asx_report_buf buf;
+
+    asx_evidence_sink_init(&sink);
+    MUST_OK(asx_evidence_record(&sink, "obs\"core\\pipe", ASX_EVIDENCE_WARN,
+                                "bad\tline\nnext", 0));
+
+    asx_report_buf_init(&buf);
+    MUST_OK(asx_report_evidence_json(&sink, &buf));
+
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "\"source\":\"obs\\\"core\\\\pipe\"") != NULL,
+           "evidence source escaped");
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "\"message\":\"bad\\tline\\nnext\"") != NULL,
+           "evidence message escaped");
+}
+
 static void test_evidence_render_null_args(void) {
     asx_evidence_sink sink;
     asx_report_buf buf;
@@ -232,6 +277,8 @@ static void test_inspection_text(void) {
 
     ASSERT(strstr(asx_report_buf_cstr(&buf), "initialized: yes") != NULL, "shows initialized");
     ASSERT(strstr(asx_report_buf_cstr(&buf), "regions:") != NULL, "shows regions");
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "io_driver:") != NULL, "shows io driver");
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "blocking:") != NULL, "shows blocking");
     ASSERT(strstr(asx_report_buf_cstr(&buf), "trace:") != NULL, "shows trace");
 
     asx_runtime_shutdown(&rt);
@@ -428,11 +475,13 @@ int main(void) {
     RUN(test_doctor_text_healthy);
     RUN(test_doctor_text_failing);
     RUN(test_doctor_json_healthy);
+    RUN(test_doctor_json_escapes_strings);
     RUN(test_doctor_render_null_args);
 
     /* Evidence rendering */
     RUN(test_evidence_text);
     RUN(test_evidence_json);
+    RUN(test_evidence_json_escapes_strings);
     RUN(test_evidence_render_null_args);
 
     /* Inspection rendering */

@@ -300,18 +300,25 @@ TEST(snapshot_capture_with_region) {
 TEST(snapshot_capture_uses_runtime_snapshot_entities) {
     asx_snapshot_buffer legacy;
     asx_runtime_snapshot typed;
+    asx_runtime rt;
+    asx_waker w;
+    asx_io_token tok;
     asx_region_id rid;
     asx_task_id tid;
     asx_obligation_id oid;
     char needle[64];
 
-    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
     asx_ghost_reset();
     asx_trace_reset();
+    ASSERT_EQ(asx_waker_register(77, &w), ASX_OK);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    if (asx_io_driver_is_initialized()) {
+        ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_OK);
+    }
 
     ASSERT_EQ(asx_runtime_snapshot_capture(&typed), ASX_OK);
     ASSERT_EQ(typed.region_count, (uint32_t)1);
@@ -329,6 +336,21 @@ TEST(snapshot_capture_uses_runtime_snapshot_entities) {
     ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
     snprintf(needle, sizeof(needle), "\"state\":%u", (unsigned)typed.obligations[0].state);
     ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
+    snprintf(needle, sizeof(needle), "\"io_driver_initialized\":%u",
+             (unsigned)typed.io_driver_initialized);
+    ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
+    snprintf(needle, sizeof(needle), "\"io_registration_count\":%u",
+             (unsigned)typed.io_registration_count);
+    ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
+    snprintf(needle, sizeof(needle), "\"blocking_pool_initialized\":%u",
+             (unsigned)typed.blocking_pool_initialized);
+    ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
+    snprintf(needle, sizeof(needle), "\"blocking_active_count\":%u",
+             (unsigned)typed.blocking_active_count);
+    ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
+
+    if (asx_io_driver_is_initialized()) { asx_io_deregister(&tok); }
+    asx_runtime_shutdown(&rt);
 }
 
 TEST(snapshot_digest_deterministic) {

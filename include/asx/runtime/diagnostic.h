@@ -88,6 +88,8 @@ typedef struct {
     asx_subsystem_gauge regions;
     asx_subsystem_gauge tasks;
     asx_subsystem_gauge obligations;
+    asx_subsystem_gauge io_driver;
+    asx_subsystem_gauge blocking;
 
     /* Subsystem gauges */
     asx_trace_gauge trace;

@@ -4,7 +4,7 @@
  * Provides structured diagnostic inspection of the runtime:
  *   - Health checks for runtime subsystems
  *   - Structured report with pass/warn/fail classification
- *   - Arena utilization and capacity queries
+ *   - Arena utilization, runtime-owned IO/blocking state, and capacity queries
  *
  * SPDX-License-Identifier: MIT
  */
@@ -61,7 +61,8 @@ typedef struct {
 
 /* Run all diagnostic checks and populate the report.
  * Checks include: runtime initialized, region/task/obligation
- * utilization, safety profile, containment policy. */
+ * utilization, runtime-owned IO driver and blocking-pool state,
+ * safety profile, and containment policy. */
 ASX_API ASX_MUST_USE asx_status asx_doctor_run(const asx_runtime *rt, asx_doctor_report *report);
 
 /* Check if the report indicates a healthy runtime (no FAILs). */

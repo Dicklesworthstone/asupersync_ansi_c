@@ -11,6 +11,8 @@ void asx_monitor_policy_init_default(asx_monitor_policy *policy) {
     policy->max_region_utilization_pct = 75u;
     policy->max_task_utilization_pct = 75u;
     policy->max_obligation_utilization_pct = 75u;
+    policy->max_io_utilization_pct = 75u;
+    policy->max_blocking_utilization_pct = 75u;
     policy->max_ghost_violations = 0u;
     policy->max_deadline_miss_rate_pct100 = 100u;
     policy->max_watchdog_violations = 0u;
@@ -61,6 +63,22 @@ asx_status asx_monitor_evaluate(const asx_runtime *rt, const asx_monitor_policy 
         out->triggered_mask |= ASX_MONITOR_OBLIGATIONS_HIGH;
         st = asx_evidence_record(sink, "monitor:obligations", ASX_EVIDENCE_WARN,
                                  "obligation utilization crossed threshold", 0);
+        if (st != ASX_OK) return st;
+    }
+
+    pct = utilization_pct(out->inspection.io_driver.active_count, out->inspection.io_driver.capacity);
+    if (pct > policy->max_io_utilization_pct) {
+        out->triggered_mask |= ASX_MONITOR_IO_HIGH;
+        st = asx_evidence_record(sink, "monitor:io_driver", ASX_EVIDENCE_WARN,
+                                 "io registration utilization crossed threshold", 0);
+        if (st != ASX_OK) return st;
+    }
+
+    pct = utilization_pct(out->inspection.blocking.active_count, out->inspection.blocking.capacity);
+    if (pct > policy->max_blocking_utilization_pct) {
+        out->triggered_mask |= ASX_MONITOR_BLOCKING_HIGH;
+        st = asx_evidence_record(sink, "monitor:blocking", ASX_EVIDENCE_WARN,
+                                 "blocking utilization crossed threshold", 0);
         if (st != ASX_OK) return st;
     }
 

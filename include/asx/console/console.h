@@ -26,6 +26,10 @@ ASX_API ASX_MUST_USE asx_status asx_console_render_doctor(const asx_doctor_repor
                                                           asx_console_format format,
                                                           asx_report_buf *out);
 
+ASX_API ASX_MUST_USE asx_status asx_console_render_inspection(const asx_inspection_report *report,
+                                                              asx_console_format format,
+                                                              asx_report_buf *out);
+
 ASX_API ASX_MUST_USE asx_status asx_console_render_evidence(const asx_evidence_sink *sink,
                                                             asx_console_format format,
                                                             asx_report_buf *out);
@@ -33,6 +37,10 @@ ASX_API ASX_MUST_USE asx_status asx_console_render_evidence(const asx_evidence_s
 ASX_API ASX_MUST_USE asx_status asx_console_run_doctor(const asx_runtime *rt,
                                                        asx_console_format format,
                                                        asx_report_buf *out);
+
+ASX_API ASX_MUST_USE asx_status asx_console_run_inspection(const asx_runtime *rt,
+                                                           asx_console_format format,
+                                                           asx_report_buf *out);
 
 ASX_API ASX_MUST_USE asx_status asx_console_emit_log_record(asx_log_level level,
                                                             const char *source,

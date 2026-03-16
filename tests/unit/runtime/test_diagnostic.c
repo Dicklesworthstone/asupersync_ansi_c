@@ -6,7 +6,10 @@
  */
 
 #include <asx/core/budget.h>
+#include <asx/runtime/blocking.h>
+#include <asx/runtime/browser_boundary.h>
 #include <asx/runtime/diagnostic.h>
+#include <asx/runtime/io_driver.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
@@ -153,8 +156,12 @@ static void test_inspect_initialized(void) {
     ASSERT(rpt.regions.capacity == ASX_MAX_REGIONS, "region capacity");
     ASSERT(rpt.tasks.capacity == ASX_MAX_TASKS, "task capacity");
     ASSERT(rpt.obligations.capacity == ASX_MAX_OBLIGATIONS, "obligation capacity");
+    ASSERT(rpt.io_driver.capacity == ASX_MAX_IO_TOKENS, "io capacity");
+    ASSERT(rpt.blocking.capacity == ASX_MAX_BLOCKING_TASKS, "blocking capacity");
     ASSERT(rpt.trace.capacity == ASX_TRACE_CAPACITY, "trace capacity");
     ASSERT(!rpt.any_poisoned, "no poisoned regions");
+    ASSERT(rpt.io_driver.active_count == 0, "io starts empty");
+    ASSERT(rpt.blocking.active_count == 0, "blocking starts empty");
 
     asx_runtime_shutdown(&rt);
 }
@@ -163,14 +170,26 @@ static void test_inspect_with_entities(void) {
     asx_runtime rt;
     asx_inspection_report rpt;
     asx_region_id region;
+    asx_waker waker;
+    asx_io_token tok;
 
     MUST_OK(asx_runtime_init_default(&rt));
     MUST_OK(asx_region_open(&region));
+    if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
+        MUST_OK(asx_waker_register(55, &waker));
+        MUST_OK(asx_io_register(55, ASX_IO_READABLE, &waker, &tok));
+    }
 
     MUST_OK(asx_inspect(&rt, &rpt));
     /* At least one region alive (the one we opened + possibly the runtime's) */
     ASSERT(rpt.regions.active_count >= 1, "at least 1 active region");
     ASSERT(rpt.trace.event_count > 0, "trace events recorded");
+    if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
+        ASSERT(rpt.io_driver.active_count == 1, "io registration counted");
+        asx_io_deregister(&tok);
+    } else {
+        ASSERT(rpt.io_driver.active_count == 0, "io inactive when unsupported");
+    }
 
     asx_runtime_shutdown(&rt);
 }
@@ -190,6 +209,8 @@ static void test_inspect_uninitialized(void) {
     memset(&rt, 0, sizeof(rt));
     MUST_OK(asx_inspect(&rt, &rpt));
     ASSERT(!rpt.initialized, "not initialized");
+    ASSERT(rpt.io_driver.active_count == 0, "io zero uninitialized");
+    ASSERT(rpt.blocking.active_count == 0, "blocking zero uninitialized");
 }
 
 /* ================================================================== */
@@ -301,13 +322,15 @@ static void test_inspect_to_evidence_healthy(void) {
     MUST_OK(asx_inspect_to_evidence(&rt, &sink));
 
     /* Should have multiple entries */
-    ASSERT(sink.count >= 4, "at least 4 evidence entries");
+    ASSERT(sink.count >= 6, "at least 6 evidence entries");
     ASSERT(sink.fail_count == 0, "no failures in healthy runtime");
     ASSERT(asx_evidence_verdict(&sink) == ASX_EVIDENCE_PASS, "healthy verdict");
 
     /* First entry should be runtime check */
     ASSERT(strcmp(sink.entries[0].source, "inspect:runtime") == 0, "first entry is runtime");
     ASSERT(sink.entries[0].level == ASX_EVIDENCE_PASS, "runtime passes");
+    ASSERT(strcmp(sink.entries[4].source, "inspect:io") == 0, "io entry present");
+    ASSERT(strcmp(sink.entries[5].source, "inspect:blocking") == 0, "blocking entry present");
 
     asx_runtime_shutdown(&rt);
 }

@@ -9,7 +9,9 @@
  */
 
 #include "runtime_internal.h"
+#include <asx/runtime/blocking.h>
 #include <asx/runtime/event.h>
+#include <asx/runtime/io_driver.h>
 #include <asx/runtime/snapshot.h>
 #include <asx/runtime/trace.h>
 #include <string.h>
@@ -37,11 +39,16 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
 
     asx_runtime_snapshot_init(snap);
 
+    snap->io_driver_initialized = asx_io_driver_is_initialized();
+    snap->io_registration_count = asx_io_active_count();
+    snap->blocking_pool_initialized = asx_blocking_pool_is_initialized();
+    snap->blocking_active_count = asx_blocking_active_count();
+
     /* Capture live regions */
     for (i = 0; i < ASX_MAX_REGIONS && ri < ASX_SNAPSHOT_MAX_REGIONS; i++) {
         if (!g_regions[i].alive) continue;
         snap->regions[ri].id =
-            asx_handle_pack(ASX_TYPE_REGION, 0,
+            asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
                             asx_handle_pack_index(g_regions[i].generation, (uint16_t)i));
         snap->regions[ri].state = g_regions[i].state;
         snap->regions[ri].task_count = g_regions[i].task_count;
@@ -55,7 +62,7 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
     for (i = 0; i < ASX_MAX_TASKS && ti < ASX_SNAPSHOT_MAX_TASKS; i++) {
         if (!g_tasks[i].alive) continue;
         snap->tasks[ti].id =
-            asx_handle_pack(ASX_TYPE_TASK, 0,
+            asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
                             asx_handle_pack_index(g_tasks[i].generation, (uint16_t)i));
         snap->tasks[ti].state = g_tasks[i].state;
         snap->tasks[ti].region = g_tasks[i].region;
@@ -68,7 +75,8 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
     for (i = 0; i < ASX_MAX_OBLIGATIONS && oi < ASX_SNAPSHOT_MAX_OBLIGATIONS; i++) {
         if (!g_obligations[i].alive) continue;
         snap->obligations[oi].id =
-            asx_handle_pack(ASX_TYPE_OBLIGATION, 0,
+            asx_handle_pack(ASX_TYPE_OBLIGATION,
+                            (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
                             asx_handle_pack_index(g_obligations[i].generation, (uint16_t)i));
         snap->obligations[oi].state = g_obligations[i].state;
         snap->obligations[oi].region = g_obligations[i].region;
@@ -133,6 +141,18 @@ asx_status asx_runtime_snapshot_to_json(const asx_runtime_snapshot *snap, asx_co
 
     /* event_hash */
     s = asx_codec_buffer_append_u64_field(out, &first, "event_hash", snap->event_hash);
+    if (s != ASX_OK) return s;
+    s = asx_codec_buffer_append_u64_field(out, &first, "io_driver_initialized",
+                                          (uint64_t)snap->io_driver_initialized);
+    if (s != ASX_OK) return s;
+    s = asx_codec_buffer_append_u64_field(out, &first, "io_registration_count",
+                                          (uint64_t)snap->io_registration_count);
+    if (s != ASX_OK) return s;
+    s = asx_codec_buffer_append_u64_field(out, &first, "blocking_pool_initialized",
+                                          (uint64_t)snap->blocking_pool_initialized);
+    if (s != ASX_OK) return s;
+    s = asx_codec_buffer_append_u64_field(out, &first, "blocking_active_count",
+                                          (uint64_t)snap->blocking_active_count);
     if (s != ASX_OK) return s;
 
     /* regions array */
@@ -240,6 +260,11 @@ asx_status asx_runtime_snapshot_eq(const asx_runtime_snapshot *a, const asx_runt
     if (a == NULL || b == NULL) return ASX_E_INVALID_ARGUMENT;
 
     if (a->event_hash != b->event_hash) return ASX_E_EQUIVALENCE_MISMATCH;
+    if (a->io_driver_initialized != b->io_driver_initialized) return ASX_E_EQUIVALENCE_MISMATCH;
+    if (a->io_registration_count != b->io_registration_count) return ASX_E_EQUIVALENCE_MISMATCH;
+    if (a->blocking_pool_initialized != b->blocking_pool_initialized)
+        return ASX_E_EQUIVALENCE_MISMATCH;
+    if (a->blocking_active_count != b->blocking_active_count) return ASX_E_EQUIVALENCE_MISMATCH;
     if (a->region_count != b->region_count) return ASX_E_EQUIVALENCE_MISMATCH;
     if (a->task_count != b->task_count) return ASX_E_EQUIVALENCE_MISMATCH;
     if (a->obligation_count != b->obligation_count) return ASX_E_EQUIVALENCE_MISMATCH;

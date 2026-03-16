@@ -932,6 +932,10 @@ static void test_app_run_server_happy_path(void) {
     ASSERT(report.main_task_spawned == 1, "main task spawned");
     ASSERT(strstr(asx_report_buf_cstr(&summary), "Server Summary:") != NULL, "summary present");
     ASSERT(strstr(asx_report_buf_cstr(&summary), "Doctor:") != NULL, "doctor present");
+    ASSERT(strstr(asx_report_buf_cstr(&summary), "Runtime Inspection:") != NULL,
+           "inspection present");
+    ASSERT(strstr(asx_report_buf_cstr(&summary), "io_driver:") != NULL, "io driver in inspection");
+    ASSERT(strstr(asx_report_buf_cstr(&summary), "blocking:") != NULL, "blocking in inspection");
 
     asx_app_shutdown(&app);
 }
@@ -1109,7 +1113,7 @@ static void test_doctor_initialized_runtime(void) {
 
     st = asx_doctor_run(&rt, &report);
     ASSERT(st == ASX_OK, "doctor run ok");
-    ASSERT(report.check_count == 6, "6 checks");
+    ASSERT(report.check_count == 8, "8 checks");
     ASSERT(asx_doctor_is_healthy(&report), "healthy");
     ASSERT(asx_doctor_overall(&report) == ASX_DOCTOR_OK, "overall ok");
 
@@ -1155,6 +1159,9 @@ static void test_doctor_check_fields(void) {
         ASSERT(report.checks[i].name != NULL, "check has name");
         ASSERT(report.checks[i].message != NULL, "check has message");
     }
+
+    ASSERT(strcmp(report.checks[4].name, "io_driver") == 0, "io driver check present");
+    ASSERT(strcmp(report.checks[5].name, "blocking") == 0, "blocking check present");
 
     /* pass + warn + fail should equal check_count */
     ASSERT(report.pass_count + report.warn_count + report.fail_count == report.check_count,

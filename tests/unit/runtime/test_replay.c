@@ -41,6 +41,7 @@ TEST(snapshot_take_restore) {
     asx_lab lab;
     asx_lab_config cfg;
     asx_snapshot_id sid;
+    asx_time now = 0;
     uint64_t r1, r2;
 
     asx_snapshot_reset();
@@ -67,6 +68,9 @@ TEST(snapshot_take_restore) {
 
     /* Time and entropy should be back to snapshot state */
     ASSERT_EQ(asx_lab_now(&lab), 10000000ULL);
+    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(now, (asx_time)10000000ULL);
+    ASSERT_EQ(asx_runtime_random_u64(&r2), ASX_OK);
     r2 = asx_lab_random_u64(&lab);
     /* After restore, entropy state matches snapshot, so same draw */
     /* (The exact value depends on snapshot state, just verify it works) */
@@ -133,6 +137,7 @@ TEST(snapshot_deterministic_replay) {
     asx_lab lab;
     asx_lab_config cfg;
     asx_snapshot_id sid;
+    asx_time now = 0;
     uint64_t r_before, r_after;
 
     asx_snapshot_reset();
@@ -148,6 +153,8 @@ TEST(snapshot_deterministic_replay) {
 
     /* Restore and draw again — should be identical */
     MUST_OK(asx_snapshot_restore(&lab, sid));
+    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(now, (asx_time)0);
     r_after = asx_lab_random_u64(&lab);
 
     ASSERT_EQ(r_before, r_after);

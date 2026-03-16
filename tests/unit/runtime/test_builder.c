@@ -165,6 +165,35 @@ TEST(hook_setters_replace_hook_families) {
     ASSERT_EQ(hooks.clock.now_ns_fn(hooks.clock.ctx), (uint64_t)99);
 }
 
+TEST(partial_hook_setter_rejects_invalid_clock_and_preserves_old_hooks) {
+    asx_runtime_builder builder;
+    asx_runtime_hooks before;
+    asx_runtime_hooks after;
+    asx_clock_hooks clock;
+
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_get_hooks(&builder, &before), ASX_OK);
+
+    memset(&clock, 0, sizeof(clock));
+    clock.now_ns_fn = fake_time;
+    clock.logical_now_ns_fn = NULL;
+
+    ASSERT_EQ(asx_runtime_builder_set_clock_hooks(&builder, &clock), ASX_E_DETERMINISM_VIOLATION);
+    ASSERT_EQ(asx_runtime_builder_get_hooks(&builder, &after), ASX_OK);
+    ASSERT_EQ(memcmp(&before, &after, sizeof(before)), 0);
+}
+
+TEST(partial_hook_setter_null_family_fails) {
+    asx_runtime_builder builder;
+
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_set_clock_hooks(&builder, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_builder_set_allocator_hooks(&builder, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_builder_set_entropy_hooks(&builder, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_builder_set_reactor_hooks(&builder, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_builder_set_log_hooks(&builder, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
 TEST(set_hooks_rejects_invalid_full_hook_table) {
     asx_runtime_builder builder;
     asx_runtime_hooks hooks;
@@ -316,6 +345,35 @@ TEST(apply_env_invalid_value_is_atomic) {
     clear_builder_test_env();
 }
 
+TEST(apply_env_preset_preserves_custom_hooks) {
+    asx_runtime_builder builder;
+    asx_runtime_hooks hooks;
+    asx_clock_hooks clock;
+    uint64_t now = 777u;
+
+    clear_builder_test_env();
+    test_set_env("ASX_RUNTIME_PRESET", "high-throughput");
+    test_set_env("ASX_RUNTIME_WAIT_POLICY", "yield");
+
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    memset(&clock, 0, sizeof(clock));
+    clock.ctx = &now;
+    clock.now_ns_fn = fake_time;
+    clock.logical_now_ns_fn = fake_time;
+    ASSERT_EQ(asx_runtime_builder_set_clock_hooks(&builder, &clock), ASX_OK);
+
+    ASSERT_EQ(asx_runtime_builder_apply_env(&builder, NULL), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_get_hooks(&builder, &hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_preset(&builder), ASX_RUNTIME_PRESET_HIGH_THROUGHPUT);
+    ASSERT_EQ(hooks.clock.ctx, &now);
+    ASSERT_TRUE(hooks.clock.now_ns_fn != NULL);
+    ASSERT_TRUE(hooks.clock.logical_now_ns_fn != NULL);
+    ASSERT_EQ(hooks.clock.now_ns_fn(hooks.clock.ctx), (uint64_t)777u);
+    ASSERT_EQ(hooks.clock.logical_now_ns_fn(hooks.clock.ctx), (uint64_t)777u);
+
+    clear_builder_test_env();
+}
+
 int main(void) {
     fprintf(stderr, "=== test_builder ===\n");
     RUN_TEST(init_null_fails);
@@ -327,6 +385,8 @@ int main(void) {
     RUN_TEST(setters_override_preset_values);
     RUN_TEST(invalid_setter_inputs_fail);
     RUN_TEST(hook_setters_replace_hook_families);
+    RUN_TEST(partial_hook_setter_rejects_invalid_clock_and_preserves_old_hooks);
+    RUN_TEST(partial_hook_setter_null_family_fails);
     RUN_TEST(set_hooks_rejects_invalid_full_hook_table);
     RUN_TEST(set_hooks_accepts_valid_full_hook_table);
     RUN_TEST(validate_rejects_bad_builder_config);
@@ -337,6 +397,7 @@ int main(void) {
     RUN_TEST(apply_env_uses_default_prefix_and_overrides_config);
     RUN_TEST(apply_env_accepts_custom_prefix);
     RUN_TEST(apply_env_invalid_value_is_atomic);
+    RUN_TEST(apply_env_preset_preserves_custom_hooks);
     TEST_REPORT();
     return test_failures;
 }

@@ -143,7 +143,8 @@ ASX_API asx_region_id asx_app_region(const asx_app *app);
 /* Run a managed native server/bootstrap flow.
  * Loads config from ghost fs when configured, optionally spawns a bootstrap
  * sidecar process, subscribes to a shutdown signal, runs the main task, and
- * emits a human-readable summary into out_summary when provided. */
+ * emits a human-readable summary plus doctor/inspection diagnostics into
+ * out_summary when provided. */
 ASX_API asx_exit_code asx_app_run_server(asx_app *app,
                                          const asx_app_server_config *server_config,
                                          asx_task_poll_fn main_fn,
@@ -153,7 +154,9 @@ ASX_API asx_exit_code asx_app_run_server(asx_app *app,
 
 /* Run a managed native server/bootstrap flow under explicit authority.
  * Fails closed before side effects if app_cx is invalid, bound to a
- * different region, or lacks ASX_CAP_SPAWN. */
+ * different region, or lacks ASX_CAP_SPAWN. When out_summary is provided,
+ * it includes the same structured summary plus doctor/inspection output as
+ * asx_app_run_server(). */
 ASX_API asx_exit_code asx_app_run_server_with_cx(asx_app *app,
                                                  const asx_cx *app_cx,
                                                  const asx_app_server_config *server_config,

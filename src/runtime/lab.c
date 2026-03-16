@@ -43,9 +43,25 @@ void asx_lab_config_init(asx_lab_config *cfg) {
 /* Lab lifecycle                                                       */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_lab_init(asx_lab *lab, const asx_lab_config *cfg) {
+static asx_status lab_bootstrap_runtime(asx_lab *lab) {
     asx_runtime_config rt_cfg;
     asx_runtime_hooks hooks;
+
+    /* Set up runtime config */
+    asx_runtime_config_init(&rt_cfg);
+
+    /* Set up hooks with virtual time and seeded entropy */
+    asx_runtime_hooks_init(&hooks);
+    hooks.clock.logical_now_ns_fn = asx_vtime_now_ns;
+    hooks.clock.ctx = &lab->vtime;
+    hooks.entropy.random_u64_fn = lab_entropy_u64;
+    hooks.entropy.ctx = lab;
+    hooks.deterministic_seeded_prng = 1;
+
+    return asx_runtime_init(&lab->rt, &rt_cfg, &hooks);
+}
+
+asx_status asx_lab_init(asx_lab *lab, const asx_lab_config *cfg) {
     asx_status st;
 
     if (lab == NULL || cfg == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -63,19 +79,7 @@ asx_status asx_lab_init(asx_lab *lab, const asx_lab_config *cfg) {
     /* Initialize virtual time */
     asx_vtime_init(&lab->vtime, lab->config.start_time_ns, lab->config.tick_ns);
 
-    /* Set up runtime config */
-    asx_runtime_config_init(&rt_cfg);
-
-    /* Set up hooks with virtual time and seeded entropy */
-    asx_runtime_hooks_init(&hooks);
-    hooks.clock.logical_now_ns_fn = asx_vtime_now_ns;
-    hooks.clock.ctx = &lab->vtime;
-    hooks.entropy.random_u64_fn = lab_entropy_u64;
-    hooks.entropy.ctx = lab;
-    hooks.deterministic_seeded_prng = 1;
-
-    /* Initialize runtime */
-    st = asx_runtime_init(&lab->rt, &rt_cfg, &hooks);
+    st = lab_bootstrap_runtime(lab);
     if (st != ASX_OK) return st;
 
     lab->initialized = 1;
@@ -91,10 +95,14 @@ void asx_lab_shutdown(asx_lab *lab) {
 }
 
 void asx_lab_reset(asx_lab *lab) {
+    asx_status st;
+
     if (lab == NULL || !lab->initialized) return;
-    asx_runtime_reset();
+    asx_runtime_shutdown(&lab->rt);
     asx_vtime_init(&lab->vtime, lab->config.start_time_ns, lab->config.tick_ns);
     lab->entropy_state = lab->config.seed;
+    st = lab_bootstrap_runtime(lab);
+    if (st != ASX_OK) lab->initialized = 0;
 }
 
 /* ------------------------------------------------------------------ */

@@ -186,6 +186,33 @@ TEST(reset_restores_state) {
     asx_lab_shutdown(&lab);
 }
 
+TEST(reset_restores_runtime_hooks) {
+    asx_lab lab;
+    asx_lab_config cfg;
+    asx_time now = 0;
+    uint64_t entropy = 0;
+
+    asx_lab_config_init(&cfg);
+    cfg.seed = 123u;
+    cfg.tick_ns = 1000000ULL;
+    MUST_OK(asx_lab_init(&lab, &cfg));
+
+    asx_lab_advance_time(&lab, 7u);
+    MUST_OK(asx_runtime_now_ns(&now));
+    ASSERT_TRUE(now > 0);
+    MUST_OK(asx_runtime_random_u64(&entropy));
+    ASSERT_TRUE(entropy != 0u);
+
+    asx_lab_reset(&lab);
+
+    ASSERT_EQ(asx_lab_now(&lab), (asx_time)0);
+    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(now, (asx_time)0);
+    ASSERT_EQ(asx_runtime_random_u64(&entropy), ASX_OK);
+
+    asx_lab_shutdown(&lab);
+}
+
 /* ------------------------------------------------------------------ */
 /* Scenario execution tests                                            */
 /* ------------------------------------------------------------------ */
@@ -404,6 +431,7 @@ int main(void) {
     RUN_TEST(entropy_different_seeds);
 
     RUN_TEST(reset_restores_state);
+    RUN_TEST(reset_restores_runtime_hooks);
 
     RUN_TEST(scenario_empty);
     RUN_TEST(scenario_single_step);

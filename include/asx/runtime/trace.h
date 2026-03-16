@@ -164,7 +164,8 @@ typedef struct {
 } asx_snapshot_buffer;
 
 /* Capture a snapshot of the current runtime state.
- * Writes a JSON object with regions, tasks, and obligations. */
+ * Writes a JSON object with subsystem state plus regions, tasks, and
+ * obligations. */
 ASX_API asx_status asx_snapshot_capture(asx_snapshot_buffer *out);
 
 /* Compute digest of a snapshot buffer (FNV-1a). */

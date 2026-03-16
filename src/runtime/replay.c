@@ -37,17 +37,19 @@ asx_status asx_snapshot_take(const asx_lab *lab, asx_snapshot_id *out) {
 
 asx_status asx_snapshot_restore(asx_lab *lab, asx_snapshot_id id) {
     asx_snapshot *snap;
+    asx_status st;
     if (lab == NULL) return ASX_E_INVALID_ARGUMENT;
     if (id.slot >= ASX_SNAPSHOT_MAX) return ASX_E_INVALID_ARGUMENT;
     snap = &g_snapshots[id.slot];
     if (!snap->valid) return ASX_E_INVALID_STATE;
 
-    /* Restore PRNG and virtual time to snapshot state */
+    /* Rebuild the embedded lab runtime so deterministic hooks remain installed
+     * after restore, then apply the saved PRNG and virtual-time state. */
+    asx_lab_shutdown(lab);
+    st = asx_lab_init(lab, &snap->config);
+    if (st != ASX_OK) return st;
     lab->entropy_state = snap->entropy_state;
-    asx_vtime_init(&lab->vtime, snap->current_time, snap->config.tick_ns);
-
-    /* Reset runtime subsystems for clean replay */
-    asx_runtime_reset();
+    lab->vtime.current_time = snap->current_time;
 
     return ASX_OK;
 }

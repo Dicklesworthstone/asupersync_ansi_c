@@ -68,7 +68,8 @@ ASX_API ASX_MUST_USE asx_status asx_lab_init(asx_lab *lab, const asx_lab_config 
 /* Shut down the lab runtime and restore hooks. */
 ASX_API void asx_lab_shutdown(asx_lab *lab);
 
-/* Reset the lab runtime to initial state (preserves config). */
+/* Reset the lab runtime to initial state (preserves config) and
+ * re-bootstrap the deterministic runtime hook table. */
 ASX_API void asx_lab_reset(asx_lab *lab);
 
 /* -------------------------------------------------------------------

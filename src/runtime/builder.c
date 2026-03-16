@@ -31,6 +31,26 @@ static asx_status builder_copy_in(void *dst, size_t dst_size, const void *src, s
     return ASX_OK;
 }
 
+static asx_status builder_set_hook_family(asx_runtime_builder *builder, void *dst_family,
+                                          size_t dst_family_size, const void *src_family,
+                                          size_t src_family_size) {
+    asx_runtime_hooks candidate;
+    asx_status st;
+
+    if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
+    candidate = builder->hooks;
+    st = builder_copy_in(dst_family == NULL
+                             ? NULL
+                             : (void *)((char *)&candidate +
+                                        ((const char *)dst_family - (const char *)&builder->hooks)),
+                         dst_family_size, src_family, src_family_size);
+    if (st != ASX_OK) return st;
+    st = asx_runtime_hooks_validate(&candidate, ASX_DETERMINISTIC);
+    if (st != ASX_OK) return st;
+    builder->hooks = candidate;
+    return ASX_OK;
+}
+
 static int ascii_streq_ignore_case(const char *lhs, const char *rhs) {
     if (lhs == NULL || rhs == NULL) return 0;
     while (*lhs != '\0' && *rhs != '\0') {
@@ -118,6 +138,19 @@ static asx_status builder_apply_preset(asx_runtime_builder *builder, asx_runtime
         return asx_runtime_builder_init_high_throughput(builder);
     default: return ASX_E_INVALID_ARGUMENT;
     }
+}
+
+static asx_status builder_apply_preset_preserve_hooks(asx_runtime_builder *builder,
+                                                      asx_runtime_preset preset) {
+    asx_runtime_hooks hooks;
+    asx_status st;
+
+    if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
+    hooks = builder->hooks;
+    st = builder_apply_preset(builder, preset);
+    if (st != ASX_OK) return st;
+    builder->hooks = hooks;
+    return ASX_OK;
 }
 
 static asx_status parse_wait_policy(const char *text, asx_wait_policy *out_policy) {
@@ -304,36 +337,32 @@ asx_status asx_runtime_builder_set_hooks(asx_runtime_builder *builder,
 
 asx_status asx_runtime_builder_set_allocator_hooks(asx_runtime_builder *builder,
                                                    const asx_allocator_hooks *allocator) {
-    if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
-    return builder_copy_in(&builder->hooks.allocator, sizeof(builder->hooks.allocator), allocator,
-                           sizeof(*allocator));
+    return builder_set_hook_family(builder, &builder->hooks.allocator,
+                                   sizeof(builder->hooks.allocator), allocator, sizeof(*allocator));
 }
 
 asx_status asx_runtime_builder_set_clock_hooks(asx_runtime_builder *builder,
                                                const asx_clock_hooks *clock) {
-    if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
-    return builder_copy_in(&builder->hooks.clock, sizeof(builder->hooks.clock), clock,
-                           sizeof(*clock));
+    return builder_set_hook_family(builder, &builder->hooks.clock, sizeof(builder->hooks.clock),
+                                   clock, sizeof(*clock));
 }
 
 asx_status asx_runtime_builder_set_entropy_hooks(asx_runtime_builder *builder,
                                                  const asx_entropy_hooks *entropy) {
-    if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
-    return builder_copy_in(&builder->hooks.entropy, sizeof(builder->hooks.entropy), entropy,
-                           sizeof(*entropy));
+    return builder_set_hook_family(builder, &builder->hooks.entropy, sizeof(builder->hooks.entropy),
+                                   entropy, sizeof(*entropy));
 }
 
 asx_status asx_runtime_builder_set_reactor_hooks(asx_runtime_builder *builder,
                                                  const asx_reactor_hooks *reactor) {
-    if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
-    return builder_copy_in(&builder->hooks.reactor, sizeof(builder->hooks.reactor), reactor,
-                           sizeof(*reactor));
+    return builder_set_hook_family(builder, &builder->hooks.reactor, sizeof(builder->hooks.reactor),
+                                   reactor, sizeof(*reactor));
 }
 
 asx_status asx_runtime_builder_set_log_hooks(asx_runtime_builder *builder,
                                              const asx_log_hooks *log) {
-    if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
-    return builder_copy_in(&builder->hooks.log, sizeof(builder->hooks.log), log, sizeof(*log));
+    return builder_set_hook_family(builder, &builder->hooks.log, sizeof(builder->hooks.log), log,
+                                   sizeof(*log));
 }
 
 asx_status asx_runtime_builder_validate(const asx_runtime_builder *builder) {
@@ -368,7 +397,7 @@ asx_status asx_runtime_builder_apply_env(asx_runtime_builder *builder, const cha
     if (value != NULL) {
         st = parse_preset(value, &preset);
         if (st != ASX_OK) return st;
-        st = builder_apply_preset(&candidate, preset);
+        st = builder_apply_preset_preserve_hooks(&candidate, preset);
         if (st != ASX_OK) return st;
     }
 

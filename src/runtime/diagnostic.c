@@ -6,8 +6,10 @@
 
 #include "runtime_internal.h"
 #include <asx/core/ghost.h>
+#include <asx/runtime/blocking.h>
 #include <asx/runtime/diagnostic.h>
 #include <asx/runtime/event.h>
+#include <asx/runtime/io_driver.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/telemetry.h>
@@ -102,6 +104,14 @@ asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
     out->obligations.active_count = count_alive_obligations();
     out->obligations.capacity = ASX_MAX_OBLIGATIONS;
     out->obligations.peak_count = g_obligation_count;
+
+    out->io_driver.active_count = asx_runtime_io_registration_count(rt);
+    out->io_driver.capacity = ASX_MAX_IO_TOKENS;
+    out->io_driver.peak_count = out->io_driver.active_count;
+
+    out->blocking.active_count = asx_runtime_blocking_active_count(rt);
+    out->blocking.capacity = ASX_MAX_BLOCKING_TASKS;
+    out->blocking.peak_count = out->blocking.active_count;
 
     /* Trace */
     out->trace.event_count = asx_trace_event_count();
@@ -260,6 +270,42 @@ asx_status asx_inspect_to_evidence(const asx_runtime *rt, asx_evidence_sink *sin
             msg = "obligation arena >75% utilized";
         }
         st = asx_evidence_record(sink, "inspect:obligations", lev, msg, 0);
+        if (st != ASX_OK) return st;
+    }
+
+    /* IO driver state/utilization */
+    {
+        asx_evidence_level lev = ASX_EVIDENCE_PASS;
+        const char *msg = "io driver active";
+        if (!asx_runtime_io_driver_initialized(rt)) {
+            lev = ASX_EVIDENCE_WARN;
+            msg = "io driver inactive or unsupported";
+        } else if (rpt.io_driver.active_count >= rpt.io_driver.capacity) {
+            lev = ASX_EVIDENCE_FAIL;
+            msg = "io registration arena exhausted";
+        } else if (rpt.io_driver.active_count > rpt.io_driver.capacity * 3 / 4) {
+            lev = ASX_EVIDENCE_WARN;
+            msg = "io registration arena >75% utilized";
+        }
+        st = asx_evidence_record(sink, "inspect:io", lev, msg, 0);
+        if (st != ASX_OK) return st;
+    }
+
+    /* Blocking subsystem state/utilization */
+    {
+        asx_evidence_level lev = ASX_EVIDENCE_PASS;
+        const char *msg = "blocking pool active";
+        if (!asx_runtime_blocking_pool_initialized(rt)) {
+            lev = ASX_EVIDENCE_WARN;
+            msg = "blocking pool inactive or unsupported";
+        } else if (rpt.blocking.active_count >= rpt.blocking.capacity) {
+            lev = ASX_EVIDENCE_FAIL;
+            msg = "blocking task arena exhausted";
+        } else if (rpt.blocking.active_count > rpt.blocking.capacity * 3 / 4) {
+            lev = ASX_EVIDENCE_WARN;
+            msg = "blocking task arena >75% utilized";
+        }
+        st = asx_evidence_record(sink, "inspect:blocking", lev, msg, 0);
         if (st != ASX_OK) return st;
     }
 
