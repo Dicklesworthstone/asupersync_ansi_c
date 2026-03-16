@@ -350,8 +350,8 @@ static asx_status noop_poll(void *user_data, asx_task_id self) {
 TEST(fault_lifecycle_region_open_succeeds_without_alloc) {
     asx_region_id rid;
     reset_fault_state();
-    install_fault_hooks();
     asx_runtime_reset();
+    install_fault_hooks();
 
     /* Walking skeleton uses static arenas — region open doesn't
      * need the hook allocator. Should succeed even with sealed alloc. */
@@ -364,9 +364,10 @@ TEST(fault_lifecycle_spawn_succeeds_without_alloc) {
     asx_task_id tid;
     reset_fault_state();
 
-    /* Re-install hooks (seal is per-install) */
-    install_fault_hooks();
     asx_runtime_reset();
+    /* runtime_reset clears installed hooks, so install after reset
+     * before sealing the allocator for the static-arena lifecycle path. */
+    install_fault_hooks();
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
