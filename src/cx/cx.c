@@ -57,6 +57,12 @@ static int cx_grant_valid(const asx_cx_registry *registry, asx_cx_grant grant,
     return 1;
 }
 
+static int cx_grant_matches_parent(const asx_cx *parent, const asx_cx_registry_entry *entry) {
+    if (parent == NULL || entry == NULL) return 0;
+    return parent->generation == entry->parent_generation &&
+           parent->region_id == entry->parent_region_id && parent->task_id == entry->parent_task_id;
+}
+
 /* ------------------------------------------------------------------ */
 /* Cx lifecycle                                                        */
 /* ------------------------------------------------------------------ */
@@ -161,6 +167,9 @@ asx_status asx_cx_registry_init(asx_cx_registry *registry, asx_cx_registry_entry
     for (i = 0; i < capacity; ++i) {
         registry->entries[i].generation = 0u;
         registry->entries[i].caps = ASX_CAP_NONE;
+        registry->entries[i].parent_region_id = ASX_INVALID_ID;
+        registry->entries[i].parent_task_id = ASX_INVALID_ID;
+        registry->entries[i].parent_generation = 0u;
         registry->entries[i].alive = 0;
     }
 
@@ -182,6 +191,9 @@ asx_status asx_cx_registry_issue(const asx_cx *parent, asx_cx_registry *registry
         entry->generation = registry->next_generation++;
         if (entry->generation == 0u) entry->generation = registry->next_generation++;
         entry->caps = child_caps;
+        entry->parent_region_id = parent->region_id;
+        entry->parent_task_id = parent->task_id;
+        entry->parent_generation = parent->generation;
         entry->alive = 1;
 
         out_grant->slot = i;
@@ -199,6 +211,9 @@ asx_status asx_cx_registry_revoke(asx_cx_registry *registry, asx_cx_grant grant)
 
     registry->entries[grant.slot].alive = 0;
     registry->entries[grant.slot].caps = ASX_CAP_NONE;
+    registry->entries[grant.slot].parent_region_id = ASX_INVALID_ID;
+    registry->entries[grant.slot].parent_task_id = ASX_INVALID_ID;
+    registry->entries[grant.slot].parent_generation = 0u;
     return ASX_OK;
 }
 
@@ -209,6 +224,7 @@ asx_status asx_cx_registry_materialize(const asx_cx *parent, const asx_cx_regist
     if (parent == NULL || registry == NULL || out_child == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
     if (!cx_grant_valid(registry, grant, &entry)) return ASX_E_NOT_FOUND;
+    if (!cx_grant_matches_parent(parent, entry)) return ASX_E_STALE_HANDLE;
 
     return cx_copy_with_caps(parent, out_child, entry->caps);
 }

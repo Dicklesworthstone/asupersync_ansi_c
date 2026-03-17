@@ -106,6 +106,17 @@ TEST(register_unknown_interest_bits_fail) {
     teardown();
 }
 
+TEST(register_stale_waker_fails) {
+    asx_waker w;
+    asx_io_token tok;
+    if (!setup()) return;
+    MUST_OK(asx_waker_register(1, &w));
+    asx_waker_deregister(&w);
+    ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_io_active_count(), 0u);
+    teardown();
+}
+
 TEST(register_success) {
     asx_waker w;
     asx_io_token tok;
@@ -425,6 +436,7 @@ int main(void) {
     RUN_TEST(register_before_init_fails);
     RUN_TEST(register_zero_interest_fails);
     RUN_TEST(register_unknown_interest_bits_fail);
+    RUN_TEST(register_stale_waker_fails);
     RUN_TEST(register_success);
     RUN_TEST(reinit_clears_registrations_and_invalidates_tokens);
     RUN_TEST(deregister_decrements_count);

@@ -73,9 +73,12 @@ ASX_API int asx_blocking_pool_is_initialized(void);
 
 /* Submit a blocking function for execution.
  * The waker (if non-NULL) is signaled when the work completes.
+ * If provided, completion_waker must refer to a currently live waker registration.
  * Walking skeleton: executes fn synchronously and signals waker
  * immediately.
- * Returns ASX_OK on success. */
+ * Returns ASX_OK on success.
+ * Returns ASX_E_INVALID_ARGUMENT if fn/out_handle is NULL or the
+ * completion waker is stale/deregistered. */
 ASX_API ASX_MUST_USE asx_status asx_spawn_blocking(asx_blocking_fn fn, void *user_data,
                                                    const asx_waker *completion_waker,
                                                    asx_blocking_handle *out_handle);

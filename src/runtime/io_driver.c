@@ -96,6 +96,7 @@ asx_status asx_io_register(int fd, asx_io_interest interest, const asx_waker *wa
     if (st != ASX_OK) return st;
     if (!g_initialized) return ASX_E_INVALID_STATE;
     if (!io_interest_valid(interest)) return ASX_E_INVALID_ARGUMENT;
+    if (asx_waker_task(waker) == ASX_INVALID_ID) return ASX_E_INVALID_ARGUMENT;
 
     /* Find free slot */
     idx = ASX_MAX_IO_TOKENS;

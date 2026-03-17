@@ -7,6 +7,29 @@
 #include <asx/evidence/evidence.h>
 #include <asx/evidence_sink/evidence_sink.h>
 
+static void append_json_escaped(asx_report_buf *out, const char *text) {
+    const unsigned char *p = (const unsigned char *)text;
+    char ch[2];
+
+    if (out == NULL || text == NULL) return;
+    ch[1] = '\0';
+
+    while (*p != '\0') {
+        switch (*p) {
+        case '\\': asx_report_buf_append(out, "\\\\"); break;
+        case '"': asx_report_buf_append(out, "\\\""); break;
+        case '\n': asx_report_buf_append(out, "\\n"); break;
+        case '\r': asx_report_buf_append(out, "\\r"); break;
+        case '\t': asx_report_buf_append(out, "\\t"); break;
+        default:
+            ch[0] = (char)*p;
+            asx_report_buf_append(out, ch);
+            break;
+        }
+        p++;
+    }
+}
+
 asx_status asx_evidence_sink_summarize(const asx_evidence_sink *sink, asx_evidence_summary *out) {
     if (sink == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
 
@@ -35,11 +58,11 @@ asx_status asx_evidence_sink_render_ndjson(const asx_evidence_sink *sink, asx_re
         asx_report_buf_append(out, "{\"seq\":");
         asx_report_buf_append_u32(out, entry->sequence);
         asx_report_buf_append(out, ",\"source\":\"");
-        asx_report_buf_append(out, entry->source ? entry->source : "");
+        append_json_escaped(out, entry->source ? entry->source : "");
         asx_report_buf_append(out, "\",\"level\":\"");
         asx_report_buf_append(out, asx_evidence_level_str(entry->level));
         asx_report_buf_append(out, "\",\"message\":\"");
-        asx_report_buf_append(out, entry->message ? entry->message : "");
+        append_json_escaped(out, entry->message ? entry->message : "");
         asx_report_buf_append(out, "\",\"entity\":");
         asx_report_buf_append_hex64(out, entry->entity_id);
         asx_report_buf_append(out, "}\n");

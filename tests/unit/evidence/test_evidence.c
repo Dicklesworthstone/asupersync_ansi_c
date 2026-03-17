@@ -78,6 +78,23 @@ static void test_evidence_sink_get_and_ndjson(void) {
     ASSERT(strstr(asx_report_buf_cstr(&out), "\"level\":\"INFO\"") != NULL, "ndjson level");
 }
 
+static void test_evidence_sink_ndjson_escapes_strings(void) {
+    asx_evidence_sink sink;
+    asx_report_buf out;
+    const char *rendered;
+
+    asx_evidence_sink_init(&sink);
+    MUST_OK(asx_evidence_record(&sink, "obs\"core\\pipe", ASX_EVIDENCE_WARN,
+                                "line1\nline2\t\"quoted\"", 0));
+
+    MUST_OK(asx_evidence_sink_render_ndjson(&sink, &out));
+    rendered = asx_report_buf_cstr(&out);
+
+    ASSERT(strstr(rendered, "\"source\":\"obs\\\"core\\\\pipe\"") != NULL, "source escaped");
+    ASSERT(strstr(rendered, "\"message\":\"line1\\nline2\\t\\\"quoted\\\"\"") != NULL,
+           "message escaped");
+}
+
 int main(void) {
     printf("test_evidence:\n");
 
@@ -85,6 +102,7 @@ int main(void) {
     RUN(test_evidence_entry_helpers);
     RUN(test_evidence_sink_summary);
     RUN(test_evidence_sink_get_and_ndjson);
+    RUN(test_evidence_sink_ndjson_escapes_strings);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

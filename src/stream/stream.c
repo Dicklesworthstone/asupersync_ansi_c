@@ -252,14 +252,30 @@ static asx_stream_result zip_poll(void *state, const asx_waker *waker, void **ou
     asx_stream_zip_state *zs = (asx_stream_zip_state *)state;
     void *item_a = NULL, *item_b = NULL;
 
-    asx_stream_result ra = asx_stream_poll_next(&zs->a, waker, &item_a);
-    if (ra != ASX_STREAM_READY) return ra;
+    if (zs->has_pending_a) {
+        item_a = zs->pending_a;
+    } else {
+        asx_stream_result ra = asx_stream_poll_next(&zs->a, waker, &item_a);
+        if (ra != ASX_STREAM_READY) return ra;
+        zs->pending_a = item_a;
+        zs->has_pending_a = 1;
+    }
 
-    asx_stream_result rb = asx_stream_poll_next(&zs->b, waker, &item_b);
-    if (rb != ASX_STREAM_READY) return rb;
+    {
+        asx_stream_result rb = asx_stream_poll_next(&zs->b, waker, &item_b);
+        if (rb != ASX_STREAM_READY) {
+            if (rb == ASX_STREAM_DONE) {
+                zs->pending_a = NULL;
+                zs->has_pending_a = 0;
+            }
+            return rb;
+        }
+    }
 
     zs->current.a = item_a;
     zs->current.b = item_b;
+    zs->pending_a = NULL;
+    zs->has_pending_a = 0;
     *out_item = &zs->current;
     return ASX_STREAM_READY;
 }
@@ -267,6 +283,8 @@ static asx_stream_result zip_poll(void *state, const asx_waker *waker, void **ou
 void asx_stream_zip_init(asx_stream *s, asx_stream_zip_state *state, asx_stream a, asx_stream b) {
     state->a = a;
     state->b = b;
+    state->pending_a = NULL;
+    state->has_pending_a = 0;
     memset(&state->current, 0, sizeof(state->current));
     s->poll_next = zip_poll;
     s->state = state;

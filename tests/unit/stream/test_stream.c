@@ -30,6 +30,39 @@ static size_t collect_ints(asx_stream *s, int *out, size_t max) {
     return n;
 }
 
+typedef struct {
+    const asx_stream_result *results;
+    const int *values;
+    size_t len;
+    size_t index;
+} scripted_int_stream_state;
+
+static asx_stream_result scripted_int_poll(void *state, const asx_waker *waker, void **out_item) {
+    scripted_int_stream_state *ss = (scripted_int_stream_state *)state;
+    (void)waker;
+
+    if (ss->index >= ss->len) return ASX_STREAM_DONE;
+
+    {
+        size_t idx = ss->index++;
+        if (ss->results[idx] == ASX_STREAM_READY) {
+            *out_item = (void *)&ss->values[idx];
+        }
+        return ss->results[idx];
+    }
+}
+
+static void scripted_int_stream_init(asx_stream *s, scripted_int_stream_state *state,
+                                     const asx_stream_result *results, const int *values,
+                                     size_t len) {
+    state->results = results;
+    state->values = values;
+    state->len = len;
+    state->index = 0;
+    s->poll_next = scripted_int_poll;
+    s->state = state;
+}
+
 /* ================================================================== */
 /* Iter source tests                                                   */
 /* ================================================================== */
@@ -382,6 +415,30 @@ TEST(zip_stops_at_shorter) {
     ASSERT_EQ(asx_stream_poll_next(&zipped, NULL, &item), ASX_STREAM_DONE);
 }
 
+TEST(zip_retains_first_item_across_pending_second) {
+    asx_stream sa, sb, zipped;
+    asx_stream_zip_state zip_state;
+    scripted_int_stream_state a_state, b_state;
+    const asx_stream_result a_results[] = {ASX_STREAM_READY, ASX_STREAM_READY, ASX_STREAM_DONE};
+    const asx_stream_result b_results[] = {ASX_STREAM_PENDING, ASX_STREAM_READY, ASX_STREAM_READY};
+    const int a_values[] = {1, 2, 0};
+    const int b_values[] = {0, 10, 20};
+    void *item = NULL;
+
+    scripted_int_stream_init(&sa, &a_state, a_results, a_values, 3);
+    scripted_int_stream_init(&sb, &b_state, b_results, b_values, 3);
+    asx_stream_zip_init(&zipped, &zip_state, sa, sb);
+
+    ASSERT_EQ(asx_stream_poll_next(&zipped, NULL, &item), ASX_STREAM_PENDING);
+    ASSERT_EQ(asx_stream_poll_next(&zipped, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(int *)((asx_stream_zip_pair *)item)->a, 1);
+    ASSERT_EQ(*(int *)((asx_stream_zip_pair *)item)->b, 10);
+    ASSERT_EQ(asx_stream_poll_next(&zipped, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(int *)((asx_stream_zip_pair *)item)->a, 2);
+    ASSERT_EQ(*(int *)((asx_stream_zip_pair *)item)->b, 20);
+    ASSERT_EQ(asx_stream_poll_next(&zipped, NULL, &item), ASX_STREAM_DONE);
+}
+
 /* ================================================================== */
 /* Terminal operation tests                                            */
 /* ================================================================== */
@@ -552,6 +609,7 @@ int main(void) {
     /* Zip */
     RUN_TEST(zip_pairs_items);
     RUN_TEST(zip_stops_at_shorter);
+    RUN_TEST(zip_retains_first_item_across_pending_second);
 
     /* Terminal operations */
     RUN_TEST(fold_sums);

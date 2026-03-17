@@ -132,6 +132,17 @@ TEST(spawn_signals_completion_waker) {
     teardown();
 }
 
+TEST(spawn_stale_completion_waker_fails) {
+    asx_blocking_handle h;
+    asx_waker w;
+    if (!setup()) return;
+    MUST_OK(asx_waker_register(1, &w));
+    asx_waker_deregister(&w);
+    ASSERT_EQ(asx_spawn_blocking(return_zero, NULL, &w, &h), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_blocking_active_count(), 0u);
+    teardown();
+}
+
 TEST(spawn_without_waker_ok) {
     asx_blocking_handle h;
     if (!setup()) return;
@@ -286,6 +297,7 @@ int main(void) {
     RUN_TEST(spawn_success);
     RUN_TEST(spawn_returns_result);
     RUN_TEST(spawn_signals_completion_waker);
+    RUN_TEST(spawn_stale_completion_waker_fails);
     RUN_TEST(spawn_without_waker_ok);
 
     RUN_TEST(get_state_null_returns_completed);

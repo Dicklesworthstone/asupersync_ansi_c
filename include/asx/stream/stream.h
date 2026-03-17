@@ -269,6 +269,8 @@ typedef struct {
 typedef struct {
     asx_stream a;
     asx_stream b;
+    void *pending_a;
+    int has_pending_a;
     asx_stream_zip_pair current;
 } asx_stream_zip_state;
 

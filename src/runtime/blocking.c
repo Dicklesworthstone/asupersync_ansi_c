@@ -90,6 +90,9 @@ asx_status asx_spawn_blocking(asx_blocking_fn fn, void *user_data,
     st = asx_surface_gate(ASX_SURFACE_BLOCKING);
     if (st != ASX_OK) return st;
     if (!g_initialized) return ASX_E_INVALID_STATE;
+    if (completion_waker != NULL && asx_waker_task(completion_waker) == ASX_INVALID_ID) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
 
     /* Find free slot */
     idx = ASX_MAX_BLOCKING_TASKS;

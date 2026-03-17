@@ -77,8 +77,11 @@ ASX_API int asx_io_driver_is_initialized(void);
  * fd is an opaque file descriptor (platform-dependent).
  * interest must be a nonzero bitmask composed only of
  * ASX_IO_READABLE|WRITABLE|ERROR.
- * waker will be signaled when the interest is ready.
- * Returns ASX_OK on success. */
+ * waker will be signaled when the interest is ready and must refer to a
+ * currently live waker registration.
+ * Returns ASX_OK on success.
+ * Returns ASX_E_INVALID_ARGUMENT if any pointer is NULL, interest is invalid,
+ * or waker is stale/deregistered. */
 ASX_API ASX_MUST_USE asx_status asx_io_register(int fd, asx_io_interest interest,
                                                 const asx_waker *waker, asx_io_token *out_token);
 

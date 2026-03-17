@@ -233,6 +233,20 @@ TEST(registry_issue_materialize_and_revoke) {
     ASSERT_EQ(asx_cx_registry_materialize(&parent, &registry, grant, &child), ASX_E_NOT_FOUND);
 }
 
+TEST(registry_materialize_wrong_parent_fails_closed) {
+    asx_cx parent, wrong_parent, child;
+    asx_cx_registry registry;
+    asx_cx_registry_entry entries[2];
+    asx_cx_grant grant;
+
+    asx_cx_init(&parent, 7, 3, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY | ASX_CAP_SPAWN);
+    asx_cx_init(&wrong_parent, 7, 3, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY | ASX_CAP_SPAWN);
+    ASSERT_EQ(asx_cx_registry_init(&registry, entries, 2u), ASX_OK);
+    ASSERT_EQ(asx_cx_registry_issue(&parent, &registry, ASX_CAP_ENTROPY, &grant), ASX_OK);
+    ASSERT_EQ(asx_cx_registry_materialize(&wrong_parent, &registry, grant, &child),
+              ASX_E_STALE_HANDLE);
+}
+
 TEST(registry_capacity_exhaustion_fails) {
     asx_cx parent;
     asx_cx_registry registry;
@@ -584,6 +598,7 @@ int main(void) {
     RUN_TEST(wrap_escalation_fails);
     RUN_TEST(unwrap_stale_wrapper_fails_closed);
     RUN_TEST(registry_issue_materialize_and_revoke);
+    RUN_TEST(registry_materialize_wrong_parent_fails_closed);
     RUN_TEST(registry_capacity_exhaustion_fails);
     RUN_TEST(registry_issue_escalation_fails);
     RUN_TEST(macaroon_issue_attenuate_and_bind);
