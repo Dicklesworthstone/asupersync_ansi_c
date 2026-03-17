@@ -331,12 +331,10 @@ static int scenario_capability_wrapped_scope(void) {
 
     printf("  child caps: clock=%d entropy=%d spawn=%d\n",
            asx_cx_has_cap(&child_cx, ASX_CAP_CLOCK_READ),
-           asx_cx_has_cap(&child_cx, ASX_CAP_ENTROPY),
-           asx_cx_has_cap(&child_cx, ASX_CAP_SPAWN));
+           asx_cx_has_cap(&child_cx, ASX_CAP_ENTROPY), asx_cx_has_cap(&child_cx, ASX_CAP_SPAWN));
 
     if (!asx_cx_has_cap(&child_cx, ASX_CAP_CLOCK_READ) ||
-        asx_cx_has_cap(&child_cx, ASX_CAP_ENTROPY) ||
-        asx_cx_has_cap(&child_cx, ASX_CAP_SPAWN)) {
+        asx_cx_has_cap(&child_cx, ASX_CAP_ENTROPY) || asx_cx_has_cap(&child_cx, ASX_CAP_SPAWN)) {
         printf("  FAIL: child authority was not narrowed correctly\n");
         return 1;
     }
@@ -431,10 +429,8 @@ static int scenario_combinator_orchestration(void) {
         return 1;
     }
 
-    printf("  join: retry_attempts=%u pipeline_stages=%u outcome=%d\n",
-           asx_retry_attempts(&retry),
-           asx_pipeline_completed_stages(&pipeline),
-           (int)asx_join_outcome(&join).severity);
+    printf("  join: retry_attempts=%u pipeline_stages=%u outcome=%d\n", asx_retry_attempts(&retry),
+           asx_pipeline_completed_stages(&pipeline), (int)asx_join_outcome(&join).severity);
 
     st = asx_select_init(&select);
     if (st != ASX_OK) {

@@ -281,6 +281,8 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/runtime/test_*.c) \
                  $(wildcard tests/unit/channel/*_test.c) \
                  $(wildcard tests/unit/channel/test_*.c) \
+                 $(wildcard tests/unit/session/*_test.c) \
+                 $(wildcard tests/unit/session/test_*.c) \
                  $(wildcard tests/unit/link/*_test.c) \
                  $(wildcard tests/unit/link/test_*.c) \
                  $(wildcard tests/unit/record/*_test.c) \
