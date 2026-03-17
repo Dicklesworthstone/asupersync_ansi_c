@@ -43,6 +43,9 @@ typedef struct {
 
 ASX_API void asx_monitor_policy_init_default(asx_monitor_policy *policy);
 
+/* Evaluate runtime state against threshold policy.
+ * Stale or uninitialized runtimes fail closed with FAIL evidence rather than
+ * being treated as healthy zero-utilization snapshots. */
 ASX_API ASX_MUST_USE asx_status asx_monitor_evaluate(const asx_runtime *rt,
                                                      const asx_monitor_policy *policy,
                                                      asx_monitor_report *out,

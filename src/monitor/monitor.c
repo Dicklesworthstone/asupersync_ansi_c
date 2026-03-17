@@ -41,6 +41,12 @@ asx_status asx_monitor_evaluate(const asx_runtime *rt, const asx_monitor_policy 
     asx_evidence_sink_reset(sink);
     out->triggered_mask = 0u;
 
+    if (!out->inspection.initialized) {
+        out->verdict = ASX_EVIDENCE_FAIL;
+        return asx_evidence_record(sink, "monitor:runtime", ASX_EVIDENCE_FAIL,
+                                   "runtime not initialized", 0);
+    }
+
     pct = utilization_pct(out->inspection.regions.active_count, out->inspection.regions.capacity);
     if (pct > policy->max_region_utilization_pct) {
         out->triggered_mask |= ASX_MONITOR_REGIONS_HIGH;

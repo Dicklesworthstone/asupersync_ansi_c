@@ -120,6 +120,42 @@ static void test_observability_capture(void) {
     asx_runtime_shutdown(&rt);
 }
 
+static void test_monitor_uninitialized_runtime_fails_closed(void) {
+    asx_runtime rt;
+    asx_monitor_policy policy;
+    asx_monitor_report report;
+    asx_evidence_sink sink;
+
+    memset(&rt, 0, sizeof(rt));
+    asx_monitor_policy_init_default(&policy);
+    MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
+
+    ASSERT(report.verdict == ASX_EVIDENCE_FAIL, "uninitialized runtime verdict");
+    ASSERT(report.triggered_mask == 0u, "no threshold mask for runtime state failure");
+    ASSERT(sink.count == 1u, "runtime failure evidence");
+    ASSERT(strcmp(sink.entries[0].source, "monitor:runtime") == 0, "runtime evidence source");
+}
+
+static void test_monitor_stale_runtime_fails_closed(void) {
+    asx_runtime a;
+    asx_runtime b;
+    asx_monitor_policy policy;
+    asx_monitor_report report;
+    asx_evidence_sink sink;
+
+    MUST_OK(asx_runtime_init_default(&a));
+    MUST_OK(asx_runtime_init_default(&b));
+    asx_monitor_policy_init_default(&policy);
+    MUST_OK(asx_monitor_evaluate(&a, &policy, &report, &sink));
+
+    ASSERT(report.verdict == ASX_EVIDENCE_FAIL, "stale runtime verdict");
+    ASSERT(report.triggered_mask == 0u, "no threshold mask for stale runtime");
+    ASSERT(sink.count == 1u, "stale runtime evidence");
+    ASSERT(strcmp(sink.entries[0].source, "monitor:runtime") == 0, "stale evidence source");
+
+    asx_runtime_shutdown(&b);
+}
+
 int main(void) {
     printf("test_monitor:\n");
 
@@ -127,6 +163,8 @@ int main(void) {
     RUN(test_monitor_watchdog_trigger);
     RUN(test_monitor_io_threshold_trigger);
     RUN(test_observability_capture);
+    RUN(test_monitor_uninitialized_runtime_fails_closed);
+    RUN(test_monitor_stale_runtime_fails_closed);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
