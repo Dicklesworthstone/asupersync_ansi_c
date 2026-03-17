@@ -465,6 +465,9 @@ asx_status asx_race_timeout_poll(void *user_data, asx_task_id self) {
 
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
 
+    /* Already timed out — return cached result without re-draining */
+    if (state->timed_out) return ASX_E_TIMED_OUT;
+
     /* Lazy deadline init on first poll */
     if (!state->initialized) {
         st = asx_deadline_after(&state->deadline, state->timeout_ns);

@@ -120,7 +120,6 @@ int asx_cancel_witness_is_valid(asx_cancel_witness_id w) {
  * ------------------------------------------------------------------- */
 
 asx_status asx_cancel_request(asx_task_id task, const asx_cancel_reason *reason) {
-    (void)task;
     if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
     if (task == ASX_INVALID_ID) return ASX_E_NOT_FOUND;
     /* Walking skeleton: validates arguments but does not propagate.

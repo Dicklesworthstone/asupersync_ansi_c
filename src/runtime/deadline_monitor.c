@@ -63,7 +63,7 @@ void asx_deadline_monitor_shutdown(void) {
         if (g_slots[i].state == ASX_DEADLINE_PENDING) {
             g_slots[i].state = ASX_DEADLINE_CANCELLED;
             g_stats.cancelled_count++;
-            g_stats.active_count--;
+            if (g_stats.active_count > 0) g_stats.active_count--;
         }
     }
     g_initialized = 0;
