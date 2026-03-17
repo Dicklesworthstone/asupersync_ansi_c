@@ -66,6 +66,18 @@ static int field_bytes_differ(const asx_runtime_config *a, const asx_runtime_con
     return memcmp(pa, pb, size) != 0;
 }
 
+static void config_state_copy(asx_config_state *state, const asx_runtime_config *cfg) {
+    state->active = *cfg;
+    state->has_leak_escalation = 0;
+    state->active.leak_escalation = NULL;
+    memset(&state->leak_escalation_storage, 0, sizeof(state->leak_escalation_storage));
+    if (cfg->leak_escalation != NULL) {
+        state->leak_escalation_storage = *cfg->leak_escalation;
+        state->active.leak_escalation = &state->leak_escalation_storage;
+        state->has_leak_escalation = 1;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* API implementation                                                  */
 /* ------------------------------------------------------------------ */
@@ -82,7 +94,7 @@ asx_status asx_config_load(asx_config_state *state, const asx_runtime_config *cf
     st = asx_runtime_config_validate(cfg);
     if (st != ASX_OK) return st;
 
-    memcpy(&state->active, cfg, sizeof(asx_runtime_config));
+    config_state_copy(state, cfg);
     state->loaded = 1;
     return ASX_OK;
 }
@@ -135,7 +147,7 @@ asx_status asx_config_reload(asx_config_state *state, const asx_runtime_config *
     if (st != ASX_OK) { return st; }
 
     /* Apply atomically (single-threaded — just copy) */
-    memcpy(&state->active, new_cfg, sizeof(asx_runtime_config));
+    config_state_copy(state, new_cfg);
     return ASX_OK;
 }
 

@@ -153,6 +153,7 @@ asx_status asx_lab_run_scenario(asx_lab *lab, const asx_lab_scenario *scenario,
 
     if (lab == NULL || scenario == NULL || out_result == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!lab->initialized) return ASX_E_INVALID_STATE;
+    if (scenario->step_count > ASX_LAB_MAX_STEPS) return ASX_E_INVALID_STATE;
 
     memset(out_result, 0, sizeof(*out_result));
     out_result->scenario_name = scenario->name;
@@ -160,6 +161,11 @@ asx_status asx_lab_run_scenario(asx_lab *lab, const asx_lab_scenario *scenario,
     start_time = asx_lab_now(lab);
 
     for (i = 0; i < scenario->step_count; i++) {
+        if (scenario->steps[i] == NULL) {
+            out_result->last_status = ASX_E_INVALID_STATE;
+            out_result->elapsed_ns = asx_lab_now(lab) - start_time;
+            return ASX_E_INVALID_STATE;
+        }
         st = scenario->steps[i](lab, scenario->step_data[i]);
         out_result->steps_completed++;
         out_result->last_status = st;

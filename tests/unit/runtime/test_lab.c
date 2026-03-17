@@ -338,6 +338,42 @@ TEST(scenario_with_region_ops) {
     asx_lab_shutdown(&lab);
 }
 
+TEST(scenario_null_step_fails_closed) {
+    asx_lab lab;
+    asx_lab_config cfg;
+    asx_lab_scenario sc;
+    asx_lab_result result;
+
+    asx_lab_config_init(&cfg);
+    MUST_OK(asx_lab_init(&lab, &cfg));
+    asx_lab_scenario_init(&sc, "null-step");
+    sc.step_count = 1u;
+    sc.steps[0] = NULL;
+
+    ASSERT_EQ(asx_lab_run_scenario(&lab, &sc, &result), ASX_E_INVALID_STATE);
+    ASSERT_EQ(result.steps_completed, 0u);
+    ASSERT_EQ(result.steps_total, 1u);
+    ASSERT_EQ(result.last_status, ASX_E_INVALID_STATE);
+
+    asx_lab_shutdown(&lab);
+}
+
+TEST(scenario_corrupt_step_count_fails_closed) {
+    asx_lab lab;
+    asx_lab_config cfg;
+    asx_lab_scenario sc;
+    asx_lab_result result;
+
+    asx_lab_config_init(&cfg);
+    MUST_OK(asx_lab_init(&lab, &cfg));
+    asx_lab_scenario_init(&sc, "corrupt-count");
+    sc.step_count = ASX_LAB_MAX_STEPS + 1u;
+
+    ASSERT_EQ(asx_lab_run_scenario(&lab, &sc, &result), ASX_E_INVALID_STATE);
+
+    asx_lab_shutdown(&lab);
+}
+
 TEST(scenario_overflow) {
     asx_lab_scenario sc;
     uint32_t i;
@@ -438,6 +474,8 @@ int main(void) {
     RUN_TEST(scenario_multi_step);
     RUN_TEST(scenario_stops_on_failure);
     RUN_TEST(scenario_with_region_ops);
+    RUN_TEST(scenario_null_step_fails_closed);
+    RUN_TEST(scenario_corrupt_step_count_fails_closed);
     RUN_TEST(scenario_overflow);
 
     RUN_TEST(replay_determinism);

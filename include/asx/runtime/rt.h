@@ -40,8 +40,10 @@ extern "C" {
 typedef struct {
     asx_runtime_config config;
     asx_runtime_hooks hooks;
+    asx_leak_escalation_config leak_escalation_storage;
     uint32_t generation; /* nonzero when initialized */
     int initialized;     /* guard flag */
+    int has_leak_escalation;
 } asx_runtime;
 
 /* ------------------------------------------------------------------ */
@@ -98,13 +100,16 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_init_from_env(asx_runtime *rt, const
  * Preconditions: rt must not be NULL.
  * Postconditions: all arenas/scheduler/trace/hooks are reset;
  *   rt->initialized is cleared.
- * Safe to call on an already-shutdown or never-initialized runtime.
+ * Safe to call on an already-shutdown, stale, or never-initialized runtime.
+ * Only the currently active runtime generation tears down global runtime state;
+ * stale runtime objects are simply cleared.
  *
  * Thread-safety: not thread-safe. */
 ASX_API void asx_runtime_shutdown(asx_runtime *rt);
 
-/* Check if a runtime is initialized.
- * Returns nonzero if initialized, 0 otherwise. */
+/* Check if a runtime is initialized and still represents the active runtime
+ * generation. Returns nonzero if initialized, 0 otherwise. Stale runtime
+ * objects from an older init generation fail closed and report not initialized. */
 ASX_API int asx_runtime_is_initialized(const asx_runtime *rt);
 
 /* ------------------------------------------------------------------ */
@@ -112,6 +117,8 @@ ASX_API int asx_runtime_is_initialized(const asx_runtime *rt);
 /* ------------------------------------------------------------------ */
 
 /* Get the active configuration from a runtime.
+ * If leak_escalation is non-NULL in the returned copy, it points at storage
+ * owned by rt and remains valid only while rt stays initialized.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if NULL,
  *   ASX_E_INVALID_STATE if runtime is not initialized. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_get_config(const asx_runtime *rt,
@@ -146,7 +153,8 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_reload_config(asx_runtime *rt,
                                                           const char **rejection_field);
 
 /* Validate a runtime config without initializing.
- * Checks size field, bounds on fields (cancel chain depth, etc.).
+ * Checks size field, enum-valued policy fields, optional leak-escalation
+ * sub-config enums, and numeric bounds.
  * Returns ASX_OK if valid, ASX_E_INVALID_ARGUMENT if NULL or invalid. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_config_validate(const asx_runtime_config *config);
 

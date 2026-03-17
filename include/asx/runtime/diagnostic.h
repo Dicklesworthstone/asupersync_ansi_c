@@ -113,7 +113,8 @@ typedef struct {
 } asx_inspection_report;
 
 /* Capture a full runtime inspection report.
- * Reads state from all subsystems without mutation. */
+ * Reads state from all subsystems without mutation. Stale or uninitialized
+ * runtime objects fail closed and report zero live gauges/digests. */
 ASX_API ASX_MUST_USE asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out);
 
 /* -------------------------------------------------------------------

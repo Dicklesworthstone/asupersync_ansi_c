@@ -87,6 +87,16 @@ asx_status asx_task_handle_abort_with_kind(asx_task_handle *h, asx_cancel_kind k
 /* Scope lifecycle                                                     */
 /* ------------------------------------------------------------------ */
 
+static int asx_scope_is_initialized(const asx_scope *scope) {
+    if (scope == NULL) return 0;
+    if (scope->region_id == ASX_INVALID_ID) return 0;
+    if (!asx_cx_is_valid(&scope->cx)) return 0;
+    if (!asx_cx_has_cap(&scope->cx, ASX_CAP_SPAWN)) return 0;
+    if (scope->cx.region_id != scope->region_id) return 0;
+    if (scope->cx.task_id != ASX_INVALID_ID) return 0;
+    return 1;
+}
+
 asx_status asx_scope_init(asx_scope *scope, asx_region_id region, const asx_cx *cx,
                           asx_budget budget) {
     if (scope == NULL || cx == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -136,7 +146,7 @@ asx_status asx_scope_spawn_with_cx(asx_scope *scope, asx_cap_flags child_caps,
     asx_status st;
 
     if (scope == NULL || poll_fn == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (!asx_cx_has_cap(&scope->cx, ASX_CAP_SPAWN)) return ASX_E_PERMISSION_DENIED;
+    if (!asx_scope_is_initialized(scope)) return ASX_E_INVALID_STATE;
     st = scope_bind_spawned_cx(scope, ASX_INVALID_ID, child_caps, NULL);
     if (st != ASX_OK) return st;
 
@@ -159,7 +169,7 @@ asx_status asx_scope_spawn_captured(asx_scope *scope, asx_task_poll_fn poll_fn, 
     asx_status st;
 
     if (scope == NULL || poll_fn == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (!asx_cx_has_cap(&scope->cx, ASX_CAP_SPAWN)) return ASX_E_PERMISSION_DENIED;
+    if (!asx_scope_is_initialized(scope)) return ASX_E_INVALID_STATE;
 
     st =
         asx_task_spawn_captured(scope->region_id, poll_fn, state_size, state_dtor, &tid, out_state);
@@ -178,11 +188,13 @@ asx_status asx_scope_spawn_captured(asx_scope *scope, asx_task_poll_fn poll_fn, 
 
 asx_status asx_scope_run(asx_scope *scope) {
     if (scope == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_scope_is_initialized(scope)) return ASX_E_INVALID_STATE;
     return asx_scheduler_run(scope->region_id, &scope->budget);
 }
 
 asx_status asx_scope_drain(asx_scope *scope) {
     if (scope == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_scope_is_initialized(scope)) return ASX_E_INVALID_STATE;
     return asx_region_drain(scope->region_id, &scope->budget);
 }
 

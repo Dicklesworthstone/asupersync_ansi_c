@@ -137,6 +137,12 @@ TEST(invalid_setter_inputs_fail) {
     asx_runtime_builder builder;
 
     ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_set_wait_policy(&builder, (asx_wait_policy)99),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_builder_set_leak_response(&builder, (asx_leak_response)99),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_builder_set_finalizer_escalation(&builder, (asx_finalizer_escalation)99),
+              ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_runtime_builder_set_finalizer_poll_budget(NULL, 1u), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_runtime_builder_set_finalizer_poll_budget(&builder, 0u), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_runtime_builder_set_finalizer_time_budget_ns(&builder, 0u),
@@ -144,6 +150,38 @@ TEST(invalid_setter_inputs_fail) {
     ASSERT_EQ(asx_runtime_builder_set_max_cancel_chain_depth(&builder, 0u), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_runtime_builder_set_max_cancel_chain_memory(&builder, 0u),
               ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(zeroed_builder_fails_closed) {
+    asx_runtime_builder builder;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_runtime rt;
+
+    memset(&builder, 0, sizeof(builder));
+
+    ASSERT_EQ(asx_runtime_builder_preset(&builder), ASX_RUNTIME_PRESET_DEFAULT);
+    ASSERT_EQ(asx_runtime_builder_get_config(&builder, &cfg), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_get_hooks(&builder, &hooks), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_wait_policy(&builder, ASX_WAIT_YIELD), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_leak_response(&builder, ASX_LEAK_RECOVER),
+              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_finalizer_poll_budget(&builder, 1u), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_finalizer_time_budget_ns(&builder, 1u), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_finalizer_escalation(&builder, ASX_FINALIZER_SOFT),
+              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_max_cancel_chain_depth(&builder, 1u), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_max_cancel_chain_memory(&builder, 1u), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_hooks(&builder, &hooks), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_allocator_hooks(&builder, &hooks.allocator),
+              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_clock_hooks(&builder, &hooks.clock), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_entropy_hooks(&builder, &hooks.entropy), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_reactor_hooks(&builder, &hooks.reactor), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_log_hooks(&builder, &hooks.log), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_validate(&builder), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_apply_env(&builder, NULL), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_build(&builder, &rt), ASX_E_INVALID_STATE);
 }
 
 TEST(hook_setters_replace_hook_families) {
@@ -232,6 +270,22 @@ TEST(validate_rejects_bad_builder_config) {
 
     ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
     builder.config.finalizer_poll_budget = 0u;
+    ASSERT_EQ(asx_runtime_builder_validate(&builder), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(validate_rejects_invalid_enum_fields) {
+    asx_runtime_builder builder;
+
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    builder.config.wait_policy = (asx_wait_policy)99;
+    ASSERT_EQ(asx_runtime_builder_validate(&builder), ASX_E_INVALID_ARGUMENT);
+
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    builder.config.leak_response = (asx_leak_response)99;
+    ASSERT_EQ(asx_runtime_builder_validate(&builder), ASX_E_INVALID_ARGUMENT);
+
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    builder.config.finalizer_escalation = (asx_finalizer_escalation)99;
     ASSERT_EQ(asx_runtime_builder_validate(&builder), ASX_E_INVALID_ARGUMENT);
 }
 
@@ -384,12 +438,14 @@ int main(void) {
     RUN_TEST(high_throughput_preset_expands_cleanup_budget);
     RUN_TEST(setters_override_preset_values);
     RUN_TEST(invalid_setter_inputs_fail);
+    RUN_TEST(zeroed_builder_fails_closed);
     RUN_TEST(hook_setters_replace_hook_families);
     RUN_TEST(partial_hook_setter_rejects_invalid_clock_and_preserves_old_hooks);
     RUN_TEST(partial_hook_setter_null_family_fails);
     RUN_TEST(set_hooks_rejects_invalid_full_hook_table);
     RUN_TEST(set_hooks_accepts_valid_full_hook_table);
     RUN_TEST(validate_rejects_bad_builder_config);
+    RUN_TEST(validate_rejects_invalid_enum_fields);
     RUN_TEST(build_roundtrip_works);
     RUN_TEST(build_null_fails);
     RUN_TEST(apply_env_null_builder_fails);

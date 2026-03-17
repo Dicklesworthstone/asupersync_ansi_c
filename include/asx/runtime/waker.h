@@ -40,6 +40,7 @@ typedef struct {
 /* Register a waker for a task. The waker can later be signaled
  * to indicate the task should be re-polled.
  * Returns ASX_OK on success.
+ * Returns ASX_E_INVALID_ARGUMENT if task is ASX_INVALID_ID or out_waker is NULL.
  * Returns ASX_E_RESOURCE_EXHAUSTED if waker arena is full. */
 ASX_API ASX_MUST_USE asx_status asx_waker_register(asx_task_id task, asx_waker *out_waker);
 

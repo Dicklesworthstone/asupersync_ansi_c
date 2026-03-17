@@ -48,6 +48,10 @@ TEST(field_class_leak_response_is_reloadable) {
     ASSERT_EQ(asx_config_field_class("leak_response"), ASX_CONFIG_RELOADABLE);
 }
 
+TEST(field_class_leak_escalation_is_reloadable) {
+    ASSERT_EQ(asx_config_field_class("leak_escalation"), ASX_CONFIG_RELOADABLE);
+}
+
 TEST(field_class_finalizer_poll_budget_is_reloadable) {
     ASSERT_EQ(asx_config_field_class("finalizer_poll_budget"), ASX_CONFIG_RELOADABLE);
 }
@@ -102,6 +106,51 @@ TEST(load_invalid_cfg_rejected) {
     ASSERT_TRUE(asx_config_active(&g_state) == NULL);
 }
 
+TEST(load_invalid_enum_cfg_rejected) {
+    asx_runtime_config bad_cfg;
+
+    cr_setup();
+    memcpy(&bad_cfg, &g_cfg, sizeof(bad_cfg));
+    bad_cfg.wait_policy = (asx_wait_policy)99;
+    ASSERT_EQ(asx_config_load(&g_state, &bad_cfg), ASX_E_INVALID_ARGUMENT);
+    ASSERT_TRUE(asx_config_active(&g_state) == NULL);
+}
+
+TEST(load_invalid_leak_escalation_cfg_rejected) {
+    asx_runtime_config bad_cfg;
+    asx_leak_escalation_config escalation;
+
+    cr_setup();
+    memcpy(&bad_cfg, &g_cfg, sizeof(bad_cfg));
+    escalation.threshold = 1u;
+    escalation.escalate_to = (asx_leak_response)99;
+    bad_cfg.leak_escalation = &escalation;
+    ASSERT_EQ(asx_config_load(&g_state, &bad_cfg), ASX_E_INVALID_ARGUMENT);
+    ASSERT_TRUE(asx_config_active(&g_state) == NULL);
+}
+
+TEST(load_copies_leak_escalation_config) {
+    asx_runtime_config cfg;
+    asx_leak_escalation_config escalation;
+
+    cr_setup();
+    memcpy(&cfg, &g_cfg, sizeof(cfg));
+    escalation.threshold = 5u;
+    escalation.escalate_to = ASX_LEAK_RECOVER;
+    cfg.leak_escalation = &escalation;
+
+    ASSERT_EQ(asx_config_load(&g_state, &cfg), ASX_OK);
+    ASSERT_TRUE(asx_config_active(&g_state) != NULL);
+    ASSERT_TRUE(asx_config_active(&g_state)->leak_escalation != NULL);
+    ASSERT_TRUE(asx_config_active(&g_state)->leak_escalation != &escalation);
+
+    escalation.threshold = 99u;
+    escalation.escalate_to = ASX_LEAK_PANIC;
+
+    ASSERT_EQ(asx_config_active(&g_state)->leak_escalation->threshold, (uint64_t)5u);
+    ASSERT_EQ(asx_config_active(&g_state)->leak_escalation->escalate_to, ASX_LEAK_RECOVER);
+}
+
 /* ------------------------------------------------------------------ */
 /* Test: reload reloadable fields succeeds                             */
 /* ------------------------------------------------------------------ */
@@ -144,6 +193,29 @@ TEST(reload_finalizer_budget_succeeds) {
 
     ASSERT_EQ(asx_config_reload(&g_state, &new_cfg), ASX_OK);
     ASSERT_EQ(asx_config_active(&g_state)->finalizer_poll_budget, (uint32_t)500);
+}
+
+TEST(reload_copies_leak_escalation_config) {
+    asx_runtime_config new_cfg;
+    asx_leak_escalation_config escalation;
+
+    cr_setup();
+    ASSERT_EQ(asx_config_load(&g_state, &g_cfg), ASX_OK);
+
+    memcpy(&new_cfg, &g_cfg, sizeof(new_cfg));
+    escalation.threshold = 12u;
+    escalation.escalate_to = ASX_LEAK_SILENT;
+    new_cfg.leak_escalation = &escalation;
+
+    ASSERT_EQ(asx_config_reload(&g_state, &new_cfg), ASX_OK);
+    ASSERT_TRUE(asx_config_active(&g_state)->leak_escalation != NULL);
+    ASSERT_TRUE(asx_config_active(&g_state)->leak_escalation != &escalation);
+
+    escalation.threshold = 77u;
+    escalation.escalate_to = ASX_LEAK_PANIC;
+
+    ASSERT_EQ(asx_config_active(&g_state)->leak_escalation->threshold, (uint64_t)12u);
+    ASSERT_EQ(asx_config_active(&g_state)->leak_escalation->escalate_to, ASX_LEAK_SILENT);
 }
 
 /* ------------------------------------------------------------------ */
@@ -266,6 +338,33 @@ TEST(validate_rejects_structurally_invalid_proposed_config) {
     ASSERT_EQ(asx_config_validate_reload(&g_state, &bad_cfg, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(validate_rejects_invalid_enum_proposed_config) {
+    asx_runtime_config bad_cfg;
+
+    cr_setup();
+    ASSERT_EQ(asx_config_load(&g_state, &g_cfg), ASX_OK);
+
+    memcpy(&bad_cfg, &g_cfg, sizeof(bad_cfg));
+    bad_cfg.finalizer_escalation = (asx_finalizer_escalation)99;
+
+    ASSERT_EQ(asx_config_validate_reload(&g_state, &bad_cfg, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(validate_rejects_invalid_leak_escalation_proposed_config) {
+    asx_runtime_config bad_cfg;
+    asx_leak_escalation_config escalation;
+
+    cr_setup();
+    ASSERT_EQ(asx_config_load(&g_state, &g_cfg), ASX_OK);
+
+    memcpy(&bad_cfg, &g_cfg, sizeof(bad_cfg));
+    escalation.threshold = 1u;
+    escalation.escalate_to = (asx_leak_response)99;
+    bad_cfg.leak_escalation = &escalation;
+
+    ASSERT_EQ(asx_config_validate_reload(&g_state, &bad_cfg, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
 /* ------------------------------------------------------------------ */
 /* Test: identical config reload succeeds                              */
 /* ------------------------------------------------------------------ */
@@ -367,6 +466,7 @@ int main(void) {
     RUN_TEST(field_class_size_is_frozen);
     RUN_TEST(field_class_wait_policy_is_reloadable);
     RUN_TEST(field_class_leak_response_is_reloadable);
+    RUN_TEST(field_class_leak_escalation_is_reloadable);
     RUN_TEST(field_class_finalizer_poll_budget_is_reloadable);
     RUN_TEST(field_class_finalizer_time_budget_is_reloadable);
     RUN_TEST(field_class_finalizer_escalation_is_reloadable);
@@ -379,11 +479,15 @@ int main(void) {
     RUN_TEST(load_null_state_fails);
     RUN_TEST(load_null_cfg_fails);
     RUN_TEST(load_invalid_cfg_rejected);
+    RUN_TEST(load_invalid_enum_cfg_rejected);
+    RUN_TEST(load_invalid_leak_escalation_cfg_rejected);
+    RUN_TEST(load_copies_leak_escalation_config);
 
     /* Reload success */
     RUN_TEST(reload_wait_policy_succeeds);
     RUN_TEST(reload_leak_response_succeeds);
     RUN_TEST(reload_finalizer_budget_succeeds);
+    RUN_TEST(reload_copies_leak_escalation_config);
 
     /* Reload rejection */
     RUN_TEST(reload_size_field_rejected);
@@ -397,6 +501,8 @@ int main(void) {
     RUN_TEST(reload_before_load_fails);
     RUN_TEST(validate_before_load_fails);
     RUN_TEST(validate_rejects_structurally_invalid_proposed_config);
+    RUN_TEST(validate_rejects_invalid_enum_proposed_config);
+    RUN_TEST(validate_rejects_invalid_leak_escalation_proposed_config);
     RUN_TEST(identical_reload_succeeds);
 
     /* Field table */

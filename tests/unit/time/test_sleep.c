@@ -218,6 +218,26 @@ TEST(interval_poll_null_fails) {
     ASSERT_EQ(asx_interval_poll(NULL, ASX_INVALID_ID), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(interval_overflow_preserves_current_deadline_state) {
+    asx_interval_state is;
+    asx_time original_target;
+
+    setup();
+    MUST_OK(asx_interval_init(&is, 2u, 0u));
+    MUST_OK(asx_interval_poll(&is, ASX_INVALID_ID));
+
+    is.deadline.expired = 1;
+    is.deadline.registered = 1;
+    original_target = is.deadline.target_ns;
+    asx_vtime_init(&g_vt, UINT64_MAX - 1u, 1u);
+
+    ASSERT_EQ(asx_interval_poll(&is, ASX_INVALID_ID), ASX_E_TIMER_DURATION_EXCEEDED);
+    ASSERT_EQ(is.deadline.target_ns, original_target);
+    ASSERT_EQ(is.deadline.expired, 1);
+    ASSERT_EQ(is.deadline.registered, 1);
+    teardown();
+}
+
 TEST(interval_completes_after_max_ticks) {
     asx_interval_state is;
     asx_status st;
@@ -248,6 +268,18 @@ TEST(interval_ticks_increment) {
         (void)st;
     }
     ASSERT_TRUE(asx_interval_ticks(&is) >= 1);
+    teardown();
+}
+
+TEST(interval_rearm_overflow_fails) {
+    asx_interval_state is;
+
+    setup();
+    MUST_OK(asx_interval_init(&is, 1u, 0u));
+    asx_vtime_init(&g_vt, UINT64_MAX, 0u);
+    MUST_OK(asx_deadline_init(&is.deadline, UINT64_MAX));
+    is.initialized = 1;
+    ASSERT_EQ(asx_interval_poll(&is, ASX_INVALID_ID), ASX_E_TIMER_DURATION_EXCEEDED);
     teardown();
 }
 
@@ -286,8 +318,10 @@ int main(void) {
     /* Interval poll */
     RUN_TEST(interval_ticks_null_returns_zero);
     RUN_TEST(interval_poll_null_fails);
+    RUN_TEST(interval_overflow_preserves_current_deadline_state);
     RUN_TEST(interval_completes_after_max_ticks);
     RUN_TEST(interval_ticks_increment);
+    RUN_TEST(interval_rearm_overflow_fails);
 
     TEST_REPORT();
     return test_failures;

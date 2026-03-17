@@ -47,7 +47,8 @@ ASX_API ASX_MUST_USE asx_status asx_deadline_init(asx_deadline *dl, asx_time tar
 /* Create a deadline relative to the current runtime time.
  * Reads the clock via asx_runtime_now_ns() and adds duration_ns.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if dl is NULL,
- *   ASX_E_HOOK_MISSING if clock hooks are not installed. */
+ *   ASX_E_HOOK_MISSING if clock hooks are not installed,
+ *   ASX_E_TIMER_DURATION_EXCEEDED if now + duration_ns would overflow. */
 ASX_API ASX_MUST_USE asx_status asx_deadline_after(asx_deadline *dl, uint64_t duration_ns);
 
 /* Arm a deadline by registering it with the global timer wheel.

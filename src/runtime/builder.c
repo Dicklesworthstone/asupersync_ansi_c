@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+static int builder_surface_ready(const asx_runtime_builder *builder);
+
 static asx_status builder_init_common(asx_runtime_builder *builder, asx_runtime_preset preset) {
     asx_status st;
 
@@ -38,6 +40,8 @@ static asx_status builder_set_hook_family(asx_runtime_builder *builder, void *ds
     asx_status st;
 
     if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
     candidate = builder->hooks;
     st = builder_copy_in(dst_family == NULL
                              ? NULL
@@ -200,6 +204,51 @@ static asx_status parse_finalizer_escalation(const char *text,
     return ASX_OK;
 }
 
+static int builder_wait_policy_valid(asx_wait_policy policy) {
+    switch (policy) {
+    case ASX_WAIT_BUSY_SPIN:
+    case ASX_WAIT_YIELD:
+    case ASX_WAIT_SLEEP: return 1;
+    default: return 0;
+    }
+}
+
+static int builder_leak_response_valid(asx_leak_response response) {
+    switch (response) {
+    case ASX_LEAK_PANIC:
+    case ASX_LEAK_LOG:
+    case ASX_LEAK_SILENT:
+    case ASX_LEAK_RECOVER: return 1;
+    default: return 0;
+    }
+}
+
+static int builder_finalizer_escalation_valid(asx_finalizer_escalation escalation) {
+    switch (escalation) {
+    case ASX_FINALIZER_SOFT:
+    case ASX_FINALIZER_BOUNDED_LOG:
+    case ASX_FINALIZER_BOUNDED_PANIC: return 1;
+    default: return 0;
+    }
+}
+
+static int builder_preset_valid(asx_runtime_preset preset) {
+    switch (preset) {
+    case ASX_RUNTIME_PRESET_DEFAULT:
+    case ASX_RUNTIME_PRESET_CURRENT_THREAD:
+    case ASX_RUNTIME_PRESET_LOW_LATENCY:
+    case ASX_RUNTIME_PRESET_HIGH_THROUGHPUT: return 1;
+    default: return 0;
+    }
+}
+
+static int builder_surface_ready(const asx_runtime_builder *builder) {
+    if (builder == NULL) return 0;
+    if (builder->config.size != (uint32_t)sizeof(builder->config)) return 0;
+    if (!builder_preset_valid(builder->preset)) return 0;
+    return asx_runtime_hooks_validate(&builder->hooks, ASX_DETERMINISTIC) == ASX_OK;
+}
+
 asx_status asx_runtime_builder_init(asx_runtime_builder *builder) {
     return builder_init_common(builder, ASX_RUNTIME_PRESET_DEFAULT);
 }
@@ -247,7 +296,7 @@ asx_status asx_runtime_builder_init_high_throughput(asx_runtime_builder *builder
 }
 
 asx_runtime_preset asx_runtime_builder_preset(const asx_runtime_builder *builder) {
-    if (builder == NULL) return ASX_RUNTIME_PRESET_DEFAULT;
+    if (!builder_surface_ready(builder)) return ASX_RUNTIME_PRESET_DEFAULT;
     return builder->preset;
 }
 
@@ -264,6 +313,8 @@ const char *asx_runtime_preset_str(asx_runtime_preset preset) {
 asx_status asx_runtime_builder_get_config(const asx_runtime_builder *builder,
                                           asx_runtime_config *out) {
     if (builder == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
     *out = builder->config;
     return ASX_OK;
 }
@@ -271,6 +322,8 @@ asx_status asx_runtime_builder_get_config(const asx_runtime_builder *builder,
 asx_status asx_runtime_builder_get_hooks(const asx_runtime_builder *builder,
                                          asx_runtime_hooks *out) {
     if (builder == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
     *out = builder->hooks;
     return ASX_OK;
 }
@@ -278,6 +331,9 @@ asx_status asx_runtime_builder_get_hooks(const asx_runtime_builder *builder,
 asx_status asx_runtime_builder_set_wait_policy(asx_runtime_builder *builder,
                                                asx_wait_policy policy) {
     if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (!builder_wait_policy_valid(policy)) return ASX_E_INVALID_ARGUMENT;
     builder->config.wait_policy = policy;
     return ASX_OK;
 }
@@ -285,6 +341,9 @@ asx_status asx_runtime_builder_set_wait_policy(asx_runtime_builder *builder,
 asx_status asx_runtime_builder_set_leak_response(asx_runtime_builder *builder,
                                                  asx_leak_response response) {
     if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (!builder_leak_response_valid(response)) return ASX_E_INVALID_ARGUMENT;
     builder->config.leak_response = response;
     return ASX_OK;
 }
@@ -292,6 +351,8 @@ asx_status asx_runtime_builder_set_leak_response(asx_runtime_builder *builder,
 asx_status asx_runtime_builder_set_finalizer_poll_budget(asx_runtime_builder *builder,
                                                          uint32_t polls) {
     if (builder == NULL || polls == 0u) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
     builder->config.finalizer_poll_budget = polls;
     return ASX_OK;
 }
@@ -299,6 +360,8 @@ asx_status asx_runtime_builder_set_finalizer_poll_budget(asx_runtime_builder *bu
 asx_status asx_runtime_builder_set_finalizer_time_budget_ns(asx_runtime_builder *builder,
                                                             uint64_t budget_ns) {
     if (builder == NULL || budget_ns == 0u) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
     builder->config.finalizer_time_budget_ns = budget_ns;
     return ASX_OK;
 }
@@ -306,6 +369,9 @@ asx_status asx_runtime_builder_set_finalizer_time_budget_ns(asx_runtime_builder 
 asx_status asx_runtime_builder_set_finalizer_escalation(asx_runtime_builder *builder,
                                                         asx_finalizer_escalation escalation) {
     if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (!builder_finalizer_escalation_valid(escalation)) return ASX_E_INVALID_ARGUMENT;
     builder->config.finalizer_escalation = escalation;
     return ASX_OK;
 }
@@ -313,6 +379,8 @@ asx_status asx_runtime_builder_set_finalizer_escalation(asx_runtime_builder *bui
 asx_status asx_runtime_builder_set_max_cancel_chain_depth(asx_runtime_builder *builder,
                                                           uint16_t depth) {
     if (builder == NULL || depth == 0u) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
     builder->config.max_cancel_chain_depth = depth;
     return ASX_OK;
 }
@@ -320,6 +388,8 @@ asx_status asx_runtime_builder_set_max_cancel_chain_depth(asx_runtime_builder *b
 asx_status asx_runtime_builder_set_max_cancel_chain_memory(asx_runtime_builder *builder,
                                                            uint32_t bytes) {
     if (builder == NULL || bytes == 0u) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
     builder->config.max_cancel_chain_memory = bytes;
     return ASX_OK;
 }
@@ -329,6 +399,8 @@ asx_status asx_runtime_builder_set_hooks(asx_runtime_builder *builder,
     asx_status st;
 
     if (builder == NULL || hooks == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
     st = asx_runtime_hooks_validate(hooks, ASX_DETERMINISTIC);
     if (st != ASX_OK) return st;
     builder->hooks = *hooks;
@@ -369,6 +441,12 @@ asx_status asx_runtime_builder_validate(const asx_runtime_builder *builder) {
     asx_status st;
 
     if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (!builder_wait_policy_valid(builder->config.wait_policy)) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_leak_response_valid(builder->config.leak_response)) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_finalizer_escalation_valid(builder->config.finalizer_escalation)) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
 
     st = asx_runtime_config_validate(&builder->config);
     if (st != ASX_OK) return st;
@@ -390,6 +468,8 @@ asx_status asx_runtime_builder_apply_env(asx_runtime_builder *builder, const cha
     asx_status st;
 
     if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
 
     candidate = *builder;
 

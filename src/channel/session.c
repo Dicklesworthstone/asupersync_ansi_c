@@ -8,6 +8,7 @@
  */
 
 #include <asx/core/session.h>
+#include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
 #include <string.h>
 
@@ -95,9 +96,17 @@ asx_status asx_session_create(asx_region_id region, uint32_t capacity,
                               asx_session_endpoint *out_responder) {
     uint32_t idx;
     asx_session_slot *s;
+    asx_region_state region_state;
+    asx_status st;
 
     if (out_initiator == NULL || out_responder == NULL) return ASX_E_INVALID_ARGUMENT;
     if (capacity == 0 || capacity > ASX_SESSION_MAX_CAPACITY) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_handle_is_valid(region)) return ASX_E_INVALID_ARGUMENT;
+    if (asx_handle_type_tag(region) != ASX_TYPE_REGION) return ASX_E_INVALID_ARGUMENT;
+
+    st = asx_region_get_state(region, &region_state);
+    if (st != ASX_OK) return st;
+    if (region_state != ASX_REGION_OPEN) return ASX_E_INVALID_STATE;
 
     /* Find free slot */
     idx = ASX_MAX_SESSIONS;
@@ -209,8 +218,8 @@ asx_status asx_session_try_recv(asx_session_endpoint *ep, uint64_t *out_value) {
     peer_alive = ep->is_initiator ? s->responder_alive : s->initiator_alive;
 
     if (queue_pop(q, out_value)) {
-        /* Responder receiving a request: decrement obligations */
-        if (!ep->is_initiator) {
+        /* Initiator receiving a response retires an outstanding obligation. */
+        if (ep->is_initiator) {
             if (s->obligations > 0) s->obligations--;
         }
         asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)ep->slot, *out_value);

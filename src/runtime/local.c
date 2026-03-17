@@ -7,6 +7,30 @@
 #include <asx/runtime/local.h>
 #include <stddef.h>
 
+static int local_scope_is_initialized(const asx_local_scope *scope) {
+    const asx_scope *inner;
+
+    if (scope == NULL) return 0;
+    inner = &scope->inner;
+    if (inner->region_id == ASX_INVALID_ID) return 0;
+    if (!asx_cx_is_valid(&inner->cx)) return 0;
+    if (!asx_cx_has_cap(&inner->cx, ASX_CAP_SPAWN)) return 0;
+    if (inner->cx.region_id != inner->region_id) return 0;
+    if (inner->cx.task_id != ASX_INVALID_ID) return 0;
+    return 1;
+}
+
+static int local_task_handle_is_initialized(const asx_local_task_handle *handle) {
+    const asx_task_handle *inner;
+
+    if (handle == NULL) return 0;
+    inner = &handle->inner;
+    if (inner->task_id == ASX_INVALID_ID) return 0;
+    if (inner->region_id == ASX_INVALID_ID) return 0;
+    if (inner->joined != 0 && inner->joined != 1) return 0;
+    return 1;
+}
+
 static asx_task_handle *local_inner_mut(asx_local_task_handle *handle) {
     if (handle == NULL) return NULL;
     return &handle->inner;
@@ -56,24 +80,28 @@ asx_status asx_local_scope_drain(asx_local_scope *scope) {
 }
 
 uint32_t asx_local_scope_spawned_count(const asx_local_scope *scope) {
-    if (scope == NULL) return 0u;
+    if (!local_scope_is_initialized(scope)) return 0u;
     return asx_scope_spawned_count(&scope->inner);
 }
 
 asx_region_id asx_local_scope_region(const asx_local_scope *scope) {
-    if (scope == NULL) return ASX_INVALID_ID;
+    if (!local_scope_is_initialized(scope)) return ASX_INVALID_ID;
     return asx_scope_region(&scope->inner);
 }
 
 int asx_local_task_handle_is_finished(const asx_local_task_handle *handle) {
+    if (!local_task_handle_is_initialized(handle)) return 0;
     return asx_task_handle_is_finished(local_inner(handle));
 }
 
 asx_task_id asx_local_task_handle_task_id(const asx_local_task_handle *handle) {
+    if (!local_task_handle_is_initialized(handle)) return ASX_INVALID_ID;
     return asx_task_handle_task_id(local_inner(handle));
 }
 
 asx_status asx_local_task_handle_try_join(asx_local_task_handle *handle, asx_outcome *out) {
+    if (handle == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!local_task_handle_is_initialized(handle)) return ASX_E_INVALID_STATE;
     return asx_task_handle_try_join(local_inner_mut(handle), out);
 }
 
@@ -82,10 +110,14 @@ asx_join_error asx_local_task_handle_join_error(const asx_outcome *outcome) {
 }
 
 asx_status asx_local_task_handle_abort(asx_local_task_handle *handle) {
+    if (handle == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!local_task_handle_is_initialized(handle)) return ASX_E_INVALID_STATE;
     return asx_task_handle_abort(local_inner_mut(handle));
 }
 
 asx_status asx_local_task_handle_abort_with_kind(asx_local_task_handle *handle,
                                                  asx_cancel_kind kind) {
+    if (handle == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!local_task_handle_is_initialized(handle)) return ASX_E_INVALID_STATE;
     return asx_task_handle_abort_with_kind(local_inner_mut(handle), kind);
 }

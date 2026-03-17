@@ -123,6 +123,8 @@ typedef struct {
 
 /* Run a scenario in the lab runtime.
  * Executes each step in order. Stops on first error.
+ * Fails closed with ASX_E_INVALID_STATE if the scenario descriptor is
+ * malformed (step_count overflow or NULL step entry inside the active range).
  * Returns ASX_OK if all steps succeed. */
 ASX_API ASX_MUST_USE asx_status asx_lab_run_scenario(asx_lab *lab, const asx_lab_scenario *scenario,
                                                      asx_lab_result *out_result);

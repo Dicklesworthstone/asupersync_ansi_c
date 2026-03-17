@@ -24,6 +24,13 @@ TEST(register_null_out_fails) {
     ASSERT_EQ(asx_waker_register(ASX_INVALID_ID, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(register_invalid_task_fails) {
+    asx_waker w;
+    setup();
+    ASSERT_EQ(asx_waker_register(ASX_INVALID_ID, &w), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_waker_active_count(), 0u);
+}
+
 TEST(register_success) {
     asx_waker w;
     setup();
@@ -148,7 +155,7 @@ TEST(arena_exhaustion) {
     asx_status st;
     setup();
     for (i = 0; i < ASX_MAX_WAKERS; i++) {
-        st = asx_waker_register(i, &w);
+        st = asx_waker_register((asx_task_id)(i + 1u), &w);
         ASSERT_EQ(st, ASX_OK);
     }
     st = asx_waker_register(999, &w);
@@ -163,6 +170,7 @@ int main(void) {
     fprintf(stderr, "=== test_waker ===\n");
 
     RUN_TEST(register_null_out_fails);
+    RUN_TEST(register_invalid_task_fails);
     RUN_TEST(register_success);
     RUN_TEST(deregister_decrements_count);
     RUN_TEST(deregister_null_safe);

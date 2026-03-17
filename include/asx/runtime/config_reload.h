@@ -60,7 +60,9 @@ typedef struct {
 
 typedef struct {
     asx_runtime_config active; /* Currently active config */
+    asx_leak_escalation_config leak_escalation_storage;
     int loaded;                /* 1 if config has been loaded */
+    int has_leak_escalation;
 } asx_config_state;
 
 /* ------------------------------------------------------------------ */
@@ -72,8 +74,9 @@ typedef struct {
 ASX_API void asx_config_state_init(asx_config_state *state);
 
 /* Load initial config (sets active config + marks as loaded).
- * The config must also satisfy the structural runtime-config contract
- * (`size`, nonzero budgets, etc).
+ * The config must also satisfy the full runtime-config contract
+ * (`size`, enum-valued policy fields including optional leak-escalation
+ * sub-config state, nonzero budgets, etc).
  * Returns ASX_OK or ASX_E_INVALID_ARGUMENT. */
 ASX_API asx_status asx_config_load(asx_config_state *state, const asx_runtime_config *cfg);
 
@@ -91,7 +94,9 @@ ASX_API asx_status asx_config_load(asx_config_state *state, const asx_runtime_co
  */
 ASX_API asx_status asx_config_reload(asx_config_state *state, const asx_runtime_config *new_cfg);
 
-/* Query the currently active config (read-only view). */
+/* Query the currently active config (read-only view).
+ * If leak_escalation is non-NULL in the returned config, it points at storage
+ * owned by state and remains valid while state stays loaded. */
 ASX_API const asx_runtime_config *asx_config_active(const asx_config_state *state);
 
 /* Query the reload classification of a named field.

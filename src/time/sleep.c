@@ -6,6 +6,7 @@
 
 #include <asx/asx_config.h>
 #include <asx/time/sleep.h>
+#include <stdint.h>
 #include <string.h>
 
 /* ===================================================================
@@ -159,15 +160,20 @@ asx_status asx_interval_poll(void *user_data, asx_task_id self) {
     if (st != ASX_OK) return st;
 
     if (asx_deadline_is_expired_at(&s->deadline, now)) {
+        asx_time next_target;
+
         s->ticks++;
 
         /* Check if we've reached max ticks */
         if (s->max_ticks > 0 && s->ticks >= s->max_ticks) { return ASX_OK; }
 
         /* Re-arm for next period */
+        if (s->period_ns > UINT64_MAX - now) return ASX_E_TIMER_DURATION_EXCEEDED;
+        next_target = now + s->period_ns;
+
         s->deadline.expired = 0;
         s->deadline.registered = 0;
-        s->deadline.target_ns = now + s->period_ns;
+        s->deadline.target_ns = next_target;
 
         st = asx_deadline_arm(&s->deadline, NULL);
         if (st != ASX_OK) return st;

@@ -88,22 +88,25 @@ static int any_region_poisoned(void) {
 }
 
 asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
+    int initialized;
+
     if (rt == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(out, 0, sizeof(*out));
+    initialized = asx_runtime_is_initialized(rt);
 
     /* Entity gauges */
-    out->regions.active_count = count_alive_regions();
+    out->regions.active_count = initialized ? count_alive_regions() : 0u;
     out->regions.capacity = ASX_MAX_REGIONS;
-    out->regions.peak_count = g_region_count; /* high water mark */
+    out->regions.peak_count = initialized ? g_region_count : 0u; /* high water mark */
 
-    out->tasks.active_count = count_alive_tasks();
+    out->tasks.active_count = initialized ? count_alive_tasks() : 0u;
     out->tasks.capacity = ASX_MAX_TASKS;
-    out->tasks.peak_count = g_task_count;
+    out->tasks.peak_count = initialized ? g_task_count : 0u;
 
-    out->obligations.active_count = count_alive_obligations();
+    out->obligations.active_count = initialized ? count_alive_obligations() : 0u;
     out->obligations.capacity = ASX_MAX_OBLIGATIONS;
-    out->obligations.peak_count = g_obligation_count;
+    out->obligations.peak_count = initialized ? g_obligation_count : 0u;
 
     out->io_driver.active_count = asx_runtime_io_registration_count(rt);
     out->io_driver.capacity = ASX_MAX_IO_TOKENS;
@@ -114,9 +117,9 @@ asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
     out->blocking.peak_count = out->blocking.active_count;
 
     /* Trace */
-    out->trace.event_count = asx_trace_event_count();
+    out->trace.event_count = initialized ? asx_trace_event_count() : 0u;
     out->trace.capacity = ASX_TRACE_CAPACITY;
-    out->trace.digest = asx_trace_digest();
+    out->trace.digest = initialized ? asx_trace_digest() : 0u;
 
     /* Error ledger — summarize across all tasks */
     {
@@ -135,24 +138,24 @@ asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
     }
 
     /* Ghost monitors */
-    out->ghosts.violation_count = asx_ghost_violation_count();
-    out->ghosts.overflowed = (uint32_t)asx_ghost_ring_overflowed();
+    out->ghosts.violation_count = initialized ? asx_ghost_violation_count() : 0u;
+    out->ghosts.overflowed = initialized ? (uint32_t)asx_ghost_ring_overflowed() : 0u;
     out->ghosts.obligation_leaks = 0; /* requires region scan */
 
     /* Runtime state */
     out->safety_profile = asx_runtime_safety_profile(rt);
     out->containment_policy = asx_runtime_containment_policy(rt);
-    out->initialized = asx_runtime_is_initialized(rt);
-    out->any_poisoned = any_region_poisoned();
+    out->initialized = initialized;
+    out->any_poisoned = initialized ? any_region_poisoned() : 0;
 
     /* Telemetry */
-    out->telemetry_emitted = asx_telemetry_emitted_count();
-    out->telemetry_filtered = asx_telemetry_filtered_count();
-    out->telemetry_digest = asx_telemetry_digest();
+    out->telemetry_emitted = initialized ? asx_telemetry_emitted_count() : 0u;
+    out->telemetry_filtered = initialized ? asx_telemetry_filtered_count() : 0u;
+    out->telemetry_digest = initialized ? asx_telemetry_digest() : 0u;
 
     /* Event log */
-    out->event_log_count = asx_event_log_count();
-    out->event_log_digest = asx_event_hash_chain();
+    out->event_log_count = initialized ? asx_event_log_count() : 0u;
+    out->event_log_digest = initialized ? asx_event_hash_chain() : 0u;
 
     return ASX_OK;
 }

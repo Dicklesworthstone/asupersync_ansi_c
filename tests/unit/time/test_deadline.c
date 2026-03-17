@@ -80,6 +80,14 @@ TEST(after_computes_target_from_now) {
     teardown();
 }
 
+TEST(after_overflow_fails) {
+    asx_deadline dl;
+    setup();
+    asx_vtime_init(&g_vt, UINT64_MAX - 1u, 1u);
+    ASSERT_EQ(asx_deadline_after(&dl, 2u), ASX_E_TIMER_DURATION_EXCEEDED);
+    teardown();
+}
+
 /* ------------------------------------------------------------------ */
 /* Arm / Disarm tests                                                  */
 /* ------------------------------------------------------------------ */
@@ -209,6 +217,7 @@ int main(void) {
     RUN_TEST(init_sets_target);
     RUN_TEST(after_null_fails);
     RUN_TEST(after_computes_target_from_now);
+    RUN_TEST(after_overflow_fails);
 
     /* Arm / Disarm */
     RUN_TEST(arm_null_fails);

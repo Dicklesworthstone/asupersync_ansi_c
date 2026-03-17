@@ -43,6 +43,11 @@ static asx_worker_state g_workers[ASX_MAX_WORKERS];
 static uint32_t g_cancel_streak_limit = 16u;
 static asx_scheduling_metrics g_metrics;
 
+static int parallel_task_handle_valid(asx_task_id tid) {
+    asx_task_slot *slot;
+    return asx_task_slot_lookup(tid, &slot) == ASX_OK;
+}
+
 /* -------------------------------------------------------------------
  * Init / Reset
  * ------------------------------------------------------------------- */
@@ -91,6 +96,8 @@ asx_status asx_lane_assign(asx_task_id tid, asx_lane_class lane) {
     lane_internal *l;
 
     if ((int)lane < 0 || (int)lane >= (int)ASX_MAX_LANES) { return ASX_E_INVALID_ARGUMENT; }
+    if (!g_initialized) return ASX_E_INVALID_STATE;
+    if (!parallel_task_handle_valid(tid)) return ASX_E_INVALID_ARGUMENT;
 
     l = &g_lanes[(int)lane];
     if (l->count >= ASX_LANE_TASK_CAPACITY) { return ASX_E_RESOURCE_EXHAUSTED; }
@@ -102,6 +109,8 @@ asx_status asx_lane_assign(asx_task_id tid, asx_lane_class lane) {
 
 asx_status asx_lane_remove(asx_task_id tid) {
     uint32_t i, j;
+
+    if (!g_initialized) return ASX_E_INVALID_STATE;
 
     for (i = 0; i < ASX_MAX_LANES; i++) {
         lane_internal *l = &g_lanes[i];
@@ -128,6 +137,7 @@ asx_status asx_lane_get_state(asx_lane_class lane, asx_lane_state *out) {
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     if ((int)lane < 0 || (int)lane >= (int)ASX_MAX_LANES) { return ASX_E_INVALID_ARGUMENT; }
+    if (!g_initialized) return ASX_E_INVALID_STATE;
 
     l = &g_lanes[(int)lane];
     out->lane_class = lane;
@@ -153,6 +163,7 @@ uint32_t asx_lane_total_tasks(void) {
 
 asx_status asx_worker_get_state(uint32_t worker_index, asx_worker_state *out) {
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!g_initialized) return ASX_E_INVALID_STATE;
     if (worker_index >= g_config.worker_count) { return ASX_E_INVALID_ARGUMENT; }
 
     *out = g_workers[worker_index];
@@ -575,6 +586,7 @@ asx_status asx_inject_ready(asx_task_id tid) { return asx_lane_assign(tid, ASX_L
 
 asx_status asx_parallel_get_metrics(asx_scheduling_metrics *out) {
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!g_initialized) return ASX_E_INVALID_STATE;
     *out = g_metrics;
     return ASX_OK;
 }

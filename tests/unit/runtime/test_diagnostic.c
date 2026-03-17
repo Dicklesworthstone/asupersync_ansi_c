@@ -209,8 +209,47 @@ static void test_inspect_uninitialized(void) {
     memset(&rt, 0, sizeof(rt));
     MUST_OK(asx_inspect(&rt, &rpt));
     ASSERT(!rpt.initialized, "not initialized");
+    ASSERT(rpt.regions.active_count == 0, "regions zero uninitialized");
+    ASSERT(rpt.tasks.active_count == 0, "tasks zero uninitialized");
+    ASSERT(rpt.obligations.active_count == 0, "obligations zero uninitialized");
     ASSERT(rpt.io_driver.active_count == 0, "io zero uninitialized");
     ASSERT(rpt.blocking.active_count == 0, "blocking zero uninitialized");
+    ASSERT(rpt.trace.event_count == 0, "trace count zero uninitialized");
+    ASSERT(rpt.trace.digest == 0u, "trace digest zero uninitialized");
+    ASSERT(rpt.ghosts.violation_count == 0, "ghosts zero uninitialized");
+    ASSERT(rpt.telemetry_emitted == 0u, "telemetry zero uninitialized");
+    ASSERT(rpt.telemetry_digest == 0u, "telemetry digest zero uninitialized");
+    ASSERT(rpt.event_log_count == 0u, "event log zero uninitialized");
+    ASSERT(rpt.event_log_digest == 0u, "event log digest zero uninitialized");
+}
+
+static void test_inspect_stale_runtime_fails_closed(void) {
+    asx_runtime a, b;
+    asx_inspection_report rpt;
+    asx_region_id region;
+
+    MUST_OK(asx_runtime_init_default(&a));
+    MUST_OK(asx_region_open(&region));
+    MUST_OK(asx_runtime_init_default(&b));
+
+    MUST_OK(asx_inspect(&a, &rpt));
+    ASSERT(!rpt.initialized, "stale runtime not initialized");
+    ASSERT(rpt.regions.active_count == 0, "stale regions fail closed");
+    ASSERT(rpt.tasks.active_count == 0, "stale tasks fail closed");
+    ASSERT(rpt.obligations.active_count == 0, "stale obligations fail closed");
+    ASSERT(rpt.io_driver.active_count == 0, "stale io fail closed");
+    ASSERT(rpt.blocking.active_count == 0, "stale blocking fail closed");
+    ASSERT(rpt.trace.event_count == 0, "stale trace count fail closed");
+    ASSERT(rpt.trace.digest == 0u, "stale trace digest fail closed");
+    ASSERT(rpt.ghosts.violation_count == 0, "stale ghosts fail closed");
+    ASSERT(rpt.telemetry_emitted == 0u, "stale telemetry fail closed");
+    ASSERT(rpt.telemetry_digest == 0u, "stale telemetry digest fail closed");
+    ASSERT(rpt.event_log_count == 0u, "stale event log fail closed");
+    ASSERT(rpt.event_log_digest == 0u, "stale event log digest fail closed");
+    ASSERT(!rpt.any_poisoned, "stale poisoned flag fail closed");
+
+    asx_runtime_shutdown(&a);
+    asx_runtime_shutdown(&b);
 }
 
 /* ================================================================== */
@@ -414,6 +453,7 @@ int main(void) {
     RUN(test_inspect_with_entities);
     RUN(test_inspect_null_args);
     RUN(test_inspect_uninitialized);
+    RUN(test_inspect_stale_runtime_fails_closed);
 
     /* Evidence sink */
     RUN(test_evidence_init);

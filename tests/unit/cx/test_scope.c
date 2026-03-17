@@ -165,6 +165,13 @@ TEST(scope_spawn_null_handle_fails) {
     teardown();
 }
 
+TEST(scope_spawn_zeroed_scope_fails_closed) {
+    asx_scope scope;
+    asx_task_handle h;
+    memset(&scope, 0, sizeof(scope));
+    ASSERT_EQ(asx_scope_spawn(&scope, poll_immediate_ok, NULL, &h), ASX_E_INVALID_STATE);
+}
+
 TEST(scope_spawn_success) {
     asx_scope scope;
     asx_task_handle h;
@@ -406,6 +413,18 @@ TEST(scope_run_null_fails) { ASSERT_EQ(asx_scope_run(NULL), ASX_E_INVALID_ARGUME
 
 TEST(scope_drain_null_fails) { ASSERT_EQ(asx_scope_drain(NULL), ASX_E_INVALID_ARGUMENT); }
 
+TEST(scope_run_zeroed_scope_fails_closed) {
+    asx_scope scope;
+    memset(&scope, 0, sizeof(scope));
+    ASSERT_EQ(asx_scope_run(&scope), ASX_E_INVALID_STATE);
+}
+
+TEST(scope_drain_zeroed_scope_fails_closed) {
+    asx_scope scope;
+    memset(&scope, 0, sizeof(scope));
+    ASSERT_EQ(asx_scope_drain(&scope), ASX_E_INVALID_STATE);
+}
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -432,6 +451,7 @@ int main(void) {
     RUN_TEST(scope_spawn_null_scope_fails);
     RUN_TEST(scope_spawn_null_poll_fails);
     RUN_TEST(scope_spawn_null_handle_fails);
+    RUN_TEST(scope_spawn_zeroed_scope_fails_closed);
     RUN_TEST(scope_spawn_success);
     RUN_TEST(scope_spawn_multiple);
     RUN_TEST(scope_spawn_with_cx_binds_spawned_task);
@@ -469,6 +489,8 @@ int main(void) {
     RUN_TEST(scope_spawned_count_null_returns_zero);
     RUN_TEST(scope_run_null_fails);
     RUN_TEST(scope_drain_null_fails);
+    RUN_TEST(scope_run_zeroed_scope_fails_closed);
+    RUN_TEST(scope_drain_zeroed_scope_fails_closed);
 
     TEST_REPORT();
     return test_failures;

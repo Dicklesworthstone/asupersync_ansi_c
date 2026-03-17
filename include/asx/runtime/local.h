@@ -50,11 +50,19 @@ ASX_API ASX_MUST_USE asx_status asx_local_scope_spawn_captured(
 ASX_API ASX_MUST_USE asx_status asx_local_scope_run(asx_local_scope *scope);
 ASX_API ASX_MUST_USE asx_status asx_local_scope_drain(asx_local_scope *scope);
 
-/* Query the local scope. */
+/* Query the local scope.
+ *
+ * Uninitialized or corrupted scope values fail closed: count queries return 0
+ * and region queries return ASX_INVALID_ID.
+ */
 ASX_API uint32_t asx_local_scope_spawned_count(const asx_local_scope *scope);
 ASX_API asx_region_id asx_local_scope_region(const asx_local_scope *scope);
 
-/* Local handle helpers mirror the generic task-handle surface. */
+/* Local handle helpers mirror the generic task-handle surface.
+ *
+ * Uninitialized or corrupted local-handle values fail closed: query helpers
+ * return safe sentinels and stateful operations return ASX_E_INVALID_STATE.
+ */
 ASX_API int asx_local_task_handle_is_finished(const asx_local_task_handle *handle);
 ASX_API asx_task_id asx_local_task_handle_task_id(const asx_local_task_handle *handle);
 ASX_API ASX_MUST_USE asx_status asx_local_task_handle_try_join(asx_local_task_handle *handle,

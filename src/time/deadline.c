@@ -6,6 +6,7 @@
 
 #include <asx/asx_config.h>
 #include <asx/time/deadline.h>
+#include <stdint.h>
 #include <string.h>
 
 /* -------------------------------------------------------------------
@@ -30,6 +31,7 @@ asx_status asx_deadline_after(asx_deadline *dl, uint64_t duration_ns) {
 
     st = asx_runtime_now_ns(&now);
     if (st != ASX_OK) return st;
+    if (duration_ns > UINT64_MAX - now) return ASX_E_TIMER_DURATION_EXCEEDED;
 
     return asx_deadline_init(dl, now + duration_ns);
 }

@@ -124,6 +124,37 @@ TEST(config_validate_zero_finalizer_budget_fails) {
     ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(config_validate_invalid_wait_policy_fails) {
+    asx_runtime_config cfg;
+    make_valid_config(&cfg);
+    cfg.wait_policy = (asx_wait_policy)99;
+    ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(config_validate_invalid_leak_response_fails) {
+    asx_runtime_config cfg;
+    make_valid_config(&cfg);
+    cfg.leak_response = (asx_leak_response)99;
+    ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(config_validate_invalid_finalizer_escalation_fails) {
+    asx_runtime_config cfg;
+    make_valid_config(&cfg);
+    cfg.finalizer_escalation = (asx_finalizer_escalation)99;
+    ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(config_validate_invalid_leak_escalation_fails) {
+    asx_runtime_config cfg;
+    asx_leak_escalation_config escalation;
+    make_valid_config(&cfg);
+    escalation.threshold = 1u;
+    escalation.escalate_to = (asx_leak_response)99;
+    cfg.leak_escalation = &escalation;
+    ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_E_INVALID_ARGUMENT);
+}
+
 TEST(config_validate_defaults_ok) {
     asx_runtime_config cfg;
     make_valid_config(&cfg);
@@ -166,6 +197,29 @@ TEST(init_bad_config_fails) {
     ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(init_invalid_enum_config_fails) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    cfg.wait_policy = (asx_wait_policy)99;
+    ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(init_invalid_leak_escalation_config_fails) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_leak_escalation_config escalation;
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    escalation.threshold = 1u;
+    escalation.escalate_to = (asx_leak_response)99;
+    cfg.leak_escalation = &escalation;
+    ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_E_INVALID_ARGUMENT);
+}
+
 TEST(init_success) {
     asx_runtime rt;
     asx_runtime_config cfg;
@@ -195,6 +249,24 @@ TEST(init_generation_increments) {
     asx_runtime_shutdown(&b);
 }
 
+TEST(stale_runtime_reports_uninitialized_after_new_init) {
+    asx_runtime a, b;
+    asx_runtime_config out;
+
+    MUST_OK(asx_runtime_init_default(&a));
+    ASSERT_TRUE(asx_runtime_is_initialized(&a));
+
+    MUST_OK(asx_runtime_init_default(&b));
+    ASSERT_FALSE(asx_runtime_is_initialized(&a));
+    ASSERT_TRUE(asx_runtime_is_initialized(&b));
+    ASSERT_EQ(asx_runtime_get_config(&a, &out), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_get_config(&b, &out), ASX_OK);
+
+    asx_runtime_shutdown(&a);
+    ASSERT_TRUE(asx_runtime_is_initialized(&b));
+    asx_runtime_shutdown(&b);
+}
+
 TEST(shutdown_clears_state) {
     asx_runtime rt;
     asx_runtime_config cfg;
@@ -221,6 +293,24 @@ TEST(shutdown_double_safe) {
     MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
     asx_runtime_shutdown(&rt);
     asx_runtime_shutdown(&rt); /* should not crash */
+}
+
+TEST(stale_shutdown_does_not_tear_down_active_runtime) {
+    asx_runtime a, b;
+    asx_runtime_config out;
+
+    MUST_OK(asx_runtime_init_default(&a));
+    MUST_OK(asx_runtime_init_default(&b));
+
+    ASSERT_FALSE(asx_runtime_is_initialized(&a));
+    ASSERT_TRUE(asx_runtime_is_initialized(&b));
+
+    asx_runtime_shutdown(&a);
+
+    ASSERT_TRUE(asx_runtime_is_initialized(&b));
+    ASSERT_EQ(asx_runtime_get_config(&b, &out), ASX_OK);
+
+    asx_runtime_shutdown(&b);
 }
 
 TEST(shutdown_uninitialized_safe) {
@@ -422,6 +512,31 @@ TEST(get_config_returns_stored_config) {
     asx_runtime_shutdown(&rt);
 }
 
+TEST(init_copies_leak_escalation_config) {
+    asx_runtime rt;
+    asx_runtime_config cfg, out;
+    asx_runtime_hooks hooks;
+    asx_leak_escalation_config escalation;
+
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    escalation.threshold = 7u;
+    escalation.escalate_to = ASX_LEAK_RECOVER;
+    cfg.leak_escalation = &escalation;
+
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+
+    escalation.threshold = 99u;
+    escalation.escalate_to = ASX_LEAK_PANIC;
+
+    ASSERT_EQ(asx_runtime_get_config(&rt, &out), ASX_OK);
+    ASSERT_TRUE(out.leak_escalation != NULL);
+    ASSERT_TRUE(out.leak_escalation != &escalation);
+    ASSERT_EQ(out.leak_escalation->threshold, (uint64_t)7u);
+    ASSERT_EQ(out.leak_escalation->escalate_to, ASX_LEAK_RECOVER);
+    asx_runtime_shutdown(&rt);
+}
+
 TEST(get_hooks_null_rt_fails) {
     asx_runtime_hooks out;
     ASSERT_EQ(asx_runtime_get_hooks_from(NULL, &out), ASX_E_INVALID_ARGUMENT);
@@ -483,6 +598,31 @@ TEST(reload_config_updates_reloadable_fields) {
     ASSERT_EQ(out.wait_policy, ASX_WAIT_BUSY_SPIN);
     ASSERT_EQ(out.finalizer_poll_budget, 222u);
     ASSERT_EQ(out.finalizer_time_budget_ns, (uint64_t)2222222u);
+    asx_runtime_shutdown(&rt);
+}
+
+TEST(reload_config_copies_leak_escalation_config) {
+    asx_runtime rt;
+    asx_runtime_config cfg, proposed, out;
+    asx_leak_escalation_config escalation;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_runtime_get_config(&rt, &cfg), ASX_OK);
+    proposed = cfg;
+    escalation.threshold = 11u;
+    escalation.escalate_to = ASX_LEAK_SILENT;
+    proposed.leak_escalation = &escalation;
+
+    ASSERT_EQ(asx_runtime_reload_config(&rt, &proposed, NULL), ASX_OK);
+
+    escalation.threshold = 22u;
+    escalation.escalate_to = ASX_LEAK_PANIC;
+
+    ASSERT_EQ(asx_runtime_get_config(&rt, &out), ASX_OK);
+    ASSERT_TRUE(out.leak_escalation != NULL);
+    ASSERT_TRUE(out.leak_escalation != &escalation);
+    ASSERT_EQ(out.leak_escalation->threshold, (uint64_t)11u);
+    ASSERT_EQ(out.leak_escalation->escalate_to, ASX_LEAK_SILENT);
     asx_runtime_shutdown(&rt);
 }
 
@@ -797,6 +937,10 @@ int main(void) {
     RUN_TEST(config_validate_bad_size_fails);
     RUN_TEST(config_validate_zero_cancel_depth_fails);
     RUN_TEST(config_validate_zero_finalizer_budget_fails);
+    RUN_TEST(config_validate_invalid_wait_policy_fails);
+    RUN_TEST(config_validate_invalid_leak_response_fails);
+    RUN_TEST(config_validate_invalid_finalizer_escalation_fails);
+    RUN_TEST(config_validate_invalid_leak_escalation_fails);
     RUN_TEST(config_validate_defaults_ok);
 
     /* Init/shutdown lifecycle */
@@ -804,11 +948,15 @@ int main(void) {
     RUN_TEST(init_null_config_fails);
     RUN_TEST(init_null_hooks_fails);
     RUN_TEST(init_bad_config_fails);
+    RUN_TEST(init_invalid_enum_config_fails);
+    RUN_TEST(init_invalid_leak_escalation_config_fails);
     RUN_TEST(init_success);
     RUN_TEST(init_generation_increments);
+    RUN_TEST(stale_runtime_reports_uninitialized_after_new_init);
     RUN_TEST(shutdown_clears_state);
     RUN_TEST(shutdown_null_safe);
     RUN_TEST(shutdown_double_safe);
+    RUN_TEST(stale_shutdown_does_not_tear_down_active_runtime);
     RUN_TEST(shutdown_uninitialized_safe);
 
     /* Default init */
@@ -831,12 +979,14 @@ int main(void) {
     RUN_TEST(get_config_null_out_fails);
     RUN_TEST(get_config_uninitialized_fails);
     RUN_TEST(get_config_returns_stored_config);
+    RUN_TEST(init_copies_leak_escalation_config);
     RUN_TEST(get_hooks_null_rt_fails);
     RUN_TEST(get_hooks_null_out_fails);
     RUN_TEST(get_hooks_uninitialized_fails);
     RUN_TEST(validate_reload_uninitialized_fails);
     RUN_TEST(validate_reload_reports_restart_required_field);
     RUN_TEST(reload_config_updates_reloadable_fields);
+    RUN_TEST(reload_config_copies_leak_escalation_config);
     RUN_TEST(reload_config_rejects_restart_required_change_without_mutation);
     RUN_TEST(umbrella_exposes_runtime_support_surfaces);
 

@@ -117,15 +117,19 @@ ASX_API void asx_parallel_reset(void);
  * ------------------------------------------------------------------- */
 
 /* Assign a task to a lane based on its work class.
- * Returns ASX_OK on success, ASX_E_RESOURCE_EXHAUSTED if lane is full. */
+ * Returns ASX_OK on success, ASX_E_INVALID_STATE if the scheduler has not
+ * been initialized, ASX_E_INVALID_ARGUMENT for malformed/stale/non-task
+ * handles or lane classes, or ASX_E_RESOURCE_EXHAUSTED if lane is full. */
 ASX_API ASX_MUST_USE asx_status asx_lane_assign(asx_task_id tid, asx_lane_class lane);
 
 /* Remove a task from its lane (on completion or reclassification).
- * Returns ASX_OK on success, ASX_E_NOT_FOUND if task not in any lane. */
+ * Returns ASX_OK on success, ASX_E_INVALID_STATE if the scheduler has not
+ * been initialized, or ASX_E_NOT_FOUND if task not in any lane. */
 ASX_API ASX_MUST_USE asx_status asx_lane_remove(asx_task_id tid);
 
 /* Query the lane state for a given lane class.
- * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out is NULL. */
+ * Returns ASX_OK on success, ASX_E_INVALID_STATE if the scheduler has not
+ * been initialized, or ASX_E_INVALID_ARGUMENT if out is NULL. */
 ASX_API ASX_MUST_USE asx_status asx_lane_get_state(asx_lane_class lane, asx_lane_state *out);
 
 /* Query the total task count across all lanes. */
@@ -136,7 +140,8 @@ ASX_API uint32_t asx_lane_total_tasks(void);
  * ------------------------------------------------------------------- */
 
 /* Query the state of a worker by index.
- * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out is NULL
+ * Returns ASX_OK on success, ASX_E_INVALID_STATE if the scheduler has not
+ * been initialized, or ASX_E_INVALID_ARGUMENT if out is NULL
  * or index exceeds configured worker_count. */
 ASX_API ASX_MUST_USE asx_status asx_worker_get_state(uint32_t worker_index, asx_worker_state *out);
 
@@ -180,15 +185,18 @@ ASX_API uint32_t asx_parallel_max_starvation(void);
  * ------------------------------------------------------------------- */
 
 /* Inject a task into the cancel lane (highest priority).
- * Used when a task transitions to cancel-requested or cancelling. */
+ * Used when a task transitions to cancel-requested or cancelling.
+ * Returns ASX_E_INVALID_ARGUMENT for malformed/stale/non-task handles. */
 ASX_API ASX_MUST_USE asx_status asx_inject_cancel(asx_task_id tid);
 
 /* Inject a task into the timed lane (deadline-ordered).
- * Used for tasks blocked on timer deadlines. */
+ * Used for tasks blocked on timer deadlines.
+ * Returns ASX_E_INVALID_ARGUMENT for malformed/stale/non-task handles. */
 ASX_API ASX_MUST_USE asx_status asx_inject_timed(asx_task_id tid);
 
 /* Inject a task into the ready lane (default work class).
- * Used for newly spawned tasks and tasks that become runnable. */
+ * Used for newly spawned tasks and tasks that become runnable.
+ * Returns ASX_E_INVALID_ARGUMENT for malformed/stale/non-task handles. */
 ASX_API ASX_MUST_USE asx_status asx_inject_ready(asx_task_id tid);
 
 /* -------------------------------------------------------------------
@@ -207,7 +215,8 @@ typedef struct {
     uint32_t fairness_yields;   /* times cancel was skipped for fairness */
 } asx_scheduling_metrics;
 
-/* Read the current scheduling metrics. */
+/* Read the current scheduling metrics.
+ * Returns ASX_E_INVALID_STATE if the scheduler has not been initialized. */
 ASX_API ASX_MUST_USE asx_status asx_parallel_get_metrics(asx_scheduling_metrics *out);
 
 /* Reset scheduling metrics to zero. */

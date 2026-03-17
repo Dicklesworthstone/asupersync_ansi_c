@@ -117,6 +117,7 @@ ASX_API ASX_MUST_USE asx_status asx_scope_init(asx_scope *scope, asx_region_id r
  * Postconditions: task is spawned in the scope's region; *out_handle
  *   holds a handle for observing completion.
  * Returns ASX_OK on success,
+ *   ASX_E_INVALID_STATE if the scope value is uninitialized or corrupted,
  *   ASX_E_PERMISSION_DENIED if cx lacks ASX_CAP_SPAWN,
  *   ASX_E_RESOURCE_EXHAUSTED if arena is full. */
 ASX_API ASX_MUST_USE asx_status asx_scope_spawn(asx_scope *scope, asx_task_poll_fn poll_fn,
@@ -124,7 +125,8 @@ ASX_API ASX_MUST_USE asx_status asx_scope_spawn(asx_scope *scope, asx_task_poll_
 
 /* Spawn a task and derive an explicit child Cx bound to the spawned task id.
  *
- * child_caps must be a subset of the scope's authority. On success,
+ * child_caps must be a subset of the scope's authority. Returns
+ * ASX_E_INVALID_STATE if the scope value is uninitialized or corrupted. On success,
  * *out_cx is a real task-bound capability token for the spawned task. */
 ASX_API ASX_MUST_USE asx_status
 asx_scope_spawn_with_cx(asx_scope *scope, asx_cap_flags child_caps, asx_task_poll_fn poll_fn,
@@ -134,7 +136,8 @@ asx_scope_spawn_with_cx(asx_scope *scope, asx_cap_flags child_caps, asx_task_pol
  *
  * Same as asx_scope_spawn but allocates state_size bytes from the
  * region's capture arena. The returned *out_state pointer is stable
- * for the task's lifetime and automatically passed as user_data. */
+ * for the task's lifetime and automatically passed as user_data.
+ * Returns ASX_E_INVALID_STATE if the scope value is uninitialized or corrupted. */
 ASX_API ASX_MUST_USE asx_status asx_scope_spawn_captured(asx_scope *scope, asx_task_poll_fn poll_fn,
                                                          uint32_t state_size,
                                                          asx_task_state_dtor_fn state_dtor,
@@ -145,6 +148,7 @@ ASX_API ASX_MUST_USE asx_status asx_scope_spawn_captured(asx_scope *scope, asx_t
  *
  * Drives the scheduler for the scope's region using the scope's budget.
  * Returns ASX_OK when all tasks reach terminal state,
+ *   ASX_E_INVALID_STATE if the scope value is uninitialized or corrupted,
  *   ASX_E_POLL_BUDGET_EXHAUSTED if budget runs out before completion. */
 ASX_API ASX_MUST_USE asx_status asx_scope_run(asx_scope *scope);
 
@@ -152,7 +156,8 @@ ASX_API ASX_MUST_USE asx_status asx_scope_run(asx_scope *scope);
  *
  * This is the structured concurrency exit guarantee: after drain,
  * no tasks are alive in the region.
- * Returns ASX_OK on success. */
+ * Returns ASX_OK on success or ASX_E_INVALID_STATE if the scope value is
+ * uninitialized or corrupted. */
 ASX_API ASX_MUST_USE asx_status asx_scope_drain(asx_scope *scope);
 
 /* Get the number of tasks spawned in this scope. */

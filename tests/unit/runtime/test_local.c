@@ -174,10 +174,35 @@ TEST(local_handle_try_join_null_fails) {
     ASSERT_EQ(asx_local_task_handle_try_join(&handle, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(local_handle_zeroed_value_fails_closed) {
+    asx_local_task_handle handle;
+    asx_outcome out;
+
+    memset(&handle, 0, sizeof(handle));
+
+    ASSERT_FALSE(asx_local_task_handle_is_finished(&handle));
+    ASSERT_EQ(asx_local_task_handle_task_id(&handle), ASX_INVALID_ID);
+    ASSERT_EQ(asx_local_task_handle_try_join(&handle, &out), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_local_task_handle_abort(&handle), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_local_task_handle_abort_with_kind(&handle, ASX_CANCEL_USER),
+              ASX_E_INVALID_STATE);
+}
+
 TEST(local_handle_query_nulls_are_safe) {
     ASSERT_FALSE(asx_local_task_handle_is_finished(NULL));
     ASSERT_EQ(asx_local_task_handle_task_id(NULL), ASX_INVALID_ID);
     ASSERT_EQ(asx_local_task_handle_join_error(NULL), ASX_JOIN_OK);
+}
+
+TEST(local_scope_zeroed_value_fails_closed) {
+    asx_local_scope scope;
+
+    memset(&scope, 0, sizeof(scope));
+
+    ASSERT_EQ(asx_local_scope_region(&scope), ASX_INVALID_ID);
+    ASSERT_EQ(asx_local_scope_spawned_count(&scope), 0u);
+    ASSERT_EQ(asx_local_scope_run(&scope), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_local_scope_drain(&scope), ASX_E_INVALID_STATE);
 }
 
 TEST(local_scope_query_nulls_are_safe) {
@@ -203,7 +228,9 @@ int main(void) {
     RUN_TEST(local_handle_abort_null_fails);
     RUN_TEST(local_handle_abort_with_kind_null_fails);
     RUN_TEST(local_handle_try_join_null_fails);
+    RUN_TEST(local_handle_zeroed_value_fails_closed);
     RUN_TEST(local_handle_query_nulls_are_safe);
+    RUN_TEST(local_scope_zeroed_value_fails_closed);
     RUN_TEST(local_scope_query_nulls_are_safe);
     TEST_REPORT();
     return test_failures;

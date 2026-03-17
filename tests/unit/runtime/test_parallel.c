@@ -130,6 +130,23 @@ TEST(parallel_reset_clears_state) {
     ASSERT_EQ(asx_parallel_worker_count(), (uint32_t)0);
 }
 
+TEST(parallel_public_api_requires_init) {
+    asx_lane_state lane_state;
+    asx_worker_state worker_state;
+    asx_scheduling_metrics metrics;
+
+    reset_all();
+
+    ASSERT_EQ(asx_lane_assign(1, ASX_LANE_READY), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_lane_remove(1), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_lane_get_state(ASX_LANE_READY, &lane_state), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_worker_get_state(0, &worker_state), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_inject_ready(1), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_inject_cancel(1), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_inject_timed(1), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_parallel_get_metrics(&metrics), ASX_E_INVALID_STATE);
+}
+
 /* ================================================================
  * Lane management
  * ================================================================ */
@@ -137,10 +154,14 @@ TEST(parallel_reset_clears_state) {
 TEST(lane_assign_and_query) {
     asx_parallel_config cfg = default_config();
     asx_lane_state ls;
-    asx_task_id fake_tid = 42;
+    asx_region_id rid;
+    asx_task_id tid;
 
+    reset_all();
     ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
-    ASSERT_EQ(asx_lane_assign(fake_tid, ASX_LANE_READY), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_lane_assign(tid, ASX_LANE_READY), ASX_OK);
 
     ASSERT_EQ(asx_lane_get_state(ASX_LANE_READY, &ls), ASX_OK);
     ASSERT_EQ(ls.task_count, (uint32_t)1);
@@ -150,15 +171,43 @@ TEST(lane_assign_and_query) {
     asx_parallel_reset();
 }
 
+TEST(lane_assign_rejects_invalid_task_handle) {
+    asx_parallel_config cfg = default_config();
+    asx_region_id rid;
+    asx_task_id tid;
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+
+    ASSERT_EQ(asx_lane_assign(ASX_INVALID_ID, ASX_LANE_READY), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_inject_ready(ASX_INVALID_ID), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_inject_cancel(ASX_INVALID_ID), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_inject_timed(ASX_INVALID_ID), ASX_E_INVALID_ARGUMENT);
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_lane_assign(rid, ASX_LANE_READY), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_lane_assign(tid + 1u, ASX_LANE_READY), ASX_E_INVALID_ARGUMENT);
+
+    asx_parallel_reset();
+}
+
 TEST(lane_assign_to_all_classes) {
     asx_parallel_config cfg = default_config();
     asx_lane_state ls;
+    asx_region_id rid;
+    asx_task_id t1, t2, t3;
 
+    reset_all();
     ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t2), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t3), ASX_OK);
 
-    ASSERT_EQ(asx_lane_assign(1, ASX_LANE_READY), ASX_OK);
-    ASSERT_EQ(asx_lane_assign(2, ASX_LANE_CANCEL), ASX_OK);
-    ASSERT_EQ(asx_lane_assign(3, ASX_LANE_TIMED), ASX_OK);
+    ASSERT_EQ(asx_lane_assign(t1, ASX_LANE_READY), ASX_OK);
+    ASSERT_EQ(asx_lane_assign(t2, ASX_LANE_CANCEL), ASX_OK);
+    ASSERT_EQ(asx_lane_assign(t3, ASX_LANE_TIMED), ASX_OK);
 
     ASSERT_EQ(asx_lane_total_tasks(), (uint32_t)3);
 
@@ -170,9 +219,13 @@ TEST(lane_assign_to_all_classes) {
 
 TEST(lane_remove_existing) {
     asx_parallel_config cfg = default_config();
-    asx_task_id tid = 100;
+    asx_region_id rid;
+    asx_task_id tid;
 
+    reset_all();
     ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_lane_assign(tid, ASX_LANE_READY), ASX_OK);
     ASSERT_EQ(asx_lane_total_tasks(), (uint32_t)1);
 
@@ -193,16 +246,21 @@ TEST(lane_remove_not_found) {
 
 TEST(lane_assign_fills_capacity) {
     asx_parallel_config cfg = default_config();
+    asx_region_id rid;
+    asx_task_id tids[ASX_LANE_TASK_CAPACITY];
     uint32_t i;
 
+    reset_all();
     ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     for (i = 0; i < ASX_LANE_TASK_CAPACITY; i++) {
-        ASSERT_EQ(asx_lane_assign((asx_task_id)(i + 1u), ASX_LANE_READY), ASX_OK);
+        ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tids[i]), ASX_OK);
+        ASSERT_EQ(asx_lane_assign(tids[i], ASX_LANE_READY), ASX_OK);
     }
 
     /* Next should fail */
-    ASSERT_EQ(asx_lane_assign(999, ASX_LANE_READY), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_lane_assign(tids[0], ASX_LANE_READY), ASX_E_RESOURCE_EXHAUSTED);
 
     asx_parallel_reset();
 }
@@ -612,11 +670,16 @@ TEST(parallel_no_starvation_initially) {
 TEST(parallel_starvation_limit_in_lane_state) {
     asx_parallel_config cfg = default_config();
     asx_lane_state ls;
+    asx_region_id rid;
+    asx_task_id tid;
 
     cfg.starvation_limit = 7;
+    reset_all();
     ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
 
-    ASSERT_EQ(asx_lane_assign(1, ASX_LANE_TIMED), ASX_OK);
+    ASSERT_EQ(asx_lane_assign(tid, ASX_LANE_TIMED), ASX_OK);
     ASSERT_EQ(asx_lane_get_state(ASX_LANE_TIMED, &ls), ASX_OK);
     ASSERT_EQ(ls.max_starvation, (uint32_t)7);
     ASSERT_EQ(ls.weight, (uint32_t)1);
@@ -788,9 +851,11 @@ int main(void) {
     RUN_TEST(parallel_init_too_many_workers);
     RUN_TEST(parallel_init_valid);
     RUN_TEST(parallel_reset_clears_state);
+    RUN_TEST(parallel_public_api_requires_init);
 
     /* Lane management */
     RUN_TEST(lane_assign_and_query);
+    RUN_TEST(lane_assign_rejects_invalid_task_handle);
     RUN_TEST(lane_assign_to_all_classes);
     RUN_TEST(lane_remove_existing);
     RUN_TEST(lane_remove_not_found);

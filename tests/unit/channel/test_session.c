@@ -56,6 +56,23 @@ TEST(create_zero_capacity_fails) {
     teardown();
 }
 
+TEST(create_invalid_region_fails) {
+    asx_session_endpoint init, resp;
+    setup();
+    ASSERT_EQ(asx_session_create(ASX_INVALID_ID, 4, &init, &resp), ASX_E_INVALID_ARGUMENT);
+    teardown();
+}
+
+TEST(create_closed_region_fails) {
+    asx_session_endpoint init, resp;
+    asx_region_id rid;
+    setup();
+    MUST_OK(asx_region_open(&rid));
+    MUST_OK(asx_region_close(rid));
+    ASSERT_EQ(asx_session_create(rid, 4, &init, &resp), ASX_E_INVALID_STATE);
+    teardown();
+}
+
 TEST(create_success) {
     asx_session_endpoint init, resp;
     asx_region_id rid;
@@ -137,7 +154,7 @@ TEST(obligations_increment_on_initiator_send) {
     teardown();
 }
 
-TEST(obligations_decrement_on_responder_recv) {
+TEST(obligations_stay_outstanding_until_response) {
     asx_session_endpoint init, resp;
     asx_region_id rid;
     uint64_t val;
@@ -148,19 +165,24 @@ TEST(obligations_decrement_on_responder_recv) {
     MUST_OK(asx_session_send(&init, 2));
     ASSERT_EQ(asx_session_obligations(init.slot, init.generation), 2u);
     MUST_OK(asx_session_try_recv(&resp, &val));
-    ASSERT_EQ(asx_session_obligations(init.slot, init.generation), 1u);
+    ASSERT_EQ(asx_session_obligations(init.slot, init.generation), 2u);
     MUST_OK(asx_session_try_recv(&resp, &val));
-    ASSERT_EQ(asx_session_obligations(init.slot, init.generation), 0u);
+    ASSERT_EQ(asx_session_obligations(init.slot, init.generation), 2u);
     teardown();
 }
 
-TEST(responder_send_no_obligation_change) {
+TEST(obligations_decrement_on_initiator_response_recv) {
     asx_session_endpoint init, resp;
     asx_region_id rid;
+    uint64_t val;
     setup();
     MUST_OK(asx_region_open(&rid));
     MUST_OK(asx_session_create(rid, 4, &init, &resp));
+    MUST_OK(asx_session_send(&init, 50));
+    MUST_OK(asx_session_try_recv(&resp, &val));
     MUST_OK(asx_session_send(&resp, 50));
+    ASSERT_EQ(asx_session_obligations(init.slot, init.generation), 1u);
+    MUST_OK(asx_session_try_recv(&init, &val));
     ASSERT_EQ(asx_session_obligations(init.slot, init.generation), 0u);
     teardown();
 }
@@ -313,6 +335,8 @@ int main(void) {
     RUN_TEST(create_null_initiator_fails);
     RUN_TEST(create_null_responder_fails);
     RUN_TEST(create_zero_capacity_fails);
+    RUN_TEST(create_invalid_region_fails);
+    RUN_TEST(create_closed_region_fails);
     RUN_TEST(create_success);
 
     RUN_TEST(initiator_sends_responder_receives);
@@ -320,8 +344,8 @@ int main(void) {
     RUN_TEST(bidirectional_exchange);
 
     RUN_TEST(obligations_increment_on_initiator_send);
-    RUN_TEST(obligations_decrement_on_responder_recv);
-    RUN_TEST(responder_send_no_obligation_change);
+    RUN_TEST(obligations_stay_outstanding_until_response);
+    RUN_TEST(obligations_decrement_on_initiator_response_recv);
 
     RUN_TEST(initiator_drop_half_closes);
     RUN_TEST(both_drop_closes);

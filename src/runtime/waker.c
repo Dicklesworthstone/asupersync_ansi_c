@@ -53,7 +53,7 @@ void asx_waker_reset(void) {
 asx_status asx_waker_register(asx_task_id task, asx_waker *out_waker) {
     uint32_t idx;
 
-    if (out_waker == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (task == ASX_INVALID_ID || out_waker == NULL) return ASX_E_INVALID_ARGUMENT;
 
     /* Find free slot */
     idx = ASX_MAX_WAKERS;

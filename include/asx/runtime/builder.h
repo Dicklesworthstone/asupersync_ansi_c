@@ -45,18 +45,24 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_builder_init_low_latency(asx_runtime
 ASX_API ASX_MUST_USE asx_status
 asx_runtime_builder_init_high_throughput(asx_runtime_builder *builder);
 
-/* Query the builder's active preset. */
+/* Query the builder's active preset.
+ * Returns ASX_RUNTIME_PRESET_DEFAULT for NULL or malformed builders. */
 ASX_API ASX_MUST_USE asx_runtime_preset
 asx_runtime_builder_preset(const asx_runtime_builder *builder);
 ASX_API ASX_MUST_USE const char *asx_runtime_preset_str(asx_runtime_preset preset);
 
-/* Copy out the builder's working config/hooks. */
+/* Copy out the builder's working config/hooks.
+ * Returns ASX_E_INVALID_STATE if the builder was never initialized or has
+ * been corrupted into an invalid state. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_get_config(const asx_runtime_builder *builder,
                                                                asx_runtime_config *out);
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_get_hooks(const asx_runtime_builder *builder,
                                                               asx_runtime_hooks *out);
 
 /* Config setters. */
+/* Enum-valued setters reject values outside the documented enum ranges.
+ * All setters return ASX_E_INVALID_STATE for uninitialized or malformed
+ * builders instead of mutating a fail-open zeroed struct. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_wait_policy(asx_runtime_builder *builder,
                                                                     asx_wait_policy policy);
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_leak_response(asx_runtime_builder *builder,
@@ -89,7 +95,9 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_reactor_hooks(
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_log_hooks(asx_runtime_builder *builder,
                                                                   const asx_log_hooks *log);
 
-/* Validate the working builder payload without building a runtime. */
+/* Validate the working builder payload without building a runtime.
+ * Rejects uninitialized or malformed builders with ASX_E_INVALID_STATE, and
+ * rejects invalid enum values or malformed config/hook tables otherwise. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_validate(const asx_runtime_builder *builder);
 
 /* Apply environment-driven builder configuration overrides.
@@ -107,12 +115,14 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_builder_validate(const asx_runtime_b
  *
  * Unset keys leave the builder unchanged. Parsing is atomic: malformed values
  * return ASX_E_INVALID_ARGUMENT and preserve the original builder state.
+ * Uninitialized or malformed builders return ASX_E_INVALID_STATE.
  * Preset overrides update the builder's config/preset while preserving any
  * hook families already configured on the builder. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_apply_env(asx_runtime_builder *builder,
                                                               const char *prefix);
 
-/* Build a runtime from the builder's stored config/hooks. */
+/* Build a runtime from the builder's stored config/hooks.
+ * Returns ASX_E_INVALID_STATE for an uninitialized or malformed builder. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_build(const asx_runtime_builder *builder,
                                                           asx_runtime *out_runtime);
 
