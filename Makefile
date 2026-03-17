@@ -176,7 +176,8 @@ SYNC_SRC := \
 	src/sync/notify.c \
 	src/sync/semaphore.c \
 	src/sync/barrier.c \
-	src/sync/once.c
+	src/sync/once.c \
+	src/sync/mutex.c
 
 ACTOR_SRC := \
 	src/actor/actor.c \
@@ -301,6 +302,8 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/signal/test_*.c) \
                  $(wildcard tests/unit/stream/*_test.c) \
                  $(wildcard tests/unit/stream/test_*.c) \
+                 $(wildcard tests/unit/sync/*_test.c) \
+                 $(wildcard tests/unit/sync/test_*.c) \
                  $(wildcard tests/unit/plan/*_test.c) \
                  $(wildcard tests/unit/plan/test_*.c) \
                  $(wildcard tests/unit/app/*_test.c) \

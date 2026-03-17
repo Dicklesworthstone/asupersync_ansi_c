@@ -10,7 +10,7 @@
  */
 
 #include "../../test_harness.h"
-#include <asx/plan/plan.h>
+#include <asx/asx.h>
 #include <string.h>
 
 /* ================================================================== */

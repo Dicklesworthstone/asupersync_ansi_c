@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/plan/plan.h>
+#include <asx/asx.h>
 #include <stdio.h>
 #include <string.h>
 

@@ -74,6 +74,9 @@
 #include <asx/monitor/monitor.h>
 #include <asx/observability/observability.h>
 
+/* Planning, rewrite, and service-layer families */
+#include <asx/plan/plan.h>
+
 /* Operator and testing support */
 #include <asx/app/app.h>
 #include <asx/app/doctor.h>
