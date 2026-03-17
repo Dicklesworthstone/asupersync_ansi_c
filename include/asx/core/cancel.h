@@ -36,4 +36,41 @@ ASX_API asx_budget asx_cancel_cleanup_budget(asx_cancel_kind kind);
 ASX_API asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a,
                                                 const asx_cancel_reason *b);
 
+/* -------------------------------------------------------------------
+ * Cancel witness protocol — query witness state
+ * ------------------------------------------------------------------- */
+
+/* Query the current phase of a cancel witness.
+ * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out_phase is NULL,
+ * ASX_E_NOT_FOUND if witness is invalid/unknown. */
+ASX_API ASX_MUST_USE asx_status asx_cancel_witness_phase(asx_cancel_witness_id w,
+                                                          asx_cancel_phase *out_phase);
+
+/* Query the cancel reason associated with a witness.
+ * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out_reason is NULL,
+ * ASX_E_NOT_FOUND if witness is invalid/unknown. */
+ASX_API ASX_MUST_USE asx_status asx_cancel_witness_reason(asx_cancel_witness_id w,
+                                                           asx_cancel_reason *out_reason);
+
+/* Check if a cancel witness is still valid (not stale/completed).
+ * Returns 1 if valid, 0 otherwise. */
+ASX_API int asx_cancel_witness_is_valid(asx_cancel_witness_id w);
+
+/* -------------------------------------------------------------------
+ * User-facing cancellation request
+ * ------------------------------------------------------------------- */
+
+/* Request cancellation of a task.
+ * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if reason is NULL,
+ * ASX_E_NOT_FOUND if task is unknown,
+ * ASX_E_INVALID_STATE if task is already in a terminal state. */
+ASX_API ASX_MUST_USE asx_status asx_cancel_request(asx_task_id task,
+                                                    const asx_cancel_reason *reason);
+
+/* Return the human-readable name for a cancel kind. */
+ASX_API const char *asx_cancel_kind_str(asx_cancel_kind kind);
+
+/* Return the human-readable name for a cancel phase. */
+ASX_API const char *asx_cancel_phase_str(asx_cancel_phase phase);
+
 #endif /* ASX_CORE_CANCEL_H */

@@ -128,7 +128,9 @@ CORE_SRC := \
 	src/core/combinator.c \
 	src/core/combinator2.c \
 	src/core/symbol.c \
-	src/core/abi.c
+	src/core/abi.c \
+	src/core/epoch.c \
+	src/core/circuit_breaker.c
 
 RUNTIME_SRC := \
 	src/runtime/hooks.c \
@@ -163,7 +165,8 @@ RUNTIME_SRC := \
 	src/runtime/replay.c \
 	src/runtime/event_log.c \
 	src/runtime/snapshot.c \
-	src/runtime/waker.c
+	src/runtime/waker.c \
+	src/runtime/deadline_monitor.c
 
 CHANNEL_SRC := \
 	src/channel/mpsc.c \

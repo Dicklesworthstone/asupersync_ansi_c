@@ -264,3 +264,48 @@ const char *asx_type_kind_str(asx_type_kind kind) {
     default: return "unknown";
     }
 }
+
+/* ------------------------------------------------------------------ */
+/* Typed value                                                         */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_typed_value_init(asx_typed_value *val, asx_symbol_id symbol,
+                                 asx_type_kind kind, const void *payload,
+                                 uint32_t payload_size) {
+    if (val == NULL) return ASX_E_INVALID_ARGUMENT;
+    val->symbol = symbol;
+    val->kind = kind;
+    val->payload = payload;
+    val->payload_size = payload_size;
+    return ASX_OK;
+}
+
+int asx_typed_value_equals(const asx_typed_value *a, const asx_typed_value *b) {
+    if (a == NULL || b == NULL) return a == b;
+    if (a->symbol != b->symbol) return 0;
+    if (a->kind != b->kind) return 0;
+    if (a->payload_size != b->payload_size) return 0;
+    if (a->payload_size == 0) return 1;
+    if (a->payload == NULL || b->payload == NULL) return a->payload == b->payload;
+    return memcmp(a->payload, b->payload, a->payload_size) == 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Symbol set iteration                                                */
+/* ------------------------------------------------------------------ */
+
+void asx_symbol_set_iterate(const asx_symbol_set *set, asx_symbol_set_iter_fn fn, void *ctx) {
+    uint32_t word, bit;
+    if (set == NULL || fn == NULL) return;
+    for (word = 0; word < 4; word++) {
+        uint64_t w = set->bits[word];
+        if (w == 0) continue;
+        for (bit = 0; bit < 64; bit++) {
+            if (w & (1ULL << bit)) {
+                /* Symbol IDs are 1-based: bit 0 in word 0 = symbol ID 1 */
+                asx_symbol_id id = (asx_symbol_id)(word * 64 + bit + 1);
+                if (fn(id, ctx) != 0) return;
+            }
+        }
+    }
+}

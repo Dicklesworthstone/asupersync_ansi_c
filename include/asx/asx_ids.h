@@ -174,4 +174,51 @@ static inline int asx_cancel_severity(asx_cancel_kind kind) {
     return (int)kind >= 0 && (int)kind <= 10 ? severity[(int)kind] : 5;
 }
 
+/* ------------------------------------------------------------------ */
+/* Cancel witness handle                                               */
+/* ------------------------------------------------------------------ */
+
+typedef uint64_t asx_cancel_witness_id;
+
+/* ------------------------------------------------------------------ */
+/* Handle type classification helpers                                  */
+/* ------------------------------------------------------------------ */
+
+static inline int asx_handle_is_region(uint64_t h) {
+    return asx_handle_type_tag(h) == ASX_TYPE_REGION;
+}
+
+static inline int asx_handle_is_task(uint64_t h) {
+    return asx_handle_type_tag(h) == ASX_TYPE_TASK;
+}
+
+static inline int asx_handle_is_obligation(uint64_t h) {
+    return asx_handle_type_tag(h) == ASX_TYPE_OBLIGATION;
+}
+
+static inline int asx_handle_is_cancel_witness(uint64_t h) {
+    return asx_handle_type_tag(h) == ASX_TYPE_CANCEL_WITNESS;
+}
+
+static inline int asx_handle_is_timer(uint64_t h) {
+    return asx_handle_type_tag(h) == ASX_TYPE_TIMER;
+}
+
+static inline int asx_handle_is_channel(uint64_t h) {
+    return asx_handle_type_tag(h) == ASX_TYPE_CHANNEL;
+}
+
+/* Return the human-readable name for a handle type tag. */
+static inline const char *asx_handle_type_str(uint16_t tag) {
+    switch (tag) {
+    case ASX_TYPE_REGION: return "region";
+    case ASX_TYPE_TASK: return "task";
+    case ASX_TYPE_OBLIGATION: return "obligation";
+    case ASX_TYPE_CANCEL_WITNESS: return "cancel_witness";
+    case ASX_TYPE_TIMER: return "timer";
+    case ASX_TYPE_CHANNEL: return "channel";
+    default: return "unknown";
+    }
+}
+
 #endif /* ASX_IDS_H */

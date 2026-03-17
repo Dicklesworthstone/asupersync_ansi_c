@@ -43,6 +43,8 @@
 #include <asx/core/cancel.h>
 #include <asx/core/channel.h>
 #include <asx/core/cleanup.h>
+#include <asx/core/epoch.h>
+#include <asx/core/circuit_breaker.h>
 #include <asx/core/combinator.h>
 #include <asx/core/combinator2.h>
 #include <asx/core/ghost.h>
@@ -92,6 +94,7 @@
 #include <asx/runtime/browser_diagnostic.h>
 #include <asx/runtime/builder.h>
 #include <asx/runtime/config_reload.h>
+#include <asx/runtime/deadline_monitor.h>
 #include <asx/runtime/diagnostic.h>
 #include <asx/runtime/event.h>
 #include <asx/runtime/hft_instrument.h>

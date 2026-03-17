@@ -87,6 +87,19 @@ typedef enum {
 /* Return the human-readable name of a resource class. Never returns NULL. */
 ASX_API const char *asx_resource_class_name(asx_resource_class cls);
 
+/* Per-class resource limits — documents what R1/R2/R3 actually cap */
+typedef struct {
+    uint32_t max_regions;
+    uint32_t max_tasks;
+    uint32_t max_timers;
+    uint32_t max_obligations;
+    uint32_t max_channels;
+    uint32_t max_trace_events;
+} asx_resource_limits;
+
+/* Return the default resource limits for a resource class. */
+ASX_API asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls);
+
 /* ------------------------------------------------------------------ */
 /* Trace mode selection                                                */
 /*                                                                     */
@@ -350,7 +363,9 @@ ASX_API asx_status asx_runtime_now_ns(asx_time *out_now);
  * deterministic entropy source. */
 ASX_API asx_status asx_runtime_random_u64(uint64_t *out_value);
 /* Wait for reactor readiness. Returns ready count via out_ready_count.
- * Returns ASX_E_HOOK_MISSING if no reactor hook installed. */
+ * Prefers the native reactor wait hook when one is installed; otherwise,
+ * deterministic builds fall back to the ghost reactor hook.
+ * Returns ASX_E_HOOK_MISSING if no compatible reactor hook is installed. */
 ASX_API asx_status asx_runtime_reactor_wait(uint32_t timeout_ms, uint32_t *out_ready_count,
                                             uint64_t logical_step);
 /* Write a log message at the given severity level.

@@ -62,3 +62,100 @@ asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a, const asx_ca
     if (a->timestamp <= b->timestamp) return *a;
     return *b;
 }
+
+/* -------------------------------------------------------------------
+ * Cancel witness protocol (walking skeleton)
+ *
+ * The walking skeleton provides slot-based witness tracking
+ * for validation purposes. Full multi-threaded witness protocol
+ * is deferred to Phase 4.
+ * ------------------------------------------------------------------- */
+
+#define ASX_MAX_CANCEL_WITNESSES 64u
+
+typedef struct {
+    asx_cancel_witness_id id;
+    asx_cancel_phase phase;
+    asx_cancel_reason reason;
+    uint16_t generation;
+    int active;
+} asx_witness_slot;
+
+static asx_witness_slot g_witnesses[ASX_MAX_CANCEL_WITNESSES];
+static uint32_t g_witness_count = 0;
+
+static asx_witness_slot *witness_find(asx_cancel_witness_id w) {
+    uint32_t i;
+    if (w == ASX_INVALID_ID) return NULL;
+    for (i = 0; i < g_witness_count; i++) {
+        if (g_witnesses[i].id == w && g_witnesses[i].active) return &g_witnesses[i];
+    }
+    return NULL;
+}
+
+asx_status asx_cancel_witness_phase(asx_cancel_witness_id w, asx_cancel_phase *out_phase) {
+    asx_witness_slot *s;
+    if (out_phase == NULL) return ASX_E_INVALID_ARGUMENT;
+    s = witness_find(w);
+    if (s == NULL) return ASX_E_NOT_FOUND;
+    *out_phase = s->phase;
+    return ASX_OK;
+}
+
+asx_status asx_cancel_witness_reason(asx_cancel_witness_id w, asx_cancel_reason *out_reason) {
+    asx_witness_slot *s;
+    if (out_reason == NULL) return ASX_E_INVALID_ARGUMENT;
+    s = witness_find(w);
+    if (s == NULL) return ASX_E_NOT_FOUND;
+    *out_reason = s->reason;
+    return ASX_OK;
+}
+
+int asx_cancel_witness_is_valid(asx_cancel_witness_id w) {
+    return witness_find(w) != NULL;
+}
+
+/* -------------------------------------------------------------------
+ * User-facing cancellation request (walking skeleton)
+ * ------------------------------------------------------------------- */
+
+asx_status asx_cancel_request(asx_task_id task, const asx_cancel_reason *reason) {
+    (void)task;
+    if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (task == ASX_INVALID_ID) return ASX_E_NOT_FOUND;
+    /* Walking skeleton: validates arguments but does not propagate.
+     * Full cancellation propagation requires scheduler integration
+     * (Phase 4). */
+    return ASX_OK;
+}
+
+/* -------------------------------------------------------------------
+ * String helpers
+ * ------------------------------------------------------------------- */
+
+const char *asx_cancel_kind_str(asx_cancel_kind kind) {
+    switch (kind) {
+    case ASX_CANCEL_USER: return "user";
+    case ASX_CANCEL_TIMEOUT: return "timeout";
+    case ASX_CANCEL_DEADLINE: return "deadline";
+    case ASX_CANCEL_POLL_QUOTA: return "poll_quota";
+    case ASX_CANCEL_COST_BUDGET: return "cost_budget";
+    case ASX_CANCEL_FAIL_FAST: return "fail_fast";
+    case ASX_CANCEL_RACE_LOST: return "race_lost";
+    case ASX_CANCEL_LINKED_EXIT: return "linked_exit";
+    case ASX_CANCEL_PARENT: return "parent";
+    case ASX_CANCEL_RESOURCE: return "resource";
+    case ASX_CANCEL_SHUTDOWN: return "shutdown";
+    default: return "unknown";
+    }
+}
+
+const char *asx_cancel_phase_str(asx_cancel_phase phase) {
+    switch (phase) {
+    case ASX_CANCEL_PHASE_REQUESTED: return "requested";
+    case ASX_CANCEL_PHASE_CANCELLING: return "cancelling";
+    case ASX_CANCEL_PHASE_FINALIZING: return "finalizing";
+    case ASX_CANCEL_PHASE_COMPLETED: return "completed";
+    default: return "unknown";
+    }
+}

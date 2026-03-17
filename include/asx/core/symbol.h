@@ -151,6 +151,39 @@ ASX_API ASX_MUST_USE asx_status asx_typed_symbol_get(asx_symbol_id id, asx_typed
 /* Human-readable name for a type kind. Never returns NULL. */
 ASX_API ASX_MUST_USE const char *asx_type_kind_str(asx_type_kind kind);
 
+/* ------------------------------------------------------------------ */
+/* Typed value — runtime value container with symbol + type metadata    */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_symbol_id symbol;     /* which concept this value represents */
+    asx_type_kind kind;       /* payload type */
+    const void *payload;      /* caller-managed pointer; NULL for void */
+    uint32_t payload_size;    /* size in bytes (0 for void/unknown) */
+} asx_typed_value;
+
+/* Initialize a typed value. Returns ASX_OK on success.
+ * Returns ASX_E_INVALID_ARGUMENT if val is NULL. */
+ASX_API ASX_MUST_USE asx_status asx_typed_value_init(asx_typed_value *val, asx_symbol_id symbol,
+                                                      asx_type_kind kind, const void *payload,
+                                                      uint32_t payload_size);
+
+/* Compare two typed values for equality.
+ * Two values are equal iff symbol, kind, payload_size match and
+ * memcmp of payloads returns 0. Returns 1 if equal, 0 otherwise. */
+ASX_API int asx_typed_value_equals(const asx_typed_value *a, const asx_typed_value *b);
+
+/* ------------------------------------------------------------------ */
+/* Symbol set iteration                                                */
+/* ------------------------------------------------------------------ */
+
+/* Callback for set iteration. Return 0 to continue, nonzero to stop. */
+typedef int (*asx_symbol_set_iter_fn)(asx_symbol_id id, void *ctx);
+
+/* Iterate over all symbols in the set, calling fn for each.
+ * Iteration order is ascending by ID. Stops early if fn returns nonzero. */
+ASX_API void asx_symbol_set_iterate(const asx_symbol_set *set, asx_symbol_set_iter_fn fn, void *ctx);
+
 #ifdef __cplusplus
 }
 #endif

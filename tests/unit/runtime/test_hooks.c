@@ -24,6 +24,7 @@ static int g_realloc_count;
 static int g_clock_count;
 static int g_entropy_count;
 static int g_reactor_count;
+static int g_native_reactor_count;
 static int g_log_count;
 static int g_log_level;
 static char g_log_buf[256];
@@ -72,6 +73,14 @@ static asx_status test_ghost_reactor(void *ctx, uint64_t logical_step, uint32_t 
     return ASX_OK;
 }
 
+static asx_status test_native_reactor(void *ctx, uint32_t timeout_ms, uint32_t *ready_count) {
+    (void)ctx;
+    (void)timeout_ms;
+    g_native_reactor_count++;
+    *ready_count = 7;
+    return ASX_OK;
+}
+
 static void test_log_sink(void *ctx, int level, const char *message) {
     (void)ctx;
     g_log_count++;
@@ -89,6 +98,7 @@ static void reset_counters(void) {
     g_clock_count = 0;
     g_entropy_count = 0;
     g_reactor_count = 0;
+    g_native_reactor_count = 0;
     g_log_count = 0;
     g_log_level = 0;
     g_log_buf[0] = '\0';
@@ -410,6 +420,23 @@ TEST(reactor_wait_dispatches_to_ghost_hook) {
     ASSERT_TRUE(g_reactor_count > 0);
 }
 
+TEST(reactor_wait_prefers_native_hook_when_both_are_installed) {
+    uint32_t ready = 0;
+    asx_runtime_hooks hooks;
+
+    asx_runtime_reset();
+    reset_counters();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.reactor.wait_fn = test_native_reactor;
+    hooks.reactor.ghost_wait_fn = test_ghost_reactor;
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    ASSERT_EQ(asx_runtime_reactor_wait(100, &ready, 5), ASX_OK);
+    ASSERT_EQ(ready, 7u);
+    ASSERT_EQ(g_native_reactor_count, 1);
+    ASSERT_EQ(g_reactor_count, 0);
+}
+
 /* ------------------------------------------------------------------ */
 /* Log dispatch                                                        */
 /* ------------------------------------------------------------------ */
@@ -676,6 +703,8 @@ int main(void) {
     RUN_TEST(reactor_wait_null_returns_error);
     asx_runtime_reset();
     RUN_TEST(reactor_wait_dispatches_to_ghost_hook);
+    asx_runtime_reset();
+    RUN_TEST(reactor_wait_prefers_native_hook_when_both_are_installed);
 
     /* Log dispatch */
     asx_runtime_reset();

@@ -168,6 +168,42 @@ asx_status asx_trace_config_init(asx_trace_config *cfg, asx_resource_class cls) 
 }
 
 /* -------------------------------------------------------------------
+ * Resource limits per class
+ * ------------------------------------------------------------------- */
+
+asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls) {
+    asx_resource_limits lim;
+    switch (cls) {
+    case ASX_CLASS_R1:
+        lim.max_regions = 4;
+        lim.max_tasks = 16;
+        lim.max_timers = 32;
+        lim.max_obligations = 16;
+        lim.max_channels = 8;
+        lim.max_trace_events = 64;
+        break;
+    case ASX_CLASS_R2:
+        lim.max_regions = 16;
+        lim.max_tasks = 64;
+        lim.max_timers = 128;
+        lim.max_obligations = 64;
+        lim.max_channels = 32;
+        lim.max_trace_events = 256;
+        break;
+    case ASX_CLASS_R3:
+    case ASX_CLASS_COUNT:
+        lim.max_regions = 64;
+        lim.max_tasks = 256;
+        lim.max_timers = 512;
+        lim.max_obligations = 256;
+        lim.max_channels = 128;
+        lim.max_trace_events = 1024;
+        break;
+    }
+    return lim;
+}
+
+/* -------------------------------------------------------------------
  * Property classification
  *
  * All profile properties are OPERATIONAL by definition — they exist

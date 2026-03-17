@@ -19,6 +19,7 @@
 #include <asx/asx_status.h>
 #include <asx/core/outcome.h>
 #include <asx/time/deadline.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* Forward declaration for task poll function type */
@@ -198,6 +199,92 @@ ASX_API asx_status asx_quorum_poll(void *user_data, asx_task_id self);
 ASX_API uint32_t asx_quorum_ok_count(const asx_quorum_state *state);
 
 ASX_API uint32_t asx_quorum_fail_count(const asx_quorum_state *state);
+
+/* -------------------------------------------------------------------
+ * Cancel token — cooperative cancellation check for combinators
+ *
+ * Combinators that accept a cancel token check it on each poll cycle.
+ * If the token is triggered, the combinator drains in-flight branches
+ * and returns ASX_E_CANCELLED.
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    const int *cancelled; /* pointer to external flag; NULL = no cancel check */
+} asx_cancel_token;
+
+/* Initialize a cancel token from an external flag.
+ * When *flag becomes nonzero, combinators using this token will cancel.
+ * Pass NULL flag to create an inert (never-cancelled) token. */
+static inline asx_cancel_token asx_cancel_token_from(const int *flag) {
+    asx_cancel_token t;
+    t.cancelled = flag;
+    return t;
+}
+
+/* Check if a cancel token has been triggered. */
+static inline int asx_cancel_token_is_cancelled(const asx_cancel_token *t) {
+    if (t == NULL || t->cancelled == NULL) return 0;
+    return *t->cancelled != 0;
+}
+
+/* Create an inert cancel token that is never cancelled. */
+static inline asx_cancel_token asx_cancel_token_none(void) {
+    asx_cancel_token t;
+    t.cancelled = NULL;
+    return t;
+}
+
+/* -------------------------------------------------------------------
+ * Race with timeout — race all branches against a deadline
+ *
+ * Returns the winning branch's status if one completes before timeout.
+ * Returns ASX_E_TIMED_OUT if deadline expires first.
+ * All losers receive one cooperative drain poll before cancellation.
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    asx_race_state race;
+    asx_deadline deadline;
+    uint64_t timeout_ns;
+    int initialized;
+    int timed_out;
+} asx_race_timeout_state;
+
+ASX_API asx_status asx_race_timeout_init(asx_race_timeout_state *state, uint64_t timeout_ns);
+
+ASX_API asx_status asx_race_timeout_add(asx_race_timeout_state *state,
+                                         asx_combinator_poll_fn poll_fn, void *user_data);
+
+ASX_API asx_status asx_race_timeout_poll(void *user_data, asx_task_id self);
+
+/* -------------------------------------------------------------------
+ * Retry with timeout — retry with per-overall-operation deadline
+ *
+ * Retries up to max_retries on failure. If the total elapsed time
+ * exceeds timeout_ns, stops retrying and returns ASX_E_TIMED_OUT.
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    asx_combinator_poll_fn poll_fn;
+    void *user_data;
+    uint32_t max_retries;
+    uint32_t attempt;
+    asx_status last_error;
+    int done;
+    asx_status result;
+    asx_deadline deadline;
+    uint64_t timeout_ns;
+    int deadline_initialized;
+    asx_combinator_branch inner;
+} asx_retry_timeout_state;
+
+ASX_API asx_status asx_retry_timeout_init(asx_retry_timeout_state *state,
+                                           asx_combinator_poll_fn poll_fn, void *user_data,
+                                           uint32_t max_retries, uint64_t timeout_ns);
+
+ASX_API asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self);
+
+ASX_API uint32_t asx_retry_timeout_attempts(const asx_retry_timeout_state *state);
 
 #ifdef __cplusplus
 }

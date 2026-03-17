@@ -437,3 +437,161 @@ uint32_t asx_quorum_fail_count(const asx_quorum_state *state) {
     if (state == NULL) return 0;
     return state->fail_count;
 }
+
+/* ------------------------------------------------------------------ */
+/* Race with timeout                                                   */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_race_timeout_init(asx_race_timeout_state *state, uint64_t timeout_ns) {
+    asx_status st;
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_race_init(&state->race);
+    if (st != ASX_OK) return st;
+    state->timeout_ns = timeout_ns;
+    state->initialized = 0;
+    state->timed_out = 0;
+    return ASX_OK;
+}
+
+asx_status asx_race_timeout_add(asx_race_timeout_state *state,
+                                 asx_combinator_poll_fn poll_fn, void *user_data) {
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+    return asx_race_add(&state->race, poll_fn, user_data);
+}
+
+asx_status asx_race_timeout_poll(void *user_data, asx_task_id self) {
+    asx_race_timeout_state *state = (asx_race_timeout_state *)user_data;
+    asx_status st;
+
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    /* Lazy deadline init on first poll */
+    if (!state->initialized) {
+        st = asx_deadline_after(&state->deadline, state->timeout_ns);
+        if (st != ASX_OK) {
+            /* If clock unavailable, skip timeout checking */
+            memset(&state->deadline, 0, sizeof(state->deadline));
+        }
+        state->initialized = 1;
+    }
+
+    /* Check timeout before polling */
+    if (asx_deadline_is_expired(&state->deadline)) {
+        uint32_t i;
+        state->timed_out = 1;
+        /* Drain all pending branches */
+        for (i = 0; i < state->race.count; i++) {
+            branch_cancel_after_final_poll(&state->race.branches[i], self);
+        }
+        return ASX_E_TIMED_OUT;
+    }
+
+    /* Delegate to normal race */
+    st = asx_race_poll(&state->race, self);
+
+    /* Check timeout after polling */
+    if (st == ASX_E_PENDING && asx_deadline_is_expired(&state->deadline)) {
+        uint32_t i;
+        state->timed_out = 1;
+        for (i = 0; i < state->race.count; i++) {
+            branch_cancel_after_final_poll(&state->race.branches[i], self);
+        }
+        return ASX_E_TIMED_OUT;
+    }
+
+    return st;
+}
+
+/* ------------------------------------------------------------------ */
+/* Retry with timeout                                                  */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_retry_timeout_init(asx_retry_timeout_state *state,
+                                   asx_combinator_poll_fn poll_fn, void *user_data,
+                                   uint32_t max_retries, uint64_t timeout_ns) {
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (poll_fn == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    state->poll_fn = poll_fn;
+    state->user_data = user_data;
+    state->max_retries = max_retries;
+    state->attempt = 0;
+    state->last_error = ASX_E_PENDING;
+    state->done = 0;
+    state->result = ASX_E_PENDING;
+    state->timeout_ns = timeout_ns;
+    state->deadline_initialized = 0;
+
+    state->inner.poll_fn = poll_fn;
+    state->inner.user_data = user_data;
+    state->inner.result = ASX_E_PENDING;
+    state->inner.done = 0;
+
+    return ASX_OK;
+}
+
+asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self) {
+    asx_retry_timeout_state *state = (asx_retry_timeout_state *)user_data;
+    asx_status st;
+
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (state->done) return state->result;
+
+    /* Lazy deadline init on first poll */
+    if (!state->deadline_initialized) {
+        st = asx_deadline_after(&state->deadline, state->timeout_ns);
+        if (st != ASX_OK) {
+            memset(&state->deadline, 0, sizeof(state->deadline));
+        }
+        state->deadline_initialized = 1;
+    }
+
+    /* Check overall timeout */
+    if (asx_deadline_is_expired(&state->deadline)) {
+        state->done = 1;
+        state->result = ASX_E_TIMED_OUT;
+        return ASX_E_TIMED_OUT;
+    }
+
+    /* Poll inner */
+    st = branch_poll(&state->inner, self);
+
+    if (st == ASX_E_PENDING) return ASX_E_PENDING;
+
+    if (st == ASX_OK) {
+        state->done = 1;
+        state->result = ASX_OK;
+        state->attempt++;
+        return ASX_OK;
+    }
+
+    /* Failure — try retry */
+    state->last_error = st;
+    state->attempt++;
+
+    if (state->attempt > state->max_retries) {
+        state->done = 1;
+        state->result = state->last_error;
+        return state->last_error;
+    }
+
+    /* Check timeout before retrying */
+    if (asx_deadline_is_expired(&state->deadline)) {
+        state->done = 1;
+        state->result = ASX_E_TIMED_OUT;
+        return ASX_E_TIMED_OUT;
+    }
+
+    /* Reset inner for next attempt */
+    state->inner.poll_fn = state->poll_fn;
+    state->inner.user_data = state->user_data;
+    state->inner.result = ASX_E_PENDING;
+    state->inner.done = 0;
+
+    return ASX_E_PENDING;
+}
+
+uint32_t asx_retry_timeout_attempts(const asx_retry_timeout_state *state) {
+    if (state == NULL) return 0;
+    return state->attempt;
+}
