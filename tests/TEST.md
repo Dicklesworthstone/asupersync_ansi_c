@@ -99,6 +99,19 @@ before API/ABI freeze (`make test-vignettes`):
 - `vignette_security.c` — authenticated symbol, derived-context rejection, and audit/evidence flows
 - `vignette_link.c` — public link/session round-trip with obligation and record capture
 
+### Canonical Examples (`examples/`)
+
+These are runnable walkthrough programs validated by the `examples_smoke`
+e2e family so public onboarding examples fail fast when runtime surfaces move:
+
+- `ex_quickstart.c` — region/task lifecycle plus current-thread runtime builder, local scope, blocking offload, and deadline flow
+- `ex_cancel_drain.c` — cancellation propagation and bounded drain patterns
+- `ex_channel_flow.c` — bounded channel handoff and producer/consumer flow
+- `ex_network_surface.c` — deterministic resolver, TCP, and UDP walkthrough
+- `ex_timeout_deadline.c` — timeout/deadline contracts and timer-wheel behavior
+- `ex_lab_replay.c` — deterministic replay/lab artifacts and rerun hints
+- `ex_browser_boundary.c` / `ex_browser_replay.c` — browser-profile boundary and replay walkthroughs, validated by the dedicated `browser_smoke` lane
+
 ### End-to-End Tests (`tests/e2e/`)
 
 E2e tests are shell scripts that build and run multi-step scenarios.
@@ -106,6 +119,8 @@ Each family maps to a hard gate:
 
 | Family | Gate | Script |
 |--------|------|--------|
+| examples_smoke | GATE-E2E-EXAMPLES | `examples_smoke.sh` |
+| browser_smoke | GATE-E2E-BROWSER | `browser_smoke.sh` |
 | core_lifecycle | GATE-E2E-LIFECYCLE | `core_lifecycle.sh` |
 | codec_parity | GATE-E2E-CODEC | `codec_parity.sh` |
 | robustness | GATE-E2E-ROBUSTNESS | `robustness.sh` |
