@@ -152,8 +152,13 @@ asx_status asx_io_set_interest(asx_io_token *token, asx_io_interest interest) {
 
 asx_status asx_io_get_registration(const asx_io_token *token, int *out_fd,
                                    asx_io_interest *out_interest) {
+    asx_status st;
+
+    st = asx_surface_gate(ASX_SURFACE_IO_DRIVER);
+    if (st != ASX_OK) return st;
     if (token == NULL) return ASX_E_INVALID_ARGUMENT;
     if (out_fd == NULL && out_interest == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!g_initialized) return ASX_E_INVALID_STATE;
     if (token->slot >= g_reg_count) return ASX_E_NOT_FOUND;
     if (g_regs[token->slot].generation != token->generation) return ASX_E_NOT_FOUND;
     if (!g_regs[token->slot].alive) return ASX_E_NOT_FOUND;

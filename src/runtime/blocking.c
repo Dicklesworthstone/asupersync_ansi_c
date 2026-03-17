@@ -156,8 +156,12 @@ asx_blocking_state asx_blocking_get_state(const asx_blocking_handle *handle) {
 
 asx_status asx_blocking_get_result(const asx_blocking_handle *handle, uint64_t *out_result) {
     const asx_blocking_slot *s;
+    asx_status st;
 
+    st = asx_surface_gate(ASX_SURFACE_BLOCKING);
+    if (st != ASX_OK) return st;
     if (handle == NULL || out_result == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!g_initialized) return ASX_E_INVALID_STATE;
     if (handle->slot >= g_slot_count) return ASX_E_NOT_FOUND;
 
     s = &g_slots[handle->slot];

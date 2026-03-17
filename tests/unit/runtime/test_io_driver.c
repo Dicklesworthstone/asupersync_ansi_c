@@ -261,6 +261,16 @@ TEST(get_registration_requires_output) {
     teardown();
 }
 
+TEST(get_registration_before_init_fails) {
+    asx_io_token tok;
+    int fd = -1;
+
+    memset(&tok, 0, sizeof(tok));
+    asx_io_driver_reset();
+    asx_io_driver_shutdown();
+    ASSERT_EQ(asx_io_get_registration(&tok, &fd, NULL), ASX_E_INVALID_STATE);
+}
+
 TEST(get_registration_stale_token_fails) {
     asx_waker w;
     asx_io_token tok;
@@ -429,6 +439,7 @@ int main(void) {
     RUN_TEST(set_interest_unknown_bits_fail);
     RUN_TEST(get_registration_null_token_fails);
     RUN_TEST(get_registration_requires_output);
+    RUN_TEST(get_registration_before_init_fails);
     RUN_TEST(get_registration_stale_token_fails);
 
     RUN_TEST(poll_returns_zero_ghost_reactor);

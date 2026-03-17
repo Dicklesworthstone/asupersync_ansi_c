@@ -7,6 +7,7 @@
 #include "../../test_harness.h"
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/browser_boundary.h>
+#include <string.h>
 
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
@@ -175,6 +176,16 @@ TEST(get_result_null_out_fails) {
     teardown();
 }
 
+TEST(get_result_before_init_fails) {
+    asx_blocking_handle h;
+    uint64_t result = 0;
+
+    memset(&h, 0, sizeof(h));
+    asx_blocking_pool_reset();
+    asx_blocking_pool_shutdown();
+    ASSERT_EQ(asx_blocking_get_result(&h, &result), ASX_E_INVALID_STATE);
+}
+
 TEST(get_result_stale_handle_fails) {
     asx_blocking_handle h;
     uint64_t result;
@@ -282,6 +293,7 @@ int main(void) {
 
     RUN_TEST(get_result_null_handle_fails);
     RUN_TEST(get_result_null_out_fails);
+    RUN_TEST(get_result_before_init_fails);
     RUN_TEST(get_result_stale_handle_fails);
 
     RUN_TEST(active_count_zero_initially);

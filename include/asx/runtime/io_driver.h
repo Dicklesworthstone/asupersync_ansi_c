@@ -93,6 +93,9 @@ ASX_API ASX_MUST_USE asx_status asx_io_set_interest(asx_io_token *token, asx_io_
 /* Query the stored registration state for an existing token.
  * Returns ASX_OK on success and fills any non-NULL outputs.
  * Returns ASX_E_INVALID_ARGUMENT if token is NULL or all outputs are NULL.
+ * Returns ASX_E_PERMISSION_DENIED when the IO-driver surface is unavailable
+ * in the active profile, or ASX_E_INVALID_STATE when the driver has not been
+ * initialized for the current runtime/bootstrap sequence.
  * Returns ASX_E_NOT_FOUND for stale or unknown tokens. */
 ASX_API ASX_MUST_USE asx_status asx_io_get_registration(const asx_io_token *token, int *out_fd,
                                                         asx_io_interest *out_interest);

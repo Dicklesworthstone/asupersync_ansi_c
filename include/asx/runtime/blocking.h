@@ -89,8 +89,12 @@ ASX_API asx_blocking_state asx_blocking_get_state(const asx_blocking_handle *han
 
 /* Get the result of a completed blocking task.
  * Returns ASX_OK and fills *out_result on success.
+ * Returns ASX_E_PERMISSION_DENIED when the blocking surface is unavailable
+ * in the active profile, or ASX_E_INVALID_STATE when the blocking pool has
+ * not been initialized for the current runtime/bootstrap sequence.
  * Returns ASX_E_PENDING if task hasn't completed.
- * Returns ASX_E_INVALID_ARGUMENT if handle or out_result is NULL. */
+ * Returns ASX_E_INVALID_ARGUMENT if handle or out_result is NULL.
+ * Returns ASX_E_STALE_HANDLE or ASX_E_NOT_FOUND for invalidated handles. */
 ASX_API ASX_MUST_USE asx_status asx_blocking_get_result(const asx_blocking_handle *handle,
                                                         uint64_t *out_result);
 
