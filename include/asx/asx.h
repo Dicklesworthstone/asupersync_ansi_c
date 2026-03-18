@@ -64,6 +64,10 @@
 /* Network surface */
 #include <asx/net/net.h>
 
+/* Actor model and supervision */
+#include <asx/actor/actor.h>
+#include <asx/actor/supervisor.h>
+
 /* Obligation, session, record, and link public families */
 #include <asx/link/link.h>
 #include <asx/obligation/obligation.h>

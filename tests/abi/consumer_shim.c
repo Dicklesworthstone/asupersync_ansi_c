@@ -172,6 +172,14 @@ static void test_symbol_resolution(void) {
     SHIM_CHECK(asx_runtime_shutdown != NULL, "asx_runtime_shutdown resolves");
     SHIM_CHECK(asx_runtime_config_init != NULL, "asx_runtime_config_init resolves");
 
+    /* Actor + supervision surface */
+    SHIM_CHECK(asx_actor_spawn != NULL, "asx_actor_spawn resolves");
+    SHIM_CHECK(asx_actor_cast != NULL, "asx_actor_cast resolves");
+    SHIM_CHECK(asx_actor_call != NULL, "asx_actor_call resolves");
+    SHIM_CHECK(asx_actor_stop != NULL, "asx_actor_stop resolves");
+    SHIM_CHECK(asx_supervisor_start != NULL, "asx_supervisor_start resolves");
+    SHIM_CHECK(asx_supervisor_stop != NULL, "asx_supervisor_stop resolves");
+
     /* Typed symbol surface */
     SHIM_CHECK(asx_typed_symbol_register != NULL, "asx_typed_symbol_register resolves");
     SHIM_CHECK(asx_typed_symbol_lookup != NULL, "asx_typed_symbol_lookup resolves");
@@ -217,6 +225,39 @@ static asx_status noop_poll(void *user_data, asx_task_id self) {
     return ASX_OK;
 }
 
+static int shim_is_progress_status(asx_status st) {
+    return st == ASX_OK || st == ASX_E_PENDING || st == ASX_E_POLL_BUDGET_EXHAUSTED;
+}
+
+typedef struct {
+    uint64_t last_cast;
+} shim_actor_state;
+
+static asx_status shim_actor_cast(void *state, uint64_t msg, asx_actor_handle self) {
+    shim_actor_state *actor = (shim_actor_state *)state;
+    (void)self;
+    actor->last_cast = msg;
+    return ASX_OK;
+}
+
+static asx_status shim_actor_call(void *state, uint64_t request, uint64_t *reply,
+                                  asx_actor_handle self) {
+    shim_actor_state *actor = (shim_actor_state *)state;
+    (void)self;
+    actor->last_cast = request;
+    *reply = request + 1u;
+    return ASX_OK;
+}
+
+static asx_status shim_child_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
+    asx_actor_behavior behavior;
+    behavior.init = NULL;
+    behavior.handle_cast = shim_actor_cast;
+    behavior.handle_call = shim_actor_call;
+    behavior.terminate = NULL;
+    return asx_actor_spawn(out, region, &behavior, user_data);
+}
+
 static void test_lifecycle_smoke(void) {
     asx_region_id rid;
     asx_task_id tid;
@@ -238,6 +279,82 @@ static void test_lifecycle_smoke(void) {
     SHIM_CHECK(st == ASX_OK, "scheduler_run succeeds");
 }
 
+static void test_actor_surface_smoke(void) {
+    asx_region_id rid;
+    asx_actor_handle actor;
+    asx_supervisor_handle supervisor;
+    asx_call_token token;
+    shim_actor_state state;
+    asx_supervisor_config cfg;
+    asx_child_spec spec;
+    asx_budget budget;
+    uint64_t reply = 0u;
+    asx_status st;
+
+    fprintf(stderr, "--- Actor surface smoke ---\n");
+
+    memset(&state, 0, sizeof(state));
+    asx_runtime_reset();
+
+    st = asx_region_open(&rid);
+    SHIM_CHECK(st == ASX_OK, "actor smoke region_open succeeds");
+
+    {
+        asx_actor_behavior behavior;
+        behavior.init = NULL;
+        behavior.handle_cast = shim_actor_cast;
+        behavior.handle_call = shim_actor_call;
+        behavior.terminate = NULL;
+        st = asx_actor_spawn(&actor, rid, &behavior, &state);
+    }
+    SHIM_CHECK(st == ASX_OK, "actor_spawn succeeds through umbrella header");
+
+    budget = asx_budget_from_polls(4u);
+    st = asx_scheduler_run(rid, &budget);
+    SHIM_CHECK(shim_is_progress_status(st), "actor init run succeeds");
+
+    st = asx_actor_cast(actor, 9u);
+    SHIM_CHECK(st == ASX_OK, "actor_cast succeeds");
+    st = asx_actor_call(actor, 41u, &token);
+    SHIM_CHECK(st == ASX_OK, "actor_call succeeds");
+
+    budget = asx_budget_from_polls(4u);
+    st = asx_scheduler_run(rid, &budget);
+    SHIM_CHECK(shim_is_progress_status(st), "actor message run succeeds");
+
+    st = asx_call_token_poll(token, &reply);
+    SHIM_CHECK(st == ASX_OK && reply == 42u, "actor call reply roundtrip");
+    SHIM_CHECK(state.last_cast == 41u, "actor state updated through reply handler");
+
+    st = asx_actor_stop(actor);
+    SHIM_CHECK(st == ASX_OK, "actor_stop succeeds");
+
+    budget = asx_budget_from_polls(4u);
+    st = asx_scheduler_run(rid, &budget);
+    SHIM_CHECK(shim_is_progress_status(st), "actor stop run succeeds");
+
+    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
+    cfg.max_restarts = 1u;
+    spec.start_fn = shim_child_start;
+    spec.user_data = &state;
+    spec.restart = ASX_CHILD_TEMPORARY;
+
+    st = asx_supervisor_start(&supervisor, rid, &cfg, &spec, 1u);
+    SHIM_CHECK(st == ASX_OK, "supervisor_start succeeds");
+    SHIM_CHECK(asx_supervisor_child_count(supervisor) == 1u, "supervisor child count visible");
+
+    budget = asx_budget_from_polls(4u);
+    st = asx_scheduler_run(rid, &budget);
+    SHIM_CHECK(shim_is_progress_status(st), "supervisor init run succeeds");
+
+    st = asx_supervisor_stop(supervisor);
+    SHIM_CHECK(st == ASX_OK, "supervisor_stop succeeds");
+
+    budget = asx_budget_from_polls(8u);
+    st = asx_scheduler_run(rid, &budget);
+    SHIM_CHECK(shim_is_progress_status(st), "supervisor stop drain succeeds");
+}
+
 /* --- Main --- */
 
 int main(void) {
@@ -250,6 +367,7 @@ int main(void) {
     test_symbol_resolution();
     test_typed_symbol_surface();
     test_lifecycle_smoke();
+    test_actor_surface_smoke();
 
     fprintf(stderr, "\n[asx-consumer-shim] %d passed, %d failed\n", passes, failures);
 

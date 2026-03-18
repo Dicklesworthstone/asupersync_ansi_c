@@ -26,6 +26,7 @@ e2e_init "examples-smoke" "E2E-EXAMPLES-SMOKE"
 EXAMPLES_DIR="${E2E_PROJECT_ROOT}/examples"
 EXAMPLE_SOURCES=(
     ex_quickstart.c
+    ex_actor_supervision.c
     ex_cancel_drain.c
     ex_channel_flow.c
     ex_network_surface.c
