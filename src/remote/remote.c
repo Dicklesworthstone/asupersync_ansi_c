@@ -85,7 +85,8 @@ void asx_remote_message_init(asx_remote_message *msg, asx_remote_msg_kind kind,
 
 asx_status asx_remote_message_set_payload(asx_remote_message *msg, const void *data, uint32_t len) {
     if (len > ASX_REMOTE_MSG_PAYLOAD_SIZE) { return ASX_E_BUFFER_TOO_SMALL; }
-    memcpy(msg->payload, data, len);
+    if (len > 0 && data == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (len > 0) { memcpy(msg->payload, data, len); }
     msg->payload_len = len;
     return ASX_OK;
 }
@@ -294,6 +295,8 @@ void asx_spawn_request_init(asx_spawn_request *req, uint64_t request_id, asx_rem
 }
 
 void asx_spawn_ack_accepted(asx_spawn_ack *ack, uint64_t request_id, uint64_t handle_id) {
+    if (ack == NULL) { return; }
+    memset(ack, 0, sizeof(*ack));
     ack->request_id = request_id;
     ack->status = ASX_SPAWN_ACK_ACCEPTED;
     ack->reject_reason = ASX_SPAWN_REJECT_CAPACITY; /* unused */
@@ -302,6 +305,8 @@ void asx_spawn_ack_accepted(asx_spawn_ack *ack, uint64_t request_id, uint64_t ha
 
 void asx_spawn_ack_rejected(asx_spawn_ack *ack, uint64_t request_id,
                             asx_spawn_reject_reason reason) {
+    if (ack == NULL) { return; }
+    memset(ack, 0, sizeof(*ack));
     ack->request_id = request_id;
     ack->status = ASX_SPAWN_ACK_REJECTED;
     ack->reject_reason = reason;
@@ -312,6 +317,7 @@ void asx_remote_report_init(asx_remote_report *report, const asx_spawn_request *
                             const asx_spawn_ack *ack, const asx_remote_handle *handle,
                             const asx_idempotency_record *rec, const asx_lease *lease,
                             const asx_saga *saga, uint64_t now_ns) {
+    if (report == NULL) { return; }
     memset(report, 0, sizeof(*report));
 
     if (req != NULL) {

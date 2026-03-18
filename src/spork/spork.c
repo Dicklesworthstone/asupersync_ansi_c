@@ -182,9 +182,6 @@ asx_status asx_spork_pipeline_execute(const asx_spork_pipeline *pipe, void *init
         current_input = current_output;
     }
 
-    /* Handle edge case: empty pipeline. */
-    if (pipe->stage_count == 0) { memcpy(final_output, initial_input, 1); }
-
     return ASX_OK;
 }
 

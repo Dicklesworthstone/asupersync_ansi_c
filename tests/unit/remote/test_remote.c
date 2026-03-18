@@ -336,6 +336,23 @@ TEST(spawn_ack_rejected) {
     ASSERT_EQ(ack.reject_reason, ASX_SPAWN_REJECT_UNAUTHORIZED);
 }
 
+TEST(spawn_ack_helpers_clear_stale_fields) {
+    asx_spawn_ack ack;
+    memset(&ack, 0xFF, sizeof(ack));
+
+    asx_spawn_ack_accepted(&ack, 42, 100);
+    ASSERT_EQ(ack.request_id, 42u);
+    ASSERT_EQ(ack.status, ASX_SPAWN_ACK_ACCEPTED);
+    ASSERT_EQ(ack.handle_id, 100u);
+
+    memset(&ack, 0xFF, sizeof(ack));
+    asx_spawn_ack_rejected(&ack, 77, ASX_SPAWN_REJECT_DUPLICATE);
+    ASSERT_EQ(ack.request_id, 77u);
+    ASSERT_EQ(ack.status, ASX_SPAWN_ACK_REJECTED);
+    ASSERT_EQ(ack.reject_reason, ASX_SPAWN_REJECT_DUPLICATE);
+    ASSERT_EQ(ack.handle_id, 0u);
+}
+
 /* ================================================================== */
 /* Operator report tests                                               */
 /* ================================================================== */
@@ -419,6 +436,20 @@ TEST(remote_report_uses_failure_sources_and_bounds_checks) {
     ASSERT_EQ(asx_remote_report_format(&report, tiny, sizeof(tiny)), ASX_E_BUFFER_TOO_SMALL);
 }
 
+TEST(remote_report_init_allows_null_report) {
+    asx_spawn_request req;
+    asx_spawn_ack ack;
+    asx_remote_cap cap;
+    asx_idempotency_key key;
+
+    asx_remote_cap_init(&cap, 1, ASX_REMOTE_CAP_SPAWN);
+    asx_idempotency_key_init(&key, 1234, 0);
+    asx_spawn_request_init(&req, 11, cap, key);
+    asx_spawn_ack_accepted(&ack, 11, 22);
+
+    asx_remote_report_init(NULL, &req, &ack, NULL, NULL, NULL, NULL, 0);
+}
+
 /* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
@@ -465,10 +496,12 @@ int main(void) {
     RUN_TEST(spawn_request_init);
     RUN_TEST(spawn_ack_accepted);
     RUN_TEST(spawn_ack_rejected);
+    RUN_TEST(spawn_ack_helpers_clear_stale_fields);
 
     /* Operator report */
     RUN_TEST(remote_report_summarizes_active_execution);
     RUN_TEST(remote_report_uses_failure_sources_and_bounds_checks);
+    RUN_TEST(remote_report_init_allows_null_report);
 
     TEST_REPORT();
     return test_failures;
