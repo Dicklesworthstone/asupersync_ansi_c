@@ -24,6 +24,11 @@ void asx_report_buf_append(asx_report_buf *buf, const char *str) {
     uint32_t slen, avail;
     if (buf == NULL || str == NULL) return;
 
+    if (buf->len >= ASX_REPORT_BUF_SIZE) {
+        buf->len = ASX_REPORT_BUF_SIZE - 1u;
+        buf->data[buf->len] = '\0';
+    }
+
     slen = (uint32_t)strlen(str);
     avail = ASX_REPORT_BUF_SIZE - buf->len - 1; /* reserve NUL */
     if (slen > avail) slen = avail;

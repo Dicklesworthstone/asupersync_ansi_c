@@ -101,6 +101,18 @@ static void test_report_buf_truncation(void) {
     ASSERT(buf.data[buf.len] == '\0', "null terminated");
 }
 
+static void test_report_buf_invalid_len_is_clamped(void) {
+    asx_report_buf buf;
+
+    memset(&buf, 'x', sizeof(buf));
+    buf.len = ASX_REPORT_BUF_SIZE;
+
+    asx_report_buf_append(&buf, "hello");
+
+    ASSERT(buf.len == ASX_REPORT_BUF_SIZE - 1u, "invalid len clamped");
+    ASSERT(buf.data[buf.len] == '\0', "clamped buffer null terminated");
+}
+
 static void test_report_buf_null(void) {
     /* Should not crash */
     asx_report_buf_init(NULL);
@@ -469,6 +481,7 @@ int main(void) {
     RUN(test_report_buf_append_u32);
     RUN(test_report_buf_append_hex64);
     RUN(test_report_buf_truncation);
+    RUN(test_report_buf_invalid_len_is_clamped);
     RUN(test_report_buf_null);
 
     /* Doctor rendering */

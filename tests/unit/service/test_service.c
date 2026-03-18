@@ -105,6 +105,38 @@ static asx_service make_count_service(count_service_state *cstate) {
     return svc;
 }
 
+typedef struct {
+    uint32_t poll_count;
+    uint32_t call_count;
+    asx_status first_call_status;
+} staged_buffer_service_state;
+
+static asx_service_readiness staged_buffer_poll_ready(void *state) {
+    staged_buffer_service_state *svc = (staged_buffer_service_state *)state;
+    svc->poll_count++;
+    if (svc->poll_count == 1u) { return ASX_SERVICE_NOT_READY; }
+    return ASX_SERVICE_READY;
+}
+
+static asx_status staged_buffer_call(void *state, const void *request, void *response) {
+    staged_buffer_service_state *svc = (staged_buffer_service_state *)state;
+    svc->call_count++;
+    if (svc->call_count == 1u) { return svc->first_call_status; }
+    *(const void **)response = request;
+    return ASX_OK;
+}
+
+static asx_service make_staged_buffer_service(staged_buffer_service_state *state, asx_status first) {
+    asx_service svc;
+    state->poll_count = 0u;
+    state->call_count = 0u;
+    state->first_call_status = first;
+    svc.poll_ready = staged_buffer_poll_ready;
+    svc.call = staged_buffer_call;
+    svc.state = state;
+    return svc;
+}
+
 /* ================================================================== */
 /* Identity service tests                                              */
 /* ================================================================== */
@@ -304,6 +336,25 @@ TEST(buffer_enqueues_when_not_ready) {
     ASSERT_EQ(asx_service_buffer_pending(&state), 1u);
 }
 
+TEST(buffer_flush_failure_does_not_drop_queued_request) {
+    staged_buffer_service_state inner_state;
+    asx_service inner = make_staged_buffer_service(&inner_state, ASX_E_PENDING);
+    asx_service svc;
+    asx_service_buffer_state state;
+    int first_req = 3;
+    int second_req = 4;
+    const void *resp = NULL;
+
+    asx_service_buffer_init(&svc, &state, inner);
+
+    ASSERT_EQ(asx_service_call(&svc, &first_req, &resp), ASX_E_PENDING);
+    ASSERT_EQ(asx_service_buffer_pending(&state), 1u);
+
+    ASSERT_EQ(asx_service_call(&svc, &second_req, &resp), ASX_E_PENDING);
+    ASSERT_EQ(asx_service_buffer_pending(&state), 1u);
+    ASSERT_EQ(inner_state.call_count, 1u);
+}
+
 /* ================================================================== */
 /* Retry tests (using existing plan.h retry layer)                     */
 /* ================================================================== */
@@ -437,6 +488,7 @@ int main(void) {
     /* Buffer */
     RUN_TEST(buffer_direct_call_when_ready);
     RUN_TEST(buffer_enqueues_when_not_ready);
+    RUN_TEST(buffer_flush_failure_does_not_drop_queued_request);
 
     /* Retry (plan.h layer) */
     RUN_TEST(retry_succeeds_on_first_try);

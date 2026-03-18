@@ -11,6 +11,9 @@
 #include <asx/transport/transport.h>
 #include <string.h>
 
+#define ASX_MEM_TRANSPORT_SIDE_A 0u
+#define ASX_MEM_TRANSPORT_SIDE_B 1u
+
 /* ------------------------------------------------------------------ */
 /* Transport trait dispatch                                            */
 /* ------------------------------------------------------------------ */
@@ -85,6 +88,15 @@ static size_t ring_read(asx_mem_transport_ring *r, void *buf, size_t len) {
     return nread;
 }
 
+static asx_transport_conn make_conn_handle(uint32_t slot_index, uint32_t generation, uint32_t side) {
+    asx_transport_conn conn;
+    conn.id = slot_index + 1u;
+    conn.generation = (generation << 1) | side;
+    return conn;
+}
+
+static uint32_t conn_side(asx_transport_conn conn) { return conn.generation & 1u; }
+
 /* ------------------------------------------------------------------ */
 /* Memory transport — deterministic in-process loopback                */
 /* ------------------------------------------------------------------ */
@@ -127,8 +139,7 @@ static asx_status mem_connect(void *state, const void *addr, size_t addr_len,
     /* Queue connection for the listener to accept. */
     ms->listeners[li].pending_conn = ci;
 
-    out->id = ci + 1; /* 1-based so {0,0} is invalid */
-    out->generation = ms->next_generation;
+    *out = make_conn_handle(ci, ms->next_generation, ASX_MEM_TRANSPORT_SIDE_A);
     ms->total_connects++;
     return ASX_OK;
 }
@@ -178,8 +189,7 @@ static asx_status mem_accept(void *state, asx_transport_listener listener,
     if (!ms->conns[ci].occupied) { return ASX_E_PENDING; }
 
     /* Deliver the connection to the accepting side. */
-    out->id = ci + 1;
-    out->generation = ms->conns[ci].generation;
+    *out = make_conn_handle(ci, ms->conns[ci].generation, ASX_MEM_TRANSPORT_SIDE_B);
     ms->listeners[li].pending_conn = UINT32_MAX;
     ms->total_accepts++;
     return ASX_OK;
@@ -192,51 +202,50 @@ static asx_mem_transport_conn_slot *resolve_conn(asx_mem_transport_state *ms,
     ci = conn.id - 1;
     if (ci >= ASX_MEM_TRANSPORT_MAX_CONNS) return NULL;
     if (!ms->conns[ci].occupied) return NULL;
-    if (ms->conns[ci].generation != conn.generation) return NULL;
+    if (conn.generation < 2u) return NULL;
+    if (ms->conns[ci].generation != (conn.generation >> 1)) return NULL;
     return &ms->conns[ci];
 }
-
-/* Determine which "side" of the connection this handle represents.
- * The connector (connect caller) is side A, the acceptor is side B.
- * We distinguish by generation parity — the first handle created
- * for a slot is A, the second (accepted) is B.
- * For simplicity: reads from the ring written by the other side.
- * Side A writes to a_to_b, reads from b_to_a.
- * Side B writes to b_to_a, reads from a_to_b.
- * We use a simple heuristic: if the connect generated this handle,
- * it's side A. Accept-generated handles are side B.
- * We track this via a flag approach: connect always gets a_to_b write.
- * Since our connect and accept return the same slot with the same
- * generation, we need a way to distinguish. Use a convention:
- * The connect() call writes to a_to_b and reads from b_to_a.
- * The accept() call writes to b_to_a and reads from a_to_b.
- * Both sides share the same (id, generation). To tell them apart,
- * the caller must track which side they are. For the memory transport,
- * the simplest approach is: the first reader/writer on each ring
- * determines direction. We'll use the convention that
- * connect-side = A (write a_to_b, read b_to_a) and
- * accept-side = B (write b_to_a, read a_to_b).
- * The API is symmetric — we default to side A for read/write. */
 
 static asx_status mem_read(void *state, asx_transport_conn conn, void *buf, size_t buf_len,
                            size_t *bytes_read) {
     asx_mem_transport_state *ms = (asx_mem_transport_state *)state;
     asx_mem_transport_conn_slot *slot = resolve_conn(ms, conn);
+    asx_mem_transport_ring *source_ring;
+    uint8_t self_closed;
+    uint8_t peer_closed;
     size_t n;
 
-    if (slot == NULL) { return ASX_E_DISCONNECTED; }
-    if (slot->closed_a && slot->closed_b) { return ASX_E_DISCONNECTED; }
-
-    /* Read from the ring that the other side writes to.
-     * Convention: first half of connections read from b_to_a (side A). */
-    n = ring_read(&slot->b_to_a, buf, buf_len);
-    if (n == 0) {
-        /* Also try a_to_b in case this is side B. */
-        n = ring_read(&slot->a_to_b, buf, buf_len);
+    if (bytes_read == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (slot == NULL) {
+        *bytes_read = 0u;
+        return ASX_E_DISCONNECTED;
+    }
+    if (slot->closed_a && slot->closed_b) {
+        *bytes_read = 0u;
+        return ASX_E_DISCONNECTED;
     }
 
+    if (conn_side(conn) == ASX_MEM_TRANSPORT_SIDE_A) {
+        source_ring = &slot->b_to_a;
+        self_closed = slot->closed_a;
+        peer_closed = slot->closed_b;
+    } else {
+        source_ring = &slot->a_to_b;
+        self_closed = slot->closed_b;
+        peer_closed = slot->closed_a;
+    }
+
+    if (self_closed) {
+        *bytes_read = 0u;
+        return ASX_E_DISCONNECTED;
+    }
+
+    n = ring_read(source_ring, buf, buf_len);
+
     if (n == 0) {
-        *bytes_read = 0;
+        *bytes_read = 0u;
+        if (peer_closed) { return ASX_E_DISCONNECTED; }
         return ASX_E_PENDING;
     }
 
@@ -249,13 +258,37 @@ static asx_status mem_write(void *state, asx_transport_conn conn, const void *da
                             size_t *bytes_written) {
     asx_mem_transport_state *ms = (asx_mem_transport_state *)state;
     asx_mem_transport_conn_slot *slot = resolve_conn(ms, conn);
+    asx_mem_transport_ring *dest_ring;
+    uint8_t self_closed;
+    uint8_t peer_closed;
     size_t n;
 
-    if (slot == NULL) { return ASX_E_DISCONNECTED; }
-    if (slot->closed_a && slot->closed_b) { return ASX_E_DISCONNECTED; }
+    if (bytes_written == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (slot == NULL) {
+        *bytes_written = 0u;
+        return ASX_E_DISCONNECTED;
+    }
+    if (slot->closed_a && slot->closed_b) {
+        *bytes_written = 0u;
+        return ASX_E_DISCONNECTED;
+    }
 
-    /* Write to a_to_b (side A convention). */
-    n = ring_write(&slot->a_to_b, data, data_len);
+    if (conn_side(conn) == ASX_MEM_TRANSPORT_SIDE_A) {
+        dest_ring = &slot->a_to_b;
+        self_closed = slot->closed_a;
+        peer_closed = slot->closed_b;
+    } else {
+        dest_ring = &slot->b_to_a;
+        self_closed = slot->closed_b;
+        peer_closed = slot->closed_a;
+    }
+
+    if (self_closed || peer_closed) {
+        *bytes_written = 0u;
+        return ASX_E_DISCONNECTED;
+    }
+
+    n = ring_write(dest_ring, data, data_len);
     *bytes_written = n;
     ms->total_bytes_written += n;
 
@@ -269,9 +302,12 @@ static asx_status mem_close_conn(void *state, asx_transport_conn conn) {
 
     if (slot == NULL) { return ASX_E_INVALID_ARGUMENT; }
 
-    slot->closed_a = 1;
-    slot->closed_b = 1;
-    slot->occupied = 0;
+    if (conn_side(conn) == ASX_MEM_TRANSPORT_SIDE_A) {
+        slot->closed_a = 1u;
+    } else {
+        slot->closed_b = 1u;
+    }
+    if (slot->closed_a && slot->closed_b) { slot->occupied = 0u; }
     return ASX_OK;
 }
 

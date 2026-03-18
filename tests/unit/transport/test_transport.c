@@ -298,6 +298,32 @@ TEST(mem_write_and_read) {
     ASSERT_TRUE(memcmp(buf, "hello", 5) == 0);
 }
 
+TEST(mem_client_cannot_read_its_own_write) {
+    asx_transport t;
+    asx_mem_transport_state state;
+    asx_transport_listener listener;
+    asx_transport_conn client_conn, server_conn;
+    uint32_t addr = 550;
+    const char *msg = "hello";
+    char buf[32];
+    size_t written = 0, nread = 0;
+
+    asx_mem_transport_init(&t, &state);
+
+    ASSERT_EQ(asx_transport_listen(&t, &addr, sizeof(addr), &listener), ASX_OK);
+    ASSERT_EQ(asx_transport_connect(&t, &addr, sizeof(addr), &client_conn), ASX_OK);
+    ASSERT_EQ(asx_transport_accept(&t, listener, &server_conn), ASX_OK);
+
+    ASSERT_EQ(asx_transport_write(&t, client_conn, msg, 5, &written), ASX_OK);
+    ASSERT_EQ(written, 5u);
+
+    ASSERT_EQ(asx_transport_read(&t, client_conn, buf, sizeof(buf), &nread), ASX_E_PENDING);
+    ASSERT_EQ(nread, 0u);
+    ASSERT_EQ(asx_transport_read(&t, server_conn, buf, sizeof(buf), &nread), ASX_OK);
+    ASSERT_EQ(nread, 5u);
+    ASSERT_TRUE(memcmp(buf, "hello", 5) == 0);
+}
+
 TEST(mem_read_empty_returns_pending) {
     asx_transport t;
     asx_mem_transport_state state;
@@ -349,16 +375,24 @@ TEST(mem_close_connection) {
     asx_transport t;
     asx_mem_transport_state state;
     asx_transport_listener listener;
-    asx_transport_conn client_conn;
+    asx_transport_conn client_conn, server_conn;
     uint32_t addr = 800;
+    char buf[8];
+    size_t nread = 0u;
 
     asx_mem_transport_init(&t, &state);
 
     ASSERT_EQ(asx_transport_listen(&t, &addr, sizeof(addr), &listener), ASX_OK);
     ASSERT_EQ(asx_transport_connect(&t, &addr, sizeof(addr), &client_conn), ASX_OK);
+    ASSERT_EQ(asx_transport_accept(&t, listener, &server_conn), ASX_OK);
     ASSERT_EQ(asx_mem_transport_active_conns(&state), 1u);
 
     ASSERT_EQ(asx_transport_close(&t, client_conn), ASX_OK);
+    ASSERT_EQ(asx_mem_transport_active_conns(&state), 1u);
+    ASSERT_EQ(asx_transport_read(&t, server_conn, buf, sizeof(buf), &nread), ASX_E_DISCONNECTED);
+    ASSERT_EQ(nread, 0u);
+
+    ASSERT_EQ(asx_transport_close(&t, server_conn), ASX_OK);
     ASSERT_EQ(asx_mem_transport_active_conns(&state), 0u);
 }
 
@@ -586,6 +620,7 @@ int main(void) {
 
     /* Read/write */
     RUN_TEST(mem_write_and_read);
+    RUN_TEST(mem_client_cannot_read_its_own_write);
     RUN_TEST(mem_read_empty_returns_pending);
     RUN_TEST(mem_write_tracks_stats);
 

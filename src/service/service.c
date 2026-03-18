@@ -173,7 +173,7 @@ static asx_status buffer_call(void *state, const void *request, void *response) 
             const void *buffered_req = bs->slots[bs->head].request;
             void *buffered_resp = bs->slots[bs->head].response;
             asx_status st = asx_service_call(&bs->inner, buffered_req, buffered_resp);
-            (void)st; /* buffered calls are fire-and-forget in this model */
+            if (st != ASX_OK) { return st; }
             bs->slots[bs->head].occupied = 0;
             bs->head = (bs->head + 1) % bs->capacity;
             bs->count--;
