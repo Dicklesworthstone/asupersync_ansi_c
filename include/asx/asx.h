@@ -80,6 +80,14 @@
 #include <asx/monitor/monitor.h>
 #include <asx/observability/observability.h>
 
+/* Encoding and decoding pipeline families */
+#include <asx/encoding/encoding.h>
+#include <asx/decoding/decoding.h>
+
+/* RaptorQ erasure coding and migration/compatibility */
+#include <asx/raptorq/raptorq.h>
+#include <asx/migration/migration.h>
+
 /* Planning, rewrite, and service-layer families */
 #include <asx/plan/plan.h>
 

@@ -15,10 +15,12 @@
 #define ASX_RUNTIME_REPLAY_H
 
 #include <asx/asx_config.h>
+#include <asx/app/report.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
 #include <asx/runtime/lab.h>
+#include <asx/runtime/trace.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -92,6 +94,14 @@ ASX_API asx_oracle_result asx_oracle_leak(const asx_lab *lab, void *ctx);
 ASX_API asx_oracle_result asx_oracle_replay_match(const asx_lab_result *r1,
                                                   const asx_lab_result *r2);
 
+/* Render a replay result as JSON for retained diagnostics/artifacts. */
+ASX_API ASX_MUST_USE asx_status asx_replay_render_result_json(const asx_replay_result *result,
+                                                              asx_report_buf *out);
+
+/* Render the current replay verification state as JSON, including
+ * expected/actual divergent events when a reference is loaded. */
+ASX_API ASX_MUST_USE asx_status asx_replay_render_current_diff_json(asx_report_buf *out);
+
 /* -------------------------------------------------------------------
  * Oracle suite — run multiple oracles and collect results
  * ------------------------------------------------------------------- */
@@ -145,11 +155,19 @@ ASX_API asx_status asx_minimize_init(asx_minimize_state *state, const asx_lab_co
  * ASX_E_PENDING if more steps remain. */
 ASX_API asx_status asx_minimize_step(asx_minimize_state *state);
 
+/* Run minimization to completion, looping until a terminal status
+ * is reached or an error occurs. */
+ASX_API asx_status asx_minimize_run(asx_minimize_state *state);
+
 /* Get the minimized scenario (valid after minimize completes). */
 ASX_API const asx_lab_scenario *asx_minimize_result(const asx_minimize_state *state);
 
 /* Get the number of shrink attempts made. */
 ASX_API uint32_t asx_minimize_attempts(const asx_minimize_state *state);
+
+/* Render minimization progress/result as JSON for retained artifacts. */
+ASX_API ASX_MUST_USE asx_status asx_minimize_render_json(const asx_minimize_state *state,
+                                                         asx_report_buf *out);
 
 #ifdef __cplusplus
 }

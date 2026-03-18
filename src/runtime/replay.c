@@ -85,6 +85,77 @@ static asx_oracle_result make_result(asx_oracle_verdict verdict, const char *nam
     return r;
 }
 
+static void replay_append_json_escaped(asx_report_buf *out, const char *text) {
+    const unsigned char *p;
+
+    if (out == NULL || text == NULL) return;
+
+    p = (const unsigned char *)text;
+    while (*p != '\0') {
+        switch (*p) {
+        case '\"': asx_report_buf_append(out, "\\\""); break;
+        case '\\': asx_report_buf_append(out, "\\\\"); break;
+        case '\b': asx_report_buf_append(out, "\\b"); break;
+        case '\f': asx_report_buf_append(out, "\\f"); break;
+        case '\n': asx_report_buf_append(out, "\\n"); break;
+        case '\r': asx_report_buf_append(out, "\\r"); break;
+        case '\t': asx_report_buf_append(out, "\\t"); break;
+        default:
+            if (*p < 0x20u) {
+                static const char hex[] = "0123456789abcdef";
+                char esc[7];
+                esc[0] = '\\';
+                esc[1] = 'u';
+                esc[2] = '0';
+                esc[3] = '0';
+                esc[4] = hex[(*p >> 4) & 0x0fu];
+                esc[5] = hex[*p & 0x0fu];
+                esc[6] = '\0';
+                asx_report_buf_append(out, esc);
+            } else {
+                char ch[2];
+                ch[0] = (char)*p;
+                ch[1] = '\0';
+                asx_report_buf_append(out, ch);
+            }
+            break;
+        }
+        p++;
+    }
+}
+
+static void replay_append_event_json(asx_report_buf *out, const asx_trace_event *event) {
+    if (out == NULL) return;
+    if (event == NULL) {
+        asx_report_buf_append(out, "null");
+        return;
+    }
+
+    asx_report_buf_append(out, "{\"sequence\":");
+    asx_report_buf_append_u32(out, event->sequence);
+    asx_report_buf_append(out, ",\"kind\":\"");
+    replay_append_json_escaped(out, asx_trace_event_kind_str(event->kind));
+    asx_report_buf_append(out, "\",\"entity_id\":");
+    asx_report_buf_append_hex64(out, event->entity_id);
+    asx_report_buf_append(out, ",\"aux\":");
+    asx_report_buf_append_hex64(out, event->aux);
+    asx_report_buf_append(out, "}");
+}
+
+static void replay_append_result_json(asx_report_buf *out, const asx_replay_result *result) {
+    if (out == NULL || result == NULL) return;
+
+    asx_report_buf_append(out, "{\"result\":\"");
+    replay_append_json_escaped(out, asx_replay_result_kind_str(result->result));
+    asx_report_buf_append(out, "\",\"divergence_index\":");
+    asx_report_buf_append_u32(out, result->divergence_index);
+    asx_report_buf_append(out, ",\"expected_digest\":");
+    asx_report_buf_append_hex64(out, result->expected_digest);
+    asx_report_buf_append(out, ",\"actual_digest\":");
+    asx_report_buf_append_hex64(out, result->actual_digest);
+    asx_report_buf_append(out, "}");
+}
+
 asx_oracle_result asx_oracle_quiescence(const asx_lab *lab, void *ctx) {
     (void)ctx;
     if (lab == NULL) return make_result(ASX_ORACLE_FAIL, "quiescence", "null lab");
@@ -129,6 +200,49 @@ asx_oracle_result asx_oracle_replay_match(const asx_lab_result *r1, const asx_la
         return make_result(ASX_ORACLE_FAIL, "replay", "final status diverged");
 
     return make_result(ASX_ORACLE_PASS, "replay", "deterministic match");
+}
+
+asx_status asx_replay_render_result_json(const asx_replay_result *result, asx_report_buf *out) {
+    if (result == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    asx_report_buf_init(out);
+    replay_append_result_json(out, result);
+    return ASX_OK;
+}
+
+asx_status asx_replay_render_current_diff_json(asx_report_buf *out) {
+    asx_replay_result result;
+    uint32_t current_count;
+    uint32_t reference_count;
+    asx_trace_event expected_event;
+    asx_trace_event actual_event;
+    int have_expected;
+    int have_actual;
+
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    result = asx_replay_verify();
+    current_count = asx_trace_event_count();
+    reference_count = asx_replay_reference_event_count();
+    have_expected = asx_replay_reference_event_get(result.divergence_index, &expected_event);
+    have_actual = asx_trace_event_get(result.divergence_index, &actual_event);
+
+    asx_report_buf_init(out);
+    asx_report_buf_append(out, "{\"reference_loaded\":");
+    asx_report_buf_append(out, reference_count > 0u ? "true" : "false");
+    asx_report_buf_append(out, ",\"reference_count\":");
+    asx_report_buf_append_u32(out, reference_count);
+    asx_report_buf_append(out, ",\"current_count\":");
+    asx_report_buf_append_u32(out, current_count);
+    asx_report_buf_append(out, ",\"verification\":");
+    replay_append_result_json(out, &result);
+    asx_report_buf_append(out, ",\"expected_event\":");
+    replay_append_event_json(out, have_expected ? &expected_event : NULL);
+    asx_report_buf_append(out, ",\"actual_event\":");
+    replay_append_event_json(out, have_actual ? &actual_event : NULL);
+    asx_report_buf_append(out, "}");
+
+    return ASX_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -243,6 +357,18 @@ asx_status asx_minimize_step(asx_minimize_state *state) {
     return ASX_E_PENDING;
 }
 
+asx_status asx_minimize_run(asx_minimize_state *state) {
+    asx_status st;
+
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    do {
+        st = asx_minimize_step(state);
+    } while (st == ASX_E_PENDING);
+
+    return st;
+}
+
 const asx_lab_scenario *asx_minimize_result(const asx_minimize_state *state) {
     if (state == NULL) return NULL;
     return &state->scenario;
@@ -251,4 +377,24 @@ const asx_lab_scenario *asx_minimize_result(const asx_minimize_state *state) {
 uint32_t asx_minimize_attempts(const asx_minimize_state *state) {
     if (state == NULL) return 0;
     return state->attempts;
+}
+
+asx_status asx_minimize_render_json(const asx_minimize_state *state, asx_report_buf *out) {
+    if (state == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    asx_report_buf_init(out);
+    asx_report_buf_append(out, "{\"scenario_name\":\"");
+    replay_append_json_escaped(out, state->scenario.name != NULL ? state->scenario.name : "");
+    asx_report_buf_append(out, "\",\"original_steps\":");
+    asx_report_buf_append_u32(out, state->original_steps);
+    asx_report_buf_append(out, ",\"current_steps\":");
+    asx_report_buf_append_u32(out, state->scenario.step_count);
+    asx_report_buf_append(out, ",\"attempts\":");
+    asx_report_buf_append_u32(out, state->attempts);
+    asx_report_buf_append(out, ",\"max_attempts\":");
+    asx_report_buf_append_u32(out, state->max_attempts);
+    asx_report_buf_append(out, ",\"found_smaller\":");
+    asx_report_buf_append(out, state->found_smaller ? "true" : "false");
+    asx_report_buf_append(out, "}");
+    return ASX_OK;
 }

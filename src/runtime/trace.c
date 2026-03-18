@@ -218,6 +218,17 @@ asx_replay_result asx_replay_verify(void) {
     return result;
 }
 
+uint32_t asx_replay_reference_event_count(void) { return g_replay_loaded ? g_replay_ref_count : 0u; }
+
+int asx_replay_reference_event_get(uint32_t index, asx_trace_event *out) {
+    if (out == NULL) return 0;
+    if (!g_replay_loaded) return 0;
+    if (index >= g_replay_ref_count) return 0;
+    if (index >= ASX_TRACE_CAPACITY) return 0;
+    *out = g_replay_ref[index];
+    return 1;
+}
+
 /* -------------------------------------------------------------------
  * Snapshot export
  * ------------------------------------------------------------------- */

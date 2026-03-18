@@ -256,6 +256,28 @@ TEST(replay_no_reference_is_match) {
     ASSERT_EQ(result.result, ASX_REPLAY_MATCH);
 }
 
+TEST(replay_reference_event_accessors_round_trip) {
+    asx_trace_event ref[2];
+    asx_trace_event got;
+
+    asx_trace_reset();
+    asx_trace_emit(ASX_TRACE_SCHED_POLL, 5u, 9u);
+    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, 5u, 0u);
+    ASSERT_TRUE(asx_trace_event_get(0u, &ref[0]));
+    ASSERT_TRUE(asx_trace_event_get(1u, &ref[1]));
+
+    ASSERT_EQ(asx_replay_load_reference(ref, 2u), ASX_OK);
+    ASSERT_EQ(asx_replay_reference_event_count(), 2u);
+    ASSERT_TRUE(asx_replay_reference_event_get(1u, &got));
+    ASSERT_EQ(got.kind, ASX_TRACE_SCHED_COMPLETE);
+    ASSERT_EQ(got.entity_id, (uint64_t)5u);
+    ASSERT_FALSE(asx_replay_reference_event_get(2u, &got));
+
+    asx_replay_clear_reference();
+    ASSERT_EQ(asx_replay_reference_event_count(), 0u);
+    ASSERT_FALSE(asx_replay_reference_event_get(0u, &got));
+}
+
 TEST(replay_reference_rejects_over_capacity) {
     asx_trace_event ref[1];
 
@@ -849,6 +871,7 @@ int main(void) {
     RUN_TEST(replay_detects_kind_mismatch);
     RUN_TEST(replay_detects_entity_mismatch);
     RUN_TEST(replay_no_reference_is_match);
+    RUN_TEST(replay_reference_event_accessors_round_trip);
     RUN_TEST(replay_reference_rejects_over_capacity);
     RUN_TEST(snapshot_capture_empty);
     RUN_TEST(snapshot_capture_with_region);

@@ -269,6 +269,51 @@ TEST(oracle_replay_null_fails) {
     ASSERT_EQ(result.verdict, ASX_ORACLE_FAIL);
 }
 
+TEST(replay_render_result_json_contains_core_fields) {
+    asx_replay_result result;
+    asx_report_buf out;
+
+    memset(&result, 0, sizeof(result));
+    result.result = ASX_REPLAY_KIND_MISMATCH;
+    result.divergence_index = 7u;
+    result.expected_digest = 0x12u;
+    result.actual_digest = 0x34u;
+
+    MUST_OK(asx_replay_render_result_json(&result, &out));
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"result\":\"kind_mismatch\"") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"divergence_index\":7") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"expected_digest\":0x0000000000000012") !=
+                NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"actual_digest\":0x0000000000000034") != NULL);
+}
+
+TEST(replay_render_current_diff_json_reports_mismatch_context) {
+    asx_trace_event ref[2];
+    asx_report_buf out;
+
+    asx_trace_reset();
+    asx_trace_emit(ASX_TRACE_SCHED_POLL, 1u, 0u);
+    asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, 1u, 0u);
+    ASSERT_TRUE(asx_trace_event_get(0u, &ref[0]));
+    ASSERT_TRUE(asx_trace_event_get(1u, &ref[1]));
+    MUST_OK(asx_replay_load_reference(ref, 2u));
+
+    asx_trace_reset();
+    asx_trace_emit(ASX_TRACE_SCHED_POLL, 1u, 0u);
+    asx_trace_emit(ASX_TRACE_SCHED_BUDGET, 1u, 0u);
+
+    MUST_OK(asx_replay_render_current_diff_json(&out));
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"reference_loaded\":true") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"current_count\":2") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"result\":\"kind_mismatch\"") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"expected_event\":{\"sequence\":1") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"kind\":\"sched_complete\"") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"actual_event\":{\"sequence\":1") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"kind\":\"sched_budget\"") != NULL);
+
+    asx_replay_clear_reference();
+}
+
 /* ================================================================== */
 /* Oracle suite tests                                                   */
 /* ================================================================== */
@@ -400,6 +445,28 @@ TEST(minimize_max_attempts_respected) {
     ASSERT_EQ(asx_minimize_attempts(&ms), 2u);
 }
 
+TEST(minimize_run_and_render_json) {
+    asx_lab_config cfg;
+    asx_lab_scenario sc;
+    asx_minimize_state ms;
+    asx_report_buf out;
+
+    asx_lab_config_init(&cfg);
+    asx_lab_scenario_init(&sc, "render");
+    MUST_OK(asx_lab_scenario_add_step(&sc, step_noop, NULL));
+    MUST_OK(asx_lab_scenario_add_step(&sc, step_advance_5, NULL));
+    MUST_OK(asx_lab_scenario_add_step(&sc, step_noop, NULL));
+
+    MUST_OK(asx_minimize_init(&ms, &cfg, &sc, oracle_always_fail, NULL, 8u));
+    MUST_OK(asx_minimize_run(&ms));
+    MUST_OK(asx_minimize_render_json(&ms, &out));
+
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"scenario_name\":\"render\"") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"original_steps\":3") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"attempts\":") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"found_smaller\":true") != NULL);
+}
+
 /* ================================================================== */
 /* Integration: snapshot + replay oracle                               */
 /* ================================================================== */
@@ -463,6 +530,8 @@ int main(void) {
     RUN_TEST(oracle_replay_match_time_diverge);
     RUN_TEST(oracle_replay_match_status_diverge);
     RUN_TEST(oracle_replay_null_fails);
+    RUN_TEST(replay_render_result_json_contains_core_fields);
+    RUN_TEST(replay_render_current_diff_json_reports_mismatch_context);
 
     /* Oracle suite */
     RUN_TEST(oracle_suite_all_pass);
@@ -474,6 +543,7 @@ int main(void) {
     RUN_TEST(minimize_single_step_no_shrink);
     RUN_TEST(minimize_null_fails);
     RUN_TEST(minimize_max_attempts_respected);
+    RUN_TEST(minimize_run_and_render_json);
 
     /* Integration */
     RUN_TEST(snapshot_replay_integration);

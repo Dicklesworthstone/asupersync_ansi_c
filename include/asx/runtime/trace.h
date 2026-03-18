@@ -148,6 +148,12 @@ ASX_API void asx_replay_clear_reference(void);
  * Returns the comparison result. */
 ASX_API asx_replay_result asx_replay_verify(void);
 
+/* Read total reference event count since last load. */
+ASX_API uint32_t asx_replay_reference_event_count(void);
+
+/* Read reference event at index (0 = oldest). Returns 1 on success, 0 on OOB. */
+ASX_API int asx_replay_reference_event_get(uint32_t index, asx_trace_event *out);
+
 /* -------------------------------------------------------------------
  * Snapshot export
  *
