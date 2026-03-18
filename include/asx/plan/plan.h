@@ -19,6 +19,7 @@
 
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
+#include <asx/core/circuit_breaker.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -267,6 +268,48 @@ typedef struct {
 /* Initialize a load-shed layer (rejects when inner not ready). */
 ASX_API void asx_load_shed_layer_init(asx_service *out, asx_load_shed_service_state *state,
                                       asx_service inner);
+
+/* ------------------------------------------------------------------ */
+/* Retry layer                                                         */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_service inner;
+    uint8_t max_attempts;   /* inclusive of the first call */
+    uint8_t last_attempts;  /* attempts consumed by the last call */
+    asx_status last_status; /* terminal status from the last call */
+} asx_retry_service_state;
+
+/* Initialize a retry layer.
+ * Retries only statuses classified as retryable by the error taxonomy.
+ * max_attempts of 0 is normalized to 1. */
+ASX_API void asx_retry_layer_init(asx_service *out, asx_retry_service_state *state,
+                                  asx_service inner, uint8_t max_attempts);
+
+/* Inspect retry-layer outcome from the most recent call. */
+ASX_API uint8_t asx_retry_layer_last_attempts(const asx_retry_service_state *state);
+ASX_API asx_status asx_retry_layer_last_status(const asx_retry_service_state *state);
+
+/* ------------------------------------------------------------------ */
+/* Circuit-breaker layer                                               */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_service inner;
+    asx_circuit_breaker breaker;
+    asx_status last_status;
+} asx_breaker_service_state;
+
+/* Initialize a circuit-breaker layer with the provided breaker config.
+ * If config is NULL, default breaker thresholds are used. */
+ASX_API ASX_MUST_USE asx_status asx_breaker_layer_init(asx_service *out,
+                                                       asx_breaker_service_state *state,
+                                                       asx_service inner,
+                                                       const asx_breaker_config *config);
+
+/* Inspect breaker-layer outcome from the most recent call. */
+ASX_API asx_status asx_breaker_layer_last_status(const asx_breaker_service_state *state);
+ASX_API asx_breaker_state asx_breaker_layer_state(const asx_breaker_service_state *state);
 
 #ifdef __cplusplus
 }

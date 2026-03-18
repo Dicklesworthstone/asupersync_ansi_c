@@ -90,6 +90,10 @@
 
 /* Planning, rewrite, and service-layer families */
 #include <asx/plan/plan.h>
+#include <asx/service/service.h>
+#include <asx/transport/transport.h>
+#include <asx/remote/remote.h>
+#include <asx/spork/spork.h>
 
 /* Operator and testing support */
 #include <asx/app/app.h>

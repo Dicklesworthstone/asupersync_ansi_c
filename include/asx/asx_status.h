@@ -83,6 +83,7 @@ typedef enum {
 
     /* Resource exhaustion (10xx) */
     ASX_E_RESOURCE_EXHAUSTED = 1000,
+    ASX_E_OVERLOADED = 1001, /* service rejected due to backpressure/load shedding */
 
     /* Handle errors (11xx) */
     ASX_E_STALE_HANDLE = 1100,

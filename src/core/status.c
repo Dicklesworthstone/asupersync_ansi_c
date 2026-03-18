@@ -176,6 +176,7 @@ const char *asx_status_str(asx_status s) {
     case ASX_E_QUIESCENCE_NOT_REACHED: return "quiescence not reached";
     case ASX_E_QUIESCENCE_TASKS_LIVE: return "quiescence tasks still live";
     case ASX_E_RESOURCE_EXHAUSTED: return "resource exhausted";
+    case ASX_E_OVERLOADED: return "overloaded";
     case ASX_E_STALE_HANDLE: return "stale handle";
     case ASX_E_HOOK_MISSING: return "required runtime hook missing";
     case ASX_E_HOOK_INVALID: return "runtime hook contract invalid";
@@ -240,7 +241,8 @@ asx_error_category asx_status_category(asx_status s) {
     case ASX_E_INCOMPLETE_CHILDREN:
     case ASX_E_QUIESCENCE_NOT_REACHED:
     case ASX_E_QUIESCENCE_TASKS_LIVE: return ASX_ERROR_CATEGORY_QUIESCENCE;
-    case ASX_E_RESOURCE_EXHAUSTED: return ASX_ERROR_CATEGORY_RESOURCE;
+    case ASX_E_RESOURCE_EXHAUSTED:
+    case ASX_E_OVERLOADED: return ASX_ERROR_CATEGORY_RESOURCE;
     case ASX_E_STALE_HANDLE: return ASX_ERROR_CATEGORY_HANDLE;
     case ASX_E_HOOK_MISSING:
     case ASX_E_HOOK_INVALID:
@@ -343,6 +345,7 @@ asx_recoverability asx_status_recoverability(asx_status s) {
     case ASX_E_TIMER_DURATION_EXCEEDED:
     case ASX_E_TIMED_OUT:
     case ASX_E_RESOURCE_EXHAUSTED:
+    case ASX_E_OVERLOADED:
     case ASX_E_CONFIG_FROZEN:
     case ASX_E_CONFIG_RESTART_REQ: return ASX_RECOVERABILITY_CONTEXT_DEPENDENT;
     default: return ASX_RECOVERABILITY_CONTEXT_DEPENDENT;
@@ -404,7 +407,8 @@ asx_recovery_action asx_status_recovery_action(asx_status s) {
     case ASX_E_SCHEDULER_UNAVAILABLE:
     case ASX_E_ADMISSION_CLOSED:
     case ASX_E_ADMISSION_LIMIT:
-    case ASX_E_RESOURCE_EXHAUSTED: return ASX_RECOVERY_RETRY_WITH_BACKOFF;
+    case ASX_E_RESOURCE_EXHAUSTED:
+    case ASX_E_OVERLOADED: return ASX_RECOVERY_RETRY_WITH_BACKOFF;
     case ASX_E_HOOK_MISSING:
     case ASX_E_HOOK_INVALID:
     case ASX_E_DETERMINISM_VIOLATION:
@@ -498,7 +502,8 @@ asx_backoff_hint asx_status_backoff_hint(asx_status s) {
     case ASX_E_SCHEDULER_UNAVAILABLE:
     case ASX_E_ADMISSION_CLOSED:
     case ASX_E_ADMISSION_LIMIT:
-    case ASX_E_RESOURCE_EXHAUSTED: return asx_backoff_hint_default();
+    case ASX_E_RESOURCE_EXHAUSTED:
+    case ASX_E_OVERLOADED: return asx_backoff_hint_default();
     }
 
     return asx_backoff_hint_none();

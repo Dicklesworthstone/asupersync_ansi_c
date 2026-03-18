@@ -494,6 +494,12 @@ typedef struct {
     int bias;
 } service_stack_state;
 
+typedef struct {
+    int failures_remaining;
+    int call_count;
+    asx_status fail_status;
+} flaky_service_state;
+
 static asx_service_readiness stack_poll_ready(void *state) {
     service_stack_state *stack = (service_stack_state *)state;
     return stack->ready_flag ? ASX_SERVICE_READY : ASX_SERVICE_NOT_READY;
@@ -506,6 +512,24 @@ static asx_status stack_call(void *state, const void *request, void *response) {
 
     stack->call_count++;
     *resp = *req + stack->bias;
+    return ASX_OK;
+}
+
+static asx_service_readiness flaky_poll_ready(void *state) {
+    (void)state;
+    return ASX_SERVICE_READY;
+}
+
+static asx_status flaky_call(void *state, const void *request, void *response) {
+    flaky_service_state *flaky = (flaky_service_state *)state;
+
+    flaky->call_count++;
+    if (flaky->failures_remaining > 0) {
+        flaky->failures_remaining--;
+        return flaky->fail_status;
+    }
+
+    *(int *)response = *(const int *)request + flaky->call_count;
     return ASX_OK;
 }
 
@@ -640,6 +664,174 @@ TEST(service_composition_load_shed_over_timeout_transitions) {
     ASSERT_EQ(state.call_count, 1);
 }
 
+TEST(service_retry_retries_retryable_status) {
+    asx_service base, wrapped;
+    asx_retry_service_state retry;
+    flaky_service_state flaky;
+    int req = 10, resp = 0;
+
+    memset(&flaky, 0, sizeof(flaky));
+    flaky.failures_remaining = 2;
+    flaky.fail_status = ASX_E_WOULD_BLOCK;
+
+    base.poll_ready = flaky_poll_ready;
+    base.call = flaky_call;
+    base.state = &flaky;
+
+    asx_retry_layer_init(&wrapped, &retry, base, 4u);
+
+    ASSERT_EQ(asx_service_poll_ready(&wrapped), ASX_SERVICE_READY);
+    ASSERT_EQ(asx_service_call(&wrapped, &req, &resp), ASX_OK);
+    ASSERT_EQ(resp, 13);
+    ASSERT_EQ(flaky.call_count, 3);
+    ASSERT_EQ(asx_retry_layer_last_attempts(&retry), 3);
+    ASSERT_EQ(asx_retry_layer_last_status(&retry), ASX_OK);
+}
+
+TEST(service_retry_stops_on_permanent_status) {
+    asx_service base, wrapped;
+    asx_retry_service_state retry;
+    flaky_service_state flaky;
+    int req = 2, resp = 0;
+
+    memset(&flaky, 0, sizeof(flaky));
+    flaky.failures_remaining = 3;
+    flaky.fail_status = ASX_E_PERMISSION_DENIED;
+
+    base.poll_ready = flaky_poll_ready;
+    base.call = flaky_call;
+    base.state = &flaky;
+
+    asx_retry_layer_init(&wrapped, &retry, base, 5u);
+
+    ASSERT_EQ(asx_service_call(&wrapped, &req, &resp), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(flaky.call_count, 1);
+    ASSERT_EQ(asx_retry_layer_last_attempts(&retry), 1);
+    ASSERT_EQ(asx_retry_layer_last_status(&retry), ASX_E_PERMISSION_DENIED);
+}
+
+TEST(service_retry_respects_attempt_budget) {
+    asx_service base, wrapped;
+    asx_retry_service_state retry;
+    flaky_service_state flaky;
+    int req = 4, resp = 0;
+
+    memset(&flaky, 0, sizeof(flaky));
+    flaky.failures_remaining = 5;
+    flaky.fail_status = ASX_E_WOULD_BLOCK;
+
+    base.poll_ready = flaky_poll_ready;
+    base.call = flaky_call;
+    base.state = &flaky;
+
+    asx_retry_layer_init(&wrapped, &retry, base, 3u);
+
+    ASSERT_EQ(asx_service_call(&wrapped, &req, &resp), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(flaky.call_count, 3);
+    ASSERT_EQ(asx_retry_layer_last_attempts(&retry), 3);
+    ASSERT_EQ(asx_retry_layer_last_status(&retry), ASX_E_WOULD_BLOCK);
+}
+
+TEST(service_retry_composes_with_timeout_and_load_shed) {
+    asx_service base_svc, retry_svc, timeout_svc, wrapped_svc;
+    asx_retry_service_state retry;
+    asx_timeout_service_state timeout;
+    asx_load_shed_service_state load_shed;
+    flaky_service_state flaky;
+    int req = 20, resp = 0;
+
+    memset(&flaky, 0, sizeof(flaky));
+    flaky.failures_remaining = 1;
+    flaky.fail_status = ASX_E_WOULD_BLOCK;
+
+    base_svc.poll_ready = flaky_poll_ready;
+    base_svc.call = flaky_call;
+    base_svc.state = &flaky;
+
+    asx_retry_layer_init(&retry_svc, &retry, base_svc, 2u);
+    asx_timeout_layer_init(&timeout_svc, &timeout, retry_svc, 250u);
+    asx_load_shed_layer_init(&wrapped_svc, &load_shed, timeout_svc);
+
+    ASSERT_EQ(asx_service_poll_ready(&wrapped_svc), ASX_SERVICE_READY);
+    ASSERT_EQ(asx_service_call(&wrapped_svc, &req, &resp), ASX_OK);
+    ASSERT_EQ(resp, 22);
+    ASSERT_EQ(flaky.call_count, 2);
+    ASSERT_EQ(asx_retry_layer_last_attempts(&retry), 2);
+}
+
+TEST(service_breaker_allows_successful_calls) {
+    asx_service base, wrapped;
+    asx_breaker_service_state breaker;
+    int req = 8, resp = 0;
+
+    base.poll_ready = echo_poll_ready;
+    base.call = echo_call;
+    base.state = NULL;
+
+    echo_ready_flag = 1;
+    ASSERT_EQ(asx_breaker_layer_init(&wrapped, &breaker, base, NULL), ASX_OK);
+    ASSERT_EQ(asx_service_poll_ready(&wrapped), ASX_SERVICE_READY);
+    ASSERT_EQ(asx_service_call(&wrapped, &req, &resp), ASX_OK);
+    ASSERT_EQ(resp, 8);
+    ASSERT_EQ((int)asx_breaker_layer_state(&breaker), (int)ASX_BREAKER_CLOSED);
+    ASSERT_EQ(asx_breaker_layer_last_status(&breaker), ASX_OK);
+}
+
+TEST(service_breaker_trips_and_rejects_after_failures) {
+    asx_service base, wrapped;
+    asx_breaker_service_state breaker;
+    flaky_service_state flaky;
+    asx_breaker_config cfg;
+    int req = 5, resp = 0;
+
+    memset(&flaky, 0, sizeof(flaky));
+    flaky.failures_remaining = 2;
+    flaky.fail_status = ASX_E_PERMISSION_DENIED;
+
+    cfg.failure_threshold = 2u;
+    cfg.success_threshold = 1u;
+    cfg.half_open_max_calls = 1u;
+
+    base.poll_ready = flaky_poll_ready;
+    base.call = flaky_call;
+    base.state = &flaky;
+
+    ASSERT_EQ(asx_breaker_layer_init(&wrapped, &breaker, base, &cfg), ASX_OK);
+    ASSERT_EQ(asx_service_call(&wrapped, &req, &resp), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_service_call(&wrapped, &req, &resp), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ((int)asx_breaker_layer_state(&breaker), (int)ASX_BREAKER_OPEN);
+    ASSERT_EQ(asx_service_call(&wrapped, &req, &resp), ASX_E_ADMISSION_CLOSED);
+    ASSERT_EQ(asx_breaker_layer_last_status(&breaker), ASX_E_ADMISSION_CLOSED);
+}
+
+TEST(service_breaker_half_open_recovery_closes_circuit) {
+    asx_service base, wrapped;
+    asx_breaker_service_state breaker;
+    flaky_service_state flaky;
+    asx_breaker_config cfg;
+    int req = 6, resp = 0;
+
+    memset(&flaky, 0, sizeof(flaky));
+    flaky.failures_remaining = 1;
+    flaky.fail_status = ASX_E_PERMISSION_DENIED;
+
+    cfg.failure_threshold = 1u;
+    cfg.success_threshold = 1u;
+    cfg.half_open_max_calls = 1u;
+
+    base.poll_ready = flaky_poll_ready;
+    base.call = flaky_call;
+    base.state = &flaky;
+
+    ASSERT_EQ(asx_breaker_layer_init(&wrapped, &breaker, base, &cfg), ASX_OK);
+    ASSERT_EQ(asx_service_call(&wrapped, &req, &resp), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ((int)asx_breaker_layer_state(&breaker), (int)ASX_BREAKER_OPEN);
+    ASSERT_EQ(asx_breaker_half_open(&breaker.breaker), ASX_OK);
+    ASSERT_EQ(asx_service_call(&wrapped, &req, &resp), ASX_OK);
+    ASSERT_EQ(resp, 8);
+    ASSERT_EQ((int)asx_breaker_layer_state(&breaker), (int)ASX_BREAKER_CLOSED);
+}
+
 /* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
@@ -692,6 +884,13 @@ int main(void) {
     RUN_TEST(service_load_shed_passes_when_ready);
     RUN_TEST(service_composition_timeout_over_load_shed);
     RUN_TEST(service_composition_load_shed_over_timeout_transitions);
+    RUN_TEST(service_retry_retries_retryable_status);
+    RUN_TEST(service_retry_stops_on_permanent_status);
+    RUN_TEST(service_retry_respects_attempt_budget);
+    RUN_TEST(service_retry_composes_with_timeout_and_load_shed);
+    RUN_TEST(service_breaker_allows_successful_calls);
+    RUN_TEST(service_breaker_trips_and_rejects_after_failures);
+    RUN_TEST(service_breaker_half_open_recovery_closes_circuit);
 
     TEST_REPORT();
     return test_failures;

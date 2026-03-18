@@ -260,6 +260,18 @@ CONSOLE_SRC := \
 TRACING_COMPAT_SRC := \
 	src/tracing_compat/tracing_compat.c
 
+SERVICE_SRC := \
+	src/service/service.c
+
+TRANSPORT_SRC := \
+	src/transport/transport.c
+
+REMOTE_SRC := \
+	src/remote/remote.c
+
+SPORK_SRC := \
+	src/spork/spork.c
+
 # Platform sources selected by profile
 ifeq ($(PROFILE),POSIX)
   PLATFORM_SRC := src/platform/posix/hooks.c
@@ -273,7 +285,7 @@ else
   PLATFORM_SRC :=
 endif
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(ENCODING_SRC) $(DECODING_SRC) $(RAPTORQ_SRC) $(MIGRATION_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(PLATFORM_SRC)
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(ENCODING_SRC) $(DECODING_SRC) $(RAPTORQ_SRC) $(MIGRATION_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(SERVICE_SRC) $(TRANSPORT_SRC) $(REMOTE_SRC) $(SPORK_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -342,7 +354,15 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/raptorq/*_test.c) \
                  $(wildcard tests/unit/raptorq/test_*.c) \
                  $(wildcard tests/unit/migration/*_test.c) \
-                 $(wildcard tests/unit/migration/test_*.c)
+                 $(wildcard tests/unit/migration/test_*.c) \
+                 $(wildcard tests/unit/service/*_test.c) \
+                 $(wildcard tests/unit/service/test_*.c) \
+                 $(wildcard tests/unit/transport/*_test.c) \
+                 $(wildcard tests/unit/transport/test_*.c) \
+                 $(wildcard tests/unit/remote/*_test.c) \
+                 $(wildcard tests/unit/remote/test_*.c) \
+                 $(wildcard tests/unit/spork/*_test.c) \
+                 $(wildcard tests/unit/spork/test_*.c)
 UNIT_TEST_SRC := $(sort $(UNIT_TEST_SRC))
 
 INVARIANT_TEST_SRC := $(wildcard tests/invariant/lifecycle/*_test.c) \

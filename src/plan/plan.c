@@ -451,3 +451,114 @@ void asx_load_shed_layer_init(asx_service *out, asx_load_shed_service_state *sta
     out->call = load_shed_call;
     out->state = state;
 }
+
+/* ------------------------------------------------------------------ */
+/* Retry layer                                                         */
+/* ------------------------------------------------------------------ */
+
+static asx_service_readiness retry_poll_ready(void *state) {
+    asx_retry_service_state *rs = (asx_retry_service_state *)state;
+    return asx_service_poll_ready(&rs->inner);
+}
+
+static asx_status retry_call(void *state, const void *request, void *response) {
+    asx_retry_service_state *rs = (asx_retry_service_state *)state;
+    uint8_t attempts;
+    asx_status st;
+
+    attempts = 0;
+    st = ASX_E_INVALID_STATE;
+
+    while (attempts < rs->max_attempts) {
+        attempts++;
+        st = asx_service_call(&rs->inner, request, response);
+        if (st == ASX_OK || !asx_status_is_retryable(st)) { break; }
+    }
+
+    rs->last_attempts = attempts;
+    rs->last_status = st;
+    return st;
+}
+
+void asx_retry_layer_init(asx_service *out, asx_retry_service_state *state, asx_service inner,
+                          uint8_t max_attempts) {
+    state->inner = inner;
+    state->max_attempts = (max_attempts == 0u) ? 1u : max_attempts;
+    state->last_attempts = 0u;
+    state->last_status = ASX_OK;
+    out->poll_ready = retry_poll_ready;
+    out->call = retry_call;
+    out->state = state;
+}
+
+uint8_t asx_retry_layer_last_attempts(const asx_retry_service_state *state) {
+    return state->last_attempts;
+}
+
+asx_status asx_retry_layer_last_status(const asx_retry_service_state *state) {
+    return state->last_status;
+}
+
+/* ------------------------------------------------------------------ */
+/* Circuit-breaker layer                                               */
+/* ------------------------------------------------------------------ */
+
+static asx_service_readiness breaker_poll_ready(void *state) {
+    asx_breaker_service_state *bs = (asx_breaker_service_state *)state;
+    asx_status allow;
+
+    allow = asx_breaker_allow(&bs->breaker);
+    if (allow != ASX_OK) { return ASX_SERVICE_NOT_READY; }
+
+    return asx_service_poll_ready(&bs->inner);
+}
+
+static asx_status breaker_call(void *state, const void *request, void *response) {
+    asx_breaker_service_state *bs = (asx_breaker_service_state *)state;
+    asx_status st;
+
+    st = asx_breaker_allow(&bs->breaker);
+    if (st != ASX_OK) {
+        bs->last_status = st;
+        return st;
+    }
+
+    st = asx_service_call(&bs->inner, request, response);
+    if (st == ASX_OK) {
+        asx_breaker_record_success(&bs->breaker);
+    } else {
+        asx_breaker_record_failure(&bs->breaker);
+    }
+
+    bs->last_status = st;
+    return st;
+}
+
+asx_status asx_breaker_layer_init(asx_service *out, asx_breaker_service_state *state,
+                                  asx_service inner, const asx_breaker_config *config) {
+    asx_status st;
+
+    if (out == NULL || state == NULL) { return ASX_E_INVALID_ARGUMENT; }
+
+    if (config == NULL) {
+        asx_breaker_init(&state->breaker);
+    } else {
+        st = asx_breaker_init_with(&state->breaker, config);
+        if (st != ASX_OK) { return st; }
+    }
+
+    state->inner = inner;
+    state->last_status = ASX_OK;
+    out->poll_ready = breaker_poll_ready;
+    out->call = breaker_call;
+    out->state = state;
+    return ASX_OK;
+}
+
+asx_status asx_breaker_layer_last_status(const asx_breaker_service_state *state) {
+    return state->last_status;
+}
+
+asx_breaker_state asx_breaker_layer_state(const asx_breaker_service_state *state) {
+    return asx_breaker_get_state(&state->breaker);
+}
