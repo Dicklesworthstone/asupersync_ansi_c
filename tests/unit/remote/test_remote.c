@@ -255,6 +255,14 @@ TEST(saga_step_count) {
     ASSERT_EQ(asx_saga_step_count(&saga), 1u);
 }
 
+TEST(saga_rejects_null_execute) {
+    asx_saga saga;
+    asx_saga_init(&saga);
+
+    ASSERT_EQ(asx_saga_add_step(&saga, NULL, saga_compensate_fn, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_saga_step_count(&saga), 0u);
+}
+
 /* ================================================================== */
 /* Lease tests                                                         */
 /* ================================================================== */
@@ -450,6 +458,48 @@ TEST(remote_report_init_allows_null_report) {
     asx_remote_report_init(NULL, &req, &ack, NULL, NULL, NULL, NULL, 0);
 }
 
+TEST(remote_report_rejected_request_is_not_reported_as_success) {
+    asx_spawn_request req;
+    asx_spawn_ack ack;
+    asx_remote_cap cap;
+    asx_idempotency_key key;
+    asx_remote_report report;
+
+    asx_remote_cap_init(&cap, 3, ASX_REMOTE_CAP_SPAWN);
+    asx_idempotency_key_init(&key, 9999, 4);
+    asx_spawn_request_init(&req, 88, cap, key);
+    asx_spawn_ack_rejected(&ack, 88, ASX_SPAWN_REJECT_UNAUTHORIZED);
+
+    asx_remote_report_init(&report, &req, &ack, NULL, NULL, NULL, NULL, 0);
+
+    ASSERT_EQ(report.request_id, 88u);
+    ASSERT_EQ(report.ack_status, ASX_SPAWN_ACK_REJECTED);
+    ASSERT_EQ(report.final_status, ASX_E_PERMISSION_DENIED);
+    ASSERT_TRUE(report.handle_terminal == 0u);
+}
+
+TEST(remote_report_active_execution_stays_pending) {
+    asx_spawn_request req;
+    asx_spawn_ack ack;
+    asx_remote_handle handle;
+    asx_remote_cap cap;
+    asx_idempotency_key key;
+    asx_remote_report report;
+
+    asx_remote_cap_init(&cap, 5, ASX_REMOTE_CAP_SPAWN);
+    asx_idempotency_key_init(&key, 12345, 1);
+    asx_spawn_request_init(&req, 55, cap, key);
+    asx_spawn_ack_accepted(&ack, 55, 501);
+    asx_remote_handle_init(&handle, 501);
+    ASSERT_EQ(asx_remote_handle_transition(&handle, ASX_REMOTE_RUNNING), ASX_OK);
+
+    asx_remote_report_init(&report, &req, &ack, &handle, NULL, NULL, NULL, 0);
+
+    ASSERT_EQ(report.remote_status, ASX_REMOTE_RUNNING);
+    ASSERT_EQ(report.final_status, ASX_E_PENDING);
+    ASSERT_TRUE(report.handle_terminal == 0u);
+}
+
 /* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
@@ -484,6 +534,7 @@ int main(void) {
     RUN_TEST(saga_all_steps_succeed);
     RUN_TEST(saga_failure_triggers_compensation);
     RUN_TEST(saga_step_count);
+    RUN_TEST(saga_rejects_null_execute);
 
     /* Lease */
     RUN_TEST(lease_init_active);
@@ -502,6 +553,8 @@ int main(void) {
     RUN_TEST(remote_report_summarizes_active_execution);
     RUN_TEST(remote_report_uses_failure_sources_and_bounds_checks);
     RUN_TEST(remote_report_init_allows_null_report);
+    RUN_TEST(remote_report_rejected_request_is_not_reported_as_success);
+    RUN_TEST(remote_report_active_execution_stays_pending);
 
     TEST_REPORT();
     return test_failures;

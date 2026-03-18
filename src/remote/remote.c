@@ -185,6 +185,7 @@ asx_status asx_saga_add_step(asx_saga *saga, asx_saga_step_fn execute,
                              asx_saga_compensate_fn compensate, void *user_data) {
     if (saga->step_count >= ASX_SAGA_MAX_STEPS) { return ASX_E_RESOURCE_EXHAUSTED; }
     if (saga->state != ASX_SAGA_IDLE) { return ASX_E_INVALID_STATE; }
+    if (execute == NULL) { return ASX_E_INVALID_ARGUMENT; }
 
     {
         asx_saga_step *step = &saga->steps[saga->step_count++];
@@ -286,6 +287,16 @@ int asx_lease_validate_fence(const asx_lease *lease, uint64_t token) {
 /* Spawn request and acknowledgment                                    */
 /* ------------------------------------------------------------------ */
 
+static asx_status spawn_reject_to_status(asx_spawn_reject_reason reason) {
+    switch (reason) {
+    case ASX_SPAWN_REJECT_CAPACITY: return ASX_E_RESOURCE_EXHAUSTED;
+    case ASX_SPAWN_REJECT_UNAUTHORIZED: return ASX_E_PERMISSION_DENIED;
+    case ASX_SPAWN_REJECT_DUPLICATE: return ASX_E_ALREADY_EXISTS;
+    case ASX_SPAWN_REJECT_INVALID: return ASX_E_INVALID_ARGUMENT;
+    }
+    return ASX_E_INVALID_ARGUMENT;
+}
+
 void asx_spawn_request_init(asx_spawn_request *req, uint64_t request_id, asx_remote_cap cap,
                             asx_idempotency_key idempotency) {
     memset(req, 0, sizeof(*req));
@@ -319,6 +330,7 @@ void asx_remote_report_init(asx_remote_report *report, const asx_spawn_request *
                             const asx_saga *saga, uint64_t now_ns) {
     if (report == NULL) { return; }
     memset(report, 0, sizeof(*report));
+    report->final_status = ASX_E_PENDING;
 
     if (req != NULL) {
         report->request_id = req->request_id;
@@ -328,6 +340,9 @@ void asx_remote_report_init(asx_remote_report *report, const asx_spawn_request *
         report->ack_status = ack->status;
         report->reject_reason = ack->reject_reason;
         report->handle_id = ack->handle_id;
+        if (ack->status == ASX_SPAWN_ACK_REJECTED) {
+            report->final_status = spawn_reject_to_status(ack->reject_reason);
+        }
     }
     if (handle != NULL) {
         report->handle_id = handle->handle_id;
@@ -364,7 +379,11 @@ void asx_remote_report_init(asx_remote_report *report, const asx_spawn_request *
                 report->completed_steps++;
             }
         }
-        if (saga->final_result != ASX_OK) { report->final_status = saga->final_result; }
+        if (saga->final_result != ASX_OK) {
+            report->final_status = saga->final_result;
+        } else if (saga->state == ASX_SAGA_COMPLETED && report->final_status == ASX_E_PENDING) {
+            report->final_status = ASX_OK;
+        }
     }
 }
 
