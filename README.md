@@ -486,21 +486,21 @@ All profiles produce identical canonical semantic digests for shared fixture set
                        └──────────────────────────────────────────┘
                                           │
                                           ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         asx_core (15 modules)                           │
-│  IDs + generation counters | outcomes | budgets | cancel + witness      │
-│  combinators (11) | symbols + typed values | epochs | circuit breakers  │
-│  ghost monitors | error taxonomy (59 codes) | codec schema             │
-└──────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│                      asx_core (15 modules)                            │
+│  IDs + generation counters | outcomes | budgets | cancel + witness    │
+│  combinators (11) | symbols + typed values | epochs | circuit breakers│
+│  ghost monitors | error taxonomy (59 codes) | codec schema            │
+└───────────────────────────────────────────────────────────────────────┘
                                           │
                                           ▼
-┌────────────────────────────────────────────────────────────────────────────┐
-│                    asx_runtime_kernel (37 modules)                        │
-│  scheduler | builder | region/task/obligation lifecycle | cancel          │
-│  timer wheel | waker | blocking pool | I/O driver | deadline monitor     │
-│  telemetry | trace | replay | virtual time | event log | snapshot        │
-│  HFT instrument | automotive instrument | diagnostics | config reload    │
-└────────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│                   asx_runtime_kernel (37 modules)                     │
+│  scheduler | builder | region/task/obligation lifecycle | cancel      │
+│  timer wheel | waker | blocking pool | I/O driver | deadline monitor  │
+│  telemetry | trace | replay | virtual time | event log | snapshot     │
+│  HFT instrument | automotive instrument | diagnostics | config reload │
+└───────────────────────────────────────────────────────────────────────┘
       │             │             │             │             │
       ▼             ▼             ▼             ▼             ▼
 ┌────────────┐┌────────────┐┌────────────┐┌────────────┐┌────────────┐
@@ -513,7 +513,7 @@ All profiles produce identical canonical semantic digests for shared fixture set
       └─────────────┴─────────────┴──────┬──────┴─────────────┘
                                          ▼
            ┌─────────────────────────────────────────────────────┐
-           │          Observability + Evidence Layer              │
+           │         Observability + Evidence Layer              │
            │  evidence sinks | monitors | diagnostics | audit    │
            │  telemetry digests | conformance | inspection       │
            └─────────────────────────────────────────────────────┘
