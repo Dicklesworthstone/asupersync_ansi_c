@@ -196,7 +196,8 @@ NET_SRC := \
 	src/net/web.c \
 	src/net/grpc.c \
 	src/net/db.c \
-	src/net/messaging.c
+	src/net/messaging.c \
+	src/net/distributed.c
 
 BYTES_SRC := \
 	src/bytes/buf.c \
