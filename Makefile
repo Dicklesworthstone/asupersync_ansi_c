@@ -187,7 +187,12 @@ ACTOR_SRC := \
 	src/actor/supervisor.c
 
 NET_SRC := \
-	src/net/net.c
+	src/net/net.c \
+	src/net/tls.c \
+	src/net/websocket.c \
+	src/net/quic.c \
+	src/net/server.c \
+	src/net/http.c
 
 BYTES_SRC := \
 	src/bytes/buf.c \
@@ -362,7 +367,9 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/remote/*_test.c) \
                  $(wildcard tests/unit/remote/test_*.c) \
                  $(wildcard tests/unit/spork/*_test.c) \
-                 $(wildcard tests/unit/spork/test_*.c)
+                 $(wildcard tests/unit/spork/test_*.c) \
+                 $(wildcard tests/unit/net/*_test.c) \
+                 $(wildcard tests/unit/net/test_*.c)
 UNIT_TEST_SRC := $(sort $(UNIT_TEST_SRC))
 
 INVARIANT_TEST_SRC := $(wildcard tests/invariant/lifecycle/*_test.c) \

@@ -308,6 +308,223 @@ ASX_API ASX_MUST_USE asx_status asx_udp_connect_host(asx_udp_socket socket, asx_
                                                      uint8_t *cache_hit);
 
 /* -------------------------------------------------------------------
+ * Unix-domain socket address
+ * ------------------------------------------------------------------- */
+
+#ifndef ASX_UNIX_PATH_MAX
+#define ASX_UNIX_PATH_MAX 108u
+#endif
+
+typedef struct {
+    char path[ASX_UNIX_PATH_MAX];
+    uint8_t has_path;
+} asx_unix_addr;
+
+/* Construct a Unix-domain address from a path string. */
+ASX_API asx_status asx_unix_addr_from_path(asx_unix_addr *out, const char *path);
+
+/* Compare two Unix-domain addresses. */
+ASX_API int asx_unix_addr_eq(const asx_unix_addr *a, const asx_unix_addr *b);
+
+/* -------------------------------------------------------------------
+ * Unix-domain arena limits
+ * ------------------------------------------------------------------- */
+
+#ifndef ASX_MAX_UNIX_LISTENERS
+#define ASX_MAX_UNIX_LISTENERS 4u
+#endif
+
+#ifndef ASX_MAX_UNIX_STREAMS
+#define ASX_MAX_UNIX_STREAMS 16u
+#endif
+
+#ifndef ASX_MAX_UNIX_DGRAM_SOCKETS
+#define ASX_MAX_UNIX_DGRAM_SOCKETS 8u
+#endif
+
+/* -------------------------------------------------------------------
+ * Unix-domain handle types
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    uint32_t slot;
+    uint32_t generation;
+} asx_unix_listener;
+
+typedef struct {
+    uint32_t slot;
+    uint32_t generation;
+} asx_unix_stream;
+
+typedef struct {
+    uint32_t slot;
+    uint32_t generation;
+} asx_unix_dgram;
+
+/* -------------------------------------------------------------------
+ * Unix-domain listener API
+ * ------------------------------------------------------------------- */
+
+/* Bind a Unix-domain listener to the given path.
+ * Deterministic in-memory transport: accepts loopback connects by path match. */
+ASX_API ASX_MUST_USE asx_status asx_unix_listener_bind(asx_unix_listener *out,
+                                                        const asx_unix_addr *addr);
+
+/* Poll for incoming Unix-domain connections. */
+ASX_API ASX_MUST_USE asx_status asx_unix_listener_poll_accept(asx_unix_listener listener,
+                                                               asx_unix_stream *out);
+
+/* Close a Unix-domain listener. */
+ASX_API asx_status asx_unix_listener_close(asx_unix_listener listener);
+
+/* Get the bound path of a Unix-domain listener. */
+ASX_API asx_status asx_unix_listener_local_addr(asx_unix_listener listener, asx_unix_addr *out);
+
+/* Check if a Unix-domain listener is alive. */
+ASX_API int asx_unix_listener_is_alive(asx_unix_listener listener);
+
+/* -------------------------------------------------------------------
+ * Unix-domain stream API
+ * ------------------------------------------------------------------- */
+
+/* Connect to a Unix-domain listener by path.
+ * Creates a linked in-memory bidirectional stream pair. */
+ASX_API ASX_MUST_USE asx_status asx_unix_connect(asx_unix_stream *out, const asx_unix_addr *addr);
+
+/* Poll-read from a Unix-domain stream. */
+ASX_API ASX_MUST_USE asx_status asx_unix_stream_poll_read(asx_unix_stream stream, asx_buf_mut *dst,
+                                                           uint32_t *bytes_read);
+
+/* Poll-write to a Unix-domain stream. */
+ASX_API ASX_MUST_USE asx_status asx_unix_stream_poll_write(asx_unix_stream stream,
+                                                            const asx_buf *src,
+                                                            uint32_t *bytes_written);
+
+/* Close a Unix-domain stream. */
+ASX_API asx_status asx_unix_stream_close(asx_unix_stream stream);
+
+/* Check if a Unix-domain stream is alive. */
+ASX_API int asx_unix_stream_is_alive(asx_unix_stream stream);
+
+/* -------------------------------------------------------------------
+ * Unix-domain datagram API
+ * ------------------------------------------------------------------- */
+
+/* Bind a Unix-domain datagram socket to the given path. */
+ASX_API ASX_MUST_USE asx_status asx_unix_dgram_bind(asx_unix_dgram *out,
+                                                     const asx_unix_addr *addr);
+
+/* Poll-send a datagram to the specified Unix-domain path. */
+ASX_API ASX_MUST_USE asx_status asx_unix_dgram_poll_send(asx_unix_dgram socket, const asx_buf *src,
+                                                          uint32_t *bytes_written,
+                                                          const asx_unix_addr *to);
+
+/* Poll-receive a datagram. */
+ASX_API ASX_MUST_USE asx_status asx_unix_dgram_poll_recv(asx_unix_dgram socket, asx_buf_mut *dst,
+                                                          uint32_t *bytes_read, asx_unix_addr *from);
+
+/* Close a Unix-domain datagram socket. */
+ASX_API asx_status asx_unix_dgram_close(asx_unix_dgram socket);
+
+/* Check if a Unix-domain datagram socket is alive. */
+ASX_API int asx_unix_dgram_is_alive(asx_unix_dgram socket);
+
+/* -------------------------------------------------------------------
+ * Ancillary data (deterministic fd-passing model)
+ *
+ * Provides a portable ancillary-data container for passing opaque
+ * descriptors alongside stream/datagram I/O. In the deterministic
+ * core, descriptors are modeled as uint32_t tokens.
+ * ------------------------------------------------------------------- */
+
+#ifndef ASX_ANCILLARY_MAX_FDS
+#define ASX_ANCILLARY_MAX_FDS 8u
+#endif
+
+typedef struct {
+    uint32_t fds[ASX_ANCILLARY_MAX_FDS];
+    uint32_t count;
+} asx_ancillary;
+
+/* Initialize ancillary data to empty. */
+ASX_API void asx_ancillary_init(asx_ancillary *anc);
+
+/* Push a descriptor token. Returns ASX_E_RESOURCE_EXHAUSTED if full. */
+ASX_API ASX_MUST_USE asx_status asx_ancillary_push_fd(asx_ancillary *anc, uint32_t fd);
+
+/* Pop the oldest descriptor token. Returns ASX_E_NOT_FOUND if empty. */
+ASX_API ASX_MUST_USE asx_status asx_ancillary_pop_fd(asx_ancillary *anc, uint32_t *out);
+
+/* Return the number of descriptor tokens. */
+ASX_API uint32_t asx_ancillary_count(const asx_ancillary *anc);
+
+/* Send ancillary data alongside a Unix-domain stream write.
+ * Tokens are delivered to the peer's ancillary receive buffer. */
+ASX_API ASX_MUST_USE asx_status asx_unix_stream_send_ancillary(asx_unix_stream stream,
+                                                                const asx_ancillary *anc);
+
+/* Receive ancillary data from a Unix-domain stream.
+ * Drains tokens that were delivered by the peer. */
+ASX_API ASX_MUST_USE asx_status asx_unix_stream_recv_ancillary(asx_unix_stream stream,
+                                                                asx_ancillary *out);
+
+/* -------------------------------------------------------------------
+ * Split-stream API
+ *
+ * Splits a bidirectional stream into independent read and write halves.
+ * Each half holds a reference to the same underlying stream. Closing
+ * one half does not close the other; both must be closed to release
+ * the underlying stream.
+ * ------------------------------------------------------------------- */
+
+typedef enum {
+    ASX_SPLIT_SOURCE_TCP  = 0,
+    ASX_SPLIT_SOURCE_UNIX = 1
+} asx_split_source_kind;
+
+typedef struct {
+    asx_split_source_kind kind;
+    uint32_t slot;
+    uint32_t generation;
+    uint8_t active;
+} asx_read_half;
+
+typedef struct {
+    asx_split_source_kind kind;
+    uint32_t slot;
+    uint32_t generation;
+    uint8_t active;
+} asx_write_half;
+
+/* Split a TCP stream into read and write halves.
+ * The original stream handle remains valid but I/O should go through
+ * the halves for proper half-close tracking. */
+ASX_API ASX_MUST_USE asx_status asx_tcp_stream_split(asx_tcp_stream stream, asx_read_half *rd,
+                                                      asx_write_half *wr);
+
+/* Split a Unix-domain stream into read and write halves. */
+ASX_API ASX_MUST_USE asx_status asx_unix_stream_split(asx_unix_stream stream, asx_read_half *rd,
+                                                       asx_write_half *wr);
+
+/* Poll-read through a read half. */
+ASX_API ASX_MUST_USE asx_status asx_read_half_poll_read(asx_read_half *half, asx_buf_mut *dst,
+                                                         uint32_t *bytes_read);
+
+/* Poll-write through a write half. */
+ASX_API ASX_MUST_USE asx_status asx_write_half_poll_write(asx_write_half *half, const asx_buf *src,
+                                                           uint32_t *bytes_written);
+
+/* Close a read half. */
+ASX_API asx_status asx_read_half_close(asx_read_half *half);
+
+/* Close a write half. */
+ASX_API asx_status asx_write_half_close(asx_write_half *half);
+
+/* Check if a read/write half is active. */
+ASX_API int asx_read_half_is_active(const asx_read_half *half);
+ASX_API int asx_write_half_is_active(const asx_write_half *half);
+
+/* -------------------------------------------------------------------
  * Reset (test support)
  * ------------------------------------------------------------------- */
 

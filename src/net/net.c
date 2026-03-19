@@ -964,19 +964,6 @@ void asx_resolver_invalidate(asx_resolver *resolver, const char *host) {
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* Reset                                                               */
-/* ------------------------------------------------------------------ */
-
-void asx_net_reset(void) {
-    memset(g_listeners, 0, sizeof(g_listeners));
-    g_listener_count = 0u;
-    memset(g_streams, 0, sizeof(g_streams));
-    g_stream_count = 0u;
-    memset(g_udp_sockets, 0, sizeof(g_udp_sockets));
-    g_next_ephemeral_port = 49152u;
-}
-
 asx_status asx_tcp_connect_host(asx_tcp_stream *out, asx_resolver *resolver, const char *host,
                                 const asx_resolve_options *options, asx_socket_addr *selected_addr,
                                 uint8_t *cache_hit) {
@@ -1007,4 +994,670 @@ asx_status asx_udp_connect_host(asx_udp_socket socket, asx_resolver *resolver, c
     if (resolved.count == 0u) return ASX_E_NOT_FOUND;
     if (selected_addr != NULL) *selected_addr = resolved.addrs[0];
     return asx_udp_connect(socket, &resolved.addrs[0]);
+}
+
+/* ------------------------------------------------------------------ */
+/* Unix-domain address                                                 */
+/* ------------------------------------------------------------------ */
+
+static size_t bounded_path_len(const char *path) {
+    size_t len;
+
+    if (path == NULL) return 0u;
+    for (len = 0u; len < ASX_UNIX_PATH_MAX; len++) {
+        if (path[len] == '\0') return len;
+    }
+    return ASX_UNIX_PATH_MAX;
+}
+
+asx_status asx_unix_addr_from_path(asx_unix_addr *out, const char *path) {
+    size_t len;
+
+    if (out == NULL || path == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    len = bounded_path_len(path);
+    if (len == 0u || len >= ASX_UNIX_PATH_MAX) return ASX_E_INVALID_ARGUMENT;
+    memcpy(out->path, path, len + 1u);
+    out->has_path = 1u;
+    return ASX_OK;
+}
+
+int asx_unix_addr_eq(const asx_unix_addr *a, const asx_unix_addr *b) {
+    if (a == NULL || b == NULL) return 0;
+    if (!a->has_path || !b->has_path) return 0;
+    return strcmp(a->path, b->path) == 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Unix-domain listener arena                                          */
+/* ------------------------------------------------------------------ */
+
+#define ASX_UNIX_ACCEPT_QUEUE_DEPTH ASX_MAX_UNIX_STREAMS
+
+typedef struct {
+    asx_unix_addr addr;
+    asx_unix_stream pending[ASX_UNIX_ACCEPT_QUEUE_DEPTH];
+    uint32_t generation;
+    uint32_t accept_head;
+    uint32_t accept_count;
+    int alive;
+} unix_listener_slot;
+
+static unix_listener_slot g_unix_listeners[ASX_MAX_UNIX_LISTENERS];
+
+/* ------------------------------------------------------------------ */
+/* Unix-domain stream arena                                            */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_unix_addr local;
+    asx_unix_addr peer;
+    asx_buf_mut inbox;
+    asx_ancillary anc_inbox;
+    uint32_t generation;
+    uint32_t peer_slot;
+    uint32_t peer_generation;
+    int alive;
+    int linked;
+} unix_stream_slot;
+
+static unix_stream_slot g_unix_streams[ASX_MAX_UNIX_STREAMS];
+
+/* ------------------------------------------------------------------ */
+/* Unix-domain datagram arena                                          */
+/* ------------------------------------------------------------------ */
+
+#define ASX_UNIX_DGRAM_QUEUE_DEPTH 4u
+
+typedef struct {
+    uint8_t bytes[ASX_BUF_CAPACITY];
+    uint32_t len;
+    asx_unix_addr from;
+} unix_dgram_packet;
+
+typedef struct {
+    asx_unix_addr local;
+    unix_dgram_packet queue[ASX_UNIX_DGRAM_QUEUE_DEPTH];
+    uint32_t generation;
+    uint32_t recv_head;
+    uint32_t recv_count;
+    int alive;
+} unix_dgram_slot;
+
+static unix_dgram_slot g_unix_dgrams[ASX_MAX_UNIX_DGRAM_SOCKETS];
+
+/* ------------------------------------------------------------------ */
+/* Unix-domain helpers                                                 */
+/* ------------------------------------------------------------------ */
+
+static unix_listener_slot *unix_listener_lookup(asx_unix_listener h) {
+    unix_listener_slot *s;
+
+    if (h.slot >= ASX_MAX_UNIX_LISTENERS) return NULL;
+    s = &g_unix_listeners[h.slot];
+    if (!s->alive) return NULL;
+    if (s->generation != h.generation) return NULL;
+    return s;
+}
+
+static unix_listener_slot *unix_listener_find_by_addr(const asx_unix_addr *addr) {
+    uint32_t idx;
+
+    if (addr == NULL || !addr->has_path) return NULL;
+    for (idx = 0u; idx < ASX_MAX_UNIX_LISTENERS; idx++) {
+        if (g_unix_listeners[idx].alive && asx_unix_addr_eq(&g_unix_listeners[idx].addr, addr)) {
+            return &g_unix_listeners[idx];
+        }
+    }
+    return NULL;
+}
+
+static unix_stream_slot *unix_stream_lookup(asx_unix_stream h) {
+    unix_stream_slot *s;
+
+    if (h.slot >= ASX_MAX_UNIX_STREAMS) return NULL;
+    s = &g_unix_streams[h.slot];
+    if (!s->alive) return NULL;
+    if (s->generation != h.generation) return NULL;
+    return s;
+}
+
+static unix_stream_slot *unix_stream_linked_peer(const unix_stream_slot *s) {
+    unix_stream_slot *peer;
+    uint32_t self_slot;
+
+    if (s == NULL || !s->linked || s->peer_slot >= ASX_MAX_UNIX_STREAMS) return NULL;
+    peer = &g_unix_streams[s->peer_slot];
+    if (!peer->alive) return NULL;
+    if (peer->generation != s->peer_generation) return NULL;
+    if (!peer->linked) return NULL;
+    if (peer->peer_generation != s->generation) return NULL;
+    self_slot = (uint32_t)(s - g_unix_streams);
+    if (peer->peer_slot != self_slot) return NULL;
+    return peer;
+}
+
+static void unix_stream_unlink_peer(unix_stream_slot *s) {
+    unix_stream_slot *peer;
+
+    if (s == NULL) return;
+    peer = unix_stream_linked_peer(s);
+    if (peer != NULL) {
+        peer->linked = 0;
+        peer->peer_slot = 0u;
+        peer->peer_generation = 0u;
+    }
+    s->linked = 0;
+    s->peer_slot = 0u;
+    s->peer_generation = 0u;
+}
+
+static asx_status unix_stream_alloc(const asx_unix_addr *local, const asx_unix_addr *peer,
+                                     asx_unix_stream *out, unix_stream_slot **out_slot) {
+    uint32_t idx;
+    unix_stream_slot *s;
+
+    if (local == NULL || peer == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    for (idx = 0u; idx < ASX_MAX_UNIX_STREAMS; idx++) {
+        if (!g_unix_streams[idx].alive) break;
+    }
+    if (idx >= ASX_MAX_UNIX_STREAMS) return ASX_E_RESOURCE_EXHAUSTED;
+
+    s = &g_unix_streams[idx];
+    memset(s, 0, sizeof(*s));
+    s->generation = next_gen(s->generation);
+    s->alive = 1;
+    s->local = *local;
+    s->peer = *peer;
+    asx_buf_mut_init(&s->inbox);
+    asx_ancillary_init(&s->anc_inbox);
+
+    out->slot = idx;
+    out->generation = s->generation;
+    if (out_slot != NULL) *out_slot = s;
+    return ASX_OK;
+}
+
+static unix_dgram_slot *unix_dgram_lookup(asx_unix_dgram h) {
+    unix_dgram_slot *s;
+
+    if (h.slot >= ASX_MAX_UNIX_DGRAM_SOCKETS) return NULL;
+    s = &g_unix_dgrams[h.slot];
+    if (!s->alive) return NULL;
+    if (s->generation != h.generation) return NULL;
+    return s;
+}
+
+/* ------------------------------------------------------------------ */
+/* Unix-domain listener API                                            */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_unix_listener_bind(asx_unix_listener *out, const asx_unix_addr *addr) {
+    uint32_t idx;
+    unix_listener_slot *s;
+
+    if (out == NULL || addr == NULL || !addr->has_path) return ASX_E_INVALID_ARGUMENT;
+
+    for (idx = 0u; idx < ASX_MAX_UNIX_LISTENERS; idx++) {
+        if (!g_unix_listeners[idx].alive) break;
+    }
+    if (idx >= ASX_MAX_UNIX_LISTENERS) return ASX_E_RESOURCE_EXHAUSTED;
+
+    s = &g_unix_listeners[idx];
+    memset(s, 0, sizeof(*s));
+    s->generation = next_gen(s->generation);
+    s->alive = 1;
+    s->addr = *addr;
+
+    out->slot = idx;
+    out->generation = s->generation;
+    return ASX_OK;
+}
+
+asx_status asx_unix_listener_poll_accept(asx_unix_listener listener, asx_unix_stream *out) {
+    unix_listener_slot *s;
+
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    s = unix_listener_lookup(listener);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (s->accept_count == 0u) return ASX_E_PENDING;
+
+    *out = s->pending[s->accept_head];
+    s->accept_head = (s->accept_head + 1u) % ASX_UNIX_ACCEPT_QUEUE_DEPTH;
+    s->accept_count--;
+    return ASX_OK;
+}
+
+asx_status asx_unix_listener_close(asx_unix_listener listener) {
+    unix_listener_slot *s;
+    uint32_t i;
+
+    s = unix_listener_lookup(listener);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    for (i = 0u; i < s->accept_count; i++) {
+        uint32_t idx = (s->accept_head + i) % ASX_UNIX_ACCEPT_QUEUE_DEPTH;
+        (void)asx_unix_stream_close(s->pending[idx]);
+    }
+
+    memset(s, 0, sizeof(*s));
+    return ASX_OK;
+}
+
+asx_status asx_unix_listener_local_addr(asx_unix_listener listener, asx_unix_addr *out) {
+    unix_listener_slot *s;
+
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    s = unix_listener_lookup(listener);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    *out = s->addr;
+    return ASX_OK;
+}
+
+int asx_unix_listener_is_alive(asx_unix_listener listener) {
+    return unix_listener_lookup(listener) != NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Unix-domain stream API                                              */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_unix_connect(asx_unix_stream *out, const asx_unix_addr *addr) {
+    asx_unix_addr client_addr;
+    asx_status st;
+    unix_listener_slot *listener;
+    unix_stream_slot *client;
+
+    if (out == NULL || addr == NULL || !addr->has_path) return ASX_E_INVALID_ARGUMENT;
+
+    memset(&client_addr, 0, sizeof(client_addr));
+
+    st = unix_stream_alloc(&client_addr, addr, out, &client);
+    if (st != ASX_OK) return st;
+
+    listener = unix_listener_find_by_addr(addr);
+    if (listener != NULL) {
+        asx_unix_stream accepted_handle;
+        unix_stream_slot *accepted;
+        uint32_t tail;
+
+        st = unix_stream_alloc(addr, &client_addr, &accepted_handle, &accepted);
+        if (st != ASX_OK) {
+            memset(client, 0, sizeof(*client));
+            return st;
+        }
+
+        client->linked = 1;
+        client->peer_slot = accepted_handle.slot;
+        client->peer_generation = accepted_handle.generation;
+        accepted->linked = 1;
+        accepted->peer_slot = out->slot;
+        accepted->peer_generation = out->generation;
+
+        if (listener->accept_count >= ASX_UNIX_ACCEPT_QUEUE_DEPTH) {
+            memset(accepted, 0, sizeof(*accepted));
+            memset(client, 0, sizeof(*client));
+            return ASX_E_WOULD_BLOCK;
+        }
+        tail = (listener->accept_head + listener->accept_count) % ASX_UNIX_ACCEPT_QUEUE_DEPTH;
+        listener->pending[tail] = accepted_handle;
+        listener->accept_count++;
+    }
+
+    return ASX_OK;
+}
+
+asx_status asx_unix_stream_poll_read(asx_unix_stream stream, asx_buf_mut *dst,
+                                      uint32_t *bytes_read) {
+    unix_stream_slot *s;
+    asx_buf readable;
+    uint32_t to_copy;
+    asx_status st;
+
+    if (dst == NULL || bytes_read == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    s = unix_stream_lookup(stream);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_buf_mut_remaining(&s->inbox) == 0u) {
+        *bytes_read = 0u;
+        return ASX_E_PENDING;
+    }
+    if (asx_buf_mut_writable(dst) == 0u) return ASX_E_BUFFER_TOO_SMALL;
+
+    readable = asx_buf_mut_readable(&s->inbox);
+    to_copy = readable.len;
+    if (to_copy > asx_buf_mut_writable(dst)) to_copy = asx_buf_mut_writable(dst);
+
+    st = asx_buf_mut_put(dst, readable.ptr, to_copy);
+    if (st != ASX_OK) return st;
+    st = asx_buf_mut_advance(&s->inbox, to_copy);
+    if (st != ASX_OK) return st;
+    if (asx_buf_mut_remaining(&s->inbox) == 0u) asx_buf_mut_clear(&s->inbox);
+
+    *bytes_read = to_copy;
+    return ASX_OK;
+}
+
+asx_status asx_unix_stream_poll_write(asx_unix_stream stream, const asx_buf *src,
+                                       uint32_t *bytes_written) {
+    unix_stream_slot *s;
+    unix_stream_slot *peer;
+    asx_status st;
+
+    if (src == NULL || bytes_written == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    s = unix_stream_lookup(stream);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    peer = unix_stream_linked_peer(s);
+    if (peer == NULL) {
+        *bytes_written = 0u;
+        return ASX_E_PENDING;
+    }
+    if (src->len > asx_buf_mut_writable(&peer->inbox)) return ASX_E_WOULD_BLOCK;
+
+    st = asx_buf_mut_put(&peer->inbox, src->ptr, src->len);
+    if (st != ASX_OK) return st;
+
+    *bytes_written = src->len;
+    return ASX_OK;
+}
+
+asx_status asx_unix_stream_close(asx_unix_stream stream) {
+    unix_stream_slot *s;
+
+    s = unix_stream_lookup(stream);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    unix_stream_unlink_peer(s);
+    memset(s, 0, sizeof(*s));
+    return ASX_OK;
+}
+
+int asx_unix_stream_is_alive(asx_unix_stream stream) {
+    return unix_stream_lookup(stream) != NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Unix-domain datagram API                                            */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_unix_dgram_bind(asx_unix_dgram *out, const asx_unix_addr *addr) {
+    uint32_t idx;
+    unix_dgram_slot *s;
+
+    if (out == NULL || addr == NULL || !addr->has_path) return ASX_E_INVALID_ARGUMENT;
+
+    for (idx = 0u; idx < ASX_MAX_UNIX_DGRAM_SOCKETS; idx++) {
+        if (!g_unix_dgrams[idx].alive) break;
+    }
+    if (idx >= ASX_MAX_UNIX_DGRAM_SOCKETS) return ASX_E_RESOURCE_EXHAUSTED;
+
+    s = &g_unix_dgrams[idx];
+    memset(s, 0, sizeof(*s));
+    s->generation = next_gen(s->generation);
+    s->alive = 1;
+    s->local = *addr;
+
+    out->slot = idx;
+    out->generation = s->generation;
+    return ASX_OK;
+}
+
+asx_status asx_unix_dgram_poll_send(asx_unix_dgram socket, const asx_buf *src,
+                                     uint32_t *bytes_written, const asx_unix_addr *to) {
+    unix_dgram_slot *sender;
+    unix_dgram_slot *dest;
+    uint32_t idx;
+    uint32_t tail;
+    unix_dgram_packet *packet;
+
+    if (src == NULL || bytes_written == NULL || to == NULL || !to->has_path)
+        return ASX_E_INVALID_ARGUMENT;
+    if (src->len > ASX_BUF_CAPACITY) return ASX_E_BUFFER_TOO_SMALL;
+
+    sender = unix_dgram_lookup(socket);
+    if (sender == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    dest = NULL;
+    for (idx = 0u; idx < ASX_MAX_UNIX_DGRAM_SOCKETS; idx++) {
+        if (g_unix_dgrams[idx].alive && asx_unix_addr_eq(&g_unix_dgrams[idx].local, to)) {
+            dest = &g_unix_dgrams[idx];
+            break;
+        }
+    }
+    if (dest == NULL) {
+        *bytes_written = 0u;
+        return ASX_E_PENDING;
+    }
+    if (dest->recv_count >= ASX_UNIX_DGRAM_QUEUE_DEPTH) return ASX_E_WOULD_BLOCK;
+
+    tail = (dest->recv_head + dest->recv_count) % ASX_UNIX_DGRAM_QUEUE_DEPTH;
+    packet = &dest->queue[tail];
+    memset(packet, 0, sizeof(*packet));
+    packet->from = sender->local;
+    packet->len = src->len;
+    if (src->len > 0u) memcpy(packet->bytes, src->ptr, src->len);
+    dest->recv_count++;
+
+    *bytes_written = src->len;
+    return ASX_OK;
+}
+
+asx_status asx_unix_dgram_poll_recv(asx_unix_dgram socket, asx_buf_mut *dst, uint32_t *bytes_read,
+                                     asx_unix_addr *from) {
+    unix_dgram_slot *s;
+    unix_dgram_packet *packet;
+    uint32_t to_copy;
+    asx_status st;
+
+    if (dst == NULL || bytes_read == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    s = unix_dgram_lookup(socket);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (s->recv_count == 0u) {
+        *bytes_read = 0u;
+        return ASX_E_PENDING;
+    }
+    if (asx_buf_mut_writable(dst) == 0u) return ASX_E_BUFFER_TOO_SMALL;
+
+    packet = &s->queue[s->recv_head];
+    to_copy = packet->len;
+    if (to_copy > asx_buf_mut_writable(dst)) to_copy = asx_buf_mut_writable(dst);
+    st = asx_buf_mut_put(dst, packet->bytes, to_copy);
+    if (st != ASX_OK) return st;
+
+    if (from != NULL) *from = packet->from;
+    *bytes_read = to_copy;
+    s->recv_head = (s->recv_head + 1u) % ASX_UNIX_DGRAM_QUEUE_DEPTH;
+    s->recv_count--;
+    return ASX_OK;
+}
+
+asx_status asx_unix_dgram_close(asx_unix_dgram socket) {
+    unix_dgram_slot *s;
+
+    s = unix_dgram_lookup(socket);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(s, 0, sizeof(*s));
+    return ASX_OK;
+}
+
+int asx_unix_dgram_is_alive(asx_unix_dgram socket) { return unix_dgram_lookup(socket) != NULL; }
+
+/* ------------------------------------------------------------------ */
+/* Ancillary data                                                      */
+/* ------------------------------------------------------------------ */
+
+void asx_ancillary_init(asx_ancillary *anc) {
+    if (anc == NULL) return;
+    memset(anc, 0, sizeof(*anc));
+}
+
+asx_status asx_ancillary_push_fd(asx_ancillary *anc, uint32_t fd) {
+    if (anc == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (anc->count >= ASX_ANCILLARY_MAX_FDS) return ASX_E_RESOURCE_EXHAUSTED;
+    anc->fds[anc->count++] = fd;
+    return ASX_OK;
+}
+
+asx_status asx_ancillary_pop_fd(asx_ancillary *anc, uint32_t *out) {
+    uint32_t i;
+
+    if (anc == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (anc->count == 0u) return ASX_E_NOT_FOUND;
+    *out = anc->fds[0];
+    for (i = 1u; i < anc->count; i++) {
+        anc->fds[i - 1u] = anc->fds[i];
+    }
+    anc->count--;
+    return ASX_OK;
+}
+
+uint32_t asx_ancillary_count(const asx_ancillary *anc) {
+    if (anc == NULL) return 0u;
+    return anc->count;
+}
+
+asx_status asx_unix_stream_send_ancillary(asx_unix_stream stream, const asx_ancillary *anc) {
+    unix_stream_slot *s;
+    unix_stream_slot *peer;
+    uint32_t i;
+
+    if (anc == NULL) return ASX_E_INVALID_ARGUMENT;
+    s = unix_stream_lookup(stream);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    peer = unix_stream_linked_peer(s);
+    if (peer == NULL) return ASX_E_PENDING;
+
+    for (i = 0u; i < anc->count; i++) {
+        if (peer->anc_inbox.count >= ASX_ANCILLARY_MAX_FDS) return ASX_E_RESOURCE_EXHAUSTED;
+        peer->anc_inbox.fds[peer->anc_inbox.count++] = anc->fds[i];
+    }
+    return ASX_OK;
+}
+
+asx_status asx_unix_stream_recv_ancillary(asx_unix_stream stream, asx_ancillary *out) {
+    unix_stream_slot *s;
+
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    s = unix_stream_lookup(stream);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    *out = s->anc_inbox;
+    asx_ancillary_init(&s->anc_inbox);
+    return ASX_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Split-stream API                                                    */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_tcp_stream_split(asx_tcp_stream stream, asx_read_half *rd, asx_write_half *wr) {
+    if (rd == NULL || wr == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (stream_lookup(stream) == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    rd->kind = ASX_SPLIT_SOURCE_TCP;
+    rd->slot = stream.slot;
+    rd->generation = stream.generation;
+    rd->active = 1u;
+
+    wr->kind = ASX_SPLIT_SOURCE_TCP;
+    wr->slot = stream.slot;
+    wr->generation = stream.generation;
+    wr->active = 1u;
+
+    return ASX_OK;
+}
+
+asx_status asx_unix_stream_split(asx_unix_stream stream, asx_read_half *rd, asx_write_half *wr) {
+    if (rd == NULL || wr == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (unix_stream_lookup(stream) == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    rd->kind = ASX_SPLIT_SOURCE_UNIX;
+    rd->slot = stream.slot;
+    rd->generation = stream.generation;
+    rd->active = 1u;
+
+    wr->kind = ASX_SPLIT_SOURCE_UNIX;
+    wr->slot = stream.slot;
+    wr->generation = stream.generation;
+    wr->active = 1u;
+
+    return ASX_OK;
+}
+
+asx_status asx_read_half_poll_read(asx_read_half *half, asx_buf_mut *dst, uint32_t *bytes_read) {
+    if (half == NULL || !half->active) return ASX_E_INVALID_ARGUMENT;
+
+    if (half->kind == ASX_SPLIT_SOURCE_TCP) {
+        asx_tcp_stream s;
+        s.slot = half->slot;
+        s.generation = half->generation;
+        return asx_tcp_stream_poll_read(s, dst, bytes_read);
+    }
+    if (half->kind == ASX_SPLIT_SOURCE_UNIX) {
+        asx_unix_stream s;
+        s.slot = half->slot;
+        s.generation = half->generation;
+        return asx_unix_stream_poll_read(s, dst, bytes_read);
+    }
+    return ASX_E_INVALID_ARGUMENT;
+}
+
+asx_status asx_write_half_poll_write(asx_write_half *half, const asx_buf *src,
+                                      uint32_t *bytes_written) {
+    if (half == NULL || !half->active) return ASX_E_INVALID_ARGUMENT;
+
+    if (half->kind == ASX_SPLIT_SOURCE_TCP) {
+        asx_tcp_stream s;
+        s.slot = half->slot;
+        s.generation = half->generation;
+        return asx_tcp_stream_poll_write(s, src, bytes_written);
+    }
+    if (half->kind == ASX_SPLIT_SOURCE_UNIX) {
+        asx_unix_stream s;
+        s.slot = half->slot;
+        s.generation = half->generation;
+        return asx_unix_stream_poll_write(s, src, bytes_written);
+    }
+    return ASX_E_INVALID_ARGUMENT;
+}
+
+asx_status asx_read_half_close(asx_read_half *half) {
+    if (half == NULL || !half->active) return ASX_E_INVALID_ARGUMENT;
+    half->active = 0u;
+    return ASX_OK;
+}
+
+asx_status asx_write_half_close(asx_write_half *half) {
+    if (half == NULL || !half->active) return ASX_E_INVALID_ARGUMENT;
+    half->active = 0u;
+    return ASX_OK;
+}
+
+int asx_read_half_is_active(const asx_read_half *half) {
+    if (half == NULL) return 0;
+    return half->active != 0u;
+}
+
+int asx_write_half_is_active(const asx_write_half *half) {
+    if (half == NULL) return 0;
+    return half->active != 0u;
+}
+
+/* ------------------------------------------------------------------ */
+/* Reset                                                               */
+/* ------------------------------------------------------------------ */
+
+void asx_net_reset(void) {
+    memset(g_listeners, 0, sizeof(g_listeners));
+    g_listener_count = 0u;
+    memset(g_streams, 0, sizeof(g_streams));
+    g_stream_count = 0u;
+    memset(g_udp_sockets, 0, sizeof(g_udp_sockets));
+    g_next_ephemeral_port = 49152u;
+    memset(g_unix_listeners, 0, sizeof(g_unix_listeners));
+    memset(g_unix_streams, 0, sizeof(g_unix_streams));
+    memset(g_unix_dgrams, 0, sizeof(g_unix_dgrams));
 }

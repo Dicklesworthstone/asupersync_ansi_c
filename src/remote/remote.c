@@ -297,6 +297,46 @@ static asx_status spawn_reject_to_status(asx_spawn_reject_reason reason) {
     return ASX_E_INVALID_ARGUMENT;
 }
 
+static const char *spawn_ack_status_str(asx_spawn_ack_status status) {
+    switch (status) {
+    case ASX_SPAWN_ACK_ACCEPTED: return "accepted";
+    case ASX_SPAWN_ACK_REJECTED: return "rejected";
+    case ASX_SPAWN_ACK_QUEUED: return "queued";
+    }
+    return "unknown";
+}
+
+static const char *remote_status_str(asx_remote_status status) {
+    switch (status) {
+    case ASX_REMOTE_PENDING: return "pending";
+    case ASX_REMOTE_RUNNING: return "running";
+    case ASX_REMOTE_COMPLETED: return "completed";
+    case ASX_REMOTE_FAILED: return "failed";
+    case ASX_REMOTE_CANCELLED: return "cancelled";
+    }
+    return "unknown";
+}
+
+static const char *saga_state_str(asx_saga_state state) {
+    switch (state) {
+    case ASX_SAGA_IDLE: return "idle";
+    case ASX_SAGA_RUNNING: return "running";
+    case ASX_SAGA_COMPENSATING: return "compensating";
+    case ASX_SAGA_COMPLETED: return "completed";
+    case ASX_SAGA_FAILED: return "failed";
+    }
+    return "unknown";
+}
+
+static const char *lease_state_str(asx_lease_state state) {
+    switch (state) {
+    case ASX_LEASE_ACTIVE: return "active";
+    case ASX_LEASE_EXPIRED: return "expired";
+    case ASX_LEASE_REVOKED: return "revoked";
+    }
+    return "unknown";
+}
+
 void asx_spawn_request_init(asx_spawn_request *req, uint64_t request_id, asx_remote_cap cap,
                             asx_idempotency_key idempotency) {
     memset(req, 0, sizeof(*req));
@@ -324,6 +364,15 @@ void asx_spawn_ack_rejected(asx_spawn_ack *ack, uint64_t request_id,
     ack->handle_id = 0;
 }
 
+void asx_spawn_ack_queued(asx_spawn_ack *ack, uint64_t request_id) {
+    if (ack == NULL) { return; }
+    memset(ack, 0, sizeof(*ack));
+    ack->request_id = request_id;
+    ack->status = ASX_SPAWN_ACK_QUEUED;
+    ack->reject_reason = ASX_SPAWN_REJECT_CAPACITY; /* unused */
+    ack->handle_id = 0;
+}
+
 void asx_remote_report_init(asx_remote_report *report, const asx_spawn_request *req,
                             const asx_spawn_ack *ack, const asx_remote_handle *handle,
                             const asx_idempotency_record *rec, const asx_lease *lease,
@@ -337,6 +386,7 @@ void asx_remote_report_init(asx_remote_report *report, const asx_spawn_request *
         report->idempotency_hash = req->idempotency.key_hash;
     }
     if (ack != NULL) {
+        report->ack_present = 1u;
         report->ack_status = ack->status;
         report->reject_reason = ack->reject_reason;
         report->handle_id = ack->handle_id;
@@ -345,6 +395,7 @@ void asx_remote_report_init(asx_remote_report *report, const asx_spawn_request *
         }
     }
     if (handle != NULL) {
+        report->handle_present = 1u;
         report->handle_id = handle->handle_id;
         report->remote_status = handle->status;
         report->handle_terminal = (uint8_t)asx_remote_handle_is_terminal(handle);
@@ -364,12 +415,14 @@ void asx_remote_report_init(asx_remote_report *report, const asx_spawn_request *
         }
     }
     if (lease != NULL) {
+        report->lease_present = 1u;
         report->lease_id = lease->lease_id;
         report->lease_state = lease->state;
         report->lease_active = (uint8_t)asx_lease_is_active(lease, now_ns);
     }
     if (saga != NULL) {
         uint32_t i;
+        report->saga_present = 1u;
         report->saga_state = saga->state;
         report->total_steps = saga->step_count;
         report->reconnect_like_attempts = saga->current_step;
@@ -389,16 +442,30 @@ void asx_remote_report_init(asx_remote_report *report, const asx_spawn_request *
 
 asx_status asx_remote_report_format(const asx_remote_report *report, char *buf, size_t buf_len) {
     int written;
+    const char *ack_str;
+    const char *remote_str;
+    const char *saga_str;
+    const char *lease_str;
+    char handle_buf[32];
 
     if (report == NULL || buf == NULL || buf_len == 0u) { return ASX_E_INVALID_ARGUMENT; }
 
+    ack_str = report->ack_present ? spawn_ack_status_str(report->ack_status) : "na";
+    remote_str = report->handle_present ? remote_status_str(report->remote_status) : "na";
+    saga_str = report->saga_present ? saga_state_str(report->saga_state) : "na";
+    lease_str = report->lease_present ? lease_state_str(report->lease_state) : "na";
+    if (report->handle_present) {
+        (void)snprintf(handle_buf, sizeof(handle_buf), "%llu",
+                       (unsigned long long)report->handle_id);
+    } else {
+        (void)snprintf(handle_buf, sizeof(handle_buf), "na");
+    }
+
     written = snprintf(buf, buf_len,
-                       "req=%llu handle=%llu ack=%u remote=%u saga=%u lease=%u final=%d "
+                       "req=%llu handle=%s ack=%s remote=%s saga=%s lease=%s final=%d "
                        "steps=%u/%u idemp=%u terminal=%u active=%u attempts=%u",
-                       (unsigned long long)report->request_id,
-                       (unsigned long long)report->handle_id, (unsigned)report->ack_status,
-                       (unsigned)report->remote_status, (unsigned)report->saga_state,
-                       (unsigned)report->lease_state, (int)report->final_status,
+                       (unsigned long long)report->request_id, handle_buf, ack_str, remote_str,
+                       saga_str, lease_str, (int)report->final_status,
                        (unsigned)report->completed_steps, (unsigned)report->total_steps,
                        (unsigned)report->idempotency_committed, (unsigned)report->handle_terminal,
                        (unsigned)report->lease_active, (unsigned)report->reconnect_like_attempts);

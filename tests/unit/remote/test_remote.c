@@ -344,6 +344,17 @@ TEST(spawn_ack_rejected) {
     ASSERT_EQ(ack.reject_reason, ASX_SPAWN_REJECT_UNAUTHORIZED);
 }
 
+TEST(spawn_ack_queued) {
+    asx_spawn_ack ack;
+    memset(&ack, 0xFF, sizeof(ack));
+
+    asx_spawn_ack_queued(&ack, 88);
+
+    ASSERT_EQ(ack.request_id, 88u);
+    ASSERT_EQ(ack.status, ASX_SPAWN_ACK_QUEUED);
+    ASSERT_EQ(ack.handle_id, 0u);
+}
+
 TEST(spawn_ack_helpers_clear_stale_fields) {
     asx_spawn_ack ack;
     memset(&ack, 0xFF, sizeof(ack));
@@ -396,6 +407,10 @@ TEST(remote_report_summarizes_active_execution) {
 
     ASSERT_EQ(report.request_id, 42u);
     ASSERT_EQ(report.handle_id, 9001u);
+    ASSERT_TRUE(report.ack_present != 0u);
+    ASSERT_TRUE(report.handle_present != 0u);
+    ASSERT_TRUE(report.saga_present != 0u);
+    ASSERT_TRUE(report.lease_present != 0u);
     ASSERT_EQ(report.idempotency_hash, 555u);
     ASSERT_EQ(report.completed_steps, 2u);
     ASSERT_EQ(report.total_steps, 2u);
@@ -404,6 +419,8 @@ TEST(remote_report_summarizes_active_execution) {
     ASSERT_TRUE(report.handle_terminal == 0u);
     ASSERT_EQ(asx_remote_report_format(&report, text, sizeof(text)), ASX_OK);
     ASSERT_TRUE(strstr(text, "req=42") != NULL);
+    ASSERT_TRUE(strstr(text, "ack=accepted") != NULL);
+    ASSERT_TRUE(strstr(text, "remote=running") != NULL);
     ASSERT_TRUE(strstr(text, "steps=2/2") != NULL);
 }
 
@@ -500,6 +517,47 @@ TEST(remote_report_active_execution_stays_pending) {
     ASSERT_TRUE(report.handle_terminal == 0u);
 }
 
+TEST(remote_report_queued_ack_stays_pending_without_handle) {
+    asx_spawn_request req;
+    asx_spawn_ack ack;
+    asx_remote_cap cap;
+    asx_idempotency_key key;
+    asx_remote_report report;
+    char text[ASX_REMOTE_REPORT_TEXT_SIZE];
+
+    asx_remote_cap_init(&cap, 6, ASX_REMOTE_CAP_SPAWN);
+    asx_idempotency_key_init(&key, 54321, 7);
+    asx_spawn_request_init(&req, 66, cap, key);
+    asx_spawn_ack_queued(&ack, 66);
+
+    asx_remote_report_init(&report, &req, &ack, NULL, NULL, NULL, NULL, 0);
+
+    ASSERT_TRUE(report.ack_present != 0u);
+    ASSERT_TRUE(report.handle_present == 0u);
+    ASSERT_EQ(report.ack_status, ASX_SPAWN_ACK_QUEUED);
+    ASSERT_EQ(report.final_status, ASX_E_PENDING);
+    ASSERT_EQ(asx_remote_report_format(&report, text, sizeof(text)), ASX_OK);
+    ASSERT_TRUE(strstr(text, "ack=queued") != NULL);
+    ASSERT_TRUE(strstr(text, "handle=na") != NULL);
+    ASSERT_TRUE(strstr(text, "remote=na") != NULL);
+}
+
+TEST(remote_report_absent_components_render_as_na) {
+    asx_remote_report report;
+    char text[ASX_REMOTE_REPORT_TEXT_SIZE];
+
+    memset(&report, 0, sizeof(report));
+    report.request_id = 7u;
+    report.final_status = ASX_E_PENDING;
+
+    ASSERT_EQ(asx_remote_report_format(&report, text, sizeof(text)), ASX_OK);
+    ASSERT_TRUE(strstr(text, "handle=na") != NULL);
+    ASSERT_TRUE(strstr(text, "ack=na") != NULL);
+    ASSERT_TRUE(strstr(text, "remote=na") != NULL);
+    ASSERT_TRUE(strstr(text, "saga=na") != NULL);
+    ASSERT_TRUE(strstr(text, "lease=na") != NULL);
+}
+
 /* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
@@ -547,6 +605,7 @@ int main(void) {
     RUN_TEST(spawn_request_init);
     RUN_TEST(spawn_ack_accepted);
     RUN_TEST(spawn_ack_rejected);
+    RUN_TEST(spawn_ack_queued);
     RUN_TEST(spawn_ack_helpers_clear_stale_fields);
 
     /* Operator report */
@@ -555,6 +614,8 @@ int main(void) {
     RUN_TEST(remote_report_init_allows_null_report);
     RUN_TEST(remote_report_rejected_request_is_not_reported_as_success);
     RUN_TEST(remote_report_active_execution_stays_pending);
+    RUN_TEST(remote_report_queued_ack_stays_pending_without_handle);
+    RUN_TEST(remote_report_absent_components_render_as_na);
 
     TEST_REPORT();
     return test_failures;

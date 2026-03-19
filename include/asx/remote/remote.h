@@ -337,6 +337,10 @@ typedef struct {
     uint32_t completed_steps;
     uint32_t total_steps;
     uint32_t reconnect_like_attempts;
+    uint8_t ack_present;
+    uint8_t handle_present;
+    uint8_t saga_present;
+    uint8_t lease_present;
     uint8_t idempotency_committed;
     uint8_t handle_terminal;
     uint8_t lease_active;
@@ -352,6 +356,9 @@ ASX_API void asx_spawn_ack_accepted(asx_spawn_ack *ack, uint64_t request_id, uin
 /* Create a rejection acknowledgment. */
 ASX_API void asx_spawn_ack_rejected(asx_spawn_ack *ack, uint64_t request_id,
                                     asx_spawn_reject_reason reason);
+
+/* Create a queued acknowledgment when execution has been accepted for later start. */
+ASX_API void asx_spawn_ack_queued(asx_spawn_ack *ack, uint64_t request_id);
 
 /* Build an operator-facing remote execution report from current primitive state. */
 ASX_API void asx_remote_report_init(asx_remote_report *report, const asx_spawn_request *req,
