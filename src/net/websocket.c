@@ -68,10 +68,12 @@ asx_status asx_ws_frame_set_payload(asx_ws_frame *frame, asx_ws_opcode opcode,
                                      const void *data, uint32_t len) {
     if (frame == NULL) return ASX_E_INVALID_ARGUMENT;
     if (len > ASX_WS_MAX_PAYLOAD) return ASX_E_BUFFER_TOO_SMALL;
+    if (len > 0u && data == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(frame->payload, 0, sizeof(frame->payload));
     frame->opcode = opcode;
     frame->payload_len = len;
     frame->fin = 1u;
-    if (len > 0u && data != NULL) memcpy(frame->payload, data, len);
+    if (len > 0u) memcpy(frame->payload, data, len);
     return ASX_OK;
 }
 

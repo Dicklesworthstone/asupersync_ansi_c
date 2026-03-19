@@ -221,6 +221,14 @@ TEST(body_empty) {
     ASSERT_EQ(asx_http_body_len(&body), 0u);
 }
 
+TEST(body_rejects_null_nonempty_payload) {
+    asx_http_body body;
+
+    asx_http_body_init(&body);
+    ASSERT_EQ(asx_http_body_set_bytes(&body, NULL, 1u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_TRUE(asx_http_body_is_empty(&body));
+}
+
 /* Request/response tests */
 
 TEST(request_init) {
@@ -441,6 +449,38 @@ TEST(multipart_parse_extracts_parts) {
     ASSERT_TRUE(memcmp(form.parts[1].data, "hello world", 11u) == 0);
 }
 
+TEST(multipart_parse_preserves_binary_file_payload) {
+    asx_http_request req;
+    asx_http_multipart_form form;
+    uint8_t body[] = {
+        '-', '-', 'B', 'O', 'U', 'N', 'D', '\r', '\n',
+        'C', 'o', 'n', 't', 'e', 'n', 't', '-', 'D', 'i', 's', 'p', 'o', 's', 'i', 't', 'i',
+        'o', 'n', ':', ' ', 'f', 'o', 'r', 'm', '-', 'd', 'a', 't', 'a', ';', ' ', 'n', 'a',
+        'm', 'e', '=', '"', 'u', 'p', 'l', 'o', 'a', 'd', '"', ';', ' ', 'f', 'i', 'l', 'e',
+        'n', 'a', 'm', 'e', '=', '"', 'b', 'i', 'n', '.', 'd', 'a', 't', '"', '\r', '\n',
+        'C', 'o', 'n', 't', 'e', 'n', 't', '-', 'T', 'y', 'p', 'e', ':', ' ', 'a', 'p', 'p',
+        'l', 'i', 'c', 'a', 't', 'i', 'o', 'n', '/', 'o', 'c', 't', 'e', 't', '-', 's', 't',
+        'r', 'e', 'a', 'm', '\r', '\n', '\r', '\n',
+        'A', 0x00, 'B', '\r', '\n',
+        '-', '-', 'B', 'O', 'U', 'N', 'D', '-', '-', '\r', '\n'
+    };
+
+    asx_http_request_init(&req, ASX_HTTP_POST, "/upload");
+    ASSERT_EQ(asx_http_headers_add(&req.headers, "Content-Type",
+                                   "multipart/form-data; boundary=BOUND"),
+              ASX_OK);
+    ASSERT_EQ(asx_http_body_set_bytes(&req.body, body, (uint32_t)sizeof(body)), ASX_OK);
+
+    ASSERT_EQ(asx_http_parse_multipart(&req, &form), ASX_OK);
+    ASSERT_EQ(form.count, 1u);
+    ASSERT_STR_EQ(form.parts[0].name, "upload");
+    ASSERT_STR_EQ(form.parts[0].filename, "bin.dat");
+    ASSERT_EQ(form.parts[0].data_len, 3u);
+    ASSERT_EQ(form.parts[0].data[0], 'A');
+    ASSERT_EQ(form.parts[0].data[1], 0x00u);
+    ASSERT_EQ(form.parts[0].data[2], 'B');
+}
+
 /* Pool tests */
 
 TEST(pool_acquire_release) {
@@ -537,6 +577,7 @@ int main(void) {
     /* Body */
     RUN_TEST(body_set_bytes);
     RUN_TEST(body_empty);
+    RUN_TEST(body_rejects_null_nonempty_payload);
 
     /* Request/response */
     RUN_TEST(request_init);
@@ -552,6 +593,7 @@ int main(void) {
     RUN_TEST(static_file_serving_and_traversal_rejection);
     RUN_TEST(sse_response_builder);
     RUN_TEST(multipart_parse_extracts_parts);
+    RUN_TEST(multipart_parse_preserves_binary_file_payload);
 
     /* Pool */
     RUN_TEST(pool_acquire_release);

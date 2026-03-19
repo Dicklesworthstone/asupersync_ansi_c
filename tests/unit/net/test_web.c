@@ -224,6 +224,20 @@ TEST(session_set_data) {
     ASSERT_TRUE(memcmp(s->data, "payload", 7) == 0);
 }
 
+TEST(session_set_data_rejects_null_nonempty_payload) {
+    asx_web_session_store store;
+    char id[ASX_WEB_SESSION_ID_LEN + 1];
+    asx_web_session *s;
+
+    asx_web_session_store_init(&store);
+    asx_web_session_create(&store, id, sizeof(id));
+    s = asx_web_session_get(&store, id);
+    ASSERT_TRUE(s != NULL);
+
+    ASSERT_EQ(asx_web_session_set_data(s, NULL, 1u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(s->data_len, 0u);
+}
+
 TEST(session_destroy) {
     asx_web_session_store store;
     char id[ASX_WEB_SESSION_ID_LEN + 1];
@@ -266,6 +280,18 @@ TEST(sse_push_and_poll) {
     ASSERT_EQ(evt.id, 2u);
 
     ASSERT_EQ(asx_web_sse_poll(&stream, &evt), ASX_E_PENDING);
+}
+
+TEST(sse_push_rejects_overlong_event_name) {
+    asx_web_sse_stream stream;
+    char long_name[ASX_WEB_SSE_EVENT_NAME_MAX + 4u];
+
+    memset(long_name, 'x', sizeof(long_name) - 1u);
+    long_name[sizeof(long_name) - 1u] = '\0';
+
+    asx_web_sse_init(&stream);
+    ASSERT_EQ(asx_web_sse_push(&stream, long_name, "data"), ASX_E_BUFFER_TOO_SMALL);
+    ASSERT_EQ(stream.count, 0u);
 }
 
 TEST(sse_close_rejects_push) {
@@ -467,11 +493,13 @@ int main(void) {
     /* Session */
     RUN_TEST(session_create_and_lookup);
     RUN_TEST(session_set_data);
+    RUN_TEST(session_set_data_rejects_null_nonempty_payload);
     RUN_TEST(session_destroy);
     RUN_TEST(session_destroy_missing);
 
     /* SSE */
     RUN_TEST(sse_push_and_poll);
+    RUN_TEST(sse_push_rejects_overlong_event_name);
     RUN_TEST(sse_close_rejects_push);
 
     /* Multipart */

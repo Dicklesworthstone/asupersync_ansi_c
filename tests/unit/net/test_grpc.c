@@ -61,6 +61,12 @@ TEST(grpc_message_set_and_read) {
 
 TEST(grpc_message_null_args) {
     ASSERT_EQ(asx_grpc_message_set(NULL, "x", 1), ASX_E_INVALID_ARGUMENT);
+    {
+        asx_grpc_message msg;
+        asx_grpc_message_init(&msg);
+        ASSERT_EQ(asx_grpc_message_set(&msg, NULL, 1u), ASX_E_INVALID_ARGUMENT);
+        ASSERT_EQ(msg.len, 0u);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -101,6 +107,22 @@ TEST(grpc_service_null_args) {
     asx_grpc_service_init(&svc, "Svc");
     ASSERT_EQ(asx_grpc_service_add_unary(&svc, NULL, echo_handler, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_grpc_service_add_unary(&svc, "M", NULL, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(grpc_service_init_truncates_long_name) {
+    asx_grpc_service svc;
+    char long_name[ASX_GRPC_SERVICE_NAME_MAX + 8u];
+    uint32_t i;
+
+    for (i = 0u; i < sizeof(long_name) - 1u; i++) {
+        long_name[i] = 'S';
+    }
+    long_name[sizeof(long_name) - 1u] = '\0';
+
+    asx_grpc_service_init(&svc, long_name);
+    ASSERT_EQ(strlen(svc.name), ASX_GRPC_SERVICE_NAME_MAX - 1u);
+    ASSERT_EQ(svc.name[ASX_GRPC_SERVICE_NAME_MAX - 1u], '\0');
+    ASSERT_EQ(svc.name[0], 'S');
 }
 
 /* ------------------------------------------------------------------ */
@@ -202,6 +224,22 @@ TEST(grpc_channel_null_server) {
     asx_grpc_message_init(&resp);
     ASSERT_EQ(asx_grpc_channel_call(&ch, "/Svc/M", &req, &resp, NULL, &code),
               ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(grpc_channel_init_truncates_long_target) {
+    asx_grpc_channel ch;
+    char target[ASX_GRPC_SERVICE_NAME_MAX + 16u];
+    uint32_t i;
+
+    for (i = 0u; i < sizeof(target) - 1u; i++) {
+        target[i] = 't';
+    }
+    target[sizeof(target) - 1u] = '\0';
+
+    asx_grpc_channel_init(&ch, target, NULL);
+    ASSERT_EQ(strlen(ch.target), ASX_GRPC_SERVICE_NAME_MAX - 1u);
+    ASSERT_EQ(ch.target[ASX_GRPC_SERVICE_NAME_MAX - 1u], '\0');
+    ASSERT_EQ(ch.target[0], 't');
 }
 
 /* ------------------------------------------------------------------ */
@@ -329,6 +367,7 @@ int main(void) {
     /* Service */
     RUN_TEST(grpc_service_add_method);
     RUN_TEST(grpc_service_null_args);
+    RUN_TEST(grpc_service_init_truncates_long_name);
 
     /* Server */
     RUN_TEST(grpc_server_dispatch_unary);
@@ -338,6 +377,7 @@ int main(void) {
     /* Client channel */
     RUN_TEST(grpc_channel_call);
     RUN_TEST(grpc_channel_null_server);
+    RUN_TEST(grpc_channel_init_truncates_long_target);
 
     /* Health */
     RUN_TEST(grpc_health_set_and_check);

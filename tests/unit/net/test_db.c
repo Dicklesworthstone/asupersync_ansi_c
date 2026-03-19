@@ -30,6 +30,23 @@ TEST(db_connect_and_close) {
     ASSERT_EQ(conn->state, ASX_DB_CONN_CLOSED);
 }
 
+TEST(db_connect_rejects_oversized_dsn) {
+    asx_db_pool pool;
+    asx_db_conn *conn = NULL;
+    asx_db_conn *ok_conn = NULL;
+    char dsn[ASX_DB_DSN_MAX + 8u];
+
+    memset(dsn, 'a', sizeof(dsn) - 1u);
+    dsn[sizeof(dsn) - 1u] = '\0';
+
+    asx_db_pool_init(&pool);
+    ASSERT_EQ(asx_db_connect(&pool, dsn, &conn), ASX_E_BUFFER_TOO_SMALL);
+    ASSERT_TRUE(conn == NULL);
+    ASSERT_EQ(asx_db_connect(&pool, "mem://ok", &ok_conn), ASX_OK);
+    ASSERT_TRUE(ok_conn != NULL);
+    ASSERT_EQ(asx_db_close(ok_conn), ASX_OK);
+}
+
 TEST(db_connect_exhaustion) {
     asx_db_pool pool;
     asx_db_conn *conns[ASX_DB_MAX_CONNECTIONS + 1];
@@ -142,6 +159,7 @@ TEST(db_column_index) {
 
 TEST(db_value_types) {
     asx_db_value v;
+    char long_text[ASX_DB_CELL_MAX + 8u];
 
     v = asx_db_value_null();
     ASSERT_EQ(v.type, ASX_DB_TYPE_NULL);
@@ -153,6 +171,15 @@ TEST(db_value_types) {
     v = asx_db_value_text("hello");
     ASSERT_EQ(v.type, ASX_DB_TYPE_TEXT);
     ASSERT_STR_EQ(v.text_val, "hello");
+    ASSERT_EQ(v.text_len, 5u);
+
+    memset(long_text, 'z', sizeof(long_text) - 1u);
+    long_text[sizeof(long_text) - 1u] = '\0';
+    v = asx_db_value_text(long_text);
+    ASSERT_EQ(v.type, ASX_DB_TYPE_TEXT);
+    ASSERT_EQ(v.text_len, ASX_DB_CELL_MAX - 1u);
+    ASSERT_EQ(v.text_val[ASX_DB_CELL_MAX - 1u], '\0');
+    ASSERT_EQ(v.text_val[0], 'z');
 
     v = asx_db_value_float(3.14);
     ASSERT_EQ(v.type, ASX_DB_TYPE_FLOAT);
@@ -175,6 +202,7 @@ int main(void) {
     fprintf(stderr, "=== db tests ===\n");
     RUN_TEST(db_pool_init);
     RUN_TEST(db_connect_and_close);
+    RUN_TEST(db_connect_rejects_oversized_dsn);
     RUN_TEST(db_connect_exhaustion);
     RUN_TEST(db_execute_query);
     RUN_TEST(db_transaction_lifecycle);

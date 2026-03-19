@@ -204,6 +204,7 @@ asx_status asx_quic_stream_poll_read(asx_quic_stream stream, asx_buf_mut *dst,
         *bytes_read = 0u;
         return ASX_E_PENDING;
     }
+    if (asx_buf_mut_writable(dst) == 0u) return ASX_E_BUFFER_TOO_SMALL;
 
     readable = asx_buf_mut_readable(&s->inbox);
     to_copy = readable.len;
@@ -225,6 +226,7 @@ asx_status asx_quic_stream_poll_write(asx_quic_stream stream, const asx_buf *src
     asx_status st;
 
     if (src == NULL || bytes_written == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (src->len > 0u && src->ptr == NULL) return ASX_E_INVALID_ARGUMENT;
     s = quic_stream_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     /* In deterministic mode, writes go to own inbox for self-test */
@@ -273,6 +275,7 @@ asx_status asx_quic_send_datagram(asx_quic_conn conn, const asx_buf *src) {
     if (c == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!c->config.enable_datagrams) return ASX_E_INVALID_STATE;
     if (src->len > ASX_QUIC_MAX_DGRAM) return ASX_E_BUFFER_TOO_SMALL;
+    if (src->len > 0u && src->ptr == NULL) return ASX_E_INVALID_ARGUMENT;
     if (c->dgram_count >= QUIC_DGRAM_QUEUE_DEPTH) return ASX_E_WOULD_BLOCK;
 
     tail = (c->dgram_head + c->dgram_count) % QUIC_DGRAM_QUEUE_DEPTH;

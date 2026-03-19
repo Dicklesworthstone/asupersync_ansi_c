@@ -117,6 +117,59 @@ TEST(quic_stream_reopen_after_close) {
     asx_quic_conn_close(conn, 0);
 }
 
+TEST(quic_stream_write_rejects_null_nonempty_payload) {
+    asx_quic_conn conn;
+    asx_quic_config cfg;
+    asx_quic_stream stream;
+    asx_buf src;
+    uint32_t written = 99u;
+
+    asx_quic_reset();
+    asx_quic_config_init(&cfg);
+    ASSERT_EQ(asx_quic_connect(&conn, &cfg), ASX_OK);
+    ASSERT_EQ(asx_quic_stream_open(&stream, conn, ASX_QUIC_STREAM_BIDI), ASX_OK);
+
+    src.ptr = NULL;
+    src.len = 1u;
+    ASSERT_EQ(asx_quic_stream_poll_write(stream, &src, &written), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(written, 99u);
+
+    asx_quic_stream_close(stream);
+    asx_quic_conn_close(conn, 0);
+}
+
+TEST(quic_stream_read_rejects_full_destination) {
+    asx_quic_conn conn;
+    asx_quic_config cfg;
+    asx_quic_stream stream;
+    asx_buf src;
+    asx_buf_mut dst;
+    uint32_t written;
+    uint32_t read_n = 77u;
+
+    asx_quic_reset();
+    asx_quic_config_init(&cfg);
+    ASSERT_EQ(asx_quic_connect(&conn, &cfg), ASX_OK);
+    ASSERT_EQ(asx_quic_stream_open(&stream, conn, ASX_QUIC_STREAM_BIDI), ASX_OK);
+
+    src = asx_buf_from("x", 1u);
+    ASSERT_EQ(asx_quic_stream_poll_write(stream, &src, &written), ASX_OK);
+    ASSERT_EQ(written, 1u);
+
+    asx_buf_mut_init(&dst);
+    ASSERT_EQ(asx_buf_mut_put(&dst, dst.data, dst.capacity), ASX_OK);
+    ASSERT_EQ(asx_quic_stream_poll_read(stream, &dst, &read_n), ASX_E_BUFFER_TOO_SMALL);
+    ASSERT_EQ(read_n, 77u);
+
+    asx_buf_mut_clear(&dst);
+    ASSERT_EQ(asx_quic_stream_poll_read(stream, &dst, &read_n), ASX_OK);
+    ASSERT_EQ(read_n, 1u);
+    ASSERT_EQ(dst.data[0], (uint8_t)'x');
+
+    asx_quic_stream_close(stream);
+    asx_quic_conn_close(conn, 0);
+}
+
 TEST(quic_conn_close_cleans_streams) {
     asx_quic_conn conn;
     asx_quic_config cfg;
@@ -182,6 +235,23 @@ TEST(quic_datagram_disabled) {
     asx_quic_conn_close(conn, 0);
 }
 
+TEST(quic_datagram_rejects_null_nonempty_payload) {
+    asx_quic_conn conn;
+    asx_quic_config cfg;
+    asx_buf src;
+
+    asx_quic_reset();
+    asx_quic_config_init(&cfg);
+    cfg.enable_datagrams = 1u;
+    ASSERT_EQ(asx_quic_connect(&conn, &cfg), ASX_OK);
+
+    src.ptr = NULL;
+    src.len = 1u;
+    ASSERT_EQ(asx_quic_send_datagram(conn, &src), ASX_E_INVALID_ARGUMENT);
+
+    asx_quic_conn_close(conn, 0);
+}
+
 TEST(quic_connection_exhaustion) {
     asx_quic_conn conns[ASX_MAX_QUIC_CONNECTIONS + 1];
     asx_quic_config cfg;
@@ -214,9 +284,12 @@ int main(void) {
     RUN_TEST(quic_stream_open_and_write_read);
     RUN_TEST(quic_stream_limit);
     RUN_TEST(quic_stream_reopen_after_close);
+    RUN_TEST(quic_stream_write_rejects_null_nonempty_payload);
+    RUN_TEST(quic_stream_read_rejects_full_destination);
     RUN_TEST(quic_conn_close_cleans_streams);
     RUN_TEST(quic_datagram_send_recv);
     RUN_TEST(quic_datagram_disabled);
+    RUN_TEST(quic_datagram_rejects_null_nonempty_payload);
     RUN_TEST(quic_connection_exhaustion);
     RUN_TEST(quic_null_args);
     TEST_REPORT();

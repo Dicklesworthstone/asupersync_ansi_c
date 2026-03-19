@@ -38,6 +38,8 @@ asx_status asx_db_connect(asx_db_pool *pool, const char *dsn, asx_db_conn **out)
 
     if (pool == NULL || dsn == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
     *out = NULL;
+    len = db_bounded_strlen(dsn, ASX_DB_DSN_MAX);
+    if (len >= ASX_DB_DSN_MAX) return ASX_E_BUFFER_TOO_SMALL;
 
     for (i = 0u; i < ASX_DB_MAX_CONNECTIONS; i++) {
         if (!pool->connections[i].alive) break;
@@ -51,8 +53,7 @@ asx_status asx_db_connect(asx_db_pool *pool, const char *dsn, asx_db_conn **out)
     c->state = ASX_DB_CONN_ACTIVE;
     c->alive = 1u;
 
-    len = db_bounded_strlen(dsn, ASX_DB_DSN_MAX);
-    if (len < ASX_DB_DSN_MAX) memcpy(c->dsn, dsn, len + 1u);
+    memcpy(c->dsn, dsn, len + 1u);
 
     *out = c;
     return ASX_OK;
@@ -173,10 +174,10 @@ asx_db_value asx_db_value_text(const char *text) {
     v.type = ASX_DB_TYPE_TEXT;
     if (text != NULL) {
         len = db_bounded_strlen(text, ASX_DB_CELL_MAX);
-        if (len < ASX_DB_CELL_MAX) {
-            memcpy(v.text_val, text, len + 1u);
-            v.text_len = (uint32_t)len;
-        }
+        if (len >= ASX_DB_CELL_MAX) len = ASX_DB_CELL_MAX - 1u;
+        memcpy(v.text_val, text, len);
+        v.text_val[len] = '\0';
+        v.text_len = (uint32_t)len;
     }
     return v;
 }

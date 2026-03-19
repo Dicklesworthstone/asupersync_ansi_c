@@ -56,8 +56,10 @@ void asx_grpc_message_init(asx_grpc_message *msg) {
 asx_status asx_grpc_message_set(asx_grpc_message *msg, const void *data, uint32_t len) {
     if (msg == NULL) return ASX_E_INVALID_ARGUMENT;
     if (len > ASX_GRPC_MSG_MAX) return ASX_E_BUFFER_TOO_SMALL;
+    if (len > 0u && data == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(msg->data, 0, sizeof(msg->data));
     msg->len = len;
-    if (len > 0u && data != NULL) memcpy(msg->data, data, len);
+    if (len > 0u) memcpy(msg->data, data, len);
     return ASX_OK;
 }
 
@@ -109,7 +111,9 @@ void asx_grpc_service_init(asx_grpc_service *svc, const char *name) {
     memset(svc, 0, sizeof(*svc));
     if (name != NULL) {
         len = grpc_bounded_strlen(name, ASX_GRPC_SERVICE_NAME_MAX);
-        if (len < ASX_GRPC_SERVICE_NAME_MAX) memcpy(svc->name, name, len + 1u);
+        if (len >= ASX_GRPC_SERVICE_NAME_MAX) len = ASX_GRPC_SERVICE_NAME_MAX - 1u;
+        memcpy(svc->name, name, len);
+        svc->name[len] = '\0';
     }
 }
 
@@ -202,7 +206,9 @@ void asx_grpc_channel_init(asx_grpc_channel *ch, const char *target, asx_grpc_se
     ch->server = server;
     if (target != NULL) {
         len = grpc_bounded_strlen(target, ASX_GRPC_SERVICE_NAME_MAX);
-        if (len < ASX_GRPC_SERVICE_NAME_MAX) memcpy(ch->target, target, len + 1u);
+        if (len >= ASX_GRPC_SERVICE_NAME_MAX) len = ASX_GRPC_SERVICE_NAME_MAX - 1u;
+        memcpy(ch->target, target, len);
+        ch->target[len] = '\0';
     }
 }
 

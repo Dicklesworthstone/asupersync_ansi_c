@@ -25,6 +25,14 @@ TEST(ws_frame_set_payload) {
     ASSERT_TRUE(memcmp(frame.payload, "hello-ws", 8) == 0);
 }
 
+TEST(ws_frame_set_payload_rejects_null_nonempty) {
+    asx_ws_frame frame;
+    asx_ws_frame_init(&frame);
+    ASSERT_EQ(asx_ws_frame_set_payload(&frame, ASX_WS_OPCODE_BINARY, NULL, 1u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(frame.payload_len, 0u);
+}
+
 TEST(ws_frame_close_encodes_code) {
     asx_ws_frame frame;
     ASSERT_EQ(asx_ws_frame_close(&frame, 1000), ASX_OK);
@@ -177,6 +185,7 @@ int main(void) {
     fprintf(stderr, "=== websocket tests ===\n");
     RUN_TEST(ws_frame_init_defaults);
     RUN_TEST(ws_frame_set_payload);
+    RUN_TEST(ws_frame_set_payload_rejects_null_nonempty);
     RUN_TEST(ws_frame_close_encodes_code);
     RUN_TEST(ws_connect_and_state);
     RUN_TEST(ws_accept_server_role);

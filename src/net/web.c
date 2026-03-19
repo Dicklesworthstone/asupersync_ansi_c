@@ -324,8 +324,10 @@ asx_web_session *asx_web_session_get(asx_web_session_store *store, const char *i
 asx_status asx_web_session_set_data(asx_web_session *session, const void *data, uint32_t len) {
     if (session == NULL) return ASX_E_INVALID_ARGUMENT;
     if (len > ASX_WEB_SESSION_MAX_DATA) return ASX_E_BUFFER_TOO_SMALL;
+    if (len > 0u && data == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(session->data, 0, sizeof(session->data));
     session->data_len = len;
-    if (len > 0u && data != NULL) memcpy(session->data, data, len);
+    if (len > 0u) memcpy(session->data, data, len);
     return ASX_OK;
 }
 
@@ -371,9 +373,8 @@ asx_status asx_web_sse_push(asx_web_sse_stream *stream, const char *event_name,
 
     if (event_name != NULL) {
         elen = web_bounded_strlen(event_name, ASX_WEB_SSE_EVENT_NAME_MAX);
-        if (elen < ASX_WEB_SSE_EVENT_NAME_MAX) {
-            memcpy(evt->event, event_name, elen + 1u);
-        }
+        if (elen >= ASX_WEB_SSE_EVENT_NAME_MAX) return ASX_E_BUFFER_TOO_SMALL;
+        memcpy(evt->event, event_name, elen + 1u);
     }
     memcpy(evt->data, data, dlen + 1u);
     evt->id = stream->next_id++;
@@ -451,8 +452,9 @@ asx_status asx_web_multipart_add_file(asx_web_multipart *mp, const char *name,
     memcpy(p->name, name, nlen + 1u);
     memcpy(p->filename, filename, flen + 1u);
     if (content_type != NULL) {
-        clen = web_bounded_strlen(content_type, ASX_HTTP_HEADER_NAME_MAX);
-        if (clen < ASX_HTTP_HEADER_NAME_MAX) memcpy(p->content_type, content_type, clen + 1u);
+        clen = web_bounded_strlen(content_type, ASX_HTTP_HEADER_VALUE_MAX);
+        if (clen >= ASX_HTTP_HEADER_VALUE_MAX) return ASX_E_BUFFER_TOO_SMALL;
+        memcpy(p->content_type, content_type, clen + 1u);
     }
     p->data_len = len;
     p->is_file = 1u;
@@ -573,9 +575,9 @@ asx_status asx_web_static_add(asx_web_static_files *sf, const char *path,
     if (sf->count >= ASX_WEB_MAX_STATIC_FILES) return ASX_E_RESOURCE_EXHAUSTED;
 
     plen = web_bounded_strlen(path, ASX_WEB_PATH_MAX);
-    clen = web_bounded_strlen(content_type, ASX_HTTP_HEADER_NAME_MAX);
+    clen = web_bounded_strlen(content_type, ASX_HTTP_HEADER_VALUE_MAX);
     if (plen == 0u || plen >= ASX_WEB_PATH_MAX) return ASX_E_INVALID_ARGUMENT;
-    if (clen == 0u || clen >= ASX_HTTP_HEADER_NAME_MAX) return ASX_E_INVALID_ARGUMENT;
+    if (clen == 0u || clen >= ASX_HTTP_HEADER_VALUE_MAX) return ASX_E_INVALID_ARGUMENT;
 
     e = &sf->files[sf->count];
     memset(e, 0, sizeof(*e));

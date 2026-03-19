@@ -137,6 +137,31 @@ static asx_status http_copy_span(char *dst, uint32_t dst_size, const char *start
     return ASX_OK;
 }
 
+static const uint8_t *http_memmem(const uint8_t *haystack, size_t haystack_len,
+                                  const char *needle, size_t needle_len) {
+    size_t i;
+
+    if (haystack == NULL || needle == NULL) return NULL;
+    if (needle_len == 0u) return haystack;
+    if (haystack_len < needle_len) return NULL;
+
+    for (i = 0u; i + needle_len <= haystack_len; i++) {
+        if (memcmp(haystack + i, needle, needle_len) == 0) return haystack + i;
+    }
+    return NULL;
+}
+
+static const uint8_t *http_memchr_byte(const uint8_t *haystack, size_t haystack_len,
+                                       uint8_t needle) {
+    size_t i;
+
+    if (haystack == NULL) return NULL;
+    for (i = 0u; i < haystack_len; i++) {
+        if (haystack[i] == needle) return haystack + i;
+    }
+    return NULL;
+}
+
 static const char *http_content_type_for_path(const char *path) {
     const char *dot;
 
@@ -359,10 +384,12 @@ void asx_http_body_init(asx_http_body *body) {
 asx_status asx_http_body_set_bytes(asx_http_body *body, const void *data, uint32_t len) {
     if (body == NULL) return ASX_E_INVALID_ARGUMENT;
     if (len > ASX_HTTP_BODY_MAX) return ASX_E_BUFFER_TOO_SMALL;
+    if (len > 0u && data == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(body->data, 0, sizeof(body->data));
     body->kind = ASX_HTTP_BODY_BYTES;
     body->len = len;
     body->content_length = len;
-    if (len > 0u && data != NULL) memcpy(body->data, data, len);
+    if (len > 0u) memcpy(body->data, data, len);
     return ASX_OK;
 }
 
@@ -663,9 +690,11 @@ asx_status asx_http_parse_multipart(const asx_http_request *req, asx_http_multip
     const char *boundary_pos;
     char boundary[ASX_HTTP_HEADER_VALUE_MAX];
     char marker[ASX_HTTP_HEADER_VALUE_MAX];
-    const char *cursor;
-    const char *body;
-    size_t body_len;
+    const uint8_t *cursor;
+    const uint8_t *body;
+    const uint8_t *body_end;
+    size_t marker_len;
+    size_t boundary_len;
 
     if (req == NULL || out_form == NULL) return ASX_E_INVALID_ARGUMENT;
     memset(out_form, 0, sizeof(*out_form));
@@ -675,70 +704,91 @@ asx_status asx_http_parse_multipart(const asx_http_request *req, asx_http_multip
     }
     boundary_pos = strstr(content_type, boundary_key);
     if (boundary_pos == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (http_copy_str(boundary, sizeof(boundary), boundary_pos + strlen(boundary_key)) != ASX_OK) {
+    boundary_len = http_copy_until(boundary, (uint32_t)sizeof(boundary),
+                                   boundary_pos + strlen(boundary_key), ';', '\r');
+    if (boundary_len == 0u || boundary_len >= sizeof(boundary)) {
         return ASX_E_BUFFER_TOO_SMALL;
     }
     if (snprintf(marker, sizeof(marker), "--%s", boundary) >= (int)sizeof(marker)) {
         return ASX_E_BUFFER_TOO_SMALL;
     }
+    marker_len = strlen(marker);
 
-    body = (const char *)req->body.data;
-    body_len = req->body.len;
+    body = req->body.data;
+    body_end = body + req->body.len;
     cursor = body;
 
-    while ((size_t)(cursor - body) < body_len) {
-        const char *part_start = strstr(cursor, marker);
-        const char *header_start;
-        const char *content_start;
-        const char *part_end;
+    while (cursor < body_end) {
+        const uint8_t *part_start = http_memmem(cursor, (size_t)(body_end - cursor), marker,
+                                                marker_len);
+        const uint8_t *header_start;
+        const uint8_t *content_start;
+        const uint8_t *content_scan_end;
+        const uint8_t *part_end;
         asx_http_multipart_part *part;
-        const char *disposition;
-        const char *name_pos;
-        const char *filename_pos;
-        const char *type_pos;
+        const uint8_t *disposition;
+        const uint8_t *name_pos;
+        const uint8_t *filename_pos;
+        const uint8_t *type_pos;
 
         if (part_start == NULL) break;
-        part_start += strlen(marker);
-        if (part_start[0] == '-' && part_start[1] == '-') break;
-        if (part_start[0] == '\r' && part_start[1] == '\n') part_start += 2;
+        part_start += marker_len;
+        if ((size_t)(body_end - part_start) >= 2u && part_start[0] == '-' && part_start[1] == '-') {
+            break;
+        }
+        if ((size_t)(body_end - part_start) >= 2u && part_start[0] == '\r' &&
+            part_start[1] == '\n') {
+            part_start += 2;
+        }
         header_start = part_start;
-        content_start = strstr(header_start, "\r\n\r\n");
+        content_start = http_memmem(header_start, (size_t)(body_end - header_start), "\r\n\r\n", 4u);
         if (content_start == NULL) return ASX_E_INVALID_ARGUMENT;
         content_start += 4;
-        part_end = strstr(content_start, marker);
+        part_end = http_memmem(content_start, (size_t)(body_end - content_start), marker,
+                               marker_len);
         if (part_end == NULL) return ASX_E_INVALID_ARGUMENT;
         if (out_form->count >= ASX_HTTP_MULTIPART_PARTS_MAX) return ASX_E_RESOURCE_EXHAUSTED;
 
         part = &out_form->parts[out_form->count];
         memset(part, 0, sizeof(*part));
-        disposition = strstr(header_start, "Content-Disposition:");
-        if (disposition == NULL || disposition > content_start) return ASX_E_INVALID_ARGUMENT;
-        name_pos = strstr(disposition, "name=\"");
-        if (name_pos == NULL || name_pos > content_start) return ASX_E_INVALID_ARGUMENT;
+        content_scan_end = content_start - 4;
+        disposition = http_memmem(header_start, (size_t)(content_scan_end - header_start),
+                                  "Content-Disposition:", 20u);
+        if (disposition == NULL) return ASX_E_INVALID_ARGUMENT;
+        name_pos = http_memmem(disposition, (size_t)(content_scan_end - disposition), "name=\"", 6u);
+        if (name_pos == NULL) return ASX_E_INVALID_ARGUMENT;
         name_pos += 6;
         {
-            const char *name_end = strchr(name_pos, '"');
-            if (name_end == NULL || name_end > content_start) return ASX_E_INVALID_ARGUMENT;
-            if (http_copy_span(part->name, sizeof(part->name), name_pos, name_end) != ASX_OK) {
+            const uint8_t *name_end =
+                http_memchr_byte(name_pos, (size_t)(content_scan_end - name_pos), '"');
+            if (name_end == NULL) return ASX_E_INVALID_ARGUMENT;
+            if (http_copy_span(part->name, sizeof(part->name), (const char *)name_pos,
+                               (const char *)name_end) != ASX_OK) {
                 return ASX_E_BUFFER_TOO_SMALL;
             }
         }
-        filename_pos = strstr(disposition, "filename=\"");
-        if (filename_pos != NULL && filename_pos < content_start) {
-            const char *filename_end;
+        filename_pos =
+            http_memmem(disposition, (size_t)(content_scan_end - disposition), "filename=\"", 10u);
+        if (filename_pos != NULL) {
+            const uint8_t *filename_end;
             filename_pos += 10;
-            filename_end = strchr(filename_pos, '"');
-            if (filename_end == NULL || filename_end > content_start) return ASX_E_INVALID_ARGUMENT;
-            if (http_copy_span(part->filename, sizeof(part->filename), filename_pos, filename_end) !=
+            filename_end =
+                http_memchr_byte(filename_pos, (size_t)(content_scan_end - filename_pos), '"');
+            if (filename_end == NULL) return ASX_E_INVALID_ARGUMENT;
+            if (http_copy_span(part->filename, sizeof(part->filename), (const char *)filename_pos,
+                               (const char *)filename_end) !=
                 ASX_OK) {
                 return ASX_E_BUFFER_TOO_SMALL;
             }
         }
-        type_pos = strstr(header_start, "Content-Type:");
-        if (type_pos != NULL && type_pos < content_start) {
-            const char *line_end = strstr(type_pos, "\r\n");
-            const char *value_start = type_pos + strlen("Content-Type:");
-            const char *value_end = (line_end != NULL && line_end < content_start) ? line_end : content_start;
+        type_pos = http_memmem(header_start, (size_t)(content_scan_end - header_start),
+                               "Content-Type:", 13u);
+        if (type_pos != NULL) {
+            const uint8_t *line_end =
+                http_memmem(type_pos, (size_t)(content_scan_end - type_pos), "\r\n", 2u);
+            const char *value_start = (const char *)(type_pos + 13u);
+            const char *value_end =
+                (line_end != NULL) ? (const char *)line_end : (const char *)content_scan_end;
             http_trim_ws_span(&value_start, &value_end);
             if (http_copy_span(part->content_type, sizeof(part->content_type), value_start,
                                value_end) != ASX_OK) {
