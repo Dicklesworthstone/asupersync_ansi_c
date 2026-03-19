@@ -75,6 +75,17 @@ TEST(work_item_failure) {
     ASSERT_TRUE(item.completed);
 }
 
+TEST(work_item_null_safety) {
+    asx_work_item item;
+    int value = 0;
+
+    asx_work_item_init(NULL, work_double, &value, &value);
+    asx_work_item_init(&item, NULL, &value, &value);
+    ASSERT_EQ(asx_work_item_execute(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_work_item_execute(&item), ASX_E_INVALID_ARGUMENT);
+    ASSERT_FALSE(item.completed);
+}
+
 /* ================================================================== */
 /* Work pool tests                                                     */
 /* ================================================================== */
@@ -124,6 +135,16 @@ TEST(pool_capacity_limit) {
     ASSERT_EQ(asx_work_pool_add(&pool, work_double, &val, &result), ASX_E_RESOURCE_EXHAUSTED);
 }
 
+TEST(pool_null_safety) {
+    asx_work_pool_init(NULL);
+    ASSERT_EQ(asx_work_pool_add(NULL, work_double, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_work_pool_add(&(asx_work_pool){0}, NULL, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_work_pool_execute_all(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_work_pool_completed(NULL), 0u);
+    ASSERT_EQ(asx_work_pool_failed(NULL), 0u);
+    ASSERT_EQ(asx_work_pool_count(NULL), 0u);
+}
+
 /* ================================================================== */
 /* Parallel map tests                                                  */
 /* ================================================================== */
@@ -147,6 +168,22 @@ TEST(parallel_map_empty) {
     asx_parallel_map_init(&state, map_triple, NULL, NULL, NULL, sizeof(int), sizeof(int), 0);
     ASSERT_EQ(asx_parallel_map_execute(&state), ASX_OK);
     ASSERT_EQ(asx_parallel_map_completed(&state), 0u);
+}
+
+TEST(parallel_map_null_safety) {
+    asx_parallel_map_state state;
+    int input = 1;
+    int output = 0;
+
+    asx_parallel_map_init(NULL, map_triple, NULL, &input, &output, sizeof(int), sizeof(int), 1);
+    ASSERT_EQ(asx_parallel_map_execute(NULL), ASX_E_INVALID_ARGUMENT);
+
+    asx_parallel_map_init(&state, NULL, NULL, &input, &output, sizeof(int), sizeof(int), 1);
+    ASSERT_EQ(asx_parallel_map_execute(&state), ASX_E_INVALID_ARGUMENT);
+
+    asx_parallel_map_init(&state, map_triple, NULL, NULL, &output, sizeof(int), sizeof(int), 1);
+    ASSERT_EQ(asx_parallel_map_execute(&state), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_parallel_map_completed(NULL), 0u);
 }
 
 /* ================================================================== */
@@ -179,6 +216,15 @@ TEST(scatter_gather_with_failure) {
 
     ASSERT_EQ(asx_scatter_gather_execute(&sg), ASX_E_DISCONNECTED);
     ASSERT_EQ(asx_scatter_gather_gathered(&sg), 2u);
+}
+
+TEST(scatter_gather_null_safety) {
+    asx_scatter_gather_init(NULL);
+    ASSERT_EQ(asx_scatter_gather_add(NULL, work_double, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_scatter_gather_add(&(asx_scatter_gather){0}, NULL, NULL, NULL),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_scatter_gather_execute(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_scatter_gather_gathered(NULL), 0u);
 }
 
 /* ================================================================== */
@@ -247,6 +293,30 @@ TEST(pipeline_capacity_limit) {
     ASSERT_EQ(asx_spork_pipeline_add_stage(&pipe, stage_add_ten, NULL), ASX_E_RESOURCE_EXHAUSTED);
 }
 
+TEST(pipeline_null_safety) {
+    asx_spork_pipeline pipe;
+    int input = 1;
+    int output = 0;
+    int scratch = 0;
+
+    asx_spork_pipeline_init(NULL);
+    ASSERT_EQ(asx_spork_pipeline_add_stage(NULL, stage_add_ten, NULL), ASX_E_INVALID_ARGUMENT);
+
+    asx_spork_pipeline_init(&pipe);
+    ASSERT_EQ(asx_spork_pipeline_add_stage(&pipe, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_spork_pipeline_execute(NULL, &input, &output, &scratch), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_spork_pipeline_execute(&pipe, &input, &output, &scratch), ASX_E_INVALID_ARGUMENT);
+
+    ASSERT_EQ(asx_spork_pipeline_add_stage(&pipe, stage_add_ten, NULL), ASX_OK);
+    ASSERT_EQ(asx_spork_pipeline_execute(&pipe, &input, NULL, &scratch), ASX_E_INVALID_ARGUMENT);
+
+    asx_spork_pipeline_init(&pipe);
+    ASSERT_EQ(asx_spork_pipeline_add_stage(&pipe, stage_add_ten, NULL), ASX_OK);
+    ASSERT_EQ(asx_spork_pipeline_add_stage(&pipe, stage_multiply_two, NULL), ASX_OK);
+    ASSERT_EQ(asx_spork_pipeline_execute(&pipe, &input, &output, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_spork_pipeline_stage_count(NULL), 0u);
+}
+
 /* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
@@ -257,19 +327,23 @@ int main(void) {
     /* Work item */
     RUN_TEST(work_item_execute);
     RUN_TEST(work_item_failure);
+    RUN_TEST(work_item_null_safety);
 
     /* Work pool */
     RUN_TEST(pool_execute_all_succeed);
     RUN_TEST(pool_execute_with_failure);
     RUN_TEST(pool_capacity_limit);
+    RUN_TEST(pool_null_safety);
 
     /* Parallel map */
     RUN_TEST(parallel_map_all_elements);
     RUN_TEST(parallel_map_empty);
+    RUN_TEST(parallel_map_null_safety);
 
     /* Scatter-gather */
     RUN_TEST(scatter_gather_all_succeed);
     RUN_TEST(scatter_gather_with_failure);
+    RUN_TEST(scatter_gather_null_safety);
 
     /* Pipeline */
     RUN_TEST(pipeline_two_stages);
@@ -277,6 +351,7 @@ int main(void) {
     RUN_TEST(pipeline_failure_stops);
     RUN_TEST(pipeline_stage_count);
     RUN_TEST(pipeline_capacity_limit);
+    RUN_TEST(pipeline_null_safety);
 
     TEST_REPORT();
     return test_failures;
