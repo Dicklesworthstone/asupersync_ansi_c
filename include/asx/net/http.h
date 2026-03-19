@@ -15,6 +15,9 @@
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
+#include <asx/fs/fs.h>
+#include <asx/security/security.h>
+#include <asx/session/session.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -201,6 +204,155 @@ typedef struct {
 
 /* Initialize a response. */
 ASX_API void asx_http_response_init(asx_http_response *resp, asx_http_status status);
+
+/* -------------------------------------------------------------------
+ * Web router, middleware, extractors, sessions, static, SSE, multipart
+ * ------------------------------------------------------------------- */
+
+#ifndef ASX_HTTP_MAX_ROUTES
+#define ASX_HTTP_MAX_ROUTES 16u
+#endif
+
+#ifndef ASX_HTTP_MAX_ROUTE_MIDDLEWARE
+#define ASX_HTTP_MAX_ROUTE_MIDDLEWARE 8u
+#endif
+
+#ifndef ASX_HTTP_MAX_PATH_PARAMS
+#define ASX_HTTP_MAX_PATH_PARAMS 8u
+#endif
+
+#ifndef ASX_HTTP_PARAM_NAME_MAX
+#define ASX_HTTP_PARAM_NAME_MAX 32u
+#endif
+
+#ifndef ASX_HTTP_PARAM_VALUE_MAX
+#define ASX_HTTP_PARAM_VALUE_MAX 128u
+#endif
+
+#ifndef ASX_HTTP_COOKIE_VALUE_MAX
+#define ASX_HTTP_COOKIE_VALUE_MAX 128u
+#endif
+
+#ifndef ASX_HTTP_SECURITY_PURPOSE_MAX
+#define ASX_HTTP_SECURITY_PURPOSE_MAX 32u
+#endif
+
+#ifndef ASX_HTTP_MULTIPART_PARTS_MAX
+#define ASX_HTTP_MULTIPART_PARTS_MAX 8u
+#endif
+
+#ifndef ASX_HTTP_MULTIPART_DATA_MAX
+#define ASX_HTTP_MULTIPART_DATA_MAX 512u
+#endif
+
+#ifndef ASX_HTTP_MULTIPART_FILENAME_MAX
+#define ASX_HTTP_MULTIPART_FILENAME_MAX 64u
+#endif
+
+typedef struct {
+    char name[ASX_HTTP_PARAM_NAME_MAX];
+    char value[ASX_HTTP_PARAM_VALUE_MAX];
+} asx_http_path_param;
+
+typedef struct {
+    asx_http_path_param entries[ASX_HTTP_MAX_PATH_PARAMS];
+    uint32_t count;
+} asx_http_path_params;
+
+typedef struct {
+    uint8_t require_session;
+    uint8_t require_security;
+    char security_purpose[ASX_HTTP_SECURITY_PURPOSE_MAX];
+} asx_http_route_policy;
+
+typedef struct asx_http_request_context asx_http_request_context;
+
+typedef enum {
+    ASX_HTTP_MIDDLEWARE_CONTINUE = 0,
+    ASX_HTTP_MIDDLEWARE_RESPOND  = 1
+} asx_http_middleware_result;
+
+typedef asx_status (*asx_http_handler_fn)(asx_http_request_context *ctx, asx_http_response *resp,
+                                          void *user_data);
+typedef asx_status (*asx_http_middleware_fn)(asx_http_request_context *ctx,
+                                             asx_http_response *resp, void *user_data,
+                                             asx_http_middleware_result *out_result);
+
+struct asx_http_request_context {
+    const asx_http_request *request;
+    asx_http_path_params path_params;
+    asx_session_pair *session;
+    asx_security_context *security;
+    uint8_t security_verified;
+    char route_pattern[ASX_HTTP_URI_MAX];
+};
+
+typedef struct {
+    asx_http_middleware_fn fn;
+    void *user_data;
+} asx_http_middleware_entry;
+
+typedef struct {
+    asx_http_method method;
+    char pattern[ASX_HTTP_URI_MAX];
+    asx_http_handler_fn handler;
+    void *handler_user_data;
+    asx_http_middleware_entry middleware[ASX_HTTP_MAX_ROUTE_MIDDLEWARE];
+    uint32_t middleware_count;
+    asx_http_route_policy policy;
+} asx_http_route;
+
+typedef struct {
+    asx_http_route routes[ASX_HTTP_MAX_ROUTES];
+    uint32_t count;
+} asx_http_router;
+
+typedef struct {
+    char name[ASX_HTTP_PARAM_NAME_MAX];
+    char filename[ASX_HTTP_MULTIPART_FILENAME_MAX];
+    char content_type[ASX_HTTP_HEADER_VALUE_MAX];
+    uint8_t data[ASX_HTTP_MULTIPART_DATA_MAX];
+    uint32_t data_len;
+} asx_http_multipart_part;
+
+typedef struct {
+    asx_http_multipart_part parts[ASX_HTTP_MULTIPART_PARTS_MAX];
+    uint32_t count;
+} asx_http_multipart_form;
+
+ASX_API void asx_http_route_policy_init(asx_http_route_policy *policy);
+ASX_API void asx_http_router_init(asx_http_router *router);
+ASX_API asx_status asx_http_router_add_route(asx_http_router *router, asx_http_method method,
+                                             const char *pattern, asx_http_handler_fn handler,
+                                             void *handler_user_data,
+                                             const asx_http_route_policy *policy,
+                                             asx_http_route **out_route);
+ASX_API asx_status asx_http_route_add_middleware(asx_http_route *route,
+                                                 asx_http_middleware_fn fn, void *user_data);
+ASX_API asx_status asx_http_router_dispatch(asx_http_router *router, const asx_http_request *req,
+                                            asx_http_response *resp, asx_session_pair *session,
+                                            asx_security_context *security,
+                                            asx_http_request_context *out_ctx);
+
+ASX_API asx_status asx_http_request_path_param(const asx_http_request_context *ctx,
+                                               const char *name, char *out, uint32_t out_size);
+ASX_API asx_status asx_http_request_query_param(const asx_http_request *req, const char *name,
+                                                char *out, uint32_t out_size);
+ASX_API asx_status asx_http_request_cookie(const asx_http_request *req, const char *name,
+                                           char *out, uint32_t out_size);
+ASX_API asx_status asx_http_request_verify_body_auth(const asx_http_request *req,
+                                                     asx_security_context *security,
+                                                     const char *purpose, int *out_verified);
+
+ASX_API asx_status asx_http_response_set_session_cookie(asx_http_response *resp,
+                                                        const char *name, const char *value,
+                                                        int secure, int http_only);
+ASX_API asx_status asx_http_response_set_sse(asx_http_response *resp, const char *event,
+                                             const char *id, const char *data);
+ASX_API asx_status asx_http_serve_static(asx_http_response *resp, const char *root,
+                                         const char *uri);
+ASX_API asx_status asx_http_parse_multipart(const asx_http_request *req,
+                                            asx_http_multipart_form *out_form);
 
 /* -------------------------------------------------------------------
  * HTTP connection pool

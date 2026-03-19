@@ -5,8 +5,103 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/fs/fs.h>
 #include <asx/net/http.h>
+#include <asx/runtime/rt.h>
+#include <asx/runtime/runtime.h>
+#include <stdio.h>
 #include <string.h>
+
+static asx_runtime g_rt;
+static asx_status st_sink_;
+
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
+
+static void setup_web(void) {
+    MUST_OK(asx_runtime_init_default(&g_rt));
+    asx_fs_reset();
+    asx_session_reset();
+}
+
+static void teardown_web(void) { asx_runtime_shutdown(&g_rt); }
+
+static void encode_tag_hex(const asx_auth_tag *tag, char *out, uint32_t out_size) {
+    static const char hex[] = "0123456789abcdef";
+    uint32_t i;
+
+    ASSERT_TRUE(out_size >= (ASX_AUTH_TAG_SIZE * 2u) + 1u);
+    for (i = 0u; i < ASX_AUTH_TAG_SIZE; i++) {
+        out[i * 2u] = hex[(tag->bytes[i] >> 4u) & 0x0fu];
+        out[(i * 2u) + 1u] = hex[tag->bytes[i] & 0x0fu];
+    }
+    out[ASX_AUTH_TAG_SIZE * 2u] = '\0';
+}
+
+static asx_status route_echo_handler(asx_http_request_context *ctx, asx_http_response *resp,
+                                     void *user_data) {
+    char id[32];
+    char page[32];
+    char body[128];
+    int written;
+    (void)user_data;
+
+    if (asx_http_request_path_param(ctx, "id", id, sizeof(id)) != ASX_OK) return ASX_E_NOT_FOUND;
+    if (asx_http_request_query_param(ctx->request, "page", page, sizeof(page)) != ASX_OK) {
+        return ASX_E_NOT_FOUND;
+    }
+    asx_http_response_init(resp, ASX_HTTP_200_OK);
+    written = snprintf(body, sizeof(body), "id=%s page=%s", id, page);
+    if (written <= 0) return ASX_E_INVALID_ARGUMENT;
+    return asx_http_body_set_bytes(&resp->body, body, (uint32_t)written);
+}
+
+static asx_status route_cookie_handler(asx_http_request_context *ctx, asx_http_response *resp,
+                                       void *user_data) {
+    char session_id[64];
+    (void)user_data;
+
+    if (asx_http_request_cookie(ctx->request, "sid", session_id, sizeof(session_id)) != ASX_OK) {
+        return ASX_E_NOT_FOUND;
+    }
+    asx_http_response_init(resp, ASX_HTTP_200_OK);
+    return asx_http_body_set_bytes(&resp->body, session_id, (uint32_t)strlen(session_id));
+}
+
+static asx_status route_ok_handler(asx_http_request_context *ctx, asx_http_response *resp,
+                                   void *user_data) {
+    (void)ctx;
+    (void)user_data;
+    asx_http_response_init(resp, ASX_HTTP_204_NO_CONTENT);
+    return ASX_OK;
+}
+
+static asx_status route_session_handler(asx_http_request_context *ctx, asx_http_response *resp,
+                                        void *user_data) {
+    (void)user_data;
+    if (ctx->session == NULL) return ASX_E_INVALID_ARGUMENT;
+    asx_http_response_init(resp, ASX_HTTP_200_OK);
+    if (asx_http_response_set_session_cookie(resp, "sid", "abc123", 1, 1) != ASX_OK) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    return asx_http_body_set_bytes(&resp->body, "session-ok", 10u);
+}
+
+static asx_status deny_middleware(asx_http_request_context *ctx, asx_http_response *resp,
+                                  void *user_data, asx_http_middleware_result *out_result) {
+    const char *body = (const char *)user_data;
+    (void)ctx;
+
+    asx_http_response_init(resp, ASX_HTTP_403_FORBIDDEN);
+    if (asx_http_body_set_bytes(&resp->body, body, (uint32_t)strlen(body)) != ASX_OK) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    *out_result = ASX_HTTP_MIDDLEWARE_RESPOND;
+    return ASX_OK;
+}
 
 /* Method tests */
 
@@ -156,6 +251,196 @@ TEST(response_init) {
     ASSERT_TRUE(asx_http_body_is_empty(&resp.body));
 }
 
+TEST(router_dispatch_extracts_path_and_query) {
+    asx_http_router router;
+    asx_http_route *route = NULL;
+    asx_http_request req;
+    asx_http_response resp;
+    asx_http_request_context ctx;
+
+    asx_http_router_init(&router);
+    ASSERT_EQ(asx_http_router_add_route(&router, ASX_HTTP_GET, "/users/:id", route_echo_handler,
+                                        NULL, NULL, &route),
+              ASX_OK);
+
+    asx_http_request_init(&req, ASX_HTTP_GET, "/users/42?page=7");
+    ASSERT_EQ(asx_http_router_dispatch(&router, &req, &resp, NULL, NULL, &ctx), ASX_OK);
+    ASSERT_EQ(resp.status, ASX_HTTP_200_OK);
+    ASSERT_TRUE(memcmp(resp.body.data, "id=42 page=7", 12u) == 0);
+    ASSERT_STR_EQ(ctx.route_pattern, "/users/:id");
+}
+
+TEST(router_cookie_extract) {
+    asx_http_router router;
+    asx_http_request req;
+    asx_http_response resp;
+
+    asx_http_router_init(&router);
+    ASSERT_EQ(asx_http_router_add_route(&router, ASX_HTTP_GET, "/cookie", route_cookie_handler,
+                                        NULL, NULL, NULL),
+              ASX_OK);
+    asx_http_request_init(&req, ASX_HTTP_GET, "/cookie");
+    ASSERT_EQ(asx_http_headers_add(&req.headers, "Cookie", "sid=xyz; theme=dark"), ASX_OK);
+
+    ASSERT_EQ(asx_http_router_dispatch(&router, &req, &resp, NULL, NULL, NULL), ASX_OK);
+    ASSERT_EQ(resp.status, ASX_HTTP_200_OK);
+    ASSERT_TRUE(memcmp(resp.body.data, "xyz", 3u) == 0);
+}
+
+TEST(router_middleware_short_circuit) {
+    asx_http_router router;
+    asx_http_route *route = NULL;
+    asx_http_request req;
+    asx_http_response resp;
+
+    asx_http_router_init(&router);
+    ASSERT_EQ(asx_http_router_add_route(&router, ASX_HTTP_GET, "/blocked", route_ok_handler, NULL,
+                                        NULL, &route),
+              ASX_OK);
+    ASSERT_EQ(asx_http_route_add_middleware(route, deny_middleware, "blocked"), ASX_OK);
+    asx_http_request_init(&req, ASX_HTTP_GET, "/blocked");
+
+    ASSERT_EQ(asx_http_router_dispatch(&router, &req, &resp, NULL, NULL, NULL), ASX_OK);
+    ASSERT_EQ(resp.status, ASX_HTTP_403_FORBIDDEN);
+    ASSERT_TRUE(memcmp(resp.body.data, "blocked", 7u) == 0);
+}
+
+TEST(router_security_policy_requires_valid_auth) {
+    asx_http_router router;
+    asx_http_route_policy policy;
+    asx_http_request req;
+    asx_http_response resp;
+    asx_http_request_context ctx;
+    asx_security_context security;
+    asx_auth_tag tag;
+    char hex_tag[(ASX_AUTH_TAG_SIZE * 2u) + 1u];
+
+    asx_http_router_init(&router);
+    asx_http_route_policy_init(&policy);
+    policy.require_security = 1u;
+    ASSERT_EQ(asx_http_router_add_route(&router, ASX_HTTP_POST, "/secure", route_ok_handler, NULL,
+                                        &policy, NULL),
+              ASX_OK);
+
+    asx_security_context_for_testing(&security, 77u);
+    asx_http_request_init(&req, ASX_HTTP_POST, "/secure");
+    ASSERT_EQ(asx_http_body_set_bytes(&req.body, "payload", 7u), ASX_OK);
+    asx_security_context_sign(&security, req.body.data, req.body.len, &tag);
+    encode_tag_hex(&tag, hex_tag, sizeof(hex_tag));
+    ASSERT_EQ(asx_http_headers_add(&req.headers, "X-ASX-Auth", hex_tag), ASX_OK);
+
+    ASSERT_EQ(asx_http_router_dispatch(&router, &req, &resp, NULL, &security, &ctx), ASX_OK);
+    ASSERT_EQ(resp.status, ASX_HTTP_204_NO_CONTENT);
+    ASSERT_EQ(ctx.security_verified, 1u);
+
+    asx_http_headers_remove(&req.headers, "X-ASX-Auth");
+    ASSERT_EQ(asx_http_headers_add(&req.headers, "X-ASX-Auth", "deadbeef"), ASX_OK);
+    ASSERT_EQ(asx_http_router_dispatch(&router, &req, &resp, NULL, &security, NULL), ASX_OK);
+    ASSERT_EQ(resp.status, ASX_HTTP_401_UNAUTHORIZED);
+}
+
+TEST(router_session_policy_requires_session) {
+    asx_http_router router;
+    asx_http_route_policy policy;
+    asx_http_request req;
+    asx_http_response resp;
+    asx_region_id region;
+    asx_session_pair pair;
+    const char *cookie;
+
+    setup_web();
+    MUST_OK(asx_region_open(&region));
+    MUST_OK(asx_session_open(region, 4u, &pair));
+
+    asx_http_router_init(&router);
+    asx_http_route_policy_init(&policy);
+    policy.require_session = 1u;
+    ASSERT_EQ(asx_http_router_add_route(&router, ASX_HTTP_GET, "/session", route_session_handler,
+                                        NULL, &policy, NULL),
+              ASX_OK);
+    asx_http_request_init(&req, ASX_HTTP_GET, "/session");
+
+    ASSERT_EQ(asx_http_router_dispatch(&router, &req, &resp, NULL, NULL, NULL), ASX_OK);
+    ASSERT_EQ(resp.status, ASX_HTTP_401_UNAUTHORIZED);
+
+    ASSERT_EQ(asx_http_router_dispatch(&router, &req, &resp, &pair, NULL, NULL), ASX_OK);
+    ASSERT_EQ(resp.status, ASX_HTTP_200_OK);
+    cookie = asx_http_headers_get(&resp.headers, "Set-Cookie");
+    ASSERT_TRUE(cookie != NULL);
+    ASSERT_TRUE(strstr(cookie, "sid=abc123") != NULL);
+    ASSERT_TRUE(strstr(cookie, "HttpOnly") != NULL);
+    ASSERT_TRUE(strstr(cookie, "Secure") != NULL);
+
+    asx_session_close_initiator(&pair);
+    asx_session_close_responder(&pair);
+    teardown_web();
+}
+
+TEST(static_file_serving_and_traversal_rejection) {
+    asx_fs_path path;
+    asx_file_handle file;
+    asx_buf payload;
+    asx_http_response resp;
+    uint32_t n;
+
+    asx_fs_reset();
+    ASSERT_EQ(asx_fs_path_from_cstr(&path, "/www/index.html"), ASX_OK);
+    ASSERT_EQ(asx_fs_file_open(&file, &path,
+                               ASX_FS_OPEN_CREATE | ASX_FS_OPEN_READ | ASX_FS_OPEN_WRITE),
+              ASX_OK);
+    payload = asx_buf_from_cstr("<h1>ok</h1>");
+    ASSERT_EQ(asx_fs_file_poll_write(file, &payload, &n), ASX_OK);
+    ASSERT_EQ(asx_fs_file_close(file), ASX_OK);
+
+    ASSERT_EQ(asx_http_serve_static(&resp, "/www", "/"), ASX_OK);
+    ASSERT_EQ(resp.status, ASX_HTTP_200_OK);
+    ASSERT_STR_EQ(asx_http_headers_get(&resp.headers, "Content-Type"), "text/html");
+    ASSERT_TRUE(memcmp(resp.body.data, "<h1>ok</h1>", 11u) == 0);
+
+    ASSERT_EQ(asx_http_serve_static(&resp, "/www", "/../secret.txt"), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(resp.status, ASX_HTTP_403_FORBIDDEN);
+}
+
+TEST(sse_response_builder) {
+    asx_http_response resp;
+
+    ASSERT_EQ(asx_http_response_set_sse(&resp, "tick", "42", "hello"), ASX_OK);
+    ASSERT_EQ(resp.status, ASX_HTTP_200_OK);
+    ASSERT_STR_EQ(asx_http_headers_get(&resp.headers, "Content-Type"), "text/event-stream");
+    ASSERT_TRUE(strstr((const char *)resp.body.data, "id: 42") != NULL);
+    ASSERT_TRUE(strstr((const char *)resp.body.data, "event: tick") != NULL);
+    ASSERT_TRUE(strstr((const char *)resp.body.data, "data: hello") != NULL);
+}
+
+TEST(multipart_parse_extracts_parts) {
+    asx_http_request req;
+    asx_http_multipart_form form;
+    const char *body =
+        "--BOUND\r\n"
+        "Content-Disposition: form-data; name=\"title\"\r\n\r\n"
+        "report\r\n"
+        "--BOUND\r\n"
+        "Content-Disposition: form-data; name=\"upload\"; filename=\"a.txt\"\r\n"
+        "Content-Type: text/plain\r\n\r\n"
+        "hello world\r\n"
+        "--BOUND--\r\n";
+
+    asx_http_request_init(&req, ASX_HTTP_POST, "/upload");
+    ASSERT_EQ(asx_http_headers_add(&req.headers, "Content-Type",
+                                   "multipart/form-data; boundary=BOUND"),
+              ASX_OK);
+    ASSERT_EQ(asx_http_body_set_bytes(&req.body, body, (uint32_t)strlen(body)), ASX_OK);
+
+    ASSERT_EQ(asx_http_parse_multipart(&req, &form), ASX_OK);
+    ASSERT_EQ(form.count, 2u);
+    ASSERT_STR_EQ(form.parts[0].name, "title");
+    ASSERT_TRUE(memcmp(form.parts[0].data, "report", 6u) == 0);
+    ASSERT_STR_EQ(form.parts[1].name, "upload");
+    ASSERT_STR_EQ(form.parts[1].filename, "a.txt");
+    ASSERT_STR_EQ(form.parts[1].content_type, "text/plain");
+    ASSERT_TRUE(memcmp(form.parts[1].data, "hello world", 11u) == 0);
+}
+
 /* Pool tests */
 
 TEST(pool_acquire_release) {
@@ -257,6 +542,16 @@ int main(void) {
     RUN_TEST(request_init);
     RUN_TEST(request_with_body_and_headers);
     RUN_TEST(response_init);
+
+    /* Web surface */
+    RUN_TEST(router_dispatch_extracts_path_and_query);
+    RUN_TEST(router_cookie_extract);
+    RUN_TEST(router_middleware_short_circuit);
+    RUN_TEST(router_security_policy_requires_valid_auth);
+    RUN_TEST(router_session_policy_requires_session);
+    RUN_TEST(static_file_serving_and_traversal_rejection);
+    RUN_TEST(sse_response_builder);
+    RUN_TEST(multipart_parse_extracts_parts);
 
     /* Pool */
     RUN_TEST(pool_acquire_release);
