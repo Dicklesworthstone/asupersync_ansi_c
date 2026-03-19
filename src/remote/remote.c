@@ -454,7 +454,7 @@ asx_status asx_remote_report_format(const asx_remote_report *report, char *buf, 
     remote_str = report->handle_present ? remote_status_str(report->remote_status) : "na";
     saga_str = report->saga_present ? saga_state_str(report->saga_state) : "na";
     lease_str = report->lease_present ? lease_state_str(report->lease_state) : "na";
-    if (report->handle_present) {
+    if (report->handle_id != 0u) {
         (void)snprintf(handle_buf, sizeof(handle_buf), "%llu",
                        (unsigned long long)report->handle_id);
     } else {

@@ -517,6 +517,29 @@ TEST(remote_report_active_execution_stays_pending) {
     ASSERT_TRUE(report.handle_terminal == 0u);
 }
 
+TEST(remote_report_ack_handle_id_renders_without_handle_snapshot) {
+    asx_spawn_request req;
+    asx_spawn_ack ack;
+    asx_remote_cap cap;
+    asx_idempotency_key key;
+    asx_remote_report report;
+    char text[ASX_REMOTE_REPORT_TEXT_SIZE];
+
+    asx_remote_cap_init(&cap, 12, ASX_REMOTE_CAP_SPAWN);
+    asx_idempotency_key_init(&key, 2024, 2);
+    asx_spawn_request_init(&req, 91, cap, key);
+    asx_spawn_ack_accepted(&ack, 91, 4444);
+
+    asx_remote_report_init(&report, &req, &ack, NULL, NULL, NULL, NULL, 0);
+
+    ASSERT_TRUE(report.ack_present != 0u);
+    ASSERT_TRUE(report.handle_present == 0u);
+    ASSERT_EQ(report.handle_id, 4444u);
+    ASSERT_EQ(asx_remote_report_format(&report, text, sizeof(text)), ASX_OK);
+    ASSERT_TRUE(strstr(text, "handle=4444") != NULL);
+    ASSERT_TRUE(strstr(text, "remote=na") != NULL);
+}
+
 TEST(remote_report_queued_ack_stays_pending_without_handle) {
     asx_spawn_request req;
     asx_spawn_ack ack;
@@ -614,6 +637,7 @@ int main(void) {
     RUN_TEST(remote_report_init_allows_null_report);
     RUN_TEST(remote_report_rejected_request_is_not_reported_as_success);
     RUN_TEST(remote_report_active_execution_stays_pending);
+    RUN_TEST(remote_report_ack_handle_id_renders_without_handle_snapshot);
     RUN_TEST(remote_report_queued_ack_stays_pending_without_handle);
     RUN_TEST(remote_report_absent_components_render_as_na);
 
