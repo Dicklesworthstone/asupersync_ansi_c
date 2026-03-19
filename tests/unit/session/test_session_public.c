@@ -48,11 +48,15 @@ TEST(open_request_response_roundtrip) {
     ASSERT_EQ(asx_session_pair_obligations(&pair), 1u);
     ASSERT_EQ(asx_session_recv_request(&pair, &value), ASX_OK);
     ASSERT_EQ(value, 11u);
-    ASSERT_EQ(asx_session_pair_obligations(&pair), 0u);
+    /* Obligations stay outstanding until initiator receives the response. */
+    ASSERT_EQ(asx_session_pair_obligations(&pair), 1u);
 
     ASSERT_EQ(asx_session_send_response(&pair, 22u), ASX_OK);
+    ASSERT_EQ(asx_session_pair_obligations(&pair), 1u);
     ASSERT_EQ(asx_session_recv_response(&pair, &value), ASX_OK);
     ASSERT_EQ(value, 22u);
+    /* Now the obligation is retired. */
+    ASSERT_EQ(asx_session_pair_obligations(&pair), 0u);
 
     asx_session_close_initiator(&pair);
     asx_session_close_responder(&pair);

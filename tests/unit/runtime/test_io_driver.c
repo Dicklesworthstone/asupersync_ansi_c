@@ -374,11 +374,11 @@ TEST(arena_exhaustion) {
     uint32_t i;
     if (!setup()) return;
     for (i = 0; i < ASX_MAX_IO_TOKENS; i++) {
-        MUST_OK(asx_waker_register(i, &w));
+        MUST_OK(asx_waker_register(i + 1u, &w));
         st = asx_io_register((int)i, ASX_IO_READABLE, &w, &tok);
         ASSERT_EQ(st, ASX_OK);
     }
-    MUST_OK(asx_waker_register(999, &w));
+    MUST_OK(asx_waker_register(999u, &w));
     st = asx_io_register(999, ASX_IO_READABLE, &w, &tok);
     ASSERT_EQ(st, ASX_E_RESOURCE_EXHAUSTED);
     teardown();

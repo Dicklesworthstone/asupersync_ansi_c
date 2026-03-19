@@ -432,9 +432,17 @@ TEST(reactor_wait_prefers_native_hook_when_both_are_installed) {
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
 
     ASSERT_EQ(asx_runtime_reactor_wait(100, &ready, 5), ASX_OK);
+#if ASX_DETERMINISTIC
+    /* In deterministic mode, ghost reactor takes priority for reproducibility. */
+    ASSERT_EQ(ready, 3u);
+    ASSERT_EQ(g_reactor_count, 1);
+    ASSERT_EQ(g_native_reactor_count, 0);
+#else
+    /* In non-deterministic mode, native reactor takes priority for live I/O. */
     ASSERT_EQ(ready, 7u);
     ASSERT_EQ(g_native_reactor_count, 1);
     ASSERT_EQ(g_reactor_count, 0);
+#endif
 }
 
 /* ------------------------------------------------------------------ */

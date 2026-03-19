@@ -51,8 +51,14 @@ TEST(summary_tracks_counts_and_obligations) {
     ASSERT_EQ(summary.requests_sent, 1u);
     ASSERT_EQ(asx_link_recv_request(&link, &value), ASX_OK);
     ASSERT_EQ(asx_link_capture_summary(&link, &summary), ASX_OK);
-    ASSERT_EQ(summary.outstanding_obligations, 0u);
+    /* Obligations persist until initiator receives the response. */
+    ASSERT_EQ(summary.outstanding_obligations, 1u);
     ASSERT_EQ(summary.requests_received, 1u);
+    /* Complete the cycle: respond and receive response. */
+    ASSERT_EQ(asx_link_send_response(&link, 7u), ASX_OK);
+    ASSERT_EQ(asx_link_recv_response(&link, &value), ASX_OK);
+    ASSERT_EQ(asx_link_capture_summary(&link, &summary), ASX_OK);
+    ASSERT_EQ(summary.outstanding_obligations, 0u);
     asx_link_close(&link);
     teardown();
 }

@@ -382,18 +382,8 @@ asx_status asx_runtime_reactor_wait(uint32_t timeout_ms, uint32_t *out_ready_cou
     if (!out_ready_count) return ASX_E_INVALID_ARGUMENT;
     if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
 
-    /* Prefer an installed native reactor hook so callers do not have to
-     * explicitly clear the default ghost hook to reach live I/O paths. */
-    if (g_hooks.reactor.wait_fn) {
-        asx_status rs_ = g_hooks.reactor.wait_fn(g_hooks.reactor.ctx, timeout_ms, out_ready_count);
-        if (rs_ == ASX_OK) {
-            asx_hindsight_log(*out_ready_count > 0 ? ASX_ND_IO_READY : ASX_ND_IO_TIMEOUT, 0,
-                              (uint64_t)*out_ready_count);
-        }
-        return rs_;
-    }
-
 #if ASX_DETERMINISTIC
+    /* In deterministic mode, prefer the ghost reactor for reproducibility. */
     if (g_hooks.reactor.ghost_wait_fn) {
         asx_status rs_ =
             g_hooks.reactor.ghost_wait_fn(g_hooks.reactor.ctx, logical_step, out_ready_count);
@@ -404,6 +394,17 @@ asx_status asx_runtime_reactor_wait(uint32_t timeout_ms, uint32_t *out_ready_cou
         return rs_;
     }
 #endif
+
+    /* Fall back to native reactor hook for live I/O paths. */
+    if (g_hooks.reactor.wait_fn) {
+        asx_status rs_ = g_hooks.reactor.wait_fn(g_hooks.reactor.ctx, timeout_ms, out_ready_count);
+        if (rs_ == ASX_OK) {
+            asx_hindsight_log(*out_ready_count > 0 ? ASX_ND_IO_READY : ASX_ND_IO_TIMEOUT, 0,
+                              (uint64_t)*out_ready_count);
+        }
+        return rs_;
+    }
+
     return ASX_E_HOOK_MISSING;
 }
 
