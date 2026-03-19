@@ -95,6 +95,47 @@ TEST(quic_stream_limit) {
     asx_quic_conn_close(conn, 0);
 }
 
+TEST(quic_stream_reopen_after_close) {
+    asx_quic_conn conn;
+    asx_quic_config cfg;
+    asx_quic_stream s1, s2;
+
+    asx_quic_reset();
+    asx_quic_config_init(&cfg);
+    cfg.max_bidi_streams = 1u;
+    ASSERT_EQ(asx_quic_connect(&conn, &cfg), ASX_OK);
+
+    /* Open one stream, filling the limit */
+    ASSERT_EQ(asx_quic_stream_open(&s1, conn, ASX_QUIC_STREAM_BIDI), ASX_OK);
+    /* Second should fail */
+    ASSERT_EQ(asx_quic_stream_open(&s2, conn, ASX_QUIC_STREAM_BIDI), ASX_E_RESOURCE_EXHAUSTED);
+    /* Close the first, then opening again should succeed */
+    asx_quic_stream_close(s1);
+    ASSERT_EQ(asx_quic_stream_open(&s2, conn, ASX_QUIC_STREAM_BIDI), ASX_OK);
+
+    asx_quic_stream_close(s2);
+    asx_quic_conn_close(conn, 0);
+}
+
+TEST(quic_conn_close_cleans_streams) {
+    asx_quic_conn conn;
+    asx_quic_config cfg;
+    asx_quic_stream s1, s2;
+
+    asx_quic_reset();
+    asx_quic_config_init(&cfg);
+    ASSERT_EQ(asx_quic_connect(&conn, &cfg), ASX_OK);
+    ASSERT_EQ(asx_quic_stream_open(&s1, conn, ASX_QUIC_STREAM_BIDI), ASX_OK);
+    ASSERT_EQ(asx_quic_stream_open(&s2, conn, ASX_QUIC_STREAM_UNI), ASX_OK);
+    ASSERT_TRUE(asx_quic_stream_is_alive(s1));
+    ASSERT_TRUE(asx_quic_stream_is_alive(s2));
+
+    /* Closing the connection should clean up all streams */
+    asx_quic_conn_close(conn, 0);
+    ASSERT_FALSE(asx_quic_stream_is_alive(s1));
+    ASSERT_FALSE(asx_quic_stream_is_alive(s2));
+}
+
 TEST(quic_datagram_send_recv) {
     asx_quic_conn conn;
     asx_quic_config cfg;
@@ -172,6 +213,8 @@ int main(void) {
     RUN_TEST(quic_accept_and_state);
     RUN_TEST(quic_stream_open_and_write_read);
     RUN_TEST(quic_stream_limit);
+    RUN_TEST(quic_stream_reopen_after_close);
+    RUN_TEST(quic_conn_close_cleans_streams);
     RUN_TEST(quic_datagram_send_recv);
     RUN_TEST(quic_datagram_disabled);
     RUN_TEST(quic_connection_exhaustion);

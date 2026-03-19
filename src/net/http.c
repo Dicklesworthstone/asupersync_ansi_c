@@ -25,7 +25,7 @@ static size_t http_bounded_strlen(const char *str, size_t max) {
 }
 
 static int http_strcasecmp(const char *a, const char *b) {
-    if (a == NULL || b == NULL) return a != b;
+    if (a == NULL || b == NULL) return 1;
     for (;;) {
         char ca = *a++;
         char cb = *b++;

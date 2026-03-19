@@ -122,12 +122,24 @@ asx_quic_state asx_quic_conn_state(asx_quic_conn conn) {
 
 asx_status asx_quic_conn_close(asx_quic_conn conn, uint32_t error_code) {
     quic_conn_slot *s;
+    uint32_t idx;
 
     (void)error_code;
     s = quic_conn_lookup(conn);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (s->state == ASX_QUIC_STATE_CLOSED) return ASX_E_INVALID_STATE;
     s->state = ASX_QUIC_STATE_DRAINING;
+
+    /* Close all streams belonging to this connection */
+    for (idx = 0u; idx < ASX_MAX_QUIC_STREAMS; idx++) {
+        if (g_quic_streams[idx].alive &&
+            g_quic_streams[idx].conn_slot == conn.slot &&
+            g_quic_streams[idx].conn_generation == conn.generation) {
+            g_quic_streams[idx].alive = 0;
+        }
+    }
+    s->stream_count = 0u;
+
     /* In deterministic mode, draining completes immediately */
     s->state = ASX_QUIC_STATE_CLOSED;
     s->alive = 0;
@@ -226,9 +238,19 @@ asx_status asx_quic_stream_poll_write(asx_quic_stream stream, const asx_buf *src
 
 asx_status asx_quic_stream_close(asx_quic_stream stream) {
     quic_stream_slot *s;
+    quic_conn_slot *c;
 
     s = quic_stream_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    /* Decrement the parent connection's stream count if still alive */
+    if (s->conn_slot < ASX_MAX_QUIC_CONNECTIONS) {
+        c = &g_quic_conns[s->conn_slot];
+        if (c->alive && c->generation == s->conn_generation && c->stream_count > 0u) {
+            c->stream_count--;
+        }
+    }
+
     s->alive = 0;
     return ASX_OK;
 }
