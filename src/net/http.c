@@ -8,6 +8,7 @@
  */
 
 #include <asx/net/http.h>
+#include <stdio.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -33,6 +34,183 @@ static int http_strcasecmp(const char *a, const char *b) {
         if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + ('a' - 'A'));
         if (ca != cb) return 1;
         if (ca == '\0') return 0;
+    }
+}
+
+static asx_status http_copy_str(char *dst, uint32_t dst_size, const char *src) {
+    size_t len;
+
+    if (dst == NULL || dst_size == 0u || src == NULL) return ASX_E_INVALID_ARGUMENT;
+    len = http_bounded_strlen(src, dst_size);
+    if (len >= (size_t)dst_size) return ASX_E_BUFFER_TOO_SMALL;
+    memcpy(dst, src, len + 1u);
+    return ASX_OK;
+}
+
+static uint32_t http_copy_until(char *dst, uint32_t dst_size, const char *src, char stop_a,
+                                char stop_b) {
+    uint32_t len = 0u;
+
+    if (dst == NULL || dst_size == 0u || src == NULL) return 0u;
+    while (src[len] != '\0' && src[len] != stop_a && src[len] != stop_b) {
+        if (len + 1u >= dst_size) return 0u;
+        dst[len] = src[len];
+        len++;
+    }
+    dst[len] = '\0';
+    return len;
+}
+
+static const char *http_find_char(const char *text, char needle) {
+    if (text == NULL) return NULL;
+    while (*text != '\0') {
+        if (*text == needle) return text;
+        text++;
+    }
+    return NULL;
+}
+
+static int http_starts_with(const char *text, const char *prefix) {
+    size_t i;
+
+    if (text == NULL || prefix == NULL) return 0;
+    for (i = 0u; prefix[i] != '\0'; i++) {
+        if (text[i] != prefix[i]) return 0;
+    }
+    return 1;
+}
+
+static const char *http_skip_slash(const char *text) {
+    while (text != NULL && *text == '/') text++;
+    return text;
+}
+
+static int http_is_hex(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+static uint8_t http_hex_value(char c) {
+    if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
+    if (c >= 'a' && c <= 'f') return (uint8_t)(10 + (c - 'a'));
+    return (uint8_t)(10 + (c - 'A'));
+}
+
+static asx_status http_parse_hex_tag(const char *text, asx_auth_tag *out_tag) {
+    uint32_t i;
+
+    if (text == NULL || out_tag == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (http_bounded_strlen(text, (ASX_AUTH_TAG_SIZE * 2u) + 1u) != ASX_AUTH_TAG_SIZE * 2u) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    for (i = 0u; i < ASX_AUTH_TAG_SIZE; i++) {
+        char hi = text[i * 2u];
+        char lo = text[(i * 2u) + 1u];
+        if (!http_is_hex(hi) || !http_is_hex(lo)) return ASX_E_INVALID_ARGUMENT;
+        out_tag->bytes[i] = (uint8_t)((http_hex_value(hi) << 4u) | http_hex_value(lo));
+    }
+    return ASX_OK;
+}
+
+static void http_trim_ws_span(const char **start, const char **end) {
+    while (*start < *end &&
+           (**start == ' ' || **start == '\t' || **start == '\r' || **start == '\n')) {
+        (*start)++;
+    }
+    while (*end > *start &&
+           ((*(*end - 1) == ' ') || (*(*end - 1) == '\t') || (*(*end - 1) == '\r') ||
+            (*(*end - 1) == '\n'))) {
+        (*end)--;
+    }
+}
+
+static asx_status http_copy_span(char *dst, uint32_t dst_size, const char *start,
+                                 const char *end) {
+    size_t len;
+
+    if (dst == NULL || dst_size == 0u || start == NULL || end == NULL || end < start) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    len = (size_t)(end - start);
+    if (len + 1u > dst_size) return ASX_E_BUFFER_TOO_SMALL;
+    if (len > 0u) memcpy(dst, start, len);
+    dst[len] = '\0';
+    return ASX_OK;
+}
+
+static const char *http_content_type_for_path(const char *path) {
+    const char *dot;
+
+    if (path == NULL) return "application/octet-stream";
+    dot = strrchr(path, '.');
+    if (dot == NULL) return "application/octet-stream";
+    if (strcmp(dot, ".html") == 0) return "text/html";
+    if (strcmp(dot, ".css") == 0) return "text/css";
+    if (strcmp(dot, ".js") == 0) return "application/javascript";
+    if (strcmp(dot, ".json") == 0) return "application/json";
+    if (strcmp(dot, ".txt") == 0) return "text/plain";
+    if (strcmp(dot, ".svg") == 0) return "image/svg+xml";
+    return "application/octet-stream";
+}
+
+static asx_status http_path_params_add(asx_http_path_params *params, const char *name_start,
+                                       const char *name_end, const char *value_start,
+                                       const char *value_end) {
+    asx_http_path_param *entry;
+    asx_status st;
+
+    if (params == NULL || name_start == NULL || name_end == NULL || value_start == NULL ||
+        value_end == NULL || name_end < name_start || value_end < value_start) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    if (params->count >= ASX_HTTP_MAX_PATH_PARAMS) return ASX_E_RESOURCE_EXHAUSTED;
+    entry = &params->entries[params->count];
+    st = http_copy_span(entry->name, ASX_HTTP_PARAM_NAME_MAX, name_start, name_end);
+    if (st != ASX_OK) return st;
+    st = http_copy_span(entry->value, ASX_HTTP_PARAM_VALUE_MAX, value_start, value_end);
+    if (st != ASX_OK) return st;
+    params->count++;
+    return ASX_OK;
+}
+
+static asx_status http_route_match(const char *pattern, const char *uri,
+                                   asx_http_path_params *out_params) {
+    char path[ASX_HTTP_URI_MAX];
+    const char *pp;
+    const char *up;
+
+    if (pattern == NULL || uri == NULL || out_params == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(out_params, 0, sizeof(*out_params));
+    if (http_copy_until(path, sizeof(path), uri, '?', '#') == 0u && uri[0] != '\0') {
+        return ASX_E_BUFFER_TOO_SMALL;
+    }
+
+    pp = http_skip_slash(pattern);
+    up = http_skip_slash(path);
+    for (;;) {
+        const char *pp_end;
+        const char *up_end;
+
+        if (*pp == '\0' && *up == '\0') return ASX_OK;
+        if (*pp == '\0' || *up == '\0') return ASX_E_NOT_FOUND;
+
+        pp_end = pp;
+        while (*pp_end != '\0' && *pp_end != '/') pp_end++;
+        up_end = up;
+        while (*up_end != '\0' && *up_end != '/') up_end++;
+
+        if (*pp == ':') {
+            asx_status st = http_path_params_add(out_params, pp + 1, pp_end, up, up_end);
+            if (st != ASX_OK) return st;
+        } else {
+            size_t plen = (size_t)(pp_end - pp);
+            size_t ulen = (size_t)(up_end - up);
+            if (plen != ulen || memcmp(pp, up, plen) != 0) return ASX_E_NOT_FOUND;
+        }
+
+        if (*pp_end == '\0' && *up_end == '\0') return ASX_OK;
+        if (*pp_end == '\0' || *up_end == '\0') return ASX_E_NOT_FOUND;
+        pp = pp_end + 1;
+        up = up_end + 1;
     }
 }
 
@@ -228,6 +406,418 @@ void asx_http_response_init(asx_http_response *resp, asx_http_status status) {
     resp->version = ASX_HTTP_VERSION_1_1;
     asx_http_headers_init(&resp->headers);
     asx_http_body_init(&resp->body);
+}
+
+/* ------------------------------------------------------------------ */
+/* Web router and helpers                                              */
+/* ------------------------------------------------------------------ */
+
+void asx_http_route_policy_init(asx_http_route_policy *policy) {
+    if (policy == NULL) return;
+    memset(policy, 0, sizeof(*policy));
+}
+
+void asx_http_router_init(asx_http_router *router) {
+    if (router == NULL) return;
+    memset(router, 0, sizeof(*router));
+}
+
+asx_status asx_http_router_add_route(asx_http_router *router, asx_http_method method,
+                                     const char *pattern, asx_http_handler_fn handler,
+                                     void *handler_user_data,
+                                     const asx_http_route_policy *policy,
+                                     asx_http_route **out_route) {
+    asx_http_route *route;
+    asx_status st;
+
+    if (out_route != NULL) *out_route = NULL;
+    if (router == NULL || pattern == NULL || handler == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (router->count >= ASX_HTTP_MAX_ROUTES) return ASX_E_RESOURCE_EXHAUSTED;
+
+    route = &router->routes[router->count];
+    memset(route, 0, sizeof(*route));
+    route->method = method;
+    route->handler = handler;
+    route->handler_user_data = handler_user_data;
+    st = http_copy_str(route->pattern, ASX_HTTP_URI_MAX, pattern);
+    if (st != ASX_OK) return st;
+    if (policy != NULL) route->policy = *policy;
+    router->count++;
+    if (out_route != NULL) *out_route = route;
+    return ASX_OK;
+}
+
+asx_status asx_http_route_add_middleware(asx_http_route *route, asx_http_middleware_fn fn,
+                                         void *user_data) {
+    if (route == NULL || fn == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (route->middleware_count >= ASX_HTTP_MAX_ROUTE_MIDDLEWARE) {
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+    route->middleware[route->middleware_count].fn = fn;
+    route->middleware[route->middleware_count].user_data = user_data;
+    route->middleware_count++;
+    return ASX_OK;
+}
+
+asx_status asx_http_request_path_param(const asx_http_request_context *ctx, const char *name,
+                                       char *out, uint32_t out_size) {
+    uint32_t i;
+
+    if (ctx == NULL || name == NULL || out == NULL || out_size == 0u) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    for (i = 0u; i < ctx->path_params.count; i++) {
+        if (strcmp(ctx->path_params.entries[i].name, name) == 0) {
+            return http_copy_str(out, out_size, ctx->path_params.entries[i].value);
+        }
+    }
+    return ASX_E_NOT_FOUND;
+}
+
+asx_status asx_http_request_query_param(const asx_http_request *req, const char *name, char *out,
+                                        uint32_t out_size) {
+    const char *query;
+    size_t name_len;
+
+    if (req == NULL || name == NULL || out == NULL || out_size == 0u) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    query = http_find_char(req->uri, '?');
+    if (query == NULL) return ASX_E_NOT_FOUND;
+    query++;
+    name_len = strlen(name);
+
+    while (*query != '\0' && *query != '#') {
+        const char *pair_end = query;
+        const char *eq = NULL;
+        while (*pair_end != '\0' && *pair_end != '&' && *pair_end != '#') {
+            if (*pair_end == '=' && eq == NULL) eq = pair_end;
+            pair_end++;
+        }
+        if (eq != NULL && (size_t)(eq - query) == name_len && memcmp(query, name, name_len) == 0) {
+            return http_copy_span(out, out_size, eq + 1, pair_end);
+        }
+        query = (*pair_end == '&') ? pair_end + 1 : pair_end;
+    }
+    return ASX_E_NOT_FOUND;
+}
+
+asx_status asx_http_request_cookie(const asx_http_request *req, const char *name, char *out,
+                                   uint32_t out_size) {
+    const char *cookie;
+    size_t name_len;
+
+    if (req == NULL || name == NULL || out == NULL || out_size == 0u) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    cookie = asx_http_headers_get(&req->headers, "Cookie");
+    if (cookie == NULL) return ASX_E_NOT_FOUND;
+    name_len = strlen(name);
+
+    while (*cookie != '\0') {
+        const char *entry = cookie;
+        const char *eq;
+        const char *end;
+
+        while (*entry == ' ' || *entry == ';') entry++;
+        eq = entry;
+        while (*eq != '\0' && *eq != '=' && *eq != ';') eq++;
+        end = eq;
+        while (*end != '\0' && *end != ';') end++;
+
+        if (*eq == '=' && (size_t)(eq - entry) == name_len && memcmp(entry, name, name_len) == 0) {
+            return http_copy_span(out, out_size, eq + 1, end);
+        }
+        cookie = (*end == ';') ? end + 1 : end;
+    }
+    return ASX_E_NOT_FOUND;
+}
+
+asx_status asx_http_request_verify_body_auth(const asx_http_request *req,
+                                             asx_security_context *security,
+                                             const char *purpose, int *out_verified) {
+    const char *header;
+    asx_auth_tag tag;
+    asx_security_context derived;
+    asx_security_context *ctx;
+    asx_status st;
+    int verified = 0;
+
+    if (out_verified != NULL) *out_verified = 0;
+    if (req == NULL || security == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    header = asx_http_headers_get(&req->headers, "X-ASX-Auth");
+    if (header == NULL) return ASX_E_PERMISSION_DENIED;
+    st = http_parse_hex_tag(header, &tag);
+    if (st != ASX_OK) return ASX_E_PERMISSION_DENIED;
+
+    ctx = security;
+    if (purpose != NULL && purpose[0] != '\0') {
+        asx_security_context_derive(&derived, security, (const uint8_t *)purpose, strlen(purpose));
+        ctx = &derived;
+    }
+
+    st = asx_security_context_verify(ctx, req->body.data, req->body.len, &tag, &verified);
+    if (st != ASX_OK || !verified) return ASX_E_PERMISSION_DENIED;
+    if (out_verified != NULL) *out_verified = 1;
+    return ASX_OK;
+}
+
+asx_status asx_http_response_set_session_cookie(asx_http_response *resp, const char *name,
+                                                const char *value, int secure, int http_only) {
+    char cookie[ASX_HTTP_HEADER_VALUE_MAX];
+    int written;
+
+    if (resp == NULL || name == NULL || value == NULL) return ASX_E_INVALID_ARGUMENT;
+    written = snprintf(cookie, sizeof(cookie), "%s=%s; Path=/%s%s", name, value,
+                       http_only ? "; HttpOnly" : "", secure ? "; Secure" : "");
+    if (written < 0 || (size_t)written >= sizeof(cookie)) return ASX_E_BUFFER_TOO_SMALL;
+    return asx_http_headers_add(&resp->headers, "Set-Cookie", cookie);
+}
+
+asx_status asx_http_response_set_sse(asx_http_response *resp, const char *event, const char *id,
+                                     const char *data) {
+    char payload[ASX_HTTP_BODY_MAX];
+    int written;
+    asx_status st;
+
+    if (resp == NULL || data == NULL) return ASX_E_INVALID_ARGUMENT;
+    written = snprintf(payload, sizeof(payload), "%s%s%s%sdata: %s\n\n",
+                       (id != NULL && id[0] != '\0') ? "id: " : "",
+                       (id != NULL && id[0] != '\0') ? id : "",
+                       (id != NULL && id[0] != '\0') ? "\n" : "",
+                       (event != NULL && event[0] != '\0') ? "" : "",
+                       data);
+    if (event != NULL && event[0] != '\0') {
+        written = snprintf(payload, sizeof(payload), "%s%s%s%s%sdata: %s\n\n",
+                           (id != NULL && id[0] != '\0') ? "id: " : "",
+                           (id != NULL && id[0] != '\0') ? id : "",
+                           (id != NULL && id[0] != '\0') ? "\n" : "",
+                           "event: ", event, data);
+    }
+    if (written < 0 || (size_t)written >= sizeof(payload)) return ASX_E_BUFFER_TOO_SMALL;
+
+    asx_http_response_init(resp, ASX_HTTP_200_OK);
+    st = asx_http_headers_add(&resp->headers, "Content-Type", "text/event-stream");
+    if (st != ASX_OK) return st;
+    st = asx_http_headers_add(&resp->headers, "Cache-Control", "no-cache");
+    if (st != ASX_OK) return st;
+    return asx_http_body_set_bytes(&resp->body, payload, (uint32_t)written);
+}
+
+asx_status asx_http_serve_static(asx_http_response *resp, const char *root, const char *uri) {
+    char path_only[ASX_HTTP_URI_MAX];
+    char full_path[ASX_FS_PATH_MAX];
+    asx_fs_path fs_path;
+    asx_file_handle file;
+    asx_buf_mut dst;
+    uint32_t bytes_read = 0u;
+    asx_status st;
+    asx_status close_st;
+
+    if (resp == NULL || root == NULL || uri == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (http_copy_until(path_only, sizeof(path_only), uri, '?', '#') == 0u && uri[0] != '\0') {
+        return ASX_E_BUFFER_TOO_SMALL;
+    }
+    if (strstr(path_only, "..") != NULL) {
+        asx_http_response_init(resp, ASX_HTTP_403_FORBIDDEN);
+        return ASX_E_PERMISSION_DENIED;
+    }
+    if (path_only[0] == '\0') {
+        http_copy_str(path_only, sizeof(path_only), "/");
+    }
+    if (strcmp(path_only, "/") == 0) {
+        st = http_copy_str(path_only, sizeof(path_only), "/index.html");
+        if (st != ASX_OK) return st;
+    }
+
+    if (snprintf(full_path, sizeof(full_path), "%s%s", root, path_only) >= (int)sizeof(full_path)) {
+        return ASX_E_BUFFER_TOO_SMALL;
+    }
+    st = asx_fs_path_from_cstr(&fs_path, full_path);
+    if (st != ASX_OK) return st;
+    st = asx_fs_file_open(&file, &fs_path, ASX_FS_OPEN_READ);
+    if (st != ASX_OK) {
+        asx_http_response_init(resp, ASX_HTTP_404_NOT_FOUND);
+        return st;
+    }
+
+    asx_buf_mut_init(&dst);
+    st = asx_fs_file_poll_read(file, &dst, &bytes_read);
+    close_st = asx_fs_file_close(file);
+    if (st != ASX_OK) {
+        asx_http_response_init(resp, ASX_HTTP_404_NOT_FOUND);
+        return st;
+    }
+    if (close_st != ASX_OK) return close_st;
+
+    asx_http_response_init(resp, ASX_HTTP_200_OK);
+    st = asx_http_headers_add(&resp->headers, "Content-Type", http_content_type_for_path(path_only));
+    if (st != ASX_OK) return st;
+    return asx_http_body_set_bytes(&resp->body, asx_buf_mut_freeze(&dst).ptr, bytes_read);
+}
+
+asx_status asx_http_parse_multipart(const asx_http_request *req, asx_http_multipart_form *out_form) {
+    const char *content_type;
+    const char *boundary_key = "boundary=";
+    const char *boundary_pos;
+    char boundary[ASX_HTTP_HEADER_VALUE_MAX];
+    char marker[ASX_HTTP_HEADER_VALUE_MAX];
+    const char *cursor;
+    const char *body;
+    size_t body_len;
+
+    if (req == NULL || out_form == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(out_form, 0, sizeof(*out_form));
+    content_type = asx_http_headers_get(&req->headers, "Content-Type");
+    if (content_type == NULL || !http_starts_with(content_type, "multipart/form-data")) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    boundary_pos = strstr(content_type, boundary_key);
+    if (boundary_pos == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (http_copy_str(boundary, sizeof(boundary), boundary_pos + strlen(boundary_key)) != ASX_OK) {
+        return ASX_E_BUFFER_TOO_SMALL;
+    }
+    if (snprintf(marker, sizeof(marker), "--%s", boundary) >= (int)sizeof(marker)) {
+        return ASX_E_BUFFER_TOO_SMALL;
+    }
+
+    body = (const char *)req->body.data;
+    body_len = req->body.len;
+    cursor = body;
+
+    while ((size_t)(cursor - body) < body_len) {
+        const char *part_start = strstr(cursor, marker);
+        const char *header_start;
+        const char *content_start;
+        const char *part_end;
+        asx_http_multipart_part *part;
+        const char *disposition;
+        const char *name_pos;
+        const char *filename_pos;
+        const char *type_pos;
+
+        if (part_start == NULL) break;
+        part_start += strlen(marker);
+        if (part_start[0] == '-' && part_start[1] == '-') break;
+        if (part_start[0] == '\r' && part_start[1] == '\n') part_start += 2;
+        header_start = part_start;
+        content_start = strstr(header_start, "\r\n\r\n");
+        if (content_start == NULL) return ASX_E_INVALID_ARGUMENT;
+        content_start += 4;
+        part_end = strstr(content_start, marker);
+        if (part_end == NULL) return ASX_E_INVALID_ARGUMENT;
+        if (out_form->count >= ASX_HTTP_MULTIPART_PARTS_MAX) return ASX_E_RESOURCE_EXHAUSTED;
+
+        part = &out_form->parts[out_form->count];
+        memset(part, 0, sizeof(*part));
+        disposition = strstr(header_start, "Content-Disposition:");
+        if (disposition == NULL || disposition > content_start) return ASX_E_INVALID_ARGUMENT;
+        name_pos = strstr(disposition, "name=\"");
+        if (name_pos == NULL || name_pos > content_start) return ASX_E_INVALID_ARGUMENT;
+        name_pos += 6;
+        {
+            const char *name_end = strchr(name_pos, '"');
+            if (name_end == NULL || name_end > content_start) return ASX_E_INVALID_ARGUMENT;
+            if (http_copy_span(part->name, sizeof(part->name), name_pos, name_end) != ASX_OK) {
+                return ASX_E_BUFFER_TOO_SMALL;
+            }
+        }
+        filename_pos = strstr(disposition, "filename=\"");
+        if (filename_pos != NULL && filename_pos < content_start) {
+            const char *filename_end;
+            filename_pos += 10;
+            filename_end = strchr(filename_pos, '"');
+            if (filename_end == NULL || filename_end > content_start) return ASX_E_INVALID_ARGUMENT;
+            if (http_copy_span(part->filename, sizeof(part->filename), filename_pos, filename_end) !=
+                ASX_OK) {
+                return ASX_E_BUFFER_TOO_SMALL;
+            }
+        }
+        type_pos = strstr(header_start, "Content-Type:");
+        if (type_pos != NULL && type_pos < content_start) {
+            const char *line_end = strstr(type_pos, "\r\n");
+            const char *value_start = type_pos + strlen("Content-Type:");
+            const char *value_end = (line_end != NULL && line_end < content_start) ? line_end : content_start;
+            http_trim_ws_span(&value_start, &value_end);
+            if (http_copy_span(part->content_type, sizeof(part->content_type), value_start,
+                               value_end) != ASX_OK) {
+                return ASX_E_BUFFER_TOO_SMALL;
+            }
+        }
+
+        while (part_end > content_start &&
+               (part_end[-1] == '\n' || part_end[-1] == '\r')) {
+            part_end--;
+        }
+        if ((size_t)(part_end - content_start) > ASX_HTTP_MULTIPART_DATA_MAX) {
+            return ASX_E_BUFFER_TOO_SMALL;
+        }
+        part->data_len = (uint32_t)(part_end - content_start);
+        if (part->data_len > 0u) memcpy(part->data, content_start, part->data_len);
+        out_form->count++;
+        cursor = part_end;
+    }
+
+    return out_form->count > 0u ? ASX_OK : ASX_E_NOT_FOUND;
+}
+
+asx_status asx_http_router_dispatch(asx_http_router *router, const asx_http_request *req,
+                                    asx_http_response *resp, asx_session_pair *session,
+                                    asx_security_context *security,
+                                    asx_http_request_context *out_ctx) {
+    uint32_t i;
+
+    if (router == NULL || req == NULL || resp == NULL) return ASX_E_INVALID_ARGUMENT;
+    for (i = 0u; i < router->count; i++) {
+        asx_http_route *route = &router->routes[i];
+        asx_http_request_context ctx;
+        asx_status st;
+        uint32_t j;
+
+        if (route->method != req->method) continue;
+        memset(&ctx, 0, sizeof(ctx));
+        ctx.request = req;
+        ctx.session = session;
+        ctx.security = security;
+        st = http_copy_str(ctx.route_pattern, sizeof(ctx.route_pattern), route->pattern);
+        if (st != ASX_OK) return st;
+        st = http_route_match(route->pattern, req->uri, &ctx.path_params);
+        if (st != ASX_OK) continue;
+
+        if (route->policy.require_session && session == NULL) {
+            asx_http_response_init(resp, ASX_HTTP_401_UNAUTHORIZED);
+            return ASX_OK;
+        }
+        if (route->policy.require_security) {
+            int verified = 0;
+            st = asx_http_request_verify_body_auth(req, security, route->policy.security_purpose,
+                                                   &verified);
+            if (st != ASX_OK || !verified) {
+                asx_http_response_init(resp, ASX_HTTP_401_UNAUTHORIZED);
+                return ASX_OK;
+            }
+            ctx.security_verified = 1u;
+        }
+
+        for (j = 0u; j < route->middleware_count; j++) {
+            asx_http_middleware_result result = ASX_HTTP_MIDDLEWARE_CONTINUE;
+            st = route->middleware[j].fn(&ctx, resp, route->middleware[j].user_data, &result);
+            if (st != ASX_OK) return st;
+            if (result == ASX_HTTP_MIDDLEWARE_RESPOND) {
+                if (out_ctx != NULL) *out_ctx = ctx;
+                return ASX_OK;
+            }
+        }
+
+        st = route->handler(&ctx, resp, route->handler_user_data);
+        if (st != ASX_OK) return st;
+        if (out_ctx != NULL) *out_ctx = ctx;
+        return ASX_OK;
+    }
+
+    asx_http_response_init(resp, ASX_HTTP_404_NOT_FOUND);
+    return ASX_E_NOT_FOUND;
 }
 
 /* ------------------------------------------------------------------ */

@@ -193,7 +193,8 @@ NET_SRC := \
 	src/net/quic.c \
 	src/net/server.c \
 	src/net/http.c \
-	src/net/web.c
+	src/net/web.c \
+	src/net/grpc.c
 
 BYTES_SRC := \
 	src/bytes/buf.c \
