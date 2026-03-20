@@ -118,3 +118,7 @@ tests/unit/fuzz/test_grammar_determinism
 tests/fuzz/fuzz_differential
 tests/fuzz/fuzz_minimize
 fuzz_findings/
+
+# Python bytecode caches
+__pycache__/
+*.pyc
