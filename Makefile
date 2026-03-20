@@ -461,7 +461,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: test test-unit test-invariants test-vignettes test-e2e test-e2e-vertical test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
-.PHONY: conformance codec-equivalence profile-parity
+.PHONY: conformance codec-equivalence profile-parity crate-acceptance-gate
 .PHONY: fuzz-smoke ci-embedded-matrix
 .PHONY: release release-artifacts bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
@@ -928,21 +928,8 @@ formal-check: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codege
 # ---------------------------------------------------------------------------
 # test-e2e — run all canonical e2e scenario lanes
 # ---------------------------------------------------------------------------
-test-e2e:
-	@echo "[asx] test-e2e: running $(words $(E2E_ALL_SCRIPTS)) script(s)..."
-	@pass=0; fail=0; \
-	for s in $(E2E_ALL_SCRIPTS); do \
-		echo "  RUN  $$(basename $$s)"; \
-		if $$s; then \
-			echo "  PASS $$(basename $$s)"; \
-			pass=$$((pass + 1)); \
-		else \
-			echo "  FAIL $$(basename $$s)"; \
-			fail=$$((fail + 1)); \
-		fi; \
-	done; \
-	echo "[asx] test-e2e: $$pass passed, $$fail failed"; \
-	[ $$fail -eq 0 ] || exit 1
+test-e2e: test-e2e-suite
+	@echo "[asx] test-e2e: canonical suite complete"
 
 # ---------------------------------------------------------------------------
 # test-e2e-vertical — run HFT/automotive/continuity e2e lanes
@@ -1144,6 +1131,13 @@ profile-parity:
 	else \
 		echo "[asx] profile-parity: SKIP (runner not yet implemented)"; \
 	fi
+
+# ---------------------------------------------------------------------------
+# crate-acceptance-gate — aggregate final crate-level parity evidence
+# ---------------------------------------------------------------------------
+crate-acceptance-gate:
+	@echo "[asx] crate-acceptance-gate: aggregating crate-level parity evidence..."
+	@python3 tools/ci/run_crate_acceptance_gate.py
 
 # ---------------------------------------------------------------------------
 # fuzz — differential fuzzing harness (bd-1md.3)
@@ -1473,6 +1467,7 @@ help:
 	@echo "  conformance        Rust fixture parity verification"
 	@echo "  codec-equivalence  JSON vs BIN codec equivalence"
 	@echo "  profile-parity     Cross-profile semantic digest parity"
+	@echo "  crate-acceptance-gate Aggregate final crate-level parity evidence"
 	@echo "  fuzz-smoke         Differential fuzzing smoke test"
 	@echo "  minimize-selftest  Counterexample minimizer self-test"
 	@echo "  ci-embedded-matrix Cross-target embedded builds (Linux-musl)"

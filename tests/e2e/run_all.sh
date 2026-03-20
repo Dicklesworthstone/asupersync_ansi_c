@@ -22,10 +22,15 @@
 #   ASX_E2E_VERBOSE       Verbose output (default: 0)
 #
 # Hard gate mapping:
+#   GATE-E2E-FOUNDATIONAL  foundational_contracts.sh
 #   GATE-E2E-LIFECYCLE     core_lifecycle.sh
 #   GATE-E2E-CODEC         codec_parity.sh
 #   GATE-E2E-ROBUSTNESS    robustness.sh, robustness_fault.sh,
 #                           robustness_endian.sh, robustness_exhaustion.sh
+#   GATE-E2E-NATIVE-HOST   native_host.sh
+#   GATE-E2E-SERVER        server_shutdown.sh
+#   GATE-E2E-EXAMPLES      examples_smoke.sh
+#   GATE-E2E-BROWSER       browser_smoke.sh
 #   GATE-E2E-VERTICAL-HFT  hft_microburst.sh
 #   GATE-E2E-VERTICAL-AUTO automotive_watchdog.sh
 #   GATE-E2E-CONTINUITY    continuity.sh, continuity_restart.sh
@@ -98,6 +103,7 @@ export ASX_E2E_LOG_DIR="$SUITE_LOG_DIR"
 
 # Family entries: gate_id:script_name
 E2E_FAMILIES=(
+    "GATE-E2E-FOUNDATIONAL:foundational_contracts.sh"
     "GATE-E2E-LIFECYCLE:core_lifecycle.sh"
     "GATE-E2E-CODEC:codec_parity.sh"
     "GATE-E2E-NETWORK:network_surface.sh"
@@ -105,6 +111,10 @@ E2E_FAMILIES=(
     "GATE-E2E-ROBUSTNESS:robustness_fault.sh"
     "GATE-E2E-ROBUSTNESS:robustness_endian.sh"
     "GATE-E2E-ROBUSTNESS:robustness_exhaustion.sh"
+    "GATE-E2E-NATIVE-HOST:native_host.sh"
+    "GATE-E2E-SERVER:server_shutdown.sh"
+    "GATE-E2E-EXAMPLES:examples_smoke.sh"
+    "GATE-E2E-BROWSER:browser_smoke.sh"
     "GATE-E2E-VERTICAL-HFT:hft_microburst.sh"
     "GATE-E2E-VERTICAL-AUTO:automotive_watchdog.sh"
     "GATE-E2E-CONTINUITY:continuity.sh"

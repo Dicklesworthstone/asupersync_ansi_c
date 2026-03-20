@@ -119,10 +119,13 @@ Each family maps to a hard gate:
 
 | Family | Gate | Script |
 |--------|------|--------|
+| foundational_contracts | GATE-E2E-FOUNDATIONAL | `foundational_contracts.sh` |
 | examples_smoke | GATE-E2E-EXAMPLES | `examples_smoke.sh` |
 | browser_smoke | GATE-E2E-BROWSER | `browser_smoke.sh` |
 | core_lifecycle | GATE-E2E-LIFECYCLE | `core_lifecycle.sh` |
 | codec_parity | GATE-E2E-CODEC | `codec_parity.sh` |
+| native_host | GATE-E2E-NATIVE-HOST | `native_host.sh` |
+| server_shutdown | GATE-E2E-SERVER | `server_shutdown.sh` |
 | robustness | GATE-E2E-ROBUSTNESS | `robustness.sh` |
 | robustness_endian | GATE-E2E-ROBUSTNESS | `robustness_endian.sh` |
 | robustness_exhaustion | GATE-E2E-ROBUSTNESS | `robustness_exhaustion.sh` |
