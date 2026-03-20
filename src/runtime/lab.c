@@ -6,6 +6,7 @@
 
 #include <asx/runtime/lab.h>
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/trace.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -19,6 +20,23 @@ static uint64_t splitmix64(uint64_t *state) {
     z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
     z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
     return z ^ (z >> 31);
+}
+
+static uint32_t lab_trace_count_scheduler_polls(uint32_t start_index) {
+    uint32_t end_index;
+    uint32_t i;
+    uint32_t polls = 0u;
+
+    end_index = asx_trace_event_count();
+    if (start_index > end_index) return 0u;
+
+    for (i = start_index; i < end_index; i++) {
+        asx_trace_event ev;
+        if (!asx_trace_event_get(i, &ev)) break;
+        if (ev.kind == ASX_TRACE_SCHED_POLL && polls < UINT32_MAX) polls++;
+    }
+
+    return polls;
 }
 
 /* Entropy hook callback */
@@ -161,13 +179,21 @@ asx_status asx_lab_run_scenario(asx_lab *lab, const asx_lab_scenario *scenario,
     start_time = asx_lab_now(lab);
 
     for (i = 0; i < scenario->step_count; i++) {
+        uint32_t trace_count_before;
+        uint32_t step_polls;
+
         if (scenario->steps[i] == NULL) {
             out_result->last_status = ASX_E_INVALID_STATE;
             out_result->elapsed_ns = asx_lab_now(lab) - start_time;
             return ASX_E_INVALID_STATE;
         }
+
+        trace_count_before = asx_trace_event_count();
         st = scenario->steps[i](lab, scenario->step_data[i]);
+        step_polls = lab_trace_count_scheduler_polls(trace_count_before);
+        out_result->polls_total += (uint64_t)step_polls;
         out_result->steps_completed++;
+        if (st == ASX_OK && step_polls > lab->config.max_polls) { st = ASX_E_POLL_BUDGET_EXHAUSTED; }
         out_result->last_status = st;
         if (st != ASX_OK) {
             out_result->elapsed_ns = asx_lab_now(lab) - start_time;

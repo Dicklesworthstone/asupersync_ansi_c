@@ -7,6 +7,7 @@
 #include "../../test_harness.h"
 #include <asx/runtime/lab.h>
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/trace.h>
 
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
@@ -244,6 +245,35 @@ static asx_status step_open_close_region(asx_lab *lab, void *user_data) {
     return asx_region_close(rid);
 }
 
+typedef struct {
+    int polls_done;
+} poll_twice_state;
+
+static asx_status poll_twice_then_complete(void *user_data, asx_task_id self) {
+    poll_twice_state *state = (poll_twice_state *)user_data;
+    (void)self;
+    state->polls_done++;
+    if (state->polls_done < 2) return ASX_E_PENDING;
+    return ASX_OK;
+}
+
+static asx_status step_run_two_polls(asx_lab *lab, void *user_data) {
+    poll_twice_state *state = (poll_twice_state *)user_data;
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_status st;
+
+    st = asx_lab_open_region(lab, &rid);
+    if (st != ASX_OK) return st;
+    st = asx_task_spawn(rid, poll_twice_then_complete, state, &tid);
+    if (st != ASX_OK) return st;
+    budget = asx_budget_infinite();
+    st = asx_scheduler_run(rid, &budget);
+    if (st != ASX_OK) return st;
+    return asx_region_close(rid);
+}
+
 TEST(scenario_empty) {
     asx_lab lab;
     asx_lab_config cfg;
@@ -334,6 +364,50 @@ TEST(scenario_with_region_ops) {
 
     ASSERT_EQ(asx_lab_run_scenario(&lab, &sc, &result), ASX_OK);
     ASSERT_EQ(result.steps_completed, 1u);
+
+    asx_lab_shutdown(&lab);
+}
+
+TEST(scenario_tracks_scheduler_polls) {
+    asx_lab lab;
+    asx_lab_config cfg;
+    asx_lab_scenario sc;
+    asx_lab_result result;
+    poll_twice_state state;
+
+    memset(&state, 0, sizeof(state));
+    asx_lab_config_init(&cfg);
+    MUST_OK(asx_lab_init(&lab, &cfg));
+    asx_trace_reset();
+    asx_lab_scenario_init(&sc, "poll-count");
+    MUST_OK(asx_lab_scenario_add_step(&sc, step_run_two_polls, &state));
+
+    ASSERT_EQ(asx_lab_run_scenario(&lab, &sc, &result), ASX_OK);
+    ASSERT_EQ(result.steps_completed, 1u);
+    ASSERT_EQ(result.polls_total, (uint64_t)2u);
+
+    asx_lab_shutdown(&lab);
+}
+
+TEST(scenario_enforces_max_polls_per_step) {
+    asx_lab lab;
+    asx_lab_config cfg;
+    asx_lab_scenario sc;
+    asx_lab_result result;
+    poll_twice_state state;
+
+    memset(&state, 0, sizeof(state));
+    asx_lab_config_init(&cfg);
+    cfg.max_polls = 1u;
+    MUST_OK(asx_lab_init(&lab, &cfg));
+    asx_trace_reset();
+    asx_lab_scenario_init(&sc, "poll-budget");
+    MUST_OK(asx_lab_scenario_add_step(&sc, step_run_two_polls, &state));
+
+    ASSERT_EQ(asx_lab_run_scenario(&lab, &sc, &result), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(result.steps_completed, 1u);
+    ASSERT_EQ(result.last_status, ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(result.polls_total, (uint64_t)2u);
 
     asx_lab_shutdown(&lab);
 }
@@ -474,6 +548,8 @@ int main(void) {
     RUN_TEST(scenario_multi_step);
     RUN_TEST(scenario_stops_on_failure);
     RUN_TEST(scenario_with_region_ops);
+    RUN_TEST(scenario_tracks_scheduler_polls);
+    RUN_TEST(scenario_enforces_max_polls_per_step);
     RUN_TEST(scenario_null_step_fails_closed);
     RUN_TEST(scenario_corrupt_step_count_fails_closed);
     RUN_TEST(scenario_overflow);

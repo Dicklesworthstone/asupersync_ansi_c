@@ -39,6 +39,18 @@ static void emit_channel_events(uint32_t count) {
     for (i = 0; i < count; i++) { asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)i, 0); }
 }
 
+static uint64_t transition_aux(asx_task_state from, asx_task_state to) {
+    return ((uint64_t)(uint32_t)from << 32) | (uint64_t)(uint32_t)to;
+}
+
+static void emit_cancel_transition_events(uint32_t count) {
+    uint32_t i;
+    for (i = 0; i < count; i++) {
+        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)i,
+                       transition_aux(ASX_TASK_RUNNING, ASX_TASK_CANCEL_REQUESTED));
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Test: subsystem classification                                      */
 /* ------------------------------------------------------------------ */
@@ -124,6 +136,18 @@ TEST(snapshot_accumulates_aux) {
     asx_perf_snapshot_build(&snap);
 
     ASSERT_EQ(snap.subsystems[ASX_SUBSYS_SCHEDULER].total_aux, (uint64_t)10);
+}
+
+TEST(snapshot_classifies_cancel_transitions) {
+    asx_perf_snapshot snap;
+
+    asx_trace_reset();
+    emit_cancel_transition_events(4);
+
+    asx_perf_snapshot_build(&snap);
+
+    ASSERT_EQ(snap.subsystems[ASX_SUBSYS_CANCEL].event_count, (uint32_t)4);
+    ASSERT_EQ(snap.subsystems[ASX_SUBSYS_LIFECYCLE].event_count, (uint32_t)0);
 }
 
 TEST(snapshot_null_safety) { asx_perf_snapshot_build(NULL); /* should not crash */ }
@@ -221,6 +245,27 @@ TEST(regression_includes_replay_divergence) {
     ASSERT_EQ(report.regressed, 1);
     ASSERT_EQ(report.divergence_index, (uint32_t)10);
     ASSERT_EQ((int)report.divergence_kind, (int)ASX_REPLAY_KIND_MISMATCH);
+}
+
+TEST(regression_blames_cancel_subsystem_for_cancel_growth) {
+    asx_perf_snapshot baseline;
+    asx_perf_snapshot current;
+    asx_regression_report report;
+
+    asx_trace_reset();
+    emit_cancel_transition_events(1);
+    asx_perf_snapshot_build(&baseline);
+
+    asx_trace_reset();
+    emit_cancel_transition_events(6);
+    asx_perf_snapshot_build(&current);
+
+    asx_regression_localize(&baseline, &current, NULL, &report);
+
+    ASSERT_EQ(report.regressed, 1);
+    ASSERT_TRUE(report.suspect_count > 0);
+    ASSERT_EQ((int)report.suspects[0].id, (int)ASX_SUBSYS_CANCEL);
+    ASSERT_EQ(report.suspects[0].event_delta, 5);
 }
 
 TEST(regression_null_safety) {
@@ -451,6 +496,7 @@ int main(void) {
     RUN_TEST(snapshot_empty_trace);
     RUN_TEST(snapshot_counts_events);
     RUN_TEST(snapshot_accumulates_aux);
+    RUN_TEST(snapshot_classifies_cancel_transitions);
     RUN_TEST(snapshot_null_safety);
 
     /* Regression */
@@ -458,6 +504,7 @@ int main(void) {
     RUN_TEST(regression_detected_on_different_digests);
     RUN_TEST(regression_blames_scheduler_for_extra_polls);
     RUN_TEST(regression_includes_replay_divergence);
+    RUN_TEST(regression_blames_cancel_subsystem_for_cancel_growth);
     RUN_TEST(regression_null_safety);
 
     /* Circuit-breaker */

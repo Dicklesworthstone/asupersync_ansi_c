@@ -16,6 +16,36 @@
 /* Subsystem classification                                           */
 /* ------------------------------------------------------------------ */
 
+static asx_task_state regression_trace_transition_from(uint64_t aux) {
+    return (asx_task_state)(uint32_t)(aux >> 32);
+}
+
+static asx_task_state regression_trace_transition_to(uint64_t aux) {
+    return (asx_task_state)(uint32_t)aux;
+}
+
+static int regression_trace_is_cancel_state(asx_task_state state) {
+    return state == ASX_TASK_CANCEL_REQUESTED || state == ASX_TASK_CANCELLING ||
+           state == ASX_TASK_FINALIZING;
+}
+
+static asx_subsystem_id regression_trace_event_subsystem(const asx_trace_event *event) {
+    asx_subsystem_id sub;
+
+    if (event == NULL) return ASX_SUBSYS_UNKNOWN;
+
+    sub = asx_trace_event_subsystem(event->kind);
+    if (event->kind == ASX_TRACE_TASK_TRANSITION) {
+        asx_task_state from = regression_trace_transition_from(event->aux);
+        asx_task_state to = regression_trace_transition_to(event->aux);
+        if (regression_trace_is_cancel_state(from) || regression_trace_is_cancel_state(to)) {
+            return ASX_SUBSYS_CANCEL;
+        }
+    }
+
+    return sub;
+}
+
 asx_subsystem_id asx_trace_event_subsystem(asx_trace_event_kind kind) {
     uint32_t k = (uint32_t)kind;
 
@@ -60,7 +90,7 @@ void asx_perf_snapshot_build(asx_perf_snapshot *snap) {
 
         if (!asx_trace_event_get(i, &ev)) break;
 
-        sub = asx_trace_event_subsystem(ev.kind);
+        sub = regression_trace_event_subsystem(&ev);
         if ((uint32_t)sub < ASX_SUBSYS_COUNT) {
             snap->subsystems[(uint32_t)sub].event_count++;
             snap->subsystems[(uint32_t)sub].total_aux += ev.aux;
