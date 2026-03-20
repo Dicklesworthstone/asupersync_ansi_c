@@ -147,6 +147,8 @@ asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_chann
         if (!g_channels[i].alive) {
             s = &g_channels[i];
 
+            s->generation++;
+            if (s->generation == 0) s->generation = 1;
             s->state = ASX_CHANNEL_OPEN;
             s->region = region;
             s->alive = 1;

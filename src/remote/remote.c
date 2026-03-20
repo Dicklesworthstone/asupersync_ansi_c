@@ -263,12 +263,16 @@ void asx_lease_init(asx_lease *lease, uint64_t lease_id, uint64_t fence_token, u
 int asx_lease_is_active(const asx_lease *lease, uint64_t now_ns) {
     if (lease->state != ASX_LEASE_ACTIVE) return 0;
     if (lease->ttl_ns == 0) return 1; /* infinite TTL */
-    return now_ns < lease->granted_ns + lease->ttl_ns;
+    /* Overflow-safe comparison: instead of now < granted + ttl,
+     * compute elapsed = now - granted and compare against ttl. */
+    if (now_ns < lease->granted_ns) return 0; /* clock wrapped or invalid */
+    return (now_ns - lease->granted_ns) < lease->ttl_ns;
 }
 
 asx_status asx_lease_renew(asx_lease *lease, uint64_t now_ns, uint64_t new_ttl_ns) {
     if (lease->state != ASX_LEASE_ACTIVE) { return ASX_E_INVALID_STATE; }
-    if (lease->ttl_ns > 0 && now_ns >= lease->granted_ns + lease->ttl_ns) {
+    if (lease->ttl_ns > 0 && now_ns >= lease->granted_ns &&
+        (now_ns - lease->granted_ns) >= lease->ttl_ns) {
         lease->state = ASX_LEASE_EXPIRED;
         return ASX_E_TIMED_OUT;
     }
