@@ -31,6 +31,7 @@ asx_status asx_message_set(asx_message *msg, const char *topic, const void *payl
 
     if (msg == NULL || topic == NULL) return ASX_E_INVALID_ARGUMENT;
     if (len > ASX_MSG_MAX_PAYLOAD) return ASX_E_BUFFER_TOO_SMALL;
+    if (len > 0u && payload == NULL) return ASX_E_INVALID_ARGUMENT;
     tlen = msg_bounded_strlen(topic, ASX_MSG_MAX_TOPIC_LEN);
     if (tlen == 0u || tlen >= ASX_MSG_MAX_TOPIC_LEN) return ASX_E_INVALID_ARGUMENT;
 
@@ -139,6 +140,7 @@ asx_status asx_msg_topic_publish(asx_msg_topic *topic, const asx_message *msg) {
     asx_status last_err;
 
     if (topic == NULL || msg == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!topic->active || strcmp(topic->name, msg->topic) != 0) return ASX_E_INVALID_ARGUMENT;
     last_err = ASX_OK;
 
     for (i = 0u; i < topic->subscriber_count; i++) {

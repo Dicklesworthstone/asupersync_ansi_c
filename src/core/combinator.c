@@ -7,6 +7,12 @@
 #include <asx/core/combinator.h>
 #include <string.h>
 
+/* Suppress warn_unused_result on deadline disarm (fire-and-forget cleanup) */
+static void disarm_deadline(asx_deadline *dl) {
+    asx_status st_ = asx_deadline_disarm(dl);
+    (void)st_;
+}
+
 /* ------------------------------------------------------------------ */
 /* Branch helpers                                                      */
 /* ------------------------------------------------------------------ */
@@ -275,18 +281,23 @@ asx_status asx_timeout_combinator_poll(void *user_data, asx_task_id self) {
         state->timed_out = 1;
         state->inner.done = 1;
         state->inner.result = ASX_E_TIMED_OUT;
+        disarm_deadline(&state->deadline);
         return ASX_E_TIMED_OUT;
     }
 
     /* Poll inner */
     st = branch_poll(&state->inner, self);
-    if (st != ASX_E_PENDING) return st;
+    if (st != ASX_E_PENDING) {
+        disarm_deadline(&state->deadline);
+        return st;
+    }
 
     /* Re-check deadline after inner poll */
     if (asx_deadline_is_expired(&state->deadline)) {
         state->timed_out = 1;
         state->inner.done = 1;
         state->inner.result = ASX_E_TIMED_OUT;
+        disarm_deadline(&state->deadline);
         return ASX_E_TIMED_OUT;
     }
 
@@ -411,12 +422,12 @@ asx_status asx_quorum_poll(void *user_data, asx_task_id self) {
         }
     }
 
-    /* Phase 2: drain remaining branches */
+    /* Phase 2: drain remaining branches with one final cooperative poll,
+     * consistent with race and select drain semantics. */
     if (state->draining) {
         for (i = 0; i < state->count; i++) {
             if (!state->branches[i].done) {
-                state->branches[i].done = 1;
-                state->branches[i].result = ASX_E_CANCELLED;
+                branch_cancel_after_final_poll(&state->branches[i], self);
                 state->drained++;
             }
         }
@@ -492,17 +503,24 @@ asx_status asx_race_timeout_poll(void *user_data, asx_task_id self) {
     /* Delegate to normal race */
     st = asx_race_poll(&state->race, self);
 
-    /* Check timeout after polling */
-    if (st == ASX_E_PENDING && asx_deadline_is_expired(&state->deadline)) {
+    /* If race found a winner, disarm deadline and return winner result */
+    if (st != ASX_E_PENDING) {
+        disarm_deadline(&state->deadline);
+        return st;
+    }
+
+    /* Check timeout after polling (only if race is still pending) */
+    if (asx_deadline_is_expired(&state->deadline)) {
         uint32_t i;
         state->timed_out = 1;
         for (i = 0; i < state->race.count; i++) {
             branch_cancel_after_final_poll(&state->race.branches[i], self);
         }
+        disarm_deadline(&state->deadline);
         return ASX_E_TIMED_OUT;
     }
 
-    return st;
+    return ASX_E_PENDING;
 }
 
 /* ------------------------------------------------------------------ */
@@ -553,6 +571,7 @@ asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self) {
     if (asx_deadline_is_expired(&state->deadline)) {
         state->done = 1;
         state->result = ASX_E_TIMED_OUT;
+        disarm_deadline(&state->deadline);
         return ASX_E_TIMED_OUT;
     }
 
@@ -565,6 +584,7 @@ asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self) {
         state->done = 1;
         state->result = ASX_OK;
         state->attempt++;
+        disarm_deadline(&state->deadline);
         return ASX_OK;
     }
 
@@ -575,6 +595,7 @@ asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self) {
     if (state->attempt > state->max_retries) {
         state->done = 1;
         state->result = state->last_error;
+        disarm_deadline(&state->deadline);
         return state->last_error;
     }
 
@@ -582,6 +603,7 @@ asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self) {
     if (asx_deadline_is_expired(&state->deadline)) {
         state->done = 1;
         state->result = ASX_E_TIMED_OUT;
+        disarm_deadline(&state->deadline);
         return ASX_E_TIMED_OUT;
     }
 

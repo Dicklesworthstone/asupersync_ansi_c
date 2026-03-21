@@ -23,6 +23,12 @@ TEST(message_null_args) {
     ASSERT_EQ(asx_message_set(&msg, NULL, "d", 1), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(message_null_payload_with_len_fails) {
+    asx_message msg;
+    asx_message_init(&msg);
+    ASSERT_EQ(asx_message_set(&msg, "events", NULL, 3u), ASX_E_INVALID_ARGUMENT);
+}
+
 TEST(queue_push_poll) {
     asx_msg_queue q;
     asx_message in, out;
@@ -129,6 +135,23 @@ TEST(broker_pubsub) {
     ASSERT_TRUE(memcmp(out.payload, "breaking", 8) == 0);
 }
 
+TEST(broker_publish_rejects_topic_mismatch) {
+    asx_msg_broker broker;
+    asx_msg_topic *topic;
+    asx_msg_queue sub;
+    asx_message msg;
+
+    asx_msg_broker_init(&broker);
+    ASSERT_EQ(asx_msg_broker_topic(&broker, "news", &topic), ASX_OK);
+    asx_msg_queue_init(&sub);
+    ASSERT_EQ(asx_msg_topic_subscribe(topic, &sub), ASX_OK);
+    ASSERT_EQ(asx_message_set(&msg, "other", "payload", 7u), ASX_OK);
+
+    ASSERT_EQ(asx_msg_topic_publish(topic, &msg), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_msg_queue_len(&sub), 0u);
+    ASSERT_EQ(asx_msg_topic_total_published(topic), 0u);
+}
+
 TEST(broker_topic_exhaustion) {
     asx_msg_broker broker;
     asx_msg_topic *topic;
@@ -153,12 +176,14 @@ int main(void) {
     fprintf(stderr, "=== messaging tests ===\n");
     RUN_TEST(message_set);
     RUN_TEST(message_null_args);
+    RUN_TEST(message_null_payload_with_len_fails);
     RUN_TEST(queue_push_poll);
     RUN_TEST(queue_poll_empty);
     RUN_TEST(queue_fifo_order);
     RUN_TEST(queue_full);
     RUN_TEST(broker_create_topic);
     RUN_TEST(broker_pubsub);
+    RUN_TEST(broker_publish_rejects_topic_mismatch);
     RUN_TEST(broker_topic_exhaustion);
     RUN_TEST(broker_null_args);
     TEST_REPORT();
