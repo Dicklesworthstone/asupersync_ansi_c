@@ -86,6 +86,14 @@ asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind) {
     cleanup = asx_cancel_cleanup_budget(kind);
     t->cleanup_polls_remaining = asx_budget_polls(&cleanup);
 
+    /* Create a cancel witness to track this cancellation's lifecycle */
+    {
+        asx_cancel_witness_id witness = ASX_INVALID_ID;
+        asx_status w_st_ = asx_cancel_witness_create(&witness, id, &t->cancel_reason);
+        (void)w_st_;
+        t->cancel_witness = witness;
+    }
+
     return ASX_OK;
 }
 
@@ -176,6 +184,7 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
         (void)asx_ghost_check_task_transition(self, t->state, ASX_TASK_CANCELLING);
         t->state = ASX_TASK_CANCELLING;
         t->cancel_phase = ASX_CANCEL_PHASE_CANCELLING;
+        { asx_status w_st_ = asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_CANCELLING); (void)w_st_; }
         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)self,
                        asx_trace_task_transition_aux(from, ASX_TASK_CANCELLING));
     }

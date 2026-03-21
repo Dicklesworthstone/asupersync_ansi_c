@@ -47,6 +47,7 @@ typedef struct {
     /* Cancellation tracking (bd-2cw.3) */
     asx_cancel_phase cancel_phase;
     asx_cancel_reason cancel_reason;
+    asx_cancel_witness_id cancel_witness;
     uint32_t cancel_epoch;
     uint32_t cleanup_polls_remaining;
     int cancel_pending; /* 1 if cancel signal delivered */
