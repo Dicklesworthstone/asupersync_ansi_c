@@ -93,6 +93,55 @@ static asx_witness_slot *witness_find(asx_cancel_witness_id w) {
     return NULL;
 }
 
+static uint32_t g_witness_next_id = 1;
+
+asx_status asx_cancel_witness_create(asx_cancel_witness_id *out, asx_task_id task,
+                                      const asx_cancel_reason *reason) {
+    uint32_t i;
+    asx_witness_slot *s;
+
+    if (out == NULL || reason == NULL) return ASX_E_INVALID_ARGUMENT;
+    *out = ASX_INVALID_ID;
+    (void)task;
+
+    /* Find free slot */
+    for (i = 0; i < ASX_MAX_CANCEL_WITNESSES; i++) {
+        if (!g_witnesses[i].active) {
+            s = &g_witnesses[i];
+            s->generation++;
+            if (s->generation == 0) s->generation = 1;
+            s->id = (asx_cancel_witness_id)g_witness_next_id++;
+            s->phase = ASX_CANCEL_PHASE_REQUESTED;
+            s->reason = *reason;
+            s->active = 1;
+            if (i >= g_witness_count) g_witness_count = i + 1;
+            *out = s->id;
+            return ASX_OK;
+        }
+    }
+    return ASX_E_RESOURCE_EXHAUSTED;
+}
+
+asx_status asx_cancel_witness_advance(asx_cancel_witness_id w, asx_cancel_phase new_phase) {
+    asx_witness_slot *s;
+
+    s = witness_find(w);
+    if (s == NULL) return ASX_E_NOT_FOUND;
+    /* Phase must be monotone non-decreasing */
+    if ((int)new_phase <= (int)s->phase) return ASX_E_INVALID_TRANSITION;
+    s->phase = new_phase;
+    return ASX_OK;
+}
+
+asx_status asx_cancel_witness_release(asx_cancel_witness_id w) {
+    asx_witness_slot *s;
+
+    s = witness_find(w);
+    if (s == NULL) return ASX_E_NOT_FOUND;
+    s->active = 0;
+    return ASX_OK;
+}
+
 asx_status asx_cancel_witness_phase(asx_cancel_witness_id w, asx_cancel_phase *out_phase) {
     asx_witness_slot *s;
     if (out_phase == NULL) return ASX_E_INVALID_ARGUMENT;

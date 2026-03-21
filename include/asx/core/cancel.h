@@ -37,8 +37,22 @@ ASX_API asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a,
                                                 const asx_cancel_reason *b);
 
 /* -------------------------------------------------------------------
- * Cancel witness protocol — query witness state
+ * Cancel witness protocol — lifecycle and query
  * ------------------------------------------------------------------- */
+
+/* Create a cancel witness for the given task and reason.
+ * The witness tracks the cancellation's progression through the
+ * requested → cancelling → finalizing → completed phases. */
+ASX_API ASX_MUST_USE asx_status asx_cancel_witness_create(asx_cancel_witness_id *out,
+                                                            asx_task_id task,
+                                                            const asx_cancel_reason *reason);
+
+/* Advance a witness to the next phase. */
+ASX_API ASX_MUST_USE asx_status asx_cancel_witness_advance(asx_cancel_witness_id w,
+                                                             asx_cancel_phase new_phase);
+
+/* Release a witness (mark as inactive). */
+ASX_API asx_status asx_cancel_witness_release(asx_cancel_witness_id w);
 
 /* Query the current phase of a cancel witness.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out_phase is NULL,
