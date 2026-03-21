@@ -335,6 +335,20 @@ static void test_evidence_null_args(void) {
     (void)sink;
 }
 
+static void test_evidence_rejects_invalid_level(void) {
+    asx_evidence_sink sink;
+
+    asx_evidence_sink_init(&sink);
+    ASSERT(asx_evidence_record(&sink, "bad", (asx_evidence_level)99, "x", 0) ==
+               ASX_E_INVALID_ARGUMENT,
+           "invalid level rejected");
+    ASSERT(sink.count == 0, "invalid level does not append");
+    ASSERT(sink.pass_count == 0, "invalid level does not change counters");
+    ASSERT(sink.warn_count == 0, "invalid level does not change counters");
+    ASSERT(sink.fail_count == 0, "invalid level does not change counters");
+    ASSERT(sink.info_count == 0, "invalid level does not change counters");
+}
+
 static void test_evidence_reset(void) {
     asx_evidence_sink sink;
     asx_evidence_sink_init(&sink);
@@ -461,6 +475,7 @@ int main(void) {
     RUN(test_evidence_verdict);
     RUN(test_evidence_exhaustion);
     RUN(test_evidence_null_args);
+    RUN(test_evidence_rejects_invalid_level);
     RUN(test_evidence_reset);
 
     /* Inspect-to-evidence pipeline */

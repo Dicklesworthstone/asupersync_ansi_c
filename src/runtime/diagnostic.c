@@ -174,6 +174,7 @@ asx_status asx_evidence_record(asx_evidence_sink *sink, const char *source,
     asx_evidence_entry *e;
 
     if (sink == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (level < ASX_EVIDENCE_INFO || level > ASX_EVIDENCE_FAIL) return ASX_E_INVALID_ARGUMENT;
     if (sink->count >= ASX_EVIDENCE_SINK_CAPACITY) return ASX_E_RESOURCE_EXHAUSTED;
 
     e = &sink->entries[sink->count];
