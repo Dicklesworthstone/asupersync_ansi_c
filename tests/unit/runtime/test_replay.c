@@ -210,10 +210,14 @@ TEST(oracle_replay_match_pass) {
     memset(&r1, 0, sizeof(r1));
     memset(&r2, 0, sizeof(r2));
     r1.steps_completed = 3;
+    r1.steps_total = 3;
     r1.elapsed_ns = 5000000;
+    r1.polls_total = 9u;
     r1.last_status = ASX_OK;
     r2.steps_completed = 3;
+    r2.steps_total = 3;
     r2.elapsed_ns = 5000000;
+    r2.polls_total = 9u;
     r2.last_status = ASX_OK;
 
     result = asx_oracle_replay_match(&r1, &r2);
@@ -243,6 +247,42 @@ TEST(oracle_replay_match_time_diverge) {
     r1.elapsed_ns = 5000000;
     r2.steps_completed = 3;
     r2.elapsed_ns = 6000000;
+
+    result = asx_oracle_replay_match(&r1, &r2);
+    ASSERT_EQ(result.verdict, ASX_ORACLE_FAIL);
+}
+
+TEST(oracle_replay_match_steps_total_diverge) {
+    asx_lab_result r1, r2;
+    asx_oracle_result result;
+
+    memset(&r1, 0, sizeof(r1));
+    memset(&r2, 0, sizeof(r2));
+    r1.steps_completed = 2;
+    r1.steps_total = 3;
+    r2.steps_completed = 2;
+    r2.steps_total = 2;
+
+    result = asx_oracle_replay_match(&r1, &r2);
+    ASSERT_EQ(result.verdict, ASX_ORACLE_FAIL);
+}
+
+TEST(oracle_replay_match_polls_diverge) {
+    asx_lab_result r1, r2;
+    asx_oracle_result result;
+
+    memset(&r1, 0, sizeof(r1));
+    memset(&r2, 0, sizeof(r2));
+    r1.steps_completed = 2;
+    r1.steps_total = 2;
+    r1.elapsed_ns = 123u;
+    r1.polls_total = 4u;
+    r1.last_status = ASX_OK;
+    r2.steps_completed = 2;
+    r2.steps_total = 2;
+    r2.elapsed_ns = 123u;
+    r2.polls_total = 5u;
+    r2.last_status = ASX_OK;
 
     result = asx_oracle_replay_match(&r1, &r2);
     ASSERT_EQ(result.verdict, ASX_ORACLE_FAIL);
@@ -528,6 +568,8 @@ int main(void) {
     RUN_TEST(oracle_replay_match_pass);
     RUN_TEST(oracle_replay_match_step_diverge);
     RUN_TEST(oracle_replay_match_time_diverge);
+    RUN_TEST(oracle_replay_match_steps_total_diverge);
+    RUN_TEST(oracle_replay_match_polls_diverge);
     RUN_TEST(oracle_replay_match_status_diverge);
     RUN_TEST(oracle_replay_null_fails);
     RUN_TEST(replay_render_result_json_contains_core_fields);

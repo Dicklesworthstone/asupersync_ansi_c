@@ -194,8 +194,12 @@ asx_oracle_result asx_oracle_replay_match(const asx_lab_result *r1, const asx_la
 
     if (r1->steps_completed != r2->steps_completed)
         return make_result(ASX_ORACLE_FAIL, "replay", "step count diverged");
+    if (r1->steps_total != r2->steps_total)
+        return make_result(ASX_ORACLE_FAIL, "replay", "total step contract diverged");
     if (r1->elapsed_ns != r2->elapsed_ns)
         return make_result(ASX_ORACLE_FAIL, "replay", "elapsed time diverged");
+    if (r1->polls_total != r2->polls_total)
+        return make_result(ASX_ORACLE_FAIL, "replay", "poll count diverged");
     if (r1->last_status != r2->last_status)
         return make_result(ASX_ORACLE_FAIL, "replay", "final status diverged");
 
