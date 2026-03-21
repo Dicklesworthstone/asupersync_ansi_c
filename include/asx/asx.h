@@ -61,8 +61,51 @@
 #include <asx/security/audit.h>
 #include <asx/security/security.h>
 
+/* Byte buffer and I/O adapters */
+#include <asx/bytes/buf.h>
+#include <asx/bytes/codec.h>
+#include <asx/bytes/io_adapter.h>
+
+/* Channel families (MPSC, oneshot, broadcast, watch, session) */
+#include <asx/core/oneshot.h>
+#include <asx/core/broadcast.h>
+#include <asx/core/watch.h>
+#include <asx/core/session.h>
+#include <asx/core/affinity.h>
+#include <asx/core/adaptive.h>
+
+/* Synchronization primitives */
+#include <asx/sync/barrier.h>
+#include <asx/sync/mutex.h>
+#include <asx/sync/semaphore.h>
+#include <asx/sync/once.h>
+#include <asx/sync/notify.h>
+
+/* Time families */
+#include <asx/time/timer_wheel.h>
+#include <asx/time/deadline.h>
+#include <asx/time/sleep.h>
+
+/* Stream family */
+#include <asx/stream/stream.h>
+
 /* Network surface */
 #include <asx/net/net.h>
+#include <asx/net/tls.h>
+#include <asx/net/websocket.h>
+#include <asx/net/quic.h>
+#include <asx/net/server.h>
+#include <asx/net/http.h>
+#include <asx/net/web.h>
+#include <asx/net/grpc.h>
+#include <asx/net/db.h>
+#include <asx/net/messaging.h>
+#include <asx/net/distributed.h>
+
+/* Filesystem, process, and signal surfaces */
+#include <asx/fs/fs.h>
+#include <asx/process/process.h>
+#include <asx/signal/signal.h>
 
 /* Actor model and supervision */
 #include <asx/actor/actor.h>
