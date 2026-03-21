@@ -44,7 +44,7 @@ asx_buf asx_buf_slice(asx_buf src, uint32_t offset, uint32_t len) {
         b.len = 0;
         return b;
     }
-    if (offset + len > src.len) {
+    if (len > src.len - offset) {
         b.ptr = NULL;
         b.len = 0;
         return b;

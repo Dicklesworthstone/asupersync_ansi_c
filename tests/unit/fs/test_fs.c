@@ -146,6 +146,33 @@ TEST(fs_reset_reuse_bumps_generation) {
     ASSERT_EQ(asx_fs_file_close(fresh_file), ASX_OK);
 }
 
+TEST(file_trunc_requires_write_access) {
+    asx_fs_path path;
+    asx_file_handle file;
+    asx_buf payload;
+    asx_buf_mut dst;
+    uint32_t n;
+
+    asx_fs_reset();
+    ASSERT_EQ(asx_fs_path_from_cstr(&path, "/tmp/trunc-guard"), ASX_OK);
+    ASSERT_EQ(asx_fs_file_open(&file, &path,
+                               ASX_FS_OPEN_CREATE | ASX_FS_OPEN_READ | ASX_FS_OPEN_WRITE),
+              ASX_OK);
+    payload = asx_buf_from_cstr("persist");
+    ASSERT_EQ(asx_fs_file_poll_write(file, &payload, &n), ASX_OK);
+    ASSERT_EQ(asx_fs_file_close(file), ASX_OK);
+
+    ASSERT_EQ(asx_fs_file_open(&file, &path, ASX_FS_OPEN_READ | ASX_FS_OPEN_TRUNC),
+              ASX_E_PERMISSION_DENIED);
+
+    ASSERT_EQ(asx_fs_file_open(&file, &path, ASX_FS_OPEN_READ), ASX_OK);
+    asx_buf_mut_init(&dst);
+    ASSERT_EQ(asx_fs_file_poll_read(file, &dst, &n), ASX_OK);
+    ASSERT_EQ(n, payload.len);
+    ASSERT_TRUE(asx_buf_eq(asx_buf_mut_freeze(&dst), payload));
+    ASSERT_EQ(asx_fs_file_close(file), ASX_OK);
+}
+
 int main(void) {
     RUN_TEST(path_from_cstr_roundtrip);
     RUN_TEST(path_eq_rejects_mismatch);
@@ -156,6 +183,7 @@ int main(void) {
     RUN_TEST(file_capacity_is_enforced);
     RUN_TEST(fs_reset_invalidates_handles);
     RUN_TEST(fs_reset_reuse_bumps_generation);
+    RUN_TEST(file_trunc_requires_write_access);
     TEST_REPORT();
     return test_failures;
 }

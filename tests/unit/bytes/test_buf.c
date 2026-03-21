@@ -68,6 +68,13 @@ TEST(buf_slice_at_end) {
     ASSERT_EQ(s.len, 0u);
 }
 
+TEST(buf_slice_overflow_fails_closed) {
+    asx_buf src = asx_buf_from_cstr("abc");
+    asx_buf s = asx_buf_slice(src, 1u, UINT32_MAX);
+    ASSERT_EQ(s.len, 0u);
+    ASSERT_TRUE(s.ptr == NULL);
+}
+
 TEST(buf_eq_same) {
     asx_buf a = asx_buf_from_cstr("hello");
     asx_buf b = asx_buf_from_cstr("hello");
@@ -300,6 +307,7 @@ int main(void) {
     RUN_TEST(buf_slice_basic);
     RUN_TEST(buf_slice_out_of_bounds);
     RUN_TEST(buf_slice_at_end);
+    RUN_TEST(buf_slice_overflow_fails_closed);
     RUN_TEST(buf_eq_same);
     RUN_TEST(buf_eq_different);
     RUN_TEST(buf_eq_different_len);

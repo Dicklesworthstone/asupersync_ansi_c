@@ -141,6 +141,9 @@ asx_status asx_fs_file_open(asx_file_handle *out, const asx_fs_path *path, uint3
 
     if (out == NULL || path == NULL) return ASX_E_INVALID_ARGUMENT;
     if ((flags & (ASX_FS_OPEN_READ | ASX_FS_OPEN_WRITE)) == 0u) { return ASX_E_INVALID_ARGUMENT; }
+    if ((flags & ASX_FS_OPEN_TRUNC) != 0u && (flags & ASX_FS_OPEN_WRITE) == 0u) {
+        return ASX_E_PERMISSION_DENIED;
+    }
 
     idx = asx_fs_find_entry(path);
     if (idx < 0) {
