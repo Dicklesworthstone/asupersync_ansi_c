@@ -113,10 +113,15 @@ TEST(cancel_request_invalid_task) {
 
 TEST(cancel_request_valid) {
     asx_cancel_reason r;
+    asx_status st;
     memset(&r, 0, sizeof(r));
     r.kind = ASX_CANCEL_USER;
     r.message = "test";
-    ASSERT_EQ(asx_cancel_request(42, &r), ASX_OK);
+    /* Task ID 42 doesn't correspond to a spawned task, so the runtime
+     * rejects it. This verifies cancel_request delegates to the runtime
+     * instead of returning a hardcoded ASX_OK. */
+    st = asx_cancel_request(42, &r);
+    ASSERT_TRUE(st != ASX_OK);
 }
 
 /* ================================================================== */
