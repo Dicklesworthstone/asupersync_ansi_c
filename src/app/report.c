@@ -100,6 +100,18 @@ static const char *severity_str(asx_doctor_severity sev) {
     return "??";
 }
 
+static asx_status validate_doctor_report(const asx_doctor_report *report) {
+    if (report == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (report->check_count > ASX_DOCTOR_MAX_CHECKS) return ASX_E_INVALID_ARGUMENT;
+    return ASX_OK;
+}
+
+static asx_status validate_evidence_sink(const asx_evidence_sink *sink) {
+    if (sink == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (sink->count > ASX_EVIDENCE_SINK_CAPACITY) return ASX_E_INVALID_ARGUMENT;
+    return ASX_OK;
+}
+
 static const char *evidence_level_str(asx_evidence_level lev) {
     switch (lev) {
     case ASX_EVIDENCE_INFO: return "INFO";
@@ -156,8 +168,11 @@ static void append_json_escaped(asx_report_buf *buf, const char *str) {
 
 asx_status asx_report_doctor_text(const asx_doctor_report *report, asx_report_buf *out) {
     uint32_t i;
+    asx_status st;
 
-    if (report == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = validate_doctor_report(report);
+    if (st != ASX_OK) return st;
 
     for (i = 0; i < report->check_count; i++) {
         const asx_doctor_check_result *c = &report->checks[i];
@@ -189,8 +204,11 @@ asx_status asx_report_doctor_text(const asx_doctor_report *report, asx_report_bu
 
 asx_status asx_report_doctor_json(const asx_doctor_report *report, asx_report_buf *out) {
     uint32_t i;
+    asx_status st;
 
-    if (report == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = validate_doctor_report(report);
+    if (st != ASX_OK) return st;
 
     asx_report_buf_append(out, "{\"checks\":[");
 
@@ -229,8 +247,11 @@ asx_status asx_report_doctor_json(const asx_doctor_report *report, asx_report_bu
 
 asx_status asx_report_evidence_text(const asx_evidence_sink *sink, asx_report_buf *out) {
     uint32_t i;
+    asx_status st;
 
-    if (sink == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = validate_evidence_sink(sink);
+    if (st != ASX_OK) return st;
 
     for (i = 0; i < sink->count; i++) {
         const asx_evidence_entry *e = &sink->entries[i];
@@ -260,8 +281,11 @@ asx_status asx_report_evidence_text(const asx_evidence_sink *sink, asx_report_bu
 
 asx_status asx_report_evidence_json(const asx_evidence_sink *sink, asx_report_buf *out) {
     uint32_t i;
+    asx_status st;
 
-    if (sink == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = validate_evidence_sink(sink);
+    if (st != ASX_OK) return st;
 
     asx_report_buf_append(out, "{\"entries\":[");
 

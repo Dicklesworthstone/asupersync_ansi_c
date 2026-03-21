@@ -213,6 +213,20 @@ static void test_doctor_render_null_args(void) {
     ASSERT(asx_report_doctor_json(&doctor, NULL) == ASX_E_INVALID_ARGUMENT, "null buf json");
 }
 
+static void test_doctor_render_rejects_oversized_check_count(void) {
+    asx_doctor_report doctor;
+    asx_report_buf buf;
+
+    memset(&doctor, 0, sizeof(doctor));
+    doctor.check_count = ASX_DOCTOR_MAX_CHECKS + 1u;
+    asx_report_buf_init(&buf);
+
+    ASSERT(asx_report_doctor_text(&doctor, &buf) == ASX_E_INVALID_ARGUMENT,
+           "doctor text rejects oversized count");
+    ASSERT(asx_report_doctor_json(&doctor, &buf) == ASX_E_INVALID_ARGUMENT,
+           "doctor json rejects oversized count");
+}
+
 /* ================================================================== */
 /* Evidence rendering                                                 */
 /* ================================================================== */
@@ -270,6 +284,20 @@ static void test_evidence_render_null_args(void) {
 
     ASSERT(asx_report_evidence_text(NULL, &buf) == ASX_E_INVALID_ARGUMENT, "null sink");
     ASSERT(asx_report_evidence_text(&sink, NULL) == ASX_E_INVALID_ARGUMENT, "null buf");
+}
+
+static void test_evidence_render_rejects_oversized_count(void) {
+    asx_evidence_sink sink;
+    asx_report_buf buf;
+
+    memset(&sink, 0, sizeof(sink));
+    sink.count = ASX_EVIDENCE_SINK_CAPACITY + 1u;
+    asx_report_buf_init(&buf);
+
+    ASSERT(asx_report_evidence_text(&sink, &buf) == ASX_E_INVALID_ARGUMENT,
+           "evidence text rejects oversized count");
+    ASSERT(asx_report_evidence_json(&sink, &buf) == ASX_E_INVALID_ARGUMENT,
+           "evidence json rejects oversized count");
 }
 
 /* ================================================================== */
@@ -490,12 +518,14 @@ int main(void) {
     RUN(test_doctor_json_healthy);
     RUN(test_doctor_json_escapes_strings);
     RUN(test_doctor_render_null_args);
+    RUN(test_doctor_render_rejects_oversized_check_count);
 
     /* Evidence rendering */
     RUN(test_evidence_text);
     RUN(test_evidence_json);
     RUN(test_evidence_json_escapes_strings);
     RUN(test_evidence_render_null_args);
+    RUN(test_evidence_render_rejects_oversized_count);
 
     /* Inspection rendering */
     RUN(test_inspection_text);

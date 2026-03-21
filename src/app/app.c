@@ -93,7 +93,9 @@ asx_status asx_app_parse_args(asx_app_args *args, int argc, const char **argv) {
             uint64_t val = 0;
             if (*p == '\0') return ASX_E_INVALID_ARGUMENT;
             while (*p >= '0' && *p <= '9') {
-                val = val * 10 + (uint64_t)(*p - '0');
+                const uint64_t digit = (uint64_t)(*p - '0');
+                if (val > (UINT64_MAX - digit) / 10u) return ASX_E_INVALID_ARGUMENT;
+                val = val * 10u + digit;
                 p++;
             }
             if (*p != '\0') return ASX_E_INVALID_ARGUMENT;

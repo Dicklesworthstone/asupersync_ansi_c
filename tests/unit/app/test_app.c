@@ -760,6 +760,14 @@ static void test_parse_args_seed_requires_decimal(void) {
     ASSERT(asx_app_parse_args(&args, 2, argv) == ASX_E_INVALID_ARGUMENT, "seed requires decimal");
 }
 
+static void test_parse_args_seed_rejects_overflow(void) {
+    asx_app_args args;
+    const char *argv[] = {"myapp", "--seed=18446744073709551616"};
+
+    ASSERT(asx_app_parse_args(&args, 2, argv) == ASX_E_INVALID_ARGUMENT,
+           "seed overflow rejected");
+}
+
 static void test_parse_args_null(void) {
     ASSERT(asx_app_parse_args(NULL, 0, NULL) == ASX_E_INVALID_ARGUMENT, "null args rejected");
 }
@@ -1231,6 +1239,7 @@ int main(void) {
     RUN(test_parse_args_unknown_rejected);
     RUN(test_parse_args_replay_requires_scenario);
     RUN(test_parse_args_seed_requires_decimal);
+    RUN(test_parse_args_seed_rejects_overflow);
     RUN(test_parse_args_null);
 
     /* App: lifecycle */
