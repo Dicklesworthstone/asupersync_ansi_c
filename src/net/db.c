@@ -122,6 +122,8 @@ asx_status asx_db_result_add_column(asx_db_result *result, const char *name) {
 asx_status asx_db_result_add_row(asx_db_result *result, const asx_db_row *row) {
     if (result == NULL || row == NULL) return ASX_E_INVALID_ARGUMENT;
     if (result->row_count >= ASX_DB_MAX_ROWS) return ASX_E_RESOURCE_EXHAUSTED;
+    if (row->cell_count > ASX_DB_MAX_COLUMNS) return ASX_E_INVALID_ARGUMENT;
+    if (row->cell_count > result->column_count) return ASX_E_INVALID_ARGUMENT;
     result->rows[result->row_count] = *row;
     result->row_count++;
     return ASX_OK;

@@ -146,6 +146,37 @@ TEST(db_result_navigation) {
     ASSERT_EQ(r->cells[0].int_val, 1);
 }
 
+TEST(db_result_rejects_row_beyond_schema) {
+    asx_db_result result;
+    asx_db_row row;
+
+    asx_db_result_init(&result);
+    ASSERT_EQ(asx_db_result_add_column(&result, "id"), ASX_OK);
+
+    memset(&row, 0, sizeof(row));
+    row.cells[0] = asx_db_value_int(1);
+    row.cells[1] = asx_db_value_text("extra");
+    row.cell_count = 2u;
+
+    ASSERT_EQ(asx_db_result_add_row(&result, &row), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(result.row_count, 0u);
+}
+
+TEST(db_result_rejects_corrupt_cell_count) {
+    asx_db_result result;
+    asx_db_row row;
+
+    asx_db_result_init(&result);
+    ASSERT_EQ(asx_db_result_add_column(&result, "id"), ASX_OK);
+
+    memset(&row, 0, sizeof(row));
+    row.cells[0] = asx_db_value_int(1);
+    row.cell_count = ASX_DB_MAX_COLUMNS + 1u;
+
+    ASSERT_EQ(asx_db_result_add_row(&result, &row), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(result.row_count, 0u);
+}
+
 TEST(db_column_index) {
     asx_db_result result;
     asx_db_result_init(&result);
@@ -207,6 +238,8 @@ int main(void) {
     RUN_TEST(db_execute_query);
     RUN_TEST(db_transaction_lifecycle);
     RUN_TEST(db_result_navigation);
+    RUN_TEST(db_result_rejects_row_beyond_schema);
+    RUN_TEST(db_result_rejects_corrupt_cell_count);
     RUN_TEST(db_column_index);
     RUN_TEST(db_value_types);
     RUN_TEST(db_null_args);
