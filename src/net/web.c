@@ -525,9 +525,13 @@ asx_status asx_web_cors_apply(const asx_web_cors_config *cfg, const char *reques
         return ASX_OK; /* Origin not allowed — don't add CORS headers */
     }
 
+    /* When credentials are enabled, never use wildcard — always echo
+     * the specific requesting origin per the CORS spec. */
     (void)asx_http_headers_add(&resp->headers, "Access-Control-Allow-Origin", request_origin);
     if (cfg->allow_credentials) {
         (void)asx_http_headers_add(&resp->headers, "Access-Control-Allow-Credentials", "true");
+        /* Vary: Origin required when origin-specific Access-Control-Allow-Origin is used */
+        (void)asx_http_headers_add(&resp->headers, "Vary", "Origin");
     }
     return ASX_OK;
 }
@@ -560,8 +564,24 @@ const char *asx_web_csrf_token(const asx_web_csrf *csrf) {
 }
 
 int asx_web_csrf_validate(const asx_web_csrf *csrf, const char *submitted) {
+    /* Constant-time comparison to prevent timing side-channel attacks.
+     * First check length, then compare all bytes. */
+    size_t slen;
+    uint32_t i;
+    uint8_t diff;
+
     if (csrf == NULL || submitted == NULL) return 0;
-    return strcmp(csrf->token, submitted) == 0;
+
+    /* Length check — non-constant-time but only leaks length, not content */
+    slen = web_bounded_strlen(submitted, ASX_WEB_CSRF_TOKEN_LEN + 1u);
+    if (slen != ASX_WEB_CSRF_TOKEN_LEN) return 0;
+
+    /* Constant-time byte comparison */
+    diff = 0u;
+    for (i = 0u; i < ASX_WEB_CSRF_TOKEN_LEN; i++) {
+        diff |= (uint8_t)((uint8_t)csrf->token[i] ^ (uint8_t)submitted[i]);
+    }
+    return diff == 0u;
 }
 
 /* ------------------------------------------------------------------ */
