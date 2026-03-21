@@ -160,6 +160,10 @@ asx_status asx_tls_stream_poll_read(asx_tls_stream stream, asx_buf_mut *dst,
     s = tls_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (s->state != ASX_TLS_STATE_READY) return ASX_E_INVALID_STATE;
+    if (!asx_tcp_stream_is_alive(s->tcp)) {
+        s->state = ASX_TLS_STATE_ERROR;
+        return ASX_E_DISCONNECTED;
+    }
     return asx_tcp_stream_poll_read(s->tcp, dst, bytes_read);
 }
 
@@ -170,6 +174,10 @@ asx_status asx_tls_stream_poll_write(asx_tls_stream stream, const asx_buf *src,
     s = tls_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (s->state != ASX_TLS_STATE_READY) return ASX_E_INVALID_STATE;
+    if (!asx_tcp_stream_is_alive(s->tcp)) {
+        s->state = ASX_TLS_STATE_ERROR;
+        return ASX_E_DISCONNECTED;
+    }
     return asx_tcp_stream_poll_write(s->tcp, src, bytes_written);
 }
 
