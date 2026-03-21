@@ -8,6 +8,7 @@
  */
 
 #include <asx/core/cancel.h>
+#include <asx/runtime/runtime.h>
 #include <stddef.h>
 
 /* Default cleanup poll quota per severity group (0-5) */
@@ -165,16 +166,16 @@ int asx_cancel_witness_is_valid(asx_cancel_witness_id w) {
 }
 
 /* -------------------------------------------------------------------
- * User-facing cancellation request (walking skeleton)
+ * User-facing cancellation request
  * ------------------------------------------------------------------- */
 
 asx_status asx_cancel_request(asx_task_id task, const asx_cancel_reason *reason) {
     if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
     if (task == ASX_INVALID_ID) return ASX_E_NOT_FOUND;
-    /* Walking skeleton: validates arguments but does not propagate.
-     * Full cancellation propagation requires scheduler integration
-     * (Phase 4). */
-    return ASX_OK;
+
+    /* Delegate to the runtime's task cancellation mechanism, which handles
+     * state transitions, cleanup budget, witness creation, and ghost checks. */
+    return asx_task_cancel(task, reason->kind);
 }
 
 /* -------------------------------------------------------------------

@@ -49,7 +49,7 @@ static const asx_ambient_finding s_known_findings[] = {
 #define AMBIENT_VIOLATION_CEILING 0u
 
 const asx_ambient_finding *asx_ambient_known_findings(size_t *out_count) {
-    *out_count = KNOWN_COUNT;
+    if (out_count != NULL) *out_count = KNOWN_COUNT;
     return s_known_findings;
 }
 
@@ -66,7 +66,7 @@ static const char *s_pristine_modules[] = {"src/core/channel.c",      "src/core/
 #define PRISTINE_COUNT (sizeof(s_pristine_modules) / sizeof(s_pristine_modules[0]))
 
 const char *const *asx_audit_pristine_modules(size_t *out_count) {
-    *out_count = PRISTINE_COUNT;
+    if (out_count != NULL) *out_count = PRISTINE_COUNT;
     return s_pristine_modules;
 }
 

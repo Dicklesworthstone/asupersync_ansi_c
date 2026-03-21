@@ -27,6 +27,11 @@ TEST(catalog_has_entries) {
     ASSERT_TRUE(count > 0);
 }
 
+TEST(catalog_allows_null_count_out) {
+    const asx_ambient_finding *catalog = asx_ambient_known_findings(NULL);
+    ASSERT_TRUE(catalog != NULL);
+}
+
 TEST(catalog_entries_have_required_fields) {
     size_t count = 0;
     size_t i;
@@ -105,6 +110,11 @@ TEST(pristine_modules_listed) {
     const char *const *modules = asx_audit_pristine_modules(&count);
     ASSERT_TRUE(modules != NULL);
     ASSERT_TRUE(count > 0);
+}
+
+TEST(pristine_modules_allow_null_count_out) {
+    const char *const *modules = asx_audit_pristine_modules(NULL);
+    ASSERT_TRUE(modules != NULL);
 }
 
 TEST(pristine_modules_include_security) {
@@ -467,6 +477,7 @@ TEST(evidence_combined_audit_and_negative_suite) {
 int main(void) {
     /* Ambient authority catalog */
     RUN_TEST(catalog_has_entries);
+    RUN_TEST(catalog_allows_null_count_out);
     RUN_TEST(catalog_entries_have_required_fields);
     RUN_TEST(catalog_all_exempted_are_providers);
     RUN_TEST(violation_ceiling_is_zero);
@@ -477,6 +488,7 @@ int main(void) {
 
     /* Pristine modules */
     RUN_TEST(pristine_modules_listed);
+    RUN_TEST(pristine_modules_allow_null_count_out);
     RUN_TEST(pristine_modules_include_security);
     RUN_TEST(pristine_modules_include_core);
 
