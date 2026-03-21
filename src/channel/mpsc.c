@@ -144,7 +144,7 @@ asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_chann
     if (region_state != ASX_REGION_OPEN) { return ASX_E_INVALID_STATE; }
 
     for (i = 0; i < ASX_MAX_CHANNELS; i++) {
-        if (!g_channels[i].alive) {
+        if (!g_channels[i].alive || g_channels[i].state == ASX_CHANNEL_FULLY_CLOSED) {
             s = &g_channels[i];
 
             s->generation++;
@@ -178,10 +178,7 @@ asx_status asx_channel_close_sender(asx_channel_id id) {
 
     switch (s->state) {
     case ASX_CHANNEL_OPEN: s->state = ASX_CHANNEL_SENDER_CLOSED; return ASX_OK;
-    case ASX_CHANNEL_RECEIVER_CLOSED:
-        s->state = ASX_CHANNEL_FULLY_CLOSED;
-        s->alive = 0; /* Both ends closed — release slot for reuse */
-        return ASX_OK;
+    case ASX_CHANNEL_RECEIVER_CLOSED: s->state = ASX_CHANNEL_FULLY_CLOSED; return ASX_OK;
     case ASX_CHANNEL_SENDER_CLOSED:
     case ASX_CHANNEL_FULLY_CLOSED: return ASX_E_INVALID_STATE;
     }
@@ -206,7 +203,6 @@ asx_status asx_channel_close_receiver(asx_channel_id id) {
         s->state = ASX_CHANNEL_FULLY_CLOSED;
         s->queue_len = 0;
         s->queue_head = 0;
-        s->alive = 0; /* Both ends closed — release slot for reuse */
         return ASX_OK;
     case ASX_CHANNEL_RECEIVER_CLOSED:
     case ASX_CHANNEL_FULLY_CLOSED: return ASX_E_INVALID_STATE;
