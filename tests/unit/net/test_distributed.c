@@ -222,6 +222,130 @@ TEST(recovery_null_args) {
     ASSERT_EQ(asx_dist_recovery_step(NULL, NULL, NULL, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+/* Edge case: ring lookup with single node returns that node for any key */
+TEST(ring_single_node_covers_all_keys) {
+    asx_dist_cluster cluster;
+    asx_dist_node *n;
+    asx_dist_hash_ring ring;
+    uint32_t i;
+
+    asx_dist_cluster_init(&cluster);
+    asx_dist_cluster_add_node(&cluster, "solo", &n);
+    asx_dist_node_set_state(n, ASX_DIST_NODE_ACTIVE);
+
+    asx_dist_ring_init(&ring);
+    ASSERT_EQ(asx_dist_ring_build(&ring, &cluster), ASX_OK);
+
+    for (i = 0u; i < 100u; i++) {
+        ASSERT_EQ(asx_dist_ring_lookup(&ring, i * 12345u), n->id);
+    }
+}
+
+/* Edge case: node re-add after removal gets new ID */
+TEST(cluster_readd_after_remove) {
+    asx_dist_cluster cluster;
+    asx_dist_node *n1, *n2;
+    uint32_t id1;
+
+    asx_dist_cluster_init(&cluster);
+    asx_dist_cluster_add_node(&cluster, "node", &n1);
+    id1 = n1->id;
+    asx_dist_cluster_remove_node(&cluster, "node");
+    ASSERT_EQ(asx_dist_cluster_add_node(&cluster, "node", &n2), ASX_OK);
+    ASSERT_NE(n2->id, id1);
+}
+
+/* Edge case: rebalance after multiple failures leaves surviving nodes */
+TEST(assignment_multi_failure_rebalance) {
+    asx_dist_cluster cluster;
+    asx_dist_node *nodes[4];
+    asx_dist_assignment assign;
+    uint32_t i;
+
+    asx_dist_cluster_init(&cluster);
+    asx_dist_cluster_add_node(&cluster, "a", &nodes[0]);
+    asx_dist_cluster_add_node(&cluster, "b", &nodes[1]);
+    asx_dist_cluster_add_node(&cluster, "c", &nodes[2]);
+    asx_dist_cluster_add_node(&cluster, "d", &nodes[3]);
+    for (i = 0; i < 4; i++) asx_dist_node_set_state(nodes[i], ASX_DIST_NODE_ACTIVE);
+
+    asx_dist_assignment_init(&assign, 8);
+    ASSERT_EQ(asx_dist_assignment_rebalance(&assign, &cluster), ASX_OK);
+
+    /* Kill two nodes */
+    asx_dist_cluster_remove_node(&cluster, "a");
+    asx_dist_cluster_remove_node(&cluster, "c");
+    ASSERT_EQ(asx_dist_cluster_active_count(&cluster), 2u);
+
+    /* Rebalance with survivors */
+    ASSERT_EQ(asx_dist_assignment_rebalance(&assign, &cluster), ASX_OK);
+    for (i = 0; i < 8; i++) {
+        uint32_t owner = asx_dist_assignment_owner(&assign, i);
+        ASSERT_TRUE(owner == nodes[1]->id || owner == nodes[3]->id);
+    }
+}
+
+/* Edge case: snapshot store exhaustion */
+TEST(snapshot_exhaustion) {
+    asx_dist_snapshot_store store;
+    asx_dist_snapshot *snap;
+    uint32_t i;
+
+    asx_dist_snapshot_store_init(&store);
+    for (i = 0; i < ASX_DIST_MAX_SNAPSHOTS; i++) {
+        ASSERT_EQ(asx_dist_snapshot_create(&store, 1, "data", 4, &snap), ASX_OK);
+    }
+    ASSERT_EQ(asx_dist_snapshot_create(&store, 1, "overflow", 8, &snap),
+              ASX_E_RESOURCE_EXHAUSTED);
+}
+
+/* Edge case: recovery with no snapshots still completes */
+TEST(recovery_no_snapshots) {
+    asx_dist_cluster cluster;
+    asx_dist_node *n1, *n2;
+    asx_dist_assignment assign;
+    asx_dist_snapshot_store snapshots;
+    asx_dist_recovery recovery;
+
+    asx_dist_cluster_init(&cluster);
+    asx_dist_cluster_add_node(&cluster, "p", &n1);
+    asx_dist_cluster_add_node(&cluster, "b", &n2);
+    asx_dist_node_set_state(n1, ASX_DIST_NODE_ACTIVE);
+    asx_dist_node_set_state(n2, ASX_DIST_NODE_ACTIVE);
+    asx_dist_assignment_init(&assign, 4);
+    asx_dist_assignment_rebalance(&assign, &cluster);
+    asx_dist_snapshot_store_init(&snapshots); /* empty — no snapshots */
+
+    asx_dist_recovery_init(&recovery);
+    asx_dist_recovery_start(&recovery, n1->id);
+
+    /* Step through all phases */
+    asx_dist_recovery_step(&recovery, &cluster, &assign, &snapshots);
+    asx_dist_recovery_step(&recovery, &cluster, &assign, &snapshots);
+    asx_dist_recovery_step(&recovery, &cluster, &assign, &snapshots);
+
+    ASSERT_TRUE(asx_dist_recovery_is_complete(&recovery));
+    ASSERT_EQ(recovery.snapshots_restored, 0u);
+    ASSERT_EQ(asx_dist_recovery_get_state(&recovery), ASX_DIST_RECOVERY_COMPLETE);
+}
+
+/* Edge case: cluster node exhaustion */
+TEST(cluster_exhaustion) {
+    asx_dist_cluster cluster;
+    asx_dist_node *n;
+    uint32_t i;
+    char name[8];
+
+    asx_dist_cluster_init(&cluster);
+    for (i = 0; i < ASX_DIST_MAX_NODES; i++) {
+        name[0] = 'A' + (char)(i % 26);
+        name[1] = '0' + (char)(i / 26);
+        name[2] = '\0';
+        ASSERT_EQ(asx_dist_cluster_add_node(&cluster, name, &n), ASX_OK);
+    }
+    ASSERT_EQ(asx_dist_cluster_add_node(&cluster, "overflow", &n), ASX_E_RESOURCE_EXHAUSTED);
+}
+
 int main(void) {
     fprintf(stderr, "=== distributed tests ===\n");
 
@@ -235,18 +359,26 @@ int main(void) {
     RUN_TEST(hash_deterministic);
     RUN_TEST(hash_different_keys_differ);
     RUN_TEST(ring_build_and_lookup);
+    RUN_TEST(ring_single_node_covers_all_keys);
+
+    /* Cluster edge cases */
+    RUN_TEST(cluster_readd_after_remove);
+    RUN_TEST(cluster_exhaustion);
 
     /* Assignment */
     RUN_TEST(assignment_rebalance);
     RUN_TEST(assignment_no_active_nodes);
+    RUN_TEST(assignment_multi_failure_rebalance);
 
     /* Snapshot */
     RUN_TEST(snapshot_create_and_restore);
     RUN_TEST(snapshot_latest);
     RUN_TEST(snapshot_missing_node);
+    RUN_TEST(snapshot_exhaustion);
 
     /* Recovery */
     RUN_TEST(recovery_full_cycle);
+    RUN_TEST(recovery_no_snapshots);
     RUN_TEST(recovery_double_start_rejected);
     RUN_TEST(recovery_null_args);
 
