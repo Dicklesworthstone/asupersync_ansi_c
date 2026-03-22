@@ -14,8 +14,8 @@
 /* ------------------------------------------------------------------ */
 
 static asx_status echo_handler(const asx_grpc_message *req, asx_grpc_message *resp,
-                                const asx_grpc_metadata *md, asx_grpc_code *out_code,
-                                void *user_data) {
+                               const asx_grpc_metadata *md, asx_grpc_code *out_code,
+                               void *user_data) {
     (void)md;
     (void)user_data;
     asx_grpc_message_set(resp, req->data, req->len);
@@ -24,8 +24,8 @@ static asx_status echo_handler(const asx_grpc_message *req, asx_grpc_message *re
 }
 
 static asx_status fail_handler(const asx_grpc_message *req, asx_grpc_message *resp,
-                                const asx_grpc_metadata *md, asx_grpc_code *out_code,
-                                void *user_data) {
+                               const asx_grpc_metadata *md, asx_grpc_code *out_code,
+                               void *user_data) {
     (void)req;
     (void)resp;
     (void)md;
@@ -114,9 +114,7 @@ TEST(grpc_service_init_truncates_long_name) {
     char long_name[ASX_GRPC_SERVICE_NAME_MAX + 8u];
     uint32_t i;
 
-    for (i = 0u; i < sizeof(long_name) - 1u; i++) {
-        long_name[i] = 'S';
-    }
+    for (i = 0u; i < sizeof(long_name) - 1u; i++) { long_name[i] = 'S'; }
     long_name[sizeof(long_name) - 1u] = '\0';
 
     asx_grpc_service_init(&svc, long_name);
@@ -231,9 +229,7 @@ TEST(grpc_channel_init_truncates_long_target) {
     char target[ASX_GRPC_SERVICE_NAME_MAX + 16u];
     uint32_t i;
 
-    for (i = 0u; i < sizeof(target) - 1u; i++) {
-        target[i] = 't';
-    }
+    for (i = 0u; i < sizeof(target) - 1u; i++) { target[i] = 't'; }
     target[sizeof(target) - 1u] = '\0';
 
     asx_grpc_channel_init(&ch, target, NULL);
@@ -305,8 +301,8 @@ TEST(grpc_reflect_empty_server) {
 /* ------------------------------------------------------------------ */
 
 static asx_status md_check_handler(const asx_grpc_message *req, asx_grpc_message *resp,
-                                    const asx_grpc_metadata *md, asx_grpc_code *out_code,
-                                    void *user_data) {
+                                   const asx_grpc_metadata *md, asx_grpc_code *out_code,
+                                   void *user_data) {
     const char *auth;
     (void)req;
     (void)resp;

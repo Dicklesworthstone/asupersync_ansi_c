@@ -41,9 +41,7 @@ TEST(ipv6_loopback_addr) {
     uint8_t i;
     ASSERT_EQ(sa.family, ASX_AF_INET6);
     ASSERT_EQ(sa.port, 9090);
-    for (i = 0; i < 15; i++) {
-        ASSERT_EQ(sa.addr[i], 0);
-    }
+    for (i = 0; i < 15; i++) { ASSERT_EQ(sa.addr[i], 0); }
     ASSERT_EQ(sa.addr[15], 1);
 }
 
@@ -54,8 +52,8 @@ TEST(addr_equality) {
     asx_socket_addr d = asx_socket_addr_ipv4(10, 0, 0, 1, 80);
 
     ASSERT_TRUE(asx_socket_addr_eq(&a, &b));
-    ASSERT_FALSE(asx_socket_addr_eq(&a, &c));  /* different port */
-    ASSERT_FALSE(asx_socket_addr_eq(&a, &d));  /* different addr */
+    ASSERT_FALSE(asx_socket_addr_eq(&a, &c)); /* different port */
+    ASSERT_FALSE(asx_socket_addr_eq(&a, &d)); /* different addr */
     ASSERT_FALSE(asx_socket_addr_eq(NULL, &a));
     ASSERT_FALSE(asx_socket_addr_eq(&a, NULL));
 }
@@ -128,9 +126,7 @@ TEST(tcp_listener_exhaustion) {
         ASSERT_EQ(asx_tcp_listener_bind(&listeners[ASX_MAX_TCP_LISTENERS], &addr),
                   ASX_E_RESOURCE_EXHAUSTED);
     }
-    for (i = 0; i < ASX_MAX_TCP_LISTENERS; i++) {
-        asx_tcp_listener_close(listeners[i]);
-    }
+    for (i = 0; i < ASX_MAX_TCP_LISTENERS; i++) { asx_tcp_listener_close(listeners[i]); }
 }
 
 /* ------------------------------------------------------------------ */

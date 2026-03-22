@@ -157,7 +157,7 @@ TEST(headers_add_and_get) {
     ASSERT_STR_EQ(val, "text/plain");
 
     val = asx_http_headers_get(&hdrs, "content-type");
-    ASSERT_TRUE(val != NULL);  /* case-insensitive lookup */
+    ASSERT_TRUE(val != NULL); /* case-insensitive lookup */
 }
 
 TEST(headers_remove) {
@@ -423,15 +423,14 @@ TEST(sse_response_builder) {
 TEST(multipart_parse_extracts_parts) {
     asx_http_request req;
     asx_http_multipart_form form;
-    const char *body =
-        "--BOUND\r\n"
-        "Content-Disposition: form-data; name=\"title\"\r\n\r\n"
-        "report\r\n"
-        "--BOUND\r\n"
-        "Content-Disposition: form-data; name=\"upload\"; filename=\"a.txt\"\r\n"
-        "Content-Type: text/plain\r\n\r\n"
-        "hello world\r\n"
-        "--BOUND--\r\n";
+    const char *body = "--BOUND\r\n"
+                       "Content-Disposition: form-data; name=\"title\"\r\n\r\n"
+                       "report\r\n"
+                       "--BOUND\r\n"
+                       "Content-Disposition: form-data; name=\"upload\"; filename=\"a.txt\"\r\n"
+                       "Content-Type: text/plain\r\n\r\n"
+                       "hello world\r\n"
+                       "--BOUND--\r\n";
 
     asx_http_request_init(&req, ASX_HTTP_POST, "/upload");
     ASSERT_EQ(asx_http_headers_add(&req.headers, "Content-Type",
@@ -452,18 +451,16 @@ TEST(multipart_parse_extracts_parts) {
 TEST(multipart_parse_preserves_binary_file_payload) {
     asx_http_request req;
     asx_http_multipart_form form;
-    uint8_t body[] = {
-        '-', '-', 'B', 'O', 'U', 'N', 'D', '\r', '\n',
-        'C', 'o', 'n', 't', 'e', 'n', 't', '-', 'D', 'i', 's', 'p', 'o', 's', 'i', 't', 'i',
-        'o', 'n', ':', ' ', 'f', 'o', 'r', 'm', '-', 'd', 'a', 't', 'a', ';', ' ', 'n', 'a',
-        'm', 'e', '=', '"', 'u', 'p', 'l', 'o', 'a', 'd', '"', ';', ' ', 'f', 'i', 'l', 'e',
-        'n', 'a', 'm', 'e', '=', '"', 'b', 'i', 'n', '.', 'd', 'a', 't', '"', '\r', '\n',
-        'C', 'o', 'n', 't', 'e', 'n', 't', '-', 'T', 'y', 'p', 'e', ':', ' ', 'a', 'p', 'p',
-        'l', 'i', 'c', 'a', 't', 'i', 'o', 'n', '/', 'o', 'c', 't', 'e', 't', '-', 's', 't',
-        'r', 'e', 'a', 'm', '\r', '\n', '\r', '\n',
-        'A', 0x00, 'B', '\r', '\n',
-        '-', '-', 'B', 'O', 'U', 'N', 'D', '-', '-', '\r', '\n'
-    };
+    uint8_t body[] = {'-', '-', 'B',  'O',  'U',  'N',  'D',  '\r', '\n', 'C',  'o',  'n', 't', 'e',
+                      'n', 't', '-',  'D',  'i',  's',  'p',  'o',  's',  'i',  't',  'i', 'o', 'n',
+                      ':', ' ', 'f',  'o',  'r',  'm',  '-',  'd',  'a',  't',  'a',  ';', ' ', 'n',
+                      'a', 'm', 'e',  '=',  '"',  'u',  'p',  'l',  'o',  'a',  'd',  '"', ';', ' ',
+                      'f', 'i', 'l',  'e',  'n',  'a',  'm',  'e',  '=',  '"',  'b',  'i', 'n', '.',
+                      'd', 'a', 't',  '"',  '\r', '\n', 'C',  'o',  'n',  't',  'e',  'n', 't', '-',
+                      'T', 'y', 'p',  'e',  ':',  ' ',  'a',  'p',  'p',  'l',  'i',  'c', 'a', 't',
+                      'i', 'o', 'n',  '/',  'o',  'c',  't',  'e',  't',  '-',  's',  't', 'r', 'e',
+                      'a', 'm', '\r', '\n', '\r', '\n', 'A',  0x00, 'B',  '\r', '\n', '-', '-', 'B',
+                      'O', 'U', 'N',  'D',  '-',  '-',  '\r', '\n'};
 
     asx_http_request_init(&req, ASX_HTTP_POST, "/upload");
     ASSERT_EQ(asx_http_headers_add(&req.headers, "Content-Type",
@@ -522,14 +519,10 @@ TEST(pool_exhaustion) {
     uint32_t i;
 
     asx_http_pool_init(&pool, 2);
-    for (i = 0; i < 2u; i++) {
-        ASSERT_EQ(asx_http_pool_acquire(&pool, &conns[i]), ASX_OK);
-    }
+    for (i = 0; i < 2u; i++) { ASSERT_EQ(asx_http_pool_acquire(&pool, &conns[i]), ASX_OK); }
     ASSERT_EQ(asx_http_pool_acquire(&pool, &extra), ASX_E_RESOURCE_EXHAUSTED);
 
-    for (i = 0; i < 2u; i++) {
-        asx_http_pool_close(&pool, conns[i].id);
-    }
+    for (i = 0; i < 2u; i++) { asx_http_pool_close(&pool, conns[i].id); }
 }
 
 TEST(pool_close_and_reset) {

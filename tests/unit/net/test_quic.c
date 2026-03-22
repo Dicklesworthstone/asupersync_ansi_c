@@ -89,9 +89,7 @@ TEST(quic_stream_limit) {
     ASSERT_EQ(asx_quic_stream_open(&streams[3], conn, ASX_QUIC_STREAM_BIDI),
               ASX_E_RESOURCE_EXHAUSTED);
 
-    for (i = 0; i < 3u; i++) {
-        asx_quic_stream_close(streams[i]);
-    }
+    for (i = 0; i < 3u; i++) { asx_quic_stream_close(streams[i]); }
     asx_quic_conn_close(conn, 0);
 }
 
@@ -264,9 +262,7 @@ TEST(quic_connection_exhaustion) {
     }
     ASSERT_EQ(asx_quic_connect(&conns[ASX_MAX_QUIC_CONNECTIONS], &cfg), ASX_E_RESOURCE_EXHAUSTED);
 
-    for (i = 0; i < ASX_MAX_QUIC_CONNECTIONS; i++) {
-        asx_quic_conn_close(conns[i], 0);
-    }
+    for (i = 0; i < ASX_MAX_QUIC_CONNECTIONS; i++) { asx_quic_conn_close(conns[i], 0); }
 }
 
 TEST(quic_null_args) {

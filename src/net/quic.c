@@ -132,8 +132,7 @@ asx_status asx_quic_conn_close(asx_quic_conn conn, uint32_t error_code) {
 
     /* Close all streams belonging to this connection */
     for (idx = 0u; idx < ASX_MAX_QUIC_STREAMS; idx++) {
-        if (g_quic_streams[idx].alive &&
-            g_quic_streams[idx].conn_slot == conn.slot &&
+        if (g_quic_streams[idx].alive && g_quic_streams[idx].conn_slot == conn.slot &&
             g_quic_streams[idx].conn_generation == conn.generation) {
             g_quic_streams[idx].alive = 0;
         }
@@ -146,16 +145,14 @@ asx_status asx_quic_conn_close(asx_quic_conn conn, uint32_t error_code) {
     return ASX_OK;
 }
 
-int asx_quic_conn_is_alive(asx_quic_conn conn) {
-    return quic_conn_lookup(conn) != NULL;
-}
+int asx_quic_conn_is_alive(asx_quic_conn conn) { return quic_conn_lookup(conn) != NULL; }
 
 /* ------------------------------------------------------------------ */
 /* QUIC stream API                                                     */
 /* ------------------------------------------------------------------ */
 
 asx_status asx_quic_stream_open(asx_quic_stream *out, asx_quic_conn conn,
-                                 asx_quic_stream_type stype) {
+                                asx_quic_stream_type stype) {
     quic_conn_slot *c;
     uint32_t idx;
     quic_stream_slot *s;
@@ -191,7 +188,7 @@ asx_status asx_quic_stream_open(asx_quic_stream *out, asx_quic_conn conn,
 }
 
 asx_status asx_quic_stream_poll_read(asx_quic_stream stream, asx_buf_mut *dst,
-                                      uint32_t *bytes_read) {
+                                     uint32_t *bytes_read) {
     quic_stream_slot *s;
     asx_buf readable;
     uint32_t to_copy;
@@ -221,7 +218,7 @@ asx_status asx_quic_stream_poll_read(asx_quic_stream stream, asx_buf_mut *dst,
 }
 
 asx_status asx_quic_stream_poll_write(asx_quic_stream stream, const asx_buf *src,
-                                       uint32_t *bytes_written) {
+                                      uint32_t *bytes_written) {
     quic_stream_slot *s;
     asx_status st;
 
@@ -257,9 +254,7 @@ asx_status asx_quic_stream_close(asx_quic_stream stream) {
     return ASX_OK;
 }
 
-int asx_quic_stream_is_alive(asx_quic_stream stream) {
-    return quic_stream_lookup(stream) != NULL;
-}
+int asx_quic_stream_is_alive(asx_quic_stream stream) { return quic_stream_lookup(stream) != NULL; }
 
 /* ------------------------------------------------------------------ */
 /* QUIC datagram API                                                   */
@@ -287,8 +282,7 @@ asx_status asx_quic_send_datagram(asx_quic_conn conn, const asx_buf *src) {
     return ASX_OK;
 }
 
-asx_status asx_quic_poll_recv_datagram(asx_quic_conn conn, asx_buf_mut *dst,
-                                        uint32_t *bytes_read) {
+asx_status asx_quic_poll_recv_datagram(asx_quic_conn conn, asx_buf_mut *dst, uint32_t *bytes_read) {
     quic_conn_slot *c;
     quic_datagram *d;
     asx_status st;

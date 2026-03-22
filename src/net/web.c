@@ -50,7 +50,7 @@ void asx_web_router_init(asx_web_router *router) {
 }
 
 asx_status asx_web_router_add(asx_web_router *router, asx_http_method method, const char *path,
-                               asx_web_handler_fn handler, void *user_data) {
+                              asx_web_handler_fn handler, void *user_data) {
     size_t len;
     asx_web_route *r;
 
@@ -72,14 +72,14 @@ asx_status asx_web_router_add(asx_web_router *router, asx_http_method method, co
 }
 
 void asx_web_router_set_not_found(asx_web_router *router, asx_web_handler_fn handler,
-                                   void *user_data) {
+                                  void *user_data) {
     if (router == NULL) return;
     router->not_found_handler = handler;
     router->not_found_user_data = user_data;
 }
 
 asx_status asx_web_router_dispatch(const asx_web_router *router, const asx_http_request *req,
-                                    asx_http_response *resp) {
+                                   asx_http_response *resp) {
     uint32_t i;
     int path_matched;
 
@@ -115,7 +115,7 @@ asx_status asx_web_router_dispatch(const asx_web_router *router, const asx_http_
 /* ------------------------------------------------------------------ */
 
 void asx_web_middleware_init(asx_web_middleware_stack *stack, asx_web_handler_fn inner,
-                              void *inner_data) {
+                             void *inner_data) {
     if (stack == NULL) return;
     memset(stack, 0, sizeof(*stack));
     stack->inner = inner;
@@ -123,7 +123,7 @@ void asx_web_middleware_init(asx_web_middleware_stack *stack, asx_web_handler_fn
 }
 
 asx_status asx_web_middleware_add(asx_web_middleware_stack *stack, asx_web_middleware_fn fn,
-                                   void *user_data) {
+                                  void *user_data) {
     if (stack == NULL || fn == NULL) return ASX_E_INVALID_ARGUMENT;
     if (stack->count >= ASX_WEB_MAX_MIDDLEWARE) return ASX_E_RESOURCE_EXHAUSTED;
     stack->layers[stack->count].fn = fn;
@@ -151,9 +151,7 @@ static asx_status mw_chain_next(const asx_http_request *req, asx_http_response *
 
     if (idx >= stack->count) {
         /* All middleware exhausted, call inner handler */
-        if (stack->inner != NULL) {
-            return stack->inner(req, resp, stack->inner_data);
-        }
+        if (stack->inner != NULL) { return stack->inner(req, resp, stack->inner_data); }
         return ASX_OK;
     }
 
@@ -168,7 +166,7 @@ static asx_status mw_chain_next(const asx_http_request *req, asx_http_response *
 }
 
 asx_status asx_web_middleware_run(const asx_web_middleware_stack *stack,
-                                   const asx_http_request *req, asx_http_response *resp) {
+                                  const asx_http_request *req, asx_http_response *resp) {
     mw_chain_ctx ctx;
 
     if (stack == NULL || req == NULL || resp == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -241,9 +239,7 @@ const char *asx_web_query_get(const asx_web_query *query, const char *key) {
 
     if (query == NULL || key == NULL) return NULL;
     for (i = 0u; i < query->count; i++) {
-        if (strcmp(query->params[i].key, key) == 0) {
-            return query->params[i].value;
-        }
+        if (strcmp(query->params[i].key, key) == 0) { return query->params[i].value; }
     }
     return NULL;
 }
@@ -274,8 +270,8 @@ static void session_generate_id(char *out, uint32_t capacity, uint32_t seq) {
     uint32_t val;
 
     if (out == NULL || capacity == 0u) return;
-    memset(out, '0', capacity - 1u < ASX_WEB_SESSION_ID_LEN ? capacity - 1u
-                                                              : ASX_WEB_SESSION_ID_LEN);
+    memset(out, '0',
+           capacity - 1u < ASX_WEB_SESSION_ID_LEN ? capacity - 1u : ASX_WEB_SESSION_ID_LEN);
     val = seq;
     /* Write hex digits right-to-left */
     i = ASX_WEB_SESSION_ID_LEN < capacity ? ASX_WEB_SESSION_ID_LEN : capacity - 1u;
@@ -288,7 +284,7 @@ static void session_generate_id(char *out, uint32_t capacity, uint32_t seq) {
 }
 
 asx_status asx_web_session_create(asx_web_session_store *store, char *out_id,
-                                    uint32_t id_capacity) {
+                                  uint32_t id_capacity) {
     uint32_t idx;
     asx_web_session *s;
 
@@ -361,8 +357,7 @@ void asx_web_sse_init(asx_web_sse_stream *stream) {
     stream->next_id = 1u;
 }
 
-asx_status asx_web_sse_push(asx_web_sse_stream *stream, const char *event_name,
-                              const char *data) {
+asx_status asx_web_sse_push(asx_web_sse_stream *stream, const char *event_name, const char *data) {
     uint32_t tail;
     asx_web_sse_event *evt;
     size_t elen, dlen;
@@ -419,7 +414,7 @@ void asx_web_multipart_init(asx_web_multipart *mp) {
 }
 
 asx_status asx_web_multipart_add_field(asx_web_multipart *mp, const char *name, const void *data,
-                                         uint32_t len) {
+                                       uint32_t len) {
     size_t nlen;
     asx_web_multipart_part *p;
 
@@ -439,9 +434,8 @@ asx_status asx_web_multipart_add_field(asx_web_multipart *mp, const char *name, 
     return ASX_OK;
 }
 
-asx_status asx_web_multipart_add_file(asx_web_multipart *mp, const char *name,
-                                        const char *filename, const char *content_type,
-                                        const void *data, uint32_t len) {
+asx_status asx_web_multipart_add_file(asx_web_multipart *mp, const char *name, const char *filename,
+                                      const char *content_type, const void *data, uint32_t len) {
     size_t nlen, flen, clen;
     asx_web_multipart_part *p;
 
@@ -470,8 +464,7 @@ asx_status asx_web_multipart_add_file(asx_web_multipart *mp, const char *name,
     return ASX_OK;
 }
 
-const asx_web_multipart_part *asx_web_multipart_get(const asx_web_multipart *mp,
-                                                      const char *name) {
+const asx_web_multipart_part *asx_web_multipart_get(const asx_web_multipart *mp, const char *name) {
     uint32_t i;
 
     if (mp == NULL || name == NULL) return NULL;
@@ -517,7 +510,7 @@ int asx_web_cors_check_origin(const asx_web_cors_config *cfg, const char *origin
 }
 
 asx_status asx_web_cors_apply(const asx_web_cors_config *cfg, const char *request_origin,
-                                asx_http_response *resp) {
+                              asx_http_response *resp) {
     if (cfg == NULL || resp == NULL) return ASX_E_INVALID_ARGUMENT;
     if (request_origin == NULL) return ASX_OK; /* No origin header = not a CORS request */
 
@@ -593,8 +586,8 @@ void asx_web_static_init(asx_web_static_files *sf) {
     memset(sf, 0, sizeof(*sf));
 }
 
-asx_status asx_web_static_add(asx_web_static_files *sf, const char *path,
-                                const char *content_type, const uint8_t *data, uint32_t data_len) {
+asx_status asx_web_static_add(asx_web_static_files *sf, const char *path, const char *content_type,
+                              const uint8_t *data, uint32_t data_len) {
     size_t plen, clen;
     asx_web_static_entry *e;
 
@@ -617,7 +610,7 @@ asx_status asx_web_static_add(asx_web_static_files *sf, const char *path,
 }
 
 const asx_web_static_entry *asx_web_static_lookup(const asx_web_static_files *sf,
-                                                    const char *path) {
+                                                  const char *path) {
     uint32_t i;
 
     if (sf == NULL || path == NULL) return NULL;
@@ -628,7 +621,7 @@ const asx_web_static_entry *asx_web_static_lookup(const asx_web_static_files *sf
 }
 
 asx_status asx_web_static_serve(const asx_web_static_files *sf, const char *path,
-                                  asx_http_response *resp) {
+                                asx_http_response *resp) {
     const asx_web_static_entry *entry;
 
     if (sf == NULL || path == NULL || resp == NULL) return ASX_E_INVALID_ARGUMENT;

@@ -109,8 +109,7 @@ void asx_tls_acceptor_init(asx_tls_acceptor *acc, const asx_tls_config *cfg) {
 /* TLS stream API                                                      */
 /* ------------------------------------------------------------------ */
 
-static asx_status tls_alloc(asx_tls_stream *out, asx_tcp_stream tcp,
-                             const asx_tls_config *cfg) {
+static asx_status tls_alloc(asx_tls_stream *out, asx_tcp_stream tcp, const asx_tls_config *cfg) {
     uint32_t idx;
     tls_stream_slot *s;
 
@@ -141,20 +140,17 @@ static asx_status tls_alloc(asx_tls_stream *out, asx_tcp_stream tcp,
     return ASX_OK;
 }
 
-asx_status asx_tls_connect(asx_tls_stream *out, const asx_tls_connector *conn,
-                            asx_tcp_stream tcp) {
+asx_status asx_tls_connect(asx_tls_stream *out, const asx_tls_connector *conn, asx_tcp_stream tcp) {
     if (conn == NULL) return ASX_E_INVALID_ARGUMENT;
     return tls_alloc(out, tcp, &conn->config);
 }
 
-asx_status asx_tls_accept(asx_tls_stream *out, const asx_tls_acceptor *acc,
-                           asx_tcp_stream tcp) {
+asx_status asx_tls_accept(asx_tls_stream *out, const asx_tls_acceptor *acc, asx_tcp_stream tcp) {
     if (acc == NULL) return ASX_E_INVALID_ARGUMENT;
     return tls_alloc(out, tcp, &acc->config);
 }
 
-asx_status asx_tls_stream_poll_read(asx_tls_stream stream, asx_buf_mut *dst,
-                                     uint32_t *bytes_read) {
+asx_status asx_tls_stream_poll_read(asx_tls_stream stream, asx_buf_mut *dst, uint32_t *bytes_read) {
     tls_stream_slot *s;
 
     s = tls_lookup(stream);
@@ -168,7 +164,7 @@ asx_status asx_tls_stream_poll_read(asx_tls_stream stream, asx_buf_mut *dst,
 }
 
 asx_status asx_tls_stream_poll_write(asx_tls_stream stream, const asx_buf *src,
-                                      uint32_t *bytes_written) {
+                                     uint32_t *bytes_written) {
     tls_stream_slot *s;
 
     s = tls_lookup(stream);
@@ -220,10 +216,6 @@ asx_status asx_tls_stream_close(asx_tls_stream stream) {
     return ASX_OK;
 }
 
-int asx_tls_stream_is_alive(asx_tls_stream stream) {
-    return tls_lookup(stream) != NULL;
-}
+int asx_tls_stream_is_alive(asx_tls_stream stream) { return tls_lookup(stream) != NULL; }
 
-void asx_tls_reset(void) {
-    memset(g_tls_streams, 0, sizeof(g_tls_streams));
-}
+void asx_tls_reset(void) { memset(g_tls_streams, 0, sizeof(g_tls_streams)); }

@@ -39,7 +39,7 @@ TEST(ws_frame_close_encodes_code) {
     ASSERT_EQ(frame.opcode, ASX_WS_OPCODE_CLOSE);
     ASSERT_EQ(frame.close_code, 1000);
     ASSERT_EQ(frame.payload_len, 2u);
-    ASSERT_EQ(frame.payload[0], 3); /* 1000 >> 8 */
+    ASSERT_EQ(frame.payload[0], 3);   /* 1000 >> 8 */
     ASSERT_EQ(frame.payload[1], 232); /* 1000 & 0xFF */
 }
 

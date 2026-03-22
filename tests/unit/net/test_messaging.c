@@ -84,9 +84,7 @@ TEST(queue_full) {
     asx_msg_queue_init(&q);
     asx_message_set(&msg, "t", "x", 1);
 
-    for (i = 0; i < ASX_MSG_QUEUE_DEPTH; i++) {
-        ASSERT_EQ(asx_msg_queue_push(&q, &msg), ASX_OK);
-    }
+    for (i = 0; i < ASX_MSG_QUEUE_DEPTH; i++) { ASSERT_EQ(asx_msg_queue_push(&q, &msg), ASX_OK); }
     ASSERT_EQ(asx_msg_queue_push(&q, &msg), ASX_E_WOULD_BLOCK);
 }
 

@@ -64,8 +64,8 @@ void asx_ws_frame_init(asx_ws_frame *frame) {
     frame->fin = 1u;
 }
 
-asx_status asx_ws_frame_set_payload(asx_ws_frame *frame, asx_ws_opcode opcode,
-                                     const void *data, uint32_t len) {
+asx_status asx_ws_frame_set_payload(asx_ws_frame *frame, asx_ws_opcode opcode, const void *data,
+                                    uint32_t len) {
     if (frame == NULL) return ASX_E_INVALID_ARGUMENT;
     if (len > ASX_WS_MAX_PAYLOAD) return ASX_E_BUFFER_TOO_SMALL;
     if (len > 0u && data == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -151,9 +151,7 @@ asx_status asx_ws_send(asx_ws_conn conn, const asx_ws_frame *frame) {
         peer->recv_count++;
     }
 
-    if (frame->opcode == ASX_WS_OPCODE_CLOSE) {
-        s->state = ASX_WS_STATE_CLOSING;
-    }
+    if (frame->opcode == ASX_WS_OPCODE_CLOSE) { s->state = ASX_WS_STATE_CLOSING; }
     return ASX_OK;
 }
 
@@ -169,9 +167,7 @@ asx_status asx_ws_poll_recv(asx_ws_conn conn, asx_ws_frame *out) {
     s->recv_head = (s->recv_head + 1u) % ASX_WS_FRAME_QUEUE_DEPTH;
     s->recv_count--;
 
-    if (out->opcode == ASX_WS_OPCODE_CLOSE) {
-        s->state = ASX_WS_STATE_CLOSED;
-    }
+    if (out->opcode == ASX_WS_OPCODE_CLOSE) { s->state = ASX_WS_STATE_CLOSED; }
     return ASX_OK;
 }
 

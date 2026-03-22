@@ -29,7 +29,7 @@ void asx_dist_cluster_init(asx_dist_cluster *cluster) {
 }
 
 asx_status asx_dist_cluster_add_node(asx_dist_cluster *cluster, const char *name,
-                                       asx_dist_node **out) {
+                                     asx_dist_node **out) {
     uint32_t i;
     size_t len;
     asx_dist_node *n;
@@ -215,13 +215,11 @@ void asx_dist_assignment_init(asx_dist_assignment *assign, uint32_t partition_co
     memset(assign, 0, sizeof(*assign));
     if (partition_count > ASX_DIST_MAX_PARTITIONS) partition_count = ASX_DIST_MAX_PARTITIONS;
     assign->count = partition_count;
-    for (i = 0u; i < partition_count; i++) {
-        assign->partitions[i].partition_id = i;
-    }
+    for (i = 0u; i < partition_count; i++) { assign->partitions[i].partition_id = i; }
 }
 
 asx_status asx_dist_assignment_rebalance(asx_dist_assignment *assign,
-                                           const asx_dist_cluster *cluster) {
+                                         const asx_dist_cluster *cluster) {
     uint32_t active_ids[ASX_DIST_MAX_NODES];
     uint32_t active_count;
     uint32_t i;
@@ -265,8 +263,7 @@ void asx_dist_snapshot_store_init(asx_dist_snapshot_store *store) {
 }
 
 asx_status asx_dist_snapshot_create(asx_dist_snapshot_store *store, uint32_t node_id,
-                                      const void *data, uint32_t data_len,
-                                      asx_dist_snapshot **out) {
+                                    const void *data, uint32_t data_len, asx_dist_snapshot **out) {
     asx_dist_snapshot *s;
 
     if (store == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -288,7 +285,7 @@ asx_status asx_dist_snapshot_create(asx_dist_snapshot_store *store, uint32_t nod
 }
 
 const asx_dist_snapshot *asx_dist_snapshot_latest(const asx_dist_snapshot_store *store,
-                                                    uint32_t node_id) {
+                                                  uint32_t node_id) {
     const asx_dist_snapshot *latest;
     uint32_t i;
 
@@ -305,7 +302,7 @@ const asx_dist_snapshot *asx_dist_snapshot_latest(const asx_dist_snapshot_store 
 }
 
 asx_status asx_dist_snapshot_restore(const asx_dist_snapshot *snap, void *out_data,
-                                       uint32_t out_capacity, uint32_t *out_len) {
+                                     uint32_t out_capacity, uint32_t *out_len) {
     if (snap == NULL || out_data == NULL || out_len == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!snap->valid) return ASX_E_INVALID_STATE;
     if (snap->data_len > out_capacity) return ASX_E_BUFFER_TOO_SMALL;
@@ -333,8 +330,7 @@ asx_status asx_dist_recovery_start(asx_dist_recovery *recovery, uint32_t failed_
 }
 
 asx_status asx_dist_recovery_step(asx_dist_recovery *recovery, asx_dist_cluster *cluster,
-                                    asx_dist_assignment *assign,
-                                    asx_dist_snapshot_store *snapshots) {
+                                  asx_dist_assignment *assign, asx_dist_snapshot_store *snapshots) {
     if (recovery == NULL) return ASX_E_INVALID_ARGUMENT;
 
     switch (recovery->state) {
@@ -382,10 +378,8 @@ asx_status asx_dist_recovery_step(asx_dist_recovery *recovery, asx_dist_cluster 
         return ASX_OK;
     }
     case ASX_DIST_RECOVERY_COMPLETE:
-    case ASX_DIST_RECOVERY_FAILED:
-        return ASX_OK;
-    case ASX_DIST_RECOVERY_IDLE:
-        return ASX_E_INVALID_STATE;
+    case ASX_DIST_RECOVERY_FAILED: return ASX_OK;
+    case ASX_DIST_RECOVERY_IDLE: return ASX_E_INVALID_STATE;
     }
     return ASX_E_INVALID_STATE;
 }

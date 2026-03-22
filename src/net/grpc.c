@@ -31,13 +31,10 @@ static size_t grpc_bounded_strlen(const char *str, size_t max) {
 /* ------------------------------------------------------------------ */
 
 static const char *const g_grpc_code_names[] = {
-    "OK",                  "CANCELLED",           "UNKNOWN",
-    "INVALID_ARGUMENT",    "DEADLINE_EXCEEDED",    "NOT_FOUND",
-    "ALREADY_EXISTS",      "PERMISSION_DENIED",    "RESOURCE_EXHAUSTED",
-    "FAILED_PRECONDITION", "ABORTED",              "OUT_OF_RANGE",
-    "UNIMPLEMENTED",       "INTERNAL",             "UNAVAILABLE",
-    "DATA_LOSS",           "UNAUTHENTICATED"
-};
+    "OK",        "CANCELLED",      "UNKNOWN",           "INVALID_ARGUMENT",   "DEADLINE_EXCEEDED",
+    "NOT_FOUND", "ALREADY_EXISTS", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED", "FAILED_PRECONDITION",
+    "ABORTED",   "OUT_OF_RANGE",   "UNIMPLEMENTED",     "INTERNAL",           "UNAVAILABLE",
+    "DATA_LOSS", "UNAUTHENTICATED"};
 
 const char *asx_grpc_code_str(asx_grpc_code code) {
     if ((unsigned)code > 16u) return "UNKNOWN";
@@ -118,7 +115,7 @@ void asx_grpc_service_init(asx_grpc_service *svc, const char *name) {
 }
 
 asx_status asx_grpc_service_add_unary(asx_grpc_service *svc, const char *method_name,
-                                       asx_grpc_unary_handler_fn handler, void *user_data) {
+                                      asx_grpc_unary_handler_fn handler, void *user_data) {
     size_t slen, mlen;
     asx_grpc_method *m;
     int written;
@@ -164,8 +161,8 @@ asx_status asx_grpc_server_add_service(asx_grpc_server *srv, const asx_grpc_serv
 }
 
 asx_status asx_grpc_server_call(asx_grpc_server *srv, const char *method_name,
-                                 const asx_grpc_message *req, asx_grpc_message *resp,
-                                 const asx_grpc_metadata *md, asx_grpc_code *out_code) {
+                                const asx_grpc_message *req, asx_grpc_message *resp,
+                                const asx_grpc_metadata *md, asx_grpc_code *out_code) {
     uint32_t si, mi;
 
     if (srv == NULL || method_name == NULL || req == NULL || resp == NULL || out_code == NULL)
@@ -213,8 +210,8 @@ void asx_grpc_channel_init(asx_grpc_channel *ch, const char *target, asx_grpc_se
 }
 
 asx_status asx_grpc_channel_call(asx_grpc_channel *ch, const char *method_name,
-                                  const asx_grpc_message *req, asx_grpc_message *resp,
-                                  const asx_grpc_metadata *md, asx_grpc_code *out_code) {
+                                 const asx_grpc_message *req, asx_grpc_message *resp,
+                                 const asx_grpc_metadata *md, asx_grpc_code *out_code) {
     if (ch == NULL || ch->server == NULL) return ASX_E_INVALID_ARGUMENT;
     return asx_grpc_server_call(ch->server, method_name, req, resp, md, out_code);
 }
@@ -229,7 +226,7 @@ void asx_grpc_health_init(asx_grpc_health *health) {
 }
 
 asx_status asx_grpc_health_set(asx_grpc_health *health, const char *service,
-                                asx_grpc_health_status status) {
+                               asx_grpc_health_status status) {
     uint32_t i;
     size_t len;
     const char *svc_name;

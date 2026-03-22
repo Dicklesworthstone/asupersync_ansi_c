@@ -25,8 +25,7 @@ void asx_message_init(asx_message *msg) {
     memset(msg, 0, sizeof(*msg));
 }
 
-asx_status asx_message_set(asx_message *msg, const char *topic, const void *payload,
-                            uint32_t len) {
+asx_status asx_message_set(asx_message *msg, const char *topic, const void *payload, uint32_t len) {
     size_t tlen;
 
     if (msg == NULL || topic == NULL) return ASX_E_INVALID_ARGUMENT;

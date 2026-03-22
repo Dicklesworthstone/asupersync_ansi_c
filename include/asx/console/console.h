@@ -17,10 +17,7 @@
 extern "C" {
 #endif
 
-typedef enum {
-    ASX_CONSOLE_FORMAT_TEXT = 0,
-    ASX_CONSOLE_FORMAT_JSON = 1
-} asx_console_format;
+typedef enum { ASX_CONSOLE_FORMAT_TEXT = 0, ASX_CONSOLE_FORMAT_JSON = 1 } asx_console_format;
 
 ASX_API ASX_MUST_USE asx_status asx_console_render_doctor(const asx_doctor_report *report,
                                                           asx_console_format format,
@@ -42,8 +39,7 @@ ASX_API ASX_MUST_USE asx_status asx_console_run_inspection(const asx_runtime *rt
                                                            asx_console_format format,
                                                            asx_report_buf *out);
 
-ASX_API ASX_MUST_USE asx_status asx_console_emit_log_record(asx_log_level level,
-                                                            const char *source,
+ASX_API ASX_MUST_USE asx_status asx_console_emit_log_record(asx_log_level level, const char *source,
                                                             const char *message,
                                                             asx_report_buf *out);
 

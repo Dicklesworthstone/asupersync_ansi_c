@@ -1153,7 +1153,7 @@ static void unix_stream_unlink_peer(unix_stream_slot *s) {
 }
 
 static asx_status unix_stream_alloc(const asx_unix_addr *local, const asx_unix_addr *peer,
-                                     asx_unix_stream *out, unix_stream_slot **out_slot) {
+                                    asx_unix_stream *out, unix_stream_slot **out_slot) {
     uint32_t idx;
     unix_stream_slot *s;
 
@@ -1309,7 +1309,7 @@ asx_status asx_unix_connect(asx_unix_stream *out, const asx_unix_addr *addr) {
 }
 
 asx_status asx_unix_stream_poll_read(asx_unix_stream stream, asx_buf_mut *dst,
-                                      uint32_t *bytes_read) {
+                                     uint32_t *bytes_read) {
     unix_stream_slot *s;
     asx_buf readable;
     uint32_t to_copy;
@@ -1340,7 +1340,7 @@ asx_status asx_unix_stream_poll_read(asx_unix_stream stream, asx_buf_mut *dst,
 }
 
 asx_status asx_unix_stream_poll_write(asx_unix_stream stream, const asx_buf *src,
-                                       uint32_t *bytes_written) {
+                                      uint32_t *bytes_written) {
     unix_stream_slot *s;
     unix_stream_slot *peer;
     asx_status st;
@@ -1374,9 +1374,7 @@ asx_status asx_unix_stream_close(asx_unix_stream stream) {
     return ASX_OK;
 }
 
-int asx_unix_stream_is_alive(asx_unix_stream stream) {
-    return unix_stream_lookup(stream) != NULL;
-}
+int asx_unix_stream_is_alive(asx_unix_stream stream) { return unix_stream_lookup(stream) != NULL; }
 
 /* ------------------------------------------------------------------ */
 /* Unix-domain datagram API                                            */
@@ -1405,7 +1403,7 @@ asx_status asx_unix_dgram_bind(asx_unix_dgram *out, const asx_unix_addr *addr) {
 }
 
 asx_status asx_unix_dgram_poll_send(asx_unix_dgram socket, const asx_buf *src,
-                                     uint32_t *bytes_written, const asx_unix_addr *to) {
+                                    uint32_t *bytes_written, const asx_unix_addr *to) {
     unix_dgram_slot *sender;
     unix_dgram_slot *dest;
     uint32_t idx;
@@ -1445,7 +1443,7 @@ asx_status asx_unix_dgram_poll_send(asx_unix_dgram socket, const asx_buf *src,
 }
 
 asx_status asx_unix_dgram_poll_recv(asx_unix_dgram socket, asx_buf_mut *dst, uint32_t *bytes_read,
-                                     asx_unix_addr *from) {
+                                    asx_unix_addr *from) {
     unix_dgram_slot *s;
     unix_dgram_packet *packet;
     uint32_t to_copy;
@@ -1507,9 +1505,7 @@ asx_status asx_ancillary_pop_fd(asx_ancillary *anc, uint32_t *out) {
     if (anc == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
     if (anc->count == 0u) return ASX_E_NOT_FOUND;
     *out = anc->fds[0];
-    for (i = 1u; i < anc->count; i++) {
-        anc->fds[i - 1u] = anc->fds[i];
-    }
+    for (i = 1u; i < anc->count; i++) { anc->fds[i - 1u] = anc->fds[i]; }
     anc->count--;
     return ASX_OK;
 }
@@ -1606,7 +1602,7 @@ asx_status asx_read_half_poll_read(asx_read_half *half, asx_buf_mut *dst, uint32
 }
 
 asx_status asx_write_half_poll_write(asx_write_half *half, const asx_buf *src,
-                                      uint32_t *bytes_written) {
+                                     uint32_t *bytes_written) {
     if (half == NULL || !half->active) return ASX_E_INVALID_ARGUMENT;
 
     if (half->kind == ASX_SPLIT_SOURCE_TCP) {

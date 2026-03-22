@@ -59,9 +59,7 @@ TEST(db_connect_exhaustion) {
     ASSERT_EQ(asx_db_connect(&pool, "mem://db", &conns[ASX_DB_MAX_CONNECTIONS]),
               ASX_E_RESOURCE_EXHAUSTED);
 
-    for (i = 0; i < ASX_DB_MAX_CONNECTIONS; i++) {
-        asx_db_close(conns[i]);
-    }
+    for (i = 0; i < ASX_DB_MAX_CONNECTIONS; i++) { asx_db_close(conns[i]); }
 }
 
 TEST(db_execute_query) {

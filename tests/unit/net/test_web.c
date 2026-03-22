@@ -14,7 +14,7 @@
 /* ------------------------------------------------------------------ */
 
 static asx_status hello_handler(const asx_http_request *req, asx_http_response *resp,
-                                 void *user_data) {
+                                void *user_data) {
     (void)req;
     (void)user_data;
     asx_http_response_init(resp, ASX_HTTP_200_OK);
@@ -23,7 +23,7 @@ static asx_status hello_handler(const asx_http_request *req, asx_http_response *
 }
 
 static asx_status custom_404(const asx_http_request *req, asx_http_response *resp,
-                              void *user_data) {
+                             void *user_data) {
     (void)req;
     (void)user_data;
     asx_http_response_init(resp, ASX_HTTP_404_NOT_FOUND);
@@ -112,8 +112,7 @@ TEST(router_null_args) {
     asx_web_router_init(&router);
     ASSERT_EQ(asx_web_router_add(&router, ASX_HTTP_GET, NULL, hello_handler, NULL),
               ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_web_router_add(&router, ASX_HTTP_GET, "/x", NULL, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_web_router_add(&router, ASX_HTTP_GET, "/x", NULL, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ------------------------------------------------------------------ */
@@ -121,7 +120,7 @@ TEST(router_null_args) {
 /* ------------------------------------------------------------------ */
 
 static asx_status add_header_mw(const asx_http_request *req, asx_http_response *resp,
-                                 void *user_data, asx_web_handler_fn next, void *next_data) {
+                                void *user_data, asx_web_handler_fn next, void *next_data) {
     asx_status st;
     (void)user_data;
     st = next(req, resp, next_data);

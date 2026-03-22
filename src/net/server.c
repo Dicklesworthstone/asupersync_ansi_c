@@ -112,9 +112,7 @@ asx_status asx_server_shutdown(asx_server *srv) {
     }
 
     /* In deterministic mode, drain completes immediately if no connections */
-    if (srv->active_count == 0u) {
-        srv->state = ASX_SERVER_STATE_STOPPED;
-    }
+    if (srv->active_count == 0u) { srv->state = ASX_SERVER_STATE_STOPPED; }
     return ASX_OK;
 }
 
