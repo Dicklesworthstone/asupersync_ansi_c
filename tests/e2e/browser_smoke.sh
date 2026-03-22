@@ -47,6 +47,7 @@ _browser_build() {
     cflags="$cflags -DASX_CODEC_$(echo "$E2E_CODEC" | tr '[:lower:]' '[:upper:]')"
     cflags="$cflags -DASX_DETERMINISTIC=1"
 
+    mkdir -p "$(dirname "$output")"
     # shellcheck disable=SC2086
     if ! $cc $cflags -o "$output" "$source" $extra_src "$lib" 2>"${output}.build.log"; then
         echo "[e2e] BUILD FAIL: $source" >&2

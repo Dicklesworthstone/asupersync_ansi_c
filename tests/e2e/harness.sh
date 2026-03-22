@@ -244,6 +244,9 @@ e2e_build() {
     cflags="$cflags -DASX_DETERMINISTIC=1"
     cflags="$cflags $extra_flags"
 
+    # Ensure output directory exists (needed for remote compilation via rch)
+    mkdir -p "$(dirname "$output")"
+
     if ! $cc $cflags -o "$output" "$source" "$lib" 2>"${output}.build.log"; then
         echo "[e2e] BUILD FAIL: $source" >&2
         cat "${output}.build.log" >&2

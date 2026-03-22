@@ -20,20 +20,7 @@ if ! ~/.local/bin/rch exec -- make -B build; then
 fi
 e2e_scenario "network_surface.lib_build" "" "pass"
 
-if ! ~/.local/bin/rch exec -- cc \
-    -std=c99 -Wall -Wextra -Wpedantic -Werror \
-    -Wconversion -Wsign-conversion -Wshadow \
-    -Wstrict-prototypes -Wmissing-prototypes \
-    -Wswitch-enum -Wformat=2 -Wno-unused-parameter \
-    -I"${E2E_PROJECT_ROOT}/include" \
-    -I"${E2E_PROJECT_ROOT}/tests" \
-    -I"${E2E_PROJECT_ROOT}/src" \
-    -DASX_PROFILE_CORE \
-    -DASX_CODEC_JSON \
-    -DASX_DETERMINISTIC=1 \
-    "${SCRIPT_DIR}/e2e_network_surface.c" \
-    "${E2E_BUILD_DIR}/lib/libasx.a" \
-    -o "$E2E_BIN"; then
+if ! e2e_build "${SCRIPT_DIR}/e2e_network_surface.c" "$E2E_BIN"; then
     e2e_scenario "network_surface.build" "compilation failed" "fail"
     e2e_finish
     exit $?

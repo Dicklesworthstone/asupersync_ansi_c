@@ -33,23 +33,19 @@ if ! ~/.local/bin/rch exec -- make -B build; then
 fi
 e2e_scenario "native_host.lib_build" "" "pass"
 
-if ! ~/.local/bin/rch exec -- cc \
-    -std=c99 -Wall -Wextra -Wpedantic -Werror \
+# Native host test runs without deterministic mode — build directly
+mkdir -p "$(dirname "$E2E_BIN")"
+if ! ${CC:-gcc} -std=c99 -Wall -Wextra -Wpedantic -Werror \
     -Wconversion -Wsign-conversion -Wshadow \
     -Wstrict-prototypes -Wmissing-prototypes \
     -Wswitch-enum -Wformat=2 -Wno-unused-parameter \
     -I"${E2E_PROJECT_ROOT}/include" \
     -I"${E2E_PROJECT_ROOT}/tests" \
     -I"${E2E_PROJECT_ROOT}/src" \
-    -DASX_PROFILE_CORE \
-    -DASX_CODEC_JSON \
-    -DASX_DETERMINISTIC=0 \
+    -DASX_PROFILE_CORE -DASX_CODEC_JSON -DASX_DETERMINISTIC=0 \
     "${SCRIPT_DIR}/e2e_native_host.c" \
-    "${E2E_PROJECT_ROOT}/src/bytes/buf.c" \
-    "${E2E_PROJECT_ROOT}/src/runtime/hooks.c" \
-    "${E2E_RUNTIME_RESET_EXTRA[@]}" \
-    "${E2E_LIB}" \
-    -o "$E2E_BIN"; then
+    "${E2E_BUILD_DIR}/lib/libasx.a" \
+    -o "$E2E_BIN" 2>"${E2E_BIN}.build.log"; then
     e2e_scenario "native_host.build" "compilation failed" "fail"
     e2e_finish
     exit $?
