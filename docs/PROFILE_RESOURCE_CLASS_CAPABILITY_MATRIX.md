@@ -283,12 +283,11 @@ The table below maps the crate-root feature/platform restrictions from
 The current C tree still needs these explicit fail-closed controls before it
 can honestly claim equivalence with the upstream feature/platform matrix:
 
-1. CI coverage for the explicit browser profile lane so the documented build surface is exercised continuously.
-2. Compile-time mutual exclusion for browser-specific subprofiles if the C port
+1. Compile-time mutual exclusion for browser-specific subprofiles if the C port
    adopts more than one browser mode.
-3. Explicit compile-time or runtime gating for future native-only module
+2. Explicit compile-time or runtime gating for future native-only module
    families such as TLS, database, messaging, gRPC, and server substrate work.
-4. A single compatibility matrix that states which combinations are supported,
+3. A single compatibility matrix that states which combinations are supported,
    denied, or currently unimplemented rather than leaving absence implicit.
 
 ---
@@ -350,11 +349,11 @@ can honestly claim equivalence with the upstream feature/platform matrix:
 
 ## 12. Open Questions
 
-1. **Browser profile lane:** The runtime, diagnostics, and build surface now
-   expose `ASX_PROFILE_BROWSER`, but CI still does not exercise that lane and
-   the C port still has only one browser mode. We need an explicit decision on
-   whether to formalize multiple browser subprofiles or keep a single browser
-   boundary scaffold until the broader `web`/WASM surface is unblocked.
+1. **Browser profile lane:** The runtime, diagnostics, build surface, and CI
+   check lane now exercise `ASX_PROFILE_BROWSER`, but the C port still has only
+   one browser mode. We need an explicit decision on whether to formalize
+   multiple browser subprofiles or keep a single browser boundary scaffold
+   until the broader `web`/WASM surface is unblocked.
 
 2. **Resource class R0 (micro):** Some IoT targets may need even tighter limits
    than R1 (e.g., 2 regions, 8 tasks). Not currently planned — evaluate when
