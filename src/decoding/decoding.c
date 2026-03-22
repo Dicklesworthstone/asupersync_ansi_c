@@ -126,6 +126,7 @@ asx_status asx_decoding_pipeline_decode(asx_decoding_pipeline *p, asx_frame *out
     /* Try to decode from current buffer contents first */
     for (;;) {
         if (asx_buf_mut_remaining(&p->recv_buf) > 0) {
+            uint32_t rd_pos_before = p->recv_buf.rd_pos;
             dr = p->codec.decode(p->codec.state, &p->recv_buf, out_frame);
 
             if (dr == ASX_DECODE_FRAME) {
@@ -141,6 +142,9 @@ asx_status asx_decoding_pipeline_decode(asx_decoding_pipeline *p, asx_frame *out
             }
 
             if (dr == ASX_DECODE_ERROR) {
+                /* Restore buffer position so the error doesn't leave
+                 * the pipeline in an inconsistent state. */
+                p->recv_buf.rd_pos = rd_pos_before;
                 p->last_error = ASX_DECODING_ERR_CODEC;
                 return ASX_E_INVALID_STATE;
             }
