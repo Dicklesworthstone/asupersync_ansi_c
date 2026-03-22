@@ -50,7 +50,6 @@ ASX_API void asx_raptorq_config_init(asx_raptorq_config *cfg);
  * ------------------------------------------------------------------- */
 
 /* Returns ASX_OK if RaptorQ encoding/decoding is available.
- * In this build, always returns ASX_E_NOT_FOUND (deferred per DEF-009).
  * Callers should check this before attempting erasure operations. */
 ASX_API ASX_MUST_USE asx_status asx_raptorq_available(void);
 
@@ -65,8 +64,8 @@ ASX_API ASX_MUST_USE const char *asx_raptorq_deferral_reason(void);
  * today and get deterministic errors rather than link failures.
  * ------------------------------------------------------------------- */
 
-/* Attempt to encode source data with RaptorQ erasure protection.
- * Currently always returns ASX_E_NOT_FOUND (deferred). */
+/* Encode source data into source + repair symbols with XOR-based
+ * erasure protection. Returns ASX_OK on success. */
 ASX_API ASX_MUST_USE asx_status asx_raptorq_encode(const asx_raptorq_config *cfg,
                                                      const void *source_data,
                                                      uint32_t source_len,
@@ -74,8 +73,7 @@ ASX_API ASX_MUST_USE asx_status asx_raptorq_encode(const asx_raptorq_config *cfg
                                                      uint32_t out_capacity,
                                                      uint32_t *out_symbol_count);
 
-/* Attempt to decode received symbols back to source data.
- * Currently always returns ASX_E_NOT_FOUND (deferred). */
+/* Decode received symbols back to source data. */
 ASX_API ASX_MUST_USE asx_status asx_raptorq_decode(const asx_raptorq_config *cfg,
                                                      const void *symbols,
                                                      uint32_t symbol_count,

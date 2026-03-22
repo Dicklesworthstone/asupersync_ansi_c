@@ -98,8 +98,7 @@ typedef struct {
 } feature_entry;
 
 static const feature_entry g_features[] = {
-    {"raptorq", 0,
-     "RaptorQ erasure coding deferred per DEF-009 (Wave D): specialized ~18k LOC surface"},
+    {"raptorq", 1, NULL},
     {"distributed", 1, NULL},
     {"grpc", 1, NULL},
     {"http", 1, NULL},

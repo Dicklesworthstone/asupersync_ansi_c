@@ -110,7 +110,8 @@ TEST(feature_available_implemented) {
 }
 
 TEST(feature_available_deferred) {
-    ASSERT_EQ(asx_feature_available("raptorq"), 0);
+    /* All features are now implemented — nothing is deferred */
+    ASSERT_NE(asx_feature_available("raptorq"), 0);
 }
 
 TEST(feature_available_unknown) {
@@ -119,10 +120,8 @@ TEST(feature_available_unknown) {
 }
 
 TEST(feature_deferral_reason) {
-    const char *reason = asx_feature_deferral_reason("raptorq");
-    ASSERT_NE(reason, NULL);
-
-    /* Implemented features have no deferral */
+    /* All features now implemented — deferral reasons are NULL */
+    ASSERT_EQ(asx_feature_deferral_reason("raptorq"), NULL);
     ASSERT_EQ(asx_feature_deferral_reason("actor"), NULL);
 
     /* Unknown features return NULL */

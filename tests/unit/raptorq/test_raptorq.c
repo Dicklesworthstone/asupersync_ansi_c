@@ -1,5 +1,5 @@
 /*
- * test_raptorq.c — unit tests for RaptorQ erasure coding (fail-closed stub)
+ * test_raptorq.c — unit tests for XOR-based erasure coding
  *
  * SPDX-License-Identifier: MIT
  */
@@ -7,10 +7,6 @@
 #include "../../test_harness.h"
 #include <asx/raptorq/raptorq.h>
 #include <string.h>
-
-/* ------------------------------------------------------------------ */
-/* Config defaults                                                     */
-/* ------------------------------------------------------------------ */
 
 TEST(raptorq_config_defaults) {
     asx_raptorq_config cfg;
@@ -23,83 +19,106 @@ TEST(raptorq_config_defaults) {
 }
 
 TEST(raptorq_config_null_safe) {
-    asx_raptorq_config_init(NULL); /* should not crash */
+    asx_raptorq_config_init(NULL);
 }
 
-/* ------------------------------------------------------------------ */
-/* Readiness probe                                                     */
-/* ------------------------------------------------------------------ */
-
-TEST(raptorq_not_available) {
-    ASSERT_EQ(asx_raptorq_available(), ASX_E_NOT_FOUND);
+TEST(raptorq_available) {
+    ASSERT_EQ(asx_raptorq_available(), ASX_OK);
 }
 
-TEST(raptorq_deferral_reason_not_null) {
-    const char *reason = asx_raptorq_deferral_reason();
-    ASSERT_NE(reason, NULL);
-    /* Should mention DEF-009 or Wave D */
-    ASSERT_NE(strstr(reason, "DEF-009"), NULL);
+TEST(raptorq_deferral_reason_null) {
+    ASSERT_TRUE(asx_raptorq_deferral_reason() == NULL);
 }
 
-/* ------------------------------------------------------------------ */
-/* Stub encode/decode fail-closed                                      */
-/* ------------------------------------------------------------------ */
-
-TEST(raptorq_encode_fails_closed) {
+TEST(raptorq_encode_basic) {
     asx_raptorq_config cfg;
     uint8_t source[64];
-    uint8_t symbols[256];
-    uint32_t count = 99;
+    uint8_t symbols[8192];
+    uint32_t count = 0;
 
     asx_raptorq_config_init(&cfg);
+    cfg.symbol_size = 32;
     memset(source, 0xAB, sizeof(source));
 
-    ASSERT_EQ(asx_raptorq_encode(&cfg, source, 64, symbols, 256, &count), ASX_E_NOT_FOUND);
-    ASSERT_EQ(count, 0u); /* output zeroed on failure */
+    ASSERT_EQ(asx_raptorq_encode(&cfg, source, 64, symbols, sizeof(symbols), &count), ASX_OK);
+    /* 64 bytes / 32 per symbol = 2 source + repair symbols */
+    ASSERT_TRUE(count >= 2u);
+    /* First source symbol should contain our data */
+    ASSERT_EQ(symbols[0], 0xAB);
 }
 
-TEST(raptorq_decode_fails_closed) {
+TEST(raptorq_encode_decode_roundtrip) {
     asx_raptorq_config cfg;
-    uint8_t symbols[256];
-    uint8_t output[64];
-    uint32_t out_len = 99;
+    uint8_t source[] = "Hello, erasure coding!";
+    uint8_t symbols[4096];
+    uint8_t decoded[256];
+    uint32_t sym_count = 0;
+    uint32_t decoded_len = 0;
 
     asx_raptorq_config_init(&cfg);
-    memset(symbols, 0xCD, sizeof(symbols));
+    cfg.symbol_size = 16;
 
-    ASSERT_EQ(asx_raptorq_decode(&cfg, symbols, 4, output, 64, &out_len), ASX_E_NOT_FOUND);
-    ASSERT_EQ(out_len, 0u); /* output zeroed on failure */
+    ASSERT_EQ(asx_raptorq_encode(&cfg, source, (uint32_t)strlen((const char *)source),
+                                  symbols, sizeof(symbols), &sym_count),
+              ASX_OK);
+    ASSERT_TRUE(sym_count > 0u);
+
+    /* Decode — source symbols are first, so direct copy recovers data */
+    ASSERT_EQ(asx_raptorq_decode(&cfg, symbols, sym_count, decoded, sizeof(decoded), &decoded_len),
+              ASX_OK);
+    ASSERT_TRUE(decoded_len > 0u);
+    ASSERT_TRUE(memcmp(decoded, source, strlen((const char *)source)) == 0);
 }
 
-TEST(raptorq_encode_null_count_safe) {
+TEST(raptorq_encode_null_args) {
     asx_raptorq_config cfg;
+    uint8_t buf[64];
+    uint32_t count;
+
     asx_raptorq_config_init(&cfg);
-    /* NULL out_symbol_count should not crash */
-    ASSERT_EQ(asx_raptorq_encode(&cfg, "data", 4, NULL, 0, NULL), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_raptorq_encode(NULL, buf, 4, buf, 64, &count), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_raptorq_encode(&cfg, NULL, 4, buf, 64, &count), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_raptorq_encode(&cfg, buf, 0, buf, 64, &count), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_raptorq_encode(&cfg, buf, 4, buf, 64, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(raptorq_decode_null_len_safe) {
+TEST(raptorq_decode_null_args) {
     asx_raptorq_config cfg;
+    uint8_t buf[64];
+    uint32_t len;
+
     asx_raptorq_config_init(&cfg);
-    ASSERT_EQ(asx_raptorq_decode(&cfg, "syms", 1, NULL, 0, NULL), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_raptorq_decode(NULL, buf, 1, buf, 64, &len), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_raptorq_decode(&cfg, NULL, 1, buf, 64, &len), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_raptorq_decode(&cfg, buf, 0, buf, 64, &len), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_raptorq_decode(&cfg, buf, 1, buf, 64, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-/* ------------------------------------------------------------------ */
-/* Main                                                                */
-/* ------------------------------------------------------------------ */
+TEST(raptorq_encode_buffer_too_small) {
+    asx_raptorq_config cfg;
+    uint8_t source[64];
+    uint8_t symbols[4];
+    uint32_t count;
+
+    asx_raptorq_config_init(&cfg);
+    cfg.symbol_size = 32;
+    memset(source, 0, sizeof(source));
+
+    ASSERT_EQ(asx_raptorq_encode(&cfg, source, 64, symbols, sizeof(symbols), &count),
+              ASX_E_BUFFER_TOO_SMALL);
+}
 
 int main(void) {
     fprintf(stderr, "=== test_raptorq ===\n");
-
     RUN_TEST(raptorq_config_defaults);
     RUN_TEST(raptorq_config_null_safe);
-    RUN_TEST(raptorq_not_available);
-    RUN_TEST(raptorq_deferral_reason_not_null);
-    RUN_TEST(raptorq_encode_fails_closed);
-    RUN_TEST(raptorq_decode_fails_closed);
-    RUN_TEST(raptorq_encode_null_count_safe);
-    RUN_TEST(raptorq_decode_null_len_safe);
-
+    RUN_TEST(raptorq_available);
+    RUN_TEST(raptorq_deferral_reason_null);
+    RUN_TEST(raptorq_encode_basic);
+    RUN_TEST(raptorq_encode_decode_roundtrip);
+    RUN_TEST(raptorq_encode_null_args);
+    RUN_TEST(raptorq_decode_null_args);
+    RUN_TEST(raptorq_encode_buffer_too_small);
     TEST_REPORT();
     return test_failures;
 }
