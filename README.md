@@ -205,6 +205,10 @@ git clone https://github.com/Dicklesworthstone/asupersync_ansi_c.git
 cd asupersync_ansi_c
 make release
 sudo make install
+
+# Convenience profile lanes
+make build-browser
+make build-parallel
 ```
 
 ### 4) Cross-Compile for Embedded Targets

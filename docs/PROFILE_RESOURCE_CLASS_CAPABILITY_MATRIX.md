@@ -267,7 +267,7 @@ The table below maps the crate-root feature/platform restrictions from
 
 | Upstream contract | Current ANSI C equivalent | State | Evidence / gap |
 |---|---|---|---|
-| `wasm32` must choose exactly one canonical browser profile | `ASX_PROFILE_BROWSER` exists in `include/asx/asx_config.h` and `src/runtime/profile_compat.c` | `gap` | The runtime knows about a browser profile, but the documented profile matrix and `Makefile` do not expose a browser build lane or mutually-exclusive browser subprofiles |
+| `wasm32` must choose exactly one canonical browser profile | `ASX_PROFILE_BROWSER` exists in `include/asx/asx_config.h`, `src/runtime/profile_compat.c`, and the explicit `build-browser` / `PROFILE=BROWSER` lane in `Makefile` | `partial` | The browser build lane is now explicit in the build surface and help text, but there is still no compile-time browser subprofile split or mutual-exclusion model because the C port only exposes one browser mode today |
 | `native-runtime` forbidden on browser builds | Browser boundary gates native surfaces | `partial` | `include/asx/runtime/browser_boundary.h` fail-closes filesystem/process/signal/io/blocking surfaces, but there is no compile-time `native-runtime`-style feature gate model |
 | `browser-io` forbidden with upstream minimal browser profile | Native I/O blocked under browser boundary | `partial` | `ASX_SURFACE_IO_DRIVER` is denied in browser mode, but there is no separate browser-IO feature flag or profile-minimal compile check |
 | `browser-trace` forbidden with upstream minimal browser profile | No separate browser trace feature | `gap` | The C tree has browser diagnostics and trace support, but no compile-time browser trace subprofile split |
@@ -283,7 +283,7 @@ The table below maps the crate-root feature/platform restrictions from
 The current C tree still needs these explicit fail-closed controls before it
 can honestly claim equivalence with the upstream feature/platform matrix:
 
-1. A documented and buildable browser profile lane in `Makefile` and CI.
+1. CI coverage for the explicit browser profile lane so the documented build surface is exercised continuously.
 2. Compile-time mutual exclusion for browser-specific subprofiles if the C port
    adopts more than one browser mode.
 3. Explicit compile-time or runtime gating for future native-only module
@@ -350,11 +350,11 @@ can honestly claim equivalence with the upstream feature/platform matrix:
 
 ## 12. Open Questions
 
-1. **Browser profile lane:** The runtime and diagnostics already know about
-   `ASX_PROFILE_BROWSER`, but the build matrix and public docs still understate
-   it. We need an explicit decision on whether to formalize a real browser
-   build lane now or keep it as a partial internal boundary scaffold until the
-   broader `web`/WASM surface is unblocked.
+1. **Browser profile lane:** The runtime, diagnostics, and build surface now
+   expose `ASX_PROFILE_BROWSER`, but CI still does not exercise that lane and
+   the C port still has only one browser mode. We need an explicit decision on
+   whether to formalize multiple browser subprofiles or keep a single browser
+   boundary scaffold until the broader `web`/WASM surface is unblocked.
 
 2. **Resource class R0 (micro):** Some IoT targets may need even tighter limits
    than R1 (e.g., 2 regions, 8 tasks). Not currently planned — evaluate when
