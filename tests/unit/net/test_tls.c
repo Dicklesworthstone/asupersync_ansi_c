@@ -6,7 +6,12 @@
 
 #include "../../test_harness.h"
 #include <asx/net/tls.h>
+#include <asx/runtime/browser_boundary.h>
 #include <string.h>
+
+static int tls_surface_available(void) {
+    return asx_surface_available_active(ASX_SURFACE_TLS);
+}
 
 TEST(tls_config_defaults) {
     asx_tls_config cfg;
@@ -61,6 +66,11 @@ TEST(tls_connect_and_state) {
     ASSERT_EQ(asx_tcp_connect(&tcp_client, &addr), ASX_OK);
     ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &tcp_server, NULL), ASX_OK);
 
+    if (!tls_surface_available()) {
+        ASSERT_EQ(asx_tls_connect(&tls, &conn, tcp_client), ASX_E_PERMISSION_DENIED);
+        return;
+    }
+
     ASSERT_EQ(asx_tls_connect(&tls, &conn, tcp_client), ASX_OK);
     ASSERT_TRUE(asx_tls_stream_is_alive(tls));
     ASSERT_EQ(asx_tls_stream_state(tls), ASX_TLS_STATE_READY);
@@ -95,6 +105,12 @@ TEST(tls_accept_and_io) {
     ASSERT_EQ(asx_tcp_listener_bind(&lis, &addr), ASX_OK);
     ASSERT_EQ(asx_tcp_connect(&tcp_client, &addr), ASX_OK);
     ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &tcp_server, NULL), ASX_OK);
+
+    if (!tls_surface_available()) {
+        ASSERT_EQ(asx_tls_connect(&tls_client, &conn, tcp_client), ASX_E_PERMISSION_DENIED);
+        ASSERT_EQ(asx_tls_accept(&tls_server, &acc, tcp_server), ASX_E_PERMISSION_DENIED);
+        return;
+    }
 
     ASSERT_EQ(asx_tls_connect(&tls_client, &conn, tcp_client), ASX_OK);
     ASSERT_EQ(asx_tls_accept(&tls_server, &acc, tcp_server), ASX_OK);
@@ -134,6 +150,11 @@ TEST(tls_alpn_negotiation) {
     ASSERT_EQ(asx_tcp_connect(&tcp_client, &addr), ASX_OK);
     ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &tcp_server, NULL), ASX_OK);
 
+    if (!tls_surface_available()) {
+        ASSERT_EQ(asx_tls_connect(&tls, &conn, tcp_client), ASX_E_PERMISSION_DENIED);
+        return;
+    }
+
     ASSERT_EQ(asx_tls_connect(&tls, &conn, tcp_client), ASX_OK);
     ASSERT_EQ(asx_tls_stream_alpn(tls, alpn_buf, sizeof(alpn_buf)), ASX_OK);
     ASSERT_STR_EQ(alpn_buf, "h2");
@@ -160,6 +181,10 @@ TEST(tls_shutdown_transitions) {
     ASSERT_EQ(asx_tcp_listener_bind(&lis, &addr), ASX_OK);
     ASSERT_EQ(asx_tcp_connect(&tcp_client, &addr), ASX_OK);
     ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &tcp_server, NULL), ASX_OK);
+    if (!tls_surface_available()) {
+        ASSERT_EQ(asx_tls_connect(&tls, &conn, tcp_client), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_tls_connect(&tls, &conn, tcp_client), ASX_OK);
 
     ASSERT_EQ(asx_tls_stream_state(tls), ASX_TLS_STATE_READY);

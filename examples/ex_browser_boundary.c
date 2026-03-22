@@ -69,9 +69,10 @@ static void scenario_native_blocked(void) {
     SCENARIO_CHECK(asx_surface_gate(ASX_SURFACE_BLOCKING) == ASX_E_PERMISSION_DENIED,
                    "blocking_blocked");
 
-    /* Exactly 5 native surfaces blocked */
-    SCENARIO_CHECK(asx_surface_blocked_count(ASX_PROFILE_ID_BROWSER) == 5,
-                   "five_blocked");
+    /* Native-only surfaces blocked (FS, process, signal, IO_driver,
+     * blocking, server, gRPC, messaging, TLS, database) */
+    SCENARIO_CHECK(asx_surface_blocked_count(ASX_PROFILE_ID_BROWSER) == 10,
+                   "native_blocked");
 
     SCENARIO_END();
 }
