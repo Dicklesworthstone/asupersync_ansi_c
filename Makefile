@@ -130,7 +130,8 @@ CORE_SRC := \
 	src/core/symbol.c \
 	src/core/abi.c \
 	src/core/epoch.c \
-	src/core/circuit_breaker.c
+	src/core/circuit_breaker.c \
+	src/core/join_set.c
 
 RUNTIME_SRC := \
 	src/runtime/hooks.c \
@@ -184,7 +185,8 @@ SYNC_SRC := \
 
 ACTOR_SRC := \
 	src/actor/actor.c \
-	src/actor/supervisor.c
+	src/actor/supervisor.c \
+	src/actor/gen_server.c
 
 NET_SRC := \
 	src/net/net.c \
@@ -197,7 +199,8 @@ NET_SRC := \
 	src/net/grpc.c \
 	src/net/db.c \
 	src/net/messaging.c \
-	src/net/distributed.c
+	src/net/distributed.c \
+	src/net/pipe.c
 
 BYTES_SRC := \
 	src/bytes/buf.c \

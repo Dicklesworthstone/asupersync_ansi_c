@@ -101,15 +101,20 @@
 #include <asx/net/db.h>
 #include <asx/net/messaging.h>
 #include <asx/net/distributed.h>
+#include <asx/net/pipe.h>
 
 /* Filesystem, process, and signal surfaces */
 #include <asx/fs/fs.h>
 #include <asx/process/process.h>
 #include <asx/signal/signal.h>
 
-/* Actor model and supervision */
+/* Actor model, supervision, and gen_server */
 #include <asx/actor/actor.h>
 #include <asx/actor/supervisor.h>
+#include <asx/actor/gen_server.h>
+
+/* Dynamic task collection */
+#include <asx/core/join_set.h>
 
 /* Obligation, session, record, and link public families */
 #include <asx/link/link.h>
