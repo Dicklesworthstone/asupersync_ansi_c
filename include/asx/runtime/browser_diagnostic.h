@@ -49,14 +49,17 @@ typedef enum {
     ASX_BROWSER_DX_NATIVE_SIGNAL = 3,   /* signal handling in browser */
     ASX_BROWSER_DX_NATIVE_IO = 4,       /* native I/O driver in browser */
     ASX_BROWSER_DX_NATIVE_BLOCKING = 5, /* blocking thread pool in browser */
+    ASX_BROWSER_DX_NATIVE_SERVER = 6,   /* server/listener family in browser */
+    ASX_BROWSER_DX_NATIVE_GRPC = 7,     /* gRPC family in browser */
+    ASX_BROWSER_DX_NATIVE_MESSAGING = 8, /* messaging/broker family in browser */
 
     /* Profile mismatch */
-    ASX_BROWSER_DX_WRONG_PROFILE = 6, /* non-browser code in browser build */
+    ASX_BROWSER_DX_WRONG_PROFILE = 9, /* non-browser code in browser build */
 
     /* Sandbox integrity */
-    ASX_BROWSER_DX_ALLOCATOR_UNSEAL = 7, /* unsealed allocator in browser */
+    ASX_BROWSER_DX_ALLOCATOR_UNSEAL = 10, /* unsealed allocator in browser */
 
-    ASX_BROWSER_DX_COUNT = 8
+    ASX_BROWSER_DX_COUNT = 11
 } asx_browser_dx_class;
 
 /* DX error entry: class, explanation, and remediation */

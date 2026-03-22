@@ -6,7 +6,12 @@
 
 #include "../../test_harness.h"
 #include <asx/net/messaging.h>
+#include <asx/runtime/browser_boundary.h>
 #include <string.h>
+
+static int messaging_surface_available(void) {
+    return asx_surface_available_active(ASX_SURFACE_MESSAGING);
+}
 
 TEST(message_set) {
     asx_message msg;
@@ -38,6 +43,11 @@ TEST(queue_push_poll) {
 
     asx_message_init(&in);
     asx_message_set(&in, "test", "data1", 5);
+    if (!messaging_surface_available()) {
+        ASSERT_EQ(asx_msg_queue_push(&q, &in), ASX_E_PERMISSION_DENIED);
+        ASSERT_EQ(asx_msg_queue_len(&q), 0u);
+        return;
+    }
     ASSERT_EQ(asx_msg_queue_push(&q, &in), ASX_OK);
     ASSERT_EQ(asx_msg_queue_len(&q), 1u);
     ASSERT_FALSE(asx_msg_queue_is_empty(&q));
@@ -54,6 +64,10 @@ TEST(queue_poll_empty) {
     asx_message out;
 
     asx_msg_queue_init(&q);
+    if (!messaging_surface_available()) {
+        ASSERT_EQ(asx_msg_queue_poll(&q, &out), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_msg_queue_poll(&q, &out), ASX_E_PENDING);
 }
 
@@ -64,6 +78,11 @@ TEST(queue_fifo_order) {
     asx_msg_queue_init(&q);
     asx_message_set(&m1, "t", "first", 5);
     asx_message_set(&m2, "t", "second", 6);
+    if (!messaging_surface_available()) {
+        ASSERT_EQ(asx_msg_queue_push(&q, &m1), ASX_E_PERMISSION_DENIED);
+        ASSERT_EQ(asx_msg_queue_push(&q, &m2), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     asx_msg_queue_push(&q, &m1);
     asx_msg_queue_push(&q, &m2);
 
@@ -84,6 +103,11 @@ TEST(queue_full) {
     asx_msg_queue_init(&q);
     asx_message_set(&msg, "t", "x", 1);
 
+    if (!messaging_surface_available()) {
+        ASSERT_EQ(asx_msg_queue_push(&q, &msg), ASX_E_PERMISSION_DENIED);
+        return;
+    }
+
     for (i = 0; i < ASX_MSG_QUEUE_DEPTH; i++) { ASSERT_EQ(asx_msg_queue_push(&q, &msg), ASX_OK); }
     ASSERT_EQ(asx_msg_queue_push(&q, &msg), ASX_E_WOULD_BLOCK);
 }
@@ -93,6 +117,10 @@ TEST(broker_create_topic) {
     asx_msg_topic *topic;
 
     asx_msg_broker_init(&broker);
+    if (!messaging_surface_available()) {
+        ASSERT_EQ(asx_msg_broker_topic(&broker, "events", &topic), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_msg_broker_topic(&broker, "events", &topic), ASX_OK);
     ASSERT_TRUE(topic != NULL);
     ASSERT_STR_EQ(topic->name, "events");
@@ -113,6 +141,10 @@ TEST(broker_pubsub) {
     asx_message msg, out;
 
     asx_msg_broker_init(&broker);
+    if (!messaging_surface_available()) {
+        ASSERT_EQ(asx_msg_broker_topic(&broker, "news", &topic), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     asx_msg_broker_topic(&broker, "news", &topic);
 
     asx_msg_queue_init(&sub1);
@@ -140,6 +172,10 @@ TEST(broker_publish_rejects_topic_mismatch) {
     asx_message msg;
 
     asx_msg_broker_init(&broker);
+    if (!messaging_surface_available()) {
+        ASSERT_EQ(asx_msg_broker_topic(&broker, "news", &topic), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_msg_broker_topic(&broker, "news", &topic), ASX_OK);
     asx_msg_queue_init(&sub);
     ASSERT_EQ(asx_msg_topic_subscribe(topic, &sub), ASX_OK);
@@ -157,6 +193,10 @@ TEST(broker_topic_exhaustion) {
     char name[16];
 
     asx_msg_broker_init(&broker);
+    if (!messaging_surface_available()) {
+        ASSERT_EQ(asx_msg_broker_topic(&broker, "a", &topic), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     for (i = 0; i < ASX_MSG_MAX_TOPICS; i++) {
         name[0] = 'a' + (char)(i % 26);
         name[1] = '\0';

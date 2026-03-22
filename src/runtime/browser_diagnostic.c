@@ -41,6 +41,22 @@ static const asx_browser_dx_entry g_dx_catalog[ASX_BROWSER_DX_COUNT] = {
      "The browser WASM environment runs on the main thread or in a Web Worker. "
      "The blocking thread pool is not available.",
      "Use cooperative scheduling with bounded poll budgets."},
+    /* NATIVE_SERVER */
+    {ASX_BROWSER_DX_NATIVE_SERVER, "server substrate unavailable",
+     "The browser profile cannot host the native listener/accept loop surface used by "
+     "the deterministic server family.",
+     "Terminate server functionality at the JS host boundary and keep browser code on the "
+     "client/channel side."},
+    /* NATIVE_GRPC */
+    {ASX_BROWSER_DX_NATIVE_GRPC, "gRPC family unavailable",
+     "The browser build excludes the native-facing gRPC transport/server family even though "
+     "the core profile can exercise it in-memory.",
+     "Move RPC dispatch to a host bridge or compile a native profile for direct gRPC use."},
+    /* NATIVE_MESSAGING */
+    {ASX_BROWSER_DX_NATIVE_MESSAGING, "messaging broker unavailable",
+     "The browser build excludes the broker-style messaging family from the fail-closed "
+     "public surface.",
+     "Route pub/sub through browser-safe channels or a host-managed messaging bridge."},
     /* WRONG_PROFILE */
     {ASX_BROWSER_DX_WRONG_PROFILE, "profile mismatch",
      "Code compiled for a native profile is running in a browser context. "
@@ -65,6 +81,9 @@ asx_browser_dx_class asx_browser_dx_for_surface(asx_host_surface surface) {
     case ASX_SURFACE_SIGNAL: return ASX_BROWSER_DX_NATIVE_SIGNAL;
     case ASX_SURFACE_IO_DRIVER: return ASX_BROWSER_DX_NATIVE_IO;
     case ASX_SURFACE_BLOCKING: return ASX_BROWSER_DX_NATIVE_BLOCKING;
+    case ASX_SURFACE_SERVER: return ASX_BROWSER_DX_NATIVE_SERVER;
+    case ASX_SURFACE_GRPC: return ASX_BROWSER_DX_NATIVE_GRPC;
+    case ASX_SURFACE_MESSAGING: return ASX_BROWSER_DX_NATIVE_MESSAGING;
     case ASX_SURFACE_REGION:
     case ASX_SURFACE_TASK:
     case ASX_SURFACE_CHANNEL:

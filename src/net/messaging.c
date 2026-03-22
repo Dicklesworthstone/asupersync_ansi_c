@@ -5,6 +5,7 @@
  */
 
 #include <asx/net/messaging.h>
+#include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
 static size_t msg_bounded_strlen(const char *str, size_t max) {
@@ -14,6 +15,10 @@ static size_t msg_bounded_strlen(const char *str, size_t max) {
         if (str[len] == '\0') return len;
     }
     return max;
+}
+
+static asx_status messaging_surface_gate(void) {
+    return asx_surface_gate(ASX_SURFACE_MESSAGING);
 }
 
 /* ------------------------------------------------------------------ */
@@ -55,6 +60,10 @@ asx_status asx_msg_queue_push(asx_msg_queue *q, const asx_message *msg) {
     uint32_t tail;
 
     if (q == NULL || msg == NULL) return ASX_E_INVALID_ARGUMENT;
+    {
+        asx_status st = messaging_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     if (q->count >= ASX_MSG_QUEUE_DEPTH) return ASX_E_WOULD_BLOCK;
 
     tail = (q->head + q->count) % ASX_MSG_QUEUE_DEPTH;
@@ -67,6 +76,10 @@ asx_status asx_msg_queue_push(asx_msg_queue *q, const asx_message *msg) {
 
 asx_status asx_msg_queue_poll(asx_msg_queue *q, asx_message *out) {
     if (q == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    {
+        asx_status st = messaging_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     if (q->count == 0u) return ASX_E_PENDING;
 
     *out = q->messages[q->head];
@@ -101,6 +114,10 @@ asx_status asx_msg_broker_topic(asx_msg_broker *broker, const char *name, asx_ms
     asx_msg_topic *t;
 
     if (broker == NULL || name == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    {
+        asx_status st = messaging_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     *out = NULL;
 
     len = msg_bounded_strlen(name, ASX_MSG_MAX_TOPIC_LEN);
@@ -127,6 +144,10 @@ asx_status asx_msg_broker_topic(asx_msg_broker *broker, const char *name, asx_ms
 
 asx_status asx_msg_topic_subscribe(asx_msg_topic *topic, asx_msg_queue *subscriber_queue) {
     if (topic == NULL || subscriber_queue == NULL) return ASX_E_INVALID_ARGUMENT;
+    {
+        asx_status st = messaging_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     if (topic->subscriber_count >= ASX_MSG_MAX_SUBSCRIBERS) return ASX_E_RESOURCE_EXHAUSTED;
     topic->subscribers[topic->subscriber_count].queue = subscriber_queue;
     topic->subscribers[topic->subscriber_count].active = 1u;
@@ -139,6 +160,10 @@ asx_status asx_msg_topic_publish(asx_msg_topic *topic, const asx_message *msg) {
     asx_status last_err;
 
     if (topic == NULL || msg == NULL) return ASX_E_INVALID_ARGUMENT;
+    {
+        asx_status st = messaging_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     if (!topic->active || strcmp(topic->name, msg->topic) != 0) return ASX_E_INVALID_ARGUMENT;
     last_err = ASX_OK;
 

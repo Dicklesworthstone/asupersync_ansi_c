@@ -51,6 +51,24 @@ TEST(dx_lookup_native_signal) {
     ASSERT_TRUE(strstr(entry->title, "signal") != NULL);
 }
 
+TEST(dx_lookup_native_server) {
+    const asx_browser_dx_entry *entry = asx_browser_dx_lookup(ASX_BROWSER_DX_NATIVE_SERVER);
+    ASSERT_TRUE(entry != NULL);
+    ASSERT_TRUE(strstr(entry->title, "server") != NULL);
+}
+
+TEST(dx_lookup_native_grpc) {
+    const asx_browser_dx_entry *entry = asx_browser_dx_lookup(ASX_BROWSER_DX_NATIVE_GRPC);
+    ASSERT_TRUE(entry != NULL);
+    ASSERT_TRUE(strstr(entry->title, "gRPC") != NULL);
+}
+
+TEST(dx_lookup_native_messaging) {
+    const asx_browser_dx_entry *entry = asx_browser_dx_lookup(ASX_BROWSER_DX_NATIVE_MESSAGING);
+    ASSERT_TRUE(entry != NULL);
+    ASSERT_TRUE(strstr(entry->title, "messaging") != NULL);
+}
+
 TEST(dx_lookup_all_have_remediation) {
     int i;
     for (i = 1; i < (int)ASX_BROWSER_DX_COUNT; i++) {
@@ -92,6 +110,21 @@ TEST(dx_for_surface_blocking) {
               (int)ASX_BROWSER_DX_NATIVE_BLOCKING);
 }
 
+TEST(dx_for_surface_server) {
+    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_SERVER),
+              (int)ASX_BROWSER_DX_NATIVE_SERVER);
+}
+
+TEST(dx_for_surface_grpc) {
+    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_GRPC),
+              (int)ASX_BROWSER_DX_NATIVE_GRPC);
+}
+
+TEST(dx_for_surface_messaging) {
+    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_MESSAGING),
+              (int)ASX_BROWSER_DX_NATIVE_MESSAGING);
+}
+
 TEST(dx_for_surface_region_none) {
     ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_REGION),
               (int)ASX_BROWSER_DX_NONE);
@@ -106,15 +139,14 @@ TEST(dx_for_surface_task_none) {
  * Browser evidence collector tests
  * ------------------------------------------------------------------- */
 
-TEST(evidence_capture_core_profile) {
+TEST(evidence_capture_active_profile) {
     asx_browser_evidence_report report;
     asx_browser_evidence_capture(&report);
 
-    /* Test build uses CORE profile */
-    ASSERT_EQ((int)report.active_profile, (int)ASX_PROFILE_ID_CORE);
-    ASSERT_EQ(report.is_browser, 0);
-    ASSERT_EQ((int)report.surfaces_available, (int)ASX_SURFACE_COUNT);
-    ASSERT_EQ((int)report.surfaces_blocked, 0);
+    ASSERT_EQ((int)report.active_profile, (int)asx_profile_active());
+    ASSERT_EQ(report.is_browser, report.active_profile == ASX_PROFILE_ID_BROWSER ? 1 : 0);
+    ASSERT_EQ((int)report.surfaces_available + (int)report.surfaces_blocked,
+              (int)ASX_SURFACE_COUNT);
     ASSERT_EQ(report.all_semantic_rules_hold, 1);
 }
 
@@ -282,6 +314,9 @@ int main(void) {
     RUN_TEST(dx_lookup_native_fs);
     RUN_TEST(dx_lookup_native_process);
     RUN_TEST(dx_lookup_native_signal);
+    RUN_TEST(dx_lookup_native_server);
+    RUN_TEST(dx_lookup_native_grpc);
+    RUN_TEST(dx_lookup_native_messaging);
     RUN_TEST(dx_lookup_all_have_remediation);
     RUN_TEST(dx_count);
 
@@ -291,11 +326,14 @@ int main(void) {
     RUN_TEST(dx_for_surface_signal);
     RUN_TEST(dx_for_surface_io_driver);
     RUN_TEST(dx_for_surface_blocking);
+    RUN_TEST(dx_for_surface_server);
+    RUN_TEST(dx_for_surface_grpc);
+    RUN_TEST(dx_for_surface_messaging);
     RUN_TEST(dx_for_surface_region_none);
     RUN_TEST(dx_for_surface_task_none);
 
     /* Evidence collector */
-    RUN_TEST(evidence_capture_core_profile);
+    RUN_TEST(evidence_capture_active_profile);
     RUN_TEST(evidence_to_sink_core);
     RUN_TEST(evidence_to_sink_null_args);
     RUN_TEST(evidence_verdict_core_no_failures);

@@ -53,8 +53,11 @@ typedef enum {
     ASX_SURFACE_SIGNAL = 9,     /* OS signal handling */
     ASX_SURFACE_IO_DRIVER = 10, /* native I/O reactor */
     ASX_SURFACE_BLOCKING = 11,  /* blocking thread pool */
+    ASX_SURFACE_SERVER = 12,    /* native server/listener substrate */
+    ASX_SURFACE_GRPC = 13,      /* gRPC transport/server family */
+    ASX_SURFACE_MESSAGING = 14, /* broker/messaging family */
 
-    ASX_SURFACE_COUNT = 12
+    ASX_SURFACE_COUNT = 15
 } asx_host_surface;
 
 /* -------------------------------------------------------------------

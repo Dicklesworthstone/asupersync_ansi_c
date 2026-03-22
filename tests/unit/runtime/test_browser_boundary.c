@@ -87,11 +87,14 @@ TEST(browser_blocks_native_surfaces) {
     ASSERT_EQ(asx_surface_available(ASX_PROFILE_ID_BROWSER, ASX_SURFACE_SIGNAL), 0);
     ASSERT_EQ(asx_surface_available(ASX_PROFILE_ID_BROWSER, ASX_SURFACE_IO_DRIVER), 0);
     ASSERT_EQ(asx_surface_available(ASX_PROFILE_ID_BROWSER, ASX_SURFACE_BLOCKING), 0);
+    ASSERT_EQ(asx_surface_available(ASX_PROFILE_ID_BROWSER, ASX_SURFACE_SERVER), 0);
+    ASSERT_EQ(asx_surface_available(ASX_PROFILE_ID_BROWSER, ASX_SURFACE_GRPC), 0);
+    ASSERT_EQ(asx_surface_available(ASX_PROFILE_ID_BROWSER, ASX_SURFACE_MESSAGING), 0);
 }
 
 TEST(browser_blocked_count) {
     uint32_t blocked = asx_surface_blocked_count(ASX_PROFILE_ID_BROWSER);
-    ASSERT_EQ((int)blocked, 5); /* fs, process, signal, io_driver, blocking */
+    ASSERT_EQ((int)blocked, 8); /* fs, process, signal, io_driver, blocking, server, grpc, messaging */
 }
 
 TEST(browser_available_count) {
@@ -158,6 +161,14 @@ TEST(surface_name_process) { ASSERT_STR_EQ(asx_surface_name(ASX_SURFACE_PROCESS)
 
 TEST(surface_name_signal) { ASSERT_STR_EQ(asx_surface_name(ASX_SURFACE_SIGNAL), "signal"); }
 
+TEST(surface_name_server) { ASSERT_STR_EQ(asx_surface_name(ASX_SURFACE_SERVER), "server"); }
+
+TEST(surface_name_grpc) { ASSERT_STR_EQ(asx_surface_name(ASX_SURFACE_GRPC), "grpc"); }
+
+TEST(surface_name_messaging) {
+    ASSERT_STR_EQ(asx_surface_name(ASX_SURFACE_MESSAGING), "messaging");
+}
+
 TEST(surface_name_out_of_range) {
     ASSERT_STR_EQ(asx_surface_name((asx_host_surface)99), "unknown");
 }
@@ -220,6 +231,9 @@ int main(void) {
     RUN_TEST(surface_name_filesystem);
     RUN_TEST(surface_name_process);
     RUN_TEST(surface_name_signal);
+    RUN_TEST(surface_name_server);
+    RUN_TEST(surface_name_grpc);
+    RUN_TEST(surface_name_messaging);
     RUN_TEST(surface_name_out_of_range);
 
     /* Edge cases */

@@ -9,6 +9,7 @@
  */
 
 #include <asx/net/server.h>
+#include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -44,6 +45,8 @@ asx_status asx_server_listen(asx_server *srv) {
     asx_status st;
 
     if (srv == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_surface_gate(ASX_SURFACE_SERVER);
+    if (st != ASX_OK) return st;
     if (srv->state != ASX_SERVER_STATE_IDLE) return ASX_E_INVALID_STATE;
 
     addr = asx_socket_addr_loopback(srv->config.listen_port);
@@ -61,6 +64,8 @@ asx_status asx_server_poll_accept(asx_server *srv, asx_server_conn *out) {
     uint32_t idx;
 
     if (srv == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_surface_gate(ASX_SURFACE_SERVER);
+    if (st != ASX_OK) return st;
     if (srv->state != ASX_SERVER_STATE_LISTENING) return ASX_E_INVALID_STATE;
     if (srv->active_count >= srv->config.max_connections) return ASX_E_RESOURCE_EXHAUSTED;
 
@@ -89,6 +94,10 @@ asx_status asx_server_close_conn(asx_server *srv, uint32_t conn_id) {
     uint32_t idx;
 
     if (srv == NULL) return ASX_E_INVALID_ARGUMENT;
+    {
+        asx_status st = asx_surface_gate(ASX_SURFACE_SERVER);
+        if (st != ASX_OK) return st;
+    }
 
     for (idx = 0u; idx < ASX_SERVER_MAX_CONNECTIONS; idx++) {
         if (srv->connections[idx].active && srv->connections[idx].id == conn_id) {
@@ -103,6 +112,10 @@ asx_status asx_server_close_conn(asx_server *srv, uint32_t conn_id) {
 
 asx_status asx_server_shutdown(asx_server *srv) {
     if (srv == NULL) return ASX_E_INVALID_ARGUMENT;
+    {
+        asx_status st = asx_surface_gate(ASX_SURFACE_SERVER);
+        if (st != ASX_OK) return st;
+    }
     if (srv->state != ASX_SERVER_STATE_LISTENING) return ASX_E_INVALID_STATE;
 
     srv->state = ASX_SERVER_STATE_DRAINING;
@@ -120,6 +133,10 @@ asx_status asx_server_stop(asx_server *srv) {
     uint32_t idx;
 
     if (srv == NULL) return ASX_E_INVALID_ARGUMENT;
+    {
+        asx_status st = asx_surface_gate(ASX_SURFACE_SERVER);
+        if (st != ASX_OK) return st;
+    }
     if (srv->listener_bound) {
         asx_tcp_listener_close(srv->listener);
         srv->listener_bound = 0u;

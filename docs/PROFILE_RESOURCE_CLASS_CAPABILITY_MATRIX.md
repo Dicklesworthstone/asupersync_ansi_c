@@ -268,15 +268,15 @@ The table below maps the crate-root feature/platform restrictions from
 | Upstream contract | Current ANSI C equivalent | State | Evidence / gap |
 |---|---|---|---|
 | `wasm32` must choose exactly one canonical browser profile | `ASX_PROFILE_BROWSER` exists in `include/asx/asx_config.h`, `src/runtime/profile_compat.c`, and the explicit `build-browser` / `PROFILE=BROWSER` lane in `Makefile` | `partial` | The browser build lane is now explicit in the build surface and help text, but there is still no compile-time browser subprofile split or mutual-exclusion model because the C port only exposes one browser mode today |
-| `native-runtime` forbidden on browser builds | Browser boundary gates native surfaces | `partial` | `include/asx/runtime/browser_boundary.h` fail-closes filesystem/process/signal/io/blocking surfaces, but there is no compile-time `native-runtime`-style feature gate model |
+| `native-runtime` forbidden on browser builds | Browser boundary gates native surfaces | `partial` | `include/asx/runtime/browser_boundary.h` now fail-closes filesystem/process/signal/io/blocking plus the shipped `server`/`grpc`/`messaging` families, but there is still no compile-time `native-runtime`-style feature gate model |
 | `browser-io` forbidden with upstream minimal browser profile | Native I/O blocked under browser boundary | `partial` | `ASX_SURFACE_IO_DRIVER` is denied in browser mode, but there is no separate browser-IO feature flag or profile-minimal compile check |
 | `browser-trace` forbidden with upstream minimal browser profile | No separate browser trace feature | `gap` | The C tree has browser diagnostics and trace support, but no compile-time browser trace subprofile split |
 | `cli` unsupported on browser builds | No `cli` module in C | `gap` | The C port currently lacks a public CLI family entirely, so there is no feature-gated fail-closed browser rule to enforce |
 | `io-uring` unsupported on browser builds | No io_uring feature surface in C | `mapped-by-absence` | No equivalent feature exists yet; once native reactor features expand, browser incompatibility must become explicit |
 | `tls`, `tls-native-roots`, `tls-webpki-roots` unsupported on browser builds | No TLS family in C | `mapped-by-absence` | Entire TLS feature family is absent, so the contract is currently unmet rather than enforced |
 | `sqlite`, `postgres`, `mysql` unsupported on browser builds | No database family in C | `mapped-by-absence` | Entire database feature family is absent, so there is no profile/target gate to enforce yet |
-| `kafka` unsupported on browser builds | No messaging family in C | `mapped-by-absence` | Messaging/broker family is absent, so the upstream restriction is not yet represented |
-| Native-only modules (`fs`, `grpc`, `messaging`, `process`, `server`, `signal`) excluded from wasm32 | Browser boundary exists for some native surfaces | `partial` | The boundary currently covers filesystem/process/signal/io/blocking, but not a full native-vs-browser public module matrix across grpc/messaging/server families |
+| `kafka` unsupported on browser builds | Browser boundary denies the shipped messaging/broker family in browser mode | `partial` | `ASX_SURFACE_MESSAGING` is now fail-closed at the boundary and in the status-returning messaging entry points, but there is still no compile-time broker feature split |
+| Native-only modules (`fs`, `grpc`, `messaging`, `process`, `server`, `signal`) excluded from wasm32 | Browser boundary denies the currently shipped native-facing families | `partial` | The boundary now covers filesystem/process/signal/io/blocking plus explicit `server`/`grpc`/`messaging` surfaces; remaining debt is the wider module/build matrix for other higher-surface families such as TLS and database work |
 
 ### 8.1 Missing Fail-Closed Checks Before Parity Claims
 
@@ -285,8 +285,8 @@ can honestly claim equivalence with the upstream feature/platform matrix:
 
 1. Compile-time mutual exclusion for browser-specific subprofiles if the C port
    adopts more than one browser mode.
-2. Explicit compile-time or runtime gating for future native-only module
-   families such as TLS, database, messaging, gRPC, and server substrate work.
+2. Explicit compile-time or runtime gating for remaining native-only module
+   families such as TLS, database, and any future browser-incompatible expansions.
 3. A single compatibility matrix that states which combinations are supported,
    denied, or currently unimplemented rather than leaving absence implicit.
 

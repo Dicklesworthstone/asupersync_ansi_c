@@ -7,7 +7,12 @@
 
 #include "../../test_harness.h"
 #include <asx/net/grpc.h>
+#include <asx/runtime/browser_boundary.h>
 #include <string.h>
+
+static int grpc_surface_available(void) {
+    return asx_surface_available_active(ASX_SURFACE_GRPC);
+}
 
 /* ------------------------------------------------------------------ */
 /* Test handler                                                        */
@@ -96,6 +101,13 @@ TEST(grpc_service_add_method) {
     asx_grpc_service_init(&svc, "TestService");
     ASSERT_STR_EQ(svc.name, "TestService");
 
+    if (!grpc_surface_available()) {
+        ASSERT_EQ(asx_grpc_service_add_unary(&svc, "Echo", echo_handler, NULL),
+                  ASX_E_PERMISSION_DENIED);
+        ASSERT_EQ(svc.method_count, 0u);
+        return;
+    }
+
     ASSERT_EQ(asx_grpc_service_add_unary(&svc, "Echo", echo_handler, NULL), ASX_OK);
     ASSERT_EQ(svc.method_count, 1u);
     ASSERT_STR_EQ(svc.methods[0].full_name, "/TestService/Echo");
@@ -135,6 +147,17 @@ TEST(grpc_server_dispatch_unary) {
 
     asx_grpc_server_init(&srv);
     asx_grpc_service_init(&svc, "EchoService");
+    if (!grpc_surface_available()) {
+        ASSERT_EQ(asx_grpc_service_add_unary(&svc, "Echo", echo_handler, NULL),
+                  ASX_E_PERMISSION_DENIED);
+        ASSERT_EQ(asx_grpc_server_add_service(&srv, &svc), ASX_E_PERMISSION_DENIED);
+        asx_grpc_message_init(&req);
+        asx_grpc_message_init(&resp);
+        ASSERT_EQ(asx_grpc_server_call(&srv, "/EchoService/Echo", &req, &resp, NULL, &code),
+                  ASX_E_PERMISSION_DENIED);
+        return;
+    }
+
     asx_grpc_service_add_unary(&svc, "Echo", echo_handler, NULL);
     ASSERT_EQ(asx_grpc_server_add_service(&srv, &svc), ASX_OK);
 
@@ -157,6 +180,15 @@ TEST(grpc_server_method_not_found) {
 
     asx_grpc_server_init(&srv);
     asx_grpc_service_init(&svc, "Svc");
+    if (!grpc_surface_available()) {
+        ASSERT_EQ(asx_grpc_service_add_unary(&svc, "M", echo_handler, NULL),
+                  ASX_E_PERMISSION_DENIED);
+        asx_grpc_message_init(&req);
+        asx_grpc_message_init(&resp);
+        ASSERT_EQ(asx_grpc_server_call(&srv, "/Svc/Missing", &req, &resp, NULL, &code),
+                  ASX_E_PERMISSION_DENIED);
+        return;
+    }
     asx_grpc_service_add_unary(&svc, "M", echo_handler, NULL);
     asx_grpc_server_add_service(&srv, &svc);
 
@@ -174,6 +206,15 @@ TEST(grpc_server_handler_sets_code) {
 
     asx_grpc_server_init(&srv);
     asx_grpc_service_init(&svc, "AuthService");
+    if (!grpc_surface_available()) {
+        ASSERT_EQ(asx_grpc_service_add_unary(&svc, "Check", fail_handler, NULL),
+                  ASX_E_PERMISSION_DENIED);
+        asx_grpc_message_init(&req);
+        asx_grpc_message_init(&resp);
+        ASSERT_EQ(asx_grpc_server_call(&srv, "/AuthService/Check", &req, &resp, NULL, &code),
+                  ASX_E_PERMISSION_DENIED);
+        return;
+    }
     asx_grpc_service_add_unary(&svc, "Check", fail_handler, NULL);
     asx_grpc_server_add_service(&srv, &svc);
 
@@ -196,11 +237,21 @@ TEST(grpc_channel_call) {
 
     asx_grpc_server_init(&srv);
     asx_grpc_service_init(&svc, "Greeter");
-    asx_grpc_service_add_unary(&svc, "SayHello", echo_handler, NULL);
-    asx_grpc_server_add_service(&srv, &svc);
-
     asx_grpc_channel_init(&ch, "localhost:50051", &srv);
     ASSERT_STR_EQ(ch.target, "localhost:50051");
+
+    if (!grpc_surface_available()) {
+        ASSERT_EQ(asx_grpc_service_add_unary(&svc, "SayHello", echo_handler, NULL),
+                  ASX_E_PERMISSION_DENIED);
+        asx_grpc_message_init(&req);
+        asx_grpc_message_init(&resp);
+        ASSERT_EQ(asx_grpc_channel_call(&ch, "/Greeter/SayHello", &req, &resp, NULL, &code),
+                  ASX_E_PERMISSION_DENIED);
+        return;
+    }
+
+    asx_grpc_service_add_unary(&svc, "SayHello", echo_handler, NULL);
+    asx_grpc_server_add_service(&srv, &svc);
 
     asx_grpc_message_init(&req);
     asx_grpc_message_set(&req, "world", 5);
@@ -246,6 +297,11 @@ TEST(grpc_health_set_and_check) {
     asx_grpc_health health;
 
     asx_grpc_health_init(&health);
+    if (!grpc_surface_available()) {
+        ASSERT_EQ(asx_grpc_health_set(&health, "", ASX_GRPC_HEALTH_SERVING),
+                  ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_grpc_health_check(&health, ""), ASX_GRPC_HEALTH_SERVICE_UNKNOWN);
 
     ASSERT_EQ(asx_grpc_health_set(&health, "", ASX_GRPC_HEALTH_SERVING), ASX_OK);
@@ -277,6 +333,11 @@ TEST(grpc_reflect_lists_services) {
     asx_grpc_server_init(&srv);
     asx_grpc_service_init(&svc1, "ServiceA");
     asx_grpc_service_init(&svc2, "ServiceB");
+    if (!grpc_surface_available()) {
+        ASSERT_EQ(asx_grpc_server_add_service(&srv, &svc1), ASX_E_PERMISSION_DENIED);
+        ASSERT_EQ(asx_grpc_reflect(&srv, &refl), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     asx_grpc_server_add_service(&srv, &svc1);
     asx_grpc_server_add_service(&srv, &svc2);
 
@@ -292,6 +353,10 @@ TEST(grpc_reflect_empty_server) {
     asx_grpc_reflection refl;
 
     asx_grpc_server_init(&srv);
+    if (!grpc_surface_available()) {
+        ASSERT_EQ(asx_grpc_reflect(&srv, &refl), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_grpc_reflect(&srv, &refl), ASX_OK);
     ASSERT_EQ(refl.count, 0u);
 }
@@ -326,6 +391,15 @@ TEST(grpc_server_with_metadata) {
 
     asx_grpc_server_init(&srv);
     asx_grpc_service_init(&svc, "Auth");
+    if (!grpc_surface_available()) {
+        ASSERT_EQ(asx_grpc_service_add_unary(&svc, "Verify", md_check_handler, NULL),
+                  ASX_E_PERMISSION_DENIED);
+        asx_grpc_message_init(&req);
+        asx_grpc_message_init(&resp);
+        ASSERT_EQ(asx_grpc_server_call(&srv, "/Auth/Verify", &req, &resp, NULL, &code),
+                  ASX_E_PERMISSION_DENIED);
+        return;
+    }
     asx_grpc_service_add_unary(&svc, "Verify", md_check_handler, NULL);
     asx_grpc_server_add_service(&srv, &svc);
 

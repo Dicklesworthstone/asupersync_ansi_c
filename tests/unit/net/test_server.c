@@ -6,7 +6,12 @@
 
 #include "../../test_harness.h"
 #include <asx/net/server.h>
+#include <asx/runtime/browser_boundary.h>
 #include <string.h>
+
+static int server_surface_available(void) {
+    return asx_surface_available_active(ASX_SURFACE_SERVER);
+}
 
 TEST(server_config_defaults) {
     asx_server_config cfg;
@@ -37,6 +42,11 @@ TEST(server_listen_and_accept) {
     cfg.listen_port = 14000;
     asx_server_init(&srv, &cfg);
 
+    if (!server_surface_available()) {
+        ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
+        return;
+    }
+
     ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
     ASSERT_EQ(asx_server_get_state(&srv), ASX_SERVER_STATE_LISTENING);
 
@@ -62,6 +72,11 @@ TEST(server_close_conn) {
     asx_server_config_init(&cfg);
     cfg.listen_port = 14001;
     asx_server_init(&srv, &cfg);
+    if (!server_surface_available()) {
+        ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
+        ASSERT_EQ(asx_server_close_conn(&srv, 1u), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
 
     addr = asx_socket_addr_loopback(14001);
@@ -88,6 +103,10 @@ TEST(server_accept_empty_pending) {
     asx_server_config_init(&cfg);
     cfg.listen_port = 14002;
     asx_server_init(&srv, &cfg);
+    if (!server_surface_available()) {
+        ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
 
     ASSERT_EQ(asx_server_poll_accept(&srv, &conn), ASX_E_PENDING);
@@ -102,6 +121,11 @@ TEST(server_graceful_shutdown) {
     asx_server_config_init(&cfg);
     cfg.listen_port = 14003;
     asx_server_init(&srv, &cfg);
+    if (!server_surface_available()) {
+        ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
+        ASSERT_EQ(asx_server_shutdown(&srv), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
 
     ASSERT_EQ(asx_server_shutdown(&srv), ASX_OK);
@@ -120,6 +144,12 @@ TEST(server_shutdown_with_active_conns_drains) {
     asx_server_config_init(&cfg);
     cfg.listen_port = 14004;
     asx_server_init(&srv, &cfg);
+    if (!server_surface_available()) {
+        ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
+        ASSERT_EQ(asx_server_shutdown(&srv), ASX_E_PERMISSION_DENIED);
+        ASSERT_EQ(asx_server_stop(&srv), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
 
     addr = asx_socket_addr_loopback(14004);
@@ -146,6 +176,10 @@ TEST(server_listen_twice_fails) {
     asx_server_config_init(&cfg);
     cfg.listen_port = 14005;
     asx_server_init(&srv, &cfg);
+    if (!server_surface_available()) {
+        ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
     ASSERT_EQ(asx_server_listen(&srv), ASX_E_INVALID_STATE);
     asx_server_stop(&srv);
@@ -168,6 +202,10 @@ TEST(server_multiple_clients) {
     asx_server_config_init(&cfg);
     cfg.listen_port = 14010;
     asx_server_init(&srv, &cfg);
+    if (!server_surface_available()) {
+        ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
 
     addr = asx_socket_addr_loopback(14010);
@@ -195,6 +233,11 @@ TEST(server_stop_idempotent) {
     asx_server_config_init(&cfg);
     cfg.listen_port = 14011;
     asx_server_init(&srv, &cfg);
+    if (!server_surface_available()) {
+        ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
+        ASSERT_EQ(asx_server_stop(&srv), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
     ASSERT_EQ(asx_server_stop(&srv), ASX_OK);
     ASSERT_EQ(asx_server_get_state(&srv), ASX_SERVER_STATE_STOPPED);
@@ -210,6 +253,10 @@ TEST(server_shutdown_idle_goes_stopped) {
     asx_server_config_init(&cfg);
     cfg.listen_port = 14012;
     asx_server_init(&srv, &cfg);
+    if (!server_surface_available()) {
+        ASSERT_EQ(asx_server_shutdown(&srv), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     /* Can't shutdown before listen */
     ASSERT_EQ(asx_server_shutdown(&srv), ASX_E_INVALID_STATE);
 }
