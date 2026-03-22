@@ -97,14 +97,20 @@ TEST(feature_available_implemented) {
     ASSERT_NE(asx_feature_available("replay"), 0);
     ASSERT_NE(asx_feature_available("evidence"), 0);
     ASSERT_NE(asx_feature_available("monitor"), 0);
+    ASSERT_NE(asx_feature_available("distributed"), 0);
+    ASSERT_NE(asx_feature_available("grpc"), 0);
+    ASSERT_NE(asx_feature_available("http"), 0);
+    ASSERT_NE(asx_feature_available("tls"), 0);
+    ASSERT_NE(asx_feature_available("websocket"), 0);
+    ASSERT_NE(asx_feature_available("quic"), 0);
+    ASSERT_NE(asx_feature_available("web"), 0);
+    ASSERT_NE(asx_feature_available("db"), 0);
+    ASSERT_NE(asx_feature_available("messaging"), 0);
+    ASSERT_NE(asx_feature_available("server"), 0);
 }
 
 TEST(feature_available_deferred) {
     ASSERT_EQ(asx_feature_available("raptorq"), 0);
-    ASSERT_EQ(asx_feature_available("distributed"), 0);
-    ASSERT_EQ(asx_feature_available("grpc"), 0);
-    ASSERT_EQ(asx_feature_available("http"), 0);
-    ASSERT_EQ(asx_feature_available("tls"), 0);
 }
 
 TEST(feature_available_unknown) {
