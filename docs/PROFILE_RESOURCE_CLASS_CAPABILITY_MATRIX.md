@@ -267,7 +267,7 @@ The table below maps the crate-root feature/platform restrictions from
 
 | Upstream contract | Current ANSI C equivalent | State | Evidence / gap |
 |---|---|---|---|
-| `wasm32` must choose exactly one canonical browser profile | `ASX_PROFILE_BROWSER` exists in `include/asx/asx_config.h`, `src/runtime/profile_compat.c`, and the explicit `build-browser` / `PROFILE=BROWSER` lane in `Makefile` | `partial` | The browser build lane is now explicit in the build surface and help text, but there is still no compile-time browser subprofile split or mutual-exclusion model because the C port only exposes one browser mode today |
+| `wasm32` must choose exactly one canonical browser profile | `ASX_PROFILE_BROWSER` exists in `include/asx/asx_config.h`, `src/runtime/profile_compat.c`, the explicit `build-browser` / `PROFILE=BROWSER` lane, and the focused `test-browser-focused` CI/test lane in `Makefile` | `partial` | The browser build/test surface is now explicit and CI-covered, but there is still no compile-time browser subprofile split or mutual-exclusion model because the C port only exposes one browser mode today |
 | `native-runtime` forbidden on browser builds | Browser boundary gates native surfaces | `partial` | `include/asx/runtime/browser_boundary.h` now fail-closes filesystem/process/signal/io/blocking plus the shipped `server`/`grpc`/`messaging` families, but there is still no compile-time `native-runtime`-style feature gate model |
 | `browser-io` forbidden with upstream minimal browser profile | Native I/O blocked under browser boundary | `partial` | `ASX_SURFACE_IO_DRIVER` is denied in browser mode, but there is no separate browser-IO feature flag or profile-minimal compile check |
 | `browser-trace` forbidden with upstream minimal browser profile | No separate browser trace feature | `gap` | The C tree has browser diagnostics and trace support, but no compile-time browser trace subprofile split |
@@ -276,7 +276,7 @@ The table below maps the crate-root feature/platform restrictions from
 | `tls`, `tls-native-roots`, `tls-webpki-roots` unsupported on browser builds | Browser boundary denies the shipped TLS family in browser mode | `partial` | `ASX_SURFACE_TLS` is now fail-closed at the boundary and in the status-returning TLS entry points, but there is still no compile-time TLS feature split |
 | `sqlite`, `postgres`, `mysql` unsupported on browser builds | Browser boundary denies the shipped database family in browser mode | `partial` | `ASX_SURFACE_DATABASE` is now fail-closed at the boundary and in the status-returning database entry points, but there is still no compile-time database feature split |
 | `kafka` unsupported on browser builds | Browser boundary denies the shipped messaging/broker family in browser mode | `partial` | `ASX_SURFACE_MESSAGING` is now fail-closed at the boundary and in the status-returning messaging entry points, but there is still no compile-time broker feature split |
-| Native-only modules (`fs`, `grpc`, `messaging`, `process`, `server`, `signal`) excluded from wasm32 | Browser boundary denies the currently shipped native-facing families | `partial` | The boundary now covers filesystem/process/signal/io/blocking plus explicit `server`/`grpc`/`messaging`/`tls`/`database` surfaces; remaining debt is the wider module/build matrix for future higher-surface families |
+| Native-only modules (`fs`, `grpc`, `messaging`, `process`, `server`, `signal`) excluded from wasm32 | Browser boundary denies the currently shipped native-facing families | `partial` | The boundary now covers filesystem/process/signal/io/blocking plus explicit `server`/`grpc`/`messaging`/`tls`/`database` surfaces, and CI now runs focused browser-profile suites over the shipped browser-safe `service`/`transport`/`remote` families; remaining debt is compile-time feature gating plus future higher-surface matrix growth |
 
 ### 8.1 Missing Fail-Closed Checks Before Parity Claims
 
@@ -285,8 +285,9 @@ can honestly claim equivalence with the upstream feature/platform matrix:
 
 1. Compile-time mutual exclusion for browser-specific subprofiles if the C port
    adopts more than one browser mode.
-2. Explicit compile-time gating for the remaining browser-incompatible families
-   rather than relying only on the runtime fail-closed boundary.
+2. Explicit compile-time gating for browser-incompatible families rather than
+   relying only on the runtime fail-closed boundary and browser-focused test
+   lanes.
 3. A single compatibility matrix that states which combinations are supported,
    denied, or currently unimplemented rather than leaving absence implicit.
 

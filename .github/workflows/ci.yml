@@ -78,6 +78,10 @@ jobs:
         id: build_browser
         run: make build-browser
 
+      - name: Browser-focused shipped-surface suites
+        id: test_browser_focused
+        run: make test-browser-focused
+
       - name: Bounded model-check (state machines)
         id: model_check
         run: make model-check
@@ -111,6 +115,9 @@ jobs:
           elif [ "${{ steps.build_browser.outcome }}" = "failure" ]; then
             first_failure="build-browser"
             rerun="make build-browser"
+          elif [ "${{ steps.test_browser_focused.outcome }}" = "failure" ]; then
+            first_failure="test-browser-focused"
+            rerun="make test-browser-focused"
           fi
 
           status="pass"
@@ -132,6 +139,7 @@ jobs:
             --arg lint_anti_butchering_outcome "${{ steps.lint_anti_butchering.outcome }}" \
             --arg build_outcome "${{ steps.build.outcome }}" \
             --arg build_browser_outcome "${{ steps.build_browser.outcome }}" \
+            --arg test_browser_focused_outcome "${{ steps.test_browser_focused.outcome }}" \
             --arg first_failure "$first_failure" \
             --arg rerun "$rerun" \
             '{
@@ -148,7 +156,8 @@ jobs:
                 {id: "lint-checkpoint", outcome: $lint_checkpoint_outcome, rerun: "make lint-checkpoint"},
                 {id: "lint-anti-butchering", outcome: $lint_anti_butchering_outcome, rerun: "make lint-anti-butchering"},
                 {id: "build", outcome: $build_outcome, rerun: "make build"},
-                {id: "build-browser", outcome: $build_browser_outcome, rerun: "make build-browser"}
+                {id: "build-browser", outcome: $build_browser_outcome, rerun: "make build-browser"},
+                {id: "test-browser-focused", outcome: $test_browser_focused_outcome, rerun: "make test-browser-focused"}
               ],
               first_failure: (if $first_failure == "" then null else {step: $first_failure, rerun: $rerun} end)
             }' > "${ASX_CI_ARTIFACT_ROOT}/${lane}.manifest.json"

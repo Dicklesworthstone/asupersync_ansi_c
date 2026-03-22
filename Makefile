@@ -461,7 +461,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: all build clean install uninstall
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation
 .PHONY: model-check
-.PHONY: test test-unit test-invariants test-vignettes test-e2e test-e2e-vertical test-abi-shim abi-check
+.PHONY: test test-unit test-browser-focused test-invariants test-vignettes test-e2e test-e2e-vertical test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
 .PHONY: conformance codec-equivalence profile-parity crate-acceptance-gate
@@ -670,6 +670,36 @@ test-unit: $(UNIT_TEST_BIN)
 		echo "[asx] test-unit: $$pass passed, $$fail failed"; \
 		[ $$fail -eq 0 ] || exit 1; \
 	fi
+
+# ---------------------------------------------------------------------------
+# test-browser-focused — browser-profile focused shipped-surface suites
+# ---------------------------------------------------------------------------
+BROWSER_FOCUSED_TEST_BIN := \
+	$(TEST_DIR)/unit/runtime/test_browser_boundary \
+	$(TEST_DIR)/unit/runtime/test_browser_diagnostic \
+	$(TEST_DIR)/unit/net/test_tls \
+	$(TEST_DIR)/unit/net/test_db \
+	$(TEST_DIR)/unit/service/test_service \
+	$(TEST_DIR)/unit/service/test_service_stack \
+	$(TEST_DIR)/unit/transport/test_transport \
+	$(TEST_DIR)/unit/remote/test_remote
+
+test-browser-focused: $(BROWSER_FOCUSED_TEST_BIN)
+	@echo "[asx] test-browser-focused: building and running browser-profile focused suites..."
+	@$(MAKE) --no-print-directory PROFILE=BROWSER -B $(BROWSER_FOCUSED_TEST_BIN)
+	@pass=0; fail=0; \
+	for t in $(BROWSER_FOCUSED_TEST_BIN); do \
+		echo "  RUN  $$(basename $$t)"; \
+		if $$t; then \
+			echo "  PASS $$(basename $$t)"; \
+			pass=$$((pass + 1)); \
+		else \
+			echo "  FAIL $$(basename $$t)"; \
+			fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo "[asx] test-browser-focused: $$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ] || exit 1
 
 # Profile compat test needs extra source (profile_compat.c not yet in LIB_A)
 $(TEST_DIR)/unit/runtime/test_profile_compat: tests/unit/runtime/test_profile_compat.c src/runtime/profile_compat.c $(LIB_A) | test-dirs
@@ -1440,7 +1470,7 @@ qemu-smoke:
 check: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build test model-check abi-check test-abi-shim formal-check
 
 check-ci: CI=1
-check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build build-browser test model-check test-e2e-vertical conformance codec-equivalence profile-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
+check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build build-browser test-browser-focused test model-check test-e2e-vertical conformance codec-equivalence profile-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
 
 ci-embedded-baremetal:
 	@echo "[asx] ci-embedded-baremetal: bare-metal gate..."
@@ -1463,6 +1493,7 @@ help:
 	@echo "  build              Build library (warnings-as-errors)"
 	@echo "  build-parallel     Build compile-only PARALLEL scaffold (deferred from Wave A gates)"
 	@echo "  build-browser      Build library with PROFILE=BROWSER"
+	@echo "  test-browser-focused Run browser-profile focused shipped-surface suites"
 	@echo "  format-check       Verify source formatting"
 	@echo "  lint               Static analysis gate"
 	@echo "  lint-docs          Public API documentation coverage gate"

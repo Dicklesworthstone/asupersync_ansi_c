@@ -134,18 +134,20 @@ TEST(non_browser_blocked_count_zero) {
 }
 
 /* -------------------------------------------------------------------
- * Fail-closed gate
+ * Active-profile gate
  *
- * Since our test build uses ASX_PROFILE_CORE (not BROWSER), the gate
- * should allow everything. We test the browser-specific blocking via
- * the asx_surface_available() path which takes an explicit profile.
+ * The gate should match the currently active profile exactly. For
+ * browser-profile builds this means native-only surfaces fail closed;
+ * for core builds the full shipped surface remains available.
  * ------------------------------------------------------------------- */
 
-TEST(gate_allows_all_for_active_core) {
-    /* Active profile is CORE in test builds — all surfaces pass */
+TEST(gate_matches_active_profile) {
     int i;
     for (i = 0; i < ASX_SURFACE_COUNT; i++) {
-        ASSERT_EQ((int)asx_surface_gate((asx_host_surface)i), (int)ASX_OK);
+        asx_status expected = asx_surface_available_active((asx_host_surface)i)
+                                  ? ASX_OK
+                                  : ASX_E_PERMISSION_DENIED;
+        ASSERT_EQ((int)asx_surface_gate((asx_host_surface)i), (int)expected);
     }
 }
 
@@ -232,7 +234,7 @@ int main(void) {
     RUN_TEST(non_browser_blocked_count_zero);
 
     /* Fail-closed gate */
-    RUN_TEST(gate_allows_all_for_active_core);
+    RUN_TEST(gate_matches_active_profile);
 
     /* Surface names */
     RUN_TEST(surface_name_region);
