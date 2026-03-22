@@ -57,6 +57,16 @@ static const asx_browser_dx_entry g_dx_catalog[ASX_BROWSER_DX_COUNT] = {
      "The browser build excludes the broker-style messaging family from the fail-closed "
      "public surface.",
      "Route pub/sub through browser-safe channels or a host-managed messaging bridge."},
+    /* NATIVE_TLS */
+    {ASX_BROWSER_DX_NATIVE_TLS, "TLS family unavailable",
+     "The browser build excludes the native-facing TLS connector/acceptor surface even though "
+     "the core profile models it deterministically.",
+     "Terminate TLS at the browser host boundary or compile a native profile for direct TLS use."},
+    /* NATIVE_DATABASE */
+    {ASX_BROWSER_DX_NATIVE_DATABASE, "database family unavailable",
+     "The browser build excludes the database connection/query family from the fail-closed "
+     "public surface.",
+     "Move database access behind a host API or service boundary instead of using the browser build directly."},
     /* WRONG_PROFILE */
     {ASX_BROWSER_DX_WRONG_PROFILE, "profile mismatch",
      "Code compiled for a native profile is running in a browser context. "
@@ -84,6 +94,8 @@ asx_browser_dx_class asx_browser_dx_for_surface(asx_host_surface surface) {
     case ASX_SURFACE_SERVER: return ASX_BROWSER_DX_NATIVE_SERVER;
     case ASX_SURFACE_GRPC: return ASX_BROWSER_DX_NATIVE_GRPC;
     case ASX_SURFACE_MESSAGING: return ASX_BROWSER_DX_NATIVE_MESSAGING;
+    case ASX_SURFACE_TLS: return ASX_BROWSER_DX_NATIVE_TLS;
+    case ASX_SURFACE_DATABASE: return ASX_BROWSER_DX_NATIVE_DATABASE;
     case ASX_SURFACE_REGION:
     case ASX_SURFACE_TASK:
     case ASX_SURFACE_CHANNEL:

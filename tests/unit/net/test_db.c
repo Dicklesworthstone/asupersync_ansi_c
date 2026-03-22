@@ -6,7 +6,12 @@
 
 #include "../../test_harness.h"
 #include <asx/net/db.h>
+#include <asx/runtime/browser_boundary.h>
 #include <string.h>
+
+static int db_surface_available(void) {
+    return asx_surface_available_active(ASX_SURFACE_DATABASE);
+}
 
 TEST(db_pool_init) {
     asx_db_pool pool;
@@ -19,6 +24,10 @@ TEST(db_connect_and_close) {
     asx_db_conn *conn;
 
     asx_db_pool_init(&pool);
+    if (!db_surface_available()) {
+        ASSERT_EQ(asx_db_connect(&pool, "mem://test", &conn), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_db_connect(&pool, "mem://test", &conn), ASX_OK);
     ASSERT_TRUE(conn != NULL);
     ASSERT_TRUE(conn->alive);
@@ -40,6 +49,10 @@ TEST(db_connect_rejects_oversized_dsn) {
     dsn[sizeof(dsn) - 1u] = '\0';
 
     asx_db_pool_init(&pool);
+    if (!db_surface_available()) {
+        ASSERT_EQ(asx_db_connect(&pool, dsn, &conn), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_db_connect(&pool, dsn, &conn), ASX_E_BUFFER_TOO_SMALL);
     ASSERT_TRUE(conn == NULL);
     ASSERT_EQ(asx_db_connect(&pool, "mem://ok", &ok_conn), ASX_OK);
@@ -53,6 +66,10 @@ TEST(db_connect_exhaustion) {
     uint32_t i;
 
     asx_db_pool_init(&pool);
+    if (!db_surface_available()) {
+        ASSERT_EQ(asx_db_connect(&pool, "mem://db", &conns[0]), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     for (i = 0; i < ASX_DB_MAX_CONNECTIONS; i++) {
         ASSERT_EQ(asx_db_connect(&pool, "mem://db", &conns[i]), ASX_OK);
     }
@@ -68,6 +85,10 @@ TEST(db_execute_query) {
     asx_db_result result;
 
     asx_db_pool_init(&pool);
+    if (!db_surface_available()) {
+        ASSERT_EQ(asx_db_connect(&pool, "mem://test", &conn), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     asx_db_connect(&pool, "mem://test", &conn);
     ASSERT_EQ(asx_db_execute(conn, "SELECT 1", &result), ASX_OK);
     ASSERT_EQ(conn->queries_executed, 1u);
@@ -80,6 +101,10 @@ TEST(db_transaction_lifecycle) {
     asx_db_conn *conn;
 
     asx_db_pool_init(&pool);
+    if (!db_surface_available()) {
+        ASSERT_EQ(asx_db_connect(&pool, "mem://test", &conn), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     asx_db_connect(&pool, "mem://test", &conn);
 
     ASSERT_EQ(asx_db_begin(conn), ASX_OK);
@@ -223,6 +248,10 @@ TEST(db_null_args) {
     asx_db_pool_init(&pool);
     ASSERT_EQ(asx_db_connect(NULL, "dsn", &conn), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_db_connect(&pool, NULL, &conn), ASX_E_INVALID_ARGUMENT);
+    if (!db_surface_available()) {
+        ASSERT_EQ(asx_db_connect(&pool, "dsn", &conn), ASX_E_PERMISSION_DENIED);
+        return;
+    }
     ASSERT_EQ(asx_db_close(NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_db_execute(NULL, "q", &result), ASX_E_INVALID_ARGUMENT);
 }

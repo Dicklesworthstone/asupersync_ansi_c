@@ -34,7 +34,9 @@ static const int g_browser_surface_allowed[ASX_SURFACE_COUNT] = {
     /* BLOCKING */   0,
     /* SERVER */     0,
     /* GRPC */       0,
-    /* MESSAGING */  0
+    /* MESSAGING */  0,
+    /* TLS */        0,
+    /* DATABASE */   0
 };
 
 /* -------------------------------------------------------------------
@@ -44,7 +46,7 @@ static const int g_browser_surface_allowed[ASX_SURFACE_COUNT] = {
 static const char *g_surface_names[ASX_SURFACE_COUNT] = {
     "region", "task",       "channel",   "timer",   "obligation", "trace",
     "ghost",  "filesystem", "process",   "signal",  "io_driver",  "blocking",
-    "server", "grpc",       "messaging"
+    "server", "grpc",       "messaging", "tls",     "database"
 };
 
 /* -------------------------------------------------------------------

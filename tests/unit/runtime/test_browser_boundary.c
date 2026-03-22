@@ -90,11 +90,13 @@ TEST(browser_blocks_native_surfaces) {
     ASSERT_EQ(asx_surface_available(ASX_PROFILE_ID_BROWSER, ASX_SURFACE_SERVER), 0);
     ASSERT_EQ(asx_surface_available(ASX_PROFILE_ID_BROWSER, ASX_SURFACE_GRPC), 0);
     ASSERT_EQ(asx_surface_available(ASX_PROFILE_ID_BROWSER, ASX_SURFACE_MESSAGING), 0);
+    ASSERT_EQ(asx_surface_available(ASX_PROFILE_ID_BROWSER, ASX_SURFACE_TLS), 0);
+    ASSERT_EQ(asx_surface_available(ASX_PROFILE_ID_BROWSER, ASX_SURFACE_DATABASE), 0);
 }
 
 TEST(browser_blocked_count) {
     uint32_t blocked = asx_surface_blocked_count(ASX_PROFILE_ID_BROWSER);
-    ASSERT_EQ((int)blocked, 8); /* fs, process, signal, io_driver, blocking, server, grpc, messaging */
+    ASSERT_EQ((int)blocked, 10); /* fs, process, signal, io_driver, blocking, server, grpc, messaging, tls, database */
 }
 
 TEST(browser_available_count) {
@@ -169,6 +171,12 @@ TEST(surface_name_messaging) {
     ASSERT_STR_EQ(asx_surface_name(ASX_SURFACE_MESSAGING), "messaging");
 }
 
+TEST(surface_name_tls) { ASSERT_STR_EQ(asx_surface_name(ASX_SURFACE_TLS), "tls"); }
+
+TEST(surface_name_database) {
+    ASSERT_STR_EQ(asx_surface_name(ASX_SURFACE_DATABASE), "database");
+}
+
 TEST(surface_name_out_of_range) {
     ASSERT_STR_EQ(asx_surface_name((asx_host_surface)99), "unknown");
 }
@@ -234,6 +242,8 @@ int main(void) {
     RUN_TEST(surface_name_server);
     RUN_TEST(surface_name_grpc);
     RUN_TEST(surface_name_messaging);
+    RUN_TEST(surface_name_tls);
+    RUN_TEST(surface_name_database);
     RUN_TEST(surface_name_out_of_range);
 
     /* Edge cases */

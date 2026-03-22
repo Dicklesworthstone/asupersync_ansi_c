@@ -69,6 +69,18 @@ TEST(dx_lookup_native_messaging) {
     ASSERT_TRUE(strstr(entry->title, "messaging") != NULL);
 }
 
+TEST(dx_lookup_native_tls) {
+    const asx_browser_dx_entry *entry = asx_browser_dx_lookup(ASX_BROWSER_DX_NATIVE_TLS);
+    ASSERT_TRUE(entry != NULL);
+    ASSERT_TRUE(strstr(entry->title, "TLS") != NULL);
+}
+
+TEST(dx_lookup_native_database) {
+    const asx_browser_dx_entry *entry = asx_browser_dx_lookup(ASX_BROWSER_DX_NATIVE_DATABASE);
+    ASSERT_TRUE(entry != NULL);
+    ASSERT_TRUE(strstr(entry->title, "database") != NULL);
+}
+
 TEST(dx_lookup_all_have_remediation) {
     int i;
     for (i = 1; i < (int)ASX_BROWSER_DX_COUNT; i++) {
@@ -123,6 +135,16 @@ TEST(dx_for_surface_grpc) {
 TEST(dx_for_surface_messaging) {
     ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_MESSAGING),
               (int)ASX_BROWSER_DX_NATIVE_MESSAGING);
+}
+
+TEST(dx_for_surface_tls) {
+    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_TLS),
+              (int)ASX_BROWSER_DX_NATIVE_TLS);
+}
+
+TEST(dx_for_surface_database) {
+    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_DATABASE),
+              (int)ASX_BROWSER_DX_NATIVE_DATABASE);
 }
 
 TEST(dx_for_surface_region_none) {
@@ -317,6 +339,8 @@ int main(void) {
     RUN_TEST(dx_lookup_native_server);
     RUN_TEST(dx_lookup_native_grpc);
     RUN_TEST(dx_lookup_native_messaging);
+    RUN_TEST(dx_lookup_native_tls);
+    RUN_TEST(dx_lookup_native_database);
     RUN_TEST(dx_lookup_all_have_remediation);
     RUN_TEST(dx_count);
 
@@ -329,6 +353,8 @@ int main(void) {
     RUN_TEST(dx_for_surface_server);
     RUN_TEST(dx_for_surface_grpc);
     RUN_TEST(dx_for_surface_messaging);
+    RUN_TEST(dx_for_surface_tls);
+    RUN_TEST(dx_for_surface_database);
     RUN_TEST(dx_for_surface_region_none);
     RUN_TEST(dx_for_surface_task_none);
 

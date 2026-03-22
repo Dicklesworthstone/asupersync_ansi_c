@@ -9,6 +9,7 @@
  */
 
 #include <asx/net/tls.h>
+#include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
 typedef struct {
@@ -46,6 +47,8 @@ static size_t tls_bounded_strlen(const char *str, size_t max) {
     }
     return max;
 }
+
+static asx_status tls_surface_gate(void) { return asx_surface_gate(ASX_SURFACE_TLS); }
 
 /* ------------------------------------------------------------------ */
 /* TLS configuration                                                   */
@@ -142,17 +145,29 @@ static asx_status tls_alloc(asx_tls_stream *out, asx_tcp_stream tcp, const asx_t
 
 asx_status asx_tls_connect(asx_tls_stream *out, const asx_tls_connector *conn, asx_tcp_stream tcp) {
     if (conn == NULL) return ASX_E_INVALID_ARGUMENT;
+    {
+        asx_status st = tls_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     return tls_alloc(out, tcp, &conn->config);
 }
 
 asx_status asx_tls_accept(asx_tls_stream *out, const asx_tls_acceptor *acc, asx_tcp_stream tcp) {
     if (acc == NULL) return ASX_E_INVALID_ARGUMENT;
+    {
+        asx_status st = tls_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     return tls_alloc(out, tcp, &acc->config);
 }
 
 asx_status asx_tls_stream_poll_read(asx_tls_stream stream, asx_buf_mut *dst, uint32_t *bytes_read) {
     tls_stream_slot *s;
 
+    {
+        asx_status st = tls_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     s = tls_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (s->state != ASX_TLS_STATE_READY) return ASX_E_INVALID_STATE;
@@ -167,6 +182,10 @@ asx_status asx_tls_stream_poll_write(asx_tls_stream stream, const asx_buf *src,
                                      uint32_t *bytes_written) {
     tls_stream_slot *s;
 
+    {
+        asx_status st = tls_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     s = tls_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (s->state != ASX_TLS_STATE_READY) return ASX_E_INVALID_STATE;
@@ -188,6 +207,10 @@ asx_status asx_tls_stream_alpn(asx_tls_stream stream, char *out, uint32_t out_ca
     size_t len;
 
     if (out == NULL || out_capacity == 0u) return ASX_E_INVALID_ARGUMENT;
+    {
+        asx_status st = tls_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     s = tls_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     len = tls_bounded_strlen(s->negotiated_alpn, ASX_TLS_ALPN_MAX_LEN);
@@ -199,6 +222,10 @@ asx_status asx_tls_stream_alpn(asx_tls_stream stream, char *out, uint32_t out_ca
 asx_status asx_tls_stream_shutdown(asx_tls_stream stream) {
     tls_stream_slot *s;
 
+    {
+        asx_status st = tls_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     s = tls_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (s->state != ASX_TLS_STATE_READY) return ASX_E_INVALID_STATE;
@@ -209,6 +236,10 @@ asx_status asx_tls_stream_shutdown(asx_tls_stream stream) {
 asx_status asx_tls_stream_close(asx_tls_stream stream) {
     tls_stream_slot *s;
 
+    {
+        asx_status st = tls_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     s = tls_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     s->state = ASX_TLS_STATE_CLOSED;

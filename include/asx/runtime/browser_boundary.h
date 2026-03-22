@@ -56,8 +56,10 @@ typedef enum {
     ASX_SURFACE_SERVER = 12,    /* native server/listener substrate */
     ASX_SURFACE_GRPC = 13,      /* gRPC transport/server family */
     ASX_SURFACE_MESSAGING = 14, /* broker/messaging family */
+    ASX_SURFACE_TLS = 15,       /* TLS connector/stream family */
+    ASX_SURFACE_DATABASE = 16,  /* database connection/query family */
 
-    ASX_SURFACE_COUNT = 15
+    ASX_SURFACE_COUNT = 17
 } asx_host_surface;
 
 /* -------------------------------------------------------------------

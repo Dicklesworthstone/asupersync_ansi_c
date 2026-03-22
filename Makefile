@@ -513,6 +513,8 @@ obj-dirs:
 	          $(OBJ_DIR)/evidence_sink $(OBJ_DIR)/monitor \
 	          $(OBJ_DIR)/observability \
 	          $(OBJ_DIR)/plan $(OBJ_DIR)/cx \
+	          $(OBJ_DIR)/service $(OBJ_DIR)/transport \
+	          $(OBJ_DIR)/remote $(OBJ_DIR)/spork \
 	          $(OBJ_DIR)/platform/posix \
 	          $(OBJ_DIR)/platform/win32 $(OBJ_DIR)/platform/freestanding
 

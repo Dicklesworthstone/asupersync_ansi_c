@@ -5,6 +5,7 @@
  */
 
 #include <asx/net/db.h>
+#include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
 static size_t db_bounded_strlen(const char *str, size_t max) {
@@ -20,6 +21,8 @@ static uint32_t db_next_gen(uint32_t g) {
     g++;
     return g == 0u ? 1u : g;
 }
+
+static asx_status db_surface_gate(void) { return asx_surface_gate(ASX_SURFACE_DATABASE); }
 
 /* ------------------------------------------------------------------ */
 /* Connection pool                                                     */
@@ -37,6 +40,10 @@ asx_status asx_db_connect(asx_db_pool *pool, const char *dsn, asx_db_conn **out)
     asx_db_conn *c;
 
     if (pool == NULL || dsn == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    {
+        asx_status st = db_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     *out = NULL;
     len = db_bounded_strlen(dsn, ASX_DB_DSN_MAX);
     if (len >= ASX_DB_DSN_MAX) return ASX_E_BUFFER_TOO_SMALL;
@@ -60,6 +67,10 @@ asx_status asx_db_connect(asx_db_pool *pool, const char *dsn, asx_db_conn **out)
 }
 
 asx_status asx_db_close(asx_db_conn *conn) {
+    {
+        asx_status st = db_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     if (conn == NULL || !conn->alive) return ASX_E_INVALID_ARGUMENT;
     conn->state = ASX_DB_CONN_CLOSED;
     conn->alive = 0u;
@@ -67,6 +78,10 @@ asx_status asx_db_close(asx_db_conn *conn) {
 }
 
 asx_status asx_db_execute(asx_db_conn *conn, const char *query, asx_db_result *result) {
+    {
+        asx_status st = db_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     if (conn == NULL || !conn->alive || query == NULL || result == NULL)
         return ASX_E_INVALID_ARGUMENT;
     if (conn->state == ASX_DB_CONN_CLOSED) return ASX_E_INVALID_STATE;
@@ -78,6 +93,10 @@ asx_status asx_db_execute(asx_db_conn *conn, const char *query, asx_db_result *r
 }
 
 asx_status asx_db_begin(asx_db_conn *conn) {
+    {
+        asx_status st = db_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     if (conn == NULL || !conn->alive) return ASX_E_INVALID_ARGUMENT;
     if (conn->state != ASX_DB_CONN_ACTIVE) return ASX_E_INVALID_STATE;
     conn->state = ASX_DB_CONN_IN_TX;
@@ -85,6 +104,10 @@ asx_status asx_db_begin(asx_db_conn *conn) {
 }
 
 asx_status asx_db_commit(asx_db_conn *conn) {
+    {
+        asx_status st = db_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     if (conn == NULL || !conn->alive) return ASX_E_INVALID_ARGUMENT;
     if (conn->state != ASX_DB_CONN_IN_TX) return ASX_E_INVALID_STATE;
     conn->state = ASX_DB_CONN_ACTIVE;
@@ -92,6 +115,10 @@ asx_status asx_db_commit(asx_db_conn *conn) {
 }
 
 asx_status asx_db_rollback(asx_db_conn *conn) {
+    {
+        asx_status st = db_surface_gate();
+        if (st != ASX_OK) return st;
+    }
     if (conn == NULL || !conn->alive) return ASX_E_INVALID_ARGUMENT;
     if (conn->state != ASX_DB_CONN_IN_TX) return ASX_E_INVALID_STATE;
     conn->state = ASX_DB_CONN_ACTIVE;

@@ -52,14 +52,16 @@ typedef enum {
     ASX_BROWSER_DX_NATIVE_SERVER = 6,   /* server/listener family in browser */
     ASX_BROWSER_DX_NATIVE_GRPC = 7,     /* gRPC family in browser */
     ASX_BROWSER_DX_NATIVE_MESSAGING = 8, /* messaging/broker family in browser */
+    ASX_BROWSER_DX_NATIVE_TLS = 9,      /* TLS family in browser */
+    ASX_BROWSER_DX_NATIVE_DATABASE = 10, /* database family in browser */
 
     /* Profile mismatch */
-    ASX_BROWSER_DX_WRONG_PROFILE = 9, /* non-browser code in browser build */
+    ASX_BROWSER_DX_WRONG_PROFILE = 11, /* non-browser code in browser build */
 
     /* Sandbox integrity */
-    ASX_BROWSER_DX_ALLOCATOR_UNSEAL = 10, /* unsealed allocator in browser */
+    ASX_BROWSER_DX_ALLOCATOR_UNSEAL = 12, /* unsealed allocator in browser */
 
-    ASX_BROWSER_DX_COUNT = 11
+    ASX_BROWSER_DX_COUNT = 13
 } asx_browser_dx_class;
 
 /* DX error entry: class, explanation, and remediation */
