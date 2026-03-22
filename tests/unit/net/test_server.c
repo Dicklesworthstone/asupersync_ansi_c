@@ -157,6 +157,63 @@ TEST(server_null_args) {
     ASSERT_EQ(asx_server_stop(NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(server_multiple_clients) {
+    asx_server srv;
+    asx_server_config cfg;
+    asx_server_conn c1, c2;
+    asx_tcp_stream client1, client2;
+    asx_socket_addr addr;
+
+    asx_net_reset();
+    asx_server_config_init(&cfg);
+    cfg.listen_port = 14010;
+    asx_server_init(&srv, &cfg);
+    ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
+
+    addr = asx_socket_addr_loopback(14010);
+    ASSERT_EQ(asx_tcp_connect(&client1, &addr), ASX_OK);
+    ASSERT_EQ(asx_tcp_connect(&client2, &addr), ASX_OK);
+    ASSERT_EQ(asx_server_poll_accept(&srv, &c1), ASX_OK);
+    ASSERT_EQ(asx_server_poll_accept(&srv, &c2), ASX_OK);
+    ASSERT_EQ(asx_server_active_count(&srv), 2u);
+    ASSERT_EQ(asx_server_total_accepted(&srv), 2u);
+    ASSERT_NE(c1.id, c2.id);
+
+    ASSERT_EQ(asx_server_close_conn(&srv, c1.id), ASX_OK);
+    ASSERT_EQ(asx_server_active_count(&srv), 1u);
+
+    asx_tcp_stream_close(client1);
+    asx_tcp_stream_close(client2);
+    asx_server_stop(&srv);
+}
+
+TEST(server_stop_idempotent) {
+    asx_server srv;
+    asx_server_config cfg;
+
+    asx_net_reset();
+    asx_server_config_init(&cfg);
+    cfg.listen_port = 14011;
+    asx_server_init(&srv, &cfg);
+    ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
+    ASSERT_EQ(asx_server_stop(&srv), ASX_OK);
+    ASSERT_EQ(asx_server_get_state(&srv), ASX_SERVER_STATE_STOPPED);
+    /* Second stop should still work */
+    ASSERT_EQ(asx_server_stop(&srv), ASX_OK);
+}
+
+TEST(server_shutdown_idle_goes_stopped) {
+    asx_server srv;
+    asx_server_config cfg;
+
+    asx_net_reset();
+    asx_server_config_init(&cfg);
+    cfg.listen_port = 14012;
+    asx_server_init(&srv, &cfg);
+    /* Can't shutdown before listen */
+    ASSERT_EQ(asx_server_shutdown(&srv), ASX_E_INVALID_STATE);
+}
+
 int main(void) {
     fprintf(stderr, "=== server tests ===\n");
     RUN_TEST(server_config_defaults);
@@ -168,6 +225,9 @@ int main(void) {
     RUN_TEST(server_shutdown_with_active_conns_drains);
     RUN_TEST(server_listen_twice_fails);
     RUN_TEST(server_null_args);
+    RUN_TEST(server_multiple_clients);
+    RUN_TEST(server_stop_idempotent);
+    RUN_TEST(server_shutdown_idle_goes_stopped);
     TEST_REPORT();
     return test_failures;
 }
