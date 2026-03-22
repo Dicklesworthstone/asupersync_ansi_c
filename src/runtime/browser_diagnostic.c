@@ -196,5 +196,9 @@ int asx_browser_flake_match(const asx_browser_flake_snapshot *a,
     if (!a || !b) return 0;
 
     return a->trace_digest == b->trace_digest && a->profile == b->profile &&
-           a->surfaces_blocked == b->surfaces_blocked;
+           a->ghost_violations == b->ghost_violations &&
+           a->surfaces_blocked == b->surfaces_blocked &&
+           a->evidence_fail_count == b->evidence_fail_count &&
+           a->evidence_warn_count == b->evidence_warn_count &&
+           a->is_deterministic == b->is_deterministic;
 }

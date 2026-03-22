@@ -230,6 +230,40 @@ TEST(flake_match_different_digest) {
     ASSERT_EQ(asx_browser_flake_match(&a, &b), 0);
 }
 
+TEST(flake_match_different_ghosts) {
+    asx_browser_flake_snapshot a, b;
+
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    a.trace_digest = 1u;
+    b.trace_digest = 1u;
+    a.profile = ASX_PROFILE_ID_CORE;
+    b.profile = ASX_PROFILE_ID_CORE;
+    a.surfaces_blocked = 0u;
+    b.surfaces_blocked = 0u;
+    a.ghost_violations = 0u;
+    b.ghost_violations = 1u;
+
+    ASSERT_EQ(asx_browser_flake_match(&a, &b), 0);
+}
+
+TEST(flake_match_different_evidence_counts) {
+    asx_browser_flake_snapshot a, b;
+
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    a.trace_digest = 1u;
+    b.trace_digest = 1u;
+    a.profile = ASX_PROFILE_ID_CORE;
+    b.profile = ASX_PROFILE_ID_CORE;
+    a.surfaces_blocked = 0u;
+    b.surfaces_blocked = 0u;
+    a.evidence_fail_count = 0u;
+    b.evidence_fail_count = 1u;
+
+    ASSERT_EQ(asx_browser_flake_match(&a, &b), 0);
+}
+
 TEST(flake_match_null_returns_zero) {
     asx_browser_flake_snapshot a;
     memset(&a, 0, sizeof(a));
@@ -271,6 +305,8 @@ int main(void) {
     RUN_TEST(flake_capture_with_sink);
     RUN_TEST(flake_match_identical);
     RUN_TEST(flake_match_different_digest);
+    RUN_TEST(flake_match_different_ghosts);
+    RUN_TEST(flake_match_different_evidence_counts);
     RUN_TEST(flake_match_null_returns_zero);
 
     TEST_REPORT();
