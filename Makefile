@@ -1456,7 +1456,7 @@ help:
 	@echo "asx build system — primary targets:"
 	@echo ""
 	@echo "  build              Build library (warnings-as-errors)"
-	@echo "  build-parallel     Build library with PROFILE=PARALLEL"
+	@echo "  build-parallel     Build compile-only PARALLEL scaffold (deferred from Wave A gates)"
 	@echo "  build-browser      Build library with PROFILE=BROWSER"
 	@echo "  format-check       Verify source formatting"
 	@echo "  lint               Static analysis gate"

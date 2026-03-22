@@ -208,7 +208,7 @@ sudo make install
 
 # Convenience profile lanes
 make build-browser
-make build-parallel
+make build-parallel  # compile-only deferred scaffold; not a Wave A parity/CI lane
 ```
 
 ### 4) Cross-Compile for Embedded Targets

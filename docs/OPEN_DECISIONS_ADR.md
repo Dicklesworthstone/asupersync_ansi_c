@@ -86,7 +86,7 @@ Each record in this log uses:
 
 | Gate | ADR(s) | Binding adjustment |
 |---|---|---|
-| Portability matrix | ADR-001 | No parallel compile/test lanes in Wave A |
+| Portability matrix | ADR-001 | No parallel CI/test lanes in Wave A; ad hoc compile-only scaffolds may exist for visibility but are not part of the portability matrix |
 | Embedded target matrix | ADR-002 | Dynamic backend required now; static backend tests deferred |
 | HFT tail/jitter gate | ADR-003 | Busy-spin baseline for HFT profile comparisons |
 | Automotive deadline/watchdog gate | ADR-004 | Evidence bundle completeness + skeleton coverage checks |

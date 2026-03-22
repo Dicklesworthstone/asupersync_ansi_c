@@ -353,7 +353,7 @@ This section binds deferred-surface governance to the owner decision log so down
 
 | Deferred item | Decision key | Decision source | Consistency note |
 |---|---|---|---|
-| DS-P01 (parallel profile) | `DEC-003` | `docs/OWNER_DECISION_LOG.md` | Deferral active; Wave A excludes parallel profile lanes |
+| DS-P01 (parallel profile) | `DEC-003` | `docs/OWNER_DECISION_LOG.md` | Deferral active; Wave A excludes parallel profile gates and scenario lanes, though compile-only scaffolds may exist locally |
 | DS-S01 (static arena backend) | `DEC-004` | `docs/OWNER_DECISION_LOG.md` | Deferral active; allocator-vtable compatibility required now |
 | All semantic-plane-sensitive deferrals | `DEC-005` | `docs/OWNER_DECISION_LOG.md` | No semantic drift allowed while surfaces are deferred |
 
