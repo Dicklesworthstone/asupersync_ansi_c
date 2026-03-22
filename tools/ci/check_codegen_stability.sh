@@ -204,14 +204,15 @@ reference_opt=""
 for opt in $OPT_LEVELS; do
     probe_bin="$tmp_dir/codegen_probe${opt}"
 
+    # Build libasx.a if not present
+    if [ ! -f "$REPO_ROOT/build/lib/libasx.a" ]; then
+        make -C "$REPO_ROOT" build >/dev/null 2>&1 || true
+    fi
+
     if ! $CC -std=c99 "$opt" -I"$REPO_ROOT/include" \
         -DASX_PROFILE_CORE -DASX_CODEC_JSON -DASX_DETERMINISTIC=1 \
         -o "$probe_bin" "$probe_src" \
-        "$REPO_ROOT/src/core/transition_tables.c" \
-        "$REPO_ROOT/src/core/cancel.c" \
-        "$REPO_ROOT/src/core/outcome.c" \
-        "$REPO_ROOT/src/core/budget.c" \
-        "$REPO_ROOT/src/core/abi.c" \
+        "$REPO_ROOT/build/lib/libasx.a" \
         2>"$tmp_dir/compile_${opt}.log"; then
         echo "[asx] codegen-check: ERROR — compile failed at $opt" >&2
         cat "$tmp_dir/compile_${opt}.log" >&2

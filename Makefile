@@ -465,6 +465,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: fuzz-smoke ci-embedded-matrix
 .PHONY: release release-artifacts bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
+.PHONY: build-parallel build-browser
 .PHONY: build-embedded-mipsel build-embedded-armv7 build-embedded-aarch64
 .PHONY: cross-baremetal-arm-m4-free cross-baremetal-arm-m0-free
 .PHONY: cross-baremetal-riscv32-free cross-baremetal-riscv64-free
@@ -480,6 +481,12 @@ all: build
 # ---------------------------------------------------------------------------
 build: $(LIB_A)
 	@echo "[asx] build complete (profile=$(PROFILE) codec=$(CODEC) det=$(DETERMINISTIC))"
+
+build-parallel:
+	@$(MAKE) build PROFILE=PARALLEL
+
+build-browser:
+	@$(MAKE) build PROFILE=BROWSER
 
 $(LIB_A): $(LIB_OBJ) | $(LIB_DIR)
 	@tmp="$@.$$$$.tmp"; \
@@ -863,14 +870,14 @@ FORMAL_ALG_SRCS := $(wildcard $(FORMAL_ALG_DIR)/test_*.c)
 $(TEST_DIR)/formal/test_outcome_lattice: $(FORMAL_ALG_DIR)/test_outcome_lattice.c src/core/outcome.c | $(TEST_DIR)/formal
 	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< src/core/outcome.c
 
-$(TEST_DIR)/formal/test_cancel_monotone: $(FORMAL_ALG_DIR)/test_cancel_monotone.c src/core/cancel.c src/core/budget.c | $(TEST_DIR)/formal
-	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< src/core/cancel.c src/core/budget.c
+$(TEST_DIR)/formal/test_cancel_monotone: $(FORMAL_ALG_DIR)/test_cancel_monotone.c $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
 
 $(TEST_DIR)/formal/test_budget_lattice: $(FORMAL_ALG_DIR)/test_budget_lattice.c src/core/budget.c | $(TEST_DIR)/formal
 	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< src/core/budget.c
 
-$(TEST_DIR)/formal/test_foundational_parity: $(FORMAL_ALG_DIR)/test_foundational_parity.c src/core/cancel.c src/core/budget.c src/core/outcome.c src/core/status.c src/core/transition_tables.c | $(TEST_DIR)/formal
-	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< src/core/cancel.c src/core/budget.c src/core/outcome.c src/core/status.c src/core/transition_tables.c
+$(TEST_DIR)/formal/test_foundational_parity: $(FORMAL_ALG_DIR)/test_foundational_parity.c $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
 
 FORMAL_ALG_BINS := $(TEST_DIR)/formal/test_outcome_lattice $(TEST_DIR)/formal/test_cancel_monotone $(TEST_DIR)/formal/test_budget_lattice $(TEST_DIR)/formal/test_foundational_parity
 
@@ -903,8 +910,8 @@ formal-tv:
 FORMAL_LITMUS_SRC := tests/formal/litmus/test_memory_model_litmus.c
 FORMAL_LITMUS_BIN := $(TEST_DIR)/formal/test_memory_model_litmus
 
-$(FORMAL_LITMUS_BIN): $(FORMAL_LITMUS_SRC) src/core/transition_tables.c src/core/outcome.c src/core/cancel.c src/core/budget.c | $(TEST_DIR)/formal
-	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< src/core/transition_tables.c src/core/outcome.c src/core/cancel.c src/core/budget.c
+$(FORMAL_LITMUS_BIN): $(FORMAL_LITMUS_SRC) $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
 
 formal-litmus: $(FORMAL_LITMUS_BIN)
 	@echo "[asx] formal-litmus: running memory-model litmus suite..."
@@ -1449,6 +1456,8 @@ help:
 	@echo "asx build system — primary targets:"
 	@echo ""
 	@echo "  build              Build library (warnings-as-errors)"
+	@echo "  build-parallel     Build library with PROFILE=PARALLEL"
+	@echo "  build-browser      Build library with PROFILE=BROWSER"
 	@echo "  format-check       Verify source formatting"
 	@echo "  lint               Static analysis gate"
 	@echo "  lint-docs          Public API documentation coverage gate"
@@ -1482,7 +1491,7 @@ help:
 	@echo ""
 	@echo "Variables:"
 	@echo "  CC=gcc|clang       Compiler selection"
-	@echo "  PROFILE=CORE|POSIX|WIN32|FREESTANDING|EMBEDDED_ROUTER|HFT|AUTOMOTIVE"
+	@echo "  PROFILE=CORE|POSIX|WIN32|FREESTANDING|EMBEDDED_ROUTER|HFT|AUTOMOTIVE|PARALLEL|BROWSER"
 	@echo "  CODEC=JSON|BIN     Codec selection"
 	@echo "  BITS=32|64         Target bitness"
 	@echo "  TARGET=<triplet>   Cross-compilation target"
