@@ -8,6 +8,7 @@
 #include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
+#if ASX_HAS_MESSAGING_SURFACE
 static size_t msg_bounded_strlen(const char *str, size_t max) {
     size_t len;
     if (str == NULL) return 0u;
@@ -186,3 +187,4 @@ uint32_t asx_msg_topic_total_published(const asx_msg_topic *topic) {
     if (topic == NULL) return 0u;
     return topic->total_published;
 }
+#endif

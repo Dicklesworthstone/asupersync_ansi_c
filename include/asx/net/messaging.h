@@ -11,6 +11,7 @@
 #ifndef ASX_NET_MESSAGING_H
 #define ASX_NET_MESSAGING_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <stdint.h>
@@ -19,6 +20,7 @@
 extern "C" {
 #endif
 
+#if ASX_HAS_MESSAGING_SURFACE
 /* -------------------------------------------------------------------
  * Messaging limits
  * ------------------------------------------------------------------- */
@@ -134,6 +136,7 @@ ASX_API uint32_t asx_msg_topic_subscriber_count(const asx_msg_topic *topic);
 
 /* Get total messages published to a topic. */
 ASX_API uint32_t asx_msg_topic_total_published(const asx_msg_topic *topic);
+#endif
 
 #ifdef __cplusplus
 }

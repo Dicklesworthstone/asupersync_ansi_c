@@ -9,6 +9,7 @@
 #include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
+#if ASX_HAS_MESSAGING_SURFACE
 static int messaging_surface_available(void) {
     return asx_surface_available_active(ASX_SURFACE_MESSAGING);
 }
@@ -209,9 +210,17 @@ TEST(broker_null_args) {
     asx_msg_topic *topic;
     ASSERT_EQ(asx_msg_broker_topic(NULL, "t", &topic), ASX_E_INVALID_ARGUMENT);
 }
+#else
+TEST(messaging_surface_compile_time_hidden_in_browser) {
+    ASSERT_EQ(ASX_HAS_MESSAGING_SURFACE, 0);
+    ASSERT_EQ(asx_surface_available_active(ASX_SURFACE_MESSAGING), 0);
+    ASSERT_EQ((int)asx_surface_gate(ASX_SURFACE_MESSAGING), (int)ASX_E_PERMISSION_DENIED);
+}
+#endif
 
 int main(void) {
     fprintf(stderr, "=== messaging tests ===\n");
+#if ASX_HAS_MESSAGING_SURFACE
     RUN_TEST(message_set);
     RUN_TEST(message_null_args);
     RUN_TEST(message_null_payload_with_len_fails);
@@ -224,6 +233,9 @@ int main(void) {
     RUN_TEST(broker_publish_rejects_topic_mismatch);
     RUN_TEST(broker_topic_exhaustion);
     RUN_TEST(broker_null_args);
+#else
+    RUN_TEST(messaging_surface_compile_time_hidden_in_browser);
+#endif
     TEST_REPORT();
     return test_failures;
 }
