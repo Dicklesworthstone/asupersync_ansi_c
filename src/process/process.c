@@ -230,16 +230,19 @@ asx_status asx_process_command_spawn(const asx_process_command *cmd, asx_process
 asx_status asx_process_wait_with_output(asx_process_handle process, asx_process_output *out) {
     int32_t exit_code = 0;
     asx_status st;
+    uint32_t max_polls = 10000u; /* guard against infinite loop */
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     memset(out, 0, sizeof(*out));
 
-    /* Poll until exit */
-    for (;;) {
+    /* Poll until exit (bounded to prevent infinite loop) */
+    while (max_polls > 0u) {
         st = asx_process_poll_wait(process, &exit_code);
         if (st == ASX_OK) break;
         if (st != ASX_E_PENDING) return st;
+        max_polls--;
     }
+    if (max_polls == 0u) return ASX_E_POLL_BUDGET_EXHAUSTED;
 
     out->exit_code = exit_code;
     out->success = (exit_code == 0) ? 1 : 0;
