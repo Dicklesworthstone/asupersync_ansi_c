@@ -677,6 +677,13 @@ test-unit: $(UNIT_TEST_BIN)
 BROWSER_FOCUSED_TEST_BIN := \
 	$(TEST_DIR)/unit/runtime/test_browser_boundary \
 	$(TEST_DIR)/unit/runtime/test_browser_diagnostic \
+	$(TEST_DIR)/unit/actor/test_actor \
+	$(TEST_DIR)/unit/actor/test_gen_server \
+	$(TEST_DIR)/unit/actor/test_supervisor \
+	$(TEST_DIR)/unit/sync/test_sync \
+	$(TEST_DIR)/unit/bytes/test_buf \
+	$(TEST_DIR)/unit/bytes/test_codec \
+	$(TEST_DIR)/unit/bytes/test_io_adapter \
 	$(TEST_DIR)/unit/net/test_tls \
 	$(TEST_DIR)/unit/net/test_db \
 	$(TEST_DIR)/unit/service/test_service \
