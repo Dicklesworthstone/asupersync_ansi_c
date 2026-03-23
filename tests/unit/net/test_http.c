@@ -384,6 +384,7 @@ TEST(router_session_policy_requires_session) {
     teardown_web();
 }
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 TEST(static_file_serving_and_traversal_rejection) {
     asx_fs_path path;
     asx_file_handle file;
@@ -408,6 +409,7 @@ TEST(static_file_serving_and_traversal_rejection) {
     ASSERT_EQ(asx_http_serve_static(&resp, "/www", "/../secret.txt"), ASX_E_PERMISSION_DENIED);
     ASSERT_EQ(resp.status, ASX_HTTP_403_FORBIDDEN);
 }
+#endif
 
 TEST(sse_response_builder) {
     asx_http_response resp;
@@ -583,7 +585,9 @@ int main(void) {
     RUN_TEST(router_middleware_short_circuit);
     RUN_TEST(router_security_policy_requires_valid_auth);
     RUN_TEST(router_session_policy_requires_session);
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
     RUN_TEST(static_file_serving_and_traversal_rejection);
+#endif
     RUN_TEST(sse_response_builder);
     RUN_TEST(multipart_parse_extracts_parts);
     RUN_TEST(multipart_parse_preserves_binary_file_payload);

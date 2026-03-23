@@ -8,6 +8,7 @@
  */
 
 #include <asx/net/http.h>
+#include <asx/fs/fs.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -160,6 +161,7 @@ static const uint8_t *http_memchr_byte(const uint8_t *haystack, size_t haystack_
     return NULL;
 }
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 static const char *http_content_type_for_path(const char *path) {
     const char *dot;
 
@@ -174,6 +176,7 @@ static const char *http_content_type_for_path(const char *path) {
     if (strcmp(dot, ".svg") == 0) return "image/svg+xml";
     return "application/octet-stream";
 }
+#endif
 
 static asx_status http_path_params_add(asx_http_path_params *params, const char *name_start,
                                        const char *name_end, const char *value_start,
@@ -614,6 +617,7 @@ asx_status asx_http_response_set_sse(asx_http_response *resp, const char *event,
     return asx_http_body_set_bytes(&resp->body, payload, (uint32_t)written);
 }
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 asx_status asx_http_serve_static(asx_http_response *resp, const char *root, const char *uri) {
     char path_only[ASX_HTTP_URI_MAX];
     char full_path[ASX_FS_PATH_MAX];
@@ -664,6 +668,7 @@ asx_status asx_http_serve_static(asx_http_response *resp, const char *root, cons
     if (st != ASX_OK) return st;
     return asx_http_body_set_bytes(&resp->body, asx_buf_mut_freeze(&dst).ptr, bytes_read);
 }
+#endif
 
 asx_status asx_http_parse_multipart(const asx_http_request *req,
                                     asx_http_multipart_form *out_form) {

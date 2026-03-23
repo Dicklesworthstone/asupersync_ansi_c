@@ -164,7 +164,9 @@
 #include <asx/testing/log.h>
 
 /* Operator and testing support */
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 #include <asx/app/app.h>
+#endif
 #include <asx/app/doctor.h>
 #include <asx/app/report.h>
 #include <asx/console/console.h>

@@ -15,7 +15,6 @@
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
-#include <asx/fs/fs.h>
 #include <asx/security/security.h>
 #include <asx/session/session.h>
 #include <stdint.h>
@@ -349,8 +348,10 @@ ASX_API asx_status asx_http_response_set_session_cookie(asx_http_response *resp,
                                                         int secure, int http_only);
 ASX_API asx_status asx_http_response_set_sse(asx_http_response *resp, const char *event,
                                              const char *id, const char *data);
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 ASX_API asx_status asx_http_serve_static(asx_http_response *resp, const char *root,
                                          const char *uri);
+#endif
 ASX_API asx_status asx_http_parse_multipart(const asx_http_request *req,
                                             asx_http_multipart_form *out_form);
 
