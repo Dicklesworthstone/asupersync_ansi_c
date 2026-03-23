@@ -112,6 +112,47 @@ ASX_API ASX_MUST_USE asx_status asx_epoch_observe(asx_epoch_handle handle,
                                                    asx_epoch_observer_fn fn, void *user_data);
 
 /* -------------------------------------------------------------------
+ * API: Epoch queries
+ * ------------------------------------------------------------------- */
+
+/* Get the elapsed time since epoch creation (ns). */
+ASX_API uint64_t asx_epoch_duration_ns(asx_epoch_handle handle);
+
+/* Check if the epoch's operation budget is exhausted. */
+ASX_API int asx_epoch_is_budget_exhausted(asx_epoch_handle handle);
+
+/* Record an operation against the epoch's budget. */
+ASX_API ASX_MUST_USE asx_status asx_epoch_record_operation(asx_epoch_handle handle);
+
+/* Get the number of operations used. */
+ASX_API uint32_t asx_epoch_operations_used(asx_epoch_handle handle);
+
+/* Get remaining operations in budget (0 if exhausted or unlimited). */
+ASX_API uint32_t asx_epoch_remaining_operations(asx_epoch_handle handle);
+
+/* Check if the epoch has expired (timed out). */
+ASX_API int asx_epoch_is_expired(asx_epoch_handle handle);
+
+/* Get the epoch's policy. */
+ASX_API asx_status asx_epoch_get_policy(asx_epoch_handle handle, asx_epoch_policy *out);
+
+/* -------------------------------------------------------------------
+ * API: Epoch policy builders (fluent configuration)
+ * ------------------------------------------------------------------- */
+
+/* Create a strict epoch policy (barrier, no tolerance for missed arrivals). */
+ASX_API asx_epoch_policy asx_epoch_policy_strict(uint32_t max_phases);
+
+/* Create a lenient epoch policy (threshold-based, tolerant). */
+ASX_API asx_epoch_policy asx_epoch_policy_lenient(uint32_t threshold, uint32_t max_phases);
+
+/* Create a single-phase epoch (one advance then done). */
+ASX_API asx_epoch_policy asx_epoch_policy_single(void);
+
+/* Create an infinite epoch (no phase limit). */
+ASX_API asx_epoch_policy asx_epoch_policy_infinite(void);
+
+/* -------------------------------------------------------------------
  * API: Epoch-scoped combinators
  *
  * Execute combinator operations within an epoch phase. The operation

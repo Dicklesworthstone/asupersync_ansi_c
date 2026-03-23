@@ -9,6 +9,10 @@
 #include <asx/core/epoch.h>
 #include <string.h>
 
+/* Forward-declare clock query (defined in runtime/hooks.c).
+ * Core module cannot include runtime.h without circular deps. */
+asx_status asx_runtime_now_ns(uint64_t *out_now);
+
 /* ------------------------------------------------------------------ */
 /* Internal slot                                                       */
 /* ------------------------------------------------------------------ */
@@ -27,6 +31,10 @@ typedef struct {
     asx_epoch_observer observers[ASX_MAX_EPOCH_OBSERVERS];
     uint32_t observer_count;
     uint16_t generation;
+    uint32_t operation_count;  /* operations recorded this epoch */
+    uint32_t operation_budget; /* max operations (0 = unlimited) */
+    uint64_t created_ns;       /* creation time for duration queries */
+    uint64_t timeout_ns;       /* epoch timeout (0 = no timeout) */
 } asx_epoch_slot;
 
 static asx_epoch_slot g_epochs[ASX_MAX_EPOCHS];
@@ -190,6 +198,106 @@ asx_status asx_epoch_observe(asx_epoch_handle handle, asx_epoch_observer_fn fn,
     s->expected_arrivals = s->observer_count;
 
     return ASX_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Epoch queries                                                       */
+/* ------------------------------------------------------------------ */
+
+uint64_t asx_epoch_duration_ns(asx_epoch_handle handle) {
+    asx_epoch_slot *s = slot_get(handle);
+    asx_time now = 0;
+
+    if (s == NULL) return 0u;
+    asx_runtime_now_ns(&now);
+    return now > s->created_ns ? now - s->created_ns : 0u;
+}
+
+int asx_epoch_is_budget_exhausted(asx_epoch_handle handle) {
+    asx_epoch_slot *s = slot_get(handle);
+    if (s == NULL) return 0;
+    if (s->operation_budget == 0u) return 0; /* unlimited */
+    return s->operation_count >= s->operation_budget;
+}
+
+asx_status asx_epoch_record_operation(asx_epoch_handle handle) {
+    asx_epoch_slot *s = slot_get(handle);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (s->state != ASX_EPOCH_ACTIVE) return ASX_E_INVALID_STATE;
+    s->operation_count++;
+    if (s->operation_budget > 0u && s->operation_count >= s->operation_budget) {
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+    return ASX_OK;
+}
+
+uint32_t asx_epoch_operations_used(asx_epoch_handle handle) {
+    asx_epoch_slot *s = slot_get(handle);
+    if (s == NULL) return 0u;
+    return s->operation_count;
+}
+
+uint32_t asx_epoch_remaining_operations(asx_epoch_handle handle) {
+    asx_epoch_slot *s = slot_get(handle);
+    if (s == NULL) return 0u;
+    if (s->operation_budget == 0u) return 0u; /* unlimited */
+    if (s->operation_count >= s->operation_budget) return 0u;
+    return s->operation_budget - s->operation_count;
+}
+
+int asx_epoch_is_expired(asx_epoch_handle handle) {
+    asx_epoch_slot *s = slot_get(handle);
+    asx_time now = 0;
+
+    if (s == NULL) return 0;
+    if (s->timeout_ns == 0u) return 0; /* no timeout */
+    asx_runtime_now_ns(&now);
+    if (now < s->created_ns) return 0;
+    return (now - s->created_ns) >= s->timeout_ns;
+}
+
+asx_status asx_epoch_get_policy(asx_epoch_handle handle, asx_epoch_policy *out) {
+    asx_epoch_slot *s = slot_get(handle);
+    if (s == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    *out = s->policy;
+    return ASX_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Epoch policy builders                                               */
+/* ------------------------------------------------------------------ */
+
+asx_epoch_policy asx_epoch_policy_strict(uint32_t max_phases) {
+    asx_epoch_policy p;
+    memset(&p, 0, sizeof(p));
+    p.mode = ASX_EPOCH_ADVANCE_BARRIER;
+    p.max_phases = max_phases;
+    return p;
+}
+
+asx_epoch_policy asx_epoch_policy_lenient(uint32_t threshold, uint32_t max_phases) {
+    asx_epoch_policy p;
+    memset(&p, 0, sizeof(p));
+    p.mode = ASX_EPOCH_ADVANCE_THRESHOLD;
+    p.threshold = threshold;
+    p.max_phases = max_phases;
+    return p;
+}
+
+asx_epoch_policy asx_epoch_policy_single(void) {
+    asx_epoch_policy p;
+    memset(&p, 0, sizeof(p));
+    p.mode = ASX_EPOCH_ADVANCE_MANUAL;
+    p.max_phases = 1u;
+    return p;
+}
+
+asx_epoch_policy asx_epoch_policy_infinite(void) {
+    asx_epoch_policy p;
+    memset(&p, 0, sizeof(p));
+    p.mode = ASX_EPOCH_ADVANCE_MANUAL;
+    p.max_phases = 0u; /* unlimited */
+    return p;
 }
 
 /* ------------------------------------------------------------------ */

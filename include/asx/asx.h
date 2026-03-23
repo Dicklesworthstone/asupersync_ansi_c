@@ -93,22 +93,34 @@
 
 /* Network surface */
 #include <asx/net/net.h>
-#include <asx/net/tls.h>
 #include <asx/net/websocket.h>
 #include <asx/net/quic.h>
-#include <asx/net/server.h>
 #include <asx/net/http.h>
 #include <asx/net/web.h>
-#include <asx/net/grpc.h>
-#include <asx/net/db.h>
-#include <asx/net/messaging.h>
 #include <asx/net/distributed.h>
 #include <asx/net/pipe.h>
+#if ASX_HAS_TLS_SURFACE
+#include <asx/net/tls.h>
+#endif
+#if ASX_HAS_SERVER_SURFACE
+#include <asx/net/server.h>
+#endif
+#if ASX_HAS_GRPC_SURFACE
+#include <asx/net/grpc.h>
+#endif
+#if ASX_HAS_DATABASE_SURFACE
+#include <asx/net/db.h>
+#endif
+#if ASX_HAS_MESSAGING_SURFACE
+#include <asx/net/messaging.h>
+#endif
 
 /* Filesystem, process, and signal surfaces */
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 #include <asx/fs/fs.h>
 #include <asx/process/process.h>
 #include <asx/signal/signal.h>
+#endif
 
 /* Actor model, supervision, and gen_server */
 #include <asx/actor/actor.h>
@@ -161,7 +173,9 @@
 /* Runtime (walking skeleton — bd-ix8.8) */
 #include <asx/runtime/adapter.h>
 #include <asx/runtime/automotive_instrument.h>
+#if ASX_HAS_BLOCKING_SURFACE
 #include <asx/runtime/blocking.h>
+#endif
 #include <asx/runtime/browser_boundary.h>
 #include <asx/runtime/browser_diagnostic.h>
 #include <asx/runtime/builder.h>
@@ -171,7 +185,9 @@
 #include <asx/runtime/event.h>
 #include <asx/runtime/hft_instrument.h>
 #include <asx/runtime/hindsight.h>
+#if ASX_HAS_NATIVE_IO_DRIVER
 #include <asx/runtime/io_driver.h>
+#endif
 #include <asx/runtime/lab.h>
 #include <asx/runtime/local.h>
 #include <asx/runtime/overload_catalog.h>
