@@ -13,6 +13,7 @@
 #define ASX_NET_HTTP_H
 
 #include <asx/asx_export.h>
+#include <asx/asx_config.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
 #include <asx/security/security.h>
