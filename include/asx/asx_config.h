@@ -41,12 +41,53 @@
  * Profile selection (exactly one must be defined at compile time).
  * If none is defined, ASX_PROFILE_CORE is assumed.
  */
-#if !defined(ASX_PROFILE_CORE) && !defined(ASX_PROFILE_POSIX) && !defined(ASX_PROFILE_WIN32) &&    \
-    !defined(ASX_PROFILE_FREESTANDING) && !defined(ASX_PROFILE_EMBEDDED_ROUTER) &&                 \
-    !defined(ASX_PROFILE_HFT) && !defined(ASX_PROFILE_AUTOMOTIVE) &&                               \
+#if (defined(ASX_PROFILE_CORE) + defined(ASX_PROFILE_POSIX) + defined(ASX_PROFILE_WIN32) +        \
+     defined(ASX_PROFILE_FREESTANDING) + defined(ASX_PROFILE_EMBEDDED_ROUTER) +                   \
+     defined(ASX_PROFILE_HFT) + defined(ASX_PROFILE_AUTOMOTIVE) + defined(ASX_PROFILE_PARALLEL) + \
+     defined(ASX_PROFILE_BROWSER)) > 1
+#error "Exactly one ASX_PROFILE_* macro may be defined per build"
+#elif !defined(ASX_PROFILE_CORE) && !defined(ASX_PROFILE_POSIX) && !defined(ASX_PROFILE_WIN32) &&  \
+    !defined(ASX_PROFILE_FREESTANDING) && !defined(ASX_PROFILE_EMBEDDED_ROUTER) &&                \
+    !defined(ASX_PROFILE_HFT) && !defined(ASX_PROFILE_AUTOMOTIVE) &&                              \
     !defined(ASX_PROFILE_PARALLEL) && !defined(ASX_PROFILE_BROWSER)
 #define ASX_PROFILE_CORE
 #endif
+
+/* -------------------------------------------------------------------
+ * Compile-time profile capability contract
+ *
+ * These macros expose the public build contract to downstream code so
+ * browser-incompatible surfaces can be gated in preprocessor space as
+ * well as at runtime. The current C port still exposes a single browser
+ * mode, so subprofile counts remain explicit rather than inferred.
+ * ------------------------------------------------------------------- */
+
+#define ASX_BROWSER_PROFILE_MODE_COUNT 1
+
+#if defined(ASX_PROFILE_BROWSER)
+#define ASX_HAS_NATIVE_RUNTIME_SURFACES 0
+#define ASX_HAS_NATIVE_IO_DRIVER 0
+#define ASX_HAS_BLOCKING_SURFACE 0
+#define ASX_HAS_SERVER_SURFACE 0
+#define ASX_HAS_GRPC_SURFACE 0
+#define ASX_HAS_MESSAGING_SURFACE 0
+#define ASX_HAS_TLS_SURFACE 0
+#define ASX_HAS_DATABASE_SURFACE 0
+#else
+#define ASX_HAS_NATIVE_RUNTIME_SURFACES 1
+#define ASX_HAS_NATIVE_IO_DRIVER 1
+#define ASX_HAS_BLOCKING_SURFACE 1
+#define ASX_HAS_SERVER_SURFACE 1
+#define ASX_HAS_GRPC_SURFACE 1
+#define ASX_HAS_MESSAGING_SURFACE 1
+#define ASX_HAS_TLS_SURFACE 1
+#define ASX_HAS_DATABASE_SURFACE 1
+#endif
+
+/* Browser trace remains a single-mode contract today: tracing is available,
+ * but there is no minimal-vs-extended browser trace subprofile split yet. */
+#define ASX_HAS_BROWSER_TRACE 1
+#define ASX_HAS_BROWSER_TRACE_SUBPROFILE_SPLIT 0
 
 /* Debug mode: enables ghost monitors (borrow ledger, protocol, linearity, determinism) */
 #if !defined(ASX_DEBUG) && !defined(NDEBUG)

@@ -67,6 +67,31 @@ TEST(browser_profile_resource_class_scaling) {
     ASSERT_TRUE(r1.max_tasks > 0);
 }
 
+TEST(compile_time_profile_contract) {
+    ASSERT_EQ(ASX_BROWSER_PROFILE_MODE_COUNT, 1);
+    ASSERT_EQ(ASX_HAS_BROWSER_TRACE, 1);
+    ASSERT_EQ(ASX_HAS_BROWSER_TRACE_SUBPROFILE_SPLIT, 0);
+#if defined(ASX_PROFILE_BROWSER)
+    ASSERT_EQ(ASX_HAS_NATIVE_RUNTIME_SURFACES, 0);
+    ASSERT_EQ(ASX_HAS_NATIVE_IO_DRIVER, 0);
+    ASSERT_EQ(ASX_HAS_BLOCKING_SURFACE, 0);
+    ASSERT_EQ(ASX_HAS_SERVER_SURFACE, 0);
+    ASSERT_EQ(ASX_HAS_GRPC_SURFACE, 0);
+    ASSERT_EQ(ASX_HAS_MESSAGING_SURFACE, 0);
+    ASSERT_EQ(ASX_HAS_TLS_SURFACE, 0);
+    ASSERT_EQ(ASX_HAS_DATABASE_SURFACE, 0);
+#else
+    ASSERT_EQ(ASX_HAS_NATIVE_RUNTIME_SURFACES, 1);
+    ASSERT_EQ(ASX_HAS_NATIVE_IO_DRIVER, 1);
+    ASSERT_EQ(ASX_HAS_BLOCKING_SURFACE, 1);
+    ASSERT_EQ(ASX_HAS_SERVER_SURFACE, 1);
+    ASSERT_EQ(ASX_HAS_GRPC_SURFACE, 1);
+    ASSERT_EQ(ASX_HAS_MESSAGING_SURFACE, 1);
+    ASSERT_EQ(ASX_HAS_TLS_SURFACE, 1);
+    ASSERT_EQ(ASX_HAS_DATABASE_SURFACE, 1);
+#endif
+}
+
 /* -------------------------------------------------------------------
  * Surface availability — browser profile
  * ------------------------------------------------------------------- */
@@ -221,6 +246,7 @@ int main(void) {
     RUN_TEST(browser_profile_descriptor);
     RUN_TEST(browser_profile_trace_capacity);
     RUN_TEST(browser_profile_resource_class_scaling);
+    RUN_TEST(compile_time_profile_contract);
 
     /* Surface availability — browser */
     RUN_TEST(browser_allows_core_surfaces);
