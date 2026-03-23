@@ -160,6 +160,9 @@
 #include <asx/remote/remote.h>
 #include <asx/spork/spork.h>
 
+/* CLI utilities */
+#include <asx/cli/cli.h>
+
 /* Testing infrastructure */
 #include <asx/testing/log.h>
 

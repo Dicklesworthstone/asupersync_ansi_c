@@ -300,7 +300,9 @@ else
   PLATFORM_SRC :=
 endif
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(ENCODING_SRC) $(DECODING_SRC) $(RAPTORQ_SRC) $(MIGRATION_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(SERVICE_SRC) $(TRANSPORT_SRC) $(REMOTE_SRC) $(SPORK_SRC) $(PLATFORM_SRC)
+CLI_SRC := src/cli/cli.c
+
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(ENCODING_SRC) $(DECODING_SRC) $(RAPTORQ_SRC) $(MIGRATION_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(SERVICE_SRC) $(TRANSPORT_SRC) $(REMOTE_SRC) $(SPORK_SRC) $(CLI_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -516,7 +518,7 @@ obj-dirs:
 	          $(OBJ_DIR)/observability \
 	          $(OBJ_DIR)/plan $(OBJ_DIR)/cx \
 	          $(OBJ_DIR)/service $(OBJ_DIR)/transport \
-	          $(OBJ_DIR)/remote $(OBJ_DIR)/spork \
+	          $(OBJ_DIR)/remote $(OBJ_DIR)/spork $(OBJ_DIR)/cli \
 	          $(OBJ_DIR)/platform/posix \
 	          $(OBJ_DIR)/platform/win32 $(OBJ_DIR)/platform/freestanding
 

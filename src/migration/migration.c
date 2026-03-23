@@ -112,6 +112,7 @@ static const feature_entry g_features[] = {
     {"pipe", 1, NULL},
     {"join_set", 1, NULL},
     {"gen_server", 1, NULL},
+    {"cli", 1, NULL},
     {"actor", 1, NULL},
     {"encoding", 1, NULL},
     {"decoding", 1, NULL},
