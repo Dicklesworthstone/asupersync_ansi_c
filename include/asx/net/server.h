@@ -11,6 +11,7 @@
 #ifndef ASX_NET_SERVER_H
 #define ASX_NET_SERVER_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/net/net.h>
@@ -20,6 +21,7 @@
 extern "C" {
 #endif
 
+#if ASX_HAS_SERVER_SURFACE
 /* -------------------------------------------------------------------
  * Server configuration and types
  * ------------------------------------------------------------------- */
@@ -99,6 +101,7 @@ ASX_API uint32_t asx_server_active_count(const asx_server *srv);
 
 /* Get the total number of accepted connections. */
 ASX_API uint32_t asx_server_total_accepted(const asx_server *srv);
+#endif
 
 #ifdef __cplusplus
 }

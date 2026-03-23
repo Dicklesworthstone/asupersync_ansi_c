@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#if ASX_HAS_GRPC_SURFACE
 /* ------------------------------------------------------------------ */
 /* Bounded string helpers                                              */
 /* ------------------------------------------------------------------ */
@@ -324,3 +325,4 @@ int asx_grpc_reflect_has_service(const asx_grpc_reflection *refl, const char *na
     }
     return 0;
 }
+#endif

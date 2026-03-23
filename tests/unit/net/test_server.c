@@ -9,6 +9,7 @@
 #include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
+#if ASX_HAS_SERVER_SURFACE
 static int server_surface_available(void) {
     return asx_surface_available_active(ASX_SURFACE_SERVER);
 }
@@ -260,9 +261,17 @@ TEST(server_shutdown_idle_goes_stopped) {
     /* Can't shutdown before listen */
     ASSERT_EQ(asx_server_shutdown(&srv), ASX_E_INVALID_STATE);
 }
+#else
+TEST(server_surface_compile_time_hidden_in_browser) {
+    ASSERT_EQ(ASX_HAS_SERVER_SURFACE, 0);
+    ASSERT_EQ(asx_surface_available_active(ASX_SURFACE_SERVER), 0);
+    ASSERT_EQ((int)asx_surface_gate(ASX_SURFACE_SERVER), (int)ASX_E_PERMISSION_DENIED);
+}
+#endif
 
 int main(void) {
     fprintf(stderr, "=== server tests ===\n");
+#if ASX_HAS_SERVER_SURFACE
     RUN_TEST(server_config_defaults);
     RUN_TEST(server_init_and_state);
     RUN_TEST(server_listen_and_accept);
@@ -275,6 +284,9 @@ int main(void) {
     RUN_TEST(server_multiple_clients);
     RUN_TEST(server_stop_idempotent);
     RUN_TEST(server_shutdown_idle_goes_stopped);
+#else
+    RUN_TEST(server_surface_compile_time_hidden_in_browser);
+#endif
     TEST_REPORT();
     return test_failures;
 }

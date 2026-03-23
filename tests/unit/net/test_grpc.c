@@ -10,6 +10,7 @@
 #include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
+#if ASX_HAS_GRPC_SURFACE
 static int grpc_surface_available(void) {
     return asx_surface_available_active(ASX_SURFACE_GRPC);
 }
@@ -416,6 +417,13 @@ TEST(grpc_server_with_metadata) {
     asx_grpc_server_call(&srv, "/Auth/Verify", &req, &resp, &md, &code);
     ASSERT_EQ(code, ASX_GRPC_OK);
 }
+#else
+TEST(grpc_surface_compile_time_hidden_in_browser) {
+    ASSERT_EQ(ASX_HAS_GRPC_SURFACE, 0);
+    ASSERT_EQ(asx_surface_available_active(ASX_SURFACE_GRPC), 0);
+    ASSERT_EQ((int)asx_surface_gate(ASX_SURFACE_GRPC), (int)ASX_E_PERMISSION_DENIED);
+}
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
@@ -423,7 +431,7 @@ TEST(grpc_server_with_metadata) {
 
 int main(void) {
     fprintf(stderr, "=== grpc tests ===\n");
-
+#if ASX_HAS_GRPC_SURFACE
     /* Status codes */
     RUN_TEST(grpc_code_str);
 
@@ -459,7 +467,9 @@ int main(void) {
 
     /* Metadata with calls */
     RUN_TEST(grpc_server_with_metadata);
-
+#else
+    RUN_TEST(grpc_surface_compile_time_hidden_in_browser);
+#endif
     TEST_REPORT();
     return test_failures;
 }

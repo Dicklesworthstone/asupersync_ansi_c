@@ -12,6 +12,7 @@
 #ifndef ASX_NET_GRPC_H
 #define ASX_NET_GRPC_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
@@ -21,6 +22,7 @@
 extern "C" {
 #endif
 
+#if ASX_HAS_GRPC_SURFACE
 /* -------------------------------------------------------------------
  * gRPC status codes (mirrors grpc-status)
  * ------------------------------------------------------------------- */
@@ -251,6 +253,7 @@ ASX_API asx_status asx_grpc_reflect(const asx_grpc_server *srv, asx_grpc_reflect
 
 /* Check if a service is listed in the reflection. */
 ASX_API int asx_grpc_reflect_has_service(const asx_grpc_reflection *refl, const char *name);
+#endif
 
 #ifdef __cplusplus
 }

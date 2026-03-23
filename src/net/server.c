@@ -12,6 +12,7 @@
 #include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
+#if ASX_HAS_SERVER_SURFACE
 /* ------------------------------------------------------------------ */
 /* Server config                                                       */
 /* ------------------------------------------------------------------ */
@@ -166,3 +167,4 @@ uint32_t asx_server_total_accepted(const asx_server *srv) {
     if (srv == NULL) return 0u;
     return srv->total_accepted;
 }
+#endif
