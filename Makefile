@@ -684,6 +684,25 @@ BROWSER_FOCUSED_TEST_BIN := \
 	$(TEST_DIR)/unit/bytes/test_buf \
 	$(TEST_DIR)/unit/bytes/test_codec \
 	$(TEST_DIR)/unit/bytes/test_io_adapter \
+	$(TEST_DIR)/unit/encoding/test_encoding \
+	$(TEST_DIR)/unit/decoding/test_decoding \
+	$(TEST_DIR)/unit/stream/test_stream \
+	$(TEST_DIR)/unit/security/test_security \
+	$(TEST_DIR)/unit/security/test_security_audit \
+	$(TEST_DIR)/unit/plan/test_plan \
+	$(TEST_DIR)/unit/cx/test_cx \
+	$(TEST_DIR)/unit/cx/test_scope \
+	$(TEST_DIR)/unit/link/test_link \
+	$(TEST_DIR)/unit/app/test_app \
+	$(TEST_DIR)/unit/app/test_report \
+	$(TEST_DIR)/unit/console/test_console \
+	$(TEST_DIR)/unit/evidence/test_evidence \
+	$(TEST_DIR)/unit/monitor/test_monitor \
+	$(TEST_DIR)/unit/record/test_record \
+	$(TEST_DIR)/unit/migration/test_migration \
+	$(TEST_DIR)/unit/raptorq/test_raptorq \
+	$(TEST_DIR)/unit/spork/test_spork \
+	$(TEST_DIR)/unit/tracing_compat/test_tracing_compat \
 	$(TEST_DIR)/unit/net/test_tls \
 	$(TEST_DIR)/unit/net/test_db \
 	$(TEST_DIR)/unit/service/test_service \
