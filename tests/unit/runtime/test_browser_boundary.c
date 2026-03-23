@@ -14,8 +14,7 @@
  */
 
 #include "test_harness.h"
-#include <asx/runtime/browser_boundary.h>
-#include <asx/runtime/profile_compat.h>
+#include <asx/asx.h>
 #include <string.h>
 
 /* -------------------------------------------------------------------
