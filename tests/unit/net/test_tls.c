@@ -9,6 +9,7 @@
 #include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
+#if ASX_HAS_TLS_SURFACE
 static int tls_surface_available(void) {
     return asx_surface_available_active(ASX_SURFACE_TLS);
 }
@@ -206,9 +207,17 @@ TEST(tls_null_args) {
     ASSERT_EQ(asx_tls_config_set_sni(&cfg, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_tls_config_add_alpn(NULL, "h2"), ASX_E_INVALID_ARGUMENT);
 }
+#else
+TEST(tls_surface_compile_time_hidden_in_browser) {
+    ASSERT_EQ(ASX_HAS_TLS_SURFACE, 0);
+    ASSERT_EQ(asx_surface_available_active(ASX_SURFACE_TLS), 0);
+    ASSERT_EQ((int)asx_surface_gate(ASX_SURFACE_TLS), (int)ASX_E_PERMISSION_DENIED);
+}
+#endif
 
 int main(void) {
     fprintf(stderr, "=== tls tests ===\n");
+#if ASX_HAS_TLS_SURFACE
     RUN_TEST(tls_config_defaults);
     RUN_TEST(tls_config_set_sni);
     RUN_TEST(tls_config_add_alpn);
@@ -218,6 +227,9 @@ int main(void) {
     RUN_TEST(tls_alpn_negotiation);
     RUN_TEST(tls_shutdown_transitions);
     RUN_TEST(tls_null_args);
+#else
+    RUN_TEST(tls_surface_compile_time_hidden_in_browser);
+#endif
     TEST_REPORT();
     return test_failures;
 }

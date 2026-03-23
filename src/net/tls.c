@@ -12,6 +12,7 @@
 #include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
+#if ASX_HAS_TLS_SURFACE
 typedef struct {
     asx_tcp_stream tcp;
     asx_tls_config config;
@@ -250,3 +251,4 @@ asx_status asx_tls_stream_close(asx_tls_stream stream) {
 int asx_tls_stream_is_alive(asx_tls_stream stream) { return tls_lookup(stream) != NULL; }
 
 void asx_tls_reset(void) { memset(g_tls_streams, 0, sizeof(g_tls_streams)); }
+#endif

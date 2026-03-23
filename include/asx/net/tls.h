@@ -12,6 +12,7 @@
 #ifndef ASX_NET_TLS_H
 #define ASX_NET_TLS_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
@@ -22,6 +23,7 @@
 extern "C" {
 #endif
 
+#if ASX_HAS_TLS_SURFACE
 /* -------------------------------------------------------------------
  * TLS version and cipher configuration
  * ------------------------------------------------------------------- */
@@ -153,6 +155,7 @@ ASX_API int asx_tls_stream_is_alive(asx_tls_stream stream);
 
 /* Reset all TLS state (test support). */
 ASX_API void asx_tls_reset(void);
+#endif
 
 #ifdef __cplusplus
 }
