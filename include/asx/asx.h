@@ -23,7 +23,8 @@
 
 /* ABI stability contract and versioning */
 #include <asx/asx_abi.h>
-#include <asx/abi/wasm_abi.h>
+/* Note: asx/abi/wasm_abi.h is included separately for WASM targets
+ * as it redefines some types for the WASM ABI boundary. */
 
 /* Configuration and profile selection */
 #include <asx/asx_config.h>
@@ -146,6 +147,9 @@
 #include <asx/transport/transport.h>
 #include <asx/remote/remote.h>
 #include <asx/spork/spork.h>
+
+/* Testing infrastructure */
+#include <asx/testing/log.h>
 
 /* Operator and testing support */
 #include <asx/app/app.h>
