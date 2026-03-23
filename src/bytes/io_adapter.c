@@ -121,3 +121,265 @@ asx_write_adapter asx_mem_write_adapter(asx_mem_write_state *s) {
     a.state = s;
     return a;
 }
+
+/* ------------------------------------------------------------------ */
+/* Buffered reader                                                     */
+/* ------------------------------------------------------------------ */
+
+void asx_buf_reader_init(asx_buf_reader *br, asx_read_adapter inner) {
+    if (br == NULL) return;
+    br->inner = inner;
+    asx_buf_mut_init(&br->buffer);
+    br->eof = 0;
+}
+
+asx_read_result asx_buf_reader_read(asx_buf_reader *br, asx_buf_mut *dst, uint32_t *bytes_read) {
+    asx_read_result rr;
+    asx_buf readable;
+    uint32_t to_copy;
+    asx_status st;
+
+    if (br == NULL || dst == NULL || bytes_read == NULL) return ASX_READ_ERROR;
+    *bytes_read = 0u;
+
+    /* First try to serve from buffer */
+    if (asx_buf_mut_remaining(&br->buffer) > 0u) {
+        readable = asx_buf_mut_readable(&br->buffer);
+        to_copy = readable.len;
+        if (to_copy > asx_buf_mut_writable(dst)) to_copy = asx_buf_mut_writable(dst);
+        st = asx_buf_mut_put(dst, readable.ptr, to_copy);
+        if (st != ASX_OK) return ASX_READ_ERROR;
+        st = asx_buf_mut_advance(&br->buffer, to_copy);
+        if (st != ASX_OK) return ASX_READ_ERROR;
+        if (asx_buf_mut_remaining(&br->buffer) == 0u) asx_buf_mut_clear(&br->buffer);
+        *bytes_read = to_copy;
+        return ASX_READ_READY;
+    }
+
+    if (br->eof) return ASX_READ_EOF;
+
+    /* Buffer empty — refill from inner */
+    asx_buf_mut_clear(&br->buffer);
+    rr = br->inner.poll_read(br->inner.state, &br->buffer, NULL, bytes_read);
+
+    if (rr == ASX_READ_EOF) {
+        br->eof = 1;
+        if (*bytes_read == 0u) return ASX_READ_EOF;
+    }
+    if (rr == ASX_READ_ERROR) return ASX_READ_ERROR;
+
+    /* Copy from buffer to dst */
+    if (asx_buf_mut_remaining(&br->buffer) > 0u) {
+        readable = asx_buf_mut_readable(&br->buffer);
+        to_copy = readable.len;
+        if (to_copy > asx_buf_mut_writable(dst)) to_copy = asx_buf_mut_writable(dst);
+        st = asx_buf_mut_put(dst, readable.ptr, to_copy);
+        if (st != ASX_OK) return ASX_READ_ERROR;
+        st = asx_buf_mut_advance(&br->buffer, to_copy);
+        if (st != ASX_OK) return ASX_READ_ERROR;
+        if (asx_buf_mut_remaining(&br->buffer) == 0u) asx_buf_mut_clear(&br->buffer);
+        *bytes_read = to_copy;
+    }
+    return ASX_READ_READY;
+}
+
+asx_status asx_buf_reader_read_line(asx_buf_reader *br, asx_buf_mut *dst, uint32_t *bytes_read) {
+    uint32_t chunk_read;
+    asx_read_result rr;
+    asx_buf readable;
+    uint32_t i;
+
+    if (br == NULL || dst == NULL || bytes_read == NULL) return ASX_E_INVALID_ARGUMENT;
+    *bytes_read = 0u;
+
+    for (;;) {
+        /* Scan buffer for newline */
+        readable = asx_buf_mut_readable(&br->buffer);
+        for (i = 0u; i < readable.len; i++) {
+            if (readable.ptr[i] == '\n') {
+                /* Found newline — copy up to (not including) it */
+                uint32_t line_len = i;
+                if (line_len > 0u && readable.ptr[line_len - 1u] == '\r') line_len--;
+                if (line_len > 0u) {
+                    asx_status st = asx_buf_mut_put(dst, readable.ptr, line_len);
+                    if (st != ASX_OK) return st;
+                }
+                /* Advance past the newline */
+                { asx_status adv_ = asx_buf_mut_advance(&br->buffer, i + 1u); (void)adv_; }
+                if (asx_buf_mut_remaining(&br->buffer) == 0u) asx_buf_mut_clear(&br->buffer);
+                *bytes_read = line_len;
+                return ASX_OK;
+            }
+        }
+
+        /* No newline found — fill more from inner */
+        if (br->eof) {
+            /* EOF and no newline — return whatever's left as last line */
+            if (readable.len > 0u) {
+                asx_status st = asx_buf_mut_put(dst, readable.ptr, readable.len);
+                if (st != ASX_OK) return st;
+                *bytes_read = readable.len;
+                asx_buf_mut_clear(&br->buffer);
+                return ASX_OK;
+            }
+            return ASX_E_NOT_FOUND; /* EOF with no more data */
+        }
+
+        asx_buf_mut_compact(&br->buffer);
+        chunk_read = 0u;
+        rr = br->inner.poll_read(br->inner.state, &br->buffer, NULL, &chunk_read);
+        if (rr == ASX_READ_EOF) {
+            br->eof = 1;
+        } else if (rr == ASX_READ_ERROR) {
+            return ASX_E_INVALID_STATE;
+        } else if (rr == ASX_READ_PENDING) {
+            return ASX_E_PENDING;
+        }
+    }
+}
+
+int asx_buf_reader_is_eof(const asx_buf_reader *br) {
+    if (br == NULL) return 1;
+    return br->eof && asx_buf_mut_remaining(&br->buffer) == 0u;
+}
+
+/* ------------------------------------------------------------------ */
+/* Buffered writer                                                     */
+/* ------------------------------------------------------------------ */
+
+void asx_buf_writer_init(asx_buf_writer *bw, asx_write_adapter inner) {
+    if (bw == NULL) return;
+    bw->inner = inner;
+    asx_buf_mut_init(&bw->buffer);
+    bw->closed = 0;
+}
+
+asx_status asx_buf_writer_write(asx_buf_writer *bw, const asx_buf *src, uint32_t *bytes_written) {
+    asx_status st;
+
+    if (bw == NULL || src == NULL || bytes_written == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (bw->closed) return ASX_E_INVALID_STATE;
+    *bytes_written = 0u;
+
+    /* If buffer has room, buffer the data */
+    if (src->len <= asx_buf_mut_writable(&bw->buffer)) {
+        st = asx_buf_mut_put(&bw->buffer, src->ptr, src->len);
+        if (st != ASX_OK) return st;
+        *bytes_written = src->len;
+        return ASX_OK;
+    }
+
+    /* Buffer full — flush first */
+    st = asx_buf_writer_flush(bw);
+    if (st != ASX_OK) return st;
+
+    /* Try again after flush */
+    if (src->len <= asx_buf_mut_writable(&bw->buffer)) {
+        st = asx_buf_mut_put(&bw->buffer, src->ptr, src->len);
+        if (st != ASX_OK) return st;
+        *bytes_written = src->len;
+        return ASX_OK;
+    }
+
+    /* Data larger than buffer — write directly */
+    {
+        asx_write_result wr;
+        uint32_t written = 0u;
+        wr = bw->inner.poll_write(bw->inner.state, src, NULL, &written);
+        if (wr != ASX_WRITE_READY) return ASX_E_INVALID_STATE;
+        *bytes_written = written;
+    }
+    return ASX_OK;
+}
+
+asx_status asx_buf_writer_flush(asx_buf_writer *bw) {
+    asx_buf readable;
+    asx_write_result wr;
+    uint32_t written;
+
+    if (bw == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_buf_mut_remaining(&bw->buffer) == 0u) return ASX_OK;
+
+    readable = asx_buf_mut_readable(&bw->buffer);
+    written = 0u;
+    wr = bw->inner.poll_write(bw->inner.state, &readable, NULL, &written);
+    if (wr != ASX_WRITE_READY) return ASX_E_INVALID_STATE;
+
+    { asx_status adv_ = asx_buf_mut_advance(&bw->buffer, written); (void)adv_; }
+    if (asx_buf_mut_remaining(&bw->buffer) == 0u) asx_buf_mut_clear(&bw->buffer);
+
+    if (bw->inner.poll_flush != NULL) {
+        wr = bw->inner.poll_flush(bw->inner.state, NULL);
+        if (wr != ASX_WRITE_READY && wr != ASX_WRITE_PENDING) return ASX_E_INVALID_STATE;
+    }
+    return ASX_OK;
+}
+
+asx_status asx_buf_writer_shutdown(asx_buf_writer *bw) {
+    asx_status st;
+    asx_write_result wr;
+
+    if (bw == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_buf_writer_flush(bw);
+    if (st != ASX_OK) return st;
+
+    if (bw->inner.poll_shutdown != NULL) {
+        wr = bw->inner.poll_shutdown(bw->inner.state, NULL);
+        if (wr != ASX_WRITE_READY) return ASX_E_INVALID_STATE;
+    }
+    bw->closed = 1;
+    return ASX_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Copy utilities                                                      */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_io_copy(asx_read_adapter *src, asx_write_adapter *dst, uint64_t *bytes_copied) {
+    return asx_io_copy_n(src, dst, UINT64_MAX, bytes_copied);
+}
+
+asx_status asx_io_copy_n(asx_read_adapter *src, asx_write_adapter *dst, uint64_t max_bytes,
+                           uint64_t *bytes_copied) {
+    asx_buf_mut chunk;
+    uint64_t total;
+    uint32_t read_n;
+    asx_read_result rr;
+
+    if (src == NULL || dst == NULL || bytes_copied == NULL) return ASX_E_INVALID_ARGUMENT;
+    total = 0u;
+
+    for (;;) {
+        asx_buf frozen;
+        uint32_t written;
+        asx_write_result wr;
+
+        if (total >= max_bytes) break;
+
+        asx_buf_mut_init(&chunk);
+        read_n = 0u;
+        rr = src->poll_read(src->state, &chunk, NULL, &read_n);
+
+        if (rr == ASX_READ_EOF && read_n == 0u) break;
+        if (rr == ASX_READ_ERROR) {
+            *bytes_copied = total;
+            return ASX_E_INVALID_STATE;
+        }
+
+        frozen = asx_buf_mut_readable(&chunk);
+        if (frozen.len > 0u) {
+            written = 0u;
+            wr = dst->poll_write(dst->state, &frozen, NULL, &written);
+            if (wr != ASX_WRITE_READY) {
+                *bytes_copied = total;
+                return ASX_E_INVALID_STATE;
+            }
+            total += written;
+        }
+
+        if (rr == ASX_READ_EOF) break;
+    }
+
+    *bytes_copied = total;
+    return ASX_OK;
+}

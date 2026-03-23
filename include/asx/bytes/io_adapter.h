@@ -107,6 +107,68 @@ typedef struct {
 ASX_API void asx_mem_write_init(asx_mem_write_state *s, asx_buf_mut *sink);
 ASX_API asx_write_adapter asx_mem_write_adapter(asx_mem_write_state *s);
 
+/* -------------------------------------------------------------------
+ * Buffered reader — wraps a read adapter with an internal buffer
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    asx_read_adapter inner;
+    asx_buf_mut buffer;
+    int eof;
+} asx_buf_reader;
+
+/* Initialize a buffered reader around a read adapter. */
+ASX_API void asx_buf_reader_init(asx_buf_reader *br, asx_read_adapter inner);
+
+/* Read up to dst capacity bytes, buffering internally. */
+ASX_API ASX_MUST_USE asx_read_result asx_buf_reader_read(asx_buf_reader *br, asx_buf_mut *dst,
+                                                           uint32_t *bytes_read);
+
+/* Read exactly one line (up to newline or EOF). Returns line in dst.
+ * Line delimiter is consumed but not included in output. */
+ASX_API ASX_MUST_USE asx_status asx_buf_reader_read_line(asx_buf_reader *br, asx_buf_mut *dst,
+                                                           uint32_t *bytes_read);
+
+/* Check if EOF has been reached. */
+ASX_API int asx_buf_reader_is_eof(const asx_buf_reader *br);
+
+/* -------------------------------------------------------------------
+ * Buffered writer — wraps a write adapter with an internal buffer
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    asx_write_adapter inner;
+    asx_buf_mut buffer;
+    int closed;
+} asx_buf_writer;
+
+/* Initialize a buffered writer around a write adapter. */
+ASX_API void asx_buf_writer_init(asx_buf_writer *bw, asx_write_adapter inner);
+
+/* Write data through the buffer. Flushes when buffer is full. */
+ASX_API ASX_MUST_USE asx_status asx_buf_writer_write(asx_buf_writer *bw, const asx_buf *src,
+                                                       uint32_t *bytes_written);
+
+/* Flush all buffered data to the underlying writer. */
+ASX_API ASX_MUST_USE asx_status asx_buf_writer_flush(asx_buf_writer *bw);
+
+/* Shutdown the writer (flush + close). */
+ASX_API asx_status asx_buf_writer_shutdown(asx_buf_writer *bw);
+
+/* -------------------------------------------------------------------
+ * Copy utility — copy all data from reader to writer
+ * ------------------------------------------------------------------- */
+
+/* Copy all data from src reader to dst writer until EOF.
+ * Returns total bytes copied in *bytes_copied. */
+ASX_API ASX_MUST_USE asx_status asx_io_copy(asx_read_adapter *src, asx_write_adapter *dst,
+                                              uint64_t *bytes_copied);
+
+/* Copy at most max_bytes from src to dst.
+ * Returns actual bytes copied in *bytes_copied. */
+ASX_API ASX_MUST_USE asx_status asx_io_copy_n(asx_read_adapter *src, asx_write_adapter *dst,
+                                                uint64_t max_bytes, uint64_t *bytes_copied);
+
 #ifdef __cplusplus
 }
 #endif
