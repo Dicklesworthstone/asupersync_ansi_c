@@ -17,6 +17,7 @@ typedef struct {
     uint32_t generation;
     uint32_t calls_handled;
     uint32_t casts_handled;
+    char name[32];
     uint8_t alive;
 } gen_server_slot;
 
@@ -192,6 +193,82 @@ asx_status asx_gen_server_poll(asx_gen_server_ref ref) {
     gs_dequeue(s);
     return ASX_OK;
 }
+
+/* ------------------------------------------------------------------ */
+/* Extended API                                                        */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_gen_server_try_cast(asx_gen_server_ref ref, uint64_t message) {
+    gen_server_slot *s;
+    asx_gen_server_msg msg;
+
+    s = gs_lookup(ref);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (s->server_state != ASX_GEN_SERVER_RUNNING) return ASX_E_INVALID_STATE;
+    if (s->mb_count >= ASX_GEN_SERVER_MAILBOX_SIZE) return ASX_E_WOULD_BLOCK;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.kind = ASX_GEN_SERVER_MSG_CAST;
+    msg.payload = message;
+    return gs_enqueue(s, &msg);
+}
+
+asx_status asx_gen_server_info(asx_gen_server_ref ref, uint64_t message) {
+    /* Info messages are handled identically to casts in this implementation */
+    return asx_gen_server_cast(ref, message);
+}
+
+int asx_gen_server_is_finished(asx_gen_server_ref ref) {
+    gen_server_slot *s = gs_lookup(ref);
+    if (s == NULL) return 1;
+    return s->server_state == ASX_GEN_SERVER_STOPPED;
+}
+
+int asx_gen_server_is_closed(asx_gen_server_ref ref) {
+    gen_server_slot *s = gs_lookup(ref);
+    if (s == NULL) return 1;
+    return !s->alive;
+}
+
+const char *asx_gen_server_name(asx_gen_server_ref ref) {
+    gen_server_slot *s = gs_lookup(ref);
+    if (s == NULL) return "";
+    return s->name;
+}
+
+uint32_t asx_gen_server_calls_handled(asx_gen_server_ref ref) {
+    gen_server_slot *s = gs_lookup(ref);
+    if (s == NULL) return 0u;
+    return s->calls_handled;
+}
+
+uint32_t asx_gen_server_casts_handled(asx_gen_server_ref ref) {
+    gen_server_slot *s = gs_lookup(ref);
+    if (s == NULL) return 0u;
+    return s->casts_handled;
+}
+
+asx_status asx_gen_server_start_named(asx_gen_server_ref *out, const char *name,
+                                        const asx_gen_server_callbacks *callbacks, void *init_args) {
+    asx_status st;
+    gen_server_slot *s;
+
+    st = asx_gen_server_start(out, callbacks, init_args);
+    if (st != ASX_OK) return st;
+
+    s = gs_lookup(*out);
+    if (s != NULL && name != NULL) {
+        size_t len = strlen(name);
+        if (len >= sizeof(s->name)) len = sizeof(s->name) - 1u;
+        memcpy(s->name, name, len);
+        s->name[len] = '\0';
+    }
+    return ASX_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Reset                                                               */
+/* ------------------------------------------------------------------ */
 
 void asx_gen_server_reset(void) {
     memset(g_servers, 0, sizeof(g_servers));

@@ -105,6 +105,32 @@ ASX_API asx_gen_server_state asx_gen_server_get_state(asx_gen_server_ref ref);
 /* Process one message from the mailbox. Returns ASX_E_PENDING if empty. */
 ASX_API ASX_MUST_USE asx_status asx_gen_server_poll(asx_gen_server_ref ref);
 
+/* Try to send a cast without blocking. Returns ASX_E_WOULD_BLOCK if mailbox full. */
+ASX_API ASX_MUST_USE asx_status asx_gen_server_try_cast(asx_gen_server_ref ref, uint64_t message);
+
+/* Send an info message (like cast but uses a separate handler). */
+ASX_API ASX_MUST_USE asx_status asx_gen_server_info(asx_gen_server_ref ref, uint64_t message);
+
+/* Check if the gen_server has finished (stopped or failed). */
+ASX_API int asx_gen_server_is_finished(asx_gen_server_ref ref);
+
+/* Check if the gen_server mailbox is closed. */
+ASX_API int asx_gen_server_is_closed(asx_gen_server_ref ref);
+
+/* Get the gen_server's name (empty string if unnamed). */
+ASX_API const char *asx_gen_server_name(asx_gen_server_ref ref);
+
+/* Get the number of calls handled. */
+ASX_API uint32_t asx_gen_server_calls_handled(asx_gen_server_ref ref);
+
+/* Get the number of casts handled. */
+ASX_API uint32_t asx_gen_server_casts_handled(asx_gen_server_ref ref);
+
+/* Start a named gen_server. */
+ASX_API ASX_MUST_USE asx_status asx_gen_server_start_named(asx_gen_server_ref *out, const char *name,
+                                                              const asx_gen_server_callbacks *callbacks,
+                                                              void *init_args);
+
 /* Reset all gen_server state (test support). */
 ASX_API void asx_gen_server_reset(void);
 
