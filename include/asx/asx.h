@@ -23,6 +23,7 @@
 
 /* ABI stability contract and versioning */
 #include <asx/asx_abi.h>
+#include <asx/abi/wasm_abi.h>
 
 /* Configuration and profile selection */
 #include <asx/asx_config.h>
@@ -115,6 +116,9 @@
 
 /* Dynamic task collection */
 #include <asx/core/join_set.h>
+
+/* Domain-specific configuration types */
+#include <asx/core/config_types.h>
 
 /* Obligation, session, record, and link public families */
 #include <asx/link/link.h>

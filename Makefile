@@ -131,7 +131,9 @@ CORE_SRC := \
 	src/core/abi.c \
 	src/core/epoch.c \
 	src/core/circuit_breaker.c \
-	src/core/join_set.c
+	src/core/join_set.c \
+	src/core/config_types.c \
+	src/core/epoch_combinators.c
 
 RUNTIME_SRC := \
 	src/runtime/hooks.c \
@@ -703,6 +705,13 @@ BROWSER_FOCUSED_TEST_BIN := \
 	$(TEST_DIR)/unit/raptorq/test_raptorq \
 	$(TEST_DIR)/unit/spork/test_spork \
 	$(TEST_DIR)/unit/tracing_compat/test_tracing_compat \
+	$(TEST_DIR)/unit/net/test_net \
+	$(TEST_DIR)/unit/net/test_http \
+	$(TEST_DIR)/unit/net/test_web \
+	$(TEST_DIR)/unit/net/test_websocket \
+	$(TEST_DIR)/unit/net/test_quic \
+	$(TEST_DIR)/unit/net/test_distributed \
+	$(TEST_DIR)/unit/net/test_pipe \
 	$(TEST_DIR)/unit/net/test_tls \
 	$(TEST_DIR)/unit/net/test_db \
 	$(TEST_DIR)/unit/service/test_service \

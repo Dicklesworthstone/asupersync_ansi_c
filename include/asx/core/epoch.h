@@ -17,6 +17,7 @@
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
+#include <asx/core/combinator.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -109,6 +110,42 @@ ASX_API uint32_t asx_epoch_arrival_count(asx_epoch_handle handle);
  * Returns ASX_E_RESOURCE_EXHAUSTED if observer slots full. */
 ASX_API ASX_MUST_USE asx_status asx_epoch_observe(asx_epoch_handle handle,
                                                    asx_epoch_observer_fn fn, void *user_data);
+
+/* -------------------------------------------------------------------
+ * API: Epoch-scoped combinators
+ *
+ * Execute combinator operations within an epoch phase. The operation
+ * runs and the epoch advances only after the combinator completes.
+ * ------------------------------------------------------------------- */
+
+/* Run a join within an epoch: poll all branches, advance epoch on completion. */
+ASX_API ASX_MUST_USE asx_status asx_epoch_join(asx_epoch_handle epoch,
+                                                 asx_combinator_poll_fn *poll_fns,
+                                                 void **user_datas, uint32_t count,
+                                                 asx_task_id self);
+
+/* Run a race within an epoch: first branch wins, losers drained, epoch advances. */
+ASX_API ASX_MUST_USE asx_status asx_epoch_race(asx_epoch_handle epoch,
+                                                 asx_combinator_poll_fn *poll_fns,
+                                                 void **user_datas, uint32_t count,
+                                                 asx_task_id self, int32_t *winner);
+
+/* Run a select within an epoch: round-robin fairness race, epoch advances. */
+ASX_API ASX_MUST_USE asx_status asx_epoch_select(asx_epoch_handle epoch,
+                                                   asx_combinator_poll_fn *poll_fns,
+                                                   void **user_datas, uint32_t count,
+                                                   asx_task_id self, int32_t *winner);
+
+/* Call a service function through a bulkhead within an epoch. */
+ASX_API ASX_MUST_USE asx_status asx_bulkhead_call_in_epoch(asx_epoch_handle epoch,
+                                                             asx_combinator_poll_fn poll_fn,
+                                                             void *user_data, asx_task_id self);
+
+/* Call a service function through a circuit breaker within an epoch. */
+ASX_API ASX_MUST_USE asx_status asx_circuit_breaker_call_in_epoch(asx_epoch_handle epoch,
+                                                                    asx_combinator_poll_fn poll_fn,
+                                                                    void *user_data,
+                                                                    asx_task_id self);
 
 /* -------------------------------------------------------------------
  * API: Reset (test support)
