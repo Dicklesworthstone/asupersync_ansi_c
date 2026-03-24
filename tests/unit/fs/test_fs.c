@@ -6,7 +6,10 @@
 
 #include "../../test_harness.h"
 #include <asx/fs/fs.h>
+#include <asx/runtime/browser_boundary.h>
 #include <string.h>
+
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 
 TEST(path_from_cstr_roundtrip) {
     asx_fs_path path;
@@ -173,7 +176,18 @@ TEST(file_trunc_requires_write_access) {
     ASSERT_EQ(asx_fs_file_close(file), ASX_OK);
 }
 
+#else
+
+TEST(fs_surface_compile_time_hidden_in_browser) {
+    ASSERT_EQ(ASX_HAS_NATIVE_RUNTIME_SURFACES, 0);
+    ASSERT_FALSE(asx_surface_available_active(ASX_SURFACE_FILESYSTEM));
+    ASSERT_EQ(asx_surface_gate(ASX_SURFACE_FILESYSTEM), ASX_E_PERMISSION_DENIED);
+}
+
+#endif
+
 int main(void) {
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
     RUN_TEST(path_from_cstr_roundtrip);
     RUN_TEST(path_eq_rejects_mismatch);
     RUN_TEST(dir_create_and_metadata_query);
@@ -184,6 +198,9 @@ int main(void) {
     RUN_TEST(fs_reset_invalidates_handles);
     RUN_TEST(fs_reset_reuse_bumps_generation);
     RUN_TEST(file_trunc_requires_write_access);
+#else
+    RUN_TEST(fs_surface_compile_time_hidden_in_browser);
+#endif
     TEST_REPORT();
     return test_failures;
 }

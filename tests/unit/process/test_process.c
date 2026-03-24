@@ -6,6 +6,9 @@
 
 #include "../../test_harness.h"
 #include <asx/process/process.h>
+#include <asx/runtime/browser_boundary.h>
+
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 
 TEST(spawn_and_query_program) {
     asx_process_handle process;
@@ -129,7 +132,18 @@ TEST(process_reset_reuse_bumps_generation) {
     ASSERT_STR_EQ(program, "second");
 }
 
+#else
+
+TEST(process_surface_compile_time_hidden_in_browser) {
+    ASSERT_EQ(ASX_HAS_NATIVE_RUNTIME_SURFACES, 0);
+    ASSERT_FALSE(asx_surface_available_active(ASX_SURFACE_PROCESS));
+    ASSERT_EQ(asx_surface_gate(ASX_SURFACE_PROCESS), ASX_E_PERMISSION_DENIED);
+}
+
+#endif
+
 int main(void) {
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
     RUN_TEST(spawn_and_query_program);
     RUN_TEST(poll_wait_counts_down_then_exits);
     RUN_TEST(request_shutdown_forces_clean_exit);
@@ -137,6 +151,9 @@ int main(void) {
     RUN_TEST(process_capacity_is_enforced);
     RUN_TEST(process_reset_invalidates_handles);
     RUN_TEST(process_reset_reuse_bumps_generation);
+#else
+    RUN_TEST(process_surface_compile_time_hidden_in_browser);
+#endif
     TEST_REPORT();
     return test_failures;
 }

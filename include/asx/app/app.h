@@ -13,6 +13,7 @@
 #ifndef ASX_APP_APP_H
 #define ASX_APP_APP_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/core/budget.h>
@@ -28,6 +29,7 @@
 extern "C" {
 #endif
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 /* -------------------------------------------------------------------
  * Exit codes
  * ------------------------------------------------------------------- */
@@ -164,6 +166,7 @@ ASX_API asx_exit_code asx_app_run_server_with_cx(asx_app *app,
                                                  void *user_data,
                                                  asx_app_server_report *out_report,
                                                  asx_report_buf *out_summary);
+#endif
 
 #ifdef __cplusplus
 }

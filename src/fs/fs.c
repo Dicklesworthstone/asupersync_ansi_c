@@ -7,6 +7,8 @@
 #include <asx/fs/fs.h>
 #include <string.h>
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+
 typedef struct {
     asx_fs_path path;
     asx_fs_entry_kind kind;
@@ -279,3 +281,5 @@ void asx_fs_reset(void) {
         g_open_files[i].alive = 0;
     }
 }
+
+#endif /* ASX_HAS_NATIVE_RUNTIME_SURFACES */

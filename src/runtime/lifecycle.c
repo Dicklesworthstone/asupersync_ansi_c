@@ -130,9 +130,11 @@ void asx_runtime_reset(void) {
     asx_actor_reset();
     asx_supervisor_reset();
     asx_net_reset();
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
     asx_fs_reset();
     asx_process_reset();
     asx_signal_reset();
+#endif
     asx_diagnostic_reset();
 }
 

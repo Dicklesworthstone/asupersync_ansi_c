@@ -7,6 +7,7 @@
 #ifndef ASX_PROCESS_PROCESS_H
 #define ASX_PROCESS_PROCESS_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <stdint.h>
@@ -14,6 +15,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 
 #ifndef ASX_MAX_PROCESSES
 #define ASX_MAX_PROCESSES 8u
@@ -165,6 +168,8 @@ ASX_API uint32_t asx_process_id(asx_process_handle process);
 ASX_API int asx_process_exited_successfully(asx_process_handle process);
 
 ASX_API void asx_process_reset(void);
+
+#endif /* ASX_HAS_NATIVE_RUNTIME_SURFACES */
 
 #ifdef __cplusplus
 }

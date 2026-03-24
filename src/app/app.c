@@ -8,6 +8,7 @@
 #include <asx/app/doctor.h>
 #include <string.h>
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 static void asx_app_server_report_reset(asx_app_server_report *report) {
     if (report == NULL) return;
     memset(report, 0, sizeof(*report));
@@ -402,3 +403,4 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app,
 
     return report->exit_code;
 }
+#endif

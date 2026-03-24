@@ -11,6 +11,7 @@
 #ifndef ASX_FS_FS_H
 #define ASX_FS_FS_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
@@ -19,6 +20,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 
 #ifndef ASX_FS_PATH_MAX
 #define ASX_FS_PATH_MAX 192u
@@ -81,6 +84,8 @@ ASX_API ASX_MUST_USE asx_status asx_fs_file_path(asx_file_handle file, asx_fs_pa
 ASX_API int asx_fs_file_is_alive(asx_file_handle file);
 
 ASX_API void asx_fs_reset(void);
+
+#endif /* ASX_HAS_NATIVE_RUNTIME_SURFACES */
 
 #ifdef __cplusplus
 }

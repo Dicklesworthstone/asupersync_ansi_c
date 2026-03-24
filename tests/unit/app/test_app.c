@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 /* ------------------------------------------------------------------ */
 /* Test harness                                                        */
 /* ------------------------------------------------------------------ */
@@ -1177,6 +1178,29 @@ static void test_doctor_check_fields(void) {
 
     asx_runtime_shutdown(&rt);
 }
+#else
+static int g_pass, g_fail;
+
+#define ASSERT(cond, msg)                                                                          \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("  FAIL: %s (line %d)\n", msg, __LINE__);                                       \
+            g_fail++;                                                                              \
+            return;                                                                                \
+        }                                                                                          \
+    } while (0)
+
+#define RUN(fn)                                                                                    \
+    do {                                                                                           \
+        printf("  " #fn "...\n");                                                                  \
+        fn();                                                                                      \
+        g_pass++;                                                                                  \
+    } while (0)
+
+static void test_app_surface_compile_time_hidden_in_browser(void) {
+    ASSERT(ASX_HAS_NATIVE_RUNTIME_SURFACES == 0, "native runtime surfaces hidden");
+}
+#endif
 
 /* ================================================================== */
 /* Main                                                               */
@@ -1185,6 +1209,7 @@ static void test_doctor_check_fields(void) {
 int main(void) {
     printf("test_app:\n");
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
     /* Net: socket address */
     RUN(test_socket_addr_ipv4);
     RUN(test_socket_addr_loopback);
@@ -1263,6 +1288,9 @@ int main(void) {
     RUN(test_doctor_uninitialized_runtime);
     RUN(test_doctor_null_args);
     RUN(test_doctor_check_fields);
+#else
+    RUN(test_app_surface_compile_time_hidden_in_browser);
+#endif
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

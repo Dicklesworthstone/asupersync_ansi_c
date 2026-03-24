@@ -7,6 +7,8 @@
 #include <asx/process/process.h>
 #include <string.h>
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+
 typedef struct {
     char program[ASX_PROCESS_PROGRAM_MAX];
     uint32_t generation;
@@ -276,3 +278,5 @@ void asx_process_reset(void) {
         g_processes[i].generation = generation;
     }
 }
+
+#endif /* ASX_HAS_NATIVE_RUNTIME_SURFACES */
