@@ -19,6 +19,7 @@
 extern "C" {
 #endif
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 /* -------------------------------------------------------------------
  * Output format
  * ------------------------------------------------------------------- */
@@ -114,6 +115,7 @@ ASX_API int asx_cli_should_force_quit(void);
 
 /* Reset signal state (for testing). */
 ASX_API void asx_cli_reset_signal_state(void);
+#endif
 
 #ifdef __cplusplus
 }

@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 /* ------------------------------------------------------------------ */
 /* Output format                                                       */
 /* ------------------------------------------------------------------ */
@@ -162,3 +163,4 @@ int asx_cli_is_cancelled(void) { return g_signal_count > 0u; }
 int asx_cli_should_force_quit(void) { return g_signal_count >= 2u; }
 
 void asx_cli_reset_signal_state(void) { g_signal_count = 0u; }
+#endif
