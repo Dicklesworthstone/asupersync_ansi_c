@@ -7,6 +7,8 @@
 #include <asx/encoding/encoding.h>
 #include <string.h>
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
+
 /* ------------------------------------------------------------------ */
 /* Error kind strings                                                  */
 /* ------------------------------------------------------------------ */
@@ -212,3 +214,5 @@ void asx_encoding_pipeline_reset(asx_encoding_pipeline *p) {
     p->last_error = ASX_ENCODING_ERR_NONE;
     p->cancelled = 0;
 }
+
+#endif /* !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO */

@@ -7,6 +7,8 @@
 #include <asx/decoding/decoding.h>
 #include <string.h>
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
+
 /* ------------------------------------------------------------------ */
 /* Error kind strings                                                  */
 /* ------------------------------------------------------------------ */
@@ -208,3 +210,5 @@ void asx_decoding_pipeline_reset(asx_decoding_pipeline *p) {
     p->last_error = ASX_DECODING_ERR_NONE;
     p->cancelled = 0;
 }
+
+#endif /* !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO */

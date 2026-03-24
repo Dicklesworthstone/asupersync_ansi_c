@@ -5,10 +5,13 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/asx_config.h>
 #include <asx/encoding/encoding.h>
 #include <asx/bytes/codec.h>
 #include <asx/bytes/io_adapter.h>
 #include <string.h>
+
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
 
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
@@ -381,6 +384,15 @@ TEST(encoding_null_queries) {
     asx_encoding_pipeline_reset(NULL);
 }
 
+#else
+
+TEST(encoding_surface_compile_time_hidden_in_minimal_browser) {
+    ASSERT_EQ(ASX_HAS_BROWSER_IO, 0);
+    ASSERT_EQ(ASX_HAS_BROWSER_IO_SUBPROFILE_SPLIT, 1);
+}
+
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -388,6 +400,7 @@ TEST(encoding_null_queries) {
 int main(void) {
     fprintf(stderr, "=== test_encoding ===\n");
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
     RUN_TEST(encoding_error_kind_str);
     RUN_TEST(encoding_config_defaults);
     RUN_TEST(encoding_config_null_safe);
@@ -405,6 +418,9 @@ int main(void) {
     RUN_TEST(encoding_flush_null);
     RUN_TEST(encoding_lines_codec);
     RUN_TEST(encoding_null_queries);
+#else
+    RUN_TEST(encoding_surface_compile_time_hidden_in_minimal_browser);
+#endif
 
     TEST_REPORT();
     return test_failures;

@@ -12,6 +12,7 @@
 #define ASX_BYTES_IO_ADAPTER_H
 
 #include <asx/asx_export.h>
+#include <asx/asx_config.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
 #include <asx/runtime/waker.h>
@@ -19,6 +20,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
 
 /* -------------------------------------------------------------------
  * Async read result
@@ -167,7 +170,58 @@ ASX_API ASX_MUST_USE asx_status asx_io_copy(asx_read_adapter *src, asx_write_ada
 /* Copy at most max_bytes from src to dst.
  * Returns actual bytes copied in *bytes_copied. */
 ASX_API ASX_MUST_USE asx_status asx_io_copy_n(asx_read_adapter *src, asx_write_adapter *dst,
-                                                uint64_t max_bytes, uint64_t *bytes_copied);
+                                              uint64_t max_bytes, uint64_t *bytes_copied);
+
+/* -------------------------------------------------------------------
+ * Read extensions — convenience wrappers
+ * ------------------------------------------------------------------- */
+
+/* Read exactly n bytes into dst. Returns ASX_OK or error.
+ * Partial reads are retried until exactly n bytes are read or EOF/error. */
+ASX_API ASX_MUST_USE asx_status asx_io_read_exact(asx_read_adapter *src, asx_buf_mut *dst,
+                                                    size_t n, size_t *bytes_read);
+
+/* Read all remaining data into dst until EOF.
+ * Returns total bytes read in *bytes_read. */
+ASX_API ASX_MUST_USE asx_status asx_io_read_to_end(asx_read_adapter *src, asx_buf_mut *dst,
+                                                     size_t *bytes_read);
+
+/* -------------------------------------------------------------------
+ * Write extensions — convenience wrappers
+ * ------------------------------------------------------------------- */
+
+/* Write all bytes from src to dst. Retries partial writes.
+ * Returns ASX_OK when all bytes are written. */
+ASX_API ASX_MUST_USE asx_status asx_io_write_all(asx_write_adapter *dst, const asx_buf *src);
+
+/* -------------------------------------------------------------------
+ * Chain reader — concatenate two readers
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    asx_read_adapter first;
+    asx_read_adapter second;
+    int first_done;
+} asx_chain_reader_state;
+
+ASX_API void asx_chain_reader_init(asx_chain_reader_state *state, asx_read_adapter first,
+                                    asx_read_adapter second);
+ASX_API asx_read_adapter asx_chain_reader_adapter(asx_chain_reader_state *state);
+
+/* -------------------------------------------------------------------
+ * Take reader — limit bytes from underlying reader
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    asx_read_adapter inner;
+    size_t remaining;
+} asx_take_reader_state;
+
+ASX_API void asx_take_reader_init(asx_take_reader_state *state, asx_read_adapter inner,
+                                   size_t limit);
+ASX_API asx_read_adapter asx_take_reader_adapter(asx_take_reader_state *state);
+
+#endif /* !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO */
 
 #ifdef __cplusplus
 }

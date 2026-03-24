@@ -66,7 +66,9 @@
 /* Byte buffer and I/O adapters */
 #include <asx/bytes/buf.h>
 #include <asx/bytes/codec.h>
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
 #include <asx/bytes/io_adapter.h>
+#endif
 
 /* Channel families (MPSC, oneshot, broadcast, watch, session) */
 #include <asx/core/oneshot.h>
@@ -149,8 +151,10 @@
 #include <asx/observability/observability.h>
 
 /* Encoding and decoding pipeline families */
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
 #include <asx/encoding/encoding.h>
 #include <asx/decoding/decoding.h>
+#endif
 
 /* RaptorQ erasure coding and migration/compatibility */
 #include <asx/raptorq/raptorq.h>

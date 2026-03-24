@@ -20,6 +20,7 @@
 #define ASX_ENCODING_H
 
 #include <asx/asx_export.h>
+#include <asx/asx_config.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
 #include <asx/bytes/codec.h>
@@ -28,6 +29,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
 
 /* -------------------------------------------------------------------
  * Encoding error classification
@@ -135,6 +138,8 @@ asx_encoding_pipeline_last_error(const asx_encoding_pipeline *p);
 /* Reset pipeline state for reuse (clears stats, staging, error, cancel).
  * Codec and writer are preserved. */
 ASX_API void asx_encoding_pipeline_reset(asx_encoding_pipeline *p);
+
+#endif /* !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO */
 
 #ifdef __cplusplus
 }

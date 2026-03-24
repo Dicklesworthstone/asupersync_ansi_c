@@ -93,6 +93,29 @@
 #define ASX_HAS_DATABASE_SURFACE 1
 #endif
 
+/* Browser I/O adapters/pipelines are only present in the extended browser
+ * subprofile. Minimal browser builds omit the public adapter-based IO,
+ * encoding, and decoding families from the umbrella surface. */
+#if defined(ASX_PROFILE_BROWSER) && defined(ASX_BROWSER_PROFILE_MINIMAL)
+#define ASX_HAS_BROWSER_IO 0
+#else
+#define ASX_HAS_BROWSER_IO 1
+#endif
+#define ASX_HAS_BROWSER_IO_SUBPROFILE_SPLIT 1
+
+/* Backend-/variant-specific network subfeatures are not implemented yet.
+ * Keep these explicit so the public build contract can represent the current
+ * state without leaving feature absence implicit in docs alone. */
+#define ASX_HAS_TLS_NATIVE_ROOTS 0
+#define ASX_HAS_TLS_WEBPKI_ROOTS 0
+#define ASX_HAS_TLS_ROOT_VARIANTS 0
+#define ASX_HAS_DB_SQLITE_BACKEND 0
+#define ASX_HAS_DB_POSTGRES_BACKEND 0
+#define ASX_HAS_DB_MYSQL_BACKEND 0
+#define ASX_HAS_DB_BACKEND_VARIANTS 0
+#define ASX_HAS_MESSAGING_KAFKA_BACKEND 0
+#define ASX_HAS_MESSAGING_BACKEND_VARIANTS 0
+
 /* Browser trace is only present in the extended browser subprofile.
  * Minimal browser builds omit the public trace/lab/replay family from
  * the umbrella surface while preserving the existing default browser lane. */

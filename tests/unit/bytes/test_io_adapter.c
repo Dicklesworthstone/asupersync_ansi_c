@@ -5,7 +5,10 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/asx_config.h>
 #include <asx/bytes/io_adapter.h>
+
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
 
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
@@ -217,6 +220,15 @@ TEST(roundtrip_read_write) {
     ASSERT_TRUE(asx_buf_eq(asx_buf_mut_freeze(&sink), asx_buf_from_cstr("roundtrip")));
 }
 
+#else
+
+TEST(io_adapter_surface_compile_time_hidden_in_minimal_browser) {
+    ASSERT_EQ(ASX_HAS_BROWSER_IO, 0);
+    ASSERT_EQ(ASX_HAS_BROWSER_IO_SUBPROFILE_SPLIT, 1);
+}
+
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -224,6 +236,7 @@ TEST(roundtrip_read_write) {
 int main(void) {
     fprintf(stderr, "=== test_io_adapter ===\n");
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
     RUN_TEST(mem_read_basic);
     RUN_TEST(mem_read_eof_when_empty);
     RUN_TEST(mem_read_partial);
@@ -235,6 +248,9 @@ int main(void) {
     RUN_TEST(mem_write_partial);
 
     RUN_TEST(roundtrip_read_write);
+#else
+    RUN_TEST(io_adapter_surface_compile_time_hidden_in_minimal_browser);
+#endif
 
     TEST_REPORT();
     return test_failures;

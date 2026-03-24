@@ -5,10 +5,13 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/asx_config.h>
 #include <asx/decoding/decoding.h>
 #include <asx/bytes/codec.h>
 #include <asx/bytes/io_adapter.h>
 #include <string.h>
+
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
 
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
@@ -416,6 +419,15 @@ TEST(decoding_null_queries) {
     asx_decoding_pipeline_reset(NULL);
 }
 
+#else
+
+TEST(decoding_surface_compile_time_hidden_in_minimal_browser) {
+    ASSERT_EQ(ASX_HAS_BROWSER_IO, 0);
+    ASSERT_EQ(ASX_HAS_BROWSER_IO_SUBPROFILE_SPLIT, 1);
+}
+
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -423,6 +435,7 @@ TEST(decoding_null_queries) {
 int main(void) {
     fprintf(stderr, "=== test_decoding ===\n");
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
     RUN_TEST(decoding_error_kind_str);
     RUN_TEST(decoding_config_defaults);
     RUN_TEST(decoding_config_null_safe);
@@ -439,6 +452,9 @@ int main(void) {
     RUN_TEST(decoding_empty_source);
     RUN_TEST(decoding_null_args);
     RUN_TEST(decoding_null_queries);
+#else
+    RUN_TEST(decoding_surface_compile_time_hidden_in_minimal_browser);
+#endif
 
     TEST_REPORT();
     return test_failures;

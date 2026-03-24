@@ -7,6 +7,8 @@
 #include <asx/bytes/io_adapter.h>
 #include <string.h>
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
+
 /* ------------------------------------------------------------------ */
 /* Memory read adapter                                                 */
 /* ------------------------------------------------------------------ */
@@ -383,3 +385,5 @@ asx_status asx_io_copy_n(asx_read_adapter *src, asx_write_adapter *dst, uint64_t
     *bytes_copied = total;
     return ASX_OK;
 }
+
+#endif /* !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO */
