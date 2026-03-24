@@ -11,6 +11,7 @@
 #include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
+#if ASX_HAS_BLOCKING_SURFACE
 /* ------------------------------------------------------------------ */
 /* Internal slot                                                       */
 /* ------------------------------------------------------------------ */
@@ -176,3 +177,4 @@ asx_status asx_blocking_get_result(const asx_blocking_handle *handle, uint64_t *
 }
 
 uint32_t asx_blocking_active_count(void) { return g_active_count; }
+#endif

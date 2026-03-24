@@ -109,8 +109,12 @@ void asx_runtime_reset(void) {
     asx_session_reset();
     asx_timer_wheel_reset(asx_timer_wheel_global());
     asx_waker_reset();
+#if ASX_HAS_NATIVE_IO_DRIVER
     asx_io_driver_reset();
+#endif
+#if ASX_HAS_BLOCKING_SURFACE
     asx_blocking_pool_reset();
+#endif
     asx_trace_reset();
     asx_telemetry_reset();
     asx_hindsight_reset();

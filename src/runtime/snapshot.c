@@ -39,10 +39,20 @@ asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap) {
 
     asx_runtime_snapshot_init(snap);
 
+#if ASX_HAS_NATIVE_IO_DRIVER
     snap->io_driver_initialized = asx_io_driver_is_initialized();
     snap->io_registration_count = asx_io_active_count();
+#else
+    snap->io_driver_initialized = 0;
+    snap->io_registration_count = 0u;
+#endif
+#if ASX_HAS_BLOCKING_SURFACE
     snap->blocking_pool_initialized = asx_blocking_pool_is_initialized();
     snap->blocking_active_count = asx_blocking_active_count();
+#else
+    snap->blocking_pool_initialized = 0;
+    snap->blocking_active_count = 0u;
+#endif
 
     /* Capture live regions */
     for (i = 0; i < ASX_MAX_REGIONS && ri < ASX_SNAPSHOT_MAX_REGIONS; i++) {

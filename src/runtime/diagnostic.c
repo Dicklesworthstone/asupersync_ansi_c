@@ -109,11 +109,19 @@ asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
     out->obligations.peak_count = initialized ? g_obligation_count : 0u;
 
     out->io_driver.active_count = asx_runtime_io_registration_count(rt);
+#if ASX_HAS_NATIVE_IO_DRIVER
     out->io_driver.capacity = ASX_MAX_IO_TOKENS;
+#else
+    out->io_driver.capacity = 0u;
+#endif
     out->io_driver.peak_count = out->io_driver.active_count;
 
     out->blocking.active_count = asx_runtime_blocking_active_count(rt);
+#if ASX_HAS_BLOCKING_SURFACE
     out->blocking.capacity = ASX_MAX_BLOCKING_TASKS;
+#else
+    out->blocking.capacity = 0u;
+#endif
     out->blocking.peak_count = out->blocking.active_count;
 
     /* Trace */

@@ -15,6 +15,7 @@
 #ifndef ASX_RUNTIME_BLOCKING_H
 #define ASX_RUNTIME_BLOCKING_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -24,6 +25,7 @@
 extern "C" {
 #endif
 
+#if ASX_HAS_BLOCKING_SURFACE
 #define ASX_MAX_BLOCKING_TASKS 16u
 
 /* -------------------------------------------------------------------
@@ -109,6 +111,7 @@ ASX_API uint32_t asx_blocking_active_count(void);
  * ------------------------------------------------------------------- */
 
 ASX_API void asx_blocking_pool_reset(void);
+#endif
 
 #ifdef __cplusplus
 }

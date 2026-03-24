@@ -117,18 +117,22 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
     /* Step 4a: initialize shipped runtime subsystems.
      * Browser profile builds fail closed for native-only surfaces, which is
      * expected and should not prevent the runtime object itself from starting. */
+#if ASX_HAS_NATIVE_IO_DRIVER
     st = asx_io_driver_init();
     if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
         asx_runtime_reset();
         return st;
     }
+#endif
 
+#if ASX_HAS_BLOCKING_SURFACE
     st = asx_blocking_pool_init();
     if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
         asx_io_driver_shutdown();
         asx_runtime_reset();
         return st;
     }
+#endif
 
     /* Step 5: store config and mark initialized */
     memset(rt, 0, sizeof(*rt));
@@ -174,8 +178,12 @@ asx_status asx_runtime_init_from_env(asx_runtime *rt, const char *prefix) {
 void asx_runtime_shutdown(asx_runtime *rt) {
     if (rt == NULL) return;
     if (asx_runtime_is_initialized(rt)) {
+#if ASX_HAS_NATIVE_IO_DRIVER
         asx_io_driver_shutdown();
+#endif
+#if ASX_HAS_BLOCKING_SURFACE
         asx_blocking_pool_shutdown();
+#endif
         asx_runtime_reset();
         g_active_rt_generation = 0u;
     }
@@ -258,22 +266,38 @@ uint32_t asx_runtime_obligation_count(const asx_runtime *rt) {
 
 int asx_runtime_io_driver_initialized(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0;
+#if ASX_HAS_NATIVE_IO_DRIVER
     return asx_io_driver_is_initialized();
+#else
+    return 0;
+#endif
 }
 
 uint32_t asx_runtime_io_registration_count(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0u;
+#if ASX_HAS_NATIVE_IO_DRIVER
     return asx_io_active_count();
+#else
+    return 0u;
+#endif
 }
 
 int asx_runtime_blocking_pool_initialized(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0;
+#if ASX_HAS_BLOCKING_SURFACE
     return asx_blocking_pool_is_initialized();
+#else
+    return 0;
+#endif
 }
 
 uint32_t asx_runtime_blocking_active_count(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0u;
+#if ASX_HAS_BLOCKING_SURFACE
     return asx_blocking_active_count();
+#else
+    return 0u;
+#endif
 }
 
 uint32_t asx_runtime_region_capacity(void) { return ASX_MAX_REGIONS; }

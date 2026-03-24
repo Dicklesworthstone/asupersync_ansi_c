@@ -112,7 +112,11 @@ static void check_obligation_utilization(const asx_runtime *rt, asx_doctor_repor
 
 static void check_io_driver_state(const asx_runtime *rt, asx_doctor_report *r) {
     uint32_t count = asx_runtime_io_registration_count(rt);
+#if ASX_HAS_NATIVE_IO_DRIVER
     uint32_t cap = ASX_MAX_IO_TOKENS;
+#else
+    uint32_t cap = 0u;
+#endif
     asx_doctor_severity sev;
     const char *msg;
 
@@ -143,7 +147,11 @@ static void check_io_driver_state(const asx_runtime *rt, asx_doctor_report *r) {
 
 static void check_blocking_pool_state(const asx_runtime *rt, asx_doctor_report *r) {
     uint32_t count = asx_runtime_blocking_active_count(rt);
+#if ASX_HAS_BLOCKING_SURFACE
     uint32_t cap = ASX_MAX_BLOCKING_TASKS;
+#else
+    uint32_t cap = 0u;
+#endif
     asx_doctor_severity sev;
     const char *msg;
 

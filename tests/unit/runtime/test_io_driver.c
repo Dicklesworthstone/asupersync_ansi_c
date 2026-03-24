@@ -9,6 +9,7 @@
 #include <asx/runtime/browser_boundary.h>
 #include <asx/runtime/io_driver.h>
 
+#if ASX_HAS_NATIVE_IO_DRIVER
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
     do {                                                                                           \
@@ -435,10 +436,17 @@ TEST(init_denied_when_io_surface_unavailable) {
     }
     teardown();
 }
+#else
+TEST(io_driver_surface_compile_time_hidden_in_browser) {
+    ASSERT_EQ(ASX_HAS_NATIVE_IO_DRIVER, 0);
+    ASSERT_EQ(asx_surface_available_active(ASX_SURFACE_IO_DRIVER), 0);
+    ASSERT_EQ((int)asx_surface_gate(ASX_SURFACE_IO_DRIVER), (int)ASX_E_PERMISSION_DENIED);
+}
+#endif
 
 int main(void) {
     fprintf(stderr, "=== test_io_driver ===\n");
-
+#if ASX_HAS_NATIVE_IO_DRIVER
     RUN_TEST(register_null_token_fails);
     RUN_TEST(register_null_waker_fails);
     RUN_TEST(register_before_init_fails);
@@ -470,7 +478,9 @@ int main(void) {
     RUN_TEST(multiple_registrations);
     RUN_TEST(init_state_tracks_lifecycle);
     RUN_TEST(init_denied_when_io_surface_unavailable);
-
+#else
+    RUN_TEST(io_driver_surface_compile_time_hidden_in_browser);
+#endif
     TEST_REPORT();
     return test_failures;
 }

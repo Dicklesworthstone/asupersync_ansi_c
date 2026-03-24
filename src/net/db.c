@@ -8,6 +8,7 @@
 #include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
+#if ASX_HAS_DATABASE_SURFACE
 static size_t db_bounded_strlen(const char *str, size_t max) {
     size_t len;
     if (str == NULL) return 0u;
@@ -218,3 +219,4 @@ asx_db_value asx_db_value_float(double val) {
     v.float_val = val;
     return v;
 }
+#endif

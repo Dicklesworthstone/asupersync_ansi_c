@@ -12,6 +12,7 @@
 #ifndef ASX_NET_DB_H
 #define ASX_NET_DB_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <stdint.h>
@@ -20,6 +21,7 @@
 extern "C" {
 #endif
 
+#if ASX_HAS_DATABASE_SURFACE
 /* -------------------------------------------------------------------
  * Database configuration and types
  * ------------------------------------------------------------------- */
@@ -170,6 +172,7 @@ ASX_API asx_db_value asx_db_value_null(void);
 ASX_API asx_db_value asx_db_value_int(int64_t val);
 ASX_API asx_db_value asx_db_value_text(const char *text);
 ASX_API asx_db_value asx_db_value_float(double val);
+#endif
 
 #ifdef __cplusplus
 }

@@ -15,6 +15,7 @@
 #ifndef ASX_RUNTIME_IO_DRIVER_H
 #define ASX_RUNTIME_IO_DRIVER_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -24,6 +25,7 @@
 extern "C" {
 #endif
 
+#if ASX_HAS_NATIVE_IO_DRIVER
 #define ASX_MAX_IO_TOKENS 32u
 
 /* -------------------------------------------------------------------
@@ -121,6 +123,7 @@ ASX_API uint32_t asx_io_active_count(void);
  * ------------------------------------------------------------------- */
 
 ASX_API void asx_io_driver_reset(void);
+#endif
 
 #ifdef __cplusplus
 }

@@ -12,6 +12,7 @@
 #include <asx/runtime/io_driver.h>
 #include <string.h>
 
+#if ASX_HAS_NATIVE_IO_DRIVER
 /* ------------------------------------------------------------------ */
 /* Internal registration slot                                          */
 /* ------------------------------------------------------------------ */
@@ -214,3 +215,4 @@ uint32_t asx_io_driver_poll(asx_io_event *out_events, uint32_t max_events, uint3
 /* ------------------------------------------------------------------ */
 
 uint32_t asx_io_active_count(void) { return g_active_count; }
+#endif

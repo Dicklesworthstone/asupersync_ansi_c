@@ -9,6 +9,7 @@
 #include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
+#if ASX_HAS_BLOCKING_SURFACE
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
     do {                                                                                           \
@@ -293,10 +294,17 @@ TEST(init_denied_when_blocking_surface_unavailable) {
     }
     teardown();
 }
+#else
+TEST(blocking_surface_compile_time_hidden_in_browser) {
+    ASSERT_EQ(ASX_HAS_BLOCKING_SURFACE, 0);
+    ASSERT_EQ(asx_surface_available_active(ASX_SURFACE_BLOCKING), 0);
+    ASSERT_EQ((int)asx_surface_gate(ASX_SURFACE_BLOCKING), (int)ASX_E_PERMISSION_DENIED);
+}
+#endif
 
 int main(void) {
     fprintf(stderr, "=== test_blocking ===\n");
-
+#if ASX_HAS_BLOCKING_SURFACE
     RUN_TEST(spawn_null_fn_fails);
     RUN_TEST(spawn_null_handle_fails);
     RUN_TEST(spawn_before_init_fails);
@@ -322,7 +330,9 @@ int main(void) {
     RUN_TEST(arena_exhaustion);
     RUN_TEST(multiple_tasks_different_results);
     RUN_TEST(init_denied_when_blocking_surface_unavailable);
-
+#else
+    RUN_TEST(blocking_surface_compile_time_hidden_in_browser);
+#endif
     TEST_REPORT();
     return test_failures;
 }
