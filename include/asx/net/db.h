@@ -69,6 +69,13 @@ typedef enum {
     ASX_DB_CONN_CLOSED  = 3
 } asx_db_conn_state;
 
+typedef enum {
+    ASX_DB_BACKEND_MEMORY   = 0,
+    ASX_DB_BACKEND_SQLITE   = 1,
+    ASX_DB_BACKEND_POSTGRES = 2,
+    ASX_DB_BACKEND_MYSQL    = 3
+} asx_db_backend;
+
 /* -------------------------------------------------------------------
  * Database value (cell)
  * ------------------------------------------------------------------- */
@@ -113,6 +120,11 @@ typedef struct {
 } asx_db_conn;
 
 typedef struct {
+    asx_db_backend backend;
+} asx_db_config;
+
+typedef struct {
+    asx_db_config config;
     asx_db_conn connections[ASX_DB_MAX_CONNECTIONS];
     uint32_t next_id;
 } asx_db_pool;
@@ -123,6 +135,15 @@ typedef struct {
 
 /* Initialize database connection pool. */
 ASX_API void asx_db_pool_init(asx_db_pool *pool);
+
+/* Initialize database configuration to deterministic defaults. */
+ASX_API void asx_db_config_init(asx_db_config *cfg);
+
+/* Get a human-readable backend name. */
+ASX_API ASX_MUST_USE const char *asx_db_backend_str(asx_db_backend backend);
+
+/* Select the backend to use for new pool connections. */
+ASX_API asx_status asx_db_pool_set_backend(asx_db_pool *pool, asx_db_backend backend);
 
 /* Open a connection. */
 ASX_API asx_status asx_db_connect(asx_db_pool *pool, const char *dsn, asx_db_conn **out);

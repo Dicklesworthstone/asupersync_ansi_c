@@ -301,9 +301,16 @@ asx_status asx_web_session_create(asx_web_session_store *store, char *out_id,
     session_generate_id(s->id, sizeof(s->id), store->next_seq++);
 
     /* Collision detection: if an active session already has this ID,
-     * bump the sequence and regenerate to avoid duplicate IDs. */
-    if (asx_web_session_get(store, s->id) != NULL) {
-        session_generate_id(s->id, sizeof(s->id), store->next_seq++);
+     * bump the sequence and regenerate. Retry up to 3 times. */
+    {
+        uint32_t retries = 0u;
+        while (retries < 3u && asx_web_session_get(store, s->id) != NULL) {
+            session_generate_id(s->id, sizeof(s->id), store->next_seq++);
+            retries++;
+        }
+        if (retries >= 3u && asx_web_session_get(store, s->id) != NULL) {
+            return ASX_E_RESOURCE_EXHAUSTED;
+        }
     }
 
     s->active = 1u;

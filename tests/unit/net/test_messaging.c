@@ -23,6 +23,12 @@ TEST(message_set) {
     ASSERT_TRUE(memcmp(msg.payload, "hello", 5) == 0);
 }
 
+TEST(messaging_backend_strings) {
+    ASSERT_STR_EQ(asx_msg_backend_str(ASX_MSG_BACKEND_MEMORY), "memory");
+    ASSERT_STR_EQ(asx_msg_backend_str(ASX_MSG_BACKEND_KAFKA), "kafka");
+    ASSERT_STR_EQ(asx_msg_backend_str((asx_msg_backend)99), "unknown");
+}
+
 TEST(message_null_args) {
     asx_message msg;
     ASSERT_EQ(asx_message_set(NULL, "t", "d", 1), ASX_E_INVALID_ARGUMENT);
@@ -118,6 +124,7 @@ TEST(broker_create_topic) {
     asx_msg_topic *topic;
 
     asx_msg_broker_init(&broker);
+    ASSERT_EQ(broker.config.backend, ASX_MSG_BACKEND_MEMORY);
     if (!messaging_surface_available()) {
         ASSERT_EQ(asx_msg_broker_topic(&broker, "events", &topic), ASX_E_PERMISSION_DENIED);
         return;
@@ -133,6 +140,19 @@ TEST(broker_create_topic) {
         ASSERT_EQ(asx_msg_broker_topic(&broker, "events", &topic2), ASX_OK);
         ASSERT_TRUE(topic == topic2);
     }
+}
+
+TEST(broker_backend_variants) {
+    asx_msg_broker broker;
+
+    asx_msg_broker_init(&broker);
+    ASSERT_EQ(asx_msg_broker_set_backend(&broker, ASX_MSG_BACKEND_MEMORY), ASX_OK);
+    ASSERT_EQ(broker.config.backend, ASX_MSG_BACKEND_MEMORY);
+    ASSERT_EQ(asx_msg_broker_set_backend(&broker, ASX_MSG_BACKEND_KAFKA),
+              ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(broker.config.backend, ASX_MSG_BACKEND_MEMORY);
+    ASSERT_EQ(asx_msg_broker_set_backend(&broker, (asx_msg_backend)77),
+              ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(broker_pubsub) {
@@ -208,6 +228,7 @@ TEST(broker_topic_exhaustion) {
 
 TEST(broker_null_args) {
     asx_msg_topic *topic;
+    ASSERT_EQ(asx_msg_broker_set_backend(NULL, ASX_MSG_BACKEND_MEMORY), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_msg_broker_topic(NULL, "t", &topic), ASX_E_INVALID_ARGUMENT);
 }
 #else
@@ -222,6 +243,7 @@ int main(void) {
     fprintf(stderr, "=== messaging tests ===\n");
 #if ASX_HAS_MESSAGING_SURFACE
     RUN_TEST(message_set);
+    RUN_TEST(messaging_backend_strings);
     RUN_TEST(message_null_args);
     RUN_TEST(message_null_payload_with_len_fails);
     RUN_TEST(queue_push_poll);
@@ -229,6 +251,7 @@ int main(void) {
     RUN_TEST(queue_fifo_order);
     RUN_TEST(queue_full);
     RUN_TEST(broker_create_topic);
+    RUN_TEST(broker_backend_variants);
     RUN_TEST(broker_pubsub);
     RUN_TEST(broker_publish_rejects_topic_mismatch);
     RUN_TEST(broker_topic_exhaustion);

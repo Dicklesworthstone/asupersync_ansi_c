@@ -45,6 +45,11 @@ extern "C" {
 #define ASX_MSG_MAX_SUBSCRIBERS 8u
 #endif
 
+typedef enum {
+    ASX_MSG_BACKEND_MEMORY = 0,
+    ASX_MSG_BACKEND_KAFKA  = 1
+} asx_msg_backend;
+
 /* -------------------------------------------------------------------
  * Message type
  * ------------------------------------------------------------------- */
@@ -109,17 +114,31 @@ typedef struct {
     uint8_t active;
 } asx_msg_topic;
 
+typedef struct {
+    asx_msg_backend backend;
+} asx_msg_broker_config;
+
 /* -------------------------------------------------------------------
  * Broker
  * ------------------------------------------------------------------- */
 
 typedef struct {
+    asx_msg_broker_config config;
     asx_msg_topic topics[ASX_MSG_MAX_TOPICS];
     uint32_t topic_count;
 } asx_msg_broker;
 
 /* Initialize a broker. */
 ASX_API void asx_msg_broker_init(asx_msg_broker *broker);
+
+/* Initialize broker configuration to deterministic defaults. */
+ASX_API void asx_msg_broker_config_init(asx_msg_broker_config *cfg);
+
+/* Get a human-readable broker backend name. */
+ASX_API ASX_MUST_USE const char *asx_msg_backend_str(asx_msg_backend backend);
+
+/* Select the broker backend for future operations. */
+ASX_API asx_status asx_msg_broker_set_backend(asx_msg_broker *broker, asx_msg_backend backend);
 
 /* Create or get a topic by name. */
 ASX_API asx_status asx_msg_broker_topic(asx_msg_broker *broker, const char *name,

@@ -270,6 +270,10 @@ asx_status asx_tls_stream_shutdown(asx_tls_stream stream) {
     s = tls_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (s->state != ASX_TLS_STATE_READY) return ASX_E_INVALID_STATE;
+    if (!asx_tcp_stream_is_alive(s->tcp)) {
+        s->state = ASX_TLS_STATE_ERROR;
+        return ASX_E_DISCONNECTED;
+    }
     s->state = ASX_TLS_STATE_SHUTDOWN;
     return ASX_OK;
 }

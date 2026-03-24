@@ -22,6 +22,23 @@ static asx_status messaging_surface_gate(void) {
     return asx_surface_gate(ASX_SURFACE_MESSAGING);
 }
 
+void asx_msg_broker_config_init(asx_msg_broker_config *cfg) {
+    if (cfg == NULL) return;
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->backend = ASX_MSG_BACKEND_MEMORY;
+}
+
+const char *asx_msg_backend_str(asx_msg_backend backend) {
+    switch (backend) {
+        case ASX_MSG_BACKEND_MEMORY:
+            return "memory";
+        case ASX_MSG_BACKEND_KAFKA:
+            return "kafka";
+        default:
+            return "unknown";
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Message                                                             */
 /* ------------------------------------------------------------------ */
@@ -107,6 +124,26 @@ int asx_msg_queue_is_empty(const asx_msg_queue *q) {
 void asx_msg_broker_init(asx_msg_broker *broker) {
     if (broker == NULL) return;
     memset(broker, 0, sizeof(*broker));
+    asx_msg_broker_config_init(&broker->config);
+}
+
+asx_status asx_msg_broker_set_backend(asx_msg_broker *broker, asx_msg_backend backend) {
+    if (broker == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    switch (backend) {
+        case ASX_MSG_BACKEND_MEMORY:
+            broker->config.backend = backend;
+            return ASX_OK;
+        case ASX_MSG_BACKEND_KAFKA:
+#if ASX_HAS_MESSAGING_KAFKA_BACKEND
+            broker->config.backend = backend;
+            return ASX_OK;
+#else
+            return ASX_E_PERMISSION_DENIED;
+#endif
+        default:
+            return ASX_E_INVALID_ARGUMENT;
+    }
 }
 
 asx_status asx_msg_broker_topic(asx_msg_broker *broker, const char *name, asx_msg_topic **out) {

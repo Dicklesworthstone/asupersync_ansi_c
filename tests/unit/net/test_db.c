@@ -18,6 +18,30 @@ TEST(db_pool_init) {
     asx_db_pool pool;
     asx_db_pool_init(&pool);
     ASSERT_EQ(pool.next_id, 1u);
+    ASSERT_EQ(pool.config.backend, ASX_DB_BACKEND_MEMORY);
+}
+
+TEST(db_backend_strings) {
+    ASSERT_STR_EQ(asx_db_backend_str(ASX_DB_BACKEND_MEMORY), "memory");
+    ASSERT_STR_EQ(asx_db_backend_str(ASX_DB_BACKEND_SQLITE), "sqlite");
+    ASSERT_STR_EQ(asx_db_backend_str(ASX_DB_BACKEND_POSTGRES), "postgres");
+    ASSERT_STR_EQ(asx_db_backend_str(ASX_DB_BACKEND_MYSQL), "mysql");
+    ASSERT_STR_EQ(asx_db_backend_str((asx_db_backend)99), "unknown");
+}
+
+TEST(db_pool_backend_variants) {
+    asx_db_pool pool;
+
+    asx_db_pool_init(&pool);
+    ASSERT_EQ(asx_db_pool_set_backend(&pool, ASX_DB_BACKEND_MEMORY), ASX_OK);
+    ASSERT_EQ(pool.config.backend, ASX_DB_BACKEND_MEMORY);
+    ASSERT_EQ(asx_db_pool_set_backend(&pool, ASX_DB_BACKEND_SQLITE), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(pool.config.backend, ASX_DB_BACKEND_MEMORY);
+    ASSERT_EQ(asx_db_pool_set_backend(&pool, ASX_DB_BACKEND_POSTGRES), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(pool.config.backend, ASX_DB_BACKEND_MEMORY);
+    ASSERT_EQ(asx_db_pool_set_backend(&pool, ASX_DB_BACKEND_MYSQL), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(pool.config.backend, ASX_DB_BACKEND_MEMORY);
+    ASSERT_EQ(asx_db_pool_set_backend(&pool, (asx_db_backend)77), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(db_connect_and_close) {
@@ -247,6 +271,7 @@ TEST(db_null_args) {
     asx_db_result result;
 
     asx_db_pool_init(&pool);
+    ASSERT_EQ(asx_db_pool_set_backend(NULL, ASX_DB_BACKEND_MEMORY), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_db_connect(NULL, "dsn", &conn), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_db_connect(&pool, NULL, &conn), ASX_E_INVALID_ARGUMENT);
     if (!db_surface_available()) {
@@ -268,6 +293,8 @@ int main(void) {
     fprintf(stderr, "=== db tests ===\n");
 #if ASX_HAS_DATABASE_SURFACE
     RUN_TEST(db_pool_init);
+    RUN_TEST(db_backend_strings);
+    RUN_TEST(db_pool_backend_variants);
     RUN_TEST(db_connect_and_close);
     RUN_TEST(db_connect_rejects_oversized_dsn);
     RUN_TEST(db_connect_exhaustion);

@@ -25,6 +25,27 @@ static uint32_t db_next_gen(uint32_t g) {
 
 static asx_status db_surface_gate(void) { return asx_surface_gate(ASX_SURFACE_DATABASE); }
 
+void asx_db_config_init(asx_db_config *cfg) {
+    if (cfg == NULL) return;
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->backend = ASX_DB_BACKEND_MEMORY;
+}
+
+const char *asx_db_backend_str(asx_db_backend backend) {
+    switch (backend) {
+        case ASX_DB_BACKEND_MEMORY:
+            return "memory";
+        case ASX_DB_BACKEND_SQLITE:
+            return "sqlite";
+        case ASX_DB_BACKEND_POSTGRES:
+            return "postgres";
+        case ASX_DB_BACKEND_MYSQL:
+            return "mysql";
+        default:
+            return "unknown";
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Connection pool                                                     */
 /* ------------------------------------------------------------------ */
@@ -32,7 +53,41 @@ static asx_status db_surface_gate(void) { return asx_surface_gate(ASX_SURFACE_DA
 void asx_db_pool_init(asx_db_pool *pool) {
     if (pool == NULL) return;
     memset(pool, 0, sizeof(*pool));
+    asx_db_config_init(&pool->config);
     pool->next_id = 1u;
+}
+
+asx_status asx_db_pool_set_backend(asx_db_pool *pool, asx_db_backend backend) {
+    if (pool == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    switch (backend) {
+        case ASX_DB_BACKEND_MEMORY:
+            pool->config.backend = backend;
+            return ASX_OK;
+        case ASX_DB_BACKEND_SQLITE:
+#if ASX_HAS_DB_SQLITE_BACKEND
+            pool->config.backend = backend;
+            return ASX_OK;
+#else
+            return ASX_E_PERMISSION_DENIED;
+#endif
+        case ASX_DB_BACKEND_POSTGRES:
+#if ASX_HAS_DB_POSTGRES_BACKEND
+            pool->config.backend = backend;
+            return ASX_OK;
+#else
+            return ASX_E_PERMISSION_DENIED;
+#endif
+        case ASX_DB_BACKEND_MYSQL:
+#if ASX_HAS_DB_MYSQL_BACKEND
+            pool->config.backend = backend;
+            return ASX_OK;
+#else
+            return ASX_E_PERMISSION_DENIED;
+#endif
+        default:
+            return ASX_E_INVALID_ARGUMENT;
+    }
 }
 
 asx_status asx_db_connect(asx_db_pool *pool, const char *dsn, asx_db_conn **out) {
@@ -62,7 +117,6 @@ asx_status asx_db_connect(asx_db_pool *pool, const char *dsn, asx_db_conn **out)
     c->alive = 1u;
 
     memcpy(c->dsn, dsn, len + 1u);
-
     *out = c;
     return ASX_OK;
 }
