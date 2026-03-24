@@ -6,6 +6,9 @@
 
 #include "../../test_harness.h"
 #include <asx/signal/signal.h>
+#include <asx/runtime/browser_boundary.h>
+
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 
 TEST(subscribe_raise_poll) {
     asx_signal_subscription subscription;
@@ -71,13 +74,27 @@ TEST(reset_clears_pending_and_shutdown) {
     ASSERT_EQ(asx_signal_poll(subscription, &count), ASX_E_NOT_FOUND);
 }
 
+#else
+
+TEST(signal_surface_compile_time_hidden_in_browser) {
+    ASSERT_EQ(ASX_HAS_NATIVE_RUNTIME_SURFACES, 0);
+    ASSERT_FALSE(asx_surface_available_active(ASX_SURFACE_SIGNAL));
+    ASSERT_EQ(asx_surface_gate(ASX_SURFACE_SIGNAL), ASX_E_PERMISSION_DENIED);
+}
+
+#endif
+
 int main(void) {
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
     RUN_TEST(subscribe_raise_poll);
     RUN_TEST(poll_without_signal_is_pending);
     RUN_TEST(term_sets_shutdown_requested);
     RUN_TEST(unsubscribe_invalidates_handle);
     RUN_TEST(capacity_is_enforced);
     RUN_TEST(reset_clears_pending_and_shutdown);
+#else
+    RUN_TEST(signal_surface_compile_time_hidden_in_browser);
+#endif
     TEST_REPORT();
     return test_failures;
 }

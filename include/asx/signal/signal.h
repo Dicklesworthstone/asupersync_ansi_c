@@ -7,6 +7,7 @@
 #ifndef ASX_SIGNAL_SIGNAL_H
 #define ASX_SIGNAL_SIGNAL_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <stdint.h>
@@ -14,6 +15,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 
 #ifndef ASX_MAX_SIGNAL_SUBSCRIPTIONS
 #define ASX_MAX_SIGNAL_SUBSCRIPTIONS 16u
@@ -41,6 +44,8 @@ ASX_API int asx_signal_shutdown_requested(void);
 ASX_API void asx_signal_clear_shutdown(void);
 
 ASX_API void asx_signal_reset(void);
+
+#endif /* ASX_HAS_NATIVE_RUNTIME_SURFACES */
 
 #ifdef __cplusplus
 }

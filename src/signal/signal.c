@@ -7,6 +7,8 @@
 #include <asx/signal/signal.h>
 #include <string.h>
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+
 typedef struct {
     asx_signal_kind kind;
     uint32_t generation;
@@ -90,3 +92,5 @@ void asx_signal_reset(void) {
     memset(g_subscriptions, 0, sizeof(g_subscriptions));
     g_shutdown_requested = 0;
 }
+
+#endif /* ASX_HAS_NATIVE_RUNTIME_SURFACES */
