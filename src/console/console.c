@@ -103,7 +103,8 @@ static void emit_ansi_start(asx_report_buf *out, const asx_console_style *style)
     if (style->dim) asx_report_buf_append(out, "2;");
     if (style->italic) asx_report_buf_append(out, "3;");
     if (style->underline) asx_report_buf_append(out, "4;");
-    if (style->fg != ASX_COLOR_DEFAULT) {
+    /* Emit foreground color: 30-37 for named colors, 39 for default */
+    {
         char fg_code[4];
         fg_code[0] = '3';
         fg_code[1] = (char)('0' + (int)style->fg);

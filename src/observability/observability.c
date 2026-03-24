@@ -6,6 +6,7 @@
 
 #include <asx/observability/observability.h>
 #include <asx/runtime/runtime.h>
+#include <limits.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -107,7 +108,14 @@ asx_status asx_metrics_observe(asx_metrics *m, const char *name, int64_t value) 
     if (e == NULL) return ASX_E_NOT_FOUND;
     if (e->type != ASX_METRIC_HISTOGRAM) return ASX_E_INVALID_STATE;
     e->count++;
-    e->sum += value;
+    /* Overflow-safe sum: clamp at INT64_MAX/MIN instead of wrapping */
+    if (value > 0 && e->sum > INT64_MAX - value) {
+        e->sum = INT64_MAX;
+    } else if (value < 0 && e->sum < INT64_MIN - value) {
+        e->sum = INT64_MIN;
+    } else {
+        e->sum += value;
+    }
     if (value < e->min_val) e->min_val = value;
     if (value > e->max_val) e->max_val = value;
     return ASX_OK;
