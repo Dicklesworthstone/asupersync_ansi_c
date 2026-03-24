@@ -386,4 +386,168 @@ asx_status asx_io_copy_n(asx_read_adapter *src, asx_write_adapter *dst, uint64_t
     return ASX_OK;
 }
 
+/* ------------------------------------------------------------------ */
+/* Read extensions                                                     */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_io_read_exact(asx_read_adapter *src, asx_buf_mut *dst, size_t n,
+                              size_t *bytes_read) {
+    size_t total = 0;
+
+    if (src == NULL || dst == NULL || bytes_read == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    while (total < n) {
+        uint32_t chunk = 0;
+        asx_read_result rr = src->poll_read(src->state, dst, NULL, &chunk);
+        total += chunk;
+        if (rr == ASX_READ_EOF) {
+            *bytes_read = total;
+            return (total == n) ? ASX_OK : ASX_E_BUFFER_TOO_SMALL;
+        }
+        if (rr == ASX_READ_PENDING) {
+            *bytes_read = total;
+            return ASX_E_WOULD_BLOCK;
+        }
+        if (rr == ASX_READ_ERROR) {
+            *bytes_read = total;
+            return ASX_E_INVALID_STATE;
+        }
+    }
+
+    *bytes_read = total;
+    return ASX_OK;
+}
+
+asx_status asx_io_read_to_end(asx_read_adapter *src, asx_buf_mut *dst, size_t *bytes_read) {
+    size_t total = 0;
+
+    if (src == NULL || dst == NULL || bytes_read == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    for (;;) {
+        uint32_t chunk = 0;
+        asx_read_result rr = src->poll_read(src->state, dst, NULL, &chunk);
+        total += chunk;
+        if (rr == ASX_READ_EOF) break;
+        if (rr == ASX_READ_PENDING) {
+            *bytes_read = total;
+            return ASX_E_WOULD_BLOCK;
+        }
+        if (rr == ASX_READ_ERROR) {
+            *bytes_read = total;
+            return ASX_E_INVALID_STATE;
+        }
+    }
+
+    *bytes_read = total;
+    return ASX_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Write extensions                                                    */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_io_write_all(asx_write_adapter *dst, const asx_buf *src) {
+    asx_buf remaining;
+    if (dst == NULL || src == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    remaining = *src;
+
+    while (remaining.len > 0) {
+        uint32_t written = 0;
+        asx_write_result wr = dst->poll_write(dst->state, &remaining, NULL, &written);
+        if (wr == ASX_WRITE_CLOSED) return ASX_E_DISCONNECTED;
+        if (wr == ASX_WRITE_PENDING) return ASX_E_WOULD_BLOCK;
+        if (wr == ASX_WRITE_ERROR) return ASX_E_INVALID_STATE;
+        remaining.ptr = remaining.ptr + written;
+        remaining.len -= written;
+    }
+
+    return ASX_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Chain reader                                                        */
+/* ------------------------------------------------------------------ */
+
+static asx_read_result chain_poll_read(void *adapter_state, asx_buf_mut *dst,
+                                        const asx_waker *waker, uint32_t *out_bytes_read) {
+    asx_chain_reader_state *s = (asx_chain_reader_state *)adapter_state;
+
+    if (!s->first_done) {
+        asx_read_result rr = s->first.poll_read(s->first.state, dst, waker, out_bytes_read);
+        if (rr != ASX_READ_EOF) return rr;
+        s->first_done = 1;
+    }
+
+    return s->second.poll_read(s->second.state, dst, waker, out_bytes_read);
+}
+
+void asx_chain_reader_init(asx_chain_reader_state *state, asx_read_adapter first,
+                            asx_read_adapter second) {
+    state->first = first;
+    state->second = second;
+    state->first_done = 0;
+}
+
+asx_read_adapter asx_chain_reader_adapter(asx_chain_reader_state *state) {
+    asx_read_adapter a;
+    a.poll_read = chain_poll_read;
+    a.state = state;
+    return a;
+}
+
+/* ------------------------------------------------------------------ */
+/* Take reader                                                         */
+/* ------------------------------------------------------------------ */
+
+static asx_read_result take_poll_read(void *adapter_state, asx_buf_mut *dst,
+                                       const asx_waker *waker, uint32_t *out_bytes_read) {
+    asx_take_reader_state *s = (asx_take_reader_state *)adapter_state;
+    asx_read_result rr;
+    uint32_t read_count;
+
+    if (s->remaining == 0) {
+        *out_bytes_read = 0;
+        return ASX_READ_EOF;
+    }
+
+    /* Limit dst capacity to remaining bytes */
+    {
+        asx_buf_mut limited = *dst;
+        if (limited.len > s->remaining) limited.len = (uint32_t)s->remaining;
+
+        rr = s->inner.poll_read(s->inner.state, &limited, waker, &read_count);
+        *out_bytes_read = read_count;
+
+        if (rr == ASX_READ_READY || rr == ASX_READ_EOF) {
+            if (read_count <= s->remaining) {
+                s->remaining -= read_count;
+            } else {
+                s->remaining = 0;
+            }
+            /* Advance dst position to match limited */
+            dst->data = limited.data;
+            dst->len = limited.len;
+        }
+    }
+
+    if (s->remaining == 0 && rr == ASX_READ_READY) {
+        return ASX_READ_EOF; /* limit reached */
+    }
+
+    return rr;
+}
+
+void asx_take_reader_init(asx_take_reader_state *state, asx_read_adapter inner, size_t limit) {
+    state->inner = inner;
+    state->remaining = limit;
+}
+
+asx_read_adapter asx_take_reader_adapter(asx_take_reader_state *state) {
+    asx_read_adapter a;
+    a.poll_read = take_poll_read;
+    a.state = state;
+    return a;
+}
+
 #endif /* !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO */
