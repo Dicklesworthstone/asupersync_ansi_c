@@ -20,6 +20,8 @@
 #include <asx/runtime/trace.h>
 #include <string.h>
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE
+
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
@@ -524,3 +526,19 @@ int main(void) {
     TEST_REPORT();
     return test_failures;
 }
+
+#else
+
+TEST(regression_localize_compile_time_hidden_in_minimal_browser) {
+    ASSERT_EQ(ASX_HAS_BROWSER_TRACE, 0);
+    ASSERT_EQ(ASX_HAS_BROWSER_TRACE_SUBPROFILE_SPLIT, 1);
+}
+
+int main(void) {
+    fprintf(stderr, "=== regression localize hidden contract ===\n");
+    RUN_TEST(regression_localize_compile_time_hidden_in_minimal_browser);
+    TEST_REPORT();
+    return test_failures;
+}
+
+#endif

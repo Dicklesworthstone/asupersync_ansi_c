@@ -380,6 +380,122 @@ ASX_API ASX_MUST_USE asx_status asx_stream_all(asx_stream *s, asx_stream_filter_
 ASX_API ASX_MUST_USE asx_status asx_stream_collect(asx_stream *s, void **buf, size_t max_items,
                                                     size_t *out_count);
 
+/* ------------------------------------------------------------------ */
+/* Fuse combinator — once DONE, always DONE                           */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_stream inner;
+    int done;
+} asx_stream_fuse_state;
+
+ASX_API void asx_stream_fuse_init(asx_stream *s, asx_stream_fuse_state *state, asx_stream inner);
+
+/* ------------------------------------------------------------------ */
+/* Chunks combinator — batches items into fixed-size groups           */
+/* ------------------------------------------------------------------ */
+
+#ifndef ASX_STREAM_CHUNK_MAX
+#define ASX_STREAM_CHUNK_MAX 16u
+#endif
+
+typedef struct {
+    void *items[ASX_STREAM_CHUNK_MAX];
+    size_t count;
+} asx_stream_chunk;
+
+typedef struct {
+    asx_stream inner;
+    size_t chunk_size;
+    asx_stream_chunk current;
+    int inner_done;
+} asx_stream_chunks_state;
+
+/* Batch items into chunks of chunk_size. The last chunk may be smaller.
+ * Each poll_next yields a pointer to an asx_stream_chunk. */
+ASX_API void asx_stream_chunks_init(asx_stream *s, asx_stream_chunks_state *state,
+                                     asx_stream inner, size_t chunk_size);
+
+/* ------------------------------------------------------------------ */
+/* Throttle combinator — rate-limits items via token bucket           */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_stream inner;
+    uint64_t interval_ns;  /* minimum nanoseconds between items */
+    uint64_t last_yield;   /* timestamp of last yielded item */
+    int first;             /* 1 if no item has been yielded yet */
+} asx_stream_throttle_state;
+
+/* Rate-limit a stream to at most one item per interval_ns.
+ * Items arriving too soon return ASX_STREAM_PENDING.
+ * First item is always yielded immediately. */
+ASX_API void asx_stream_throttle_init(asx_stream *s, asx_stream_throttle_state *state,
+                                       asx_stream inner, uint64_t interval_ns);
+
+/* ------------------------------------------------------------------ */
+/* SkipWhile combinator — skips items while predicate holds           */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_stream inner;
+    asx_stream_filter_fn predicate;
+    void *user_data;
+    int skipping; /* 1 while still skipping */
+} asx_stream_skip_while_state;
+
+ASX_API void asx_stream_skip_while_init(asx_stream *s, asx_stream_skip_while_state *state,
+                                         asx_stream inner, asx_stream_filter_fn predicate,
+                                         void *user_data);
+
+/* ------------------------------------------------------------------ */
+/* Flatten combinator — flattens a stream of streams                  */
+/* ------------------------------------------------------------------ */
+
+/* Each item from the outer stream is itself an asx_stream*.
+ * Flatten yields all items from each inner stream in sequence. */
+typedef struct {
+    asx_stream outer;
+    asx_stream *current_inner; /* pointer to active inner stream, or NULL */
+    int outer_done;
+} asx_stream_flatten_state;
+
+ASX_API void asx_stream_flatten_init(asx_stream *s, asx_stream_flatten_state *state,
+                                      asx_stream outer);
+
+/* ------------------------------------------------------------------ */
+/* Dedup combinator — suppresses consecutive duplicate items          */
+/* ------------------------------------------------------------------ */
+
+typedef int (*asx_stream_eq_fn)(const void *a, const void *b, void *user_data);
+
+typedef struct {
+    asx_stream inner;
+    asx_stream_eq_fn eq_fn;
+    void *user_data;
+    void *last_item;  /* pointer to last yielded item */
+    int has_last;
+} asx_stream_dedup_state;
+
+/* Suppress consecutive items where eq_fn returns nonzero. */
+ASX_API void asx_stream_dedup_init(asx_stream *s, asx_stream_dedup_state *state,
+                                    asx_stream inner, asx_stream_eq_fn eq_fn, void *user_data);
+
+/* ------------------------------------------------------------------ */
+/* Nth terminal — get the nth item (0-indexed)                        */
+/* ------------------------------------------------------------------ */
+
+/* Skip n items and return the next one. Sets *out_item on success.
+ * Returns ASX_OK if found, ASX_E_NOT_FOUND if stream exhausted. */
+ASX_API ASX_MUST_USE asx_status asx_stream_nth(asx_stream *s, size_t n, void **out_item);
+
+/* ------------------------------------------------------------------ */
+/* Last terminal — consume stream and return last item                */
+/* ------------------------------------------------------------------ */
+
+/* Returns ASX_OK and sets *out_item to last item, or ASX_E_NOT_FOUND if empty. */
+ASX_API ASX_MUST_USE asx_status asx_stream_last(asx_stream *s, void **out_item);
+
 #ifdef __cplusplus
 }
 #endif

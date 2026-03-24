@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/tracing_compat/tracing_compat.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 
 asx_status asx_tracing_compat_format_event(const asx_trace_event *event, asx_report_buf *out) {
     if (event == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;

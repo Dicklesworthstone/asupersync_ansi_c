@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE
+
 static int g_pass, g_fail;
 static asx_status st_sink_;
 static int g_sink_count;
@@ -109,3 +111,17 @@ int main(void) {
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
 }
+
+#else
+
+int main(void) {
+    printf("test_tracing_compat (minimal browser hidden contract):\n");
+    if (ASX_HAS_BROWSER_TRACE != 0 || ASX_HAS_BROWSER_TRACE_SUBPROFILE_SPLIT != 1) {
+        printf("\n  0 passed, 1 failed\n");
+        return 1;
+    }
+    printf("\n  1 passed, 0 failed\n");
+    return 0;
+}
+
+#endif

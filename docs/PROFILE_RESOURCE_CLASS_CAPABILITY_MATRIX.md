@@ -267,10 +267,10 @@ The table below maps the crate-root feature/platform restrictions from
 
 | Upstream contract | Current ANSI C equivalent | State | Evidence / gap |
 |---|---|---|---|
-| `wasm32` must choose exactly one canonical browser profile | `ASX_PROFILE_BROWSER` exists in `include/asx/asx_config.h`, `src/runtime/profile_compat.c`, the explicit `build-browser` / `PROFILE=BROWSER` lane, and the focused `test-browser-focused` CI/test lane in `Makefile` | `partial` | The browser build/test surface is now explicit and CI-covered, and `include/asx/asx_config.h` now hard-fails multiple `ASX_PROFILE_*` selections while declaring `ASX_BROWSER_PROFILE_MODE_COUNT == 1`, but there is still no compile-time browser subprofile split because the C port only exposes one browser mode today |
+| `wasm32` must choose exactly one canonical browser profile | `ASX_PROFILE_BROWSER` exists in `include/asx/asx_config.h`, `src/runtime/profile_compat.c`, the explicit `build-browser` / `PROFILE=BROWSER` lane, and the focused `test-browser-focused` CI/test lane in `Makefile` | `partial` | The browser build/test surface is now explicit and CI-covered, `include/asx/asx_config.h` now hard-fails multiple `ASX_PROFILE_*` selections, and browser builds now expose two compile-time browser subprofiles via `ASX_BROWSER_PROFILE_MODE_COUNT == 2` with default-extended semantics; remaining debt is deeper upstream feature granularity beyond the new minimal/extended split |
 | `native-runtime` forbidden on browser builds | Browser boundary gates native surfaces, compile-time capability macros mark them unavailable, and the browser umbrella stops directly advertising native-only families | `partial` | `include/asx/runtime/browser_boundary.h` fail-closes filesystem/process/signal/io/blocking plus the shipped `server`/`grpc`/`messaging` families, `include/asx/asx_config.h` exposes `ASX_HAS_NATIVE_RUNTIME_SURFACES == 0` under browser builds, and `include/asx/asx.h` now omits direct inclusion of `fs`/`process`/`signal`, the native `app` bootstrap family, `server`, `grpc`, `messaging`, `tls`, `db`, `blocking`, and `io_driver` when `ASX_PROFILE_BROWSER` is active. `include/asx/net/http.h` no longer drags in `fs.h` transitively, browser builds now hide the filesystem-backed `asx_http_serve_static()` helper itself, and `include/asx/fs/fs.h`, `include/asx/process/process.h`, `include/asx/signal/signal.h`, `include/asx/app/app.h`, `include/asx/runtime/io_driver.h`, `include/asx/runtime/blocking.h`, `include/asx/net/server.h`, `include/asx/net/grpc.h`, `include/asx/net/messaging.h`, `include/asx/net/tls.h`, and `include/asx/net/db.h` now self-gate their native families directly; remaining debt is broader mixed-purpose API surfacing plus the lack of finer-grained subprofile removal |
 | `browser-io` forbidden with upstream minimal browser profile | Native I/O blocked under browser boundary and compile-time capability macros | `partial` | `ASX_SURFACE_IO_DRIVER` is denied in browser mode and `include/asx/asx_config.h` now exposes `ASX_HAS_NATIVE_IO_DRIVER == 0`, but there is still no separate browser-IO feature flag or profile-minimal compile check |
-| `browser-trace` forbidden with upstream minimal browser profile | No separate browser trace feature | `gap` | The C tree has browser diagnostics and trace support, but no compile-time browser trace subprofile split |
+| `browser-trace` forbidden with upstream minimal browser profile | Browser minimal-vs-extended subprofiles now gate the public trace family | `partial` | `include/asx/asx_config.h` now exposes `ASX_HAS_BROWSER_TRACE == 0` under `ASX_BROWSER_PROFILE_MINIMAL`, `include/asx/asx.h` omits `trace`/`telemetry`/`replay`/`lab`/`regression_localize`/`tracing_compat` from the umbrella in minimal browser builds, and the direct headers now self-gate those families unless internal implementation files opt in via `ASX_INTERNAL_TRACE_FAMILY_ACCESS`; remaining debt is broader upstream feature parity beyond this trace-family split |
 | `cli` unsupported on browser builds | No `cli` module in C | `gap` | The C port currently lacks a public CLI family entirely, so there is no feature-gated fail-closed browser rule to enforce |
 | `io-uring` unsupported on browser builds | No io_uring feature surface in C | `mapped-by-absence` | No equivalent feature exists yet; once native reactor features expand, browser incompatibility must become explicit |
 | `tls`, `tls-native-roots`, `tls-webpki-roots` unsupported on browser builds | Browser boundary denies the shipped TLS family in browser mode | `partial` | `ASX_SURFACE_TLS` is fail-closed at the boundary and in the status-returning TLS entry points, and `include/asx/asx_config.h` now exposes `ASX_HAS_TLS_SURFACE == 0` under browser builds, but there is still no sub-feature split for trust-root variants |
@@ -283,12 +283,10 @@ The table below maps the crate-root feature/platform restrictions from
 The current C tree still needs these explicit fail-closed controls before it
 can honestly claim equivalence with the upstream feature/platform matrix:
 
-1. Compile-time mutual exclusion for browser-specific subprofiles if the C port
-   adopts more than one browser mode.
-2. Explicit compile-time removal of browser-incompatible APIs from the public
+1. Explicit compile-time removal of browser-incompatible APIs from the public
    browser umbrella/header surface rather than relying on capability macros plus
    runtime fail-closed boundary and browser-focused test lanes.
-3. A single compatibility matrix that states which combinations are supported,
+2. A single compatibility matrix that states which combinations are supported,
    denied, or currently unimplemented rather than leaving absence implicit.
 
 ---
@@ -330,7 +328,7 @@ can honestly claim equivalence with the upstream feature/platform matrix:
 | bd-1eqo.5 (time/cancel) | Cancel protocol is semantic (rule 1); timer limits are operational (resource class) |
 | bd-1eqo.9 (bytes/codec/IO) | Codec is orthogonal; IO hooks are platform-specific but semantic contract is not |
 | bd-1eqo.14 (native host) | Platform hooks vary; shutdown/bootstrap must follow lifecycle transitions (rule 0) |
-| bd-1eqo.16 (browser/wasm) | Browser profile NOT yet defined; when added, must satisfy all 8 semantic rules |
+| bd-1eqo.16 (browser/wasm) | Browser profile is now explicit; deeper browser subprofile and feature-split parity still must satisfy all 8 semantic rules |
 | bd-reg6.1 (Rust baseline) | Rust fixture capture must record profile ID and resource class in metadata |
 | bd-rkql (fuzz gate) | Fuzz harness already uses CORE/R2/DEBUG; parity gate should cross-check at least one other profile |
 
@@ -350,11 +348,11 @@ can honestly claim equivalence with the upstream feature/platform matrix:
 
 ## 12. Open Questions
 
-1. **Browser profile lane:** The runtime, diagnostics, build surface, and CI
-   check lane now exercise `ASX_PROFILE_BROWSER`, but the C port still has only
-   one browser mode. We need an explicit decision on whether to formalize
-   multiple browser subprofiles or keep a single browser boundary scaffold
-   until the broader `web`/WASM surface is unblocked.
+1. **Browser feature granularity:** The runtime, diagnostics, build surface,
+   and CI check lane now exercise `ASX_PROFILE_BROWSER`, and the C port now has
+   explicit minimal/extended browser subprofiles. The remaining question is how
+   far to mirror upstream feature granularity beyond the current trace-family
+   split as the broader `web`/WASM surface expands.
 
 2. **Resource class R0 (micro):** Some IoT targets may need even tighter limits
    than R1 (e.g., 2 regions, 8 tasks). Not currently planned — evaluate when

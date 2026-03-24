@@ -10,9 +10,13 @@
 #ifndef ASX_TRACING_COMPAT_TRACING_COMPAT_H
 #define ASX_TRACING_COMPAT_TRACING_COMPAT_H
 
+#include <asx/asx_config.h>
 #include <asx/app/report.h>
 #include <asx/asx_export.h>
 #include <asx/runtime/trace.h>
+
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE || \
+    defined(ASX_INTERNAL_TRACE_FAMILY_ACCESS)
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,5 +37,7 @@ ASX_API ASX_MUST_USE asx_status asx_tracing_compat_export_current(
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* trace family public contract */
 
 #endif /* ASX_TRACING_COMPAT_TRACING_COMPAT_H */

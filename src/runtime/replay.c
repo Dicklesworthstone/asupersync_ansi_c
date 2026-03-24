@@ -5,7 +5,9 @@
  */
 
 #include "runtime_internal.h"
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/replay.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <asx/runtime/runtime.h>
 #include <string.h>
 

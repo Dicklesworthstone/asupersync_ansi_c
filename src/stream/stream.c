@@ -8,6 +8,7 @@
  */
 
 #include <asx/stream/stream.h>
+#include <asx/asx_config.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -597,5 +598,253 @@ asx_status asx_stream_collect(asx_stream *s, void **buf, size_t max_items, size_
         if (count >= max_items) { *out_count = count; return ASX_E_RESOURCE_EXHAUSTED; }
         buf[count] = item;
         count++;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Fuse combinator                                                     */
+/* ------------------------------------------------------------------ */
+
+static asx_stream_result fuse_poll(void *state, const asx_waker *waker, void **out_item) {
+    asx_stream_fuse_state *fs = (asx_stream_fuse_state *)state;
+    asx_stream_result r;
+    if (fs->done) return ASX_STREAM_DONE;
+    r = asx_stream_poll_next(&fs->inner, waker, out_item);
+    if (r == ASX_STREAM_DONE) fs->done = 1;
+    return r;
+}
+
+void asx_stream_fuse_init(asx_stream *s, asx_stream_fuse_state *state, asx_stream inner) {
+    state->inner = inner;
+    state->done = 0;
+    s->poll_next = fuse_poll;
+    s->state = state;
+}
+
+/* ------------------------------------------------------------------ */
+/* Chunks combinator                                                   */
+/* ------------------------------------------------------------------ */
+
+static asx_stream_result chunks_poll(void *state, const asx_waker *waker, void **out_item) {
+    asx_stream_chunks_state *cs = (asx_stream_chunks_state *)state;
+    cs->current.count = 0;
+
+    if (cs->inner_done) return ASX_STREAM_DONE;
+
+    while (cs->current.count < cs->chunk_size) {
+        void *item = NULL;
+        asx_stream_result r = asx_stream_poll_next(&cs->inner, waker, &item);
+        if (r == ASX_STREAM_DONE) {
+            cs->inner_done = 1;
+            break;
+        }
+        if (r == ASX_STREAM_PENDING) {
+            if (cs->current.count > 0) break; /* yield partial chunk */
+            return ASX_STREAM_PENDING;
+        }
+        if (cs->current.count < ASX_STREAM_CHUNK_MAX) {
+            cs->current.items[cs->current.count] = item;
+            cs->current.count++;
+        }
+    }
+
+    if (cs->current.count == 0) return ASX_STREAM_DONE;
+    *out_item = &cs->current;
+    return ASX_STREAM_READY;
+}
+
+void asx_stream_chunks_init(asx_stream *s, asx_stream_chunks_state *state, asx_stream inner,
+                             size_t chunk_size) {
+    state->inner = inner;
+    state->chunk_size = chunk_size;
+    if (state->chunk_size > ASX_STREAM_CHUNK_MAX) state->chunk_size = ASX_STREAM_CHUNK_MAX;
+    if (state->chunk_size == 0) state->chunk_size = 1;
+    state->inner_done = 0;
+    state->current.count = 0;
+    s->poll_next = chunks_poll;
+    s->state = state;
+}
+
+/* ------------------------------------------------------------------ */
+/* Throttle combinator                                                 */
+/* ------------------------------------------------------------------ */
+
+static asx_stream_result throttle_poll(void *state, const asx_waker *waker, void **out_item) {
+    asx_stream_throttle_state *ts = (asx_stream_throttle_state *)state;
+    asx_stream_result r;
+    asx_time now = 0;
+
+    /* Check if enough time has passed */
+    if (!ts->first) {
+        asx_runtime_now_ns(&now);
+        if ((uint64_t)now < ts->last_yield + ts->interval_ns) {
+            return ASX_STREAM_PENDING;
+        }
+    }
+
+    r = asx_stream_poll_next(&ts->inner, waker, out_item);
+    if (r == ASX_STREAM_READY) {
+        if (ts->first) {
+            asx_runtime_now_ns(&now);
+            ts->first = 0;
+        }
+        ts->last_yield = (uint64_t)now;
+    }
+    return r;
+}
+
+void asx_stream_throttle_init(asx_stream *s, asx_stream_throttle_state *state, asx_stream inner,
+                               uint64_t interval_ns) {
+    state->inner = inner;
+    state->interval_ns = interval_ns;
+    state->last_yield = 0;
+    state->first = 1;
+    s->poll_next = throttle_poll;
+    s->state = state;
+}
+
+/* ------------------------------------------------------------------ */
+/* SkipWhile combinator                                                */
+/* ------------------------------------------------------------------ */
+
+static asx_stream_result skip_while_poll(void *state, const asx_waker *waker, void **out_item) {
+    asx_stream_skip_while_state *sw = (asx_stream_skip_while_state *)state;
+
+    for (;;) {
+        void *item = NULL;
+        asx_stream_result r = asx_stream_poll_next(&sw->inner, waker, &item);
+        if (r != ASX_STREAM_READY) return r;
+
+        if (!sw->skipping) {
+            *out_item = item;
+            return ASX_STREAM_READY;
+        }
+
+        if (!sw->predicate(item, sw->user_data)) {
+            sw->skipping = 0;
+            *out_item = item;
+            return ASX_STREAM_READY;
+        }
+    }
+}
+
+void asx_stream_skip_while_init(asx_stream *s, asx_stream_skip_while_state *state,
+                                 asx_stream inner, asx_stream_filter_fn predicate,
+                                 void *user_data) {
+    state->inner = inner;
+    state->predicate = predicate;
+    state->user_data = user_data;
+    state->skipping = 1;
+    s->poll_next = skip_while_poll;
+    s->state = state;
+}
+
+/* ------------------------------------------------------------------ */
+/* Flatten combinator                                                  */
+/* ------------------------------------------------------------------ */
+
+static asx_stream_result flatten_poll(void *state, const asx_waker *waker, void **out_item) {
+    asx_stream_flatten_state *fl = (asx_stream_flatten_state *)state;
+
+    for (;;) {
+        /* Try current inner stream */
+        if (fl->current_inner != NULL) {
+            asx_stream_result r = asx_stream_poll_next(fl->current_inner, waker, out_item);
+            if (r == ASX_STREAM_READY) return ASX_STREAM_READY;
+            if (r == ASX_STREAM_PENDING) return ASX_STREAM_PENDING;
+            /* Inner stream done, get next from outer */
+            fl->current_inner = NULL;
+        }
+
+        if (fl->outer_done) return ASX_STREAM_DONE;
+
+        /* Get next inner stream from outer */
+        {
+            void *inner_ptr = NULL;
+            asx_stream_result r = asx_stream_poll_next(&fl->outer, waker, &inner_ptr);
+            if (r == ASX_STREAM_DONE) { fl->outer_done = 1; return ASX_STREAM_DONE; }
+            if (r == ASX_STREAM_PENDING) return ASX_STREAM_PENDING;
+            fl->current_inner = *(asx_stream **)inner_ptr;
+        }
+    }
+}
+
+void asx_stream_flatten_init(asx_stream *s, asx_stream_flatten_state *state, asx_stream outer) {
+    state->outer = outer;
+    state->current_inner = NULL;
+    state->outer_done = 0;
+    s->poll_next = flatten_poll;
+    s->state = state;
+}
+
+/* ------------------------------------------------------------------ */
+/* Dedup combinator                                                    */
+/* ------------------------------------------------------------------ */
+
+static asx_stream_result dedup_poll(void *state, const asx_waker *waker, void **out_item) {
+    asx_stream_dedup_state *dd = (asx_stream_dedup_state *)state;
+
+    for (;;) {
+        void *item = NULL;
+        asx_stream_result r = asx_stream_poll_next(&dd->inner, waker, &item);
+        if (r != ASX_STREAM_READY) return r;
+
+        if (dd->has_last && dd->eq_fn(dd->last_item, item, dd->user_data)) {
+            continue; /* duplicate, skip */
+        }
+
+        dd->last_item = item;
+        dd->has_last = 1;
+        *out_item = item;
+        return ASX_STREAM_READY;
+    }
+}
+
+void asx_stream_dedup_init(asx_stream *s, asx_stream_dedup_state *state, asx_stream inner,
+                            asx_stream_eq_fn eq_fn, void *user_data) {
+    state->inner = inner;
+    state->eq_fn = eq_fn;
+    state->user_data = user_data;
+    state->last_item = NULL;
+    state->has_last = 0;
+    s->poll_next = dedup_poll;
+    s->state = state;
+}
+
+/* ------------------------------------------------------------------ */
+/* Nth terminal                                                        */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_stream_nth(asx_stream *s, size_t n, void **out_item) {
+    size_t i = 0;
+    if (out_item == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    for (;;) {
+        void *item = NULL;
+        asx_stream_result r = asx_stream_poll_next(s, NULL, &item);
+        if (r == ASX_STREAM_DONE) return ASX_E_NOT_FOUND;
+        if (r == ASX_STREAM_PENDING) return ASX_E_WOULD_BLOCK;
+        if (i == n) { *out_item = item; return ASX_OK; }
+        i++;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Last terminal                                                       */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_stream_last(asx_stream *s, void **out_item) {
+    int found = 0;
+    if (out_item == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    for (;;) {
+        void *item = NULL;
+        asx_stream_result r = asx_stream_poll_next(s, NULL, &item);
+        if (r == ASX_STREAM_DONE) {
+            return found ? ASX_OK : ASX_E_NOT_FOUND;
+        }
+        if (r == ASX_STREAM_PENDING) return ASX_E_WOULD_BLOCK;
+        *out_item = item;
+        found = 1;
     }
 }

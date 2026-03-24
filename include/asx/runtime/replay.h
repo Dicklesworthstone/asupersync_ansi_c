@@ -22,6 +22,9 @@
 #include <asx/runtime/lab.h>
 #include <asx/runtime/trace.h>
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE || \
+    defined(ASX_INTERNAL_TRACE_FAMILY_ACCESS)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -172,5 +175,7 @@ ASX_API ASX_MUST_USE asx_status asx_minimize_render_json(const asx_minimize_stat
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* trace family public contract */
 
 #endif /* ASX_RUNTIME_REPLAY_H */

@@ -14,10 +14,14 @@
 #ifndef ASX_RUNTIME_REGRESSION_LOCALIZE_H
 #define ASX_RUNTIME_REGRESSION_LOCALIZE_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/runtime/trace.h>
 #include <stdint.h>
+
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE || \
+    defined(ASX_INTERNAL_TRACE_FAMILY_ACCESS)
 
 #ifdef __cplusplus
 extern "C" {
@@ -146,5 +150,7 @@ ASX_API const char *asx_cb_state_name(asx_cb_state state);
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* trace family public contract */
 
 #endif /* ASX_RUNTIME_REGRESSION_LOCALIZE_H */

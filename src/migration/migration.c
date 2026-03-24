@@ -124,6 +124,7 @@ static const feature_entry g_features[] = {
     {"hedge", 1, NULL},
     {"map_reduce", 1, NULL},
     {"contended_mutex", 1, NULL},
+    {"stream_combinators", 1, NULL},
     {NULL, 0, NULL}};
 
 int asx_feature_available(const char *feature_name) {

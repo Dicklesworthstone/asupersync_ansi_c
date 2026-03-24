@@ -13,7 +13,9 @@
 #include <asx/runtime/event.h>
 #include <asx/runtime/io_driver.h>
 #include <asx/runtime/snapshot.h>
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <string.h>
 
 /* ------------------------------------------------------------------ */

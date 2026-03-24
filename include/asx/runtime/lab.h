@@ -31,6 +31,9 @@
 #include <asx/runtime/rt.h>
 #include <asx/runtime/virtual_time.h>
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE || \
+    defined(ASX_INTERNAL_TRACE_FAMILY_ACCESS)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -145,5 +148,7 @@ ASX_API ASX_MUST_USE asx_status asx_lab_open_region(asx_lab *lab, asx_region_id 
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* trace family public contract */
 
 #endif /* ASX_RUNTIME_LAB_H */

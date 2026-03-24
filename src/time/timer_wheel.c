@@ -13,7 +13,9 @@
  */
 
 #include <asx/asx_config.h>
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <asx/time/timer_wheel.h>
 #include <string.h>
 

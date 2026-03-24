@@ -18,7 +18,9 @@
 #include <asx/core/cancel.h>
 #include <asx/core/transition.h>
 #include <asx/runtime/runtime.h>
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 
 /* -------------------------------------------------------------------
  * Event log (ring buffer for deterministic sequencing)

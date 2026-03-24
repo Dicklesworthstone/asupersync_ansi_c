@@ -9,7 +9,9 @@
 
 #include <asx/runtime/profile_compat.h>
 #include <asx/runtime/runtime.h>
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/telemetry.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <asx/time/timer_wheel.h>
 #include <stddef.h>
 

@@ -12,6 +12,8 @@
 #include <asx/runtime/telemetry.h>
 #include <asx/runtime/trace.h>
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE
+
 /* ---- Tier configuration ---- */
 
 TEST(telemetry_default_tier_is_forensic) {
@@ -350,3 +352,18 @@ int main(void) {
     TEST_REPORT();
     return test_failures;
 }
+
+#else
+
+TEST(telemetry_family_compile_time_hidden_in_minimal_browser) {
+    ASSERT_EQ(ASX_HAS_BROWSER_TRACE, 0);
+    ASSERT_EQ(ASX_HAS_BROWSER_TRACE_SUBPROFILE_SPLIT, 1);
+}
+
+int main(void) {
+    RUN_TEST(telemetry_family_compile_time_hidden_in_minimal_browser);
+    TEST_REPORT();
+    return test_failures;
+}
+
+#endif

@@ -58,11 +58,20 @@
  *
  * These macros expose the public build contract to downstream code so
  * browser-incompatible surfaces can be gated in preprocessor space as
- * well as at runtime. The current C port still exposes a single browser
- * mode, so subprofile counts remain explicit rather than inferred.
+ * well as at runtime. Browser builds support a minimal-vs-extended
+ * split so upstream wasm/browser feature contracts can be represented
+ * without changing the default browser lane semantics.
  * ------------------------------------------------------------------- */
 
-#define ASX_BROWSER_PROFILE_MODE_COUNT 1
+#if defined(ASX_PROFILE_BROWSER) && \
+    ((defined(ASX_BROWSER_PROFILE_MINIMAL) + defined(ASX_BROWSER_PROFILE_EXTENDED)) > 1)
+#error "Exactly one ASX_BROWSER_PROFILE_* subprofile may be defined per browser build"
+#elif defined(ASX_PROFILE_BROWSER) && !defined(ASX_BROWSER_PROFILE_MINIMAL) && \
+    !defined(ASX_BROWSER_PROFILE_EXTENDED)
+#define ASX_BROWSER_PROFILE_EXTENDED
+#endif
+
+#define ASX_BROWSER_PROFILE_MODE_COUNT 2
 
 #if defined(ASX_PROFILE_BROWSER)
 #define ASX_HAS_NATIVE_RUNTIME_SURFACES 0
@@ -84,10 +93,15 @@
 #define ASX_HAS_DATABASE_SURFACE 1
 #endif
 
-/* Browser trace remains a single-mode contract today: tracing is available,
- * but there is no minimal-vs-extended browser trace subprofile split yet. */
+/* Browser trace is only present in the extended browser subprofile.
+ * Minimal browser builds omit the public trace/lab/replay family from
+ * the umbrella surface while preserving the existing default browser lane. */
+#if defined(ASX_PROFILE_BROWSER) && defined(ASX_BROWSER_PROFILE_MINIMAL)
+#define ASX_HAS_BROWSER_TRACE 0
+#else
 #define ASX_HAS_BROWSER_TRACE 1
-#define ASX_HAS_BROWSER_TRACE_SUBPROFILE_SPLIT 0
+#endif
+#define ASX_HAS_BROWSER_TRACE_SUBPROFILE_SPLIT 1
 
 /* Debug mode: enables ghost monitors (borrow ledger, protocol, linearity, determinism) */
 #if !defined(ASX_DEBUG) && !defined(NDEBUG)

@@ -15,9 +15,13 @@
 #ifndef ASX_RUNTIME_TRACE_H
 #define ASX_RUNTIME_TRACE_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
+
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE || \
+    defined(ASX_INTERNAL_TRACE_FAMILY_ACCESS)
 
 #ifdef __cplusplus
 extern "C" {
@@ -231,5 +235,7 @@ ASX_API asx_status asx_trace_continuity_check(const uint8_t *buf, uint32_t len);
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* trace family public contract */
 
 #endif /* ASX_RUNTIME_TRACE_H */

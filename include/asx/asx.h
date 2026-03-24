@@ -175,7 +175,9 @@
 #include <asx/app/doctor.h>
 #include <asx/app/report.h>
 #include <asx/console/console.h>
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE
 #include <asx/tracing_compat/tracing_compat.h>
+#endif
 
 /* Runtime (walking skeleton — bd-ix8.8) */
 #include <asx/runtime/adapter.h>
@@ -195,18 +197,20 @@
 #if ASX_HAS_NATIVE_IO_DRIVER
 #include <asx/runtime/io_driver.h>
 #endif
-#include <asx/runtime/lab.h>
 #include <asx/runtime/local.h>
 #include <asx/runtime/overload_catalog.h>
 #include <asx/runtime/parallel.h>
 #include <asx/runtime/profile_compat.h>
-#include <asx/runtime/regression_localize.h>
-#include <asx/runtime/replay.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/snapshot.h>
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE
+#include <asx/runtime/lab.h>
+#include <asx/runtime/regression_localize.h>
+#include <asx/runtime/replay.h>
 #include <asx/runtime/telemetry.h>
 #include <asx/runtime/trace.h>
+#endif
 #include <asx/runtime/vertical_adapter.h>
 #include <asx/runtime/virtual_time.h>
 #include <asx/runtime/waker.h>

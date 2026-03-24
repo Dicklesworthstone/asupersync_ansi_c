@@ -810,6 +810,212 @@ TEST(collect_overflow) {
 }
 
 /* ================================================================== */
+/* Fuse tests                                                          */
+/* ================================================================== */
+
+/* A buggy stream that yields one item after DONE */
+static int fuse_bogus_state;
+static int fuse_bogus_val;
+static asx_stream_result fuse_bogus_poll(void *state, const asx_waker *waker, void **out_item) {
+    (void)state; (void)waker;
+    fuse_bogus_state++;
+    if (fuse_bogus_state == 1) { fuse_bogus_val = 10; *out_item = &fuse_bogus_val; return ASX_STREAM_READY; }
+    if (fuse_bogus_state == 2) return ASX_STREAM_DONE;
+    /* Bug: yields again after DONE */
+    fuse_bogus_val = 99;
+    *out_item = &fuse_bogus_val;
+    return ASX_STREAM_READY;
+}
+
+TEST(fuse_prevents_post_done) {
+    asx_stream bogus, fused;
+    asx_stream_fuse_state fs;
+    void *item = NULL;
+
+    fuse_bogus_state = 0;
+    bogus.poll_next = fuse_bogus_poll;
+    bogus.state = NULL;
+    asx_stream_fuse_init(&fused, &fs, bogus);
+
+    ASSERT_EQ(asx_stream_poll_next(&fused, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(int *)item, 10);
+    ASSERT_EQ(asx_stream_poll_next(&fused, NULL, &item), ASX_STREAM_DONE);
+    /* Fuse should prevent the bogus post-DONE yield */
+    ASSERT_EQ(asx_stream_poll_next(&fused, NULL, &item), ASX_STREAM_DONE);
+}
+
+/* ================================================================== */
+/* Chunks tests                                                        */
+/* ================================================================== */
+
+TEST(chunks_exact) {
+    int data[] = {1, 2, 3, 4, 5, 6};
+    asx_stream inner, chunked;
+    asx_stream_iter_state is;
+    asx_stream_chunks_state cs;
+    void *item = NULL;
+    asx_stream_chunk *ch;
+
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 6);
+    asx_stream_chunks_init(&chunked, &cs, inner, 3);
+
+    ASSERT_EQ(asx_stream_poll_next(&chunked, NULL, &item), ASX_STREAM_READY);
+    ch = (asx_stream_chunk *)item;
+    ASSERT_EQ(ch->count, (size_t)3);
+    ASSERT_EQ(*(int *)ch->items[0], 1);
+    ASSERT_EQ(*(int *)ch->items[2], 3);
+
+    ASSERT_EQ(asx_stream_poll_next(&chunked, NULL, &item), ASX_STREAM_READY);
+    ch = (asx_stream_chunk *)item;
+    ASSERT_EQ(ch->count, (size_t)3);
+    ASSERT_EQ(*(int *)ch->items[0], 4);
+
+    ASSERT_EQ(asx_stream_poll_next(&chunked, NULL, &item), ASX_STREAM_DONE);
+}
+
+TEST(chunks_remainder) {
+    int data[] = {1, 2, 3, 4, 5};
+    asx_stream inner, chunked;
+    asx_stream_iter_state is;
+    asx_stream_chunks_state cs;
+    void *item = NULL;
+    asx_stream_chunk *ch;
+
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 5);
+    asx_stream_chunks_init(&chunked, &cs, inner, 3);
+
+    ASSERT_EQ(asx_stream_poll_next(&chunked, NULL, &item), ASX_STREAM_READY);
+    ch = (asx_stream_chunk *)item;
+    ASSERT_EQ(ch->count, (size_t)3);
+
+    ASSERT_EQ(asx_stream_poll_next(&chunked, NULL, &item), ASX_STREAM_READY);
+    ch = (asx_stream_chunk *)item;
+    ASSERT_EQ(ch->count, (size_t)2); /* remainder */
+
+    ASSERT_EQ(asx_stream_poll_next(&chunked, NULL, &item), ASX_STREAM_DONE);
+}
+
+/* ================================================================== */
+/* SkipWhile tests                                                     */
+/* ================================================================== */
+
+TEST(skip_while_basic) {
+    int data[] = {1, 2, 3, 4, 5};
+    int out[5];
+    size_t n;
+    asx_stream inner, sw;
+    asx_stream_iter_state is;
+    asx_stream_skip_while_state sws;
+
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 5);
+    asx_stream_skip_while_init(&sw, &sws, inner, less_than_4, NULL);
+    n = collect_ints(&sw, out, 5);
+    ASSERT_EQ(n, (size_t)2); /* 4, 5 */
+    ASSERT_EQ(out[0], 4);
+    ASSERT_EQ(out[1], 5);
+}
+
+/* ================================================================== */
+/* Flatten tests                                                       */
+/* ================================================================== */
+
+TEST(flatten_basic) {
+    int data1[] = {1, 2};
+    int data2[] = {3, 4, 5};
+    asx_stream s1, s2;
+    asx_stream_iter_state is1, is2;
+    asx_stream *stream_ptrs[2];
+    asx_stream outer, flat;
+    asx_stream_iter_state outer_is;
+    asx_stream_flatten_state fls;
+    int out[5];
+    size_t n;
+
+    asx_stream_iter_init(&s1, &is1, data1, sizeof(int), 2);
+    asx_stream_iter_init(&s2, &is2, data2, sizeof(int), 3);
+    stream_ptrs[0] = &s1;
+    stream_ptrs[1] = &s2;
+
+    asx_stream_iter_init(&outer, &outer_is, stream_ptrs, sizeof(asx_stream *), 2);
+    asx_stream_flatten_init(&flat, &fls, outer);
+
+    n = collect_ints(&flat, out, 5);
+    ASSERT_EQ(n, (size_t)5);
+    ASSERT_EQ(out[0], 1);
+    ASSERT_EQ(out[1], 2);
+    ASSERT_EQ(out[2], 3);
+    ASSERT_EQ(out[4], 5);
+}
+
+/* ================================================================== */
+/* Dedup tests                                                         */
+/* ================================================================== */
+
+static int int_eq(const void *a, const void *b, void *user_data) {
+    (void)user_data;
+    return *(const int *)a == *(const int *)b;
+}
+
+TEST(dedup_basic) {
+    int data[] = {1, 1, 2, 2, 2, 3, 1, 1};
+    int out[8];
+    size_t n;
+    asx_stream inner, dd;
+    asx_stream_iter_state is;
+    asx_stream_dedup_state dds;
+
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 8);
+    asx_stream_dedup_init(&dd, &dds, inner, int_eq, NULL);
+    n = collect_ints(&dd, out, 8);
+    ASSERT_EQ(n, (size_t)4); /* 1, 2, 3, 1 */
+    ASSERT_EQ(out[0], 1);
+    ASSERT_EQ(out[1], 2);
+    ASSERT_EQ(out[2], 3);
+    ASSERT_EQ(out[3], 1);
+}
+
+/* ================================================================== */
+/* Nth / Last tests                                                    */
+/* ================================================================== */
+
+TEST(nth_found) {
+    int data[] = {10, 20, 30, 40};
+    void *item = NULL;
+    asx_stream s;
+    asx_stream_iter_state is;
+    asx_stream_iter_init(&s, &is, data, sizeof(int), 4);
+    ASSERT_EQ(asx_stream_nth(&s, 2, &item), ASX_OK);
+    ASSERT_EQ(*(int *)item, 30);
+}
+
+TEST(nth_not_found) {
+    int data[] = {10, 20};
+    void *item = NULL;
+    asx_stream s;
+    asx_stream_iter_state is;
+    asx_stream_iter_init(&s, &is, data, sizeof(int), 2);
+    ASSERT_EQ(asx_stream_nth(&s, 5, &item), ASX_E_NOT_FOUND);
+}
+
+TEST(last_basic) {
+    int data[] = {10, 20, 30};
+    void *item = NULL;
+    asx_stream s;
+    asx_stream_iter_state is;
+    asx_stream_iter_init(&s, &is, data, sizeof(int), 3);
+    ASSERT_EQ(asx_stream_last(&s, &item), ASX_OK);
+    ASSERT_EQ(*(int *)item, 30);
+}
+
+TEST(last_empty) {
+    void *item = NULL;
+    asx_stream s;
+    asx_stream_iter_state is;
+    asx_stream_iter_init(&s, &is, NULL, sizeof(int), 0);
+    ASSERT_EQ(asx_stream_last(&s, &item), ASX_E_NOT_FOUND);
+}
+
+/* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
 
@@ -888,6 +1094,28 @@ int main(void) {
     /* Collect */
     RUN_TEST(collect_basic);
     RUN_TEST(collect_overflow);
+
+    /* Fuse */
+    RUN_TEST(fuse_prevents_post_done);
+
+    /* Chunks */
+    RUN_TEST(chunks_exact);
+    RUN_TEST(chunks_remainder);
+
+    /* SkipWhile */
+    RUN_TEST(skip_while_basic);
+
+    /* Flatten */
+    RUN_TEST(flatten_basic);
+
+    /* Dedup */
+    RUN_TEST(dedup_basic);
+
+    /* Nth / Last */
+    RUN_TEST(nth_found);
+    RUN_TEST(nth_not_found);
+    RUN_TEST(last_basic);
+    RUN_TEST(last_empty);
 
     TEST_REPORT();
     return test_failures;

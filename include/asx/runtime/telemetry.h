@@ -19,9 +19,13 @@
 #ifndef ASX_RUNTIME_TELEMETRY_H
 #define ASX_RUNTIME_TELEMETRY_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/runtime/trace.h>
+
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE || \
+    defined(ASX_INTERNAL_TRACE_FAMILY_ACCESS)
 
 #ifdef __cplusplus
 extern "C" {
@@ -109,5 +113,7 @@ ASX_API void asx_telemetry_reset(void);
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* trace family public contract */
 
 #endif /* ASX_RUNTIME_TELEMETRY_H */

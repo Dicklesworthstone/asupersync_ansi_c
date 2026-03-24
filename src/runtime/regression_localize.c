@@ -8,8 +8,10 @@
 /* ASX_CHECKPOINT_WAIVER_FILE() -- regression localize spike, no checkpoint coverage needed */
 
 #include <asx/asx.h>
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/regression_localize.h>
 #include <asx/runtime/trace.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <string.h>
 
 /* ------------------------------------------------------------------ */

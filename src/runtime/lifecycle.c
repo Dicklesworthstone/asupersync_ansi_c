@@ -32,7 +32,9 @@
 #include <asx/runtime/io_driver.h>
 #include <asx/runtime/parallel.h>
 #include <asx/runtime/runtime.h>
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/telemetry.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <asx/runtime/vertical_adapter.h>
 #include <asx/runtime/waker.h>
 #include <asx/signal/signal.h>

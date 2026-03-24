@@ -18,6 +18,8 @@
 #include <asx/time/timer_wheel.h>
 #include <string.h>
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE
+
 static asx_status poll_complete(void *data, asx_task_id self) {
     (void)data;
     (void)self;
@@ -324,7 +326,9 @@ TEST(snapshot_capture_uses_runtime_snapshot_entities) {
     asx_runtime_snapshot typed;
     asx_runtime rt;
     asx_waker w;
+#if ASX_HAS_NATIVE_IO_DRIVER
     asx_io_token tok;
+#endif
     asx_region_id rid;
     asx_task_id tid;
     asx_obligation_id oid;
@@ -338,9 +342,11 @@ TEST(snapshot_capture_uses_runtime_snapshot_entities) {
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+#if ASX_HAS_NATIVE_IO_DRIVER
     if (asx_io_driver_is_initialized()) {
         ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_OK);
     }
+#endif
 
     ASSERT_EQ(asx_runtime_snapshot_capture(&typed), ASX_OK);
     ASSERT_EQ(typed.region_count, (uint32_t)1);
@@ -371,7 +377,9 @@ TEST(snapshot_capture_uses_runtime_snapshot_entities) {
              (unsigned)typed.blocking_active_count);
     ASSERT_TRUE(strstr(legacy.data, needle) != NULL);
 
+#if ASX_HAS_NATIVE_IO_DRIVER
     if (asx_io_driver_is_initialized()) { asx_io_deregister(&tok); }
+#endif
     asx_runtime_shutdown(&rt);
 }
 
@@ -904,3 +912,19 @@ int main(void) {
     TEST_REPORT();
     return test_failures;
 }
+
+#else
+
+TEST(trace_family_compile_time_hidden_in_minimal_browser) {
+    ASSERT_EQ(ASX_HAS_BROWSER_TRACE, 0);
+    ASSERT_EQ(ASX_HAS_BROWSER_TRACE_SUBPROFILE_SPLIT, 1);
+}
+
+int main(void) {
+    fprintf(stderr, "=== test_trace (minimal browser hidden contract) ===\n");
+    RUN_TEST(trace_family_compile_time_hidden_in_minimal_browser);
+    TEST_REPORT();
+    return test_failures;
+}
+
+#endif

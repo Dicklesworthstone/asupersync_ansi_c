@@ -20,7 +20,9 @@
 
 #include <asx/asx.h>
 #include <asx/core/channel.h>
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <string.h>
 
 /* ------------------------------------------------------------------ */

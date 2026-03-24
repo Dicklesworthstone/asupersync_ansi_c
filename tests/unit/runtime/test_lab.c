@@ -9,6 +9,8 @@
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
 
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE
+
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
     do {                                                                                           \
@@ -562,3 +564,19 @@ int main(void) {
     TEST_REPORT();
     return test_failures;
 }
+
+#else
+
+TEST(lab_family_compile_time_hidden_in_minimal_browser) {
+    ASSERT_EQ(ASX_HAS_BROWSER_TRACE, 0);
+    ASSERT_EQ(ASX_HAS_BROWSER_TRACE_SUBPROFILE_SPLIT, 1);
+}
+
+int main(void) {
+    fprintf(stderr, "=== test_lab (minimal browser hidden contract) ===\n");
+    RUN_TEST(lab_family_compile_time_hidden_in_minimal_browser);
+    TEST_REPORT();
+    return test_failures;
+}
+
+#endif
