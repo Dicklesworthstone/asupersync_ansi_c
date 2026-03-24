@@ -642,10 +642,8 @@ static asx_stream_result chunks_poll(void *state, const asx_waker *waker, void *
             if (cs->current.count > 0) break; /* yield partial chunk */
             return ASX_STREAM_PENDING;
         }
-        if (cs->current.count < ASX_STREAM_CHUNK_MAX) {
-            cs->current.items[cs->current.count] = item;
-            cs->current.count++;
-        }
+        cs->current.items[cs->current.count] = item;
+        cs->current.count++;
     }
 
     if (cs->current.count == 0) return ASX_STREAM_DONE;
@@ -764,6 +762,7 @@ static asx_stream_result flatten_poll(void *state, const asx_waker *waker, void 
             asx_stream_result r = asx_stream_poll_next(&fl->outer, waker, &inner_ptr);
             if (r == ASX_STREAM_DONE) { fl->outer_done = 1; return ASX_STREAM_DONE; }
             if (r == ASX_STREAM_PENDING) return ASX_STREAM_PENDING;
+            if (inner_ptr == NULL) continue; /* skip NULL inner streams */
             fl->current_inner = *(asx_stream **)inner_ptr;
         }
     }
@@ -808,6 +807,102 @@ void asx_stream_dedup_init(asx_stream *s, asx_stream_dedup_state *state, asx_str
     state->last_item = NULL;
     state->has_last = 0;
     s->poll_next = dedup_poll;
+    s->state = state;
+}
+
+/* ------------------------------------------------------------------ */
+/* FlatMap combinator                                                  */
+/* ------------------------------------------------------------------ */
+
+static asx_stream_result flat_map_poll(void *state, const asx_waker *waker, void **out_item) {
+    asx_stream_flat_map_state *fm = (asx_stream_flat_map_state *)state;
+
+    for (;;) {
+        if (fm->current != NULL) {
+            asx_stream_result r = asx_stream_poll_next(fm->current, waker, out_item);
+            if (r == ASX_STREAM_READY) return ASX_STREAM_READY;
+            if (r == ASX_STREAM_PENDING) return ASX_STREAM_PENDING;
+            fm->current = NULL; /* sub-stream done */
+        }
+
+        if (fm->outer_done) return ASX_STREAM_DONE;
+
+        {
+            void *item = NULL;
+            asx_stream_result r = asx_stream_poll_next(&fm->inner, waker, &item);
+            if (r == ASX_STREAM_DONE) { fm->outer_done = 1; return ASX_STREAM_DONE; }
+            if (r == ASX_STREAM_PENDING) return ASX_STREAM_PENDING;
+            fm->current = fm->fn(item, fm->user_data);
+            if (fm->current == NULL) continue; /* skip NULL sub-streams */
+        }
+    }
+}
+
+void asx_stream_flat_map_init(asx_stream *s, asx_stream_flat_map_state *state,
+                               asx_stream inner, asx_stream_flat_map_fn fn, void *user_data) {
+    state->inner = inner;
+    state->fn = fn;
+    state->user_data = user_data;
+    state->current = NULL;
+    state->outer_done = 0;
+    s->poll_next = flat_map_poll;
+    s->state = state;
+}
+
+/* ------------------------------------------------------------------ */
+/* Window combinator                                                   */
+/* ------------------------------------------------------------------ */
+
+static asx_stream_result window_poll(void *state, const asx_waker *waker, void **out_item) {
+    asx_stream_window_state *ws = (asx_stream_window_state *)state;
+
+    if (ws->inner_done) return ASX_STREAM_DONE;
+
+    for (;;) {
+        void *item = NULL;
+        asx_stream_result r = asx_stream_poll_next(&ws->inner, waker, &item);
+
+        if (r == ASX_STREAM_DONE) {
+            ws->inner_done = 1;
+            /* Yield final partial window if any items buffered */
+            if (ws->current.count > 0 && !ws->filled) {
+                *out_item = &ws->current;
+                return ASX_STREAM_READY;
+            }
+            return ASX_STREAM_DONE;
+        }
+        if (r == ASX_STREAM_PENDING) return ASX_STREAM_PENDING;
+
+        /* Add item to circular buffer */
+        if (ws->current.count < ws->window_size) {
+            ws->current.items[ws->current.count] = item;
+            ws->current.count++;
+        } else {
+            /* Window full — slide: overwrite oldest */
+            ws->current.items[ws->current.start] = item;
+            ws->current.start = (ws->current.start + 1) % ws->window_size;
+        }
+
+        /* Yield when window is full */
+        if (ws->current.count >= ws->window_size) {
+            ws->filled = 1;
+            *out_item = &ws->current;
+            return ASX_STREAM_READY;
+        }
+    }
+}
+
+void asx_stream_window_init(asx_stream *s, asx_stream_window_state *state,
+                             asx_stream inner, size_t window_size) {
+    state->inner = inner;
+    state->window_size = window_size;
+    if (state->window_size > ASX_STREAM_WINDOW_MAX) state->window_size = ASX_STREAM_WINDOW_MAX;
+    if (state->window_size == 0) state->window_size = 1;
+    state->current.count = 0;
+    state->current.start = 0;
+    state->filled = 0;
+    state->inner_done = 0;
+    s->poll_next = window_poll;
     s->state = state;
 }
 

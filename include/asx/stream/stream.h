@@ -477,9 +477,60 @@ typedef struct {
     int has_last;
 } asx_stream_dedup_state;
 
-/* Suppress consecutive items where eq_fn returns nonzero. */
+/* Suppress consecutive items where eq_fn returns nonzero.
+ * Requires that item pointers from the inner stream remain valid
+ * across consecutive poll_next calls (true for iter/array-backed
+ * streams; not guaranteed for streams that reuse a single buffer). */
 ASX_API void asx_stream_dedup_init(asx_stream *s, asx_stream_dedup_state *state,
                                     asx_stream inner, asx_stream_eq_fn eq_fn, void *user_data);
+
+/* ------------------------------------------------------------------ */
+/* FlatMap combinator — map then flatten                              */
+/* ------------------------------------------------------------------ */
+
+/* flat_map_fn: given an item, returns an asx_stream* to iterate.
+ * The returned stream pointer must remain valid until drained. */
+typedef asx_stream *(*asx_stream_flat_map_fn)(void *item, void *user_data);
+
+typedef struct {
+    asx_stream inner;
+    asx_stream_flat_map_fn fn;
+    void *user_data;
+    asx_stream *current;  /* current sub-stream, or NULL */
+    int outer_done;
+} asx_stream_flat_map_state;
+
+ASX_API void asx_stream_flat_map_init(asx_stream *s, asx_stream_flat_map_state *state,
+                                       asx_stream inner, asx_stream_flat_map_fn fn,
+                                       void *user_data);
+
+/* ------------------------------------------------------------------ */
+/* Window combinator — sliding window of items                        */
+/* ------------------------------------------------------------------ */
+
+#ifndef ASX_STREAM_WINDOW_MAX
+#define ASX_STREAM_WINDOW_MAX 16u
+#endif
+
+typedef struct {
+    void *items[ASX_STREAM_WINDOW_MAX];
+    size_t count;
+    size_t start; /* index of oldest item in circular buffer */
+} asx_stream_window;
+
+typedef struct {
+    asx_stream inner;
+    size_t window_size;
+    asx_stream_window current;
+    int filled;   /* 1 once window is full for first time */
+    int inner_done;
+} asx_stream_window_state;
+
+/* Emit sliding windows of window_size consecutive items.
+ * Each poll yields a pointer to asx_stream_window.
+ * First yield occurs after window_size items are buffered. */
+ASX_API void asx_stream_window_init(asx_stream *s, asx_stream_window_state *state,
+                                     asx_stream inner, size_t window_size);
 
 /* ------------------------------------------------------------------ */
 /* Nth terminal — get the nth item (0-indexed)                        */

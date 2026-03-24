@@ -975,6 +975,105 @@ TEST(dedup_basic) {
 }
 
 /* ================================================================== */
+/* FlatMap tests                                                       */
+/* ================================================================== */
+
+static asx_stream fm_sub1, fm_sub2;
+static asx_stream_iter_state fm_sub1_is, fm_sub2_is;
+static int fm_sub1_data[] = {10, 20};
+static int fm_sub2_data[] = {30};
+
+static asx_stream *flat_map_fn(void *item, void *user_data) {
+    int val = *(int *)item;
+    (void)user_data;
+    if (val == 1) {
+        asx_stream_iter_init(&fm_sub1, &fm_sub1_is, fm_sub1_data, sizeof(int), 2);
+        return &fm_sub1;
+    }
+    if (val == 2) {
+        asx_stream_iter_init(&fm_sub2, &fm_sub2_is, fm_sub2_data, sizeof(int), 1);
+        return &fm_sub2;
+    }
+    return NULL; /* skip */
+}
+
+TEST(flat_map_basic) {
+    int data[] = {1, 2, 3};
+    int out[5];
+    size_t n;
+    asx_stream inner, fmap;
+    asx_stream_iter_state is;
+    asx_stream_flat_map_state fms;
+
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 3);
+    asx_stream_flat_map_init(&fmap, &fms, inner, flat_map_fn, NULL);
+    n = collect_ints(&fmap, out, 5);
+    ASSERT_EQ(n, (size_t)3); /* 10, 20 from sub1; 30 from sub2; 3 skipped */
+    ASSERT_EQ(out[0], 10);
+    ASSERT_EQ(out[1], 20);
+    ASSERT_EQ(out[2], 30);
+}
+
+/* ================================================================== */
+/* Window tests                                                        */
+/* ================================================================== */
+
+TEST(window_basic) {
+    int data[] = {1, 2, 3, 4, 5};
+    asx_stream inner, win;
+    asx_stream_iter_state is;
+    asx_stream_window_state ws;
+    void *item = NULL;
+    asx_stream_window *w;
+
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 5);
+    asx_stream_window_init(&win, &ws, inner, 3);
+
+    /* First window: [1,2,3] */
+    ASSERT_EQ(asx_stream_poll_next(&win, NULL, &item), ASX_STREAM_READY);
+    w = (asx_stream_window *)item;
+    ASSERT_EQ(w->count, (size_t)3);
+    ASSERT_EQ(*(int *)w->items[0], 1);
+    ASSERT_EQ(*(int *)w->items[2], 3);
+
+    /* Second window: [2,3,4] — sliding */
+    ASSERT_EQ(asx_stream_poll_next(&win, NULL, &item), ASX_STREAM_READY);
+    w = (asx_stream_window *)item;
+    ASSERT_EQ(w->count, (size_t)3);
+    /* In circular buffer, start=1, items[1]=4 overwrote items[0]=1 */
+    /* Items: [4, 2, 3] with start=1, so logical order is [2, 3, 4] */
+    ASSERT_EQ(*(int *)w->items[w->start], 2);
+
+    /* Third window: [3,4,5] */
+    ASSERT_EQ(asx_stream_poll_next(&win, NULL, &item), ASX_STREAM_READY);
+    w = (asx_stream_window *)item;
+    ASSERT_EQ(w->count, (size_t)3);
+
+    ASSERT_EQ(asx_stream_poll_next(&win, NULL, &item), ASX_STREAM_DONE);
+}
+
+TEST(window_short_stream) {
+    int data[] = {1, 2};
+    asx_stream inner, win;
+    asx_stream_iter_state is;
+    asx_stream_window_state ws;
+    void *item = NULL;
+    asx_stream_window *w;
+
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 2);
+    asx_stream_window_init(&win, &ws, inner, 3);
+
+    /* Stream shorter than window — yields partial window */
+    ASSERT_EQ(asx_stream_poll_next(&win, NULL, &item), ASX_STREAM_READY);
+    w = (asx_stream_window *)item;
+    ASSERT_EQ(w->count, (size_t)2);
+    ASSERT_EQ(*(int *)w->items[0], 1);
+    ASSERT_EQ(*(int *)w->items[1], 2);
+
+    ASSERT_EQ(asx_stream_poll_next(&win, NULL, &item), ASX_STREAM_DONE);
+}
+
+/* ================================================================== */
 /* Nth / Last tests                                                    */
 /* ================================================================== */
 
@@ -1110,6 +1209,13 @@ int main(void) {
 
     /* Dedup */
     RUN_TEST(dedup_basic);
+
+    /* FlatMap */
+    RUN_TEST(flat_map_basic);
+
+    /* Window */
+    RUN_TEST(window_basic);
+    RUN_TEST(window_short_stream);
 
     /* Nth / Last */
     RUN_TEST(nth_found);
