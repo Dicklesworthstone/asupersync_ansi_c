@@ -279,6 +279,107 @@ typedef struct {
 ASX_API void asx_stream_zip_init(asx_stream *s, asx_stream_zip_state *state, asx_stream a,
                                  asx_stream b);
 
+/* ------------------------------------------------------------------ */
+/* FilterMap combinator — filters and maps in one pass                */
+/* ------------------------------------------------------------------ */
+
+typedef void *(*asx_stream_filter_map_fn)(void *in_item, void *user_data);
+
+typedef struct {
+    asx_stream inner;
+    asx_stream_filter_map_fn fn;
+    void *user_data;
+} asx_stream_filter_map_state;
+
+ASX_API void asx_stream_filter_map_init(asx_stream *s, asx_stream_filter_map_state *state,
+                                         asx_stream inner, asx_stream_filter_map_fn fn,
+                                         void *user_data);
+
+/* ------------------------------------------------------------------ */
+/* TakeWhile combinator — yields while predicate holds                */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_stream inner;
+    asx_stream_filter_fn predicate;
+    void *user_data;
+    int done;
+} asx_stream_take_while_state;
+
+ASX_API void asx_stream_take_while_init(asx_stream *s, asx_stream_take_while_state *state,
+                                         asx_stream inner, asx_stream_filter_fn predicate,
+                                         void *user_data);
+
+/* ------------------------------------------------------------------ */
+/* Scan combinator — stateful map with accumulator                    */
+/* ------------------------------------------------------------------ */
+
+typedef void *(*asx_stream_scan_fn)(void *accumulator, void *item, void *user_data);
+
+typedef struct {
+    asx_stream inner;
+    asx_stream_scan_fn scan_fn;
+    void *accumulator;
+    void *user_data;
+} asx_stream_scan_state;
+
+ASX_API void asx_stream_scan_init(asx_stream *s, asx_stream_scan_state *state, asx_stream inner,
+                                   asx_stream_scan_fn scan_fn, void *accumulator, void *user_data);
+
+/* ------------------------------------------------------------------ */
+/* Peekable adapter — lookahead without consuming                     */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_stream inner;
+    void *peeked;
+    int has_peeked;
+    int inner_done;
+} asx_stream_peekable_state;
+
+ASX_API void asx_stream_peekable_init(asx_stream *s, asx_stream_peekable_state *state,
+                                       asx_stream inner);
+
+ASX_API asx_stream_result asx_stream_peek(asx_stream_peekable_state *state, const asx_waker *waker,
+                                           void **out_item);
+
+/* ------------------------------------------------------------------ */
+/* Inspect combinator — observe items without modifying               */
+/* ------------------------------------------------------------------ */
+
+typedef void (*asx_stream_inspect_fn)(const void *item, void *user_data);
+
+typedef struct {
+    asx_stream inner;
+    asx_stream_inspect_fn inspect_fn;
+    void *user_data;
+} asx_stream_inspect_state;
+
+ASX_API void asx_stream_inspect_init(asx_stream *s, asx_stream_inspect_state *state,
+                                      asx_stream inner, asx_stream_inspect_fn inspect_fn,
+                                      void *user_data);
+
+/* ------------------------------------------------------------------ */
+/* Any terminal                                                        */
+/* ------------------------------------------------------------------ */
+
+ASX_API ASX_MUST_USE asx_status asx_stream_any(asx_stream *s, asx_stream_filter_fn predicate,
+                                                void *user_data, int *out_result);
+
+/* ------------------------------------------------------------------ */
+/* All terminal                                                        */
+/* ------------------------------------------------------------------ */
+
+ASX_API ASX_MUST_USE asx_status asx_stream_all(asx_stream *s, asx_stream_filter_fn predicate,
+                                                void *user_data, int *out_result);
+
+/* ------------------------------------------------------------------ */
+/* Collect terminal                                                    */
+/* ------------------------------------------------------------------ */
+
+ASX_API ASX_MUST_USE asx_status asx_stream_collect(asx_stream *s, void **buf, size_t max_items,
+                                                    size_t *out_count);
+
 #ifdef __cplusplus
 }
 #endif

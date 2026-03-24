@@ -571,6 +571,245 @@ TEST(filter_map_fold_pipeline) {
 }
 
 /* ================================================================== */
+/* FilterMap tests                                                     */
+/* ================================================================== */
+
+static int fm_buf;
+static void *filter_map_even_double(void *item, void *user_data) {
+    int val = *(int *)item;
+    (void)user_data;
+    if (val % 2 != 0) return NULL;
+    fm_buf = val * 2;
+    return &fm_buf;
+}
+
+TEST(filter_map_basic) {
+    int data[] = {1, 2, 3, 4, 5};
+    int out[5];
+    size_t n;
+    asx_stream inner, fm;
+    asx_stream_iter_state is;
+    asx_stream_filter_map_state fms;
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 5);
+    asx_stream_filter_map_init(&fm, &fms, inner, filter_map_even_double, NULL);
+    n = collect_ints(&fm, out, 5);
+    ASSERT_EQ(n, (size_t)2);
+    ASSERT_EQ(out[0], 4);
+    ASSERT_EQ(out[1], 8);
+}
+
+/* ================================================================== */
+/* TakeWhile tests                                                     */
+/* ================================================================== */
+
+static int less_than_4(const void *item, void *user_data) {
+    (void)user_data;
+    return *(const int *)item < 4;
+}
+
+TEST(take_while_stops_at_predicate) {
+    int data[] = {1, 2, 3, 4, 5};
+    int out[5];
+    size_t n;
+    asx_stream inner, tw;
+    asx_stream_iter_state is;
+    asx_stream_take_while_state tws;
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 5);
+    asx_stream_take_while_init(&tw, &tws, inner, less_than_4, NULL);
+    n = collect_ints(&tw, out, 5);
+    ASSERT_EQ(n, (size_t)3);
+    ASSERT_EQ(out[0], 1);
+    ASSERT_EQ(out[2], 3);
+}
+
+TEST(take_while_all_match) {
+    int data[] = {1, 2, 3};
+    int out[5];
+    size_t n;
+    asx_stream inner, tw;
+    asx_stream_iter_state is;
+    asx_stream_take_while_state tws;
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 3);
+    asx_stream_take_while_init(&tw, &tws, inner, less_than_4, NULL);
+    n = collect_ints(&tw, out, 5);
+    ASSERT_EQ(n, (size_t)3);
+}
+
+/* ================================================================== */
+/* Scan tests                                                          */
+/* ================================================================== */
+
+static int scan_running;
+static void *scan_running_sum(void *acc, void *item, void *user_data) {
+    (void)user_data;
+    scan_running = *(int *)acc + *(int *)item;
+    *(int *)acc = scan_running;
+    return &scan_running;
+}
+
+TEST(scan_accumulates) {
+    int data[] = {1, 2, 3, 4};
+    int out[4];
+    size_t n;
+    int acc = 0;
+    asx_stream inner, sc;
+    asx_stream_iter_state is;
+    asx_stream_scan_state scs;
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 4);
+    asx_stream_scan_init(&sc, &scs, inner, scan_running_sum, &acc, NULL);
+    n = collect_ints(&sc, out, 4);
+    ASSERT_EQ(n, (size_t)4);
+    ASSERT_EQ(out[0], 1);
+    ASSERT_EQ(out[1], 3);
+    ASSERT_EQ(out[2], 6);
+    ASSERT_EQ(out[3], 10);
+}
+
+/* ================================================================== */
+/* Peekable tests                                                      */
+/* ================================================================== */
+
+TEST(peekable_peek_then_next) {
+    int data[] = {10, 20, 30};
+    asx_stream inner, pk;
+    asx_stream_iter_state is;
+    asx_stream_peekable_state pks;
+    void *item = NULL;
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 3);
+    asx_stream_peekable_init(&pk, &pks, inner);
+    ASSERT_EQ(asx_stream_peek(&pks, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(int *)item, 10);
+    ASSERT_EQ(asx_stream_poll_next(&pk, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(int *)item, 10);
+    ASSERT_EQ(asx_stream_poll_next(&pk, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(int *)item, 20);
+}
+
+TEST(peekable_double_peek) {
+    int data[] = {42};
+    asx_stream inner, pk;
+    asx_stream_iter_state is;
+    asx_stream_peekable_state pks;
+    void *item = NULL;
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 1);
+    asx_stream_peekable_init(&pk, &pks, inner);
+    ASSERT_EQ(asx_stream_peek(&pks, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(int *)item, 42);
+    ASSERT_EQ(asx_stream_peek(&pks, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(int *)item, 42);
+    ASSERT_EQ(asx_stream_poll_next(&pk, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(int *)item, 42);
+    ASSERT_EQ(asx_stream_poll_next(&pk, NULL, &item), ASX_STREAM_DONE);
+}
+
+/* ================================================================== */
+/* Inspect tests                                                       */
+/* ================================================================== */
+
+static int inspect_count;
+static void inspect_counter(const void *item, void *user_data) {
+    (void)item; (void)user_data;
+    inspect_count++;
+}
+
+TEST(inspect_observes) {
+    int data[] = {1, 2, 3};
+    int out[3];
+    size_t n;
+    asx_stream inner, insp;
+    asx_stream_iter_state is;
+    asx_stream_inspect_state ins;
+    inspect_count = 0;
+    asx_stream_iter_init(&inner, &is, data, sizeof(int), 3);
+    asx_stream_inspect_init(&insp, &ins, inner, inspect_counter, NULL);
+    n = collect_ints(&insp, out, 3);
+    ASSERT_EQ(n, (size_t)3);
+    ASSERT_EQ(inspect_count, 3);
+}
+
+/* ================================================================== */
+/* Any / All tests                                                     */
+/* ================================================================== */
+
+static int is_five(const void *item, void *user_data) {
+    (void)user_data;
+    return *(const int *)item == 5;
+}
+
+static int is_positive(const void *item, void *user_data) {
+    (void)user_data;
+    return *(const int *)item > 0;
+}
+
+TEST(any_found) {
+    int data[] = {1, 2, 5, 3};
+    int result = 0;
+    asx_stream s;
+    asx_stream_iter_state is;
+    asx_stream_iter_init(&s, &is, data, sizeof(int), 4);
+    ASSERT_EQ(asx_stream_any(&s, is_five, NULL, &result), ASX_OK);
+    ASSERT_TRUE(result);
+}
+
+TEST(any_not_found) {
+    int data[] = {1, 2, 3, 4};
+    int result = 1;
+    asx_stream s;
+    asx_stream_iter_state is;
+    asx_stream_iter_init(&s, &is, data, sizeof(int), 4);
+    ASSERT_EQ(asx_stream_any(&s, is_five, NULL, &result), ASX_OK);
+    ASSERT_FALSE(result);
+}
+
+TEST(all_true) {
+    int data[] = {1, 2, 3, 4};
+    int result = 0;
+    asx_stream s;
+    asx_stream_iter_state is;
+    asx_stream_iter_init(&s, &is, data, sizeof(int), 4);
+    ASSERT_EQ(asx_stream_all(&s, is_positive, NULL, &result), ASX_OK);
+    ASSERT_TRUE(result);
+}
+
+TEST(all_false) {
+    int data[] = {1, -2, 3};
+    int result = 1;
+    asx_stream s;
+    asx_stream_iter_state is;
+    asx_stream_iter_init(&s, &is, data, sizeof(int), 3);
+    ASSERT_EQ(asx_stream_all(&s, is_positive, NULL, &result), ASX_OK);
+    ASSERT_FALSE(result);
+}
+
+/* ================================================================== */
+/* Collect tests                                                       */
+/* ================================================================== */
+
+TEST(collect_basic) {
+    int data[] = {10, 20, 30};
+    void *buf[5];
+    size_t count = 0;
+    asx_stream s;
+    asx_stream_iter_state is;
+    asx_stream_iter_init(&s, &is, data, sizeof(int), 3);
+    ASSERT_EQ(asx_stream_collect(&s, buf, 5, &count), ASX_OK);
+    ASSERT_EQ(count, (size_t)3);
+    ASSERT_EQ(*(int *)buf[0], 10);
+    ASSERT_EQ(*(int *)buf[2], 30);
+}
+
+TEST(collect_overflow) {
+    int data[] = {1, 2, 3, 4, 5};
+    void *buf[2];
+    size_t count = 0;
+    asx_stream s;
+    asx_stream_iter_state is;
+    asx_stream_iter_init(&s, &is, data, sizeof(int), 5);
+    ASSERT_EQ(asx_stream_collect(&s, buf, 2, &count), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(count, (size_t)2);
+}
+
+/* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
 
@@ -622,6 +861,33 @@ int main(void) {
     RUN_TEST(filter_then_map_pipeline);
     RUN_TEST(skip_then_take_pipeline);
     RUN_TEST(filter_map_fold_pipeline);
+
+    /* FilterMap */
+    RUN_TEST(filter_map_basic);
+
+    /* TakeWhile */
+    RUN_TEST(take_while_stops_at_predicate);
+    RUN_TEST(take_while_all_match);
+
+    /* Scan */
+    RUN_TEST(scan_accumulates);
+
+    /* Peekable */
+    RUN_TEST(peekable_peek_then_next);
+    RUN_TEST(peekable_double_peek);
+
+    /* Inspect */
+    RUN_TEST(inspect_observes);
+
+    /* Any / All */
+    RUN_TEST(any_found);
+    RUN_TEST(any_not_found);
+    RUN_TEST(all_true);
+    RUN_TEST(all_false);
+
+    /* Collect */
+    RUN_TEST(collect_basic);
+    RUN_TEST(collect_overflow);
 
     TEST_REPORT();
     return test_failures;

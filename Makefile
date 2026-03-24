@@ -184,7 +184,8 @@ SYNC_SRC := \
 	src/sync/barrier.c \
 	src/sync/once.c \
 	src/sync/mutex.c \
-	src/sync/rwlock.c
+	src/sync/rwlock.c \
+	src/sync/contended_mutex.c
 
 ACTOR_SRC := \
 	src/actor/actor.c \
