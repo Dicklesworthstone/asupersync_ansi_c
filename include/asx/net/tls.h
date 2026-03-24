@@ -39,6 +39,12 @@ typedef enum {
     ASX_TLS_VERIFY_REQUIRED = 2
 } asx_tls_verify_mode;
 
+typedef enum {
+    ASX_TLS_ROOT_SOURCE_NONE   = 0,
+    ASX_TLS_ROOT_SOURCE_NATIVE = 1,
+    ASX_TLS_ROOT_SOURCE_WEBPKI = 2
+} asx_tls_root_source;
+
 #ifndef ASX_TLS_MAX_HOSTNAME
 #define ASX_TLS_MAX_HOSTNAME 64u
 #endif
@@ -63,6 +69,7 @@ typedef struct {
     asx_tls_version min_version;
     asx_tls_version max_version;
     asx_tls_verify_mode verify_mode;
+    asx_tls_root_source root_source;
     char sni_hostname[ASX_TLS_MAX_HOSTNAME];
     char alpn_protocols[ASX_TLS_MAX_ALPN][ASX_TLS_ALPN_MAX_LEN];
     uint32_t alpn_count;
@@ -71,8 +78,15 @@ typedef struct {
 /* Initialize TLS config to safe defaults (TLS 1.2+, verify peer). */
 ASX_API void asx_tls_config_init(asx_tls_config *cfg);
 
+/* Get a human-readable trust-root source name. */
+ASX_API ASX_MUST_USE const char *asx_tls_root_source_str(asx_tls_root_source source);
+
 /* Set SNI hostname for client connections. */
 ASX_API asx_status asx_tls_config_set_sni(asx_tls_config *cfg, const char *hostname);
+
+/* Select the trust-root source for peer verification. */
+ASX_API asx_status asx_tls_config_set_root_source(asx_tls_config *cfg,
+                                                  asx_tls_root_source source);
 
 /* Add an ALPN protocol name (e.g. "h2", "http/1.1"). */
 ASX_API asx_status asx_tls_config_add_alpn(asx_tls_config *cfg, const char *protocol);

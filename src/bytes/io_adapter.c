@@ -505,29 +505,31 @@ static asx_read_result take_poll_read(void *adapter_state, asx_buf_mut *dst,
     asx_take_reader_state *s = (asx_take_reader_state *)adapter_state;
     asx_read_result rr;
     uint32_t read_count;
+    uint32_t saved_capacity;
 
     if (s->remaining == 0) {
         *out_bytes_read = 0;
         return ASX_READ_EOF;
     }
 
-    /* Limit dst capacity to remaining bytes */
+    /* Temporarily limit dst writable space to remaining bytes */
+    saved_capacity = dst->capacity;
     {
-        asx_buf_mut limited = *dst;
-        if (limited.len > s->remaining) limited.len = (uint32_t)s->remaining;
+        uint32_t writable = dst->capacity - dst->wr_pos;
+        if (writable > (uint32_t)s->remaining) {
+            dst->capacity = dst->wr_pos + (uint32_t)s->remaining;
+        }
+    }
 
-        rr = s->inner.poll_read(s->inner.state, &limited, waker, &read_count);
-        *out_bytes_read = read_count;
+    rr = s->inner.poll_read(s->inner.state, dst, waker, &read_count);
+    dst->capacity = saved_capacity; /* restore */
+    *out_bytes_read = read_count;
 
-        if (rr == ASX_READ_READY || rr == ASX_READ_EOF) {
-            if (read_count <= s->remaining) {
-                s->remaining -= read_count;
-            } else {
-                s->remaining = 0;
-            }
-            /* Advance dst position to match limited */
-            dst->data = limited.data;
-            dst->len = limited.len;
+    if (rr == ASX_READ_READY || rr == ASX_READ_EOF) {
+        if (read_count <= s->remaining) {
+            s->remaining -= read_count;
+        } else {
+            s->remaining = 0;
         }
     }
 

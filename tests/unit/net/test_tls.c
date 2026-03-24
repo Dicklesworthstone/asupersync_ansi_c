@@ -20,7 +20,31 @@ TEST(tls_config_defaults) {
     ASSERT_EQ(cfg.min_version, ASX_TLS_VERSION_1_2);
     ASSERT_EQ(cfg.max_version, ASX_TLS_VERSION_1_3);
     ASSERT_EQ(cfg.verify_mode, ASX_TLS_VERIFY_PEER);
+    ASSERT_EQ(cfg.root_source, ASX_TLS_ROOT_SOURCE_NONE);
     ASSERT_EQ(cfg.alpn_count, 0u);
+}
+
+TEST(tls_root_source_strings) {
+    ASSERT_STR_EQ(asx_tls_root_source_str(ASX_TLS_ROOT_SOURCE_NONE), "none");
+    ASSERT_STR_EQ(asx_tls_root_source_str(ASX_TLS_ROOT_SOURCE_NATIVE), "native");
+    ASSERT_STR_EQ(asx_tls_root_source_str(ASX_TLS_ROOT_SOURCE_WEBPKI), "webpki");
+    ASSERT_STR_EQ(asx_tls_root_source_str((asx_tls_root_source)99), "unknown");
+}
+
+TEST(tls_config_root_source_variants) {
+    asx_tls_config cfg;
+
+    asx_tls_config_init(&cfg);
+    ASSERT_EQ(asx_tls_config_set_root_source(&cfg, ASX_TLS_ROOT_SOURCE_NONE), ASX_OK);
+    ASSERT_EQ(cfg.root_source, ASX_TLS_ROOT_SOURCE_NONE);
+    ASSERT_EQ(asx_tls_config_set_root_source(&cfg, ASX_TLS_ROOT_SOURCE_NATIVE),
+              ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(cfg.root_source, ASX_TLS_ROOT_SOURCE_NONE);
+    ASSERT_EQ(asx_tls_config_set_root_source(&cfg, ASX_TLS_ROOT_SOURCE_WEBPKI),
+              ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(cfg.root_source, ASX_TLS_ROOT_SOURCE_NONE);
+    ASSERT_EQ(asx_tls_config_set_root_source(&cfg, (asx_tls_root_source)77),
+              ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(tls_config_set_sni) {
@@ -205,6 +229,8 @@ TEST(tls_null_args) {
     asx_tls_config_init(&cfg);
     ASSERT_EQ(asx_tls_config_set_sni(NULL, "host"), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_tls_config_set_sni(&cfg, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_tls_config_set_root_source(NULL, ASX_TLS_ROOT_SOURCE_NONE),
+              ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_tls_config_add_alpn(NULL, "h2"), ASX_E_INVALID_ARGUMENT);
 }
 #else
@@ -219,6 +245,8 @@ int main(void) {
     fprintf(stderr, "=== tls tests ===\n");
 #if ASX_HAS_TLS_SURFACE
     RUN_TEST(tls_config_defaults);
+    RUN_TEST(tls_root_source_strings);
+    RUN_TEST(tls_config_root_source_variants);
     RUN_TEST(tls_config_set_sni);
     RUN_TEST(tls_config_add_alpn);
     RUN_TEST(tls_config_alpn_exhaustion);

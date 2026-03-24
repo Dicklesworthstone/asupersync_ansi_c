@@ -61,6 +61,20 @@ void asx_tls_config_init(asx_tls_config *cfg) {
     cfg->min_version = ASX_TLS_VERSION_1_2;
     cfg->max_version = ASX_TLS_VERSION_1_3;
     cfg->verify_mode = ASX_TLS_VERIFY_PEER;
+    cfg->root_source = ASX_TLS_ROOT_SOURCE_NONE;
+}
+
+const char *asx_tls_root_source_str(asx_tls_root_source source) {
+    switch (source) {
+        case ASX_TLS_ROOT_SOURCE_NONE:
+            return "none";
+        case ASX_TLS_ROOT_SOURCE_NATIVE:
+            return "native";
+        case ASX_TLS_ROOT_SOURCE_WEBPKI:
+            return "webpki";
+        default:
+            return "unknown";
+    }
 }
 
 asx_status asx_tls_config_set_sni(asx_tls_config *cfg, const char *hostname) {
@@ -71,6 +85,32 @@ asx_status asx_tls_config_set_sni(asx_tls_config *cfg, const char *hostname) {
     if (len == 0u || len >= ASX_TLS_MAX_HOSTNAME) return ASX_E_INVALID_ARGUMENT;
     memcpy(cfg->sni_hostname, hostname, len + 1u);
     return ASX_OK;
+}
+
+asx_status asx_tls_config_set_root_source(asx_tls_config *cfg, asx_tls_root_source source) {
+    if (cfg == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    switch (source) {
+        case ASX_TLS_ROOT_SOURCE_NONE:
+            cfg->root_source = source;
+            return ASX_OK;
+        case ASX_TLS_ROOT_SOURCE_NATIVE:
+#if ASX_HAS_TLS_NATIVE_ROOTS
+            cfg->root_source = source;
+            return ASX_OK;
+#else
+            return ASX_E_PERMISSION_DENIED;
+#endif
+        case ASX_TLS_ROOT_SOURCE_WEBPKI:
+#if ASX_HAS_TLS_WEBPKI_ROOTS
+            cfg->root_source = source;
+            return ASX_OK;
+#else
+            return ASX_E_PERMISSION_DENIED;
+#endif
+        default:
+            return ASX_E_INVALID_ARGUMENT;
+    }
 }
 
 asx_status asx_tls_config_add_alpn(asx_tls_config *cfg, const char *protocol) {

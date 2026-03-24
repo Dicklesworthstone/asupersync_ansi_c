@@ -220,6 +220,89 @@ TEST(roundtrip_read_write) {
     ASSERT_TRUE(asx_buf_eq(asx_buf_mut_freeze(&sink), asx_buf_from_cstr("roundtrip")));
 }
 
+/* ------------------------------------------------------------------ */
+/* Read extension tests                                                */
+/* ------------------------------------------------------------------ */
+
+TEST(read_to_end_basic) {
+    asx_buf_mut source, dst;
+    asx_mem_read_state rs;
+    asx_read_adapter reader;
+    size_t bytes_read = 0;
+
+    asx_buf_mut_init(&source);
+    MUST_OK(asx_buf_mut_put(&source, "hello world", 11));
+    asx_mem_read_init(&rs, &source);
+    reader = asx_mem_read_adapter(&rs);
+
+    asx_buf_mut_init(&dst);
+    ASSERT_EQ(asx_io_read_to_end(&reader, &dst, &bytes_read), ASX_OK);
+    ASSERT_EQ(bytes_read, (size_t)11);
+}
+
+TEST(write_all_basic) {
+    asx_buf_mut sink;
+    asx_mem_write_state ws;
+    asx_write_adapter writer;
+    asx_buf data = asx_buf_from_cstr("write all test");
+
+    asx_buf_mut_init(&sink);
+    asx_mem_write_init(&ws, &sink);
+    writer = asx_mem_write_adapter(&ws);
+
+    ASSERT_EQ(asx_io_write_all(&writer, &data), ASX_OK);
+    ASSERT_TRUE(asx_buf_eq(asx_buf_mut_freeze(&sink), asx_buf_from_cstr("write all test")));
+}
+
+TEST(chain_reader_basic) {
+    asx_buf_mut src1, src2, dst;
+    asx_mem_read_state rs1, rs2;
+    asx_read_adapter r1, r2;
+    asx_chain_reader_state chain;
+    asx_read_adapter chained;
+    size_t bytes_read = 0;
+
+    asx_buf_mut_init(&src1);
+    MUST_OK(asx_buf_mut_put(&src1, "AB", 2));
+    asx_mem_read_init(&rs1, &src1);
+    r1 = asx_mem_read_adapter(&rs1);
+
+    asx_buf_mut_init(&src2);
+    MUST_OK(asx_buf_mut_put(&src2, "CD", 2));
+    asx_mem_read_init(&rs2, &src2);
+    r2 = asx_mem_read_adapter(&rs2);
+
+    asx_chain_reader_init(&chain, r1, r2);
+    chained = asx_chain_reader_adapter(&chain);
+
+    asx_buf_mut_init(&dst);
+    ASSERT_EQ(asx_io_read_to_end(&chained, &dst, &bytes_read), ASX_OK);
+    ASSERT_EQ(bytes_read, (size_t)4);
+    ASSERT_TRUE(asx_buf_eq(asx_buf_mut_freeze(&dst), asx_buf_from_cstr("ABCD")));
+}
+
+TEST(take_reader_basic) {
+    asx_buf_mut source, dst;
+    asx_mem_read_state rs;
+    asx_read_adapter reader;
+    asx_take_reader_state take;
+    asx_read_adapter limited;
+    size_t bytes_read = 0;
+
+    asx_buf_mut_init(&source);
+    MUST_OK(asx_buf_mut_put(&source, "hello world", 11));
+    asx_mem_read_init(&rs, &source);
+    reader = asx_mem_read_adapter(&rs);
+
+    asx_take_reader_init(&take, reader, 5);
+    limited = asx_take_reader_adapter(&take);
+
+    asx_buf_mut_init(&dst);
+    ASSERT_EQ(asx_io_read_to_end(&limited, &dst, &bytes_read), ASX_OK);
+    ASSERT_EQ(bytes_read, (size_t)5);
+    ASSERT_TRUE(asx_buf_eq(asx_buf_mut_freeze(&dst), asx_buf_from_cstr("hello")));
+}
+
 #else
 
 TEST(io_adapter_surface_compile_time_hidden_in_minimal_browser) {
@@ -248,6 +331,11 @@ int main(void) {
     RUN_TEST(mem_write_partial);
 
     RUN_TEST(roundtrip_read_write);
+
+    RUN_TEST(read_to_end_basic);
+    RUN_TEST(write_all_basic);
+    RUN_TEST(chain_reader_basic);
+    RUN_TEST(take_reader_basic);
 #else
     RUN_TEST(io_adapter_surface_compile_time_hidden_in_minimal_browser);
 #endif
