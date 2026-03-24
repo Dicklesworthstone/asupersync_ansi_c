@@ -183,7 +183,8 @@ SYNC_SRC := \
 	src/sync/semaphore.c \
 	src/sync/barrier.c \
 	src/sync/once.c \
-	src/sync/mutex.c
+	src/sync/mutex.c \
+	src/sync/rwlock.c
 
 ACTOR_SRC := \
 	src/actor/actor.c \

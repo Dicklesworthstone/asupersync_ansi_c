@@ -184,6 +184,86 @@ ASX_API void asx_rate_limit_refill(asx_rate_limit_state *state);
 /* Get the number of available tokens. */
 ASX_API uint32_t asx_rate_limit_available(const asx_rate_limit_state *state);
 
+/* -------------------------------------------------------------------
+ * Hedge — latency hedging (speculative execution)
+ *
+ * Start a primary task. If it does not complete within deadline_ns,
+ * launch a backup. Return whichever completes first.
+ *
+ * Phases:
+ *   PRIMARY_ONLY — polling primary, deadline not expired
+ *   RACING       — deadline expired, polling both primary and backup
+ *   DECIDED      — winner chosen, done
+ * ------------------------------------------------------------------- */
+
+typedef enum {
+    ASX_HEDGE_PRIMARY_ONLY,
+    ASX_HEDGE_RACING,
+    ASX_HEDGE_DECIDED
+} asx_hedge_phase;
+
+typedef struct {
+    asx_combinator_branch primary;
+    asx_combinator_branch backup;
+    asx_combinator_poll_fn backup_fn;
+    void *backup_data;
+    uint64_t deadline_ns;
+    asx_deadline deadline;
+    int deadline_armed;
+    asx_hedge_phase phase;
+    int winner;        /* 0 = primary, 1 = backup */
+    asx_status result; /* final result */
+} asx_hedge_state;
+
+/* Initialize a hedge combinator.
+ * primary_fn/primary_data: the primary task
+ * backup_fn/backup_data: the backup task (launched on deadline)
+ * deadline_ns: nanoseconds to wait before hedging */
+ASX_API asx_status asx_hedge_init(asx_hedge_state *state, asx_combinator_poll_fn primary_fn,
+                                   void *primary_data, asx_combinator_poll_fn backup_fn,
+                                   void *backup_data, uint64_t deadline_ns);
+
+/* Poll function — compatible with asx_combinator_poll_fn. */
+ASX_API asx_status asx_hedge_poll(void *user_data, asx_task_id self);
+
+/* Get the phase the hedge is currently in. */
+ASX_API asx_hedge_phase asx_hedge_current_phase(const asx_hedge_state *state);
+
+/* Get which branch won (0 = primary, 1 = backup). Only valid after DECIDED. */
+ASX_API int asx_hedge_winner(const asx_hedge_state *state);
+
+/* -------------------------------------------------------------------
+ * MapReduce — parallel map + reduce
+ *
+ * Runs all map tasks concurrently (like join), then applies a
+ * reduce function to combine results. Map tasks use standard
+ * combinator poll functions. The reduce function is called once
+ * after all maps complete.
+ * ------------------------------------------------------------------- */
+
+typedef asx_status (*asx_map_reduce_fn)(const asx_status *results, uint32_t count, void *user_data);
+
+typedef struct {
+    asx_combinator_branch branches[ASX_COMBINATOR_MAX_BRANCHES];
+    uint32_t count;
+    asx_map_reduce_fn reduce_fn;
+    void *reduce_data;
+    int done;
+    asx_status result;
+} asx_map_reduce_state;
+
+ASX_API asx_status asx_map_reduce_init(asx_map_reduce_state *state, asx_map_reduce_fn reduce_fn,
+                                        void *reduce_data);
+
+ASX_API asx_status asx_map_reduce_add(asx_map_reduce_state *state, asx_combinator_poll_fn map_fn,
+                                       void *user_data);
+
+/* Poll function — compatible with asx_combinator_poll_fn. */
+ASX_API asx_status asx_map_reduce_poll(void *user_data, asx_task_id self);
+
+/* Get number of completed map branches. */
+ASX_API uint32_t asx_map_reduce_completed(const asx_map_reduce_state *state);
+
 #ifdef __cplusplus
 }
 #endif

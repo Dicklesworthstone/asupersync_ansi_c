@@ -82,6 +82,7 @@
 #include <asx/sync/semaphore.h>
 #include <asx/sync/once.h>
 #include <asx/sync/notify.h>
+#include <asx/sync/rwlock.h>
 
 /* Time families */
 #include <asx/time/timer_wheel.h>

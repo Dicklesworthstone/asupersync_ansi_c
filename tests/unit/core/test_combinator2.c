@@ -466,6 +466,128 @@ TEST(law_bracket_release_guarantee) {
 }
 
 /* ================================================================== */
+/* Hedge tests                                                         */
+/* ================================================================== */
+
+/* Primary completes immediately — should win */
+TEST(hedge_primary_wins_immediately) {
+    asx_hedge_state hs;
+    MUST_OK(asx_hedge_init(&hs, poll_ok, NULL, poll_fail, NULL, 1000000));
+    ASSERT_EQ(asx_hedge_poll(&hs, 0), ASX_OK);
+    ASSERT_EQ(asx_hedge_winner(&hs), 0);
+    ASSERT_EQ(asx_hedge_current_phase(&hs), ASX_HEDGE_DECIDED);
+}
+
+/* Primary is pending, backup completes — backup wins.
+ * In deterministic mode, deadline expires immediately, so both
+ * branches race on first poll. */
+static int hedge_primary_pending_count;
+static asx_status hedge_primary_pending(void *user_data, asx_task_id self) {
+    (void)user_data; (void)self;
+    hedge_primary_pending_count++;
+    return ASX_E_PENDING;
+}
+
+TEST(hedge_backup_wins_when_primary_pending) {
+    asx_hedge_state hs;
+    hedge_primary_pending_count = 0;
+    MUST_OK(asx_hedge_init(&hs, hedge_primary_pending, NULL, poll_ok, NULL, 0));
+    /* With 0ns deadline, should go to RACING immediately */
+    ASSERT_EQ(asx_hedge_poll(&hs, 0), ASX_OK);
+    ASSERT_EQ(asx_hedge_winner(&hs), 1); /* backup won */
+}
+
+TEST(hedge_null_fails) {
+    asx_hedge_state hs;
+    ASSERT_EQ(asx_hedge_init(NULL, poll_ok, NULL, poll_ok, NULL, 0), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_hedge_init(&hs, NULL, NULL, poll_ok, NULL, 0), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_hedge_init(&hs, poll_ok, NULL, NULL, NULL, 0), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(hedge_phase_tracking) {
+    asx_hedge_state hs;
+    MUST_OK(asx_hedge_init(&hs, poll_ok, NULL, poll_ok, NULL, 1000000));
+    ASSERT_EQ(asx_hedge_current_phase(&hs), ASX_HEDGE_PRIMARY_ONLY);
+    asx_hedge_poll(&hs, 0);
+    ASSERT_EQ(asx_hedge_current_phase(&hs), ASX_HEDGE_DECIDED);
+}
+
+TEST(hedge_primary_fail_result) {
+    asx_hedge_state hs;
+    MUST_OK(asx_hedge_init(&hs, poll_fail, NULL, poll_ok, NULL, 1000000));
+    /* Primary fails immediately — that's the result */
+    ASSERT_EQ(asx_hedge_poll(&hs, 0), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_hedge_winner(&hs), 0);
+}
+
+/* ================================================================== */
+/* MapReduce tests                                                     */
+/* ================================================================== */
+
+static asx_status reduce_count_ok(const asx_status *results, uint32_t count, void *user_data) {
+    uint32_t i, ok_count = 0;
+    (void)user_data;
+    for (i = 0; i < count; i++) {
+        if (results[i] == ASX_OK) ok_count++;
+    }
+    return (ok_count == count) ? ASX_OK : ASX_E_INVALID_STATE;
+}
+
+TEST(map_reduce_all_ok) {
+    asx_map_reduce_state ms;
+    MUST_OK(asx_map_reduce_init(&ms, reduce_count_ok, NULL));
+    MUST_OK(asx_map_reduce_add(&ms, poll_ok, NULL));
+    MUST_OK(asx_map_reduce_add(&ms, poll_ok, NULL));
+    MUST_OK(asx_map_reduce_add(&ms, poll_ok, NULL));
+    ASSERT_EQ(asx_map_reduce_poll(&ms, 0), ASX_OK);
+    ASSERT_EQ(asx_map_reduce_completed(&ms), 3u);
+}
+
+TEST(map_reduce_reduce_sees_errors) {
+    asx_map_reduce_state ms;
+    MUST_OK(asx_map_reduce_init(&ms, reduce_count_ok, NULL));
+    MUST_OK(asx_map_reduce_add(&ms, poll_ok, NULL));
+    MUST_OK(asx_map_reduce_add(&ms, poll_fail, NULL));
+    /* reduce_count_ok returns error because not all OK */
+    ASSERT_EQ(asx_map_reduce_poll(&ms, 0), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_map_reduce_completed(&ms), 2u);
+}
+
+TEST(map_reduce_empty) {
+    asx_map_reduce_state ms;
+    MUST_OK(asx_map_reduce_init(&ms, reduce_count_ok, NULL));
+    /* No branches — reduce called with count=0 */
+    ASSERT_EQ(asx_map_reduce_poll(&ms, 0), ASX_OK);
+}
+
+TEST(map_reduce_null_fails) {
+    asx_map_reduce_state ms;
+    ASSERT_EQ(asx_map_reduce_init(NULL, reduce_count_ok, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_map_reduce_init(&ms, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+/* ================================================================== */
+/* Additional Laws                                                     */
+/* ================================================================== */
+
+/* Law: hedge with immediate primary is equivalent to just running primary */
+TEST(law_hedge_immediate_is_primary) {
+    asx_hedge_state hs;
+    MUST_OK(asx_hedge_init(&hs, poll_ok, NULL, poll_fail, NULL, 999999999));
+    ASSERT_EQ(asx_hedge_poll(&hs, 0), ASX_OK);
+    ASSERT_EQ(asx_hedge_winner(&hs), 0);
+}
+
+/* Law: map_reduce with one branch is identity */
+TEST(law_map_reduce_single_is_identity) {
+    asx_map_reduce_state ms;
+    MUST_OK(asx_map_reduce_init(&ms, reduce_count_ok, NULL));
+    MUST_OK(asx_map_reduce_add(&ms, poll_ok, NULL));
+    ASSERT_EQ(asx_map_reduce_poll(&ms, 0), ASX_OK);
+    ASSERT_EQ(asx_map_reduce_completed(&ms), 1u);
+}
+
+/* ================================================================== */
 /* Main                                                                */
 /* ================================================================== */
 
@@ -511,6 +633,19 @@ int main(void) {
     /* Integration */
     RUN_TEST(integration_join_with_retry_and_pipeline);
 
+    /* Hedge */
+    RUN_TEST(hedge_primary_wins_immediately);
+    RUN_TEST(hedge_backup_wins_when_primary_pending);
+    RUN_TEST(hedge_null_fails);
+    RUN_TEST(hedge_phase_tracking);
+    RUN_TEST(hedge_primary_fail_result);
+
+    /* MapReduce */
+    RUN_TEST(map_reduce_all_ok);
+    RUN_TEST(map_reduce_reduce_sees_errors);
+    RUN_TEST(map_reduce_empty);
+    RUN_TEST(map_reduce_null_fails);
+
     /* Laws */
     RUN_TEST(law_retry_zero_is_single);
     RUN_TEST(law_bracket_identity);
@@ -518,6 +653,8 @@ int main(void) {
     RUN_TEST(law_bulkhead_one_is_mutex_like);
     RUN_TEST(law_rate_limit_starts_full);
     RUN_TEST(law_bracket_release_guarantee);
+    RUN_TEST(law_hedge_immediate_is_primary);
+    RUN_TEST(law_map_reduce_single_is_identity);
 
     TEST_REPORT();
     return test_failures;

@@ -120,6 +120,9 @@ static const feature_entry g_features[] = {
     {"replay", 1, NULL},
     {"evidence", 1, NULL},
     {"monitor", 1, NULL},
+    {"rwlock", 1, NULL},
+    {"hedge", 1, NULL},
+    {"map_reduce", 1, NULL},
     {NULL, 0, NULL}};
 
 int asx_feature_available(const char *feature_name) {
