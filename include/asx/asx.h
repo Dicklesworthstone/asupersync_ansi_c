@@ -84,6 +84,7 @@
 #include <asx/sync/notify.h>
 #include <asx/sync/rwlock.h>
 #include <asx/sync/contended_mutex.h>
+#include <asx/sync/pool.h>
 
 /* Time families */
 #include <asx/time/timer_wheel.h>
@@ -163,7 +164,9 @@
 #include <asx/spork/spork.h>
 
 /* CLI utilities */
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 #include <asx/cli/cli.h>
+#endif
 
 /* Testing infrastructure */
 #include <asx/testing/log.h>
