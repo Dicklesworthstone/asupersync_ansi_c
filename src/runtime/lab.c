@@ -6,6 +6,7 @@
 
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/lab.h>
+#include <asx/runtime/replay.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
@@ -225,3 +226,6 @@ asx_status asx_lab_open_region(asx_lab *lab, asx_region_id *out_id) {
     if (!lab->initialized) return ASX_E_INVALID_STATE;
     return asx_region_open(out_id);
 }
+
+/* Oracle implementations are in replay.c alongside the existing
+ * oracle framework defined in include/asx/runtime/replay.h. */

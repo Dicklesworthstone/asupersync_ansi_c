@@ -293,6 +293,26 @@ asx_status asx_service_builder_buffer(asx_service_builder *builder) {
     return builder_add_layer(builder, spec);
 }
 
+asx_status asx_service_builder_concurrency_limit(asx_service_builder *builder,
+                                                   uint32_t max_inflight) {
+    asx_service_layer_spec spec;
+    memset(&spec, 0, sizeof(spec));
+    spec.kind = ASX_SERVICE_LAYER_CONCURRENCY_LIMIT;
+    spec.config.concurrency_limit.max_inflight = max_inflight;
+    return builder_add_layer(builder, spec);
+}
+
+asx_status asx_service_builder_filter(asx_service_builder *builder, asx_service_filter_fn fn,
+                                        void *user_data) {
+    asx_service_layer_spec spec;
+    if (fn == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(&spec, 0, sizeof(spec));
+    spec.kind = ASX_SERVICE_LAYER_FILTER;
+    spec.config.filter.fn = fn;
+    spec.config.filter.user_data = user_data;
+    return builder_add_layer(builder, spec);
+}
+
 asx_status asx_service_builder_build(asx_service *out, asx_service_builder_runtime *runtime,
                                      const asx_service_builder *builder, asx_service base) {
     asx_service current;
@@ -370,6 +390,30 @@ asx_status asx_service_builder_build(asx_service *out, asx_service_builder_runti
                                           spec->config.map_response.user_data);
             map_response_count++;
             break;
+        case ASX_SERVICE_LAYER_CONCURRENCY_LIMIT: {
+            uint32_t cl_idx = 0;
+            uint32_t j;
+            for (j = 0; j < i; j++) {
+                if (builder->layers[j].kind == ASX_SERVICE_LAYER_CONCURRENCY_LIMIT) cl_idx++;
+            }
+            if (cl_idx >= ASX_SERVICE_BUILDER_MAX_LAYERS) { return ASX_E_RESOURCE_EXHAUSTED; }
+            asx_service_concurrency_limit_init(
+                &current, &runtime->concurrency_limit[cl_idx], current,
+                spec->config.concurrency_limit.max_inflight);
+            break;
+        }
+        case ASX_SERVICE_LAYER_FILTER: {
+            uint32_t f_idx = 0;
+            uint32_t j;
+            for (j = 0; j < i; j++) {
+                if (builder->layers[j].kind == ASX_SERVICE_LAYER_FILTER) f_idx++;
+            }
+            if (f_idx >= ASX_SERVICE_BUILDER_MAX_LAYERS) { return ASX_E_RESOURCE_EXHAUSTED; }
+            if (spec->config.filter.fn == NULL) { return ASX_E_INVALID_ARGUMENT; }
+            asx_service_filter_init(&current, &runtime->filter[f_idx], current,
+                                     spec->config.filter.fn, spec->config.filter.user_data);
+            break;
+        }
         default: return ASX_E_INVALID_ARGUMENT;
         }
     }

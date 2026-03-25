@@ -24,13 +24,14 @@
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
 #include <asx/bytes/codec.h>
-#include <asx/bytes/io_adapter.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
+
+#include <asx/bytes/io_adapter.h>
 
 /* -------------------------------------------------------------------
  * Decoding error classification

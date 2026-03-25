@@ -137,6 +137,21 @@ ASX_API void asx_service_buffer_init(asx_service *svc, asx_service_buffer_state 
 /* Return the number of buffered (pending) requests. */
 ASX_API uint32_t asx_service_buffer_pending(const asx_service_buffer_state *state);
 
+/* Forward declarations for builder use */
+typedef int (*asx_service_filter_fn)(const void *request, void *user_data);
+
+typedef struct {
+    asx_service inner;
+    uint32_t max_inflight;
+    uint32_t current;
+} asx_service_concurrency_limit_state;
+
+typedef struct {
+    asx_service inner;
+    asx_service_filter_fn filter_fn;
+    void *user_data;
+} asx_service_filter_state;
+
 /* ------------------------------------------------------------------ */
 /* Service builder — fluent middleware composition                     */
 /* ------------------------------------------------------------------ */
@@ -153,7 +168,9 @@ typedef enum {
     ASX_SERVICE_LAYER_LOAD_SHED = 3,
     ASX_SERVICE_LAYER_BUFFER = 4,
     ASX_SERVICE_LAYER_MAP_REQUEST = 5,
-    ASX_SERVICE_LAYER_MAP_RESPONSE = 6
+    ASX_SERVICE_LAYER_MAP_RESPONSE = 6,
+    ASX_SERVICE_LAYER_CONCURRENCY_LIMIT = 7,
+    ASX_SERVICE_LAYER_FILTER = 8
 } asx_service_layer_kind;
 
 typedef struct {
@@ -177,6 +194,13 @@ typedef struct {
             asx_service_map_response_fn fn;
             void *user_data;
         } map_response;
+        struct {
+            uint32_t max_inflight;
+        } concurrency_limit;
+        struct {
+            asx_service_filter_fn fn;
+            void *user_data;
+        } filter;
     } config;
 } asx_service_layer_spec;
 
@@ -193,6 +217,8 @@ typedef struct {
     asx_service_buffer_state buffer[ASX_SERVICE_BUILDER_MAX_LAYERS];
     asx_service_map_request_state map_request[ASX_SERVICE_BUILDER_MAX_LAYERS];
     asx_service_map_response_state map_response[ASX_SERVICE_BUILDER_MAX_LAYERS];
+    asx_service_concurrency_limit_state concurrency_limit[ASX_SERVICE_BUILDER_MAX_LAYERS];
+    asx_service_filter_state filter[ASX_SERVICE_BUILDER_MAX_LAYERS];
 } asx_service_builder_runtime;
 
 /* Initialize a service builder. */
@@ -227,6 +253,15 @@ ASX_API ASX_MUST_USE asx_status asx_service_builder_load_shed(asx_service_builde
 /* Add a buffer layer. */
 ASX_API ASX_MUST_USE asx_status asx_service_builder_buffer(asx_service_builder *builder);
 
+/* Add a concurrency-limit layer. */
+ASX_API ASX_MUST_USE asx_status asx_service_builder_concurrency_limit(asx_service_builder *builder,
+                                                                        uint32_t max_inflight);
+
+/* Add a filter layer. */
+ASX_API ASX_MUST_USE asx_status asx_service_builder_filter(asx_service_builder *builder,
+                                                             asx_service_filter_fn fn,
+                                                             void *user_data);
+
 /* Build a concrete composed service from the recorded layer specs.
  * Layers are applied in insertion order, so later-added layers become
  * the outermost wrappers around the base service. */
@@ -242,11 +277,7 @@ ASX_API uint32_t asx_service_builder_layer_count(const asx_service_builder *buil
 /* Concurrency-limit middleware — bounds in-flight requests            */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    asx_service inner;
-    uint32_t max_inflight;
-    uint32_t current;
-} asx_service_concurrency_limit_state;
+/* (asx_service_concurrency_limit_state defined above for builder use) */
 
 /* Initialize a concurrency-limiting wrapper. Returns ASX_E_OVERLOADED
  * when the limit is reached instead of forwarding to the inner service. */
@@ -266,14 +297,7 @@ ASX_API uint32_t asx_service_concurrency_limit_inflight(
 /* Filter middleware — rejects requests that fail a predicate          */
 /* ------------------------------------------------------------------ */
 
-/* Returns nonzero if the request should be forwarded. */
-typedef int (*asx_service_filter_fn)(const void *request, void *user_data);
-
-typedef struct {
-    asx_service inner;
-    asx_service_filter_fn filter_fn;
-    void *user_data;
-} asx_service_filter_state;
+/* (asx_service_filter_state defined above for builder use) */
 
 /* Initialize a filter wrapper. Rejected requests get ASX_E_PERMISSION_DENIED. */
 ASX_API void asx_service_filter_init(asx_service *svc, asx_service_filter_state *state,
