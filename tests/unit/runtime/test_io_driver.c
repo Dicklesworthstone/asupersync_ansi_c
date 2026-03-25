@@ -421,6 +421,17 @@ TEST(init_state_tracks_lifecycle) {
     ASSERT_FALSE(asx_io_driver_is_initialized());
 }
 
+TEST(get_backend_tracks_selected_backend) {
+    asx_io_backend backend;
+
+    ASSERT_EQ(asx_io_driver_get_backend(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_io_driver_get_backend(&backend), ASX_E_INVALID_STATE);
+    if (!setup()) return;
+    ASSERT_EQ(asx_io_driver_get_backend(&backend), ASX_OK);
+    ASSERT_EQ(backend, ASX_IO_BACKEND_GHOST);
+    teardown();
+}
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -477,6 +488,7 @@ int main(void) {
     RUN_TEST(arena_exhaustion);
     RUN_TEST(multiple_registrations);
     RUN_TEST(init_state_tracks_lifecycle);
+    RUN_TEST(get_backend_tracks_selected_backend);
     RUN_TEST(init_denied_when_io_surface_unavailable);
 #else
     RUN_TEST(io_driver_surface_compile_time_hidden_in_browser);

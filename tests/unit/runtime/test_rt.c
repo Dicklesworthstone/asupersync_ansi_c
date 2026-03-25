@@ -70,6 +70,7 @@ static asx_status lab_noop_step(asx_lab *lab, void *user_data) {
 static void clear_rt_test_env(void) {
     rt_unsetenv("ASX_RUNTIME_PRESET");
     rt_unsetenv("ASX_RUNTIME_WAIT_POLICY");
+    rt_unsetenv("ASX_RUNTIME_IO_BACKEND");
     rt_unsetenv("ASX_RUNTIME_LEAK_RESPONSE");
     rt_unsetenv("ASX_RUNTIME_FINALIZER_POLL_BUDGET");
     rt_unsetenv("ASX_RUNTIME_FINALIZER_TIME_BUDGET_NS");
@@ -79,6 +80,7 @@ static void clear_rt_test_env(void) {
 
     rt_unsetenv("TESTRT_PRESET");
     rt_unsetenv("TESTRT_WAIT_POLICY");
+    rt_unsetenv("TESTRT_IO_BACKEND");
     rt_unsetenv("TESTRT_LEAK_RESPONSE");
     rt_unsetenv("TESTRT_FINALIZER_POLL_BUDGET");
     rt_unsetenv("TESTRT_FINALIZER_TIME_BUDGET_NS");
@@ -131,6 +133,13 @@ TEST(config_validate_invalid_wait_policy_fails) {
     ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(config_validate_invalid_io_backend_fails) {
+    asx_runtime_config cfg;
+    make_valid_config(&cfg);
+    cfg.io_backend = (asx_io_backend)99;
+    ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_E_INVALID_ARGUMENT);
+}
+
 TEST(config_validate_invalid_leak_response_fails) {
     asx_runtime_config cfg;
     make_valid_config(&cfg);
@@ -159,6 +168,7 @@ TEST(config_validate_defaults_ok) {
     asx_runtime_config cfg;
     make_valid_config(&cfg);
     ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_OK);
+    ASSERT_EQ(cfg.io_backend, ASX_IO_BACKEND_GHOST);
 }
 
 /* ------------------------------------------------------------------ */
@@ -205,6 +215,16 @@ TEST(init_invalid_enum_config_fails) {
     make_valid_hooks(&hooks);
     cfg.wait_policy = (asx_wait_policy)99;
     ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(init_unsupported_io_backend_fails_closed) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    cfg.io_backend = ASX_IO_BACKEND_IO_URING;
+    ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_E_PERMISSION_DENIED);
 }
 
 TEST(init_invalid_leak_escalation_config_fails) {
@@ -336,6 +356,7 @@ TEST(init_default_success) {
     ASSERT_TRUE(asx_runtime_is_initialized(&rt));
 
     /* Verify defaults were applied */
+    ASSERT_EQ(rt.config.io_backend, ASX_IO_BACKEND_GHOST);
     ASSERT_EQ(rt.config.leak_response, ASX_LEAK_LOG);
     ASSERT_EQ(rt.config.finalizer_poll_budget, 100u);
     ASSERT_EQ(rt.config.max_cancel_chain_depth, 16u);
@@ -350,11 +371,13 @@ TEST(init_from_env_applies_default_prefix_overrides) {
     clear_rt_test_env();
     rt_setenv("ASX_RUNTIME_PRESET", "high-throughput");
     rt_setenv("ASX_RUNTIME_WAIT_POLICY", "yield");
+    rt_setenv("ASX_RUNTIME_IO_BACKEND", "ghost");
     rt_setenv("ASX_RUNTIME_FINALIZER_POLL_BUDGET", "77");
 
     ASSERT_EQ(asx_runtime_init_from_env(&rt, NULL), ASX_OK);
     ASSERT_EQ(asx_runtime_get_config(&rt, &cfg), ASX_OK);
     ASSERT_EQ(cfg.wait_policy, ASX_WAIT_YIELD);
+    ASSERT_EQ(cfg.io_backend, ASX_IO_BACKEND_GHOST);
     ASSERT_EQ(cfg.finalizer_poll_budget, 77u);
     ASSERT_EQ(cfg.max_cancel_chain_depth, 32u);
 
@@ -368,12 +391,14 @@ TEST(init_from_env_applies_custom_prefix_overrides) {
 
     clear_rt_test_env();
     rt_setenv("TESTRT_PRESET", "current-thread");
+    rt_setenv("TESTRT_IO_BACKEND", "ghost");
     rt_setenv("TESTRT_FINALIZER_TIME_BUDGET_NS", "4444");
     rt_setenv("TESTRT_MAX_CANCEL_CHAIN_MEMORY", "12345");
 
     ASSERT_EQ(asx_runtime_init_from_env(&rt, "TESTRT_"), ASX_OK);
     ASSERT_EQ(asx_runtime_get_config(&rt, &cfg), ASX_OK);
     ASSERT_EQ(cfg.wait_policy, ASX_WAIT_BUSY_SPIN);
+    ASSERT_EQ(cfg.io_backend, ASX_IO_BACKEND_GHOST);
     ASSERT_EQ(cfg.finalizer_time_budget_ns, (uint64_t)4444u);
     ASSERT_EQ(cfg.max_cancel_chain_memory, 12345u);
 
@@ -389,6 +414,19 @@ TEST(init_from_env_rejects_invalid_env_without_initializing) {
     rt_setenv("ASX_RUNTIME_MAX_CANCEL_CHAIN_DEPTH", "0");
 
     ASSERT_EQ(asx_runtime_init_from_env(&rt, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_FALSE(asx_runtime_is_initialized(&rt));
+
+    clear_rt_test_env();
+}
+
+TEST(init_from_env_rejects_unsupported_io_backend_without_initializing) {
+    asx_runtime rt;
+
+    memset(&rt, 0, sizeof(rt));
+    clear_rt_test_env();
+    rt_setenv("ASX_RUNTIME_IO_BACKEND", "io_uring");
+
+    ASSERT_EQ(asx_runtime_init_from_env(&rt, NULL), ASX_E_PERMISSION_DENIED);
     ASSERT_FALSE(asx_runtime_is_initialized(&rt));
 
     clear_rt_test_env();
@@ -505,11 +543,22 @@ TEST(get_config_returns_stored_config) {
     make_valid_config(&cfg);
     make_valid_hooks(&hooks);
     cfg.finalizer_poll_budget = 42;
+    cfg.io_backend = ASX_IO_BACKEND_GHOST;
 
     MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
     ASSERT_EQ(asx_runtime_get_config(&rt, &out), ASX_OK);
     ASSERT_EQ(out.finalizer_poll_budget, 42u);
+    ASSERT_EQ(out.io_backend, ASX_IO_BACKEND_GHOST);
     asx_runtime_shutdown(&rt);
+}
+
+TEST(runtime_io_backend_query_tracks_runtime_config) {
+    asx_runtime rt;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_runtime_io_backend(&rt), ASX_IO_BACKEND_GHOST);
+    asx_runtime_shutdown(&rt);
+    ASSERT_EQ(asx_runtime_io_backend(&rt), ASX_IO_BACKEND_GHOST);
 }
 
 TEST(init_copies_leak_escalation_config) {
@@ -938,6 +987,7 @@ int main(void) {
     RUN_TEST(config_validate_zero_cancel_depth_fails);
     RUN_TEST(config_validate_zero_finalizer_budget_fails);
     RUN_TEST(config_validate_invalid_wait_policy_fails);
+    RUN_TEST(config_validate_invalid_io_backend_fails);
     RUN_TEST(config_validate_invalid_leak_response_fails);
     RUN_TEST(config_validate_invalid_finalizer_escalation_fails);
     RUN_TEST(config_validate_invalid_leak_escalation_fails);
@@ -949,6 +999,7 @@ int main(void) {
     RUN_TEST(init_null_hooks_fails);
     RUN_TEST(init_bad_config_fails);
     RUN_TEST(init_invalid_enum_config_fails);
+    RUN_TEST(init_unsupported_io_backend_fails_closed);
     RUN_TEST(init_invalid_leak_escalation_config_fails);
     RUN_TEST(init_success);
     RUN_TEST(init_generation_increments);
@@ -966,6 +1017,7 @@ int main(void) {
     RUN_TEST(init_from_env_applies_default_prefix_overrides);
     RUN_TEST(init_from_env_applies_custom_prefix_overrides);
     RUN_TEST(init_from_env_rejects_invalid_env_without_initializing);
+    RUN_TEST(init_from_env_rejects_unsupported_io_backend_without_initializing);
     RUN_TEST(init_default_wires_blocking_surface);
     RUN_TEST(init_default_wires_io_surface);
     RUN_TEST(init_default_io_poll_wakes_registered_task);
@@ -979,6 +1031,7 @@ int main(void) {
     RUN_TEST(get_config_null_out_fails);
     RUN_TEST(get_config_uninitialized_fails);
     RUN_TEST(get_config_returns_stored_config);
+    RUN_TEST(runtime_io_backend_query_tracks_runtime_config);
     RUN_TEST(init_copies_leak_escalation_config);
     RUN_TEST(get_hooks_null_rt_fails);
     RUN_TEST(get_hooks_null_out_fails);

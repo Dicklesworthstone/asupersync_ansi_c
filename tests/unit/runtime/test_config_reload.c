@@ -44,6 +44,10 @@ TEST(field_class_wait_policy_is_reloadable) {
     ASSERT_EQ(asx_config_field_class("wait_policy"), ASX_CONFIG_RELOADABLE);
 }
 
+TEST(field_class_io_backend_is_restart_required) {
+    ASSERT_EQ(asx_config_field_class("io_backend"), ASX_CONFIG_RESTART_REQUIRED);
+}
+
 TEST(field_class_leak_response_is_reloadable) {
     ASSERT_EQ(asx_config_field_class("leak_response"), ASX_CONFIG_RELOADABLE);
 }
@@ -193,6 +197,20 @@ TEST(reload_finalizer_budget_succeeds) {
 
     ASSERT_EQ(asx_config_reload(&g_state, &new_cfg), ASX_OK);
     ASSERT_EQ(asx_config_active(&g_state)->finalizer_poll_budget, (uint32_t)500);
+}
+
+TEST(reload_io_backend_requires_restart) {
+    asx_runtime_config new_cfg;
+    const char *rejected = NULL;
+
+    cr_setup();
+    ASSERT_EQ(asx_config_load(&g_state, &g_cfg), ASX_OK);
+
+    memcpy(&new_cfg, &g_cfg, sizeof(new_cfg));
+    new_cfg.io_backend = ASX_IO_BACKEND_IO_URING;
+
+    ASSERT_EQ(asx_config_validate_reload(&g_state, &new_cfg, &rejected), ASX_E_CONFIG_RESTART_REQ);
+    ASSERT_STR_EQ(rejected, "io_backend");
 }
 
 TEST(reload_copies_leak_escalation_config) {
@@ -386,7 +404,7 @@ TEST(field_table_has_all_config_fields) {
     const asx_config_field_desc *table = asx_config_field_table(&count);
 
     ASSERT_TRUE(table != NULL);
-    ASSERT_EQ(count, (uint32_t)9); /* 9 fields in asx_runtime_config */
+    ASSERT_EQ(count, (uint32_t)10); /* 10 fields in asx_runtime_config */
 }
 
 TEST(field_table_covers_struct_range) {
@@ -465,6 +483,7 @@ int main(void) {
     /* Field classification */
     RUN_TEST(field_class_size_is_frozen);
     RUN_TEST(field_class_wait_policy_is_reloadable);
+    RUN_TEST(field_class_io_backend_is_restart_required);
     RUN_TEST(field_class_leak_response_is_reloadable);
     RUN_TEST(field_class_leak_escalation_is_reloadable);
     RUN_TEST(field_class_finalizer_poll_budget_is_reloadable);
@@ -487,6 +506,7 @@ int main(void) {
     RUN_TEST(reload_wait_policy_succeeds);
     RUN_TEST(reload_leak_response_succeeds);
     RUN_TEST(reload_finalizer_budget_succeeds);
+    RUN_TEST(reload_io_backend_requires_restart);
     RUN_TEST(reload_copies_leak_escalation_config);
 
     /* Reload rejection */

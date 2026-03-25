@@ -21,6 +21,7 @@
 extern uint32_t g_region_count;
 extern uint32_t g_task_count;
 extern uint32_t g_obligation_count;
+asx_io_backend asx_runtime_active_io_backend_selected(void);
 
 /* Generation counter for runtime instances */
 static uint32_t g_rt_generation = 1u;

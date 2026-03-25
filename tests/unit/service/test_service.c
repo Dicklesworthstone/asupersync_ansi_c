@@ -598,6 +598,97 @@ TEST(load_balance_empty_fails) {
 }
 
 /* ================================================================== */
+/* Reconnect tests                                                     */
+/* ================================================================== */
+
+static int reconnect_factory_calls;
+
+static asx_status reconnect_make_echo(void *factory_data, asx_service *out) {
+    (void)factory_data;
+    reconnect_factory_calls++;
+    out->poll_ready = echo_poll_ready;
+    out->call = echo_call;
+    out->state = NULL;
+    return ASX_OK;
+}
+
+TEST(reconnect_retries_on_failure) {
+    asx_service svc;
+    asx_service_reconnect_state rs;
+    failing_service_state fs;
+    asx_service failing;
+    int req = 42;
+    const void *resp = NULL;
+
+    reconnect_factory_calls = 0;
+    failing = make_failing_service(&fs, ASX_E_DISCONNECTED);
+
+    asx_service_reconnect_init(&svc, &rs, failing, reconnect_make_echo, NULL, 3);
+    /* First call: inner fails, reconnects to echo, retries, succeeds */
+    ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
+    ASSERT_EQ(*(const int *)resp, 42);
+    ASSERT_EQ(reconnect_factory_calls, 1);
+    ASSERT_EQ(asx_service_reconnect_count(&rs), 1u);
+}
+
+TEST(reconnect_respects_limit) {
+    asx_service svc;
+    asx_service_reconnect_state rs;
+    failing_service_state fs;
+    asx_service failing;
+    int req = 1;
+    const void *resp = NULL;
+
+    reconnect_factory_calls = 0;
+    failing = make_failing_service(&fs, ASX_E_DISCONNECTED);
+
+    /* max_reconnects = 0 means unlimited */
+    asx_service_reconnect_init(&svc, &rs, failing, reconnect_make_echo, NULL, 0);
+    ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK); /* reconnects */
+    ASSERT_EQ(asx_service_reconnect_count(&rs), 1u);
+}
+
+/* ================================================================== */
+/* Steer tests                                                         */
+/* ================================================================== */
+
+static uint32_t steer_by_value(const void *request, uint32_t backend_count, void *user_data) {
+    int val = *(const int *)request;
+    (void)user_data;
+    return (uint32_t)(val % (int)backend_count);
+}
+
+TEST(steer_routes_by_key) {
+    asx_service svc;
+    asx_service_steer_state ss;
+    asx_service a, b;
+    int req;
+    int resp = 0;
+
+    a.poll_ready = echo_poll_ready;
+    a.call = lb_echo_a;
+    a.state = NULL;
+    b.poll_ready = echo_poll_ready;
+    b.call = lb_echo_b;
+    b.state = NULL;
+
+    lb_call_count_a = 0;
+    lb_call_count_b = 0;
+
+    asx_service_steer_init(&svc, &ss, steer_by_value, NULL);
+    ASSERT_EQ(asx_service_steer_add_backend(&ss, a), ASX_OK);
+    ASSERT_EQ(asx_service_steer_add_backend(&ss, b), ASX_OK);
+
+    /* Even numbers go to a (idx 0), odd to b (idx 1) */
+    req = 0; ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
+    req = 1; ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
+    req = 2; ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
+    req = 3; ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
+    ASSERT_EQ(lb_call_count_a, 2);
+    ASSERT_EQ(lb_call_count_b, 2);
+}
+
+/* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
 
@@ -652,6 +743,13 @@ int main(void) {
     /* Load balance */
     RUN_TEST(load_balance_round_robin);
     RUN_TEST(load_balance_empty_fails);
+
+    /* Reconnect */
+    RUN_TEST(reconnect_retries_on_failure);
+    RUN_TEST(reconnect_respects_limit);
+
+    /* Steer */
+    RUN_TEST(steer_routes_by_key);
 
     TEST_REPORT();
     return test_failures;
