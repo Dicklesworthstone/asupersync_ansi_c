@@ -127,6 +127,9 @@ static const feature_entry g_features[] = {
     {"stream_combinators", 1, NULL},
     {"pool", 1, NULL},
     {"det_hash", 1, NULL},
+    {"concurrency_limit", 1, NULL},
+    {"filter_middleware", 1, NULL},
+    {"load_balance", 1, NULL},
     {NULL, 0, NULL}};
 
 int asx_feature_available(const char *feature_name) {

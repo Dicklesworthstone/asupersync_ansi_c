@@ -65,13 +65,15 @@ typedef enum {
     ASX_E_WOULD_BLOCK = 701,
     ASX_E_CHANNEL_FULL = 702,
     ASX_E_CHANNEL_NOT_DRAINED = 703,
-    ASX_E_LAGGED = 704, /* broadcast receiver fell behind */
+    ASX_E_LAGGED = 704,        /* broadcast receiver fell behind */
+    ASX_E_CHANNEL_EMPTY = 705, /* channel has no messages (distinct from WOULD_BLOCK) */
 
     /* Timer errors (8xx) */
     ASX_E_TIMER_NOT_FOUND = 800,
     ASX_E_TIMERS_PENDING = 801,
     ASX_E_TIMER_DURATION_EXCEEDED = 802,
-    ASX_E_TIMED_OUT = 803, /* operation exceeded deadline */
+    ASX_E_TIMED_OUT = 803,          /* operation exceeded deadline */
+    ASX_E_THRESHOLD_TIMEOUT = 804, /* quorum/threshold not met within deadline */
 
     /* Quiescence errors (9xx) */
     ASX_E_TASKS_STILL_ACTIVE = 900,
@@ -83,7 +85,9 @@ typedef enum {
 
     /* Resource exhaustion (10xx) */
     ASX_E_RESOURCE_EXHAUSTED = 1000,
-    ASX_E_OVERLOADED = 1001, /* service rejected due to backpressure/load shedding */
+    ASX_E_OVERLOADED = 1001,          /* service rejected due to backpressure/load shedding */
+    ASX_E_COST_QUOTA_EXHAUSTED = 1002, /* cost budget depleted */
+    ASX_E_POLL_QUOTA_EXHAUSTED = 1003, /* poll budget depleted (finer than POLL_BUDGET_EXHAUSTED) */
 
     /* Handle errors (11xx) */
     ASX_E_STALE_HANDLE = 1100,
@@ -103,6 +107,9 @@ typedef enum {
 
     /* Codec equivalence errors (14xx) */
     ASX_E_EQUIVALENCE_MISMATCH = 1400, /* cross-codec semantic mismatch */
+    ASX_E_DUPLICATE_SYMBOL = 1401,     /* RaptorQ: duplicate source symbol */
+    ASX_E_OBJECT_MISMATCH = 1402,      /* RaptorQ: symbol does not belong to object */
+    ASX_E_CORRUPTED_SYMBOL = 1403,     /* RaptorQ: symbol integrity check failed */
 
     /* Trace/replay errors (15xx) */
     ASX_E_REPLAY_MISMATCH = 1500, /* replay continuity check failed */

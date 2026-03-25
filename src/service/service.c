@@ -381,3 +381,130 @@ asx_status asx_service_builder_build(asx_service *out, asx_service_builder_runti
 uint32_t asx_service_builder_layer_count(const asx_service_builder *builder) {
     return builder->layer_count;
 }
+
+/* ------------------------------------------------------------------ */
+/* Concurrency-limit middleware                                        */
+/* ------------------------------------------------------------------ */
+
+static asx_service_readiness cl_poll_ready(void *state) {
+    asx_service_concurrency_limit_state *s = (asx_service_concurrency_limit_state *)state;
+    if (s->current >= s->max_inflight) return ASX_SERVICE_NOT_READY;
+    return s->inner.poll_ready(s->inner.state);
+}
+
+static asx_status cl_call(void *state, const void *request, void *response) {
+    asx_service_concurrency_limit_state *s = (asx_service_concurrency_limit_state *)state;
+    if (s->current >= s->max_inflight) return ASX_E_OVERLOADED;
+    s->current++;
+    return s->inner.call(s->inner.state, request, response);
+}
+
+void asx_service_concurrency_limit_init(asx_service *svc,
+                                          asx_service_concurrency_limit_state *state,
+                                          asx_service inner, uint32_t max_inflight) {
+    state->inner = inner;
+    state->max_inflight = max_inflight;
+    state->current = 0;
+    svc->poll_ready = cl_poll_ready;
+    svc->call = cl_call;
+    svc->state = state;
+}
+
+void asx_service_concurrency_limit_release(asx_service_concurrency_limit_state *state) {
+    if (state != NULL && state->current > 0) state->current--;
+}
+
+uint32_t asx_service_concurrency_limit_inflight(
+    const asx_service_concurrency_limit_state *state) {
+    if (state == NULL) return 0;
+    return state->current;
+}
+
+/* ------------------------------------------------------------------ */
+/* Filter middleware                                                    */
+/* ------------------------------------------------------------------ */
+
+static asx_service_readiness filter_poll_ready(void *state) {
+    asx_service_filter_state *s = (asx_service_filter_state *)state;
+    return s->inner.poll_ready(s->inner.state);
+}
+
+static asx_status filter_call(void *state, const void *request, void *response) {
+    asx_service_filter_state *s = (asx_service_filter_state *)state;
+    if (!s->filter_fn(request, s->user_data)) return ASX_E_PERMISSION_DENIED;
+    return s->inner.call(s->inner.state, request, response);
+}
+
+void asx_service_filter_init(asx_service *svc, asx_service_filter_state *state,
+                              asx_service inner, asx_service_filter_fn filter_fn,
+                              void *user_data) {
+    state->inner = inner;
+    state->filter_fn = filter_fn;
+    state->user_data = user_data;
+    svc->poll_ready = filter_poll_ready;
+    svc->call = filter_call;
+    svc->state = state;
+}
+
+/* ------------------------------------------------------------------ */
+/* Load-balance middleware (round-robin)                                */
+/* ------------------------------------------------------------------ */
+
+static asx_service_readiness lb_poll_ready(void *state) {
+    asx_service_load_balance_state *s = (asx_service_load_balance_state *)state;
+    uint32_t i;
+    if (s->count == 0) return ASX_SERVICE_NOT_READY;
+    /* Ready if any backend is ready */
+    for (i = 0; i < s->count; i++) {
+        if (s->backends[i].poll_ready(s->backends[i].state) == ASX_SERVICE_READY) {
+            return ASX_SERVICE_READY;
+        }
+    }
+    return ASX_SERVICE_NOT_READY;
+}
+
+static asx_status lb_call(void *state, const void *request, void *response) {
+    asx_service_load_balance_state *s = (asx_service_load_balance_state *)state;
+    uint32_t start;
+    uint32_t i;
+
+    if (s->count == 0) return ASX_E_INVALID_STATE;
+
+    /* Round-robin: try from current index, wrap around */
+    start = s->next % s->count;
+    for (i = 0; i < s->count; i++) {
+        uint32_t idx = (start + i) % s->count;
+        if (s->backends[idx].poll_ready(s->backends[idx].state) == ASX_SERVICE_READY) {
+            s->next = idx + 1u;
+            return s->backends[idx].call(s->backends[idx].state, request, response);
+        }
+    }
+
+    /* No backend ready — try the designated next anyway */
+    s->next = start + 1u;
+    return s->backends[start].call(s->backends[start].state, request, response);
+}
+
+void asx_service_load_balance_init(asx_service *svc,
+                                    asx_service_load_balance_state *state) {
+    state->count = 0;
+    state->next = 0;
+    svc->poll_ready = lb_poll_ready;
+    svc->call = lb_call;
+    svc->state = state;
+}
+
+asx_status asx_service_load_balance_add_backend(asx_service_load_balance_state *state,
+                                                  asx_service backend) {
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (state->count >= ASX_SERVICE_LB_MAX_BACKENDS) return ASX_E_RESOURCE_EXHAUSTED;
+    state->backends[state->count] = backend;
+    state->count++;
+    return ASX_OK;
+}
+
+uint32_t asx_service_load_balance_backend_count(
+    const asx_service_load_balance_state *state) {
+    if (state == NULL) return 0;
+    return state->count;
+}

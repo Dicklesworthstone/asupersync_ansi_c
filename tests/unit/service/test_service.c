@@ -460,6 +460,144 @@ TEST(map_request_wrapping_echo) {
 }
 
 /* ================================================================== */
+/* Concurrency limit tests                                             */
+/* ================================================================== */
+
+TEST(concurrency_limit_allows_under_limit) {
+    asx_service echo = make_echo_service();
+    asx_service limited;
+    asx_service_concurrency_limit_state cls;
+    int req = 42;
+    const void *resp = NULL;
+
+    asx_service_concurrency_limit_init(&limited, &cls, echo, 2);
+    ASSERT_EQ(asx_service_call(&limited, &req, &resp), ASX_OK);
+    ASSERT_EQ(*(const int *)resp, 42);
+    ASSERT_EQ(asx_service_concurrency_limit_inflight(&cls), 1u);
+    asx_service_concurrency_limit_release(&cls);
+    ASSERT_EQ(asx_service_concurrency_limit_inflight(&cls), 0u);
+}
+
+TEST(concurrency_limit_rejects_at_limit) {
+    asx_service echo = make_echo_service();
+    asx_service limited;
+    asx_service_concurrency_limit_state cls;
+    int req = 1;
+    const void *resp = NULL;
+
+    asx_service_concurrency_limit_init(&limited, &cls, echo, 1);
+    ASSERT_EQ(asx_service_call(&limited, &req, &resp), ASX_OK);
+    /* Now at limit — next call should be rejected */
+    ASSERT_EQ(asx_service_call(&limited, &req, &resp), ASX_E_OVERLOADED);
+}
+
+TEST(concurrency_limit_release_frees_slot) {
+    asx_service echo = make_echo_service();
+    asx_service limited;
+    asx_service_concurrency_limit_state cls;
+    int req = 1;
+    const void *resp = NULL;
+
+    asx_service_concurrency_limit_init(&limited, &cls, echo, 1);
+    ASSERT_EQ(asx_service_call(&limited, &req, &resp), ASX_OK);
+    ASSERT_EQ(asx_service_call(&limited, &req, &resp), ASX_E_OVERLOADED);
+    asx_service_concurrency_limit_release(&cls);
+    ASSERT_EQ(asx_service_call(&limited, &req, &resp), ASX_OK);
+}
+
+/* ================================================================== */
+/* Filter tests                                                        */
+/* ================================================================== */
+
+static int filter_positive(const void *request, void *user_data) {
+    (void)user_data;
+    return *(const int *)request > 0;
+}
+
+TEST(filter_passes_matching) {
+    asx_service echo = make_echo_service();
+    asx_service filtered;
+    asx_service_filter_state fs;
+    int req = 42;
+    const void *resp = NULL;
+
+    asx_service_filter_init(&filtered, &fs, echo, filter_positive, NULL);
+    ASSERT_EQ(asx_service_call(&filtered, &req, &resp), ASX_OK);
+    ASSERT_EQ(*(const int *)resp, 42);
+}
+
+TEST(filter_rejects_non_matching) {
+    asx_service echo = make_echo_service();
+    asx_service filtered;
+    asx_service_filter_state fs;
+    int req = -5;
+    const void *resp = NULL;
+
+    asx_service_filter_init(&filtered, &fs, echo, filter_positive, NULL);
+    ASSERT_EQ(asx_service_call(&filtered, &req, &resp), ASX_E_PERMISSION_DENIED);
+}
+
+/* ================================================================== */
+/* Load balance tests                                                  */
+/* ================================================================== */
+
+static int lb_call_count_a;
+static int lb_call_count_b;
+
+static asx_status lb_echo_a(void *state, const void *request, void *response) {
+    (void)state; (void)request; (void)response;
+    lb_call_count_a++;
+    return ASX_OK;
+}
+
+static asx_status lb_echo_b(void *state, const void *request, void *response) {
+    (void)state; (void)request; (void)response;
+    lb_call_count_b++;
+    return ASX_OK;
+}
+
+TEST(load_balance_round_robin) {
+    asx_service lb;
+    asx_service_load_balance_state lbs;
+    asx_service a, b;
+    int req = 1;
+    int resp = 0;
+
+    a.poll_ready = echo_poll_ready;
+    a.call = lb_echo_a;
+    a.state = NULL;
+    b.poll_ready = echo_poll_ready;
+    b.call = lb_echo_b;
+    b.state = NULL;
+
+    lb_call_count_a = 0;
+    lb_call_count_b = 0;
+
+    asx_service_load_balance_init(&lb, &lbs);
+    ASSERT_EQ(asx_service_load_balance_add_backend(&lbs, a), ASX_OK);
+    ASSERT_EQ(asx_service_load_balance_add_backend(&lbs, b), ASX_OK);
+    ASSERT_EQ(asx_service_load_balance_backend_count(&lbs), 2u);
+
+    /* 4 calls should alternate: a, b, a, b */
+    ASSERT_EQ(asx_service_call(&lb, &req, &resp), ASX_OK);
+    ASSERT_EQ(asx_service_call(&lb, &req, &resp), ASX_OK);
+    ASSERT_EQ(asx_service_call(&lb, &req, &resp), ASX_OK);
+    ASSERT_EQ(asx_service_call(&lb, &req, &resp), ASX_OK);
+    ASSERT_EQ(lb_call_count_a, 2);
+    ASSERT_EQ(lb_call_count_b, 2);
+}
+
+TEST(load_balance_empty_fails) {
+    asx_service lb;
+    asx_service_load_balance_state lbs;
+    int req = 1;
+    int resp = 0;
+
+    asx_service_load_balance_init(&lb, &lbs);
+    ASSERT_EQ(asx_service_call(&lb, &req, &resp), ASX_E_INVALID_STATE);
+}
+
+/* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
 
@@ -501,6 +639,19 @@ int main(void) {
 
     /* Composition */
     RUN_TEST(map_request_wrapping_echo);
+
+    /* Concurrency limit */
+    RUN_TEST(concurrency_limit_allows_under_limit);
+    RUN_TEST(concurrency_limit_rejects_at_limit);
+    RUN_TEST(concurrency_limit_release_frees_slot);
+
+    /* Filter */
+    RUN_TEST(filter_passes_matching);
+    RUN_TEST(filter_rejects_non_matching);
+
+    /* Load balance */
+    RUN_TEST(load_balance_round_robin);
+    RUN_TEST(load_balance_empty_fails);
 
     TEST_REPORT();
     return test_failures;

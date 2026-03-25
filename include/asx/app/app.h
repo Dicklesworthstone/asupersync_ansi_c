@@ -18,9 +18,6 @@
 #include <asx/asx_status.h>
 #include <asx/core/budget.h>
 #include <asx/cx/cx.h>
-#include <asx/fs/fs.h>
-#include <asx/process/process.h>
-#include <asx/signal/signal.h>
 #include <asx/app/report.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
@@ -30,6 +27,10 @@ extern "C" {
 #endif
 
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES
+#include <asx/fs/fs.h>
+#include <asx/process/process.h>
+#include <asx/signal/signal.h>
+
 /* -------------------------------------------------------------------
  * Exit codes
  * ------------------------------------------------------------------- */

@@ -238,6 +238,74 @@ ASX_API ASX_MUST_USE asx_status asx_service_builder_build(asx_service *out,
 /* Return the number of layers added so far. */
 ASX_API uint32_t asx_service_builder_layer_count(const asx_service_builder *builder);
 
+/* ------------------------------------------------------------------ */
+/* Concurrency-limit middleware — bounds in-flight requests            */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_service inner;
+    uint32_t max_inflight;
+    uint32_t current;
+} asx_service_concurrency_limit_state;
+
+/* Initialize a concurrency-limiting wrapper. Returns ASX_E_OVERLOADED
+ * when the limit is reached instead of forwarding to the inner service. */
+ASX_API void asx_service_concurrency_limit_init(asx_service *svc,
+                                                  asx_service_concurrency_limit_state *state,
+                                                  asx_service inner, uint32_t max_inflight);
+
+/* Must be called after each request completes (success or failure)
+ * to release the in-flight slot. */
+ASX_API void asx_service_concurrency_limit_release(asx_service_concurrency_limit_state *state);
+
+/* Get current in-flight count. */
+ASX_API uint32_t asx_service_concurrency_limit_inflight(
+    const asx_service_concurrency_limit_state *state);
+
+/* ------------------------------------------------------------------ */
+/* Filter middleware — rejects requests that fail a predicate          */
+/* ------------------------------------------------------------------ */
+
+/* Returns nonzero if the request should be forwarded. */
+typedef int (*asx_service_filter_fn)(const void *request, void *user_data);
+
+typedef struct {
+    asx_service inner;
+    asx_service_filter_fn filter_fn;
+    void *user_data;
+} asx_service_filter_state;
+
+/* Initialize a filter wrapper. Rejected requests get ASX_E_PERMISSION_DENIED. */
+ASX_API void asx_service_filter_init(asx_service *svc, asx_service_filter_state *state,
+                                      asx_service inner, asx_service_filter_fn filter_fn,
+                                      void *user_data);
+
+/* ------------------------------------------------------------------ */
+/* Load-balance middleware — round-robin across multiple backends      */
+/* ------------------------------------------------------------------ */
+
+#ifndef ASX_SERVICE_LB_MAX_BACKENDS
+#define ASX_SERVICE_LB_MAX_BACKENDS 8u
+#endif
+
+typedef struct {
+    asx_service backends[ASX_SERVICE_LB_MAX_BACKENDS];
+    uint32_t count;
+    uint32_t next; /* round-robin index */
+} asx_service_load_balance_state;
+
+/* Initialize a load balancer. Backends must be added via _add_backend. */
+ASX_API void asx_service_load_balance_init(asx_service *svc,
+                                            asx_service_load_balance_state *state);
+
+/* Add a backend service. Returns ASX_E_RESOURCE_EXHAUSTED at capacity. */
+ASX_API ASX_MUST_USE asx_status asx_service_load_balance_add_backend(
+    asx_service_load_balance_state *state, asx_service backend);
+
+/* Get the number of registered backends. */
+ASX_API uint32_t asx_service_load_balance_backend_count(
+    const asx_service_load_balance_state *state);
+
 #ifdef __cplusplus
 }
 #endif

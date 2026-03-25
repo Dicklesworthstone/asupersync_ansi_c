@@ -165,10 +165,12 @@ const char *asx_status_str(asx_status s) {
     case ASX_E_CHANNEL_FULL: return "channel full";
     case ASX_E_CHANNEL_NOT_DRAINED: return "channel not drained";
     case ASX_E_LAGGED: return "broadcast receiver fell behind";
+    case ASX_E_CHANNEL_EMPTY: return "channel empty";
     case ASX_E_TIMER_NOT_FOUND: return "timer not found";
     case ASX_E_TIMERS_PENDING: return "timers pending";
     case ASX_E_TIMER_DURATION_EXCEEDED: return "timer duration exceeded";
     case ASX_E_TIMED_OUT: return "operation exceeded deadline";
+    case ASX_E_THRESHOLD_TIMEOUT: return "threshold not met within deadline";
     case ASX_E_TASKS_STILL_ACTIVE: return "tasks still active";
     case ASX_E_OBLIGATIONS_UNRESOLVED: return "obligations unresolved";
     case ASX_E_REGIONS_NOT_CLOSED: return "regions not closed";
@@ -177,6 +179,8 @@ const char *asx_status_str(asx_status s) {
     case ASX_E_QUIESCENCE_TASKS_LIVE: return "quiescence tasks still live";
     case ASX_E_RESOURCE_EXHAUSTED: return "resource exhausted";
     case ASX_E_OVERLOADED: return "overloaded";
+    case ASX_E_COST_QUOTA_EXHAUSTED: return "cost quota exhausted";
+    case ASX_E_POLL_QUOTA_EXHAUSTED: return "poll quota exhausted";
     case ASX_E_STALE_HANDLE: return "stale handle";
     case ASX_E_HOOK_MISSING: return "required runtime hook missing";
     case ASX_E_HOOK_INVALID: return "runtime hook contract invalid";
@@ -188,6 +192,9 @@ const char *asx_status_str(asx_status s) {
     case ASX_E_AFFINITY_TRANSFER_REQUIRED: return "cross-domain transfer required";
     case ASX_E_AFFINITY_TABLE_FULL: return "affinity tracking table full";
     case ASX_E_EQUIVALENCE_MISMATCH: return "cross-codec semantic equivalence mismatch";
+    case ASX_E_DUPLICATE_SYMBOL: return "duplicate source symbol";
+    case ASX_E_OBJECT_MISMATCH: return "symbol does not belong to object";
+    case ASX_E_CORRUPTED_SYMBOL: return "symbol integrity check failed";
     case ASX_E_REPLAY_MISMATCH: return "replay continuity mismatch";
     case ASX_E_CONFIG_FROZEN: return "config field is frozen";
     case ASX_E_CONFIG_RESTART_REQ: return "config field requires restart";
@@ -230,11 +237,13 @@ asx_error_category asx_status_category(asx_status s) {
     case ASX_E_WOULD_BLOCK:
     case ASX_E_CHANNEL_FULL:
     case ASX_E_CHANNEL_NOT_DRAINED:
-    case ASX_E_LAGGED: return ASX_ERROR_CATEGORY_CHANNEL;
+    case ASX_E_LAGGED:
+    case ASX_E_CHANNEL_EMPTY: return ASX_ERROR_CATEGORY_CHANNEL;
     case ASX_E_TIMER_NOT_FOUND:
     case ASX_E_TIMERS_PENDING:
     case ASX_E_TIMER_DURATION_EXCEEDED:
-    case ASX_E_TIMED_OUT: return ASX_ERROR_CATEGORY_TIMER;
+    case ASX_E_TIMED_OUT:
+    case ASX_E_THRESHOLD_TIMEOUT: return ASX_ERROR_CATEGORY_TIMER;
     case ASX_E_TASKS_STILL_ACTIVE:
     case ASX_E_OBLIGATIONS_UNRESOLVED:
     case ASX_E_REGIONS_NOT_CLOSED:
@@ -242,7 +251,9 @@ asx_error_category asx_status_category(asx_status s) {
     case ASX_E_QUIESCENCE_NOT_REACHED:
     case ASX_E_QUIESCENCE_TASKS_LIVE: return ASX_ERROR_CATEGORY_QUIESCENCE;
     case ASX_E_RESOURCE_EXHAUSTED:
-    case ASX_E_OVERLOADED: return ASX_ERROR_CATEGORY_RESOURCE;
+    case ASX_E_OVERLOADED:
+    case ASX_E_COST_QUOTA_EXHAUSTED:
+    case ASX_E_POLL_QUOTA_EXHAUSTED: return ASX_ERROR_CATEGORY_RESOURCE;
     case ASX_E_STALE_HANDLE: return ASX_ERROR_CATEGORY_HANDLE;
     case ASX_E_HOOK_MISSING:
     case ASX_E_HOOK_INVALID:
@@ -253,7 +264,10 @@ asx_error_category asx_status_category(asx_status s) {
     case ASX_E_AFFINITY_ALREADY_BOUND:
     case ASX_E_AFFINITY_TRANSFER_REQUIRED:
     case ASX_E_AFFINITY_TABLE_FULL: return ASX_ERROR_CATEGORY_AFFINITY;
-    case ASX_E_EQUIVALENCE_MISMATCH: return ASX_ERROR_CATEGORY_EQUIVALENCE;
+    case ASX_E_EQUIVALENCE_MISMATCH:
+    case ASX_E_DUPLICATE_SYMBOL:
+    case ASX_E_OBJECT_MISMATCH:
+    case ASX_E_CORRUPTED_SYMBOL: return ASX_ERROR_CATEGORY_EQUIVALENCE;
     case ASX_E_REPLAY_MISMATCH: return ASX_ERROR_CATEGORY_REPLAY;
     case ASX_E_CONFIG_FROZEN:
     case ASX_E_CONFIG_RESTART_REQ: return ASX_ERROR_CATEGORY_CONFIG;
@@ -335,6 +349,9 @@ asx_recoverability asx_status_recoverability(asx_status s) {
     case ASX_E_AFFINITY_TRANSFER_REQUIRED:
     case ASX_E_AFFINITY_TABLE_FULL:
     case ASX_E_EQUIVALENCE_MISMATCH:
+    case ASX_E_DUPLICATE_SYMBOL:
+    case ASX_E_OBJECT_MISMATCH:
+    case ASX_E_CORRUPTED_SYMBOL:
     case ASX_E_REPLAY_MISMATCH:
     case ASX_E_PERMISSION_DENIED: return ASX_RECOVERABILITY_PERMANENT;
     case ASX_E_INVALID_STATE:
@@ -344,8 +361,12 @@ asx_recoverability asx_status_recoverability(asx_status s) {
     case ASX_E_LAGGED:
     case ASX_E_TIMER_DURATION_EXCEEDED:
     case ASX_E_TIMED_OUT:
+    case ASX_E_THRESHOLD_TIMEOUT:
     case ASX_E_RESOURCE_EXHAUSTED:
     case ASX_E_OVERLOADED:
+    case ASX_E_COST_QUOTA_EXHAUSTED:
+    case ASX_E_POLL_QUOTA_EXHAUSTED:
+    case ASX_E_CHANNEL_EMPTY:
     case ASX_E_CONFIG_FROZEN:
     case ASX_E_CONFIG_RESTART_REQ: return ASX_RECOVERABILITY_CONTEXT_DEPENDENT;
     default: return ASX_RECOVERABILITY_CONTEXT_DEPENDENT;
@@ -391,6 +412,7 @@ asx_recovery_action asx_status_recovery_action(asx_status s) {
     case ASX_E_TIMER_NOT_FOUND:
     case ASX_E_TIMER_DURATION_EXCEEDED:
     case ASX_E_TIMED_OUT:
+    case ASX_E_THRESHOLD_TIMEOUT:
     case ASX_E_TASKS_STILL_ACTIVE:
     case ASX_E_OBLIGATIONS_UNRESOLVED:
     case ASX_E_REGIONS_NOT_CLOSED:
@@ -400,15 +422,21 @@ asx_recovery_action asx_status_recovery_action(asx_status s) {
     case ASX_E_AFFINITY_VIOLATION:
     case ASX_E_AFFINITY_ALREADY_BOUND:
     case ASX_E_AFFINITY_TABLE_FULL:
+    case ASX_E_DUPLICATE_SYMBOL:
+    case ASX_E_OBJECT_MISMATCH:
+    case ASX_E_CORRUPTED_SYMBOL:
     case ASX_E_PERMISSION_DENIED: return ASX_RECOVERY_PROPAGATE;
     case ASX_E_WOULD_BLOCK:
     case ASX_E_CHANNEL_FULL:
+    case ASX_E_CHANNEL_EMPTY:
     case ASX_E_TIMERS_PENDING: return ASX_RECOVERY_RETRY_IMMEDIATELY;
     case ASX_E_SCHEDULER_UNAVAILABLE:
     case ASX_E_ADMISSION_CLOSED:
     case ASX_E_ADMISSION_LIMIT:
     case ASX_E_RESOURCE_EXHAUSTED:
-    case ASX_E_OVERLOADED: return ASX_RECOVERY_RETRY_WITH_BACKOFF;
+    case ASX_E_OVERLOADED:
+    case ASX_E_COST_QUOTA_EXHAUSTED:
+    case ASX_E_POLL_QUOTA_EXHAUSTED: return ASX_RECOVERY_RETRY_WITH_BACKOFF;
     case ASX_E_HOOK_MISSING:
     case ASX_E_HOOK_INVALID:
     case ASX_E_DETERMINISM_VIOLATION:
@@ -475,6 +503,7 @@ asx_backoff_hint asx_status_backoff_hint(asx_status s) {
     case ASX_E_TIMER_NOT_FOUND:
     case ASX_E_TIMER_DURATION_EXCEEDED:
     case ASX_E_TIMED_OUT:
+    case ASX_E_THRESHOLD_TIMEOUT:
     case ASX_E_TASKS_STILL_ACTIVE:
     case ASX_E_OBLIGATIONS_UNRESOLVED:
     case ASX_E_REGIONS_NOT_CLOSED:
@@ -492,18 +521,24 @@ asx_backoff_hint asx_status_backoff_hint(asx_status s) {
     case ASX_E_AFFINITY_TRANSFER_REQUIRED:
     case ASX_E_AFFINITY_TABLE_FULL:
     case ASX_E_EQUIVALENCE_MISMATCH:
+    case ASX_E_DUPLICATE_SYMBOL:
+    case ASX_E_OBJECT_MISMATCH:
+    case ASX_E_CORRUPTED_SYMBOL:
     case ASX_E_REPLAY_MISMATCH:
     case ASX_E_CONFIG_FROZEN:
     case ASX_E_CONFIG_RESTART_REQ:
     case ASX_E_PERMISSION_DENIED: return asx_backoff_hint_none();
     case ASX_E_WOULD_BLOCK:
     case ASX_E_CHANNEL_FULL:
+    case ASX_E_CHANNEL_EMPTY:
     case ASX_E_TIMERS_PENDING: return asx_backoff_hint_quick();
     case ASX_E_SCHEDULER_UNAVAILABLE:
     case ASX_E_ADMISSION_CLOSED:
     case ASX_E_ADMISSION_LIMIT:
     case ASX_E_RESOURCE_EXHAUSTED:
-    case ASX_E_OVERLOADED: return asx_backoff_hint_default();
+    case ASX_E_OVERLOADED:
+    case ASX_E_COST_QUOTA_EXHAUSTED:
+    case ASX_E_POLL_QUOTA_EXHAUSTED: return asx_backoff_hint_default();
     }
 
     return asx_backoff_hint_none();
