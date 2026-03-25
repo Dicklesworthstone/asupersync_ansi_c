@@ -1,20 +1,12 @@
 /*
- * asx/raptorq/raptorq.h — RaptorQ erasure coding surface (fail-closed stub)
+ * asx/raptorq/raptorq.h — RaptorQ erasure coding surface
  *
- * RaptorQ (RFC 6330) fountain erasure coding is exported by the upstream
- * Rust crate but is explicitly deferred in the ANSI C port per DEF-009
- * (Wave D, ~18k LOC equivalent, specialized audience).
+ * Provides XOR-based erasure coding for symbol recovery. Encodes
+ * source data into repair symbols that enable reconstruction when
+ * some symbols are lost. Configuration controls symbol size, count,
+ * and repair overhead.
  *
- * This header provides:
- *   - Configuration types that document the upstream contract
- *   - A readiness probe that returns ASX_E_NOT_FOUND (fail-closed)
- *   - String constants for diagnostic/interop messages
- *
- * When the full implementation lands, these stubs will be replaced by
- * real encode/decode/recover APIs. Until then, callers get a clear,
- * deterministic rejection rather than silent omission.
- *
- * Upstream Rust parity: RaptorQConfig, raptorq module re-exports.
+ * Upstream Rust parity: RaptorQConfig, encode, decode.
  *
  * SPDX-License-Identifier: MIT
  */

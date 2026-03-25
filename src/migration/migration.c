@@ -126,6 +126,7 @@ static const feature_entry g_features[] = {
     {"contended_mutex", 1, NULL},
     {"stream_combinators", 1, NULL},
     {"pool", 1, NULL},
+    {"det_hash", 1, NULL},
     {NULL, 0, NULL}};
 
 int asx_feature_available(const char *feature_name) {

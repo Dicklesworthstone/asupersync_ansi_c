@@ -278,7 +278,7 @@ void asx_hft_gate_init(asx_hft_gate *gate) {
     if (!gate) return;
     /* Default HFT thresholds: p99 < 10us, p99.9 < 50us,
      * p99.99 < 100us, jitter < 5us */
-    gate->p99_ns = 10000;
+    gate->p99_ns = ASX_HFT_DEFAULT_P99_NS;
     gate->p99_9_ns = 0;  /* skip by default */
     gate->p99_99_ns = 0; /* skip by default */
     gate->jitter_ns = 0; /* skip by default */

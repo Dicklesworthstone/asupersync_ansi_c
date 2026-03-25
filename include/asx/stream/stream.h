@@ -528,7 +528,10 @@ typedef struct {
 
 /* Emit sliding windows of window_size consecutive items.
  * Each poll yields a pointer to asx_stream_window.
- * First yield occurs after window_size items are buffered. */
+ * First yield occurs after window_size items are buffered.
+ * Items are stored in a circular buffer: logical item i is at
+ * items[(start + i) % count]. If stream is shorter than window_size,
+ * a single partial window is yielded. */
 ASX_API void asx_stream_window_init(asx_stream *s, asx_stream_window_state *state,
                                      asx_stream inner, size_t window_size);
 

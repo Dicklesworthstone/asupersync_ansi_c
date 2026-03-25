@@ -137,6 +137,7 @@
 
 /* Domain-specific configuration types */
 #include <asx/core/config_types.h>
+#include <asx/core/det_hash.h>
 
 /* Obligation, session, record, and link public families */
 #include <asx/link/link.h>

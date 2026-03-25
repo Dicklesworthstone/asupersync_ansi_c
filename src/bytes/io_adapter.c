@@ -408,7 +408,7 @@ asx_status asx_io_read_exact(asx_read_adapter *src, asx_buf_mut *dst, size_t n,
             *bytes_read = total;
             return ASX_E_WOULD_BLOCK;
         }
-        if (rr == ASX_READ_ERROR) {
+        if (rr == ASX_READ_ERROR || (rr == ASX_READ_READY && chunk == 0)) {
             *bytes_read = total;
             return ASX_E_INVALID_STATE;
         }
@@ -432,7 +432,7 @@ asx_status asx_io_read_to_end(asx_read_adapter *src, asx_buf_mut *dst, size_t *b
             *bytes_read = total;
             return ASX_E_WOULD_BLOCK;
         }
-        if (rr == ASX_READ_ERROR) {
+        if (rr == ASX_READ_ERROR || (rr == ASX_READ_READY && chunk == 0)) {
             *bytes_read = total;
             return ASX_E_INVALID_STATE;
         }
@@ -458,6 +458,7 @@ asx_status asx_io_write_all(asx_write_adapter *dst, const asx_buf *src) {
         if (wr == ASX_WRITE_CLOSED) return ASX_E_DISCONNECTED;
         if (wr == ASX_WRITE_PENDING) return ASX_E_WOULD_BLOCK;
         if (wr == ASX_WRITE_ERROR) return ASX_E_INVALID_STATE;
+        if (written == 0) return ASX_E_INVALID_STATE; /* no progress — prevent infinite loop */
         remaining.ptr = remaining.ptr + written;
         remaining.len -= written;
     }
@@ -477,6 +478,9 @@ static asx_read_result chain_poll_read(void *adapter_state, asx_buf_mut *dst,
         asx_read_result rr = s->first.poll_read(s->first.state, dst, waker, out_bytes_read);
         if (rr != ASX_READ_EOF) return rr;
         s->first_done = 1;
+        /* If the final read from first produced bytes, return them before
+         * switching to second. The caller will poll again to get second's data. */
+        if (*out_bytes_read > 0) return ASX_READ_READY;
     }
 
     return s->second.poll_read(s->second.state, dst, waker, out_bytes_read);

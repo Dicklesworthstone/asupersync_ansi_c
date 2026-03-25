@@ -247,7 +247,7 @@ static int g_auto_initialized = 0;
 static void ensure_auto_init(void) {
     if (!g_auto_initialized) {
         asx_auto_deadline_init(&g_deadline);
-        asx_auto_watchdog_init(&g_watchdog, 10000000u); /* 10ms default period */
+        asx_auto_watchdog_init(&g_watchdog, ASX_AUTO_DEFAULT_WATCHDOG_PERIOD_NS); /* 10ms default period */
         asx_auto_audit_init(&g_audit);
         g_auto_initialized = 1;
     }
@@ -255,7 +255,7 @@ static void ensure_auto_init(void) {
 
 void asx_auto_instrument_reset(void) {
     asx_auto_deadline_init(&g_deadline);
-    asx_auto_watchdog_init(&g_watchdog, 10000000u);
+    asx_auto_watchdog_init(&g_watchdog, ASX_AUTO_DEFAULT_WATCHDOG_PERIOD_NS);
     asx_auto_audit_init(&g_audit);
     g_auto_initialized = 1;
 }

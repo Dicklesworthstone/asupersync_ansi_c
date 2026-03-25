@@ -64,6 +64,10 @@ ASX_API uint32_t asx_auto_deadline_miss_rate(const asx_auto_deadline_tracker *dt
 /* Reset the deadline tracker. */
 ASX_API void asx_auto_deadline_reset(asx_auto_deadline_tracker *dt);
 
+#ifndef ASX_AUTO_DEFAULT_WATCHDOG_PERIOD_NS
+#define ASX_AUTO_DEFAULT_WATCHDOG_PERIOD_NS 10000000u
+#endif
+
 /* -------------------------------------------------------------------
  * Watchdog monitor — checkpoint interval tracking
  *

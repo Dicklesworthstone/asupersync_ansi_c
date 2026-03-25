@@ -22,6 +22,10 @@ extern "C" {
 #define ASX_MAX_PROCESSES 8u
 #endif
 
+#ifndef ASX_PROCESS_WAIT_MAX_POLLS
+#define ASX_PROCESS_WAIT_MAX_POLLS 10000u
+#endif
+
 #ifndef ASX_PROCESS_PROGRAM_MAX
 #define ASX_PROCESS_PROGRAM_MAX 96u
 #endif

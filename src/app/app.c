@@ -122,7 +122,7 @@ asx_status asx_app_init(asx_app *app, const asx_app_config *config) {
     app->config = *config;
 
     /* Set default poll budget */
-    if (app->config.poll_budget == 0) { app->config.poll_budget = 10000; }
+    if (app->config.poll_budget == 0) { app->config.poll_budget = ASX_APP_DEFAULT_POLL_BUDGET; }
 
     /* Initialize runtime with defaults */
     st = asx_runtime_init_default(&app->runtime);

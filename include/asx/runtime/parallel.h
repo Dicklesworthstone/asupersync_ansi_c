@@ -5,9 +5,8 @@
  * profile. Tasks are assigned to lanes by work class (ready, cancel, timed).
  * Each lane has bounded fairness controls to prevent starvation.
  *
- * Walking skeleton: single-threaded simulation of lane scheduling.
- * Real multi-threaded dispatch will be added when platform threading
- * hooks are implemented.
+ * Currently provides single-threaded lane scheduling simulation.
+ * Multi-threaded dispatch requires platform threading hooks.
  *
  * Feature-gated: compile with -DASX_PROFILE_PARALLEL to enable.
  * When disabled, all APIs compile to zero-overhead stubs.

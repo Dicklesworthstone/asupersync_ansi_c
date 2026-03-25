@@ -232,7 +232,7 @@ asx_status asx_process_command_spawn(const asx_process_command *cmd, asx_process
 asx_status asx_process_wait_with_output(asx_process_handle process, asx_process_output *out) {
     int32_t exit_code = 0;
     asx_status st;
-    uint32_t max_polls = 10000u; /* guard against infinite loop */
+    uint32_t max_polls = ASX_PROCESS_WAIT_MAX_POLLS;
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     memset(out, 0, sizeof(*out));

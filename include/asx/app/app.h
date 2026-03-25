@@ -70,9 +70,13 @@ typedef struct {
  * Application config
  * ------------------------------------------------------------------- */
 
+#ifndef ASX_APP_DEFAULT_POLL_BUDGET
+#define ASX_APP_DEFAULT_POLL_BUDGET 10000u
+#endif
+
 typedef struct {
     const char *name;     /* application name for diagnostics */
-    uint32_t poll_budget; /* max polls per run (0 = 10000) */
+    uint32_t poll_budget; /* max polls per run (0 = ASX_APP_DEFAULT_POLL_BUDGET) */
 } asx_app_config;
 
 /* -------------------------------------------------------------------

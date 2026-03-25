@@ -133,7 +133,8 @@ CORE_SRC := \
 	src/core/circuit_breaker.c \
 	src/core/join_set.c \
 	src/core/config_types.c \
-	src/core/epoch_combinators.c
+	src/core/epoch_combinators.c \
+	src/core/det_hash.c
 
 RUNTIME_SRC := \
 	src/runtime/hooks.c \

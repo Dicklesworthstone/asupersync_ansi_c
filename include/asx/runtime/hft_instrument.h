@@ -164,6 +164,10 @@ ASX_API const char *asx_overload_mode_str(asx_overload_mode mode);
  * pass/fail against a histogram + jitter tracker combo.
  * ------------------------------------------------------------------- */
 
+#ifndef ASX_HFT_DEFAULT_P99_NS
+#define ASX_HFT_DEFAULT_P99_NS 10000u /* 10 microseconds */
+#endif
+
 typedef struct {
     uint64_t p99_ns;    /* p99 must be <= this value */
     uint64_t p99_9_ns;  /* p99.9 must be <= this value (0 = skip) */
