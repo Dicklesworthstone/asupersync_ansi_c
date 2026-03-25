@@ -520,8 +520,9 @@ static asx_read_result take_poll_read(void *adapter_state, asx_buf_mut *dst,
     saved_capacity = dst->capacity;
     {
         uint32_t writable = dst->capacity - dst->wr_pos;
-        if (writable > (uint32_t)s->remaining) {
-            dst->capacity = dst->wr_pos + (uint32_t)s->remaining;
+        uint32_t limit = (s->remaining > (size_t)UINT32_MAX) ? UINT32_MAX : (uint32_t)s->remaining;
+        if (writable > limit) {
+            dst->capacity = dst->wr_pos + limit;
         }
     }
 

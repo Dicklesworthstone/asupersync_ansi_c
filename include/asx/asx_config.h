@@ -115,6 +115,7 @@
 #define ASX_HAS_DB_BACKEND_VARIANTS 0
 #define ASX_HAS_MESSAGING_KAFKA_BACKEND 0
 #define ASX_HAS_MESSAGING_BACKEND_VARIANTS 0
+#define ASX_HAS_IO_URING 0
 
 /* Browser trace is only present in the extended browser subprofile.
  * Minimal browser builds omit the public trace/lab/replay family from
