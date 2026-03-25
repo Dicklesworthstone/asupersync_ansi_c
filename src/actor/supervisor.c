@@ -147,7 +147,7 @@ static void apply_strategy(asx_supervisor_slot *s, uint32_t failed_idx) {
         break;
 
     case ASX_SUPERVISOR_ONE_FOR_ALL:
-        s->restart_mask = (1u << s->child_count) - 1;
+        s->restart_mask = (s->child_count >= 32u) ? 0xFFFFFFFFu : ((1u << s->child_count) - 1u);
         /* Stop all live children */
         for (i = 0; i < s->child_count; i++) {
             if (i != failed_idx) { stop_child(s, i); }

@@ -39,6 +39,11 @@ extern "C" {
 #define ASX_SUPERVISOR_MAX_CHILDREN 8u
 #endif
 
+/* Bitmask-based restart tracking limits children to 32 */
+#if ASX_SUPERVISOR_MAX_CHILDREN > 32
+#error "ASX_SUPERVISOR_MAX_CHILDREN must be <= 32 (bitmask limit)"
+#endif
+
 /* -------------------------------------------------------------------
  * Restart strategy — what to do when a child dies
  * ------------------------------------------------------------------- */

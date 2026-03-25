@@ -686,6 +686,8 @@ BROWSER_FOCUSED_TEST_BIN := \
 	$(TEST_DIR)/unit/runtime/test_browser_boundary \
 	$(TEST_DIR)/unit/runtime/test_browser_diagnostic \
 	$(TEST_DIR)/unit/runtime/test_rt \
+	$(TEST_DIR)/unit/runtime/test_blocking \
+	$(TEST_DIR)/unit/runtime/test_io_driver \
 	$(TEST_DIR)/unit/actor/test_actor \
 	$(TEST_DIR)/unit/actor/test_gen_server \
 	$(TEST_DIR)/unit/actor/test_supervisor \
@@ -704,17 +706,24 @@ BROWSER_FOCUSED_TEST_BIN := \
 	$(TEST_DIR)/unit/link/test_link \
 	$(TEST_DIR)/unit/app/test_app \
 	$(TEST_DIR)/unit/app/test_report \
+	$(TEST_DIR)/unit/cli/test_cli \
 	$(TEST_DIR)/unit/console/test_console \
 	$(TEST_DIR)/unit/evidence/test_evidence \
+	$(TEST_DIR)/unit/fs/test_fs \
 	$(TEST_DIR)/unit/monitor/test_monitor \
+	$(TEST_DIR)/unit/process/test_process \
 	$(TEST_DIR)/unit/record/test_record \
 	$(TEST_DIR)/unit/migration/test_migration \
 	$(TEST_DIR)/unit/raptorq/test_raptorq \
+	$(TEST_DIR)/unit/signal/test_signal \
 	$(TEST_DIR)/unit/spork/test_spork \
 	$(TEST_DIR)/unit/tracing_compat/test_tracing_compat \
 	$(TEST_DIR)/unit/net/test_net \
+	$(TEST_DIR)/unit/net/test_server \
 	$(TEST_DIR)/unit/net/test_http \
 	$(TEST_DIR)/unit/net/test_web \
+	$(TEST_DIR)/unit/net/test_grpc \
+	$(TEST_DIR)/unit/net/test_messaging \
 	$(TEST_DIR)/unit/net/test_websocket \
 	$(TEST_DIR)/unit/net/test_quic \
 	$(TEST_DIR)/unit/net/test_distributed \
