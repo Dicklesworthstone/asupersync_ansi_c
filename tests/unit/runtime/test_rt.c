@@ -47,10 +47,12 @@ static asx_status dummy_poll(void *user_data, asx_task_id self) {
     return ASX_OK;
 }
 
+#if ASX_HAS_BLOCKING_SURFACE
 static uint64_t add_one(void *user_data) {
     uint64_t value = *(uint64_t *)user_data;
     return value + 1u;
 }
+#endif
 
 static uint32_t g_rt_ready_count;
 
@@ -434,12 +436,15 @@ TEST(init_from_env_rejects_unsupported_io_backend_without_initializing) {
 
 TEST(init_default_wires_blocking_surface) {
     asx_runtime rt;
+#if ASX_HAS_BLOCKING_SURFACE
     asx_blocking_handle h;
     uint64_t input = 9;
     uint64_t result = 0;
+#endif
 
     ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
 
+#if ASX_HAS_BLOCKING_SURFACE
     if (asx_surface_available_active(ASX_SURFACE_BLOCKING)) {
         ASSERT_EQ(asx_spawn_blocking(add_one, &input, NULL, &h), ASX_OK);
         ASSERT_EQ(asx_blocking_get_result(&h, &result), ASX_OK);
@@ -447,6 +452,11 @@ TEST(init_default_wires_blocking_surface) {
     } else {
         ASSERT_EQ(asx_spawn_blocking(add_one, &input, NULL, &h), ASX_E_PERMISSION_DENIED);
     }
+#else
+    ASSERT_FALSE(asx_surface_available_active(ASX_SURFACE_BLOCKING));
+    ASSERT_FALSE(asx_runtime_blocking_pool_initialized(&rt));
+    ASSERT_EQ(asx_runtime_blocking_active_count(&rt), 0u);
+#endif
 
     asx_runtime_shutdown(&rt);
 }
@@ -454,17 +464,25 @@ TEST(init_default_wires_blocking_surface) {
 TEST(init_default_wires_io_surface) {
     asx_runtime rt;
     asx_waker w;
+#if ASX_HAS_NATIVE_IO_DRIVER
     asx_io_token tok;
+#endif
 
     ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
     ASSERT_EQ(asx_waker_register(1, &w), ASX_OK);
 
+#if ASX_HAS_NATIVE_IO_DRIVER
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
         ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_OK);
         asx_io_deregister(&tok);
     } else {
         ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_E_PERMISSION_DENIED);
     }
+#else
+    ASSERT_FALSE(asx_surface_available_active(ASX_SURFACE_IO_DRIVER));
+    ASSERT_FALSE(asx_runtime_io_driver_initialized(&rt));
+    ASSERT_EQ(asx_runtime_io_registration_count(&rt), 0u);
+#endif
 
     asx_runtime_shutdown(&rt);
 }
@@ -473,8 +491,10 @@ TEST(init_default_io_poll_wakes_registered_task) {
     asx_runtime rt;
     asx_runtime_hooks hooks;
     asx_waker w;
+#if ASX_HAS_NATIVE_IO_DRIVER
     asx_io_token tok;
     asx_io_event event;
+#endif
 
     ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
     ASSERT_EQ(asx_runtime_get_hooks_from(&rt, &hooks), ASX_OK);
@@ -484,6 +504,7 @@ TEST(init_default_io_poll_wakes_registered_task) {
 
     ASSERT_EQ(asx_waker_register(7, &w), ASX_OK);
 
+#if ASX_HAS_NATIVE_IO_DRIVER
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
         ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_OK);
         ASSERT_FALSE(asx_waker_is_signaled(&w));
@@ -497,6 +518,11 @@ TEST(init_default_io_poll_wakes_registered_task) {
     } else {
         ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_E_PERMISSION_DENIED);
     }
+#else
+    ASSERT_FALSE(asx_surface_available_active(ASX_SURFACE_IO_DRIVER));
+    ASSERT_FALSE(asx_runtime_io_driver_initialized(&rt));
+    ASSERT_FALSE(asx_waker_is_signaled(&w));
+#endif
 
     asx_runtime_shutdown(&rt);
 }
@@ -818,13 +844,18 @@ TEST(counts_uninitialized_returns_zero) {
 
 TEST(runtime_subsystem_queries_track_live_state) {
     asx_runtime rt;
+#if ASX_HAS_NATIVE_IO_DRIVER
     asx_waker w;
     asx_io_token tok;
+#endif
+#if ASX_HAS_BLOCKING_SURFACE
     asx_blocking_handle blocking;
     uint64_t blocking_input = 5u;
+#endif
 
     ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
 
+#if ASX_HAS_NATIVE_IO_DRIVER
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
         ASSERT_TRUE(asx_runtime_io_driver_initialized(&rt));
         ASSERT_EQ(asx_runtime_io_registration_count(&rt), 0u);
@@ -837,7 +868,13 @@ TEST(runtime_subsystem_queries_track_live_state) {
         ASSERT_FALSE(asx_runtime_io_driver_initialized(&rt));
         ASSERT_EQ(asx_runtime_io_registration_count(&rt), 0u);
     }
+#else
+    ASSERT_FALSE(asx_surface_available_active(ASX_SURFACE_IO_DRIVER));
+    ASSERT_FALSE(asx_runtime_io_driver_initialized(&rt));
+    ASSERT_EQ(asx_runtime_io_registration_count(&rt), 0u);
+#endif
 
+#if ASX_HAS_BLOCKING_SURFACE
     if (asx_surface_available_active(ASX_SURFACE_BLOCKING)) {
         ASSERT_TRUE(asx_runtime_blocking_pool_initialized(&rt));
         ASSERT_EQ(asx_runtime_blocking_active_count(&rt), 0u);
@@ -847,6 +884,11 @@ TEST(runtime_subsystem_queries_track_live_state) {
         ASSERT_FALSE(asx_runtime_blocking_pool_initialized(&rt));
         ASSERT_EQ(asx_runtime_blocking_active_count(&rt), 0u);
     }
+#else
+    ASSERT_FALSE(asx_surface_available_active(ASX_SURFACE_BLOCKING));
+    ASSERT_FALSE(asx_runtime_blocking_pool_initialized(&rt));
+    ASSERT_EQ(asx_runtime_blocking_active_count(&rt), 0u);
+#endif
 
     asx_runtime_shutdown(&rt);
     ASSERT_FALSE(asx_runtime_io_driver_initialized(&rt));

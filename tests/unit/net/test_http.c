@@ -5,7 +5,9 @@
  */
 
 #include "../../test_harness.h"
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
 #include <asx/fs/fs.h>
+#endif
 #include <asx/net/http.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
@@ -23,7 +25,9 @@ static asx_status st_sink_;
 
 static void setup_web(void) {
     MUST_OK(asx_runtime_init_default(&g_rt));
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
     asx_fs_reset();
+#endif
     asx_session_reset();
 }
 

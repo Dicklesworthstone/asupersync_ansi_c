@@ -685,6 +685,7 @@ test-unit: $(UNIT_TEST_BIN)
 BROWSER_FOCUSED_TEST_BIN := \
 	$(TEST_DIR)/unit/runtime/test_browser_boundary \
 	$(TEST_DIR)/unit/runtime/test_browser_diagnostic \
+	$(TEST_DIR)/unit/runtime/test_rt \
 	$(TEST_DIR)/unit/actor/test_actor \
 	$(TEST_DIR)/unit/actor/test_gen_server \
 	$(TEST_DIR)/unit/actor/test_supervisor \

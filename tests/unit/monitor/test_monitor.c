@@ -86,6 +86,7 @@ static void test_monitor_io_threshold_trigger(void) {
     policy.max_io_utilization_pct = 0u;
 
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
+#if ASX_HAS_NATIVE_IO_DRIVER
         asx_waker w;
         asx_io_token tok;
         MUST_OK(asx_waker_register(88u, &w));
@@ -95,6 +96,9 @@ static void test_monitor_io_threshold_trigger(void) {
         ASSERT(report.verdict == ASX_EVIDENCE_WARN, "io threshold warns");
         ASSERT(strcmp(sink.entries[0].source, "monitor:io_driver") == 0, "io evidence source");
         asx_io_deregister(&tok);
+#else
+        ASSERT(0, "io surface should not be active when io-driver types are compile-hidden");
+#endif
     } else {
         MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
         ASSERT((report.triggered_mask & ASX_MONITOR_IO_HIGH) == 0u, "no io mask when unsupported");
@@ -115,8 +119,17 @@ static void test_observability_capture(void) {
 
     ASSERT(snapshot.evidence.verdict == ASX_EVIDENCE_WARN, "snapshot verdict");
     ASSERT(snapshot.trace_digest == snapshot.inspection.trace.digest, "trace digest mirrored");
+#if ASX_HAS_NATIVE_IO_DRIVER
     ASSERT(snapshot.inspection.io_driver.capacity > 0u, "io capacity mirrored");
+#else
+    ASSERT(snapshot.inspection.io_driver.capacity == 0u, "io capacity hidden when unsupported");
+#endif
+#if ASX_HAS_BLOCKING_SURFACE
     ASSERT(snapshot.inspection.blocking.capacity > 0u, "blocking capacity mirrored");
+#else
+    ASSERT(snapshot.inspection.blocking.capacity == 0u,
+           "blocking capacity hidden when unsupported");
+#endif
     asx_runtime_shutdown(&rt);
 }
 
