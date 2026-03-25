@@ -25,6 +25,7 @@ extern uint32_t g_obligation_count;
 /* Generation counter for runtime instances */
 static uint32_t g_rt_generation = 1u;
 static uint32_t g_active_rt_generation = 0u;
+static asx_io_backend g_active_io_backend = ASX_IO_BACKEND_GHOST;
 
 static int runtime_wait_policy_valid(asx_wait_policy policy) {
     switch (policy) {
@@ -41,6 +42,22 @@ static int runtime_leak_response_valid(asx_leak_response response) {
     case ASX_LEAK_LOG:
     case ASX_LEAK_SILENT:
     case ASX_LEAK_RECOVER: return 1;
+    }
+    return 0;
+}
+
+static int runtime_io_backend_known(asx_io_backend backend) {
+    switch (backend) {
+    case ASX_IO_BACKEND_GHOST:
+    case ASX_IO_BACKEND_IO_URING: return 1;
+    }
+    return 0;
+}
+
+static int runtime_io_backend_supported(asx_io_backend backend) {
+    switch (backend) {
+    case ASX_IO_BACKEND_GHOST: return 1;
+    case ASX_IO_BACKEND_IO_URING: return ASX_HAS_IO_URING;
     }
     return 0;
 }
@@ -79,6 +96,7 @@ asx_status asx_runtime_config_validate(const asx_runtime_config *config) {
     if (config == NULL) return ASX_E_INVALID_ARGUMENT;
     if (config->size != (uint32_t)sizeof(asx_runtime_config)) return ASX_E_INVALID_ARGUMENT;
     if (!runtime_wait_policy_valid(config->wait_policy)) return ASX_E_INVALID_ARGUMENT;
+    if (!runtime_io_backend_known(config->io_backend)) return ASX_E_INVALID_ARGUMENT;
     if (!runtime_leak_response_valid(config->leak_response)) return ASX_E_INVALID_ARGUMENT;
     if (!runtime_leak_escalation_valid(config->leak_escalation)) return ASX_E_INVALID_ARGUMENT;
     if (!runtime_finalizer_escalation_valid(config->finalizer_escalation))
@@ -101,6 +119,7 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
     /* Step 1: validate config */
     st = asx_runtime_config_validate(config);
     if (st != ASX_OK) return st;
+    if (!runtime_io_backend_supported(config->io_backend)) return ASX_E_PERMISSION_DENIED;
 
     /* Step 2: validate hooks */
     st = asx_runtime_hooks_validate(hooks, ASX_DETERMINISTIC);
@@ -109,10 +128,13 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
     /* Step 3: reset all internal state (deterministic clean slate) */
     asx_runtime_reset();
     g_active_rt_generation = 0u;
+    g_active_io_backend = ASX_IO_BACKEND_GHOST;
 
     /* Step 4: install hooks */
     st = asx_runtime_set_hooks(hooks);
     if (st != ASX_OK) return st;
+
+    g_active_io_backend = config->io_backend;
 
     /* Step 4a: initialize shipped runtime subsystems.
      * Browser profile builds fail closed for native-only surfaces, which is
@@ -120,6 +142,7 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
 #if ASX_HAS_NATIVE_IO_DRIVER
     st = asx_io_driver_init();
     if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
+        g_active_io_backend = ASX_IO_BACKEND_GHOST;
         asx_runtime_reset();
         return st;
     }
@@ -129,6 +152,7 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
     st = asx_blocking_pool_init();
     if (st != ASX_OK && st != ASX_E_PERMISSION_DENIED) {
         asx_io_driver_shutdown();
+        g_active_io_backend = ASX_IO_BACKEND_GHOST;
         asx_runtime_reset();
         return st;
     }
@@ -186,6 +210,7 @@ void asx_runtime_shutdown(asx_runtime *rt) {
 #endif
         asx_runtime_reset();
         g_active_rt_generation = 0u;
+        g_active_io_backend = ASX_IO_BACKEND_GHOST;
     }
     memset(rt, 0, sizeof(*rt));
 }
@@ -315,3 +340,10 @@ asx_containment_policy asx_runtime_containment_policy(const asx_runtime *rt) {
     (void)rt;
     return asx_containment_policy_active();
 }
+
+asx_io_backend asx_runtime_io_backend(const asx_runtime *rt) {
+    if (rt == NULL || !asx_runtime_is_initialized(rt)) return ASX_IO_BACKEND_GHOST;
+    return rt->config.io_backend;
+}
+
+asx_io_backend asx_runtime_active_io_backend_selected(void) { return g_active_io_backend; }

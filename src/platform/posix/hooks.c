@@ -5,7 +5,7 @@
  */
 
 #ifdef ASX_PROFILE_POSIX
-/* Stub: POSIX hooks pending */
+/* POSIX platform hooks: not yet implemented */
 #else
 typedef int asx_no_empty_tu_warning;
 #endif

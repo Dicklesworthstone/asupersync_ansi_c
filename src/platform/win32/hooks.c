@@ -5,7 +5,7 @@
  */
 
 #ifdef ASX_PROFILE_WIN32
-/* Stub: Win32 hooks pending */
+/* Win32 platform hooks: not yet implemented */
 #else
 typedef int asx_no_empty_tu_warning;
 #endif

@@ -357,6 +357,14 @@ typedef struct {
 /* Wait policy (resource-plane only; does not affect semantics) */
 typedef enum { ASX_WAIT_BUSY_SPIN = 0, ASX_WAIT_YIELD = 1, ASX_WAIT_SLEEP = 2 } asx_wait_policy;
 
+/* Runtime IO backend selection.
+ * GHOST is the walking-skeleton hook-driven backend.
+ * IO_URING is recognized for contract parity but currently unsupported. */
+typedef enum {
+    ASX_IO_BACKEND_GHOST = 0,
+    ASX_IO_BACKEND_IO_URING = 1
+} asx_io_backend;
+
 /* Obligation leak response policy */
 typedef enum {
     ASX_LEAK_PANIC = 0,
@@ -387,6 +395,7 @@ typedef struct {
 typedef struct {
     uint32_t size;                                 /* sizeof(asx_runtime_config) */
     asx_wait_policy wait_policy;                   /* profile-dependent default */
+    asx_io_backend io_backend;                     /* default: ghost */
     asx_leak_response leak_response;               /* default: ASX_LEAK_LOG */
     asx_leak_escalation_config *leak_escalation;   /* optional */
     uint32_t finalizer_poll_budget;                /* default: 100 */
@@ -398,6 +407,16 @@ typedef struct {
 
 /* Initialize config with profile-appropriate defaults */
 ASX_API void asx_runtime_config_init(asx_runtime_config *cfg);
+
+/* Get a human-readable IO backend name. */
+ASX_API ASX_MUST_USE const char *asx_io_backend_str(asx_io_backend backend);
+
+/* Select the IO backend used for runtime bootstrap.
+ * Returns ASX_OK for supported selections, ASX_E_PERMISSION_DENIED for known
+ * but currently unsupported backends such as io_uring, and
+ * ASX_E_INVALID_ARGUMENT for NULL config or unknown enum values. */
+ASX_API ASX_MUST_USE asx_status asx_runtime_config_set_io_backend(asx_runtime_config *cfg,
+                                                                  asx_io_backend backend);
 
 /* Initialize hook table with safe defaults.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if hooks is NULL. */

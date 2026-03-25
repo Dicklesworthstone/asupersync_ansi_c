@@ -13,6 +13,8 @@
 #include <string.h>
 
 #if ASX_HAS_NATIVE_IO_DRIVER
+extern asx_io_backend asx_runtime_active_io_backend_selected(void);
+
 /* ------------------------------------------------------------------ */
 /* Internal registration slot                                          */
 /* ------------------------------------------------------------------ */
@@ -33,6 +35,7 @@ static asx_io_reg g_regs[ASX_MAX_IO_TOKENS];
 static uint32_t g_reg_count = 0;
 static uint32_t g_active_count = 0;
 static int g_initialized = 0;
+static asx_io_backend g_backend = ASX_IO_BACKEND_GHOST;
 
 static uint16_t next_gen(uint16_t g) {
     g++;
@@ -57,6 +60,9 @@ asx_status asx_io_driver_init(void) {
     asx_status st = asx_surface_gate(ASX_SURFACE_IO_DRIVER);
     if (st != ASX_OK) return st;
 
+    g_backend = asx_runtime_active_io_backend_selected();
+    if (g_backend == ASX_IO_BACKEND_IO_URING) return ASX_E_PERMISSION_DENIED;
+
     /* Re-initialization must start from a clean registration arena so
      * old tokens cannot survive across runtime/bootstrap boundaries. */
     asx_io_driver_reset();
@@ -67,6 +73,7 @@ asx_status asx_io_driver_init(void) {
 void asx_io_driver_shutdown(void) {
     asx_io_driver_reset();
     g_initialized = 0;
+    g_backend = ASX_IO_BACKEND_GHOST;
 }
 
 int asx_io_driver_is_initialized(void) { return g_initialized; }
@@ -215,4 +222,11 @@ uint32_t asx_io_driver_poll(asx_io_event *out_events, uint32_t max_events, uint3
 /* ------------------------------------------------------------------ */
 
 uint32_t asx_io_active_count(void) { return g_active_count; }
+
+asx_status asx_io_driver_get_backend(asx_io_backend *out_backend) {
+    if (out_backend == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!g_initialized) return ASX_E_INVALID_STATE;
+    *out_backend = g_backend;
+    return ASX_OK;
+}
 #endif

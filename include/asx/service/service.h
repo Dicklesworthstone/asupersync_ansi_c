@@ -330,6 +330,56 @@ ASX_API ASX_MUST_USE asx_status asx_service_load_balance_add_backend(
 ASX_API uint32_t asx_service_load_balance_backend_count(
     const asx_service_load_balance_state *state);
 
+/* ------------------------------------------------------------------ */
+/* Reconnect middleware — auto-recreates service on failure            */
+/* ------------------------------------------------------------------ */
+
+/* Factory function: creates a new service instance.
+ * Called when the inner service fails and needs replacement. */
+typedef asx_status (*asx_service_make_fn)(void *factory_data, asx_service *out);
+
+typedef struct {
+    asx_service inner;
+    asx_service_make_fn make_fn;
+    void *factory_data;
+    uint32_t reconnect_count;
+    uint32_t max_reconnects; /* 0 = unlimited */
+} asx_service_reconnect_state;
+
+/* Initialize a reconnect wrapper. On inner call failure, the service
+ * is recreated from make_fn. Limits total reconnects to max_reconnects
+ * (0 = unlimited). */
+ASX_API void asx_service_reconnect_init(asx_service *svc, asx_service_reconnect_state *state,
+                                         asx_service inner, asx_service_make_fn make_fn,
+                                         void *factory_data, uint32_t max_reconnects);
+
+/* Get the number of reconnections that have occurred. */
+ASX_API uint32_t asx_service_reconnect_count(const asx_service_reconnect_state *state);
+
+/* ------------------------------------------------------------------ */
+/* Steer middleware — route requests to backends by key                */
+/* ------------------------------------------------------------------ */
+
+/* Steer function: returns backend index for a given request.
+ * Must return a value < backend_count. */
+typedef uint32_t (*asx_service_steer_fn)(const void *request, uint32_t backend_count,
+                                          void *user_data);
+
+typedef struct {
+    asx_service backends[ASX_SERVICE_LB_MAX_BACKENDS];
+    uint32_t count;
+    asx_service_steer_fn steer_fn;
+    void *user_data;
+} asx_service_steer_state;
+
+/* Initialize a steer router. Backends added via _add_backend. */
+ASX_API void asx_service_steer_init(asx_service *svc, asx_service_steer_state *state,
+                                     asx_service_steer_fn steer_fn, void *user_data);
+
+/* Add a backend. Returns ASX_E_RESOURCE_EXHAUSTED at capacity. */
+ASX_API ASX_MUST_USE asx_status asx_service_steer_add_backend(asx_service_steer_state *state,
+                                                                asx_service backend);
+
 #ifdef __cplusplus
 }
 #endif

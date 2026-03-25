@@ -4,8 +4,8 @@
  * Minimal implementation for bd-ix8.8: region drain and quiescence
  * assertion. Drives region through Close → Drain → Finalize → Closed.
  *
- * Phase 3 will add obligation tracking, finalizer chains, and leak
- * detection (bd-2cw.1). Semantics from QUIESCENCE_FINALIZATION_INVARIANTS.md.
+ * Extended obligation tracking, finalizer chains, and leak detection
+ * tracked in bd-2cw.1. Semantics from QUIESCENCE_FINALIZATION_INVARIANTS.md.
  *
  * SPDX-License-Identifier: MIT
  */

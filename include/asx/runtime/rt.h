@@ -184,6 +184,7 @@ ASX_API uint32_t asx_runtime_obligation_capacity(void);
 /* Query the runtime's profile and resource class. */
 ASX_API asx_safety_profile asx_runtime_safety_profile(const asx_runtime *rt);
 ASX_API asx_containment_policy asx_runtime_containment_policy(const asx_runtime *rt);
+ASX_API asx_io_backend asx_runtime_io_backend(const asx_runtime *rt);
 
 #ifdef __cplusplus
 }

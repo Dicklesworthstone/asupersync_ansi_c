@@ -80,6 +80,8 @@ TEST(compile_time_profile_contract) {
     ASSERT_EQ(ASX_HAS_MESSAGING_KAFKA_BACKEND, 0);
     ASSERT_EQ(ASX_HAS_MESSAGING_BACKEND_VARIANTS, 0);
     ASSERT_EQ(ASX_HAS_IO_URING, 0);
+    ASSERT_STR_EQ(asx_io_backend_str(ASX_IO_BACKEND_GHOST), "ghost");
+    ASSERT_STR_EQ(asx_io_backend_str(ASX_IO_BACKEND_IO_URING), "io_uring");
 #if defined(ASX_PROFILE_BROWSER)
 #if defined(ASX_BROWSER_PROFILE_MINIMAL)
     ASSERT_EQ(ASX_HAS_BROWSER_IO, 0);

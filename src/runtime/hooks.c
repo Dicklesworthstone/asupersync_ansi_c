@@ -430,12 +430,33 @@ void asx_runtime_config_init(asx_runtime_config *cfg) {
 #else
     cfg->wait_policy = ASX_WAIT_YIELD;
 #endif
+    cfg->io_backend = ASX_IO_BACKEND_GHOST;
     cfg->leak_response = ASX_LEAK_LOG;
     cfg->finalizer_poll_budget = 100;
     cfg->finalizer_time_budget_ns = (uint64_t)5000000000ULL; /* 5 seconds */
     cfg->finalizer_escalation = ASX_FINALIZER_BOUNDED_LOG;
     cfg->max_cancel_chain_depth = 16;
     cfg->max_cancel_chain_memory = 4096;
+}
+
+const char *asx_io_backend_str(asx_io_backend backend) {
+    switch (backend) {
+    case ASX_IO_BACKEND_GHOST: return "ghost";
+    case ASX_IO_BACKEND_IO_URING: return "io_uring";
+    default: return "unknown";
+    }
+}
+
+asx_status asx_runtime_config_set_io_backend(asx_runtime_config *cfg, asx_io_backend backend) {
+    if (cfg == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    switch (backend) {
+    case ASX_IO_BACKEND_GHOST:
+        cfg->io_backend = backend;
+        return ASX_OK;
+    case ASX_IO_BACKEND_IO_URING: return ASX_E_PERMISSION_DENIED;
+    default: return ASX_E_INVALID_ARGUMENT;
+    }
 }
 
 /* ------------------------------------------------------------------ */

@@ -4,8 +4,8 @@
  * Provides generation-safe handle validation, cleanup-stack primitives,
  * and region/task lifecycle operations.
  *
- * Uses fixed-size static arenas. Phase 3 will replace with
- * hook-backed dynamic allocation (bd-hwb.3, bd-2cw.1).
+ * Uses fixed-size static arenas. Hook-backed dynamic allocation
+ * requires platform threading hooks (bd-hwb.3, bd-2cw.1).
  *
  * SPDX-License-Identifier: MIT
  */

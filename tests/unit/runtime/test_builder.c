@@ -44,6 +44,7 @@ static void test_unset_env(const char *name) {
 static void clear_builder_test_env(void) {
     test_unset_env("ASX_RUNTIME_PRESET");
     test_unset_env("ASX_RUNTIME_WAIT_POLICY");
+    test_unset_env("ASX_RUNTIME_IO_BACKEND");
     test_unset_env("ASX_RUNTIME_LEAK_RESPONSE");
     test_unset_env("ASX_RUNTIME_FINALIZER_POLL_BUDGET");
     test_unset_env("ASX_RUNTIME_FINALIZER_TIME_BUDGET_NS");
@@ -52,6 +53,7 @@ static void clear_builder_test_env(void) {
     test_unset_env("ASX_RUNTIME_MAX_CANCEL_CHAIN_MEMORY");
     test_unset_env("TESTRT_PRESET");
     test_unset_env("TESTRT_WAIT_POLICY");
+    test_unset_env("TESTRT_IO_BACKEND");
     test_unset_env("TESTRT_LEAK_RESPONSE");
     test_unset_env("TESTRT_FINALIZER_POLL_BUDGET");
     test_unset_env("TESTRT_FINALIZER_TIME_BUDGET_NS");
@@ -70,7 +72,14 @@ TEST(init_defaults_ok) {
     ASSERT_EQ(asx_runtime_builder_preset(&builder), ASX_RUNTIME_PRESET_DEFAULT);
     ASSERT_EQ(asx_runtime_builder_get_config(&builder, &cfg), ASX_OK);
     ASSERT_EQ(cfg.size, (uint32_t)sizeof(cfg));
+    ASSERT_EQ(cfg.io_backend, ASX_IO_BACKEND_GHOST);
     ASSERT_EQ(cfg.finalizer_poll_budget, 100u);
+}
+
+TEST(io_backend_names_are_stable) {
+    ASSERT_STR_EQ(asx_io_backend_str(ASX_IO_BACKEND_GHOST), "ghost");
+    ASSERT_STR_EQ(asx_io_backend_str(ASX_IO_BACKEND_IO_URING), "io_uring");
+    ASSERT_STR_EQ(asx_io_backend_str((asx_io_backend)99), "unknown");
 }
 
 TEST(preset_names_are_stable) {
@@ -118,6 +127,7 @@ TEST(setters_override_preset_values) {
 
     ASSERT_EQ(asx_runtime_builder_init_low_latency(&builder), ASX_OK);
     ASSERT_EQ(asx_runtime_builder_set_wait_policy(&builder, ASX_WAIT_YIELD), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_set_io_backend(&builder, ASX_IO_BACKEND_GHOST), ASX_OK);
     ASSERT_EQ(asx_runtime_builder_set_finalizer_poll_budget(&builder, 77u), ASX_OK);
     ASSERT_EQ(asx_runtime_builder_set_finalizer_time_budget_ns(&builder, 1234u), ASX_OK);
     ASSERT_EQ(asx_runtime_builder_set_max_cancel_chain_depth(&builder, 19u), ASX_OK);
@@ -126,6 +136,7 @@ TEST(setters_override_preset_values) {
     ASSERT_EQ(asx_runtime_builder_get_config(&builder, &cfg), ASX_OK);
 
     ASSERT_EQ(cfg.wait_policy, ASX_WAIT_YIELD);
+    ASSERT_EQ(cfg.io_backend, ASX_IO_BACKEND_GHOST);
     ASSERT_EQ(cfg.finalizer_poll_budget, 77u);
     ASSERT_EQ(cfg.finalizer_time_budget_ns, (uint64_t)1234);
     ASSERT_EQ(cfg.max_cancel_chain_depth, 19u);
@@ -139,6 +150,10 @@ TEST(invalid_setter_inputs_fail) {
     ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
     ASSERT_EQ(asx_runtime_builder_set_wait_policy(&builder, (asx_wait_policy)99),
               ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_builder_set_io_backend(&builder, (asx_io_backend)99),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_runtime_builder_set_io_backend(&builder, ASX_IO_BACKEND_IO_URING),
+              ASX_E_PERMISSION_DENIED);
     ASSERT_EQ(asx_runtime_builder_set_leak_response(&builder, (asx_leak_response)99),
               ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_runtime_builder_set_finalizer_escalation(&builder, (asx_finalizer_escalation)99),
@@ -164,6 +179,8 @@ TEST(zeroed_builder_fails_closed) {
     ASSERT_EQ(asx_runtime_builder_get_config(&builder, &cfg), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_runtime_builder_get_hooks(&builder, &hooks), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_runtime_builder_set_wait_policy(&builder, ASX_WAIT_YIELD), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_set_io_backend(&builder, ASX_IO_BACKEND_GHOST),
+              ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_runtime_builder_set_leak_response(&builder, ASX_LEAK_RECOVER),
               ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_runtime_builder_set_finalizer_poll_budget(&builder, 1u), ASX_E_INVALID_STATE);
@@ -339,6 +356,7 @@ TEST(apply_env_uses_default_prefix_and_overrides_config) {
     clear_builder_test_env();
     test_set_env("ASX_RUNTIME_PRESET", "high-throughput");
     test_set_env("ASX_RUNTIME_WAIT_POLICY", "yield");
+    test_set_env("ASX_RUNTIME_IO_BACKEND", "ghost");
     test_set_env("ASX_RUNTIME_LEAK_RESPONSE", "recover");
     test_set_env("ASX_RUNTIME_FINALIZER_POLL_BUDGET", "321");
     test_set_env("ASX_RUNTIME_FINALIZER_TIME_BUDGET_NS", "654321");
@@ -352,6 +370,7 @@ TEST(apply_env_uses_default_prefix_and_overrides_config) {
 
     ASSERT_EQ(asx_runtime_builder_preset(&builder), ASX_RUNTIME_PRESET_HIGH_THROUGHPUT);
     ASSERT_EQ(cfg.wait_policy, ASX_WAIT_YIELD);
+    ASSERT_EQ(cfg.io_backend, ASX_IO_BACKEND_GHOST);
     ASSERT_EQ(cfg.leak_response, ASX_LEAK_RECOVER);
     ASSERT_EQ(cfg.finalizer_poll_budget, 321u);
     ASSERT_EQ(cfg.finalizer_time_budget_ns, (uint64_t)654321);
@@ -368,12 +387,14 @@ TEST(apply_env_accepts_custom_prefix) {
 
     clear_builder_test_env();
     test_set_env("TESTRT_PRESET", "current_thread");
+    test_set_env("TESTRT_IO_BACKEND", "ghost");
     test_set_env("TESTRT_FINALIZER_POLL_BUDGET", "88");
 
     ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
     ASSERT_EQ(asx_runtime_builder_apply_env(&builder, "TESTRT_"), ASX_OK);
     ASSERT_EQ(asx_runtime_builder_get_config(&builder, &cfg), ASX_OK);
     ASSERT_EQ(asx_runtime_builder_preset(&builder), ASX_RUNTIME_PRESET_CURRENT_THREAD);
+    ASSERT_EQ(cfg.io_backend, ASX_IO_BACKEND_GHOST);
     ASSERT_EQ(cfg.finalizer_poll_budget, 88u);
 
     clear_builder_test_env();
@@ -395,6 +416,23 @@ TEST(apply_env_invalid_value_is_atomic) {
     ASSERT_EQ(asx_runtime_builder_get_config(&builder, &after), ASX_OK);
     ASSERT_EQ(memcmp(&before, &after, sizeof(before)), 0);
     ASSERT_EQ(asx_runtime_builder_preset(&builder), ASX_RUNTIME_PRESET_LOW_LATENCY);
+
+    clear_builder_test_env();
+}
+
+TEST(apply_env_rejects_unsupported_io_backend) {
+    asx_runtime_builder builder;
+    asx_runtime_config before;
+    asx_runtime_config after;
+
+    clear_builder_test_env();
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_get_config(&builder, &before), ASX_OK);
+    test_set_env("ASX_RUNTIME_IO_BACKEND", "io-uring");
+
+    ASSERT_EQ(asx_runtime_builder_apply_env(&builder, NULL), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_runtime_builder_get_config(&builder, &after), ASX_OK);
+    ASSERT_EQ(memcmp(&before, &after, sizeof(before)), 0);
 
     clear_builder_test_env();
 }
@@ -432,6 +470,7 @@ int main(void) {
     fprintf(stderr, "=== test_builder ===\n");
     RUN_TEST(init_null_fails);
     RUN_TEST(init_defaults_ok);
+    RUN_TEST(io_backend_names_are_stable);
     RUN_TEST(preset_names_are_stable);
     RUN_TEST(current_thread_preset_tightens_for_single_thread);
     RUN_TEST(low_latency_preset_reduces_cleanup_budget);
@@ -453,6 +492,7 @@ int main(void) {
     RUN_TEST(apply_env_uses_default_prefix_and_overrides_config);
     RUN_TEST(apply_env_accepts_custom_prefix);
     RUN_TEST(apply_env_invalid_value_is_atomic);
+    RUN_TEST(apply_env_rejects_unsupported_io_backend);
     RUN_TEST(apply_env_preset_preserves_custom_hooks);
     TEST_REPORT();
     return test_failures;

@@ -23,8 +23,8 @@ extern "C" {
 #endif
 
 /* -------------------------------------------------------------------
- * Arena capacity (walking skeleton: fixed-size static arenas)
- * Phase 3 will replace with dynamic hook-backed allocation.
+ * Arena capacity (fixed-size static arenas).
+ * Dynamic hook-backed allocation requires platform threading hooks.
  * ------------------------------------------------------------------- */
 
 #define ASX_MAX_REGIONS 8

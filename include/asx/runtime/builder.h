@@ -65,6 +65,8 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_builder_get_hooks(const asx_runtime_
  * builders instead of mutating a fail-open zeroed struct. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_wait_policy(asx_runtime_builder *builder,
                                                                     asx_wait_policy policy);
+ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_io_backend(asx_runtime_builder *builder,
+                                                                   asx_io_backend backend);
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_leak_response(asx_runtime_builder *builder,
                                                                       asx_leak_response response);
 ASX_API ASX_MUST_USE asx_status
@@ -106,6 +108,7 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_builder_validate(const asx_runtime_b
  * prefix is NULL/empty):
  *   PRESET=current-thread|low-latency|high-throughput|default
  *   WAIT_POLICY=busy_spin|yield|sleep
+ *   IO_BACKEND=ghost|io-uring
  *   LEAK_RESPONSE=panic|log|silent|recover
  *   FINALIZER_POLL_BUDGET=<u32>
  *   FINALIZER_TIME_BUDGET_NS=<u64>

@@ -118,6 +118,11 @@ ASX_API uint32_t asx_io_driver_poll(asx_io_event *out_events, uint32_t max_event
 /* Get the count of active IO registrations. */
 ASX_API uint32_t asx_io_active_count(void);
 
+/* Query the currently selected IO backend for the initialized driver.
+ * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT for NULL, and
+ * ASX_E_INVALID_STATE when the driver has not been initialized. */
+ASX_API ASX_MUST_USE asx_status asx_io_driver_get_backend(asx_io_backend *out_backend);
+
 /* -------------------------------------------------------------------
  * Reset (test support)
  * ------------------------------------------------------------------- */

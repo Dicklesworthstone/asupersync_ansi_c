@@ -1,8 +1,8 @@
 /*
- * runtime_internal.h — shared internal state for walking skeleton runtime
+ * runtime_internal.h — shared internal state for runtime kernel
  *
  * NOT part of the public API. Used only by runtime .c translation units.
- * Phase 3 will replace static arenas with hook-backed dynamic allocation.
+ * Static arenas; dynamic allocation requires platform threading hooks.
  *
  * SPDX-License-Identifier: MIT
  */

@@ -171,6 +171,19 @@ static asx_status parse_wait_policy(const char *text, asx_wait_policy *out_polic
     return ASX_OK;
 }
 
+static asx_status parse_io_backend(const char *text, asx_io_backend *out_backend) {
+    if (text == NULL || out_backend == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (ascii_streq_ignore_case(text, "ghost")) {
+        *out_backend = ASX_IO_BACKEND_GHOST;
+    } else if (ascii_streq_ignore_case(text, "io_uring") ||
+               ascii_streq_ignore_case(text, "io-uring")) {
+        *out_backend = ASX_IO_BACKEND_IO_URING;
+    } else {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    return ASX_OK;
+}
+
 static asx_status parse_leak_response(const char *text, asx_leak_response *out_response) {
     if (text == NULL || out_response == NULL) return ASX_E_INVALID_ARGUMENT;
     if (ascii_streq_ignore_case(text, "panic")) {
@@ -219,6 +232,14 @@ static int builder_leak_response_valid(asx_leak_response response) {
     case ASX_LEAK_LOG:
     case ASX_LEAK_SILENT:
     case ASX_LEAK_RECOVER: return 1;
+    default: return 0;
+    }
+}
+
+static int builder_io_backend_known(asx_io_backend backend) {
+    switch (backend) {
+    case ASX_IO_BACKEND_GHOST:
+    case ASX_IO_BACKEND_IO_URING: return 1;
     default: return 0;
     }
 }
@@ -336,6 +357,14 @@ asx_status asx_runtime_builder_set_wait_policy(asx_runtime_builder *builder,
     if (!builder_wait_policy_valid(policy)) return ASX_E_INVALID_ARGUMENT;
     builder->config.wait_policy = policy;
     return ASX_OK;
+}
+
+asx_status asx_runtime_builder_set_io_backend(asx_runtime_builder *builder, asx_io_backend backend) {
+    if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (!builder_io_backend_known(backend)) return ASX_E_INVALID_ARGUMENT;
+    return asx_runtime_config_set_io_backend(&builder->config, backend);
 }
 
 asx_status asx_runtime_builder_set_leak_response(asx_runtime_builder *builder,
@@ -460,6 +489,7 @@ asx_status asx_runtime_builder_apply_env(asx_runtime_builder *builder, const cha
     char env_name[96];
     asx_runtime_preset preset;
     asx_wait_policy wait_policy;
+    asx_io_backend io_backend;
     asx_leak_response leak_response;
     asx_finalizer_escalation escalation;
     uint32_t u32_value;
@@ -486,6 +516,14 @@ asx_status asx_runtime_builder_apply_env(asx_runtime_builder *builder, const cha
         st = parse_wait_policy(value, &wait_policy);
         if (st != ASX_OK) return st;
         candidate.config.wait_policy = wait_policy;
+    }
+
+    value = builder_env_value(prefix, "IO_BACKEND", env_name, sizeof(env_name));
+    if (value != NULL) {
+        st = parse_io_backend(value, &io_backend);
+        if (st != ASX_OK) return st;
+        st = asx_runtime_config_set_io_backend(&candidate.config, io_backend);
+        if (st != ASX_OK) return st;
     }
 
     value = builder_env_value(prefix, "LEAK_RESPONSE", env_name, sizeof(env_name));

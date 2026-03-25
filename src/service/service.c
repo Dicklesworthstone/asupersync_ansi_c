@@ -552,3 +552,100 @@ uint32_t asx_service_load_balance_backend_count(
     if (state == NULL) return 0;
     return state->count;
 }
+
+/* ------------------------------------------------------------------ */
+/* Reconnect middleware                                                 */
+/* ------------------------------------------------------------------ */
+
+static asx_service_readiness reconnect_poll_ready(void *state) {
+    asx_service_reconnect_state *s = (asx_service_reconnect_state *)state;
+    return s->inner.poll_ready(s->inner.state);
+}
+
+static asx_status reconnect_call(void *state, const void *request, void *response) {
+    asx_service_reconnect_state *s = (asx_service_reconnect_state *)state;
+    asx_status st = s->inner.call(s->inner.state, request, response);
+
+    if (st == ASX_OK) return ASX_OK;
+
+    /* Inner call failed — try to reconnect */
+    if (s->max_reconnects > 0 && s->reconnect_count >= s->max_reconnects) {
+        return st; /* reconnect limit reached */
+    }
+
+    {
+        asx_service new_inner;
+        asx_status make_st = s->make_fn(s->factory_data, &new_inner);
+        if (make_st != ASX_OK) return st; /* can't reconnect, return original error */
+
+        s->inner = new_inner;
+        s->reconnect_count++;
+
+        /* Retry with new service */
+        return s->inner.call(s->inner.state, request, response);
+    }
+}
+
+void asx_service_reconnect_init(asx_service *svc, asx_service_reconnect_state *state,
+                                 asx_service inner, asx_service_make_fn make_fn,
+                                 void *factory_data, uint32_t max_reconnects) {
+    state->inner = inner;
+    state->make_fn = make_fn;
+    state->factory_data = factory_data;
+    state->reconnect_count = 0;
+    state->max_reconnects = max_reconnects;
+    svc->poll_ready = reconnect_poll_ready;
+    svc->call = reconnect_call;
+    svc->state = state;
+}
+
+uint32_t asx_service_reconnect_count(const asx_service_reconnect_state *state) {
+    if (state == NULL) return 0;
+    return state->reconnect_count;
+}
+
+/* ------------------------------------------------------------------ */
+/* Steer middleware                                                     */
+/* ------------------------------------------------------------------ */
+
+static asx_service_readiness steer_poll_ready(void *state) {
+    asx_service_steer_state *s = (asx_service_steer_state *)state;
+    uint32_t i;
+    if (s->count == 0) return ASX_SERVICE_NOT_READY;
+    for (i = 0; i < s->count; i++) {
+        if (s->backends[i].poll_ready(s->backends[i].state) == ASX_SERVICE_READY) {
+            return ASX_SERVICE_READY;
+        }
+    }
+    return ASX_SERVICE_NOT_READY;
+}
+
+static asx_status steer_call(void *state, const void *request, void *response) {
+    asx_service_steer_state *s = (asx_service_steer_state *)state;
+    uint32_t idx;
+
+    if (s->count == 0) return ASX_E_INVALID_STATE;
+
+    idx = s->steer_fn(request, s->count, s->user_data);
+    if (idx >= s->count) idx = 0; /* safety clamp */
+
+    return s->backends[idx].call(s->backends[idx].state, request, response);
+}
+
+void asx_service_steer_init(asx_service *svc, asx_service_steer_state *state,
+                             asx_service_steer_fn steer_fn, void *user_data) {
+    state->count = 0;
+    state->steer_fn = steer_fn;
+    state->user_data = user_data;
+    svc->poll_ready = steer_poll_ready;
+    svc->call = steer_call;
+    svc->state = state;
+}
+
+asx_status asx_service_steer_add_backend(asx_service_steer_state *state, asx_service backend) {
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (state->count >= ASX_SERVICE_LB_MAX_BACKENDS) return ASX_E_RESOURCE_EXHAUSTED;
+    state->backends[state->count] = backend;
+    state->count++;
+    return ASX_OK;
+}

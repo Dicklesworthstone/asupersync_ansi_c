@@ -8,5 +8,5 @@
 typedef int asx_freestanding_hooks_stub;
 
 #ifdef ASX_PROFILE_FREESTANDING
-/* Stub: freestanding hooks pending */
+/* Freestanding platform hooks: user-supplied at runtime init */
 #endif

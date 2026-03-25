@@ -33,6 +33,7 @@
  *   - finalizer_escalation: diagnostic escalation on budget exhaust
  *
  * RESTART_REQUIRED: Fields that affect in-flight task state.
+ *   - io_backend: changes reactor bootstrap/backend contract
  *   - max_cancel_chain_depth: existing chains may exceed new limit
  *   - max_cancel_chain_memory: existing allocations may exceed new cap
  */
@@ -44,6 +45,7 @@
 static const asx_config_field_desc g_field_table[] = {
     FIELD_DESC("size", ASX_CONFIG_FROZEN_INIT, size),
     FIELD_DESC("wait_policy", ASX_CONFIG_RELOADABLE, wait_policy),
+    FIELD_DESC("io_backend", ASX_CONFIG_RESTART_REQUIRED, io_backend),
     FIELD_DESC("leak_response", ASX_CONFIG_RELOADABLE, leak_response),
     FIELD_DESC("leak_escalation", ASX_CONFIG_RELOADABLE, leak_escalation),
     FIELD_DESC("finalizer_poll_budget", ASX_CONFIG_RELOADABLE, finalizer_poll_budget),
