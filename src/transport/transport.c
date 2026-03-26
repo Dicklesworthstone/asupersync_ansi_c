@@ -450,9 +450,19 @@ asx_status asx_framed_transport_read(asx_framed_transport_state *state, void *bu
 
         st = asx_transport_read(&state->inner, state->conn, buf, to_read, &got);
         if (st != ASX_OK && st != ASX_E_PENDING) { return st; }
-        if (got < state->pending_frame_len) { return ASX_E_PENDING; }
+
+        /* Track progress: decrement remaining bytes as they arrive */
+        if (got <= state->pending_frame_len) {
+            state->pending_frame_len -= (uint32_t)got;
+        } else {
+            state->pending_frame_len = 0;
+        }
 
         *bytes_read = got;
+
+        if (state->pending_frame_len > 0) { return ASX_E_PENDING; }
+
+        /* Frame complete — reset for next frame */
         state->header_complete = 0;
         state->header_pos = 0;
         return ASX_OK;

@@ -757,6 +757,17 @@ test-browser-focused:
 # ---------------------------------------------------------------------------
 BROWSER_MINIMAL_FOCUSED_TEST_BIN := \
 	$(TEST_DIR)/unit/runtime/test_browser_boundary \
+	$(TEST_DIR)/unit/runtime/test_blocking \
+	$(TEST_DIR)/unit/runtime/test_io_driver \
+	$(TEST_DIR)/unit/cli/test_cli \
+	$(TEST_DIR)/unit/fs/test_fs \
+	$(TEST_DIR)/unit/process/test_process \
+	$(TEST_DIR)/unit/signal/test_signal \
+	$(TEST_DIR)/unit/net/test_server \
+	$(TEST_DIR)/unit/net/test_grpc \
+	$(TEST_DIR)/unit/net/test_messaging \
+	$(TEST_DIR)/unit/net/test_tls \
+	$(TEST_DIR)/unit/net/test_db \
 	$(TEST_DIR)/unit/encoding/test_encoding \
 	$(TEST_DIR)/unit/decoding/test_decoding \
 	$(TEST_DIR)/unit/runtime/test_lab \
