@@ -459,11 +459,12 @@ Status terms used below:
   skeletal, ghost-backed, or in-memory placeholder logic.
 - `absent`: no comparable public module family exists in the ANSI C tree today.
 
-One more nuance matters for roadmap truth-maintenance: some families exist in
-the repository tree but are not part of the default shipped surface because the
-current umbrella header (`include/asx/asx.h`) and archive build (`LIB_SRC` in
-`Makefile`) still center the kernel slice. In other words, "present in-tree"
-and "shipped by default" are not yet the same thing.
+One more nuance matters for roadmap truth-maintenance: tree presence alone is
+still not enough to establish the shipped contract. The current umbrella header
+(`include/asx/asx.h`) and archive build (`LIB_SRC` in `Makefile`) now expose a
+much broader surface than the earlier kernel-only story, but profile-gated
+hiding and partial implementations still mean "present in-tree" and "fully
+parity-ready" are not the same thing.
 
 ### 11.1 Portable and Always-Exported Upstream Families
 
@@ -482,14 +483,14 @@ and "shipped by default" are not yet the same thing.
 | `console` | `partial` | `include/asx/console/console.h`, `src/console/console.c`, `tests/unit/console/test_console.c`, `tests/vignettes/vignette_console.c` | A thin public operator/console family now ships over doctor/report surfaces, but it is still much smaller than upstream console/operator scope |
 | `cx` | `partial` | `include/asx/cx/cx.h`, `include/asx/cx/scope.h`, `src/cx/*.c`, umbrella/header + archive build exposure | Capability context and scopes now ship publicly, but the broader upstream `Cx` ecosystem and more propagation points are still missing |
 | `decoding` | `partial` | `include/asx/decoding/decoding.h`, `src/decoding/decoding.c`, `tests/unit/decoding/test_decoding.c` | DecodingPipeline, DecodingConfig, DecodingProgress, DecodingError implemented; RaptorQ integration deferred |
-| `distributed` | `absent` | No `include/asx/distributed/` or `src/distributed/` | Entire distributed runtime family is missing |
+| `distributed` | `partial` | `include/asx/net/distributed.h`, `src/net/distributed.c`, `tests/unit/net/test_distributed.c` | A public distributed/network-coordination family now ships, but it is still far narrower than the broader upstream distributed runtime contract |
 | `encoding` | `partial` | `include/asx/encoding/encoding.h`, `src/encoding/encoding.c`, `tests/unit/encoding/test_encoding.c` | EncodingPipeline, EncodingStats, EncodedSymbol, EncodingError implemented; RaptorQ integration deferred |
-| `epoch` | `absent` | No `include/asx/epoch/` or `src/epoch/` | Barrier/epoch/circuit-breaker surface is missing |
+| `epoch` | `partial` | `include/asx/core/epoch.h`, `include/asx/core/circuit_breaker.h`, `src/core/epoch.c`, `src/core/circuit_breaker.c` | Epoch and circuit-breaker primitives exist, but the broader upstream epoch/barrier ecosystem and adjacent contracts are still narrower here |
 | `error` | `partial` | `include/asx/asx_status.h`, runtime error ledger, docs | Status/error taxonomy exists, but not the richer upstream `error` module and re-export set |
 | `evidence` | `partial` | `include/asx/evidence/evidence.h`, `src/evidence/evidence.c`, `include/asx/runtime/diagnostic.h` | Evidence helpers now ship as a dedicated public family, but the broader upstream evidence ecosystem is still richer |
 | `evidence_sink` | `partial` | `include/asx/evidence_sink/evidence_sink.h`, `src/evidence_sink/evidence_sink.c`, `src/app/report.c` | Structured sink helpers now ship publicly with summary and NDJSON rendering, but the sink story is still narrower than upstream scope |
-| `gen_server` | `partial` | `include/asx/actor/actor.h`, `src/actor/actor.c` comment and behavior callbacks | Gen-server semantics are folded into actor behavior callbacks, not a distinct public family |
-| `http` | `absent` | No `include/asx/http/` or `src/http/` | Entire HTTP surface remains missing |
+| `gen_server` | `partial` | `include/asx/actor/gen_server.h`, `src/actor/gen_server.c`, `tests/unit/actor/test_gen_server.c` | A distinct public gen-server family now exists, but it remains much smaller than the broader upstream gen_server contract |
+| `http` | `partial` | `include/asx/net/http.h`, `src/net/http.c`, `tests/unit/net/test_http.c` | A shipped HTTP family exists under the `net/` surface, but it is still a reduced deterministic skeleton rather than the broader upstream HTTP stack |
 | `io` | `partial` | `include/asx/bytes/io_adapter.h`, `include/asx/runtime/io_driver.h`, `src/runtime/io_driver.c` | Some I/O adapters exist, but no broad public async-IO module matching upstream |
 | `lab` | `partial` | `include/asx/runtime/lab.h`, `include/asx/runtime/replay.h`, `include/asx/runtime/snapshot.h`, `src/runtime/replay.c` | Deterministic lab/replay exists, but much narrower than upstream lab/oracle/explorer tooling |
 | `link` | `partial` | `include/asx/link/link.h`, `src/link/link.c`, `tests/unit/link/test_link.c`, `tests/vignettes/vignette_link.c` | Public coordination link now exists on top of shipped sessions, but it is still far smaller than upstream cross-runtime/linkage scope |
@@ -501,42 +502,42 @@ and "shipped by default" are not yet the same thing.
 | `plan` | `partial` | `include/asx/plan/plan.h`, `src/plan/plan.c` | Plan DAG/IR surface exists in reduced form |
 | `raptorq` | `stub` | `include/asx/raptorq/raptorq.h`, `src/raptorq/raptorq.c`, `tests/unit/raptorq/test_raptorq.c` | Fail-closed stub with config types, readiness probe, deferral reason, and stub encode/decode (per DEF-009 Wave D) |
 | `record` | `partial` | `include/asx/record/record.h`, runtime event/snapshot capture, `tests/unit/record/test_record.c`, `tests/vignettes/vignette_link.c` | Public record helpers now expose snapshot and event-log summaries, but not the full upstream record/history ecosystem |
-| `remote` | `absent` | No `include/asx/remote/` or `src/remote/` | Remote/idempotency/saga surfaces are missing |
+| `remote` | `partial` | `include/asx/remote/remote.h`, `src/remote/remote.c`, `tests/unit/remote/test_remote.c` | A public remote family now ships, but it remains a reduced subset of the broader upstream remote/idempotency/saga story |
 | `runtime` | `substantive` | `include/asx/runtime/*.h`, `src/runtime/*.c`, extensive runtime tests/docs | This is the strongest implemented family after core/channel/time/trace |
 | `security` | `partial` | `include/asx/security/*.h`, `src/security/*.c`, `tests/vignettes/vignette_security.c` | Security/audit primitives and logged authenticated flows exist, but the full upstream security scope is still broader |
-| `service` | `absent` | No `include/asx/service/` or `src/service/` | No service-builder/service-stack family |
+| `service` | `partial` | `include/asx/service/service.h`, `src/service/service.c`, `tests/unit/service/test_service.c`, `tests/unit/service/test_service_stack.c` | A public service family now ships, but it is still much smaller than the broader upstream service-builder/service-stack ecosystem |
 | `session` | `partial` | `include/asx/session/session.h`, `include/asx/core/session.h`, `src/channel/session.c`, `tests/unit/channel/test_session.c`, `tests/vignettes/vignette_link.c` | Session is now a shipped standalone public family, but it remains a reduced subset of the upstream session/orchestration story |
-| `spork` | `absent` | No `include/asx/spork/` or `src/spork/` | No comparable orchestration/operator family |
+| `spork` | `partial` | `include/asx/spork/spork.h`, `src/spork/spork.c`, `tests/unit/spork/test_spork.c` | A public spork/orchestration family now exists, but it remains narrower than the broader upstream operator/orchestration scope |
 | `stream` | `partial` | `include/asx/stream/stream.h`, `src/stream/stream.c` | Stream utilities exist, but not the full upstream streaming ecosystem |
 | `supervision` | `partial` | `include/asx/actor/supervisor.h`, `src/actor/supervisor.c` | Real supervisor logic exists, but still much smaller than upstream supervision families |
 | `sync` | `partial` | `include/asx/sync/*.h`, `src/sync/*.c` | Mutex/once/semaphore/barrier/notify exist, but not the full upstream sync surface |
 | `time` | `substantive` | `include/asx/time/*.h`, `src/time/*.c`, timer tests/docs | Timer wheel, deadline, and sleep surfaces are real and verified |
 | `trace` | `substantive` | `include/asx/runtime/trace.h`, event log/telemetry/hindsight/reporting, conformance docs/tests | Trace/replay evidence is a real product surface here |
 | `tracing_compat` | `partial` | `include/asx/tracing_compat/tracing_compat.h`, `src/tracing_compat/tracing_compat.c`, `tests/unit/tracing_compat/test_tracing_compat.c` | A lightweight compatibility export over the deterministic trace ring now exists, but it is not a full upstream tracing integration ecosystem |
-| `transport` | `absent` | No `include/asx/transport/` or `src/transport/` | No reusable transport abstraction layer |
+| `transport` | `partial` | `include/asx/transport/transport.h`, `src/transport/transport.c`, `tests/unit/transport/test_transport.c` | A public transport abstraction now ships, but it is still a reduced subset of the broader upstream transport ecosystem |
 | `types` | `partial` | `include/asx/asx_ids.h`, `asx_status.h`, `asx_config.h`, `asx_abi.h`, `abi/wasm_abi.h` | Many foundational value types exist, but not the broad upstream `types` export set |
 | `util` | `absent` | No public `include/asx/util/` family | Internal helpers exist, but no exported util module |
-| `web` | `absent` | No `include/asx/web/` or `src/web/` | Entire web/browser/server framework family is missing |
+| `web` | `partial` | `include/asx/net/web.h`, `src/net/web.c`, `tests/unit/net/test_web.c` | A shipped web family exists under the `net/` surface, but it is still a reduced deterministic framework relative to the broader upstream web/browser/server stack |
 
 ### 11.2 Feature-Gated and Platform-Gated Upstream Families
 
 | Upstream family | Current ANSI C state | Evidence in this repo | Gap / dependency note |
 |---|---|---|---|
-| `cli` | `partial` | `asx_app_parse_args` / command dispatch in `include/asx/app/app.h`, shipped through `include/asx/asx.h`, plus `tests/unit/app/test_app.c` | A real CLI/operator parsing surface now ships, but there is still no standalone `include/asx/cli/` family or full upstream CLI ecosystem |
-| `database` | `absent` | No `include/asx/database/` or `src/database/` | Entire database client family is missing |
-| `tls` | `absent` | No `include/asx/tls/` or `src/tls/` | No transport-security family today |
+| `cli` | `partial` | `include/asx/cli/cli.h`, `src/cli/cli.c`, `tests/unit/cli/test_cli.c` | A standalone public CLI family now ships, but it is still much smaller than the broader upstream CLI/operator ecosystem |
+| `database` | `partial` | `include/asx/net/db.h`, `src/net/db.c`, `tests/unit/net/test_db.c` | A shipped database family exists under the `net/` surface, but it remains a deterministic reduced skeleton rather than the broader upstream database client stack |
+| `tls` | `partial` | `include/asx/net/tls.h`, `src/net/tls.c`, `tests/unit/net/test_tls.c` | A shipped TLS family exists under the `net/` surface, but it remains much smaller than the broader upstream transport-security contract |
 | `fs` | `partial` | `include/asx/fs/fs.h`, `src/fs/fs.c` deterministic in-memory host surface | Useful API exists, but it is not a native OS filesystem integration layer |
-| `grpc` | `absent` | No `include/asx/grpc/` or `src/grpc/` | Entire gRPC family is missing |
-| `messaging` | `absent` | No `include/asx/messaging/` or `src/messaging/` | Entire broker/client family is missing |
+| `grpc` | `partial` | `include/asx/net/grpc.h`, `src/net/grpc.c`, `tests/unit/net/test_grpc.c` | A shipped gRPC family exists under the `net/` surface, but it is still a reduced deterministic scaffold rather than the broader upstream gRPC stack |
+| `messaging` | `partial` | `include/asx/net/messaging.h`, `src/net/messaging.c`, `tests/unit/net/test_messaging.c` | A shipped messaging/broker family exists under the `net/` surface, but it remains much smaller than the broader upstream messaging ecosystem |
 | `process` | `partial` | `include/asx/process/process.h`, `src/process/process.c` deterministic child-process model | Public process API exists, but it is not a full host-process integration layer |
-| `server` | `partial` | `asx_app_run_server` in `include/asx/app/app.h`, no `include/asx/server/` family | Some server bootstrap entry points exist, but no standalone server substrate |
+| `server` | `partial` | `include/asx/net/server.h`, `src/net/server.c`, `tests/unit/net/test_server.c` | A standalone shipped server family now exists under the `net/` surface, but it remains much smaller than the broader upstream server substrate |
 | `signal` | `partial` | `include/asx/signal/signal.h`, `src/signal/signal.c` deterministic signal subscription/raise logic | Real API exists, but it is not native signal integration |
 
 ### 11.3 Adjacent Contract Surfaces That Still Exceed the C Tree
 
 | Upstream contract surface | Current ANSI C state | Evidence in this repo | Gap / dependency note |
 |---|---|---|---|
-| Browser/WASM product surface | `partial` | `include/asx/abi/wasm_abi.h`, `include/asx/runtime/browser_boundary.h`, `browser_diagnostic.h`, examples `ex_browser_*` | Some ABI/boundary tooling exists, but no `web` family or upstream-style fail-closed browser feature matrix |
+| Browser/WASM product surface | `partial` | `include/asx/abi/wasm_abi.h`, `include/asx/runtime/browser_boundary.h`, `include/asx/runtime/browser_diagnostic.h`, `include/asx/net/web.h`, examples `ex_browser_*` | ABI/boundary tooling and a shipped web-facing browser-safe family now exist, but the broader upstream browser/WASM product surface and fail-closed feature matrix are still incomplete |
 | Examples and smoke paths | `partial` | `examples/*.c`, `tests/e2e/*.sh`, `README.md` examples | Good kernel/lab/browser-boundary examples exist; HTTP/web/grpc/database/distributed example families do not |
 | Doctor/report/evidence workflow | `partial` | `include/asx/app/report.h`, `app/doctor.h`, `runtime/diagnostic.h`, `include/asx/evidence*.h`, `include/asx/monitor/monitor.h`, `src/app/*.c`, `tests/vignettes/vignette_console.c`, `tests/vignettes/vignette_observability.c` | Strong diagnostic story locally, now with explicit evidence/monitor families and logged observability flows, but still narrower than upstream evidence/observability contract |
 | Test-helper / artifact surface | `partial` | `tests/test_log.h`, `tests/test_harness.h`, `include/asx/testing/log.h`, `tools/fixture_capture`, `fixtures/rust_reference/` | Verification tooling is strong and now has a public test-log helper, but it still is not a full public `test_logging` / `test_ndjson` / `test_utils` module family |
@@ -551,13 +552,14 @@ surfaces. That said, crate-level parity is still nowhere close to closure:
   diagnostics, and a handful of host-style facades;
 - several named families exist only in narrowed form (`cx`, `lab`, `plan`,
   `sync`, `stream`, `actor`, `supervision`, `app`, `security`);
-- some tree-present families are also not shipped by the default umbrella
-  header/archive build today, including representative surfaces such as
-  `actor`, `supervision`, `sync`, `stream`, and parts of the lab stack;
+- the current shipped surface is broader than the older kernel-only narrative,
+  but many of those shipped families are still intentionally reduced or
+  profile-gated rather than close to full upstream breadth;
 - networking is still explicitly skeletal rather than production-capable;
-- major exported families remain entirely absent, including `http`, `web`,
-  `grpc`, `database`, `tls`, `messaging`, `distributed`, `remote`, `service`,
-  `transport`, `encoding`, `decoding`, `epoch`, `migration`, and `spork`.
+- some major upstream families still remain entirely absent or materially
+  underrepresented, but the absent set is now much smaller; the real gap is
+  parity depth across shipped families plus truly missing ecosystems such as
+  `util` and broader distributed/browser/platform stacks.
 
 This is the truth-maintenance result that the reopened `bd-yx9r.*` roadmap
 needs to preserve: earlier deferred-surface documents correctly explained why

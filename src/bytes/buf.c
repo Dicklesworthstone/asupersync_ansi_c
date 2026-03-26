@@ -97,7 +97,7 @@ asx_status asx_buf_mut_put(asx_buf_mut *buf, const void *data, uint32_t len) {
     if (buf == NULL) return ASX_E_INVALID_ARGUMENT;
     if (len == 0) return ASX_OK;
     if (data == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (buf->wr_pos + len > buf->capacity) return ASX_E_RESOURCE_EXHAUSTED;
+    if (len > buf->capacity - buf->wr_pos) return ASX_E_RESOURCE_EXHAUSTED;
 
     memcpy(buf->data + buf->wr_pos, data, len);
     buf->wr_pos += len;
