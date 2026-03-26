@@ -768,6 +768,10 @@ BROWSER_MINIMAL_FOCUSED_TEST_BIN := \
 	$(TEST_DIR)/unit/net/test_messaging \
 	$(TEST_DIR)/unit/net/test_tls \
 	$(TEST_DIR)/unit/net/test_db \
+	$(TEST_DIR)/unit/net/test_http \
+	$(TEST_DIR)/unit/net/test_web \
+	$(TEST_DIR)/unit/app/test_report \
+	$(TEST_DIR)/unit/console/test_console \
 	$(TEST_DIR)/unit/encoding/test_encoding \
 	$(TEST_DIR)/unit/decoding/test_decoding \
 	$(TEST_DIR)/unit/runtime/test_lab \
