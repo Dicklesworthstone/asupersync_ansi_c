@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![494 API functions](https://img.shields.io/badge/public%20API-494%20functions-blue)
-![192 test programs](https://img.shields.io/badge/tests-192%20programs-brightgreen)
+![1641 API functions](https://img.shields.io/badge/public%20API-1%2C641%20functions-blue)
+![233 test programs](https://img.shields.io/badge/tests-233%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. 494 public API functions across a broad multi-family surface, backed by 192 tracked C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. 1,641 public API functions across 37 subsystem families, backed by 233 test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Install</h3>
@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/asupersync_ansi_c
 
 | Feature | What It Gives You |
 |---|---|
-| **494 public API functions across a broad subsystem surface** | Full async runtime: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **1,641 public API functions across 37 subsystem families** | Full async runtime: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Reproduce production failures exactly; diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and bounded cleanup budgets |
@@ -549,7 +549,7 @@ src/                         123 C source files in the current tree
   core/                      15 files: status, cancel, combinators, symbols, epochs, circuit breakers
   runtime/                   37 files: scheduler, lifecycle, builder, blocking, I/O, deadline, instruments
   channel/                   6 files: MPSC, oneshot, broadcast, watch, session
-  sync/                      5 files | actor/ 2 files | time/ 3 files | bytes/ 3 files
+  sync/                      8 files | actor/ 3 files | time/ 3 files | bytes/ 3 files
   platform/                  3 files: POSIX, Win32, freestanding adapters
   ...                        + cx, codec, security, net, fs, process, signal, stream, evidence, etc.
 
@@ -562,7 +562,7 @@ tests/                       254 tracked files total; 198 C test programs in the
   fuzz/                      4 differential fuzzing harnesses
   formal/                    9 algebraic, CBMC, and litmus verification
 
-examples/                    8 example programs
+examples/                    14 example programs
 fixtures/rust_reference/     Canonical fixtures captured from Rust runtime
 tools/                       CI, capture, replay, fuzz, and minimization tooling
 docs/                        Port architecture, parity tracking, deployment hardening
@@ -1366,7 +1366,7 @@ The test and example suites serve as executable documentation:
 | `ex_browser_replay.c` | Browser profile combined with replay verification |
 | `ex_network_surface.c` | Resolver, dual-stack discovery, happy-eyeballs, TCP/UDP ghost contracts |
 
-### API Vignettes (11 walkthroughs in `tests/vignettes/`)
+### API Vignettes (12 walkthroughs in `tests/vignettes/`)
 
 Vignettes are self-contained programs that demonstrate one API pattern each with detailed comments. They serve as both documentation and regression tests:
 
@@ -1609,7 +1609,7 @@ The CI pipeline runs 7 parallel lanes on every push and PR:
 ```
 ┌────────────┐┌────────────────┐┌────────────────┐┌────────────────┐
 │   check    ││ unit-invariant ││  conformance   ││ profile-parity │
-│  format    ││  116 unit      ││  Rust fixture  ││  cross-profile │
+│  format    ││  146 unit      ││  Rust fixture  ││  cross-profile │
 │  8 lints   ││  3 invariant   ││  parity        ││  digest match  │
 │  build     ││                ││                ││                │
 └────────────┘└────────────────┘└────────────────┘└────────────────┘
@@ -1728,7 +1728,7 @@ Usually slightly, depending on workload and trace settings. In exchange you gain
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: 494 public functions, 122 public headers in the
+Yes. The C API is first-class: 1,641 public functions across public headers in the
 current `include/asx/` tree, and one umbrella `#include <asx/asx.h>`. CLI
 tooling is operational scaffolding around the same runtime and conformance
 layers.

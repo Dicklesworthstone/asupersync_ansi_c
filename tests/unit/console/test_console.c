@@ -116,6 +116,54 @@ static void test_console_null_args(void) {
            "null source rejected");
 }
 
+static void test_console_color_mode(void) {
+    asx_color_mode mode;
+    asx_console_set_color_mode(ASX_COLOR_MODE_NONE);
+    mode = asx_console_get_color_mode();
+    ASSERT(mode == ASX_COLOR_MODE_NONE, "color mode set to none");
+
+    asx_console_set_color_mode(ASX_COLOR_MODE_256);
+    mode = asx_console_get_color_mode();
+    ASSERT(mode == ASX_COLOR_MODE_256, "color mode set to 256");
+}
+
+static void test_console_styled_write(void) {
+    asx_report_buf out;
+    asx_console_style style;
+
+    asx_console_set_color_mode(ASX_COLOR_MODE_256);
+    asx_console_style_init(&style);
+    style.fg = ASX_COLOR_RED;
+    style.bold = 1;
+
+    MUST_OK(asx_console_styled_write(&out, &style, "error text"));
+    ASSERT(strstr(asx_report_buf_cstr(&out), "error text") != NULL, "styled text present");
+}
+
+static void test_console_bold_and_colored(void) {
+    asx_report_buf out;
+
+    asx_console_set_color_mode(ASX_COLOR_MODE_256);
+    MUST_OK(asx_console_bold(&out, "important"));
+    ASSERT(strstr(asx_report_buf_cstr(&out), "important") != NULL, "bold text present");
+
+    MUST_OK(asx_console_colored(&out, ASX_COLOR_GREEN, "success"));
+    ASSERT(strstr(asx_report_buf_cstr(&out), "success") != NULL, "colored text present");
+}
+
+static void test_console_str_width(void) {
+    ASSERT(asx_console_str_width("hello") == 5, "ASCII width = length");
+    ASSERT(asx_console_str_width("") == 0, "empty string width = 0");
+    ASSERT(asx_console_str_width(NULL) == 0, "NULL width = 0");
+}
+
+static void test_console_clear_and_cursor(void) {
+    asx_report_buf out;
+    MUST_OK(asx_console_clear(&out));
+    MUST_OK(asx_console_cursor_hide(&out));
+    MUST_OK(asx_console_cursor_show(&out));
+}
+
 int main(void) {
     printf("test_console:\n");
 
@@ -126,6 +174,11 @@ int main(void) {
     RUN(test_console_emit_log_record);
     RUN(test_public_test_log_header_compiles_and_noops);
     RUN(test_console_null_args);
+    RUN(test_console_color_mode);
+    RUN(test_console_styled_write);
+    RUN(test_console_bold_and_colored);
+    RUN(test_console_str_width);
+    RUN(test_console_clear_and_cursor);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
