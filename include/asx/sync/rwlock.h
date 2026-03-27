@@ -143,6 +143,7 @@ ASX_API int asx_rwlock_is_write_locked(asx_rwlock_handle handle);
  * Arena management
  * ------------------------------------------------------------------- */
 
+/* Reset all rwlock arena state. For tests only. */
 ASX_API void asx_rwlock_reset(void);
 
 #ifdef __cplusplus

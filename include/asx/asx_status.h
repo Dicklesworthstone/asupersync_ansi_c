@@ -177,14 +177,31 @@ typedef struct asx_backoff_hint {
     uint8_t max_attempts;
 } asx_backoff_hint;
 
+/* Get the error category for a status code. */
 ASX_API ASX_MUST_USE asx_error_category asx_status_category(asx_status s);
+
+/* Get a human-readable string for an error category. */
 ASX_API ASX_MUST_USE const char *asx_error_category_str(asx_error_category category);
+
+/* Get the recoverability class for a status code. */
 ASX_API ASX_MUST_USE asx_recoverability asx_status_recoverability(asx_status s);
+
+/* Get a human-readable string for a recoverability class. */
 ASX_API ASX_MUST_USE const char *asx_recoverability_str(asx_recoverability recoverability);
+
+/* Get the recommended recovery action for a status code. */
 ASX_API ASX_MUST_USE asx_recovery_action asx_status_recovery_action(asx_status s);
+
+/* Get a human-readable string for a recovery action. */
 ASX_API ASX_MUST_USE const char *asx_recovery_action_str(asx_recovery_action action);
+
+/* Get the backoff hint for a status code (delay, max attempts). */
 ASX_API ASX_MUST_USE asx_backoff_hint asx_status_backoff_hint(asx_status s);
+
+/* Returns nonzero if the status code is retryable. */
 ASX_API ASX_MUST_USE int asx_status_is_retryable(asx_status s);
+
+/* Returns nonzero if the status represents a cancellation. */
 ASX_API ASX_MUST_USE int asx_status_is_cancel(asx_status s);
 
 /* ------------------------------------------------------------------ */
