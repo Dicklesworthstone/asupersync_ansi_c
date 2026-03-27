@@ -74,13 +74,16 @@ ASX_API asx_status asx_contended_mutex_unlock(asx_mutex_guard guard);
  * Async lock (delegates to inner mutex with instrumentation)
  * ------------------------------------------------------------------- */
 
+/* Begin async lock acquisition. */
 ASX_API ASX_MUST_USE asx_status asx_contended_mutex_lock_begin(asx_contended_mutex_handle handle,
                                                                 asx_mutex_lock_waiter *out);
 
+/* Poll for async lock. Tracks contention on PENDING. */
 ASX_API asx_status asx_contended_mutex_poll_lock(asx_contended_mutex_handle handle,
                                                   asx_mutex_lock_waiter *waiter,
                                                   asx_mutex_guard *out, asx_cx *cx);
 
+/* Cancel an async lock acquisition. */
 ASX_API asx_status asx_contended_mutex_lock_cancel(asx_mutex_lock_waiter *waiter);
 
 /* -------------------------------------------------------------------
@@ -105,6 +108,7 @@ ASX_API int asx_contended_mutex_is_locked(asx_contended_mutex_handle handle);
  * Arena management
  * ------------------------------------------------------------------- */
 
+/* Reset all contended mutex arena state. For tests only. */
 ASX_API void asx_contended_mutex_reset(void);
 
 #ifdef __cplusplus

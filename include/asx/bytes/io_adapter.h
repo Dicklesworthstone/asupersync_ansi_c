@@ -97,7 +97,10 @@ typedef struct {
     int eof;
 } asx_mem_read_state;
 
+/* Initialize a memory read adapter from a buffer. */
 ASX_API void asx_mem_read_init(asx_mem_read_state *s, asx_buf_mut *source);
+
+/* Get a read adapter for the memory reader. */
 ASX_API asx_read_adapter asx_mem_read_adapter(asx_mem_read_state *s);
 
 /* A memory write adapter backed by an asx_buf_mut.
@@ -107,7 +110,10 @@ typedef struct {
     int closed;
 } asx_mem_write_state;
 
+/* Initialize a memory write adapter to a buffer. */
 ASX_API void asx_mem_write_init(asx_mem_write_state *s, asx_buf_mut *sink);
+
+/* Get a write adapter for the memory writer. */
 ASX_API asx_write_adapter asx_mem_write_adapter(asx_mem_write_state *s);
 
 /* -------------------------------------------------------------------
@@ -204,8 +210,11 @@ typedef struct {
     int first_done;
 } asx_chain_reader_state;
 
+/* Initialize a chain reader that reads from first, then second. */
 ASX_API void asx_chain_reader_init(asx_chain_reader_state *state, asx_read_adapter first,
                                     asx_read_adapter second);
+
+/* Get a read adapter for the chain reader. */
 ASX_API asx_read_adapter asx_chain_reader_adapter(asx_chain_reader_state *state);
 
 /* -------------------------------------------------------------------
@@ -217,8 +226,11 @@ typedef struct {
     size_t remaining;
 } asx_take_reader_state;
 
+/* Initialize a take reader that reads at most limit bytes from inner. */
 ASX_API void asx_take_reader_init(asx_take_reader_state *state, asx_read_adapter inner,
                                    size_t limit);
+
+/* Get a read adapter for the take reader. */
 ASX_API asx_read_adapter asx_take_reader_adapter(asx_take_reader_state *state);
 
 #endif /* !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO */

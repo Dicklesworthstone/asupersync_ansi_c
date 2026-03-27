@@ -138,6 +138,7 @@ ASX_API int asx_pool_is_closed(asx_pool_handle handle);
  * Arena management
  * ------------------------------------------------------------------- */
 
+/* Reset all pool arena state. Destroys all resources. For tests only. */
 ASX_API void asx_pool_reset(void);
 
 #ifdef __cplusplus
