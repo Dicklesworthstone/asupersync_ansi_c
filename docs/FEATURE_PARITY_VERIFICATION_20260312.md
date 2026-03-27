@@ -1,5 +1,12 @@
 # Feature Parity Verification Report
 
+> **Historical Note (2026-03-27):** This report is a March 12 verification snapshot for a narrower surface audit. It should not be read as the current project-wide parity verdict for the full repo as it exists now.
+>
+> For current source-backed surface status, use:
+> - `docs/RUST_EXPORTED_SURFACE_INVENTORY.md`
+> - `docs/DEFERRED_SURFACE_REGISTER.md`
+> - `docs/SUBSYSTEM_EVIDENCE_MATRIX.md`
+
 > **Date:** 2026-03-12
 > **Auditor:** AmberCrane (claude-code/opus-4.6)
 > **Methodology:** /porting-to-rust Phase 5 — Conformance Testing & QA
@@ -7,11 +14,16 @@
 
 ## 1. Executive Summary
 
-**Verdict: FULL FEATURE PARITY CONFIRMED**
+**Verdict (Historical Snapshot): parity confirmed for the audited March 12 surface, not for the full current repository surface**
 
 All 256 declared public API functions are implemented. All 22 semantic units
 pass conformance gates. Zero semantic delta. Profile parity verified across
 CORE, FREESTANDING, and EMBEDDED_ROUTER profiles.
+
+That conclusion applies to the audited surface described in this document. The
+current repository surface is broader than this report's 33-header / 256-function
+audit scope, so newer source-backed inventory/register documents should be
+treated as the current authority for shipped-surface status.
 
 ## 2. Quality Gate Results
 
@@ -146,6 +158,10 @@ The ANSI C port achieves **full API-level feature parity** with the Rust
 reference implementation. All 256 public functions are implemented, all 22
 semantic units pass their acceptance obligations, and all exercisable quality
 gates produce zero failures with zero semantic delta.
+
+This conclusion is preserved here as a historical record of the March 12 audit
+scope. It should not be interpreted as a blanket statement about the broader
+surface now present in the repository.
 
 The remaining gaps (Rust fixture capture, fuzz-parity, embedded-matrix) are
 infrastructure/environment constraints, not implementation gaps. No code
