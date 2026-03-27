@@ -151,6 +151,7 @@ ASX_API void asx_deadline_monitor_get_stats(asx_deadline_monitor_stats *out);
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
+/* Reset all deadline monitor state (test support). */
 ASX_API void asx_deadline_monitor_reset(void);
 
 #ifdef __cplusplus

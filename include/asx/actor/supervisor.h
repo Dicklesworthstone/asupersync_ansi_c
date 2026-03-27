@@ -210,6 +210,7 @@ ASX_API int asx_supervisor_intensity_exceeded(asx_supervisor_handle sup);
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
+/* Reset all supervisor arena state. For tests only. */
 ASX_API void asx_supervisor_reset(void);
 
 #ifdef __cplusplus

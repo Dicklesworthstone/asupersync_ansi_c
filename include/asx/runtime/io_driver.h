@@ -127,6 +127,7 @@ ASX_API ASX_MUST_USE asx_status asx_io_driver_get_backend(asx_io_backend *out_ba
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
+/* Reset the IO driver to uninitialized state (test support). */
 ASX_API void asx_io_driver_reset(void);
 #endif
 

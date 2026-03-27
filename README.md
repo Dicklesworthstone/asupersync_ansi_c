@@ -16,7 +16,7 @@
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. 494 public API functions across 28 subsystems, backed by 192 tracked C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. 494 public API functions across a broad multi-family surface, backed by 192 tracked C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Install</h3>
@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/asupersync_ansi_c
 
 | Feature | What It Gives You |
 |---|---|
-| **494 public API functions across 28 subsystems** | Full async runtime: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **494 public API functions across a broad subsystem surface** | Full async runtime: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Reproduce production failures exactly; diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and bounded cleanup budgets |
@@ -533,7 +533,7 @@ All profiles produce identical canonical semantic digests for shared fixture set
 ## Repository Layout
 
 ```text
-include/asx/                 95 public C headers across 28 subsystem families
+include/asx/                 122 public C headers in the current tree
   asx.h                      Umbrella header (single #include entry point)
   asx_status.h               59 error codes with categories and recovery guidance
   asx_config.h               Profile, resource class, hook, and fault injection types
@@ -545,7 +545,7 @@ include/asx/                 95 public C headers across 28 subsystem families
   codec/                     Codec abstraction + equivalence checking
   ...                        + actor, cx, time, bytes, stream, security, net, fs, evidence, monitor, etc.
 
-src/                         95 C source files (~25,500 LOC)
+src/                         123 C source files in the current tree
   core/                      15 files: status, cancel, combinators, symbols, epochs, circuit breakers
   runtime/                   37 files: scheduler, lifecycle, builder, blocking, I/O, deadline, instruments
   channel/                   6 files: MPSC, oneshot, broadcast, watch, session

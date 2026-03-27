@@ -72,6 +72,7 @@ ASX_API int asx_once_is_initialized(asx_once_handle handle);
  * Arena management
  * ------------------------------------------------------------------- */
 
+/* Reset all once-cell arena state (test support). */
 ASX_API void asx_once_reset(void);
 
 #ifdef __cplusplus

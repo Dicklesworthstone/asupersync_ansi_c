@@ -91,6 +91,7 @@ ASX_API uint32_t asx_waker_drain_signaled(asx_task_id *out_tasks, uint32_t max_t
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
+/* Reset all waker arena state (test support). */
 ASX_API void asx_waker_reset(void);
 
 #ifdef __cplusplus

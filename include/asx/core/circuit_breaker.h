@@ -103,9 +103,13 @@ ASX_API void asx_breaker_reset(asx_circuit_breaker *cb);
  * API: Queries
  * ------------------------------------------------------------------- */
 
+/* Get the current breaker state (closed/open/half-open). */
 ASX_API asx_breaker_state asx_breaker_get_state(const asx_circuit_breaker *cb);
+/* Get the current consecutive failure count. */
 ASX_API uint32_t asx_breaker_failure_count(const asx_circuit_breaker *cb);
+/* Get the total number of times the breaker has tripped. */
 ASX_API uint32_t asx_breaker_total_trips(const asx_circuit_breaker *cb);
+/* Get the total number of rejected (fast-failed) calls. */
 ASX_API uint32_t asx_breaker_total_rejected(const asx_circuit_breaker *cb);
 
 /* Return the human-readable name for a breaker state. */

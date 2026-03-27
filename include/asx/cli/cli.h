@@ -30,7 +30,9 @@ typedef enum {
     ASX_OUTPUT_JSON_PRETTY = 2
 } asx_output_format;
 
+/* Parse an output format string ("text", "json", "json-pretty") into an enum. */
 ASX_API asx_output_format asx_cli_parse_output_format(const char *str);
+/* Return the string representation of an output format. */
 ASX_API const char *asx_output_format_str(asx_output_format fmt);
 
 /* -------------------------------------------------------------------

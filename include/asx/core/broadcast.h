@@ -114,6 +114,7 @@ ASX_API uint32_t asx_broadcast_total_sent(const asx_broadcast_sender *sender);
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
+/* Reset all broadcast channel state (test support). */
 ASX_API void asx_broadcast_reset(void);
 
 #ifdef __cplusplus

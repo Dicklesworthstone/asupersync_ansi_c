@@ -105,6 +105,7 @@ ASX_API int asx_session_peer_alive(const asx_session_endpoint *ep);
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
+/* Reset all session state (test support). */
 ASX_API void asx_session_reset(void);
 
 #ifdef __cplusplus

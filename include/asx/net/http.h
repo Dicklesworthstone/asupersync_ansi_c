@@ -320,39 +320,52 @@ typedef struct {
     uint32_t count;
 } asx_http_multipart_form;
 
+/* Initialize a route policy to defaults (no session or security required). */
 ASX_API void asx_http_route_policy_init(asx_http_route_policy *policy);
+/* Initialize an empty HTTP router. */
 ASX_API void asx_http_router_init(asx_http_router *router);
+/* Add a route with handler, policy, and optional middleware slot. */
 ASX_API asx_status asx_http_router_add_route(asx_http_router *router, asx_http_method method,
                                              const char *pattern, asx_http_handler_fn handler,
                                              void *handler_user_data,
                                              const asx_http_route_policy *policy,
                                              asx_http_route **out_route);
+/* Attach a middleware function to a route. */
 ASX_API asx_status asx_http_route_add_middleware(asx_http_route *route,
                                                  asx_http_middleware_fn fn, void *user_data);
+/* Dispatch an incoming request through the router, matching routes and running middleware. */
 ASX_API asx_status asx_http_router_dispatch(asx_http_router *router, const asx_http_request *req,
                                             asx_http_response *resp, asx_session_pair *session,
                                             asx_security_context *security,
                                             asx_http_request_context *out_ctx);
 
+/* Extract a named path parameter from the request context. */
 ASX_API asx_status asx_http_request_path_param(const asx_http_request_context *ctx,
                                                const char *name, char *out, uint32_t out_size);
+/* Extract a named query parameter from the request URI. */
 ASX_API asx_status asx_http_request_query_param(const asx_http_request *req, const char *name,
                                                 char *out, uint32_t out_size);
+/* Extract a named cookie value from the request headers. */
 ASX_API asx_status asx_http_request_cookie(const asx_http_request *req, const char *name,
                                            char *out, uint32_t out_size);
+/* Verify the request body against the security context for the given purpose. */
 ASX_API asx_status asx_http_request_verify_body_auth(const asx_http_request *req,
                                                      asx_security_context *security,
                                                      const char *purpose, int *out_verified);
 
+/* Set a session cookie on the response with secure/httponly flags. */
 ASX_API asx_status asx_http_response_set_session_cookie(asx_http_response *resp,
                                                         const char *name, const char *value,
                                                         int secure, int http_only);
+/* Set the response as a Server-Sent Event with event type, id, and data. */
 ASX_API asx_status asx_http_response_set_sse(asx_http_response *resp, const char *event,
                                              const char *id, const char *data);
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES
+/* Serve a static file from the given root directory matching the URI path. */
 ASX_API asx_status asx_http_serve_static(asx_http_response *resp, const char *root,
                                          const char *uri);
 #endif
+/* Parse multipart form data from a request body. */
 ASX_API asx_status asx_http_parse_multipart(const asx_http_request *req,
                                             asx_http_multipart_form *out_form);
 

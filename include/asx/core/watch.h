@@ -105,6 +105,7 @@ ASX_API int asx_watch_sender_is_alive(uint32_t slot, uint16_t generation);
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
+/* Reset all watch channel state (test support). */
 ASX_API void asx_watch_reset(void);
 
 #ifdef __cplusplus

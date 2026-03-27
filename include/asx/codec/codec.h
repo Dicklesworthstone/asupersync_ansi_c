@@ -67,6 +67,7 @@ ASX_API void asx_codec_buffer_reset(asx_codec_buffer *buf);
 /* Buffer append primitives */
 ASX_API asx_status asx_codec_buffer_append_bytes(asx_codec_buffer *buf, const char *bytes,
                                                  size_t len);
+/* Decode a frame from the buffer using the codec. */
 ASX_API asx_status asx_codec_buffer_append_cstr(asx_codec_buffer *buf, const char *text);
 ASX_API asx_status asx_codec_buffer_append_char(asx_codec_buffer *buf, char ch);
 ASX_API asx_status asx_codec_buffer_append_u64(asx_codec_buffer *buf, uint64_t value);

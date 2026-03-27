@@ -23,9 +23,11 @@ typedef struct {
     asx_evidence_level verdict;
 } asx_evidence_summary;
 
+/* Summarize evidence sink into counts and verdict. */
 ASX_API ASX_MUST_USE asx_status asx_evidence_sink_summarize(const asx_evidence_sink *sink,
                                                             asx_evidence_summary *out);
 
+/* Get evidence entry at the given index. */
 ASX_API const asx_evidence_entry *asx_evidence_sink_get(const asx_evidence_sink *sink,
                                                         uint32_t index);
 

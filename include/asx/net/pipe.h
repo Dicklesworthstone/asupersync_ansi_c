@@ -53,6 +53,7 @@ ASX_API asx_status asx_pipe_close_write(asx_pipe_write wr);
 
 /* Check if read/write end is alive. */
 ASX_API int asx_pipe_read_is_alive(asx_pipe_read rd);
+/* Check if the write end of a pipe is still alive. */
 ASX_API int asx_pipe_write_is_alive(asx_pipe_write wr);
 
 /* Reset all pipe state (test support). */

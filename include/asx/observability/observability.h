@@ -22,6 +22,7 @@ typedef struct {
     uint64_t event_log_digest;
 } asx_observability_snapshot;
 
+/* Capture a combined observability snapshot from the runtime and evidence sink. */
 ASX_API ASX_MUST_USE asx_status asx_observability_capture(const asx_runtime *rt,
                                                           const asx_evidence_sink *sink,
                                                           asx_observability_snapshot *out);

@@ -512,6 +512,7 @@ typedef struct {
     int outer_done;
 } asx_stream_flat_map_state;
 
+/* Create a flat-map stream that maps each item to a sub-stream and flattens. */
 ASX_API void asx_stream_flat_map_init(asx_stream *s, asx_stream_flat_map_state *state,
                                        asx_stream inner, asx_stream_flat_map_fn fn,
                                        void *user_data);

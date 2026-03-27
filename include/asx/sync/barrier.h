@@ -82,6 +82,7 @@ ASX_API uint32_t asx_barrier_waiting_count(asx_barrier_handle handle);
  * Arena management
  * ------------------------------------------------------------------- */
 
+/* Reset all barrier arena state (test support). */
 ASX_API void asx_barrier_reset(void);
 
 #ifdef __cplusplus

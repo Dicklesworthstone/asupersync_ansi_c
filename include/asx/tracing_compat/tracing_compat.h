@@ -25,13 +25,16 @@ extern "C" {
 
 typedef void (*asx_tracing_compat_sink_fn)(const char *record, void *user_data);
 
+/* Initialize the tracing compatibility layer. */
 ASX_API ASX_MUST_USE asx_status asx_tracing_compat_format_event(const asx_trace_event *event,
                                                                 asx_report_buf *out);
 
+/* Shut down the tracing compatibility layer. */
 ASX_API ASX_MUST_USE asx_status asx_tracing_compat_emit_event(const asx_trace_event *event,
                                                               asx_tracing_compat_sink_fn sink,
                                                               void *user_data);
 
+/* Emit a tracing-compatible span event. */
 ASX_API ASX_MUST_USE asx_status asx_tracing_compat_export_current(
     asx_tracing_compat_sink_fn sink, void *user_data, uint32_t *out_count);
 

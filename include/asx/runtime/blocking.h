@@ -110,6 +110,7 @@ ASX_API uint32_t asx_blocking_active_count(void);
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
+/* Reset the blocking pool to uninitialized state (test support). */
 ASX_API void asx_blocking_pool_reset(void);
 #endif
 

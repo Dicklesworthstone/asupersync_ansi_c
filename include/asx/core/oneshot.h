@@ -100,6 +100,7 @@ ASX_API asx_oneshot_state asx_oneshot_get_state(uint32_t slot, uint16_t generati
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
+/* Reset all oneshot channel state (test support). */
 ASX_API void asx_oneshot_reset(void);
 
 #ifdef __cplusplus

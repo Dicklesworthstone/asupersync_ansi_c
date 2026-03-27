@@ -107,6 +107,7 @@ ASX_API uint32_t asx_semaphore_available(asx_semaphore_handle handle);
  * Arena management
  * ------------------------------------------------------------------- */
 
+/* Reset all semaphore arena state (test support). */
 ASX_API void asx_semaphore_reset(void);
 
 #ifdef __cplusplus

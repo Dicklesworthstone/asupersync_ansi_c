@@ -132,16 +132,23 @@ ASX_API ASX_MUST_USE asx_status asx_process_command_spawn(const asx_process_comm
  * Process lifecycle (original API)
  * ------------------------------------------------------------------- */
 
+/* Spawn a child process from spawn options. */
 ASX_API ASX_MUST_USE asx_status asx_process_spawn(asx_process_handle *out,
                                                   const asx_process_spawn_options *options);
+/* Poll a process for exit, returning the exit code when complete. */
 ASX_API ASX_MUST_USE asx_status asx_process_poll_wait(asx_process_handle process,
                                                       int32_t *out_exit_code);
+/* Request graceful shutdown of a running process. */
 ASX_API ASX_MUST_USE asx_status asx_process_request_shutdown(asx_process_handle process);
+/* Forcefully kill a process with the given exit code. */
 ASX_API ASX_MUST_USE asx_status asx_process_kill(asx_process_handle process, int32_t exit_code);
+/* Get the program name of a spawned process. */
 ASX_API ASX_MUST_USE asx_status asx_process_program(asx_process_handle process,
                                                     const char **out_program);
+/* Query the current state (running/exited/terminated) of a process. */
 ASX_API ASX_MUST_USE asx_status asx_process_state_query(asx_process_handle process,
                                                         asx_process_state *out_state);
+/* Check if a process handle refers to a still-running process. */
 ASX_API int asx_process_is_alive(asx_process_handle process);
 
 /* -------------------------------------------------------------------
@@ -171,6 +178,7 @@ ASX_API uint32_t asx_process_id(asx_process_handle process);
 /* Check if exit was successful (exit code 0). */
 ASX_API int asx_process_exited_successfully(asx_process_handle process);
 
+/* Reset all process state (test support). */
 ASX_API void asx_process_reset(void);
 
 #endif /* ASX_HAS_NATIVE_RUNTIME_SURFACES */

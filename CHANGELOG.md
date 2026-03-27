@@ -15,8 +15,8 @@ Repo: <https://github.com/Dicklesworthstone/asupersync_ansi_c>
 ## Unreleased
 
 **Snapshot (2026-03-21):** 223 commits across 24 days of development,
-513 C/header files totalling ~137 k lines, 494 public API functions across
-28 subsystems, 192 tracked C test programs across the current 7-category
+513 C/header files totalling ~137 k lines, 494 public API functions across a
+broad subsystem surface, 192 tracked C test programs across the current 7-category
 `tests/` tree, 9 deployment profiles.
 No tags. No GitHub Releases.
 
@@ -708,8 +708,9 @@ vignette, conformance, fuzz, and formal verification.
 
 ## Architecture summary
 
-The `asx` runtime is organized into 28 subsystems under `src/` and
-`include/asx/`, with corresponding test suites under `tests/`:
+The `asx` runtime is organized across a broad set of source and public-header
+families under `src/` and `include/asx/`, with corresponding test suites under
+`tests/`:
 
 | Subsystem family | Modules |
 |---|---|

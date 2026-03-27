@@ -65,24 +65,36 @@ typedef enum {
     ASX_FS_OPEN_TRUNC = 1u << 3
 } asx_fs_open_flags;
 
+/* Construct an fs path from a C string. */
 ASX_API ASX_MUST_USE asx_status asx_fs_path_from_cstr(asx_fs_path *out, const char *path);
+/* Compare two fs paths for equality. */
 ASX_API int asx_fs_path_eq(const asx_fs_path *a, const asx_fs_path *b);
 
+/* Create a directory at the given path. */
 ASX_API ASX_MUST_USE asx_status asx_fs_dir_create(const asx_fs_path *path);
+/* Query metadata (kind, size, existence) for a path. */
 ASX_API ASX_MUST_USE asx_status asx_fs_metadata_query(const asx_fs_path *path,
                                                       asx_fs_metadata *out);
 
+/* Open a file with the given flags, returning a file handle. */
 ASX_API ASX_MUST_USE asx_status asx_fs_file_open(asx_file_handle *out, const asx_fs_path *path,
                                                  uint32_t flags);
+/* Poll-read from an open file into a destination buffer. */
 ASX_API ASX_MUST_USE asx_status asx_fs_file_poll_read(asx_file_handle file, asx_buf_mut *dst,
                                                       uint32_t *bytes_read);
+/* Poll-write to an open file from a source buffer. */
 ASX_API ASX_MUST_USE asx_status asx_fs_file_poll_write(asx_file_handle file, const asx_buf *src,
                                                        uint32_t *bytes_written);
+/* Rewind the file cursor to the beginning. */
 ASX_API ASX_MUST_USE asx_status asx_fs_file_rewind(asx_file_handle file);
+/* Close an open file handle. */
 ASX_API ASX_MUST_USE asx_status asx_fs_file_close(asx_file_handle file);
+/* Retrieve the path associated with an open file handle. */
 ASX_API ASX_MUST_USE asx_status asx_fs_file_path(asx_file_handle file, asx_fs_path *out);
+/* Check if a file handle is still alive. */
 ASX_API int asx_fs_file_is_alive(asx_file_handle file);
 
+/* Reset all filesystem state (test support). */
 ASX_API void asx_fs_reset(void);
 
 #endif /* ASX_HAS_NATIVE_RUNTIME_SURFACES */

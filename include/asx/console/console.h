@@ -19,26 +19,32 @@ extern "C" {
 
 typedef enum { ASX_CONSOLE_FORMAT_TEXT = 0, ASX_CONSOLE_FORMAT_JSON = 1 } asx_console_format;
 
+/* Render a doctor report to the given buffer in the specified format. */
 ASX_API ASX_MUST_USE asx_status asx_console_render_doctor(const asx_doctor_report *report,
                                                           asx_console_format format,
                                                           asx_report_buf *out);
 
+/* Render an inspection report to the given buffer in the specified format. */
 ASX_API ASX_MUST_USE asx_status asx_console_render_inspection(const asx_inspection_report *report,
                                                               asx_console_format format,
                                                               asx_report_buf *out);
 
+/* Render evidence sink contents to the given buffer in the specified format. */
 ASX_API ASX_MUST_USE asx_status asx_console_render_evidence(const asx_evidence_sink *sink,
                                                             asx_console_format format,
                                                             asx_report_buf *out);
 
+/* Run the doctor check on a runtime and render results to the buffer. */
 ASX_API ASX_MUST_USE asx_status asx_console_run_doctor(const asx_runtime *rt,
                                                        asx_console_format format,
                                                        asx_report_buf *out);
 
+/* Run a runtime inspection and render results to the buffer. */
 ASX_API ASX_MUST_USE asx_status asx_console_run_inspection(const asx_runtime *rt,
                                                            asx_console_format format,
                                                            asx_report_buf *out);
 
+/* Emit a formatted log record at the given level to the buffer. */
 ASX_API ASX_MUST_USE asx_status asx_console_emit_log_record(asx_log_level level, const char *source,
                                                             const char *message,
                                                             asx_report_buf *out);

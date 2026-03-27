@@ -13,10 +13,13 @@
 extern "C" {
 #endif
 
+/* Return the human-readable string for an evidence level. */
 ASX_API const char *asx_evidence_level_str(asx_evidence_level level);
 
+/* Check if an evidence entry has an associated entity ID. */
 ASX_API int asx_evidence_entry_has_entity(const asx_evidence_entry *entry);
 
+/* Check if an evidence entry is a failure. */
 ASX_API int asx_evidence_is_failure(const asx_evidence_entry *entry);
 
 /* Check if an evidence entry is a warning. */

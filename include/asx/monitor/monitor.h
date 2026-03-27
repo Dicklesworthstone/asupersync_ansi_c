@@ -41,6 +41,7 @@ typedef struct {
     asx_evidence_level verdict;
 } asx_monitor_report;
 
+/* Initialize a monitor policy with default threshold values. */
 ASX_API void asx_monitor_policy_init_default(asx_monitor_policy *policy);
 
 /* Evaluate runtime state against threshold policy.

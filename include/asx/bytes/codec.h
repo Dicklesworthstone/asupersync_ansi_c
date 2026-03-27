@@ -122,6 +122,7 @@ ASX_API asx_codec asx_lines_as_codec(asx_lines_codec *c);
  * Each encode writes bytes directly.
  * ------------------------------------------------------------------- */
 
+/* Decode the next frame from the buffer. */
 ASX_API asx_decode_result asx_bytes_decode(void *codec_state, asx_buf_mut *src,
                                            asx_frame *out_frame);
 ASX_API asx_status asx_bytes_encode(void *codec_state, const void *data, uint32_t len,

@@ -98,6 +98,7 @@ ASX_API uint32_t asx_notify_waiter_count(asx_notify_handle handle);
  * Arena management
  * ------------------------------------------------------------------- */
 
+/* Reset all notify arena state (test support). */
 ASX_API void asx_notify_reset(void);
 
 #ifdef __cplusplus

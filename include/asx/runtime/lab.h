@@ -143,6 +143,7 @@ ASX_API uint64_t asx_lab_random_u64(asx_lab *lab);
  * Convenience: open region in lab context
  * ------------------------------------------------------------------- */
 
+/* Open a new region within the lab runtime context. */
 ASX_API ASX_MUST_USE asx_status asx_lab_open_region(asx_lab *lab, asx_region_id *out_id);
 
 #ifdef __cplusplus

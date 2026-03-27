@@ -74,11 +74,14 @@ typedef void (*asx_epoch_observer_fn)(uint64_t epoch_id, uint64_t old_phase,
  * API: Lifecycle
  * ------------------------------------------------------------------- */
 
+/* Create an epoch with the given advancement policy. */
 ASX_API ASX_MUST_USE asx_status asx_epoch_create(const asx_epoch_policy *policy,
                                                   asx_epoch_handle *out);
 
+/* Close an epoch, preventing further advances. */
 ASX_API asx_status asx_epoch_close(asx_epoch_handle handle);
 
+/* Get the current state of an epoch. */
 ASX_API asx_epoch_state asx_epoch_get_state(asx_epoch_handle handle);
 
 /* -------------------------------------------------------------------
@@ -192,6 +195,7 @@ ASX_API ASX_MUST_USE asx_status asx_circuit_breaker_call_in_epoch(asx_epoch_hand
  * API: Reset (test support)
  * ------------------------------------------------------------------- */
 
+/* Reset all epoch arena state. For tests only. */
 ASX_API void asx_epoch_reset(void);
 
 #ifdef __cplusplus

@@ -140,6 +140,7 @@ ASX_API ASX_MUST_USE asx_status asx_quic_poll_recv_datagram(asx_quic_conn conn, 
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
+/* Reset all QUIC connection and stream state (test support). */
 ASX_API void asx_quic_reset(void);
 
 #ifdef __cplusplus

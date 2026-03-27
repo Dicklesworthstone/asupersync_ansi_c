@@ -189,8 +189,11 @@ ASX_API int asx_db_result_column_index(const asx_db_result *result, const char *
  * Value constructors
  * ------------------------------------------------------------------- */
 
+/* Get a value as a 64-bit integer. */
 ASX_API asx_db_value asx_db_value_null(void);
+/* Get a value as a string pointer. */
 ASX_API asx_db_value asx_db_value_int(int64_t val);
+/* Get a value as a double. */
 ASX_API asx_db_value asx_db_value_text(const char *text);
 ASX_API asx_db_value asx_db_value_float(double val);
 #endif

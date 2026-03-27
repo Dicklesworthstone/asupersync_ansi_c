@@ -178,7 +178,9 @@ ASX_API uint32_t asx_runtime_blocking_active_count(const asx_runtime *rt);
 /* Query arena capacities (compile-time constants, but useful for
  * downstream tracks to check without hardcoding). */
 ASX_API uint32_t asx_runtime_region_capacity(void);
+/* Get the task arena capacity. */
 ASX_API uint32_t asx_runtime_task_capacity(void);
+/* Get the obligation arena capacity. */
 ASX_API uint32_t asx_runtime_obligation_capacity(void);
 
 /* Query the runtime's profile and resource class. */

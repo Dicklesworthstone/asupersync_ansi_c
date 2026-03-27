@@ -65,10 +65,13 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_builder_get_hooks(const asx_runtime_
  * builders instead of mutating a fail-open zeroed struct. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_wait_policy(asx_runtime_builder *builder,
                                                                     asx_wait_policy policy);
+/* Set the runtime safety profile. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_io_backend(asx_runtime_builder *builder,
                                                                    asx_io_backend backend);
+/* Set the fault containment policy. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_leak_response(asx_runtime_builder *builder,
                                                                       asx_leak_response response);
+/* Set the IO backend selection. */
 ASX_API ASX_MUST_USE asx_status
 asx_runtime_builder_set_finalizer_poll_budget(asx_runtime_builder *builder, uint32_t polls);
 ASX_API ASX_MUST_USE asx_status

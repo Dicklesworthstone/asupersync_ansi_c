@@ -528,6 +528,7 @@ ASX_API int asx_write_half_is_active(const asx_write_half *half);
  * Reset (test support)
  * ------------------------------------------------------------------- */
 
+/* Reset all network state including TCP, UDP, and Unix sockets (test support). */
 ASX_API void asx_net_reset(void);
 
 #ifdef __cplusplus
