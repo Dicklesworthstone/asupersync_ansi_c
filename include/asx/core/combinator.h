@@ -62,13 +62,17 @@ typedef struct {
     asx_outcome combined;
 } asx_join_state;
 
+/* Initialize a join combinator. */
 ASX_API asx_status asx_join_init(asx_join_state *state);
 
+/* Add a branch to the join. */
 ASX_API asx_status asx_join_add(asx_join_state *state, asx_combinator_poll_fn poll_fn,
                                 void *user_data);
 
+/* Poll the join combinator. Returns ASX_OK when all branches complete. */
 ASX_API asx_status asx_join_poll(void *user_data, asx_task_id self);
 
+/* Get the combined outcome of all joined branches. */
 ASX_API asx_outcome asx_join_outcome(const asx_join_state *state);
 
 /* -------------------------------------------------------------------
@@ -88,15 +92,20 @@ typedef struct {
     uint32_t drained;
 } asx_race_state;
 
+/* Initialize a race combinator. */
 ASX_API asx_status asx_race_init(asx_race_state *state);
 
+/* Add a branch to the race. */
 ASX_API asx_status asx_race_add(asx_race_state *state, asx_combinator_poll_fn poll_fn,
                                 void *user_data);
 
+/* Poll the race combinator. Returns ASX_OK when a winner is found. */
 ASX_API asx_status asx_race_poll(void *user_data, asx_task_id self);
 
+/* Get the winning branch index (-1 if undecided). */
 ASX_API int32_t asx_race_winner(const asx_race_state *state);
 
+/* Get the winning branch's result status. */
 ASX_API asx_status asx_race_winner_result(const asx_race_state *state);
 
 /* -------------------------------------------------------------------
@@ -116,13 +125,17 @@ typedef struct {
     uint32_t drained;
 } asx_select_state;
 
+/* Initialize a select combinator with round-robin fairness. */
 ASX_API asx_status asx_select_init(asx_select_state *state);
 
+/* Add a branch to the select. */
 ASX_API asx_status asx_select_add(asx_select_state *state, asx_combinator_poll_fn poll_fn,
                                   void *user_data);
 
+/* Poll the select combinator. Returns ASX_OK when a winner is found. */
 ASX_API asx_status asx_select_poll(void *user_data, asx_task_id self);
 
+/* Get the winning branch index (-1 if undecided). */
 ASX_API int32_t asx_select_winner(const asx_select_state *state);
 
 /* -------------------------------------------------------------------
@@ -140,10 +153,12 @@ typedef struct {
     int timed_out;
 } asx_timeout_combinator_state;
 
+/* Initialize a timeout combinator wrapping an inner poll function. */
 ASX_API asx_status asx_timeout_combinator_init(asx_timeout_combinator_state *state,
                                                asx_combinator_poll_fn inner_poll, void *inner_data,
                                                uint64_t timeout_ns);
 
+/* Poll the timeout combinator. Returns ASX_E_TIMED_OUT on deadline expiry. */
 ASX_API asx_status asx_timeout_combinator_poll(void *user_data, asx_task_id self);
 
 /* -------------------------------------------------------------------
@@ -162,13 +177,17 @@ typedef struct {
     asx_status last_error; /* last error for fallback */
 } asx_first_ok_state;
 
+/* Initialize a first-ok combinator. */
 ASX_API asx_status asx_first_ok_init(asx_first_ok_state *state);
 
+/* Add a branch to the first-ok combinator. */
 ASX_API asx_status asx_first_ok_add(asx_first_ok_state *state, asx_combinator_poll_fn poll_fn,
                                     void *user_data);
 
+/* Poll the first-ok combinator. Returns ASX_OK on first successful branch. */
 ASX_API asx_status asx_first_ok_poll(void *user_data, asx_task_id self);
 
+/* Get the index of the first successful branch (-1 if none). */
 ASX_API int32_t asx_first_ok_winner(const asx_first_ok_state *state);
 
 /* -------------------------------------------------------------------
@@ -189,15 +208,20 @@ typedef struct {
     uint32_t drained;
 } asx_quorum_state;
 
+/* Initialize a quorum combinator requiring threshold successes. */
 ASX_API asx_status asx_quorum_init(asx_quorum_state *state, uint32_t threshold);
 
+/* Add a branch to the quorum. */
 ASX_API asx_status asx_quorum_add(asx_quorum_state *state, asx_combinator_poll_fn poll_fn,
                                   void *user_data);
 
+/* Poll the quorum combinator. Returns ASX_OK when threshold reached. */
 ASX_API asx_status asx_quorum_poll(void *user_data, asx_task_id self);
 
+/* Get the number of successful completions. */
 ASX_API uint32_t asx_quorum_ok_count(const asx_quorum_state *state);
 
+/* Get the number of failed completions. */
 ASX_API uint32_t asx_quorum_fail_count(const asx_quorum_state *state);
 
 /* -------------------------------------------------------------------
@@ -250,11 +274,14 @@ typedef struct {
     int timed_out;
 } asx_race_timeout_state;
 
+/* Initialize a race-with-timeout combinator. */
 ASX_API asx_status asx_race_timeout_init(asx_race_timeout_state *state, uint64_t timeout_ns);
 
+/* Add a branch to the race-with-timeout. */
 ASX_API asx_status asx_race_timeout_add(asx_race_timeout_state *state,
                                          asx_combinator_poll_fn poll_fn, void *user_data);
 
+/* Poll the race-with-timeout. Returns ASX_E_TIMED_OUT on deadline expiry. */
 ASX_API asx_status asx_race_timeout_poll(void *user_data, asx_task_id self);
 
 /* -------------------------------------------------------------------
@@ -278,12 +305,15 @@ typedef struct {
     asx_combinator_branch inner;
 } asx_retry_timeout_state;
 
+/* Initialize a retry-with-timeout combinator. */
 ASX_API asx_status asx_retry_timeout_init(asx_retry_timeout_state *state,
                                            asx_combinator_poll_fn poll_fn, void *user_data,
                                            uint32_t max_retries, uint64_t timeout_ns);
 
+/* Poll the retry-with-timeout. Returns ASX_E_TIMED_OUT on overall deadline expiry. */
 ASX_API asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self);
 
+/* Get the number of attempts made so far. */
 ASX_API uint32_t asx_retry_timeout_attempts(const asx_retry_timeout_state *state);
 
 #ifdef __cplusplus

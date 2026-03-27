@@ -44,6 +44,7 @@ typedef struct {
     asx_combinator_branch inner; /* current attempt branch */
 } asx_retry_state;
 
+/* Initialize a retry combinator with the given max retry count. */
 ASX_API asx_status asx_retry_init(asx_retry_state *state, asx_combinator_poll_fn poll_fn,
                                   void *user_data, uint32_t max_retries);
 
@@ -88,6 +89,7 @@ typedef struct {
     int done;
 } asx_bracket_state;
 
+/* Initialize a bracket combinator (acquire, use, release). */
 ASX_API asx_status asx_bracket_init(asx_bracket_state *state, asx_bracket_fn acquire_fn,
                                     asx_bracket_fn use_fn, asx_bracket_fn release_fn,
                                     void *user_data);
@@ -119,8 +121,10 @@ typedef struct {
     asx_combinator_branch active; /* current stage branch */
 } asx_pipeline_state;
 
+/* Initialize a pipeline combinator. */
 ASX_API asx_status asx_pipeline_init(asx_pipeline_state *state);
 
+/* Add a stage to the pipeline. */
 ASX_API asx_status asx_pipeline_add_stage(asx_pipeline_state *state,
                                           asx_combinator_poll_fn stage_fn, void *user_data);
 
@@ -142,6 +146,7 @@ typedef struct {
     uint32_t active_count;
 } asx_bulkhead_state;
 
+/* Initialize a bulkhead concurrency limiter. */
 ASX_API asx_status asx_bulkhead_init(asx_bulkhead_state *state, uint32_t max_concurrent);
 
 /* Try to enter the bulkhead. Returns ASX_OK if admitted,
@@ -171,6 +176,7 @@ typedef struct {
     uint32_t refill_amount; /* tokens added per refill */
 } asx_rate_limit_state;
 
+/* Initialize a token-bucket rate limiter. */
 ASX_API asx_status asx_rate_limit_init(asx_rate_limit_state *state, uint32_t capacity,
                                        uint32_t refill_amount);
 
@@ -252,9 +258,11 @@ typedef struct {
     asx_status result;
 } asx_map_reduce_state;
 
+/* Initialize a map-reduce combinator with the given reduce function. */
 ASX_API asx_status asx_map_reduce_init(asx_map_reduce_state *state, asx_map_reduce_fn reduce_fn,
                                         void *reduce_data);
 
+/* Add a map branch to the map-reduce combinator. */
 ASX_API asx_status asx_map_reduce_add(asx_map_reduce_state *state, asx_combinator_poll_fn map_fn,
                                        void *user_data);
 

@@ -553,11 +553,11 @@ src/                         95 C source files (~25,500 LOC)
   platform/                  3 files: POSIX, Win32, freestanding adapters
   ...                        + cx, codec, security, net, fs, process, signal, stream, evidence, etc.
 
-tests/                       161 test files (~48,500 LOC), 2,011 test cases
-  unit/                      116 files across 20 subsystem directories
+tests/                       254 tracked files total; 198 C test programs in the current tree
+  unit/                      146 C test files across the current subsystem directories
   e2e/                       17 end-to-end scenario programs
   invariant/                 3 lifecycle/quiescence invariant suites
-  vignettes/                 11 API ergonomics demonstrations
+  vignettes/                 12 API ergonomics demonstrations
   conformance/               Rust parity + codec/profile equivalence
   fuzz/                      4 differential fuzzing harnesses
   formal/                    9 algebraic, CBMC, and litmus verification
