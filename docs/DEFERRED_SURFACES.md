@@ -1,7 +1,17 @@
 # Deferred Surface Register
 
+> **Historical Note (2026-03-27):** This file is a planning-era snapshot, not the current canonical scope baseline. Some statements below describe an earlier "kernel-only until later waves" posture that no longer matches the current shipped umbrella/archive surface.
+>
+> Use these source-backed documents for current status instead:
+> - `docs/DEFERRED_SURFACE_REGISTER.md`
+> - `docs/RUST_EXPORTED_SURFACE_INVENTORY.md`
+> - `docs/SUBSYSTEM_EVIDENCE_MATRIX.md`
+> - `docs/SELECTIVE_SURFACE_PORTING_QUEUE.md`
+>
+> The bead IDs and `Not yet created` markers embedded in the tables below are also historical planning artifacts from the time this document was written; they do not reflect the current live Beads backlog state.
+
 > **Bead:** bd-296.24
-> **Status:** Canonical register of deferred subsystems and capabilities
+> **Status:** Historical planning register retained for context
 > **Source:** Plan sections 2.4, 2.4.1, 4.2–4.4, 5, and ADR-001 (parallel profile deferral)
 > **Author:** NobleCanyon (claude-code/opus-4.6)
 > **Date:** 2026-02-27
@@ -13,6 +23,8 @@
 This document tracks all subsystems, capabilities, and interoperability surfaces that are explicitly deferred from the kernel milestone (Wave A). Each entry includes rationale, unblock criteria, ownership, and parity/risk implications.
 
 Deferrals are not feature cuts — they are scope-sequencing decisions that preserve kernel quality while enabling future expansion.
+
+Where this file conflicts with the newer source-backed registers, treat this file as historical context rather than the controlling record.
 
 ---
 
@@ -97,7 +109,7 @@ Each entry follows this structure:
 | **Rationale** | Plan section 4.3: networking is a systems surface, not kernel semantics |
 | **Unblock Criteria** | (1) Kernel stable, (2) platform adapters (POSIX/Win32) proven, (3) reactor vtable interface tested |
 | **Owner** | Project maintainer |
-| **Parity Impact** | Rust has ~26k LOC net subsystem. C port is kernel-only until Wave C. |
+| **Parity Impact** | Rust has ~26k LOC net subsystem. This reflects an earlier planning snapshot; current `asx` ships a broader surface than kernel-only, but higher network layers remain partial/profile-gated rather than at full upstream parity. |
 | **Risk if Deferred Too Long** | Users needing I/O must bring their own reactor; API constraints may emerge from kernel assumptions |
 | **Bead** | Not yet created (Wave C scope) |
 
@@ -233,7 +245,8 @@ Each entry follows this structure:
 | 2026-02-27 | Register created | NobleCanyon | Initial register with 11 deferred surfaces, 3 interop decisions |
 | 2026-02-27 | ADR-001 applied | NobleCanyon | Parallel profile explicitly deferred to Wave B (DEF-001) |
 | 2026-02-27 | ADR-002 applied | NobleCanyon | Static arena deferred to Wave B with vtable prep (DEF-002) |
+| 2026-03-27 | Historical-status note added | SilverRiver | Marked this file as a planning snapshot and redirected readers to the current source-backed deferred-surface and shipped-surface registers |
 
 ---
 
-*This register is the canonical source for deferred scope. Any surface not listed here is either in-scope for Wave A or not yet evaluated. New deferrals must be added with full field documentation.*
+*This register is retained for historical planning context. For current deferred-surface and shipped-surface status, use the newer source-backed docs listed at the top of this file.*

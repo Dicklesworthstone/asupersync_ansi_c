@@ -271,9 +271,10 @@ This register ensures that deferred work is:
 ## Crate-Level Truth Table Audit (bd-yx9r.1)
 
 This appendix records the gap that reopened crate-level parity planning on
-2026-03-14: the local tree is broader than the kernel-only story, but much of
-that breadth is either not shipped through the umbrella header, not compiled
-into `libasx.a`, or still only a walking-skeleton/stub implementation.
+2026-03-14: the local tree is broader than the kernel-only story, and the
+current shipped surface is broader than that earlier closure implied, but much
+of the reopened breadth is still only `partial`, profile-gated, or
+walking-skeleton/stub-level rather than close to full upstream parity.
 
 ### Audit Rules
 

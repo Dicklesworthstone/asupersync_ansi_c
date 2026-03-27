@@ -242,8 +242,8 @@ Required evidence patterns:
 The reopened crate-level parity stream (`bd-yx9r.*`) needs a stricter
 pre-implementation contract than the earlier kernel-only closure. The inventory
 and profile-matrix work now make clear that many higher-surface families are
-either absent, stub-only, or present in-tree but not actually shipped through
-the default umbrella/archive build.
+either still absent, explicitly stub-only, or shipped only in reduced/profile-
+gated form rather than close to full upstream breadth.
 
 Before any `bd-yx9r.*` implementation bead starts, it should declare the
 default evidence bundle for its family using the rules below.
