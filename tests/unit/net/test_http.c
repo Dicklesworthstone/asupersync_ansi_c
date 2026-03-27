@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/asx_config.h>
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES
 #include <asx/fs/fs.h>
 #endif

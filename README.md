@@ -1728,7 +1728,10 @@ Usually slightly, depending on workload and trace settings. In exchange you gain
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: 494 public functions, 95 headers, one umbrella `#include <asx/asx.h>`. CLI tooling is operational scaffolding around the same runtime and conformance layers.
+Yes. The C API is first-class: 494 public functions, 122 public headers in the
+current `include/asx/` tree, and one umbrella `#include <asx/asx.h>`. CLI
+tooling is operational scaffolding around the same runtime and conformance
+layers.
 
 ### How big is the compiled library?
 
