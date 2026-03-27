@@ -291,6 +291,7 @@ typedef struct {
     void *user_data;
 } asx_stream_filter_map_state;
 
+/* Initialize a filter-map stream wrapping an inner stream. */
 ASX_API void asx_stream_filter_map_init(asx_stream *s, asx_stream_filter_map_state *state,
                                          asx_stream inner, asx_stream_filter_map_fn fn,
                                          void *user_data);
@@ -306,6 +307,7 @@ typedef struct {
     int done;
 } asx_stream_take_while_state;
 
+/* Create a take-while stream that yields items while the predicate holds. */
 ASX_API void asx_stream_take_while_init(asx_stream *s, asx_stream_take_while_state *state,
                                          asx_stream inner, asx_stream_filter_fn predicate,
                                          void *user_data);
@@ -323,6 +325,7 @@ typedef struct {
     void *user_data;
 } asx_stream_scan_state;
 
+/* Create a scan stream that applies an accumulating function to each item. */
 ASX_API void asx_stream_scan_init(asx_stream *s, asx_stream_scan_state *state, asx_stream inner,
                                    asx_stream_scan_fn scan_fn, void *accumulator, void *user_data);
 
@@ -337,9 +340,11 @@ typedef struct {
     int inner_done;
 } asx_stream_peekable_state;
 
+/* Initialize a peekable adapter wrapping an inner stream. */
 ASX_API void asx_stream_peekable_init(asx_stream *s, asx_stream_peekable_state *state,
                                        asx_stream inner);
 
+/* Poll for the next item without consuming it. */
 ASX_API asx_stream_result asx_stream_peek(asx_stream_peekable_state *state, const asx_waker *waker,
                                            void **out_item);
 
@@ -355,6 +360,7 @@ typedef struct {
     void *user_data;
 } asx_stream_inspect_state;
 
+/* Create an inspect stream that observes each item via a callback. */
 ASX_API void asx_stream_inspect_init(asx_stream *s, asx_stream_inspect_state *state,
                                       asx_stream inner, asx_stream_inspect_fn inspect_fn,
                                       void *user_data);
@@ -363,6 +369,7 @@ ASX_API void asx_stream_inspect_init(asx_stream *s, asx_stream_inspect_state *st
 /* Any terminal                                                        */
 /* ------------------------------------------------------------------ */
 
+/* Check if any item matches the predicate (short-circuits on first match). */
 ASX_API ASX_MUST_USE asx_status asx_stream_any(asx_stream *s, asx_stream_filter_fn predicate,
                                                 void *user_data, int *out_result);
 
@@ -370,6 +377,7 @@ ASX_API ASX_MUST_USE asx_status asx_stream_any(asx_stream *s, asx_stream_filter_
 /* All terminal                                                        */
 /* ------------------------------------------------------------------ */
 
+/* Check if all items match the predicate (short-circuits on first failure). */
 ASX_API ASX_MUST_USE asx_status asx_stream_all(asx_stream *s, asx_stream_filter_fn predicate,
                                                 void *user_data, int *out_result);
 
@@ -377,6 +385,7 @@ ASX_API ASX_MUST_USE asx_status asx_stream_all(asx_stream *s, asx_stream_filter_
 /* Collect terminal                                                    */
 /* ------------------------------------------------------------------ */
 
+/* Collect stream items into a caller-provided buffer up to max_items. */
 ASX_API ASX_MUST_USE asx_status asx_stream_collect(asx_stream *s, void **buf, size_t max_items,
                                                     size_t *out_count);
 
@@ -389,6 +398,7 @@ typedef struct {
     int done;
 } asx_stream_fuse_state;
 
+/* Create a fuse stream that permanently returns DONE after first exhaustion. */
 ASX_API void asx_stream_fuse_init(asx_stream *s, asx_stream_fuse_state *state, asx_stream inner);
 
 /* ------------------------------------------------------------------ */
@@ -444,6 +454,7 @@ typedef struct {
     int skipping; /* 1 while still skipping */
 } asx_stream_skip_while_state;
 
+/* Create a skip-while stream that discards items while the predicate holds. */
 ASX_API void asx_stream_skip_while_init(asx_stream *s, asx_stream_skip_while_state *state,
                                          asx_stream inner, asx_stream_filter_fn predicate,
                                          void *user_data);
@@ -460,6 +471,7 @@ typedef struct {
     int outer_done;
 } asx_stream_flatten_state;
 
+/* Create a flatten stream that yields items from a stream of streams. */
 ASX_API void asx_stream_flatten_init(asx_stream *s, asx_stream_flatten_state *state,
                                       asx_stream outer);
 
