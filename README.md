@@ -10,13 +10,13 @@
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
 ![1641 API functions](https://img.shields.io/badge/public%20API-1%2C641%20functions-blue)
-![233 test programs](https://img.shields.io/badge/tests-233%20programs-brightgreen)
+![194 test programs](https://img.shields.io/badge/tests-194%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. 1,641 public API functions across 37 subsystem families, backed by 233 test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. 1,641 public API functions across 37 subsystem families, backed by 194 C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Install</h3>
@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/asupersync_ansi_c
 | **59 typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
-| **192 tracked C test programs across 7 categories** | 146 unit, 17 e2e, 3 invariant, 12 vignette, 1 conformance, 4 fuzz, and 9 formal files in the current tree |
+| **194 tracked C test programs across 7 categories** | 148 unit, 17 e2e, 3 invariant, 12 vignette, 1 conformance, 4 fuzz, and 9 formal files in the current tree |
 | **Cross-profile semantic parity gates** | All profiles produce identical semantic digests for shared fixture sets |
 
 ## Quick Example
@@ -589,14 +589,14 @@ asx conformance profile-parity --scenario scenarios/perf-critical
 
 ## Testing and Quality Gates
 
-`asx` currently ships with 192 tracked C test programs across 7 categories in
+`asx` currently ships with 194 tracked C test programs across 7 categories in
 the checked-in `tests/` tree. Individual assertion counts evolve over time; see
 `tests/TEST.md` for the current indexed suite inventory and per-suite case
 totals where tracked.
 
 | Category | Files | Coverage |
 |---|---|---|
-| **Unit tests** | 146 | Broad public API and subsystem coverage across the current tree |
+| **Unit tests** | 148 | Broad public API and subsystem coverage across the current tree |
 | **End-to-end scenarios** | 17 | Core lifecycle, automotive, HFT, codec parity, continuity, browser, network |
 | **Invariant tests** | 3 | Lifecycle transition legality, quiescence, obligation linearity |
 | **API vignettes** | 12 | Ergonomics and usage pattern demonstrations |
@@ -1609,7 +1609,7 @@ The CI pipeline runs 7 parallel lanes on every push and PR:
 ```
 ┌────────────┐┌────────────────┐┌────────────────┐┌────────────────┐
 │   check    ││ unit-invariant ││  conformance   ││ profile-parity │
-│  format    ││  146 unit      ││  Rust fixture  ││  cross-profile │
+│  format    ││  148 unit      ││  Rust fixture  ││  cross-profile │
 │  8 lints   ││  3 invariant   ││  parity        ││  digest match  │
 │  build     ││                ││                ││                │
 └────────────┘└────────────────┘└────────────────┘└────────────────┘
