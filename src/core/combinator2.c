@@ -422,6 +422,76 @@ int asx_hedge_winner(const asx_hedge_state *state) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Adaptive hedge policy                                               */
+/* ------------------------------------------------------------------ */
+
+void asx_adaptive_hedge_init(asx_adaptive_hedge_policy *policy, uint32_t alpha_pct,
+                              uint64_t min_delay_ns, uint64_t max_delay_ns) {
+    uint32_t i;
+    if (policy == NULL) return;
+    for (i = 0; i < ASX_ADAPTIVE_HEDGE_WINDOW; i++) policy->history[i] = 0;
+    policy->count = 0;
+    policy->alpha_pct = (alpha_pct > 0 && alpha_pct < 100) ? alpha_pct : 5u;
+    policy->min_delay_ns = min_delay_ns;
+    policy->max_delay_ns = max_delay_ns;
+}
+
+void asx_adaptive_hedge_record(asx_adaptive_hedge_policy *policy, uint64_t latency_ns) {
+    if (policy == NULL) return;
+    policy->history[policy->count % ASX_ADAPTIVE_HEDGE_WINDOW] = latency_ns;
+    if (policy->count < UINT32_MAX) policy->count++;
+}
+
+uint64_t asx_adaptive_hedge_delay(const asx_adaptive_hedge_policy *policy) {
+    uint32_t n, rank, i, j;
+    uint64_t sorted[ASX_ADAPTIVE_HEDGE_WINDOW];
+    uint64_t delay;
+    double q;
+
+    if (policy == NULL) return 0;
+
+    n = policy->count < ASX_ADAPTIVE_HEDGE_WINDOW ? policy->count : ASX_ADAPTIVE_HEDGE_WINDOW;
+    if (n < 10) return policy->max_delay_ns; /* not enough data */
+
+    /* Copy window into sorted buffer */
+    for (i = 0; i < n; i++) sorted[i] = policy->history[i];
+
+    /* Insertion sort — small N, deterministic */
+    for (i = 1; i < n; i++) {
+        uint64_t tmp = sorted[i];
+        j = i;
+        while (j > 0 && sorted[j - 1] > tmp) {
+            sorted[j] = sorted[j - 1];
+            j--;
+        }
+        sorted[j] = tmp;
+    }
+
+    /* Conformal rank: ceil((n+1) * (1 - alpha/100)) - 1, clamped to [0, n-1] */
+    q = ((double)(n + 1u) * (1.0 - (double)policy->alpha_pct / 100.0));
+    if (q < 1.0) {
+        rank = 0;
+    } else if (q >= (double)n) {
+        rank = n - 1u;
+    } else {
+        /* ceil(q) - 1 */
+        uint32_t ceiled = (uint32_t)q;
+        if ((double)ceiled < q) ceiled++;
+        rank = ceiled > 0 ? ceiled - 1u : 0u;
+    }
+
+    delay = sorted[rank];
+    if (delay < policy->min_delay_ns) delay = policy->min_delay_ns;
+    if (delay > policy->max_delay_ns) delay = policy->max_delay_ns;
+    return delay;
+}
+
+uint32_t asx_adaptive_hedge_observations(const asx_adaptive_hedge_policy *policy) {
+    if (policy == NULL) return 0;
+    return policy->count;
+}
+
+/* ------------------------------------------------------------------ */
 /* MapReduce                                                           */
 /* ------------------------------------------------------------------ */
 

@@ -239,6 +239,42 @@ ASX_API asx_hedge_phase asx_hedge_current_phase(const asx_hedge_state *state);
 ASX_API int asx_hedge_winner(const asx_hedge_state *state);
 
 /* -------------------------------------------------------------------
+ * Adaptive hedge policy — conformal prediction calibration
+ *
+ * Dynamically adjusts hedge delay based on observed primary latencies.
+ * Uses marginal conformal prediction to compute the (1-alpha) quantile
+ * of the sliding window, providing a finite-sample guarantee that the
+ * hedge fires only on true statistical outliers.
+ * ------------------------------------------------------------------- */
+
+#ifndef ASX_ADAPTIVE_HEDGE_WINDOW
+#define ASX_ADAPTIVE_HEDGE_WINDOW 64u
+#endif
+
+typedef struct {
+    uint64_t history[ASX_ADAPTIVE_HEDGE_WINDOW]; /* circular buffer of latencies (ns) */
+    uint32_t count;        /* total observations recorded */
+    uint32_t alpha_pct;    /* miscoverage target * 100 (e.g., 5 for P95) */
+    uint64_t min_delay_ns; /* absolute minimum hedge delay */
+    uint64_t max_delay_ns; /* absolute maximum hedge delay */
+} asx_adaptive_hedge_policy;
+
+/* Initialize an adaptive hedge policy.
+ * alpha_pct: miscoverage target (5 = P95 hedging, 1 = P99). */
+ASX_API void asx_adaptive_hedge_init(asx_adaptive_hedge_policy *policy, uint32_t alpha_pct,
+                                      uint64_t min_delay_ns, uint64_t max_delay_ns);
+
+/* Record a primary execution latency (nanoseconds). */
+ASX_API void asx_adaptive_hedge_record(asx_adaptive_hedge_policy *policy, uint64_t latency_ns);
+
+/* Compute the dynamically calibrated hedge delay.
+ * Returns the conformal (1-alpha) quantile, clamped to [min, max]. */
+ASX_API uint64_t asx_adaptive_hedge_delay(const asx_adaptive_hedge_policy *policy);
+
+/* Get the number of observations recorded. */
+ASX_API uint32_t asx_adaptive_hedge_observations(const asx_adaptive_hedge_policy *policy);
+
+/* -------------------------------------------------------------------
  * MapReduce — parallel map + reduce
  *
  * Runs all map tasks concurrently (like join), then applies a

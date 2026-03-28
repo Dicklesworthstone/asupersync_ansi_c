@@ -415,6 +415,65 @@ TEST(integration_join_with_retry_and_pipeline) {
 /* ================================================================== */
 
 /* Law: retry(0) ≡ single attempt */
+/* ================================================================== */
+/* Adaptive hedge tests                                                */
+/* ================================================================== */
+
+TEST(adaptive_hedge_init_defaults) {
+    asx_adaptive_hedge_policy p;
+    asx_adaptive_hedge_init(&p, 5, 1000, 100000);
+    ASSERT_EQ(p.alpha_pct, 5u);
+    ASSERT_EQ(asx_adaptive_hedge_observations(&p), 0u);
+}
+
+TEST(adaptive_hedge_cold_start_returns_max) {
+    asx_adaptive_hedge_policy p;
+    asx_adaptive_hedge_init(&p, 5, 1000, 50000);
+    /* With < 10 observations, should return max_delay */
+    asx_adaptive_hedge_record(&p, 100);
+    asx_adaptive_hedge_record(&p, 200);
+    ASSERT_EQ(asx_adaptive_hedge_delay(&p), (uint64_t)50000);
+}
+
+TEST(adaptive_hedge_calibrates_from_history) {
+    asx_adaptive_hedge_policy p;
+    uint32_t i;
+    uint64_t delay;
+
+    asx_adaptive_hedge_init(&p, 5, 0, UINT64_MAX);
+
+    /* Record 20 latencies: 100, 200, 300, ..., 2000 */
+    for (i = 0; i < 20; i++) {
+        asx_adaptive_hedge_record(&p, (uint64_t)((i + 1u) * 100u));
+    }
+
+    delay = asx_adaptive_hedge_delay(&p);
+    /* P95 of [100..2000] should be near 1900-2000 */
+    ASSERT_TRUE(delay >= 1800);
+    ASSERT_TRUE(delay <= 2000);
+}
+
+TEST(adaptive_hedge_clamps_to_bounds) {
+    asx_adaptive_hedge_policy p;
+    uint32_t i;
+    uint64_t delay;
+
+    asx_adaptive_hedge_init(&p, 5, 5000, 10000);
+
+    /* Record 20 tiny latencies (all 1ns) */
+    for (i = 0; i < 20; i++) {
+        asx_adaptive_hedge_record(&p, 1);
+    }
+
+    delay = asx_adaptive_hedge_delay(&p);
+    /* Conformal bound is 1ns, but clamped to min=5000 */
+    ASSERT_EQ(delay, (uint64_t)5000);
+}
+
+/* ================================================================== */
+/* Laws                                                                */
+/* ================================================================== */
+
 TEST(law_retry_zero_is_single) {
     asx_retry_state rs;
     MUST_OK(asx_retry_init(&rs, poll_ok, NULL, 0));
@@ -645,6 +704,12 @@ int main(void) {
     RUN_TEST(map_reduce_reduce_sees_errors);
     RUN_TEST(map_reduce_empty);
     RUN_TEST(map_reduce_null_fails);
+
+    /* Adaptive hedge */
+    RUN_TEST(adaptive_hedge_init_defaults);
+    RUN_TEST(adaptive_hedge_cold_start_returns_max);
+    RUN_TEST(adaptive_hedge_calibrates_from_history);
+    RUN_TEST(adaptive_hedge_clamps_to_bounds);
 
     /* Laws */
     RUN_TEST(law_retry_zero_is_single);

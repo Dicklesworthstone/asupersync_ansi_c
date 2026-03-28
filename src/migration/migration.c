@@ -132,6 +132,7 @@ static const feature_entry g_features[] = {
     {"load_balance", 1, NULL},
     {"reconnect", 1, NULL},
     {"steer", 1, NULL},
+    {"adaptive_hedge", 1, NULL},
     {NULL, 0, NULL}};
 
 int asx_feature_available(const char *feature_name) {
