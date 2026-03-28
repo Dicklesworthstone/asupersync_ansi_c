@@ -5,9 +5,9 @@
  * Provides deterministic tie-break ordering (deadline ASC, insertion_seq ASC)
  * and O(1) cancel via generation-validated handles.
  *
- * Phase 5 will upgrade to a hierarchical 4-level wheel with occupied
- * bitmaps for O(1) skip optimization. The flat approach is correct and
- * sufficient for proving semantics.
+ * Hierarchical 4-level wheel with occupied bitmaps for O(1) skip
+ * optimization is a future upgrade path. The flat approach is correct
+ * and sufficient for proving semantics.
  *
  * SPDX-License-Identifier: MIT
  */

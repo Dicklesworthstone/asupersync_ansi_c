@@ -110,8 +110,8 @@ ASX_API void asx_trace_reset(void);
  *
  * Computes a rolling digest over the trace event stream. The digest
  * is deterministic for identical event sequences. Uses FNV-1a 64-bit
- * for the walking skeleton; Phase 4 will add SHA-256 for fixture
- * parity with the Rust reference implementation.
+ * currently. SHA-256 for fixture parity with the Rust reference
+ * implementation is a future upgrade path.
  * ------------------------------------------------------------------- */
 
 /* Compute the current trace digest (FNV-1a over all events). */

@@ -14,6 +14,11 @@ Repo: <https://github.com/Dicklesworthstone/asupersync_ansi_c>
 
 ## Unreleased
 
+> **Historical Snapshot Note (2026-03-28):** The summary immediately below is a
+> dated point-in-time snapshot from March 21, 2026, retained for context inside
+> the changelog. It is not the canonical current project-metrics surface; for
+> current top-level counts and public-surface framing, use `README.md`.
+
 **Snapshot (2026-03-21):** 223 commits across 24 days of development,
 513 C/header files totalling ~137 k lines, 494 public API functions across a
 broad subsystem surface, 192 tracked C test programs across the current 7-category
@@ -655,7 +660,7 @@ closed on 2026-03-20.
 
 ### Test infrastructure
 
-192 tracked C test programs across 7 categories: unit, invariant, E2E,
+194 tracked C test programs across 7 categories: unit, invariant, E2E,
 vignette, conformance, fuzz, and formal verification.
 
 #### Test suites
