@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/asupersync_ansi_c
 | **11 async combinators** | Join, race, select, timeout, retry, bracket, pipeline, bulkhead, rate-limit, quorum, first-ok |
 | **Circuit breaker and epoch-based execution** | Failure containment with open/half-open/closed states; phase-scoped execution with barrier triggers |
 | **Dual codecs (JSON + binary)** | JSON for debug/conformance, binary for production; both produce equivalent semantic digests |
-| **59 typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
+| **66 typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
 | **194 tracked C test programs across 7 categories** | 148 unit, 17 e2e, 3 invariant, 12 vignette, 1 conformance, 4 fuzz, and 9 formal files in the current tree |
@@ -494,7 +494,7 @@ All profiles produce identical canonical semantic digests for shared fixture set
 │                      asx_core (15 modules)                            │
 │  IDs + generation counters | outcomes | budgets | cancel + witness    │
 │  combinators (11) | symbols + typed values | epochs | circuit breakers│
-│  ghost monitors | error taxonomy (59 codes) | codec schema            │
+│  ghost monitors | error taxonomy (66 codes) | codec schema            │
 └───────────────────────────────────────────────────────────────────────┘
                                           │
                                           ▼
@@ -535,7 +535,7 @@ All profiles produce identical canonical semantic digests for shared fixture set
 ```text
 include/asx/                 122 public C headers in the current tree
   asx.h                      Umbrella header (single #include entry point)
-  asx_status.h               59 error codes with categories and recovery guidance
+  asx_status.h               66 error codes with categories and recovery guidance
   asx_config.h               Profile, resource class, hook, and fault injection types
   asx_ids.h                  Handle types, type tags, lifecycle enums, cancel kinds
   core/                      19 headers: symbols, budgets, cancel, combinators, epochs, circuit breakers
@@ -1352,7 +1352,7 @@ Each adapter includes an **isomorphism proof function** that verifies the accele
 
 The test and example suites serve as executable documentation:
 
-### Examples (9 programs in `examples/`)
+### Examples (14 programs in `examples/`)
 
 | Example | Demonstrates |
 |---|---|
@@ -1361,10 +1361,15 @@ The test and example suites serve as executable documentation:
 | `ex_channel_flow.c` | MPSC bounded channel, two-phase send (reserve-send), backpressure handling |
 | `ex_cancel_drain.c` | Cancellation protocol and region drain semantics |
 | `ex_timeout_deadline.c` | Deadline arming, timeout handling, expiry detection |
+| `ex_encoding_decoding.c` | Encoding/decoding pipelines, wire-format round-trips, progress tracking |
+| `ex_evidence_monitoring.c` | Evidence collection, monitor policies, NDJSON rendering, observability snapshots |
+| `ex_gen_server.c` | OTP-style gen_server lifecycle with call/cast/stop flow |
+| `ex_join_set.c` | Dynamic JoinSet task collection and completion-order polling |
 | `ex_lab_replay.c` | Deterministic lab runtime, virtual time, scenario execution and replay |
 | `ex_browser_boundary.c` | Browser profile surfaces, fail-closed gating, browser-safe operations |
 | `ex_browser_replay.c` | Browser profile combined with replay verification |
 | `ex_network_surface.c` | Resolver, dual-stack discovery, happy-eyeballs, TCP/UDP ghost contracts |
+| `ex_pipe_io.c` | Anonymous pipe I/O, buffered reads/writes, disconnect handling |
 
 ### API Vignettes (12 walkthroughs in `tests/vignettes/`)
 
@@ -1378,6 +1383,7 @@ Vignettes are self-contained programs that demonstrate one API pattern each with
 | `vignette_replay.c` | Event capture and deterministic replay |
 | `vignette_network.c` | Network resolver and socket operations |
 | `vignette_budgets.c` | Task budget algebra and exhaustion |
+| `vignette_encoding_decoding.c` | Encode/decode pipeline walkthrough with artifact summaries |
 | `vignette_link.c` | Long-lived request/response coordination |
 | `vignette_observability.c` | Snapshot capture and inspection |
 | `vignette_security.c` | Ambient authority audit |
