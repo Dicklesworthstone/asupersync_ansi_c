@@ -1604,23 +1604,27 @@ The `docs/` directory contains 60+ files covering architecture, decisions, verif
 
 ## CI Pipeline Architecture
 
-The CI pipeline runs 7 parallel lanes on every push and PR:
+The primary CI workflow (`.github/workflows/ci.yml`) currently runs 8 top-level
+jobs on pushes and PRs:
 
 ```
 ┌────────────┐┌────────────────┐┌────────────────┐┌────────────────┐
 │   check    ││ unit-invariant ││  conformance   ││ profile-parity │
-│  format    ││  148 unit      ││  Rust fixture  ││  cross-profile │
-│  8 lints   ││  3 invariant   ││  parity        ││  digest match  │
-│  build     ││                ││                ││                │
+│ format +   ││  148 unit      ││  Rust fixture  ││  cross-profile │
+│ lint/docs/ ││  3 invariant   ││  parity        ││  digest match  │
+│ browser/MC ││  vignettes     ││  codec equiv   ││                │
 └────────────┘└────────────────┘└────────────────┘└────────────────┘
-┌──────────────┐┌──────────────────┐┌──────────────┐
-│  fuzz-parity ││  embedded-matrix ││     e2e      │
-│  diff fuzz   ││  mipsel/armv7/   ││  17 scen-    │
-│  minimize    ││  aarch64/RISC-V  ││  arios       │
-└──────────────┘└──────────────────┘└──────────────┘
+┌──────────────┐┌──────────────────┐┌──────────────┐┌────────────────┐
+│  fuzz-parity ││  embedded-matrix ││     e2e      ││compiler-matrix │
+│  diff fuzz   ││  mipsel/armv7/   ││  17 scen-    ││ GCC/Clang x    │
+│  minimize    ││  aarch64/RISC-V  ││  arios       ││ 4 profiles     │
+└──────────────┘└──────────────────┘└──────────────┘└────────────────┘
 ```
 
-All 7 lanes must pass before merge. A nightly workflow extends fuzz runs to 100K iterations and collects performance baselines. The release workflow is tag-triggered (`v*`) and produces signed artifact bundles with SHA-256 checksums and Sigstore signatures.
+All 8 jobs must pass before merge. A nightly workflow extends fuzz runs to
+100K iterations and collects performance baselines. The release workflow is
+tag-triggered (`v*`) and produces signed artifact bundles with SHA-256
+checksums and Sigstore signatures.
 
 ## Troubleshooting
 

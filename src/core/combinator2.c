@@ -439,7 +439,9 @@ void asx_adaptive_hedge_init(asx_adaptive_hedge_policy *policy, uint32_t alpha_p
 void asx_adaptive_hedge_record(asx_adaptive_hedge_policy *policy, uint64_t latency_ns) {
     if (policy == NULL) return;
     policy->history[policy->count % ASX_ADAPTIVE_HEDGE_WINDOW] = latency_ns;
-    if (policy->count < UINT32_MAX) policy->count++;
+    /* Wrap-around after UINT32_MAX causes brief recalibration (10 records).
+     * Acceptable tradeoff for zero-allocation circular buffer simplicity. */
+    policy->count++;
 }
 
 uint64_t asx_adaptive_hedge_delay(const asx_adaptive_hedge_policy *policy) {
