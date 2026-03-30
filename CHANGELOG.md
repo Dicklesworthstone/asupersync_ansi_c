@@ -145,7 +145,7 @@ reference implementation and established the porting plan.
 ### Core types, status codes, and error taxonomy
 
 The `asx_core` layer provides fundamental types (IDs with generation
-counters, outcomes, budgets, symbols, typed values), 59 typed error codes
+counters, outcomes, budgets, symbols, typed values), 66 typed error codes
 with recovery guidance, and the foundation every other subsystem builds on.
 
 - Core module sources, tests, and platform stubs

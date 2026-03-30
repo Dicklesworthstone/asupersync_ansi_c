@@ -491,7 +491,7 @@ All profiles produce identical canonical semantic digests for shared fixture set
                                           │
                                           ▼
 ┌───────────────────────────────────────────────────────────────────────┐
-│                      asx_core (15 modules)                            │
+│                      asx_core (19 modules)                            │
 │  IDs + generation counters | outcomes | budgets | cancel + witness    │
 │  combinators (11) | symbols + typed values | epochs | circuit breakers│
 │  ghost monitors | error taxonomy (66 codes) | codec schema            │
@@ -1593,7 +1593,8 @@ Summary records include aggregate metrics (count, passed, failed). This structur
 
 ## Documentation Suite
 
-The `docs/` directory contains 60+ files covering architecture, decisions, verification, and risk:
+The top-level `docs/` directory currently contains 75 files covering
+architecture, decisions, verification, and risk:
 
 | Category | Key Documents |
 |---|---|
