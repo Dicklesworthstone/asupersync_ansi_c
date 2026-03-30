@@ -553,8 +553,8 @@ src/                         123 C source files in the current tree
   platform/                  3 files: POSIX, Win32, freestanding adapters
   ...                        + cx, codec, security, net, fs, process, signal, stream, evidence, etc.
 
-tests/                       254 tracked files total; 198 C test programs in the current tree
-  unit/                      146 C test files across the current subsystem directories
+tests/                       256 tracked files total; 200 C test programs in the current tree
+  unit/                      148 C test files across the current subsystem directories
   e2e/                       17 end-to-end scenario programs
   invariant/                 3 lifecycle/quiescence invariant suites
   vignettes/                 12 API ergonomics demonstrations
@@ -1739,8 +1739,9 @@ Usually slightly, depending on workload and trace settings. In exchange you gain
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: 1,641 public functions across public headers in the
-current `include/asx/` tree, and one umbrella `#include <asx/asx.h>`. CLI
+Yes. The C API is first-class: 1,364 exported `ASX_API` declarations across 37
+public header families in the current `include/asx/` tree, and one umbrella
+`#include <asx/asx.h>`. CLI
 tooling is operational scaffolding around the same runtime and conformance
 layers.
 
