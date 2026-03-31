@@ -139,7 +139,8 @@ ASX_API asx_profile_id asx_adapter_profile(asx_adapter_id id);
 
 /* Evaluate overload using the specified adapter and mode.
  * In FALLBACK mode, uses catalog-defined policy.
- * In ACCELERATED mode, uses domain-tuned policy with annotations. */
+ * In ACCELERATED mode, uses domain-tuned policy with annotations.
+ * Returns ASX_E_INVALID_ARGUMENT for out-of-range adapter IDs or modes. */
 ASX_API asx_status asx_adapter_evaluate(asx_adapter_id id, asx_adapter_mode mode, uint32_t used,
                                         uint32_t capacity, asx_adapter_result *out);
 

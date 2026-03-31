@@ -162,6 +162,13 @@ TEST(evaluate_invalid_adapter_rejected) {
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(evaluate_invalid_mode_rejected) {
+    asx_adapter_result res;
+    asx_status s =
+        asx_adapter_evaluate(ASX_ADAPTER_HFT, (asx_adapter_mode)99, 50, 100, &res);
+    ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
+}
+
 /* ===================================================================
  * Evaluation tests — accelerated mode (with annotations)
  * =================================================================== */
@@ -514,6 +521,7 @@ int main(void) {
     RUN_TEST(evaluate_fallback_router_reject);
     RUN_TEST(evaluate_null_result_rejected);
     RUN_TEST(evaluate_invalid_adapter_rejected);
+    RUN_TEST(evaluate_invalid_mode_rejected);
 
     /* Accelerated evaluation */
     RUN_TEST(evaluate_accelerated_hft_has_annotations);

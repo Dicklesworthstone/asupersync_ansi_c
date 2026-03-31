@@ -141,6 +141,9 @@ asx_status asx_adapter_evaluate(asx_adapter_id id, asx_adapter_mode mode, uint32
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     if ((unsigned)id >= (unsigned)ASX_ADAPTER_COUNT) return ASX_E_INVALID_ARGUMENT;
+    if (mode != ASX_ADAPTER_MODE_FALLBACK && mode != ASX_ADAPTER_MODE_ACCELERATED) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
 
     memset(out, 0, sizeof(*out));
     out->adapter = id;
