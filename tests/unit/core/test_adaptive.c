@@ -348,6 +348,28 @@ TEST(decide_null_output_returns_error) {
     ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(decide_null_evidence_with_nonzero_count_returns_error) {
+    asx_adaptive_surface surface;
+    asx_adaptive_posterior posterior;
+    asx_adaptive_decision result;
+
+    asx_adaptive_init();
+    memset(&surface, 0, sizeof(surface));
+    surface.name = "null-evidence";
+    surface.action_count = 2;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.fallback = 0;
+    memset(&posterior, 0, sizeof(posterior));
+    posterior.posterior[0] = (uint32_t)(0.5 * 4294967296.0);
+    posterior.posterior[1] = (uint32_t)(0.5 * 4294967296.0);
+    posterior.state_count = 2;
+    posterior.confidence_fp32 = UINT32_MAX;
+
+    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 1, &result),
+              ASX_E_INVALID_ARGUMENT);
+}
+
 TEST(decide_zero_actions_returns_error) {
     asx_adaptive_surface surface;
     asx_adaptive_posterior posterior;
@@ -364,6 +386,28 @@ TEST(decide_zero_actions_returns_error) {
     posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX;
     ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(decide_out_of_range_fallback_returns_error) {
+    asx_adaptive_surface surface;
+    asx_adaptive_posterior posterior;
+    asx_adaptive_decision result;
+
+    asx_adaptive_init();
+    memset(&surface, 0, sizeof(surface));
+    surface.name = "bad-fallback";
+    surface.action_count = 2;
+    surface.state_count = 2;
+    surface.loss_fn = test_loss_fn;
+    surface.fallback = 2;
+    memset(&posterior, 0, sizeof(posterior));
+    posterior.posterior[0] = (uint32_t)(0.5 * 4294967296.0);
+    posterior.posterior[1] = (uint32_t)(0.5 * 4294967296.0);
+    posterior.state_count = 2;
+    posterior.confidence_fp32 = UINT32_MAX;
+
+    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result),
+              ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(decide_state_count_mismatch_returns_error) {
@@ -485,7 +529,9 @@ int main(void) {
     RUN_TEST(decide_null_surface_returns_error);
     RUN_TEST(decide_null_posterior_returns_error);
     RUN_TEST(decide_null_output_returns_error);
+    RUN_TEST(decide_null_evidence_with_nonzero_count_returns_error);
     RUN_TEST(decide_zero_actions_returns_error);
+    RUN_TEST(decide_out_of_range_fallback_returns_error);
     RUN_TEST(decide_state_count_mismatch_returns_error);
     RUN_TEST(decide_null_loss_fn_returns_error);
     RUN_TEST(ledger_get_out_of_bounds_returns_zero);

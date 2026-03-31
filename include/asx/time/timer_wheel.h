@@ -99,17 +99,19 @@ ASX_API uint32_t asx_timer_collect_expired(asx_timer_wheel *wheel, asx_time now,
 /* -------------------------------------------------------------------
  * Timer update (cancel + re-register)
  *
- * Cancels the old timer and registers a new one with a fresh handle.
- * Returns ASX_OK on success. If the old handle is stale, the new
- * timer is still registered (old cancel is a no-op).
+ * Registers the replacement timer before retiring the old one so the
+ * operation is failure-atomic. If the new registration fails, the old
+ * timer remains live. If the old handle is stale, the new timer is
+ * still registered (old cancel is a no-op).
  * ------------------------------------------------------------------- */
 
-/* Cancel old timer and register a new one with updated deadline.
+/* Register a new timer and then retire the old one with updated deadline.
  *
  * Preconditions: wheel and out_handle must not be NULL.
  * old_handle may be NULL (treated as a pure register operation).
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if NULL params,
- *   ASX_E_RESOURCE_EXHAUSTED if timer arena is full.
+ *   ASX_E_RESOURCE_EXHAUSTED if timer arena is full, and leaves the old
+ *   timer untouched on registration failure.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_timer_update(asx_timer_wheel *wheel,
                                                  const asx_timer_handle *old_handle,

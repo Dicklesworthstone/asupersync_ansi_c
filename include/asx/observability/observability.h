@@ -73,14 +73,14 @@ ASX_API ASX_MUST_USE asx_status asx_metrics_gauge(asx_metrics *m, const char *na
 /* Register a histogram metric. */
 ASX_API ASX_MUST_USE asx_status asx_metrics_histogram(asx_metrics *m, const char *name);
 
-/* Increment a counter by delta. */
+/* Increment a counter by delta, clamping on overflow instead of wrapping. */
 ASX_API ASX_MUST_USE asx_status asx_metrics_increment(asx_metrics *m, const char *name,
                                                       int64_t delta);
 
 /* Set a gauge value. */
 ASX_API ASX_MUST_USE asx_status asx_metrics_set(asx_metrics *m, const char *name, int64_t value);
 
-/* Record a histogram observation. */
+/* Record a histogram observation. Histogram sums clamp on overflow. */
 ASX_API ASX_MUST_USE asx_status asx_metrics_observe(asx_metrics *m, const char *name,
                                                     int64_t value);
 

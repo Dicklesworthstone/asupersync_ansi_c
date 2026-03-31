@@ -75,6 +75,29 @@ static void test_monitor_watchdog_trigger(void) {
     asx_runtime_shutdown(&rt);
 }
 
+static void test_monitor_watchdog_threshold_equality_does_not_trigger(void) {
+    asx_runtime rt;
+    asx_monitor_policy policy;
+    asx_monitor_report report;
+    asx_evidence_sink sink;
+    asx_auto_watchdog *wd;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    wd = asx_auto_watchdog_global();
+    asx_auto_watchdog_init(wd, 10u);
+    asx_auto_watchdog_checkpoint(wd, 0u);
+    asx_auto_watchdog_checkpoint(wd, 25u);
+
+    asx_monitor_policy_init_default(&policy);
+    policy.max_watchdog_violations = 1u;
+    MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
+
+    ASSERT((report.triggered_mask & ASX_MONITOR_WATCHDOG_VIOLATIONS) == 0u,
+           "watchdog threshold should not trigger at equality");
+    ASSERT(report.verdict == ASX_EVIDENCE_PASS, "watchdog equality remains healthy");
+    asx_runtime_shutdown(&rt);
+}
+
 static void test_monitor_io_threshold_trigger(void) {
     asx_runtime rt;
     asx_monitor_policy policy;
@@ -95,6 +118,45 @@ static void test_monitor_io_threshold_trigger(void) {
         ASSERT((report.triggered_mask & ASX_MONITOR_IO_HIGH) != 0u, "io mask");
         ASSERT(report.verdict == ASX_EVIDENCE_WARN, "io threshold warns");
         ASSERT(strcmp(sink.entries[0].source, "monitor:io_driver") == 0, "io evidence source");
+        asx_io_deregister(&tok);
+#else
+        ASSERT(0, "io surface should not be active when io-driver types are compile-hidden");
+#endif
+    } else {
+        MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
+        ASSERT((report.triggered_mask & ASX_MONITOR_IO_HIGH) == 0u, "no io mask when unsupported");
+    }
+
+    asx_runtime_shutdown(&rt);
+}
+
+static void test_monitor_io_threshold_equality_does_not_trigger(void) {
+    asx_runtime rt;
+    asx_monitor_policy policy;
+    asx_monitor_report report;
+    asx_evidence_sink sink;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    asx_monitor_policy_init_default(&policy);
+
+    if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
+#if ASX_HAS_NATIVE_IO_DRIVER
+        asx_waker w;
+        asx_io_token tok;
+        asx_inspection_report inspection;
+        uint32_t pct;
+
+        MUST_OK(asx_waker_register(89u, &w));
+        MUST_OK(asx_io_register(89, ASX_IO_READABLE, &w, &tok));
+        MUST_OK(asx_inspect(&rt, &inspection));
+        pct = (inspection.io_driver.capacity == 0u) ? 0u
+                                                    : (inspection.io_driver.active_count * 100u) /
+                                                          inspection.io_driver.capacity;
+        policy.max_io_utilization_pct = pct;
+
+        MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
+        ASSERT((report.triggered_mask & ASX_MONITOR_IO_HIGH) == 0u,
+               "io threshold should not trigger at equality");
         asx_io_deregister(&tok);
 #else
         ASSERT(0, "io surface should not be active when io-driver types are compile-hidden");
@@ -174,7 +236,9 @@ int main(void) {
 
     RUN(test_monitor_healthy);
     RUN(test_monitor_watchdog_trigger);
+    RUN(test_monitor_watchdog_threshold_equality_does_not_trigger);
     RUN(test_monitor_io_threshold_trigger);
+    RUN(test_monitor_io_threshold_equality_does_not_trigger);
     RUN(test_observability_capture);
     RUN(test_monitor_uninitialized_runtime_fails_closed);
     RUN(test_monitor_stale_runtime_fails_closed);

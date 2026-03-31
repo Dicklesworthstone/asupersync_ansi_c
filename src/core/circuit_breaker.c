@@ -26,6 +26,7 @@ asx_status asx_breaker_init_with(asx_circuit_breaker *cb, const asx_breaker_conf
     if (cb == NULL || config == NULL) return ASX_E_INVALID_ARGUMENT;
     if (config->failure_threshold == 0) return ASX_E_INVALID_ARGUMENT;
     if (config->success_threshold == 0) return ASX_E_INVALID_ARGUMENT;
+    if (config->half_open_max_calls == 0) return ASX_E_INVALID_ARGUMENT;
     memset(cb, 0, sizeof(*cb));
     cb->config = *config;
     cb->state = ASX_BREAKER_CLOSED;

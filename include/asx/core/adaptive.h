@@ -146,7 +146,9 @@ ASX_API asx_adaptive_policy asx_adaptive_policy_active(void);
  *
  * Preconditions: surface, posterior, and out_decision must not be NULL.
  *   surface->action_count must be in [1, ASX_ADAPTIVE_MAX_ACTIONS].
+ *   surface->fallback must be a valid action index for the surface.
  *   posterior->state_count must equal surface->state_count.
+ *   evidence must be non-NULL when evidence_count is nonzero.
  * Returns ASX_OK on success.
  * Returns ASX_E_INVALID_ARGUMENT if any precondition fails.
  * The decision is logged to the evidence ledger. */
@@ -168,8 +170,10 @@ ASX_API int asx_adaptive_ledger_overflowed(void);
 
 /* Read entry at logical index (0 = oldest readable).
  * Returns nonzero on success, 0 on out-of-bounds.
- * The returned entry's pointers (surface, evidence labels) are valid
- * only until the next asx_adaptive_decide() or asx_adaptive_reset(). */
+ * The returned entry borrows caller-owned pointers (surface name and
+ * evidence labels). They remain valid only as long as the caller's
+ * backing storage remains live, and the entry contents may be overwritten
+ * by a later asx_adaptive_decide() after the ring wraps. */
 ASX_API int asx_adaptive_ledger_get(uint32_t index, asx_adaptive_ledger_entry *out);
 
 /* Compute FNV-1a digest over ledger contents (for replay identity). */

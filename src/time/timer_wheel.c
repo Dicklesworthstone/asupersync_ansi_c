@@ -266,13 +266,18 @@ uint32_t asx_timer_collect_expired(asx_timer_wheel *wheel, asx_time now, void **
 
 asx_status asx_timer_update(asx_timer_wheel *wheel, const asx_timer_handle *old_handle,
                             asx_time new_deadline, void *waker_data, asx_timer_handle *out_handle) {
+    asx_status st;
+
     if (wheel == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    /* Cancel old timer (no-op if stale) */
+    /* Register new timer first so update is failure-atomic. */
+    st = asx_timer_register(wheel, new_deadline, waker_data, out_handle);
+    if (st != ASX_OK) return st;
+
+    /* Retire old timer only after the replacement exists. */
     if (old_handle != NULL) { (void)asx_timer_cancel(wheel, old_handle); }
 
-    /* Register new timer */
-    return asx_timer_register(wheel, new_deadline, waker_data, out_handle);
+    return ASX_OK;
 }
 
 /* -------------------------------------------------------------------

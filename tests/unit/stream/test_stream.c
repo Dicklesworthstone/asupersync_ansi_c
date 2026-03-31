@@ -505,6 +505,23 @@ TEST(for_each_visits_all) {
     ASSERT_EQ(foreach_sum, 6);
 }
 
+TEST(stream_terminals_reject_null_inputs) {
+    int data[] = {1, 2, 3};
+    asx_stream s;
+    asx_stream_iter_state state;
+    int sum = 0;
+    size_t count = 0u;
+
+    asx_stream_iter_init(&s, &state, data, sizeof(int), 3);
+
+    ASSERT_EQ(asx_stream_fold(NULL, &sum, sum_fold, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_stream_fold(&s, &sum, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_stream_count(NULL, &count), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_stream_count(&s, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_stream_for_each(NULL, foreach_add, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_stream_for_each(&s, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
 /* ================================================================== */
 /* Combinator composition tests                                        */
 /* ================================================================== */
@@ -1165,6 +1182,7 @@ int main(void) {
     RUN_TEST(count_items);
     RUN_TEST(count_empty);
     RUN_TEST(for_each_visits_all);
+    RUN_TEST(stream_terminals_reject_null_inputs);
 
     /* Combinator composition */
     RUN_TEST(filter_then_map_pipeline);

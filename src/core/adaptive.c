@@ -122,8 +122,10 @@ asx_status asx_adaptive_decide(const asx_adaptive_surface *surface,
     if (surface->state_count < 1 || surface->state_count > ASX_ADAPTIVE_MAX_ACTIONS) {
         return ASX_E_INVALID_ARGUMENT;
     }
+    if (surface->fallback >= surface->action_count) { return ASX_E_INVALID_ARGUMENT; }
     if (posterior->state_count != surface->state_count) { return ASX_E_INVALID_ARGUMENT; }
     if (!surface->loss_fn) { return ASX_E_INVALID_ARGUMENT; }
+    if (evidence_count > 0u && evidence == NULL) { return ASX_E_INVALID_ARGUMENT; }
 
     /* Check fallback conditions */
     use_fallback = 0;

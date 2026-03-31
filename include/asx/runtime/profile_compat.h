@@ -149,7 +149,9 @@ ASX_API asx_status asx_profile_get_descriptor(asx_profile_id id, asx_profile_des
 ASX_API asx_status asx_profile_get_descriptor_for_class(asx_profile_id id, asx_resource_class cls,
                                                         asx_profile_descriptor *desc);
 
-/* Classify a profile property as operational or semantic. */
+/* Classify a profile property as operational or semantic.
+ * Out-of-range values fail closed as ASX_PROP_SEMANTIC so invalid
+ * callers cannot silently bypass parity enforcement. */
 ASX_API asx_property_class asx_profile_property_class(asx_profile_property prop);
 
 /* Return the name of a profile property. Never returns NULL. */
@@ -159,8 +161,9 @@ ASX_API const char *asx_profile_property_name(asx_profile_property prop);
  * API: Semantic rule enforcement
  * ------------------------------------------------------------------- */
 
-/* Check if a semantic rule is enforced. Always returns 1 (all rules
- * are compile-time guarantees, never disabled). */
+/* Check if a semantic rule is enforced.
+ * Returns 1 for valid rules and 0 for out-of-range values so invalid
+ * callers do not appear to satisfy the parity contract. */
 ASX_API int asx_profile_semantic_rule_enforced(asx_semantic_rule rule);
 
 /* Return the name of a semantic rule. Never returns NULL. */

@@ -297,6 +297,8 @@ void asx_stream_zip_init(asx_stream *s, asx_stream_zip_state *state, asx_stream 
 
 asx_status asx_stream_fold(asx_stream *s, void *accumulator, asx_stream_fold_fn fold_fn,
                            void *user_data) {
+    if (s == NULL || fold_fn == NULL) return ASX_E_INVALID_ARGUMENT;
+
     for (;;) {
         void *item = NULL;
         asx_stream_result r = asx_stream_poll_next(s, NULL, &item);
@@ -309,6 +311,9 @@ asx_status asx_stream_fold(asx_stream *s, void *accumulator, asx_stream_fold_fn 
 
 asx_status asx_stream_count(asx_stream *s, size_t *out_count) {
     size_t count = 0;
+
+    if (s == NULL || out_count == NULL) return ASX_E_INVALID_ARGUMENT;
+
     for (;;) {
         void *item = NULL;
         asx_stream_result r = asx_stream_poll_next(s, NULL, &item);
@@ -323,6 +328,8 @@ asx_status asx_stream_count(asx_stream *s, size_t *out_count) {
 }
 
 asx_status asx_stream_for_each(asx_stream *s, asx_stream_foreach_fn fn, void *user_data) {
+    if (s == NULL || fn == NULL) return ASX_E_INVALID_ARGUMENT;
+
     for (;;) {
         void *item = NULL;
         asx_stream_result r = asx_stream_poll_next(s, NULL, &item);

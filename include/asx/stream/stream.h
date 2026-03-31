@@ -181,7 +181,8 @@ ASX_API void asx_stream_enumerate_init(asx_stream *s, asx_stream_enumerate_state
 typedef void (*asx_stream_fold_fn)(void *accumulator, void *item, void *user_data);
 
 /* Synchronously fold a stream.  Polls until DONE, applying fold_fn.
- * Returns ASX_OK on success, ASX_E_WOULD_BLOCK if any poll returns PENDING. */
+ * Returns ASX_OK on success, ASX_E_WOULD_BLOCK if any poll returns PENDING,
+ * and ASX_E_INVALID_ARGUMENT for NULL required inputs. */
 ASX_API ASX_MUST_USE asx_status asx_stream_fold(asx_stream *s, void *accumulator,
                                                 asx_stream_fold_fn fold_fn, void *user_data);
 
@@ -190,7 +191,8 @@ ASX_API ASX_MUST_USE asx_status asx_stream_fold(asx_stream *s, void *accumulator
 /* ------------------------------------------------------------------ */
 
 /* Synchronously count all items.
- * Returns ASX_OK on success, ASX_E_WOULD_BLOCK if any poll returns PENDING. */
+ * Returns ASX_OK on success, ASX_E_WOULD_BLOCK if any poll returns PENDING,
+ * and ASX_E_INVALID_ARGUMENT for NULL required inputs. */
 ASX_API ASX_MUST_USE asx_status asx_stream_count(asx_stream *s, size_t *out_count);
 
 /* ------------------------------------------------------------------ */
@@ -200,7 +202,8 @@ ASX_API ASX_MUST_USE asx_status asx_stream_count(asx_stream *s, size_t *out_coun
 typedef void (*asx_stream_foreach_fn)(void *item, void *user_data);
 
 /* Synchronously consume a stream, calling fn for each item.
- * Returns ASX_OK on success, ASX_E_WOULD_BLOCK if any poll returns PENDING. */
+ * Returns ASX_OK on success, ASX_E_WOULD_BLOCK if any poll returns PENDING,
+ * and ASX_E_INVALID_ARGUMENT for NULL required inputs. */
 ASX_API ASX_MUST_USE asx_status asx_stream_for_each(asx_stream *s, asx_stream_foreach_fn fn,
                                                     void *user_data);
 

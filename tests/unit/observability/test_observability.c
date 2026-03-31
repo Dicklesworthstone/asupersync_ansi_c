@@ -44,6 +44,30 @@ TEST(counter_not_found) {
     ASSERT_EQ(asx_metrics_increment(&g_m, "nonexistent", 1), ASX_E_NOT_FOUND);
 }
 
+TEST(counter_increment_clamps_positive_overflow) {
+    const asx_metric_entry *e;
+    setup();
+    ASSERT_EQ(asx_metrics_counter(&g_m, "requests"), ASX_OK);
+    ASSERT_EQ(asx_metrics_increment(&g_m, "requests", INT64_MAX - 1), ASX_OK);
+    ASSERT_EQ(asx_metrics_increment(&g_m, "requests", 5), ASX_OK);
+
+    e = asx_metrics_get(&g_m, "requests");
+    ASSERT_TRUE(e != NULL);
+    ASSERT_EQ(e->value, (int64_t)INT64_MAX);
+}
+
+TEST(counter_increment_clamps_negative_overflow) {
+    const asx_metric_entry *e;
+    setup();
+    ASSERT_EQ(asx_metrics_counter(&g_m, "requests"), ASX_OK);
+    ASSERT_EQ(asx_metrics_increment(&g_m, "requests", INT64_MIN + 1), ASX_OK);
+    ASSERT_EQ(asx_metrics_increment(&g_m, "requests", -5), ASX_OK);
+
+    e = asx_metrics_get(&g_m, "requests");
+    ASSERT_TRUE(e != NULL);
+    ASSERT_EQ(e->value, (int64_t)INT64_MIN);
+}
+
 /* ================================================================== */
 /* Gauge                                                               */
 /* ================================================================== */
@@ -86,6 +110,18 @@ TEST(histogram_register_and_observe) {
     ASSERT_EQ(e->sum, (int64_t)350);
 }
 
+TEST(histogram_sum_clamps_positive_overflow) {
+    const asx_metric_entry *e;
+    setup();
+    ASSERT_EQ(asx_metrics_histogram(&g_m, "latency"), ASX_OK);
+    ASSERT_EQ(asx_metrics_observe(&g_m, "latency", INT64_MAX - 1), ASX_OK);
+    ASSERT_EQ(asx_metrics_observe(&g_m, "latency", 5), ASX_OK);
+
+    e = asx_metrics_get(&g_m, "latency");
+    ASSERT_TRUE(e != NULL);
+    ASSERT_EQ(e->sum, (int64_t)INT64_MAX);
+}
+
 /* ================================================================== */
 /* Lookup                                                              */
 /* ================================================================== */
@@ -122,8 +158,11 @@ int main(void) {
     RUN_TEST(metrics_init_empty);
     RUN_TEST(counter_register_and_increment);
     RUN_TEST(counter_not_found);
+    RUN_TEST(counter_increment_clamps_positive_overflow);
+    RUN_TEST(counter_increment_clamps_negative_overflow);
     RUN_TEST(gauge_register_and_set);
     RUN_TEST(histogram_register_and_observe);
+    RUN_TEST(histogram_sum_clamps_positive_overflow);
     RUN_TEST(get_returns_null_for_missing);
     RUN_TEST(get_null_metrics);
     RUN_TEST(capacity_exhaustion);

@@ -45,6 +45,12 @@ TEST(init_zero_threshold) {
     ASSERT_EQ(asx_breaker_init_with(&cb, &cfg), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(init_zero_half_open_max_calls) {
+    asx_circuit_breaker cb;
+    asx_breaker_config cfg = {1, 1, 0};
+    ASSERT_EQ(asx_breaker_init_with(&cb, &cfg), ASX_E_INVALID_ARGUMENT);
+}
+
 /* ------------------------------------------------------------------ */
 /* Closed state — tracking failures                                    */
 /* ------------------------------------------------------------------ */
@@ -233,6 +239,7 @@ int main(void) {
     RUN_TEST(init_custom);
     RUN_TEST(init_null);
     RUN_TEST(init_zero_threshold);
+    RUN_TEST(init_zero_half_open_max_calls);
     RUN_TEST(closed_allows_calls);
     RUN_TEST(closed_success_resets_failures);
     RUN_TEST(trip_after_threshold);

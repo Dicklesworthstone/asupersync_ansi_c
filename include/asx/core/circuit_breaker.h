@@ -65,7 +65,8 @@ typedef struct {
 /* Initialize with default config (5 failures to trip, 2 successes to close). */
 ASX_API void asx_breaker_init(asx_circuit_breaker *cb);
 
-/* Initialize with custom config. */
+/* Initialize with custom config.
+ * All thresholds and half-open probe capacity must be nonzero. */
 ASX_API ASX_MUST_USE asx_status asx_breaker_init_with(asx_circuit_breaker *cb,
                                                       const asx_breaker_config *config);
 

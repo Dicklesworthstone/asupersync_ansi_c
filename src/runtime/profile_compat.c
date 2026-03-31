@@ -215,8 +215,12 @@ asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls) {
  * ------------------------------------------------------------------- */
 
 asx_property_class asx_profile_property_class(asx_profile_property prop) {
-    (void)prop;
-    /* All profile properties are operational by design.
+    if ((int)prop < 0 || (int)prop >= ASX_PPROP_COUNT) {
+        /* Fail closed: unknown properties must not be treated as
+         * profile-tunable operational differences. */
+        return ASX_PROP_SEMANTIC;
+    }
+    /* All valid profile properties are operational by design.
      * Semantic rules are enforced separately via asx_semantic_rule. */
     return ASX_PROP_OPERATIONAL;
 }
@@ -241,10 +245,10 @@ static const char *g_rule_names[ASX_SRULE_COUNT] = {
     "handle_validation",     "error_codes",     "quiescence_definition", "budget_exhaustion"};
 
 int asx_profile_semantic_rule_enforced(asx_semantic_rule rule) {
+    if ((int)rule < 0 || (int)rule >= ASX_SRULE_COUNT) { return 0; }
     /* All semantic rules are always enforced. This is a compile-time
      * guarantee — the state machines, handle validation, and error
      * codes are identical across all profile builds. */
-    (void)rule;
     return 1;
 }
 

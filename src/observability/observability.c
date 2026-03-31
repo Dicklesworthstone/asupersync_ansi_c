@@ -40,6 +40,12 @@ void asx_metrics_init(asx_metrics *m) {
     memset(m, 0, sizeof(*m));
 }
 
+static int64_t metrics_clamp_add_i64(int64_t lhs, int64_t rhs) {
+    if (rhs > 0 && lhs > INT64_MAX - rhs) return INT64_MAX;
+    if (rhs < 0 && lhs < INT64_MIN - rhs) return INT64_MIN;
+    return lhs + rhs;
+}
+
 static asx_metric_entry *metrics_find(asx_metrics *m, const char *name) {
     uint32_t i;
     if (m == NULL || name == NULL) return NULL;
@@ -91,7 +97,7 @@ asx_status asx_metrics_increment(asx_metrics *m, const char *name, int64_t delta
     asx_metric_entry *e = metrics_find(m, name);
     if (e == NULL) return ASX_E_NOT_FOUND;
     if (e->type != ASX_METRIC_COUNTER) return ASX_E_INVALID_STATE;
-    e->value += delta;
+    e->value = metrics_clamp_add_i64(e->value, delta);
     return ASX_OK;
 }
 
@@ -108,14 +114,7 @@ asx_status asx_metrics_observe(asx_metrics *m, const char *name, int64_t value) 
     if (e == NULL) return ASX_E_NOT_FOUND;
     if (e->type != ASX_METRIC_HISTOGRAM) return ASX_E_INVALID_STATE;
     e->count++;
-    /* Overflow-safe sum: clamp at INT64_MAX/MIN instead of wrapping */
-    if (value > 0 && e->sum > INT64_MAX - value) {
-        e->sum = INT64_MAX;
-    } else if (value < 0 && e->sum < INT64_MIN - value) {
-        e->sum = INT64_MIN;
-    } else {
-        e->sum += value;
-    }
+    e->sum = metrics_clamp_add_i64(e->sum, value);
     if (value < e->min_val) e->min_val = value;
     if (value > e->max_val) e->max_val = value;
     return ASX_OK;

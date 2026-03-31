@@ -408,6 +408,49 @@ TEST(timer_update_allows_null_old_handle) {
     ASSERT_EQ(wakers[0], (void *)0xCAFE);
 }
 
+TEST(timer_update_resource_failure_preserves_old_timer) {
+    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_handle handles[ASX_MAX_TIMERS];
+    asx_timer_handle replacement;
+    void *wakers[4];
+    uint32_t i, count;
+
+    asx_timer_wheel_reset(w);
+
+    ASSERT_EQ(asx_timer_register(w, 100, (void *)0xAA, &handles[0]), ASX_OK);
+    for (i = 1; i < ASX_MAX_TIMERS; i++) {
+        ASSERT_EQ(asx_timer_register(w, (asx_time)(1000u + i), (void *)(uintptr_t)i, &handles[i]),
+                  ASX_OK);
+    }
+
+    ASSERT_EQ(asx_timer_update(w, &handles[0], 200, (void *)0xBB, &replacement),
+              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_timer_active_count(w), ASX_MAX_TIMERS);
+
+    count = asx_timer_collect_expired(w, 100, wakers, 4);
+    ASSERT_EQ(count, (uint32_t)1);
+    ASSERT_EQ(wakers[0], (void *)0xAA);
+}
+
+TEST(timer_update_duration_failure_preserves_old_timer) {
+    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_handle old_h, replacement;
+    void *wakers[4];
+    uint32_t count;
+
+    asx_timer_wheel_reset(w);
+    asx_timer_set_max_duration(w, 1000u);
+
+    ASSERT_EQ(asx_timer_register(w, 100, (void *)0xAA, &old_h), ASX_OK);
+    ASSERT_EQ(asx_timer_update(w, &old_h, 2000, (void *)0xBB, &replacement),
+              ASX_E_TIMER_DURATION_EXCEEDED);
+    ASSERT_EQ(asx_timer_active_count(w), (uint32_t)1);
+
+    count = asx_timer_collect_expired(w, 100, wakers, 4);
+    ASSERT_EQ(count, (uint32_t)1);
+    ASSERT_EQ(wakers[0], (void *)0xAA);
+}
+
 /* -------------------------------------------------------------------
  * Test: churn — rapid register/cancel cycles
  * ------------------------------------------------------------------- */
@@ -639,6 +682,8 @@ int main(void) {
     RUN_TEST(timer_collect_zero_capacity_advances_time);
     RUN_TEST(timer_update_cancels_old_and_registers_new);
     RUN_TEST(timer_update_allows_null_old_handle);
+    RUN_TEST(timer_update_resource_failure_preserves_old_timer);
+    RUN_TEST(timer_update_duration_failure_preserves_old_timer);
     RUN_TEST(timer_churn_register_cancel);
     RUN_TEST(timer_generation_increments_on_reuse);
     RUN_TEST(timer_stale_handle_rejected_after_reset);

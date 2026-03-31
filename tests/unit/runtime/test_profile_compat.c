@@ -180,6 +180,11 @@ TEST(property_name_out_of_range) {
     ASSERT_STR_EQ(name, "unknown");
 }
 
+TEST(property_class_out_of_range_fails_closed) {
+    asx_property_class cls = asx_profile_property_class((asx_profile_property)99);
+    ASSERT_EQ((int)cls, (int)ASX_PROP_SEMANTIC);
+}
+
 /* -------------------------------------------------------------------
  * Semantic rule enforcement tests
  * ------------------------------------------------------------------- */
@@ -220,6 +225,10 @@ TEST(semantic_rule_lifecycle) {
 TEST(semantic_rule_cancel) {
     const char *name = asx_semantic_rule_name(ASX_SRULE_CANCEL_PROTOCOL);
     ASSERT_STR_EQ(name, "cancel_protocol");
+}
+
+TEST(semantic_rule_out_of_range_is_not_enforced) {
+    ASSERT_EQ(asx_profile_semantic_rule_enforced((asx_semantic_rule)99), 0);
 }
 
 /* -------------------------------------------------------------------
@@ -601,6 +610,7 @@ int main(void) {
     RUN_TEST(all_properties_are_operational);
     RUN_TEST(property_names_all_valid);
     RUN_TEST(property_name_out_of_range);
+    RUN_TEST(property_class_out_of_range_fails_closed);
 
     /* Semantic rules */
     RUN_TEST(all_semantic_rules_enforced);
@@ -609,6 +619,7 @@ int main(void) {
     RUN_TEST(semantic_rule_name_out_of_range);
     RUN_TEST(semantic_rule_lifecycle);
     RUN_TEST(semantic_rule_cancel);
+    RUN_TEST(semantic_rule_out_of_range_is_not_enforced);
 
     /* Digest comparison */
     RUN_TEST(digest_compare_same_passes);
