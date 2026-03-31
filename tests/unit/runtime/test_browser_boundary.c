@@ -237,6 +237,16 @@ TEST(surface_available_out_of_range) {
     ASSERT_EQ(asx_surface_available(ASX_PROFILE_ID_BROWSER, (asx_host_surface)99), 0);
 }
 
+TEST(surface_available_invalid_profile_fails_closed) {
+    ASSERT_EQ(asx_surface_available((asx_profile_id)99, ASX_SURFACE_REGION), 0);
+    ASSERT_EQ(asx_surface_available((asx_profile_id)-1, ASX_SURFACE_FILESYSTEM), 0);
+}
+
+TEST(surface_counts_invalid_profile_fail_closed) {
+    ASSERT_EQ((int)asx_surface_blocked_count((asx_profile_id)99), ASX_SURFACE_COUNT);
+    ASSERT_EQ((int)asx_surface_available_count((asx_profile_id)99), 0);
+}
+
 /* -------------------------------------------------------------------
  * Semantic parity — browser profile enforces all 8 semantic rules
  * ------------------------------------------------------------------- */
@@ -295,6 +305,8 @@ int main(void) {
 
     /* Edge cases */
     RUN_TEST(surface_available_out_of_range);
+    RUN_TEST(surface_available_invalid_profile_fails_closed);
+    RUN_TEST(surface_counts_invalid_profile_fail_closed);
 
     /* Semantic parity */
     RUN_TEST(browser_enforces_all_semantic_rules);

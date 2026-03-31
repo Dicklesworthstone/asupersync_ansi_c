@@ -67,7 +67,8 @@ typedef enum {
  * ------------------------------------------------------------------- */
 
 /* Check if a surface is available for the given profile.
- * Returns 1 if the surface is available, 0 if blocked. */
+ * Returns 1 if the surface is available, 0 if blocked.
+ * Out-of-range profiles fail closed and expose no surfaces. */
 ASX_API int asx_surface_available(asx_profile_id profile, asx_host_surface surface);
 
 /* Check if a surface is available for the currently active profile. */
@@ -85,10 +86,12 @@ ASX_API const char *asx_surface_name(asx_host_surface surface);
  * This is the primary entry point for fail-closed boundary enforcement. */
 ASX_API asx_status asx_surface_gate(asx_host_surface surface);
 
-/* Return the number of surfaces blocked for the given profile. */
+/* Return the number of surfaces blocked for the given profile.
+ * Out-of-range profiles fail closed and report all surfaces blocked. */
 ASX_API uint32_t asx_surface_blocked_count(asx_profile_id profile);
 
-/* Return the number of surfaces available for the given profile. */
+/* Return the number of surfaces available for the given profile.
+ * Out-of-range profiles fail closed and report zero available surfaces. */
 ASX_API uint32_t asx_surface_available_count(asx_profile_id profile);
 
 #ifdef __cplusplus

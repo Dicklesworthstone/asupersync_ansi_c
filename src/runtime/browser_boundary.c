@@ -55,6 +55,7 @@ static const char *g_surface_names[ASX_SURFACE_COUNT] = {"region", "task",      
 
 int asx_surface_available(asx_profile_id profile, asx_host_surface surface) {
     if ((int)surface < 0 || (int)surface >= ASX_SURFACE_COUNT) { return 0; }
+    if ((int)profile < 0 || (int)profile >= ASX_PROFILE_ID_COUNT) { return 0; }
 
     /* Only the browser profile restricts surfaces */
     if (profile != ASX_PROFILE_ID_BROWSER) { return 1; }
@@ -79,6 +80,9 @@ asx_status asx_surface_gate(asx_host_surface surface) {
 uint32_t asx_surface_blocked_count(asx_profile_id profile) {
     uint32_t blocked = 0;
     int i;
+    if ((int)profile < 0 || (int)profile >= ASX_PROFILE_ID_COUNT) {
+        return (uint32_t)ASX_SURFACE_COUNT;
+    }
     for (i = 0; i < ASX_SURFACE_COUNT; i++) {
         if (!asx_surface_available(profile, (asx_host_surface)i)) { blocked++; }
     }
@@ -86,5 +90,6 @@ uint32_t asx_surface_blocked_count(asx_profile_id profile) {
 }
 
 uint32_t asx_surface_available_count(asx_profile_id profile) {
+    if ((int)profile < 0 || (int)profile >= ASX_PROFILE_ID_COUNT) { return 0; }
     return (uint32_t)ASX_SURFACE_COUNT - asx_surface_blocked_count(profile);
 }
