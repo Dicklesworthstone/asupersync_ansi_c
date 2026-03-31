@@ -20,7 +20,7 @@
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
 
-#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE || \
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE ||                                      \
     defined(ASX_INTERNAL_TRACE_FAMILY_ACCESS)
 
 #ifdef __cplusplus

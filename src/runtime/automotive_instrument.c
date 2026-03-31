@@ -70,8 +70,8 @@ void asx_auto_deadline_record(asx_auto_deadline_tracker *dt, uint64_t deadline_n
     if (margin > dt->best_margin_ns || dt->total_deadlines == 1) { dt->best_margin_ns = margin; }
 
     /* Accumulate absolute margin for mean computation */
-    dt->total_margin_ns = asx_u64_saturating_add(dt->total_margin_ns,
-                                                 asx_margin_abs(deadline_ns, actual_ns));
+    dt->total_margin_ns =
+        asx_u64_saturating_add(dt->total_margin_ns, asx_margin_abs(deadline_ns, actual_ns));
     dt->total_margin_count++;
 }
 
@@ -247,7 +247,8 @@ static int g_auto_initialized = 0;
 static void ensure_auto_init(void) {
     if (!g_auto_initialized) {
         asx_auto_deadline_init(&g_deadline);
-        asx_auto_watchdog_init(&g_watchdog, ASX_AUTO_DEFAULT_WATCHDOG_PERIOD_NS); /* 10ms default period */
+        asx_auto_watchdog_init(&g_watchdog,
+                               ASX_AUTO_DEFAULT_WATCHDOG_PERIOD_NS); /* 10ms default period */
         asx_auto_audit_init(&g_audit);
         g_auto_initialized = 1;
     }

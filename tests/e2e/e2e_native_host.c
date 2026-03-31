@@ -46,7 +46,9 @@ static asx_status native_poll_wait(void *ctx, uint32_t timeout_ms, uint32_t *rea
     struct pollfd pfd;
     int rc;
 
-    if (native == NULL || ready_count == NULL || native->read_fd < 0) { return ASX_E_INVALID_ARGUMENT; }
+    if (native == NULL || ready_count == NULL || native->read_fd < 0) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
 
     pfd.fd = native->read_fd;
     pfd.events = POLLIN;
@@ -175,8 +177,7 @@ int main(void) {
         asx_runtime_builder_build(&builder, &runtime) != ASX_OK ||
         !asx_runtime_is_initialized(&runtime) ||
         asx_runtime_get_config(&runtime, &runtime_cfg) != ASX_OK ||
-        runtime_cfg.wait_policy != ASX_WAIT_BUSY_SPIN ||
-        runtime_cfg.finalizer_poll_budget != 48u) {
+        runtime_cfg.wait_policy != ASX_WAIT_BUSY_SPIN || runtime_cfg.finalizer_poll_budget != 48u) {
         printf("SCENARIO native_host.builder fail builder_contract\n");
         return 1;
     }

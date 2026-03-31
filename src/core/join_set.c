@@ -55,9 +55,7 @@ asx_status asx_join_set_poll_next(asx_join_set *js, asx_join_set_result *out) {
         if (state == ASX_TASK_COMPLETED) {
             asx_outcome outcome;
             st = asx_task_get_outcome(js->entries[idx].task_id, &outcome);
-            if (st != ASX_OK) {
-                outcome = asx_outcome_make(ASX_OUTCOME_ERR);
-            }
+            if (st != ASX_OK) { outcome = asx_outcome_make(ASX_OUTCOME_ERR); }
 
             js->entries[idx].active = 0u;
             js->entries[idx].completed = 1u;

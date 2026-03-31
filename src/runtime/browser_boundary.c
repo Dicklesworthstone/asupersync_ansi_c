@@ -20,34 +20,34 @@
  * ------------------------------------------------------------------- */
 
 static const int g_browser_surface_allowed[ASX_SURFACE_COUNT] = {
-    /* REGION */     1,
-    /* TASK */       1,
-    /* CHANNEL */    1,
-    /* TIMER */      1,
+    /* REGION */ 1,
+    /* TASK */ 1,
+    /* CHANNEL */ 1,
+    /* TIMER */ 1,
     /* OBLIGATION */ 1,
-    /* TRACE */      1,
-    /* GHOST */      1,
+    /* TRACE */ 1,
+    /* GHOST */ 1,
     /* FILESYSTEM */ 0,
-    /* PROCESS */    0,
-    /* SIGNAL */     0,
-    /* IO_DRIVER */  0,
-    /* BLOCKING */   0,
-    /* SERVER */     0,
-    /* GRPC */       0,
-    /* MESSAGING */  0,
-    /* TLS */        0,
-    /* DATABASE */   0
-};
+    /* PROCESS */ 0,
+    /* SIGNAL */ 0,
+    /* IO_DRIVER */ 0,
+    /* BLOCKING */ 0,
+    /* SERVER */ 0,
+    /* GRPC */ 0,
+    /* MESSAGING */ 0,
+    /* TLS */ 0,
+    /* DATABASE */ 0};
 
 /* -------------------------------------------------------------------
  * Surface names
  * ------------------------------------------------------------------- */
 
-static const char *g_surface_names[ASX_SURFACE_COUNT] = {
-    "region", "task",       "channel",   "timer",   "obligation", "trace",
-    "ghost",  "filesystem", "process",   "signal",  "io_driver",  "blocking",
-    "server", "grpc",       "messaging", "tls",     "database"
-};
+static const char *g_surface_names[ASX_SURFACE_COUNT] = {"region", "task",       "channel",
+                                                         "timer",  "obligation", "trace",
+                                                         "ghost",  "filesystem", "process",
+                                                         "signal", "io_driver",  "blocking",
+                                                         "server", "grpc",       "messaging",
+                                                         "tls",    "database"};
 
 /* -------------------------------------------------------------------
  * API implementation

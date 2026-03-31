@@ -443,9 +443,7 @@ TEST(adaptive_hedge_calibrates_from_history) {
     asx_adaptive_hedge_init(&p, 5, 0, UINT64_MAX);
 
     /* Record 20 latencies: 100, 200, 300, ..., 2000 */
-    for (i = 0; i < 20; i++) {
-        asx_adaptive_hedge_record(&p, (uint64_t)((i + 1u) * 100u));
-    }
+    for (i = 0; i < 20; i++) { asx_adaptive_hedge_record(&p, (uint64_t)((i + 1u) * 100u)); }
 
     delay = asx_adaptive_hedge_delay(&p);
     /* P95 of [100..2000] should be near 1900-2000 */
@@ -461,9 +459,7 @@ TEST(adaptive_hedge_clamps_to_bounds) {
     asx_adaptive_hedge_init(&p, 5, 5000, 10000);
 
     /* Record 20 tiny latencies (all 1ns) */
-    for (i = 0; i < 20; i++) {
-        asx_adaptive_hedge_record(&p, 1);
-    }
+    for (i = 0; i < 20; i++) { asx_adaptive_hedge_record(&p, 1); }
 
     delay = asx_adaptive_hedge_delay(&p);
     /* Conformal bound is 1ns, but clamped to min=5000 */
@@ -542,7 +538,8 @@ TEST(hedge_primary_wins_immediately) {
  * branches race on first poll. */
 static int hedge_primary_pending_count;
 static asx_status hedge_primary_pending(void *user_data, asx_task_id self) {
-    (void)user_data; (void)self;
+    (void)user_data;
+    (void)self;
     hedge_primary_pending_count++;
     return ASX_E_PENDING;
 }

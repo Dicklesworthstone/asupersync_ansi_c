@@ -13,8 +13,8 @@
  */
 
 #include "../../test_harness.h"
-#include <asx/asx_ids.h>
 #include <asx/asx_config.h>
+#include <asx/asx_ids.h>
 #include <asx/core/cancel.h>
 #include <asx/core/symbol.h>
 #include <string.h>
@@ -100,9 +100,7 @@ TEST(witness_null_out) {
 /* Cancel request                                                      */
 /* ================================================================== */
 
-TEST(cancel_request_null_reason) {
-    ASSERT_EQ(asx_cancel_request(1, NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(cancel_request_null_reason) { ASSERT_EQ(asx_cancel_request(1, NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(cancel_request_invalid_task) {
     asx_cancel_reason r;
@@ -163,8 +161,7 @@ TEST(typed_value_init) {
 }
 
 TEST(typed_value_init_null) {
-    ASSERT_EQ(asx_typed_value_init(NULL, 1, ASX_TYPE_KIND_VOID, NULL, 0),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_typed_value_init(NULL, 1, ASX_TYPE_KIND_VOID, NULL, 0), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(typed_value_equals_same) {

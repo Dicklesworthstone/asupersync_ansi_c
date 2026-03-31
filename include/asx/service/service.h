@@ -255,12 +255,12 @@ ASX_API ASX_MUST_USE asx_status asx_service_builder_buffer(asx_service_builder *
 
 /* Add a concurrency-limit layer. */
 ASX_API ASX_MUST_USE asx_status asx_service_builder_concurrency_limit(asx_service_builder *builder,
-                                                                        uint32_t max_inflight);
+                                                                      uint32_t max_inflight);
 
 /* Add a filter layer. */
 ASX_API ASX_MUST_USE asx_status asx_service_builder_filter(asx_service_builder *builder,
-                                                             asx_service_filter_fn fn,
-                                                             void *user_data);
+                                                           asx_service_filter_fn fn,
+                                                           void *user_data);
 
 /* Build a concrete composed service from the recorded layer specs.
  * Layers are applied in insertion order, so later-added layers become
@@ -282,16 +282,16 @@ ASX_API uint32_t asx_service_builder_layer_count(const asx_service_builder *buil
 /* Initialize a concurrency-limiting wrapper. Returns ASX_E_OVERLOADED
  * when the limit is reached instead of forwarding to the inner service. */
 ASX_API void asx_service_concurrency_limit_init(asx_service *svc,
-                                                  asx_service_concurrency_limit_state *state,
-                                                  asx_service inner, uint32_t max_inflight);
+                                                asx_service_concurrency_limit_state *state,
+                                                asx_service inner, uint32_t max_inflight);
 
 /* Must be called after each request completes (success or failure)
  * to release the in-flight slot. */
 ASX_API void asx_service_concurrency_limit_release(asx_service_concurrency_limit_state *state);
 
 /* Get current in-flight count. */
-ASX_API uint32_t asx_service_concurrency_limit_inflight(
-    const asx_service_concurrency_limit_state *state);
+ASX_API uint32_t
+asx_service_concurrency_limit_inflight(const asx_service_concurrency_limit_state *state);
 
 /* ------------------------------------------------------------------ */
 /* Filter middleware — rejects requests that fail a predicate          */
@@ -301,8 +301,8 @@ ASX_API uint32_t asx_service_concurrency_limit_inflight(
 
 /* Initialize a filter wrapper. Rejected requests get ASX_E_PERMISSION_DENIED. */
 ASX_API void asx_service_filter_init(asx_service *svc, asx_service_filter_state *state,
-                                      asx_service inner, asx_service_filter_fn filter_fn,
-                                      void *user_data);
+                                     asx_service inner, asx_service_filter_fn filter_fn,
+                                     void *user_data);
 
 /* ------------------------------------------------------------------ */
 /* Load-balance middleware — round-robin across multiple backends      */
@@ -319,16 +319,15 @@ typedef struct {
 } asx_service_load_balance_state;
 
 /* Initialize a load balancer. Backends must be added via _add_backend. */
-ASX_API void asx_service_load_balance_init(asx_service *svc,
-                                            asx_service_load_balance_state *state);
+ASX_API void asx_service_load_balance_init(asx_service *svc, asx_service_load_balance_state *state);
 
 /* Add a backend service. Returns ASX_E_RESOURCE_EXHAUSTED at capacity. */
-ASX_API ASX_MUST_USE asx_status asx_service_load_balance_add_backend(
-    asx_service_load_balance_state *state, asx_service backend);
+ASX_API ASX_MUST_USE asx_status
+asx_service_load_balance_add_backend(asx_service_load_balance_state *state, asx_service backend);
 
 /* Get the number of registered backends. */
-ASX_API uint32_t asx_service_load_balance_backend_count(
-    const asx_service_load_balance_state *state);
+ASX_API uint32_t
+asx_service_load_balance_backend_count(const asx_service_load_balance_state *state);
 
 /* ------------------------------------------------------------------ */
 /* Reconnect middleware — auto-recreates service on failure            */
@@ -350,8 +349,8 @@ typedef struct {
  * is recreated from make_fn. Limits total reconnects to max_reconnects
  * (0 = unlimited). */
 ASX_API void asx_service_reconnect_init(asx_service *svc, asx_service_reconnect_state *state,
-                                         asx_service inner, asx_service_make_fn make_fn,
-                                         void *factory_data, uint32_t max_reconnects);
+                                        asx_service inner, asx_service_make_fn make_fn,
+                                        void *factory_data, uint32_t max_reconnects);
 
 /* Get the number of reconnections that have occurred. */
 ASX_API uint32_t asx_service_reconnect_count(const asx_service_reconnect_state *state);
@@ -363,7 +362,7 @@ ASX_API uint32_t asx_service_reconnect_count(const asx_service_reconnect_state *
 /* Steer function: returns backend index for a given request.
  * Must return a value < backend_count. */
 typedef uint32_t (*asx_service_steer_fn)(const void *request, uint32_t backend_count,
-                                          void *user_data);
+                                         void *user_data);
 
 typedef struct {
     asx_service backends[ASX_SERVICE_LB_MAX_BACKENDS];
@@ -374,11 +373,11 @@ typedef struct {
 
 /* Initialize a steer router. Backends added via _add_backend. */
 ASX_API void asx_service_steer_init(asx_service *svc, asx_service_steer_state *state,
-                                     asx_service_steer_fn steer_fn, void *user_data);
+                                    asx_service_steer_fn steer_fn, void *user_data);
 
 /* Add a backend. Returns ASX_E_RESOURCE_EXHAUSTED at capacity. */
 ASX_API ASX_MUST_USE asx_status asx_service_steer_add_backend(asx_service_steer_state *state,
-                                                                asx_service backend);
+                                                              asx_service backend);
 
 #ifdef __cplusplus
 }

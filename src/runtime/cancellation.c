@@ -184,7 +184,11 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
         (void)asx_ghost_check_task_transition(self, t->state, ASX_TASK_CANCELLING);
         t->state = ASX_TASK_CANCELLING;
         t->cancel_phase = ASX_CANCEL_PHASE_CANCELLING;
-        { asx_status w_st_ = asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_CANCELLING); (void)w_st_; }
+        {
+            asx_status w_st_ =
+                asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_CANCELLING);
+            (void)w_st_;
+        }
         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)self,
                        asx_trace_task_transition_aux(from, ASX_TASK_CANCELLING));
     }
@@ -218,7 +222,11 @@ asx_status asx_task_finalize(asx_task_id id) {
         (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_FINALIZING);
         t->state = ASX_TASK_FINALIZING;
         t->cancel_phase = ASX_CANCEL_PHASE_FINALIZING;
-        { asx_status w_st_ = asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_FINALIZING); (void)w_st_; }
+        {
+            asx_status w_st_ =
+                asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_FINALIZING);
+            (void)w_st_;
+        }
         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
                        asx_trace_task_transition_aux(from, ASX_TASK_FINALIZING));
     }

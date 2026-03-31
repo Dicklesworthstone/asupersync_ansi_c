@@ -51,8 +51,8 @@ static void counter_terminate(void *state, asx_status reason) {
     g_terminated = 1;
 }
 
-static const asx_gen_server_callbacks counter_callbacks = {
-    counter_init, counter_handle_call, counter_handle_cast, counter_terminate};
+static const asx_gen_server_callbacks counter_callbacks = {counter_init, counter_handle_call,
+                                                           counter_handle_cast, counter_terminate};
 
 /* ------------------------------------------------------------------ */
 /* Tests                                                               */
@@ -122,9 +122,7 @@ TEST(gen_server_exhaustion) {
     }
     ASSERT_EQ(asx_gen_server_start(&refs[ASX_GEN_SERVER_MAX_INSTANCES], &counter_callbacks, NULL),
               ASX_E_RESOURCE_EXHAUSTED);
-    for (i = 0; i < ASX_GEN_SERVER_MAX_INSTANCES; i++) {
-        asx_gen_server_stop(refs[i]);
-    }
+    for (i = 0; i < ASX_GEN_SERVER_MAX_INSTANCES; i++) { asx_gen_server_stop(refs[i]); }
 }
 
 TEST(gen_server_null_args) {

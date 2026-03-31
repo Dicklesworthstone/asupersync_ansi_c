@@ -6,9 +6,9 @@
 
 #include "../../test_harness.h"
 #include <asx/asx_config.h>
-#include <asx/decoding/decoding.h>
 #include <asx/bytes/codec.h>
 #include <asx/bytes/io_adapter.h>
+#include <asx/decoding/decoding.h>
 #include <string.h>
 
 #if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
@@ -45,9 +45,7 @@ TEST(decoding_config_defaults) {
     ASSERT_EQ(cfg.max_frames, 0u);
 }
 
-TEST(decoding_config_null_safe) {
-    asx_decoding_config_init(NULL); /* should not crash */
-}
+TEST(decoding_config_null_safe) { asx_decoding_config_init(NULL); /* should not crash */ }
 
 /* ------------------------------------------------------------------ */
 /* Pipeline init tests                                                 */
@@ -412,7 +410,7 @@ TEST(decoding_null_args) {
 TEST(decoding_null_queries) {
     asx_decoding_progress prog;
 
-    asx_decoding_pipeline_progress(NULL, &prog);  /* should not crash */
+    asx_decoding_pipeline_progress(NULL, &prog); /* should not crash */
     asx_decoding_pipeline_progress(NULL, NULL);
     ASSERT_EQ(asx_decoding_pipeline_last_error(NULL), ASX_DECODING_ERR_NONE);
     asx_decoding_pipeline_cancel(NULL);

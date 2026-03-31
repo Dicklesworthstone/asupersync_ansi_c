@@ -88,7 +88,8 @@ static size_t ring_read(asx_mem_transport_ring *r, void *buf, size_t len) {
     return nread;
 }
 
-static asx_transport_conn make_conn_handle(uint32_t slot_index, uint32_t generation, uint32_t side) {
+static asx_transport_conn make_conn_handle(uint32_t slot_index, uint32_t generation,
+                                           uint32_t side) {
     asx_transport_conn conn;
     conn.id = slot_index + 1u;
     conn.generation = (generation << 1) | side;

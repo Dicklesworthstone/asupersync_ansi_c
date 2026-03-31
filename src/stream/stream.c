@@ -7,8 +7,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/stream/stream.h>
 #include <asx/asx_config.h>
+#include <asx/stream/stream.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -435,12 +435,15 @@ static asx_stream_result filter_map_poll(void *state, const asx_waker *waker, vo
         asx_stream_result r = asx_stream_poll_next(&fm->inner, waker, &inner_item);
         if (r != ASX_STREAM_READY) return r;
         mapped = fm->fn(inner_item, fm->user_data);
-        if (mapped != NULL) { *out_item = mapped; return ASX_STREAM_READY; }
+        if (mapped != NULL) {
+            *out_item = mapped;
+            return ASX_STREAM_READY;
+        }
     }
 }
 
-void asx_stream_filter_map_init(asx_stream *s, asx_stream_filter_map_state *state,
-                                 asx_stream inner, asx_stream_filter_map_fn fn, void *user_data) {
+void asx_stream_filter_map_init(asx_stream *s, asx_stream_filter_map_state *state, asx_stream inner,
+                                asx_stream_filter_map_fn fn, void *user_data) {
     state->inner = inner;
     state->fn = fn;
     state->user_data = user_data;
@@ -459,13 +462,16 @@ static asx_stream_result take_while_poll(void *state, const asx_waker *waker, vo
     if (tw->done) return ASX_STREAM_DONE;
     r = asx_stream_poll_next(&tw->inner, waker, &inner_item);
     if (r != ASX_STREAM_READY) return r;
-    if (tw->predicate(inner_item, tw->user_data)) { *out_item = inner_item; return ASX_STREAM_READY; }
+    if (tw->predicate(inner_item, tw->user_data)) {
+        *out_item = inner_item;
+        return ASX_STREAM_READY;
+    }
     tw->done = 1;
     return ASX_STREAM_DONE;
 }
 
-void asx_stream_take_while_init(asx_stream *s, asx_stream_take_while_state *state,
-                                 asx_stream inner, asx_stream_filter_fn predicate, void *user_data) {
+void asx_stream_take_while_init(asx_stream *s, asx_stream_take_while_state *state, asx_stream inner,
+                                asx_stream_filter_fn predicate, void *user_data) {
     state->inner = inner;
     state->predicate = predicate;
     state->user_data = user_data;
@@ -488,7 +494,7 @@ static asx_stream_result scan_poll(void *state, const asx_waker *waker, void **o
 }
 
 void asx_stream_scan_init(asx_stream *s, asx_stream_scan_state *state, asx_stream inner,
-                           asx_stream_scan_fn scan_fn, void *accumulator, void *user_data) {
+                          asx_stream_scan_fn scan_fn, void *accumulator, void *user_data) {
     state->inner = inner;
     state->scan_fn = scan_fn;
     state->accumulator = accumulator;
@@ -503,7 +509,12 @@ void asx_stream_scan_init(asx_stream *s, asx_stream_scan_state *state, asx_strea
 
 static asx_stream_result peekable_poll(void *state, const asx_waker *waker, void **out_item) {
     asx_stream_peekable_state *pk = (asx_stream_peekable_state *)state;
-    if (pk->has_peeked) { *out_item = pk->peeked; pk->has_peeked = 0; pk->peeked = NULL; return ASX_STREAM_READY; }
+    if (pk->has_peeked) {
+        *out_item = pk->peeked;
+        pk->has_peeked = 0;
+        pk->peeked = NULL;
+        return ASX_STREAM_READY;
+    }
     if (pk->inner_done) return ASX_STREAM_DONE;
     return asx_stream_poll_next(&pk->inner, waker, out_item);
 }
@@ -518,13 +529,20 @@ void asx_stream_peekable_init(asx_stream *s, asx_stream_peekable_state *state, a
 }
 
 asx_stream_result asx_stream_peek(asx_stream_peekable_state *state, const asx_waker *waker,
-                                   void **out_item) {
+                                  void **out_item) {
     asx_stream_result r;
-    if (state->has_peeked) { *out_item = state->peeked; return ASX_STREAM_READY; }
+    if (state->has_peeked) {
+        *out_item = state->peeked;
+        return ASX_STREAM_READY;
+    }
     if (state->inner_done) return ASX_STREAM_DONE;
     r = asx_stream_poll_next(&state->inner, waker, &state->peeked);
-    if (r == ASX_STREAM_READY) { state->has_peeked = 1; *out_item = state->peeked; }
-    else if (r == ASX_STREAM_DONE) { state->inner_done = 1; }
+    if (r == ASX_STREAM_READY) {
+        state->has_peeked = 1;
+        *out_item = state->peeked;
+    } else if (r == ASX_STREAM_DONE) {
+        state->inner_done = 1;
+    }
     return r;
 }
 
@@ -536,12 +554,15 @@ static asx_stream_result inspect_poll(void *state, const asx_waker *waker, void 
     asx_stream_inspect_state *is = (asx_stream_inspect_state *)state;
     void *inner_item = NULL;
     asx_stream_result r = asx_stream_poll_next(&is->inner, waker, &inner_item);
-    if (r == ASX_STREAM_READY) { is->inspect_fn(inner_item, is->user_data); *out_item = inner_item; }
+    if (r == ASX_STREAM_READY) {
+        is->inspect_fn(inner_item, is->user_data);
+        *out_item = inner_item;
+    }
     return r;
 }
 
 void asx_stream_inspect_init(asx_stream *s, asx_stream_inspect_state *state, asx_stream inner,
-                              asx_stream_inspect_fn inspect_fn, void *user_data) {
+                             asx_stream_inspect_fn inspect_fn, void *user_data) {
     state->inner = inner;
     state->inspect_fn = inspect_fn;
     state->user_data = user_data;
@@ -554,7 +575,7 @@ void asx_stream_inspect_init(asx_stream *s, asx_stream_inspect_state *state, asx
 /* ------------------------------------------------------------------ */
 
 asx_status asx_stream_any(asx_stream *s, asx_stream_filter_fn predicate, void *user_data,
-                           int *out_result) {
+                          int *out_result) {
     if (out_result == NULL) return ASX_E_INVALID_ARGUMENT;
     *out_result = 0;
     for (;;) {
@@ -562,7 +583,10 @@ asx_status asx_stream_any(asx_stream *s, asx_stream_filter_fn predicate, void *u
         asx_stream_result r = asx_stream_poll_next(s, NULL, &item);
         if (r == ASX_STREAM_DONE) return ASX_OK;
         if (r == ASX_STREAM_PENDING) return ASX_E_WOULD_BLOCK;
-        if (predicate(item, user_data)) { *out_result = 1; return ASX_OK; }
+        if (predicate(item, user_data)) {
+            *out_result = 1;
+            return ASX_OK;
+        }
     }
 }
 
@@ -571,7 +595,7 @@ asx_status asx_stream_any(asx_stream *s, asx_stream_filter_fn predicate, void *u
 /* ------------------------------------------------------------------ */
 
 asx_status asx_stream_all(asx_stream *s, asx_stream_filter_fn predicate, void *user_data,
-                           int *out_result) {
+                          int *out_result) {
     if (out_result == NULL) return ASX_E_INVALID_ARGUMENT;
     *out_result = 1;
     for (;;) {
@@ -579,7 +603,10 @@ asx_status asx_stream_all(asx_stream *s, asx_stream_filter_fn predicate, void *u
         asx_stream_result r = asx_stream_poll_next(s, NULL, &item);
         if (r == ASX_STREAM_DONE) return ASX_OK;
         if (r == ASX_STREAM_PENDING) return ASX_E_WOULD_BLOCK;
-        if (!predicate(item, user_data)) { *out_result = 0; return ASX_OK; }
+        if (!predicate(item, user_data)) {
+            *out_result = 0;
+            return ASX_OK;
+        }
     }
 }
 
@@ -593,9 +620,18 @@ asx_status asx_stream_collect(asx_stream *s, void **buf, size_t max_items, size_
     for (;;) {
         void *item = NULL;
         asx_stream_result r = asx_stream_poll_next(s, NULL, &item);
-        if (r == ASX_STREAM_DONE) { *out_count = count; return ASX_OK; }
-        if (r == ASX_STREAM_PENDING) { *out_count = count; return ASX_E_WOULD_BLOCK; }
-        if (count >= max_items) { *out_count = count; return ASX_E_RESOURCE_EXHAUSTED; }
+        if (r == ASX_STREAM_DONE) {
+            *out_count = count;
+            return ASX_OK;
+        }
+        if (r == ASX_STREAM_PENDING) {
+            *out_count = count;
+            return ASX_E_WOULD_BLOCK;
+        }
+        if (count >= max_items) {
+            *out_count = count;
+            return ASX_E_RESOURCE_EXHAUSTED;
+        }
         buf[count] = item;
         count++;
     }
@@ -652,7 +688,7 @@ static asx_stream_result chunks_poll(void *state, const asx_waker *waker, void *
 }
 
 void asx_stream_chunks_init(asx_stream *s, asx_stream_chunks_state *state, asx_stream inner,
-                             size_t chunk_size) {
+                            size_t chunk_size) {
     state->inner = inner;
     state->chunk_size = chunk_size;
     if (state->chunk_size > ASX_STREAM_CHUNK_MAX) state->chunk_size = ASX_STREAM_CHUNK_MAX;
@@ -675,9 +711,7 @@ static asx_stream_result throttle_poll(void *state, const asx_waker *waker, void
     /* Check if enough time has passed */
     if (!ts->first) {
         asx_runtime_now_ns(&now);
-        if ((uint64_t)now < ts->last_yield + ts->interval_ns) {
-            return ASX_STREAM_PENDING;
-        }
+        if ((uint64_t)now < ts->last_yield + ts->interval_ns) { return ASX_STREAM_PENDING; }
     }
 
     r = asx_stream_poll_next(&ts->inner, waker, out_item);
@@ -692,7 +726,7 @@ static asx_stream_result throttle_poll(void *state, const asx_waker *waker, void
 }
 
 void asx_stream_throttle_init(asx_stream *s, asx_stream_throttle_state *state, asx_stream inner,
-                               uint64_t interval_ns) {
+                              uint64_t interval_ns) {
     state->inner = inner;
     state->interval_ns = interval_ns;
     state->last_yield = 0;
@@ -726,9 +760,8 @@ static asx_stream_result skip_while_poll(void *state, const asx_waker *waker, vo
     }
 }
 
-void asx_stream_skip_while_init(asx_stream *s, asx_stream_skip_while_state *state,
-                                 asx_stream inner, asx_stream_filter_fn predicate,
-                                 void *user_data) {
+void asx_stream_skip_while_init(asx_stream *s, asx_stream_skip_while_state *state, asx_stream inner,
+                                asx_stream_filter_fn predicate, void *user_data) {
     state->inner = inner;
     state->predicate = predicate;
     state->user_data = user_data;
@@ -760,7 +793,10 @@ static asx_stream_result flatten_poll(void *state, const asx_waker *waker, void 
         {
             void *inner_ptr = NULL;
             asx_stream_result r = asx_stream_poll_next(&fl->outer, waker, &inner_ptr);
-            if (r == ASX_STREAM_DONE) { fl->outer_done = 1; return ASX_STREAM_DONE; }
+            if (r == ASX_STREAM_DONE) {
+                fl->outer_done = 1;
+                return ASX_STREAM_DONE;
+            }
             if (r == ASX_STREAM_PENDING) return ASX_STREAM_PENDING;
             if (inner_ptr == NULL) continue; /* skip NULL inner streams */
             fl->current_inner = *(asx_stream **)inner_ptr;
@@ -800,7 +836,7 @@ static asx_stream_result dedup_poll(void *state, const asx_waker *waker, void **
 }
 
 void asx_stream_dedup_init(asx_stream *s, asx_stream_dedup_state *state, asx_stream inner,
-                            asx_stream_eq_fn eq_fn, void *user_data) {
+                           asx_stream_eq_fn eq_fn, void *user_data) {
     state->inner = inner;
     state->eq_fn = eq_fn;
     state->user_data = user_data;
@@ -830,7 +866,10 @@ static asx_stream_result flat_map_poll(void *state, const asx_waker *waker, void
         {
             void *item = NULL;
             asx_stream_result r = asx_stream_poll_next(&fm->inner, waker, &item);
-            if (r == ASX_STREAM_DONE) { fm->outer_done = 1; return ASX_STREAM_DONE; }
+            if (r == ASX_STREAM_DONE) {
+                fm->outer_done = 1;
+                return ASX_STREAM_DONE;
+            }
             if (r == ASX_STREAM_PENDING) return ASX_STREAM_PENDING;
             fm->current = fm->fn(item, fm->user_data);
             if (fm->current == NULL) continue; /* skip NULL sub-streams */
@@ -838,8 +877,8 @@ static asx_stream_result flat_map_poll(void *state, const asx_waker *waker, void
     }
 }
 
-void asx_stream_flat_map_init(asx_stream *s, asx_stream_flat_map_state *state,
-                               asx_stream inner, asx_stream_flat_map_fn fn, void *user_data) {
+void asx_stream_flat_map_init(asx_stream *s, asx_stream_flat_map_state *state, asx_stream inner,
+                              asx_stream_flat_map_fn fn, void *user_data) {
     state->inner = inner;
     state->fn = fn;
     state->user_data = user_data;
@@ -892,8 +931,8 @@ static asx_stream_result window_poll(void *state, const asx_waker *waker, void *
     }
 }
 
-void asx_stream_window_init(asx_stream *s, asx_stream_window_state *state,
-                             asx_stream inner, size_t window_size) {
+void asx_stream_window_init(asx_stream *s, asx_stream_window_state *state, asx_stream inner,
+                            size_t window_size) {
     state->inner = inner;
     state->window_size = window_size;
     if (state->window_size > ASX_STREAM_WINDOW_MAX) state->window_size = ASX_STREAM_WINDOW_MAX;
@@ -919,7 +958,10 @@ asx_status asx_stream_nth(asx_stream *s, size_t n, void **out_item) {
         asx_stream_result r = asx_stream_poll_next(s, NULL, &item);
         if (r == ASX_STREAM_DONE) return ASX_E_NOT_FOUND;
         if (r == ASX_STREAM_PENDING) return ASX_E_WOULD_BLOCK;
-        if (i == n) { *out_item = item; return ASX_OK; }
+        if (i == n) {
+            *out_item = item;
+            return ASX_OK;
+        }
         i++;
     }
 }
@@ -935,9 +977,7 @@ asx_status asx_stream_last(asx_stream *s, void **out_item) {
     for (;;) {
         void *item = NULL;
         asx_stream_result r = asx_stream_poll_next(s, NULL, &item);
-        if (r == ASX_STREAM_DONE) {
-            return found ? ASX_OK : ASX_E_NOT_FOUND;
-        }
+        if (r == ASX_STREAM_DONE) { return found ? ASX_OK : ASX_E_NOT_FOUND; }
         if (r == ASX_STREAM_PENDING) return ASX_E_WOULD_BLOCK;
         *out_item = item;
         found = 1;

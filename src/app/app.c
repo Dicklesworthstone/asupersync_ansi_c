@@ -16,8 +16,7 @@ static void asx_app_server_report_reset(asx_app_server_report *report) {
     report->exit_code = ASX_EXIT_ERROR;
 }
 
-static void asx_app_server_summary(asx_report_buf *out,
-                                   const asx_app_server_report *report) {
+static void asx_app_server_summary(asx_report_buf *out, const asx_app_server_report *report) {
     if (out == NULL || report == NULL) return;
     asx_report_buf_init(out);
     asx_report_buf_append(out, "Server Summary:\n");
@@ -206,12 +205,9 @@ asx_region_id asx_app_region(const asx_app *app) {
     return app->region;
 }
 
-asx_exit_code asx_app_run_server(asx_app *app,
-                                 const asx_app_server_config *server_config,
-                                 asx_task_poll_fn main_fn,
-                                 void *user_data,
-                                 asx_app_server_report *out_report,
-                                 asx_report_buf *out_summary) {
+asx_exit_code asx_app_run_server(asx_app *app, const asx_app_server_config *server_config,
+                                 asx_task_poll_fn main_fn, void *user_data,
+                                 asx_app_server_report *out_report, asx_report_buf *out_summary) {
     asx_cx root_cx;
     asx_status st;
 
@@ -228,11 +224,9 @@ asx_exit_code asx_app_run_server(asx_app *app,
                                       out_summary);
 }
 
-asx_exit_code asx_app_run_server_with_cx(asx_app *app,
-                                         const asx_cx *app_cx,
+asx_exit_code asx_app_run_server_with_cx(asx_app *app, const asx_cx *app_cx,
                                          const asx_app_server_config *server_config,
-                                         asx_task_poll_fn main_fn,
-                                         void *user_data,
+                                         asx_task_poll_fn main_fn, void *user_data,
                                          asx_app_server_report *out_report,
                                          asx_report_buf *out_summary) {
     asx_app_server_config defaults;
@@ -337,9 +331,8 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app,
     report->main_task_spawned = 1;
 
     budget = asx_budget_infinite();
-    budget.poll_quota = server_config->run_poll_budget != 0u
-                        ? server_config->run_poll_budget
-                        : app->config.poll_budget;
+    budget.poll_quota = server_config->run_poll_budget != 0u ? server_config->run_poll_budget
+                                                             : app->config.poll_budget;
     st = asx_scheduler_run(app->region, &budget);
     report->last_status = st;
 
@@ -369,7 +362,8 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app,
         asx_signal_clear_shutdown();
     }
 
-    if (report->bootstrap_process_exited && report->bootstrap_process_exit_code != 0 && !report->shutdown_requested) {
+    if (report->bootstrap_process_exited && report->bootstrap_process_exit_code != 0 &&
+        !report->shutdown_requested) {
         report->exit_code = ASX_EXIT_TASK_FAILED;
     } else if (st == ASX_OK || st == ASX_E_POLL_BUDGET_EXHAUSTED) {
         report->exit_code = ASX_EXIT_OK;

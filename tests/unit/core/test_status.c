@@ -39,8 +39,7 @@ TEST(status_recoverability_classifies_retryability) {
     ASSERT_EQ((int)asx_status_recoverability(ASX_OK), (int)ASX_RECOVERABILITY_NONE);
     ASSERT_EQ((int)asx_status_recoverability(ASX_E_CHANNEL_FULL),
               (int)ASX_RECOVERABILITY_TRANSIENT);
-    ASSERT_EQ((int)asx_status_recoverability(ASX_E_CANCELLED),
-              (int)ASX_RECOVERABILITY_PERMANENT);
+    ASSERT_EQ((int)asx_status_recoverability(ASX_E_CANCELLED), (int)ASX_RECOVERABILITY_PERMANENT);
     ASSERT_EQ((int)asx_status_recoverability(ASX_E_RESOURCE_EXHAUSTED),
               (int)ASX_RECOVERABILITY_CONTEXT_DEPENDENT);
     ASSERT_TRUE(asx_status_is_retryable(ASX_E_CHANNEL_FULL));
@@ -63,8 +62,7 @@ TEST(status_recovery_actions_expose_guidance) {
     ASSERT_EQ((int)asx_status_recovery_action(ASX_E_INVALID_TRANSITION),
               (int)ASX_RECOVERY_ESCALATE);
     ASSERT_EQ((int)asx_status_recovery_action(ASX_E_CANCELLED), (int)ASX_RECOVERY_PROPAGATE);
-    ASSERT_STR_EQ(asx_recovery_action_str(ASX_RECOVERY_RETRY_WITH_BACKOFF),
-                  "retry-with-backoff");
+    ASSERT_STR_EQ(asx_recovery_action_str(ASX_RECOVERY_RETRY_WITH_BACKOFF), "retry-with-backoff");
 
     hint = asx_status_backoff_hint(ASX_E_CHANNEL_FULL);
     ASSERT_EQ(hint.initial_delay_ms, 10u);

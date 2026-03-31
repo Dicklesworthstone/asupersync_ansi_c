@@ -451,9 +451,7 @@ asx_status asx_runtime_config_set_io_backend(asx_runtime_config *cfg, asx_io_bac
     if (cfg == NULL) return ASX_E_INVALID_ARGUMENT;
 
     switch (backend) {
-    case ASX_IO_BACKEND_GHOST:
-        cfg->io_backend = backend;
-        return ASX_OK;
+    case ASX_IO_BACKEND_GHOST: cfg->io_backend = backend; return ASX_OK;
     case ASX_IO_BACKEND_IO_URING: return ASX_E_PERMISSION_DENIED;
     default: return ASX_E_INVALID_ARGUMENT;
     }

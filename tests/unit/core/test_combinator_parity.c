@@ -22,17 +22,20 @@ static asx_status st_sink_;
 /* ------------------------------------------------------------------ */
 
 static asx_status poll_ok(void *ud, asx_task_id self) {
-    (void)ud; (void)self;
+    (void)ud;
+    (void)self;
     return ASX_OK;
 }
 
 static asx_status poll_fail(void *ud, asx_task_id self) {
-    (void)ud; (void)self;
+    (void)ud;
+    (void)self;
     return ASX_E_INVALID_STATE;
 }
 
 static asx_status poll_pending(void *ud, asx_task_id self) {
-    (void)ud; (void)self;
+    (void)ud;
+    (void)self;
     return ASX_E_PENDING;
 }
 
@@ -61,9 +64,7 @@ TEST(cancel_token_from_flag) {
     ASSERT_TRUE(asx_cancel_token_is_cancelled(&t));
 }
 
-TEST(cancel_token_null_check) {
-    ASSERT_FALSE(asx_cancel_token_is_cancelled(NULL));
-}
+TEST(cancel_token_null_check) { ASSERT_FALSE(asx_cancel_token_is_cancelled(NULL)); }
 
 /* ================================================================== */
 /* Race with timeout tests                                             */
@@ -128,9 +129,7 @@ TEST(retry_timeout_null) {
     ASSERT_EQ(asx_retry_timeout_init(&state, NULL, NULL, 3, 1000), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(retry_timeout_null_attempts) {
-    ASSERT_EQ(asx_retry_timeout_attempts(NULL), 0u);
-}
+TEST(retry_timeout_null_attempts) { ASSERT_EQ(asx_retry_timeout_attempts(NULL), 0u); }
 
 /* ================================================================== */
 /* Algebraic property tests                                            */

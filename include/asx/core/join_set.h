@@ -56,8 +56,7 @@ ASX_API ASX_MUST_USE asx_status asx_join_set_add(asx_join_set *js, asx_task_id t
 /* Poll for the next completed task. Returns ASX_OK with result when a task
  * completes, ASX_E_PENDING if all tasks are still running, ASX_E_NOT_FOUND
  * if the set is empty or all completed tasks have been consumed. */
-ASX_API ASX_MUST_USE asx_status asx_join_set_poll_next(asx_join_set *js,
-                                                         asx_join_set_result *out);
+ASX_API ASX_MUST_USE asx_status asx_join_set_poll_next(asx_join_set *js, asx_join_set_result *out);
 
 /* Cancel all remaining tasks in the set. */
 ASX_API asx_status asx_join_set_abort_all(asx_join_set *js);

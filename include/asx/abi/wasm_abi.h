@@ -147,15 +147,15 @@ typedef enum {
 /* ------------------------------------------------------------------ */
 
 typedef enum {
-    ASX_RECOVER_NONE = 0,     /* not recoverable — abort */
-    ASX_RECOVER_RETRY = 1,    /* transient — safe to retry */
-    ASX_RECOVER_DEGRADE = 2,  /* feature unavailable — degrade gracefully */
-    ASX_RECOVER_RECONNECT = 3 /* boundary lost — re-bootstrap required */
-} asx_recoverability;
+    ASX_ABI_RECOVER_NONE = 0,     /* not recoverable — abort */
+    ASX_ABI_RECOVER_RETRY = 1,    /* transient — safe to retry */
+    ASX_ABI_RECOVER_DEGRADE = 2,  /* feature unavailable — degrade gracefully */
+    ASX_ABI_RECOVER_RECONNECT = 3 /* boundary lost — re-bootstrap required */
+} asx_abi_recoverability;
 
 typedef struct {
     asx_status status; /* underlying error code */
-    asx_recoverability recoverability;
+    asx_abi_recoverability recoverability;
     asx_boot_phase boot_phase; /* phase when error occurred */
     uint32_t error_code;       /* provider-specific error code */
     const char *message;       /* human-readable diagnostic (may be NULL) */
@@ -185,10 +185,10 @@ typedef struct {
 
 /* Response envelope for cross-boundary returns */
 typedef struct {
-    uint32_t request_id;               /* correlates with request */
-    asx_status status;                 /* ASX_OK or error */
-    asx_abi_bytes payload;             /* serialized response body */
-    asx_recoverability recoverability; /* hint for error handling */
+    uint32_t request_id;                   /* correlates with request */
+    asx_status status;                     /* ASX_OK or error */
+    asx_abi_bytes payload;                 /* serialized response body */
+    asx_abi_recoverability recoverability; /* hint for error handling */
 } asx_abi_response;
 
 /* Task-scope boundary context (passed into wasm-spawned tasks) */
@@ -252,8 +252,8 @@ ASX_API const char *asx_hook_state_str(asx_hook_state state);
 /* API: Error envelope                                                 */
 /* ------------------------------------------------------------------ */
 
-/* Human-readable name for a recoverability level. Never returns NULL. */
-ASX_API const char *asx_recoverability_str(asx_recoverability r);
+/* Human-readable name for a wasm ABI recoverability level. Never returns NULL. */
+ASX_API const char *asx_abi_recoverability_str(asx_abi_recoverability r);
 
 #ifdef __cplusplus
 }

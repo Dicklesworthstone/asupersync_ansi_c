@@ -27,10 +27,10 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_SERVER_STATE_IDLE       = 0,
-    ASX_SERVER_STATE_LISTENING  = 1,
-    ASX_SERVER_STATE_DRAINING   = 2,
-    ASX_SERVER_STATE_STOPPED    = 3
+    ASX_SERVER_STATE_IDLE = 0,
+    ASX_SERVER_STATE_LISTENING = 1,
+    ASX_SERVER_STATE_DRAINING = 2,
+    ASX_SERVER_STATE_STOPPED = 3
 } asx_server_state;
 
 #ifndef ASX_SERVER_MAX_CONNECTIONS

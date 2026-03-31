@@ -50,10 +50,10 @@ int main(void) {
         return 1;
     }
 
-    if (asx_console_emit_log_record(ASX_LOG_INFO, "operator",
-                                    "rerun with rch exec -- make build/tests/vignettes/vignette_console",
-                                    &log_record)
-        != ASX_OK) {
+    if (asx_console_emit_log_record(
+            ASX_LOG_INFO, "operator",
+            "rerun with rch exec -- make build/tests/vignettes/vignette_console",
+            &log_record) != ASX_OK) {
         fprintf(stderr, "log record failed\n");
         asx_runtime_shutdown(&rt);
         return 1;

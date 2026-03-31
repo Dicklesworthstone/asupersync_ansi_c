@@ -11,11 +11,7 @@
 /* Arena                                                               */
 /* ------------------------------------------------------------------ */
 
-typedef enum {
-    RESOURCE_IDLE = 0,
-    RESOURCE_ACTIVE = 1,
-    RESOURCE_EMPTY = 2
-} resource_state;
+typedef enum { RESOURCE_IDLE = 0, RESOURCE_ACTIVE = 1, RESOURCE_EMPTY = 2 } resource_state;
 
 typedef struct {
     void *resource;
@@ -221,8 +217,10 @@ asx_status asx_pool_get_stats(asx_pool_handle handle, asx_pool_stats *out) {
 
     memset(out, 0, sizeof(*out));
     for (i = 0; i < ASX_POOL_MAX_RESOURCES; i++) {
-        if (ps->resources[i].state == RESOURCE_ACTIVE) out->active++;
-        else if (ps->resources[i].state == RESOURCE_IDLE) out->idle++;
+        if (ps->resources[i].state == RESOURCE_ACTIVE)
+            out->active++;
+        else if (ps->resources[i].state == RESOURCE_IDLE)
+            out->idle++;
     }
     out->total = out->active + out->idle;
     out->max_size = ps->config.max_size;

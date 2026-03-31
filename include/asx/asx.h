@@ -40,18 +40,18 @@
 #include <asx/cx/scope.h>
 
 /* Core semantic types */
-#include <asx/core/symbol.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
 #include <asx/core/channel.h>
-#include <asx/core/cleanup.h>
-#include <asx/core/epoch.h>
 #include <asx/core/circuit_breaker.h>
+#include <asx/core/cleanup.h>
 #include <asx/core/combinator.h>
 #include <asx/core/combinator2.h>
+#include <asx/core/epoch.h>
 #include <asx/core/ghost.h>
 #include <asx/core/outcome.h>
 #include <asx/core/resource.h>
+#include <asx/core/symbol.h>
 #include <asx/core/transition.h>
 
 /* Codec abstraction and canonical fixture schema */
@@ -71,39 +71,39 @@
 #endif
 
 /* Channel families (MPSC, oneshot, broadcast, watch, session) */
-#include <asx/core/oneshot.h>
-#include <asx/core/broadcast.h>
-#include <asx/core/watch.h>
-#include <asx/core/session.h>
-#include <asx/core/affinity.h>
 #include <asx/core/adaptive.h>
+#include <asx/core/affinity.h>
+#include <asx/core/broadcast.h>
+#include <asx/core/oneshot.h>
+#include <asx/core/session.h>
+#include <asx/core/watch.h>
 
 /* Synchronization primitives */
 #include <asx/sync/barrier.h>
-#include <asx/sync/mutex.h>
-#include <asx/sync/semaphore.h>
-#include <asx/sync/once.h>
-#include <asx/sync/notify.h>
-#include <asx/sync/rwlock.h>
 #include <asx/sync/contended_mutex.h>
+#include <asx/sync/mutex.h>
+#include <asx/sync/notify.h>
+#include <asx/sync/once.h>
 #include <asx/sync/pool.h>
+#include <asx/sync/rwlock.h>
+#include <asx/sync/semaphore.h>
 
 /* Time families */
-#include <asx/time/timer_wheel.h>
 #include <asx/time/deadline.h>
 #include <asx/time/sleep.h>
+#include <asx/time/timer_wheel.h>
 
 /* Stream family */
 #include <asx/stream/stream.h>
 
 /* Network surface */
-#include <asx/net/net.h>
-#include <asx/net/websocket.h>
-#include <asx/net/quic.h>
-#include <asx/net/http.h>
-#include <asx/net/web.h>
 #include <asx/net/distributed.h>
+#include <asx/net/http.h>
+#include <asx/net/net.h>
 #include <asx/net/pipe.h>
+#include <asx/net/quic.h>
+#include <asx/net/web.h>
+#include <asx/net/websocket.h>
 #if ASX_HAS_TLS_SURFACE
 #include <asx/net/tls.h>
 #endif
@@ -129,8 +129,8 @@
 
 /* Actor model, supervision, and gen_server */
 #include <asx/actor/actor.h>
-#include <asx/actor/supervisor.h>
 #include <asx/actor/gen_server.h>
+#include <asx/actor/supervisor.h>
 
 /* Dynamic task collection */
 #include <asx/core/join_set.h>
@@ -153,20 +153,20 @@
 
 /* Encoding and decoding pipeline families */
 #if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
-#include <asx/encoding/encoding.h>
 #include <asx/decoding/decoding.h>
+#include <asx/encoding/encoding.h>
 #endif
 
 /* RaptorQ erasure coding and migration/compatibility */
-#include <asx/raptorq/raptorq.h>
 #include <asx/migration/migration.h>
+#include <asx/raptorq/raptorq.h>
 
 /* Planning, rewrite, and service-layer families */
 #include <asx/plan/plan.h>
-#include <asx/service/service.h>
-#include <asx/transport/transport.h>
 #include <asx/remote/remote.h>
+#include <asx/service/service.h>
 #include <asx/spork/spork.h>
+#include <asx/transport/transport.h>
 
 /* CLI utilities */
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES

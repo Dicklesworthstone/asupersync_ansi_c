@@ -45,10 +45,7 @@ extern "C" {
 #define ASX_MSG_MAX_SUBSCRIBERS 8u
 #endif
 
-typedef enum {
-    ASX_MSG_BACKEND_MEMORY = 0,
-    ASX_MSG_BACKEND_KAFKA  = 1
-} asx_msg_backend;
+typedef enum { ASX_MSG_BACKEND_MEMORY = 0, ASX_MSG_BACKEND_KAFKA = 1 } asx_msg_backend;
 
 /* -------------------------------------------------------------------
  * Message type
@@ -67,7 +64,7 @@ ASX_API void asx_message_init(asx_message *msg);
 
 /* Set message topic and payload. */
 ASX_API asx_status asx_message_set(asx_message *msg, const char *topic, const void *payload,
-                                    uint32_t len);
+                                   uint32_t len);
 
 /* -------------------------------------------------------------------
  * Message queue (point-to-point)
@@ -142,7 +139,7 @@ ASX_API asx_status asx_msg_broker_set_backend(asx_msg_broker *broker, asx_msg_ba
 
 /* Create or get a topic by name. */
 ASX_API asx_status asx_msg_broker_topic(asx_msg_broker *broker, const char *name,
-                                         asx_msg_topic **out);
+                                        asx_msg_topic **out);
 
 /* Subscribe a queue to a topic. */
 ASX_API asx_status asx_msg_topic_subscribe(asx_msg_topic *topic, asx_msg_queue *subscriber_queue);

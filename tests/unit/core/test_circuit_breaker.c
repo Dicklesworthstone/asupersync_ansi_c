@@ -8,7 +8,11 @@
 #include <asx/core/circuit_breaker.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while (0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* Lifecycle                                                           */
@@ -71,9 +75,7 @@ TEST(trip_after_threshold) {
     asx_breaker_config cfg = {3, 2, 1};
     uint32_t i;
     MUST_OK(asx_breaker_init_with(&cb, &cfg));
-    for (i = 0; i < 3; i++) {
-        asx_breaker_record_failure(&cb);
-    }
+    for (i = 0; i < 3; i++) { asx_breaker_record_failure(&cb); }
     ASSERT_EQ(asx_breaker_get_state(&cb), ASX_BREAKER_OPEN);
     ASSERT_EQ(asx_breaker_total_trips(&cb), 1u);
 }

@@ -368,11 +368,11 @@ typedef struct {
 /* Bind a Unix-domain listener to the given path.
  * Deterministic in-memory transport: accepts loopback connects by path match. */
 ASX_API ASX_MUST_USE asx_status asx_unix_listener_bind(asx_unix_listener *out,
-                                                        const asx_unix_addr *addr);
+                                                       const asx_unix_addr *addr);
 
 /* Poll for incoming Unix-domain connections. */
 ASX_API ASX_MUST_USE asx_status asx_unix_listener_poll_accept(asx_unix_listener listener,
-                                                               asx_unix_stream *out);
+                                                              asx_unix_stream *out);
 
 /* Close a Unix-domain listener. */
 ASX_API asx_status asx_unix_listener_close(asx_unix_listener listener);
@@ -393,12 +393,12 @@ ASX_API ASX_MUST_USE asx_status asx_unix_connect(asx_unix_stream *out, const asx
 
 /* Poll-read from a Unix-domain stream. */
 ASX_API ASX_MUST_USE asx_status asx_unix_stream_poll_read(asx_unix_stream stream, asx_buf_mut *dst,
-                                                           uint32_t *bytes_read);
+                                                          uint32_t *bytes_read);
 
 /* Poll-write to a Unix-domain stream. */
 ASX_API ASX_MUST_USE asx_status asx_unix_stream_poll_write(asx_unix_stream stream,
-                                                            const asx_buf *src,
-                                                            uint32_t *bytes_written);
+                                                           const asx_buf *src,
+                                                           uint32_t *bytes_written);
 
 /* Close a Unix-domain stream. */
 ASX_API asx_status asx_unix_stream_close(asx_unix_stream stream);
@@ -411,17 +411,16 @@ ASX_API int asx_unix_stream_is_alive(asx_unix_stream stream);
  * ------------------------------------------------------------------- */
 
 /* Bind a Unix-domain datagram socket to the given path. */
-ASX_API ASX_MUST_USE asx_status asx_unix_dgram_bind(asx_unix_dgram *out,
-                                                     const asx_unix_addr *addr);
+ASX_API ASX_MUST_USE asx_status asx_unix_dgram_bind(asx_unix_dgram *out, const asx_unix_addr *addr);
 
 /* Poll-send a datagram to the specified Unix-domain path. */
 ASX_API ASX_MUST_USE asx_status asx_unix_dgram_poll_send(asx_unix_dgram socket, const asx_buf *src,
-                                                          uint32_t *bytes_written,
-                                                          const asx_unix_addr *to);
+                                                         uint32_t *bytes_written,
+                                                         const asx_unix_addr *to);
 
 /* Poll-receive a datagram. */
 ASX_API ASX_MUST_USE asx_status asx_unix_dgram_poll_recv(asx_unix_dgram socket, asx_buf_mut *dst,
-                                                          uint32_t *bytes_read, asx_unix_addr *from);
+                                                         uint32_t *bytes_read, asx_unix_addr *from);
 
 /* Close a Unix-domain datagram socket. */
 ASX_API asx_status asx_unix_dgram_close(asx_unix_dgram socket);
@@ -461,12 +460,12 @@ ASX_API uint32_t asx_ancillary_count(const asx_ancillary *anc);
 /* Send ancillary data alongside a Unix-domain stream write.
  * Tokens are delivered to the peer's ancillary receive buffer. */
 ASX_API ASX_MUST_USE asx_status asx_unix_stream_send_ancillary(asx_unix_stream stream,
-                                                                const asx_ancillary *anc);
+                                                               const asx_ancillary *anc);
 
 /* Receive ancillary data from a Unix-domain stream.
  * Drains tokens that were delivered by the peer. */
 ASX_API ASX_MUST_USE asx_status asx_unix_stream_recv_ancillary(asx_unix_stream stream,
-                                                                asx_ancillary *out);
+                                                               asx_ancillary *out);
 
 /* -------------------------------------------------------------------
  * Split-stream API
@@ -477,10 +476,7 @@ ASX_API ASX_MUST_USE asx_status asx_unix_stream_recv_ancillary(asx_unix_stream s
  * the underlying stream.
  * ------------------------------------------------------------------- */
 
-typedef enum {
-    ASX_SPLIT_SOURCE_TCP  = 0,
-    ASX_SPLIT_SOURCE_UNIX = 1
-} asx_split_source_kind;
+typedef enum { ASX_SPLIT_SOURCE_TCP = 0, ASX_SPLIT_SOURCE_UNIX = 1 } asx_split_source_kind;
 
 typedef struct {
     asx_split_source_kind kind;
@@ -500,19 +496,19 @@ typedef struct {
  * The original stream handle remains valid but I/O should go through
  * the halves for proper half-close tracking. */
 ASX_API ASX_MUST_USE asx_status asx_tcp_stream_split(asx_tcp_stream stream, asx_read_half *rd,
-                                                      asx_write_half *wr);
+                                                     asx_write_half *wr);
 
 /* Split a Unix-domain stream into read and write halves. */
 ASX_API ASX_MUST_USE asx_status asx_unix_stream_split(asx_unix_stream stream, asx_read_half *rd,
-                                                       asx_write_half *wr);
+                                                      asx_write_half *wr);
 
 /* Poll-read through a read half. */
 ASX_API ASX_MUST_USE asx_status asx_read_half_poll_read(asx_read_half *half, asx_buf_mut *dst,
-                                                         uint32_t *bytes_read);
+                                                        uint32_t *bytes_read);
 
 /* Poll-write through a write half. */
 ASX_API ASX_MUST_USE asx_status asx_write_half_poll_write(asx_write_half *half, const asx_buf *src,
-                                                           uint32_t *bytes_written);
+                                                          uint32_t *bytes_written);
 
 /* Close a read half. */
 ASX_API asx_status asx_read_half_close(asx_read_half *half);

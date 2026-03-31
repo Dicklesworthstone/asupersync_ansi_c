@@ -324,11 +324,11 @@ TEST(hook_state_str_all) {
 }
 
 TEST(recoverability_str_all) {
-    ASSERT_TRUE(strcmp(asx_recoverability_str(ASX_RECOVER_NONE), "none") == 0);
-    ASSERT_TRUE(strcmp(asx_recoverability_str(ASX_RECOVER_RETRY), "retry") == 0);
-    ASSERT_TRUE(strcmp(asx_recoverability_str(ASX_RECOVER_DEGRADE), "degrade") == 0);
-    ASSERT_TRUE(strcmp(asx_recoverability_str(ASX_RECOVER_RECONNECT), "reconnect") == 0);
-    ASSERT_TRUE(strcmp(asx_recoverability_str((asx_recoverability)99), "unknown") == 0);
+    ASSERT_TRUE(strcmp(asx_abi_recoverability_str(ASX_ABI_RECOVER_NONE), "none") == 0);
+    ASSERT_TRUE(strcmp(asx_abi_recoverability_str(ASX_ABI_RECOVER_RETRY), "retry") == 0);
+    ASSERT_TRUE(strcmp(asx_abi_recoverability_str(ASX_ABI_RECOVER_DEGRADE), "degrade") == 0);
+    ASSERT_TRUE(strcmp(asx_abi_recoverability_str(ASX_ABI_RECOVER_RECONNECT), "reconnect") == 0);
+    ASSERT_TRUE(strcmp(asx_abi_recoverability_str((asx_abi_recoverability)99), "unknown") == 0);
 }
 
 /* ================================================================== */
@@ -358,7 +358,7 @@ TEST(abi_response_layout) {
     memset(&resp, 0, sizeof(resp));
     resp.request_id = 42;
     resp.status = ASX_OK;
-    resp.recoverability = ASX_RECOVER_NONE;
+    resp.recoverability = ASX_ABI_RECOVER_NONE;
     ASSERT_EQ(resp.request_id, 42u);
     ASSERT_EQ(resp.status, ASX_OK);
 }
@@ -378,11 +378,11 @@ TEST(error_envelope_layout) {
     asx_abi_error_envelope env;
     memset(&env, 0, sizeof(env));
     env.status = ASX_E_INVALID_TRANSITION;
-    env.recoverability = ASX_RECOVER_DEGRADE;
+    env.recoverability = ASX_ABI_RECOVER_DEGRADE;
     env.boot_phase = ASX_BOOT_PHASE_HOOKS_BIND;
     env.message = "hook bind failed";
     ASSERT_EQ(env.status, ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(env.recoverability, ASX_RECOVER_DEGRADE);
+    ASSERT_EQ(env.recoverability, ASX_ABI_RECOVER_DEGRADE);
     ASSERT_TRUE(env.message != NULL);
 }
 

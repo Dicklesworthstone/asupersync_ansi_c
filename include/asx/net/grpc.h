@@ -28,23 +28,23 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_GRPC_OK                  = 0,
-    ASX_GRPC_CANCELLED           = 1,
-    ASX_GRPC_UNKNOWN             = 2,
-    ASX_GRPC_INVALID_ARGUMENT    = 3,
-    ASX_GRPC_DEADLINE_EXCEEDED   = 4,
-    ASX_GRPC_NOT_FOUND           = 5,
-    ASX_GRPC_ALREADY_EXISTS      = 6,
-    ASX_GRPC_PERMISSION_DENIED   = 7,
-    ASX_GRPC_RESOURCE_EXHAUSTED  = 8,
+    ASX_GRPC_OK = 0,
+    ASX_GRPC_CANCELLED = 1,
+    ASX_GRPC_UNKNOWN = 2,
+    ASX_GRPC_INVALID_ARGUMENT = 3,
+    ASX_GRPC_DEADLINE_EXCEEDED = 4,
+    ASX_GRPC_NOT_FOUND = 5,
+    ASX_GRPC_ALREADY_EXISTS = 6,
+    ASX_GRPC_PERMISSION_DENIED = 7,
+    ASX_GRPC_RESOURCE_EXHAUSTED = 8,
     ASX_GRPC_FAILED_PRECONDITION = 9,
-    ASX_GRPC_ABORTED             = 10,
-    ASX_GRPC_OUT_OF_RANGE        = 11,
-    ASX_GRPC_UNIMPLEMENTED       = 12,
-    ASX_GRPC_INTERNAL            = 13,
-    ASX_GRPC_UNAVAILABLE         = 14,
-    ASX_GRPC_DATA_LOSS           = 15,
-    ASX_GRPC_UNAUTHENTICATED     = 16
+    ASX_GRPC_ABORTED = 10,
+    ASX_GRPC_OUT_OF_RANGE = 11,
+    ASX_GRPC_UNIMPLEMENTED = 12,
+    ASX_GRPC_INTERNAL = 13,
+    ASX_GRPC_UNAVAILABLE = 14,
+    ASX_GRPC_DATA_LOSS = 15,
+    ASX_GRPC_UNAUTHENTICATED = 16
 } asx_grpc_code;
 
 /* Return the name of a gRPC status code. */
@@ -99,8 +99,7 @@ typedef struct {
 ASX_API void asx_grpc_metadata_init(asx_grpc_metadata *md);
 
 /* Add a metadata entry. */
-ASX_API asx_status asx_grpc_metadata_add(asx_grpc_metadata *md, const char *key,
-                                          const char *value);
+ASX_API asx_status asx_grpc_metadata_add(asx_grpc_metadata *md, const char *key, const char *value);
 
 /* Get metadata by key. Returns NULL if not found. */
 ASX_API const char *asx_grpc_metadata_get(const asx_grpc_metadata *md, const char *key);
@@ -122,18 +121,16 @@ ASX_API const char *asx_grpc_metadata_get(const asx_grpc_metadata *md, const cha
 #endif
 
 typedef enum {
-    ASX_GRPC_METHOD_UNARY            = 0,
-    ASX_GRPC_METHOD_SERVER_STREAM    = 1,
-    ASX_GRPC_METHOD_CLIENT_STREAM    = 2,
-    ASX_GRPC_METHOD_BIDI_STREAM      = 3
+    ASX_GRPC_METHOD_UNARY = 0,
+    ASX_GRPC_METHOD_SERVER_STREAM = 1,
+    ASX_GRPC_METHOD_CLIENT_STREAM = 2,
+    ASX_GRPC_METHOD_BIDI_STREAM = 3
 } asx_grpc_method_type;
 
 /* Unary handler: receives request message, produces response message. */
-typedef asx_status (*asx_grpc_unary_handler_fn)(const asx_grpc_message *req,
-                                                 asx_grpc_message *resp,
-                                                 const asx_grpc_metadata *md,
-                                                 asx_grpc_code *out_code,
-                                                 void *user_data);
+typedef asx_status (*asx_grpc_unary_handler_fn)(const asx_grpc_message *req, asx_grpc_message *resp,
+                                                const asx_grpc_metadata *md,
+                                                asx_grpc_code *out_code, void *user_data);
 
 typedef struct {
     char full_name[ASX_GRPC_METHOD_NAME_MAX]; /* "/pkg.Service/Method" */
@@ -154,7 +151,7 @@ ASX_API void asx_grpc_service_init(asx_grpc_service *svc, const char *name);
 
 /* Add a unary method to a service. */
 ASX_API asx_status asx_grpc_service_add_unary(asx_grpc_service *svc, const char *method_name,
-                                               asx_grpc_unary_handler_fn handler, void *user_data);
+                                              asx_grpc_unary_handler_fn handler, void *user_data);
 
 /* -------------------------------------------------------------------
  * gRPC server
@@ -178,8 +175,8 @@ ASX_API asx_status asx_grpc_server_add_service(asx_grpc_server *srv, const asx_g
 
 /* Dispatch a unary call by full method name. */
 ASX_API asx_status asx_grpc_server_call(asx_grpc_server *srv, const char *method_name,
-                                         const asx_grpc_message *req, asx_grpc_message *resp,
-                                         const asx_grpc_metadata *md, asx_grpc_code *out_code);
+                                        const asx_grpc_message *req, asx_grpc_message *resp,
+                                        const asx_grpc_metadata *md, asx_grpc_code *out_code);
 
 /* Get the number of calls handled. */
 ASX_API uint32_t asx_grpc_server_calls_handled(const asx_grpc_server *srv);
@@ -195,21 +192,21 @@ typedef struct {
 
 /* Initialize a client channel connected to a server (in-memory). */
 ASX_API void asx_grpc_channel_init(asx_grpc_channel *ch, const char *target,
-                                    asx_grpc_server *server);
+                                   asx_grpc_server *server);
 
 /* Make a unary call through the channel. */
 ASX_API asx_status asx_grpc_channel_call(asx_grpc_channel *ch, const char *method_name,
-                                          const asx_grpc_message *req, asx_grpc_message *resp,
-                                          const asx_grpc_metadata *md, asx_grpc_code *out_code);
+                                         const asx_grpc_message *req, asx_grpc_message *resp,
+                                         const asx_grpc_metadata *md, asx_grpc_code *out_code);
 
 /* -------------------------------------------------------------------
  * gRPC health check (grpc.health.v1)
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_GRPC_HEALTH_UNKNOWN         = 0,
-    ASX_GRPC_HEALTH_SERVING         = 1,
-    ASX_GRPC_HEALTH_NOT_SERVING     = 2,
+    ASX_GRPC_HEALTH_UNKNOWN = 0,
+    ASX_GRPC_HEALTH_SERVING = 1,
+    ASX_GRPC_HEALTH_NOT_SERVING = 2,
     ASX_GRPC_HEALTH_SERVICE_UNKNOWN = 3
 } asx_grpc_health_status;
 
@@ -233,11 +230,11 @@ ASX_API void asx_grpc_health_init(asx_grpc_health *health);
 
 /* Set the health status for a service. Empty name = overall server health. */
 ASX_API asx_status asx_grpc_health_set(asx_grpc_health *health, const char *service,
-                                        asx_grpc_health_status status);
+                                       asx_grpc_health_status status);
 
 /* Check the health status of a service. */
 ASX_API asx_grpc_health_status asx_grpc_health_check(const asx_grpc_health *health,
-                                                      const char *service);
+                                                     const char *service);
 
 /* -------------------------------------------------------------------
  * gRPC reflection (service listing)

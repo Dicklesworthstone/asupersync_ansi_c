@@ -59,8 +59,8 @@ static void gs_dequeue(gen_server_slot *s) {
 /* API                                                                 */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_gen_server_start(asx_gen_server_ref *out,
-                                 const asx_gen_server_callbacks *callbacks, void *init_args) {
+asx_status asx_gen_server_start(asx_gen_server_ref *out, const asx_gen_server_callbacks *callbacks,
+                                void *init_args) {
     uint32_t i;
     gen_server_slot *s;
     asx_status st;
@@ -137,9 +137,7 @@ asx_status asx_gen_server_stop(asx_gen_server_ref ref) {
     s = gs_lookup(ref);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    if (s->callbacks.terminate != NULL) {
-        s->callbacks.terminate(s->state, ASX_OK);
-    }
+    if (s->callbacks.terminate != NULL) { s->callbacks.terminate(s->state, ASX_OK); }
     s->server_state = ASX_GEN_SERVER_STOPPED;
     s->alive = 0u;
     return ASX_OK;
@@ -181,9 +179,7 @@ asx_status asx_gen_server_poll(asx_gen_server_ref ref) {
         }
         break;
     case ASX_GEN_SERVER_MSG_STOP:
-        if (s->callbacks.terminate != NULL) {
-            s->callbacks.terminate(s->state, ASX_OK);
-        }
+        if (s->callbacks.terminate != NULL) { s->callbacks.terminate(s->state, ASX_OK); }
         s->server_state = ASX_GEN_SERVER_STOPPED;
         s->alive = 0u;
         gs_dequeue(s);
@@ -249,7 +245,7 @@ uint32_t asx_gen_server_casts_handled(asx_gen_server_ref ref) {
 }
 
 asx_status asx_gen_server_start_named(asx_gen_server_ref *out, const char *name,
-                                        const asx_gen_server_callbacks *callbacks, void *init_args) {
+                                      const asx_gen_server_callbacks *callbacks, void *init_args) {
     asx_status st;
     gen_server_slot *s;
 

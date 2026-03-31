@@ -97,7 +97,7 @@ static asx_witness_slot *witness_find(asx_cancel_witness_id w) {
 static uint32_t g_witness_next_id = 1;
 
 asx_status asx_cancel_witness_create(asx_cancel_witness_id *out, asx_task_id task,
-                                      const asx_cancel_reason *reason) {
+                                     const asx_cancel_reason *reason) {
     uint32_t i;
     asx_witness_slot *s;
 
@@ -161,9 +161,7 @@ asx_status asx_cancel_witness_reason(asx_cancel_witness_id w, asx_cancel_reason 
     return ASX_OK;
 }
 
-int asx_cancel_witness_is_valid(asx_cancel_witness_id w) {
-    return witness_find(w) != NULL;
-}
+int asx_cancel_witness_is_valid(asx_cancel_witness_id w) { return witness_find(w) != NULL; }
 
 /* -------------------------------------------------------------------
  * User-facing cancellation request

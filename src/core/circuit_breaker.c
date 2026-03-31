@@ -41,12 +41,9 @@ asx_status asx_breaker_allow(asx_circuit_breaker *cb) {
     cb->total_calls++;
 
     switch (cb->state) {
-    case ASX_BREAKER_CLOSED:
-        return ASX_OK;
+    case ASX_BREAKER_CLOSED: return ASX_OK;
 
-    case ASX_BREAKER_OPEN:
-        cb->total_rejected++;
-        return ASX_E_ADMISSION_CLOSED;
+    case ASX_BREAKER_OPEN: cb->total_rejected++; return ASX_E_ADMISSION_CLOSED;
 
     case ASX_BREAKER_HALF_OPEN:
         if (cb->half_open_active >= cb->config.half_open_max_calls) {
@@ -64,9 +61,7 @@ void asx_breaker_record_success(asx_circuit_breaker *cb) {
     if (cb == NULL) return;
 
     switch (cb->state) {
-    case ASX_BREAKER_CLOSED:
-        cb->failure_count = 0;
-        break;
+    case ASX_BREAKER_CLOSED: cb->failure_count = 0; break;
 
     case ASX_BREAKER_HALF_OPEN:
         cb->success_count++;
@@ -80,8 +75,7 @@ void asx_breaker_record_success(asx_circuit_breaker *cb) {
         }
         break;
 
-    case ASX_BREAKER_OPEN:
-        break; /* ignore success in OPEN (shouldn't happen) */
+    case ASX_BREAKER_OPEN: break; /* ignore success in OPEN (shouldn't happen) */
     }
 }
 
@@ -105,8 +99,7 @@ void asx_breaker_record_failure(asx_circuit_breaker *cb) {
         if (cb->half_open_active > 0) cb->half_open_active--;
         break;
 
-    case ASX_BREAKER_OPEN:
-        break;
+    case ASX_BREAKER_OPEN: break;
     }
 }
 

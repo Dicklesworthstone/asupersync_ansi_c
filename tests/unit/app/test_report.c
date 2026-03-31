@@ -174,8 +174,7 @@ static void test_doctor_json_healthy(void) {
     ASSERT(strstr(asx_report_buf_cstr(&buf), "{\"checks\":[") != NULL, "starts with checks array");
     ASSERT(strstr(asx_report_buf_cstr(&buf), "\"name\":\"io_driver\"") != NULL,
            "io driver in JSON");
-    ASSERT(strstr(asx_report_buf_cstr(&buf), "\"name\":\"blocking\"") != NULL,
-           "blocking in JSON");
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "\"name\":\"blocking\"") != NULL, "blocking in JSON");
     ASSERT(strstr(asx_report_buf_cstr(&buf), "\"overall\":\"OK\"") != NULL, "overall OK in JSON");
 
     asx_runtime_shutdown(&rt);
@@ -266,8 +265,7 @@ static void test_evidence_json_escapes_strings(void) {
     asx_report_buf buf;
 
     asx_evidence_sink_init(&sink);
-    MUST_OK(asx_evidence_record(&sink, "obs\"core\\pipe", ASX_EVIDENCE_WARN,
-                                "bad\tline\nnext", 0));
+    MUST_OK(asx_evidence_record(&sink, "obs\"core\\pipe", ASX_EVIDENCE_WARN, "bad\tline\nnext", 0));
 
     asx_report_buf_init(&buf);
     MUST_OK(asx_report_evidence_json(&sink, &buf));

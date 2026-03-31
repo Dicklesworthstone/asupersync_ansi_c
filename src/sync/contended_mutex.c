@@ -17,7 +17,7 @@ typedef struct {
     asx_mutex_handle inner;
     uint64_t acquisitions;
     uint64_t contentions;
-    uint64_t current_run;         /* current consecutive contention streak */
+    uint64_t current_run; /* current consecutive contention streak */
     uint64_t max_contention_run;
 } cm_slot;
 
@@ -92,9 +92,7 @@ asx_status asx_contended_mutex_try_lock(asx_contended_mutex_handle handle, asx_m
     } else if (st == ASX_E_WOULD_BLOCK) {
         s->contentions++;
         s->current_run++;
-        if (s->current_run > s->max_contention_run) {
-            s->max_contention_run = s->current_run;
-        }
+        if (s->current_run > s->max_contention_run) { s->max_contention_run = s->current_run; }
     }
     return st;
 }
@@ -103,24 +101,22 @@ asx_status asx_contended_mutex_try_lock(asx_contended_mutex_handle handle, asx_m
 /* Unlock (delegates to mutex)                                         */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_contended_mutex_unlock(asx_mutex_guard guard) {
-    return asx_mutex_unlock(guard);
-}
+asx_status asx_contended_mutex_unlock(asx_mutex_guard guard) { return asx_mutex_unlock(guard); }
 
 /* ------------------------------------------------------------------ */
 /* Async lock (instrumented)                                           */
 /* ------------------------------------------------------------------ */
 
 asx_status asx_contended_mutex_lock_begin(asx_contended_mutex_handle handle,
-                                           asx_mutex_lock_waiter *out) {
+                                          asx_mutex_lock_waiter *out) {
     cm_slot *s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
     return asx_mutex_lock_begin(s->inner, out);
 }
 
 asx_status asx_contended_mutex_poll_lock(asx_contended_mutex_handle handle,
-                                          asx_mutex_lock_waiter *waiter, asx_mutex_guard *out,
-                                          asx_cx *cx) {
+                                         asx_mutex_lock_waiter *waiter, asx_mutex_guard *out,
+                                         asx_cx *cx) {
     cm_slot *s = slot_lookup(handle.slot, handle.generation);
     asx_status st;
     if (s == NULL) return ASX_E_STALE_HANDLE;
@@ -132,9 +128,7 @@ asx_status asx_contended_mutex_poll_lock(asx_contended_mutex_handle handle,
     } else if (st == ASX_E_PENDING) {
         s->contentions++;
         s->current_run++;
-        if (s->current_run > s->max_contention_run) {
-            s->max_contention_run = s->current_run;
-        }
+        if (s->current_run > s->max_contention_run) { s->max_contention_run = s->current_run; }
     }
     return st;
 }
@@ -148,7 +142,7 @@ asx_status asx_contended_mutex_lock_cancel(asx_mutex_lock_waiter *waiter) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_contended_mutex_metrics(asx_contended_mutex_handle handle,
-                                        asx_lock_metrics_snapshot *out) {
+                                       asx_lock_metrics_snapshot *out) {
     cm_slot *s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -187,9 +181,7 @@ int asx_contended_mutex_is_locked(asx_contended_mutex_handle handle) {
 void asx_contended_mutex_reset(void) {
     uint32_t i;
     for (i = 0; i < g_slot_count; i++) {
-        if (g_slots[i].alive) {
-            asx_mutex_close(g_slots[i].inner);
-        }
+        if (g_slots[i].alive) { asx_mutex_close(g_slots[i].inner); }
         g_slots[i].generation = next_gen(g_slots[i].generation);
         g_slots[i].alive = 0;
         g_slots[i].acquisitions = 0;

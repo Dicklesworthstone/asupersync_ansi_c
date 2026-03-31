@@ -60,14 +60,10 @@ void asx_cli_config_from_env(asx_cli_config *cfg) {
     }
 
     val = getenv("ASX_VERBOSE");
-    if (val != NULL && (strcmp(val, "1") == 0 || strcmp(val, "true") == 0)) {
-        cfg->verbose = 1u;
-    }
+    if (val != NULL && (strcmp(val, "1") == 0 || strcmp(val, "true") == 0)) { cfg->verbose = 1u; }
 
     val = getenv("ASX_QUIET");
-    if (val != NULL && (strcmp(val, "1") == 0 || strcmp(val, "true") == 0)) {
-        cfg->quiet = 1u;
-    }
+    if (val != NULL && (strcmp(val, "1") == 0 || strcmp(val, "true") == 0)) { cfg->quiet = 1u; }
 }
 
 int asx_cli_should_colorize(const asx_cli_config *cfg) {
@@ -133,16 +129,12 @@ void asx_cli_report_error(const char *context, asx_status error) {
 }
 
 void asx_cli_report_warning(const char *message) {
-    if (message != NULL) {
-        fprintf(stderr, "warning: %s\n", message);
-    }
+    if (message != NULL) { fprintf(stderr, "warning: %s\n", message); }
 }
 
 void asx_cli_report_info(const asx_cli_config *cfg, const char *message) {
     if (cfg != NULL && cfg->quiet) return;
-    if (message != NULL) {
-        fprintf(stderr, "info: %s\n", message);
-    }
+    if (message != NULL) { fprintf(stderr, "info: %s\n", message); }
 }
 
 /* ------------------------------------------------------------------ */

@@ -10,11 +10,11 @@
 #ifndef ASX_TRACING_COMPAT_TRACING_COMPAT_H
 #define ASX_TRACING_COMPAT_TRACING_COMPAT_H
 
-#include <asx/asx_config.h>
 #include <asx/app/report.h>
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 
-#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE || \
+#if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE ||                                      \
     defined(ASX_INTERNAL_TRACE_FAMILY_ACCESS)
 
 #include <asx/runtime/trace.h>
@@ -35,8 +35,9 @@ ASX_API ASX_MUST_USE asx_status asx_tracing_compat_emit_event(const asx_trace_ev
                                                               void *user_data);
 
 /* Emit a tracing-compatible span event. */
-ASX_API ASX_MUST_USE asx_status asx_tracing_compat_export_current(
-    asx_tracing_compat_sink_fn sink, void *user_data, uint32_t *out_count);
+ASX_API ASX_MUST_USE asx_status asx_tracing_compat_export_current(asx_tracing_compat_sink_fn sink,
+                                                                  void *user_data,
+                                                                  uint32_t *out_count);
 
 #ifdef __cplusplus
 }

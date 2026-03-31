@@ -61,7 +61,7 @@ typedef struct {
 typedef struct {
     asx_runtime_config active; /* Currently active config */
     asx_leak_escalation_config leak_escalation_storage;
-    int loaded;                /* 1 if config has been loaded */
+    int loaded; /* 1 if config has been loaded */
     int has_leak_escalation;
 } asx_config_state;
 

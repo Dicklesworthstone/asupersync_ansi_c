@@ -26,9 +26,7 @@ TEST(version_str) {
     ASSERT_STR_EQ(s, "0.1.0");
 }
 
-TEST(wire_format_version) {
-    ASSERT_EQ(asx_wire_format_version(), 1u);
-}
+TEST(wire_format_version) { ASSERT_EQ(asx_wire_format_version(), 1u); }
 
 /* ------------------------------------------------------------------ */
 /* Compatibility checking                                              */
@@ -42,17 +40,11 @@ TEST(compat_level_str) {
     ASSERT_STR_EQ(asx_compat_level_str((asx_compat_level)99), "unknown");
 }
 
-TEST(check_wire_compat_current) {
-    ASSERT_EQ(asx_check_wire_compat(1), ASX_COMPAT_FULL);
-}
+TEST(check_wire_compat_current) { ASSERT_EQ(asx_check_wire_compat(1), ASX_COMPAT_FULL); }
 
-TEST(check_wire_compat_older) {
-    ASSERT_EQ(asx_check_wire_compat(0), ASX_COMPAT_FORWARD);
-}
+TEST(check_wire_compat_older) { ASSERT_EQ(asx_check_wire_compat(0), ASX_COMPAT_FORWARD); }
 
-TEST(check_wire_compat_future) {
-    ASSERT_EQ(asx_check_wire_compat(999), ASX_COMPAT_INCOMPATIBLE);
-}
+TEST(check_wire_compat_future) { ASSERT_EQ(asx_check_wire_compat(999), ASX_COMPAT_INCOMPATIBLE); }
 
 /* ------------------------------------------------------------------ */
 /* Migration reports                                                   */

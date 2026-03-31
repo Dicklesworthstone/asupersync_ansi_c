@@ -368,9 +368,7 @@ asx_status asx_minimize_run(asx_minimize_state *state) {
 
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    do {
-        st = asx_minimize_step(state);
-    } while (st == ASX_E_PENDING);
+    do { st = asx_minimize_step(state); } while (st == ASX_E_PENDING);
 
     return st;
 }

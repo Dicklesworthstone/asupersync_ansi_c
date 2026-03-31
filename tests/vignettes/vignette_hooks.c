@@ -86,7 +86,9 @@ static asx_status native_poll_reactor(void *ctx, uint64_t logical_step, uint32_t
 
     (void)logical_step;
 
-    if (native == NULL || ready_count == NULL || native->read_fd < 0) { return ASX_E_INVALID_ARGUMENT; }
+    if (native == NULL || ready_count == NULL || native->read_fd < 0) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
 
     pfd.fd = native->read_fd;
     pfd.events = POLLIN;

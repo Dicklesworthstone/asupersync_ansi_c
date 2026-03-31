@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![1364 API declarations](https://img.shields.io/badge/public%20API-1%2C364%20declarations-blue)
+![1359 API declarations](https://img.shields.io/badge/public%20API-1%2C359%20declarations-blue)
 ![194 test programs](https://img.shields.io/badge/tests-194%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. 1,364 exported `ASX_API` declarations across 37 public header families, backed by 194 C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. 1,359 exported `ASX_API` declarations across 37 public header families, backed by 194 C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Install</h3>
@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/asupersync_ansi_c
 
 | Feature | What It Gives You |
 |---|---|
-| **1,364 exported `ASX_API` declarations across 37 header families** | Full async runtime: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **1,359 exported `ASX_API` declarations across 37 header families** | Full async runtime: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Reproduce production failures exactly; diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and bounded cleanup budgets |
@@ -1739,7 +1739,7 @@ Usually slightly, depending on workload and trace settings. In exchange you gain
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: 1,364 exported `ASX_API` declarations across 37
+Yes. The C API is first-class: 1,359 exported `ASX_API` declarations across 37
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. CLI
 tooling is operational scaffolding around the same runtime and conformance

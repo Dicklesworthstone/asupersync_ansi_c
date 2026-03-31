@@ -46,8 +46,8 @@ asx_profile_id asx_profile_active(void) {
  * ------------------------------------------------------------------- */
 
 static const char *g_profile_names[ASX_PROFILE_ID_COUNT] = {
-    "CORE",    "POSIX", "WIN32",      "FREESTANDING", "EMBEDDED_ROUTER",
-    "HFT",     "AUTOMOTIVE", "PARALLEL", "BROWSER"};
+    "CORE", "POSIX",      "WIN32",    "FREESTANDING", "EMBEDDED_ROUTER",
+    "HFT",  "AUTOMOTIVE", "PARALLEL", "BROWSER"};
 
 const char *asx_profile_name(asx_profile_id id) {
     if ((int)id < 0 || (int)id >= ASX_PROFILE_ID_COUNT) { return "UNKNOWN"; }

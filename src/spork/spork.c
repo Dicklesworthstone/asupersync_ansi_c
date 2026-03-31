@@ -183,7 +183,8 @@ void asx_spork_pipeline_init(asx_spork_pipeline *pipe) {
     memset(pipe, 0, sizeof(*pipe));
 }
 
-asx_status asx_spork_pipeline_add_stage(asx_spork_pipeline *pipe, asx_spork_stage_fn fn, void *user_data) {
+asx_status asx_spork_pipeline_add_stage(asx_spork_pipeline *pipe, asx_spork_stage_fn fn,
+                                        void *user_data) {
     if (pipe == NULL || fn == NULL) { return ASX_E_INVALID_ARGUMENT; }
     if (pipe->stage_count >= ASX_SPORK_PIPELINE_MAX_STAGES) { return ASX_E_RESOURCE_EXHAUSTED; }
 
@@ -193,8 +194,8 @@ asx_status asx_spork_pipeline_add_stage(asx_spork_pipeline *pipe, asx_spork_stag
     return ASX_OK;
 }
 
-asx_status asx_spork_pipeline_execute(const asx_spork_pipeline *pipe, void *initial_input, void *final_output,
-                                void *scratch) {
+asx_status asx_spork_pipeline_execute(const asx_spork_pipeline *pipe, void *initial_input,
+                                      void *final_output, void *scratch) {
     uint32_t i;
     void *current_input = initial_input;
     void *current_output;

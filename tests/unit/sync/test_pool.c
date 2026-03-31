@@ -119,7 +119,7 @@ TEST(acquire_reuses_returned_resource) {
 
     ASSERT_EQ(asx_pool_try_acquire(h, &pr2), ASX_OK);
     ASSERT_EQ(pr2.resource, first_resource); /* same resource reused */
-    ASSERT_EQ(create_count, 1); /* only created once */
+    ASSERT_EQ(create_count, 1);              /* only created once */
 
     ASSERT_EQ(asx_pool_return(&pr2), ASX_OK);
     asx_pool_close(h);
@@ -174,8 +174,8 @@ TEST(health_check_rejects_unhealthy) {
 
     /* Next acquire should fail health check, create new resource */
     ASSERT_EQ(asx_pool_try_acquire(h, &pr2), ASX_OK);
-    ASSERT_EQ(health_count, 1); /* health check was called */
-    ASSERT_EQ(create_count, 2); /* new resource was created */
+    ASSERT_EQ(health_count, 1);  /* health check was called */
+    ASSERT_EQ(create_count, 2);  /* new resource was created */
     ASSERT_EQ(destroy_count, 1); /* unhealthy one was destroyed */
 
     asx_pool_get_stats(h, &stats);
@@ -261,13 +261,9 @@ TEST(pool_arena_exhaustion) {
     asx_pool_config cfg = basic_config(1);
     uint32_t i;
     setup();
-    for (i = 0; i < ASX_POOL_MAX; i++) {
-        ASSERT_EQ(asx_pool_create(&cfg, &handles[i]), ASX_OK);
-    }
+    for (i = 0; i < ASX_POOL_MAX; i++) { ASSERT_EQ(asx_pool_create(&cfg, &handles[i]), ASX_OK); }
     ASSERT_EQ(asx_pool_create(&cfg, &overflow), ASX_E_RESOURCE_EXHAUSTED);
-    for (i = 0; i < ASX_POOL_MAX; i++) {
-        asx_pool_close(handles[i]);
-    }
+    for (i = 0; i < ASX_POOL_MAX; i++) { asx_pool_close(handles[i]); }
 }
 
 /* ------------------------------------------------------------------ */

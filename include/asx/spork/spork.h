@@ -34,14 +34,13 @@ typedef asx_status (*asx_work_fn)(void *user_data, void *result);
 typedef struct {
     asx_work_fn fn;
     void *user_data;
-    void *result;        /* pointer to result storage (caller-provided) */
-    asx_status status;   /* outcome status */
-    int completed;       /* nonzero when work is done */
+    void *result;      /* pointer to result storage (caller-provided) */
+    asx_status status; /* outcome status */
+    int completed;     /* nonzero when work is done */
 } asx_work_item;
 
 /* Initialize a work item. result must point to caller-owned storage. */
-ASX_API void asx_work_item_init(asx_work_item *item, asx_work_fn fn, void *user_data,
-                                void *result);
+ASX_API void asx_work_item_init(asx_work_item *item, asx_work_fn fn, void *user_data, void *result);
 
 /* Execute a work item synchronously. */
 ASX_API ASX_MUST_USE asx_status asx_work_item_execute(asx_work_item *item);
@@ -66,7 +65,7 @@ ASX_API void asx_work_pool_init(asx_work_pool *pool);
 
 /* Add a work item to the pool. */
 ASX_API ASX_MUST_USE asx_status asx_work_pool_add(asx_work_pool *pool, asx_work_fn fn,
-                                                    void *user_data, void *result);
+                                                  void *user_data, void *result);
 
 /* Execute all work items in the pool sequentially.
  * Returns ASX_OK if all items succeed, or the first error encountered. */
@@ -139,7 +138,7 @@ ASX_API void asx_scatter_gather_init(asx_scatter_gather *sg);
 
 /* Add a work item to scatter. */
 ASX_API ASX_MUST_USE asx_status asx_scatter_gather_add(asx_scatter_gather *sg, asx_work_fn fn,
-                                                        void *user_data, void *result);
+                                                       void *user_data, void *result);
 
 /* Execute all scatter items and gather results.
  * Returns ASX_OK if all succeed, or the first error. */
@@ -174,8 +173,8 @@ ASX_API void asx_spork_pipeline_init(asx_spork_pipeline *pipe);
 
 /* Add a stage to the spork pipeline. */
 ASX_API ASX_MUST_USE asx_status asx_spork_pipeline_add_stage(asx_spork_pipeline *pipe,
-                                                              asx_spork_stage_fn fn,
-                                                              void *user_data);
+                                                             asx_spork_stage_fn fn,
+                                                             void *user_data);
 
 /* Execute the pipeline, feeding output of each stage as input to the next.
  * initial_input is fed to the first stage.
@@ -183,8 +182,8 @@ ASX_API ASX_MUST_USE asx_status asx_spork_pipeline_add_stage(asx_spork_pipeline 
  * scratch is a buffer used for intermediate results between stages.
  * Returns ASX_OK if all stages succeed, or the first error. */
 ASX_API ASX_MUST_USE asx_status asx_spork_pipeline_execute(const asx_spork_pipeline *pipe,
-                                                            void *initial_input,
-                                                            void *final_output, void *scratch);
+                                                           void *initial_input, void *final_output,
+                                                           void *scratch);
 
 /* Return the number of stages. */
 ASX_API uint32_t asx_spork_pipeline_stage_count(const asx_spork_pipeline *pipe);

@@ -11,9 +11,7 @@
 #include <string.h>
 
 #if ASX_HAS_GRPC_SURFACE
-static int grpc_surface_available(void) {
-    return asx_surface_available_active(ASX_SURFACE_GRPC);
-}
+static int grpc_surface_available(void) { return asx_surface_available_active(ASX_SURFACE_GRPC); }
 
 /* ------------------------------------------------------------------ */
 /* Test handler                                                        */

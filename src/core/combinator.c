@@ -464,8 +464,8 @@ asx_status asx_race_timeout_init(asx_race_timeout_state *state, uint64_t timeout
     return ASX_OK;
 }
 
-asx_status asx_race_timeout_add(asx_race_timeout_state *state,
-                                 asx_combinator_poll_fn poll_fn, void *user_data) {
+asx_status asx_race_timeout_add(asx_race_timeout_state *state, asx_combinator_poll_fn poll_fn,
+                                void *user_data) {
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     return asx_race_add(&state->race, poll_fn, user_data);
 }
@@ -527,9 +527,8 @@ asx_status asx_race_timeout_poll(void *user_data, asx_task_id self) {
 /* Retry with timeout                                                  */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_retry_timeout_init(asx_retry_timeout_state *state,
-                                   asx_combinator_poll_fn poll_fn, void *user_data,
-                                   uint32_t max_retries, uint64_t timeout_ns) {
+asx_status asx_retry_timeout_init(asx_retry_timeout_state *state, asx_combinator_poll_fn poll_fn,
+                                  void *user_data, uint32_t max_retries, uint64_t timeout_ns) {
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     if (poll_fn == NULL) return ASX_E_INVALID_ARGUMENT;
 
@@ -561,9 +560,7 @@ asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self) {
     /* Lazy deadline init on first poll */
     if (!state->deadline_initialized) {
         st = asx_deadline_after(&state->deadline, state->timeout_ns);
-        if (st != ASX_OK) {
-            memset(&state->deadline, 0, sizeof(state->deadline));
-        }
+        if (st != ASX_OK) { memset(&state->deadline, 0, sizeof(state->deadline)); }
         state->deadline_initialized = 1;
     }
 

@@ -45,9 +45,7 @@ static asx_stream_result scripted_int_poll(void *state, const asx_waker *waker, 
 
     {
         size_t idx = ss->index++;
-        if (ss->results[idx] == ASX_STREAM_READY) {
-            *out_item = (void *)&ss->values[idx];
-        }
+        if (ss->results[idx] == ASX_STREAM_READY) { *out_item = (void *)&ss->values[idx]; }
         return ss->results[idx];
     }
 }
@@ -708,7 +706,8 @@ TEST(peekable_double_peek) {
 
 static int inspect_count;
 static void inspect_counter(const void *item, void *user_data) {
-    (void)item; (void)user_data;
+    (void)item;
+    (void)user_data;
     inspect_count++;
 }
 
@@ -817,9 +816,14 @@ TEST(collect_overflow) {
 static int fuse_bogus_state;
 static int fuse_bogus_val;
 static asx_stream_result fuse_bogus_poll(void *state, const asx_waker *waker, void **out_item) {
-    (void)state; (void)waker;
+    (void)state;
+    (void)waker;
     fuse_bogus_state++;
-    if (fuse_bogus_state == 1) { fuse_bogus_val = 10; *out_item = &fuse_bogus_val; return ASX_STREAM_READY; }
+    if (fuse_bogus_state == 1) {
+        fuse_bogus_val = 10;
+        *out_item = &fuse_bogus_val;
+        return ASX_STREAM_READY;
+    }
     if (fuse_bogus_state == 2) return ASX_STREAM_DONE;
     /* Bug: yields again after DONE */
     fuse_bogus_val = 99;

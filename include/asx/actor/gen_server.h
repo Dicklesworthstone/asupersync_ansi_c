@@ -36,8 +36,7 @@ extern "C" {
 typedef asx_status (*asx_gen_server_init_fn)(void *args, void **out_state);
 
 /* Handle call (synchronous request/reply). */
-typedef asx_status (*asx_gen_server_handle_call_fn)(void *state, uint64_t request,
-                                                     uint64_t *reply);
+typedef asx_status (*asx_gen_server_handle_call_fn)(void *state, uint64_t request, uint64_t *reply);
 
 /* Handle cast (asynchronous one-way message). */
 typedef asx_status (*asx_gen_server_handle_cast_fn)(void *state, uint64_t message);
@@ -57,7 +56,7 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_GEN_SERVER_IDLE    = 0,
+    ASX_GEN_SERVER_IDLE = 0,
     ASX_GEN_SERVER_RUNNING = 1,
     ASX_GEN_SERVER_STOPPED = 2
 } asx_gen_server_state;
@@ -86,12 +85,12 @@ typedef struct {
 
 /* Start a gen_server with the given callback module and init args. */
 ASX_API ASX_MUST_USE asx_status asx_gen_server_start(asx_gen_server_ref *out,
-                                                       const asx_gen_server_callbacks *callbacks,
-                                                       void *init_args);
+                                                     const asx_gen_server_callbacks *callbacks,
+                                                     void *init_args);
 
 /* Send a synchronous call. Blocks (polls) until reply is available. */
 ASX_API ASX_MUST_USE asx_status asx_gen_server_call(asx_gen_server_ref ref, uint64_t request,
-                                                      uint64_t *reply);
+                                                    uint64_t *reply);
 
 /* Send an asynchronous cast (fire-and-forget). */
 ASX_API ASX_MUST_USE asx_status asx_gen_server_cast(asx_gen_server_ref ref, uint64_t message);
@@ -127,9 +126,9 @@ ASX_API uint32_t asx_gen_server_calls_handled(asx_gen_server_ref ref);
 ASX_API uint32_t asx_gen_server_casts_handled(asx_gen_server_ref ref);
 
 /* Start a named gen_server. */
-ASX_API ASX_MUST_USE asx_status asx_gen_server_start_named(asx_gen_server_ref *out, const char *name,
-                                                              const asx_gen_server_callbacks *callbacks,
-                                                              void *init_args);
+ASX_API ASX_MUST_USE asx_status
+asx_gen_server_start_named(asx_gen_server_ref *out, const char *name,
+                           const asx_gen_server_callbacks *callbacks, void *init_args);
 
 /* Reset all gen_server state (test support). */
 ASX_API void asx_gen_server_reset(void);

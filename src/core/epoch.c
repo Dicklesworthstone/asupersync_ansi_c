@@ -159,15 +159,11 @@ asx_status asx_epoch_arrive(asx_epoch_handle handle, uint64_t entity_id) {
     /* Check if we should auto-advance */
     if (s->policy.mode == ASX_EPOCH_ADVANCE_BARRIER) {
         if (s->expected_arrivals > 0 && s->arrival_count >= s->expected_arrivals) {
-            if (s->policy.max_phases == 0 || s->phase + 1 < s->policy.max_phases) {
-                do_advance(s);
-            }
+            if (s->policy.max_phases == 0 || s->phase + 1 < s->policy.max_phases) { do_advance(s); }
         }
     } else if (s->policy.mode == ASX_EPOCH_ADVANCE_THRESHOLD) {
         if (s->arrival_count >= s->policy.threshold) {
-            if (s->policy.max_phases == 0 || s->phase + 1 < s->policy.max_phases) {
-                do_advance(s);
-            }
+            if (s->policy.max_phases == 0 || s->phase + 1 < s->policy.max_phases) { do_advance(s); }
         }
     }
 
@@ -184,8 +180,7 @@ uint32_t asx_epoch_arrival_count(asx_epoch_handle handle) {
 /* Observers                                                           */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_epoch_observe(asx_epoch_handle handle, asx_epoch_observer_fn fn,
-                              void *user_data) {
+asx_status asx_epoch_observe(asx_epoch_handle handle, asx_epoch_observer_fn fn, void *user_data) {
     asx_epoch_slot *s = slot_get(handle);
     if (s == NULL) return ASX_E_NOT_FOUND;
     if (fn == NULL) return ASX_E_INVALID_ARGUMENT;

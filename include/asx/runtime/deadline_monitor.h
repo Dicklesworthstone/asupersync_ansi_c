@@ -55,21 +55,20 @@ typedef struct {
  * entity_id identifies the task/scope, margin_ns is how far past
  * the deadline (positive = amount overdue). user_data is from
  * registration. */
-typedef void (*asx_deadline_miss_fn)(uint64_t entity_id, uint64_t margin_ns,
-                                     void *user_data);
+typedef void (*asx_deadline_miss_fn)(uint64_t entity_id, uint64_t margin_ns, void *user_data);
 
 /* -------------------------------------------------------------------
  * Deadline monitor statistics
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint32_t total_registered;  /* total deadlines ever registered */
-    uint32_t active_count;      /* currently pending deadlines */
-    uint32_t met_count;         /* deadlines met */
-    uint32_t missed_count;      /* deadlines missed */
-    uint32_t cancelled_count;   /* deadlines cancelled */
-    int64_t worst_margin_ns;    /* most negative margin (worst miss) */
-    int64_t best_margin_ns;     /* most positive margin (best hit) */
+    uint32_t total_registered; /* total deadlines ever registered */
+    uint32_t active_count;     /* currently pending deadlines */
+    uint32_t met_count;        /* deadlines met */
+    uint32_t missed_count;     /* deadlines missed */
+    uint32_t cancelled_count;  /* deadlines cancelled */
+    int64_t worst_margin_ns;   /* most negative margin (worst miss) */
+    int64_t best_margin_ns;    /* most positive margin (best hit) */
 } asx_deadline_monitor_stats;
 
 /* -------------------------------------------------------------------
@@ -100,18 +99,17 @@ ASX_API int asx_deadline_monitor_is_initialized(void);
  * Returns ASX_E_INVALID_ARGUMENT if out_handle is NULL.
  * Returns ASX_E_INVALID_STATE if monitor is not initialized.
  * Returns ASX_E_RESOURCE_EXHAUSTED if no slots available. */
-ASX_API ASX_MUST_USE asx_status asx_deadline_monitor_register(
-    asx_time target_ns, uint64_t entity_id,
-    asx_deadline_miss_fn on_miss, void *user_data,
-    asx_deadline_monitor_handle *out_handle);
+ASX_API ASX_MUST_USE asx_status
+asx_deadline_monitor_register(asx_time target_ns, uint64_t entity_id, asx_deadline_miss_fn on_miss,
+                              void *user_data, asx_deadline_monitor_handle *out_handle);
 
 /* Cancel a pending deadline.
  * Safe to call on already-resolved deadlines (no-op).
  * Returns ASX_OK on success.
  * Returns ASX_E_INVALID_ARGUMENT if handle is NULL.
  * Returns ASX_E_NOT_FOUND for stale/unknown handles. */
-ASX_API ASX_MUST_USE asx_status asx_deadline_monitor_cancel(
-    const asx_deadline_monitor_handle *handle);
+ASX_API ASX_MUST_USE asx_status
+asx_deadline_monitor_cancel(const asx_deadline_monitor_handle *handle);
 
 /* Mark a deadline as met (task completed before deadline).
  * completion_ns: the time at which the task completed.
@@ -119,8 +117,8 @@ ASX_API ASX_MUST_USE asx_status asx_deadline_monitor_cancel(
  * Returns ASX_E_INVALID_ARGUMENT if handle is NULL.
  * Returns ASX_E_NOT_FOUND for stale/unknown handles.
  * Returns ASX_E_INVALID_STATE if deadline is not PENDING. */
-ASX_API ASX_MUST_USE asx_status asx_deadline_monitor_complete(
-    const asx_deadline_monitor_handle *handle, asx_time completion_ns);
+ASX_API ASX_MUST_USE asx_status
+asx_deadline_monitor_complete(const asx_deadline_monitor_handle *handle, asx_time completion_ns);
 
 /* -------------------------------------------------------------------
  * API: Check / evaluation
@@ -138,8 +136,8 @@ ASX_API uint32_t asx_deadline_monitor_check(asx_time now_ns);
 
 /* Get the state of a registered deadline.
  * Returns ASX_DEADLINE_CANCELLED for stale/unknown handles. */
-ASX_API asx_deadline_state asx_deadline_monitor_get_state(
-    const asx_deadline_monitor_handle *handle);
+ASX_API asx_deadline_state
+asx_deadline_monitor_get_state(const asx_deadline_monitor_handle *handle);
 
 /* Get the count of currently active (pending) deadlines. */
 ASX_API uint32_t asx_deadline_monitor_active_count(void);

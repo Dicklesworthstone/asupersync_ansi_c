@@ -293,8 +293,8 @@ typedef struct {
 
 /* Initialize a filter-map stream wrapping an inner stream. */
 ASX_API void asx_stream_filter_map_init(asx_stream *s, asx_stream_filter_map_state *state,
-                                         asx_stream inner, asx_stream_filter_map_fn fn,
-                                         void *user_data);
+                                        asx_stream inner, asx_stream_filter_map_fn fn,
+                                        void *user_data);
 
 /* ------------------------------------------------------------------ */
 /* TakeWhile combinator — yields while predicate holds                */
@@ -309,8 +309,8 @@ typedef struct {
 
 /* Create a take-while stream that yields items while the predicate holds. */
 ASX_API void asx_stream_take_while_init(asx_stream *s, asx_stream_take_while_state *state,
-                                         asx_stream inner, asx_stream_filter_fn predicate,
-                                         void *user_data);
+                                        asx_stream inner, asx_stream_filter_fn predicate,
+                                        void *user_data);
 
 /* ------------------------------------------------------------------ */
 /* Scan combinator — stateful map with accumulator                    */
@@ -327,7 +327,7 @@ typedef struct {
 
 /* Create a scan stream that applies an accumulating function to each item. */
 ASX_API void asx_stream_scan_init(asx_stream *s, asx_stream_scan_state *state, asx_stream inner,
-                                   asx_stream_scan_fn scan_fn, void *accumulator, void *user_data);
+                                  asx_stream_scan_fn scan_fn, void *accumulator, void *user_data);
 
 /* ------------------------------------------------------------------ */
 /* Peekable adapter — lookahead without consuming                     */
@@ -342,11 +342,11 @@ typedef struct {
 
 /* Initialize a peekable adapter wrapping an inner stream. */
 ASX_API void asx_stream_peekable_init(asx_stream *s, asx_stream_peekable_state *state,
-                                       asx_stream inner);
+                                      asx_stream inner);
 
 /* Poll for the next item without consuming it. */
 ASX_API asx_stream_result asx_stream_peek(asx_stream_peekable_state *state, const asx_waker *waker,
-                                           void **out_item);
+                                          void **out_item);
 
 /* ------------------------------------------------------------------ */
 /* Inspect combinator — observe items without modifying               */
@@ -362,8 +362,8 @@ typedef struct {
 
 /* Create an inspect stream that observes each item via a callback. */
 ASX_API void asx_stream_inspect_init(asx_stream *s, asx_stream_inspect_state *state,
-                                      asx_stream inner, asx_stream_inspect_fn inspect_fn,
-                                      void *user_data);
+                                     asx_stream inner, asx_stream_inspect_fn inspect_fn,
+                                     void *user_data);
 
 /* ------------------------------------------------------------------ */
 /* Any terminal                                                        */
@@ -371,7 +371,7 @@ ASX_API void asx_stream_inspect_init(asx_stream *s, asx_stream_inspect_state *st
 
 /* Check if any item matches the predicate (short-circuits on first match). */
 ASX_API ASX_MUST_USE asx_status asx_stream_any(asx_stream *s, asx_stream_filter_fn predicate,
-                                                void *user_data, int *out_result);
+                                               void *user_data, int *out_result);
 
 /* ------------------------------------------------------------------ */
 /* All terminal                                                        */
@@ -379,7 +379,7 @@ ASX_API ASX_MUST_USE asx_status asx_stream_any(asx_stream *s, asx_stream_filter_
 
 /* Check if all items match the predicate (short-circuits on first failure). */
 ASX_API ASX_MUST_USE asx_status asx_stream_all(asx_stream *s, asx_stream_filter_fn predicate,
-                                                void *user_data, int *out_result);
+                                               void *user_data, int *out_result);
 
 /* ------------------------------------------------------------------ */
 /* Collect terminal                                                    */
@@ -387,7 +387,7 @@ ASX_API ASX_MUST_USE asx_status asx_stream_all(asx_stream *s, asx_stream_filter_
 
 /* Collect stream items into a caller-provided buffer up to max_items. */
 ASX_API ASX_MUST_USE asx_status asx_stream_collect(asx_stream *s, void **buf, size_t max_items,
-                                                    size_t *out_count);
+                                                   size_t *out_count);
 
 /* ------------------------------------------------------------------ */
 /* Fuse combinator — once DONE, always DONE                           */
@@ -423,8 +423,8 @@ typedef struct {
 
 /* Batch items into chunks of chunk_size. The last chunk may be smaller.
  * Each poll_next yields a pointer to an asx_stream_chunk. */
-ASX_API void asx_stream_chunks_init(asx_stream *s, asx_stream_chunks_state *state,
-                                     asx_stream inner, size_t chunk_size);
+ASX_API void asx_stream_chunks_init(asx_stream *s, asx_stream_chunks_state *state, asx_stream inner,
+                                    size_t chunk_size);
 
 /* ------------------------------------------------------------------ */
 /* Throttle combinator — rate-limits items via token bucket           */
@@ -432,16 +432,16 @@ ASX_API void asx_stream_chunks_init(asx_stream *s, asx_stream_chunks_state *stat
 
 typedef struct {
     asx_stream inner;
-    uint64_t interval_ns;  /* minimum nanoseconds between items */
-    uint64_t last_yield;   /* timestamp of last yielded item */
-    int first;             /* 1 if no item has been yielded yet */
+    uint64_t interval_ns; /* minimum nanoseconds between items */
+    uint64_t last_yield;  /* timestamp of last yielded item */
+    int first;            /* 1 if no item has been yielded yet */
 } asx_stream_throttle_state;
 
 /* Rate-limit a stream to at most one item per interval_ns.
  * Items arriving too soon return ASX_STREAM_PENDING.
  * First item is always yielded immediately. */
 ASX_API void asx_stream_throttle_init(asx_stream *s, asx_stream_throttle_state *state,
-                                       asx_stream inner, uint64_t interval_ns);
+                                      asx_stream inner, uint64_t interval_ns);
 
 /* ------------------------------------------------------------------ */
 /* SkipWhile combinator — skips items while predicate holds           */
@@ -456,8 +456,8 @@ typedef struct {
 
 /* Create a skip-while stream that discards items while the predicate holds. */
 ASX_API void asx_stream_skip_while_init(asx_stream *s, asx_stream_skip_while_state *state,
-                                         asx_stream inner, asx_stream_filter_fn predicate,
-                                         void *user_data);
+                                        asx_stream inner, asx_stream_filter_fn predicate,
+                                        void *user_data);
 
 /* ------------------------------------------------------------------ */
 /* Flatten combinator — flattens a stream of streams                  */
@@ -473,7 +473,7 @@ typedef struct {
 
 /* Create a flatten stream that yields items from a stream of streams. */
 ASX_API void asx_stream_flatten_init(asx_stream *s, asx_stream_flatten_state *state,
-                                      asx_stream outer);
+                                     asx_stream outer);
 
 /* ------------------------------------------------------------------ */
 /* Dedup combinator — suppresses consecutive duplicate items          */
@@ -485,7 +485,7 @@ typedef struct {
     asx_stream inner;
     asx_stream_eq_fn eq_fn;
     void *user_data;
-    void *last_item;  /* pointer to last yielded item */
+    void *last_item; /* pointer to last yielded item */
     int has_last;
 } asx_stream_dedup_state;
 
@@ -493,8 +493,8 @@ typedef struct {
  * Requires that item pointers from the inner stream remain valid
  * across consecutive poll_next calls (true for iter/array-backed
  * streams; not guaranteed for streams that reuse a single buffer). */
-ASX_API void asx_stream_dedup_init(asx_stream *s, asx_stream_dedup_state *state,
-                                    asx_stream inner, asx_stream_eq_fn eq_fn, void *user_data);
+ASX_API void asx_stream_dedup_init(asx_stream *s, asx_stream_dedup_state *state, asx_stream inner,
+                                   asx_stream_eq_fn eq_fn, void *user_data);
 
 /* ------------------------------------------------------------------ */
 /* FlatMap combinator — map then flatten                              */
@@ -508,14 +508,13 @@ typedef struct {
     asx_stream inner;
     asx_stream_flat_map_fn fn;
     void *user_data;
-    asx_stream *current;  /* current sub-stream, or NULL */
+    asx_stream *current; /* current sub-stream, or NULL */
     int outer_done;
 } asx_stream_flat_map_state;
 
 /* Create a flat-map stream that maps each item to a sub-stream and flattens. */
 ASX_API void asx_stream_flat_map_init(asx_stream *s, asx_stream_flat_map_state *state,
-                                       asx_stream inner, asx_stream_flat_map_fn fn,
-                                       void *user_data);
+                                      asx_stream inner, asx_stream_flat_map_fn fn, void *user_data);
 
 /* ------------------------------------------------------------------ */
 /* Window combinator — sliding window of items                        */
@@ -535,7 +534,7 @@ typedef struct {
     asx_stream inner;
     size_t window_size;
     asx_stream_window current;
-    int filled;   /* 1 once window is full for first time */
+    int filled; /* 1 once window is full for first time */
     int inner_done;
 } asx_stream_window_state;
 
@@ -545,8 +544,8 @@ typedef struct {
  * Items are stored in a circular buffer: logical item i is at
  * items[(start + i) % count]. If stream is shorter than window_size,
  * a single partial window is yielded. */
-ASX_API void asx_stream_window_init(asx_stream *s, asx_stream_window_state *state,
-                                     asx_stream inner, size_t window_size);
+ASX_API void asx_stream_window_init(asx_stream *s, asx_stream_window_state *state, asx_stream inner,
+                                    size_t window_size);
 
 /* ------------------------------------------------------------------ */
 /* Nth terminal — get the nth item (0-indexed)                        */

@@ -236,9 +236,7 @@ TEST(ring_single_node_covers_all_keys) {
     asx_dist_ring_init(&ring);
     ASSERT_EQ(asx_dist_ring_build(&ring, &cluster), ASX_OK);
 
-    for (i = 0u; i < 100u; i++) {
-        ASSERT_EQ(asx_dist_ring_lookup(&ring, i * 12345u), n->id);
-    }
+    for (i = 0u; i < 100u; i++) { ASSERT_EQ(asx_dist_ring_lookup(&ring, i * 12345u), n->id); }
 }
 
 /* Edge case: node re-add after removal gets new ID */
@@ -295,8 +293,7 @@ TEST(snapshot_exhaustion) {
     for (i = 0; i < ASX_DIST_MAX_SNAPSHOTS; i++) {
         ASSERT_EQ(asx_dist_snapshot_create(&store, 1, "data", 4, &snap), ASX_OK);
     }
-    ASSERT_EQ(asx_dist_snapshot_create(&store, 1, "overflow", 8, &snap),
-              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_dist_snapshot_create(&store, 1, "overflow", 8, &snap), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 /* Edge case: recovery with no snapshots still completes */

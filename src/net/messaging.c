@@ -18,9 +18,7 @@ static size_t msg_bounded_strlen(const char *str, size_t max) {
     return max;
 }
 
-static asx_status messaging_surface_gate(void) {
-    return asx_surface_gate(ASX_SURFACE_MESSAGING);
-}
+static asx_status messaging_surface_gate(void) { return asx_surface_gate(ASX_SURFACE_MESSAGING); }
 
 void asx_msg_broker_config_init(asx_msg_broker_config *cfg) {
     if (cfg == NULL) return;
@@ -30,12 +28,9 @@ void asx_msg_broker_config_init(asx_msg_broker_config *cfg) {
 
 const char *asx_msg_backend_str(asx_msg_backend backend) {
     switch (backend) {
-        case ASX_MSG_BACKEND_MEMORY:
-            return "memory";
-        case ASX_MSG_BACKEND_KAFKA:
-            return "kafka";
-        default:
-            return "unknown";
+    case ASX_MSG_BACKEND_MEMORY: return "memory";
+    case ASX_MSG_BACKEND_KAFKA: return "kafka";
+    default: return "unknown";
     }
 }
 
@@ -131,18 +126,15 @@ asx_status asx_msg_broker_set_backend(asx_msg_broker *broker, asx_msg_backend ba
     if (broker == NULL) return ASX_E_INVALID_ARGUMENT;
 
     switch (backend) {
-        case ASX_MSG_BACKEND_MEMORY:
-            broker->config.backend = backend;
-            return ASX_OK;
-        case ASX_MSG_BACKEND_KAFKA:
+    case ASX_MSG_BACKEND_MEMORY: broker->config.backend = backend; return ASX_OK;
+    case ASX_MSG_BACKEND_KAFKA:
 #if ASX_HAS_MESSAGING_KAFKA_BACKEND
-            broker->config.backend = backend;
-            return ASX_OK;
+        broker->config.backend = backend;
+        return ASX_OK;
 #else
-            return ASX_E_PERMISSION_DENIED;
+        return ASX_E_PERMISSION_DENIED;
 #endif
-        default:
-            return ASX_E_INVALID_ARGUMENT;
+    default: return ASX_E_INVALID_ARGUMENT;
     }
 }
 

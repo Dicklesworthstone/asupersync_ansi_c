@@ -23,8 +23,8 @@ typedef struct {
 typedef struct {
     uint16_t generation;
     int alive;
-    uint32_t readers;       /* active reader count */
-    int write_locked;       /* 1 if a writer holds the lock */
+    uint32_t readers;         /* active reader count */
+    int write_locked;         /* 1 if a writer holds the lock */
     uint32_t writers_waiting; /* count of waiting writers (for preference) */
     rw_waiter_slot waiters[ASX_RWLOCK_MAX_WAITERS];
     uint32_t waiter_count;
@@ -149,8 +149,7 @@ asx_status asx_rwlock_read_begin(asx_rwlock_handle handle, asx_rwlock_waiter *ou
     return ASX_E_RESOURCE_EXHAUSTED;
 }
 
-asx_status asx_rwlock_poll_read(asx_rwlock_waiter *waiter, asx_rwlock_read_guard *out,
-                                 asx_cx *cx) {
+asx_status asx_rwlock_poll_read(asx_rwlock_waiter *waiter, asx_rwlock_read_guard *out, asx_cx *cx) {
     rw_slot *s;
     rw_waiter_slot *w;
 
@@ -224,7 +223,7 @@ asx_status asx_rwlock_write_begin(asx_rwlock_handle handle, asx_rwlock_waiter *o
 }
 
 asx_status asx_rwlock_poll_write(asx_rwlock_waiter *waiter, asx_rwlock_write_guard *out,
-                                  asx_cx *cx) {
+                                 asx_cx *cx) {
     rw_slot *s;
     rw_waiter_slot *w;
 
@@ -295,9 +294,7 @@ asx_status asx_rwlock_waiter_cancel(asx_rwlock_waiter *waiter) {
                 if (s->readers > 0) s->readers--;
             }
         }
-        if (w->is_write && s->writers_waiting > 0) {
-            s->writers_waiting--;
-        }
+        if (w->is_write && s->writers_waiting > 0) { s->writers_waiting--; }
         w->active = 0;
         s->waiter_count--;
     }
@@ -343,9 +340,7 @@ asx_status asx_rwlock_read_unlock(asx_rwlock_read_guard guard) {
     s->readers--;
 
     /* Only wake waiters when all readers have released */
-    if (s->readers == 0) {
-        wake_waiters(s);
-    }
+    if (s->readers == 0) { wake_waiters(s); }
 
     return ASX_OK;
 }

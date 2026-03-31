@@ -59,19 +59,15 @@ ASX_API ASX_MUST_USE const char *asx_raptorq_deferral_reason(void);
 /* Encode source data into source + repair symbols with XOR-based
  * erasure protection. Returns ASX_OK on success. */
 ASX_API ASX_MUST_USE asx_status asx_raptorq_encode(const asx_raptorq_config *cfg,
-                                                     const void *source_data,
-                                                     uint32_t source_len,
-                                                     void *out_symbols,
-                                                     uint32_t out_capacity,
-                                                     uint32_t *out_symbol_count);
+                                                   const void *source_data, uint32_t source_len,
+                                                   void *out_symbols, uint32_t out_capacity,
+                                                   uint32_t *out_symbol_count);
 
 /* Decode received symbols back to source data. */
 ASX_API ASX_MUST_USE asx_status asx_raptorq_decode(const asx_raptorq_config *cfg,
-                                                     const void *symbols,
-                                                     uint32_t symbol_count,
-                                                     void *out_data,
-                                                     uint32_t out_capacity,
-                                                     uint32_t *out_data_len);
+                                                   const void *symbols, uint32_t symbol_count,
+                                                   void *out_data, uint32_t out_capacity,
+                                                   uint32_t *out_data_len);
 
 #ifdef __cplusplus
 }

@@ -306,7 +306,9 @@ endif
 
 CLI_SRC := src/cli/cli.c
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(ENCODING_SRC) $(DECODING_SRC) $(RAPTORQ_SRC) $(MIGRATION_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(SERVICE_SRC) $(TRANSPORT_SRC) $(REMOTE_SRC) $(SPORK_SRC) $(CLI_SRC) $(PLATFORM_SRC)
+ABI_SRC := src/abi/wasm_abi.c
+
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(ENCODING_SRC) $(DECODING_SRC) $(RAPTORQ_SRC) $(MIGRATION_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(SERVICE_SRC) $(TRANSPORT_SRC) $(REMOTE_SRC) $(SPORK_SRC) $(ABI_SRC) $(CLI_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -385,7 +387,17 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/spork/*_test.c) \
                  $(wildcard tests/unit/spork/test_*.c) \
                  $(wildcard tests/unit/net/*_test.c) \
-                 $(wildcard tests/unit/net/test_*.c)
+                 $(wildcard tests/unit/net/test_*.c) \
+                 $(wildcard tests/unit/abi/*_test.c) \
+                 $(wildcard tests/unit/abi/test_*.c) \
+                 $(wildcard tests/unit/cli/*_test.c) \
+                 $(wildcard tests/unit/cli/test_*.c) \
+                 $(wildcard tests/unit/evidence_sink/*_test.c) \
+                 $(wildcard tests/unit/evidence_sink/test_*.c) \
+                 $(wildcard tests/unit/fuzz/*_test.c) \
+                 $(wildcard tests/unit/fuzz/test_*.c) \
+                 $(wildcard tests/unit/observability/*_test.c) \
+                 $(wildcard tests/unit/observability/test_*.c)
 UNIT_TEST_SRC := $(sort $(UNIT_TEST_SRC))
 
 INVARIANT_TEST_SRC := $(wildcard tests/invariant/lifecycle/*_test.c) \

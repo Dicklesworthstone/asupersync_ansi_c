@@ -25,17 +25,14 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_QUIC_STATE_IDLE        = 0,
-    ASX_QUIC_STATE_HANDSHAKE   = 1,
-    ASX_QUIC_STATE_CONNECTED   = 2,
-    ASX_QUIC_STATE_DRAINING    = 3,
-    ASX_QUIC_STATE_CLOSED      = 4
+    ASX_QUIC_STATE_IDLE = 0,
+    ASX_QUIC_STATE_HANDSHAKE = 1,
+    ASX_QUIC_STATE_CONNECTED = 2,
+    ASX_QUIC_STATE_DRAINING = 3,
+    ASX_QUIC_STATE_CLOSED = 4
 } asx_quic_state;
 
-typedef enum {
-    ASX_QUIC_STREAM_BIDI = 0,
-    ASX_QUIC_STREAM_UNI  = 1
-} asx_quic_stream_type;
+typedef enum { ASX_QUIC_STREAM_BIDI = 0, ASX_QUIC_STREAM_UNI = 1 } asx_quic_stream_type;
 
 #ifndef ASX_MAX_QUIC_CONNECTIONS
 #define ASX_MAX_QUIC_CONNECTIONS 4u
@@ -86,12 +83,10 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 /* Create a QUIC client connection (deterministic handshake). */
-ASX_API ASX_MUST_USE asx_status asx_quic_connect(asx_quic_conn *out,
-                                                   const asx_quic_config *cfg);
+ASX_API ASX_MUST_USE asx_status asx_quic_connect(asx_quic_conn *out, const asx_quic_config *cfg);
 
 /* Accept a QUIC server connection (deterministic handshake). */
-ASX_API ASX_MUST_USE asx_status asx_quic_accept(asx_quic_conn *out,
-                                                  const asx_quic_config *cfg);
+ASX_API ASX_MUST_USE asx_status asx_quic_accept(asx_quic_conn *out, const asx_quic_config *cfg);
 
 /* Get the current connection state. */
 ASX_API asx_quic_state asx_quic_conn_state(asx_quic_conn conn);
@@ -108,16 +103,16 @@ ASX_API int asx_quic_conn_is_alive(asx_quic_conn conn);
 
 /* Open a new stream on a connection. */
 ASX_API ASX_MUST_USE asx_status asx_quic_stream_open(asx_quic_stream *out, asx_quic_conn conn,
-                                                      asx_quic_stream_type stype);
+                                                     asx_quic_stream_type stype);
 
 /* Poll-read from a QUIC stream. */
 ASX_API ASX_MUST_USE asx_status asx_quic_stream_poll_read(asx_quic_stream stream, asx_buf_mut *dst,
-                                                           uint32_t *bytes_read);
+                                                          uint32_t *bytes_read);
 
 /* Poll-write to a QUIC stream. */
 ASX_API ASX_MUST_USE asx_status asx_quic_stream_poll_write(asx_quic_stream stream,
-                                                            const asx_buf *src,
-                                                            uint32_t *bytes_written);
+                                                           const asx_buf *src,
+                                                           uint32_t *bytes_written);
 
 /* Close a QUIC stream. */
 ASX_API asx_status asx_quic_stream_close(asx_quic_stream stream);
@@ -134,7 +129,7 @@ ASX_API ASX_MUST_USE asx_status asx_quic_send_datagram(asx_quic_conn conn, const
 
 /* Poll-receive a datagram from a QUIC connection. */
 ASX_API ASX_MUST_USE asx_status asx_quic_poll_recv_datagram(asx_quic_conn conn, asx_buf_mut *dst,
-                                                             uint32_t *bytes_read);
+                                                            uint32_t *bytes_read);
 
 /* -------------------------------------------------------------------
  * Reset (test support)

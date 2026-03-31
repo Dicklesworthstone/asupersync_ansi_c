@@ -148,11 +148,9 @@ TEST(broker_backend_variants) {
     asx_msg_broker_init(&broker);
     ASSERT_EQ(asx_msg_broker_set_backend(&broker, ASX_MSG_BACKEND_MEMORY), ASX_OK);
     ASSERT_EQ(broker.config.backend, ASX_MSG_BACKEND_MEMORY);
-    ASSERT_EQ(asx_msg_broker_set_backend(&broker, ASX_MSG_BACKEND_KAFKA),
-              ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_msg_broker_set_backend(&broker, ASX_MSG_BACKEND_KAFKA), ASX_E_PERMISSION_DENIED);
     ASSERT_EQ(broker.config.backend, ASX_MSG_BACKEND_MEMORY);
-    ASSERT_EQ(asx_msg_broker_set_backend(&broker, (asx_msg_backend)77),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_msg_broker_set_backend(&broker, (asx_msg_backend)77), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(broker_pubsub) {

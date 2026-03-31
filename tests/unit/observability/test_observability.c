@@ -95,9 +95,7 @@ TEST(get_returns_null_for_missing) {
     ASSERT_TRUE(asx_metrics_get(&g_m, "nope") == NULL);
 }
 
-TEST(get_null_metrics) {
-    ASSERT_TRUE(asx_metrics_get(NULL, "x") == NULL);
-}
+TEST(get_null_metrics) { ASSERT_TRUE(asx_metrics_get(NULL, "x") == NULL); }
 
 /* ================================================================== */
 /* Capacity                                                            */

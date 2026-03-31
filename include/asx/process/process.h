@@ -70,8 +70,8 @@ typedef struct {
 
 typedef enum {
     ASX_PROCESS_STDIO_INHERIT = 0,
-    ASX_PROCESS_STDIO_PIPED   = 1,
-    ASX_PROCESS_STDIO_NULL    = 2
+    ASX_PROCESS_STDIO_PIPED = 1,
+    ASX_PROCESS_STDIO_NULL = 2
 } asx_process_stdio;
 
 typedef struct {
@@ -105,7 +105,7 @@ ASX_API ASX_MUST_USE asx_status asx_process_command_arg(asx_process_command *cmd
 
 /* Set an environment variable. */
 ASX_API ASX_MUST_USE asx_status asx_process_command_env(asx_process_command *cmd, const char *key,
-                                                          const char *value);
+                                                        const char *value);
 
 /* Clear the environment before adding new variables. */
 ASX_API void asx_process_command_env_clear(asx_process_command *cmd);
@@ -126,7 +126,7 @@ ASX_API void asx_process_command_kill_on_drop(asx_process_command *cmd, uint8_t 
 
 /* Spawn from command builder. */
 ASX_API ASX_MUST_USE asx_status asx_process_command_spawn(const asx_process_command *cmd,
-                                                            asx_process_handle *out);
+                                                          asx_process_handle *out);
 
 /* -------------------------------------------------------------------
  * Process lifecycle (original API)
@@ -170,7 +170,7 @@ typedef struct {
 
 /* Wait for process to complete and capture all output. */
 ASX_API ASX_MUST_USE asx_status asx_process_wait_with_output(asx_process_handle process,
-                                                               asx_process_output *out);
+                                                             asx_process_output *out);
 
 /* Get the process ID (deterministic: slot index in core profile). */
 ASX_API uint32_t asx_process_id(asx_process_handle process);

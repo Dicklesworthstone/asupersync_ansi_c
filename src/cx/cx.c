@@ -22,9 +22,7 @@ static uint64_t cx_entropy_step(uint64_t *state) {
 
 static uint32_t g_cx_generation = 1u;
 
-static int cx_caps_subset(asx_cap_flags have, asx_cap_flags want) {
-    return (want & ~have) == 0u;
-}
+static int cx_caps_subset(asx_cap_flags have, asx_cap_flags want) { return (want & ~have) == 0u; }
 
 static asx_status cx_copy_with_caps(const asx_cx *parent, asx_cx *child, asx_cap_flags child_caps) {
     if (parent == NULL || child == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -131,7 +129,8 @@ asx_cap_flags asx_cx_caps(const asx_cx *cx) {
     return cx->caps;
 }
 
-asx_status asx_cx_wrap(const asx_cx *parent, asx_cap_flags child_caps, asx_cx_wrapper *out_wrapper) {
+asx_status asx_cx_wrap(const asx_cx *parent, asx_cap_flags child_caps,
+                       asx_cx_wrapper *out_wrapper) {
     if (parent == NULL || out_wrapper == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
     if (!cx_caps_subset(parent->caps, child_caps)) return ASX_E_INVALID_ARGUMENT;

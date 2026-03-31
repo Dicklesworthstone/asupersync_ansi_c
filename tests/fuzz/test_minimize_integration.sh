@@ -2,11 +2,12 @@
 # test_minimize_integration.sh — Integration tests for minimizer pipeline
 #
 # Tests:
-# 1. Self-tests pass (all 3 modes)
+# 1. Self-tests pass (all built-in modes)
 # 2. stdin-scenario mode works with generated scenarios
 # 3. Minimizer reduces ops via predicate (self-test 3 baseline)
 # 4. JSONL output is parseable
-# 5. End-to-end: fuzz_differential --minimize pipeline wired correctly
+# 5. seed+iteration replay path works
+# 6. End-to-end: fuzz_differential --minimize pipeline wired correctly
 #
 # Bead: bd-rkql.5
 
@@ -39,9 +40,9 @@ run_test() {
 
 # ---- Test 1: Self-tests ----
 test_selftests() {
-    "$MINIMIZE_BIN" --selftest 2>&1 | command grep -q "self-test 3 PASS"
+    "$MINIMIZE_BIN" --selftest 2>&1 | command grep -q "self-test 4 PASS"
 }
-run_test "all 3 self-tests pass" test_selftests
+run_test "all built-in self-tests pass" test_selftests
 
 # ---- Test 2: stdin-scenario mode ----
 test_stdin_scenario() {
@@ -114,6 +115,23 @@ assert ratio >= 0.5, f'reduction ratio {ratio:.2f} < 0.5 (need >50%)'
 run_test "self-test 3: >50% reduction" test_reduction_ratio
 
 # ---- Test 5: Pipeline wiring ----
+test_seed_iteration_replay() {
+    "$MINIMIZE_BIN" --initial-seed 424242 --iteration 7 --output "$TMPDIR_WORK/test5.json" \
+        2>/dev/null
+    python3 -c "
+import json
+with open('$TMPDIR_WORK/test5.json') as f:
+    d = json.loads(f.read())
+assert d['kind'] == 'minimized_scenario'
+assert d['seed'] > 0
+assert d['original_ops'] > 0
+assert d['minimized_ops'] > 0
+assert len(d['ops']) == d['minimized_ops']
+"
+}
+run_test "seed+iteration replay produces valid output" test_seed_iteration_replay
+
+# ---- Test 6: Pipeline wiring ----
 test_pipeline_wiring() {
     # Run differential harness with --minimize flag
     # Since there are no determinism failures, this just verifies the flag is accepted

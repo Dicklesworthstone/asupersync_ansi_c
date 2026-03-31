@@ -279,7 +279,7 @@ ASX_API asx_status asx_race_timeout_init(asx_race_timeout_state *state, uint64_t
 
 /* Add a branch to the race-with-timeout. */
 ASX_API asx_status asx_race_timeout_add(asx_race_timeout_state *state,
-                                         asx_combinator_poll_fn poll_fn, void *user_data);
+                                        asx_combinator_poll_fn poll_fn, void *user_data);
 
 /* Poll the race-with-timeout. Returns ASX_E_TIMED_OUT on deadline expiry. */
 ASX_API asx_status asx_race_timeout_poll(void *user_data, asx_task_id self);
@@ -307,8 +307,8 @@ typedef struct {
 
 /* Initialize a retry-with-timeout combinator. */
 ASX_API asx_status asx_retry_timeout_init(asx_retry_timeout_state *state,
-                                           asx_combinator_poll_fn poll_fn, void *user_data,
-                                           uint32_t max_retries, uint64_t timeout_ns);
+                                          asx_combinator_poll_fn poll_fn, void *user_data,
+                                          uint32_t max_retries, uint64_t timeout_ns);
 
 /* Poll the retry-with-timeout. Returns ASX_E_TIMED_OUT on overall deadline expiry. */
 ASX_API asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self);

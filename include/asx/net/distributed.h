@@ -53,11 +53,11 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_DIST_NODE_JOINING  = 0,
-    ASX_DIST_NODE_ACTIVE   = 1,
-    ASX_DIST_NODE_SUSPECT  = 2,
-    ASX_DIST_NODE_LEAVING  = 3,
-    ASX_DIST_NODE_DOWN     = 4
+    ASX_DIST_NODE_JOINING = 0,
+    ASX_DIST_NODE_ACTIVE = 1,
+    ASX_DIST_NODE_SUSPECT = 2,
+    ASX_DIST_NODE_LEAVING = 3,
+    ASX_DIST_NODE_DOWN = 4
 } asx_dist_node_state;
 
 typedef struct {
@@ -80,7 +80,7 @@ ASX_API void asx_dist_cluster_init(asx_dist_cluster *cluster);
 
 /* Add a node. */
 ASX_API asx_status asx_dist_cluster_add_node(asx_dist_cluster *cluster, const char *name,
-                                               asx_dist_node **out);
+                                             asx_dist_node **out);
 
 /* Remove a node by name. */
 ASX_API asx_status asx_dist_cluster_remove_node(asx_dist_cluster *cluster, const char *name);
@@ -112,8 +112,7 @@ typedef struct {
 ASX_API void asx_dist_ring_init(asx_dist_hash_ring *ring);
 
 /* Build ring from cluster's active nodes. */
-ASX_API asx_status asx_dist_ring_build(asx_dist_hash_ring *ring,
-                                        const asx_dist_cluster *cluster);
+ASX_API asx_status asx_dist_ring_build(asx_dist_hash_ring *ring, const asx_dist_cluster *cluster);
 
 /* Look up the node responsible for a key. Returns node_id. */
 ASX_API uint32_t asx_dist_ring_lookup(const asx_dist_hash_ring *ring, uint32_t key_hash);
@@ -142,10 +141,11 @@ ASX_API void asx_dist_assignment_init(asx_dist_assignment *assign, uint32_t part
 
 /* Rebalance partitions across active nodes in a cluster. */
 ASX_API asx_status asx_dist_assignment_rebalance(asx_dist_assignment *assign,
-                                                   const asx_dist_cluster *cluster);
+                                                 const asx_dist_cluster *cluster);
 
 /* Get the owner node for a partition. Returns 0 if unassigned. */
-ASX_API uint32_t asx_dist_assignment_owner(const asx_dist_assignment *assign, uint32_t partition_id);
+ASX_API uint32_t asx_dist_assignment_owner(const asx_dist_assignment *assign,
+                                           uint32_t partition_id);
 
 /* -------------------------------------------------------------------
  * Snapshot
@@ -172,28 +172,28 @@ ASX_API void asx_dist_snapshot_store_init(asx_dist_snapshot_store *store);
 
 /* Create a snapshot. */
 ASX_API asx_status asx_dist_snapshot_create(asx_dist_snapshot_store *store, uint32_t node_id,
-                                              const void *data, uint32_t data_len,
-                                              asx_dist_snapshot **out);
+                                            const void *data, uint32_t data_len,
+                                            asx_dist_snapshot **out);
 
 /* Find the latest snapshot for a node. Returns NULL if none. */
 ASX_API const asx_dist_snapshot *asx_dist_snapshot_latest(const asx_dist_snapshot_store *store,
-                                                            uint32_t node_id);
+                                                          uint32_t node_id);
 
 /* Restore from a snapshot (copy data out). */
 ASX_API asx_status asx_dist_snapshot_restore(const asx_dist_snapshot *snap, void *out_data,
-                                               uint32_t out_capacity, uint32_t *out_len);
+                                             uint32_t out_capacity, uint32_t *out_len);
 
 /* -------------------------------------------------------------------
  * Recovery protocol
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_DIST_RECOVERY_IDLE       = 0,
-    ASX_DIST_RECOVERY_DETECTING  = 1,
-    ASX_DIST_RECOVERY_RESTORING  = 2,
+    ASX_DIST_RECOVERY_IDLE = 0,
+    ASX_DIST_RECOVERY_DETECTING = 1,
+    ASX_DIST_RECOVERY_RESTORING = 2,
     ASX_DIST_RECOVERY_REASSIGNING = 3,
-    ASX_DIST_RECOVERY_COMPLETE   = 4,
-    ASX_DIST_RECOVERY_FAILED     = 5
+    ASX_DIST_RECOVERY_COMPLETE = 4,
+    ASX_DIST_RECOVERY_FAILED = 5
 } asx_dist_recovery_state;
 
 typedef struct {
@@ -212,10 +212,9 @@ ASX_API void asx_dist_recovery_init(asx_dist_recovery *recovery);
 ASX_API asx_status asx_dist_recovery_start(asx_dist_recovery *recovery, uint32_t failed_node_id);
 
 /* Execute one recovery step (deterministic state machine). */
-ASX_API asx_status asx_dist_recovery_step(asx_dist_recovery *recovery,
-                                            asx_dist_cluster *cluster,
-                                            asx_dist_assignment *assign,
-                                            asx_dist_snapshot_store *snapshots);
+ASX_API asx_status asx_dist_recovery_step(asx_dist_recovery *recovery, asx_dist_cluster *cluster,
+                                          asx_dist_assignment *assign,
+                                          asx_dist_snapshot_store *snapshots);
 
 /* Check if recovery is complete. */
 ASX_API int asx_dist_recovery_is_complete(const asx_dist_recovery *recovery);

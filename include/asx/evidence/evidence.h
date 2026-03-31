@@ -30,11 +30,11 @@ ASX_API int asx_evidence_is_pass(const asx_evidence_entry *entry);
 
 /* Count entries by level in a sink. */
 ASX_API uint32_t asx_evidence_count_by_level(const asx_evidence_sink *sink,
-                                               asx_evidence_level level);
+                                             asx_evidence_level level);
 
 /* Count entries for a specific source prefix (e.g., "monitor:"). */
 ASX_API uint32_t asx_evidence_count_for_source(const asx_evidence_sink *sink,
-                                                 const char *source_prefix);
+                                               const char *source_prefix);
 
 /* Get the first failure entry, or NULL if no failures. */
 ASX_API const asx_evidence_entry *asx_evidence_first_failure(const asx_evidence_sink *sink);

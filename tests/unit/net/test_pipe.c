@@ -90,9 +90,7 @@ TEST(pipe_exhaustion) {
     uint32_t i;
 
     asx_pipe_reset();
-    for (i = 0; i < ASX_MAX_PIPES; i++) {
-        ASSERT_EQ(asx_pipe_open(&rds[i], &wrs[i]), ASX_OK);
-    }
+    for (i = 0; i < ASX_MAX_PIPES; i++) { ASSERT_EQ(asx_pipe_open(&rds[i], &wrs[i]), ASX_OK); }
     ASSERT_EQ(asx_pipe_open(&rds[ASX_MAX_PIPES], &wrs[ASX_MAX_PIPES]), ASX_E_RESOURCE_EXHAUSTED);
 
     for (i = 0; i < ASX_MAX_PIPES; i++) {

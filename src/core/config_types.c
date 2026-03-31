@@ -29,10 +29,8 @@ uint64_t asx_backoff_delay_for_attempt(const asx_backoff_config *cfg, uint32_t a
     if (attempt >= cfg->max_retries) return cfg->max_delay_ns;
 
     switch (cfg->strategy) {
-    case ASX_BACKOFF_NONE:
-        return 0;
-    case ASX_BACKOFF_CONSTANT:
-        return cfg->initial_delay_ns;
+    case ASX_BACKOFF_NONE: return 0;
+    case ASX_BACKOFF_CONSTANT: return cfg->initial_delay_ns;
     case ASX_BACKOFF_LINEAR: {
         uint64_t factor = (uint64_t)(attempt + 1u);
         /* Overflow-safe: check before multiply */
@@ -53,7 +51,10 @@ uint64_t asx_backoff_delay_for_attempt(const asx_backoff_config *cfg, uint32_t a
         delay = cfg->initial_delay_ns;
         for (i = 0; i < attempt; i++) {
             delay = (uint64_t)((double)delay * cfg->multiplier);
-            if (delay > cfg->max_delay_ns) { delay = cfg->max_delay_ns; break; }
+            if (delay > cfg->max_delay_ns) {
+                delay = cfg->max_delay_ns;
+                break;
+            }
         }
         /* Simple deterministic "jitter": reduce by attempt-dependent fraction */
         delay = delay - (delay / (uint64_t)(attempt + 2u));
@@ -69,9 +70,9 @@ uint64_t asx_backoff_delay_for_attempt(const asx_backoff_config *cfg, uint32_t a
 void asx_timeout_config_init(asx_timeout_config *cfg) {
     if (cfg == NULL) return;
     memset(cfg, 0, sizeof(*cfg));
-    cfg->connect_timeout_ns = 5000000000ULL;  /* 5s */
-    cfg->request_timeout_ns = 30000000000ULL; /* 30s */
-    cfg->idle_timeout_ns = 60000000000ULL;    /* 60s */
+    cfg->connect_timeout_ns = 5000000000ULL;   /* 5s */
+    cfg->request_timeout_ns = 30000000000ULL;  /* 30s */
+    cfg->idle_timeout_ns = 60000000000ULL;     /* 60s */
     cfg->shutdown_timeout_ns = 10000000000ULL; /* 10s */
 }
 

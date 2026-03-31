@@ -41,14 +41,14 @@
  * Profile selection (exactly one must be defined at compile time).
  * If none is defined, ASX_PROFILE_CORE is assumed.
  */
-#if (defined(ASX_PROFILE_CORE) + defined(ASX_PROFILE_POSIX) + defined(ASX_PROFILE_WIN32) +        \
-     defined(ASX_PROFILE_FREESTANDING) + defined(ASX_PROFILE_EMBEDDED_ROUTER) +                   \
-     defined(ASX_PROFILE_HFT) + defined(ASX_PROFILE_AUTOMOTIVE) + defined(ASX_PROFILE_PARALLEL) + \
+#if (defined(ASX_PROFILE_CORE) + defined(ASX_PROFILE_POSIX) + defined(ASX_PROFILE_WIN32) +         \
+     defined(ASX_PROFILE_FREESTANDING) + defined(ASX_PROFILE_EMBEDDED_ROUTER) +                    \
+     defined(ASX_PROFILE_HFT) + defined(ASX_PROFILE_AUTOMOTIVE) + defined(ASX_PROFILE_PARALLEL) +  \
      defined(ASX_PROFILE_BROWSER)) > 1
 #error "Exactly one ASX_PROFILE_* macro may be defined per build"
 #elif !defined(ASX_PROFILE_CORE) && !defined(ASX_PROFILE_POSIX) && !defined(ASX_PROFILE_WIN32) &&  \
-    !defined(ASX_PROFILE_FREESTANDING) && !defined(ASX_PROFILE_EMBEDDED_ROUTER) &&                \
-    !defined(ASX_PROFILE_HFT) && !defined(ASX_PROFILE_AUTOMOTIVE) &&                              \
+    !defined(ASX_PROFILE_FREESTANDING) && !defined(ASX_PROFILE_EMBEDDED_ROUTER) &&                 \
+    !defined(ASX_PROFILE_HFT) && !defined(ASX_PROFILE_AUTOMOTIVE) &&                               \
     !defined(ASX_PROFILE_PARALLEL) && !defined(ASX_PROFILE_BROWSER)
 #define ASX_PROFILE_CORE
 #endif
@@ -63,10 +63,10 @@
  * without changing the default browser lane semantics.
  * ------------------------------------------------------------------- */
 
-#if defined(ASX_PROFILE_BROWSER) && \
+#if defined(ASX_PROFILE_BROWSER) &&                                                                \
     ((defined(ASX_BROWSER_PROFILE_MINIMAL) + defined(ASX_BROWSER_PROFILE_EXTENDED)) > 1)
 #error "Exactly one ASX_BROWSER_PROFILE_* subprofile may be defined per browser build"
-#elif defined(ASX_PROFILE_BROWSER) && !defined(ASX_BROWSER_PROFILE_MINIMAL) && \
+#elif defined(ASX_PROFILE_BROWSER) && !defined(ASX_BROWSER_PROFILE_MINIMAL) &&                     \
     !defined(ASX_BROWSER_PROFILE_EXTENDED)
 #define ASX_BROWSER_PROFILE_EXTENDED
 #endif
@@ -360,10 +360,7 @@ typedef enum { ASX_WAIT_BUSY_SPIN = 0, ASX_WAIT_YIELD = 1, ASX_WAIT_SLEEP = 2 } 
 /* Runtime IO backend selection.
  * GHOST is the walking-skeleton hook-driven backend.
  * IO_URING is recognized for contract parity but currently unsupported. */
-typedef enum {
-    ASX_IO_BACKEND_GHOST = 0,
-    ASX_IO_BACKEND_IO_URING = 1
-} asx_io_backend;
+typedef enum { ASX_IO_BACKEND_GHOST = 0, ASX_IO_BACKEND_IO_URING = 1 } asx_io_backend;
 
 /* Obligation leak response policy */
 typedef enum {

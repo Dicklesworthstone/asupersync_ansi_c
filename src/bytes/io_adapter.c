@@ -207,7 +207,10 @@ asx_status asx_buf_reader_read_line(asx_buf_reader *br, asx_buf_mut *dst, uint32
                     if (st != ASX_OK) return st;
                 }
                 /* Advance past the newline */
-                { asx_status adv_ = asx_buf_mut_advance(&br->buffer, i + 1u); (void)adv_; }
+                {
+                    asx_status adv_ = asx_buf_mut_advance(&br->buffer, i + 1u);
+                    (void)adv_;
+                }
                 if (asx_buf_mut_remaining(&br->buffer) == 0u) asx_buf_mut_clear(&br->buffer);
                 *bytes_read = line_len;
                 return ASX_OK;
@@ -307,7 +310,10 @@ asx_status asx_buf_writer_flush(asx_buf_writer *bw) {
     wr = bw->inner.poll_write(bw->inner.state, &readable, NULL, &written);
     if (wr != ASX_WRITE_READY) return ASX_E_INVALID_STATE;
 
-    { asx_status adv_ = asx_buf_mut_advance(&bw->buffer, written); (void)adv_; }
+    {
+        asx_status adv_ = asx_buf_mut_advance(&bw->buffer, written);
+        (void)adv_;
+    }
     if (asx_buf_mut_remaining(&bw->buffer) == 0u) asx_buf_mut_clear(&bw->buffer);
 
     if (bw->inner.poll_flush != NULL) {
@@ -342,7 +348,7 @@ asx_status asx_io_copy(asx_read_adapter *src, asx_write_adapter *dst, uint64_t *
 }
 
 asx_status asx_io_copy_n(asx_read_adapter *src, asx_write_adapter *dst, uint64_t max_bytes,
-                           uint64_t *bytes_copied) {
+                         uint64_t *bytes_copied) {
     asx_buf_mut chunk;
     uint64_t total;
     uint32_t read_n;
@@ -391,7 +397,7 @@ asx_status asx_io_copy_n(asx_read_adapter *src, asx_write_adapter *dst, uint64_t
 /* ------------------------------------------------------------------ */
 
 asx_status asx_io_read_exact(asx_read_adapter *src, asx_buf_mut *dst, size_t n,
-                              size_t *bytes_read) {
+                             size_t *bytes_read) {
     size_t total = 0;
 
     if (src == NULL || dst == NULL || bytes_read == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -471,7 +477,7 @@ asx_status asx_io_write_all(asx_write_adapter *dst, const asx_buf *src) {
 /* ------------------------------------------------------------------ */
 
 static asx_read_result chain_poll_read(void *adapter_state, asx_buf_mut *dst,
-                                        const asx_waker *waker, uint32_t *out_bytes_read) {
+                                       const asx_waker *waker, uint32_t *out_bytes_read) {
     asx_chain_reader_state *s = (asx_chain_reader_state *)adapter_state;
 
     if (!s->first_done) {
@@ -487,7 +493,7 @@ static asx_read_result chain_poll_read(void *adapter_state, asx_buf_mut *dst,
 }
 
 void asx_chain_reader_init(asx_chain_reader_state *state, asx_read_adapter first,
-                            asx_read_adapter second) {
+                           asx_read_adapter second) {
     state->first = first;
     state->second = second;
     state->first_done = 0;
@@ -504,8 +510,8 @@ asx_read_adapter asx_chain_reader_adapter(asx_chain_reader_state *state) {
 /* Take reader                                                         */
 /* ------------------------------------------------------------------ */
 
-static asx_read_result take_poll_read(void *adapter_state, asx_buf_mut *dst,
-                                       const asx_waker *waker, uint32_t *out_bytes_read) {
+static asx_read_result take_poll_read(void *adapter_state, asx_buf_mut *dst, const asx_waker *waker,
+                                      uint32_t *out_bytes_read) {
     asx_take_reader_state *s = (asx_take_reader_state *)adapter_state;
     asx_read_result rr;
     uint32_t read_count;
@@ -521,9 +527,7 @@ static asx_read_result take_poll_read(void *adapter_state, asx_buf_mut *dst,
     {
         uint32_t writable = dst->capacity - dst->wr_pos;
         uint32_t limit = (s->remaining > (size_t)UINT32_MAX) ? UINT32_MAX : (uint32_t)s->remaining;
-        if (writable > limit) {
-            dst->capacity = dst->wr_pos + limit;
-        }
+        if (writable > limit) { dst->capacity = dst->wr_pos + limit; }
     }
 
     rr = s->inner.poll_read(s->inner.state, dst, waker, &read_count);
@@ -538,9 +542,7 @@ static asx_read_result take_poll_read(void *adapter_state, asx_buf_mut *dst,
         }
     }
 
-    if (s->remaining == 0 && rr == ASX_READ_READY) {
-        return ASX_READ_EOF; /* limit reached */
-    }
+    if (s->remaining == 0 && rr == ASX_READ_READY) { return ASX_READ_EOF; /* limit reached */ }
 
     return rr;
 }

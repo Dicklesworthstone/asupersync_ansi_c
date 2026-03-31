@@ -5,8 +5,8 @@
  */
 
 #include "../../test_harness.h"
-#include <asx/signal/signal.h>
 #include <asx/runtime/browser_boundary.h>
+#include <asx/signal/signal.h>
 
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES
 

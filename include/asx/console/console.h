@@ -56,19 +56,19 @@ ASX_API ASX_MUST_USE asx_status asx_console_emit_log_record(asx_log_level level,
 typedef enum {
     ASX_COLOR_MODE_NONE = 0,
     ASX_COLOR_MODE_ANSI = 1,
-    ASX_COLOR_MODE_256  = 2,
+    ASX_COLOR_MODE_256 = 2,
     ASX_COLOR_MODE_TRUE = 3
 } asx_color_mode;
 
 typedef enum {
-    ASX_COLOR_BLACK   = 0,
-    ASX_COLOR_RED     = 1,
-    ASX_COLOR_GREEN   = 2,
-    ASX_COLOR_YELLOW  = 3,
-    ASX_COLOR_BLUE    = 4,
+    ASX_COLOR_BLACK = 0,
+    ASX_COLOR_RED = 1,
+    ASX_COLOR_GREEN = 2,
+    ASX_COLOR_YELLOW = 3,
+    ASX_COLOR_BLUE = 4,
     ASX_COLOR_MAGENTA = 5,
-    ASX_COLOR_CYAN    = 6,
-    ASX_COLOR_WHITE   = 7,
+    ASX_COLOR_CYAN = 6,
+    ASX_COLOR_WHITE = 7,
     ASX_COLOR_DEFAULT = 9
 } asx_ansi_color;
 
@@ -95,7 +95,7 @@ ASX_API void asx_console_style_init(asx_console_style *style);
 
 /* Write styled text to the report buffer. */
 ASX_API asx_status asx_console_styled_write(asx_report_buf *out, const asx_console_style *style,
-                                              const char *text);
+                                            const char *text);
 
 /* Write bold text. */
 ASX_API asx_status asx_console_bold(asx_report_buf *out, const char *text);

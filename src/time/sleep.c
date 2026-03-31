@@ -111,7 +111,10 @@ asx_status asx_timeout_poll(void *user_data, asx_task_id self) {
         }
         if (inner_st != ASX_E_PENDING) {
             /* Inner returned an error — disarm deadline and propagate */
-            { asx_status d_st_ = asx_deadline_disarm(&s->deadline); (void)d_st_; }
+            {
+                asx_status d_st_ = asx_deadline_disarm(&s->deadline);
+                (void)d_st_;
+            }
             return inner_st;
         }
     }
@@ -167,7 +170,10 @@ asx_status asx_interval_poll(void *user_data, asx_task_id self) {
 
         /* Check if we've reached max ticks */
         if (s->max_ticks > 0 && s->ticks >= s->max_ticks) {
-            { asx_status d_st_ = asx_deadline_disarm(&s->deadline); (void)d_st_; }
+            {
+                asx_status d_st_ = asx_deadline_disarm(&s->deadline);
+                (void)d_st_;
+            }
             return ASX_OK;
         }
 
@@ -177,7 +183,10 @@ asx_status asx_interval_poll(void *user_data, asx_task_id self) {
         next_target = now + s->period_ns;
 
         /* Disarm old deadline via proper API, then init+arm the new one */
-        { asx_status d_st_ = asx_deadline_disarm(&s->deadline); (void)d_st_; }
+        {
+            asx_status d_st_ = asx_deadline_disarm(&s->deadline);
+            (void)d_st_;
+        }
         st = asx_deadline_init(&s->deadline, next_target);
         if (st != ASX_OK) return st;
         st = asx_deadline_arm(&s->deadline, NULL);

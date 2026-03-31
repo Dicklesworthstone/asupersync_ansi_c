@@ -57,12 +57,12 @@ typedef int (*asx_pool_health_fn)(void *resource, void *factory_data);
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint32_t max_size;               /* maximum number of resources */
-    uint32_t min_idle;               /* minimum idle resources to maintain */
-    asx_pool_create_fn create_fn;    /* factory: create new resource */
-    asx_pool_destroy_fn destroy_fn;  /* factory: destroy resource (may be NULL) */
-    asx_pool_health_fn health_fn;    /* health check (may be NULL = always healthy) */
-    void *factory_data;              /* user data passed to factory functions */
+    uint32_t max_size;              /* maximum number of resources */
+    uint32_t min_idle;              /* minimum idle resources to maintain */
+    asx_pool_create_fn create_fn;   /* factory: create new resource */
+    asx_pool_destroy_fn destroy_fn; /* factory: destroy resource (may be NULL) */
+    asx_pool_health_fn health_fn;   /* health check (may be NULL = always healthy) */
+    void *factory_data;             /* user data passed to factory functions */
 } asx_pool_config;
 
 /* -------------------------------------------------------------------
@@ -103,7 +103,7 @@ typedef struct {
 
 /* Create a pool with the given configuration. */
 ASX_API ASX_MUST_USE asx_status asx_pool_create(const asx_pool_config *config,
-                                                  asx_pool_handle *out);
+                                                asx_pool_handle *out);
 
 /* Close a pool. All idle resources are destroyed.
  * Active resources will be destroyed when returned. */

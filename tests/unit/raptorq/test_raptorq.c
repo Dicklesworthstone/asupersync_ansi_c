@@ -18,17 +18,11 @@ TEST(raptorq_config_defaults) {
     ASSERT_NE(cfg.max_source_symbols, 0u);
 }
 
-TEST(raptorq_config_null_safe) {
-    asx_raptorq_config_init(NULL);
-}
+TEST(raptorq_config_null_safe) { asx_raptorq_config_init(NULL); }
 
-TEST(raptorq_available) {
-    ASSERT_EQ(asx_raptorq_available(), ASX_OK);
-}
+TEST(raptorq_available) { ASSERT_EQ(asx_raptorq_available(), ASX_OK); }
 
-TEST(raptorq_deferral_reason_null) {
-    ASSERT_TRUE(asx_raptorq_deferral_reason() == NULL);
-}
+TEST(raptorq_deferral_reason_null) { ASSERT_TRUE(asx_raptorq_deferral_reason() == NULL); }
 
 TEST(raptorq_encode_basic) {
     asx_raptorq_config cfg;
@@ -58,8 +52,8 @@ TEST(raptorq_encode_decode_roundtrip) {
     asx_raptorq_config_init(&cfg);
     cfg.symbol_size = 16;
 
-    ASSERT_EQ(asx_raptorq_encode(&cfg, source, (uint32_t)strlen((const char *)source),
-                                  symbols, sizeof(symbols), &sym_count),
+    ASSERT_EQ(asx_raptorq_encode(&cfg, source, (uint32_t)strlen((const char *)source), symbols,
+                                 sizeof(symbols), &sym_count),
               ASX_OK);
     ASSERT_TRUE(sym_count > 0u);
 

@@ -196,7 +196,9 @@ asx_status asx_lab_run_scenario(asx_lab *lab, const asx_lab_scenario *scenario,
         step_polls = lab_trace_count_scheduler_polls(trace_count_before);
         out_result->polls_total += (uint64_t)step_polls;
         out_result->steps_completed++;
-        if (st == ASX_OK && step_polls > lab->config.max_polls) { st = ASX_E_POLL_BUDGET_EXHAUSTED; }
+        if (st == ASX_OK && step_polls > lab->config.max_polls) {
+            st = ASX_E_POLL_BUDGET_EXHAUSTED;
+        }
         out_result->last_status = st;
         if (st != ASX_OK) {
             out_result->elapsed_ns = asx_lab_now(lab) - start_time;

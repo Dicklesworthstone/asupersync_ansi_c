@@ -39,11 +39,11 @@ ASX_API ASX_MUST_USE asx_status asx_pipe_open(asx_pipe_read *rd, asx_pipe_write 
 
 /* Poll-read from pipe. Returns ASX_E_PENDING if empty, ASX_E_DISCONNECTED if writer closed. */
 ASX_API ASX_MUST_USE asx_status asx_pipe_poll_read(asx_pipe_read rd, asx_buf_mut *dst,
-                                                     uint32_t *bytes_read);
+                                                   uint32_t *bytes_read);
 
 /* Poll-write to pipe. Returns ASX_E_DISCONNECTED if reader closed. */
 ASX_API ASX_MUST_USE asx_status asx_pipe_poll_write(asx_pipe_write wr, const asx_buf *src,
-                                                      uint32_t *bytes_written);
+                                                    uint32_t *bytes_written);
 
 /* Close the read end. */
 ASX_API asx_status asx_pipe_close_read(asx_pipe_read rd);

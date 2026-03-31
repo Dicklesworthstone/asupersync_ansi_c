@@ -63,8 +63,8 @@ asx_status asx_monitor_evaluate(const asx_runtime *rt, const asx_monitor_policy 
         if (st != ASX_OK) return st;
     }
 
-    pct =
-        utilization_pct(out->inspection.obligations.active_count, out->inspection.obligations.capacity);
+    pct = utilization_pct(out->inspection.obligations.active_count,
+                          out->inspection.obligations.capacity);
     if (pct > policy->max_obligation_utilization_pct) {
         out->triggered_mask |= ASX_MONITOR_OBLIGATIONS_HIGH;
         st = asx_evidence_record(sink, "monitor:obligations", ASX_EVIDENCE_WARN,
@@ -72,7 +72,8 @@ asx_status asx_monitor_evaluate(const asx_runtime *rt, const asx_monitor_policy 
         if (st != ASX_OK) return st;
     }
 
-    pct = utilization_pct(out->inspection.io_driver.active_count, out->inspection.io_driver.capacity);
+    pct =
+        utilization_pct(out->inspection.io_driver.active_count, out->inspection.io_driver.capacity);
     if (pct > policy->max_io_utilization_pct) {
         out->triggered_mask |= ASX_MONITOR_IO_HIGH;
         st = asx_evidence_record(sink, "monitor:io_driver", ASX_EVIDENCE_WARN,

@@ -25,8 +25,8 @@ asx_status asx_tracing_compat_format_event(const asx_trace_event *event, asx_rep
     return ASX_OK;
 }
 
-asx_status asx_tracing_compat_emit_event(const asx_trace_event *event, asx_tracing_compat_sink_fn sink,
-                                         void *user_data) {
+asx_status asx_tracing_compat_emit_event(const asx_trace_event *event,
+                                         asx_tracing_compat_sink_fn sink, void *user_data) {
     asx_report_buf out;
     asx_status st;
 

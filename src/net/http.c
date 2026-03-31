@@ -7,8 +7,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/net/http.h>
 #include <asx/fs/fs.h>
+#include <asx/net/http.h>
 #include <stdio.h>
 #include <string.h>
 

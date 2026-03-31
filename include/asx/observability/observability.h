@@ -40,19 +40,19 @@ ASX_API ASX_MUST_USE asx_status asx_observability_capture(const asx_runtime *rt,
 #endif
 
 typedef enum {
-    ASX_METRIC_COUNTER   = 0,
-    ASX_METRIC_GAUGE     = 1,
+    ASX_METRIC_COUNTER = 0,
+    ASX_METRIC_GAUGE = 1,
     ASX_METRIC_HISTOGRAM = 2
 } asx_metric_type;
 
 typedef struct {
     char name[ASX_METRICS_NAME_MAX];
     asx_metric_type type;
-    int64_t value;       /* counter/gauge current value */
-    uint64_t count;      /* histogram: number of observations */
-    int64_t sum;         /* histogram: sum of observations */
-    int64_t min_val;     /* histogram: minimum observed */
-    int64_t max_val;     /* histogram: maximum observed */
+    int64_t value;   /* counter/gauge current value */
+    uint64_t count;  /* histogram: number of observations */
+    int64_t sum;     /* histogram: sum of observations */
+    int64_t min_val; /* histogram: minimum observed */
+    int64_t max_val; /* histogram: maximum observed */
     uint8_t active;
 } asx_metric_entry;
 
@@ -75,14 +75,14 @@ ASX_API ASX_MUST_USE asx_status asx_metrics_histogram(asx_metrics *m, const char
 
 /* Increment a counter by delta. */
 ASX_API ASX_MUST_USE asx_status asx_metrics_increment(asx_metrics *m, const char *name,
-                                                        int64_t delta);
+                                                      int64_t delta);
 
 /* Set a gauge value. */
 ASX_API ASX_MUST_USE asx_status asx_metrics_set(asx_metrics *m, const char *name, int64_t value);
 
 /* Record a histogram observation. */
 ASX_API ASX_MUST_USE asx_status asx_metrics_observe(asx_metrics *m, const char *name,
-                                                      int64_t value);
+                                                    int64_t value);
 
 /* Get a metric by name. Returns NULL if not found. */
 ASX_API const asx_metric_entry *asx_metrics_get(const asx_metrics *m, const char *name);
@@ -104,8 +104,7 @@ typedef struct {
 } asx_task_inspection;
 
 /* Inspect a specific task. */
-ASX_API ASX_MUST_USE asx_status asx_task_inspect(asx_task_id task_id,
-                                                   asx_task_inspection *out);
+ASX_API ASX_MUST_USE asx_status asx_task_inspect(asx_task_id task_id, asx_task_inspection *out);
 
 /* -------------------------------------------------------------------
  * Resource accounting — track resource usage
@@ -125,7 +124,7 @@ typedef struct {
 
 /* Capture current resource accounting. */
 ASX_API ASX_MUST_USE asx_status asx_resource_accounting_capture(const asx_runtime *rt,
-                                                                  asx_resource_accounting *out);
+                                                                asx_resource_accounting *out);
 
 #ifdef __cplusplus
 }

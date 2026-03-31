@@ -81,7 +81,8 @@ TEST(local_scope_spawn_success) {
 
 TEST(local_scope_spawn_null_scope_fails) {
     asx_local_task_handle handle;
-    ASSERT_EQ(asx_local_scope_spawn(NULL, poll_immediate_ok, NULL, &handle), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_local_scope_spawn(NULL, poll_immediate_ok, NULL, &handle),
+              ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(local_scope_spawn_null_poll_fails) {
@@ -163,8 +164,7 @@ TEST(local_handle_abort_null_fails) {
 }
 
 TEST(local_handle_abort_with_kind_null_fails) {
-    ASSERT_EQ(asx_local_task_handle_abort_with_kind(NULL, ASX_CANCEL_USER),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_local_task_handle_abort_with_kind(NULL, ASX_CANCEL_USER), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(local_handle_try_join_null_fails) {
@@ -184,8 +184,7 @@ TEST(local_handle_zeroed_value_fails_closed) {
     ASSERT_EQ(asx_local_task_handle_task_id(&handle), ASX_INVALID_ID);
     ASSERT_EQ(asx_local_task_handle_try_join(&handle, &out), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_local_task_handle_abort(&handle), ASX_E_INVALID_STATE);
-    ASSERT_EQ(asx_local_task_handle_abort_with_kind(&handle, ASX_CANCEL_USER),
-              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_local_task_handle_abort_with_kind(&handle, ASX_CANCEL_USER), ASX_E_INVALID_STATE);
 }
 
 TEST(local_handle_query_nulls_are_safe) {

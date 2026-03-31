@@ -44,15 +44,15 @@ typedef enum {
     ASX_BROWSER_DX_NONE = 0,
 
     /* Capability boundary violations */
-    ASX_BROWSER_DX_NATIVE_FS = 1,       /* filesystem access in browser */
-    ASX_BROWSER_DX_NATIVE_PROCESS = 2,  /* process spawn in browser */
-    ASX_BROWSER_DX_NATIVE_SIGNAL = 3,   /* signal handling in browser */
-    ASX_BROWSER_DX_NATIVE_IO = 4,       /* native I/O driver in browser */
-    ASX_BROWSER_DX_NATIVE_BLOCKING = 5, /* blocking thread pool in browser */
-    ASX_BROWSER_DX_NATIVE_SERVER = 6,   /* server/listener family in browser */
-    ASX_BROWSER_DX_NATIVE_GRPC = 7,     /* gRPC family in browser */
+    ASX_BROWSER_DX_NATIVE_FS = 1,        /* filesystem access in browser */
+    ASX_BROWSER_DX_NATIVE_PROCESS = 2,   /* process spawn in browser */
+    ASX_BROWSER_DX_NATIVE_SIGNAL = 3,    /* signal handling in browser */
+    ASX_BROWSER_DX_NATIVE_IO = 4,        /* native I/O driver in browser */
+    ASX_BROWSER_DX_NATIVE_BLOCKING = 5,  /* blocking thread pool in browser */
+    ASX_BROWSER_DX_NATIVE_SERVER = 6,    /* server/listener family in browser */
+    ASX_BROWSER_DX_NATIVE_GRPC = 7,      /* gRPC family in browser */
     ASX_BROWSER_DX_NATIVE_MESSAGING = 8, /* messaging/broker family in browser */
-    ASX_BROWSER_DX_NATIVE_TLS = 9,      /* TLS family in browser */
+    ASX_BROWSER_DX_NATIVE_TLS = 9,       /* TLS family in browser */
     ASX_BROWSER_DX_NATIVE_DATABASE = 10, /* database family in browser */
 
     /* Profile mismatch */
@@ -93,11 +93,11 @@ ASX_API uint32_t asx_browser_dx_count(void);
 /* Browser-specific evidence report */
 typedef struct {
     asx_profile_id active_profile;
-    int is_browser;                /* 1 if active profile is BROWSER */
-    uint32_t surfaces_available;   /* count of available surfaces */
-    uint32_t surfaces_blocked;     /* count of blocked surfaces */
-    int allocator_sealable;        /* 1 if allocator can be sealed */
-    int all_semantic_rules_hold;   /* 1 if all 8 semantic rules enforced */
+    int is_browser;              /* 1 if active profile is BROWSER */
+    uint32_t surfaces_available; /* count of available surfaces */
+    uint32_t surfaces_blocked;   /* count of blocked surfaces */
+    int allocator_sealable;      /* 1 if allocator can be sealed */
+    int all_semantic_rules_hold; /* 1 if all 8 semantic rules enforced */
 } asx_browser_evidence_report;
 
 /* Capture browser boundary evidence into a report struct.
@@ -109,7 +109,7 @@ ASX_API void asx_browser_evidence_capture(asx_browser_evidence_report *report);
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if either arg is NULL,
  * ASX_E_RESOURCE_EXHAUSTED if sink is full. */
 ASX_API asx_status asx_browser_evidence_to_sink(const asx_browser_evidence_report *report,
-                                                 asx_evidence_sink *sink);
+                                                asx_evidence_sink *sink);
 
 /* -------------------------------------------------------------------
  * Flake governance — deterministic artifact retention
@@ -121,25 +121,25 @@ ASX_API asx_status asx_browser_evidence_to_sink(const asx_browser_evidence_repor
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint64_t trace_digest;           /* deterministic trace fingerprint */
-    asx_profile_id profile;          /* profile under which failure occurred */
-    uint32_t ghost_violations;       /* ghost violation count at capture */
-    uint32_t surfaces_blocked;       /* surfaces blocked at capture */
-    uint32_t evidence_fail_count;    /* FAIL evidence entries at capture */
-    uint32_t evidence_warn_count;    /* WARN evidence entries at capture */
-    int is_deterministic;            /* 1 if replay should be exact */
+    uint64_t trace_digest;        /* deterministic trace fingerprint */
+    asx_profile_id profile;       /* profile under which failure occurred */
+    uint32_t ghost_violations;    /* ghost violation count at capture */
+    uint32_t surfaces_blocked;    /* surfaces blocked at capture */
+    uint32_t evidence_fail_count; /* FAIL evidence entries at capture */
+    uint32_t evidence_warn_count; /* WARN evidence entries at capture */
+    int is_deterministic;         /* 1 if replay should be exact */
 } asx_browser_flake_snapshot;
 
 /* Capture a flake-governance snapshot for failure forensics.
  * Reads from trace, ghost, and browser boundary subsystems.
  * sink may be NULL (in which case evidence counts are zero). */
 ASX_API void asx_browser_flake_capture(asx_browser_flake_snapshot *snapshot,
-                                        const asx_evidence_sink *sink);
+                                       const asx_evidence_sink *sink);
 
 /* Check if two flake snapshots represent the same failure.
  * Returns 1 if trace digests match and boundary state is identical. */
 ASX_API int asx_browser_flake_match(const asx_browser_flake_snapshot *a,
-                                     const asx_browser_flake_snapshot *b);
+                                    const asx_browser_flake_snapshot *b);
 
 #ifdef __cplusplus
 }

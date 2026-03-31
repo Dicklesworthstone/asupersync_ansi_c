@@ -28,19 +28,16 @@ extern "C" {
  * TLS version and cipher configuration
  * ------------------------------------------------------------------- */
 
-typedef enum {
-    ASX_TLS_VERSION_1_2 = 0,
-    ASX_TLS_VERSION_1_3 = 1
-} asx_tls_version;
+typedef enum { ASX_TLS_VERSION_1_2 = 0, ASX_TLS_VERSION_1_3 = 1 } asx_tls_version;
 
 typedef enum {
-    ASX_TLS_VERIFY_NONE     = 0,
-    ASX_TLS_VERIFY_PEER     = 1,
+    ASX_TLS_VERIFY_NONE = 0,
+    ASX_TLS_VERIFY_PEER = 1,
     ASX_TLS_VERIFY_REQUIRED = 2
 } asx_tls_verify_mode;
 
 typedef enum {
-    ASX_TLS_ROOT_SOURCE_NONE   = 0,
+    ASX_TLS_ROOT_SOURCE_NONE = 0,
     ASX_TLS_ROOT_SOURCE_NATIVE = 1,
     ASX_TLS_ROOT_SOURCE_WEBPKI = 2
 } asx_tls_root_source;
@@ -85,8 +82,7 @@ ASX_API ASX_MUST_USE const char *asx_tls_root_source_str(asx_tls_root_source sou
 ASX_API asx_status asx_tls_config_set_sni(asx_tls_config *cfg, const char *hostname);
 
 /* Select the trust-root source for peer verification. */
-ASX_API asx_status asx_tls_config_set_root_source(asx_tls_config *cfg,
-                                                  asx_tls_root_source source);
+ASX_API asx_status asx_tls_config_set_root_source(asx_tls_config *cfg, asx_tls_root_source source);
 
 /* Add an ALPN protocol name (e.g. "h2", "http/1.1"). */
 ASX_API asx_status asx_tls_config_add_alpn(asx_tls_config *cfg, const char *protocol);
@@ -114,12 +110,12 @@ ASX_API void asx_tls_acceptor_init(asx_tls_acceptor *acc, const asx_tls_config *
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_TLS_STATE_INIT       = 0,
-    ASX_TLS_STATE_HANDSHAKE  = 1,
-    ASX_TLS_STATE_READY      = 2,
-    ASX_TLS_STATE_SHUTDOWN   = 3,
-    ASX_TLS_STATE_CLOSED     = 4,
-    ASX_TLS_STATE_ERROR      = 5
+    ASX_TLS_STATE_INIT = 0,
+    ASX_TLS_STATE_HANDSHAKE = 1,
+    ASX_TLS_STATE_READY = 2,
+    ASX_TLS_STATE_SHUTDOWN = 3,
+    ASX_TLS_STATE_CLOSED = 4,
+    ASX_TLS_STATE_ERROR = 5
 } asx_tls_state;
 
 typedef struct {
@@ -133,24 +129,21 @@ typedef struct {
 
 /* Perform a TLS client handshake over a TCP stream.
  * In deterministic mode, transitions immediately to READY. */
-ASX_API ASX_MUST_USE asx_status asx_tls_connect(asx_tls_stream *out,
-                                                  const asx_tls_connector *conn,
-                                                  asx_tcp_stream tcp);
+ASX_API ASX_MUST_USE asx_status asx_tls_connect(asx_tls_stream *out, const asx_tls_connector *conn,
+                                                asx_tcp_stream tcp);
 
 /* Perform a TLS server handshake over a TCP stream.
  * In deterministic mode, transitions immediately to READY. */
-ASX_API ASX_MUST_USE asx_status asx_tls_accept(asx_tls_stream *out,
-                                                 const asx_tls_acceptor *acc,
-                                                 asx_tcp_stream tcp);
+ASX_API ASX_MUST_USE asx_status asx_tls_accept(asx_tls_stream *out, const asx_tls_acceptor *acc,
+                                               asx_tcp_stream tcp);
 
 /* Poll-read decrypted data from a TLS stream. */
 ASX_API ASX_MUST_USE asx_status asx_tls_stream_poll_read(asx_tls_stream stream, asx_buf_mut *dst,
-                                                          uint32_t *bytes_read);
+                                                         uint32_t *bytes_read);
 
 /* Poll-write data through a TLS stream (encrypted on wire). */
-ASX_API ASX_MUST_USE asx_status asx_tls_stream_poll_write(asx_tls_stream stream,
-                                                           const asx_buf *src,
-                                                           uint32_t *bytes_written);
+ASX_API ASX_MUST_USE asx_status asx_tls_stream_poll_write(asx_tls_stream stream, const asx_buf *src,
+                                                          uint32_t *bytes_written);
 
 /* Get the current TLS handshake/connection state. */
 ASX_API asx_tls_state asx_tls_stream_state(asx_tls_stream stream);

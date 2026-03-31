@@ -398,7 +398,12 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                         (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_CANCELLING);
                         t->state = ASX_TASK_CANCELLING;
                         t->cancel_phase = ASX_CANCEL_PHASE_CANCELLING;
-                        { asx_status w_st_ = asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_CANCELLING); (void)w_st_; }
+                        {
+                            asx_status w_st_ =
+                                asx_cancel_witness_advance(t->cancel_witness,
+                                                           ASX_CANCEL_PHASE_CANCELLING);
+                            (void)w_st_;
+                        }
                         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                        asx_trace_task_transition_aux(from, ASX_TASK_CANCELLING));
                     }
@@ -407,7 +412,12 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                         (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_FINALIZING);
                         t->state = ASX_TASK_FINALIZING;
                         t->cancel_phase = ASX_CANCEL_PHASE_FINALIZING;
-                        { asx_status w_st_ = asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_FINALIZING); (void)w_st_; }
+                        {
+                            asx_status w_st_ =
+                                asx_cancel_witness_advance(t->cancel_witness,
+                                                           ASX_CANCEL_PHASE_FINALIZING);
+                            (void)w_st_;
+                        }
                         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                        asx_trace_task_transition_aux(from, ASX_TASK_FINALIZING));
                     }
@@ -416,8 +426,16 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                         (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                         t->state = ASX_TASK_COMPLETED;
                         t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
-                        { asx_status w_st_ = asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_COMPLETED); (void)w_st_; }
-                        { asx_status w_st_ = asx_cancel_witness_release(t->cancel_witness); (void)w_st_; }
+                        {
+                            asx_status w_st_ =
+                                asx_cancel_witness_advance(t->cancel_witness,
+                                                           ASX_CANCEL_PHASE_COMPLETED);
+                            (void)w_st_;
+                        }
+                        {
+                            asx_status w_st_ = asx_cancel_witness_release(t->cancel_witness);
+                            (void)w_st_;
+                        }
                         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                        asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     }
@@ -435,8 +453,15 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                     t->state = ASX_TASK_COMPLETED;
                     t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
-                    { asx_status w_st_ = asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_COMPLETED); (void)w_st_; }
-                    { asx_status w_st_ = asx_cancel_witness_release(t->cancel_witness); (void)w_st_; }
+                    {
+                        asx_status w_st_ = asx_cancel_witness_advance(t->cancel_witness,
+                                                                      ASX_CANCEL_PHASE_COMPLETED);
+                        (void)w_st_;
+                    }
+                    {
+                        asx_status w_st_ = asx_cancel_witness_release(t->cancel_witness);
+                        (void)w_st_;
+                    }
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
@@ -488,8 +513,16 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     t->state = ASX_TASK_COMPLETED;
                     if (t->cancel_pending) {
                         t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
-                        { asx_status w_st_ = asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_COMPLETED); (void)w_st_; }
-                        { asx_status w_st_ = asx_cancel_witness_release(t->cancel_witness); (void)w_st_; }
+                        {
+                            asx_status w_st_ =
+                                asx_cancel_witness_advance(t->cancel_witness,
+                                                           ASX_CANCEL_PHASE_COMPLETED);
+                            (void)w_st_;
+                        }
+                        {
+                            asx_status w_st_ = asx_cancel_witness_release(t->cancel_witness);
+                            (void)w_st_;
+                        }
                     }
                     t->outcome = asx_outcome_make(t->cancel_pending ? ASX_OUTCOME_CANCELLED
                                                                     : ASX_OUTCOME_OK);
@@ -507,8 +540,16 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     t->state = ASX_TASK_COMPLETED;
                     if (t->cancel_pending) {
                         t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
-                        { asx_status w_st_ = asx_cancel_witness_advance(t->cancel_witness, ASX_CANCEL_PHASE_COMPLETED); (void)w_st_; }
-                        { asx_status w_st_ = asx_cancel_witness_release(t->cancel_witness); (void)w_st_; }
+                        {
+                            asx_status w_st_ =
+                                asx_cancel_witness_advance(t->cancel_witness,
+                                                           ASX_CANCEL_PHASE_COMPLETED);
+                            (void)w_st_;
+                        }
+                        {
+                            asx_status w_st_ = asx_cancel_witness_release(t->cancel_witness);
+                            (void)w_st_;
+                        }
                     }
                     t->outcome = asx_outcome_make(t->cancel_pending ? ASX_OUTCOME_CANCELLED
                                                                     : ASX_OUTCOME_ERR);

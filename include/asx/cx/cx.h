@@ -165,8 +165,8 @@ ASX_API asx_status asx_cx_unwrap(const asx_cx *parent, const asx_cx_wrapper *wra
                                  asx_cx *out_child);
 
 /* Initialize a fixed-capacity zero-allocation registry of grants. */
-ASX_API asx_status asx_cx_registry_init(asx_cx_registry *registry,
-                                        asx_cx_registry_entry *entries, uint32_t capacity);
+ASX_API asx_status asx_cx_registry_init(asx_cx_registry *registry, asx_cx_registry_entry *entries,
+                                        uint32_t capacity);
 
 /* Issue a revocable grant for a subset of the parent's authority.
  * The grant is bound to the issuing parent context and must be materialized
@@ -180,16 +180,15 @@ ASX_API asx_status asx_cx_registry_revoke(asx_cx_registry *registry, asx_cx_gran
 /* Materialize a live grant into a child Cx.
  * Fails closed if the grant is replayed against a different parent context. */
 ASX_API asx_status asx_cx_registry_materialize(const asx_cx *parent,
-                                               const asx_cx_registry *registry,
-                                               asx_cx_grant grant, asx_cx *out_child);
+                                               const asx_cx_registry *registry, asx_cx_grant grant,
+                                               asx_cx *out_child);
 
 /* Capture an attenuated macaroon-like token for later rebinding. */
 ASX_API asx_status asx_cx_macaroon_issue(const asx_cx *parent, asx_cap_flags child_caps,
                                          asx_cx_macaroon *out_macaroon);
 
 /* Apply an additional attenuation caveat to a macaroon. */
-ASX_API asx_status asx_cx_macaroon_attenuate(asx_cx_macaroon *macaroon,
-                                             asx_cap_flags caveat_caps);
+ASX_API asx_status asx_cx_macaroon_attenuate(asx_cx_macaroon *macaroon, asx_cap_flags caveat_caps);
 
 /* Rebind a macaroon against its parent context, failing closed on mismatch. */
 ASX_API asx_status asx_cx_macaroon_bind(const asx_cx *parent, const asx_cx_macaroon *macaroon,

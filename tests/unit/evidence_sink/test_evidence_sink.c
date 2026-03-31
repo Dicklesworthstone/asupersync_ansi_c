@@ -71,9 +71,7 @@ TEST(get_out_of_range) {
     ASSERT_TRUE(asx_evidence_sink_get(&g_sink, 999) == NULL);
 }
 
-TEST(get_null_sink) {
-    ASSERT_TRUE(asx_evidence_sink_get(NULL, 0) == NULL);
-}
+TEST(get_null_sink) { ASSERT_TRUE(asx_evidence_sink_get(NULL, 0) == NULL); }
 
 /* ================================================================== */
 /* Render NDJSON                                                       */

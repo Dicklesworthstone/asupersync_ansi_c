@@ -92,12 +92,12 @@ ASX_API asx_status asx_rwlock_try_write(asx_rwlock_handle handle, asx_rwlock_wri
 
 /* Begin async read-lock. Must be followed by poll_read calls. */
 ASX_API ASX_MUST_USE asx_status asx_rwlock_read_begin(asx_rwlock_handle handle,
-                                                       asx_rwlock_waiter *out);
+                                                      asx_rwlock_waiter *out);
 
 /* Poll for read lock. Returns ASX_OK + guard when acquired,
  * ASX_E_PENDING when waiting. */
 ASX_API asx_status asx_rwlock_poll_read(asx_rwlock_waiter *waiter, asx_rwlock_read_guard *out,
-                                         asx_cx *cx);
+                                        asx_cx *cx);
 
 /* -------------------------------------------------------------------
  * Write lock (async / poll-based)
@@ -105,12 +105,12 @@ ASX_API asx_status asx_rwlock_poll_read(asx_rwlock_waiter *waiter, asx_rwlock_re
 
 /* Begin async write-lock. Must be followed by poll_write calls. */
 ASX_API ASX_MUST_USE asx_status asx_rwlock_write_begin(asx_rwlock_handle handle,
-                                                        asx_rwlock_waiter *out);
+                                                       asx_rwlock_waiter *out);
 
 /* Poll for write lock. Returns ASX_OK + guard when acquired,
  * ASX_E_PENDING when waiting. */
 ASX_API asx_status asx_rwlock_poll_write(asx_rwlock_waiter *waiter, asx_rwlock_write_guard *out,
-                                          asx_cx *cx);
+                                         asx_cx *cx);
 
 /* -------------------------------------------------------------------
  * Cancel async acquisition

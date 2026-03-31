@@ -294,7 +294,7 @@ asx_status asx_service_builder_buffer(asx_service_builder *builder) {
 }
 
 asx_status asx_service_builder_concurrency_limit(asx_service_builder *builder,
-                                                   uint32_t max_inflight) {
+                                                 uint32_t max_inflight) {
     asx_service_layer_spec spec;
     memset(&spec, 0, sizeof(spec));
     spec.kind = ASX_SERVICE_LAYER_CONCURRENCY_LIMIT;
@@ -303,7 +303,7 @@ asx_status asx_service_builder_concurrency_limit(asx_service_builder *builder,
 }
 
 asx_status asx_service_builder_filter(asx_service_builder *builder, asx_service_filter_fn fn,
-                                        void *user_data) {
+                                      void *user_data) {
     asx_service_layer_spec spec;
     if (fn == NULL) return ASX_E_INVALID_ARGUMENT;
     memset(&spec, 0, sizeof(spec));
@@ -397,9 +397,9 @@ asx_status asx_service_builder_build(asx_service *out, asx_service_builder_runti
                 if (builder->layers[j].kind == ASX_SERVICE_LAYER_CONCURRENCY_LIMIT) cl_idx++;
             }
             if (cl_idx >= ASX_SERVICE_BUILDER_MAX_LAYERS) { return ASX_E_RESOURCE_EXHAUSTED; }
-            asx_service_concurrency_limit_init(
-                &current, &runtime->concurrency_limit[cl_idx], current,
-                spec->config.concurrency_limit.max_inflight);
+            asx_service_concurrency_limit_init(&current, &runtime->concurrency_limit[cl_idx],
+                                               current,
+                                               spec->config.concurrency_limit.max_inflight);
             break;
         }
         case ASX_SERVICE_LAYER_FILTER: {
@@ -411,7 +411,7 @@ asx_status asx_service_builder_build(asx_service *out, asx_service_builder_runti
             if (f_idx >= ASX_SERVICE_BUILDER_MAX_LAYERS) { return ASX_E_RESOURCE_EXHAUSTED; }
             if (spec->config.filter.fn == NULL) { return ASX_E_INVALID_ARGUMENT; }
             asx_service_filter_init(&current, &runtime->filter[f_idx], current,
-                                     spec->config.filter.fn, spec->config.filter.user_data);
+                                    spec->config.filter.fn, spec->config.filter.user_data);
             break;
         }
         default: return ASX_E_INVALID_ARGUMENT;
@@ -444,8 +444,8 @@ static asx_status cl_call(void *state, const void *request, void *response) {
 }
 
 void asx_service_concurrency_limit_init(asx_service *svc,
-                                          asx_service_concurrency_limit_state *state,
-                                          asx_service inner, uint32_t max_inflight) {
+                                        asx_service_concurrency_limit_state *state,
+                                        asx_service inner, uint32_t max_inflight) {
     state->inner = inner;
     state->max_inflight = max_inflight;
     state->current = 0;
@@ -458,8 +458,7 @@ void asx_service_concurrency_limit_release(asx_service_concurrency_limit_state *
     if (state != NULL && state->current > 0) state->current--;
 }
 
-uint32_t asx_service_concurrency_limit_inflight(
-    const asx_service_concurrency_limit_state *state) {
+uint32_t asx_service_concurrency_limit_inflight(const asx_service_concurrency_limit_state *state) {
     if (state == NULL) return 0;
     return state->current;
 }
@@ -479,9 +478,8 @@ static asx_status filter_call(void *state, const void *request, void *response) 
     return s->inner.call(s->inner.state, request, response);
 }
 
-void asx_service_filter_init(asx_service *svc, asx_service_filter_state *state,
-                              asx_service inner, asx_service_filter_fn filter_fn,
-                              void *user_data) {
+void asx_service_filter_init(asx_service *svc, asx_service_filter_state *state, asx_service inner,
+                             asx_service_filter_fn filter_fn, void *user_data) {
     state->inner = inner;
     state->filter_fn = filter_fn;
     state->user_data = user_data;
@@ -529,8 +527,7 @@ static asx_status lb_call(void *state, const void *request, void *response) {
     return s->backends[start].call(s->backends[start].state, request, response);
 }
 
-void asx_service_load_balance_init(asx_service *svc,
-                                    asx_service_load_balance_state *state) {
+void asx_service_load_balance_init(asx_service *svc, asx_service_load_balance_state *state) {
     state->count = 0;
     state->next = 0;
     svc->poll_ready = lb_poll_ready;
@@ -539,7 +536,7 @@ void asx_service_load_balance_init(asx_service *svc,
 }
 
 asx_status asx_service_load_balance_add_backend(asx_service_load_balance_state *state,
-                                                  asx_service backend) {
+                                                asx_service backend) {
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     if (state->count >= ASX_SERVICE_LB_MAX_BACKENDS) return ASX_E_RESOURCE_EXHAUSTED;
     state->backends[state->count] = backend;
@@ -547,8 +544,7 @@ asx_status asx_service_load_balance_add_backend(asx_service_load_balance_state *
     return ASX_OK;
 }
 
-uint32_t asx_service_load_balance_backend_count(
-    const asx_service_load_balance_state *state) {
+uint32_t asx_service_load_balance_backend_count(const asx_service_load_balance_state *state) {
     if (state == NULL) return 0;
     return state->count;
 }
@@ -587,8 +583,8 @@ static asx_status reconnect_call(void *state, const void *request, void *respons
 }
 
 void asx_service_reconnect_init(asx_service *svc, asx_service_reconnect_state *state,
-                                 asx_service inner, asx_service_make_fn make_fn,
-                                 void *factory_data, uint32_t max_reconnects) {
+                                asx_service inner, asx_service_make_fn make_fn, void *factory_data,
+                                uint32_t max_reconnects) {
     state->inner = inner;
     state->make_fn = make_fn;
     state->factory_data = factory_data;
@@ -633,7 +629,7 @@ static asx_status steer_call(void *state, const void *request, void *response) {
 }
 
 void asx_service_steer_init(asx_service *svc, asx_service_steer_state *state,
-                             asx_service_steer_fn steer_fn, void *user_data) {
+                            asx_service_steer_fn steer_fn, void *user_data) {
     state->count = 0;
     state->steer_fn = steer_fn;
     state->user_data = user_data;

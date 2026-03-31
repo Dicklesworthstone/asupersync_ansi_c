@@ -27,9 +27,9 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint64_t acquisitions;        /* total successful lock acquisitions */
-    uint64_t contentions;         /* times try_lock returned WOULD_BLOCK */
-    uint64_t max_contention_run;  /* longest consecutive contention streak */
+    uint64_t acquisitions;       /* total successful lock acquisitions */
+    uint64_t contentions;        /* times try_lock returned WOULD_BLOCK */
+    uint64_t max_contention_run; /* longest consecutive contention streak */
 } asx_lock_metrics_snapshot;
 
 /* -------------------------------------------------------------------
@@ -65,7 +65,7 @@ ASX_API asx_status asx_contended_mutex_close(asx_contended_mutex_handle handle);
 
 /* Try to lock immediately. Tracks contention on failure. */
 ASX_API asx_status asx_contended_mutex_try_lock(asx_contended_mutex_handle handle,
-                                                 asx_mutex_guard *out);
+                                                asx_mutex_guard *out);
 
 /* Unlock (delegates directly to mutex). */
 ASX_API asx_status asx_contended_mutex_unlock(asx_mutex_guard guard);
@@ -76,12 +76,12 @@ ASX_API asx_status asx_contended_mutex_unlock(asx_mutex_guard guard);
 
 /* Begin async lock acquisition. */
 ASX_API ASX_MUST_USE asx_status asx_contended_mutex_lock_begin(asx_contended_mutex_handle handle,
-                                                                asx_mutex_lock_waiter *out);
+                                                               asx_mutex_lock_waiter *out);
 
 /* Poll for async lock. Tracks contention on PENDING. */
 ASX_API asx_status asx_contended_mutex_poll_lock(asx_contended_mutex_handle handle,
-                                                  asx_mutex_lock_waiter *waiter,
-                                                  asx_mutex_guard *out, asx_cx *cx);
+                                                 asx_mutex_lock_waiter *waiter,
+                                                 asx_mutex_guard *out, asx_cx *cx);
 
 /* Cancel an async lock acquisition. */
 ASX_API asx_status asx_contended_mutex_lock_cancel(asx_mutex_lock_waiter *waiter);
@@ -92,7 +92,7 @@ ASX_API asx_status asx_contended_mutex_lock_cancel(asx_mutex_lock_waiter *waiter
 
 /* Get a snapshot of contention metrics. */
 ASX_API asx_status asx_contended_mutex_metrics(asx_contended_mutex_handle handle,
-                                                asx_lock_metrics_snapshot *out);
+                                               asx_lock_metrics_snapshot *out);
 
 /* Reset contention metrics to zero. */
 ASX_API asx_status asx_contended_mutex_reset_metrics(asx_contended_mutex_handle handle);

@@ -39,8 +39,8 @@ static inline ASX_MUST_USE asx_status asx_record_snapshot_capture(asx_record_sna
     return asx_runtime_snapshot_capture(snapshot);
 }
 
-static inline ASX_MUST_USE asx_status asx_record_snapshot_json(
-    const asx_record_snapshot *snapshot, asx_codec_buffer *out_json) {
+static inline ASX_MUST_USE asx_status asx_record_snapshot_json(const asx_record_snapshot *snapshot,
+                                                               asx_codec_buffer *out_json) {
     return asx_runtime_snapshot_to_json(snapshot, out_json);
 }
 

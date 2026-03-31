@@ -188,9 +188,7 @@ static inline int asx_handle_is_region(uint64_t h) {
     return asx_handle_type_tag(h) == ASX_TYPE_REGION;
 }
 
-static inline int asx_handle_is_task(uint64_t h) {
-    return asx_handle_type_tag(h) == ASX_TYPE_TASK;
-}
+static inline int asx_handle_is_task(uint64_t h) { return asx_handle_type_tag(h) == ASX_TYPE_TASK; }
 
 static inline int asx_handle_is_obligation(uint64_t h) {
     return asx_handle_type_tag(h) == ASX_TYPE_OBLIGATION;

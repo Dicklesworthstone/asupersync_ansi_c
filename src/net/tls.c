@@ -66,14 +66,10 @@ void asx_tls_config_init(asx_tls_config *cfg) {
 
 const char *asx_tls_root_source_str(asx_tls_root_source source) {
     switch (source) {
-        case ASX_TLS_ROOT_SOURCE_NONE:
-            return "none";
-        case ASX_TLS_ROOT_SOURCE_NATIVE:
-            return "native";
-        case ASX_TLS_ROOT_SOURCE_WEBPKI:
-            return "webpki";
-        default:
-            return "unknown";
+    case ASX_TLS_ROOT_SOURCE_NONE: return "none";
+    case ASX_TLS_ROOT_SOURCE_NATIVE: return "native";
+    case ASX_TLS_ROOT_SOURCE_WEBPKI: return "webpki";
+    default: return "unknown";
     }
 }
 
@@ -91,25 +87,22 @@ asx_status asx_tls_config_set_root_source(asx_tls_config *cfg, asx_tls_root_sour
     if (cfg == NULL) return ASX_E_INVALID_ARGUMENT;
 
     switch (source) {
-        case ASX_TLS_ROOT_SOURCE_NONE:
-            cfg->root_source = source;
-            return ASX_OK;
-        case ASX_TLS_ROOT_SOURCE_NATIVE:
+    case ASX_TLS_ROOT_SOURCE_NONE: cfg->root_source = source; return ASX_OK;
+    case ASX_TLS_ROOT_SOURCE_NATIVE:
 #if ASX_HAS_TLS_NATIVE_ROOTS
-            cfg->root_source = source;
-            return ASX_OK;
+        cfg->root_source = source;
+        return ASX_OK;
 #else
-            return ASX_E_PERMISSION_DENIED;
+        return ASX_E_PERMISSION_DENIED;
 #endif
-        case ASX_TLS_ROOT_SOURCE_WEBPKI:
+    case ASX_TLS_ROOT_SOURCE_WEBPKI:
 #if ASX_HAS_TLS_WEBPKI_ROOTS
-            cfg->root_source = source;
-            return ASX_OK;
+        cfg->root_source = source;
+        return ASX_OK;
 #else
-            return ASX_E_PERMISSION_DENIED;
+        return ASX_E_PERMISSION_DENIED;
 #endif
-        default:
-            return ASX_E_INVALID_ARGUMENT;
+    default: return ASX_E_INVALID_ARGUMENT;
     }
 }
 

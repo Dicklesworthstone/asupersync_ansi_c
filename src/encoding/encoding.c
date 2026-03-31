@@ -15,12 +15,12 @@
 
 const char *asx_encoding_error_kind_str(asx_encoding_error_kind kind) {
     switch (kind) {
-    case ASX_ENCODING_ERR_NONE:      return "none";
-    case ASX_ENCODING_ERR_CODEC:     return "codec";
-    case ASX_ENCODING_ERR_IO:        return "io";
-    case ASX_ENCODING_ERR_OVERFLOW:  return "overflow";
+    case ASX_ENCODING_ERR_NONE: return "none";
+    case ASX_ENCODING_ERR_CODEC: return "codec";
+    case ASX_ENCODING_ERR_IO: return "io";
+    case ASX_ENCODING_ERR_OVERFLOW: return "overflow";
     case ASX_ENCODING_ERR_CANCELLED: return "cancelled";
-    default:                         return "unknown";
+    default: return "unknown";
     }
 }
 
@@ -38,8 +38,7 @@ void asx_encoding_config_init(asx_encoding_config *cfg) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_encoding_pipeline_init(asx_encoding_pipeline *p, asx_codec codec,
-                                       asx_write_adapter writer,
-                                       const asx_encoding_config *cfg) {
+                                      asx_write_adapter writer, const asx_encoding_config *cfg) {
     if (p == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(p, 0, sizeof(*p));
@@ -64,8 +63,8 @@ asx_status asx_encoding_pipeline_init(asx_encoding_pipeline *p, asx_codec codec,
 /* Encode one frame                                                    */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_encoding_pipeline_encode(asx_encoding_pipeline *p, const void *data,
-                                         uint32_t len, asx_encoded_symbol *out_symbol) {
+asx_status asx_encoding_pipeline_encode(asx_encoding_pipeline *p, const void *data, uint32_t len,
+                                        asx_encoded_symbol *out_symbol) {
     asx_status st;
     asx_buf frozen;
     uint32_t bytes_before;

@@ -72,7 +72,7 @@ typedef enum {
     ASX_E_TIMER_NOT_FOUND = 800,
     ASX_E_TIMERS_PENDING = 801,
     ASX_E_TIMER_DURATION_EXCEEDED = 802,
-    ASX_E_TIMED_OUT = 803,          /* operation exceeded deadline */
+    ASX_E_TIMED_OUT = 803,         /* operation exceeded deadline */
     ASX_E_THRESHOLD_TIMEOUT = 804, /* quorum/threshold not met within deadline */
 
     /* Quiescence errors (9xx) */
@@ -85,7 +85,7 @@ typedef enum {
 
     /* Resource exhaustion (10xx) */
     ASX_E_RESOURCE_EXHAUSTED = 1000,
-    ASX_E_OVERLOADED = 1001,          /* service rejected due to backpressure/load shedding */
+    ASX_E_OVERLOADED = 1001,           /* service rejected due to backpressure/load shedding */
     ASX_E_COST_QUOTA_EXHAUSTED = 1002, /* cost budget depleted */
     ASX_E_POLL_QUOTA_EXHAUSTED = 1003, /* poll budget depleted (finer than POLL_BUDGET_EXHAUSTED) */
 

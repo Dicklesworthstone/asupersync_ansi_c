@@ -765,8 +765,7 @@ static void test_parse_args_seed_rejects_overflow(void) {
     asx_app_args args;
     const char *argv[] = {"myapp", "--seed=18446744073709551616"};
 
-    ASSERT(asx_app_parse_args(&args, 2, argv) == ASX_E_INVALID_ARGUMENT,
-           "seed overflow rejected");
+    ASSERT(asx_app_parse_args(&args, 2, argv) == ASX_E_INVALID_ARGUMENT, "seed overflow rejected");
 }
 
 static void test_parse_args_null(void) {

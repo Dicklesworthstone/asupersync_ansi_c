@@ -13,12 +13,12 @@
 #ifndef ASX_APP_APP_H
 #define ASX_APP_APP_H
 
+#include <asx/app/report.h>
 #include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/core/budget.h>
 #include <asx/cx/cx.h>
-#include <asx/app/report.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 
@@ -152,10 +152,8 @@ ASX_API asx_region_id asx_app_region(const asx_app *app);
  * sidecar process, subscribes to a shutdown signal, runs the main task, and
  * emits a human-readable summary plus doctor/inspection diagnostics into
  * out_summary when provided. */
-ASX_API asx_exit_code asx_app_run_server(asx_app *app,
-                                         const asx_app_server_config *server_config,
-                                         asx_task_poll_fn main_fn,
-                                         void *user_data,
+ASX_API asx_exit_code asx_app_run_server(asx_app *app, const asx_app_server_config *server_config,
+                                         asx_task_poll_fn main_fn, void *user_data,
                                          asx_app_server_report *out_report,
                                          asx_report_buf *out_summary);
 
@@ -164,11 +162,9 @@ ASX_API asx_exit_code asx_app_run_server(asx_app *app,
  * different region, or lacks ASX_CAP_SPAWN. When out_summary is provided,
  * it includes the same structured summary plus doctor/inspection output as
  * asx_app_run_server(). */
-ASX_API asx_exit_code asx_app_run_server_with_cx(asx_app *app,
-                                                 const asx_cx *app_cx,
+ASX_API asx_exit_code asx_app_run_server_with_cx(asx_app *app, const asx_cx *app_cx,
                                                  const asx_app_server_config *server_config,
-                                                 asx_task_poll_fn main_fn,
-                                                 void *user_data,
+                                                 asx_task_poll_fn main_fn, void *user_data,
                                                  asx_app_server_report *out_report,
                                                  asx_report_buf *out_summary);
 #endif

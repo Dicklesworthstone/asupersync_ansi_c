@@ -451,27 +451,27 @@ ASX_API ASX_MUST_USE asx_status asx_region_drain(asx_region_id id, asx_budget *b
 
 /* Drain progress snapshot: live counters during region drain. */
 typedef struct {
-    asx_region_state region_state;     /* current region state */
-    uint32_t tasks_total;              /* total tasks spawned in region */
-    uint32_t tasks_live;               /* non-completed tasks */
-    uint32_t tasks_cancelled;          /* tasks in cancel phase >= REQUESTED */
-    uint32_t tasks_completed;          /* tasks in COMPLETED state */
-    uint32_t obligations_total;        /* total obligations in region */
-    uint32_t obligations_reserved;     /* still-reserved (unresolved) */
-    uint32_t obligations_resolved;     /* committed + aborted */
-    int cleanup_drained;               /* 1 if cleanup stack is empty */
-    int poisoned;                      /* 1 if region is poisoned */
+    asx_region_state region_state; /* current region state */
+    uint32_t tasks_total;          /* total tasks spawned in region */
+    uint32_t tasks_live;           /* non-completed tasks */
+    uint32_t tasks_cancelled;      /* tasks in cancel phase >= REQUESTED */
+    uint32_t tasks_completed;      /* tasks in COMPLETED state */
+    uint32_t obligations_total;    /* total obligations in region */
+    uint32_t obligations_reserved; /* still-reserved (unresolved) */
+    uint32_t obligations_resolved; /* committed + aborted */
+    int cleanup_drained;           /* 1 if cleanup stack is empty */
+    int poisoned;                  /* 1 if region is poisoned */
 } asx_drain_progress;
 
 /* Quiescence conjunct evidence: each field is 1 if the condition holds. */
 typedef struct {
-    int q1_tasks_complete;       /* Q1: all tasks reached COMPLETED */
-    int q2_children_closed;      /* Q2: all child regions closed (always 1 in walking skeleton) */
-    int q3_obligations_resolved; /* Q3: no obligations in RESERVED state */
-    int q4_cleanup_drained;      /* Q4: cleanup stack fully drained */
-    int quiescent;               /* 1 iff all Q1-Q4 hold and region is CLOSED */
+    int q1_tasks_complete;         /* Q1: all tasks reached COMPLETED */
+    int q2_children_closed;        /* Q2: all child regions closed (always 1 in walking skeleton) */
+    int q3_obligations_resolved;   /* Q3: no obligations in RESERVED state */
+    int q4_cleanup_drained;        /* Q4: cleanup stack fully drained */
+    int quiescent;                 /* 1 iff all Q1-Q4 hold and region is CLOSED */
     asx_region_state region_state; /* current region state */
-    asx_drain_progress progress; /* full progress snapshot */
+    asx_drain_progress progress;   /* full progress snapshot */
 } asx_quiescence_report;
 
 /* Query the drain progress of a region.
@@ -482,7 +482,7 @@ typedef struct {
  *   ASX_E_NOT_FOUND if id is invalid.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_region_drain_progress(asx_region_id id,
-                                                           asx_drain_progress *out);
+                                                          asx_drain_progress *out);
 
 /* Detailed quiescence check with decomposed Q1-Q4 evidence.
  *
@@ -497,7 +497,7 @@ ASX_API ASX_MUST_USE asx_status asx_region_drain_progress(asx_region_id id,
  *   ASX_E_NOT_FOUND if id is invalid.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_quiescence_check_detailed(asx_region_id id,
-                                                               asx_quiescence_report *out);
+                                                              asx_quiescence_report *out);
 
 /* Reset all runtime state (test support only).
  * Clears lifecycle arenas plus global scheduler/parallel/channel/timer/

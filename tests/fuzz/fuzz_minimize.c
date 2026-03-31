@@ -213,6 +213,141 @@ static void min_generate_scenario(min_rng *rng, min_scenario *sc, uint32_t max_o
     }
 }
 
+/* ===================================================================
+ * Mutation engine (kept in lockstep with fuzz_differential.c)
+ * =================================================================== */
+
+typedef enum {
+    MIN_MUT_REMOVE_OP = 0,
+    MIN_MUT_DUPLICATE_OP = 1,
+    MIN_MUT_SWAP_OPS = 2,
+    MIN_MUT_CHANGE_KIND = 3,
+    MIN_MUT_TWEAK_ARG = 4,
+    MIN_MUT_INSERT_OP = 5,
+    MIN_MUT_CHANGE_IDX = 6,
+    MIN_MUT_COUNT = 7
+} min_mutation_kind;
+
+typedef struct {
+    min_mutation_kind kind;
+    uint32_t target_idx;
+    uint32_t secondary;
+} min_mutation_record;
+
+static min_mutation_record min_mutate(min_rng *rng, min_scenario *sc) {
+    min_mutation_record rec;
+    min_mutation_kind mut;
+    uint32_t idx;
+    uint32_t idx2;
+
+    memset(&rec, 0, sizeof(rec));
+
+    if (sc->op_count < 2u) {
+        rec.kind = MIN_MUT_TWEAK_ARG;
+        rec.target_idx = 0u;
+        if (sc->op_count > 0u) { sc->ops[0].arg_u32 = min_rng_u32(rng, 64u); }
+        return rec;
+    }
+
+    mut = (min_mutation_kind)min_rng_u32(rng, MIN_MUT_COUNT);
+    rec.kind = mut;
+
+    switch (mut) {
+    case MIN_MUT_REMOVE_OP:
+        idx = 1u + min_rng_u32(rng, sc->op_count - 1u);
+        rec.target_idx = idx;
+        memmove(&sc->ops[idx], &sc->ops[idx + 1u],
+                (size_t)(sc->op_count - idx - 1u) * sizeof(min_op));
+        sc->op_count--;
+        break;
+
+    case MIN_MUT_DUPLICATE_OP:
+        if (sc->op_count < MIN_MAX_OPS) {
+            idx = min_rng_u32(rng, sc->op_count);
+            rec.target_idx = idx;
+            sc->ops[sc->op_count] = sc->ops[idx];
+            sc->op_count++;
+        }
+        break;
+
+    case MIN_MUT_SWAP_OPS:
+        idx = 1u + min_rng_u32(rng, sc->op_count - 1u);
+        idx2 = 1u + min_rng_u32(rng, sc->op_count - 1u);
+        rec.target_idx = idx;
+        rec.secondary = idx2;
+        if (idx != idx2) {
+            min_op tmp = sc->ops[idx];
+            sc->ops[idx] = sc->ops[idx2];
+            sc->ops[idx2] = tmp;
+        }
+        break;
+
+    case MIN_MUT_CHANGE_KIND:
+        idx = 1u + min_rng_u32(rng, sc->op_count - 1u);
+        rec.target_idx = idx;
+        sc->ops[idx].kind = min_pick_op(rng);
+        break;
+
+    case MIN_MUT_TWEAK_ARG:
+        idx = min_rng_u32(rng, sc->op_count);
+        rec.target_idx = idx;
+        switch (min_rng_u32(rng, 3u)) {
+        case 0u: sc->ops[idx].arg_u32 = min_rng_u32(rng, 128u); break;
+        case 1u: sc->ops[idx].arg_u64 = min_rng_next(rng) % 100000u; break;
+        default: sc->ops[idx].arg_u32 ^= (1u << min_rng_u32(rng, 32u)); break;
+        }
+        break;
+
+    case MIN_MUT_INSERT_OP:
+        if (sc->op_count < MIN_MAX_OPS) {
+            idx = 1u + min_rng_u32(rng, sc->op_count);
+            if (idx > sc->op_count) idx = sc->op_count;
+            rec.target_idx = idx;
+            memmove(&sc->ops[idx + 1u], &sc->ops[idx],
+                    (size_t)(sc->op_count - idx) * sizeof(min_op));
+            sc->ops[idx].kind = min_pick_op(rng);
+            sc->ops[idx].idx_a = min_rng_u32(rng, MIN_MAX_REGIONS);
+            sc->ops[idx].idx_b = min_rng_u32(rng, MIN_MAX_TASKS);
+            sc->ops[idx].arg_u32 = min_rng_u32(rng, 32u);
+            sc->ops[idx].arg_u64 = min_rng_next(rng) % 10000u;
+            sc->op_count++;
+        }
+        break;
+
+    case MIN_MUT_CHANGE_IDX:
+        idx = min_rng_u32(rng, sc->op_count);
+        rec.target_idx = idx;
+        if (min_rng_u32(rng, 2u) == 0u) {
+            sc->ops[idx].idx_a = min_rng_u32(rng, MIN_MAX_REGIONS);
+        } else {
+            sc->ops[idx].idx_b = min_rng_u32(rng, MIN_MAX_TASKS);
+        }
+        break;
+
+    default: break;
+    }
+
+    return rec;
+}
+
+static void min_generate_iteration_scenario(min_scenario *sc, uint64_t initial_seed,
+                                            uint64_t target_iteration, uint32_t max_ops,
+                                            uint32_t mutations_per_scenario) {
+    min_rng gen_rng;
+    uint64_t iter;
+
+    min_rng_seed(&gen_rng, initial_seed);
+    for (iter = 0u; iter < target_iteration; iter++) {
+        min_scenario skip_sc;
+        uint32_t m;
+
+        min_generate_scenario(&gen_rng, &skip_sc, max_ops);
+        for (m = 0u; m < mutations_per_scenario && m < 16u; m++) { min_mutate(&gen_rng, &skip_sc); }
+    }
+
+    min_generate_scenario(&gen_rng, sc, max_ops);
+}
+
 /* Read a scenario from stdin in text format:
  * "scenario_seed op_count kind0 a0 b0 u32_0 u64_0 kind1 ..."
  * Returns 0 on success, -1 on failure/EOF. */
@@ -1071,6 +1206,39 @@ static int min_selftest(int verbose) {
             result.minimized_ops);
     if (verbose) { min_emit_json(stderr, &sc, &result); }
 
+    /* ---- Self-test 4: seed+iteration replay stays aligned with mutation RNG ---- */
+    fprintf(stderr, "[minimize] running self-test 4 (seed+iteration replay)...\n");
+    {
+        static const uint64_t k_seed = 424242u;
+        static const uint64_t k_iteration = 7u;
+        static const uint32_t k_max_ops = 64u;
+        static const uint32_t k_mutations = 4u;
+        min_rng replay_rng;
+        min_scenario expected;
+        min_scenario replayed;
+        uint64_t iter;
+
+        min_rng_seed(&replay_rng, k_seed);
+        memset(&expected, 0, sizeof(expected));
+        for (iter = 0u; iter <= k_iteration; iter++) {
+            uint32_t m;
+
+            min_generate_scenario(&replay_rng, &expected, k_max_ops);
+            if (iter == k_iteration) { break; }
+            for (m = 0u; m < k_mutations && m < 16u; m++) { min_mutate(&replay_rng, &expected); }
+        }
+
+        memset(&replayed, 0, sizeof(replayed));
+        min_generate_iteration_scenario(&replayed, k_seed, k_iteration, k_max_ops, k_mutations);
+        if (expected.seed != replayed.seed || expected.op_count != replayed.op_count ||
+            memcmp(expected.ops, replayed.ops,
+                   (size_t)expected.op_count * sizeof(expected.ops[0])) != 0) {
+            fprintf(stderr, "[minimize] self-test 4 FAIL: replayed scenario mismatch\n");
+            return 1;
+        }
+    }
+    fprintf(stderr, "[minimize] self-test 4 PASS\n");
+
     return 0;
 }
 
@@ -1173,30 +1341,11 @@ int main(int argc, char **argv) {
 
     /* Generate or read scenario */
     if (has_initial_seed) {
-        /* Generate scenario from master seed + iteration, matching
-         * fuzz_differential.c's RNG sequence exactly. */
-        min_rng gen_rng;
-        uint64_t skip;
-        min_rng_seed(&gen_rng, initial_seed);
-        /* Skip to the target iteration by generating + discarding
-         * preceding scenarios. Each iteration consumes generation RNG
-         * plus mutation RNG (4 mutations by default). */
-        for (skip = 0u; skip < target_iteration; skip++) {
-            min_scenario skip_sc;
-            uint32_t m;
-            min_generate_scenario(&gen_rng, &skip_sc, max_ops);
-            /* Skip mutation RNG draws to stay in sync */
-            for (m = 0u; m < mutations_per_scenario && m < 16u; m++) {
-                /* Each mutation draws 2-4 RNG values depending on type.
-                 * For simplicity, we do the actual mutation on a throw-away copy. */
-                /* TODO: when fuzz_common.h is created, use the real mutate.
-                 * For now, just advance the RNG by the average mutation cost. */
-                min_rng_next(&gen_rng);
-                min_rng_next(&gen_rng);
-                min_rng_next(&gen_rng);
-            }
-        }
-        min_generate_scenario(&gen_rng, &sc, max_ops);
+        /* Reconstruct the exact base scenario for a target iteration.
+         * Earlier iterations must consume both generation RNG and the
+         * real mutation RNG sequence to stay aligned with the fuzzer. */
+        min_generate_iteration_scenario(&sc, initial_seed, target_iteration, max_ops,
+                                        mutations_per_scenario);
         fprintf(stderr,
                 "[minimize] generated scenario from seed=%llu iter=%llu: "
                 "%u ops, scenario_seed=%llu\n",

@@ -6,9 +6,9 @@
 
 #include "../../test_harness.h"
 #include <asx/asx_config.h>
-#include <asx/encoding/encoding.h>
 #include <asx/bytes/codec.h>
 #include <asx/bytes/io_adapter.h>
+#include <asx/encoding/encoding.h>
 #include <string.h>
 
 #if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_IO
@@ -45,9 +45,7 @@ TEST(encoding_config_defaults) {
     ASSERT_EQ(cfg.flush_after_each, 0);
 }
 
-TEST(encoding_config_null_safe) {
-    asx_encoding_config_init(NULL); /* should not crash */
-}
+TEST(encoding_config_null_safe) { asx_encoding_config_init(NULL); /* should not crash */ }
 
 /* ------------------------------------------------------------------ */
 /* Pipeline init tests                                                 */
@@ -147,8 +145,8 @@ TEST(encoding_encode_multiple_frames) {
 
     asx_encoding_pipeline_stats(&p, &stats);
     ASSERT_EQ(stats.frames_encoded, 3u);
-    ASSERT_EQ(stats.bytes_input, 6u);      /* 2 + 3 + 1 */
-    ASSERT_EQ(stats.bytes_output, 18u);    /* (4+2) + (4+3) + (4+1) */
+    ASSERT_EQ(stats.bytes_input, 6u);   /* 2 + 3 + 1 */
+    ASSERT_EQ(stats.bytes_output, 18u); /* (4+2) + (4+3) + (4+1) */
 }
 
 /* ------------------------------------------------------------------ */
@@ -337,9 +335,7 @@ TEST(encoding_flush) {
     ASSERT_EQ(asx_encoding_pipeline_flush(&p), ASX_OK);
 }
 
-TEST(encoding_flush_null) {
-    ASSERT_EQ(asx_encoding_pipeline_flush(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(encoding_flush_null) { ASSERT_EQ(asx_encoding_pipeline_flush(NULL), ASX_E_INVALID_ARGUMENT); }
 
 /* ------------------------------------------------------------------ */
 /* Lines codec through pipeline                                        */
@@ -377,7 +373,7 @@ TEST(encoding_lines_codec) {
 TEST(encoding_null_queries) {
     asx_encoding_stats stats;
 
-    asx_encoding_pipeline_stats(NULL, &stats);  /* should not crash */
+    asx_encoding_pipeline_stats(NULL, &stats); /* should not crash */
     asx_encoding_pipeline_stats(NULL, NULL);
     ASSERT_EQ(asx_encoding_pipeline_last_error(NULL), ASX_ENCODING_ERR_NONE);
     asx_encoding_pipeline_cancel(NULL);

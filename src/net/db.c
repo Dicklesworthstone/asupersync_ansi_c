@@ -33,16 +33,11 @@ void asx_db_config_init(asx_db_config *cfg) {
 
 const char *asx_db_backend_str(asx_db_backend backend) {
     switch (backend) {
-        case ASX_DB_BACKEND_MEMORY:
-            return "memory";
-        case ASX_DB_BACKEND_SQLITE:
-            return "sqlite";
-        case ASX_DB_BACKEND_POSTGRES:
-            return "postgres";
-        case ASX_DB_BACKEND_MYSQL:
-            return "mysql";
-        default:
-            return "unknown";
+    case ASX_DB_BACKEND_MEMORY: return "memory";
+    case ASX_DB_BACKEND_SQLITE: return "sqlite";
+    case ASX_DB_BACKEND_POSTGRES: return "postgres";
+    case ASX_DB_BACKEND_MYSQL: return "mysql";
+    default: return "unknown";
     }
 }
 
@@ -61,32 +56,29 @@ asx_status asx_db_pool_set_backend(asx_db_pool *pool, asx_db_backend backend) {
     if (pool == NULL) return ASX_E_INVALID_ARGUMENT;
 
     switch (backend) {
-        case ASX_DB_BACKEND_MEMORY:
-            pool->config.backend = backend;
-            return ASX_OK;
-        case ASX_DB_BACKEND_SQLITE:
+    case ASX_DB_BACKEND_MEMORY: pool->config.backend = backend; return ASX_OK;
+    case ASX_DB_BACKEND_SQLITE:
 #if ASX_HAS_DB_SQLITE_BACKEND
-            pool->config.backend = backend;
-            return ASX_OK;
+        pool->config.backend = backend;
+        return ASX_OK;
 #else
-            return ASX_E_PERMISSION_DENIED;
+        return ASX_E_PERMISSION_DENIED;
 #endif
-        case ASX_DB_BACKEND_POSTGRES:
+    case ASX_DB_BACKEND_POSTGRES:
 #if ASX_HAS_DB_POSTGRES_BACKEND
-            pool->config.backend = backend;
-            return ASX_OK;
+        pool->config.backend = backend;
+        return ASX_OK;
 #else
-            return ASX_E_PERMISSION_DENIED;
+        return ASX_E_PERMISSION_DENIED;
 #endif
-        case ASX_DB_BACKEND_MYSQL:
+    case ASX_DB_BACKEND_MYSQL:
 #if ASX_HAS_DB_MYSQL_BACKEND
-            pool->config.backend = backend;
-            return ASX_OK;
+        pool->config.backend = backend;
+        return ASX_OK;
 #else
-            return ASX_E_PERMISSION_DENIED;
+        return ASX_E_PERMISSION_DENIED;
 #endif
-        default:
-            return ASX_E_INVALID_ARGUMENT;
+    default: return ASX_E_INVALID_ARGUMENT;
     }
 }
 

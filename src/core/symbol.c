@@ -269,9 +269,8 @@ const char *asx_type_kind_str(asx_type_kind kind) {
 /* Typed value                                                         */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_typed_value_init(asx_typed_value *val, asx_symbol_id symbol,
-                                 asx_type_kind kind, const void *payload,
-                                 uint32_t payload_size) {
+asx_status asx_typed_value_init(asx_typed_value *val, asx_symbol_id symbol, asx_type_kind kind,
+                                const void *payload, uint32_t payload_size) {
     if (val == NULL) return ASX_E_INVALID_ARGUMENT;
     val->symbol = symbol;
     val->kind = kind;

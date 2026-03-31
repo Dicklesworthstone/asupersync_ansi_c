@@ -55,25 +55,25 @@ extern "C" {
 #endif
 
 typedef enum {
-    ASX_DB_TYPE_NULL    = 0,
-    ASX_DB_TYPE_INT     = 1,
-    ASX_DB_TYPE_TEXT    = 2,
-    ASX_DB_TYPE_BLOB    = 3,
-    ASX_DB_TYPE_FLOAT   = 4
+    ASX_DB_TYPE_NULL = 0,
+    ASX_DB_TYPE_INT = 1,
+    ASX_DB_TYPE_TEXT = 2,
+    ASX_DB_TYPE_BLOB = 3,
+    ASX_DB_TYPE_FLOAT = 4
 } asx_db_type;
 
 typedef enum {
-    ASX_DB_CONN_IDLE    = 0,
-    ASX_DB_CONN_ACTIVE  = 1,
-    ASX_DB_CONN_IN_TX   = 2,
-    ASX_DB_CONN_CLOSED  = 3
+    ASX_DB_CONN_IDLE = 0,
+    ASX_DB_CONN_ACTIVE = 1,
+    ASX_DB_CONN_IN_TX = 2,
+    ASX_DB_CONN_CLOSED = 3
 } asx_db_conn_state;
 
 typedef enum {
-    ASX_DB_BACKEND_MEMORY   = 0,
-    ASX_DB_BACKEND_SQLITE   = 1,
+    ASX_DB_BACKEND_MEMORY = 0,
+    ASX_DB_BACKEND_SQLITE = 1,
     ASX_DB_BACKEND_POSTGRES = 2,
-    ASX_DB_BACKEND_MYSQL    = 3
+    ASX_DB_BACKEND_MYSQL = 3
 } asx_db_backend;
 
 /* -------------------------------------------------------------------

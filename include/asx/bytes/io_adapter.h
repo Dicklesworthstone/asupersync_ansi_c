@@ -11,8 +11,8 @@
 #ifndef ASX_BYTES_IO_ADAPTER_H
 #define ASX_BYTES_IO_ADAPTER_H
 
-#include <asx/asx_export.h>
 #include <asx/asx_config.h>
+#include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
 #include <asx/runtime/waker.h>
@@ -131,12 +131,12 @@ ASX_API void asx_buf_reader_init(asx_buf_reader *br, asx_read_adapter inner);
 
 /* Read up to dst capacity bytes, buffering internally. */
 ASX_API ASX_MUST_USE asx_read_result asx_buf_reader_read(asx_buf_reader *br, asx_buf_mut *dst,
-                                                           uint32_t *bytes_read);
+                                                         uint32_t *bytes_read);
 
 /* Read exactly one line (up to newline or EOF). Returns line in dst.
  * Line delimiter is consumed but not included in output. */
 ASX_API ASX_MUST_USE asx_status asx_buf_reader_read_line(asx_buf_reader *br, asx_buf_mut *dst,
-                                                           uint32_t *bytes_read);
+                                                         uint32_t *bytes_read);
 
 /* Check if EOF has been reached. */
 ASX_API int asx_buf_reader_is_eof(const asx_buf_reader *br);
@@ -156,7 +156,7 @@ ASX_API void asx_buf_writer_init(asx_buf_writer *bw, asx_write_adapter inner);
 
 /* Write data through the buffer. Flushes when buffer is full. */
 ASX_API ASX_MUST_USE asx_status asx_buf_writer_write(asx_buf_writer *bw, const asx_buf *src,
-                                                       uint32_t *bytes_written);
+                                                     uint32_t *bytes_written);
 
 /* Flush all buffered data to the underlying writer. */
 ASX_API ASX_MUST_USE asx_status asx_buf_writer_flush(asx_buf_writer *bw);
@@ -171,7 +171,7 @@ ASX_API asx_status asx_buf_writer_shutdown(asx_buf_writer *bw);
 /* Copy all data from src reader to dst writer until EOF.
  * Returns total bytes copied in *bytes_copied. */
 ASX_API ASX_MUST_USE asx_status asx_io_copy(asx_read_adapter *src, asx_write_adapter *dst,
-                                              uint64_t *bytes_copied);
+                                            uint64_t *bytes_copied);
 
 /* Copy at most max_bytes from src to dst.
  * Returns actual bytes copied in *bytes_copied. */
@@ -184,13 +184,13 @@ ASX_API ASX_MUST_USE asx_status asx_io_copy_n(asx_read_adapter *src, asx_write_a
 
 /* Read exactly n bytes into dst. Returns ASX_OK or error.
  * Partial reads are retried until exactly n bytes are read or EOF/error. */
-ASX_API ASX_MUST_USE asx_status asx_io_read_exact(asx_read_adapter *src, asx_buf_mut *dst,
-                                                    size_t n, size_t *bytes_read);
+ASX_API ASX_MUST_USE asx_status asx_io_read_exact(asx_read_adapter *src, asx_buf_mut *dst, size_t n,
+                                                  size_t *bytes_read);
 
 /* Read all remaining data into dst until EOF.
  * Returns total bytes read in *bytes_read. */
 ASX_API ASX_MUST_USE asx_status asx_io_read_to_end(asx_read_adapter *src, asx_buf_mut *dst,
-                                                     size_t *bytes_read);
+                                                   size_t *bytes_read);
 
 /* -------------------------------------------------------------------
  * Write extensions — convenience wrappers
@@ -212,7 +212,7 @@ typedef struct {
 
 /* Initialize a chain reader that reads from first, then second. */
 ASX_API void asx_chain_reader_init(asx_chain_reader_state *state, asx_read_adapter first,
-                                    asx_read_adapter second);
+                                   asx_read_adapter second);
 
 /* Get a read adapter for the chain reader. */
 ASX_API asx_read_adapter asx_chain_reader_adapter(asx_chain_reader_state *state);
@@ -228,7 +228,7 @@ typedef struct {
 
 /* Initialize a take reader that reads at most limit bytes from inner. */
 ASX_API void asx_take_reader_init(asx_take_reader_state *state, asx_read_adapter inner,
-                                   size_t limit);
+                                  size_t limit);
 
 /* Get a read adapter for the take reader. */
 ASX_API asx_read_adapter asx_take_reader_adapter(asx_take_reader_state *state);

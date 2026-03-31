@@ -50,12 +50,12 @@ typedef struct {
 typedef struct {
     asx_breaker_config config;
     asx_breaker_state state;
-    uint32_t failure_count;       /* consecutive failures in CLOSED */
-    uint32_t success_count;       /* consecutive successes in HALF_OPEN */
-    uint32_t half_open_active;    /* active calls in HALF_OPEN */
-    uint32_t total_trips;         /* total times breaker has tripped */
-    uint32_t total_calls;         /* total call attempts */
-    uint32_t total_rejected;      /* total fast-fail rejections */
+    uint32_t failure_count;    /* consecutive failures in CLOSED */
+    uint32_t success_count;    /* consecutive successes in HALF_OPEN */
+    uint32_t half_open_active; /* active calls in HALF_OPEN */
+    uint32_t total_trips;      /* total times breaker has tripped */
+    uint32_t total_calls;      /* total call attempts */
+    uint32_t total_rejected;   /* total fast-fail rejections */
 } asx_circuit_breaker;
 
 /* -------------------------------------------------------------------
@@ -67,7 +67,7 @@ ASX_API void asx_breaker_init(asx_circuit_breaker *cb);
 
 /* Initialize with custom config. */
 ASX_API ASX_MUST_USE asx_status asx_breaker_init_with(asx_circuit_breaker *cb,
-                                                       const asx_breaker_config *config);
+                                                      const asx_breaker_config *config);
 
 /* -------------------------------------------------------------------
  * API: Call lifecycle

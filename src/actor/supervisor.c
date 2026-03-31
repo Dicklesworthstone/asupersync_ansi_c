@@ -384,7 +384,7 @@ uint32_t asx_supervisor_restart_count(asx_supervisor_handle sup) {
 /* ------------------------------------------------------------------ */
 
 void asx_child_spec_ext_init(asx_child_spec_ext *spec, const char *name,
-                               asx_child_start_fn start_fn, void *user_data) {
+                             asx_child_start_fn start_fn, void *user_data) {
     if (spec == NULL) return;
     memset(spec, 0, sizeof(*spec));
     spec->start_fn = start_fn;
@@ -412,7 +412,7 @@ asx_status asx_child_spec_ext_depends_on(asx_child_spec_ext *spec, uint32_t dep_
 /* ------------------------------------------------------------------ */
 
 void asx_restart_intensity_init(asx_restart_intensity *ri, uint32_t max_restarts,
-                                 uint64_t window_ns) {
+                                uint64_t window_ns) {
     if (ri == NULL) return;
     memset(ri, 0, sizeof(*ri));
     ri->max_restarts = max_restarts;
@@ -459,8 +459,8 @@ int asx_restart_intensity_is_storm(const asx_restart_intensity *ri, uint64_t now
 /* ------------------------------------------------------------------ */
 
 asx_status asx_supervisor_start_ext(asx_supervisor_handle *out, asx_region_id region,
-                                     const asx_supervisor_config *config,
-                                     const asx_child_spec_ext *children, uint32_t child_count) {
+                                    const asx_supervisor_config *config,
+                                    const asx_child_spec_ext *children, uint32_t child_count) {
     /* Convert extended specs to basic specs and delegate to start */
     asx_child_spec basic[ASX_SUPERVISOR_MAX_CHILDREN];
     uint32_t i;

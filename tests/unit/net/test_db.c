@@ -10,9 +10,7 @@
 #include <string.h>
 
 #if ASX_HAS_DATABASE_SURFACE
-static int db_surface_available(void) {
-    return asx_surface_available_active(ASX_SURFACE_DATABASE);
-}
+static int db_surface_available(void) { return asx_surface_available_active(ASX_SURFACE_DATABASE); }
 
 TEST(db_pool_init) {
     asx_db_pool pool;

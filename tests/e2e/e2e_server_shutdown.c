@@ -5,14 +5,13 @@
  */
 
 #include <asx/app/app.h>
-#include <asx/fs/fs.h>
 #include <asx/bytes/buf.h>
+#include <asx/fs/fs.h>
 #include <asx/signal/signal.h>
 #include <stdio.h>
 #include <string.h>
 
-static asx_status server_poll(void *data, asx_task_id self)
-{
+static asx_status server_poll(void *data, asx_task_id self) {
     int *remaining = (int *)data;
     (void)self;
     if (*remaining > 0) {
@@ -22,13 +21,11 @@ static asx_status server_poll(void *data, asx_task_id self)
     return ASX_OK;
 }
 
-static void record_digest(unsigned long long *digest, unsigned long long value)
-{
+static void record_digest(unsigned long long *digest, unsigned long long value) {
     *digest ^= value + 0x9e3779b97f4a7c15ULL + (*digest << 6) + (*digest >> 2);
 }
 
-int main(void)
-{
+int main(void) {
     asx_app app;
     asx_app_config config;
     asx_app_server_config server;
@@ -59,8 +56,7 @@ int main(void)
         return 1;
     }
     payload = asx_buf_from_cstr("mode=serve\nport=8080\n");
-    if (asx_fs_file_poll_write(file, &payload, &n) != ASX_OK ||
-        asx_fs_file_close(file) != ASX_OK) {
+    if (asx_fs_file_poll_write(file, &payload, &n) != ASX_OK || asx_fs_file_close(file) != ASX_OK) {
         printf("SCENARIO server.config_write fail config_write\n");
         return 1;
     }
@@ -78,8 +74,8 @@ int main(void)
         return 1;
     }
 
-    if (asx_app_run_server(&app, &server, server_poll, &polls_remaining, &report, &summary)
-        != ASX_EXIT_OK) {
+    if (asx_app_run_server(&app, &server, server_poll, &polls_remaining, &report, &summary) !=
+        ASX_EXIT_OK) {
         printf("SCENARIO server.run fail exit_code_%u\n", (unsigned)report.exit_code);
         return 1;
     }

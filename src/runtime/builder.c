@@ -359,7 +359,8 @@ asx_status asx_runtime_builder_set_wait_policy(asx_runtime_builder *builder,
     return ASX_OK;
 }
 
-asx_status asx_runtime_builder_set_io_backend(asx_runtime_builder *builder, asx_io_backend backend) {
+asx_status asx_runtime_builder_set_io_backend(asx_runtime_builder *builder,
+                                              asx_io_backend backend) {
     if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
     if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;

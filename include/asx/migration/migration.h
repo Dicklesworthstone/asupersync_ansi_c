@@ -81,7 +81,7 @@ typedef struct {
 /* Produce a migration report for data produced with a given wire version.
  * Returns ASX_E_INVALID_ARGUMENT if report is NULL. */
 ASX_API ASX_MUST_USE asx_status asx_migration_check(uint32_t wire_version,
-                                                      asx_migration_report *report);
+                                                    asx_migration_report *report);
 
 /* -------------------------------------------------------------------
  * Feature availability probes

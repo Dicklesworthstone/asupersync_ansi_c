@@ -318,8 +318,8 @@ uint32_t asx_rate_limit_available(const asx_rate_limit_state *state) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_hedge_init(asx_hedge_state *state, asx_combinator_poll_fn primary_fn,
-                           void *primary_data, asx_combinator_poll_fn backup_fn,
-                           void *backup_data, uint64_t deadline_ns) {
+                          void *primary_data, asx_combinator_poll_fn backup_fn, void *backup_data,
+                          uint64_t deadline_ns) {
     if (state == NULL || primary_fn == NULL || backup_fn == NULL) return ASX_E_INVALID_ARGUMENT;
 
     branch_init(&state->primary);
@@ -351,9 +351,7 @@ asx_status asx_hedge_poll(void *user_data, asx_task_id self) {
             asx_status dst = asx_deadline_after(&state->deadline, state->deadline_ns);
             if (dst == ASX_OK) {
                 dst = asx_deadline_arm(&state->deadline, NULL);
-                if (dst == ASX_OK) {
-                    state->deadline_armed = 1;
-                }
+                if (dst == ASX_OK) { state->deadline_armed = 1; }
             }
             /* If deadline cannot be armed, skip to racing immediately */
             if (!state->deadline_armed) {
@@ -371,13 +369,19 @@ asx_status asx_hedge_poll(void *user_data, asx_task_id self) {
             state->phase = ASX_HEDGE_DECIDED;
             state->winner = 0;
             state->result = st;
-            { asx_status dd_ = asx_deadline_disarm(&state->deadline); (void)dd_; }
+            {
+                asx_status dd_ = asx_deadline_disarm(&state->deadline);
+                (void)dd_;
+            }
             return st;
         }
 
         /* Check deadline */
         if (asx_deadline_is_expired(&state->deadline)) {
-            { asx_status dd_ = asx_deadline_disarm(&state->deadline); (void)dd_; }
+            {
+                asx_status dd_ = asx_deadline_disarm(&state->deadline);
+                (void)dd_;
+            }
             state->phase = ASX_HEDGE_RACING;
             state->backup.poll_fn = state->backup_fn;
             state->backup.user_data = state->backup_data;
@@ -426,7 +430,7 @@ int asx_hedge_winner(const asx_hedge_state *state) {
 /* ------------------------------------------------------------------ */
 
 void asx_adaptive_hedge_init(asx_adaptive_hedge_policy *policy, uint32_t alpha_pct,
-                              uint64_t min_delay_ns, uint64_t max_delay_ns) {
+                             uint64_t min_delay_ns, uint64_t max_delay_ns) {
     uint32_t i;
     if (policy == NULL) return;
     for (i = 0; i < ASX_ADAPTIVE_HEDGE_WINDOW; i++) policy->history[i] = 0;
@@ -498,7 +502,7 @@ uint32_t asx_adaptive_hedge_observations(const asx_adaptive_hedge_policy *policy
 /* ------------------------------------------------------------------ */
 
 asx_status asx_map_reduce_init(asx_map_reduce_state *state, asx_map_reduce_fn reduce_fn,
-                                void *reduce_data) {
+                               void *reduce_data) {
     if (state == NULL || reduce_fn == NULL) return ASX_E_INVALID_ARGUMENT;
     memset(state, 0, sizeof(*state));
     state->reduce_fn = reduce_fn;
@@ -508,7 +512,7 @@ asx_status asx_map_reduce_init(asx_map_reduce_state *state, asx_map_reduce_fn re
 }
 
 asx_status asx_map_reduce_add(asx_map_reduce_state *state, asx_combinator_poll_fn map_fn,
-                               void *user_data) {
+                              void *user_data) {
     if (state == NULL || map_fn == NULL) return ASX_E_INVALID_ARGUMENT;
     if (state->count >= ASX_COMBINATOR_MAX_BRANCHES) return ASX_E_RESOURCE_EXHAUSTED;
     branch_init(&state->branches[state->count]);
@@ -530,18 +534,14 @@ asx_status asx_map_reduce_poll(void *user_data, asx_task_id self) {
     /* Poll all incomplete branches */
     completed = 0;
     for (i = 0; i < state->count; i++) {
-        if (!state->branches[i].done) {
-            (void)branch_poll(&state->branches[i], self);
-        }
+        if (!state->branches[i].done) { (void)branch_poll(&state->branches[i], self); }
         if (state->branches[i].done) completed++;
     }
 
     if (completed < state->count) return ASX_E_PENDING;
 
     /* All map tasks done — collect results and reduce */
-    for (i = 0; i < state->count; i++) {
-        results[i] = state->branches[i].result;
-    }
+    for (i = 0; i < state->count; i++) { results[i] = state->branches[i].result; }
 
     state->result = state->reduce_fn(results, state->count, state->reduce_data);
     state->done = 1;

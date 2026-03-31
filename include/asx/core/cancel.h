@@ -44,12 +44,12 @@ ASX_API asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a,
  * The witness tracks the cancellation's progression through the
  * requested → cancelling → finalizing → completed phases. */
 ASX_API ASX_MUST_USE asx_status asx_cancel_witness_create(asx_cancel_witness_id *out,
-                                                            asx_task_id task,
-                                                            const asx_cancel_reason *reason);
+                                                          asx_task_id task,
+                                                          const asx_cancel_reason *reason);
 
 /* Advance a witness to the next phase. */
 ASX_API ASX_MUST_USE asx_status asx_cancel_witness_advance(asx_cancel_witness_id w,
-                                                             asx_cancel_phase new_phase);
+                                                           asx_cancel_phase new_phase);
 
 /* Release a witness (mark as inactive). */
 ASX_API asx_status asx_cancel_witness_release(asx_cancel_witness_id w);
@@ -58,13 +58,13 @@ ASX_API asx_status asx_cancel_witness_release(asx_cancel_witness_id w);
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out_phase is NULL,
  * ASX_E_NOT_FOUND if witness is invalid/unknown. */
 ASX_API ASX_MUST_USE asx_status asx_cancel_witness_phase(asx_cancel_witness_id w,
-                                                          asx_cancel_phase *out_phase);
+                                                         asx_cancel_phase *out_phase);
 
 /* Query the cancel reason associated with a witness.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out_reason is NULL,
  * ASX_E_NOT_FOUND if witness is invalid/unknown. */
 ASX_API ASX_MUST_USE asx_status asx_cancel_witness_reason(asx_cancel_witness_id w,
-                                                           asx_cancel_reason *out_reason);
+                                                          asx_cancel_reason *out_reason);
 
 /* Check if a cancel witness is still valid (not stale/completed).
  * Returns 1 if valid, 0 otherwise. */
@@ -79,7 +79,7 @@ ASX_API int asx_cancel_witness_is_valid(asx_cancel_witness_id w);
  * ASX_E_NOT_FOUND if task is unknown,
  * ASX_E_INVALID_STATE if task is already in a terminal state. */
 ASX_API ASX_MUST_USE asx_status asx_cancel_request(asx_task_id task,
-                                                    const asx_cancel_reason *reason);
+                                                   const asx_cancel_reason *reason);
 
 /* Return the human-readable name for a cancel kind. */
 ASX_API const char *asx_cancel_kind_str(asx_cancel_kind kind);

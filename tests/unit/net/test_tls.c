@@ -10,9 +10,7 @@
 #include <string.h>
 
 #if ASX_HAS_TLS_SURFACE
-static int tls_surface_available(void) {
-    return asx_surface_available_active(ASX_SURFACE_TLS);
-}
+static int tls_surface_available(void) { return asx_surface_available_active(ASX_SURFACE_TLS); }
 
 TEST(tls_config_defaults) {
     asx_tls_config cfg;

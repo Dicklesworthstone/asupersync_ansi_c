@@ -202,11 +202,7 @@ ASX_API uint32_t asx_rate_limit_available(const asx_rate_limit_state *state);
  *   DECIDED      — winner chosen, done
  * ------------------------------------------------------------------- */
 
-typedef enum {
-    ASX_HEDGE_PRIMARY_ONLY,
-    ASX_HEDGE_RACING,
-    ASX_HEDGE_DECIDED
-} asx_hedge_phase;
+typedef enum { ASX_HEDGE_PRIMARY_ONLY, ASX_HEDGE_RACING, ASX_HEDGE_DECIDED } asx_hedge_phase;
 
 typedef struct {
     asx_combinator_branch primary;
@@ -226,8 +222,8 @@ typedef struct {
  * backup_fn/backup_data: the backup task (launched on deadline)
  * deadline_ns: nanoseconds to wait before hedging */
 ASX_API asx_status asx_hedge_init(asx_hedge_state *state, asx_combinator_poll_fn primary_fn,
-                                   void *primary_data, asx_combinator_poll_fn backup_fn,
-                                   void *backup_data, uint64_t deadline_ns);
+                                  void *primary_data, asx_combinator_poll_fn backup_fn,
+                                  void *backup_data, uint64_t deadline_ns);
 
 /* Poll function — compatible with asx_combinator_poll_fn. */
 ASX_API asx_status asx_hedge_poll(void *user_data, asx_task_id self);
@@ -253,16 +249,16 @@ ASX_API int asx_hedge_winner(const asx_hedge_state *state);
 
 typedef struct {
     uint64_t history[ASX_ADAPTIVE_HEDGE_WINDOW]; /* circular buffer of latencies (ns) */
-    uint32_t count;        /* total observations recorded */
-    uint32_t alpha_pct;    /* miscoverage target * 100 (e.g., 5 for P95) */
-    uint64_t min_delay_ns; /* absolute minimum hedge delay */
-    uint64_t max_delay_ns; /* absolute maximum hedge delay */
+    uint32_t count;                              /* total observations recorded */
+    uint32_t alpha_pct;                          /* miscoverage target * 100 (e.g., 5 for P95) */
+    uint64_t min_delay_ns;                       /* absolute minimum hedge delay */
+    uint64_t max_delay_ns;                       /* absolute maximum hedge delay */
 } asx_adaptive_hedge_policy;
 
 /* Initialize an adaptive hedge policy.
  * alpha_pct: miscoverage target (5 = P95 hedging, 1 = P99). */
 ASX_API void asx_adaptive_hedge_init(asx_adaptive_hedge_policy *policy, uint32_t alpha_pct,
-                                      uint64_t min_delay_ns, uint64_t max_delay_ns);
+                                     uint64_t min_delay_ns, uint64_t max_delay_ns);
 
 /* Record a primary execution latency (nanoseconds). */
 ASX_API void asx_adaptive_hedge_record(asx_adaptive_hedge_policy *policy, uint64_t latency_ns);
@@ -296,11 +292,11 @@ typedef struct {
 
 /* Initialize a map-reduce combinator with the given reduce function. */
 ASX_API asx_status asx_map_reduce_init(asx_map_reduce_state *state, asx_map_reduce_fn reduce_fn,
-                                        void *reduce_data);
+                                       void *reduce_data);
 
 /* Add a map branch to the map-reduce combinator. */
 ASX_API asx_status asx_map_reduce_add(asx_map_reduce_state *state, asx_combinator_poll_fn map_fn,
-                                       void *user_data);
+                                      void *user_data);
 
 /* Poll function — compatible with asx_combinator_poll_fn. */
 ASX_API asx_status asx_map_reduce_poll(void *user_data, asx_task_id self);

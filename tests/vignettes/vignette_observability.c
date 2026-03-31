@@ -53,7 +53,8 @@ int main(void) {
 
     printf("triggered_mask=0x%x verdict=%s trace_digest=0x%016llx event_log_digest=0x%016llx\n",
            report.triggered_mask, asx_evidence_level_str(snapshot.evidence.verdict),
-           (unsigned long long)snapshot.trace_digest, (unsigned long long)snapshot.event_log_digest);
+           (unsigned long long)snapshot.trace_digest,
+           (unsigned long long)snapshot.event_log_digest);
     printf("artifact_manifest:\n%s", asx_report_buf_cstr(&ndjson));
     printf("rerun_hint: rch exec -- make build/tests/vignettes/vignette_observability\n");
 

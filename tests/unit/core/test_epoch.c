@@ -9,14 +9,19 @@
 #include <string.h>
 
 static asx_status st_sink_;
-#define MUST_OK(expr) do { st_sink_ = (expr); (void)st_sink_; } while (0)
+#define MUST_OK(expr)                                                                              \
+    do {                                                                                           \
+        st_sink_ = (expr);                                                                         \
+        (void)st_sink_;                                                                            \
+    } while (0)
 
 static uint64_t g_obs_old_phase;
 static uint64_t g_obs_new_phase;
 static int g_obs_count;
 
 static void observer_fn(uint64_t eid, uint64_t old_p, uint64_t new_p, void *ud) {
-    (void)eid; (void)ud;
+    (void)eid;
+    (void)ud;
     g_obs_old_phase = old_p;
     g_obs_new_phase = new_p;
     g_obs_count++;
@@ -54,9 +59,7 @@ TEST(create_exhaustion) {
     asx_epoch_handle handles[ASX_MAX_EPOCHS];
     asx_epoch_policy pol = {ASX_EPOCH_ADVANCE_MANUAL, 0, 0};
     uint32_t i;
-    for (i = 0; i < ASX_MAX_EPOCHS; i++) {
-        ASSERT_EQ(asx_epoch_create(&pol, &handles[i]), ASX_OK);
-    }
+    for (i = 0; i < ASX_MAX_EPOCHS; i++) { ASSERT_EQ(asx_epoch_create(&pol, &handles[i]), ASX_OK); }
     asx_epoch_handle overflow;
     ASSERT_EQ(asx_epoch_create(&pol, &overflow), ASX_E_RESOURCE_EXHAUSTED);
 }

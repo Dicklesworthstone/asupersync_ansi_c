@@ -262,9 +262,7 @@ TEST(cancel_write_waiter) {
     asx_rwlock_close(h);
 }
 
-TEST(cancel_null_fails) {
-    ASSERT_EQ(asx_rwlock_waiter_cancel(NULL), ASX_E_INVALID_ARGUMENT);
-}
+TEST(cancel_null_fails) { ASSERT_EQ(asx_rwlock_waiter_cancel(NULL), ASX_E_INVALID_ARGUMENT); }
 
 /* ------------------------------------------------------------------ */
 /* Unlock validation                                                   */
@@ -301,13 +299,9 @@ TEST(arena_exhaustion) {
     asx_rwlock_handle overflow;
     uint32_t i;
     setup();
-    for (i = 0; i < ASX_RWLOCK_MAX; i++) {
-        ASSERT_EQ(asx_rwlock_create(&handles[i]), ASX_OK);
-    }
+    for (i = 0; i < ASX_RWLOCK_MAX; i++) { ASSERT_EQ(asx_rwlock_create(&handles[i]), ASX_OK); }
     ASSERT_EQ(asx_rwlock_create(&overflow), ASX_E_RESOURCE_EXHAUSTED);
-    for (i = 0; i < ASX_RWLOCK_MAX; i++) {
-        asx_rwlock_close(handles[i]);
-    }
+    for (i = 0; i < ASX_RWLOCK_MAX; i++) { asx_rwlock_close(handles[i]); }
 }
 
 /* ------------------------------------------------------------------ */

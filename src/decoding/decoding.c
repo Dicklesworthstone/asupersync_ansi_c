@@ -15,12 +15,12 @@
 
 const char *asx_decoding_error_kind_str(asx_decoding_error_kind kind) {
     switch (kind) {
-    case ASX_DECODING_ERR_NONE:      return "none";
-    case ASX_DECODING_ERR_CODEC:     return "codec";
-    case ASX_DECODING_ERR_IO:        return "io";
-    case ASX_DECODING_ERR_OVERFLOW:  return "overflow";
+    case ASX_DECODING_ERR_NONE: return "none";
+    case ASX_DECODING_ERR_CODEC: return "codec";
+    case ASX_DECODING_ERR_IO: return "io";
+    case ASX_DECODING_ERR_OVERFLOW: return "overflow";
     case ASX_DECODING_ERR_CANCELLED: return "cancelled";
-    default:                         return "unknown";
+    default: return "unknown";
     }
 }
 
@@ -38,8 +38,7 @@ void asx_decoding_config_init(asx_decoding_config *cfg) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_decoding_pipeline_init(asx_decoding_pipeline *p, asx_codec codec,
-                                       asx_read_adapter reader,
-                                       const asx_decoding_config *cfg) {
+                                      asx_read_adapter reader, const asx_decoding_config *cfg) {
     if (p == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(p, 0, sizeof(*p));
@@ -86,18 +85,13 @@ static asx_status decode_fill(asx_decoding_pipeline *p) {
 
     case ASX_READ_EOF:
         p->progress.eof_reached = 1;
-        if (asx_buf_mut_remaining(&p->recv_buf) == 0) {
-            p->progress.complete = 1;
-        }
+        if (asx_buf_mut_remaining(&p->recv_buf) == 0) { p->progress.complete = 1; }
         return ASX_E_NOT_FOUND;
 
-    case ASX_READ_PENDING:
-        return ASX_E_PENDING;
+    case ASX_READ_PENDING: return ASX_E_PENDING;
 
     case ASX_READ_ERROR:
-    default:
-        p->last_error = ASX_DECODING_ERR_IO;
-        return ASX_E_INVALID_STATE;
+    default: p->last_error = ASX_DECODING_ERR_IO; return ASX_E_INVALID_STATE;
     }
 }
 
@@ -157,9 +151,7 @@ asx_status asx_decoding_pipeline_decode(asx_decoding_pipeline *p, asx_frame *out
         /* If EOF was already reached and we still need more data, we're done */
         if (p->progress.eof_reached) {
             p->progress.bytes_buffered = asx_buf_mut_remaining(&p->recv_buf);
-            if (p->progress.bytes_buffered == 0) {
-                p->progress.complete = 1;
-            }
+            if (p->progress.bytes_buffered == 0) { p->progress.complete = 1; }
             return ASX_E_NOT_FOUND;
         }
 
@@ -169,9 +161,7 @@ asx_status asx_decoding_pipeline_decode(asx_decoding_pipeline *p, asx_frame *out
             /* EOF — loop back to try decoding whatever remains */
             continue;
         }
-        if (fill_st != ASX_OK) {
-            return fill_st;
-        }
+        if (fill_st != ASX_OK) { return fill_st; }
         /* Got more data, loop back to try decoding */
     }
 }

@@ -40,8 +40,8 @@ const char *asx_raptorq_deferral_reason(void) { return NULL; }
 /* ------------------------------------------------------------------ */
 
 asx_status asx_raptorq_encode(const asx_raptorq_config *cfg, const void *source_data,
-                               uint32_t source_len, void *out_symbols, uint32_t out_capacity,
-                               uint32_t *out_symbol_count) {
+                              uint32_t source_len, void *out_symbols, uint32_t out_capacity,
+                              uint32_t *out_symbol_count) {
     const uint8_t *src;
     uint8_t *dst;
     uint32_t sym_size;
@@ -88,9 +88,7 @@ asx_status asx_raptorq_encode(const asx_raptorq_config *cfg, const void *source_
             if ((i + j) % r == 0u || k <= r) {
                 const uint8_t *source_sym = dst + (i * sym_size);
                 uint32_t b;
-                for (b = 0u; b < sym_size; b++) {
-                    repair[b] ^= source_sym[b];
-                }
+                for (b = 0u; b < sym_size; b++) { repair[b] ^= source_sym[b]; }
             }
         }
     }
@@ -104,8 +102,8 @@ asx_status asx_raptorq_encode(const asx_raptorq_config *cfg, const void *source_
 /* ------------------------------------------------------------------ */
 
 asx_status asx_raptorq_decode(const asx_raptorq_config *cfg, const void *symbols,
-                               uint32_t symbol_count, void *out_data, uint32_t out_capacity,
-                               uint32_t *out_data_len) {
+                              uint32_t symbol_count, void *out_data, uint32_t out_capacity,
+                              uint32_t *out_data_len) {
     const uint8_t *syms;
     uint8_t *dst;
     uint32_t sym_size;

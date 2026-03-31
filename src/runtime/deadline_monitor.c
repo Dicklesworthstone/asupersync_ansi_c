@@ -90,8 +90,8 @@ void asx_deadline_monitor_reset(void) {
 /* ------------------------------------------------------------------ */
 
 asx_status asx_deadline_monitor_register(asx_time target_ns, uint64_t entity_id,
-                                          asx_deadline_miss_fn on_miss, void *user_data,
-                                          asx_deadline_monitor_handle *out_handle) {
+                                         asx_deadline_miss_fn on_miss, void *user_data,
+                                         asx_deadline_monitor_handle *out_handle) {
     uint32_t idx;
     asx_dm_slot *s;
 
@@ -149,7 +149,7 @@ asx_status asx_deadline_monitor_cancel(const asx_deadline_monitor_handle *handle
 }
 
 asx_status asx_deadline_monitor_complete(const asx_deadline_monitor_handle *handle,
-                                          asx_time completion_ns) {
+                                         asx_time completion_ns) {
     asx_dm_slot *s;
     int64_t margin;
 
@@ -225,9 +225,7 @@ uint32_t asx_deadline_monitor_check(asx_time now_ns) {
             }
 
             /* Invoke miss callback */
-            if (s->on_miss != NULL) {
-                s->on_miss(s->entity_id, overdue, s->user_data);
-            }
+            if (s->on_miss != NULL) { s->on_miss(s->entity_id, overdue, s->user_data); }
         }
     }
 

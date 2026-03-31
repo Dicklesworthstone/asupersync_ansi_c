@@ -62,16 +62,14 @@ TEST(register_basic) {
 
 TEST(register_null_handle) {
     setup();
-    ASSERT_EQ(asx_deadline_monitor_register(5000, 1, NULL, NULL, NULL),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_deadline_monitor_register(5000, 1, NULL, NULL, NULL), ASX_E_INVALID_ARGUMENT);
     teardown();
 }
 
 TEST(register_not_initialized) {
     asx_deadline_monitor_reset();
     asx_deadline_monitor_handle h;
-    ASSERT_EQ(asx_deadline_monitor_register(5000, 1, NULL, NULL, &h),
-              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_deadline_monitor_register(5000, 1, NULL, NULL, &h), ASX_E_INVALID_STATE);
 }
 
 TEST(register_exhaustion) {
@@ -79,8 +77,7 @@ TEST(register_exhaustion) {
     asx_deadline_monitor_handle handles[ASX_MAX_DEADLINE_MONITORS];
     uint32_t i;
     for (i = 0; i < ASX_MAX_DEADLINE_MONITORS; i++) {
-        ASSERT_EQ(asx_deadline_monitor_register(5000 + i, i, NULL, NULL, &handles[i]),
-                  ASX_OK);
+        ASSERT_EQ(asx_deadline_monitor_register(5000 + i, i, NULL, NULL, &handles[i]), ASX_OK);
     }
     asx_deadline_monitor_handle overflow;
     ASSERT_EQ(asx_deadline_monitor_register(9999, 99, NULL, NULL, &overflow),
@@ -307,8 +304,7 @@ TEST(callback_with_user_data) {
     g_cb_count = 0;
 
     asx_deadline_monitor_handle h;
-    ASSERT_EQ(asx_deadline_monitor_register(1000, 1,
-        miss_callback, &sentinel, &h), ASX_OK);
+    ASSERT_EQ(asx_deadline_monitor_register(1000, 1, miss_callback, &sentinel, &h), ASX_OK);
     ASSERT_EQ(asx_deadline_monitor_check(2000), 1u);
     ASSERT_EQ(g_cb_count, 1);
     teardown();
@@ -383,7 +379,7 @@ TEST(stats_mixed) {
     ASSERT_EQ(asx_deadline_monitor_register(7000, 3, NULL, NULL, &h3), ASX_OK);
 
     ASSERT_EQ(asx_deadline_monitor_complete(&h1, 4000), ASX_OK); /* met with 1000 margin */
-    asx_deadline_monitor_check(4000);                             /* h2 missed by 1000 */
+    asx_deadline_monitor_check(4000);                            /* h2 missed by 1000 */
     ASSERT_EQ(asx_deadline_monitor_cancel(&h3), ASX_OK);
 
     asx_deadline_monitor_get_stats(&stats);

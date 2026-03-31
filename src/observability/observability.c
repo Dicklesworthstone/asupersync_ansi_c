@@ -162,8 +162,7 @@ asx_status asx_task_inspect(asx_task_id task_id, asx_task_inspection *out) {
 /* Resource accounting                                                 */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_resource_accounting_capture(const asx_runtime *rt,
-                                            asx_resource_accounting *out) {
+asx_status asx_resource_accounting_capture(const asx_runtime *rt, asx_resource_accounting *out) {
     asx_inspection_report rpt;
     asx_status st;
 

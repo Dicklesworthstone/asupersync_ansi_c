@@ -71,7 +71,8 @@ int main(void) {
             fprintf(stderr, "  ERROR: encode frame %u failed: %s\n", i, asx_status_str(st));
             return 1;
         }
-        printf("  frame[%u]: input=%u bytes, wire=%u bytes, seq=%u\n", i, len, sym.len, sym.sequence);
+        printf("  frame[%u]: input=%u bytes, wire=%u bytes, seq=%u\n", i, len, sym.len,
+               sym.sequence);
     }
 
     asx_encoding_pipeline_stats(&enc, &enc_stats);
@@ -79,7 +80,8 @@ int main(void) {
     printf("  frames_encoded=%u bytes_input=%u bytes_output=%u frames_rejected=%u\n",
            enc_stats.frames_encoded, enc_stats.bytes_input, enc_stats.bytes_output,
            enc_stats.frames_rejected);
-    printf("  last_error=%s\n", asx_encoding_error_kind_str(asx_encoding_pipeline_last_error(&enc)));
+    printf("  last_error=%s\n",
+           asx_encoding_error_kind_str(asx_encoding_pipeline_last_error(&enc)));
 
     /* Show wire hex */
     printf("\n[artifact:wire_format] %u bytes on wire: ", asx_buf_mut_remaining(&wire_buf));
@@ -123,9 +125,8 @@ int main(void) {
 
     asx_decoding_pipeline_progress(&dec, &dec_prog);
     printf("\n[artifact:decoding_progress]\n");
-    printf("  frames_decoded=%u bytes_consumed=%u eof=%d complete=%d\n",
-           dec_prog.frames_decoded, dec_prog.bytes_consumed, dec_prog.eof_reached,
-           dec_prog.complete);
+    printf("  frames_decoded=%u bytes_consumed=%u eof=%d complete=%d\n", dec_prog.frames_decoded,
+           dec_prog.bytes_consumed, dec_prog.eof_reached, dec_prog.complete);
     printf("  last_error=%s\n",
            asx_decoding_error_kind_str(asx_decoding_pipeline_last_error(&dec)));
 

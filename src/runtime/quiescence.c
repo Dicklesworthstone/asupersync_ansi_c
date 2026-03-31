@@ -148,11 +148,11 @@ asx_status asx_quiescence_check_detailed(asx_region_id id, asx_quiescence_report
     out->q4_cleanup_drained = out->progress.cleanup_drained;
 
     /* Overall: quiescent iff region is CLOSED and Q1-Q4 all hold */
-    out->quiescent = (r->state == ASX_REGION_CLOSED && out->q1_tasks_complete &&
-                      out->q2_children_closed && out->q3_obligations_resolved &&
-                      out->q4_cleanup_drained)
-                         ? 1
-                         : 0;
+    out->quiescent =
+        (r->state == ASX_REGION_CLOSED && out->q1_tasks_complete && out->q2_children_closed &&
+         out->q3_obligations_resolved && out->q4_cleanup_drained)
+            ? 1
+            : 0;
 
     return ASX_OK;
 }

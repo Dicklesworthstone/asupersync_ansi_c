@@ -11,9 +11,9 @@
 
 #include "test_harness.h"
 #include <asx/asx.h>
+#include <asx/core/ghost.h>
 #include <asx/runtime/browser_diagnostic.h>
 #include <asx/runtime/trace.h>
-#include <asx/core/ghost.h>
 #include <string.h>
 
 /* -------------------------------------------------------------------
@@ -128,8 +128,7 @@ TEST(dx_for_surface_server) {
 }
 
 TEST(dx_for_surface_grpc) {
-    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_GRPC),
-              (int)ASX_BROWSER_DX_NATIVE_GRPC);
+    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_GRPC), (int)ASX_BROWSER_DX_NATIVE_GRPC);
 }
 
 TEST(dx_for_surface_messaging) {
@@ -138,8 +137,7 @@ TEST(dx_for_surface_messaging) {
 }
 
 TEST(dx_for_surface_tls) {
-    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_TLS),
-              (int)ASX_BROWSER_DX_NATIVE_TLS);
+    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_TLS), (int)ASX_BROWSER_DX_NATIVE_TLS);
 }
 
 TEST(dx_for_surface_database) {
@@ -148,13 +146,11 @@ TEST(dx_for_surface_database) {
 }
 
 TEST(dx_for_surface_region_none) {
-    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_REGION),
-              (int)ASX_BROWSER_DX_NONE);
+    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_REGION), (int)ASX_BROWSER_DX_NONE);
 }
 
 TEST(dx_for_surface_task_none) {
-    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_TASK),
-              (int)ASX_BROWSER_DX_NONE);
+    ASSERT_EQ((int)asx_browser_dx_for_surface(ASX_SURFACE_TASK), (int)ASX_BROWSER_DX_NONE);
 }
 
 /* -------------------------------------------------------------------

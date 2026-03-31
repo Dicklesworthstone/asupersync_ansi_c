@@ -19,8 +19,8 @@
 #ifndef ASX_ENCODING_H
 #define ASX_ENCODING_H
 
-#include <asx/asx_export.h>
 #include <asx/asx_config.h>
+#include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
 #include <asx/bytes/codec.h>
@@ -38,11 +38,11 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_ENCODING_ERR_NONE = 0,       /* no error */
-    ASX_ENCODING_ERR_CODEC = 1,      /* codec rejected the input */
-    ASX_ENCODING_ERR_IO = 2,         /* write adapter returned error/closed */
-    ASX_ENCODING_ERR_OVERFLOW = 3,   /* staging buffer exhausted */
-    ASX_ENCODING_ERR_CANCELLED = 4   /* pipeline was cancelled */
+    ASX_ENCODING_ERR_NONE = 0,     /* no error */
+    ASX_ENCODING_ERR_CODEC = 1,    /* codec rejected the input */
+    ASX_ENCODING_ERR_IO = 2,       /* write adapter returned error/closed */
+    ASX_ENCODING_ERR_OVERFLOW = 3, /* staging buffer exhausted */
+    ASX_ENCODING_ERR_CANCELLED = 4 /* pipeline was cancelled */
 } asx_encoding_error_kind;
 
 /* Returns a human-readable string for an encoding error kind. */
@@ -53,10 +53,10 @@ ASX_API ASX_MUST_USE const char *asx_encoding_error_kind_str(asx_encoding_error_
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint32_t frames_encoded;   /* frames successfully encoded */
-    uint32_t bytes_input;      /* total raw input bytes accepted */
-    uint32_t bytes_output;     /* total framed bytes written to adapter */
-    uint32_t frames_rejected;  /* frames rejected by codec or size limits */
+    uint32_t frames_encoded;  /* frames successfully encoded */
+    uint32_t bytes_input;     /* total raw input bytes accepted */
+    uint32_t bytes_output;    /* total framed bytes written to adapter */
+    uint32_t frames_rejected; /* frames rejected by codec or size limits */
 } asx_encoding_stats;
 
 /* -------------------------------------------------------------------
@@ -64,9 +64,9 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    const uint8_t *data;  /* pointer into staging buffer (valid until next encode) */
-    uint32_t len;         /* encoded frame length in bytes */
-    uint32_t sequence;    /* monotonic sequence number within pipeline */
+    const uint8_t *data; /* pointer into staging buffer (valid until next encode) */
+    uint32_t len;        /* encoded frame length in bytes */
+    uint32_t sequence;   /* monotonic sequence number within pipeline */
 } asx_encoded_symbol;
 
 /* -------------------------------------------------------------------
@@ -74,9 +74,9 @@ typedef struct {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint32_t max_frame_bytes;  /* max single frame size (0 = no limit) */
-    uint32_t max_total_bytes;  /* max cumulative output (0 = no limit) */
-    int flush_after_each;      /* if nonzero, flush adapter after each frame */
+    uint32_t max_frame_bytes; /* max single frame size (0 = no limit) */
+    uint32_t max_total_bytes; /* max cumulative output (0 = no limit) */
+    int flush_after_each;     /* if nonzero, flush adapter after each frame */
 } asx_encoding_config;
 
 /* Initialize config with defaults (no limits, no auto-flush). */
@@ -90,7 +90,7 @@ typedef struct {
     asx_codec codec;
     asx_write_adapter writer;
     asx_encoding_config config;
-    asx_buf_mut staging;          /* internal staging buffer for codec output */
+    asx_buf_mut staging; /* internal staging buffer for codec output */
     asx_encoding_stats stats;
     asx_encoding_error_kind last_error;
     int cancelled;
@@ -100,9 +100,9 @@ typedef struct {
  * The staging buffer is cleared and ready for use.
  * Returns ASX_E_INVALID_ARGUMENT if pipeline, codec, or writer is NULL. */
 ASX_API ASX_MUST_USE asx_status asx_encoding_pipeline_init(asx_encoding_pipeline *p,
-                                                            asx_codec codec,
-                                                            asx_write_adapter writer,
-                                                            const asx_encoding_config *cfg);
+                                                           asx_codec codec,
+                                                           asx_write_adapter writer,
+                                                           const asx_encoding_config *cfg);
 
 /* Encode a single frame of raw data through the pipeline.
  * The data is first encoded by the codec into the staging buffer,
@@ -118,8 +118,8 @@ ASX_API ASX_MUST_USE asx_status asx_encoding_pipeline_init(asx_encoding_pipeline
  *   ASX_E_CANCELLED           — pipeline was cancelled
  *   ASX_E_INVALID_STATE       — write adapter returned error/closed */
 ASX_API ASX_MUST_USE asx_status asx_encoding_pipeline_encode(asx_encoding_pipeline *p,
-                                                              const void *data, uint32_t len,
-                                                              asx_encoded_symbol *out_symbol);
+                                                             const void *data, uint32_t len,
+                                                             asx_encoded_symbol *out_symbol);
 
 /* Flush the write adapter, ensuring all buffered output is transmitted.
  * Returns ASX_OK when flush completes, or an error if the adapter fails. */
@@ -129,8 +129,7 @@ ASX_API ASX_MUST_USE asx_status asx_encoding_pipeline_flush(asx_encoding_pipelin
 ASX_API void asx_encoding_pipeline_cancel(asx_encoding_pipeline *p);
 
 /* Query current pipeline statistics. */
-ASX_API void asx_encoding_pipeline_stats(const asx_encoding_pipeline *p,
-                                          asx_encoding_stats *out);
+ASX_API void asx_encoding_pipeline_stats(const asx_encoding_pipeline *p, asx_encoding_stats *out);
 
 /* Query the last error kind (ASX_ENCODING_ERR_NONE if no error). */
 ASX_API ASX_MUST_USE asx_encoding_error_kind

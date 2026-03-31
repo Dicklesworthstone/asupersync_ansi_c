@@ -209,12 +209,12 @@ const char *asx_hook_state_str(asx_hook_state state) {
 /* Recoverability                                                      */
 /* ------------------------------------------------------------------ */
 
-const char *asx_recoverability_str(asx_recoverability r) {
+const char *asx_abi_recoverability_str(asx_abi_recoverability r) {
     switch (r) {
-    case ASX_RECOVER_NONE: return "none";
-    case ASX_RECOVER_RETRY: return "retry";
-    case ASX_RECOVER_DEGRADE: return "degrade";
-    case ASX_RECOVER_RECONNECT: return "reconnect";
+    case ASX_ABI_RECOVER_NONE: return "none";
+    case ASX_ABI_RECOVER_RETRY: return "retry";
+    case ASX_ABI_RECOVER_DEGRADE: return "degrade";
+    case ASX_ABI_RECOVER_RECONNECT: return "reconnect";
     default: return "unknown";
     }
 }

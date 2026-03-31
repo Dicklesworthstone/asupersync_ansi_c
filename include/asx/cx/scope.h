@@ -128,9 +128,10 @@ ASX_API ASX_MUST_USE asx_status asx_scope_spawn(asx_scope *scope, asx_task_poll_
  * child_caps must be a subset of the scope's authority. Returns
  * ASX_E_INVALID_STATE if the scope value is uninitialized or corrupted. On success,
  * *out_cx is a real task-bound capability token for the spawned task. */
-ASX_API ASX_MUST_USE asx_status
-asx_scope_spawn_with_cx(asx_scope *scope, asx_cap_flags child_caps, asx_task_poll_fn poll_fn,
-                        void *user_data, asx_task_handle *out_handle, asx_cx *out_cx);
+ASX_API ASX_MUST_USE asx_status asx_scope_spawn_with_cx(asx_scope *scope, asx_cap_flags child_caps,
+                                                        asx_task_poll_fn poll_fn, void *user_data,
+                                                        asx_task_handle *out_handle,
+                                                        asx_cx *out_cx);
 
 /* Spawn a task with captured state (region-arena allocated).
  *

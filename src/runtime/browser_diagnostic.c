@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/runtime/browser_diagnostic.h>
 #include <asx/core/ghost.h>
+#include <asx/runtime/browser_diagnostic.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
@@ -68,7 +68,8 @@ static const asx_browser_dx_entry g_dx_catalog[ASX_BROWSER_DX_COUNT] = {
     {ASX_BROWSER_DX_NATIVE_DATABASE, "database family unavailable",
      "The browser build excludes the database connection/query family from the fail-closed "
      "public surface.",
-     "Move database access behind a host API or service boundary instead of using the browser build directly."},
+     "Move database access behind a host API or service boundary instead of using the browser "
+     "build directly."},
     /* WRONG_PROFILE */
     {ASX_BROWSER_DX_WRONG_PROFILE, "profile mismatch",
      "Code compiled for a native profile is running in a browser context. "
@@ -151,7 +152,7 @@ void asx_browser_evidence_capture(asx_browser_evidence_report *report) {
 }
 
 asx_status asx_browser_evidence_to_sink(const asx_browser_evidence_report *report,
-                                         asx_evidence_sink *sink) {
+                                        asx_evidence_sink *sink) {
     asx_status rc;
 
     if (!report || !sink) return ASX_E_INVALID_ARGUMENT;
@@ -206,7 +207,7 @@ asx_status asx_browser_evidence_to_sink(const asx_browser_evidence_report *repor
  * ------------------------------------------------------------------- */
 
 void asx_browser_flake_capture(asx_browser_flake_snapshot *snapshot,
-                                const asx_evidence_sink *sink) {
+                               const asx_evidence_sink *sink) {
     if (!snapshot) return;
 
     snapshot->trace_digest = asx_trace_digest();
@@ -225,7 +226,7 @@ void asx_browser_flake_capture(asx_browser_flake_snapshot *snapshot,
 }
 
 int asx_browser_flake_match(const asx_browser_flake_snapshot *a,
-                             const asx_browser_flake_snapshot *b) {
+                            const asx_browser_flake_snapshot *b) {
     if (!a || !b) return 0;
 
     return a->trace_digest == b->trace_digest && a->profile == b->profile &&

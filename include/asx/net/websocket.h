@@ -26,24 +26,21 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef enum {
-    ASX_WS_OPCODE_TEXT   = 1,
+    ASX_WS_OPCODE_TEXT = 1,
     ASX_WS_OPCODE_BINARY = 2,
-    ASX_WS_OPCODE_CLOSE  = 8,
-    ASX_WS_OPCODE_PING   = 9,
-    ASX_WS_OPCODE_PONG   = 10
+    ASX_WS_OPCODE_CLOSE = 8,
+    ASX_WS_OPCODE_PING = 9,
+    ASX_WS_OPCODE_PONG = 10
 } asx_ws_opcode;
 
 typedef enum {
     ASX_WS_STATE_CONNECTING = 0,
-    ASX_WS_STATE_OPEN       = 1,
-    ASX_WS_STATE_CLOSING    = 2,
-    ASX_WS_STATE_CLOSED     = 3
+    ASX_WS_STATE_OPEN = 1,
+    ASX_WS_STATE_CLOSING = 2,
+    ASX_WS_STATE_CLOSED = 3
 } asx_ws_state;
 
-typedef enum {
-    ASX_WS_ROLE_CLIENT = 0,
-    ASX_WS_ROLE_SERVER = 1
-} asx_ws_role;
+typedef enum { ASX_WS_ROLE_CLIENT = 0, ASX_WS_ROLE_SERVER = 1 } asx_ws_role;
 
 #ifndef ASX_WS_MAX_PAYLOAD
 #define ASX_WS_MAX_PAYLOAD 4096u
@@ -70,7 +67,7 @@ ASX_API void asx_ws_frame_init(asx_ws_frame *frame);
 
 /* Set frame payload from a buffer. */
 ASX_API asx_status asx_ws_frame_set_payload(asx_ws_frame *frame, asx_ws_opcode opcode,
-                                             const void *data, uint32_t len);
+                                            const void *data, uint32_t len);
 
 /* Create a close frame with status code. */
 ASX_API asx_status asx_ws_frame_close(asx_ws_frame *frame, uint16_t code);

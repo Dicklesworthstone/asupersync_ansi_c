@@ -113,13 +113,13 @@ typedef struct {
     uint32_t depends_on[ASX_SUPERVISOR_MAX_DEPS]; /* indices of children this depends on */
     uint32_t dep_count;
     uint32_t shutdown_budget_polls; /* max polls during shutdown (0 = default) */
-    uint8_t required;              /* if 1, supervisor fails if this child can't start */
-    uint8_t start_immediately;     /* if 1, start with supervisor (default). if 0, lazy start */
+    uint8_t required;               /* if 1, supervisor fails if this child can't start */
+    uint8_t start_immediately;      /* if 1, start with supervisor (default). if 0, lazy start */
 } asx_child_spec_ext;
 
 /* Initialize an extended child spec with defaults. */
 ASX_API void asx_child_spec_ext_init(asx_child_spec_ext *spec, const char *name,
-                                       asx_child_start_fn start_fn, void *user_data);
+                                     asx_child_start_fn start_fn, void *user_data);
 
 /* Add a dependency (index of another child). */
 ASX_API asx_status asx_child_spec_ext_depends_on(asx_child_spec_ext *spec, uint32_t dep_index);
@@ -133,12 +133,12 @@ typedef struct {
     uint32_t head;
     uint32_t count;
     uint32_t max_restarts;
-    uint64_t window_ns;     /* time window for restart counting */
+    uint64_t window_ns; /* time window for restart counting */
 } asx_restart_intensity;
 
 /* Initialize restart intensity tracker. */
 ASX_API void asx_restart_intensity_init(asx_restart_intensity *ri, uint32_t max_restarts,
-                                         uint64_t window_ns);
+                                        uint64_t window_ns);
 
 /* Record a restart. Returns 1 if intensity exceeded (too many restarts in window). */
 ASX_API int asx_restart_intensity_record(asx_restart_intensity *ri, uint64_t now_ns);
@@ -155,8 +155,8 @@ ASX_API int asx_restart_intensity_is_storm(const asx_restart_intensity *ri, uint
 
 typedef struct {
     asx_supervisor_strategy strategy;
-    uint32_t max_restarts;       /* max restarts before escalation */
-    uint64_t restart_window_ns;  /* time window for restart intensity (0 = no window) */
+    uint32_t max_restarts;          /* max restarts before escalation */
+    uint64_t restart_window_ns;     /* time window for restart intensity (0 = no window) */
     uint32_t shutdown_budget_polls; /* default per-child shutdown budget */
 } asx_supervisor_config;
 
@@ -192,10 +192,10 @@ ASX_API uint32_t asx_supervisor_restart_count(asx_supervisor_handle sup);
 
 /* Start a supervisor with extended child specs (supports deps, names, budgets). */
 ASX_API ASX_MUST_USE asx_status asx_supervisor_start_ext(asx_supervisor_handle *out,
-                                                           asx_region_id region,
-                                                           const asx_supervisor_config *config,
-                                                           const asx_child_spec_ext *children,
-                                                           uint32_t child_count);
+                                                         asx_region_id region,
+                                                         const asx_supervisor_config *config,
+                                                         const asx_child_spec_ext *children,
+                                                         uint32_t child_count);
 
 /* Get a child's name (or empty string if unnamed). */
 ASX_API const char *asx_supervisor_child_name(asx_supervisor_handle sup, uint32_t index);

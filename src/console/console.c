@@ -120,7 +120,7 @@ static void emit_ansi_reset(asx_report_buf *out) {
 }
 
 asx_status asx_console_styled_write(asx_report_buf *out, const asx_console_style *style,
-                                      const char *text) {
+                                    const char *text) {
     if (out == NULL || text == NULL) return ASX_E_INVALID_ARGUMENT;
     if (style != NULL) emit_ansi_start(out, style);
     asx_report_buf_append(out, text);

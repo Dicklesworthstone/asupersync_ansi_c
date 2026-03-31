@@ -35,7 +35,7 @@ extern "C" {
 
 /* Handler callback: receives request, writes response. Returns status. */
 typedef asx_status (*asx_web_handler_fn)(const asx_http_request *req, asx_http_response *resp,
-                                          void *user_data);
+                                         void *user_data);
 
 typedef struct {
     asx_http_method method;
@@ -57,16 +57,16 @@ ASX_API void asx_web_router_init(asx_web_router *router);
 
 /* Register a route. Path must be an exact match (no wildcards in core). */
 ASX_API asx_status asx_web_router_add(asx_web_router *router, asx_http_method method,
-                                       const char *path, asx_web_handler_fn handler,
-                                       void *user_data);
+                                      const char *path, asx_web_handler_fn handler,
+                                      void *user_data);
 
 /* Set a custom 404 handler. */
 ASX_API void asx_web_router_set_not_found(asx_web_router *router, asx_web_handler_fn handler,
-                                           void *user_data);
+                                          void *user_data);
 
 /* Dispatch a request through the router. */
 ASX_API asx_status asx_web_router_dispatch(const asx_web_router *router,
-                                            const asx_http_request *req, asx_http_response *resp);
+                                           const asx_http_request *req, asx_http_response *resp);
 
 /* -------------------------------------------------------------------
  * Middleware
@@ -95,15 +95,15 @@ typedef struct {
 
 /* Initialize a middleware stack with an inner handler. */
 ASX_API void asx_web_middleware_init(asx_web_middleware_stack *stack, asx_web_handler_fn inner,
-                                      void *inner_data);
+                                     void *inner_data);
 
 /* Add a middleware layer (outermost added last). */
-ASX_API asx_status asx_web_middleware_add(asx_web_middleware_stack *stack,
-                                           asx_web_middleware_fn fn, void *user_data);
+ASX_API asx_status asx_web_middleware_add(asx_web_middleware_stack *stack, asx_web_middleware_fn fn,
+                                          void *user_data);
 
 /* Execute the middleware stack. */
 ASX_API asx_status asx_web_middleware_run(const asx_web_middleware_stack *stack,
-                                           const asx_http_request *req, asx_http_response *resp);
+                                          const asx_http_request *req, asx_http_response *resp);
 
 /* -------------------------------------------------------------------
  * Request extraction
@@ -178,14 +178,14 @@ ASX_API void asx_web_session_store_init(asx_web_session_store *store);
 
 /* Create a new session. Returns the session ID in out_id. */
 ASX_API asx_status asx_web_session_create(asx_web_session_store *store, char *out_id,
-                                            uint32_t id_capacity);
+                                          uint32_t id_capacity);
 
 /* Look up a session by ID. Returns NULL if not found or expired. */
 ASX_API asx_web_session *asx_web_session_get(asx_web_session_store *store, const char *id);
 
 /* Set session data. */
 ASX_API asx_status asx_web_session_set_data(asx_web_session *session, const void *data,
-                                              uint32_t len);
+                                            uint32_t len);
 
 /* Destroy a session by ID. */
 ASX_API asx_status asx_web_session_destroy(asx_web_session_store *store, const char *id);
@@ -225,7 +225,7 @@ ASX_API void asx_web_sse_init(asx_web_sse_stream *stream);
 
 /* Push an event to the SSE stream. */
 ASX_API asx_status asx_web_sse_push(asx_web_sse_stream *stream, const char *event_name,
-                                      const char *data);
+                                    const char *data);
 
 /* Poll-receive an event. Returns ASX_E_PENDING if empty. */
 ASX_API asx_status asx_web_sse_poll(asx_web_sse_stream *stream, asx_web_sse_event *out);
@@ -275,16 +275,16 @@ ASX_API void asx_web_multipart_init(asx_web_multipart *mp);
 
 /* Add a field part (non-file). */
 ASX_API asx_status asx_web_multipart_add_field(asx_web_multipart *mp, const char *name,
-                                                 const void *data, uint32_t len);
+                                               const void *data, uint32_t len);
 
 /* Add a file part. */
 ASX_API asx_status asx_web_multipart_add_file(asx_web_multipart *mp, const char *name,
-                                                const char *filename, const char *content_type,
-                                                const void *data, uint32_t len);
+                                              const char *filename, const char *content_type,
+                                              const void *data, uint32_t len);
 
 /* Get a part by name. Returns NULL if not found. */
 ASX_API const asx_web_multipart_part *asx_web_multipart_get(const asx_web_multipart *mp,
-                                                              const char *name);
+                                                            const char *name);
 
 /* -------------------------------------------------------------------
  * CORS
@@ -316,7 +316,7 @@ ASX_API int asx_web_cors_check_origin(const asx_web_cors_config *cfg, const char
 
 /* Apply CORS headers to a response for the given request origin. */
 ASX_API asx_status asx_web_cors_apply(const asx_web_cors_config *cfg, const char *request_origin,
-                                        asx_http_response *resp);
+                                      asx_http_response *resp);
 
 /* -------------------------------------------------------------------
  * CSRF protection
@@ -365,16 +365,16 @@ ASX_API void asx_web_static_init(asx_web_static_files *sf);
 
 /* Register a static file. Data pointer must remain valid for the lifetime of the registry. */
 ASX_API asx_status asx_web_static_add(asx_web_static_files *sf, const char *path,
-                                        const char *content_type, const uint8_t *data,
-                                        uint32_t data_len);
+                                      const char *content_type, const uint8_t *data,
+                                      uint32_t data_len);
 
 /* Look up a static file by path. Returns NULL if not found. */
 ASX_API const asx_web_static_entry *asx_web_static_lookup(const asx_web_static_files *sf,
-                                                            const char *path);
+                                                          const char *path);
 
 /* Serve a static file into an HTTP response. */
 ASX_API asx_status asx_web_static_serve(const asx_web_static_files *sf, const char *path,
-                                          asx_http_response *resp);
+                                        asx_http_response *resp);
 
 #ifdef __cplusplus
 }

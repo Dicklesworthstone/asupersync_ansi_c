@@ -126,7 +126,8 @@ static asx_status staged_buffer_call(void *state, const void *request, void *res
     return ASX_OK;
 }
 
-static asx_service make_staged_buffer_service(staged_buffer_service_state *state, asx_status first) {
+static asx_service make_staged_buffer_service(staged_buffer_service_state *state,
+                                              asx_status first) {
     asx_service svc;
     state->poll_count = 0u;
     state->call_count = 0u;
@@ -162,9 +163,7 @@ TEST(identity_always_ready) {
 
     asx_service_identity_init(&svc, &state);
 
-    for (i = 0; i < 10; i++) {
-        ASSERT_EQ(asx_service_poll_ready(&svc), ASX_SERVICE_READY);
-    }
+    for (i = 0; i < 10; i++) { ASSERT_EQ(asx_service_poll_ready(&svc), ASX_SERVICE_READY); }
 }
 
 /* ================================================================== */
@@ -233,9 +232,7 @@ TEST(rate_limit_allows_within_budget) {
     /* Allow 5 calls per window. */
     asx_service_rate_limit_init(&svc, &state, inner, 5, 1000000000ULL);
 
-    for (i = 0; i < 5; i++) {
-        ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
-    }
+    for (i = 0; i < 5; i++) { ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK); }
     ASSERT_EQ(cstate.call_count, 5u);
 }
 
@@ -250,9 +247,7 @@ TEST(rate_limit_rejects_over_budget) {
 
     asx_service_rate_limit_init(&svc, &state, inner, 3, 1000000000ULL);
 
-    for (i = 0; i < 3; i++) {
-        ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
-    }
+    for (i = 0; i < 3; i++) { ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK); }
 
     ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_E_RESOURCE_EXHAUSTED);
     ASSERT_EQ(cstate.call_count, 3u);
@@ -545,13 +540,17 @@ static int lb_call_count_a;
 static int lb_call_count_b;
 
 static asx_status lb_echo_a(void *state, const void *request, void *response) {
-    (void)state; (void)request; (void)response;
+    (void)state;
+    (void)request;
+    (void)response;
     lb_call_count_a++;
     return ASX_OK;
 }
 
 static asx_status lb_echo_b(void *state, const void *request, void *response) {
-    (void)state; (void)request; (void)response;
+    (void)state;
+    (void)request;
+    (void)response;
     lb_call_count_b++;
     return ASX_OK;
 }
@@ -680,10 +679,14 @@ TEST(steer_routes_by_key) {
     ASSERT_EQ(asx_service_steer_add_backend(&ss, b), ASX_OK);
 
     /* Even numbers go to a (idx 0), odd to b (idx 1) */
-    req = 0; ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
-    req = 1; ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
-    req = 2; ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
-    req = 3; ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
+    req = 0;
+    ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
+    req = 1;
+    ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
+    req = 2;
+    ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
+    req = 3;
+    ASSERT_EQ(asx_service_call(&svc, &req, &resp), ASX_OK);
     ASSERT_EQ(lb_call_count_a, 2);
     ASSERT_EQ(lb_call_count_b, 2);
 }
