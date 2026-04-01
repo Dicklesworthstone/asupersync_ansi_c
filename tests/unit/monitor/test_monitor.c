@@ -149,9 +149,9 @@ static void test_monitor_io_threshold_equality_does_not_trigger(void) {
         MUST_OK(asx_waker_register(89u, &w));
         MUST_OK(asx_io_register(89, ASX_IO_READABLE, &w, &tok));
         MUST_OK(asx_inspect(&rt, &inspection));
-        pct = (inspection.io_driver.capacity == 0u) ? 0u
-                                                    : (inspection.io_driver.active_count * 100u) /
-                                                          inspection.io_driver.capacity;
+        pct = (inspection.io_driver.capacity == 0u)
+                  ? 0u
+                  : (inspection.io_driver.active_count * 100u) / inspection.io_driver.capacity;
         policy.max_io_utilization_pct = pct;
 
         MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));

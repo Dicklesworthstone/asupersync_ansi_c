@@ -366,8 +366,7 @@ TEST(decide_null_evidence_with_nonzero_count_returns_error) {
     posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX;
 
-    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 1, &result),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 1, &result), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(decide_zero_actions_returns_error) {
@@ -406,8 +405,7 @@ TEST(decide_out_of_range_fallback_returns_error) {
     posterior.state_count = 2;
     posterior.confidence_fp32 = UINT32_MAX;
 
-    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result),
-              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_adaptive_decide(&surface, &posterior, NULL, 0, &result), ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(decide_state_count_mismatch_returns_error) {

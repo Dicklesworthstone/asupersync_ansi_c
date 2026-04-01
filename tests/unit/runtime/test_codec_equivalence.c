@@ -321,6 +321,19 @@ TEST(equiv_cross_codec_verify_rejects_null) {
     ASSERT_EQ(asx_codec_cross_codec_verify(NULL, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(equiv_cross_codec_verify_clears_report_on_early_failure) {
+    asx_canonical_fixture fixture;
+    asx_codec_equiv_report report;
+
+    asx_canonical_fixture_init(&fixture);
+    report.count = 1u;
+    strcpy(report.diffs[0].field_name, "stale_field");
+
+    ASSERT_EQ(asx_codec_cross_codec_verify(&fixture, &report), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(report.count, (uint32_t)0);
+    ASSERT_EQ(report.diffs[0].field_name[0], '\0');
+}
+
 /* ---- Report without report pointer ---- */
 
 TEST(equiv_semantic_eq_works_without_report) {
@@ -434,6 +447,7 @@ int main(void) {
     RUN_TEST(equiv_semantic_eq_rejects_null);
     RUN_TEST(equiv_semantic_key_rejects_null);
     RUN_TEST(equiv_cross_codec_verify_rejects_null);
+    RUN_TEST(equiv_cross_codec_verify_clears_report_on_early_failure);
 
     /* Report-less mode */
     RUN_TEST(equiv_semantic_eq_works_without_report);

@@ -66,7 +66,8 @@ ASX_API ASX_MUST_USE asx_status asx_codec_fixture_semantic_key(const asx_canonic
  * if the round-trip preserves semantic identity, or the first error
  * encountered (encode/decode failure or equivalence mismatch).
  *
- * When report is non-NULL, any mismatched fields are recorded.
+ * When report is non-NULL, it is reset before verification begins and any
+ * mismatched fields are recorded if semantic comparison is reached.
  */
 ASX_API ASX_MUST_USE asx_status asx_codec_cross_codec_verify(const asx_canonical_fixture *fixture,
                                                              asx_codec_equiv_report *report);

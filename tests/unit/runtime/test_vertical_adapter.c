@@ -164,8 +164,7 @@ TEST(evaluate_invalid_adapter_rejected) {
 
 TEST(evaluate_invalid_mode_rejected) {
     asx_adapter_result res;
-    asx_status s =
-        asx_adapter_evaluate(ASX_ADAPTER_HFT, (asx_adapter_mode)99, 50, 100, &res);
+    asx_status s = asx_adapter_evaluate(ASX_ADAPTER_HFT, (asx_adapter_mode)99, 50, 100, &res);
     ASSERT_EQ(s, ASX_E_INVALID_ARGUMENT);
 }
 

@@ -98,7 +98,8 @@ static void test_console_emit_log_record(void) {
 
 static void test_console_emit_log_record_escapes_json(void) {
     asx_report_buf out;
-    static const char message[] = {'l', 'i', 'n', 'e', '1', '\n', '\t', '"', 'x', '"', '\x01', '\0'};
+    static const char message[] = {'l',  'i', 'n', 'e', '1',    '\n',
+                                   '\t', '"', 'x', '"', '\x01', '\0'};
 
     MUST_OK(asx_console_emit_log_record(ASX_LOG_INFO, "ops\"core\\pipe", message, &out));
     ASSERT(strstr(asx_report_buf_cstr(&out), "\"source\":\"ops\\\"core\\\\pipe\"") != NULL,

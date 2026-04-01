@@ -56,9 +56,8 @@ asx_status asx_codec_fixture_semantic_eq(const asx_canonical_fixture *a,
                                          asx_codec_equiv_report *report) {
     int mismatch = 0;
 
-    if (a == NULL || b == NULL) return ASX_E_INVALID_ARGUMENT;
-
     if (report != NULL) { asx_codec_equiv_report_init(report); }
+    if (a == NULL || b == NULL) return ASX_E_INVALID_ARGUMENT;
 
     /* Compare all semantic fields — codec is explicitly excluded */
 
@@ -184,6 +183,7 @@ asx_status asx_codec_cross_codec_verify(const asx_canonical_fixture *fixture,
     asx_status st;
     asx_status result;
 
+    if (report != NULL) { asx_codec_equiv_report_init(report); }
     if (fixture == NULL) return ASX_E_INVALID_ARGUMENT;
 
     asx_canonical_fixture_init(&from_json);
