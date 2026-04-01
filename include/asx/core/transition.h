@@ -29,10 +29,12 @@ ASX_API ASX_MUST_USE asx_status asx_task_transition_check(asx_task_state from, a
 ASX_API ASX_MUST_USE asx_status asx_obligation_transition_check(asx_obligation_state from,
                                                                 asx_obligation_state to);
 
-/* Returns nonzero if the region state allows spawning new tasks. */
+/* Returns nonzero if the region state allows strict OPEN-only admissions such
+ * as child regions and obligation reservation. */
 ASX_API int asx_region_can_spawn(asx_region_state s);
 
-/* Returns nonzero if the region state allows new work (spawn, reserve). */
+/* Returns nonzero if the region state allows task admission, including
+ * finalizer-spawned cleanup work during FINALIZING. */
 ASX_API int asx_region_can_accept_work(asx_region_state s);
 
 /* Returns nonzero if the region is in a closing or draining state. */

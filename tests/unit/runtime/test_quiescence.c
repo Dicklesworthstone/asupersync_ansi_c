@@ -27,6 +27,12 @@ static asx_status poll_pending(void *data, asx_task_id self) {
     return ASX_E_PENDING;
 }
 
+static asx_status poll_complete(void *data, asx_task_id self) {
+    (void)data;
+    (void)self;
+    return ASX_OK;
+}
+
 static asx_status poll_checkpoint_then_complete(void *data, asx_task_id self) {
     asx_checkpoint_result cr;
     (void)data;
@@ -141,6 +147,55 @@ TEST(region_drain_budget_exhaustion_leaves_region_closing) {
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     ASSERT_EQ(region->state, ASX_REGION_CLOSING);
     ASSERT_TRUE(region->task_count > 0);
+}
+
+TEST(finalizing_region_allows_cleanup_task_spawn) {
+    asx_region_id rid;
+    asx_region_slot *region = NULL;
+    asx_task_id tid;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    region->state = ASX_REGION_FINALIZING;
+
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
+    ASSERT_EQ(region->task_count, 1u);
+}
+
+TEST(finalizing_region_allows_captured_cleanup_task_spawn) {
+    asx_region_id rid;
+    asx_region_slot *region = NULL;
+    asx_task_id tid;
+    uint32_t *captured = NULL;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    region->state = ASX_REGION_FINALIZING;
+
+    ASSERT_EQ(asx_task_spawn_captured(rid, poll_complete, sizeof(*captured), NULL, &tid,
+                                      (void **)&captured),
+              ASX_OK);
+    ASSERT_TRUE(captured != NULL);
+    ASSERT_EQ(*captured, 0u);
+    ASSERT_EQ(region->task_count, 1u);
+}
+
+TEST(finalizing_region_still_rejects_obligation_reserve) {
+    asx_region_id rid;
+    asx_region_slot *region = NULL;
+    asx_obligation_id oid;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    region->state = ASX_REGION_FINALIZING;
+
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_REGION_NOT_OPEN);
 }
 
 /* --- New tests covering additional branches --- */
@@ -616,6 +671,12 @@ int main(void) {
     RUN_TEST(region_drain_recancels_uncancelled_tasks_before_scheduler_run);
     asx_runtime_reset();
     RUN_TEST(region_drain_budget_exhaustion_leaves_region_closing);
+    asx_runtime_reset();
+    RUN_TEST(finalizing_region_allows_cleanup_task_spawn);
+    asx_runtime_reset();
+    RUN_TEST(finalizing_region_allows_captured_cleanup_task_spawn);
+    asx_runtime_reset();
+    RUN_TEST(finalizing_region_still_rejects_obligation_reserve);
     asx_runtime_reset();
     RUN_TEST(quiescence_invalid_handle_returns_not_found);
     asx_runtime_reset();

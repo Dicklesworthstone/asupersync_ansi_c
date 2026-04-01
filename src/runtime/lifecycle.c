@@ -375,8 +375,9 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     if (st != ASX_OK) return st;
     if (r->poisoned) return ASX_E_REGION_POISONED;
 
-    /* Only open regions can spawn tasks */
-    if (!asx_region_can_spawn(r->state)) return ASX_E_REGION_NOT_OPEN;
+    /* Finalizing regions may still spawn cleanup tasks; broader admissions
+     * like obligations remain OPEN-only. */
+    if (!asx_region_can_accept_work(r->state)) return ASX_E_REGION_NOT_OPEN;
 
     if (g_task_count >= ASX_MAX_TASKS) return ASX_E_RESOURCE_EXHAUSTED;
 
@@ -422,7 +423,7 @@ asx_status asx_task_spawn_captured(asx_region_id region, asx_task_poll_fn poll_f
 
     st = asx_region_slot_lookup(region, &r);
     if (st != ASX_OK) return st;
-    if (!asx_region_can_spawn(r->state)) return ASX_E_REGION_NOT_OPEN;
+    if (!asx_region_can_accept_work(r->state)) return ASX_E_REGION_NOT_OPEN;
 
     captured = asx_region_capture_alloc(r, state_size, &old_capture_used);
     if (captured == NULL) return ASX_E_RESOURCE_EXHAUSTED;
