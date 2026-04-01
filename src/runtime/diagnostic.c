@@ -60,6 +60,7 @@ void asx_diagnostic_reset(void) {
 static uint32_t count_alive_regions(void) {
     uint32_t i, n = 0;
     for (i = 0; i < g_region_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (g_regions[i].alive) n++;
     }
     return n;
@@ -68,6 +69,7 @@ static uint32_t count_alive_regions(void) {
 static uint32_t count_alive_tasks(void) {
     uint32_t i, n = 0;
     for (i = 0; i < g_task_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (g_tasks[i].alive) n++;
     }
     return n;
@@ -76,6 +78,7 @@ static uint32_t count_alive_tasks(void) {
 static uint32_t count_alive_obligations(void) {
     uint32_t i, n = 0;
     for (i = 0; i < g_obligation_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (g_obligations[i].alive) n++;
     }
     return n;
@@ -84,6 +87,7 @@ static uint32_t count_alive_obligations(void) {
 static int any_region_poisoned(void) {
     uint32_t i;
     for (i = 0; i < g_region_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (g_regions[i].alive && g_regions[i].poisoned) return 1;
     }
     return 0;
@@ -137,6 +141,7 @@ asx_status asx_inspect(const asx_runtime *rt, asx_inspection_report *out) {
         out->errors.total_errors = 0;
         out->errors.overflowed = 0;
         for (i = 0; i < g_task_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
             if (g_tasks[i].alive) {
                 /* We can't easily query per-task error counts without
                  * a task handle. Track the task count as a proxy. */

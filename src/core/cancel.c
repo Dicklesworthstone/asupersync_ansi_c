@@ -89,6 +89,7 @@ static asx_witness_slot *witness_find(asx_cancel_witness_id w) {
     uint32_t i;
     if (w == ASX_INVALID_ID) return NULL;
     for (i = 0; i < g_witness_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (g_witnesses[i].id == w && g_witnesses[i].active) return &g_witnesses[i];
     }
     return NULL;

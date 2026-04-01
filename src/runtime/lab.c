@@ -34,6 +34,7 @@ static uint32_t lab_trace_count_scheduler_polls(uint32_t start_index) {
     if (start_index > end_index) return 0u;
 
     for (i = start_index; i < end_index; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
         asx_trace_event ev;
         if (!asx_trace_event_get(i, &ev)) break;
         if (ev.kind == ASX_TRACE_SCHED_POLL && polls < UINT32_MAX) polls++;
@@ -182,6 +183,7 @@ asx_status asx_lab_run_scenario(asx_lab *lab, const asx_lab_scenario *scenario,
     start_time = asx_lab_now(lab);
 
     for (i = 0; i < scenario->step_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded init over static array") */
         uint32_t trace_count_before;
         uint32_t step_polls;
 

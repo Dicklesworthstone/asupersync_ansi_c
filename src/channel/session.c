@@ -115,6 +115,7 @@ asx_status asx_session_create(asx_region_id region, uint32_t capacity,
     {
         uint32_t i;
         for (i = 0; i < g_slot_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded slot search") */
             if (g_slots[i].state == ASX_SESSION_CLOSED && !g_slots[i].initiator_alive &&
                 !g_slots[i].responder_alive) {
                 idx = i;

@@ -37,6 +37,7 @@ asx_status asx_symbol_register(const char *name, asx_symbol_id *out_id) {
 
     /* Check for existing registration (idempotent) */
     for (i = 0; i < g_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (g_registry[i].name != NULL && strcmp(g_registry[i].name, name) == 0) {
             *out_id = (asx_symbol_id)(i + 1);
             return ASX_OK;
@@ -59,6 +60,7 @@ asx_status asx_symbol_lookup(const char *name, asx_symbol_id *out_id) {
     if (name == NULL || out_id == NULL) return ASX_E_INVALID_ARGUMENT;
 
     for (i = 0; i < g_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (g_registry[i].name != NULL && strcmp(g_registry[i].name, name) == 0) {
             *out_id = (asx_symbol_id)(i + 1);
             return ASX_OK;
@@ -133,6 +135,7 @@ int asx_symbol_set_contains(const asx_symbol_set *set, asx_symbol_id id) {
 static uint16_t popcount64(uint64_t x) {
     uint16_t count = 0;
     while (x) {
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
         count++;
         x &= x - 1; /* clear lowest set bit */
     }

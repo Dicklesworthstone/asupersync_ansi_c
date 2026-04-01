@@ -237,6 +237,7 @@ uint64_t asx_adaptive_ledger_digest(void) {
          * differ across platforms/compilers, breaking determinism. */
 #define LEDGER_HASH_U32(val)                                                                       \
     do {                                                                                           \
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */                                         \
         hash ^= (uint64_t)(val);                                                                   \
         hash *= 1099511628211ULL;                                                                  \
     } while (0)
@@ -250,7 +251,10 @@ uint64_t asx_adaptive_ledger_digest(void) {
         LEDGER_HASH_U32((uint32_t)e->evidence_count);
         {
             uint8_t j;
-            for (j = 0; j < e->evidence_count; j++) { LEDGER_HASH_U32(e->evidence[j].value_fp32); }
+            for (j = 0; j < e->evidence_count; j++) {
+                /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
+                LEDGER_HASH_U32(e->evidence[j].value_fp32);
+            }
         }
 #undef LEDGER_HASH_U32
         /* Include sequence */

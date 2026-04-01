@@ -111,6 +111,7 @@ asx_status asx_io_register(int fd, asx_io_interest interest, const asx_waker *wa
     {
         uint32_t i;
         for (i = 0; i < g_reg_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded slot search") */
             if (!g_regs[i].alive) {
                 idx = i;
                 break;
@@ -200,6 +201,7 @@ uint32_t asx_io_driver_poll(asx_io_event *out_events, uint32_t max_events, uint3
     }
 
     for (i = 0; i < g_reg_count && collected < ready_count && collected < max_events; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         asx_status wake_st;
 
         if (!g_regs[i].alive) continue;

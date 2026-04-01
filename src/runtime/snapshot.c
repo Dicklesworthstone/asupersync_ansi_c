@@ -184,6 +184,7 @@ asx_status asx_runtime_snapshot_to_json(const asx_runtime_snapshot *snap, asx_co
     if (s != ASX_OK) return s;
 
     for (i = 0; i < snap->region_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded JSON serialization") */
         int rf = 1;
         const asx_snapshot_region *r = &snap->regions[i];
         if (i > 0) {
@@ -216,6 +217,7 @@ asx_status asx_runtime_snapshot_to_json(const asx_runtime_snapshot *snap, asx_co
     if (s != ASX_OK) return s;
 
     for (i = 0; i < snap->task_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded JSON serialization") */
         int tf = 1;
         const asx_snapshot_task *t = &snap->tasks[i];
         if (i > 0) {
@@ -247,6 +249,7 @@ asx_status asx_runtime_snapshot_to_json(const asx_runtime_snapshot *snap, asx_co
     if (s != ASX_OK) return s;
 
     for (i = 0; i < snap->obligation_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded JSON serialization") */
         int of = 1;
         const asx_snapshot_obligation *o = &snap->obligations[i];
         if (i > 0) {
@@ -297,6 +300,7 @@ asx_status asx_runtime_snapshot_eq(const asx_runtime_snapshot *a, const asx_runt
     if (a->obligation_count != b->obligation_count) return ASX_E_EQUIVALENCE_MISMATCH;
 
     for (i = 0; i < a->region_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
         if (a->regions[i].id != b->regions[i].id) return ASX_E_EQUIVALENCE_MISMATCH;
         if (a->regions[i].state != b->regions[i].state) return ASX_E_EQUIVALENCE_MISMATCH;
         if (a->regions[i].task_count != b->regions[i].task_count) return ASX_E_EQUIVALENCE_MISMATCH;
@@ -305,6 +309,7 @@ asx_status asx_runtime_snapshot_eq(const asx_runtime_snapshot *a, const asx_runt
     }
 
     for (i = 0; i < a->task_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
         if (a->tasks[i].id != b->tasks[i].id) return ASX_E_EQUIVALENCE_MISMATCH;
         if (a->tasks[i].state != b->tasks[i].state) return ASX_E_EQUIVALENCE_MISMATCH;
         if (a->tasks[i].region != b->tasks[i].region) return ASX_E_EQUIVALENCE_MISMATCH;
@@ -313,6 +318,7 @@ asx_status asx_runtime_snapshot_eq(const asx_runtime_snapshot *a, const asx_runt
     }
 
     for (i = 0; i < a->obligation_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
         if (a->obligations[i].id != b->obligations[i].id) return ASX_E_EQUIVALENCE_MISMATCH;
         if (a->obligations[i].state != b->obligations[i].state) return ASX_E_EQUIVALENCE_MISMATCH;
         if (a->obligations[i].region != b->obligations[i].region) return ASX_E_EQUIVALENCE_MISMATCH;

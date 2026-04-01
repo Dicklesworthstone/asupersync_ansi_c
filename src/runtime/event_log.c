@@ -140,6 +140,7 @@ asx_status asx_event_log_to_json(asx_codec_buffer *out) {
     if (limit > ASX_EVENT_LOG_CAPACITY) { limit = ASX_EVENT_LOG_CAPACITY; }
 
     for (i = 0; i < limit; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
         const asx_event_record *e = &g_event_log[i];
         int first = 1;
 
@@ -203,6 +204,7 @@ asx_status asx_event_replay_verify(const asx_event_record *expected, uint32_t ex
     compare_limit = expected_count < actual_count ? expected_count : actual_count;
 
     for (i = 0; i < compare_limit; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
         const asx_event_record *exp = &expected[i];
         const asx_event_record *act = &g_event_log[i];
 

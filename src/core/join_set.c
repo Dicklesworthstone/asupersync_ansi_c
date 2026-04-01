@@ -34,6 +34,7 @@ asx_status asx_join_set_poll_next(asx_join_set *js, asx_join_set_result *out) {
 
     /* First check for any newly completed tasks */
     for (i = 0u; i < js->count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         idx = (js->next_poll_idx + i) % js->count;
         if (!js->entries[idx].active) continue;
 
@@ -80,6 +81,7 @@ asx_status asx_join_set_abort_all(asx_join_set *js) {
 
     if (js == NULL) return ASX_E_INVALID_ARGUMENT;
     for (i = 0u; i < js->count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (js->entries[i].active) {
             asx_status st = asx_task_cancel(js->entries[i].task_id, ASX_CANCEL_USER);
             (void)st;

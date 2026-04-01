@@ -43,6 +43,7 @@ uint64_t asx_backoff_delay_for_attempt(const asx_backoff_config *cfg, uint32_t a
     case ASX_BACKOFF_EXPONENTIAL:
         delay = cfg->initial_delay_ns;
         for (i = 0; i < attempt; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
             delay = (uint64_t)((double)delay * cfg->multiplier);
             if (delay > cfg->max_delay_ns) return cfg->max_delay_ns;
         }
@@ -50,6 +51,7 @@ uint64_t asx_backoff_delay_for_attempt(const asx_backoff_config *cfg, uint32_t a
     case ASX_BACKOFF_JITTERED:
         delay = cfg->initial_delay_ns;
         for (i = 0; i < attempt; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
             delay = (uint64_t)((double)delay * cfg->multiplier);
             if (delay > cfg->max_delay_ns) {
                 delay = cfg->max_delay_ns;

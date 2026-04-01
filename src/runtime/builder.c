@@ -58,6 +58,7 @@ static asx_status builder_set_hook_family(asx_runtime_builder *builder, void *ds
 static int ascii_streq_ignore_case(const char *lhs, const char *rhs) {
     if (lhs == NULL || rhs == NULL) return 0;
     while (*lhs != '\0' && *rhs != '\0') {
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
         if (tolower((unsigned char)*lhs) != tolower((unsigned char)*rhs)) return 0;
         lhs++;
         rhs++;

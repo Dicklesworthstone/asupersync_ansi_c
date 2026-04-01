@@ -60,6 +60,7 @@ asx_status asx_waker_register(asx_task_id task, asx_waker *out_waker) {
     {
         uint32_t i;
         for (i = 0; i < g_slot_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded slot search") */
             if (!g_slots[i].alive) {
                 idx = i;
                 break;
@@ -160,6 +161,7 @@ uint32_t asx_waker_drain_signaled(asx_task_id *out_tasks, uint32_t max_tasks) {
     if (out_tasks == NULL || max_tasks == 0) return 0;
 
     for (i = 0; i < g_slot_count && count < max_tasks; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (g_slots[i].alive && g_slots[i].signaled) {
             out_tasks[count++] = g_slots[i].task;
             g_slots[i].signaled = 0;

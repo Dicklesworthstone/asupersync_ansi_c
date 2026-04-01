@@ -64,6 +64,7 @@ asx_status asx_oneshot_create(asx_oneshot_sender *out_sender, asx_oneshot_receiv
     {
         uint32_t i;
         for (i = 0; i < g_slot_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded slot search") */
             if (!g_slots[i].sender_alive && !g_slots[i].receiver_alive &&
                 g_slots[i].state != ASX_ONESHOT_EMPTY) {
                 /* Recycled slot: bump generation */

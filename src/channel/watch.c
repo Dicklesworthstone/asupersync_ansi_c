@@ -65,6 +65,7 @@ asx_status asx_watch_create(uint64_t initial_value, asx_watch_sender *out_sender
     {
         uint32_t i;
         for (i = 0; i < g_slot_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded slot search") */
             if (!g_slots[i].sender_alive && g_slots[i].receiver_count == 0) {
                 idx = i;
                 break;

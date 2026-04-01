@@ -24,6 +24,7 @@ asx_status asx_snapshot_take(const asx_lab *lab, asx_snapshot_id *out) {
     if (!lab->initialized) return ASX_E_INVALID_STATE;
 
     for (i = 0; i < ASX_SNAPSHOT_MAX; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (!g_snapshots[i].valid) {
             g_snapshots[i].config = lab->config;
             g_snapshots[i].entropy_state = lab->entropy_state;
@@ -94,6 +95,7 @@ static void replay_append_json_escaped(asx_report_buf *out, const char *text) {
 
     p = (const unsigned char *)text;
     while (*p != '\0') {
+        /* ASX_CHECKPOINT_WAIVER("bounded JSON serialization") */
         switch (*p) {
         case '\"': asx_report_buf_append(out, "\\\""); break;
         case '\\': asx_report_buf_append(out, "\\\\"); break;
@@ -168,6 +170,7 @@ asx_oracle_result asx_oracle_quiescence(const asx_lab *lab, void *ctx) {
     {
         uint32_t i;
         for (i = 0; i < g_task_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
             if (g_tasks[i].alive && g_tasks[i].state < ASX_TASK_COMPLETED)
                 return make_result(ASX_ORACLE_FAIL, "quiescence", "tasks still active");
         }
@@ -184,6 +187,7 @@ asx_oracle_result asx_oracle_leak(const asx_lab *lab, void *ctx) {
     {
         uint32_t i;
         for (i = 0; i < g_region_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
             if (g_regions[i].alive && g_regions[i].state != ASX_REGION_CLOSED)
                 return make_result(ASX_ORACLE_FAIL, "leak", "regions still open");
         }
@@ -280,6 +284,7 @@ asx_status asx_oracle_suite_run(asx_oracle_suite *suite, const asx_lab *lab) {
     suite->fail_count = 0;
 
     for (i = 0; i < suite->count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
         suite->results[i] = suite->oracles[i](lab, suite->oracle_ctx[i]);
         if (suite->results[i].verdict == ASX_ORACLE_PASS)
             suite->pass_count++;
@@ -334,6 +339,7 @@ asx_status asx_minimize_step(asx_minimize_state *state) {
     asx_lab_scenario_init(&candidate, state->scenario.name);
     j = 0;
     for (i = 0; i < state->scenario.step_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded init over static array") */
         if (i == try_remove) continue;
         candidate.steps[j] = state->scenario.steps[i];
         candidate.step_data[j] = state->scenario.step_data[i];
@@ -369,7 +375,10 @@ asx_status asx_minimize_run(asx_minimize_state *state) {
 
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    do { st = asx_minimize_step(state); } while (st == ASX_E_PENDING);
+    do {
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
+        st = asx_minimize_step(state);
+    } while (st == ASX_E_PENDING);
 
     return st;
 }

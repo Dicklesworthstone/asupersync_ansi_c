@@ -84,6 +84,7 @@ uint32_t asx_surface_blocked_count(asx_profile_id profile) {
         return (uint32_t)ASX_SURFACE_COUNT;
     }
     for (i = 0; i < ASX_SURFACE_COUNT; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded init over static array") */
         if (!asx_surface_available(profile, (asx_host_surface)i)) { blocked++; }
     }
     return blocked;

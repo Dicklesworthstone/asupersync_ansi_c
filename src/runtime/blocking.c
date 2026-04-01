@@ -100,6 +100,7 @@ asx_status asx_spawn_blocking(asx_blocking_fn fn, void *user_data,
     {
         uint32_t i;
         for (i = 0; i < g_slot_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded slot search") */
             if (g_slots[i].state == ASX_BLOCKING_COMPLETED) {
                 idx = i;
                 break;

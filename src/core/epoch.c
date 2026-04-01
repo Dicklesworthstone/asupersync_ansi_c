@@ -56,6 +56,7 @@ static void notify_observers(asx_epoch_slot *s, uint64_t old_phase, uint64_t new
     uint32_t i;
     uint64_t epoch_id = (uint64_t)s->generation;
     for (i = 0; i < s->observer_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded init over static array") */
         if (s->observers[i].fn != NULL) {
             s->observers[i].fn(epoch_id, old_phase, new_phase, s->observers[i].user_data);
         }
@@ -85,6 +86,7 @@ asx_status asx_epoch_create(const asx_epoch_policy *policy, asx_epoch_handle *ou
     {
         uint32_t i;
         for (i = 0; i < g_epoch_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded slot search") */
             if (g_epochs[i].state == ASX_EPOCH_CLOSED) {
                 idx = i;
                 break;

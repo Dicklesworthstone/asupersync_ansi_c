@@ -143,6 +143,7 @@ void asx_browser_evidence_capture(asx_browser_evidence_report *report) {
         uint32_t i;
         report->all_semantic_rules_hold = 1;
         for (i = 0; i < asx_profile_semantic_rule_count(); i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded init over static array") */
             if (!asx_profile_semantic_rule_enforced((asx_semantic_rule)i)) {
                 report->all_semantic_rules_hold = 0;
                 break;

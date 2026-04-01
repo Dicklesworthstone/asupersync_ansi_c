@@ -69,6 +69,7 @@ asx_status asx_broadcast_create(uint32_t capacity, asx_broadcast_sender *out_sen
     {
         uint32_t i;
         for (i = 0; i < g_slot_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded slot search") */
             if (!g_slots[i].sender_alive && g_slots[i].receiver_count == 0) {
                 idx = i;
                 break;

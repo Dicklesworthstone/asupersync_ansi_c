@@ -60,6 +60,7 @@ void asx_deadline_monitor_shutdown(void) {
     /* Cancel all pending deadlines */
     uint32_t i;
     for (i = 0; i < g_slot_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         if (g_slots[i].state == ASX_DEADLINE_PENDING) {
             g_slots[i].state = ASX_DEADLINE_CANCELLED;
             g_stats.cancelled_count++;
@@ -103,6 +104,7 @@ asx_status asx_deadline_monitor_register(asx_time target_ns, uint64_t entity_id,
     {
         uint32_t i;
         for (i = 0; i < g_slot_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded slot search") */
             if (g_slots[i].state != ASX_DEADLINE_PENDING) {
                 idx = i;
                 break;
@@ -201,6 +203,7 @@ uint32_t asx_deadline_monitor_check(asx_time now_ns) {
     if (!g_initialized) return 0;
 
     for (i = 0; i < g_slot_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         asx_dm_slot *s = &g_slots[i];
         if (s->state != ASX_DEADLINE_PENDING) continue;
 

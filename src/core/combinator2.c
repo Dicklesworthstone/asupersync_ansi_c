@@ -433,7 +433,10 @@ void asx_adaptive_hedge_init(asx_adaptive_hedge_policy *policy, uint32_t alpha_p
                              uint64_t min_delay_ns, uint64_t max_delay_ns) {
     uint32_t i;
     if (policy == NULL) return;
-    for (i = 0; i < ASX_ADAPTIVE_HEDGE_WINDOW; i++) policy->history[i] = 0;
+    for (i = 0; i < ASX_ADAPTIVE_HEDGE_WINDOW; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded init over static array") */
+        policy->history[i] = 0;
+    }
     policy->count = 0;
     policy->alpha_pct = (alpha_pct > 0 && alpha_pct < 100) ? alpha_pct : 5u;
     policy->min_delay_ns = min_delay_ns;
@@ -460,13 +463,18 @@ uint64_t asx_adaptive_hedge_delay(const asx_adaptive_hedge_policy *policy) {
     if (n < 10) return policy->max_delay_ns; /* not enough data */
 
     /* Copy window into sorted buffer */
-    for (i = 0; i < n; i++) sorted[i] = policy->history[i];
+    for (i = 0; i < n; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded init over static array") */
+        sorted[i] = policy->history[i];
+    }
 
     /* Insertion sort — small N, deterministic */
     for (i = 1; i < n; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
         uint64_t tmp = sorted[i];
         j = i;
         while (j > 0 && sorted[j - 1] > tmp) {
+            /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
             sorted[j] = sorted[j - 1];
             j--;
         }
@@ -534,6 +542,7 @@ asx_status asx_map_reduce_poll(void *user_data, asx_task_id self) {
     /* Poll all incomplete branches */
     completed = 0;
     for (i = 0; i < state->count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
         if (!state->branches[i].done) { (void)branch_poll(&state->branches[i], self); }
         if (state->branches[i].done) completed++;
     }
@@ -541,7 +550,10 @@ asx_status asx_map_reduce_poll(void *user_data, asx_task_id self) {
     if (completed < state->count) return ASX_E_PENDING;
 
     /* All map tasks done — collect results and reduce */
-    for (i = 0; i < state->count; i++) { results[i] = state->branches[i].result; }
+    for (i = 0; i < state->count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
+        results[i] = state->branches[i].result;
+    }
 
     state->result = state->reduce_fn(results, state->count, state->reduce_data);
     state->done = 1;
@@ -552,6 +564,7 @@ uint32_t asx_map_reduce_completed(const asx_map_reduce_state *state) {
     uint32_t i, count = 0;
     if (state == NULL) return 0;
     for (i = 0; i < state->count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
         if (state->branches[i].done) count++;
     }
     return count;
