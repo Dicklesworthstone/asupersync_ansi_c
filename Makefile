@@ -406,8 +406,12 @@ INVARIANT_TEST_SRC := $(wildcard tests/invariant/lifecycle/*_test.c) \
                       $(wildcard tests/invariant/quiescence/test_*.c)
 INVARIANT_TEST_SRC := $(sort $(INVARIANT_TEST_SRC))
 
+CONFORMANCE_TEST_SRC := $(wildcard tests/conformance/*_test.c)
+CONFORMANCE_TEST_SRC := $(sort $(CONFORMANCE_TEST_SRC))
+
 UNIT_TEST_BIN := $(patsubst tests/%.c,$(TEST_DIR)/%,$(UNIT_TEST_SRC))
 INV_TEST_BIN  := $(patsubst tests/%.c,$(TEST_DIR)/%,$(INVARIANT_TEST_SRC))
+CONFORMANCE_TEST_BIN := $(patsubst tests/%.c,$(TEST_DIR)/%,$(CONFORMANCE_TEST_SRC))
 VIGNETTE_TEST_SRC := $(wildcard tests/vignettes/vignette_*.c)
 VIGNETTE_TEST_SRC := $(sort $(VIGNETTE_TEST_SRC))
 VIGNETTE_TEST_BIN := $(patsubst tests/%.c,$(TEST_DIR)/%,$(VIGNETTE_TEST_SRC))
@@ -481,7 +485,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: all build clean install uninstall
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation
 .PHONY: model-check
-.PHONY: test test-unit test-browser-focused test-browser-minimal-focused test-invariants test-vignettes test-e2e test-e2e-vertical test-abi-shim abi-check
+.PHONY: test test-unit test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
 .PHONY: conformance codec-equivalence profile-parity crate-acceptance-gate
@@ -660,7 +664,7 @@ model-check: $(MODEL_CHECK_BIN)
 # ---------------------------------------------------------------------------
 # test — run all test suites
 # ---------------------------------------------------------------------------
-test: test-unit test-invariants test-vignettes
+test: test-unit test-invariants test-conformance-c test-vignettes
 	@echo "[asx] test: all suites passed"
 
 # ---------------------------------------------------------------------------
@@ -928,6 +932,29 @@ test-invariants: $(INV_TEST_BIN)
 	fi
 
 # ---------------------------------------------------------------------------
+# test-conformance-c — cross-codec / parity C conformance tests
+# ---------------------------------------------------------------------------
+test-conformance-c: $(CONFORMANCE_TEST_BIN)
+	@echo "[asx] test-conformance-c: running $(words $(CONFORMANCE_TEST_BIN)) test(s)..."
+	@if [ -z "$(strip $(CONFORMANCE_TEST_BIN))" ]; then \
+		echo "[asx] test-conformance-c: no tests found (scaffold stage)"; \
+	else \
+		pass=0; fail=0; \
+		for t in $(CONFORMANCE_TEST_BIN); do \
+			echo "  RUN  $$(basename $$t)"; \
+			if $$t; then \
+				echo "  PASS $$(basename $$t)"; \
+				pass=$$((pass + 1)); \
+			else \
+				echo "  FAIL $$(basename $$t)"; \
+				fail=$$((fail + 1)); \
+			fi; \
+		done; \
+		echo "[asx] test-conformance-c: $$pass passed, $$fail failed"; \
+		[ $$fail -eq 0 ] || exit 1; \
+	fi
+
+# ---------------------------------------------------------------------------
 # test-vignettes — compile and run API ergonomics usage vignettes
 # ---------------------------------------------------------------------------
 test-vignettes: $(VIGNETTE_TEST_BIN)
@@ -1118,6 +1145,10 @@ $(TEST_DIR)/invariant/%: tests/invariant/%.c $(LIB_A) | test-dirs
 	@mkdir -p $(@D)
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
 
+$(TEST_DIR)/conformance/%: tests/conformance/%.c $(LIB_A) | test-dirs
+	@mkdir -p $(@D)
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
+
 $(TEST_DIR)/vignettes/%: tests/vignettes/%.c $(LIB_A) | test-dirs
 	@mkdir -p $(@D)
 	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
@@ -1156,6 +1187,7 @@ test-dirs:
 	          $(TEST_DIR)/unit/stream $(TEST_DIR)/unit/plan \
 	          $(TEST_DIR)/invariant/lifecycle $(TEST_DIR)/invariant/quiescence \
 	          $(TEST_DIR)/invariant/model_check \
+	          $(TEST_DIR)/conformance \
 	          $(TEST_DIR)/vignettes
 
 # ---------------------------------------------------------------------------
