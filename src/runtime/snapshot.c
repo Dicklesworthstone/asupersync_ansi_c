@@ -139,12 +139,22 @@ static const char *obligation_state_str(asx_obligation_state s) {
     return "unknown";
 }
 
+static asx_status validate_snapshot_counts(const asx_runtime_snapshot *snap) {
+    if (snap == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (snap->region_count > ASX_SNAPSHOT_MAX_REGIONS) return ASX_E_INVALID_ARGUMENT;
+    if (snap->task_count > ASX_SNAPSHOT_MAX_TASKS) return ASX_E_INVALID_ARGUMENT;
+    if (snap->obligation_count > ASX_SNAPSHOT_MAX_OBLIGATIONS) return ASX_E_INVALID_ARGUMENT;
+    return ASX_OK;
+}
+
 asx_status asx_runtime_snapshot_to_json(const asx_runtime_snapshot *snap, asx_codec_buffer *out) {
     asx_status s;
     uint32_t i;
     int first;
 
     if (snap == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    s = validate_snapshot_counts(snap);
+    if (s != ASX_OK) return s;
 
     s = asx_codec_buffer_append_char(out, '{');
     if (s != ASX_OK) return s;
@@ -268,8 +278,13 @@ asx_status asx_runtime_snapshot_to_json(const asx_runtime_snapshot *snap, asx_co
 
 asx_status asx_runtime_snapshot_eq(const asx_runtime_snapshot *a, const asx_runtime_snapshot *b) {
     uint32_t i;
+    asx_status s;
 
     if (a == NULL || b == NULL) return ASX_E_INVALID_ARGUMENT;
+    s = validate_snapshot_counts(a);
+    if (s != ASX_OK) return s;
+    s = validate_snapshot_counts(b);
+    if (s != ASX_OK) return s;
 
     if (a->event_hash != b->event_hash) return ASX_E_EQUIVALENCE_MISMATCH;
     if (a->io_driver_initialized != b->io_driver_initialized) return ASX_E_EQUIVALENCE_MISMATCH;

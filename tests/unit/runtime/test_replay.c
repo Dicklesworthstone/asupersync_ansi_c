@@ -401,6 +401,21 @@ TEST(oracle_suite_overflow) {
     ASSERT_EQ(asx_oracle_suite_add(&suite, asx_oracle_quiescence, NULL), ASX_E_RESOURCE_EXHAUSTED);
 }
 
+TEST(oracle_suite_run_rejects_oversized_count) {
+    asx_lab lab;
+    asx_lab_config cfg;
+    asx_oracle_suite suite;
+
+    asx_lab_config_init(&cfg);
+    MUST_OK(asx_lab_init(&lab, &cfg));
+
+    asx_oracle_suite_init(&suite);
+    suite.count = ASX_ORACLE_SUITE_MAX + 1u;
+    ASSERT_EQ(asx_oracle_suite_run(&suite, &lab), ASX_E_INVALID_ARGUMENT);
+
+    asx_lab_shutdown(&lab);
+}
+
 /* ================================================================== */
 /* Counterexample minimization tests                                   */
 /* ================================================================== */
@@ -581,6 +596,7 @@ int main(void) {
     RUN_TEST(oracle_suite_all_pass);
     RUN_TEST(oracle_suite_empty);
     RUN_TEST(oracle_suite_overflow);
+    RUN_TEST(oracle_suite_run_rejects_oversized_count);
 
     /* Minimization */
     RUN_TEST(minimize_shrinks_scenario);

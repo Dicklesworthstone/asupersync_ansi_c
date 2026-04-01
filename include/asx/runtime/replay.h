@@ -130,7 +130,9 @@ ASX_API void asx_oracle_suite_init(asx_oracle_suite *suite);
 ASX_API ASX_MUST_USE asx_status asx_oracle_suite_add(asx_oracle_suite *suite, asx_oracle_fn oracle,
                                                      void *ctx);
 
-/* Run all oracles against the lab state. Returns ASX_OK if all pass. */
+/* Run all oracles against the lab state. Returns ASX_OK if all pass.
+ * Fails closed with ASX_E_INVALID_ARGUMENT when suite->count exceeds
+ * ASX_ORACLE_SUITE_MAX. */
 ASX_API asx_status asx_oracle_suite_run(asx_oracle_suite *suite, const asx_lab *lab);
 
 /* -------------------------------------------------------------------

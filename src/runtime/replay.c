@@ -274,6 +274,7 @@ asx_status asx_oracle_suite_run(asx_oracle_suite *suite, const asx_lab *lab) {
     int any_fail = 0;
 
     if (suite == NULL || lab == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (suite->count > ASX_ORACLE_SUITE_MAX) return ASX_E_INVALID_ARGUMENT;
 
     suite->pass_count = 0;
     suite->fail_count = 0;

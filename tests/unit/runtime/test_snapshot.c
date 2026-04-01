@@ -323,6 +323,49 @@ TEST(snapshot_to_json_null_returns_error) {
     asx_codec_buffer_reset(&buf);
 }
 
+TEST(snapshot_to_json_rejects_oversized_counts) {
+    asx_runtime_snapshot snap;
+    asx_codec_buffer buf;
+
+    asx_runtime_snapshot_init(&snap);
+    snap.region_count = ASX_SNAPSHOT_MAX_REGIONS + 1u;
+    asx_codec_buffer_init(&buf);
+    ASSERT_EQ(asx_runtime_snapshot_to_json(&snap, &buf), ASX_E_INVALID_ARGUMENT);
+    asx_codec_buffer_reset(&buf);
+
+    asx_runtime_snapshot_init(&snap);
+    snap.task_count = ASX_SNAPSHOT_MAX_TASKS + 1u;
+    asx_codec_buffer_init(&buf);
+    ASSERT_EQ(asx_runtime_snapshot_to_json(&snap, &buf), ASX_E_INVALID_ARGUMENT);
+    asx_codec_buffer_reset(&buf);
+
+    asx_runtime_snapshot_init(&snap);
+    snap.obligation_count = ASX_SNAPSHOT_MAX_OBLIGATIONS + 1u;
+    asx_codec_buffer_init(&buf);
+    ASSERT_EQ(asx_runtime_snapshot_to_json(&snap, &buf), ASX_E_INVALID_ARGUMENT);
+    asx_codec_buffer_reset(&buf);
+}
+
+TEST(snapshot_eq_rejects_oversized_counts) {
+    asx_runtime_snapshot a, b;
+
+    asx_runtime_snapshot_init(&a);
+    asx_runtime_snapshot_init(&b);
+
+    a.region_count = ASX_SNAPSHOT_MAX_REGIONS + 1u;
+    ASSERT_EQ(asx_runtime_snapshot_eq(&a, &b), ASX_E_INVALID_ARGUMENT);
+
+    asx_runtime_snapshot_init(&a);
+    asx_runtime_snapshot_init(&b);
+    b.task_count = ASX_SNAPSHOT_MAX_TASKS + 1u;
+    ASSERT_EQ(asx_runtime_snapshot_eq(&a, &b), ASX_E_INVALID_ARGUMENT);
+
+    asx_runtime_snapshot_init(&a);
+    asx_runtime_snapshot_init(&b);
+    b.obligation_count = ASX_SNAPSHOT_MAX_OBLIGATIONS + 1u;
+    ASSERT_EQ(asx_runtime_snapshot_eq(&a, &b), ASX_E_INVALID_ARGUMENT);
+}
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -362,6 +405,10 @@ int main(void) {
     RUN_TEST(snapshot_to_json_with_entities);
     asx_runtime_reset();
     RUN_TEST(snapshot_to_json_null_returns_error);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_to_json_rejects_oversized_counts);
+    asx_runtime_reset();
+    RUN_TEST(snapshot_eq_rejects_oversized_counts);
 
     TEST_REPORT();
     return test_failures;

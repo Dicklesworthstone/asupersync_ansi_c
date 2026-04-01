@@ -84,12 +84,14 @@ ASX_API void asx_runtime_snapshot_init(asx_runtime_snapshot *snap);
 ASX_API ASX_MUST_USE asx_status asx_runtime_snapshot_capture(asx_runtime_snapshot *snap);
 
 /* Serialize snapshot to JSON.
- * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if snap or out is NULL. */
+ * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if snap/out is NULL or
+ * any public count field exceeds its fixed snapshot array capacity. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_snapshot_to_json(const asx_runtime_snapshot *snap,
                                                              asx_codec_buffer *out);
 
 /* Compare two snapshots for equality.
- * Returns ASX_OK if identical, ASX_E_EQUIVALENCE_MISMATCH if not. */
+ * Returns ASX_OK if identical, ASX_E_EQUIVALENCE_MISMATCH if not, and
+ * ASX_E_INVALID_ARGUMENT if either snapshot has oversized public counts. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_snapshot_eq(const asx_runtime_snapshot *a,
                                                         const asx_runtime_snapshot *b);
 
