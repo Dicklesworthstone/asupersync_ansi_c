@@ -147,7 +147,9 @@ ASX_API void asx_adapter_router_fallback(uint32_t used, uint32_t capacity,
 
 /* Dispatch an overload decision to the appropriate adapter.
  * When mode is FALLBACK, uses CORE-equivalent path regardless of domain.
- * domain_ctx: NULL for HFT/router; asx_auto_deadline_tracker* for auto. */
+ * domain_ctx: NULL for HFT/router; asx_auto_deadline_tracker* for auto.
+ * If out is NULL the call is a no-op. Invalid domains or modes fail closed
+ * by writing a rejecting decision with ASX_E_INVALID_ARGUMENT. */
 ASX_API void asx_adapter_dispatch(asx_adapter_domain domain, asx_adapter_mode mode, uint32_t used,
                                   uint32_t capacity, const void *domain_ctx,
                                   asx_adapter_decision *out);
@@ -163,7 +165,9 @@ ASX_API void asx_adapter_dispatch(asx_adapter_domain domain, asx_adapter_mode mo
 /* Run isomorphism proof for a single (load, capacity) pair.
  * For automotive domain, domain_ctx is asx_auto_deadline_tracker*.
  * For router domain, domain_ctx is asx_resource_class* (pointer to class).
- * For HFT domain, domain_ctx is NULL. */
+ * For HFT domain, domain_ctx is NULL.
+ * If proof is NULL the call is a no-op. Invalid domains fail closed with
+ * pass=0 and rejecting decisions carrying ASX_E_INVALID_ARGUMENT. */
 ASX_API void asx_adapter_prove_isomorphism(asx_adapter_domain domain, uint32_t load,
                                            uint32_t capacity, const void *domain_ctx,
                                            asx_adapter_isomorphism *proof);

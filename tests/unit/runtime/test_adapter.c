@@ -277,6 +277,25 @@ TEST(dispatch_all_fallback_same_behavior) {
     ASSERT_EQ(d_auto.load_pct, d_router.load_pct);
 }
 
+TEST(dispatch_invalid_mode_fails_closed) {
+    asx_adapter_decision d;
+    asx_adapter_dispatch(ASX_ADAPTER_DOMAIN_HFT, (asx_adapter_mode)99, 50, 100, NULL, &d);
+    ASSERT_EQ(d.triggered, 1);
+    ASSERT_EQ(d.admit_status, ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ((int)d.mode, (int)ASX_OVERLOAD_REJECT);
+}
+
+TEST(dispatch_invalid_domain_fails_closed) {
+    asx_adapter_decision d;
+    asx_adapter_dispatch((asx_adapter_domain)99, ASX_ADAPTER_ACCELERATED, 50, 100, NULL, &d);
+    ASSERT_EQ(d.triggered, 1);
+    ASSERT_EQ(d.admit_status, ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(dispatch_null_out_is_noop) {
+    asx_adapter_dispatch(ASX_ADAPTER_DOMAIN_HFT, ASX_ADAPTER_ACCELERATED, 50, 100, NULL, NULL);
+}
+
 /* ===================================================================
  * Isomorphism proof tests
  * =================================================================== */
@@ -356,6 +375,25 @@ TEST(iso_decision_hash_deterministic) {
     ASSERT_EQ(proof1.fallback_hash, proof2.fallback_hash);
 }
 
+TEST(iso_invalid_domain_fails_closed) {
+    asx_adapter_isomorphism proof;
+    asx_adapter_prove_isomorphism((asx_adapter_domain)99, 50, 100, NULL, &proof);
+    ASSERT_EQ(proof.pass, 0);
+    ASSERT_EQ(proof.accel_decision.admit_status, ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(proof.fallback_decision.admit_status, ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(iso_null_proof_is_noop) {
+    asx_adapter_prove_isomorphism(ASX_ADAPTER_DOMAIN_HFT, 50, 100, NULL, NULL);
+}
+
+TEST(iso_sweep_invalid_domain_fails) {
+    asx_adapter_isomorphism proof;
+    ASSERT_EQ(asx_adapter_prove_isomorphism_sweep((asx_adapter_domain)99, 100, NULL, &proof), 0);
+    ASSERT_EQ(proof.pass, 0);
+    ASSERT_EQ(proof.accel_decision.admit_status, ASX_E_INVALID_ARGUMENT);
+}
+
 /* ===================================================================
  * Diagnostics tests
  * =================================================================== */
@@ -424,6 +462,9 @@ int main(void) {
     RUN_TEST(dispatch_auto_accelerated);
     RUN_TEST(dispatch_router_accelerated);
     RUN_TEST(dispatch_all_fallback_same_behavior);
+    RUN_TEST(dispatch_invalid_mode_fails_closed);
+    RUN_TEST(dispatch_invalid_domain_fails_closed);
+    RUN_TEST(dispatch_null_out_is_noop);
 
     /* Isomorphism proofs */
     RUN_TEST(iso_hft_single_low_load);
@@ -436,6 +477,9 @@ int main(void) {
     RUN_TEST(iso_router_r3_sweep_passes);
     RUN_TEST(iso_zero_capacity_all_domains);
     RUN_TEST(iso_decision_hash_deterministic);
+    RUN_TEST(iso_invalid_domain_fails_closed);
+    RUN_TEST(iso_null_proof_is_noop);
+    RUN_TEST(iso_sweep_invalid_domain_fails);
 
     /* Diagnostics */
     RUN_TEST(domain_str_all_valid);

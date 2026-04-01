@@ -32,7 +32,8 @@ ASX_API const asx_evidence_entry *asx_evidence_sink_get(const asx_evidence_sink 
                                                         uint32_t index);
 
 /* Render the sink as newline-delimited JSON.
- * Source and message fields are JSON-escaped before emission. */
+ * Source and message fields are JSON-escaped before emission, including all
+ * control characters below 0x20. */
 ASX_API ASX_MUST_USE asx_status asx_evidence_sink_render_ndjson(const asx_evidence_sink *sink,
                                                                 asx_report_buf *out);
 

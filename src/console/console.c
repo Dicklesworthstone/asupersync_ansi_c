@@ -8,6 +8,45 @@
 #include <stdio.h>
 #include <string.h>
 
+static void console_append_json_escaped(asx_report_buf *out, const char *text) {
+    const unsigned char *p;
+
+    if (out == NULL || text == NULL) return;
+
+    p = (const unsigned char *)text;
+    while (*p != '\0') {
+        switch (*p) {
+        case '"': asx_report_buf_append(out, "\\\""); break;
+        case '\\': asx_report_buf_append(out, "\\\\"); break;
+        case '\b': asx_report_buf_append(out, "\\b"); break;
+        case '\f': asx_report_buf_append(out, "\\f"); break;
+        case '\n': asx_report_buf_append(out, "\\n"); break;
+        case '\r': asx_report_buf_append(out, "\\r"); break;
+        case '\t': asx_report_buf_append(out, "\\t"); break;
+        default:
+            if (*p < 0x20u) {
+                static const char hex[] = "0123456789abcdef";
+                char esc[7];
+                esc[0] = '\\';
+                esc[1] = 'u';
+                esc[2] = '0';
+                esc[3] = '0';
+                esc[4] = hex[(*p >> 4) & 0x0fu];
+                esc[5] = hex[*p & 0x0fu];
+                esc[6] = '\0';
+                asx_report_buf_append(out, esc);
+            } else {
+                char ch[2];
+                ch[0] = (char)*p;
+                ch[1] = '\0';
+                asx_report_buf_append(out, ch);
+            }
+            break;
+        }
+        p++;
+    }
+}
+
 asx_status asx_console_render_doctor(const asx_doctor_report *report, asx_console_format format,
                                      asx_report_buf *out) {
     if (report == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -66,9 +105,9 @@ asx_status asx_console_emit_log_record(asx_log_level level, const char *source, 
     asx_report_buf_append(out, "{\"level\":\"");
     asx_report_buf_append(out, asx_log_level_str(level));
     asx_report_buf_append(out, "\",\"source\":\"");
-    asx_report_buf_append(out, source);
+    console_append_json_escaped(out, source);
     asx_report_buf_append(out, "\",\"message\":\"");
-    asx_report_buf_append(out, message);
+    console_append_json_escaped(out, message);
     asx_report_buf_append(out, "\"}");
     return ASX_OK;
 }

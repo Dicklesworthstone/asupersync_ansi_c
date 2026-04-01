@@ -205,6 +205,30 @@ TEST(evidence_verdict_core_no_failures) {
     ASSERT_TRUE(verdict != ASX_EVIDENCE_FAIL);
 }
 
+TEST(evidence_to_sink_resource_exhausted_is_failure_atomic) {
+    asx_browser_evidence_report report;
+    asx_evidence_sink sink;
+    asx_evidence_sink before;
+    asx_status rc;
+
+    asx_browser_evidence_capture(&report);
+    asx_evidence_sink_init(&sink);
+
+    while (sink.count + 3u < ASX_EVIDENCE_SINK_CAPACITY) {
+        ASSERT_EQ((int)asx_evidence_record(&sink, "fill", ASX_EVIDENCE_INFO, "x", 0), (int)ASX_OK);
+    }
+
+    before = sink;
+    rc = asx_browser_evidence_to_sink(&report, &sink);
+    ASSERT_EQ((int)rc, (int)ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(sink.count, before.count);
+    ASSERT_EQ(sink.pass_count, before.pass_count);
+    ASSERT_EQ(sink.warn_count, before.warn_count);
+    ASSERT_EQ(sink.fail_count, before.fail_count);
+    ASSERT_EQ(sink.info_count, before.info_count);
+    ASSERT_EQ(sink.next_seq, before.next_seq);
+}
+
 /* -------------------------------------------------------------------
  * Flake governance tests
  * ------------------------------------------------------------------- */
@@ -359,6 +383,7 @@ int main(void) {
     RUN_TEST(evidence_to_sink_core);
     RUN_TEST(evidence_to_sink_null_args);
     RUN_TEST(evidence_verdict_core_no_failures);
+    RUN_TEST(evidence_to_sink_resource_exhausted_is_failure_atomic);
 
     /* Flake governance */
     RUN_TEST(flake_capture_basic);

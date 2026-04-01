@@ -7,6 +7,22 @@
 #include <asx/evidence/evidence.h>
 #include <asx/evidence_sink/evidence_sink.h>
 
+static void append_json_control_escape(asx_report_buf *out, unsigned char byte) {
+    static const char hex[] = "0123456789abcdef";
+    char escape[7];
+
+    if (out == NULL) return;
+
+    escape[0] = '\\';
+    escape[1] = 'u';
+    escape[2] = '0';
+    escape[3] = '0';
+    escape[4] = hex[(byte >> 4) & 0x0f];
+    escape[5] = hex[byte & 0x0f];
+    escape[6] = '\0';
+    asx_report_buf_append(out, escape);
+}
+
 static void append_json_escaped(asx_report_buf *out, const char *text) {
     const unsigned char *p = (const unsigned char *)text;
     char ch[2];
@@ -21,7 +37,13 @@ static void append_json_escaped(asx_report_buf *out, const char *text) {
         case '\n': asx_report_buf_append(out, "\\n"); break;
         case '\r': asx_report_buf_append(out, "\\r"); break;
         case '\t': asx_report_buf_append(out, "\\t"); break;
+        case '\b': asx_report_buf_append(out, "\\b"); break;
+        case '\f': asx_report_buf_append(out, "\\f"); break;
         default:
+            if (*p < 0x20u) {
+                append_json_control_escape(out, *p);
+                break;
+            }
             ch[0] = (char)*p;
             asx_report_buf_append(out, ch);
             break;

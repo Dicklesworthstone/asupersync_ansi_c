@@ -106,6 +106,16 @@ TEST(render_ndjson_escapes_special_chars) {
     ASSERT_TRUE(strstr(buf.data, "line1\\nline2") != NULL);
 }
 
+TEST(render_ndjson_escapes_all_control_chars) {
+    asx_report_buf buf;
+    static const char message[] = {'a', '\b', '\f', '\x01', 'z', '\0'};
+
+    setup();
+    ASSERT_EQ(asx_evidence_record(&g_sink, "test", ASX_EVIDENCE_INFO, message, 0), ASX_OK);
+    ASSERT_EQ(asx_evidence_sink_render_ndjson(&g_sink, &buf), ASX_OK);
+    ASSERT_TRUE(strstr(buf.data, "\"message\":\"a\\b\\f\\u0001z\"") != NULL);
+}
+
 TEST(render_ndjson_null_args) {
     asx_report_buf buf;
     setup();
@@ -131,6 +141,7 @@ int main(void) {
     RUN_TEST(render_ndjson_empty);
     RUN_TEST(render_ndjson_with_entries);
     RUN_TEST(render_ndjson_escapes_special_chars);
+    RUN_TEST(render_ndjson_escapes_all_control_chars);
     RUN_TEST(render_ndjson_null_args);
 
     TEST_REPORT();

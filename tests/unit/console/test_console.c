@@ -96,6 +96,17 @@ static void test_console_emit_log_record(void) {
     ASSERT(strstr(asx_report_buf_cstr(&out), "\"source\":\"operator\"") != NULL, "source rendered");
 }
 
+static void test_console_emit_log_record_escapes_json(void) {
+    asx_report_buf out;
+    static const char message[] = {'l', 'i', 'n', 'e', '1', '\n', '\t', '"', 'x', '"', '\x01', '\0'};
+
+    MUST_OK(asx_console_emit_log_record(ASX_LOG_INFO, "ops\"core\\pipe", message, &out));
+    ASSERT(strstr(asx_report_buf_cstr(&out), "\"source\":\"ops\\\"core\\\\pipe\"") != NULL,
+           "source escaped");
+    ASSERT(strstr(asx_report_buf_cstr(&out), "\"message\":\"line1\\n\\t\\\"x\\\"\\u0001\"") != NULL,
+           "message escaped");
+}
+
 static void test_public_test_log_header_compiles_and_noops(void) {
     asx_test_log_open("unit", "console", "test_console");
     asx_test_log_result("smoke", "pass", NULL, 0, NULL);
@@ -172,6 +183,7 @@ int main(void) {
     RUN(test_console_run_inspection_text);
     RUN(test_console_run_inspection_json_rejected);
     RUN(test_console_emit_log_record);
+    RUN(test_console_emit_log_record_escapes_json);
     RUN(test_public_test_log_header_compiles_and_noops);
     RUN(test_console_null_args);
     RUN(test_console_color_mode);

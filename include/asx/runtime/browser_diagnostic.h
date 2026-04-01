@@ -107,7 +107,8 @@ ASX_API void asx_browser_evidence_capture(asx_browser_evidence_report *report);
 /* Record browser evidence into a shared evidence sink.
  * Records one entry per check (boundary, parity, allocator).
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if either arg is NULL,
- * ASX_E_RESOURCE_EXHAUSTED if sink is full. */
+ * ASX_E_RESOURCE_EXHAUSTED if the sink cannot hold all four entries.
+ * This operation is failure-atomic: on exhaustion, the sink is unchanged. */
 ASX_API asx_status asx_browser_evidence_to_sink(const asx_browser_evidence_report *report,
                                                 asx_evidence_sink *sink);
 

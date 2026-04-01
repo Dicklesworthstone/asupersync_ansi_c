@@ -76,6 +76,17 @@ static uint32_t scale_capacity_for_class(uint32_t capacity, asx_resource_class r
     }
 }
 
+static void invalid_input_decide(asx_adapter_mode path, asx_adapter_decision *out) {
+    if (out == NULL) { return; }
+    memset(out, 0, sizeof(*out));
+    out->path_used = path;
+    out->mode = ASX_OVERLOAD_REJECT;
+    out->triggered = 1;
+    out->load_pct = 100u;
+    out->admit_status = ASX_E_INVALID_ARGUMENT;
+    out->decision_hash = decision_hash(out);
+}
+
 /* -------------------------------------------------------------------
  * Internal: CORE fallback implementation (shared by all domains)
  *
@@ -85,6 +96,7 @@ static uint32_t scale_capacity_for_class(uint32_t capacity, asx_resource_class r
 static void core_fallback_decide(uint32_t used, uint32_t capacity, asx_adapter_decision *out) {
     uint32_t load_pct;
 
+    if (out == NULL) { return; }
     memset(out, 0, sizeof(*out));
     out->path_used = ASX_ADAPTER_FALLBACK;
     out->mode = ASX_OVERLOAD_REJECT;
@@ -120,6 +132,7 @@ static void core_fallback_decide(uint32_t used, uint32_t capacity, asx_adapter_d
 void asx_adapter_hft_decide(uint32_t used, uint32_t capacity, asx_adapter_decision *out) {
     uint32_t load_pct;
 
+    if (out == NULL) { return; }
     memset(out, 0, sizeof(*out));
     out->path_used = ASX_ADAPTER_ACCELERATED;
     out->mode = ASX_OVERLOAD_SHED_OLDEST;
@@ -162,6 +175,7 @@ void asx_adapter_auto_decide(uint32_t used, uint32_t capacity, const asx_auto_de
                              asx_adapter_decision *out) {
     uint32_t load_pct;
 
+    if (out == NULL) { return; }
     memset(out, 0, sizeof(*out));
     out->path_used = ASX_ADAPTER_ACCELERATED;
     out->mode = ASX_OVERLOAD_BACKPRESSURE;
@@ -214,6 +228,7 @@ void asx_adapter_router_decide(uint32_t used, uint32_t capacity, asx_resource_cl
     uint32_t scaled_capacity;
     uint32_t load_pct;
 
+    if (out == NULL) { return; }
     memset(out, 0, sizeof(*out));
     out->path_used = ASX_ADAPTER_ACCELERATED;
     out->mode = ASX_OVERLOAD_REJECT;
@@ -265,8 +280,15 @@ void asx_adapter_router_fallback(uint32_t used, uint32_t capacity, asx_adapter_d
 
 void asx_adapter_dispatch(asx_adapter_domain domain, asx_adapter_mode mode, uint32_t used,
                           uint32_t capacity, const void *domain_ctx, asx_adapter_decision *out) {
+    if (out == NULL) { return; }
+
     if (mode == ASX_ADAPTER_FALLBACK) {
         core_fallback_decide(used, capacity, out);
+        return;
+    }
+
+    if (mode != ASX_ADAPTER_ACCELERATED) {
+        invalid_input_decide(mode, out);
         return;
     }
 
@@ -282,7 +304,7 @@ void asx_adapter_dispatch(asx_adapter_domain domain, asx_adapter_mode mode, uint
         break;
     }
     case ASX_ADAPTER_DOMAIN_COUNT:
-    default: core_fallback_decide(used, capacity, out); break;
+    default: invalid_input_decide(mode, out); break;
     }
 }
 
@@ -304,10 +326,22 @@ void asx_adapter_prove_isomorphism(asx_adapter_domain domain, uint32_t load, uin
                                    const void *domain_ctx, asx_adapter_isomorphism *proof) {
     asx_adapter_decision accel, fallback;
 
+    if (proof == NULL) { return; }
     memset(proof, 0, sizeof(*proof));
     proof->domain = domain;
     proof->test_load = load;
     proof->test_capacity = capacity;
+
+    if ((unsigned)domain >= (unsigned)ASX_ADAPTER_DOMAIN_COUNT) {
+        invalid_input_decide(ASX_ADAPTER_ACCELERATED, &accel);
+        invalid_input_decide(ASX_ADAPTER_FALLBACK, &fallback);
+        proof->accel_decision = accel;
+        proof->fallback_decision = fallback;
+        proof->accel_hash = accel.decision_hash;
+        proof->fallback_hash = fallback.decision_hash;
+        proof->pass = 0;
+        return;
+    }
 
     /* Run accelerated path */
     asx_adapter_dispatch(domain, ASX_ADAPTER_ACCELERATED, load, capacity, domain_ctx, &accel);
@@ -340,6 +374,13 @@ int asx_adapter_prove_isomorphism_sweep(asx_adapter_domain domain, uint32_t capa
                                         const void *domain_ctx,
                                         asx_adapter_isomorphism *failed_proof) {
     uint32_t load;
+
+    if ((unsigned)domain >= (unsigned)ASX_ADAPTER_DOMAIN_COUNT) {
+        if (failed_proof != NULL) {
+            asx_adapter_prove_isomorphism(domain, 0u, capacity, domain_ctx, failed_proof);
+        }
+        return 0;
+    }
 
     for (load = 0; load <= capacity; load++) {
         asx_adapter_isomorphism proof;

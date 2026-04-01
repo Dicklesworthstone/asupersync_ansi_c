@@ -44,7 +44,8 @@ ASX_API ASX_MUST_USE asx_status asx_console_run_inspection(const asx_runtime *rt
                                                            asx_console_format format,
                                                            asx_report_buf *out);
 
-/* Emit a formatted log record at the given level to the buffer. */
+/* Emit a formatted JSON log record at the given level to the buffer.
+ * Source and message are JSON-escaped before emission. */
 ASX_API ASX_MUST_USE asx_status asx_console_emit_log_record(asx_log_level level, const char *source,
                                                             const char *message,
                                                             asx_report_buf *out);

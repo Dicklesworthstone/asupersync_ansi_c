@@ -154,8 +154,11 @@ void asx_browser_evidence_capture(asx_browser_evidence_report *report) {
 asx_status asx_browser_evidence_to_sink(const asx_browser_evidence_report *report,
                                         asx_evidence_sink *sink) {
     asx_status rc;
+    uint32_t remaining;
 
     if (!report || !sink) return ASX_E_INVALID_ARGUMENT;
+    remaining = ASX_EVIDENCE_SINK_CAPACITY - sink->count;
+    if (remaining < 4u) return ASX_E_RESOURCE_EXHAUSTED;
 
     /* Profile identity check */
     if (report->is_browser) {
