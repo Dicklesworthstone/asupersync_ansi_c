@@ -178,7 +178,9 @@ ASX_API void asx_evidence_sink_reset(asx_evidence_sink *sink);
  * ------------------------------------------------------------------- */
 
 /* Run inspection and automatically record findings to an evidence sink.
- * Records one entry per subsystem with appropriate severity. */
+ * Records one entry per subsystem with appropriate severity.
+ * Returns ASX_E_RESOURCE_EXHAUSTED if the sink cannot hold the full result set.
+ * This operation is failure-atomic: on exhaustion, the sink is unchanged. */
 ASX_API ASX_MUST_USE asx_status asx_inspect_to_evidence(const asx_runtime *rt,
                                                         asx_evidence_sink *sink);
 

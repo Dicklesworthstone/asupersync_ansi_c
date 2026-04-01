@@ -231,14 +231,28 @@ void asx_evidence_sink_reset(asx_evidence_sink *sink) {
 /* Inspect-to-evidence pipeline                                        */
 /* ------------------------------------------------------------------ */
 
+static uint32_t inspect_evidence_entry_count(const asx_inspection_report *rpt) {
+    uint32_t count = 7u; /* runtime, regions, tasks, obligations, io, blocking, trace */
+
+    if (rpt->any_poisoned) count++;
+    if (rpt->ghosts.violation_count > 0u) count++;
+
+    return count;
+}
+
 asx_status asx_inspect_to_evidence(const asx_runtime *rt, asx_evidence_sink *sink) {
     asx_inspection_report rpt;
     asx_status st;
+    uint32_t needed;
 
     if (rt == NULL || sink == NULL) return ASX_E_INVALID_ARGUMENT;
 
     st = asx_inspect(rt, &rpt);
     if (st != ASX_OK) return st;
+
+    needed = inspect_evidence_entry_count(&rpt);
+    if (sink->count > ASX_EVIDENCE_SINK_CAPACITY) return ASX_E_INVALID_ARGUMENT;
+    if (needed > ASX_EVIDENCE_SINK_CAPACITY - sink->count) return ASX_E_RESOURCE_EXHAUSTED;
 
     /* Runtime initialization */
     st =

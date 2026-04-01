@@ -193,6 +193,22 @@ while IFS= read -r line; do
     # Skip epics (they don't carry direct evidence)
     [ "$bead_type" = "epic" ] && continue
 
+    # Skip non-implementation types (only task beads require evidence)
+    is_evidence_required=0
+    for _req_type in "${EVIDENCE_REQUIRED_TYPES[@]}"; do
+        if [ "$bead_type" = "$_req_type" ]; then
+            is_evidence_required=1
+            break
+        fi
+    done
+    if [ "$is_evidence_required" = "0" ]; then
+        EXEMPTED=$((EXEMPTED + 1))
+        if [ "$VERBOSE" = "1" ] && [ "$JSON_OUTPUT" = "0" ]; then
+            echo "  EXEMPT $bead_id (type=$bead_type)"
+        fi
+        continue
+    fi
+
     # Check if exempt by label
     if is_exempt "$bead_labels"; then
         EXEMPTED=$((EXEMPTED + 1))

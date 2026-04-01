@@ -149,7 +149,10 @@ ASX_API int asx_overload_catalog_entry_valid(const asx_overload_catalog_entry *e
  * ------------------------------------------------------------------- */
 
 /* Check that a decision from asx_overload_evaluate matches the
- * catalog entry's declared mode. Returns 1 if consistent, 0 if not. */
+ * catalog entry's declared mode. Accepts the evaluator's zero-capacity
+ * exhaustion sentinel (`ASX_E_RESOURCE_EXHAUSTED`, load_pct=100, no shedding)
+ * for all modes because that path runs before mode-specific handling.
+ * Returns 1 if consistent, 0 if not. */
 ASX_API int asx_overload_catalog_decision_consistent(const asx_overload_catalog_entry *entry,
                                                      const asx_overload_decision *decision);
 

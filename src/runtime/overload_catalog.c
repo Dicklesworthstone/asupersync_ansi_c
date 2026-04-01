@@ -268,8 +268,17 @@ int asx_overload_catalog_decision_consistent(const asx_overload_catalog_entry *e
     /* Mode must match */
     if (decision->mode != entry->mode) return 0;
 
-    /* When not triggered, admit_status must be OK */
-    if (!decision->triggered) { return decision->admit_status == ASX_OK; }
+    /* When not triggered, load must stay below threshold and no shedding occurs. */
+    if (!decision->triggered) {
+        return decision->load_pct < entry->threshold_pct && decision->shed_count == 0u &&
+               decision->admit_status == ASX_OK;
+    }
+
+    /* Zero-capacity evaluation reports a fail-closed exhaustion sentinel
+     * before mode-specific overload handling, so all catalog modes accept it. */
+    if (decision->admit_status == ASX_E_RESOURCE_EXHAUSTED) {
+        return decision->load_pct == 100u && decision->shed_count == 0u;
+    }
 
     /* When triggered, check mode-specific outcomes */
     switch (entry->mode) {

@@ -243,6 +243,54 @@ TEST(decision_consistent_backpressure) {
     ASSERT_TRUE(asx_overload_catalog_decision_consistent(entry, &dec));
 }
 
+TEST(decision_consistent_zero_capacity_reject) {
+    const asx_overload_catalog_entry *entry = NULL;
+    asx_overload_policy pol;
+    asx_overload_decision dec;
+
+    asx_overload_catalog_get(ASX_PROFILE_ID_CORE, &entry);
+    asx_overload_catalog_to_policy(ASX_PROFILE_ID_CORE, &pol);
+    asx_overload_evaluate(&pol, 0u, 0u, &dec);
+
+    ASSERT_TRUE(dec.triggered);
+    ASSERT_EQ(dec.load_pct, 100u);
+    ASSERT_EQ(dec.shed_count, 0u);
+    ASSERT_EQ(dec.admit_status, ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_TRUE(asx_overload_catalog_decision_consistent(entry, &dec));
+}
+
+TEST(decision_consistent_zero_capacity_shed_oldest) {
+    const asx_overload_catalog_entry *entry = NULL;
+    asx_overload_policy pol;
+    asx_overload_decision dec;
+
+    asx_overload_catalog_get(ASX_PROFILE_ID_HFT, &entry);
+    asx_overload_catalog_to_policy(ASX_PROFILE_ID_HFT, &pol);
+    asx_overload_evaluate(&pol, 0u, 0u, &dec);
+
+    ASSERT_TRUE(dec.triggered);
+    ASSERT_EQ(dec.load_pct, 100u);
+    ASSERT_EQ(dec.shed_count, 0u);
+    ASSERT_EQ(dec.admit_status, ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_TRUE(asx_overload_catalog_decision_consistent(entry, &dec));
+}
+
+TEST(decision_consistent_zero_capacity_backpressure) {
+    const asx_overload_catalog_entry *entry = NULL;
+    asx_overload_policy pol;
+    asx_overload_decision dec;
+
+    asx_overload_catalog_get(ASX_PROFILE_ID_AUTOMOTIVE, &entry);
+    asx_overload_catalog_to_policy(ASX_PROFILE_ID_AUTOMOTIVE, &pol);
+    asx_overload_evaluate(&pol, 0u, 0u, &dec);
+
+    ASSERT_TRUE(dec.triggered);
+    ASSERT_EQ(dec.load_pct, 100u);
+    ASSERT_EQ(dec.shed_count, 0u);
+    ASSERT_EQ(dec.admit_status, ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_TRUE(asx_overload_catalog_decision_consistent(entry, &dec));
+}
+
 TEST(decision_inconsistent_wrong_mode) {
     const asx_overload_catalog_entry *entry = NULL;
     asx_overload_decision dec;
@@ -401,6 +449,9 @@ int main(void) {
     RUN_TEST(decision_consistent_reject_above_threshold);
     RUN_TEST(decision_consistent_shed_oldest);
     RUN_TEST(decision_consistent_backpressure);
+    RUN_TEST(decision_consistent_zero_capacity_reject);
+    RUN_TEST(decision_consistent_zero_capacity_shed_oldest);
+    RUN_TEST(decision_consistent_zero_capacity_backpressure);
     RUN_TEST(decision_inconsistent_wrong_mode);
     RUN_TEST(decision_null_safety);
 

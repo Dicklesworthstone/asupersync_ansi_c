@@ -411,6 +411,27 @@ static void test_inspect_to_evidence_null_args(void) {
     ASSERT(asx_inspect_to_evidence(&rt, NULL) == ASX_E_INVALID_ARGUMENT, "null sink");
 }
 
+static void test_inspect_to_evidence_exhaustion_is_failure_atomic(void) {
+    asx_runtime rt;
+    asx_evidence_sink sink;
+    asx_evidence_sink before;
+    uint32_t i;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    asx_evidence_sink_init(&sink);
+
+    for (i = 0; i < ASX_EVIDENCE_SINK_CAPACITY - 6u; i++) {
+        MUST_OK(asx_evidence_record(&sink, "prefill", ASX_EVIDENCE_INFO, "entry", i));
+    }
+    before = sink;
+
+    ASSERT(asx_inspect_to_evidence(&rt, &sink) == ASX_E_RESOURCE_EXHAUSTED,
+           "inspect_to_evidence rejects partial-capacity sink");
+    ASSERT(memcmp(&sink, &before, sizeof(sink)) == 0, "sink unchanged on exhaustion");
+
+    asx_runtime_shutdown(&rt);
+}
+
 /* ================================================================== */
 /* End-to-end: diagnostic context + inspection + evidence             */
 /* ================================================================== */
@@ -486,6 +507,7 @@ int main(void) {
     RUN(test_inspect_to_evidence_healthy);
     RUN(test_inspect_to_evidence_uninitialized);
     RUN(test_inspect_to_evidence_null_args);
+    RUN(test_inspect_to_evidence_exhaustion_is_failure_atomic);
 
     /* E2E workflow */
     RUN(test_e2e_diagnostic_workflow);
