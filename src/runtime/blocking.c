@@ -132,6 +132,7 @@ asx_status asx_spawn_blocking(asx_blocking_fn fn, void *user_data,
     g_active_count++;
 
     /* Walking skeleton: execute inline immediately */
+    /* ASX_ANALYZER_WAIVER("state visible inside fn via handle lookup") */
     s->state = ASX_BLOCKING_RUNNING;
     s->result = s->fn(s->user_data);
     s->state = ASX_BLOCKING_COMPLETED;

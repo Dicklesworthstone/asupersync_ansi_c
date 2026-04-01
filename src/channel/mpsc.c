@@ -110,6 +110,7 @@ static uint32_t channel_token_allocate(asx_channel_slot *s) {
     }
 
     s->next_token = token + 1u;
+    /* ASX_ANALYZER_WAIVER("uint32_t wraparound guard — skip sentinel 0") */
     if (s->next_token == 0u) s->next_token = 1u;
 
     return token;

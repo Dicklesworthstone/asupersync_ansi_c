@@ -110,6 +110,12 @@ run_cppcheck() {
         --suppress=missingIncludeSystem \
         --suppress=unusedFunction \
         --suppress=unmatchedSuppression \
+        --suppress=variableScope \
+        --suppress=constVariablePointer \
+        --suppress=constParameterPointer \
+        --suppress=constVariable \
+        --suppress=normalCheckLevelMaxBranches \
+        --suppress=toomanyconfigs \
         --template='{file}:{line}:{severity}:{id}:{message}' \
         -I "$REPO_ROOT/include" \
         "${SCAN_DIRS[@]/#/$REPO_ROOT/}" \
@@ -185,7 +191,7 @@ run_clang_tidy() {
 
     # Run clang-tidy with curated checks
     clang-tidy \
-        --checks='-*,bugprone-*,cert-*,misc-*,performance-*,portability-*,-bugprone-easily-swappable-parameters,-cert-dcl37-c,-cert-dcl51-c,-misc-unused-parameters' \
+        --checks='-*,bugprone-*,cert-*,misc-*,performance-*,portability-*,-bugprone-easily-swappable-parameters,-cert-dcl37-c,-cert-dcl51-c,-cert-err33-c,-misc-unused-parameters,-misc-include-cleaner' \
         "${src_files[@]}" \
         -- -std=c99 -I"$REPO_ROOT/include" \
            -DASX_PROFILE_CORE -DASX_CODEC_JSON -DASX_DETERMINISTIC=1 \

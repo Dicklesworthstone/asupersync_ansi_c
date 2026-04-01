@@ -101,14 +101,50 @@ static const char *severity_str(asx_doctor_severity sev) {
 }
 
 static asx_status validate_doctor_report(const asx_doctor_report *report) {
+    uint32_t i;
+    uint32_t pass_count = 0u;
+    uint32_t warn_count = 0u;
+    uint32_t fail_count = 0u;
+
     if (report == NULL) return ASX_E_INVALID_ARGUMENT;
     if (report->check_count > ASX_DOCTOR_MAX_CHECKS) return ASX_E_INVALID_ARGUMENT;
+    for (i = 0; i < report->check_count; i++) {
+        switch (report->checks[i].severity) {
+        case ASX_DOCTOR_OK: pass_count++; break;
+        case ASX_DOCTOR_WARN: warn_count++; break;
+        case ASX_DOCTOR_FAIL: fail_count++; break;
+        default: return ASX_E_INVALID_ARGUMENT;
+        }
+    }
+    if (report->pass_count != pass_count || report->warn_count != warn_count ||
+        report->fail_count != fail_count) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
     return ASX_OK;
 }
 
 static asx_status validate_evidence_sink(const asx_evidence_sink *sink) {
+    uint32_t i;
+    uint32_t info_count = 0u;
+    uint32_t pass_count = 0u;
+    uint32_t warn_count = 0u;
+    uint32_t fail_count = 0u;
+
     if (sink == NULL) return ASX_E_INVALID_ARGUMENT;
     if (sink->count > ASX_EVIDENCE_SINK_CAPACITY) return ASX_E_INVALID_ARGUMENT;
+    for (i = 0; i < sink->count; i++) {
+        switch (sink->entries[i].level) {
+        case ASX_EVIDENCE_INFO: info_count++; break;
+        case ASX_EVIDENCE_PASS: pass_count++; break;
+        case ASX_EVIDENCE_WARN: warn_count++; break;
+        case ASX_EVIDENCE_FAIL: fail_count++; break;
+        default: return ASX_E_INVALID_ARGUMENT;
+        }
+    }
+    if (sink->info_count != info_count || sink->pass_count != pass_count ||
+        sink->warn_count != warn_count || sink->fail_count != fail_count) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
     return ASX_OK;
 }
 

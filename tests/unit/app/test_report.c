@@ -226,6 +226,40 @@ static void test_doctor_render_rejects_oversized_check_count(void) {
            "doctor json rejects oversized count");
 }
 
+static void test_doctor_render_rejects_inconsistent_counters(void) {
+    asx_doctor_report doctor;
+    asx_report_buf buf;
+
+    memset(&doctor, 0, sizeof(doctor));
+    doctor.check_count = 1u;
+    doctor.checks[0].severity = ASX_DOCTOR_FAIL;
+    doctor.checks[0].name = "runtime";
+    doctor.checks[0].message = "failed";
+    doctor.fail_count = 0u;
+    doctor.pass_count = 1u;
+    asx_report_buf_init(&buf);
+
+    ASSERT(asx_report_doctor_text(&doctor, &buf) == ASX_E_INVALID_ARGUMENT,
+           "doctor text rejects mismatched counters");
+    ASSERT(asx_report_doctor_json(&doctor, &buf) == ASX_E_INVALID_ARGUMENT,
+           "doctor json rejects mismatched counters");
+}
+
+static void test_doctor_render_rejects_invalid_severity(void) {
+    asx_doctor_report doctor;
+    asx_report_buf buf;
+
+    memset(&doctor, 0, sizeof(doctor));
+    doctor.check_count = 1u;
+    doctor.checks[0].severity = (asx_doctor_severity)99;
+    asx_report_buf_init(&buf);
+
+    ASSERT(asx_report_doctor_text(&doctor, &buf) == ASX_E_INVALID_ARGUMENT,
+           "doctor text rejects invalid severity");
+    ASSERT(asx_report_doctor_json(&doctor, &buf) == ASX_E_INVALID_ARGUMENT,
+           "doctor json rejects invalid severity");
+}
+
 /* ================================================================== */
 /* Evidence rendering                                                 */
 /* ================================================================== */
@@ -296,6 +330,37 @@ static void test_evidence_render_rejects_oversized_count(void) {
            "evidence text rejects oversized count");
     ASSERT(asx_report_evidence_json(&sink, &buf) == ASX_E_INVALID_ARGUMENT,
            "evidence json rejects oversized count");
+}
+
+static void test_evidence_render_rejects_inconsistent_counters(void) {
+    asx_evidence_sink sink;
+    asx_report_buf buf;
+
+    asx_evidence_sink_init(&sink);
+    MUST_OK(asx_evidence_record(&sink, "test", ASX_EVIDENCE_FAIL, "failure", 0));
+    sink.fail_count = 0u;
+    sink.pass_count = 1u;
+    asx_report_buf_init(&buf);
+
+    ASSERT(asx_report_evidence_text(&sink, &buf) == ASX_E_INVALID_ARGUMENT,
+           "evidence text rejects mismatched counters");
+    ASSERT(asx_report_evidence_json(&sink, &buf) == ASX_E_INVALID_ARGUMENT,
+           "evidence json rejects mismatched counters");
+}
+
+static void test_evidence_render_rejects_invalid_entry_level(void) {
+    asx_evidence_sink sink;
+    asx_report_buf buf;
+
+    memset(&sink, 0, sizeof(sink));
+    sink.count = 1u;
+    sink.entries[0].level = (asx_evidence_level)99;
+    asx_report_buf_init(&buf);
+
+    ASSERT(asx_report_evidence_text(&sink, &buf) == ASX_E_INVALID_ARGUMENT,
+           "evidence text rejects invalid level");
+    ASSERT(asx_report_evidence_json(&sink, &buf) == ASX_E_INVALID_ARGUMENT,
+           "evidence json rejects invalid level");
 }
 
 /* ================================================================== */
@@ -517,6 +582,8 @@ int main(void) {
     RUN(test_doctor_json_escapes_strings);
     RUN(test_doctor_render_null_args);
     RUN(test_doctor_render_rejects_oversized_check_count);
+    RUN(test_doctor_render_rejects_inconsistent_counters);
+    RUN(test_doctor_render_rejects_invalid_severity);
 
     /* Evidence rendering */
     RUN(test_evidence_text);
@@ -524,6 +591,8 @@ int main(void) {
     RUN(test_evidence_json_escapes_strings);
     RUN(test_evidence_render_null_args);
     RUN(test_evidence_render_rejects_oversized_count);
+    RUN(test_evidence_render_rejects_inconsistent_counters);
+    RUN(test_evidence_render_rejects_invalid_entry_level);
 
     /* Inspection rendering */
     RUN(test_inspection_text);

@@ -62,11 +62,15 @@ ASX_API const char *asx_report_buf_cstr(const asx_report_buf *buf);
  *   [WARN] regions: region arena >75% utilized (6/8)
  *   ---
  *   Overall: OK (6 pass, 0 warn, 0 fail)
+ * Invalid public report state (oversized check count, out-of-range severities,
+ * or inconsistent pass/warn/fail counters) fails closed with
+ * ASX_E_INVALID_ARGUMENT.
  */
 ASX_API ASX_MUST_USE asx_status asx_report_doctor_text(const asx_doctor_report *report,
                                                        asx_report_buf *out);
 
-/* Render a doctor report as JSON. */
+/* Render a doctor report as JSON.
+ * Invalid public report state fails closed with ASX_E_INVALID_ARGUMENT. */
 ASX_API ASX_MUST_USE asx_status asx_report_doctor_json(const asx_doctor_report *report,
                                                        asx_report_buf *out);
 
@@ -80,11 +84,14 @@ ASX_API ASX_MUST_USE asx_status asx_report_doctor_json(const asx_doctor_report *
  *   [WARN] inspect:regions — region arena >75% utilized
  *   ---
  *   Verdict: PASS (4 pass, 1 warn, 0 fail, 1 info)
+ * Invalid public sink state (oversized count, out-of-range levels, or
+ * inconsistent per-level counters) fails closed with ASX_E_INVALID_ARGUMENT.
  */
 ASX_API ASX_MUST_USE asx_status asx_report_evidence_text(const asx_evidence_sink *sink,
                                                          asx_report_buf *out);
 
-/* Render an evidence sink as JSON. */
+/* Render an evidence sink as JSON.
+ * Invalid public sink state fails closed with ASX_E_INVALID_ARGUMENT. */
 ASX_API ASX_MUST_USE asx_status asx_report_evidence_json(const asx_evidence_sink *sink,
                                                          asx_report_buf *out);
 

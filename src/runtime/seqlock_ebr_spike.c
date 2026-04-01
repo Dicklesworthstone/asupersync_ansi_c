@@ -455,15 +455,18 @@ void asx_spinlock_unlock(asx_spinlock *lock) {
  * Measure cycles per operation for each strategy.
  */
 
+/* ASX_ANALYZER_WAIVER("spike struct — members used in future parallel profile") */
 typedef struct {
     uint64_t seqlock_read_cycles;
     uint64_t seqlock_write_cycles;
     uint64_t spinlock_read_cycles;
+    /* ASX_ANALYZER_WAIVER("spike: used in future parallel profile") */
     uint64_t spinlock_write_cycles;
     uint64_t raw_read_cycles; /* unprotected (baseline lower bound) */
     uint64_t raw_write_cycles;
     uint32_t read_ops;
     uint32_t write_ops;
+    /* ASX_ANALYZER_WAIVER("spike: used in future parallel profile") */
     uint32_t seqlock_retries; /* times reader had to retry */
 } asx_concurrency_bench;
 

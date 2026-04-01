@@ -15,7 +15,9 @@ Checks: >
   -bugprone-assignment-in-if-condition,
   -cert-dcl37-c,
   -cert-dcl51-cpp,
-  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -misc-include-cleaner,
+  -cert-err33-c
 
 # Only check project headers, not system headers
 HeaderFilterRegex: 'include/asx/.*'
@@ -49,3 +51,15 @@ CheckOptions:
 # clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling:
 #   Flags memcpy/memset which are fundamental in zero-alloc C99.
 #   The project does not use user-controlled sizes unsafely.
+#
+# misc-include-cleaner:
+#   Flags transitive includes as missing direct includes. This project
+#   uses umbrella headers (asx.h) and internal headers that provide all
+#   needed types transitively. Adding redundant direct includes would
+#   clutter source files without improving correctness.
+#
+# cert-err33-c:
+#   Flags unchecked return values on internal helper functions (memset,
+#   snprintf in bounded buffers, arena reset). These are intentionally
+#   fire-and-forget calls where the return value is meaningless or
+#   the buffer is statically bounded.
