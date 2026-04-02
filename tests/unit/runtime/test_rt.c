@@ -878,6 +878,26 @@ TEST(runtime_is_quiescent_false_with_live_task) {
     asx_runtime_shutdown(&rt);
 }
 
+TEST(runtime_is_quiescent_true_with_completed_task_in_closed_region) {
+    asx_runtime rt;
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_region_slot *region = NULL;
+    asx_budget budget;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, dummy_poll, NULL, &tid), ASX_OK);
+
+    budget = asx_budget_from_polls(8);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    region->state = ASX_REGION_CLOSED;
+
+    ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
+    asx_runtime_shutdown(&rt);
+}
+
 TEST(runtime_is_quiescent_false_with_pending_obligation) {
     asx_runtime rt;
     asx_region_id rid;
@@ -1194,6 +1214,7 @@ int main(void) {
     RUN_TEST(counts_uninitialized_returns_zero);
     RUN_TEST(runtime_is_quiescent_false_with_open_region);
     RUN_TEST(runtime_is_quiescent_false_with_live_task);
+    RUN_TEST(runtime_is_quiescent_true_with_completed_task_in_closed_region);
     RUN_TEST(runtime_is_quiescent_false_with_pending_obligation);
     RUN_TEST(runtime_is_quiescent_false_with_pending_region_cleanup);
     RUN_TEST(runtime_is_quiescent_false_with_active_io_registration);
