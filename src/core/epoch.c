@@ -298,6 +298,104 @@ asx_epoch_policy asx_epoch_policy_infinite(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Epoch-scoped combinators                                            */
+/* ------------------------------------------------------------------ */
+
+/* Helper: validate epoch is active, run combinator, advance on success. */
+static asx_status epoch_scoped_run(asx_epoch_handle epoch, asx_combinator_poll_fn poll_fn,
+                                   void *state, asx_task_id self) {
+    asx_epoch_slot *s;
+    asx_status st;
+
+    s = slot_get(epoch);
+    if (s == NULL) return ASX_E_NOT_FOUND;
+    if (s->state != ASX_EPOCH_ACTIVE) return ASX_E_INVALID_STATE;
+
+    st = poll_fn(state, self);
+    if (st == ASX_E_PENDING) return ASX_E_PENDING;
+
+    /* Combinator completed — advance epoch if manual mode and budget allows */
+    if (s->policy.mode == ASX_EPOCH_ADVANCE_MANUAL) {
+        if (s->policy.max_phases == 0 || s->phase + 1 < s->policy.max_phases) { do_advance(s); }
+    }
+
+    return st;
+}
+
+asx_status asx_epoch_join(asx_epoch_handle epoch, asx_combinator_poll_fn *poll_fns,
+                          void **user_datas, uint32_t count, asx_task_id self) {
+    asx_join_state js;
+    uint32_t i;
+    asx_status st;
+
+    if (poll_fns == NULL || count == 0) return ASX_E_INVALID_ARGUMENT;
+
+    st = asx_join_init(&js);
+    if (st != ASX_OK) return st;
+
+    for (i = 0; i < count; i++) {
+        st = asx_join_add(&js, poll_fns[i], user_datas ? user_datas[i] : NULL);
+        if (st != ASX_OK) return st;
+    }
+
+    return epoch_scoped_run(epoch, asx_join_poll, &js, self);
+}
+
+asx_status asx_epoch_race(asx_epoch_handle epoch, asx_combinator_poll_fn *poll_fns,
+                          void **user_datas, uint32_t count, asx_task_id self, int32_t *winner) {
+    asx_race_state rs;
+    uint32_t i;
+    asx_status st;
+
+    if (poll_fns == NULL || count == 0) return ASX_E_INVALID_ARGUMENT;
+
+    st = asx_race_init(&rs);
+    if (st != ASX_OK) return st;
+
+    for (i = 0; i < count; i++) {
+        st = asx_race_add(&rs, poll_fns[i], user_datas ? user_datas[i] : NULL);
+        if (st != ASX_OK) return st;
+    }
+
+    st = epoch_scoped_run(epoch, asx_race_poll, &rs, self);
+    if (winner != NULL) *winner = rs.winner;
+    return st;
+}
+
+asx_status asx_epoch_select(asx_epoch_handle epoch, asx_combinator_poll_fn *poll_fns,
+                            void **user_datas, uint32_t count, asx_task_id self, int32_t *winner) {
+    asx_select_state ss;
+    uint32_t i;
+    asx_status st;
+
+    if (poll_fns == NULL || count == 0) return ASX_E_INVALID_ARGUMENT;
+
+    st = asx_select_init(&ss);
+    if (st != ASX_OK) return st;
+
+    for (i = 0; i < count; i++) {
+        st = asx_select_add(&ss, poll_fns[i], user_datas ? user_datas[i] : NULL);
+        if (st != ASX_OK) return st;
+    }
+
+    st = epoch_scoped_run(epoch, asx_select_poll, &ss, self);
+    if (winner != NULL) *winner = ss.winner;
+    return st;
+}
+
+asx_status asx_bulkhead_call_in_epoch(asx_epoch_handle epoch, asx_combinator_poll_fn poll_fn,
+                                      void *user_data, asx_task_id self) {
+    if (poll_fn == NULL) return ASX_E_INVALID_ARGUMENT;
+    return epoch_scoped_run(epoch, poll_fn, user_data, self);
+}
+
+asx_status asx_circuit_breaker_call_in_epoch(asx_epoch_handle epoch, asx_combinator_poll_fn poll_fn,
+                                             void *user_data, asx_task_id self) {
+    if (poll_fn == NULL) return ASX_E_INVALID_ARGUMENT;
+    return epoch_scoped_run(epoch, poll_fn, user_data, self);
+}
+
+/* ------------------------------------------------------------------ */
 /* Reset                                                               */
 /* ------------------------------------------------------------------ */
 
