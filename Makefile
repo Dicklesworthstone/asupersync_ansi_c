@@ -1016,8 +1016,11 @@ $(TEST_DIR)/formal:
 $(TEST_DIR)/formal/%: $(FORMAL_CBMC_DIR)/%.c src/core/transition_tables.c | $(TEST_DIR)/formal
 	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< src/core/transition_tables.c
 
-# Cancel witness harness needs full library (cancel.c + runtime deps)
+# Harnesses that need full library (cancel.c, budget.c + runtime deps)
 $(TEST_DIR)/formal/cancel_witness_harness: $(FORMAL_CBMC_DIR)/cancel_witness_harness.c $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
+
+$(TEST_DIR)/formal/budget_lattice_harness: $(FORMAL_CBMC_DIR)/budget_lattice_harness.c $(LIB_A) | $(TEST_DIR)/formal
 	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
 
 formal-cbmc: $(FORMAL_CBMC_BINS)
