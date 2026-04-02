@@ -419,7 +419,7 @@ ASX_API void asx_scheduler_event_reset(void);
  * ------------------------------------------------------------------- */
 
 /* Check if a region has reached quiescence (all tasks completed,
- * all obligations resolved, region is CLOSED).
+ * all obligations resolved, cleanup stack drained, region is CLOSED).
  *
  * Preconditions: id must be a valid region handle.
  * Returns ASX_OK if quiescent, ASX_E_NOT_FOUND if id is invalid,

@@ -334,6 +334,7 @@ asx_status asx_epoch_join(asx_epoch_handle epoch, asx_combinator_poll_fn *poll_f
     if (st != ASX_OK) return st;
 
     for (i = 0; i < count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded branch add over combinator array") */
         st = asx_join_add(&js, poll_fns[i], user_datas ? user_datas[i] : NULL);
         if (st != ASX_OK) return st;
     }
@@ -353,6 +354,7 @@ asx_status asx_epoch_race(asx_epoch_handle epoch, asx_combinator_poll_fn *poll_f
     if (st != ASX_OK) return st;
 
     for (i = 0; i < count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded branch add over combinator array") */
         st = asx_race_add(&rs, poll_fns[i], user_datas ? user_datas[i] : NULL);
         if (st != ASX_OK) return st;
     }
@@ -374,6 +376,7 @@ asx_status asx_epoch_select(asx_epoch_handle epoch, asx_combinator_poll_fn *poll
     if (st != ASX_OK) return st;
 
     for (i = 0; i < count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded branch add over combinator array") */
         st = asx_select_add(&ss, poll_fns[i], user_datas ? user_datas[i] : NULL);
         if (st != ASX_OK) return st;
     }

@@ -268,6 +268,23 @@ TEST(quiescence_success_with_aborted_obligation) {
     ASSERT_EQ(asx_quiescence_check(rid), ASX_OK);
 }
 
+TEST(quiescence_closed_region_with_pending_cleanup_returns_not_reached) {
+    asx_region_id rid;
+    asx_region_slot *region = NULL;
+    asx_cleanup_handle handle = ASX_CLEANUP_INVALID;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    ASSERT_EQ(asx_cleanup_push(&region->cleanup, cleanup_mark, NULL, &handle), ASX_OK);
+
+    region->state = ASX_REGION_CLOSED;
+    region->task_count = 0;
+
+    ASSERT_EQ(asx_quiescence_check(rid), ASX_E_QUIESCENCE_NOT_REACHED);
+}
+
 TEST(drain_null_budget_returns_invalid_argument) {
     asx_region_id rid;
 
@@ -697,6 +714,8 @@ int main(void) {
     RUN_TEST(quiescence_success_with_committed_obligation);
     asx_runtime_reset();
     RUN_TEST(quiescence_success_with_aborted_obligation);
+    asx_runtime_reset();
+    RUN_TEST(quiescence_closed_region_with_pending_cleanup_returns_not_reached);
     asx_runtime_reset();
     RUN_TEST(drain_null_budget_returns_invalid_argument);
     asx_runtime_reset();

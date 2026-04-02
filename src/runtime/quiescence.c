@@ -115,6 +115,7 @@ asx_status asx_quiescence_check(asx_region_id id) {
     /* Quiescent iff region is CLOSED and no live tasks remain */
     if (r->state != ASX_REGION_CLOSED) { return ASX_E_QUIESCENCE_NOT_REACHED; }
     if (r->task_count > 0) { return ASX_E_QUIESCENCE_TASKS_LIVE; }
+    if (asx_cleanup_pending(&r->cleanup) != 0u) { return ASX_E_QUIESCENCE_NOT_REACHED; }
 
     return asx_region_obligations_resolved(id);
 }
