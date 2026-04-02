@@ -1053,7 +1053,13 @@ $(TEST_DIR)/formal/test_budget_lattice: $(FORMAL_ALG_DIR)/test_budget_lattice.c 
 $(TEST_DIR)/formal/test_foundational_parity: $(FORMAL_ALG_DIR)/test_foundational_parity.c $(LIB_A) | $(TEST_DIR)/formal
 	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
 
-FORMAL_ALG_BINS := $(TEST_DIR)/formal/test_outcome_lattice $(TEST_DIR)/formal/test_cancel_monotone $(TEST_DIR)/formal/test_budget_lattice $(TEST_DIR)/formal/test_foundational_parity
+$(TEST_DIR)/formal/test_resource_ownership_parity: $(FORMAL_ALG_DIR)/test_resource_ownership_parity.c $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
+
+$(TEST_DIR)/formal/test_circuit_breaker_sm: $(FORMAL_ALG_DIR)/test_circuit_breaker_sm.c $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
+
+FORMAL_ALG_BINS := $(TEST_DIR)/formal/test_outcome_lattice $(TEST_DIR)/formal/test_cancel_monotone $(TEST_DIR)/formal/test_budget_lattice $(TEST_DIR)/formal/test_foundational_parity $(TEST_DIR)/formal/test_resource_ownership_parity $(TEST_DIR)/formal/test_circuit_breaker_sm
 
 formal-algebraic: $(FORMAL_ALG_BINS)
 	@echo "[asx] formal-algebraic: running $(words $(FORMAL_ALG_BINS)) algebraic property suite(s)..."
