@@ -9,6 +9,7 @@
 
 #include "runtime_internal.h"
 #include <asx/asx_config.h>
+#include <asx/core/transition.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/builder.h>
 #include <asx/runtime/config_reload.h>
@@ -67,6 +68,19 @@ static int runtime_has_pending_obligations(void) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static obligation slots") */
         if (!g_obligations[i].alive) continue;
         if (g_obligations[i].state == ASX_OBLIGATION_RESERVED) return 1;
+    }
+
+    return 0;
+}
+
+static int runtime_has_live_tasks(void) {
+    uint32_t i;
+
+    for (i = 0; i < g_task_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static task slots") */
+        if (!g_tasks[i].alive) continue;
+        if (asx_task_is_terminal(g_tasks[i].state)) continue;
+        return 1;
     }
 
     return 0;
@@ -325,7 +339,7 @@ uint32_t asx_runtime_obligation_count(const asx_runtime *rt) {
 
 int asx_runtime_is_quiescent(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0;
-    if (g_task_count != 0u) return 0;
+    if (runtime_has_live_tasks()) return 0;
     if (runtime_has_pending_obligations()) return 0;
     if (asx_runtime_io_registration_count(rt) != 0u) return 0;
     if (runtime_has_pending_region_cleanup()) return 0;
