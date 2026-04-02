@@ -660,8 +660,8 @@ closed on 2026-03-20.
 
 ### Test infrastructure
 
-198 tracked C test programs across 7 categories: unit (148), invariant (3), E2E (17),
-vignette (12), conformance (3), fuzz (4), and formal verification (11).
+199 tracked C test programs across 7 categories: unit (148), invariant (3), E2E (17),
+vignette (12), conformance (3), fuzz (4), and formal verification (12).
 
 #### Test suites
 

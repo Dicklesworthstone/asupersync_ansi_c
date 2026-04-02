@@ -10,7 +10,7 @@
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
 ![1359 API declarations](https://img.shields.io/badge/public%20API-1%2C359%20declarations-blue)
-![198 test programs](https://img.shields.io/badge/tests-198%20programs-brightgreen)
+![199 test programs](https://img.shields.io/badge/tests-198%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
@@ -47,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/asupersync_ansi_c
 | **66 typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
-| **198 tracked C test programs across 7 categories** | 148 unit, 17 e2e, 3 invariant, 12 vignette, 3 conformance, 4 fuzz, and 11 formal files in the current tree |
+| **199 tracked C test programs across 7 categories** | 148 unit, 17 e2e, 3 invariant, 12 vignette, 3 conformance, 4 fuzz, and 12 formal files in the current tree |
 | **Cross-profile semantic parity gates** | All profiles produce identical semantic digests for shared fixture sets |
 
 ## Quick Example
@@ -602,7 +602,7 @@ totals where tracked.
 | **API vignettes** | 12 | Ergonomics and usage pattern demonstrations |
 | **Conformance** | 3 | Rust parity, cross-codec equivalence, cross-profile parity |
 | **Differential fuzz** | 4 | Rust-vs-C drift detection + deterministic minimization |
-| **Formal verification** | 11 | Algebraic laws (6 suites), CBMC bounded model checking (4 harnesses), litmus tests |
+| **Formal verification** | 12 | Algebraic laws (6 suites), CBMC bounded model checking (5 harnesses), litmus tests |
 
 CI command set:
 
