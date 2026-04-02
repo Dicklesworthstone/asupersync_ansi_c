@@ -185,6 +185,138 @@ TEST(slot_reuse) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Operation budget tracking                                           */
+/* ------------------------------------------------------------------ */
+
+TEST(budget_record_and_query) {
+    setup();
+    asx_epoch_handle h;
+    asx_epoch_policy pol = {ASX_EPOCH_ADVANCE_MANUAL, 0, 0};
+    MUST_OK(asx_epoch_create(&pol, &h));
+
+    ASSERT_EQ(asx_epoch_operations_used(h), 0u);
+    ASSERT_TRUE(!asx_epoch_is_budget_exhausted(h)); /* unlimited by default */
+
+    MUST_OK(asx_epoch_record_operation(h));
+    MUST_OK(asx_epoch_record_operation(h));
+    ASSERT_EQ(asx_epoch_operations_used(h), 2u);
+    ASSERT_TRUE(!asx_epoch_is_budget_exhausted(h)); /* still unlimited */
+}
+
+TEST(budget_remaining_unlimited) {
+    setup();
+    asx_epoch_handle h;
+    asx_epoch_policy pol = {ASX_EPOCH_ADVANCE_MANUAL, 0, 0};
+    MUST_OK(asx_epoch_create(&pol, &h));
+
+    /* Unlimited budget: remaining returns 0 (meaning unlimited, not exhausted) */
+    ASSERT_EQ(asx_epoch_remaining_operations(h), 0u);
+}
+
+TEST(budget_record_on_closed_rejected) {
+    setup();
+    asx_epoch_handle h;
+    asx_epoch_policy pol = {ASX_EPOCH_ADVANCE_MANUAL, 0, 0};
+    MUST_OK(asx_epoch_create(&pol, &h));
+    MUST_OK(asx_epoch_close(h));
+    ASSERT_EQ(asx_epoch_record_operation(h), ASX_E_INVALID_STATE);
+}
+
+/* ------------------------------------------------------------------ */
+/* Policy query and builders                                           */
+/* ------------------------------------------------------------------ */
+
+TEST(get_policy_round_trip) {
+    setup();
+    asx_epoch_handle h;
+    asx_epoch_policy pol = {ASX_EPOCH_ADVANCE_THRESHOLD, 5, 10};
+    asx_epoch_policy out;
+    MUST_OK(asx_epoch_create(&pol, &h));
+
+    ASSERT_EQ(asx_epoch_get_policy(h, &out), ASX_OK);
+    ASSERT_EQ(out.mode, ASX_EPOCH_ADVANCE_THRESHOLD);
+    ASSERT_EQ(out.threshold, 5u);
+    ASSERT_EQ(out.max_phases, 10u);
+}
+
+TEST(get_policy_null_rejected) {
+    setup();
+    asx_epoch_handle h;
+    asx_epoch_policy pol = {ASX_EPOCH_ADVANCE_MANUAL, 0, 0};
+    MUST_OK(asx_epoch_create(&pol, &h));
+    ASSERT_EQ(asx_epoch_get_policy(h, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(policy_strict_builder) {
+    asx_epoch_policy p = asx_epoch_policy_strict(5);
+    ASSERT_EQ(p.mode, ASX_EPOCH_ADVANCE_BARRIER);
+    ASSERT_EQ(p.max_phases, 5u);
+}
+
+TEST(policy_lenient_builder) {
+    asx_epoch_policy p = asx_epoch_policy_lenient(3, 10);
+    ASSERT_EQ(p.mode, ASX_EPOCH_ADVANCE_THRESHOLD);
+    ASSERT_EQ(p.threshold, 3u);
+    ASSERT_EQ(p.max_phases, 10u);
+}
+
+TEST(policy_single_builder) {
+    asx_epoch_policy p = asx_epoch_policy_single();
+    ASSERT_EQ(p.mode, ASX_EPOCH_ADVANCE_MANUAL);
+    ASSERT_EQ(p.max_phases, 1u);
+}
+
+TEST(policy_infinite_builder) {
+    asx_epoch_policy p = asx_epoch_policy_infinite();
+    ASSERT_EQ(p.mode, ASX_EPOCH_ADVANCE_MANUAL);
+    ASSERT_EQ(p.max_phases, 0u);
+}
+
+/* ------------------------------------------------------------------ */
+/* Duration and expiry                                                 */
+/* ------------------------------------------------------------------ */
+
+TEST(duration_returns_value) {
+    setup();
+    asx_epoch_handle h;
+    asx_epoch_policy pol = {ASX_EPOCH_ADVANCE_MANUAL, 0, 0};
+    MUST_OK(asx_epoch_create(&pol, &h));
+
+    /* Duration should be non-negative (may be zero if clock resolution is coarse) */
+    (void)asx_epoch_duration_ns(h);
+}
+
+TEST(expired_returns_false_without_timeout) {
+    setup();
+    asx_epoch_handle h;
+    asx_epoch_policy pol = {ASX_EPOCH_ADVANCE_MANUAL, 0, 0};
+    MUST_OK(asx_epoch_create(&pol, &h));
+
+    /* Default epoch has no timeout — should never expire */
+    ASSERT_TRUE(!asx_epoch_is_expired(h));
+}
+
+/* ------------------------------------------------------------------ */
+/* Invalid handle queries                                              */
+/* ------------------------------------------------------------------ */
+
+TEST(queries_on_invalid_handle) {
+    setup();
+    asx_epoch_handle bad;
+    asx_epoch_policy out;
+    bad.slot = 99u;
+    bad.generation = 0u;
+
+    ASSERT_EQ(asx_epoch_duration_ns(bad), (uint64_t)0);
+    ASSERT_TRUE(!asx_epoch_is_budget_exhausted(bad));
+    ASSERT_EQ(asx_epoch_operations_used(bad), 0u);
+    ASSERT_EQ(asx_epoch_remaining_operations(bad), 0u);
+    ASSERT_TRUE(!asx_epoch_is_expired(bad));
+    ASSERT_EQ(asx_epoch_get_policy(bad, &out), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_epoch_record_operation(bad), ASX_E_INVALID_ARGUMENT);
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -204,6 +336,26 @@ int main(void) {
     RUN_TEST(observer_null_fn);
     RUN_TEST(observer_exhaustion);
     RUN_TEST(slot_reuse);
+
+    /* Budget tracking */
+    RUN_TEST(budget_record_and_query);
+    RUN_TEST(budget_remaining_unlimited);
+    RUN_TEST(budget_record_on_closed_rejected);
+
+    /* Policy query and builders */
+    RUN_TEST(get_policy_round_trip);
+    RUN_TEST(get_policy_null_rejected);
+    RUN_TEST(policy_strict_builder);
+    RUN_TEST(policy_lenient_builder);
+    RUN_TEST(policy_single_builder);
+    RUN_TEST(policy_infinite_builder);
+
+    /* Duration and expiry */
+    RUN_TEST(duration_returns_value);
+    RUN_TEST(expired_returns_false_without_timeout);
+
+    /* Invalid handles */
+    RUN_TEST(queries_on_invalid_handle);
 
     TEST_REPORT();
     return test_failures;
