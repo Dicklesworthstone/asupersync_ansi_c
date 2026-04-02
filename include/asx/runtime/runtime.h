@@ -428,6 +428,19 @@ ASX_API void asx_scheduler_event_reset(void);
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_quiescence_check(asx_region_id id);
 
+/* Boolean region-level quiescence helper.
+ *
+ * Returns nonzero iff the region satisfies the exact four-conjunct
+ * quiescence contract exposed by asx_quiescence_check_detailed():
+ *   1. all tasks complete,
+ *   2. all child regions closed,
+ *   3. all obligations resolved,
+ *   4. cleanup stack fully drained,
+ * and the region state is CLOSED.
+ *
+ * Returns 0 if id is invalid or any conjunct fails. */
+ASX_API int asx_region_is_quiescent(asx_region_id id);
+
 /* Drain a region: run scheduler then close through to CLOSED.
  * This is the high-level "shut down cleanly" operation.
  *

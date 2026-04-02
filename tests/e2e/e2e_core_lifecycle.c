@@ -678,6 +678,7 @@ static void scenario_quiescence_evidence(void) {
 
     /* Cross-validate with basic quiescence check */
     SCENARIO_CHECK(asx_quiescence_check(rid) == ASX_OK, "basic_quiescence_agrees");
+    SCENARIO_CHECK(asx_region_is_quiescent(rid) == 1, "bool_quiescence_agrees");
 
     SCENARIO_END();
 }

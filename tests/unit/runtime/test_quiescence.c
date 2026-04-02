@@ -480,6 +480,11 @@ TEST(quiescence_detailed_invalid_handle_returns_not_found) {
     ASSERT_EQ(asx_quiescence_check_detailed(bad, &report), ASX_E_NOT_FOUND);
 }
 
+TEST(region_is_quiescent_invalid_handle_returns_false) {
+    asx_runtime_reset();
+    ASSERT_FALSE(asx_region_is_quiescent(0xDEADBEEFu));
+}
+
 TEST(quiescence_detailed_fully_quiescent) {
     asx_region_id rid;
     asx_region_slot *region = NULL;
@@ -500,6 +505,7 @@ TEST(quiescence_detailed_fully_quiescent) {
     ASSERT_EQ(report.q3_obligations_resolved, 1);
     ASSERT_EQ(report.q4_cleanup_drained, 1);
     ASSERT_EQ(report.region_state, ASX_REGION_CLOSED);
+    ASSERT_TRUE(asx_region_is_quiescent(rid));
 }
 
 TEST(quiescence_detailed_live_tasks_q1_fails) {
@@ -521,6 +527,7 @@ TEST(quiescence_detailed_live_tasks_q1_fails) {
     ASSERT_EQ(report.q2_children_closed, 1);
     ASSERT_EQ(report.q3_obligations_resolved, 1);
     ASSERT_EQ(report.q4_cleanup_drained, 1);
+    ASSERT_FALSE(asx_region_is_quiescent(rid));
 }
 
 TEST(quiescence_detailed_unresolved_obligations_q3_fails) {
@@ -543,6 +550,7 @@ TEST(quiescence_detailed_unresolved_obligations_q3_fails) {
     ASSERT_EQ(report.q1_tasks_complete, 1);
     ASSERT_EQ(report.q3_obligations_resolved, 0);
     ASSERT_EQ(report.progress.obligations_reserved, 1u);
+    ASSERT_FALSE(asx_region_is_quiescent(rid));
 }
 
 TEST(quiescence_detailed_undrained_cleanup_q4_fails) {
@@ -565,6 +573,7 @@ TEST(quiescence_detailed_undrained_cleanup_q4_fails) {
     ASSERT_EQ(report.quiescent, 0);
     ASSERT_EQ(report.q1_tasks_complete, 1);
     ASSERT_EQ(report.q4_cleanup_drained, 0);
+    ASSERT_FALSE(asx_region_is_quiescent(rid));
 }
 
 TEST(quiescence_detailed_not_closed_not_quiescent) {
@@ -578,6 +587,7 @@ TEST(quiescence_detailed_not_closed_not_quiescent) {
     ASSERT_EQ(asx_quiescence_check_detailed(rid, &report), ASX_OK);
     ASSERT_EQ(report.quiescent, 0);
     ASSERT_EQ(report.region_state, ASX_REGION_OPEN);
+    ASSERT_FALSE(asx_region_is_quiescent(rid));
 }
 
 TEST(drain_progress_monotonicity_during_drain) {
@@ -711,6 +721,8 @@ int main(void) {
     RUN_TEST(quiescence_detailed_null_out_returns_invalid_argument);
     asx_runtime_reset();
     RUN_TEST(quiescence_detailed_invalid_handle_returns_not_found);
+    asx_runtime_reset();
+    RUN_TEST(region_is_quiescent_invalid_handle_returns_false);
     asx_runtime_reset();
     RUN_TEST(quiescence_detailed_fully_quiescent);
     asx_runtime_reset();

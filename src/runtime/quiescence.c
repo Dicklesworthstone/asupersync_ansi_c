@@ -119,6 +119,13 @@ asx_status asx_quiescence_check(asx_region_id id) {
     return asx_region_obligations_resolved(id);
 }
 
+int asx_region_is_quiescent(asx_region_id id) {
+    asx_quiescence_report report;
+
+    if (asx_quiescence_check_detailed(id, &report) != ASX_OK) return 0;
+    return report.quiescent;
+}
+
 /* -------------------------------------------------------------------
  * Detailed quiescence check with Q1-Q4 decomposition (bd-1eqo.5.2)
  * ------------------------------------------------------------------- */

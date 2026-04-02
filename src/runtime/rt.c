@@ -64,6 +64,7 @@ static int runtime_has_pending_obligations(void) {
     uint32_t i;
 
     for (i = 0; i < g_obligation_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static obligation slots") */
         if (!g_obligations[i].alive) continue;
         if (g_obligations[i].state == ASX_OBLIGATION_RESERVED) return 1;
     }
@@ -75,6 +76,7 @@ static int runtime_has_pending_region_cleanup(void) {
     uint32_t i;
 
     for (i = 0; i < g_region_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static region slots") */
         if (!g_regions[i].alive) continue;
         if (asx_cleanup_pending(&g_regions[i].cleanup) != 0u) return 1;
     }
@@ -86,6 +88,7 @@ static int runtime_all_regions_closed(void) {
     uint32_t i;
 
     for (i = 0; i < g_region_count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static region slots") */
         if (!g_regions[i].alive) continue;
         if (g_regions[i].state != ASX_REGION_CLOSED) return 0;
     }
