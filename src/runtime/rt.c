@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "runtime_internal.h"
 #include <asx/asx_config.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/builder.h>
@@ -17,10 +18,6 @@
 #include <stddef.h>
 #include <string.h>
 
-/* Forward declarations for global state access (defined in lifecycle.c) */
-extern uint32_t g_region_count;
-extern uint32_t g_task_count;
-extern uint32_t g_obligation_count;
 asx_io_backend asx_runtime_active_io_backend_selected(void);
 
 /* Generation counter for runtime instances */
@@ -61,6 +58,39 @@ static int runtime_io_backend_supported(asx_io_backend backend) {
     case ASX_IO_BACKEND_IO_URING: return ASX_HAS_IO_URING;
     }
     return 0;
+}
+
+static int runtime_has_pending_obligations(void) {
+    uint32_t i;
+
+    for (i = 0; i < g_obligation_count; i++) {
+        if (!g_obligations[i].alive) continue;
+        if (g_obligations[i].state == ASX_OBLIGATION_RESERVED) return 1;
+    }
+
+    return 0;
+}
+
+static int runtime_has_pending_region_cleanup(void) {
+    uint32_t i;
+
+    for (i = 0; i < g_region_count; i++) {
+        if (!g_regions[i].alive) continue;
+        if (asx_cleanup_pending(&g_regions[i].cleanup) != 0u) return 1;
+    }
+
+    return 0;
+}
+
+static int runtime_all_regions_closed(void) {
+    uint32_t i;
+
+    for (i = 0; i < g_region_count; i++) {
+        if (!g_regions[i].alive) continue;
+        if (g_regions[i].state != ASX_REGION_CLOSED) return 0;
+    }
+
+    return 1;
 }
 
 static int runtime_finalizer_escalation_valid(asx_finalizer_escalation escalation) {
@@ -288,6 +318,16 @@ uint32_t asx_runtime_task_count(const asx_runtime *rt) {
 uint32_t asx_runtime_obligation_count(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0u;
     return g_obligation_count;
+}
+
+int asx_runtime_is_quiescent(const asx_runtime *rt) {
+    if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0;
+    if (g_task_count != 0u) return 0;
+    if (runtime_has_pending_obligations()) return 0;
+    if (asx_runtime_io_registration_count(rt) != 0u) return 0;
+    if (runtime_has_pending_region_cleanup()) return 0;
+    if (!runtime_all_regions_closed()) return 0;
+    return 1;
 }
 
 int asx_runtime_io_driver_initialized(const asx_runtime *rt) {

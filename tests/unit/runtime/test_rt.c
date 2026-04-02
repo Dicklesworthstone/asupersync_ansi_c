@@ -13,8 +13,10 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../../../src/runtime/runtime_internal.h"
 #include "../../test_harness.h"
 #include <asx/asx.h>
+#include <asx/core/cleanup.h>
 #include <string.h>
 
 #if defined(_WIN32)
@@ -45,6 +47,11 @@ static asx_status dummy_poll(void *user_data, asx_task_id self) {
     (void)user_data;
     (void)self;
     return ASX_OK;
+}
+
+static void cleanup_mark(void *ctx) {
+    int *flag = (int *)ctx;
+    *flag += 1;
 }
 
 #if ASX_HAS_BLOCKING_SURFACE
@@ -797,12 +804,15 @@ TEST(blocking_pool_initialized_null_returns_false) {
     ASSERT_FALSE(asx_runtime_blocking_pool_initialized(NULL));
 }
 
+TEST(runtime_is_quiescent_null_returns_false) { ASSERT_FALSE(asx_runtime_is_quiescent(NULL)); }
+
 TEST(counts_zero_after_init) {
     asx_runtime rt;
     MUST_OK(asx_runtime_init_default(&rt));
     ASSERT_EQ(asx_runtime_region_count(&rt), 0u);
     ASSERT_EQ(asx_runtime_task_count(&rt), 0u);
     ASSERT_EQ(asx_runtime_obligation_count(&rt), 0u);
+    ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
     asx_runtime_shutdown(&rt);
 }
 
@@ -840,6 +850,90 @@ TEST(counts_uninitialized_returns_zero) {
     ASSERT_EQ(asx_runtime_blocking_active_count(&rt), 0u);
     ASSERT_FALSE(asx_runtime_io_driver_initialized(&rt));
     ASSERT_FALSE(asx_runtime_blocking_pool_initialized(&rt));
+    ASSERT_FALSE(asx_runtime_is_quiescent(&rt));
+}
+
+TEST(runtime_is_quiescent_false_with_open_region) {
+    asx_runtime rt;
+    asx_region_id rid;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_FALSE(asx_runtime_is_quiescent(&rt));
+    asx_runtime_shutdown(&rt);
+}
+
+TEST(runtime_is_quiescent_false_with_live_task) {
+    asx_runtime rt;
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_region_slot *region = NULL;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, dummy_poll, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    region->state = ASX_REGION_CLOSED;
+    ASSERT_FALSE(asx_runtime_is_quiescent(&rt));
+    asx_runtime_shutdown(&rt);
+}
+
+TEST(runtime_is_quiescent_false_with_pending_obligation) {
+    asx_runtime rt;
+    asx_region_id rid;
+    asx_obligation_id oid;
+    asx_region_slot *region = NULL;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    region->state = ASX_REGION_CLOSED;
+    ASSERT_FALSE(asx_runtime_is_quiescent(&rt));
+    asx_runtime_shutdown(&rt);
+}
+
+TEST(runtime_is_quiescent_false_with_pending_region_cleanup) {
+    asx_runtime rt;
+    asx_region_id rid;
+    asx_region_slot *region = NULL;
+    asx_cleanup_handle handle = ASX_CLEANUP_INVALID;
+    int cleaned = 0;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    region->state = ASX_REGION_CLOSED;
+    ASSERT_EQ(asx_cleanup_push(&region->cleanup, cleanup_mark, &cleaned, &handle), ASX_OK);
+    ASSERT_FALSE(asx_runtime_is_quiescent(&rt));
+    ASSERT_EQ(cleaned, 0);
+    asx_runtime_shutdown(&rt);
+}
+
+TEST(runtime_is_quiescent_false_with_active_io_registration) {
+    asx_runtime rt;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+
+#if ASX_HAS_NATIVE_IO_DRIVER
+    if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
+        asx_waker w;
+        asx_io_token tok;
+
+        ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
+        ASSERT_EQ(asx_waker_register(88, &w), ASX_OK);
+        ASSERT_EQ(asx_io_register(88, ASX_IO_READABLE, &w, &tok), ASX_OK);
+        ASSERT_FALSE(asx_runtime_is_quiescent(&rt));
+        asx_io_deregister(&tok);
+        ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
+    } else {
+        ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
+    }
+#else
+    ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
+#endif
+
+    asx_runtime_shutdown(&rt);
 }
 
 TEST(runtime_subsystem_queries_track_live_state) {
@@ -1093,10 +1187,16 @@ int main(void) {
     RUN_TEST(blocking_active_count_null_returns_zero);
     RUN_TEST(io_driver_initialized_null_returns_false);
     RUN_TEST(blocking_pool_initialized_null_returns_false);
+    RUN_TEST(runtime_is_quiescent_null_returns_false);
     RUN_TEST(counts_zero_after_init);
     RUN_TEST(counts_reflect_opened_region);
     RUN_TEST(counts_reflect_spawned_task);
     RUN_TEST(counts_uninitialized_returns_zero);
+    RUN_TEST(runtime_is_quiescent_false_with_open_region);
+    RUN_TEST(runtime_is_quiescent_false_with_live_task);
+    RUN_TEST(runtime_is_quiescent_false_with_pending_obligation);
+    RUN_TEST(runtime_is_quiescent_false_with_pending_region_cleanup);
+    RUN_TEST(runtime_is_quiescent_false_with_active_io_registration);
     RUN_TEST(runtime_subsystem_queries_track_live_state);
 
     /* Capacity queries */

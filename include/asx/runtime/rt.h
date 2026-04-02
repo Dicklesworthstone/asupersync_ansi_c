@@ -168,6 +168,19 @@ ASX_API uint32_t asx_runtime_region_count(const asx_runtime *rt);
 ASX_API uint32_t asx_runtime_task_count(const asx_runtime *rt);
 ASX_API uint32_t asx_runtime_obligation_count(const asx_runtime *rt);
 
+/* Runtime-wide quiescence query.
+ *
+ * Returns nonzero iff the active runtime satisfies the documented
+ * five-conjunct quiescence contract:
+ *   1. no live tasks,
+ *   2. no pending (RESERVED) obligations,
+ *   3. no active I/O registrations,
+ *   4. no pending region finalizers/cleanup entries,
+ *   5. all live region slots are CLOSED.
+ *
+ * Returns 0 if rt is NULL, not initialized, or any conjunct fails. */
+ASX_API int asx_runtime_is_quiescent(const asx_runtime *rt);
+
 /* Query state for runtime-owned reactor and blocking subsystems.
  * Returns 0 if rt is NULL or not initialized. */
 ASX_API int asx_runtime_io_driver_initialized(const asx_runtime *rt);
