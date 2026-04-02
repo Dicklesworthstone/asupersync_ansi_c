@@ -74,6 +74,21 @@ TEST(region_spawn_after_close_rejected) {
     ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_E_REGION_NOT_OPEN);
 }
 
+TEST(region_finalizing_admits_work_but_not_strict_spawn) {
+    /* FINALIZING allows task admission (can_accept_work) but rejects
+     * strict admission (can_spawn) used by obligations/child regions. */
+    ASSERT_TRUE(asx_region_can_accept_work(ASX_REGION_FINALIZING));
+    ASSERT_TRUE(!asx_region_can_spawn(ASX_REGION_FINALIZING));
+}
+
+TEST(region_closing_and_draining_reject_all_admission) {
+    /* CLOSING and DRAINING reject both task and strict admission. */
+    ASSERT_TRUE(!asx_region_can_accept_work(ASX_REGION_CLOSING));
+    ASSERT_TRUE(!asx_region_can_spawn(ASX_REGION_CLOSING));
+    ASSERT_TRUE(!asx_region_can_accept_work(ASX_REGION_DRAINING));
+    ASSERT_TRUE(!asx_region_can_spawn(ASX_REGION_DRAINING));
+}
+
 TEST(region_obligation_after_close_rejected) {
     asx_region_id rid;
     asx_obligation_id oid;
@@ -261,6 +276,8 @@ int main(void) {
     RUN_TEST(region_double_close_rejected);
     RUN_TEST(region_close_on_invalid_handle_rejected);
     RUN_TEST(region_spawn_after_close_rejected);
+    RUN_TEST(region_finalizing_admits_work_but_not_strict_spawn);
+    RUN_TEST(region_closing_and_draining_reject_all_admission);
     RUN_TEST(region_obligation_after_close_rejected);
     RUN_TEST(region_spawn_after_poison_rejected);
     RUN_TEST(region_close_after_poison_rejected);

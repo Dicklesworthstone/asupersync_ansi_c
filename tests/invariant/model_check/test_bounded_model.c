@@ -161,10 +161,11 @@ TEST(obligation_no_double_resolve) {
 }
 
 /* -------------------------------------------------------------------
- * Invariant 5: Region spawn prohibition
+ * Invariant 5: Region strict admission (OPEN-only)
  *
- * Spawning tasks is only allowed in OPEN state.
- * All other states must reject spawn.
+ * asx_region_can_spawn gates strict admissions: child regions and
+ * obligation reservation. Only OPEN state passes.
+ * Task spawning uses asx_region_can_accept_work (OPEN + FINALIZING).
  * ------------------------------------------------------------------- */
 
 TEST(region_spawn_only_in_open) {
