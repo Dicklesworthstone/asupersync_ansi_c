@@ -38,7 +38,7 @@ A region is quiescent if and only if ALL four conditions hold simultaneously:
 
 | # | Condition | Runtime Check | Formal (Lean4) |
 |---|-----------|---------------|-----------------|
-| Q1 | All child tasks completed | `tasks.is_empty()` (completed tasks removed from tracking) | `allTasksCompleted s r.children` |
+| Q1 | All child tasks completed | `tasks.is_empty()` (completed tasks removed from region-local live tracking) | `allTasksCompleted s r.children` |
 | Q2 | All child sub-regions closed | `children.is_empty()` (closed regions removed from tracking) | `allRegionsClosed s r.subregions` |
 | Q3 | Obligation ledger empty | `pending_obligations == 0` | `r.ledger = []` |
 | Q4 | All finalizers executed | `finalizers.is_empty()` | `r.finalizers = []` |
@@ -66,6 +66,8 @@ bool asx_region_is_quiescent(const asx_region *r) {
 }
 ```
 
+Here `r->task_count` is the region-local live-task count used by quiescence checks. It is intentionally different from the runtime-wide `asx_runtime_task_count()` surface, which reports arena-resident task slots and may still include completed tasks until a reset/reclaim path clears the slot.
+
 ### 1.2 Runtime-Level Quiescence (Five Conjuncts)
 
 The entire runtime is quiescent when all hold:
@@ -77,6 +79,8 @@ The entire runtime is quiescent when all hold:
 | RQ3 | No active I/O sources | `io_driver.is_none_or(IoDriverHandle::is_empty)` (profile-dependent) |
 | RQ4 | No pending finalizers | All regions: `finalizers_empty()` |
 | RQ5 | All regions closed | All region records in `Closed` state |
+
+Runtime-wide quiescence must not be inferred from `asx_runtime_task_count() == 0` or the other runtime count APIs. Those counters are slot-occupancy queries, not semantic live-work queries.
 
 **Rust implementation** (`runtime/state.rs:1476`):
 

@@ -840,6 +840,23 @@ TEST(counts_reflect_spawned_task) {
     asx_runtime_shutdown(&rt);
 }
 
+TEST(task_count_retains_completed_task_slot_until_reset) {
+    asx_runtime rt;
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, dummy_poll, NULL, &tid), ASX_OK);
+
+    budget = asx_budget_from_polls(8);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_runtime_task_count(&rt), 1u);
+
+    asx_runtime_shutdown(&rt);
+}
+
 TEST(counts_uninitialized_returns_zero) {
     asx_runtime rt;
     memset(&rt, 0, sizeof(rt));
@@ -1211,6 +1228,7 @@ int main(void) {
     RUN_TEST(counts_zero_after_init);
     RUN_TEST(counts_reflect_opened_region);
     RUN_TEST(counts_reflect_spawned_task);
+    RUN_TEST(task_count_retains_completed_task_slot_until_reset);
     RUN_TEST(counts_uninitialized_returns_zero);
     RUN_TEST(runtime_is_quiescent_false_with_open_region);
     RUN_TEST(runtime_is_quiescent_false_with_live_task);

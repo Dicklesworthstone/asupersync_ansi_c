@@ -162,7 +162,12 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_config_validate(const asx_runtime_co
 /* State queries                                                       */
 /* ------------------------------------------------------------------ */
 
-/* Query counts of active entities.
+/* Query counts of arena-resident entities (alive slots).
+ *
+ * These counters reflect occupied runtime slots, not semantic "live work":
+ * completed tasks and resolved obligations may still contribute while their
+ * slots remain resident until the next runtime reset/reclaim path.
+ *
  * Returns 0 if rt is NULL or not initialized. */
 ASX_API uint32_t asx_runtime_region_count(const asx_runtime *rt);
 ASX_API uint32_t asx_runtime_task_count(const asx_runtime *rt);

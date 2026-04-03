@@ -985,12 +985,14 @@ Region cleanup must verify four conditions before a region can reach the CLOSED 
 
 | Condition | Check | Error If Violated |
 |---|---|---|
-| **Q1** | All tasks completed (`task_count == 0`) | `ASX_E_TASKS_STILL_ACTIVE` |
+| **Q1** | All region-local tasks completed (`region.task_count == 0`) | `ASX_E_TASKS_STILL_ACTIVE` |
 | **Q2** | All child regions closed | `ASX_E_INCOMPLETE_CHILDREN` |
 | **Q3** | No reserved obligations remain (`obligations_reserved == 0`) | `ASX_E_OBLIGATIONS_UNRESOLVED` |
 | **Q4** | Cleanup stack fully drained | `ASX_E_QUIESCENCE_NOT_REACHED` |
 
 A region is quiescent if and only if: `state == CLOSED && Q1 && Q2 && Q3 && Q4 && !poisoned`. If any condition fails, the runtime reports which specific condition was violated rather than returning a generic "not quiescent" error, so you know exactly what's still alive.
+
+This region-local `task_count` is not the same as `asx_runtime_task_count()`. The runtime-wide count APIs report arena-resident slot occupancy, so completed tasks and resolved obligations may still contribute there until the next runtime reset or reclaim path. Runtime-wide quiescence therefore uses a stricter live-work check rather than raw slot counts.
 
 Poisoned regions are never quiescent. If a region is poisoned (invariant violation detected), it transitions to a terminal error state and downstream consumers are notified.
 
