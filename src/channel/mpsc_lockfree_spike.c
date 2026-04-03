@@ -19,57 +19,9 @@
  */
 
 #include <asx/asx.h>
+#include <asx/platform/atomics.h>
 #include <stdint.h>
 #include <string.h>
-
-/* ------------------------------------------------------------------ */
-/* Portable atomic abstraction                                        */
-/* ------------------------------------------------------------------ */
-
-/*
- * When ASX_LOCKFREE_SINGLE_THREAD is defined, all atomic ops become
- * plain memory access — semantically equivalent to the baseline queue
- * for single-threaded verification.
- *
- * For future multi-threaded deployment, this layer would map to:
- * - GCC/Clang: __atomic_* builtins
- * - MSVC: _Interlocked* intrinsics
- * - C11: _Atomic with <stdatomic.h>
- */
-
-#ifndef ASX_LOCKFREE_SINGLE_THREAD
-#define ASX_LOCKFREE_SINGLE_THREAD 1
-#endif
-
-typedef struct {
-    uint32_t value;
-} asx_atomic_u32;
-
-#if ASX_LOCKFREE_SINGLE_THREAD
-
-static uint32_t asx_atomic_load(const asx_atomic_u32 *a) { return a->value; }
-
-static void asx_atomic_store(asx_atomic_u32 *a, uint32_t v) { a->value = v; }
-
-/* Returns 1 on success (old value matched expected), 0 on failure */
-static int asx_atomic_cas(asx_atomic_u32 *a, uint32_t expected, uint32_t desired) {
-    if (a->value == expected) {
-        a->value = desired;
-        return 1;
-    }
-    return 0;
-}
-
-#else
-/* Future: real atomic implementations
- * #if defined(__GNUC__) || defined(__clang__)
- *   // __atomic_load_n, __atomic_store_n, __atomic_compare_exchange_n
- * #elif defined(_MSC_VER)
- *   // _InterlockedCompareExchange, etc.
- * #endif
- */
-#error "Multi-threaded atomics not yet implemented (GS-009/GS-010 deferred)"
-#endif
 
 /* ------------------------------------------------------------------ */
 /* Lock-free MPSC ring buffer                                         */
@@ -121,14 +73,14 @@ void asx_lockfree_queue_init(asx_lockfree_queue *q, uint32_t capacity) {
 
     q->capacity = actual_cap;
     q->mask = actual_cap - 1u;
-    asx_atomic_store(&q->enqueue_pos, 0);
+    asx_atomic_u32_store(&q->enqueue_pos, 0);
     q->dequeue_pos = 0;
     q->len = 0;
     q->alive = 1;
 
     for (i = 0; i < actual_cap; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: actual_cap <= ASX_LOCKFREE_MAX_CAPACITY");
-        asx_atomic_store(&q->cells[i].sequence, i);
+        asx_atomic_u32_store(&q->cells[i].sequence, i);
         q->cells[i].value = 0;
     }
 }
@@ -159,9 +111,9 @@ asx_status asx_lockfree_enqueue(asx_lockfree_queue *q, uint64_t value) {
     if (q == NULL || !q->alive) { return ASX_E_INVALID_ARGUMENT; }
 
     /* In the real multi-threaded version this is a CAS loop */
-    pos = asx_atomic_load(&q->enqueue_pos);
+    pos = asx_atomic_u32_load(&q->enqueue_pos);
     cell = &q->cells[pos & q->mask];
-    seq = asx_atomic_load(&cell->sequence);
+    seq = asx_atomic_u32_load(&cell->sequence);
     diff = (int32_t)(seq - pos);
 
     if (diff < 0) {
@@ -171,7 +123,7 @@ asx_status asx_lockfree_enqueue(asx_lockfree_queue *q, uint64_t value) {
 
     if (diff == 0) {
         /* Claim the slot */
-        if (!asx_atomic_cas(&q->enqueue_pos, pos, pos + 1u)) {
+        if (!asx_atomic_u32_cas(&q->enqueue_pos, pos, pos + 1u)) {
             /* Contention (can't happen in single-threaded mode) */
             return ASX_E_CHANNEL_FULL;
         }
@@ -179,7 +131,7 @@ asx_status asx_lockfree_enqueue(asx_lockfree_queue *q, uint64_t value) {
 
     /* Write value and signal consumer */
     cell->value = value;
-    asx_atomic_store(&cell->sequence, pos + 1u);
+    asx_atomic_u32_store(&cell->sequence, pos + 1u);
     q->len++;
 
     return ASX_OK;
@@ -204,7 +156,7 @@ asx_status asx_lockfree_dequeue(asx_lockfree_queue *q, uint64_t *out_value) {
     if (!q->alive) { return ASX_E_DISCONNECTED; }
 
     cell = &q->cells[q->dequeue_pos & q->mask];
-    seq = asx_atomic_load(&cell->sequence);
+    seq = asx_atomic_u32_load(&cell->sequence);
     diff = (int32_t)(seq - (q->dequeue_pos + 1u));
 
     if (diff < 0) {
@@ -214,7 +166,7 @@ asx_status asx_lockfree_dequeue(asx_lockfree_queue *q, uint64_t *out_value) {
 
     /* Read value and recycle slot */
     *out_value = cell->value;
-    asx_atomic_store(&cell->sequence, q->dequeue_pos + q->capacity);
+    asx_atomic_u32_store(&cell->sequence, q->dequeue_pos + q->capacity);
     q->dequeue_pos++;
     q->len--;
 

@@ -21,55 +21,8 @@
 /* ASX_PROOF_BLOCK_WAIVER("reason: bug fixes for infinite loop and benchmark reporting") */
 
 #include <asx/asx.h>
+#include <asx/platform/atomics.h>
 #include <string.h>
-
-/* ------------------------------------------------------------------ */
-/* Portable atomic abstraction (same pattern as MPSC spike)           */
-/* ------------------------------------------------------------------ */
-
-#ifndef ASX_LOCKFREE_SINGLE_THREAD
-#define ASX_LOCKFREE_SINGLE_THREAD 1
-#endif
-
-typedef struct {
-    uint32_t value;
-} asx_seqlock_atomic_u32;
-
-#if ASX_LOCKFREE_SINGLE_THREAD
-
-static uint32_t seqlock_atomic_load(const asx_seqlock_atomic_u32 *a) { return a->value; }
-
-static void seqlock_atomic_store(asx_seqlock_atomic_u32 *a, uint32_t v) { a->value = v; }
-
-/* Returns 1 on success, 0 on failure (CAS) */
-static int seqlock_atomic_cas(asx_seqlock_atomic_u32 *a, uint32_t expected, uint32_t desired) {
-    if (a->value == expected) {
-        a->value = desired;
-        return 1;
-    }
-    return 0;
-}
-
-#else
-#error "Multi-threaded atomics not yet implemented (GS-009/GS-010 deferred)"
-#endif
-
-/* ------------------------------------------------------------------ */
-/* Compiler/memory barrier abstraction                                */
-/* ------------------------------------------------------------------ */
-
-/*
- * In single-threaded mode, barriers are no-ops.
- * In multi-threaded mode, these map to compiler+hardware fences:
- *   GCC/Clang: __atomic_thread_fence(__ATOMIC_ACQUIRE/RELEASE/SEQ_CST)
- *   MSVC: _ReadWriteBarrier() + MemoryBarrier()
- *   C11: atomic_thread_fence(memory_order_*)
- */
-
-#if ASX_LOCKFREE_SINGLE_THREAD
-static void asx_fence_acquire(void) { /* no-op */ }
-static void asx_fence_release(void) { /* no-op */ }
-#endif
 
 /* ------------------------------------------------------------------ */
 /* 1. SEQLOCK — Reader-writer metadata snapshot                       */
@@ -105,7 +58,7 @@ static void asx_fence_release(void) { /* no-op */ }
 #define ASX_SEQLOCK_MAX_DATA 64u /* bytes of protected metadata */
 
 typedef struct {
-    asx_seqlock_atomic_u32 sequence;
+    asx_atomic_u32 sequence;
     uint8_t data[ASX_SEQLOCK_MAX_DATA];
     uint32_t data_size;
 } asx_seqlock;
@@ -134,17 +87,17 @@ void asx_seqlock_init(asx_seqlock *sl, uint32_t data_size) {
 void asx_seqlock_write_begin(asx_seqlock *sl) {
     uint32_t seq;
     if (sl == NULL) return;
-    seq = seqlock_atomic_load(&sl->sequence);
-    seqlock_atomic_store(&sl->sequence, seq + 1u); /* now odd */
-    asx_fence_release();
+    seq = asx_atomic_u32_load(&sl->sequence);
+    asx_atomic_u32_store(&sl->sequence, seq + 1u); /* now odd */
+    asx_atomic_fence_release();
 }
 
 void asx_seqlock_write_end(asx_seqlock *sl) {
     uint32_t seq;
     if (sl == NULL) return;
-    asx_fence_release();
-    seq = seqlock_atomic_load(&sl->sequence);
-    seqlock_atomic_store(&sl->sequence, seq + 1u); /* now even */
+    asx_atomic_fence_release();
+    seq = asx_atomic_u32_load(&sl->sequence);
+    asx_atomic_u32_store(&sl->sequence, seq + 1u); /* now even */
 }
 
 /*
@@ -166,17 +119,17 @@ int asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size) {
     read_size = (size < sl->data_size) ? size : sl->data_size;
 
     do {
-        s1 = seqlock_atomic_load(&sl->sequence);
+        s1 = asx_atomic_u32_load(&sl->sequence);
         if (s1 & 1u) {
             /* Writer in progress — retry */
             retries++;
             if (retries >= max_retries) return 0; /* give up */
             continue;
         }
-        asx_fence_acquire();
+        asx_atomic_fence_acquire();
         memcpy(out, sl->data, read_size);
-        asx_fence_acquire();
-        s2 = seqlock_atomic_load(&sl->sequence);
+        asx_atomic_fence_acquire();
+        s2 = asx_atomic_u32_load(&sl->sequence);
         if (s1 != s2) {
             retries++;
             if (retries >= max_retries) return 0;
@@ -188,7 +141,7 @@ int asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size) {
 
 uint32_t asx_seqlock_sequence(const asx_seqlock *sl) {
     if (sl == NULL) return 0;
-    return seqlock_atomic_load(&sl->sequence);
+    return asx_atomic_u32_load(&sl->sequence);
 }
 
 /* Convenience: full write-begin + memcpy + write-end */
@@ -247,10 +200,10 @@ typedef struct {
 
 typedef struct {
     /* Global epoch, wraps mod 3 */
-    asx_seqlock_atomic_u32 global_epoch;
+    asx_atomic_u32 global_epoch;
 
     /* Per-reader announced epoch (or ASX_EBR_INACTIVE) */
-    asx_seqlock_atomic_u32 reader_epoch[ASX_EBR_MAX_READERS];
+    asx_atomic_u32 reader_epoch[ASX_EBR_MAX_READERS];
     uint32_t reader_count;
 
     /* Deferred reclamation ring per epoch */
@@ -280,23 +233,23 @@ void asx_ebr_init(asx_ebr_state *ebr, uint32_t reader_count) {
     memset(ebr, 0, sizeof(*ebr));
     ebr->reader_count = (reader_count > ASX_EBR_MAX_READERS) ? ASX_EBR_MAX_READERS : reader_count;
     for (i = 0; i < ASX_EBR_MAX_READERS; i++) {
-        seqlock_atomic_store(&ebr->reader_epoch[i], ASX_EBR_INACTIVE);
+        asx_atomic_u32_store(&ebr->reader_epoch[i], ASX_EBR_INACTIVE);
     }
 }
 
 uint32_t asx_ebr_reader_enter(asx_ebr_state *ebr, uint32_t reader_id) {
     uint32_t epoch;
     if (ebr == NULL || reader_id >= ebr->reader_count) return 0;
-    epoch = seqlock_atomic_load(&ebr->global_epoch);
-    seqlock_atomic_store(&ebr->reader_epoch[reader_id], epoch);
-    asx_fence_acquire();
+    epoch = asx_atomic_u32_load(&ebr->global_epoch);
+    asx_atomic_u32_store(&ebr->reader_epoch[reader_id], epoch);
+    asx_atomic_fence_acquire();
     return epoch;
 }
 
 void asx_ebr_reader_leave(asx_ebr_state *ebr, uint32_t reader_id) {
     if (ebr == NULL || reader_id >= ebr->reader_count) return;
-    asx_fence_release();
-    seqlock_atomic_store(&ebr->reader_epoch[reader_id], ASX_EBR_INACTIVE);
+    asx_atomic_fence_release();
+    asx_atomic_u32_store(&ebr->reader_epoch[reader_id], ASX_EBR_INACTIVE);
 }
 
 int asx_ebr_defer(asx_ebr_state *ebr, uint32_t slot_index, uint32_t generation) {
@@ -305,7 +258,7 @@ int asx_ebr_defer(asx_ebr_state *ebr, uint32_t slot_index, uint32_t generation) 
 
     if (ebr == NULL) return 0;
 
-    epoch = seqlock_atomic_load(&ebr->global_epoch);
+    epoch = asx_atomic_u32_load(&ebr->global_epoch);
     count = ebr->defer_count[epoch];
 
     if (count >= ASX_EBR_DEFER_CAPACITY) return 0; /* defer ring full */
@@ -324,7 +277,7 @@ int asx_ebr_defer(asx_ebr_state *ebr, uint32_t slot_index, uint32_t generation) 
 static int ebr_epoch_quiesced(const asx_ebr_state *ebr, uint32_t epoch) {
     uint32_t i;
     for (i = 0; i < ebr->reader_count; i++) {
-        uint32_t re = seqlock_atomic_load(&ebr->reader_epoch[i]);
+        uint32_t re = asx_atomic_u32_load(&ebr->reader_epoch[i]);
         if (re == epoch) return 0; /* reader still in this epoch */
     }
     return 1;
@@ -342,7 +295,7 @@ int asx_ebr_try_advance(asx_ebr_state *ebr, asx_ebr_reclaim_fn reclaim_fn, void 
 
     if (ebr == NULL) return 0;
 
-    current = seqlock_atomic_load(&ebr->global_epoch);
+    current = asx_atomic_u32_load(&ebr->global_epoch);
 
     /*
      * To advance from epoch E to E+1, we need all readers to have
@@ -365,14 +318,14 @@ int asx_ebr_try_advance(asx_ebr_state *ebr, asx_ebr_reclaim_fn reclaim_fn, void 
     ebr->defer_count[reclaim_epoch] = 0;
 
     /* Advance global epoch */
-    seqlock_atomic_store(&ebr->global_epoch, (current + 1u) % ASX_EBR_EPOCH_COUNT);
+    asx_atomic_u32_store(&ebr->global_epoch, (current + 1u) % ASX_EBR_EPOCH_COUNT);
     ebr->epoch_advances++;
     return 1;
 }
 
 uint32_t asx_ebr_current_epoch(const asx_ebr_state *ebr) {
     if (ebr == NULL) return 0;
-    return seqlock_atomic_load(&ebr->global_epoch);
+    return asx_atomic_u32_load(&ebr->global_epoch);
 }
 
 uint32_t asx_ebr_pending_count(const asx_ebr_state *ebr) {
@@ -399,7 +352,7 @@ uint32_t asx_ebr_pending_count(const asx_ebr_state *ebr) {
  */
 
 typedef struct {
-    asx_seqlock_atomic_u32 locked; /* 0 = free, 1 = held */
+    asx_atomic_u32 locked; /* 0 = free, 1 = held */
     uint32_t acquisitions;
     uint32_t contentions;
 } asx_spinlock;
@@ -416,7 +369,7 @@ void asx_spinlock_init(asx_spinlock *lock) {
 
 int asx_spinlock_try_lock(asx_spinlock *lock) {
     if (lock == NULL) return 0;
-    if (seqlock_atomic_cas(&lock->locked, 0, 1)) {
+    if (asx_atomic_u32_cas(&lock->locked, 0, 1)) {
         lock->acquisitions++;
         return 1;
     }
@@ -428,7 +381,7 @@ void asx_spinlock_lock(asx_spinlock *lock) {
     int spins = 0;
     int max_spins = 1000;
     if (lock == NULL) return;
-    while (!seqlock_atomic_cas(&lock->locked, 0, 1)) {
+    while (!asx_atomic_u32_cas(&lock->locked, 0, 1)) {
         lock->contentions++;
         spins++;
         if (spins >= max_spins) return; /* deadlock guard */
@@ -438,7 +391,7 @@ void asx_spinlock_lock(asx_spinlock *lock) {
 
 void asx_spinlock_unlock(asx_spinlock *lock) {
     if (lock == NULL) return;
-    seqlock_atomic_store(&lock->locked, 0);
+    asx_atomic_u32_store(&lock->locked, 0);
 }
 
 /* ------------------------------------------------------------------ */
