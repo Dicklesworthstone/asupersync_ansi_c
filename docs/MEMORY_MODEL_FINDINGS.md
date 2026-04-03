@@ -7,9 +7,16 @@
 ## 1. Executive Summary
 
 The asupersync ANSI C runtime is **synchronization-free by architectural
-design**. All execution is single-threaded and deterministic. No atomic
-operations, memory barriers, locks, or multi-threading primitives exist
-in the codebase.
+design** at the kernel/runtime level. All shipped execution remains
+single-threaded and deterministic. The production runtime surface does
+not rely on atomic operations, memory barriers, locks, or
+multi-threading primitives.
+
+Research spike/support code now includes a shared
+`include/asx/platform/atomics.h` portability layer used by the
+lock-free queue and seqlock/EBR evaluation spikes. That does not change
+the kernel claim: parallel semantics remain deferred, and the atomics
+layer exists to keep those spike surfaces portable and non-duplicative.
 
 This finding is intentional: the architecture explicitly defers parallelism
 to post-kernel phases (Wave D, ALPHA-5/6), documented in ADR-001 and the
@@ -20,19 +27,21 @@ hold across compilers, targets, and optimization levels.
 
 ## 2. Findings
 
-### 2.1 No Atomic Operations
+### 2.1 Kernel Runtime Remains Free Of Atomic Synchronization
 
 | Category | Found | Expected |
 |----------|-------|----------|
-| `_Atomic` types | 0 | 0 |
-| `__atomic_*` builtins | 0 | 0 |
+| `_Atomic` types in kernel/runtime path | 0 | 0 |
+| `__atomic_*` builtins in kernel/runtime path | 0 | 0 |
 | `__sync_*` builtins | 0 | 0 |
-| Memory barriers | 0 | 0 |
-| Inline assembly | 0 | 0 |
-| Locks/mutexes | 0 | 0 |
-| `volatile` for sync | 0 | 0 |
+| Memory barriers in kernel/runtime path | 0 | 0 |
+| Inline assembly in kernel/runtime path | 0 | 0 |
+| Locks/mutexes in kernel/runtime path | 0 | 0 |
+| `volatile` for sync in kernel/runtime path | 0 | 0 |
 
-**Verdict:** The codebase is clean. No synchronization code exists.
+**Verdict:** The shipped kernel/runtime is clean. No synchronization code
+exists there. Research spikes may carry atomics scaffolding without
+changing the single-threaded runtime contract.
 
 ### 2.2 Codegen Stability
 

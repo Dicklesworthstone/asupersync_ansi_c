@@ -30,20 +30,21 @@ Vyukov bounded MPSC ring buffer:
 
 | File | Purpose |
 |------|---------|
-| `src/channel/mpsc_lockfree_spike.c` | Standalone spike with portable atomic abstraction |
+| `src/channel/mpsc_lockfree_spike.c` | Standalone spike using shared `include/asx/platform/atomics.h` |
+| `include/asx/platform/atomics.h` | Shared portable `u32` atomic/fence shim for spike surfaces |
 | `tests/unit/channel/test_mpsc_equivalence.c` | 9 tests validating semantic equivalence |
 
 ### 2.3 Atomic Abstraction
 
 Single-threaded mode: atomics degrade to plain loads/stores.
-Multi-threaded mode: would map to `__atomic_*` builtins (GCC/Clang)
-or `_Interlocked*` (MSVC).
+Multi-threaded mode maps through the shared header to `__atomic_*`
+builtins (GCC/Clang), `_Interlocked*` (MSVC), or C11 `_Atomic`.
 
 ```c
 typedef struct { uint32_t value; } asx_atomic_u32;
-asx_atomic_load(a)            → a->value
-asx_atomic_store(a, v)        → a->value = v
-asx_atomic_cas(a, exp, des)   → CAS with return code
+asx_atomic_u32_load(a)            → backend-specific acquire load
+asx_atomic_u32_store(a, v)        → backend-specific release store
+asx_atomic_u32_cas(a, exp, des)   → CAS with return code
 ```
 
 ## 3. Equivalence Evidence
