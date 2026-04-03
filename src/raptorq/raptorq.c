@@ -43,6 +43,14 @@ static int raptorq_infer_source_symbol_count(const asx_raptorq_config *cfg,
     return 0;
 }
 
+static int raptorq_repair_covers_source(uint32_t source_index, uint32_t repair_index,
+                                        uint32_t source_symbol_count,
+                                        uint32_t repair_symbol_count) {
+    if (repair_symbol_count == 0u) return 0;
+    if (source_symbol_count <= repair_symbol_count) return 1;
+    return ((source_index + repair_index) % repair_symbol_count) == 0u;
+}
+
 /* ------------------------------------------------------------------ */
 /* Config defaults                                                     */
 /* ------------------------------------------------------------------ */
@@ -132,27 +140,17 @@ asx_status asx_raptorq_encode(const asx_raptorq_config *cfg, const void *source_
 asx_status asx_raptorq_decode(const asx_raptorq_config *cfg, const void *symbols,
                               uint32_t symbol_count, void *out_data, uint32_t out_capacity,
                               uint32_t *out_data_len) {
-    const uint8_t *syms;
-    uint8_t *dst;
-    uint32_t sym_size;
-    uint32_t copy_len;
+    uint8_t present[256];
+    uint32_t i;
 
     if (cfg == NULL || symbols == NULL || out_data == NULL || out_data_len == NULL)
         return ASX_E_INVALID_ARGUMENT;
     if (symbol_count == 0u) return ASX_E_INVALID_ARGUMENT;
+    if (symbol_count > 256u) return ASX_E_RESOURCE_EXHAUSTED;
 
-    syms = (const uint8_t *)symbols;
-    dst = (uint8_t *)out_data;
-    sym_size = raptorq_symbol_size(cfg);
-
-    /* Simple decode: copy source symbols directly (repair symbols at end are ignored).
-     * Full recovery from symbol loss would require the repair XOR equations. */
-    copy_len = symbol_count * sym_size;
-    if (copy_len > out_capacity) copy_len = out_capacity;
-
-    memcpy(dst, syms, copy_len);
-    *out_data_len = copy_len;
-    return ASX_OK;
+    for (i = 0u; i < symbol_count; i++) { present[i] = 1u; }
+    return asx_raptorq_decode_with_erasures(cfg, symbols, symbol_count, present, out_data,
+                                            out_capacity, out_data_len);
 }
 
 asx_status asx_raptorq_decode_with_erasures(const asx_raptorq_config *cfg, const void *symbols,
@@ -166,12 +164,16 @@ asx_status asx_raptorq_decode_with_erasures(const asx_raptorq_config *cfg, const
     uint32_t repair_symbol_count;
     uint32_t present_source_count = 0u;
     uint32_t present_repair_count = 0u;
+    uint8_t recovered[256];
+    int progress;
     uint32_t i;
+    uint32_t j;
 
     if (cfg == NULL || symbols == NULL || symbol_present == NULL || out_data == NULL ||
         out_data_len == NULL)
         return ASX_E_INVALID_ARGUMENT;
     if (symbol_count == 0u) return ASX_E_INVALID_ARGUMENT;
+    if (symbol_count > 256u) return ASX_E_RESOURCE_EXHAUSTED;
     if (!raptorq_infer_source_symbol_count(cfg, symbol_count, &source_symbol_count)) {
         return ASX_E_INVALID_ARGUMENT;
     }
@@ -183,15 +185,19 @@ asx_status asx_raptorq_decode_with_erasures(const asx_raptorq_config *cfg, const
 
     if (source_symbol_count * sym_size > out_capacity) return ASX_E_BUFFER_TOO_SMALL;
 
+    memset(dst, 0, source_symbol_count * sym_size);
     for (i = 0u; i < source_symbol_count; i++) {
-        if (symbol_present[i] != 0u) present_source_count++;
+        recovered[i] = (uint8_t)(symbol_present[i] != 0u ? 1u : 0u);
+        if (recovered[i] != 0u) {
+            memcpy(dst + (i * sym_size), syms + (i * sym_size), sym_size);
+            present_source_count++;
+        }
     }
     for (i = 0u; i < repair_symbol_count; i++) {
         if (symbol_present[source_symbol_count + i] != 0u) present_repair_count++;
     }
 
     if (present_source_count == source_symbol_count) {
-        memcpy(dst, syms, source_symbol_count * sym_size);
         *out_data_len = source_symbol_count * sym_size;
         return ASX_OK;
     }
@@ -200,5 +206,52 @@ asx_status asx_raptorq_decode_with_erasures(const asx_raptorq_config *cfg, const
         return ASX_E_RESOURCE_EXHAUSTED;
     }
 
-    return ASX_E_RESOURCE_EXHAUSTED;
+    progress = 1;
+    while (progress && present_source_count < source_symbol_count) {
+        progress = 0;
+
+        for (j = 0u; j < repair_symbol_count; j++) {
+            const uint8_t *repair_symbol;
+            uint32_t missing_count = 0u;
+            uint32_t missing_index = 0u;
+            uint32_t b;
+
+            if (symbol_present[source_symbol_count + j] == 0u) continue;
+
+            for (i = 0u; i < source_symbol_count; i++) {
+                if (!raptorq_repair_covers_source(i, j, source_symbol_count, repair_symbol_count))
+                    continue;
+                if (recovered[i] != 0u) continue;
+                missing_count++;
+                missing_index = i;
+                if (missing_count > 1u) break;
+            }
+            if (missing_count != 1u) continue;
+
+            repair_symbol = syms + ((source_symbol_count + j) * sym_size);
+            memcpy(dst + (missing_index * sym_size), repair_symbol, sym_size);
+            for (i = 0u; i < source_symbol_count; i++) {
+                uint8_t *recovered_symbol;
+                const uint8_t *known_symbol;
+
+                if (i == missing_index) continue;
+                if (!raptorq_repair_covers_source(i, j, source_symbol_count, repair_symbol_count))
+                    continue;
+                if (recovered[i] == 0u) continue;
+
+                recovered_symbol = dst + (missing_index * sym_size);
+                known_symbol = dst + (i * sym_size);
+                for (b = 0u; b < sym_size; b++) { recovered_symbol[b] ^= known_symbol[b]; }
+            }
+
+            recovered[missing_index] = 1u;
+            present_source_count++;
+            progress = 1;
+        }
+    }
+
+    if (present_source_count != source_symbol_count) return ASX_E_RESOURCE_EXHAUSTED;
+
+    *out_data_len = source_symbol_count * sym_size;
+    return ASX_OK;
 }

@@ -11,11 +11,37 @@
  */
 
 #include "runtime_internal.h"
+#include <asx/app/report.h>
 #include <asx/asx.h>
 #include <asx/core/cleanup.h>
 #include <asx/core/ghost.h>
 #include <asx/core/transition.h>
 #include <asx/runtime/runtime.h>
+
+static void asx_region_unlink_from_parent(asx_region_id id, asx_region_slot *r) {
+    asx_region_slot *parent = NULL;
+    asx_status st;
+    uint32_t i;
+
+    if (r->parent_id == ASX_INVALID_ID) return;
+
+    st = asx_region_slot_lookup(r->parent_id, &parent);
+    if (st == ASX_OK) {
+        for (i = 0; i < parent->child_count; i++) {
+            if (parent->children[i] != id) continue;
+
+            parent->child_count--;
+            parent->children[i] = parent->children[parent->child_count];
+            parent->children[parent->child_count] = ASX_INVALID_ID;
+            break;
+        }
+    } else {
+        (void)asx_runtime_log_write(ASX_LOG_WARN,
+                                    "child region closed after parent slot became unavailable");
+    }
+
+    r->parent_id = ASX_INVALID_ID;
+}
 
 static asx_status asx_region_obligations_resolved(asx_region_id id) {
     uint32_t i;
@@ -146,8 +172,8 @@ asx_status asx_quiescence_check_detailed(asx_region_id id, asx_quiescence_report
     /* Q1: all tasks complete (no live tasks) */
     out->q1_tasks_complete = (r->task_count == 0) ? 1 : 0;
 
-    /* Q2: all child regions closed (walking skeleton: always true) */
-    out->q2_children_closed = 1;
+    /* Q2: all child regions closed */
+    out->q2_children_closed = (r->child_count == 0u) ? 1 : 0;
 
     /* Q3: all obligations resolved (no RESERVED obligations) */
     out->q3_obligations_resolved = (out->progress.obligations_reserved == 0) ? 1 : 0;
@@ -212,7 +238,9 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
 
     /* Step 3: Advance through closing protocol */
     if (r->state == ASX_REGION_CLOSING) {
-        /* No children (walking skeleton) — fast path: skip Draining */
+        if (r->child_count > 0u) return ASX_E_PENDING;
+
+        /* No live children remain; fast path: skip Draining */
         asx_ghost_check_region_transition(id, ASX_REGION_CLOSING, ASX_REGION_FINALIZING);
         st = asx_region_transition_check(ASX_REGION_CLOSING, ASX_REGION_FINALIZING);
         if (st != ASX_OK) return st;
@@ -239,6 +267,7 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
         asx_ghost_check_region_transition(id, ASX_REGION_FINALIZING, ASX_REGION_CLOSED);
         st = asx_region_transition_check(ASX_REGION_FINALIZING, ASX_REGION_CLOSED);
         if (st != ASX_OK) return st;
+        asx_region_unlink_from_parent(id, r);
         r->state = ASX_REGION_CLOSED;
         asx_trace_emit(ASX_TRACE_REGION_CLOSED, id, 0);
     }

@@ -465,7 +465,9 @@ ASX_API int asx_region_is_quiescent(asx_region_id id);
  *   completed; cleanup destructors called in LIFO order.
  * Returns ASX_OK on success, ASX_E_NOT_FOUND if id is invalid,
  *   ASX_E_INVALID_ARGUMENT if budget is NULL,
- *   ASX_E_BUDGET_EXHAUSTED if not all tasks completed within budget.
+ *   ASX_E_BUDGET_EXHAUSTED if not all tasks completed within budget,
+ *   ASX_E_PENDING while the region is closing but still waiting for
+ *   child regions to close.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Region Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_region_drain(asx_region_id id, asx_budget *budget);
@@ -495,7 +497,7 @@ typedef struct {
 /* Quiescence conjunct evidence: each field is 1 if the condition holds. */
 typedef struct {
     int q1_tasks_complete;         /* Q1: all tasks reached COMPLETED */
-    int q2_children_closed;        /* Q2: all child regions closed (always 1 in walking skeleton) */
+    int q2_children_closed;        /* Q2: all child regions closed */
     int q3_obligations_resolved;   /* Q3: no obligations in RESERVED state */
     int q4_cleanup_drained;        /* Q4: cleanup stack fully drained */
     int quiescent;                 /* 1 iff all Q1-Q4 hold and region is CLOSED */
