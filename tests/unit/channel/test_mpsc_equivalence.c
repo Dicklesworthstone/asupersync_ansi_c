@@ -15,6 +15,7 @@
 #include "test_harness.h"
 #include <asx/asx.h>
 #include <asx/core/channel.h>
+#include <asx/platform/atomics.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
 #define EQ_IGNORE(expr)                                                                            \
@@ -24,27 +25,13 @@
     } while (0)
 
 /* ------------------------------------------------------------------ */
-/* Inline the lock-free spike (self-contained test)                    */
+/* Inline the lock-free shadow model using the shared atomics layer    */
 /* ------------------------------------------------------------------ */
 
 #define LOCKFREE_MAX_CAPACITY 64u
 
 typedef struct {
-    uint32_t value;
-} spike_atomic_u32;
-
-static uint32_t spike_atomic_load(const spike_atomic_u32 *a) { return a->value; }
-static void spike_atomic_store(spike_atomic_u32 *a, uint32_t v) { a->value = v; }
-static int spike_atomic_cas(spike_atomic_u32 *a, uint32_t expected, uint32_t desired) {
-    if (a->value == expected) {
-        a->value = desired;
-        return 1;
-    }
-    return 0;
-}
-
-typedef struct {
-    spike_atomic_u32 sequence;
+    asx_atomic_u32 sequence;
     uint64_t value;
 } spike_cell;
 
@@ -52,7 +39,7 @@ typedef struct {
     spike_cell cells[LOCKFREE_MAX_CAPACITY];
     uint32_t capacity;
     uint32_t mask;
-    spike_atomic_u32 enqueue_pos;
+    asx_atomic_u32 enqueue_pos;
     uint32_t dequeue_pos;
     uint32_t len;
     int alive;
@@ -75,12 +62,12 @@ static void spike_init(spike_queue *q, uint32_t cap) {
     if (actual > LOCKFREE_MAX_CAPACITY) actual = LOCKFREE_MAX_CAPACITY;
     q->capacity = actual;
     q->mask = actual - 1u;
-    spike_atomic_store(&q->enqueue_pos, 0);
+    asx_atomic_u32_store(&q->enqueue_pos, 0);
     q->dequeue_pos = 0;
     q->len = 0;
     q->alive = 1;
     for (i = 0; i < actual; i++) {
-        spike_atomic_store(&q->cells[i].sequence, i);
+        asx_atomic_u32_store(&q->cells[i].sequence, i);
         q->cells[i].value = 0;
     }
 }
@@ -91,16 +78,16 @@ static asx_status spike_enqueue(spike_queue *q, uint64_t value) {
     uint32_t seq;
     int32_t diff;
     if (!q || !q->alive) return ASX_E_INVALID_ARGUMENT;
-    pos = spike_atomic_load(&q->enqueue_pos);
+    pos = asx_atomic_u32_load(&q->enqueue_pos);
     cell = &q->cells[pos & q->mask];
-    seq = spike_atomic_load(&cell->sequence);
+    seq = asx_atomic_u32_load(&cell->sequence);
     diff = (int32_t)(seq - pos);
     if (diff < 0) return ASX_E_CHANNEL_FULL;
     if (diff == 0) {
-        if (!spike_atomic_cas(&q->enqueue_pos, pos, pos + 1u)) return ASX_E_CHANNEL_FULL;
+        if (!asx_atomic_u32_cas(&q->enqueue_pos, pos, pos + 1u)) return ASX_E_CHANNEL_FULL;
     }
     cell->value = value;
-    spike_atomic_store(&cell->sequence, pos + 1u);
+    asx_atomic_u32_store(&cell->sequence, pos + 1u);
     q->len++;
     return ASX_OK;
 }
@@ -112,11 +99,11 @@ static asx_status spike_dequeue(spike_queue *q, uint64_t *out) {
     if (!q || !out) return ASX_E_INVALID_ARGUMENT;
     if (!q->alive) return ASX_E_DISCONNECTED;
     cell = &q->cells[q->dequeue_pos & q->mask];
-    seq = spike_atomic_load(&cell->sequence);
+    seq = asx_atomic_u32_load(&cell->sequence);
     diff = (int32_t)(seq - (q->dequeue_pos + 1u));
     if (diff < 0) return ASX_E_WOULD_BLOCK;
     *out = cell->value;
-    spike_atomic_store(&cell->sequence, q->dequeue_pos + q->capacity);
+    asx_atomic_u32_store(&cell->sequence, q->dequeue_pos + q->capacity);
     q->dequeue_pos++;
     q->len--;
     return ASX_OK;

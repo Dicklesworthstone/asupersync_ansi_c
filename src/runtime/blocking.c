@@ -1,8 +1,10 @@
 /*
  * blocking.c — blocking pool for offloading blocking work
  *
- * Walking skeleton: executes blocking work inline (synchronously).
- * The API surface is ready for multi-threaded dispatch.
+ * Deferred stub status: walking-skeleton implementation.
+ * Executes blocking work inline (synchronously) to preserve API shape and
+ * deterministic semantics without claiming live worker-pool dispatch yet.
+ * See docs/DEFERRED_STUBS_REGISTER.md.
  *
  * SPDX-License-Identifier: MIT
  */

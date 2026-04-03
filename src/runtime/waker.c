@@ -1,7 +1,10 @@
 /*
  * waker.c — wake registration for task readiness signaling
  *
- * Walking skeleton: single-threaded, flag-based signaling.
+ * Deferred stub status: walking-skeleton implementation.
+ * Uses single-threaded flag-based signaling to preserve wake semantics
+ * without claiming cross-thread wake transport yet.
+ * See docs/DEFERRED_STUBS_REGISTER.md.
  *
  * SPDX-License-Identifier: MIT
  */

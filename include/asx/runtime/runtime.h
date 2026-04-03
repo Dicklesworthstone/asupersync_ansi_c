@@ -89,6 +89,22 @@ typedef struct asx_co_state {
  * See: API_MISUSE_CATALOG.md § Region Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_region_open(asx_region_id *out_id);
 
+/* Open a child region under an existing OPEN parent region.
+ *
+ * Preconditions: parent must be a valid OPEN, unpoisoned region handle;
+ *   out_child must not be NULL.
+ * Postconditions: on success, *out_child holds a valid OPEN child region.
+ *   The child's parent_id is set to parent and the child is appended to the
+ *   parent's bounded children[] list.
+ * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out_child is NULL,
+ *   ASX_E_NOT_FOUND if parent is invalid, ASX_E_STALE_HANDLE if generation
+ *   mismatch, ASX_E_REGION_NOT_OPEN if parent is not OPEN,
+ *   ASX_E_REGION_POISONED if parent is poisoned, or
+ *   ASX_E_RESOURCE_EXHAUSTED if the parent's child list or region arena is full.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_region_open_child(asx_region_id parent,
+                                                      asx_region_id *out_child);
+
 /* Initiate region close. Transitions: Open → Closing → Closed.
  *
  * Preconditions: id must be a valid region handle for an OPEN region.

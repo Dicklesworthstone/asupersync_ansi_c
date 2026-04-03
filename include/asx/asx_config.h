@@ -143,6 +143,11 @@
 #define ASX_DETERMINISTIC 1
 #endif
 
+/* Walking-skeleton fanout cap for child-region tracking. */
+#ifndef ASX_MAX_REGION_CHILDREN
+#define ASX_MAX_REGION_CHILDREN 8u
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Resource classes                                                     */
 /*                                                                     */

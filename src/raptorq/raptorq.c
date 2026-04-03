@@ -14,6 +14,35 @@
 #include <asx/raptorq/raptorq.h>
 #include <string.h>
 
+static uint32_t raptorq_symbol_size(const asx_raptorq_config *cfg) {
+    return cfg->symbol_size > 0u ? cfg->symbol_size : 1024u;
+}
+
+static uint32_t raptorq_repair_symbol_count(uint32_t source_symbol_count, uint32_t overhead_pct) {
+    uint32_t repair_symbol_count = (source_symbol_count * overhead_pct + 99u) / 100u;
+    if (repair_symbol_count == 0u) repair_symbol_count = 1u;
+    return repair_symbol_count;
+}
+
+static int raptorq_infer_source_symbol_count(const asx_raptorq_config *cfg,
+                                             uint32_t total_symbol_count,
+                                             uint32_t *out_source_symbol_count) {
+    uint32_t candidate;
+
+    if (cfg == NULL || out_source_symbol_count == NULL || total_symbol_count == 0u) return 0;
+
+    for (candidate = 1u; candidate <= total_symbol_count; candidate++) {
+        uint32_t repair_symbol_count =
+            raptorq_repair_symbol_count(candidate, cfg->repair_overhead_pct);
+        if (candidate + repair_symbol_count == total_symbol_count) {
+            *out_source_symbol_count = candidate;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Config defaults                                                     */
 /* ------------------------------------------------------------------ */
@@ -56,15 +85,14 @@ asx_status asx_raptorq_encode(const asx_raptorq_config *cfg, const void *source_
 
     src = (const uint8_t *)source_data;
     dst = (uint8_t *)out_symbols;
-    sym_size = cfg->symbol_size > 0u ? cfg->symbol_size : 1024u;
+    sym_size = raptorq_symbol_size(cfg);
 
     /* Calculate source symbol count (ceil division) */
     k = (source_len + sym_size - 1u) / sym_size;
     if (k > cfg->max_source_symbols) return ASX_E_RESOURCE_EXHAUSTED;
 
     /* Calculate repair symbols from overhead percentage */
-    r = (k * cfg->repair_overhead_pct + 99u) / 100u;
-    if (r == 0u) r = 1u;
+    r = raptorq_repair_symbol_count(k, cfg->repair_overhead_pct);
 
     total = k + r;
     if (total * sym_size > out_capacity) return ASX_E_BUFFER_TOO_SMALL;
@@ -115,7 +143,7 @@ asx_status asx_raptorq_decode(const asx_raptorq_config *cfg, const void *symbols
 
     syms = (const uint8_t *)symbols;
     dst = (uint8_t *)out_data;
-    sym_size = cfg->symbol_size > 0u ? cfg->symbol_size : 1024u;
+    sym_size = raptorq_symbol_size(cfg);
 
     /* Simple decode: copy source symbols directly (repair symbols at end are ignored).
      * Full recovery from symbol loss would require the repair XOR equations. */
@@ -125,4 +153,52 @@ asx_status asx_raptorq_decode(const asx_raptorq_config *cfg, const void *symbols
     memcpy(dst, syms, copy_len);
     *out_data_len = copy_len;
     return ASX_OK;
+}
+
+asx_status asx_raptorq_decode_with_erasures(const asx_raptorq_config *cfg, const void *symbols,
+                                            uint32_t symbol_count, const uint8_t *symbol_present,
+                                            void *out_data, uint32_t out_capacity,
+                                            uint32_t *out_data_len) {
+    const uint8_t *syms;
+    uint8_t *dst;
+    uint32_t sym_size;
+    uint32_t source_symbol_count;
+    uint32_t repair_symbol_count;
+    uint32_t present_source_count = 0u;
+    uint32_t present_repair_count = 0u;
+    uint32_t i;
+
+    if (cfg == NULL || symbols == NULL || symbol_present == NULL || out_data == NULL ||
+        out_data_len == NULL)
+        return ASX_E_INVALID_ARGUMENT;
+    if (symbol_count == 0u) return ASX_E_INVALID_ARGUMENT;
+    if (!raptorq_infer_source_symbol_count(cfg, symbol_count, &source_symbol_count)) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+
+    syms = (const uint8_t *)symbols;
+    dst = (uint8_t *)out_data;
+    sym_size = raptorq_symbol_size(cfg);
+    repair_symbol_count = symbol_count - source_symbol_count;
+
+    if (source_symbol_count * sym_size > out_capacity) return ASX_E_BUFFER_TOO_SMALL;
+
+    for (i = 0u; i < source_symbol_count; i++) {
+        if (symbol_present[i] != 0u) present_source_count++;
+    }
+    for (i = 0u; i < repair_symbol_count; i++) {
+        if (symbol_present[source_symbol_count + i] != 0u) present_repair_count++;
+    }
+
+    if (present_source_count == source_symbol_count) {
+        memcpy(dst, syms, source_symbol_count * sym_size);
+        *out_data_len = source_symbol_count * sym_size;
+        return ASX_OK;
+    }
+
+    if (present_source_count + present_repair_count < source_symbol_count) {
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+
+    return ASX_E_RESOURCE_EXHAUSTED;
 }

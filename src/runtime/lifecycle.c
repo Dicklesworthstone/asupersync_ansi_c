@@ -64,8 +64,12 @@ uint32_t g_obligation_count;
 
 void asx_runtime_reset(void) {
     uint32_t i;
+    uint32_t j;
     for (i = 0; i < ASX_MAX_REGIONS; i++) {
         g_regions[i].state = ASX_REGION_OPEN;
+        g_regions[i].parent_id = ASX_INVALID_ID;
+        g_regions[i].child_count = 0;
+        for (j = 0; j < ASX_MAX_REGION_CHILDREN; j++) { g_regions[i].children[j] = ASX_INVALID_ID; }
         g_regions[i].task_count = 0;
         g_regions[i].task_total = 0;
         g_regions[i].generation = 0;
@@ -248,6 +252,11 @@ asx_status asx_region_open(asx_region_id *out_id) {
     if (reclaim) { g_regions[idx].generation++; }
 
     g_regions[idx].state = ASX_REGION_OPEN;
+    g_regions[idx].parent_id = ASX_INVALID_ID;
+    g_regions[idx].child_count = 0;
+    for (uint32_t child_idx = 0; child_idx < ASX_MAX_REGION_CHILDREN; child_idx++) {
+        g_regions[idx].children[child_idx] = ASX_INVALID_ID;
+    }
     g_regions[idx].task_count = 0;
     g_regions[idx].task_total = 0;
     g_regions[idx].alive = 1;
@@ -262,6 +271,31 @@ asx_status asx_region_open(asx_region_id *out_id) {
 
     (void)asx_event_emit(ASX_EVENT_REGION_OPEN, *out_id, 0u, ASX_OK);
     asx_trace_emit(ASX_TRACE_REGION_OPEN, *out_id, 0);
+    return ASX_OK;
+}
+
+asx_status asx_region_open_child(asx_region_id parent, asx_region_id *out_child) {
+    asx_region_slot *parent_slot;
+    asx_region_slot *child_slot;
+    asx_status st;
+
+    if (out_child == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    st = asx_region_slot_lookup(parent, &parent_slot);
+    if (st != ASX_OK) return st;
+    if (parent_slot->poisoned) return ASX_E_REGION_POISONED;
+    if (parent_slot->state != ASX_REGION_OPEN) return ASX_E_REGION_NOT_OPEN;
+    if (parent_slot->child_count >= ASX_MAX_REGION_CHILDREN) return ASX_E_RESOURCE_EXHAUSTED;
+
+    st = asx_region_open(out_child);
+    if (st != ASX_OK) return st;
+
+    st = asx_region_slot_lookup(*out_child, &child_slot);
+    if (st != ASX_OK) return st;
+
+    child_slot->parent_id = parent;
+    parent_slot->children[parent_slot->child_count] = *out_child;
+    parent_slot->child_count++;
     return ASX_OK;
 }
 

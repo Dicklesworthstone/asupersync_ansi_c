@@ -1,8 +1,10 @@
 /*
  * deadline_monitor.c — runtime deadline monitor
  *
- * Walking skeleton: single-threaded, check-on-poll model.
- * Deadlines are checked against a caller-provided timestamp.
+ * Deferred stub status: walking-skeleton implementation.
+ * Uses a single-threaded check-on-poll model where deadlines are checked
+ * against a caller-provided timestamp instead of a live timer backend.
+ * See docs/DEFERRED_STUBS_REGISTER.md.
  *
  * SPDX-License-Identifier: MIT
  */

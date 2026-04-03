@@ -198,6 +198,82 @@ TEST(finalizing_region_still_rejects_obligation_reserve) {
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_REGION_NOT_OPEN);
 }
 
+TEST(region_open_child_null_out_fails) {
+    asx_region_id parent;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&parent), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(parent, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(region_open_child_invalid_parent_returns_not_found) {
+    asx_region_id child;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open_child(ASX_INVALID_ID, &child), ASX_E_NOT_FOUND);
+}
+
+TEST(region_open_child_rejects_non_open_parent) {
+    asx_region_id parent;
+    asx_region_id child;
+    asx_region_slot *parent_slot = NULL;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&parent), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(parent, &parent_slot), ASX_OK);
+    parent_slot->state = ASX_REGION_CLOSING;
+
+    ASSERT_EQ(asx_region_open_child(parent, &child), ASX_E_REGION_NOT_OPEN);
+}
+
+TEST(region_open_child_rejects_poisoned_parent) {
+    asx_region_id parent;
+    asx_region_id child;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&parent), ASX_OK);
+    ASSERT_EQ(asx_region_poison(parent), ASX_OK);
+
+    ASSERT_EQ(asx_region_open_child(parent, &child), ASX_E_REGION_POISONED);
+}
+
+TEST(region_open_child_rejects_full_child_list) {
+    asx_region_id parent;
+    asx_region_id child;
+    asx_region_slot *parent_slot = NULL;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&parent), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(parent, &parent_slot), ASX_OK);
+    parent_slot->child_count = ASX_MAX_REGION_CHILDREN;
+
+    ASSERT_EQ(asx_region_open_child(parent, &child), ASX_E_RESOURCE_EXHAUSTED);
+}
+
+TEST(region_open_child_sets_parent_and_tracks_child) {
+    asx_region_id parent;
+    asx_region_id child;
+    asx_region_slot *parent_slot = NULL;
+    asx_region_slot *child_slot = NULL;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&parent), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(parent, &child), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(parent, &parent_slot), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(child, &child_slot), ASX_OK);
+
+    ASSERT_EQ(parent_slot->child_count, 1u);
+    ASSERT_EQ(parent_slot->children[0], child);
+    ASSERT_EQ(child_slot->parent_id, parent);
+    ASSERT_EQ(child_slot->state, ASX_REGION_OPEN);
+}
+
 /* --- New tests covering additional branches --- */
 
 TEST(quiescence_invalid_handle_returns_not_found) {
@@ -704,6 +780,18 @@ int main(void) {
     RUN_TEST(finalizing_region_allows_captured_cleanup_task_spawn);
     asx_runtime_reset();
     RUN_TEST(finalizing_region_still_rejects_obligation_reserve);
+    asx_runtime_reset();
+    RUN_TEST(region_open_child_null_out_fails);
+    asx_runtime_reset();
+    RUN_TEST(region_open_child_invalid_parent_returns_not_found);
+    asx_runtime_reset();
+    RUN_TEST(region_open_child_rejects_non_open_parent);
+    asx_runtime_reset();
+    RUN_TEST(region_open_child_rejects_poisoned_parent);
+    asx_runtime_reset();
+    RUN_TEST(region_open_child_rejects_full_child_list);
+    asx_runtime_reset();
+    RUN_TEST(region_open_child_sets_parent_and_tracks_child);
     asx_runtime_reset();
     RUN_TEST(quiescence_invalid_handle_returns_not_found);
     asx_runtime_reset();

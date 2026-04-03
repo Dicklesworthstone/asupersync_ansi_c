@@ -11,6 +11,10 @@
  *
  * Both are compared to the baseline asx_task_slot linear scan.
  *
+ * Deferred stub status: research spike. This file evaluates layout ideas
+ * and does not by itself promote any arena model into shipped runtime
+ * semantics. See docs/DEFERRED_STUBS_REGISTER.md.
+ *
  * SPDX-License-Identifier: MIT
  */
 

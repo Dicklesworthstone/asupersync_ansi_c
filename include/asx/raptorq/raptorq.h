@@ -69,6 +69,22 @@ ASX_API ASX_MUST_USE asx_status asx_raptorq_decode(const asx_raptorq_config *cfg
                                                    void *out_data, uint32_t out_capacity,
                                                    uint32_t *out_data_len);
 
+/* Decode received symbols with an explicit erasure bitmap.
+ *
+ * `symbol_present` is one byte per symbol: 1 if present, 0 if erased.
+ * The first k entries correspond to source symbols and the remaining
+ * entries correspond to repair symbols.
+ *
+ * The baseline implementation supports:
+ *   - fast-path decode when all source symbols are present,
+ *   - early impossibility detection when present source+repair symbols
+ *     cannot satisfy the source-symbol count.
+ *
+ * Full erasure recovery is provided by later solver work. */
+ASX_API ASX_MUST_USE asx_status asx_raptorq_decode_with_erasures(
+    const asx_raptorq_config *cfg, const void *symbols, uint32_t symbol_count,
+    const uint8_t *symbol_present, void *out_data, uint32_t out_capacity, uint32_t *out_data_len);
+
 #ifdef __cplusplus
 }
 #endif

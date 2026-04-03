@@ -10,6 +10,7 @@
 #ifndef ASX_RUNTIME_INTERNAL_H
 #define ASX_RUNTIME_INTERNAL_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
 #include <asx/core/cancel.h>
@@ -26,6 +27,9 @@
 
 typedef struct {
     asx_region_state state;
+    asx_region_id parent_id;
+    uint32_t child_count;
+    asx_region_id children[ASX_MAX_REGION_CHILDREN];
     uint32_t task_count;       /* live (non-completed) tasks */
     uint32_t task_total;       /* total spawned tasks */
     uint16_t generation;       /* increments on slot reclaim */

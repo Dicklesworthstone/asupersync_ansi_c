@@ -12,6 +12,10 @@
  * verification* side: given a pre-computed barrier function B(x), check
  * that B decreases along observed trajectories.
  *
+ * Deferred stub status: research spike. This file is an evaluation surface,
+ * not a claim that SOS/barrier-certificate machinery is part of shipped
+ * runtime policy. See docs/DEFERRED_STUBS_REGISTER.md.
+ *
  * SPDX-License-Identifier: MIT
  */
 

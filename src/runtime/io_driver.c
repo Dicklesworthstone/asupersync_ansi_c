@@ -1,8 +1,10 @@
 /*
  * io_driver.c — IO driver and reactor integration
  *
- * Walking skeleton: ghost reactor only, no real IO.
- * Provides the API surface for future platform-specific reactors.
+ * Deferred stub status: walking-skeleton implementation.
+ * Ships a ghost/no-op backend only, preserving registration and quiescence
+ * semantics without claiming real OS reactor integration yet.
+ * See docs/DEFERRED_STUBS_REGISTER.md.
  *
  * SPDX-License-Identifier: MIT
  */

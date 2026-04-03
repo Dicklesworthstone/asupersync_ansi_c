@@ -2,9 +2,10 @@
  * parallel.c — optional parallel profile worker model and lane scheduler
  *
  * Implements lane-based task scheduling with bounded fairness controls.
- * Walking skeleton: single-threaded simulation. Tasks are classified
- * into READY, CANCEL, and TIMED lanes. The scheduler polls lanes
- * according to the configured fairness policy.
+ * Deferred stub status: walking-skeleton implementation. This is a
+ * single-threaded simulation that preserves the optional parallel-profile
+ * API shape without claiming real worker concurrency yet.
+ * See docs/DEFERRED_STUBS_REGISTER.md.
  *
  * SPDX-License-Identifier: MIT
  */
