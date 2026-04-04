@@ -20,6 +20,7 @@
 #include <asx/asx_config.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -175,6 +176,59 @@ static asx_status posix_ghost_reactor_wait(void *ctx, uint64_t logical_step,
     (void)ctx;
     (void)logical_step;
     if (ready_count != NULL) *ready_count = 0;
+    return ASX_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Blocking pool (pthread-based)                                       */
+/*                                                                     */
+/* Provides a thread pool for offloading blocking work. Currently      */
+/* implemented as a fire-and-detach model: each submitted blocking     */
+/* task gets its own detached thread. A bounded work-stealing pool     */
+/* with condvar dispatch would be the production upgrade.              */
+/* ------------------------------------------------------------------ */
+
+#include <pthread.h>
+
+/* Include blocking header for asx_blocking_fn typedef */
+#include <asx/runtime/blocking.h>
+
+typedef struct {
+    asx_blocking_fn fn;
+    void *user_data;
+} posix_blocking_task;
+
+static void *posix_blocking_worker(void *arg) {
+    posix_blocking_task *task = (posix_blocking_task *)arg;
+    if (task != NULL && task->fn != NULL) { (void)task->fn(task->user_data); }
+    free(arg); /* heap-allocated by submit */
+    return NULL;
+}
+
+/* Submit blocking work to a detached pthread.
+ * Note: This function is available for POSIX profile consumers but is
+ * not yet wired into the runtime's blocking.c submit path. That requires
+ * adding an optional blocking_submit_fn hook to asx_runtime_hooks (future).
+ * For now, CORE profile continues inline execution. */
+static asx_status posix_blocking_submit_detached(asx_blocking_fn fn, void *user_data) {
+    pthread_t tid;
+    posix_blocking_task *task;
+    int ret;
+
+    if (fn == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    task = (posix_blocking_task *)malloc(sizeof(*task));
+    if (task == NULL) return ASX_E_RESOURCE_EXHAUSTED;
+    task->fn = fn;
+    task->user_data = user_data;
+
+    ret = pthread_create(&tid, NULL, posix_blocking_worker, task);
+    if (ret != 0) {
+        free(task);
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+
+    (void)pthread_detach(tid);
     return ASX_OK;
 }
 
