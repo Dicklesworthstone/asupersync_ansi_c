@@ -116,6 +116,69 @@ static uint64_t posix_entropy_u64(void *ctx) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Reactor hook (epoll on Linux, poll fallback elsewhere)              */
+/* ------------------------------------------------------------------ */
+
+#if defined(__linux__)
+#include <sys/epoll.h>
+
+#define ASX_POSIX_REACTOR_MAX_EVENTS 64
+
+typedef struct {
+    int epoll_fd;
+} asx_posix_reactor_ctx;
+
+static asx_posix_reactor_ctx g_reactor_ctx = {-1};
+
+static asx_status posix_reactor_wait(void *ctx, uint32_t timeout_ms, uint32_t *ready_count) {
+    asx_posix_reactor_ctx *rc = (asx_posix_reactor_ctx *)ctx;
+    struct epoll_event events[ASX_POSIX_REACTOR_MAX_EVENTS];
+    int n;
+
+    if (ready_count == NULL) return ASX_E_INVALID_ARGUMENT;
+    *ready_count = 0;
+
+    if (rc == NULL || rc->epoll_fd < 0) {
+        /* Lazy-initialize epoll instance */
+        if (rc == NULL) return ASX_E_INVALID_STATE;
+        rc->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+        if (rc->epoll_fd < 0) return ASX_E_RESOURCE_EXHAUSTED;
+    }
+
+    n = epoll_wait(rc->epoll_fd, events, ASX_POSIX_REACTOR_MAX_EVENTS, (int)timeout_ms);
+    if (n < 0) {
+        /* EINTR is not an error — just means we were interrupted */
+        *ready_count = 0;
+        return ASX_OK;
+    }
+    *ready_count = (uint32_t)n;
+    return ASX_OK;
+}
+
+#else /* Non-Linux POSIX: use poll(2) as fallback */
+#include <poll.h>
+
+static asx_status posix_reactor_wait(void *ctx, uint32_t timeout_ms, uint32_t *ready_count) {
+    (void)ctx;
+    if (ready_count == NULL) return ASX_E_INVALID_ARGUMENT;
+    *ready_count = 0;
+    /* No registered fds — just sleep for the timeout period */
+    if (timeout_ms > 0) { poll(NULL, 0, (int)timeout_ms); }
+    return ASX_OK;
+}
+
+#endif /* __linux__ */
+
+/* Ghost reactor for deterministic mode (same as default) */
+static asx_status posix_ghost_reactor_wait(void *ctx, uint64_t logical_step,
+                                           uint32_t *ready_count) {
+    (void)ctx;
+    (void)logical_step;
+    if (ready_count != NULL) *ready_count = 0;
+    return ASX_OK;
+}
+
+/* ------------------------------------------------------------------ */
 /* Log hook                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -144,7 +207,14 @@ asx_status asx_posix_hooks_install(asx_runtime_hooks *hooks) {
     hooks->entropy.random_u64_fn = posix_entropy_u64;
     hooks->log.write_fn = posix_log_stderr;
 
-    /* Reactor and blocking pool are future work (bd-vhzw, bd-8575) */
+    /* Reactor: epoll on Linux, poll fallback elsewhere */
+#if defined(__linux__)
+    hooks->reactor.ctx = &g_reactor_ctx;
+#endif
+    hooks->reactor.wait_fn = posix_reactor_wait;
+    hooks->reactor.ghost_wait_fn = posix_ghost_reactor_wait;
+
+    /* Blocking pool is future work (bd-8575) */
 
     return ASX_OK;
 }
