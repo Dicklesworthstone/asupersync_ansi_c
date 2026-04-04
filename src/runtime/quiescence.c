@@ -28,6 +28,7 @@ static void asx_region_unlink_from_parent(asx_region_id id, asx_region_slot *r) 
     st = asx_region_slot_lookup(r->parent_id, &parent);
     if (st == ASX_OK) {
         for (i = 0; i < parent->child_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded scan over parent's child array") */
             if (parent->children[i] != id) continue;
 
             parent->child_count--;

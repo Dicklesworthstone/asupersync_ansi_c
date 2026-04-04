@@ -24,6 +24,7 @@
 # Hard gate mapping:
 #   GATE-E2E-FOUNDATIONAL  foundational_contracts.sh
 #   GATE-E2E-LIFECYCLE     core_lifecycle.sh
+#   GATE-E2E-LIFECYCLE     nested_regions.sh
 #   GATE-E2E-CODEC         codec_parity.sh
 #   GATE-E2E-ROBUSTNESS    robustness.sh, robustness_fault.sh,
 #                           robustness_endian.sh, robustness_exhaustion.sh
@@ -105,6 +106,7 @@ export ASX_E2E_LOG_DIR="$SUITE_LOG_DIR"
 E2E_FAMILIES=(
     "GATE-E2E-FOUNDATIONAL:foundational_contracts.sh"
     "GATE-E2E-LIFECYCLE:core_lifecycle.sh"
+    "GATE-E2E-LIFECYCLE:nested_regions.sh"
     "GATE-E2E-CODEC:codec_parity.sh"
     "GATE-E2E-NETWORK:network_surface.sh"
     "GATE-E2E-ROBUSTNESS:robustness.sh"

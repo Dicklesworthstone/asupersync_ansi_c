@@ -449,6 +449,7 @@ OPERATOR_TEST_EXTRA_SRC := $(PUBLIC_FAMILY_TEST_EXTRA_SRC)
 E2E_SCRIPT_DIR := tests/e2e
 E2E_ALL_SCRIPTS := \
 	$(E2E_SCRIPT_DIR)/core_lifecycle.sh \
+	$(E2E_SCRIPT_DIR)/nested_regions.sh \
 	$(E2E_SCRIPT_DIR)/codec_parity.sh \
 	$(E2E_SCRIPT_DIR)/network_surface.sh \
 	$(E2E_SCRIPT_DIR)/robustness.sh \
@@ -1021,6 +1022,9 @@ $(TEST_DIR)/formal/cancel_witness_harness: $(FORMAL_CBMC_DIR)/cancel_witness_har
 	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
 
 $(TEST_DIR)/formal/budget_lattice_harness: $(FORMAL_CBMC_DIR)/budget_lattice_harness.c $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
+
+$(TEST_DIR)/formal/child_region_harness: $(FORMAL_CBMC_DIR)/child_region_harness.c $(LIB_A) | $(TEST_DIR)/formal
 	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
 
 formal-cbmc: $(FORMAL_CBMC_BINS)
