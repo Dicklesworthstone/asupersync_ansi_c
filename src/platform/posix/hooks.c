@@ -18,6 +18,7 @@
 #endif
 
 #include <asx/asx_config.h>
+#include <asx/platform/posix.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -268,7 +269,9 @@ asx_status asx_posix_hooks_install(asx_runtime_hooks *hooks) {
     hooks->reactor.wait_fn = posix_reactor_wait;
     hooks->reactor.ghost_wait_fn = posix_ghost_reactor_wait;
 
-    /* Blocking pool is future work (bd-8575) */
+    /* Blocking pool: function available but not wired into blocking.c submit path.
+     * Requires adding blocking_submit_fn hook to asx_runtime_hooks. */
+    (void)posix_blocking_submit_detached; /* suppress unused-function warning */
 
     return ASX_OK;
 }

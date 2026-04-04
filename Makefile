@@ -493,7 +493,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: fuzz-smoke ci-embedded-matrix
 .PHONY: release release-artifacts bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
-.PHONY: build-parallel build-browser
+.PHONY: build-posix build-parallel build-browser
 .PHONY: build-embedded-mipsel build-embedded-armv7 build-embedded-aarch64
 .PHONY: cross-baremetal-arm-m4-free cross-baremetal-arm-m0-free
 .PHONY: cross-baremetal-riscv32-free cross-baremetal-riscv64-free
@@ -509,6 +509,9 @@ all: build
 # ---------------------------------------------------------------------------
 build: $(LIB_A)
 	@echo "[asx] build complete (profile=$(PROFILE) codec=$(CODEC) det=$(DETERMINISTIC))"
+
+build-posix:
+	@$(MAKE) build PROFILE=POSIX LDFLAGS="-lpthread -lrt"
 
 build-parallel:
 	@$(MAKE) build PROFILE=PARALLEL
