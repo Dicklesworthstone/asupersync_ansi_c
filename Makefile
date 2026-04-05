@@ -360,6 +360,8 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/app/test_*.c) \
                  $(wildcard tests/unit/console/*_test.c) \
                  $(wildcard tests/unit/console/test_*.c) \
+                 $(wildcard tests/unit/platform/*_test.c) \
+                 $(wildcard tests/unit/platform/test_*.c) \
                  $(wildcard tests/unit/evidence/*_test.c) \
                  $(wildcard tests/unit/evidence/test_*.c) \
                  $(wildcard tests/unit/monitor/*_test.c) \
@@ -493,7 +495,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: fuzz-smoke ci-embedded-matrix
 .PHONY: release release-artifacts bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
-.PHONY: build-posix build-parallel build-browser
+.PHONY: build-posix build-win32 build-parallel build-browser
 .PHONY: build-embedded-mipsel build-embedded-armv7 build-embedded-aarch64
 .PHONY: cross-baremetal-arm-m4-free cross-baremetal-arm-m0-free
 .PHONY: cross-baremetal-riscv32-free cross-baremetal-riscv64-free
@@ -512,6 +514,9 @@ build: $(LIB_A)
 
 build-posix:
 	@$(MAKE) build PROFILE=POSIX LDFLAGS="-lpthread -lrt"
+
+build-win32:
+	@$(MAKE) build PROFILE=WIN32 CC="x86_64-w64-mingw32-gcc" LDFLAGS="-lbcrypt -lws2_32"
 
 build-parallel:
 	@$(MAKE) build PROFILE=PARALLEL

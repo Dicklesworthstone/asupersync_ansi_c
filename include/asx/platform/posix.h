@@ -31,9 +31,11 @@ extern "C" {
  * Calls asx_runtime_hooks_init() for safe defaults, then overlays:
  *   - clock: clock_gettime(CLOCK_MONOTONIC) for wall time
  *   - entropy: getrandom(2) with /dev/urandom fallback
+ *   - reactor: epoll (Linux) or poll(2) fallback
  *   - log: stderr fprintf sink
  *
- * Reactor and blocking pool hooks are not yet populated (future work).
+ * Blocking pool (pthread fire-and-detach) is available internally
+ * but not yet wired into the runtime blocking submit path.
  *
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if hooks is NULL. */
 ASX_API ASX_MUST_USE asx_status asx_posix_hooks_install(asx_runtime_hooks *hooks);
