@@ -22,7 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 
-/* windows.h must come before winsock2.h on some toolchains */
+/* winsock2.h must precede windows.h, while bcrypt.h needs Windows types. */
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif

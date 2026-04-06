@@ -516,7 +516,7 @@ build-posix:
 	@$(MAKE) build PROFILE=POSIX LDFLAGS="-lpthread -lrt"
 
 build-win32:
-	@$(MAKE) build PROFILE=WIN32 CC="x86_64-w64-mingw32-gcc" LDFLAGS="-lbcrypt -lws2_32"
+	@$(MAKE) build PROFILE=WIN32 CC="x86_64-w64-mingw32-gcc" CFLAGS="-DASX_BUILDING_DLL" LDFLAGS="-lbcrypt -lws2_32"
 
 build-parallel:
 	@$(MAKE) build PROFILE=PARALLEL
