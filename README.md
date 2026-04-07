@@ -19,10 +19,13 @@
 Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. 1,359 exported `ASX_API` declarations across 37 public header families, backed by 198 C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
-<h3>Quick Install</h3>
+<h3>Quick Source Build</h3>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/asupersync_ansi_c/main/scripts/install.sh | sh
+git clone https://github.com/Dicklesworthstone/asupersync_ansi_c.git
+cd asupersync_ansi_c
+make build
+make test
 ```
 
 </div>
@@ -50,33 +53,27 @@ curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/asupersync_ansi_c
 | **199 tracked C test programs across 7 categories** | 148 unit, 17 e2e, 3 invariant, 12 vignette, 3 conformance, 4 fuzz, and 12 formal files in the current tree |
 | **Cross-profile semantic parity gates** | All profiles produce identical semantic digests for shared fixture sets |
 
-## Quick Example
+The current repository is library-first: it ships the static library, public
+headers, tests, examples, and release-packaging machinery. It does not
+currently include the `scripts/install.sh` installer shown in older docs, and
+it does not currently build or install a standalone `asx` executable.
+
+## Quick Repository Workflow
 
 ```bash
-# 1) Generate a default config tuned for constrained devices
-asx init --profile embedded_router --resource-class R1 --output asx.toml
+# 1) Build the static library with strict warnings-as-errors
+make build
 
-# 2) Run a scenario in deterministic mode with JSON codec
-asx run --config asx.toml --scenario scenarios/bootstrap.asxs --codec json --seed 42
+# 2) Run the current local test gate
+make test
 
-# 3) Export trace and semantic digest
-asx trace export --format json --out run.trace.json
-asx digest run.trace.json
+# 3) Verify Rust fixture parity and codec/profile equivalence
+make conformance
+make codec-equivalence
+make profile-parity
 
-# 4) Replay the same trace and verify identity
-asx replay --config asx.toml --trace run.trace.json --verify-digest
-
-# 5) Switch to binary codec for production profile
-asx run --config asx.toml --scenario scenarios/bootstrap.asxs --codec bin --seed 42
-
-# 6) Assert JSON vs BIN semantic equivalence
-asx conformance codec-equivalence --scenario scenarios/bootstrap.asxs
-
-# 7) Differential check against Rust fixtures
-asx conformance rust-parity --fixtures fixtures/rust_reference
-
-# 8) Run stress + fuzz in CI mode
-asx fuzz --target parity --time-budget 120s --minimize
+# 4) Produce deterministic release bundles (libasx.a + headers/docs)
+make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=linux-x86_64 PROFILE=CORE CODEC=BIN DETERMINISTIC=1
 ```
 
 ## C API Quick Start
@@ -173,32 +170,18 @@ See `examples/` for more: channel flow, actor supervision, cancellation draining
 
 ## Installation
 
-### 1) Quick Install (Recommended)
+The current repository ships:
+- the static library `libasx.a`
+- public headers under `include/asx/`
+- examples, tests, fixtures, and deterministic release packaging
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/asupersync_ansi_c/main/scripts/install.sh | sh
-```
+The current repository does not ship:
+- an in-tree `scripts/install.sh`
+- package-manager metadata that makes `brew install asx` / `apt install asx`
+  / `opkg install asx` true for this repo by itself
+- a standalone `asx` executable
 
-Install script behavior:
-- detects target architecture,
-- installs `asx` binary + man page,
-- keeps core/runtime dependency-free.
-
-### 2) Package Managers
-
-```bash
-# Homebrew
-brew install dicklesworthstone/tap/asx
-
-# Debian/Ubuntu
-sudo apt install asx
-
-# OpenWrt/embedded (opkg feed)
-opkg update
-opkg install asx
-```
-
-### 3) From Source
+### 1) From Source
 
 ```bash
 git clone https://github.com/Dicklesworthstone/asupersync_ansi_c.git
@@ -211,7 +194,17 @@ make build-browser
 make build-parallel  # compile-only deferred scaffold; not a Wave A parity/CI lane
 ```
 
-### 4) Cross-Compile for Embedded Targets
+`make install` currently installs the static library plus public headers under
+`$(PREFIX)`; it does not install a CLI binary.
+
+### 2) Release Artifacts
+
+```bash
+make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=linux-x86_64 PROFILE=CORE CODEC=BIN DETERMINISTIC=1
+make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=source RELEASE_KIND=source
+```
+
+### 3) Cross-Compile for Embedded Targets
 
 ```bash
 # mipsel OpenWrt
@@ -229,31 +222,24 @@ make cross-baremetal-riscv32-router
 
 ## Quick Start
 
-1. Create config:
+1. Build the library:
 ```bash
-asx init --profile embedded_router --resource-class R2 --output asx.toml
+make build
 ```
-2. Validate environment:
+2. Run the default local verification lane:
 ```bash
-asx doctor --config asx.toml
+make test
 ```
-3. Run a scenario:
+3. Run the parity-focused gates:
 ```bash
-asx run --config asx.toml --scenario scenarios/hello_world.asxs --seed 7 --codec json
+make conformance
+make codec-equivalence
+make profile-parity
 ```
-4. Inspect trace + digest:
+4. Explore runnable examples and API walkthroughs:
 ```bash
-asx trace export --format json --out trace.json
-asx digest trace.json
-```
-5. Enable binary codec:
-```bash
-asx run --config asx.toml --scenario scenarios/hello_world.asxs --seed 7 --codec bin
-```
-6. Verify parity:
-```bash
-asx conformance codec-equivalence --scenario scenarios/hello_world.asxs
-asx conformance rust-parity --fixtures fixtures/rust_reference
+ls examples
+ls tests/vignettes
 ```
 
 ## Subsystem Overview
@@ -291,165 +277,128 @@ asx conformance rust-parity --fixtures fixtures/rust_reference
 | **tracing_compat** | Tracing compatibility layer for integration with external systems |
 | **platform** | POSIX, Win32, and freestanding adapters |
 
-## Command Reference
+## Build and Verification Reference
 
-Global flags:
+This repository currently exposes build/test/release entry points through
+`make` and library/operator surfaces through the public headers. It does not
+currently ship a standalone `asx` executable.
 
-```bash
---config <path>         # Config file path (default: ./asx.toml)
---profile <name>        # core|posix|win32|freestanding|embedded_router|hft|automotive|parallel|browser
---resource-class <R1|R2|R3>
---codec <json|bin>
---deterministic
---seed <u64>
---format <text|json>
---verbose
-```
-
-### `asx init`
-
-Generate starter config.
+Build knobs:
 
 ```bash
-asx init --profile core --output asx.toml
-asx init --profile embedded_router --resource-class R1 --output asx.toml
-asx init --profile hft --output asx.toml
+PROFILE=CORE|POSIX|WIN32|FREESTANDING|EMBEDDED_ROUTER|HFT|AUTOMOTIVE|PARALLEL|BROWSER
+CODEC=JSON|BIN
+DETERMINISTIC=0|1
+BUILD_TYPE=debug|release
+TARGET=<cross-triplet>
+BITS=32|64
 ```
 
-### `asx run`
+### `make build`
 
-Run a scenario or workload through the runtime kernel.
+Compile `libasx.a` with strict warnings-as-errors.
 
 ```bash
-asx run --scenario scenarios/pipeline.asxs
-asx run --scenario scenarios/pipeline.asxs --codec bin --deterministic --seed 123
+make build
+make build PROFILE=POSIX CODEC=BIN
 ```
 
-### `asx replay`
+### `make test`
 
-Replay a prior trace and verify deterministic identity.
+Run the default local verification lane.
 
 ```bash
-asx replay --trace run.trace.json --verify-digest
-asx replay --trace run.trace.bin --verify-digest --format json
+make test
+make test-unit
+make test-invariants
+make test-vignettes
 ```
 
-### `asx trace export`
+### `make conformance`
 
-Export runtime event stream.
+Run Rust fixture parity.
 
 ```bash
-asx trace export --format json --out trace.json
-asx trace export --format bin --out trace.bin
+make conformance
 ```
 
-### `asx digest`
+### `make codec-equivalence`
 
-Compute canonical semantic digest from a trace.
+Verify JSON vs BIN semantic equivalence.
 
 ```bash
-asx digest trace.json
-asx digest trace.bin
+make codec-equivalence
 ```
 
-### `asx conformance`
+### `make profile-parity`
 
-Conformance and parity tools.
+Verify cross-profile semantic digest parity.
 
 ```bash
-# C runtime vs Rust fixture parity
-asx conformance rust-parity --fixtures fixtures/rust_reference
-
-# JSON codec vs BIN codec semantic equivalence
-asx conformance codec-equivalence --scenario scenarios/all
-
-# Profile semantic parity (core/freestanding/embedded_router)
-asx conformance profile-parity --scenario scenarios/all
+make profile-parity
 ```
 
-### `asx fuzz`
+### `make fuzz-smoke`
 
-Differential fuzzing with automatic counterexample minimization.
+Run the differential fuzz smoke lane.
 
 ```bash
-asx fuzz --target parity --time-budget 300s --minimize
-asx fuzz --target scheduler --seed 5 --cases 200000
+make fuzz-smoke
 ```
 
-### `asx bench`
+### `make bench`
 
-Micro and scenario benchmarks.
+Run the benchmark suite.
 
 ```bash
-asx bench --suite core
-asx bench --suite embedded --profile embedded_router --resource-class R1
+make bench
+make bench PROFILE=EMBEDDED_ROUTER
 ```
 
-### `asx doctor`
+### `make release-artifacts`
 
-Validate config, platform hooks, resource ceilings, and profile readiness.
+Produce deterministic artifact bundles and integrity metadata.
 
 ```bash
-asx doctor --config asx.toml
-asx doctor --config asx.toml --format json
+make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=linux-x86_64 PROFILE=CORE CODEC=BIN DETERMINISTIC=1
 ```
 
-### `asx inspect`
+### Public Operator Surfaces
 
-Inspect runtime state and resource contract counters.
-
-```bash
-asx inspect --snapshot current
-asx inspect --snapshot current --format json
-```
+- Runtime construction: `include/asx/runtime/builder.h`, `include/asx/runtime/rt.h`, `include/asx/runtime/runtime.h`
+- App bootstrap helpers: `include/asx/app/app.h`
+- Doctor/reporting surfaces: `include/asx/app/doctor.h`, `include/asx/app/report.h`, `include/asx/console/console.h`
+- CLI embedding helpers (not a shipped executable): `include/asx/cli/cli.h`
 
 ## Configuration
 
-Example `asx.toml`:
+Runtime configuration is currently programmatic via `asx_runtime_config`,
+`asx_runtime_builder`, and environment overrides consumed by
+`asx_runtime_builder_apply_env()` / `asx_runtime_init_from_env()`. This tree
+does not currently ship a TOML parser or `asx.toml` generator.
 
-```toml
-# Runtime profile
-profile = "embedded_router"        # core | posix | win32 | freestanding | embedded_router | hft | automotive | parallel | browser
-resource_class = "R1"              # R1 (tight), R2 (balanced), R3 (roomy)
+```c
+#include <asx/asx.h>
 
-# Deterministic execution
-deterministic = true
-seed = 42
+asx_runtime_builder builder;
+asx_runtime runtime;
 
-# Codec selection
-codec = "bin"                       # json or bin
+asx_runtime_builder_init_current_thread(&builder);
+asx_runtime_builder_set_wait_policy(&builder, ASX_WAIT_YIELD);
+asx_runtime_builder_set_io_backend(&builder, ASX_IO_BACKEND_GHOST);
+asx_runtime_builder_set_finalizer_poll_budget(&builder, 512u);
+asx_runtime_builder_set_finalizer_time_budget_ns(&builder, 5000000u);
+asx_runtime_builder_build(&builder, &runtime);
+```
 
-[resource_contract]
-# Hard limits (failure-atomic when exceeded)
-max_runtime_bytes = 4194304         # 4 MiB
-max_ready_queue = 4096
-max_cancel_queue = 2048
-max_timer_nodes = 8192
-max_trace_events = 65536
+Environment-driven overrides use the `ASX_RUNTIME_` prefix:
 
-[resource_contract.behavior]
-oom_policy = "fail_atomic"          # fail_atomic | abort_process
-queue_overflow = "reject"           # reject | backpressure
-timer_overflow = "reject"           # reject | backpressure
-
-[trace]
-enabled = true
-mode = "ram_ring"                   # ram_ring | persistent_spill
-ring_bytes = 524288                 # 512 KiB
-persistent_path = "/var/log/asx.trace.bin"
-flush_interval_ms = 500
-wear_safe = true
-
-[conformance]
-fixtures_path = "fixtures/rust_reference"
-require_profile_parity = true
-require_codec_equivalence = true
-
-[platform]
-# Hooks are required for freestanding/embedded targets
-clock = "monotonic"
-entropy = "deterministic_prng"      # deterministic_prng in deterministic mode
-log_sink = "stderr"
+```bash
+ASX_RUNTIME_PRESET=current-thread
+ASX_RUNTIME_WAIT_POLICY=yield
+ASX_RUNTIME_IO_BACKEND=ghost
+ASX_RUNTIME_FINALIZER_POLL_BUDGET=512
+ASX_RUNTIME_FINALIZER_TIME_BUDGET_NS=5000000
 ```
 
 ### Resource Classes
@@ -582,9 +531,9 @@ Guaranteed/targeted properties in production builds:
 Recommended benchmark flow:
 
 ```bash
-asx bench --suite core
-asx bench --suite embedded --profile embedded_router --resource-class R1
-asx conformance profile-parity --scenario scenarios/perf-critical
+make bench
+make bench PROFILE=EMBEDDED_ROUTER
+make profile-parity
 ```
 
 ## Testing and Quality Gates
@@ -1642,19 +1591,16 @@ checksums and Sigstore signatures.
 
 Your resource contract is too tight for the current workload.
 
-```bash
-asx inspect --snapshot current --format json
-# Check which gauge is at capacity, then raise limits in [resource_contract]
-# or move from R1 -> R2 for higher ceilings
-```
+Use `asx_inspect()`, `asx_doctor_run()`, or the console helpers in
+`include/asx/console/console.h` to identify which gauge is saturated, then
+raise the corresponding runtime-config limits or move from `R1` to `R2`.
 
 ### `profile-parity` fails between `core` and `embedded_router`
 
 A resource-plane optimization likely changed semantic behavior. Semantic behavior must be identical across profiles.
 
 ```bash
-asx conformance profile-parity --scenario scenarios/all --format json
-asx replay --trace failing.trace.json --verify-digest
+make profile-parity
 ```
 
 ### JSON and BIN outputs differ
@@ -1662,30 +1608,24 @@ asx replay --trace failing.trace.json --verify-digest
 Codec implementation drift was detected. Both codecs must produce identical semantic digests.
 
 ```bash
-asx conformance codec-equivalence --scenario scenarios/all
-asx trace export --format json --out a.json
-asx trace export --format bin --out a.bin
-asx digest a.json && asx digest a.bin
+make codec-equivalence
 ```
 
 ### Runtime aborts on missing platform hooks
 
 Common with freestanding or custom embedded integration. The runtime requires allocator, clock, and log hooks.
 
-```bash
-asx doctor --config asx.toml
-# Provide the hooks required by your selected profile
-```
+Provide the required hook families through `asx_runtime_hooks`,
+`asx_runtime_builder_set_*_hooks()`, or the freestanding patterns exercised in
+`tests/vignettes/vignette_hooks.c`.
 
 ### Non-deterministic replay mismatch
 
 Determinism can be broken by non-seeded entropy or profile mismatch.
 
-```bash
-# Ensure deterministic settings and matching profile/seed
-grep -E 'deterministic|seed|profile' asx.toml
-asx replay --trace run.trace.json --verify-digest
-```
+Ensure `ASX_DETERMINISTIC=1`, keep `PROFILE`/`CODEC` aligned across runs, and
+re-run the replay/conformance-focused suites (`make conformance`,
+`make profile-parity`, `tests/unit/runtime/test_replay.c`).
 
 ### Circuit breaker stuck in OPEN state
 
@@ -1729,11 +1669,11 @@ Yes. `ASX_PROFILE_EMBEDDED_ROUTER` plus `R1/R2` resource classes target OpenWrt/
 
 ### How do I validate parity against Rust asupersync?
 
-Use the built-in conformance commands:
+Use the shipped make targets:
 
 ```bash
-asx conformance rust-parity --fixtures fixtures/rust_reference
-asx fuzz --target parity --minimize
+make conformance
+make fuzz-smoke
 ```
 
 ### Is deterministic mode slower?
@@ -1744,9 +1684,9 @@ Usually slightly, depending on workload and trace settings. In exchange you gain
 
 Yes. The C API is first-class: 1,359 exported `ASX_API` declarations across 37
 public header families in the current `include/asx/` tree, and one umbrella
-`#include <asx/asx.h>`. CLI
-tooling is operational scaffolding around the same runtime and conformance
-layers.
+`#include <asx/asx.h>`. The current repository ships a library-first surface:
+runtime/app/doctor/report helpers are present in headers and sources, but a
+standalone `asx` executable is not currently built or installed by this tree.
 
 ### How big is the compiled library?
 
