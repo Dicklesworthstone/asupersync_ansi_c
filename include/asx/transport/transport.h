@@ -207,13 +207,13 @@ ASX_API uint64_t asx_mem_transport_bytes_read(const asx_mem_transport_state *sta
 
 typedef struct {
     asx_transport inner;
-    asx_transport_conn conn;    /* connection being framed */
-    uint8_t header_buf[4];      /* 4-byte big-endian length prefix */
-    size_t header_pos;          /* bytes of header read so far */
-    uint32_t pending_frame_len; /* announced frame body length */
-    int header_complete;        /* nonzero when header has been read */
-    uint8_t *body_buf;          /* caller buffer reused until frame completes */
-    uint32_t body_bytes_read;   /* body bytes assembled so far */
+    asx_transport_conn conn;     /* connection being framed */
+    uint8_t header_buf[4];       /* 4-byte big-endian length prefix */
+    size_t header_pos;           /* bytes of header read so far */
+    uint32_t pending_frame_len;  /* announced frame body length */
+    int header_complete;         /* nonzero when header has been read */
+    uint8_t *body_buf;           /* caller buffer reused until frame completes */
+    uint32_t body_bytes_read;    /* body bytes assembled so far */
     uint8_t write_header_buf[4]; /* 4-byte big-endian length prefix for writes */
     size_t write_header_pos;     /* header bytes accepted so far */
     size_t write_body_pos;       /* body bytes accepted so far */

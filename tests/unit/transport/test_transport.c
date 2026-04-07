@@ -627,13 +627,17 @@ TEST(framed_write_retries_partial_body_without_duplicate_header) {
     size_t written = 0u;
 
     memset(&mock, 0, sizeof(mock));
-    mock.max_write_chunk = 5u;
+    mock.max_write_chunk = 3u;
     t = make_framed_partial_mock_transport(&mock);
     asx_framed_transport_init(&frame, t, conn);
 
     ASSERT_EQ(asx_framed_transport_write(&frame, "hello", 5u, &written), ASX_E_PENDING);
-    ASSERT_EQ(mock.written_len, 5u);
-    ASSERT_EQ(written, 1u);
+    ASSERT_EQ(mock.written_len, 3u);
+    ASSERT_EQ(written, 0u);
+
+    ASSERT_EQ(asx_framed_transport_write(&frame, "hello", 5u, &written), ASX_E_PENDING);
+    ASSERT_EQ(mock.written_len, 7u);
+    ASSERT_EQ(written, 3u);
 
     ASSERT_EQ(asx_framed_transport_write(&frame, "hello", 5u, &written), ASX_OK);
     ASSERT_EQ(written, 5u);

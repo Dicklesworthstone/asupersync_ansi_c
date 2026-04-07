@@ -35,7 +35,9 @@ TEST(cap_all_flags) {
     ASSERT_TRUE(asx_remote_cap_allows(&cap, ASX_REMOTE_CAP_LEASE));
 }
 
-TEST(cap_null_denies_permissions) { ASSERT_FALSE(asx_remote_cap_allows(NULL, ASX_REMOTE_CAP_SPAWN)); }
+TEST(cap_null_denies_permissions) {
+    ASSERT_FALSE(asx_remote_cap_allows(NULL, ASX_REMOTE_CAP_SPAWN));
+}
 
 /* ================================================================== */
 /* Remote handle lifecycle tests                                       */

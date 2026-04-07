@@ -127,7 +127,7 @@ asx_status asx_idempotency_record_commit(asx_idempotency_record *rec, asx_status
 
 int asx_idempotency_record_expired(const asx_idempotency_record *rec, uint64_t now_ns) {
     if (rec == NULL) { return 0; }
-    if (rec->ttl_ns == 0) return 0; /* infinite TTL */
+    if (rec->ttl_ns == 0) return 0;         /* infinite TTL */
     if (now_ns < rec->created_ns) return 0; /* clock wrapped or invalid */
     return (now_ns - rec->created_ns) >= rec->ttl_ns;
 }

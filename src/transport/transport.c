@@ -438,8 +438,9 @@ asx_status asx_framed_transport_write(asx_framed_transport_state *state, const v
     if (state->write_body_pos < state->write_data_len) {
         size_t remaining = state->write_data_len - state->write_body_pos;
         chunk_written = 0u;
-        st = asx_transport_write(&state->inner, state->conn, state->write_data + state->write_body_pos,
-                                 remaining, &chunk_written);
+        st = asx_transport_write(&state->inner, state->conn,
+                                 state->write_data + state->write_body_pos, remaining,
+                                 &chunk_written);
         if (st != ASX_OK && st != ASX_E_PENDING) {
             framed_clear_write_state(state);
             return st;
@@ -504,8 +505,8 @@ asx_status asx_framed_transport_read(asx_framed_transport_state *state, void *bu
 
         to_read = (size_t)state->pending_frame_len - state->body_bytes_read;
 
-        st = asx_transport_read(&state->inner, state->conn, state->body_buf + state->body_bytes_read,
-                                to_read, &got);
+        st = asx_transport_read(&state->inner, state->conn,
+                                state->body_buf + state->body_bytes_read, to_read, &got);
         if (st != ASX_OK && st != ASX_E_PENDING) {
             framed_clear_read_state(state);
             return st;
