@@ -23,10 +23,28 @@
  * Profile identity tests
  * ------------------------------------------------------------------- */
 
-TEST(profile_active_is_core) {
-    /* Default build uses ASX_PROFILE_CORE */
+TEST(profile_active_matches_compiled) {
+    /* Verify the active profile matches the compile-time profile selection */
     asx_profile_id id = asx_profile_active();
+#if defined(ASX_PROFILE_POSIX)
+    ASSERT_EQ((int)id, (int)ASX_PROFILE_ID_POSIX);
+#elif defined(ASX_PROFILE_WIN32)
+    ASSERT_EQ((int)id, (int)ASX_PROFILE_ID_WIN32);
+#elif defined(ASX_PROFILE_FREESTANDING)
+    ASSERT_EQ((int)id, (int)ASX_PROFILE_ID_FREESTANDING);
+#elif defined(ASX_PROFILE_EMBEDDED_ROUTER)
+    ASSERT_EQ((int)id, (int)ASX_PROFILE_ID_EMBEDDED_ROUTER);
+#elif defined(ASX_PROFILE_HFT)
+    ASSERT_EQ((int)id, (int)ASX_PROFILE_ID_HFT);
+#elif defined(ASX_PROFILE_AUTOMOTIVE)
+    ASSERT_EQ((int)id, (int)ASX_PROFILE_ID_AUTOMOTIVE);
+#elif defined(ASX_PROFILE_PARALLEL)
+    ASSERT_EQ((int)id, (int)ASX_PROFILE_ID_PARALLEL);
+#elif defined(ASX_PROFILE_BROWSER)
+    ASSERT_EQ((int)id, (int)ASX_PROFILE_ID_BROWSER);
+#else
     ASSERT_EQ((int)id, (int)ASX_PROFILE_ID_CORE);
+#endif
 }
 
 TEST(profile_name_all_valid) {
@@ -587,7 +605,7 @@ TEST(all_profiles_share_semantic_rule_count) {
 
 int main(void) {
     /* Identity */
-    RUN_TEST(profile_active_is_core);
+    RUN_TEST(profile_active_matches_compiled);
     RUN_TEST(profile_name_all_valid);
     RUN_TEST(profile_name_core);
     RUN_TEST(profile_name_hft);
