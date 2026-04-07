@@ -1466,11 +1466,9 @@ release-artifacts:
 # ---------------------------------------------------------------------------
 install: release
 	install -d $(DESTDIR)$(PREFIX)/lib
-	install -d $(DESTDIR)$(PREFIX)/include/asx
-	install -d $(DESTDIR)$(PREFIX)/include/asx/core
+	install -d $(DESTDIR)$(PREFIX)/include
 	install -m 644 $(LIB_DIR)/libasx.a $(DESTDIR)$(PREFIX)/lib/
-	install -m 644 include/asx/*.h $(DESTDIR)$(PREFIX)/include/asx/
-	install -m 644 include/asx/core/*.h $(DESTDIR)$(PREFIX)/include/asx/core/
+	cp -R include/asx $(DESTDIR)$(PREFIX)/include/
 	@echo "[asx] installed to $(DESTDIR)$(PREFIX)"
 
 uninstall:
