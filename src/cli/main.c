@@ -15,7 +15,6 @@
 
 #include <asx/app/doctor.h>
 #include <asx/asx.h>
-#include <asx/cli/cli.h>
 #include <asx/migration/migration.h>
 #include <asx/runtime/profile_compat.h>
 #include <stdio.h>
@@ -25,20 +24,20 @@
 /* Usage                                                               */
 /* ------------------------------------------------------------------ */
 
-static void print_usage(void) {
-    fprintf(stderr, "asx — asupersync ANSI C runtime tool\n"
-                    "\n"
-                    "Usage: asx <command> [options]\n"
-                    "\n"
-                    "Commands:\n"
-                    "  version          Print version and build configuration\n"
-                    "  info             Print active profile and resource limits\n"
-                    "  doctor           Run runtime diagnostic checks\n"
-                    "  help             Print this help message\n"
-                    "\n"
-                    "Options:\n"
-                    "  --format=json    Output in JSON format (doctor only)\n"
-                    "  -h, --help       Print help\n");
+static void print_usage(FILE *out) {
+    fprintf(out, "asx — asupersync ANSI C runtime tool\n"
+                 "\n"
+                 "Usage: asx <command> [options]\n"
+                 "\n"
+                 "Commands:\n"
+                 "  version          Print version and build configuration\n"
+                 "  info             Print active profile and resource limits\n"
+                 "  doctor           Run runtime diagnostic checks\n"
+                 "  help             Print this help message\n"
+                 "\n"
+                 "Options:\n"
+                 "  --format=json    Output in JSON format (doctor only)\n"
+                 "  -h, --help       Print help\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -196,7 +195,7 @@ int main(int argc, char **argv) {
     int i;
 
     if (argc < 2) {
-        print_usage();
+        print_usage(stderr);
         return 1;
     }
 
@@ -215,11 +214,11 @@ int main(int argc, char **argv) {
         return cmd_doctor(json_fmt);
     } else if (strcmp(argv[1], "help") == 0 || strcmp(argv[1], "--help") == 0 ||
                strcmp(argv[1], "-h") == 0) {
-        print_usage();
+        print_usage(stdout);
         return 0;
     } else {
         fprintf(stderr, "asx: unknown command '%s'\n\n", argv[1]);
-        print_usage();
+        print_usage(stderr);
         return 1;
     }
 }
