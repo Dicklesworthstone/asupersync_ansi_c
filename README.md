@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![1359 API declarations](https://img.shields.io/badge/public%20API-1%2C359%20declarations-blue)
-![199 test programs](https://img.shields.io/badge/tests-198%20programs-brightgreen)
+![1364 API declarations](https://img.shields.io/badge/public%20API-1%2C364%20declarations-blue)
+![204 test programs](https://img.shields.io/badge/tests-204%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. 1,359 exported `ASX_API` declarations across 37 public header families, backed by 198 C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. 1,364 exported `ASX_API` declarations across 38 public header families, backed by 204 C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -40,7 +40,7 @@ make test
 
 | Feature | What It Gives You |
 |---|---|
-| **1,359 exported `ASX_API` declarations across 37 header families** | Full async runtime: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **1,364 exported `ASX_API` declarations across 38 header families** | Full async runtime: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Reproduce production failures exactly; diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and bounded cleanup budgets |
@@ -50,7 +50,7 @@ make test
 | **66 typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
-| **199 tracked C test programs across 7 categories** | 148 unit, 17 e2e, 3 invariant, 12 vignette, 3 conformance, 4 fuzz, and 12 formal files in the current tree |
+| **204 tracked C test programs across 7 categories** | 149 unit, 20 e2e, 3 invariant, 12 vignette, 3 conformance, 4 fuzz, and 13 formal files in the current tree |
 | **Cross-profile semantic parity gates** | All profiles produce identical semantic digests for shared fixture sets |
 
 The current repository is library-first: it ships the static library, public
@@ -482,7 +482,7 @@ All profiles produce identical canonical semantic digests for shared fixture set
 ## Repository Layout
 
 ```text
-include/asx/                 122 public C headers in the current tree
+include/asx/                 125 public C headers in the current tree
   asx.h                      Umbrella header (single #include entry point)
   asx_status.h               66 error codes with categories and recovery guidance
   asx_config.h               Profile, resource class, hook, and fault injection types
@@ -502,14 +502,14 @@ src/                         123 C source files in the current tree
   platform/                  3 files: POSIX, Win32, freestanding adapters
   ...                        + cx, codec, security, net, fs, process, signal, stream, evidence, etc.
 
-tests/                       256 tracked files total; 200 C test programs in the current tree
-  unit/                      148 C test files across the current subsystem directories
-  e2e/                       17 end-to-end scenario programs
+tests/                       204 C test programs in the current tree
+  unit/                      149 C test files across the current subsystem directories
+  e2e/                       20 end-to-end scenario programs (+ shell harnesses)
   invariant/                 3 lifecycle/quiescence invariant suites
   vignettes/                 12 API ergonomics demonstrations
-  conformance/               Rust parity + codec/profile equivalence
+  conformance/               3 Rust parity + codec/profile equivalence suites
   fuzz/                      4 differential fuzzing harnesses
-  formal/                    9 algebraic, CBMC, and litmus verification
+  formal/                    13 algebraic, CBMC, and litmus verification
 
 examples/                    14 example programs
 fixtures/rust_reference/     Canonical fixtures captured from Rust runtime
@@ -538,20 +538,20 @@ make profile-parity
 
 ## Testing and Quality Gates
 
-`asx` currently ships with 198 tracked C test programs across 7 categories in
+`asx` currently ships with 204 tracked C test programs across 7 categories in
 the checked-in `tests/` tree. Individual assertion counts evolve over time; see
 `tests/TEST.md` for the current indexed suite inventory and per-suite case
 totals where tracked.
 
 | Category | Files | Coverage |
 |---|---|---|
-| **Unit tests** | 148 | Broad public API and subsystem coverage across the current tree |
-| **End-to-end scenarios** | 17 | Core lifecycle, automotive, HFT, codec parity, continuity, browser, network |
+| **Unit tests** | 149 | Broad public API and subsystem coverage across the current tree |
+| **End-to-end scenarios** | 20 | Core lifecycle, automotive, HFT, codec parity, continuity, browser, network, POSIX adapter |
 | **Invariant tests** | 3 | Lifecycle transition legality, quiescence, obligation linearity |
 | **API vignettes** | 12 | Ergonomics and usage pattern demonstrations |
 | **Conformance** | 3 | Rust parity, cross-codec equivalence, cross-profile parity |
 | **Differential fuzz** | 4 | Rust-vs-C drift detection + deterministic minimization |
-| **Formal verification** | 12 | Algebraic laws (6 suites), CBMC bounded model checking (5 harnesses), litmus tests |
+| **Formal verification** | 13 | Algebraic laws (6 suites), CBMC bounded model checking (6 harnesses), litmus tests |
 
 CI command set:
 
