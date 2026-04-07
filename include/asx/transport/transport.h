@@ -210,22 +210,37 @@ typedef struct {
     asx_transport_conn conn;    /* connection being framed */
     uint8_t header_buf[4];      /* 4-byte big-endian length prefix */
     size_t header_pos;          /* bytes of header read so far */
-    uint32_t pending_frame_len; /* expected frame body length */
+    uint32_t pending_frame_len; /* announced frame body length */
     int header_complete;        /* nonzero when header has been read */
+    uint8_t *body_buf;          /* caller buffer reused until frame completes */
+    uint32_t body_bytes_read;   /* body bytes assembled so far */
+    uint8_t write_header_buf[4]; /* 4-byte big-endian length prefix for writes */
+    size_t write_header_pos;     /* header bytes accepted so far */
+    size_t write_body_pos;       /* body bytes accepted so far */
+    const uint8_t *write_data;   /* caller payload reused until frame completes */
+    size_t write_data_len;       /* payload length for the in-flight write */
+    int write_in_progress;       /* nonzero while a framed write is being resumed */
 } asx_framed_transport_state;
 
 /* Initialize framed transport wrapping an existing connection. */
 ASX_API void asx_framed_transport_init(asx_framed_transport_state *state, asx_transport inner,
                                        asx_transport_conn conn);
 
-/* Write a complete frame (length prefix + data). */
+/* Write a complete frame (length prefix + data).
+ * Returns ASX_E_PENDING if the inner transport only accepts part of the
+ * frame. In that case, retry with the same data pointer and length until
+ * the write completes or fails. On ASX_OK, *bytes_written is the body
+ * length (not including the 4-byte header). */
 ASX_API ASX_MUST_USE asx_status asx_framed_transport_write(asx_framed_transport_state *state,
                                                            const void *data, size_t data_len,
                                                            size_t *bytes_written);
 
 /* Read the next complete frame. Returns ASX_E_PENDING if the full
- * frame has not yet arrived. On ASX_OK, *bytes_read holds the frame
- * body length (not including the 4-byte header). */
+ * frame has not yet arrived. Retries after ASX_E_PENDING must reuse the
+ * same output buffer until the frame completes. Returns
+ * ASX_E_BUFFER_TOO_SMALL if buf_len cannot hold the announced frame body.
+ * On ASX_OK, *bytes_read holds the full frame body length (not including
+ * the 4-byte header). */
 ASX_API ASX_MUST_USE asx_status asx_framed_transport_read(asx_framed_transport_state *state,
                                                           void *buf, size_t buf_len,
                                                           size_t *bytes_read);

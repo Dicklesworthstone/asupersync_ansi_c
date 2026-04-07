@@ -131,6 +131,119 @@ static asx_transport make_reconnect_mock_transport(reconnect_mock_state *state) 
     return t;
 }
 
+typedef struct {
+    uint8_t written[64];
+    size_t written_len;
+    uint8_t read_data[64];
+    size_t read_len;
+    size_t read_pos;
+    size_t max_write_chunk;
+    size_t max_read_chunk;
+} framed_partial_mock_state;
+
+static asx_status framed_partial_mock_connect(void *state, const void *addr, size_t addr_len,
+                                              asx_transport_conn *out) {
+    (void)state;
+    (void)addr;
+    (void)addr_len;
+    (void)out;
+    return ASX_E_INVALID_ARGUMENT;
+}
+
+static asx_status framed_partial_mock_listen(void *state, const void *addr, size_t addr_len,
+                                             asx_transport_listener *out) {
+    (void)state;
+    (void)addr;
+    (void)addr_len;
+    (void)out;
+    return ASX_E_INVALID_ARGUMENT;
+}
+
+static asx_status framed_partial_mock_accept(void *state, asx_transport_listener listener,
+                                             asx_transport_conn *out) {
+    (void)state;
+    (void)listener;
+    (void)out;
+    return ASX_E_INVALID_ARGUMENT;
+}
+
+static asx_status framed_partial_mock_read(void *state, asx_transport_conn conn, void *buf,
+                                           size_t buf_len, size_t *bytes_read) {
+    framed_partial_mock_state *mock = (framed_partial_mock_state *)state;
+    size_t remaining;
+    size_t chunk;
+
+    (void)conn;
+
+    remaining = mock->read_len - mock->read_pos;
+    if (remaining == 0u) {
+        *bytes_read = 0u;
+        return ASX_E_PENDING;
+    }
+
+    chunk = remaining;
+    if (chunk > mock->max_read_chunk) { chunk = mock->max_read_chunk; }
+    if (chunk > buf_len) { chunk = buf_len; }
+    if (chunk == 0u) {
+        *bytes_read = 0u;
+        return ASX_E_PENDING;
+    }
+
+    memcpy(buf, mock->read_data + mock->read_pos, chunk);
+    mock->read_pos += chunk;
+    *bytes_read = chunk;
+    return ASX_OK;
+}
+
+static asx_status framed_partial_mock_write(void *state, asx_transport_conn conn, const void *data,
+                                            size_t data_len, size_t *bytes_written) {
+    framed_partial_mock_state *mock = (framed_partial_mock_state *)state;
+    size_t remaining_capacity;
+    size_t chunk;
+
+    (void)conn;
+
+    remaining_capacity = sizeof(mock->written) - mock->written_len;
+    chunk = data_len;
+    if (chunk > mock->max_write_chunk) { chunk = mock->max_write_chunk; }
+    if (chunk > remaining_capacity) { chunk = remaining_capacity; }
+    if (chunk == 0u) {
+        *bytes_written = 0u;
+        return ASX_E_PENDING;
+    }
+
+    memcpy(mock->written + mock->written_len, data, chunk);
+    mock->written_len += chunk;
+    *bytes_written = chunk;
+    return ASX_OK;
+}
+
+static asx_status framed_partial_mock_close_conn(void *state, asx_transport_conn conn) {
+    (void)state;
+    (void)conn;
+    return ASX_OK;
+}
+
+static asx_status framed_partial_mock_close_listener(void *state, asx_transport_listener listener) {
+    (void)state;
+    (void)listener;
+    return ASX_OK;
+}
+
+static asx_transport make_framed_partial_mock_transport(framed_partial_mock_state *state) {
+    asx_transport t;
+    memset(&t, 0, sizeof(t));
+    t.connect = framed_partial_mock_connect;
+    t.listen = framed_partial_mock_listen;
+    t.accept = framed_partial_mock_accept;
+    t.read = framed_partial_mock_read;
+    t.write = framed_partial_mock_write;
+    t.close_conn = framed_partial_mock_close_conn;
+    t.close_listener = framed_partial_mock_close_listener;
+    t.state = state;
+    return t;
+}
+
 /* ================================================================== */
 /* Transport connection handle tests                                   */
 /* ================================================================== */
@@ -505,6 +618,89 @@ TEST(framed_empty_frame) {
     ASSERT_EQ(nread, 0u);
 }
 
+TEST(framed_write_retries_partial_body_without_duplicate_header) {
+    framed_partial_mock_state mock;
+    asx_transport t;
+    asx_framed_transport_state frame;
+    asx_transport_conn conn = {1u, 1u};
+    const uint8_t expected[] = {0u, 0u, 0u, 5u, 'h', 'e', 'l', 'l', 'o'};
+    size_t written = 0u;
+
+    memset(&mock, 0, sizeof(mock));
+    mock.max_write_chunk = 5u;
+    t = make_framed_partial_mock_transport(&mock);
+    asx_framed_transport_init(&frame, t, conn);
+
+    ASSERT_EQ(asx_framed_transport_write(&frame, "hello", 5u, &written), ASX_E_PENDING);
+    ASSERT_EQ(mock.written_len, 5u);
+    ASSERT_EQ(written, 1u);
+
+    ASSERT_EQ(asx_framed_transport_write(&frame, "hello", 5u, &written), ASX_OK);
+    ASSERT_EQ(written, 5u);
+    ASSERT_EQ(mock.written_len, sizeof(expected));
+    ASSERT_TRUE(memcmp(mock.written, expected, sizeof(expected)) == 0);
+}
+
+TEST(framed_read_retries_partial_body_until_complete) {
+    framed_partial_mock_state mock;
+    asx_transport t;
+    asx_framed_transport_state frame;
+    asx_transport_conn conn = {1u, 1u};
+    char buf[16];
+    size_t nread = 0u;
+
+    memset(&mock, 0, sizeof(mock));
+    mock.max_read_chunk = 3u;
+    mock.read_data[0] = 0u;
+    mock.read_data[1] = 0u;
+    mock.read_data[2] = 0u;
+    mock.read_data[3] = 5u;
+    memcpy(mock.read_data + 4, "hello", 5u);
+    mock.read_len = 9u;
+    t = make_framed_partial_mock_transport(&mock);
+    asx_framed_transport_init(&frame, t, conn);
+    memset(buf, 0, sizeof(buf));
+
+    ASSERT_EQ(asx_framed_transport_read(&frame, buf, sizeof(buf), &nread), ASX_E_PENDING);
+    ASSERT_EQ(nread, 0u);
+    ASSERT_EQ(asx_framed_transport_read(&frame, buf, sizeof(buf), &nread), ASX_E_PENDING);
+    ASSERT_EQ(nread, 0u);
+    ASSERT_EQ(asx_framed_transport_read(&frame, buf, sizeof(buf), &nread), ASX_OK);
+    ASSERT_EQ(nread, 5u);
+    ASSERT_TRUE(memcmp(buf, "hello", 5u) == 0);
+}
+
+TEST(framed_read_rejects_too_small_buffer_without_consuming_body) {
+    framed_partial_mock_state mock;
+    asx_transport t;
+    asx_framed_transport_state frame;
+    asx_transport_conn conn = {1u, 1u};
+    char small[4];
+    char big[16];
+    size_t nread = 0u;
+
+    memset(&mock, 0, sizeof(mock));
+    mock.max_read_chunk = 9u;
+    mock.read_data[0] = 0u;
+    mock.read_data[1] = 0u;
+    mock.read_data[2] = 0u;
+    mock.read_data[3] = 5u;
+    memcpy(mock.read_data + 4, "hello", 5u);
+    mock.read_len = 9u;
+    t = make_framed_partial_mock_transport(&mock);
+    asx_framed_transport_init(&frame, t, conn);
+    memset(big, 0, sizeof(big));
+
+    ASSERT_EQ(asx_framed_transport_read(&frame, small, sizeof(small), &nread),
+              ASX_E_BUFFER_TOO_SMALL);
+    ASSERT_EQ(nread, 0u);
+    ASSERT_EQ(mock.read_pos, 4u);
+
+    ASSERT_EQ(asx_framed_transport_read(&frame, big, sizeof(big), &nread), ASX_OK);
+    ASSERT_EQ(nread, 5u);
+    ASSERT_TRUE(memcmp(big, "hello", 5u) == 0);
+}
+
 TEST(framed_reset_clears_state) {
     asx_framed_transport_state frame;
     asx_transport t;
@@ -635,6 +831,9 @@ int main(void) {
     /* Framed transport */
     RUN_TEST(framed_write_and_read_roundtrip);
     RUN_TEST(framed_empty_frame);
+    RUN_TEST(framed_write_retries_partial_body_without_duplicate_header);
+    RUN_TEST(framed_read_retries_partial_body_until_complete);
+    RUN_TEST(framed_read_rejects_too_small_buffer_without_consuming_body);
     RUN_TEST(framed_reset_clears_state);
 
     /* Reconnecting transport */

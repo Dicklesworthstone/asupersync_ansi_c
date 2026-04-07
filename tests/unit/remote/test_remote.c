@@ -35,6 +35,8 @@ TEST(cap_all_flags) {
     ASSERT_TRUE(asx_remote_cap_allows(&cap, ASX_REMOTE_CAP_LEASE));
 }
 
+TEST(cap_null_denies_permissions) { ASSERT_FALSE(asx_remote_cap_allows(NULL, ASX_REMOTE_CAP_SPAWN)); }
+
 /* ================================================================== */
 /* Remote handle lifecycle tests                                       */
 /* ================================================================== */
@@ -85,6 +87,11 @@ TEST(handle_terminal_cannot_transition) {
     asx_remote_handle_init(&h, 1);
     ASSERT_EQ(asx_remote_handle_transition(&h, ASX_REMOTE_CANCELLED), ASX_OK);
     ASSERT_EQ(asx_remote_handle_transition(&h, ASX_REMOTE_RUNNING), ASX_E_INVALID_TRANSITION);
+}
+
+TEST(handle_null_helpers_are_safe) {
+    ASSERT_EQ(asx_remote_handle_transition(NULL, ASX_REMOTE_RUNNING), ASX_E_INVALID_ARGUMENT);
+    ASSERT_FALSE(asx_remote_handle_is_terminal(NULL));
 }
 
 /* ================================================================== */
@@ -151,6 +158,19 @@ TEST(idempotency_record_expiry) {
 
     ASSERT_FALSE(asx_idempotency_record_expired(&rec, 1000));
     ASSERT_TRUE(asx_idempotency_record_expired(&rec, 1500));
+}
+
+TEST(idempotency_record_expiry_avoids_overflow) {
+    asx_idempotency_key key;
+    asx_idempotency_record rec;
+
+    asx_idempotency_key_init(&key, 201, 0);
+    asx_idempotency_record_init(&rec, key, 20);
+    rec.created_ns = UINT64_MAX - 10u;
+
+    ASSERT_FALSE(asx_idempotency_record_expired(&rec, UINT64_MAX - 5u));
+    ASSERT_FALSE(asx_idempotency_record_expired(&rec, UINT64_MAX));
+    ASSERT_FALSE(asx_idempotency_record_expired(&rec, 5u));
 }
 
 TEST(idempotency_store_lookup_and_upsert) {
@@ -591,6 +611,7 @@ int main(void) {
     /* Capability */
     RUN_TEST(cap_init_and_flags);
     RUN_TEST(cap_all_flags);
+    RUN_TEST(cap_null_denies_permissions);
 
     /* Handle lifecycle */
     RUN_TEST(handle_init_pending);
@@ -599,6 +620,7 @@ int main(void) {
     RUN_TEST(handle_illegal_transition);
     RUN_TEST(handle_complete_with_outcome);
     RUN_TEST(handle_terminal_cannot_transition);
+    RUN_TEST(handle_null_helpers_are_safe);
 
     /* Message */
     RUN_TEST(message_init_and_payload);
@@ -608,6 +630,7 @@ int main(void) {
     RUN_TEST(idempotency_key_equality);
     RUN_TEST(idempotency_record_lifecycle);
     RUN_TEST(idempotency_record_expiry);
+    RUN_TEST(idempotency_record_expiry_avoids_overflow);
     RUN_TEST(idempotency_store_lookup_and_upsert);
     RUN_TEST(idempotency_store_eviction);
 

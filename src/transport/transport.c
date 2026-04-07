@@ -98,6 +98,24 @@ static asx_transport_conn make_conn_handle(uint32_t slot_index, uint32_t generat
 
 static uint32_t conn_side(asx_transport_conn conn) { return conn.generation & 1u; }
 
+static void framed_clear_read_state(asx_framed_transport_state *state) {
+    state->header_pos = 0u;
+    state->pending_frame_len = 0u;
+    state->header_complete = 0;
+    state->body_buf = NULL;
+    state->body_bytes_read = 0u;
+    memset(state->header_buf, 0, sizeof(state->header_buf));
+}
+
+static void framed_clear_write_state(asx_framed_transport_state *state) {
+    state->write_header_pos = 0u;
+    state->write_body_pos = 0u;
+    state->write_data = NULL;
+    state->write_data_len = 0u;
+    state->write_in_progress = 0;
+    memset(state->write_header_buf, 0, sizeof(state->write_header_buf));
+}
+
 /* ------------------------------------------------------------------ */
 /* Memory transport — deterministic in-process loopback                */
 /* ------------------------------------------------------------------ */
@@ -376,45 +394,73 @@ void asx_framed_transport_init(asx_framed_transport_state *state, asx_transport 
                                asx_transport_conn conn) {
     state->inner = inner;
     state->conn = conn;
-    memset(state->header_buf, 0, sizeof(state->header_buf));
-    state->header_pos = 0;
-    state->pending_frame_len = 0;
-    state->header_complete = 0;
+    framed_clear_read_state(state);
+    framed_clear_write_state(state);
 }
 
 asx_status asx_framed_transport_write(asx_framed_transport_state *state, const void *data,
                                       size_t data_len, size_t *bytes_written) {
-    uint8_t header[4];
-    size_t header_written = 0;
-    size_t body_written = 0;
     asx_status st;
+    size_t chunk_written = 0u;
 
+    if (state == NULL || bytes_written == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (data_len > 0u && data == NULL) { return ASX_E_INVALID_ARGUMENT; }
     if (data_len > UINT32_MAX) { return ASX_E_INVALID_ARGUMENT; }
 
-    /* Encode big-endian 4-byte length prefix. */
-    header[0] = (uint8_t)((data_len >> 24) & 0xFF);
-    header[1] = (uint8_t)((data_len >> 16) & 0xFF);
-    header[2] = (uint8_t)((data_len >> 8) & 0xFF);
-    header[3] = (uint8_t)(data_len & 0xFF);
+    *bytes_written = 0u;
 
-    /* Write header. */
-    st = asx_transport_write(&state->inner, state->conn, header, 4, &header_written);
-    if (st != ASX_OK) { return st; }
-    if (header_written < 4) { return ASX_E_PENDING; }
-
-    /* Write body. */
-    if (data_len > 0) {
-        st = asx_transport_write(&state->inner, state->conn, data, data_len, &body_written);
-        if (st != ASX_OK) { return st; }
+    if (!state->write_in_progress) {
+        state->write_header_buf[0] = (uint8_t)((data_len >> 24) & 0xFFu);
+        state->write_header_buf[1] = (uint8_t)((data_len >> 16) & 0xFFu);
+        state->write_header_buf[2] = (uint8_t)((data_len >> 8) & 0xFFu);
+        state->write_header_buf[3] = (uint8_t)(data_len & 0xFFu);
+        state->write_data = (const uint8_t *)data;
+        state->write_data_len = data_len;
+        state->write_in_progress = 1;
+    } else if (state->write_data != (const uint8_t *)data || state->write_data_len != data_len) {
+        return ASX_E_INVALID_ARGUMENT;
     }
 
-    *bytes_written = body_written;
+    if (state->write_header_pos < 4u) {
+        size_t remaining = 4u - state->write_header_pos;
+        chunk_written = 0u;
+        st = asx_transport_write(&state->inner, state->conn,
+                                 state->write_header_buf + state->write_header_pos, remaining,
+                                 &chunk_written);
+        if (st != ASX_OK && st != ASX_E_PENDING) {
+            framed_clear_write_state(state);
+            return st;
+        }
+        state->write_header_pos += chunk_written;
+        if (state->write_header_pos < 4u) { return ASX_E_PENDING; }
+    }
+
+    if (state->write_body_pos < state->write_data_len) {
+        size_t remaining = state->write_data_len - state->write_body_pos;
+        chunk_written = 0u;
+        st = asx_transport_write(&state->inner, state->conn, state->write_data + state->write_body_pos,
+                                 remaining, &chunk_written);
+        if (st != ASX_OK && st != ASX_E_PENDING) {
+            framed_clear_write_state(state);
+            return st;
+        }
+        state->write_body_pos += chunk_written;
+        *bytes_written = chunk_written;
+        if (state->write_body_pos < state->write_data_len) { return ASX_E_PENDING; }
+    }
+
+    *bytes_written = state->write_data_len;
+    framed_clear_write_state(state);
     return ASX_OK;
 }
 
 asx_status asx_framed_transport_read(asx_framed_transport_state *state, void *buf, size_t buf_len,
                                      size_t *bytes_read) {
     asx_status st;
+
+    if (state == NULL || bytes_read == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (buf_len > 0u && buf == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    *bytes_read = 0u;
 
     /* Phase 1: read the 4-byte length header. */
     if (!state->header_complete) {
@@ -423,7 +469,10 @@ asx_status asx_framed_transport_read(asx_framed_transport_state *state, void *bu
 
         st = asx_transport_read(&state->inner, state->conn, state->header_buf + state->header_pos,
                                 need, &got);
-        if (st != ASX_OK && st != ASX_E_PENDING) { return st; }
+        if (st != ASX_OK && st != ASX_E_PENDING) {
+            framed_clear_read_state(state);
+            return st;
+        }
 
         state->header_pos += got;
         if (state->header_pos < 4) { return ASX_E_PENDING; }
@@ -437,44 +486,45 @@ asx_status asx_framed_transport_read(asx_framed_transport_state *state, void *bu
 
     /* Phase 2: read the frame body. */
     if (state->pending_frame_len == 0) {
-        *bytes_read = 0;
-        state->header_complete = 0;
-        state->header_pos = 0;
+        framed_clear_read_state(state);
         return ASX_OK;
     }
 
     {
-        size_t to_read = state->pending_frame_len;
+        size_t to_read;
         size_t got = 0;
 
-        if (to_read > buf_len) { to_read = buf_len; }
+        if (buf_len < (size_t)state->pending_frame_len) { return ASX_E_BUFFER_TOO_SMALL; }
 
-        st = asx_transport_read(&state->inner, state->conn, buf, to_read, &got);
-        if (st != ASX_OK && st != ASX_E_PENDING) { return st; }
-
-        /* Track progress: decrement remaining bytes as they arrive */
-        if (got <= state->pending_frame_len) {
-            state->pending_frame_len -= (uint32_t)got;
-        } else {
-            state->pending_frame_len = 0;
+        if (state->body_bytes_read == 0u) {
+            state->body_buf = (uint8_t *)buf;
+        } else if (buf != state->body_buf) {
+            return ASX_E_INVALID_ARGUMENT;
         }
 
-        *bytes_read = got;
+        to_read = (size_t)state->pending_frame_len - state->body_bytes_read;
 
-        if (state->pending_frame_len > 0) { return ASX_E_PENDING; }
+        st = asx_transport_read(&state->inner, state->conn, state->body_buf + state->body_bytes_read,
+                                to_read, &got);
+        if (st != ASX_OK && st != ASX_E_PENDING) {
+            framed_clear_read_state(state);
+            return st;
+        }
 
-        /* Frame complete — reset for next frame */
-        state->header_complete = 0;
-        state->header_pos = 0;
+        state->body_bytes_read += (uint32_t)got;
+
+        if (state->body_bytes_read < state->pending_frame_len) { return ASX_E_PENDING; }
+
+        *bytes_read = state->pending_frame_len;
+        framed_clear_read_state(state);
         return ASX_OK;
     }
 }
 
 void asx_framed_transport_reset(asx_framed_transport_state *state) {
-    state->header_pos = 0;
-    state->pending_frame_len = 0;
-    state->header_complete = 0;
-    memset(state->header_buf, 0, sizeof(state->header_buf));
+    if (state == NULL) { return; }
+    framed_clear_read_state(state);
+    framed_clear_write_state(state);
 }
 
 /* ------------------------------------------------------------------ */

@@ -21,6 +21,7 @@ void asx_remote_cap_init(asx_remote_cap *cap, uint64_t cap_id, uint32_t flags) {
 }
 
 int asx_remote_cap_allows(const asx_remote_cap *cap, uint32_t flag) {
+    if (cap == NULL) { return 0; }
     return (cap->flags & flag) == flag;
 }
 
@@ -36,6 +37,7 @@ void asx_remote_handle_init(asx_remote_handle *h, uint64_t handle_id) {
 }
 
 asx_status asx_remote_handle_transition(asx_remote_handle *h, asx_remote_status new_status) {
+    if (h == NULL) { return ASX_E_INVALID_ARGUMENT; }
     /* Legal transitions:
      * PENDING -> RUNNING, CANCELLED
      * RUNNING -> COMPLETED, FAILED, CANCELLED
@@ -68,6 +70,7 @@ asx_status asx_remote_handle_complete(asx_remote_handle *h, asx_outcome outcome)
 }
 
 int asx_remote_handle_is_terminal(const asx_remote_handle *h) {
+    if (h == NULL) { return 0; }
     return h->status == ASX_REMOTE_COMPLETED || h->status == ASX_REMOTE_FAILED ||
            h->status == ASX_REMOTE_CANCELLED;
 }
@@ -101,6 +104,7 @@ void asx_idempotency_key_init(asx_idempotency_key *key, uint64_t hash, uint32_t 
 }
 
 int asx_idempotency_key_eq(const asx_idempotency_key *a, const asx_idempotency_key *b) {
+    if (a == NULL || b == NULL) { return 0; }
     return a->key_hash == b->key_hash && a->namespace_ == b->namespace_;
 }
 
@@ -114,6 +118,7 @@ void asx_idempotency_record_init(asx_idempotency_record *rec, asx_idempotency_ke
 }
 
 asx_status asx_idempotency_record_commit(asx_idempotency_record *rec, asx_status result) {
+    if (rec == NULL) { return ASX_E_INVALID_ARGUMENT; }
     if (rec->state != ASX_IDEMPOTENCY_PENDING) { return ASX_E_INVALID_TRANSITION; }
     rec->state = ASX_IDEMPOTENCY_COMMITTED;
     rec->result = result;
@@ -121,8 +126,10 @@ asx_status asx_idempotency_record_commit(asx_idempotency_record *rec, asx_status
 }
 
 int asx_idempotency_record_expired(const asx_idempotency_record *rec, uint64_t now_ns) {
+    if (rec == NULL) { return 0; }
     if (rec->ttl_ns == 0) return 0; /* infinite TTL */
-    return now_ns >= rec->created_ns + rec->ttl_ns;
+    if (now_ns < rec->created_ns) return 0; /* clock wrapped or invalid */
+    return (now_ns - rec->created_ns) >= rec->ttl_ns;
 }
 
 /* ------------------------------------------------------------------ */
@@ -134,6 +141,7 @@ void asx_idempotency_store_init(asx_idempotency_store *store) { memset(store, 0,
 const asx_idempotency_record *asx_idempotency_store_lookup(const asx_idempotency_store *store,
                                                            const asx_idempotency_key *key) {
     uint32_t i;
+    if (store == NULL || key == NULL) { return NULL; }
     for (i = 0; i < store->count; i++) {
         if (asx_idempotency_key_eq(&store->records[i].key, key)) { return &store->records[i]; }
     }
@@ -143,6 +151,7 @@ const asx_idempotency_record *asx_idempotency_store_lookup(const asx_idempotency
 asx_status asx_idempotency_store_upsert(asx_idempotency_store *store,
                                         const asx_idempotency_record *rec) {
     uint32_t i;
+    if (store == NULL || rec == NULL) { return ASX_E_INVALID_ARGUMENT; }
     /* Update existing. */
     for (i = 0; i < store->count; i++) {
         if (asx_idempotency_key_eq(&store->records[i].key, &rec->key)) {
@@ -159,6 +168,7 @@ asx_status asx_idempotency_store_upsert(asx_idempotency_store *store,
 uint32_t asx_idempotency_store_evict_expired(asx_idempotency_store *store, uint64_t now_ns) {
     uint32_t evicted = 0;
     uint32_t i = 0;
+    if (store == NULL) { return 0u; }
     while (i < store->count) {
         if (asx_idempotency_record_expired(&store->records[i], now_ns)) {
             /* Swap with last and shrink. */
