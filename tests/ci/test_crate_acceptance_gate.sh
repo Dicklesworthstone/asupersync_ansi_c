@@ -161,6 +161,23 @@ test_gate_fails_when_family_docs_missing() {
     assert_contains "family listed in failures" "$output" 'bd-yx9r.19'
 }
 
+test_gate_fails_cleanly_on_invalid_e2e_manifest() {
+    echo "Test: gate fails cleanly on invalid e2e manifest JSON"
+    local repo="$TMPDIR_BASE/repo-invalid-e2e"
+    create_mock_repo "$repo"
+    printf '{invalid json\n' >"$repo/build/e2e-artifacts/e2e-pass/run_manifest.json"
+
+    local output rc=0
+    output=$(python3 "$GATE_SCRIPT" --repo-root "$repo" --run-id test-invalid-e2e 2>&1) || rc=$?
+
+    assert_eq "exit code" "1" "$rc"
+    assert_contains "summary lists e2e failure" "$output" '"artifact_failures": ["e2e-manifest"]'
+    assert_contains \
+        "report records invalid json" \
+        "$(cat "$repo/build/acceptance/crate_acceptance_test-invalid-e2e.json")" \
+        '"reason": "invalid-json"'
+}
+
 main() {
     echo "=========================================="
     echo "Crate Acceptance Gate — Unit Tests"
@@ -171,6 +188,8 @@ main() {
     test_gate_passes_with_complete_inputs
     echo ""
     test_gate_fails_when_family_docs_missing
+    echo ""
+    test_gate_fails_cleanly_on_invalid_e2e_manifest
     echo ""
 
     echo "=========================================="

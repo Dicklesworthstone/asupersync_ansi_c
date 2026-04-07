@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -50,8 +49,20 @@ def latest_matching(root: Path, pattern: str) -> Path | None:
 
 
 def load_json(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"{path}: unable to read JSON ({exc})") from exc
+
+    try:
+        decoder = json.JSONDecoder()
+        data = decoder.decode(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"{path}: invalid JSON at line {exc.lineno} column {exc.colno}: {exc.msg}"
+        ) from exc
+
+    return data
 
 
 def text_contains(path: Path, needle: str) -> bool:
@@ -243,7 +254,7 @@ def latest_summary_for_mode(conformance_dir: Path, mode: str) -> Path | None:
     for path in sorted(conformance_dir.glob("*.summary.json"), key=lambda p: p.stat().st_mtime):
         try:
             data = load_json(path)
-        except Exception:
+        except ValueError:
             continue
         if data.get("mode") == mode:
             candidate = path
@@ -295,7 +306,17 @@ def main() -> int:
         if path is None:
             artifacts_ok = False
             return {"name": name, "status": "fail", "reason": "missing"}
-        data = load_json(path)
+        try:
+            data = load_json(path)
+        except ValueError as exc:
+            artifacts_ok = False
+            return {
+                "name": name,
+                "status": "fail",
+                "reason": "invalid-json",
+                "path": path.relative_to(repo_root).as_posix(),
+                "detail": str(exc),
+            }
         ok = bool(pass_predicate(data))
         artifacts_ok = artifacts_ok and ok
         return {
@@ -332,16 +353,30 @@ def main() -> int:
         artifact_results.append({"name": "e2e-manifest", "status": "fail", "reason": "missing"})
         e2e_manifest = None
     else:
-        e2e_manifest = load_json(latest_e2e)
-        e2e_ok = e2e_manifest.get("status") == "pass" and int(e2e_manifest.get("failed_families", 1)) == 0
-        artifacts_ok = artifacts_ok and e2e_ok
-        artifact_results.append(
-            {
-                "name": "e2e-manifest",
-                "status": gate_status(e2e_ok),
-                "path": latest_e2e.relative_to(repo_root).as_posix(),
-            }
-        )
+        try:
+            e2e_manifest = load_json(latest_e2e)
+        except ValueError as exc:
+            artifacts_ok = False
+            e2e_manifest = None
+            artifact_results.append(
+                {
+                    "name": "e2e-manifest",
+                    "status": "fail",
+                    "reason": "invalid-json",
+                    "path": latest_e2e.relative_to(repo_root).as_posix(),
+                    "detail": str(exc),
+                }
+            )
+        else:
+            e2e_ok = e2e_manifest.get("status") == "pass" and int(e2e_manifest.get("failed_families", 1)) == 0
+            artifacts_ok = artifacts_ok and e2e_ok
+            artifact_results.append(
+                {
+                    "name": "e2e-manifest",
+                    "status": gate_status(e2e_ok),
+                    "path": latest_e2e.relative_to(repo_root).as_posix(),
+                }
+            )
 
     family_results: list[dict[str, Any]] = []
     families_ok = True
