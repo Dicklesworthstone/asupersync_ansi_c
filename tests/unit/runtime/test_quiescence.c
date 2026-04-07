@@ -45,6 +45,20 @@ static void cleanup_mark(void *ctx) {
     *flag += 1;
 }
 
+typedef struct {
+    asx_region_id region;
+    asx_status spawn_status;
+    asx_task_id task_id;
+} cleanup_spawn_task_ctx;
+
+static void cleanup_spawn_immediate_task(void *ctx) {
+    cleanup_spawn_task_ctx *spawn = (cleanup_spawn_task_ctx *)ctx;
+
+    if (spawn == NULL) return;
+    spawn->task_id = ASX_INVALID_ID;
+    spawn->spawn_status = asx_task_spawn(spawn->region, poll_complete, NULL, &spawn->task_id);
+}
+
 static void log_child_summary(const char *label, asx_region_id parent,
                               asx_region_slot *parent_slot) {
     fprintf(stderr, "[child-test] %s parent=0x%016llx child_count=%u state=%d\n", label,
@@ -160,6 +174,42 @@ TEST(region_drain_budget_exhaustion_leaves_region_closing) {
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
     ASSERT_EQ(region->state, ASX_REGION_CLOSING);
     ASSERT_TRUE(region->task_count > 0);
+}
+
+TEST(region_drain_finalizer_spawned_task_requires_followup_drain) {
+    asx_region_id rid;
+    asx_region_slot *region = NULL;
+    asx_cleanup_handle handle = ASX_CLEANUP_INVALID;
+    cleanup_spawn_task_ctx spawn_ctx;
+    asx_task_state task_state;
+    asx_budget budget;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+
+    spawn_ctx.region = rid;
+    spawn_ctx.spawn_status = ASX_E_INVALID_STATE;
+    spawn_ctx.task_id = ASX_INVALID_ID;
+    ASSERT_EQ(asx_cleanup_push(&region->cleanup, cleanup_spawn_immediate_task, &spawn_ctx, &handle),
+              ASX_OK);
+
+    budget = asx_budget_from_polls(8);
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
+    ASSERT_EQ(spawn_ctx.spawn_status, ASX_OK);
+    ASSERT_NE(spawn_ctx.task_id, ASX_INVALID_ID);
+    ASSERT_EQ(region->state, ASX_REGION_FINALIZING);
+    ASSERT_EQ(region->task_count, 1u);
+    ASSERT_EQ(asx_task_get_state(spawn_ctx.task_id, &task_state), ASX_OK);
+    ASSERT_EQ(task_state, ASX_TASK_CREATED);
+
+    budget = asx_budget_from_polls(8);
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_get_state(spawn_ctx.task_id, &task_state), ASX_OK);
+    ASSERT_EQ(task_state, ASX_TASK_COMPLETED);
+    ASSERT_EQ(region->state, ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_quiescence_check(rid), ASX_OK);
 }
 
 TEST(finalizing_region_allows_cleanup_task_spawn) {
@@ -1041,6 +1091,8 @@ int main(void) {
     RUN_TEST(region_drain_recancels_uncancelled_tasks_before_scheduler_run);
     asx_runtime_reset();
     RUN_TEST(region_drain_budget_exhaustion_leaves_region_closing);
+    asx_runtime_reset();
+    RUN_TEST(region_drain_finalizer_spawned_task_requires_followup_drain);
     asx_runtime_reset();
     RUN_TEST(finalizing_region_allows_cleanup_task_spawn);
     asx_runtime_reset();

@@ -262,8 +262,11 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
         /* Ghost linearity monitor: check for leaked obligations before close */
         (void)asx_ghost_check_obligation_leaks(id);
 
-        /* Drain cleanup stack in LIFO order before closing */
+        /* Drain cleanup stack in LIFO order before closing. Finalizers are
+         * allowed to spawn cleanup tasks in FINALIZING, so we must confirm
+         * the region is still task-free before sealing it CLOSED. */
         asx_cleanup_drain(&r->cleanup);
+        if (r->task_count > 0u) return ASX_E_QUIESCENCE_TASKS_LIVE;
 
         asx_ghost_check_region_transition(id, ASX_REGION_FINALIZING, ASX_REGION_CLOSED);
         st = asx_region_transition_check(ASX_REGION_FINALIZING, ASX_REGION_CLOSED);
