@@ -6,9 +6,9 @@ The ASX test suite verifies the ANSI C async runtime across multiple layers:
 unit tests, invariant tests, API ergonomics vignette tests, end-to-end scenario
 tests, benchmarks, and fuzz tests.
 
-**Current totals**: 763+ individual test cases across unit suites, plus
-invariant suites, API ergonomics vignettes, e2e scenario families, differential fuzz harnesses,
-and runtime benchmarks.
+**Current totals**: 204 C test programs (149 unit, 20 e2e, 3 invariant,
+12 vignette, 3 conformance, 4 fuzz, 13 formal) with 800+ individual test
+cases. Canonical counts are maintained by `tools/count_inventory.sh`.
 
 ## Running Tests
 
@@ -202,3 +202,11 @@ The observability/evidence slice adds:
 - `tests/unit/evidence/test_evidence.c`
 - `tests/unit/monitor/test_monitor.c`
 - `tests/vignettes/vignette_observability.c`
+
+The platform adapter slice adds:
+- `tests/unit/platform/test_posix_hooks.c` — 12 tests: hook install, validation,
+  clock monotonicity/plausibility, entropy distribution/uniqueness, reactor lifecycle
+  (epoll pipe fd register/write/wait/deregister on Linux), ghost reactor
+- `tests/e2e/posix_adapter_smoke.sh` + `e2e_posix_adapter_smoke.c` — 7 scenarios
+- `tests/e2e/install_smoke.sh` — 8 scenarios: install script, header install, quickstart compile/run
+- `tests/e2e/cli_smoke.sh` — 10 scenarios: CLI version/info/doctor/help/error handling

@@ -721,10 +721,20 @@ jobs:
           sudo apt-get install -y -qq clang
 
       - name: Build (${{ matrix.compiler }}, ${{ matrix.profile }})
-        run: make build CC=${{ matrix.compiler }} PROFILE=${{ matrix.profile }}
+        run: |
+          EXTRA_LDFLAGS=""
+          if [ "${{ matrix.profile }}" = "POSIX" ]; then EXTRA_LDFLAGS="-lpthread -lrt"; fi
+          make build CC=${{ matrix.compiler }} PROFILE=${{ matrix.profile }} LDFLAGS="$EXTRA_LDFLAGS"
 
       - name: Test (${{ matrix.compiler }}, ${{ matrix.profile }})
-        run: make test-unit CC=${{ matrix.compiler }} PROFILE=${{ matrix.profile }}
+        run: |
+          EXTRA_LDFLAGS=""
+          if [ "${{ matrix.profile }}" = "POSIX" ]; then EXTRA_LDFLAGS="-lpthread -lrt"; fi
+          make test-unit CC=${{ matrix.compiler }} PROFILE=${{ matrix.profile }} LDFLAGS="$EXTRA_LDFLAGS"
+
+      - name: POSIX adapter e2e smoke
+        if: matrix.profile == 'POSIX'
+        run: ASX_E2E_PROFILE=POSIX bash tests/e2e/posix_adapter_smoke.sh
 
   # ---------------------------------------------------------------------------
   # embedded-matrix — router-class cross-target builds + QEMU
