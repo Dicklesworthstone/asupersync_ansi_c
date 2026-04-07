@@ -503,6 +503,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: cross-baremetal-riscv32-router cross-baremetal-riscv64-router
 .PHONY: cross-baremetal-all
 .PHONY: qemu-smoke
+.PHONY: cli
 
 all: build
 
@@ -523,6 +524,11 @@ build-parallel:
 
 build-browser:
 	@$(MAKE) build PROFILE=BROWSER
+
+cli: $(LIB_A) src/cli/main.c
+	@mkdir -p build/bin
+	$(CC) $(ALL_CFLAGS) -o build/bin/asx src/cli/main.c $(LIB_A) $(LDFLAGS)
+	@echo "[asx] cli binary: build/bin/asx"
 
 $(LIB_A): $(LIB_OBJ) | $(LIB_DIR)
 	@tmp="$@.$$$$.tmp"; \
