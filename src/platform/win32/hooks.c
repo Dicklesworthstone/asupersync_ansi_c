@@ -27,9 +27,9 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
-#include <winsock2.h>
-#include <windows.h>
 #include <bcrypt.h>
+#include <windows.h>
+#include <winsock2.h>
 
 #define ASX_WIN32_NSEC_PER_SEC 1000000000ULL
 #define ASX_WIN32_FILETIME_UNIX_EPOCH_100NS 116444736000000000ULL
