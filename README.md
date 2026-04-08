@@ -54,9 +54,10 @@ make test
 | **Cross-profile semantic parity gates** | All profiles produce identical semantic digests for shared fixture sets |
 
 The current repository is library-first: it ships the static library, public
-headers, tests, examples, and release-packaging machinery. It does not
-currently include the `scripts/install.sh` installer shown in older docs, and
-it does not currently build or install a standalone `asx` executable.
+headers, tests, examples, release-packaging machinery, the in-tree
+`scripts/install.sh` helper, and a convenience CLI build target (`make cli`).
+`make install` still installs the library and headers only; the `asx` CLI is an
+in-tree convenience binary rather than the default installed artifact.
 
 ## Quick Repository Workflow
 
@@ -173,13 +174,14 @@ See `examples/` for more: channel flow, actor supervision, cancellation draining
 The current repository ships:
 - the static library `libasx.a`
 - public headers under `include/asx/`
+- the in-tree installer helper `scripts/install.sh`
+- the in-tree convenience CLI target `make cli` (builds `build/bin/asx`)
 - examples, tests, fixtures, and deterministic release packaging
 
 The current repository does not ship:
-- an in-tree `scripts/install.sh`
 - package-manager metadata that makes `brew install asx` / `apt install asx`
   / `opkg install asx` true for this repo by itself
-- a standalone `asx` executable
+- a default `make install` path that installs the `asx` CLI binary
 
 ### 1) From Source
 
@@ -196,6 +198,20 @@ make build-parallel  # compile-only deferred scaffold; not a Wave A parity/CI la
 
 `make install` currently installs the static library plus public headers under
 `$(PREFIX)`; it does not install a CLI binary.
+
+If you want the in-tree convenience CLI as well, build it explicitly:
+
+```bash
+make cli
+./build/bin/asx help
+```
+
+If you want a one-step source install helper for the library surface, the
+repository also ships:
+
+```bash
+./scripts/install.sh [--prefix=/usr/local]
+```
 
 ### 2) Release Artifacts
 
@@ -368,7 +384,7 @@ make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=linux-x86_64 PROFILE
 - Runtime construction: `include/asx/runtime/builder.h`, `include/asx/runtime/rt.h`, `include/asx/runtime/runtime.h`
 - App bootstrap helpers: `include/asx/app/app.h`
 - Doctor/reporting surfaces: `include/asx/app/doctor.h`, `include/asx/app/report.h`, `include/asx/console/console.h`
-- CLI embedding helpers (not a shipped executable): `include/asx/cli/cli.h`
+- CLI helpers and in-tree convenience binary surface: `include/asx/cli/cli.h`, `src/cli/main.c`, `make cli`
 
 ## Configuration
 
