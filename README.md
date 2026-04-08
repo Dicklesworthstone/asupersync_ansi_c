@@ -596,6 +596,7 @@ make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=source RELEASE_KIND=
 Notes:
 - `ASX_ENABLE_SIGSTORE=1` enables keyless Sigstore bundle generation when `cosign` is available.
 - `ASX_USE_RCH=auto` keeps local release builds compatible with remote build offload.
+- Root `rust-toolchain.toml` intentionally uses generic `nightly` so `rch` does not infer a machine-specific dated nightly snapshot for C-only `make` lanes.
 - Operational release/rollback checklist: `docs/DEPLOYMENT_HARDENING.md` ("Release Verification and Rollback Runbook").
 
 ## How It Works: Internal Design

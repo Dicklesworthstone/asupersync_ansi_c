@@ -669,6 +669,8 @@ Parse: `file:line:col` -> location | fix hint -> how to fix | Exit 0/1 -> pass/f
 
 RCH offloads heavy C build/test/lint commands to remote workers instead of building locally. This prevents compilation storms when many agents run simultaneously.
 
+This repo intentionally carries a root `rust-toolchain.toml` pinned to generic `nightly`. That file exists so `rch` does **not** infer a host-specific dated nightly snapshot and wrap plain C `make` lanes with a toolchain that some workers may not have. Do not change it to a dated nightly unless you have also reprovisioned the worker fleet.
+
 **RCH is installed at `~/.local/bin/rch` and is hooked into Claude Code's PreToolUse automatically.** Most of the time you don't need to do anything if you are Claude Code — builds are intercepted and offloaded transparently.
 
 To manually offload a build:

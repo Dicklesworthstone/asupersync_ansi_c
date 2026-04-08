@@ -1,0 +1,7 @@
+[toolchain]
+# Keep RCH from wrapping C-only `make` lanes with a host-specific dated nightly
+# inferred from the operator machine. Generic nightly is sufficient for the
+# auxiliary Rust tooling under `tools/` and is present across the worker fleet.
+channel = "nightly"
+components = ["rustfmt", "clippy"]
+profile = "default"

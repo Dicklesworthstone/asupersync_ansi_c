@@ -318,6 +318,7 @@ OBJ_DIR   := $(BUILD_DIR)/obj
 LIB_DIR   := $(BUILD_DIR)/lib
 BIN_DIR   := $(BUILD_DIR)/bin
 TEST_DIR  := $(BUILD_DIR)/tests
+BUILD_CONFIG_FILE := $(BUILD_DIR)/.build-config
 
 LIB_OBJ := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(LIB_SRC))
 LIB_DEP := $(LIB_OBJ:.o=.d)
@@ -485,7 +486,7 @@ E2E_VERTICAL_SCRIPTS := \
 # PRIMARY TARGETS — map 1:1 to quality gate commands
 # ===================================================================
 
-.PHONY: all build clean install uninstall
+.PHONY: all build clean install uninstall FORCE
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation
 .PHONY: model-check
 .PHONY: test test-unit test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-abi-shim abi-check
@@ -535,7 +536,19 @@ $(LIB_A): $(LIB_OBJ) | $(LIB_DIR)
 	$(AR) rcs "$$tmp" $^ && \
 	mv "$$tmp" "$@"
 
-$(OBJ_DIR)/%.o: src/%.c | obj-dirs
+# Rebuild objects whenever the effective build configuration changes so
+# profile/browser-mode/compiler-flag mixes cannot silently reuse stale objects.
+$(BUILD_CONFIG_FILE): FORCE | obj-dirs
+	@new_contents="$$(printf '%s\n%s\n%s\n' \
+		'CC=$(CC)' \
+		'ALL_CFLAGS=$(ALL_CFLAGS)' \
+		'ALL_LDFLAGS=$(ALL_LDFLAGS)')"; \
+	old_contents="$$(cat "$@" 2>/dev/null || true)"; \
+	if [ "$$old_contents" != "$$new_contents" ]; then \
+		printf '%s\n' "$$new_contents" > "$@"; \
+	fi
+
+$(OBJ_DIR)/%.o: src/%.c $(BUILD_CONFIG_FILE) | obj-dirs
 	$(CC) $(ALL_CFLAGS) $(DEP_FLAGS) -c -o $@ $<
 
 -include $(LIB_DEP)
@@ -551,7 +564,7 @@ obj-dirs:
 	          $(OBJ_DIR)/tracing_compat $(OBJ_DIR)/evidence \
 	          $(OBJ_DIR)/evidence_sink $(OBJ_DIR)/monitor \
 	          $(OBJ_DIR)/observability \
-	          $(OBJ_DIR)/plan $(OBJ_DIR)/cx \
+	          $(OBJ_DIR)/plan $(OBJ_DIR)/cx $(OBJ_DIR)/abi \
 	          $(OBJ_DIR)/service $(OBJ_DIR)/transport \
 	          $(OBJ_DIR)/remote $(OBJ_DIR)/spork $(OBJ_DIR)/cli \
 	          $(OBJ_DIR)/platform/posix \
