@@ -518,7 +518,7 @@ src/                         123 C source files in the current tree
   platform/                  3 files: POSIX, Win32, freestanding adapters
   ...                        + cx, codec, security, net, fs, process, signal, stream, evidence, etc.
 
-tests/                       204 C test programs in the current tree
+tests/                       204 tracked C test programs across the main verification lanes
   unit/                      149 C test files across the current subsystem directories
   e2e/                       20 end-to-end scenario programs (+ shell harnesses)
   invariant/                 3 lifecycle/quiescence invariant suites
@@ -526,6 +526,7 @@ tests/                       204 C test programs in the current tree
   conformance/               3 Rust parity + codec/profile equivalence suites
   fuzz/                      4 differential fuzzing harnesses
   formal/                    13 algebraic, CBMC, and litmus verification
+  ...                        + ABI, bench, and embedded support programs under tests/abi, tests/bench, tests/embedded
 
 examples/                    14 example programs
 fixtures/rust_reference/     Canonical fixtures captured from Rust runtime
@@ -1699,7 +1700,7 @@ Usually slightly, depending on workload and trace settings. In exchange you gain
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: 1,359 exported `ASX_API` declarations across 37
+Yes. The C API is first-class: 1,364 exported `ASX_API` declarations across 38
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The current repository ships a library-first surface:
 runtime/app/doctor/report helpers are present in headers and sources, but a
