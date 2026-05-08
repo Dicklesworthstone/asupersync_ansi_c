@@ -1,0 +1,44 @@
+{
+  "schema_name": "asx.trace_event",
+  "schema_version": "asx.trace_event.v1",
+  "producer": {
+    "runtime": "asx-c",
+    "language": "c99",
+    "profile": "ASX_PROFILE_CORE",
+    "source": "fixtures/rust_reference/core_lifecycle/region-lifecycle-open-close-001.core.codec_json.json"
+  },
+  "semantic_digest_contract": {
+    "algorithm": "fnv1a64-le",
+    "endianness": "little",
+    "included_event_fields": ["sequence", "kind_id", "entity_id", "aux"]
+  },
+  "rust_correlation": {
+    "rust_baseline_commit": "a9e737d869c04c2f6aa4222fe38be66b28628227",
+    "source_fixture": "fixtures/rust_reference/core_lifecycle/region-lifecycle-open-close-001.core.codec_json.json",
+    "mapping_status": "semantic-equivalent"
+  },
+  "events": [
+    {
+      "sequence": 0,
+      "kind": "region_open",
+      "kind_id": 16,
+      "entity_id": "0x0000000000000000",
+      "aux": "0x0000000000000000",
+      "domain": "region",
+      "semantic_unit": "REGION-001",
+      "rust_event": "RegionCreated",
+      "source_fixture_event": 0
+    },
+    {
+      "sequence": 1,
+      "kind": "region_closed",
+      "kind_id": 18,
+      "entity_id": "0x0000000000000000",
+      "aux": "0x0000000000000000",
+      "domain": "region",
+      "semantic_unit": "REGION-001",
+      "rust_event": "RegionCloseComplete",
+      "source_fixture_event": 1
+    }
+  ]
+}

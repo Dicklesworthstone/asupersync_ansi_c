@@ -157,6 +157,16 @@ if os.path.isfile(capture_schema_path):
         "description": "Fixture capture manifests",
     })
 
+# 7. Trace event golden examples
+trace_event_schema_path = os.path.join(schemas_dir, "trace_event.schema.json")
+if os.path.isfile(trace_event_schema_path):
+    targets.append({
+        "schema_path": trace_event_schema_path,
+        "schema_name": "trace_event",
+        "glob": os.path.join(fixtures_dir, "trace_events", "**", "*.json"),
+        "description": "Trace event schema golden examples",
+    })
+
 # Deduplicate files across targets to avoid double-validation
 validated_files = set()
 results = []

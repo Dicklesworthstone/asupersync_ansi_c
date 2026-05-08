@@ -1,0 +1,44 @@
+{
+  "schema_name": "asx.trace_event",
+  "schema_version": "asx.trace_event.v1",
+  "producer": {
+    "runtime": "asx-c",
+    "language": "c99",
+    "profile": "ASX_PROFILE_CORE",
+    "source": "tests/unit/runtime/test_trace.c"
+  },
+  "semantic_digest_contract": {
+    "algorithm": "fnv1a64-le",
+    "endianness": "little",
+    "included_event_fields": ["sequence", "kind_id", "entity_id", "aux"]
+  },
+  "events": [
+    {
+      "sequence": 0,
+      "kind": "region_open",
+      "kind_id": 16,
+      "entity_id": "0x0000000000001000",
+      "aux": "0x0000000000000000",
+      "domain": "region",
+      "semantic_unit": "REGION-001"
+    },
+    {
+      "sequence": 1,
+      "kind": "task_spawn",
+      "kind_id": 19,
+      "entity_id": "0x0000000000002000",
+      "aux": "0x0000000000001000",
+      "domain": "task",
+      "semantic_unit": "TASK-001"
+    },
+    {
+      "sequence": 2,
+      "kind": "sched_poll",
+      "kind_id": 0,
+      "entity_id": "0x0000000000002000",
+      "aux": "0x0000000000000000",
+      "domain": "scheduler",
+      "semantic_unit": "SCHEDULER-001"
+    }
+  ]
+}

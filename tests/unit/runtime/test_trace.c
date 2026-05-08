@@ -40,6 +40,98 @@ static uint64_t timer_trace_entity_id(const asx_timer_handle *handle) {
     return ((uint64_t)handle->slot << 32) | (uint64_t)handle->generation;
 }
 
+/* ---- Trace schema contract ---- */
+
+TEST(trace_schema_current_descriptor_is_versioned) {
+    asx_trace_schema_descriptor desc;
+
+    memset(&desc, 0, sizeof(desc));
+    ASSERT_EQ(asx_trace_schema_current(&desc), ASX_OK);
+
+    ASSERT_TRUE(strcmp(desc.schema_name, ASX_TRACE_SCHEMA_NAME) == 0);
+    ASSERT_TRUE(strcmp(desc.schema_version, ASX_TRACE_SCHEMA_VERSION) == 0);
+    ASSERT_EQ(desc.version_major, ASX_TRACE_SCHEMA_VERSION_MAJOR);
+    ASSERT_EQ(desc.version_minor, ASX_TRACE_SCHEMA_VERSION_MINOR);
+    ASSERT_EQ(desc.version_patch, ASX_TRACE_SCHEMA_VERSION_PATCH);
+    ASSERT_EQ(desc.required_event_fields, (uint32_t)ASX_TRACE_SCHEMA_REQUIRED_EVENT_FIELDS);
+    ASSERT_EQ(desc.digest_event_fields, (uint32_t)ASX_TRACE_SCHEMA_DIGEST_EVENT_FIELDS);
+    ASSERT_TRUE((desc.optional_event_fields & ASX_TRACE_SCHEMA_FIELD_RUST_CORRELATION) != 0u);
+}
+
+TEST(trace_schema_current_rejects_null_output) {
+    ASSERT_EQ(asx_trace_schema_current(NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(trace_schema_exact_compatibility) {
+    asx_trace_schema_descriptor producer;
+    asx_trace_schema_descriptor consumer;
+
+    ASSERT_EQ(asx_trace_schema_current(&producer), ASX_OK);
+    ASSERT_EQ(asx_trace_schema_current(&consumer), ASX_OK);
+
+    ASSERT_EQ(asx_trace_schema_compatibility(&producer, &consumer), ASX_TRACE_SCHEMA_COMPAT_EXACT);
+    ASSERT_TRUE(strcmp(asx_trace_schema_compat_str(ASX_TRACE_SCHEMA_COMPAT_EXACT), "exact") == 0);
+}
+
+TEST(trace_schema_allows_additive_optional_version) {
+    asx_trace_schema_descriptor producer;
+    asx_trace_schema_descriptor consumer;
+
+    ASSERT_EQ(asx_trace_schema_current(&producer), ASX_OK);
+    ASSERT_EQ(asx_trace_schema_current(&consumer), ASX_OK);
+    producer.schema_version = "asx.trace_event.v1.1";
+    producer.version_minor = consumer.version_minor + 1u;
+
+    ASSERT_EQ(asx_trace_schema_compatibility(&producer, &consumer),
+              ASX_TRACE_SCHEMA_COMPAT_ADDITIVE_OPTIONAL);
+    ASSERT_TRUE(strcmp(asx_trace_schema_compat_str(ASX_TRACE_SCHEMA_COMPAT_ADDITIVE_OPTIONAL),
+                       "additive_optional") == 0);
+}
+
+TEST(trace_schema_rejects_required_or_digest_drift) {
+    asx_trace_schema_descriptor producer;
+    asx_trace_schema_descriptor consumer;
+
+    ASSERT_EQ(asx_trace_schema_current(&producer), ASX_OK);
+    ASSERT_EQ(asx_trace_schema_current(&consumer), ASX_OK);
+
+    producer.required_event_fields &= ~((uint32_t)ASX_TRACE_SCHEMA_FIELD_AUX);
+    ASSERT_EQ(asx_trace_schema_compatibility(&producer, &consumer),
+              ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE);
+
+    ASSERT_EQ(asx_trace_schema_current(&producer), ASX_OK);
+    producer.digest_event_fields &= ~((uint32_t)ASX_TRACE_SCHEMA_FIELD_AUX);
+    ASSERT_EQ(asx_trace_schema_compatibility(&producer, &consumer),
+              ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE);
+
+    ASSERT_EQ(asx_trace_schema_current(&producer), ASX_OK);
+    producer.version_major = consumer.version_major + 1u;
+    ASSERT_EQ(asx_trace_schema_compatibility(&producer, &consumer),
+              ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE);
+}
+
+TEST(trace_schema_rejects_unversioned_descriptors) {
+    asx_trace_schema_descriptor producer;
+    asx_trace_schema_descriptor consumer;
+
+    ASSERT_EQ(asx_trace_schema_current(&producer), ASX_OK);
+    ASSERT_EQ(asx_trace_schema_current(&consumer), ASX_OK);
+
+    producer.schema_version = NULL;
+    ASSERT_EQ(asx_trace_schema_compatibility(&producer, &consumer),
+              ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE);
+
+    ASSERT_EQ(asx_trace_schema_current(&producer), ASX_OK);
+    producer.version_major = 0u;
+    ASSERT_EQ(asx_trace_schema_compatibility(&producer, &consumer),
+              ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE);
+
+    ASSERT_EQ(asx_trace_schema_compatibility(NULL, &consumer),
+              ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE);
+    ASSERT_TRUE(strcmp(asx_trace_schema_compat_str(ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE),
+                       "incompatible") == 0);
+}
+
 /* ---- Trace emission ---- */
 
 TEST(trace_emit_records_events) {
@@ -867,6 +959,12 @@ TEST(replay_result_kind_str_all_kinds) {
 int main(void) {
     fprintf(stderr, "=== test_trace ===\n");
 
+    RUN_TEST(trace_schema_current_descriptor_is_versioned);
+    RUN_TEST(trace_schema_current_rejects_null_output);
+    RUN_TEST(trace_schema_exact_compatibility);
+    RUN_TEST(trace_schema_allows_additive_optional_version);
+    RUN_TEST(trace_schema_rejects_required_or_digest_drift);
+    RUN_TEST(trace_schema_rejects_unversioned_descriptors);
     RUN_TEST(trace_emit_records_events);
     RUN_TEST(trace_reset_clears);
     RUN_TEST(trace_get_out_of_bounds);

@@ -242,7 +242,7 @@ gate evidence must cover the surface-specific behavior named below.
 | `GATE-WAVE-C-CONTRACT` | docs/register validation, `br dep cycles --no-db --json`, `bv --robot-triage` | `bd-v12u.1` | Keep Wave C native adapter/static arena/networking/combinator/actor contracts explicit, acyclic, and source-linked. |
 | `GATE-NATIVE-ADAPTER-COMMIT` | `parallel-parity`, `profile-parity`, `test-win32-hooks-build`, `test-e2e-posix-adapter`, native-adapter parity/e2e targets added by child beads | `bd-v12u.2`, `bd-v12u.3`, `bd-v12u.4` | Prove POSIX/Win32 live hooks preserve deterministic commit authority or fail closed. `bd-v12u.2` adds commit-authority telemetry/gate fields; `bd-v12u.3` keeps Win32 socket/IOCP and blocking hooks fail-closed while cross-building QPC/entropy hook installation; `.4` turns POSIX pipe readiness into runtime I/O, waker, timed-lane, and scheduler readiness records with zero commit drift. |
 | `GATE-STATIC-ARENA-PARITY` | static-vs-dynamic hook/seal/alloc/realloc/free tests; invalid-config and undersized-arena tests; partial-rollback and over-capacity-handle tests; `profile-parity`; `codec-equivalence` | `bd-v12u.5`, `bd-v12u.6` | Prove static arena allocation is a resource-plane backend with failure-atomic OOM, legal free-after-seal behavior, exact resource-class defaults, and digest parity. |
-| `GATE-INCIDENT-REPLAY-BUNDLE` | incident bundle schema/unit/e2e targets to be added by child bead | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` | Emit operator-grade evidence bundles, trace schema, and minimized counterexamples without mutating runtime behavior. |
+| `GATE-INCIDENT-REPLAY-BUNDLE` | `test_trace` schema compatibility tests; `lint-schema-validation` over `schemas/trace_event.schema.json` and `fixtures/trace_events/*.json`; incident bundle e2e and minimizer targets added by child beads | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` | Emit operator-grade evidence bundles, trace schema, and minimized counterexamples without mutating runtime behavior. |
 | `GATE-WAVE-C-NETWORKING` | `test-e2e-network-surface`; focused `tests/unit/net/test_net` and `tests/unit/net/test_pipe` binaries; `profile-parity`; `br dep cycles --no-db --json` | `bd-v12u.9`, `bd-v12u.10` | Prove bounded connection lifecycle, cancellation/backpressure, resource exhaustion, unsupported-profile diagnostics, and zero kernel semantic drift. `bd-v12u.10` extends the gate to the first native socket/reactor e2e. |
 | `GATE-COMBINATOR-ACTOR-HARNESS` | `test-combinator-contract`; `make conformance`; `codec-equivalence`; `profile-parity`; actor/supervision fixture targets added by `bd-v12u.12` | `bd-v12u.11`, `bd-v12u.12` | Pin cancellation, outcome aggregation, timeout ordering, retry/budget caps, bracket cleanup, restart policy, escalation, and obligation cleanup before parity claims expand. |
 | `GATE-OVERLOAD-SLO-DEMO` | benchmark/acceptance demo targets to be added by child bead | `bd-v12u.14`, `bd-v12u.15` | Convert large-swarm telemetry into SLOs and user-facing proof bundles with replay and fail-closed messaging. |
@@ -258,9 +258,13 @@ Coverage requirements:
    `GATE-NATIVE-ADAPTER-COMMIT` records this with
    `native_adapter_commit_authority.fail_closed_records` and requires
    `drift_records == 0`.
-4. Static arena, overload, and admission work are resource-plane changes only;
+4. Trace and incident evidence artifacts must name `schema_name` and
+   `schema_version`. Required event fields and digest-visible fields cannot
+   change under `asx.trace_event.v1`; such drift fails schema compatibility and
+   must move to a new major schema version.
+5. Static arena, overload, and admission work are resource-plane changes only;
    they cannot alter lifecycle, cancellation, channel, timer, or trace semantics.
-5. Expensive proof runs must use `rch exec -- make ...`.
+6. Expensive proof runs must use `rch exec -- make ...`.
 
 ## 3. E2E Gate IDs
 

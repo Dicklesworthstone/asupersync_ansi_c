@@ -25,6 +25,69 @@
 #include <string.h>
 
 /* -------------------------------------------------------------------
+ * Trace schema descriptor
+ * ------------------------------------------------------------------- */
+
+static int trace_schema_descriptor_valid(const asx_trace_schema_descriptor *desc) {
+    if (desc == NULL) { return 0; }
+    if (desc->schema_name == NULL || desc->schema_version == NULL) { return 0; }
+    if (desc->version_major == 0u) { return 0; }
+    return 1;
+}
+
+asx_status asx_trace_schema_current(asx_trace_schema_descriptor *out) {
+    if (out == NULL) { return ASX_E_INVALID_ARGUMENT; }
+
+    out->schema_name = ASX_TRACE_SCHEMA_NAME;
+    out->schema_version = ASX_TRACE_SCHEMA_VERSION;
+    out->version_major = ASX_TRACE_SCHEMA_VERSION_MAJOR;
+    out->version_minor = ASX_TRACE_SCHEMA_VERSION_MINOR;
+    out->version_patch = ASX_TRACE_SCHEMA_VERSION_PATCH;
+    out->required_event_fields = ASX_TRACE_SCHEMA_REQUIRED_EVENT_FIELDS;
+    out->optional_event_fields = ASX_TRACE_SCHEMA_OPTIONAL_EVENT_FIELDS;
+    out->digest_event_fields = ASX_TRACE_SCHEMA_DIGEST_EVENT_FIELDS;
+    return ASX_OK;
+}
+
+asx_trace_schema_compat asx_trace_schema_compatibility(
+    const asx_trace_schema_descriptor *producer, const asx_trace_schema_descriptor *consumer) {
+    if (!trace_schema_descriptor_valid(producer) || !trace_schema_descriptor_valid(consumer)) {
+        return ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE;
+    }
+
+    if (strcmp(producer->schema_name, consumer->schema_name) != 0) {
+        return ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE;
+    }
+    if (producer->version_major != consumer->version_major) {
+        return ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE;
+    }
+    if (producer->required_event_fields != consumer->required_event_fields) {
+        return ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE;
+    }
+    if (producer->digest_event_fields != consumer->digest_event_fields) {
+        return ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE;
+    }
+
+    if (strcmp(producer->schema_version, consumer->schema_version) == 0 &&
+        producer->version_minor == consumer->version_minor &&
+        producer->version_patch == consumer->version_patch &&
+        producer->optional_event_fields == consumer->optional_event_fields) {
+        return ASX_TRACE_SCHEMA_COMPAT_EXACT;
+    }
+
+    return ASX_TRACE_SCHEMA_COMPAT_ADDITIVE_OPTIONAL;
+}
+
+const char *asx_trace_schema_compat_str(asx_trace_schema_compat compat) {
+    switch (compat) {
+    case ASX_TRACE_SCHEMA_COMPAT_EXACT: return "exact";
+    case ASX_TRACE_SCHEMA_COMPAT_ADDITIVE_OPTIONAL: return "additive_optional";
+    case ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE: return "incompatible";
+    default: return "unknown";
+    }
+}
+
+/* -------------------------------------------------------------------
  * Trace ring buffer
  * ------------------------------------------------------------------- */
 

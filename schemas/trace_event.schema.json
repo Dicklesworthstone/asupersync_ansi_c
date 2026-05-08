@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "asx-trace-event",
+  "description": "Versioned trace-event golden schema for C trace evidence and Rust correlation bundles.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_name",
+    "schema_version",
+    "producer",
+    "semantic_digest_contract",
+    "events"
+  ],
+  "properties": {
+    "schema_name": {
+      "type": "string",
+      "const": "asx.trace_event"
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "asx.trace_event.v1"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime", "language", "profile", "source"],
+      "properties": {
+        "runtime": {
+          "type": "string",
+          "enum": ["asx-c", "asupersync-rust"]
+        },
+        "language": {
+          "type": "string",
+          "enum": ["c99", "rust"]
+        },
+        "profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "semantic_digest_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "endianness", "included_event_fields"],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "fnv1a64-le"
+        },
+        "endianness": {
+          "type": "string",
+          "const": "little"
+        },
+        "included_event_fields": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["sequence", "kind_id", "entity_id", "aux"]
+          },
+          "allOf": [
+            {"contains": {"const": "sequence"}},
+            {"contains": {"const": "kind_id"}},
+            {"contains": {"const": "entity_id"}},
+            {"contains": {"const": "aux"}}
+          ]
+        }
+      }
+    },
+    "rust_correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rust_baseline_commit", "source_fixture", "mapping_status"],
+      "properties": {
+        "rust_baseline_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "source_fixture": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mapping_status": {
+          "type": "string",
+          "enum": ["semantic-equivalent", "pending-review"]
+        }
+      }
+    },
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sequence", "kind", "kind_id", "entity_id", "aux"],
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "sched_poll",
+              "sched_complete",
+              "sched_budget",
+              "sched_quiescent",
+              "sched_round",
+              "region_open",
+              "region_close",
+              "region_closed",
+              "task_spawn",
+              "task_transition",
+              "obligation_reserve",
+              "obligation_commit",
+              "obligation_abort",
+              "channel_send",
+              "channel_recv",
+              "timer_set",
+              "timer_fire",
+              "timer_cancel"
+            ]
+          },
+          "kind_id": {
+            "type": "integer",
+            "enum": [0, 1, 2, 3, 4, 16, 17, 18, 19, 20, 32, 33, 34, 48, 49, 64, 65, 66]
+          },
+          "entity_id": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{16}$"
+          },
+          "aux": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{16}$"
+          },
+          "domain": {
+            "type": "string",
+            "enum": ["scheduler", "region", "task", "obligation", "channel", "timer"]
+          },
+          "semantic_unit": {
+            "type": "string",
+            "pattern": "^[A-Z0-9_-]+$"
+          },
+          "rust_event": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_fixture_event": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}

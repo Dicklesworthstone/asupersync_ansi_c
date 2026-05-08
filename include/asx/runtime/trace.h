@@ -80,6 +80,67 @@ typedef struct {
 } asx_trace_event;
 
 /* -------------------------------------------------------------------
+ * Trace event schema contract
+ *
+ * Versioned schema metadata is used by conformance fixtures, incident
+ * bundles, and minimizers to reject ambiguous trace-event changes before
+ * they can be compared as semantic evidence.
+ * ------------------------------------------------------------------- */
+
+#define ASX_TRACE_SCHEMA_NAME "asx.trace_event"
+#define ASX_TRACE_SCHEMA_VERSION "asx.trace_event.v1"
+#define ASX_TRACE_SCHEMA_VERSION_MAJOR 1u
+#define ASX_TRACE_SCHEMA_VERSION_MINOR 0u
+#define ASX_TRACE_SCHEMA_VERSION_PATCH 0u
+
+typedef enum {
+    ASX_TRACE_SCHEMA_FIELD_SEQUENCE = 1u << 0,
+    ASX_TRACE_SCHEMA_FIELD_KIND = 1u << 1,
+    ASX_TRACE_SCHEMA_FIELD_ENTITY_ID = 1u << 2,
+    ASX_TRACE_SCHEMA_FIELD_AUX = 1u << 3,
+    ASX_TRACE_SCHEMA_FIELD_SCHEMA_VERSION = 1u << 4,
+    ASX_TRACE_SCHEMA_FIELD_PRODUCER = 1u << 5,
+    ASX_TRACE_SCHEMA_FIELD_RUST_CORRELATION = 1u << 6
+} asx_trace_schema_field;
+
+#define ASX_TRACE_SCHEMA_REQUIRED_EVENT_FIELDS                                                     \
+    (ASX_TRACE_SCHEMA_FIELD_SEQUENCE | ASX_TRACE_SCHEMA_FIELD_KIND |                               \
+     ASX_TRACE_SCHEMA_FIELD_ENTITY_ID | ASX_TRACE_SCHEMA_FIELD_AUX)
+
+#define ASX_TRACE_SCHEMA_OPTIONAL_EVENT_FIELDS                                                     \
+    (ASX_TRACE_SCHEMA_FIELD_SCHEMA_VERSION | ASX_TRACE_SCHEMA_FIELD_PRODUCER |                     \
+     ASX_TRACE_SCHEMA_FIELD_RUST_CORRELATION)
+
+#define ASX_TRACE_SCHEMA_DIGEST_EVENT_FIELDS ASX_TRACE_SCHEMA_REQUIRED_EVENT_FIELDS
+
+typedef enum {
+    ASX_TRACE_SCHEMA_COMPAT_EXACT = 0,
+    ASX_TRACE_SCHEMA_COMPAT_ADDITIVE_OPTIONAL = 1,
+    ASX_TRACE_SCHEMA_COMPAT_INCOMPATIBLE = 2
+} asx_trace_schema_compat;
+
+typedef struct {
+    const char *schema_name;
+    const char *schema_version;
+    uint32_t version_major;
+    uint32_t version_minor;
+    uint32_t version_patch;
+    uint32_t required_event_fields;
+    uint32_t optional_event_fields;
+    uint32_t digest_event_fields;
+} asx_trace_schema_descriptor;
+
+/* Read the current trace event schema descriptor. */
+ASX_API ASX_MUST_USE asx_status asx_trace_schema_current(asx_trace_schema_descriptor *out);
+
+/* Compare producer and consumer schema descriptors for event compatibility. */
+ASX_API ASX_MUST_USE asx_trace_schema_compat asx_trace_schema_compatibility(
+    const asx_trace_schema_descriptor *producer, const asx_trace_schema_descriptor *consumer);
+
+/* Return human-readable name for a trace schema compatibility result. */
+ASX_API const char *asx_trace_schema_compat_str(asx_trace_schema_compat compat);
+
+/* -------------------------------------------------------------------
  * Trace ring buffer capacity
  * ------------------------------------------------------------------- */
 

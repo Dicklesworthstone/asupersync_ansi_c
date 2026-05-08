@@ -4,7 +4,7 @@
 > **Status:** Canonical mapping slice complete for current extracted semantics (`bd-296.12`, `.15`, `.16`, `.17`, `.18`)  
 > **Rust baseline commit:** `38c152405bd03e2bd9eecf178bfbbe9472fed861`  
 > **Baseline inventory artifact:** `docs/rust_baseline_inventory.json`  
-> **Last updated:** 2026-02-27 by BeigeOtter, extended by MossySeal/GrayKite
+> **Last updated:** 2026-05-08 by SilverFrog - trace schema row
 
 This document maps extracted semantic rules to fixture families, parity rows, and test obligations so implementation/QA work can proceed without re-reading Rust internals.
 
@@ -67,6 +67,7 @@ Each provenance row in this file tracks:
 | `SCHEDULER-004` | Cancel-streak fairness limit (base 16, doubled under drain governor) | `docs/CHANNEL_TIMER_SEMANTICS.md` section 3.7 | `sc-cancel-streak-001` | `rust_vs_c`, `profile_parity` | unit + stress | mapped |
 | `SCHEDULER-005` | Fairness certificate with deterministic witness hash for replay verification | `docs/CHANNEL_TIMER_SEMANTICS.md` section 3.8 | `sc-certificate-001` | `rust_vs_c`, `profile_parity` | unit + conformance | mapped |
 | `SCHEDULER-006` | Phase 0 timer processing before task dispatch (expired timers -> inject tasks) | `docs/CHANNEL_TIMER_SEMANTICS.md` section 3.2 | `sc-timer-phase0-001` | `rust_vs_c`, `profile_parity` | unit + conformance | mapped |
+| `TRACE-001` | Versioned trace event schema and Rust/C event correlation | `docs/TRACE_EVENT_SCHEMA.md`; `schemas/trace_event.schema.json`; `include/asx/runtime/trace.h`; `src/runtime/trace.c` | `trace-schema-v1-c-region-task`, `trace-schema-v1-rust-correlated` | `rust_vs_c`, `codec_equivalence`, `profile_parity`, `incident_bundle` | `test_trace` schema compatibility + `lint-schema-validation` | mapped |
 | `COMBINATOR-001` | Join/race/select/timeout/first-ok/quorum fixed-branch semantics | `docs/DEFERRED_SURFACE_REGISTER.md` DS-C02; `include/asx/core/combinator.h`; `src/core/combinator.c`; `docs/RUST_EXPORTED_SURFACE_INVENTORY.md` combinator row | `combinator-contract-001` | `rust_vs_c`, `codec_equivalence`, `profile_parity` | `test-combinator-contract` + conformance | mapped |
 | `COMBINATOR-002` | Retry/bracket/pipeline/bulkhead/rate-limit/hedge/map-reduce, JoinSet, plan DAG, and service middleware caps | `docs/DEFERRED_SURFACE_REGISTER.md` DS-C02; `include/asx/core/combinator2.h`; `include/asx/core/join_set.h`; `include/asx/plan/plan.h`; `include/asx/service/service.h`; `src/core/combinator2.c`; `src/core/join_set.c`; `src/plan/plan.c` | `combinator-contract-001` | `rust_vs_c`, `codec_equivalence`, `profile_parity` | `test-combinator-contract` + conformance | mapped |
 
@@ -114,10 +115,11 @@ When upstream Rust baseline changes:
 | Channel | CHANNEL-001..007 | 7 | ~18 | mapped |
 | Timer | TIMER-001..008 | 8 | ~14 | mapped |
 | Scheduler | SCHEDULER-001..006 | 6 | ~12 | mapped |
+| Trace | TRACE-001 | 1 | 2 golden examples | mapped |
 | Combinator | COMBINATOR-001..002 | 2 | 1 fixture family / 4 codec-profile records | mapped |
 | Quiescence | QUIESCENCE-001 | 1 | ~6 | mapped |
 | Finalization | FINALIZE-001 | 1 | ~3 | mapped |
-| **Total** | | **35** | **~116** | |
+| **Total** | | **36** | **~118** | |
 
 ## 7. Known Gaps (Current Session)
 
