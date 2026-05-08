@@ -1393,6 +1393,7 @@ slo-gate: bench-build
 	@$(BENCH_BIN) --json > build/perf/bench-results.json
 	@tools/ci/evaluate_slo_gates.sh \
 		--bench-json build/perf/bench-results.json \
+		--command "make bench-json" \
 		--output build/perf/slo_gate_report.json \
 		--strict
 	@echo "[asx] slo-gate: complete (report: build/perf/slo_gate_report.json)"

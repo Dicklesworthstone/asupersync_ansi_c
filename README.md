@@ -331,6 +331,13 @@ Parallel operator knobs:
   gross-regression warnings. Use `rch exec -- make wave-c-acceptance-demo` for
   the user-facing Wave C bundle under
   `build/e2e-artifacts/wave-c-acceptance-*`.
+- Baseline refreshes are intentional changes, not incidental benchmark churn.
+  Update `tools/ci/slo_baselines.json` only with a fresh artifact, git commit,
+  profile, compiler, target, command, scenario set, timestamp, and threshold
+  policy. The SLO evaluator rejects stale metadata, missing benchmark reports,
+  profile mismatches, and supplied-command mismatches; it keeps resource-plane
+  latency deltas separate from semantic proof, which still comes from
+  `profile-parity` and conformance gates.
 
 ### `make build`
 

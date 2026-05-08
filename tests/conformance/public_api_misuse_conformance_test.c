@@ -74,15 +74,12 @@ TEST(unknown_and_wrong_type_handles_fail_without_events) {
 
     reset_all();
     budget = asx_budget_infinite();
-    wrong_region =
-        asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
-                        asx_handle_pack_index(0u, 0u));
-    wrong_task =
-        asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
-                        asx_handle_pack_index(0u, 0u));
-    out_of_range_task =
-        asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
-                        asx_handle_pack_index(0u, (uint16_t)ASX_MAX_TASKS));
+    wrong_region = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
+                                   asx_handle_pack_index(0u, 0u));
+    wrong_task = asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
+                                 asx_handle_pack_index(0u, 0u));
+    out_of_range_task = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)ASX_TASK_CREATED),
+                                        asx_handle_pack_index(0u, (uint16_t)ASX_MAX_TASKS));
 
     guard_capture(&guard);
 

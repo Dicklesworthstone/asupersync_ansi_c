@@ -207,8 +207,7 @@ static void json_metrics(FILE *stream, const pressure_metrics *metrics) {
             (unsigned)metrics->regions_used, (unsigned)metrics->tasks_used,
             (unsigned)metrics->obligations_used, (unsigned)metrics->channel_queue_len,
             (unsigned)metrics->channel_reserved_count, (unsigned)metrics->timer_active_count,
-            (unsigned)metrics->scheduler_event_count,
-            (unsigned)metrics->cancel_forced_event_count,
+            (unsigned)metrics->scheduler_event_count, (unsigned)metrics->cancel_forced_event_count,
             (unsigned)metrics->final_state_code);
 }
 
@@ -238,16 +237,15 @@ static void emit_report_record(const pressure_case_result *result) {
             ",\"resource_limits\":{\"max_regions\":%u,\"max_tasks\":%u,"
             "\"max_timers\":%u,\"max_obligations\":%u,\"max_channels\":%u,"
             "\"max_trace_events\":%u}",
-            (unsigned)limits.max_regions, (unsigned)limits.max_tasks,
-            (unsigned)limits.max_timers, (unsigned)limits.max_obligations,
-            (unsigned)limits.max_channels, (unsigned)limits.max_trace_events);
+            (unsigned)limits.max_regions, (unsigned)limits.max_tasks, (unsigned)limits.max_timers,
+            (unsigned)limits.max_obligations, (unsigned)limits.max_channels,
+            (unsigned)limits.max_trace_events);
     fputs(",\"scenario_id\":", stream);
     json_string(stream, result->scenario_id);
     fputs(",\"surface\":", stream);
     json_string(stream, result->surface);
     fprintf(stream, ",\"status\":\"%s\"", result->passed ? "pass" : "fail");
-    fprintf(stream, ",\"expected_status\":{\"code\":%d,\"name\":",
-            (int)result->expected_status);
+    fprintf(stream, ",\"expected_status\":{\"code\":%d,\"name\":", (int)result->expected_status);
     json_string(stream, asx_status_str(result->expected_status));
     fprintf(stream, "},\"actual_status\":{\"code\":%d,\"name\":", (int)result->actual_status);
     json_string(stream, asx_status_str(result->actual_status));
@@ -279,8 +277,7 @@ static void finalize_result(pressure_case_result *result) {
     }
 }
 
-static int snapshots_equal(const asx_runtime_snapshot *before,
-                           const asx_runtime_snapshot *after) {
+static int snapshots_equal(const asx_runtime_snapshot *before, const asx_runtime_snapshot *after) {
     return asx_runtime_snapshot_eq(before, after) == ASX_OK;
 }
 
@@ -325,8 +322,8 @@ static void scenario_region_create_exhaustion(pressure_case_result *result) {
         result->diagnostic = "existing region was not queryable after overflow";
         goto finish;
     }
-    result->passed = (result->actual_status == result->expected_status &&
-                      result->failure_atomic_observed == 1u);
+    result->passed =
+        (result->actual_status == result->expected_status && result->failure_atomic_observed == 1u);
 
 finish:
     finalize_result(result);
@@ -375,13 +372,12 @@ static void scenario_task_spawn_exhaustion(pressure_case_result *result) {
     result->semantic_final_code = FINAL_STATE_NO_MUTATION;
     result->after.final_state_code = result->semantic_final_code;
 
-    if (asx_task_get_state(last_task, &task_state) != ASX_OK ||
-        task_state != ASX_TASK_CREATED) {
+    if (asx_task_get_state(last_task, &task_state) != ASX_OK || task_state != ASX_TASK_CREATED) {
         result->diagnostic = "last valid task changed after failed spawn";
         goto finish;
     }
-    result->passed = (result->actual_status == result->expected_status &&
-                      result->failure_atomic_observed == 1u);
+    result->passed =
+        (result->actual_status == result->expected_status && result->failure_atomic_observed == 1u);
 
 finish:
     finalize_result(result);
@@ -434,8 +430,8 @@ static void scenario_obligation_reserve_exhaustion(pressure_case_result *result)
         result->diagnostic = "first obligation changed after failed reserve";
         goto finish;
     }
-    result->passed = (result->actual_status == result->expected_status &&
-                      result->failure_atomic_observed == 1u);
+    result->passed =
+        (result->actual_status == result->expected_status && result->failure_atomic_observed == 1u);
 
 finish:
     finalize_result(result);
@@ -457,8 +453,7 @@ static void scenario_channel_enqueue_exhaustion(pressure_case_result *result) {
     result->failure_atomic_expected = 1u;
     reset_all();
 
-    if (asx_region_open(&region) != ASX_OK ||
-        asx_channel_create(region, 4u, &channel) != ASX_OK) {
+    if (asx_region_open(&region) != ASX_OK || asx_channel_create(region, 4u, &channel) != ASX_OK) {
         result->diagnostic = "failed to create bounded channel";
         goto finish;
     }
@@ -499,8 +494,8 @@ static void scenario_channel_enqueue_exhaustion(pressure_case_result *result) {
         result->diagnostic = "channel FIFO was not intact after failed reserve";
         goto finish;
     }
-    result->passed = (result->actual_status == result->expected_status &&
-                      result->failure_atomic_observed == 1u);
+    result->passed =
+        (result->actual_status == result->expected_status && result->failure_atomic_observed == 1u);
 
 finish:
     finalize_result(result);
@@ -523,8 +518,7 @@ static void scenario_timer_allocation_exhaustion(pressure_case_result *result) {
     reset_all();
 
     for (index = 0u; index < (uint32_t)ASX_MAX_TIMERS; index++) {
-        if (asx_timer_register(wheel, (asx_time)(100u + index), NULL, &handles[index]) !=
-            ASX_OK) {
+        if (asx_timer_register(wheel, (asx_time)(100u + index), NULL, &handles[index]) != ASX_OK) {
             result->diagnostic = "failed to fill timer wheel";
             goto finish;
         }
@@ -555,8 +549,8 @@ static void scenario_timer_allocation_exhaustion(pressure_case_result *result) {
         result->diagnostic = "oldest timer was not intact after failed allocation";
         goto finish;
     }
-    result->passed = (result->actual_status == result->expected_status &&
-                      result->failure_atomic_observed == 1u);
+    result->passed =
+        (result->actual_status == result->expected_status && result->failure_atomic_observed == 1u);
 
 finish:
     finalize_result(result);
@@ -570,9 +564,7 @@ static asx_status run_budget_once(uint32_t *event_count_out) {
 
     reset_all();
     if (asx_region_open(&region) != ASX_OK) return ASX_E_INVALID_STATE;
-    if (asx_task_spawn(region, poll_pending, NULL, &task) != ASX_OK) {
-        return ASX_E_INVALID_STATE;
-    }
+    if (asx_task_spawn(region, poll_pending, NULL, &task) != ASX_OK) { return ASX_E_INVALID_STATE; }
     budget = asx_budget_from_polls(1u);
     status = asx_scheduler_run(region, &budget);
     if (event_count_out != NULL) *event_count_out = asx_scheduler_event_count();

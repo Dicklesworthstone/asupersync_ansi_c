@@ -5,6 +5,21 @@
     "update_policy": "Baseline changes require explicit rationale in commit message and must reference the benchmark run that justifies the new values. Use 'make bench-json > bench-results.json' for normal profiles and 'rch exec -- make parallel-bench-json > parallel-bench-results.json' for PARALLEL worker-count baselines.",
     "tolerance_policy": "Each metric budget is set to baseline_value * headroom_multiplier. The multiplier accounts for CI runner variance, OS scheduling jitter, and measurement noise. Tighter multipliers are used for low-variance operations (e.g., timer_cancel) and looser for high-variance ones (e.g., timer_register).",
     "approval_required": true,
+    "baseline_validation": {
+      "max_age_days": 120,
+      "required_metadata_fields": [
+        "git_commit",
+        "profile",
+        "compiler",
+        "target",
+        "command",
+        "scenario_set",
+        "captured_at",
+        "threshold_policy"
+      ],
+      "command_policy": "evaluate_slo_gates.sh rejects a supplied --command that does not match baseline_metadata.command or one of baseline_metadata.accepted_commands.",
+      "semantic_boundary": "These SLO baselines cover resource-plane throughput and tail behavior only. Semantic identity remains enforced by conformance, codec-equivalence, profile-parity, and semantic-delta gates."
+    },
     "audit_trail": [
       {
         "date": "2026-03-01",
@@ -18,21 +33,21 @@
         "author": "SandyAnchor",
         "action": "add_hft_profile",
         "rationale": "HFT profile baselines from development host. Captures HFT-specific instrumentation overhead. Same headroom strategy as CORE. Closes quality gate gap bd-39o.",
-        "commit": "pending"
+        "commit": "a645205d4c65e09a0f0e7c645620b97d78d11731"
       },
       {
         "date": "2026-05-08",
         "author": "SilverFrog",
         "action": "add_parallel_observe_only_profile",
         "rationale": "PARALLEL profile gross-regression baseline from rch exec -- make parallel-bench-json on worker vmi1149989. Worker-count baselines stay in the benchmark artifact; SLO profile keeps loose thresholds for the aggregate large-swarm lane.",
-        "commit": "pending"
+        "commit": "ebf4d141952187c9bce185383fd9af2961b6cb64"
       },
       {
         "date": "2026-05-08",
         "author": "SilverFrog",
         "action": "calibrate_parallel_overload_admission_slos",
         "rationale": "RCH run `rch exec -- make parallel-bench-gate` on worker vmi1152480 emitted 5 worker-count rows and 15 resource-class footprint rows. Expected full-queue pressure produced observe-only warnings for worker_count=1/2/8/32/64; block count stayed 0. Thresholds are resource-plane gates only and require profile-parity evidence before any baseline update can claim semantic safety.",
-        "commit": "pending"
+        "commit": "2d8a13b3454c8376d195876e6f2506a8687909db"
       }
     ]
   },
@@ -41,6 +56,25 @@
       "captured_at": "2026-03-01T05:10:00Z",
       "captured_on": "development-host",
       "deterministic": true,
+      "baseline_metadata": {
+        "git_commit": "07b193833509ff496ed1e02201baa06dab1e53be",
+        "profile": "CORE",
+        "compiler": "gcc",
+        "target": "development-host-x86_64",
+        "command": "make bench-json",
+        "accepted_commands": [
+          "make bench-json",
+          "make slo-gate"
+        ],
+        "scenario_set": "runtime_microbenchmarks.v1",
+        "captured_at": "2026-03-01T05:10:00Z",
+        "threshold_policy": {
+          "name": "tail_latency_headroom_v1",
+          "mode": "blocking",
+          "semantic_scope": "resource-plane-only"
+        },
+        "max_age_days": 120
+      },
       "benchmarks": {
         "scheduler_single_task": {
           "p99_ns":    {"budget": 1000,  "headroom": 5.0, "baseline": 201},
@@ -104,6 +138,26 @@
       "captured_at": "2026-03-02T06:20:00Z",
       "captured_on": "development-host",
       "deterministic": true,
+      "baseline_metadata": {
+        "git_commit": "a645205d4c65e09a0f0e7c645620b97d78d11731",
+        "profile": "HFT",
+        "compiler": "gcc",
+        "target": "development-host-x86_64",
+        "command": "make bench-json",
+        "accepted_commands": [
+          "make bench-json",
+          "make bench-json PROFILE=HFT",
+          "make slo-gate PROFILE=HFT"
+        ],
+        "scenario_set": "runtime_microbenchmarks_hft.v1",
+        "captured_at": "2026-03-02T06:20:00Z",
+        "threshold_policy": {
+          "name": "hft_tail_latency_headroom_v1",
+          "mode": "blocking",
+          "semantic_scope": "resource-plane-only"
+        },
+        "max_age_days": 120
+      },
       "benchmarks": {
         "scheduler_single_task": {
           "p99_ns":    {"budget": 1100,  "headroom": 5.0, "baseline": 221},
@@ -169,6 +223,26 @@
       "deterministic": true,
       "governance_mode": "observe_only_gross_regression",
       "baseline_command": "rch exec -- make parallel-bench-json",
+      "baseline_metadata": {
+        "git_commit": "ebf4d141952187c9bce185383fd9af2961b6cb64",
+        "profile": "PARALLEL",
+        "compiler": "gcc",
+        "target": "rch-linux-x86_64",
+        "command": "rch exec -- make parallel-bench-json",
+        "accepted_commands": [
+          "rch exec -- make parallel-bench-json",
+          "rch exec -- make parallel-bench-json PROFILE=PARALLEL",
+          "rch exec -- make parallel-bench-gate"
+        ],
+        "scenario_set": "parallel_worker_baselines.v1",
+        "captured_at": "2026-05-08T08:58:50Z",
+        "threshold_policy": {
+          "name": "parallel_observe_only_gross_regression_v1",
+          "mode": "observe_only_warn_block_fail",
+          "semantic_scope": "resource-plane-only"
+        },
+        "max_age_days": 120
+      },
       "benchmarks": {
         "parallel_large_swarm": {
           "p99_ns":    {"budget": 1000000, "headroom": 40.7, "baseline": 24587},
