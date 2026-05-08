@@ -29,6 +29,14 @@ e2e_init "posix-adapter-smoke" "E2E-POSIX-ADAPTER"
 
 E2E_BIN="${E2E_ARTIFACT_DIR}/e2e_posix_adapter_smoke"
 
+if ! "${MAKE:-make}" -C "$E2E_PROJECT_ROOT" build PROFILE=POSIX DETERMINISTIC=0 \
+    CFLAGS="-DASX_LOCKFREE_SINGLE_THREAD=0" LDFLAGS="-lpthread -lrt"; then
+    e2e_scenario "posix_adapter_smoke.lib_build" "POSIX lib build failed" "fail"
+    e2e_finish
+    exit $?
+fi
+e2e_scenario "posix_adapter_smoke.lib_build" "" "pass"
+
 if ! e2e_build "${SCRIPT_DIR}/e2e_posix_adapter_smoke.c" "$E2E_BIN" \
     "-DASX_LOCKFREE_SINGLE_THREAD=0 -lpthread -lrt"; then
     e2e_scenario "posix_adapter_smoke.build" "compilation failed" "fail"

@@ -122,6 +122,7 @@ static uint64_t posix_entropy_u64(void *ctx) {
 /* ------------------------------------------------------------------ */
 
 #if defined(__linux__)
+#include <errno.h>
 #include <sys/epoll.h>
 
 #define ASX_POSIX_REACTOR_MAX_EVENTS 64
@@ -132,29 +133,89 @@ typedef struct {
 
 static asx_posix_reactor_ctx g_reactor_ctx = {-1};
 
-static asx_status posix_reactor_wait(void *ctx, uint32_t timeout_ms, uint32_t *ready_count) {
-    asx_posix_reactor_ctx *rc = (asx_posix_reactor_ctx *)ctx;
-    struct epoll_event events[ASX_POSIX_REACTOR_MAX_EVENTS];
-    int n;
-
-    if (ready_count == NULL) return ASX_E_INVALID_ARGUMENT;
-    *ready_count = 0;
-
+static asx_status posix_reactor_ensure(asx_posix_reactor_ctx *rc) {
     if (rc == NULL || rc->epoll_fd < 0) {
         /* Lazy-initialize epoll instance */
         if (rc == NULL) return ASX_E_INVALID_STATE;
         rc->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
         if (rc->epoll_fd < 0) return ASX_E_RESOURCE_EXHAUSTED;
     }
+    return ASX_OK;
+}
+
+static int posix_interest_to_epoll(uint32_t interest, uint32_t *out_events) {
+    uint32_t events = 0u;
+    uint32_t valid =
+        ASX_POSIX_REACTOR_READABLE | ASX_POSIX_REACTOR_WRITABLE | ASX_POSIX_REACTOR_ERROR;
+
+    if (out_events == NULL || interest == 0u || (interest & ~valid) != 0u) { return 0; }
+    if ((interest & ASX_POSIX_REACTOR_READABLE) != 0u) { events |= (uint32_t)EPOLLIN; }
+    if ((interest & ASX_POSIX_REACTOR_WRITABLE) != 0u) { events |= (uint32_t)EPOLLOUT; }
+    if ((interest & ASX_POSIX_REACTOR_ERROR) != 0u) {
+        events |= (uint32_t)EPOLLERR | (uint32_t)EPOLLHUP;
+    }
+    *out_events = events;
+    return events != 0u;
+}
+
+static asx_status posix_reactor_wait(void *ctx, uint32_t timeout_ms, uint32_t *ready_count) {
+    asx_posix_reactor_ctx *rc = (asx_posix_reactor_ctx *)ctx;
+    struct epoll_event events[ASX_POSIX_REACTOR_MAX_EVENTS];
+    asx_status st;
+    int n;
+
+    if (ready_count == NULL) return ASX_E_INVALID_ARGUMENT;
+    *ready_count = 0;
+
+    st = posix_reactor_ensure(rc);
+    if (st != ASX_OK) return st;
 
     n = epoll_wait(rc->epoll_fd, events, ASX_POSIX_REACTOR_MAX_EVENTS, (int)timeout_ms);
     if (n < 0) {
         /* EINTR is not an error — just means we were interrupted */
+        if (errno != EINTR) return ASX_E_INVALID_STATE;
         *ready_count = 0;
         return ASX_OK;
     }
     *ready_count = (uint32_t)n;
     return ASX_OK;
+}
+
+asx_status asx_posix_reactor_register_fd(void *reactor_ctx, int fd, uint32_t interest) {
+    asx_posix_reactor_ctx *rc = (asx_posix_reactor_ctx *)reactor_ctx;
+    struct epoll_event ev;
+    uint32_t events = 0u;
+    asx_status st;
+    int ret;
+
+    if (fd < 0 || !posix_interest_to_epoll(interest, &events)) return ASX_E_INVALID_ARGUMENT;
+    st = posix_reactor_ensure(rc);
+    if (st != ASX_OK) return st;
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = events;
+    ev.data.fd = fd;
+
+    ret = epoll_ctl(rc->epoll_fd, EPOLL_CTL_ADD, fd, &ev);
+    if (ret == 0) return ASX_OK;
+    if (errno == EEXIST && epoll_ctl(rc->epoll_fd, EPOLL_CTL_MOD, fd, &ev) == 0) { return ASX_OK; }
+    if (errno == EBADF || errno == EINVAL || errno == EPERM) return ASX_E_INVALID_ARGUMENT;
+    return ASX_E_INVALID_STATE;
+}
+
+void asx_posix_reactor_deregister_fd(void *reactor_ctx, int fd) {
+    asx_posix_reactor_ctx *rc = (asx_posix_reactor_ctx *)reactor_ctx;
+    if (rc == NULL || rc->epoll_fd < 0 || fd < 0) return;
+    (void)epoll_ctl(rc->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+}
+
+void asx_posix_reactor_reset(void *reactor_ctx) {
+    asx_posix_reactor_ctx *rc = (asx_posix_reactor_ctx *)reactor_ctx;
+    if (rc == NULL) return;
+    if (rc->epoll_fd >= 0) {
+        (void)close(rc->epoll_fd);
+        rc->epoll_fd = -1;
+    }
 }
 
 #else /* Non-Linux POSIX: use poll(2) as fallback */
@@ -168,6 +229,20 @@ static asx_status posix_reactor_wait(void *ctx, uint32_t timeout_ms, uint32_t *r
     if (timeout_ms > 0) { poll(NULL, 0, (int)timeout_ms); }
     return ASX_OK;
 }
+
+asx_status asx_posix_reactor_register_fd(void *reactor_ctx, int fd, uint32_t interest) {
+    (void)reactor_ctx;
+    (void)fd;
+    (void)interest;
+    return ASX_E_PERMISSION_DENIED;
+}
+
+void asx_posix_reactor_deregister_fd(void *reactor_ctx, int fd) {
+    (void)reactor_ctx;
+    (void)fd;
+}
+
+void asx_posix_reactor_reset(void *reactor_ctx) { (void)reactor_ctx; }
 
 #endif /* __linux__ */
 
@@ -209,10 +284,18 @@ typedef struct {
     int stopping;
 } posix_blocking_pool;
 
-static posix_blocking_pool g_blocking_pool = {
-    PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER, {0}, {{0}}, 0u,
-    0u,                        0u,                         0u,                    0u, 0,
-    0};
+static posix_blocking_pool g_blocking_pool = {PTHREAD_MUTEX_INITIALIZER,
+                                              PTHREAD_COND_INITIALIZER,
+                                              PTHREAD_COND_INITIALIZER,
+                                              {0},
+                                              {{0}},
+                                              0u,
+                                              0u,
+                                              0u,
+                                              0u,
+                                              0u,
+                                              0,
+                                              0};
 
 static void posix_blocking_pool_reset_locked(posix_blocking_pool *pool) {
     pool->head = 0u;
@@ -249,9 +332,7 @@ static void *posix_blocking_worker(void *arg) {
 
         pthread_mutex_lock(&pool->mutex);
         if (pool->active > 0u) { pool->active--; }
-        if (pool->queued == 0u && pool->active == 0u) {
-            pthread_cond_broadcast(&pool->drained);
-        }
+        if (pool->queued == 0u && pool->active == 0u) { pthread_cond_broadcast(&pool->drained); }
         pthread_mutex_unlock(&pool->mutex);
     }
 

@@ -205,6 +205,11 @@ surface-specific obligations above. Expensive gates must run through
   deterministic-safe entropy selection, keeps socket/IOCP registration and
   blocking hooks explicitly unsupported, and adds `test-win32-hooks-build` as
   the available mingw compile lane for the adapter contract.
+- Landed under `bd-v12u.4`: POSIX reactor fd registration exposes the timed
+  readiness seam behind explicit capability macros, rejects bad descriptors and
+  invalid interest masks fail-closed, and adds `test-e2e-posix-adapter` evidence
+  that pipe readiness wakes the runtime I/O driver, waker registry, timed lane,
+  and parallel scheduler without commit-order drift.
 - Remaining: native platform adapters must preserve deterministic commit authority before enabling concurrent lane execution by default.
 **Owner:** `SilverFrog` started contract planning in `bd-pweu.1`; implementation ownership remains per-child bead
 **Dependency path:** Wave A gates -> parallel contract -> scheduler/atomic/channel/platform gates -> e2e/proof/locality evidence -> benchmark baselines -> native adapter concurrency proof

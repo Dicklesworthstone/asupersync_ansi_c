@@ -46,6 +46,18 @@ TEST(posix_install_populates_expected_hooks) {
     ASSERT_TRUE(hooks.log.write_fn != NULL);
 }
 
+TEST(posix_capability_contract_names_supported_and_deferred_surfaces) {
+    ASSERT_EQ(ASX_POSIX_HAS_TIMED_REACTOR_WAIT, 1u);
+#if defined(__linux__)
+    ASSERT_EQ(ASX_POSIX_HAS_REACTOR_FD_REGISTRATION, 1u);
+#else
+    ASSERT_EQ(ASX_POSIX_HAS_REACTOR_FD_REGISTRATION, 0u);
+#endif
+    ASSERT_EQ(ASX_POSIX_REACTOR_READABLE, 0x01u);
+    ASSERT_EQ(ASX_POSIX_REACTOR_WRITABLE, 0x02u);
+    ASSERT_EQ(ASX_POSIX_REACTOR_ERROR, 0x04u);
+}
+
 TEST(posix_install_validates_in_live_and_deterministic_modes) {
     asx_runtime_hooks hooks;
 
@@ -225,17 +237,14 @@ TEST(posix_entropy_distribution_uniqueness) {
 }
 
 #if defined(__linux__)
-#include <sys/epoll.h>
 #include <unistd.h>
 
 TEST(posix_reactor_lifecycle_pipe) {
-    /* Reactor lifecycle: create pipe, register read-end with epoll,
+    /* Reactor lifecycle: create pipe, register read-end through the POSIX helper,
      * write to pipe, wait should report ready=1, then clean up. */
     asx_runtime_hooks hooks;
     uint32_t ready_count = 0;
     int pipefd[2];
-    int epoll_fd;
-    struct epoll_event ev;
     char buf = 'X';
 
     ASSERT_EQ(install_posix_hooks(&hooks), ASX_OK);
@@ -243,17 +252,13 @@ TEST(posix_reactor_lifecycle_pipe) {
     /* Trigger lazy init by calling wait once */
     ASSERT_EQ(hooks.reactor.wait_fn(hooks.reactor.ctx, 0u, &ready_count), ASX_OK);
 
-    /* Access epoll fd from reactor context (first field of asx_posix_reactor_ctx) */
     ASSERT_TRUE(hooks.reactor.ctx != NULL);
-    epoll_fd = *((int *)hooks.reactor.ctx);
-    ASSERT_TRUE(epoll_fd >= 0);
 
     /* Create pipe and register read-end */
     ASSERT_EQ(pipe(pipefd), 0);
-    memset(&ev, 0, sizeof(ev));
-    ev.events = EPOLLIN;
-    ev.data.fd = pipefd[0];
-    ASSERT_EQ(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, pipefd[0], &ev), 0);
+    ASSERT_EQ(asx_posix_reactor_register_fd(hooks.reactor.ctx, pipefd[0],
+                                            ASX_POSIX_REACTOR_READABLE),
+              ASX_OK);
 
     /* Write to pipe to make it readable */
     ASSERT_EQ(write(pipefd[1], &buf, 1), 1);
@@ -264,7 +269,7 @@ TEST(posix_reactor_lifecycle_pipe) {
     ASSERT_EQ(ready_count, 1u);
 
     /* Deregister and close */
-    (void)epoll_ctl(epoll_fd, EPOLL_CTL_DEL, pipefd[0], NULL);
+    asx_posix_reactor_deregister_fd(hooks.reactor.ctx, pipefd[0]);
     close(pipefd[0]);
     close(pipefd[1]);
 
@@ -272,8 +277,23 @@ TEST(posix_reactor_lifecycle_pipe) {
     ready_count = 99u;
     ASSERT_EQ(hooks.reactor.wait_fn(hooks.reactor.ctx, 0u, &ready_count), ASX_OK);
     ASSERT_EQ(ready_count, 0u);
+    asx_posix_reactor_reset(hooks.reactor.ctx);
+    ASSERT_EQ(hooks.reactor.wait_fn(hooks.reactor.ctx, 0u, &ready_count), ASX_OK);
+    asx_posix_reactor_reset(hooks.reactor.ctx);
 
     fprintf(stderr, "    reactor lifecycle: pipe register/write/wait/deregister OK\n");
+}
+
+TEST(posix_reactor_registration_fails_closed_for_bad_inputs) {
+    asx_runtime_hooks hooks;
+
+    ASSERT_EQ(install_posix_hooks(&hooks), ASX_OK);
+    ASSERT_EQ(asx_posix_reactor_register_fd(NULL, 0, ASX_POSIX_REACTOR_READABLE),
+              ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_posix_reactor_register_fd(hooks.reactor.ctx, -1, ASX_POSIX_REACTOR_READABLE),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_posix_reactor_register_fd(hooks.reactor.ctx, 0, 0u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_posix_reactor_register_fd(hooks.reactor.ctx, 0, 0x80u), ASX_E_INVALID_ARGUMENT);
 }
 
 #endif /* __linux__ */
@@ -287,6 +307,7 @@ TEST(posix_hooks_skipped_without_posix_profile) { ASSERT_TRUE(1); }
 int main(void) {
 #if defined(ASX_PROFILE_POSIX)
     RUN_TEST(posix_install_populates_expected_hooks);
+    RUN_TEST(posix_capability_contract_names_supported_and_deferred_surfaces);
     RUN_TEST(posix_install_validates_in_live_and_deterministic_modes);
     RUN_TEST(posix_wall_clock_is_non_decreasing);
     RUN_TEST(posix_wall_clock_advances_after_short_sleep);
@@ -302,6 +323,7 @@ int main(void) {
     RUN_TEST(posix_entropy_distribution_uniqueness);
 #if defined(__linux__)
     RUN_TEST(posix_reactor_lifecycle_pipe);
+    RUN_TEST(posix_reactor_registration_fails_closed_for_bad_inputs);
 #endif
 #else
     RUN_TEST(posix_hooks_skipped_without_posix_profile);

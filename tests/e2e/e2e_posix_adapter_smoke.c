@@ -18,13 +18,19 @@
 #endif
 
 #include <asx/asx.h>
+#include <asx/runtime/io_driver.h>
+#include <asx/runtime/parallel.h>
+#include <asx/runtime/waker.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #if defined(ASX_PROFILE_POSIX)
 #include <asx/platform/posix.h>
 #include <pthread.h>
 #include <time.h>
+#include <unistd.h>
 #endif
 
 static void scenario(const char *id, int pass, const char *detail) {
@@ -42,6 +48,13 @@ static uint64_t add_seven(void *user_data) {
     return value + 7u;
 }
 
+static asx_status poll_mark_ready(void *user_data, asx_task_id self) {
+    uint32_t *count = (uint32_t *)user_data;
+    (void)self;
+    if (count != NULL) { (*count)++; }
+    return ASX_OK;
+}
+
 static uint64_t gated_job(void *user_data) {
     (void)user_data;
     pthread_mutex_lock(&g_gate_mutex);
@@ -55,6 +68,31 @@ static void open_gate(void) {
     g_gate_open = 1;
     pthread_cond_broadcast(&g_gate_cond);
     pthread_mutex_unlock(&g_gate_mutex);
+}
+
+static const char *env_or_default(const char *name, const char *fallback) {
+    const char *value = getenv(name);
+    return value != NULL ? value : fallback;
+}
+
+static void scenario_reactor_trace(uint64_t logical_step, uint32_t ready_count,
+                                   uint32_t poll_count) {
+    char detail[384];
+    int n;
+    const char *seed = env_or_default("ASX_E2E_SEED", "42");
+    const char *profile = env_or_default("ASX_E2E_PROFILE", "POSIX");
+
+    n = snprintf(detail, sizeof(detail),
+                 "seed=%s profile=%s logical_step=%llu ready_count=%u poll_count=%u "
+                 "rerun=ASX_E2E_SEED=%s_ASX_E2E_PROFILE=POSIX_"
+                 "ASX_E2E_DETERMINISTIC=0_tests/e2e/posix_adapter_smoke.sh",
+                 seed, profile, (unsigned long long)logical_step, (unsigned)ready_count,
+                 (unsigned)poll_count, seed);
+    if (n < 0 || (size_t)n >= sizeof(detail)) {
+        scenario("posix_adapter_smoke.reactor_scheduler_trace", 0, "detail_truncated");
+        return;
+    }
+    scenario("posix_adapter_smoke.reactor_scheduler_trace", 1, detail);
 }
 
 static int wait_result(const asx_blocking_handle *handle, uint64_t *out) {
@@ -177,9 +215,113 @@ int main(void) {
         open_gate();
     }
 
+    /* Scenario 10: POSIX fd readiness pumps through io_driver -> waker -> timed lane */
+    {
+        asx_parallel_config pcfg;
+        asx_region_id rid;
+        asx_task_id tid;
+        asx_waker waker;
+        asx_io_token token;
+        asx_io_event events[2];
+        asx_scheduling_metrics metrics;
+        asx_budget budget;
+        uint32_t poll_count = 0u;
+        uint32_t event_count = 0u;
+        uint64_t logical_step = 11u;
+        int pipefd[2] = {-1, -1};
+        char byte = 'R';
+        int ok = 1;
+        int token_registered = 0;
+
+        memset(&pcfg, 0, sizeof(pcfg));
+        pcfg.worker_count = 2u;
+        pcfg.fairness = ASX_FAIRNESS_ROUND_ROBIN;
+        pcfg.lane_weights[ASX_LANE_READY] = 1u;
+        pcfg.lane_weights[ASX_LANE_CANCEL] = 1u;
+        pcfg.lane_weights[ASX_LANE_TIMED] = 1u;
+        pcfg.starvation_limit = 5u;
+        asx_parallel_admission_policy_init(&pcfg.admission_policy);
+        asx_parallel_locality_config_init(&pcfg.locality);
+        st = asx_parallel_init(&pcfg);
+        scenario("posix_adapter_smoke.parallel_init", st == ASX_OK, NULL);
+        if (st != ASX_OK) ok = 0;
+
+        if (ok) {
+            st = asx_region_open(&rid);
+            scenario("posix_adapter_smoke.region_open", st == ASX_OK, NULL);
+            if (st != ASX_OK) ok = 0;
+        }
+        if (ok) {
+            st = asx_task_spawn(rid, poll_mark_ready, &poll_count, &tid);
+            scenario("posix_adapter_smoke.timed_task_spawn", st == ASX_OK, NULL);
+            if (st != ASX_OK) ok = 0;
+        }
+        if (ok) {
+            st = asx_waker_register(tid, &waker);
+            scenario("posix_adapter_smoke.waker_register", st == ASX_OK, NULL);
+            if (st != ASX_OK) ok = 0;
+        }
+        if (ok) {
+            st = asx_inject_timed(tid);
+            scenario("posix_adapter_smoke.inject_timed", st == ASX_OK, NULL);
+            if (st != ASX_OK) ok = 0;
+        }
+        if (ok) {
+            st = pipe(pipefd) == 0 ? ASX_OK : ASX_E_INVALID_STATE;
+            scenario("posix_adapter_smoke.pipe_create", st == ASX_OK, NULL);
+            if (st != ASX_OK) ok = 0;
+        }
+        if (ok) {
+            st = asx_io_register(pipefd[0], ASX_IO_READABLE, &waker, &token);
+            scenario("posix_adapter_smoke.io_register", st == ASX_OK, NULL);
+            if (st == ASX_OK) token_registered = 1;
+            if (st != ASX_OK) ok = 0;
+        }
+        if (ok) {
+            st = asx_posix_reactor_register_fd(hooks.reactor.ctx, pipefd[0],
+                                               ASX_POSIX_REACTOR_READABLE);
+            scenario("posix_adapter_smoke.reactor_register_fd", st == ASX_OK, NULL);
+            if (st != ASX_OK) ok = 0;
+        }
+        if (ok) {
+            st = write(pipefd[1], &byte, 1) == 1 ? ASX_OK : ASX_E_INVALID_STATE;
+            scenario("posix_adapter_smoke.pipe_signal", st == ASX_OK, NULL);
+            if (st != ASX_OK) ok = 0;
+        }
+        if (ok) {
+            event_count = asx_io_driver_poll(events, 2u, 25u);
+            scenario("posix_adapter_smoke.io_driver_ready", event_count == 1u, NULL);
+            scenario("posix_adapter_smoke.waker_signaled", asx_waker_is_signaled(&waker), NULL);
+        }
+        if (ok) {
+            budget = asx_budget_from_polls(8u);
+            st = asx_parallel_run(rid, &budget);
+            scenario("posix_adapter_smoke.parallel_run_after_ready", st == ASX_OK, NULL);
+            scenario("posix_adapter_smoke.timed_task_polled", poll_count == 1u, NULL);
+        }
+        if (ok && asx_parallel_get_metrics(&metrics) == ASX_OK) {
+            scenario("posix_adapter_smoke.scheduler_metrics",
+                     metrics.reactor_ready >= 1u && metrics.waker_ready >= 1u &&
+                         metrics.timed_promotions >= 1u,
+                     NULL);
+            scenario_reactor_trace(logical_step, event_count, poll_count);
+        } else if (ok) {
+            scenario("posix_adapter_smoke.scheduler_metrics", 0, "metrics_unavailable");
+        }
+
+        if (pipefd[0] >= 0) {
+            asx_posix_reactor_deregister_fd(hooks.reactor.ctx, pipefd[0]);
+            if (token_registered) { asx_io_deregister(&token); }
+            close(pipefd[0]);
+        }
+        if (pipefd[1] >= 0) { close(pipefd[1]); }
+        asx_posix_reactor_reset(hooks.reactor.ctx);
+    }
+
     asx_runtime_shutdown(&rt);
     scenario("posix_adapter_smoke.shutdown_drains",
-             !asx_runtime_blocking_pool_initialized(&rt) && asx_runtime_blocking_active_count(&rt) == 0u,
+             !asx_runtime_blocking_pool_initialized(&rt) &&
+                 asx_runtime_blocking_active_count(&rt) == 0u,
              NULL);
 
     {
