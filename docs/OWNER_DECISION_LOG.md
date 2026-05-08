@@ -2,7 +2,7 @@
 
 > **Bead:** `bd-296.25`  
 > **Status:** Resolved-decision register with impact mapping  
-> **Last updated:** 2026-02-27 by LilacTurtle
+> **Last updated:** 2026-05-08 by SilverFrog
 
 This log records only decisions that are already effective in project artifacts. Unresolved recommendations are intentionally excluded.
 
@@ -21,7 +21,7 @@ Decisions still marked draft/recommendation-only are tracked as pending, not inc
 |---|---|---|---|
 | `DEC-001` | C dialect baseline is ANSI C core with selective C99 use when it materially improves correctness/maintainability. | Plan section 17 resolved decisions; `AGENTS.md` toolchain policy. | resolved |
 | `DEC-002` | Codec strategy is JSON-first for parity/debug, with clean architecture toggle to optimized binary codec. | Plan section 17 resolved decisions; `AGENTS.md` codec macros. | resolved |
-| `DEC-003` | Optional parallel profile is deferred from Wave A kernel milestone (Wave B+), with explicit unblock criteria. | `DEFERRED_SURFACE_REGISTER.md` DS-P01 status “Deferred per ADR-001”; deferred-surface audit trail marks ADR-001 applied. | resolved-in-repo |
+| `DEC-003` | Optional parallel profile was deferred from the Wave A kernel milestone, then reopened for post-kernel production graduation under `bd-pweu` with explicit remaining blockers. | `DEFERRED_SURFACE_REGISTER.md` DS-P01 status; `QUALITY_GATES.md` parallel graduation gate; closed `bd-pweu.1`, `.7`, `.10`, `.11`, `.12`, `.13`; open `bd-pweu.9`, `.14`. | resolved-in-repo; graduation-active |
 | `DEC-004` | Static arena backend is deferred; Wave A ships allocator-vtable-compatible dynamic backend plus allocator seal hook. | `DEFERRED_SURFACE_REGISTER.md` DS-S01 status “deferred per ADR-002”; deferred-surface audit trail marks ADR-002 applied. | resolved-in-repo |
 | `DEC-005` | Semantic drift is disallowed by default: resource-plane tuning may vary, semantic behavior may not fork; semantic delta budget defaults to zero. | `AGENTS.md` core rule; plan semantic-delta policy and kernel DoD gate language. | resolved |
 
@@ -31,7 +31,7 @@ Decisions still marked draft/recommendation-only are tracked as pending, not inc
 |---|---|---|---|---|---|
 | `DEC-001` | `bd-hwb.1`, `bd-hwb.3`, `bd-ix8.2` | compiler matrix (`gcc/clang/msvc`, 32/64) must preserve C99 portability boundaries | verify APIs/types compile and behave under configured dialect switches | walking-skeleton scenario must run under baseline profile with same semantics | build manifests must record compiler + profile + language mode |
 | `DEC-002` | `bd-2n0.*`, `bd-1md.2`, `bd-1md.11` | codec-equivalence and conformance gates are mandatory | unit coverage for canonical schema encode/decode paths | same scenario must match semantic digest across JSON/BIN | parity reports include `codec`, `semantic_digest`, `delta_classification` |
-| `DEC-003` | `bd-2cw.7` (deferred), `bd-296.24`, `bd-296.10`, `bd-ix8.1` | Wave A excludes parallel-profile gates; compile-only scaffold lanes may exist locally, but parity scope remains single-thread kernel profiles | unit/invariant suites for Wave A do not assume parallel semantics | no parallel scheduling scenarios in Wave A e2e packs | deferred-surface entries + audit trail must keep explicit unblock criteria |
+| `DEC-003` | `bd-2cw.7`, `bd-296.24`, `bd-296.10`, `bd-ix8.1`, `bd-pweu.*` | Historical Wave A excluded parallel-profile gates; current post-kernel graduation requires `parallel-parity`, parallel telemetry, large-swarm e2e, and formal memory-model proof gates | unit/invariant suites must preserve single-worker fallback semantics and parallel worker-count boundaries | `tests/e2e/parallel_swarm.sh` records seed, worker count, profile, digest, and rerun command for current parallel scenarios | deferred-surface entries must distinguish landed parity/e2e/proof evidence from remaining locality and benchmark blockers |
 | `DEC-004` | `bd-hwb.6`, `bd-hwb.1`, `bd-j4m.*` (future static backend parity) | embedded/profile gates run dynamic allocator backend in Wave A; static backend gate deferred | allocator-vtable behavior and seal semantics must be unit-tested | wave scenarios must verify deterministic behavior independent of allocator backend | runtime logs record allocator backend and seal mode in artifacts |
 | `DEC-005` | `bd-296.6`, `bd-2cw.*`, `bd-hwb.*`, `bd-1md.*`, `bd-66l.9` | semantic-delta budget gate default `0`; profile parity/conformance drift blocks merges | invariant suites must fail on lifecycle/cancellation/linearity semantic divergence | cross-profile shared scenarios must keep equal canonical digest | closure manifests require explicit decision/fixture/evidence linkage |
 
@@ -50,7 +50,8 @@ Downstream artifacts should reference decisions via `DEC-*` keys:
 
 - `DEC-001` language mode and portability assumptions,
 - `DEC-002` codec/parity assumptions,
-- `DEC-003` parallel profile deferral scope,
+- `DEC-003` historical parallel profile deferral and current `bd-pweu`
+  graduation boundary,
 - `DEC-004` allocator backend scope,
 - `DEC-005` semantic-delta/no-drift enforcement.
 

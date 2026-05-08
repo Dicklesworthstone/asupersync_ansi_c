@@ -1699,7 +1699,7 @@ help:
 	@echo "asx build system — primary targets:"
 	@echo ""
 	@echo "  build              Build library (warnings-as-errors)"
-	@echo "  build-parallel     Build compile-only PARALLEL scaffold (deferred from Wave A gates)"
+	@echo "  build-parallel     Build PARALLEL profile with live atomic backend enabled"
 	@echo "  build-browser      Build library with PROFILE=BROWSER"
 	@echo "  test-browser-focused Run browser-profile focused shipped-surface suites"
 	@echo "  test-browser-minimal-focused Run minimal-browser hidden-contract suites"

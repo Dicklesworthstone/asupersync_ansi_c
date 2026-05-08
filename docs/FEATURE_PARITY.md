@@ -2,7 +2,7 @@
 
 > **Bead:** `bd-296.3`
 > **Status:** Semantic-unit parity tracker with acceptance-test mapping
-> **Last updated:** 2026-03-02 by WildCondor (claude-code/opus-4.6) — status audit
+> **Last updated:** 2026-05-08 by SilverFrog — parallel graduation status audit
 
 This matrix tracks canonical semantic units, their source-of-truth extraction status, and required acceptance coverage before parity can be declared complete.
 
@@ -13,7 +13,8 @@ This matrix tracks canonical semantic units, their source-of-truth extraction st
 - `impl-pending`: implementation not yet landed.
 - `impl-in-progress`: implementation work has started.
 - `impl-complete`: implementation landed and unit/invariant gates pass.
-- `conformance-passed`: Rust-vs-C parity + codec/profile parity gates passed for this unit.
+- `conformance-passed`: Rust-vs-C parity and/or unit-specific
+  conformance/profile parity gates passed for this unit.
 
 ## 2. Canonical Unit Matrix
 
@@ -41,6 +42,7 @@ This matrix tracks canonical semantic units, their source-of-truth extraction st
 | `U-CODEC-EQUIVALENCE` | JSON/BIN canonical semantic equivalence | `tools/ci/run_conformance.sh`, `schemas/canonical_fixture.schema.json` | codec-equivalence conformance suite | semantic drift between codecs forbidden | `impl-complete` | `bd-2n0.1`, `bd-1md.11`, `bd-j4m.1` |
 | `U-PROFILE-PARITY` | Cross-profile canonical digest equivalence | `docs/VERTICAL_CONTINUITY_FIXTURE_FAMILIES.md`, `docs/HFT_PROFILE.md`, `docs/AUTOMOTIVE_PROFILE.md`, `tools/ci/run_conformance.sh` | profile parity suite across shared fixtures + vertical fixture lanes (`E2E-VERT-HFT`, `E2E-VERT-AUTO`) | profile-only semantic forks and hidden degraded-mode behavior forbidden | `impl-complete` | `bd-1md.15`, `bd-j4m.7`, `bd-1md.10`, `bd-j4m.1` |
 | `U-REPLAY-CONTINUITY` | Deterministic replay + continuity under restart | `docs/VERTICAL_CONTINUITY_FIXTURE_FAMILIES.md` + trace/replay docs | replay identity and crash/restart continuity tests (`E2E-CONT-RESTART`) | digest mismatch or duplicated side effects on restart forbidden | `impl-complete` | `bd-1md.15`, `bd-2n0.4`, `bd-j4m.8` |
+| `U-PARALLEL-PROFILE` | Optional parallel worker-lane semantics and single-vs-multi-worker digest parity | `docs/DEFERRED_SURFACE_REGISTER.md`, `docs/QUALITY_GATES.md`, `include/asx/runtime/parallel.h` | `parallel-parity`; `test-e2e-parallel`; `formal-litmus`; `formal-codegen`; large-swarm telemetry/admission tests | semantic digest drift, unclassified event-order drift, silent drops, unbounded queues, data races, stale-handle mutation, and weakened cancellation forbidden | `conformance-passed` | `bd-pweu.1`, `bd-pweu.7`, `bd-pweu.10`, `bd-pweu.11`, `bd-pweu.12`, `bd-pweu.13` |
 
 ## 3. Phase 1 Exit Review Gate Checklist
 
@@ -77,8 +79,9 @@ All kernel-scope semantic units (U-REG-TRANSITIONS through U-GUARANTEE-SUBSTITUT
 | Unit Status | Count |
 |-------------|-------|
 | `impl-complete` | 21 (all kernel units + codec equivalence + profile parity + replay continuity — all beads closed, CI gates pass) |
+| `conformance-passed` | 1 (`U-PARALLEL-PROFILE` — logical-worker scheduler, parity/e2e/proof gates pass; locality and benchmark baselines remain tracked by `bd-pweu.9` and `bd-pweu.14`) |
 | `spec-reviewed` | 1 (`U-PROVENANCE-MAP` — static documentation artifact, no runtime test needed) |
-| **Total** | 22 |
+| **Total** | 23 |
 
 **Status audit 2026-03-02 (WildCondor):** All 19 kernel units advanced from `spec-reviewed` to `impl-complete` based on passing unit tests (59 suites), invariant tests (2 suites/33 scenarios), formal gates (CBMC + algebraic + litmus), e2e lanes (14 families/85+ scenarios), and clean build with `-Werror`. `U-PROVENANCE-MAP` remains `spec-reviewed` as it is a static traceability artifact.
 

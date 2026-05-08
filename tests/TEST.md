@@ -19,7 +19,9 @@ make test-invariants   # Lifecycle invariant tests
 make test-vignettes    # API ergonomics usage vignettes (public headers)
 make test-e2e          # Core e2e scenario lanes
 make test-e2e-suite    # All e2e families with unified manifest
+make test-e2e-parallel # Parallel swarm e2e pack with JSONL detail logs
 make bench             # Performance benchmarks (JSON output)
+make parallel-parity   # Single-vs-multi-worker digest parity
 make fuzz-smoke        # Differential fuzz smoke test
 make formal-litmus     # C99/atomics/memory-model litmus suite
 make formal-codegen    # Cross-optimization semantic stability check
@@ -150,13 +152,15 @@ Each family maps to a hard gate:
 | automotive_watchdog | GATE-E2E-VERTICAL-AUTO | `automotive_watchdog.sh` |
 | continuity | GATE-E2E-CONTINUITY | `continuity.sh` |
 | continuity_restart | GATE-E2E-CONTINUITY | `continuity_restart.sh` |
+| parallel_swarm | GATE-E2E-PARALLEL-SWARM | `parallel_swarm.sh` |
 
 Run all families: `make test-e2e-suite` (emits `run_manifest.json`).
 
 ### Benchmarks (`tests/bench/`)
 
 - **bench_runtime.c**: Scheduler throughput, cancel propagation latency,
-  trace emission rates. Outputs JSON for CI trend tracking.
+  trace emission rates, and PARALLEL worker/admission telemetry. Outputs JSON
+  for CI trend tracking.
 
 ### Fuzz Tests (`tests/fuzz/`)
 

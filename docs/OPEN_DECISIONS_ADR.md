@@ -40,6 +40,11 @@ Each record in this log uses:
 - `rationale`: kernel lifecycle/cancel/obligation parity and deterministic replay are first-release critical path; parallel profile substantially expands verification surface.
 - `rollback_trigger`: material early-adopter demand for parallel before Wave B plus readiness of dedicated fairness/non-regression gates.
 - `supersession_rule`: new ADR must include full parity-risk assessment and explicit gate deltas.
+- `current_status_2026_05_08`: this remains the historical Wave A decision.
+  The post-kernel `bd-pweu` program is now active: logical-worker scheduler,
+  atomic/MPSC/POSIX slices, parallel parity, large-swarm e2e, telemetry, and
+  memory-model proof gates have landed. Read older "no parallel lane" rows as
+  Wave A scope, not the current CI/operator boundary.
 
 ### ADR-002 - Static Arena Requirement Timing
 
@@ -86,11 +91,11 @@ Each record in this log uses:
 
 | Gate | ADR(s) | Binding adjustment |
 |---|---|---|
-| Portability matrix | ADR-001 | No parallel CI/test lanes in Wave A; ad hoc compile-only scaffolds may exist for visibility but are not part of the portability matrix |
+| Portability matrix | ADR-001 | Historical Wave A excluded parallel CI/test lanes; current post-kernel CI includes `parallel-parity`, parallel telemetry, and parallel e2e gates where wired |
 | Embedded target matrix | ADR-002 | Dynamic backend required now; static backend tests deferred |
 | HFT tail/jitter gate | ADR-003 | Busy-spin baseline for HFT profile comparisons |
 | Automotive deadline/watchdog gate | ADR-004 | Evidence bundle completeness + skeleton coverage checks |
-| Profile parity gate | ADR-001, ADR-003 | Exclude parallel profile in Wave A; enforce semantic digest equivalence for included profiles |
+| Profile parity gate | ADR-001, ADR-003 | Exclude parallel profile in historical Wave A scope; current parallel graduation enforces single-vs-multi-worker semantic digest equivalence through `parallel-parity` |
 | Semantic delta budget gate | ADR-001..004 | Remains zero-default; all ADR effects are resource/operational-plane only |
 
 ### 4.3 Test / E2E / Logging Effects
@@ -99,7 +104,7 @@ Each record in this log uses:
 |---|---|---|
 | Unit + invariant tests | ADR-002 | allocator backend callbacks + allocator-seal behavior tests |
 | Unit + profile tests | ADR-003 | deterministic coverage of `busy_spin`, `yield`, `sleep` and per-profile defaults |
-| E2E scenarios | ADR-001, ADR-004 | defer parallel lanes; include automotive evidence-capture lanes |
+| E2E scenarios | ADR-001, ADR-004 | Historical Wave A deferred parallel lanes; current graduation includes `tests/e2e/parallel_swarm.sh` plus automotive evidence-capture lanes |
 | Structured logs | ADR-001..004 | require `parallel_profile_enabled`, `allocator_backend`, `wait_policy`, `profile_name`, `evidence_bundle_version` fields |
 
 ## 5. Traceability and Evidence Links
@@ -108,7 +113,7 @@ Decision records must remain linked to semantic provenance and evidence assets:
 
 | decision_id | provenance linkage | evidence expectation |
 |---|---|---|
-| ADR-001 | `SCHEDULER-001..006`, `CHANNEL-001..007`, `TIMER-001..008` in `docs/SOURCE_TO_FIXTURE_PROVENANCE_MAP.md` | parity reports excluding parallel profile for Wave A; deferred-surface audit trail |
+| ADR-001 | `SCHEDULER-001..006`, `CHANNEL-001..007`, `TIMER-001..008` in `docs/SOURCE_TO_FIXTURE_PROVENANCE_MAP.md` | Wave A parity reports excluded parallel profile; current `bd-pweu` evidence is `parallel-parity`, large-swarm e2e logs, telemetry reports, and formal memory-model proof output |
 | ADR-002 | `BUDGET-001..002`, `HANDLE-001`, `QUIESCENCE-001`, `FINALIZE-001` | allocator backend test artifacts; resource exhaustion behavior traces |
 | ADR-003 | `SCHEDULER-001..006`, `TIMER-001..004` | HFT tail/jitter benchmark logs and profile-default verification artifacts |
 | ADR-004 | `QUIESCENCE-001`, `FINALIZE-001`, `OUTCOME-001..002` | evidence bundle index + annotated automotive mapping skeleton + watchdog/deadline scenario outputs |

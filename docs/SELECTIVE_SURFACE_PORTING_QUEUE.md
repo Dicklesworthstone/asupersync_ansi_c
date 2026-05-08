@@ -2,7 +2,7 @@
 
 > **Bead:** `bd-296.11`
 > **Status:** Canonical queue + per-subsystem spec/conformance templates
-> **Last updated:** 2026-02-27 by CopperSpire
+> **Last updated:** 2026-05-08 by SilverFrog
 
 This queue defines how deferred higher surfaces are selectively admitted after kernel-phase stability, with mandatory spec and conformance templates for each subsystem.
 
@@ -32,7 +32,7 @@ A subsystem may enter active implementation queue only when:
 |---|---|---|---|---|---|---|
 | `Q-B-001` | full trace subsystem expansion | Wave B | Wave A review gate + replay baseline stable | `SPEC-TPL-TRACE` | `CONF-TPL-TRACE` | deferred |
 | `Q-B-002` | lab/runtime experiment surfaces | Wave B | Wave A review gate + determinism baseline stable | `SPEC-TPL-LAB` | `CONF-TPL-LAB` | deferred |
-| `Q-B-003` | optional parallel profile | Wave B+ | ADR-001 unblock criteria + fairness spec | `SPEC-TPL-PARALLEL` | `CONF-TPL-PARALLEL` | deferred |
+| `Q-B-003` | optional parallel profile | Wave B+ / active `bd-pweu` graduation | `bd-pweu.1`, `.7`, `.10`, `.11`, `.12`, `.13` green; remaining `bd-pweu.9` locality and `bd-pweu.14` RCH benchmark baselines | `SPEC-TPL-PARALLEL` | `CONF-TPL-PARALLEL` via `parallel-parity`, `test-e2e-parallel`, `formal-check` | in-progress |
 | `Q-B-004` | static arena backend | Wave B+ | ADR-002 unblock criteria + allocator parity plan | `SPEC-TPL-STATIC-ARENA` | `CONF-TPL-STATIC-ARENA` | deferred |
 | `Q-C-001` | networking core surfaces | Wave C | Wave B conformance/fuzz gates green | `SPEC-TPL-NET` | `CONF-TPL-NET` | deferred |
 | `Q-C-002` | combinator surface expansion | Wave C | Wave A/B lifecycle/cancel semantics stable | `SPEC-TPL-COMBINATOR` | `CONF-TPL-COMBINATOR` | deferred |

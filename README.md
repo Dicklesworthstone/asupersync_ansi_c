@@ -193,7 +193,7 @@ sudo make install
 
 # Convenience profile lanes
 make build-browser
-make build-parallel  # compile-only deferred scaffold; not a Wave A parity/CI lane
+make build-parallel  # PARALLEL profile build with live atomic backend enabled
 ```
 
 `make install` currently installs the static library plus public headers under
@@ -309,6 +309,24 @@ BUILD_TYPE=debug|release
 TARGET=<cross-triplet>
 BITS=32|64
 ```
+
+Parallel operator knobs:
+
+- `make build-parallel` builds `PROFILE=PARALLEL` with
+  `ASX_LOCKFREE_SINGLE_THREAD=0`, exercising the live atomic MPSC/backend path.
+- Generic PARALLEL builds represent up to 64 logical workers. Constrained
+  profiles intentionally cap lower: freestanding/browser at 1,
+  embedded-router at 4, and HFT/automotive at 16 unless `ASX_MAX_WORKERS` is
+  explicitly overridden and revalidated.
+- Worker count is resource-plane configuration. It must not change canonical
+  semantic digests; use `make parallel-parity` before claiming a new worker
+  count or platform path is equivalent.
+- Admission telemetry is observe-only by default. Enforced reject/backpressure
+  behavior must be selected explicitly and remains failure-atomic.
+- For large-swarm evidence, run `make test-e2e-parallel` for structured JSONL
+  scenario logs and `make bench-json` for the current `parallel_report`
+  telemetry. RCH-backed profile/worker-count baselines remain tracked by
+  `bd-pweu.14`.
 
 ### `make build`
 
@@ -441,7 +459,7 @@ Each resource class defines concrete capacity limits:
 | `ASX_PROFILE_EMBEDDED_ROUTER` | OpenWrt/router-class | Low-memory defaults, RAM-ring diagnostics, wear-safe tracing |
 | `ASX_PROFILE_HFT` | High-frequency trading | Tail-latency histograms, jitter tracking, overload admission control |
 | `ASX_PROFILE_AUTOMOTIVE` | Safety-critical systems | Deadline tracking, watchdog monitoring, degraded-mode audit, compliance gates |
-| `ASX_PROFILE_PARALLEL` | Multi-core | Parallel execution emphasis |
+| `ASX_PROFILE_PARALLEL` | Multi-core | Deterministic worker-lane scheduler, 64 logical-worker generic cap, observe-only admission by default |
 | `ASX_PROFILE_BROWSER` | WebAssembly | Browser boundary enforcement, surface gating |
 
 All profiles produce identical canonical semantic digests for shared fixture sets. Profiles control operational envelopes (limits, defaults, instrumentation), never semantic behavior.
@@ -549,6 +567,9 @@ Recommended benchmark flow:
 
 ```bash
 make bench
+make bench-json
+make parallel-parity
+make test-e2e-parallel
 make bench PROFILE=EMBEDDED_ROUTER
 make profile-parity
 ```
@@ -1506,7 +1527,13 @@ The ABI module (`include/asx/abi/wasm_abi.h`) defines the contract between `asx`
 
 ## Lane-Based Parallel Scheduler
 
-The parallel subsystem (`include/asx/runtime/parallel.h`) declares a lane-based scheduler for multi-core dispatch (walking skeleton: single-worker mode that produces identical event streams to the sequential scheduler):
+The parallel subsystem (`include/asx/runtime/parallel.h`) implements a
+deterministic lane-based scheduler for multi-core dispatch. Generic PARALLEL
+builds can model 64 logical workers, and the `parallel-parity` gate compares
+worker counts 1, 2, 8, and 64 for canonical digest stability. The shipped
+guarantee is replay-stable event commitment and resource-plane equivalence; it
+is not a promise that every platform adapter executes worker lanes concurrently
+by default.
 
 **Three lane classes**:
 - **READY**: Tasks with pending work (normal polling).
@@ -1521,6 +1548,11 @@ The parallel subsystem (`include/asx/runtime/parallel.h`) declares a lane-based 
 Cancel-streak limiting (default: 16) prevents starvation. If the cancel lane runs 16 consecutive polls without yielding, the scheduler forces a fairness yield to other lanes. Per-lane starvation detection reports when any lane goes unpolled for too many rounds.
 
 The injector API (`asx_inject_ready`, `asx_inject_cancel`, `asx_inject_timed`) allows cross-boundary task submission into specific lanes, enabling I/O completions and timer fires to route tasks directly to the appropriate scheduling class.
+
+Operator rule: treat `worker_count` as a capacity knob, not a semantic knob.
+After changing worker count, admission mode, queue backend, or platform hooks,
+rerun `make parallel-parity` and preserve the emitted report if the change is
+used to justify a production-scale claim.
 
 ## Browser Developer Experience Diagnostics
 
@@ -1569,7 +1601,7 @@ architecture, decisions, verification, and risk:
 | Category | Key Documents |
 |---|---|
 | **Semantic baseline** | `EXISTING_ASUPERSYNC_STRUCTURE.md` — authoritative lifecycle tables, cancellation protocol, budget algebra, channel semantics, timer ordering |
-| **Parity tracking** | `FEATURE_PARITY.md` — 23 semantic units with status (all `impl-complete`) |
+| **Parity tracking** | `FEATURE_PARITY.md` — 23 semantic units with implementation/conformance status, including the active parallel-profile parity lane |
 | **Architecture** | `PROPOSED_ANSI_C_ARCHITECTURE.md` — layering boundaries derived from semantics |
 | **Decisions** | `OPEN_DECISIONS_ADR.md`, `OWNER_DECISION_LOG.md` — architecture decision records |
 | **Safety** | `FORMAL_ASSURANCE_LADDER.md`, `GUARANTEE_SUBSTITUTION_MATRIX.md` — Rust-to-C safety mechanism mapping |
@@ -1661,7 +1693,12 @@ Check whether `asx_deadline_monitor_check()` is being called frequently enough i
 ## Limitations
 
 - `asx` is intentionally strict: undefined behavior in callers (invalid pointers, lifetime misuse outside API contract) is not masked. Ghost monitors catch violations in debug builds.
-- The walking skeleton is single-threaded. Multi-threaded dispatch (parallel scheduler, real blocking pool threads) is planned for Phase 4.
+- The CORE/default path remains deterministic and single-thread oriented.
+  `ASX_PROFILE_PARALLEL` now ships logical worker lanes, atomic publication
+  coverage, POSIX bounded blocking hooks, parity gates, and large-swarm e2e
+  evidence; native platform concurrent execution still has to preserve the
+  deterministic commit authority and pass the parallel gates before it can be
+  claimed as production scale.
 - Deterministic guarantees assume matching scenario, profile, seed, and compatible runtime version.
 - Extremely tiny targets (< 16 KB RAM) may need reduced trace retention and tighter queue ceilings; semantics remain intact, but throughput envelopes will differ.
 - Binary codec schema compatibility follows explicit versioning; cross-major interoperability is not guaranteed without migration tooling.
@@ -1712,7 +1749,12 @@ The static library (`libasx.a`) is typically 200-400 KB depending on profile and
 
 ### What about thread safety?
 
-The walking skeleton is single-threaded by design. All state is in static arenas with generation-safe handles for stale detection. The sync primitives (mutex, semaphore, barrier) provide the API surface for Phase 4 multi-threaded dispatch.
+CORE remains deterministic with static arenas and generation-safe handles.
+`ASX_PROFILE_PARALLEL` adds a validated logical-worker scheduler, atomic MPSC
+publication path, seqlock/EBR metadata proofs, and POSIX bounded blocking
+hooks. Cross-thread/platform execution must still enter through the documented
+hook/backend contracts and preserve the same semantic digest as the
+single-worker lane.
 
 ### What formal verification is included?
 

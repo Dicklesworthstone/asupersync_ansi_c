@@ -179,12 +179,14 @@ and documentation enforcement.
 
 `bd-pweu.1` defines the activation contract for the production parallel runtime
 program. `bd-pweu.11` activates the single-vs-multi-worker parity gate that
-child beads must satisfy before claiming that the parallel profile has graduated
-beyond walking-skeleton behavior. `bd-pweu.10` activates the large-swarm
+child beads satisfy before claiming worker-count semantic equivalence.
+`bd-pweu.10` activates the large-swarm
 telemetry and deterministic admission evidence surface for diagnosing pressure
 without hidden semantic drift. `bd-pweu.13` pins the parallel memory-model proof
 surface: atomics, metadata publication/reclamation, trace commit ordering, and
 bounded scheduler state are covered by formal litmus and codegen gates.
+Remaining production-scale operator claims are gated by `bd-pweu.9` locality
+evidence and `bd-pweu.14` RCH-backed benchmark baselines.
 
 | Gate ID | Makefile Target | CI Job | Tracking Bead | Purpose |
 |---------|-----------------|--------|---------------|---------|

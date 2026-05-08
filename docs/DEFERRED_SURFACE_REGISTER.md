@@ -23,7 +23,7 @@ This register ensures that deferred work is:
 |----------|-------|------------------|
 | Wave C — Selected Systems Surfaces | 3 | Kernel stabilization first |
 | Wave D — Advanced Surfaces | 6 | Massive scope; kernel focus |
-| Parallel Profile | 1 | ADR-001: defer to post-kernel |
+| Parallel Profile | 1 | ADR-001 started as post-kernel deferral; `bd-pweu` graduation is active |
 | Static Arena Backend | 1 | ADR-002: dynamic default + vtable prep |
 | Rust-C Interoperability | 3 | Plan Section 2.4.1: companion, not bridge |
 | Explicit Exclusions | 3 | Plan Section 5: out of scope for first release |
@@ -163,26 +163,30 @@ This register ensures that deferred work is:
 
 ### DS-P01: Optional Parallel Profile (Worker Model, Work-Stealing, Lane Scheduling)
 
-**Status:** Deferred per ADR-001; production graduation program opened under `bd-pweu`
-**Rationale:** Kernel correctness is the foundation. Parallel profile adds atomics, synchronization adapters, EBR/hazard pointers (ALPHA-5/6), work-stealing, and fairness validation — doubling the verification surface. The three primary target verticals (HFT, automotive, embedded router) primarily need single-thread deterministic behavior.
+**Status:** Graduation in progress under `bd-pweu`; core logical-worker scheduler, parity gates, large-swarm e2e, telemetry, and memory-model proofs have landed, while locality and benchmark baselines remain open.
+**Rationale:** Kernel correctness is the foundation. Parallel profile adds atomics, synchronization adapters, EBR/hazard pointers (ALPHA-5/6), work-stealing, and fairness validation -- doubling the verification surface. The three primary target verticals (HFT, automotive, embedded router) still require deterministic single-worker fallback behavior.
 **ADR:** ADR-001 (docs/OPEN_DECISIONS_ADR.md)
-**Beads:** `bd-2cw.7` (closed compile/simulation scaffold), `bd-pweu` (open production graduation epic)
+**Beads:** `bd-2cw.7` (closed compile/simulation scaffold), `bd-pweu` (open production graduation epic), closed children `bd-pweu.1`-`.8` and `.10`-`.13` for the contract/scheduler/atomic/MPSC/POSIX/parity/e2e/proof slices, open children `bd-pweu.9` and `bd-pweu.14` for locality and RCH-backed benchmark baselines, and `bd-pweu.15` for the current docs/governance alignment pass.
 **Unblock criteria:**
-- Wave A kernel quality gates green
-- Kernel deterministic scheduling verified
-- Hotspot data available to evaluate ALPHA-5 (seqlocks) and ALPHA-6 (EBR/hazard pointers) EV >= 2.0
-- Dedicated parallel-specific quality gates defined (fairness, no deterministic-mode regression, fallback parity)
-- Early adopter demand signal for multi-threaded usage
+- Landed: Wave A kernel quality gates green.
+- Landed: deterministic worker-lane scheduling, bounded work stealing, timed-lane/waker/reactor readiness pumping, and replay-stable commit authority.
+- Landed: portable atomics, seqlock/EBR metadata coverage, atomic two-phase MPSC publication, and memory-model litmus/codegen gates.
+- Landed: parallel-specific gates for single-vs-multi-worker digest parity, telemetry/admission evidence, large-swarm e2e logs, and formal proofs.
+- Remaining: locality/arena-sharding decision and RCH-backed worker-count benchmark baselines before broad 64-core performance claims.
 **Owner:** `SilverFrog` started contract planning in `bd-pweu.1`; implementation ownership remains per-child bead
-**Dependency path:** Wave A gates -> hotspot measurement -> parallel spec -> implementation + fairness tests
+**Dependency path:** Wave A gates -> parallel contract -> scheduler/atomic/channel/platform gates -> e2e/proof evidence -> locality and benchmark baselines
 **Semantic risk:** HIGH if not carefully handled — parallel scheduling must produce identical semantic outcomes to single-thread mode for deterministic scenarios. Cross-profile digest parity is mandatory.
-**Rollback trigger:** Strong early adopter demand for parallel before Wave B.
+**Rollback trigger:** Any semantic digest drift, unclassified event-order drift, data-race finding, silent drop, or benchmark/admission evidence that contradicts production-scale claims.
 
 #### Production Graduation Contract (`bd-pweu.1`)
 
-The production parallel profile may only graduate when the following contract is
-met. Until then, `src/runtime/parallel.c` remains a walking-skeleton simulation
-and any large-swarm claims are planning targets, not shipped behavior.
+The production parallel profile graduates only by evidence. As of 2026-05-08,
+`src/runtime/parallel.c` is no longer only a walking-skeleton simulation: it
+ships deterministic logical-worker routing, bounded steal accounting, timed
+lane promotion, reactor/waker pumping, drain states, replay-stable commit
+counters, telemetry/admission evidence, and parity/proof gates. The remaining
+claim boundary is performance and platform execution breadth, not the existence
+of the logical scheduler.
 
 - **Capacity target:** at least 64 logical workers must be representable and
   validated. Profile/resource-class defaults may still cap smaller targets, but
@@ -203,10 +207,11 @@ and any large-swarm claims are planning targets, not shipped behavior.
   BROWSER, POSIX, and WIN32 must either provide the documented live-mode hooks
   or fail closed / fall back to a tested single-worker path without semantic
   drift.
-- **Gate contract:** `bd-pweu.11` must add a parallel single-vs-multi-worker
-  parity gate before implementation beads can claim production readiness.
-  Supporting beads must add unit, stress/e2e, fuzz or formal coverage as
-  appropriate, and all expensive verification must run through `rch exec -- ...`.
+- **Gate contract:** `bd-pweu.11`, `bd-pweu.12`, and `bd-pweu.13` provide
+  the parallel parity, large-swarm e2e, and memory-model proof gates for
+  semantic claims. `bd-pweu.9` and `bd-pweu.14` remain the blockers for
+  locality-sensitive and benchmark-backed 64-core performance claims. All
+  expensive verification must run through `rch exec -- ...`.
 
 ---
 
@@ -388,7 +393,7 @@ This section binds deferred-surface governance to the owner decision log so down
 
 | Deferred item | Decision key | Decision source | Consistency note |
 |---|---|---|---|
-| DS-P01 (parallel profile) | `DEC-003` | `docs/OWNER_DECISION_LOG.md` | Deferral active for shipped behavior; `bd-pweu` opens the production graduation program, and no live-mode claim is valid until its parallel parity gate and evidence bundle land |
+| DS-P01 (parallel profile) | `DEC-003` | `docs/OWNER_DECISION_LOG.md` | Wave A deferral is historical; `bd-pweu` graduation is active. Parity/e2e/proof evidence has landed, while locality and benchmark baselines still gate broad production-scale claims. |
 | DS-S01 (static arena backend) | `DEC-004` | `docs/OWNER_DECISION_LOG.md` | Deferral active; allocator-vtable compatibility required now |
 | All semantic-plane-sensitive deferrals | `DEC-005` | `docs/OWNER_DECISION_LOG.md` | No semantic drift allowed while surfaces are deferred |
 
