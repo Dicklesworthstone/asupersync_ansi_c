@@ -1122,14 +1122,20 @@ formal-tv:
 # formal-litmus — memory-model litmus suite (bd-3vt.4)
 # ---------------------------------------------------------------------------
 FORMAL_LITMUS_SRC := tests/formal/litmus/test_memory_model_litmus.c
-FORMAL_LITMUS_BIN := $(TEST_DIR)/formal/test_memory_model_litmus
+FORMAL_LITMUS_SINGLE_BIN := $(TEST_DIR)/formal/test_memory_model_litmus_single
+FORMAL_LITMUS_MULTI_BIN := $(TEST_DIR)/formal/test_memory_model_litmus_multi
+FORMAL_LITMUS_BIN := $(FORMAL_LITMUS_SINGLE_BIN) $(FORMAL_LITMUS_MULTI_BIN)
 
-$(FORMAL_LITMUS_BIN): $(FORMAL_LITMUS_SRC) $(LIB_A) | $(TEST_DIR)/formal
-	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
+$(FORMAL_LITMUS_SINGLE_BIN): $(FORMAL_LITMUS_SRC) $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -DASX_LOCKFREE_SINGLE_THREAD=1 -o $@ $< $(LIB_A)
+
+$(FORMAL_LITMUS_MULTI_BIN): $(FORMAL_LITMUS_SRC) $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -DASX_LOCKFREE_SINGLE_THREAD=0 -o $@ $< $(LIB_A)
 
 formal-litmus: $(FORMAL_LITMUS_BIN)
 	@echo "[asx] formal-litmus: running memory-model litmus suite..."
-	@$(FORMAL_LITMUS_BIN)
+	@$(FORMAL_LITMUS_SINGLE_BIN)
+	@$(FORMAL_LITMUS_MULTI_BIN)
 	@echo "[asx] formal-litmus: PASS"
 
 # ---------------------------------------------------------------------------

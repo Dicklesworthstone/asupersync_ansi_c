@@ -21,6 +21,7 @@
 
 #include "../../test_harness.h"
 #include <asx/asx.h>
+#include <asx/platform/atomics.h>
 #include <limits.h>
 #include <string.h>
 
@@ -299,6 +300,99 @@ TEST(litmus_cancel_severity_purity) {
     }
 }
 
+/* -----------------------------------------------------------------------
+ * LITMUS-16: Atomic backend selection is explicit
+ * Assumption: production atomics have one visible backend per build mode
+ * ----------------------------------------------------------------------- */
+TEST(litmus_atomic_backend_selection) {
+#if ASX_LOCKFREE_SINGLE_THREAD
+    ASSERT_EQ((int)asx_atomic_u32_backend(), (int)ASX_ATOMIC_BACKEND_SINGLE_THREAD);
+    ASSERT_TRUE(asx_atomic_u32_is_single_threaded());
+#else
+    ASSERT_TRUE(asx_atomic_u32_backend() != ASX_ATOMIC_BACKEND_SINGLE_THREAD);
+    ASSERT_FALSE(asx_atomic_u32_is_single_threaded());
+#endif
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-17: Atomic load/store/init preserve values
+ * Assumption: acquire loads observe values published by release stores
+ * in the same deterministic sequence
+ * ----------------------------------------------------------------------- */
+TEST(litmus_atomic_load_store_init) {
+    asx_atomic_u32 a;
+    asx_atomic_u32_init(&a, 7u);
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)7);
+
+    asx_atomic_u32_store(&a, 42u);
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)42);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-18: Atomic compare-exchange has stable success/failure semantics
+ * Assumption: failed compare-exchange reports the observed value and does
+ * not mutate storage
+ * ----------------------------------------------------------------------- */
+TEST(litmus_atomic_compare_exchange_contract) {
+    asx_atomic_u32 a;
+    uint32_t expected;
+
+    asx_atomic_u32_init(&a, 10u);
+    expected = 10u;
+    ASSERT_TRUE(asx_atomic_u32_compare_exchange(&a, &expected, 11u));
+    ASSERT_EQ(expected, (uint32_t)10);
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)11);
+
+    expected = 10u;
+    ASSERT_FALSE(asx_atomic_u32_compare_exchange(&a, &expected, 12u));
+    ASSERT_EQ(expected, (uint32_t)11);
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)11);
+
+    ASSERT_FALSE(asx_atomic_u32_compare_exchange(&a, NULL, 13u));
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)11);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-19: Legacy CAS wrapper and exchange/fetch_add are linear
+ * Assumption: each atomic read-modify-write returns the old value exactly
+ * once in deterministic single-thread test execution
+ * ----------------------------------------------------------------------- */
+TEST(litmus_atomic_rmw_linearity) {
+    asx_atomic_u32 a;
+    uint32_t old;
+    uint32_t i;
+
+    asx_atomic_u32_init(&a, 0u);
+    ASSERT_TRUE(asx_atomic_u32_cas(&a, 0u, 1u));
+    ASSERT_FALSE(asx_atomic_u32_cas(&a, 0u, 2u));
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)1);
+
+    old = asx_atomic_u32_exchange(&a, 100u);
+    ASSERT_EQ(old, (uint32_t)1);
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)100);
+
+    for (i = 0u; i < 16u; i++) {
+        old = asx_atomic_u32_fetch_add(&a, 1u);
+        ASSERT_EQ(old, (uint32_t)(100u + i));
+    }
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)116);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-20: Atomic fences are callable no-op/ordering boundaries
+ * Assumption: acquire/release fence calls compile and preserve surrounding
+ * deterministic atomic observations
+ * ----------------------------------------------------------------------- */
+TEST(litmus_atomic_fences) {
+    asx_atomic_u32 a;
+
+    asx_atomic_u32_init(&a, 3u);
+    asx_atomic_fence_release();
+    asx_atomic_u32_store(&a, 4u);
+    asx_atomic_fence_acquire();
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)4);
+}
+
 /* --- Main --- */
 
 int main(void) {
@@ -320,6 +414,11 @@ int main(void) {
     RUN_TEST(litmus_char_bit_is_8);
     RUN_TEST(litmus_outcome_join_stability);
     RUN_TEST(litmus_cancel_severity_purity);
+    RUN_TEST(litmus_atomic_backend_selection);
+    RUN_TEST(litmus_atomic_load_store_init);
+    RUN_TEST(litmus_atomic_compare_exchange_contract);
+    RUN_TEST(litmus_atomic_rmw_linearity);
+    RUN_TEST(litmus_atomic_fences);
 
     TEST_REPORT();
     return test_failures;
