@@ -465,6 +465,7 @@ E2E_ALL_SCRIPTS := \
 	$(E2E_SCRIPT_DIR)/continuity_restart.sh \
 	$(E2E_SCRIPT_DIR)/native_host.sh \
 	$(E2E_SCRIPT_DIR)/server_shutdown.sh \
+	$(E2E_SCRIPT_DIR)/parallel_swarm.sh \
 	$(E2E_SCRIPT_DIR)/router_storm.sh \
 	$(E2E_SCRIPT_DIR)/market_open_burst.sh \
 	$(E2E_SCRIPT_DIR)/automotive_fault_burst.sh \
@@ -489,10 +490,10 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: all build clean install uninstall FORCE
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation
 .PHONY: model-check
-.PHONY: test test-unit test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-abi-shim abi-check
+.PHONY: test test-unit test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
-.PHONY: conformance codec-equivalence profile-parity crate-acceptance-gate
+.PHONY: conformance codec-equivalence profile-parity parallel-parity crate-acceptance-gate
 .PHONY: fuzz-smoke ci-embedded-matrix
 .PHONY: release release-artifacts bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
@@ -515,13 +516,13 @@ build: $(LIB_A)
 	@echo "[asx] build complete (profile=$(PROFILE) codec=$(CODEC) det=$(DETERMINISTIC))"
 
 build-posix:
-	@$(MAKE) build PROFILE=POSIX LDFLAGS="-lpthread -lrt"
+	@$(MAKE) build PROFILE=POSIX DETERMINISTIC=0 CFLAGS="$(CFLAGS) -DASX_LOCKFREE_SINGLE_THREAD=0" LDFLAGS="-lpthread -lrt"
 
 build-win32:
 	@$(MAKE) build PROFILE=WIN32 CC="x86_64-w64-mingw32-gcc" CFLAGS="-DASX_BUILDING_DLL" LDFLAGS="-lbcrypt -lws2_32"
 
 build-parallel:
-	@$(MAKE) build PROFILE=PARALLEL
+	@$(MAKE) build PROFILE=PARALLEL CFLAGS="$(CFLAGS) -DASX_LOCKFREE_SINGLE_THREAD=0"
 
 build-browser:
 	@$(MAKE) build PROFILE=BROWSER
@@ -1122,14 +1123,21 @@ formal-tv:
 # formal-litmus — memory-model litmus suite (bd-3vt.4)
 # ---------------------------------------------------------------------------
 FORMAL_LITMUS_SRC := tests/formal/litmus/test_memory_model_litmus.c
-FORMAL_LITMUS_BIN := $(TEST_DIR)/formal/test_memory_model_litmus
+FORMAL_LITMUS_EXTRA_SRC := src/runtime/seqlock_ebr_spike.c
+FORMAL_LITMUS_SINGLE_BIN := $(TEST_DIR)/formal/test_memory_model_litmus_single
+FORMAL_LITMUS_MULTI_BIN := $(TEST_DIR)/formal/test_memory_model_litmus_multi
+FORMAL_LITMUS_BIN := $(FORMAL_LITMUS_SINGLE_BIN) $(FORMAL_LITMUS_MULTI_BIN)
 
-$(FORMAL_LITMUS_BIN): $(FORMAL_LITMUS_SRC) $(LIB_A) | $(TEST_DIR)/formal
-	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
+$(FORMAL_LITMUS_SINGLE_BIN): $(FORMAL_LITMUS_SRC) $(FORMAL_LITMUS_EXTRA_SRC) $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -DASX_LOCKFREE_SINGLE_THREAD=1 -o $@ $< $(FORMAL_LITMUS_EXTRA_SRC) $(LIB_A)
+
+$(FORMAL_LITMUS_MULTI_BIN): $(FORMAL_LITMUS_SRC) $(FORMAL_LITMUS_EXTRA_SRC) $(LIB_A) | $(TEST_DIR)/formal
+	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -DASX_LOCKFREE_SINGLE_THREAD=0 -o $@ $< $(FORMAL_LITMUS_EXTRA_SRC) $(LIB_A)
 
 formal-litmus: $(FORMAL_LITMUS_BIN)
 	@echo "[asx] formal-litmus: running memory-model litmus suite..."
-	@$(FORMAL_LITMUS_BIN)
+	@$(FORMAL_LITMUS_SINGLE_BIN)
+	@$(FORMAL_LITMUS_MULTI_BIN)
 	@echo "[asx] formal-litmus: PASS"
 
 # ---------------------------------------------------------------------------
@@ -1179,11 +1187,15 @@ test-e2e-vertical:
 # Maps to hard gates: GATE-E2E-LIFECYCLE, GATE-E2E-CODEC,
 # GATE-E2E-ROBUSTNESS, GATE-E2E-VERTICAL-{HFT,AUTO}, GATE-E2E-CONTINUITY.
 # Plus deployment/package gates: GATE-E2E-DEPLOY-{ROUTER,HFT,AUTO},
-# GATE-E2E-PACKAGE.
+# GATE-E2E-PARALLEL-SWARM, GATE-E2E-PACKAGE.
 # ---------------------------------------------------------------------------
 test-e2e-suite: $(LIB_A)
 	@chmod +x $(E2E_SCRIPT_DIR)/run_all.sh $(E2E_SCRIPT_DIR)/harness.sh $(E2E_ALL_SCRIPTS) 2>/dev/null || true
 	@$(E2E_SCRIPT_DIR)/run_all.sh
+
+test-e2e-parallel: $(LIB_A)
+	@chmod +x $(E2E_SCRIPT_DIR)/harness.sh $(E2E_SCRIPT_DIR)/parallel_swarm.sh 2>/dev/null || true
+	@$(E2E_SCRIPT_DIR)/parallel_swarm.sh
 
 $(TEST_DIR)/invariant/%: tests/invariant/%.c $(LIB_A) | test-dirs
 	@mkdir -p $(@D)
@@ -1356,6 +1368,20 @@ profile-parity:
 		exit 1; \
 	else \
 		echo "[asx] profile-parity: SKIP (runner not yet implemented)"; \
+	fi
+
+# ---------------------------------------------------------------------------
+# parallel-parity — single-vs-multi-worker canonical digest parity
+# ---------------------------------------------------------------------------
+parallel-parity:
+	@echo "[asx] parallel-parity: single-vs-multi-worker digest check..."
+	@if [ -x tools/ci/run_parallel_parity.sh ]; then \
+		tools/ci/run_parallel_parity.sh; \
+	elif [ "$(FAIL_ON_MISSING_RUNNERS)" = "1" ]; then \
+		echo "[asx] parallel-parity: FAIL (runner missing; strict mode)"; \
+		exit 1; \
+	else \
+		echo "[asx] parallel-parity: SKIP (runner not yet implemented)"; \
 	fi
 
 # ---------------------------------------------------------------------------
@@ -1652,7 +1678,7 @@ qemu-smoke:
 check: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build test model-check abi-check test-abi-shim formal-check
 
 check-ci: CI=1
-check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build build-browser test-browser-focused test-browser-minimal-focused test model-check test-e2e-vertical conformance codec-equivalence profile-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
+check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build build-browser test-browser-focused test-browser-minimal-focused test model-check test-e2e-vertical conformance codec-equivalence profile-parity parallel-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
 
 ci-embedded-baremetal:
 	@echo "[asx] ci-embedded-baremetal: bare-metal gate..."
@@ -1695,6 +1721,7 @@ help:
 	@echo "  conformance        Rust fixture parity verification"
 	@echo "  codec-equivalence  JSON vs BIN codec equivalence"
 	@echo "  profile-parity     Cross-profile semantic digest parity"
+	@echo "  parallel-parity    Single-vs-multi-worker semantic digest parity"
 	@echo "  crate-acceptance-gate Aggregate final crate-level parity evidence"
 	@echo "  fuzz-smoke         Differential fuzzing smoke test"
 	@echo "  minimize-selftest  Counterexample minimizer self-test"

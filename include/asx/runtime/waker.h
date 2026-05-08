@@ -5,8 +5,9 @@
  * as ready to be polled. Tasks register wakers with the IO driver
  * or timer system when they need to be woken on external events.
  *
- * Walking skeleton: single-threaded, no atomics. Wakers signal
- * readiness by setting a flag in a fixed-size wake arena.
+ * Wakers signal readiness in a fixed-size arena. Signals carry a
+ * deterministic sequence number so cross-boundary wake drains can replay
+ * a stable ready order even when worker/reactor adapters are live.
  *
  * SPDX-License-Identifier: MIT
  */

@@ -5,12 +5,16 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/asx.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/browser_boundary.h>
 #include <string.h>
 
 #if ASX_HAS_BLOCKING_SURFACE
 static asx_status st_sink_;
+#if !ASX_DETERMINISTIC
+static void reset_hook_state(void);
+#endif
 #define MUST_OK(expr)                                                                              \
     do {                                                                                           \
         st_sink_ = (expr);                                                                         \
@@ -19,6 +23,7 @@ static asx_status st_sink_;
 
 static int setup(void) {
     asx_status st;
+    asx_runtime_reset();
     asx_waker_reset();
     asx_blocking_pool_reset();
     st = asx_blocking_pool_init();
@@ -40,7 +45,13 @@ static int setup(void) {
     return 1;
 }
 
-static void teardown(void) { asx_blocking_pool_shutdown(); }
+static void teardown(void) {
+    asx_blocking_pool_shutdown();
+    asx_runtime_reset();
+#if !ASX_DETERMINISTIC
+    reset_hook_state();
+#endif
+}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -55,6 +66,44 @@ static uint64_t return_zero(void *user_data) {
     (void)user_data;
     return 0;
 }
+
+#if !ASX_DETERMINISTIC
+static asx_blocking_job_fn g_hook_job_fn;
+static void *g_hook_job_ctx;
+static uint32_t g_hook_submit_count;
+static uint32_t g_hook_shutdown_count;
+static int g_hook_reject_submit;
+
+static asx_status test_blocking_submit(void *ctx, asx_blocking_job_fn job_fn, void *job_ctx) {
+    (void)ctx;
+    g_hook_submit_count++;
+    if (g_hook_reject_submit) return ASX_E_RESOURCE_EXHAUSTED;
+    g_hook_job_fn = job_fn;
+    g_hook_job_ctx = job_ctx;
+    return ASX_OK;
+}
+
+static void test_blocking_shutdown(void *ctx) {
+    (void)ctx;
+    g_hook_shutdown_count++;
+}
+
+static void reset_hook_state(void) {
+    g_hook_job_fn = NULL;
+    g_hook_job_ctx = NULL;
+    g_hook_submit_count = 0u;
+    g_hook_shutdown_count = 0u;
+    g_hook_reject_submit = 0;
+}
+
+static void install_deferred_blocking_hook(void) {
+    asx_runtime_hooks hooks;
+    MUST_OK(asx_runtime_hooks_init(&hooks));
+    hooks.blocking.submit_fn = test_blocking_submit;
+    hooks.blocking.shutdown_fn = test_blocking_shutdown;
+    MUST_OK(asx_runtime_set_hooks(&hooks));
+}
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Spawn tests                                                         */
@@ -237,6 +286,58 @@ TEST(active_count_zero_after_inline_completion) {
     teardown();
 }
 
+#if !ASX_DETERMINISTIC
+TEST(hook_submit_leaves_task_pending_until_job_runs) {
+    asx_blocking_handle h;
+    uint64_t input = 100u;
+    uint64_t result = 0u;
+
+    reset_hook_state();
+    asx_blocking_pool_reset();
+    install_deferred_blocking_hook();
+    MUST_OK(asx_blocking_pool_init());
+
+    ASSERT_EQ(asx_spawn_blocking(add_42, &input, NULL, &h), ASX_OK);
+    ASSERT_EQ(g_hook_submit_count, 1u);
+    ASSERT_TRUE(g_hook_job_fn != NULL);
+    ASSERT_EQ(asx_blocking_get_state(&h), ASX_BLOCKING_PENDING);
+    ASSERT_EQ(asx_blocking_active_count(), 1u);
+    ASSERT_EQ(asx_blocking_get_result(&h, &result), ASX_E_PENDING);
+
+    g_hook_job_fn(g_hook_job_ctx);
+    ASSERT_EQ(asx_blocking_get_state(&h), ASX_BLOCKING_COMPLETED);
+    ASSERT_EQ(asx_blocking_active_count(), 0u);
+    ASSERT_EQ(asx_blocking_get_result(&h, &result), ASX_OK);
+    ASSERT_EQ(result, 142u);
+    teardown();
+}
+
+TEST(hook_submit_failure_rolls_back_slot_and_active_count) {
+    asx_blocking_handle h;
+
+    reset_hook_state();
+    asx_blocking_pool_reset();
+    install_deferred_blocking_hook();
+    MUST_OK(asx_blocking_pool_init());
+    g_hook_reject_submit = 1;
+
+    ASSERT_EQ(asx_spawn_blocking(return_zero, NULL, NULL, &h), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(g_hook_submit_count, 1u);
+    ASSERT_EQ(asx_blocking_active_count(), 0u);
+    teardown();
+}
+
+TEST(pool_shutdown_invokes_live_blocking_hook) {
+    reset_hook_state();
+    asx_blocking_pool_reset();
+    install_deferred_blocking_hook();
+    MUST_OK(asx_blocking_pool_init());
+    g_hook_shutdown_count = 0u;
+    asx_blocking_pool_shutdown();
+    ASSERT_EQ(g_hook_shutdown_count, 1u);
+}
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Exhaustion                                                          */
 /* ------------------------------------------------------------------ */
@@ -326,6 +427,11 @@ int main(void) {
 
     RUN_TEST(active_count_zero_initially);
     RUN_TEST(active_count_zero_after_inline_completion);
+#if !ASX_DETERMINISTIC
+    RUN_TEST(hook_submit_leaves_task_pending_until_job_runs);
+    RUN_TEST(hook_submit_failure_rolls_back_slot_and_active_count);
+    RUN_TEST(pool_shutdown_invokes_live_blocking_hook);
+#endif
 
     RUN_TEST(arena_exhaustion);
     RUN_TEST(multiple_tasks_different_results);

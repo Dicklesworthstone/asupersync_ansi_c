@@ -26,6 +26,11 @@ static asx_status install_posix_hooks(asx_runtime_hooks *hooks) {
     return asx_posix_hooks_install(hooks);
 }
 
+static void posix_counting_job(void *ctx) {
+    uint32_t *count = (uint32_t *)ctx;
+    if (count != NULL) { (*count)++; }
+}
+
 TEST(posix_install_populates_expected_hooks) {
     asx_runtime_hooks hooks;
 
@@ -35,6 +40,9 @@ TEST(posix_install_populates_expected_hooks) {
     ASSERT_TRUE(hooks.entropy.random_u64_fn != NULL);
     ASSERT_TRUE(hooks.reactor.wait_fn != NULL);
     ASSERT_TRUE(hooks.reactor.ghost_wait_fn != NULL);
+    ASSERT_TRUE(hooks.blocking.submit_fn != NULL);
+    ASSERT_TRUE(hooks.blocking.shutdown_fn != NULL);
+    ASSERT_TRUE(hooks.blocking.capacity_fn != NULL);
     ASSERT_TRUE(hooks.log.write_fn != NULL);
 }
 
@@ -132,6 +140,35 @@ TEST(posix_ghost_reactor_returns_empty_ready_set) {
     ASSERT_EQ(install_posix_hooks(&hooks), ASX_OK);
     ASSERT_EQ(hooks.reactor.ghost_wait_fn(hooks.reactor.ctx, 7u, &ready_count), ASX_OK);
     ASSERT_EQ(ready_count, 0u);
+}
+
+TEST(posix_blocking_hook_reports_bounded_capacity) {
+    asx_runtime_hooks hooks;
+
+    ASSERT_EQ(install_posix_hooks(&hooks), ASX_OK);
+    ASSERT_TRUE(hooks.blocking.capacity_fn(hooks.blocking.ctx) > 0u);
+    ASSERT_TRUE(hooks.blocking.capacity_fn(hooks.blocking.ctx) <= 16u);
+    hooks.blocking.shutdown_fn(hooks.blocking.ctx);
+}
+
+TEST(posix_blocking_hook_rejects_null_job) {
+    asx_runtime_hooks hooks;
+
+    ASSERT_EQ(install_posix_hooks(&hooks), ASX_OK);
+    ASSERT_EQ(hooks.blocking.submit_fn(hooks.blocking.ctx, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    hooks.blocking.shutdown_fn(hooks.blocking.ctx);
+}
+
+TEST(posix_blocking_hook_runs_and_drains_jobs) {
+    asx_runtime_hooks hooks;
+    uint32_t count = 0u;
+
+    ASSERT_EQ(install_posix_hooks(&hooks), ASX_OK);
+    ASSERT_EQ(hooks.blocking.submit_fn(hooks.blocking.ctx, posix_counting_job, &count), ASX_OK);
+    ASSERT_EQ(hooks.blocking.submit_fn(hooks.blocking.ctx, posix_counting_job, &count), ASX_OK);
+    ASSERT_EQ(hooks.blocking.submit_fn(hooks.blocking.ctx, posix_counting_job, &count), ASX_OK);
+    hooks.blocking.shutdown_fn(hooks.blocking.ctx);
+    ASSERT_EQ(count, 3u);
 }
 
 TEST(posix_wall_clock_plausibility) {
@@ -257,6 +294,9 @@ int main(void) {
     RUN_TEST(posix_entropy_produces_nonzero_sample_window);
     RUN_TEST(posix_reactor_zero_timeout_returns_empty_ready_set);
     RUN_TEST(posix_ghost_reactor_returns_empty_ready_set);
+    RUN_TEST(posix_blocking_hook_reports_bounded_capacity);
+    RUN_TEST(posix_blocking_hook_rejects_null_job);
+    RUN_TEST(posix_blocking_hook_runs_and_drains_jobs);
     RUN_TEST(posix_wall_clock_plausibility);
     RUN_TEST(posix_entropy_100_samples_no_errors);
     RUN_TEST(posix_entropy_distribution_uniqueness);

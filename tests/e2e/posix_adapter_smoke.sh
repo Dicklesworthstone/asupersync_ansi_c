@@ -12,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Force POSIX profile for this smoke test
 export ASX_E2E_PROFILE="POSIX"
+export ASX_E2E_DETERMINISTIC="0"
 
 # Source shared harness
 source "$SCRIPT_DIR/harness.sh"
@@ -28,7 +29,8 @@ e2e_init "posix-adapter-smoke" "E2E-POSIX-ADAPTER"
 
 E2E_BIN="${E2E_ARTIFACT_DIR}/e2e_posix_adapter_smoke"
 
-if ! e2e_build "${SCRIPT_DIR}/e2e_posix_adapter_smoke.c" "$E2E_BIN" "-lpthread -lrt"; then
+if ! e2e_build "${SCRIPT_DIR}/e2e_posix_adapter_smoke.c" "$E2E_BIN" \
+    "-DASX_LOCKFREE_SINGLE_THREAD=0 -lpthread -lrt"; then
     e2e_scenario "posix_adapter_smoke.build" "compilation failed" "fail"
     e2e_finish
     exit $?

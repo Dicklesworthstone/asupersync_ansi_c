@@ -1,38 +1,45 @@
 # Lock-Free Queue and Shadow-Path Equivalence Evaluation
 
-> **Bead:** bd-3vt.2
-> **Status:** Research complete — DEFER recommendation
-> **Last updated:** 2026-03-01 by NobleCanyon
+> **Bead:** bd-pweu.5
+> **Status:** Production promotion complete
+> **Last updated:** 2026-05-08 by SilverFrog
 
 ## 1. Executive Summary
 
-A Vyukov-style bounded MPSC lock-free ring buffer was spiked and
-evaluated against the baseline two-phase MPSC channel. The spike
-demonstrates ~7x higher raw throughput in single-threaded mode but
-**lacks cancel-safety** (no abort path), which is a non-negotiable
-requirement for the asx runtime.
+A Vyukov-style bounded MPSC lock-free ring buffer was spiked and then
+graduated into the production channel path without changing the public
+two-phase contract. The shipped MPSC API still requires
+`reserve -> send/abort`; the POSIX/PARALLEL live profile now uses atomic
+capacity claims, atomic permit tokens, and an atomic committed-message
+ring behind that API.
 
-**Decision: DEFER lock-free upgrade.** When parallelism is added
-(GS-009/GS-010), extend the baseline channel with atomic wrappers
-rather than replacing the queue architecture.
+**Decision: PROMOTE with semantic guardrails.** CORE remains the
+deterministic single-thread ring for replay-stable behavior. Live
+POSIX/PARALLEL builds select the atomic backend with
+`ASX_LOCKFREE_SINGLE_THREAD=0`, preserving FIFO receive, bounded
+capacity, abort capacity release, disconnect behavior, and stale-permit
+rejection.
 
 ## 2. Spike Design
 
 ### 2.1 Algorithm
 
-Vyukov bounded MPSC ring buffer:
-- Per-cell sequence numbers coordinate producers and consumer
-- Producers: CAS on enqueue_pos, then write value + advance sequence
-- Consumer: load sequence, read value, recycle slot
-- Power-of-2 capacity (required for mask-based indexing)
+Production two-phase atomic MPSC:
+- `in_use` atomically claims capacity before a permit is issued
+- `permit_tokens[]` are claimed and consumed with CAS
+- abort consumes the permit token and releases the claimed capacity
+- send consumes the permit token and publishes to the committed-message ring
+- consumer load/recycle follows the single-consumer MPSC sequence protocol
 
 ### 2.2 Implementation
 
 | File | Purpose |
 |------|---------|
-| `src/channel/mpsc_lockfree_spike.c` | Standalone spike using shared `include/asx/platform/atomics.h` |
+| `src/channel/mpsc.c` | Production two-phase MPSC with CORE ring and POSIX/PARALLEL atomic backend |
+| `src/channel/mpsc_lockfree_spike.c` | Superseded direct-enqueue reference spike using shared atomics |
 | `include/asx/platform/atomics.h` | Shared portable `u32` atomic/fence shim for spike surfaces |
-| `tests/unit/channel/test_mpsc_equivalence.c` | 9 tests validating semantic equivalence |
+| `tests/unit/channel/test_mpsc.c` | Unit and contention-style coverage for two-phase channel semantics |
+| `tests/unit/channel/test_mpsc_equivalence.c` | 10 tests validating baseline/atomic semantic equivalence |
 
 ### 2.3 Atomic Abstraction
 
@@ -51,8 +58,8 @@ asx_atomic_u32_cas(a, exp, des)   → CAS with return code
 
 ### 3.1 Shared Fixture Results
 
-All 9 equivalence tests pass, confirming that the spike produces
-identical observable behavior to the baseline for:
+The equivalence suite now includes 10 tests confirming that the atomic
+shadow path produces identical observable behavior to the baseline for:
 
 | Test | What it proves |
 |------|----------------|
@@ -61,9 +68,10 @@ identical observable behavior to the baseline for:
 | `empty_dequeue_equivalence` | Same empty behavior (ASX_E_WOULD_BLOCK) |
 | `wraparound_equivalence` | Identical after 20 fill/drain cycles (80 messages) |
 | `interleaved_equivalence` | Same behavior under mixed send/recv patterns |
+| `two_phase_scripted_equivalence` | Same reserve/send/abort, close, queue length, and reserved count outcomes |
 | `power_of_2_capacity` | Capacity rounding validated (1,3,5,16,33,100) |
 | `throughput_comparison` | Both produce valid results at scale (128K ops) |
-| `two_phase_tradeoff` | Architectural analysis documented |
+| `two_phase_promotion_analysis` | Production guardrails documented |
 | `memory_overhead_comparison` | Memory footprint within bounds |
 
 ### 3.2 Throughput Comparison
@@ -91,55 +99,40 @@ identical observable behavior to the baseline for:
 | Lower per-operation overhead | Removes token tracking | HIGH |
 | Simpler hot path | 1 CAS vs 2 function calls | HIGH |
 
-### 4.2 What lock-free loses
+### 4.2 Guardrails that remain mandatory
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| No cancel-safety (no abort path) | **CRITICAL** | Would need CAS-loop rollback protocol |
-| Power-of-2 capacity requirement | LOW | Acceptable constraint |
-| No generation-safe handles | MEDIUM | Would need separate handle layer |
-| Sequence number wraparound | LOW | 2^32 messages before wrap |
-| More complex debugging | MEDIUM | Sequence numbers obscure state |
-| ABI breakage | HIGH | Different internal layout |
+| Cancel-safety drift | **CRITICAL** | Capacity is claimed before reserve and released by abort/disconnect; tests cover mixed send/abort |
+| Semantic fork by profile | **HIGH** | CORE and atomic paths share the public API and are compared by scripted equivalence |
+| Producer contention | MEDIUM | Atomic CAS loops claim capacity, tokens, and enqueue slots; pthread stress is available behind `ASX_MPSC_PTHREAD_STRESS` |
+| Sequence number wraparound | LOW | Bounded `uint32_t` sequence model remains documented; long-run fuzz/benchmark gates should continue to watch it |
+| Debug complexity | MEDIUM | Queue length/reserved count remain observable through existing query APIs |
 
-### 4.3 Cancel-Safety Gap (Critical)
+### 4.3 Cancel-Safety Resolution
 
-The asx runtime requires cancel-safety: a task may be cancelled between
-`try_reserve` and `send`, requiring the permit to be aborted and
-capacity returned. The lock-free spike has no abort path.
-
-A lock-free two-phase protocol is theoretically possible:
-1. CAS to claim a cell (reserve)
-2. Write value + advance sequence (send)
-3. Reset sequence to reclaim cell (abort)
-
-This adds significant complexity:
-- Race between abort and consumer reading the cell
-- Need for a "reserved but not committed" state in the sequence
-- Consumer must skip uncommitted cells or wait
-- Abort under contention requires retry loops
-
-**Estimated additional complexity: ~200 LOC + 15 additional tests.**
+The production path does not expose a direct enqueue API. Reservation
+claims `in_use` capacity first, then records a permit token. Abort
+consumes the token and releases `in_use`; send consumes the token and
+only then publishes a committed message. If the receiver is closed after
+reserve, send returns `ASX_E_DISCONNECTED` and releases the claimed
+capacity without enqueuing a value.
 
 ## 5. Decision
 
-### 5.1 Expected Value Analysis
+### 5.1 Production Selection
 
-| Path | Benefit | Cost | Risk | EV |
-|------|---------|------|------|----|
-| Adopt lock-free now | ~7x throughput | 200 LOC + ABI break + cancel-safety protocol | HIGH | **Negative** — cancel-safety risk too high for current phase |
-| Defer to GS-009/GS-010 | Same throughput gain later | Deferred cost | LOW | **Positive** — aligns with architecture plan |
-| Atomic-wrap baseline | ~3-5x throughput (estimated) | ~100 LOC atomic wrappers | LOW | **Positive** — preserves cancel-safety |
+| Build | Backend | Purpose |
+|------|---------|---------|
+| CORE/default | deterministic ring | replay-stable canonical semantics |
+| POSIX with `ASX_LOCKFREE_SINGLE_THREAD=0` | atomic committed-message ring | live profile producer contention |
+| PARALLEL with `ASX_LOCKFREE_SINGLE_THREAD=0` | atomic committed-message ring | large-swarm runtime path |
 
 ### 5.2 Recommendation
 
-**DEFER.** The optimal path when parallelism is needed:
-
-1. Add `asx_atomic_u32` / `asx_atomic_u64` abstraction layer (portable)
-2. Wrap baseline `queue_head`, `queue_len`, `reserved` with atomics
-3. Protect `permit_tokens[]` with per-channel spinlock (low contention)
-4. Benchmark under realistic contention (not just single-threaded)
-5. If hot path is still bottleneck, revisit lock-free with two-phase CAS protocol
+Keep this profile split until `bd-pweu.11` lands single-vs-multi-worker
+digest parity. After that, platform adapters can execute channel traffic
+concurrently by default only if the parity gate remains green.
 
 This preserves:
 - Cancel-safety (two-phase protocol unchanged)
@@ -149,20 +142,23 @@ This preserves:
 
 ## 6. Safe Fallback Status
 
-The baseline MPSC channel remains the first-class implementation:
-- 49 functional tests + 9 exhaustion tests = 58 tests passing
-- Ring buffer wraparound validated across 20+ cycles
-- Capacity invariant enforced: `queue_len + reserved <= capacity`
-- Two-phase protocol (reserve/send/abort) fully cancel-safe
-- Generation-safe handle detection prevents stale access
-
-The spike exists as a research artifact only. It is not compiled into
-the production library.
+The public MPSC channel remains the first-class implementation:
+- CORE unit path: `test_mpsc` covers 51 default channel tests
+- Atomic live path: the same unit test passes under `PROFILE=PARALLEL`
+  with `ASX_LOCKFREE_SINGLE_THREAD=0`
+- Optional pthread stress: `ASX_MPSC_PTHREAD_STRESS=1` adds a
+  multi-producer/single-consumer contention test
+- Equivalence path: `test_mpsc_equivalence` covers 10 baseline/atomic
+  scripted parity checks
+- Capacity invariant remains `queue_len + reserved_count <= capacity`
+  from the public observer perspective
 
 ## 7. Artifacts
 
 | Artifact | Purpose |
 |----------|---------|
-| `src/channel/mpsc_lockfree_spike.c` | Vyukov spike implementation |
-| `tests/unit/channel/test_mpsc_equivalence.c` | 9-test equivalence suite |
+| `src/channel/mpsc.c` | Production two-phase atomic backend selection |
+| `src/channel/mpsc_lockfree_spike.c` | Superseded direct-enqueue reference spike |
+| `tests/unit/channel/test_mpsc.c` | Unit + scripted/optional pthread stress coverage |
+| `tests/unit/channel/test_mpsc_equivalence.c` | 10-test equivalence suite |
 | `docs/LOCKFREE_QUEUE_EVALUATION.md` | This evaluation document |

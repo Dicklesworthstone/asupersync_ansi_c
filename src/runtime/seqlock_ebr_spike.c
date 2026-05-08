@@ -1,22 +1,23 @@
 /*
  * seqlock_ebr_spike.c — Seqlock metadata and EBR/hazard reclamation
- * evaluation (bd-3vt.7)
+ * production metadata strategy (bd-pweu.4; original evaluation bd-3vt.7)
  *
- * Implements three concurrency strategies for task-slot metadata access
- * and slot reclamation, all in single-threaded simulation mode:
+ * Implements the task-slot metadata synchronization strategy used by the
+ * parallel runtime graduation path, plus the original comparison harness:
  *
- * 1. Seqlock — reader-writer synchronization for metadata snapshots
- * 2. EBR (Epoch-Based Reclamation) — deferred slot reclamation
- * 3. Baseline spinlock — parity reference for both
+ * 1. Seqlock — reader-writer synchronization for metadata snapshots.
+ * 2. EBR (Epoch-Based Reclamation) — bounded deferred slot reclamation.
+ * 3. Guarded task metadata slot — seqlock + EBR composition.
+ * 4. Baseline spinlock — parity reference for evaluation tests.
  *
- * All strategies use the same portable atomic abstraction as the MPSC
- * lock-free spike: plain loads/stores in single-threaded mode, with
- * a clear upgrade path to __atomic_* builtins for multi-threaded.
+ * All production-facing paths use the portable atomic abstraction. The
+ * single-thread backend remains isomorphic; multi-thread builds use the
+ * selected atomics backend without changing the semantic state machine.
  *
  * SPDX-License-Identifier: MIT
  */
 
-/* ASX_CHECKPOINT_WAIVER_FILE() -- seqlock/EBR spike, no checkpoint coverage needed */
+/* ASX_CHECKPOINT_WAIVER_FILE() -- internal metadata primitive covered by focused tests */
 
 /* ASX_PROOF_BLOCK_WAIVER("reason: bug fixes for infinite loop and benchmark reporting") */
 
@@ -56,6 +57,7 @@
  */
 
 #define ASX_SEQLOCK_MAX_DATA 64u /* bytes of protected metadata */
+#define ASX_TASK_METADATA_NO_OWNER UINT16_MAX
 
 typedef struct {
     asx_atomic_u32 sequence;
@@ -76,11 +78,19 @@ typedef struct {
     uint16_t generation;
     int alive;
     uint32_t cancel_epoch;
+    uint16_t lane;
+    uint16_t owner_worker;
+    uint64_t trace_sequence;
 } asx_task_metadata;
+
+void asx_task_metadata_init(asx_task_metadata *md, uint32_t state, uint16_t generation, int alive,
+                            uint32_t cancel_epoch, uint16_t lane, uint16_t owner_worker,
+                            uint64_t trace_sequence);
 
 void asx_seqlock_init(asx_seqlock *sl, uint32_t data_size) {
     if (sl == NULL) return;
-    memset(sl, 0, sizeof(*sl));
+    asx_atomic_u32_init(&sl->sequence, 0u);
+    memset(sl->data, 0, sizeof(sl->data));
     sl->data_size = (data_size > ASX_SEQLOCK_MAX_DATA) ? ASX_SEQLOCK_MAX_DATA : data_size;
 }
 
@@ -154,6 +164,19 @@ void asx_seqlock_write(asx_seqlock *sl, const void *src, uint32_t size) {
     asx_seqlock_write_end(sl);
 }
 
+void asx_task_metadata_init(asx_task_metadata *md, uint32_t state, uint16_t generation, int alive,
+                            uint32_t cancel_epoch, uint16_t lane, uint16_t owner_worker,
+                            uint64_t trace_sequence) {
+    if (md == NULL) return;
+    md->state = state;
+    md->generation = generation;
+    md->alive = alive;
+    md->cancel_epoch = cancel_epoch;
+    md->lane = lane;
+    md->owner_worker = owner_worker;
+    md->trace_sequence = trace_sequence;
+}
+
 /* ------------------------------------------------------------------ */
 /* 2. EBR — Epoch-Based Reclamation                                   */
 /* ------------------------------------------------------------------ */
@@ -219,6 +242,14 @@ typedef struct {
 /* Callback for reclaiming an item */
 typedef void (*asx_ebr_reclaim_fn)(uint32_t slot_index, uint32_t generation, void *user_data);
 
+typedef struct {
+    asx_seqlock metadata;
+    asx_ebr_state ebr;
+    uint32_t slot_index;
+    uint16_t current_generation;
+    uint32_t stale_generation_rejects;
+} asx_task_metadata_slot;
+
 void asx_ebr_init(asx_ebr_state *ebr, uint32_t reader_count);
 uint32_t asx_ebr_reader_enter(asx_ebr_state *ebr, uint32_t reader_id);
 void asx_ebr_reader_leave(asx_ebr_state *ebr, uint32_t reader_id);
@@ -226,14 +257,33 @@ int asx_ebr_defer(asx_ebr_state *ebr, uint32_t slot_index, uint32_t generation);
 int asx_ebr_try_advance(asx_ebr_state *ebr, asx_ebr_reclaim_fn reclaim_fn, void *user_data);
 uint32_t asx_ebr_current_epoch(const asx_ebr_state *ebr);
 uint32_t asx_ebr_pending_count(const asx_ebr_state *ebr);
+void asx_task_metadata_slot_init(asx_task_metadata_slot *slot, uint32_t slot_index,
+                                 uint32_t reader_count);
+int asx_task_metadata_slot_publish(asx_task_metadata_slot *slot,
+                                   const asx_task_metadata *metadata);
+uint32_t asx_task_metadata_slot_reader_enter(asx_task_metadata_slot *slot, uint32_t reader_id);
+void asx_task_metadata_slot_reader_leave(asx_task_metadata_slot *slot, uint32_t reader_id);
+int asx_task_metadata_slot_snapshot_in_epoch(asx_task_metadata_slot *slot,
+                                             asx_task_metadata *out);
+int asx_task_metadata_slot_snapshot(asx_task_metadata_slot *slot, uint32_t reader_id,
+                                    asx_task_metadata *out);
+int asx_task_metadata_is_current(const asx_task_metadata *metadata, uint16_t expected_generation);
+int asx_task_metadata_slot_retire(asx_task_metadata_slot *slot, uint16_t expected_generation);
+int asx_task_metadata_slot_try_reclaim(asx_task_metadata_slot *slot,
+                                       asx_ebr_reclaim_fn reclaim_fn, void *user_data);
 
 void asx_ebr_init(asx_ebr_state *ebr, uint32_t reader_count) {
     uint32_t i;
     if (ebr == NULL) return;
-    memset(ebr, 0, sizeof(*ebr));
+    asx_atomic_u32_init(&ebr->global_epoch, 0u);
     ebr->reader_count = (reader_count > ASX_EBR_MAX_READERS) ? ASX_EBR_MAX_READERS : reader_count;
+    memset(ebr->defer_ring, 0, sizeof(ebr->defer_ring));
+    memset(ebr->defer_count, 0, sizeof(ebr->defer_count));
+    ebr->total_deferred = 0u;
+    ebr->total_reclaimed = 0u;
+    ebr->epoch_advances = 0u;
     for (i = 0; i < ASX_EBR_MAX_READERS; i++) {
-        asx_atomic_u32_store(&ebr->reader_epoch[i], ASX_EBR_INACTIVE);
+        asx_atomic_u32_init(&ebr->reader_epoch[i], ASX_EBR_INACTIVE);
     }
 }
 
@@ -336,6 +386,82 @@ uint32_t asx_ebr_pending_count(const asx_ebr_state *ebr) {
     return total;
 }
 
+void asx_task_metadata_slot_init(asx_task_metadata_slot *slot, uint32_t slot_index,
+                                 uint32_t reader_count) {
+    asx_task_metadata initial;
+    if (slot == NULL) return;
+
+    asx_seqlock_init(&slot->metadata, sizeof(asx_task_metadata));
+    asx_ebr_init(&slot->ebr, reader_count);
+    slot->slot_index = slot_index;
+    slot->current_generation = 0u;
+    slot->stale_generation_rejects = 0u;
+
+    asx_task_metadata_init(&initial, 0u, 0u, 0, 0u, 0u, ASX_TASK_METADATA_NO_OWNER, 0u);
+    asx_seqlock_write(&slot->metadata, &initial, sizeof(initial));
+}
+
+int asx_task_metadata_slot_publish(asx_task_metadata_slot *slot,
+                                   const asx_task_metadata *metadata) {
+    if (slot == NULL || metadata == NULL) return 0;
+    asx_seqlock_write(&slot->metadata, metadata, sizeof(*metadata));
+    slot->current_generation = metadata->generation;
+    return 1;
+}
+
+uint32_t asx_task_metadata_slot_reader_enter(asx_task_metadata_slot *slot, uint32_t reader_id) {
+    if (slot == NULL || reader_id >= slot->ebr.reader_count) return ASX_EBR_INACTIVE;
+    return asx_ebr_reader_enter(&slot->ebr, reader_id);
+}
+
+void asx_task_metadata_slot_reader_leave(asx_task_metadata_slot *slot, uint32_t reader_id) {
+    if (slot == NULL) return;
+    asx_ebr_reader_leave(&slot->ebr, reader_id);
+}
+
+int asx_task_metadata_slot_snapshot_in_epoch(asx_task_metadata_slot *slot,
+                                             asx_task_metadata *out) {
+    if (slot == NULL || out == NULL) return 0;
+    return asx_seqlock_read(&slot->metadata, out, sizeof(*out));
+}
+
+int asx_task_metadata_slot_snapshot(asx_task_metadata_slot *slot, uint32_t reader_id,
+                                    asx_task_metadata *out) {
+    int ok;
+    if (slot == NULL || out == NULL || reader_id >= slot->ebr.reader_count) return 0;
+    (void)asx_ebr_reader_enter(&slot->ebr, reader_id);
+    ok = asx_seqlock_read(&slot->metadata, out, sizeof(*out));
+    asx_ebr_reader_leave(&slot->ebr, reader_id);
+    return ok;
+}
+
+int asx_task_metadata_is_current(const asx_task_metadata *metadata, uint16_t expected_generation) {
+    if (metadata == NULL) return 0;
+    return (metadata->alive != 0 && metadata->generation == expected_generation) ? 1 : 0;
+}
+
+int asx_task_metadata_slot_retire(asx_task_metadata_slot *slot, uint16_t expected_generation) {
+    asx_task_metadata snapshot;
+    if (slot == NULL) return 0;
+    if (!asx_seqlock_read(&slot->metadata, &snapshot, sizeof(snapshot))) return 0;
+    if (!asx_task_metadata_is_current(&snapshot, expected_generation)) {
+        slot->stale_generation_rejects++;
+        return 0;
+    }
+    if (!asx_ebr_defer(&slot->ebr, slot->slot_index, expected_generation)) return 0;
+
+    snapshot.alive = 0;
+    snapshot.owner_worker = ASX_TASK_METADATA_NO_OWNER;
+    asx_seqlock_write(&slot->metadata, &snapshot, sizeof(snapshot));
+    return 1;
+}
+
+int asx_task_metadata_slot_try_reclaim(asx_task_metadata_slot *slot,
+                                       asx_ebr_reclaim_fn reclaim_fn, void *user_data) {
+    if (slot == NULL) return 0;
+    return asx_ebr_try_advance(&slot->ebr, reclaim_fn, user_data);
+}
+
 /* ------------------------------------------------------------------ */
 /* 3. BASELINE SPINLOCK — Parity reference                            */
 /* ------------------------------------------------------------------ */
@@ -364,7 +490,9 @@ void asx_spinlock_unlock(asx_spinlock *lock);
 
 void asx_spinlock_init(asx_spinlock *lock) {
     if (lock == NULL) return;
-    memset(lock, 0, sizeof(*lock));
+    asx_atomic_u32_init(&lock->locked, 0u);
+    lock->acquisitions = 0u;
+    lock->contentions = 0u;
 }
 
 int asx_spinlock_try_lock(asx_spinlock *lock) {

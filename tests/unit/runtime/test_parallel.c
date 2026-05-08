@@ -11,9 +11,13 @@
 #include "../../test_harness.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
+#include <asx/runtime/io_driver.h>
 #include <asx/runtime/parallel.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
+#include <asx/runtime/waker.h>
+#include <asx/time/timer_wheel.h>
+#include <string.h>
 
 /* ---- Test poll functions ---- */
 
@@ -61,6 +65,39 @@ static asx_status poll_checkpoint_forever(void *data, asx_task_id self) {
     return ASX_E_PENDING;
 }
 
+typedef struct {
+    int id;
+} poll_order_state;
+
+static int g_poll_order[8];
+static uint32_t g_poll_order_count;
+static uint32_t g_parallel_ghost_ready;
+
+static asx_status poll_record_order(void *data, asx_task_id self) {
+    poll_order_state *state = (poll_order_state *)data;
+    (void)self;
+    if (state != NULL && g_poll_order_count < 8u) {
+        g_poll_order[g_poll_order_count] = state->id;
+        g_poll_order_count++;
+    }
+    return ASX_OK;
+}
+
+static void reset_poll_order(void) {
+    uint32_t i;
+    for (i = 0; i < 8u; i++) { g_poll_order[i] = 0; }
+    g_poll_order_count = 0u;
+}
+
+static asx_status parallel_test_ghost_reactor(void *ctx, uint64_t logical_step,
+                                              uint32_t *ready_count) {
+    (void)ctx;
+    (void)logical_step;
+    if (ready_count == NULL) return ASX_E_INVALID_ARGUMENT;
+    *ready_count = g_parallel_ghost_ready;
+    return ASX_OK;
+}
+
 static int g_parallel_dtor_calls;
 static uint32_t g_parallel_dtor_last_size;
 
@@ -81,16 +118,25 @@ static void reset_all(void) {
     asx_runtime_reset();
     asx_ghost_reset();
     asx_parallel_reset();
+    asx_waker_reset();
+    asx_timer_wheel_reset(asx_timer_wheel_global());
+#if ASX_HAS_NATIVE_IO_DRIVER
+    asx_io_driver_reset();
+#endif
+    reset_poll_order();
+    g_parallel_ghost_ready = 0u;
 }
 
 static asx_parallel_config default_config(void) {
     asx_parallel_config cfg;
+    memset(&cfg, 0, sizeof(cfg));
     cfg.worker_count = 1;
     cfg.fairness = ASX_FAIRNESS_ROUND_ROBIN;
     cfg.lane_weights[0] = 1;
     cfg.lane_weights[1] = 1;
     cfg.lane_weights[2] = 1;
     cfg.starvation_limit = 5;
+    asx_parallel_admission_policy_init(&cfg.admission_policy);
     return cfg;
 }
 
@@ -109,7 +155,7 @@ TEST(parallel_init_zero_workers) {
 TEST(parallel_init_too_many_workers) {
     asx_parallel_config cfg = default_config();
     cfg.worker_count = ASX_MAX_WORKERS + 1;
-    ASSERT_EQ(asx_parallel_init(&cfg), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 TEST(parallel_init_valid) {
@@ -118,6 +164,44 @@ TEST(parallel_init_valid) {
     ASSERT_TRUE(asx_parallel_is_initialized());
     ASSERT_EQ(asx_parallel_worker_count(), (uint32_t)1);
     asx_parallel_reset();
+}
+
+TEST(parallel_init_worker_count_boundaries) {
+    asx_parallel_config cfg = default_config();
+
+    cfg.worker_count = 0u;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_E_INVALID_ARGUMENT);
+
+    cfg.worker_count = 1u;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_parallel_worker_count(), (uint32_t)1);
+    asx_parallel_reset();
+
+    cfg.worker_count = 4u;
+#if ASX_MAX_WORKERS >= 4u
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_parallel_worker_count(), (uint32_t)4);
+    asx_parallel_reset();
+#else
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_E_RESOURCE_EXHAUSTED);
+#endif
+
+    cfg.worker_count = ASX_PARALLEL_GENERIC_TARGET_WORKERS;
+#if ASX_MAX_WORKERS >= ASX_PARALLEL_GENERIC_TARGET_WORKERS
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_parallel_worker_count(), (uint32_t)ASX_PARALLEL_GENERIC_TARGET_WORKERS);
+    asx_parallel_reset();
+#else
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_E_RESOURCE_EXHAUSTED);
+#endif
+
+    cfg.worker_count = ASX_MAX_WORKERS;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_parallel_worker_count(), (uint32_t)ASX_MAX_WORKERS);
+    asx_parallel_reset();
+
+    cfg.worker_count = ASX_MAX_WORKERS + 1u;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 TEST(parallel_reset_clears_state) {
@@ -259,8 +343,9 @@ TEST(lane_assign_fills_capacity) {
         ASSERT_EQ(asx_lane_assign(tids[i], ASX_LANE_READY), ASX_OK);
     }
 
-    /* Next should fail */
-    ASSERT_EQ(asx_lane_assign(tids[0], ASX_LANE_READY), ASX_E_RESOURCE_EXHAUSTED);
+    /* Reassigning an already-lane-owned task is idempotent, not a duplicate. */
+    ASSERT_EQ(asx_lane_assign(tids[0], ASX_LANE_READY), ASX_OK);
+    ASSERT_EQ(asx_lane_total_tasks(), ASX_LANE_TASK_CAPACITY);
 
     asx_parallel_reset();
 }
@@ -311,6 +396,88 @@ TEST(worker_get_state_null_out) {
 
     ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
     ASSERT_EQ(asx_worker_get_state(0, NULL), ASX_E_INVALID_ARGUMENT);
+
+    asx_parallel_reset();
+}
+
+TEST(worker_lifecycle_drains_on_quiescence) {
+    asx_region_id rid;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    asx_worker_state ws;
+
+    cfg.worker_count = 4;
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+
+    ASSERT_EQ(asx_worker_get_state(0, &ws), ASX_OK);
+    ASSERT_TRUE(ws.active);
+    ASSERT_EQ((int)ws.lifecycle, (int)ASX_WORKER_RUNNING);
+
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(asx_worker_get_state(0, &ws), ASX_OK);
+    ASSERT_FALSE(ws.active);
+    ASSERT_EQ((int)ws.lifecycle, (int)ASX_WORKER_DRAINED);
+
+    asx_parallel_reset();
+}
+
+TEST(worker_lifecycle_marks_draining_on_budget_exhaustion) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    asx_worker_state ws;
+
+    cfg.worker_count = 2;
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_forever, NULL, &tid), ASX_OK);
+
+    budget = asx_budget_from_polls(1);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+
+    ASSERT_EQ(asx_worker_get_state(0, &ws), ASX_OK);
+    ASSERT_TRUE(ws.active);
+    ASSERT_EQ((int)ws.lifecycle, (int)ASX_WORKER_DRAINING);
+
+    asx_parallel_reset();
+}
+
+TEST(worker_lane_depths_track_manual_injection) {
+    asx_parallel_config cfg = default_config();
+    asx_region_id rid;
+    asx_task_id ready_task, cancel_task, timed_task;
+    uint32_t lane_totals[ASX_MAX_LANES] = {0u, 0u, 0u};
+    uint32_t i;
+
+    cfg.worker_count = 4;
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &ready_task), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &cancel_task), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &timed_task), ASX_OK);
+
+    ASSERT_EQ(asx_inject_ready(ready_task), ASX_OK);
+    ASSERT_EQ(asx_inject_cancel(cancel_task), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(timed_task), ASX_OK);
+
+    for (i = 0; i < cfg.worker_count; i++) {
+        asx_worker_state ws;
+        ASSERT_EQ(asx_worker_get_state(i, &ws), ASX_OK);
+        lane_totals[ASX_LANE_READY] += ws.lane_depths[ASX_LANE_READY];
+        lane_totals[ASX_LANE_CANCEL] += ws.lane_depths[ASX_LANE_CANCEL];
+        lane_totals[ASX_LANE_TIMED] += ws.lane_depths[ASX_LANE_TIMED];
+    }
+
+    ASSERT_EQ(lane_totals[ASX_LANE_READY], 1u);
+    ASSERT_EQ(lane_totals[ASX_LANE_CANCEL], 1u);
+    ASSERT_EQ(lane_totals[ASX_LANE_TIMED], 1u);
 
     asx_parallel_reset();
 }
@@ -688,6 +855,218 @@ TEST(parallel_starvation_limit_in_lane_state) {
 }
 
 /* ================================================================
+ * Timed lane, wakers, and reactor readiness
+ * ================================================================ */
+
+TEST(timed_lane_waits_for_waker_before_polling) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_waker waker;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    asx_scheduling_metrics metrics;
+    poll_order_state task = {1};
+
+    cfg.worker_count = 2;
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &task, &tid), ASX_OK);
+    ASSERT_EQ(asx_waker_register(tid, &waker), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(tid), ASX_OK);
+
+    budget = asx_budget_from_polls(5);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(g_poll_order_count, 0u);
+
+    ASSERT_EQ(asx_waker_wake(&waker), ASX_OK);
+    budget = asx_budget_from_polls(5);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(g_poll_order_count, 1u);
+    ASSERT_EQ(g_poll_order[0], 1);
+
+    ASSERT_EQ(asx_parallel_get_metrics(&metrics), ASX_OK);
+    ASSERT_EQ(metrics.waker_ready, 1u);
+    ASSERT_EQ(metrics.timed_promotions, 1u);
+
+    asx_parallel_reset();
+}
+
+TEST(timed_equal_deadline_wakers_preserve_fire_order) {
+    asx_region_id rid;
+    asx_task_id t1, t2;
+    asx_waker w1, w2;
+    asx_timer_handle h1, h2;
+    void *ready_wakers[2];
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    poll_order_state s1 = {1};
+    poll_order_state s2 = {2};
+    uint32_t ready_count;
+    uint32_t i;
+
+    cfg.worker_count = 2;
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &s1, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &s2, &t2), ASX_OK);
+    ASSERT_EQ(asx_waker_register(t1, &w1), ASX_OK);
+    ASSERT_EQ(asx_waker_register(t2, &w2), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(t1), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(t2), ASX_OK);
+
+    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(), 100, &w1, &h1), ASX_OK);
+    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(), 100, &w2, &h2), ASX_OK);
+    ready_count = asx_timer_collect_expired(asx_timer_wheel_global(), 100, ready_wakers, 2);
+    ASSERT_EQ(ready_count, 2u);
+    for (i = 0; i < ready_count; i++) {
+        ASSERT_EQ(asx_waker_wake((const asx_waker *)ready_wakers[i]), ASX_OK);
+    }
+
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(g_poll_order_count, 2u);
+    ASSERT_EQ(g_poll_order[0], 1);
+    ASSERT_EQ(g_poll_order[1], 2);
+
+    asx_parallel_reset();
+}
+
+TEST(reactor_readiness_promotes_timed_waker) {
+#if ASX_HAS_NATIVE_IO_DRIVER
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_waker waker;
+    asx_io_token token;
+    asx_runtime_hooks hooks;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    asx_scheduling_metrics metrics;
+    poll_order_state task = {7};
+
+    cfg.worker_count = 2;
+    reset_all();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.reactor.ghost_wait_fn = parallel_test_ghost_reactor;
+    hooks.deterministic_seeded_prng = 1;
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+    ASSERT_EQ(asx_io_driver_init(), ASX_OK);
+
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &task, &tid), ASX_OK);
+    ASSERT_EQ(asx_waker_register(tid, &waker), ASX_OK);
+    ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &waker, &token), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(tid), ASX_OK);
+
+    g_parallel_ghost_ready = 1u;
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(g_poll_order_count, 1u);
+    ASSERT_EQ(g_poll_order[0], 7);
+
+    ASSERT_EQ(asx_parallel_get_metrics(&metrics), ASX_OK);
+    ASSERT_TRUE(metrics.reactor_polls > 0u);
+    ASSERT_EQ(metrics.reactor_ready, 1u);
+    ASSERT_EQ(metrics.waker_ready, 1u);
+    ASSERT_EQ(metrics.timed_promotions, 1u);
+
+    asx_io_driver_shutdown();
+#endif
+}
+
+/* ================================================================
+ * Multi-worker routing and replay-stable commit accounting
+ * ================================================================ */
+
+TEST(parallel_multi_worker_steals_preserve_completion) {
+    asx_region_id rid;
+    asx_task_id t1, t2;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    asx_scheduling_metrics metrics;
+    asx_worker_state ws;
+    int c1 = 3;
+    int c2 = 3;
+
+    cfg.worker_count = 4;
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c2, &t2), ASX_OK);
+
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(asx_parallel_get_metrics(&metrics), ASX_OK);
+    ASSERT_TRUE(metrics.steal_attempts > 0u);
+    ASSERT_TRUE(metrics.steals_succeeded > 0u);
+    ASSERT_TRUE(metrics.commit_sequence >= metrics.ready_dispatches);
+
+    ASSERT_EQ(asx_worker_get_state(0, &ws), ASX_OK);
+    ASSERT_EQ(ws.lane_depths[ASX_LANE_READY], 0u);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_multi_worker_trace_matches_single_worker) {
+    asx_region_id rid;
+    asx_task_id t1, t2, t3;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    int c1, c2, c3;
+    uint32_t i;
+    uint32_t single_count;
+    asx_trace_event single_events[96];
+
+    reset_all();
+    asx_trace_reset();
+    c1 = 2;
+    c2 = 1;
+    c3 = 0;
+    cfg.worker_count = 1;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c2, &t2), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c3, &t3), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    single_count = asx_trace_event_count();
+    ASSERT_TRUE(single_count > 0u);
+    ASSERT_TRUE(single_count <= 96u);
+    for (i = 0; i < single_count; i++) { ASSERT_TRUE(asx_trace_event_get(i, &single_events[i])); }
+
+    reset_all();
+    asx_trace_reset();
+    c1 = 2;
+    c2 = 1;
+    c3 = 0;
+    cfg.worker_count = 4;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c2, &t2), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c3, &t3), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(asx_trace_event_count(), single_count);
+    for (i = 0; i < single_count; i++) {
+        asx_trace_event ev;
+        ASSERT_TRUE(asx_trace_event_get(i, &ev));
+        ASSERT_EQ((int)ev.kind, (int)single_events[i].kind);
+        ASSERT_EQ(ev.entity_id, single_events[i].entity_id);
+        ASSERT_EQ(ev.aux, single_events[i].aux);
+    }
+
+    asx_parallel_reset();
+}
+
+/* ================================================================
  * Replay identity — run twice, verify same completion count
  * ================================================================ */
 
@@ -839,6 +1218,116 @@ TEST(parallel_lane_weight_query) {
 }
 
 /* ================================================================
+ * Admission and telemetry evidence
+ * ================================================================ */
+
+TEST(parallel_admission_evaluate_modes) {
+    asx_parallel_admission_policy policy;
+    asx_parallel_admission_decision decision;
+
+    asx_parallel_admission_policy_init(&policy);
+    policy.pressure_threshold_pct = 50u;
+
+    ASSERT_EQ(asx_parallel_evaluate_admission(&policy, 49u, 100u, &decision), ASX_OK);
+    ASSERT_FALSE(decision.triggered);
+    ASSERT_EQ((int)decision.admit_status, (int)ASX_OK);
+
+    ASSERT_EQ(asx_parallel_evaluate_admission(&policy, 50u, 100u, &decision), ASX_OK);
+    ASSERT_TRUE(decision.triggered);
+    ASSERT_EQ((int)decision.mode, (int)ASX_PARALLEL_ADMISSION_REJECT);
+    ASSERT_EQ((int)decision.admit_status, (int)ASX_E_ADMISSION_CLOSED);
+
+    policy.mode = ASX_PARALLEL_ADMISSION_BACKPRESSURE;
+    ASSERT_EQ(asx_parallel_evaluate_admission(&policy, 75u, 100u, &decision), ASX_OK);
+    ASSERT_TRUE(decision.triggered);
+    ASSERT_EQ((int)decision.admit_status, (int)ASX_E_WOULD_BLOCK);
+
+    policy.mode = ASX_PARALLEL_ADMISSION_SHED_OLDEST;
+    policy.shed_max = 3u;
+    ASSERT_EQ(asx_parallel_evaluate_admission(&policy, 75u, 100u, &decision), ASX_OK);
+    ASSERT_TRUE(decision.triggered);
+    ASSERT_EQ((int)decision.admit_status, (int)ASX_OK);
+    ASSERT_EQ(decision.shed_count, 3u);
+
+    policy.pressure_threshold_pct = 101u;
+    ASSERT_EQ(asx_parallel_evaluate_admission(&policy, 75u, 100u, &decision),
+              ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(parallel_admission_enforced_backpressure_is_atomic) {
+    asx_parallel_config cfg = default_config();
+    asx_region_id rid;
+    asx_task_id t1, t2;
+    asx_scheduling_metrics metrics;
+
+    cfg.admission_policy.mode = ASX_PARALLEL_ADMISSION_BACKPRESSURE;
+    cfg.admission_policy.pressure_threshold_pct = 2u;
+    cfg.admission_policy.enforce = 1;
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t2), ASX_OK);
+
+    ASSERT_EQ(asx_lane_assign(t1, ASX_LANE_READY), ASX_OK);
+    ASSERT_EQ(asx_lane_assign(t2, ASX_LANE_READY), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_lane_total_tasks(), 1u);
+
+    ASSERT_EQ(asx_parallel_get_metrics(&metrics), ASX_OK);
+    ASSERT_EQ(metrics.admission_backpressure, 1u);
+    ASSERT_EQ(metrics.pressure_transitions, 1u);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_telemetry_snapshot_and_jsonl_are_failure_atomic) {
+    asx_parallel_config cfg = default_config();
+    asx_parallel_telemetry_snapshot snapshot;
+    asx_region_id rid;
+    asx_task_id t1, t2;
+    char tiny[8] = "keep";
+    char jsonl[1536];
+    uint32_t needed = 0u;
+
+    cfg.worker_count = 4u;
+    cfg.admission_policy.mode = ASX_PARALLEL_ADMISSION_SHED_OLDEST;
+    cfg.admission_policy.pressure_threshold_pct = 1u;
+    cfg.admission_policy.shed_max = 2u;
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t2), ASX_OK);
+    ASSERT_EQ(asx_lane_assign(t1, ASX_LANE_READY), ASX_OK);
+    ASSERT_EQ(asx_lane_assign(t2, ASX_LANE_READY), ASX_OK);
+
+    ASSERT_EQ(asx_parallel_get_telemetry_snapshot(&snapshot), ASX_OK);
+    ASSERT_EQ(snapshot.worker_count, 4u);
+    ASSERT_EQ(snapshot.total_queue_depth, 2u);
+    ASSERT_TRUE(snapshot.pressure_pct >= 3u);
+    ASSERT_EQ(snapshot.admission.triggered, 1);
+    ASSERT_EQ((int)snapshot.admission.mode, (int)ASX_PARALLEL_ADMISSION_SHED_OLDEST);
+    ASSERT_EQ(snapshot.metrics.admission_sheds, 3u);
+
+    ASSERT_EQ(asx_parallel_render_telemetry_jsonl(&snapshot, tiny, (uint32_t)sizeof(tiny), &needed),
+              ASX_E_BUFFER_TOO_SMALL);
+    ASSERT_STR_EQ(tiny, "keep");
+    ASSERT_TRUE(needed > (uint32_t)sizeof(tiny));
+
+    memset(jsonl, 0, sizeof(jsonl));
+    ASSERT_EQ(asx_parallel_render_telemetry_jsonl(&snapshot, jsonl, (uint32_t)sizeof(jsonl),
+                                                  &needed),
+              ASX_OK);
+    ASSERT_TRUE(strstr(jsonl, "\"kind\":\"parallel_telemetry\"") != NULL);
+    ASSERT_TRUE(strstr(jsonl, "\"admission\"") != NULL);
+    ASSERT_TRUE(strstr(jsonl, "\"shed_oldest\"") != NULL);
+
+    asx_parallel_reset();
+}
+
+/* ================================================================
  * main
  * ================================================================ */
 
@@ -850,6 +1339,7 @@ int main(void) {
     RUN_TEST(parallel_init_zero_workers);
     RUN_TEST(parallel_init_too_many_workers);
     RUN_TEST(parallel_init_valid);
+    RUN_TEST(parallel_init_worker_count_boundaries);
     RUN_TEST(parallel_reset_clears_state);
     RUN_TEST(parallel_public_api_requires_init);
 
@@ -867,6 +1357,9 @@ int main(void) {
     RUN_TEST(worker_get_state_valid);
     RUN_TEST(worker_get_state_out_of_range);
     RUN_TEST(worker_get_state_null_out);
+    RUN_TEST(worker_lifecycle_drains_on_quiescence);
+    RUN_TEST(worker_lifecycle_marks_draining_on_budget_exhaustion);
+    RUN_TEST(worker_lane_depths_track_manual_injection);
 
     /* Parallel run */
     RUN_TEST(parallel_run_single_task_completes);
@@ -892,6 +1385,15 @@ int main(void) {
     RUN_TEST(parallel_no_starvation_initially);
     RUN_TEST(parallel_starvation_limit_in_lane_state);
 
+    /* Timed lane / wakers / reactor readiness */
+    RUN_TEST(timed_lane_waits_for_waker_before_polling);
+    RUN_TEST(timed_equal_deadline_wakers_preserve_fire_order);
+    RUN_TEST(reactor_readiness_promotes_timed_waker);
+
+    /* Worker routing */
+    RUN_TEST(parallel_multi_worker_steals_preserve_completion);
+    RUN_TEST(parallel_multi_worker_trace_matches_single_worker);
+
     /* Replay identity */
     RUN_TEST(parallel_replay_identity);
     RUN_TEST(parallel_single_worker_trace_matches_core_scheduler);
@@ -901,6 +1403,11 @@ int main(void) {
 
     /* Lane weight query */
     RUN_TEST(parallel_lane_weight_query);
+
+    /* Admission and telemetry evidence */
+    RUN_TEST(parallel_admission_evaluate_modes);
+    RUN_TEST(parallel_admission_enforced_backpressure_is_atomic);
+    RUN_TEST(parallel_telemetry_snapshot_and_jsonl_are_failure_atomic);
 
     TEST_REPORT();
     return test_failures;

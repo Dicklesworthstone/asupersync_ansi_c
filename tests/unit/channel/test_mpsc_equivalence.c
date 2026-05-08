@@ -1,11 +1,12 @@
 /*
- * test_mpsc_equivalence.c — Shadow-path equivalence: baseline vs lock-free (bd-3vt.2)
+ * test_mpsc_equivalence.c — Shadow-path equivalence: baseline vs lock-free (bd-pweu.5)
  *
  * Runs identical operation sequences through both the baseline MPSC
- * channel and the lock-free Vyukov spike, validating that observable
- * outputs are identical (FIFO order, capacity limits, error codes).
+ * channel and the atomic MPSC shadow path, validating that observable
+ * outputs are identical (FIFO order, two-phase capacity accounting,
+ * abort behavior, and error codes).
  *
- * This is the semantic equivalence proof artifact required by bd-3vt.2.
+ * This is the semantic equivalence proof artifact required by bd-pweu.5.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -44,6 +45,21 @@ typedef struct {
     uint32_t len;
     int alive;
 } spike_queue;
+
+typedef struct {
+    uint32_t token;
+    int consumed;
+} spike_permit;
+
+typedef struct {
+    spike_queue queue;
+    uint32_t in_use;
+    uint32_t reserved;
+    uint32_t next_token;
+    uint32_t permit_tokens[LOCKFREE_MAX_CAPACITY];
+    int sender_closed;
+    int receiver_closed;
+} spike_channel;
 
 static uint32_t spike_next_pow2(uint32_t v) {
     v--;
@@ -106,6 +122,138 @@ static asx_status spike_dequeue(spike_queue *q, uint64_t *out) {
     asx_atomic_u32_store(&cell->sequence, q->dequeue_pos + q->capacity);
     q->dequeue_pos++;
     q->len--;
+    return ASX_OK;
+}
+
+static void spike_channel_init(spike_channel *ch, uint32_t cap) {
+    uint32_t i;
+
+    spike_init(&ch->queue, cap);
+    ch->in_use = 0;
+    ch->reserved = 0;
+    ch->next_token = 1;
+    ch->sender_closed = 0;
+    ch->receiver_closed = 0;
+    for (i = 0; i < LOCKFREE_MAX_CAPACITY; i++) { ch->permit_tokens[i] = 0u; }
+}
+
+static uint32_t spike_channel_alloc_token(spike_channel *ch) {
+    uint32_t token;
+    uint32_t attempts;
+    uint32_t i;
+    int found;
+
+    for (attempts = 0; attempts < LOCKFREE_MAX_CAPACITY + 2u; attempts++) {
+        token = ch->next_token++;
+        if (ch->next_token == 0u) { ch->next_token = 1u; }
+        if (token == 0u) { continue; }
+
+        found = 0;
+        for (i = 0; i < LOCKFREE_MAX_CAPACITY; i++) {
+            if (ch->permit_tokens[i] == token) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) { return token; }
+    }
+
+    return 0u;
+}
+
+static asx_status spike_channel_reserve(spike_channel *ch, spike_permit *out) {
+    uint32_t i;
+    uint32_t token;
+
+    if (ch == NULL || out == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (ch->sender_closed) { return ASX_E_INVALID_STATE; }
+    if (ch->receiver_closed) { return ASX_E_DISCONNECTED; }
+    if (ch->in_use >= ch->queue.capacity) { return ASX_E_CHANNEL_FULL; }
+
+    token = spike_channel_alloc_token(ch);
+    if (token == 0u) { return ASX_E_RESOURCE_EXHAUSTED; }
+
+    for (i = 0; i < LOCKFREE_MAX_CAPACITY; i++) {
+        if (ch->permit_tokens[i] == 0u) {
+            ch->permit_tokens[i] = token;
+            ch->in_use++;
+            ch->reserved++;
+            out->token = token;
+            out->consumed = 0;
+            return ASX_OK;
+        }
+    }
+
+    return ASX_E_RESOURCE_EXHAUSTED;
+}
+
+static asx_status spike_channel_consume(spike_channel *ch, spike_permit *permit) {
+    uint32_t i;
+
+    if (ch == NULL || permit == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (permit->consumed || permit->token == 0u) { return ASX_E_INVALID_STATE; }
+
+    for (i = 0; i < LOCKFREE_MAX_CAPACITY; i++) {
+        if (ch->permit_tokens[i] == permit->token) {
+            ch->permit_tokens[i] = 0u;
+            permit->consumed = 1;
+            if (ch->reserved > 0u) { ch->reserved--; }
+            return ASX_OK;
+        }
+    }
+
+    permit->consumed = 1;
+    return ASX_E_INVALID_STATE;
+}
+
+static asx_status spike_channel_send(spike_channel *ch, spike_permit *permit, uint64_t value) {
+    asx_status st;
+
+    st = spike_channel_consume(ch, permit);
+    if (st != ASX_OK) { return st; }
+    if (ch->receiver_closed) {
+        if (ch->in_use > 0u) { ch->in_use--; }
+        return ASX_E_DISCONNECTED;
+    }
+
+    st = spike_enqueue(&ch->queue, value);
+    if (st != ASX_OK && ch->in_use > 0u) { ch->in_use--; }
+    return st;
+}
+
+static void spike_channel_abort(spike_channel *ch, spike_permit *permit) {
+    if (spike_channel_consume(ch, permit) == ASX_OK && ch->in_use > 0u) { ch->in_use--; }
+}
+
+static asx_status spike_channel_recv(spike_channel *ch, uint64_t *out) {
+    asx_status st;
+
+    st = spike_dequeue(&ch->queue, out);
+    if (st == ASX_OK) {
+        if (ch->in_use > 0u) { ch->in_use--; }
+        return ASX_OK;
+    }
+    if (ch->receiver_closed) { return ASX_E_DISCONNECTED; }
+    if (ch->sender_closed && ch->reserved == 0u) { return ASX_E_DISCONNECTED; }
+    return st;
+}
+
+static asx_status spike_channel_close_sender(spike_channel *ch) {
+    if (ch->sender_closed || (ch->sender_closed && ch->receiver_closed)) {
+        return ASX_E_INVALID_STATE;
+    }
+    ch->sender_closed = 1;
+    return ASX_OK;
+}
+
+static asx_status spike_channel_close_receiver(spike_channel *ch) {
+    uint64_t ignored;
+
+    if (ch->receiver_closed) { return ASX_E_INVALID_STATE; }
+    while (spike_dequeue(&ch->queue, &ignored) == ASX_OK) {
+        if (ch->in_use > 0u) { ch->in_use--; }
+    }
+    ch->receiver_closed = 1;
     return ASX_OK;
 }
 
@@ -305,6 +453,76 @@ TEST(interleaved_equivalence) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Test: two-phase scripted equivalence                                */
+/* ------------------------------------------------------------------ */
+
+TEST(two_phase_scripted_equivalence) {
+    asx_channel_id cid;
+    asx_send_permit bp[6];
+    asx_send_permit boverflow;
+    spike_channel shadow;
+    spike_permit sp[6];
+    spike_permit soverflow;
+    uint32_t baseline_len;
+    uint32_t baseline_reserved;
+    uint64_t bval;
+    uint64_t sval;
+
+    eq_setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &cid), ASX_OK);
+    spike_channel_init(&shadow, 4);
+
+    ASSERT_EQ(asx_channel_try_reserve(cid, &bp[0]), spike_channel_reserve(&shadow, &sp[0]));
+    ASSERT_EQ(asx_channel_try_reserve(cid, &bp[1]), spike_channel_reserve(&shadow, &sp[1]));
+    ASSERT_EQ(asx_channel_try_reserve(cid, &bp[2]), spike_channel_reserve(&shadow, &sp[2]));
+    ASSERT_EQ(asx_channel_try_reserve(cid, &bp[3]), spike_channel_reserve(&shadow, &sp[3]));
+    ASSERT_EQ(asx_channel_try_reserve(cid, &boverflow), spike_channel_reserve(&shadow, &soverflow));
+
+    ASSERT_EQ(asx_send_permit_send(&bp[0], 100u), spike_channel_send(&shadow, &sp[0], 100u));
+    spike_channel_abort(&shadow, &sp[1]);
+    asx_send_permit_abort(&bp[1]);
+    ASSERT_EQ(asx_send_permit_send(&bp[2], 200u), spike_channel_send(&shadow, &sp[2], 200u));
+
+    ASSERT_EQ(asx_channel_queue_len(cid, &baseline_len), ASX_OK);
+    ASSERT_EQ(baseline_len, shadow.queue.len);
+    ASSERT_EQ(asx_channel_reserved_count(cid, &baseline_reserved), ASX_OK);
+    ASSERT_EQ(baseline_reserved, shadow.reserved);
+
+    ASSERT_EQ(asx_channel_try_reserve(cid, &bp[4]), spike_channel_reserve(&shadow, &sp[4]));
+    ASSERT_EQ(asx_send_permit_send(&bp[4], 400u), spike_channel_send(&shadow, &sp[4], 400u));
+    ASSERT_EQ(asx_send_permit_send(&bp[3], 300u), spike_channel_send(&shadow, &sp[3], 300u));
+
+    ASSERT_EQ(asx_channel_close_sender(cid), spike_channel_close_sender(&shadow));
+    ASSERT_EQ(asx_channel_try_recv(cid, &bval), spike_channel_recv(&shadow, &sval));
+    ASSERT_EQ(bval, sval);
+    ASSERT_EQ(asx_channel_try_recv(cid, &bval), spike_channel_recv(&shadow, &sval));
+    ASSERT_EQ(bval, sval);
+    ASSERT_EQ(asx_channel_try_recv(cid, &bval), spike_channel_recv(&shadow, &sval));
+    ASSERT_EQ(bval, sval);
+    ASSERT_EQ(asx_channel_try_recv(cid, &bval), spike_channel_recv(&shadow, &sval));
+    ASSERT_EQ(bval, sval);
+    ASSERT_EQ(asx_channel_try_recv(cid, &bval), spike_channel_recv(&shadow, &sval));
+
+    eq_setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 3, &cid), ASX_OK);
+    spike_channel_init(&shadow, 3);
+    ASSERT_EQ(asx_channel_try_reserve(cid, &bp[0]), spike_channel_reserve(&shadow, &sp[0]));
+    ASSERT_EQ(asx_send_permit_send(&bp[0], 10u), spike_channel_send(&shadow, &sp[0], 10u));
+    ASSERT_EQ(asx_channel_try_reserve(cid, &bp[1]), spike_channel_reserve(&shadow, &sp[1]));
+    ASSERT_EQ(asx_send_permit_send(&bp[1], 20u), spike_channel_send(&shadow, &sp[1], 20u));
+    ASSERT_EQ(asx_channel_try_reserve(cid, &bp[2]), spike_channel_reserve(&shadow, &sp[2]));
+
+    ASSERT_EQ(asx_channel_close_receiver(cid), spike_channel_close_receiver(&shadow));
+    ASSERT_EQ(asx_channel_queue_len(cid, &baseline_len), ASX_OK);
+    ASSERT_EQ(baseline_len, shadow.queue.len);
+    ASSERT_EQ(asx_channel_reserved_count(cid, &baseline_reserved), ASX_OK);
+    ASSERT_EQ(baseline_reserved, shadow.reserved);
+    ASSERT_EQ(asx_send_permit_send(&bp[2], 30u), spike_channel_send(&shadow, &sp[2], 30u));
+    ASSERT_EQ(asx_channel_reserved_count(cid, &baseline_reserved), ASX_OK);
+    ASSERT_EQ(baseline_reserved, shadow.reserved);
+}
+
+/* ------------------------------------------------------------------ */
 /* Test: power-of-2 rounding for spike capacity                        */
 /* ------------------------------------------------------------------ */
 
@@ -409,30 +627,26 @@ TEST(throughput_comparison) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Test: two-phase vs direct enqueue trade-off analysis                */
+/* Test: two-phase production promotion analysis                       */
 /* ------------------------------------------------------------------ */
 
-TEST(two_phase_tradeoff) {
+TEST(two_phase_promotion_analysis) {
     /*
      * Key architectural finding:
      *
-     * The baseline MPSC uses a two-phase protocol (reserve → send/abort)
-     * for cancel-safety. The lock-free spike uses direct enqueue.
+     * The public MPSC API keeps the two-phase protocol
+     * (reserve -> send/abort) for cancel-safety. The production
+     * POSIX/PARALLEL path can use atomics for committed-message
+     * publication, but it must keep reservation accounting outside
+     * the queue so abort always returns capacity.
      *
      * Trade-offs:
-     * - Baseline: 2 ops/msg + token tracking = higher overhead per msg
-     * - Spike:    1 op/msg + no abort path = lower overhead
-     * - Cancel-safety: baseline YES, spike NO
-     * - Memory footprint: spike ~2x due to cell+sequence array
+     * - CORE: deterministic ring buffer for replay-stable tests
+     * - POSIX/PARALLEL: atomic ring for committed messages
+     * - Both: token-tracked reserve/send/abort linearity
      *
-     * For asx, cancel-safety is non-negotiable (task cancellation can
-     * occur mid-send). A lock-free two-phase protocol is possible but
-     * significantly more complex (requires CAS-loop for reserve +
-     * sequence-number commit/rollback).
-     *
-     * RECOMMENDATION: Defer lock-free upgrade. When GS-009/GS-010
-     * add multi-threading, extend baseline with atomic wrappers
-     * rather than replacing with a different queue architecture.
+     * This is why the production backend is selected by profile/build
+     * mode rather than exposed as a public semantic fork.
      */
     ASSERT_TRUE(1); /* Analysis documented; test passes by construction */
 }
@@ -461,16 +675,17 @@ TEST(memory_overhead_comparison) {
 /* ------------------------------------------------------------------ */
 
 int main(void) {
-    fprintf(stderr, "=== MPSC equivalence tests (bd-3vt.2) ===\n");
+    fprintf(stderr, "=== MPSC equivalence tests (bd-pweu.5) ===\n");
 
     RUN_TEST(fifo_ordering_equivalence);
     RUN_TEST(capacity_limit_equivalence);
     RUN_TEST(empty_dequeue_equivalence);
     RUN_TEST(wraparound_equivalence);
     RUN_TEST(interleaved_equivalence);
+    RUN_TEST(two_phase_scripted_equivalence);
     RUN_TEST(power_of_2_capacity);
     RUN_TEST(throughput_comparison);
-    RUN_TEST(two_phase_tradeoff);
+    RUN_TEST(two_phase_promotion_analysis);
     RUN_TEST(memory_overhead_comparison);
 
     TEST_REPORT();

@@ -2,9 +2,10 @@
  * parallel.c — optional parallel profile worker model and lane scheduler
  *
  * Implements lane-based task scheduling with bounded fairness controls.
- * Deferred stub status: walking-skeleton implementation. This is a
- * single-threaded simulation that preserves the optional parallel-profile
- * API shape without claiming real worker concurrency yet.
+ * Deferred stub status: graduating-internal implementation. The core owns
+ * deterministic worker-lane routing, bounded steal ordering, and replay-stable
+ * event commits. Platform adapters may later execute worker lanes concurrently
+ * only if they preserve this committed order.
  * See docs/DEFERRED_STUBS_REGISTER.md.
  *
  * SPDX-License-Identifier: MIT
@@ -15,11 +16,15 @@
 #include <asx/core/cancel.h>
 #include <asx/core/ghost.h>
 #include <asx/core/transition.h>
+#include <asx/runtime/blocking.h>
+#include <asx/runtime/io_driver.h>
 #include <asx/runtime/parallel.h>
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/waker.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
+#include <stdio.h>
 #include <string.h>
 
 /* -------------------------------------------------------------------
@@ -42,13 +47,255 @@ static asx_parallel_config g_config;
 static lane_internal g_lanes[ASX_MAX_LANES];
 static asx_worker_state g_workers[ASX_MAX_WORKERS];
 
+#define ASX_PARALLEL_TASK_UNOWNED 0xffffu
+
+static uint16_t g_task_worker_owner[ASX_MAX_TASKS];
+static uint8_t g_task_lane_override_valid[ASX_MAX_TASKS];
+static asx_lane_class g_task_lane_override[ASX_MAX_TASKS];
+static uint8_t g_task_ready_to_poll[ASX_MAX_TASKS];
+static uint8_t g_task_timed_since_valid[ASX_MAX_TASKS];
+static uint32_t g_task_timed_since_round[ASX_MAX_TASKS];
+static uint32_t g_worker_lane_depths[ASX_MAX_WORKERS][ASX_MAX_LANES];
+static uint32_t g_lane_dispatch_cursor[ASX_MAX_LANES];
+static uint32_t g_current_round;
+static int g_pressure_triggered;
+
 /* Cancel-streak fairness state */
 static uint32_t g_cancel_streak_limit = 16u;
 static asx_scheduling_metrics g_metrics;
+static asx_parallel_admission_decision g_last_admission;
+
+static void sat_inc_u32(uint32_t *value) {
+    if (value != NULL && *value < UINT32_MAX) { (*value)++; }
+}
+
+static void sat_add_u32(uint32_t *value, uint32_t delta) {
+    if (value == NULL) { return; }
+    if (UINT32_MAX - *value < delta) {
+        *value = UINT32_MAX;
+    } else {
+        *value += delta;
+    }
+}
 
 static int parallel_task_handle_valid(asx_task_id tid) {
     asx_task_slot *slot;
     return asx_task_slot_lookup(tid, &slot) == ASX_OK;
+}
+
+static void parallel_reset_routing(void) {
+    uint32_t i;
+    for (i = 0; i < ASX_MAX_TASKS; i++) {
+        g_task_worker_owner[i] = ASX_PARALLEL_TASK_UNOWNED;
+        g_task_lane_override_valid[i] = 0u;
+        g_task_lane_override[i] = ASX_LANE_READY;
+        g_task_ready_to_poll[i] = 0u;
+        g_task_timed_since_valid[i] = 0u;
+        g_task_timed_since_round[i] = 0u;
+    }
+    memset(g_worker_lane_depths, 0, sizeof(g_worker_lane_depths));
+    memset(g_lane_dispatch_cursor, 0, sizeof(g_lane_dispatch_cursor));
+    g_current_round = 0u;
+    g_pressure_triggered = 0;
+}
+
+static uint32_t parallel_active_worker_count(void) {
+    return g_config.worker_count == 0u ? 1u : g_config.worker_count;
+}
+
+static uint32_t percent_u32(uint32_t used, uint32_t capacity) {
+    if (capacity == 0u) { return 100u; }
+    if (used >= capacity) { return 100u; }
+    return (uint32_t)(((uint64_t)used * 100u) / (uint64_t)capacity);
+}
+
+static int admission_mode_valid(asx_parallel_admission_mode mode) {
+    return mode == ASX_PARALLEL_ADMISSION_REJECT || mode == ASX_PARALLEL_ADMISSION_BACKPRESSURE ||
+           mode == ASX_PARALLEL_ADMISSION_SHED_OLDEST;
+}
+
+static void normalize_admission_policy(asx_parallel_admission_policy *policy) {
+    if (policy == NULL) { return; }
+    if (policy->pressure_threshold_pct == 0u) {
+        policy->pressure_threshold_pct = ASX_PARALLEL_DEFAULT_PRESSURE_THRESHOLD_PCT;
+    }
+    if (policy->shed_max == 0u && policy->mode == ASX_PARALLEL_ADMISSION_SHED_OLDEST) {
+        policy->shed_max = 1u;
+    }
+}
+
+static void parallel_record_admission_decision(const asx_parallel_admission_decision *decision) {
+    int triggered;
+
+    if (decision == NULL) { return; }
+    g_last_admission = *decision;
+    triggered = decision->triggered ? 1 : 0;
+    if (triggered != g_pressure_triggered) {
+        sat_inc_u32(&g_metrics.pressure_transitions);
+        g_pressure_triggered = triggered;
+    }
+    if (!decision->triggered) { return; }
+
+    switch (decision->mode) {
+    case ASX_PARALLEL_ADMISSION_REJECT: sat_inc_u32(&g_metrics.admission_rejects); break;
+    case ASX_PARALLEL_ADMISSION_BACKPRESSURE: sat_inc_u32(&g_metrics.admission_backpressure); break;
+    case ASX_PARALLEL_ADMISSION_SHED_OLDEST:
+        sat_add_u32(&g_metrics.admission_sheds, decision->shed_count);
+        break;
+    default: break;
+    }
+}
+
+static asx_status parallel_observe_lane_admission(uint32_t lane_count_after) {
+    asx_parallel_admission_decision decision;
+    asx_status st;
+
+    st = asx_parallel_evaluate_admission(&g_config.admission_policy, lane_count_after,
+                                         ASX_LANE_TASK_CAPACITY, &decision);
+    if (st != ASX_OK) { return st; }
+    parallel_record_admission_decision(&decision);
+
+    if (g_config.admission_policy.enforce && decision.admit_status != ASX_OK) {
+        return decision.admit_status;
+    }
+    return ASX_OK;
+}
+
+static uint32_t parallel_seed_task_owner(uint16_t slot_idx) {
+    uint32_t worker_count = parallel_active_worker_count();
+    uint32_t owner;
+    if (slot_idx >= ASX_MAX_TASKS) { return 0u; }
+    if (worker_count > ASX_MAX_WORKERS) { worker_count = ASX_MAX_WORKERS; }
+    if (g_task_worker_owner[slot_idx] == ASX_PARALLEL_TASK_UNOWNED ||
+        g_task_worker_owner[slot_idx] >= worker_count) {
+        g_task_worker_owner[slot_idx] = (uint16_t)(slot_idx % worker_count);
+    }
+    owner = (uint32_t)g_task_worker_owner[slot_idx];
+    return owner >= worker_count ? 0u : owner;
+}
+
+static void parallel_clear_task_routing(uint16_t slot_idx) {
+    if (slot_idx >= ASX_MAX_TASKS) { return; }
+    g_task_worker_owner[slot_idx] = ASX_PARALLEL_TASK_UNOWNED;
+    g_task_lane_override_valid[slot_idx] = 0u;
+    g_task_lane_override[slot_idx] = ASX_LANE_READY;
+    g_task_ready_to_poll[slot_idx] = 0u;
+    g_task_timed_since_valid[slot_idx] = 0u;
+    g_task_timed_since_round[slot_idx] = 0u;
+}
+
+static int parallel_find_task_lane(uint16_t slot_idx, uint16_t generation, uint32_t *out_lane,
+                                   uint32_t *out_pos) {
+    uint32_t lane_idx;
+
+    for (lane_idx = 0; lane_idx < ASX_MAX_LANES; lane_idx++) {
+        lane_internal *lane = &g_lanes[lane_idx];
+        uint32_t pos;
+        for (pos = 0; pos < lane->count;
+             pos++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
+            asx_task_id existing = lane->tasks[pos];
+            if (asx_handle_slot(existing) == slot_idx &&
+                asx_handle_generation(existing) == generation) {
+                if (out_lane != NULL) *out_lane = lane_idx;
+                if (out_pos != NULL) *out_pos = pos;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static void parallel_remove_lane_pos(uint32_t lane_idx, uint32_t pos) {
+    lane_internal *lane;
+    uint32_t k;
+
+    if (lane_idx >= ASX_MAX_LANES) return;
+    lane = &g_lanes[lane_idx];
+    if (pos >= lane->count) return;
+
+    for (k = pos; k + 1 < lane->count;
+         k++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
+        lane->tasks[k] = lane->tasks[k + 1];
+    }
+    lane->count--;
+}
+
+static void parallel_rebuild_worker_depths(void) {
+    uint32_t lane_idx;
+    memset(g_worker_lane_depths, 0, sizeof(g_worker_lane_depths));
+    for (lane_idx = 0; lane_idx < ASX_MAX_LANES; lane_idx++) {
+        lane_internal *lane = &g_lanes[lane_idx];
+        uint32_t i;
+        for (i = 0; i < lane->count;
+             i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
+            uint16_t slot_idx = asx_handle_slot(lane->tasks[i]);
+            uint32_t owner = parallel_seed_task_owner(slot_idx);
+            if (owner < ASX_MAX_WORKERS) { g_worker_lane_depths[owner][lane_idx]++; }
+        }
+    }
+}
+
+static uint32_t parallel_select_worker(asx_lane_class lane, asx_task_id tid) {
+    uint32_t worker_count = parallel_active_worker_count();
+    uint16_t slot_idx = asx_handle_slot(tid);
+    uint32_t owner = parallel_seed_task_owner(slot_idx);
+    uint32_t selected;
+
+    if ((int)lane < 0 || (int)lane >= (int)ASX_MAX_LANES) { return owner; }
+    if (worker_count <= 1u) { return 0u; }
+
+    selected = g_lane_dispatch_cursor[(int)lane] % worker_count;
+    g_lane_dispatch_cursor[(int)lane]++;
+
+    if (selected != owner) {
+        sat_inc_u32(&g_metrics.steal_attempts);
+        if (g_worker_lane_depths[owner][(int)lane] > 0u) {
+            g_worker_lane_depths[owner][(int)lane]--;
+            g_worker_lane_depths[selected][(int)lane]++;
+            g_task_worker_owner[slot_idx] = (uint16_t)selected;
+            sat_inc_u32(&g_metrics.steals_succeeded);
+            sat_inc_u32(&g_workers[selected].steals_total);
+            return selected;
+        }
+        sat_inc_u32(&g_metrics.steals_failed);
+        sat_inc_u32(&g_metrics.worker_yields);
+    }
+
+    return owner;
+}
+
+static void parallel_task_leaves_worker_lane(uint32_t worker_idx, asx_lane_class lane) {
+    if (worker_idx >= ASX_MAX_WORKERS) { return; }
+    if ((int)lane < 0 || (int)lane >= (int)ASX_MAX_LANES) { return; }
+    if (g_worker_lane_depths[worker_idx][(int)lane] > 0u) {
+        g_worker_lane_depths[worker_idx][(int)lane]--;
+    }
+}
+
+static void parallel_commit_worker_event(uint32_t worker_idx) {
+    if (worker_idx >= parallel_active_worker_count()) { worker_idx = 0u; }
+    sat_inc_u32(&g_workers[worker_idx].commits_total);
+    g_workers[worker_idx].last_commit_sequence = g_metrics.commit_sequence;
+    sat_inc_u32(&g_metrics.commit_sequence);
+}
+
+static void parallel_mark_workers_running(void) {
+    uint32_t i;
+    for (i = 0; i < g_config.worker_count;
+         i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_MAX_WORKERS validation") */
+        g_workers[i].active = 1;
+        g_workers[i].lifecycle = ASX_WORKER_RUNNING;
+    }
+}
+
+static void parallel_mark_workers_drained(void) {
+    uint32_t i;
+    for (i = 0; i < g_config.worker_count;
+         i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_MAX_WORKERS validation") */
+        g_workers[i].active = 0;
+        g_workers[i].lifecycle = ASX_WORKER_DRAINED;
+    }
 }
 
 /* -------------------------------------------------------------------
@@ -59,16 +306,24 @@ asx_status asx_parallel_init(const asx_parallel_config *cfg) {
     uint32_t i;
 
     if (cfg == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (cfg->worker_count == 0 || cfg->worker_count > ASX_MAX_WORKERS) {
-        return ASX_E_INVALID_ARGUMENT;
-    }
+    if (cfg->worker_count == 0) { return ASX_E_INVALID_ARGUMENT; }
+    if (cfg->worker_count > ASX_MAX_WORKERS) { return ASX_E_RESOURCE_EXHAUSTED; }
+    if (!admission_mode_valid(cfg->admission_policy.mode)) { return ASX_E_INVALID_ARGUMENT; }
+    if (cfg->admission_policy.pressure_threshold_pct > 100u) { return ASX_E_INVALID_ARGUMENT; }
 
     g_config = *cfg;
+    normalize_admission_policy(&g_config.admission_policy);
 
     /* Initialize lanes */
     for (i = 0; i < ASX_MAX_LANES; i++) { memset(&g_lanes[i], 0, sizeof(lane_internal)); }
+    parallel_reset_routing();
 
     /* Initialize workers */
+    for (i = 0; i < ASX_MAX_WORKERS; i++) {
+        memset(&g_workers[i], 0, sizeof(g_workers[i]));
+        g_workers[i].id = i;
+        g_workers[i].lifecycle = ASX_WORKER_STOPPED;
+    }
     for (i = 0; i < cfg->worker_count;
          i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_MAX_WORKERS checked above") */
         g_workers[i].id = i;
@@ -76,6 +331,11 @@ asx_status asx_parallel_init(const asx_parallel_config *cfg) {
         g_workers[i].active = 1;
         g_workers[i].polls_total = 0;
         g_workers[i].tasks_completed = 0;
+        g_workers[i].steals_total = 0;
+        g_workers[i].commits_total = 0;
+        g_workers[i].last_commit_sequence = 0;
+        g_workers[i].lifecycle = ASX_WORKER_RUNNING;
+        memset(g_workers[i].lane_depths, 0, sizeof(g_workers[i].lane_depths));
     }
 
     g_initialized = 1;
@@ -87,6 +347,8 @@ void asx_parallel_reset(void) {
     memset(g_workers, 0, sizeof(g_workers));
     memset(&g_config, 0, sizeof(g_config));
     memset(&g_metrics, 0, sizeof(g_metrics));
+    memset(&g_last_admission, 0, sizeof(g_last_admission));
+    parallel_reset_routing();
     g_cancel_streak_limit = 16u;
     g_initialized = 0;
 }
@@ -97,16 +359,67 @@ void asx_parallel_reset(void) {
 
 asx_status asx_lane_assign(asx_task_id tid, asx_lane_class lane) {
     lane_internal *l;
+    uint16_t slot_idx;
+    uint16_t generation;
+    uint32_t old_lane;
+    uint32_t old_pos;
+    int already_assigned;
 
     if ((int)lane < 0 || (int)lane >= (int)ASX_MAX_LANES) { return ASX_E_INVALID_ARGUMENT; }
     if (!g_initialized) return ASX_E_INVALID_STATE;
     if (!parallel_task_handle_valid(tid)) return ASX_E_INVALID_ARGUMENT;
 
     l = &g_lanes[(int)lane];
-    if (l->count >= ASX_LANE_TASK_CAPACITY) { return ASX_E_RESOURCE_EXHAUSTED; }
+    slot_idx = asx_handle_slot(tid);
+    generation = asx_handle_generation(tid);
+    already_assigned = parallel_find_task_lane(slot_idx, generation, &old_lane, &old_pos);
+
+    if (already_assigned && old_lane == (uint32_t)lane) {
+        g_task_lane_override_valid[slot_idx] = 1u;
+        g_task_lane_override[slot_idx] = lane;
+        g_task_ready_to_poll[slot_idx] = (uint8_t)(lane == ASX_LANE_TIMED ? 0u : 1u);
+        if (lane == ASX_LANE_TIMED) {
+            g_task_timed_since_valid[slot_idx] = 1u;
+            g_task_timed_since_round[slot_idx] = g_current_round;
+        } else {
+            g_task_timed_since_valid[slot_idx] = 0u;
+            g_task_timed_since_round[slot_idx] = 0u;
+        }
+        return ASX_OK;
+    }
+
+    if (l->count >= ASX_LANE_TASK_CAPACITY) {
+        (void)parallel_observe_lane_admission(ASX_LANE_TASK_CAPACITY);
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+    if (!already_assigned) {
+        asx_status admission_st = parallel_observe_lane_admission(l->count + 1u);
+        if (admission_st != ASX_OK) { return admission_st; }
+    }
+
+    if (already_assigned) {
+        uint32_t owner = parallel_seed_task_owner(slot_idx);
+        parallel_task_leaves_worker_lane(owner, (asx_lane_class)old_lane);
+        parallel_remove_lane_pos(old_lane, old_pos);
+    }
 
     l->tasks[l->count] = tid;
     l->count++;
+    if (slot_idx < ASX_MAX_TASKS) {
+        uint32_t owner;
+        g_task_lane_override_valid[slot_idx] = 1u;
+        g_task_lane_override[slot_idx] = lane;
+        g_task_ready_to_poll[slot_idx] = (uint8_t)(lane == ASX_LANE_TIMED ? 0u : 1u);
+        if (lane == ASX_LANE_TIMED) {
+            g_task_timed_since_valid[slot_idx] = 1u;
+            g_task_timed_since_round[slot_idx] = g_current_round;
+        } else {
+            g_task_timed_since_valid[slot_idx] = 0u;
+            g_task_timed_since_round[slot_idx] = 0u;
+        }
+        owner = parallel_seed_task_owner(slot_idx);
+        if (owner < ASX_MAX_WORKERS) { g_worker_lane_depths[owner][(int)lane]++; }
+    }
     return ASX_OK;
 }
 
@@ -122,11 +435,14 @@ asx_status asx_lane_remove(asx_task_id tid) {
             if (l->tasks[j] == tid) {
                 /* Shift remaining tasks down */
                 uint32_t k;
+                uint32_t owner = parallel_seed_task_owner(asx_handle_slot(tid));
+                parallel_task_leaves_worker_lane(owner, (asx_lane_class)i);
                 for (k = j; k + 1 < l->count;
                      k++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
                     l->tasks[k] = l->tasks[k + 1];
                 }
                 l->count--;
+                parallel_clear_task_routing(asx_handle_slot(tid));
                 return ASX_OK;
             }
         }
@@ -165,10 +481,14 @@ uint32_t asx_lane_total_tasks(void) {
  * ------------------------------------------------------------------- */
 
 asx_status asx_worker_get_state(uint32_t worker_index, asx_worker_state *out) {
+    uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!g_initialized) return ASX_E_INVALID_STATE;
     if (worker_index >= g_config.worker_count) { return ASX_E_INVALID_ARGUMENT; }
 
+    for (i = 0; i < ASX_MAX_LANES; i++) {
+        g_workers[worker_index].lane_depths[i] = g_worker_lane_depths[worker_index][i];
+    }
     *out = g_workers[worker_index];
     return ASX_OK;
 }
@@ -242,12 +562,90 @@ static void lane_assign_internal(asx_task_id tid, asx_lane_class lc) {
     (void)st_;
 }
 
+static void parallel_promote_ready_task(asx_region_id region, asx_task_id tid) {
+    asx_task_slot *slot;
+    uint16_t slot_idx;
+    asx_lane_class target_lane;
+    uint32_t old_lane;
+    uint32_t old_pos;
+    int was_timed = 0;
+    asx_status st;
+
+    st = asx_task_slot_lookup(tid, &slot);
+    if (st != ASX_OK) return;
+    if (!slot->alive || slot->region != region || asx_task_is_terminal(slot->state)) return;
+
+    slot_idx = asx_handle_slot(tid);
+    if (slot_idx >= ASX_MAX_TASKS) return;
+
+    if (parallel_find_task_lane(slot_idx, asx_handle_generation(tid), &old_lane, &old_pos) &&
+        old_lane == (uint32_t)ASX_LANE_TIMED) {
+        (void)old_pos;
+        was_timed = 1;
+    }
+
+    target_lane = slot->cancel_pending ? ASX_LANE_CANCEL : ASX_LANE_READY;
+    st = asx_lane_assign(tid, target_lane);
+    if (st == ASX_OK) {
+        g_task_ready_to_poll[slot_idx] = 1u;
+        sat_inc_u32(&g_metrics.waker_ready);
+        if (was_timed) {
+            uint32_t latency = 0u;
+            if (g_task_timed_since_valid[slot_idx] &&
+                g_current_round >= g_task_timed_since_round[slot_idx]) {
+                latency = g_current_round - g_task_timed_since_round[slot_idx];
+            }
+            sat_inc_u32(&g_metrics.timed_promotions);
+            sat_add_u32(&g_metrics.timed_wake_latency_rounds_total, latency);
+            if (latency > g_metrics.timed_wake_latency_rounds_max) {
+                g_metrics.timed_wake_latency_rounds_max = latency;
+            }
+            g_task_timed_since_valid[slot_idx] = 0u;
+            g_task_timed_since_round[slot_idx] = 0u;
+        }
+    }
+}
+
+static void parallel_drain_ready_sources(asx_region_id region, uint32_t round) {
+    asx_task_id ready_tasks[ASX_LANE_TASK_CAPACITY];
+    uint32_t ready_count;
+    uint32_t i;
+
+#if ASX_HAS_NATIVE_IO_DRIVER
+    if (asx_io_driver_is_initialized()) {
+        asx_io_event events[ASX_LANE_TASK_CAPACITY];
+        uint32_t event_count;
+        event_count = asx_io_driver_poll(events, ASX_LANE_TASK_CAPACITY, 0u);
+        (void)events;
+        sat_inc_u32(&g_metrics.reactor_polls);
+        sat_add_u32(&g_metrics.reactor_ready, event_count);
+    }
+#else
+    (void)round;
+#endif
+
+    (void)round;
+    ready_count = asx_waker_drain_signaled(ready_tasks, ASX_LANE_TASK_CAPACITY);
+    for (i = 0; i < ready_count;
+         i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
+        parallel_promote_ready_task(region, ready_tasks[i]);
+    }
+}
+
 static asx_status parallel_return_budget(uint32_t round) {
+    uint32_t i;
+    for (i = 0; i < g_config.worker_count;
+         i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_MAX_WORKERS validation") */
+        g_workers[i].lifecycle = ASX_WORKER_DRAINING;
+    }
+    parallel_commit_worker_event(0u);
     asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
     return ASX_E_POLL_BUDGET_EXHAUSTED;
 }
 
 static asx_status parallel_return_quiescent(uint32_t round) {
+    parallel_mark_workers_drained();
+    parallel_commit_worker_event(0u);
     asx_trace_emit(ASX_TRACE_SCHED_QUIESCENT, ASX_INVALID_ID, round);
     return ASX_OK;
 }
@@ -275,6 +673,9 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
     st = asx_region_slot_lookup(region, &rslot);
     if (st != ASX_OK) return st;
 
+    parallel_mark_workers_running();
+    memset(g_lane_dispatch_cursor, 0, sizeof(g_lane_dispatch_cursor));
+
     /* Auto-classify existing tasks into lanes */
     {
         uint32_t i;
@@ -296,14 +697,15 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
             /* Classify by cancel state */
             if (t->cancel_pending) {
                 lc = ASX_LANE_CANCEL;
+            } else if (g_task_lane_override_valid[i]) {
+                lc = g_task_lane_override[i];
             } else {
                 lc = ASX_LANE_READY;
             }
-            /* Note: TIMED lane assignment would require timer integration.
-             * Walking skeleton assigns to READY by default. */
 
             lane_assign_internal(tid, lc);
         }
+        parallel_rebuild_worker_depths();
     }
 
     /* Scheduler loop */
@@ -316,9 +718,12 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
         ASX_CHECKPOINT_WAIVER("kernel-parallel-scheduler: budget exhaustion "
                               "provides bounded termination");
 
+        g_current_round = round;
         asx_trace_emit(ASX_TRACE_SCHED_ROUND, ASX_INVALID_ID, round);
 
         if (asx_budget_is_exhausted(budget)) { return parallel_return_budget(round); }
+
+        parallel_drain_ready_sources(region, round);
 
         total_active = asx_lane_total_tasks();
         if (total_active == 0) { return parallel_return_quiescent(round); }
@@ -352,7 +757,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                 g_metrics.cancel_streak >= g_cancel_streak_limit) {
                 /* Check if any other lane has tasks */
                 if (g_lanes[ASX_LANE_READY].count > 0 || g_lanes[ASX_LANE_TIMED].count > 0) {
-                    g_metrics.fairness_yields++;
+                    sat_inc_u32(&g_metrics.fairness_yields);
                     continue;
                 }
                 /* Fallback: only cancel work remains, allow it */
@@ -365,6 +770,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                 asx_task_slot *t;
                 uint16_t slot_idx;
                 asx_status poll_result;
+                uint32_t worker_idx;
 
                 ASX_CHECKPOINT_WAIVER("kernel-parallel-scheduler: inner poll "
                                       "bounded by lane count and quota");
@@ -381,14 +787,23 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
 
                 if (!t->alive || asx_task_is_terminal(t->state)) {
                     /* Remove completed task from lane */
+                    parallel_task_leaves_worker_lane(parallel_seed_task_owner(slot_idx),
+                                                     (asx_lane_class)li);
+                    parallel_clear_task_routing(slot_idx);
                     lane_remove_internal(tid);
                     continue; /* don't increment j, array shifted */
+                }
+
+                if (li == (int)ASX_LANE_TIMED && !g_task_ready_to_poll[slot_idx]) {
+                    j++;
+                    continue;
                 }
 
                 /* Refresh handle from live slot to avoid stale state masks. */
                 tid = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
                                       asx_handle_pack_index(t->generation, slot_idx));
                 lane->tasks[j] = tid;
+                worker_idx = parallel_select_worker((asx_lane_class)li, tid);
 
                 /* Handle cancel force-completion */
                 if (t->cancel_pending &&
@@ -443,8 +858,11 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
                     asx_task_release_capture_internal(t);
                     if (rslot->task_count > 0) rslot->task_count--;
+                    parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
+                    parallel_clear_task_routing(slot_idx);
                     lane_remove_internal(tid);
-                    g_workers[0].tasks_completed++;
+                    sat_inc_u32(&g_workers[worker_idx].tasks_completed);
+                    parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
                     continue;
                 }
@@ -468,8 +886,11 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
                     asx_task_release_capture_internal(t);
                     if (rslot->task_count > 0) rslot->task_count--;
+                    parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
+                    parallel_clear_task_routing(slot_idx);
                     lane_remove_internal(tid);
-                    g_workers[0].tasks_completed++;
+                    sat_inc_u32(&g_workers[worker_idx].tasks_completed);
+                    parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
                     continue;
                 }
@@ -487,25 +908,28 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                 }
 
                 asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)tid, round);
+                parallel_commit_worker_event(worker_idx);
 
                 /* Poll the task */
+                asx_error_ledger_bind_task(tid);
                 poll_result = t->poll_fn(t->user_data, tid);
+                asx_error_ledger_bind_task(ASX_INVALID_ID);
                 polls_this_lane++;
-                g_workers[0].polls_total++;
+                sat_inc_u32(&g_workers[worker_idx].polls_total);
                 any_polled = 1;
 
                 /* Update per-lane dispatch metrics and cancel streak */
                 if (li == (int)ASX_LANE_CANCEL) {
-                    g_metrics.cancel_dispatches++;
-                    g_metrics.cancel_streak++;
+                    sat_inc_u32(&g_metrics.cancel_dispatches);
+                    sat_inc_u32(&g_metrics.cancel_streak);
                     if (g_metrics.cancel_streak > g_metrics.cancel_streak_max)
                         g_metrics.cancel_streak_max = g_metrics.cancel_streak;
                 } else {
                     g_metrics.cancel_streak = 0;
                     if (li == (int)ASX_LANE_TIMED)
-                        g_metrics.timed_dispatches++;
+                        sat_inc_u32(&g_metrics.timed_dispatches);
                     else
-                        g_metrics.ready_dispatches++;
+                        sat_inc_u32(&g_metrics.ready_dispatches);
                 }
 
                 if (poll_result == ASX_OK) {
@@ -531,8 +955,11 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     asx_task_release_capture_internal(t);
                     if (rslot->task_count > 0) rslot->task_count--;
+                    parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
+                    parallel_clear_task_routing(slot_idx);
                     lane_remove_internal(tid);
-                    g_workers[0].tasks_completed++;
+                    sat_inc_u32(&g_workers[worker_idx].tasks_completed);
+                    parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
                     continue;
                 } else if (poll_result != ASX_E_PENDING) {
@@ -558,8 +985,11 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     asx_task_release_capture_internal(t);
                     if (rslot->task_count > 0) rslot->task_count--;
+                    parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
+                    parallel_clear_task_routing(slot_idx);
                     lane_remove_internal(tid);
-                    g_workers[0].tasks_completed++;
+                    sat_inc_u32(&g_workers[worker_idx].tasks_completed);
+                    parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
 
                     {
@@ -658,3 +1088,201 @@ void asx_parallel_reset_metrics(void) { memset(&g_metrics, 0, sizeof(g_metrics))
 void asx_parallel_set_cancel_streak_limit(uint32_t limit) { g_cancel_streak_limit = limit; }
 
 uint32_t asx_parallel_cancel_streak_limit(void) { return g_cancel_streak_limit; }
+
+/* -------------------------------------------------------------------
+ * Admission and large-swarm telemetry
+ * ------------------------------------------------------------------- */
+
+void asx_parallel_admission_policy_init(asx_parallel_admission_policy *policy) {
+    if (policy == NULL) { return; }
+    policy->mode = ASX_PARALLEL_ADMISSION_REJECT;
+    policy->pressure_threshold_pct = ASX_PARALLEL_DEFAULT_PRESSURE_THRESHOLD_PCT;
+    policy->shed_max = 1u;
+    policy->enforce = 0;
+}
+
+asx_status asx_parallel_evaluate_admission(const asx_parallel_admission_policy *policy,
+                                           uint32_t queued, uint32_t capacity,
+                                           asx_parallel_admission_decision *decision) {
+    asx_parallel_admission_policy normalized;
+    uint32_t pressure_pct;
+
+    if (policy == NULL || decision == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (!admission_mode_valid(policy->mode)) { return ASX_E_INVALID_ARGUMENT; }
+    if (policy->pressure_threshold_pct > 100u) { return ASX_E_INVALID_ARGUMENT; }
+
+    normalized = *policy;
+    normalize_admission_policy(&normalized);
+
+    memset(decision, 0, sizeof(*decision));
+    decision->mode = normalized.mode;
+    decision->queued = queued;
+    decision->capacity = capacity;
+
+    if (capacity == 0u) {
+        decision->triggered = 1;
+        decision->pressure_pct = 100u;
+        decision->admit_status = ASX_E_RESOURCE_EXHAUSTED;
+        return ASX_OK;
+    }
+
+    pressure_pct = percent_u32(queued, capacity);
+    decision->pressure_pct = pressure_pct;
+    if (pressure_pct < normalized.pressure_threshold_pct) {
+        decision->triggered = 0;
+        decision->admit_status = ASX_OK;
+        return ASX_OK;
+    }
+
+    decision->triggered = 1;
+    switch (normalized.mode) {
+    case ASX_PARALLEL_ADMISSION_REJECT: decision->admit_status = ASX_E_ADMISSION_CLOSED; break;
+    case ASX_PARALLEL_ADMISSION_BACKPRESSURE: decision->admit_status = ASX_E_WOULD_BLOCK; break;
+    case ASX_PARALLEL_ADMISSION_SHED_OLDEST:
+        decision->shed_count = normalized.shed_max;
+        if (decision->shed_count > queued) { decision->shed_count = queued; }
+        decision->admit_status = ASX_OK;
+        break;
+    default: return ASX_E_INVALID_ARGUMENT;
+    }
+
+    return ASX_OK;
+}
+
+asx_status asx_parallel_set_admission_policy(const asx_parallel_admission_policy *policy) {
+    asx_parallel_admission_policy normalized;
+
+    if (policy == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (!g_initialized) { return ASX_E_INVALID_STATE; }
+    if (!admission_mode_valid(policy->mode)) { return ASX_E_INVALID_ARGUMENT; }
+    if (policy->pressure_threshold_pct > 100u) { return ASX_E_INVALID_ARGUMENT; }
+
+    normalized = *policy;
+    normalize_admission_policy(&normalized);
+    g_config.admission_policy = normalized;
+    return ASX_OK;
+}
+
+asx_status asx_parallel_get_admission_policy(asx_parallel_admission_policy *out) {
+    if (out == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (!g_initialized) { return ASX_E_INVALID_STATE; }
+    *out = g_config.admission_policy;
+    return ASX_OK;
+}
+
+const char *asx_parallel_admission_mode_str(asx_parallel_admission_mode mode) {
+    switch (mode) {
+    case ASX_PARALLEL_ADMISSION_REJECT: return "reject";
+    case ASX_PARALLEL_ADMISSION_BACKPRESSURE: return "backpressure";
+    case ASX_PARALLEL_ADMISSION_SHED_OLDEST: return "shed_oldest";
+    default: return "unknown";
+    }
+}
+
+asx_status asx_parallel_get_telemetry_snapshot(asx_parallel_telemetry_snapshot *out) {
+    uint32_t i;
+    uint32_t total_polls = 0u;
+
+    if (out == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (!g_initialized) { return ASX_E_INVALID_STATE; }
+
+    memset(out, 0, sizeof(*out));
+    out->worker_count = g_config.worker_count;
+    out->metrics = g_metrics;
+    out->admission = g_last_admission;
+
+    for (i = 0u; i < ASX_MAX_LANES; i++) {
+        out->lane_depths[i] = g_lanes[i].count;
+        out->total_queue_depth += g_lanes[i].count;
+        if (g_lanes[i].count > out->max_lane_depth) { out->max_lane_depth = g_lanes[i].count; }
+    }
+    out->pressure_pct = percent_u32(out->max_lane_depth, ASX_LANE_TASK_CAPACITY);
+
+    for (i = 0u; i < g_config.worker_count; i++) { total_polls += g_workers[i].polls_total; }
+
+    for (i = 0u; i < g_config.worker_count; i++) {
+        uint32_t lane_idx;
+        uint32_t depth = 0u;
+
+        for (lane_idx = 0u; lane_idx < ASX_MAX_LANES; lane_idx++) {
+            depth += g_worker_lane_depths[i][lane_idx];
+        }
+        out->worker_queue_depths[i] = depth;
+        if (depth > out->max_worker_queue_depth) {
+            out->max_worker_queue_depth = depth;
+            out->hot_worker = i;
+        }
+
+        if (total_polls > 0u) {
+            out->worker_busy_permille[i] =
+                (uint32_t)(((uint64_t)g_workers[i].polls_total * 1000u) / total_polls);
+            out->worker_idle_permille[i] =
+                out->worker_busy_permille[i] > 1000u ? 0u : 1000u - out->worker_busy_permille[i];
+        } else {
+            out->worker_busy_permille[i] = 0u;
+            out->worker_idle_permille[i] = 1000u;
+        }
+    }
+
+#if ASX_HAS_BLOCKING_SURFACE
+    out->blocking_backlog = asx_blocking_active_count();
+#else
+    out->blocking_backlog = 0u;
+#endif
+
+    return ASX_OK;
+}
+
+asx_status asx_parallel_render_telemetry_jsonl(const asx_parallel_telemetry_snapshot *snapshot,
+                                               char *buf, uint32_t buf_len, uint32_t *out_len) {
+    char tmp[1536];
+    int needed;
+
+    if (snapshot == NULL || buf == NULL) { return ASX_E_INVALID_ARGUMENT; }
+
+    needed = snprintf(
+        tmp, sizeof(tmp),
+        "{\"kind\":\"parallel_telemetry\","
+        "\"worker_count\":%u,"
+        "\"queue_depth\":%u,"
+        "\"pressure_pct\":%u,"
+        "\"max_lane_depth\":%u,"
+        "\"max_worker_queue_depth\":%u,"
+        "\"hot_worker\":%u,"
+        "\"blocking_backlog\":%u,"
+        "\"steals\":{\"attempts\":%u,\"succeeded\":%u,\"failed\":%u},"
+        "\"cancel\":{\"streak\":%u,\"streak_max\":%u},"
+        "\"timed\":{\"promotions\":%u,\"wake_latency_rounds_total\":%u,"
+        "\"wake_latency_rounds_max\":%u},"
+        "\"reactor\":{\"polls\":%u,\"ready\":%u,\"waker_ready\":%u},"
+        "\"admission\":{\"triggered\":%d,\"mode\":\"%s\",\"pressure_pct\":%u,"
+        "\"queued\":%u,\"capacity\":%u,\"shed_count\":%u,\"status_code\":%d,"
+        "\"status_text\":\"%s\"},"
+        "\"worker0\":{\"queue_depth\":%u,\"busy_permille\":%u,\"idle_permille\":%u},"
+        "\"rerun\":\"make parallel-parity\"}\n",
+        (unsigned)snapshot->worker_count, (unsigned)snapshot->total_queue_depth,
+        (unsigned)snapshot->pressure_pct, (unsigned)snapshot->max_lane_depth,
+        (unsigned)snapshot->max_worker_queue_depth, (unsigned)snapshot->hot_worker,
+        (unsigned)snapshot->blocking_backlog, (unsigned)snapshot->metrics.steal_attempts,
+        (unsigned)snapshot->metrics.steals_succeeded, (unsigned)snapshot->metrics.steals_failed,
+        (unsigned)snapshot->metrics.cancel_streak, (unsigned)snapshot->metrics.cancel_streak_max,
+        (unsigned)snapshot->metrics.timed_promotions,
+        (unsigned)snapshot->metrics.timed_wake_latency_rounds_total,
+        (unsigned)snapshot->metrics.timed_wake_latency_rounds_max,
+        (unsigned)snapshot->metrics.reactor_polls, (unsigned)snapshot->metrics.reactor_ready,
+        (unsigned)snapshot->metrics.waker_ready, snapshot->admission.triggered,
+        asx_parallel_admission_mode_str(snapshot->admission.mode),
+        (unsigned)snapshot->admission.pressure_pct, (unsigned)snapshot->admission.queued,
+        (unsigned)snapshot->admission.capacity, (unsigned)snapshot->admission.shed_count,
+        (int)snapshot->admission.admit_status, asx_status_str(snapshot->admission.admit_status),
+        (unsigned)snapshot->worker_queue_depths[0], (unsigned)snapshot->worker_busy_permille[0],
+        (unsigned)snapshot->worker_idle_permille[0]);
+
+    if (needed < 0) { return ASX_E_INVALID_STATE; }
+    if (out_len != NULL) { *out_len = (uint32_t)needed; }
+    if ((uint32_t)needed >= sizeof(tmp)) { return ASX_E_RESOURCE_EXHAUSTED; }
+    if (buf_len <= (uint32_t)needed) { return ASX_E_BUFFER_TOO_SMALL; }
+
+    memcpy(buf, tmp, (size_t)needed + 1u);
+    return ASX_OK;
+}

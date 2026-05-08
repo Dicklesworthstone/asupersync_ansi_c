@@ -5,9 +5,9 @@
  * runs outside the async scheduler. A waker is signaled when the
  * blocking work completes.
  *
- * Walking skeleton: single-threaded, executes blocking work inline
- * (synchronously). The API surface is ready for future multi-threaded
- * dispatch via platform threading hooks.
+ * Deterministic builds execute blocking work inline. Live platform
+ * adapters may install a bounded submit hook; the runtime still owns
+ * task slots, results, and completion wakers.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -76,8 +76,8 @@ ASX_API int asx_blocking_pool_is_initialized(void);
 /* Submit a blocking function for execution.
  * The waker (if non-NULL) is signaled when the work completes.
  * If provided, completion_waker must refer to a currently live waker registration.
- * Walking skeleton: executes fn synchronously and signals waker
- * immediately.
+ * Deterministic builds execute fn synchronously and signal the waker
+ * immediately. Live platform hooks may complete asynchronously.
  * Returns ASX_OK on success.
  * Returns ASX_E_INVALID_ARGUMENT if fn/out_handle is NULL or the
  * completion waker is stale/deregistered. */

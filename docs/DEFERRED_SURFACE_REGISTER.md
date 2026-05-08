@@ -163,20 +163,50 @@ This register ensures that deferred work is:
 
 ### DS-P01: Optional Parallel Profile (Worker Model, Work-Stealing, Lane Scheduling)
 
-**Status:** Deferred per ADR-001
+**Status:** Deferred per ADR-001; production graduation program opened under `bd-pweu`
 **Rationale:** Kernel correctness is the foundation. Parallel profile adds atomics, synchronization adapters, EBR/hazard pointers (ALPHA-5/6), work-stealing, and fairness validation — doubling the verification surface. The three primary target verticals (HFT, automotive, embedded router) primarily need single-thread deterministic behavior.
 **ADR:** ADR-001 (docs/OPEN_DECISIONS_ADR.md)
-**Bead:** bd-2cw.7
+**Beads:** `bd-2cw.7` (closed compile/simulation scaffold), `bd-pweu` (open production graduation epic)
 **Unblock criteria:**
 - Wave A kernel quality gates green
 - Kernel deterministic scheduling verified
 - Hotspot data available to evaluate ALPHA-5 (seqlocks) and ALPHA-6 (EBR/hazard pointers) EV >= 2.0
 - Dedicated parallel-specific quality gates defined (fairness, no deterministic-mode regression, fallback parity)
 - Early adopter demand signal for multi-threaded usage
-**Owner:** TBD (assigned at Wave B planning)
+**Owner:** `SilverFrog` started contract planning in `bd-pweu.1`; implementation ownership remains per-child bead
 **Dependency path:** Wave A gates -> hotspot measurement -> parallel spec -> implementation + fairness tests
 **Semantic risk:** HIGH if not carefully handled — parallel scheduling must produce identical semantic outcomes to single-thread mode for deterministic scenarios. Cross-profile digest parity is mandatory.
 **Rollback trigger:** Strong early adopter demand for parallel before Wave B.
+
+#### Production Graduation Contract (`bd-pweu.1`)
+
+The production parallel profile may only graduate when the following contract is
+met. Until then, `src/runtime/parallel.c` remains a walking-skeleton simulation
+and any large-swarm claims are planning targets, not shipped behavior.
+
+- **Capacity target:** at least 64 logical workers must be representable and
+  validated. Profile/resource-class defaults may still cap smaller targets, but
+  the generic parallel profile cannot keep a hard 4-worker ceiling.
+- **Semantic contract:** worker count, work stealing, lane placement, reactor
+  wakeups, and queue backend selection are resource-plane mechanics. Shared
+  deterministic fixtures must produce the same canonical semantic digest under
+  single-worker and multi-worker execution unless an explicit semantic delta is
+  approved through the existing exception workflow.
+- **Replay contract:** concurrent workers may poll in parallel, but externally
+  visible scheduler, lifecycle, cancellation, channel, timer, and trace events
+  must commit through a deterministic sequence authority.
+- **Safety contract:** no silent drops, unbounded queues, data races, weakened
+  cancellation, stale-handle mutation, or allocator use after
+  `asx_runtime_seal_allocator()` unless the behavior is explicitly configured,
+  documented, and covered by tests.
+- **Fallback contract:** CORE, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE,
+  BROWSER, POSIX, and WIN32 must either provide the documented live-mode hooks
+  or fail closed / fall back to a tested single-worker path without semantic
+  drift.
+- **Gate contract:** `bd-pweu.11` must add a parallel single-vs-multi-worker
+  parity gate before implementation beads can claim production readiness.
+  Supporting beads must add unit, stress/e2e, fuzz or formal coverage as
+  appropriate, and all expensive verification must run through `rch exec -- ...`.
 
 ---
 
@@ -358,7 +388,7 @@ This section binds deferred-surface governance to the owner decision log so down
 
 | Deferred item | Decision key | Decision source | Consistency note |
 |---|---|---|---|
-| DS-P01 (parallel profile) | `DEC-003` | `docs/OWNER_DECISION_LOG.md` | Deferral active; Wave A excludes parallel profile gates and scenario lanes, though compile-only scaffolds may exist locally |
+| DS-P01 (parallel profile) | `DEC-003` | `docs/OWNER_DECISION_LOG.md` | Deferral active for shipped behavior; `bd-pweu` opens the production graduation program, and no live-mode claim is valid until its parallel parity gate and evidence bundle land |
 | DS-S01 (static arena backend) | `DEC-004` | `docs/OWNER_DECISION_LOG.md` | Deferral active; allocator-vtable compatibility required now |
 | All semantic-plane-sensitive deferrals | `DEC-005` | `docs/OWNER_DECISION_LOG.md` | No semantic drift allowed while surfaces are deferred |
 

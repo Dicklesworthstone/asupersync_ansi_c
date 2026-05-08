@@ -9,9 +9,9 @@
  * Messages are uint64_t tokens (opaque to the channel). FIFO ordering
  * is guaranteed for committed messages.
  *
- * Walking skeleton: single-threaded, non-blocking (try_reserve/try_recv).
- * Blocking variants will be added when the scheduler gains channel
- * awareness (future phase).
+ * CORE builds are deterministic and single-threaded. POSIX/PARALLEL live
+ * builds may select the atomic committed-message backend while preserving
+ * the same public reserve/send/abort semantics.
  *
  * SPDX-License-Identifier: MIT
  */

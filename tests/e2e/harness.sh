@@ -21,6 +21,7 @@
 #   ASX_E2E_SEED          Deterministic seed (default: 42)
 #   ASX_E2E_PROFILE       Profile under test (default: CORE)
 #   ASX_E2E_CODEC         Codec under test (default: json)
+#   ASX_E2E_DETERMINISTIC Deterministic compile mode, 1 or 0 (default: 1)
 #   ASX_E2E_SCENARIO_PACK Scenario pack filter (default: all)
 #   ASX_E2E_RESOURCE_CLASS Resource class for embedded (default: R3)
 #   ASX_E2E_RUN_ID        Override run ID (default: auto-generated)
@@ -40,6 +41,7 @@ set -euo pipefail
 E2E_SEED="${ASX_E2E_SEED:-42}"
 E2E_PROFILE="${ASX_E2E_PROFILE:-CORE}"
 E2E_CODEC="${ASX_E2E_CODEC:-json}"
+E2E_DETERMINISTIC="${ASX_E2E_DETERMINISTIC:-1}"
 E2E_SCENARIO_PACK="${ASX_E2E_SCENARIO_PACK:-all}"
 E2E_RESOURCE_CLASS="${ASX_E2E_RESOURCE_CLASS:-R3}"
 E2E_POLICY_ID="${ASX_E2E_POLICY_ID:-}"
@@ -188,6 +190,7 @@ e2e_init() {
     if [ "$E2E_VERBOSE" = "1" ]; then
         echo "[e2e] init family=${family_id} lane=${lane_id}"
         echo "[e2e] profile=${E2E_PROFILE} codec=${E2E_CODEC} seed=${E2E_SEED}"
+        echo "[e2e] deterministic=${E2E_DETERMINISTIC}"
         echo "[e2e] artifacts=${E2E_ARTIFACT_DIR}"
         echo "[e2e] report=${_E2E_REPORT_FILE}"
     fi
@@ -241,7 +244,7 @@ e2e_build() {
     cflags="$cflags -I${E2E_PROJECT_ROOT}/src"
     cflags="$cflags -DASX_PROFILE_${E2E_PROFILE}"
     cflags="$cflags -DASX_CODEC_$(echo "$E2E_CODEC" | tr '[:lower:]' '[:upper:]')"
-    cflags="$cflags -DASX_DETERMINISTIC=1"
+    cflags="$cflags -DASX_DETERMINISTIC=${E2E_DETERMINISTIC}"
     cflags="$cflags $extra_flags"
 
     # Ensure output directory exists (needed for remote compilation via rch)

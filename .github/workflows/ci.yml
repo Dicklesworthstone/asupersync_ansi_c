@@ -5,7 +5,7 @@
 #   check            format + lint + strict build                    (blocking)
 #   unit-invariant   module + invariant test suites                  (blocking)
 #   conformance      Rust fixture parity + codec equivalence         (blocking)
-#   profile-parity   cross-profile semantic digest parity            (blocking)
+#   profile-parity   cross-profile + parallel worker digest parity   (blocking)
 #   fuzz-parity      differential fuzzing smoke + minimization check (blocking)
 #   embedded-matrix  router-class cross-target builds + QEMU         (blocking)
 #   e2e              canonical e2e scenario suite with manifest      (blocking)
@@ -507,7 +507,7 @@ jobs:
           retention-days: 14
 
   # ---------------------------------------------------------------------------
-  # profile-parity — cross-profile canonical digest parity
+  # profile-parity — cross-profile and parallel worker canonical digest parity
   # ---------------------------------------------------------------------------
   profile-parity:
     name: "profile parity"
@@ -529,6 +529,10 @@ jobs:
         id: run_profile_parity
         run: make profile-parity
 
+      - name: Parallel worker parity check
+        id: run_parallel_parity
+        run: make parallel-parity
+
       - name: Validate profile parity summary
         id: validate_manifest
         run: |
@@ -539,12 +543,26 @@ jobs:
           fi
           printf '[asx] profile-parity: summary files found=%s\n' "$summary_count"
 
+          parallel_summary_count="$(find tools/ci/artifacts/conformance -maxdepth 1 -type f -name '*-parallel-parity.summary.json' | wc -l | tr -d ' ')"
+          if [ "$parallel_summary_count" -lt 1 ]; then
+            echo "[asx] profile-parity: FAIL — expected parallel-parity summary file" >&2
+            exit 1
+          fi
+          printf '[asx] profile-parity: parallel summary files found=%s\n' "$parallel_summary_count"
+
           semantic_delta_count="$(find build/conformance -maxdepth 1 -type f -name 'semantic_delta_*.json' | wc -l | tr -d ' ')"
           if [ "$semantic_delta_count" -lt 1 ]; then
             echo "[asx] profile-parity: FAIL — expected semantic delta artifact output" >&2
             exit 1
           fi
           printf '[asx] profile-parity: semantic delta artifacts found=%s\n' "$semantic_delta_count"
+
+          parallel_artifact_count="$(find build/conformance -maxdepth 1 -type f -name 'parallel_parity_*.json' | wc -l | tr -d ' ')"
+          if [ "$parallel_artifact_count" -lt 1 ]; then
+            echo "[asx] profile-parity: FAIL — expected parallel parity artifact output" >&2
+            exit 1
+          fi
+          printf '[asx] profile-parity: parallel artifacts found=%s\n' "$parallel_artifact_count"
 
       - name: Emit profile parity lane manifest
         if: always()
@@ -560,6 +578,9 @@ jobs:
           elif [ "${{ steps.run_profile_parity.outcome }}" = "failure" ]; then
             first_failure="profile-parity"
             rerun="make profile-parity"
+          elif [ "${{ steps.run_parallel_parity.outcome }}" = "failure" ]; then
+            first_failure="parallel-parity"
+            rerun="make parallel-parity"
           elif [ "${{ steps.validate_manifest.outcome }}" = "failure" ]; then
             first_failure="validate-profile-parity-summary"
             rerun="find tools/ci/artifacts/conformance -name '*-profile-parity.summary.json'"
@@ -579,6 +600,7 @@ jobs:
             --arg ref "${{ github.ref }}" \
             --arg build_outcome "${{ steps.build.outcome }}" \
             --arg parity_outcome "${{ steps.run_profile_parity.outcome }}" \
+            --arg parallel_outcome "${{ steps.run_parallel_parity.outcome }}" \
             --arg validate_outcome "${{ steps.validate_manifest.outcome }}" \
             --arg first_failure "$first_failure" \
             --arg rerun "$rerun" \
@@ -592,6 +614,7 @@ jobs:
               steps: [
                 {id: "build", outcome: $build_outcome, rerun: "make build"},
                 {id: "profile-parity", outcome: $parity_outcome, rerun: "make profile-parity"},
+                {id: "parallel-parity", outcome: $parallel_outcome, rerun: "make parallel-parity"},
                 {id: "validate-profile-parity-summary", outcome: $validate_outcome, rerun: "find tools/ci/artifacts/conformance -name '*-profile-parity.summary.json'"}
               ],
               first_failure: (if $first_failure == "" then null else {step: $first_failure, rerun: $rerun} end)

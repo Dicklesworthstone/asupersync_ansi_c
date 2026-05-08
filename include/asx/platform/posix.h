@@ -33,9 +33,7 @@ extern "C" {
  *   - entropy: getrandom(2) with /dev/urandom fallback
  *   - reactor: epoll (Linux) or poll(2) fallback
  *   - log: stderr fprintf sink
- *
- * Blocking pool (pthread fire-and-detach) is available internally
- * but not yet wired into the runtime blocking submit path.
+ *   - blocking: bounded pthread worker queue for live-mode blocking submit
  *
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if hooks is NULL. */
 ASX_API ASX_MUST_USE asx_status asx_posix_hooks_install(asx_runtime_hooks *hooks);

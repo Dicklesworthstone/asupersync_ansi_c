@@ -2,7 +2,8 @@
 
 ## Summary
 
-Evaluated two optional alpha tracks for the parallel profile:
+Evaluated two optional alpha tracks for the parallel profile, then promoted
+the proven task-metadata subset in `bd-pweu.4`:
 
 1. **Seqlock metadata** — optimistic reader-writer synchronization for
    task-slot metadata snapshots
@@ -10,7 +11,9 @@ Evaluated two optional alpha tracks for the parallel profile:
    ownership-sensitive arena slots
 
 Both were prototyped in single-threaded simulation mode, validated against
-a baseline spinlock, and benchmarked for overhead.
+a baseline spinlock, and benchmarked for overhead. The promoted subset now
+uses the production portable atomic abstraction in both single-thread and
+multi-thread litmus builds.
 
 ## 1. Seqlock Metadata
 
@@ -46,10 +49,13 @@ is an excellent seqlock candidate:
 - Reads occur on every scheduler poll (high frequency)
 - In multi-threaded mode, scheduler workers read concurrently
 
-### Decision: **GO** (for Wave B parallel profile)
+### Decision: **PROMOTED FOR INTERNAL TASK METADATA**
 
 Seqlocks are the right primitive for task metadata when parallelism is added.
-The prototype is clean, correct, and the overhead analysis is favorable.
+`bd-pweu.4` adds a guarded task metadata slot that covers state, generation,
+alive flag, cancel epoch, lane, owner worker, and trace sequence linkage.
+The broader scheduler adoption remains a separate task, but the metadata
+primitive is no longer only a research decision.
 
 ## 2. EBR (Epoch-Based Reclamation)
 
@@ -94,15 +100,18 @@ deferred reclamation:
 | Writer increments generation on reclaim | Writer defers + advances epoch |
 | Stale access returns ASX_E_STALE_HANDLE | Stale access impossible if in epoch |
 
-### Decision: **DEFER** (EBR not needed until dynamic allocation)
+### Decision: **BOUNDED INTERNAL GUARD, BROADER RECLAMATION DEFERRED**
 
 The current static arena with generation counters is correct and sufficient.
-EBR adds value only when:
+`bd-pweu.4` keeps generation counters as the semantic stale-handle authority
+and adds a bounded EBR guard for reader epochs around metadata snapshots and
+retirement. Broader arena reclamation still adds value only when:
 - Slot memory is dynamically allocated (can't just mark dead + reuse)
 - Multiple workers access arenas concurrently (race on generation check)
 - Reclamation latency matters (EBR batches, generation is immediate)
 
-None of these conditions apply in the walking skeleton.
+Those broader dynamic-allocation conditions still do not apply in the walking
+skeleton.
 
 ## 3. Baseline Spinlock (Parity Reference)
 
@@ -145,7 +154,7 @@ because atomic ops degrade to plain loads/stores:
 
 ## 4. Test Results
 
-31 tests across 7 categories, all passing:
+36 unit tests across 8 categories, plus seqlock/EBR litmus coverage:
 
 | Category | Tests | What |
 |----------|-------|------|
@@ -156,13 +165,20 @@ because atomic ops degrade to plain loads/stores:
 | Spinlock | 4 | init, lock/unlock, try_lock, null |
 | Parity | 2 | same data through all strategies, write-update-read cycle |
 | Benchmark + determinism + integration | 5 | benchmark runs, cycles nonzero, seqlock determinism, EBR determinism, seqlock+EBR integration |
+| Task metadata slot | 5 | metadata field coverage, publish/snapshot, stale-generation rejection, retire/reclaim, bounded reader epoch |
+
+Formal/litmus coverage:
+- `formal-litmus` now links `src/runtime/seqlock_ebr_spike.c` into both
+  `ASX_LOCKFREE_SINGLE_THREAD=1` and `ASX_LOCKFREE_SINGLE_THREAD=0` binaries.
+- Litmus checks cover seqlock sequence monotonicity/even publication and EBR
+  grace-period blocking before reader leave.
 
 ## 5. Overall Decision
 
 | Track | Decision | Rationale |
 |-------|----------|-----------|
-| **Seqlock** | **GO** (Wave B) | Right primitive for task metadata in parallel profile |
-| **EBR** | **DEFER** | Not needed until dynamic allocation; generation counters sufficient |
+| **Seqlock** | **PROMOTED** | Right primitive for task metadata in parallel profile |
+| **EBR** | **BOUNDED GUARD** | Reader epoch guard added; broad reclamation still waits for dynamic arenas |
 | **Spinlock** | **FALLBACK** | Always available as safe baseline; no adoption cost |
 
 ### When to Revisit EBR
@@ -181,6 +197,7 @@ The baseline locking approach (spinlock or mutex) remains fully verified:
 
 ### Preserved Artifacts
 
-- `seqlock_ebr_spike.c`: Seqlock + EBR + spinlock + benchmark
-- `test_seqlock_ebr.c`: 31 validation tests
+- `seqlock_ebr_spike.c`: Seqlock + EBR + guarded task metadata slot + spinlock + benchmark
+- `test_seqlock_ebr.c`: 36 validation tests
+- `test_memory_model_litmus.c`: seqlock/EBR litmus coverage in single-thread and multi-thread atomic modes
 - This document: evaluation and decision rationale

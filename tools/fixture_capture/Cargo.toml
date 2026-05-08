@@ -9,7 +9,7 @@ name = "fixture_capture"
 path = "src/main.rs"
 
 [dependencies]
-asupersync = { path = "/data/projects/asupersync", features = ["test-internals"] }
+asupersync = { version = "0.3.1", features = ["test-internals"] }
 serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
