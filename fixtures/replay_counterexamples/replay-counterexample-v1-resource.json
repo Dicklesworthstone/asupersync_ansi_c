@@ -1,0 +1,39 @@
+{
+  "schema_name": "asx.replay_counterexample",
+  "schema_version": "asx.replay_counterexample.v1",
+  "scenario_name": "resource-json",
+  "original_steps": 2,
+  "current_steps": 1,
+  "attempts": 2,
+  "max_attempts": 4,
+  "accepted_attempts": 1,
+  "rejected_attempts": 1,
+  "found_smaller": true,
+  "preserves_failure_class": true,
+  "original_failure": {
+    "failure_class": "resource",
+    "run_status": "resource exhausted",
+    "run_status_code": 1000,
+    "last_status": "resource exhausted",
+    "last_status_code": 1000,
+    "terminal_status": "resource exhausted",
+    "terminal_status_code": 1000,
+    "status_category": "resource",
+    "oracle_verdict": "pass",
+    "oracle_name": "always_pass",
+    "oracle_message": "always passes"
+  },
+  "current_failure": {
+    "failure_class": "resource",
+    "run_status": "resource exhausted",
+    "run_status_code": 1000,
+    "last_status": "resource exhausted",
+    "last_status_code": 1000,
+    "terminal_status": "resource exhausted",
+    "terminal_status_code": 1000,
+    "status_category": "resource",
+    "oracle_verdict": "pass",
+    "oracle_name": "always_pass",
+    "oracle_message": "always passes"
+  }
+}

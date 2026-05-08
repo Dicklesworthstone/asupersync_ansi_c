@@ -34,6 +34,18 @@ static asx_status step_advance_5(asx_lab *lab, void *user_data) {
     return ASX_OK;
 }
 
+static asx_status step_resource_exhausted(asx_lab *lab, void *user_data) {
+    (void)lab;
+    (void)user_data;
+    return ASX_E_RESOURCE_EXHAUSTED;
+}
+
+static asx_status step_invalid_state(asx_lab *lab, void *user_data) {
+    (void)lab;
+    (void)user_data;
+    return ASX_E_INVALID_STATE;
+}
+
 
 /* ================================================================== */
 /* Snapshot tests                                                       */
@@ -427,6 +439,13 @@ static asx_oracle_result oracle_always_fail(const asx_lab *lab, void *ctx) {
     return (asx_oracle_result){ASX_ORACLE_FAIL, "always_fail", "always fails", 0};
 }
 
+/* Oracle that always says PASS, so status failures drive minimization. */
+static asx_oracle_result oracle_always_pass(const asx_lab *lab, void *ctx) {
+    (void)lab;
+    (void)ctx;
+    return (asx_oracle_result){ASX_ORACLE_PASS, "always_pass", "always passes", 0};
+}
+
 
 TEST(minimize_shrinks_scenario) {
     asx_lab_config cfg;
@@ -519,9 +538,94 @@ TEST(minimize_run_and_render_json) {
     MUST_OK(asx_minimize_render_json(&ms, &out));
 
     ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"scenario_name\":\"render\"") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out),
+                       "\"schema_version\":\"asx.replay_counterexample.v1\"") != NULL);
     ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"original_steps\":3") != NULL);
     ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"attempts\":") != NULL);
     ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"found_smaller\":true") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"preserves_failure_class\":true") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"failure_class\":\"oracle\"") != NULL);
+}
+
+TEST(minimize_rejects_success_when_resource_failure_removed) {
+    asx_lab_config cfg;
+    asx_lab_scenario sc;
+    asx_minimize_state ms;
+    const asx_minimize_observation *original;
+    const asx_minimize_observation *current;
+
+    asx_lab_config_init(&cfg);
+    asx_lab_scenario_init(&sc, "resource-preserve");
+    MUST_OK(asx_lab_scenario_add_step(&sc, step_noop, NULL));
+    MUST_OK(asx_lab_scenario_add_step(&sc, step_resource_exhausted, NULL));
+
+    MUST_OK(asx_minimize_init(&ms, &cfg, &sc, oracle_always_pass, NULL, 4u));
+    MUST_OK(asx_minimize_run(&ms));
+
+    original = asx_minimize_original_observation(&ms);
+    current = asx_minimize_current_observation(&ms);
+    ASSERT_TRUE(original != NULL);
+    ASSERT_TRUE(current != NULL);
+    ASSERT_EQ(original->failure_class, ASX_MINIMIZE_FAILURE_RESOURCE);
+    ASSERT_EQ(current->failure_class, ASX_MINIMIZE_FAILURE_RESOURCE);
+    ASSERT_EQ(current->run_status, ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_minimize_result(&ms)->step_count, 1u);
+    ASSERT_EQ(ms.rejected_attempts, 1u);
+}
+
+TEST(minimize_preserves_exact_runtime_status) {
+    asx_lab_config cfg;
+    asx_lab_scenario sc;
+    asx_minimize_state ms;
+    const asx_minimize_observation *current;
+
+    asx_lab_config_init(&cfg);
+    asx_lab_scenario_init(&sc, "runtime-preserve");
+    MUST_OK(asx_lab_scenario_add_step(&sc, step_noop, NULL));
+    MUST_OK(asx_lab_scenario_add_step(&sc, step_invalid_state, NULL));
+
+    MUST_OK(asx_minimize_init(&ms, &cfg, &sc, oracle_always_pass, NULL, 4u));
+    MUST_OK(asx_minimize_run(&ms));
+
+    current = asx_minimize_current_observation(&ms);
+    ASSERT_TRUE(current != NULL);
+    ASSERT_EQ(current->failure_class, ASX_MINIMIZE_FAILURE_RUNTIME);
+    ASSERT_EQ(current->run_status, ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_minimize_result(&ms)->step_count, 1u);
+    ASSERT_EQ(ms.rejected_attempts, 1u);
+}
+
+TEST(minimize_rejects_original_scenario_without_failure) {
+    asx_lab_config cfg;
+    asx_lab_scenario sc;
+    asx_minimize_state ms;
+
+    asx_lab_config_init(&cfg);
+    asx_lab_scenario_init(&sc, "no-failure");
+    MUST_OK(asx_lab_scenario_add_step(&sc, step_noop, NULL));
+
+    ASSERT_EQ(asx_minimize_init(&ms, &cfg, &sc, oracle_always_pass, NULL, 4u), ASX_E_INVALID_STATE);
+}
+
+TEST(minimize_render_json_reports_resource_class) {
+    asx_lab_config cfg;
+    asx_lab_scenario sc;
+    asx_minimize_state ms;
+    asx_report_buf out;
+
+    asx_lab_config_init(&cfg);
+    asx_lab_scenario_init(&sc, "resource-json");
+    MUST_OK(asx_lab_scenario_add_step(&sc, step_noop, NULL));
+    MUST_OK(asx_lab_scenario_add_step(&sc, step_resource_exhausted, NULL));
+
+    MUST_OK(asx_minimize_init(&ms, &cfg, &sc, oracle_always_pass, NULL, 4u));
+    MUST_OK(asx_minimize_run(&ms));
+    MUST_OK(asx_minimize_render_json(&ms, &out));
+
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"failure_class\":\"resource\"") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"run_status\":\"resource exhausted\"") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"rejected_attempts\":1") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"preserves_failure_class\":true") != NULL);
 }
 
 /* ================================================================== */
@@ -604,6 +708,10 @@ int main(void) {
     RUN_TEST(minimize_null_fails);
     RUN_TEST(minimize_max_attempts_respected);
     RUN_TEST(minimize_run_and_render_json);
+    RUN_TEST(minimize_rejects_success_when_resource_failure_removed);
+    RUN_TEST(minimize_preserves_exact_runtime_status);
+    RUN_TEST(minimize_rejects_original_scenario_without_failure);
+    RUN_TEST(minimize_render_json_reports_resource_class);
 
     /* Integration */
     RUN_TEST(snapshot_replay_integration);

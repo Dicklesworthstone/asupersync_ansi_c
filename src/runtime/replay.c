@@ -301,12 +301,133 @@ asx_status asx_oracle_suite_run(asx_oracle_suite *suite, const asx_lab *lab) {
 /* Counterexample minimization                                         */
 /* ------------------------------------------------------------------ */
 
+static const char *oracle_verdict_str(asx_oracle_verdict verdict) {
+    switch (verdict) {
+    case ASX_ORACLE_PASS: return "pass";
+    case ASX_ORACLE_FAIL: return "fail";
+    case ASX_ORACLE_INCONCLUSIVE: return "inconclusive";
+    }
+    return "unknown";
+}
+
+const char *asx_minimize_failure_class_str(asx_minimize_failure_class failure_class) {
+    switch (failure_class) {
+    case ASX_MINIMIZE_FAILURE_NONE: return "none";
+    case ASX_MINIMIZE_FAILURE_ORACLE: return "oracle";
+    case ASX_MINIMIZE_FAILURE_RESOURCE: return "resource";
+    case ASX_MINIMIZE_FAILURE_RUNTIME: return "runtime";
+    case ASX_MINIMIZE_FAILURE_CONFORMANCE: return "conformance";
+    }
+    return "unknown";
+}
+
+static asx_status minimize_terminal_status(const asx_minimize_observation *obs) {
+    if (obs == NULL) return ASX_OK;
+    if (obs->run_status != ASX_OK) return obs->run_status;
+    return obs->last_status;
+}
+
+static asx_minimize_failure_class minimize_classify(asx_status status,
+                                                    asx_oracle_verdict oracle_verdict) {
+    asx_error_category category;
+
+    if (status == ASX_OK) {
+        return oracle_verdict == ASX_ORACLE_FAIL ? ASX_MINIMIZE_FAILURE_ORACLE
+                                                 : ASX_MINIMIZE_FAILURE_NONE;
+    }
+
+    category = asx_status_category(status);
+    if (category == ASX_ERROR_CATEGORY_RESOURCE) return ASX_MINIMIZE_FAILURE_RESOURCE;
+    if (category == ASX_ERROR_CATEGORY_EQUIVALENCE || category == ASX_ERROR_CATEGORY_REPLAY ||
+        status == ASX_E_REPLAY_MISMATCH) {
+        return ASX_MINIMIZE_FAILURE_CONFORMANCE;
+    }
+    return ASX_MINIMIZE_FAILURE_RUNTIME;
+}
+
+static int minimize_same_text(const char *left, const char *right) {
+    if (left == NULL || left[0] == '\0') return right == NULL || right[0] == '\0';
+    if (right == NULL) return 0;
+    return strcmp(left, right) == 0;
+}
+
+static int minimize_same_failure(const asx_minimize_observation *original,
+                                 const asx_minimize_observation *candidate) {
+    asx_status original_status;
+    asx_status candidate_status;
+
+    if (original == NULL || candidate == NULL) return 0;
+    if (original->failure_class == ASX_MINIMIZE_FAILURE_NONE) return 0;
+    if (original->failure_class != candidate->failure_class) return 0;
+
+    original_status = minimize_terminal_status(original);
+    candidate_status = minimize_terminal_status(candidate);
+    if (original_status != ASX_OK || candidate_status != ASX_OK) {
+        return original_status == candidate_status;
+    }
+
+    if (original->failure_class == ASX_MINIMIZE_FAILURE_ORACLE) {
+        return original->oracle_verdict == ASX_ORACLE_FAIL &&
+               candidate->oracle_verdict == ASX_ORACLE_FAIL &&
+               minimize_same_text(original->oracle_name, candidate->oracle_name);
+    }
+
+    return 1;
+}
+
+static asx_status minimize_observe(const asx_minimize_state *state,
+                                   const asx_lab_scenario *scenario,
+                                   asx_minimize_observation *out) {
+    asx_lab lab;
+    asx_lab_result result;
+    asx_oracle_result oracle_result;
+    asx_status st;
+    asx_status terminal;
+
+    if (state == NULL || scenario == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    memset(out, 0, sizeof(*out));
+    out->run_status = ASX_OK;
+    out->last_status = ASX_OK;
+    out->status_category = ASX_ERROR_CATEGORY_NONE;
+    out->oracle_verdict = ASX_ORACLE_INCONCLUSIVE;
+    out->oracle_name = "";
+    out->oracle_message = "";
+    out->failure_class = ASX_MINIMIZE_FAILURE_NONE;
+
+    st = asx_lab_init(&lab, state->config);
+    if (st != ASX_OK) {
+        out->run_status = st;
+        out->last_status = st;
+        out->status_category = asx_status_category(st);
+        out->failure_class = minimize_classify(st, out->oracle_verdict);
+        return ASX_OK;
+    }
+
+    st = asx_lab_run_scenario(&lab, scenario, &result);
+    out->run_status = st;
+    out->last_status = result.last_status;
+    oracle_result = state->oracle(&lab, state->oracle_ctx);
+    out->oracle_verdict = oracle_result.verdict;
+    out->oracle_name = oracle_result.oracle_name != NULL ? oracle_result.oracle_name : "";
+    out->oracle_message = oracle_result.message != NULL ? oracle_result.message : "";
+    asx_lab_shutdown(&lab);
+
+    terminal = minimize_terminal_status(out);
+    out->status_category = asx_status_category(terminal);
+    out->failure_class = minimize_classify(terminal, out->oracle_verdict);
+    return ASX_OK;
+}
+
 asx_status asx_minimize_init(asx_minimize_state *state, const asx_lab_config *config,
                              const asx_lab_scenario *failing_scenario, asx_oracle_fn oracle,
                              void *oracle_ctx, uint32_t max_attempts) {
+    asx_status st;
+
     if (state == NULL || config == NULL || failing_scenario == NULL || oracle == NULL)
         return ASX_E_INVALID_ARGUMENT;
 
+    memset(state, 0, sizeof(*state));
     state->config = config;
     state->scenario = *failing_scenario; /* copy the scenario */
     state->oracle = oracle;
@@ -315,14 +436,18 @@ asx_status asx_minimize_init(asx_minimize_state *state, const asx_lab_config *co
     state->attempts = 0;
     state->max_attempts = max_attempts;
     state->found_smaller = 0;
+
+    st = minimize_observe(state, failing_scenario, &state->original_observation);
+    if (st != ASX_OK) return st;
+    if (state->original_observation.failure_class == ASX_MINIMIZE_FAILURE_NONE)
+        return ASX_E_INVALID_STATE;
+    state->current_observation = state->original_observation;
     return ASX_OK;
 }
 
 asx_status asx_minimize_step(asx_minimize_state *state) {
-    asx_lab lab;
-    asx_lab_result result;
-    asx_oracle_result oracle_result;
     asx_lab_scenario candidate;
+    asx_minimize_observation candidate_observation;
     uint32_t try_remove;
     uint32_t i, j;
     asx_status st;
@@ -349,20 +474,17 @@ asx_status asx_minimize_step(asx_minimize_state *state) {
 
     state->attempts++;
 
-    /* Run candidate and check oracle */
-    st = asx_lab_init(&lab, state->config);
-    if (st != ASX_OK) return ASX_E_PENDING;
+    st = minimize_observe(state, &candidate, &candidate_observation);
+    if (st != ASX_OK) return st;
 
-    st = asx_lab_run_scenario(&lab, &candidate, &result);
-    (void)st; /* we care about oracle verdict, not scenario result */
-
-    oracle_result = state->oracle(&lab, state->oracle_ctx);
-    asx_lab_shutdown(&lab);
-
-    if (oracle_result.verdict == ASX_ORACLE_FAIL) {
-        /* Candidate still fails — accept the smaller scenario */
+    if (minimize_same_failure(&state->original_observation, &candidate_observation)) {
+        /* Candidate still reproduces the same failure class. */
         state->scenario = candidate;
+        state->current_observation = candidate_observation;
         state->found_smaller = 1;
+        state->accepted_attempts++;
+    } else {
+        state->rejected_attempts++;
     }
 
     if (state->attempts >= state->max_attempts || state->scenario.step_count <= 1) return ASX_OK;
@@ -393,11 +515,61 @@ uint32_t asx_minimize_attempts(const asx_minimize_state *state) {
     return state->attempts;
 }
 
+const asx_minimize_observation *asx_minimize_original_observation(const asx_minimize_state *state) {
+    if (state == NULL) return NULL;
+    return &state->original_observation;
+}
+
+const asx_minimize_observation *asx_minimize_current_observation(const asx_minimize_state *state) {
+    if (state == NULL) return NULL;
+    return &state->current_observation;
+}
+
+static void append_minimize_observation_json(asx_report_buf *out,
+                                             const asx_minimize_observation *obs) {
+    asx_status terminal;
+
+    if (out == NULL) return;
+    if (obs == NULL) {
+        asx_report_buf_append(out, "null");
+        return;
+    }
+
+    terminal = minimize_terminal_status(obs);
+    asx_report_buf_append(out, "{\"failure_class\":\"");
+    replay_append_json_escaped(out, asx_minimize_failure_class_str(obs->failure_class));
+    asx_report_buf_append(out, "\",\"run_status\":\"");
+    replay_append_json_escaped(out, asx_status_str(obs->run_status));
+    asx_report_buf_append(out, "\",\"run_status_code\":");
+    asx_report_buf_append_u32(out, (uint32_t)obs->run_status);
+    asx_report_buf_append(out, ",\"last_status\":\"");
+    replay_append_json_escaped(out, asx_status_str(obs->last_status));
+    asx_report_buf_append(out, "\",\"last_status_code\":");
+    asx_report_buf_append_u32(out, (uint32_t)obs->last_status);
+    asx_report_buf_append(out, ",\"terminal_status\":\"");
+    replay_append_json_escaped(out, asx_status_str(terminal));
+    asx_report_buf_append(out, "\",\"terminal_status_code\":");
+    asx_report_buf_append_u32(out, (uint32_t)terminal);
+    asx_report_buf_append(out, ",\"status_category\":\"");
+    replay_append_json_escaped(out, asx_error_category_str(obs->status_category));
+    asx_report_buf_append(out, "\",\"oracle_verdict\":\"");
+    replay_append_json_escaped(out, oracle_verdict_str(obs->oracle_verdict));
+    asx_report_buf_append(out, "\",\"oracle_name\":\"");
+    replay_append_json_escaped(out, obs->oracle_name != NULL ? obs->oracle_name : "");
+    asx_report_buf_append(out, "\",\"oracle_message\":\"");
+    replay_append_json_escaped(out, obs->oracle_message != NULL ? obs->oracle_message : "");
+    asx_report_buf_append(out, "\"}");
+}
+
 asx_status asx_minimize_render_json(const asx_minimize_state *state, asx_report_buf *out) {
     if (state == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
 
     asx_report_buf_init(out);
-    asx_report_buf_append(out, "{\"scenario_name\":\"");
+    asx_report_buf_append(out, "{\"schema_name\":\"");
+    asx_report_buf_append(out, ASX_MINIMIZE_SCHEMA_NAME);
+    asx_report_buf_append(out, "\",\"schema_version\":\"");
+    asx_report_buf_append(out, ASX_MINIMIZE_SCHEMA_VERSION);
+    asx_report_buf_append(out, "\",\"scenario_name\":\"");
     replay_append_json_escaped(out, state->scenario.name != NULL ? state->scenario.name : "");
     asx_report_buf_append(out, "\",\"original_steps\":");
     asx_report_buf_append_u32(out, state->original_steps);
@@ -407,8 +579,21 @@ asx_status asx_minimize_render_json(const asx_minimize_state *state, asx_report_
     asx_report_buf_append_u32(out, state->attempts);
     asx_report_buf_append(out, ",\"max_attempts\":");
     asx_report_buf_append_u32(out, state->max_attempts);
+    asx_report_buf_append(out, ",\"accepted_attempts\":");
+    asx_report_buf_append_u32(out, state->accepted_attempts);
+    asx_report_buf_append(out, ",\"rejected_attempts\":");
+    asx_report_buf_append_u32(out, state->rejected_attempts);
     asx_report_buf_append(out, ",\"found_smaller\":");
     asx_report_buf_append(out, state->found_smaller ? "true" : "false");
+    asx_report_buf_append(out, ",\"preserves_failure_class\":");
+    asx_report_buf_append(out, minimize_same_failure(&state->original_observation,
+                                                     &state->current_observation)
+                                   ? "true"
+                                   : "false");
+    asx_report_buf_append(out, ",\"original_failure\":");
+    append_minimize_observation_json(out, &state->original_observation);
+    asx_report_buf_append(out, ",\"current_failure\":");
+    append_minimize_observation_json(out, &state->current_observation);
     asx_report_buf_append(out, "}");
     return ASX_OK;
 }

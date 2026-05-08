@@ -732,6 +732,27 @@ typedef enum {
     MIN_MODE_PREDICATE     /* preserve: user predicate returns nonzero */
 } min_mode;
 
+#define MIN_SCHEMA_NAME "asx.replay_counterexample"
+#define MIN_SCHEMA_VERSION "asx.replay_counterexample.v1"
+
+static const char *min_mode_name(min_mode mode) {
+    switch (mode) {
+    case MIN_MODE_DETERMINISM: return "determinism";
+    case MIN_MODE_DIGEST_MATCH: return "digest_match";
+    case MIN_MODE_PREDICATE: return "predicate";
+    }
+    return "unknown";
+}
+
+static const char *min_failure_class_name(min_mode mode) {
+    switch (mode) {
+    case MIN_MODE_DETERMINISM: return "conformance";
+    case MIN_MODE_DIGEST_MATCH: return "semantic_digest";
+    case MIN_MODE_PREDICATE: return "predicate";
+    }
+    return "unknown";
+}
+
 typedef struct {
     min_mode mode;
     uint64_t target_digest;     /* for DIGEST_MATCH mode */
@@ -904,7 +925,12 @@ typedef struct {
     uint32_t ops_removed;
     uint32_t args_simplified;
     double duration_sec;
+    uint64_t original_digest;
+    uint64_t target_digest;
     uint64_t final_digest;
+    const char *mode_name;
+    const char *failure_class;
+    int preserves_failure_class;
 } min_result;
 
 static void min_minimize(min_scenario *sc, const min_config *cfg, min_result *result) {
@@ -919,6 +945,11 @@ static void min_minimize(min_scenario *sc, const min_config *cfg, min_result *re
     result->ops_removed = 0u;
     result->args_simplified = 0u;
     result->rounds = 0u;
+    result->original_digest = min_execute_digest(sc);
+    result->target_digest = cfg->target_digest;
+    result->mode_name = min_mode_name(cfg->mode);
+    result->failure_class = min_failure_class_name(cfg->mode);
+    result->preserves_failure_class = 0;
 
     if (cfg->verbose) { fprintf(stderr, "[minimize] starting with %u ops\n", sc->op_count); }
 
@@ -929,6 +960,7 @@ static void min_minimize(min_scenario *sc, const min_config *cfg, min_result *re
         }
         result->minimized_ops = sc->op_count;
         result->final_digest = min_execute_digest(sc);
+        result->preserves_failure_class = 0;
         return;
     }
 
@@ -965,6 +997,7 @@ static void min_minimize(min_scenario *sc, const min_config *cfg, min_result *re
 
     result->minimized_ops = sc->op_count;
     result->final_digest = min_execute_digest(sc);
+    result->preserves_failure_class = min_preserves_failure(sc, cfg);
     result->duration_sec = end_sec - start_sec;
 }
 
@@ -975,7 +1008,14 @@ static void min_minimize(min_scenario *sc, const min_config *cfg, min_result *re
 static void min_emit_json(FILE *out, const min_scenario *sc, const min_result *result) {
     uint32_t i;
 
-    fprintf(out, "{\"kind\":\"minimized_scenario\",");
+    fprintf(out, "{\"schema_name\":\"%s\",", MIN_SCHEMA_NAME);
+    fprintf(out, "\"schema_version\":\"%s\",", MIN_SCHEMA_VERSION);
+    fprintf(out, "\"kind\":\"minimized_scenario\",");
+    fprintf(out, "\"mode\":\"%s\",", result->mode_name != NULL ? result->mode_name : "unknown");
+    fprintf(out, "\"failure_class\":\"%s\",",
+            result->failure_class != NULL ? result->failure_class : "unknown");
+    fprintf(out, "\"preserves_failure_class\":%s,",
+            result->preserves_failure_class ? "true" : "false");
     fprintf(out, "\"seed\":%llu,", (unsigned long long)sc->seed);
     fprintf(out, "\"original_ops\":%u,", result->original_ops);
     fprintf(out, "\"minimized_ops\":%u,", result->minimized_ops);
@@ -983,6 +1023,8 @@ static void min_emit_json(FILE *out, const min_scenario *sc, const min_result *r
     fprintf(out, "\"ops_removed\":%u,", result->ops_removed);
     fprintf(out, "\"args_simplified\":%u,", result->args_simplified);
     fprintf(out, "\"duration_sec\":%.3f,", result->duration_sec);
+    fprintf(out, "\"target_digest\":\"%016llx\",", (unsigned long long)result->target_digest);
+    fprintf(out, "\"original_digest\":\"%016llx\",", (unsigned long long)result->original_digest);
     fprintf(out, "\"final_digest\":\"%016llx\",", (unsigned long long)result->final_digest);
     fprintf(out, "\"ops\":[");
     for (i = 0u; i < sc->op_count; i++) {
@@ -1182,6 +1224,7 @@ static int min_selftest(int verbose) {
     sc.ops[11].arg_u64 = 700u;
 
     cfg.mode = MIN_MODE_PREDICATE;
+    cfg.target_digest = 0u;
     cfg.predicate = min_predicate_has_poisoned_spawn;
     cfg.predicate_data = NULL;
     cfg.max_rounds = 10u;

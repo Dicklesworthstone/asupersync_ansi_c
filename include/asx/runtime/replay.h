@@ -139,15 +139,40 @@ ASX_API asx_status asx_oracle_suite_run(asx_oracle_suite *suite, const asx_lab *
  * Counterexample minimization — shrink failing scenarios
  * ------------------------------------------------------------------- */
 
+#define ASX_MINIMIZE_SCHEMA_NAME "asx.replay_counterexample"
+#define ASX_MINIMIZE_SCHEMA_VERSION "asx.replay_counterexample.v1"
+
+typedef enum {
+    ASX_MINIMIZE_FAILURE_NONE = 0,
+    ASX_MINIMIZE_FAILURE_ORACLE = 1,
+    ASX_MINIMIZE_FAILURE_RESOURCE = 2,
+    ASX_MINIMIZE_FAILURE_RUNTIME = 3,
+    ASX_MINIMIZE_FAILURE_CONFORMANCE = 4
+} asx_minimize_failure_class;
+
+typedef struct {
+    asx_status run_status;
+    asx_status last_status;
+    asx_error_category status_category;
+    asx_oracle_verdict oracle_verdict;
+    const char *oracle_name;
+    const char *oracle_message;
+    asx_minimize_failure_class failure_class;
+} asx_minimize_observation;
+
 typedef struct {
     const asx_lab_config *config; /* lab config to use */
     asx_lab_scenario scenario;    /* current candidate */
     asx_oracle_fn oracle;         /* oracle to check */
     void *oracle_ctx;
-    uint32_t original_steps; /* original step count */
-    uint32_t attempts;       /* shrink attempts made */
-    uint32_t max_attempts;   /* max shrink attempts */
-    int found_smaller;       /* 1 if we found a smaller fail */
+    asx_minimize_observation original_observation; /* failure to preserve */
+    asx_minimize_observation current_observation;  /* current candidate failure */
+    uint32_t original_steps;                       /* original step count */
+    uint32_t attempts;                             /* shrink attempts made */
+    uint32_t accepted_attempts;                    /* shrink attempts accepted */
+    uint32_t rejected_attempts;                    /* shrink attempts rejected */
+    uint32_t max_attempts;                         /* max shrink attempts */
+    int found_smaller;                             /* 1 if we found a smaller fail */
 } asx_minimize_state;
 
 /* Initialize counterexample minimization.
@@ -170,6 +195,15 @@ ASX_API const asx_lab_scenario *asx_minimize_result(const asx_minimize_state *st
 
 /* Get the number of shrink attempts made. */
 ASX_API uint32_t asx_minimize_attempts(const asx_minimize_state *state);
+
+/* Return the stable string form of a minimizer failure class. */
+ASX_API const char *asx_minimize_failure_class_str(asx_minimize_failure_class failure_class);
+
+/* Return captured observations used for class-preserving minimization. */
+ASX_API const asx_minimize_observation *asx_minimize_original_observation(
+    const asx_minimize_state *state);
+ASX_API const asx_minimize_observation *asx_minimize_current_observation(
+    const asx_minimize_state *state);
 
 /* Render minimization progress/result as JSON for retained artifacts. */
 ASX_API ASX_MUST_USE asx_status asx_minimize_render_json(const asx_minimize_state *state,

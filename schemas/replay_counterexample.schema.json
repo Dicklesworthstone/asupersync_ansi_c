@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "asx-replay-counterexample",
+  "description": "Versioned minimized replay/fuzz counterexample packet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_name", "schema_version", "preserves_failure_class"],
+  "properties": {
+    "schema_name": {"type": "string", "const": "asx.replay_counterexample"},
+    "schema_version": {"type": "string", "const": "asx.replay_counterexample.v1"},
+    "kind": {"type": "string", "const": "minimized_scenario"},
+    "mode": {"type": "string", "enum": ["determinism", "digest_match", "predicate"]},
+    "failure_class": {"$ref": "#/$defs/failure_class"},
+    "preserves_failure_class": {"type": "boolean"},
+    "seed": {"type": "integer", "minimum": 0},
+    "original_ops": {"type": "integer", "minimum": 0},
+    "minimized_ops": {"type": "integer", "minimum": 0},
+    "rounds": {"type": "integer", "minimum": 0},
+    "ops_removed": {"type": "integer", "minimum": 0},
+    "args_simplified": {"type": "integer", "minimum": 0},
+    "duration_sec": {"type": "number", "minimum": 0},
+    "target_digest": {"$ref": "#/$defs/raw_digest"},
+    "original_digest": {"$ref": "#/$defs/raw_digest"},
+    "final_digest": {"$ref": "#/$defs/raw_digest"},
+    "ops": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/op"}
+    },
+    "scenario_name": {"type": "string"},
+    "original_steps": {"type": "integer", "minimum": 0},
+    "current_steps": {"type": "integer", "minimum": 0},
+    "attempts": {"type": "integer", "minimum": 0},
+    "max_attempts": {"type": "integer", "minimum": 0},
+    "accepted_attempts": {"type": "integer", "minimum": 0},
+    "rejected_attempts": {"type": "integer", "minimum": 0},
+    "found_smaller": {"type": "boolean"},
+    "original_failure": {"$ref": "#/$defs/observation"},
+    "current_failure": {"$ref": "#/$defs/observation"}
+  },
+  "oneOf": [
+    {
+      "required": [
+        "kind",
+        "mode",
+        "failure_class",
+        "seed",
+        "original_ops",
+        "minimized_ops",
+        "rounds",
+        "ops_removed",
+        "args_simplified",
+        "duration_sec",
+        "target_digest",
+        "original_digest",
+        "final_digest",
+        "ops"
+      ]
+    },
+    {
+      "required": [
+        "scenario_name",
+        "original_steps",
+        "current_steps",
+        "attempts",
+        "max_attempts",
+        "accepted_attempts",
+        "rejected_attempts",
+        "found_smaller",
+        "original_failure",
+        "current_failure"
+      ]
+    }
+  ],
+  "$defs": {
+    "raw_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "failure_class": {
+      "type": "string",
+      "enum": [
+        "none",
+        "oracle",
+        "resource",
+        "runtime",
+        "conformance",
+        "semantic_digest",
+        "predicate"
+      ]
+    },
+    "status_category": {
+      "type": "string",
+      "enum": [
+        "none",
+        "general",
+        "transition",
+        "region",
+        "task",
+        "obligation",
+        "cancellation",
+        "channel",
+        "timer",
+        "quiescence",
+        "resource",
+        "handle",
+        "hook",
+        "affinity",
+        "equivalence",
+        "replay",
+        "config",
+        "permission",
+        "unknown"
+      ]
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "failure_class",
+        "run_status",
+        "run_status_code",
+        "last_status",
+        "last_status_code",
+        "terminal_status",
+        "terminal_status_code",
+        "status_category",
+        "oracle_verdict",
+        "oracle_name",
+        "oracle_message"
+      ],
+      "properties": {
+        "failure_class": {"$ref": "#/$defs/failure_class"},
+        "run_status": {"type": "string"},
+        "run_status_code": {"type": "integer", "minimum": 0},
+        "last_status": {"type": "string"},
+        "last_status_code": {"type": "integer", "minimum": 0},
+        "terminal_status": {"type": "string"},
+        "terminal_status_code": {"type": "integer", "minimum": 0},
+        "status_category": {"$ref": "#/$defs/status_category"},
+        "oracle_verdict": {"type": "string", "enum": ["pass", "fail", "inconclusive", "unknown"]},
+        "oracle_name": {"type": "string"},
+        "oracle_message": {"type": "string"}
+      }
+    },
+    "op": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "idx_a", "idx_b", "arg_u32", "arg_u64"],
+      "properties": {
+        "op": {"type": "string", "minLength": 1},
+        "idx_a": {"type": "integer", "minimum": 0},
+        "idx_b": {"type": "integer", "minimum": 0},
+        "arg_u32": {"type": "integer", "minimum": 0},
+        "arg_u64": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

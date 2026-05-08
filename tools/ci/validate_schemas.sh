@@ -177,6 +177,16 @@ if os.path.isfile(incident_bundle_schema_path):
         "description": "Incident evidence bundle golden examples",
     })
 
+# 9. Replay counterexample/minimizer golden examples
+replay_counterexample_schema_path = os.path.join(schemas_dir, "replay_counterexample.schema.json")
+if os.path.isfile(replay_counterexample_schema_path):
+    targets.append({
+        "schema_path": replay_counterexample_schema_path,
+        "schema_name": "replay_counterexample",
+        "glob": os.path.join(fixtures_dir, "replay_counterexamples", "**", "*.json"),
+        "description": "Replay counterexample minimizer golden examples",
+    })
+
 # Deduplicate files across targets to avoid double-validation
 validated_files = set()
 results = []

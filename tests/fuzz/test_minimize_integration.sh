@@ -90,6 +90,10 @@ for line in sys.stdin:
 assert len(lines) == 3, f'expected 3 JSONL records, got {len(lines)}'
 for d in lines:
     assert d['kind'] == 'minimized_scenario'
+    assert d['schema_name'] == 'asx.replay_counterexample'
+    assert d['schema_version'] == 'asx.replay_counterexample.v1'
+    assert d['preserves_failure_class'] is True
+    assert 'failure_class' in d
     assert 'seed' in d
     assert 'original_ops' in d
     assert 'minimized_ops' in d
@@ -97,6 +101,8 @@ for d in lines:
     assert 'ops_removed' in d
     assert 'args_simplified' in d
     assert 'duration_sec' in d
+    assert 'target_digest' in d
+    assert 'original_digest' in d
     assert 'final_digest' in d
     assert 'ops' in d
 "
