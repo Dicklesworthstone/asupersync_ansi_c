@@ -172,6 +172,29 @@ and documentation enforcement.
 | `GATE-CONFORMANCE` | `conformance` | `conformance` | `tools/ci/run_conformance.sh` | Rust fixture parity |
 | `GATE-CODEC` | `codec-equivalence` | `conformance` | `tools/ci/run_codec_equivalence.sh` | JSON/BIN codec equivalence |
 
+### 2.1 Planned Parallel Graduation Gate
+
+`bd-pweu.1` defines the activation contract for the production parallel runtime
+program. The gate below is not active yet; it must be implemented by
+`bd-pweu.11` before any child bead may claim that the parallel profile has
+graduated beyond walking-skeleton behavior.
+
+| Gate ID | Planned Makefile Target | Planned CI Job | Tracking Bead | Purpose |
+|---------|-------------------------|----------------|---------------|---------|
+| `GATE-PARALLEL-PARITY` | `parallel-parity` | `parallel-parity` or `conformance` extension | `bd-pweu.11` | Compare canonical semantic digests and structured event summaries for the same scenarios under worker_count=1, 2, 8, and 64. |
+
+Activation requirements:
+
+1. The gate must include lifecycle, cancellation, timer/waker, MPSC contention,
+   blocking-pool, and reactor-readiness scenarios.
+2. The gate must fail on semantic digest drift, unclassified event-order drift,
+   silent drops, stale-handle mutation, weakened cancellation, or unbounded
+   queue growth.
+3. The gate must emit machine-readable reports under the existing conformance
+   artifact layout, including seed, worker count, profile, codec, digest, and
+   rerun command.
+4. Expensive local proof runs must be executed via `rch exec -- make ...`.
+
 ## 3. E2E Gate IDs
 
 E2E gates are assigned by `tests/e2e/run_all.sh` and map to deployment hardening
