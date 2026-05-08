@@ -421,7 +421,43 @@ Coverage requirements:
    fails the gate and requires rerunning `profile-parity` before any baseline update.
 6. Expensive proof runs must use `rch exec -- make ...`.
 
-## 3. E2E Gate IDs
+## 3. Release-Readiness Failure Triage Runbook
+
+Use this table when a release-readiness run fails and the next agent needs the
+first useful local command plus the artifact to inspect. Expensive commands
+should be run as `rch exec -- make ...` in shared sessions.
+
+| Lane | Shortest rerun | Primary report or artifact | First failure meaning |
+|------|----------------|----------------------------|-----------------------|
+| Build and portability | `make build` | `build/lib/libasx.a`; matrix rows under `tools/ci/artifacts/build/*.jsonl`; layout reports under `tools/ci/artifacts/layout/*.json` | Compiler, warning-as-error, profile macro, bitness, or layout-budget regression. Re-run one cell with `make build CC=gcc BITS=64 PROFILE=CORE`. |
+| Format, lint, and docs | `make format-check`; `make lint`; `make lint-docs` | `build/lint/*.json` when static analysis emits structured output; API docs lint stdout/stderr | Formatting drift, analyzer finding, missing tool in strict CI, or undocumented public API declaration. |
+| Unit and invariant | `make test-unit`; `make test-invariants` | Unit log candidates under `build/test-logs/unit-*.jsonl`; invariant binaries under `build/tests/invariant/*` | Module behavior or lifecycle legality broke before scenario-level parity. Re-run the named test binary from the failing line. |
+| Conformance | `make conformance` | `tools/ci/artifacts/conformance/conformance-*-conformance.summary.json`; `.jsonl`; `.diffs.jsonl`; `build/conformance/semantic_delta_conformance-*.json` | Rust fixture parity failed, fixture runner failed, or semantic delta budget exceeded. Inspect `diff_file` and the semantic-delta artifact before changing fixtures. |
+| Codec equivalence | `make codec-equivalence` | `tools/ci/artifacts/conformance/codec-equivalence-*-codec-equivalence.summary.json`; `.diffs.jsonl`; `build/conformance/semantic_delta_codec-equivalence-*.json` | JSON/BIN canonical semantic schema drift or codec normalization mismatch. Check the first diff field in the mode summary. |
+| Profile parity | `make profile-parity` | `tools/ci/artifacts/conformance/profile-parity-*-profile-parity.summary.json`; `build/conformance/adapter_iso_profile-parity-*.json` | CORE/FREESTANDING/EMBEDDED_ROUTER/HFT/AUTOMOTIVE semantic digest drift or adapter-isomorphism failure. Treat resource-plane profile tuning as suspect until parity is green. |
+| Differential fuzz smoke | `make fuzz-smoke` | JSONL summary on stdout by default; durable corpus replay reports under `build/fuzz/counterexamples/*/fuzz_counterexample_replay_report.json` | Crash, determinism failure, or Rust-vs-C divergence. Preserve the seed/input and use `make fuzz-run FUZZ_ARGS="--seed <seed> --iterations <n> --report build/fuzz/repro.jsonl"`. |
+| Formal and memory model | `make formal-check` | Formal binaries under `build/tests/formal/*`; codegen stability output from `tools/ci/check_codegen_stability.sh` | State-machine, algebraic, litmus, or optimization-stability proof failed. For parallel memory-model failures, start with `make formal-litmus`. |
+| Embedded portability | `make embedded-portability-proof` | `build/embedded-portability/*/embedded_portability_proof.json`; `.jsonl`; full matrix rows under `tools/ci/artifacts/embedded/*.jsonl`; QEMU rows under `tools/ci/artifacts/qemu/*.jsonl` | Constrained profile, resource-class, alignment, optional 32-bit, cross-toolchain, QEMU, or profile-parity linkage failed. Unsupported optional lanes must name the missing toolchain. |
+| Benchmark and SLO | `make slo-gate`; `make parallel-bench-gate` | `build/perf/bench-results.json`; `build/perf/slo_gate_report.json`; `build/perf/parallel-bench-results.json`; `build/perf/parallel-bench-gate-summary.json` | Missing/stale baseline metadata, command/profile mismatch, p99/p99.9/jitter/deadline regression, or PARALLEL worker-count block. Resource-plane warnings do not justify semantic changes. |
+| Release evidence manifest | `make release-evidence-manifest` | `build/ci-manifests/release_evidence_manifest.json`; `build/ci-manifests/release_evidence_report.json`; `build/ci-manifests/release_evidence_manifest.records.jsonl` | Required artifact missing, digest mismatch, artifact status is failure, or artifact commit does not match current `HEAD`. Re-run the source lane, not the manifest, when the underlying artifact is bad. |
+| Release artifact and install smoke | `make release-artifacts RELEASE_VERSION=<x.y.z> RELEASE_TARGET=linux-x86_64`; `make release-install-smoke RELEASE_INSTALL_SMOKE_VERSION=<x.y.z> RELEASE_INSTALL_SMOKE_TARGET=linux-x86_64` | `build/release/dist/asx-*.tar.xz`; `.sha256`; `.sigstore.json`; `.provenance.json`; `build/release/install-smoke/*/release_install_smoke_report.json` | Packaging, checksum/provenance, extraction, installed header/library layout, or README quickstart drift. Do not publish partial asset sets. |
+| Wave C acceptance | `make wave-c-acceptance-demo` | `build/e2e-artifacts/wave-c-acceptance-*/wave_c_acceptance.summary.json`; config, expected-output, rerun, unsupported-platform, parallel incident, and benchmark files in the same directory | Native adapter, static arena, networking, combinator/actor, incident replay, or overload evidence is missing, failing, or counting unsupported live behavior as pass instead of fail-closed. |
+| Wave D acceptance | `make release-evidence-manifest`; then targeted Wave D gates above | `build/ci-manifests/release_evidence_report.json`; Wave D source artifacts from resource pressure, fuzz replay, embedded portability, benchmark/SLO, parallel parity, and install smoke lanes | Operator-proof release hardening is incomplete. Use the failed manifest record's `lane`, `command`, and `artifact.path` to jump to the source gate. |
+
+Escalation rules:
+
+1. If `release-evidence-manifest` fails because an artifact is missing, run the
+   source lane named in the manifest record.
+2. If an artifact exists but reports failure, inspect that artifact's
+   `diagnostic`, `diff_file`, `summary`, or first-failure log before rerunning.
+3. If a benchmark/SLO lane warns, keep it resource-plane unless
+   `profile-parity` or `conformance` also reports semantic drift.
+4. If a lane mentions unsupported platform/toolchain, verify the unsupported
+   record is explicit; silent skips are not release evidence.
+5. Use `main` as the workflow branch when checking CI, release tags, and
+   provenance metadata.
+
+## 4. E2E Gate IDs
 
 E2E gates are assigned by `tests/e2e/run_all.sh` and map to deployment hardening
 scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
@@ -441,7 +477,7 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | `GATE-E2E-DEPLOY-AUTO` | `automotive_fault_burst.sh` | AUTOMOTIVE |
 | `GATE-E2E-PACKAGE` | `openwrt_package.sh` | EMBEDDED_ROUTER |
 
-## 4. Aggregation Targets
+## 5. Aggregation Targets
 
 | Target | Scope | Gates Included |
 |--------|-------|----------------|
@@ -454,7 +490,7 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | `make embedded-portability-proof` | Capture compact EMBEDDED_ROUTER/R1 portability proof with deterministic digest, resource caps, optional 32-bit evidence, and profile-parity linkage | GATE-EMBEDDED-PORTABILITY |
 | `make wave-c-acceptance-demo` | Capture the user-facing Wave C acceptance bundle with replay, profile, benchmark, incident, and fail-closed evidence | GATE-E2E-WAVE-C-ACCEPTANCE, GATE-OVERLOAD-SLO-DEMO |
 
-## 5. CI Workflow Jobs
+## 6. CI Workflow Jobs
 
 From `.github/workflows/ci.yml`:
 
@@ -481,7 +517,7 @@ From `.github/workflows/release.yml`:
 |-----|---------|-------------|----------|
 | `release-artifacts` | push tag `v*` | — | Yes |
 
-## 6. Enforcement Rules
+## 7. Enforcement Rules
 
 Per `docs/WAVE_GATING_PROTOCOL.md`:
 
@@ -494,7 +530,7 @@ Per `docs/WAVE_GATING_PROTOCOL.md`:
    - Deferred surface started without `DS-*` registration
    - Decision-dependent work missing `DEC-*` linkage
 
-## 7. Known Gaps
+## 8. Known Gaps
 
 | Gap | Status | Tracking |
 |-----|--------|----------|
@@ -503,7 +539,7 @@ Per `docs/WAVE_GATING_PROTOCOL.md`:
 | Real-device smoke run for embedded | Manual | One device smoke required before milestone closure per plan |
 | Machine-readable traceability export | Done | `make traceability-export` generates `build/traceability/traceability_index.json` (bd-3gn) |
 
-## 8. Cross-References
+## 9. Cross-References
 
 | Document | Relationship |
 |----------|-------------|
