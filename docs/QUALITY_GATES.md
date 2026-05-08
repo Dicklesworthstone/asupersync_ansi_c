@@ -153,6 +153,70 @@ Nine mandatory gates from plan section 10.6, plus release artifact integrity and
 | **Rerun** | `make release-artifacts RELEASE_VERSION=<x.y.z> RELEASE_TARGET=linux-x86_64`, `make release-artifacts RELEASE_VERSION=<x.y.z> RELEASE_TARGET=source RELEASE_KIND=source` |
 | **Failure action** | Fix packaging/integrity generation before publishing; do not release partial asset sets. |
 
+### 1.11 Unified Release Evidence Manifest Gate
+
+| Field | Value |
+|-------|-------|
+| **Gate ID** | `GATE-RELEASE-EVIDENCE-MANIFEST` |
+| **Plan ref** | `bd-dq94.2` |
+| **Makefile targets** | `release-evidence-manifest` |
+| **CI job** | `release-readiness` / release candidate validation |
+| **Scripts** | `tools/ci/generate_release_evidence_manifest.sh` |
+| **Artifacts** | `build/ci-manifests/release_evidence_manifest.json`, `build/ci-manifests/release_evidence_report.json`, `build/ci-manifests/release_evidence_manifest.records.jsonl` |
+| **Pass criteria** | Required release evidence artifacts exist, each referenced artifact's SHA-256 digest is recomputed and verified, artifact failure statuses fail the gate, and any artifact commit metadata must match current `HEAD`. Optional lanes that do not emit persistent artifacts are recorded as warnings, not silent omissions. |
+| **Rerun** | `make release-evidence-manifest` |
+| **Failure action** | Re-run the missing quality gate to produce fresh evidence, fix failing artifacts at their source gate, or regenerate stale artifacts from current `HEAD`. |
+
+Manifest shape:
+
+```json
+{
+  "schema": "asx.release_evidence_manifest.v1",
+  "run_id": "release-evidence-<timestamp>",
+  "generated_at": "2026-05-08T00:00:00Z",
+  "status": "pass|warn|fail",
+  "git": { "commit": "<head>", "branch": "main" },
+  "tools": { "cc": "...", "make": "...", "jq": "..." },
+  "policy": {
+    "required_artifacts_fail_closed": true,
+    "digest_verification_required": true,
+    "stale_commit_metadata_fails": true,
+    "optional_missing_artifacts_warn": true
+  },
+  "summary": {
+    "total": 13,
+    "required_total": 6,
+    "passed": 8,
+    "failed": 0,
+    "warnings": 5
+  },
+  "artifacts": [
+    {
+      "lane": "conformance",
+      "gate_id": "GATE-CONFORMANCE",
+      "command": "make conformance",
+      "required": true,
+      "artifact": {
+        "path": "tools/ci/artifacts/conformance/...",
+        "sha256": "...",
+        "bytes": 1234,
+        "digest_verified": true
+      },
+      "evidence": {
+        "run_id": "conformance-...",
+        "profile": "CORE",
+        "artifact_status": "pass",
+        "artifact_commit": null
+      },
+      "validation": {
+        "status": "pass",
+        "diagnostic": "artifact exists and digest verified"
+      }
+    }
+  ]
+}
+```
+
 ## 2. Supplementary Enforcement Gates
 
 These gates support the 9 mandatory gates above with additional static analysis
@@ -171,6 +235,7 @@ and documentation enforcement.
 | `GATE-INVARIANT` | `test-invariants` | `unit-invariant` | (compiled test binaries) | Lifecycle/quiescence invariants |
 | `GATE-CONFORMANCE` | `conformance` | `conformance` | `tools/ci/run_conformance.sh` | Rust fixture parity |
 | `GATE-CODEC` | `codec-equivalence` | `conformance` | `tools/ci/run_codec_equivalence.sh` | JSON/BIN codec equivalence |
+| `GATE-RELEASE-EVIDENCE-MANIFEST` | `release-evidence-manifest` | `release-readiness` | `tools/ci/generate_release_evidence_manifest.sh` | Unified release evidence index with digest and stale-commit validation |
 | `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `check` | `tests/formal/litmus/test_memory_model_litmus.c`, `tools/ci/check_codegen_stability.sh` | Parallel-runtime atomic publication, queue ownership, seqlock/EBR, trace-ordering, and bounded scheduler proofs |
 | `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `tools/ci/run_parallel_parity.sh` | Single-vs-multi-worker semantic digest and event-summary parity |
 | `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json`, `parallel-bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `tests/unit/runtime/test_parallel.c`, `tools/ci/run_parallel_parity.sh`, `tests/bench/bench_runtime.c` | Large-swarm pressure telemetry, admission evidence, worker-count baselines, locality metadata, and benchmark JSON artifacts |

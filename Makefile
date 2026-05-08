@@ -1384,7 +1384,7 @@ parallel-bench-gate:
 		exit 1; \
 	fi
 
-.PHONY: slo-gate size-gate evidence-dashboard traceability-export
+.PHONY: slo-gate size-gate evidence-dashboard traceability-export release-evidence-manifest
 slo-gate: bench-build
 	@echo "[asx] slo-gate: capturing benchmark and evaluating SLO baselines..."
 	@mkdir -p build/perf
@@ -1426,6 +1426,14 @@ check-evidence-bundle:
 	@echo "[asx] check-evidence-bundle: validating evidence completeness..."
 	@tools/ci/check_evidence_bundle.sh --strict
 	@echo "[asx] check-evidence-bundle: complete"
+
+# ---------------------------------------------------------------------------
+# release-evidence-manifest — unified release evidence manifest (bd-dq94.2)
+# ---------------------------------------------------------------------------
+release-evidence-manifest:
+	@echo "[asx] release-evidence-manifest: generating unified release evidence manifest..."
+	@tools/ci/generate_release_evidence_manifest.sh --strict
+	@echo "[asx] release-evidence-manifest: complete"
 
 # ---------------------------------------------------------------------------
 # conformance — Rust fixture parity verification
@@ -1836,6 +1844,7 @@ help:
 	@echo "  bench-json         Benchmarks (JSON-only to stdout)"
 	@echo "  parallel-bench-json PARALLEL worker-count baseline JSON"
 	@echo "  parallel-bench-gate Capture PARALLEL baseline JSON and observe-only warnings"
+	@echo "  release-evidence-manifest Generate unified release evidence manifest"
 	@echo "  release            Optimized production build"
 	@echo "  release-artifacts  Build release tar.xz + checksum/signature/provenance bundles"
 	@echo "  install            Install to PREFIX (default /usr/local)"
