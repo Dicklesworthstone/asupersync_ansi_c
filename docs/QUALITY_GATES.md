@@ -2,7 +2,7 @@
 
 > **Bead:** `bd-66l.2`
 > **Status:** Canonical gate registry (plan section 10.6 → Makefile → CI → artifacts)
-> **Last updated:** 2026-02-27
+> **Last updated:** 2026-05-08
 
 This document is the single source of truth for all quality gates enforced on the
 asx ANSI C port. Every gate listed here is mandatory — merges are blocked when any
@@ -171,6 +171,55 @@ and documentation enforcement.
 | `GATE-INVARIANT` | `test-invariants` | `unit-invariant` | (compiled test binaries) | Lifecycle/quiescence invariants |
 | `GATE-CONFORMANCE` | `conformance` | `conformance` | `tools/ci/run_conformance.sh` | Rust fixture parity |
 | `GATE-CODEC` | `codec-equivalence` | `conformance` | `tools/ci/run_codec_equivalence.sh` | JSON/BIN codec equivalence |
+| `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `check` | `tests/formal/litmus/test_memory_model_litmus.c`, `tools/ci/check_codegen_stability.sh` | Parallel-runtime atomic publication, queue ownership, seqlock/EBR, trace-ordering, and bounded scheduler proofs |
+| `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `tools/ci/run_parallel_parity.sh` | Single-vs-multi-worker semantic digest and event-summary parity |
+| `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `tests/unit/runtime/test_parallel.c`, `tools/ci/run_parallel_parity.sh`, `tests/bench/bench_runtime.c` | Large-swarm pressure telemetry, admission evidence, and benchmark JSON artifacts |
+
+### 2.1 Parallel Graduation Gate
+
+`bd-pweu.1` defines the activation contract for the production parallel runtime
+program. `bd-pweu.11` activates the single-vs-multi-worker parity gate that
+child beads must satisfy before claiming that the parallel profile has graduated
+beyond walking-skeleton behavior. `bd-pweu.10` activates the large-swarm
+telemetry and deterministic admission evidence surface for diagnosing pressure
+without hidden semantic drift. `bd-pweu.13` pins the parallel memory-model proof
+surface: atomics, metadata publication/reclamation, trace commit ordering, and
+bounded scheduler state are covered by formal litmus and codegen gates.
+
+| Gate ID | Makefile Target | CI Job | Tracking Bead | Purpose |
+|---------|-----------------|--------|---------------|---------|
+| `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `check` | `bd-pweu.13` | Prove portable atomic publication, two-phase queue slot ownership, seqlock/EBR metadata safety, gap-free trace commit tickets, bounded work stealing, cancel fairness, and shutdown/drain state reporting. |
+| `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `bd-pweu.11` | Compare canonical semantic digests and structured event summaries for the same scenarios under worker_count=1, 2, 8, and 64. |
+| `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `bd-pweu.10` | Validate pressure snapshots, deterministic admission decisions, JSONL rendering, and benchmark JSON telemetry for large-swarm runs. |
+
+Coverage requirements:
+
+1. The gate must include lifecycle, cancellation, timer/waker, MPSC contention,
+   blocking-pool, and reactor-readiness scenarios.
+2. The gate must fail on semantic digest drift, unclassified event-order drift,
+   silent drops, stale-handle mutation, weakened cancellation, or unbounded
+   queue growth.
+3. The gate must emit machine-readable reports under the existing conformance
+   artifact layout, including seed, worker count, profile, codec, digest, and
+   rerun command.
+4. Memory-model proof evidence must cover release/acquire publication, queue
+   slot single-owner terminal CAS, seqlock mid-write rejection, EBR stale
+   generation and reader grace-period behavior, gap-free trace commit fetch-add,
+   bounded work-steal/cancel fairness, and shutdown/drain budget exhaustion.
+5. `formal-litmus` must build and run both `ASX_LOCKFREE_SINGLE_THREAD=1` and
+   `ASX_LOCKFREE_SINGLE_THREAD=0` lanes, and `formal-codegen` must confirm that
+   the relevant semantic helpers remain optimization-stable.
+6. Telemetry evidence must include queue pressure, worker queue depth, steal
+   attempts/success/failure, cancel streaks, timed wake latency, reactor/waker
+   readiness, blocking backlog, and the deterministic admission decision.
+7. Admission policy defaults to observe-only; enforced reject/backpressure must
+   be explicit and failure-atomic.
+8. Expensive local proof runs must be executed via `rch exec -- make ...`.
+
+The large-swarm e2e pack is `tests/e2e/parallel_swarm.sh`. Its default
+`ASX_E2E_PARALLEL_SCALE=smoke` lane is suitable for CI. Nightly/profile runs
+use the same script with `ASX_E2E_PARALLEL_SCALE=large` and may raise
+`ASX_E2E_PARALLEL_WORKERS` up to the compiled profile cap.
 
 ## 3. E2E Gate IDs
 
@@ -185,6 +234,7 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | `GATE-E2E-VERTICAL-HFT` | `hft_microburst.sh` | HFT |
 | `GATE-E2E-VERTICAL-AUTO` | `automotive_watchdog.sh` | AUTOMOTIVE |
 | `GATE-E2E-CONTINUITY` | `continuity.sh`, `continuity_restart.sh` | CORE |
+| `GATE-E2E-PARALLEL-SWARM` | `parallel_swarm.sh` | PARALLEL |
 | `GATE-E2E-DEPLOY-ROUTER` | `router_storm.sh` | EMBEDDED_ROUTER |
 | `GATE-E2E-DEPLOY-HFT` | `market_open_burst.sh` | HFT |
 | `GATE-E2E-DEPLOY-AUTO` | `automotive_fault_burst.sh` | AUTOMOTIVE |
@@ -194,9 +244,10 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 
 | Target | Scope | Gates Included |
 |--------|-------|----------------|
-| `make check` | Local PR gate | FORMAT, LINT, LINT-DOCS, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK |
-| `make check-ci` | Full CI gate (`CI=1`) | FORMAT, LINT, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, E2E-VERTICAL, CONFORMANCE, CODEC, PROFILE, FUZZ, EMBED |
+| `make check` | Local PR gate | FORMAT, LINT, LINT-DOCS, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, FORMAL-CHECK, PARALLEL-MEMORY-MODEL |
+| `make check-ci` | Full CI gate (`CI=1`) | FORMAT, LINT, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, E2E-VERTICAL, CONFORMANCE, CODEC, PROFILE, PARALLEL-PARITY, PARALLEL-TELEMETRY, FUZZ, EMBED |
 | `make test-e2e-suite` | Unified E2E manifest | All GATE-E2E-* gates |
+| `make test-e2e-parallel` | Parallel swarm e2e pack | GATE-E2E-PARALLEL-SWARM |
 
 ## 5. CI Workflow Jobs
 

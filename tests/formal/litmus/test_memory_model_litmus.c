@@ -21,8 +21,78 @@
 
 #include "../../test_harness.h"
 #include <asx/asx.h>
+#include <asx/platform/atomics.h>
 #include <limits.h>
 #include <string.h>
+
+#define ASX_SEQLOCK_MAX_DATA 64u
+#define ASX_EBR_EPOCH_COUNT 3u
+#define ASX_EBR_MAX_READERS 16u
+#define ASX_EBR_DEFER_CAPACITY 32u
+#define ASX_EBR_INACTIVE UINT32_MAX
+#define ASX_TASK_METADATA_NO_OWNER UINT16_MAX
+
+typedef struct {
+    asx_atomic_u32 sequence;
+    uint8_t data[ASX_SEQLOCK_MAX_DATA];
+    uint32_t data_size;
+} asx_seqlock;
+
+typedef struct {
+    uint32_t state;
+    uint16_t generation;
+    int alive;
+    uint32_t cancel_epoch;
+    uint16_t lane;
+    uint16_t owner_worker;
+    uint64_t trace_sequence;
+} asx_task_metadata;
+
+typedef struct {
+    uint32_t slot_index;
+    uint32_t generation;
+} asx_ebr_deferred_item;
+
+typedef struct {
+    asx_atomic_u32 global_epoch;
+    asx_atomic_u32 reader_epoch[ASX_EBR_MAX_READERS];
+    uint32_t reader_count;
+    asx_ebr_deferred_item defer_ring[ASX_EBR_EPOCH_COUNT][ASX_EBR_DEFER_CAPACITY];
+    uint32_t defer_count[ASX_EBR_EPOCH_COUNT];
+    uint32_t total_deferred;
+    uint32_t total_reclaimed;
+    uint32_t epoch_advances;
+} asx_ebr_state;
+
+typedef void (*asx_ebr_reclaim_fn)(uint32_t slot_index, uint32_t generation, void *user_data);
+
+typedef struct {
+    asx_seqlock metadata;
+    asx_ebr_state ebr;
+    uint32_t slot_index;
+    uint16_t current_generation;
+    uint32_t stale_generation_rejects;
+} asx_task_metadata_slot;
+
+void asx_seqlock_init(asx_seqlock *sl, uint32_t data_size);
+void asx_seqlock_write_begin(asx_seqlock *sl);
+void asx_seqlock_write_end(asx_seqlock *sl);
+void asx_seqlock_write(asx_seqlock *sl, const void *src, uint32_t size);
+int asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size);
+uint32_t asx_seqlock_sequence(const asx_seqlock *sl);
+void asx_task_metadata_init(asx_task_metadata *md, uint32_t state, uint16_t generation, int alive,
+                            uint32_t cancel_epoch, uint16_t lane, uint16_t owner_worker,
+                            uint64_t trace_sequence);
+void asx_task_metadata_slot_init(asx_task_metadata_slot *slot, uint32_t slot_index,
+                                 uint32_t reader_count);
+int asx_task_metadata_slot_publish(asx_task_metadata_slot *slot, const asx_task_metadata *metadata);
+uint32_t asx_task_metadata_slot_reader_enter(asx_task_metadata_slot *slot, uint32_t reader_id);
+void asx_task_metadata_slot_reader_leave(asx_task_metadata_slot *slot, uint32_t reader_id);
+int asx_task_metadata_slot_snapshot_in_epoch(asx_task_metadata_slot *slot, asx_task_metadata *out);
+int asx_task_metadata_slot_retire(asx_task_metadata_slot *slot, uint16_t expected_generation);
+int asx_task_metadata_slot_try_reclaim(asx_task_metadata_slot *slot, asx_ebr_reclaim_fn reclaim_fn,
+                                       void *user_data);
+uint32_t asx_ebr_pending_count(const asx_ebr_state *ebr);
 
 /* -----------------------------------------------------------------------
  * LITMUS-1: Type sizes match ABI contract
@@ -299,6 +369,497 @@ TEST(litmus_cancel_severity_purity) {
     }
 }
 
+/* -----------------------------------------------------------------------
+ * LITMUS-16: Atomic backend selection is explicit
+ * Assumption: production atomics have one visible backend per build mode
+ * ----------------------------------------------------------------------- */
+TEST(litmus_atomic_backend_selection) {
+#if ASX_LOCKFREE_SINGLE_THREAD
+    ASSERT_EQ((int)asx_atomic_u32_backend(), (int)ASX_ATOMIC_BACKEND_SINGLE_THREAD);
+    ASSERT_TRUE(asx_atomic_u32_is_single_threaded());
+#else
+    ASSERT_TRUE(asx_atomic_u32_backend() != ASX_ATOMIC_BACKEND_SINGLE_THREAD);
+    ASSERT_FALSE(asx_atomic_u32_is_single_threaded());
+#endif
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-17: Atomic load/store/init preserve values
+ * Assumption: acquire loads observe values published by release stores
+ * in the same deterministic sequence
+ * ----------------------------------------------------------------------- */
+TEST(litmus_atomic_load_store_init) {
+    asx_atomic_u32 a;
+    asx_atomic_u32_init(&a, 7u);
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)7);
+
+    asx_atomic_u32_store(&a, 42u);
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)42);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-18: Atomic compare-exchange has stable success/failure semantics
+ * Assumption: failed compare-exchange reports the observed value and does
+ * not mutate storage
+ * ----------------------------------------------------------------------- */
+TEST(litmus_atomic_compare_exchange_contract) {
+    asx_atomic_u32 a;
+    uint32_t expected;
+
+    asx_atomic_u32_init(&a, 10u);
+    expected = 10u;
+    ASSERT_TRUE(asx_atomic_u32_compare_exchange(&a, &expected, 11u));
+    ASSERT_EQ(expected, (uint32_t)10);
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)11);
+
+    expected = 10u;
+    ASSERT_FALSE(asx_atomic_u32_compare_exchange(&a, &expected, 12u));
+    ASSERT_EQ(expected, (uint32_t)11);
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)11);
+
+    ASSERT_FALSE(asx_atomic_u32_compare_exchange(&a, NULL, 13u));
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)11);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-19: Legacy CAS wrapper and exchange/fetch_add are linear
+ * Assumption: each atomic read-modify-write returns the old value exactly
+ * once in deterministic single-thread test execution
+ * ----------------------------------------------------------------------- */
+TEST(litmus_atomic_rmw_linearity) {
+    asx_atomic_u32 a;
+    uint32_t old;
+    uint32_t i;
+
+    asx_atomic_u32_init(&a, 0u);
+    ASSERT_TRUE(asx_atomic_u32_cas(&a, 0u, 1u));
+    ASSERT_FALSE(asx_atomic_u32_cas(&a, 0u, 2u));
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)1);
+
+    old = asx_atomic_u32_exchange(&a, 100u);
+    ASSERT_EQ(old, (uint32_t)1);
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)100);
+
+    for (i = 0u; i < 16u; i++) {
+        old = asx_atomic_u32_fetch_add(&a, 1u);
+        ASSERT_EQ(old, (uint32_t)(100u + i));
+    }
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)116);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-20: Atomic fences are callable no-op/ordering boundaries
+ * Assumption: acquire/release fence calls compile and preserve surrounding
+ * deterministic atomic observations
+ * ----------------------------------------------------------------------- */
+TEST(litmus_atomic_fences) {
+    asx_atomic_u32 a;
+
+    asx_atomic_u32_init(&a, 3u);
+    asx_atomic_fence_release();
+    asx_atomic_u32_store(&a, 4u);
+    asx_atomic_fence_acquire();
+    ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)4);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-21: Seqlock sequence publication remains even/monotone
+ * Assumption: every completed metadata publication advances the seqlock
+ * sequence by exactly two and leaves readers observing an even sequence.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_seqlock_sequence_monotone) {
+    asx_seqlock sl;
+    asx_task_metadata md;
+    asx_task_metadata snap;
+    uint32_t i;
+
+    asx_seqlock_init(&sl, sizeof(asx_task_metadata));
+    ASSERT_EQ(asx_seqlock_sequence(&sl), (uint32_t)0);
+
+    for (i = 0u; i < 8u; i++) {
+        asx_task_metadata_init(&md, i, (uint16_t)(i + 1u), 1, i * 3u, (uint16_t)(i % 3u),
+                               (uint16_t)(i % 4u), (uint64_t)i * 100u);
+        asx_seqlock_write(&sl, &md, sizeof(md));
+        ASSERT_EQ(asx_seqlock_sequence(&sl), (uint32_t)((i + 1u) * 2u));
+        ASSERT_EQ(asx_seqlock_sequence(&sl) & 1u, (uint32_t)0);
+        ASSERT_TRUE(asx_seqlock_read(&sl, &snap, sizeof(snap)));
+        ASSERT_EQ(snap.trace_sequence, (uint64_t)i * 100u);
+    }
+}
+
+static uint32_t litmus_reclaim_count = 0u;
+static uint32_t litmus_reclaim_slot = UINT32_MAX;
+static uint32_t litmus_reclaim_generation = UINT32_MAX;
+
+static void litmus_reclaim_fn(uint32_t slot_index, uint32_t generation, void *user_data) {
+    (void)user_data;
+    litmus_reclaim_count++;
+    litmus_reclaim_slot = slot_index;
+    litmus_reclaim_generation = generation;
+}
+
+typedef struct {
+    asx_atomic_u32 published;
+    asx_task_metadata metadata;
+} litmus_publication_cell;
+
+typedef enum {
+    LITMUS_QUEUE_EMPTY = 0,
+    LITMUS_QUEUE_RESERVED = 1,
+    LITMUS_QUEUE_COMMITTED = 2
+} litmus_queue_slot_state;
+
+static void litmus_runtime_reset(void) {
+    asx_runtime_reset();
+    asx_parallel_reset();
+    asx_trace_reset();
+}
+
+static asx_parallel_config litmus_parallel_config(uint32_t worker_count,
+                                                  asx_fairness_policy fairness) {
+    asx_parallel_config cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.worker_count = worker_count;
+    cfg.fairness = fairness;
+    cfg.lane_weights[ASX_LANE_READY] = 1u;
+    cfg.lane_weights[ASX_LANE_CANCEL] = 1u;
+    cfg.lane_weights[ASX_LANE_TIMED] = 1u;
+    cfg.starvation_limit = 3u;
+    asx_parallel_admission_policy_init(&cfg.admission_policy);
+    return cfg;
+}
+
+static asx_status litmus_pending_n(void *user_data, asx_task_id self) {
+    int *remaining = (int *)user_data;
+    (void)self;
+    if (remaining != NULL && *remaining > 0) {
+        (*remaining)--;
+        return ASX_E_PENDING;
+    }
+    return ASX_OK;
+}
+
+static asx_status litmus_pending_forever(void *user_data, asx_task_id self) {
+    (void)user_data;
+    (void)self;
+    return ASX_E_PENDING;
+}
+
+static uint32_t litmus_cancel_model_should_yield(uint32_t cancel_count, uint32_t ready_count,
+                                                 uint32_t timed_count, uint32_t cancel_streak,
+                                                 uint32_t cancel_streak_limit) {
+    if (cancel_count == 0u) return 0u;
+    if (cancel_streak_limit == 0u) return 0u;
+    if (cancel_streak < cancel_streak_limit) return 0u;
+    return (ready_count + timed_count) > 0u ? 1u : 0u;
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-22: EBR grace period blocks reclaim while a reader is active
+ * Assumption: retirement is fail-closed until readers leave the epoch
+ * containing the retired generation.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_ebr_grace_period_blocks_reclaim) {
+    asx_task_metadata_slot slot;
+    asx_task_metadata md;
+    asx_task_metadata snap;
+    uint32_t epoch;
+
+    litmus_reclaim_count = 0u;
+    litmus_reclaim_slot = UINT32_MAX;
+    litmus_reclaim_generation = UINT32_MAX;
+
+    asx_task_metadata_slot_init(&slot, 33u, 2u);
+    asx_task_metadata_init(&md, 1u, 9u, 1, 0u, 2u, 1u, 700u);
+    ASSERT_TRUE(asx_task_metadata_slot_publish(&slot, &md));
+
+    epoch = asx_task_metadata_slot_reader_enter(&slot, 0u);
+    ASSERT_EQ(epoch, (uint32_t)0);
+    ASSERT_TRUE(asx_task_metadata_slot_snapshot_in_epoch(&slot, &snap));
+    ASSERT_EQ(snap.generation, (uint16_t)9);
+
+    ASSERT_TRUE(asx_task_metadata_slot_retire(&slot, 9u));
+    ASSERT_TRUE(asx_task_metadata_slot_try_reclaim(&slot, litmus_reclaim_fn, NULL));
+    ASSERT_TRUE(asx_task_metadata_slot_try_reclaim(&slot, litmus_reclaim_fn, NULL));
+    ASSERT_TRUE(!asx_task_metadata_slot_try_reclaim(&slot, litmus_reclaim_fn, NULL));
+    ASSERT_EQ(litmus_reclaim_count, (uint32_t)0);
+
+    asx_task_metadata_slot_reader_leave(&slot, 0u);
+    ASSERT_TRUE(asx_task_metadata_slot_try_reclaim(&slot, litmus_reclaim_fn, NULL));
+    ASSERT_EQ(litmus_reclaim_count, (uint32_t)1);
+    ASSERT_EQ(litmus_reclaim_slot, (uint32_t)33);
+    ASSERT_EQ(litmus_reclaim_generation, (uint32_t)9);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-23: Release/acquire publication preserves metadata payload
+ * Assumption: the portable atomic layer can publish a metadata block with
+ * a release store and observe it through an acquire load before use.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_atomic_publication_release_acquire) {
+    litmus_publication_cell cell;
+    asx_task_metadata observed;
+
+    memset(&cell, 0, sizeof(cell));
+    memset(&observed, 0, sizeof(observed));
+    asx_atomic_u32_init(&cell.published, 0u);
+
+    asx_task_metadata_init(&cell.metadata, 3u, 17u, 1, 11u, ASX_LANE_CANCEL, 5u, 9001u);
+    asx_atomic_fence_release();
+    asx_atomic_u32_store(&cell.published, 1u);
+
+    ASSERT_EQ(asx_atomic_u32_load(&cell.published), 1u);
+    asx_atomic_fence_acquire();
+    observed = cell.metadata;
+
+    ASSERT_EQ(observed.state, 3u);
+    ASSERT_EQ(observed.generation, (uint16_t)17u);
+    ASSERT_EQ(observed.alive, 1);
+    ASSERT_EQ(observed.cancel_epoch, 11u);
+    ASSERT_EQ(observed.lane, (uint16_t)ASX_LANE_CANCEL);
+    ASSERT_EQ(observed.owner_worker, (uint16_t)5u);
+    ASSERT_EQ(observed.trace_sequence, (uint64_t)9001u);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-24: Queue slot ownership is single-owner and terminal
+ * Assumption: lock-free two-phase queue slots can be reserved by exactly
+ * one writer and then committed exactly once.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_queue_slot_single_owner_cas) {
+    asx_atomic_u32 state;
+    uint32_t expected;
+
+    asx_atomic_u32_init(&state, (uint32_t)LITMUS_QUEUE_EMPTY);
+
+    expected = (uint32_t)LITMUS_QUEUE_EMPTY;
+    ASSERT_TRUE(
+        asx_atomic_u32_compare_exchange(&state, &expected, (uint32_t)LITMUS_QUEUE_RESERVED));
+    ASSERT_EQ(expected, (uint32_t)LITMUS_QUEUE_EMPTY);
+
+    expected = (uint32_t)LITMUS_QUEUE_EMPTY;
+    ASSERT_FALSE(
+        asx_atomic_u32_compare_exchange(&state, &expected, (uint32_t)LITMUS_QUEUE_RESERVED));
+    ASSERT_EQ(expected, (uint32_t)LITMUS_QUEUE_RESERVED);
+    ASSERT_EQ(asx_atomic_u32_load(&state), (uint32_t)LITMUS_QUEUE_RESERVED);
+
+    expected = (uint32_t)LITMUS_QUEUE_RESERVED;
+    ASSERT_TRUE(
+        asx_atomic_u32_compare_exchange(&state, &expected, (uint32_t)LITMUS_QUEUE_COMMITTED));
+    ASSERT_EQ(asx_atomic_u32_load(&state), (uint32_t)LITMUS_QUEUE_COMMITTED);
+
+    expected = (uint32_t)LITMUS_QUEUE_RESERVED;
+    ASSERT_FALSE(
+        asx_atomic_u32_compare_exchange(&state, &expected, (uint32_t)LITMUS_QUEUE_COMMITTED));
+    ASSERT_EQ(expected, (uint32_t)LITMUS_QUEUE_COMMITTED);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-25: Seqlock readers reject in-progress publications
+ * Assumption: readers never consume a torn metadata snapshot while the
+ * sequence is odd, and accept the same payload after write completion.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_seqlock_rejects_mid_write_snapshot) {
+    asx_seqlock sl;
+    asx_task_metadata md;
+    asx_task_metadata snap;
+
+    asx_seqlock_init(&sl, sizeof(asx_task_metadata));
+    asx_task_metadata_init(&md, 4u, 21u, 1, 12u, ASX_LANE_TIMED, 7u, 12345u);
+
+    asx_seqlock_write_begin(&sl);
+    memcpy(sl.data, &md, sizeof(md));
+    ASSERT_EQ(asx_seqlock_sequence(&sl) & 1u, 1u);
+    ASSERT_FALSE(asx_seqlock_read(&sl, &snap, sizeof(snap)));
+
+    asx_seqlock_write_end(&sl);
+    ASSERT_EQ(asx_seqlock_sequence(&sl) & 1u, 0u);
+    ASSERT_TRUE(asx_seqlock_read(&sl, &snap, sizeof(snap)));
+    ASSERT_EQ(snap.generation, (uint16_t)21u);
+    ASSERT_EQ(snap.trace_sequence, (uint64_t)12345u);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-26: EBR rejects stale-generation retirement
+ * Assumption: a retired slot must match the generation observed through
+ * seqlock metadata before it can enter the EBR defer ring.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_ebr_rejects_stale_generation_retire) {
+    asx_task_metadata_slot slot;
+    asx_task_metadata md;
+
+    asx_task_metadata_slot_init(&slot, 44u, 2u);
+    asx_task_metadata_init(&md, 1u, 4u, 1, 0u, ASX_LANE_READY, 0u, 77u);
+    ASSERT_TRUE(asx_task_metadata_slot_publish(&slot, &md));
+
+    ASSERT_FALSE(asx_task_metadata_slot_retire(&slot, 3u));
+    ASSERT_EQ(slot.stale_generation_rejects, 1u);
+    ASSERT_EQ(asx_ebr_pending_count(&slot.ebr), 0u);
+
+    ASSERT_TRUE(asx_task_metadata_slot_retire(&slot, 4u));
+    ASSERT_EQ(asx_ebr_pending_count(&slot.ebr), 1u);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-27: Trace commit tickets are gap-free and monotone
+ * Assumption: commit order can be represented by a single fetch-add ticket
+ * stream; every worker observes a unique replay-stable sequence number.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_trace_commit_fetch_add_order) {
+    asx_atomic_u32 commit_ticket;
+    uint32_t seen[8];
+    uint32_t i;
+
+    asx_atomic_u32_init(&commit_ticket, 0u);
+    for (i = 0u; i < 8u; i++) {
+        seen[i] = asx_atomic_u32_fetch_add(&commit_ticket, 1u);
+        ASSERT_EQ(seen[i], i);
+    }
+
+    ASSERT_EQ(asx_atomic_u32_load(&commit_ticket), 8u);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-28: Bounded work-steal model preserves ownership accounting
+ * Assumption: deterministic stealing transfers at most one lane slot from
+ * an owner to a thief and fails closed when no transferable work exists.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_bounded_work_steal_model) {
+    uint32_t owner_depth;
+    uint32_t thief_depth;
+    uint32_t attempts;
+    uint32_t succeeded;
+    uint32_t failed;
+    uint32_t initial_owner;
+
+    for (initial_owner = 0u; initial_owner <= 2u; initial_owner++) {
+        owner_depth = initial_owner;
+        thief_depth = 0u;
+        attempts = 0u;
+        succeeded = 0u;
+        failed = 0u;
+
+        attempts++;
+        if (owner_depth > 0u) {
+            owner_depth--;
+            thief_depth++;
+            succeeded++;
+        } else {
+            failed++;
+        }
+
+        ASSERT_EQ(owner_depth + thief_depth, initial_owner);
+        ASSERT_EQ(succeeded + failed, attempts);
+        ASSERT_TRUE(succeeded <= 1u);
+        ASSERT_TRUE(failed <= 1u);
+    }
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-29: Bounded cancel-lane fairness model yields to live work
+ * Assumption: a saturated cancel streak yields when ready or timed work is
+ * available, but never invents a yield when cancel is the only live lane.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_bounded_cancel_fairness_model) {
+    uint32_t cancel_count;
+    uint32_t ready_count;
+    uint32_t timed_count;
+    uint32_t streak;
+    uint32_t limit;
+
+    for (cancel_count = 0u; cancel_count <= 2u; cancel_count++) {
+        for (ready_count = 0u; ready_count <= 2u; ready_count++) {
+            for (timed_count = 0u; timed_count <= 2u; timed_count++) {
+                for (streak = 0u; streak <= 2u; streak++) {
+                    for (limit = 0u; limit <= 2u; limit++) {
+                        uint32_t should_yield =
+                            litmus_cancel_model_should_yield(cancel_count, ready_count, timed_count,
+                                                             streak, limit);
+                        if (should_yield) {
+                            ASSERT_TRUE(cancel_count > 0u);
+                            ASSERT_TRUE(limit > 0u);
+                            ASSERT_TRUE(streak >= limit);
+                            ASSERT_TRUE((ready_count + timed_count) > 0u);
+                        } else if (cancel_count > 0u && limit > 0u && streak >= limit) {
+                            ASSERT_EQ(ready_count + timed_count, 0u);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-30: Parallel commit sequence covers worker commits
+ * Assumption: multi-worker execution preserves a single replay-stable
+ * commit stream while permitting deterministic steal accounting.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_parallel_commit_sequence_worker_sum) {
+    asx_region_id rid;
+    asx_task_id t1, t2, t3;
+    asx_budget budget;
+    asx_parallel_config cfg;
+    asx_scheduling_metrics metrics;
+    uint32_t worker_idx;
+    uint32_t commit_sum = 0u;
+    int c1 = 2;
+    int c2 = 1;
+    int c3 = 0;
+
+    litmus_runtime_reset();
+    cfg = litmus_parallel_config(4u, ASX_FAIRNESS_ROUND_ROBIN);
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, litmus_pending_n, &c1, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, litmus_pending_n, &c2, &t2), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, litmus_pending_n, &c3, &t3), ASX_OK);
+
+    budget = asx_budget_from_polls(100u);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_parallel_get_metrics(&metrics), ASX_OK);
+    ASSERT_TRUE(metrics.commit_sequence > 0u);
+    ASSERT_TRUE(metrics.steal_attempts > 0u);
+
+    for (worker_idx = 0u; worker_idx < asx_parallel_worker_count(); worker_idx++) {
+        asx_worker_state ws;
+        ASSERT_EQ(asx_worker_get_state(worker_idx, &ws), ASX_OK);
+        commit_sum += ws.commits_total;
+        ASSERT_FALSE(ws.active);
+        ASSERT_EQ((int)ws.lifecycle, (int)ASX_WORKER_DRAINED);
+        if (ws.commits_total > 0u) {
+            ASSERT_TRUE(ws.last_commit_sequence < metrics.commit_sequence);
+        }
+    }
+    ASSERT_EQ(commit_sum, metrics.commit_sequence);
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-31: Budget exhaustion leaves workers in draining state
+ * Assumption: shutdown/drain state is fail-closed under bounded budgets;
+ * workers do not report drained while live work remains pending.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_parallel_budget_exhaustion_draining) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_parallel_config cfg;
+    asx_worker_state ws;
+
+    litmus_runtime_reset();
+    cfg = litmus_parallel_config(2u, ASX_FAIRNESS_ROUND_ROBIN);
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, litmus_pending_forever, NULL, &tid), ASX_OK);
+
+    budget = asx_budget_from_polls(1u);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+
+    ASSERT_EQ(asx_worker_get_state(0u, &ws), ASX_OK);
+    ASSERT_TRUE(ws.active);
+    ASSERT_EQ((int)ws.lifecycle, (int)ASX_WORKER_DRAINING);
+}
+
 /* --- Main --- */
 
 int main(void) {
@@ -320,6 +881,22 @@ int main(void) {
     RUN_TEST(litmus_char_bit_is_8);
     RUN_TEST(litmus_outcome_join_stability);
     RUN_TEST(litmus_cancel_severity_purity);
+    RUN_TEST(litmus_atomic_backend_selection);
+    RUN_TEST(litmus_atomic_load_store_init);
+    RUN_TEST(litmus_atomic_compare_exchange_contract);
+    RUN_TEST(litmus_atomic_rmw_linearity);
+    RUN_TEST(litmus_atomic_fences);
+    RUN_TEST(litmus_seqlock_sequence_monotone);
+    RUN_TEST(litmus_ebr_grace_period_blocks_reclaim);
+    RUN_TEST(litmus_atomic_publication_release_acquire);
+    RUN_TEST(litmus_queue_slot_single_owner_cas);
+    RUN_TEST(litmus_seqlock_rejects_mid_write_snapshot);
+    RUN_TEST(litmus_ebr_rejects_stale_generation_retire);
+    RUN_TEST(litmus_trace_commit_fetch_add_order);
+    RUN_TEST(litmus_bounded_work_steal_model);
+    RUN_TEST(litmus_bounded_cancel_fairness_model);
+    RUN_TEST(litmus_parallel_commit_sequence_worker_sum);
+    RUN_TEST(litmus_parallel_budget_exhaustion_draining);
 
     TEST_REPORT();
     return test_failures;

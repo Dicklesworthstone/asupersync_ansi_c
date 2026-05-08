@@ -21,6 +21,9 @@ make test-e2e          # Core e2e scenario lanes
 make test-e2e-suite    # All e2e families with unified manifest
 make bench             # Performance benchmarks (JSON output)
 make fuzz-smoke        # Differential fuzz smoke test
+make formal-litmus     # C99/atomics/memory-model litmus suite
+make formal-codegen    # Cross-optimization semantic stability check
+make formal-check      # All formal gates, including litmus and codegen
 make check             # Full gate: format + lint + build + test
 ```
 
@@ -85,6 +88,19 @@ Invariant tests verify structural properties that must hold across all
 valid inputs. They use exhaustive enumeration of state machine transitions.
 
 - **test_lifecycle_legality** (18 tests): Region/task/obligation transition matrix
+
+### Formal Verification (`tests/formal/`)
+
+Formal tests cover bounded semantic proofs that are too cross-cutting for a
+single unit suite:
+
+- `make formal-litmus` — 31 C99, atomics, metadata, and scheduler litmus tests
+  in both `ASX_LOCKFREE_SINGLE_THREAD=1` and `ASX_LOCKFREE_SINGLE_THREAD=0`
+  lanes.
+- `make formal-codegen` — optimization-level stability for semantic helper
+  behavior.
+- `make formal-check` — complete formal gate aggregation, including CBMC,
+  algebraic laws, translation validation, litmus, and codegen checks.
 
 ### API Ergonomics Vignettes (`tests/vignettes/`)
 
@@ -183,8 +199,9 @@ Every `ASX_MUST_USE` function call must have its return value checked
 
 ## CI Integration
 
-The `make check` target runs the full gate sequence:
-`format-check` -> `lint` -> `lint-docs` -> `lint-checkpoint` -> `build` -> `test`
+The `make check` target runs the full gate sequence, including formatting,
+linting, docs/evidence checks, strict build, unit/invariant/vignette tests,
+model-checking, ABI checks, and `formal-check`.
 
 Test logs can optionally emit structured JSONL via `test_log.h` for
 automated analysis. Schema: `schemas/test_log.schema.json`.
