@@ -384,6 +384,18 @@ Run the differential fuzz smoke lane.
 make fuzz-smoke
 ```
 
+### `make fuzz-counterexample-replay`
+
+Replay the durable minimized fuzz counterexample corpus. The gate runs each
+fixture with deterministic seeds, checks the C fuzz harness summary counters,
+optionally compares a Rust reference binary when provided, and writes a
+machine-readable report under `build/fuzz/counterexamples/`.
+
+```bash
+make fuzz-counterexample-replay
+make fuzz-counterexample-replay RUST_FUZZ_BINARY=tools/rust_fuzz_target/target/release/rust_fuzz_target
+```
+
 ### `make bench`
 
 Run the benchmark suite.
@@ -1485,8 +1497,15 @@ The fuzzer covers cancellation, timers, channels, obligations, budget exhaustion
 
 ```bash
 make fuzz-smoke          # 100 iterations (CI gate)
+make fuzz-counterexample-replay
 make fuzz-nightly        # 100,000 iterations (nightly)
 ```
+
+Durable counterexamples live in `fixtures/fuzz_counterexamples/` with schema
+`asx.fuzz_counterexample.v1`. Add minimized sanitizer crashes or Rust-vs-C
+divergences there after triage; every fixture records the deterministic input
+seed, expected summary counters, Rust-reference requirement, and minimization
+metadata.
 
 ## Conformance Fixture Format
 

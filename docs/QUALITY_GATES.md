@@ -47,13 +47,36 @@ release artifact install smoke, and supplementary enforcement gates.
 |-------|-------|
 | **Gate ID** | `GATE-FUZZ` |
 | **Plan ref** | Section 10.6 item 3 |
-| **Makefile targets** | `fuzz-smoke` (CI, 100 iterations), `fuzz-nightly` (nightly, 100K iterations), `minimize-selftest` |
+| **Makefile targets** | `fuzz-smoke` (CI, 100 iterations), `fuzz-counterexample-replay`, `fuzz-nightly` (nightly, 100K iterations), `minimize-selftest` |
 | **CI job** | `fuzz-parity` |
-| **Scripts** | `tests/fuzz/fuzz_differential.c`, `tests/fuzz/fuzz_minimize.c` |
-| **Artifacts** | `build/fuzz/fuzz_differential`, `build/fuzz/fuzz_minimize`, `asx.replay_counterexample.v1` counterexample files |
-| **Pass criteria** | Smoke test passes (100 scenario mutations self-consistent). Nightly passes (100K). Failing cases produce minimized counterexamples with parity diffs and preserved failure class. |
-| **Rerun** | `make fuzz-smoke` (CI), `make fuzz-run FUZZ_ARGS="--seed 42 --iterations 5000"` (targeted) |
+| **Scripts** | `tests/fuzz/fuzz_differential.c`, `tests/fuzz/fuzz_minimize.c`, `tools/ci/replay_fuzz_counterexamples.sh` |
+| **Artifacts** | `build/fuzz/fuzz_differential`, `build/fuzz/fuzz_minimize`, `fixtures/fuzz_counterexamples/*.json`, `build/fuzz/counterexamples/*/fuzz_counterexample_replay_report.json`, `asx.replay_counterexample.v1` counterexample files |
+| **Pass criteria** | Smoke test passes (100 scenario mutations self-consistent). Counterexample replay parses every `asx.fuzz_counterexample.v1` fixture, runs the deterministic C fuzz harness input, optionally compares the Rust reference binary when requested, verifies expected exit/error counters, and emits per-case reports. Nightly passes (100K). Failing cases produce minimized counterexamples with parity diffs and preserved failure class. |
+| **Rerun** | `make fuzz-smoke` (CI), `make fuzz-counterexample-replay`, `make fuzz-run FUZZ_ARGS="--seed 42 --iterations 5000"` (targeted) |
 | **Failure action** | Minimize with `make minimize-run MIN_ARGS="--failure-digest <digest>"`. Fix semantic divergence. |
+
+Counterexample corpus fixture shape:
+
+```json
+{
+  "schema": "asx.fuzz_counterexample.v1",
+  "scenario_id": "fuzz-no-drift-smoke-001",
+  "input": {"seed": 42, "iterations": 16, "max_ops": 32, "mutations": 4},
+  "expected": {
+    "c_exit_code": 0,
+    "determinism_failures": 0,
+    "crashes": 0,
+    "rust_divergences": 0
+  },
+  "rust_reference": {"mode": "optional|required|disabled"},
+  "minimization": {
+    "source": "seeded-smoke",
+    "source_failure_class": "none",
+    "minimized": false,
+    "minimizer": "tests/fuzz/fuzz_minimize.c"
+  }
+}
+```
 
 ### 1.4 Embedded Target Matrix Gate
 
@@ -281,6 +304,7 @@ and documentation enforcement.
 | `GATE-CONFORMANCE` | `conformance` | `conformance` | `tools/ci/run_conformance.sh` | Rust fixture parity |
 | `GATE-CODEC` | `codec-equivalence` | `conformance` | `tools/ci/run_codec_equivalence.sh` | JSON/BIN codec equivalence |
 | `GATE-RELEASE-EVIDENCE-MANIFEST` | `release-evidence-manifest` | `release-readiness` | `tools/ci/generate_release_evidence_manifest.sh` | Unified release evidence index with digest and stale-commit validation |
+| `GATE-FUZZ-COUNTEREXAMPLE-REPLAY` | `fuzz-counterexample-replay` | `fuzz-parity` | `tools/ci/replay_fuzz_counterexamples.sh` | Durable minimized fuzz corpus replay with C counters and optional Rust oracle |
 | `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `check` | `tests/formal/litmus/test_memory_model_litmus.c`, `tools/ci/check_codegen_stability.sh` | Parallel-runtime atomic publication, queue ownership, seqlock/EBR, trace-ordering, and bounded scheduler proofs |
 | `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `tools/ci/run_parallel_parity.sh` | Single-vs-multi-worker semantic digest and event-summary parity |
 | `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json`, `parallel-bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `tests/unit/runtime/test_parallel.c`, `tools/ci/run_parallel_parity.sh`, `tests/bench/bench_runtime.c` | Large-swarm pressure telemetry, admission evidence, worker-count baselines, locality metadata, and benchmark JSON artifacts |

@@ -1,0 +1,29 @@
+{
+  "schema": "asx.fuzz_counterexample.v1",
+  "scenario_id": "fuzz-no-drift-smoke-001",
+  "description": "Seeded no-drift replay fixture that pins the fuzz harness counterexample format and report contract.",
+  "input": {
+    "seed": 42,
+    "iterations": 16,
+    "max_ops": 32,
+    "mutations": 4
+  },
+  "expected": {
+    "c_exit_code": 0,
+    "determinism_failures": 0,
+    "crashes": 0,
+    "rust_divergences": 0
+  },
+  "rust_reference": {
+    "mode": "optional",
+    "binary_hint": "tools/rust_fuzz_target/target/release/rust_fuzz_target"
+  },
+  "minimization": {
+    "source": "seeded-smoke",
+    "source_failure_class": "none",
+    "minimized": false,
+    "minimizer": "tests/fuzz/fuzz_minimize.c",
+    "minimal_input_digest": null,
+    "notes": "Add minimized sanitizer crashes or Rust-vs-C divergences as new fixtures with the same schema and expected failure counters."
+  }
+}

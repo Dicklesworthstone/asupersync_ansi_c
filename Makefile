@@ -1520,6 +1520,7 @@ FUZZ_BIN := $(FUZZ_DIR)/fuzz_differential
 FUZZ_ARGS ?=
 RUST_FUZZ_BINARY ?=
 FUZZ_RUST_FLAG := $(if $(RUST_FUZZ_BINARY),--rust-binary $(RUST_FUZZ_BINARY),)
+ASX_GIT_COMMIT ?= $(shell git -C $(CURDIR) show -s --format=%H HEAD 2>/dev/null || true)
 
 FUZZ_CFLAGS := -std=c99 -Wall -Wextra -Wpedantic -Werror \
                -Wno-unused-parameter -Wno-unused-result \
@@ -1528,7 +1529,7 @@ FUZZ_CFLAGS := -std=c99 -Wall -Wextra -Wpedantic -Werror \
                $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) \
                -I$(CURDIR)/tests -I$(CURDIR)/src
 
-.PHONY: fuzz-build fuzz-smoke fuzz-nightly fuzz-run
+.PHONY: fuzz-build fuzz-smoke fuzz-nightly fuzz-run fuzz-counterexample-replay
 
 fuzz-build: $(FUZZ_BIN)
 
@@ -1548,6 +1549,10 @@ fuzz-nightly: fuzz-build
 
 fuzz-run: fuzz-build
 	@$(FUZZ_BIN) $(FUZZ_ARGS) $(FUZZ_RUST_FLAG)
+
+fuzz-counterexample-replay: fuzz-build
+	@echo "[asx] fuzz-counterexample-replay: replaying minimized differential corpus..."
+	@ASX_GIT_COMMIT="$(ASX_GIT_COMMIT)" RUST_FUZZ_BINARY="$(RUST_FUZZ_BINARY)" bash tools/ci/replay_fuzz_counterexamples.sh
 
 # ---------------------------------------------------------------------------
 # minimize — deterministic counterexample minimizer (bd-1md.4)
@@ -1861,6 +1866,7 @@ help:
 	@echo "  parallel-parity    Single-vs-multi-worker semantic digest parity"
 	@echo "  crate-acceptance-gate Aggregate final crate-level parity evidence"
 	@echo "  fuzz-smoke         Differential fuzzing smoke test"
+	@echo "  fuzz-counterexample-replay Replay minimized differential fuzz corpus"
 	@echo "  minimize-selftest  Counterexample minimizer self-test"
 	@echo "  ci-embedded-matrix Cross-target embedded builds (Linux-musl)"
 	@echo "  cross-baremetal-all All 8 bare-metal ARM/RISC-V targets"
