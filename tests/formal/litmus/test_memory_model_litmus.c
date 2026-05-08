@@ -25,6 +25,74 @@
 #include <limits.h>
 #include <string.h>
 
+#define ASX_SEQLOCK_MAX_DATA 64u
+#define ASX_EBR_EPOCH_COUNT 3u
+#define ASX_EBR_MAX_READERS 16u
+#define ASX_EBR_DEFER_CAPACITY 32u
+#define ASX_EBR_INACTIVE UINT32_MAX
+#define ASX_TASK_METADATA_NO_OWNER UINT16_MAX
+
+typedef struct {
+    asx_atomic_u32 sequence;
+    uint8_t data[ASX_SEQLOCK_MAX_DATA];
+    uint32_t data_size;
+} asx_seqlock;
+
+typedef struct {
+    uint32_t state;
+    uint16_t generation;
+    int alive;
+    uint32_t cancel_epoch;
+    uint16_t lane;
+    uint16_t owner_worker;
+    uint64_t trace_sequence;
+} asx_task_metadata;
+
+typedef struct {
+    uint32_t slot_index;
+    uint32_t generation;
+} asx_ebr_deferred_item;
+
+typedef struct {
+    asx_atomic_u32 global_epoch;
+    asx_atomic_u32 reader_epoch[ASX_EBR_MAX_READERS];
+    uint32_t reader_count;
+    asx_ebr_deferred_item defer_ring[ASX_EBR_EPOCH_COUNT][ASX_EBR_DEFER_CAPACITY];
+    uint32_t defer_count[ASX_EBR_EPOCH_COUNT];
+    uint32_t total_deferred;
+    uint32_t total_reclaimed;
+    uint32_t epoch_advances;
+} asx_ebr_state;
+
+typedef void (*asx_ebr_reclaim_fn)(uint32_t slot_index, uint32_t generation, void *user_data);
+
+typedef struct {
+    asx_seqlock metadata;
+    asx_ebr_state ebr;
+    uint32_t slot_index;
+    uint16_t current_generation;
+    uint32_t stale_generation_rejects;
+} asx_task_metadata_slot;
+
+void asx_seqlock_init(asx_seqlock *sl, uint32_t data_size);
+void asx_seqlock_write(asx_seqlock *sl, const void *src, uint32_t size);
+int asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size);
+uint32_t asx_seqlock_sequence(const asx_seqlock *sl);
+void asx_task_metadata_init(asx_task_metadata *md, uint32_t state, uint16_t generation, int alive,
+                            uint32_t cancel_epoch, uint16_t lane, uint16_t owner_worker,
+                            uint64_t trace_sequence);
+void asx_task_metadata_slot_init(asx_task_metadata_slot *slot, uint32_t slot_index,
+                                 uint32_t reader_count);
+int asx_task_metadata_slot_publish(asx_task_metadata_slot *slot,
+                                   const asx_task_metadata *metadata);
+uint32_t asx_task_metadata_slot_reader_enter(asx_task_metadata_slot *slot, uint32_t reader_id);
+void asx_task_metadata_slot_reader_leave(asx_task_metadata_slot *slot, uint32_t reader_id);
+int asx_task_metadata_slot_snapshot_in_epoch(asx_task_metadata_slot *slot,
+                                             asx_task_metadata *out);
+int asx_task_metadata_slot_retire(asx_task_metadata_slot *slot, uint16_t expected_generation);
+int asx_task_metadata_slot_try_reclaim(asx_task_metadata_slot *slot,
+                                       asx_ebr_reclaim_fn reclaim_fn, void *user_data);
+
 /* -----------------------------------------------------------------------
  * LITMUS-1: Type sizes match ABI contract
  * Assumption: handle types are exactly 8 bytes, status is 4 bytes
@@ -393,6 +461,79 @@ TEST(litmus_atomic_fences) {
     ASSERT_EQ(asx_atomic_u32_load(&a), (uint32_t)4);
 }
 
+/* -----------------------------------------------------------------------
+ * LITMUS-21: Seqlock sequence publication remains even/monotone
+ * Assumption: every completed metadata publication advances the seqlock
+ * sequence by exactly two and leaves readers observing an even sequence.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_seqlock_sequence_monotone) {
+    asx_seqlock sl;
+    asx_task_metadata md;
+    asx_task_metadata snap;
+    uint32_t i;
+
+    asx_seqlock_init(&sl, sizeof(asx_task_metadata));
+    ASSERT_EQ(asx_seqlock_sequence(&sl), (uint32_t)0);
+
+    for (i = 0u; i < 8u; i++) {
+        asx_task_metadata_init(&md, i, (uint16_t)(i + 1u), 1, i * 3u, (uint16_t)(i % 3u),
+                               (uint16_t)(i % 4u), (uint64_t)i * 100u);
+        asx_seqlock_write(&sl, &md, sizeof(md));
+        ASSERT_EQ(asx_seqlock_sequence(&sl), (uint32_t)((i + 1u) * 2u));
+        ASSERT_EQ(asx_seqlock_sequence(&sl) & 1u, (uint32_t)0);
+        ASSERT_TRUE(asx_seqlock_read(&sl, &snap, sizeof(snap)));
+        ASSERT_EQ(snap.trace_sequence, (uint64_t)i * 100u);
+    }
+}
+
+static uint32_t litmus_reclaim_count = 0u;
+static uint32_t litmus_reclaim_slot = UINT32_MAX;
+static uint32_t litmus_reclaim_generation = UINT32_MAX;
+
+static void litmus_reclaim_fn(uint32_t slot_index, uint32_t generation, void *user_data) {
+    (void)user_data;
+    litmus_reclaim_count++;
+    litmus_reclaim_slot = slot_index;
+    litmus_reclaim_generation = generation;
+}
+
+/* -----------------------------------------------------------------------
+ * LITMUS-22: EBR grace period blocks reclaim while a reader is active
+ * Assumption: retirement is fail-closed until readers leave the epoch
+ * containing the retired generation.
+ * ----------------------------------------------------------------------- */
+TEST(litmus_ebr_grace_period_blocks_reclaim) {
+    asx_task_metadata_slot slot;
+    asx_task_metadata md;
+    asx_task_metadata snap;
+    uint32_t epoch;
+
+    litmus_reclaim_count = 0u;
+    litmus_reclaim_slot = UINT32_MAX;
+    litmus_reclaim_generation = UINT32_MAX;
+
+    asx_task_metadata_slot_init(&slot, 33u, 2u);
+    asx_task_metadata_init(&md, 1u, 9u, 1, 0u, 2u, 1u, 700u);
+    ASSERT_TRUE(asx_task_metadata_slot_publish(&slot, &md));
+
+    epoch = asx_task_metadata_slot_reader_enter(&slot, 0u);
+    ASSERT_EQ(epoch, (uint32_t)0);
+    ASSERT_TRUE(asx_task_metadata_slot_snapshot_in_epoch(&slot, &snap));
+    ASSERT_EQ(snap.generation, (uint16_t)9);
+
+    ASSERT_TRUE(asx_task_metadata_slot_retire(&slot, 9u));
+    ASSERT_TRUE(asx_task_metadata_slot_try_reclaim(&slot, litmus_reclaim_fn, NULL));
+    ASSERT_TRUE(asx_task_metadata_slot_try_reclaim(&slot, litmus_reclaim_fn, NULL));
+    ASSERT_TRUE(!asx_task_metadata_slot_try_reclaim(&slot, litmus_reclaim_fn, NULL));
+    ASSERT_EQ(litmus_reclaim_count, (uint32_t)0);
+
+    asx_task_metadata_slot_reader_leave(&slot, 0u);
+    ASSERT_TRUE(asx_task_metadata_slot_try_reclaim(&slot, litmus_reclaim_fn, NULL));
+    ASSERT_EQ(litmus_reclaim_count, (uint32_t)1);
+    ASSERT_EQ(litmus_reclaim_slot, (uint32_t)33);
+    ASSERT_EQ(litmus_reclaim_generation, (uint32_t)9);
+}
+
 /* --- Main --- */
 
 int main(void) {
@@ -419,6 +560,8 @@ int main(void) {
     RUN_TEST(litmus_atomic_compare_exchange_contract);
     RUN_TEST(litmus_atomic_rmw_linearity);
     RUN_TEST(litmus_atomic_fences);
+    RUN_TEST(litmus_seqlock_sequence_monotone);
+    RUN_TEST(litmus_ebr_grace_period_blocks_reclaim);
 
     TEST_REPORT();
     return test_failures;

@@ -27,6 +27,7 @@
 #define ASX_EBR_MAX_READERS 16u
 #define ASX_EBR_DEFER_CAPACITY 32u
 #define ASX_EBR_INACTIVE UINT32_MAX
+#define ASX_TASK_METADATA_NO_OWNER UINT16_MAX
 
 typedef struct {
     uint32_t value;
@@ -43,6 +44,9 @@ typedef struct {
     uint16_t generation;
     int alive;
     uint32_t cancel_epoch;
+    uint16_t lane;
+    uint16_t owner_worker;
+    uint64_t trace_sequence;
 } asx_task_metadata;
 
 typedef struct {
@@ -81,6 +85,14 @@ typedef struct {
     uint32_t seqlock_retries;
 } asx_concurrency_bench;
 
+typedef struct {
+    asx_seqlock metadata;
+    asx_ebr_state ebr;
+    uint32_t slot_index;
+    uint16_t current_generation;
+    uint32_t stale_generation_rejects;
+} asx_task_metadata_slot;
+
 /* Forward declarations for spike functions */
 void asx_seqlock_init(asx_seqlock *sl, uint32_t data_size);
 void asx_seqlock_write_begin(asx_seqlock *sl);
@@ -104,6 +116,23 @@ void asx_spinlock_unlock(asx_spinlock *lock);
 
 void asx_concurrency_bench_init(asx_concurrency_bench *bench);
 void asx_concurrency_bench_run(asx_concurrency_bench *bench, uint32_t rounds);
+void asx_task_metadata_init(asx_task_metadata *md, uint32_t state, uint16_t generation, int alive,
+                            uint32_t cancel_epoch, uint16_t lane, uint16_t owner_worker,
+                            uint64_t trace_sequence);
+void asx_task_metadata_slot_init(asx_task_metadata_slot *slot, uint32_t slot_index,
+                                 uint32_t reader_count);
+int asx_task_metadata_slot_publish(asx_task_metadata_slot *slot,
+                                   const asx_task_metadata *metadata);
+uint32_t asx_task_metadata_slot_reader_enter(asx_task_metadata_slot *slot, uint32_t reader_id);
+void asx_task_metadata_slot_reader_leave(asx_task_metadata_slot *slot, uint32_t reader_id);
+int asx_task_metadata_slot_snapshot_in_epoch(asx_task_metadata_slot *slot,
+                                             asx_task_metadata *out);
+int asx_task_metadata_slot_snapshot(asx_task_metadata_slot *slot, uint32_t reader_id,
+                                    asx_task_metadata *out);
+int asx_task_metadata_is_current(const asx_task_metadata *metadata, uint16_t expected_generation);
+int asx_task_metadata_slot_retire(asx_task_metadata_slot *slot, uint16_t expected_generation);
+int asx_task_metadata_slot_try_reclaim(asx_task_metadata_slot *slot,
+                                       asx_ebr_reclaim_fn reclaim_fn, void *user_data);
 
 /* ------------------------------------------------------------------ */
 /* Test reclaim callback state                                        */
@@ -149,7 +178,7 @@ TEST(seqlock_init_null_safety) { asx_seqlock_init(NULL, 8); /* should not crash 
 
 TEST(seqlock_write_advances_sequence) {
     asx_seqlock sl;
-    asx_task_metadata md = {1, 42, 1, 100};
+    asx_task_metadata md = {1, 42, 1, 100, 2, 7, 9001u};
 
     asx_seqlock_init(&sl, sizeof(asx_task_metadata));
     ASSERT_EQ(asx_seqlock_sequence(&sl), (uint32_t)0);
@@ -161,7 +190,7 @@ TEST(seqlock_write_advances_sequence) {
 
 TEST(seqlock_consistent_read) {
     asx_seqlock sl;
-    asx_task_metadata md = {3, 10, 1, 500};
+    asx_task_metadata md = {3, 10, 1, 500, 1, 3, 123456u};
     asx_task_metadata snap;
     int consistent;
 
@@ -176,6 +205,9 @@ TEST(seqlock_consistent_read) {
     ASSERT_EQ(snap.generation, (uint16_t)10);
     ASSERT_EQ(snap.alive, 1);
     ASSERT_EQ(snap.cancel_epoch, (uint32_t)500);
+    ASSERT_EQ(snap.lane, (uint16_t)1);
+    ASSERT_EQ(snap.owner_worker, (uint16_t)3);
+    ASSERT_EQ(snap.trace_sequence, (uint64_t)123456u);
 }
 
 TEST(seqlock_read_fails_during_write) {
@@ -208,6 +240,9 @@ TEST(seqlock_multiple_writes) {
         md.generation = (uint16_t)(i + 1);
         md.alive = 1;
         md.cancel_epoch = i * 10;
+        md.lane = (uint16_t)(i % 3u);
+        md.owner_worker = (uint16_t)(i % 16u);
+        md.trace_sequence = (uint64_t)i * 11u;
         asx_seqlock_write(&sl, &md, sizeof(md));
     }
 
@@ -219,6 +254,9 @@ TEST(seqlock_multiple_writes) {
     ASSERT_EQ(snap.state, (uint32_t)19);
     ASSERT_EQ(snap.generation, (uint16_t)20);
     ASSERT_EQ(snap.cancel_epoch, (uint32_t)190);
+    ASSERT_EQ(snap.lane, (uint16_t)1);
+    ASSERT_EQ(snap.owner_worker, (uint16_t)3);
+    ASSERT_EQ(snap.trace_sequence, (uint64_t)209u);
 }
 
 TEST(seqlock_read_null_safety) {
@@ -231,7 +269,7 @@ TEST(seqlock_read_null_safety) {
 }
 
 TEST(seqlock_write_null_safety) {
-    asx_task_metadata md = {0, 0, 0, 0};
+    asx_task_metadata md = {0, 0, 0, 0, 0, ASX_TASK_METADATA_NO_OWNER, 0};
     asx_seqlock sl;
 
     asx_seqlock_init(&sl, sizeof(asx_task_metadata));
@@ -451,7 +489,7 @@ TEST(spinlock_null_safety) {
 TEST(parity_all_strategies_read_same_data) {
     asx_seqlock sl;
     asx_spinlock lock;
-    asx_task_metadata md = {5, 99, 1, 12345};
+    asx_task_metadata md = {5, 99, 1, 12345, 2, 8, 0xABCDEFu};
     asx_task_metadata snap_seq, snap_spin, snap_raw;
 
     /* Seqlock path */
@@ -477,6 +515,12 @@ TEST(parity_all_strategies_read_same_data) {
     ASSERT_EQ(snap_seq.alive, snap_raw.alive);
     ASSERT_EQ(snap_seq.cancel_epoch, snap_spin.cancel_epoch);
     ASSERT_EQ(snap_seq.cancel_epoch, snap_raw.cancel_epoch);
+    ASSERT_EQ(snap_seq.lane, snap_spin.lane);
+    ASSERT_EQ(snap_seq.lane, snap_raw.lane);
+    ASSERT_EQ(snap_seq.owner_worker, snap_spin.owner_worker);
+    ASSERT_EQ(snap_seq.owner_worker, snap_raw.owner_worker);
+    ASSERT_EQ(snap_seq.trace_sequence, snap_spin.trace_sequence);
+    ASSERT_EQ(snap_seq.trace_sequence, snap_raw.trace_sequence);
 }
 
 TEST(parity_write_update_read_cycle) {
@@ -494,6 +538,9 @@ TEST(parity_write_update_read_cycle) {
         md.generation = (uint16_t)(i + 1);
         md.alive = (i % 10 != 0) ? 1 : 0;
         md.cancel_epoch = i * 7;
+        md.lane = (uint16_t)(i % 3u);
+        md.owner_worker = (uint16_t)(i % 16u);
+        md.trace_sequence = (uint64_t)i * 1000u;
 
         /* Write via both paths */
         asx_seqlock_write(&sl, &md, sizeof(md));
@@ -509,6 +556,9 @@ TEST(parity_write_update_read_cycle) {
         ASSERT_EQ(snap_seq.generation, snap_spin.generation);
         ASSERT_EQ(snap_seq.alive, snap_spin.alive);
         ASSERT_EQ(snap_seq.cancel_epoch, snap_spin.cancel_epoch);
+        ASSERT_EQ(snap_seq.lane, snap_spin.lane);
+        ASSERT_EQ(snap_seq.owner_worker, snap_spin.owner_worker);
+        ASSERT_EQ(snap_seq.trace_sequence, snap_spin.trace_sequence);
     }
 }
 
@@ -562,6 +612,9 @@ TEST(seqlock_deterministic_trajectory) {
         md.generation = (uint16_t)i;
         md.alive = 1;
         md.cancel_epoch = i * 3;
+        md.lane = (uint16_t)(i % 3u);
+        md.owner_worker = (uint16_t)(i % 8u);
+        md.trace_sequence = (uint64_t)i * 77u;
 
         asx_seqlock_write(&s1, &md, sizeof(md));
         asx_seqlock_write(&s2, &md, sizeof(md));
@@ -574,6 +627,9 @@ TEST(seqlock_deterministic_trajectory) {
     ASSERT_EQ(snap1.state, snap2.state);
     ASSERT_EQ(snap1.generation, snap2.generation);
     ASSERT_EQ(snap1.cancel_epoch, snap2.cancel_epoch);
+    ASSERT_EQ(snap1.lane, snap2.lane);
+    ASSERT_EQ(snap1.owner_worker, snap2.owner_worker);
+    ASSERT_EQ(snap1.trace_sequence, snap2.trace_sequence);
     ASSERT_EQ(asx_seqlock_sequence(&s1), asx_seqlock_sequence(&s2));
 }
 
@@ -601,6 +657,115 @@ TEST(ebr_deterministic_trajectory) {
 }
 
 /* ================================================================== */
+/* TASK METADATA SLOT GRADUATION                                      */
+/* ================================================================== */
+
+TEST(task_metadata_init_covers_parallel_fields) {
+    asx_task_metadata md;
+
+    asx_task_metadata_init(&md, 4u, 12u, 1, 33u, 2u, 15u, 0x12345678u);
+
+    ASSERT_EQ(md.state, (uint32_t)4);
+    ASSERT_EQ(md.generation, (uint16_t)12);
+    ASSERT_EQ(md.alive, 1);
+    ASSERT_EQ(md.cancel_epoch, (uint32_t)33);
+    ASSERT_EQ(md.lane, (uint16_t)2);
+    ASSERT_EQ(md.owner_worker, (uint16_t)15);
+    ASSERT_EQ(md.trace_sequence, (uint64_t)0x12345678u);
+    ASSERT_TRUE(asx_task_metadata_is_current(&md, 12u));
+    ASSERT_TRUE(!asx_task_metadata_is_current(&md, 11u));
+}
+
+TEST(task_metadata_slot_publish_snapshot_roundtrip) {
+    asx_task_metadata_slot slot;
+    asx_task_metadata md;
+    asx_task_metadata snap;
+
+    asx_task_metadata_slot_init(&slot, 9u, 4u);
+    asx_task_metadata_init(&md, 2u, 3u, 1, 44u, 1u, 6u, 700u);
+
+    ASSERT_TRUE(asx_task_metadata_slot_publish(&slot, &md));
+    ASSERT_TRUE(asx_task_metadata_slot_snapshot(&slot, 0u, &snap));
+
+    ASSERT_EQ(slot.slot_index, (uint32_t)9);
+    ASSERT_EQ(slot.current_generation, (uint16_t)3);
+    ASSERT_EQ(snap.state, (uint32_t)2);
+    ASSERT_EQ(snap.generation, (uint16_t)3);
+    ASSERT_EQ(snap.alive, 1);
+    ASSERT_EQ(snap.cancel_epoch, (uint32_t)44);
+    ASSERT_EQ(snap.lane, (uint16_t)1);
+    ASSERT_EQ(snap.owner_worker, (uint16_t)6);
+    ASSERT_EQ(snap.trace_sequence, (uint64_t)700u);
+    ASSERT_EQ(slot.ebr.reader_epoch[0].value, ASX_EBR_INACTIVE);
+}
+
+TEST(task_metadata_slot_rejects_stale_generation_retire) {
+    asx_task_metadata_slot slot;
+    asx_task_metadata md;
+
+    asx_task_metadata_slot_init(&slot, 4u, 2u);
+    asx_task_metadata_init(&md, 1u, 7u, 1, 0u, 0u, 1u, 10u);
+    ASSERT_TRUE(asx_task_metadata_slot_publish(&slot, &md));
+
+    ASSERT_TRUE(!asx_task_metadata_slot_retire(&slot, 6u));
+    ASSERT_EQ(slot.stale_generation_rejects, (uint32_t)1);
+    ASSERT_EQ(asx_ebr_pending_count(&slot.ebr), (uint32_t)0);
+}
+
+TEST(task_metadata_slot_retire_defers_then_reclaims) {
+    asx_task_metadata_slot slot;
+    asx_task_metadata md;
+    asx_task_metadata snap;
+
+    reset_reclaim_log();
+    asx_task_metadata_slot_init(&slot, 17u, 2u);
+    asx_task_metadata_init(&md, 1u, 8u, 1, 2u, 2u, 5u, 99u);
+    ASSERT_TRUE(asx_task_metadata_slot_publish(&slot, &md));
+
+    ASSERT_TRUE(asx_task_metadata_slot_retire(&slot, 8u));
+    ASSERT_TRUE(asx_task_metadata_slot_snapshot(&slot, 0u, &snap));
+    ASSERT_EQ(snap.alive, 0);
+    ASSERT_EQ(snap.owner_worker, (uint16_t)ASX_TASK_METADATA_NO_OWNER);
+    ASSERT_EQ(asx_ebr_pending_count(&slot.ebr), (uint32_t)1);
+
+    ASSERT_TRUE(asx_task_metadata_slot_try_reclaim(&slot, test_reclaim_fn, NULL));
+    ASSERT_TRUE(asx_task_metadata_slot_try_reclaim(&slot, test_reclaim_fn, NULL));
+    ASSERT_TRUE(asx_task_metadata_slot_try_reclaim(&slot, test_reclaim_fn, NULL));
+    ASSERT_EQ(reclaim_count, (uint32_t)1);
+    ASSERT_EQ(reclaim_log[0], (uint32_t)17);
+    ASSERT_EQ(reclaim_gen[0], (uint32_t)8);
+}
+
+TEST(task_metadata_reader_blocks_reclaim_until_leave) {
+    asx_task_metadata_slot slot;
+    asx_task_metadata md;
+    asx_task_metadata snap;
+    uint32_t epoch;
+
+    reset_reclaim_log();
+    asx_task_metadata_slot_init(&slot, 21u, 2u);
+    asx_task_metadata_init(&md, 1u, 4u, 1, 0u, 1u, 3u, 88u);
+    ASSERT_TRUE(asx_task_metadata_slot_publish(&slot, &md));
+
+    epoch = asx_task_metadata_slot_reader_enter(&slot, 0u);
+    ASSERT_EQ(epoch, (uint32_t)0);
+    ASSERT_TRUE(asx_task_metadata_slot_snapshot_in_epoch(&slot, &snap));
+    ASSERT_EQ(snap.generation, (uint16_t)4);
+
+    ASSERT_TRUE(asx_task_metadata_slot_retire(&slot, 4u));
+    ASSERT_TRUE(asx_task_metadata_slot_try_reclaim(&slot, test_reclaim_fn, NULL));
+    ASSERT_TRUE(asx_task_metadata_slot_try_reclaim(&slot, test_reclaim_fn, NULL));
+    ASSERT_TRUE(!asx_task_metadata_slot_try_reclaim(&slot, test_reclaim_fn, NULL));
+    ASSERT_EQ(reclaim_count, (uint32_t)0);
+
+    asx_task_metadata_slot_reader_leave(&slot, 0u);
+    ASSERT_TRUE(asx_task_metadata_slot_try_reclaim(&slot, test_reclaim_fn, NULL));
+    ASSERT_EQ(reclaim_count, (uint32_t)1);
+    ASSERT_EQ(reclaim_log[0], (uint32_t)21);
+    ASSERT_EQ(reclaim_gen[0], (uint32_t)4);
+}
+
+/* ================================================================== */
 /* INTEGRATION: Seqlock + EBR workflow                                */
 /* ================================================================== */
 
@@ -620,6 +785,9 @@ TEST(integration_seqlock_protects_slot_during_ebr_reclaim) {
     md.generation = 1;
     md.alive = 1;
     md.cancel_epoch = 0;
+    md.lane = 2;
+    md.owner_worker = 9;
+    md.trace_sequence = 77u;
     asx_seqlock_write(&sl, &md, sizeof(md));
 
     /* Reader enters EBR epoch, reads metadata via seqlock */
@@ -627,6 +795,9 @@ TEST(integration_seqlock_protects_slot_during_ebr_reclaim) {
     asx_seqlock_read(&sl, &snap, sizeof(snap));
     ASSERT_EQ(snap.alive, 1);
     ASSERT_EQ(snap.generation, (uint16_t)1);
+    ASSERT_EQ(snap.lane, (uint16_t)2);
+    ASSERT_EQ(snap.owner_worker, (uint16_t)9);
+    ASSERT_EQ(snap.trace_sequence, (uint64_t)77u);
 
     /* Writer "frees" the slot: marks dead, defers for reclamation */
     md.state = 5; /* ASX_TASK_COMPLETED */
@@ -699,6 +870,13 @@ int main(void) {
     /* Determinism (2) */
     RUN_TEST(seqlock_deterministic_trajectory);
     RUN_TEST(ebr_deterministic_trajectory);
+
+    /* Task metadata slot graduation (5) */
+    RUN_TEST(task_metadata_init_covers_parallel_fields);
+    RUN_TEST(task_metadata_slot_publish_snapshot_roundtrip);
+    RUN_TEST(task_metadata_slot_rejects_stale_generation_retire);
+    RUN_TEST(task_metadata_slot_retire_defers_then_reclaims);
+    RUN_TEST(task_metadata_reader_blocks_reclaim_until_leave);
 
     /* Integration (1) */
     RUN_TEST(integration_seqlock_protects_slot_during_ebr_reclaim);
