@@ -205,6 +205,11 @@ Coverage requirements:
    be explicit and failure-atomic.
 6. Expensive local proof runs must be executed via `rch exec -- make ...`.
 
+The large-swarm e2e pack is `tests/e2e/parallel_swarm.sh`. Its default
+`ASX_E2E_PARALLEL_SCALE=smoke` lane is suitable for CI. Nightly/profile runs
+use the same script with `ASX_E2E_PARALLEL_SCALE=large` and may raise
+`ASX_E2E_PARALLEL_WORKERS` up to the compiled profile cap.
+
 ## 3. E2E Gate IDs
 
 E2E gates are assigned by `tests/e2e/run_all.sh` and map to deployment hardening
@@ -218,6 +223,7 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | `GATE-E2E-VERTICAL-HFT` | `hft_microburst.sh` | HFT |
 | `GATE-E2E-VERTICAL-AUTO` | `automotive_watchdog.sh` | AUTOMOTIVE |
 | `GATE-E2E-CONTINUITY` | `continuity.sh`, `continuity_restart.sh` | CORE |
+| `GATE-E2E-PARALLEL-SWARM` | `parallel_swarm.sh` | PARALLEL |
 | `GATE-E2E-DEPLOY-ROUTER` | `router_storm.sh` | EMBEDDED_ROUTER |
 | `GATE-E2E-DEPLOY-HFT` | `market_open_burst.sh` | HFT |
 | `GATE-E2E-DEPLOY-AUTO` | `automotive_fault_burst.sh` | AUTOMOTIVE |
@@ -230,6 +236,7 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | `make check` | Local PR gate | FORMAT, LINT, LINT-DOCS, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK |
 | `make check-ci` | Full CI gate (`CI=1`) | FORMAT, LINT, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, E2E-VERTICAL, CONFORMANCE, CODEC, PROFILE, PARALLEL-PARITY, PARALLEL-TELEMETRY, FUZZ, EMBED |
 | `make test-e2e-suite` | Unified E2E manifest | All GATE-E2E-* gates |
+| `make test-e2e-parallel` | Parallel swarm e2e pack | GATE-E2E-PARALLEL-SWARM |
 
 ## 5. CI Workflow Jobs
 
