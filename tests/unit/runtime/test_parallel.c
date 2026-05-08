@@ -11,9 +11,12 @@
 #include "../../test_harness.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
+#include <asx/runtime/io_driver.h>
 #include <asx/runtime/parallel.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
+#include <asx/runtime/waker.h>
+#include <asx/time/timer_wheel.h>
 
 /* ---- Test poll functions ---- */
 
@@ -61,6 +64,39 @@ static asx_status poll_checkpoint_forever(void *data, asx_task_id self) {
     return ASX_E_PENDING;
 }
 
+typedef struct {
+    int id;
+} poll_order_state;
+
+static int g_poll_order[8];
+static uint32_t g_poll_order_count;
+static uint32_t g_parallel_ghost_ready;
+
+static asx_status poll_record_order(void *data, asx_task_id self) {
+    poll_order_state *state = (poll_order_state *)data;
+    (void)self;
+    if (state != NULL && g_poll_order_count < 8u) {
+        g_poll_order[g_poll_order_count] = state->id;
+        g_poll_order_count++;
+    }
+    return ASX_OK;
+}
+
+static void reset_poll_order(void) {
+    uint32_t i;
+    for (i = 0; i < 8u; i++) { g_poll_order[i] = 0; }
+    g_poll_order_count = 0u;
+}
+
+static asx_status parallel_test_ghost_reactor(void *ctx, uint64_t logical_step,
+                                              uint32_t *ready_count) {
+    (void)ctx;
+    (void)logical_step;
+    if (ready_count == NULL) return ASX_E_INVALID_ARGUMENT;
+    *ready_count = g_parallel_ghost_ready;
+    return ASX_OK;
+}
+
 static int g_parallel_dtor_calls;
 static uint32_t g_parallel_dtor_last_size;
 
@@ -81,6 +117,13 @@ static void reset_all(void) {
     asx_runtime_reset();
     asx_ghost_reset();
     asx_parallel_reset();
+    asx_waker_reset();
+    asx_timer_wheel_reset(asx_timer_wheel_global());
+#if ASX_HAS_NATIVE_IO_DRIVER
+    asx_io_driver_reset();
+#endif
+    reset_poll_order();
+    g_parallel_ghost_ready = 0u;
 }
 
 static asx_parallel_config default_config(void) {
@@ -297,8 +340,9 @@ TEST(lane_assign_fills_capacity) {
         ASSERT_EQ(asx_lane_assign(tids[i], ASX_LANE_READY), ASX_OK);
     }
 
-    /* Next should fail */
-    ASSERT_EQ(asx_lane_assign(tids[0], ASX_LANE_READY), ASX_E_RESOURCE_EXHAUSTED);
+    /* Reassigning an already-lane-owned task is idempotent, not a duplicate. */
+    ASSERT_EQ(asx_lane_assign(tids[0], ASX_LANE_READY), ASX_OK);
+    ASSERT_EQ(asx_lane_total_tasks(), ASX_LANE_TASK_CAPACITY);
 
     asx_parallel_reset();
 }
@@ -808,6 +852,128 @@ TEST(parallel_starvation_limit_in_lane_state) {
 }
 
 /* ================================================================
+ * Timed lane, wakers, and reactor readiness
+ * ================================================================ */
+
+TEST(timed_lane_waits_for_waker_before_polling) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_waker waker;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    asx_scheduling_metrics metrics;
+    poll_order_state task = {1};
+
+    cfg.worker_count = 2;
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &task, &tid), ASX_OK);
+    ASSERT_EQ(asx_waker_register(tid, &waker), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(tid), ASX_OK);
+
+    budget = asx_budget_from_polls(5);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(g_poll_order_count, 0u);
+
+    ASSERT_EQ(asx_waker_wake(&waker), ASX_OK);
+    budget = asx_budget_from_polls(5);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(g_poll_order_count, 1u);
+    ASSERT_EQ(g_poll_order[0], 1);
+
+    ASSERT_EQ(asx_parallel_get_metrics(&metrics), ASX_OK);
+    ASSERT_EQ(metrics.waker_ready, 1u);
+    ASSERT_EQ(metrics.timed_promotions, 1u);
+
+    asx_parallel_reset();
+}
+
+TEST(timed_equal_deadline_wakers_preserve_fire_order) {
+    asx_region_id rid;
+    asx_task_id t1, t2;
+    asx_waker w1, w2;
+    asx_timer_handle h1, h2;
+    void *ready_wakers[2];
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    poll_order_state s1 = {1};
+    poll_order_state s2 = {2};
+    uint32_t ready_count;
+    uint32_t i;
+
+    cfg.worker_count = 2;
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &s1, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &s2, &t2), ASX_OK);
+    ASSERT_EQ(asx_waker_register(t1, &w1), ASX_OK);
+    ASSERT_EQ(asx_waker_register(t2, &w2), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(t1), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(t2), ASX_OK);
+
+    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(), 100, &w1, &h1), ASX_OK);
+    ASSERT_EQ(asx_timer_register(asx_timer_wheel_global(), 100, &w2, &h2), ASX_OK);
+    ready_count = asx_timer_collect_expired(asx_timer_wheel_global(), 100, ready_wakers, 2);
+    ASSERT_EQ(ready_count, 2u);
+    for (i = 0; i < ready_count; i++) {
+        ASSERT_EQ(asx_waker_wake((const asx_waker *)ready_wakers[i]), ASX_OK);
+    }
+
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(g_poll_order_count, 2u);
+    ASSERT_EQ(g_poll_order[0], 1);
+    ASSERT_EQ(g_poll_order[1], 2);
+
+    asx_parallel_reset();
+}
+
+TEST(reactor_readiness_promotes_timed_waker) {
+#if ASX_HAS_NATIVE_IO_DRIVER
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_waker waker;
+    asx_io_token token;
+    asx_runtime_hooks hooks;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    asx_scheduling_metrics metrics;
+    poll_order_state task = {7};
+
+    cfg.worker_count = 2;
+    reset_all();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.reactor.ghost_wait_fn = parallel_test_ghost_reactor;
+    hooks.deterministic_seeded_prng = 1;
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+    ASSERT_EQ(asx_io_driver_init(), ASX_OK);
+
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &task, &tid), ASX_OK);
+    ASSERT_EQ(asx_waker_register(tid, &waker), ASX_OK);
+    ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &waker, &token), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(tid), ASX_OK);
+
+    g_parallel_ghost_ready = 1u;
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(g_poll_order_count, 1u);
+    ASSERT_EQ(g_poll_order[0], 7);
+
+    ASSERT_EQ(asx_parallel_get_metrics(&metrics), ASX_OK);
+    ASSERT_TRUE(metrics.reactor_polls > 0u);
+    ASSERT_EQ(metrics.reactor_ready, 1u);
+    ASSERT_EQ(metrics.waker_ready, 1u);
+    ASSERT_EQ(metrics.timed_promotions, 1u);
+
+    asx_io_driver_shutdown();
+#endif
+}
+
+/* ================================================================
  * Multi-worker routing and replay-stable commit accounting
  * ================================================================ */
 
@@ -1105,6 +1271,11 @@ int main(void) {
     /* Starvation */
     RUN_TEST(parallel_no_starvation_initially);
     RUN_TEST(parallel_starvation_limit_in_lane_state);
+
+    /* Timed lane / wakers / reactor readiness */
+    RUN_TEST(timed_lane_waits_for_waker_before_polling);
+    RUN_TEST(timed_equal_deadline_wakers_preserve_fire_order);
+    RUN_TEST(reactor_readiness_promotes_timed_waker);
 
     /* Worker routing */
     RUN_TEST(parallel_multi_worker_steals_preserve_completion);

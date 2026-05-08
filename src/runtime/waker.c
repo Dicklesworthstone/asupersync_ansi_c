@@ -1,9 +1,10 @@
 /*
  * waker.c — wake registration for task readiness signaling
  *
- * Deferred stub status: walking-skeleton implementation.
- * Uses single-threaded flag-based signaling to preserve wake semantics
- * without claiming cross-thread wake transport yet.
+ * Deferred stub status: graduating-internal implementation.
+ * Uses bounded sequence-tagged signaling to preserve deterministic wake
+ * ordering across timer/reactor/worker boundaries. Platform-specific
+ * cross-thread transport remains outside this core arena.
  * See docs/DEFERRED_STUBS_REGISTER.md.
  *
  * SPDX-License-Identifier: MIT
@@ -21,6 +22,7 @@ typedef struct {
     uint16_t generation;
     int alive;
     int signaled;
+    uint64_t signal_sequence;
 } asx_waker_slot;
 
 /* ------------------------------------------------------------------ */
@@ -30,6 +32,7 @@ typedef struct {
 static asx_waker_slot g_slots[ASX_MAX_WAKERS];
 static uint32_t g_slot_count = 0;
 static uint32_t g_active_count = 0;
+static uint64_t g_signal_sequence = 0;
 
 static uint16_t next_gen(uint16_t g) {
     g++;
@@ -43,10 +46,12 @@ void asx_waker_reset(void) {
         g_slots[i].generation = next_gen(g_slots[i].generation);
         g_slots[i].alive = 0;
         g_slots[i].signaled = 0;
+        g_slots[i].signal_sequence = 0;
         g_slots[i].task = ASX_INVALID_ID;
     }
     g_slot_count = 0;
     g_active_count = 0;
+    g_signal_sequence = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -80,6 +85,7 @@ asx_status asx_waker_register(asx_task_id task, asx_waker *out_waker) {
     g_slots[idx].generation = next_gen(g_slots[idx].generation);
     g_slots[idx].alive = 1;
     g_slots[idx].signaled = 0;
+    g_slots[idx].signal_sequence = 0;
     g_active_count++;
 
     out_waker->slot = idx;
@@ -109,7 +115,10 @@ asx_status asx_waker_wake(const asx_waker *waker) {
     if (g_slots[waker->slot].generation != waker->generation) return ASX_E_NOT_FOUND;
     if (!g_slots[waker->slot].alive) return ASX_E_NOT_FOUND;
 
-    g_slots[waker->slot].signaled = 1;
+    if (!g_slots[waker->slot].signaled) {
+        g_slots[waker->slot].signaled = 1;
+        g_slots[waker->slot].signal_sequence = ++g_signal_sequence;
+    }
     return ASX_OK;
 }
 
@@ -159,16 +168,29 @@ uint32_t asx_waker_active_count(void) { return g_active_count; }
 /* ------------------------------------------------------------------ */
 
 uint32_t asx_waker_drain_signaled(asx_task_id *out_tasks, uint32_t max_tasks) {
-    uint32_t i, count = 0;
+    uint32_t count = 0;
 
     if (out_tasks == NULL || max_tasks == 0) return 0;
 
-    for (i = 0; i < g_slot_count && count < max_tasks; i++) {
-        /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
-        if (g_slots[i].alive && g_slots[i].signaled) {
-            out_tasks[count++] = g_slots[i].task;
-            g_slots[i].signaled = 0;
+    while (count < max_tasks) {
+        uint32_t i;
+        uint32_t best = ASX_MAX_WAKERS;
+        uint64_t best_sequence = UINT64_MAX;
+
+        for (i = 0; i < g_slot_count; i++) {
+            /* ASX_CHECKPOINT_WAIVER("bounded arena scan") */
+            if (g_slots[i].alive && g_slots[i].signaled &&
+                g_slots[i].signal_sequence < best_sequence) {
+                best = i;
+                best_sequence = g_slots[i].signal_sequence;
+            }
         }
+
+        if (best == ASX_MAX_WAKERS) break;
+
+        out_tasks[count++] = g_slots[best].task;
+        g_slots[best].signaled = 0;
+        g_slots[best].signal_sequence = 0;
     }
     return count;
 }

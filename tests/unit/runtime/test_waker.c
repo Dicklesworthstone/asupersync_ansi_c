@@ -135,6 +135,44 @@ TEST(drain_collects_signaled) {
     ASSERT_FALSE(asx_waker_is_signaled(&w3));
 }
 
+TEST(drain_uses_signal_order) {
+    asx_waker w1, w2, w3;
+    asx_task_id tasks[4];
+    uint32_t count;
+    setup();
+    MUST_OK(asx_waker_register(10, &w1));
+    MUST_OK(asx_waker_register(20, &w2));
+    MUST_OK(asx_waker_register(30, &w3));
+
+    MUST_OK(asx_waker_wake(&w2));
+    MUST_OK(asx_waker_wake(&w1));
+    MUST_OK(asx_waker_wake(&w3));
+
+    count = asx_waker_drain_signaled(tasks, 4);
+    ASSERT_EQ(count, 3u);
+    ASSERT_EQ(tasks[0], (asx_task_id)20);
+    ASSERT_EQ(tasks[1], (asx_task_id)10);
+    ASSERT_EQ(tasks[2], (asx_task_id)30);
+}
+
+TEST(duplicate_wake_keeps_first_signal_order) {
+    asx_waker w1, w2;
+    asx_task_id tasks[4];
+    uint32_t count;
+    setup();
+    MUST_OK(asx_waker_register(10, &w1));
+    MUST_OK(asx_waker_register(20, &w2));
+
+    MUST_OK(asx_waker_wake(&w1));
+    MUST_OK(asx_waker_wake(&w2));
+    MUST_OK(asx_waker_wake(&w1));
+
+    count = asx_waker_drain_signaled(tasks, 4);
+    ASSERT_EQ(count, 2u);
+    ASSERT_EQ(tasks[0], (asx_task_id)10);
+    ASSERT_EQ(tasks[1], (asx_task_id)20);
+}
+
 TEST(drain_null_returns_zero) { ASSERT_EQ(asx_waker_drain_signaled(NULL, 4), 0u); }
 
 /* ------------------------------------------------------------------ */
@@ -186,6 +224,8 @@ int main(void) {
 
     RUN_TEST(drain_empty_returns_zero);
     RUN_TEST(drain_collects_signaled);
+    RUN_TEST(drain_uses_signal_order);
+    RUN_TEST(duplicate_wake_keeps_first_signal_order);
     RUN_TEST(drain_null_returns_zero);
 
     RUN_TEST(signaled_null_false);

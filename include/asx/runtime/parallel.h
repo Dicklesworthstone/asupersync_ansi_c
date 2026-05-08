@@ -255,6 +255,10 @@ typedef struct {
     uint32_t steals_succeeded;  /* probes that transferred lane ownership */
     uint32_t worker_yields;     /* idle worker turns while peer lanes had work */
     uint32_t commit_sequence;   /* replay-stable committed event counter */
+    uint32_t reactor_polls;     /* nonblocking reactor pump attempts */
+    uint32_t reactor_ready;     /* reactor events mapped to wakers */
+    uint32_t waker_ready;       /* signaled wakers promoted into runnable lanes */
+    uint32_t timed_promotions;  /* timed-lane tasks promoted after wake */
 } asx_scheduling_metrics;
 
 /* Read the current scheduling metrics.
