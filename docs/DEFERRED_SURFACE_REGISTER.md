@@ -201,6 +201,10 @@ surface-specific obligations above. Expensive gates must run through
   that compare the global replay-stable commit sequence against per-worker
   commit totals and fail the gate on drift. POSIX/Win32 live native adapters
   still report fail-closed until their child beads enable hooks.
+- Landed under `bd-v12u.3`: Win32 hook installation exposes QPC clock and
+  deterministic-safe entropy selection, keeps socket/IOCP registration and
+  blocking hooks explicitly unsupported, and adds `test-win32-hooks-build` as
+  the available mingw compile lane for the adapter contract.
 - Remaining: native platform adapters must preserve deterministic commit authority before enabling concurrent lane execution by default.
 **Owner:** `SilverFrog` started contract planning in `bd-pweu.1`; implementation ownership remains per-child bead
 **Dependency path:** Wave A gates -> parallel contract -> scheduler/atomic/channel/platform gates -> e2e/proof/locality evidence -> benchmark baselines -> native adapter concurrency proof

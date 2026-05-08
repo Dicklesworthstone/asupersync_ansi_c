@@ -497,7 +497,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: fuzz-smoke ci-embedded-matrix
 .PHONY: release release-artifacts bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
-.PHONY: build-posix build-win32 build-parallel build-browser
+.PHONY: build-posix build-win32 build-parallel build-browser test-win32-hooks-build
 .PHONY: build-embedded-mipsel build-embedded-armv7 build-embedded-aarch64
 .PHONY: cross-baremetal-arm-m4-free cross-baremetal-arm-m0-free
 .PHONY: cross-baremetal-riscv32-free cross-baremetal-riscv64-free
@@ -519,7 +519,18 @@ build-posix:
 	@$(MAKE) build PROFILE=POSIX DETERMINISTIC=0 CFLAGS="$(CFLAGS) -DASX_LOCKFREE_SINGLE_THREAD=0" LDFLAGS="-lpthread -lrt"
 
 build-win32:
-	@$(MAKE) build PROFILE=WIN32 CC="x86_64-w64-mingw32-gcc" CFLAGS="-DASX_BUILDING_DLL" LDFLAGS="-lbcrypt -lws2_32"
+	@$(MAKE) build PROFILE=WIN32 CC="x86_64-w64-mingw32-gcc" CFLAGS="-DASX_BUILDING_DLL" LDFLAGS="-lbcrypt"
+
+test-win32-hooks-build:
+	@if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then \
+		if [ "$(FAIL_ON_MISSING_CROSS_TOOLCHAINS)" = "1" ]; then \
+			echo "[asx] test-win32-hooks-build: FAIL (x86_64-w64-mingw32-gcc missing)"; \
+			exit 1; \
+		fi; \
+		echo "[asx] test-win32-hooks-build: SKIP (x86_64-w64-mingw32-gcc missing)"; \
+	else \
+		$(MAKE) PROFILE=WIN32 CC="x86_64-w64-mingw32-gcc" CFLAGS="-DASX_BUILDING_DLL" LDFLAGS="-lbcrypt" $(TEST_DIR)/unit/platform/test_win32_hooks; \
+	fi
 
 build-parallel:
 	@$(MAKE) build PROFILE=PARALLEL CFLAGS="$(CFLAGS) -DASX_LOCKFREE_SINGLE_THREAD=0"

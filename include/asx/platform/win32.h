@@ -2,9 +2,11 @@
  * asx/platform/win32.h — Win32 platform adapter public API
  *
  * Provides asx_win32_hooks_install() which populates asx_runtime_hooks
- * with Win32-native implementations: monotonic clock (QPC), entropy
- * (BCryptGenRandom), reactor (WSAPoll/SleepEx), and log (stderr +
- * OutputDebugString).
+ * with Win32 implementations: monotonic clock (QPC), deterministic-safe
+ * entropy selection, a fail-closed timed reactor wait, and log output.
+ *
+ * Socket registration, IOCP delivery, and blocking pool hooks are not
+ * claimed by this adapter yet.
  *
  * Usage:
  *   asx_runtime_hooks hooks;
@@ -12,7 +14,7 @@
  *   asx_runtime_set_hooks(&hooks);
  *
  * Requires: -DASX_PROFILE_WIN32 at compile time.
- * Links:    -lbcrypt -lws2_32 (or MSVC #pragma comment(lib, ...))
+ * Links:    -lbcrypt (or MSVC #pragma comment(lib, ...))
  *
  * SPDX-License-Identifier: MIT
  */
@@ -24,6 +26,13 @@
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 
+#define ASX_WIN32_HAS_QPC_CLOCK 1u
+#define ASX_WIN32_HAS_BCRYPT_ENTROPY 1u
+#define ASX_WIN32_HAS_TIMED_REACTOR_WAIT 1u
+#define ASX_WIN32_HAS_SOCKET_REACTOR_REGISTRATION 0u
+#define ASX_WIN32_HAS_IOCP_REACTOR 0u
+#define ASX_WIN32_HAS_BLOCKING_HOOKS 0u
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -32,12 +41,12 @@ extern "C" {
  *
  * Calls asx_runtime_hooks_init() for safe defaults, then overlays:
  *   - clock: QueryPerformanceCounter for monotonic nanoseconds
- *   - entropy: BCryptGenRandom with PID+QPC fallback
- *   - reactor: WSAPoll/SleepEx (socket registration is external)
+ *   - entropy: seeded PRNG in deterministic builds; BCryptGenRandom in live builds
+ *   - reactor: SleepEx timed wait with zero readiness until registration lands
  *   - log: stderr + OutputDebugStringA
  *
- * Blocking pool (CreateThread fire-and-detach) is available internally
- * but not yet wired into the runtime blocking submit path.
+ * Blocking hooks are intentionally left NULL until a bounded Win32 pool
+ * with deterministic shutdown/drain semantics lands.
  *
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if hooks is NULL. */
 ASX_API ASX_MUST_USE asx_status asx_win32_hooks_install(asx_runtime_hooks *hooks);

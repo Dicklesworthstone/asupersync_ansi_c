@@ -1,13 +1,14 @@
 /*
  * win32/hooks.c — Win32 platform adapter
  *
- * Provides clock, entropy, reactor, blocking pool, and log hooks for
- * live-mode Win32 targets. Mirrors the POSIX adapter structure.
+ * Provides clock, entropy, reactor, and log hooks for Win32 targets.
+ * Unsupported socket registration, IOCP, and runtime blocking-pool
+ * integration remain explicit fail-closed surfaces.
  *
  * Clock:     QueryPerformanceCounter for monotonic ns
- * Entropy:   BCryptGenRandom with PID+QPC fallback
- * Reactor:   WSAPoll-based event multiplexing
- * Blocking:  CreateThread fire-and-detach pool
+ * Entropy:   deterministic PRNG in deterministic builds; BCryptGenRandom in live builds
+ * Reactor:   SleepEx timed wait that reports no readiness until registration lands
+ * Blocking:  no hook installed until a bounded Win32 pool lands
  * Log:       OutputDebugStringA + stderr
  *
  * SPDX-License-Identifier: MIT
@@ -22,21 +23,20 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Include order: winsock2.h before windows.h (avoids redefinition warnings
- * on MSVC), then bcrypt.h which requires Windows types from windows.h. */
+/* Include order: windows.h before bcrypt.h for Windows types. */
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
-#include <bcrypt.h>
+/* clang-format off */
 #include <windows.h>
-#include <winsock2.h>
+#include <bcrypt.h>
+/* clang-format on */
 
 #define ASX_WIN32_NSEC_PER_SEC 1000000000ULL
 #define ASX_WIN32_FILETIME_UNIX_EPOCH_100NS 116444736000000000ULL
 
 #if defined(_MSC_VER)
 #pragma comment(lib, "bcrypt.lib")
-#pragma comment(lib, "ws2_32.lib")
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -96,11 +96,12 @@ static uint64_t win32_entropy_u64(void *ctx) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Reactor hook (WSAPoll-based)                                        */
+/* Reactor hook                                                        */
 /*                                                                     */
-/* WSAPoll is available on Vista+ and provides a portable poll(2)      */
-/* equivalent. With no registered sockets it degrades to a timed       */
-/* sleep via SleepEx.                                                  */
+/* Win32 socket registration and IOCP are not enabled by this slice.    */
+/* The hook is intentionally fail-closed: it can provide a timed wait   */
+/* boundary for live profiles, but reports zero readiness until a       */
+/* future registration API owns socket/IOCP delivery.                  */
 /* ------------------------------------------------------------------ */
 
 static asx_status win32_reactor_wait(void *ctx, uint32_t timeout_ms, uint32_t *ready_count) {
@@ -122,11 +123,11 @@ static asx_status win32_ghost_reactor_wait(void *ctx, uint64_t logical_step,
 }
 
 /* ------------------------------------------------------------------ */
-/* Blocking pool (CreateThread fire-and-detach)                        */
+/* Blocking pool placeholder                                           */
 /*                                                                     */
-/* Same pattern as POSIX pthread adapter: each blocking task gets its  */
-/* own thread. Production upgrade would use a bounded thread pool with */
-/* event-based completion signaling.                                   */
+/* Kept private and unwired. Runtime hooks must not claim blocking      */
+/* support until a bounded Win32 pool with shutdown/drain semantics      */
+/* lands.                                                              */
 /* ------------------------------------------------------------------ */
 
 typedef struct {
@@ -195,13 +196,28 @@ asx_status asx_win32_hooks_install(asx_runtime_hooks *hooks) {
     /* Override with Win32 implementations */
     hooks->clock.now_ns_fn = win32_qpc_now_ns;
     hooks->clock.logical_now_ns_fn = win32_logical_clock;
+
+#if ASX_DETERMINISTIC
+    /* Keep the default seeded PRNG in deterministic builds.  The
+     * BCrypt-backed primitive remains available through
+     * asx_win32_entropy_u64(), but installing it as the runtime entropy
+     * hook would mislabel ambient entropy as replay-safe. */
+#else
     hooks->entropy.random_u64_fn = win32_entropy_u64;
+    hooks->deterministic_seeded_prng = 0u;
+#endif
+
     hooks->reactor.wait_fn = win32_reactor_wait;
     hooks->reactor.ghost_wait_fn = win32_ghost_reactor_wait;
     hooks->log.write_fn = win32_log_stderr;
 
-    /* Blocking pool: available but not yet wired into runtime submit path */
-    (void)win32_blocking_submit_detached; /* suppress unused warning */
+    /* Blocking pool: deliberately not installed until bounded Win32
+     * queueing and deterministic shutdown/drain semantics are present. */
+    hooks->blocking.ctx = NULL;
+    hooks->blocking.submit_fn = NULL;
+    hooks->blocking.shutdown_fn = NULL;
+    hooks->blocking.capacity_fn = NULL;
+    (void)win32_blocking_submit_detached;
 
     return ASX_OK;
 }
