@@ -286,7 +286,7 @@ of the logical scheduler.
 
 ### DS-S01: Static Arena Memory Backend (Freestanding/Automotive Targets)
 
-**Status:** Interface designed; implementation deferred per ADR-002
+**Status:** Wave C sizing/seal contract active under `bd-v12u.5`; implementation remains `bd-v12u.6`.
 **Rationale:** Primary embedded target (EMBEDDED_ROUTER / OpenWrt) has `malloc`. Arena tables already use allocator vtable, which can be swapped to static memory without API changes. Static arena is a different allocator backend, not a different architecture.
 **ADR:** ADR-002 (docs/OPEN_DECISIONS_ADR.md)
 **Activation beads:** `bd-v12u.5` (static arena sizing/seal contract), `bd-v12u.6` (static backend implementation and parity)
@@ -303,6 +303,26 @@ of the logical scheduler.
 **Dependency path:** Wave A vtable design -> demand signal -> static arena spec -> implementation + parity
 **Semantic risk:** LOW — allocator backend is resource-plane. Semantic behavior must be identical regardless of backend. Profile parity gate enforces this.
 **Rollback trigger:** Automotive or freestanding adopter needs static mode before Wave B.
+
+**Static arena contract boundary:** The static backend is an allocator hook backend, not a second runtime. It must be installed through the existing `asx_runtime_hooks.allocator` path and must preserve the public resource/error contract already exposed by `asx_resource_limits_for_class`, `asx_resource_admit`, `asx_runtime_alloc`, `asx_runtime_realloc`, `asx_runtime_free`, and `asx_runtime_seal_allocator`.
+
+**Required sizing API fields for `bd-v12u.6`:**
+- `size`: struct-size/version guard for forward-compatible initialization.
+- `memory`: caller-owned byte span base pointer; NULL is invalid unless `memory_len == 0` is explicitly rejected during init.
+- `memory_len`: total byte capacity available to the static backend.
+- `alignment`: power-of-two alignment, minimum pointer alignment; invalid alignment fails before any hook install.
+- `resource_class`: `ASX_CLASS_R1`, `ASX_CLASS_R2`, or `ASX_CLASS_R3`; default is `ASX_CLASS_R2`.
+- `limits`: `asx_resource_limits` defaults from `asx_resource_limits_for_class(resource_class)`; explicit overrides may only lower a class default unless a later bead records a profile-specific exception.
+- `capture_bytes_per_region`: per-region captured-state arena bytes; default remains the current runtime constant until implementation replaces it.
+- `cleanup_slots_per_region`: cleanup stack slots per region; default remains the current runtime constant until implementation replaces it.
+- `trace_ring_capacity`: trace-event slots; default follows the selected resource class and profile descriptor.
+- `seal_after_init`: when true, successful bootstrap seals the allocator before user work begins.
+
+**Required failure modes:** invalid config returns `ASX_E_INVALID_ARGUMENT` before changing active hooks; undersized memory, allocation fault, and exhausted arena return `ASX_E_RESOURCE_EXHAUSTED`; post-seal allocation and realloc return `ASX_E_ALLOCATOR_SEALED`; freeing remains legal after seal and must not allocate; partial allocation rollback must leave no new live handles, no consumed task/region/obligation slots, and no digest-visible event drift.
+
+**Profile/default expectations:** FREESTANDING, EMBEDDED_ROUTER, BROWSER, and AUTOMOTIVE must be able to run with static allocation evidence; CORE/POSIX/WIN32/PARALLEL/HFT keep dynamic allocation as the default unless explicitly configured. All profiles use `ASX_CLASS_R2` by default. R1/R2/R3 change operational ceilings only; they must not change lifecycle, cancellation, timer, channel, trace, or outcome semantics.
+
+**Validation obligation:** `bd-v12u.6` must add static-vs-dynamic unit coverage for hook install, seal, alloc/realloc/free, invalid config, undersized arena, partial rollback, over-capacity handles, and resource-class defaults; it must also run `profile-parity` and `codec-equivalence` with identical semantic digests for shared fixtures.
 
 ---
 
@@ -462,7 +482,7 @@ This section binds deferred-surface governance to the owner decision log so down
 | Deferred item | Decision key | Decision source | Consistency note |
 |---|---|---|---|
 | DS-P01 (parallel profile) | `DEC-003` | `docs/OWNER_DECISION_LOG.md` | Wave A deferral is historical; `bd-pweu` graduation evidence is complete. Parity/e2e/proof/locality/benchmark evidence has landed; native adapters still own deterministic commit authority before default concurrent lane execution. |
-| DS-S01 (static arena backend) | `DEC-004` | `docs/OWNER_DECISION_LOG.md` | Deferral active; allocator-vtable compatibility required now |
+| DS-S01 (static arena backend) | `DEC-004` | `docs/OWNER_DECISION_LOG.md` | Contract active; implementation remains deferred to `bd-v12u.6` with allocator-vtable compatibility required |
 | All semantic-plane-sensitive deferrals | `DEC-005` | `docs/OWNER_DECISION_LOG.md` | No semantic drift allowed while surfaces are deferred |
 
 ### Downstream Bead and Gate Alignment

@@ -115,21 +115,67 @@ They scale operational limits while preserving identical semantic behavior.
 | R2 (balanced) | 1× | Typical router-class device | 256 events |
 | R3 (roomy) | 2× | Higher-capacity embedded/server | 1024 events |
 
-### 4.2 Scaled Limits (from CORE R2 baseline)
+### 4.2 Static-Backend Sizing Defaults
 
 | Resource | R1 | R2 | R3 |
 |----------|----|----|-----|
-| Max regions | 4 | 8 | 16 |
-| Max tasks | 32 | 64 | 128 |
-| Max obligations | 64 | 128 | 256 |
-| Max timers | 64 | 128 | 256 |
-| Trace capacity | varies* | varies* | varies* |
+| Max regions | 4 | 16 | 64 |
+| Max tasks | 16 | 64 | 256 |
+| Max obligations | 16 | 64 | 256 |
+| Max timers | 32 | 128 | 512 |
+| Max channels | 8 | 32 | 128 |
+| Max trace events | 64 | 256 | 1024 |
 
-*Trace capacity is profile-dependent before class scaling. For CORE profile:
-R1 = 512, R2 = 1024, R3 = 2048. For FREESTANDING: R1 = 128, R2 = 256, R3 = 512.
-Minimum of 1 enforced for all scaled values.
+These are the implementation defaults returned by `asx_resource_limits_for_class()`
+and the required sizing defaults for the static arena backend. Existing
+compile-time arena constants still bound the current walking-skeleton runtime
+until `bd-v12u.6` replaces the dynamic allocator backend; a static backend may
+lower these defaults explicitly, but increasing them requires a profile-specific
+evidence record and must not change semantic digests.
 
-### 4.3 Admission Gate Behavior
+### 4.3 Static Arena Backend Contract
+
+The static arena backend is a resource-plane allocator hook backend. It must
+be selected through the same allocator hook path used by the dynamic backend
+and must not introduce a second lifecycle, scheduler, timer, channel, or trace
+semantic model.
+
+Required config fields for the implementation bead:
+
+| Field | Contract |
+|---|---|
+| `size` | Struct-size/version guard; mismatches fail before hook installation. |
+| `memory` | Caller-owned byte span base pointer. |
+| `memory_len` | Total byte capacity for all static allocations. |
+| `alignment` | Power-of-two alignment, minimum pointer alignment. |
+| `resource_class` | R1/R2/R3 limit selector; default is R2. |
+| `limits` | `asx_resource_limits` defaults; overrides may only lower class ceilings by default. |
+| `capture_bytes_per_region` | Per-region captured-state arena bytes. |
+| `cleanup_slots_per_region` | Per-region cleanup stack slots. |
+| `trace_ring_capacity` | Trace-event capacity after profile/resource-class selection. |
+| `seal_after_init` | If set, bootstrap seals allocation before user work. |
+
+Fail-closed outcomes:
+
+| Case | Required status | State rule |
+|---|---|---|
+| NULL config, invalid alignment, or bad class | `ASX_E_INVALID_ARGUMENT` | Active hooks unchanged. |
+| Memory span too small | `ASX_E_RESOURCE_EXHAUSTED` | No partial backend install. |
+| Allocation/reallocation cannot fit | `ASX_E_RESOURCE_EXHAUSTED` | No new live handle or consumed resource slot. |
+| Allocation/reallocation after seal | `ASX_E_ALLOCATOR_SEALED` | Existing allocations remain valid. |
+| Free after seal | `ASX_OK` if the pointer belongs to the backend | Free must not allocate. |
+| Over-capacity resource admission | `ASX_E_RESOURCE_EXHAUSTED` | Existing runtime state unchanged. |
+
+Parity obligations:
+
+- dynamic and static backends produce identical canonical semantic digests for
+  every shared fixture;
+- R1/R2/R3 change only resource ceilings and diagnostics;
+- OOM/resource exhaustion is failure-atomic and rollback-visible in tests;
+- post-seal allocation failure is observable as a resource-plane status, not a
+  semantic event ordering change.
+
+### 4.4 Admission Gate Behavior
 
 When a resource class limit is reached, the admission gate returns
 `ASX_E_RESOURCE_EXHAUSTED`. This is deterministic and identical across profiles:
@@ -325,9 +371,10 @@ selection is modeled explicitly but still returns a stable unsupported status.
    and RELEASE. HFT never enables them. Users should not depend on ghost
    diagnostics in production.
 
-4. **Allocator sealing is opt-in** and only meaningful on FREESTANDING and
-   EMBEDDED_ROUTER. After sealing, all allocation paths return
-   `ASX_E_ALLOCATOR_SEALED`.
+4. **Allocator sealing is opt-in** and meaningful for static/no-allocation
+   evidence in FREESTANDING, EMBEDDED_ROUTER, BROWSER, and AUTOMOTIVE. After
+   sealing, allocation and reallocation return `ASX_E_ALLOCATOR_SEALED`; free
+   remains legal and must not allocate.
 
 5. **Wait policy affects latency, not correctness.** Busy-spin (HFT, ROUTER)
    gives lowest latency; sleep (AUTOMOTIVE) gives lowest power; yield (others)

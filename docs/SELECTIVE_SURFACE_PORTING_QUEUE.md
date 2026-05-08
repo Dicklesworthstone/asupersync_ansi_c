@@ -33,7 +33,7 @@ A subsystem may enter active implementation queue only when:
 | `Q-B-001` | full trace subsystem expansion | Wave B | Wave A review gate + replay baseline stable | `SPEC-TPL-TRACE` | `CONF-TPL-TRACE` | deferred |
 | `Q-B-002` | lab/runtime experiment surfaces | Wave B | Wave A review gate + determinism baseline stable | `SPEC-TPL-LAB` | `CONF-TPL-LAB` | deferred |
 | `Q-B-003` | optional parallel profile | Wave B+ / `bd-pweu` graduation evidence complete | `bd-pweu.1`-`.15` green, including locality, parity, e2e, proof, benchmark, and docs slices | `SPEC-TPL-PARALLEL` | `CONF-TPL-PARALLEL` via `parallel-parity`, `test-e2e-parallel`, `formal-check`, `parallel-bench-json` | done |
-| `Q-B-004` | static arena backend | Wave B+ | ADR-002 unblock criteria + allocator parity plan | `SPEC-TPL-STATIC-ARENA` | `CONF-TPL-STATIC-ARENA` | deferred |
+| `Q-B-004` | static arena backend | Wave C / `bd-v12u.5`-`.6` | DEC-004 + DS-S01 sizing/seal contract + allocator parity plan | `SPEC-TPL-STATIC-ARENA` in DS-S01 | `CONF-TPL-STATIC-ARENA` via `GATE-STATIC-ARENA-PARITY` | spec-complete |
 | `Q-C-001` | networking core surfaces | Wave C | Wave B conformance/fuzz gates green | `SPEC-TPL-NET` | `CONF-TPL-NET` | deferred |
 | `Q-C-002` | combinator surface expansion | Wave C | Wave A/B lifecycle/cancel semantics stable | `SPEC-TPL-COMBINATOR` | `CONF-TPL-COMBINATOR` | deferred |
 | `Q-C-003` | observability/metrics beyond trace | Wave C | trace baseline stable + schema compatibility | `SPEC-TPL-OBS` | `CONF-TPL-OBS` | deferred |
