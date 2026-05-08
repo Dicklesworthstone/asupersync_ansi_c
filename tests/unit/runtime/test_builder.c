@@ -25,6 +25,11 @@ static uint64_t fake_entropy(void *ctx) {
     return *value;
 }
 
+static int builder_ptr_in_span(const void *ptr, const unsigned char *base, size_t len) {
+    const unsigned char *p = (const unsigned char *)ptr;
+    return p >= base && (size_t)(p - base) < len;
+}
+
 static void test_set_env(const char *name, const char *value) {
 #if defined(_WIN32)
     ASSERT_EQ(_putenv_s(name, value), 0);
@@ -282,6 +287,60 @@ TEST(set_hooks_accepts_valid_full_hook_table) {
     ASSERT_EQ(hooks.entropy.random_u64_fn(hooks.entropy.ctx), (uint64_t)456);
 }
 
+TEST(set_static_arena_installs_allocator_family) {
+    unsigned char memory[256];
+    asx_static_arena_config arena_cfg;
+    asx_static_arena arena;
+    asx_runtime_builder builder;
+    asx_runtime_hooks hooks;
+
+    ASSERT_EQ(asx_static_arena_config_init(&arena_cfg, memory, sizeof(memory), ASX_CLASS_R2),
+              ASX_OK);
+    ASSERT_EQ(asx_static_arena_init(&arena, &arena_cfg), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_set_static_arena(&builder, &arena), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_get_hooks(&builder, &hooks), ASX_OK);
+    ASSERT_EQ(hooks.allocator.ctx, &arena);
+    ASSERT_TRUE(hooks.allocator.malloc_fn != NULL);
+    ASSERT_TRUE(hooks.allocator.realloc_fn != NULL);
+    ASSERT_TRUE(hooks.allocator.free_fn != NULL);
+}
+
+TEST(set_static_arena_rejects_uninitialized_arena_atomically) {
+    asx_runtime_builder builder;
+    asx_runtime_hooks before;
+    asx_runtime_hooks after;
+    asx_static_arena arena;
+
+    memset(&arena, 0, sizeof(arena));
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_get_hooks(&builder, &before), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_set_static_arena(&builder, &arena), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_builder_get_hooks(&builder, &after), ASX_OK);
+    ASSERT_EQ(memcmp(&before, &after, sizeof(before)), 0);
+}
+
+TEST(build_with_static_arena_uses_static_memory) {
+    unsigned char memory[512];
+    asx_static_arena_config arena_cfg;
+    asx_static_arena arena;
+    asx_runtime_builder builder;
+    asx_runtime rt;
+    void *ptr = NULL;
+
+    ASSERT_EQ(asx_static_arena_config_init(&arena_cfg, memory, sizeof(memory), ASX_CLASS_R2),
+              ASX_OK);
+    ASSERT_EQ(asx_static_arena_init(&arena, &arena_cfg), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_set_static_arena(&builder, &arena), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_build(&builder, &rt), ASX_OK);
+    ASSERT_EQ(asx_runtime_alloc(32u, &ptr), ASX_OK);
+    ASSERT_TRUE(ptr != NULL);
+    ASSERT_TRUE(builder_ptr_in_span(ptr, memory, sizeof(memory)));
+    ASSERT_EQ(asx_runtime_free(ptr), ASX_OK);
+    asx_runtime_shutdown(&rt);
+}
+
 TEST(validate_rejects_bad_builder_config) {
     asx_runtime_builder builder;
 
@@ -483,6 +542,9 @@ int main(void) {
     RUN_TEST(partial_hook_setter_null_family_fails);
     RUN_TEST(set_hooks_rejects_invalid_full_hook_table);
     RUN_TEST(set_hooks_accepts_valid_full_hook_table);
+    RUN_TEST(set_static_arena_installs_allocator_family);
+    RUN_TEST(set_static_arena_rejects_uninitialized_arena_atomically);
+    RUN_TEST(build_with_static_arena_uses_static_memory);
     RUN_TEST(validate_rejects_bad_builder_config);
     RUN_TEST(validate_rejects_invalid_enum_fields);
     RUN_TEST(build_roundtrip_works);

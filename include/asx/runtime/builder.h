@@ -91,6 +91,8 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_hooks(asx_runtime_builde
                                                               const asx_runtime_hooks *hooks);
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_allocator_hooks(
     asx_runtime_builder *builder, const asx_allocator_hooks *allocator);
+ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_static_arena(asx_runtime_builder *builder,
+                                                                     asx_static_arena *arena);
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_clock_hooks(asx_runtime_builder *builder,
                                                                     const asx_clock_hooks *clock);
 ASX_API ASX_MUST_USE asx_status asx_runtime_builder_set_entropy_hooks(

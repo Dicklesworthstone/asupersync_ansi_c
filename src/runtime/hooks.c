@@ -33,6 +33,15 @@
 #error "asx binary codec requires 8-bit bytes"
 #endif
 
+#define ASX_STATIC_ARENA_BLOCK_MAGIC 0xA57A5A7Au
+
+typedef struct {
+    uint32_t magic;
+    size_t requested_size;
+    size_t total_span;
+    size_t header_offset;
+} asx_static_arena_block_header;
+
 /* ------------------------------------------------------------------ */
 /* Default hook implementations                                       */
 /* ------------------------------------------------------------------ */
@@ -50,6 +59,176 @@ static void *default_realloc(void *ctx, void *ptr, size_t size) {
 static void default_free(void *ctx, void *ptr) {
     (void)ctx;
     free(ptr);
+}
+
+static int static_arena_power_of_two(size_t value) {
+    return value != 0u && (value & (value - 1u)) == 0u;
+}
+
+static size_t static_arena_default_alignment(void) { return sizeof(void *); }
+
+static int static_arena_align_uintptr(uintptr_t value, size_t alignment, uintptr_t *out) {
+    uintptr_t mask;
+    uintptr_t aligned;
+
+    if (out == NULL || !static_arena_power_of_two(alignment)) return 0;
+    mask = (uintptr_t)(alignment - 1u);
+    if ((value & mask) == 0u) {
+        aligned = value;
+    } else {
+        if (value > ((uintptr_t)-1) - mask) return 0;
+        aligned = (value + mask) & ~mask;
+    }
+    *out = aligned;
+    return 1;
+}
+
+static int static_arena_limits_valid(asx_resource_class cls, const asx_resource_limits *limits) {
+    asx_resource_limits defaults;
+
+    if (limits == NULL) return 0;
+    if ((int)cls < 0 || (int)cls >= (int)ASX_CLASS_COUNT) return 0;
+    defaults = asx_resource_limits_for_class(cls);
+
+    if (limits->max_regions == 0u || limits->max_tasks == 0u || limits->max_timers == 0u ||
+        limits->max_obligations == 0u || limits->max_channels == 0u ||
+        limits->max_trace_events == 0u) {
+        return 0;
+    }
+    if (limits->max_regions > defaults.max_regions || limits->max_tasks > defaults.max_tasks ||
+        limits->max_timers > defaults.max_timers ||
+        limits->max_obligations > defaults.max_obligations ||
+        limits->max_channels > defaults.max_channels ||
+        limits->max_trace_events > defaults.max_trace_events) {
+        return 0;
+    }
+    return 1;
+}
+
+static int static_arena_config_valid(const asx_static_arena_config *cfg) {
+    if (cfg == NULL) return 0;
+    if (cfg->size != (uint32_t)sizeof(*cfg)) return 0;
+    if (cfg->memory == NULL || cfg->memory_len == 0u) return 0;
+    if (!static_arena_power_of_two(cfg->alignment)) return 0;
+    if (cfg->alignment < static_arena_default_alignment()) return 0;
+    if (!static_arena_limits_valid(cfg->resource_class, &cfg->limits)) return 0;
+    if (cfg->capture_bytes_per_region == 0u || cfg->cleanup_slots_per_region == 0u ||
+        cfg->trace_ring_capacity == 0u) {
+        return 0;
+    }
+    return 1;
+}
+
+static int static_arena_span_within(size_t offset, size_t span, size_t limit) {
+    if (offset > limit) return 0;
+    return span <= limit - offset;
+}
+
+static void *static_arena_malloc(void *ctx, size_t size) {
+    asx_static_arena *arena = (asx_static_arena *)ctx;
+    size_t requested = size == 0u ? 1u : size;
+    uintptr_t base_addr;
+    uintptr_t header_start;
+    uintptr_t user_addr;
+    size_t user_offset;
+    size_t header_offset;
+    size_t end_offset;
+    asx_static_arena_block_header *header;
+
+    if (arena == NULL || arena->initialized == 0u || arena->base == NULL) return NULL;
+    base_addr = (uintptr_t)arena->base;
+    if (arena->used > arena->capacity) return NULL;
+    if (base_addr > ((uintptr_t)-1) - arena->used) return NULL;
+    header_start = base_addr + arena->used;
+    if (header_start > ((uintptr_t)-1) - sizeof(*header)) return NULL;
+    if (!static_arena_align_uintptr(header_start + sizeof(*header), arena->config.alignment,
+                                    &user_addr)) {
+        return NULL;
+    }
+    if (user_addr < base_addr) return NULL;
+    user_offset = (size_t)(user_addr - base_addr);
+    if (user_offset < sizeof(*header)) return NULL;
+    header_offset = user_offset - sizeof(*header);
+    if (requested > ((size_t)-1) - user_offset) return NULL;
+    end_offset = user_offset + requested;
+    if (end_offset > arena->capacity) {
+        arena->failed_allocation_count++;
+        return NULL;
+    }
+
+    header = (asx_static_arena_block_header *)(void *)(arena->base + header_offset);
+    header->magic = ASX_STATIC_ARENA_BLOCK_MAGIC;
+    header->requested_size = requested;
+    header->total_span = end_offset - header_offset;
+    header->header_offset = header_offset;
+
+    arena->used = end_offset;
+    arena->allocation_count++;
+    return (void *)(arena->base + user_offset);
+}
+
+static asx_static_arena_block_header *static_arena_header_for(asx_static_arena *arena, void *ptr) {
+    uintptr_t base_addr;
+    uintptr_t ptr_addr;
+    size_t ptr_offset;
+    asx_static_arena_block_header *header;
+
+    if (arena == NULL || arena->initialized == 0u || ptr == NULL) return NULL;
+    base_addr = (uintptr_t)arena->base;
+    ptr_addr = (uintptr_t)ptr;
+    if (ptr_addr < base_addr) return NULL;
+    ptr_offset = (size_t)(ptr_addr - base_addr);
+    if (ptr_offset > arena->capacity || ptr_offset < sizeof(*header)) return NULL;
+    header = (asx_static_arena_block_header *)(void *)(arena->base + ptr_offset - sizeof(*header));
+    if (header->magic != ASX_STATIC_ARENA_BLOCK_MAGIC) return NULL;
+    if (!static_arena_span_within(header->header_offset, header->total_span, arena->capacity)) {
+        return NULL;
+    }
+    if (!static_arena_span_within(header->header_offset, header->total_span, arena->used)) {
+        return NULL;
+    }
+    return header;
+}
+
+static void *static_arena_realloc(void *ctx, void *ptr, size_t size) {
+    asx_static_arena *arena = (asx_static_arena *)ctx;
+    asx_static_arena_block_header *header;
+    void *next;
+    size_t requested = size == 0u ? 0u : size;
+    size_t ptr_offset;
+    size_t end_offset;
+
+    if (ptr == NULL) return static_arena_malloc(ctx, size);
+    if (arena == NULL || arena->initialized == 0u) return NULL;
+    if (size == 0u) return NULL;
+
+    header = static_arena_header_for(arena, ptr);
+    if (header == NULL) return NULL;
+    if (requested <= header->requested_size) {
+        header->requested_size = requested;
+        return ptr;
+    }
+
+    ptr_offset = (size_t)((uintptr_t)ptr - (uintptr_t)arena->base);
+    if (header->header_offset + header->total_span == arena->used) {
+        if (requested > ((size_t)-1) - ptr_offset) return NULL;
+        end_offset = ptr_offset + requested;
+        if (end_offset <= arena->capacity) {
+            header->requested_size = requested;
+            header->total_span = end_offset - header->header_offset;
+            arena->used = end_offset;
+            return ptr;
+        }
+    }
+
+    next = static_arena_malloc(ctx, requested);
+    if (next == NULL) return NULL;
+    memcpy(next, ptr, header->requested_size);
+    return next;
+}
+
+static void static_arena_free(void *ctx, void *ptr) {
+    (void)static_arena_header_for((asx_static_arena *)ctx, ptr);
 }
 
 static asx_time default_logical_clock(void *ctx) {
@@ -189,6 +368,86 @@ asx_status asx_runtime_hooks_init(asx_runtime_hooks *hooks) {
     hooks->allocator_sealed = 0;
 
     return ASX_OK;
+}
+
+asx_status asx_static_arena_config_init(asx_static_arena_config *cfg, void *memory,
+                                        size_t memory_len, asx_resource_class resource_class) {
+    asx_trace_config trace_cfg;
+    asx_status st;
+
+    if (cfg == NULL) return ASX_E_INVALID_ARGUMENT;
+    if ((int)resource_class < 0 || (int)resource_class >= (int)ASX_CLASS_COUNT) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->size = (uint32_t)sizeof(*cfg);
+    cfg->memory = memory;
+    cfg->memory_len = memory_len;
+    cfg->alignment = static_arena_default_alignment();
+    cfg->resource_class = resource_class;
+    cfg->limits = asx_resource_limits_for_class(resource_class);
+    cfg->capture_bytes_per_region = ASX_REGION_CAPTURE_ARENA_BYTES;
+    cfg->cleanup_slots_per_region = ASX_CLEANUP_STACK_CAPACITY;
+    st = asx_trace_config_init(&trace_cfg, resource_class);
+    if (st != ASX_OK) return st;
+    cfg->trace_ring_capacity = trace_cfg.ring_capacity;
+    cfg->seal_after_init = 0u;
+    return ASX_OK;
+}
+
+asx_status asx_static_arena_init(asx_static_arena *arena, const asx_static_arena_config *cfg) {
+    asx_static_arena candidate;
+    uintptr_t base_addr;
+    uintptr_t user_addr;
+
+    if (arena == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(arena, 0, sizeof(*arena));
+    if (cfg == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!static_arena_config_valid(cfg)) return ASX_E_INVALID_ARGUMENT;
+
+    memset(&candidate, 0, sizeof(candidate));
+    candidate.config = *cfg;
+    candidate.base = (unsigned char *)cfg->memory;
+    candidate.capacity = cfg->memory_len;
+
+    base_addr = (uintptr_t)candidate.base;
+    if (base_addr > ((uintptr_t)-1) - sizeof(asx_static_arena_block_header)) {
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+    if (!static_arena_align_uintptr(base_addr + sizeof(asx_static_arena_block_header),
+                                    cfg->alignment, &user_addr)) {
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+    if (user_addr < base_addr || (size_t)(user_addr - base_addr) + 1u > candidate.capacity) {
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+
+    candidate.initialized = 1u;
+    *arena = candidate;
+    return ASX_OK;
+}
+
+asx_status asx_static_arena_bind_hooks(asx_static_arena *arena, asx_runtime_hooks *hooks) {
+    if (arena == NULL || hooks == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (arena->initialized == 0u) return ASX_E_INVALID_STATE;
+    hooks->allocator.ctx = arena;
+    hooks->allocator.malloc_fn = static_arena_malloc;
+    hooks->allocator.realloc_fn = static_arena_realloc;
+    hooks->allocator.free_fn = static_arena_free;
+    hooks->allocator_sealed = arena->config.seal_after_init ? 1u : 0u;
+    return ASX_OK;
+}
+
+size_t asx_static_arena_used(const asx_static_arena *arena) {
+    if (arena == NULL || arena->initialized == 0u) return 0u;
+    return arena->used;
+}
+
+size_t asx_static_arena_remaining(const asx_static_arena *arena) {
+    if (arena == NULL || arena->initialized == 0u) return 0u;
+    if (arena->used >= arena->capacity) return 0u;
+    return arena->capacity - arena->used;
 }
 
 /* ------------------------------------------------------------------ */

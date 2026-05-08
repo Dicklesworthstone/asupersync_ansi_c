@@ -491,6 +491,33 @@ TEST(resource_class_name_out_of_range) {
     ASSERT_STR_EQ(asx_resource_class_name((asx_resource_class)99), "UNKNOWN");
 }
 
+TEST(resource_limits_for_class_match_static_arena_contract) {
+    asx_resource_limits r1 = asx_resource_limits_for_class(ASX_CLASS_R1);
+    asx_resource_limits r2 = asx_resource_limits_for_class(ASX_CLASS_R2);
+    asx_resource_limits r3 = asx_resource_limits_for_class(ASX_CLASS_R3);
+
+    ASSERT_EQ(r1.max_regions, 4u);
+    ASSERT_EQ(r1.max_tasks, 16u);
+    ASSERT_EQ(r1.max_timers, 32u);
+    ASSERT_EQ(r1.max_obligations, 16u);
+    ASSERT_EQ(r1.max_channels, 8u);
+    ASSERT_EQ(r1.max_trace_events, 64u);
+
+    ASSERT_EQ(r2.max_regions, 16u);
+    ASSERT_EQ(r2.max_tasks, 64u);
+    ASSERT_EQ(r2.max_timers, 128u);
+    ASSERT_EQ(r2.max_obligations, 64u);
+    ASSERT_EQ(r2.max_channels, 32u);
+    ASSERT_EQ(r2.max_trace_events, 256u);
+
+    ASSERT_EQ(r3.max_regions, 64u);
+    ASSERT_EQ(r3.max_tasks, 256u);
+    ASSERT_EQ(r3.max_timers, 512u);
+    ASSERT_EQ(r3.max_obligations, 256u);
+    ASSERT_EQ(r3.max_channels, 128u);
+    ASSERT_EQ(r3.max_trace_events, 1024u);
+}
+
 /* -------------------------------------------------------------------
  * Trace config initialization tests (bd-j4m.2)
  *
@@ -664,6 +691,7 @@ int main(void) {
     RUN_TEST(resource_class_name_r2);
     RUN_TEST(resource_class_name_r3);
     RUN_TEST(resource_class_name_out_of_range);
+    RUN_TEST(resource_limits_for_class_match_static_arena_contract);
 
     /* Trace config (bd-j4m.2) */
     RUN_TEST(trace_config_null_returns_error);

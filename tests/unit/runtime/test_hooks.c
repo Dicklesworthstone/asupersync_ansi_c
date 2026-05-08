@@ -145,6 +145,37 @@ static asx_status install_test_hooks(void) {
     return asx_runtime_set_hooks(&hooks);
 }
 
+static int ptr_in_span(const void *ptr, const unsigned char *base, size_t len) {
+    const unsigned char *p = (const unsigned char *)ptr;
+    return p >= base && (size_t)(p - base) < len;
+}
+
+static asx_status static_arena_alloc_once(size_t request, size_t *used_out) {
+    unsigned char memory[128];
+    asx_static_arena arena;
+    asx_static_arena_config cfg;
+    asx_runtime_hooks hooks;
+    void *ptr = NULL;
+    asx_status st;
+
+    asx_runtime_reset();
+    st = asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2);
+    if (st != ASX_OK) return st;
+    st = asx_static_arena_init(&arena, &cfg);
+    if (st != ASX_OK) return st;
+    st = asx_runtime_hooks_init(&hooks);
+    if (st != ASX_OK) return st;
+    st = asx_static_arena_bind_hooks(&arena, &hooks);
+    if (st != ASX_OK) return st;
+    st = asx_runtime_set_hooks(&hooks);
+    if (st != ASX_OK) return st;
+
+    st = asx_runtime_alloc(request, &ptr);
+    if (used_out != NULL) *used_out = asx_static_arena_used(&arena);
+    asx_runtime_reset();
+    return st;
+}
+
 /* ------------------------------------------------------------------ */
 /* Hook init                                                           */
 /* ------------------------------------------------------------------ */
@@ -321,6 +352,206 @@ TEST(double_seal_returns_invalid_state) {
     ASSERT_EQ(install_test_hooks(), ASX_OK);
     ASSERT_EQ(asx_runtime_seal_allocator(), ASX_OK);
     ASSERT_EQ(asx_runtime_seal_allocator(), ASX_E_INVALID_STATE);
+}
+
+TEST(static_arena_config_init_sets_resource_defaults) {
+    unsigned char memory[512];
+    asx_static_arena_config cfg;
+    asx_resource_limits r1;
+
+    ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R1), ASX_OK);
+    r1 = asx_resource_limits_for_class(ASX_CLASS_R1);
+    ASSERT_EQ(cfg.size, (uint32_t)sizeof(cfg));
+    ASSERT_EQ(cfg.memory, memory);
+    ASSERT_EQ(cfg.memory_len, sizeof(memory));
+    ASSERT_EQ(cfg.alignment, sizeof(void *));
+    ASSERT_EQ((int)cfg.resource_class, (int)ASX_CLASS_R1);
+    ASSERT_EQ(cfg.limits.max_regions, r1.max_regions);
+    ASSERT_EQ(cfg.limits.max_tasks, r1.max_tasks);
+    ASSERT_EQ(cfg.limits.max_channels, r1.max_channels);
+    ASSERT_EQ(cfg.trace_ring_capacity, 64u);
+    ASSERT_TRUE(cfg.capture_bytes_per_region > 0u);
+    ASSERT_TRUE(cfg.cleanup_slots_per_region > 0u);
+}
+
+TEST(static_arena_rejects_invalid_config) {
+    unsigned char memory[128];
+    asx_static_arena arena;
+    asx_static_arena_config cfg;
+
+    ASSERT_EQ(asx_static_arena_config_init(NULL, memory, sizeof(memory), ASX_CLASS_R2),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), (asx_resource_class)99),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
+    cfg.alignment = 3u;
+    ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_E_INVALID_ARGUMENT);
+    cfg.alignment = sizeof(void *);
+    cfg.limits.max_tasks = cfg.limits.max_tasks + 1u;
+    ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(static_arena_rejects_undersized_memory) {
+    unsigned char memory[1];
+    asx_static_arena arena;
+    asx_static_arena_config cfg;
+
+    ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
+    ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_static_arena_used(&arena), 0u);
+}
+
+TEST(static_arena_allocates_from_static_span) {
+    unsigned char memory[256];
+    asx_static_arena arena;
+    asx_static_arena_config cfg;
+    asx_runtime_hooks hooks;
+    void *ptr = NULL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
+    ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_OK);
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_static_arena_bind_hooks(&arena, &hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    ASSERT_EQ(asx_runtime_alloc(32u, &ptr), ASX_OK);
+    ASSERT_TRUE(ptr != NULL);
+    ASSERT_TRUE(ptr_in_span(ptr, memory, sizeof(memory)));
+    ASSERT_TRUE(asx_static_arena_used(&arena) > 0u);
+    ASSERT_TRUE(asx_static_arena_remaining(&arena) < sizeof(memory));
+    ASSERT_EQ(asx_runtime_free(ptr), ASX_OK);
+}
+
+TEST(static_arena_zero_size_allocation_uses_static_span) {
+    unsigned char memory[128];
+    asx_static_arena arena;
+    asx_static_arena_config cfg;
+    asx_runtime_hooks hooks;
+    void *ptr = NULL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
+    ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_OK);
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_static_arena_bind_hooks(&arena, &hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    ASSERT_EQ(asx_runtime_alloc(0u, &ptr), ASX_OK);
+    ASSERT_TRUE(ptr != NULL);
+    ASSERT_TRUE(ptr_in_span(ptr, memory, sizeof(memory)));
+    ASSERT_TRUE(asx_static_arena_used(&arena) > 0u);
+}
+
+TEST(static_arena_boundary_allocation_consumes_usable_span) {
+    size_t request;
+    size_t max_request = 0u;
+    size_t used = 0u;
+    size_t max_used = 0u;
+
+    for (request = 1u; request <= 128u; request++) {
+        if (static_arena_alloc_once(request, &used) == ASX_OK) {
+            max_request = request;
+            max_used = used;
+        } else if (max_request > 0u) {
+            break;
+        }
+    }
+
+    ASSERT_TRUE(max_request > 0u);
+    ASSERT_EQ(max_used, 128u);
+    ASSERT_EQ(static_arena_alloc_once(max_request + 1u, &used), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(used, 0u);
+}
+
+TEST(static_arena_exhaustion_is_failure_atomic) {
+    unsigned char memory[96];
+    asx_static_arena arena;
+    asx_static_arena_config cfg;
+    asx_runtime_hooks hooks;
+    void *ptr = NULL;
+    void *too_large = NULL;
+    size_t used_before;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
+    ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_OK);
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_static_arena_bind_hooks(&arena, &hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_alloc(24u, &ptr), ASX_OK);
+    used_before = asx_static_arena_used(&arena);
+
+    ASSERT_EQ(asx_runtime_alloc(sizeof(memory), &too_large), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_TRUE(too_large == NULL);
+    ASSERT_EQ(asx_static_arena_used(&arena), used_before);
+    ASSERT_EQ(arena.failed_allocation_count, 1u);
+    ASSERT_EQ(asx_runtime_free(ptr), ASX_OK);
+}
+
+TEST(static_arena_realloc_preserves_contents) {
+    unsigned char memory[256];
+    asx_static_arena arena;
+    asx_static_arena_config cfg;
+    asx_runtime_hooks hooks;
+    unsigned char *ptr = NULL;
+    unsigned char *grown = NULL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
+    ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_OK);
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_static_arena_bind_hooks(&arena, &hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    ASSERT_EQ(asx_runtime_alloc(8u, (void **)&ptr), ASX_OK);
+    ptr[0] = 0x12u;
+    ptr[7] = 0x34u;
+    ASSERT_EQ(asx_runtime_realloc(ptr, 32u, (void **)&grown), ASX_OK);
+    ASSERT_TRUE(grown != NULL);
+    ASSERT_EQ(grown[0], 0x12u);
+    ASSERT_EQ(grown[7], 0x34u);
+}
+
+TEST(static_arena_seal_blocks_alloc_but_not_free) {
+    unsigned char memory[256];
+    asx_static_arena arena;
+    asx_static_arena_config cfg;
+    asx_runtime_hooks hooks;
+    void *ptr = NULL;
+    void *after_seal = NULL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
+    ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_OK);
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_static_arena_bind_hooks(&arena, &hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    ASSERT_EQ(asx_runtime_alloc(16u, &ptr), ASX_OK);
+    ASSERT_EQ(asx_runtime_seal_allocator(), ASX_OK);
+    ASSERT_EQ(asx_runtime_alloc(16u, &after_seal), ASX_E_ALLOCATOR_SEALED);
+    ASSERT_TRUE(after_seal == NULL);
+    ASSERT_EQ(asx_runtime_free(ptr), ASX_OK);
+}
+
+TEST(static_arena_bind_can_install_presealed_hooks) {
+    unsigned char memory[256];
+    asx_static_arena arena;
+    asx_static_arena_config cfg;
+    asx_runtime_hooks hooks;
+    void *ptr = NULL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_static_arena_config_init(&cfg, memory, sizeof(memory), ASX_CLASS_R2), ASX_OK);
+    cfg.seal_after_init = 1u;
+    ASSERT_EQ(asx_static_arena_init(&arena, &cfg), ASX_OK);
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_static_arena_bind_hooks(&arena, &hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    ASSERT_EQ(asx_runtime_alloc(16u, &ptr), ASX_E_ALLOCATOR_SEALED);
+    ASSERT_TRUE(ptr == NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -744,6 +975,26 @@ int main(void) {
     RUN_TEST(seal_then_realloc_returns_sealed);
     asx_runtime_reset();
     RUN_TEST(double_seal_returns_invalid_state);
+    asx_runtime_reset();
+    RUN_TEST(static_arena_config_init_sets_resource_defaults);
+    asx_runtime_reset();
+    RUN_TEST(static_arena_rejects_invalid_config);
+    asx_runtime_reset();
+    RUN_TEST(static_arena_rejects_undersized_memory);
+    asx_runtime_reset();
+    RUN_TEST(static_arena_allocates_from_static_span);
+    asx_runtime_reset();
+    RUN_TEST(static_arena_zero_size_allocation_uses_static_span);
+    asx_runtime_reset();
+    RUN_TEST(static_arena_boundary_allocation_consumes_usable_span);
+    asx_runtime_reset();
+    RUN_TEST(static_arena_exhaustion_is_failure_atomic);
+    asx_runtime_reset();
+    RUN_TEST(static_arena_realloc_preserves_contents);
+    asx_runtime_reset();
+    RUN_TEST(static_arena_seal_blocks_alloc_but_not_free);
+    asx_runtime_reset();
+    RUN_TEST(static_arena_bind_can_install_presealed_hooks);
 
     /* Allocator dispatch */
     asx_runtime_reset();

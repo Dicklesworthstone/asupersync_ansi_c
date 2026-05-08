@@ -444,6 +444,23 @@ asx_status asx_runtime_builder_set_allocator_hooks(asx_runtime_builder *builder,
                                    sizeof(builder->hooks.allocator), allocator, sizeof(*allocator));
 }
 
+asx_status asx_runtime_builder_set_static_arena(asx_runtime_builder *builder,
+                                                asx_static_arena *arena) {
+    asx_runtime_hooks candidate;
+    asx_status st;
+
+    if (builder == NULL || arena == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!builder_surface_ready(builder)) return ASX_E_INVALID_STATE;
+    if (asx_runtime_config_validate(&builder->config) != ASX_OK) return ASX_E_INVALID_STATE;
+    candidate = builder->hooks;
+    st = asx_static_arena_bind_hooks(arena, &candidate);
+    if (st != ASX_OK) return st;
+    st = asx_runtime_hooks_validate(&candidate, ASX_DETERMINISTIC);
+    if (st != ASX_OK) return st;
+    builder->hooks = candidate;
+    return ASX_OK;
+}
+
 asx_status asx_runtime_builder_set_clock_hooks(asx_runtime_builder *builder,
                                                const asx_clock_hooks *clock) {
     return builder_set_hook_family(builder, &builder->hooks.clock, sizeof(builder->hooks.clock),

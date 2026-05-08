@@ -345,8 +345,7 @@ typedef struct {
 } asx_reactor_hooks;
 
 typedef void (*asx_blocking_job_fn)(void *job_ctx);
-typedef asx_status (*asx_blocking_submit_fn)(void *ctx, asx_blocking_job_fn job_fn,
-                                             void *job_ctx);
+typedef asx_status (*asx_blocking_submit_fn)(void *ctx, asx_blocking_job_fn job_fn, void *job_ctx);
 typedef void (*asx_blocking_shutdown_fn)(void *ctx);
 typedef uint32_t (*asx_blocking_capacity_fn)(void *ctx);
 
@@ -372,6 +371,55 @@ typedef struct {
     uint8_t deterministic_seeded_prng; /* 1 when deterministic entropy stream is configured */
     uint8_t allocator_sealed;          /* 1 after asx_runtime_seal_allocator() */
 } asx_runtime_hooks;
+
+/* Static arena allocator backend configuration.
+ *
+ * The static backend is selected by binding allocator hooks to an
+ * asx_static_arena instance; it does not change runtime semantics. The caller
+ * owns the backing memory and the arena object for at least as long as the hook
+ * table can dispatch allocation calls. */
+typedef struct {
+    uint32_t size;                     /* sizeof(asx_static_arena_config) */
+    void *memory;                      /* caller-owned byte span */
+    size_t memory_len;                 /* bytes in memory */
+    size_t alignment;                  /* power-of-two, >= pointer alignment */
+    asx_resource_class resource_class; /* R1/R2/R3 sizing defaults */
+    asx_resource_limits limits;        /* default from resource_class */
+    uint32_t capture_bytes_per_region;
+    uint32_t cleanup_slots_per_region;
+    uint32_t trace_ring_capacity;
+    uint8_t seal_after_init; /* bind hooks as already sealed */
+} asx_static_arena_config;
+
+typedef struct {
+    asx_static_arena_config config;
+    unsigned char *base;
+    size_t capacity;
+    size_t used;
+    uint32_t allocation_count;
+    uint32_t failed_allocation_count;
+    uint8_t initialized;
+} asx_static_arena;
+
+/* Initialize a static arena config with resource-class defaults. */
+ASX_API ASX_MUST_USE asx_status asx_static_arena_config_init(asx_static_arena_config *cfg,
+                                                             void *memory, size_t memory_len,
+                                                             asx_resource_class resource_class);
+
+/* Initialize arena state. Returns ASX_E_RESOURCE_EXHAUSTED for too-small
+ * memory spans and leaves the arena uninitialized on failure. */
+ASX_API ASX_MUST_USE asx_status asx_static_arena_init(asx_static_arena *arena,
+                                                      const asx_static_arena_config *cfg);
+
+/* Bind an initialized static arena into a hook table's allocator family. */
+ASX_API ASX_MUST_USE asx_status asx_static_arena_bind_hooks(asx_static_arena *arena,
+                                                            asx_runtime_hooks *hooks);
+
+/* Return bytes consumed in an initialized static arena, or 0 for inactive state. */
+ASX_API ASX_MUST_USE size_t asx_static_arena_used(const asx_static_arena *arena);
+
+/* Return allocatable bytes remaining in an initialized static arena. */
+ASX_API ASX_MUST_USE size_t asx_static_arena_remaining(const asx_static_arena *arena);
 
 /* Wait policy (resource-plane only; does not affect semantics) */
 typedef enum { ASX_WAIT_BUSY_SPIN = 0, ASX_WAIT_YIELD = 1, ASX_WAIT_SLEEP = 2 } asx_wait_policy;
