@@ -729,14 +729,26 @@ typedef struct {
 #define BENCH_PARALLEL_AUX_SAMPLES 128u
 #define BENCH_PARALLEL_BASELINE_COUNT 5u
 #define BENCH_PARALLEL_CANCEL_WARN_NS UINT64_C(1000000)
+#define BENCH_PARALLEL_CANCEL_BLOCK_NS UINT64_C(5000000)
 #define BENCH_PARALLEL_TRACE_COMMIT_WARN_NS UINT64_C(1000000)
+#define BENCH_PARALLEL_TRACE_COMMIT_BLOCK_NS UINT64_C(5000000)
 #define BENCH_PARALLEL_MPSC_FLOOR_OPS_PER_SEC UINT64_C(1000)
+#define BENCH_PARALLEL_LATENCY_P99_WARN_NS UINT64_C(1000000)
+#define BENCH_PARALLEL_LATENCY_P99_BLOCK_NS UINT64_C(5000000)
+#define BENCH_PARALLEL_LATENCY_P99_9_WARN_NS UINT64_C(2000000)
+#define BENCH_PARALLEL_LATENCY_P99_9_BLOCK_NS UINT64_C(10000000)
+#define BENCH_PARALLEL_PRESSURE_WARN_PCT 90u
+#define BENCH_PARALLEL_MEMORY_WARN_BYTES UINT64_C(8388608)
+#define BENCH_PARALLEL_MEMORY_BLOCK_BYTES UINT64_C(67108864)
 
 typedef struct {
     bench_parallel_report rows[BENCH_PARALLEL_BASELINE_COUNT];
     uint32_t count;
     uint32_t supported_count;
 } bench_parallel_baselines;
+
+static const uint32_t g_bench_parallel_workers[BENCH_PARALLEL_BASELINE_COUNT] = {1u, 2u, 8u, 32u,
+                                                                                 64u};
 
 static void bench_parallel_config_init(asx_parallel_config *cfg, uint32_t worker_count) {
     memset(cfg, 0, sizeof(*cfg));
@@ -902,35 +914,201 @@ static bench_parallel_report bench_parallel_large_swarm(void) {
 }
 
 static bench_parallel_baselines bench_parallel_worker_baselines(void) {
-    static const uint32_t workers[BENCH_PARALLEL_BASELINE_COUNT] = {1u, 2u, 8u, 32u, 64u};
     bench_parallel_baselines baselines;
     uint32_t i;
 
     memset(&baselines, 0, sizeof(baselines));
     baselines.count = BENCH_PARALLEL_BASELINE_COUNT;
     for (i = 0u; i < BENCH_PARALLEL_BASELINE_COUNT; i++) {
-        baselines.rows[i] =
-            bench_parallel_large_swarm_for_workers(workers[i], BENCH_PARALLEL_BASELINE_SAMPLES);
+        baselines.rows[i] = bench_parallel_large_swarm_for_workers(g_bench_parallel_workers[i],
+                                                                   BENCH_PARALLEL_BASELINE_SAMPLES);
         if (baselines.rows[i].supported) { baselines.supported_count++; }
     }
 
     return baselines;
 }
 
-static int bench_parallel_threshold_pass(const bench_parallel_report *rpt) {
-    if (!rpt->supported) { return 1; }
-    if (rpt->stats.count == 0u) { return 0; }
-    if (rpt->scheduler_throughput_ops_per_sec == 0u) { return 0; }
-    if (rpt->mpsc_contention_ops_per_sec < BENCH_PARALLEL_MPSC_FLOOR_OPS_PER_SEC) { return 0; }
-    if (rpt->cancel_latency_mean_ns > BENCH_PARALLEL_CANCEL_WARN_NS) { return 0; }
-    if (rpt->trace_commit_mean_ns > BENCH_PARALLEL_TRACE_COMMIT_WARN_NS) { return 0; }
-    return 1;
+static asx_resource_class bench_active_resource_class(void) {
+    asx_profile_descriptor desc;
+    if (asx_profile_get_descriptor(asx_profile_active(), &desc) == ASX_OK) {
+        return desc.resource_class;
+    }
+    return ASX_CLASS_R2;
+}
+
+static uint64_t bench_parallel_worker_metadata_bytes(uint32_t worker_count) {
+    uint64_t worker_bytes;
+
+    worker_bytes = (uint64_t)sizeof(asx_worker_state) * (uint64_t)worker_count;
+    worker_bytes += (uint64_t)sizeof(asx_lane_state) * (uint64_t)ASX_MAX_LANES;
+    worker_bytes += (uint64_t)sizeof(asx_parallel_config);
+    worker_bytes += (uint64_t)sizeof(asx_parallel_telemetry_snapshot);
+    return worker_bytes;
+}
+
+static uint64_t bench_parallel_estimated_control_plane_bytes(asx_resource_class cls,
+                                                             uint32_t worker_count) {
+    asx_resource_limits lim = asx_resource_limits_for_class(cls);
+    uint64_t bytes = bench_parallel_worker_metadata_bytes(worker_count);
+
+    bytes += (uint64_t)lim.max_regions * (uint64_t)sizeof(asx_region_id);
+    bytes += (uint64_t)lim.max_tasks * (uint64_t)sizeof(asx_task_id);
+    bytes += (uint64_t)lim.max_timers * (uint64_t)sizeof(asx_timer_id);
+    bytes += (uint64_t)lim.max_obligations * (uint64_t)sizeof(asx_obligation_id);
+    bytes += (uint64_t)lim.max_channels * (uint64_t)sizeof(asx_channel_id);
+    bytes += (uint64_t)lim.max_trace_events * (uint64_t)sizeof(uint64_t);
+    return bytes;
+}
+
+static const char *bench_parallel_memory_threshold_status(uint64_t bytes) {
+    if (bytes > BENCH_PARALLEL_MEMORY_BLOCK_BYTES) { return "block"; }
+    if (bytes > BENCH_PARALLEL_MEMORY_WARN_BYTES) { return "warn"; }
+    return "pass";
+}
+
+static uint64_t bench_parallel_report_memory_bytes(const bench_parallel_report *rpt) {
+    return bench_parallel_estimated_control_plane_bytes(bench_active_resource_class(),
+                                                        rpt->worker_count);
+}
+
+static uint64_t bench_parallel_steal_cost_proxy_ns(const bench_parallel_report *rpt) {
+    if (rpt->snapshot.metrics.steal_attempts == 0u) { return 0u; }
+    return rpt->stats.mean / (uint64_t)rpt->snapshot.metrics.steal_attempts;
+}
+
+static int bench_parallel_threshold_block(const bench_parallel_report *rpt) {
+    uint64_t memory_bytes;
+
+    if (!rpt->supported) { return 0; }
+    memory_bytes = bench_parallel_report_memory_bytes(rpt);
+    if (rpt->stats.count == 0u) { return 1; }
+    if (rpt->scheduler_throughput_ops_per_sec == 0u) { return 1; }
+    if (rpt->mpsc_contention_ops_per_sec < BENCH_PARALLEL_MPSC_FLOOR_OPS_PER_SEC) { return 1; }
+    if (rpt->stats.p99 > BENCH_PARALLEL_LATENCY_P99_BLOCK_NS) { return 1; }
+    if (rpt->stats.p99_9 > BENCH_PARALLEL_LATENCY_P99_9_BLOCK_NS) { return 1; }
+    if (rpt->cancel_latency_mean_ns > BENCH_PARALLEL_CANCEL_BLOCK_NS) { return 1; }
+    if (rpt->trace_commit_mean_ns > BENCH_PARALLEL_TRACE_COMMIT_BLOCK_NS) { return 1; }
+    if (memory_bytes > BENCH_PARALLEL_MEMORY_BLOCK_BYTES) { return 1; }
+    return 0;
+}
+
+static int bench_parallel_threshold_warn(const bench_parallel_report *rpt) {
+    uint64_t memory_bytes;
+
+    if (!rpt->supported) { return 0; }
+    memory_bytes = bench_parallel_report_memory_bytes(rpt);
+    if (rpt->stats.p99 > BENCH_PARALLEL_LATENCY_P99_WARN_NS) { return 1; }
+    if (rpt->stats.p99_9 > BENCH_PARALLEL_LATENCY_P99_9_WARN_NS) { return 1; }
+    if (rpt->peak_pressure_pct >= BENCH_PARALLEL_PRESSURE_WARN_PCT) { return 1; }
+    if (rpt->cancel_latency_mean_ns > BENCH_PARALLEL_CANCEL_WARN_NS) { return 1; }
+    if (rpt->trace_commit_mean_ns > BENCH_PARALLEL_TRACE_COMMIT_WARN_NS) { return 1; }
+    if (memory_bytes > BENCH_PARALLEL_MEMORY_WARN_BYTES) { return 1; }
+    return 0;
+}
+
+static const char *bench_parallel_threshold_status(const bench_parallel_report *rpt) {
+    if (!rpt->supported) { return "skipped"; }
+    if (bench_parallel_threshold_block(rpt)) { return "block"; }
+    if (bench_parallel_threshold_warn(rpt)) { return "warn"; }
+    return "pass";
+}
+
+static void bench_print_parallel_memory_json(asx_resource_class cls, uint32_t worker_count,
+                                             const char *indent, int last) {
+    asx_resource_limits lim = asx_resource_limits_for_class(cls);
+    uint64_t estimated = bench_parallel_estimated_control_plane_bytes(cls, worker_count);
+
+    printf("%s\"memory_footprint\": {\n", indent);
+    printf("%s  \"classification\": \"public_control_plane_estimate\",\n", indent);
+    printf("%s  \"estimated_control_plane_bytes\": %" PRIu64 ",\n", indent, estimated);
+    printf("%s  \"bytes_per_worker\": %" PRIu64 ",\n", indent, (uint64_t)sizeof(asx_worker_state));
+    printf("%s  \"worker_metadata_bytes\": %" PRIu64 ",\n", indent,
+           bench_parallel_worker_metadata_bytes(worker_count));
+    printf("%s  \"resource_limits\": {\n", indent);
+    printf("%s    \"max_regions\": %" PRIu32 ",\n", indent, lim.max_regions);
+    printf("%s    \"max_tasks\": %" PRIu32 ",\n", indent, lim.max_tasks);
+    printf("%s    \"max_timers\": %" PRIu32 ",\n", indent, lim.max_timers);
+    printf("%s    \"max_obligations\": %" PRIu32 ",\n", indent, lim.max_obligations);
+    printf("%s    \"max_channels\": %" PRIu32 ",\n", indent, lim.max_channels);
+    printf("%s    \"max_trace_events\": %" PRIu32 "\n", indent, lim.max_trace_events);
+    printf("%s  },\n", indent);
+    printf("%s  \"threshold_status\": \"%s\"\n", indent,
+           bench_parallel_memory_threshold_status(estimated));
+    printf("%s}%s\n", indent, last ? "" : ",");
+}
+
+static void bench_print_parallel_overload_slo_json(const bench_parallel_report *rpt) {
+    printf("      \"overload_slo\": {\n");
+    printf("        \"schema\": \"asx.parallel_overload_slo.v1\",\n");
+    printf("        \"status\": \"%s\",\n", bench_parallel_threshold_status(rpt));
+    printf("        \"resource_plane_only\": true,\n");
+    printf("        \"observed\": {\n");
+    printf("          \"scheduler_latency_ns\": {\n");
+    printf("            \"p50\": %" PRIu64 ",\n", rpt->stats.p50);
+    printf("            \"p95\": %" PRIu64 ",\n", rpt->stats.p95);
+    printf("            \"p99\": %" PRIu64 ",\n", rpt->stats.p99);
+    printf("            \"p99_9\": %" PRIu64 "\n", rpt->stats.p99_9);
+    printf("          },\n");
+    printf("          \"admission\": {\n");
+    printf("            \"rejects_observed\": %" PRIu32 ",\n",
+           rpt->snapshot.metrics.admission_rejects);
+    printf("            \"backpressure_observed\": %" PRIu32 ",\n",
+           rpt->snapshot.metrics.admission_backpressure);
+    printf("            \"sheds_observed\": %" PRIu32 ",\n", rpt->snapshot.metrics.admission_sheds);
+    printf("            \"pressure_pct\": %" PRIu32 ",\n", rpt->snapshot.admission.pressure_pct);
+    printf("            \"queued\": %" PRIu32 ",\n", rpt->snapshot.admission.queued);
+    printf("            \"capacity\": %" PRIu32 "\n", rpt->snapshot.admission.capacity);
+    printf("          },\n");
+    printf("          \"steal\": {\n");
+    printf("            \"attempts\": %" PRIu32 ",\n", rpt->snapshot.metrics.steal_attempts);
+    printf("            \"failed\": %" PRIu32 ",\n", rpt->snapshot.metrics.steals_failed);
+    printf("            \"cost_proxy_ns_per_attempt\": %" PRIu64 "\n",
+           bench_parallel_steal_cost_proxy_ns(rpt));
+    printf("          },\n");
+    printf("          \"queue_pressure\": {\n");
+    printf("            \"peak_pressure_pct\": %" PRIu32 ",\n", rpt->peak_pressure_pct);
+    printf("            \"peak_max_lane_depth\": %" PRIu32 ",\n", rpt->peak_max_lane_depth);
+    printf("            \"peak_max_worker_queue_depth\": %" PRIu32 "\n",
+           rpt->peak_max_worker_queue_depth);
+    printf("          },\n");
+    printf("          \"memory_footprint_bytes\": %" PRIu64 "\n",
+           bench_parallel_report_memory_bytes(rpt));
+    printf("        },\n");
+    printf("        \"thresholds\": {\n");
+    printf("          \"warn\": {\n");
+    printf("            \"p99_ns\": %" PRIu64 ",\n", BENCH_PARALLEL_LATENCY_P99_WARN_NS);
+    printf("            \"p99_9_ns\": %" PRIu64 ",\n", BENCH_PARALLEL_LATENCY_P99_9_WARN_NS);
+    printf("            \"pressure_pct\": %" PRIu32 ",\n", BENCH_PARALLEL_PRESSURE_WARN_PCT);
+    printf("            \"cancel_mean_ns\": %" PRIu64 ",\n", BENCH_PARALLEL_CANCEL_WARN_NS);
+    printf("            \"trace_commit_mean_ns\": %" PRIu64 ",\n",
+           BENCH_PARALLEL_TRACE_COMMIT_WARN_NS);
+    printf("            \"memory_bytes\": %" PRIu64 "\n", BENCH_PARALLEL_MEMORY_WARN_BYTES);
+    printf("          },\n");
+    printf("          \"block\": {\n");
+    printf("            \"p99_ns\": %" PRIu64 ",\n", BENCH_PARALLEL_LATENCY_P99_BLOCK_NS);
+    printf("            \"p99_9_ns\": %" PRIu64 ",\n", BENCH_PARALLEL_LATENCY_P99_9_BLOCK_NS);
+    printf("            \"scheduler_throughput_ops_per_sec_floor\": 1,\n");
+    printf("            \"mpsc_contention_ops_per_sec_floor\": %" PRIu64 ",\n",
+           BENCH_PARALLEL_MPSC_FLOOR_OPS_PER_SEC);
+    printf("            \"cancel_mean_ns\": %" PRIu64 ",\n", BENCH_PARALLEL_CANCEL_BLOCK_NS);
+    printf("            \"trace_commit_mean_ns\": %" PRIu64 ",\n",
+           BENCH_PARALLEL_TRACE_COMMIT_BLOCK_NS);
+    printf("            \"memory_bytes\": %" PRIu64 "\n", BENCH_PARALLEL_MEMORY_BLOCK_BYTES);
+    printf("          }\n");
+    printf("        },\n");
+    printf("        \"remediation\": \"rerun rch exec -- make parallel-bench-gate; if block "
+           "persists, inspect worker-count row, profile-parity, and resource-plane changes before "
+           "updating baselines\"\n");
+    printf("      },\n");
 }
 
 static void bench_print_parallel_baseline_json(const bench_parallel_report *rpt, int last) {
     printf("    {\n");
     printf("      \"requested_worker_count\": %" PRIu32 ",\n", rpt->requested_worker_count);
     printf("      \"worker_count\": %" PRIu32 ",\n", rpt->worker_count);
+    printf("      \"resource_class\": ");
+    bench_print_json_string(asx_resource_class_name(bench_active_resource_class()));
+    printf(",\n");
     printf("      \"supported\": %s,\n", rpt->supported ? "true" : "false");
 
     if (!rpt->supported) {
@@ -944,6 +1122,7 @@ static void bench_print_parallel_baseline_json(const bench_parallel_report *rpt,
     printf("      \"sample_count\": %" PRIu32 ",\n", rpt->samples);
     printf("      \"task_count\": %" PRIu32 ",\n", rpt->task_count);
     printf("      \"seed\": %" PRIu32 ",\n", BENCH_PARALLEL_SEED);
+    bench_print_parallel_memory_json(bench_active_resource_class(), rpt->worker_count, "      ", 0);
     printf("      \"runtime_config\": {\n");
     printf("        \"fairness\": \"ROUND_ROBIN\",\n");
     printf("        \"lane_weights\": [1, 1, 1],\n");
@@ -1003,6 +1182,7 @@ static void bench_print_parallel_baseline_json(const bench_parallel_report *rpt,
     printf("        \"locality_max_shard_tasks\": %" PRIu32 "\n",
            rpt->snapshot.locality.max_shard_tasks);
     printf("      },\n");
+    bench_print_parallel_overload_slo_json(rpt);
     printf("      \"trace_commit_mean_ns\": %" PRIu64 ",\n", rpt->trace_commit_mean_ns);
     printf("      \"thresholds\": {\n");
     printf("        \"mode\": \"observe_only_gross_regression\",\n");
@@ -1014,9 +1194,78 @@ static void bench_print_parallel_baseline_json(const bench_parallel_report *rpt,
     printf("        \"trace_commit_mean_ns_warn\": %" PRIu64 "\n",
            BENCH_PARALLEL_TRACE_COMMIT_WARN_NS);
     printf("      },\n");
-    printf("      \"threshold_status\": \"%s\"\n",
-           bench_parallel_threshold_pass(rpt) ? "pass" : "warn");
+    printf("      \"threshold_status\": \"%s\"\n", bench_parallel_threshold_status(rpt));
     printf("    }%s\n", last ? "" : ",");
+}
+
+static void bench_print_parallel_slo_summary_json(const bench_parallel_baselines *baselines) {
+    uint32_t pass_count = 0u;
+    uint32_t warn_count = 0u;
+    uint32_t block_count = 0u;
+    uint32_t skipped_count = 0u;
+    uint32_t i;
+
+    for (i = 0u; i < baselines->count; i++) {
+        const char *status = bench_parallel_threshold_status(&baselines->rows[i]);
+        if (strcmp(status, "pass") == 0) {
+            pass_count++;
+        } else if (strcmp(status, "warn") == 0) {
+            warn_count++;
+        } else if (strcmp(status, "block") == 0) {
+            block_count++;
+        } else {
+            skipped_count++;
+        }
+    }
+
+    printf("  \"parallel_overload_slo_summary\": {\n");
+    printf("    \"schema\": \"asx.parallel_overload_slo_summary.v1\",\n");
+    printf("    \"profile\": ");
+    bench_print_json_string(bench_profile_name());
+    printf(",\n");
+    printf("    \"active_resource_class\": ");
+    bench_print_json_string(asx_resource_class_name(bench_active_resource_class()));
+    printf(",\n");
+    printf("    \"worker_count_rows\": %" PRIu32 ",\n", baselines->count);
+    printf("    \"resource_class_rows\": %" PRIu32 ",\n",
+           (uint32_t)(ASX_CLASS_COUNT * BENCH_PARALLEL_BASELINE_COUNT));
+    printf("    \"status_counts\": {\n");
+    printf("      \"pass\": %" PRIu32 ",\n", pass_count);
+    printf("      \"warn\": %" PRIu32 ",\n", warn_count);
+    printf("      \"block\": %" PRIu32 ",\n", block_count);
+    printf("      \"skipped\": %" PRIu32 "\n", skipped_count);
+    printf("    },\n");
+    printf("    \"semantic_digest_policy\": \"resource-plane thresholds only; validate digest "
+           "identity with profile-parity before changing baselines\"\n");
+    printf("  },\n");
+}
+
+static void bench_print_parallel_resource_class_baselines_json(void) {
+    uint32_t cls_idx;
+    uint32_t worker_idx;
+    uint32_t emitted = 0u;
+    uint32_t total = (uint32_t)(ASX_CLASS_COUNT * BENCH_PARALLEL_BASELINE_COUNT);
+
+    printf("  \"parallel_resource_class_footprint_baselines\": [\n");
+    for (cls_idx = 0u; cls_idx < (uint32_t)ASX_CLASS_COUNT; cls_idx++) {
+        asx_resource_class cls = (asx_resource_class)cls_idx;
+        for (worker_idx = 0u; worker_idx < BENCH_PARALLEL_BASELINE_COUNT; worker_idx++) {
+            uint32_t worker_count = g_bench_parallel_workers[worker_idx];
+
+            emitted++;
+            printf("    {\n");
+            printf("      \"resource_class\": ");
+            bench_print_json_string(asx_resource_class_name(cls));
+            printf(",\n");
+            printf("      \"worker_count\": %" PRIu32 ",\n", worker_count);
+            bench_print_parallel_memory_json(cls, worker_count, "      ", 0);
+            printf("      \"threshold_status\": \"%s\"\n",
+                   bench_parallel_memory_threshold_status(
+                       bench_parallel_estimated_control_plane_bytes(cls, worker_count)));
+            printf("    }%s\n", emitted == total ? "" : ",");
+        }
+    }
+    printf("  ],\n");
 }
 
 /* -------------------------------------------------------------------
@@ -1312,6 +1561,9 @@ int main(int argc, char **argv) {
     printf("    \"codec\": ");
     bench_print_json_string(bench_codec_name());
     printf(",\n");
+    printf("    \"resource_class\": ");
+    bench_print_json_string(asx_resource_class_name(bench_active_resource_class()));
+    printf(",\n");
     printf("    \"compiler\": ");
     bench_print_json_string(bench_compiler_name());
     printf(",\n");
@@ -1486,6 +1738,9 @@ int main(int argc, char **argv) {
     printf("    \"rationale\": \"surface gross regressions in benchmark artifacts before turning "
            "exploratory PARALLEL thresholds into blocking CI\"\n");
     printf("  },\n");
+
+    bench_print_parallel_slo_summary_json(&pbl);
+    bench_print_parallel_resource_class_baselines_json();
 
     printf("  \"parallel_worker_baselines\": [\n");
     {

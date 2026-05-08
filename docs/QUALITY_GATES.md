@@ -195,7 +195,7 @@ isomorphism proof needed for locality-sensitive 64-core operator claims.
 | `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `check` | `bd-pweu.13` | Prove portable atomic publication, two-phase queue slot ownership, seqlock/EBR metadata safety, gap-free trace commit tickets, bounded work stealing, cancel fairness, and shutdown/drain state reporting. |
 | `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `bd-pweu.11` | Compare canonical semantic digests and structured event summaries for the same scenarios under worker_count=1, 2, 8, and 64. |
 | `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `bd-pweu.10` | Validate pressure snapshots, deterministic admission decisions, JSONL rendering, and benchmark JSON telemetry for large-swarm runs. |
-| `GATE-PARALLEL-BENCHMARK` | `parallel-bench-json`, `parallel-bench-gate` | `perf-tail-deadline` | `bd-pweu.14` | Capture RCH-backed worker_count=1/2/8/32/64 baselines with scheduler throughput, cancel latency, MPSC throughput, steal/commit/timed-wake telemetry, and observe-only threshold status. |
+| `GATE-PARALLEL-BENCHMARK` | `parallel-bench-json`, `parallel-bench-gate` | `perf-tail-deadline` | `bd-pweu.14`, `bd-v12u.14` | Capture RCH-backed worker_count=1/2/8/32/64 baselines with scheduler p50/p95/p99/p99.9, admission rejection observations, queue pressure, steal-cost proxy, memory-footprint estimates, and warn/block threshold status. |
 | `GATE-PARALLEL-LOCALITY` | `test-unit`, `parallel-parity`, `parallel-bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `bd-pweu.9` | Validate compact vs worker-sharded locality routing, stale-handle fail-closed checks, shard telemetry, and benchmark evidence without semantic digest drift. |
 
 Coverage requirements:
@@ -245,7 +245,7 @@ gate evidence must cover the surface-specific behavior named below.
 | `GATE-INCIDENT-REPLAY-BUNDLE` | `test_evidence` incident renderer tests; `test_trace` schema compatibility tests; `test_replay` failure-class minimizer tests; `lint-schema-validation` over `schemas/incident_bundle.schema.json`, `fixtures/incident_bundles/*.json`, `schemas/trace_event.schema.json`, `fixtures/trace_events/*.json`, `schemas/replay_counterexample.schema.json`, and `fixtures/replay_counterexamples/*.json`; `test-e2e-parallel` incident bundle JSONL emission; `minimize-selftest` | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` | Emit operator-grade evidence bundles, trace schema, and minimized counterexamples without mutating runtime behavior or changing original failure class. |
 | `GATE-WAVE-C-NETWORKING` | `test-e2e-network-surface`; focused `tests/unit/net/test_net` and `tests/unit/net/test_pipe` binaries; `profile-parity`; `br dep cycles --no-db --json` | `bd-v12u.9`, `bd-v12u.10` | Prove bounded connection lifecycle, cancellation/backpressure, resource exhaustion, unsupported-profile diagnostics, raw/replay artifacts, and zero kernel semantic drift. `bd-v12u.10` extends the gate to bounded pipe-backed/reactor-readiness evidence without counting Wave D protocol stacks as complete. |
 | `GATE-COMBINATOR-ACTOR-HARNESS` | `test-combinator-contract`; `test-actor-supervision-harness`; `test-e2e-actor-supervision`; `make conformance`; `codec-equivalence`; `profile-parity` | `bd-v12u.11`, `bd-v12u.12` | Pin cancellation, outcome aggregation, timeout ordering, retry/budget caps, bracket cleanup, restart policy, escalation, child-spec metadata, cancellation during restart, obligation cleanup, raw logs, digest, and replay artifacts before parity claims expand. |
-| `GATE-OVERLOAD-SLO-DEMO` | benchmark/acceptance demo targets to be added by child bead | `bd-v12u.14`, `bd-v12u.15` | Convert large-swarm telemetry into SLOs and user-facing proof bundles with replay and fail-closed messaging. |
+| `GATE-OVERLOAD-SLO-DEMO` | `parallel-bench-gate`; final acceptance demo target from `bd-v12u.15` | `bd-v12u.14`, `bd-v12u.15` | Convert large-swarm telemetry into resource-plane SLOs and user-facing proof bundles with replay and fail-closed messaging. `bd-v12u.14` emits `build/perf/parallel-bench-gate-summary.json` with worker-count rows, R1/R2/R3 footprint rows, warn/block thresholds, and remediation text. |
 
 Coverage requirements:
 
@@ -265,6 +265,8 @@ Coverage requirements:
    and must move to a new major schema version.
 5. Static arena, overload, and admission work are resource-plane changes only;
    they cannot alter lifecycle, cancellation, channel, timer, or trace semantics.
+   For overload SLOs, `warn` means expected observe-only pressure evidence; `block`
+   fails the gate and requires rerunning `profile-parity` before any baseline update.
 6. Expensive proof runs must use `rch exec -- make ...`.
 
 ## 3. E2E Gate IDs
@@ -295,7 +297,7 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | `make test-e2e-suite` | Unified E2E manifest | All GATE-E2E-* gates |
 | `make test-e2e-parallel` | Parallel swarm e2e pack | GATE-E2E-PARALLEL-SWARM |
 | `make parallel-bench-json` | PARALLEL benchmark JSON artifact | GATE-PARALLEL-BENCHMARK |
-| `make parallel-bench-gate` | Capture PARALLEL benchmark artifact and observe-only warnings | GATE-PARALLEL-BENCHMARK |
+| `make parallel-bench-gate` | Capture PARALLEL benchmark artifact plus `parallel-bench-gate-summary.json`; warnings are observe-only, blocks fail | GATE-PARALLEL-BENCHMARK, GATE-OVERLOAD-SLO-DEMO |
 
 ## 5. CI Workflow Jobs
 

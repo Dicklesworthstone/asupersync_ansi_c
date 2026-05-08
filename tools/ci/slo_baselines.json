@@ -26,6 +26,13 @@
         "action": "add_parallel_observe_only_profile",
         "rationale": "PARALLEL profile gross-regression baseline from rch exec -- make parallel-bench-json on worker vmi1149989. Worker-count baselines stay in the benchmark artifact; SLO profile keeps loose thresholds for the aggregate large-swarm lane.",
         "commit": "pending"
+      },
+      {
+        "date": "2026-05-08",
+        "author": "SilverFrog",
+        "action": "calibrate_parallel_overload_admission_slos",
+        "rationale": "RCH run `rch exec -- make parallel-bench-gate` on worker vmi1152480 emitted 5 worker-count rows and 15 resource-class footprint rows. Expected full-queue pressure produced observe-only warnings for worker_count=1/2/8/32/64; block count stayed 0. Thresholds are resource-plane gates only and require profile-parity evidence before any baseline update can claim semantic safety.",
+        "commit": "pending"
       }
     ]
   },
@@ -168,6 +175,40 @@
           "p99_9_ns":  {"budget": 2000000, "headroom": 60.8, "baseline": 32869},
           "p99_99_ns": {"budget": 2000000, "headroom": 60.8, "baseline": 32869},
           "jitter_ns": {"budget": 250000,  "headroom": 95.5, "baseline": 2618}
+        }
+      },
+      "overload_admission_slo": {
+        "schema": "asx.parallel_overload_slo.v1",
+        "gate_target": "parallel-bench-gate",
+        "results_artifact": "build/perf/parallel-bench-results.json",
+        "summary_artifact": "build/perf/parallel-bench-gate-summary.json",
+        "threshold_mode": "observe_only_warn_block_fail",
+        "resource_plane_only": true,
+        "worker_counts": [1, 2, 8, 32, 64],
+        "resource_classes": ["R1", "R2", "R3"],
+        "warn": {
+          "p99_ns": 1000000,
+          "p99_9_ns": 2000000,
+          "pressure_pct": 90,
+          "cancel_mean_ns": 1000000,
+          "trace_commit_mean_ns": 1000000,
+          "memory_bytes": 8388608
+        },
+        "block": {
+          "p99_ns": 5000000,
+          "p99_9_ns": 10000000,
+          "scheduler_throughput_ops_per_sec_floor": 1,
+          "mpsc_contention_ops_per_sec_floor": 1000,
+          "cancel_mean_ns": 5000000,
+          "trace_commit_mean_ns": 5000000,
+          "memory_bytes": 67108864
+        },
+        "reference_capture": {
+          "captured_at": "2026-05-08T13:32:27Z",
+          "captured_on": "rch-vmi1152480",
+          "warnings": 5,
+          "blocks": 0,
+          "warning_rationale": "Full ASX_MAX_TASKS admission pressure intentionally reaches 100 percent in the large-swarm baseline. Warnings remain observe-only until repeated evidence justifies a tighter blocking policy."
         }
       }
     }

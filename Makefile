@@ -1366,11 +1366,17 @@ parallel-bench-gate:
 	@echo "[asx] parallel-bench-gate: capturing PARALLEL worker-count baselines..."
 	@mkdir -p build/perf
 	@$(MAKE) --no-print-directory parallel-bench-json > build/perf/parallel-bench-results.json
-	@jq -e '.profile == "PARALLEL" and (.parallel_worker_baselines | length > 0)' build/perf/parallel-bench-results.json >/dev/null
+	@jq -e '.profile == "PARALLEL" and (.parallel_worker_baselines | length > 0) and (.parallel_overload_slo_summary.schema == "asx.parallel_overload_slo_summary.v1") and (.parallel_resource_class_footprint_baselines | length > 0)' build/perf/parallel-bench-results.json >/dev/null
+	@jq '{schema:"asx.parallel_bench_gate_summary.v1",generated_at:(now|todate),source:"build/perf/parallel-bench-results.json",profile:.profile,bench_metadata:.bench_metadata,overload_slo_summary:.parallel_overload_slo_summary,threshold_policy:.parallel_worker_baselines[0].overload_slo.thresholds,remediation:.parallel_worker_baselines[0].overload_slo.remediation,worker_rows:[.parallel_worker_baselines[] | {worker_count,resource_class,supported,threshold_status,p50_ns:.scheduler_stats.p50_ns,p95_ns:.scheduler_stats.p95_ns,p99_ns:.scheduler_stats.p99_ns,p99_9_ns:.scheduler_stats.p99_9_ns,admission_rejects_observed:.overload_slo.observed.admission.rejects_observed,steal_cost_proxy_ns_per_attempt:.overload_slo.observed.steal.cost_proxy_ns_per_attempt,peak_pressure_pct:.overload_slo.observed.queue_pressure.peak_pressure_pct,memory_footprint_bytes:.overload_slo.observed.memory_footprint_bytes}],resource_class_rows:.parallel_resource_class_footprint_baselines}' build/perf/parallel-bench-results.json > build/perf/parallel-bench-gate-summary.json
 	@warns=$$(jq '[.parallel_worker_baselines[] | select(.threshold_status == "warn")] | length' build/perf/parallel-bench-results.json); \
-	echo "[asx] parallel-bench-gate: observe-only warnings=$$warns report=build/perf/parallel-bench-results.json"; \
+	blocks=$$(jq '[.parallel_worker_baselines[] | select(.threshold_status == "block")] | length' build/perf/parallel-bench-results.json); \
+	echo "[asx] parallel-bench-gate: observe-only warnings=$$warns blocks=$$blocks report=build/perf/parallel-bench-results.json summary=build/perf/parallel-bench-gate-summary.json"; \
 	if [ "$$warns" -gt 0 ]; then \
-		jq -r '.parallel_worker_baselines[] | select(.threshold_status == "warn") | "  - worker_count=\(.worker_count) scheduler_ops_per_sec=\(.scheduler_throughput_ops_per_sec) cancel_mean_ns=\(.cancel_latency.mean_per_task_ns) mpsc_ops_per_sec=\(.mpsc_contention.ops_per_sec) trace_commit_mean_ns=\(.trace_commit_mean_ns)"' build/perf/parallel-bench-results.json; \
+		jq -r '.parallel_worker_baselines[] | select(.threshold_status == "warn") | "  - WARN worker_count=\(.worker_count) resource_class=\(.resource_class) p99_ns=\(.scheduler_stats.p99_ns) p99_9_ns=\(.scheduler_stats.p99_9_ns) pressure_pct=\(.overload_slo.observed.queue_pressure.peak_pressure_pct) memory_bytes=\(.overload_slo.observed.memory_footprint_bytes) remediation=\(.overload_slo.remediation)"' build/perf/parallel-bench-results.json; \
+	fi; \
+	if [ "$$blocks" -gt 0 ]; then \
+		jq -r '.parallel_worker_baselines[] | select(.threshold_status == "block") | "  - BLOCK worker_count=\(.worker_count) resource_class=\(.resource_class) p99_ns=\(.scheduler_stats.p99_ns) p99_9_ns=\(.scheduler_stats.p99_9_ns) scheduler_ops_per_sec=\(.scheduler_throughput_ops_per_sec) mpsc_ops_per_sec=\(.mpsc_contention.ops_per_sec) memory_bytes=\(.overload_slo.observed.memory_footprint_bytes)"' build/perf/parallel-bench-results.json; \
+		exit 1; \
 	fi
 
 .PHONY: slo-gate size-gate evidence-dashboard traceability-export

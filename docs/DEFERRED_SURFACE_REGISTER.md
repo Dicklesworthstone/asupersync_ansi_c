@@ -116,7 +116,7 @@ surface, test obligation, and no-drift rule.
 | Observability and replay evidence | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` | Incident bundles, trace schema changes, and minimized counterexamples must be read-only evidence surfaces and must not alter runtime behavior. |
 | Networking primitives | `bd-v12u.9`, `bd-v12u.10` | `test-e2e-network-surface`, focused net/pipe unit tests, and `profile-parity` must cover lifecycle, cancellation, backpressure, resource caps, and unsupported-profile diagnostics. `bd-v12u.10` owns the first native socket/reactor e2e and must not introduce kernel digest drift. |
 | Combinators and actor/supervision harnesses | `bd-v12u.11`, `bd-v12u.12` | `test-combinator-contract`, `make conformance`, `codec-equivalence`, and `profile-parity` must pin outcome aggregation, cancellation propagation, timeout ordering, retry/budget caps, bracket cleanup, and unsupported actor/supervision depth before parity claims expand. |
-| Overload SLOs and user acceptance | `bd-v12u.14`, `bd-v12u.15` | Performance/admission thresholds must be resource-plane only; final demos must include replay, profile compatibility, incident evidence, and fail-closed messaging. |
+| Overload SLOs and user acceptance | `bd-v12u.14`, `bd-v12u.15` | Performance/admission thresholds must be resource-plane only. `bd-v12u.14` owns `parallel-bench-gate` SLO summaries with p50/p95/p99/p99.9, admission rejection, queue pressure, steal-cost proxy, and R1/R2/R3 footprint evidence; `bd-v12u.15` owns final replay/profile/incident demo packaging and fail-closed messaging. |
 
 No Wave C child may close on a proxy signal alone. Passing tests, complete
 manifests, or generated reports count only when they directly cover the
