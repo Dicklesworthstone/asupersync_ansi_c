@@ -396,6 +396,17 @@ make fuzz-counterexample-replay
 make fuzz-counterexample-replay RUST_FUZZ_BINARY=tools/rust_fuzz_target/target/release/rust_fuzz_target
 ```
 
+### `make resource-pressure-gate`
+
+Replay the resource-pressure failure-atomic scenario pack. The gate runs the
+same region/task/obligation/channel/timer/scheduler/cancel cleanup scenarios
+for CORE/R3 and EMBEDDED_ROUTER/R1 lanes, checks exact error outcomes, writes
+per-case snapshots, and rejects cross-lane semantic digest drift.
+
+```bash
+make resource-pressure-gate
+```
+
 ### `make bench`
 
 Run the benchmark suite.
@@ -1506,6 +1517,13 @@ Durable counterexamples live in `fixtures/fuzz_counterexamples/` with schema
 divergences there after triage; every fixture records the deterministic input
 seed, expected summary counters, Rust-reference requirement, and minimization
 metadata.
+
+Resource-pressure scenarios live in `fixtures/resource_pressure/` with schema
+`asx.resource_pressure.failure_atomic_scenarios.v1`. Each listed scenario must
+have a matching record from `make resource-pressure-gate`; the gate emits
+profile/resource-class evidence under `build/resource-pressure/` and fails if a
+resource-exhausted operation mutates its pre-operation snapshot or if CORE and
+the constrained lane disagree on canonical semantic digest.
 
 ## Conformance Fixture Format
 

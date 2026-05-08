@@ -1,0 +1,48 @@
+{
+  "schema": "asx.resource_pressure.failure_atomic_scenarios.v1",
+  "description": "Deterministic resource-pressure scenarios for failure-atomic replay evidence.",
+  "scenarios": [
+    {
+      "scenario_id": "rp-region-create-exhaustion-001",
+      "surface": "region_create",
+      "expected_status": "ASX_E_RESOURCE_EXHAUSTED",
+      "failure_atomic": true
+    },
+    {
+      "scenario_id": "rp-task-spawn-exhaustion-002",
+      "surface": "task_spawn",
+      "expected_status": "ASX_E_RESOURCE_EXHAUSTED",
+      "failure_atomic": true
+    },
+    {
+      "scenario_id": "rp-obligation-reserve-exhaustion-003",
+      "surface": "obligation_reserve",
+      "expected_status": "ASX_E_RESOURCE_EXHAUSTED",
+      "failure_atomic": true
+    },
+    {
+      "scenario_id": "rp-channel-enqueue-exhaustion-004",
+      "surface": "channel_enqueue",
+      "expected_status": "ASX_E_CHANNEL_FULL",
+      "failure_atomic": true
+    },
+    {
+      "scenario_id": "rp-timer-allocation-exhaustion-005",
+      "surface": "timer_allocation",
+      "expected_status": "ASX_E_RESOURCE_EXHAUSTED",
+      "failure_atomic": true
+    },
+    {
+      "scenario_id": "rp-scheduler-poll-budget-exhaustion-006",
+      "surface": "scheduler_poll_budget",
+      "expected_status": "ASX_E_POLL_BUDGET_EXHAUSTED",
+      "failure_atomic": false
+    },
+    {
+      "scenario_id": "rp-cancel-cleanup-budget-exhaustion-007",
+      "surface": "cancel_cleanup_budget",
+      "expected_status": "ASX_E_CANCELLED",
+      "failure_atomic": false
+    }
+  ]
+}

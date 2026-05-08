@@ -497,7 +497,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
-.PHONY: conformance codec-equivalence profile-parity parallel-parity crate-acceptance-gate
+.PHONY: conformance codec-equivalence profile-parity parallel-parity crate-acceptance-gate resource-pressure-gate
 .PHONY: fuzz-smoke ci-embedded-matrix
 .PHONY: release release-artifacts release-install-smoke bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
@@ -1438,6 +1438,13 @@ release-evidence-manifest:
 	@echo "[asx] release-evidence-manifest: complete"
 
 # ---------------------------------------------------------------------------
+# resource-pressure-gate — deterministic failure-atomic pressure scenarios
+# ---------------------------------------------------------------------------
+resource-pressure-gate:
+	@echo "[asx] resource-pressure-gate: replaying resource pressure scenario pack..."
+	@ASX_GIT_COMMIT="$(ASX_GIT_COMMIT)" tools/ci/run_resource_pressure_gate.sh
+
+# ---------------------------------------------------------------------------
 # conformance — Rust fixture parity verification
 # ---------------------------------------------------------------------------
 conformance:
@@ -1875,6 +1882,7 @@ help:
 	@echo "  parallel-bench-json PARALLEL worker-count baseline JSON"
 	@echo "  parallel-bench-gate Capture PARALLEL baseline JSON and observe-only warnings"
 	@echo "  release-evidence-manifest Generate unified release evidence manifest"
+	@echo "  resource-pressure-gate Replay failure-atomic resource pressure scenarios"
 	@echo "  release            Optimized production build"
 	@echo "  release-artifacts  Build release tar.xz + checksum/signature/provenance bundles"
 	@echo "  release-install-smoke Install release tarball into a prefix and run README quickstart"

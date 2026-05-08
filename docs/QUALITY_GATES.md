@@ -33,13 +33,29 @@ release artifact install smoke, and supplementary enforcement gates.
 |-------|-------|
 | **Gate ID** | `GATE-OOM` |
 | **Plan ref** | Section 10.6 item 2 |
-| **Makefile targets** | `test-unit` (test_budget, test_boundary_exhaustion), `test-e2e` (robustness_exhaustion.sh) |
+| **Makefile targets** | `test-unit` (test_budget, test_boundary_exhaustion), `test-e2e` (robustness_exhaustion.sh), `resource-pressure-gate` |
 | **CI job** | `unit-invariant`, `e2e` |
-| **Scripts** | `tests/e2e/robustness_exhaustion.sh` |
-| **Artifacts** | `build/test-logs/e2e-robustness-exhaustion.jsonl` |
-| **Pass criteria** | All budget-exhaustion and resource-exhaustion tests pass. Exhaustion returns deterministic error codes (`ASX_E_POLL_BUDGET_EXHAUSTED`, `ASX_E_RESOURCE_EXHAUSTED`). Region remains healthy after exhaustion. |
-| **Rerun** | `make test-unit` (unit), `ASX_E2E_SEED=42 tests/e2e/robustness_exhaustion.sh` (e2e) |
+| **Scripts** | `tests/e2e/robustness_exhaustion.sh`, `tools/ci/run_resource_pressure_gate.sh` |
+| **Artifacts** | `build/test-logs/e2e-robustness-exhaustion.jsonl`, `fixtures/resource_pressure/failure_atomic_scenarios.json`, `build/resource-pressure/*/resource_pressure_failure_atomic_summary.json`, `build/resource-pressure/*/resource_pressure_failure_atomic_cases.jsonl` |
+| **Pass criteria** | All budget-exhaustion and resource-exhaustion tests pass. Exhaustion returns deterministic error codes (`ASX_E_POLL_BUDGET_EXHAUSTED`, `ASX_E_RESOURCE_EXHAUSTED`, `ASX_E_CHANNEL_FULL`, `ASX_E_CANCELLED`). Resource-exhausted region/task/obligation/channel/timer operations leave the pre-operation snapshot unchanged. CORE/R3 and EMBEDDED_ROUTER/R1 lanes emit matching canonical semantic digests. |
+| **Rerun** | `make test-unit` (unit), `ASX_E2E_SEED=42 tests/e2e/robustness_exhaustion.sh` (e2e), `make resource-pressure-gate` |
 | **Failure action** | Fix non-deterministic exhaustion behavior. Budget paths must be failure-atomic. |
+
+Resource-pressure fixture shape:
+
+```json
+{
+  "schema": "asx.resource_pressure.failure_atomic_scenarios.v1",
+  "scenarios": [
+    {
+      "scenario_id": "rp-task-spawn-exhaustion-002",
+      "surface": "task_spawn",
+      "expected_status": "ASX_E_RESOURCE_EXHAUSTED",
+      "failure_atomic": true
+    }
+  ]
+}
+```
 
 ### 1.3 Differential Fuzzing Gate
 
@@ -304,6 +320,7 @@ and documentation enforcement.
 | `GATE-CONFORMANCE` | `conformance` | `conformance` | `tools/ci/run_conformance.sh` | Rust fixture parity |
 | `GATE-CODEC` | `codec-equivalence` | `conformance` | `tools/ci/run_codec_equivalence.sh` | JSON/BIN codec equivalence |
 | `GATE-RELEASE-EVIDENCE-MANIFEST` | `release-evidence-manifest` | `release-readiness` | `tools/ci/generate_release_evidence_manifest.sh` | Unified release evidence index with digest and stale-commit validation |
+| `GATE-RESOURCE-PRESSURE` | `resource-pressure-gate` | `unit-invariant`, `profile-parity` | `tools/ci/run_resource_pressure_gate.sh` | Deterministic region/task/obligation/channel/timer/scheduler/cancel cleanup pressure scenarios with failure-atomic snapshots and CORE vs constrained-lane digest parity |
 | `GATE-FUZZ-COUNTEREXAMPLE-REPLAY` | `fuzz-counterexample-replay` | `fuzz-parity` | `tools/ci/replay_fuzz_counterexamples.sh` | Durable minimized fuzz corpus replay with C counters and optional Rust oracle |
 | `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `check` | `tests/formal/litmus/test_memory_model_litmus.c`, `tools/ci/check_codegen_stability.sh` | Parallel-runtime atomic publication, queue ownership, seqlock/EBR, trace-ordering, and bounded scheduler proofs |
 | `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `tools/ci/run_parallel_parity.sh` | Single-vs-multi-worker semantic digest and event-summary parity |
