@@ -1,6 +1,7 @@
 #ifndef ASX_PLATFORM_ATOMICS_H
 #define ASX_PLATFORM_ATOMICS_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifndef ASX_LOCKFREE_SINGLE_THREAD

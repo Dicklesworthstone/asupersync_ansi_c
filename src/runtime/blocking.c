@@ -9,9 +9,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <asx/platform/atomics.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/browser_boundary.h>
-#include <asx/platform/atomics.h>
 #include <string.h>
 
 #if ASX_HAS_BLOCKING_SURFACE

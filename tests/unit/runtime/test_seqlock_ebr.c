@@ -121,18 +121,16 @@ void asx_task_metadata_init(asx_task_metadata *md, uint32_t state, uint16_t gene
                             uint64_t trace_sequence);
 void asx_task_metadata_slot_init(asx_task_metadata_slot *slot, uint32_t slot_index,
                                  uint32_t reader_count);
-int asx_task_metadata_slot_publish(asx_task_metadata_slot *slot,
-                                   const asx_task_metadata *metadata);
+int asx_task_metadata_slot_publish(asx_task_metadata_slot *slot, const asx_task_metadata *metadata);
 uint32_t asx_task_metadata_slot_reader_enter(asx_task_metadata_slot *slot, uint32_t reader_id);
 void asx_task_metadata_slot_reader_leave(asx_task_metadata_slot *slot, uint32_t reader_id);
-int asx_task_metadata_slot_snapshot_in_epoch(asx_task_metadata_slot *slot,
-                                             asx_task_metadata *out);
+int asx_task_metadata_slot_snapshot_in_epoch(asx_task_metadata_slot *slot, asx_task_metadata *out);
 int asx_task_metadata_slot_snapshot(asx_task_metadata_slot *slot, uint32_t reader_id,
                                     asx_task_metadata *out);
 int asx_task_metadata_is_current(const asx_task_metadata *metadata, uint16_t expected_generation);
 int asx_task_metadata_slot_retire(asx_task_metadata_slot *slot, uint16_t expected_generation);
-int asx_task_metadata_slot_try_reclaim(asx_task_metadata_slot *slot,
-                                       asx_ebr_reclaim_fn reclaim_fn, void *user_data);
+int asx_task_metadata_slot_try_reclaim(asx_task_metadata_slot *slot, asx_ebr_reclaim_fn reclaim_fn,
+                                       void *user_data);
 
 /* ------------------------------------------------------------------ */
 /* Test reclaim callback state                                        */

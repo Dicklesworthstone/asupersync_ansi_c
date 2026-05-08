@@ -884,7 +884,8 @@ static bench_parallel_report bench_parallel_large_swarm_for_workers(uint32_t req
     rpt.cancel_stats = bench_parallel_cancel_latency(rpt.worker_count, BENCH_PARALLEL_AUX_SAMPLES);
     rpt.mpsc_stats = bench_parallel_mpsc_contention(rpt.worker_count, BENCH_PARALLEL_AUX_SAMPLES);
     rpt.scheduler_throughput_ops_per_sec = bench_ops_per_sec(rpt.task_count, &rpt.stats);
-    rpt.cancel_latency_mean_ns = rpt.task_count > 0u ? rpt.cancel_stats.mean / (uint64_t)rpt.task_count : 0u;
+    rpt.cancel_latency_mean_ns =
+        rpt.task_count > 0u ? rpt.cancel_stats.mean / (uint64_t)rpt.task_count : 0u;
     rpt.mpsc_contention_ops_per_sec =
         bench_ops_per_sec(ASX_CHANNEL_MAX_CAPACITY * 2u, &rpt.mpsc_stats);
     rpt.trace_commit_mean_ns = rpt.snapshot.metrics.commit_sequence > 0u
@@ -933,7 +934,8 @@ static void bench_print_parallel_baseline_json(const bench_parallel_report *rpt,
     printf("      \"supported\": %s,\n", rpt->supported ? "true" : "false");
 
     if (!rpt->supported) {
-        printf("      \"unsupported_reason\": \"requested_worker_count_exceeds_ASX_MAX_WORKERS\",\n");
+        printf(
+            "      \"unsupported_reason\": \"requested_worker_count_exceeds_ASX_MAX_WORKERS\",\n");
         printf("      \"threshold_status\": \"skipped\"\n");
         printf("    }%s\n", last ? "" : ",");
         return;
@@ -1322,7 +1324,8 @@ int main(int argc, char **argv) {
     printf("    \"c_standard\": 0,\n");
 #endif
     printf("    \"seed\": %" PRIu32 ",\n", BENCH_PARALLEL_SEED);
-    printf("    \"rch_expected_command\": \"rch exec -- make parallel-bench-json PROFILE=PARALLEL\",\n");
+    printf("    \"rch_expected_command\": \"rch exec -- make parallel-bench-json "
+           "PROFILE=PARALLEL\",\n");
     printf("    \"run_tag\": ");
     bench_print_json_string(getenv("ASX_CI_RUN_TAG"));
     printf(",\n");
@@ -1480,7 +1483,8 @@ int main(int argc, char **argv) {
     printf("    \"mode\": \"observe_only_gross_regression\",\n");
     printf("    \"status_field\": \"parallel_worker_baselines[].threshold_status\",\n");
     printf("    \"hard_fail_default\": false,\n");
-    printf("    \"rationale\": \"surface gross regressions in benchmark artifacts before turning exploratory PARALLEL thresholds into blocking CI\"\n");
+    printf("    \"rationale\": \"surface gross regressions in benchmark artifacts before turning "
+           "exploratory PARALLEL thresholds into blocking CI\"\n");
     printf("  },\n");
 
     printf("  \"parallel_worker_baselines\": [\n");
