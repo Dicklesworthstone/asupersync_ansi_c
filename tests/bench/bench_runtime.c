@@ -747,6 +747,8 @@ static void bench_parallel_config_init(asx_parallel_config *cfg, uint32_t worker
     cfg->lane_weights[2] = 1u;
     cfg->starvation_limit = 8u;
     asx_parallel_admission_policy_init(&cfg->admission_policy);
+    asx_parallel_locality_config_init(&cfg->locality);
+    if (worker_count > 1u) { cfg->locality.mode = ASX_PARALLEL_LOCALITY_WORKER_SHARDED; }
 }
 
 static bench_stats bench_parallel_cancel_latency(uint32_t worker_count, uint32_t sample_count) {
@@ -945,8 +947,13 @@ static void bench_print_parallel_baseline_json(const bench_parallel_report *rpt,
     printf("        \"lane_weights\": [1, 1, 1],\n");
     printf("        \"starvation_limit\": 8,\n");
     printf("        \"admission_mode\": \"observe_only\",\n");
-    printf("        \"admission_pressure_threshold_pct\": %" PRIu32 "\n",
+    printf("        \"admission_pressure_threshold_pct\": %" PRIu32 ",\n",
            ASX_PARALLEL_DEFAULT_PRESSURE_THRESHOLD_PCT);
+    printf("        \"locality_mode\": \"%s\",\n",
+           asx_parallel_locality_mode_str(rpt->snapshot.locality.mode));
+    printf("        \"locality_shard_count\": %" PRIu32 ",\n", rpt->snapshot.locality.shard_count);
+    printf("        \"locality_tasks_per_shard\": %" PRIu32 "\n",
+           rpt->snapshot.locality.tasks_per_shard);
     printf("      },\n");
     printf("      \"scheduler_stats\": {\n");
     bench_print_stats_members_json(&rpt->stats, "        ");
@@ -987,7 +994,12 @@ static void bench_print_parallel_baseline_json(const bench_parallel_report *rpt,
     printf("        \"reactor_ready\": %" PRIu32 ",\n", rpt->snapshot.metrics.reactor_ready);
     printf("        \"waker_ready\": %" PRIu32 ",\n", rpt->snapshot.metrics.waker_ready);
     printf("        \"worker_yields\": %" PRIu32 ",\n", rpt->snapshot.metrics.worker_yields);
-    printf("        \"commit_sequence\": %" PRIu32 "\n", rpt->snapshot.metrics.commit_sequence);
+    printf("        \"commit_sequence\": %" PRIu32 ",\n", rpt->snapshot.metrics.commit_sequence);
+    printf("        \"locality_mode\": \"%s\",\n",
+           asx_parallel_locality_mode_str(rpt->snapshot.locality.mode));
+    printf("        \"locality_hot_shard\": %" PRIu32 ",\n", rpt->snapshot.locality.hot_shard);
+    printf("        \"locality_max_shard_tasks\": %" PRIu32 "\n",
+           rpt->snapshot.locality.max_shard_tasks);
     printf("      },\n");
     printf("      \"trace_commit_mean_ns\": %" PRIu64 ",\n", rpt->trace_commit_mean_ns);
     printf("      \"thresholds\": {\n");
@@ -1452,8 +1464,16 @@ int main(int argc, char **argv) {
     printf("    \"admission_queued\": %" PRIu32 ",\n", plr.snapshot.admission.queued);
     printf("    \"admission_capacity\": %" PRIu32 ",\n", plr.snapshot.admission.capacity);
     printf("    \"admission_status_code\": %d,\n", (int)plr.snapshot.admission.admit_status);
-    printf("    \"admission_status_text\": \"%s\"\n",
+    printf("    \"admission_status_text\": \"%s\",\n",
            asx_status_str(plr.snapshot.admission.admit_status));
+    printf("    \"locality_mode\": \"%s\",\n",
+           asx_parallel_locality_mode_str(plr.snapshot.locality.mode));
+    printf("    \"locality_shard_count\": %" PRIu32 ",\n", plr.snapshot.locality.shard_count);
+    printf("    \"locality_tasks_per_shard\": %" PRIu32 ",\n",
+           plr.snapshot.locality.tasks_per_shard);
+    printf("    \"locality_hot_shard\": %" PRIu32 ",\n", plr.snapshot.locality.hot_shard);
+    printf("    \"locality_max_shard_tasks\": %" PRIu32 "\n",
+           plr.snapshot.locality.max_shard_tasks);
     printf("  },\n");
 
     printf("  \"parallel_threshold_governance\": {\n");

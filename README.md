@@ -1548,18 +1548,27 @@ by default.
 - `WEIGHTED`: Proportional distribution per configurable lane weights.
 - `PRIORITY`: Cancel lane drains first, then Ready, then Timed.
 
+**Locality policies**:
+- `COMPACT`: Legacy flat arena routing for constrained profiles and
+  single-worker fallback.
+- `WORKER_SHARDED`: Contiguous task-slot shards seed logical worker ownership
+  while preserving generation-safe handles and replay-stable commit order.
+- `NUMA_DOMAIN_SHARDED`: Explicit shard count for larger deployment domains;
+  shard placement remains a resource-plane hint, not semantic behavior.
+
 Cancel-streak limiting (default: 16) prevents starvation. If the cancel lane runs 16 consecutive polls without yielding, the scheduler forces a fairness yield to other lanes. Per-lane starvation detection reports when any lane goes unpolled for too many rounds.
 
 The injector API (`asx_inject_ready`, `asx_inject_cancel`, `asx_inject_timed`) allows cross-boundary task submission into specific lanes, enabling I/O completions and timer fires to route tasks directly to the appropriate scheduling class.
 
 Operator rule: treat `worker_count` as a capacity knob, not a semantic knob.
-After changing worker count, admission mode, queue backend, or platform hooks,
-rerun `make parallel-parity` and `rch exec -- make parallel-bench-json`;
-preserve the emitted reports if the change is used to justify a
-production-scale claim. The benchmark artifact includes scheduler throughput,
-cancel latency, MPSC roundtrip throughput, steal/commit/timed-wake telemetry,
-and observe-only threshold status for worker counts 1, 2, 8, 32, and 64 where
-the active profile supports them.
+After changing worker count, locality mode, admission mode, queue backend, or
+platform hooks, rerun `make parallel-parity` and
+`rch exec -- make parallel-bench-json`; preserve the emitted reports if the
+change is used to justify a production-scale claim. The benchmark artifact
+includes scheduler throughput, cancel latency, MPSC roundtrip throughput,
+steal/commit/timed-wake telemetry, locality shard metadata, and observe-only
+threshold status for worker counts 1, 2, 8, 32, and 64 where the active profile
+supports them.
 
 ## Browser Developer Experience Diagnostics
 

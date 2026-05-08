@@ -137,6 +137,7 @@ static asx_parallel_config default_config(void) {
     cfg.lane_weights[2] = 1;
     cfg.starvation_limit = 5;
     asx_parallel_admission_policy_init(&cfg.admission_policy);
+    asx_parallel_locality_config_init(&cfg.locality);
     return cfg;
 }
 
@@ -1191,6 +1192,171 @@ TEST(parallel_multi_worker_init) {
     asx_parallel_reset();
 }
 
+TEST(parallel_locality_default_compact_snapshot) {
+    asx_parallel_config cfg = default_config();
+    asx_parallel_locality_snapshot snapshot;
+
+    cfg.worker_count = 4;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_parallel_get_locality_snapshot(&snapshot), ASX_OK);
+    ASSERT_EQ((int)snapshot.mode, (int)ASX_PARALLEL_LOCALITY_COMPACT);
+    ASSERT_EQ(snapshot.shard_count, 1u);
+    ASSERT_EQ(snapshot.tasks_per_shard, (uint32_t)ASX_MAX_TASKS);
+    ASSERT_EQ(snapshot.slot_count, (uint32_t)ASX_MAX_TASKS);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_worker_sharded_locality_routes_by_contiguous_slot_ranges) {
+    asx_region_id rid;
+    asx_task_id tids[8];
+    asx_parallel_config cfg = default_config();
+    asx_parallel_locality_snapshot snapshot;
+    asx_worker_state ws;
+    uint32_t shard;
+    uint32_t worker;
+    uint32_t i;
+
+    cfg.worker_count = 4;
+    cfg.locality.mode = ASX_PARALLEL_LOCALITY_WORKER_SHARDED;
+    cfg.locality.shard_count = 4u;
+    cfg.locality.tasks_per_shard = 2u;
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+
+    for (i = 0u; i < 8u; i++) {
+        ASSERT_EQ(asx_task_spawn(rid, poll_forever, NULL, &tids[i]), ASX_OK);
+        ASSERT_EQ(asx_lane_assign(tids[i], ASX_LANE_READY), ASX_OK);
+    }
+
+    ASSERT_EQ(asx_parallel_get_locality_snapshot(&snapshot), ASX_OK);
+    ASSERT_EQ((int)snapshot.mode, (int)ASX_PARALLEL_LOCALITY_WORKER_SHARDED);
+    ASSERT_EQ(snapshot.shard_count, 4u);
+    ASSERT_EQ(snapshot.tasks_per_shard, 2u);
+    ASSERT_EQ(snapshot.shard_task_counts[0], 2u);
+    ASSERT_EQ(snapshot.shard_task_counts[1], 2u);
+    ASSERT_EQ(snapshot.shard_task_counts[2], 2u);
+    ASSERT_EQ(snapshot.shard_task_counts[3], 2u);
+    ASSERT_EQ(snapshot.max_shard_tasks, 2u);
+
+    ASSERT_EQ(asx_parallel_task_locality(tids[0], &shard, &worker), ASX_OK);
+    ASSERT_EQ(shard, 0u);
+    ASSERT_EQ(worker, 0u);
+    ASSERT_EQ(asx_parallel_task_locality(tids[2], &shard, &worker), ASX_OK);
+    ASSERT_EQ(shard, 1u);
+    ASSERT_EQ(worker, 1u);
+    ASSERT_EQ(asx_parallel_task_locality(tids[6], &shard, &worker), ASX_OK);
+    ASSERT_EQ(shard, 3u);
+    ASSERT_EQ(worker, 3u);
+
+    ASSERT_EQ(asx_worker_get_state(3u, &ws), ASX_OK);
+    ASSERT_EQ(ws.lane_depths[ASX_LANE_READY], 2u);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_worker_sharded_locality_defaults_to_worker_shards) {
+    asx_parallel_config cfg = default_config();
+    asx_parallel_locality_snapshot snapshot;
+
+    cfg.worker_count = 8u;
+    cfg.locality.mode = ASX_PARALLEL_LOCALITY_WORKER_SHARDED;
+
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_parallel_get_locality_snapshot(&snapshot), ASX_OK);
+    ASSERT_EQ((int)snapshot.mode, (int)ASX_PARALLEL_LOCALITY_WORKER_SHARDED);
+    ASSERT_EQ(snapshot.shard_count, 8u);
+    ASSERT_EQ(snapshot.tasks_per_shard, 8u);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_task_locality_rejects_stale_handle) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_task_id stale;
+    asx_parallel_config cfg = default_config();
+    uint32_t shard;
+    uint32_t worker;
+
+    cfg.worker_count = 2;
+    cfg.locality.mode = ASX_PARALLEL_LOCALITY_WORKER_SHARDED;
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_forever, NULL, &tid), ASX_OK);
+
+    stale = asx_handle_pack(
+        ASX_TYPE_TASK, (uint16_t)(1u << ASX_TASK_CREATED),
+        asx_handle_pack_index((uint16_t)(asx_handle_generation(tid) + 1u), asx_handle_slot(tid)));
+    ASSERT_EQ(asx_parallel_task_locality(stale, &shard, &worker), ASX_E_INVALID_ARGUMENT);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_worker_sharded_trace_matches_compact) {
+    asx_region_id rid;
+    asx_task_id t1, t2, t3;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    int c1, c2, c3;
+    uint32_t i;
+    uint32_t compact_count;
+    asx_trace_event compact_events[96];
+
+    reset_all();
+    asx_trace_reset();
+    c1 = 2;
+    c2 = 1;
+    c3 = 0;
+    cfg.worker_count = 4;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c2, &t2), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c3, &t3), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    compact_count = asx_trace_event_count();
+    ASSERT_TRUE(compact_count > 0u);
+    ASSERT_TRUE(compact_count <= 96u);
+    for (i = 0; i < compact_count; i++) {
+        ASSERT_TRUE(asx_trace_event_get(i, &compact_events[i]));
+    }
+
+    reset_all();
+    asx_trace_reset();
+    c1 = 2;
+    c2 = 1;
+    c3 = 0;
+    cfg.worker_count = 4;
+    cfg.locality.mode = ASX_PARALLEL_LOCALITY_WORKER_SHARDED;
+    cfg.locality.shard_count = 4u;
+    cfg.locality.tasks_per_shard = 1u;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c2, &t2), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c3, &t3), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(asx_trace_event_count(), compact_count);
+    for (i = 0; i < compact_count; i++) {
+        asx_trace_event ev;
+        ASSERT_TRUE(asx_trace_event_get(i, &ev));
+        ASSERT_EQ((int)ev.kind, (int)compact_events[i].kind);
+        ASSERT_EQ(ev.entity_id, compact_events[i].entity_id);
+        ASSERT_EQ(ev.aux, compact_events[i].aux);
+    }
+
+    asx_parallel_reset();
+}
+
 /* ================================================================
  * Lane weight reflected in state
  * ================================================================ */
@@ -1400,6 +1566,11 @@ int main(void) {
 
     /* Multi-worker */
     RUN_TEST(parallel_multi_worker_init);
+    RUN_TEST(parallel_locality_default_compact_snapshot);
+    RUN_TEST(parallel_worker_sharded_locality_routes_by_contiguous_slot_ranges);
+    RUN_TEST(parallel_worker_sharded_locality_defaults_to_worker_shards);
+    RUN_TEST(parallel_task_locality_rejects_stale_handle);
+    RUN_TEST(parallel_worker_sharded_trace_matches_compact);
 
     /* Lane weight query */
     RUN_TEST(parallel_lane_weight_query);

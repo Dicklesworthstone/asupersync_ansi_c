@@ -173,7 +173,7 @@ and documentation enforcement.
 | `GATE-CODEC` | `codec-equivalence` | `conformance` | `tools/ci/run_codec_equivalence.sh` | JSON/BIN codec equivalence |
 | `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `check` | `tests/formal/litmus/test_memory_model_litmus.c`, `tools/ci/check_codegen_stability.sh` | Parallel-runtime atomic publication, queue ownership, seqlock/EBR, trace-ordering, and bounded scheduler proofs |
 | `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `tools/ci/run_parallel_parity.sh` | Single-vs-multi-worker semantic digest and event-summary parity |
-| `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json`, `parallel-bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `tests/unit/runtime/test_parallel.c`, `tools/ci/run_parallel_parity.sh`, `tests/bench/bench_runtime.c` | Large-swarm pressure telemetry, admission evidence, worker-count baselines, and benchmark JSON artifacts |
+| `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json`, `parallel-bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `tests/unit/runtime/test_parallel.c`, `tools/ci/run_parallel_parity.sh`, `tests/bench/bench_runtime.c` | Large-swarm pressure telemetry, admission evidence, worker-count baselines, locality metadata, and benchmark JSON artifacts |
 
 ### 2.1 Parallel Graduation Gate
 
@@ -186,8 +186,9 @@ without hidden semantic drift. `bd-pweu.13` pins the parallel memory-model proof
 surface: atomics, metadata publication/reclamation, trace commit ordering, and
 bounded scheduler state are covered by formal litmus and codegen gates.
 `bd-pweu.14` adds RCH-backed worker-count benchmark baselines with
-observe-only gross-regression threshold status. Remaining production-scale
-operator claims are gated by `bd-pweu.9` locality evidence.
+observe-only gross-regression threshold status. `bd-pweu.9` adds the
+runtime-configured locality prototype and sharded-vs-compact trace
+isomorphism proof needed for locality-sensitive 64-core operator claims.
 
 | Gate ID | Makefile Target | CI Job | Tracking Bead | Purpose |
 |---------|-----------------|--------|---------------|---------|
@@ -195,6 +196,7 @@ operator claims are gated by `bd-pweu.9` locality evidence.
 | `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `bd-pweu.11` | Compare canonical semantic digests and structured event summaries for the same scenarios under worker_count=1, 2, 8, and 64. |
 | `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `bd-pweu.10` | Validate pressure snapshots, deterministic admission decisions, JSONL rendering, and benchmark JSON telemetry for large-swarm runs. |
 | `GATE-PARALLEL-BENCHMARK` | `parallel-bench-json`, `parallel-bench-gate` | `perf-tail-deadline` | `bd-pweu.14` | Capture RCH-backed worker_count=1/2/8/32/64 baselines with scheduler throughput, cancel latency, MPSC throughput, steal/commit/timed-wake telemetry, and observe-only threshold status. |
+| `GATE-PARALLEL-LOCALITY` | `test-unit`, `parallel-parity`, `parallel-bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `bd-pweu.9` | Validate compact vs worker-sharded locality routing, stale-handle fail-closed checks, shard telemetry, and benchmark evidence without semantic digest drift. |
 
 Coverage requirements:
 
@@ -218,7 +220,10 @@ Coverage requirements:
    readiness, blocking backlog, and the deterministic admission decision.
 7. Admission policy defaults to observe-only; enforced reject/backpressure must
    be explicit and failure-atomic.
-8. Expensive local proof runs must be executed via `rch exec -- make ...`.
+8. Locality sharding must be explicitly configured, must leave constrained
+   profiles on compact routing by default, and must preserve generation-safe
+   handle checks plus compact-vs-sharded trace/event isomorphism.
+9. Expensive local proof runs must be executed via `rch exec -- make ...`.
 
 The large-swarm e2e pack is `tests/e2e/parallel_swarm.sh`. Its default
 `ASX_E2E_PARALLEL_SCALE=smoke` lane is suitable for CI. Nightly/profile runs

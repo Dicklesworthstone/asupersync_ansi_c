@@ -32,7 +32,7 @@ A subsystem may enter active implementation queue only when:
 |---|---|---|---|---|---|---|
 | `Q-B-001` | full trace subsystem expansion | Wave B | Wave A review gate + replay baseline stable | `SPEC-TPL-TRACE` | `CONF-TPL-TRACE` | deferred |
 | `Q-B-002` | lab/runtime experiment surfaces | Wave B | Wave A review gate + determinism baseline stable | `SPEC-TPL-LAB` | `CONF-TPL-LAB` | deferred |
-| `Q-B-003` | optional parallel profile | Wave B+ / active `bd-pweu` graduation | `bd-pweu.1`, `.7`, `.10`, `.11`, `.12`, `.13`, `.14`, `.15` green; remaining `bd-pweu.9` locality | `SPEC-TPL-PARALLEL` | `CONF-TPL-PARALLEL` via `parallel-parity`, `test-e2e-parallel`, `formal-check`, `parallel-bench-json` | in-progress |
+| `Q-B-003` | optional parallel profile | Wave B+ / `bd-pweu` graduation evidence complete | `bd-pweu.1`-`.15` green, including locality, parity, e2e, proof, benchmark, and docs slices | `SPEC-TPL-PARALLEL` | `CONF-TPL-PARALLEL` via `parallel-parity`, `test-e2e-parallel`, `formal-check`, `parallel-bench-json` | done |
 | `Q-B-004` | static arena backend | Wave B+ | ADR-002 unblock criteria + allocator parity plan | `SPEC-TPL-STATIC-ARENA` | `CONF-TPL-STATIC-ARENA` | deferred |
 | `Q-C-001` | networking core surfaces | Wave C | Wave B conformance/fuzz gates green | `SPEC-TPL-NET` | `CONF-TPL-NET` | deferred |
 | `Q-C-002` | combinator surface expansion | Wave C | Wave A/B lifecycle/cancel semantics stable | `SPEC-TPL-COMBINATOR` | `CONF-TPL-COMBINATOR` | deferred |

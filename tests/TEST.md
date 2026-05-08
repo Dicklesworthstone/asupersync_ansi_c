@@ -159,10 +159,10 @@ Run all families: `make test-e2e-suite` (emits `run_manifest.json`).
 ### Benchmarks (`tests/bench/`)
 
 - **bench_runtime.c**: Scheduler throughput, cancel propagation latency,
-  trace emission rates, and PARALLEL worker/admission telemetry. The
+  trace emission rates, and PARALLEL worker/admission/locality telemetry. The
   `parallel-bench-json` target emits RCH-friendly 1/2/8/32/64 worker-count
-  baselines with observe-only gross-regression threshold status for CI trend
-  tracking.
+  baselines with locality shard metadata and observe-only gross-regression
+  threshold status for CI trend tracking.
 
 ### Fuzz Tests (`tests/fuzz/`)
 

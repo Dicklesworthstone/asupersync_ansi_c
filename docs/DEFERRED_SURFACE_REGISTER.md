@@ -163,18 +163,18 @@ This register ensures that deferred work is:
 
 ### DS-P01: Optional Parallel Profile (Worker Model, Work-Stealing, Lane Scheduling)
 
-**Status:** Graduation in progress under `bd-pweu`; core logical-worker scheduler, parity gates, large-swarm e2e, telemetry, memory-model proofs, and RCH-backed benchmark baselines have landed, while locality remains open.
+**Status:** Graduation evidence complete under `bd-pweu`; core logical-worker scheduler, parity gates, large-swarm e2e, telemetry, locality routing, memory-model proofs, and RCH-backed benchmark baselines have landed. Remaining broad live-execution claims depend on native platform adapters preserving deterministic commit authority before executing lanes concurrently by default.
 **Rationale:** Kernel correctness is the foundation. Parallel profile adds atomics, synchronization adapters, EBR/hazard pointers (ALPHA-5/6), work-stealing, and fairness validation -- doubling the verification surface. The three primary target verticals (HFT, automotive, embedded router) still require deterministic single-worker fallback behavior.
 **ADR:** ADR-001 (docs/OPEN_DECISIONS_ADR.md)
-**Beads:** `bd-2cw.7` (closed compile/simulation scaffold), `bd-pweu` (open production graduation epic), closed children `bd-pweu.1`-`.8` and `.10`-`.15` for the contract/scheduler/atomic/MPSC/POSIX/parity/e2e/proof/benchmark/docs slices, and open child `bd-pweu.9` for locality.
+**Beads:** `bd-2cw.7` (closed compile/simulation scaffold), `bd-pweu` (production graduation epic), closed children `bd-pweu.1`-`.15` for the contract/scheduler/atomic/MPSC/POSIX/parity/e2e/locality/proof/benchmark/docs slices.
 **Unblock criteria:**
 - Landed: Wave A kernel quality gates green.
 - Landed: deterministic worker-lane scheduling, bounded work stealing, timed-lane/waker/reactor readiness pumping, and replay-stable commit authority.
 - Landed: portable atomics, seqlock/EBR metadata coverage, atomic two-phase MPSC publication, and memory-model litmus/codegen gates.
-- Landed: parallel-specific gates for single-vs-multi-worker digest parity, telemetry/admission evidence, large-swarm e2e logs, and formal proofs.
-- Remaining: locality/arena-sharding decision before broad 64-core performance claims.
+- Landed: parallel-specific gates for single-vs-multi-worker digest parity, telemetry/admission/locality evidence, large-swarm e2e logs, formal proofs, and benchmark baselines.
+- Remaining: native platform adapters must preserve deterministic commit authority before enabling concurrent lane execution by default.
 **Owner:** `SilverFrog` started contract planning in `bd-pweu.1`; implementation ownership remains per-child bead
-**Dependency path:** Wave A gates -> parallel contract -> scheduler/atomic/channel/platform gates -> e2e/proof evidence -> locality and benchmark baselines
+**Dependency path:** Wave A gates -> parallel contract -> scheduler/atomic/channel/platform gates -> e2e/proof/locality evidence -> benchmark baselines -> native adapter concurrency proof
 **Semantic risk:** HIGH if not carefully handled — parallel scheduling must produce identical semantic outcomes to single-thread mode for deterministic scenarios. Cross-profile digest parity is mandatory.
 **Rollback trigger:** Any semantic digest drift, unclassified event-order drift, data-race finding, silent drop, or benchmark/admission evidence that contradicts production-scale claims.
 
@@ -207,11 +207,12 @@ of the logical scheduler.
   BROWSER, POSIX, and WIN32 must either provide the documented live-mode hooks
   or fail closed / fall back to a tested single-worker path without semantic
   drift.
-- **Gate contract:** `bd-pweu.11`, `bd-pweu.12`, `bd-pweu.13`, and
+- **Gate contract:** `bd-pweu.9`, `bd-pweu.11`, `bd-pweu.12`, `bd-pweu.13`, and
   `bd-pweu.14` provide the parallel parity, large-swarm e2e, memory-model
-  proof, and benchmark-baseline gates for semantic and operator claims.
-  `bd-pweu.9` remains the blocker for locality-sensitive 64-core performance
-  claims. All expensive verification must run through `rch exec -- ...`.
+  proof, locality, and benchmark-baseline gates for semantic and operator
+  claims. Native platform adapters remain responsible for preserving the same
+  deterministic commit authority before concurrent lane execution is enabled
+  by default. All expensive verification must run through `rch exec -- ...`.
 
 ---
 
@@ -393,7 +394,7 @@ This section binds deferred-surface governance to the owner decision log so down
 
 | Deferred item | Decision key | Decision source | Consistency note |
 |---|---|---|---|
-| DS-P01 (parallel profile) | `DEC-003` | `docs/OWNER_DECISION_LOG.md` | Wave A deferral is historical; `bd-pweu` graduation is active. Parity/e2e/proof evidence has landed, while locality and benchmark baselines still gate broad production-scale claims. |
+| DS-P01 (parallel profile) | `DEC-003` | `docs/OWNER_DECISION_LOG.md` | Wave A deferral is historical; `bd-pweu` graduation evidence is complete. Parity/e2e/proof/locality/benchmark evidence has landed; native adapters still own deterministic commit authority before default concurrent lane execution. |
 | DS-S01 (static arena backend) | `DEC-004` | `docs/OWNER_DECISION_LOG.md` | Deferral active; allocator-vtable compatibility required now |
 | All semantic-plane-sensitive deferrals | `DEC-005` | `docs/OWNER_DECISION_LOG.md` | No semantic drift allowed while surfaces are deferred |
 

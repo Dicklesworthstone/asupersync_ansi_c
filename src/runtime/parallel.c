@@ -114,6 +114,12 @@ static int admission_mode_valid(asx_parallel_admission_mode mode) {
            mode == ASX_PARALLEL_ADMISSION_SHED_OLDEST;
 }
 
+static int locality_mode_valid(asx_parallel_locality_mode mode) {
+    return mode == ASX_PARALLEL_LOCALITY_COMPACT ||
+           mode == ASX_PARALLEL_LOCALITY_WORKER_SHARDED ||
+           mode == ASX_PARALLEL_LOCALITY_NUMA_DOMAIN_SHARDED;
+}
+
 static void normalize_admission_policy(asx_parallel_admission_policy *policy) {
     if (policy == NULL) { return; }
     if (policy->pressure_threshold_pct == 0u) {
@@ -121,6 +127,119 @@ static void normalize_admission_policy(asx_parallel_admission_policy *policy) {
     }
     if (policy->shed_max == 0u && policy->mode == ASX_PARALLEL_ADMISSION_SHED_OLDEST) {
         policy->shed_max = 1u;
+    }
+}
+
+static uint32_t ceil_div_u32(uint32_t numerator, uint32_t denominator) {
+    if (denominator == 0u) { return 0u; }
+    return (numerator + denominator - 1u) / denominator;
+}
+
+static int parallel_locality_sharding_available(void) {
+#if defined(ASX_PROFILE_FREESTANDING) || defined(ASX_PROFILE_BROWSER) || \
+    defined(ASX_PROFILE_EMBEDDED_ROUTER)
+    return 0;
+#else
+    return 1;
+#endif
+}
+
+static void normalize_locality_config(asx_parallel_locality_config *locality,
+                                      uint32_t worker_count) {
+    uint32_t shard_count;
+
+    if (locality == NULL) { return; }
+    if (!parallel_locality_sharding_available()) { locality->mode = ASX_PARALLEL_LOCALITY_COMPACT; }
+
+    if (locality->mode == ASX_PARALLEL_LOCALITY_COMPACT || worker_count <= 1u) {
+        locality->mode = ASX_PARALLEL_LOCALITY_COMPACT;
+        locality->shard_count = 1u;
+        locality->tasks_per_shard = ASX_MAX_TASKS;
+        return;
+    }
+
+    shard_count = locality->shard_count;
+    if (shard_count == 0u) { shard_count = worker_count; }
+    if (shard_count > ASX_PARALLEL_MAX_LOCALITY_SHARDS) {
+        shard_count = ASX_PARALLEL_MAX_LOCALITY_SHARDS;
+    }
+    if (shard_count > ASX_MAX_TASKS) { shard_count = ASX_MAX_TASKS; }
+    if (shard_count == 0u) { shard_count = 1u; }
+
+    locality->shard_count = shard_count;
+    if (locality->tasks_per_shard == 0u) {
+        locality->tasks_per_shard = ceil_div_u32(ASX_MAX_TASKS, shard_count);
+    }
+    if (locality->tasks_per_shard == 0u) { locality->tasks_per_shard = 1u; }
+}
+
+static uint32_t parallel_slot_locality_shard(uint16_t slot_idx) {
+    const asx_parallel_locality_config *locality = &g_config.locality;
+    uint32_t shard;
+
+    if (slot_idx >= ASX_MAX_TASKS) { return 0u; }
+    if (locality->mode == ASX_PARALLEL_LOCALITY_COMPACT || locality->shard_count <= 1u) {
+        return 0u;
+    }
+
+    shard = (uint32_t)slot_idx / locality->tasks_per_shard;
+    if (shard >= locality->shard_count) { shard = locality->shard_count - 1u; }
+    return shard;
+}
+
+static uint32_t parallel_locality_owner_for_shard(uint32_t shard) {
+    uint32_t worker_count = parallel_active_worker_count();
+    if (worker_count == 0u) { return 0u; }
+    if (worker_count > ASX_MAX_WORKERS) { worker_count = ASX_MAX_WORKERS; }
+    return shard % worker_count;
+}
+
+static uint32_t parallel_locality_seed_owner(uint16_t slot_idx) {
+    uint32_t shard = parallel_slot_locality_shard(slot_idx);
+    return parallel_locality_owner_for_shard(shard);
+}
+
+static uint32_t parallel_locality_effective_owner(uint16_t slot_idx) {
+    uint32_t worker_count = parallel_active_worker_count();
+    uint32_t owner;
+
+    if (slot_idx >= ASX_MAX_TASKS) { return 0u; }
+    if (worker_count == 0u) { return 0u; }
+    if (worker_count > ASX_MAX_WORKERS) { worker_count = ASX_MAX_WORKERS; }
+
+    owner = (uint32_t)g_task_worker_owner[slot_idx];
+    if (owner == ASX_PARALLEL_TASK_UNOWNED || owner >= worker_count) {
+        return parallel_locality_seed_owner(slot_idx);
+    }
+    return owner;
+}
+
+static void parallel_fill_locality_snapshot(asx_parallel_locality_snapshot *out) {
+    uint32_t lane_idx;
+
+    if (out == NULL) { return; }
+    memset(out, 0, sizeof(*out));
+    out->mode = g_config.locality.mode;
+    out->shard_count = g_config.locality.shard_count == 0u ? 1u : g_config.locality.shard_count;
+    out->tasks_per_shard =
+        g_config.locality.tasks_per_shard == 0u ? ASX_MAX_TASKS : g_config.locality.tasks_per_shard;
+    out->slot_count = ASX_MAX_TASKS;
+
+    for (lane_idx = 0u; lane_idx < ASX_MAX_LANES; lane_idx++) {
+        lane_internal *lane = &g_lanes[lane_idx];
+        uint32_t i;
+
+        for (i = 0u; i < lane->count;
+             i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_LANE_TASK_CAPACITY") */
+            uint32_t shard = parallel_slot_locality_shard(asx_handle_slot(lane->tasks[i]));
+            if (shard < ASX_PARALLEL_MAX_LOCALITY_SHARDS) {
+                sat_inc_u32(&out->shard_task_counts[shard]);
+                if (out->shard_task_counts[shard] > out->max_shard_tasks) {
+                    out->max_shard_tasks = out->shard_task_counts[shard];
+                    out->hot_shard = shard;
+                }
+            }
+        }
     }
 }
 
@@ -163,12 +282,14 @@ static asx_status parallel_observe_lane_admission(uint32_t lane_count_after) {
 
 static uint32_t parallel_seed_task_owner(uint16_t slot_idx) {
     uint32_t worker_count = parallel_active_worker_count();
+    uint32_t locality_owner;
     uint32_t owner;
     if (slot_idx >= ASX_MAX_TASKS) { return 0u; }
     if (worker_count > ASX_MAX_WORKERS) { worker_count = ASX_MAX_WORKERS; }
+    locality_owner = parallel_locality_seed_owner(slot_idx);
     if (g_task_worker_owner[slot_idx] == ASX_PARALLEL_TASK_UNOWNED ||
         g_task_worker_owner[slot_idx] >= worker_count) {
-        g_task_worker_owner[slot_idx] = (uint16_t)(slot_idx % worker_count);
+        g_task_worker_owner[slot_idx] = (uint16_t)locality_owner;
     }
     owner = (uint32_t)g_task_worker_owner[slot_idx];
     return owner >= worker_count ? 0u : owner;
@@ -310,9 +431,14 @@ asx_status asx_parallel_init(const asx_parallel_config *cfg) {
     if (cfg->worker_count > ASX_MAX_WORKERS) { return ASX_E_RESOURCE_EXHAUSTED; }
     if (!admission_mode_valid(cfg->admission_policy.mode)) { return ASX_E_INVALID_ARGUMENT; }
     if (cfg->admission_policy.pressure_threshold_pct > 100u) { return ASX_E_INVALID_ARGUMENT; }
+    if (!locality_mode_valid(cfg->locality.mode)) { return ASX_E_INVALID_ARGUMENT; }
+    if (cfg->locality.shard_count > ASX_PARALLEL_MAX_LOCALITY_SHARDS) {
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
 
     g_config = *cfg;
     normalize_admission_policy(&g_config.admission_policy);
+    normalize_locality_config(&g_config.locality, g_config.worker_count);
 
     /* Initialize lanes */
     for (i = 0; i < ASX_MAX_LANES; i++) { memset(&g_lanes[i], 0, sizeof(lane_internal)); }
@@ -1101,6 +1227,47 @@ void asx_parallel_admission_policy_init(asx_parallel_admission_policy *policy) {
     policy->enforce = 0;
 }
 
+void asx_parallel_locality_config_init(asx_parallel_locality_config *locality) {
+    if (locality == NULL) { return; }
+    locality->mode = ASX_PARALLEL_LOCALITY_COMPACT;
+    locality->shard_count = 0u;
+    locality->tasks_per_shard = 0u;
+}
+
+const char *asx_parallel_locality_mode_str(asx_parallel_locality_mode mode) {
+    switch (mode) {
+    case ASX_PARALLEL_LOCALITY_COMPACT: return "compact";
+    case ASX_PARALLEL_LOCALITY_WORKER_SHARDED: return "worker_sharded";
+    case ASX_PARALLEL_LOCALITY_NUMA_DOMAIN_SHARDED: return "numa_domain_sharded";
+    default: return "unknown";
+    }
+}
+
+asx_status asx_parallel_get_locality_snapshot(asx_parallel_locality_snapshot *out) {
+    if (out == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (!g_initialized) { return ASX_E_INVALID_STATE; }
+    parallel_fill_locality_snapshot(out);
+    return ASX_OK;
+}
+
+asx_status asx_parallel_task_locality(asx_task_id tid, uint32_t *out_shard,
+                                      uint32_t *out_worker) {
+    asx_task_slot *slot;
+    uint16_t slot_idx;
+    uint32_t shard;
+
+    if (out_shard == NULL || out_worker == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (!g_initialized) { return ASX_E_INVALID_STATE; }
+    if (asx_task_slot_lookup(tid, &slot) != ASX_OK) { return ASX_E_INVALID_ARGUMENT; }
+    (void)slot;
+
+    slot_idx = asx_handle_slot(tid);
+    shard = parallel_slot_locality_shard(slot_idx);
+    *out_shard = shard;
+    *out_worker = parallel_locality_effective_owner(slot_idx);
+    return ASX_OK;
+}
+
 asx_status asx_parallel_evaluate_admission(const asx_parallel_admission_policy *policy,
                                            uint32_t queued, uint32_t capacity,
                                            asx_parallel_admission_decision *decision) {
@@ -1190,6 +1357,7 @@ asx_status asx_parallel_get_telemetry_snapshot(asx_parallel_telemetry_snapshot *
     out->worker_count = g_config.worker_count;
     out->metrics = g_metrics;
     out->admission = g_last_admission;
+    parallel_fill_locality_snapshot(&out->locality);
 
     for (i = 0u; i < ASX_MAX_LANES; i++) {
         out->lane_depths[i] = g_lanes[i].count;
@@ -1235,7 +1403,7 @@ asx_status asx_parallel_get_telemetry_snapshot(asx_parallel_telemetry_snapshot *
 
 asx_status asx_parallel_render_telemetry_jsonl(const asx_parallel_telemetry_snapshot *snapshot,
                                                char *buf, uint32_t buf_len, uint32_t *out_len) {
-    char tmp[1536];
+    char tmp[2048];
     int needed;
 
     if (snapshot == NULL || buf == NULL) { return ASX_E_INVALID_ARGUMENT; }
@@ -1258,6 +1426,8 @@ asx_status asx_parallel_render_telemetry_jsonl(const asx_parallel_telemetry_snap
         "\"admission\":{\"triggered\":%d,\"mode\":\"%s\",\"pressure_pct\":%u,"
         "\"queued\":%u,\"capacity\":%u,\"shed_count\":%u,\"status_code\":%d,"
         "\"status_text\":\"%s\"},"
+        "\"locality\":{\"mode\":\"%s\",\"shard_count\":%u,\"tasks_per_shard\":%u,"
+        "\"hot_shard\":%u,\"max_shard_tasks\":%u},"
         "\"worker0\":{\"queue_depth\":%u,\"busy_permille\":%u,\"idle_permille\":%u},"
         "\"rerun\":\"make parallel-parity\"}\n",
         (unsigned)snapshot->worker_count, (unsigned)snapshot->total_queue_depth,
@@ -1275,6 +1445,9 @@ asx_status asx_parallel_render_telemetry_jsonl(const asx_parallel_telemetry_snap
         (unsigned)snapshot->admission.pressure_pct, (unsigned)snapshot->admission.queued,
         (unsigned)snapshot->admission.capacity, (unsigned)snapshot->admission.shed_count,
         (int)snapshot->admission.admit_status, asx_status_str(snapshot->admission.admit_status),
+        asx_parallel_locality_mode_str(snapshot->locality.mode),
+        (unsigned)snapshot->locality.shard_count, (unsigned)snapshot->locality.tasks_per_shard,
+        (unsigned)snapshot->locality.hot_shard, (unsigned)snapshot->locality.max_shard_tasks,
         (unsigned)snapshot->worker_queue_depths[0], (unsigned)snapshot->worker_busy_permille[0],
         (unsigned)snapshot->worker_idle_permille[0]);
 

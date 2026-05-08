@@ -51,6 +51,7 @@ extern "C" {
 #endif
 
 #define ASX_PARALLEL_GENERIC_TARGET_WORKERS 64u
+#define ASX_PARALLEL_MAX_LOCALITY_SHARDS ASX_MAX_WORKERS
 #define ASX_MAX_LANES 3u /* READY, CANCEL, TIMED */
 #define ASX_LANE_TASK_CAPACITY 64u
 
@@ -79,6 +80,40 @@ typedef enum {
     ASX_FAIRNESS_WEIGHTED = 1,
     ASX_FAIRNESS_PRIORITY = 2
 } asx_fairness_policy;
+
+/* -------------------------------------------------------------------
+ * Locality mode
+ *
+ * Locality sharding is a resource-plane routing hint. It changes which
+ * logical worker owns a task slot first, but never changes generation-safe
+ * handle packing, lane semantics, or externally committed event order.
+ *
+ * COMPACT keeps the legacy flat arena scan path.
+ * WORKER_SHARDED partitions task slots into contiguous worker-local shards.
+ * NUMA_DOMAIN_SHARDED uses an explicit shard count for larger domains.
+ * ------------------------------------------------------------------- */
+
+typedef enum {
+    ASX_PARALLEL_LOCALITY_COMPACT = 0,
+    ASX_PARALLEL_LOCALITY_WORKER_SHARDED = 1,
+    ASX_PARALLEL_LOCALITY_NUMA_DOMAIN_SHARDED = 2
+} asx_parallel_locality_mode;
+
+typedef struct {
+    asx_parallel_locality_mode mode;
+    uint32_t shard_count;     /* 0 => default from mode/worker_count */
+    uint32_t tasks_per_shard; /* 0 => ceil(ASX_MAX_TASKS / shard_count) */
+} asx_parallel_locality_config;
+
+typedef struct {
+    asx_parallel_locality_mode mode;
+    uint32_t shard_count;
+    uint32_t tasks_per_shard;
+    uint32_t slot_count;
+    uint32_t hot_shard;
+    uint32_t max_shard_tasks;
+    uint32_t shard_task_counts[ASX_PARALLEL_MAX_LOCALITY_SHARDS];
+} asx_parallel_locality_snapshot;
 
 /* -------------------------------------------------------------------
  * Admission policy
@@ -169,6 +204,7 @@ typedef struct {
     uint32_t lane_weights[ASX_MAX_LANES]; /* per-lane weights */
     uint32_t starvation_limit;            /* max rounds without polls before alert */
     asx_parallel_admission_policy admission_policy;
+    asx_parallel_locality_config locality;
 } asx_parallel_config;
 
 /* -------------------------------------------------------------------
@@ -340,7 +376,25 @@ typedef struct {
     uint32_t blocking_backlog;
     asx_scheduling_metrics metrics;
     asx_parallel_admission_decision admission;
+    asx_parallel_locality_snapshot locality;
 } asx_parallel_telemetry_snapshot;
+
+/* Initialize a compact default locality policy. */
+ASX_API void asx_parallel_locality_config_init(asx_parallel_locality_config *locality);
+
+/* Return human-readable name for a locality mode. */
+ASX_API const char *asx_parallel_locality_mode_str(asx_parallel_locality_mode mode);
+
+/* Query the active locality plan and current shard queue depths. */
+ASX_API ASX_MUST_USE asx_status
+asx_parallel_get_locality_snapshot(asx_parallel_locality_snapshot *out);
+
+/* Query the deterministic shard and current logical owner for a task handle.
+ * This validates the task handle through the normal generation-safe lookup
+ * path before returning locality metadata. */
+ASX_API ASX_MUST_USE asx_status asx_parallel_task_locality(asx_task_id tid,
+                                                           uint32_t *out_shard,
+                                                           uint32_t *out_worker);
 
 /* Initialize a default observe-only admission policy. */
 ASX_API void asx_parallel_admission_policy_init(asx_parallel_admission_policy *policy);
