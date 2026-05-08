@@ -521,7 +521,7 @@ build-win32:
 	@$(MAKE) build PROFILE=WIN32 CC="x86_64-w64-mingw32-gcc" CFLAGS="-DASX_BUILDING_DLL" LDFLAGS="-lbcrypt -lws2_32"
 
 build-parallel:
-	@$(MAKE) build PROFILE=PARALLEL
+	@$(MAKE) build PROFILE=PARALLEL CFLAGS="$(CFLAGS) -DASX_LOCKFREE_SINGLE_THREAD=0"
 
 build-browser:
 	@$(MAKE) build PROFILE=BROWSER

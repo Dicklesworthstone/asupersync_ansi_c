@@ -1,9 +1,10 @@
 /*
- * mpsc_lockfree_spike.c — Lock-free MPSC queue spike (bd-3vt.2)
+ * mpsc_lockfree_spike.c — Lock-free MPSC queue reference spike (bd-pweu.5)
  *
- * Research spike: Vyukov-style bounded MPSC ring buffer with portable
- * atomic abstraction layer. Uses per-cell sequence numbers to coordinate
- * producers and consumer without locks.
+ * Superseded reference spike: Vyukov-style bounded MPSC ring buffer with
+ * portable atomic abstraction layer. Production channel semantics now live
+ * in mpsc.c, where the public two-phase reserve/send/abort API is preserved.
+ * This file remains as a direct-enqueue benchmark/design reference.
  *
  * Design rationale:
  * - Bounded (fixed capacity, no allocation on hot path)

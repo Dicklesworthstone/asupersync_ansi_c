@@ -12,6 +12,9 @@
 #include <asx/asx.h>
 #include <asx/core/channel.h>
 #include <asx/runtime/trace.h>
+#if defined(ASX_MPSC_PTHREAD_STRESS)
+#include <pthread.h>
+#endif
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
 #define CH_IGNORE(expr)                                                                            \
@@ -292,6 +295,157 @@ TEST(capacity_mixed_reserved_and_queued) {
     ASSERT_EQ(asx_send_permit_send(&p3, 30), ASX_OK);
 }
 
+TEST(capacity_invariant_interleaves_send_abort) {
+    asx_channel_id ch;
+    asx_send_permit permits[5];
+    asx_send_permit overflow;
+    uint32_t len;
+    uint32_t res;
+    uint64_t val;
+    uint32_t i;
+
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 5, &ch), ASX_OK);
+
+    for (i = 0; i < 5; i++) { ASSERT_EQ(asx_channel_try_reserve(ch, &permits[i]), ASX_OK); }
+    ASSERT_EQ(asx_channel_try_reserve(ch, &overflow), ASX_E_CHANNEL_FULL);
+
+    ASSERT_EQ(asx_send_permit_send(&permits[0], 10u), ASX_OK);
+    asx_send_permit_abort(&permits[1]);
+    ASSERT_EQ(asx_send_permit_send(&permits[2], 30u), ASX_OK);
+
+    ASSERT_EQ(asx_channel_queue_len(ch, &len), ASX_OK);
+    ASSERT_EQ(len, 2u);
+    ASSERT_EQ(asx_channel_reserved_count(ch, &res), ASX_OK);
+    ASSERT_EQ(res, 2u);
+
+    ASSERT_EQ(asx_channel_try_reserve(ch, &overflow), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&overflow, 60u), ASX_OK);
+    asx_send_permit_abort(&permits[3]);
+    ASSERT_EQ(asx_send_permit_send(&permits[4], 50u), ASX_OK);
+
+    ASSERT_EQ(asx_channel_queue_len(ch, &len), ASX_OK);
+    ASSERT_EQ(len, 4u);
+    ASSERT_EQ(asx_channel_reserved_count(ch, &res), ASX_OK);
+    ASSERT_EQ(res, 0u);
+
+    ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_OK);
+    ASSERT_EQ(val, 10u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_OK);
+    ASSERT_EQ(val, 30u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_OK);
+    ASSERT_EQ(val, 60u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_OK);
+    ASSERT_EQ(val, 50u);
+}
+
+TEST(scripted_multi_producer_fifo_stress) {
+    enum { PRODUCERS = 4, PER_PRODUCER = 16, TOTAL = PRODUCERS * PER_PRODUCER };
+    asx_channel_id ch;
+    asx_send_permit permit;
+    uint64_t val;
+    uint32_t producer;
+    uint32_t seq;
+    uint32_t expected_idx;
+
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, TOTAL, &ch), ASX_OK);
+
+    for (seq = 0; seq < PER_PRODUCER; seq++) {
+        for (producer = 0; producer < PRODUCERS; producer++) {
+            ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
+            ASSERT_EQ(asx_send_permit_send(&permit, (uint64_t)(producer * 1000u + seq)), ASX_OK);
+        }
+    }
+
+    for (expected_idx = 0; expected_idx < TOTAL; expected_idx++) {
+        producer = expected_idx % PRODUCERS;
+        seq = expected_idx / PRODUCERS;
+        ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_OK);
+        ASSERT_EQ(val, (uint64_t)(producer * 1000u + seq));
+    }
+    ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_E_WOULD_BLOCK);
+}
+
+#if defined(ASX_MPSC_PTHREAD_STRESS)
+enum { PTHREAD_PRODUCERS = 4, PTHREAD_PER_PRODUCER = 8 };
+
+typedef struct {
+    asx_channel_id ch;
+    uint32_t producer;
+    uint32_t failures;
+} pthread_producer_args;
+
+static void *pthread_producer_main(void *arg) {
+    pthread_producer_args *pa;
+    asx_send_permit permit;
+    uint32_t seq;
+    asx_status st;
+
+    pa = (pthread_producer_args *)arg;
+    for (seq = 0; seq < PTHREAD_PER_PRODUCER; seq++) {
+        st = asx_channel_try_reserve(pa->ch, &permit);
+        if (st != ASX_OK) {
+            pa->failures++;
+            return NULL;
+        }
+        st = asx_send_permit_send(&permit, (uint64_t)(pa->producer * 1000u + seq));
+        if (st != ASX_OK) {
+            pa->failures++;
+            return NULL;
+        }
+    }
+
+    return NULL;
+}
+
+TEST(pthread_multi_producer_single_consumer_stress) {
+    enum { TOTAL = PTHREAD_PRODUCERS * PTHREAD_PER_PRODUCER };
+    asx_channel_id ch;
+    pthread_t threads[PTHREAD_PRODUCERS];
+    pthread_producer_args args[PTHREAD_PRODUCERS];
+    uint8_t seen[PTHREAD_PRODUCERS][PTHREAD_PER_PRODUCER];
+    uint64_t val;
+    uint32_t producer;
+    uint32_t seq;
+    uint32_t i;
+    uint32_t len;
+
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, TOTAL, &ch), ASX_OK);
+    memset(seen, 0, sizeof(seen));
+
+    for (i = 0; i < PTHREAD_PRODUCERS; i++) {
+        args[i].ch = ch;
+        args[i].producer = i;
+        args[i].failures = 0u;
+        ASSERT_EQ((uint32_t)pthread_create(&threads[i], NULL, pthread_producer_main, &args[i]), 0u);
+    }
+
+    for (i = 0; i < PTHREAD_PRODUCERS; i++) {
+        ASSERT_EQ((uint32_t)pthread_join(threads[i], NULL), 0u);
+        ASSERT_EQ(args[i].failures, 0u);
+    }
+
+    ASSERT_EQ(asx_channel_queue_len(ch, &len), ASX_OK);
+    ASSERT_EQ(len, (uint32_t)TOTAL);
+
+    for (i = 0; i < TOTAL; i++) {
+        ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_OK);
+        producer = (uint32_t)(val / 1000u);
+        seq = (uint32_t)(val % 1000u);
+        ASSERT_TRUE(producer < PTHREAD_PRODUCERS);
+        ASSERT_TRUE(seq < PTHREAD_PER_PRODUCER);
+        ASSERT_EQ(seen[producer][seq], (uint8_t)0u);
+        seen[producer][seq] = 1u;
+    }
+
+    for (producer = 0; producer < PTHREAD_PRODUCERS; producer++) {
+        for (seq = 0; seq < PTHREAD_PER_PRODUCER; seq++) { ASSERT_EQ(seen[producer][seq], 1u); }
+    }
+}
+#endif
+
 /* -------------------------------------------------------------------
  * Two-phase send: abort
  * ------------------------------------------------------------------- */
@@ -536,6 +690,33 @@ TEST(close_receiver_discards_queued_messages) {
     ASSERT_EQ(len, 0u);
 }
 
+TEST(close_receiver_discards_queue_but_not_pending_reserve) {
+    asx_channel_id ch;
+    asx_send_permit p1;
+    asx_send_permit p2;
+    asx_send_permit pending;
+    uint32_t len;
+    uint32_t res;
+
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 3, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p1), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&p1, 1u), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p2), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&p2, 2u), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &pending), ASX_OK);
+
+    ASSERT_EQ(asx_channel_close_receiver(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_queue_len(ch, &len), ASX_OK);
+    ASSERT_EQ(len, 0u);
+    ASSERT_EQ(asx_channel_reserved_count(ch, &res), ASX_OK);
+    ASSERT_EQ(res, 1u);
+
+    ASSERT_EQ(asx_send_permit_send(&pending, 3u), ASX_E_DISCONNECTED);
+    ASSERT_EQ(asx_channel_reserved_count(ch, &res), ASX_OK);
+    ASSERT_EQ(res, 0u);
+}
+
 /* -------------------------------------------------------------------
  * Query NULL safety
  * ------------------------------------------------------------------- */
@@ -666,6 +847,11 @@ int main(void) {
     RUN_TEST(trace_emits_send_and_recv);
     RUN_TEST(capacity_enforcement);
     RUN_TEST(capacity_mixed_reserved_and_queued);
+    RUN_TEST(capacity_invariant_interleaves_send_abort);
+    RUN_TEST(scripted_multi_producer_fifo_stress);
+#if defined(ASX_MPSC_PTHREAD_STRESS)
+    RUN_TEST(pthread_multi_producer_single_consumer_stress);
+#endif
 
     RUN_TEST(abort_returns_capacity);
     RUN_TEST(abort_null_is_safe);
@@ -687,6 +873,7 @@ int main(void) {
     RUN_TEST(reserve_after_receiver_closed);
     RUN_TEST(send_after_receiver_closed);
     RUN_TEST(close_receiver_discards_queued_messages);
+    RUN_TEST(close_receiver_discards_queue_but_not_pending_reserve);
 
     RUN_TEST(get_state_null_out);
     RUN_TEST(queue_len_null_out);
