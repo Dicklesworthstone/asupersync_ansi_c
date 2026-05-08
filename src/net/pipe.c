@@ -107,7 +107,10 @@ asx_status asx_pipe_poll_write(asx_pipe_write wr, const asx_buf *src, uint32_t *
         *bytes_written = 0u;
         return ASX_E_DISCONNECTED;
     }
-    if (src->len > asx_buf_mut_writable(&s->buffer)) return ASX_E_WOULD_BLOCK;
+    if (src->len > asx_buf_mut_writable(&s->buffer)) {
+        *bytes_written = 0u;
+        return ASX_E_WOULD_BLOCK;
+    }
 
     st = asx_buf_mut_put(&s->buffer, src->ptr, src->len);
     if (st != ASX_OK) return st;

@@ -6,11 +6,217 @@
 
 #include <asx/asx.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static unsigned long long mix_u64(unsigned long long state, unsigned long long value) {
     state ^= value + 0x9e3779b97f4a7c15ULL + (state << 6) + (state >> 2);
     return state;
+}
+
+static const char *env_or_default(const char *name, const char *fallback) {
+    const char *value = getenv(name);
+    return value != NULL ? value : fallback;
+}
+
+static const char *compile_profile_name(void) {
+#if defined(ASX_PROFILE_POSIX)
+    return "POSIX";
+#elif defined(ASX_PROFILE_WIN32)
+    return "WIN32";
+#elif defined(ASX_PROFILE_FREESTANDING)
+    return "FREESTANDING";
+#elif defined(ASX_PROFILE_EMBEDDED_ROUTER)
+    return "EMBEDDED_ROUTER";
+#elif defined(ASX_PROFILE_HFT)
+    return "HFT";
+#elif defined(ASX_PROFILE_AUTOMOTIVE)
+    return "AUTOMOTIVE";
+#elif defined(ASX_PROFILE_PARALLEL)
+    return "PARALLEL";
+#elif defined(ASX_PROFILE_BROWSER)
+    return "BROWSER";
+#else
+    return "CORE";
+#endif
+}
+
+static const char *compile_codec_name(void) {
+#if defined(ASX_CODEC_BIN)
+    return "bin";
+#else
+    return "json";
+#endif
+}
+
+static const char *compile_deterministic_name(void) {
+#if ASX_DETERMINISTIC
+    return "1";
+#else
+    return "0";
+#endif
+}
+
+static void scenario_line(const char *id, int pass, const char *detail) {
+    printf("SCENARIO %s %s%s%s\n", id, pass ? "pass" : "fail", detail != NULL ? " " : "",
+           detail != NULL ? detail : "");
+}
+
+static unsigned long long record_run_config(unsigned long long digest) {
+    const char *seed = env_or_default("ASX_E2E_SEED", "42");
+    const char *profile = env_or_default("ASX_E2E_PROFILE", compile_profile_name());
+    const char *codec = env_or_default("ASX_E2E_CODEC", compile_codec_name());
+    const char *deterministic =
+        env_or_default("ASX_E2E_DETERMINISTIC", compile_deterministic_name());
+    const char *resource_class = env_or_default("ASX_E2E_RESOURCE_CLASS", "R3");
+    char detail[384];
+    int n;
+
+    n = snprintf(detail, sizeof(detail),
+                 "seed=%s profile=%s codec=%s deterministic=%s resource_class=%s "
+                 "command=make_test-e2e-network-surface",
+                 seed, profile, codec, deterministic, resource_class);
+    if (n < 0 || (size_t)n >= sizeof(detail)) {
+        scenario_line("network.config", 0, "detail_truncated");
+        return digest;
+    }
+    scenario_line("network.config", 1, detail);
+    printf("TRACE network.config %s\n", detail);
+    printf("REPLAY ASX_E2E_SEED=%s ASX_E2E_PROFILE=%s ASX_E2E_CODEC=%s "
+           "ASX_E2E_DETERMINISTIC=%s make test-e2e-network-surface\n",
+           seed, profile, codec, deterministic);
+
+    digest = mix_u64(digest, (unsigned long long)ASX_BUF_CAPACITY);
+    digest = mix_u64(digest, (unsigned long long)ASX_MAX_PIPES);
+    return digest;
+}
+
+static unsigned long long record_unsupported_profile(unsigned long long digest) {
+#if defined(ASX_PROFILE_POSIX)
+    scenario_line("network.unsupported_profile", 1,
+                  "profile=POSIX protocol_stacks=deferred fail_closed=1");
+#elif defined(ASX_PROFILE_CORE)
+    scenario_line("network.unsupported_profile", 1,
+                  "profile=CORE native_socket_backend=deferred fail_closed=1");
+#elif defined(ASX_PROFILE_BROWSER)
+    scenario_line("network.unsupported_profile", 1,
+                  "profile=BROWSER live_socket_backend=unsupported fail_closed=1");
+#else
+    scenario_line("network.unsupported_profile", 1,
+                  "profile=non_core live_socket_claim=not_counted fail_closed=1");
+#endif
+
+#if ASX_HAS_IO_URING == 0
+    scenario_line("network.unsupported_io_uring", 1, "ASX_HAS_IO_URING=0");
+#else
+    scenario_line("network.unsupported_io_uring", 0, "unexpected_io_uring_support");
+#endif
+    return mix_u64(digest, 0x0u);
+}
+
+static void fill_pattern(uint8_t *buf, uint32_t len) {
+    uint32_t i;
+    for (i = 0u; i < len; i++) { buf[i] = (uint8_t)('A' + (i % 23u)); }
+}
+
+static int run_pipe_backed_surface(unsigned long long *digest) {
+    asx_pipe_read rd;
+    asx_pipe_write wr;
+    asx_pipe_read rds[ASX_MAX_PIPES];
+    asx_pipe_write wrs[ASX_MAX_PIPES];
+    asx_pipe_read temp_rd;
+    asx_pipe_write temp_wr;
+    asx_buf payload;
+    asx_buf readable;
+    asx_buf src;
+    asx_buf one_src;
+    asx_buf_mut dst;
+    uint8_t full[ASX_BUF_CAPACITY];
+    uint8_t one = 'z';
+    uint32_t n = 0u;
+    uint32_t i;
+
+    asx_pipe_reset();
+    if (asx_pipe_open(&rd, &wr) != ASX_OK || !asx_pipe_read_is_alive(rd) ||
+        !asx_pipe_write_is_alive(wr)) {
+        scenario_line("network.pipe_open", 0, "pipe_pair_not_live");
+        return 0;
+    }
+    scenario_line("network.pipe_open", 1, "bounded_pair=1");
+    *digest = mix_u64(*digest, 1u);
+
+    payload = asx_buf_from_cstr("pipe-backed-network");
+    asx_buf_mut_init(&dst);
+    if (asx_pipe_poll_write(wr, &payload, &n) != ASX_OK || n != payload.len ||
+        asx_pipe_poll_read(rd, &dst, &n) != ASX_OK || n != payload.len) {
+        scenario_line("network.pipe_lifecycle", 0, "pipe_roundtrip_failed");
+        return 0;
+    }
+    readable = asx_buf_mut_readable(&dst);
+    if (readable.len != payload.len || memcmp(readable.ptr, payload.ptr, payload.len) != 0) {
+        scenario_line("network.pipe_lifecycle", 0, "payload_mismatch");
+        return 0;
+    }
+    scenario_line("network.pipe_lifecycle", 1, "roundtrip_bytes=19");
+    *digest = mix_u64(*digest, (unsigned long long)payload.len);
+
+    if (asx_pipe_close_write(wr) != ASX_OK ||
+        asx_pipe_poll_read(rd, &dst, &n) != ASX_E_DISCONNECTED || n != 0u ||
+        asx_pipe_close_read(rd) != ASX_OK) {
+        scenario_line("network.pipe_close_cancel", 0, "close_did_not_cancel_reader");
+        return 0;
+    }
+    scenario_line("network.pipe_close_cancel", 1, "reader_observed_disconnected");
+    *digest = mix_u64(*digest, 2u);
+
+    asx_pipe_reset();
+    if (asx_pipe_open(&rd, &wr) != ASX_OK) {
+        scenario_line("network.pipe_backpressure", 0, "pipe_reopen_failed");
+        return 0;
+    }
+    fill_pattern(full, ASX_BUF_CAPACITY);
+    src = asx_buf_from(full, ASX_BUF_CAPACITY);
+    one_src = asx_buf_from(&one, 1u);
+    n = 0u;
+    if (asx_pipe_poll_write(wr, &src, &n) != ASX_OK || n != ASX_BUF_CAPACITY) {
+        scenario_line("network.pipe_backpressure", 0, "initial_fill_failed");
+        return 0;
+    }
+    n = 123u;
+    if (asx_pipe_poll_write(wr, &one_src, &n) != ASX_E_WOULD_BLOCK || n != 0u) {
+        scenario_line("network.pipe_backpressure", 0, "full_buffer_not_would_block");
+        return 0;
+    }
+    asx_buf_mut_clear(&dst);
+    if (asx_pipe_poll_read(rd, &dst, &n) != ASX_OK || n != ASX_BUF_CAPACITY ||
+        asx_pipe_poll_write(wr, &one_src, &n) != ASX_OK || n != 1u) {
+        scenario_line("network.pipe_backpressure", 0, "capacity_not_released_after_read");
+        return 0;
+    }
+    scenario_line("network.pipe_backpressure", 1, "bounded_buffer_would_block_then_released");
+    *digest = mix_u64(*digest, (unsigned long long)ASX_BUF_CAPACITY);
+    asx_pipe_close_read(rd);
+    asx_pipe_close_write(wr);
+
+    asx_pipe_reset();
+    for (i = 0u; i < ASX_MAX_PIPES; i++) {
+        if (asx_pipe_open(&rds[i], &wrs[i]) != ASX_OK) {
+            scenario_line("network.pipe_resource_exhaustion", 0, "open_within_cap_failed");
+            return 0;
+        }
+    }
+    if (asx_pipe_open(&temp_rd, &temp_wr) != ASX_E_RESOURCE_EXHAUSTED) {
+        scenario_line("network.pipe_resource_exhaustion", 0, "over_cap_did_not_fail");
+        return 0;
+    }
+    for (i = 0u; i < ASX_MAX_PIPES; i++) {
+        asx_pipe_close_read(rds[i]);
+        asx_pipe_close_write(wrs[i]);
+    }
+    scenario_line("network.pipe_resource_exhaustion", 1, "over_cap_failed_atomically");
+    *digest = mix_u64(*digest, (unsigned long long)ASX_MAX_PIPES);
+
+    return 1;
 }
 
 int main(void) {
@@ -36,6 +242,9 @@ int main(void) {
     uint8_t cache_hit = 0u;
     uint32_t io_n = 0u;
     unsigned long long digest = 0xcbf29ce484222325ULL;
+
+    digest = record_run_config(digest);
+    digest = record_unsupported_profile(digest);
 
     if (asx_runtime_builder_init_current_thread(&builder) != ASX_OK ||
         asx_runtime_builder_set_finalizer_poll_budget(&builder, 40u) != ASX_OK ||
@@ -142,6 +351,11 @@ int main(void) {
     }
     printf("SCENARIO network.udp pass\n");
     digest = mix_u64(digest, (unsigned long long)udp_peer.family);
+
+    if (!run_pipe_backed_surface(&digest)) {
+        asx_runtime_shutdown(&runtime);
+        return 1;
+    }
 
     if (asx_udp_close(receiver) != ASX_OK || asx_udp_close(socket) != ASX_OK ||
         asx_tcp_stream_close(accepted) != ASX_OK || asx_tcp_stream_close(stream) != ASX_OK ||

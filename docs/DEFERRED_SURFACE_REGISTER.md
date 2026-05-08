@@ -34,10 +34,10 @@ This register ensures that deferred work is:
 
 ### DS-C01: Targeted Networking Primitives
 
-**Status:** Wave C contract active under `bd-v12u.9`; first native socket/reactor e2e remains `bd-v12u.10`.
+**Status:** Wave C contract active under `bd-v12u.9`; bounded pipe-backed/reactor-readiness e2e evidence lands under `bd-v12u.10`.
 **Rationale:** Networking requires platform adapters (POSIX sockets, Win32 IOCP, embedded poll/select), reactor integration, and connection lifecycle management that are outside the kernel's semantic scope. Kernel parity must be proven before adding I/O surfaces.
 **Rust source:** `src/net/` (~26k LOC)
-**Activation beads:** `bd-v12u.9` (Wave C networking primitive spec), `bd-v12u.10` (first deterministic network reactor/socket e2e)
+**Activation beads:** `bd-v12u.9` (Wave C networking primitive spec), `bd-v12u.10` (first deterministic network reactor/socket e2e evidence)
 **Unblock criteria:**
 - Wave A quality gates green (all kernel conformance/parity/embedded gates pass)
 - Wave B conformance harness operational (differential fixture runner working)
@@ -59,7 +59,7 @@ This register ensures that deferred work is:
 - unsupported platform diagnostics: profiles without live socket support fail closed and cannot report a live capability;
 - semantic drift: shared fixture digests across CORE/POSIX/PARALLEL profiles remain unchanged unless an approved semantic-delta record exists.
 
-Current executable coverage is `make test-e2e-network-surface` plus focused `tests/unit/net/test_net` and `tests/unit/net/test_pipe` unit binaries. `bd-v12u.10` extends this contract to the first reactor-backed native socket e2e without changing the kernel digest contract.
+Current executable coverage is `make test-e2e-network-surface` plus focused `tests/unit/net/test_net` and `tests/unit/net/test_pipe` unit binaries. `bd-v12u.10` extends this contract with bounded pipe-backed lifecycle, close-as-cancel, backpressure, resource exhaustion, unsupported-profile diagnostics, raw logs, command transcript, digest, and replay-command artifacts without changing the kernel digest contract. Full OS socket stacks and application protocols remain Wave D exclusions.
 
 ### DS-C02: Selected Combinators
 
