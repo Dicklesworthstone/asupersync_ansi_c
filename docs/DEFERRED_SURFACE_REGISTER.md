@@ -197,6 +197,10 @@ surface-specific obligations above. Expensive gates must run through
 - Landed: deterministic worker-lane scheduling, bounded work stealing, timed-lane/waker/reactor readiness pumping, and replay-stable commit authority.
 - Landed: portable atomics, seqlock/EBR metadata coverage, atomic two-phase MPSC publication, and memory-model litmus/codegen gates.
 - Landed: parallel-specific gates for single-vs-multi-worker digest parity, telemetry/admission/locality evidence, large-swarm e2e logs, formal proofs, and benchmark baselines.
+- Landed under `bd-v12u.2`: `parallel-parity` emits commit-authority records
+  that compare the global replay-stable commit sequence against per-worker
+  commit totals and fail the gate on drift. POSIX/Win32 live native adapters
+  still report fail-closed until their child beads enable hooks.
 - Remaining: native platform adapters must preserve deterministic commit authority before enabling concurrent lane execution by default.
 **Owner:** `SilverFrog` started contract planning in `bd-pweu.1`; implementation ownership remains per-child bead
 **Dependency path:** Wave A gates -> parallel contract -> scheduler/atomic/channel/platform gates -> e2e/proof/locality evidence -> benchmark baselines -> native adapter concurrency proof

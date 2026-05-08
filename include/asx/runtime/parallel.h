@@ -363,6 +363,15 @@ ASX_API uint32_t asx_parallel_cancel_streak_limit(void);
  * ------------------------------------------------------------------- */
 
 typedef struct {
+    uint32_t commit_sequence;            /* global replay-stable commit counter */
+    uint32_t total_worker_commits;       /* sum of per-worker committed events */
+    uint32_t max_worker_commit_sequence; /* highest per-worker observed ticket */
+    uint32_t drift_detected;             /* nonzero if worker totals diverge from global */
+    uint32_t native_live_enabled;        /* nonzero only when native workers may commit live */
+    asx_status native_live_status;       /* fail-closed status when live native mode is absent */
+} asx_parallel_commit_authority_snapshot;
+
+typedef struct {
     uint32_t worker_count;
     uint32_t total_queue_depth;
     uint32_t lane_depths[ASX_MAX_LANES];
@@ -377,6 +386,7 @@ typedef struct {
     asx_scheduling_metrics metrics;
     asx_parallel_admission_decision admission;
     asx_parallel_locality_snapshot locality;
+    asx_parallel_commit_authority_snapshot commit_authority;
 } asx_parallel_telemetry_snapshot;
 
 /* Initialize a compact default locality policy. */
@@ -392,8 +402,7 @@ asx_parallel_get_locality_snapshot(asx_parallel_locality_snapshot *out);
 /* Query the deterministic shard and current logical owner for a task handle.
  * This validates the task handle through the normal generation-safe lookup
  * path before returning locality metadata. */
-ASX_API ASX_MUST_USE asx_status asx_parallel_task_locality(asx_task_id tid,
-                                                           uint32_t *out_shard,
+ASX_API ASX_MUST_USE asx_status asx_parallel_task_locality(asx_task_id tid, uint32_t *out_shard,
                                                            uint32_t *out_worker);
 
 /* Initialize a default observe-only admission policy. */

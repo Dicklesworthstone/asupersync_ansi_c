@@ -56,18 +56,21 @@ fail_count="$(jq -s 'map(select(.kind == "parallel_parity_record" and .parity ==
 skip_count="$(jq -s 'map(select(.kind == "parallel_parity_record" and .parity == "skip")) | length' "$REPORT_FILE")"
 scenario_count="$(jq -s 'map(select(.kind == "parallel_parity_record") | .scenario_id) | unique | length' "$REPORT_FILE")"
 compared_records="$(jq -s '((map(select(.kind == "parallel_parity_summary")) | .[-1].compared_records) // 0)' "$REPORT_FILE")"
+commit_drift_count="$(jq -s 'map(select(.kind == "parallel_parity_record" and ((.commit_authority.drift_detected // 0) != 0))) | length' "$REPORT_FILE")"
+native_live_records="$(jq -s 'map(select(.kind == "parallel_parity_record" and ((.commit_authority.native_live_enabled // 0) != 0))) | length' "$REPORT_FILE")"
+native_fail_closed_records="$(jq -s 'map(select(.kind == "parallel_parity_record" and ((.commit_authority.native_live_enabled // 0) == 0) and ((.commit_authority.native_live_status_code // 0) != 0))) | length' "$REPORT_FILE")"
 summary_status="$(jq -s -r '((map(select(.kind == "parallel_parity_summary")) | .[-1].status) // "fail")' "$REPORT_FILE")"
 profiles_json="$(jq -s 'map(select(.kind == "parallel_parity_record") | .profile) | unique' "$REPORT_FILE")"
 workers_json="$(jq -s 'map(select(.kind == "parallel_parity_record" and .parity != "skip") | .worker_count) | unique' "$REPORT_FILE")"
 
 status="pass"
-diagnostic="parallel worker digests and structured event summaries match"
+diagnostic="parallel worker digests, structured event summaries, and commit authority match"
 if [[ "$build_rc" -ne 0 ]]; then
   status="fail"
   diagnostic="parallel parity conformance binary failed to build"
-elif [[ "$run_rc" -ne 0 || "$summary_status" != "pass" || "$fail_count" -ne 0 ]]; then
+elif [[ "$run_rc" -ne 0 || "$summary_status" != "pass" || "$fail_count" -ne 0 || "$commit_drift_count" -ne 0 ]]; then
   status="fail"
-  diagnostic="parallel parity mismatch or test failure; inspect run log and JSONL report"
+  diagnostic="parallel parity mismatch, commit-authority drift, or test failure; inspect run log and JSONL report"
 fi
 
 jq -n \
@@ -88,6 +91,9 @@ jq -n \
   --argjson skip_count "$skip_count" \
   --argjson scenario_count "$scenario_count" \
   --argjson compared_records "$compared_records" \
+  --argjson commit_drift_count "$commit_drift_count" \
+  --argjson native_live_records "$native_live_records" \
+  --argjson native_fail_closed_records "$native_fail_closed_records" \
   --argjson profiles "$profiles_json" \
   --argjson workers "$workers_json" \
   '{
@@ -102,6 +108,11 @@ jq -n \
     scenario_count: $scenario_count,
     compared_records: $compared_records,
     fail_records: $fail_count,
+    native_adapter_commit_authority: {
+      drift_records: $commit_drift_count,
+      native_live_records: $native_live_records,
+      fail_closed_records: $native_fail_closed_records
+    },
     profiles: $profiles,
     worker_counts: $workers,
     report_file: $report_file,
@@ -115,7 +126,7 @@ jq -n \
       build: $build_rc,
       run: $run_rc
     },
-    semantic_delta_count: $fail_count,
+    semantic_delta_count: ($fail_count + $commit_drift_count),
     rerun: $rerun,
     diagnostic: $diagnostic
   }' >"$SUMMARY_FILE"

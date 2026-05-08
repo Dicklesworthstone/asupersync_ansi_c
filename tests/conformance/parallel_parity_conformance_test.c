@@ -53,6 +53,12 @@ typedef struct {
     uint32_t admission_triggered;
     uint32_t admission_pressure_pct;
     asx_status admission_status;
+    uint32_t commit_sequence;
+    uint32_t total_worker_commits;
+    uint32_t max_worker_commit_sequence;
+    uint32_t commit_authority_drift;
+    uint32_t native_live_enabled;
+    asx_status native_live_status;
     uint32_t order_count;
     uint32_t order_values[PARITY_MAX_ORDER];
     uint32_t output_count;
@@ -146,6 +152,7 @@ static asx_parallel_config default_config(uint32_t worker_count) {
     cfg.lane_weights[2] = 1u;
     cfg.starvation_limit = 5u;
     asx_parallel_admission_policy_init(&cfg.admission_policy);
+    asx_parallel_locality_config_init(&cfg.locality);
     return cfg;
 }
 
@@ -277,6 +284,12 @@ static void capture_metric_summary(parity_result *out) {
         out->admission_triggered = (uint32_t)(snapshot.admission.triggered ? 1 : 0);
         out->admission_pressure_pct = snapshot.admission.pressure_pct;
         out->admission_status = snapshot.admission.admit_status;
+        out->commit_sequence = snapshot.commit_authority.commit_sequence;
+        out->total_worker_commits = snapshot.commit_authority.total_worker_commits;
+        out->max_worker_commit_sequence = snapshot.commit_authority.max_worker_commit_sequence;
+        out->commit_authority_drift = snapshot.commit_authority.drift_detected;
+        out->native_live_enabled = snapshot.commit_authority.native_live_enabled;
+        out->native_live_status = snapshot.commit_authority.native_live_status;
     }
 }
 
@@ -312,6 +325,9 @@ static void finalize_result(parity_result *out) {
     digest = digest_mix_u32(digest, out->reactor_ready);
     digest = digest_mix_u32(digest, out->waker_ready);
     digest = digest_mix_u32(digest, out->timed_promotions);
+    digest = digest_mix_u32(digest, out->commit_sequence);
+    digest = digest_mix_u32(digest, out->total_worker_commits);
+    digest = digest_mix_u32(digest, out->commit_authority_drift);
     digest = digest_mix_u32(digest, out->order_count);
     for (i = 0u; i < PARITY_MAX_ORDER; i++) {
         digest = digest_mix_u32(digest, out->order_values[i]);
@@ -621,6 +637,13 @@ static asx_status run_scenario(parity_scenario scenario, uint32_t worker_count,
     return st == ASX_OK ? ASX_OK : st;
 }
 
+static const char *result_parity_text(const parity_result *result) {
+    if (result->skipped) { return "skip"; }
+    if (result->status != ASX_OK) { return "fail"; }
+    if (result->commit_authority_drift != 0u) { return "fail"; }
+    return "pass";
+}
+
 static void emit_result_json(const parity_result *result) {
     printf("{\"kind\":\"parallel_parity_record\",");
     printf("\"scenario_id\":\"%s\",", result->scenario_id);
@@ -629,8 +652,7 @@ static void emit_result_json(const parity_result *result) {
     printf("\"max_workers\":%" PRIu32 ",", (uint32_t)ASX_MAX_WORKERS);
     printf("\"status_code\":%d,", (int)result->status);
     printf("\"status_text\":\"%s\",", asx_status_str(result->status));
-    printf("\"parity\":\"%s\",",
-           result->skipped ? "skip" : (result->status == ASX_OK ? "pass" : "fail"));
+    printf("\"parity\":\"%s\",", result_parity_text(result));
     printf("\"semantic_digest\":\"fnv64:%016" PRIx64 "\",", result->semantic_digest);
     printf("\"trace_digest\":\"fnv64:%016" PRIx64 "\",", result->trace_digest);
     printf("\"event_order_digest\":\"fnv64:%016" PRIx64 "\",", result->event_order_digest);
@@ -650,6 +672,14 @@ static void emit_result_json(const parity_result *result) {
            ",\"status_code\":%d,\"status_text\":\"%s\"},",
            result->admission_triggered, result->admission_pressure_pct,
            (int)result->admission_status, asx_status_str(result->admission_status));
+    printf("\"commit_authority\":{\"commit_sequence\":%" PRIu32 ",\"total_worker_commits\":%" PRIu32
+           ",\"max_worker_commit_sequence\":%" PRIu32 ",\"drift_detected\":%" PRIu32
+           ",\"native_live_enabled\":%" PRIu32
+           ",\"native_live_status_code\":%d,\"native_live_status_text\":\"%s\"},",
+           result->commit_sequence, result->total_worker_commits,
+           result->max_worker_commit_sequence, result->commit_authority_drift,
+           result->native_live_enabled, (int)result->native_live_status,
+           asx_status_str(result->native_live_status));
     printf("\"events\":{");
     printf("\"sched_poll\":%" PRIu32 ",", result->event_counts[ASX_TRACE_SCHED_POLL]);
     printf("\"sched_complete\":%" PRIu32 ",", result->event_counts[ASX_TRACE_SCHED_COMPLETE]);
@@ -694,6 +724,12 @@ static int results_match(const parity_result *expected, const parity_result *act
     if (expected->reactor_ready != actual->reactor_ready) { return 0; }
     if (expected->waker_ready != actual->waker_ready) { return 0; }
     if (expected->timed_promotions != actual->timed_promotions) { return 0; }
+    if (expected->commit_sequence != actual->commit_sequence) { return 0; }
+    if (expected->total_worker_commits != actual->total_worker_commits) { return 0; }
+    if (expected->max_worker_commit_sequence != actual->max_worker_commit_sequence) { return 0; }
+    if (expected->commit_authority_drift != actual->commit_authority_drift) { return 0; }
+    if (expected->native_live_enabled != actual->native_live_enabled) { return 0; }
+    if (expected->native_live_status != actual->native_live_status) { return 0; }
     if (expected->order_count != actual->order_count) { return 0; }
     if (expected->output_count != actual->output_count) { return 0; }
     for (i = 0u; i < PARITY_EVENT_BUCKETS; i++) {
@@ -713,6 +749,8 @@ TEST(parallel_single_vs_multi_worker_digest_parity) {
     uint32_t worker_index;
     uint32_t compared = 0u;
     uint32_t skipped = 0u;
+    uint32_t commit_authority_drift_count = 0u;
+    uint32_t native_live_enabled_count = 0u;
 
     for (scenario_index = 0u; scenario_index < (uint32_t)(sizeof(SCENARIOS) / sizeof(SCENARIOS[0]));
          scenario_index++) {
@@ -724,6 +762,10 @@ TEST(parallel_single_vs_multi_worker_digest_parity) {
         ASSERT_EQ(st, ASX_OK);
         ASSERT_FALSE(baseline.skipped);
         ASSERT_EQ(baseline.status, ASX_OK);
+        if (baseline.commit_authority_drift != 0u) { commit_authority_drift_count++; }
+        if (baseline.native_live_enabled != 0u) { native_live_enabled_count++; }
+        ASSERT_EQ(baseline.commit_authority_drift, 0u);
+        ASSERT_EQ(baseline.total_worker_commits, baseline.commit_sequence);
 
         for (worker_index = 1u;
              worker_index < (uint32_t)(sizeof(WORKER_COUNTS) / sizeof(WORKER_COUNTS[0]));
@@ -737,6 +779,10 @@ TEST(parallel_single_vs_multi_worker_digest_parity) {
                 skipped++;
                 continue;
             }
+            if (actual.commit_authority_drift != 0u) { commit_authority_drift_count++; }
+            if (actual.native_live_enabled != 0u) { native_live_enabled_count++; }
+            ASSERT_EQ(actual.commit_authority_drift, 0u);
+            ASSERT_EQ(actual.total_worker_commits, actual.commit_sequence);
 
             if (!results_match(&baseline, &actual)) {
                 fprintf(stderr,
@@ -758,6 +804,8 @@ TEST(parallel_single_vs_multi_worker_digest_parity) {
     printf("\"baseline_worker_count\":1,");
     printf("\"compared_records\":%" PRIu32 ",", compared);
     printf("\"skipped_records\":%" PRIu32 ",", skipped);
+    printf("\"commit_authority_drift_count\":%" PRIu32 ",", commit_authority_drift_count);
+    printf("\"native_live_enabled_count\":%" PRIu32 ",", native_live_enabled_count);
     printf("\"worker_counts\":[1,2,8,%" PRIu32 "],", (uint32_t)ASX_PARALLEL_GENERIC_TARGET_WORKERS);
     printf("\"max_workers\":%" PRIu32 ",", (uint32_t)ASX_MAX_WORKERS);
     printf("\"rerun\":\"make parallel-parity\"}\n");

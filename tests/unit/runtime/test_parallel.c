@@ -1289,9 +1289,9 @@ TEST(parallel_task_locality_rejects_stale_handle) {
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_forever, NULL, &tid), ASX_OK);
 
-    stale = asx_handle_pack(
-        ASX_TYPE_TASK, (uint16_t)(1u << ASX_TASK_CREATED),
-        asx_handle_pack_index((uint16_t)(asx_handle_generation(tid) + 1u), asx_handle_slot(tid)));
+    stale = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << ASX_TASK_CREATED),
+                            asx_handle_pack_index((uint16_t)(asx_handle_generation(tid) + 1u),
+                                                  asx_handle_slot(tid)));
     ASSERT_EQ(asx_parallel_task_locality(stale, &shard, &worker), ASX_E_INVALID_ARGUMENT);
 
     asx_parallel_reset();
@@ -1324,9 +1324,7 @@ TEST(parallel_worker_sharded_trace_matches_compact) {
     compact_count = asx_trace_event_count();
     ASSERT_TRUE(compact_count > 0u);
     ASSERT_TRUE(compact_count <= 96u);
-    for (i = 0; i < compact_count; i++) {
-        ASSERT_TRUE(asx_trace_event_get(i, &compact_events[i]));
-    }
+    for (i = 0; i < compact_count; i++) { ASSERT_TRUE(asx_trace_event_get(i, &compact_events[i])); }
 
     reset_all();
     asx_trace_reset();
@@ -1453,7 +1451,7 @@ TEST(parallel_telemetry_snapshot_and_jsonl_are_failure_atomic) {
     asx_region_id rid;
     asx_task_id t1, t2;
     char tiny[8] = "keep";
-    char jsonl[1536];
+    char jsonl[2048];
     uint32_t needed = 0u;
 
     cfg.worker_count = 4u;
@@ -1476,6 +1474,9 @@ TEST(parallel_telemetry_snapshot_and_jsonl_are_failure_atomic) {
     ASSERT_EQ(snapshot.admission.triggered, 1);
     ASSERT_EQ((int)snapshot.admission.mode, (int)ASX_PARALLEL_ADMISSION_SHED_OLDEST);
     ASSERT_EQ(snapshot.metrics.admission_sheds, 3u);
+    ASSERT_EQ(snapshot.commit_authority.commit_sequence, 0u);
+    ASSERT_EQ(snapshot.commit_authority.total_worker_commits, 0u);
+    ASSERT_EQ(snapshot.commit_authority.drift_detected, 0u);
 
     ASSERT_EQ(asx_parallel_render_telemetry_jsonl(&snapshot, tiny, (uint32_t)sizeof(tiny), &needed),
               ASX_E_BUFFER_TOO_SMALL);
@@ -1489,6 +1490,46 @@ TEST(parallel_telemetry_snapshot_and_jsonl_are_failure_atomic) {
     ASSERT_TRUE(strstr(jsonl, "\"kind\":\"parallel_telemetry\"") != NULL);
     ASSERT_TRUE(strstr(jsonl, "\"admission\"") != NULL);
     ASSERT_TRUE(strstr(jsonl, "\"shed_oldest\"") != NULL);
+    ASSERT_TRUE(strstr(jsonl, "\"commit_authority\"") != NULL);
+    ASSERT_TRUE(strstr(jsonl, "\"native_live_enabled\":0") != NULL);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_commit_authority_snapshot_tracks_single_commit_stream) {
+    asx_parallel_config cfg = default_config();
+    asx_parallel_telemetry_snapshot snapshot;
+    asx_region_id rid;
+    asx_task_id t1, t2, t3;
+    asx_budget budget;
+    int c1 = 2;
+    int c2 = 1;
+    int c3 = 0;
+
+    cfg.worker_count = 4u;
+    cfg.locality.mode = ASX_PARALLEL_LOCALITY_WORKER_SHARDED;
+    cfg.locality.shard_count = 4u;
+    cfg.locality.tasks_per_shard = 1u;
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c2, &t2), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c3, &t3), ASX_OK);
+
+    budget = asx_budget_from_polls(100u);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_parallel_get_telemetry_snapshot(&snapshot), ASX_OK);
+
+    ASSERT_TRUE(snapshot.commit_authority.commit_sequence > 0u);
+    ASSERT_EQ(snapshot.commit_authority.total_worker_commits,
+              snapshot.commit_authority.commit_sequence);
+    ASSERT_TRUE(snapshot.commit_authority.max_worker_commit_sequence <
+                snapshot.commit_authority.commit_sequence);
+    ASSERT_EQ(snapshot.commit_authority.drift_detected, 0u);
+    ASSERT_EQ(snapshot.commit_authority.native_live_enabled, 0u);
+    ASSERT_TRUE(snapshot.commit_authority.native_live_status != ASX_OK);
 
     asx_parallel_reset();
 }
@@ -1579,6 +1620,7 @@ int main(void) {
     RUN_TEST(parallel_admission_evaluate_modes);
     RUN_TEST(parallel_admission_enforced_backpressure_is_atomic);
     RUN_TEST(parallel_telemetry_snapshot_and_jsonl_are_failure_atomic);
+    RUN_TEST(parallel_commit_authority_snapshot_tracks_single_commit_stream);
 
     TEST_REPORT();
     return test_failures;

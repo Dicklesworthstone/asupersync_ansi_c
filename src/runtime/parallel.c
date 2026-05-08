@@ -115,8 +115,7 @@ static int admission_mode_valid(asx_parallel_admission_mode mode) {
 }
 
 static int locality_mode_valid(asx_parallel_locality_mode mode) {
-    return mode == ASX_PARALLEL_LOCALITY_COMPACT ||
-           mode == ASX_PARALLEL_LOCALITY_WORKER_SHARDED ||
+    return mode == ASX_PARALLEL_LOCALITY_COMPACT || mode == ASX_PARALLEL_LOCALITY_WORKER_SHARDED ||
            mode == ASX_PARALLEL_LOCALITY_NUMA_DOMAIN_SHARDED;
 }
 
@@ -136,7 +135,7 @@ static uint32_t ceil_div_u32(uint32_t numerator, uint32_t denominator) {
 }
 
 static int parallel_locality_sharding_available(void) {
-#if defined(ASX_PROFILE_FREESTANDING) || defined(ASX_PROFILE_BROWSER) || \
+#if defined(ASX_PROFILE_FREESTANDING) || defined(ASX_PROFILE_BROWSER) ||                           \
     defined(ASX_PROFILE_EMBEDDED_ROUTER)
     return 0;
 #else
@@ -399,6 +398,46 @@ static void parallel_commit_worker_event(uint32_t worker_idx) {
     sat_inc_u32(&g_workers[worker_idx].commits_total);
     g_workers[worker_idx].last_commit_sequence = g_metrics.commit_sequence;
     sat_inc_u32(&g_metrics.commit_sequence);
+}
+
+static asx_status parallel_native_live_status(void) {
+#if defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_WIN32)
+    return ASX_E_HOOK_MISSING;
+#else
+    return ASX_E_PERMISSION_DENIED;
+#endif
+}
+
+static void parallel_fill_commit_authority_snapshot(asx_parallel_commit_authority_snapshot *out) {
+    uint32_t i;
+    uint32_t active_workers;
+
+    if (out == NULL) { return; }
+
+    memset(out, 0, sizeof(*out));
+    out->commit_sequence = g_metrics.commit_sequence;
+    out->native_live_enabled = 0u;
+    out->native_live_status = parallel_native_live_status();
+
+    active_workers = parallel_active_worker_count();
+    if (active_workers > ASX_MAX_WORKERS) { active_workers = ASX_MAX_WORKERS; }
+
+    for (i = 0u; i < active_workers; i++) {
+        sat_add_u32(&out->total_worker_commits, g_workers[i].commits_total);
+        if (g_workers[i].last_commit_sequence > out->max_worker_commit_sequence) {
+            out->max_worker_commit_sequence = g_workers[i].last_commit_sequence;
+        }
+        if (g_workers[i].last_commit_sequence > g_metrics.commit_sequence) {
+            out->drift_detected = 1u;
+        }
+    }
+
+    if (out->total_worker_commits != g_metrics.commit_sequence) { out->drift_detected = 1u; }
+    if (g_metrics.commit_sequence == 0u) {
+        if (out->max_worker_commit_sequence != 0u) { out->drift_detected = 1u; }
+    } else if (out->max_worker_commit_sequence >= g_metrics.commit_sequence) {
+        out->drift_detected = 1u;
+    }
 }
 
 static void parallel_mark_workers_running(void) {
@@ -1250,8 +1289,7 @@ asx_status asx_parallel_get_locality_snapshot(asx_parallel_locality_snapshot *ou
     return ASX_OK;
 }
 
-asx_status asx_parallel_task_locality(asx_task_id tid, uint32_t *out_shard,
-                                      uint32_t *out_worker) {
+asx_status asx_parallel_task_locality(asx_task_id tid, uint32_t *out_shard, uint32_t *out_worker) {
     asx_task_slot *slot;
     uint16_t slot_idx;
     uint32_t shard;
@@ -1358,6 +1396,7 @@ asx_status asx_parallel_get_telemetry_snapshot(asx_parallel_telemetry_snapshot *
     out->metrics = g_metrics;
     out->admission = g_last_admission;
     parallel_fill_locality_snapshot(&out->locality);
+    parallel_fill_commit_authority_snapshot(&out->commit_authority);
 
     for (i = 0u; i < ASX_MAX_LANES; i++) {
         out->lane_depths[i] = g_lanes[i].count;
@@ -1403,7 +1442,7 @@ asx_status asx_parallel_get_telemetry_snapshot(asx_parallel_telemetry_snapshot *
 
 asx_status asx_parallel_render_telemetry_jsonl(const asx_parallel_telemetry_snapshot *snapshot,
                                                char *buf, uint32_t buf_len, uint32_t *out_len) {
-    char tmp[2048];
+    char tmp[3072];
     int needed;
 
     if (snapshot == NULL || buf == NULL) { return ASX_E_INVALID_ARGUMENT; }
@@ -1428,6 +1467,10 @@ asx_status asx_parallel_render_telemetry_jsonl(const asx_parallel_telemetry_snap
         "\"status_text\":\"%s\"},"
         "\"locality\":{\"mode\":\"%s\",\"shard_count\":%u,\"tasks_per_shard\":%u,"
         "\"hot_shard\":%u,\"max_shard_tasks\":%u},"
+        "\"commit_authority\":{\"commit_sequence\":%u,\"total_worker_commits\":%u,"
+        "\"max_worker_commit_sequence\":%u,\"drift_detected\":%u,"
+        "\"native_live_enabled\":%u,\"native_live_status_code\":%d,"
+        "\"native_live_status_text\":\"%s\"},"
         "\"worker0\":{\"queue_depth\":%u,\"busy_permille\":%u,\"idle_permille\":%u},"
         "\"rerun\":\"make parallel-parity\"}\n",
         (unsigned)snapshot->worker_count, (unsigned)snapshot->total_queue_depth,
@@ -1448,6 +1491,13 @@ asx_status asx_parallel_render_telemetry_jsonl(const asx_parallel_telemetry_snap
         asx_parallel_locality_mode_str(snapshot->locality.mode),
         (unsigned)snapshot->locality.shard_count, (unsigned)snapshot->locality.tasks_per_shard,
         (unsigned)snapshot->locality.hot_shard, (unsigned)snapshot->locality.max_shard_tasks,
+        (unsigned)snapshot->commit_authority.commit_sequence,
+        (unsigned)snapshot->commit_authority.total_worker_commits,
+        (unsigned)snapshot->commit_authority.max_worker_commit_sequence,
+        (unsigned)snapshot->commit_authority.drift_detected,
+        (unsigned)snapshot->commit_authority.native_live_enabled,
+        (int)snapshot->commit_authority.native_live_status,
+        asx_status_str(snapshot->commit_authority.native_live_status),
         (unsigned)snapshot->worker_queue_depths[0], (unsigned)snapshot->worker_busy_permille[0],
         (unsigned)snapshot->worker_idle_permille[0]);
 

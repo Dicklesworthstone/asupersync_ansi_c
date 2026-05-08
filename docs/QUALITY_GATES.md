@@ -240,7 +240,7 @@ gate evidence must cover the surface-specific behavior named below.
 | Gate ID | Initial target/script expectation | Tracking Bead(s) | Purpose |
 |---------|-----------------------------------|------------------|---------|
 | `GATE-WAVE-C-CONTRACT` | docs/register validation, `br dep cycles --no-db --json`, `bv --robot-triage` | `bd-v12u.1` | Keep Wave C native adapter/static arena/networking/combinator/actor contracts explicit, acyclic, and source-linked. |
-| `GATE-NATIVE-ADAPTER-COMMIT` | native-adapter parity/e2e target to be added by child bead | `bd-v12u.2`, `bd-v12u.3`, `bd-v12u.4` | Prove POSIX/Win32 live hooks preserve deterministic commit authority or fail closed. |
+| `GATE-NATIVE-ADAPTER-COMMIT` | `parallel-parity`, `profile-parity`, native-adapter parity/e2e targets added by child beads | `bd-v12u.2`, `bd-v12u.3`, `bd-v12u.4` | Prove POSIX/Win32 live hooks preserve deterministic commit authority or fail closed. `bd-v12u.2` adds commit-authority telemetry/gate fields; `bd-v12u.3`/`.4` must turn native live records on only with zero drift. |
 | `GATE-STATIC-ARENA-PARITY` | static-vs-dynamic unit and profile parity targets to be added by child bead | `bd-v12u.5`, `bd-v12u.6` | Prove static arena allocation is a resource-plane backend with failure-atomic OOM and digest parity. |
 | `GATE-INCIDENT-REPLAY-BUNDLE` | incident bundle schema/unit/e2e targets to be added by child bead | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` | Emit operator-grade evidence bundles, trace schema, and minimized counterexamples without mutating runtime behavior. |
 | `GATE-WAVE-C-NETWORKING` | networking primitive conformance/e2e targets to be added by child bead | `bd-v12u.9`, `bd-v12u.10` | Prove bounded connection lifecycle, cancellation, backpressure, resource exhaustion, and unsupported-profile diagnostics. |
@@ -255,6 +255,9 @@ Coverage requirements:
    exception explicitly approves the fixture and scope.
 3. Unsupported platforms must fail closed with diagnostics; they must not be
    counted as passing live-mode behavior.
+   `GATE-NATIVE-ADAPTER-COMMIT` records this with
+   `native_adapter_commit_authority.fail_closed_records` and requires
+   `drift_records == 0`.
 4. Static arena, overload, and admission work are resource-plane changes only;
    they cannot alter lifecycle, cancellation, channel, timer, or trace semantics.
 5. Expensive proof runs must use `rch exec -- make ...`.
