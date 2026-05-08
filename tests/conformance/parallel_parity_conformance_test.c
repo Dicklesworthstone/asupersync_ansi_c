@@ -18,6 +18,7 @@
 #define PARITY_EVENT_BUCKETS 0x43u
 #define PARITY_MAX_ORDER 8u
 #define PARITY_MAX_OUTPUTS 8u
+#define PARITY_SEED UINT32_C(854341)
 
 typedef enum {
     PARITY_SCENARIO_LIFECYCLE = 0,
@@ -25,16 +26,25 @@ typedef enum {
     PARITY_SCENARIO_TIMER_WAKER = 2,
     PARITY_SCENARIO_MPSC = 3,
     PARITY_SCENARIO_BLOCKING = 4,
-    PARITY_SCENARIO_REACTOR = 5
+    PARITY_SCENARIO_REACTOR = 5,
+    PARITY_SCENARIO_MIXED_LIVENESS = 6
 } parity_scenario;
 
 typedef struct {
     parity_scenario scenario;
     const char *scenario_id;
+    uint32_t seed;
     uint32_t worker_count;
     int skipped;
     asx_status status;
+    asx_status drain_status;
+    asx_status quiescence_status;
+    uint32_t quiescence_required;
+    uint32_t quiescent;
+    uint32_t cancelled_tasks;
+    uint32_t bounded_liveness;
     uint64_t semantic_digest;
+    uint64_t canonical_trace_digest;
     uint64_t trace_digest;
     uint64_t event_order_digest;
     uint32_t event_count;
@@ -70,9 +80,10 @@ static uint32_t g_order_values[PARITY_MAX_ORDER];
 static uint32_t g_ghost_reactor_ready;
 
 static const uint32_t WORKER_COUNTS[] = {1u, 2u, 8u, ASX_PARALLEL_GENERIC_TARGET_WORKERS};
-static const parity_scenario SCENARIOS[] = {PARITY_SCENARIO_LIFECYCLE,   PARITY_SCENARIO_CANCEL,
-                                            PARITY_SCENARIO_TIMER_WAKER, PARITY_SCENARIO_MPSC,
-                                            PARITY_SCENARIO_BLOCKING,    PARITY_SCENARIO_REACTOR};
+static const parity_scenario SCENARIOS[] = {PARITY_SCENARIO_LIFECYCLE,     PARITY_SCENARIO_CANCEL,
+                                            PARITY_SCENARIO_TIMER_WAKER,   PARITY_SCENARIO_MPSC,
+                                            PARITY_SCENARIO_BLOCKING,      PARITY_SCENARIO_REACTOR,
+                                            PARITY_SCENARIO_MIXED_LIVENESS};
 
 static const char *active_profile_name(void) {
 #if defined(ASX_PROFILE_CORE)
@@ -106,6 +117,7 @@ static const char *scenario_id(parity_scenario scenario) {
     case PARITY_SCENARIO_MPSC: return "parallel.channel.mpsc-two-phase";
     case PARITY_SCENARIO_BLOCKING: return "parallel.blocking.spawn-wake";
     case PARITY_SCENARIO_REACTOR: return "parallel.reactor.ghost-readiness";
+    case PARITY_SCENARIO_MIXED_LIVENESS: return "parallel.liveness.mixed-quiescence";
     }
     return "parallel.unknown";
 }
@@ -312,7 +324,14 @@ static void finalize_result(parity_result *out) {
     capture_order_summary(out);
 
     digest = digest_mix_str(digest, out->scenario_id);
+    digest = digest_mix_u32(digest, out->seed);
     digest = digest_mix_u32(digest, (uint32_t)out->status);
+    digest = digest_mix_u32(digest, (uint32_t)out->drain_status);
+    digest = digest_mix_u32(digest, (uint32_t)out->quiescence_status);
+    digest = digest_mix_u32(digest, out->quiescence_required);
+    digest = digest_mix_u32(digest, out->quiescent);
+    digest = digest_mix_u32(digest, out->cancelled_tasks);
+    digest = digest_mix_u32(digest, out->bounded_liveness);
     digest = digest_mix_u64(digest, out->event_order_digest);
     digest = digest_mix_u32(digest, out->event_count);
     for (i = 0u; i < PARITY_EVENT_BUCKETS; i++) {
@@ -335,6 +354,7 @@ static void finalize_result(parity_result *out) {
     digest = digest_mix_u32(digest, out->output_count);
     for (i = 0u; i < PARITY_MAX_OUTPUTS; i++) { digest = digest_mix_u64(digest, out->outputs[i]); }
     out->semantic_digest = digest;
+    out->canonical_trace_digest = digest;
 }
 
 static void append_output(parity_result *out, uint64_t value) {
@@ -604,6 +624,130 @@ static asx_status run_reactor(uint32_t worker_count, parity_result *out) {
 #endif
 }
 
+static asx_status run_mixed_liveness(uint32_t worker_count, parity_result *out) {
+    static const uint64_t CHANNEL_VALUES[] = {UINT64_C(101), UINT64_C(202), UINT64_C(303)};
+    asx_parallel_config cfg = default_config(worker_count);
+    asx_region_id rid;
+    asx_channel_id channel;
+    asx_send_permit permit;
+    asx_task_id ready_task;
+    asx_task_id cancel_task;
+    asx_task_id timer_task;
+    asx_waker timer_waker;
+    asx_timer_handle timer_handle;
+    void *ready_wakers[1];
+    asx_budget budget;
+    asx_quiescence_report report;
+    int ready_yields = 2;
+    uint32_t timer_order = 17u;
+    uint32_t ready_count;
+    uint32_t i;
+    uint64_t value;
+    uint64_t channel_checksum = UINT64_C(0);
+    asx_status st;
+
+    out->quiescence_required = 1u;
+    out->drain_status = ASX_E_QUIESCENCE_NOT_REACHED;
+    out->quiescence_status = ASX_E_QUIESCENCE_NOT_REACHED;
+
+    st = asx_parallel_init(&cfg);
+    if (st != ASX_OK) { return st; }
+    st = asx_region_open(&rid);
+    if (st != ASX_OK) { return st; }
+    st = asx_channel_create(rid, 4u, &channel);
+    if (st != ASX_OK) { return st; }
+
+    for (i = 0u; i < (uint32_t)(sizeof(CHANNEL_VALUES) / sizeof(CHANNEL_VALUES[0])); i++) {
+        st = asx_channel_try_reserve(channel, &permit);
+        if (st != ASX_OK) { return st; }
+        st = asx_send_permit_send(&permit, CHANNEL_VALUES[i] ^ (uint64_t)PARITY_SEED);
+        if (st != ASX_OK) { return st; }
+    }
+    for (i = 0u; i < (uint32_t)(sizeof(CHANNEL_VALUES) / sizeof(CHANNEL_VALUES[0])); i++) {
+        st = asx_channel_try_recv(channel, &value);
+        if (st != ASX_OK) { return st; }
+        channel_checksum ^= digest_mix_u64(UINT64_C(1469598103934665603), value + (uint64_t)i);
+    }
+    st = asx_channel_queue_len(channel, &out->queue_len);
+    if (st != ASX_OK) { return st; }
+    st = asx_channel_reserved_count(channel, &out->reserved_count);
+    if (st != ASX_OK) { return st; }
+    st = asx_channel_close_sender(channel);
+    if (st != ASX_OK) { return st; }
+    st = asx_channel_close_receiver(channel);
+    if (st != ASX_OK) { return st; }
+
+    st = asx_task_spawn(rid, poll_yield_n, &ready_yields, &ready_task);
+    if (st != ASX_OK) { return st; }
+    st = asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &cancel_task);
+    if (st != ASX_OK) { return st; }
+    st = asx_task_spawn(rid, poll_record_order, &timer_order, &timer_task);
+    if (st != ASX_OK) { return st; }
+
+    st = asx_inject_ready(ready_task);
+    if (st != ASX_OK) { return st; }
+    st = asx_inject_ready(cancel_task);
+    if (st != ASX_OK) { return st; }
+    st = asx_waker_register(timer_task, &timer_waker);
+    if (st != ASX_OK) { return st; }
+    st = asx_inject_timed(timer_task);
+    if (st != ASX_OK) { return st; }
+    st = asx_timer_register(asx_timer_wheel_global(), 50u, &timer_waker, &timer_handle);
+    if (st != ASX_OK) { return st; }
+
+    ready_count = asx_timer_collect_expired(asx_timer_wheel_global(), 50u, ready_wakers, 1u);
+    if (ready_count != 1u) { return ASX_E_INVALID_STATE; }
+    st = asx_waker_wake((const asx_waker *)ready_wakers[0]);
+    if (st != ASX_OK) { return st; }
+
+    budget = asx_budget_from_polls(8u);
+    st = asx_parallel_run(rid, &budget);
+    if (st != ASX_E_POLL_BUDGET_EXHAUSTED && st != ASX_OK) { return st; }
+
+    st = asx_task_cancel(cancel_task, ASX_CANCEL_USER);
+    if (st != ASX_OK) { return st; }
+    st = asx_inject_cancel(cancel_task);
+    if (st != ASX_OK) { return st; }
+    out->cancelled_tasks = 1u;
+
+    budget = asx_budget_from_polls(32u);
+    out->status = asx_parallel_run(rid, &budget);
+    if (out->status != ASX_OK) { return ASX_OK; }
+
+    {
+        asx_task_state ready_state;
+        asx_task_state cancel_state;
+        asx_task_state timer_state;
+
+        st = asx_task_get_state(ready_task, &ready_state);
+        if (st != ASX_OK) { return st; }
+        st = asx_task_get_state(cancel_task, &cancel_state);
+        if (st != ASX_OK) { return st; }
+        st = asx_task_get_state(timer_task, &timer_state);
+        if (st != ASX_OK) { return st; }
+        if (ready_state != ASX_TASK_COMPLETED || cancel_state != ASX_TASK_COMPLETED ||
+            timer_state != ASX_TASK_COMPLETED) {
+            out->bounded_liveness = 0u;
+            return ASX_E_INVALID_STATE;
+        }
+    }
+
+    budget = asx_budget_from_polls(32u);
+    out->drain_status = asx_region_drain(rid, &budget);
+    if (out->drain_status != ASX_OK) { return out->drain_status; }
+    out->quiescence_status = asx_quiescence_check_detailed(rid, &report);
+    if (out->quiescence_status != ASX_OK) { return out->quiescence_status; }
+    out->quiescent = report.quiescent ? 1u : 0u;
+    out->bounded_liveness = out->quiescent;
+
+    append_output(out, channel_checksum);
+    append_output(out, ready_count);
+    append_output(out, (uint64_t)ready_yields);
+    append_output(out, (uint64_t)out->cancelled_tasks);
+    append_output(out, (uint64_t)out->quiescent);
+    return out->quiescent ? ASX_OK : ASX_E_QUIESCENCE_NOT_REACHED;
+}
+
 static asx_status run_scenario(parity_scenario scenario, uint32_t worker_count,
                                parity_result *out) {
     asx_status st = ASX_OK;
@@ -611,6 +755,7 @@ static asx_status run_scenario(parity_scenario scenario, uint32_t worker_count,
     memset(out, 0, sizeof(*out));
     out->scenario = scenario;
     out->scenario_id = scenario_id(scenario);
+    out->seed = PARITY_SEED;
     out->worker_count = worker_count;
 
     if (worker_count > ASX_MAX_WORKERS) {
@@ -630,6 +775,7 @@ static asx_status run_scenario(parity_scenario scenario, uint32_t worker_count,
     case PARITY_SCENARIO_MPSC: st = run_mpsc(worker_count, out); break;
     case PARITY_SCENARIO_BLOCKING: st = run_blocking(worker_count, out); break;
     case PARITY_SCENARIO_REACTOR: st = run_reactor(worker_count, out); break;
+    case PARITY_SCENARIO_MIXED_LIVENESS: st = run_mixed_liveness(worker_count, out); break;
     }
 
     if (st != ASX_OK && out->status == ASX_OK) { out->status = st; }
@@ -640,6 +786,7 @@ static asx_status run_scenario(parity_scenario scenario, uint32_t worker_count,
 static const char *result_parity_text(const parity_result *result) {
     if (result->skipped) { return "skip"; }
     if (result->status != ASX_OK) { return "fail"; }
+    if (result->quiescence_required != 0u && result->quiescent == 0u) { return "fail"; }
     if (result->commit_authority_drift != 0u) { return "fail"; }
     return "pass";
 }
@@ -648,12 +795,14 @@ static void emit_result_json(const parity_result *result) {
     printf("{\"kind\":\"parallel_parity_record\",");
     printf("\"scenario_id\":\"%s\",", result->scenario_id);
     printf("\"profile\":\"%s\",", active_profile_name());
+    printf("\"seed\":%" PRIu32 ",", result->seed);
     printf("\"worker_count\":%" PRIu32 ",", result->worker_count);
     printf("\"max_workers\":%" PRIu32 ",", (uint32_t)ASX_MAX_WORKERS);
     printf("\"status_code\":%d,", (int)result->status);
     printf("\"status_text\":\"%s\",", asx_status_str(result->status));
     printf("\"parity\":\"%s\",", result_parity_text(result));
     printf("\"semantic_digest\":\"fnv64:%016" PRIx64 "\",", result->semantic_digest);
+    printf("\"canonical_trace_digest\":\"fnv64:%016" PRIx64 "\",", result->canonical_trace_digest);
     printf("\"trace_digest\":\"fnv64:%016" PRIx64 "\",", result->trace_digest);
     printf("\"event_order_digest\":\"fnv64:%016" PRIx64 "\",", result->event_order_digest);
     printf("\"event_count\":%" PRIu32 ",", result->event_count);
@@ -668,6 +817,15 @@ static void emit_result_json(const parity_result *result) {
     printf("\"max_worker_queue_depth\":%" PRIu32 ",", result->max_worker_queue_depth);
     printf("\"steals_failed\":%" PRIu32 ",", result->steals_failed);
     printf("\"timed_wake_latency_rounds_max\":%" PRIu32 ",", result->timed_wake_latency_rounds_max);
+    printf("\"liveness\":{\"quiescence_required\":%" PRIu32
+           ",\"drain_status_code\":%d,\"drain_status_text\":\"%s\""
+           ",\"quiescence_status_code\":%d,\"quiescence_status_text\":\"%s\""
+           ",\"quiescent\":%" PRIu32 ",\"cancelled_tasks\":%" PRIu32
+           ",\"bounded_liveness\":%" PRIu32 "},",
+           result->quiescence_required, (int)result->drain_status,
+           asx_status_str(result->drain_status), (int)result->quiescence_status,
+           asx_status_str(result->quiescence_status), result->quiescent, result->cancelled_tasks,
+           result->bounded_liveness);
     printf("\"admission\":{\"triggered\":%" PRIu32 ",\"pressure_pct\":%" PRIu32
            ",\"status_code\":%d,\"status_text\":\"%s\"},",
            result->admission_triggered, result->admission_pressure_pct,
@@ -687,6 +845,8 @@ static void emit_result_json(const parity_result *result) {
     printf("\"sched_quiescent\":%" PRIu32 ",", result->event_counts[ASX_TRACE_SCHED_QUIESCENT]);
     printf("\"sched_round\":%" PRIu32 ",", result->event_counts[ASX_TRACE_SCHED_ROUND]);
     printf("\"region_open\":%" PRIu32 ",", result->event_counts[ASX_TRACE_REGION_OPEN]);
+    printf("\"region_close\":%" PRIu32 ",", result->event_counts[ASX_TRACE_REGION_CLOSE]);
+    printf("\"region_closed\":%" PRIu32 ",", result->event_counts[ASX_TRACE_REGION_CLOSED]);
     printf("\"task_spawn\":%" PRIu32 ",", result->event_counts[ASX_TRACE_TASK_SPAWN]);
     printf("\"task_transition\":%" PRIu32 ",", result->event_counts[ASX_TRACE_TASK_TRANSITION]);
     printf("\"channel_send\":%" PRIu32 ",", result->event_counts[ASX_TRACE_CHANNEL_SEND]);
@@ -714,7 +874,15 @@ static int results_match(const parity_result *expected, const parity_result *act
     uint32_t i;
 
     if (expected->status != actual->status) { return 0; }
+    if (expected->seed != actual->seed) { return 0; }
+    if (expected->drain_status != actual->drain_status) { return 0; }
+    if (expected->quiescence_status != actual->quiescence_status) { return 0; }
+    if (expected->quiescence_required != actual->quiescence_required) { return 0; }
+    if (expected->quiescent != actual->quiescent) { return 0; }
+    if (expected->cancelled_tasks != actual->cancelled_tasks) { return 0; }
+    if (expected->bounded_liveness != actual->bounded_liveness) { return 0; }
     if (expected->semantic_digest != actual->semantic_digest) { return 0; }
+    if (expected->canonical_trace_digest != actual->canonical_trace_digest) { return 0; }
     if (expected->event_order_digest != actual->event_order_digest) { return 0; }
     if (expected->event_count != actual->event_count) { return 0; }
     if (expected->completed_tasks != actual->completed_tasks) { return 0; }
@@ -800,7 +968,9 @@ TEST(parallel_single_vs_multi_worker_digest_parity) {
     printf("{\"kind\":\"parallel_parity_summary\",");
     printf("\"status\":\"pass\",");
     printf("\"profile\":\"%s\",", active_profile_name());
+    printf("\"seed\":%" PRIu32 ",", PARITY_SEED);
     printf("\"scenario_count\":%u,", (unsigned)(sizeof(SCENARIOS) / sizeof(SCENARIOS[0])));
+    printf("\"liveness_scenario_id\":\"parallel.liveness.mixed-quiescence\",");
     printf("\"baseline_worker_count\":1,");
     printf("\"compared_records\":%" PRIu32 ",", compared);
     printf("\"skipped_records\":%" PRIu32 ",", skipped);
