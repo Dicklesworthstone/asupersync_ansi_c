@@ -217,6 +217,13 @@ asx_status asx_runtime_hooks_validate(const asx_runtime_hooks *hooks, int determ
         if (!hooks->clock.now_ns_fn) return ASX_E_INVALID_ARGUMENT;
     }
 
+    if ((hooks->blocking.submit_fn == NULL) != (hooks->blocking.shutdown_fn == NULL)) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    if (hooks->blocking.capacity_fn != NULL && hooks->blocking.submit_fn == NULL) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+
     return ASX_OK;
 }
 

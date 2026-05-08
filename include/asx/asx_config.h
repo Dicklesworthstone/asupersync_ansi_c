@@ -344,6 +344,19 @@ typedef struct {
     asx_ghost_reactor_wait_fn ghost_wait_fn;
 } asx_reactor_hooks;
 
+typedef void (*asx_blocking_job_fn)(void *job_ctx);
+typedef asx_status (*asx_blocking_submit_fn)(void *ctx, asx_blocking_job_fn job_fn,
+                                             void *job_ctx);
+typedef void (*asx_blocking_shutdown_fn)(void *ctx);
+typedef uint32_t (*asx_blocking_capacity_fn)(void *ctx);
+
+typedef struct {
+    void *ctx;
+    asx_blocking_submit_fn submit_fn;
+    asx_blocking_shutdown_fn shutdown_fn;
+    asx_blocking_capacity_fn capacity_fn;
+} asx_blocking_hooks;
+
 typedef struct {
     void *ctx;
     asx_log_sink_fn write_fn;
@@ -354,6 +367,7 @@ typedef struct {
     asx_clock_hooks clock;
     asx_entropy_hooks entropy;
     asx_reactor_hooks reactor;
+    asx_blocking_hooks blocking;
     asx_log_hooks log;
     uint8_t deterministic_seeded_prng; /* 1 when deterministic entropy stream is configured */
     uint8_t allocator_sealed;          /* 1 after asx_runtime_seal_allocator() */

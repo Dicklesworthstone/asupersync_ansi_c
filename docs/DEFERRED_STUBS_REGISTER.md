@@ -21,7 +21,7 @@ This register complements `docs/DEFERRED_SURFACE_REGISTER.md`.
 
 | File | Status | Current Intent | Graduation Trigger |
 |---|---|---|---|
-| `src/runtime/blocking.c` | `walking-skeleton` | Inline execution preserves blocking API shape without worker-thread dispatch. | Real worker pool for deferred live-mode profiles. |
+| `src/runtime/blocking.c` | `graduating-internal` | Runtime-owned blocking slots preserve deterministic inline execution by default and can submit opaque jobs through a live-mode hook when the platform installs one. | Broader cancellation-aware blocking handles and cross-profile conformance gate remain tracked by `bd-pweu.11`. |
 | `src/runtime/io_driver.c` | `walking-skeleton` | Ghost/no-op backend preserves registration semantics without a native reactor. | Platform adapters with real poll/epoll/kqueue/IOCP style integration. |
 | `src/runtime/waker.c` | `walking-skeleton` | Single-threaded flag-based wake tracking for deterministic runtime progress. | Cross-thread wake transport once parallel/profile-specific execution is promoted. |
 | `src/runtime/deadline_monitor.c` | `walking-skeleton` | Check-on-poll monitoring against caller-provided timestamps. | Integrated timer/reactor driven monitoring for live-mode profiles. |
@@ -29,7 +29,7 @@ This register complements `docs/DEFERRED_SURFACE_REGISTER.md`.
 | `src/runtime/arena_locality_spike.c` | `research-spike` | Evaluates arena layout alternatives against baseline task-slot scans. | Separate decision to adopt a proven layout into runtime internals. |
 | `src/runtime/barrier_cert_spike.c` | `research-spike` | Evaluates barrier-certificate style scheduler safety checks. | Separate decision to promote a proven runtime safety monitor. |
 | `src/platform/freestanding/hooks.c` | `user-supplied` | Freestanding profile intentionally expects embedders to install hooks at runtime init. | No graduation required; this remains an adapter contract rather than an OS implementation. |
-| `src/platform/posix/hooks.c` | `walking-skeleton` | POSIX clock, entropy, reactor wait, and a detached blocking-submit helper exist; the blocking helper is not yet wired through `asx_runtime_hooks` or `src/runtime/blocking.c`. | `bd-pweu.6`: bounded pthread worker pool wired through the runtime hook contract, deterministic shutdown/drain, and POSIX e2e proof. |
+| `src/platform/posix/hooks.c` | `graduated` | POSIX clock, entropy, reactor wait, and bounded pthread blocking-submit hooks are installed through `asx_runtime_hooks`; shutdown drains queued/running blocking jobs before reset. | Future work: timed reactor registration and scheduler integration under `bd-pweu.8`. |
 | `src/platform/win32/hooks.c` | `walking-skeleton` | Empty Win32 adapter stub. No QPC, BCrypt, IOCP, or thread pool hooks. | Wave B/C: implement Win32 platform hooks. |
 | `src/channel/mpsc.c` | `walking-skeleton` | Single-threaded non-blocking MPSC channel. | Multi-threaded MPSC with atomic operations (post atomics layer). |
 | `src/channel/oneshot.c` | `walking-skeleton` | Fixed-size arena, single-threaded oneshot channel. | Multi-threaded variant for cross-task communication. |

@@ -25,6 +25,8 @@ static int g_clock_count;
 static int g_entropy_count;
 static int g_reactor_count;
 static int g_native_reactor_count;
+static int g_blocking_submit_count;
+static int g_blocking_shutdown_count;
 static int g_log_count;
 static int g_log_level;
 static char g_log_buf[256];
@@ -81,6 +83,25 @@ static asx_status test_native_reactor(void *ctx, uint32_t timeout_ms, uint32_t *
     return ASX_OK;
 }
 
+static void test_blocking_job(void *job_ctx) { (void)job_ctx; }
+
+static asx_status test_blocking_submit(void *ctx, asx_blocking_job_fn job_fn, void *job_ctx) {
+    (void)ctx;
+    g_blocking_submit_count++;
+    if (job_fn != NULL) { job_fn(job_ctx); }
+    return ASX_OK;
+}
+
+static void test_blocking_shutdown(void *ctx) {
+    (void)ctx;
+    g_blocking_shutdown_count++;
+}
+
+static uint32_t test_blocking_capacity(void *ctx) {
+    (void)ctx;
+    return 8u;
+}
+
 static void test_log_sink(void *ctx, int level, const char *message) {
     (void)ctx;
     g_log_count++;
@@ -99,6 +120,8 @@ static void reset_counters(void) {
     g_entropy_count = 0;
     g_reactor_count = 0;
     g_native_reactor_count = 0;
+    g_blocking_submit_count = 0;
+    g_blocking_shutdown_count = 0;
     g_log_count = 0;
     g_log_level = 0;
     g_log_buf[0] = '\0';
@@ -142,6 +165,9 @@ TEST(hooks_init_sets_defaults) {
     ASSERT_TRUE(hooks.entropy.random_u64_fn != NULL);
     ASSERT_EQ(hooks.deterministic_seeded_prng, 1);
     ASSERT_EQ(hooks.allocator_sealed, 0);
+    ASSERT_TRUE(hooks.blocking.submit_fn == NULL);
+    ASSERT_TRUE(hooks.blocking.shutdown_fn == NULL);
+    ASSERT_TRUE(hooks.blocking.capacity_fn == NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -194,6 +220,41 @@ TEST(hooks_validate_live_no_wall_clock_fails) {
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.clock.now_ns_fn = NULL;
     ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 0), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(hooks_validate_blocking_submit_requires_shutdown) {
+    asx_runtime_hooks hooks;
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.blocking.submit_fn = test_blocking_submit;
+    ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 0), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(hooks_validate_blocking_shutdown_requires_submit) {
+    asx_runtime_hooks hooks;
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.blocking.shutdown_fn = test_blocking_shutdown;
+    ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 0), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(hooks_validate_blocking_capacity_requires_submit) {
+    asx_runtime_hooks hooks;
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.blocking.capacity_fn = test_blocking_capacity;
+    ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 0), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(hooks_validate_blocking_pair_passes) {
+    asx_runtime_hooks hooks;
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.blocking.submit_fn = test_blocking_submit;
+    hooks.blocking.shutdown_fn = test_blocking_shutdown;
+    hooks.blocking.capacity_fn = test_blocking_capacity;
+    ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 0), ASX_OK);
+    ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 1), ASX_OK);
+    hooks.blocking.submit_fn(hooks.blocking.ctx, test_blocking_job, NULL);
+    hooks.blocking.shutdown_fn(hooks.blocking.ctx);
+    ASSERT_EQ(g_blocking_submit_count, 1);
+    ASSERT_EQ(g_blocking_shutdown_count, 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -664,6 +725,10 @@ int main(void) {
     RUN_TEST(hooks_validate_deterministic_no_logical_clock_fails);
     RUN_TEST(hooks_validate_deterministic_unseeded_entropy_fails);
     RUN_TEST(hooks_validate_live_no_wall_clock_fails);
+    RUN_TEST(hooks_validate_blocking_submit_requires_shutdown);
+    RUN_TEST(hooks_validate_blocking_shutdown_requires_submit);
+    RUN_TEST(hooks_validate_blocking_capacity_requires_submit);
+    RUN_TEST(hooks_validate_blocking_pair_passes);
 
     /* Hook install/retrieval */
     RUN_TEST(set_hooks_null_returns_error);

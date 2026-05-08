@@ -1,11 +1,11 @@
 /*
  * posix/hooks.c — POSIX platform adapter
  *
- * Provides clock and entropy hooks for live-mode POSIX targets.
- * Reactor and blocking pool hooks are added by subsequent beads.
+ * Provides clock, entropy, reactor, log, and bounded blocking-submit hooks
+ * for live-mode POSIX targets.
  *
- * Walking skeleton (Wave B/C): clock + entropy implemented.
- * Graduation: reactor (epoll/kqueue), blocking pool (pthreads).
+ * Blocking-submit uses a fixed pthread pool with bounded queueing; runtime
+ * code owns task metadata and drains this pool before reset.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -182,55 +182,181 @@ static asx_status posix_ghost_reactor_wait(void *ctx, uint64_t logical_step,
 
 /* ------------------------------------------------------------------ */
 /* Blocking pool (pthread-based)                                       */
-/*                                                                     */
-/* Provides a thread pool for offloading blocking work. Currently      */
-/* implemented as a fire-and-detach model: each submitted blocking     */
-/* task gets its own detached thread. A bounded work-stealing pool     */
-/* with condvar dispatch would be the production upgrade.              */
 /* ------------------------------------------------------------------ */
 
 #include <pthread.h>
 
-/* Include blocking header for asx_blocking_fn typedef */
-#include <asx/runtime/blocking.h>
+#define ASX_POSIX_BLOCKING_WORKERS 4u
+#define ASX_POSIX_BLOCKING_QUEUE_CAPACITY 8u
 
 typedef struct {
-    asx_blocking_fn fn;
-    void *user_data;
+    asx_blocking_job_fn job_fn;
+    void *job_ctx;
 } posix_blocking_task;
 
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t has_work;
+    pthread_cond_t drained;
+    pthread_t workers[ASX_POSIX_BLOCKING_WORKERS];
+    posix_blocking_task queue[ASX_POSIX_BLOCKING_QUEUE_CAPACITY];
+    uint32_t head;
+    uint32_t tail;
+    uint32_t queued;
+    uint32_t active;
+    uint32_t worker_count;
+    int started;
+    int stopping;
+} posix_blocking_pool;
+
+static posix_blocking_pool g_blocking_pool = {
+    PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER, {0}, {{0}}, 0u,
+    0u,                        0u,                         0u,                    0u, 0,
+    0};
+
+static void posix_blocking_pool_reset_locked(posix_blocking_pool *pool) {
+    pool->head = 0u;
+    pool->tail = 0u;
+    pool->queued = 0u;
+    pool->active = 0u;
+    pool->worker_count = 0u;
+    pool->started = 0;
+    pool->stopping = 0;
+}
+
 static void *posix_blocking_worker(void *arg) {
-    posix_blocking_task *task = (posix_blocking_task *)arg;
-    if (task != NULL && task->fn != NULL) { (void)task->fn(task->user_data); }
-    free(arg); /* heap-allocated by submit */
+    posix_blocking_pool *pool = (posix_blocking_pool *)arg;
+
+    for (;;) {
+        posix_blocking_task task;
+
+        pthread_mutex_lock(&pool->mutex);
+        while (pool->queued == 0u && !pool->stopping) {
+            pthread_cond_wait(&pool->has_work, &pool->mutex);
+        }
+        if (pool->queued == 0u && pool->stopping) {
+            pthread_mutex_unlock(&pool->mutex);
+            break;
+        }
+
+        task = pool->queue[pool->head];
+        pool->head = (pool->head + 1u) % ASX_POSIX_BLOCKING_QUEUE_CAPACITY;
+        pool->queued--;
+        pool->active++;
+        pthread_mutex_unlock(&pool->mutex);
+
+        if (task.job_fn != NULL) { task.job_fn(task.job_ctx); }
+
+        pthread_mutex_lock(&pool->mutex);
+        if (pool->active > 0u) { pool->active--; }
+        if (pool->queued == 0u && pool->active == 0u) {
+            pthread_cond_broadcast(&pool->drained);
+        }
+        pthread_mutex_unlock(&pool->mutex);
+    }
+
     return NULL;
 }
 
-/* Submit blocking work to a detached pthread.
- * Note: This function is available for POSIX profile consumers but is
- * not yet wired into the runtime's blocking.c submit path. That requires
- * adding an optional blocking_submit_fn hook to asx_runtime_hooks (future).
- * For now, CORE profile continues inline execution. */
-static asx_status posix_blocking_submit_detached(asx_blocking_fn fn, void *user_data) {
-    pthread_t tid;
-    posix_blocking_task *task;
-    int ret;
+static asx_status posix_blocking_pool_start_locked(posix_blocking_pool *pool) {
+    uint32_t i;
 
-    if (fn == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (pool->started) return ASX_OK;
 
-    task = (posix_blocking_task *)malloc(sizeof(*task));
-    if (task == NULL) return ASX_E_RESOURCE_EXHAUSTED;
-    task->fn = fn;
-    task->user_data = user_data;
+    pool->head = 0u;
+    pool->tail = 0u;
+    pool->queued = 0u;
+    pool->active = 0u;
+    pool->worker_count = 0u;
+    pool->stopping = 0;
 
-    ret = pthread_create(&tid, NULL, posix_blocking_worker, task);
-    if (ret != 0) {
-        free(task);
+    for (i = 0; i < ASX_POSIX_BLOCKING_WORKERS; ++i) {
+        int ret = pthread_create(&pool->workers[i], NULL, posix_blocking_worker, pool);
+        if (ret != 0) {
+            uint32_t j;
+            uint32_t created = pool->worker_count;
+
+            pool->stopping = 1;
+            pthread_cond_broadcast(&pool->has_work);
+            pthread_mutex_unlock(&pool->mutex);
+            for (j = 0; j < created; ++j) { (void)pthread_join(pool->workers[j], NULL); }
+            pthread_mutex_lock(&pool->mutex);
+            posix_blocking_pool_reset_locked(pool);
+            return ASX_E_RESOURCE_EXHAUSTED;
+        }
+        pool->worker_count++;
+    }
+
+    pool->started = 1;
+    return ASX_OK;
+}
+
+static asx_status posix_blocking_submit(void *ctx, asx_blocking_job_fn job_fn, void *job_ctx) {
+    posix_blocking_pool *pool = (posix_blocking_pool *)ctx;
+    asx_status st;
+
+    if (pool == NULL || job_fn == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    pthread_mutex_lock(&pool->mutex);
+    st = posix_blocking_pool_start_locked(pool);
+    if (st != ASX_OK) {
+        pthread_mutex_unlock(&pool->mutex);
+        return st;
+    }
+    if (pool->stopping) {
+        pthread_mutex_unlock(&pool->mutex);
+        return ASX_E_INVALID_STATE;
+    }
+    if (pool->queued >= ASX_POSIX_BLOCKING_QUEUE_CAPACITY) {
+        pthread_mutex_unlock(&pool->mutex);
         return ASX_E_RESOURCE_EXHAUSTED;
     }
 
-    (void)pthread_detach(tid);
+    pool->queue[pool->tail].job_fn = job_fn;
+    pool->queue[pool->tail].job_ctx = job_ctx;
+    pool->tail = (pool->tail + 1u) % ASX_POSIX_BLOCKING_QUEUE_CAPACITY;
+    pool->queued++;
+    pthread_cond_signal(&pool->has_work);
+    pthread_mutex_unlock(&pool->mutex);
+
     return ASX_OK;
+}
+
+static void posix_blocking_shutdown(void *ctx) {
+    posix_blocking_pool *pool = (posix_blocking_pool *)ctx;
+    pthread_t workers[ASX_POSIX_BLOCKING_WORKERS];
+    uint32_t worker_count;
+    uint32_t i;
+
+    if (pool == NULL) return;
+
+    pthread_mutex_lock(&pool->mutex);
+    if (!pool->started) {
+        posix_blocking_pool_reset_locked(pool);
+        pthread_mutex_unlock(&pool->mutex);
+        return;
+    }
+
+    while (pool->queued > 0u || pool->active > 0u) {
+        pthread_cond_wait(&pool->drained, &pool->mutex);
+    }
+
+    pool->stopping = 1;
+    pthread_cond_broadcast(&pool->has_work);
+    worker_count = pool->worker_count;
+    for (i = 0; i < worker_count; ++i) { workers[i] = pool->workers[i]; }
+    pthread_mutex_unlock(&pool->mutex);
+
+    for (i = 0; i < worker_count; ++i) { (void)pthread_join(workers[i], NULL); }
+
+    pthread_mutex_lock(&pool->mutex);
+    posix_blocking_pool_reset_locked(pool);
+    pthread_mutex_unlock(&pool->mutex);
+}
+
+static uint32_t posix_blocking_capacity(void *ctx) {
+    (void)ctx;
+    return ASX_POSIX_BLOCKING_QUEUE_CAPACITY;
 }
 
 /* ------------------------------------------------------------------ */
@@ -269,9 +395,10 @@ asx_status asx_posix_hooks_install(asx_runtime_hooks *hooks) {
     hooks->reactor.wait_fn = posix_reactor_wait;
     hooks->reactor.ghost_wait_fn = posix_ghost_reactor_wait;
 
-    /* Blocking pool: function available but not wired into blocking.c submit path.
-     * Requires adding blocking_submit_fn hook to asx_runtime_hooks. */
-    (void)posix_blocking_submit_detached; /* suppress unused-function warning */
+    hooks->blocking.ctx = &g_blocking_pool;
+    hooks->blocking.submit_fn = posix_blocking_submit;
+    hooks->blocking.shutdown_fn = posix_blocking_shutdown;
+    hooks->blocking.capacity_fn = posix_blocking_capacity;
 
     return ASX_OK;
 }
