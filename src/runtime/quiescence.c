@@ -213,7 +213,7 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
 
     /* Step 1: Close the region if still open */
     if (r->state == ASX_REGION_OPEN) {
-        asx_ghost_check_region_transition(id, ASX_REGION_OPEN, ASX_REGION_CLOSING);
+        (void)asx_ghost_check_region_transition(id, ASX_REGION_OPEN, ASX_REGION_CLOSING);
         st = asx_region_transition_check(ASX_REGION_OPEN, ASX_REGION_CLOSING);
         if (st != ASX_OK) return st;
         r->state = ASX_REGION_CLOSING;
@@ -242,14 +242,14 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
         if (r->child_count > 0u) return ASX_E_PENDING;
 
         /* No live children remain; fast path: skip Draining */
-        asx_ghost_check_region_transition(id, ASX_REGION_CLOSING, ASX_REGION_FINALIZING);
+        (void)asx_ghost_check_region_transition(id, ASX_REGION_CLOSING, ASX_REGION_FINALIZING);
         st = asx_region_transition_check(ASX_REGION_CLOSING, ASX_REGION_FINALIZING);
         if (st != ASX_OK) return st;
         r->state = ASX_REGION_FINALIZING;
     }
 
     if (r->state == ASX_REGION_DRAINING) {
-        asx_ghost_check_region_transition(id, ASX_REGION_DRAINING, ASX_REGION_FINALIZING);
+        (void)asx_ghost_check_region_transition(id, ASX_REGION_DRAINING, ASX_REGION_FINALIZING);
         st = asx_region_transition_check(ASX_REGION_DRAINING, ASX_REGION_FINALIZING);
         if (st != ASX_OK) return st;
         r->state = ASX_REGION_FINALIZING;
@@ -268,7 +268,7 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
         asx_cleanup_drain(&r->cleanup);
         if (r->task_count > 0u) return ASX_E_QUIESCENCE_TASKS_LIVE;
 
-        asx_ghost_check_region_transition(id, ASX_REGION_FINALIZING, ASX_REGION_CLOSED);
+        (void)asx_ghost_check_region_transition(id, ASX_REGION_FINALIZING, ASX_REGION_CLOSED);
         st = asx_region_transition_check(ASX_REGION_FINALIZING, ASX_REGION_CLOSED);
         if (st != ASX_OK) return st;
         asx_region_unlink_from_parent(id, r);

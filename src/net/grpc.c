@@ -120,6 +120,8 @@ void asx_grpc_service_init(asx_grpc_service *svc, const char *name) {
 
 asx_status asx_grpc_service_add_unary(asx_grpc_service *svc, const char *method_name,
                                       asx_grpc_unary_handler_fn handler, void *user_data) {
+    char service_name[ASX_GRPC_SERVICE_NAME_MAX];
+    char method_name_copy[ASX_GRPC_METHOD_NAME_MAX];
     size_t slen, mlen;
     asx_grpc_method *m;
     int written;
@@ -134,13 +136,21 @@ asx_status asx_grpc_service_add_unary(asx_grpc_service *svc, const char *method_
     slen = grpc_bounded_strlen(svc->name, ASX_GRPC_SERVICE_NAME_MAX);
     mlen = grpc_bounded_strlen(method_name, ASX_GRPC_METHOD_NAME_MAX);
     if (mlen == 0u) return ASX_E_INVALID_ARGUMENT;
+    if (slen >= ASX_GRPC_SERVICE_NAME_MAX || mlen >= ASX_GRPC_METHOD_NAME_MAX) {
+        return ASX_E_BUFFER_TOO_SMALL;
+    }
+
+    memcpy(service_name, svc->name, slen);
+    service_name[slen] = '\0';
+    memcpy(method_name_copy, method_name, mlen);
+    method_name_copy[mlen] = '\0';
 
     m = &svc->methods[svc->method_count];
     memset(m, 0, sizeof(*m));
 
     /* Build full name: "/ServiceName/MethodName" */
-    written = snprintf(m->full_name, ASX_GRPC_METHOD_NAME_MAX, "/%.*s/%.*s", (int)slen, svc->name,
-                       (int)mlen, method_name);
+    written = snprintf(m->full_name, ASX_GRPC_METHOD_NAME_MAX, "/%.*s/%.*s", (int)slen,
+                       service_name, (int)mlen, method_name_copy);
     if (written < 0 || (uint32_t)written >= ASX_GRPC_METHOD_NAME_MAX) return ASX_E_BUFFER_TOO_SMALL;
 
     m->method_type = ASX_GRPC_METHOD_UNARY;

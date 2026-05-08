@@ -65,6 +65,8 @@ endif
 RELEASE_TARGET ?= linux-x86_64
 RELEASE_KIND ?= binary
 RELEASE_VERSION ?=
+RELEASE_INSTALL_SMOKE_VERSION ?= 0.1.0
+RELEASE_INSTALL_SMOKE_TARGET ?= $(RELEASE_TARGET)
 
 # ---------------------------------------------------------------------------
 # Cross-compilation support
@@ -497,7 +499,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: check-evidence-bundle
 .PHONY: conformance codec-equivalence profile-parity parallel-parity crate-acceptance-gate
 .PHONY: fuzz-smoke ci-embedded-matrix
-.PHONY: release release-artifacts bench
+.PHONY: release release-artifacts release-install-smoke bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
 .PHONY: build-posix build-win32 build-parallel build-browser test-win32-hooks-build
 .PHONY: build-embedded-mipsel build-embedded-armv7 build-embedded-aarch64
@@ -1614,6 +1616,28 @@ release-artifacts:
 		--source-date-epoch "$$source_epoch"
 
 # ---------------------------------------------------------------------------
+# release-install-smoke — install and run from packaged release artifact
+# ---------------------------------------------------------------------------
+release-install-smoke:
+	@version="$(RELEASE_INSTALL_SMOKE_VERSION)"; \
+	target="$(RELEASE_INSTALL_SMOKE_TARGET)"; \
+	if [ -z "$$version" ] || [ -z "$$target" ]; then \
+		echo "[asx] release-install-smoke: RELEASE_INSTALL_SMOKE_VERSION and RELEASE_INSTALL_SMOKE_TARGET must be set"; \
+		exit 1; \
+	fi; \
+	$(MAKE) release-artifacts \
+		RELEASE_VERSION="$$version" \
+		RELEASE_TARGET="$$target" \
+		RELEASE_KIND=binary \
+		PROFILE=CORE \
+		CODEC=BIN \
+		DETERMINISTIC=1; \
+	bash tools/ci/run_release_install_smoke.sh \
+		--artifact "build/release/dist/asx-$$target.tar.xz" \
+		--version "$$version" \
+		--target "$$target"
+
+# ---------------------------------------------------------------------------
 # install / uninstall
 # ---------------------------------------------------------------------------
 install: release
@@ -1847,6 +1871,7 @@ help:
 	@echo "  release-evidence-manifest Generate unified release evidence manifest"
 	@echo "  release            Optimized production build"
 	@echo "  release-artifacts  Build release tar.xz + checksum/signature/provenance bundles"
+	@echo "  release-install-smoke Install release tarball into a prefix and run README quickstart"
 	@echo "  install            Install to PREFIX (default /usr/local)"
 	@echo "  check              Combined gate (format+lint+build+test)"
 	@echo "  clean              Remove build artifacts"

@@ -308,7 +308,7 @@ asx_status asx_region_close(asx_region_id id) {
     if (r->poisoned) return ASX_E_REGION_POISONED;
 
     /* Ghost protocol monitor: record transition for diagnostics */
-    asx_ghost_check_region_transition(id, r->state, ASX_REGION_CLOSING);
+    (void)asx_ghost_check_region_transition(id, r->state, ASX_REGION_CLOSING);
 
     /* Transition Open -> Closing */
     st = asx_region_transition_check(r->state, ASX_REGION_CLOSING);

@@ -401,6 +401,16 @@ Produce deterministic artifact bundles and integrity metadata.
 make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=linux-x86_64 PROFILE=CORE CODEC=BIN DETERMINISTIC=1
 ```
 
+### `make release-install-smoke`
+
+Build the binary release artifact, unpack it, install the extracted payload into
+a fresh prefix, compile the README quickstart against only the installed
+headers/library, run that binary, and emit a machine-readable report.
+
+```bash
+make release-install-smoke RELEASE_INSTALL_SMOKE_VERSION=0.1.0 RELEASE_INSTALL_SMOKE_TARGET=linux-x86_64
+```
+
 ### Public Operator Surfaces
 
 - Runtime construction: `include/asx/runtime/builder.h`, `include/asx/runtime/rt.h`, `include/asx/runtime/runtime.h`
@@ -633,6 +643,9 @@ Build artifacts locally:
 ```bash
 # Binary package (libasx.a + public headers)
 make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=linux-x86_64 PROFILE=CORE CODEC=BIN DETERMINISTIC=1
+
+# Binary package install/quickstart smoke
+make release-install-smoke RELEASE_INSTALL_SMOKE_VERSION=0.1.0 RELEASE_INSTALL_SMOKE_TARGET=linux-x86_64
 
 # Source package
 make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=source RELEASE_KIND=source

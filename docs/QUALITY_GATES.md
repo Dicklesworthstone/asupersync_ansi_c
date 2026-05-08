@@ -10,7 +10,8 @@ gate fails. Gate status is binary: **pass** or **fail**. There is no soft-pass.
 
 ## 1. Gate Inventory
 
-Nine mandatory gates from plan section 10.6, plus release artifact integrity and supplementary enforcement gates.
+Nine mandatory gates from plan section 10.6, plus release artifact integrity,
+release artifact install smoke, and supplementary enforcement gates.
 
 ### 1.1 Portability CI Gate
 
@@ -212,6 +213,50 @@ Manifest shape:
         "status": "pass",
         "diagnostic": "artifact exists and digest verified"
       }
+    }
+  ]
+}
+```
+
+### 1.12 Release Artifact Install Smoke Gate
+
+| Field | Value |
+|-------|-------|
+| **Gate ID** | `GATE-RELEASE-INSTALL-SMOKE` |
+| **Plan ref** | `bd-dq94.1` |
+| **Makefile targets** | `release-install-smoke` |
+| **CI job** | `release-readiness` / release candidate validation |
+| **Scripts** | `tools/ci/run_release_install_smoke.sh` |
+| **Artifacts** | `build/release/dist/asx-*.tar.xz`, `build/release/dist/asx-*.tar.xz.sha256`, `build/release/dist/asx-*.tar.xz.sigstore.json`, `build/release/dist/asx-*.provenance.json`, `build/release/install-smoke/*/release_install_smoke_report.json` |
+| **Pass criteria** | The packaged release tarball, checksum, sigstore bundle, and provenance exist; checksum and provenance match current `HEAD`; the tarball extracts cleanly; the extracted library and headers install into a fresh prefix; the README quickstart compiles and runs against only that installed prefix. |
+| **Rerun** | `make release-install-smoke RELEASE_INSTALL_SMOKE_VERSION=0.1.0 RELEASE_INSTALL_SMOKE_TARGET=linux-x86_64` |
+| **Failure action** | Fix packaging, checksum/provenance generation, installed header/library layout, or README quickstart link/run drift before publishing release assets. |
+
+Report shape:
+
+```json
+{
+  "schema": "asx.release_install_smoke.v1",
+  "run_id": "release-install-smoke-<timestamp>",
+  "status": "pass|fail",
+  "git": { "commit": "<head>" },
+  "release": { "version": "0.1.0", "target": "linux-x86_64" },
+  "artifact": {
+    "path": "build/release/dist/asx-linux-x86_64.tar.xz",
+    "sha256": "...",
+    "sha256_file": "build/release/dist/asx-linux-x86_64.tar.xz.sha256",
+    "sigstore_bundle": "build/release/dist/asx-linux-x86_64.tar.xz.sigstore.json",
+    "provenance": "build/release/dist/asx-linux-x86_64.provenance.json"
+  },
+  "install": {
+    "prefix": "build/release/install-smoke/<run-id>/prefix",
+    "work_dir": "build/release/install-smoke/<run-id>"
+  },
+  "steps": [
+    {
+      "name": "quickstart_run",
+      "status": "pass",
+      "command": "build/release/install-smoke/<run-id>/build/readme_quickstart"
     }
   ]
 }
