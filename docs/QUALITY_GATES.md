@@ -171,19 +171,20 @@ and documentation enforcement.
 | `GATE-INVARIANT` | `test-invariants` | `unit-invariant` | (compiled test binaries) | Lifecycle/quiescence invariants |
 | `GATE-CONFORMANCE` | `conformance` | `conformance` | `tools/ci/run_conformance.sh` | Rust fixture parity |
 | `GATE-CODEC` | `codec-equivalence` | `conformance` | `tools/ci/run_codec_equivalence.sh` | JSON/BIN codec equivalence |
+| `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `tools/ci/run_parallel_parity.sh` | Single-vs-multi-worker semantic digest and event-summary parity |
 
-### 2.1 Planned Parallel Graduation Gate
+### 2.1 Parallel Graduation Gate
 
 `bd-pweu.1` defines the activation contract for the production parallel runtime
-program. The gate below is not active yet; it must be implemented by
-`bd-pweu.11` before any child bead may claim that the parallel profile has
-graduated beyond walking-skeleton behavior.
+program. `bd-pweu.11` activates the single-vs-multi-worker parity gate that
+child beads must satisfy before claiming that the parallel profile has graduated
+beyond walking-skeleton behavior.
 
-| Gate ID | Planned Makefile Target | Planned CI Job | Tracking Bead | Purpose |
-|---------|-------------------------|----------------|---------------|---------|
-| `GATE-PARALLEL-PARITY` | `parallel-parity` | `parallel-parity` or `conformance` extension | `bd-pweu.11` | Compare canonical semantic digests and structured event summaries for the same scenarios under worker_count=1, 2, 8, and 64. |
+| Gate ID | Makefile Target | CI Job | Tracking Bead | Purpose |
+|---------|-----------------|--------|---------------|---------|
+| `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `bd-pweu.11` | Compare canonical semantic digests and structured event summaries for the same scenarios under worker_count=1, 2, 8, and 64. |
 
-Activation requirements:
+Coverage requirements:
 
 1. The gate must include lifecycle, cancellation, timer/waker, MPSC contention,
    blocking-pool, and reactor-readiness scenarios.
@@ -218,7 +219,7 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | Target | Scope | Gates Included |
 |--------|-------|----------------|
 | `make check` | Local PR gate | FORMAT, LINT, LINT-DOCS, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK |
-| `make check-ci` | Full CI gate (`CI=1`) | FORMAT, LINT, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, E2E-VERTICAL, CONFORMANCE, CODEC, PROFILE, FUZZ, EMBED |
+| `make check-ci` | Full CI gate (`CI=1`) | FORMAT, LINT, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, E2E-VERTICAL, CONFORMANCE, CODEC, PROFILE, PARALLEL-PARITY, FUZZ, EMBED |
 | `make test-e2e-suite` | Unified E2E manifest | All GATE-E2E-* gates |
 
 ## 5. CI Workflow Jobs

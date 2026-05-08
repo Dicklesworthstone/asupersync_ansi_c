@@ -492,7 +492,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: test test-unit test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
-.PHONY: conformance codec-equivalence profile-parity crate-acceptance-gate
+.PHONY: conformance codec-equivalence profile-parity parallel-parity crate-acceptance-gate
 .PHONY: fuzz-smoke ci-embedded-matrix
 .PHONY: release release-artifacts bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
@@ -1366,6 +1366,20 @@ profile-parity:
 	fi
 
 # ---------------------------------------------------------------------------
+# parallel-parity — single-vs-multi-worker canonical digest parity
+# ---------------------------------------------------------------------------
+parallel-parity:
+	@echo "[asx] parallel-parity: single-vs-multi-worker digest check..."
+	@if [ -x tools/ci/run_parallel_parity.sh ]; then \
+		tools/ci/run_parallel_parity.sh; \
+	elif [ "$(FAIL_ON_MISSING_RUNNERS)" = "1" ]; then \
+		echo "[asx] parallel-parity: FAIL (runner missing; strict mode)"; \
+		exit 1; \
+	else \
+		echo "[asx] parallel-parity: SKIP (runner not yet implemented)"; \
+	fi
+
+# ---------------------------------------------------------------------------
 # crate-acceptance-gate — aggregate final crate-level parity evidence
 # ---------------------------------------------------------------------------
 crate-acceptance-gate:
@@ -1659,7 +1673,7 @@ qemu-smoke:
 check: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build test model-check abi-check test-abi-shim formal-check
 
 check-ci: CI=1
-check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build build-browser test-browser-focused test-browser-minimal-focused test model-check test-e2e-vertical conformance codec-equivalence profile-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
+check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build build-browser test-browser-focused test-browser-minimal-focused test model-check test-e2e-vertical conformance codec-equivalence profile-parity parallel-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
 
 ci-embedded-baremetal:
 	@echo "[asx] ci-embedded-baremetal: bare-metal gate..."
@@ -1702,6 +1716,7 @@ help:
 	@echo "  conformance        Rust fixture parity verification"
 	@echo "  codec-equivalence  JSON vs BIN codec equivalence"
 	@echo "  profile-parity     Cross-profile semantic digest parity"
+	@echo "  parallel-parity    Single-vs-multi-worker semantic digest parity"
 	@echo "  crate-acceptance-gate Aggregate final crate-level parity evidence"
 	@echo "  fuzz-smoke         Differential fuzzing smoke test"
 	@echo "  minimize-selftest  Counterexample minimizer self-test"
