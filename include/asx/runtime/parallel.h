@@ -81,6 +81,40 @@ typedef enum {
 } asx_fairness_policy;
 
 /* -------------------------------------------------------------------
+ * Admission policy
+ *
+ * Large-swarm deployments need deterministic admission evidence when
+ * scheduler pressure rises. The default policy records decisions without
+ * enforcing them, so observability never changes semantic behavior unless
+ * callers explicitly set enforce=1.
+ * ------------------------------------------------------------------- */
+
+#define ASX_PARALLEL_DEFAULT_PRESSURE_THRESHOLD_PCT 90u
+
+typedef enum {
+    ASX_PARALLEL_ADMISSION_REJECT = 0,
+    ASX_PARALLEL_ADMISSION_BACKPRESSURE = 1,
+    ASX_PARALLEL_ADMISSION_SHED_OLDEST = 2
+} asx_parallel_admission_mode;
+
+typedef struct {
+    asx_parallel_admission_mode mode;
+    uint32_t pressure_threshold_pct; /* 1-100, 0 means default at init */
+    uint32_t shed_max;               /* SHED_OLDEST evidence count cap */
+    int enforce;                     /* 1: reject/backpressure affects admission */
+} asx_parallel_admission_policy;
+
+typedef struct {
+    int triggered;
+    asx_parallel_admission_mode mode;
+    uint32_t pressure_pct;
+    uint32_t queued;
+    uint32_t capacity;
+    uint32_t shed_count;
+    asx_status admit_status;
+} asx_parallel_admission_decision;
+
+/* -------------------------------------------------------------------
  * Lane descriptor (per-lane operational state)
  * ------------------------------------------------------------------- */
 
@@ -134,6 +168,7 @@ typedef struct {
     asx_fairness_policy fairness;
     uint32_t lane_weights[ASX_MAX_LANES]; /* per-lane weights */
     uint32_t starvation_limit;            /* max rounds without polls before alert */
+    asx_parallel_admission_policy admission_policy;
 } asx_parallel_config;
 
 /* -------------------------------------------------------------------
@@ -245,20 +280,27 @@ ASX_API ASX_MUST_USE asx_status asx_inject_ready(asx_task_id tid);
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint32_t cancel_dispatches; /* total cancel-lane polls */
-    uint32_t timed_dispatches;  /* total timed-lane polls */
-    uint32_t ready_dispatches;  /* total ready-lane polls */
-    uint32_t cancel_streak;     /* current consecutive cancel polls */
-    uint32_t cancel_streak_max; /* peak cancel streak observed */
-    uint32_t fairness_yields;   /* times cancel was skipped for fairness */
-    uint32_t steal_attempts;    /* deterministic worker-lane steal probes */
-    uint32_t steals_succeeded;  /* probes that transferred lane ownership */
-    uint32_t worker_yields;     /* idle worker turns while peer lanes had work */
-    uint32_t commit_sequence;   /* replay-stable committed event counter */
-    uint32_t reactor_polls;     /* nonblocking reactor pump attempts */
-    uint32_t reactor_ready;     /* reactor events mapped to wakers */
-    uint32_t waker_ready;       /* signaled wakers promoted into runnable lanes */
-    uint32_t timed_promotions;  /* timed-lane tasks promoted after wake */
+    uint32_t cancel_dispatches;               /* total cancel-lane polls */
+    uint32_t timed_dispatches;                /* total timed-lane polls */
+    uint32_t ready_dispatches;                /* total ready-lane polls */
+    uint32_t cancel_streak;                   /* current consecutive cancel polls */
+    uint32_t cancel_streak_max;               /* peak cancel streak observed */
+    uint32_t fairness_yields;                 /* times cancel was skipped for fairness */
+    uint32_t steal_attempts;                  /* deterministic worker-lane steal probes */
+    uint32_t steals_succeeded;                /* probes that transferred lane ownership */
+    uint32_t steals_failed;                   /* probes that found no transferable work */
+    uint32_t worker_yields;                   /* idle worker turns while peer lanes had work */
+    uint32_t commit_sequence;                 /* replay-stable committed event counter */
+    uint32_t reactor_polls;                   /* nonblocking reactor pump attempts */
+    uint32_t reactor_ready;                   /* reactor events mapped to wakers */
+    uint32_t waker_ready;                     /* signaled wakers promoted into runnable lanes */
+    uint32_t timed_promotions;                /* timed-lane tasks promoted after wake */
+    uint32_t timed_wake_latency_rounds_total; /* sum of timed-lane wait rounds */
+    uint32_t timed_wake_latency_rounds_max;   /* max timed-lane wait in rounds */
+    uint32_t admission_rejects;               /* enforced or observed rejects */
+    uint32_t admission_backpressure;          /* enforced or observed backpressure */
+    uint32_t admission_sheds;                 /* observed shed decisions */
+    uint32_t pressure_transitions;            /* threshold crossing count */
 } asx_scheduling_metrics;
 
 /* Read the current scheduling metrics.
@@ -279,6 +321,53 @@ ASX_API void asx_parallel_set_cancel_streak_limit(uint32_t limit);
 
 /* Get the current cancel-streak limit. */
 ASX_API uint32_t asx_parallel_cancel_streak_limit(void);
+
+/* -------------------------------------------------------------------
+ * API: Admission and large-swarm telemetry
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    uint32_t worker_count;
+    uint32_t total_queue_depth;
+    uint32_t lane_depths[ASX_MAX_LANES];
+    uint32_t worker_queue_depths[ASX_MAX_WORKERS];
+    uint32_t worker_busy_permille[ASX_MAX_WORKERS];
+    uint32_t worker_idle_permille[ASX_MAX_WORKERS];
+    uint32_t max_lane_depth;
+    uint32_t max_worker_queue_depth;
+    uint32_t hot_worker;
+    uint32_t pressure_pct;
+    uint32_t blocking_backlog;
+    asx_scheduling_metrics metrics;
+    asx_parallel_admission_decision admission;
+} asx_parallel_telemetry_snapshot;
+
+/* Initialize a default observe-only admission policy. */
+ASX_API void asx_parallel_admission_policy_init(asx_parallel_admission_policy *policy);
+
+/* Evaluate a deterministic admission policy as a pure function. */
+ASX_API ASX_MUST_USE asx_status
+asx_parallel_evaluate_admission(const asx_parallel_admission_policy *policy, uint32_t queued,
+                                uint32_t capacity, asx_parallel_admission_decision *decision);
+
+/* Install/read the active scheduler admission policy. */
+ASX_API ASX_MUST_USE asx_status
+asx_parallel_set_admission_policy(const asx_parallel_admission_policy *policy);
+ASX_API ASX_MUST_USE asx_status
+asx_parallel_get_admission_policy(asx_parallel_admission_policy *out);
+
+/* Return human-readable name for an admission mode. */
+ASX_API const char *asx_parallel_admission_mode_str(asx_parallel_admission_mode mode);
+
+/* Capture a structured operational snapshot. */
+ASX_API ASX_MUST_USE asx_status
+asx_parallel_get_telemetry_snapshot(asx_parallel_telemetry_snapshot *out);
+
+/* Render a single JSONL record from a snapshot.
+ * Failure is atomic: ASX_E_BUFFER_TOO_SMALL leaves buf untouched. */
+ASX_API ASX_MUST_USE asx_status
+asx_parallel_render_telemetry_jsonl(const asx_parallel_telemetry_snapshot *snapshot, char *buf,
+                                    uint32_t buf_len, uint32_t *out_len);
 
 /* -------------------------------------------------------------------
  * API: Configuration queries

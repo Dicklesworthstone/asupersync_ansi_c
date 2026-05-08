@@ -24,6 +24,7 @@
 #include <asx/core/adaptive.h>
 #include <asx/core/budget.h>
 #include <asx/core/channel.h>
+#include <asx/runtime/parallel.h>
 #include <asx/runtime/runtime.h>
 #include <asx/time/timer_wheel.h>
 
@@ -594,7 +595,86 @@ static bench_stats bench_embedded_pressure(void) {
 }
 
 /* -------------------------------------------------------------------
- * BENCH 12: Deadline miss measurement
+ * BENCH 12: Parallel large swarm — telemetry/admission evidence
+ *
+ * Measures the optional parallel scheduler over the largest task set the
+ * current core arena admits, and captures the final structured telemetry
+ * snapshot for benchmark JSON artifacts.
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    bench_stats stats;
+    asx_parallel_telemetry_snapshot snapshot;
+    uint32_t worker_count;
+    uint32_t task_count;
+    uint32_t peak_pressure_pct;
+    uint32_t peak_max_lane_depth;
+    uint32_t peak_max_worker_queue_depth;
+} bench_parallel_report;
+
+static bench_parallel_report bench_parallel_large_swarm(void) {
+    bench_parallel_report rpt;
+    bench_samples s;
+    uint32_t iter;
+
+    memset(&rpt, 0, sizeof(rpt));
+    bench_samples_init(&s);
+    rpt.worker_count = ASX_MAX_WORKERS < ASX_PARALLEL_GENERIC_TARGET_WORKERS
+                           ? ASX_MAX_WORKERS
+                           : ASX_PARALLEL_GENERIC_TARGET_WORKERS;
+    rpt.task_count = ASX_MAX_TASKS;
+
+    for (iter = 0; iter < 1000u; iter++) {
+        asx_parallel_config cfg;
+        asx_region_id rid;
+        asx_task_id tid;
+        asx_budget budget;
+        uint64_t t0, t1;
+        uint32_t i;
+
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.worker_count = rpt.worker_count;
+        cfg.fairness = ASX_FAIRNESS_ROUND_ROBIN;
+        cfg.lane_weights[0] = 1u;
+        cfg.lane_weights[1] = 1u;
+        cfg.lane_weights[2] = 1u;
+        cfg.starvation_limit = 8u;
+        asx_parallel_admission_policy_init(&cfg.admission_policy);
+
+        asx_runtime_reset();
+        asx_parallel_reset();
+        (void)asx_parallel_init(&cfg);
+        (void)asx_region_open(&rid);
+        for (i = 0u; i < ASX_MAX_TASKS; i++) { (void)asx_task_spawn(rid, noop_poll, NULL, &tid); }
+
+        (void)asx_parallel_get_telemetry_snapshot(&rpt.snapshot);
+        rpt.peak_pressure_pct = rpt.snapshot.pressure_pct;
+        rpt.peak_max_lane_depth = rpt.snapshot.max_lane_depth;
+        rpt.peak_max_worker_queue_depth = rpt.snapshot.max_worker_queue_depth;
+
+        budget = asx_budget_from_polls(ASX_MAX_TASKS * 4u);
+        t0 = bench_now_ns();
+        (void)asx_parallel_run(rid, &budget);
+        t1 = bench_now_ns();
+        bench_samples_add(&s, t1 - t0);
+
+        (void)asx_parallel_get_telemetry_snapshot(&rpt.snapshot);
+        if (rpt.snapshot.admission.pressure_pct > rpt.peak_pressure_pct) {
+            rpt.peak_pressure_pct = rpt.snapshot.admission.pressure_pct;
+            rpt.peak_max_lane_depth = rpt.snapshot.admission.queued;
+            rpt.peak_max_worker_queue_depth =
+                rpt.worker_count > 0u
+                    ? (rpt.snapshot.admission.queued + rpt.worker_count - 1u) / rpt.worker_count
+                    : rpt.snapshot.admission.queued;
+        }
+    }
+
+    rpt.stats = bench_compute_stats(&s);
+    return rpt;
+}
+
+/* -------------------------------------------------------------------
+ * BENCH 13: Deadline miss measurement
  *
  * Measures: how many operations complete after their target deadline
  * under various load conditions.
@@ -650,7 +730,7 @@ static bench_deadline_report bench_deadline_miss(void) {
 }
 
 /* -------------------------------------------------------------------
- * BENCH 13: Adaptive evidence/fallback metrics
+ * BENCH 14: Adaptive evidence/fallback metrics
  *
  * Exercises the adaptive decision surface with deterministic posterior
  * regimes so CI can trend confidence/fallback behavior over time.
@@ -856,6 +936,7 @@ int main(int argc, char **argv) {
     bench_stats st;
     bench_deadline_report dlr;
     bench_adaptive_report adr;
+    bench_parallel_report plr;
     int json_only = 0;
 
     (void)argc;
@@ -955,7 +1036,13 @@ int main(int argc, char **argv) {
     if (!json_only) fprintf(stderr, "  embedded_pressure... ");
     st = bench_embedded_pressure();
     if (!json_only) fprintf(stderr, "done (p50=%" PRIu64 "ns)\n", st.p50);
-    bench_print_stats_json("embedded_pressure", &st, 1);
+    bench_print_stats_json("embedded_pressure", &st, 0);
+
+    /* Parallel large-swarm benchmark */
+    if (!json_only) fprintf(stderr, "  parallel_large_swarm... ");
+    plr = bench_parallel_large_swarm();
+    if (!json_only) fprintf(stderr, "done (p50=%" PRIu64 "ns)\n", plr.stats.p50);
+    bench_print_stats_json("parallel_large_swarm", &plr.stats, 1);
 
     printf("  },\n");
 
@@ -994,6 +1081,28 @@ int main(int argc, char **argv) {
     printf("    \"ledger_digest\": \"0x%016" PRIx64 "\",\n", adr.ledger_digest);
     printf("    \"ledger_count\": %" PRIu32 ",\n", adr.ledger_count);
     printf("    \"ledger_overflowed\": %s\n", adr.ledger_overflowed ? "true" : "false");
+    printf("  },\n");
+
+    printf("  \"parallel_report\": {\n");
+    printf("    \"worker_count\": %" PRIu32 ",\n", plr.worker_count);
+    printf("    \"task_count\": %" PRIu32 ",\n", plr.task_count);
+    printf("    \"final_pressure_pct\": %" PRIu32 ",\n", plr.snapshot.pressure_pct);
+    printf("    \"peak_pressure_pct\": %" PRIu32 ",\n", plr.peak_pressure_pct);
+    printf("    \"peak_max_lane_depth\": %" PRIu32 ",\n", plr.peak_max_lane_depth);
+    printf("    \"peak_max_worker_queue_depth\": %" PRIu32 ",\n", plr.peak_max_worker_queue_depth);
+    printf("    \"steal_attempts\": %" PRIu32 ",\n", plr.snapshot.metrics.steal_attempts);
+    printf("    \"steals_succeeded\": %" PRIu32 ",\n", plr.snapshot.metrics.steals_succeeded);
+    printf("    \"steals_failed\": %" PRIu32 ",\n", plr.snapshot.metrics.steals_failed);
+    printf("    \"admission_rejects_observed\": %" PRIu32 ",\n",
+           plr.snapshot.metrics.admission_rejects);
+    printf("    \"pressure_transitions\": %" PRIu32 ",\n",
+           plr.snapshot.metrics.pressure_transitions);
+    printf("    \"admission_pressure_pct\": %" PRIu32 ",\n", plr.snapshot.admission.pressure_pct);
+    printf("    \"admission_queued\": %" PRIu32 ",\n", plr.snapshot.admission.queued);
+    printf("    \"admission_capacity\": %" PRIu32 ",\n", plr.snapshot.admission.capacity);
+    printf("    \"admission_status_code\": %d,\n", (int)plr.snapshot.admission.admit_status);
+    printf("    \"admission_status_text\": \"%s\"\n",
+           asx_status_str(plr.snapshot.admission.admit_status));
     printf("  },\n");
 
     /* Cold-start report */

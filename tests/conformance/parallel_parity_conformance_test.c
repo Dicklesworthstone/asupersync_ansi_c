@@ -46,6 +46,13 @@ typedef struct {
     uint32_t reactor_ready;
     uint32_t waker_ready;
     uint32_t timed_promotions;
+    uint32_t pressure_pct;
+    uint32_t max_worker_queue_depth;
+    uint32_t steals_failed;
+    uint32_t timed_wake_latency_rounds_max;
+    uint32_t admission_triggered;
+    uint32_t admission_pressure_pct;
+    asx_status admission_status;
     uint32_t order_count;
     uint32_t order_values[PARITY_MAX_ORDER];
     uint32_t output_count;
@@ -131,12 +138,14 @@ static void reset_all(void) {
 static asx_parallel_config default_config(uint32_t worker_count) {
     asx_parallel_config cfg;
 
+    memset(&cfg, 0, sizeof(cfg));
     cfg.worker_count = worker_count;
     cfg.fairness = ASX_FAIRNESS_ROUND_ROBIN;
     cfg.lane_weights[0] = 1u;
     cfg.lane_weights[1] = 1u;
     cfg.lane_weights[2] = 1u;
     cfg.starvation_limit = 5u;
+    asx_parallel_admission_policy_init(&cfg.admission_policy);
     return cfg;
 }
 
@@ -252,12 +261,23 @@ static void capture_worker_summary(parity_result *out) {
 
 static void capture_metric_summary(parity_result *out) {
     asx_scheduling_metrics metrics;
+    asx_parallel_telemetry_snapshot snapshot;
 
     if (!asx_parallel_is_initialized()) { return; }
     if (asx_parallel_get_metrics(&metrics) != ASX_OK) { return; }
     out->reactor_ready = metrics.reactor_ready;
     out->waker_ready = metrics.waker_ready;
     out->timed_promotions = metrics.timed_promotions;
+    out->steals_failed = metrics.steals_failed;
+    out->timed_wake_latency_rounds_max = metrics.timed_wake_latency_rounds_max;
+
+    if (asx_parallel_get_telemetry_snapshot(&snapshot) == ASX_OK) {
+        out->pressure_pct = snapshot.pressure_pct;
+        out->max_worker_queue_depth = snapshot.max_worker_queue_depth;
+        out->admission_triggered = (uint32_t)(snapshot.admission.triggered ? 1 : 0);
+        out->admission_pressure_pct = snapshot.admission.pressure_pct;
+        out->admission_status = snapshot.admission.admit_status;
+    }
 }
 
 static void capture_order_summary(parity_result *out) {
@@ -622,6 +642,14 @@ static void emit_result_json(const parity_result *result) {
     printf("\"reactor_ready\":%" PRIu32 ",", result->reactor_ready);
     printf("\"waker_ready\":%" PRIu32 ",", result->waker_ready);
     printf("\"timed_promotions\":%" PRIu32 ",", result->timed_promotions);
+    printf("\"pressure_pct\":%" PRIu32 ",", result->pressure_pct);
+    printf("\"max_worker_queue_depth\":%" PRIu32 ",", result->max_worker_queue_depth);
+    printf("\"steals_failed\":%" PRIu32 ",", result->steals_failed);
+    printf("\"timed_wake_latency_rounds_max\":%" PRIu32 ",", result->timed_wake_latency_rounds_max);
+    printf("\"admission\":{\"triggered\":%" PRIu32 ",\"pressure_pct\":%" PRIu32
+           ",\"status_code\":%d,\"status_text\":\"%s\"},",
+           result->admission_triggered, result->admission_pressure_pct,
+           (int)result->admission_status, asx_status_str(result->admission_status));
     printf("\"events\":{");
     printf("\"sched_poll\":%" PRIu32 ",", result->event_counts[ASX_TRACE_SCHED_POLL]);
     printf("\"sched_complete\":%" PRIu32 ",", result->event_counts[ASX_TRACE_SCHED_COMPLETE]);

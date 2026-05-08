@@ -17,6 +17,7 @@
 #include <asx/runtime/trace.h>
 #include <asx/runtime/waker.h>
 #include <asx/time/timer_wheel.h>
+#include <string.h>
 
 /* ---- Test poll functions ---- */
 
@@ -128,12 +129,14 @@ static void reset_all(void) {
 
 static asx_parallel_config default_config(void) {
     asx_parallel_config cfg;
+    memset(&cfg, 0, sizeof(cfg));
     cfg.worker_count = 1;
     cfg.fairness = ASX_FAIRNESS_ROUND_ROBIN;
     cfg.lane_weights[0] = 1;
     cfg.lane_weights[1] = 1;
     cfg.lane_weights[2] = 1;
     cfg.starvation_limit = 5;
+    asx_parallel_admission_policy_init(&cfg.admission_policy);
     return cfg;
 }
 
@@ -1215,6 +1218,116 @@ TEST(parallel_lane_weight_query) {
 }
 
 /* ================================================================
+ * Admission and telemetry evidence
+ * ================================================================ */
+
+TEST(parallel_admission_evaluate_modes) {
+    asx_parallel_admission_policy policy;
+    asx_parallel_admission_decision decision;
+
+    asx_parallel_admission_policy_init(&policy);
+    policy.pressure_threshold_pct = 50u;
+
+    ASSERT_EQ(asx_parallel_evaluate_admission(&policy, 49u, 100u, &decision), ASX_OK);
+    ASSERT_FALSE(decision.triggered);
+    ASSERT_EQ((int)decision.admit_status, (int)ASX_OK);
+
+    ASSERT_EQ(asx_parallel_evaluate_admission(&policy, 50u, 100u, &decision), ASX_OK);
+    ASSERT_TRUE(decision.triggered);
+    ASSERT_EQ((int)decision.mode, (int)ASX_PARALLEL_ADMISSION_REJECT);
+    ASSERT_EQ((int)decision.admit_status, (int)ASX_E_ADMISSION_CLOSED);
+
+    policy.mode = ASX_PARALLEL_ADMISSION_BACKPRESSURE;
+    ASSERT_EQ(asx_parallel_evaluate_admission(&policy, 75u, 100u, &decision), ASX_OK);
+    ASSERT_TRUE(decision.triggered);
+    ASSERT_EQ((int)decision.admit_status, (int)ASX_E_WOULD_BLOCK);
+
+    policy.mode = ASX_PARALLEL_ADMISSION_SHED_OLDEST;
+    policy.shed_max = 3u;
+    ASSERT_EQ(asx_parallel_evaluate_admission(&policy, 75u, 100u, &decision), ASX_OK);
+    ASSERT_TRUE(decision.triggered);
+    ASSERT_EQ((int)decision.admit_status, (int)ASX_OK);
+    ASSERT_EQ(decision.shed_count, 3u);
+
+    policy.pressure_threshold_pct = 101u;
+    ASSERT_EQ(asx_parallel_evaluate_admission(&policy, 75u, 100u, &decision),
+              ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(parallel_admission_enforced_backpressure_is_atomic) {
+    asx_parallel_config cfg = default_config();
+    asx_region_id rid;
+    asx_task_id t1, t2;
+    asx_scheduling_metrics metrics;
+
+    cfg.admission_policy.mode = ASX_PARALLEL_ADMISSION_BACKPRESSURE;
+    cfg.admission_policy.pressure_threshold_pct = 2u;
+    cfg.admission_policy.enforce = 1;
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t2), ASX_OK);
+
+    ASSERT_EQ(asx_lane_assign(t1, ASX_LANE_READY), ASX_OK);
+    ASSERT_EQ(asx_lane_assign(t2, ASX_LANE_READY), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_lane_total_tasks(), 1u);
+
+    ASSERT_EQ(asx_parallel_get_metrics(&metrics), ASX_OK);
+    ASSERT_EQ(metrics.admission_backpressure, 1u);
+    ASSERT_EQ(metrics.pressure_transitions, 1u);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_telemetry_snapshot_and_jsonl_are_failure_atomic) {
+    asx_parallel_config cfg = default_config();
+    asx_parallel_telemetry_snapshot snapshot;
+    asx_region_id rid;
+    asx_task_id t1, t2;
+    char tiny[8] = "keep";
+    char jsonl[1536];
+    uint32_t needed = 0u;
+
+    cfg.worker_count = 4u;
+    cfg.admission_policy.mode = ASX_PARALLEL_ADMISSION_SHED_OLDEST;
+    cfg.admission_policy.pressure_threshold_pct = 1u;
+    cfg.admission_policy.shed_max = 2u;
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t2), ASX_OK);
+    ASSERT_EQ(asx_lane_assign(t1, ASX_LANE_READY), ASX_OK);
+    ASSERT_EQ(asx_lane_assign(t2, ASX_LANE_READY), ASX_OK);
+
+    ASSERT_EQ(asx_parallel_get_telemetry_snapshot(&snapshot), ASX_OK);
+    ASSERT_EQ(snapshot.worker_count, 4u);
+    ASSERT_EQ(snapshot.total_queue_depth, 2u);
+    ASSERT_TRUE(snapshot.pressure_pct >= 3u);
+    ASSERT_EQ(snapshot.admission.triggered, 1);
+    ASSERT_EQ((int)snapshot.admission.mode, (int)ASX_PARALLEL_ADMISSION_SHED_OLDEST);
+    ASSERT_EQ(snapshot.metrics.admission_sheds, 3u);
+
+    ASSERT_EQ(asx_parallel_render_telemetry_jsonl(&snapshot, tiny, (uint32_t)sizeof(tiny), &needed),
+              ASX_E_BUFFER_TOO_SMALL);
+    ASSERT_STR_EQ(tiny, "keep");
+    ASSERT_TRUE(needed > (uint32_t)sizeof(tiny));
+
+    memset(jsonl, 0, sizeof(jsonl));
+    ASSERT_EQ(asx_parallel_render_telemetry_jsonl(&snapshot, jsonl, (uint32_t)sizeof(jsonl),
+                                                  &needed),
+              ASX_OK);
+    ASSERT_TRUE(strstr(jsonl, "\"kind\":\"parallel_telemetry\"") != NULL);
+    ASSERT_TRUE(strstr(jsonl, "\"admission\"") != NULL);
+    ASSERT_TRUE(strstr(jsonl, "\"shed_oldest\"") != NULL);
+
+    asx_parallel_reset();
+}
+
+/* ================================================================
  * main
  * ================================================================ */
 
@@ -1290,6 +1403,11 @@ int main(void) {
 
     /* Lane weight query */
     RUN_TEST(parallel_lane_weight_query);
+
+    /* Admission and telemetry evidence */
+    RUN_TEST(parallel_admission_evaluate_modes);
+    RUN_TEST(parallel_admission_enforced_backpressure_is_atomic);
+    RUN_TEST(parallel_telemetry_snapshot_and_jsonl_are_failure_atomic);
 
     TEST_REPORT();
     return test_failures;

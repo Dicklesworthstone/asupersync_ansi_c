@@ -2,7 +2,7 @@
 
 > **Bead:** `bd-66l.2`
 > **Status:** Canonical gate registry (plan section 10.6 → Makefile → CI → artifacts)
-> **Last updated:** 2026-02-27
+> **Last updated:** 2026-05-08
 
 This document is the single source of truth for all quality gates enforced on the
 asx ANSI C port. Every gate listed here is mandatory — merges are blocked when any
@@ -172,17 +172,21 @@ and documentation enforcement.
 | `GATE-CONFORMANCE` | `conformance` | `conformance` | `tools/ci/run_conformance.sh` | Rust fixture parity |
 | `GATE-CODEC` | `codec-equivalence` | `conformance` | `tools/ci/run_codec_equivalence.sh` | JSON/BIN codec equivalence |
 | `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `tools/ci/run_parallel_parity.sh` | Single-vs-multi-worker semantic digest and event-summary parity |
+| `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `tests/unit/runtime/test_parallel.c`, `tools/ci/run_parallel_parity.sh`, `tests/bench/bench_runtime.c` | Large-swarm pressure telemetry, admission evidence, and benchmark JSON artifacts |
 
 ### 2.1 Parallel Graduation Gate
 
 `bd-pweu.1` defines the activation contract for the production parallel runtime
 program. `bd-pweu.11` activates the single-vs-multi-worker parity gate that
 child beads must satisfy before claiming that the parallel profile has graduated
-beyond walking-skeleton behavior.
+beyond walking-skeleton behavior. `bd-pweu.10` activates the large-swarm
+telemetry and deterministic admission evidence surface for diagnosing pressure
+without hidden semantic drift.
 
 | Gate ID | Makefile Target | CI Job | Tracking Bead | Purpose |
 |---------|-----------------|--------|---------------|---------|
 | `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `bd-pweu.11` | Compare canonical semantic digests and structured event summaries for the same scenarios under worker_count=1, 2, 8, and 64. |
+| `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `bd-pweu.10` | Validate pressure snapshots, deterministic admission decisions, JSONL rendering, and benchmark JSON telemetry for large-swarm runs. |
 
 Coverage requirements:
 
@@ -194,7 +198,12 @@ Coverage requirements:
 3. The gate must emit machine-readable reports under the existing conformance
    artifact layout, including seed, worker count, profile, codec, digest, and
    rerun command.
-4. Expensive local proof runs must be executed via `rch exec -- make ...`.
+4. Telemetry evidence must include queue pressure, worker queue depth, steal
+   attempts/success/failure, cancel streaks, timed wake latency, reactor/waker
+   readiness, blocking backlog, and the deterministic admission decision.
+5. Admission policy defaults to observe-only; enforced reject/backpressure must
+   be explicit and failure-atomic.
+6. Expensive local proof runs must be executed via `rch exec -- make ...`.
 
 ## 3. E2E Gate IDs
 
@@ -219,7 +228,7 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | Target | Scope | Gates Included |
 |--------|-------|----------------|
 | `make check` | Local PR gate | FORMAT, LINT, LINT-DOCS, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK |
-| `make check-ci` | Full CI gate (`CI=1`) | FORMAT, LINT, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, E2E-VERTICAL, CONFORMANCE, CODEC, PROFILE, PARALLEL-PARITY, FUZZ, EMBED |
+| `make check-ci` | Full CI gate (`CI=1`) | FORMAT, LINT, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, E2E-VERTICAL, CONFORMANCE, CODEC, PROFILE, PARALLEL-PARITY, PARALLEL-TELEMETRY, FUZZ, EMBED |
 | `make test-e2e-suite` | Unified E2E manifest | All GATE-E2E-* gates |
 
 ## 5. CI Workflow Jobs
