@@ -328,7 +328,9 @@ Parallel operator knobs:
   PARALLEL-profile 1/2/8/32/64 worker-count baseline artifact. Use
   `rch exec -- make parallel-bench-gate` when you want the artifact captured
   under `build/perf/parallel-bench-results.json` plus observe-only
-  gross-regression warnings.
+  gross-regression warnings. Use `rch exec -- make wave-c-acceptance-demo` for
+  the user-facing Wave C bundle under
+  `build/e2e-artifacts/wave-c-acceptance-*`.
 
 ### `make build`
 
@@ -573,6 +575,8 @@ make bench-json
 make parallel-parity
 make test-e2e-parallel
 rch exec -- make parallel-bench-json
+rch exec -- make parallel-bench-gate
+rch exec -- make wave-c-acceptance-demo
 make bench PROFILE=EMBEDDED_ROUTER
 make profile-parity
 ```
@@ -1563,12 +1567,16 @@ The injector API (`asx_inject_ready`, `asx_inject_cancel`, `asx_inject_timed`) a
 Operator rule: treat `worker_count` as a capacity knob, not a semantic knob.
 After changing worker count, locality mode, admission mode, queue backend, or
 platform hooks, rerun `make parallel-parity` and
-`rch exec -- make parallel-bench-json`; preserve the emitted reports if the
+`rch exec -- make parallel-bench-json`; for release-facing claims also run
+`rch exec -- make parallel-bench-gate` and
+`rch exec -- make wave-c-acceptance-demo`. Preserve the emitted reports if the
 change is used to justify a production-scale claim. The benchmark artifact
 includes scheduler throughput, cancel latency, MPSC roundtrip throughput,
 steal/commit/timed-wake telemetry, locality shard metadata, and observe-only
 threshold status for worker counts 1, 2, 8, 32, and 64 where the active profile
-supports them.
+supports them. The Wave C acceptance bundle adds the rerun command, profile
+report, benchmark summary, incident evidence, and fail-closed unsupported-live
+diagnostic in one artifact directory.
 
 ## Browser Developer Experience Diagnostics
 

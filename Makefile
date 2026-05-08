@@ -467,6 +467,7 @@ E2E_ALL_SCRIPTS := \
 	$(E2E_SCRIPT_DIR)/native_host.sh \
 	$(E2E_SCRIPT_DIR)/server_shutdown.sh \
 	$(E2E_SCRIPT_DIR)/parallel_swarm.sh \
+	$(E2E_SCRIPT_DIR)/wave_c_acceptance_demo.sh \
 	$(E2E_SCRIPT_DIR)/router_storm.sh \
 	$(E2E_SCRIPT_DIR)/market_open_burst.sh \
 	$(E2E_SCRIPT_DIR)/automotive_fault_burst.sh \
@@ -491,7 +492,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: all build clean install uninstall FORCE
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation
 .PHONY: model-check
-.PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision test-abi-shim abi-check
+.PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
 .PHONY: conformance codec-equivalence profile-parity parallel-parity crate-acceptance-gate
@@ -1268,6 +1269,10 @@ test-e2e-actor-supervision:
 	@chmod +x $(E2E_SCRIPT_DIR)/harness.sh $(E2E_SCRIPT_DIR)/actor_supervision.sh 2>/dev/null || true
 	@$(E2E_SCRIPT_DIR)/actor_supervision.sh
 
+wave-c-acceptance-demo: $(LIB_A)
+	@chmod +x $(E2E_SCRIPT_DIR)/harness.sh $(E2E_SCRIPT_DIR)/parallel_swarm.sh $(E2E_SCRIPT_DIR)/network_surface.sh $(E2E_SCRIPT_DIR)/actor_supervision.sh $(E2E_SCRIPT_DIR)/wave_c_acceptance_demo.sh 2>/dev/null || true
+	@$(E2E_SCRIPT_DIR)/wave_c_acceptance_demo.sh
+
 $(TEST_DIR)/invariant/%: tests/invariant/%.c $(LIB_A) | test-dirs
 	@mkdir -p $(@D)
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
@@ -1817,6 +1822,7 @@ help:
 	@echo "  test-e2e-posix-adapter Run POSIX reactor/readiness adapter smoke"
 	@echo "  test-e2e-network-surface Run deterministic network primitive e2e smoke"
 	@echo "  test-e2e-actor-supervision Run deterministic actor/supervision semantic e2e smoke"
+	@echo "  wave-c-acceptance-demo Run Wave C user-facing acceptance evidence bundle"
 	@echo "  conformance        Rust fixture parity verification"
 	@echo "  codec-equivalence  JSON vs BIN codec equivalence"
 	@echo "  profile-parity     Cross-profile semantic digest parity"

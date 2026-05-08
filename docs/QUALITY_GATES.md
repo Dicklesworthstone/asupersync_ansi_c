@@ -245,7 +245,7 @@ gate evidence must cover the surface-specific behavior named below.
 | `GATE-INCIDENT-REPLAY-BUNDLE` | `test_evidence` incident renderer tests; `test_trace` schema compatibility tests; `test_replay` failure-class minimizer tests; `lint-schema-validation` over `schemas/incident_bundle.schema.json`, `fixtures/incident_bundles/*.json`, `schemas/trace_event.schema.json`, `fixtures/trace_events/*.json`, `schemas/replay_counterexample.schema.json`, and `fixtures/replay_counterexamples/*.json`; `test-e2e-parallel` incident bundle JSONL emission; `minimize-selftest` | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` | Emit operator-grade evidence bundles, trace schema, and minimized counterexamples without mutating runtime behavior or changing original failure class. |
 | `GATE-WAVE-C-NETWORKING` | `test-e2e-network-surface`; focused `tests/unit/net/test_net` and `tests/unit/net/test_pipe` binaries; `profile-parity`; `br dep cycles --no-db --json` | `bd-v12u.9`, `bd-v12u.10` | Prove bounded connection lifecycle, cancellation/backpressure, resource exhaustion, unsupported-profile diagnostics, raw/replay artifacts, and zero kernel semantic drift. `bd-v12u.10` extends the gate to bounded pipe-backed/reactor-readiness evidence without counting Wave D protocol stacks as complete. |
 | `GATE-COMBINATOR-ACTOR-HARNESS` | `test-combinator-contract`; `test-actor-supervision-harness`; `test-e2e-actor-supervision`; `make conformance`; `codec-equivalence`; `profile-parity` | `bd-v12u.11`, `bd-v12u.12` | Pin cancellation, outcome aggregation, timeout ordering, retry/budget caps, bracket cleanup, restart policy, escalation, child-spec metadata, cancellation during restart, obligation cleanup, raw logs, digest, and replay artifacts before parity claims expand. |
-| `GATE-OVERLOAD-SLO-DEMO` | `parallel-bench-gate`; final acceptance demo target from `bd-v12u.15` | `bd-v12u.14`, `bd-v12u.15` | Convert large-swarm telemetry into resource-plane SLOs and user-facing proof bundles with replay and fail-closed messaging. `bd-v12u.14` emits `build/perf/parallel-bench-gate-summary.json` with worker-count rows, R1/R2/R3 footprint rows, warn/block thresholds, and remediation text. |
+| `GATE-OVERLOAD-SLO-DEMO` | `parallel-bench-gate`; `wave-c-acceptance-demo` | `bd-v12u.14`, `bd-v12u.15` | Convert large-swarm telemetry into resource-plane SLOs and user-facing proof bundles with replay and fail-closed messaging. `bd-v12u.14` emits `build/perf/parallel-bench-gate-summary.json` with worker-count rows, R1/R2/R3 footprint rows, warn/block thresholds, and remediation text. `bd-v12u.15` emits a Wave C acceptance bundle with config, expected outputs, rerun command, profile report, benchmark summary, incident evidence, and unsupported-platform fail-closed diagnostics. |
 
 Coverage requirements:
 
@@ -283,6 +283,7 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | `GATE-E2E-VERTICAL-AUTO` | `automotive_watchdog.sh` | AUTOMOTIVE |
 | `GATE-E2E-CONTINUITY` | `continuity.sh`, `continuity_restart.sh` | CORE |
 | `GATE-E2E-PARALLEL-SWARM` | `parallel_swarm.sh` | PARALLEL |
+| `GATE-E2E-WAVE-C-ACCEPTANCE` | `wave_c_acceptance_demo.sh` | PARALLEL/mixed |
 | `GATE-E2E-DEPLOY-ROUTER` | `router_storm.sh` | EMBEDDED_ROUTER |
 | `GATE-E2E-DEPLOY-HFT` | `market_open_burst.sh` | HFT |
 | `GATE-E2E-DEPLOY-AUTO` | `automotive_fault_burst.sh` | AUTOMOTIVE |
@@ -298,6 +299,7 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | `make test-e2e-parallel` | Parallel swarm e2e pack | GATE-E2E-PARALLEL-SWARM |
 | `make parallel-bench-json` | PARALLEL benchmark JSON artifact | GATE-PARALLEL-BENCHMARK |
 | `make parallel-bench-gate` | Capture PARALLEL benchmark artifact plus `parallel-bench-gate-summary.json`; warnings are observe-only, blocks fail | GATE-PARALLEL-BENCHMARK, GATE-OVERLOAD-SLO-DEMO |
+| `make wave-c-acceptance-demo` | Capture the user-facing Wave C acceptance bundle with replay, profile, benchmark, incident, and fail-closed evidence | GATE-E2E-WAVE-C-ACCEPTANCE, GATE-OVERLOAD-SLO-DEMO |
 
 ## 5. CI Workflow Jobs
 
