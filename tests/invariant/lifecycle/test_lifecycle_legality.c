@@ -51,15 +51,15 @@ TEST(region_double_close_rejected) {
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
 
-    /* Second close on a CLOSING region should fail */
-    ASSERT_NE(asx_region_close(rid), ASX_OK);
+    /* Second close on a CLOSING region must fail with the transition taxonomy. */
+    ASSERT_EQ(asx_region_close(rid), ASX_E_INVALID_TRANSITION);
 }
 
 TEST(region_close_on_invalid_handle_rejected) {
     reset_all();
 
     /* Close with invalid handle */
-    ASSERT_NE(asx_region_close(ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_region_close(ASX_INVALID_ID), ASX_E_NOT_FOUND);
 }
 
 TEST(region_spawn_after_close_rejected) {
@@ -195,7 +195,7 @@ TEST(obligation_double_commit_rejected) {
     ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
 
     /* Second commit should fail (already in COMMITTED state) */
-    ASSERT_NE(asx_obligation_commit(oid), ASX_OK);
+    ASSERT_EQ(asx_obligation_commit(oid), ASX_E_INVALID_TRANSITION);
 }
 
 TEST(obligation_commit_then_abort_rejected) {
@@ -209,7 +209,7 @@ TEST(obligation_commit_then_abort_rejected) {
     ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
 
     /* Abort after commit should fail */
-    ASSERT_NE(asx_obligation_abort(oid), ASX_OK);
+    ASSERT_EQ(asx_obligation_abort(oid), ASX_E_INVALID_TRANSITION);
 }
 
 TEST(obligation_abort_then_commit_rejected) {
@@ -223,7 +223,7 @@ TEST(obligation_abort_then_commit_rejected) {
     ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
 
     /* Commit after abort should fail */
-    ASSERT_NE(asx_obligation_commit(oid), ASX_OK);
+    ASSERT_EQ(asx_obligation_commit(oid), ASX_E_INVALID_TRANSITION);
 }
 
 TEST(obligation_double_abort_rejected) {
@@ -237,14 +237,14 @@ TEST(obligation_double_abort_rejected) {
     ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
 
     /* Second abort should fail */
-    ASSERT_NE(asx_obligation_abort(oid), ASX_OK);
+    ASSERT_EQ(asx_obligation_abort(oid), ASX_E_INVALID_TRANSITION);
 }
 
 TEST(obligation_invalid_handle_rejected) {
     reset_all();
 
-    ASSERT_NE(asx_obligation_commit(ASX_INVALID_ID), ASX_OK);
-    ASSERT_NE(asx_obligation_abort(ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_obligation_commit(ASX_INVALID_ID), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_obligation_abort(ASX_INVALID_ID), ASX_E_NOT_FOUND);
 }
 
 /* -------------------------------------------------------------------
@@ -257,12 +257,14 @@ TEST(region_transition_open_to_closing_legal) {
 
 TEST(region_transition_open_to_closed_illegal) {
     /* Direct OPEN → CLOSED skips intermediate states */
-    ASSERT_NE(asx_region_transition_check(ASX_REGION_OPEN, ASX_REGION_CLOSED), ASX_OK);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_OPEN, ASX_REGION_CLOSED),
+              ASX_E_INVALID_TRANSITION);
 }
 
 TEST(region_transition_closed_to_open_illegal) {
     /* CLOSED is terminal — no forward transitions */
-    ASSERT_NE(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_OPEN), ASX_OK);
+    ASSERT_EQ(asx_region_transition_check(ASX_REGION_CLOSED, ASX_REGION_OPEN),
+              ASX_E_INVALID_TRANSITION);
 }
 
 /* -------------------------------------------------------------------

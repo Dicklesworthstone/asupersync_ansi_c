@@ -6,6 +6,16 @@ Covers invalid-usage examples and expected outcomes for every public API surface
 **Purpose:** Compensate for missing Rust compile-time misuse rejection (plan 7.3.4).
 Each entry is regression-tested via unit/invariant/fixture artifacts.
 
+## Conformance Gate
+
+`tests/conformance/public_api_misuse_conformance_test.c` is the release-facing
+negative conformance gate for this catalog. It freezes exact `asx_status`
+outcomes for stale handles, unknown IDs, double close/finalize, illegal
+obligation transitions, invalid channel operations, and deadline/cancellation
+misuse. It also snapshots the runtime before rejected calls and fails if those
+calls mutate the runtime snapshot or emit semantic event, scheduler, or trace
+records.
+
 ## Error Classification
 
 | Code Family | Range | Meaning |
