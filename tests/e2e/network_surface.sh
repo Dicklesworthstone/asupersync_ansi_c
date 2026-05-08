@@ -13,7 +13,7 @@ e2e_init "network-surface" "E2E-NETWORK-SURFACE"
 
 E2E_BIN="${E2E_ARTIFACT_DIR}/e2e_network_surface"
 
-if ! ~/.local/bin/rch exec -- make -B build; then
+if ! "${MAKE:-make}" -C "$E2E_PROJECT_ROOT" -B build; then
     e2e_scenario "network_surface.lib_build" "make build failed" "fail"
     e2e_finish
     exit $?

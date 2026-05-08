@@ -34,7 +34,7 @@ This register ensures that deferred work is:
 
 ### DS-C01: Targeted Networking Primitives
 
-**Status:** Deferred to Wave C
+**Status:** Wave C contract active under `bd-v12u.9`; first native socket/reactor e2e remains `bd-v12u.10`.
 **Rationale:** Networking requires platform adapters (POSIX sockets, Win32 IOCP, embedded poll/select), reactor integration, and connection lifecycle management that are outside the kernel's semantic scope. Kernel parity must be proven before adding I/O surfaces.
 **Rust source:** `src/net/` (~26k LOC)
 **Activation beads:** `bd-v12u.9` (Wave C networking primitive spec), `bd-v12u.10` (first deterministic network reactor/socket e2e)
@@ -42,10 +42,24 @@ This register ensures that deferred work is:
 - Wave A quality gates green (all kernel conformance/parity/embedded gates pass)
 - Wave B conformance harness operational (differential fixture runner working)
 - Reactor/event-loop adapter interface designed in `docs/PROPOSED_ANSI_C_ARCHITECTURE.md`
-- Dedicated spec extraction for networking semantics (new bead required)
+- POSIX native readiness evidence from `bd-v12u.4` remains linked before live sockets claim reactor-backed behavior
+- Dedicated spec extraction for networking semantics (`bd-v12u.9`) is complete before `bd-v12u.10` expands native sockets
 **Owner:** TBD (assigned when Wave C opens)
-**Dependency path:** Wave A gates -> Wave B harness -> networking spec -> implementation
+**Dependency path:** Wave A gates -> Wave B harness -> POSIX/native readiness -> networking spec -> native socket e2e -> implementation
 **Semantic risk:** LOW — networking does not change kernel lifecycle/cancel/obligation semantics. Uses kernel primitives.
+
+**Wave C primitive boundary:** Wave C owns bounded, runtime-level networking primitives only: socket-address value handling, deterministic resolver ordering/cache behavior, in-memory TCP listener/stream lifecycle, UDP datagram delivery, anonymous pipes, resource-cap enforcement, and fail-closed native readiness handoff. These primitives may use kernel regions, cancellation, tasks, timers, and obligations, but they must not alter their externally visible semantics.
+
+**Wave D exclusion boundary:** HTTP/2, gRPC, TLS, database clients, distributed runtime protocols, remote regions, connection pooling policies, and protocol-specific flow-control semantics remain Wave D or later. A Wave C networking pass cannot count any of those application/protocol stacks as completed evidence.
+
+**Fixture obligations:** Wave C networking evidence must cover:
+- lifecycle: bind, connect, accept, read, write, datagram send/receive, close, reset, and stale-handle rejection;
+- cancellation and backpressure: pending accepts/reads, closed peers, bounded pipe/socket buffers, queue-full behavior, and no silent data loss;
+- resource exhaustion: listener, stream, UDP socket, pipe, resolver result, and cache caps fail atomically without partially live handles;
+- unsupported platform diagnostics: profiles without live socket support fail closed and cannot report a live capability;
+- semantic drift: shared fixture digests across CORE/POSIX/PARALLEL profiles remain unchanged unless an approved semantic-delta record exists.
+
+Current executable coverage is `make test-e2e-network-surface` plus focused `tests/unit/net/test_net` and `tests/unit/net/test_pipe` unit binaries. `bd-v12u.10` extends this contract to the first reactor-backed native socket e2e without changing the kernel digest contract.
 
 ### DS-C02: Selected Combinators
 
@@ -86,7 +100,7 @@ surface, test obligation, and no-drift rule.
 | Native adapter deterministic commit authority | `bd-v12u.2`, `bd-v12u.3`, `bd-v12u.4` | Native POSIX/Win32 hooks must preserve the same externally visible scheduler, channel, timer, cancellation, and trace commit order as CORE/PARALLEL logical mode, or fail closed. |
 | Static arena backend | `bd-v12u.5`, `bd-v12u.6` | Static and dynamic allocator backends must produce identical semantic digests for shared fixtures; OOM and post-seal failures must be failure-atomic. |
 | Observability and replay evidence | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` | Incident bundles, trace schema changes, and minimized counterexamples must be read-only evidence surfaces and must not alter runtime behavior. |
-| Networking primitives | `bd-v12u.9`, `bd-v12u.10` | Connection lifecycle, cancellation, backpressure, and resource exhaustion fixtures must pass without changing kernel semantics; unsupported profiles fail closed. |
+| Networking primitives | `bd-v12u.9`, `bd-v12u.10` | `test-e2e-network-surface`, focused net/pipe unit tests, and `profile-parity` must cover lifecycle, cancellation, backpressure, resource caps, and unsupported-profile diagnostics. `bd-v12u.10` owns the first native socket/reactor e2e and must not introduce kernel digest drift. |
 | Combinators and actor/supervision harnesses | `bd-v12u.11`, `bd-v12u.12` | Outcome aggregation, cancellation propagation, restart policy, escalation, and obligation cleanup must be fixture-backed before parity claims expand. |
 | Overload SLOs and user acceptance | `bd-v12u.14`, `bd-v12u.15` | Performance/admission thresholds must be resource-plane only; final demos must include replay, profile compatibility, incident evidence, and fail-closed messaging. |
 
