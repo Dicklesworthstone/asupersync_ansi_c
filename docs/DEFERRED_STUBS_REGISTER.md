@@ -32,8 +32,8 @@ This register complements `docs/DEFERRED_SURFACE_REGISTER.md`.
 | `src/runtime/arena_locality_spike.c` | `research-spike` | Evaluates arena layout alternatives against baseline task-slot scans. Production locality routing now lives in parallel config/telemetry; this spike remains for future layout-cost comparisons. | Separate decision to adopt a proven physical layout into runtime internals. |
 | `src/runtime/barrier_cert_spike.c` | `research-spike` | Evaluates barrier-certificate style scheduler safety checks. | Separate decision to promote a proven runtime safety monitor. |
 | `src/platform/freestanding/hooks.c` | `user-supplied` | Freestanding profile intentionally expects embedders to install hooks at runtime init. | No graduation required; this remains an adapter contract rather than an OS implementation. |
-| `src/platform/posix/hooks.c` | `graduated` | POSIX clock, entropy, reactor wait, and bounded pthread blocking-submit hooks are installed through `asx_runtime_hooks`; shutdown drains queued/running blocking jobs before reset. | Future work: timed reactor registration and scheduler integration under `bd-pweu.8`. |
-| `src/platform/win32/hooks.c` | `walking-skeleton` | Empty Win32 adapter stub. No QPC, BCrypt, IOCP, or thread pool hooks. | Wave B/C: implement Win32 platform hooks. |
+| `src/platform/posix/hooks.c` | `graduated` | POSIX clock, entropy, reactor wait, and bounded pthread blocking-submit hooks are installed through `asx_runtime_hooks`; shutdown drains queued/running blocking jobs before reset. | Future work: timed reactor registration and scheduler readiness e2e under `bd-v12u.4`. |
+| `src/platform/win32/hooks.c` | `walking-skeleton` | Empty Win32 adapter stub. No QPC, BCrypt, IOCP, or thread pool hooks. | Wave C: fail-closed real hook graduation under `bd-v12u.3`. |
 | `src/channel/mpsc.c` | `graduating-internal` | Two-phase MPSC channel now has deterministic CORE ring-buffer semantics plus POSIX/PARALLEL atomic committed-message publication behind the same reserve/send/abort API. | Parallel parity, memory-model, benchmark/admission, and locality gates are closed; remaining broad claim depends on platform worker execution paths preserving deterministic commit authority. |
 | `src/channel/oneshot.c` | `walking-skeleton` | Fixed-size arena, single-threaded oneshot channel. | Multi-threaded variant for cross-task communication. |
 | `src/channel/broadcast.c` | `walking-skeleton` | Fixed-size arena, single-threaded broadcast channel. | Multi-threaded broadcast with atomic subscriber tracking. |
@@ -46,6 +46,20 @@ This register complements `docs/DEFERRED_SURFACE_REGISTER.md`.
 | `src/runtime/virtual_time.c` | `walking-skeleton` | Virtual time source for deterministic replay. Callers install via asx_runtime_set_hooks(). | Full virtual-time integration with scheduler time-travel for debug/replay. |
 | `src/runtime/runtime_internal.h` | `walking-skeleton` | Fixed-size arena slot types for regions/tasks/obligations. | Dynamic arena sizing or pool-based allocation for production workloads. |
 | `src/net/tls.c` | `walking-skeleton` | TLS passthrough wrapper tracking handshake state without real cryptography. | Wave C: integrate platform TLS library (OpenSSL/Mbed TLS/SChannel). |
+
+## Wave C Evidence Contract (`bd-v12u.1`)
+
+The `bd-v12u` follow-up graph converts the remaining walking-skeleton and
+graduating-internal rows into evidence-gated work. This register must keep
+source-level intent aligned with those beads:
+
+| Stub/register surface | Follow-up bead(s) | Required no-drift proof |
+|---|---|---|
+| Native reactor and wake transport (`io_driver.c`, `waker.c`, POSIX/Win32 hooks) | `bd-v12u.2`, `bd-v12u.3`, `bd-v12u.4` | Native readiness may change polling mechanics only; externally visible event commit order and semantic digests must match CORE/PARALLEL logical mode or fail closed. |
+| Fixed arena slot tables (`runtime_internal.h`) | `bd-v12u.5`, `bd-v12u.6` | Static backend sizing and implementation must be resource-plane only, with failure-atomic OOM and post-seal behavior. |
+| Trace/replay/lab diagnostics | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` | Incident bundles, trace schema, and minimized counterexamples are read-only evidence surfaces and must not mutate runtime state. |
+| Networking and TLS walking skeletons | `bd-v12u.9`, `bd-v12u.10` | First networking e2e work must prove lifecycle/cancel/backpressure/resource behavior and keep full TLS/HTTP/gRPC claims deferred. |
+| Actor/supervision partial surfaces | `bd-v12u.11`, `bd-v12u.12` | Combinator and supervision harnesses must pin cancellation, outcome aggregation, restart, escalation, and obligation cleanup before parity claims expand. |
 
 ## Maintenance Rule
 

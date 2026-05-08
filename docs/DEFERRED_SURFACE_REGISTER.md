@@ -37,6 +37,7 @@ This register ensures that deferred work is:
 **Status:** Deferred to Wave C
 **Rationale:** Networking requires platform adapters (POSIX sockets, Win32 IOCP, embedded poll/select), reactor integration, and connection lifecycle management that are outside the kernel's semantic scope. Kernel parity must be proven before adding I/O surfaces.
 **Rust source:** `src/net/` (~26k LOC)
+**Activation beads:** `bd-v12u.9` (Wave C networking primitive spec), `bd-v12u.10` (first deterministic network reactor/socket e2e)
 **Unblock criteria:**
 - Wave A quality gates green (all kernel conformance/parity/embedded gates pass)
 - Wave B conformance harness operational (differential fixture runner working)
@@ -51,6 +52,7 @@ This register ensures that deferred work is:
 **Status:** Deferred to Wave C
 **Rationale:** Combinators (join, race, select, timeout, retry) compose kernel primitives. They require a stable task/region/cancellation substrate before they can be faithfully ported.
 **Rust source:** `src/combinator/` (~17k LOC)
+**Activation beads:** `bd-v12u.11` (combinator parity contracts and conformance fixture expansion)
 **Unblock criteria:**
 - Wave A task lifecycle, cancellation protocol, and obligation resolution stable
 - Combinator semantic spec extracted from Rust behavior
@@ -64,6 +66,7 @@ This register ensures that deferred work is:
 **Status:** Deferred to Wave C
 **Rationale:** Observability (metrics, spans, structured logging beyond trace) builds on the trace/replay layer (Wave B). Adding observability before trace is stable would create untested instrumentation.
 **Rust source:** Parts of `src/trace/` (~36k LOC), observability layers
+**Activation beads:** `bd-v12u.7` (operator incident bundle), `bd-v12u.8` (deterministic counterexample minimizer), `bd-v12u.13` (versioned Rust/C trace schema)
 **Unblock criteria:**
 - Wave B trace/replay layer operational
 - Trace format and semantic digest stable
@@ -71,6 +74,26 @@ This register ensures that deferred work is:
 **Owner:** TBD
 **Dependency path:** Wave B trace -> observability spec -> implementation
 **Semantic risk:** LOW — observability is read-only instrumentation; does not alter runtime behavior.
+
+### Wave C Activation Contract (`bd-v12u.1`)
+
+Wave C activation is gated by evidence, not by source-tree presence. The first
+contract bead, `bd-v12u.1`, binds every newly opened Wave C child to a concrete
+surface, test obligation, and no-drift rule.
+
+| Surface | Activation beads | Required proof before implementation claims |
+|---|---|---|
+| Native adapter deterministic commit authority | `bd-v12u.2`, `bd-v12u.3`, `bd-v12u.4` | Native POSIX/Win32 hooks must preserve the same externally visible scheduler, channel, timer, cancellation, and trace commit order as CORE/PARALLEL logical mode, or fail closed. |
+| Static arena backend | `bd-v12u.5`, `bd-v12u.6` | Static and dynamic allocator backends must produce identical semantic digests for shared fixtures; OOM and post-seal failures must be failure-atomic. |
+| Observability and replay evidence | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` | Incident bundles, trace schema changes, and minimized counterexamples must be read-only evidence surfaces and must not alter runtime behavior. |
+| Networking primitives | `bd-v12u.9`, `bd-v12u.10` | Connection lifecycle, cancellation, backpressure, and resource exhaustion fixtures must pass without changing kernel semantics; unsupported profiles fail closed. |
+| Combinators and actor/supervision harnesses | `bd-v12u.11`, `bd-v12u.12` | Outcome aggregation, cancellation propagation, restart policy, escalation, and obligation cleanup must be fixture-backed before parity claims expand. |
+| Overload SLOs and user acceptance | `bd-v12u.14`, `bd-v12u.15` | Performance/admission thresholds must be resource-plane only; final demos must include replay, profile compatibility, incident evidence, and fail-closed messaging. |
+
+No Wave C child may close on a proxy signal alone. Passing tests, complete
+manifests, or generated reports count only when they directly cover the
+surface-specific obligations above. Expensive gates must run through
+`rch exec -- ...`.
 
 ---
 
@@ -148,6 +171,7 @@ This register ensures that deferred work is:
 **Status:** Deferred to Wave D
 **Rationale:** The actor/supervision layer (~28k LOC) is a significant subsystem that builds on top of the kernel's region/task/obligation model. It requires stable kernel semantics before faithful porting.
 **Rust source:** `src/actor/`, `src/supervision/` (~28k LOC combined)
+**Activation harness bead:** `bd-v12u.12` covers deterministic actor/supervision semantics without claiming full OTP parity.
 **Unblock criteria:**
 - Wave A kernel lifecycle, cancellation, and obligation semantics stable
 - Actor/supervision semantic spec extracted (gen_server, supervisor strategies, child specs, restart policies)
@@ -167,6 +191,7 @@ This register ensures that deferred work is:
 **Rationale:** Kernel correctness is the foundation. Parallel profile adds atomics, synchronization adapters, EBR/hazard pointers (ALPHA-5/6), work-stealing, and fairness validation -- doubling the verification surface. The three primary target verticals (HFT, automotive, embedded router) still require deterministic single-worker fallback behavior.
 **ADR:** ADR-001 (docs/OPEN_DECISIONS_ADR.md)
 **Beads:** `bd-2cw.7` (closed compile/simulation scaffold), `bd-pweu` (production graduation epic), closed children `bd-pweu.1`-`.15` for the contract/scheduler/atomic/MPSC/POSIX/parity/e2e/locality/proof/benchmark/docs slices.
+**Native-adapter follow-up beads:** `bd-v12u.2` (deterministic commit authority), `bd-v12u.3` (Win32 hooks), `bd-v12u.4` (POSIX timed reactor readiness)
 **Unblock criteria:**
 - Landed: Wave A kernel quality gates green.
 - Landed: deterministic worker-lane scheduling, bounded work stealing, timed-lane/waker/reactor readiness pumping, and replay-stable commit authority.
@@ -223,6 +248,7 @@ of the logical scheduler.
 **Status:** Interface designed; implementation deferred per ADR-002
 **Rationale:** Primary embedded target (EMBEDDED_ROUTER / OpenWrt) has `malloc`. Arena tables already use allocator vtable, which can be swapped to static memory without API changes. Static arena is a different allocator backend, not a different architecture.
 **ADR:** ADR-002 (docs/OPEN_DECISIONS_ADR.md)
+**Activation beads:** `bd-v12u.5` (static arena sizing/seal contract), `bd-v12u.6` (static backend implementation and parity)
 **What ships in Wave A:**
 - Arena tables with `malloc`-based allocator backend
 - Allocator vtable interface designed for static-arena forward compatibility

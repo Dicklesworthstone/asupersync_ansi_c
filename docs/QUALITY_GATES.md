@@ -230,6 +230,35 @@ The large-swarm e2e pack is `tests/e2e/parallel_swarm.sh`. Its default
 use the same script with `ASX_E2E_PARALLEL_SCALE=large` and may raise
 `ASX_E2E_PARALLEL_WORKERS` up to the compiled profile cap.
 
+### 2.2 Wave C Native Evidence Gates
+
+`bd-v12u.1` opens the next gate family after the `bd-pweu` parallel graduation.
+These gates are activation contracts until their child beads add concrete
+Makefile targets or scripts. A child cannot close by citing a proxy report; the
+gate evidence must cover the surface-specific behavior named below.
+
+| Gate ID | Initial target/script expectation | Tracking Bead(s) | Purpose |
+|---------|-----------------------------------|------------------|---------|
+| `GATE-WAVE-C-CONTRACT` | docs/register validation, `br dep cycles --no-db --json`, `bv --robot-triage` | `bd-v12u.1` | Keep Wave C native adapter/static arena/networking/combinator/actor contracts explicit, acyclic, and source-linked. |
+| `GATE-NATIVE-ADAPTER-COMMIT` | native-adapter parity/e2e target to be added by child bead | `bd-v12u.2`, `bd-v12u.3`, `bd-v12u.4` | Prove POSIX/Win32 live hooks preserve deterministic commit authority or fail closed. |
+| `GATE-STATIC-ARENA-PARITY` | static-vs-dynamic unit and profile parity targets to be added by child bead | `bd-v12u.5`, `bd-v12u.6` | Prove static arena allocation is a resource-plane backend with failure-atomic OOM and digest parity. |
+| `GATE-INCIDENT-REPLAY-BUNDLE` | incident bundle schema/unit/e2e targets to be added by child bead | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` | Emit operator-grade evidence bundles, trace schema, and minimized counterexamples without mutating runtime behavior. |
+| `GATE-WAVE-C-NETWORKING` | networking primitive conformance/e2e targets to be added by child bead | `bd-v12u.9`, `bd-v12u.10` | Prove bounded connection lifecycle, cancellation, backpressure, resource exhaustion, and unsupported-profile diagnostics. |
+| `GATE-COMBINATOR-ACTOR-HARNESS` | combinator/actor fixture targets to be added by child bead | `bd-v12u.11`, `bd-v12u.12` | Pin cancellation, outcome aggregation, restart policy, escalation, and obligation cleanup before parity claims expand. |
+| `GATE-OVERLOAD-SLO-DEMO` | benchmark/acceptance demo targets to be added by child bead | `bd-v12u.14`, `bd-v12u.15` | Convert large-swarm telemetry into SLOs and user-facing proof bundles with replay and fail-closed messaging. |
+
+Coverage requirements:
+
+1. Gate evidence must name the profile, seed/input, codec, rerun command, and
+   artifact paths used to prove the claim.
+2. Semantic digest drift remains forbidden unless an existing semantic-delta
+   exception explicitly approves the fixture and scope.
+3. Unsupported platforms must fail closed with diagnostics; they must not be
+   counted as passing live-mode behavior.
+4. Static arena, overload, and admission work are resource-plane changes only;
+   they cannot alter lifecycle, cancellation, channel, timer, or trace semantics.
+5. Expensive proof runs must use `rch exec -- make ...`.
+
 ## 3. E2E Gate IDs
 
 E2E gates are assigned by `tests/e2e/run_all.sh` and map to deployment hardening

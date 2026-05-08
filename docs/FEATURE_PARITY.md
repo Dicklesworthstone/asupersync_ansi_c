@@ -44,6 +44,21 @@ This matrix tracks canonical semantic units, their source-of-truth extraction st
 | `U-REPLAY-CONTINUITY` | Deterministic replay + continuity under restart | `docs/VERTICAL_CONTINUITY_FIXTURE_FAMILIES.md` + trace/replay docs | replay identity and crash/restart continuity tests (`E2E-CONT-RESTART`) | digest mismatch or duplicated side effects on restart forbidden | `impl-complete` | `bd-1md.15`, `bd-2n0.4`, `bd-j4m.8` |
 | `U-PARALLEL-PROFILE` | Optional parallel worker-lane semantics and single-vs-multi-worker digest parity | `docs/DEFERRED_SURFACE_REGISTER.md`, `docs/QUALITY_GATES.md`, `include/asx/runtime/parallel.h` | `parallel-parity`; `test-e2e-parallel`; `formal-litmus`; `formal-codegen`; large-swarm telemetry/admission/locality tests; `parallel-bench-json` | semantic digest drift, unclassified event-order drift, silent drops, unbounded queues, data races, stale-handle mutation, locality routing semantic drift, and weakened cancellation forbidden | `conformance-passed` | `bd-pweu.1`, `bd-pweu.7`, `bd-pweu.9`, `bd-pweu.10`, `bd-pweu.11`, `bd-pweu.12`, `bd-pweu.13`, `bd-pweu.14` |
 
+### 2.1 Wave C Activation Matrix
+
+These rows are post-kernel activation contracts created by `bd-v12u.1`. They
+do not change the Phase 1 status count below until the named child beads land
+the corresponding specs, tests, and implementation evidence.
+
+| Unit ID | Semantic Unit | Canonical Source Artifacts | Acceptance Test Obligations | Must-Fail / Negative Obligations | Current Status | Primary Bead(s) |
+|---|---|---|---|---|---|---|
+| `U-NATIVE-ADAPTER-COMMIT` | POSIX/Win32 native hooks preserving deterministic commit authority | `docs/DEFERRED_SURFACE_REGISTER.md` DS-P01; `src/platform/posix/hooks.c`; `src/platform/win32/hooks.c`; `src/runtime/parallel.c` | native adapter parity/e2e tests; `parallel-parity`; `profile-parity` | native event-order drift, silent drops, unsupported live-mode claims, stale-handle mutation | `spec-drafted` | `bd-v12u.2`, `bd-v12u.3`, `bd-v12u.4` |
+| `U-STATIC-ARENA-BACKEND` | Static allocator backend preserving dynamic-backend semantics | `docs/DEFERRED_SURFACE_REGISTER.md` DS-S01; allocator vtable/runtime config docs | static-vs-dynamic unit tests; OOM rollback tests; `profile-parity` | partial allocation on failure, post-seal allocation, digest drift, over-capacity live handles | `spec-drafted` | `bd-v12u.5`, `bd-v12u.6` |
+| `U-INCIDENT-REPLAY-EVIDENCE` | Operator incident bundle, trace schema, and minimized replay packet | trace/replay/lab docs; `docs/QUALITY_GATES.md` `GATE-INCIDENT-REPLAY-BUNDLE` | schema/unit tests; e2e bundle emission; golden trace examples; minimizer self-tests | evidence artifacts mutating runtime state, unversioned schema drift, minimized failures changing class | `spec-drafted` | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` |
+| `U-WAVE-C-NETWORKING` | Minimal networking primitive lifecycle over native reactor readiness | `docs/DEFERRED_SURFACE_REGISTER.md` DS-C01; `src/net/*`; `src/runtime/io_driver.c` | networking primitive spec; socket/pipe e2e; cancellation/backpressure/resource fixtures | kernel semantic drift, unsupported profiles passing live claims, unbounded connection/resource growth | `spec-drafted` | `bd-v12u.9`, `bd-v12u.10` |
+| `U-COMBINATOR-ACTOR-HARNESS` | Combinator and actor/supervision semantic harnesses | `docs/DEFERRED_SURFACE_REGISTER.md` DS-C02/DS-D06; `src/core/combinator*.c`; `src/actor/*` | combinator conformance fixtures; actor/supervision restart-policy tests; replay logs | cancellation weakening, outcome lattice drift, leaked obligations, restart/escalation divergence | `spec-drafted` | `bd-v12u.11`, `bd-v12u.12` |
+| `U-OVERLOAD-SLO-DEMO` | Large-swarm SLO baselines and user-facing acceptance proof bundle | `docs/QUALITY_GATES.md` `GATE-OVERLOAD-SLO-DEMO`; benchmark/e2e docs | RCH benchmark baselines; release/demo gate with replay/profile/incident artifacts | SLO/admission changing semantics, stale README claims, unsupported platforms hidden as success | `spec-drafted` | `bd-v12u.14`, `bd-v12u.15` |
+
 ## 3. Phase 1 Exit Review Gate Checklist
 
 A semantic unit may be marked Phase 1 complete only when:
