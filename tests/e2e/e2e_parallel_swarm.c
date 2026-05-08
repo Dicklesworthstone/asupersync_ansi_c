@@ -45,9 +45,12 @@ typedef struct {
     uint32_t timer_ready;
     asx_scheduling_metrics metrics;
     asx_parallel_admission_decision admission;
+    asx_parallel_telemetry_snapshot telemetry;
     int admission_seen;
+    int telemetry_seen;
     uint64_t semantic_digest;
     uint64_t trace_digest;
+    uint32_t trace_event_count;
 } swarm_result;
 
 typedef struct {
@@ -258,6 +261,8 @@ static void result_note_pressure(swarm_result *result,
         result->admission = snapshot->admission;
         result->admission_seen = 1;
     }
+    result->telemetry = *snapshot;
+    result->telemetry_seen = 1;
 }
 
 static void result_add_metrics(swarm_result *result,
@@ -309,9 +314,70 @@ static void result_mix(swarm_result *result, uint32_t value) {
 
 static void result_mix_trace(swarm_result *result) {
     result->trace_digest = asx_trace_digest();
+    result->trace_event_count = asx_trace_event_count();
     result->semantic_digest = digest_mix_u64(result->semantic_digest, result->trace_digest);
-    result->semantic_digest =
-        digest_mix_u32(result->semantic_digest, (uint32_t)asx_trace_event_count());
+    result->semantic_digest = digest_mix_u32(result->semantic_digest, result->trace_event_count);
+}
+
+static void result_incident_snapshot(const swarm_result *result,
+                                     asx_parallel_telemetry_snapshot *out) {
+    if (result->telemetry_seen) {
+        *out = result->telemetry;
+    } else {
+        memset(out, 0, sizeof(*out));
+        out->commit_authority.native_live_status = ASX_E_PERMISSION_DENIED;
+    }
+
+    out->worker_count = result->worker_count;
+    out->total_queue_depth = result->queue_depth;
+    out->lane_depths[ASX_LANE_READY] = result->lane_depth_ready;
+    out->lane_depths[ASX_LANE_CANCEL] = result->lane_depth_cancel;
+    out->lane_depths[ASX_LANE_TIMED] = result->lane_depth_timed;
+    out->max_lane_depth = result->max_lane_depth;
+    out->max_worker_queue_depth = result->max_worker_queue_depth;
+    out->pressure_pct = result->pressure_pct;
+    out->blocking_backlog = result->blocking_backlog;
+    out->metrics = result->metrics;
+    out->admission = result->admission;
+}
+
+static void emit_incident_bundle_record(const swarm_result *result, const char *rerun) {
+    asx_parallel_telemetry_snapshot telemetry;
+    asx_incident_bundle bundle;
+    asx_report_buf out;
+    const char *message = "";
+
+    result_incident_snapshot(result, &telemetry);
+    asx_incident_bundle_init(&bundle);
+    bundle.run_id = g_run_id;
+    bundle.scenario_id = result->scenario_id;
+    bundle.profile = g_profile;
+    bundle.compiled_profile = active_profile_name();
+    bundle.scale = g_scale;
+    bundle.seed = g_seed;
+    bundle.worker_count = result->worker_count;
+    bundle.max_workers = (uint32_t)ASX_MAX_WORKERS;
+    bundle.pass = result->pass;
+    bundle.status = result->status;
+    bundle.failure_class =
+        asx_incident_bundle_failure_class(result->status,
+                                          result->status == ASX_E_PERMISSION_DENIED);
+    if (!result->pass && result->diagnostic != NULL && result->diagnostic[0] != '\0') {
+        message = result->diagnostic;
+    } else if (result->status == ASX_E_PERMISSION_DENIED) {
+        message = "surface unsupported in compiled profile";
+    }
+    bundle.failure_message = message;
+    bundle.semantic_digest = result->semantic_digest;
+    bundle.trace_digest = result->trace_digest;
+    bundle.trace_event_count = result->trace_event_count;
+    bundle.replay_command = rerun;
+    bundle.details_path = "parallel_swarm.details.jsonl";
+    bundle.telemetry = &telemetry;
+
+    if (asx_incident_bundle_render_json(&bundle, &out) == ASX_OK) {
+        printf("INCIDENT %s\n", asx_report_buf_cstr(&out));
+    }
 }
 
 static void emit_detail(const swarm_result *result) {
@@ -394,6 +460,8 @@ static void emit_detail(const swarm_result *result) {
         printf("}");
     }
     printf("}\n");
+
+    emit_incident_bundle_record(result, rerun);
 
     printf("SCENARIO %s %s", result->scenario_id, result->pass ? "pass" : "fail");
     if (!result->pass && result->diagnostic != NULL && result->diagnostic[0] != '\0') {

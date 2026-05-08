@@ -4,7 +4,7 @@
 > **Status:** Canonical mapping slice complete for current extracted semantics (`bd-296.12`, `.15`, `.16`, `.17`, `.18`)  
 > **Rust baseline commit:** `38c152405bd03e2bd9eecf178bfbbe9472fed861`  
 > **Baseline inventory artifact:** `docs/rust_baseline_inventory.json`  
-> **Last updated:** 2026-05-08 by SilverFrog - trace schema row
+> **Last updated:** 2026-05-08 by SilverFrog - incident bundle row
 
 This document maps extracted semantic rules to fixture families, parity rows, and test obligations so implementation/QA work can proceed without re-reading Rust internals.
 
@@ -68,6 +68,7 @@ Each provenance row in this file tracks:
 | `SCHEDULER-005` | Fairness certificate with deterministic witness hash for replay verification | `docs/CHANNEL_TIMER_SEMANTICS.md` section 3.8 | `sc-certificate-001` | `rust_vs_c`, `profile_parity` | unit + conformance | mapped |
 | `SCHEDULER-006` | Phase 0 timer processing before task dispatch (expired timers -> inject tasks) | `docs/CHANNEL_TIMER_SEMANTICS.md` section 3.2 | `sc-timer-phase0-001` | `rust_vs_c`, `profile_parity` | unit + conformance | mapped |
 | `TRACE-001` | Versioned trace event schema and Rust/C event correlation | `docs/TRACE_EVENT_SCHEMA.md`; `schemas/trace_event.schema.json`; `include/asx/runtime/trace.h`; `src/runtime/trace.c` | `trace-schema-v1-c-region-task`, `trace-schema-v1-rust-correlated` | `rust_vs_c`, `codec_equivalence`, `profile_parity`, `incident_bundle` | `test_trace` schema compatibility + `lint-schema-validation` | mapped |
+| `INCIDENT-001` | Operator incident evidence bundle tying replay, status, telemetry, trace, and parity artifacts | `docs/INCIDENT_EVIDENCE_BUNDLE.md`; `schemas/incident_bundle.schema.json`; `include/asx/evidence/evidence.h`; `src/evidence/evidence.c`; `tests/e2e/parallel_swarm.sh` | `incident-bundle-v1-parallel-swarm`; e2e `parallel_swarm.incident_bundle.jsonl` | `incident_bundle`, `profile_parity` | `test_evidence` renderer coverage + `test-e2e-parallel` artifact emission + `lint-schema-validation` | mapped |
 | `COMBINATOR-001` | Join/race/select/timeout/first-ok/quorum fixed-branch semantics | `docs/DEFERRED_SURFACE_REGISTER.md` DS-C02; `include/asx/core/combinator.h`; `src/core/combinator.c`; `docs/RUST_EXPORTED_SURFACE_INVENTORY.md` combinator row | `combinator-contract-001` | `rust_vs_c`, `codec_equivalence`, `profile_parity` | `test-combinator-contract` + conformance | mapped |
 | `COMBINATOR-002` | Retry/bracket/pipeline/bulkhead/rate-limit/hedge/map-reduce, JoinSet, plan DAG, and service middleware caps | `docs/DEFERRED_SURFACE_REGISTER.md` DS-C02; `include/asx/core/combinator2.h`; `include/asx/core/join_set.h`; `include/asx/plan/plan.h`; `include/asx/service/service.h`; `src/core/combinator2.c`; `src/core/join_set.c`; `src/plan/plan.c` | `combinator-contract-001` | `rust_vs_c`, `codec_equivalence`, `profile_parity` | `test-combinator-contract` + conformance | mapped |
 

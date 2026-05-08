@@ -23,6 +23,7 @@ export ASX_E2E_SCENARIO_PACK="$E2E_SCENARIO_PACK"
 
 E2E_BIN="${E2E_ARTIFACT_DIR}/e2e_parallel_swarm"
 DETAIL_FILE="${E2E_ARTIFACT_DIR}/parallel_swarm.details.jsonl"
+INCIDENT_FILE="${E2E_ARTIFACT_DIR}/parallel_swarm.incident_bundle.jsonl"
 
 if ! e2e_build "${SCRIPT_DIR}/e2e_parallel_swarm.c" "$E2E_BIN"; then
     e2e_scenario "parallel_swarm.build" "compilation failed" "fail"
@@ -35,9 +36,11 @@ e2e_run_binary "$E2E_BIN" "${E2E_ARTIFACT_DIR}/parallel_swarm.stderr" "parallel_
 OUTPUT="$E2E_LAST_OUTPUT"
 
 : > "$DETAIL_FILE"
+: > "$INCIDENT_FILE"
 while IFS= read -r line; do
     case "$line" in
         DETAIL\ *) printf '%s\n' "${line#DETAIL }" >> "$DETAIL_FILE" ;;
+        INCIDENT\ *) printf '%s\n' "${line#INCIDENT }" >> "$INCIDENT_FILE" ;;
     esac
 done <<< "$OUTPUT"
 
@@ -46,6 +49,14 @@ if [ "$DETAIL_COUNT" -gt 0 ]; then
     e2e_scenario "parallel_swarm.details_jsonl" "records=${DETAIL_COUNT} file=${DETAIL_FILE}" "pass"
 else
     e2e_scenario "parallel_swarm.details_jsonl" "no DETAIL JSONL records emitted" "fail"
+fi
+
+INCIDENT_COUNT="$(wc -l < "$INCIDENT_FILE" | tr -d ' ')"
+if [ "$INCIDENT_COUNT" -gt 0 ]; then
+    e2e_scenario "parallel_swarm.incident_bundle" \
+        "records=${INCIDENT_COUNT} file=${INCIDENT_FILE}" "pass"
+else
+    e2e_scenario "parallel_swarm.incident_bundle" "no INCIDENT bundle records emitted" "fail"
 fi
 
 DIGEST=""
@@ -61,7 +72,7 @@ else
 fi
 
 e2e_scenario "parallel_swarm.scale.${ASX_E2E_PARALLEL_SCALE}" \
-    "workers=${ASX_E2E_PARALLEL_WORKERS} detail=${DETAIL_FILE}" "pass"
+    "workers=${ASX_E2E_PARALLEL_WORKERS} detail=${DETAIL_FILE} incident=${INCIDENT_FILE}" "pass"
 
 set +e
 e2e_finish

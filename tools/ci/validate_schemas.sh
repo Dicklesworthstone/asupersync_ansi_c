@@ -167,6 +167,16 @@ if os.path.isfile(trace_event_schema_path):
         "description": "Trace event schema golden examples",
     })
 
+# 8. Incident evidence bundle golden examples
+incident_bundle_schema_path = os.path.join(schemas_dir, "incident_bundle.schema.json")
+if os.path.isfile(incident_bundle_schema_path):
+    targets.append({
+        "schema_path": incident_bundle_schema_path,
+        "schema_name": "incident_bundle",
+        "glob": os.path.join(fixtures_dir, "incident_bundles", "**", "*.json"),
+        "description": "Incident evidence bundle golden examples",
+    })
+
 # Deduplicate files across targets to avoid double-validation
 validated_files = set()
 results = []

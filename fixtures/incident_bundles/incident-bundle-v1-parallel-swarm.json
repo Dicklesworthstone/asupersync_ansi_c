@@ -1,0 +1,88 @@
+{
+  "schema_name": "asx.incident_bundle",
+  "schema_version": "asx.incident_bundle.v1",
+  "run": {
+    "run_id": "fixture-parallel-swarm",
+    "scenario_id": "parallel_swarm.admission_pressure",
+    "seed": 42,
+    "profile": "PARALLEL",
+    "compiled_profile": "PARALLEL",
+    "scale": "smoke",
+    "codec": "json"
+  },
+  "status": {
+    "pass": false,
+    "result": "fail",
+    "status_code": 1000,
+    "status_text": "resource exhausted",
+    "failure_class": "resource",
+    "failure_message": "queue pressure crossed deterministic admission threshold"
+  },
+  "telemetry": {
+    "worker_count": 8,
+    "max_workers": 64,
+    "queue_depths": {
+      "total": 64,
+      "ready": 64,
+      "cancel": 0,
+      "timed": 0
+    },
+    "pressure_pct": 100,
+    "blocking_backlog": 0,
+    "max_lane_depth": 64,
+    "max_worker_queue_depth": 8,
+    "hot_worker": 0,
+    "metrics": {
+      "ready_dispatches": 0,
+      "cancel_dispatches": 0,
+      "timed_dispatches": 0,
+      "cancel_streak_max": 0,
+      "fairness_yields": 0,
+      "worker_yields": 0,
+      "commit_sequence": 0,
+      "admission_rejects": 1,
+      "admission_backpressure": 0,
+      "admission_sheds": 0,
+      "pressure_transitions": 1
+    },
+    "admission": {
+      "triggered": true,
+      "mode": "reject",
+      "pressure_pct": 100,
+      "queued": 64,
+      "capacity": 64,
+      "shed_count": 0,
+      "status_code": 304,
+      "status_text": "admission closed"
+    },
+    "locality": {
+      "mode": "compact",
+      "shard_count": 1,
+      "tasks_per_shard": 64,
+      "hot_shard": 0,
+      "max_shard_tasks": 64
+    },
+    "commit_authority": {
+      "commit_sequence": 0,
+      "total_worker_commits": 0,
+      "max_worker_commit_sequence": 0,
+      "drift_detected": false,
+      "native_live_enabled": false,
+      "native_live_status": "capability not granted"
+    }
+  },
+  "trace": {
+    "schema_version": "asx.trace_event.v1",
+    "event_count": 64,
+    "semantic_digest": "fnv64:0123456789abcdef",
+    "trace_digest": "fnv64:fedcba9876543210"
+  },
+  "parity": {
+    "conformance": "not-run",
+    "profile_parity": "not-run"
+  },
+  "artifacts": {
+    "details_path": "parallel_swarm.details.jsonl",
+    "replay_command": "ASX_E2E_SEED=42 ASX_E2E_PROFILE=PARALLEL ASX_E2E_PARALLEL_SCALE=smoke ASX_E2E_PARALLEL_WORKERS=8 ASX_E2E_SCENARIO_PACK=parallel_swarm.admission_pressure tests/e2e/parallel_swarm.sh"
+  }
+}

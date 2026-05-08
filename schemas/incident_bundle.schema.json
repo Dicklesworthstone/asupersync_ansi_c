@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "asx-incident-bundle",
+  "description": "Versioned operator incident evidence bundle for large-swarm replay and debug artifacts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_name",
+    "schema_version",
+    "run",
+    "status",
+    "telemetry",
+    "trace",
+    "parity",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_name": {
+      "type": "string",
+      "const": "asx.incident_bundle"
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "asx.incident_bundle.v1"
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "scenario_id",
+        "seed",
+        "profile",
+        "compiled_profile",
+        "scale",
+        "codec"
+      ],
+      "properties": {
+        "run_id": {"type": "string", "minLength": 1},
+        "scenario_id": {"type": "string", "minLength": 1},
+        "seed": {"type": "integer", "minimum": 0},
+        "profile": {"type": "string", "minLength": 1},
+        "compiled_profile": {"type": "string", "minLength": 1},
+        "scale": {"type": "string", "minLength": 1},
+        "codec": {"type": "string", "enum": ["json", "bin"]}
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pass",
+        "result",
+        "status_code",
+        "status_text",
+        "failure_class",
+        "failure_message"
+      ],
+      "properties": {
+        "pass": {"type": "boolean"},
+        "result": {"type": "string", "enum": ["pass", "fail"]},
+        "status_code": {"type": "integer", "minimum": 0},
+        "status_text": {"type": "string"},
+        "failure_class": {
+          "type": "string",
+          "enum": ["none", "runtime", "conformance", "resource", "unsupported"]
+        },
+        "failure_message": {"type": "string"}
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "worker_count",
+        "max_workers",
+        "queue_depths",
+        "pressure_pct",
+        "blocking_backlog",
+        "max_lane_depth",
+        "max_worker_queue_depth",
+        "hot_worker",
+        "metrics",
+        "admission",
+        "locality",
+        "commit_authority"
+      ],
+      "properties": {
+        "worker_count": {"type": "integer", "minimum": 1},
+        "max_workers": {"type": "integer", "minimum": 1},
+        "queue_depths": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["total", "ready", "cancel", "timed"],
+          "properties": {
+            "total": {"type": "integer", "minimum": 0},
+            "ready": {"type": "integer", "minimum": 0},
+            "cancel": {"type": "integer", "minimum": 0},
+            "timed": {"type": "integer", "minimum": 0}
+          }
+        },
+        "pressure_pct": {"type": "integer", "minimum": 0, "maximum": 100},
+        "blocking_backlog": {"type": "integer", "minimum": 0},
+        "max_lane_depth": {"type": "integer", "minimum": 0},
+        "max_worker_queue_depth": {"type": "integer", "minimum": 0},
+        "hot_worker": {"type": "integer", "minimum": 0},
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ready_dispatches",
+            "cancel_dispatches",
+            "timed_dispatches",
+            "cancel_streak_max",
+            "fairness_yields",
+            "worker_yields",
+            "commit_sequence",
+            "admission_rejects",
+            "admission_backpressure",
+            "admission_sheds",
+            "pressure_transitions"
+          ],
+          "properties": {
+            "ready_dispatches": {"type": "integer", "minimum": 0},
+            "cancel_dispatches": {"type": "integer", "minimum": 0},
+            "timed_dispatches": {"type": "integer", "minimum": 0},
+            "cancel_streak_max": {"type": "integer", "minimum": 0},
+            "fairness_yields": {"type": "integer", "minimum": 0},
+            "worker_yields": {"type": "integer", "minimum": 0},
+            "commit_sequence": {"type": "integer", "minimum": 0},
+            "admission_rejects": {"type": "integer", "minimum": 0},
+            "admission_backpressure": {"type": "integer", "minimum": 0},
+            "admission_sheds": {"type": "integer", "minimum": 0},
+            "pressure_transitions": {"type": "integer", "minimum": 0}
+          }
+        },
+        "admission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "triggered",
+            "mode",
+            "pressure_pct",
+            "queued",
+            "capacity",
+            "shed_count",
+            "status_code",
+            "status_text"
+          ],
+          "properties": {
+            "triggered": {"type": "boolean"},
+            "mode": {"type": "string", "enum": ["reject", "backpressure", "shed_oldest", "unknown"]},
+            "pressure_pct": {"type": "integer", "minimum": 0, "maximum": 100},
+            "queued": {"type": "integer", "minimum": 0},
+            "capacity": {"type": "integer", "minimum": 0},
+            "shed_count": {"type": "integer", "minimum": 0},
+            "status_code": {"type": "integer", "minimum": 0},
+            "status_text": {"type": "string"}
+          }
+        },
+        "locality": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "shard_count", "tasks_per_shard", "hot_shard", "max_shard_tasks"],
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["compact", "worker_sharded", "numa_domain_sharded", "unknown"]
+            },
+            "shard_count": {"type": "integer", "minimum": 0},
+            "tasks_per_shard": {"type": "integer", "minimum": 0},
+            "hot_shard": {"type": "integer", "minimum": 0},
+            "max_shard_tasks": {"type": "integer", "minimum": 0}
+          }
+        },
+        "commit_authority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "commit_sequence",
+            "total_worker_commits",
+            "max_worker_commit_sequence",
+            "drift_detected",
+            "native_live_enabled",
+            "native_live_status"
+          ],
+          "properties": {
+            "commit_sequence": {"type": "integer", "minimum": 0},
+            "total_worker_commits": {"type": "integer", "minimum": 0},
+            "max_worker_commit_sequence": {"type": "integer", "minimum": 0},
+            "drift_detected": {"type": "boolean"},
+            "native_live_enabled": {"type": "boolean"},
+            "native_live_status": {"type": "string"}
+          }
+        }
+      }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "event_count", "semantic_digest", "trace_digest"],
+      "properties": {
+        "schema_version": {"type": "string", "const": "asx.trace_event.v1"},
+        "event_count": {"type": "integer", "minimum": 0},
+        "semantic_digest": {"type": "string", "pattern": "^fnv64:[0-9a-f]{16}$"},
+        "trace_digest": {"type": "string", "pattern": "^fnv64:[0-9a-f]{16}$"}
+      }
+    },
+    "parity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conformance", "profile_parity"],
+      "properties": {
+        "conformance": {"type": "string", "enum": ["not-run", "pass", "fail", "skip"]},
+        "profile_parity": {"type": "string", "enum": ["not-run", "pass", "fail", "skip"]}
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["details_path", "replay_command"],
+      "properties": {
+        "details_path": {"type": "string", "minLength": 1},
+        "replay_command": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}
