@@ -353,6 +353,88 @@ TEST(worker_get_state_null_out) {
     asx_parallel_reset();
 }
 
+TEST(worker_lifecycle_drains_on_quiescence) {
+    asx_region_id rid;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    asx_worker_state ws;
+
+    cfg.worker_count = 4;
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+
+    ASSERT_EQ(asx_worker_get_state(0, &ws), ASX_OK);
+    ASSERT_TRUE(ws.active);
+    ASSERT_EQ((int)ws.lifecycle, (int)ASX_WORKER_RUNNING);
+
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(asx_worker_get_state(0, &ws), ASX_OK);
+    ASSERT_FALSE(ws.active);
+    ASSERT_EQ((int)ws.lifecycle, (int)ASX_WORKER_DRAINED);
+
+    asx_parallel_reset();
+}
+
+TEST(worker_lifecycle_marks_draining_on_budget_exhaustion) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    asx_worker_state ws;
+
+    cfg.worker_count = 2;
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_forever, NULL, &tid), ASX_OK);
+
+    budget = asx_budget_from_polls(1);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+
+    ASSERT_EQ(asx_worker_get_state(0, &ws), ASX_OK);
+    ASSERT_TRUE(ws.active);
+    ASSERT_EQ((int)ws.lifecycle, (int)ASX_WORKER_DRAINING);
+
+    asx_parallel_reset();
+}
+
+TEST(worker_lane_depths_track_manual_injection) {
+    asx_parallel_config cfg = default_config();
+    asx_region_id rid;
+    asx_task_id ready_task, cancel_task, timed_task;
+    uint32_t lane_totals[ASX_MAX_LANES] = {0u, 0u, 0u};
+    uint32_t i;
+
+    cfg.worker_count = 4;
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &ready_task), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &cancel_task), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &timed_task), ASX_OK);
+
+    ASSERT_EQ(asx_inject_ready(ready_task), ASX_OK);
+    ASSERT_EQ(asx_inject_cancel(cancel_task), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(timed_task), ASX_OK);
+
+    for (i = 0; i < cfg.worker_count; i++) {
+        asx_worker_state ws;
+        ASSERT_EQ(asx_worker_get_state(i, &ws), ASX_OK);
+        lane_totals[ASX_LANE_READY] += ws.lane_depths[ASX_LANE_READY];
+        lane_totals[ASX_LANE_CANCEL] += ws.lane_depths[ASX_LANE_CANCEL];
+        lane_totals[ASX_LANE_TIMED] += ws.lane_depths[ASX_LANE_TIMED];
+    }
+
+    ASSERT_EQ(lane_totals[ASX_LANE_READY], 1u);
+    ASSERT_EQ(lane_totals[ASX_LANE_CANCEL], 1u);
+    ASSERT_EQ(lane_totals[ASX_LANE_TIMED], 1u);
+
+    asx_parallel_reset();
+}
+
 /* ================================================================
  * Parallel run — single task immediate complete
  * ================================================================ */
@@ -726,6 +808,96 @@ TEST(parallel_starvation_limit_in_lane_state) {
 }
 
 /* ================================================================
+ * Multi-worker routing and replay-stable commit accounting
+ * ================================================================ */
+
+TEST(parallel_multi_worker_steals_preserve_completion) {
+    asx_region_id rid;
+    asx_task_id t1, t2;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    asx_scheduling_metrics metrics;
+    asx_worker_state ws;
+    int c1 = 3;
+    int c2 = 3;
+
+    cfg.worker_count = 4;
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c2, &t2), ASX_OK);
+
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(asx_parallel_get_metrics(&metrics), ASX_OK);
+    ASSERT_TRUE(metrics.steal_attempts > 0u);
+    ASSERT_TRUE(metrics.steals_succeeded > 0u);
+    ASSERT_TRUE(metrics.commit_sequence >= metrics.ready_dispatches);
+
+    ASSERT_EQ(asx_worker_get_state(0, &ws), ASX_OK);
+    ASSERT_EQ(ws.lane_depths[ASX_LANE_READY], 0u);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_multi_worker_trace_matches_single_worker) {
+    asx_region_id rid;
+    asx_task_id t1, t2, t3;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    int c1, c2, c3;
+    uint32_t i;
+    uint32_t single_count;
+    asx_trace_event single_events[96];
+
+    reset_all();
+    asx_trace_reset();
+    c1 = 2;
+    c2 = 1;
+    c3 = 0;
+    cfg.worker_count = 1;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c2, &t2), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c3, &t3), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    single_count = asx_trace_event_count();
+    ASSERT_TRUE(single_count > 0u);
+    ASSERT_TRUE(single_count <= 96u);
+    for (i = 0; i < single_count; i++) { ASSERT_TRUE(asx_trace_event_get(i, &single_events[i])); }
+
+    reset_all();
+    asx_trace_reset();
+    c1 = 2;
+    c2 = 1;
+    c3 = 0;
+    cfg.worker_count = 4;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c1, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c2, &t2), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &c3, &t3), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(asx_trace_event_count(), single_count);
+    for (i = 0; i < single_count; i++) {
+        asx_trace_event ev;
+        ASSERT_TRUE(asx_trace_event_get(i, &ev));
+        ASSERT_EQ((int)ev.kind, (int)single_events[i].kind);
+        ASSERT_EQ(ev.entity_id, single_events[i].entity_id);
+        ASSERT_EQ(ev.aux, single_events[i].aux);
+    }
+
+    asx_parallel_reset();
+}
+
+/* ================================================================
  * Replay identity — run twice, verify same completion count
  * ================================================================ */
 
@@ -906,6 +1078,9 @@ int main(void) {
     RUN_TEST(worker_get_state_valid);
     RUN_TEST(worker_get_state_out_of_range);
     RUN_TEST(worker_get_state_null_out);
+    RUN_TEST(worker_lifecycle_drains_on_quiescence);
+    RUN_TEST(worker_lifecycle_marks_draining_on_budget_exhaustion);
+    RUN_TEST(worker_lane_depths_track_manual_injection);
 
     /* Parallel run */
     RUN_TEST(parallel_run_single_task_completes);
@@ -930,6 +1105,10 @@ int main(void) {
     /* Starvation */
     RUN_TEST(parallel_no_starvation_initially);
     RUN_TEST(parallel_starvation_limit_in_lane_state);
+
+    /* Worker routing */
+    RUN_TEST(parallel_multi_worker_steals_preserve_completion);
+    RUN_TEST(parallel_multi_worker_trace_matches_single_worker);
 
     /* Replay identity */
     RUN_TEST(parallel_replay_identity);

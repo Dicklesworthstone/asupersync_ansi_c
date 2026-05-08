@@ -5,10 +5,10 @@
  * profile. Tasks are assigned to lanes by work class (ready, cancel, timed).
  * Each lane has bounded fairness controls to prevent starvation.
  *
- * Currently provides single-threaded lane scheduling simulation.
- * Multi-threaded dispatch requires platform threading hooks. Generic
- * CORE/POSIX/WIN32/PARALLEL builds reserve enough worker metadata for
- * 64-core deployments; constrained profiles keep smaller compile-time caps.
+ * Provides deterministic worker-lane scheduling with replay-stable commit
+ * order. Generic CORE/POSIX/WIN32/PARALLEL builds reserve enough worker
+ * metadata for 64-core deployments; constrained profiles keep smaller
+ * compile-time caps.
  *
  * Feature-gated: compile with -DASX_PROFILE_PARALLEL to enable.
  * When disabled, all APIs compile to zero-overhead stubs.
@@ -94,6 +94,21 @@ typedef struct {
 } asx_lane_state;
 
 /* -------------------------------------------------------------------
+ * Worker lifecycle
+ *
+ * Workers are deterministic scheduler lanes in the ANSI C core. A live
+ * platform adapter may execute these lanes concurrently only when it can
+ * preserve the same externally committed event order.
+ * ------------------------------------------------------------------- */
+
+typedef enum {
+    ASX_WORKER_STOPPED = 0,
+    ASX_WORKER_RUNNING = 1,
+    ASX_WORKER_DRAINING = 2,
+    ASX_WORKER_DRAINED = 3
+} asx_worker_lifecycle;
+
+/* -------------------------------------------------------------------
  * Worker descriptor (per-worker state)
  * ------------------------------------------------------------------- */
 
@@ -103,6 +118,11 @@ typedef struct {
     int active;                 /* 1 if worker is running */
     uint32_t polls_total;       /* lifetime poll count */
     uint32_t tasks_completed;   /* lifetime completions */
+    uint32_t steals_total;      /* lifetime deterministic steals accepted */
+    uint32_t commits_total;     /* externally committed scheduler events */
+    uint32_t last_commit_sequence;
+    asx_worker_lifecycle lifecycle;
+    uint32_t lane_depths[ASX_MAX_LANES];
 } asx_worker_state;
 
 /* -------------------------------------------------------------------
@@ -231,6 +251,10 @@ typedef struct {
     uint32_t cancel_streak;     /* current consecutive cancel polls */
     uint32_t cancel_streak_max; /* peak cancel streak observed */
     uint32_t fairness_yields;   /* times cancel was skipped for fairness */
+    uint32_t steal_attempts;    /* deterministic worker-lane steal probes */
+    uint32_t steals_succeeded;  /* probes that transferred lane ownership */
+    uint32_t worker_yields;     /* idle worker turns while peer lanes had work */
+    uint32_t commit_sequence;   /* replay-stable committed event counter */
 } asx_scheduling_metrics;
 
 /* Read the current scheduling metrics.
