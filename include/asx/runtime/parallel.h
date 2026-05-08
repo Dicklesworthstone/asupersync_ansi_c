@@ -6,7 +6,9 @@
  * Each lane has bounded fairness controls to prevent starvation.
  *
  * Currently provides single-threaded lane scheduling simulation.
- * Multi-threaded dispatch requires platform threading hooks.
+ * Multi-threaded dispatch requires platform threading hooks. Generic
+ * CORE/POSIX/WIN32/PARALLEL builds reserve enough worker metadata for
+ * 64-core deployments; constrained profiles keep smaller compile-time caps.
  *
  * Feature-gated: compile with -DASX_PROFILE_PARALLEL to enable.
  * When disabled, all APIs compile to zero-overhead stubs.
@@ -32,7 +34,23 @@ extern "C" {
  * Lane capacity limits
  * ------------------------------------------------------------------- */
 
+#ifndef ASX_MAX_WORKERS
+#if defined(ASX_PROFILE_FREESTANDING) || defined(ASX_PROFILE_BROWSER)
+#define ASX_MAX_WORKERS 1u
+#elif defined(ASX_PROFILE_EMBEDDED_ROUTER)
 #define ASX_MAX_WORKERS 4u
+#elif defined(ASX_PROFILE_HFT) || defined(ASX_PROFILE_AUTOMOTIVE)
+#define ASX_MAX_WORKERS 16u
+#else
+#define ASX_MAX_WORKERS 64u
+#endif
+#endif
+
+#if ASX_MAX_WORKERS < 1u
+#error "ASX_MAX_WORKERS must be at least 1"
+#endif
+
+#define ASX_PARALLEL_GENERIC_TARGET_WORKERS 64u
 #define ASX_MAX_LANES 3u /* READY, CANCEL, TIMED */
 #define ASX_LANE_TASK_CAPACITY 64u
 
@@ -105,7 +123,8 @@ typedef struct {
 /* Initialize the parallel scheduler with the given configuration.
  * Must be called before asx_parallel_run().
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if cfg is NULL
- * or worker_count is 0 or exceeds ASX_MAX_WORKERS. */
+ * or worker_count is 0, and ASX_E_RESOURCE_EXHAUSTED if worker_count
+ * exceeds the active profile's ASX_MAX_WORKERS cap. */
 ASX_API ASX_MUST_USE asx_status asx_parallel_init(const asx_parallel_config *cfg);
 
 /* Reset all parallel scheduler state (test support). */

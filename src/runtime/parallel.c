@@ -59,9 +59,8 @@ asx_status asx_parallel_init(const asx_parallel_config *cfg) {
     uint32_t i;
 
     if (cfg == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (cfg->worker_count == 0 || cfg->worker_count > ASX_MAX_WORKERS) {
-        return ASX_E_INVALID_ARGUMENT;
-    }
+    if (cfg->worker_count == 0) { return ASX_E_INVALID_ARGUMENT; }
+    if (cfg->worker_count > ASX_MAX_WORKERS) { return ASX_E_RESOURCE_EXHAUSTED; }
 
     g_config = *cfg;
 

@@ -109,7 +109,7 @@ TEST(parallel_init_zero_workers) {
 TEST(parallel_init_too_many_workers) {
     asx_parallel_config cfg = default_config();
     cfg.worker_count = ASX_MAX_WORKERS + 1;
-    ASSERT_EQ(asx_parallel_init(&cfg), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 TEST(parallel_init_valid) {
@@ -118,6 +118,44 @@ TEST(parallel_init_valid) {
     ASSERT_TRUE(asx_parallel_is_initialized());
     ASSERT_EQ(asx_parallel_worker_count(), (uint32_t)1);
     asx_parallel_reset();
+}
+
+TEST(parallel_init_worker_count_boundaries) {
+    asx_parallel_config cfg = default_config();
+
+    cfg.worker_count = 0u;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_E_INVALID_ARGUMENT);
+
+    cfg.worker_count = 1u;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_parallel_worker_count(), (uint32_t)1);
+    asx_parallel_reset();
+
+    cfg.worker_count = 4u;
+#if ASX_MAX_WORKERS >= 4u
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_parallel_worker_count(), (uint32_t)4);
+    asx_parallel_reset();
+#else
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_E_RESOURCE_EXHAUSTED);
+#endif
+
+    cfg.worker_count = ASX_PARALLEL_GENERIC_TARGET_WORKERS;
+#if ASX_MAX_WORKERS >= ASX_PARALLEL_GENERIC_TARGET_WORKERS
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_parallel_worker_count(), (uint32_t)ASX_PARALLEL_GENERIC_TARGET_WORKERS);
+    asx_parallel_reset();
+#else
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_E_RESOURCE_EXHAUSTED);
+#endif
+
+    cfg.worker_count = ASX_MAX_WORKERS;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_parallel_worker_count(), (uint32_t)ASX_MAX_WORKERS);
+    asx_parallel_reset();
+
+    cfg.worker_count = ASX_MAX_WORKERS + 1u;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 TEST(parallel_reset_clears_state) {
@@ -850,6 +888,7 @@ int main(void) {
     RUN_TEST(parallel_init_zero_workers);
     RUN_TEST(parallel_init_too_many_workers);
     RUN_TEST(parallel_init_valid);
+    RUN_TEST(parallel_init_worker_count_boundaries);
     RUN_TEST(parallel_reset_clears_state);
     RUN_TEST(parallel_public_api_requires_init);
 
