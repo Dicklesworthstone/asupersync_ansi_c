@@ -56,6 +56,13 @@ static void pump(asx_region_id region, uint32_t polls) {
     (void)st_sink_;
 }
 
+static void pump_budget(asx_region_id region, uint32_t polls) {
+    asx_budget budget = asx_budget_infinite();
+    budget.poll_quota = polls;
+    st_sink_ = asx_scheduler_run(region, &budget);
+    (void)st_sink_;
+}
+
 /* ------------------------------------------------------------------ */
 /* Test actors                                                         */
 /* ------------------------------------------------------------------ */
@@ -523,6 +530,117 @@ static void test_transient_no_restart_on_normal_exit(void) {
     ASSERT(start_count_saved == 0, "no restarts yet");
 }
 
+static void test_restart_intensity_window_contract(void) {
+    asx_restart_intensity ri;
+
+    asx_restart_intensity_init(&ri, 2u, 10u);
+
+    ASSERT(!asx_restart_intensity_record(&ri, 100u), "first restart stays under threshold");
+    ASSERT(!asx_restart_intensity_record(&ri, 105u), "second restart reaches threshold");
+    ASSERT(asx_restart_intensity_record(&ri, 109u), "third restart exceeds threshold");
+    ASSERT(asx_restart_intensity_is_storm(&ri, 109u), "intensity should report storm");
+    ASSERT(asx_restart_intensity_count(&ri, 125u) == 0u, "window should age out old restarts");
+}
+
+static void test_ext_child_names_are_queryable(void) {
+    asx_supervisor_handle sup;
+    asx_supervisor_config cfg;
+    asx_child_spec_ext specs[2];
+    asx_region_id r;
+
+    asx_runtime_reset();
+    r = make_region();
+
+    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
+    cfg.max_restarts = 3u;
+    cfg.restart_window_ns = 0u;
+    cfg.shutdown_budget_polls = 0u;
+
+    asx_child_spec_ext_init(&specs[0], "alpha", stable_start, NULL);
+    asx_child_spec_ext_init(&specs[1], "beta", stable_start, NULL);
+
+    MUST_OK(asx_supervisor_start_ext(&sup, r, &cfg, specs, 2u));
+
+    ASSERT(strcmp(asx_supervisor_child_name(sup, 0u), "alpha") == 0,
+           "child 0 name should be stored");
+    ASSERT(strcmp(asx_supervisor_child_name(sup, 1u), "beta") == 0,
+           "child 1 name should be stored");
+    ASSERT(strcmp(asx_supervisor_child_name(sup, 2u), "") == 0,
+           "out-of-range child name should be empty");
+}
+
+static void test_escalation_accessors_after_death(void) {
+    asx_supervisor_handle sup;
+    asx_supervisor_config cfg;
+    asx_child_spec spec;
+    asx_region_id r;
+
+    asx_runtime_reset();
+    g_start_count = 0u;
+    g_die_on_poll = 999u;
+    g_poll_counter = 0u;
+    r = make_region();
+
+    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
+    cfg.max_restarts = 2u;
+    cfg.restart_window_ns = 0u;
+    cfg.shutdown_budget_polls = 0u;
+
+    spec.start_fn = dying_start;
+    spec.user_data = NULL;
+    spec.restart = ASX_CHILD_PERMANENT;
+
+    MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1u));
+    pump(r, 1000u);
+
+    ASSERT(!asx_supervisor_is_alive(sup), "supervisor should be dead after escalation");
+    ASSERT(asx_supervisor_restart_count(sup) >= 2u,
+           "restart count should remain queryable after escalation");
+    ASSERT(asx_supervisor_intensity_exceeded(sup), "intensity should remain queryable");
+    ASSERT(asx_supervisor_exit_reason(sup) == ASX_E_RESOURCE_EXHAUSTED,
+           "exit reason should be resource exhausted");
+}
+
+static void test_stop_during_pending_restart_prevents_restart(void) {
+    asx_supervisor_handle sup;
+    asx_supervisor_config cfg;
+    asx_child_spec specs[2];
+    asx_region_id r;
+    uint32_t starts_before_stop;
+
+    asx_runtime_reset();
+    g_start_count = 0u;
+    g_die_on_poll = 999u;
+    g_poll_counter = 0u;
+    r = make_region();
+
+    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
+    cfg.max_restarts = 5u;
+    cfg.restart_window_ns = 0u;
+    cfg.shutdown_budget_polls = 0u;
+
+    specs[0].start_fn = dying_start;
+    specs[0].user_data = NULL;
+    specs[0].restart = ASX_CHILD_PERMANENT;
+
+    specs[1].start_fn = stable_start;
+    specs[1].user_data = NULL;
+    specs[1].restart = ASX_CHILD_PERMANENT;
+
+    MUST_OK(asx_supervisor_start(&sup, r, &cfg, specs, 2u));
+    pump_budget(r, 4u);
+
+    ASSERT(asx_supervisor_restart_count(sup) == 1u, "restart should be pending");
+    starts_before_stop = g_start_count;
+
+    MUST_OK(asx_supervisor_stop(sup));
+    pump(r, 500u);
+
+    ASSERT(!asx_supervisor_is_alive(sup), "supervisor should stop cleanly");
+    ASSERT(g_start_count == starts_before_stop, "pending restart should not start after stop");
+    ASSERT(asx_supervisor_exit_reason(sup) == ASX_OK, "stop should preserve OK exit reason");
+}
+
 /* ------------------------------------------------------------------ */
 /* Tests: Reset                                                        */
 /* ------------------------------------------------------------------ */
@@ -711,6 +829,10 @@ int main(void) {
     /* Restart policies */
     RUN(test_temporary_never_restarts);
     RUN(test_transient_no_restart_on_normal_exit);
+    RUN(test_restart_intensity_window_contract);
+    RUN(test_ext_child_names_are_queryable);
+    RUN(test_escalation_accessors_after_death);
+    RUN(test_stop_during_pending_restart_prevents_restart);
 
     /* Reset */
     RUN(test_reset);

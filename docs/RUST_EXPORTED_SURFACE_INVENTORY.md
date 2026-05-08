@@ -470,7 +470,7 @@ parity-ready" are not the same thing.
 
 | Upstream family | Current ANSI C state | Evidence in this repo | Gap / dependency note |
 |---|---|---|---|
-| `actor` | `partial` | `include/asx/actor/actor.h`, `src/actor/actor.c`, actor task/mailbox/call loop | Real actor API exists, but far smaller than the upstream actor ecosystem |
+| `actor` | `partial` | `include/asx/actor/actor.h`, `src/actor/actor.c`, `tests/unit/actor/test_actor.c`, `tests/e2e/e2e_actor_supervision.c`, actor task/mailbox/call loop | Real actor API exists with deterministic lifecycle/call/cleanup harness evidence, but far smaller than the upstream actor ecosystem |
 | `app` | `partial` | `include/asx/app/app.h`, `include/asx/app/doctor.h`, `include/asx/app/report.h`, `src/app/*.c`, umbrella/header + archive build exposure | Bootstrap/doctor/report surface now ships through the umbrella and archive, but it is still not a full crate-level application stack |
 | `audit` | `partial` | `include/asx/security/audit.h`, `src/security/audit.c`, `tests/vignettes/vignette_security.c` | Audit/evidence helpers now have a logged public usage flow, but the broader upstream audit + operator story is still narrower here |
 | `bytes` | `substantive` | `include/asx/bytes/*.h`, `src/bytes/*.c`, buffer/codec APIs | Strong local byte/buffer surface with tests; still much smaller than full upstream ecosystem |
@@ -489,7 +489,7 @@ parity-ready" are not the same thing.
 | `error` | `partial` | `include/asx/asx_status.h`, runtime error ledger, docs | Status/error taxonomy exists, but not the richer upstream `error` module and re-export set |
 | `evidence` | `partial` | `include/asx/evidence/evidence.h`, `src/evidence/evidence.c`, `include/asx/runtime/diagnostic.h` | Evidence helpers now ship as a dedicated public family, but the broader upstream evidence ecosystem is still richer |
 | `evidence_sink` | `partial` | `include/asx/evidence_sink/evidence_sink.h`, `src/evidence_sink/evidence_sink.c`, `src/app/report.c` | Structured sink helpers now ship publicly with summary and NDJSON rendering, but the sink story is still narrower than upstream scope |
-| `gen_server` | `partial` | `include/asx/actor/gen_server.h`, `src/actor/gen_server.c`, `tests/unit/actor/test_gen_server.c` | A distinct public gen-server family now exists, but it remains much smaller than the broader upstream gen_server contract |
+| `gen_server` | `partial` | `include/asx/actor/gen_server.h`, `src/actor/gen_server.c`, `tests/unit/actor/test_gen_server.c`, `tests/e2e/e2e_actor_supervision.c` | A distinct public gen-server family now exists with request/reply E2E evidence, but it remains much smaller than the broader upstream gen_server contract |
 | `http` | `partial` | `include/asx/net/http.h`, `src/net/http.c`, `tests/unit/net/test_http.c` | A shipped HTTP family exists under the `net/` surface, but it is still a reduced deterministic skeleton rather than the broader upstream HTTP stack |
 | `io` | `partial` | `include/asx/bytes/io_adapter.h`, `include/asx/runtime/io_driver.h`, `src/runtime/io_driver.c` | Some I/O adapters exist, but no broad public async-IO module matching upstream |
 | `lab` | `partial` | `include/asx/runtime/lab.h`, `include/asx/runtime/replay.h`, `include/asx/runtime/snapshot.h`, `src/runtime/replay.c` | Deterministic lab/replay exists, but much narrower than upstream lab/oracle/explorer tooling |
@@ -509,7 +509,7 @@ parity-ready" are not the same thing.
 | `session` | `partial` | `include/asx/session/session.h`, `include/asx/core/session.h`, `src/channel/session.c`, `tests/unit/channel/test_session.c`, `tests/vignettes/vignette_link.c` | Session is now a shipped standalone public family, but it remains a reduced subset of the upstream session/orchestration story |
 | `spork` | `partial` | `include/asx/spork/spork.h`, `src/spork/spork.c`, `tests/unit/spork/test_spork.c` | A public spork/orchestration family now exists, but it remains narrower than the broader upstream operator/orchestration scope |
 | `stream` | `partial` | `include/asx/stream/stream.h`, `src/stream/stream.c` | Stream utilities exist, but not the full upstream streaming ecosystem |
-| `supervision` | `partial` | `include/asx/actor/supervisor.h`, `src/actor/supervisor.c` | Real supervisor logic exists, but still much smaller than upstream supervision families |
+| `supervision` | `partial` | `include/asx/actor/supervisor.h`, `src/actor/supervisor.c`, `tests/unit/actor/test_supervisor.c`, `tests/e2e/e2e_actor_supervision.c` | Real supervisor logic now has deterministic child-spec, restart-policy, escalation, cancellation-during-restart, and replay-artifact evidence, but still much smaller than upstream supervision families |
 | `sync` | `partial` | `include/asx/sync/*.h`, `src/sync/*.c` | Mutex/once/semaphore/barrier/notify exist, but not the full upstream sync surface |
 | `time` | `substantive` | `include/asx/time/*.h`, `src/time/*.c`, timer tests/docs | Timer wheel, deadline, and sleep surfaces are real and verified |
 | `trace` | `substantive` | `include/asx/runtime/trace.h`, event log/telemetry/hindsight/reporting, conformance docs/tests | Trace/replay evidence is a real product surface here |

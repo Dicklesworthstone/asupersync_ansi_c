@@ -38,6 +38,7 @@ typedef struct {
     asx_child_spec specs[ASX_SUPERVISOR_MAX_CHILDREN];
     asx_actor_handle children[ASX_SUPERVISOR_MAX_CHILDREN];
     asx_task_id child_tasks[ASX_SUPERVISOR_MAX_CHILDREN];
+    char child_names[ASX_SUPERVISOR_MAX_CHILDREN][ASX_CHILD_NAME_MAX];
     uint32_t child_count;
 
     /* Restart tracking */
@@ -76,8 +77,18 @@ static uint32_t next_gen(uint32_t g) {
 static asx_supervisor_slot *sup_lookup(asx_supervisor_handle h) {
     asx_supervisor_slot *s;
     if (h.slot >= ASX_MAX_SUPERVISORS) return NULL;
+    if (h.generation == 0u) return NULL;
     s = &g_supervisors[h.slot];
     if (!s->alive) return NULL;
+    if (s->generation != h.generation) return NULL;
+    return s;
+}
+
+static asx_supervisor_slot *sup_lookup_any(asx_supervisor_handle h) {
+    asx_supervisor_slot *s;
+    if (h.slot >= ASX_MAX_SUPERVISORS) return NULL;
+    if (h.generation == 0u) return NULL;
+    s = &g_supervisors[h.slot];
     if (s->generation != h.generation) return NULL;
     return s;
 }
@@ -326,6 +337,7 @@ asx_status asx_supervisor_start(asx_supervisor_handle *out, asx_region_id region
     s->child_count = child_count;
     memset(s->children, 0, sizeof(s->children));
     memset(s->child_tasks, 0, sizeof(s->child_tasks));
+    memset(s->child_names, 0, sizeof(s->child_names));
     s->restart_count = 0;
     s->phase = SUP_PHASE_INIT;
     s->restart_mask = 0;
@@ -370,7 +382,7 @@ int asx_supervisor_child_alive(asx_supervisor_handle sup, uint32_t index) {
 }
 
 uint32_t asx_supervisor_restart_count(asx_supervisor_handle sup) {
-    asx_supervisor_slot *s = sup_lookup(sup);
+    asx_supervisor_slot *s = sup_lookup_any(sup);
     if (s == NULL) return 0;
     return s->restart_count;
 }
@@ -463,7 +475,9 @@ asx_status asx_supervisor_start_ext(asx_supervisor_handle *out, asx_region_id re
                                     const asx_child_spec_ext *children, uint32_t child_count) {
     /* Convert extended specs to basic specs and delegate to start */
     asx_child_spec basic[ASX_SUPERVISOR_MAX_CHILDREN];
+    asx_supervisor_slot *s;
     uint32_t i;
+    asx_status st;
 
     if (children == NULL || child_count == 0u) return ASX_E_INVALID_ARGUMENT;
     if (child_count > ASX_SUPERVISOR_MAX_CHILDREN) return ASX_E_RESOURCE_EXHAUSTED;
@@ -474,23 +488,33 @@ asx_status asx_supervisor_start_ext(asx_supervisor_handle *out, asx_region_id re
         basic[i].restart = children[i].restart;
     }
 
-    return asx_supervisor_start(out, region, config, basic, child_count);
+    st = asx_supervisor_start(out, region, config, basic, child_count);
+    if (st != ASX_OK) return st;
+
+    s = sup_lookup(*out);
+    if (s == NULL) return ASX_E_INVALID_STATE;
+    for (i = 0u; i < child_count; i++) {
+        memcpy(s->child_names[i], children[i].name, ASX_CHILD_NAME_MAX);
+        s->child_names[i][ASX_CHILD_NAME_MAX - 1u] = '\0';
+    }
+    return ASX_OK;
 }
 
 const char *asx_supervisor_child_name(asx_supervisor_handle sup, uint32_t index) {
-    (void)sup;
-    (void)index;
-    return ""; /* Names are stored in ext specs, not in basic supervisor slot */
+    asx_supervisor_slot *s = sup_lookup_any(sup);
+    if (s == NULL) return "";
+    if (index >= s->child_count) return "";
+    return s->child_names[index];
 }
 
 asx_status asx_supervisor_exit_reason(asx_supervisor_handle sup) {
-    asx_supervisor_slot *s = sup_lookup(sup);
+    asx_supervisor_slot *s = sup_lookup_any(sup);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     return s->exit_reason;
 }
 
 int asx_supervisor_intensity_exceeded(asx_supervisor_handle sup) {
-    asx_supervisor_slot *s = sup_lookup(sup);
+    asx_supervisor_slot *s = sup_lookup_any(sup);
     if (s == NULL) return 0;
     return s->restart_count >= s->config.max_restarts;
 }

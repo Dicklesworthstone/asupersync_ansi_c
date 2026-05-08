@@ -455,6 +455,7 @@ E2E_ALL_SCRIPTS := \
 	$(E2E_SCRIPT_DIR)/nested_regions.sh \
 	$(E2E_SCRIPT_DIR)/codec_parity.sh \
 	$(E2E_SCRIPT_DIR)/network_surface.sh \
+	$(E2E_SCRIPT_DIR)/actor_supervision.sh \
 	$(E2E_SCRIPT_DIR)/robustness.sh \
 	$(E2E_SCRIPT_DIR)/robustness_fault.sh \
 	$(E2E_SCRIPT_DIR)/robustness_endian.sh \
@@ -490,7 +491,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: all build clean install uninstall FORCE
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation
 .PHONY: model-check
-.PHONY: test test-unit test-combinator-contract test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-abi-shim abi-check
+.PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
 .PHONY: conformance codec-equivalence profile-parity parallel-parity crate-acceptance-gate
@@ -759,6 +760,27 @@ test-combinator-contract: $(COMBINATOR_CONTRACT_TEST_BIN)
 		fi; \
 	done; \
 	echo "[asx] test-combinator-contract: $$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ] || exit 1
+
+ACTOR_SUPERVISION_HARNESS_TEST_BIN := \
+	$(TEST_DIR)/unit/actor/test_actor \
+	$(TEST_DIR)/unit/actor/test_gen_server \
+	$(TEST_DIR)/unit/actor/test_supervisor
+
+test-actor-supervision-harness: $(ACTOR_SUPERVISION_HARNESS_TEST_BIN)
+	@echo "[asx] test-actor-supervision-harness: running $(words $(ACTOR_SUPERVISION_HARNESS_TEST_BIN)) actor/supervision suite(s)..."
+	@pass=0; fail=0; \
+	for t in $(ACTOR_SUPERVISION_HARNESS_TEST_BIN); do \
+		echo "  RUN  $$(basename $$t)"; \
+		if $$t; then \
+			echo "  PASS $$(basename $$t)"; \
+			pass=$$((pass + 1)); \
+		else \
+			echo "  FAIL $$(basename $$t)"; \
+			fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo "[asx] test-actor-supervision-harness: $$pass passed, $$fail failed"; \
 	[ $$fail -eq 0 ] || exit 1
 
 # ---------------------------------------------------------------------------
@@ -1241,6 +1263,10 @@ test-e2e-posix-adapter:
 test-e2e-network-surface:
 	@chmod +x $(E2E_SCRIPT_DIR)/harness.sh $(E2E_SCRIPT_DIR)/network_surface.sh 2>/dev/null || true
 	@$(E2E_SCRIPT_DIR)/network_surface.sh
+
+test-e2e-actor-supervision:
+	@chmod +x $(E2E_SCRIPT_DIR)/harness.sh $(E2E_SCRIPT_DIR)/actor_supervision.sh 2>/dev/null || true
+	@$(E2E_SCRIPT_DIR)/actor_supervision.sh
 
 $(TEST_DIR)/invariant/%: tests/invariant/%.c $(LIB_A) | test-dirs
 	@mkdir -p $(@D)
@@ -1776,6 +1802,7 @@ help:
 	@echo "  test               Run all tests (unit + invariant + vignettes)"
 	@echo "  test-unit          Unit tests per module"
 	@echo "  test-combinator-contract Run combinator/plan/service contract suites"
+	@echo "  test-actor-supervision-harness Run actor/gen_server/supervision semantic harness suites"
 	@echo "  test-invariants    Lifecycle invariant tests"
 	@echo "  test-vignettes     API ergonomics usage vignettes (public headers)"
 	@echo "  test-e2e           Run all e2e scenario lanes"
@@ -1783,6 +1810,7 @@ help:
 	@echo "  test-e2e-suite     Run ALL e2e families with unified manifest"
 	@echo "  test-e2e-posix-adapter Run POSIX reactor/readiness adapter smoke"
 	@echo "  test-e2e-network-surface Run deterministic network primitive e2e smoke"
+	@echo "  test-e2e-actor-supervision Run deterministic actor/supervision semantic e2e smoke"
 	@echo "  conformance        Rust fixture parity verification"
 	@echo "  codec-equivalence  JSON vs BIN codec equivalence"
 	@echo "  profile-parity     Cross-profile semantic digest parity"

@@ -63,7 +63,7 @@ Current executable coverage is `make test-e2e-network-surface` plus focused `tes
 
 ### DS-C02: Selected Combinators
 
-**Status:** Wave C contract active under `bd-v12u.11`; actor/supervision harness expansion remains `bd-v12u.12`.
+**Status:** Wave C contract active under `bd-v12u.11`; actor/supervision harness evidence lands under `bd-v12u.12`.
 **Rationale:** Combinators (join, race, select, timeout, retry) compose kernel primitives. They require a stable task/region/cancellation substrate before they can be faithfully ported.
 **Rust source:** `src/combinator/` (~17k LOC)
 **Activation beads:** `bd-v12u.11` (combinator parity contracts and conformance fixture expansion)
@@ -77,7 +77,7 @@ Current executable coverage is `make test-e2e-network-surface` plus focused `tes
 
 **Wave C combinator boundary:** Wave C covers fixed-capacity, allocation-free combinator state machines and service-layer wrappers already represented in C: join, race, select, timeout, first-ok, quorum, retry, bracket, pipeline, bulkhead, rate-limit, hedge, map-reduce, JoinSet, plan DAG join/race/timeout rewrites, and service middleware for timeout, retry, rate-limit, buffering, concurrency limit, map, filter, and load-shed. The contract is behavioral parity for these primitives, not broad Rust macro/API parity.
 
-**Wave D / later exclusion boundary:** Full actor supervision policy, restart escalation, distributed actor routing, protocol stack orchestration, and user-facing macro ergonomics are not completed by this bead. `bd-v12u.12` owns actor/supervision fixture expansion after the combinator contract is stable.
+**Wave D / later exclusion boundary:** Full OTP parity, distributed actor routing, protocol stack orchestration, remote node supervision, and user-facing macro ergonomics are not completed by this bead. `bd-v12u.12` owns deterministic actor lifecycle, gen_server request/reply, child-spec metadata, restart-policy, restart-intensity, cancellation-during-restart, and obligation-cleanup evidence after the combinator contract is stable.
 
 **Fixture obligations:** Wave C combinator evidence must cover:
 - cancellation: race, select, quorum, race-timeout, and retry-timeout drain/cancel losers without weakening cancellation severity or leaking unfinished branches;
@@ -87,7 +87,7 @@ Current executable coverage is `make test-e2e-network-surface` plus focused `tes
 - cleanup: bracket release runs after successful acquire even when use fails, while acquire failure does not release an unowned resource;
 - semantic drift: shared fixtures under CORE/PARALLEL and JSON/BIN keep identical semantic digests unless an approved semantic-delta record exists.
 
-Current executable coverage is `make test-combinator-contract` plus the `fixtures/rust_reference/core_combinator/combinator-contract-001.*` conformance family. Unsupported depth remains explicitly outside the contract until a downstream bead maps it to source artifacts and fixtures.
+Current executable coverage is `make test-combinator-contract`, `make test-actor-supervision-harness`, `make test-e2e-actor-supervision`, and the `fixtures/rust_reference/core_combinator/combinator-contract-001.*` conformance family. Unsupported depth remains explicitly outside the contract until a downstream bead maps it to source artifacts and fixtures.
 
 ### DS-C03: Selected Observability Surfaces
 
@@ -129,7 +129,7 @@ surface-specific obligations above. Expensive gates must run through
 
 ### DS-D01: Full HTTP/2 and gRPC Parity
 
-**Status:** Deferred to Wave D
+**Status:** Wave C deterministic harness coverage under `bd-v12u.12`; full OTP parity remains deferred to Wave D.
 **Rationale:** HTTP/2 framing, HPACK, gRPC protobuf handling, and TLS integration represent massive surface area (~23k LOC for HTTP alone). Porting before kernel and networking are stable would create unmaintainable code.
 **Rust source:** `src/http/` (~23k LOC), gRPC layers
 **Unblock criteria:**
@@ -199,7 +199,7 @@ surface-specific obligations above. Expensive gates must run through
 **Status:** Deferred to Wave D
 **Rationale:** The actor/supervision layer (~28k LOC) is a significant subsystem that builds on top of the kernel's region/task/obligation model. It requires stable kernel semantics before faithful porting.
 **Rust source:** `src/actor/`, `src/supervision/` (~28k LOC combined)
-**Activation harness bead:** `bd-v12u.12` covers deterministic actor/supervision semantics without claiming full OTP parity.
+**Activation harness bead:** `bd-v12u.12` covers deterministic actor lifecycle, gen_server request/reply, supervisor child specs, restart policy, restart intensity/escalation, cancellation during restart, obligation cleanup, raw logs, digest, and replay command artifacts without claiming full OTP parity.
 **Unblock criteria:**
 - Wave A kernel lifecycle, cancellation, and obligation semantics stable
 - Actor/supervision semantic spec extracted (gen_server, supervisor strategies, child specs, restart policies)
