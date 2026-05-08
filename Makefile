@@ -490,7 +490,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: all build clean install uninstall FORCE
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation
 .PHONY: model-check
-.PHONY: test test-unit test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-abi-shim abi-check
+.PHONY: test test-unit test-combinator-contract test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
 .PHONY: conformance codec-equivalence profile-parity parallel-parity crate-acceptance-gate
@@ -734,6 +734,32 @@ test-unit: $(UNIT_TEST_BIN)
 		echo "[asx] test-unit: $$pass passed, $$fail failed"; \
 		[ $$fail -eq 0 ] || exit 1; \
 	fi
+
+COMBINATOR_CONTRACT_TEST_BIN := \
+	$(TEST_DIR)/unit/core/test_combinator \
+	$(TEST_DIR)/unit/core/test_combinator2 \
+	$(TEST_DIR)/unit/core/test_combinator_parity \
+	$(TEST_DIR)/unit/core/test_join_set \
+	$(TEST_DIR)/unit/core/test_epoch_combinators \
+	$(TEST_DIR)/unit/plan/test_plan \
+	$(TEST_DIR)/unit/service/test_service \
+	$(TEST_DIR)/unit/service/test_service_stack
+
+test-combinator-contract: $(COMBINATOR_CONTRACT_TEST_BIN)
+	@echo "[asx] test-combinator-contract: running $(words $(COMBINATOR_CONTRACT_TEST_BIN)) combinator/plan/service suite(s)..."
+	@pass=0; fail=0; \
+	for t in $(COMBINATOR_CONTRACT_TEST_BIN); do \
+		echo "  RUN  $$(basename $$t)"; \
+		if $$t; then \
+			echo "  PASS $$(basename $$t)"; \
+			pass=$$((pass + 1)); \
+		else \
+			echo "  FAIL $$(basename $$t)"; \
+			fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo "[asx] test-combinator-contract: $$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ] || exit 1
 
 # ---------------------------------------------------------------------------
 # test-browser-focused — browser-profile focused shipped-surface suites
@@ -1749,6 +1775,7 @@ help:
 	@echo "  lint-semantic-delta  Semantic delta budget gate"
 	@echo "  test               Run all tests (unit + invariant + vignettes)"
 	@echo "  test-unit          Unit tests per module"
+	@echo "  test-combinator-contract Run combinator/plan/service contract suites"
 	@echo "  test-invariants    Lifecycle invariant tests"
 	@echo "  test-vignettes     API ergonomics usage vignettes (public headers)"
 	@echo "  test-e2e           Run all e2e scenario lanes"

@@ -1,0 +1,207 @@
+{
+  "codec": "json",
+  "expected_error_codes": [
+    "forbidden:combinator_cancellation_weakening",
+    "forbidden:combinator_outcome_lattice_drift",
+    "forbidden:combinator_timeout_order_drift",
+    "forbidden:combinator_retry_budget_overrun"
+  ],
+  "expected_events": [
+    {
+      "entity_id": 0,
+      "kind": "CombinatorJoinAll",
+      "seq": 0,
+      "time_ns": 0
+    },
+    {
+      "entity_id": 1,
+      "kind": "CombinatorRaceDrainLosers",
+      "seq": 1,
+      "time_ns": 0
+    },
+    {
+      "entity_id": 2,
+      "kind": "CombinatorTimeoutDeadline",
+      "seq": 2,
+      "time_ns": 0
+    },
+    {
+      "entity_id": 3,
+      "kind": "CombinatorResourceCap",
+      "seq": 3,
+      "time_ns": 0
+    }
+  ],
+  "expected_final_snapshot": {
+    "bracket_release_after_use_failure": true,
+    "bulkhead_over_capacity_status": "ASX_E_WOULD_BLOCK",
+    "first_ok_winner_after_initial_failure": 1,
+    "join_failure_severity": "ASX_OUTCOME_ERR",
+    "pipeline_failure_stops_next_stage": true,
+    "quorum_threshold": "2_of_3",
+    "race_losers_cancelled_after_drain": true,
+    "rate_limit_empty_status": "ASX_E_WOULD_BLOCK",
+    "retry_max_attempts": 3,
+    "select_fairness": "round_robin_offset",
+    "timeout_failure_status": "ASX_E_TIMED_OUT"
+  },
+  "fixture_schema_version": "fixture-v1",
+  "input": {
+    "ops": [
+      {
+        "args": {
+          "branches": [
+            "ASX_OK",
+            "ASX_E_INVALID_STATE"
+          ],
+          "expected_outcome": "ASX_OUTCOME_ERR"
+        },
+        "expect": {
+          "status": "ASX_OK"
+        },
+        "id": 0,
+        "op": "combinator_join_all"
+      },
+      {
+        "args": {
+          "branches": [
+            "pending_then_ok",
+            "ASX_OK"
+          ],
+          "drain_losers": true
+        },
+        "expect": {
+          "loser_result": "ASX_E_CANCELLED",
+          "winner": 1
+        },
+        "id": 1,
+        "op": "combinator_race"
+      },
+      {
+        "args": {
+          "fairness": "round_robin",
+          "starting_offset": 0
+        },
+        "expect": {
+          "winner": 1
+        },
+        "id": 2,
+        "op": "combinator_select"
+      },
+      {
+        "args": {
+          "deadline_ns": 0,
+          "inner": "pending"
+        },
+        "expect": {
+          "status": "ASX_E_TIMED_OUT"
+        },
+        "id": 3,
+        "op": "combinator_timeout"
+      },
+      {
+        "args": {
+          "failures_before_success": 2,
+          "max_retries": 2
+        },
+        "expect": {
+          "attempts": 3,
+          "status": "ASX_OK"
+        },
+        "id": 4,
+        "op": "combinator_retry"
+      },
+      {
+        "args": {
+          "acquire": "ASX_OK",
+          "release": "ASX_OK",
+          "use": "ASX_E_INVALID_STATE"
+        },
+        "expect": {
+          "release_called": true,
+          "status": "ASX_E_INVALID_STATE"
+        },
+        "id": 5,
+        "op": "combinator_bracket"
+      },
+      {
+        "args": {
+          "stages": [
+            "ASX_E_INVALID_STATE",
+            "ASX_OK"
+          ]
+        },
+        "expect": {
+          "completed_stages": 0,
+          "second_stage_ran": false
+        },
+        "id": 6,
+        "op": "combinator_pipeline"
+      },
+      {
+        "args": {
+          "max_concurrent": 1
+        },
+        "expect": {
+          "second_enter_status": "ASX_E_WOULD_BLOCK"
+        },
+        "id": 7,
+        "op": "combinator_bulkhead"
+      },
+      {
+        "args": {
+          "capacity": 2,
+          "refill_amount": 1
+        },
+        "expect": {
+          "third_acquire_status": "ASX_E_WOULD_BLOCK"
+        },
+        "id": 8,
+        "op": "combinator_rate_limit"
+      },
+      {
+        "args": {
+          "branches": [
+            "ASX_OK",
+            "ASX_E_INVALID_STATE",
+            "ASX_OK"
+          ],
+          "threshold": 2
+        },
+        "expect": {
+          "ok_count": 2,
+          "status": "ASX_OK"
+        },
+        "id": 9,
+        "op": "combinator_quorum"
+      },
+      {
+        "args": {
+          "branches": [
+            "ASX_E_INVALID_STATE",
+            "ASX_OK"
+          ]
+        },
+        "expect": {
+          "status": "ASX_OK",
+          "winner": 1
+        },
+        "id": 10,
+        "op": "combinator_first_ok"
+      }
+    ]
+  },
+  "profile": "ASX_PROFILE_PARALLEL",
+  "provenance": {
+    "capture_run_id": "bd-v12u-11-combinator-contract-001",
+    "cargo_lock_sha256": "ddf46a437b62698175bdc96183436813a4a81c220a55ed94c7eb766fe4f20ac9",
+    "rust_baseline_commit": "a9e737d869c04c2f6aa4222fe38be66b28628227",
+    "rust_toolchain_commit_hash": "3b1b0ef4d80d3117924d91352c8b6ca528708b3c",
+    "rust_toolchain_host": "x86_64-unknown-linux-gnu",
+    "rust_toolchain_release": "1.96.0-nightly"
+  },
+  "scenario_dsl_version": "dsl-v1",
+  "scenario_id": "combinator-contract-001",
+  "seed": 112911,
+  "semantic_digest": "sha256:c19751fad1db71f3f6da639114dd18c4e732e78c86b4797d0af9a4550188e678"
+}

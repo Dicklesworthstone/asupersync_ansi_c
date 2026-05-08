@@ -63,17 +63,31 @@ Current executable coverage is `make test-e2e-network-surface` plus focused `tes
 
 ### DS-C02: Selected Combinators
 
-**Status:** Deferred to Wave C
+**Status:** Wave C contract active under `bd-v12u.11`; actor/supervision harness expansion remains `bd-v12u.12`.
 **Rationale:** Combinators (join, race, select, timeout, retry) compose kernel primitives. They require a stable task/region/cancellation substrate before they can be faithfully ported.
 **Rust source:** `src/combinator/` (~17k LOC)
 **Activation beads:** `bd-v12u.11` (combinator parity contracts and conformance fixture expansion)
 **Unblock criteria:**
 - Wave A task lifecycle, cancellation protocol, and obligation resolution stable
-- Combinator semantic spec extracted from Rust behavior
-- Dedicated test suites with deterministic replay verification
+- Combinator semantic spec extracted from Rust behavior and current C surfaces
+- Dedicated test suites with deterministic replay verification (`test-combinator-contract`, `make conformance`)
 **Owner:** TBD
-**Dependency path:** Wave A kernel -> combinator spec extraction -> implementation + parity fixtures
+**Dependency path:** Wave A kernel -> combinator spec extraction -> parity fixtures -> actor/supervision harnesses
 **Semantic risk:** MEDIUM — combinators interact deeply with cancellation propagation and outcome aggregation. Incorrect port could violate outcome lattice join semantics.
+
+**Wave C combinator boundary:** Wave C covers fixed-capacity, allocation-free combinator state machines and service-layer wrappers already represented in C: join, race, select, timeout, first-ok, quorum, retry, bracket, pipeline, bulkhead, rate-limit, hedge, map-reduce, JoinSet, plan DAG join/race/timeout rewrites, and service middleware for timeout, retry, rate-limit, buffering, concurrency limit, map, filter, and load-shed. The contract is behavioral parity for these primitives, not broad Rust macro/API parity.
+
+**Wave D / later exclusion boundary:** Full actor supervision policy, restart escalation, distributed actor routing, protocol stack orchestration, and user-facing macro ergonomics are not completed by this bead. `bd-v12u.12` owns actor/supervision fixture expansion after the combinator contract is stable.
+
+**Fixture obligations:** Wave C combinator evidence must cover:
+- cancellation: race, select, quorum, race-timeout, and retry-timeout drain/cancel losers without weakening cancellation severity or leaking unfinished branches;
+- outcome aggregation: join and JoinSet preserve the outcome lattice and deterministic completion identity;
+- ordering: select fairness rotation, same-input race winners, plan DAG associativity, and timeout-min rewrites are deterministic;
+- resource/budget caps: branch, pipeline-stage, JoinSet, bulkhead, rate-limit, retry-attempt, and service-builder capacities fail closed without partial admission;
+- cleanup: bracket release runs after successful acquire even when use fails, while acquire failure does not release an unowned resource;
+- semantic drift: shared fixtures under CORE/PARALLEL and JSON/BIN keep identical semantic digests unless an approved semantic-delta record exists.
+
+Current executable coverage is `make test-combinator-contract` plus the `fixtures/rust_reference/core_combinator/combinator-contract-001.*` conformance family. Unsupported depth remains explicitly outside the contract until a downstream bead maps it to source artifacts and fixtures.
 
 ### DS-C03: Selected Observability Surfaces
 
@@ -101,7 +115,7 @@ surface, test obligation, and no-drift rule.
 | Static arena backend | `bd-v12u.5`, `bd-v12u.6` | Static and dynamic allocator backends must produce identical semantic digests for shared fixtures; OOM and post-seal failures must be failure-atomic. |
 | Observability and replay evidence | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` | Incident bundles, trace schema changes, and minimized counterexamples must be read-only evidence surfaces and must not alter runtime behavior. |
 | Networking primitives | `bd-v12u.9`, `bd-v12u.10` | `test-e2e-network-surface`, focused net/pipe unit tests, and `profile-parity` must cover lifecycle, cancellation, backpressure, resource caps, and unsupported-profile diagnostics. `bd-v12u.10` owns the first native socket/reactor e2e and must not introduce kernel digest drift. |
-| Combinators and actor/supervision harnesses | `bd-v12u.11`, `bd-v12u.12` | Outcome aggregation, cancellation propagation, restart policy, escalation, and obligation cleanup must be fixture-backed before parity claims expand. |
+| Combinators and actor/supervision harnesses | `bd-v12u.11`, `bd-v12u.12` | `test-combinator-contract`, `make conformance`, `codec-equivalence`, and `profile-parity` must pin outcome aggregation, cancellation propagation, timeout ordering, retry/budget caps, bracket cleanup, and unsupported actor/supervision depth before parity claims expand. |
 | Overload SLOs and user acceptance | `bd-v12u.14`, `bd-v12u.15` | Performance/admission thresholds must be resource-plane only; final demos must include replay, profile compatibility, incident evidence, and fail-closed messaging. |
 
 No Wave C child may close on a proxy signal alone. Passing tests, complete
