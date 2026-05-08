@@ -498,7 +498,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
 .PHONY: conformance codec-equivalence profile-parity parallel-parity crate-acceptance-gate resource-pressure-gate
-.PHONY: fuzz-smoke ci-embedded-matrix
+.PHONY: fuzz-smoke ci-embedded-matrix embedded-portability-proof
 .PHONY: release release-artifacts release-install-smoke bench
 .PHONY: build-gcc build-clang build-msvc build-32 build-64
 .PHONY: build-posix build-win32 build-parallel build-browser test-win32-hooks-build
@@ -1600,6 +1600,10 @@ ci-embedded-matrix: build-embedded-mipsel build-embedded-armv7 build-embedded-aa
 	fi
 	@echo "[asx] ci-embedded-matrix: all embedded targets built"
 
+embedded-portability-proof:
+	@echo "[asx] embedded-portability-proof: constrained profile + portability proof..."
+	@bash tools/ci/run_embedded_portability_proof.sh
+
 # ---------------------------------------------------------------------------
 # release — optimized production build
 # ---------------------------------------------------------------------------
@@ -1877,6 +1881,7 @@ help:
 	@echo "  fuzz-counterexample-replay Replay minimized differential fuzz corpus"
 	@echo "  minimize-selftest  Counterexample minimizer self-test"
 	@echo "  ci-embedded-matrix Cross-target embedded builds (Linux-musl)"
+	@echo "  embedded-portability-proof Compact EMBEDDED_ROUTER/R1 portability proof"
 	@echo "  cross-baremetal-all All 8 bare-metal ARM/RISC-V targets"
 	@echo "  bench              Performance benchmarks (JSON output)"
 	@echo "  bench-json         Benchmarks (JSON-only to stdout)"

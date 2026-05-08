@@ -100,13 +100,13 @@ Counterexample corpus fixture shape:
 |-------|-------|
 | **Gate ID** | `GATE-EMBED` |
 | **Plan ref** | Section 10.6 item 4 |
-| **Makefile targets** | `ci-embedded-matrix`, `build-embedded-mipsel`, `build-embedded-armv7`, `build-embedded-aarch64`, `qemu-smoke` |
+| **Makefile targets** | `embedded-portability-proof`, `ci-embedded-matrix`, `build-embedded-mipsel`, `build-embedded-armv7`, `build-embedded-aarch64`, `qemu-smoke` |
 | **CI job** | `embedded-matrix` |
-| **Scripts** | `tools/ci/run_embedded_matrix.sh`, `tools/ci/run_qemu_smoke.sh`, `tools/ci/check_endian_assumptions.sh`, `tools/ci/portability_check.c` |
-| **Artifacts** | `tools/ci/artifacts/embedded/*.jsonl`, `tools/ci/artifacts/qemu/*.jsonl` |
-| **Pass criteria** | All three router-class triplets (mipsel/armv7/aarch64 + musl) build cleanly. QEMU scenario replay passes. Layout budget invariants match host. |
-| **Rerun** | `make build-embedded-mipsel PROFILE=EMBEDDED_ROUTER` (single target), `make ci-embedded-matrix` (full) |
-| **Failure action** | Fix cross-compilation errors. Endian/alignment issues must update `include/asx/portable.h`. |
+| **Scripts** | `tools/ci/run_embedded_portability_proof.sh`, `tools/ci/run_embedded_matrix.sh`, `tools/ci/run_qemu_smoke.sh`, `tools/ci/check_endian_assumptions.sh`, `tools/ci/portability_check.c` |
+| **Artifacts** | `build/embedded-portability/*/embedded_portability_proof.json`, `tools/ci/artifacts/embedded/*.jsonl`, `tools/ci/artifacts/qemu/*.jsonl` |
+| **Pass criteria** | Compact proof emits `asx.embedded_portability_proof.v1` with an EMBEDDED_ROUTER/R1 deterministic digest, resource caps, compiler/target/macro metadata, host alignment portability canary, optional 32-bit canary or explicit unsupported-platform record, and fresh profile-parity linkage. Full matrix still requires all three router-class triplets (mipsel/armv7/aarch64 + musl) to build cleanly when toolchains exist. QEMU scenario replay passes. Layout budget invariants match host. |
+| **Rerun** | `make embedded-portability-proof` (compact proof), `ASX_PORTABILITY_STRICT=1 make embedded-portability-proof` (treat unsupported optional lanes as failures), `make build-embedded-mipsel PROFILE=EMBEDDED_ROUTER` (single target), `make ci-embedded-matrix` (full) |
+| **Failure action** | Fix failed constrained-profile builds or portability canaries. Unsupported optional 32-bit/cross lanes must emit an unsupported-platform record naming the missing toolchain or multilib dependency. Endian/alignment issues must update `include/asx/portable.h`. |
 
 ### 1.5 Profile Semantic Parity Gate
 
@@ -320,6 +320,7 @@ and documentation enforcement.
 | `GATE-CONFORMANCE` | `conformance` | `conformance` | `tools/ci/run_conformance.sh` | Rust fixture parity |
 | `GATE-CODEC` | `codec-equivalence` | `conformance` | `tools/ci/run_codec_equivalence.sh` | JSON/BIN codec equivalence |
 | `GATE-RELEASE-EVIDENCE-MANIFEST` | `release-evidence-manifest` | `release-readiness` | `tools/ci/generate_release_evidence_manifest.sh` | Unified release evidence index with digest and stale-commit validation |
+| `GATE-EMBEDDED-PORTABILITY` | `embedded-portability-proof` | `profile-parity`, `embedded-matrix` | `tools/ci/run_embedded_portability_proof.sh`, `tests/embedded/embedded_portability_probe.c`, `tools/ci/portability_check.c` | Compact EMBEDDED_ROUTER/R1 proof with deterministic digest, resource caps, compiler/target/macro metadata, host alignment canary, optional 32-bit canary, unsupported-platform evidence, and profile-parity linkage |
 | `GATE-RESOURCE-PRESSURE` | `resource-pressure-gate` | `unit-invariant`, `profile-parity` | `tools/ci/run_resource_pressure_gate.sh` | Deterministic region/task/obligation/channel/timer/scheduler/cancel cleanup pressure scenarios with failure-atomic snapshots and CORE vs constrained-lane digest parity |
 | `GATE-FUZZ-COUNTEREXAMPLE-REPLAY` | `fuzz-counterexample-replay` | `fuzz-parity` | `tools/ci/replay_fuzz_counterexamples.sh` | Durable minimized fuzz corpus replay with C counters and optional Rust oracle |
 | `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `check` | `tests/formal/litmus/test_memory_model_litmus.c`, `tools/ci/check_codegen_stability.sh` | Parallel-runtime atomic publication, queue ownership, seqlock/EBR, trace-ordering, and bounded scheduler proofs |
@@ -450,6 +451,7 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | `make test-e2e-parallel` | Parallel swarm e2e pack | GATE-E2E-PARALLEL-SWARM |
 | `make parallel-bench-json` | PARALLEL benchmark JSON artifact | GATE-PARALLEL-BENCHMARK |
 | `make parallel-bench-gate` | Capture PARALLEL benchmark artifact plus `parallel-bench-gate-summary.json`; warnings are observe-only, blocks fail | GATE-PARALLEL-BENCHMARK, GATE-OVERLOAD-SLO-DEMO |
+| `make embedded-portability-proof` | Capture compact EMBEDDED_ROUTER/R1 portability proof with deterministic digest, resource caps, optional 32-bit evidence, and profile-parity linkage | GATE-EMBEDDED-PORTABILITY |
 | `make wave-c-acceptance-demo` | Capture the user-facing Wave C acceptance bundle with replay, profile, benchmark, incident, and fail-closed evidence | GATE-E2E-WAVE-C-ACCEPTANCE, GATE-OVERLOAD-SLO-DEMO |
 
 ## 5. CI Workflow Jobs
