@@ -324,9 +324,11 @@ Parallel operator knobs:
 - Admission telemetry is observe-only by default. Enforced reject/backpressure
   behavior must be selected explicitly and remains failure-atomic.
 - For large-swarm evidence, run `make test-e2e-parallel` for structured JSONL
-  scenario logs and `make bench-json` for the current `parallel_report`
-  telemetry. RCH-backed profile/worker-count baselines remain tracked by
-  `bd-pweu.14`.
+  scenario logs and `rch exec -- make parallel-bench-json` for the
+  PARALLEL-profile 1/2/8/32/64 worker-count baseline artifact. Use
+  `rch exec -- make parallel-bench-gate` when you want the artifact captured
+  under `build/perf/parallel-bench-results.json` plus observe-only
+  gross-regression warnings.
 
 ### `make build`
 
@@ -570,6 +572,7 @@ make bench
 make bench-json
 make parallel-parity
 make test-e2e-parallel
+rch exec -- make parallel-bench-json
 make bench PROFILE=EMBEDDED_ROUTER
 make profile-parity
 ```
@@ -1551,8 +1554,12 @@ The injector API (`asx_inject_ready`, `asx_inject_cancel`, `asx_inject_timed`) a
 
 Operator rule: treat `worker_count` as a capacity knob, not a semantic knob.
 After changing worker count, admission mode, queue backend, or platform hooks,
-rerun `make parallel-parity` and preserve the emitted report if the change is
-used to justify a production-scale claim.
+rerun `make parallel-parity` and `rch exec -- make parallel-bench-json`;
+preserve the emitted reports if the change is used to justify a
+production-scale claim. The benchmark artifact includes scheduler throughput,
+cancel latency, MPSC roundtrip throughput, steal/commit/timed-wake telemetry,
+and observe-only threshold status for worker counts 1, 2, 8, 32, and 64 where
+the active profile supports them.
 
 ## Browser Developer Experience Diagnostics
 

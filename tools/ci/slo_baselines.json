@@ -2,7 +2,7 @@
   "schema": "asx.slo_baselines.v1",
   "description": "Golden performance SLO baselines per profile. Gate fails when any metric exceeds its budget. Baselines captured from deterministic bench runs on reference hardware.",
   "governance": {
-    "update_policy": "Baseline changes require explicit rationale in commit message and must reference the benchmark run that justifies the new values. Use 'make bench-json > bench-results.json' to capture a new baseline run.",
+    "update_policy": "Baseline changes require explicit rationale in commit message and must reference the benchmark run that justifies the new values. Use 'make bench-json > bench-results.json' for normal profiles and 'rch exec -- make parallel-bench-json > parallel-bench-results.json' for PARALLEL worker-count baselines.",
     "tolerance_policy": "Each metric budget is set to baseline_value * headroom_multiplier. The multiplier accounts for CI runner variance, OS scheduling jitter, and measurement noise. Tighter multipliers are used for low-variance operations (e.g., timer_cancel) and looser for high-variance ones (e.g., timer_register).",
     "approval_required": true,
     "audit_trail": [
@@ -18,6 +18,13 @@
         "author": "SandyAnchor",
         "action": "add_hft_profile",
         "rationale": "HFT profile baselines from development host. Captures HFT-specific instrumentation overhead. Same headroom strategy as CORE. Closes quality gate gap bd-39o.",
+        "commit": "pending"
+      },
+      {
+        "date": "2026-05-08",
+        "author": "SilverFrog",
+        "action": "add_parallel_observe_only_profile",
+        "rationale": "PARALLEL profile gross-regression baseline from rch exec -- make parallel-bench-json on worker vmi1149989. Worker-count baselines stay in the benchmark artifact; SLO profile keeps loose thresholds for the aggregate large-swarm lane.",
         "commit": "pending"
       }
     ]
@@ -147,6 +154,21 @@
       "adaptive_report": {
         "fallback_rate":              {"budget": 0.80,  "headroom": 1.6,  "baseline": 0.50,  "direction": "upper"},
         "mean_confidence_fp32_floor": {"budget": 1000000000, "headroom": 2.6, "baseline": 2641404886, "direction": "lower"}
+      }
+    },
+    "PARALLEL": {
+      "captured_at": "2026-05-08T08:58:50Z",
+      "captured_on": "rch-vmi1149989",
+      "deterministic": true,
+      "governance_mode": "observe_only_gross_regression",
+      "baseline_command": "rch exec -- make parallel-bench-json",
+      "benchmarks": {
+        "parallel_large_swarm": {
+          "p99_ns":    {"budget": 1000000, "headroom": 40.7, "baseline": 24587},
+          "p99_9_ns":  {"budget": 2000000, "headroom": 60.8, "baseline": 32869},
+          "p99_99_ns": {"budget": 2000000, "headroom": 60.8, "baseline": 32869},
+          "jitter_ns": {"budget": 250000,  "headroom": 95.5, "baseline": 2618}
+        }
       }
     }
   }

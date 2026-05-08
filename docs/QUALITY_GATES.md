@@ -173,7 +173,7 @@ and documentation enforcement.
 | `GATE-CODEC` | `codec-equivalence` | `conformance` | `tools/ci/run_codec_equivalence.sh` | JSON/BIN codec equivalence |
 | `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `check` | `tests/formal/litmus/test_memory_model_litmus.c`, `tools/ci/check_codegen_stability.sh` | Parallel-runtime atomic publication, queue ownership, seqlock/EBR, trace-ordering, and bounded scheduler proofs |
 | `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `tools/ci/run_parallel_parity.sh` | Single-vs-multi-worker semantic digest and event-summary parity |
-| `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `tests/unit/runtime/test_parallel.c`, `tools/ci/run_parallel_parity.sh`, `tests/bench/bench_runtime.c` | Large-swarm pressure telemetry, admission evidence, and benchmark JSON artifacts |
+| `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json`, `parallel-bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `tests/unit/runtime/test_parallel.c`, `tools/ci/run_parallel_parity.sh`, `tests/bench/bench_runtime.c` | Large-swarm pressure telemetry, admission evidence, worker-count baselines, and benchmark JSON artifacts |
 
 ### 2.1 Parallel Graduation Gate
 
@@ -185,14 +185,16 @@ telemetry and deterministic admission evidence surface for diagnosing pressure
 without hidden semantic drift. `bd-pweu.13` pins the parallel memory-model proof
 surface: atomics, metadata publication/reclamation, trace commit ordering, and
 bounded scheduler state are covered by formal litmus and codegen gates.
-Remaining production-scale operator claims are gated by `bd-pweu.9` locality
-evidence and `bd-pweu.14` RCH-backed benchmark baselines.
+`bd-pweu.14` adds RCH-backed worker-count benchmark baselines with
+observe-only gross-regression threshold status. Remaining production-scale
+operator claims are gated by `bd-pweu.9` locality evidence.
 
 | Gate ID | Makefile Target | CI Job | Tracking Bead | Purpose |
 |---------|-----------------|--------|---------------|---------|
 | `GATE-PARALLEL-MEMORY-MODEL` | `formal-litmus`, `formal-codegen`, `formal-check` | `check` | `bd-pweu.13` | Prove portable atomic publication, two-phase queue slot ownership, seqlock/EBR metadata safety, gap-free trace commit tickets, bounded work stealing, cancel fairness, and shutdown/drain state reporting. |
 | `GATE-PARALLEL-PARITY` | `parallel-parity` | `profile-parity` | `bd-pweu.11` | Compare canonical semantic digests and structured event summaries for the same scenarios under worker_count=1, 2, 8, and 64. |
 | `GATE-PARALLEL-TELEMETRY` | `test-unit`, `parallel-parity`, `bench-json` | `unit-invariant`, `profile-parity`, `perf-tail-deadline` | `bd-pweu.10` | Validate pressure snapshots, deterministic admission decisions, JSONL rendering, and benchmark JSON telemetry for large-swarm runs. |
+| `GATE-PARALLEL-BENCHMARK` | `parallel-bench-json`, `parallel-bench-gate` | `perf-tail-deadline` | `bd-pweu.14` | Capture RCH-backed worker_count=1/2/8/32/64 baselines with scheduler throughput, cancel latency, MPSC throughput, steal/commit/timed-wake telemetry, and observe-only threshold status. |
 
 Coverage requirements:
 
@@ -250,6 +252,8 @@ scenario packs (see `docs/DEPLOYMENT_HARDENING.md`).
 | `make check-ci` | Full CI gate (`CI=1`) | FORMAT, LINT, LINT-CHECKPOINT, GATE-SEM-DELTA (anti-butchering), LINT-EVIDENCE, STATIC-ANALYSIS, PORT (build), UNIT, INVARIANT, MODEL-CHECK, E2E-VERTICAL, CONFORMANCE, CODEC, PROFILE, PARALLEL-PARITY, PARALLEL-TELEMETRY, FUZZ, EMBED |
 | `make test-e2e-suite` | Unified E2E manifest | All GATE-E2E-* gates |
 | `make test-e2e-parallel` | Parallel swarm e2e pack | GATE-E2E-PARALLEL-SWARM |
+| `make parallel-bench-json` | PARALLEL benchmark JSON artifact | GATE-PARALLEL-BENCHMARK |
+| `make parallel-bench-gate` | Capture PARALLEL benchmark artifact and observe-only warnings | GATE-PARALLEL-BENCHMARK |
 
 ## 5. CI Workflow Jobs
 

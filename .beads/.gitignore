@@ -2,6 +2,7 @@
 *.db
 *.db-shm
 *.db-wal
+*.truncated-wal
 
 # Lock files
 *.lock

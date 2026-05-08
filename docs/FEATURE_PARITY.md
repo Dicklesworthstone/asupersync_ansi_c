@@ -79,7 +79,7 @@ All kernel-scope semantic units (U-REG-TRANSITIONS through U-GUARANTEE-SUBSTITUT
 | Unit Status | Count |
 |-------------|-------|
 | `impl-complete` | 21 (all kernel units + codec equivalence + profile parity + replay continuity — all beads closed, CI gates pass) |
-| `conformance-passed` | 1 (`U-PARALLEL-PROFILE` — logical-worker scheduler, parity/e2e/proof gates pass; locality and benchmark baselines remain tracked by `bd-pweu.9` and `bd-pweu.14`) |
+| `conformance-passed` | 1 (`U-PARALLEL-PROFILE` — logical-worker scheduler, parity/e2e/proof/benchmark gates pass; locality remains tracked by `bd-pweu.9`) |
 | `spec-reviewed` | 1 (`U-PROVENANCE-MAP` — static documentation artifact, no runtime test needed) |
 | **Total** | 23 |
 

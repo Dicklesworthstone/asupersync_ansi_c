@@ -1254,6 +1254,8 @@ test-dirs:
 # Usage:
 #   make bench                    # Build and run (human-friendly)
 #   make bench-json               # Build and run (JSON-only to stdout)
+#   make parallel-bench-json      # PARALLEL profile worker-count baseline JSON
+#   make parallel-bench-gate      # Capture PARALLEL baselines and report warnings
 #   make bench-build              # Build only
 # ---------------------------------------------------------------------------
 BENCH_DIR  := $(BUILD_DIR)/bench
@@ -1267,7 +1269,7 @@ BENCH_CFLAGS := -std=c99 -Wall -Wextra -Wpedantic -Werror \
                 $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) \
                 -I$(CURDIR)/tests -I$(CURDIR)/src
 
-.PHONY: bench bench-json bench-build
+.PHONY: bench bench-json bench-build parallel-bench-json parallel-bench-gate
 
 bench-build: $(BENCH_BIN)
 
@@ -1284,6 +1286,21 @@ bench: bench-build
 
 bench-json: bench-build
 	@$(BENCH_BIN) --json
+
+parallel-bench-json:
+	@$(MAKE) --no-print-directory bench-build PROFILE=PARALLEL CFLAGS="$(CFLAGS) -DASX_LOCKFREE_SINGLE_THREAD=0" >/dev/null
+	@$(BENCH_BIN) --json
+
+parallel-bench-gate:
+	@echo "[asx] parallel-bench-gate: capturing PARALLEL worker-count baselines..."
+	@mkdir -p build/perf
+	@$(MAKE) --no-print-directory parallel-bench-json > build/perf/parallel-bench-results.json
+	@jq -e '.profile == "PARALLEL" and (.parallel_worker_baselines | length > 0)' build/perf/parallel-bench-results.json >/dev/null
+	@warns=$$(jq '[.parallel_worker_baselines[] | select(.threshold_status == "warn")] | length' build/perf/parallel-bench-results.json); \
+	echo "[asx] parallel-bench-gate: observe-only warnings=$$warns report=build/perf/parallel-bench-results.json"; \
+	if [ "$$warns" -gt 0 ]; then \
+		jq -r '.parallel_worker_baselines[] | select(.threshold_status == "warn") | "  - worker_count=\(.worker_count) scheduler_ops_per_sec=\(.scheduler_throughput_ops_per_sec) cancel_mean_ns=\(.cancel_latency.mean_per_task_ns) mpsc_ops_per_sec=\(.mpsc_contention.ops_per_sec) trace_commit_mean_ns=\(.trace_commit_mean_ns)"' build/perf/parallel-bench-results.json; \
+	fi
 
 .PHONY: slo-gate size-gate evidence-dashboard traceability-export
 slo-gate: bench-build
@@ -1729,6 +1746,8 @@ help:
 	@echo "  cross-baremetal-all All 8 bare-metal ARM/RISC-V targets"
 	@echo "  bench              Performance benchmarks (JSON output)"
 	@echo "  bench-json         Benchmarks (JSON-only to stdout)"
+	@echo "  parallel-bench-json PARALLEL worker-count baseline JSON"
+	@echo "  parallel-bench-gate Capture PARALLEL baseline JSON and observe-only warnings"
 	@echo "  release            Optimized production build"
 	@echo "  release-artifacts  Build release tar.xz + checksum/signature/provenance bundles"
 	@echo "  install            Install to PREFIX (default /usr/local)"
