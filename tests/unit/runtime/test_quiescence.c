@@ -453,7 +453,7 @@ TEST(region_drain_closed_child_tolerates_missing_parent_slot) {
     ASSERT_EQ(parent_slot->children[0], child);
 }
 
-TEST(region_drain_parent_waits_for_open_child_to_close) {
+TEST(region_drain_parent_closes_open_child_first) {
     asx_region_id parent;
     asx_region_id child;
     asx_region_slot *parent_slot = NULL;
@@ -467,21 +467,48 @@ TEST(region_drain_parent_waits_for_open_child_to_close) {
     ASSERT_EQ(asx_region_slot_lookup(parent, &parent_slot), ASX_OK);
     ASSERT_EQ(asx_region_slot_lookup(child, &child_slot), ASX_OK);
 
-    budget = asx_budget_from_polls(1);
-    ASSERT_EQ(asx_region_drain(parent, &budget), ASX_E_PENDING);
-    ASSERT_EQ(parent_slot->state, ASX_REGION_CLOSING);
-    ASSERT_EQ(parent_slot->child_count, 1u);
-    ASSERT_EQ(parent_slot->children[0], child);
-    ASSERT_EQ(child_slot->state, ASX_REGION_OPEN);
-
-    budget = asx_budget_from_polls(1);
-    ASSERT_EQ(asx_region_drain(child, &budget), ASX_OK);
-    ASSERT_EQ(child_slot->state, ASX_REGION_CLOSED);
-    ASSERT_EQ(parent_slot->child_count, 0u);
-
+    /* Draining the parent is a structured shutdown of its subtree: the
+     * open child is closed and finalized first, then the parent. */
     budget = asx_budget_from_polls(1);
     ASSERT_EQ(asx_region_drain(parent, &budget), ASX_OK);
+    ASSERT_EQ(child_slot->state, ASX_REGION_CLOSED);
+    ASSERT_EQ(child_slot->parent_id, ASX_INVALID_ID);
+    ASSERT_EQ(parent_slot->child_count, 0u);
     ASSERT_EQ(parent_slot->state, ASX_REGION_CLOSED);
+}
+
+static asx_status q_poll_pending(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    return ASX_E_PENDING;
+}
+
+TEST(region_drain_cancels_descendant_tasks_with_parent_attribution) {
+    asx_region_id parent;
+    asx_region_id child;
+    asx_region_id grandchild;
+    asx_task_id t_child;
+    asx_task_id t_grand;
+    asx_outcome out;
+    asx_budget budget;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&parent), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(parent, &child), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(child, &grandchild), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(child, q_poll_pending, NULL, &t_child), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(grandchild, q_poll_pending, NULL, &t_grand), ASX_OK);
+
+    /* Never-finishing tasks deep in the tree are cancelled and force-
+     * completed within their cleanup budget; every region closes. */
+    budget = asx_budget_from_polls(10000);
+    ASSERT_EQ(asx_region_drain(parent, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_get_outcome(t_child, &out), ASX_OK);
+    ASSERT_EQ(asx_outcome_severity_of(&out), ASX_OUTCOME_CANCELLED);
+    ASSERT_EQ(asx_task_get_outcome(t_grand, &out), ASX_OK);
+    ASSERT_EQ(asx_outcome_severity_of(&out), ASX_OUTCOME_CANCELLED);
+    ASSERT_EQ(asx_region_is_quiescent(parent), 1);
 }
 
 TEST(region_drain_nested_grandchild_closes_inside_out) {
@@ -1122,7 +1149,8 @@ int main(void) {
     asx_runtime_reset();
     RUN_TEST(region_drain_closed_child_tolerates_missing_parent_slot);
     asx_runtime_reset();
-    RUN_TEST(region_drain_parent_waits_for_open_child_to_close);
+    RUN_TEST(region_drain_parent_closes_open_child_first);
+    RUN_TEST(region_drain_cancels_descendant_tasks_with_parent_attribution);
     asx_runtime_reset();
     RUN_TEST(region_drain_nested_grandchild_closes_inside_out);
     asx_runtime_reset();

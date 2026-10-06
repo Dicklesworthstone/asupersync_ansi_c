@@ -73,6 +73,18 @@ static void log_region_state(const char *label, asx_region_id id) {
             slot->child_count, slot->task_count, slot->task_total);
 }
 
+/* Trace index of a region's REGION_CLOSED event (UINT32_MAX if absent). */
+static uint32_t region_closed_trace_index(asx_region_id id) {
+    uint32_t i;
+    uint32_t n = asx_trace_event_count();
+    for (i = 0; i < n; i++) {
+        asx_trace_event ev;
+        if (!asx_trace_event_get(i, &ev)) continue;
+        if (ev.kind == ASX_TRACE_REGION_CLOSED && ev.entity_id == id) return i;
+    }
+    return UINT32_MAX;
+}
+
 static void log_quiescence_state(const char *label, asx_region_id id) {
     asx_quiescence_report report;
 
@@ -143,37 +155,26 @@ static void scenario_nested_lifecycle_full(void) {
     budget = asx_budget_infinite();
     SCENARIO_CHECK(asx_scheduler_run(grandchild, &budget) == ASX_OK, "run_grandchild_scheduler");
 
+    /* Draining a child shuts down exactly its own subtree. */
     budget = asx_budget_from_polls(8);
-    SCENARIO_CHECK(asx_region_drain(root, &budget) == ASX_E_PENDING, "root_pending_with_children");
-    SCENARIO_CHECK(root_slot->state == ASX_REGION_CLOSING, "root_stays_closing");
-    log_region_state("root-pending", root);
-
-    budget = asx_budget_from_polls(8);
-    SCENARIO_CHECK(asx_region_drain(grandchild, &budget) == ASX_OK, "drain_grandchild");
+    SCENARIO_CHECK(asx_region_drain(child1, &budget) == ASX_OK, "drain_child1_subtree");
     SCENARIO_CHECK(grandchild_slot->state == ASX_REGION_CLOSED, "grandchild_closed");
     SCENARIO_CHECK(grandchild_slot->parent_id == ASX_INVALID_ID, "grandchild_unlinked");
-    SCENARIO_CHECK(child1_slot->child_count == 0u, "child1_count_after_grandchild");
-    log_region_state("after-grandchild-close", child1);
-
-    budget = asx_budget_from_polls(8);
-    SCENARIO_CHECK(asx_region_drain(child1, &budget) == ASX_OK, "drain_child1");
     SCENARIO_CHECK(child1_slot->state == ASX_REGION_CLOSED, "child1_closed");
     SCENARIO_CHECK(root_slot->child_count == 1u, "root_count_after_child1");
-    log_region_state("after-child1-close", root);
+    SCENARIO_CHECK(child2_slot->state == ASX_REGION_OPEN, "child2_untouched");
+    SCENARIO_CHECK(region_closed_trace_index(grandchild) < region_closed_trace_index(child1),
+                   "grandchild_closed_before_child1");
+    log_region_state("after-child1-subtree-close", root);
 
-    budget = asx_budget_from_polls(8);
-    SCENARIO_CHECK(asx_region_drain(root, &budget) == ASX_E_PENDING,
-                   "root_pending_with_child2_open");
-    SCENARIO_CHECK(root_slot->child_count == 1u, "root_still_has_child2");
-
-    budget = asx_budget_from_polls(8);
-    SCENARIO_CHECK(asx_region_drain(child2, &budget) == ASX_OK, "drain_child2");
-    SCENARIO_CHECK(child2_slot->state == ASX_REGION_CLOSED, "child2_closed");
-    SCENARIO_CHECK(root_slot->child_count == 0u, "root_no_children_remaining");
-    log_region_state("after-child2-close", root);
-
+    /* Draining the root is a structured shutdown of everything left: the
+     * open child2 closes before the root does. */
     budget = asx_budget_from_polls(8);
     SCENARIO_CHECK(asx_region_drain(root, &budget) == ASX_OK, "drain_root");
+    SCENARIO_CHECK(child2_slot->state == ASX_REGION_CLOSED, "child2_closed");
+    SCENARIO_CHECK(root_slot->child_count == 0u, "root_no_children_remaining");
+    SCENARIO_CHECK(region_closed_trace_index(child2) < region_closed_trace_index(root),
+                   "child2_closed_before_root");
     SCENARIO_CHECK(root_slot->state == ASX_REGION_CLOSED, "root_closed");
     SCENARIO_CHECK(asx_quiescence_check_detailed(root, &report) == ASX_OK, "root_quiescence");
     log_quiescence_state("root-final", root);
@@ -203,16 +204,17 @@ static void scenario_nested_inside_out_pending(void) {
     SCENARIO_CHECK(asx_region_slot_lookup(root, &root_slot) == ASX_OK, "lookup_root");
     SCENARIO_CHECK(asx_region_slot_lookup(child, &child_slot) == ASX_OK, "lookup_child");
 
+    /* Draining the middle region closes its grandchild first (inside-out)
+     * and leaves the root open. */
     budget = asx_budget_from_polls(4);
-    SCENARIO_CHECK(asx_region_drain(child, &budget) == ASX_E_PENDING, "child_pending");
-    SCENARIO_CHECK(child_slot->state == ASX_REGION_CLOSING, "child_closing");
-    SCENARIO_CHECK(child_slot->child_count == 1u, "child_still_has_grandchild");
-    log_region_state("child-pending", child);
+    SCENARIO_CHECK(asx_region_drain(child, &budget) == ASX_OK, "drain_child_subtree");
+    SCENARIO_CHECK(child_slot->state == ASX_REGION_CLOSED, "child_closed");
+    SCENARIO_CHECK(child_slot->child_count == 0u, "child_has_no_children");
+    SCENARIO_CHECK(region_closed_trace_index(grandchild) < region_closed_trace_index(child),
+                   "grandchild_closed_before_child");
+    SCENARIO_CHECK(root_slot->state == ASX_REGION_OPEN, "root_still_open");
+    log_region_state("child-closed", child);
 
-    budget = asx_budget_from_polls(4);
-    SCENARIO_CHECK(asx_region_drain(grandchild, &budget) == ASX_OK, "drain_grandchild");
-    budget = asx_budget_from_polls(4);
-    SCENARIO_CHECK(asx_region_drain(child, &budget) == ASX_OK, "drain_child");
     budget = asx_budget_from_polls(4);
     SCENARIO_CHECK(asx_region_drain(root, &budget) == ASX_OK, "drain_root");
     SCENARIO_CHECK(root_slot->child_count == 0u, "root_has_no_children");

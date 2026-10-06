@@ -60,6 +60,22 @@ typedef struct {
     int cancel_pending; /* 1 if cancel signal delivered */
     int detached;       /* 1 if the slot is released at completion */
     uint32_t next_free; /* free-list link while !alive */
+    /* Wake-driven scheduling. A task that returns ASX_E_PENDING stays
+     * runnable (yield) unless it called asx_task_park() during that poll
+     * and was not woken before the poll returned. */
+    uint8_t in_poll;        /* 1 while the scheduler is inside poll_fn */
+    uint8_t park_requested; /* asx_task_park() called during this poll */
+    uint8_t notified;       /* woken while in_poll */
+    uint8_t parked;         /* not runnable until asx_task_wake() */
+    asx_status last_error;  /* status returned by a failing poll_fn */
+    /* Task timer (EDF heap keyed by (wake_at, timer_seq)). */
+    asx_time wake_at;
+    uint64_t timer_seq;
+    uint32_t timer_pos; /* heap index, ASX_SLOT_NONE when disarmed */
+    /* Join waiters: intrusive singly-linked list of slot indices. */
+    uint32_t first_waiter; /* first task parked in join on this one */
+    uint32_t next_waiter;  /* link while waiting on another task */
+    uint32_t waiting_on;   /* slot index of join target, or ASX_SLOT_NONE */
 } asx_task_slot;
 
 typedef struct {
@@ -108,10 +124,34 @@ void asx_task_release_capture_internal(asx_task_slot *task);
 asx_task_id asx_task_handle_for_slot(uint32_t slot_idx);
 
 /* Completion bookkeeping shared by every path that drives a task to
- * COMPLETED: releases captured state, decrements the region's live-task
- * count, and frees the slot if the task was detached.
- * The caller must already have set state/outcome. */
+ * COMPLETED: disarms its timer, wakes join waiters, releases captured
+ * state, decrements the region's live-task count, and frees the slot if
+ * the task was detached. The caller must already have set
+ * state/outcome. */
 void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region);
+
+/* Reset wake-driven scheduler state (timer heap, sequence counters).
+ * Called from asx_runtime_reset(). Defined in scheduler.c. */
+void asx_scheduler_reset_internal(void);
+
+/* Initialize the scheduling fields of a freshly allocated task slot. */
+void asx_task_sched_init_internal(asx_task_slot *task);
+
+/* Make a task runnable (or record the wake if it is mid-poll). */
+void asx_task_wake_slot_internal(asx_task_slot *task);
+
+/* Timer / join-wait teardown for a task leaving the live set. */
+void asx_task_timer_disarm_internal(asx_task_slot *task);
+void asx_task_join_detach_internal(asx_task_slot *task);
+void asx_task_join_wake_waiters_internal(asx_task_slot *task);
+
+/* Collect the region subtree rooted at `root` in parent-first (BFS)
+ * order as region slot indices. Returns the count written (bounded by
+ * `max`), or 0 if root does not resolve. Defined in lifecycle.c. */
+uint32_t asx_region_subtree_internal(asx_region_id root, uint32_t *out_slots, uint32_t max);
+
+/* Build the public handle for an occupied region slot. */
+asx_region_id asx_region_handle_for_slot(uint32_t slot_idx);
 
 /* Reset private hook installation state during runtime teardown. */
 void asx_runtime_hooks_reset_internal(void);

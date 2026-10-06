@@ -104,6 +104,7 @@ void asx_runtime_reset(void) {
         g_tasks[i].cleanup_polls_remaining = 0;
         g_tasks[i].detached = 0;
         g_tasks[i].next_free = ASX_SLOT_NONE;
+        asx_task_sched_init_internal(&g_tasks[i]);
         memset(&g_tasks[i].cancel_reason, 0, sizeof(g_tasks[i].cancel_reason));
     }
     g_task_count = 0;
@@ -123,6 +124,7 @@ void asx_runtime_reset(void) {
     /* Reset ghost safety monitors */
     asx_ghost_reset();
     asx_scheduler_event_reset();
+    asx_scheduler_reset_internal();
     asx_parallel_reset();
     asx_channel_reset();
     asx_oneshot_reset();
@@ -379,9 +381,43 @@ static void asx_region_release_records(asx_region_id region) {
 }
 
 void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region) {
+    asx_task_timer_disarm_internal(task);
+    asx_task_join_detach_internal(task);
+    asx_task_join_wake_waiters_internal(task);
+    task->parked = 0;
     asx_task_release_capture_internal(task);
     if (region != NULL && region->task_count > 0u) region->task_count--;
     if (task->detached) { asx_task_slot_release((uint32_t)(task - g_tasks)); }
+}
+
+asx_region_id asx_region_handle_for_slot(uint32_t slot_idx) {
+    return asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
+                           asx_handle_pack_index(g_regions[slot_idx].generation,
+                                                 (uint16_t)slot_idx));
+}
+
+uint32_t asx_region_subtree_internal(asx_region_id root, uint32_t *out_slots, uint32_t max) {
+    asx_region_slot *r;
+    uint32_t head = 0;
+    uint32_t count = 0;
+
+    if (out_slots == NULL || max == 0u) return 0u;
+    if (asx_region_slot_lookup(root, &r) != ASX_OK) return 0u;
+
+    out_slots[count++] = asx_handle_slot(root);
+    /* Breadth-first over the bounded children[] lists: parents always
+     * precede their descendants in the output. */
+    while (head < count) {
+        ASX_CHECKPOINT_WAIVER("bounded: count <= max <= ASX_MAX_REGIONS");
+        asx_region_slot *cur = &g_regions[out_slots[head++]];
+        uint32_t c;
+        for (c = 0; c < cur->child_count && count < max; c++) {
+            asx_region_slot *child;
+            if (asx_region_slot_lookup(cur->children[c], &child) != ASX_OK) continue;
+            out_slots[count++] = asx_handle_slot(cur->children[c]);
+        }
+    }
+    return count;
 }
 
 /* -------------------------------------------------------------------
@@ -594,6 +630,7 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     g_tasks[idx].outcome = asx_outcome_make(ASX_OUTCOME_OK);
     g_tasks[idx].alive = 1;
     g_tasks[idx].detached = 0;
+    asx_task_sched_init_internal(&g_tasks[idx]);
     g_tasks[idx].captured_state = NULL;
     g_tasks[idx].captured_size = 0;
     g_tasks[idx].captured_dtor = NULL;

@@ -438,23 +438,113 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_get_state(asx_obligation_id id,
 
 /* -------------------------------------------------------------------
  * Scheduler
+ *
+ * The scheduler drives every task in the region *subtree* (the region
+ * and all of its descendants), in ascending arena-index order within a
+ * round. Scheduling is wake-driven:
+ *
+ *   - a task that returns ASX_E_PENDING stays runnable and is re-polled
+ *     next round (cooperative yield), UNLESS it called asx_task_park()
+ *     during that poll — then it is not polled again until something
+ *     calls asx_task_wake() on it (a timer, a join target completing, a
+ *     waker/IO readiness signal, a cancel request, or user code);
+ *   - when every live task in scope is parked, the scheduler goes idle:
+ *     it fires due task timers; with the virtual clock (deterministic
+ *     builds without a real clock hook) it jumps time straight to the
+ *     earliest armed timer; with a real clock it blocks in the reactor
+ *     wait hook until the timer deadline or I/O readiness;
+ *   - if nothing can ever wake the parked tasks, it returns
+ *     ASX_E_WOULD_BLOCK instead of spinning.
+ *
+ * Idle waiting never consumes poll budget; only actual polls do.
  * ------------------------------------------------------------------- */
 
-/* Run the scheduler loop until all tasks in the region complete or
- * the budget is exhausted.
+/* Run the scheduler loop until all tasks in the region subtree complete,
+ * the budget is exhausted, or every live task is parked with no wake
+ * source.
  *
  * Preconditions: region must be a valid handle; budget must not be NULL
  *   and must have remaining polls > 0.
  * Postconditions: tasks are polled in arena-index order; event log is
- *   populated; budget is decremented.
+ *   populated; budget is decremented once per poll.
  * Returns ASX_OK when all tasks complete (quiescent),
- *   ASX_E_BUDGET_EXHAUSTED if polls ran out before completion,
+ *   ASX_E_POLL_BUDGET_EXHAUSTED if polls ran out before completion,
+ *   ASX_E_WOULD_BLOCK if all live tasks are parked and no timer, waker,
+ *   or I/O registration can wake them,
  *   ASX_E_NOT_FOUND if region is invalid,
  *   ASX_E_STALE_HANDLE if generation mismatch,
  *   ASX_E_INVALID_ARGUMENT if budget is NULL.
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Scheduler. */
 ASX_API ASX_MUST_USE asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget);
+
+/* -------------------------------------------------------------------
+ * Wake-driven waiting (park / wake / timers / join)
+ * ------------------------------------------------------------------- */
+
+/* Park the calling task: after the current poll returns ASX_E_PENDING it
+ * is not polled again until woken. Must be called from inside the task's
+ * own poll function, after arranging a wake source (timer, join, waker).
+ * A wake that arrives before the poll returns cancels the park.
+ *
+ * Returns ASX_OK on success, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for
+ *   invalid handles, ASX_E_INVALID_STATE if `self` is not currently being
+ *   polled by the scheduler (the call is then a harmless no-op).
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_park(asx_task_id self);
+
+/* Make a parked task runnable again. Waking a task that is mid-poll makes
+ * its pending park request void; waking a runnable task is a no-op.
+ *
+ * Returns ASX_OK on success (including for completed tasks),
+ *   ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for invalid handles.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_wake(asx_task_id id);
+
+/* Ensure the task is woken no later than `deadline` (nanoseconds on the
+ * runtime clock). Each task has one timer that keeps the earliest armed
+ * deadline; it disarms when it fires or the task completes. A wake that
+ * turns out to be early is harmless: poll functions re-check their own
+ * deadline and re-arm.
+ *
+ * Returns ASX_OK on success, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for
+ *   invalid handles, ASX_E_INVALID_STATE for completed tasks.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_arm_timer(asx_task_id self, asx_time deadline);
+
+/* Wait until the runtime clock reaches `deadline`: returns ASX_OK if it
+ * already has; otherwise arms the task timer, parks `self`, and returns
+ * ASX_E_PENDING (propagate that from the poll function).
+ *
+ * Outside a scheduler poll (e.g. invalid `self`) nothing is armed or
+ * parked and the call simply reports ASX_OK / ASX_E_PENDING.
+ * Returns ASX_E_HOOK_MISSING-class errors only if the clock fails.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_wait_until(asx_task_id self, asx_time deadline);
+
+/* Await another task from inside a poll function.
+ *
+ * If `target` has completed, writes its outcome to *out_outcome (if
+ * non-NULL), releases the target's slot (consuming join, like awaiting a
+ * Rust JoinHandle), and returns ASX_OK. Otherwise registers `self` as a
+ * join waiter, parks it, and returns ASX_E_PENDING; the scheduler wakes
+ * `self` when `target` completes.
+ *
+ * Returns ASX_E_INVALID_ARGUMENT if self == target,
+ *   ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE if either handle is invalid
+ *   (e.g. the target was already joined or detached).
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_join_poll(asx_task_id self, asx_task_id target,
+                                                   asx_outcome *out_outcome);
+
+/* Report the error status a task's poll function returned when it
+ * failed (ASX_OK if it completed successfully or was cancelled).
+ *
+ * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out is NULL,
+ *   ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for invalid handles,
+ *   ASX_E_TASK_NOT_COMPLETED if the task is still live.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_get_error(asx_task_id id, asx_status *out_error);
 
 /* -------------------------------------------------------------------
  * Scheduler event sequencing (deterministic replay support)

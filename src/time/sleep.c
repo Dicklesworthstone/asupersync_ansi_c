@@ -9,6 +9,17 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Arm the calling task's timer for `target` and park it. Both steps are
+ * best-effort: outside a scheduler poll (or with an invalid `self`) the
+ * primitive degrades to plain re-polling. Always returns ASX_E_PENDING. */
+static asx_status park_until(asx_task_id self, asx_time target) {
+    if (asx_task_arm_timer(self, target) == ASX_OK) {
+        asx_status st = asx_task_park(self);
+        (void)st;
+    }
+    return ASX_E_PENDING;
+}
+
 /* ===================================================================
  * Sleep
  * =================================================================== */
@@ -27,32 +38,27 @@ asx_status asx_sleep_poll(void *user_data, asx_task_id self) {
     asx_time now;
     asx_status st;
 
-    (void)self;
-
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    /* First poll: compute deadline and arm timer */
+    /* First poll: compute the deadline, then park on the task timer */
     if (!s->initialized) {
         st = asx_deadline_after(&s->deadline, s->duration_ns);
-        if (st != ASX_OK) return st;
-
-        st = asx_deadline_arm(&s->deadline, NULL);
         if (st != ASX_OK) return st;
 
         s->initialized = 1;
 
         /* Zero-duration sleep completes immediately */
         if (s->duration_ns == 0) { return ASX_OK; }
-        return ASX_E_PENDING;
+        return park_until(self, asx_deadline_target(&s->deadline));
     }
 
-    /* Subsequent polls: check if deadline expired */
+    /* Subsequent polls (timer fired or spurious wake): re-check */
     st = asx_runtime_now_ns(&now);
     if (st != ASX_OK) return st;
 
     if (asx_deadline_is_expired_at(&s->deadline, now)) { return ASX_OK; }
 
-    return ASX_E_PENDING;
+    return park_until(self, asx_deadline_target(&s->deadline));
 }
 
 /* ===================================================================
@@ -85,9 +91,6 @@ asx_status asx_timeout_poll(void *user_data, asx_task_id self) {
         st = asx_deadline_after(&s->deadline, s->timeout_ns);
         if (st != ASX_OK) return st;
 
-        st = asx_deadline_arm(&s->deadline, NULL);
-        if (st != ASX_OK) return st;
-
         s->initialized = 1;
     }
 
@@ -105,20 +108,17 @@ asx_status asx_timeout_poll(void *user_data, asx_task_id self) {
         inner_st = s->inner_poll(s->inner_data, self);
         if (inner_st == ASX_OK) {
             s->inner_done = 1;
-            st = asx_deadline_disarm(&s->deadline);
-            (void)st;
             return ASX_OK;
         }
-        if (inner_st != ASX_E_PENDING) {
-            /* Inner returned an error — disarm deadline and propagate */
-            {
-                asx_status d_st_ = asx_deadline_disarm(&s->deadline);
-                (void)d_st_;
-            }
-            return inner_st;
-        }
+        if (inner_st != ASX_E_PENDING) return inner_st;
     }
 
+    /* Inner is pending: guarantee a wake at the deadline without parking
+     * (whether to park is the inner poll's decision). */
+    {
+        asx_status a_st_ = asx_task_arm_timer(self, asx_deadline_target(&s->deadline));
+        (void)a_st_;
+    }
     return ASX_E_PENDING;
 }
 
@@ -143,8 +143,6 @@ asx_status asx_interval_poll(void *user_data, asx_task_id self) {
     asx_time now;
     asx_status st;
 
-    (void)self;
-
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
 
     /* First poll or after a tick: set up the next deadline */
@@ -152,11 +150,8 @@ asx_status asx_interval_poll(void *user_data, asx_task_id self) {
         st = asx_deadline_after(&s->deadline, s->period_ns);
         if (st != ASX_OK) return st;
 
-        st = asx_deadline_arm(&s->deadline, NULL);
-        if (st != ASX_OK) return st;
-
         s->initialized = 1;
-        return ASX_E_PENDING;
+        return park_until(self, asx_deadline_target(&s->deadline));
     }
 
     /* Check if current period has elapsed */
@@ -169,31 +164,18 @@ asx_status asx_interval_poll(void *user_data, asx_task_id self) {
         s->ticks++;
 
         /* Check if we've reached max ticks */
-        if (s->max_ticks > 0 && s->ticks >= s->max_ticks) {
-            {
-                asx_status d_st_ = asx_deadline_disarm(&s->deadline);
-                (void)d_st_;
-            }
-            return ASX_OK;
-        }
+        if (s->max_ticks > 0 && s->ticks >= s->max_ticks) return ASX_OK;
 
-        /* Re-arm for next period. Check overflow first so the old
-         * deadline state is preserved on failure. */
+        /* Next period. Check overflow first so the old deadline state is
+         * preserved on failure. */
         if (s->period_ns > UINT64_MAX - now) return ASX_E_TIMER_DURATION_EXCEEDED;
         next_target = now + s->period_ns;
 
-        /* Disarm old deadline via proper API, then init+arm the new one */
-        {
-            asx_status d_st_ = asx_deadline_disarm(&s->deadline);
-            (void)d_st_;
-        }
         st = asx_deadline_init(&s->deadline, next_target);
-        if (st != ASX_OK) return st;
-        st = asx_deadline_arm(&s->deadline, NULL);
         if (st != ASX_OK) return st;
     }
 
-    return ASX_E_PENDING;
+    return park_until(self, asx_deadline_target(&s->deadline));
 }
 
 uint32_t asx_interval_ticks(const asx_interval_state *state) {

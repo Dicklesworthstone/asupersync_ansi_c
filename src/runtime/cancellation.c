@@ -86,6 +86,10 @@ asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind) {
     cleanup = asx_cancel_cleanup_budget(kind);
     t->cleanup_polls_remaining = asx_budget_polls(&cleanup);
 
+    /* Cancellation must be observed: a parked task becomes runnable so it
+     * can reach a checkpoint and run its bounded cleanup. */
+    asx_task_wake_slot_internal(t);
+
     /* Create a cancel witness to track this cancellation's lifecycle */
     {
         asx_cancel_witness_id witness = ASX_INVALID_ID;
@@ -133,24 +137,38 @@ asx_status asx_task_cancel_with_origin(asx_task_id id, asx_cancel_kind kind,
  * Region-wide propagation
  * ------------------------------------------------------------------- */
 
+/* Region subtree scratch: parent-first slot order (see lifecycle.c). */
+static uint32_t g_propagate_slots[ASX_MAX_REGIONS];
+
 uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind) {
     uint32_t i;
+    uint32_t r;
+    uint32_t n;
     uint32_t count = 0;
 
-    for (i = 0; i < g_task_count; i++) {
-        ASX_CHECKPOINT_WAIVER("kernel-propagation: single-pass cancel sweep bounded by "
-                              "g_task_count <= ASX_MAX_TASKS; O(1) per iteration");
-        asx_task_slot *t = &g_tasks[i];
-        asx_task_id tid;
+    /* Structured cancellation: the region's own tasks receive `kind`;
+     * tasks in every descendant region receive PARENT, attributed to the
+     * region where the cancel originated. Regions are visited parent-first
+     * so attribution and trace order are deterministic. */
+    n = asx_region_subtree_internal(region, g_propagate_slots, ASX_MAX_REGIONS);
+    for (r = 0; r < n; r++) {
+        uint32_t key = asx_handle_index(asx_region_handle_for_slot(g_propagate_slots[r]));
+        asx_cancel_kind effective = (r == 0u) ? kind : ASX_CANCEL_PARENT;
 
-        if (!t->alive) continue;
-        if (t->region != region) continue;
-        if (asx_task_is_terminal(t->state)) continue;
+        for (i = 0; i < g_task_count; i++) {
+            ASX_CHECKPOINT_WAIVER("kernel-propagation: single-pass cancel sweep bounded by "
+                                  "g_task_count <= ASX_MAX_TASKS; O(1) per iteration");
+            asx_task_slot *t = &g_tasks[i];
 
-        tid = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
-                              asx_handle_pack_index(t->generation, (uint16_t)i));
+            if (!t->alive) continue;
+            if (asx_handle_index(t->region) != key) continue;
+            if (asx_task_is_terminal(t->state)) continue;
 
-        if (asx_task_cancel_with_origin(tid, kind, region, ASX_INVALID_ID) == ASX_OK) { count++; }
+            if (asx_task_cancel_with_origin(asx_task_handle_for_slot(i), effective, region,
+                                            ASX_INVALID_ID) == ASX_OK) {
+                count++;
+            }
+        }
     }
 
     return count;

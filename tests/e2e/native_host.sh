@@ -26,7 +26,15 @@ E2E_RUNTIME_RESET_EXTRA=(
     "${E2E_PROJECT_ROOT}/src/net/net.c"
 )
 
-if ! ~/.local/bin/rch exec -- make -B build; then
+# Offload through rch when it is installed; fail open to a local build.
+RCH_BIN="${HOME}/.local/bin/rch"
+if [ -x "$RCH_BIN" ]; then
+    BUILD_CMD=("$RCH_BIN" exec -- make -B build)
+else
+    BUILD_CMD=(make -B build)
+fi
+
+if ! "${BUILD_CMD[@]}"; then
     e2e_scenario "native_host.lib_build" "make build failed" "fail"
     e2e_finish
     exit $?

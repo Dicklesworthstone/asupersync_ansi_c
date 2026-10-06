@@ -519,6 +519,18 @@ ASX_API asx_status asx_runtime_free(void *ptr);
  * ASX_E_HOOK_MISSING if no clock hook installed. */
 ASX_API asx_status asx_runtime_now_ns(asx_time *out_now);
 
+/* Returns nonzero when the effective clock is the runtime's virtual clock
+ * (no hooks installed, or the default clock stubs are active). Virtual
+ * time only moves when the scheduler finds every runnable task parked and
+ * jumps to the earliest armed task timer. */
+ASX_API int asx_runtime_clock_is_virtual(void);
+
+/* Current virtual time in nanoseconds (0 after runtime reset). */
+ASX_API asx_time asx_runtime_virtual_now(void);
+
+/* Advance virtual time to `to` (no-op if `to` is not in the future). */
+ASX_API void asx_runtime_virtual_advance(asx_time to);
+
 /* Read random u64 via the configured deterministic entropy stream.
  * Returns ASX_OK on success, ASX_E_HOOK_MISSING if hooks are not installed,
  * and ASX_E_INVALID_STATE when the active hook table does not provide a

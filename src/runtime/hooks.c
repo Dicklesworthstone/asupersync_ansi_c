@@ -231,14 +231,26 @@ static void static_arena_free(void *ctx, void *ptr) {
     (void)static_arena_header_for((asx_static_arena *)ctx, ptr);
 }
 
+/* Virtual time: the default clock hooks read this counter, which only the
+ * scheduler advances (to the next armed task timer) when every runnable
+ * task is parked. This is lab-runtime time: deterministic, and sleeping
+ * costs no wall-clock time. Real platforms install real clock hooks. */
+static asx_time g_virtual_now = 0;
+
 static asx_time default_logical_clock(void *ctx) {
     (void)ctx;
-    return 0; /* logical clock starts at 0, advanced by runtime */
+    return g_virtual_now;
 }
 
 static asx_time default_wall_clock(void *ctx) {
     (void)ctx;
-    return 0; /* stub: real platforms override this */
+    return g_virtual_now;
+}
+
+asx_time asx_runtime_virtual_now(void) { return g_virtual_now; }
+
+void asx_runtime_virtual_advance(asx_time to) {
+    if (to > g_virtual_now) g_virtual_now = to;
 }
 
 static uint64_t default_seeded_entropy(void *ctx) {
@@ -268,6 +280,7 @@ static int g_hooks_installed = 0;
 void asx_runtime_hooks_reset_internal(void) {
     memset(&g_hooks, 0, sizeof(g_hooks));
     g_hooks_installed = 0;
+    g_virtual_now = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -568,6 +581,17 @@ asx_status asx_runtime_free(void *ptr) {
     if (!g_hooks.allocator.free_fn) return ASX_E_HOOK_MISSING;
     g_hooks.allocator.free_fn(g_hooks.allocator.ctx, ptr);
     return ASX_OK;
+}
+
+int asx_runtime_clock_is_virtual(void) {
+    if (!g_hooks_installed) return 1;
+#if ASX_DETERMINISTIC
+    if (g_hooks.clock.logical_now_ns_fn) {
+        return g_hooks.clock.logical_now_ns_fn == default_logical_clock;
+    }
+#endif
+    if (g_hooks.clock.now_ns_fn) return g_hooks.clock.now_ns_fn == default_wall_clock;
+    return 1;
 }
 
 asx_status asx_runtime_now_ns(asx_time *out_now) {

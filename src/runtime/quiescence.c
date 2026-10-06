@@ -193,66 +193,50 @@ asx_status asx_quiescence_check_detailed(asx_region_id id, asx_quiescence_report
 }
 
 /* -------------------------------------------------------------------
- * Region drain: scheduler + close protocol
+ * Region drain: structured shutdown of a region subtree
  *
- * Drives the region through its full shutdown sequence:
- *   1. Close (Open → Closing)
- *   2. Run scheduler to completion
- *   3. Drain cleanup stack (Finalizing)
- *   4. Advance (Closing → Draining → Finalizing → Closed)
+ * Drives the region and every descendant through the shutdown sequence:
+ *   1. Close: every OPEN region in the subtree → CLOSING (parent-first)
+ *   2. Cancel: PARENT cancel reaches every live task in the subtree;
+ *      tasks observe it via asx_checkpoint() and get bounded cleanup
+ *   3. Run the scheduler over the subtree until all tasks complete
+ *   4. Finalize bottom-up (deepest regions first): Closing → [Draining]
+ *      → Finalizing → Closed, draining cleanup stacks in LIFO order and
+ *      unlinking each region from its parent
+ *
+ * A parent therefore never closes before its children: structured
+ * concurrency by construction. The call is resumable — after a budget
+ * exhaustion, call it again to continue.
  * ------------------------------------------------------------------- */
 
-asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
-    asx_region_slot *r;
+static uint32_t g_drain_slots[ASX_MAX_REGIONS];
+
+static asx_status asx_region_set_state(asx_region_id id, asx_region_slot *r, asx_region_state to) {
+    asx_status st;
+    (void)asx_ghost_check_region_transition(id, r->state, to);
+    st = asx_region_transition_check(r->state, to);
+    if (st != ASX_OK) return st;
+    r->state = to;
+    return ASX_OK;
+}
+
+/* Finalize one region whose tasks have all completed. */
+static asx_status asx_region_finalize_one(asx_region_id id, asx_region_slot *r) {
     asx_status st;
 
-    if (budget == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (r->state == ASX_REGION_CLOSED) return ASX_OK;
 
-    st = asx_region_slot_lookup(id, &r);
-    if (st != ASX_OK) return st;
-
-    /* Step 1: Close the region if still open */
-    if (r->state == ASX_REGION_OPEN) {
-        (void)asx_ghost_check_region_transition(id, ASX_REGION_OPEN, ASX_REGION_CLOSING);
-        st = asx_region_transition_check(ASX_REGION_OPEN, ASX_REGION_CLOSING);
+    if (r->state == ASX_REGION_CLOSING || r->state == ASX_REGION_DRAINING) {
+        if (r->child_count > 0u) {
+            /* Children still closing: the region waits in DRAINING. */
+            if (r->state == ASX_REGION_CLOSING) {
+                st = asx_region_set_state(id, r, ASX_REGION_DRAINING);
+                if (st != ASX_OK) return st;
+            }
+            return ASX_E_PENDING;
+        }
+        st = asx_region_set_state(id, r, ASX_REGION_FINALIZING);
         if (st != ASX_OK) return st;
-        r->state = ASX_REGION_CLOSING;
-
-        /* Propagate PARENT cancel to all active tasks in this region.
-         * Tasks observe cancellation via asx_checkpoint() and have
-         * bounded cleanup before forced completion. (bd-2cw.3) */
-        asx_cancel_propagate(id, ASX_CANCEL_PARENT);
-    }
-
-    if (r->state == ASX_REGION_CLOSING && r->task_count > 0 &&
-        asx_region_has_uncancelled_tasks(id)) {
-        asx_cancel_propagate(id, ASX_CANCEL_PARENT);
-    }
-
-    /* Step 2: Run scheduler to drain tasks */
-    if (r->task_count > 0) {
-        st = asx_scheduler_run(id, budget);
-        if (st == ASX_E_POLL_BUDGET_EXHAUSTED) return st;
-        if (st != ASX_OK) return st;
-        if (r->task_count > 0) { return ASX_E_QUIESCENCE_TASKS_LIVE; }
-    }
-
-    /* Step 3: Advance through closing protocol */
-    if (r->state == ASX_REGION_CLOSING) {
-        if (r->child_count > 0u) return ASX_E_PENDING;
-
-        /* No live children remain; fast path: skip Draining */
-        (void)asx_ghost_check_region_transition(id, ASX_REGION_CLOSING, ASX_REGION_FINALIZING);
-        st = asx_region_transition_check(ASX_REGION_CLOSING, ASX_REGION_FINALIZING);
-        if (st != ASX_OK) return st;
-        r->state = ASX_REGION_FINALIZING;
-    }
-
-    if (r->state == ASX_REGION_DRAINING) {
-        (void)asx_ghost_check_region_transition(id, ASX_REGION_DRAINING, ASX_REGION_FINALIZING);
-        st = asx_region_transition_check(ASX_REGION_DRAINING, ASX_REGION_FINALIZING);
-        if (st != ASX_OK) return st;
-        r->state = ASX_REGION_FINALIZING;
     }
 
     if (r->state == ASX_REGION_FINALIZING) {
@@ -268,12 +252,67 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
         asx_cleanup_drain(&r->cleanup);
         if (r->task_count > 0u) return ASX_E_QUIESCENCE_TASKS_LIVE;
 
-        (void)asx_ghost_check_region_transition(id, ASX_REGION_FINALIZING, ASX_REGION_CLOSED);
-        st = asx_region_transition_check(ASX_REGION_FINALIZING, ASX_REGION_CLOSED);
+        st = asx_region_set_state(id, r, ASX_REGION_CLOSED);
         if (st != ASX_OK) return st;
         asx_region_unlink_from_parent(id, r);
-        r->state = ASX_REGION_CLOSED;
         asx_trace_emit(ASX_TRACE_REGION_CLOSED, id, 0);
+    }
+
+    return ASX_OK;
+}
+
+asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
+    asx_region_slot *r;
+    asx_status st;
+    uint32_t n;
+    uint32_t i;
+    uint32_t live;
+    int need_cancel = 0;
+
+    if (budget == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
+    if (r->state == ASX_REGION_CLOSED) return ASX_OK;
+
+    n = asx_region_subtree_internal(id, g_drain_slots, ASX_MAX_REGIONS);
+
+    /* Step 1: close every open region in the subtree (parent-first). */
+    for (i = 0; i < n; i++) {
+        asx_region_slot *rs = &g_regions[g_drain_slots[i]];
+        if (rs->state == ASX_REGION_OPEN) {
+            st = asx_region_set_state(asx_region_handle_for_slot(g_drain_slots[i]), rs,
+                                      ASX_REGION_CLOSING);
+            if (st != ASX_OK) return st;
+            need_cancel = 1;
+        }
+        if (rs->task_count > 0u &&
+            asx_region_has_uncancelled_tasks(asx_region_handle_for_slot(g_drain_slots[i]))) {
+            need_cancel = 1;
+        }
+    }
+
+    /* Step 2: PARENT cancel reaches every live task in the subtree.
+     * Tasks observe cancellation via asx_checkpoint() and have bounded
+     * cleanup before forced completion. (bd-2cw.3) */
+    if (need_cancel) (void)asx_cancel_propagate(id, ASX_CANCEL_PARENT);
+
+    /* Step 3: run the scheduler over the subtree. */
+    live = 0;
+    for (i = 0; i < n; i++) live += g_regions[g_drain_slots[i]].task_count;
+    if (live > 0u) {
+        st = asx_scheduler_run(id, budget);
+        if (st != ASX_OK) return st;
+        for (i = 0; i < n; i++) {
+            if (g_regions[g_drain_slots[i]].task_count > 0u) return ASX_E_QUIESCENCE_TASKS_LIVE;
+        }
+    }
+
+    /* Step 4: finalize bottom-up so children close before parents. */
+    for (i = n; i > 0u; i--) {
+        uint32_t slot = g_drain_slots[i - 1u];
+        st = asx_region_finalize_one(asx_region_handle_for_slot(slot), &g_regions[slot]);
+        if (st != ASX_OK) return st;
     }
 
     return ASX_OK;

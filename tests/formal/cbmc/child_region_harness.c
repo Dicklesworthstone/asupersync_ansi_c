@@ -181,8 +181,9 @@ int main(void) {
               open_count, 0);
 
         if (open_count > 0u) {
-            asx_budget budget = asx_budget_from_polls(1);
-            check(asx_region_drain(parent, &budget) == ASX_E_PENDING, "parent waits for children",
+            /* Closing (not draining) the parent keeps every child linked;
+             * the parent cannot reach CLOSED while children are open. */
+            check(asx_region_close(parent) == ASX_OK, "parent closes with open children",
                   open_count, 0);
             check(parent_slot->state == ASX_REGION_CLOSING, "parent remains closing", open_count,
                   0);
