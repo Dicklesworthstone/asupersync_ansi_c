@@ -735,6 +735,11 @@ asx_status asx_runtime_reactor_poll(uint32_t timeout_ms, asx_reactor_event *even
     return st;
 }
 
+void asx_runtime_reactor_notify(void) {
+    if (!g_hooks_installed || g_hooks.reactor.notify_fn == NULL) return;
+    g_hooks.reactor.notify_fn(g_hooks.reactor.ctx);
+}
+
 asx_status asx_runtime_log_write(int level, const char *message) {
     if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
     if (!g_hooks.log.write_fn) return ASX_OK; /* silent if no log hook */

@@ -738,6 +738,138 @@ TEST(cancel_phase_null_output_rejected) {
  * Main
  * ------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------
+ * Cancel masking
+ * ------------------------------------------------------------------- */
+
+TEST(mask_defers_checkpoint_acknowledgement) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_checkpoint_result cr;
+    asx_cancel_phase phase;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_mask(tid), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_TIMEOUT), ASX_OK);
+
+    ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
+    ASSERT_EQ(cr.cancelled, 0);
+    ASSERT_EQ(cr.masked, 1);
+    ASSERT_EQ((int)cr.kind, (int)ASX_CANCEL_TIMEOUT);
+    ASSERT_EQ(asx_task_get_cancel_phase(tid, &phase), ASX_OK);
+    ASSERT_EQ((int)phase, (int)ASX_CANCEL_PHASE_REQUESTED);
+
+    /* Strengthening still applies while masked. */
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_SHUTDOWN), ASX_OK);
+    ASSERT_EQ(asx_task_unmask(tid), ASX_OK);
+    ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
+    ASSERT_EQ(cr.cancelled, 1);
+    ASSERT_EQ(cr.masked, 0);
+    ASSERT_EQ((int)cr.kind, (int)ASX_CANCEL_SHUTDOWN);
+    ASSERT_EQ((int)cr.phase, (int)ASX_CANCEL_PHASE_CANCELLING);
+}
+
+typedef struct {
+    uint32_t polls;
+    uint32_t unmask_at;
+    int finished_itself;
+} masked_section_state;
+
+/* Masks on the first poll, stays in the critical section until
+ * `unmask_at`, then observes the cancel and completes. */
+static asx_status poll_masked_section(void *data, asx_task_id self) {
+    masked_section_state *s = (masked_section_state *)data;
+    asx_checkpoint_result cr;
+    s->polls++;
+    if (s->polls == 1u && asx_task_mask(self) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (s->polls < s->unmask_at) return ASX_E_PENDING;
+    if (asx_task_unmask(self) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) {
+        s->finished_itself = 1;
+        return ASX_OK;
+    }
+    return ASX_E_PENDING;
+}
+
+TEST(masked_task_is_not_force_completed) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_outcome out;
+    masked_section_state s;
+
+    asx_runtime_reset();
+    s.polls = 0;
+    s.unmask_at = 80u; /* well past SHUTDOWN's 50-poll cleanup budget */
+    s.finished_itself = 0;
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_masked_section, &s, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_SHUTDOWN), ASX_OK);
+    budget = asx_budget_from_polls(500);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_TRUE(s.finished_itself);
+    ASSERT_EQ(s.polls, 80u);
+    ASSERT_EQ(asx_task_get_outcome(tid, &out), ASX_OK);
+    ASSERT_EQ(asx_outcome_severity_of(&out), ASX_OUTCOME_CANCELLED);
+}
+
+TEST(unmasked_task_is_force_completed_by_cleanup_budget) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_mask(tid), ASX_OK);
+    ASSERT_EQ(asx_task_unmask(tid), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_SHUTDOWN), ASX_OK);
+    budget = asx_budget_from_polls(500);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+}
+
+TEST(mask_depth_is_bounded) {
+    asx_region_id rid;
+    asx_task_id tid;
+    uint32_t depth = 99u;
+    uint32_t i;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_unmask(tid), ASX_E_INVALID_STATE);
+    for (i = 0; i < ASX_MAX_MASK_DEPTH; i++) ASSERT_EQ(asx_task_mask(tid), ASX_OK);
+    ASSERT_EQ(asx_task_mask(tid), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_task_mask_depth(tid, &depth), ASX_OK);
+    ASSERT_EQ(depth, ASX_MAX_MASK_DEPTH);
+    for (i = 0; i < ASX_MAX_MASK_DEPTH; i++) ASSERT_EQ(asx_task_unmask(tid), ASX_OK);
+    ASSERT_EQ(asx_task_unmask(tid), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_task_mask_depth(tid, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_task_mask(ASX_INVALID_ID), ASX_E_NOT_FOUND);
+}
+
+TEST(checkpoint_observes_budget_deadline_inline) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget tb;
+    asx_checkpoint_result cr;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    tb = asx_budget_infinite();
+    tb.deadline = asx_runtime_virtual_now() + 1000u;
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &tb, &tid), ASX_OK);
+    ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
+    ASSERT_EQ(cr.cancelled, 0);
+
+    asx_runtime_virtual_advance(tb.deadline);
+    ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
+    ASSERT_EQ(cr.cancelled, 1);
+    ASSERT_EQ((int)cr.kind, (int)ASX_CANCEL_DEADLINE);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_cancellation (runtime) ===\n");
 
@@ -764,6 +896,11 @@ int main(void) {
     RUN_TEST(cleanup_budget_tighter_for_severe_cancels);
     RUN_TEST(checkpoint_null_result_rejected);
     RUN_TEST(cancel_phase_null_output_rejected);
+    RUN_TEST(mask_defers_checkpoint_acknowledgement);
+    RUN_TEST(masked_task_is_not_force_completed);
+    RUN_TEST(unmasked_task_is_force_completed_by_cleanup_budget);
+    RUN_TEST(mask_depth_is_bounded);
+    RUN_TEST(checkpoint_observes_budget_deadline_inline);
 
     TEST_REPORT();
     return test_failures;

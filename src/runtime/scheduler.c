@@ -208,6 +208,7 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->waiting_on = ASX_SLOT_NONE;
     task->watcher = ASX_SLOT_NONE;
     task->watcher_gen = 0;
+    task->mask_depth = 0;
 }
 
 void asx_task_wake_slot_internal(asx_task_slot *task) {
@@ -517,12 +518,16 @@ static void sched_poll_io_nonblocking(void) {
 #endif
 }
 
-/* Block for up to timeout_ms waiting for I/O (or just time to pass). */
+/* Block for up to timeout_ms waiting for I/O, a cross-thread wake
+ * (blocking-pool completion), or just time to pass. Returns at once when
+ * a waker is already signaled. */
 static void sched_block(uint32_t timeout_ms) {
+    if (!asx_waker_prepare_block_internal()) return;
 #if ASX_HAS_NATIVE_IO_DRIVER
     if (sched_io_pending()) {
         asx_io_event events[8];
         (void)asx_io_driver_poll(events, 8u, timeout_ms);
+        asx_waker_finish_block_internal();
         return;
     }
 #endif
@@ -530,6 +535,15 @@ static void sched_block(uint32_t timeout_ms) {
         uint32_t ready = 0;
         (void)asx_runtime_reactor_wait(timeout_ms, &ready, 0u);
     }
+    asx_waker_finish_block_internal();
+}
+
+/* Work that completes off the scheduler thread and signals a waker. */
+static int sched_external_pending(void) {
+#if ASX_HAS_BLOCKING_SURFACE
+    if (asx_blocking_active_count() > 0u) return 1;
+#endif
+    return sched_io_pending();
 }
 
 /* Called when every live task in scope is parked. Returns ASX_OK if the
@@ -558,7 +572,7 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall) {
             now = sched_now();
             (void)timers_fire(now);
         }
-    } else if (sched_io_pending()) {
+    } else if (sched_external_pending()) {
         sched_block(ASX_SCHED_MAX_IDLE_WAIT_MS);
         (void)sched_drain_wakers();
         now = sched_now();
@@ -655,8 +669,9 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
 
             /* Cleanup budget exhausted: force-complete with CANCELLED. The
              * task either never called checkpoint (CANCEL_REQUESTED) or ran
-             * out of cleanup polls (CANCELLING). Bounded cleanup. */
-            if (t->cancel_pending &&
+             * out of cleanup polls (CANCELLING). Bounded cleanup. A masked
+             * task is inside a critical section and is never interrupted. */
+            if (t->cancel_pending && t->mask_depth == 0u &&
                 (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED) &&
                 t->cleanup_polls_remaining == 0) {
                 if (t->state == ASX_TASK_CANCEL_REQUESTED) {
@@ -749,8 +764,9 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
                     timer_arm(i, t->budget.deadline);
                 }
                 /* Each poll of a cancel-phase task consumes one cleanup
-                 * unit; the scheduler is the sole budget enforcer. */
-                if (t->cancel_pending && t->cleanup_polls_remaining > 0) {
+                 * unit; the scheduler is the sole budget enforcer. Masked
+                 * polls do not count: the cancel is not yet acknowledged. */
+                if (t->cancel_pending && t->mask_depth == 0u && t->cleanup_polls_remaining > 0) {
                     t->cleanup_polls_remaining--;
                 }
             }

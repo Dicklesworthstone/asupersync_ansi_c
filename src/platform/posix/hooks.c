@@ -128,7 +128,9 @@ static uint64_t posix_entropy_u64(void *ctx) {
 /* ------------------------------------------------------------------ */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
+#include <unistd.h>
 
 #if defined(__linux__) && !defined(ASX_POSIX_REACTOR_FORCE_POLL)
 #define ASX_POSIX_REACTOR_EPOLL 1
@@ -156,12 +158,73 @@ typedef struct {
      * which fds were added so re-arming uses MOD instead of ADD. */
     posix_reactor_entry entries[ASX_POSIX_REACTOR_MAX_FDS];
     uint32_t count;
+    /* Self-pipe for cross-thread notify: the read end is part of every
+     * wait/poll, the write end is written by posix_reactor_notify(). */
+    int wake_rd;
+    int wake_wr;
 } asx_posix_reactor_ctx;
 
-static asx_posix_reactor_ctx g_reactor_ctx = {-1, {{0, 0u, 0u, 0}}, 0u};
+static asx_posix_reactor_ctx g_reactor_ctx = {-1, {{0, 0u, 0u, 0}}, 0u, -1, -1};
+
+/* Reserved epoll token for the wake pipe (never handed to callers). */
+#define ASX_POSIX_REACTOR_WAKE_TOKEN UINT64_MAX
 
 static const uint32_t posix_valid_interest =
     ASX_POSIX_REACTOR_READABLE | ASX_POSIX_REACTOR_WRITABLE | ASX_POSIX_REACTOR_ERROR;
+
+static int posix_set_nonblock_cloexec(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) != 0) return -1;
+    fl = fcntl(fd, F_GETFD, 0);
+    if (fl < 0 || fcntl(fd, F_SETFD, fl | FD_CLOEXEC) != 0) return -1;
+    return 0;
+}
+
+/* Create the wake pipe (once). Failure leaves notify a no-op: blocked
+ * waits then fall back to their timeout. */
+static void posix_reactor_wake_ensure(asx_posix_reactor_ctx *rc) {
+    int fds[2];
+    if (rc->wake_rd >= 0) return;
+    if (pipe(fds) != 0) return;
+    if (posix_set_nonblock_cloexec(fds[0]) != 0 || posix_set_nonblock_cloexec(fds[1]) != 0) {
+        (void)close(fds[0]);
+        (void)close(fds[1]);
+        return;
+    }
+#if ASX_POSIX_REACTOR_EPOLL
+    if (rc->epoll_fd >= 0) {
+        struct epoll_event ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.events = (uint32_t)EPOLLIN; /* level-triggered until drained */
+        ev.data.u64 = ASX_POSIX_REACTOR_WAKE_TOKEN;
+        if (epoll_ctl(rc->epoll_fd, EPOLL_CTL_ADD, fds[0], &ev) != 0) {
+            (void)close(fds[0]);
+            (void)close(fds[1]);
+            return;
+        }
+    }
+#endif
+    rc->wake_rd = fds[0];
+    rc->wake_wr = fds[1];
+}
+
+static void posix_reactor_wake_drain(asx_posix_reactor_ctx *rc) {
+    char buf[64];
+    if (rc->wake_rd < 0) return;
+    while (read(rc->wake_rd, buf, sizeof(buf)) > 0) {
+        ASX_CHECKPOINT_WAIVER("bounded: pipe holds a finite number of wake bytes");
+    }
+}
+
+static void posix_reactor_notify(void *ctx) {
+    asx_posix_reactor_ctx *rc = (asx_posix_reactor_ctx *)ctx;
+    char b = 1;
+    ssize_t n;
+    if (rc == NULL || rc->wake_wr < 0) return;
+    /* EAGAIN means the pipe is full: a wake is already pending. */
+    n = write(rc->wake_wr, &b, 1);
+    (void)n;
+}
 
 static asx_status posix_reactor_ensure(asx_posix_reactor_ctx *rc) {
     if (rc == NULL) return ASX_E_INVALID_STATE;
@@ -171,6 +234,7 @@ static asx_status posix_reactor_ensure(asx_posix_reactor_ctx *rc) {
         if (rc->epoll_fd < 0) return ASX_E_RESOURCE_EXHAUSTED;
     }
 #endif
+    posix_reactor_wake_ensure(rc);
     return ASX_OK;
 }
 
@@ -289,6 +353,10 @@ static asx_status posix_reactor_poll(void *ctx, uint32_t timeout_ms, asx_reactor
             uint32_t ev = events[i].events;
             uint32_t armed = ASX_POSIX_REACTOR_READABLE | ASX_POSIX_REACTOR_WRITABLE;
             uint32_t j;
+            if (events[i].data.u64 == ASX_POSIX_REACTOR_WAKE_TOKEN) {
+                posix_reactor_wake_drain(rc);
+                continue;
+            }
             /* Disarm the matching table entry (one-shot). */
             for (j = 0; j < rc->count; j++) {
                 if (rc->entries[j].token == events[i].data.u64 && rc->entries[j].armed) {
@@ -307,10 +375,11 @@ static asx_status posix_reactor_poll(void *ctx, uint32_t timeout_ms, asx_reactor
     }
 #else
     {
-        struct pollfd pfds[ASX_POSIX_REACTOR_MAX_FDS];
+        struct pollfd pfds[ASX_POSIX_REACTOR_MAX_FDS + 1u];
         uint32_t map[ASX_POSIX_REACTOR_MAX_FDS];
         uint32_t i;
         uint32_t n = 0;
+        uint32_t nfds;
         int rv;
 
         for (i = 0; i < rc->count; i++) {
@@ -327,8 +396,16 @@ static asx_status posix_reactor_poll(void *ctx, uint32_t timeout_ms, asx_reactor
             map[n] = i;
             n++;
         }
-        rv = poll(n > 0u ? pfds : NULL, (nfds_t)n, posix_timeout_arg(timeout_ms));
+        nfds = n;
+        if (rc->wake_rd >= 0) {
+            pfds[nfds].fd = rc->wake_rd;
+            pfds[nfds].events = POLLIN;
+            pfds[nfds].revents = 0;
+            nfds++;
+        }
+        rv = poll(nfds > 0u ? pfds : NULL, (nfds_t)nfds, posix_timeout_arg(timeout_ms));
         if (rv < 0) return errno == EINTR ? ASX_OK : ASX_E_INVALID_STATE;
+        if (nfds > n && pfds[n].revents != 0) posix_reactor_wake_drain(rc);
         for (i = 0; i < n && *out_count < max_events; i++) {
             posix_reactor_entry *e;
             if (pfds[i].revents == 0) continue;
@@ -368,10 +445,12 @@ static asx_status posix_reactor_wait(void *ctx, uint32_t timeout_ms, uint32_t *r
         rv = poll(&pfd, 1, posix_timeout_arg(timeout_ms));
         if (rv < 0) return errno == EINTR ? ASX_OK : ASX_E_INVALID_STATE;
         *ready_count = (rv > 0 && (pfd.revents & POLLIN) != 0) ? 1u : 0u;
+        /* The wake pipe lives in the epoll set: consume any notify. */
+        if (*ready_count > 0u) posix_reactor_wake_drain(rc);
     }
 #else
     {
-        struct pollfd pfds[ASX_POSIX_REACTOR_MAX_FDS];
+        struct pollfd pfds[ASX_POSIX_REACTOR_MAX_FDS + 1u];
         uint32_t i;
         uint32_t n = 0;
         for (i = 0; i < rc->count; i++) {
@@ -387,9 +466,16 @@ static asx_status posix_reactor_wait(void *ctx, uint32_t timeout_ms, uint32_t *r
             pfds[n].revents = 0;
             n++;
         }
+        if (rc->wake_rd >= 0) {
+            pfds[n].fd = rc->wake_rd;
+            pfds[n].events = POLLIN;
+            pfds[n].revents = 0;
+            n++;
+        }
         rv = poll(n > 0u ? pfds : NULL, (nfds_t)n, posix_timeout_arg(timeout_ms));
         if (rv < 0) return errno == EINTR ? ASX_OK : ASX_E_INVALID_STATE;
         *ready_count = (uint32_t)rv;
+        if (rc->wake_rd >= 0 && pfds[n - 1u].revents != 0) posix_reactor_wake_drain(rc);
     }
 #endif
     return ASX_OK;
@@ -413,6 +499,14 @@ void asx_posix_reactor_reset(void *reactor_ctx) {
         rc->epoll_fd = -1;
     }
 #endif
+    /* The wake pipe was registered in the closed epoll set: recreate it
+     * with the next one. */
+    if (rc->wake_rd >= 0) {
+        (void)close(rc->wake_rd);
+        (void)close(rc->wake_wr);
+        rc->wake_rd = -1;
+        rc->wake_wr = -1;
+    }
     rc->count = 0;
 }
 
@@ -646,6 +740,10 @@ asx_status asx_posix_hooks_install(asx_runtime_hooks *hooks) {
     hooks->reactor.register_fn = posix_reactor_arm;
     hooks->reactor.deregister_fn = posix_reactor_forget;
     hooks->reactor.poll_fn = posix_reactor_poll;
+    hooks->reactor.notify_fn = posix_reactor_notify;
+    /* Create the epoll set and wake pipe now, before any pool thread can
+     * notify, so no wake is lost to lazy creation. */
+    (void)posix_reactor_ensure(&g_reactor_ctx);
 
     hooks->blocking.ctx = &g_blocking_pool;
     hooks->blocking.submit_fn = posix_blocking_submit;

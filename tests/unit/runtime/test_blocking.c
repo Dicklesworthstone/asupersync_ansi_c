@@ -4,10 +4,21 @@
  * SPDX-License-Identifier: MIT
  */
 
+#if defined(ASX_PROFILE_POSIX) && defined(ASX_DETERMINISTIC) && (ASX_DETERMINISTIC == 0)
+#define ASX_TEST_LIVE_POOL 1
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#include <time.h>
+#else
+#define ASX_TEST_LIVE_POOL 0
+#endif
+
 #include "../../test_harness.h"
 #include <asx/asx.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/browser_boundary.h>
+#include <asx/runtime/rt.h>
 #include <string.h>
 
 #if ASX_HAS_BLOCKING_SURFACE
@@ -380,6 +391,79 @@ TEST(multiple_tasks_different_results) {
     teardown();
 }
 
+#if ASX_TEST_LIVE_POOL
+/* ------------------------------------------------------------------ */
+/* Live pool: cross-thread wake of a scheduler blocked in the reactor  */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_waker waker;
+    asx_blocking_handle job;
+    int submitted;
+    uint64_t result;
+    uint32_t polls;
+} pool_waiter_state;
+
+static uint64_t slow_job(void *user_data) {
+    struct timespec ts;
+    (void)user_data;
+    ts.tv_sec = 0;
+    ts.tv_nsec = 50L * 1000000L;
+    (void)nanosleep(&ts, NULL);
+    return 7u;
+}
+
+/* Submits one pool job with its own waker, then parks until it is done. */
+static asx_status poll_pool_waiter(void *ud, asx_task_id self) {
+    pool_waiter_state *s = (pool_waiter_state *)ud;
+    asx_status st;
+    s->polls++;
+    if (!s->submitted) {
+        st = asx_waker_register(self, &s->waker);
+        if (st != ASX_OK) return st;
+        st = asx_spawn_blocking(slow_job, NULL, &s->waker, &s->job);
+        if (st != ASX_OK) return st;
+        s->submitted = 1;
+    }
+    st = asx_blocking_get_result(&s->job, &s->result);
+    if (st == ASX_OK) {
+        asx_waker_deregister(&s->waker);
+        return ASX_OK;
+    }
+    if (st != ASX_E_PENDING) return st;
+    st = asx_task_park(self);
+    if (st != ASX_OK) return st;
+    return ASX_E_PENDING;
+}
+
+TEST(scheduler_wakes_task_parked_on_pool_job) {
+    asx_runtime rt;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+    pool_waiter_state s;
+    asx_time t0 = 0;
+    asx_time t1 = 0;
+
+    ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_pool_waiter, &s, &t), ASX_OK);
+    MUST_OK(asx_runtime_now_ns(&t0));
+    budget = asx_budget_from_polls(100);
+    /* Nothing but the pool job can wake the task: the scheduler must block
+     * on it rather than report ASX_E_WOULD_BLOCK. */
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    MUST_OK(asx_runtime_now_ns(&t1));
+    ASSERT_EQ(s.result, 7u);
+    ASSERT_TRUE(s.polls <= 3u);
+    /* Woken by the completion's reactor notify, not the 1 s idle cap. */
+    ASSERT_TRUE(t1 - t0 < (asx_time)500u * 1000000u);
+    asx_runtime_shutdown(&rt);
+    teardown();
+}
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -436,6 +520,9 @@ int main(void) {
     RUN_TEST(arena_exhaustion);
     RUN_TEST(multiple_tasks_different_results);
     RUN_TEST(init_denied_when_blocking_surface_unavailable);
+#if ASX_TEST_LIVE_POOL
+    RUN_TEST(scheduler_wakes_task_parked_on_pool_job);
+#endif
 #else
     RUN_TEST(blocking_surface_compile_time_hidden_in_browser);
 #endif

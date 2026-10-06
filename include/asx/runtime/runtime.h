@@ -367,8 +367,14 @@ typedef struct {
     asx_cancel_phase phase;   /* current phase (or 0 if not cancelled) */
     int cancelled;            /* nonzero if cancel is active */
     uint32_t polls_remaining; /* cleanup budget left */
-    asx_cancel_kind kind;     /* cancel kind (if cancelled) */
+    asx_cancel_kind kind;     /* cancel kind (if cancelled or masked) */
+    int masked;               /* cancel pending but deferred by asx_task_mask() */
 } asx_checkpoint_result;
+
+/* Maximum nesting of asx_task_mask() sections (INV-MASK-BOUNDED). */
+#ifndef ASX_MAX_MASK_DEPTH
+#define ASX_MAX_MASK_DEPTH 64u
+#endif
 
 /* Request cancellation of a task. Transitions Running → CancelRequested.
  * No-op if already in cancel or terminal state.
@@ -403,6 +409,14 @@ ASX_API uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind
  * If in CancelRequested, transitions to Cancelling and applies
  * cleanup budget. Returns cancel status in *out.
  *
+ * A checkpoint also observes the task's budget deadline: once it has
+ * passed, the task is cancelled with ASX_CANCEL_DEADLINE right here,
+ * without waiting for the scheduler's next pre-poll check.
+ *
+ * While the task is masked (asx_task_mask), a pending cancel is not
+ * acknowledged: *out reports cancelled = 0, masked = 1 and the pending
+ * kind, and the phase stays CancelRequested.
+ *
  * Preconditions: self must be a valid task handle; out must not be NULL.
  * Postconditions: *out contains current cancel phase and budget.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out is NULL,
@@ -430,6 +444,38 @@ ASX_API ASX_MUST_USE asx_status asx_task_finalize(asx_task_id id);
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Task Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_task_get_cancel_phase(asx_task_id id, asx_cancel_phase *out);
+
+/* Enter a cancel-masked critical section (nestable).
+ *
+ * While a task's mask depth is nonzero, cancellation is deferred: it is
+ * still recorded (and strengthened) but asx_checkpoint() does not
+ * acknowledge it, and the scheduler neither consumes cleanup polls nor
+ * force-completes the task. Use for short sections that must not be
+ * interrupted (committing a transaction, flushing a buffer, finalizers);
+ * the mask may span polls. Every mask must be paired with
+ * asx_task_unmask().
+ *
+ * Preconditions: self must be a live, non-completed task handle.
+ * Returns ASX_OK, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for a bad handle,
+ *   ASX_E_INVALID_STATE for a completed task or when the depth would
+ *   exceed ASX_MAX_MASK_DEPTH.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_mask(asx_task_id self);
+
+/* Leave the innermost masked section. When the depth returns to zero a
+ * pending cancel becomes observable at the next checkpoint.
+ *
+ * Returns ASX_OK, a lookup error for a bad handle, or ASX_E_INVALID_STATE
+ *   when the task is not masked.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_unmask(asx_task_id self);
+
+/* Query a task's current mask depth.
+ *
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if out_depth is NULL, or a
+ *   lookup error for a bad handle.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_mask_depth(asx_task_id id, uint32_t *out_depth);
 
 /* -------------------------------------------------------------------
  * Obligation lifecycle

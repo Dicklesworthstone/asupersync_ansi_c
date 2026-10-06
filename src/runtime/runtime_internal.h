@@ -59,6 +59,7 @@ typedef struct {
     uint32_t cancel_epoch;
     uint32_t cleanup_polls_remaining;
     int cancel_pending; /* 1 if cancel signal delivered */
+    uint32_t mask_depth; /* asx_task_mask() nesting; cancel deferred while > 0 */
     int detached;       /* 1 if the slot is released at completion */
     uint32_t next_free; /* free-list link while !alive */
     /* Wake-driven scheduling. A task that returns ASX_E_PENDING stays
@@ -182,6 +183,14 @@ uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *ou
 /* Take (and clear) a fault raised during completion bookkeeping, e.g. an
  * obligation leak under the PANIC policy. ASX_OK when none is pending. */
 asx_status asx_runtime_take_pending_fault_internal(void);
+
+/* Scheduler block handshake with cross-thread wakers (waker.c). Call
+ * prepare right before a blocking reactor wait: it returns 0 (do not
+ * block) when a waker is already signaled, else marks the scheduler as
+ * blocking so later wakes call asx_runtime_reactor_notify(). Call finish
+ * after the wait returns. */
+int asx_waker_prepare_block_internal(void);
+void asx_waker_finish_block_internal(void);
 
 /* Reset private hook installation state during runtime teardown. */
 void asx_runtime_hooks_reset_internal(void);

@@ -342,6 +342,10 @@ typedef void (*asx_reactor_deregister_fn)(void *ctx, int fd);
  * notifications (consuming their one-shot arming). */
 typedef asx_status (*asx_reactor_poll_fn)(void *ctx, uint32_t timeout_ms, asx_reactor_event *events,
                                           uint32_t max_events, uint32_t *out_count);
+/* Interrupt a wait_fn / poll_fn blocked on another thread (async-signal
+ * and thread safe). A notify that races ahead of the wait must still make
+ * that wait return promptly. */
+typedef void (*asx_reactor_notify_fn)(void *ctx);
 
 typedef void (*asx_log_sink_fn)(void *ctx, int level, const char *message);
 
@@ -372,6 +376,9 @@ typedef struct {
     asx_reactor_register_fn register_fn;
     asx_reactor_deregister_fn deregister_fn;
     asx_reactor_poll_fn poll_fn;
+    /* Optional cross-thread wakeup (blocking-pool completions). Without
+     * it a blocked scheduler notices them at its next idle timeout. */
+    asx_reactor_notify_fn notify_fn;
 } asx_reactor_hooks;
 
 typedef void (*asx_blocking_job_fn)(void *job_ctx);
@@ -588,6 +595,11 @@ ASX_API void asx_runtime_reactor_deregister(int fd);
  * Returns ASX_E_HOOK_MISSING without a readiness-capable reactor. */
 ASX_API asx_status asx_runtime_reactor_poll(uint32_t timeout_ms, asx_reactor_event *events,
                                             uint32_t max_events, uint32_t *out_count);
+
+/* Interrupt a reactor wait/poll blocked on another thread. Safe to call
+ * from any thread; a no-op without a notify-capable reactor. */
+ASX_API void asx_runtime_reactor_notify(void);
+
 /* Write a log message at the given severity level.
  * Returns ASX_E_HOOK_MISSING if the runtime hook table is not installed.
  * Returns ASX_OK with no side effects when hooks are installed but no log sink is configured. */

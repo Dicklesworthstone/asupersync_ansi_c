@@ -187,12 +187,34 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
     st = asx_task_slot_lookup(self, &t);
     if (st != ASX_OK) return st;
 
+    /* Budget deadline observed inline, between scheduler polls. */
+    if (!t->cancel_pending && t->budget.deadline != 0u && !asx_task_is_terminal(t->state)) {
+        asx_time now;
+        if (asx_runtime_now_ns(&now) != ASX_OK) now = asx_runtime_virtual_now();
+        if (now >= t->budget.deadline) {
+            st = asx_task_cancel(self, ASX_CANCEL_DEADLINE);
+            (void)st;
+        }
+    }
+
+    out->masked = 0;
+
     /* Not cancelled — report clean status */
     if (!t->cancel_pending) {
         out->cancelled = 0;
         out->phase = ASX_CANCEL_PHASE_REQUESTED; /* unused when not cancelled */
         out->polls_remaining = 0;
         out->kind = ASX_CANCEL_USER;
+        return ASX_OK;
+    }
+
+    /* Masked: the cancel stays pending and unacknowledged. */
+    if (t->mask_depth > 0u) {
+        out->cancelled = 0;
+        out->masked = 1;
+        out->phase = t->cancel_phase;
+        out->polls_remaining = t->cleanup_polls_remaining;
+        out->kind = t->cancel_reason.kind;
         return ASX_OK;
     }
 
@@ -219,6 +241,39 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
     /* Budget is decremented by the scheduler after each poll,
      * not here. Checkpoint only observes and transitions phases. */
 
+    return ASX_OK;
+}
+
+/* -------------------------------------------------------------------
+ * Cancel masking (deferred acknowledgement for critical sections)
+ * ------------------------------------------------------------------- */
+
+asx_status asx_task_mask(asx_task_id self) {
+    asx_task_slot *t;
+    asx_status st = asx_task_slot_lookup(self, &t);
+    if (st != ASX_OK) return st;
+    if (asx_task_is_terminal(t->state)) return ASX_E_INVALID_STATE;
+    if (t->mask_depth >= ASX_MAX_MASK_DEPTH) return ASX_E_INVALID_STATE;
+    t->mask_depth++;
+    return ASX_OK;
+}
+
+asx_status asx_task_unmask(asx_task_id self) {
+    asx_task_slot *t;
+    asx_status st = asx_task_slot_lookup(self, &t);
+    if (st != ASX_OK) return st;
+    if (t->mask_depth == 0u) return ASX_E_INVALID_STATE;
+    t->mask_depth--;
+    return ASX_OK;
+}
+
+asx_status asx_task_mask_depth(asx_task_id id, uint32_t *out_depth) {
+    asx_task_slot *t;
+    asx_status st;
+    if (out_depth == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
+    *out_depth = t->mask_depth;
     return ASX_OK;
 }
 
