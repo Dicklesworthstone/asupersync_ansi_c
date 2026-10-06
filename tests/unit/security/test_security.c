@@ -11,12 +11,77 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/security/crypto.h>
 #include <asx/security/security.h>
 #include <string.h>
+
+/* Hex-encode bytes into a static buffer for string comparison. */
+static const char *bytes_hex(const uint8_t *data, size_t len) {
+    static char buf[2u * 64u + 1u];
+    if (asx_hex_encode(data, len, buf, sizeof(buf)) != ASX_OK) return "<hex-error>";
+    return buf;
+}
 
 /* ================================================================== */
 /* AuthKey tests                                                       */
 /* ================================================================== */
+
+TEST(key_from_seed_known_answer) {
+    /* SHA-256("asupersync::security::AuthKey::from_seed:v1" || u64le(42)) */
+    asx_auth_key key;
+    asx_auth_key_from_seed(&key, 42);
+    ASSERT_STR_EQ(bytes_hex(key.bytes, ASX_AUTH_KEY_SIZE),
+                  "79a7cd6dabb8d600f5a8130a1fbf777ab7d3ffbafe505c105bb1dc87ce8e7dea");
+    asx_auth_key_from_seed(&key, 0);
+    ASSERT_STR_EQ(bytes_hex(key.bytes, ASX_AUTH_KEY_SIZE),
+                  "830d7dc611695c1b3c15b0306c0a72ef0be3f1e82c64650c43d489fa1315bc2e");
+}
+
+TEST(key_derive_is_hmac_sha256) {
+    asx_auth_key parent, child;
+    uint8_t expect[ASX_HMAC_SHA256_SIZE];
+
+    asx_auth_key_from_seed(&parent, 42);
+    asx_auth_key_derive(&child, &parent, (const uint8_t *)"transport", 9);
+    asx_hmac_sha256(parent.bytes, ASX_AUTH_KEY_SIZE, "transport", 9u, expect);
+    ASSERT_TRUE(memcmp(child.bytes, expect, sizeof(expect)) == 0);
+    ASSERT_STR_EQ(bytes_hex(child.bytes, ASX_AUTH_KEY_SIZE),
+                  "aef0f5b6cb02247af5874324ed866050bd1a7fa7e3564cac3d62662297eddaf0");
+}
+
+TEST(key_derive_in_place_alias) {
+    asx_auth_key a, b;
+    asx_auth_key_from_seed(&a, 7);
+    asx_auth_key_derive(&b, &a, (const uint8_t *)"x", 1);
+    asx_auth_key_derive(&a, &a, (const uint8_t *)"x", 1);
+    ASSERT_TRUE(asx_auth_key_equals(&a, &b));
+}
+
+TEST(key_from_hkdf_rfc5869_case1_prefix) {
+    uint8_t ikm[22], salt[13], info[10];
+    asx_auth_key key;
+    unsigned i;
+
+    memset(ikm, 0x0b, sizeof(ikm));
+    for (i = 0u; i < sizeof(salt); i++) salt[i] = (uint8_t)i;
+    for (i = 0u; i < sizeof(info); i++) info[i] = (uint8_t)(0xf0u + i);
+    ASSERT_EQ(asx_auth_key_from_hkdf(&key, ikm, sizeof(ikm), salt, sizeof(salt), info,
+                                     sizeof(info)),
+              ASX_OK);
+    /* first 32 bytes of the RFC 5869 test case 1 OKM */
+    ASSERT_STR_EQ(bytes_hex(key.bytes, ASX_AUTH_KEY_SIZE),
+                  "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf");
+    ASSERT_EQ(asx_auth_key_from_hkdf(NULL, ikm, sizeof(ikm), NULL, 0u, NULL, 0u),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_auth_key_from_hkdf(&key, NULL, 4u, NULL, 0u, NULL, 0u), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(key_wipe_zeroes_material) {
+    asx_auth_key key;
+    asx_auth_key_from_seed(&key, 9);
+    asx_auth_key_wipe(&key);
+    ASSERT_TRUE(asx_crypto_ct_is_zero(key.bytes, ASX_AUTH_KEY_SIZE));
+}
 
 TEST(key_from_seed_deterministic) {
     asx_auth_key k1, k2;
@@ -83,6 +148,38 @@ TEST(tag_compute_deterministic) {
     asx_auth_tag_compute(&t1, &key, data, sizeof(data));
     asx_auth_tag_compute(&t2, &key, data, sizeof(data));
     ASSERT_TRUE(asx_auth_tag_equals(&t1, &t2));
+}
+
+TEST(tag_known_answer_hmac_sha256) {
+    /* HMAC-SHA256(key42, "asupersync::security::AuthenticationTag::bytes::v1"
+     *                    || u64le(3) || 01 02 03) */
+    asx_auth_key key;
+    asx_auth_tag tag;
+    uint8_t data[] = {1, 2, 3};
+    asx_auth_key_from_seed(&key, 42);
+    asx_auth_tag_compute(&tag, &key, data, sizeof(data));
+    ASSERT_STR_EQ(bytes_hex(tag.bytes, ASX_AUTH_TAG_SIZE),
+                  "0e1e5372f651662c84b546e27c476641b6766feb7a98e201fe5687c510d8f8f4");
+}
+
+TEST(tag_domain_separated_from_subkeys) {
+    /* A tag over "transport" must not equal (leak) the "transport" subkey. */
+    asx_auth_key key, sub;
+    asx_auth_tag tag;
+    asx_auth_key_from_seed(&key, 42);
+    asx_auth_key_derive(&sub, &key, (const uint8_t *)"transport", 9);
+    asx_auth_tag_compute(&tag, &key, (const uint8_t *)"transport", 9);
+    ASSERT_FALSE(memcmp(tag.bytes, sub.bytes, ASX_AUTH_TAG_SIZE) == 0);
+}
+
+TEST(tag_length_framing_distinguishes_prefixes) {
+    asx_auth_key key;
+    asx_auth_tag t1, t2;
+    uint8_t data[] = {0, 0, 0};
+    asx_auth_key_from_seed(&key, 5);
+    asx_auth_tag_compute(&t1, &key, data, 2);
+    asx_auth_tag_compute(&t2, &key, data, 3);
+    ASSERT_FALSE(asx_auth_tag_equals(&t1, &t2));
 }
 
 TEST(tag_verify_valid) {
@@ -433,6 +530,11 @@ TEST(authority_flow_tampered_data_rejected) {
 
 int main(void) {
     /* AuthKey */
+    RUN_TEST(key_from_seed_known_answer);
+    RUN_TEST(key_derive_is_hmac_sha256);
+    RUN_TEST(key_derive_in_place_alias);
+    RUN_TEST(key_from_hkdf_rfc5869_case1_prefix);
+    RUN_TEST(key_wipe_zeroes_material);
     RUN_TEST(key_from_seed_deterministic);
     RUN_TEST(key_different_seeds_differ);
     RUN_TEST(key_seed_zero_is_distinct);
@@ -442,6 +544,9 @@ int main(void) {
     RUN_TEST(key_derived_not_equal_to_parent);
 
     /* AuthenticationTag */
+    RUN_TEST(tag_known_answer_hmac_sha256);
+    RUN_TEST(tag_domain_separated_from_subkeys);
+    RUN_TEST(tag_length_framing_distinguishes_prefixes);
     RUN_TEST(tag_compute_deterministic);
     RUN_TEST(tag_verify_valid);
     RUN_TEST(tag_verify_fails_different_data);

@@ -12,19 +12,28 @@
  *   4. Fail-safe defaults — invalid/missing auth fails closed
  *   5. Zero dynamic allocation — all types are value types, no malloc
  *
- * Phase 0 status:
- *   The current implementation uses a deterministic keyed hash that is NOT
- *   cryptographically secure.  Production deployments MUST use a proper HMAC.
+ * Cryptographic constructions (asx/security/crypto.h, matching upstream):
+ *   key_from_seed(seed) = SHA-256("asupersync::security::AuthKey::from_seed:v1"
+ *                                 || u64le(seed))
+ *   key_derive(k, p)    = HMAC-SHA256(k, p)
+ *   tag(k, data)        = HMAC-SHA256(k, "asupersync::security::AuthenticationTag::bytes::v1"
+ *                                        || u64le(len) || data)
+ *   The tag domain prefix keeps tags and derived subkeys in disjoint input
+ *   spaces, so publishing a tag never reveals a subkey.
+ *
+ * Seeded keys carry at most 64 bits of entropy and exist for deterministic
+ * tests, fixtures, and replay. Production keys must come from a CSPRNG or a
+ * secret store via asx_auth_key_from_bytes() or asx_auth_key_from_hkdf().
  *
  * Architecture:
  *
  *   SecurityContext
  *   ├── AuthKey (256-bit key material)
- *   │   └── derive_subkey(purpose) → child AuthKey
+ *   │   └── derive_subkey(purpose) → child AuthKey  (HMAC-SHA256)
  *   ├── AuthMode (Strict / Permissive / Disabled)
  *   └── sign / verify
- *       ├── sign_symbol(data, len) → AuthenticationTag
- *       └── verify_symbol(data, len, tag) → status
+ *       ├── sign_symbol(data, len) → AuthenticationTag  (HMAC-SHA256)
+ *       └── verify_symbol(data, len, tag) → status      (constant time)
  *
  *   AuthenticatedSymbol
  *   ├── data pointer + length (borrowed, not owned)
@@ -61,21 +70,37 @@ typedef struct {
     uint8_t bytes[ASX_AUTH_KEY_SIZE];
 } asx_auth_key;
 
-/* Create a key from a deterministic 64-bit seed.
- * Seed 0 is remapped to a fixed non-zero value. */
+/* Create a key from a deterministic 64-bit seed (tests/fixtures/replay only).
+ * Construction: SHA-256 of a domain label followed by the little-endian seed;
+ * every seed, including 0, maps to a distinct uniformly distributed key. */
 ASX_API void asx_auth_key_from_seed(asx_auth_key *key, uint64_t seed);
 
 /* Create a key from raw bytes. */
 ASX_API void asx_auth_key_from_bytes(asx_auth_key *key, const uint8_t bytes[ASX_AUTH_KEY_SIZE]);
 
+/* Create a key with HKDF-SHA256 (RFC 5869) from input keying material.
+ * salt may be NULL/empty (RFC zero salt); info provides domain separation.
+ * HKDF spreads existing entropy but cannot add any: ikm must already be
+ * secret and high-entropy for production use.
+ * Returns ASX_OK or ASX_E_INVALID_ARGUMENT for NULL key or NULL non-empty
+ * inputs; key is untouched on error. */
+ASX_API ASX_MUST_USE asx_status asx_auth_key_from_hkdf(asx_auth_key *key, const uint8_t *ikm,
+                                                       size_t ikm_len, const uint8_t *salt,
+                                                       size_t salt_len, const uint8_t *info,
+                                                       size_t info_len);
+
 /* Derive a subkey for a specific purpose.
- * Construction: derived = keyed_hash(self, purpose, purpose_len).
- * Different purpose strings produce incompatible keys. */
+ * Construction: derived = HMAC-SHA256(parent, purpose).
+ * Different purpose strings produce independent keys. derived may alias
+ * parent. purpose may be NULL if purpose_len == 0. */
 ASX_API void asx_auth_key_derive(asx_auth_key *derived, const asx_auth_key *parent,
                                  const uint8_t *purpose, size_t purpose_len);
 
 /* Returns nonzero if two keys are equal (constant-time). */
 ASX_API ASX_MUST_USE int asx_auth_key_equals(const asx_auth_key *a, const asx_auth_key *b);
+
+/* Securely wipe key material (cannot be optimized away). */
+ASX_API void asx_auth_key_wipe(asx_auth_key *key);
 
 /* ------------------------------------------------------------------ */
 /* AuthenticationTag — 32-byte MAC for symbol verification             */
@@ -85,18 +110,20 @@ typedef struct {
     uint8_t bytes[ASX_AUTH_TAG_SIZE];
 } asx_auth_tag;
 
-/* Compute an authentication tag for data using the given key.
- * Phase 0: deterministic keyed hash (not cryptographically secure).
+/* Compute an HMAC-SHA256 authentication tag for data using the given key
+ * (domain-separated and length-framed, see the header comment).
  * data may be NULL if data_len == 0. */
 ASX_API void asx_auth_tag_compute(asx_auth_tag *tag, const asx_auth_key *key, const uint8_t *data,
                                   size_t data_len);
 
 /* Verify that a tag matches the computed tag for the given data+key.
- * Returns nonzero if valid. Uses constant-time comparison. */
+ * Returns nonzero if valid. Always recomputes the HMAC and compares in
+ * constant time; the all-zero sentinel tag is never accepted. */
 ASX_API ASX_MUST_USE int asx_auth_tag_verify(const asx_auth_tag *tag, const asx_auth_key *key,
                                              const uint8_t *data, size_t data_len);
 
-/* Returns a zeroed tag (for testing or placeholders). */
+/* Returns a zeroed tag: an "unauthenticated" sentinel that verification
+ * always rejects (for tests or placeholders). */
 ASX_API void asx_auth_tag_zero(asx_auth_tag *tag);
 
 /* Returns nonzero if two tags are equal (constant-time). */

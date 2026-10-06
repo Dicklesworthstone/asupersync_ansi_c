@@ -8,7 +8,9 @@
  */
 
 #include <asx/cx/cx.h>
+#include <asx/portable.h>
 #include <asx/runtime/runtime.h>
+#include <asx/security/crypto.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -228,33 +230,106 @@ asx_status asx_cx_registry_materialize(const asx_cx *parent, const asx_cx_regist
     return cx_copy_with_caps(parent, out_child, entry->caps);
 }
 
-asx_status asx_cx_macaroon_issue(const asx_cx *parent, asx_cap_flags child_caps,
-                                 asx_cx_macaroon *out_macaroon) {
-    if (parent == NULL || out_macaroon == NULL) return ASX_E_INVALID_ARGUMENT;
+/* ------------------------------------------------------------------ */
+/* Capability macaroons (HMAC-SHA256 chain)                            */
+/* ------------------------------------------------------------------ */
+
+static const char k_macaroon_id_domain[] = "asupersync::cx::macaroon::identifier:v1";
+#define CX_CAVEAT_KIND_CAP_MASK 0x01u
+
+/* sig_0 = HMAC(root_key, domain || u64le(region) || u64le(task) ||
+ *              u32le(generation) || u32le(root_caps)) */
+static void cx_macaroon_root_sig(const asx_auth_key *root_key, asx_region_id region_id,
+                                 asx_task_id task_id, uint32_t generation, asx_cap_flags root_caps,
+                                 uint8_t out[ASX_CX_MACAROON_SIG_SIZE]) {
+    asx_hmac_sha256_ctx mac;
+    uint8_t id[24];
+
+    asx_store_le_u64(id, (uint64_t)region_id);
+    asx_store_le_u64(id + 8, (uint64_t)task_id);
+    asx_store_le_u32(id + 16, generation);
+    asx_store_le_u32(id + 20, (uint32_t)root_caps);
+
+    asx_hmac_sha256_init(&mac, root_key->bytes, ASX_AUTH_KEY_SIZE);
+    asx_hmac_sha256_update(&mac, k_macaroon_id_domain, sizeof(k_macaroon_id_domain) - 1u);
+    asx_hmac_sha256_update(&mac, id, sizeof(id));
+    asx_hmac_sha256_final(&mac, out);
+}
+
+/* sig_i = HMAC(sig_{i-1}, kind || u32le(mask)); sig may be updated in place. */
+static void cx_macaroon_chain_caveat(uint8_t sig[ASX_CX_MACAROON_SIG_SIZE],
+                                     asx_cap_flags caveat_caps) {
+    uint8_t caveat[5];
+    uint8_t next[ASX_CX_MACAROON_SIG_SIZE];
+
+    caveat[0] = (uint8_t)CX_CAVEAT_KIND_CAP_MASK;
+    asx_store_le_u32(caveat + 1, (uint32_t)caveat_caps);
+    asx_hmac_sha256(sig, ASX_CX_MACAROON_SIG_SIZE, caveat, sizeof(caveat), next);
+    memcpy(sig, next, sizeof(next));
+    asx_crypto_secure_zero(next, sizeof(next));
+}
+
+asx_status asx_cx_macaroon_issue(const asx_cx *parent, const asx_auth_key *root_key,
+                                 asx_cap_flags child_caps, asx_cx_macaroon *out_macaroon) {
+    if (parent == NULL || root_key == NULL || out_macaroon == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
     if (!cx_caps_subset(parent->caps, child_caps)) return ASX_E_INVALID_ARGUMENT;
 
+    memset(out_macaroon, 0, sizeof(*out_macaroon));
     out_macaroon->caps = child_caps;
+    out_macaroon->root_caps = child_caps;
+    out_macaroon->parent_region_id = parent->region_id;
+    out_macaroon->parent_task_id = parent->task_id;
     out_macaroon->parent_generation = parent->generation;
     out_macaroon->caveat_count = 0u;
+    cx_macaroon_root_sig(root_key, parent->region_id, parent->task_id, parent->generation,
+                         child_caps, out_macaroon->signature);
     return ASX_OK;
 }
 
 asx_status asx_cx_macaroon_attenuate(asx_cx_macaroon *macaroon, asx_cap_flags caveat_caps) {
     if (macaroon == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (macaroon->caveat_count >= ASX_CX_MACAROON_MAX_CAVEATS) return ASX_E_RESOURCE_EXHAUSTED;
 
-    macaroon->caps &= caveat_caps;
+    macaroon->caveats[macaroon->caveat_count] = caveat_caps;
     macaroon->caveat_count++;
+    macaroon->caps &= caveat_caps;
+    cx_macaroon_chain_caveat(macaroon->signature, caveat_caps);
     return ASX_OK;
 }
 
-asx_status asx_cx_macaroon_bind(const asx_cx *parent, const asx_cx_macaroon *macaroon,
-                                asx_cx *out_child) {
-    if (parent == NULL || macaroon == NULL || out_child == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
-    if (macaroon->parent_generation != parent->generation) return ASX_E_STALE_HANDLE;
+asx_status asx_cx_macaroon_bind(const asx_cx *parent, const asx_auth_key *root_key,
+                                const asx_cx_macaroon *macaroon, asx_cx *out_child) {
+    uint8_t sig[ASX_CX_MACAROON_SIG_SIZE];
+    asx_cap_flags effective;
+    uint32_t i;
+    int sig_ok;
 
-    return cx_copy_with_caps(parent, out_child, macaroon->caps);
+    if (parent == NULL || root_key == NULL || macaroon == NULL || out_child == NULL) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    if (!asx_cx_is_valid(parent)) return ASX_E_INVALID_STATE;
+    if (macaroon->parent_generation != parent->generation ||
+        macaroon->parent_region_id != parent->region_id ||
+        macaroon->parent_task_id != parent->task_id) {
+        return ASX_E_STALE_HANDLE;
+    }
+    if (macaroon->caveat_count > ASX_CX_MACAROON_MAX_CAVEATS) return ASX_E_PERMISSION_DENIED;
+
+    /* Recompute the chain from the root key and compare in constant time. */
+    cx_macaroon_root_sig(root_key, macaroon->parent_region_id, macaroon->parent_task_id,
+                         macaroon->parent_generation, macaroon->root_caps, sig);
+    effective = macaroon->root_caps;
+    for (i = 0u; i < macaroon->caveat_count; i++) {
+        cx_macaroon_chain_caveat(sig, macaroon->caveats[i]);
+        effective &= macaroon->caveats[i];
+    }
+    sig_ok = asx_crypto_ct_equal(sig, macaroon->signature, sizeof(sig));
+    asx_crypto_secure_zero(sig, sizeof(sig));
+    if (!sig_ok || effective != macaroon->caps) return ASX_E_PERMISSION_DENIED;
+
+    /* Root caps were a parent subset at issue; recheck against the live parent. */
+    return cx_copy_with_caps(parent, out_child, effective);
 }
 
 /* ------------------------------------------------------------------ */

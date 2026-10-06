@@ -233,6 +233,7 @@ TIME_SRC := \
 	src/time/timer_wheel.c
 
 SECURITY_SRC := \
+	src/security/crypto.c \
 	src/security/security.c \
 	src/security/audit.c
 
@@ -805,6 +806,7 @@ BROWSER_FOCUSED_TEST_BIN := \
 	$(TEST_DIR)/unit/encoding/test_encoding \
 	$(TEST_DIR)/unit/decoding/test_decoding \
 	$(TEST_DIR)/unit/stream/test_stream \
+	$(TEST_DIR)/unit/security/test_crypto \
 	$(TEST_DIR)/unit/security/test_security \
 	$(TEST_DIR)/unit/security/test_security_audit \
 	$(TEST_DIR)/unit/plan/test_plan \

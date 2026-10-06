@@ -6,8 +6,45 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/asx_config.h>
 #include <asx/net/web.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
+
+/* ------------------------------------------------------------------ */
+/* Seeded entropy hook (deterministic-mode stand-in)                   */
+/* ------------------------------------------------------------------ */
+
+static uint64_t g_web_entropy_state = 0u;
+
+static uint64_t web_test_entropy(void *ctx) {
+    /* splitmix64 */
+    uint64_t z;
+    (void)ctx;
+    g_web_entropy_state += UINT64_C(0x9E3779B97F4A7C15);
+    z = g_web_entropy_state;
+    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
+    return z ^ (z >> 31);
+}
+
+static void install_seeded_entropy(uint64_t seed) {
+    asx_runtime_hooks hooks;
+    asx_runtime_reset();
+    (void)asx_runtime_hooks_init(&hooks);
+    hooks.entropy.random_u64_fn = web_test_entropy;
+    hooks.deterministic_seeded_prng = 1u;
+    g_web_entropy_state = seed;
+    (void)asx_runtime_set_hooks(&hooks);
+}
+
+static int is_lower_hex(const char *s, size_t len) {
+    size_t i;
+    for (i = 0u; i < len; i++) {
+        if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return 0;
+    }
+    return s[len] == '\0';
+}
 
 /* ------------------------------------------------------------------ */
 /* Test handler helpers                                                */
@@ -199,13 +236,70 @@ TEST(session_create_and_lookup) {
     char id[ASX_WEB_SESSION_ID_LEN + 1];
     asx_web_session *s;
 
+    install_seeded_entropy(1u);
     asx_web_session_store_init(&store);
     ASSERT_EQ(asx_web_session_create(&store, id, sizeof(id)), ASX_OK);
-    ASSERT_TRUE(id[0] != '\0');
+    ASSERT_TRUE(is_lower_hex(id, ASX_WEB_SESSION_ID_LEN));
 
     s = asx_web_session_get(&store, id);
     ASSERT_TRUE(s != NULL);
     ASSERT_TRUE(s->active);
+}
+
+TEST(session_ids_unpredictable_and_unique) {
+    asx_web_session_store store;
+    char ids[ASX_WEB_MAX_SESSIONS][ASX_WEB_SESSION_ID_LEN + 1];
+    uint32_t i, j;
+
+    install_seeded_entropy(2u);
+    asx_web_session_store_init(&store);
+    for (i = 0u; i < ASX_WEB_MAX_SESSIONS; i++) {
+        ASSERT_EQ(asx_web_session_create(&store, ids[i], sizeof(ids[i])), ASX_OK);
+        ASSERT_TRUE(is_lower_hex(ids[i], ASX_WEB_SESSION_ID_LEN));
+    }
+    /* No sequential/zero-padded counter IDs, and all distinct. */
+    ASSERT_TRUE(strncmp(ids[0], "0000000000000000", 16) != 0);
+    for (i = 0u; i < ASX_WEB_MAX_SESSIONS; i++) {
+        for (j = i + 1u; j < ASX_WEB_MAX_SESSIONS; j++) {
+            ASSERT_TRUE(strcmp(ids[i], ids[j]) != 0);
+        }
+    }
+    {
+        char extra[ASX_WEB_SESSION_ID_LEN + 1];
+        ASSERT_EQ(asx_web_session_create(&store, extra, sizeof(extra)), ASX_E_RESOURCE_EXHAUSTED);
+    }
+}
+
+TEST(session_ids_replay_deterministically_with_seeded_entropy) {
+    asx_web_session_store s1, s2;
+    char a[ASX_WEB_SESSION_ID_LEN + 1], b[ASX_WEB_SESSION_ID_LEN + 1];
+    char c[ASX_WEB_SESSION_ID_LEN + 1];
+
+    install_seeded_entropy(77u);
+    asx_web_session_store_init(&s1);
+    ASSERT_EQ(asx_web_session_create(&s1, a, sizeof(a)), ASX_OK);
+
+    install_seeded_entropy(77u);
+    asx_web_session_store_init(&s2);
+    ASSERT_EQ(asx_web_session_create(&s2, b, sizeof(b)), ASX_OK);
+    ASSERT_STR_EQ(a, b);
+
+    install_seeded_entropy(78u);
+    asx_web_session_store_init(&s2);
+    ASSERT_EQ(asx_web_session_create(&s2, c, sizeof(c)), ASX_OK);
+    ASSERT_TRUE(strcmp(a, c) != 0);
+}
+
+TEST(session_create_fails_closed_without_entropy) {
+    asx_web_session_store store;
+    char id[ASX_WEB_SESSION_ID_LEN + 1];
+    uint32_t i;
+
+    asx_runtime_reset(); /* no hooks installed */
+    asx_web_session_store_init(&store);
+    ASSERT_EQ(asx_web_session_create(&store, id, sizeof(id)), ASX_E_HOOK_MISSING);
+    for (i = 0u; i < ASX_WEB_MAX_SESSIONS; i++) ASSERT_FALSE(store.sessions[i].active);
+    ASSERT_EQ(store.next_seq, 1u);
 }
 
 TEST(session_set_data) {
@@ -213,6 +307,7 @@ TEST(session_set_data) {
     char id[ASX_WEB_SESSION_ID_LEN + 1];
     asx_web_session *s;
 
+    install_seeded_entropy(3u);
     asx_web_session_store_init(&store);
     asx_web_session_create(&store, id, sizeof(id));
     s = asx_web_session_get(&store, id);
@@ -228,6 +323,7 @@ TEST(session_set_data_rejects_null_nonempty_payload) {
     char id[ASX_WEB_SESSION_ID_LEN + 1];
     asx_web_session *s;
 
+    install_seeded_entropy(4u);
     asx_web_session_store_init(&store);
     asx_web_session_create(&store, id, sizeof(id));
     s = asx_web_session_get(&store, id);
@@ -241,6 +337,7 @@ TEST(session_destroy) {
     asx_web_session_store store;
     char id[ASX_WEB_SESSION_ID_LEN + 1];
 
+    install_seeded_entropy(5u);
     asx_web_session_store_init(&store);
     asx_web_session_create(&store, id, sizeof(id));
     ASSERT_TRUE(asx_web_session_get(&store, id) != NULL);
@@ -395,27 +492,51 @@ TEST(cors_apply_headers) {
 /* CSRF tests                                                          */
 /* ------------------------------------------------------------------ */
 
-TEST(csrf_deterministic_token) {
+TEST(csrf_deterministic_token_under_seeded_entropy) {
     asx_web_csrf csrf1, csrf2;
-    asx_web_csrf_init(&csrf1, 42);
-    asx_web_csrf_init(&csrf2, 42);
-    /* Same seed = same token */
-    ASSERT_STR_EQ(asx_web_csrf_token(&csrf1), asx_web_csrf_token(&csrf2));
+    char copy[ASX_WEB_CSRF_TOKEN_LEN + 1];
+
+    install_seeded_entropy(42u);
+    ASSERT_EQ(asx_web_csrf_init(&csrf1), ASX_OK);
+    memcpy(copy, asx_web_csrf_token(&csrf1), sizeof(copy));
+    install_seeded_entropy(42u);
+    ASSERT_EQ(asx_web_csrf_init(&csrf2), ASX_OK);
+    /* Same seeded entropy stream = same token (replay determinism) */
+    ASSERT_STR_EQ(copy, asx_web_csrf_token(&csrf2));
     ASSERT_TRUE(asx_web_csrf_validate(&csrf1, asx_web_csrf_token(&csrf2)));
+    ASSERT_TRUE(is_lower_hex(asx_web_csrf_token(&csrf1), ASX_WEB_CSRF_TOKEN_LEN));
 }
 
-TEST(csrf_different_seeds) {
+TEST(csrf_successive_tokens_differ) {
     asx_web_csrf csrf1, csrf2;
-    asx_web_csrf_init(&csrf1, 1);
-    asx_web_csrf_init(&csrf2, 2);
+    install_seeded_entropy(1u);
+    ASSERT_EQ(asx_web_csrf_init(&csrf1), ASX_OK);
+    ASSERT_EQ(asx_web_csrf_init(&csrf2), ASX_OK);
     ASSERT_FALSE(asx_web_csrf_validate(&csrf1, asx_web_csrf_token(&csrf2)));
 }
 
 TEST(csrf_reject_bad_token) {
     asx_web_csrf csrf;
-    asx_web_csrf_init(&csrf, 99);
+    char tampered[ASX_WEB_CSRF_TOKEN_LEN + 1];
+
+    install_seeded_entropy(99u);
+    ASSERT_EQ(asx_web_csrf_init(&csrf), ASX_OK);
     ASSERT_FALSE(asx_web_csrf_validate(&csrf, "bad-token"));
     ASSERT_FALSE(asx_web_csrf_validate(&csrf, NULL));
+    memcpy(tampered, asx_web_csrf_token(&csrf), sizeof(tampered));
+    tampered[ASX_WEB_CSRF_TOKEN_LEN - 1u] =
+        (char)(tampered[ASX_WEB_CSRF_TOKEN_LEN - 1u] == 'a' ? 'b' : 'a');
+    ASSERT_FALSE(asx_web_csrf_validate(&csrf, tampered));
+}
+
+TEST(csrf_init_fails_closed_without_entropy) {
+    asx_web_csrf csrf;
+    asx_runtime_reset();
+    ASSERT_EQ(asx_web_csrf_init(&csrf), ASX_E_HOOK_MISSING);
+    ASSERT_STR_EQ(asx_web_csrf_token(&csrf), "");
+    ASSERT_FALSE(asx_web_csrf_validate(&csrf, ""));
+    ASSERT_FALSE(asx_web_csrf_validate(&csrf, "00000000000000000000000000000000"));
+    ASSERT_EQ(asx_web_csrf_init(NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ------------------------------------------------------------------ */
@@ -491,6 +612,9 @@ int main(void) {
 
     /* Session */
     RUN_TEST(session_create_and_lookup);
+    RUN_TEST(session_ids_unpredictable_and_unique);
+    RUN_TEST(session_ids_replay_deterministically_with_seeded_entropy);
+    RUN_TEST(session_create_fails_closed_without_entropy);
     RUN_TEST(session_set_data);
     RUN_TEST(session_set_data_rejects_null_nonempty_payload);
     RUN_TEST(session_destroy);
@@ -513,9 +637,10 @@ int main(void) {
     RUN_TEST(cors_apply_headers);
 
     /* CSRF */
-    RUN_TEST(csrf_deterministic_token);
-    RUN_TEST(csrf_different_seeds);
+    RUN_TEST(csrf_deterministic_token_under_seeded_entropy);
+    RUN_TEST(csrf_successive_tokens_differ);
     RUN_TEST(csrf_reject_bad_token);
+    RUN_TEST(csrf_init_fails_closed_without_entropy);
 
     /* Static files */
     RUN_TEST(static_add_and_serve);

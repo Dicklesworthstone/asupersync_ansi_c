@@ -30,6 +30,7 @@
 #include <asx/asx_status.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
+#include <asx/security/security.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -82,10 +83,29 @@ typedef struct {
     uint32_t parent_generation;
 } asx_cx_wrapper;
 
+#ifndef ASX_CX_MACAROON_MAX_CAVEATS
+#define ASX_CX_MACAROON_MAX_CAVEATS 8u
+#endif
+
+#define ASX_CX_MACAROON_SIG_SIZE 32u
+
+/* Capability macaroon (HMAC chain, Birgisson et al. 2014):
+ *   sig_0 = HMAC-SHA256(root_key, identifier)
+ *   sig_i = HMAC-SHA256(sig_{i-1}, caveat_i)
+ * The identifier binds the issuing parent identity and the root caps.
+ * Anyone holding a macaroon can append caveats (attenuate), but only a
+ * root-key holder can mint or verify one; removing or editing a caveat
+ * breaks the chain. Every field is covered by the signature except `caps`,
+ * which is a derived convenience copy that bind recomputes and checks. */
 typedef struct {
-    asx_cap_flags caps;
-    uint32_t parent_generation;
-    uint32_t caveat_count;
+    asx_cap_flags caps;             /* effective caps = root_caps & every caveat */
+    asx_cap_flags root_caps;        /* caps granted at issue (identifier) */
+    asx_region_id parent_region_id; /* issuing parent identity (identifier) */
+    asx_task_id parent_task_id;     /* issuing parent identity (identifier) */
+    uint32_t parent_generation;     /* issuing parent generation (identifier) */
+    uint32_t caveat_count;          /* number of caveats in the chain */
+    asx_cap_flags caveats[ASX_CX_MACAROON_MAX_CAVEATS]; /* capability-mask caveats */
+    uint8_t signature[ASX_CX_MACAROON_SIG_SIZE];        /* HMAC chain tail */
 } asx_cx_macaroon;
 
 typedef struct {
@@ -183,16 +203,26 @@ ASX_API asx_status asx_cx_registry_materialize(const asx_cx *parent,
                                                const asx_cx_registry *registry, asx_cx_grant grant,
                                                asx_cx *out_child);
 
-/* Capture an attenuated macaroon-like token for later rebinding. */
-ASX_API asx_status asx_cx_macaroon_issue(const asx_cx *parent, asx_cap_flags child_caps,
-                                         asx_cx_macaroon *out_macaroon);
+/* Mint a capability macaroon for child_caps (must be a subset of the
+ * parent's caps), signed with root_key (sig_0 = HMAC(root_key, identifier)).
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT (NULL args or escalation), or
+ * ASX_E_INVALID_STATE for an invalid parent. */
+ASX_API asx_status asx_cx_macaroon_issue(const asx_cx *parent, const asx_auth_key *root_key,
+                                         asx_cap_flags child_caps, asx_cx_macaroon *out_macaroon);
 
-/* Apply an additional attenuation caveat to a macaroon. */
+/* Append a capability-mask caveat: caps &= caveat_caps and
+ * sig = HMAC(sig, caveat). Needs no key. Failure-atomic: returns
+ * ASX_E_RESOURCE_EXHAUSTED (macaroon unchanged) once
+ * ASX_CX_MACAROON_MAX_CAVEATS caveats are present. */
 ASX_API asx_status asx_cx_macaroon_attenuate(asx_cx_macaroon *macaroon, asx_cap_flags caveat_caps);
 
-/* Rebind a macaroon against its parent context, failing closed on mismatch. */
-ASX_API asx_status asx_cx_macaroon_bind(const asx_cx *parent, const asx_cx_macaroon *macaroon,
-                                        asx_cx *out_child);
+/* Verify a macaroon's HMAC chain under root_key (constant-time compare) and
+ * rebind it against its parent context.
+ * Returns ASX_OK, ASX_E_STALE_HANDLE if the parent identity/generation does
+ * not match, ASX_E_PERMISSION_DENIED for a forged/tampered chain, or
+ * ASX_E_INVALID_ARGUMENT / ASX_E_INVALID_STATE for bad arguments. */
+ASX_API asx_status asx_cx_macaroon_bind(const asx_cx *parent, const asx_auth_key *root_key,
+                                        const asx_cx_macaroon *macaroon, asx_cx *out_child);
 
 /* ------------------------------------------------------------------ */
 /* Budget access                                                       */

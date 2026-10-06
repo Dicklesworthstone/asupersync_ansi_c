@@ -6,7 +6,10 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <asx/asx_config.h>
 #include <asx/net/web.h>
+#include <asx/portable.h>
+#include <asx/security/crypto.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -263,29 +266,65 @@ void asx_web_session_store_init(asx_web_session_store *store) {
     store->next_seq = 1u;
 }
 
-static void session_generate_id(char *out, uint32_t capacity, uint32_t seq) {
-    /* Deterministic hex-encoded session ID from sequence number */
-    static const char hex[] = "0123456789abcdef";
-    uint32_t i;
-    uint32_t val;
+/* ------------------------------------------------------------------ */
+/* Unpredictable identifiers                                           */
+/* ------------------------------------------------------------------ */
 
-    if (out == NULL || capacity == 0u) return;
-    memset(out, '0',
-           capacity - 1u < ASX_WEB_SESSION_ID_LEN ? capacity - 1u : ASX_WEB_SESSION_ID_LEN);
-    val = seq;
-    /* Write hex digits right-to-left */
-    i = ASX_WEB_SESSION_ID_LEN < capacity ? ASX_WEB_SESSION_ID_LEN : capacity - 1u;
-    out[i] = '\0';
-    while (i > 0u && val > 0u) {
-        i--;
-        out[i] = hex[val & 0xFu];
-        val >>= 4;
+#define WEB_RANDOM_HEX_MAX                                                                         \
+    (ASX_WEB_SESSION_ID_LEN > ASX_WEB_CSRF_TOKEN_LEN ? ASX_WEB_SESSION_ID_LEN                      \
+                                                     : ASX_WEB_CSRF_TOKEN_LEN)
+#define WEB_RANDOM_BYTES_MAX ((WEB_RANDOM_HEX_MAX + 1u) / 2u)
+
+static const char k_web_session_label[] = "asupersync::web::session-id:v1";
+static const char k_web_csrf_label[] = "asupersync::web::csrf-token:v1";
+
+/* The runtime entropy hook is the explicit entropy provider boundary. */
+static asx_status web_runtime_entropy(void *ctx, uint64_t *out) {
+    (void)ctx;
+    return asx_runtime_random_u64(out);
+}
+
+/* Write hex_len unpredictable lowercase hex chars plus NUL into out:
+ *   ikm = SHA-256-whitened 256 bits from the runtime entropy hook
+ *   okm = HKDF-SHA256(salt = label, ikm, info = u32be(seq))
+ * Raw PRNG words never reach the identifier, and seq keeps identifiers
+ * distinct even under a degenerate (constant) entropy source. */
+static asx_status web_random_hex(char *out, size_t hex_len, const char *label, uint32_t seq) {
+    uint8_t ikm[32];
+    uint8_t okm[WEB_RANDOM_BYTES_MAX];
+    char hex[(2u * WEB_RANDOM_BYTES_MAX) + 1u];
+    uint8_t seq_be[4];
+    size_t nbytes;
+    asx_status st;
+
+    if (out == NULL || label == NULL || hex_len == 0u || hex_len > WEB_RANDOM_HEX_MAX) {
+        return ASX_E_INVALID_ARGUMENT;
     }
+    nbytes = (hex_len + 1u) / 2u;
+    asx_store_be_u32(seq_be, seq);
+
+    st = asx_crypto_random_bytes(web_runtime_entropy, NULL, ikm, sizeof(ikm));
+    if (st == ASX_OK) {
+        st = asx_hkdf_sha256(label, strlen(label), ikm, sizeof(ikm), seq_be, sizeof(seq_be), okm,
+                             nbytes);
+    }
+    if (st == ASX_OK) st = asx_hex_encode(okm, nbytes, hex, sizeof(hex));
+    if (st == ASX_OK) {
+        memcpy(out, hex, hex_len);
+        out[hex_len] = '\0';
+    }
+    asx_crypto_secure_zero(ikm, sizeof(ikm));
+    asx_crypto_secure_zero(okm, sizeof(okm));
+    asx_crypto_secure_zero(hex, sizeof(hex));
+    return st;
 }
 
 asx_status asx_web_session_create(asx_web_session_store *store, char *out_id,
                                   uint32_t id_capacity) {
+    char id[ASX_WEB_SESSION_ID_LEN + 1];
     uint32_t idx;
+    uint32_t attempt;
+    asx_status st;
     asx_web_session *s;
 
     if (store == NULL || out_id == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -296,23 +335,20 @@ asx_status asx_web_session_create(asx_web_session_store *store, char *out_id,
     }
     if (idx >= ASX_WEB_MAX_SESSIONS) return ASX_E_RESOURCE_EXHAUSTED;
 
+    /* Generate before claiming the slot so entropy failure leaves the store
+     * untouched. A collision with a live ID is negligible with real entropy;
+     * retry a bounded number of times and then fail closed. */
+    for (attempt = 0u; attempt < 4u; attempt++) {
+        st = web_random_hex(id, ASX_WEB_SESSION_ID_LEN, k_web_session_label, store->next_seq);
+        if (st != ASX_OK) return st;
+        store->next_seq++;
+        if (asx_web_session_get(store, id) == NULL) break;
+    }
+    if (attempt >= 4u) return ASX_E_RESOURCE_EXHAUSTED;
+
     s = &store->sessions[idx];
     memset(s, 0, sizeof(*s));
-    session_generate_id(s->id, sizeof(s->id), store->next_seq++);
-
-    /* Collision detection: if an active session already has this ID,
-     * bump the sequence and regenerate. Retry up to 3 times. */
-    {
-        uint32_t retries = 0u;
-        while (retries < 3u && asx_web_session_get(store, s->id) != NULL) {
-            session_generate_id(s->id, sizeof(s->id), store->next_seq++);
-            retries++;
-        }
-        if (retries >= 3u && asx_web_session_get(store, s->id) != NULL) {
-            return ASX_E_RESOURCE_EXHAUSTED;
-        }
-    }
-
+    memcpy(s->id, id, ASX_WEB_SESSION_ID_LEN + 1u);
     s->active = 1u;
 
     memcpy(out_id, s->id, ASX_WEB_SESSION_ID_LEN + 1u);
@@ -540,22 +576,14 @@ asx_status asx_web_cors_apply(const asx_web_cors_config *cfg, const char *reques
 /* CSRF                                                                */
 /* ------------------------------------------------------------------ */
 
-void asx_web_csrf_init(asx_web_csrf *csrf, uint32_t seed) {
-    static const char hex[] = "0123456789abcdef";
-    uint32_t i;
-    uint32_t val;
+asx_status asx_web_csrf_init(asx_web_csrf *csrf) {
+    asx_status st;
 
-    if (csrf == NULL) return;
+    if (csrf == NULL) return ASX_E_INVALID_ARGUMENT;
     memset(csrf, 0, sizeof(*csrf));
-    csrf->seq = seed;
-
-    /* Generate deterministic token from seed using simple hash expansion */
-    val = seed;
-    for (i = 0u; i < ASX_WEB_CSRF_TOKEN_LEN; i++) {
-        val = val * 2654435761u + (uint32_t)i; /* Knuth multiplicative hash */
-        csrf->token[i] = hex[(val >> 28) & 0xFu];
-    }
-    csrf->token[ASX_WEB_CSRF_TOKEN_LEN] = '\0';
+    st = web_random_hex(csrf->token, ASX_WEB_CSRF_TOKEN_LEN, k_web_csrf_label, 0u);
+    if (st != ASX_OK) memset(csrf, 0, sizeof(*csrf));
+    return st;
 }
 
 const char *asx_web_csrf_token(const asx_web_csrf *csrf) {
@@ -567,21 +595,18 @@ int asx_web_csrf_validate(const asx_web_csrf *csrf, const char *submitted) {
     /* Constant-time comparison to prevent timing side-channel attacks.
      * First check length, then compare all bytes. */
     size_t slen;
-    uint32_t i;
-    uint8_t diff;
 
     if (csrf == NULL || submitted == NULL) return 0;
+    /* An uninitialized/failed token must never validate. */
+    if (web_bounded_strlen(csrf->token, ASX_WEB_CSRF_TOKEN_LEN + 1u) != ASX_WEB_CSRF_TOKEN_LEN) {
+        return 0;
+    }
 
     /* Length check — non-constant-time but only leaks length, not content */
     slen = web_bounded_strlen(submitted, ASX_WEB_CSRF_TOKEN_LEN + 1u);
     if (slen != ASX_WEB_CSRF_TOKEN_LEN) return 0;
 
-    /* Constant-time byte comparison */
-    diff = 0u;
-    for (i = 0u; i < ASX_WEB_CSRF_TOKEN_LEN; i++) {
-        diff |= (uint8_t)((uint8_t)csrf->token[i] ^ (uint8_t)submitted[i]);
-    }
-    return diff == 0u;
+    return asx_crypto_ct_equal(csrf->token, submitted, ASX_WEB_CSRF_TOKEN_LEN);
 }
 
 /* ------------------------------------------------------------------ */
