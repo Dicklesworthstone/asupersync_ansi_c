@@ -493,6 +493,12 @@ ASX_API ASX_MUST_USE asx_status asx_scheduler_run(asx_region_id region, asx_budg
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_park(asx_task_id self);
 
+/* The task whose poll function the scheduler is currently running, or
+ * ASX_INVALID_ID outside a poll. Lets I/O and sync primitives park the
+ * caller without threading its handle through every call.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API asx_task_id asx_task_current(void);
+
 /* Make a parked task runnable again. Waking a task that is mid-poll makes
  * its pending park request void; waking a runnable task is a no-op.
  *

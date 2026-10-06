@@ -318,6 +318,31 @@ typedef asx_status (*asx_reactor_wait_fn)(void *ctx, uint32_t timeout_ms, uint32
 typedef asx_status (*asx_ghost_reactor_wait_fn)(void *ctx, uint64_t logical_step,
                                                 uint32_t *ready_count);
 
+/* Readiness interest / ready bits shared by the reactor hooks and the IO
+ * driver (same values as ASX_IO_READABLE / _WRITABLE / _ERROR). */
+#define ASX_REACTOR_READABLE 0x01u
+#define ASX_REACTOR_WRITABLE 0x02u
+#define ASX_REACTOR_ERROR 0x04u
+
+/* One readiness notification: the token supplied at registration plus
+ * the ready bits (ERROR/hang-up also sets the interests that were armed so
+ * the waiter wakes and observes the failure on its next I/O call). */
+typedef struct {
+    uint64_t token;
+    uint32_t ready;
+} asx_reactor_event;
+
+/* Arm one-shot interest for fd: the next readiness for `interest` is
+ * reported once with `token`, then the fd is disarmed until armed again.
+ * Re-arming an already registered fd replaces its interest and token. */
+typedef asx_status (*asx_reactor_register_fn)(void *ctx, int fd, uint32_t interest, uint64_t token);
+/* Forget fd. Unknown descriptors are ignored. */
+typedef void (*asx_reactor_deregister_fn)(void *ctx, int fd);
+/* Wait up to timeout_ms for readiness and collect at most max_events
+ * notifications (consuming their one-shot arming). */
+typedef asx_status (*asx_reactor_poll_fn)(void *ctx, uint32_t timeout_ms, asx_reactor_event *events,
+                                          uint32_t max_events, uint32_t *out_count);
+
 typedef void (*asx_log_sink_fn)(void *ctx, int level, const char *message);
 
 typedef struct {
@@ -342,6 +367,11 @@ typedef struct {
     void *ctx;
     asx_reactor_wait_fn wait_fn;
     asx_ghost_reactor_wait_fn ghost_wait_fn;
+    /* Optional real fd readiness (all three or none). Without them the IO
+     * driver keeps its ghost backend. */
+    asx_reactor_register_fn register_fn;
+    asx_reactor_deregister_fn deregister_fn;
+    asx_reactor_poll_fn poll_fn;
 } asx_reactor_hooks;
 
 typedef void (*asx_blocking_job_fn)(void *job_ctx);
@@ -542,6 +572,22 @@ ASX_API asx_status asx_runtime_random_u64(uint64_t *out_value);
  * Returns ASX_E_HOOK_MISSING if no compatible reactor hook is installed. */
 ASX_API asx_status asx_runtime_reactor_wait(uint32_t timeout_ms, uint32_t *out_ready_count,
                                             uint64_t logical_step);
+
+/* Returns nonzero when the installed reactor reports per-fd readiness
+ * (register/deregister/poll hooks are all present). */
+ASX_API int asx_runtime_reactor_has_readiness(void);
+
+/* Arm one-shot readiness interest for fd (see asx_reactor_register_fn).
+ * Returns ASX_E_HOOK_MISSING without a readiness-capable reactor. */
+ASX_API asx_status asx_runtime_reactor_register(int fd, uint32_t interest, uint64_t token);
+
+/* Forget fd in the readiness reactor (no-op without one). */
+ASX_API void asx_runtime_reactor_deregister(int fd);
+
+/* Collect readiness notifications, waiting up to timeout_ms.
+ * Returns ASX_E_HOOK_MISSING without a readiness-capable reactor. */
+ASX_API asx_status asx_runtime_reactor_poll(uint32_t timeout_ms, asx_reactor_event *events,
+                                            uint32_t max_events, uint32_t *out_count);
 /* Write a log message at the given severity level.
  * Returns ASX_E_HOOK_MISSING if the runtime hook table is not installed.
  * Returns ASX_OK with no side effects when hooks are installed but no log sink is configured. */

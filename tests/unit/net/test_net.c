@@ -234,11 +234,72 @@ TEST(tcp_close_unlinks_peer) {
     ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &server, NULL), ASX_OK);
 
     asx_tcp_stream_close(server);
-    /* writing to client should return PENDING since peer is gone */
+    /* Peer is gone: writes fail like EPIPE instead of pending forever,
+     * and reads report EOF (OK with zero bytes). */
     src = asx_buf_from(data, 4);
-    ASSERT_EQ(asx_tcp_stream_poll_write(client, &src, &written), ASX_E_PENDING);
+    ASSERT_EQ(asx_tcp_stream_poll_write(client, &src, &written), ASX_E_DISCONNECTED);
+    {
+        uint8_t buf[8];
+        uint32_t n = 99u;
+        ASSERT_EQ(asx_tcp_stream_read(client, buf, (uint32_t)sizeof(buf), &n), ASX_OK);
+        ASSERT_EQ(n, 0u);
+    }
 
     asx_tcp_stream_close(client);
+    asx_tcp_listener_close(lis);
+}
+
+TEST(tcp_shutdown_write_delivers_eof_after_data) {
+    asx_tcp_listener lis;
+    asx_tcp_stream client, server;
+    asx_socket_addr addr = asx_socket_addr_loopback(7013);
+    uint8_t buf[16];
+    uint32_t n;
+
+    asx_net_reset();
+    ASSERT_EQ(asx_tcp_listener_bind(&lis, &addr), ASX_OK);
+    ASSERT_EQ(asx_tcp_connect(&client, &addr), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &server, NULL), ASX_OK);
+
+    ASSERT_EQ(asx_tcp_stream_read(server, buf, (uint32_t)sizeof(buf), &n), ASX_E_PENDING);
+    ASSERT_EQ(asx_tcp_stream_write(client, (const uint8_t *)"abc", 3u, &n), ASX_OK);
+    ASSERT_EQ(n, 3u);
+    ASSERT_EQ(asx_tcp_stream_shutdown_write(client), ASX_OK);
+    ASSERT_EQ(asx_tcp_stream_write(client, (const uint8_t *)"x", 1u, &n), ASX_E_INVALID_STATE);
+
+    /* Buffered data first, then EOF; the server can still reply. */
+    ASSERT_EQ(asx_tcp_stream_read(server, buf, (uint32_t)sizeof(buf), &n), ASX_OK);
+    ASSERT_EQ(n, 3u);
+    ASSERT_EQ(asx_tcp_stream_read(server, buf, (uint32_t)sizeof(buf), &n), ASX_OK);
+    ASSERT_EQ(n, 0u);
+    ASSERT_EQ(asx_tcp_stream_write(server, (const uint8_t *)"ok", 2u, &n), ASX_OK);
+    ASSERT_EQ(asx_tcp_stream_read(client, buf, (uint32_t)sizeof(buf), &n), ASX_OK);
+    ASSERT_EQ(n, 2u);
+
+    asx_tcp_stream_close(client);
+    asx_tcp_stream_close(server);
+    asx_tcp_listener_close(lis);
+}
+
+TEST(tcp_stale_handle_after_close_does_not_alias) {
+    asx_tcp_listener lis;
+    asx_tcp_stream first, second, accepted;
+    asx_socket_addr addr = asx_socket_addr_loopback(7014);
+
+    asx_net_reset();
+    ASSERT_EQ(asx_tcp_listener_bind(&lis, &addr), ASX_OK);
+    ASSERT_EQ(asx_tcp_connect(&first, &addr), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &accepted, NULL), ASX_OK);
+    ASSERT_EQ(asx_tcp_stream_close(first), ASX_OK);
+    ASSERT_EQ(asx_tcp_stream_close(accepted), ASX_OK);
+
+    /* The next stream reuses the slot but not the generation. */
+    ASSERT_EQ(asx_tcp_connect(&second, &addr), ASX_OK);
+    ASSERT_EQ(second.slot, first.slot);
+    ASSERT_TRUE(second.generation != first.generation);
+    ASSERT_FALSE(asx_tcp_stream_is_alive(first));
+    ASSERT_TRUE(asx_tcp_stream_is_alive(second));
+
     asx_tcp_listener_close(lis);
 }
 
@@ -984,6 +1045,8 @@ int main(void) {
     RUN_TEST(tcp_bidirectional_io);
     RUN_TEST(tcp_read_empty_returns_pending);
     RUN_TEST(tcp_close_unlinks_peer);
+    RUN_TEST(tcp_shutdown_write_delivers_eof_after_data);
+    RUN_TEST(tcp_stale_handle_after_close_does_not_alias);
     RUN_TEST(tcp_peer_addr);
     RUN_TEST(tcp_connect_null_args);
 

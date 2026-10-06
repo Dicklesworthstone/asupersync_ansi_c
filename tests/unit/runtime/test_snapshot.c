@@ -5,6 +5,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_io_fd.h"
 #include <asx/codec/codec.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/io_driver.h>
@@ -189,7 +190,7 @@ TEST(snapshot_capture_includes_subsystem_state) {
     ASSERT_EQ(asx_waker_register(11, &w), ASX_OK);
 
     if (asx_io_driver_is_initialized()) {
-        ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_OK);
+        ASSERT_EQ(asx_io_register(test_io_fd(42), ASX_IO_READABLE, &w, &tok), ASX_OK);
     }
 
     s = asx_runtime_snapshot_capture(&snap);

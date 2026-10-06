@@ -127,11 +127,43 @@ typedef struct {
 } asx_resolver;
 
 /* -------------------------------------------------------------------
+ * Socket backend
+ *
+ * MEMORY — deterministic in-memory loopback transport (lab/replay): only
+ *          connections between sockets of this process exist.
+ * NATIVE — real non-blocking OS sockets (POSIX builds). Operations that
+ *          would block park the polled task on reactor readiness and
+ *          return ASX_E_PENDING; the scheduler wakes it on readiness.
+ *
+ * Default: NATIVE in non-deterministic POSIX builds, MEMORY otherwise.
+ * The backend applies to sockets created afterwards; existing handles keep
+ * the backend they were created with. asx_net_reset() restores the
+ * default.
+ *
+ * Shared stream semantics: a read returning ASX_OK with 0 bytes means the
+ * peer closed its write side (EOF); writes may be partial (check the
+ * written count); ASX_E_DISCONNECTED reports a reset/refused/broken
+ * connection.
+ * ------------------------------------------------------------------- */
+
+typedef enum { ASX_NET_BACKEND_MEMORY = 0, ASX_NET_BACKEND_NATIVE = 1 } asx_net_backend;
+
+/* Select the backend for sockets created from now on.
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT for unknown values, or
+ * ASX_E_PERMISSION_DENIED when NATIVE is unavailable in this build. */
+ASX_API ASX_MUST_USE asx_status asx_net_set_backend(asx_net_backend backend);
+
+/* Report the backend used for newly created sockets. */
+ASX_API asx_net_backend asx_net_get_backend(void);
+
+/* -------------------------------------------------------------------
  * TCP listener API
  * ------------------------------------------------------------------- */
 
-/* Bind a TCP listener to the given address.
- * Deterministic core transport: records the address and accepts in-memory loopback connects. */
+/* Bind a TCP listener to the given address. With the NATIVE backend this
+ * binds and listens on a real socket (port 0 picks an ephemeral port; read
+ * it back with asx_tcp_listener_local_addr). With MEMORY it records the
+ * address and accepts in-memory loopback connects. */
 ASX_API ASX_MUST_USE asx_status asx_tcp_listener_bind(asx_tcp_listener *out,
                                                       const asx_socket_addr *addr);
 
@@ -200,8 +232,33 @@ ASX_API ASX_MUST_USE asx_status asx_tcp_stream_poll_write_with_cx(asx_tcp_stream
                                                                   uint32_t *bytes_written,
                                                                   asx_cx *cx);
 
+/* Read up to cap bytes into dst. Returns ASX_OK with *out_read > 0 for
+ * data, ASX_OK with *out_read == 0 at EOF, ASX_E_PENDING when no data is
+ * available yet (native: the polled task is parked until readable),
+ * ASX_E_DISCONNECTED on reset, ASX_E_INVALID_ARGUMENT for bad handles. */
+ASX_API ASX_MUST_USE asx_status asx_tcp_stream_read(asx_tcp_stream stream, uint8_t *dst,
+                                                    uint32_t cap, uint32_t *out_read);
+
+/* Write up to len bytes from src. Returns ASX_OK with the number written
+ * (possibly fewer than len), ASX_E_PENDING when the socket cannot accept
+ * data yet (native: the polled task is parked until writable),
+ * ASX_E_DISCONNECTED if the peer is gone. */
+ASX_API ASX_MUST_USE asx_status asx_tcp_stream_write(asx_tcp_stream stream, const uint8_t *src,
+                                                     uint32_t len, uint32_t *out_written);
+
+/* Half-close: signal EOF to the peer while keeping the read side open.
+ * Returns ASX_OK or ASX_E_INVALID_ARGUMENT for bad handles. */
+ASX_API asx_status asx_tcp_stream_shutdown_write(asx_tcp_stream stream);
+
+/* Enable/disable Nagle's algorithm (TCP_NODELAY) on a native stream.
+ * No-op returning ASX_OK on the MEMORY backend. */
+ASX_API asx_status asx_tcp_stream_set_nodelay(asx_tcp_stream stream, int enabled);
+
 /* Close a TCP stream. */
 ASX_API asx_status asx_tcp_stream_close(asx_tcp_stream stream);
+
+/* Get the local address of a stream. */
+ASX_API asx_status asx_tcp_stream_local_addr(asx_tcp_stream stream, asx_socket_addr *out);
 
 /* Get the remote address of a stream. */
 ASX_API asx_status asx_tcp_stream_peer_addr(asx_tcp_stream stream, asx_socket_addr *out);

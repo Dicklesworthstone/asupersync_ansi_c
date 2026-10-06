@@ -496,6 +496,13 @@ asx_status asx_runtime_hooks_validate(const asx_runtime_hooks *hooks, int determ
         return ASX_E_INVALID_ARGUMENT;
     }
 
+    /* Readiness reactor hooks are all-or-nothing. */
+    {
+        int n = (hooks->reactor.register_fn != NULL) + (hooks->reactor.deregister_fn != NULL) +
+                (hooks->reactor.poll_fn != NULL);
+        if (n != 0 && n != 3) return ASX_E_INVALID_ARGUMENT;
+    }
+
     return ASX_OK;
 }
 
@@ -696,6 +703,36 @@ asx_status asx_runtime_reactor_wait(uint32_t timeout_ms, uint32_t *out_ready_cou
     }
 
     return ASX_E_HOOK_MISSING;
+}
+
+int asx_runtime_reactor_has_readiness(void) {
+    if (!g_hooks_installed) return 0;
+    return g_hooks.reactor.register_fn != NULL && g_hooks.reactor.deregister_fn != NULL &&
+           g_hooks.reactor.poll_fn != NULL;
+}
+
+asx_status asx_runtime_reactor_register(int fd, uint32_t interest, uint64_t token) {
+    if (!asx_runtime_reactor_has_readiness()) return ASX_E_HOOK_MISSING;
+    return g_hooks.reactor.register_fn(g_hooks.reactor.ctx, fd, interest, token);
+}
+
+void asx_runtime_reactor_deregister(int fd) {
+    if (!asx_runtime_reactor_has_readiness()) return;
+    g_hooks.reactor.deregister_fn(g_hooks.reactor.ctx, fd);
+}
+
+asx_status asx_runtime_reactor_poll(uint32_t timeout_ms, asx_reactor_event *events,
+                                    uint32_t max_events, uint32_t *out_count) {
+    asx_status st;
+    if (out_count == NULL || events == NULL) return ASX_E_INVALID_ARGUMENT;
+    *out_count = 0;
+    if (!asx_runtime_reactor_has_readiness()) return ASX_E_HOOK_MISSING;
+    st = g_hooks.reactor.poll_fn(g_hooks.reactor.ctx, timeout_ms, events, max_events, out_count);
+    if (st == ASX_OK) {
+        asx_hindsight_log(*out_count > 0 ? ASX_ND_IO_READY : ASX_ND_IO_TIMEOUT, 0,
+                          (uint64_t)*out_count);
+    }
+    return st;
 }
 
 asx_status asx_runtime_log_write(int level, const char *message) {

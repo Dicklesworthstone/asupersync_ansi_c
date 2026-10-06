@@ -88,6 +88,9 @@ static uint32_t g_timer_heap[ASX_MAX_TASKS];
 static uint32_t g_timer_heap_len = 0;
 static uint64_t g_timer_seq = 0;
 
+/* Task whose poll function is running (ASX_INVALID_ID outside polls). */
+static asx_task_id g_current_task = ASX_INVALID_ID;
+
 static int timer_less(uint32_t a, uint32_t b) {
     const asx_task_slot *ta = &g_tasks[a];
     const asx_task_slot *tb = &g_tasks[b];
@@ -188,6 +191,7 @@ static uint32_t timers_fire(asx_time now) {
 void asx_scheduler_reset_internal(void) {
     g_timer_heap_len = 0;
     g_timer_seq = 0;
+    g_current_task = ASX_INVALID_ID;
 }
 
 void asx_task_sched_init_internal(asx_task_slot *task) {
@@ -261,6 +265,8 @@ static asx_time sched_now(void) {
 /* -------------------------------------------------------------------
  * Public wake/park/timer/join API
  * ------------------------------------------------------------------- */
+
+asx_task_id asx_task_current(void) { return g_current_task; }
 
 asx_status asx_task_park(asx_task_id self) {
     asx_task_slot *t;
@@ -457,9 +463,20 @@ static uint32_t sched_unpark_cancelled(void) {
 
 static int sched_io_pending(void) {
 #if ASX_HAS_NATIVE_IO_DRIVER
-    return asx_io_driver_is_initialized() && asx_io_active_count() > 0u;
+    return asx_io_driver_is_initialized() && asx_io_armed_count() > 0u;
 #else
     return 0;
+#endif
+}
+
+/* Live backend: collect readiness without blocking so I/O-bound tasks
+ * make progress even while other tasks keep the scheduler busy. */
+static void sched_poll_io_nonblocking(void) {
+#if ASX_HAS_NATIVE_IO_DRIVER
+    if (asx_io_driver_is_live() && asx_io_armed_count() > 0u) {
+        asx_io_event events[16];
+        (void)asx_io_driver_poll(events, 16u, 0u);
+    }
 #endif
 }
 
@@ -564,6 +581,7 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
         }
 
         sched_compute_scope(region);
+        sched_poll_io_nonblocking();
         (void)sched_drain_wakers();
         if (g_timer_heap_len > 0u) (void)timers_fire(sched_now());
 
@@ -639,9 +657,11 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
             t->in_poll = 1;
             t->park_requested = 0;
             t->notified = 0;
+            g_current_task = tid;
             asx_error_ledger_bind_task(tid);
             poll_result = t->poll_fn(t->user_data, tid);
             asx_error_ledger_bind_task(ASX_INVALID_ID);
+            g_current_task = ASX_INVALID_ID;
             t->in_poll = 0;
 
             if (poll_result == ASX_OK) {

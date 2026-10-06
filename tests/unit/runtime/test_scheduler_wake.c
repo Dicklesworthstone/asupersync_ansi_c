@@ -16,8 +16,16 @@
 
 static asx_runtime g_rt;
 
+/* Always run on the runtime's virtual clock (default stub hooks), even in
+ * live POSIX builds where asx_runtime_init_default installs a real clock:
+ * these scenarios sleep for virtual hours. */
 static void setup(void) {
-    asx_status st = asx_runtime_init_default(&g_rt);
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_status st;
+    asx_runtime_config_init(&cfg);
+    st = asx_runtime_hooks_init(&hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);
     (void)st;
 }
 

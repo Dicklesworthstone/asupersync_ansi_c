@@ -10,6 +10,7 @@
 #include "runtime_internal.h"
 #include <asx/asx_config.h>
 #include <asx/core/transition.h>
+#include <asx/net/net.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/builder.h>
 #include <asx/runtime/config_reload.h>
@@ -18,6 +19,9 @@
 #include <asx/runtime/runtime.h>
 #include <stddef.h>
 #include <string.h>
+#if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
+#include <asx/platform/posix.h>
+#endif
 
 asx_io_backend asx_runtime_active_io_backend_selected(void);
 
@@ -206,6 +210,15 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
     }
 #endif
 
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES && !ASX_DETERMINISTIC
+    /* A live readiness reactor means real I/O: sockets created from now on
+     * use the native backend (where the platform provides one). */
+    if (asx_io_driver_is_live()) {
+        st = asx_net_set_backend(ASX_NET_BACKEND_NATIVE);
+        (void)st;
+    }
+#endif
+
     /* Step 5: store config and mark initialized */
     memset(rt, 0, sizeof(*rt));
     runtime_config_copy(rt, config);
@@ -226,7 +239,13 @@ asx_status asx_runtime_init_default(asx_runtime *rt) {
 
     asx_runtime_config_init(&config);
 
+#if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
+    /* Live POSIX builds default to the real platform: monotonic clock,
+     * OS entropy, epoll/poll readiness reactor, blocking pool. */
+    st = asx_posix_hooks_install(&hooks);
+#else
     st = asx_runtime_hooks_init(&hooks);
+#endif
     if (st != ASX_OK) return st;
 
     return asx_runtime_init(rt, &config, &hooks);

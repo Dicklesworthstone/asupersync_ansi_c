@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "test_io_fd.h"
 #include <asx/monitor/monitor.h>
 #include <asx/observability/observability.h>
 #include <asx/runtime/browser_boundary.h>
@@ -113,7 +114,7 @@ static void test_monitor_io_threshold_trigger(void) {
         asx_waker w;
         asx_io_token tok;
         MUST_OK(asx_waker_register(88u, &w));
-        MUST_OK(asx_io_register(88, ASX_IO_READABLE, &w, &tok));
+        MUST_OK(asx_io_register(test_io_fd(88), ASX_IO_READABLE, &w, &tok));
         MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
         ASSERT((report.triggered_mask & ASX_MONITOR_IO_HIGH) != 0u, "io mask");
         ASSERT(report.verdict == ASX_EVIDENCE_WARN, "io threshold warns");
@@ -147,7 +148,7 @@ static void test_monitor_io_threshold_equality_does_not_trigger(void) {
         uint32_t pct;
 
         MUST_OK(asx_waker_register(89u, &w));
-        MUST_OK(asx_io_register(89, ASX_IO_READABLE, &w, &tok));
+        MUST_OK(asx_io_register(test_io_fd(89), ASX_IO_READABLE, &w, &tok));
         MUST_OK(asx_inspect(&rt, &inspection));
         pct = (inspection.io_driver.capacity == 0u)
                   ? 0u

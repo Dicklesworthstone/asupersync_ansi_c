@@ -28,11 +28,8 @@
 #define ASX_POSIX_REACTOR_ERROR 0x04u
 
 #define ASX_POSIX_HAS_TIMED_REACTOR_WAIT 1u
-#if defined(__linux__)
+/* fd readiness registration: epoll on Linux, poll(2) on other POSIX. */
 #define ASX_POSIX_HAS_REACTOR_FD_REGISTRATION 1u
-#else
-#define ASX_POSIX_HAS_REACTOR_FD_REGISTRATION 0u
-#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,12 +47,14 @@ extern "C" {
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if hooks is NULL. */
 ASX_API ASX_MUST_USE asx_status asx_posix_hooks_install(asx_runtime_hooks *hooks);
 
-/* Register a POSIX file descriptor with the reactor context installed in
- * hooks.reactor.ctx. interest is a nonzero mask of ASX_POSIX_REACTOR_* bits.
+/* Register (arm) a POSIX file descriptor with the reactor context installed
+ * in hooks.reactor.ctx. interest is a nonzero mask of ASX_POSIX_REACTOR_*
+ * bits. Readiness is one-shot: the fd reports once, then must be armed
+ * again. The readiness token is the fd itself.
  *
- * Linux builds use epoll and return ASX_OK on successful ADD or MOD.
- * Non-Linux POSIX builds keep the timed poll fallback fail-closed for fd
- * registration and return ASX_E_PERMISSION_DENIED. */
+ * Linux builds use epoll; other POSIX builds use poll(2). Returns ASX_OK,
+ * ASX_E_INVALID_STATE for a NULL context, ASX_E_INVALID_ARGUMENT for bad
+ * fds/interest, or ASX_E_RESOURCE_EXHAUSTED when the fd table is full. */
 ASX_API ASX_MUST_USE asx_status asx_posix_reactor_register_fd(void *reactor_ctx, int fd,
                                                               uint32_t interest);
 

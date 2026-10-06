@@ -1,16 +1,57 @@
 /*
- * net.c — deterministic in-memory network types and socket primitives
+ * net.c — network types and socket primitives
  *
- * The portable core intentionally avoids OS sockets, but higher layers still
- * need a materially useful network substrate. This implementation provides a
- * deterministic loopback transport for bound listeners and UDP sockets while
- * preserving ghost-pending behavior for addresses outside the in-memory model.
+ * Two backends behind one API:
+ *   MEMORY — deterministic in-memory loopback transport for bound listeners
+ *            and UDP sockets, with ghost-pending behavior for addresses
+ *            outside the model (lab runtime, replay, portable core).
+ *   NATIVE — real non-blocking OS sockets (src/platform/posix/net_posix.c),
+ *            selected per socket at creation; native handles carry
+ *            ASX_NET_NATIVE_SLOT_BIT in their slot.
  *
  * SPDX-License-Identifier: MIT
  */
 
 #include <asx/net/net.h>
 #include <string.h>
+
+#if defined(ASX_PROFILE_POSIX)
+#include "net_native.h"
+#define ASX_NET_HAS_NATIVE 1
+#else
+#define ASX_NET_HAS_NATIVE 0
+#endif
+
+/* asx_net_reset() always restores the deterministic in-memory transport;
+ * asx_runtime_init() switches to NATIVE when it installs a live,
+ * readiness-capable reactor (see rt.c). */
+#define ASX_NET_DEFAULT_BACKEND ASX_NET_BACKEND_MEMORY
+
+static asx_net_backend g_net_backend = ASX_NET_DEFAULT_BACKEND;
+
+asx_status asx_net_set_backend(asx_net_backend backend) {
+    if (backend != ASX_NET_BACKEND_MEMORY && backend != ASX_NET_BACKEND_NATIVE) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+#if !ASX_NET_HAS_NATIVE
+    if (backend == ASX_NET_BACKEND_NATIVE) return ASX_E_PERMISSION_DENIED;
+#endif
+    g_net_backend = backend;
+    return ASX_OK;
+}
+
+asx_net_backend asx_net_get_backend(void) { return g_net_backend; }
+
+#if ASX_NET_HAS_NATIVE
+static asx_native_handle native_h(uint32_t slot, uint32_t generation) {
+    asx_native_handle h;
+    h.slot = slot;
+    h.generation = generation;
+    return h;
+}
+#define NET_NATIVE(h) asx_net_slot_is_native((h).slot)
+#define NET_USE_NATIVE() (g_net_backend == ASX_NET_BACKEND_NATIVE)
+#endif
 
 #define ASX_NET_TCP_ACCEPT_QUEUE_DEPTH ASX_MAX_TCP_STREAMS
 #define ASX_NET_UDP_QUEUE_DEPTH 4u
@@ -224,6 +265,8 @@ typedef struct {
     uint32_t peer_generation;
     int alive;
     int linked;
+    int peer_closed; /* linked peer closed: reads drain then report EOF */
+    int write_shut;  /* local write side shut down */
 } tcp_stream_slot;
 
 static tcp_stream_slot g_streams[ASX_MAX_TCP_STREAMS];
@@ -339,6 +382,7 @@ static void stream_unlink_peer(tcp_stream_slot *s) {
         peer->linked = 0;
         peer->peer_slot = 0u;
         peer->peer_generation = 0u;
+        peer->peer_closed = 1;
     }
     s->linked = 0;
     s->peer_slot = 0u;
@@ -358,8 +402,12 @@ static asx_status stream_alloc(const asx_socket_addr *local, const asx_socket_ad
     if (idx >= ASX_MAX_TCP_STREAMS) return ASX_E_RESOURCE_EXHAUSTED;
 
     s = &g_streams[idx];
-    memset(s, 0, sizeof(*s));
-    s->generation = next_gen(s->generation);
+    {
+        /* Advance (not reset) the generation so stale handles fail. */
+        uint32_t gen_ = s->generation;
+        memset(s, 0, sizeof(*s));
+        s->generation = next_gen(gen_);
+    }
     s->alive = 1;
     s->local = *local;
     s->peer = *peer;
@@ -433,14 +481,29 @@ asx_status asx_tcp_listener_bind_with_cx(asx_tcp_listener *out, const asx_socket
         if (st != ASX_OK) return st;
     }
 
+#if ASX_NET_HAS_NATIVE
+    if (NET_USE_NATIVE()) {
+        asx_native_handle h;
+        asx_status st = asx_native_tcp_listen(addr, &h);
+        if (st != ASX_OK) return st;
+        out->slot = h.slot;
+        out->generation = h.generation;
+        return ASX_OK;
+    }
+#endif
+
     for (idx = 0u; idx < ASX_MAX_TCP_LISTENERS; idx++) {
         if (!g_listeners[idx].alive) break;
     }
     if (idx >= ASX_MAX_TCP_LISTENERS) return ASX_E_RESOURCE_EXHAUSTED;
 
     s = &g_listeners[idx];
-    memset(s, 0, sizeof(*s));
-    s->generation = next_gen(s->generation);
+    {
+        /* Advance (not reset) the generation so stale handles fail. */
+        uint32_t gen_ = s->generation;
+        memset(s, 0, sizeof(*s));
+        s->generation = next_gen(gen_);
+    }
     s->alive = 1;
     s->addr = *addr;
 
@@ -467,6 +530,18 @@ asx_status asx_tcp_listener_poll_accept_with_cx(asx_tcp_listener listener, asx_t
         if (st != ASX_OK) return st;
     }
 
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(listener)) {
+        asx_native_handle h;
+        asx_status st =
+            asx_native_tcp_accept(native_h(listener.slot, listener.generation), &h, peer_addr);
+        if (st != ASX_OK) return st;
+        out->slot = h.slot;
+        out->generation = h.generation;
+        return ASX_OK;
+    }
+#endif
+
     s = listener_lookup(listener);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (s->accept_count == 0u) return ASX_E_PENDING;
@@ -490,6 +565,12 @@ asx_status asx_tcp_listener_close(asx_tcp_listener listener) {
     tcp_listener_slot *s;
     uint32_t i;
 
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(listener)) {
+        return asx_native_close(native_h(listener.slot, listener.generation));
+    }
+#endif
+
     s = listener_lookup(listener);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
 
@@ -498,7 +579,12 @@ asx_status asx_tcp_listener_close(asx_tcp_listener listener) {
         (void)asx_tcp_stream_close(s->pending[idx]);
     }
 
-    memset(s, 0, sizeof(*s));
+    {
+        /* Keep the generation so stale handles never alias the next owner. */
+        uint32_t gen_ = s->generation;
+        memset(s, 0, sizeof(*s));
+        s->generation = gen_;
+    }
     return ASX_OK;
 }
 
@@ -506,6 +592,11 @@ asx_status asx_tcp_listener_local_addr(asx_tcp_listener listener, asx_socket_add
     tcp_listener_slot *s;
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(listener)) {
+        return asx_native_local_addr(native_h(listener.slot, listener.generation), out);
+    }
+#endif
     s = listener_lookup(listener);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     *out = s->addr;
@@ -513,6 +604,10 @@ asx_status asx_tcp_listener_local_addr(asx_tcp_listener listener, asx_socket_add
 }
 
 int asx_tcp_listener_is_alive(asx_tcp_listener listener) {
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(listener))
+        return asx_native_is_alive(native_h(listener.slot, listener.generation));
+#endif
     return listener_lookup(listener) != NULL;
 }
 
@@ -536,6 +631,17 @@ asx_status asx_tcp_connect_with_cx(asx_tcp_stream *out, const asx_socket_addr *a
         st = net_require_channel_cx(cx);
         if (st != ASX_OK) return st;
     }
+
+#if ASX_NET_HAS_NATIVE
+    if (NET_USE_NATIVE()) {
+        asx_native_handle h;
+        st = asx_native_tcp_connect(addr, &h);
+        if (st != ASX_OK) return st;
+        out->slot = h.slot;
+        out->generation = h.generation;
+        return ASX_OK;
+    }
+#endif
 
     local = net_ephemeral_addr(addr->family);
     st = stream_alloc(&local, addr, out, &client);
@@ -587,11 +693,24 @@ asx_status asx_tcp_stream_poll_read_with_cx(asx_tcp_stream stream, asx_buf_mut *
         if (st != ASX_OK) return st;
     }
 
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(stream)) {
+        uint32_t cap = asx_buf_mut_writable(dst);
+        *bytes_read = 0u;
+        if (cap == 0u) return ASX_E_BUFFER_TOO_SMALL;
+        st = asx_native_tcp_read(native_h(stream.slot, stream.generation), &dst->data[dst->wr_pos],
+                                 cap, bytes_read);
+        if (st == ASX_OK) dst->wr_pos += *bytes_read;
+        return st;
+    }
+#endif
+
     s = stream_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (asx_buf_mut_remaining(&s->inbox) == 0u) {
         *bytes_read = 0u;
-        return ASX_E_PENDING;
+        /* Drained and the peer will send no more: EOF. */
+        return s->peer_closed ? ASX_OK : ASX_E_PENDING;
     }
     if (asx_buf_mut_writable(dst) == 0u) return ASX_E_BUFFER_TOO_SMALL;
 
@@ -607,6 +726,93 @@ asx_status asx_tcp_stream_poll_read_with_cx(asx_tcp_stream stream, asx_buf_mut *
 
     *bytes_read = to_copy;
     return ASX_OK;
+}
+
+asx_status asx_tcp_stream_read(asx_tcp_stream stream, uint8_t *dst, uint32_t cap,
+                               uint32_t *out_read) {
+    tcp_stream_slot *s;
+    asx_buf readable;
+    uint32_t n;
+    asx_status st;
+
+    if (out_read == NULL || (dst == NULL && cap > 0u)) return ASX_E_INVALID_ARGUMENT;
+    *out_read = 0u;
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(stream)) {
+        return asx_native_tcp_read(native_h(stream.slot, stream.generation), dst, cap, out_read);
+    }
+#endif
+    s = stream_lookup(stream);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (asx_buf_mut_remaining(&s->inbox) == 0u) return s->peer_closed ? ASX_OK : ASX_E_PENDING;
+    if (cap == 0u) return ASX_E_BUFFER_TOO_SMALL;
+
+    readable = asx_buf_mut_readable(&s->inbox);
+    n = readable.len < cap ? readable.len : cap;
+    memcpy(dst, readable.ptr, n);
+    st = asx_buf_mut_advance(&s->inbox, n);
+    if (st != ASX_OK) return st;
+    if (asx_buf_mut_remaining(&s->inbox) == 0u) asx_buf_mut_clear(&s->inbox);
+    *out_read = n;
+    return ASX_OK;
+}
+
+asx_status asx_tcp_stream_write(asx_tcp_stream stream, const uint8_t *src, uint32_t len,
+                                uint32_t *out_written) {
+    tcp_stream_slot *s;
+    tcp_stream_slot *peer;
+    uint32_t n;
+    asx_status st;
+
+    if (out_written == NULL || (src == NULL && len > 0u)) return ASX_E_INVALID_ARGUMENT;
+    *out_written = 0u;
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(stream)) {
+        return asx_native_tcp_write(native_h(stream.slot, stream.generation), src, len,
+                                    out_written);
+    }
+#endif
+    s = stream_lookup(stream);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (s->write_shut) return ASX_E_INVALID_STATE;
+    peer = stream_linked_peer(s);
+    if (peer == NULL) return s->peer_closed ? ASX_E_DISCONNECTED : ASX_E_PENDING;
+    if (len == 0u) return ASX_OK;
+    asx_buf_mut_compact(&peer->inbox);
+    n = asx_buf_mut_writable(&peer->inbox);
+    if (n == 0u) return ASX_E_PENDING;
+    if (n > len) n = len;
+    st = asx_buf_mut_put(&peer->inbox, src, n);
+    if (st != ASX_OK) return st;
+    *out_written = n;
+    return ASX_OK;
+}
+
+asx_status asx_tcp_stream_shutdown_write(asx_tcp_stream stream) {
+    tcp_stream_slot *s;
+    tcp_stream_slot *peer;
+
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(stream)) {
+        return asx_native_tcp_shutdown_write(native_h(stream.slot, stream.generation));
+    }
+#endif
+    s = stream_lookup(stream);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    s->write_shut = 1;
+    peer = stream_linked_peer(s);
+    if (peer != NULL) peer->peer_closed = 1;
+    return ASX_OK;
+}
+
+asx_status asx_tcp_stream_set_nodelay(asx_tcp_stream stream, int enabled) {
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(stream)) {
+        return asx_native_tcp_set_nodelay(native_h(stream.slot, stream.generation), enabled);
+    }
+#endif
+    (void)enabled;
+    return stream_lookup(stream) != NULL ? ASX_OK : ASX_E_INVALID_ARGUMENT;
 }
 
 asx_status asx_tcp_stream_poll_write(asx_tcp_stream stream, const asx_buf *src,
@@ -626,13 +832,20 @@ asx_status asx_tcp_stream_poll_write_with_cx(asx_tcp_stream stream, const asx_bu
         if (st != ASX_OK) return st;
     }
 
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(stream)) {
+        return asx_native_tcp_write(native_h(stream.slot, stream.generation), src->ptr, src->len,
+                                    bytes_written);
+    }
+#endif
+
     s = stream_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
 
     peer = stream_linked_peer(s);
     if (peer == NULL) {
         *bytes_written = 0u;
-        return ASX_E_PENDING;
+        return s->peer_closed ? ASX_E_DISCONNECTED : ASX_E_PENDING;
     }
     if (src->len > asx_buf_mut_writable(&peer->inbox)) return ASX_E_WOULD_BLOCK;
 
@@ -645,11 +858,32 @@ asx_status asx_tcp_stream_poll_write_with_cx(asx_tcp_stream stream, const asx_bu
 
 asx_status asx_tcp_stream_close(asx_tcp_stream stream) {
     tcp_stream_slot *s;
+    uint32_t gen;
 
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(stream)) return asx_native_close(native_h(stream.slot, stream.generation));
+#endif
     s = stream_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     stream_unlink_peer(s);
+    /* Keep the generation so stale handles never alias the next owner. */
+    gen = s->generation;
     memset(s, 0, sizeof(*s));
+    s->generation = gen;
+    return ASX_OK;
+}
+
+asx_status asx_tcp_stream_local_addr(asx_tcp_stream stream, asx_socket_addr *out) {
+    tcp_stream_slot *s;
+
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(stream))
+        return asx_native_local_addr(native_h(stream.slot, stream.generation), out);
+#endif
+    s = stream_lookup(stream);
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    *out = s->local;
     return ASX_OK;
 }
 
@@ -657,13 +891,22 @@ asx_status asx_tcp_stream_peer_addr(asx_tcp_stream stream, asx_socket_addr *out)
     tcp_stream_slot *s;
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(stream))
+        return asx_native_peer_addr(native_h(stream.slot, stream.generation), out);
+#endif
     s = stream_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     *out = s->peer;
     return ASX_OK;
 }
 
-int asx_tcp_stream_is_alive(asx_tcp_stream stream) { return stream_lookup(stream) != NULL; }
+int asx_tcp_stream_is_alive(asx_tcp_stream stream) {
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(stream)) return asx_native_is_alive(native_h(stream.slot, stream.generation));
+#endif
+    return stream_lookup(stream) != NULL;
+}
 
 /* ------------------------------------------------------------------ */
 /* UDP socket API                                                      */
@@ -684,14 +927,29 @@ asx_status asx_udp_bind_with_cx(asx_udp_socket *out, const asx_socket_addr *addr
         if (st != ASX_OK) return st;
     }
 
+#if ASX_NET_HAS_NATIVE
+    if (NET_USE_NATIVE()) {
+        asx_native_handle h;
+        asx_status st = asx_native_udp_bind(addr, &h);
+        if (st != ASX_OK) return st;
+        out->slot = h.slot;
+        out->generation = h.generation;
+        return ASX_OK;
+    }
+#endif
+
     for (idx = 0u; idx < ASX_MAX_UDP_SOCKETS; idx++) {
         if (!g_udp_sockets[idx].alive) break;
     }
     if (idx >= ASX_MAX_UDP_SOCKETS) return ASX_E_RESOURCE_EXHAUSTED;
 
     s = &g_udp_sockets[idx];
-    memset(s, 0, sizeof(*s));
-    s->generation = next_gen(s->generation);
+    {
+        /* Advance (not reset) the generation so stale handles fail. */
+        uint32_t gen_ = s->generation;
+        memset(s, 0, sizeof(*s));
+        s->generation = next_gen(gen_);
+    }
     s->alive = 1;
     s->local = *addr;
 
@@ -713,6 +971,12 @@ asx_status asx_udp_connect_with_cx(asx_udp_socket socket, const asx_socket_addr 
         asx_status st = net_require_channel_cx(cx);
         if (st != ASX_OK) return st;
     }
+
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(socket)) {
+        return asx_native_udp_connect(native_h(socket.slot, socket.generation), peer_addr);
+    }
+#endif
 
     s = udp_lookup(socket);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -739,6 +1003,13 @@ asx_status asx_udp_poll_send_with_cx(asx_udp_socket socket, const asx_buf *src,
         st = net_poll_checkpoint(cx);
         if (st != ASX_OK) return st;
     }
+
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(socket)) {
+        return asx_native_udp_send(native_h(socket.slot, socket.generation), src->ptr, src->len, to,
+                                   bytes_written);
+    }
+#endif
 
     s = udp_lookup(socket);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -776,6 +1047,18 @@ asx_status asx_udp_poll_recv_with_cx(asx_udp_socket socket, asx_buf_mut *dst, ui
         if (st != ASX_OK) return st;
     }
 
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(socket)) {
+        uint32_t cap = asx_buf_mut_writable(dst);
+        *bytes_read = 0u;
+        if (cap == 0u) return ASX_E_BUFFER_TOO_SMALL;
+        st = asx_native_udp_recv(native_h(socket.slot, socket.generation), &dst->data[dst->wr_pos],
+                                 cap, bytes_read, from);
+        if (st == ASX_OK) dst->wr_pos += *bytes_read;
+        return st;
+    }
+#endif
+
     s = udp_lookup(socket);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (s->recv_count == 0u) {
@@ -807,9 +1090,17 @@ asx_status asx_udp_poll_recv_with_cx(asx_udp_socket socket, asx_buf_mut *dst, ui
 asx_status asx_udp_close(asx_udp_socket socket) {
     udp_socket_slot *s;
 
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(socket)) return asx_native_close(native_h(socket.slot, socket.generation));
+#endif
     s = udp_lookup(socket);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
-    memset(s, 0, sizeof(*s));
+    {
+        /* Keep the generation so stale handles never alias the next owner. */
+        uint32_t gen_ = s->generation;
+        memset(s, 0, sizeof(*s));
+        s->generation = gen_;
+    }
     return ASX_OK;
 }
 
@@ -817,6 +1108,10 @@ asx_status asx_udp_local_addr(asx_udp_socket socket, asx_socket_addr *out) {
     udp_socket_slot *s;
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(socket))
+        return asx_native_local_addr(native_h(socket.slot, socket.generation), out);
+#endif
     s = udp_lookup(socket);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     *out = s->local;
@@ -827,13 +1122,25 @@ asx_status asx_udp_peer_addr(asx_udp_socket socket, asx_socket_addr *out) {
     udp_socket_slot *s;
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(socket)) {
+        return asx_native_peer_addr(native_h(socket.slot, socket.generation), out) == ASX_OK
+                   ? ASX_OK
+                   : ASX_E_INVALID_ARGUMENT;
+    }
+#endif
     s = udp_lookup(socket);
     if (s == NULL || !s->has_peer) return ASX_E_INVALID_ARGUMENT;
     *out = s->peer;
     return ASX_OK;
 }
 
-int asx_udp_is_alive(asx_udp_socket socket) { return udp_lookup(socket) != NULL; }
+int asx_udp_is_alive(asx_udp_socket socket) {
+#if ASX_NET_HAS_NATIVE
+    if (NET_NATIVE(socket)) return asx_native_is_alive(native_h(socket.slot, socket.generation));
+#endif
+    return udp_lookup(socket) != NULL;
+}
 
 /* ------------------------------------------------------------------ */
 /* Resolve / happy-eyeballs helpers                                    */
@@ -1165,8 +1472,12 @@ static asx_status unix_stream_alloc(const asx_unix_addr *local, const asx_unix_a
     if (idx >= ASX_MAX_UNIX_STREAMS) return ASX_E_RESOURCE_EXHAUSTED;
 
     s = &g_unix_streams[idx];
-    memset(s, 0, sizeof(*s));
-    s->generation = next_gen(s->generation);
+    {
+        /* Advance (not reset) the generation so stale handles fail. */
+        uint32_t gen_ = s->generation;
+        memset(s, 0, sizeof(*s));
+        s->generation = next_gen(gen_);
+    }
     s->alive = 1;
     s->local = *local;
     s->peer = *peer;
@@ -1205,8 +1516,12 @@ asx_status asx_unix_listener_bind(asx_unix_listener *out, const asx_unix_addr *a
     if (idx >= ASX_MAX_UNIX_LISTENERS) return ASX_E_RESOURCE_EXHAUSTED;
 
     s = &g_unix_listeners[idx];
-    memset(s, 0, sizeof(*s));
-    s->generation = next_gen(s->generation);
+    {
+        /* Advance (not reset) the generation so stale handles fail. */
+        uint32_t gen_ = s->generation;
+        memset(s, 0, sizeof(*s));
+        s->generation = next_gen(gen_);
+    }
     s->alive = 1;
     s->addr = *addr;
 
@@ -1241,7 +1556,12 @@ asx_status asx_unix_listener_close(asx_unix_listener listener) {
         (void)asx_unix_stream_close(s->pending[idx]);
     }
 
-    memset(s, 0, sizeof(*s));
+    {
+        /* Keep the generation so stale handles never alias the next owner. */
+        uint32_t gen_ = s->generation;
+        memset(s, 0, sizeof(*s));
+        s->generation = gen_;
+    }
     return ASX_OK;
 }
 
@@ -1370,7 +1690,12 @@ asx_status asx_unix_stream_close(asx_unix_stream stream) {
     s = unix_stream_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     unix_stream_unlink_peer(s);
-    memset(s, 0, sizeof(*s));
+    {
+        /* Keep the generation so stale handles never alias the next owner. */
+        uint32_t gen_ = s->generation;
+        memset(s, 0, sizeof(*s));
+        s->generation = gen_;
+    }
     return ASX_OK;
 }
 
@@ -1392,8 +1717,12 @@ asx_status asx_unix_dgram_bind(asx_unix_dgram *out, const asx_unix_addr *addr) {
     if (idx >= ASX_MAX_UNIX_DGRAM_SOCKETS) return ASX_E_RESOURCE_EXHAUSTED;
 
     s = &g_unix_dgrams[idx];
-    memset(s, 0, sizeof(*s));
-    s->generation = next_gen(s->generation);
+    {
+        /* Advance (not reset) the generation so stale handles fail. */
+        uint32_t gen_ = s->generation;
+        memset(s, 0, sizeof(*s));
+        s->generation = next_gen(gen_);
+    }
     s->alive = 1;
     s->local = *addr;
 
@@ -1477,7 +1806,12 @@ asx_status asx_unix_dgram_close(asx_unix_dgram socket) {
 
     s = unix_dgram_lookup(socket);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
-    memset(s, 0, sizeof(*s));
+    {
+        /* Keep the generation so stale handles never alias the next owner. */
+        uint32_t gen_ = s->generation;
+        memset(s, 0, sizeof(*s));
+        s->generation = gen_;
+    }
     return ASX_OK;
 }
 
@@ -1551,7 +1885,7 @@ asx_status asx_unix_stream_recv_ancillary(asx_unix_stream stream, asx_ancillary 
 
 asx_status asx_tcp_stream_split(asx_tcp_stream stream, asx_read_half *rd, asx_write_half *wr) {
     if (rd == NULL || wr == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (stream_lookup(stream) == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!asx_tcp_stream_is_alive(stream)) return ASX_E_INVALID_ARGUMENT;
 
     rd->kind = ASX_SPLIT_SOURCE_TCP;
     rd->slot = stream.slot;
@@ -1647,6 +1981,10 @@ int asx_write_half_is_active(const asx_write_half *half) {
 /* ------------------------------------------------------------------ */
 
 void asx_net_reset(void) {
+#if ASX_NET_HAS_NATIVE
+    asx_native_net_reset();
+#endif
+    g_net_backend = ASX_NET_DEFAULT_BACKEND;
     memset(g_listeners, 0, sizeof(g_listeners));
     g_listener_count = 0u;
     memset(g_streams, 0, sizeof(g_streams));

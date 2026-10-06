@@ -2,12 +2,21 @@
  * asx/runtime/io_driver.h — IO driver and reactor integration
  *
  * The IO driver owns the reactor lifecycle and provides the bridge
- * between external IO events and task wakeups. It integrates with
- * the reactor hooks (real or ghost) and the waker system.
+ * between external IO events and task wakeups.
  *
- * Walking skeleton: single-threaded, uses ghost reactor for
- * deterministic testing. Real reactor integration deferred to
- * platform hook implementation.
+ * Backends:
+ *   live  — non-deterministic builds whose reactor hooks report per-fd
+ *           readiness (POSIX epoll / poll(2)). Interest is armed one-shot
+ *           and readiness wakes exactly the task (or waker) that armed it.
+ *   ghost — deterministic builds: registration/quiescence semantics only;
+ *           readiness is synthesized deterministically for replay.
+ *
+ * Typical use from a poll function (non-blocking fd):
+ *   n = read(fd, ...);
+ *   if (n < 0 && errno == EAGAIN) return asx_io_wait(&token, ASX_IO_READABLE);
+ * asx_io_wait arms one-shot interest for the current task and parks it;
+ * the scheduler's idle loop blocks in the reactor and wakes it on
+ * readiness.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -26,7 +35,9 @@ extern "C" {
 #endif
 
 #if ASX_HAS_NATIVE_IO_DRIVER
-#define ASX_MAX_IO_TOKENS 32u
+#ifndef ASX_MAX_IO_TOKENS
+#define ASX_MAX_IO_TOKENS 64u
+#endif
 
 /* -------------------------------------------------------------------
  * IO interest
@@ -87,6 +98,25 @@ ASX_API int asx_io_driver_is_initialized(void);
 ASX_API ASX_MUST_USE asx_status asx_io_register(int fd, asx_io_interest interest,
                                                 const asx_waker *waker, asx_io_token *out_token);
 
+/* Register a file descriptor without arming any interest or wake target.
+ * Use asx_io_arm() / asx_io_wait() to request readiness notifications.
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT for NULL/negative input,
+ * ASX_E_INVALID_STATE if the driver is not initialized, or
+ * ASX_E_RESOURCE_EXHAUSTED when the token arena is full. */
+ASX_API ASX_MUST_USE asx_status asx_io_register_fd(int fd, asx_io_token *out_token);
+
+/* Arm one-shot interest and set the task woken on readiness (the live
+ * backend reports the next readiness once, then the registration must be
+ * armed again). Returns ASX_OK, ASX_E_INVALID_ARGUMENT for bad interest,
+ * ASX_E_NOT_FOUND for stale tokens, or a reactor error. */
+ASX_API ASX_MUST_USE asx_status asx_io_arm(asx_io_token *token, asx_io_interest interest,
+                                           asx_task_id task);
+
+/* Arm interest for the currently polled task and park it (live backend).
+ * Returns ASX_E_PENDING on success — return it from the poll function —
+ * or the arming error. Outside a scheduler poll nothing is parked. */
+ASX_API ASX_MUST_USE asx_status asx_io_wait(asx_io_token *token, asx_io_interest interest);
+
 /* Deregister an IO token. */
 ASX_API void asx_io_deregister(asx_io_token *token);
 
@@ -109,14 +139,21 @@ ASX_API ASX_MUST_USE asx_status asx_io_get_registration(const asx_io_token *toke
  * API: IO driver poll
  * ------------------------------------------------------------------- */
 
-/* Poll the reactor for IO events. Non-blocking in walking skeleton.
- * Collects ready events and signals associated wakers.
+/* Poll the reactor for IO events, waiting up to timeout_ms (live backend).
+ * Collects ready events and wakes the associated tasks/wakers.
  * Returns the number of events collected. */
 ASX_API uint32_t asx_io_driver_poll(asx_io_event *out_events, uint32_t max_events,
                                     uint32_t timeout_ms);
 
 /* Get the count of active IO registrations. */
 ASX_API uint32_t asx_io_active_count(void);
+
+/* Get the count of registrations that can still produce a wakeup (live
+ * backend: armed one-shot interests; ghost backend: all active). */
+ASX_API uint32_t asx_io_armed_count(void);
+
+/* Returns nonzero when the driver is initialized with the live backend. */
+ASX_API int asx_io_driver_is_live(void);
 
 /* Query the currently selected IO backend for the initialized driver.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT for NULL, and

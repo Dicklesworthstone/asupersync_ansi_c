@@ -295,7 +295,7 @@ SPORK_SRC := \
 
 # Platform sources selected by profile
 ifeq ($(PROFILE),POSIX)
-  PLATFORM_SRC := src/platform/posix/hooks.c
+  PLATFORM_SRC := src/platform/posix/hooks.c src/platform/posix/net_posix.c
 else ifeq ($(PROFILE),WIN32)
   PLATFORM_SRC := src/platform/win32/hooks.c
 else ifeq ($(PROFILE),FREESTANDING)

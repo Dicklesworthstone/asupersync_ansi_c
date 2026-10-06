@@ -8,6 +8,7 @@
  */
 
 #include "../../test_harness.h"
+#include "../../test_io_fd.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
 #include <asx/runtime/hindsight.h>
@@ -436,7 +437,7 @@ TEST(snapshot_capture_uses_runtime_snapshot_entities) {
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
 #if ASX_HAS_NATIVE_IO_DRIVER
     if (asx_io_driver_is_initialized()) {
-        ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_OK);
+        ASSERT_EQ(asx_io_register(test_io_fd(42), ASX_IO_READABLE, &w, &tok), ASX_OK);
     }
 #endif
 

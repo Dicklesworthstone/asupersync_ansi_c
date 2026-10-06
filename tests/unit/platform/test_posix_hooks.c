@@ -48,11 +48,7 @@ TEST(posix_install_populates_expected_hooks) {
 
 TEST(posix_capability_contract_names_supported_and_deferred_surfaces) {
     ASSERT_EQ(ASX_POSIX_HAS_TIMED_REACTOR_WAIT, 1u);
-#if defined(__linux__)
     ASSERT_EQ(ASX_POSIX_HAS_REACTOR_FD_REGISTRATION, 1u);
-#else
-    ASSERT_EQ(ASX_POSIX_HAS_REACTOR_FD_REGISTRATION, 0u);
-#endif
     ASSERT_EQ(ASX_POSIX_REACTOR_READABLE, 0x01u);
     ASSERT_EQ(ASX_POSIX_REACTOR_WRITABLE, 0x02u);
     ASSERT_EQ(ASX_POSIX_REACTOR_ERROR, 0x04u);

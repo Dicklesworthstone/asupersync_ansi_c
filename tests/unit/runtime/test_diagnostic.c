@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "test_io_fd.h"
 #include <asx/core/budget.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/browser_boundary.h>
@@ -177,7 +178,7 @@ static void test_inspect_with_entities(void) {
     MUST_OK(asx_region_open(&region));
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
         MUST_OK(asx_waker_register(55, &waker));
-        MUST_OK(asx_io_register(55, ASX_IO_READABLE, &waker, &tok));
+        MUST_OK(asx_io_register(test_io_fd(55), ASX_IO_READABLE, &waker, &tok));
     }
 
     MUST_OK(asx_inspect(&rt, &rpt));
