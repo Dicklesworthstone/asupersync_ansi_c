@@ -183,7 +183,8 @@ surface-specific obligations above. Expensive gates must run through
 
 ### DS-D05: Full RaptorQ + Advanced Policy Stack
 
-**Status:** Deferred to Wave D
+**Status:** RaptorQ codec landed (2026-10-06); advanced policy stack still deferred to Wave D
+**RaptorQ (landed):** `src/raptorq/raptorq.c` is a standards-conformant RFC 6330 systematic encoder/decoder (GF(256), Table 2 parameters, LDPC/HDPC/LT constraint matrix, inactivation-decoding solver, any-ESI encoding, OTI wire format, Z>1 source blocks and N>=1 sub-blocks) running in caller-supplied workspaces with no allocation. Encoding symbols are bit-identical to an independent RFC 6330 implementation (golden vectors in `tests/unit/raptorq/test_raptorq.c`, K up to 8192). Still unported: upstream pipeline/proof/journal/decision-contract layers built on top of the codec.
 **Rationale:** RaptorQ (fountain codes for erasure coding) and advanced policy engines are specialized surfaces not needed for kernel parity.
 **Rust source:** `src/raptorq/` (~18k LOC)
 **Unblock criteria:**

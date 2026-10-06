@@ -1,10 +1,13 @@
 /*
- * e2e_raptorq_erasure.c — end-to-end erasure coding recovery scenario
+ * e2e_raptorq_erasure.c — end-to-end RFC 6330 erasure recovery scenario
  *
- * Exercises the full encode→erase→decode pipeline with deterministic
- * symbol loss patterns and detailed per-step logging. Verifies that
- * the XOR peeling decoder correctly recovers source data from partial
- * symbol sets across multiple loss rates.
+ * Exercises the full object pipeline: OTI derivation and wire round trip,
+ * source-block gather, RaptorQ encoding (source + repair symbols),
+ * deterministic symbol loss, decoding from whatever symbols survive, and
+ * scatter back into the object. With RFC 6330 any K received symbols
+ * (source or repair, any mix) recover a block with high probability; with
+ * fewer than K the decoder reports ASX_E_RESOURCE_EXHAUSTED and recovers
+ * once more symbols arrive.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -26,8 +29,10 @@ static int g_expected_fail = 0;
 #define LOG0(msg) fprintf(stderr, "  [raptorq-e2e] " msg "\n")
 #define SCENARIO(name) fprintf(stderr, "\n=== SCENARIO: %s ===\n", name)
 
-static void fill_deterministic(uint8_t *buf, uint32_t len, uint32_t seed) {
-    uint32_t i;
+#define E2E_MAX_SYMBOLS 4096u
+
+static void fill_deterministic(uint8_t *buf, size_t len, uint32_t seed) {
+    size_t i;
     uint32_t state = seed;
     for (i = 0; i < len; i++) {
         state = state * 1103515245u + 12345u;
@@ -35,153 +40,259 @@ static void fill_deterministic(uint8_t *buf, uint32_t len, uint32_t seed) {
     }
 }
 
-/* Deterministic pseudo-random erasure: erase every Nth symbol starting at offset */
-static void erase_pattern_periodic(uint8_t *present, uint32_t count, uint32_t period,
-                                   uint32_t offset) {
-    uint32_t i;
-    for (i = offset; i < count; i += period) { present[i] = 0u; }
-}
-
-static uint32_t count_present(const uint8_t *present, uint32_t count) {
-    uint32_t i, n = 0;
-    for (i = 0; i < count; i++) {
-        if (present[i]) n++;
+static uint64_t fnv1a(const uint8_t *data, size_t len) {
+    uint64_t h = UINT64_C(0xcbf29ce484222325);
+    size_t i;
+    for (i = 0; i < len; i++) {
+        h ^= data[i];
+        h *= UINT64_C(0x100000001b3);
     }
-    return n;
+    return h;
 }
 
-static int run_erasure_scenario(const char *name, uint32_t data_len, uint32_t sym_size,
-                                uint32_t overhead_pct, void (*erase_fn)(uint8_t *, uint32_t),
-                                int expect_recovery) {
-    asx_raptorq_config cfg;
-    uint8_t source[2048];
-    uint8_t encoded[4096];
-    uint8_t decoded[2048];
-    uint8_t present[256];
-    uint32_t symbol_count = 0;
-    uint32_t decoded_len = 0;
-    uint32_t source_symbols, repair_symbols;
+/* Erasure pattern over the K source + R repair symbols of one block:
+ * present[i] == 0 means symbol i (ESI i) was lost. */
+typedef void (*erase_fn)(uint8_t *present, uint32_t k, uint32_t total);
+
+static void erase_none(uint8_t *present, uint32_t k, uint32_t total) {
+    (void)present;
+    (void)k;
+    (void)total;
+}
+
+static void erase_1_source(uint8_t *present, uint32_t k, uint32_t total) {
+    (void)k;
+    (void)total;
+    present[0] = 0u;
+}
+
+static void erase_3_sources(uint8_t *present, uint32_t k, uint32_t total) {
+    (void)total;
+    present[0] = 0u;
+    if (k > 2u) present[2] = 0u;
+    if (k > 4u) present[4] = 0u;
+}
+
+static void erase_all_repair(uint8_t *present, uint32_t k, uint32_t total) {
+    uint32_t i;
+    for (i = k; i < total; i++) present[i] = 0u;
+}
+
+static void erase_all_source(uint8_t *present, uint32_t k, uint32_t total) {
+    uint32_t i;
+    (void)total;
+    for (i = 0; i < k; i++) present[i] = 0u;
+}
+
+static void erase_every_other(uint8_t *present, uint32_t k, uint32_t total) {
+    uint32_t i;
+    (void)k;
+    for (i = 0; i < total; i += 2u) present[i] = 0u;
+}
+
+static void erase_periodic_3(uint8_t *present, uint32_t k, uint32_t total) {
+    uint32_t i;
+    (void)k;
+    for (i = 0; i < total; i += 3u) present[i] = 0u;
+}
+
+/* Too much loss: keep only K - 1 symbols. */
+static void erase_to_k_minus_1(uint8_t *present, uint32_t k, uint32_t total) {
+    uint32_t i;
+    uint32_t kept = 0u;
+    for (i = 0; i < total; i++) {
+        if (kept + 1u < k) {
+            kept++;
+        } else {
+            present[i] = 0u;
+        }
+    }
+}
+
+/*
+ * Encode an object of `data_len` bytes with symbol size `sym_size` and at
+ * most `max_block` symbols per source block, emit `repair` repair symbols
+ * per block, apply `erase` to every block and decode.
+ */
+static int run_erasure_scenario(const char *name, uint32_t data_len, uint16_t sym_size,
+                                uint32_t max_block, uint32_t repair, erase_fn erase,
+                                int expect_recovery, uint64_t *out_digest) {
+    asx_raptorq_oti oti;
+    asx_raptorq_oti rx_oti;
+    uint8_t wire[ASX_RAPTORQ_OTI_SIZE];
+    uint8_t *source = NULL;
+    uint8_t *rebuilt = NULL;
+    uint8_t present[E2E_MAX_SYMBOLS];
+    uint32_t sbn;
+    uint32_t total_erased = 0u;
+    uint32_t total_symbols = 0u;
     asx_status st;
     int ok = 1;
 
     SCENARIO(name);
-
-    if (data_len > sizeof(source)) {
-        LOG("ERROR: data_len %u exceeds buffer", data_len);
+    source = (uint8_t *)malloc(data_len);
+    rebuilt = (uint8_t *)malloc(data_len);
+    if (source == NULL || rebuilt == NULL) {
+        LOG0("FAIL: allocation");
         g_fail++;
+        free(source);
+        free(rebuilt);
         return 0;
     }
-
-    /* Generate deterministic source data */
     fill_deterministic(source, data_len, 0xDEADBEEFu);
+    memset(rebuilt, 0, data_len);
     LOG("source: %u bytes, seed=0xDEADBEEF", data_len);
 
-    /* Configure and encode */
-    asx_raptorq_config_init(&cfg);
-    cfg.symbol_size = sym_size;
-    cfg.repair_overhead_pct = overhead_pct;
-
-    st = asx_raptorq_encode(&cfg, source, data_len, encoded, sizeof(encoded), &symbol_count);
+    /* Sender derives the OTI; receiver parses it from the 12-byte wire form. */
+    st = asx_raptorq_oti_init(&oti, data_len, sym_size, 1u, max_block);
+    if (st == ASX_OK) st = asx_raptorq_oti_serialize(&oti, wire);
+    if (st == ASX_OK) st = asx_raptorq_oti_deserialize(wire, &rx_oti);
     if (st != ASX_OK) {
-        LOG("FAIL: encode returned %s", asx_status_str(st));
+        LOG("FAIL: OTI setup returned %s", asx_status_str(st));
         g_fail++;
+        free(source);
+        free(rebuilt);
         return 0;
     }
+    LOG("OTI: F=%u T=%u Z=%u N=%u Al=%u", (unsigned)rx_oti.transfer_length,
+        (unsigned)rx_oti.symbol_size, (unsigned)rx_oti.source_blocks, (unsigned)rx_oti.sub_blocks,
+        (unsigned)rx_oti.alignment);
 
-    source_symbols = (data_len + sym_size - 1u) / sym_size;
-    repair_symbols = symbol_count - source_symbols;
-    LOG("encoded: %u symbols (%u source + %u repair), sym_size=%u, overhead=%u%%", symbol_count,
-        source_symbols, repair_symbols, sym_size, overhead_pct);
+    for (sbn = 0u; sbn < rx_oti.source_blocks && ok; sbn++) {
+        asx_raptorq_block_layout lay;
+        asx_raptorq_encoder enc;
+        asx_raptorq_decoder dec;
+        size_t ews_size = 0u;
+        size_t dws_size = 0u;
+        void *ews = NULL;
+        void *dws = NULL;
+        uint8_t *block = NULL;
+        uint8_t *decoded = NULL;
+        uint8_t *sym = NULL;
+        uint32_t k;
+        uint32_t total;
+        uint32_t i;
+        size_t bytes;
 
-    /* Initialize all present, then apply erasure pattern */
-    memset(present, 1, symbol_count);
-    if (erase_fn) erase_fn(present, symbol_count);
-
-    {
-        uint32_t present_count = count_present(present, symbol_count);
-        uint32_t erased = symbol_count - present_count;
-        LOG("erasure: %u/%u symbols erased (%u remaining)", erased, symbol_count, present_count);
-    }
-
-    /* Decode with erasures */
-    memset(decoded, 0, sizeof(decoded));
-    st = asx_raptorq_decode_with_erasures(&cfg, encoded, symbol_count, present, decoded,
-                                          sizeof(decoded), &decoded_len);
-
-    if (expect_recovery) {
+        st = asx_raptorq_oti_block_layout(&rx_oti, sbn, &lay);
         if (st != ASX_OK) {
-            LOG("FAIL: expected recovery but got %s", asx_status_str(st));
-            g_fail++;
-            return 0;
+            ok = 0;
+            break;
         }
-        if (decoded_len < data_len) {
-            LOG("FAIL: decoded_len=%u < source_len=%u", decoded_len, data_len);
-            g_fail++;
-            return 0;
+        k = lay.source_symbols;
+        total = k + repair;
+        if (total > E2E_MAX_SYMBOLS) {
+            LOG("FAIL: block %u needs %u symbols", sbn, total);
+            ok = 0;
+            break;
         }
-        if (memcmp(source, decoded, data_len) != 0) {
-            uint32_t j;
-            LOG0("FAIL: decoded data does not match source");
-            for (j = 0; j < data_len; j++) {
-                if (source[j] != decoded[j]) {
-                    LOG("  first mismatch at byte %u: expected 0x%02X got 0x%02X", j, source[j],
-                        decoded[j]);
-                    break;
+        bytes = (size_t)k * sym_size;
+        block = (uint8_t *)malloc(bytes);
+        decoded = (uint8_t *)malloc(bytes);
+        sym = (uint8_t *)malloc(sym_size);
+        st = asx_raptorq_encoder_workspace_size(k, sym_size, &ews_size);
+        if (st == ASX_OK) st = asx_raptorq_decoder_workspace_size(k, sym_size, total, &dws_size);
+        if (st == ASX_OK) {
+            ews = malloc(ews_size);
+            dws = malloc(dws_size);
+        }
+        if (st != ASX_OK || block == NULL || decoded == NULL || sym == NULL || ews == NULL ||
+            dws == NULL) {
+            LOG("FAIL: block %u setup (%s)", sbn, asx_status_str(st));
+            ok = 0;
+        }
+        if (ok) st = asx_raptorq_block_gather(&rx_oti, sbn, source, data_len, block, bytes);
+        if (ok && st == ASX_OK) {
+            st = asx_raptorq_encoder_init(&enc, k, sym_size, block, bytes, ews, ews_size);
+        }
+        if (ok && st == ASX_OK)
+            st = asx_raptorq_decoder_init(&dec, k, sym_size, total, dws, dws_size);
+        if (ok && st != ASX_OK) {
+            LOG("FAIL: block %u encode setup returned %s", sbn, asx_status_str(st));
+            ok = 0;
+        }
+
+        if (ok) {
+            uint32_t received = 0u;
+            memset(present, 1, total);
+            erase(present, k, total);
+            for (i = 0u; i < total && ok; i++) {
+                if (!present[i]) {
+                    total_erased++;
+                    continue;
+                }
+                st = asx_raptorq_encoder_symbol(&enc, i, sym, sym_size);
+                if (st == ASX_OK) st = asx_raptorq_decoder_add_symbol(&dec, i, sym, sym_size);
+                if (st != ASX_OK) {
+                    LOG("FAIL: symbol %u transfer returned %s", i, asx_status_str(st));
+                    ok = 0;
+                }
+                received++;
+            }
+            total_symbols += total;
+            LOG("block %u: K=%u, %u source + %u repair emitted, %u received", sbn, k, k, repair,
+                received);
+        }
+
+        if (ok) {
+            st = asx_raptorq_decoder_decode(&dec, decoded, bytes);
+            if (st == ASX_E_RESOURCE_EXHAUSTED && !expect_recovery) {
+                /* Late arrivals: feed fresh repair symbols until recovery. */
+                uint32_t extra = 0u;
+                LOG("block %u: decode deferred (%s), requesting more symbols", sbn,
+                    asx_status_str(st));
+                while (st == ASX_E_RESOURCE_EXHAUSTED && extra < 4u) {
+                    uint32_t esi = total + 1000u + extra;
+                    asx_status st2 = asx_raptorq_encoder_symbol(&enc, esi, sym, sym_size);
+                    if (st2 == ASX_OK)
+                        st2 = asx_raptorq_decoder_add_symbol(&dec, esi, sym, sym_size);
+                    if (st2 != ASX_OK) break;
+                    extra++;
+                    st = asx_raptorq_decoder_decode(&dec, decoded, bytes);
+                }
+                if (st == ASX_OK) {
+                    LOG("block %u: recovered after %u late repair symbol(s)", sbn, extra);
+                    g_expected_fail++;
                 }
             }
-            g_fail++;
-            return 0;
+            if (st == ASX_OK) {
+                st = asx_raptorq_block_scatter(&rx_oti, sbn, decoded, bytes, rebuilt, data_len);
+            }
+            if (st != ASX_OK) {
+                LOG("FAIL: block %u decode returned %s", sbn, asx_status_str(st));
+                ok = 0;
+            }
         }
-        LOG("PASS: recovered %u bytes, byte-exact match with source", decoded_len);
-        g_pass++;
-    } else {
-        if (st == ASX_OK) {
-            LOG0("UNEXPECTED: recovery succeeded when failure was expected");
-            /* Count as pass — recovery is always good */
-            g_pass++;
-        } else {
-            LOG("PASS (expected failure): decode returned %s", asx_status_str(st));
-            g_expected_fail++;
-            g_pass++;
-        }
+        free(ews);
+        free(dws);
+        free(block);
+        free(decoded);
+        free(sym);
     }
 
+    if (ok && memcmp(source, rebuilt, data_len) != 0) {
+        uint32_t j;
+        LOG0("FAIL: decoded data does not match source");
+        for (j = 0; j < data_len; j++) {
+            if (source[j] != rebuilt[j]) {
+                LOG("  first mismatch at byte %u: expected 0x%02X got 0x%02X", j, source[j],
+                    rebuilt[j]);
+                break;
+            }
+        }
+        ok = 0;
+    }
+    if (ok) {
+        if (out_digest != NULL) *out_digest = fnv1a(rebuilt, data_len);
+        LOG("PASS: %u/%u symbols erased, %u bytes recovered byte-exact", total_erased,
+            total_symbols, data_len);
+        g_pass++;
+    } else {
+        g_fail++;
+    }
+    free(source);
+    free(rebuilt);
     return ok;
-}
-
-/* ------------------------------------------------------------------ */
-/* Erasure pattern functions                                           */
-/* ------------------------------------------------------------------ */
-
-static void erase_none(uint8_t *present, uint32_t count) {
-    (void)present;
-    (void)count;
-}
-
-static void erase_1_source(uint8_t *present, uint32_t count) {
-    (void)count;
-    present[0] = 0u; /* erase first source symbol */
-}
-
-static void erase_3_sources(uint8_t *present, uint32_t count) {
-    (void)count;
-    present[0] = 0u;
-    present[2] = 0u;
-    present[4] = 0u;
-}
-
-static void erase_periodic_3(uint8_t *present, uint32_t count) {
-    erase_pattern_periodic(present, count, 3, 0);
-}
-
-static void erase_all_repair(uint8_t *present, uint32_t count) {
-    /* For 1024 bytes, sym_size=128: 8 source, ~2 repair → erase last 2 */
-    uint32_t i;
-    for (i = count > 2 ? count - 2 : 0; i < count; i++) { present[i] = 0u; }
-}
-
-static void erase_heavy_50pct(uint8_t *present, uint32_t count) {
-    erase_pattern_periodic(present, count, 2, 0); /* erase every other symbol */
 }
 
 /* ------------------------------------------------------------------ */
@@ -189,56 +300,45 @@ static void erase_heavy_50pct(uint8_t *present, uint32_t count) {
 /* ------------------------------------------------------------------ */
 
 int main(void) {
-    fprintf(stderr, "=== e2e_raptorq_erasure: full encode-erase-decode pipeline ===\n\n");
+    uint64_t digest_a = 0u;
+    uint64_t digest_b = 0u;
 
-    /* Scenario 1: No erasure (baseline) */
-    run_erasure_scenario("no-loss baseline (1024B, sym=128, overhead=25%)", 1024, 128, 25,
-                         erase_none, 1);
+    fprintf(stderr, "=== e2e_raptorq_erasure: RFC 6330 encode-erase-decode pipeline ===\n\n");
 
-    /* Scenario 2: Single source symbol loss */
-    run_erasure_scenario("single source loss (1024B, sym=128, overhead=25%)", 1024, 128, 25,
-                         erase_1_source, 1);
+    run_erasure_scenario("no-loss baseline (1024B, T=128, 2 repair)", 1024u, 128u, 64u, 2u,
+                         erase_none, 1, NULL);
+    run_erasure_scenario("single source loss (1024B, T=128, 2 repair)", 1024u, 128u, 64u, 2u,
+                         erase_1_source, 1, NULL);
+    run_erasure_scenario("3 source losses (1024B, T=128, 5 repair)", 1024u, 128u, 64u, 5u,
+                         erase_3_sources, 1, NULL);
+    run_erasure_scenario("repair-only loss (1024B, T=128, 2 repair)", 1024u, 128u, 64u, 2u,
+                         erase_all_repair, 1, NULL);
+    run_erasure_scenario("all sources lost, repair-only decode (2048B, T=64, 36 repair)", 2048u,
+                         64u, 64u, 36u, erase_all_source, 1, NULL);
+    run_erasure_scenario("heavy 50% loss (4000B, T=40, 104 repair)", 4000u, 40u, 1000u, 104u,
+                         erase_every_other, 1, NULL);
+    run_erasure_scenario("periodic/3 erasure (512B, T=16, 20 repair)", 512u, 16u, 64u, 20u,
+                         erase_periodic_3, 1, NULL);
+    run_erasure_scenario("multi-block object Z>1 (20000B, T=64, <=100 symbols/block)", 20000u, 64u,
+                         100u, 12u, erase_3_sources, 1, NULL);
+    run_erasure_scenario("insufficient symbols then late arrivals (1024B, T=32)", 1024u, 32u, 64u,
+                         8u, erase_to_k_minus_1, 0, NULL);
+    run_erasure_scenario("determinism-A (3000B, T=48, 40 repair)", 3000u, 48u, 1000u, 40u,
+                         erase_periodic_3, 1, &digest_a);
+    run_erasure_scenario("determinism-B (3000B, T=48, 40 repair)", 3000u, 48u, 1000u, 40u,
+                         erase_periodic_3, 1, &digest_b);
+    if (digest_a != digest_b) {
+        LOG0("FAIL: determinism digests differ");
+        g_fail++;
+    }
 
-    /* Scenario 3: Multiple source losses — may exceed peeling solver capacity
-     * depending on the XOR coverage pattern. Mark as expected-failure since
-     * the simplified XOR scheme cannot always recover 3+ losses even with
-     * sufficient repair symbols (unlike full RaptorQ/RFC 6330). */
-    run_erasure_scenario("3 source losses (1024B, sym=128, overhead=50%)", 1024, 128, 50,
-                         erase_3_sources, 0);
-
-    /* Scenario 4: Repair-only loss (all sources present) */
-    run_erasure_scenario("repair-only loss (1024B, sym=128, overhead=25%)", 1024, 128, 25,
-                         erase_all_repair, 1);
-
-    /* Scenario 5: Heavy loss — may or may not recover depending on pattern */
-    run_erasure_scenario("heavy 50% periodic loss (1024B, sym=128, overhead=50%)", 1024, 128, 50,
-                         erase_heavy_50pct, 0);
-
-    /* Scenario 6: Small data, large overhead */
-    run_erasure_scenario("small data (256B, sym=64, overhead=50%)", 256, 64, 50, erase_1_source, 1);
-
-    /* Scenario 7: Large symbols */
-    run_erasure_scenario("large symbols (1024B, sym=1024, overhead=25%)", 1024, 1024, 25,
-                         erase_none, 1);
-
-    /* Scenario 8: Periodic erasure pattern */
-    run_erasure_scenario("periodic/3 erasure (512B, sym=64, overhead=50%)", 512, 64, 50,
-                         erase_periodic_3, 0);
-
-    /* Scenario 9: Determinism check — same scenario twice */
-    run_erasure_scenario("determinism-A (1024B, sym=128, overhead=25%)", 1024, 128, 25,
-                         erase_1_source, 1);
-    run_erasure_scenario("determinism-B (1024B, sym=128, overhead=25%)", 1024, 128, 25,
-                         erase_1_source, 1);
-
-    /* Summary */
     fprintf(stderr, "\n=================================================================\n");
     fprintf(stderr, " RaptorQ E2E Erasure Summary\n");
     fprintf(stderr, "=================================================================\n");
     fprintf(stderr, "  scenarios:       %d\n", g_pass + g_fail);
     fprintf(stderr, "  passed:          %d\n", g_pass);
     fprintf(stderr, "  failed:          %d\n", g_fail);
-    fprintf(stderr, "  expected_fail:   %d\n", g_expected_fail);
+    fprintf(stderr, "  deferred_decode: %d\n", g_expected_fail);
     fprintf(stderr, "=================================================================\n");
 
     if (g_fail > 0) {
