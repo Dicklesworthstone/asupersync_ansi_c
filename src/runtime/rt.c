@@ -222,6 +222,7 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
     /* Step 5: store config and mark initialized */
     memset(rt, 0, sizeof(*rt));
     runtime_config_copy(rt, config);
+    asx_runtime_set_leak_policy_internal(config->leak_response, config->leak_escalation);
     rt->hooks = *hooks;
     rt->generation = g_rt_generation++;
     rt->initialized = 1;
@@ -334,6 +335,7 @@ asx_status asx_runtime_reload_config(asx_runtime *rt, const asx_runtime_config *
     if (st != ASX_OK) return st;
 
     runtime_config_copy(rt, proposed);
+    asx_runtime_set_leak_policy_internal(proposed->leak_response, proposed->leak_escalation);
     return ASX_OK;
 }
 

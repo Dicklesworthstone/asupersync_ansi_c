@@ -396,10 +396,12 @@ static void sched_cancel_phase_complete(asx_task_slot *t) {
 
 /* Drive a task to COMPLETED with the given severity. Emits the transition
  * trace, runs completion bookkeeping, and logs `ev`. The slot may be
- * released (detached task) when this returns: do not touch `t` after. */
-static void sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_slot *rslot,
-                           asx_outcome_severity severity, asx_scheduler_event_kind ev,
-                           uint32_t round) {
+ * released (detached task) when this returns: do not touch `t` after.
+ * Returns a fault raised by completion bookkeeping (obligation leak under
+ * the PANIC policy with fail-fast containment), else ASX_OK. */
+static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_slot *rslot,
+                                 asx_outcome_severity severity, asx_scheduler_event_kind ev,
+                                 uint32_t round) {
     asx_task_state from = t->state;
     (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
     t->state = ASX_TASK_COMPLETED;
@@ -410,6 +412,30 @@ static void sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_slot *r
     asx_task_on_complete_internal(t, rslot);
     sched_emit(ev, tid, round);
     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
+    return asx_runtime_take_pending_fault_internal();
+}
+
+/* Enforce a task's budget before polling it: deadline -> DEADLINE cancel,
+ * exhausted poll quota -> POLL_QUOTA cancel. `*now`/`*have_now` cache one
+ * clock read per round (only taken when a deadline is set). */
+static void sched_enforce_budget(asx_task_slot *t, asx_task_id tid, asx_time *now, int *have_now) {
+    asx_status st;
+    if (t->cancel_pending) return;
+    if (t->budget.deadline != 0u) {
+        if (!*have_now) {
+            *now = sched_now();
+            *have_now = 1;
+        }
+        if (*now >= t->budget.deadline) {
+            st = asx_task_cancel(tid, ASX_CANCEL_DEADLINE);
+            (void)st;
+            return;
+        }
+    }
+    if (t->budget.poll_quota == 0u) {
+        st = asx_task_cancel(tid, ASX_CANCEL_POLL_QUOTA);
+        (void)st;
+    }
 }
 
 static void sched_transition(asx_task_slot *t, asx_task_id tid, asx_task_state to,
@@ -563,11 +589,14 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
 
     /* Reset event log for this scheduler invocation */
     asx_scheduler_event_reset();
+    (void)asx_runtime_take_pending_fault_internal(); /* drop stale faults */
 
     for (round = 0;; round++) {
         uint32_t active = 0;
         uint32_t progress = 0;
         uint32_t i;
+        asx_time round_now = 0;
+        int have_now = 0;
 
         ASX_CHECKPOINT_WAIVER("kernel-scheduler: this IS the scheduler event loop; "
                               "budget exhaustion provides bounded termination");
@@ -605,8 +634,9 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
             /* FINALIZING: the task called asx_task_finalize() — cleanup is
              * done. Complete without consuming a poll unit. */
             if (t->state == ASX_TASK_FINALIZING) {
-                sched_complete(t, tid, rslot, ASX_OUTCOME_CANCELLED, ASX_SCHED_EVENT_COMPLETE,
-                               round);
+                st = sched_complete(t, tid, rslot, ASX_OUTCOME_CANCELLED, ASX_SCHED_EVENT_COMPLETE,
+                                    round);
+                if (st != ASX_OK) return st;
                 active--;
                 progress++;
                 continue;
@@ -622,14 +652,18 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
                     sched_transition(t, tid, ASX_TASK_CANCELLING, ASX_CANCEL_PHASE_CANCELLING);
                 }
                 sched_transition(t, tid, ASX_TASK_FINALIZING, ASX_CANCEL_PHASE_FINALIZING);
-                sched_complete(t, tid, rslot, ASX_OUTCOME_CANCELLED, ASX_SCHED_EVENT_CANCEL_FORCED,
-                               round);
+                st = sched_complete(t, tid, rslot, ASX_OUTCOME_CANCELLED,
+                                    ASX_SCHED_EVENT_CANCEL_FORCED, round);
+                if (st != ASX_OK) return st;
                 active--;
                 progress++;
                 continue;
             }
 
             if (t->parked) continue;
+
+            /* Budget: deadline / poll quota -> cancellation before polling */
+            sched_enforce_budget(t, tid, &round_now, &have_now);
 
             /* Consume one poll unit */
             if (asx_budget_consume_poll(budget) == 0) {
@@ -663,20 +697,25 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
             asx_error_ledger_bind_task(ASX_INVALID_ID);
             g_current_task = ASX_INVALID_ID;
             t->in_poll = 0;
+            if (t->budget.poll_quota != UINT32_MAX && t->budget.poll_quota > 0u) {
+                t->budget.poll_quota--;
+            }
 
             if (poll_result == ASX_OK) {
                 /* Completed — outcome joins to CANCELLED if cancel was pending */
-                sched_complete(t, tid, rslot,
-                               t->cancel_pending ? ASX_OUTCOME_CANCELLED : ASX_OUTCOME_OK,
-                               ASX_SCHED_EVENT_COMPLETE, round);
+                st = sched_complete(t, tid, rslot,
+                                    t->cancel_pending ? ASX_OUTCOME_CANCELLED : ASX_OUTCOME_OK,
+                                    ASX_SCHED_EVENT_COMPLETE, round);
+                if (st != ASX_OK) return st;
                 active--;
             } else if (poll_result != ASX_E_PENDING) {
                 /* Failed — CANCELLED > ERR in the severity lattice, so a
                  * pending cancel dominates. */
                 if (!t->cancel_pending) t->last_error = poll_result;
-                sched_complete(t, tid, rslot,
-                               t->cancel_pending ? ASX_OUTCOME_CANCELLED : ASX_OUTCOME_ERR,
-                               ASX_SCHED_EVENT_COMPLETE, round);
+                st = sched_complete(t, tid, rslot,
+                                    t->cancel_pending ? ASX_OUTCOME_CANCELLED : ASX_OUTCOME_ERR,
+                                    ASX_SCHED_EVENT_COMPLETE, round);
+                if (st != ASX_OK) return st;
                 active--;
 
                 /* Apply fault containment policy (bd-hwb.15). In
@@ -694,6 +733,10 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
                 if (t->park_requested && !t->notified) t->parked = 1;
                 t->park_requested = 0;
                 t->notified = 0;
+                /* A parked task with a deadline must wake to be cancelled. */
+                if (t->parked && !t->cancel_pending && t->budget.deadline != 0u) {
+                    timer_arm(i, t->budget.deadline);
+                }
                 /* Each poll of a cancel-phase task consumes one cleanup
                  * unit; the scheduler is the sole budget enforcer. */
                 if (t->cancel_pending && t->cleanup_polls_remaining > 0) {

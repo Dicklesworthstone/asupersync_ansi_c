@@ -36,6 +36,7 @@ typedef struct {
     int alive;                 /* 1 if slot in use */
     int poisoned;              /* 1 if region has been poisoned (containment) */
     asx_cleanup_stack cleanup; /* LIFO cleanup for finalization */
+    asx_budget budget;         /* inherited by tasks and child regions */
     uint8_t capture_arena[ASX_REGION_CAPTURE_ARENA_BYTES];
     uint32_t capture_used;
 } asx_region_slot;
@@ -76,6 +77,11 @@ typedef struct {
     uint32_t first_waiter; /* first task parked in join on this one */
     uint32_t next_waiter;  /* link while waiting on another task */
     uint32_t waiting_on;   /* slot index of join target, or ASX_SLOT_NONE */
+    /* Budget: deadline -> DEADLINE cancel, poll quota -> POLL_QUOTA cancel,
+     * cost quota -> COST_BUDGET cancel. Inherited from the region. */
+    asx_budget budget;
+    /* Obligations held by this task (intrusive list of obligation slots). */
+    uint32_t first_held;
 } asx_task_slot;
 
 typedef struct {
@@ -84,6 +90,10 @@ typedef struct {
     uint16_t generation;
     int alive;
     uint32_t next_free; /* free-list link while !alive */
+    asx_obligation_kind kind;
+    asx_task_id holder;                       /* ASX_INVALID_ID if unowned */
+    uint32_t next_held;                       /* link in the holder's list */
+    asx_obligation_abort_reason abort_reason; /* why it was aborted */
 } asx_obligation_slot;
 
 /* Free-list terminator for arena slot links. */
@@ -152,6 +162,21 @@ uint32_t asx_region_subtree_internal(asx_region_id root, uint32_t *out_slots, ui
 
 /* Build the public handle for an occupied region slot. */
 asx_region_id asx_region_handle_for_slot(uint32_t slot_idx);
+
+/* Active obligation-leak policy (set by asx_runtime_init / reload; LOG
+ * after a bare asx_runtime_reset). */
+void asx_runtime_set_leak_policy_internal(asx_leak_response response,
+                                          const asx_leak_escalation_config *escalation);
+
+/* Resolve the obligations a completing task still holds: aborted with
+ * reason CANCEL if the task was cancelled, otherwise handled as leaks per
+ * the active policy. Returns the number of leaks recorded. Sets
+ * *out_fail_fast when the policy demands fail-fast containment. */
+uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *out_fail_fast);
+
+/* Take (and clear) a fault raised during completion bookkeeping, e.g. an
+ * obligation leak under the PANIC policy. ASX_OK when none is pending. */
+asx_status asx_runtime_take_pending_fault_internal(void);
 
 /* Reset private hook installation state during runtime teardown. */
 void asx_runtime_hooks_reset_internal(void);

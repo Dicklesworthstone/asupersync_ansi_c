@@ -244,6 +244,52 @@ ASX_API ASX_MUST_USE asx_status asx_task_spawn_captured(asx_region_id region,
                                                         asx_task_state_dtor_fn state_dtor,
                                                         asx_task_id *out_id, void **out_state);
 
+/* -------------------------------------------------------------------
+ * Budgets (deadlines, poll quotas, cost quotas)
+ *
+ * Every region carries a budget, inherited by its tasks and narrowed for
+ * child regions with asx_budget_meet(). A task's budget is enforced by the
+ * scheduler before each poll:
+ *   - deadline reached     -> cancel with ASX_CANCEL_DEADLINE (a parked
+ *                             task is woken by a timer at the deadline);
+ *   - poll quota used up   -> cancel with ASX_CANCEL_POLL_QUOTA;
+ *   - cost quota exceeded  -> asx_task_consume_cost() cancels with
+ *                             ASX_CANCEL_COST_BUDGET.
+ * Cancelled tasks then run their bounded cleanup as usual. Deadlines use
+ * the runtime clock (virtual time in deterministic builds). The default
+ * budget is asx_budget_infinite(): nothing is enforced.
+ * ------------------------------------------------------------------- */
+
+/* Spawn a task whose budget is meet(region budget, *budget).
+ * Same contract and errors as asx_task_spawn; budget may be NULL
+ * (region budget only). */
+ASX_API ASX_MUST_USE asx_status asx_task_spawn_with_budget(asx_region_id region,
+                                                           asx_task_poll_fn poll_fn,
+                                                           void *user_data,
+                                                           const asx_budget *budget,
+                                                           asx_task_id *out_id);
+
+/* Open a child region whose budget is meet(parent budget, *budget); its
+ * tasks and descendants inherit it (e.g. a deadline for a whole subtree).
+ * Same contract and errors as asx_region_open_child; budget may be NULL. */
+ASX_API ASX_MUST_USE asx_status asx_region_open_child_with_budget(asx_region_id parent,
+                                                                  const asx_budget *budget,
+                                                                  asx_region_id *out_child);
+
+/* Read a region's budget. Returns ASX_OK, ASX_E_INVALID_ARGUMENT if out is
+ * NULL, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for invalid handles. */
+ASX_API ASX_MUST_USE asx_status asx_region_get_budget(asx_region_id id, asx_budget *out);
+
+/* Read a task's remaining budget. Same errors as asx_region_get_budget. */
+ASX_API ASX_MUST_USE asx_status asx_task_get_budget(asx_task_id id, asx_budget *out);
+
+/* Charge `cost` units against the task's cost quota. When the quota cannot
+ * cover it, the task is cancelled with ASX_CANCEL_COST_BUDGET and
+ * ASX_E_COST_QUOTA_EXHAUSTED is returned (the quota is left untouched).
+ * Returns ASX_OK when charged, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for
+ * invalid handles. */
+ASX_API ASX_MUST_USE asx_status asx_task_consume_cost(asx_task_id self, uint64_t cost);
+
 /* Query the current state of a task.
  *
  * Preconditions: out_state must not be NULL; id must be a valid handle.
@@ -387,10 +433,73 @@ ASX_API ASX_MUST_USE asx_status asx_task_get_cancel_phase(asx_task_id id, asx_ca
 
 /* -------------------------------------------------------------------
  * Obligation lifecycle
+ *
+ * An obligation is a linear resource (send permit, ack, lease, ...) that
+ * must be committed or aborted exactly once. Each obligation records its
+ * kind and its holder task. When a holder completes with obligations still
+ * RESERVED, the runtime resolves them deterministically:
+ *   - holder CANCELLED  -> aborted with ASX_OBLIGATION_ABORT_CANCEL;
+ *   - otherwise         -> a leak, handled by the runtime's leak_response
+ *     policy: PANIC (marked LEAKED, fault reported through the region's
+ *     containment policy), LOG (LEAKED + log record), SILENT (LEAKED), or
+ *     RECOVER (aborted with ASX_OBLIGATION_ABORT_LEAK_RECOVERED). The
+ *     optional leak_escalation threshold switches policy after N leaks.
+ * Obligations without a holder (reserved outside any task) are not
+ * auto-resolved: an unresolved one blocks its region's finalization with
+ * ASX_E_OBLIGATIONS_UNRESOLVED.
  * ------------------------------------------------------------------- */
+
+typedef enum {
+    ASX_OBLIGATION_KIND_GENERIC = 0,
+    ASX_OBLIGATION_KIND_SEND_PERMIT = 1,
+    ASX_OBLIGATION_KIND_ACK = 2,
+    ASX_OBLIGATION_KIND_LEASE = 3,
+    ASX_OBLIGATION_KIND_IO_OP = 4,
+    ASX_OBLIGATION_KIND_SEMAPHORE_PERMIT = 5,
+    ASX_OBLIGATION_KIND_TRANSACTION = 6
+} asx_obligation_kind;
+
+typedef enum {
+    ASX_OBLIGATION_ABORT_NONE = 0,          /* not aborted */
+    ASX_OBLIGATION_ABORT_EXPLICIT = 1,      /* asx_obligation_abort() */
+    ASX_OBLIGATION_ABORT_CANCEL = 2,        /* holder was cancelled */
+    ASX_OBLIGATION_ABORT_ERROR = 3,         /* aborted on an error path */
+    ASX_OBLIGATION_ABORT_LEAK_RECOVERED = 4 /* leak resolved by RECOVER policy */
+} asx_obligation_abort_reason;
+
+typedef struct {
+    asx_obligation_state state;
+    asx_obligation_kind kind;
+    asx_region_id region;
+    asx_task_id holder; /* ASX_INVALID_ID if unowned */
+    asx_obligation_abort_reason abort_reason;
+} asx_obligation_info;
+
+/* Reserve an obligation with an explicit kind and holder task.
+ * `holder` may be ASX_INVALID_ID (unowned) or a live task.
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT for NULL out_id / bad kind,
+ *   ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for a bad region or holder,
+ *   ASX_E_INVALID_STATE if the holder already completed, plus the region
+ *   errors of asx_obligation_reserve.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_obligation_reserve_ex(asx_region_id region,
+                                                          asx_obligation_kind kind,
+                                                          asx_task_id holder,
+                                                          asx_obligation_id *out_id);
+
+/* Query kind/holder/state/abort reason of an obligation.
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if out is NULL, or
+ *   ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for invalid handles. */
+ASX_API ASX_MUST_USE asx_status asx_obligation_get_info(asx_obligation_id id,
+                                                        asx_obligation_info *out);
+
+/* Cumulative number of obligations recorded as leaked since reset. */
+ASX_API uint64_t asx_obligation_leak_count(void);
 
 /* Reserve an obligation within a region. The obligation starts in
  * the RESERVED state and must eventually be committed or aborted.
+ * Kind is GENERIC; the holder is the task currently being polled
+ * (asx_task_current()), or none when called outside a poll.
  *
  * Preconditions: region must be OPEN and not poisoned; out_id must
  *   not be NULL.
