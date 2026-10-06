@@ -45,6 +45,7 @@ This register complements `docs/DEFERRED_SURFACE_REGISTER.md`.
 | `src/runtime/quiescence.c` | `walking-skeleton` | Close/finalize/quiescence driver. Q2 child-region check now implemented but child-region model is bounded. | Full hierarchical region tree with unbounded children for production. |
 | `src/runtime/virtual_time.c` | `walking-skeleton` | Virtual time source for deterministic replay. Callers install via asx_runtime_set_hooks(). | Full virtual-time integration with scheduler time-travel for debug/replay. |
 | `src/runtime/runtime_internal.h` | `walking-skeleton` | Fixed-size arena slot types for regions/tasks/obligations. | Dynamic arena sizing or pool-based allocation for production workloads. |
+| `src/raptorq/raptorq.c` | `graduated` | RFC 6330 RaptorQ systematic encoder/decoder (replaces the former XOR-parity placeholder): bit-exact encoding symbols for any ESI, inactivation-decoding solver, OTI and source-block/sub-block partitioning, caller-supplied workspaces with no allocation. | No graduation required for the codec; upstream pipeline/proof/journal layers remain tracked by DS-D05. |
 | `src/net/tls.c` | `walking-skeleton` | TLS passthrough wrapper tracking handshake state without real cryptography. | Wave C: integrate platform TLS library (OpenSSL/Mbed TLS/SChannel). |
 
 ## Wave C Evidence Contract (`bd-v12u.1`)

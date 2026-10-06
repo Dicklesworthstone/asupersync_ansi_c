@@ -156,7 +156,7 @@ Each entry follows this structure:
 
 | Field | Value |
 |-------|-------|
-| **Surface** | RaptorQ erasure coding, advanced scheduling policies |
+| **Surface** | Advanced scheduling policies; RaptorQ layers above the codec (the RFC 6330 codec itself landed in `src/raptorq/raptorq.c`, see DS-D05) |
 | **Wave** | D |
 | **Rationale** | Plan section 4.4: specialized surface, ~18k LOC in Rust |
 | **Unblock Criteria** | (1) Channel semantics stable, (2) binary codec proven, (3) demand from specific vertical |
