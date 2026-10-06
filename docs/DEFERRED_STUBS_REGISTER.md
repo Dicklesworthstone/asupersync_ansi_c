@@ -59,7 +59,7 @@ source-level intent aligned with those beads:
 | Native reactor and wake transport (`io_driver.c`, `waker.c`, POSIX/Win32 hooks) | `bd-v12u.2`, `bd-v12u.3`, `bd-v12u.4` | Native readiness may change polling mechanics only; externally visible event commit order and semantic digests must match CORE/PARALLEL logical mode or fail closed. |
 | Fixed arena slot tables (`runtime_internal.h`) | `bd-v12u.5`, `bd-v12u.6` | Static backend sizing and implementation must be resource-plane only, with failure-atomic OOM and post-seal behavior. |
 | Trace/replay/lab diagnostics | `bd-v12u.7`, `bd-v12u.8`, `bd-v12u.13` | Incident bundles, trace schema, and minimized counterexamples are read-only evidence surfaces and must not mutate runtime state. |
-| Networking and TLS walking skeletons | `bd-v12u.9`, `bd-v12u.10` | First networking e2e work must prove lifecycle/cancel/backpressure/resource behavior and keep full TLS/HTTP/gRPC claims deferred. |
+| Networking and TLS walking skeletons | `bd-v12u.9`, `bd-v12u.10` | First networking e2e work must prove lifecycle/cancel/backpressure/resource behavior and keep full TLS/HTTP/gRPC claims deferred. HTTP/1.1 wire protocol (`src/net/http.c`: RFC 9112 sans-IO parser, serializer, keep-alive server/client connections over `asx_tcp_stream`, `asx_server` drain wiring) is implemented with loopback e2e tests in `tests/unit/net/test_http_wire.c`; HTTP/2, HTTP/3, TLS, pooled-client policy, and upgrade/tunnel handling stay deferred. |
 | Actor/supervision partial surfaces | `bd-v12u.11`, `bd-v12u.12` | Combinator and supervision harnesses must pin cancellation, outcome aggregation, restart, escalation, and obligation cleanup before parity claims expand. |
 
 ## Maintenance Rule

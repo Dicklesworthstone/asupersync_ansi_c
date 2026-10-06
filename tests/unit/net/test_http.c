@@ -137,6 +137,34 @@ TEST(status_reason) {
     ASSERT_STR_EQ(asx_http_status_reason(500), "Internal Server Error");
 }
 
+TEST(status_reason_rfc9110_table) {
+    ASSERT_STR_EQ(asx_http_status_reason(100), "Continue");
+    ASSERT_STR_EQ(asx_http_status_reason(101), "Switching Protocols");
+    ASSERT_STR_EQ(asx_http_status_reason(206), "Partial Content");
+    ASSERT_STR_EQ(asx_http_status_reason(308), "Permanent Redirect");
+    ASSERT_STR_EQ(asx_http_status_reason(413), "Content Too Large");
+    ASSERT_STR_EQ(asx_http_status_reason(414), "URI Too Long");
+    ASSERT_STR_EQ(asx_http_status_reason(417), "Expectation Failed");
+    ASSERT_STR_EQ(asx_http_status_reason(431), "Request Header Fields Too Large");
+    ASSERT_STR_EQ(asx_http_status_reason(501), "Not Implemented");
+    ASSERT_STR_EQ(asx_http_status_reason(505), "HTTP Version Not Supported");
+    ASSERT_STR_EQ(asx_http_status_reason(599), "Unknown");
+}
+
+TEST(parse_error_status_mapping) {
+    ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_NONE), 0u);
+    ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_BAD_LINE_ENDING), 400u);
+    ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_CONTENT_LENGTH_AND_CHUNKED), 400u);
+    ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_BODY_TOO_LARGE), 413u);
+    ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_START_LINE_TOO_LONG), 414u);
+    ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_TOO_MANY_HEADERS), 431u);
+    ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_HEADERS_TOO_LARGE), 431u);
+    ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_UNKNOWN_METHOD), 501u);
+    ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_UNSUPPORTED_TRANSFER_CODING), 501u);
+    ASSERT_EQ(asx_http_parse_error_status(ASX_HTTP_PERR_UNSUPPORTED_VERSION), 505u);
+    ASSERT_STR_EQ(asx_http_parse_error_str(ASX_HTTP_PERR_OBS_FOLD), "obs-fold");
+}
+
 /* Version tests */
 
 TEST(version_str) {
@@ -205,6 +233,46 @@ TEST(headers_null_args) {
     ASSERT_EQ(asx_http_headers_add(&hdrs, "k", NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(header_token_lists) {
+    ASSERT_TRUE(asx_http_header_has_token("close", "close"));
+    ASSERT_TRUE(asx_http_header_has_token("Keep-Alive, Upgrade", "upgrade"));
+    ASSERT_TRUE(asx_http_header_has_token(" ,\tCLOSE ,", "close"));
+    ASSERT_FALSE(asx_http_header_has_token("closed", "close"));
+    ASSERT_FALSE(asx_http_header_has_token("", "close"));
+    ASSERT_FALSE(asx_http_header_has_token(NULL, "close"));
+}
+
+/* RFC 9112 section 9.3 persistence decisions. */
+TEST(keep_alive_decision_table) {
+    static const struct {
+        asx_http_version version;
+        const char *connection; /* NULL: no Connection header */
+        int keep;
+    } rows[] = {
+        {ASX_HTTP_VERSION_1_1, NULL, 1},
+        {ASX_HTTP_VERSION_1_1, "close", 0},
+        {ASX_HTTP_VERSION_1_1, "Close", 0},
+        {ASX_HTTP_VERSION_1_1, "keep-alive", 1},
+        {ASX_HTTP_VERSION_1_1, "keep-alive, close", 0},
+        {ASX_HTTP_VERSION_1_1, "upgrade", 1},
+        {ASX_HTTP_VERSION_1_0, NULL, 0},
+        {ASX_HTTP_VERSION_1_0, "keep-alive", 1},
+        {ASX_HTTP_VERSION_1_0, "Keep-Alive", 1},
+        {ASX_HTTP_VERSION_1_0, "keep-alive, close", 0},
+        {ASX_HTTP_VERSION_1_0, "upgrade", 0},
+    };
+    uint32_t i;
+
+    for (i = 0u; i < (uint32_t)(sizeof(rows) / sizeof(rows[0])); i++) {
+        asx_http_headers hdrs;
+        asx_http_headers_init(&hdrs);
+        if (rows[i].connection != NULL) {
+            ASSERT_EQ(asx_http_headers_add(&hdrs, "Connection", rows[i].connection), ASX_OK);
+        }
+        ASSERT_EQ(asx_http_headers_keep_alive(&hdrs, rows[i].version), rows[i].keep);
+    }
+}
+
 /* Body tests */
 
 TEST(body_set_bytes) {
@@ -232,6 +300,74 @@ TEST(body_rejects_null_nonempty_payload) {
     asx_http_body_init(&body);
     ASSERT_EQ(asx_http_body_set_bytes(&body, NULL, 1u), ASX_E_INVALID_ARGUMENT);
     ASSERT_TRUE(asx_http_body_is_empty(&body));
+}
+
+TEST(body_append_collects_and_fails_closed) {
+    static asx_http_body body;
+    static uint8_t big[ASX_HTTP_BODY_MAX];
+
+    asx_http_body_init(&body);
+    ASSERT_EQ(asx_http_body_append(&body, "ab", 2u), ASX_OK);
+    ASSERT_EQ(asx_http_body_append(&body, "cd", 2u), ASX_OK);
+    ASSERT_EQ(asx_http_body_append(&body, NULL, 0u), ASX_OK);
+    ASSERT_EQ(body.kind, ASX_HTTP_BODY_BYTES);
+    ASSERT_EQ(body.len, 4u);
+    ASSERT_TRUE(memcmp(body.data, "abcd", 4u) == 0);
+
+    memset(big, 'x', sizeof(big));
+    ASSERT_EQ(asx_http_body_append(&body, big, ASX_HTTP_BODY_MAX - 3u), ASX_E_BUFFER_TOO_SMALL);
+    ASSERT_EQ(body.len, 4u); /* failure-atomic */
+    ASSERT_EQ(asx_http_body_append(&body, big, ASX_HTTP_BODY_MAX - 4u), ASX_OK);
+    ASSERT_EQ(body.len, ASX_HTTP_BODY_MAX);
+    ASSERT_EQ(asx_http_body_append(&body, "z", 1u), ASX_E_BUFFER_TOO_SMALL);
+    ASSERT_EQ(asx_http_body_append(NULL, "z", 1u), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(format_imf_fixdate) {
+    char date[ASX_HTTP_DATE_LEN + 1u];
+
+    ASSERT_EQ(asx_http_format_date(0u, date, sizeof(date)), ASX_OK);
+    ASSERT_STR_EQ(date, "Thu, 01 Jan 1970 00:00:00 GMT");
+    ASSERT_EQ(asx_http_format_date(784111777u, date, sizeof(date)), ASX_OK);
+    ASSERT_STR_EQ(date, "Sun, 06 Nov 1994 08:49:37 GMT");
+    ASSERT_EQ(asx_http_format_date(951782400u, date, sizeof(date)), ASX_OK);
+    ASSERT_STR_EQ(date, "Tue, 29 Feb 2000 00:00:00 GMT");
+    ASSERT_EQ(asx_http_format_date(4102444799u, date, sizeof(date)), ASX_OK);
+    ASSERT_STR_EQ(date, "Thu, 31 Dec 2099 23:59:59 GMT");
+    ASSERT_EQ(asx_http_format_date(0u, date, ASX_HTTP_DATE_LEN), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_http_format_date(253402300800u, date, sizeof(date)), ASX_E_INVALID_ARGUMENT);
+}
+
+/* Browser-safe wire smoke: serialize -> parse -> equal through the
+ * convenience collection path (the full matrix lives in test_http_wire.c). */
+TEST(wire_request_round_trip_smoke) {
+    static asx_http_request req;
+    static asx_http_request parsed;
+    static uint8_t wire[2048];
+    static uint8_t head[1024];
+    asx_http_parser parser;
+    uint32_t len = 0u;
+    uint32_t consumed = 0u;
+    int complete = 0;
+
+    asx_http_request_init(&req, ASX_HTTP_POST, "/api/items?id=7");
+    ASSERT_EQ(asx_http_headers_add(&req.headers, "Host", "example.test"), ASX_OK);
+    ASSERT_EQ(asx_http_headers_add(&req.headers, "Content-Type", "application/json"), ASX_OK);
+    ASSERT_EQ(asx_http_body_set_bytes(&req.body, "{\"a\":1}", 7u), ASX_OK);
+    ASSERT_EQ(asx_http_serialize_request(&req, NULL, wire, sizeof(wire), &len), ASX_OK);
+
+    ASSERT_EQ(asx_http_parser_init(&parser, ASX_HTTP_PARSE_REQUEST, NULL, head, sizeof(head)),
+              ASX_OK);
+    ASSERT_EQ(asx_http_parser_collect_request(&parser, wire, len, &consumed, &parsed, &complete),
+              ASX_OK);
+    ASSERT_EQ(complete, 1);
+    ASSERT_EQ(consumed, len);
+    ASSERT_EQ(parsed.method, ASX_HTTP_POST);
+    ASSERT_STR_EQ(parsed.uri, "/api/items?id=7");
+    ASSERT_STR_EQ(asx_http_headers_get(&parsed.headers, "content-type"), "application/json");
+    ASSERT_STR_EQ(asx_http_headers_get(&parsed.headers, "Content-Length"), "7");
+    ASSERT_EQ(parsed.body.len, 7u);
+    ASSERT_TRUE(memcmp(parsed.body.data, "{\"a\":1}", 7u) == 0);
 }
 
 /* Request/response tests */
@@ -563,6 +699,8 @@ int main(void) {
     /* Status */
     RUN_TEST(status_categories);
     RUN_TEST(status_reason);
+    RUN_TEST(status_reason_rfc9110_table);
+    RUN_TEST(parse_error_status_mapping);
 
     /* Version */
     RUN_TEST(version_str);
@@ -573,11 +711,18 @@ int main(void) {
     RUN_TEST(headers_not_found);
     RUN_TEST(headers_exhaustion);
     RUN_TEST(headers_null_args);
+    RUN_TEST(header_token_lists);
+    RUN_TEST(keep_alive_decision_table);
 
     /* Body */
     RUN_TEST(body_set_bytes);
     RUN_TEST(body_empty);
     RUN_TEST(body_rejects_null_nonempty_payload);
+    RUN_TEST(body_append_collects_and_fails_closed);
+
+    /* Wire helpers */
+    RUN_TEST(format_imf_fixdate);
+    RUN_TEST(wire_request_round_trip_smoke);
 
     /* Request/response */
     RUN_TEST(request_init);

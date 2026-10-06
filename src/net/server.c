@@ -105,6 +105,10 @@ asx_status asx_server_close_conn(asx_server *srv, uint32_t conn_id) {
             asx_tcp_stream_close(srv->connections[idx].stream);
             srv->connections[idx].active = 0u;
             if (srv->active_count > 0u) srv->active_count--;
+            /* Graceful drain completes when the last connection is released. */
+            if (srv->state == ASX_SERVER_STATE_DRAINING && srv->active_count == 0u) {
+                srv->state = ASX_SERVER_STATE_STOPPED;
+            }
             return ASX_OK;
         }
     }
