@@ -15,7 +15,9 @@
 
 #include "test_harness.h"
 #include <asx/asx.h>
+#include <asx/net/http.h>
 #include <asx/net/net.h>
+#include <asx/net/server.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <asx/time/sleep.h>
@@ -416,8 +418,134 @@ TEST(real_clock_sleep_blocks_in_reactor_without_spinning) {
     ASSERT_TRUE(s->polls <= 3u);
 }
 
+/* -------------------------------------------------------------------
+ * HTTP/1.1 server and client over real sockets
+ * ------------------------------------------------------------------- */
+
+static asx_server g_srv;
+static asx_http_server g_hs;
+static asx_http_router g_router;
+static uint32_t g_http_server_polls;
+
+static asx_status h_hello(asx_http_request_context *ctx, asx_http_response *resp, void *ud) {
+    (void)ctx;
+    (void)ud;
+    asx_http_response_init(resp, ASX_HTTP_200_OK);
+    return asx_http_body_set_bytes(&resp->body, "hello from asx", 14u);
+}
+
+static asx_status h_echo(asx_http_request_context *ctx, asx_http_response *resp, void *ud) {
+    (void)ud;
+    asx_http_response_init(resp, ASX_HTTP_200_OK);
+    return asx_http_body_set_bytes(&resp->body, ctx->request->body.data, ctx->request->body.len);
+}
+
+static asx_status http_server_task(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    g_http_server_polls++;
+    return asx_http_server_poll(&g_hs);
+}
+
+typedef struct {
+    asx_co_state co;
+    asx_socket_addr addr;
+    asx_http_client_conn client;
+    asx_http_request req;
+    asx_http_response resp;
+    char got_hello[32];
+    char got_echo[32];
+    uint32_t polls;
+} http_client_state;
+
+static asx_status http_client_task(void *ud, asx_task_id self) {
+    http_client_state *c = (http_client_state *)ud;
+    asx_tcp_stream stream;
+    asx_status st;
+    (void)self;
+    c->polls++;
+    ASX_CO_BEGIN(&c->co);
+    st = asx_tcp_connect(&stream, &c->addr);
+    if (st != ASX_OK) return st;
+    st = asx_http_client_conn_init(&c->client, stream, NULL);
+    if (st != ASX_OK) return st;
+
+    asx_http_request_init(&c->req, ASX_HTTP_GET, "/hello");
+    st = asx_http_headers_add(&c->req.headers, "Host", "localhost");
+    if (st != ASX_OK) return st;
+    st = asx_http_client_conn_send(&c->client, &c->req, NULL);
+    if (st != ASX_OK) return st;
+    while ((st = asx_http_client_conn_poll(&c->client, &c->resp)) == ASX_E_PENDING) {
+        ASX_CO_YIELD(&c->co);
+    }
+    if (st != ASX_OK || c->resp.status != ASX_HTTP_200_OK) return ASX_E_INVALID_STATE;
+    memcpy(c->got_hello, c->resp.body.data, c->resp.body.len);
+
+    /* Second request on the same keep-alive connection. */
+    asx_http_request_init(&c->req, ASX_HTTP_POST, "/echo");
+    st = asx_http_headers_add(&c->req.headers, "Host", "localhost");
+    if (st == ASX_OK) st = asx_http_body_set_bytes(&c->req.body, "ping-pong", 9u);
+    if (st == ASX_OK) st = asx_http_client_conn_send(&c->client, &c->req, NULL);
+    if (st != ASX_OK) return st;
+    while ((st = asx_http_client_conn_poll(&c->client, &c->resp)) == ASX_E_PENDING) {
+        ASX_CO_YIELD(&c->co);
+    }
+    if (st != ASX_OK || c->resp.status != ASX_HTTP_200_OK) return ASX_E_INVALID_STATE;
+    memcpy(c->got_echo, c->resp.body.data, c->resp.body.len);
+
+    (void)asx_http_client_conn_close(&c->client);
+    /* Done: ask the server to drain and stop. */
+    (void)asx_server_shutdown(&g_srv);
+    ASX_CO_END(&c->co);
+}
+
+static http_client_state g_http_client; /* too large for a capture arena */
+
+TEST(http_keepalive_exchange_over_real_sockets) {
+    asx_region_id r;
+    asx_task_id t;
+    http_client_state *c = &g_http_client;
+    asx_server_config scfg;
+    asx_http_server_config hcfg;
+    asx_budget budget;
+
+    ASSERT_TRUE(setup());
+    g_http_server_polls = 0;
+    asx_http_router_init(&g_router);
+    ASSERT_EQ(asx_http_router_add_route(&g_router, ASX_HTTP_GET, "/hello", h_hello, NULL, NULL,
+                                        NULL),
+              ASX_OK);
+    ASSERT_EQ(asx_http_router_add_route(&g_router, ASX_HTTP_POST, "/echo", h_echo, NULL, NULL,
+                                        NULL),
+              ASX_OK);
+    asx_server_config_init(&scfg);
+    scfg.listen_port = 0u; /* ephemeral */
+    asx_server_init(&g_srv, &scfg);
+    ASSERT_EQ(asx_server_listen(&g_srv), ASX_OK);
+    asx_http_server_config_init(&hcfg, &g_router);
+    ASSERT_EQ(asx_http_server_init(&g_hs, &g_srv, &hcfg), ASX_OK);
+
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, http_server_task, NULL, &t), ASX_OK);
+    memset(c, 0, sizeof(*c));
+    ASSERT_EQ(asx_task_spawn(r, http_client_task, c, &t), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_local_addr(g_srv.listener, &c->addr), ASX_OK);
+    ASSERT_TRUE(c->addr.port != 0u);
+
+    budget = asx_budget_from_polls(500);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(memcmp(c->got_hello, "hello from asx", 14u), 0);
+    ASSERT_EQ(memcmp(c->got_echo, "ping-pong", 9u), 0);
+    ASSERT_EQ(asx_http_server_requests_served(&g_hs), 2u);
+    ASSERT_EQ(asx_server_get_state(&g_srv), ASX_SERVER_STATE_STOPPED);
+    /* Readiness-driven on both sides: no busy spinning. */
+    ASSERT_TRUE(g_http_server_polls < 40u);
+    ASSERT_TRUE(c->polls < 40u);
+}
+
 static int run_native(void) {
     RUN_TEST(tcp_echo_over_real_sockets_parks_instead_of_spinning);
+    RUN_TEST(http_keepalive_exchange_over_real_sockets);
     RUN_TEST(tcp_fanout_many_clients_one_server);
     RUN_TEST(tcp_connect_refused_reports_disconnected);
     RUN_TEST(udp_datagram_between_real_sockets);

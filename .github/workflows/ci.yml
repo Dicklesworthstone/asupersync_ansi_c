@@ -759,6 +759,13 @@ jobs:
         if: matrix.profile == 'POSIX'
         run: ASX_E2E_PROFILE=POSIX bash tests/e2e/posix_adapter_smoke.sh
 
+      - name: Native I/O lane (live POSIX sockets, reactor, HTTP)
+        if: matrix.profile == 'POSIX'
+        run: |
+          make build/live/tests/unit/net/test_net_native BUILD_DIR=build/live \
+            CC=${{ matrix.compiler }} PROFILE=POSIX DETERMINISTIC=0 LDFLAGS="-lpthread -lrt"
+          timeout 120 ./build/live/tests/unit/net/test_net_native
+
   # ---------------------------------------------------------------------------
   # embedded-matrix — router-class cross-target builds + QEMU
   # ---------------------------------------------------------------------------
