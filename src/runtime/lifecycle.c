@@ -51,12 +51,20 @@
 
 asx_region_slot g_regions[ASX_MAX_REGIONS];
 uint32_t g_region_count;
+uint32_t g_region_live;
 
 asx_task_slot g_tasks[ASX_MAX_TASKS];
 uint32_t g_task_count;
+uint32_t g_task_live;
 
 asx_obligation_slot g_obligations[ASX_MAX_OBLIGATIONS];
 uint32_t g_obligation_count;
+uint32_t g_obligation_live;
+
+/* LIFO free lists of released slots (ASX_SLOT_NONE when empty). Reuse
+ * order depends only on the release sequence, so replay is stable. */
+static uint32_t g_task_free_head = ASX_SLOT_NONE;
+static uint32_t g_obligation_free_head = ASX_SLOT_NONE;
 
 /* -------------------------------------------------------------------
  * Reset (test support)
@@ -78,6 +86,7 @@ void asx_runtime_reset(void) {
         g_regions[i].capture_used = 0;
     }
     g_region_count = 0;
+    g_region_live = 0;
     for (i = 0; i < ASX_MAX_TASKS; i++) {
         g_tasks[i].state = ASX_TASK_CREATED;
         g_tasks[i].region = ASX_INVALID_ID;
@@ -93,16 +102,23 @@ void asx_runtime_reset(void) {
         g_tasks[i].cancel_pending = 0;
         g_tasks[i].cancel_epoch = 0;
         g_tasks[i].cleanup_polls_remaining = 0;
+        g_tasks[i].detached = 0;
+        g_tasks[i].next_free = ASX_SLOT_NONE;
         memset(&g_tasks[i].cancel_reason, 0, sizeof(g_tasks[i].cancel_reason));
     }
     g_task_count = 0;
+    g_task_live = 0;
+    g_task_free_head = ASX_SLOT_NONE;
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
         g_obligations[i].state = ASX_OBLIGATION_RESERVED;
         g_obligations[i].region = ASX_INVALID_ID;
         g_obligations[i].generation = 0;
         g_obligations[i].alive = 0;
+        g_obligations[i].next_free = ASX_SLOT_NONE;
     }
     g_obligation_count = 0;
+    g_obligation_live = 0;
+    g_obligation_free_head = ASX_SLOT_NONE;
 
     /* Reset ghost safety monitors */
     asx_ghost_reset();
@@ -223,6 +239,152 @@ static void *asx_region_capture_alloc(asx_region_slot *region, uint32_t size,
 }
 
 /* -------------------------------------------------------------------
+ * Slot reclamation
+ *
+ * Task and obligation slots move between "live" and a LIFO free list.
+ * Releasing a slot bumps its generation, so every outstanding handle to
+ * the old occupant fails closed (ASX_E_STALE_HANDLE / ASX_E_NOT_FOUND).
+ * ------------------------------------------------------------------- */
+
+asx_task_id asx_task_handle_for_slot(uint32_t slot_idx) {
+    const asx_task_slot *t = &g_tasks[slot_idx];
+    return asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+                           asx_handle_pack_index(t->generation, (uint16_t)slot_idx));
+}
+
+static void asx_task_slot_release(uint32_t idx) {
+    asx_task_slot *t = &g_tasks[idx];
+
+    if (!t->alive) return;
+    asx_task_release_capture_internal(t);
+    t->alive = 0;
+    t->generation++;
+    t->detached = 0;
+    t->poll_fn = NULL;
+    t->user_data = NULL;
+    t->region = ASX_INVALID_ID;
+    t->cancel_pending = 0;
+    t->next_free = g_task_free_head;
+    g_task_free_head = idx;
+    if (g_task_live > 0u) g_task_live--;
+}
+
+static void asx_obligation_slot_release(uint32_t idx) {
+    asx_obligation_slot *o = &g_obligations[idx];
+
+    if (!o->alive) return;
+    o->alive = 0;
+    o->generation++;
+    o->region = ASX_INVALID_ID;
+    o->next_free = g_obligation_free_head;
+    g_obligation_free_head = idx;
+    if (g_obligation_live > 0u) g_obligation_live--;
+}
+
+/* A region's records are reclaimable once the region is CLOSED or its
+ * slot has been recycled (the stored handle no longer resolves). */
+static int asx_region_records_reclaimable(asx_region_id region) {
+    asx_region_slot *r;
+    if (asx_region_slot_lookup(region, &r) != ASX_OK) return 1;
+    return r->state == ASX_REGION_CLOSED;
+}
+
+/* Allocation-pressure reclamation: free every completed task whose
+ * region is CLOSED (or gone), in ascending slot order. */
+static uint32_t asx_task_reclaim_closed(void) {
+    uint32_t i;
+    uint32_t freed = 0;
+
+    for (i = g_task_count; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        asx_task_slot *t = &g_tasks[i - 1u];
+        if (!t->alive || !asx_task_is_terminal(t->state)) continue;
+        if (!asx_region_records_reclaimable(t->region)) continue;
+        /* Released in descending order so the LIFO free list hands the
+         * lowest slot index out first. */
+        asx_task_slot_release(i - 1u);
+        freed++;
+    }
+    return freed;
+}
+
+/* Allocation-pressure reclamation for obligations: free every resolved
+ * (committed/aborted/leaked) obligation, in ascending slot order. */
+static uint32_t asx_obligation_reclaim_resolved(void) {
+    uint32_t i;
+    uint32_t freed = 0;
+
+    for (i = g_obligation_count; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+        asx_obligation_slot *o = &g_obligations[i - 1u];
+        if (!o->alive || o->state == ASX_OBLIGATION_RESERVED) continue;
+        asx_obligation_slot_release(i - 1u);
+        freed++;
+    }
+    return freed;
+}
+
+static asx_status asx_task_slot_alloc(uint32_t *out_idx) {
+    if (g_task_free_head == ASX_SLOT_NONE && g_task_count >= ASX_MAX_TASKS) {
+        (void)asx_task_reclaim_closed();
+    }
+    if (g_task_free_head != ASX_SLOT_NONE) {
+        *out_idx = g_task_free_head;
+        g_task_free_head = g_tasks[*out_idx].next_free;
+    } else if (g_task_count < ASX_MAX_TASKS) {
+        *out_idx = g_task_count++;
+    } else {
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+    g_tasks[*out_idx].next_free = ASX_SLOT_NONE;
+    g_task_live++;
+    return ASX_OK;
+}
+
+static asx_status asx_obligation_slot_alloc(uint32_t *out_idx) {
+    if (g_obligation_free_head == ASX_SLOT_NONE && g_obligation_count >= ASX_MAX_OBLIGATIONS) {
+        (void)asx_obligation_reclaim_resolved();
+    }
+    if (g_obligation_free_head != ASX_SLOT_NONE) {
+        *out_idx = g_obligation_free_head;
+        g_obligation_free_head = g_obligations[*out_idx].next_free;
+    } else if (g_obligation_count < ASX_MAX_OBLIGATIONS) {
+        *out_idx = g_obligation_count++;
+    } else {
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+    g_obligations[*out_idx].next_free = ASX_SLOT_NONE;
+    g_obligation_live++;
+    return ASX_OK;
+}
+
+/* Free every task and obligation record still bound to a region whose
+ * slot is about to be recycled. */
+static void asx_region_release_records(asx_region_id region) {
+    uint32_t i;
+    uint32_t key = asx_handle_index(region); /* slot + generation */
+
+    for (i = g_task_count; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        if (g_tasks[i - 1u].alive && asx_handle_index(g_tasks[i - 1u].region) == key) {
+            asx_task_slot_release(i - 1u);
+        }
+    }
+    for (i = g_obligation_count; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+        if (g_obligations[i - 1u].alive && asx_handle_index(g_obligations[i - 1u].region) == key) {
+            asx_obligation_slot_release(i - 1u);
+        }
+    }
+}
+
+void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region) {
+    asx_task_release_capture_internal(task);
+    if (region != NULL && region->task_count > 0u) region->task_count--;
+    if (task->detached) { asx_task_slot_release((uint32_t)(task - g_tasks)); }
+}
+
+/* -------------------------------------------------------------------
  * Region lifecycle
  * ------------------------------------------------------------------- */
 
@@ -248,8 +410,17 @@ asx_status asx_region_open(asx_region_id *out_id) {
     }
     if (idx >= ASX_MAX_REGIONS) return ASX_E_RESOURCE_EXHAUSTED;
 
-    /* Increment generation on slot reclaim to invalidate stale handles */
-    if (reclaim) { g_regions[idx].generation++; }
+    /* Increment generation on slot reclaim to invalidate stale handles.
+     * The recycled region's completed tasks and resolved obligations go
+     * with it: their handles become stale together with the region's. */
+    if (reclaim) {
+        asx_region_release_records(
+            asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
+                            asx_handle_pack_index(g_regions[idx].generation, (uint16_t)idx)));
+        g_regions[idx].generation++;
+    } else {
+        g_region_live++;
+    }
 
     g_regions[idx].state = ASX_REGION_OPEN;
     g_regions[idx].parent_id = ASX_INVALID_ID;
@@ -413,16 +584,16 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
      * like obligations remain OPEN-only. */
     if (!asx_region_can_accept_work(r->state)) return ASX_E_REGION_NOT_OPEN;
 
-    if (g_task_count >= ASX_MAX_TASKS) return ASX_E_RESOURCE_EXHAUSTED;
+    st = asx_task_slot_alloc(&idx);
+    if (st != ASX_OK) return st;
 
-    idx = g_task_count++;
     g_tasks[idx].state = ASX_TASK_CREATED;
     g_tasks[idx].region = region;
     g_tasks[idx].poll_fn = poll_fn;
     g_tasks[idx].user_data = user_data;
     g_tasks[idx].outcome = asx_outcome_make(ASX_OUTCOME_OK);
-    g_tasks[idx].generation = 0;
     g_tasks[idx].alive = 1;
+    g_tasks[idx].detached = 0;
     g_tasks[idx].captured_state = NULL;
     g_tasks[idx].captured_size = 0;
     g_tasks[idx].captured_dtor = NULL;
@@ -509,6 +680,31 @@ asx_status asx_task_get_outcome(asx_task_id id, asx_outcome *out_outcome) {
     return ASX_OK;
 }
 
+asx_status asx_task_join(asx_task_id id, asx_outcome *out_outcome) {
+    asx_task_slot *t;
+    asx_status st;
+
+    st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
+    if (!asx_task_is_terminal(t->state)) return ASX_E_TASK_NOT_COMPLETED;
+
+    if (out_outcome != NULL) *out_outcome = t->outcome;
+    asx_task_slot_release((uint32_t)(t - g_tasks));
+    return ASX_OK;
+}
+
+asx_status asx_task_detach(asx_task_id id) {
+    asx_task_slot *t;
+    asx_status st;
+
+    st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
+
+    t->detached = 1;
+    if (asx_task_is_terminal(t->state)) asx_task_slot_release((uint32_t)(t - g_tasks));
+    return ASX_OK;
+}
+
 /* -------------------------------------------------------------------
  * Obligation lifecycle
  * ------------------------------------------------------------------- */
@@ -547,12 +743,11 @@ asx_status asx_obligation_reserve(asx_region_id region, asx_obligation_id *out_i
     /* Only open regions can reserve obligations */
     if (!asx_region_can_spawn(r->state)) return ASX_E_REGION_NOT_OPEN;
 
-    if (g_obligation_count >= ASX_MAX_OBLIGATIONS) return ASX_E_RESOURCE_EXHAUSTED;
+    st = asx_obligation_slot_alloc(&idx);
+    if (st != ASX_OK) return st;
 
-    idx = g_obligation_count++;
     g_obligations[idx].state = ASX_OBLIGATION_RESERVED;
     g_obligations[idx].region = region;
-    g_obligations[idx].generation = 0;
     g_obligations[idx].alive = 1;
 
     *out_id =

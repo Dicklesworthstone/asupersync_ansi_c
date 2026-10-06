@@ -24,13 +24,40 @@ extern "C" {
 
 /* -------------------------------------------------------------------
  * Arena capacity (fixed-size static arenas).
- * Dynamic hook-backed allocation requires platform threading hooks.
+ *
+ * Capacities are compile-time resource-plane knobs: override them with
+ * -DASX_MAX_TASKS=4096 (etc.) to size the arenas for a deployment.
+ * They bound how many records may be *resident at once*, not how many
+ * may be created over the runtime's lifetime: slots are reclaimed with a
+ * generation bump (see "Slot reclamation" below), so stale handles fail
+ * closed with ASX_E_STALE_HANDLE instead of aliasing new records.
+ *
+ * Slot indices are 16-bit inside handles, so each arena is capped at
+ * 65535 slots.
  * ------------------------------------------------------------------- */
 
+#ifndef ASX_MAX_REGIONS
 #define ASX_MAX_REGIONS 8
+#endif
+#ifndef ASX_MAX_TASKS
 #define ASX_MAX_TASKS 64
+#endif
+#ifndef ASX_MAX_OBLIGATIONS
 #define ASX_MAX_OBLIGATIONS 128
+#endif
+#ifndef ASX_REGION_CAPTURE_ARENA_BYTES
 #define ASX_REGION_CAPTURE_ARENA_BYTES 16384u
+#endif
+
+#if (ASX_MAX_REGIONS) < 1 || (ASX_MAX_REGIONS) > 65535
+#error "ASX_MAX_REGIONS must be in [1, 65535]"
+#endif
+#if (ASX_MAX_TASKS) < 1 || (ASX_MAX_TASKS) > 65535
+#error "ASX_MAX_TASKS must be in [1, 65535]"
+#endif
+#if (ASX_MAX_OBLIGATIONS) < 1 || (ASX_MAX_OBLIGATIONS) > 65535
+#error "ASX_MAX_OBLIGATIONS must be in [1, 65535]"
+#endif
 
 /* -------------------------------------------------------------------
  * Task poll function signature
@@ -236,6 +263,47 @@ ASX_API ASX_MUST_USE asx_status asx_task_get_state(asx_task_id id, asx_task_stat
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Task Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_task_get_outcome(asx_task_id id, asx_outcome *out_outcome);
+
+/* -------------------------------------------------------------------
+ * Slot reclamation: join / detach
+ *
+ * A completed task keeps its arena slot (and therefore its outcome)
+ * until one of the following releases it:
+ *   - asx_task_join() consumes the outcome and frees the slot;
+ *   - asx_task_detach() marks the task so its slot is freed the moment
+ *     it completes (or immediately if it already has);
+ *   - its region reaches CLOSED and the arena later needs the capacity
+ *     (allocation-pressure reclamation, lowest slot index first), or the
+ *     CLOSED region slot itself is recycled.
+ *
+ * Reuse order is deterministic for identical spawn/release sequences.
+ * After release, every old handle reports ASX_E_STALE_HANDLE or
+ * ASX_E_NOT_FOUND; it never observes the slot's next occupant.
+ *
+ * Long-lived regions that keep spawning work (servers, supervisors)
+ * must join or detach their tasks, exactly as a Rust JoinHandle must be
+ * awaited or dropped.
+ * ------------------------------------------------------------------- */
+
+/* Consume a completed task's outcome and release its slot.
+ *
+ * Preconditions: id must be a valid task handle.
+ * Postconditions: on success, *out_outcome (if non-NULL) holds the final
+ *   outcome and the handle is invalidated.
+ * Returns ASX_OK on success, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for
+ *   invalid handles, ASX_E_TASK_NOT_COMPLETED if the task is still live
+ *   (the slot is left untouched).
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_join(asx_task_id id, asx_outcome *out_outcome);
+
+/* Detach a task: its slot is released as soon as it completes.
+ * Detaching an already-completed task releases it immediately.
+ * Detaching twice is a no-op while the task is live.
+ *
+ * Returns ASX_OK on success, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for
+ *   invalid handles.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_detach(asx_task_id id);
 
 /* -------------------------------------------------------------------
  * Cancellation (bd-2cw.3)

@@ -143,6 +143,7 @@ static void test_console_styled_write(void) {
     asx_report_buf out;
     asx_console_style style;
 
+    asx_report_buf_init(&out);
     asx_console_set_color_mode(ASX_COLOR_MODE_256);
     asx_console_style_init(&style);
     style.fg = ASX_COLOR_RED;
@@ -155,6 +156,7 @@ static void test_console_styled_write(void) {
 static void test_console_bold_and_colored(void) {
     asx_report_buf out;
 
+    asx_report_buf_init(&out);
     asx_console_set_color_mode(ASX_COLOR_MODE_256);
     MUST_OK(asx_console_bold(&out, "important"));
     ASSERT(strstr(asx_report_buf_cstr(&out), "important") != NULL, "bold text present");
@@ -171,6 +173,8 @@ static void test_console_str_width(void) {
 
 static void test_console_clear_and_cursor(void) {
     asx_report_buf out;
+
+    asx_report_buf_init(&out);
     MUST_OK(asx_console_clear(&out));
     MUST_OK(asx_console_cursor_hide(&out));
     MUST_OK(asx_console_cursor_show(&out));

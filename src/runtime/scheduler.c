@@ -140,8 +140,7 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
                 asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                 t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
-                asx_task_release_capture_internal(t);
-                if (rslot->task_count > 0) rslot->task_count--;
+                asx_task_on_complete_internal(t, rslot);
                 active--;
                 sched_emit(ASX_SCHED_EVENT_COMPLETE, tid, round);
                 asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
@@ -198,8 +197,7 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
                                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                 }
                 t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
-                asx_task_release_capture_internal(t);
-                if (rslot->task_count > 0) rslot->task_count--;
+                asx_task_on_complete_internal(t, rslot);
                 active--;
                 sched_emit(ASX_SCHED_EVENT_CANCEL_FORCED, tid, round);
                 asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
@@ -253,8 +251,7 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
                 }
                 asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
-                asx_task_release_capture_internal(t);
-                if (rslot->task_count > 0) rslot->task_count--;
+                asx_task_on_complete_internal(t, rslot);
                 active--;
                 sched_emit(ASX_SCHED_EVENT_COMPLETE, tid, round);
                 asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
@@ -282,8 +279,7 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
                 }
                 asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
-                asx_task_release_capture_internal(t);
-                if (rslot->task_count > 0) rslot->task_count--;
+                asx_task_on_complete_internal(t, rslot);
                 active--;
                 sched_emit(ASX_SCHED_EVENT_COMPLETE, tid, round);
                 asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);

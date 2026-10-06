@@ -324,17 +324,17 @@ asx_status asx_runtime_reload_config(asx_runtime *rt, const asx_runtime_config *
 
 uint32_t asx_runtime_region_count(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0u;
-    return g_region_count;
+    return g_region_live;
 }
 
 uint32_t asx_runtime_task_count(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0u;
-    return g_task_count;
+    return g_task_live;
 }
 
 uint32_t asx_runtime_obligation_count(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0u;
-    return g_obligation_count;
+    return g_obligation_live;
 }
 
 int asx_runtime_is_quiescent(const asx_runtime *rt) {

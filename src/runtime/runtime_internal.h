@@ -58,6 +58,8 @@ typedef struct {
     uint32_t cancel_epoch;
     uint32_t cleanup_polls_remaining;
     int cancel_pending; /* 1 if cancel signal delivered */
+    int detached;       /* 1 if the slot is released at completion */
+    uint32_t next_free; /* free-list link while !alive */
 } asx_task_slot;
 
 typedef struct {
@@ -65,20 +67,31 @@ typedef struct {
     asx_region_id region;
     uint16_t generation;
     int alive;
+    uint32_t next_free; /* free-list link while !alive */
 } asx_obligation_slot;
+
+/* Free-list terminator for arena slot links. */
+#define ASX_SLOT_NONE 0xFFFFFFFFu
 
 /* -------------------------------------------------------------------
  * Global arenas (defined in lifecycle.c)
+ *
+ * g_*_count is the high-water mark: every slot index below it has been
+ * used at least once, so arena scans iterate [0, g_*_count) and skip
+ * !alive slots. g_*_live counts currently-allocated slots.
  * ------------------------------------------------------------------- */
 
 extern asx_region_slot g_regions[ASX_MAX_REGIONS];
 extern uint32_t g_region_count;
+extern uint32_t g_region_live;
 
 extern asx_task_slot g_tasks[ASX_MAX_TASKS];
 extern uint32_t g_task_count;
+extern uint32_t g_task_live;
 
 extern asx_obligation_slot g_obligations[ASX_MAX_OBLIGATIONS];
 extern uint32_t g_obligation_count;
+extern uint32_t g_obligation_live;
 
 /* -------------------------------------------------------------------
  * Shared lookup functions (generation-safe, used across TUs)
@@ -90,6 +103,15 @@ ASX_MUST_USE asx_status asx_obligation_slot_lookup(asx_obligation_id id, asx_obl
 
 /* Release captured state for a task exactly once. */
 void asx_task_release_capture_internal(asx_task_slot *task);
+
+/* Build the public handle for an occupied task slot. */
+asx_task_id asx_task_handle_for_slot(uint32_t slot_idx);
+
+/* Completion bookkeeping shared by every path that drives a task to
+ * COMPLETED: releases captured state, decrements the region's live-task
+ * count, and frees the slot if the task was detached.
+ * The caller must already have set state/outcome. */
+void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region);
 
 /* Reset private hook installation state during runtime teardown. */
 void asx_runtime_hooks_reset_internal(void);

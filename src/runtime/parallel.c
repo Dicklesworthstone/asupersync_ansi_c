@@ -1021,11 +1021,10 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                                        asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     }
                     t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
-                    asx_task_release_capture_internal(t);
-                    if (rslot->task_count > 0) rslot->task_count--;
                     parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
                     parallel_clear_task_routing(slot_idx);
                     lane_remove_internal(tid);
+                    asx_task_on_complete_internal(t, rslot);
                     sat_inc_u32(&g_workers[worker_idx].tasks_completed);
                     parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
@@ -1049,11 +1048,10 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
-                    asx_task_release_capture_internal(t);
-                    if (rslot->task_count > 0) rslot->task_count--;
                     parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
                     parallel_clear_task_routing(slot_idx);
                     lane_remove_internal(tid);
+                    asx_task_on_complete_internal(t, rslot);
                     sat_inc_u32(&g_workers[worker_idx].tasks_completed);
                     parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
@@ -1118,11 +1116,10 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                                                                     : ASX_OUTCOME_OK);
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
-                    asx_task_release_capture_internal(t);
-                    if (rslot->task_count > 0) rslot->task_count--;
                     parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
                     parallel_clear_task_routing(slot_idx);
                     lane_remove_internal(tid);
+                    asx_task_on_complete_internal(t, rslot);
                     sat_inc_u32(&g_workers[worker_idx].tasks_completed);
                     parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
@@ -1148,11 +1145,10 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                                                                     : ASX_OUTCOME_ERR);
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
-                    asx_task_release_capture_internal(t);
-                    if (rslot->task_count > 0) rslot->task_count--;
                     parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
                     parallel_clear_task_routing(slot_idx);
                     lane_remove_internal(tid);
+                    asx_task_on_complete_internal(t, rslot);
                     sat_inc_u32(&g_workers[worker_idx].tasks_completed);
                     parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);

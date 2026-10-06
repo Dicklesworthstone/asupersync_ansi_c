@@ -32,9 +32,9 @@ uint32_t asx_resource_capacity(asx_resource_kind kind) {
 
 uint32_t asx_resource_used(asx_resource_kind kind) {
     switch (kind) {
-    case ASX_RESOURCE_REGION: return g_region_count;
-    case ASX_RESOURCE_TASK: return g_task_count;
-    case ASX_RESOURCE_OBLIGATION: return g_obligation_count;
+    case ASX_RESOURCE_REGION: return g_region_live;
+    case ASX_RESOURCE_TASK: return g_task_live;
+    case ASX_RESOURCE_OBLIGATION: return g_obligation_live;
     case ASX_RESOURCE_KIND_COUNT: return 0;
     }
     return 0;

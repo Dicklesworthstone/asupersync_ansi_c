@@ -476,17 +476,27 @@ TEST(obligation_exhaust_then_commit_no_free_slots) {
     /* Exhaust */
     ASSERT_EQ(asx_obligation_reserve(rid, &extra), ASX_E_RESOURCE_EXHAUSTED);
 
-    /* Commit all — arena stays full (no recycling in walking skeleton) */
+    /* Commit all — resolved records stay inspectable until pressure */
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) { ASSERT_EQ(asx_obligation_commit(oids[i]), ASX_OK); }
-
-    /* Still exhausted */
-    ASSERT_EQ(asx_obligation_reserve(rid, &extra), ASX_E_RESOURCE_EXHAUSTED);
-
-    /* All obligations in committed state */
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
         asx_obligation_state s;
         ASSERT_EQ(asx_obligation_get_state(oids[i], &s), ASX_OK);
         ASSERT_EQ(s, ASX_OBLIGATION_COMMITTED);
+    }
+
+    /* Allocation pressure reclaims resolved slots: the reserve succeeds
+     * and reuses the lowest slot index first. */
+    ASSERT_EQ(asx_obligation_reserve(rid, &extra), ASX_OK);
+    ASSERT_EQ(asx_handle_slot(extra), asx_handle_slot(oids[0]));
+
+    /* Every reclaimed handle now fails closed instead of aliasing. */
+    {
+        asx_obligation_state s;
+        ASSERT_EQ(asx_obligation_get_state(oids[0], &s), ASX_E_STALE_HANDLE);
+        ASSERT_EQ(asx_obligation_get_state(oids[1], &s), ASX_E_NOT_FOUND);
+        ASSERT_EQ(asx_obligation_commit(oids[0]), ASX_E_STALE_HANDLE);
+        ASSERT_EQ(asx_obligation_get_state(extra, &s), ASX_OK);
+        ASSERT_EQ(s, ASX_OBLIGATION_RESERVED);
     }
 }
 
@@ -513,10 +523,7 @@ TEST(obligation_exhaust_mixed_commit_abort) {
         }
     }
 
-    /* Still exhausted (no slot recycling) */
-    ASSERT_EQ(asx_obligation_reserve(rid, &extra), ASX_E_RESOURCE_EXHAUSTED);
-
-    /* Verify final states */
+    /* Verify final states (resolved records remain inspectable) */
     for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
         asx_obligation_state s;
         ASSERT_EQ(asx_obligation_get_state(oids[i], &s), ASX_OK);
@@ -526,6 +533,13 @@ TEST(obligation_exhaust_mixed_commit_abort) {
             ASSERT_EQ(s, ASX_OBLIGATION_ABORTED);
         }
     }
+
+    /* Both committed and aborted slots are reclaimable under pressure:
+     * the arena can be refilled completely. */
+    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
+        ASSERT_EQ(asx_obligation_reserve(rid, &extra), ASX_OK);
+    }
+    ASSERT_EQ(asx_obligation_reserve(rid, &extra), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 /* ====================================================================

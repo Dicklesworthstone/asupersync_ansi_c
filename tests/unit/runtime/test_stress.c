@@ -498,16 +498,82 @@ TEST(obligation_rapid_reserve_commit_cycle) {
     reset_all();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
-    /* Rapidly reserve and commit obligations.
-     * The walking skeleton doesn't recycle slots, so we're bounded
-     * by ASX_MAX_OBLIGATIONS. */
-    for (i = 0; i < ASX_MAX_OBLIGATIONS; i++) {
+    /* Rapidly reserve and commit far more obligations than the arena
+     * holds: resolved slots are reclaimed, so the lifetime count is
+     * unbounded while the resident count stays within capacity. */
+    for (i = 0; i < ASX_MAX_OBLIGATIONS * 8u; i++) {
         ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
         ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
     }
+    ASSERT_TRUE(asx_resource_used(ASX_RESOURCE_OBLIGATION) <= (uint32_t)ASX_MAX_OBLIGATIONS);
+}
 
-    /* Arena exhausted — no recycling in walking skeleton */
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_RESOURCE_EXHAUSTED);
+TEST(task_spawn_join_cycle_exceeds_arena) {
+    asx_region_id rid;
+    asx_task_id tid;
+    uint32_t i;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+
+    /* Spawn/run/join many more tasks than the arena holds. */
+    for (i = 0; i < ASX_MAX_TASKS * 8u; i++) {
+        asx_budget budget = asx_budget_from_polls(4);
+        asx_outcome out;
+        ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_OK);
+        ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+        ASSERT_EQ(asx_task_join(tid, &out), ASX_OK);
+        ASSERT_EQ(asx_outcome_severity_of(&out), ASX_OUTCOME_OK);
+        /* The joined handle is now stale; the slot is free again. */
+        ASSERT_EQ(asx_task_join(tid, &out), ASX_E_NOT_FOUND);
+    }
+    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_TASK), 0u);
+}
+
+TEST(task_detach_releases_on_completion) {
+    asx_region_id rid;
+    asx_task_id tid;
+    uint32_t i;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+
+    for (i = 0; i < ASX_MAX_TASKS * 4u; i++) {
+        asx_budget budget = asx_budget_from_polls(4);
+        asx_task_state st;
+        ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_OK);
+        ASSERT_EQ(asx_task_detach(tid), ASX_OK);
+        ASSERT_EQ(asx_task_get_state(tid, &st), ASX_OK); /* still live */
+        ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+        ASSERT_EQ(asx_task_get_state(tid, &st), ASX_E_NOT_FOUND);
+    }
+    ASSERT_EQ(asx_resource_used(ASX_RESOURCE_TASK), 0u);
+}
+
+TEST(closed_region_tasks_reclaimed_under_pressure) {
+    asx_region_id r1, r2;
+    asx_task_id first = ASX_INVALID_ID;
+    asx_task_id tid;
+    asx_outcome out;
+    uint32_t i;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&r1), ASX_OK);
+    for (i = 0; i < ASX_MAX_TASKS; i++) {
+        ASSERT_EQ(asx_task_spawn(r1, poll_ok, NULL, &tid), ASX_OK);
+        if (i == 0u) first = tid;
+    }
+    {
+        asx_budget budget = asx_budget_from_polls(ASX_MAX_TASKS * 2u);
+        ASSERT_EQ(asx_region_drain(r1, &budget), ASX_OK);
+    }
+
+    /* Outcomes of a CLOSED region stay readable until capacity is needed. */
+    ASSERT_EQ(asx_task_get_outcome(first, &out), ASX_OK);
+
+    ASSERT_EQ(asx_region_open(&r2), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r2, poll_ok, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_get_outcome(first, &out), ASX_E_STALE_HANDLE);
 }
 
 TEST(obligation_mixed_commit_abort_pattern) {
@@ -616,6 +682,9 @@ int main(void) {
 
     /* Obligation churn */
     RUN_TEST(obligation_rapid_reserve_commit_cycle);
+    RUN_TEST(task_spawn_join_cycle_exceeds_arena);
+    RUN_TEST(task_detach_releases_on_completion);
+    RUN_TEST(closed_region_tasks_reclaimed_under_pressure);
     RUN_TEST(obligation_mixed_commit_abort_pattern);
 
     /* Fault containment under pressure */
