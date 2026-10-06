@@ -145,6 +145,7 @@ RUNTIME_SRC := \
 	src/runtime/equivalence.c \
 	src/runtime/lifecycle.c \
 	src/runtime/scheduler.c \
+	src/runtime/task_group.c \
 	src/runtime/cancellation.c \
 	src/runtime/quiescence.c \
 	src/runtime/resource.c \

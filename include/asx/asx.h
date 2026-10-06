@@ -219,6 +219,7 @@
 #include <asx/runtime/telemetry.h>
 #include <asx/runtime/trace.h>
 #endif
+#include <asx/runtime/task_group.h>
 #include <asx/runtime/vertical_adapter.h>
 #include <asx/runtime/virtual_time.h>
 #include <asx/runtime/waker.h>

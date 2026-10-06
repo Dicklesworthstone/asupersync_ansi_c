@@ -54,6 +54,7 @@ static uint16_t next_gen(uint16_t g) {
 static void pool_lock(void) {
     uint32_t expected;
     for (;;) {
+        ASX_CHECKPOINT_WAIVER("spinlock: critical sections are short and non-blocking");
         expected = 0u;
         if (asx_atomic_u32_compare_exchange(&g_pool_lock, &expected, 1u)) return;
     }

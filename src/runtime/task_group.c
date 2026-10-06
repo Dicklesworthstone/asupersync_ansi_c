@@ -1,0 +1,313 @@
+/*
+ * task_group.c — structured combinators over spawned tasks with loser drain
+ *
+ * The owner task polls the group; members wake it through the task-slot
+ * completion watcher. Every decision (winner, quorum reached or
+ * impossible, owner cancel, deadline) moves the group to DRAINING: the
+ * unfinished members are cancelled once and the group only reaches DONE
+ * after each of them has completed and been joined.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#include "runtime_internal.h"
+#include <asx/core/transition.h>
+#include <asx/runtime/task_group.h>
+#include <string.h>
+
+static asx_time group_now(void) {
+    asx_time now;
+    if (asx_runtime_now_ns(&now) != ASX_OK) now = asx_runtime_virtual_now();
+    return now;
+}
+
+/* Status a completed member contributes to the group result. */
+static asx_status group_member_status(const asx_task_slot *t) {
+    switch (asx_outcome_severity_of(&t->outcome)) {
+    case ASX_OUTCOME_OK: return ASX_OK;
+    case ASX_OUTCOME_ERR: return t->last_error != ASX_OK ? t->last_error : ASX_E_INVALID_STATE;
+    case ASX_OUTCOME_CANCELLED: return ASX_E_CANCELLED;
+    case ASX_OUTCOME_PANICKED: return ASX_E_INVALID_STATE;
+    default: return ASX_E_INVALID_STATE;
+    }
+}
+
+static int group_member_ok(const asx_task_group *g, uint32_t i) {
+    return g->completed[i] && asx_outcome_severity_of(&g->outcomes[i]) == ASX_OUTCOME_OK;
+}
+
+/* Most severe status among completed members the group did not cancel
+ * itself (lowest index on ties); ASX_OK when all of them succeeded. */
+static asx_status group_worst_status(const asx_task_group *g) {
+    asx_outcome_severity worst = ASX_OUTCOME_OK;
+    asx_status st = ASX_OK;
+    uint32_t i;
+    for (i = 0; i < g->count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
+        asx_outcome_severity sev;
+        if (!g->completed[i] || g->cancel_sent[i]) continue;
+        sev = asx_outcome_severity_of(&g->outcomes[i]);
+        if (sev > worst) {
+            worst = sev;
+            st = g->statuses[i];
+        }
+    }
+    return st;
+}
+
+/* Collect completed members (joining them) and register the owner as the
+ * completion watcher of the rest. */
+static void group_collect(asx_task_group *g, const asx_task_slot *owner) {
+    uint32_t owner_idx = (uint32_t)(owner - g_tasks);
+    uint32_t i;
+
+    for (i = 0; i < g->count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
+        asx_task_slot *t;
+        asx_status st;
+
+        if (g->completed[i]) continue;
+        st = asx_task_slot_lookup(g->members[i], &t);
+        if (st != ASX_OK) {
+            /* Joined or released behind the group's back. */
+            g->outcomes[i] = asx_outcome_make(ASX_OUTCOME_ERR);
+            g->statuses[i] = st;
+        } else if (asx_task_is_terminal(t->state)) {
+            g->outcomes[i] = t->outcome;
+            g->statuses[i] = group_member_status(t);
+            t->watcher = ASX_SLOT_NONE;
+            st = asx_task_join(g->members[i], NULL);
+            (void)st;
+        } else {
+            t->watcher = owner_idx;
+            t->watcher_gen = owner->generation;
+            continue;
+        }
+        g->completed[i] = 1;
+        g->completed_count++;
+        if (asx_outcome_severity_of(&g->outcomes[i]) == ASX_OUTCOME_OK) g->ok_count++;
+    }
+}
+
+static void group_begin_drain(asx_task_group *g, asx_cancel_kind kind, asx_status result,
+                              int early) {
+    g->phase = ASX_TASK_GROUP_DRAINING;
+    g->drain_kind = kind;
+    g->result = result;
+    g->early = (uint8_t)(early ? 1 : 0);
+}
+
+static void group_send_cancels(asx_task_group *g) {
+    uint32_t i;
+    for (i = 0; i < g->count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
+        asx_status st;
+        if (g->completed[i] || g->cancel_sent[i]) continue;
+        st = asx_task_cancel(g->members[i], g->drain_kind);
+        (void)st;
+        g->cancel_sent[i] = 1;
+    }
+}
+
+/* Decide the group from the members collected so far. Member completion
+ * takes precedence over owner cancellation and the deadline. */
+static void group_decide(asx_task_group *g, const asx_task_slot *owner) {
+    uint32_t i;
+
+    switch (g->mode) {
+    case ASX_TASK_GROUP_JOIN_ALL:
+        if (g->completed_count == g->count) {
+            group_begin_drain(g, ASX_CANCEL_RACE_LOST, group_worst_status(g), 0);
+        }
+        break;
+    case ASX_TASK_GROUP_RACE:
+        for (i = 0; i < g->count; i++) {
+            ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
+            if (!g->completed[i]) continue;
+            g->winner = (int32_t)i;
+            group_begin_drain(g, ASX_CANCEL_RACE_LOST, g->statuses[i], 0);
+            break;
+        }
+        break;
+    case ASX_TASK_GROUP_FIRST_OK:
+        for (i = 0; i < g->count; i++) {
+            ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
+            if (!group_member_ok(g, i)) continue;
+            g->winner = (int32_t)i;
+            group_begin_drain(g, ASX_CANCEL_RACE_LOST, ASX_OK, 0);
+            break;
+        }
+        if (g->phase == ASX_TASK_GROUP_COLLECTING && g->count > 0u &&
+            g->completed_count == g->count) {
+            group_begin_drain(g, ASX_CANCEL_RACE_LOST, group_worst_status(g), 0);
+        }
+        break;
+    case ASX_TASK_GROUP_QUORUM:
+        if (g->needed == 0u || g->needed > g->count) {
+            group_begin_drain(g, ASX_CANCEL_RACE_LOST, ASX_E_INVALID_ARGUMENT, 1);
+        } else if (g->ok_count >= g->needed) {
+            group_begin_drain(g, ASX_CANCEL_RACE_LOST, ASX_OK, 0);
+        } else if (g->completed_count - g->ok_count > g->count - g->needed) {
+            group_begin_drain(g, ASX_CANCEL_RACE_LOST, group_worst_status(g), 0);
+        }
+        break;
+    default: group_begin_drain(g, ASX_CANCEL_RACE_LOST, ASX_E_INVALID_STATE, 1); break;
+    }
+    if (g->phase != ASX_TASK_GROUP_COLLECTING) return;
+
+    if (owner->cancel_pending) {
+        group_begin_drain(g, ASX_CANCEL_PARENT, ASX_E_CANCELLED, 1);
+        return;
+    }
+    if (g->deadline != 0u && group_now() >= g->deadline) {
+        group_begin_drain(g, ASX_CANCEL_TIMEOUT,
+                          g->mode == ASX_TASK_GROUP_QUORUM ? ASX_E_THRESHOLD_TIMEOUT
+                                                           : ASX_E_TIMED_OUT,
+                          1);
+    }
+}
+
+/* -------------------------------------------------------------------
+ * Public API
+ * ------------------------------------------------------------------- */
+
+asx_status asx_task_group_init(asx_task_group *g, asx_task_group_mode mode, uint32_t needed) {
+    if (g == NULL) return ASX_E_INVALID_ARGUMENT;
+    if ((int)mode < (int)ASX_TASK_GROUP_JOIN_ALL || (int)mode > (int)ASX_TASK_GROUP_QUORUM) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    memset(g, 0, sizeof(*g));
+    g->mode = mode;
+    g->needed = needed;
+    g->phase = ASX_TASK_GROUP_COLLECTING;
+    g->winner = -1;
+    g->drain_kind = ASX_CANCEL_RACE_LOST;
+    g->result = ASX_E_PENDING;
+    return ASX_OK;
+}
+
+asx_status asx_task_group_set_deadline(asx_task_group *g, asx_time deadline) {
+    if (g == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (g->phase != ASX_TASK_GROUP_COLLECTING) return ASX_E_INVALID_STATE;
+    g->deadline = deadline;
+    return ASX_OK;
+}
+
+asx_status asx_task_group_add(asx_task_group *g, asx_task_id task) {
+    asx_task_slot *t;
+    asx_status st;
+    uint32_t i;
+
+    if (g == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (g->phase != ASX_TASK_GROUP_COLLECTING) return ASX_E_INVALID_STATE;
+    if (g->count >= ASX_TASK_GROUP_MAX) return ASX_E_RESOURCE_EXHAUSTED;
+    st = asx_task_slot_lookup(task, &t);
+    if (st != ASX_OK) return st;
+    /* A detached member's slot (and outcome) vanishes at completion. */
+    if (t->detached) return ASX_E_INVALID_STATE;
+    for (i = 0; i < g->count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
+        if (g->members[i] == task) return ASX_E_ALREADY_EXISTS;
+    }
+
+    g->members[g->count] = task;
+    g->outcomes[g->count] = asx_outcome_make(ASX_OUTCOME_OK);
+    g->statuses[g->count] = ASX_E_PENDING;
+    g->completed[g->count] = 0;
+    g->cancel_sent[g->count] = 0;
+    g->count++;
+    return ASX_OK;
+}
+
+asx_status asx_task_group_spawn(asx_task_group *g, asx_region_id region, asx_task_poll_fn poll_fn,
+                                void *user_data, asx_task_id *out_id) {
+    asx_task_id id;
+    asx_status st;
+
+    if (g == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (g->phase != ASX_TASK_GROUP_COLLECTING) return ASX_E_INVALID_STATE;
+    if (g->count >= ASX_TASK_GROUP_MAX) return ASX_E_RESOURCE_EXHAUSTED;
+    st = asx_task_spawn(region, poll_fn, user_data, &id);
+    if (st != ASX_OK) return st;
+    st = asx_task_group_add(g, id);
+    if (st != ASX_OK) return st;
+    if (out_id != NULL) *out_id = id;
+    return ASX_OK;
+}
+
+asx_status asx_task_group_poll(asx_task_group *g, asx_task_id self) {
+    asx_task_slot *owner;
+    asx_status st;
+
+    if (g == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (g->phase == ASX_TASK_GROUP_DONE) return g->result;
+    st = asx_task_slot_lookup(self, &owner);
+    if (st != ASX_OK) return st;
+
+    group_collect(g, owner);
+    if (g->phase == ASX_TASK_GROUP_COLLECTING) group_decide(g, owner);
+    if (g->phase == ASX_TASK_GROUP_DRAINING) {
+        group_send_cancels(g);
+        group_collect(g, owner);
+        if (g->completed_count == g->count) {
+            g->phase = ASX_TASK_GROUP_DONE;
+            return g->result;
+        }
+    }
+
+    /* Still waiting: members wake the owner as they complete. */
+    if (g->phase == ASX_TASK_GROUP_COLLECTING && g->deadline != 0u) {
+        st = asx_task_arm_timer(self, g->deadline);
+        (void)st;
+    }
+    if (owner->in_poll) owner->park_requested = 1;
+    return ASX_E_PENDING;
+}
+
+asx_status asx_task_group_cancel(asx_task_group *g, asx_cancel_kind kind) {
+    if (g == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (g->phase != ASX_TASK_GROUP_COLLECTING) return ASX_OK;
+    group_begin_drain(g, kind, ASX_E_CANCELLED, 1);
+    group_send_cancels(g);
+    return ASX_OK;
+}
+
+int32_t asx_task_group_winner(const asx_task_group *g) { return g != NULL ? g->winner : -1; }
+
+uint32_t asx_task_group_ok_count(const asx_task_group *g) { return g != NULL ? g->ok_count : 0u; }
+
+asx_task_group_phase asx_task_group_phase_of(const asx_task_group *g) {
+    return g != NULL ? g->phase : ASX_TASK_GROUP_DONE;
+}
+
+asx_outcome asx_task_group_outcome(const asx_task_group *g) {
+    asx_outcome acc = asx_outcome_make(ASX_OUTCOME_OK);
+    uint32_t i;
+
+    if (g == NULL) return acc;
+    if (!g->early && g->winner >= 0) return g->outcomes[g->winner];
+    if (!g->early && g->mode == ASX_TASK_GROUP_QUORUM && g->phase != ASX_TASK_GROUP_COLLECTING &&
+        g->result == ASX_OK) {
+        return acc;
+    }
+    for (i = 0; i < g->count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
+        if (!g->completed[i] || g->cancel_sent[i]) continue;
+        acc = asx_outcome_join(&acc, &g->outcomes[i]);
+    }
+    if (g->early) {
+        asx_outcome cancelled = asx_outcome_make(ASX_OUTCOME_CANCELLED);
+        acc = asx_outcome_join(&acc, &cancelled);
+    }
+    return acc;
+}
+
+asx_status asx_task_group_member_result(const asx_task_group *g, uint32_t index,
+                                        asx_outcome *out_outcome, asx_status *out_status) {
+    if (g == NULL || index >= g->count) return ASX_E_INVALID_ARGUMENT;
+    if (out_outcome == NULL && out_status == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!g->completed[index]) return ASX_E_TASK_NOT_COMPLETED;
+    if (out_outcome != NULL) *out_outcome = g->outcomes[index];
+    if (out_status != NULL) *out_status = g->statuses[index];
+    return ASX_OK;
+}

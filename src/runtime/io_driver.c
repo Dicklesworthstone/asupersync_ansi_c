@@ -309,6 +309,7 @@ static uint32_t io_poll_live(asx_io_event *out_events, uint32_t max_events, uint
 
     if (asx_runtime_reactor_poll(timeout_ms, events, cap, &n) != ASX_OK) return 0u;
     for (i = 0; i < n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= 32 reactor events");
         uint32_t slot = (uint32_t)(events[i].token & 0xFFFFFFFFu);
         uint16_t gen = (uint16_t)(events[i].token >> 32);
         asx_io_reg *r;
@@ -370,6 +371,7 @@ uint32_t asx_io_armed_count(void) {
     uint32_t n = 0;
     if (!g_live) return g_active_count;
     for (i = 0; i < g_reg_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_reg_count <= ASX_MAX_IO_TOKENS");
         if (g_regs[i].alive && g_regs[i].armed) n++;
     }
     return n;

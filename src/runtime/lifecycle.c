@@ -550,6 +550,7 @@ uint32_t asx_region_subtree_internal(asx_region_id root, uint32_t *out_slots, ui
         asx_region_slot *cur = &g_regions[out_slots[head++]];
         uint32_t c;
         for (c = 0; c < cur->child_count && count < max; c++) {
+            ASX_CHECKPOINT_WAIVER("bounded: child_count <= ASX_MAX_REGION_CHILDREN");
             asx_region_slot *child;
             if (asx_region_slot_lookup(cur->children[c], &child) != ASX_OK) continue;
             out_slots[count++] = asx_handle_slot(cur->children[c]);

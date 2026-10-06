@@ -423,6 +423,7 @@ static void parallel_fill_commit_authority_snapshot(asx_parallel_commit_authorit
     if (active_workers > ASX_MAX_WORKERS) { active_workers = ASX_MAX_WORKERS; }
 
     for (i = 0u; i < active_workers; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: active_workers <= ASX_MAX_WORKERS");
         sat_add_u32(&out->total_worker_commits, g_workers[i].commits_total);
         if (g_workers[i].last_commit_sequence > out->max_worker_commit_sequence) {
             out->max_worker_commit_sequence = g_workers[i].last_commit_sequence;
@@ -1401,9 +1402,13 @@ asx_status asx_parallel_get_telemetry_snapshot(asx_parallel_telemetry_snapshot *
     }
     out->pressure_pct = percent_u32(out->max_lane_depth, ASX_LANE_TASK_CAPACITY);
 
-    for (i = 0u; i < g_config.worker_count; i++) { total_polls += g_workers[i].polls_total; }
+    for (i = 0u; i < g_config.worker_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: worker_count <= ASX_MAX_WORKERS");
+        total_polls += g_workers[i].polls_total;
+    }
 
     for (i = 0u; i < g_config.worker_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: worker_count <= ASX_MAX_WORKERS");
         uint32_t lane_idx;
         uint32_t depth = 0u;
 

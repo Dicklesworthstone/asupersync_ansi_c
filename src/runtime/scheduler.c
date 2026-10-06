@@ -206,6 +206,8 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->first_waiter = ASX_SLOT_NONE;
     task->next_waiter = ASX_SLOT_NONE;
     task->waiting_on = ASX_SLOT_NONE;
+    task->watcher = ASX_SLOT_NONE;
+    task->watcher_gen = 0;
 }
 
 void asx_task_wake_slot_internal(asx_task_slot *task) {
@@ -241,6 +243,11 @@ void asx_task_join_wake_waiters_internal(asx_task_slot *task) {
     uint32_t w;
 
     if (task == NULL) return;
+    if (task->watcher != ASX_SLOT_NONE) {
+        asx_task_slot *ws = &g_tasks[task->watcher];
+        if (ws->generation == task->watcher_gen) asx_task_wake_slot_internal(ws);
+        task->watcher = ASX_SLOT_NONE;
+    }
     w = task->first_waiter;
     task->first_waiter = ASX_SLOT_NONE;
     while (w != ASX_SLOT_NONE) {
@@ -367,7 +374,10 @@ static void sched_compute_scope(asx_region_id root) {
         g_scope_epoch = 1u;
     }
     n = asx_region_subtree_internal(root, g_scope_slots, ASX_MAX_REGIONS);
-    for (i = 0; i < n; i++) g_scope_mark[g_scope_slots[i]] = g_scope_epoch;
+    for (i = 0; i < n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
+        g_scope_mark[g_scope_slots[i]] = g_scope_epoch;
+    }
 }
 
 /* Resolve a live task's region slot if it lies in the current scope. */
@@ -466,6 +476,7 @@ static uint32_t sched_drain_wakers(void) {
         ASX_CHECKPOINT_WAIVER("bounded: each pass clears up to 16 signaled wakers");
         n = asx_waker_drain_signaled(woken, 16u);
         for (i = 0; i < n; i++) {
+            ASX_CHECKPOINT_WAIVER("bounded: n <= 16");
             if (asx_task_wake(woken[i]) == ASX_OK) total++;
         }
     } while (n == 16u);

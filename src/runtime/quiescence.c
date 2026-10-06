@@ -279,6 +279,7 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
 
     /* Step 1: close every open region in the subtree (parent-first). */
     for (i = 0; i < n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
         asx_region_slot *rs = &g_regions[g_drain_slots[i]];
         if (rs->state == ASX_REGION_OPEN) {
             st = asx_region_set_state(asx_region_handle_for_slot(g_drain_slots[i]), rs,
@@ -299,17 +300,22 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
 
     /* Step 3: run the scheduler over the subtree. */
     live = 0;
-    for (i = 0; i < n; i++) live += g_regions[g_drain_slots[i]].task_count;
+    for (i = 0; i < n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
+        live += g_regions[g_drain_slots[i]].task_count;
+    }
     if (live > 0u) {
         st = asx_scheduler_run(id, budget);
         if (st != ASX_OK) return st;
         for (i = 0; i < n; i++) {
+            ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
             if (g_regions[g_drain_slots[i]].task_count > 0u) return ASX_E_QUIESCENCE_TASKS_LIVE;
         }
     }
 
     /* Step 4: finalize bottom-up so children close before parents. */
     for (i = n; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
         uint32_t slot = g_drain_slots[i - 1u];
         st = asx_region_finalize_one(asx_region_handle_for_slot(slot), &g_regions[slot]);
         if (st != ASX_OK) return st;

@@ -77,6 +77,10 @@ typedef struct {
     uint32_t first_waiter; /* first task parked in join on this one */
     uint32_t next_waiter;  /* link while waiting on another task */
     uint32_t waiting_on;   /* slot index of join target, or ASX_SLOT_NONE */
+    /* Completion watcher (task-group owner): woken when this task
+     * completes, if that slot still holds generation `watcher_gen`. */
+    uint32_t watcher;
+    uint16_t watcher_gen;
     /* Budget: deadline -> DEADLINE cancel, poll quota -> POLL_QUOTA cancel,
      * cost quota -> COST_BUDGET cancel. Inherited from the region. */
     asx_budget budget;
@@ -153,6 +157,7 @@ void asx_task_wake_slot_internal(asx_task_slot *task);
 /* Timer / join-wait teardown for a task leaving the live set. */
 void asx_task_timer_disarm_internal(asx_task_slot *task);
 void asx_task_join_detach_internal(asx_task_slot *task);
+/* Wakes join waiters and the completion watcher of a completing task. */
 void asx_task_join_wake_waiters_internal(asx_task_slot *task);
 
 /* Collect the region subtree rooted at `root` in parent-first (BFS)
