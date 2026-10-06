@@ -13,6 +13,7 @@
 #include "../../test_harness.h"
 #include <asx/core/budget.h>
 #include <asx/cx/cx.h>
+#include <asx/security/crypto.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -275,24 +276,147 @@ TEST(registry_issue_escalation_fails) {
 TEST(macaroon_issue_attenuate_and_bind) {
     asx_cx parent, child;
     asx_cx_macaroon macaroon;
+    asx_auth_key root;
 
+    asx_auth_key_from_seed(&root, 1234u);
     asx_cx_init(&parent, 11, 13, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY | ASX_CAP_SPAWN);
-    ASSERT_EQ(asx_cx_macaroon_issue(&parent, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY, &macaroon),
+    ASSERT_EQ(asx_cx_macaroon_issue(&parent, &root, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY,
+                                    &macaroon),
               ASX_OK);
     ASSERT_EQ(asx_cx_macaroon_attenuate(&macaroon, ASX_CAP_CLOCK_READ), ASX_OK);
     ASSERT_EQ(macaroon.caveat_count, 1u);
-    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &macaroon, &child), ASX_OK);
+    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &root, &macaroon, &child), ASX_OK);
     ASSERT_EQ(asx_cx_caps(&child), ASX_CAP_CLOCK_READ);
 }
 
 TEST(macaroon_bind_stale_parent_fails_closed) {
     asx_cx parent, child;
     asx_cx_macaroon macaroon;
+    asx_auth_key root;
 
+    asx_auth_key_from_seed(&root, 1234u);
     asx_cx_init(&parent, 11, 13, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY);
-    ASSERT_EQ(asx_cx_macaroon_issue(&parent, ASX_CAP_CLOCK_READ, &macaroon), ASX_OK);
+    ASSERT_EQ(asx_cx_macaroon_issue(&parent, &root, ASX_CAP_CLOCK_READ, &macaroon), ASX_OK);
     macaroon.parent_generation++;
-    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &macaroon, &child), ASX_E_STALE_HANDLE);
+    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &root, &macaroon, &child), ASX_E_STALE_HANDLE);
+}
+
+TEST(macaroon_signature_is_hmac_chain) {
+    /* sig_0 = HMAC(root, domain || ids), sig_1 = HMAC(sig_0, 0x01 || u32le(mask)) */
+    static const char domain[] = "asupersync::cx::macaroon::identifier:v1";
+    asx_cx parent;
+    asx_cx_macaroon macaroon;
+    asx_auth_key root;
+    asx_hmac_sha256_ctx mac;
+    uint8_t id[24] = {0};
+    uint8_t sig[ASX_CX_MACAROON_SIG_SIZE];
+    uint8_t caveat[5];
+    uint32_t gen;
+
+    asx_auth_key_from_seed(&root, 99u);
+    asx_cx_init(&parent, 0x0102u, 0x03u, ASX_CAP_CLOCK_READ | ASX_CAP_SPAWN);
+    ASSERT_EQ(asx_cx_macaroon_issue(&parent, &root, ASX_CAP_CLOCK_READ | ASX_CAP_SPAWN, &macaroon),
+              ASX_OK);
+
+    gen = parent.generation;
+    id[0] = 0x02u;
+    id[1] = 0x01u;
+    id[8] = 0x03u;
+    id[16] = (uint8_t)(gen & 0xFFu);
+    id[17] = (uint8_t)((gen >> 8) & 0xFFu);
+    id[18] = (uint8_t)((gen >> 16) & 0xFFu);
+    id[19] = (uint8_t)((gen >> 24) & 0xFFu);
+    id[20] = (uint8_t)((ASX_CAP_CLOCK_READ | ASX_CAP_SPAWN) & 0xFFu);
+    asx_hmac_sha256_init(&mac, root.bytes, ASX_AUTH_KEY_SIZE);
+    asx_hmac_sha256_update(&mac, domain, sizeof(domain) - 1u);
+    asx_hmac_sha256_update(&mac, id, sizeof(id));
+    asx_hmac_sha256_final(&mac, sig);
+    ASSERT_TRUE(memcmp(sig, macaroon.signature, sizeof(sig)) == 0);
+
+    ASSERT_EQ(asx_cx_macaroon_attenuate(&macaroon, ASX_CAP_CLOCK_READ), ASX_OK);
+    caveat[0] = 0x01u;
+    caveat[1] = (uint8_t)ASX_CAP_CLOCK_READ;
+    caveat[2] = 0u;
+    caveat[3] = 0u;
+    caveat[4] = 0u;
+    asx_hmac_sha256(sig, sizeof(sig), caveat, sizeof(caveat), sig);
+    ASSERT_TRUE(memcmp(sig, macaroon.signature, sizeof(sig)) == 0);
+}
+
+TEST(macaroon_forged_escalation_rejected) {
+    asx_cx parent, child;
+    asx_cx_macaroon macaroon, forged;
+    asx_auth_key root;
+
+    asx_auth_key_from_seed(&root, 7u);
+    asx_cx_init(&parent, 11, 13, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY | ASX_CAP_SPAWN);
+    ASSERT_EQ(asx_cx_macaroon_issue(&parent, &root, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY,
+                                    &macaroon),
+              ASX_OK);
+    ASSERT_EQ(asx_cx_macaroon_attenuate(&macaroon, ASX_CAP_CLOCK_READ), ASX_OK);
+
+    /* Editing the derived caps field */
+    forged = macaroon;
+    forged.caps |= ASX_CAP_SPAWN;
+    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &root, &forged, &child), ASX_E_PERMISSION_DENIED);
+
+    /* Widening the root caps (identifier) */
+    forged = macaroon;
+    forged.root_caps |= ASX_CAP_SPAWN;
+    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &root, &forged, &child), ASX_E_PERMISSION_DENIED);
+
+    /* Dropping the caveat */
+    forged = macaroon;
+    forged.caveat_count = 0u;
+    forged.caps = forged.root_caps;
+    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &root, &forged, &child), ASX_E_PERMISSION_DENIED);
+
+    /* Rewriting the caveat */
+    forged = macaroon;
+    forged.caveats[0] = ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY;
+    forged.caps = ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY;
+    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &root, &forged, &child), ASX_E_PERMISSION_DENIED);
+
+    /* Out-of-range caveat count */
+    forged = macaroon;
+    forged.caveat_count = ASX_CX_MACAROON_MAX_CAVEATS + 1u;
+    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &root, &forged, &child), ASX_E_PERMISSION_DENIED);
+
+    /* The genuine macaroon still binds */
+    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &root, &macaroon, &child), ASX_OK);
+    ASSERT_EQ(asx_cx_caps(&child), ASX_CAP_CLOCK_READ);
+}
+
+TEST(macaroon_wrong_root_key_rejected) {
+    asx_cx parent, child;
+    asx_cx_macaroon macaroon;
+    asx_auth_key root, other;
+
+    asx_auth_key_from_seed(&root, 1u);
+    asx_auth_key_from_seed(&other, 2u);
+    asx_cx_init(&parent, 11, 13, ASX_CAP_CLOCK_READ);
+    ASSERT_EQ(asx_cx_macaroon_issue(&parent, &root, ASX_CAP_CLOCK_READ, &macaroon), ASX_OK);
+    ASSERT_EQ(asx_cx_macaroon_bind(&parent, &other, &macaroon, &child), ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_cx_macaroon_bind(&parent, NULL, &macaroon, &child), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cx_macaroon_issue(&parent, NULL, ASX_CAP_CLOCK_READ, &macaroon),
+              ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(macaroon_caveat_capacity_failure_atomic) {
+    asx_cx parent;
+    asx_cx_macaroon macaroon, before;
+    asx_auth_key root;
+    uint32_t i;
+
+    asx_auth_key_from_seed(&root, 3u);
+    asx_cx_init(&parent, 11, 13, ASX_CAP_ALL);
+    ASSERT_EQ(asx_cx_macaroon_issue(&parent, &root, ASX_CAP_ALL, &macaroon), ASX_OK);
+    for (i = 0u; i < ASX_CX_MACAROON_MAX_CAVEATS; i++) {
+        ASSERT_EQ(asx_cx_macaroon_attenuate(&macaroon, ASX_CAP_ALL), ASX_OK);
+    }
+    before = macaroon;
+    ASSERT_EQ(asx_cx_macaroon_attenuate(&macaroon, ASX_CAP_NONE), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_TRUE(memcmp(&before, &macaroon, sizeof(macaroon)) == 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -603,6 +727,10 @@ int main(void) {
     RUN_TEST(registry_issue_escalation_fails);
     RUN_TEST(macaroon_issue_attenuate_and_bind);
     RUN_TEST(macaroon_bind_stale_parent_fails_closed);
+    RUN_TEST(macaroon_signature_is_hmac_chain);
+    RUN_TEST(macaroon_forged_escalation_rejected);
+    RUN_TEST(macaroon_wrong_root_key_rejected);
+    RUN_TEST(macaroon_caveat_capacity_failure_atomic);
 
     /* Budget */
     RUN_TEST(bind_budget_null_cx_fails);
