@@ -110,7 +110,9 @@ set(ASX_PLATFORM_SRC)
 
 # Select platform sources by profile
 if(ASX_PROFILE STREQUAL "POSIX")
-    list(APPEND ASX_PLATFORM_SRC src/platform/posix/hooks.c src/platform/posix/net_posix.c)
+    list(APPEND ASX_PLATFORM_SRC src/platform/posix/hooks.c src/platform/posix/net_posix.c
+        src/platform/posix/fs_posix.c src/platform/posix/process_posix.c
+        src/platform/posix/signal_posix.c)
 elseif(ASX_PROFILE STREQUAL "WIN32")
     list(APPEND ASX_PLATFORM_SRC src/platform/win32/hooks.c)
 elseif(ASX_PROFILE STREQUAL "FREESTANDING" OR ASX_PROFILE STREQUAL "EMBEDDED_ROUTER")

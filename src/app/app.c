@@ -42,6 +42,45 @@ static void asx_app_note_cleanup_status(asx_app_server_report *report, asx_statu
     if (report->last_status == ASX_OK && cleanup_st != ASX_OK) { report->last_status = cleanup_st; }
 }
 
+/* Graceful shutdown for real signals. When the shutdown subscription is
+ * NATIVE, a watcher task in the app region parks on it next to the main
+ * task: a delivered shutdown signal (or a pending INT/TERM) cancels the
+ * region with ASX_CANCEL_SHUTDOWN, so the run drains within the bounded
+ * cleanup budget and returns instead of the signal going unnoticed until
+ * main finishes. The main task completing first ends the watcher.
+ *
+ * The watch state is static, not on the run's stack: a run that stops on
+ * its poll budget can leave the watcher parked in the region, and a later
+ * scheduler run must never hand it a dangling pointer. */
+typedef struct {
+    asx_signal_subscription subscription;
+    asx_region_id region;
+    asx_task_id main_task;
+    int signaled;
+} asx_app_shutdown_watch;
+
+static asx_app_shutdown_watch g_app_shutdown_watch;
+
+static asx_status asx_app_shutdown_watch_poll(void *user_data, asx_task_id self) {
+    asx_app_shutdown_watch *watch = (asx_app_shutdown_watch *)user_data;
+    uint32_t count = 0u;
+    asx_status st;
+
+    /* Parks as a join waiter; joins main once it has completed. */
+    st = asx_task_join_poll(self, watch->main_task, NULL);
+    if (st != ASX_E_PENDING) return ASX_OK;
+    st = asx_signal_poll(watch->subscription, &count);
+    if (st == ASX_OK || asx_signal_shutdown_requested()) {
+        uint32_t cancelled;
+        watch->signaled = 1;
+        cancelled = asx_cancel_propagate(watch->region, ASX_CANCEL_SHUTDOWN);
+        (void)cancelled;
+        return ASX_OK;
+    }
+    if (st != ASX_E_PENDING) return st;
+    return ASX_E_PENDING;
+}
+
 static asx_status asx_app_validate_cx(const asx_app *app, const asx_cx *app_cx) {
     if (app == NULL || app_cx == NULL) return ASX_E_INVALID_ARGUMENT;
     if (!app->initialized) return ASX_E_INVALID_STATE;
@@ -243,7 +282,9 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app, const asx_cx *app_cx,
     uint32_t signal_count = 0;
     asx_doctor_report doctor;
     asx_inspection_report inspection;
+    asx_app_shutdown_watch *watch = &g_app_shutdown_watch;
 
+    memset(watch, 0, sizeof(*watch));
     if (app == NULL || app_cx == NULL || main_fn == NULL) return ASX_EXIT_ERROR;
     if (!app->initialized) return ASX_EXIT_INIT_FAILED;
 
@@ -309,6 +350,7 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app, const asx_cx *app_cx,
     } else {
         report->last_status = st;
         report->exit_code = ASX_EXIT_INIT_FAILED;
+        if (have_process) asx_app_note_cleanup_status(report, asx_process_release(process));
         app->exit_code = report->exit_code;
         asx_app_server_summary(out_summary, report);
         return report->exit_code;
@@ -324,11 +366,24 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app, const asx_cx *app_cx,
             asx_app_note_cleanup_status(report, cleanup_st);
             asx_signal_clear_shutdown();
         }
+        if (have_process) asx_app_note_cleanup_status(report, asx_process_release(process));
         app->exit_code = report->exit_code;
         asx_app_server_summary(out_summary, report);
         return report->exit_code;
     }
     report->main_task_spawned = 1;
+
+    if (asx_signal_get_backend() == ASX_SIGNAL_BACKEND_NATIVE) {
+        asx_task_id watch_tid;
+        asx_status watch_st;
+        watch->subscription = subscription;
+        watch->region = app->region;
+        watch->main_task = tid;
+        /* Without the watcher (task arena full) the signal is still
+         * observed after the run, as with the MEMORY backend. */
+        watch_st = asx_task_spawn(app->region, asx_app_shutdown_watch_poll, watch, &watch_tid);
+        (void)watch_st;
+    }
 
     budget = asx_budget_infinite();
     budget.poll_quota = server_config->run_poll_budget != 0u ? server_config->run_poll_budget
@@ -344,7 +399,8 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app, const asx_cx *app_cx,
         }
     }
 
-    if (asx_signal_poll(subscription, &signal_count) == ASX_OK || asx_signal_shutdown_requested()) {
+    if (watch->signaled || asx_signal_poll(subscription, &signal_count) == ASX_OK ||
+        asx_signal_shutdown_requested()) {
         report->shutdown_requested = 1;
         if (have_process) {
             asx_status shutdown_st = asx_process_request_shutdown(process);
@@ -355,6 +411,10 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app, const asx_cx *app_cx,
             }
         }
     }
+
+    /* Drop the bootstrap handle: a real child that is still running is
+     * handed to the reaper (never left as a zombie). */
+    if (have_process) asx_app_note_cleanup_status(report, asx_process_release(process));
 
     if (have_subscription) {
         asx_status cleanup_st = asx_signal_unsubscribe(subscription);
