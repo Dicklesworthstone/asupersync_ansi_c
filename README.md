@@ -260,25 +260,26 @@ ls tests/vignettes
 
 ## Subsystem Overview
 
-`asx` is organized into 28 subsystem families. Every subsystem has a public header, implementation, and dedicated tests.
+`asx` is organized into 29 subsystem families. Every subsystem has a public header, implementation, and dedicated tests.
 
 | Subsystem | Purpose |
 |---|---|
 | **core** | Fundamental types: IDs, outcomes, budgets, symbols, cancellation, ghost monitors, combinators, epochs, circuit breakers |
-| **runtime** | Scheduler, lifecycle engine, builder, blocking pool, I/O driver, deadline monitor, waker system, virtual time, telemetry, diagnostics, HFT/automotive instrumentation |
+| **runtime** | Wake-driven scheduler (park/wake, task timers, join/watch), lifecycle engine, budgets, obligation holders and leak policy, cancel masking, task groups (race/join/first-ok/quorum with loser drain), builder, blocking pool, readiness reactor and I/O driver, deadline monitor, waker system, virtual time, telemetry, diagnostics, HFT/automotive instrumentation |
 | **channel** | Bounded MPSC, oneshot, broadcast, watch channels, and session endpoints |
 | **sync** | Mutex, semaphore, barrier (N-way rendezvous with leader election), once, notify |
-| **actor** | Actor model with supervision trees |
+| **actor** | Wake-driven actors (mailboxes, cast/call) with event-driven supervision trees |
 | **cx** | Capability context and structured concurrency scoping |
 | **codec** | JSON + binary codecs with equivalence checking and schema validation |
 | **time** | Deadline abstraction, sleep primitives, timer wheel with generation-safe handles |
 | **stream** | Poll-based async iterators and streaming combinators |
 | **bytes** | Buffer management, codec bridges, I/O adapters |
-| **security** | Audit trails and security policy enforcement |
-| **net** | Network surface API |
-| **fs** | File system operations |
-| **process** | Child process lifecycle |
-| **signal** | OS signal handling |
+| **security** | Audit trails, security policy enforcement, crypto primitives (SHA-1/256/512, HMAC, HKDF, constant-time compare, OS entropy) |
+| **net** | TCP/UDP over in-memory or native sockets, DNS (getaddrinfo on the blocking pool), HTTP/1.1 server/client, WebSocket (RFC 6455) |
+| **raptorq** | RFC 6330 fountain-code encoder/decoder (byte-identical to the reference crate) |
+| **fs** | Files and directories: in-memory model, plus native POSIX backend |
+| **process** | Child processes: spawn, stdio pipes, exit status, kill/reap (native POSIX backend) |
+| **signal** | Signal subscriptions with task wakeups; graceful shutdown on SIGTERM/SIGINT |
 | **obligation** | Structured obligation lifecycle (reserve/commit/abort/leak tracking) |
 | **session** | Bidirectional session endpoints |
 | **link** | Long-lived coordination links between tasks |
@@ -705,20 +706,20 @@ The state mask enables O(1) admission gating: each handle carries a bitmask of t
 
 Six type tags (region, task, obligation, cancel_witness, timer, channel) are validated on every lookup. Type confusion across entity families is caught at the handle layer, not deep inside business logic.
 
-### Deterministic Round-Robin Scheduler
+### Wake-Driven Deterministic Scheduler
 
-The scheduler uses a flat arena-based polling strategy that processes all non-terminal tasks in ascending arena index order within each round. This deterministic tie-break means: given the same set of tasks and the same seed, the scheduler produces identical event sequences across runs, platforms, and profiles.
+`asx_scheduler_run(region, budget)` drives a whole region **subtree**. Runnable tasks are polled in ascending arena index within each round, so the same tasks and seed produce identical event sequences across runs, platforms, and profiles.
+
+Tasks are **wake-driven**, not busy-polled. A poll function that must wait calls `asx_task_park(self)` (directly, or through a primitive that does it for it: sleep, join, channel receive, mutex, socket read, actor mailbox, ...) and returns `ASX_E_PENDING`. The task is not polled again until something wakes it: `asx_task_wake`, a waker signal, a task timer, I/O readiness, a joined task completing, or cancellation. A task that returns `ASX_E_PENDING` without parking simply yields.
 
 Each round:
-1. Iterates all task slots in index order.
-2. Skips terminal tasks (COMPLETED, not alive).
-3. Transitions CREATED tasks to RUNNING on first poll.
-4. Calls each task's poll function, consuming one poll unit per call.
-5. Joins error outcomes into the task's severity lattice (Cancelled > Err > Ok).
-6. Checks budget exhaustion after each poll; returns `ASX_E_POLL_BUDGET_EXHAUSTED` if quota hits zero.
-7. Terminates when `active_count == 0` (quiescent state).
+1. Polls every live, non-parked task in the subtree in index order. Deadline and poll-quota budgets are enforced before each poll, consuming one poll unit per call.
+2. Completes tasks that return a final status, joining the result into the severity lattice (Cancelled > Err > Ok). A cancelled task's error is its acknowledgement and is not a fault.
+3. Force-completes tasks whose cleanup budget is exhausted. Masked tasks are exempt.
+4. When nothing is runnable it **idles** instead of spinning: unpark cancelled tasks, drain wakers, fire due timers (an EDF heap keyed by `(deadline, sequence)`), and otherwise block in the reactor until I/O, a cross-thread wake, or the next timer. In deterministic builds the virtual clock jumps straight to the next timer. When nothing can ever wake the parked tasks, it returns `ASX_E_WOULD_BLOCK`.
+5. Returns `ASX_OK` at quiescence, or `ASX_E_POLL_BUDGET_EXHAUSTED` if the caller's budget runs out.
 
-Tasks in the FINALIZING phase complete without consuming poll units, ensuring cleanup can finish even under tight budgets. Tasks in the CANCELLING phase with exhausted cleanup budgets are force-completed; the runtime never blocks indefinitely on a misbehaving cleanup handler.
+Tasks in the FINALIZING phase complete without consuming poll units, ensuring cleanup can finish even under tight budgets. Tasks can be joined (`asx_task_join_poll` parks until the target completes), watched (`asx_task_watch`, monitor semantics), or detached. Arena slots are recycled with generation bumps, so long-running servers do not exhaust the task, region, or obligation arenas.
 
 ### Budget Algebra
 
@@ -734,6 +735,14 @@ meet(a, b).priority   = min(a.priority,   b.priority)
 ```
 
 This means budgets compose correctly: if a task has a 100-poll budget and its region has a 50-poll budget, the effective budget is 50. Cleanup budgets for cancellation follow the same rule; severity 5 (SHUTDOWN) gets 50 cleanup polls, while severity 0 (USER) gets 1,000.
+
+Budgets are **enforced**, not advisory. Regions carry a budget that child regions (`asx_region_open_child_with_budget`) and tasks (`asx_task_spawn_with_budget`) inherit through the meet, so a child can only tighten it:
+
+| Dimension | Enforcement | Cancel kind |
+|---|---|---|
+| deadline | checked before every poll and at every checkpoint; a parked task arms its deadline as a timer, so it wakes up in order to be cancelled | `DEADLINE` |
+| poll quota | decremented per poll; at zero the task is cancelled | `POLL_QUOTA` |
+| cost quota | `asx_task_consume_cost(self, n)` charges abstract cost; an unaffordable charge cancels the task and returns `ASX_E_COST_QUOTA_EXHAUSTED` | `COST_BUDGET` |
 
 ### Cancellation Protocol and Severity Lattice
 
@@ -757,6 +766,24 @@ Running → CancelRequested → Cancelling → Finalizing → Completed
 ```
 
 Each cancel carries an **origin attribution chain** (source region, source task, timestamp, message) so propagation can be traced across cancel waves. The chain is bounded to prevent unbounded allocation.
+
+Cancelling a region (`asx_cancel_propagate`, `asx_region_drain`) reaches its whole subtree: the root's tasks get the requested kind, descendants get `PARENT`. Draining closes the subtree parent-first, cancels and runs it to completion, then finalizes it deepest-first. A parked task is woken by its cancel.
+
+**Masking** (`asx_task_mask` / `asx_task_unmask`, nestable to `ASX_MAX_MASK_DEPTH` = 64) defers acknowledgement for a critical section, such as committing a transaction or a finalizer. While a task is masked, `asx_checkpoint` reports `masked = 1` instead of `cancelled`, the cancel can still strengthen, and the scheduler neither consumes cleanup polls nor force-completes the task. The cancel becomes observable at the first checkpoint after the depth returns to zero.
+
+### Obligations: Holders and Leak Policy
+
+An obligation (send permit, ack, lease, I/O op, semaphore permit, transaction) is a linear resource that must be committed or aborted exactly once. Each records its **kind** and its **holder task**: `asx_obligation_reserve` binds the task being polled, and `asx_obligation_reserve_ex` takes an explicit kind and holder. When a holder completes with obligations still reserved, the runtime resolves them deterministically:
+
+- If the holder was **cancelled**, they are aborted with reason `CANCEL`. Cancellation is not a leak.
+- Otherwise they are **leaks**, handled by the configured `leak_response`:
+  - `LOG` (the default) warns.
+  - `SILENT` records them.
+  - `RECOVER` aborts them with reason `LEAK_RECOVERED`.
+  - `PANIC` routes the leak through region fault containment, so FAIL_FAST surfaces `ASX_E_UNRESOLVED_OBLIGATIONS` from the scheduler.
+- `leak_escalation` switches to a stricter response once the leak count reaches a threshold.
+
+`asx_obligation_get_info` and `asx_obligation_leak_count` expose the results.
 
 ### Two-Phase Channel Protocol
 
@@ -832,6 +859,16 @@ The **loser-drain protocol** is central to race/select/quorum semantics. When a 
 3. The combinator then returns the winner's result.
 
 This bounded drain prevents indefinite hangs on losing branches while giving them a chance to release resources. The drain is deterministic: same input, same drain order, same result.
+
+**Task groups** (`asx/runtime/task_group.h`) provide the full "losers are drained" guarantee over real spawned tasks, porting asupersync's `Scope::race_all` / `join_all` / `first_ok` / `quorum`. The owner drives the group with `asx_task_group_poll(&group, self)`; it parks, and members wake it as they complete. Once the group is decided, every unfinished member is cancelled with `RACE_LOST` and **awaited to completion** before the group resolves, so a loser's obligations, finalizers, and handles are resolved, never abandoned. Ending early drains members the same way:
+
+| Trigger | Members cancelled with | Group result |
+|---|---|---|
+| owner cancelled | `PARENT` | `ASX_E_CANCELLED` |
+| group deadline | `TIMEOUT` | `ASX_E_TIMED_OUT` (`ASX_E_THRESHOLD_TIMEOUT` for quorum) |
+| `asx_task_group_cancel` | the requested kind | `ASX_E_CANCELLED` |
+
+Members completing in the same round are tie-broken by lowest index, so results are deterministic.
 
 **Outcome aggregation** in join uses a severity lattice: `Ok < Err < Cancelled < Panicked`. The combined outcome of a join is the maximum severity across all branches. This means a join of (Ok, Ok, Err) produces Err, and a join of (Ok, Cancelled) produces Cancelled.
 
@@ -997,6 +1034,12 @@ Each child has a restart policy:
 - **TEMPORARY**: Never restart. The child is gone.
 
 The supervisor state machine progresses through INIT, RUNNING, STOPPING, RESTART, SHUTDOWN, and DONE phases. This structured lifecycle means supervision decisions are deterministic and auditable. The same failure sequence always produces the same restart pattern.
+
+Supervision is event-driven:
+- An actor parks on an empty mailbox, and every cast, call or stop wakes it.
+- A caller polling a call token parks until the reply, or until the actor drops the call or exits.
+- A supervisor watches its children's tasks (`asx_task_watch`) and sleeps until one exits, so a quiet tree costs no polls.
+- Cancellation is not a crash. A cancelled actor runs its `terminate` callback with `ASX_E_CANCELLED`, and a cancelled supervisor cancels its children and shuts down without restarting them.
 
 ## Structured Concurrency and Capability Flow
 
@@ -1234,6 +1277,8 @@ The waker arena holds 64 slots, each binding a task ID to a signaled/alive state
 
 This decouples I/O sources from scheduling policy. The I/O driver, timer wheel, and channel subsystems all signal wakers identically, and the scheduler handles them uniformly.
 
+Wakers are also the **cross-thread** path. Blocking-pool workers (file and DNS work, `asx_spawn_blocking`) signal a completion waker from their own thread. The waker arena is lock-protected, and the scheduler publishes "about to block" under the same lock: a wake that lands after its last drain calls the reactor's `notify_fn` (a self-pipe in the POSIX epoll/poll set), so a scheduler blocked in the reactor wakes within milliseconds and no wake is lost.
+
 ## Synchronization Primitives
 
 All sync primitives are cooperative (no OS-level blocking), async-friendly (three-phase begin/poll/cancel), and cancel-safe (cancellation removes the waiter without corrupting shared state).
@@ -1295,9 +1340,22 @@ The `asx doctor` command (and programmatic `asx_doctor_run()`) performs a compre
 
 The report is available as structured text or JSON, suitable for CLI output, log ingestion, or CI gate evaluation. Each check produces a named finding with severity, message, current value, and capacity.
 
+## Native I/O: Sockets, DNS, Files, Processes, Signals
+
+In live (non-deterministic) POSIX builds, `asx_runtime_init` installs a real readiness reactor (epoll with one-shot arming on Linux, poll(2) elsewhere) and switches the net, fs, process, and signal surfaces to their **NATIVE** backends. Deterministic builds and `*_reset()` keep the in-memory **MEMORY** backends, so lab, replay, and conformance runs never touch the OS. Every native operation that would block parks the polling task on readiness and returns `ASX_E_PENDING`, and the reactor wakes exactly that task:
+
+| Surface | Native behaviour |
+|---|---|
+| TCP / UDP | Non-blocking BSD sockets. A read returning `ASX_OK` with 0 bytes is EOF, writes may be partial, and `ASX_E_DISCONNECTED` means reset or refused. |
+| DNS | Literals (IPv4, full RFC 4291 IPv6, `localhost`) resolve deterministically. Other names run `getaddrinfo` on the blocking pool through `asx_resolve_poll`, and the task parks until the lookup's completion wakes it. |
+| HTTP/1.1, WebSocket | Sans-IO engines (`asx/net/http.h`, `asx/net/websocket.h`) plus server/client connection drivers over the stream API. Keep-alive and RFC 6455 framing are included. |
+| Files | Real files and directories (open/read/write/seek/sync/metadata, `mkdir -p`, rename, directory iteration). Regular-file I/O runs synchronously. |
+| Processes | fork/execve with PATH lookup, env, and cwd. Exec failures come back through an error pipe. Non-blocking stdio pipes park on readiness, exit waits park on a pidfd on Linux, and children are always reaped. |
+| Signals | Refcounted `sigaction` handlers feed a self-pipe, and each subscriber parks on its own duplicate. The app runner turns SIGTERM/SIGINT into a `SHUTDOWN` cancel of the server region. |
+
 ## In-Memory Network Transport
 
-The network subsystem provides a deterministic in-memory transport that mirrors real socket semantics without touching the OS network stack. This enables network-aware scenarios to run deterministically in lab mode:
+The MEMORY backend provides a deterministic in-memory transport that mirrors real socket semantics without touching the OS network stack. This enables network-aware scenarios to run deterministically in lab mode:
 
 **TCP**: Listener with accept queue (16 deep), stream handles with send/recv buffers (1,460 bytes, matching typical MTU payload). `listen()` → `accept()` → `connect()` → `send()`/`recv()` → `close()`.
 
@@ -1305,7 +1363,7 @@ The network subsystem provides a deterministic in-memory transport that mirrors 
 
 **Address handling**: IPv4 dotted-quad parser, IPv4/IPv6 loopback constructors, address equality. Addresses outside the in-memory model produce ghost-pending behavior: the call returns `ASX_E_PENDING` indefinitely, observable by the ghost monitor as a "network boundary event."
 
-**Happy eyeballs**: The resolver simulates dual-stack address discovery. A TCP connect attempt against a resolved name tries addresses in parallel (race combinator pattern), preferring the first successful connection.
+**Happy eyeballs ordering**: Resolution results are ordered by address-family preference (IPv6 first by default), with a small per-resolver cache. `asx_tcp_connect_host` connects to the first ordered endpoint; racing several endpoints is a task-group `RACE` away.
 
 ## Buffer and Byte Slice Primitives
 
