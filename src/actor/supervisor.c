@@ -190,17 +190,45 @@ static void apply_strategy(asx_supervisor_slot *s, uint32_t failed_idx) {
 /* Supervisor poll function                                            */
 /* ------------------------------------------------------------------ */
 
+/* Park the supervisor until one of its live children exits: each child's
+ * task wakes it on completion (asx_task_watch). */
+static asx_status sup_wait_children(asx_supervisor_slot *s, asx_task_id self) {
+    uint32_t i;
+    asx_status st;
+    for (i = 0; i < s->child_count; i++) {
+        if (!asx_actor_is_alive(s->children[i])) continue;
+        st = asx_task_watch(s->child_tasks[i], self);
+        (void)st;
+    }
+    st = asx_task_park(self);
+    (void)st;
+    return ASX_E_PENDING;
+}
+
 static asx_status supervisor_poll(void *user_data, asx_task_id self) {
     uint32_t slot_idx = (uint32_t)(uintptr_t)user_data;
     asx_supervisor_slot *s;
+    asx_checkpoint_result cp;
     uint32_t i;
     asx_status st;
-
-    (void)self;
 
     if (slot_idx >= ASX_MAX_SUPERVISORS) return ASX_E_INVALID_STATE;
     s = &g_supervisors[slot_idx];
     if (!s->alive) return ASX_E_INVALID_STATE;
+
+    /* Cancelled supervisor: cancel every child (PARENT), wait for them
+     * all to exit, then finish. No restarts once shutting down. */
+    if (s->phase != SUP_PHASE_SHUTDOWN && s->phase != SUP_PHASE_DONE &&
+        asx_checkpoint(self, &cp) == ASX_OK && cp.cancelled) {
+        for (i = 0; i < s->child_count; i++) {
+            if (asx_actor_is_alive(s->children[i])) {
+                st = asx_task_cancel(s->child_tasks[i], ASX_CANCEL_PARENT);
+                (void)st;
+            }
+        }
+        s->exit_reason = ASX_E_CANCELLED;
+        s->phase = SUP_PHASE_SHUTDOWN;
+    }
 
     switch (s->phase) {
     case SUP_PHASE_INIT:
@@ -245,12 +273,15 @@ static asx_status supervisor_poll(void *user_data, asx_task_id self) {
                 return ASX_E_PENDING;
             }
         }
-        return ASX_E_PENDING;
+        return sup_wait_children(s, self);
 
     case SUP_PHASE_STOPPING:
         /* Wait for children in restart_mask to die */
-        if (all_mask_dead(s, s->restart_mask)) { s->phase = SUP_PHASE_RESTART; }
-        return ASX_E_PENDING;
+        if (all_mask_dead(s, s->restart_mask)) {
+            s->phase = SUP_PHASE_RESTART;
+            return ASX_E_PENDING;
+        }
+        return sup_wait_children(s, self);
 
     case SUP_PHASE_RESTART:
         /* Restart children in mask, in order */
@@ -284,7 +315,7 @@ static asx_status supervisor_poll(void *user_data, asx_task_id self) {
                 return s->exit_reason;
             }
         }
-        return ASX_E_PENDING;
+        return sup_wait_children(s, self);
 
     case SUP_PHASE_DONE: return s->exit_reason;
     }
@@ -363,6 +394,11 @@ asx_status asx_supervisor_stop(asx_supervisor_handle sup) {
 
     s->exit_reason = ASX_OK;
     s->phase = SUP_PHASE_SHUTDOWN;
+    {
+        /* The supervisor may be parked watching its children. */
+        asx_status st = asx_task_wake(s->task_id);
+        (void)st;
+    }
     return ASX_OK;
 }
 

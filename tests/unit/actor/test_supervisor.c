@@ -645,6 +645,100 @@ static void test_stop_during_pending_restart_prevents_restart(void) {
 /* Tests: Reset                                                        */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Wake-driven supervision                                             */
+/* ------------------------------------------------------------------ */
+
+static asx_actor_handle g_captured;
+
+/* Fragile child whose handle the test can reach. */
+static asx_status capture_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
+    asx_status st = counting_start(user_data, region, out);
+    if (st == ASX_OK) g_captured = *out;
+    return st;
+}
+
+static uint32_t run_counting(asx_region_id region, asx_status *out_st) {
+    asx_budget b = asx_budget_from_polls(1000);
+    *out_st = asx_scheduler_run(region, &b);
+    return 1000u - b.poll_quota;
+}
+
+static void test_supervisor_parks_and_wakes_on_child_death(void) {
+    asx_supervisor_handle sup;
+    asx_supervisor_config cfg;
+    asx_child_spec specs[2];
+    asx_region_id r;
+    asx_status st;
+    uint32_t used;
+
+    asx_runtime_reset();
+    g_start_count = 0;
+    r = make_region();
+    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
+    cfg.max_restarts = 5;
+    specs[0].start_fn = capture_start;
+    specs[0].user_data = NULL;
+    specs[0].restart = ASX_CHILD_PERMANENT;
+    specs[1].start_fn = stable_start;
+    specs[1].user_data = NULL;
+    specs[1].restart = ASX_CHILD_PERMANENT;
+    MUST_OK(asx_supervisor_start(&sup, r, &cfg, specs, 2));
+
+    /* Everything parks: supervisor watching, children on empty mailboxes. */
+    used = run_counting(r, &st);
+    ASSERT(st == ASX_E_WOULD_BLOCK, "quiet supervision tree parks");
+    ASSERT(used < 10u, "no busy polling");
+    ASSERT(g_start_count == 1u, "child started once");
+
+    /* Kill the fragile child: its completion wakes the supervisor, which
+     * restarts it, and the tree parks again. */
+    MUST_OK(asx_actor_cast(g_captured, 1u));
+    used = run_counting(r, &st);
+    ASSERT(st == ASX_E_WOULD_BLOCK, "parks again after restart");
+    ASSERT(used < 10u, "restart is event-driven");
+    ASSERT(g_start_count == 2u, "child restarted");
+    ASSERT(asx_supervisor_restart_count(sup) == 1u, "one restart");
+    ASSERT(asx_supervisor_child_alive(sup, 0), "child 0 back");
+
+    /* Graceful stop wakes the parked supervisor and drains the tree. */
+    MUST_OK(asx_supervisor_stop(sup));
+    used = run_counting(r, &st);
+    ASSERT(st == ASX_OK, "tree finishes");
+    ASSERT(!asx_supervisor_is_alive(sup), "supervisor done");
+}
+
+static void test_draining_region_cancels_supervision_tree(void) {
+    asx_supervisor_handle sup;
+    asx_supervisor_config cfg;
+    asx_child_spec specs[2];
+    asx_region_id r;
+    asx_status st;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    g_start_count = 0;
+    r = make_region();
+    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ALL;
+    cfg.max_restarts = 5;
+    specs[0].start_fn = capture_start;
+    specs[0].user_data = NULL;
+    specs[0].restart = ASX_CHILD_PERMANENT;
+    specs[1].start_fn = stable_start;
+    specs[1].user_data = NULL;
+    specs[1].restart = ASX_CHILD_PERMANENT;
+    MUST_OK(asx_supervisor_start(&sup, r, &cfg, specs, 2));
+    (void)run_counting(r, &st);
+    ASSERT(st == ASX_E_WOULD_BLOCK, "tree parked");
+
+    /* Cancellation is not a crash: no restarts, everything exits. */
+    budget = asx_budget_from_polls(200);
+    ASSERT(asx_region_drain(r, &budget) == ASX_OK, "region drains");
+    ASSERT(g_start_count == 1u, "no restart during shutdown");
+    ASSERT(!asx_supervisor_is_alive(sup), "supervisor gone");
+    ASSERT(asx_actor_exit_reason(g_captured) == ASX_E_CANCELLED, "child cancelled");
+}
+
 static void test_reset(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
@@ -835,6 +929,8 @@ int main(void) {
     RUN(test_stop_during_pending_restart_prevents_restart);
 
     /* Reset */
+    RUN(test_supervisor_parks_and_wakes_on_child_death);
+    RUN(test_draining_region_cancels_supervision_tree);
     RUN(test_reset);
 
     /* Arena */

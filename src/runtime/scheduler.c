@@ -314,6 +314,25 @@ asx_status asx_task_wait_until(asx_task_id self, asx_time deadline) {
     return ASX_E_PENDING;
 }
 
+asx_status asx_task_watch(asx_task_id target, asx_task_id watcher) {
+    asx_task_slot *tt;
+    asx_task_slot *tw;
+    asx_status st;
+
+    st = asx_task_slot_lookup(target, &tt);
+    if (st != ASX_OK) return st;
+    st = asx_task_slot_lookup(watcher, &tw);
+    if (st != ASX_OK) return st;
+    if (tt == tw) return ASX_E_INVALID_ARGUMENT;
+    if (asx_task_is_terminal(tt->state)) {
+        asx_task_wake_slot_internal(tw);
+        return ASX_OK;
+    }
+    tt->watcher = (uint32_t)(tw - g_tasks);
+    tt->watcher_gen = tw->generation;
+    return ASX_OK;
+}
+
 asx_status asx_task_join_poll(asx_task_id self, asx_task_id target, asx_outcome *out_outcome) {
     asx_task_slot *tt;
     asx_task_slot *ts;
@@ -737,17 +756,20 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
             } else if (poll_result != ASX_E_PENDING) {
                 /* Failed — CANCELLED > ERR in the severity lattice, so a
                  * pending cancel dominates. */
-                if (!t->cancel_pending) t->last_error = poll_result;
+                int was_cancelled = t->cancel_pending;
+                if (!was_cancelled) t->last_error = poll_result;
                 st = sched_complete(t, tid, rslot,
-                                    t->cancel_pending ? ASX_OUTCOME_CANCELLED : ASX_OUTCOME_ERR,
+                                    was_cancelled ? ASX_OUTCOME_CANCELLED : ASX_OUTCOME_ERR,
                                     ASX_SCHED_EVENT_COMPLETE, round);
                 if (st != ASX_OK) return st;
                 active--;
 
                 /* Apply fault containment policy (bd-hwb.15). In
                  * POISON_REGION mode this poisons the task's region and the
-                 * scheduler continues draining existing tasks. */
-                {
+                 * scheduler continues draining existing tasks. A cancelled
+                 * task's outcome is CANCELLED, not a fault: its error (often
+                 * ASX_E_CANCELLED itself) is how it acknowledged the cancel. */
+                if (!was_cancelled) {
                     asx_status fc_ = asx_region_contain_fault(task_region, poll_result);
                     if (fc_ != ASX_OK &&
                         asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {

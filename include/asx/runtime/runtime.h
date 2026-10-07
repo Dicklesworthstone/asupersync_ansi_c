@@ -683,6 +683,17 @@ ASX_API ASX_MUST_USE asx_status asx_task_arm_timer(asx_task_id self, asx_time de
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_wait_until(asx_task_id self, asx_time deadline);
 
+/* Wake `watcher` when `target` completes, without joining it (a monitor:
+ * supervisors, task groups). A task has at most one watcher; a new call
+ * replaces the previous one. If `target` has already completed, the
+ * watcher is woken immediately. The watcher must still park itself
+ * (asx_task_park) to wait.
+ *
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if target == watcher, or a lookup
+ *   error (ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE) for either handle.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_watch(asx_task_id target, asx_task_id watcher);
+
 /* Await another task from inside a poll function.
  *
  * If `target` has completed, writes its outcome to *out_outcome (if

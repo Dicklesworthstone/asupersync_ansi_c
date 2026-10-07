@@ -22,6 +22,7 @@ typedef struct {
     uint64_t reply;
     int active;
     int replied;
+    asx_task_id caller; /* task to wake on reply / actor exit */
 } asx_actor_call_slot;
 
 typedef struct {
@@ -85,11 +86,20 @@ static asx_actor_slot *actor_lookup(asx_actor_handle h) {
 
 static int mb_full(const asx_actor_slot *s) { return s->mb_count >= ASX_ACTOR_MAILBOX_CAPACITY; }
 
+static void wake_task(asx_task_id task) {
+    asx_status st;
+    if (task == ASX_INVALID_ID) return;
+    st = asx_task_wake(task);
+    (void)st;
+}
+
+/* Enqueue and wake the actor task, which parks on an empty mailbox. */
 static asx_status mb_push(asx_actor_slot *s, const asx_actor_envelope *env) {
     if (mb_full(s)) return ASX_E_WOULD_BLOCK;
     s->mailbox[s->mb_tail] = *env;
     s->mb_tail = (s->mb_tail + 1) % ASX_ACTOR_MAILBOX_CAPACITY;
     s->mb_count++;
+    wake_task(s->task_id);
     return ASX_OK;
 }
 
@@ -112,6 +122,7 @@ static int call_slot_alloc(asx_actor_slot *s, uint32_t *out) {
             s->pending_calls[i].active = 1;
             s->pending_calls[i].replied = 0;
             s->pending_calls[i].reply = 0;
+            s->pending_calls[i].caller = asx_task_current();
             *out = i;
             return 1;
         }
@@ -129,9 +140,9 @@ static asx_status actor_poll(void *user_data, asx_task_id self) {
     asx_actor_slot *s;
     asx_actor_handle handle;
     asx_actor_envelope env;
+    asx_checkpoint_result cp;
     asx_status st;
-
-    (void)self;
+    uint32_t i;
 
     if (slot_idx >= ASX_MAX_ACTORS) return ASX_E_INVALID_STATE;
     s = &g_actors[slot_idx];
@@ -139,6 +150,18 @@ static asx_status actor_poll(void *user_data, asx_task_id self) {
 
     handle.slot = slot_idx;
     handle.generation = s->generation;
+
+    /* Cancelled (region drain, supervisor, deadline): stop now and run
+     * terminate, instead of being force-completed after the cleanup
+     * budget with resources never released. */
+    if (asx_checkpoint(self, &cp) == ASX_OK && cp.cancelled) {
+        s->exit_reason = ASX_E_CANCELLED;
+        if (!s->initialized) {
+            s->alive = 0;
+            goto release_callers;
+        }
+        goto terminate;
+    }
 
     /* Phase 1: Initialize on first poll */
     if (!s->initialized) {
@@ -150,7 +173,12 @@ static asx_status actor_poll(void *user_data, asx_task_id self) {
                 goto terminate;
             }
         }
-        /* Don't process messages on init poll — return pending */
+        /* Don't process messages on init poll; come back for any that
+         * are already queued, else wait for the first one. */
+        if (s->mb_count == 0u) {
+            st = asx_task_park(self);
+            (void)st;
+        }
         return ASX_E_PENDING;
     }
 
@@ -174,6 +202,7 @@ static asx_status actor_poll(void *user_data, asx_task_id self) {
                 if (st == ASX_OK) {
                     s->pending_calls[env.call_slot].reply = reply;
                     s->pending_calls[env.call_slot].replied = 1;
+                    wake_task(s->pending_calls[env.call_slot].caller);
                 } else {
                     /* Handler failed — mark slot inactive so caller
                      * gets ASX_E_INVALID_STATE on poll */
@@ -185,6 +214,7 @@ static asx_status actor_poll(void *user_data, asx_task_id self) {
                 /* No call handler — release slot */
                 if (env.call_slot < ASX_ACTOR_MAX_PENDING_CALLS) {
                     s->pending_calls[env.call_slot].active = 0;
+                    wake_task(s->pending_calls[env.call_slot].caller);
                 }
             }
             break;
@@ -199,11 +229,21 @@ static asx_status actor_poll(void *user_data, asx_task_id self) {
         goto terminate;
     }
 
+    /* Idle: park until a message arrives (mb_push wakes the task). */
+    if (s->mb_count == 0u) {
+        st = asx_task_park(self);
+        (void)st;
+    }
     return ASX_E_PENDING;
 
 terminate:
     if (s->behavior.terminate != NULL) { s->behavior.terminate(s->state, s->exit_reason, handle); }
     s->alive = 0;
+release_callers:
+    /* Pending callers observe the exit (ASX_E_INVALID_STATE) when woken. */
+    for (i = 0; i < ASX_ACTOR_MAX_PENDING_CALLS; i++) {
+        if (s->pending_calls[i].active) wake_task(s->pending_calls[i].caller);
+    }
     /* Always return ASX_OK to the scheduler — the actor completed its
      * lifecycle normally from the task's perspective. The actor-level
      * exit reason is tracked in exit_reason for supervisor queries.
@@ -368,7 +408,18 @@ asx_status asx_call_token_poll(asx_call_token token, uint64_t *reply) {
     cs = &s->pending_calls[token.call_slot];
     if (!cs->active) return ASX_E_INVALID_STATE;
 
-    if (!cs->replied) return ASX_E_PENDING;
+    if (!cs->replied) {
+        /* Inside a task poll: park; the reply (or the actor's exit) wakes
+         * whichever task polls the token. */
+        asx_task_id current = asx_task_current();
+        if (current != ASX_INVALID_ID) {
+            asx_status st;
+            cs->caller = current;
+            st = asx_task_park(current);
+            (void)st;
+        }
+        return ASX_E_PENDING;
+    }
 
     *reply = cs->reply;
     cs->active = 0; /* consume the reply */

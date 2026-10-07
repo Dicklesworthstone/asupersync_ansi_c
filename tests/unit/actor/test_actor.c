@@ -168,6 +168,141 @@ static asx_status accum_cast(void *state, uint64_t msg, asx_actor_handle self) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Tests: Wake-driven mailbox                                          */
+/* ------------------------------------------------------------------ */
+
+/* Run the region; return how many poll units were used. */
+static uint32_t run_counting(asx_region_id region, asx_status *out_st) {
+    asx_budget b = asx_budget_from_polls(1000);
+    *out_st = asx_scheduler_run(region, &b);
+    return 1000u - b.poll_quota;
+}
+
+static void test_idle_actor_parks_and_cast_wakes_it(void) {
+    asx_actor_handle h;
+    asx_actor_behavior b = echo_behavior();
+    echo_state state;
+    asx_region_id r;
+    asx_status st;
+    uint32_t used;
+
+    asx_runtime_reset();
+    memset(&state, 0, sizeof(state));
+    r = make_region();
+    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
+
+    /* Init poll, then the empty mailbox parks the actor: the scheduler
+     * reports WOULD_BLOCK instead of burning the whole budget. */
+    used = run_counting(r, &st);
+    ASSERT(st == ASX_E_WOULD_BLOCK, "idle actor parks");
+    ASSERT(used == 1u, "one poll for init");
+    ASSERT(state.init_called, "init ran");
+
+    MUST_OK(asx_actor_cast(h, 41u));
+    MUST_OK(asx_actor_cast(h, 42u));
+    used = run_counting(r, &st);
+    ASSERT(st == ASX_E_WOULD_BLOCK, "parks again after draining");
+    ASSERT(used == 2u, "one poll per message");
+    ASSERT(state.msg_count == 2u, "both casts handled");
+    ASSERT(state.last_msg == 42u, "in order");
+}
+
+typedef struct {
+    asx_actor_handle actor;
+    asx_call_token token;
+    int called;
+    uint64_t reply;
+    asx_status result;
+    uint32_t polls;
+} caller_state;
+
+static asx_status caller_poll(void *ud, asx_task_id self) {
+    caller_state *c = (caller_state *)ud;
+    asx_status st;
+    (void)self;
+    c->polls++;
+    if (!c->called) {
+        st = asx_actor_call(c->actor, 21u, &c->token);
+        if (st != ASX_OK) return st;
+        c->called = 1;
+    }
+    st = asx_call_token_poll(c->token, &c->reply);
+    if (st == ASX_E_PENDING) return st;
+    c->result = st;
+    return ASX_OK;
+}
+
+static void test_call_parks_caller_until_reply(void) {
+    asx_actor_handle h;
+    asx_actor_behavior b = echo_behavior();
+    echo_state state;
+    caller_state c;
+    asx_region_id r;
+    asx_task_id t;
+    asx_status st;
+
+    asx_runtime_reset();
+    memset(&state, 0, sizeof(state));
+    memset(&c, 0, sizeof(c));
+    r = make_region();
+    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
+    c.actor = h;
+    MUST_OK(asx_task_spawn(r, caller_poll, &c, &t));
+    (void)run_counting(r, &st);
+    ASSERT(st == ASX_E_WOULD_BLOCK, "only the idle actor remains");
+    ASSERT(c.result == ASX_OK, "call completed");
+    ASSERT(c.reply == 42u, "reply delivered");
+    ASSERT(c.polls == 2u, "caller polled once to call, once on the reply wake");
+}
+
+static void test_dropped_call_wakes_caller(void) {
+    asx_actor_handle h;
+    asx_actor_behavior b = echo_behavior();
+    echo_state state;
+    caller_state c;
+    asx_region_id r;
+    asx_task_id t;
+    asx_status st;
+
+    asx_runtime_reset();
+    memset(&state, 0, sizeof(state));
+    memset(&c, 0, sizeof(c));
+    b.handle_call = NULL; /* calls are dropped: the caller must not hang */
+    r = make_region();
+    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
+    c.actor = h;
+    MUST_OK(asx_task_spawn(r, caller_poll, &c, &t));
+    (void)run_counting(r, &st);
+    ASSERT(st == ASX_E_WOULD_BLOCK, "caller did not hang");
+    ASSERT(c.result == ASX_E_INVALID_STATE, "dropped call reported");
+}
+
+static void test_cancelled_actor_runs_terminate(void) {
+    asx_actor_handle h;
+    asx_actor_behavior b = echo_behavior();
+    echo_state state;
+    asx_region_id r;
+    asx_budget budget;
+    asx_status st;
+
+    asx_runtime_reset();
+    memset(&state, 0, sizeof(state));
+    r = make_region();
+    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
+    (void)run_counting(r, &st);
+    ASSERT(st == ASX_E_WOULD_BLOCK, "actor parked");
+
+    /* Draining the region cancels the parked actor: it wakes, runs its
+     * terminate callback with ASX_E_CANCELLED, and the region closes. */
+    budget = asx_budget_from_polls(100);
+    ASSERT(asx_region_drain(r, &budget) == ASX_OK, "region drains");
+    ASSERT(state.term_called, "terminate ran");
+    ASSERT(state.term_reason == ASX_E_CANCELLED, "reason is CANCELLED");
+    ASSERT(!asx_actor_is_alive(h), "actor gone");
+    ASSERT(asx_actor_exit_reason(h) == ASX_E_CANCELLED, "exit reason recorded");
+}
+
+/* ------------------------------------------------------------------ */
 /* Tests: Spawn and lifecycle                                          */
 /* ------------------------------------------------------------------ */
 
@@ -856,6 +991,10 @@ int main(void) {
 
     /* Interleaved */
     RUN(test_interleaved_cast_call);
+    RUN(test_idle_actor_parks_and_cast_wakes_it);
+    RUN(test_call_parks_caller_until_reply);
+    RUN(test_dropped_call_wakes_caller);
+    RUN(test_cancelled_actor_runs_terminate);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
