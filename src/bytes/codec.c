@@ -57,13 +57,21 @@ asx_decode_result asx_length_delimited_decode(void *codec_state, asx_buf_mut *sr
     /* Check max frame length */
     if (c->max_frame_len > 0 && frame_len > c->max_frame_len) return ASX_DECODE_ERROR;
 
-    /* Need length field + payload */
-    if (remaining < lfs + frame_len) return ASX_DECODE_NEED_MORE;
+    /* Without an explicit limit the buffer capacity is the limit: a frame
+     * that can never fit would otherwise be waited for forever. All sums
+     * are kept out of uint32 arithmetic: `lfs + frame_len` wraps for
+     * lengths near UINT32_MAX (an attacker-controlled header). */
+    if (c->max_frame_len == 0 && (src->capacity < lfs || frame_len > src->capacity - lfs)) {
+        return ASX_DECODE_ERROR;
+    }
+
+    /* Need length field + payload (remaining >= lfs here, no wrap) */
+    if (frame_len > remaining - lfs) return ASX_DECODE_NEED_MORE;
 
     /* Produce frame */
     out_frame->data = src->data + src->rd_pos + lfs;
     out_frame->len = frame_len;
-    src->rd_pos += lfs + frame_len;
+    src->rd_pos += (uint32_t)lfs + frame_len;
     return ASX_DECODE_FRAME;
 }
 

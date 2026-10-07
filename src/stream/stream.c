@@ -8,6 +8,9 @@
  */
 
 #include <asx/asx_config.h>
+#include <asx/core/broadcast.h>
+#include <asx/core/channel.h>
+#include <asx/core/watch.h>
 #include <asx/stream/stream.h>
 #include <string.h>
 
@@ -346,20 +349,10 @@ asx_status asx_stream_for_each(asx_stream *s, asx_stream_foreach_fn fn, void *us
 
 /*
  * Note: These adapters store the channel/watch/broadcast identifiers
- * but delegate actual receive operations to the existing channel APIs.
- * The poll functions call the appropriate try_recv and translate the
- * result to stream semantics.
- *
- * Because channel_try_recv/watch_recv/broadcast_try_recv are defined
- * in the core library (already linked), we forward-declare them here
- * rather than including all channel headers to avoid circular deps.
+ * but delegate actual receive operations to the existing channel APIs
+ * (declared by the channel headers). The poll functions call the
+ * appropriate try_recv and translate the result to stream semantics.
  */
-
-/* Forward declarations — defined in core/channel.c, core/watch.c, etc. */
-extern asx_status asx_channel_try_recv(uint16_t id, uint64_t *out_value);
-extern asx_status asx_watch_recv(void *rx, uint64_t *out_value);
-extern int asx_watch_has_changed(const void *rx);
-extern asx_status asx_broadcast_try_recv(void *rx, uint64_t *out_value);
 
 static asx_stream_result receiver_poll(void *state, const asx_waker *waker, void **out_item) {
     asx_stream_receiver_state *rs = (asx_stream_receiver_state *)state;
@@ -376,8 +369,8 @@ static asx_stream_result receiver_poll(void *state, const asx_waker *waker, void
     return ASX_STREAM_PENDING;
 }
 
-void asx_stream_from_receiver(asx_stream *s, asx_stream_receiver_state *state, uint16_t channel_id,
-                              void *recv_buf) {
+void asx_stream_from_receiver(asx_stream *s, asx_stream_receiver_state *state,
+                              asx_channel_id channel_id, void *recv_buf) {
     state->channel_id = channel_id;
     state->recv_buf = recv_buf;
     s->poll_next = receiver_poll;

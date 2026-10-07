@@ -23,6 +23,7 @@
 #define ASX_STREAM_STREAM_H
 
 #include <asx/asx_export.h>
+#include <asx/asx_ids.h>
 #include <asx/asx_status.h>
 #include <asx/runtime/waker.h>
 #include <stddef.h>
@@ -212,16 +213,17 @@ ASX_API ASX_MUST_USE asx_status asx_stream_for_each(asx_stream *s, asx_stream_fo
 /* ------------------------------------------------------------------ */
 
 /* ReceiverStream: wraps asx_channel_id receiver into a stream.
- * Each poll_next calls asx_channel_try_recv. */
+ * Each poll_next calls asx_channel_try_recv (so a pending poll inside a
+ * scheduler poll parks the task until the next commit). */
 typedef struct {
-    uint16_t channel_id; /* asx_channel_id */
-    void *recv_buf;      /* pointer to buffer for received item */
+    asx_channel_id channel_id; /* full typed handle (tag, generation, slot) */
+    void *recv_buf;            /* pointer to buffer for received item */
 } asx_stream_receiver_state;
 
 /* Initialize a stream that reads from a channel receiver.
- * recv_buf must be large enough to hold one channel item. */
+ * recv_buf must be large enough to hold one channel item (uint64_t). */
 ASX_API void asx_stream_from_receiver(asx_stream *s, asx_stream_receiver_state *state,
-                                      uint16_t channel_id, void *recv_buf);
+                                      asx_channel_id channel_id, void *recv_buf);
 
 /* WatchStream: wraps asx_watch into a stream of value changes. */
 typedef struct {

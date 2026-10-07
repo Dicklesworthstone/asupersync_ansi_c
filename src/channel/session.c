@@ -4,9 +4,17 @@
  * Walking skeleton: uses inline ring buffers (not MPSC channels)
  * to avoid coupling session arena to channel arena capacity.
  *
+ * Wake-driven waiting: inside a scheduler poll, try_recv on an empty
+ * direction and send on a full direction park the calling task in that
+ * direction's FIFO wait queue. Each queued message is owed to one parked
+ * receiver and each free slot to one parked sender (oldest first); an
+ * endpoint drop wakes every waiter so it observes the disconnect.
+ *
  * SPDX-License-Identifier: MIT
  */
 
+#include "../sync/wait_queue.h"
+#include <asx/asx_config.h>
 #include <asx/core/session.h>
 #include <asx/runtime/runtime.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
@@ -53,6 +61,17 @@ static int queue_pop(asx_session_queue *q, uint64_t *out) {
 /* Internal slot                                                       */
 /* ------------------------------------------------------------------ */
 
+/* Parked tasks per wait queue (one endpoint per side; slack for tasks
+ * sharing an endpoint). */
+#define SESSION_MAX_WAITERS 4u
+
+/* Wait queue indices: per direction, receivers then senders. */
+#define SESSION_WQ_I2R_RECV 0u
+#define SESSION_WQ_I2R_SEND 1u
+#define SESSION_WQ_R2I_RECV 2u
+#define SESSION_WQ_R2I_SEND 3u
+#define SESSION_WQ_COUNT 4u
+
 typedef struct {
     uint16_t generation;
     asx_session_state state;
@@ -62,7 +81,37 @@ typedef struct {
     asx_session_queue i2r; /* initiator → responder */
     asx_session_queue r2i; /* responder → initiator */
     uint32_t obligations;  /* outstanding request count */
+    asx_task_id wait_slots[SESSION_WQ_COUNT][SESSION_MAX_WAITERS];
+    asx_wait_queue waiters[SESSION_WQ_COUNT];
 } asx_session_slot;
+
+static void session_waiters_init(asx_session_slot *s) {
+    uint32_t i;
+    for (i = 0; i < SESSION_WQ_COUNT; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: SESSION_WQ_COUNT constant");
+        asx_wait_queue_init(&s->waiters[i], s->wait_slots[i], SESSION_MAX_WAITERS);
+    }
+}
+
+/* Re-balance one direction's queues: one parked receiver per queued
+ * message, one parked sender per free slot (FIFO). */
+static void session_settle(asx_session_slot *s, int i2r) {
+    asx_session_queue *q = i2r ? &s->i2r : &s->r2i;
+    asx_wait_queue *rx = &s->waiters[i2r ? SESSION_WQ_I2R_RECV : SESSION_WQ_R2I_RECV];
+    asx_wait_queue *tx = &s->waiters[i2r ? SESSION_WQ_I2R_SEND : SESSION_WQ_R2I_SEND];
+
+    if (rx->len > 0u) (void)asx_wait_queue_settle(rx, q->len);
+    if (tx->len > 0u) (void)asx_wait_queue_settle(tx, q->capacity - q->len);
+}
+
+/* A peer dropped: every waiter must observe the disconnect. */
+static void session_wake_everyone(asx_session_slot *s) {
+    uint32_t i;
+    for (i = 0; i < SESSION_WQ_COUNT; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: SESSION_WQ_COUNT constant");
+        if (s->waiters[i].len > 0u) (void)asx_wait_queue_wake_all(&s->waiters[i]);
+    }
+}
 
 /* ------------------------------------------------------------------ */
 /* Arena                                                               */
@@ -85,6 +134,7 @@ void asx_session_reset(void) {
         g_slots[i].initiator_alive = 0;
         g_slots[i].responder_alive = 0;
         g_slots[i].obligations = 0;
+        session_waiters_init(&g_slots[i]);
     }
     g_slot_count = 0;
 }
@@ -138,6 +188,7 @@ asx_status asx_session_create(asx_region_id region, uint32_t capacity,
     s->obligations = 0;
     queue_init(&s->i2r, capacity);
     queue_init(&s->r2i, capacity);
+    session_waiters_init(s);
 
     out_initiator->slot = idx;
     out_initiator->generation = s->generation;
@@ -168,6 +219,7 @@ void asx_session_endpoint_drop(asx_session_endpoint *ep) {
     } else if (s->state == ASX_SESSION_OPEN) {
         s->state = ASX_SESSION_HALF_CLOSED;
     }
+    session_wake_everyone(s);
 }
 
 /* ------------------------------------------------------------------ */
@@ -177,30 +229,43 @@ void asx_session_endpoint_drop(asx_session_endpoint *ep) {
 asx_status asx_session_send(asx_session_endpoint *ep, uint64_t value) {
     asx_session_slot *s;
     asx_session_queue *q;
+    asx_wait_queue *wq;
 
     if (ep == NULL) return ASX_E_INVALID_ARGUMENT;
     if (ep->slot >= g_slot_count) return ASX_E_NOT_FOUND;
 
     s = &g_slots[ep->slot];
     if (s->generation != ep->generation) return ASX_E_STALE_HANDLE;
+    wq = &s->waiters[ep->is_initiator ? SESSION_WQ_I2R_SEND : SESSION_WQ_R2I_SEND];
 
     /* Check sender is alive */
-    if (ep->is_initiator && !s->initiator_alive) return ASX_E_INVALID_STATE;
-    if (!ep->is_initiator && !s->responder_alive) return ASX_E_INVALID_STATE;
+    if ((ep->is_initiator && !s->initiator_alive) || (!ep->is_initiator && !s->responder_alive)) {
+        asx_wait_queue_leave_current(wq);
+        return ASX_E_INVALID_STATE;
+    }
 
     /* Check peer is alive */
-    if (ep->is_initiator && !s->responder_alive) return ASX_E_DISCONNECTED;
-    if (!ep->is_initiator && !s->initiator_alive) return ASX_E_DISCONNECTED;
+    if ((ep->is_initiator && !s->responder_alive) || (!ep->is_initiator && !s->initiator_alive)) {
+        asx_wait_queue_leave_current(wq);
+        return ASX_E_DISCONNECTED;
+    }
 
     /* Select direction */
     q = ep->is_initiator ? &s->i2r : &s->r2i;
 
-    if (!queue_push(q, value)) return ASX_E_CHANNEL_FULL;
+    if (!queue_push(q, value)) {
+        /* Full: park until the peer receives from this direction. */
+        session_settle(s, ep->is_initiator);
+        (void)asx_wait_queue_park_current(wq);
+        return ASX_E_CHANNEL_FULL;
+    }
 
     /* Initiator sends are requests: increment obligations */
     if (ep->is_initiator) { s->obligations++; }
 
     asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)ep->slot, value);
+    asx_wait_queue_leave_current(wq);
+    session_settle(s, ep->is_initiator);
 
     return ASX_OK;
 }
@@ -208,6 +273,7 @@ asx_status asx_session_send(asx_session_endpoint *ep, uint64_t value) {
 asx_status asx_session_try_recv(asx_session_endpoint *ep, uint64_t *out_value) {
     asx_session_slot *s;
     asx_session_queue *q;
+    asx_wait_queue *wq;
     int peer_alive;
 
     if (ep == NULL || out_value == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -219,6 +285,7 @@ asx_status asx_session_try_recv(asx_session_endpoint *ep, uint64_t *out_value) {
     /* Receive from the peer's send direction */
     q = ep->is_initiator ? &s->r2i : &s->i2r;
     peer_alive = ep->is_initiator ? s->responder_alive : s->initiator_alive;
+    wq = &s->waiters[ep->is_initiator ? SESSION_WQ_R2I_RECV : SESSION_WQ_I2R_RECV];
 
     if (queue_pop(q, out_value)) {
         /* Initiator receiving a response retires an outstanding obligation. */
@@ -226,10 +293,18 @@ asx_status asx_session_try_recv(asx_session_endpoint *ep, uint64_t *out_value) {
             if (s->obligations > 0) s->obligations--;
         }
         asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)ep->slot, *out_value);
+        asx_wait_queue_leave_current(wq);
+        session_settle(s, !ep->is_initiator); /* a slot freed for the peer */
         return ASX_OK;
     }
 
-    if (!peer_alive) return ASX_E_DISCONNECTED;
+    if (!peer_alive) {
+        asx_wait_queue_leave_current(wq);
+        return ASX_E_DISCONNECTED;
+    }
+    /* Empty: park until the peer sends in this direction or drops. */
+    session_settle(s, !ep->is_initiator);
+    (void)asx_wait_queue_park_current(wq);
     return ASX_E_WOULD_BLOCK;
 }
 

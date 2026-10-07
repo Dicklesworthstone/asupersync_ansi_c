@@ -4,9 +4,15 @@
  * Walking skeleton: fixed-size arena, single-threaded.
  * Ring buffer with per-receiver cursors.
  *
+ * Wake-driven waiting: try_recv reporting ASX_E_WOULD_BLOCK inside a
+ * scheduler poll parks the calling task. Every send (each receiver has its
+ * own cursor, so every receiver gains a message) and the sender drop wake
+ * all parked tasks, in FIFO order.
+ *
  * SPDX-License-Identifier: MIT
  */
 
+#include "../sync/wait_queue.h"
 #include <asx/core/broadcast.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
@@ -24,6 +30,8 @@ typedef struct {
     uint64_t buffer[ASX_BROADCAST_MAX_CAPACITY];
     uint32_t write_seq; /* next write position (monotonic) */
     uint32_t receiver_count;
+    asx_task_id wait_slots[ASX_BROADCAST_MAX_RECEIVERS];
+    asx_wait_queue waiters; /* tasks parked in try_recv */
 } asx_broadcast_slot;
 
 /* ------------------------------------------------------------------ */
@@ -39,6 +47,15 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
+static void broadcast_waiters_init(asx_broadcast_slot *s) {
+    asx_wait_queue_init(&s->waiters, s->wait_slots, ASX_BROADCAST_MAX_RECEIVERS);
+}
+
+/* New message or sender gone: every parked receiver task re-polls. */
+static void broadcast_wake_waiters(asx_broadcast_slot *s) {
+    if (s->waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->waiters);
+}
+
 void asx_broadcast_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_BROADCASTS; i++) {
@@ -48,6 +65,7 @@ void asx_broadcast_reset(void) {
         g_slots[i].write_seq = 0;
         g_slots[i].receiver_count = 0;
         memset(g_slots[i].buffer, 0, sizeof(g_slots[i].buffer));
+        broadcast_waiters_init(&g_slots[i]);
     }
     g_slot_count = 0;
 }
@@ -89,6 +107,7 @@ asx_status asx_broadcast_create(uint32_t capacity, asx_broadcast_sender *out_sen
     s->write_seq = 0;
     s->receiver_count = 1;
     memset(s->buffer, 0, sizeof(s->buffer));
+    broadcast_waiters_init(s);
 
     out_sender->slot = idx;
     out_sender->generation = s->generation;
@@ -126,6 +145,7 @@ void asx_broadcast_sender_drop(asx_broadcast_sender *sender) {
     s = &g_slots[sender->slot];
     if (s->generation != sender->generation) return;
     s->sender_alive = 0;
+    broadcast_wake_waiters(s);
 }
 
 void asx_broadcast_receiver_drop(asx_broadcast_receiver *receiver) {
@@ -158,6 +178,7 @@ asx_status asx_broadcast_send(asx_broadcast_sender *sender, uint64_t value) {
     s->write_seq++;
 
     asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
+    broadcast_wake_waiters(s);
 
     return ASX_OK;
 }
@@ -179,9 +200,16 @@ asx_status asx_broadcast_try_recv(asx_broadcast_receiver *receiver, uint64_t *ou
 
     /* Nothing to read */
     if (receiver->cursor >= s->write_seq) {
-        if (!s->sender_alive) return ASX_E_DISCONNECTED;
+        if (!s->sender_alive) {
+            asx_wait_queue_leave_current(&s->waiters);
+            return ASX_E_DISCONNECTED;
+        }
+        (void)asx_wait_queue_park_current(&s->waiters);
         return ASX_E_WOULD_BLOCK;
     }
+
+    /* Something to report: the caller's wait (if any) is over. */
+    asx_wait_queue_leave_current(&s->waiters);
 
     /* Check for lag: cursor too far behind write_seq */
     oldest_available = 0;

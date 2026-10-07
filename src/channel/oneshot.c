@@ -3,14 +3,23 @@
  *
  * Walking skeleton: fixed-size arena, single-threaded.
  *
+ * Wake-driven waiting: try_recv reporting ASX_E_WOULD_BLOCK inside a
+ * scheduler poll parks the calling task; the send, a sender drop, or a
+ * receiver drop wakes every parked task so it observes the final state.
+ *
  * SPDX-License-Identifier: MIT
  */
 
+#include "../sync/wait_queue.h"
 #include <asx/core/oneshot.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <string.h>
+
+/* Parked receiver tasks per oneshot (one receiver handle; slack for tasks
+ * sharing it). */
+#define ONESHOT_MAX_WAITERS 4u
 
 /* ------------------------------------------------------------------ */
 /* Internal slot                                                       */
@@ -22,6 +31,8 @@ typedef struct {
     uint64_t value;
     int sender_alive;
     int receiver_alive;
+    asx_task_id wait_slots[ONESHOT_MAX_WAITERS];
+    asx_wait_queue waiters; /* tasks parked in try_recv */
 } asx_oneshot_slot;
 
 /* ------------------------------------------------------------------ */
@@ -37,6 +48,12 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
+/* Final state reached (value sent, a side dropped): every parked task
+ * re-polls and observes it. */
+static void oneshot_wake_waiters(asx_oneshot_slot *s) {
+    if (s->waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->waiters);
+}
+
 void asx_oneshot_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_ONESHOTS; i++) {
@@ -45,6 +62,7 @@ void asx_oneshot_reset(void) {
         g_slots[i].value = 0;
         g_slots[i].sender_alive = 0;
         g_slots[i].receiver_alive = 0;
+        asx_wait_queue_init(&g_slots[i].waiters, g_slots[i].wait_slots, ONESHOT_MAX_WAITERS);
     }
     g_slot_count = 0;
 }
@@ -86,6 +104,7 @@ asx_status asx_oneshot_create(asx_oneshot_sender *out_sender, asx_oneshot_receiv
     s->value = 0;
     s->sender_alive = 1;
     s->receiver_alive = 1;
+    asx_wait_queue_init(&s->waiters, s->wait_slots, ONESHOT_MAX_WAITERS);
 
     out_sender->slot = idx;
     out_sender->generation = s->generation;
@@ -105,6 +124,7 @@ void asx_oneshot_sender_drop(asx_oneshot_sender *sender) {
 
     s->sender_alive = 0;
     if (s->state == ASX_ONESHOT_EMPTY) { s->state = ASX_ONESHOT_SENDER_DROPPED; }
+    oneshot_wake_waiters(s);
 }
 
 void asx_oneshot_receiver_drop(asx_oneshot_receiver *receiver) {
@@ -119,6 +139,7 @@ void asx_oneshot_receiver_drop(asx_oneshot_receiver *receiver) {
     if (s->state == ASX_ONESHOT_EMPTY || s->state == ASX_ONESHOT_FILLED) {
         s->state = ASX_ONESHOT_RECEIVER_DROPPED;
     }
+    oneshot_wake_waiters(s);
 }
 
 /* ------------------------------------------------------------------ */
@@ -147,6 +168,7 @@ asx_status asx_oneshot_try_send(asx_oneshot_sender *sender, uint64_t value) {
     s->sender_alive = 0;
 
     asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
+    oneshot_wake_waiters(s);
 
     return ASX_OK;
 }
@@ -159,21 +181,30 @@ asx_status asx_oneshot_try_recv(asx_oneshot_receiver *receiver, uint64_t *out_va
 
     s = &g_slots[receiver->slot];
     if (s->generation != receiver->generation) return ASX_E_STALE_HANDLE;
-    if (!s->receiver_alive) return ASX_E_INVALID_STATE;
+    if (!s->receiver_alive) {
+        asx_wait_queue_leave_current(&s->waiters);
+        return ASX_E_INVALID_STATE;
+    }
 
     if (s->state == ASX_ONESHOT_FILLED) {
         *out_value = s->value;
         s->state = ASX_ONESHOT_CONSUMED;
         s->receiver_alive = 0;
         asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)receiver->slot, s->value);
+        asx_wait_queue_leave_current(&s->waiters);
+        /* The receiver is spent: any other task parked on it must see that. */
+        oneshot_wake_waiters(s);
         return ASX_OK;
     }
 
     if (s->state == ASX_ONESHOT_SENDER_DROPPED || !s->sender_alive) {
         s->receiver_alive = 0;
+        asx_wait_queue_leave_current(&s->waiters);
+        oneshot_wake_waiters(s);
         return ASX_E_DISCONNECTED;
     }
 
+    (void)asx_wait_queue_park_current(&s->waiters);
     return ASX_E_WOULD_BLOCK;
 }
 

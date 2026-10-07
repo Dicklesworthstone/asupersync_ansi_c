@@ -131,6 +131,50 @@ TEST(ld_max_frame_exceeded) {
     ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_ERROR);
 }
 
+/* Regression: with the default max_frame_len (0 = no explicit limit),
+ * `remaining < lfs + frame_len` wrapped in uint32 for lengths near
+ * UINT32_MAX, so a 4-byte header claiming 0xFFFFFFFF (or 0xFFFFFFFD)
+ * produced a frame far past the end of the buffer. */
+TEST(ld_huge_length_does_not_wrap) {
+    static const uint32_t lengths[3] = {0xFFFFFFFFu, 0xFFFFFFFDu, 0xFFFFFFFCu};
+    asx_length_delimited_codec c;
+    asx_buf_mut buf;
+    asx_frame frame;
+    uint32_t i;
+
+    asx_length_delimited_codec_init(&c);
+    for (i = 0; i < 3u; i++) {
+        asx_buf_mut_init(&buf);
+        MUST_OK(asx_buf_mut_put_u32_be(&buf, lengths[i]));
+        MUST_OK(asx_buf_mut_put(&buf, "abcd", 4));
+        frame.data = NULL;
+        frame.len = 0;
+        ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame),
+                  (asx_decode_result)ASX_DECODE_ERROR);
+        ASSERT_EQ(frame.len, 0u);
+        ASSERT_EQ(buf.rd_pos, 0u); /* nothing consumed */
+    }
+}
+
+TEST(ld_frame_larger_than_buffer_is_error) {
+    asx_length_delimited_codec c;
+    asx_buf_mut buf;
+    asx_frame frame;
+
+    asx_length_delimited_codec_init(&c);
+    asx_buf_mut_init(&buf);
+
+    /* Can never fit in the buffer: an error, not an endless NEED_MORE. */
+    MUST_OK(asx_buf_mut_put_u32_be(&buf, buf.capacity - 3u));
+    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame), (asx_decode_result)ASX_DECODE_ERROR);
+
+    /* The largest frame that fits is still awaited / decoded. */
+    asx_buf_mut_init(&buf);
+    MUST_OK(asx_buf_mut_put_u32_be(&buf, buf.capacity - 4u));
+    ASSERT_EQ(asx_length_delimited_decode(&c, &buf, &frame),
+              (asx_decode_result)ASX_DECODE_NEED_MORE);
+}
+
 TEST(ld_encode_empty_frame) {
     asx_length_delimited_codec c;
     asx_buf_mut buf;
@@ -339,6 +383,8 @@ int main(void) {
     RUN_TEST(ld_decode_need_more);
     RUN_TEST(ld_decode_need_more_payload);
     RUN_TEST(ld_max_frame_exceeded);
+    RUN_TEST(ld_huge_length_does_not_wrap);
+    RUN_TEST(ld_frame_larger_than_buffer_is_error);
     RUN_TEST(ld_encode_empty_frame);
     RUN_TEST(ld_multiple_frames);
     RUN_TEST(ld_as_codec);

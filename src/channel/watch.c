@@ -3,9 +3,15 @@
  *
  * Walking skeleton: fixed-size arena, single-threaded.
  *
+ * Wake-driven waiting: asx_watch_poll_changed() reporting ASX_E_PENDING
+ * inside a scheduler poll parks the calling task; every publish and the
+ * sender drop wake all parked tasks (FIFO), since every receiver observes
+ * every new version.
+ *
  * SPDX-License-Identifier: MIT
  */
 
+#include "../sync/wait_queue.h"
 #include <asx/core/watch.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
@@ -22,6 +28,8 @@ typedef struct {
     uint64_t value;
     uint32_t version; /* incremented on each send */
     uint32_t receiver_count;
+    asx_task_id wait_slots[ASX_WATCH_MAX_RECEIVERS];
+    asx_wait_queue waiters; /* tasks parked in poll_changed */
 } asx_watch_slot;
 
 /* ------------------------------------------------------------------ */
@@ -37,6 +45,15 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
+static void watch_waiters_init(asx_watch_slot *s) {
+    asx_wait_queue_init(&s->waiters, s->wait_slots, ASX_WATCH_MAX_RECEIVERS);
+}
+
+/* New version or sender gone: every parked receiver task re-polls. */
+static void watch_wake_waiters(asx_watch_slot *s) {
+    if (s->waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->waiters);
+}
+
 void asx_watch_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_WATCHES; i++) {
@@ -45,6 +62,7 @@ void asx_watch_reset(void) {
         g_slots[i].value = 0;
         g_slots[i].version = 0;
         g_slots[i].receiver_count = 0;
+        watch_waiters_init(&g_slots[i]);
     }
     g_slot_count = 0;
 }
@@ -84,6 +102,7 @@ asx_status asx_watch_create(uint64_t initial_value, asx_watch_sender *out_sender
     s->value = initial_value;
     s->version = 1; /* start at version 1 so receivers can detect first value */
     s->receiver_count = 1;
+    watch_waiters_init(s);
 
     out_sender->slot = idx;
     out_sender->generation = s->generation;
@@ -120,6 +139,7 @@ void asx_watch_sender_drop(asx_watch_sender *sender) {
     s = &g_slots[sender->slot];
     if (s->generation != sender->generation) return;
     s->sender_alive = 0;
+    watch_wake_waiters(s);
 }
 
 void asx_watch_receiver_drop(asx_watch_receiver *receiver) {
@@ -149,6 +169,7 @@ asx_status asx_watch_send(asx_watch_sender *sender, uint64_t value) {
     s->version++;
 
     asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
+    watch_wake_waiters(s);
 
     return ASX_OK;
 }
@@ -182,6 +203,30 @@ int asx_watch_has_changed(const asx_watch_receiver *receiver) {
     if (s->generation != receiver->generation) return 0;
 
     return s->version != receiver->last_seen_version;
+}
+
+asx_status asx_watch_poll_changed(asx_watch_receiver *receiver) {
+    asx_watch_slot *s;
+
+    if (receiver == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (receiver->slot >= g_slot_count) return ASX_E_NOT_FOUND;
+
+    s = &g_slots[receiver->slot];
+    if (s->generation != receiver->generation) return ASX_E_STALE_HANDLE;
+
+    if (s->version != receiver->last_seen_version) {
+        receiver->last_seen_version = s->version;
+        asx_wait_queue_leave_current(&s->waiters);
+        return ASX_OK;
+    }
+
+    if (!s->sender_alive) {
+        asx_wait_queue_leave_current(&s->waiters);
+        return ASX_E_DISCONNECTED;
+    }
+
+    (void)asx_wait_queue_park_current(&s->waiters);
+    return ASX_E_PENDING;
 }
 
 /* ------------------------------------------------------------------ */

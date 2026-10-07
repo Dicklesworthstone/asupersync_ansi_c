@@ -16,6 +16,7 @@
 
 #include <asx/asx_config.h>
 #include <asx/asx_export.h>
+#include <asx/asx_ids.h>
 #include <asx/asx_status.h>
 #include <stdint.h>
 
@@ -35,6 +36,8 @@ extern "C" {
 #define ASX_POOL_MAX_RESOURCES 16u
 #endif
 
+/* Tasks that can park in try_acquire per pool; further waiters yield and
+ * are re-polled every round. */
 #ifndef ASX_POOL_MAX_WAITERS
 #define ASX_POOL_MAX_WAITERS 8u
 #endif
@@ -74,7 +77,7 @@ typedef struct {
     uint32_t idle;               /* resources available in pool */
     uint32_t total;              /* active + idle */
     uint32_t max_size;           /* maximum pool size */
-    uint32_t waiters;            /* threads/tasks waiting for a resource */
+    uint32_t waiters;            /* tasks parked in try_acquire */
     uint64_t total_acquisitions; /* lifetime acquisition count */
     uint64_t total_creates;      /* lifetime resource creation count */
     uint64_t health_failures;    /* resources discarded by health check */
@@ -115,10 +118,22 @@ ASX_API asx_status asx_pool_close(asx_pool_handle handle);
 
 /* Try to acquire a resource immediately.
  * Returns ASX_OK and fills *out on success.
- * Returns ASX_E_WOULD_BLOCK if no resource available.
+ * Returns ASX_E_WOULD_BLOCK if no resource available, or if the available
+ *   ones belong to tasks parked earlier (FIFO: no queue jumping); inside a
+ *   scheduler poll the calling task is then parked until a resource is
+ *   returned or the pool closes.
  * Returns ASX_E_DISCONNECTED if pool is closed.
  * Health-checks idle resources before returning them. */
 ASX_API asx_status asx_pool_try_acquire(asx_pool_handle handle, asx_pooled_resource *out);
+
+/* Withdraw `task` from the pool's wait queue — the analog of dropping a
+ * Rust acquire future. Call it when a task that parked in try_acquire
+ * stops waiting; a wake already delivered to it passes to the next waiter.
+ * Completed or cancel-pending tasks never absorb a wake.
+ * Returns ASX_OK (also when `task` was not queued), ASX_E_STALE_HANDLE for
+ *   an invalid pool handle.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API asx_status asx_pool_wait_cancel(asx_pool_handle handle, asx_task_id task);
 
 /* Return a resource to the pool. If the pool is closed, the resource
  * is destroyed. If health check fails on return, it's destroyed. */

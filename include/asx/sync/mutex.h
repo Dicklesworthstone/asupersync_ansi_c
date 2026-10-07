@@ -67,7 +67,9 @@ ASX_API ASX_MUST_USE asx_status asx_mutex_lock_begin(asx_mutex_handle handle,
                                                      asx_mutex_lock_waiter *out);
 
 /* Poll for lock. Returns ASX_OK + guard when acquired,
- * ASX_E_PENDING when waiting. */
+ * ASX_E_PENDING when waiting. Lockers are served in arrival (FIFO) order;
+ * inside a scheduler poll an ASX_E_PENDING result parks the calling task
+ * until the unlock that hands it the lock (or close). */
 ASX_API asx_status asx_mutex_poll_lock(asx_mutex_lock_waiter *waiter, asx_mutex_guard *out,
                                        asx_cx *cx);
 

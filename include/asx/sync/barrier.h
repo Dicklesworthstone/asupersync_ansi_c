@@ -65,7 +65,8 @@ ASX_API ASX_MUST_USE asx_status asx_barrier_wait_begin(asx_barrier_handle handle
 
 /* Poll for barrier release. Returns ASX_OK when all N arrived
  * (check waiter->is_leader for leader election),
- * ASX_E_PENDING when still waiting. */
+ * ASX_E_PENDING when still waiting; inside a scheduler poll the calling
+ * task is then parked until the last arrival (or close) wakes it. */
 ASX_API asx_status asx_barrier_poll_wait(asx_barrier_waiter *waiter, asx_cx *cx);
 
 /* Cancel a barrier wait. */

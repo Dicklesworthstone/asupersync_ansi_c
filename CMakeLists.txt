@@ -99,6 +99,7 @@ set(ASX_RUNTIME_SRC
 
 set(ASX_CHANNEL_SRC
     src/channel/mpsc.c
+    src/sync/wait_queue.c
 )
 
 set(ASX_TIME_SRC

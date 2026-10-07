@@ -82,18 +82,25 @@ ASX_API ASX_MUST_USE asx_status asx_semaphore_acquire_begin(asx_semaphore_handle
                                                             asx_semaphore_waiter *out);
 
 /* Poll for permit. Returns ASX_OK + permit when acquired,
- * ASX_E_PENDING when waiting. */
+ * ASX_E_PENDING when waiting. Permits go to waiters in arrival (FIFO)
+ * order: a waiter takes a free permit only when no earlier waiter is still
+ * queued. Inside a scheduler poll an ASX_E_PENDING result parks the
+ * calling task until a release grants it the permit (or close). */
 ASX_API asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter,
                                               asx_semaphore_permit *out, asx_cx *cx);
 
-/* Cancel an async acquire (safe even if already acquired). */
+/* Cancel an async acquire (safe even if already acquired). A permit that
+ * was already granted to the waiter passes on to the next waiter in line.
+ * Waiters whose parked task completed without cancelling are reclaimed
+ * lazily, and cancel-pending waiters are skipped when granting. */
 ASX_API asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter);
 
 /* -------------------------------------------------------------------
  * Release
  * ------------------------------------------------------------------- */
 
-/* Release a permit back to the semaphore. Wakes one waiter if any. */
+/* Release a permit back to the semaphore. Grants it to the oldest waiter
+ * (waking its task if parked) if any, else returns it to the pool. */
 ASX_API asx_status asx_semaphore_release(asx_semaphore_permit permit);
 
 /* -------------------------------------------------------------------

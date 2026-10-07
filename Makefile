@@ -182,6 +182,7 @@ CHANNEL_SRC := \
 	src/channel/watch.c
 
 SYNC_SRC := \
+	src/sync/wait_queue.c \
 	src/sync/notify.c \
 	src/sync/semaphore.c \
 	src/sync/barrier.c \
