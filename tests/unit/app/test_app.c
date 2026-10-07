@@ -44,6 +44,17 @@ static asx_status st_sink_;
         g_pass++;                                                                                  \
     } while (0)
 
+/* The server scenarios exercise app orchestration over the deterministic
+ * host models. Live POSIX runtimes switch fs/process/signal to their
+ * native backends at init, so pin the models explicitly (a no-op where
+ * they are already selected). Native integration is covered by the
+ * *_native suites. */
+static void use_memory_host(void) {
+    MUST_OK(asx_fs_set_backend(ASX_FS_BACKEND_MEMORY));
+    MUST_OK(asx_process_set_backend(ASX_PROCESS_BACKEND_MEMORY));
+    MUST_OK(asx_signal_set_backend(ASX_SIGNAL_BACKEND_MEMORY));
+}
+
 /* ================================================================== */
 /* NET: Socket address tests                                          */
 /* ================================================================== */
@@ -926,6 +937,7 @@ static void test_app_run_server_happy_path(void) {
     server.require_config = 1;
 
     MUST_OK(asx_app_init(&app, &config));
+    use_memory_host();
     MUST_OK(asx_fs_path_from_cstr(&path, "/service/app.cfg"));
     server.config_path = &path;
     MUST_OK(asx_fs_file_open(&file, &path, ASX_FS_OPEN_CREATE | ASX_FS_OPEN_WRITE));
@@ -964,6 +976,7 @@ static void test_app_run_server_with_cx_happy_path(void) {
     server.run_poll_budget = 20;
 
     MUST_OK(asx_app_init(&app, &config));
+    use_memory_host();
     MUST_OK(asx_cx_init(&cx, asx_app_region(&app), ASX_INVALID_ID, ASX_CAP_SPAWN));
 
     ASSERT(asx_app_run_server_with_cx(&app, &cx, &server, noop_poll, NULL, &report, NULL) ==
@@ -990,6 +1003,7 @@ static void test_app_run_server_requires_config(void) {
     server.shutdown_signal = ASX_SIGNAL_TERM;
 
     MUST_OK(asx_app_init(&app, &config));
+    use_memory_host();
     ASSERT(asx_app_run_server(&app, &server, noop_poll, NULL, &report, NULL) == ASX_EXIT_OK,
            "no config path accepted when absent");
 
@@ -1020,6 +1034,7 @@ static void test_app_run_server_signal_shutdown(void) {
     server.bootstrap_process_name = "sidecar";
 
     MUST_OK(asx_app_init(&app, &config));
+    use_memory_host();
     MUST_OK(asx_signal_raise(ASX_SIGNAL_TERM));
     ASSERT(asx_app_run_server(&app, &server, noop_poll, NULL, &report, NULL) == ASX_EXIT_OK,
            "signal shutdown still clean");
@@ -1044,6 +1059,7 @@ static void test_app_run_server_bootstrap_failure(void) {
     server.bootstrap_exit_code = 23;
 
     MUST_OK(asx_app_init(&app, &config));
+    use_memory_host();
     ASSERT(asx_app_run_server(&app, &server, noop_poll, NULL, &report, NULL) ==
                ASX_EXIT_TASK_FAILED,
            "unexpected bootstrap failure bubbles");
@@ -1066,6 +1082,7 @@ static void test_app_run_server_with_cx_permission_denied_fails_closed(void) {
     server.bootstrap_process_name = "sidecar";
 
     MUST_OK(asx_app_init(&app, &config));
+    use_memory_host();
     MUST_OK(asx_cx_init(&cx, asx_app_region(&app), ASX_INVALID_ID, ASX_CAP_CLOCK_READ));
 
     ASSERT(asx_app_run_server_with_cx(&app, &cx, &server, noop_poll, NULL, &report, NULL) ==
@@ -1095,6 +1112,7 @@ static void test_app_run_server_with_cx_region_mismatch_fails_closed(void) {
     server.bootstrap_process_name = "sidecar";
 
     MUST_OK(asx_app_init(&app, &config));
+    use_memory_host();
     MUST_OK(asx_cx_init(&cx, asx_app_region(&app) + 1u, ASX_INVALID_ID, ASX_CAP_SPAWN));
 
     ASSERT(asx_app_run_server_with_cx(&app, &cx, &server, noop_poll, NULL, &report, NULL) ==

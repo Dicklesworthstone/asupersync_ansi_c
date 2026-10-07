@@ -10,13 +10,16 @@
 #include "runtime_internal.h"
 #include <asx/asx_config.h>
 #include <asx/core/transition.h>
+#include <asx/fs/fs.h>
 #include <asx/net/net.h>
+#include <asx/process/process.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/builder.h>
 #include <asx/runtime/config_reload.h>
 #include <asx/runtime/io_driver.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
+#include <asx/signal/signal.h>
 #include <stddef.h>
 #include <string.h>
 #if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
@@ -211,10 +214,18 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
 #endif
 
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES && !ASX_DETERMINISTIC
-    /* A live readiness reactor means real I/O: sockets created from now on
-     * use the native backend (where the platform provides one). */
+    /* A live readiness reactor means real I/O: sockets, files, child
+     * processes and signal subscriptions created from now on use the
+     * native backends (where the platform provides them; elsewhere the
+     * setters refuse and the deterministic models stay selected). */
     if (asx_io_driver_is_live()) {
         st = asx_net_set_backend(ASX_NET_BACKEND_NATIVE);
+        (void)st;
+        st = asx_fs_set_backend(ASX_FS_BACKEND_NATIVE);
+        (void)st;
+        st = asx_process_set_backend(ASX_PROCESS_BACKEND_NATIVE);
+        (void)st;
+        st = asx_signal_set_backend(ASX_SIGNAL_BACKEND_NATIVE);
         (void)st;
     }
 #endif
