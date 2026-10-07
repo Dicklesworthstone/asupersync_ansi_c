@@ -10,7 +10,8 @@
  *   - Multiple receivers: each tracks their own "seen" version
  *   - Changed detection: receivers know if value changed since last read
  *
- * Walking skeleton: single-threaded, non-blocking.
+ * Walking skeleton: single-threaded, non-blocking. Wake-driven waiting for
+ * changes goes through asx_watch_poll_changed().
  *
  * SPDX-License-Identifier: MIT
  */
@@ -88,8 +89,22 @@ ASX_API ASX_MUST_USE asx_status asx_watch_send(asx_watch_sender *sender, uint64_
 ASX_API ASX_MUST_USE asx_status asx_watch_recv(asx_watch_receiver *receiver, uint64_t *out_value);
 
 /* Check if the value has changed since this receiver last read it.
- * Returns 1 if changed, 0 if not (or on error). */
+ * Returns 1 if changed, 0 if not (or on error). A pure query: never parks.
+ */
 ASX_API int asx_watch_has_changed(const asx_watch_receiver *receiver);
+
+/* Wait for a change (upstream Receiver::changed). Poll-style.
+ * Returns ASX_OK if a version this receiver has not seen is available and
+ *   marks it seen (read it with asx_watch_recv).
+ * Returns ASX_E_PENDING if nothing changed; inside a scheduler poll the
+ *   calling task is then parked until the next send or the sender drop
+ *   (every send wakes every parked receiver task, FIFO).
+ * Returns ASX_E_DISCONNECTED if the sender was dropped and no unseen
+ *   version remains.
+ * Returns ASX_E_INVALID_ARGUMENT for a NULL receiver, ASX_E_NOT_FOUND /
+ *   ASX_E_STALE_HANDLE for invalid handles.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_watch_poll_changed(asx_watch_receiver *receiver);
 
 /* -------------------------------------------------------------------
  * API: Query

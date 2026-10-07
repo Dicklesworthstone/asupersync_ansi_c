@@ -9,7 +9,9 @@
  * ASX_E_DISCONNECTED on the receiver side. Dropping the receiver
  * without receiving returns ASX_E_DISCONNECTED on send.
  *
- * Walking skeleton: single-threaded, non-blocking.
+ * Walking skeleton: single-threaded, non-blocking. Wake-driven: a receive
+ * that would block inside a scheduler poll parks the calling task until
+ * the value is sent or either side is dropped.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -83,7 +85,8 @@ ASX_API ASX_MUST_USE asx_status asx_oneshot_try_send(asx_oneshot_sender *sender,
 
 /* Try to receive the value. Non-blocking.
  * Returns ASX_OK and fills *out_value if a value is available.
- * Returns ASX_E_WOULD_BLOCK if sender hasn't sent yet.
+ * Returns ASX_E_WOULD_BLOCK if sender hasn't sent yet; inside a scheduler
+ *   poll the calling task is then parked until the send or a drop.
  * Returns ASX_E_DISCONNECTED if sender dropped without sending. */
 ASX_API ASX_MUST_USE asx_status asx_oneshot_try_recv(asx_oneshot_receiver *receiver,
                                                      uint64_t *out_value);

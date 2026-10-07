@@ -1,11 +1,25 @@
 /*
  * pool.c — generic resource pool with health checks and stats
  *
+ * Wake-driven waiting: try_acquire reporting ASX_E_WOULD_BLOCK inside a
+ * scheduler poll parks the calling task in the pool's FIFO wait queue.
+ * After every state change the queue is settled: each idle resource (or
+ * free creation slot) is owed to one parked task, oldest first, so a
+ * return wakes one waiter, and nobody jumps the line (with k resources
+ * available only the first k parked waiters may take one). Close wakes
+ * every waiter so it observes ASX_E_DISCONNECTED. asx_pool_wait_cancel()
+ * withdraws a task that stops waiting and passes any wake it held on.
+ *
  * SPDX-License-Identifier: MIT
  */
 
+#include "wait_queue.h"
 #include <asx/sync/pool.h>
 #include <string.h>
+
+#if (ASX_POOL_MAX_WAITERS) < 1 || (ASX_POOL_MAX_WAITERS) > (ASX_WAIT_QUEUE_MAX_CAPACITY)
+#error "ASX_POOL_MAX_WAITERS must be in [1, ASX_WAIT_QUEUE_MAX_CAPACITY]"
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Arena                                                               */
@@ -28,6 +42,8 @@ typedef struct {
     uint64_t total_acquisitions;
     uint64_t total_creates;
     uint64_t health_failures;
+    asx_task_id wait_slots[ASX_POOL_MAX_WAITERS];
+    asx_wait_queue waiters; /* tasks parked in try_acquire */
 } pool_slot;
 
 static pool_slot g_slots[ASX_POOL_MAX];
@@ -60,6 +76,24 @@ static int health_check(pool_slot *ps, resource_slot *rs) {
     return ps->config.health_fn(rs->resource, ps->config.factory_data);
 }
 
+/* Resources a try_acquire could get right now: idle ones plus room to
+ * create new ones (an idle resource failing its health check is replaced
+ * by a creation, so it still counts). */
+static uint32_t pool_available(const pool_slot *ps) {
+    uint32_t i;
+    uint32_t n = 0;
+    for (i = 0; i < ASX_POOL_MAX_RESOURCES; i++) {
+        if (ps->resources[i].state == RESOURCE_IDLE) n++;
+    }
+    if (ps->resource_count < ps->config.max_size) n += ps->config.max_size - ps->resource_count;
+    return n;
+}
+
+/* Owe each available resource to one parked waiter, oldest first. */
+static void pool_settle(pool_slot *ps) {
+    if (ps->waiters.len > 0u) (void)asx_wait_queue_settle(&ps->waiters, pool_available(ps));
+}
+
 /* ------------------------------------------------------------------ */
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
@@ -87,6 +121,7 @@ asx_status asx_pool_create(const asx_pool_config *config, asx_pool_handle *out) 
                 ps->resources[j].resource = NULL;
                 ps->resources[j].state = RESOURCE_EMPTY;
             }
+            asx_wait_queue_init(&ps->waiters, ps->wait_slots, ASX_POOL_MAX_WAITERS);
             out->slot = i;
             out->generation = ps->generation;
             if (i >= g_slot_count) g_slot_count = i + 1;
@@ -111,6 +146,8 @@ asx_status asx_pool_close(asx_pool_handle handle) {
         }
     }
 
+    /* Every parked waiter re-polls and observes the close. */
+    if (ps->waiters.len > 0u) (void)asx_wait_queue_wake_all(&ps->waiters);
     return ASX_OK;
 }
 
@@ -124,7 +161,18 @@ asx_status asx_pool_try_acquire(asx_pool_handle handle, asx_pooled_resource *out
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     if (ps == NULL) return ASX_E_STALE_HANDLE;
-    if (ps->closed) return ASX_E_DISCONNECTED;
+    if (ps->closed) {
+        asx_wait_queue_leave_current(&ps->waiters);
+        return ASX_E_DISCONNECTED;
+    }
+
+    /* FIFO window: with k resources available, the first k parked waiters
+     * own them; later arrivals (and newcomers) wait their turn. */
+    if (ps->waiters.len > 0u && asx_wait_queue_live_ahead(&ps->waiters) >= pool_available(ps)) {
+        pool_settle(ps);
+        (void)asx_wait_queue_park_current(&ps->waiters);
+        return ASX_E_WOULD_BLOCK;
+    }
 
     /* Try to find a healthy idle resource */
     for (i = 0; i < ASX_POOL_MAX_RESOURCES; i++) {
@@ -143,6 +191,8 @@ asx_status asx_pool_try_acquire(asx_pool_handle handle, asx_pooled_resource *out
             out->resource_slot = i;
             out->generation = handle.generation;
             out->resource = ps->resources[i].resource;
+            asx_wait_queue_leave_current(&ps->waiters);
+            pool_settle(ps);
             return ASX_OK;
         }
     }
@@ -153,7 +203,10 @@ asx_status asx_pool_try_acquire(asx_pool_handle handle, asx_pooled_resource *out
             if (ps->resources[i].state == RESOURCE_EMPTY) {
                 void *new_resource = NULL;
                 asx_status st = ps->config.create_fn(ps->config.factory_data, &new_resource);
-                if (st != ASX_OK) return st;
+                if (st != ASX_OK) {
+                    asx_wait_queue_leave_current(&ps->waiters);
+                    return st;
+                }
 
                 ps->resources[i].resource = new_resource;
                 ps->resources[i].state = RESOURCE_ACTIVE;
@@ -164,12 +217,26 @@ asx_status asx_pool_try_acquire(asx_pool_handle handle, asx_pooled_resource *out
                 out->resource_slot = i;
                 out->generation = handle.generation;
                 out->resource = new_resource;
+                asx_wait_queue_leave_current(&ps->waiters);
+                pool_settle(ps);
                 return ASX_OK;
             }
         }
     }
 
+    /* Exhausted: inside a scheduler poll, park until a resource returns. */
+    pool_settle(ps);
+    (void)asx_wait_queue_park_current(&ps->waiters);
     return ASX_E_WOULD_BLOCK;
+}
+
+asx_status asx_pool_wait_cancel(asx_pool_handle handle, asx_task_id task) {
+    pool_slot *ps = slot_lookup(handle.slot, handle.generation);
+    if (ps == NULL) return ASX_E_STALE_HANDLE;
+
+    /* A wake the withdrawn task held goes to the next waiter in line. */
+    if (asx_wait_queue_remove(&ps->waiters, task)) pool_settle(ps);
+    return ASX_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -197,8 +264,9 @@ asx_status asx_pool_return(asx_pooled_resource *pr) {
         destroy_resource(ps, rs);
         ps->resource_count--;
     } else {
-        /* Return to idle pool */
+        /* Return to idle pool and hand it to the oldest parked waiter */
         rs->state = RESOURCE_IDLE;
+        pool_settle(ps);
     }
 
     pr->resource = NULL; /* prevent use-after-return */
@@ -224,6 +292,7 @@ asx_status asx_pool_get_stats(asx_pool_handle handle, asx_pool_stats *out) {
     }
     out->total = out->active + out->idle;
     out->max_size = ps->config.max_size;
+    out->waiters = asx_wait_queue_len(&ps->waiters);
     out->total_acquisitions = ps->total_acquisitions;
     out->total_creates = ps->total_creates;
     out->health_failures = ps->health_failures;
@@ -254,6 +323,7 @@ void asx_pool_reset(void) {
         g_slots[i].alive = 0;
         g_slots[i].closed = 0;
         g_slots[i].resource_count = 0;
+        asx_wait_queue_init(&g_slots[i].waiters, g_slots[i].wait_slots, ASX_POOL_MAX_WAITERS);
     }
     g_slot_count = 0;
 }

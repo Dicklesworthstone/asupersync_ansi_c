@@ -76,7 +76,9 @@ ASX_API void asx_session_endpoint_drop(asx_session_endpoint *ep);
 /* Send a request (initiator→responder) or response (responder→initiator).
  * Increments the outstanding obligation count when sending a request.
  * Returns ASX_OK on success.
- * Returns ASX_E_CHANNEL_FULL if the direction's buffer is full.
+ * Returns ASX_E_CHANNEL_FULL if the direction's buffer is full; inside a
+ *   scheduler poll the calling task is then parked until the peer receives
+ *   from this direction or an endpoint drops.
  * Returns ASX_E_DISCONNECTED if peer dropped. */
 ASX_API ASX_MUST_USE asx_status asx_session_send(asx_session_endpoint *ep, uint64_t value);
 
@@ -84,7 +86,9 @@ ASX_API ASX_MUST_USE asx_status asx_session_send(asx_session_endpoint *ep, uint6
  * Decrements obligation count when the initiator receives a response,
  * retiring an outstanding request/response obligation.
  * Returns ASX_OK and fills *out_value on success.
- * Returns ASX_E_WOULD_BLOCK if no messages.
+ * Returns ASX_E_WOULD_BLOCK if no messages; inside a scheduler poll the
+ *   calling task is then parked until the peer sends in this direction or
+ *   an endpoint drops.
  * Returns ASX_E_DISCONNECTED if peer dropped and no messages remain. */
 ASX_API ASX_MUST_USE asx_status asx_session_try_recv(asx_session_endpoint *ep, uint64_t *out_value);
 

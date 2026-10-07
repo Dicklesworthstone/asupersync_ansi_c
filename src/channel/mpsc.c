@@ -12,6 +12,17 @@
  *
  * Capacity invariant: queue_len + reserved_count <= capacity
  *
+ * Wake-driven waiting: inside a scheduler poll, try_recv (empty) and
+ * try_reserve (full) park the calling task in the channel's FIFO recv /
+ * reserve wait queue. After every state change the queues are settled:
+ * each committed message is owed to one parked receiver, and free capacity
+ * to the head of the reserve line (a commit wakes one receiver, a dequeue
+ * or abort wakes the oldest producer). As upstream, try_reserve never
+ * jumps the line: with a live producer parked ahead it reports FULL even
+ * if capacity is free. Closing either side wakes everyone.
+ * asx_channel_wait_cancel() withdraws a task that stops waiting and passes
+ * any wake it held on. Outside a scheduler poll nothing parks.
+ *
  * Semantics specified in docs/CHANNEL_TIMER_KERNEL_SEMANTICS.md.
  *
  * ASX_PROOF_BLOCK_WAIVER("reason: bug fix for recv after close, no semantic break")
@@ -19,6 +30,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../sync/wait_queue.h"
 #include <asx/asx.h>
 #include <asx/core/channel.h>
 #include <asx/platform/atomics.h>
@@ -26,6 +38,10 @@
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <string.h>
+
+#if (ASX_CHANNEL_MAX_WAITERS) < 1 || (ASX_CHANNEL_MAX_WAITERS) > (ASX_WAIT_QUEUE_MAX_CAPACITY)
+#error "ASX_CHANNEL_MAX_WAITERS must be in [1, ASX_WAIT_QUEUE_MAX_CAPACITY]"
+#endif
 
 #ifndef ASX_CHANNEL_BACKEND_LOCKFREE
 #if (defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_PARALLEL)) && !ASX_LOCKFREE_SINGLE_THREAD
@@ -74,6 +90,12 @@ typedef struct {
 #if ASX_CHANNEL_BACKEND_LOCKFREE
     asx_channel_lf_queue lf_queue;
 #endif
+
+    /* Parked tasks (scheduler-thread state; FIFO by arrival) */
+    asx_task_id recv_wait_slots[ASX_CHANNEL_MAX_WAITERS];
+    asx_task_id reserve_wait_slots[ASX_CHANNEL_MAX_WAITERS];
+    asx_wait_queue recv_waiters;    /* waiting for a committed message */
+    asx_wait_queue reserve_waiters; /* waiting for free capacity */
 } asx_channel_slot;
 
 static asx_channel_slot g_channels[ASX_MAX_CHANNELS];
@@ -300,6 +322,56 @@ static asx_status channel_lf_dequeue(asx_channel_slot *s, uint64_t *out_value) {
 #endif
 
 /* ------------------------------------------------------------------ */
+/* Wait queues                                                        */
+/* ------------------------------------------------------------------ */
+
+static void channel_waiters_init(asx_channel_slot *s) {
+    asx_wait_queue_init(&s->recv_waiters, s->recv_wait_slots, ASX_CHANNEL_MAX_WAITERS);
+    asx_wait_queue_init(&s->reserve_waiters, s->reserve_wait_slots, ASX_CHANNEL_MAX_WAITERS);
+}
+
+/* Committed messages ready for try_recv. */
+static uint32_t channel_message_count(asx_channel_slot *s) {
+#if ASX_CHANNEL_BACKEND_LOCKFREE
+    return channel_atomic_load(&s->lf_queue.committed);
+#else
+    return s->queue_len;
+#endif
+}
+
+/* Capacity try_reserve could claim right now. */
+static uint32_t channel_free_capacity(asx_channel_slot *s) {
+    uint32_t used;
+#if ASX_CHANNEL_BACKEND_LOCKFREE
+    used = channel_atomic_load(&s->lf_queue.in_use);
+#else
+    used = s->queue_len + channel_atomic_load(&s->reserved);
+#endif
+    return used < s->capacity ? s->capacity - used : 0u;
+}
+
+/* Re-balance both wait queues after a state change: one queued receiver
+ * per committed message holds a wake, and the head of the reserve line
+ * holds one while capacity is free (only the head may claim it; when it
+ * does, the next head is woken). The length checks keep queue-free
+ * channels (the common case, and every foreign-thread producer of the
+ * lock-free backend) off the queue code. */
+static void channel_settle(asx_channel_slot *s) {
+    if (s->recv_waiters.len > 0u) {
+        (void)asx_wait_queue_settle(&s->recv_waiters, channel_message_count(s));
+    }
+    if (s->reserve_waiters.len > 0u) {
+        (void)asx_wait_queue_settle(&s->reserve_waiters, channel_free_capacity(s) > 0u ? 1u : 0u);
+    }
+}
+
+/* Close / disconnect: every waiter must observe the new state. */
+static void channel_wake_everyone(asx_channel_slot *s) {
+    if (s->recv_waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->recv_waiters);
+    if (s->reserve_waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->reserve_waiters);
+}
+
+/* ------------------------------------------------------------------ */
 /* Channel lifecycle                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -337,6 +409,7 @@ asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_chann
 #if ASX_CHANNEL_BACKEND_LOCKFREE
             channel_lf_init(s);
 #endif
+            channel_waiters_init(s);
 
             g_channel_count++;
             *out_id = channel_make_handle(i, s->generation);
@@ -355,8 +428,14 @@ asx_status asx_channel_close_sender(asx_channel_id id) {
     if (st != ASX_OK) { return st; }
 
     switch (s->state) {
-    case ASX_CHANNEL_OPEN: s->state = ASX_CHANNEL_SENDER_CLOSED; return ASX_OK;
-    case ASX_CHANNEL_RECEIVER_CLOSED: s->state = ASX_CHANNEL_FULLY_CLOSED; return ASX_OK;
+    case ASX_CHANNEL_OPEN:
+        s->state = ASX_CHANNEL_SENDER_CLOSED;
+        channel_wake_everyone(s);
+        return ASX_OK;
+    case ASX_CHANNEL_RECEIVER_CLOSED:
+        s->state = ASX_CHANNEL_FULLY_CLOSED;
+        channel_wake_everyone(s);
+        return ASX_OK;
     case ASX_CHANNEL_SENDER_CLOSED:
     case ASX_CHANNEL_FULLY_CLOSED: return ASX_E_INVALID_STATE;
     }
@@ -379,6 +458,7 @@ asx_status asx_channel_close_receiver(asx_channel_id id) {
         s->queue_len = 0;
         s->queue_head = 0;
 #endif
+        channel_wake_everyone(s);
         return ASX_OK;
     case ASX_CHANNEL_SENDER_CLOSED: s->state = ASX_CHANNEL_FULLY_CLOSED;
 #if ASX_CHANNEL_BACKEND_LOCKFREE
@@ -387,6 +467,7 @@ asx_status asx_channel_close_receiver(asx_channel_id id) {
         s->queue_len = 0;
         s->queue_head = 0;
 #endif
+        channel_wake_everyone(s);
         return ASX_OK;
     case ASX_CHANNEL_RECEIVER_CLOSED:
     case ASX_CHANNEL_FULLY_CLOSED: return ASX_E_INVALID_STATE;
@@ -443,6 +524,15 @@ asx_status asx_channel_reserved_count(asx_channel_id id, uint32_t *out) {
 /* Two-phase send: reserve                                            */
 /* ------------------------------------------------------------------ */
 
+/* try_reserve found no capacity: park the calling task until a dequeue or
+ * abort frees a slot. Settling first re-issues any wake that a receiver
+ * which died after being woken can no longer act on. */
+static asx_status channel_reserve_full(asx_channel_slot *s) {
+    channel_settle(s);
+    (void)asx_wait_queue_park_current(&s->reserve_waiters);
+    return ASX_E_CHANNEL_FULL;
+}
+
 asx_status asx_channel_try_reserve(asx_channel_id id, asx_send_permit *out) {
     asx_channel_slot *s;
     asx_status st;
@@ -453,16 +543,27 @@ asx_status asx_channel_try_reserve(asx_channel_id id, asx_send_permit *out) {
     if (st != ASX_OK) { return st; }
 
     if (s->state == ASX_CHANNEL_SENDER_CLOSED || s->state == ASX_CHANNEL_FULLY_CLOSED) {
+        asx_wait_queue_leave_current(&s->reserve_waiters);
         return ASX_E_INVALID_STATE;
     }
 
-    if (s->state == ASX_CHANNEL_RECEIVER_CLOSED) { return ASX_E_DISCONNECTED; }
+    if (s->state == ASX_CHANNEL_RECEIVER_CLOSED) {
+        asx_wait_queue_leave_current(&s->reserve_waiters);
+        return ASX_E_DISCONNECTED;
+    }
+
+    /* FIFO, no queue jumping: capacity freed while producers are parked
+     * belongs to the head of the line until it claims it or stops waiting,
+     * so anyone with a live producer ahead of them reports FULL. */
+    if (s->reserve_waiters.len > 0u && asx_wait_queue_live_ahead(&s->reserve_waiters) > 0u) {
+        return channel_reserve_full(s);
+    }
 
 #if ASX_CHANNEL_BACKEND_LOCKFREE
-    if (!channel_lf_claim_capacity(s)) { return ASX_E_CHANNEL_FULL; }
+    if (!channel_lf_claim_capacity(s)) { return channel_reserve_full(s); }
 #else
     if (s->queue_len + channel_atomic_load(&s->reserved) >= s->capacity) {
-        return ASX_E_CHANNEL_FULL;
+        return channel_reserve_full(s);
     }
 #endif
 
@@ -497,6 +598,12 @@ asx_status asx_channel_try_reserve(asx_channel_id id, asx_send_permit *out) {
         }
     }
 
+    /* Reserved: the caller's wait (if any) is over; capacity left over goes
+     * to the next parked producer. */
+    if (s->reserve_waiters.len > 0u) {
+        asx_wait_queue_leave_current(&s->reserve_waiters);
+        channel_settle(s);
+    }
     return ASX_OK;
 }
 
@@ -539,15 +646,20 @@ asx_status asx_send_permit_send(asx_send_permit *permit, uint64_t value) {
     st = channel_lf_enqueue(s, value);
     if (st != ASX_OK) {
         channel_lf_release_capacity(s);
+        channel_settle(s); /* the consumed permit freed capacity */
         return st;
     }
 #else
-    if (s->queue_len >= s->capacity) { return ASX_E_CHANNEL_FULL; }
+    if (s->queue_len >= s->capacity) {
+        channel_settle(s); /* the consumed permit freed capacity */
+        return ASX_E_CHANNEL_FULL;
+    }
     write_pos = (s->queue_head + s->queue_len) % s->capacity;
     s->queue[write_pos] = value;
     s->queue_len++;
 #endif
     asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)permit->channel_id, value);
+    channel_settle(s); /* one more message for a parked receiver */
 
     return ASX_OK;
 }
@@ -571,12 +683,25 @@ void asx_send_permit_abort(asx_send_permit *permit) {
 #if ASX_CHANNEL_BACKEND_LOCKFREE
         channel_lf_release_capacity(s);
 #endif
+        channel_settle(s); /* the slot is free again */
+        /* With the sender side closed, the last outstanding permit going
+         * away can turn an empty queue into a disconnect: re-check them. */
+        if (s->state == ASX_CHANNEL_SENDER_CLOSED && s->recv_waiters.len > 0u) {
+            (void)asx_wait_queue_wake_all(&s->recv_waiters);
+        }
     }
 }
 
 /* ------------------------------------------------------------------ */
 /* Receive                                                            */
 /* ------------------------------------------------------------------ */
+
+/* A message was dequeued: the receiver's wait is over and one slot of
+ * capacity is free again for a parked producer. */
+static void channel_recv_done(asx_channel_slot *s) {
+    asx_wait_queue_leave_current(&s->recv_waiters);
+    channel_settle(s);
+}
 
 asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value) {
     asx_channel_slot *s;
@@ -591,6 +716,7 @@ asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value) {
     st = channel_lf_dequeue(s, out_value);
     if (st == ASX_OK) {
         asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)id, *out_value);
+        channel_recv_done(s);
         return ASX_OK;
     }
     if (st != ASX_E_WOULD_BLOCK) { return st; }
@@ -600,19 +726,47 @@ asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value) {
         s->queue_head = (s->queue_head + 1u) % s->capacity;
         s->queue_len--;
         asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)id, *out_value);
+        channel_recv_done(s);
         return ASX_OK;
     }
 #endif
 
     if (s->state == ASX_CHANNEL_RECEIVER_CLOSED || s->state == ASX_CHANNEL_FULLY_CLOSED) {
+        asx_wait_queue_leave_current(&s->recv_waiters);
         return ASX_E_DISCONNECTED;
     }
 
     if (s->state == ASX_CHANNEL_SENDER_CLOSED) {
-        if (channel_atomic_load(&s->reserved) == 0u) { return ASX_E_DISCONNECTED; }
+        if (channel_atomic_load(&s->reserved) == 0u) {
+            asx_wait_queue_leave_current(&s->recv_waiters);
+            return ASX_E_DISCONNECTED;
+        }
     }
 
+    /* Empty: park until a commit (or a close). Settling first re-issues any
+     * wake that a producer which died after being woken can no longer use. */
+    channel_settle(s);
+    (void)asx_wait_queue_park_current(&s->recv_waiters);
     return ASX_E_WOULD_BLOCK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Wait withdrawal                                                    */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_channel_wait_cancel(asx_channel_id id, asx_task_id task) {
+    asx_channel_slot *s;
+    asx_status st;
+    int removed;
+
+    st = channel_slot_lookup(id, &s);
+    if (st != ASX_OK) { return st; }
+
+    removed = asx_wait_queue_remove(&s->recv_waiters, task);
+    removed |= asx_wait_queue_remove(&s->reserve_waiters, task);
+    /* A wake the withdrawn task held goes to the next waiter in line. */
+    if (removed) channel_settle(s);
+    return ASX_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -635,6 +789,7 @@ void asx_channel_reset(void) {
 #if ASX_CHANNEL_BACKEND_LOCKFREE
         channel_lf_init(&g_channels[i]);
 #endif
+        channel_waiters_init(&g_channels[i]);
     }
     g_channel_count = 0;
 }

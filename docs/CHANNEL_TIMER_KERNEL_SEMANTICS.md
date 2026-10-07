@@ -549,3 +549,27 @@ This strengthening is intentional and required by Plan Section 6.8.3(H). It does
 - Double-cancel of same timer handle
 - Use of permit after send/abort
 - Channel operation on closed channel (beyond simple error return)
+
+### 7.5 Wake-Driven Waiting (C Port)
+
+The C API stays poll-style (`try_*` / `poll_*` calls that report "not
+yet"), but waiting is wake-driven, mirroring Rust's waker registration:
+
+| Rule | C realization |
+|------|---------------|
+| Waker registration | A "not yet" result (`ASX_E_WOULD_BLOCK`, `ASX_E_CHANNEL_FULL`, `ASX_E_PENDING`) returned while `asx_task_current() != ASX_INVALID_ID` enqueues the current task in the primitive's bounded FIFO wait queue and calls `asx_task_park()`. The poll function propagates `ASX_E_PENDING`; the scheduler does not poll the task again until it is woken. |
+| No registration outside a poll | Callers outside a scheduler poll are never queued or parked; their results are unchanged. |
+| Wake on state change | Commit wakes one parked receiver per committed message; dequeue/abort wakes the head of the producer line; close/disconnect wakes every waiter so it observes the new state. |
+| FIFO + no queue jumping | Waiters are served in arrival order. As in Rust (`mpsc.rs` `try_reserve`), `try_reserve` reports `ASX_E_CHANNEL_FULL` while a live producer is parked ahead of the caller, even with free capacity: the freed slot belongs to the head until it claims it or stops waiting. |
+| Drop of a wait future | `asx_channel_wait_cancel(id, task)` withdraws a task that stops waiting (select branch lost, timeout); a wake it held passes to the next waiter. Cancel-pending tasks never hold a place in line or absorb a wake, and completed/reclaimed tasks are removed lazily (generation-checked handles), so cancellation needs no explicit call. |
+| Bounded queues | `ASX_CHANNEL_MAX_WAITERS` per direction. Overflow waiters are not parked: they yield and are re-polled each round (degraded to polling, never a lost wakeup). |
+| Determinism | Queue order and wake order depend only on the call sequence; the scheduler still polls runnable tasks in arena order. With every task parked and no wake source, `asx_scheduler_run` returns `ASX_E_WOULD_BLOCK` instead of spinning to budget exhaustion. |
+| Threading | Wait queues are scheduler-thread state (like `asx_task_wake`). Foreign-thread producers of the lock-free backend only reach queue code when a scheduler task is parked on that channel and must not race with it. |
+
+The same contract covers oneshot/broadcast/watch/session receives (send or
+drop wakes every parked receiver task; `asx_watch_poll_changed` is the
+wake-driven form of watch `changed()`), and the sync primitives in
+`src/sync/` (semaphore/mutex/rwlock grants in arrival order, notify,
+barrier trip, async `asx_once_get_or_init`, pool checkout with the same
+no-queue-jumping window). The shared mechanism lives in
+`src/sync/wait_queue.{h,c}`.

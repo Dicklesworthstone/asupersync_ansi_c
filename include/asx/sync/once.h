@@ -29,6 +29,12 @@ extern "C" {
 #define ASX_ONCE_MAX 16u
 #endif
 
+/* Tasks that can park behind one in-flight asynchronous initializer;
+ * further callers yield and are re-polled every round. */
+#ifndef ASX_ONCE_MAX_WAITERS
+#define ASX_ONCE_MAX_WAITERS 8u
+#endif
+
 /* -------------------------------------------------------------------
  * Handles
  * ------------------------------------------------------------------- */
@@ -57,9 +63,28 @@ ASX_API asx_status asx_once_close(asx_once_handle handle);
 
 /* Get the value, initializing if needed. The init_fn is called at most
  * once. Returns ASX_OK + value. If init_fn fails, the cell remains
- * uninitialized and returns the error. */
+ * uninitialized and returns the error.
+ *
+ * Asynchronous initializers: if init_fn returns ASX_E_PENDING inside a
+ * scheduler poll, the calling task becomes the cell's initializer (it calls
+ * get_or_init again to continue). Meanwhile other tasks get ASX_E_PENDING
+ * without running init_fn and are parked (FIFO) until the initializer
+ * finishes: all are woken on success; on failure the oldest one is woken to
+ * retry. An initializer whose task completes or is cancelled mid-init is
+ * replaced by the next caller. Outside a scheduler poll an ASX_E_PENDING
+ * init_fn leaves the cell uninitialized, as any failure does. */
 ASX_API asx_status asx_once_get_or_init(asx_once_handle handle, asx_once_init_fn init_fn,
                                         void *user_data, uint64_t *out_value);
+
+/* Withdraw `task` from the cell — the analog of dropping a Rust
+ * get_or_init future. If `task` is the in-flight initializer, the
+ * initialization is abandoned (the cell stays uninitialized) and the oldest
+ * parked waiter is woken to retry; if it is a parked waiter it stops
+ * waiting, passing on a retry turn it may have been given.
+ * Returns ASX_OK (also when `task` is not involved), ASX_E_INVALID_ARGUMENT
+ *   for an out-of-range handle, ASX_E_STALE_HANDLE for a closed cell.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API asx_status asx_once_wait_cancel(asx_once_handle handle, asx_task_id task);
 
 /* Get the value if already initialized. Returns ASX_E_INVALID_STATE
  * if not yet initialized. */

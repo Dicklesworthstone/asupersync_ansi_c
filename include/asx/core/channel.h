@@ -13,6 +13,19 @@
  * builds may select the atomic committed-message backend while preserving
  * the same public reserve/send/abort semantics.
  *
+ * Wake-driven waiting: when asx_channel_try_recv() reports
+ * ASX_E_WOULD_BLOCK or asx_channel_try_reserve() reports
+ * ASX_E_CHANNEL_FULL from inside a scheduler poll, the calling task is
+ * queued (FIFO, at most ASX_CHANNEL_MAX_WAITERS per direction) and parked
+ * (asx_task_park); the caller just propagates ASX_E_PENDING. A commit
+ * wakes one parked receiver, a dequeue or abort wakes the oldest parked
+ * producer (no one may jump that line), and closing either side wakes
+ * every waiter so it observes the new state.
+ * Wakes are FIFO and deterministic. Callers outside a scheduler poll are
+ * never queued or parked. Parking and waking are scheduler-thread
+ * operations: foreign-thread producers of the lock-free backend must not
+ * run concurrently with a scheduler task parked on the same channel.
+ *
  * SPDX-License-Identifier: MIT
  */
 
@@ -33,6 +46,8 @@ extern "C" {
 
 #define ASX_MAX_CHANNELS 16u
 #define ASX_CHANNEL_MAX_CAPACITY 64u
+/* Parked tasks per wait direction (recv / reserve) per channel. Further
+ * waiters are not parked: they yield and are re-polled every round. */
 #define ASX_CHANNEL_MAX_WAITERS 32u
 
 /* ------------------------------------------------------------------ */
@@ -95,7 +110,10 @@ ASX_API ASX_MUST_USE asx_status asx_channel_reserved_count(asx_channel_id id, ui
 
 /* Try to reserve a send slot. Non-blocking.
  * Returns ASX_OK and fills *out_permit on success.
- * Returns ASX_E_CHANNEL_FULL if capacity exhausted.
+ * Returns ASX_E_CHANNEL_FULL if capacity exhausted, or if a parked producer
+ *   is ahead in line (FIFO: freed capacity belongs to the oldest parked
+ *   producer, no queue jumping); inside a scheduler poll the calling task
+ *   is then parked until it is at the head of the line with capacity.
  * Returns ASX_E_DISCONNECTED if receiver closed.
  * Returns ASX_E_INVALID_STATE if sender side closed. */
 ASX_API ASX_MUST_USE asx_status asx_channel_try_reserve(asx_channel_id id, asx_send_permit *out);
@@ -115,9 +133,22 @@ ASX_API void asx_send_permit_abort(asx_send_permit *permit);
 
 /* Try to receive a message. Non-blocking.
  * Returns ASX_OK and fills *out_value on success.
- * Returns ASX_E_WOULD_BLOCK if queue is empty but channel is open.
+ * Returns ASX_E_WOULD_BLOCK if queue is empty but channel is open; inside
+ *   a scheduler poll the calling task is then parked until a commit or a
+ *   close.
  * Returns ASX_E_DISCONNECTED if queue is empty and sender closed. */
 ASX_API ASX_MUST_USE asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value);
+
+/* Withdraw `task` from this channel's recv and reserve wait queues — the
+ * analog of dropping a Rust recv/reserve future. Call it when a task that
+ * parked on this channel stops waiting for it (a select branch lost, a
+ * timeout fired); a wake already delivered to it passes to the next
+ * waiter in line. Completed or cancel-pending tasks never absorb a wake,
+ * so they need not call this.
+ * Returns ASX_OK (also when `task` was not queued), or the channel lookup
+ *   error (ASX_E_INVALID_ARGUMENT, ASX_E_NOT_FOUND, ASX_E_STALE_HANDLE).
+ * Thread-safety: scheduler thread only. */
+ASX_API asx_status asx_channel_wait_cancel(asx_channel_id id, asx_task_id task);
 
 /* ------------------------------------------------------------------ */
 /* Reset (test support)                                               */

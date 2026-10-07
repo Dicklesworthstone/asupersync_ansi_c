@@ -65,7 +65,8 @@ ASX_API asx_status asx_notify_close(asx_notify_handle handle);
  * Signal
  * ------------------------------------------------------------------- */
 
-/* Wake one waiter (FIFO). Returns ASX_OK even if no waiters. */
+/* Wake one waiter (FIFO by arrival; cancel-pending waiters are skipped).
+ * Returns ASX_OK even if no waiters. */
 ASX_API asx_status asx_notify_one(asx_notify_handle handle);
 
 /* Wake all waiters. Returns ASX_OK even if no waiters. */
@@ -81,10 +82,14 @@ ASX_API ASX_MUST_USE asx_status asx_notify_wait_begin(asx_notify_handle handle,
 
 /* Poll for notification. Returns ASX_OK when notified,
  * ASX_E_PENDING when still waiting, ASX_E_CANCELLED if cx cancelled,
- * ASX_E_DISCONNECTED if notify was closed. */
+ * ASX_E_DISCONNECTED if notify was closed. Inside a scheduler poll an
+ * ASX_E_PENDING result parks the calling task until it is notified (or
+ * the notify is closed). */
 ASX_API asx_status asx_notify_poll_wait(asx_notify_waiter *waiter, asx_cx *cx);
 
-/* Cancel a wait registration (safe to call even if already notified). */
+/* Cancel a wait registration (safe to call even if already notified). A
+ * notify_one notification the waiter had not consumed passes on to the
+ * next waiter in arrival order. */
 ASX_API asx_status asx_notify_wait_cancel(asx_notify_waiter *waiter);
 
 /* -------------------------------------------------------------------

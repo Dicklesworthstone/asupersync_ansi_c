@@ -10,6 +10,8 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/core/channel.h>
+#include <asx/runtime/runtime.h>
 #include <asx/stream/stream.h>
 #include <string.h>
 
@@ -1136,6 +1138,46 @@ TEST(last_empty) {
 }
 
 /* ================================================================== */
+/* Channel receiver source                                             */
+/* ================================================================== */
+
+/* Regression: the receiver adapter used to store the 64-bit channel
+ * handle as uint16_t, dropping its type tag and generation, so every poll
+ * failed handle validation and the stream stayed PENDING forever. */
+TEST(receiver_stream_keeps_full_channel_handle) {
+    asx_region_id rid;
+    asx_channel_id ch;
+    asx_send_permit permit;
+    asx_stream s;
+    asx_stream_receiver_state rs;
+    uint64_t buf = 0;
+    void *item = NULL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_channel_create(rid, 4, &ch), ASX_OK);
+    ASSERT_TRUE(ch > (asx_channel_id)0xFFFFu); /* tag + generation above bit 16 */
+
+    asx_stream_from_receiver(&s, &rs, ch, &buf);
+    ASSERT_EQ(rs.channel_id, ch);
+    ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_PENDING);
+
+    ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&permit, 11u), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&permit, 22u), ASX_OK);
+
+    ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(uint64_t *)item, (uint64_t)11);
+    ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(uint64_t *)item, (uint64_t)22);
+    ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_PENDING);
+
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_DONE);
+}
+
+/* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
 
@@ -1244,6 +1286,9 @@ int main(void) {
     RUN_TEST(nth_not_found);
     RUN_TEST(last_basic);
     RUN_TEST(last_empty);
+
+    /* Channel sources */
+    RUN_TEST(receiver_stream_keeps_full_channel_handle);
 
     TEST_REPORT();
     return test_failures;

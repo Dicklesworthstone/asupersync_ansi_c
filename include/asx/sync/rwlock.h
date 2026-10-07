@@ -95,7 +95,8 @@ ASX_API ASX_MUST_USE asx_status asx_rwlock_read_begin(asx_rwlock_handle handle,
                                                       asx_rwlock_waiter *out);
 
 /* Poll for read lock. Returns ASX_OK + guard when acquired,
- * ASX_E_PENDING when waiting. */
+ * ASX_E_PENDING when waiting; inside a scheduler poll the calling task is
+ * then parked until an unlock grants it the lock (or close). */
 ASX_API asx_status asx_rwlock_poll_read(asx_rwlock_waiter *waiter, asx_rwlock_read_guard *out,
                                         asx_cx *cx);
 
@@ -108,7 +109,9 @@ ASX_API ASX_MUST_USE asx_status asx_rwlock_write_begin(asx_rwlock_handle handle,
                                                        asx_rwlock_waiter *out);
 
 /* Poll for write lock. Returns ASX_OK + guard when acquired,
- * ASX_E_PENDING when waiting. */
+ * ASX_E_PENDING when waiting. Writers are served in arrival (FIFO) order;
+ * inside a scheduler poll the calling task is then parked until an unlock
+ * grants it the lock (or close). */
 ASX_API asx_status asx_rwlock_poll_write(asx_rwlock_waiter *waiter, asx_rwlock_write_guard *out,
                                          asx_cx *cx);
 
@@ -116,7 +119,9 @@ ASX_API asx_status asx_rwlock_poll_write(asx_rwlock_waiter *waiter, asx_rwlock_w
  * Cancel async acquisition
  * ------------------------------------------------------------------- */
 
-/* Cancel an async read or write acquisition (safe even if acquired). */
+/* Cancel an async read or write acquisition (safe even if acquired). A
+ * lock already granted to the waiter is returned and passes on to the
+ * parked waiters it unblocks. */
 ASX_API asx_status asx_rwlock_waiter_cancel(asx_rwlock_waiter *waiter);
 
 /* -------------------------------------------------------------------
