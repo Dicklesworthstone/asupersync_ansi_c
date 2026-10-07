@@ -5,7 +5,15 @@
 #include <stdint.h>
 
 #ifndef ASX_LOCKFREE_SINGLE_THREAD
+/* Live (non-deterministic) POSIX/WIN32 builds run blocking-pool worker
+ * threads that touch runtime state (wakers, pool slots), so they need
+ * real atomics. Deterministic builds execute that work inline. */
+#if (defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_WIN32)) && defined(ASX_DETERMINISTIC) &&    \
+    (ASX_DETERMINISTIC == 0)
+#define ASX_LOCKFREE_SINGLE_THREAD 0
+#else
 #define ASX_LOCKFREE_SINGLE_THREAD 1
+#endif
 #endif
 
 #if !ASX_LOCKFREE_SINGLE_THREAD && defined(_MSC_VER)

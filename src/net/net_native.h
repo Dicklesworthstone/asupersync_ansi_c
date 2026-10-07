@@ -55,6 +55,12 @@ asx_status asx_native_udp_send(asx_native_handle sock, const uint8_t *src, uint3
 asx_status asx_native_udp_recv(asx_native_handle sock, uint8_t *dst, uint32_t cap,
                                uint32_t *out_read, asx_socket_addr *from);
 
+/* Name resolution (getaddrinfo; blocking, thread safe). Fills `out` with
+ * up to ASX_RESOLVE_MAX_RESULTS distinct addresses in resolver order,
+ * each carrying opts->port, filtered by opts->allow_ipv4/allow_ipv6. */
+asx_status asx_native_resolve(const char *host, const asx_resolve_options *opts,
+                              asx_resolve_result *out);
+
 /* Shared */
 asx_status asx_native_close(asx_native_handle h);
 asx_status asx_native_local_addr(asx_native_handle h, asx_socket_addr *out);

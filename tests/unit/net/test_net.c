@@ -479,6 +479,98 @@ TEST(resolve_ipv6_loopback_literal) {
     ASSERT_EQ(result.addrs[0].port, 8080);
 }
 
+TEST(resolve_ipv6_literal_forms) {
+    static const struct {
+        const char *text;
+        uint8_t bytes[16];
+    } ok[] = {
+        {"::", {0}},
+        {"[::1]", {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}},
+        {"2001:db8::1", {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}},
+        {"fe80::", {0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+        {"1:2:3:4:5:6:7:8", {0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8}},
+        {"::ffff:192.0.2.33", {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 0, 2, 33}},
+        {"64:FF9B::C000:221", {0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0x02, 0x21}},
+        {"1:0:0:0:0:0:0::", {0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+    };
+    static const char *const bad[] = {
+        ":",        ":::",     "1::2::3",   "12345::", "1:2:3:4:5:6:7:8:9",
+        "g::1",     "1:",      "[::1",      "::1]",    "1:2:3:4:5:6:7",
+        "::1%eth0", "::1.2.3", "1.2.3.4::", "[]",      "1:2:3:4:5:6:7:1.2.3.4"};
+    asx_resolve_result result;
+    asx_resolve_options opts;
+    uint32_t i;
+
+    asx_net_reset();
+    asx_resolve_options_init(&opts, 443);
+    for (i = 0; i < sizeof(ok) / sizeof(ok[0]); i++) {
+        ASSERT_EQ(asx_resolve_host(&result, ok[i].text, &opts), ASX_OK);
+        ASSERT_EQ(result.count, 1u);
+        ASSERT_EQ(result.addrs[0].family, ASX_AF_INET6);
+        ASSERT_EQ(result.addrs[0].port, 443);
+        ASSERT_EQ(memcmp(result.addrs[0].addr, ok[i].bytes, 16), 0);
+    }
+    for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        ASSERT_EQ(asx_resolve_host(&result, bad[i], &opts), ASX_E_NOT_FOUND);
+    }
+    opts.allow_ipv6 = 0;
+    ASSERT_EQ(asx_resolve_host(&result, "2001:db8::1", &opts), ASX_E_NOT_FOUND);
+}
+
+TEST(async_resolve_literal_completes_on_first_poll) {
+    asx_resolve_request req;
+    asx_resolve_result result;
+    asx_resolve_options opts;
+
+    asx_net_reset();
+    asx_resolve_options_init(&opts, 53);
+    ASSERT_EQ(asx_resolve_request_init(&req, "10.1.2.3", &opts), ASX_OK);
+    ASSERT_EQ(asx_resolve_poll(&req, ASX_INVALID_ID, &result), ASX_OK);
+    ASSERT_EQ(result.count, 1u);
+    ASSERT_EQ(result.addrs[0].family, ASX_AF_INET4);
+    ASSERT_EQ(result.addrs[0].addr[3], 3u);
+    ASSERT_EQ(result.addrs[0].port, 53);
+    /* Final status is stable. */
+    memset(&result, 0, sizeof(result));
+    ASSERT_EQ(asx_resolve_poll(&req, ASX_INVALID_ID, &result), ASX_OK);
+    ASSERT_EQ(result.count, 1u);
+
+    ASSERT_EQ(asx_resolve_request_init(&req, "localhost", NULL), ASX_OK);
+    ASSERT_EQ(asx_resolve_poll(&req, ASX_INVALID_ID, &result), ASX_OK);
+    ASSERT_EQ(result.count, 2u);
+    ASSERT_EQ(result.addrs[0].family, ASX_AF_INET6);
+}
+
+TEST(async_resolve_name_needs_native_backend) {
+    asx_resolve_request req;
+    asx_resolve_result result;
+
+    asx_net_reset(); /* MEMORY backend: no resolver for real names */
+    ASSERT_EQ(asx_resolve_request_init(&req, "example.com", NULL), ASX_OK);
+    ASSERT_EQ(asx_resolve_poll(&req, ASX_INVALID_ID, &result), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_resolve_poll(&req, ASX_INVALID_ID, NULL), ASX_E_NOT_FOUND);
+    asx_resolve_request_cancel(&req); /* not in flight: no effect */
+    ASSERT_EQ(asx_resolve_poll(&req, ASX_INVALID_ID, NULL), ASX_E_NOT_FOUND);
+}
+
+TEST(async_resolve_request_validation) {
+    asx_resolve_request req;
+    asx_resolve_options opts;
+    char long_host[ASX_RESOLVER_HOST_CAPACITY + 8u];
+
+    memset(long_host, 'a', sizeof(long_host) - 1u);
+    long_host[sizeof(long_host) - 1u] = '\0';
+    ASSERT_EQ(asx_resolve_request_init(NULL, "x", NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resolve_request_init(&req, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resolve_request_init(&req, "", NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resolve_request_init(&req, long_host, NULL), ASX_E_INVALID_ARGUMENT);
+    asx_resolve_options_init(&opts, 0);
+    opts.allow_ipv4 = 0;
+    opts.allow_ipv6 = 0;
+    ASSERT_EQ(asx_resolve_request_init(&req, "localhost", &opts), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_resolve_poll(NULL, ASX_INVALID_ID, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
 TEST(resolve_unknown_host_not_found) {
     asx_resolve_result result;
     asx_resolve_options opts;
@@ -1063,6 +1155,10 @@ int main(void) {
     RUN_TEST(resolve_localhost_dual_stack);
     RUN_TEST(resolve_ipv4_literal);
     RUN_TEST(resolve_ipv6_loopback_literal);
+    RUN_TEST(resolve_ipv6_literal_forms);
+    RUN_TEST(async_resolve_literal_completes_on_first_poll);
+    RUN_TEST(async_resolve_name_needs_native_backend);
+    RUN_TEST(async_resolve_request_validation);
     RUN_TEST(resolve_unknown_host_not_found);
     RUN_TEST(resolve_null_args);
     RUN_TEST(happy_eyeballs_ipv4_preferred);

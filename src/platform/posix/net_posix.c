@@ -31,6 +31,7 @@
 #include <asx/runtime/runtime.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -540,6 +541,54 @@ asx_status asx_native_peer_addr(asx_native_handle h, asx_socket_addr *out) {
 }
 
 int asx_native_is_alive(asx_native_handle h) { return native_lookup(h, NATIVE_FREE) != NULL; }
+
+/* ------------------------------------------------------------------ */
+/* Name resolution                                                     */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_native_resolve(const char *host, const asx_resolve_options *opts,
+                              asx_resolve_result *out) {
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *ai;
+    int rc;
+
+    if (host == NULL || opts == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    if (!opts->allow_ipv4 && !opts->allow_ipv6) return ASX_E_INVALID_ARGUMENT;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = opts->allow_ipv4 && opts->allow_ipv6 ? AF_UNSPEC
+                      : opts->allow_ipv6                   ? AF_INET6
+                                                           : AF_INET;
+    hints.ai_socktype = SOCK_STREAM; /* one entry per address */
+    rc = getaddrinfo(host, NULL, &hints, &res);
+    if (rc != 0) {
+        if (rc == EAI_AGAIN) return ASX_E_TIMED_OUT;
+        if (rc == EAI_MEMORY) return ASX_E_RESOURCE_EXHAUSTED;
+        return ASX_E_NOT_FOUND;
+    }
+
+    for (ai = res; ai != NULL && out->count < ASX_RESOLVE_MAX_RESULTS; ai = ai->ai_next) {
+        struct sockaddr_storage ss;
+        asx_socket_addr a;
+        uint32_t i;
+        int dup = 0;
+
+        if (ai->ai_family != AF_INET && ai->ai_family != AF_INET6) continue;
+        if (ai->ai_addr == NULL || ai->ai_addrlen > (socklen_t)sizeof(ss)) continue;
+        memset(&ss, 0, sizeof(ss));
+        memcpy(&ss, ai->ai_addr, (size_t)ai->ai_addrlen);
+        native_from_sockaddr(&ss, &a);
+        a.port = opts->port;
+        for (i = 0; i < out->count; i++) {
+            if (asx_socket_addr_eq(&out->addrs[i], &a)) dup = 1;
+        }
+        if (!dup) out->addrs[out->count++] = a;
+    }
+    freeaddrinfo(res);
+    return out->count > 0u ? ASX_OK : ASX_E_NOT_FOUND;
+}
 
 #else
 typedef int asx_net_posix_empty_translation_unit;

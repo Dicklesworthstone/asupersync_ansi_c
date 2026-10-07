@@ -13,6 +13,14 @@
  * SPDX-License-Identifier: MIT
  */
 
+#if defined(ASX_PROFILE_POSIX) && defined(ASX_DETERMINISTIC) && (ASX_DETERMINISTIC == 0)
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#include <time.h>   /* nanosleep */
+#include <unistd.h> /* gethostname */
+#endif
+
 #include "test_harness.h"
 #include <asx/asx.h>
 #include <asx/net/http.h>
@@ -543,7 +551,103 @@ TEST(http_keepalive_exchange_over_real_sockets) {
     ASSERT_TRUE(c->polls < 40u);
 }
 
+/* -------------------------------------------------------------------
+ * DNS: getaddrinfo on the blocking pool, completion wakes the task
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    asx_resolve_request req;
+    asx_resolve_result result;
+    asx_status status;
+    uint32_t polls;
+    int done;
+} resolve_state;
+
+static asx_status resolve_task(void *ud, asx_task_id self) {
+    resolve_state *s = (resolve_state *)ud;
+    asx_status st;
+    s->polls++;
+    st = asx_resolve_poll(&s->req, self, &s->result);
+    if (st == ASX_E_PENDING) return st;
+    s->status = st;
+    s->done = 1;
+    return ASX_OK;
+}
+
+TEST(async_resolve_runs_on_pool_and_wakes_task) {
+    resolve_state s;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+    asx_resolve_options opts;
+    char host[128];
+    uint32_t i;
+
+    ASSERT_TRUE(setup());
+    memset(host, 0, sizeof(host));
+    ASSERT_EQ(gethostname(host, sizeof(host) - 1u), 0);
+    memset(&s, 0, sizeof(s));
+    asx_resolve_options_init(&opts, 8443);
+    ASSERT_EQ(asx_resolve_request_init(&s.req, host, &opts), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, resolve_task, &s, &t), ASX_OK);
+    budget = asx_budget_from_polls(50);
+    /* The lookup runs off-thread: the scheduler blocks until the pool
+     * completion wakes the task, instead of reporting WOULD_BLOCK. */
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_TRUE(s.done);
+    ASSERT_TRUE(s.polls <= 3u);
+    /* The host's own name normally resolves; a sandbox without an entry
+     * for it may legitimately answer NOT_FOUND / TIMED_OUT. */
+    ASSERT_TRUE(s.status == ASX_OK || s.status == ASX_E_NOT_FOUND || s.status == ASX_E_TIMED_OUT);
+    if (s.status == ASX_OK) {
+        ASSERT_TRUE(s.result.count >= 1u);
+        for (i = 0; i < s.result.count; i++) ASSERT_EQ(s.result.addrs[i].port, 8443);
+    }
+}
+
+TEST(async_resolve_cancel_discards_in_flight_lookup) {
+    resolve_state s;
+    asx_resolve_options opts;
+    asx_region_id r;
+    asx_task_id owner;
+    char host[128];
+    uint32_t round;
+    uint32_t started = 0;
+
+    ASSERT_TRUE(setup());
+    memset(host, 0, sizeof(host));
+    ASSERT_EQ(gethostname(host, sizeof(host) - 1u), 0);
+    asx_resolve_options_init(&opts, 80);
+    /* A live (never polled) task owns the lookups' wakers. */
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, resolve_task, &s, &owner), ASX_OK);
+    /* Start and abandon more lookups than the in-flight table holds:
+     * orphaned slots must be recycled by their finishing workers. */
+    for (round = 0; round < ASX_RESOLVE_MAX_INFLIGHT * 3u; round++) {
+        asx_status st;
+        int tries = 0;
+        memset(&s, 0, sizeof(s));
+        ASSERT_EQ(asx_resolve_request_init(&s.req, host, &opts), ASX_OK);
+        for (;;) {
+            struct timespec ts;
+            st = asx_resolve_poll(&s.req, owner, NULL);
+            if (st != ASX_E_RESOURCE_EXHAUSTED || ++tries > 5000) break;
+            ts.tv_sec = 0; /* table full: let orphaned lookups finish */
+            ts.tv_nsec = 1000000L;
+            (void)nanosleep(&ts, NULL);
+        }
+        if (st == ASX_E_PENDING) started++;
+        asx_resolve_request_cancel(&s.req);
+        ASSERT_EQ(asx_resolve_poll(&s.req, owner, NULL),
+                  st == ASX_E_PENDING ? ASX_E_CANCELLED : st);
+    }
+    ASSERT_TRUE(started > 0u);
+}
+
 static int run_native(void) {
+    RUN_TEST(async_resolve_runs_on_pool_and_wakes_task);
+    RUN_TEST(async_resolve_cancel_discards_in_flight_lookup);
     RUN_TEST(tcp_echo_over_real_sockets_parks_instead_of_spinning);
     RUN_TEST(http_keepalive_exchange_over_real_sockets);
     RUN_TEST(tcp_fanout_many_clients_one_server);

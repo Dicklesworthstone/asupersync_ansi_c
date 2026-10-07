@@ -16,6 +16,7 @@
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
 #include <asx/cx/cx.h>
+#include <asx/runtime/waker.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -79,7 +80,11 @@ ASX_API int asx_socket_addr_eq(const asx_socket_addr *a, const asx_socket_addr *
 #endif
 
 #ifndef ASX_RESOLVER_HOST_CAPACITY
-#define ASX_RESOLVER_HOST_CAPACITY 64u
+#define ASX_RESOLVER_HOST_CAPACITY 256u /* DNS names are at most 253 octets */
+#endif
+
+#ifndef ASX_RESOLVE_MAX_INFLIGHT
+#define ASX_RESOLVE_MAX_INFLIGHT 8u /* concurrent native lookups */
 #endif
 
 /* -------------------------------------------------------------------
@@ -125,6 +130,18 @@ typedef struct {
     asx_resolver_cache_entry entries[ASX_RESOLVER_CACHE_CAPACITY];
     uint32_t next_slot;
 } asx_resolver;
+
+/* Caller-owned state of one asynchronous lookup (asx_resolve_poll). */
+typedef struct {
+    char host[ASX_RESOLVER_HOST_CAPACITY];
+    asx_resolve_options options;
+    asx_resolve_result result;
+    asx_status status;
+    uint8_t state;           /* 0 = not started, 1 = in flight, 2 = done */
+    uint32_t job_slot;       /* in-flight native lookup */
+    uint32_t job_generation; /* guards against a recycled lookup slot */
+    asx_waker waker;         /* wakes the polling task on completion */
+} asx_resolve_request;
 
 /* -------------------------------------------------------------------
  * Socket backend
@@ -326,9 +343,45 @@ ASX_API int asx_udp_is_alive(asx_udp_socket socket);
 /* Initialize resolve options to a deterministic dual-stack localhost-friendly default. */
 ASX_API void asx_resolve_options_init(asx_resolve_options *out, uint16_t port);
 
-/* Resolve a host string into deterministic endpoints. */
+/* Resolve a host string into endpoints ordered by family preference.
+ *
+ * "localhost", IPv4 dotted quads and IPv6 literals (RFC 4291 text form,
+ * optionally in brackets, including "::" compression and an embedded IPv4
+ * tail) resolve deterministically in every build. Other names resolve
+ * through the native resolver (getaddrinfo) when the NATIVE backend is
+ * active — synchronously, blocking the caller; inside tasks prefer
+ * asx_resolve_poll(). Otherwise they fail with ASX_E_NOT_FOUND.
+ * Returns ASX_OK, ASX_E_NOT_FOUND, ASX_E_TIMED_OUT (temporary resolver
+ * failure), ASX_E_RESOURCE_EXHAUSTED, or ASX_E_INVALID_ARGUMENT. */
 ASX_API ASX_MUST_USE asx_status asx_resolve_host(asx_resolve_result *out, const char *host,
                                                  const asx_resolve_options *options);
+
+/* Prepare an asynchronous lookup of `host` (copied into the request).
+ * options may be NULL for the defaults.
+ * Returns ASX_E_INVALID_ARGUMENT for a NULL/empty host, a host that does
+ * not fit ASX_RESOLVER_HOST_CAPACITY, or options allowing no family. */
+ASX_API ASX_MUST_USE asx_status asx_resolve_request_init(asx_resolve_request *req, const char *host,
+                                                         const asx_resolve_options *options);
+
+/* Drive an asynchronous lookup from task `self`.
+ *
+ * Literals and "localhost" complete on the first poll. With the NATIVE
+ * backend, other names are resolved by getaddrinfo on the blocking pool:
+ * the poll parks `self` and returns ASX_E_PENDING, and the pool
+ * completion wakes it (falling back to a synchronous lookup when the pool
+ * is unavailable). Once done, every poll returns the same final status
+ * (see asx_resolve_host) and copies the ordered result to *out when out
+ * is not NULL.
+ * Returns ASX_E_RESOURCE_EXHAUSTED when ASX_RESOLVE_MAX_INFLIGHT lookups
+ * or the waker arena are in use. */
+ASX_API ASX_MUST_USE asx_status asx_resolve_poll(asx_resolve_request *req, asx_task_id self,
+                                                 asx_resolve_result *out);
+
+/* Abandon an in-flight lookup (e.g. when the polling task is cancelled):
+ * the background lookup finishes on its own and its result is discarded.
+ * The request ends in the done state with ASX_E_CANCELLED. No effect on
+ * requests that are not in flight. */
+ASX_API void asx_resolve_request_cancel(asx_resolve_request *req);
 
 /* Initialize or clear a resolver cache. */
 ASX_API void asx_resolver_init(asx_resolver *out);

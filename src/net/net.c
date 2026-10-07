@@ -13,7 +13,12 @@
  */
 
 #include <asx/net/net.h>
+#include <asx/platform/atomics.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
+#if ASX_HAS_BLOCKING_SURFACE
+#include <asx/runtime/blocking.h>
+#endif
 
 #if defined(ASX_PROFILE_POSIX)
 #include "net_native.h"
@@ -92,6 +97,102 @@ static int parse_ipv4_host(const char *host, uint8_t out[4]) {
     }
     if (!have_digit || parts_seen != 3u) return 0;
     out[3] = (uint8_t)part;
+    return 1;
+}
+
+static int hex_digit_value(char ch) {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+    return -1;
+}
+
+/* Parse an IPv6 literal in RFC 4291 text form: eight 16-bit hex groups,
+ * at most one "::" run of zero groups, an optional dotted-quad tail, and
+ * optional surrounding brackets. Zone identifiers are rejected. */
+static int parse_ipv6_host(const char *host, uint8_t out[16]) {
+    uint16_t groups[8];
+    uint32_t n = 0;
+    int gap = -1;
+    const char *p;
+    const char *end;
+    size_t len;
+    uint32_t i;
+
+    if (host == NULL) return 0;
+    len = strlen(host);
+    p = host;
+    end = host + len;
+    if (len > 0u && host[0] == '[') {
+        if (len < 3u || host[len - 1u] != ']') return 0;
+        p = host + 1;
+        end = host + len - 1u;
+    }
+    if (p >= end) return 0;
+    if (*p == ':') {
+        if (end - p < 2 || p[1] != ':') return 0;
+        gap = 0;
+        p += 2;
+    }
+    while (p < end) {
+        const char *q = p;
+        uint32_t value = 0;
+        uint32_t digits = 0;
+
+        /* A dotted quad may only form the last two groups. */
+        while (q < end && *q != ':' && *q != '.') q++;
+        if (q < end && *q == '.') {
+            char quad[16];
+            uint8_t v4[4];
+            size_t qlen = (size_t)(end - p);
+            if (qlen >= sizeof(quad) || n > 6u) return 0;
+            memcpy(quad, p, qlen);
+            quad[qlen] = '\0';
+            if (!parse_ipv4_host(quad, v4)) return 0;
+            groups[n++] = (uint16_t)(((uint32_t)v4[0] << 8) | v4[1]);
+            groups[n++] = (uint16_t)(((uint32_t)v4[2] << 8) | v4[3]);
+            p = end;
+            break;
+        }
+        while (p < end && hex_digit_value(*p) >= 0) {
+            value = (value << 4) | (uint32_t)hex_digit_value(*p);
+            if (++digits > 4u) return 0;
+            p++;
+        }
+        if (digits == 0u || n >= 8u) return 0;
+        groups[n++] = (uint16_t)value;
+        if (p == end) break;
+        if (*p != ':') return 0;
+        p++;
+        if (p < end && *p == ':') {
+            if (gap >= 0) return 0;
+            gap = (int)n;
+            p++;
+        } else if (p == end) {
+            return 0; /* trailing single ':' */
+        }
+    }
+
+    if (gap >= 0) {
+        uint32_t tail = n - (uint32_t)gap;
+        if (n > 7u) return 0;
+        memset(out, 0, 16);
+        for (i = 0; i < (uint32_t)gap; i++) {
+            out[2u * i] = (uint8_t)(groups[i] >> 8);
+            out[2u * i + 1u] = (uint8_t)(groups[i] & 0xFFu);
+        }
+        for (i = 0; i < tail; i++) {
+            uint32_t dst = 8u - tail + i;
+            out[2u * dst] = (uint8_t)(groups[(uint32_t)gap + i] >> 8);
+            out[2u * dst + 1u] = (uint8_t)(groups[(uint32_t)gap + i] & 0xFFu);
+        }
+        return 1;
+    }
+    if (n != 8u) return 0;
+    for (i = 0; i < 8u; i++) {
+        out[2u * i] = (uint8_t)(groups[i] >> 8);
+        out[2u * i + 1u] = (uint8_t)(groups[i] & 0xFFu);
+    }
     return 1;
 }
 
@@ -1176,11 +1277,48 @@ asx_status asx_happy_eyeballs_order(asx_resolve_result *out, const asx_resolve_r
     return out->count == 0u ? ASX_E_NOT_FOUND : ASX_OK;
 }
 
+/* Deterministic resolution: "localhost" and literals. Returns 1 and sets
+ * *st when `host` is one of those, else 0 (a name for the resolver). */
+static int resolve_literal(const char *host, const asx_resolve_options *opts,
+                           asx_resolve_result *unordered, asx_status *st) {
+    uint8_t ipv4[4];
+    uint8_t ipv6[16];
+
+    *st = ASX_OK;
+    if (strcmp(host, "localhost") == 0) {
+        if (opts->allow_ipv6 && unordered->count < ASX_RESOLVE_MAX_RESULTS) {
+            unordered->addrs[unordered->count++] = asx_socket_addr_ipv6_loopback(opts->port);
+        }
+        if (opts->allow_ipv4 && unordered->count < ASX_RESOLVE_MAX_RESULTS) {
+            unordered->addrs[unordered->count++] = asx_socket_addr_loopback(opts->port);
+        }
+        return 1;
+    }
+    if (parse_ipv4_host(host, ipv4)) {
+        if (!opts->allow_ipv4) {
+            *st = ASX_E_NOT_FOUND;
+        } else {
+            unordered->addrs[unordered->count++] =
+                asx_socket_addr_ipv4(ipv4[0], ipv4[1], ipv4[2], ipv4[3], opts->port);
+        }
+        return 1;
+    }
+    if (parse_ipv6_host(host, ipv6)) {
+        if (!opts->allow_ipv6) {
+            *st = ASX_E_NOT_FOUND;
+        } else {
+            unordered->addrs[unordered->count++] = asx_socket_addr_ipv6(ipv6, opts->port);
+        }
+        return 1;
+    }
+    return 0;
+}
+
 asx_status asx_resolve_host(asx_resolve_result *out, const char *host,
                             const asx_resolve_options *options) {
     asx_resolve_options opts;
-    uint8_t ipv4[4];
     asx_resolve_result unordered;
+    asx_status st;
 
     if (out == NULL || host == NULL) return ASX_E_INVALID_ARGUMENT;
     memset(out, 0, sizeof(*out));
@@ -1193,25 +1331,198 @@ asx_status asx_resolve_host(asx_resolve_result *out, const char *host,
     }
     if (!opts.allow_ipv4 && !opts.allow_ipv6) return ASX_E_INVALID_ARGUMENT;
 
-    if (strcmp(host, "localhost") == 0) {
-        if (opts.allow_ipv6 && unordered.count < ASX_RESOLVE_MAX_RESULTS) {
-            unordered.addrs[unordered.count++] = asx_socket_addr_ipv6_loopback(opts.port);
-        }
-        if (opts.allow_ipv4 && unordered.count < ASX_RESOLVE_MAX_RESULTS) {
-            unordered.addrs[unordered.count++] = asx_socket_addr_loopback(opts.port);
-        }
-    } else if (strcmp(host, "::1") == 0) {
-        if (!opts.allow_ipv6) return ASX_E_NOT_FOUND;
-        unordered.addrs[unordered.count++] = asx_socket_addr_ipv6_loopback(opts.port);
-    } else if (parse_ipv4_host(host, ipv4)) {
-        if (!opts.allow_ipv4) return ASX_E_NOT_FOUND;
-        unordered.addrs[unordered.count++] =
-            asx_socket_addr_ipv4(ipv4[0], ipv4[1], ipv4[2], ipv4[3], opts.port);
-    } else {
+    if (!resolve_literal(host, &opts, &unordered, &st)) {
+#if ASX_NET_HAS_NATIVE
+        if (!NET_USE_NATIVE()) return ASX_E_NOT_FOUND;
+        st = asx_native_resolve(host, &opts, &unordered);
+#else
         return ASX_E_NOT_FOUND;
+#endif
     }
-
+    if (st != ASX_OK) return st;
     return asx_happy_eyeballs_order(out, &unordered, opts.preferred_family);
+}
+
+/* ------------------------------------------------------------------ */
+/* Asynchronous resolution                                             */
+/*                                                                     */
+/* Native lookups run getaddrinfo on the blocking pool. Their state     */
+/* lives in a static table, not in the caller's request, so a request   */
+/* abandoned mid-lookup (cancelled task) never sees a late write: the   */
+/* worker flips RUNNING -> DONE, or frees an ORPHANED slot itself.      */
+/* ------------------------------------------------------------------ */
+
+enum { RESOLVE_IDLE = 0u, RESOLVE_IN_FLIGHT = 1u, RESOLVE_DONE = 2u };
+
+#if ASX_NET_HAS_NATIVE && ASX_HAS_BLOCKING_SURFACE
+enum { DNS_JOB_FREE = 0u, DNS_JOB_RUNNING = 1u, DNS_JOB_DONE = 2u, DNS_JOB_ORPHANED = 3u };
+
+typedef struct {
+    asx_atomic_u32 state;
+    uint32_t generation;
+    char host[ASX_RESOLVER_HOST_CAPACITY];
+    asx_resolve_options options;
+    asx_resolve_result result;
+    asx_status status;
+} dns_job;
+
+static dns_job g_dns_jobs[ASX_RESOLVE_MAX_INFLIGHT];
+
+static uint64_t dns_job_run(void *user_data) {
+    dns_job *job = (dns_job *)user_data;
+    uint32_t expected = DNS_JOB_RUNNING;
+    job->status = asx_native_resolve(job->host, &job->options, &job->result);
+    if (!asx_atomic_u32_compare_exchange(&job->state, &expected, DNS_JOB_DONE)) {
+        /* Orphaned by asx_resolve_request_cancel: nobody will collect. */
+        asx_atomic_u32_store(&job->state, DNS_JOB_FREE);
+    }
+    return 0u;
+}
+
+/* Start a pool lookup for req. Returns ASX_E_PENDING when started, or a
+ * status to fall back on (ASX_E_INVALID_STATE: no pool -> resolve
+ * synchronously). */
+static asx_status dns_job_start(asx_resolve_request *req, asx_task_id self) {
+    asx_blocking_handle handle;
+    dns_job *job = NULL;
+    asx_status st;
+    uint32_t i;
+
+    if (!asx_blocking_pool_is_initialized()) return ASX_E_INVALID_STATE;
+    for (i = 0; i < ASX_RESOLVE_MAX_INFLIGHT; i++) {
+        if (asx_atomic_u32_load(&g_dns_jobs[i].state) == DNS_JOB_FREE) {
+            job = &g_dns_jobs[i];
+            break;
+        }
+    }
+    if (job == NULL) return ASX_E_RESOURCE_EXHAUSTED;
+
+    st = asx_waker_register(self, &req->waker);
+    if (st != ASX_OK) return st;
+    job->generation++;
+    memcpy(job->host, req->host, sizeof(job->host));
+    job->options = req->options;
+    memset(&job->result, 0, sizeof(job->result));
+    job->status = ASX_E_PENDING;
+    asx_atomic_u32_store(&job->state, DNS_JOB_RUNNING);
+    req->job_slot = i;
+    req->job_generation = job->generation;
+    req->state = RESOLVE_IN_FLIGHT;
+
+    st = asx_spawn_blocking(dns_job_run, job, &req->waker, &handle);
+    if (st != ASX_OK) {
+        asx_atomic_u32_store(&job->state, DNS_JOB_FREE);
+        asx_waker_deregister(&req->waker);
+        req->state = RESOLVE_IDLE;
+        return ASX_E_INVALID_STATE;
+    }
+    return ASX_E_PENDING;
+}
+
+/* Collect a finished lookup into req. ASX_E_PENDING while it runs. */
+static asx_status dns_job_collect(asx_resolve_request *req) {
+    dns_job *job;
+    if (req->job_slot >= ASX_RESOLVE_MAX_INFLIGHT) return ASX_E_INVALID_STATE;
+    job = &g_dns_jobs[req->job_slot];
+    if (job->generation != req->job_generation) return ASX_E_STALE_HANDLE;
+    if (asx_atomic_u32_load(&job->state) != DNS_JOB_DONE) return ASX_E_PENDING;
+    req->status = job->status;
+    if (req->status == ASX_OK) {
+        req->status =
+            asx_happy_eyeballs_order(&req->result, &job->result, req->options.preferred_family);
+    }
+    asx_atomic_u32_store(&job->state, DNS_JOB_FREE);
+    asx_waker_deregister(&req->waker);
+    return req->status;
+}
+#endif
+
+asx_status asx_resolve_request_init(asx_resolve_request *req, const char *host,
+                                    const asx_resolve_options *options) {
+    size_t len;
+    if (req == NULL || host == NULL) return ASX_E_INVALID_ARGUMENT;
+    len = bounded_host_len(host);
+    if (len == 0u || len >= ASX_RESOLVER_HOST_CAPACITY) return ASX_E_INVALID_ARGUMENT;
+    memset(req, 0, sizeof(*req));
+    memcpy(req->host, host, len + 1u);
+    if (options != NULL) {
+        req->options = *options;
+    } else {
+        asx_resolve_options_init(&req->options, 0u);
+    }
+    if (!req->options.allow_ipv4 && !req->options.allow_ipv6) return ASX_E_INVALID_ARGUMENT;
+    req->status = ASX_E_PENDING;
+    req->state = RESOLVE_IDLE;
+    return ASX_OK;
+}
+
+asx_status asx_resolve_poll(asx_resolve_request *req, asx_task_id self, asx_resolve_result *out) {
+    asx_resolve_result unordered;
+    asx_status st;
+
+    if (req == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (req->state == RESOLVE_IDLE) {
+        memset(&unordered, 0, sizeof(unordered));
+        if (resolve_literal(req->host, &req->options, &unordered, &st)) {
+            if (st == ASX_OK) {
+                st = asx_happy_eyeballs_order(&req->result, &unordered,
+                                              req->options.preferred_family);
+            }
+            req->status = st;
+            req->state = RESOLVE_DONE;
+        } else {
+#if ASX_NET_HAS_NATIVE && ASX_HAS_BLOCKING_SURFACE
+            if (NET_USE_NATIVE()) {
+                st = dns_job_start(req, self);
+                if (st == ASX_E_INVALID_STATE) {
+                    /* No pool: resolve synchronously. */
+                    req->status = asx_resolve_host(&req->result, req->host, &req->options);
+                    req->state = RESOLVE_DONE;
+                } else if (st != ASX_E_PENDING) {
+                    return st; /* transient: table or waker arena full */
+                }
+            } else
+#endif
+            {
+                (void)self;
+                req->status = ASX_E_NOT_FOUND;
+                req->state = RESOLVE_DONE;
+            }
+        }
+    }
+#if ASX_NET_HAS_NATIVE && ASX_HAS_BLOCKING_SURFACE
+    if (req->state == RESOLVE_IN_FLIGHT) {
+        st = dns_job_collect(req);
+        if (st == ASX_E_PENDING) {
+            st = asx_task_park(self);
+            (void)st;
+            return ASX_E_PENDING;
+        }
+        if (st == ASX_E_STALE_HANDLE || st == ASX_E_INVALID_STATE) req->status = st;
+        req->state = RESOLVE_DONE;
+    }
+#endif
+    if (req->state != RESOLVE_DONE) return ASX_E_INVALID_STATE;
+    if (out != NULL && req->status == ASX_OK) *out = req->result;
+    return req->status;
+}
+
+void asx_resolve_request_cancel(asx_resolve_request *req) {
+    if (req == NULL || req->state != RESOLVE_IN_FLIGHT) return;
+#if ASX_NET_HAS_NATIVE && ASX_HAS_BLOCKING_SURFACE
+    if (req->job_slot < ASX_RESOLVE_MAX_INFLIGHT &&
+        g_dns_jobs[req->job_slot].generation == req->job_generation) {
+        dns_job *job = &g_dns_jobs[req->job_slot];
+        uint32_t expected = DNS_JOB_RUNNING;
+        if (!asx_atomic_u32_compare_exchange(&job->state, &expected, DNS_JOB_ORPHANED)) {
+            /* Already finished: release the slot ourselves. */
+            asx_atomic_u32_store(&job->state, DNS_JOB_FREE);
+        }
+    }
+    asx_waker_deregister(&req->waker);
+#endif
+    req->status = ASX_E_CANCELLED;
+    req->state = RESOLVE_DONE;
 }
 
 void asx_resolver_init(asx_resolver *out) {
