@@ -58,10 +58,10 @@ typedef struct {
     asx_cancel_witness_id cancel_witness;
     uint32_t cancel_epoch;
     uint32_t cleanup_polls_remaining;
-    int cancel_pending; /* 1 if cancel signal delivered */
+    int cancel_pending;  /* 1 if cancel signal delivered */
     uint32_t mask_depth; /* asx_task_mask() nesting; cancel deferred while > 0 */
-    int detached;       /* 1 if the slot is released at completion */
-    uint32_t next_free; /* free-list link while !alive */
+    int detached;        /* 1 if the slot is released at completion */
+    uint32_t next_free;  /* free-list link while !alive */
     /* Wake-driven scheduling. A task that returns ASX_E_PENDING stays
      * runnable (yield) unless it called asx_task_park() during that poll
      * and was not woken before the poll returned. */

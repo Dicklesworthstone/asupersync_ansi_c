@@ -350,8 +350,7 @@ typedef struct {
     asx_http_parse_error err;
 } reject_vector;
 
-#define RV(s, e)                                                                                   \
-    { (s), (uint32_t)(sizeof(s) - 1u), (e) }
+#define RV(s, e) {(s), (uint32_t)(sizeof(s) - 1u), (e)}
 #define RQ "POST / HTTP/1.1\r\nHost: a\r\n"
 #define CH RQ "Transfer-Encoding: chunked\r\n\r\n"
 

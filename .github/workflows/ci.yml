@@ -44,7 +44,10 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cppcheck clang-format jq
+          sudo apt-get install -y -qq cppcheck jq
+          # Pin clang-format so CI and local runs agree (local: uvx --from clang-format==18.1.8 clang-format).
+          pipx install clang-format==18.1.8
+          clang-format --version
 
       - name: Format check
         id: format_check
