@@ -47,7 +47,8 @@ TEST(notify_one_no_waiters) {
     asx_notify_handle h;
     setup();
     MUST_OK(asx_notify_create(&h));
-    ASSERT_EQ(asx_notify_one(h), ASX_OK); /* no-op, no waiters */
+    ASSERT_EQ(asx_notify_one(h), ASX_OK); /* no waiter: stored */
+    ASSERT_EQ(asx_notify_stored_count(h), 1u);
     ASSERT_EQ(asx_notify_close(h), ASX_OK);
 }
 
@@ -56,7 +57,59 @@ TEST(notify_all_no_waiters) {
     setup();
     MUST_OK(asx_notify_create(&h));
     ASSERT_EQ(asx_notify_all(h), ASX_OK);
+    ASSERT_EQ(asx_notify_stored_count(h), 0u); /* notify_all stores nothing */
     ASSERT_EQ(asx_notify_close(h), ASX_OK);
+}
+
+/* Y2 regression: a notify_one that arrives before the waiter must not be
+ * lost (Rust sync/notify.rs stores it; the C port used to drop it and the
+ * waiter parked forever). Stored notifications accumulate. */
+TEST(notify_one_before_wait_is_stored) {
+    asx_notify_handle h;
+    asx_notify_waiter w1, w2, w3;
+    setup();
+    MUST_OK(asx_notify_create(&h));
+
+    MUST_OK(asx_notify_one(h));
+    MUST_OK(asx_notify_one(h));
+    ASSERT_EQ(asx_notify_stored_count(h), 2u);
+
+    MUST_OK(asx_notify_wait_begin(h, &w1));
+    ASSERT_EQ(asx_notify_poll_wait(&w1, NULL), ASX_OK);
+    MUST_OK(asx_notify_wait_begin(h, &w2));
+    ASSERT_EQ(asx_notify_poll_wait(&w2, NULL), ASX_OK);
+    ASSERT_EQ(asx_notify_stored_count(h), 0u);
+
+    /* The third waiter has nothing stored and waits */
+    MUST_OK(asx_notify_wait_begin(h, &w3));
+    ASSERT_EQ(asx_notify_poll_wait(&w3, NULL), ASX_E_PENDING);
+    MUST_OK(asx_notify_one(h));
+    ASSERT_EQ(asx_notify_poll_wait(&w3, NULL), ASX_OK);
+    ASSERT_EQ(asx_notify_close(h), ASX_OK);
+}
+
+TEST(notify_stored_permit_survives_abandoned_waiter) {
+    asx_notify_handle h;
+    asx_notify_waiter w1, w2;
+    setup();
+    MUST_OK(asx_notify_create(&h));
+
+    MUST_OK(asx_notify_one(h));
+    /* w1 claims the stored permit, then gives up before consuming it */
+    MUST_OK(asx_notify_wait_begin(h, &w1));
+    ASSERT_EQ(asx_notify_stored_count(h), 0u);
+    MUST_OK(asx_notify_wait_cancel(&w1));
+    /* Nobody else is waiting, so it is stored again, not lost */
+    ASSERT_EQ(asx_notify_stored_count(h), 1u);
+
+    MUST_OK(asx_notify_wait_begin(h, &w2));
+    ASSERT_EQ(asx_notify_poll_wait(&w2, NULL), ASX_OK);
+
+    /* Close drops stored notifications */
+    MUST_OK(asx_notify_one(h));
+    ASSERT_EQ(asx_notify_stored_count(h), 1u);
+    ASSERT_EQ(asx_notify_close(h), ASX_OK);
+    ASSERT_EQ(asx_notify_stored_count(h), 0u);
 }
 
 TEST(notify_wait_then_signal) {
@@ -476,6 +529,73 @@ TEST(barrier_close_disconnects) {
     ASSERT_EQ(asx_barrier_poll_wait(&w, NULL), ASX_E_DISCONNECTED);
 }
 
+/* Y1 regression: the barrier is cyclic (Rust sync/barrier.rs resets
+ * `arrived` and advances the generation on trip). Before the fix,
+ * `arrived` stayed at the threshold after the first trip, so every later
+ * arrival tripped the barrier alone and was elected leader. */
+TEST(barrier_reusable_across_rounds) {
+    asx_barrier_handle h;
+    asx_barrier_waiter w1, w2, w3;
+    int round;
+    setup();
+    MUST_OK(asx_barrier_create(3, &h));
+
+    for (round = 0; round < 3; round++) {
+        MUST_OK(asx_barrier_wait_begin(h, &w1));
+        ASSERT_EQ(asx_barrier_poll_wait(&w1, NULL), ASX_E_PENDING);
+        MUST_OK(asx_barrier_wait_begin(h, &w2));
+        ASSERT_EQ(asx_barrier_poll_wait(&w2, NULL), ASX_E_PENDING);
+        ASSERT_EQ(asx_barrier_waiting_count(h), 2u);
+
+        MUST_OK(asx_barrier_wait_begin(h, &w3)); /* trips this round */
+        ASSERT_EQ(asx_barrier_waiting_count(h), 0u);
+
+        ASSERT_EQ(asx_barrier_poll_wait(&w1, NULL), ASX_OK);
+        ASSERT_EQ(asx_barrier_poll_wait(&w2, NULL), ASX_OK);
+        ASSERT_EQ(asx_barrier_poll_wait(&w3, NULL), ASX_OK);
+        /* Exactly one leader per round: the arrival that tripped it */
+        ASSERT_FALSE(w1.is_leader);
+        ASSERT_FALSE(w2.is_leader);
+        ASSERT_TRUE(w3.is_leader);
+    }
+
+    ASSERT_EQ(asx_barrier_close(h), ASX_OK);
+}
+
+TEST(barrier_cancel_counts_only_current_round) {
+    asx_barrier_handle h;
+    asx_barrier_waiter a, b, c, d;
+    setup();
+    MUST_OK(asx_barrier_create(2, &h));
+
+    /* Round 1 trips; a and b are released but have not polled yet */
+    MUST_OK(asx_barrier_wait_begin(h, &a));
+    MUST_OK(asx_barrier_wait_begin(h, &b));
+    ASSERT_EQ(asx_barrier_waiting_count(h), 0u);
+
+    /* Round 2 starts with c */
+    MUST_OK(asx_barrier_wait_begin(h, &c));
+    ASSERT_EQ(asx_barrier_waiting_count(h), 1u);
+
+    /* Withdrawing a released round-1 waiter must not touch round 2 */
+    MUST_OK(asx_barrier_wait_cancel(&a));
+    ASSERT_EQ(asx_barrier_waiting_count(h), 1u);
+    ASSERT_EQ(asx_barrier_poll_wait(&b, NULL), ASX_OK);
+
+    /* Cancelling c withdraws its round-2 arrival; round 2 still needs two */
+    MUST_OK(asx_barrier_wait_cancel(&c));
+    ASSERT_EQ(asx_barrier_waiting_count(h), 0u);
+    MUST_OK(asx_barrier_wait_begin(h, &d));
+    ASSERT_EQ(asx_barrier_poll_wait(&d, NULL), ASX_E_PENDING);
+    MUST_OK(asx_barrier_wait_begin(h, &c));
+    ASSERT_EQ(asx_barrier_poll_wait(&d, NULL), ASX_OK);
+    ASSERT_EQ(asx_barrier_poll_wait(&c, NULL), ASX_OK);
+    ASSERT_FALSE(d.is_leader);
+    ASSERT_TRUE(c.is_leader);
+
+    ASSERT_EQ(asx_barrier_close(h), ASX_OK);
+}
+
 /* ================================================================== */
 /* OnceCell tests                                                      */
 /* ================================================================== */
@@ -647,6 +767,8 @@ int main(void) {
     RUN_TEST(notify_create_null_fails);
     RUN_TEST(notify_one_no_waiters);
     RUN_TEST(notify_all_no_waiters);
+    RUN_TEST(notify_one_before_wait_is_stored);
+    RUN_TEST(notify_stored_permit_survives_abandoned_waiter);
     RUN_TEST(notify_wait_then_signal);
     RUN_TEST(notify_all_wakes_multiple);
     RUN_TEST(notify_one_fifo);
@@ -683,6 +805,8 @@ int main(void) {
     RUN_TEST(barrier_three_tasks);
     RUN_TEST(barrier_wait_cancel);
     RUN_TEST(barrier_close_disconnects);
+    RUN_TEST(barrier_reusable_across_rounds);
+    RUN_TEST(barrier_cancel_counts_only_current_round);
 
     /* OnceCell */
     RUN_TEST(once_create_close);

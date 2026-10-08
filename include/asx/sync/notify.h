@@ -66,10 +66,12 @@ ASX_API asx_status asx_notify_close(asx_notify_handle handle);
  * ------------------------------------------------------------------- */
 
 /* Wake one waiter (FIFO by arrival; cancel-pending waiters are skipped).
- * Returns ASX_OK even if no waiters. */
+ * If no waiter can take it, the notification is stored and the next
+ * waiter consumes it immediately; stored notifications accumulate. */
 ASX_API asx_status asx_notify_one(asx_notify_handle handle);
 
-/* Wake all waiters. Returns ASX_OK even if no waiters. */
+/* Wake all current waiters. Stores nothing: waiters that arrive later
+ * are not affected. */
 ASX_API asx_status asx_notify_all(asx_notify_handle handle);
 
 /* -------------------------------------------------------------------
@@ -98,6 +100,9 @@ ASX_API asx_status asx_notify_wait_cancel(asx_notify_waiter *waiter);
 
 /* Get the number of pending waiters. */
 ASX_API uint32_t asx_notify_waiter_count(asx_notify_handle handle);
+
+/* Get the number of stored notify_one notifications awaiting a waiter. */
+ASX_API uint32_t asx_notify_stored_count(asx_notify_handle handle);
 
 /* -------------------------------------------------------------------
  * Arena management

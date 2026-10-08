@@ -48,11 +48,13 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
-/* Withdraw a waiter and its arrival (wait_cancel semantics). */
+/* Withdraw a waiter (wait_cancel semantics). Only an arrival that has not
+ * been released still counts toward the current round; a released waiter
+ * belongs to a round that already tripped and reset `arrived`. */
 static void barrier_waiter_withdraw(barrier_slot *s, barrier_waiter_slot *w) {
+    if (!w->released && s->arrived > 0) s->arrived--;
     w->active = 0;
     w->task = ASX_INVALID_ID;
-    s->arrived--;
     s->waiter_count--;
 }
 
@@ -147,13 +149,17 @@ asx_status asx_barrier_wait_begin(asx_barrier_handle handle, asx_barrier_waiter 
                 s->tripped = 1;
                 /* Last to arrive is leader */
                 s->waiters[i].is_leader = 1;
-                /* Release all waiters and wake the parked ones */
+                /* Release this round's waiters and wake the parked ones */
                 for (j = 0; j < BARRIER_MAX_WAITERS; j++) {
                     if (s->waiters[j].active && !s->waiters[j].released) {
                         s->waiters[j].released = 1;
                         asx_wait_wake_task(s->waiters[j].task);
                     }
                 }
+                /* The barrier is cyclic: the next arrival starts a new
+                 * round (Rust sync/barrier.rs resets arrived and advances
+                 * the generation on trip). */
+                s->arrived = 0;
             }
 
             return ASX_OK;
@@ -176,6 +182,17 @@ asx_status asx_barrier_poll_wait(asx_barrier_waiter *waiter, asx_cx *cx) {
     w = &s->waiters[waiter->waiter_slot];
     if (!w->active) return ASX_E_INVALID_STATE;
 
+    /* Release wins a race with cancellation: a waiter whose round already
+     * tripped completes successfully even if a cancel is now pending
+     * (Rust sync/barrier.rs finish_cancelled). */
+    if (w->released) {
+        waiter->is_leader = w->is_leader;
+        w->active = 0;
+        w->task = ASX_INVALID_ID;
+        s->waiter_count--;
+        return ASX_OK;
+    }
+
     /* Cx cancellation/budget checkpoint */
     if (cx != NULL) {
         asx_status cst = asx_cx_checkpoint(cx);
@@ -183,14 +200,6 @@ asx_status asx_barrier_poll_wait(asx_barrier_waiter *waiter, asx_cx *cx) {
             barrier_waiter_withdraw(s, w);
             return cst;
         }
-    }
-
-    if (w->released) {
-        waiter->is_leader = w->is_leader;
-        w->active = 0;
-        w->task = ASX_INVALID_ID;
-        s->waiter_count--;
-        return ASX_OK;
     }
 
     /* Inside a scheduler poll, park until the barrier trips (or closes). */

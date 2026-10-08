@@ -47,6 +47,10 @@ typedef struct {
     notify_waiter_slot waiters[ASX_NOTIFY_MAX_WAITERS];
     uint32_t waiter_count;
     uint32_t next_seq; /* arrival stamp for the next waiter */
+    /* notify_one notifications that found no waiter. They accumulate and
+     * each later waiter consumes one (Rust sync/notify.rs
+     * stored_notifications; unlike tokio, which stores at most one). */
+    uint32_t stored;
 } notify_slot;
 
 static notify_slot g_slots[ASX_NOTIFY_MAX];
@@ -82,18 +86,21 @@ static uint32_t notify_first_in_line(const notify_slot *s) {
     return best;
 }
 
-/* Deliver one notification to the next waiter in line. Returns 1 if a
- * waiter took it. */
+/* Deliver one notification to the next waiter in line, or store it when
+ * no waiter can take it. Returns 1 if a waiter took it. */
 static int notify_deliver_one(notify_slot *s) {
     uint32_t i = notify_first_in_line(s);
-    if (i == NOTIFY_NO_WAITER) return 0;
+    if (i == NOTIFY_NO_WAITER) {
+        if (s->stored < UINT32_MAX) s->stored++;
+        return 0;
+    }
     s->waiters[i].notified = NOTIFY_ONE;
     asx_wait_wake_task(s->waiters[i].task);
     return 1;
 }
 
 /* Deactivate a waiter that leaves without consuming its notification. A
- * notify_one notification it held is passed on. */
+ * notify_one notification it held is passed on (or stored again). */
 static void notify_waiter_abandon(notify_slot *s, notify_waiter_slot *w) {
     int pass_on = (w->notified == NOTIFY_ONE);
     w->active = 0;
@@ -136,6 +143,7 @@ asx_status asx_notify_create(asx_notify_handle *out) {
             g_slots[i].generation = next_gen(g_slots[i].generation);
             g_slots[i].waiter_count = 0;
             g_slots[i].next_seq = 0;
+            g_slots[i].stored = 0;
             memset(g_slots[i].waiters, 0, sizeof(g_slots[i].waiters));
             out->slot = i;
             out->generation = g_slots[i].generation;
@@ -162,6 +170,7 @@ asx_status asx_notify_close(asx_notify_handle handle) {
 
     s->alive = 0;
     s->waiter_count = 0;
+    s->stored = 0; /* no consumer can arrive after close */
     return ASX_OK;
 }
 
@@ -175,10 +184,12 @@ asx_status asx_notify_one(asx_notify_handle handle) {
     s = &g_slots[handle.slot];
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
-    /* FIFO: notify the oldest waiter (reclaiming dead ones first) */
+    /* FIFO: notify the oldest waiter (reclaiming dead ones first). With no
+     * waiter the notification is stored for the next one, so a notify that
+     * races ahead of a wait is never lost. */
     notify_reap(s);
     (void)notify_deliver_one(s);
-    return ASX_OK; /* no waiters, that's fine */
+    return ASX_OK;
 }
 
 asx_status asx_notify_all(asx_notify_handle handle) {
@@ -222,6 +233,12 @@ asx_status asx_notify_wait_begin(asx_notify_handle handle, asx_notify_waiter *ou
     s->waiters[i].seq = s->next_seq++;
     s->waiters[i].task = ASX_INVALID_ID;
     s->waiter_count++;
+    /* Claim a stored notification. It behaves like a notify_one delivery,
+     * so a waiter that gives up passes it on (or stores it again). */
+    if (s->stored > 0) {
+        s->stored--;
+        s->waiters[i].notified = NOTIFY_ONE;
+    }
     out->notify_slot = handle.slot;
     out->waiter_slot = i;
     out->generation = handle.generation;
@@ -293,6 +310,13 @@ uint32_t asx_notify_waiter_count(asx_notify_handle handle) {
     return g_slots[handle.slot].waiter_count;
 }
 
+uint32_t asx_notify_stored_count(asx_notify_handle handle) {
+    if (handle.slot >= ASX_NOTIFY_MAX) return 0;
+    if (!g_slots[handle.slot].alive || g_slots[handle.slot].generation != handle.generation)
+        return 0;
+    return g_slots[handle.slot].stored;
+}
+
 /* ------------------------------------------------------------------ */
 /* Arena management                                                    */
 /* ------------------------------------------------------------------ */
@@ -304,6 +328,7 @@ void asx_notify_reset(void) {
         g_slots[i].alive = 0;
         g_slots[i].waiter_count = 0;
         g_slots[i].next_seq = 0;
+        g_slots[i].stored = 0;
         memset(g_slots[i].waiters, 0, sizeof(g_slots[i].waiters));
     }
     g_slot_count = 0;
