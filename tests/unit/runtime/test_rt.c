@@ -445,8 +445,12 @@ TEST(init_default_wires_blocking_surface) {
     asx_runtime rt;
 #if ASX_HAS_BLOCKING_SURFACE
     asx_blocking_handle h;
-    uint64_t input = 9;
+    /* Static: in live builds a pool worker reads it on another thread,
+     * possibly after this test has already returned on a failed assert. */
+    static uint64_t input = 9;
     uint64_t result = 0;
+    asx_status got;
+    uint32_t spins = 0;
 #endif
 
     ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
@@ -454,7 +458,12 @@ TEST(init_default_wires_blocking_surface) {
 #if ASX_HAS_BLOCKING_SURFACE
     if (asx_surface_available_active(ASX_SURFACE_BLOCKING)) {
         ASSERT_EQ(asx_spawn_blocking(add_one, &input, NULL, &h), ASX_OK);
-        ASSERT_EQ(asx_blocking_get_result(&h, &result), ASX_OK);
+        /* CORE completes inline; live POSIX builds complete on a pool
+         * worker, so wait (bounded) for the result. */
+        do {
+            got = asx_blocking_get_result(&h, &result);
+        } while (got == ASX_E_PENDING && ++spins < 2000000000u);
+        ASSERT_EQ(got, ASX_OK);
         ASSERT_EQ(result, (uint64_t)10);
     } else {
         ASSERT_EQ(asx_spawn_blocking(add_one, &input, NULL, &h), ASX_E_PERMISSION_DENIED);

@@ -364,7 +364,9 @@ asx_status asx_supervisor_start(asx_supervisor_handle *out, asx_region_id region
     s->alive = 1;
     s->config = *config;
     s->region = region;
-    memcpy(s->specs, children, child_count * sizeof(asx_child_spec));
+    /* children may be NULL when child_count is 0; memcpy from NULL is
+     * undefined even for zero bytes. */
+    if (child_count > 0u) memcpy(s->specs, children, child_count * sizeof(asx_child_spec));
     s->child_count = child_count;
     memset(s->children, 0, sizeof(s->children));
     memset(s->child_tasks, 0, sizeof(s->child_tasks));
