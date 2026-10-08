@@ -93,8 +93,11 @@ storage.sqlite3-*
 *.sqlite3-wal.corrupt-*
 
 # Ephemeral files (core dumps, profiling, agent config backups, etc.)
-core.*
-core
+# Core dumps only. A bare `core` pattern also matched the tracked source
+# directories include/asx/core, src/core and tests/unit/core, so `git add`
+# refused edits there without -f.
+/core
+core.[0-9]*
 perf.data
 perf.data.old
 *.bak
