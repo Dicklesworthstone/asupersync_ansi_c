@@ -24,7 +24,7 @@ TEST(budget_zero_is_absorbing) {
     asx_budget result = asx_budget_meet(&a, &zero);
     ASSERT_EQ(result.poll_quota, (uint32_t)0);
     ASSERT_EQ(result.cost_quota, (uint64_t)0);
-    ASSERT_EQ(result.priority, (uint8_t)0);
+    ASSERT_EQ(result.priority, (uint8_t)255); /* ZERO priority absorbs under max */
 }
 
 TEST(budget_meet_commutative) {
@@ -45,7 +45,35 @@ TEST(budget_meet_tightens) {
     ASSERT_EQ(result.deadline, (asx_time)100);
     ASSERT_EQ(result.poll_quota, (uint32_t)30);
     ASSERT_EQ(result.cost_quota, (uint64_t)1000);
-    ASSERT_EQ(result.priority, (uint8_t)64);
+    /* K1: priority meet is max (Rust types/budget.rs combine_untraced:
+     * `priority: self.priority.max(other.priority)`); it was min. */
+    ASSERT_EQ(result.priority, (uint8_t)128);
+}
+
+TEST(budget_new_and_from_polls_default_priority) {
+    asx_budget n = asx_budget_new();
+    asx_budget p = asx_budget_from_polls(7);
+    ASSERT_EQ(n.priority, (uint8_t)ASX_BUDGET_DEFAULT_PRIORITY);
+    ASSERT_EQ(n.priority, (uint8_t)128);
+    ASSERT_EQ(n.poll_quota, UINT32_MAX);
+    ASSERT_EQ(n.cost_quota, UINT64_MAX);
+    ASSERT_EQ(n.deadline, (asx_time)0);
+    ASSERT_EQ(p.priority, (uint8_t)128);
+    ASSERT_EQ(p.poll_quota, (uint32_t)7);
+}
+
+TEST(budget_priority_inherits_most_urgent) {
+    /* A child can only become more urgent than its parent, never less. */
+    asx_budget parent = asx_budget_new();
+    asx_budget child = asx_budget_new();
+    asx_budget eff;
+    parent.priority = 200;
+    child.priority = 50;
+    eff = asx_budget_meet(&parent, &child);
+    ASSERT_EQ(eff.priority, (uint8_t)200);
+    child.priority = 250;
+    eff = asx_budget_meet(&parent, &child);
+    ASSERT_EQ(eff.priority, (uint8_t)250);
 }
 
 TEST(budget_consume_poll) {
@@ -116,7 +144,7 @@ TEST(budget_infinite_fields) {
     ASSERT_EQ(inf.deadline, (asx_time)0);
     ASSERT_EQ(inf.poll_quota, UINT32_MAX);
     ASSERT_EQ(inf.cost_quota, UINT64_MAX);
-    ASSERT_EQ(inf.priority, (uint8_t)255);
+    ASSERT_EQ(inf.priority, (uint8_t)0); /* Rust Budget::INFINITE */
     ASSERT_FALSE(asx_budget_is_exhausted(&inf));
 }
 
@@ -124,7 +152,7 @@ TEST(budget_zero_fields) {
     asx_budget zero = asx_budget_zero();
     ASSERT_EQ(zero.poll_quota, (uint32_t)0);
     ASSERT_EQ(zero.cost_quota, (uint64_t)0);
-    ASSERT_EQ(zero.priority, (uint8_t)0);
+    ASSERT_EQ(zero.priority, (uint8_t)255); /* Rust Budget::ZERO */
     ASSERT_TRUE(asx_budget_is_exhausted(&zero));
 }
 
@@ -157,6 +185,8 @@ int main(void) {
     RUN_TEST(budget_zero_is_absorbing);
     RUN_TEST(budget_meet_commutative);
     RUN_TEST(budget_meet_tightens);
+    RUN_TEST(budget_new_and_from_polls_default_priority);
+    RUN_TEST(budget_priority_inherits_most_urgent);
     RUN_TEST(budget_consume_poll);
     RUN_TEST(budget_consume_cost);
     RUN_TEST(budget_exhaustion);

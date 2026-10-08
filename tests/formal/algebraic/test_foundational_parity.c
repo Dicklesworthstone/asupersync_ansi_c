@@ -533,8 +533,11 @@ TEST(budget_meet_of_two_cleanup_budgets_tightens) {
 
     ASSERT_TRUE(result.poll_quota <= user_b.poll_quota);
     ASSERT_TRUE(result.poll_quota <= shut_b.poll_quota);
-    ASSERT_TRUE(result.priority <= user_b.priority);
-    ASSERT_TRUE(result.priority <= shut_b.priority);
+    /* K1: priority meets upward (Rust Budget::combine takes the max), so
+     * the stricter SHUTDOWN cleanup priority (255) wins over USER (200). */
+    ASSERT_TRUE(result.priority >= user_b.priority);
+    ASSERT_TRUE(result.priority >= shut_b.priority);
+    ASSERT_EQ(result.priority, shut_b.priority);
 }
 
 TEST(cancel_severity_groups_have_monotone_budgets) {

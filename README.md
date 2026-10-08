@@ -731,8 +731,10 @@ The key operation is the **meet** (componentwise tightening):
 meet(a, b).deadline   = min(a.deadline,   b.deadline)     // 0 = unconstrained
 meet(a, b).poll_quota = min(a.poll_quota, b.poll_quota)
 meet(a, b).cost_quota = min(a.cost_quota, b.cost_quota)   // UINT64_MAX = unconstrained
-meet(a, b).priority   = min(a.priority,   b.priority)
+meet(a, b).priority   = max(a.priority,   b.priority)     // most urgent wins
 ```
+
+As in Rust asupersync's `Budget::combine`, priority meets upward: `asx_budget_infinite()` has priority 0 (the identity), `asx_budget_zero()` has 255 (absorbing), and ordinary budgets (`asx_budget_new()`, `asx_budget_from_polls()`) default to 128. The scheduler does not yet order tasks by budget priority (tracked as bridge bead S5).
 
 This means budgets compose correctly: if a task has a 100-poll budget and its region has a 50-poll budget, the effective budget is 50. Cleanup budgets for cancellation follow the same rule; severity 5 (SHUTDOWN) gets 50 cleanup polls, while severity 0 (USER) gets 1,000.
 

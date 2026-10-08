@@ -7,7 +7,9 @@
  *   L3. Idempotence: meet(a,a) == a
  *   L4. Identity: meet(a,infinite) == a
  *   L5. Absorption: meet(a,zero) == zero
- *   L6. Tightening: meet(a,b).field <= min(a.field, b.field)
+ *   L6. Tightening: meet(a,b).field <= min(a.field, b.field) for quotas,
+ *       and meet(a,b).priority >= max(a.priority, b.priority) (Rust
+ *       types/budget.rs: the most urgent priority wins)
  *
  * SPDX-License-Identifier: MIT
  */
@@ -84,6 +86,7 @@ int main(void) {
     /* L6: Tightening */
     VERIFY(ab.poll_quota <= u32_min(a.poll_quota, b.poll_quota));
     VERIFY(ab.cost_quota <= u64_min(a.cost_quota, b.cost_quota));
+    VERIFY(ab.priority >= a.priority && ab.priority >= b.priority);
 
     return 0;
 }
@@ -145,6 +148,7 @@ int main(void) {
             /* L6: Tightening */
             check(ab.poll_quota <= u32_min(a.poll_quota, b.poll_quota), "tighten poll_quota");
             check(ab.cost_quota <= u64_min(a.cost_quota, b.cost_quota), "tighten cost_quota");
+            check(ab.priority >= a.priority && ab.priority >= b.priority, "priority most urgent");
 
             /* L2: Associativity */
             for (ci = 0; ci < N_SAMPLES; ci++) {

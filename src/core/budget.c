@@ -7,12 +7,16 @@
 #include <asx/core/budget.h>
 #include <stddef.h>
 
+/* Priority follows Rust types/budget.rs: meet takes the MAX (the more
+ * urgent constraint wins), so INFINITE has priority 0 (the identity) and
+ * ZERO has priority 255 (absorbing). Ordinary budgets default to 128. */
+
 asx_budget asx_budget_infinite(void) {
     asx_budget b;
     b.deadline = 0; /* 0 = unconstrained */
     b.poll_quota = UINT32_MAX;
     b.cost_quota = UINT64_MAX; /* unconstrained */
-    b.priority = 255;
+    b.priority = 0;
     return b;
 }
 
@@ -21,13 +25,19 @@ asx_budget asx_budget_zero(void) {
     b.deadline = 1; /* earliest possible (non-zero = has deadline) */
     b.poll_quota = 0;
     b.cost_quota = 0;
-    b.priority = 0;
+    b.priority = 255;
+    return b;
+}
+
+asx_budget asx_budget_new(void) {
+    asx_budget b = asx_budget_infinite();
+    b.priority = ASX_BUDGET_DEFAULT_PRIORITY;
     return b;
 }
 
 static uint64_t min_u64(uint64_t a, uint64_t b) { return a < b ? a : b; }
 static uint32_t min_u32(uint32_t a, uint32_t b) { return a < b ? a : b; }
-static uint8_t min_u8(uint8_t a, uint8_t b) { return a < b ? a : b; }
+static uint8_t max_u8(uint8_t a, uint8_t b) { return a > b ? a : b; }
 
 /* deadline meet: earliest finite deadline wins; 0 means unconstrained */
 static asx_time min_deadline(asx_time a, asx_time b) {
@@ -43,7 +53,7 @@ asx_budget asx_budget_meet(const asx_budget *a, const asx_budget *b) {
     result.deadline = min_deadline(a->deadline, b->deadline);
     result.poll_quota = min_u32(a->poll_quota, b->poll_quota);
     result.cost_quota = min_u64(a->cost_quota, b->cost_quota);
-    result.priority = min_u8(a->priority, b->priority);
+    result.priority = max_u8(a->priority, b->priority);
     return result;
 }
 
@@ -76,10 +86,8 @@ uint32_t asx_budget_polls(const asx_budget *b) {
 }
 
 asx_budget asx_budget_from_polls(uint32_t polls) {
-    asx_budget b;
-    b.deadline = 0;
+    /* Budget::new().with_poll_quota(polls) */
+    asx_budget b = asx_budget_new();
     b.poll_quota = polls;
-    b.cost_quota = UINT64_MAX;
-    b.priority = 255;
     return b;
 }

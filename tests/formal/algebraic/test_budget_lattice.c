@@ -1,9 +1,10 @@
 /*
  * test_budget_lattice.c — algebraic property verification for budget meet
  *
- * Budget meet is componentwise tightening (min). This test verifies
- * identity, absorption, commutativity, associativity, and idempotence
- * on representative budget values.
+ * Budget meet is componentwise tightening: min deadline, min quotas, and
+ * MAX priority (Rust types/budget.rs; the most urgent priority wins).
+ * This test verifies identity, absorption, commutativity, associativity,
+ * idempotence, and narrowing on representative budget values.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -122,6 +123,9 @@ TEST(budget_meet_narrowing) {
             ASSERT_TRUE(result.poll_quota <= samples[j].poll_quota);
             ASSERT_TRUE(result.cost_quota <= samples[i].cost_quota);
             ASSERT_TRUE(result.cost_quota <= samples[j].cost_quota);
+            /* Priority narrows upward: the result is at least as urgent */
+            ASSERT_TRUE(result.priority >= samples[i].priority);
+            ASSERT_TRUE(result.priority >= samples[j].priority);
         }
     }
 }
