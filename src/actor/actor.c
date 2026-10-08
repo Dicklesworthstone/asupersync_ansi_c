@@ -400,17 +400,30 @@ asx_status asx_call_token_poll(asx_call_token token, uint64_t *reply) {
 
     s = &g_actors[token.actor_slot];
 
-    /* Actor died or was recycled */
-    if (!s->alive || s->generation != token.generation) { return ASX_E_INVALID_STATE; }
+    /* Slot recycled for another actor: this call no longer exists. A dead
+     * actor keeps its pending calls until the slot is reused. */
+    if (s->generation != token.generation) return ASX_E_INVALID_STATE;
 
     if (token.call_slot >= ASX_ACTOR_MAX_PENDING_CALLS) return ASX_E_INVALID_ARGUMENT;
 
     cs = &s->pending_calls[token.call_slot];
     if (!cs->active) return ASX_E_INVALID_STATE;
 
-    if (!cs->replied) {
-        /* Inside a task poll: park; the reply (or the actor's exit) wakes
-         * whichever task polls the token. */
+    /* A reply delivered before the actor exited still belongs to the
+     * caller (Rust actor.rs: a reply sent before exit survives it), so
+     * check it before checking whether the actor is alive. */
+    if (cs->replied) {
+        *reply = cs->reply;
+        cs->active = 0; /* consume the reply */
+        return ASX_OK;
+    }
+
+    /* The actor exited without replying. */
+    if (!s->alive) return ASX_E_INVALID_STATE;
+
+    /* Inside a task poll: park; the reply (or the actor's exit) wakes
+     * whichever task polls the token. */
+    {
         asx_task_id current = asx_task_current();
         if (current != ASX_INVALID_ID) {
             asx_status st;
@@ -418,12 +431,8 @@ asx_status asx_call_token_poll(asx_call_token token, uint64_t *reply) {
             st = asx_task_park(current);
             (void)st;
         }
-        return ASX_E_PENDING;
     }
-
-    *reply = cs->reply;
-    cs->active = 0; /* consume the reply */
-    return ASX_OK;
+    return ASX_E_PENDING;
 }
 
 /* ------------------------------------------------------------------ */

@@ -553,6 +553,56 @@ static void test_call_basic(void) {
     ASSERT(reply == 42, "reply should be 21*2=42");
 }
 
+/* Replies, then asks its own actor to stop: the actor exits in the same
+ * poll that delivered the reply. */
+static asx_status reply_then_stop_call(void *state, uint64_t request, uint64_t *reply,
+                                       asx_actor_handle self) {
+    asx_status st;
+    (void)state;
+    *reply = request + 1u;
+    st = asx_actor_stop(self);
+    return st;
+}
+
+/* A1 regression: asx_call_token_poll checked `alive` before `replied`, so
+ * a reply delivered just before the actor exited was reported as
+ * ASX_E_INVALID_STATE and lost. Rust delivers a reply sent before exit. */
+static void test_call_reply_survives_actor_exit(void) {
+    asx_actor_handle h;
+    asx_actor_behavior b = echo_behavior();
+    echo_state state;
+    asx_region_id r;
+    asx_call_token token;
+    asx_call_token unanswered;
+    uint64_t reply = 0;
+    asx_status st;
+
+    asx_runtime_reset();
+    memset(&state, 0, sizeof(state));
+    b.handle_call = reply_then_stop_call;
+    r = make_region();
+
+    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
+    pump_region(r, 1); /* init */
+
+    MUST_OK(asx_actor_call(h, 41, &token));
+    pump_region(r, 4); /* handle call, process stop, exit */
+    ASSERT(state.term_called, "actor should have exited");
+
+    st = asx_call_token_poll(token, &reply);
+    ASSERT(st == ASX_OK, "reply sent before exit must be delivered");
+    ASSERT(reply == 42u, "reply should be request + 1");
+
+    /* Consumed once: a second poll sees the call is gone */
+    st = asx_call_token_poll(token, &reply);
+    ASSERT(st == ASX_E_INVALID_STATE, "a consumed reply is not delivered twice");
+
+    /* A call to an exited actor is not answered */
+    st = asx_actor_call(h, 1, &unanswered);
+    ASSERT(st != ASX_OK || asx_call_token_poll(unanswered, &reply) == ASX_E_INVALID_STATE,
+           "an exited actor does not answer new calls");
+}
+
 static void test_call_multiple(void) {
     asx_actor_handle h;
     asx_actor_behavior b = echo_behavior();
@@ -965,6 +1015,7 @@ int main(void) {
 
     /* Call */
     RUN(test_call_basic);
+    RUN(test_call_reply_survives_actor_exit);
     RUN(test_call_multiple);
     RUN(test_call_pending_exhaustion);
     RUN(test_call_null_handler);
