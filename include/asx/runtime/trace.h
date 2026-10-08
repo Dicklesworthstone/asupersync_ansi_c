@@ -144,38 +144,63 @@ ASX_API const char *asx_trace_schema_compat_str(asx_trace_schema_compat compat);
  * Trace ring buffer capacity
  * ------------------------------------------------------------------- */
 
+/* Number of most-recent events the ring retains. The digest and the
+ * per-kind totals cover every emitted event regardless of this size. */
+#ifndef ASX_TRACE_CAPACITY
 #define ASX_TRACE_CAPACITY 1024u
+#endif
+#if (ASX_TRACE_CAPACITY) < 1
+#error "ASX_TRACE_CAPACITY must be at least 1"
+#endif
 
 /* -------------------------------------------------------------------
  * Trace emission API
  *
- * Events are recorded into a global ring buffer. Scheduler and
- * parallel-run invocations append to the current trace until the
- * caller explicitly resets it with asx_trace_reset().
+ * Events are recorded into a global ring buffer that keeps the most
+ * recent ASX_TRACE_CAPACITY events. Scheduler and parallel-run
+ * invocations append to the current trace until the caller explicitly
+ * resets it with asx_trace_reset().
  * ------------------------------------------------------------------- */
 
 /* Emit a trace event. Thread-safe: none (single-threaded runtime). */
 ASX_API void asx_trace_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux);
 
-/* Read total event count since last reset. */
+/* Number of events currently retained in the ring (<= ASX_TRACE_CAPACITY). */
 ASX_API uint32_t asx_trace_event_count(void);
 
-/* Read event at index (0 = oldest). Returns 1 on success, 0 on OOB. */
+/* Total events emitted since the last reset, retained or not. */
+ASX_API uint64_t asx_trace_emitted_total(void);
+
+/* Events emitted since the last reset that the ring no longer retains. */
+ASX_API uint64_t asx_trace_dropped(void);
+
+/* Events of one kind emitted since the last reset (exact, never dropped). */
+ASX_API uint64_t asx_trace_kind_total(asx_trace_event_kind kind);
+
+/* Read the retained event at index (0 = oldest retained). Returns 1 on
+ * success, 0 when index >= asx_trace_event_count(). */
 ASX_API int asx_trace_event_get(uint32_t index, asx_trace_event *out);
+
+/* Read the event with absolute sequence number seq (0 = first event since
+ * reset). Returns 0 if seq was not emitted yet or is no longer retained. */
+ASX_API int asx_trace_event_get_seq(uint64_t seq, asx_trace_event *out);
 
 /* Reset trace state before starting a fresh scenario or replay window. */
 ASX_API void asx_trace_reset(void);
 
 /* -------------------------------------------------------------------
- * Hash-chain digest
+ * Rolling digest
  *
- * Computes a rolling digest over the trace event stream. The digest
- * is deterministic for identical event sequences. Uses FNV-1a 64-bit
- * currently. SHA-256 for fixture parity with the Rust reference
- * implementation is a future upgrade path.
+ * Every emitted event is folded into the digest when it is emitted, so
+ * the digest covers the whole trace, not just the retained ring. It is
+ * deterministic for identical event sequences: FNV-1a mixing of each
+ * event's (sequence, kind, entity_id, aux), little-endian, starting from
+ * the asx digest seed 0x517cc1b727220a95. This is the C runtime's fast
+ * self-consistency digest; cross-engine parity with the Rust reference
+ * uses the canonical vocabulary digest instead.
  * ------------------------------------------------------------------- */
 
-/* Compute the current trace digest (FNV-1a over all events). */
+/* Current rolling digest over every event emitted since the last reset. */
 ASX_API uint64_t asx_trace_digest(void);
 
 /* -------------------------------------------------------------------
@@ -209,15 +234,22 @@ ASX_API asx_status asx_replay_load_reference(const asx_trace_event *events, uint
 /* Clear reference events. */
 ASX_API void asx_replay_clear_reference(void);
 
-/* Compare the current trace against the loaded reference.
- * Returns the comparison result. */
+/* Compare the current trace against the loaded reference: equal emitted
+ * totals, equal events wherever both sides retain them (aligned by
+ * sequence), and equal rolling digests. divergence_index is the sequence
+ * of the first mismatching event. */
 ASX_API asx_replay_result asx_replay_verify(void);
 
-/* Read total reference event count since last load. */
+/* Number of reference events held (the reference window). */
 ASX_API uint32_t asx_replay_reference_event_count(void);
 
-/* Read reference event at index (0 = oldest). Returns 1 on success, 0 on OOB. */
+/* Read reference event at window index (0 = oldest held). Returns 1 on
+ * success, 0 on OOB. */
 ASX_API int asx_replay_reference_event_get(uint32_t index, asx_trace_event *out);
+
+/* Read the reference event with absolute sequence seq. Returns 0 if the
+ * reference window does not hold it. */
+ASX_API int asx_replay_reference_event_get_seq(uint64_t seq, asx_trace_event *out);
 
 /* -------------------------------------------------------------------
  * Snapshot export
@@ -257,14 +289,16 @@ ASX_API const char *asx_replay_result_kind_str(asx_replay_result_kind kind);
  * restart, then verify the replayed scenario matches.
  *
  * Wire format (little-endian):
- *   Header (24 bytes):
- *     [0..3]   magic      "ASXt" (0x41535874)
- *     [4..7]   version    1
- *     [8..11]  event_count
- *     [12..15] reserved   0
- *     [16..23] trace_digest (FNV-1a 64-bit)
+ *   Header (32 bytes):
+ *     [0..3]   magic         "ASXt" (0x41535874)
+ *     [4..7]   version       2
+ *     [8..11]  event_count   events in this file (the retained window)
+ *     [12..15] flags         bit 0: TRUNCATED (older events were dropped)
+ *     [16..23] trace_digest  rolling digest over the whole trace
+ *     [24..31] total_emitted events emitted in the whole trace
  *
- *   Per event (24 bytes each):
+ *   Per event (24 bytes each), oldest first; sequences are the
+ *   contiguous tail [total_emitted - event_count, total_emitted):
  *     [0..3]   sequence   (uint32)
  *     [4..7]   kind       (uint32)
  *     [8..15]  entity_id  (uint64)
@@ -272,9 +306,10 @@ ASX_API const char *asx_replay_result_kind_str(asx_replay_result_kind kind);
  * ------------------------------------------------------------------- */
 
 #define ASX_TRACE_BINARY_MAGIC 0x41535874u /* "ASXt" */
-#define ASX_TRACE_BINARY_VERSION 1u
-#define ASX_TRACE_BINARY_HEADER 24u
+#define ASX_TRACE_BINARY_VERSION 2u
+#define ASX_TRACE_BINARY_HEADER 32u
 #define ASX_TRACE_BINARY_EVENT 24u
+#define ASX_TRACE_BINARY_FLAG_TRUNCATED 0x1u
 
 /* Export the current trace to a binary buffer.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if buf/out_len

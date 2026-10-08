@@ -511,8 +511,9 @@ TEST(trace_binary_export_basic) {
     asx_trace_emit(ASX_TRACE_TASK_SPAWN, 0x2000, 0x1000);
 
     ASSERT_EQ(asx_trace_export_binary(buf, sizeof(buf), &written), ASX_OK);
-    /* Header(24) + 2 events * 24 = 72 */
-    ASSERT_EQ(written, (uint32_t)72);
+    /* Header(32) + 2 events * 24 = 80 */
+    ASSERT_EQ(written, (uint32_t)(ASX_TRACE_BINARY_HEADER + 2u * ASX_TRACE_BINARY_EVENT));
+    ASSERT_EQ(written, (uint32_t)80);
 }
 
 TEST(trace_binary_export_null_rejects) {
@@ -835,30 +836,179 @@ TEST(replay_detects_aux_mismatch) {
 
 /* ---- Ring buffer wrap ---- */
 
-TEST(trace_ring_drops_beyond_capacity) {
+TEST(trace_ring_keeps_most_recent_beyond_capacity) {
     uint32_t i;
     asx_trace_event ev;
 
     asx_trace_reset();
 
-    /* Fill beyond capacity — events past cap are silently dropped */
+    /* Fill beyond capacity: the ring keeps the most recent events */
     for (i = 0; i < ASX_TRACE_CAPACITY + 10u; i++) {
         asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0);
     }
 
-    /* Readable count is capped at capacity */
     ASSERT_EQ(asx_trace_event_count(), ASX_TRACE_CAPACITY);
+    ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)(ASX_TRACE_CAPACITY + 10u));
+    ASSERT_EQ(asx_trace_dropped(), (uint64_t)10);
 
-    /* First event is still index 0 (no wrap — fill-once ring) */
+    /* Index 0 is the oldest retained event: sequence 10 */
     ASSERT_TRUE(asx_trace_event_get(0, &ev));
-    ASSERT_EQ(ev.entity_id, (uint64_t)0);
+    ASSERT_EQ(ev.entity_id, (uint64_t)10);
+    ASSERT_EQ(ev.sequence, (uint32_t)10);
 
-    /* Last readable is capacity - 1 */
+    /* Last retained is the last emitted */
     ASSERT_TRUE(asx_trace_event_get(ASX_TRACE_CAPACITY - 1, &ev));
-    ASSERT_EQ(ev.entity_id, (uint64_t)(ASX_TRACE_CAPACITY - 1));
+    ASSERT_EQ(ev.entity_id, (uint64_t)(ASX_TRACE_CAPACITY + 9u));
 
-    /* Index beyond capacity returns false */
+    /* Index beyond the retained window returns false */
     ASSERT_TRUE(!asx_trace_event_get(ASX_TRACE_CAPACITY, &ev));
+
+    /* Absolute-sequence access: dropped events are gone, retained ones resolve */
+    ASSERT_TRUE(!asx_trace_event_get_seq(9, &ev));
+    ASSERT_TRUE(asx_trace_event_get_seq(10, &ev));
+    ASSERT_EQ(ev.entity_id, (uint64_t)10);
+    ASSERT_TRUE(asx_trace_event_get_seq(ASX_TRACE_CAPACITY + 9u, &ev));
+    ASSERT_TRUE(!asx_trace_event_get_seq(ASX_TRACE_CAPACITY + 10u, &ev));
+}
+
+/* RB1 regression: before the rolling digest, events past capacity were
+ * not hashed, so two traces that diverged after event 1024 had the same
+ * digest and replay verification could not see the divergence. */
+static uint64_t trace_digest_of_run(uint32_t total, uint32_t perturb_at) {
+    uint32_t i;
+    asx_trace_reset();
+    for (i = 0; i < total; i++) {
+        uint64_t aux = (i == perturb_at) ? 0xBADu : 0u;
+        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, aux);
+    }
+    return asx_trace_digest();
+}
+
+TEST(trace_digest_covers_events_beyond_capacity) {
+    uint32_t total = ASX_TRACE_CAPACITY * 5u;
+    uint64_t base = trace_digest_of_run(total, UINT32_MAX);
+
+    /* Identical long runs digest identically */
+    ASSERT_EQ(trace_digest_of_run(total, UINT32_MAX), base);
+    /* A change far beyond the ring changes the digest */
+    ASSERT_TRUE(trace_digest_of_run(total, total - 1u) != base);
+    ASSERT_TRUE(trace_digest_of_run(total, ASX_TRACE_CAPACITY + 1u) != base);
+    /* So does a change in the dropped prefix */
+    ASSERT_TRUE(trace_digest_of_run(total, 0u) != base);
+    /* And a different length */
+    ASSERT_TRUE(trace_digest_of_run(total + 1u, UINT32_MAX) != base);
+}
+
+TEST(trace_digest_within_capacity_matches_fold_of_events) {
+    asx_trace_event events[3];
+    uint32_t i;
+    uint64_t live;
+
+    asx_trace_reset();
+    asx_trace_emit(ASX_TRACE_REGION_OPEN, 0x1000, 0);
+    asx_trace_emit(ASX_TRACE_TASK_SPAWN, 0x2000, 0x1000);
+    asx_trace_emit(ASX_TRACE_SCHED_POLL, 0x2000, 7);
+    live = asx_trace_digest();
+
+    for (i = 0; i < 3u; i++) ASSERT_TRUE(asx_trace_event_get(i, &events[i]));
+    ASSERT_EQ(asx_replay_load_reference(events, 3), ASX_OK);
+    {
+        asx_replay_result r = asx_replay_verify();
+        ASSERT_EQ(r.result, ASX_REPLAY_MATCH);
+        ASSERT_EQ(r.expected_digest, live);
+        ASSERT_EQ(r.actual_digest, live);
+    }
+    asx_replay_clear_reference();
+}
+
+TEST(trace_kind_totals_exact_beyond_capacity) {
+    uint32_t i;
+
+    asx_trace_reset();
+    for (i = 0; i < ASX_TRACE_CAPACITY * 3u; i++) {
+        asx_trace_emit((i % 3u) == 0u ? ASX_TRACE_SCHED_POLL : ASX_TRACE_TASK_SPAWN, i, 0);
+    }
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_SCHED_POLL), (uint64_t)ASX_TRACE_CAPACITY);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TASK_SPAWN), (uint64_t)(ASX_TRACE_CAPACITY * 2u));
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)0);
+
+    asx_trace_reset();
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_SCHED_POLL), (uint64_t)0);
+    ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)0);
+}
+
+static uint8_t
+    g_long_trace_buf[ASX_TRACE_BINARY_HEADER + ASX_TRACE_CAPACITY * ASX_TRACE_BINARY_EVENT];
+
+static void emit_long_trace(uint32_t total, uint32_t perturb_at) {
+    uint32_t i;
+    asx_trace_reset();
+    for (i = 0; i < total; i++) {
+        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, i == perturb_at ? 1u : 0u);
+    }
+}
+
+TEST(trace_truncated_export_roundtrip_and_continuity) {
+    uint32_t written = 0;
+    uint32_t total = ASX_TRACE_CAPACITY * 2u + 7u;
+
+    emit_long_trace(total, UINT32_MAX);
+    ASSERT_EQ(asx_trace_export_binary(g_long_trace_buf, sizeof(g_long_trace_buf), &written),
+              ASX_OK);
+    ASSERT_EQ(written, (uint32_t)sizeof(g_long_trace_buf));
+
+    /* Same run again: continuity holds */
+    emit_long_trace(total, UINT32_MAX);
+    ASSERT_EQ(asx_trace_continuity_check(g_long_trace_buf, written), ASX_OK);
+
+    /* A divergence inside the dropped prefix is invisible to the window
+     * but caught by the rolling digest */
+    emit_long_trace(total, 3u);
+    ASSERT_EQ(asx_trace_import_binary(g_long_trace_buf, written), ASX_OK);
+    {
+        asx_replay_result r = asx_replay_verify();
+        ASSERT_EQ(r.result, ASX_REPLAY_DIGEST_MISMATCH);
+    }
+    asx_replay_clear_reference();
+
+    /* A divergence inside the window is reported at its sequence */
+    emit_long_trace(total, total - 2u);
+    ASSERT_EQ(asx_trace_import_binary(g_long_trace_buf, written), ASX_OK);
+    {
+        asx_replay_result r = asx_replay_verify();
+        ASSERT_EQ(r.result, ASX_REPLAY_AUX_MISMATCH);
+        ASSERT_EQ(r.divergence_index, total - 2u);
+    }
+    asx_replay_clear_reference();
+
+    /* A longer run is a length mismatch */
+    emit_long_trace(total + 1u, UINT32_MAX);
+    ASSERT_EQ(asx_trace_continuity_check(g_long_trace_buf, written), ASX_E_REPLAY_MISMATCH);
+}
+
+TEST(trace_import_rejects_inconsistent_truncation) {
+    uint32_t written = 0;
+
+    emit_long_trace(ASX_TRACE_CAPACITY + 5u, UINT32_MAX);
+    ASSERT_EQ(asx_trace_export_binary(g_long_trace_buf, sizeof(g_long_trace_buf), &written),
+              ASX_OK);
+
+    /* Clearing the TRUNCATED flag while count < total is rejected */
+    g_long_trace_buf[12] = 0u;
+    ASSERT_EQ(asx_trace_import_binary(g_long_trace_buf, written), ASX_E_INVALID_ARGUMENT);
+    g_long_trace_buf[12] = (uint8_t)ASX_TRACE_BINARY_FLAG_TRUNCATED;
+    ASSERT_EQ(asx_trace_import_binary(g_long_trace_buf, written), ASX_OK);
+    asx_replay_clear_reference();
+
+    /* A non-contiguous window (tampered first sequence) is rejected */
+    g_long_trace_buf[ASX_TRACE_BINARY_HEADER] ^= 0x01u;
+    ASSERT_EQ(asx_trace_import_binary(g_long_trace_buf, written), ASX_E_INVALID_ARGUMENT);
+    g_long_trace_buf[ASX_TRACE_BINARY_HEADER] ^= 0x01u;
+
+    /* Unknown flag bits are rejected */
+    g_long_trace_buf[13] = 0x80u;
+    ASSERT_EQ(asx_trace_import_binary(g_long_trace_buf, written), ASX_E_INVALID_ARGUMENT);
+    g_long_trace_buf[13] = 0u;
 }
 
 /* ---- Digest sensitivity to aux ---- */
@@ -1000,7 +1150,12 @@ int main(void) {
     RUN_TEST(trace_timer_events_emitted_by_runtime);
     RUN_TEST(runtime_reset_clears_global_support_state);
     RUN_TEST(replay_detects_aux_mismatch);
-    RUN_TEST(trace_ring_drops_beyond_capacity);
+    RUN_TEST(trace_ring_keeps_most_recent_beyond_capacity);
+    RUN_TEST(trace_digest_covers_events_beyond_capacity);
+    RUN_TEST(trace_digest_within_capacity_matches_fold_of_events);
+    RUN_TEST(trace_kind_totals_exact_beyond_capacity);
+    RUN_TEST(trace_truncated_export_roundtrip_and_continuity);
+    RUN_TEST(trace_import_rejects_inconsistent_truncation);
     RUN_TEST(trace_digest_sensitive_to_aux);
     RUN_TEST(trace_digest_sensitive_to_entity_id);
     RUN_TEST(trace_digest_sensitive_to_order);

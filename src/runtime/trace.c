@@ -88,43 +88,14 @@ const char *asx_trace_schema_compat_str(asx_trace_schema_compat compat) {
 }
 
 /* -------------------------------------------------------------------
- * Trace ring buffer
+ * FNV-1a mixing over the trace event stream
+ *
+ * The seed is the asx digest seed shared with telemetry and hindsight
+ * (the FxHash multiplier constant). It is not the FNV-1a offset basis;
+ * only the mixing step is FNV-1a.
  * ------------------------------------------------------------------- */
 
-static asx_trace_event g_trace_ring[ASX_TRACE_CAPACITY];
-static uint32_t g_trace_count;
-
-void asx_trace_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux) {
-    if (g_trace_count < ASX_TRACE_CAPACITY) {
-        asx_trace_event *e = &g_trace_ring[g_trace_count];
-        e->sequence = g_trace_count;
-        e->kind = kind;
-        e->entity_id = entity_id;
-        e->aux = aux;
-    }
-    g_trace_count++;
-}
-
-uint32_t asx_trace_event_count(void) {
-    /* Return stored count, not total emitted. Events beyond capacity
-     * are silently dropped; reporting the unbounded count misleads
-     * callers into iterating past readable entries. */
-    return g_trace_count < ASX_TRACE_CAPACITY ? g_trace_count : ASX_TRACE_CAPACITY;
-}
-
-int asx_trace_event_get(uint32_t index, asx_trace_event *out) {
-    if (out == NULL) return 0;
-    if (index >= g_trace_count) return 0;
-    if (index >= ASX_TRACE_CAPACITY) return 0;
-    *out = g_trace_ring[index];
-    return 1;
-}
-
-void asx_trace_reset(void) { g_trace_count = 0; }
-
-/* -------------------------------------------------------------------
- * FNV-1a 64-bit digest over the trace event stream
- * ------------------------------------------------------------------- */
+#define ASX_TRACE_DIGEST_SEED 0x517cc1b727220a95ULL
 
 static uint64_t fnv1a_mix(uint64_t hash, const void *data, uint32_t len) {
     const uint8_t *p = (const uint8_t *)data;
@@ -159,57 +130,137 @@ static uint64_t fnv1a_mix_u64(uint64_t hash, uint64_t v) {
     return fnv1a_mix(hash, bytes, 8);
 }
 
-uint64_t asx_trace_digest(void) {
-    uint64_t hash = 0x517cc1b727220a95ULL; /* FNV-1a offset basis */
-    uint32_t count;
-    uint32_t i;
-
-    count = g_trace_count < ASX_TRACE_CAPACITY ? g_trace_count : ASX_TRACE_CAPACITY;
-
-    for (i = 0; i < count; i++) {
-        asx_trace_event *e = &g_trace_ring[i];
-        uint32_t k = (uint32_t)e->kind;
-        hash = fnv1a_mix_u32(hash, e->sequence);
-        hash = fnv1a_mix_u32(hash, k);
-        hash = fnv1a_mix_u64(hash, e->entity_id);
-        hash = fnv1a_mix_u64(hash, e->aux);
-    }
-
+/* Fold one event into a digest. The field order is part of the digest
+ * contract (ASX_TRACE_SCHEMA_DIGEST_EVENT_FIELDS); it must not change. */
+static uint64_t trace_digest_fold(uint64_t hash, const asx_trace_event *e) {
+    hash = fnv1a_mix_u32(hash, e->sequence);
+    hash = fnv1a_mix_u32(hash, (uint32_t)e->kind);
+    hash = fnv1a_mix_u64(hash, e->entity_id);
+    hash = fnv1a_mix_u64(hash, e->aux);
     return hash;
 }
+
+static uint64_t trace_digest_of(const asx_trace_event *events, uint32_t count) {
+    uint64_t hash = ASX_TRACE_DIGEST_SEED;
+    uint32_t i;
+    for (i = 0; i < count; i++) hash = trace_digest_fold(hash, &events[i]);
+    return hash;
+}
+
+/* -------------------------------------------------------------------
+ * Trace ring buffer and rolling digest
+ *
+ * Every emitted event is folded into the rolling digest at emit time,
+ * so the digest covers the whole trace no matter how many events the
+ * ring retains. The ring keeps the most recent ASX_TRACE_CAPACITY
+ * events; the event with sequence `seq` lives in slot
+ * seq % ASX_TRACE_CAPACITY. For traces that fit in the ring the digest
+ * equals a fold over the stored events.
+ * ------------------------------------------------------------------- */
+
+/* Kinds are grouped 0x00-0x4F; per-kind totals are exact even after the
+ * ring wraps, so callers never need retained events to count them. */
+#define ASX_TRACE_KIND_SLOTS 0x50u
+
+static asx_trace_event g_trace_ring[ASX_TRACE_CAPACITY];
+static uint64_t g_trace_emitted;
+static uint64_t g_trace_digest_state = ASX_TRACE_DIGEST_SEED;
+static uint64_t g_trace_kind_totals[ASX_TRACE_KIND_SLOTS];
+
+static uint32_t trace_retained(void) {
+    return g_trace_emitted < ASX_TRACE_CAPACITY ? (uint32_t)g_trace_emitted : ASX_TRACE_CAPACITY;
+}
+
+static uint64_t trace_first_retained_seq(void) { return g_trace_emitted - trace_retained(); }
+
+static uint32_t trace_seq_to_u32(uint64_t seq) {
+    return seq > (uint64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)seq;
+}
+
+void asx_trace_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux) {
+    asx_trace_event *e = &g_trace_ring[g_trace_emitted % ASX_TRACE_CAPACITY];
+    e->sequence = (uint32_t)(g_trace_emitted & 0xFFFFFFFFu);
+    e->kind = kind;
+    e->entity_id = entity_id;
+    e->aux = aux;
+    g_trace_digest_state = trace_digest_fold(g_trace_digest_state, e);
+    if ((uint32_t)kind < ASX_TRACE_KIND_SLOTS) g_trace_kind_totals[(uint32_t)kind]++;
+    g_trace_emitted++;
+}
+
+uint32_t asx_trace_event_count(void) { return trace_retained(); }
+
+uint64_t asx_trace_emitted_total(void) { return g_trace_emitted; }
+
+uint64_t asx_trace_dropped(void) { return g_trace_emitted - trace_retained(); }
+
+uint64_t asx_trace_kind_total(asx_trace_event_kind kind) {
+    if ((uint32_t)kind >= ASX_TRACE_KIND_SLOTS) return 0u;
+    return g_trace_kind_totals[(uint32_t)kind];
+}
+
+int asx_trace_event_get(uint32_t index, asx_trace_event *out) {
+    if (out == NULL) return 0;
+    if (index >= trace_retained()) return 0;
+    *out = g_trace_ring[(trace_first_retained_seq() + index) % ASX_TRACE_CAPACITY];
+    return 1;
+}
+
+int asx_trace_event_get_seq(uint64_t seq, asx_trace_event *out) {
+    if (out == NULL) return 0;
+    if (seq >= g_trace_emitted || seq < trace_first_retained_seq()) return 0;
+    *out = g_trace_ring[seq % ASX_TRACE_CAPACITY];
+    return 1;
+}
+
+void asx_trace_reset(void) {
+    g_trace_emitted = 0u;
+    g_trace_digest_state = ASX_TRACE_DIGEST_SEED;
+    memset(g_trace_kind_totals, 0, sizeof(g_trace_kind_totals));
+}
+
+uint64_t asx_trace_digest(void) { return g_trace_digest_state; }
 
 /* -------------------------------------------------------------------
  * Replay verification
  * ------------------------------------------------------------------- */
 
+/* The reference is a window of a trace: g_replay_ref[i] holds the event
+ * with sequence g_replay_ref_first_seq + i, the whole trace emitted
+ * g_replay_ref_total events, and g_replay_ref_digest is its rolling
+ * digest. A complete reference has first_seq == 0 and count == total. */
 static asx_trace_event g_replay_ref[ASX_TRACE_CAPACITY];
 static uint32_t g_replay_ref_count;
+static uint64_t g_replay_ref_first_seq;
+static uint64_t g_replay_ref_total;
+static uint64_t g_replay_ref_digest;
 static int g_replay_loaded;
 
 asx_status asx_replay_load_reference(const asx_trace_event *events, uint32_t count) {
-    uint32_t copy_count;
-
     if (events == NULL && count > 0) { return ASX_E_INVALID_ARGUMENT; }
     if (count > ASX_TRACE_CAPACITY) { return ASX_E_INVALID_ARGUMENT; }
 
-    copy_count = count;
-    if (copy_count > 0) { memcpy(g_replay_ref, events, copy_count * sizeof(asx_trace_event)); }
+    if (count > 0) { memcpy(g_replay_ref, events, count * sizeof(asx_trace_event)); }
     g_replay_ref_count = count;
+    g_replay_ref_first_seq = 0u;
+    g_replay_ref_total = count;
+    g_replay_ref_digest = trace_digest_of(g_replay_ref, count);
     g_replay_loaded = 1;
     return ASX_OK;
 }
 
 void asx_replay_clear_reference(void) {
     g_replay_ref_count = 0;
+    g_replay_ref_first_seq = 0u;
+    g_replay_ref_total = 0u;
+    g_replay_ref_digest = ASX_TRACE_DIGEST_SEED;
     g_replay_loaded = 0;
 }
 
 asx_replay_result asx_replay_verify(void) {
     asx_replay_result result;
-    uint32_t check_count;
-    uint32_t i;
-    uint64_t expected_digest;
-    uint64_t actual_digest;
+    uint64_t seq;
+    uint64_t start;
 
     memset(&result, 0, sizeof(result));
 
@@ -218,63 +269,47 @@ asx_replay_result asx_replay_verify(void) {
         return result;
     }
 
-    /* Check event count */
-    if (g_trace_count != g_replay_ref_count) {
+    /* Both traces must have emitted the same number of events. */
+    if (g_trace_emitted != g_replay_ref_total) {
         result.result = ASX_REPLAY_LENGTH_MISMATCH;
-        result.divergence_index =
-            g_trace_count < g_replay_ref_count ? g_trace_count : g_replay_ref_count;
+        result.divergence_index = trace_seq_to_u32(
+            g_trace_emitted < g_replay_ref_total ? g_trace_emitted : g_replay_ref_total);
         return result;
     }
 
-    /* Element-by-element comparison */
-    check_count = g_trace_count < ASX_TRACE_CAPACITY ? g_trace_count : ASX_TRACE_CAPACITY;
+    /* Compare the events both sides still hold, aligned by sequence.
+     * divergence_index is the sequence of the first mismatch. */
+    start = trace_first_retained_seq();
+    if (g_replay_ref_first_seq > start) start = g_replay_ref_first_seq;
 
-    for (i = 0; i < check_count; i++) {
-        asx_trace_event *actual = &g_trace_ring[i];
-        asx_trace_event *expected = &g_replay_ref[i];
+    for (seq = start; seq < g_trace_emitted; seq++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded by ASX_TRACE_CAPACITY retained events") */
+        const asx_trace_event *actual = &g_trace_ring[seq % ASX_TRACE_CAPACITY];
+        const asx_trace_event *expected = &g_replay_ref[seq - g_replay_ref_first_seq];
 
         if (actual->kind != expected->kind) {
             result.result = ASX_REPLAY_KIND_MISMATCH;
-            result.divergence_index = i;
+            result.divergence_index = trace_seq_to_u32(seq);
             return result;
         }
         if (actual->entity_id != expected->entity_id) {
             result.result = ASX_REPLAY_ENTITY_MISMATCH;
-            result.divergence_index = i;
+            result.divergence_index = trace_seq_to_u32(seq);
             return result;
         }
         if (actual->aux != expected->aux) {
             result.result = ASX_REPLAY_AUX_MISMATCH;
-            result.divergence_index = i;
+            result.divergence_index = trace_seq_to_u32(seq);
             return result;
         }
     }
 
-    /* Compute and compare digests */
-    actual_digest = asx_trace_digest();
+    /* The rolling digests cover every event, including any that neither
+     * side retained, so they catch divergence outside the window. */
+    result.expected_digest = g_replay_ref_digest;
+    result.actual_digest = g_trace_digest_state;
 
-    /* Compute expected digest from reference.
-     * Must use fnv1a_mix_u32/u64 (endian-safe) to match asx_trace_digest().
-     * Using raw fnv1a_mix() would hash native-endian bytes, producing
-     * different digests on big-endian platforms (bd-jlc). */
-    {
-        uint64_t hash = 0x517cc1b727220a95ULL;
-        uint32_t ref_count =
-            g_replay_ref_count < ASX_TRACE_CAPACITY ? g_replay_ref_count : ASX_TRACE_CAPACITY;
-        for (i = 0; i < ref_count; i++) {
-            uint32_t k = (uint32_t)g_replay_ref[i].kind;
-            hash = fnv1a_mix_u32(hash, g_replay_ref[i].sequence);
-            hash = fnv1a_mix_u32(hash, k);
-            hash = fnv1a_mix_u64(hash, g_replay_ref[i].entity_id);
-            hash = fnv1a_mix_u64(hash, g_replay_ref[i].aux);
-        }
-        expected_digest = hash;
-    }
-
-    result.expected_digest = expected_digest;
-    result.actual_digest = actual_digest;
-
-    if (actual_digest != expected_digest) {
+    if (result.actual_digest != result.expected_digest) {
         result.result = ASX_REPLAY_DIGEST_MISMATCH;
         return result;
     }
@@ -291,8 +326,17 @@ int asx_replay_reference_event_get(uint32_t index, asx_trace_event *out) {
     if (out == NULL) return 0;
     if (!g_replay_loaded) return 0;
     if (index >= g_replay_ref_count) return 0;
-    if (index >= ASX_TRACE_CAPACITY) return 0;
     *out = g_replay_ref[index];
+    return 1;
+}
+
+int asx_replay_reference_event_get_seq(uint64_t seq, asx_trace_event *out) {
+    if (out == NULL) return 0;
+    if (!g_replay_loaded) return 0;
+    if (seq < g_replay_ref_first_seq || seq - g_replay_ref_first_seq >= g_replay_ref_count) {
+        return 0;
+    }
+    *out = g_replay_ref[seq - g_replay_ref_first_seq];
     return 1;
 }
 
@@ -408,7 +452,7 @@ asx_status asx_snapshot_capture(asx_snapshot_buffer *out) {
     }
 
     snap_str(out, "],\"trace_count\":");
-    snap_u32(out, g_trace_count);
+    snap_u32(out, trace_seq_to_u32(g_trace_emitted));
     snap_str(out, ",\"trace_digest\":");
     {
         uint64_t d = asx_trace_digest();
@@ -429,7 +473,7 @@ asx_status asx_snapshot_capture(asx_snapshot_buffer *out) {
 
 uint64_t asx_snapshot_digest(const asx_snapshot_buffer *snap) {
     if (snap == NULL) return 0;
-    return fnv1a_mix(0x517cc1b727220a95ULL, snap->data, snap->len);
+    return fnv1a_mix(ASX_TRACE_DIGEST_SEED, snap->data, snap->len);
 }
 
 /* -------------------------------------------------------------------
@@ -501,13 +545,14 @@ static uint64_t read_le64(const uint8_t *p) {
 asx_status asx_trace_export_binary(uint8_t *buf, uint32_t capacity, uint32_t *out_len) {
     uint32_t count;
     uint32_t needed;
-    uint64_t digest;
+    uint64_t first_seq;
     uint32_t i;
     uint8_t *p;
 
     if (buf == NULL || out_len == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    count = g_trace_count < ASX_TRACE_CAPACITY ? g_trace_count : ASX_TRACE_CAPACITY;
+    count = trace_retained();
+    first_seq = trace_first_retained_seq();
 
     needed = ASX_TRACE_BINARY_HEADER + count * ASX_TRACE_BINARY_EVENT;
     if (capacity < needed) {
@@ -515,19 +560,20 @@ asx_status asx_trace_export_binary(uint8_t *buf, uint32_t capacity, uint32_t *ou
         return ASX_E_BUFFER_TOO_SMALL;
     }
 
-    digest = asx_trace_digest();
-
-    /* Write header */
+    /* Write header. The digest and total cover the whole trace; the
+     * events are the retained window, flagged when older ones dropped. */
     write_le32(buf + 0, ASX_TRACE_BINARY_MAGIC);
     write_le32(buf + 4, ASX_TRACE_BINARY_VERSION);
     write_le32(buf + 8, count);
-    write_le32(buf + 12, 0); /* reserved */
-    write_le64(buf + 16, digest);
+    write_le32(buf + 12, first_seq > 0u ? ASX_TRACE_BINARY_FLAG_TRUNCATED : 0u);
+    write_le64(buf + 16, g_trace_digest_state);
+    write_le64(buf + 24, g_trace_emitted);
 
-    /* Write events */
+    /* Write events, oldest retained first */
     p = buf + ASX_TRACE_BINARY_HEADER;
     for (i = 0; i < count; i++) {
-        asx_trace_event *e = &g_trace_ring[i];
+        /* ASX_CHECKPOINT_WAIVER("bounded by ASX_TRACE_CAPACITY retained events") */
+        const asx_trace_event *e = &g_trace_ring[(first_seq + i) % ASX_TRACE_CAPACITY];
         write_le32(p + 0, e->sequence);
         write_le32(p + 4, (uint32_t)e->kind);
         write_le64(p + 8, e->entity_id);
@@ -543,12 +589,13 @@ asx_status asx_trace_import_binary(const uint8_t *buf, uint32_t len) {
     uint32_t magic;
     uint32_t version;
     uint32_t count;
+    uint32_t flags;
     uint64_t stored_digest;
+    uint64_t total;
+    uint64_t first_seq;
     uint32_t needed;
     uint32_t i;
     const uint8_t *p;
-    uint64_t computed_digest;
-    uint64_t hash;
 
     /* Invalidate any existing reference before potentially overwriting it */
     g_replay_loaded = 0;
@@ -559,40 +606,47 @@ asx_status asx_trace_import_binary(const uint8_t *buf, uint32_t len) {
     magic = read_le32(buf + 0);
     version = read_le32(buf + 4);
     count = read_le32(buf + 8);
+    flags = read_le32(buf + 12);
     stored_digest = read_le64(buf + 16);
+    total = read_le64(buf + 24);
 
     if (magic != ASX_TRACE_BINARY_MAGIC) return ASX_E_INVALID_ARGUMENT;
     if (version != ASX_TRACE_BINARY_VERSION) return ASX_E_INVALID_ARGUMENT;
-    if (count > ASX_TRACE_CAPACITY) return ASX_E_INVALID_ARGUMENT;
+    if (count > ASX_TRACE_CAPACITY || (uint64_t)count > total) return ASX_E_INVALID_ARGUMENT;
+    if ((flags & ~ASX_TRACE_BINARY_FLAG_TRUNCATED) != 0u) return ASX_E_INVALID_ARGUMENT;
+    /* The truncation flag must agree with the counts. */
+    if (((flags & ASX_TRACE_BINARY_FLAG_TRUNCATED) != 0u) != ((uint64_t)count < total)) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
 
     needed = ASX_TRACE_BINARY_HEADER + count * ASX_TRACE_BINARY_EVENT;
     if (len < needed) return ASX_E_INVALID_ARGUMENT;
 
-    /* Decode events directly into g_replay_ref to save stack space */
+    /* Decode events directly into g_replay_ref to save stack space.
+     * The window must be the contiguous tail of the trace. */
+    first_seq = total - count;
     p = buf + ASX_TRACE_BINARY_HEADER;
     for (i = 0; i < count; i++) {
         g_replay_ref[i].sequence = read_le32(p + 0);
         g_replay_ref[i].kind = (asx_trace_event_kind)read_le32(p + 4);
         g_replay_ref[i].entity_id = read_le64(p + 8);
         g_replay_ref[i].aux = read_le64(p + 16);
+        if (g_replay_ref[i].sequence != (uint32_t)((first_seq + i) & 0xFFFFFFFFu)) {
+            return ASX_E_INVALID_ARGUMENT;
+        }
         p += ASX_TRACE_BINARY_EVENT;
     }
 
-    /* Verify digest of decoded events matches stored digest */
-    hash = 0x517cc1b727220a95ULL;
-    for (i = 0; i < count; i++) {
-        uint32_t k = (uint32_t)g_replay_ref[i].kind;
-        hash = fnv1a_mix_u32(hash, g_replay_ref[i].sequence);
-        hash = fnv1a_mix_u32(hash, k);
-        hash = fnv1a_mix_u64(hash, g_replay_ref[i].entity_id);
-        hash = fnv1a_mix_u64(hash, g_replay_ref[i].aux);
+    /* A complete trace must reproduce the stored digest. A truncated one
+     * cannot be re-folded; its stored digest is taken as the expectation. */
+    if (first_seq == 0u && trace_digest_of(g_replay_ref, count) != stored_digest) {
+        return ASX_E_INVALID_ARGUMENT;
     }
-    computed_digest = hash;
 
-    if (computed_digest != stored_digest) { return ASX_E_INVALID_ARGUMENT; }
-
-    /* Set count and loaded flag on success */
     g_replay_ref_count = count;
+    g_replay_ref_first_seq = first_seq;
+    g_replay_ref_total = total;
+    g_replay_ref_digest = stored_digest;
     g_replay_loaded = 1;
 
     return ASX_OK;

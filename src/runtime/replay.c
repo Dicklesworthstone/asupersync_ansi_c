@@ -234,8 +234,9 @@ asx_status asx_replay_render_current_diff_json(asx_report_buf *out) {
     result = asx_replay_verify();
     current_count = asx_trace_event_count();
     reference_count = asx_replay_reference_event_count();
-    have_expected = asx_replay_reference_event_get(result.divergence_index, &expected_event);
-    have_actual = asx_trace_event_get(result.divergence_index, &actual_event);
+    /* divergence_index is an absolute event sequence on both sides. */
+    have_expected = asx_replay_reference_event_get_seq(result.divergence_index, &expected_event);
+    have_actual = asx_trace_event_get_seq(result.divergence_index, &actual_event);
 
     asx_report_buf_init(out);
     asx_report_buf_append(out, "{\"reference_loaded\":");

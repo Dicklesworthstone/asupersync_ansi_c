@@ -57,7 +57,9 @@ void asx_hindsight_log(asx_nd_event_kind kind, uint64_t entity_id, uint64_t obse
     e->kind = kind;
     e->entity_id = entity_id;
     e->observed_value = observed_value;
-    e->trace_seq = asx_trace_event_count();
+    /* Sequence of the next trace event (low 32 bits, matching the trace
+     * event sequence field), so the link survives ring wrap-around. */
+    e->trace_seq = (uint32_t)(asx_trace_emitted_total() & 0xFFFFFFFFu);
 
     g_write_index++;
     if (g_total_count < UINT32_MAX) g_total_count++;
