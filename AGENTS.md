@@ -113,9 +113,12 @@ We do not care about backwards compatibility—we're in early development with n
 # Build with strict warnings
 make build
 
-# Run formatting/lint gates
-make format-check
-make lint
+# Run formatting/lint gates. STRICT_GATES=1 makes a missing tool a FAILURE
+# instead of a silent SKIP (CI has never passed format-check while local runs
+# skipped it). clang-format is pinned to 18.1.8; if the system binary is a
+# different version, the Makefile uses `uvx --from clang-format==18.1.8 clang-format`.
+make format-check STRICT_GATES=1
+make lint STRICT_GATES=1
 
 # Run core tests and conformance
 make test

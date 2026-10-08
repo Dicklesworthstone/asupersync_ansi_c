@@ -21,11 +21,20 @@ PREFIX   ?= /usr/local
 # Policy toggles (local defaults vs CI strictness)
 # ---------------------------------------------------------------------------
 CI ?= 0
-FAIL_ON_MISSING_FORMATTER ?= $(CI)
-FAIL_ON_MISSING_LINTER ?= $(CI)
-FAIL_ON_MISSING_RUNNERS ?= $(CI)
-FAIL_ON_MISSING_CROSS_TOOLCHAINS ?= $(CI)
-FAIL_ON_EMPTY_UNIT_TESTS ?= $(CI)
+# STRICT_GATES=1 turns every "tool missing -> SKIP" path into a failure.
+# Agents running the AGENTS.md gates locally should pass STRICT_GATES=1.
+STRICT_GATES ?= $(CI)
+FAIL_ON_MISSING_FORMATTER ?= $(STRICT_GATES)
+FAIL_ON_MISSING_LINTER ?= $(STRICT_GATES)
+FAIL_ON_MISSING_RUNNERS ?= $(STRICT_GATES)
+FAIL_ON_MISSING_CROSS_TOOLCHAINS ?= $(STRICT_GATES)
+FAIL_ON_EMPTY_UNIT_TESTS ?= $(STRICT_GATES)
+# Pinned formatter: the system clang-format is used only when it is this
+# version; otherwise uvx fetches it, so local runs and CI agree.
+CLANG_FORMAT_VERSION ?= 18.1.8
+CLANG_FORMAT ?= $(shell if clang-format --version 2>/dev/null | grep -q 'version $(CLANG_FORMAT_VERSION)'; then \
+	echo clang-format; elif command -v uvx >/dev/null 2>&1; then \
+	echo "uvx --from clang-format==$(CLANG_FORMAT_VERSION) clang-format"; fi)
 FAIL_ON_EMPTY_INVARIANT_TESTS ?= 0
 RUN_QEMU_IN_MATRIX ?= 0
 
@@ -602,16 +611,16 @@ $(BIN_DIR):
 # ---------------------------------------------------------------------------
 format-check:
 	@echo "[asx] format-check: verifying source formatting..."
-	@if command -v clang-format >/dev/null 2>&1; then \
+	@if [ -n "$(CLANG_FORMAT)" ]; then \
 		find include src tests \( -name '*.c' -o -name '*.h' \) -print0 | \
-		xargs -0 clang-format --dry-run --Werror 2>&1 && \
-		echo "[asx] format-check: PASS" || \
-		{ echo "[asx] format-check: FAIL — run clang-format"; exit 1; }; \
+		xargs -0 $(CLANG_FORMAT) --dry-run --Werror 2>&1 && \
+		echo "[asx] format-check: PASS (clang-format $(CLANG_FORMAT_VERSION))" || \
+		{ echo "[asx] format-check: FAIL — run $(CLANG_FORMAT) -i on the files above"; exit 1; }; \
 	elif [ "$(FAIL_ON_MISSING_FORMATTER)" = "1" ]; then \
-		echo "[asx] format-check: FAIL (clang-format not found; strict mode)"; \
+		echo "[asx] format-check: FAIL (clang-format $(CLANG_FORMAT_VERSION) not found and no uvx; strict mode)"; \
 		exit 1; \
 	else \
-		echo "[asx] format-check: SKIP (clang-format not found)"; \
+		echo "[asx] format-check: SKIP (clang-format $(CLANG_FORMAT_VERSION) not found and no uvx; use STRICT_GATES=1 to fail)"; \
 	fi
 
 # ---------------------------------------------------------------------------
