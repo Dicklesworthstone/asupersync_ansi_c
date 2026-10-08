@@ -692,11 +692,11 @@ TEST(watch_publish_wakes_receivers) {
         ASSERT_EQ(asx_task_spawn(g_region, poll_watch_rx, &r[i], &t), ASX_OK);
     }
 
-    /* First poll observes the initial version, then parks. */
+    /* The initial value is not a change: the first poll parks at once. */
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
-    ASSERT_EQ(r[0].changes, 1u);
-    ASSERT_EQ(r[1].changes, 1u);
+    ASSERT_EQ(r[0].changes, 0u);
+    ASSERT_EQ(r[1].changes, 0u);
 
     ASSERT_EQ(asx_watch_send(&tx, 2u), ASX_OK);
     ASSERT_EQ(asx_watch_send(&tx, 3u), ASX_OK); /* latest value wins */
@@ -704,7 +704,7 @@ TEST(watch_publish_wakes_receivers) {
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
     ASSERT_EQ(polls_used(100, &budget), 2u);
     for (i = 0; i < 2u; i++) {
-        ASSERT_EQ(r[i].changes, 2u);
+        ASSERT_EQ(r[i].changes, 1u); /* two sends, observed as one change */
         ASSERT_EQ(r[i].value, (uint64_t)3);
     }
 
@@ -722,7 +722,7 @@ TEST(watch_poll_changed_outside_scheduler) {
 
     ASSERT_TRUE(setup());
     ASSERT_EQ(asx_watch_create(5u, &tx, &rx), ASX_OK);
-    ASSERT_EQ(asx_watch_poll_changed(&rx), ASX_OK); /* initial version */
+    ASSERT_EQ(asx_watch_poll_changed(&rx), ASX_E_PENDING); /* initial value is not a change */
     ASSERT_FALSE(asx_watch_has_changed(&rx));
     ASSERT_EQ(asx_watch_poll_changed(&rx), ASX_E_PENDING);
     ASSERT_EQ(asx_watch_send(&tx, 6u), ASX_OK);

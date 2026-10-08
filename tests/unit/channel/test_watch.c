@@ -53,13 +53,39 @@ TEST(read_initial_value) {
     ASSERT_EQ(val, (uint64_t)100);
 }
 
-TEST(has_changed_initially_true) {
+/* C4 regression: the initial value is version 0 and the first receiver
+ * has seen it, so nothing has changed yet (Rust channel/watch.rs). The C
+ * port used to start at version 1, reporting a change that never
+ * happened to every new receiver. */
+TEST(has_changed_initially_false) {
     asx_watch_sender tx;
     asx_watch_receiver rx;
     setup();
     MUST_OK(asx_watch_create(1, &tx, &rx));
-    /* Receiver hasn't read yet, so value is "new" */
+    ASSERT_FALSE(asx_watch_has_changed(&rx));
+    ASSERT_EQ(asx_watch_poll_changed(&rx), ASX_E_PENDING);
+    MUST_OK(asx_watch_send(&tx, 2));
     ASSERT_TRUE(asx_watch_has_changed(&rx));
+}
+
+TEST(subscribe_sees_only_later_changes) {
+    asx_watch_sender tx;
+    asx_watch_receiver rx1, rx2;
+    uint64_t val;
+    setup();
+    MUST_OK(asx_watch_create(0, &tx, &rx1));
+    MUST_OK(asx_watch_send(&tx, 1));
+    MUST_OK(asx_watch_send(&tx, 2));
+    MUST_OK(asx_watch_send(&tx, 3));
+    /* A late subscriber has seen the current version */
+    MUST_OK(asx_watch_subscribe(&tx, &rx2));
+    ASSERT_FALSE(asx_watch_has_changed(&rx2));
+    MUST_OK(asx_watch_recv(&rx2, &val));
+    ASSERT_EQ(val, (uint64_t)3); /* but can still read the current value */
+    /* The original receiver still sees the unread sends as a change */
+    ASSERT_TRUE(asx_watch_has_changed(&rx1));
+    MUST_OK(asx_watch_send(&tx, 4));
+    ASSERT_TRUE(asx_watch_has_changed(&rx2));
 }
 
 TEST(has_changed_false_after_read) {
@@ -212,7 +238,8 @@ int main(void) {
     RUN_TEST(create_success);
 
     RUN_TEST(read_initial_value);
-    RUN_TEST(has_changed_initially_true);
+    RUN_TEST(has_changed_initially_false);
+    RUN_TEST(subscribe_sees_only_later_changes);
     RUN_TEST(has_changed_false_after_read);
 
     RUN_TEST(send_updates_value);

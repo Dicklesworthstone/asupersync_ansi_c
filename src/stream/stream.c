@@ -381,11 +381,13 @@ static asx_stream_result watch_poll(void *state, const asx_waker *waker, void **
     asx_stream_watch_state *ws = (asx_stream_watch_state *)state;
     (void)waker;
 
-    if (!asx_watch_has_changed(ws->watch_rx)) { return ASX_STREAM_PENDING; }
+    /* The first poll yields the current value; after that, only changes. */
+    if (ws->has_seen_initial && !asx_watch_has_changed(ws->watch_rx)) { return ASX_STREAM_PENDING; }
 
     {
         asx_status s = asx_watch_recv(ws->watch_rx, (uint64_t *)ws->value_buf);
         if (s == ASX_OK) {
+            ws->has_seen_initial = 1;
             *out_item = ws->value_buf;
             return ASX_STREAM_READY;
         }
@@ -397,8 +399,15 @@ void asx_stream_from_watch(asx_stream *s, asx_stream_watch_state *state, void *w
                            void *value_buf) {
     state->watch_rx = watch_rx;
     state->value_buf = value_buf;
+    state->has_seen_initial = 0;
     s->poll_next = watch_poll;
     s->state = state;
+}
+
+void asx_stream_from_watch_changes(asx_stream *s, asx_stream_watch_state *state, void *watch_rx,
+                                   void *value_buf) {
+    asx_stream_from_watch(s, state, watch_rx, value_buf);
+    state->has_seen_initial = 1;
 }
 
 static asx_stream_result broadcast_poll(void *state, const asx_waker *waker, void **out_item) {

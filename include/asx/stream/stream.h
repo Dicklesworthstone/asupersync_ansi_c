@@ -227,13 +227,20 @@ ASX_API void asx_stream_from_receiver(asx_stream *s, asx_stream_receiver_state *
 
 /* WatchStream: wraps asx_watch into a stream of value changes. */
 typedef struct {
-    void *watch_rx;  /* pointer to asx_watch_receiver */
-    void *value_buf; /* pointer to buffer for current value */
+    void *watch_rx;       /* pointer to asx_watch_receiver */
+    void *value_buf;      /* pointer to buffer for current value */
+    int has_seen_initial; /* the current value has been yielded once */
 } asx_stream_watch_state;
 
-/* Initialize a stream that yields on watch value changes. */
+/* Initialize a stream that yields the current value first, then every
+ * later change (Rust WatchStream::new). */
 ASX_API void asx_stream_from_watch(asx_stream *s, asx_stream_watch_state *state, void *watch_rx,
                                    void *value_buf);
+
+/* Initialize a stream that yields only changes after this call, skipping
+ * the current value (Rust WatchStream::from_changes). */
+ASX_API void asx_stream_from_watch_changes(asx_stream *s, asx_stream_watch_state *state,
+                                           void *watch_rx, void *value_buf);
 
 /* BroadcastStream: wraps asx_broadcast_receiver into a stream. */
 typedef struct {

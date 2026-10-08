@@ -26,7 +26,7 @@ typedef struct {
     uint16_t generation;
     int sender_alive;
     uint64_t value;
-    uint32_t version; /* incremented on each send */
+    uint64_t version; /* incremented on each send; 0 = initial value */
     uint32_t receiver_count;
     asx_task_id wait_slots[ASX_WATCH_MAX_RECEIVERS];
     asx_wait_queue waiters; /* tasks parked in poll_changed */
@@ -100,7 +100,9 @@ asx_status asx_watch_create(uint64_t initial_value, asx_watch_sender *out_sender
     s->generation = next_gen(s->generation);
     s->sender_alive = 1;
     s->value = initial_value;
-    s->version = 1; /* start at version 1 so receivers can detect first value */
+    /* Version 0 holds the initial value and the first receiver has seen
+     * it: only later sends count as changes (Rust channel/watch.rs). */
+    s->version = 0;
     s->receiver_count = 1;
     watch_waiters_init(s);
 
@@ -108,7 +110,7 @@ asx_status asx_watch_create(uint64_t initial_value, asx_watch_sender *out_sender
     out_sender->generation = s->generation;
     out_receiver->slot = idx;
     out_receiver->generation = s->generation;
-    out_receiver->last_seen_version = 0; /* hasn't seen any version yet */
+    out_receiver->last_seen_version = 0;
 
     return ASX_OK;
 }
@@ -127,7 +129,9 @@ asx_status asx_watch_subscribe(const asx_watch_sender *sender, asx_watch_receive
     s->receiver_count++;
     out_receiver->slot = sender->slot;
     out_receiver->generation = s->generation;
-    out_receiver->last_seen_version = 0;
+    /* A new subscriber has seen the current version and observes only
+     * later changes (Rust Sender::subscribe). */
+    out_receiver->last_seen_version = s->version;
 
     return ASX_OK;
 }

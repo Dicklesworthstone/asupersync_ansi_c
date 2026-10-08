@@ -42,7 +42,7 @@ typedef struct {
 typedef struct {
     uint32_t slot;
     uint16_t generation;
-    uint32_t last_seen_version; /* version last observed by this receiver */
+    uint64_t last_seen_version; /* version last observed by this receiver */
 } asx_watch_receiver;
 
 /* -------------------------------------------------------------------

@@ -11,6 +11,7 @@
 
 #include "../../test_harness.h"
 #include <asx/core/channel.h>
+#include <asx/core/watch.h>
 #include <asx/runtime/runtime.h>
 #include <asx/stream/stream.h>
 #include <string.h>
@@ -1177,6 +1178,49 @@ TEST(receiver_stream_keeps_full_channel_handle) {
     ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_DONE);
 }
 
+/* WatchStream::new semantics: the current value first, then changes. */
+TEST(watch_stream_yields_initial_then_changes) {
+    asx_watch_sender tx;
+    asx_watch_receiver rx;
+    asx_stream s;
+    asx_stream_watch_state ws;
+    uint64_t buf = 0;
+    void *item = NULL;
+
+    asx_watch_reset();
+    ASSERT_EQ(asx_watch_create(5u, &tx, &rx), ASX_OK);
+    asx_stream_from_watch(&s, &ws, &rx, &buf);
+
+    ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(uint64_t *)item, (uint64_t)5);
+    ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_PENDING);
+
+    ASSERT_EQ(asx_watch_send(&tx, 6u), ASX_OK);
+    ASSERT_EQ(asx_watch_send(&tx, 7u), ASX_OK);
+    ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(uint64_t *)item, (uint64_t)7); /* latest value wins */
+    ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_PENDING);
+}
+
+/* WatchStream::from_changes semantics: the current value is skipped. */
+TEST(watch_stream_from_changes_skips_initial) {
+    asx_watch_sender tx;
+    asx_watch_receiver rx;
+    asx_stream s;
+    asx_stream_watch_state ws;
+    uint64_t buf = 0;
+    void *item = NULL;
+
+    asx_watch_reset();
+    ASSERT_EQ(asx_watch_create(5u, &tx, &rx), ASX_OK);
+    asx_stream_from_watch_changes(&s, &ws, &rx, &buf);
+
+    ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_PENDING);
+    ASSERT_EQ(asx_watch_send(&tx, 9u), ASX_OK);
+    ASSERT_EQ(asx_stream_poll_next(&s, NULL, &item), ASX_STREAM_READY);
+    ASSERT_EQ(*(uint64_t *)item, (uint64_t)9);
+}
+
 /* ================================================================== */
 /* main                                                                */
 /* ================================================================== */
@@ -1289,6 +1333,8 @@ int main(void) {
 
     /* Channel sources */
     RUN_TEST(receiver_stream_keeps_full_channel_handle);
+    RUN_TEST(watch_stream_yields_initial_then_changes);
+    RUN_TEST(watch_stream_from_changes_skips_initial);
 
     TEST_REPORT();
     return test_failures;
