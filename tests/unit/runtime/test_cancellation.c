@@ -13,6 +13,7 @@
 #include <asx/core/cancel.h>
 #include <asx/core/ghost.h>
 #include <asx/runtime/runtime.h>
+#include <string.h>
 
 /* Suppress warn_unused_result for intentionally-ignored scheduler calls.
  * GCC's (void) cast does not silence warn_unused_result under -Werror. */
@@ -1011,6 +1012,147 @@ TEST(region_cancel_records_one_request_per_newly_cancelled_task) {
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)1u);
 }
 
+/* -------------------------------------------------------------------
+ * Spawn completion policy (Rust classify_spawn_completion,
+ * task_handle.rs:173-202; fuzz findings gen-1-14/19/33/56, bd-ij9w)
+ * ------------------------------------------------------------------- */
+
+/* Yields until a checkpoint observes a cancel, then returns Ok, or returns
+ * Ok at once when `ack` is 0 and it was polled twice. */
+typedef struct {
+    int ack;
+    uint32_t polls;
+} ack_child;
+
+static asx_status poll_ack_child(void *ud, asx_task_id self) {
+    ack_child *c = (ack_child *)ud;
+    asx_checkpoint_result cr;
+    c->polls++;
+    if (c->ack) {
+        if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) return ASX_OK;
+    } else if (c->polls >= 2u) {
+        return ASX_OK;
+    }
+    return ASX_E_PENDING;
+}
+
+/* Spawns `child` from inside its first poll; with `cancel_now` it cancels
+ * the child in that same poll, before the child's first poll. */
+typedef struct {
+    asx_region_id region;
+    ack_child child_state;
+    asx_task_id child;
+    int spawned;
+    int cancel_now;
+} spawner;
+
+static asx_status poll_spawner(void *ud, asx_task_id self) {
+    spawner *s = (spawner *)ud;
+    (void)self;
+    if (!s->spawned) {
+        asx_status st = asx_task_spawn(s->region, poll_ack_child, &s->child_state, &s->child);
+        if (st != ASX_OK) return st;
+        s->spawned = 1;
+        if (s->cancel_now) return asx_task_cancel(s->child, ASX_CANCEL_USER);
+    }
+    return ASX_OK;
+}
+
+static asx_outcome_severity child_outcome(int ack, int cancel_now) {
+    asx_region_id rid;
+    asx_task_id parent;
+    spawner s;
+    asx_outcome out;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    memset(&s, 0, sizeof(s));
+    s.child_state.ack = ack;
+    s.cancel_now = cancel_now;
+    if (asx_region_open(&rid) != ASX_OK) return ASX_OUTCOME_PANICKED;
+    s.region = rid;
+    if (asx_task_spawn(rid, poll_spawner, &s, &parent) != ASX_OK) return ASX_OUTCOME_PANICKED;
+    budget = asx_budget_from_polls(2); /* parent completes, child polled once */
+    {
+        asx_status partial = asx_scheduler_run(rid, &budget); /* stops at the budget */
+        (void)partial;
+    }
+    if (!cancel_now && asx_task_cancel(s.child, ASX_CANCEL_USER) != ASX_OK) {
+        return ASX_OUTCOME_PANICKED;
+    }
+    budget = asx_budget_from_polls(20);
+    if (asx_scheduler_run(rid, &budget) != ASX_OK) return ASX_OUTCOME_PANICKED;
+    if (asx_task_get_outcome(s.child, &out) != ASX_OK) return ASX_OUTCOME_PANICKED;
+    return asx_outcome_severity_of(&out);
+}
+
+TEST(spawned_child_that_acknowledges_a_later_cancel_keeps_its_value) {
+    ASSERT_EQ((int)child_outcome(1, 0), (int)ASX_OUTCOME_OK);
+}
+
+TEST(spawned_child_cancelled_before_its_first_poll_is_cancelled) {
+    ASSERT_EQ((int)child_outcome(1, 1), (int)ASX_OUTCOME_CANCELLED);
+}
+
+TEST(spawned_child_that_never_acknowledges_is_cancelled) {
+    ASSERT_EQ((int)child_outcome(0, 0), (int)ASX_OUTCOME_CANCELLED);
+}
+
+TEST(top_level_task_that_acknowledges_is_still_cancelled) {
+    /* Rust create_task: cancellation wins (DSL v2 §2). */
+    asx_region_id rid;
+    asx_task_id tid;
+    ack_child c;
+    asx_outcome out;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    memset(&c, 0, sizeof(c));
+    c.ack = 1;
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_ack_child, &c, &tid), ASX_OK);
+    budget = asx_budget_from_polls(1);
+    {
+        asx_status partial = asx_scheduler_run(rid, &budget); /* stops at the budget */
+        (void)partial;
+    }
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
+    budget = asx_budget_from_polls(20);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_get_outcome(tid, &out), ASX_OK);
+    ASSERT_EQ((int)asx_outcome_severity_of(&out), (int)ASX_OUTCOME_CANCELLED);
+}
+
+TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline) {
+    /* Rust Cx::checkpoint (cx.rs:3112-3160) acknowledges a pending cancel
+     * and turns a passed budget deadline into a cancel, as asx_checkpoint. */
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_task_id late;
+    asx_task_state state;
+    asx_cancel_reason got;
+    asx_budget b;
+    asx_cx cx;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
+    asx_cx_init(&cx, rid, tid, ASX_CAP_CANCEL_CHECK);
+    ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
+    ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
+    ASSERT_EQ((int)state, (int)ASX_TASK_CANCELLING);
+
+    b = asx_budget_infinite();
+    b.deadline = 1u; /* already passed: the clock is past 1 ns */
+    asx_runtime_virtual_advance(10u);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &b, &late), ASX_OK);
+    asx_cx_init(&cx, rid, late, ASX_CAP_CANCEL_CHECK);
+    ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
+    ASSERT_EQ(asx_task_get_cancel_reason(late, &got), ASX_OK);
+    ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_DEADLINE);
+}
+
 TEST(budget_cancel_is_attributed_to_the_task_and_records_no_request) {
     asx_region_id rid;
     asx_task_id tid;
@@ -1089,6 +1231,11 @@ int main(void) {
     RUN_TEST(region_cancel_of_an_idle_region_finalizes_at_once);
     RUN_TEST(cancel_strengthen_replaces_the_whole_reason_and_records_no_event);
     RUN_TEST(region_cancel_records_one_request_per_newly_cancelled_task);
+    RUN_TEST(spawned_child_that_acknowledges_a_later_cancel_keeps_its_value);
+    RUN_TEST(spawned_child_cancelled_before_its_first_poll_is_cancelled);
+    RUN_TEST(spawned_child_that_never_acknowledges_is_cancelled);
+    RUN_TEST(top_level_task_that_acknowledges_is_still_cancelled);
+    RUN_TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline);
     RUN_TEST(budget_cancel_is_attributed_to_the_task_and_records_no_request);
     RUN_TEST(obligation_abort_with_reason_records_it);
 

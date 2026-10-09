@@ -188,8 +188,12 @@ static void timer_arm(uint32_t idx, asx_time deadline) {
     timer_heap_sift_up(g_timer_heap_len - 1u);
 }
 
-/* Fire every task timer due at `now`, in (deadline, seq) order.
- * Returns the number of tasks woken. */
+/* Fire every task timer due at `now`, in (deadline, seq) order: wake its
+ * task. The trace records nothing here: as in Rust, the sleep records
+ * fired or cancelled itself when it completes (asx_task_complete_timer,
+ * asx_task_cancel_timer; sleep.rs:670-690), so a sleeper woken by its
+ * timer that first observes a cancel records a cancel (fuzz finding
+ * gen-1-21, bd-ij9w). Returns the number of tasks woken. */
 static uint32_t timers_fire(asx_time now) {
     uint32_t fired = 0;
     while (g_timer_heap_len > 0u) {
@@ -197,11 +201,6 @@ static uint32_t timers_fire(asx_time now) {
         uint32_t idx = g_timer_heap[0];
         if (g_tasks[idx].wake_at > now) break;
         timer_heap_remove_at(0u);
-        if (g_tasks[idx].traced_deadline != 0u && g_tasks[idx].traced_deadline <= now) {
-            asx_trace_emit(ASX_TRACE_TIMER_FIRE, (uint64_t)asx_task_handle_for_slot(idx),
-                           g_tasks[idx].traced_deadline);
-            g_tasks[idx].traced_deadline = 0u;
-        }
         asx_task_wake_slot_internal(&g_tasks[idx]);
         fired++;
     }
@@ -237,6 +236,22 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->panicked = 0;
     task->panic_message = NULL;
     task->cancel_polled = 0;
+    task->spawned_in_poll = 0;
+    task->first_polled = 0;
+    task->cancel_before_first_poll = 0;
+}
+
+/* Whether a pending cancel makes a completing task's outcome CANCELLED
+ * (Rust classify_spawn_completion, task_handle.rs:173-202). A task spawned
+ * from inside another task's poll (Rust cx.spawn,
+ * PreserveAcknowledgedCancellationResult) keeps the value it returned when
+ * its cancel came after its first poll and it acknowledged it (a checkpoint
+ * moved it to CANCELLING); C reasons are always attributed. Every other
+ * task (Rust create_task) is cancellation-dominant (DSL v2 §2). */
+static int sched_cancel_dominates(const asx_task_slot *t) {
+    int acknowledged = t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_FINALIZING;
+    if (!t->cancel_pending) return 0;
+    return !(t->spawned_in_poll && !t->cancel_before_first_poll && acknowledged);
 }
 
 asx_status asx_task_panic(asx_task_id self, const char *message) {
@@ -378,10 +393,26 @@ asx_status asx_task_cancel_timer(asx_task_id self) {
     asx_task_slot *t;
     asx_status st = asx_task_slot_lookup(self, &t);
     if (st != ASX_OK) return st;
-    /* A sleep dropped before its deadline (Rust: cancel_active_registration,
-     * TimerCancelled). */
+    /* A sleep that ends without completing at its deadline (Rust:
+     * cancel_active_registration, TimerCancelled), whether or not its timer
+     * already woke it. */
     if (t->traced_deadline != 0u) {
         asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, t->traced_deadline);
+        t->traced_deadline = 0u;
+    }
+    if (t->timer_pos != ASX_SLOT_NONE) timer_heap_remove_at(t->timer_pos);
+    return ASX_OK;
+}
+
+asx_status asx_task_complete_timer(asx_task_id self) {
+    asx_task_slot *t;
+    asx_status st = asx_task_slot_lookup(self, &t);
+    if (st != ASX_OK) return st;
+    /* A sleep that completes at its deadline (Rust:
+     * complete_ready_registration, TimerFired). A sleep that never
+     * registered (ready at its first poll) records nothing. */
+    if (t->traced_deadline != 0u) {
+        asx_trace_emit(ASX_TRACE_TIMER_FIRE, (uint64_t)self, t->traced_deadline);
         t->traced_deadline = 0u;
     }
     if (t->timer_pos != ASX_SLOT_NONE) timer_heap_remove_at(t->timer_pos);
@@ -657,6 +688,22 @@ static void sched_block(uint32_t timeout_ms) {
     asx_waker_finish_block_internal();
 }
 
+/* A live, unparked task in scope: a round has work. Rust's lab steps, and
+ * so processes due timers, only while some task is runnable
+ * (run_until_idle, lab/runtime.rs:3428-3447; the timer pass is inside the
+ * step, :4509), so an idle run_until_idle leaves due timers unfired for the
+ * caller's next advance (fuzz finding gen-1-38, bd-ij9w). */
+static int sched_any_runnable(void) {
+    uint32_t i;
+    for (i = 0; i < g_task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        const asx_task_slot *t = &g_tasks[i];
+        if (!t->alive || t->parked || asx_task_is_terminal(t->state)) continue;
+        if (sched_scope_region(t) != NULL) return 1;
+    }
+    return 0;
+}
+
 /* Work that completes off the scheduler thread and signals a waker. */
 static int sched_external_pending(void) {
 #if ASX_HAS_BLOCKING_SURFACE
@@ -687,10 +734,10 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
     if (sched_unpark_cancelled(0) > 0u) return ASX_OK;
     if (sched_drain_wakers() > 0u) return ASX_OK;
 
-    /* Run-until-idle: only what is due now may make progress; the clock is
-     * the caller's to move (lab run_until_idle semantics). */
+    /* Run-until-idle: nothing is runnable, so the run ends, due timers
+     * unfired: the lab processes timers only within a step, and steps only
+     * while some task is runnable; the clock is the caller's to move. */
     if (!advance_clock) {
-        if (g_timer_heap_len > 0u && timers_fire(sched_now()) > 0u) return ASX_OK;
         /* ASX_ANALYZER_WAIVER("config-dependent: 0 without blocking pool/native I/O") */
         return (g_timer_heap_len > 0u || sched_external_pending()) ? ASX_E_PENDING
                                                                    : ASX_E_WOULD_BLOCK;
@@ -803,7 +850,12 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
         sched_compute_scope(region);
         sched_poll_io_nonblocking();
         (void)sched_drain_wakers();
-        if (g_timer_heap_len > 0u) (void)timers_fire(sched_now());
+        /* Due timers fire at the start of a round, as a lab step processes
+         * them before polling; run-until-idle starts no round for them
+         * when nothing is runnable (sched_any_runnable). */
+        if (g_timer_heap_len > 0u && (advance_clock || sched_any_runnable())) {
+            (void)timers_fire(sched_now());
+        }
 
         for (i = 0; i < g_task_count; i++) {
             ASX_CHECKPOINT_WAIVER("kernel-scheduler: inner poll loop bounded by "
@@ -881,6 +933,16 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             /* Call the task's poll function */
             task_region = t->region;
             if (t->cancel_pending) t->cancel_polled = 1;
+            if (!t->first_polled) {
+                t->first_polled = 1;
+                t->cancel_before_first_poll = t->cancel_pending ? 1u : 0u;
+            }
+            /* Charge the poll before running it, as Rust's lab does
+             * (lab/runtime.rs:4663): a checkpoint in the poll that spends
+             * the last unit sees the quota exhausted. */
+            if (t->budget.poll_quota != UINT32_MAX && t->budget.poll_quota > 0u) {
+                t->budget.poll_quota--;
+            }
             t->in_poll = 1;
             t->park_requested = 0;
             t->notified = 0;
@@ -890,9 +952,6 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             asx_error_ledger_bind_task(ASX_INVALID_ID);
             g_current_task = ASX_INVALID_ID;
             t->in_poll = 0;
-            if (t->budget.poll_quota != UINT32_MAX && t->budget.poll_quota > 0u) {
-                t->budget.poll_quota--;
-            }
 
             /* A panic ends the task whatever the poll returned (Rust catches
              * it at the poll boundary: Outcome::Panicked). It dominates a
@@ -907,16 +966,17 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             }
 
             if (poll_result == ASX_OK) {
-                /* Completed — outcome joins to CANCELLED if cancel was pending */
+                /* Completed — CANCELLED if a pending cancel dominates. */
                 st = sched_complete(t, tid, rslot,
-                                    t->cancel_pending ? ASX_OUTCOME_CANCELLED : ASX_OUTCOME_OK,
+                                    sched_cancel_dominates(t) ? ASX_OUTCOME_CANCELLED
+                                                              : ASX_OUTCOME_OK,
                                     ASX_SCHED_EVENT_COMPLETE, round);
                 if (st != ASX_OK) return st;
                 active--;
             } else if (poll_result != ASX_E_PENDING) {
                 /* Failed — CANCELLED > ERR in the severity lattice, so a
-                 * pending cancel dominates. */
-                int was_cancelled = t->cancel_pending;
+                 * dominating pending cancel wins. */
+                int was_cancelled = sched_cancel_dominates(t);
                 if (!was_cancelled) t->last_error = poll_result;
                 st = sched_complete(t, tid, rslot,
                                     was_cancelled ? ASX_OUTCOME_CANCELLED : ASX_OUTCOME_ERR,

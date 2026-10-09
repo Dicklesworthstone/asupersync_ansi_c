@@ -298,7 +298,7 @@ TEST(race_same_round_completion_picks_lowest_index) {
     ASSERT_EQ(asx_task_group_winner(&g_owner.group), 0);
 }
 
-TEST(race_loser_obligations_are_aborted_before_resolve) {
+TEST(race_loser_obligations_are_leaked_before_resolve) {
     asx_region_id r;
     asx_task_id owner;
     asx_budget run;
@@ -314,10 +314,11 @@ TEST(race_loser_obligations_are_aborted_before_resolve) {
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
     ASSERT_TRUE(g_owner.done);
     ASSERT_TRUE(g_m[1].ob != ASX_INVALID_ID);
+    /* The cancelled loser completed holding it: a leak, resolved before the
+     * group resolves (Rust drops the loser's token, which posts a Leak). */
     ASSERT_EQ(asx_obligation_get_info(g_m[1].ob, &info), ASX_OK);
-    ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
-    ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_CANCEL);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
+    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
     run = asx_budget_from_polls(10);
     ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
 }
@@ -598,7 +599,7 @@ int main(void) {
     RUN_TEST(race_cancels_and_drains_losers_before_resolving);
     RUN_TEST(race_winner_failure_is_group_result);
     RUN_TEST(race_same_round_completion_picks_lowest_index);
-    RUN_TEST(race_loser_obligations_are_aborted_before_resolve);
+    RUN_TEST(race_loser_obligations_are_leaked_before_resolve);
     RUN_TEST(first_ok_skips_failures);
     RUN_TEST(first_ok_fails_when_every_member_fails);
     RUN_TEST(quorum_reached_drains_remaining_members);

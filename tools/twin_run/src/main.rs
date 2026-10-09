@@ -9,6 +9,9 @@
 
 mod canon;
 mod run;
+// `gen` is a reserved keyword in edition 2024.
+#[path = "gen.rs"]
+mod scenario_gen;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -17,8 +20,37 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 fn usage() -> ExitCode {
-    eprintln!("usage: twin_run capture <scenario.json>... --out <dir>");
+    eprintln!(
+        "usage: twin_run capture <scenario.json>... --out <dir>\n       \
+         twin_run generate --seed <u64> --count <n> --out <dir>\n       \
+         twin_run trace <scenario.json>   (raw lab trace, for diagnosis)"
+    );
     ExitCode::from(2)
+}
+
+/// Write `count` generated scenarios (gen.rs) for batch `seed` to `out`.
+fn generate(seed: u64, count: u64, out: &PathBuf) -> ExitCode {
+    if let Err(err) = std::fs::create_dir_all(out) {
+        eprintln!("twin_run: cannot create {}: {err}", out.display());
+        return ExitCode::from(1);
+    }
+    for index in 0..count {
+        let scenario = scenario_gen::scenario(seed, index);
+        let file = out.join(format!("gen-{seed}-{index}.json"));
+        let text = match canon::canonical_json(&scenario) {
+            Ok(t) => t,
+            Err(err) => {
+                eprintln!("twin_run: scenario {index}: {err}");
+                return ExitCode::from(1);
+            }
+        };
+        if let Err(err) = std::fs::write(&file, text + "\n") {
+            eprintln!("twin_run: cannot write {}: {err}", file.display());
+            return ExitCode::from(1);
+        }
+    }
+    println!("twin_run generate: {count} scenario(s) for seed {seed}");
+    ExitCode::SUCCESS
 }
 
 /// The asupersync commit this tool links, read from its own Cargo.lock so it
@@ -134,6 +166,53 @@ fn main() -> ExitCode {
             }
             match out {
                 Some(out) if !paths.is_empty() => capture(&paths, &out),
+                _ => usage(),
+            }
+        }
+        Some("trace") => {
+            // Raw lab trace of one scenario, for diagnosing a divergence.
+            let Some(path) = args.get(1) else {
+                return usage();
+            };
+            let scenario: Value = match std::fs::read_to_string(path)
+                .map_err(|e| e.to_string())
+                .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
+            {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("twin_run: {path}: {err}");
+                    return ExitCode::from(1);
+                }
+            };
+            let mut raw = Vec::new();
+            let result = run::run_scenario_with(&scenario, Some(&mut raw));
+            for line in &raw {
+                println!("{line}");
+            }
+            match result {
+                Ok(_) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("twin_run: {err}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        Some("generate") => {
+            let mut seed = None;
+            let mut count = None;
+            let mut out = None;
+            let mut rest = args[1..].iter();
+            while let Some(arg) = rest.next() {
+                let value = rest.next();
+                match arg.as_str() {
+                    "--seed" => seed = value.and_then(|v| v.parse::<u64>().ok()),
+                    "--count" => count = value.and_then(|v| v.parse::<u64>().ok()),
+                    "--out" => out = value.map(PathBuf::from),
+                    _ => return usage(),
+                }
+            }
+            match (seed, count, out) {
+                (Some(seed), Some(count), Some(out)) => generate(seed, count, &out),
                 _ => usage(),
             }
         }

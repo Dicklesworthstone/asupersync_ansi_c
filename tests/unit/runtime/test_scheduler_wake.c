@@ -583,11 +583,42 @@ TEST(run_until_idle_leaves_the_clock_to_the_caller) {
     ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
     ASSERT_EQ(s->polls, 1u);
 
-    /* At the deadline the due timer fires and the sleeper completes. */
+    /* Past the deadline, still nothing runnable: an idle run fires no
+     * timer (Rust's lab processes timers only within a step, and steps
+     * only while a task is runnable; lab/runtime.rs:3428-3447). */
     asx_runtime_virtual_advance(10u * MS);
-    ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
+    ASSERT_EQ(s->polls, 1u);
+
+    /* The auto-advancing run fires it and the sleeper completes, without
+     * moving the clock further. */
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(s->polls, 2u);
     ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(10u * MS));
+}
+
+TEST(run_until_idle_fires_due_timers_when_a_task_is_runnable) {
+    /* With another task runnable, the round (Rust: the step) processes the
+     * due timer before polling, so the sleeper wakes in the same run. */
+    asx_region_id r;
+    asx_task_id t;
+    asx_task_id other;
+    sleeper_state *s = NULL;
+    asx_budget budget;
+
+    setup();
+    g_finish_count = 0;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
+                                      (void **)&s),
+              ASX_OK);
+    ASSERT_EQ(asx_sleep_init(&s->sleep, 10u * MS), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
+    asx_runtime_virtual_advance(10u * MS);
+    ASSERT_EQ(asx_task_spawn(r, poll_ok, NULL, &other), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_OK);
+    ASSERT_EQ(s->polls, 2u);
 }
 
 TEST(run_until_idle_reports_would_block_without_wake_sources) {
@@ -632,6 +663,44 @@ TEST(sleep_ends_early_on_a_user_cancel_and_drops_its_timer) {
     ASSERT_EQ((int)asx_outcome_severity_of(&out), (int)ASX_OUTCOME_CANCELLED);
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)1u);
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)0u);
+}
+
+TEST(sleep_records_how_it_ended_not_when_its_timer_woke_it) {
+    /* Rust's Sleep records TimerFired or TimerCancelled itself when it
+     * completes (sleep.rs:660-690); the timer waking it records nothing.
+     * A sleeper whose timer is due when a cancel arrives observes the
+     * cancel first: cancelled, not fired (fuzz finding gen-1-21). */
+    asx_region_id r;
+    asx_task_id t;
+    sleeper_state *s = NULL;
+    asx_budget budget;
+
+    setup();
+    g_finish_count = 0;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
+                                      (void **)&s),
+              ASX_OK);
+    ASSERT_EQ(asx_sleep_init(&s->sleep, 50u), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
+    asx_runtime_virtual_advance(50u); /* due, not yet fired */
+    ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_SHUTDOWN), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)0u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)1u);
+
+    /* Control: no cancel, the sleep completes at its deadline: fired. */
+    setup();
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
+                                      (void **)&s),
+              ASX_OK);
+    ASSERT_EQ(asx_sleep_init(&s->sleep, 50u), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)0u);
 }
 
 TEST(deadline_cancelled_sleeper_sleeps_to_its_own_deadline) {
@@ -725,8 +794,10 @@ int main(void) {
     RUN_TEST(drain_cancels_sleepers_without_waiting_for_deadline);
     RUN_TEST(wake_driven_run_is_deterministic);
     RUN_TEST(run_until_idle_leaves_the_clock_to_the_caller);
+    RUN_TEST(run_until_idle_fires_due_timers_when_a_task_is_runnable);
     RUN_TEST(run_until_idle_reports_would_block_without_wake_sources);
     RUN_TEST(sleep_ends_early_on_a_user_cancel_and_drops_its_timer);
+    RUN_TEST(sleep_records_how_it_ended_not_when_its_timer_woke_it);
     RUN_TEST(deadline_cancelled_sleeper_sleeps_to_its_own_deadline);
     RUN_TEST(panic_completes_the_task_as_panicked_even_when_cancelled);
 

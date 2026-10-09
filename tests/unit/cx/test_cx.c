@@ -13,6 +13,7 @@
 #include "../../test_harness.h"
 #include <asx/core/budget.h>
 #include <asx/cx/cx.h>
+#include <asx/runtime/runtime.h>
 #include <asx/security/crypto.h>
 #include <string.h>
 
@@ -39,6 +40,21 @@ asx_status asx_task_mask_depth(asx_task_id id, uint32_t *out_depth) {
     if (out_depth == NULL) return ASX_E_INVALID_ARGUMENT;
     if (id == ASX_INVALID_ID || id != g_stub_task_id) return ASX_E_NOT_FOUND;
     *out_depth = g_stub_mask_depth;
+    return ASX_OK;
+}
+
+/* Stub for asx_checkpoint, which Cx's checkpoint delegates to: the stub
+ * task observes its cancel request unless masked. */
+asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out);
+asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
+    int requested = g_stub_task_state >= ASX_TASK_CANCEL_REQUESTED;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (self == ASX_INVALID_ID || self != g_stub_task_id) return ASX_E_NOT_FOUND;
+    out->cancelled = requested && g_stub_mask_depth == 0u;
+    out->masked = requested && g_stub_mask_depth > 0u;
+    out->phase = ASX_CANCEL_PHASE_REQUESTED;
+    out->polls_remaining = 0;
+    out->kind = ASX_CANCEL_USER;
     return ASX_OK;
 }
 

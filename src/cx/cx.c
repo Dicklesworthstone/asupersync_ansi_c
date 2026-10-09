@@ -416,8 +416,14 @@ int asx_cx_is_cancelled(const asx_cx *cx) {
 asx_status asx_cx_checkpoint(asx_cx *cx) {
     if (cx == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    /* Check cancellation first */
-    if (asx_cx_is_cancelled(cx)) return ASX_E_CANCELLED;
+    /* Check cancellation first, as Rust's Cx::checkpoint does
+     * (cx.rs:3112-3160): it observes the task's pending cancel, which
+     * acknowledges it, and a passed budget deadline; a masked task sees
+     * neither. asx_checkpoint is exactly that for the task. */
+    if (asx_cx_has_cap(cx, ASX_CAP_CANCEL_CHECK) && cx->task_id != ASX_INVALID_ID) {
+        asx_checkpoint_result cr;
+        if (asx_checkpoint(cx->task_id, &cr) == ASX_OK && cr.cancelled) return ASX_E_CANCELLED;
+    }
 
     /* Consume a poll tick if budget is bound */
     if (cx->budget != NULL && asx_cx_has_cap(cx, ASX_CAP_BUDGET_CONSUME)) {

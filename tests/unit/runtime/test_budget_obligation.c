@@ -156,8 +156,10 @@ TEST(poll_quota_cancels_after_quota_polls) {
     ASSERT_EQ(asx_task_spawn_with_budget(r, poll_probe, &p, &tb, &t), ASX_OK);
     run = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
-    /* Three budgeted polls, then one cancel-observing poll. */
-    ASSERT_EQ(p.polls, 4u);
+    /* Three budgeted polls: the third spends the last unit before it runs,
+     * so its own checkpoint observes the exhausted quota (Rust charges at
+     * poll start and Cx::checkpoint reports poll_quota == 0). */
+    ASSERT_EQ(p.polls, 3u);
     ASSERT_TRUE(p.saw_cancel);
     ASSERT_EQ(p.kind, ASX_CANCEL_POLL_QUOTA);
     ASSERT_EQ(asx_task_get_budget(t, &left), ASX_OK);
@@ -385,7 +387,7 @@ TEST(reserve_in_poll_binds_current_task_and_leaks_under_log) {
     ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
 }
 
-TEST(cancelled_holder_aborts_obligation_with_cancel_reason) {
+TEST(cancelled_holder_leaks_its_unresolved_obligation) {
     asx_region_id r;
     asx_task_id t;
     reserver_state s;
@@ -404,13 +406,15 @@ TEST(cancelled_holder_aborts_obligation_with_cancel_reason) {
     ASSERT_EQ(asx_obligation_get_info(s.ob, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_RESERVED);
 
-    /* Draining cancels the holder; its obligation is aborted, not leaked. */
+    /* Draining cancels the holder, which completes with it unresolved: a
+     * leak, as in Rust, where the dropped token posts a Leak whether or not
+     * the task was cancelled (fixture obligation-cancelled-holder-leaks-001).
+     * The region still drains. */
     run = asx_budget_from_polls(100);
     ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
     ASSERT_EQ(asx_obligation_get_info(s.ob, &info), ASX_OK);
-    ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
-    ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_CANCEL);
-    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
+    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
 }
 
 TEST(recover_policy_aborts_leaked_obligation) {
@@ -534,7 +538,7 @@ int main(void) {
     RUN_TEST(reserve_ex_validates_arguments);
     RUN_TEST(reserve_outside_poll_has_no_holder);
     RUN_TEST(reserve_in_poll_binds_current_task_and_leaks_under_log);
-    RUN_TEST(cancelled_holder_aborts_obligation_with_cancel_reason);
+    RUN_TEST(cancelled_holder_leaks_its_unresolved_obligation);
     RUN_TEST(recover_policy_aborts_leaked_obligation);
     RUN_TEST(panic_policy_routes_leak_through_containment);
     RUN_TEST(leak_escalation_switches_policy_at_threshold);

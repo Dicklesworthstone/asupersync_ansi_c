@@ -448,8 +448,17 @@ static asx_leak_response asx_leak_policy_effective(void) {
     return g_leak_response;
 }
 
+/* A holder completed with obligations still reserved: each is a leak,
+ * whether or not the holder was cancelled. This is Rust's common path: a
+ * task body that ends holding an unresolved ObligationToken drops it, and
+ * the drop posts a Leak (runtime/obligation_mailbox.rs:897) before the
+ * completion phase runs, cancelled or not (fuzz finding gen-1-20 /
+ * gen-1-37, bd-ij9w; fixture obligation-cancelled-holder-leaks-001). Rust's
+ * completion-time abort with Cancel (abort_orphaned_obligations_for_holder,
+ * state.rs:8454) only reaches tokens that were never dropped, which C, with
+ * no destructors, cannot tell apart. The leak policy then applies; RECOVER
+ * aborts with ASX_OBLIGATION_ABORT_LEAK_RECOVERED. */
 uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *out_fail_fast) {
-    int cancelled = asx_outcome_severity_of(&task->outcome) == ASX_OUTCOME_CANCELLED;
     uint32_t leaks = 0;
     uint32_t idx = task->first_held;
 
@@ -467,18 +476,15 @@ uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *ou
         o->next_held = ASX_SLOT_NONE;
         if (o->alive && o->state == ASX_OBLIGATION_RESERVED) {
             asx_leak_response policy = asx_leak_policy_effective();
-            if (cancelled || policy == ASX_LEAK_RECOVER) {
-                /* Orphaned by cancellation (or recovered leak): abort. */
+            if (policy == ASX_LEAK_RECOVER) {
+                /* Recovered leak: abort. */
                 o->state = ASX_OBLIGATION_ABORTED;
-                o->abort_reason =
-                    cancelled ? ASX_OBLIGATION_ABORT_CANCEL : ASX_OBLIGATION_ABORT_LEAK_RECOVERED;
+                o->abort_reason = ASX_OBLIGATION_ABORT_LEAK_RECOVERED;
                 asx_ghost_obligation_resolved(oid);
                 (void)asx_event_emit(ASX_EVENT_OBLIGATION_ABORT, oid, 0u, ASX_OK);
                 asx_trace_emit(ASX_TRACE_OBLIGATION_ABORT, oid, 0);
-                if (!cancelled) {
-                    if (g_leak_count < UINT64_MAX) g_leak_count++;
-                    leaks++;
-                }
+                if (g_leak_count < UINT64_MAX) g_leak_count++;
+                leaks++;
             } else {
                 o->state = ASX_OBLIGATION_LEAKED;
                 /* Vocabulary obligation.leaked (Rust ObligationLeak). */
@@ -817,6 +823,25 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     g_tasks[idx].budget = r->budget;
     g_tasks[idx].first_held = ASX_SLOT_NONE;
     asx_task_sched_init_internal(&g_tasks[idx]);
+    /* Spawned by a running task: Rust's cx.spawn. It takes cx.spawn's
+     * completion policy, and, in the spawner's own region, the spawner's
+     * current budget (Cx::inherited_budget, cx.rs:2504), with an unbounded
+     * poll quota once the spawner is in its cleanup (fuzz finding
+     * gen-1-16, bd-ij9w). */
+    {
+        asx_task_slot *spawner;
+        asx_task_id cur = asx_task_current();
+        if (cur != ASX_INVALID_ID && asx_task_slot_lookup(cur, &spawner) == ASX_OK) {
+            g_tasks[idx].spawned_in_poll = 1u;
+            if (asx_handle_index(spawner->region) == asx_handle_index(region)) {
+                g_tasks[idx].budget = spawner->budget;
+                if (spawner->state == ASX_TASK_CANCELLING ||
+                    spawner->state == ASX_TASK_FINALIZING) {
+                    g_tasks[idx].budget.poll_quota = UINT32_MAX;
+                }
+            }
+        }
+    }
     g_tasks[idx].captured_state = NULL;
     g_tasks[idx].captured_size = 0;
     g_tasks[idx].captured_dtor = NULL;

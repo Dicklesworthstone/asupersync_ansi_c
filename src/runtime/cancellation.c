@@ -347,6 +347,24 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
         }
     }
 
+    /* A quota already spent to zero (the current poll took the last unit:
+     * the scheduler charges before polling, as Rust's lab does) or a spent
+     * cost quota cancels the task, attributed to it and stamped now, even
+     * inside a masked section (Rust Cx::checkpoint,
+     * checkpoint_budget_exhaustion, cx.rs:3112-3160; fuzz finding gen-1-16,
+     * bd-ij9w). */
+    if (!t->cancel_pending && !asx_task_is_terminal(t->state)) {
+        if (t->budget.poll_quota == 0u) {
+            st = asx_task_cancel_budget_internal(self, ASX_CANCEL_POLL_QUOTA,
+                                                 asx_cancel_now_internal());
+            (void)st;
+        } else if (t->budget.cost_quota == 0u) {
+            st = asx_task_cancel_budget_internal(self, ASX_CANCEL_COST_BUDGET,
+                                                 asx_cancel_now_internal());
+            (void)st;
+        }
+    }
+
     out->masked = 0;
 
     /* Not cancelled — report clean status */

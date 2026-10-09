@@ -1536,6 +1536,28 @@ conformance: $(CONFORMANCE_RUNNER)
 	@$(CONFORMANCE_RUNNER) compare $(CONFORMANCE_V2_FIXTURES)
 
 # ---------------------------------------------------------------------------
+# fuzz-differential — Rust-vs-C differential fuzzing over DSL v2 (bd-ij9w):
+# twin_run generates FUZZ_V2_COUNT scenarios for FUZZ_V2_SEED, runs them in
+# asupersync's LabRuntime, and the C runtime runs every scenario Rust could
+# capture (only this run's captures are compared). Every FAIL is a candidate
+# drift to root-cause. Not yet a CI gate: open divergences are tracked in
+# bd-ij9w until they are fixed or classified.
+# ---------------------------------------------------------------------------
+FUZZ_V2_SEED ?= 1
+FUZZ_V2_COUNT ?= 100
+FUZZ_V2_DIR := $(BUILD_DIR)/fuzz_v2/seed-$(FUZZ_V2_SEED)
+TWIN_RUN := cargo run --release --locked --quiet --manifest-path tools/twin_run/Cargo.toml --
+
+.PHONY: fuzz-differential
+fuzz-differential: $(CONFORMANCE_RUNNER)
+	@echo "[asx] fuzz-differential: seed=$(FUZZ_V2_SEED) count=$(FUZZ_V2_COUNT)"
+	@mkdir -p $(FUZZ_V2_DIR)
+	@$(TWIN_RUN) generate --seed $(FUZZ_V2_SEED) --count $(FUZZ_V2_COUNT) --out $(FUZZ_V2_DIR)/scenarios
+	@$(TWIN_RUN) capture $(FUZZ_V2_DIR)/scenarios/*.json --out $(FUZZ_V2_DIR)/fixtures > $(FUZZ_V2_DIR)/capture.log || true
+	@tail -1 $(FUZZ_V2_DIR)/capture.log
+	@$(CONFORMANCE_RUNNER) compare $$(sed -n 's|^PASS \([^ ]*\) .*|$(FUZZ_V2_DIR)/fixtures/\1.json|p' $(FUZZ_V2_DIR)/capture.log)
+
+# ---------------------------------------------------------------------------
 # fixture-integrity — fixture schema, provenance, digest recomputation,
 # capture_run_id format, unknown ops, and a codec round trip. It proves the
 # fixtures are well-formed captures; it does NOT execute the C runtime.

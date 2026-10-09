@@ -75,7 +75,14 @@ typedef struct {
     uint8_t notified;       /* woken while in_poll */
     uint8_t parked;         /* not runnable until asx_task_wake() */
     uint8_t cancel_polled;  /* polled since its cancel was requested */
-    asx_status last_error;  /* status returned by a failing poll_fn */
+    /* Rust's spawn completion policy (task_handle.rs:173-202): a task
+     * spawned from inside another task's poll (Rust cx.spawn) keeps the
+     * value it returns after acknowledging a cancel that came after its
+     * first poll; others are cancellation-dominant. */
+    uint8_t spawned_in_poll;
+    uint8_t first_polled;
+    uint8_t cancel_before_first_poll;
+    asx_status last_error; /* status returned by a failing poll_fn */
     /* Task timer (EDF heap keyed by (wake_at, timer_seq)). */
     asx_time wake_at;
     uint64_t timer_seq;

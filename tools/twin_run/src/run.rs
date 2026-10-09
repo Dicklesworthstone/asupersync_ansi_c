@@ -55,6 +55,7 @@ struct Shared {
     region_ids: HashMap<String, RegionId>,
     region_names: HashMap<RegionId, String>,
     region_parents: HashMap<String, Option<String>>,
+    /// Timer names by the trace seq of their TimerScheduled event.
     timer_names: HashMap<u64, String>,
     handles: HashMap<String, TaskHandle<Body>>,
     /// Join results, projected only after the run (`finish_outcomes`): a
@@ -1127,8 +1128,6 @@ async fn exec_step(
             observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
         }
         "sleep" | "sleep_until" => {
-            local.timers += 1;
-            let timer = format!("{me}/tm{}", local.timers);
             let deadline = if op == "sleep" {
                 Time::from_nanos(cx.now().as_nanos().saturating_add(u64_field(step, "ns")?))
             } else {
@@ -1139,7 +1138,7 @@ async fn exec_step(
             } else {
                 asupersync::time::sleep_until(deadline)
             };
-            name_timer_on_first_poll(cx, &ctx.shared, timer, sleep).await;
+            name_timer_on_first_poll(cx, &ctx.shared, me, &mut local.timers, sleep).await;
             observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
         }
         "return" => {
@@ -1366,7 +1365,8 @@ fn spawn_members(
 async fn name_timer_on_first_poll<F: Future<Output = ()>>(
     cx: &Cx,
     shared: &SharedRef,
-    name: String,
+    owner: &str,
+    counter: &mut u32,
     sleep: F,
 ) {
     let buffer = cx.trace_buffer();
@@ -1382,10 +1382,16 @@ async fn name_timer_on_first_poll<F: Future<Output = ()>>(
             if let Some(buffer) = &buffer {
                 let mut s = lock(shared);
                 for event in buffer.snapshot().iter().filter(|e| e.seq > before) {
-                    if let (TraceEventKind::TimerScheduled, TraceData::Timer { timer_id, .. }) =
+                    if let (TraceEventKind::TimerScheduled, TraceData::Timer { .. }) =
                         (&event.kind, &event.data)
                     {
-                        s.timer_names.insert(*timer_id, name.clone());
+                        // Numbered by timers actually scheduled (a sleep that
+                        // schedules none takes no number), keyed by the
+                        // scheduling event, not the timer id: the lab reuses a
+                        // fired timer's id for later sleeps.
+                        *counter += 1;
+                        s.timer_names
+                            .insert(event.seq, format!("{owner}/tm{}", *counter));
                     }
                 }
             }
@@ -1400,6 +1406,12 @@ async fn name_timer_on_first_poll<F: Future<Output = ()>>(
 // ---------------------------------------------------------------------------
 
 pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
+    run_scenario_with(scenario, None)
+}
+
+/// As [`run_scenario`], also appending the raw lab trace (seq, kind, data)
+/// to `raw` for diagnosing a divergence (`twin_run trace`).
+pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> RunResult<Value> {
     if scenario.get("schema").and_then(Value::as_str) != Some("asx.scenario.v2") {
         return Err("not an asx.scenario.v2 document".to_string());
     }
@@ -1654,6 +1666,11 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
         ));
     }
     finish_outcomes(&mut lock(&shared))?;
+    if let Some(raw) = raw {
+        for e in lab.trace().snapshot().iter() {
+            raw.push(format!("{} {:?} {:?}", e.seq, e.kind, e.data));
+        }
+    }
     let events = project_trace(&lab, &shared)?;
     let trace = canon::canonical_trace(&events.events)?;
     let snapshot = build_snapshot(&lab, &shared, &events)?;
@@ -1825,6 +1842,8 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
     let mut obligations: Vec<(String, Value)> = Vec::new();
     let mut timers: HashMap<String, (u64, bool)> = HashMap::new();
     let mut timer_order: Vec<String> = Vec::new();
+    // timer id -> the name of its current schedule (ids are reused).
+    let mut timer_current: HashMap<u64, String> = HashMap::new();
     for event in lab.trace().snapshot() {
         let ev = match (&event.kind, &event.data) {
             (K::Spawn, TraceData::Task { task, region }) => {
@@ -1907,8 +1926,15 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
                 K::TimerScheduled | K::TimerFired | K::TimerCancelled,
                 TraceData::Timer { timer_id, deadline },
             ) => {
-                let name = s
-                    .timer_names
+                // A scheduling event carries the name its sleep recorded (a
+                // re-arm of the same timer keeps its name); fired and
+                // cancelled events refer to the timer's current schedule.
+                if event.kind == K::TimerScheduled {
+                    if let Some(name) = s.timer_names.get(&event.seq) {
+                        timer_current.insert(*timer_id, name.clone());
+                    }
+                }
+                let name = timer_current
                     .get(timer_id)
                     .cloned()
                     .ok_or_else(|| format!("unnamed timer {timer_id}"))?;

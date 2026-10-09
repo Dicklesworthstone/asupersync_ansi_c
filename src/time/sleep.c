@@ -88,7 +88,13 @@ asx_status asx_sleep_poll(void *user_data, asx_task_id self) {
      * a later poll (timer fired or spurious wake) re-checks. */
     st = asx_runtime_now_ns(&now);
     if (st != ASX_OK) return st;
-    if (asx_deadline_is_expired_at(&s->deadline, now)) { return ASX_OK; }
+    if (asx_deadline_is_expired_at(&s->deadline, now)) {
+        /* Completed at its deadline: the sleep records the fire (Rust
+         * complete_ready_registration, sleep.rs:677). */
+        st = asx_task_complete_timer(self);
+        (void)st;
+        return ASX_OK;
+    }
 
     return park_until(self, asx_deadline_target(&s->deadline));
 }

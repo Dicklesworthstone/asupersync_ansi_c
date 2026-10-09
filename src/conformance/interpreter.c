@@ -1348,7 +1348,9 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         if (cr.cancelled) {
             observe_status(t, idx, label, ASX_E_CANCELLED);
             if (on_cancel == NULL || strcmp(on_cancel, "return") == 0) {
-                t->end = ASX_OK; /* cancellation wins: the outcome is Cancelled */
+                /* The body returns Ok, as Rust's; the runtime decides the
+                 * outcome (Cancelled, unless a spawned child keeps it). */
+                t->end = ASX_OK;
                 return STEP_END;
             }
             return STEP_NEXT;

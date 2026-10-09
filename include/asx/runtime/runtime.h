@@ -540,13 +540,13 @@ ASX_API ASX_MUST_USE asx_status asx_task_mask_depth(asx_task_id id, uint32_t *ou
  * An obligation is a linear resource (send permit, ack, lease, ...) that
  * must be committed or aborted exactly once. Each obligation records its
  * kind and its holder task. When a holder completes with obligations still
- * RESERVED, the runtime resolves them deterministically:
- *   - holder CANCELLED  -> aborted with ASX_OBLIGATION_ABORT_CANCEL;
- *   - otherwise         -> a leak, handled by the runtime's leak_response
- *     policy: PANIC (marked LEAKED, fault reported through the region's
- *     containment policy), LOG (LEAKED + log record), SILENT (LEAKED), or
- *     RECOVER (aborted with ASX_OBLIGATION_ABORT_LEAK_RECOVERED). The
- *     optional leak_escalation threshold switches policy after N leaks.
+ * RESERVED, each is a leak, whether or not the holder was cancelled (as
+ * Rust, where a body ending with an unresolved token drops it and the drop
+ * posts a Leak), handled by the runtime's leak_response policy: PANIC
+ * (marked LEAKED, fault reported through the region's containment policy),
+ * LOG (LEAKED + log record), SILENT (LEAKED), or RECOVER (aborted with
+ * ASX_OBLIGATION_ABORT_LEAK_RECOVERED). The optional leak_escalation
+ * threshold switches policy after N leaks.
  * Obligations without a holder (reserved outside any task) are not
  * auto-resolved: an unresolved one blocks its region's finalization with
  * ASX_E_OBLIGATIONS_UNRESOLVED.
@@ -565,7 +565,7 @@ typedef enum {
 typedef enum {
     ASX_OBLIGATION_ABORT_NONE = 0,          /* not aborted */
     ASX_OBLIGATION_ABORT_EXPLICIT = 1,      /* asx_obligation_abort() */
-    ASX_OBLIGATION_ABORT_CANCEL = 2,        /* holder was cancelled */
+    ASX_OBLIGATION_ABORT_CANCEL = 2,        /* aborted because of a cancellation */
     ASX_OBLIGATION_ABORT_ERROR = 3,         /* aborted on an error path */
     ASX_OBLIGATION_ABORT_LEAK_RECOVERED = 4 /* leak resolved by RECOVER policy */
 } asx_obligation_abort_reason;
@@ -767,12 +767,22 @@ ASX_API ASX_MUST_USE asx_status asx_task_arm_timer(asx_task_id self, asx_time de
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_wait_until(asx_task_id self, asx_time deadline);
 
-/* Drop the task's sleep timer before its deadline (a sleep that ended
- * early): records ASX_TRACE_TIMER_CANCEL if a traced timer is registered
- * and disarms the task's wake. No-op when nothing is armed.
- * Returns ASX_OK or a lookup error for a bad handle.
+/* A sleep's timer is traced by the sleep itself, as Rust's Sleep does
+ * (sleep.rs:660-690): the scheduler firing a due timer only wakes the
+ * task; the sleep then records how it ended.
+ *
+ * asx_task_cancel_timer: the sleep ended without completing at its
+ * deadline (cancelled, dropped): records ASX_TRACE_TIMER_CANCEL if a
+ * traced timer is registered, even one that already woke the task, and
+ * disarms the task's wake.
+ * asx_task_complete_timer: the sleep completed at its deadline: records
+ * ASX_TRACE_TIMER_FIRE if a traced timer is registered (a sleep ready at
+ * its first poll registered none) and disarms the wake.
+ * Both are no-ops when nothing is registered.
+ * Return ASX_OK or a lookup error for a bad handle.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_cancel_timer(asx_task_id self);
+ASX_API ASX_MUST_USE asx_status asx_task_complete_timer(asx_task_id self);
 
 /* Wake `watcher` when `target` completes, without joining it (a monitor:
  * supervisors, task groups). A task has at most one watcher; a new call
