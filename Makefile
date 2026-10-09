@@ -690,23 +690,15 @@ lint-anti-butchering:
 # ---------------------------------------------------------------------------
 lint-evidence:
 	@echo "[asx] lint-evidence: checking per-bead evidence linkage..."
-	@if [ -x tools/ci/check_evidence_linkage.sh ]; then \
-		tools/ci/check_evidence_linkage.sh; \
-	else \
-		echo "[asx] lint-evidence: SKIP (runner not found)"; \
-	fi
+	@tools/ci/check_evidence_linkage.sh
 
 # ---------------------------------------------------------------------------
 # lint-static-analysis — section 10.7 static analysis gate (bd-66l.10)
 # ---------------------------------------------------------------------------
 lint-static-analysis:
 	@echo "[asx] lint-static-analysis: section 10.7 gates..."
-	@if [ -x tools/ci/run_static_analysis.sh ]; then \
-		CPPCHECK="$(CPPCHECK)" CLANG_TIDY="$(CLANG_TIDY)" \
-		FAIL_ON_MISSING_LINTER="$(FAIL_ON_MISSING_LINTER)" tools/ci/run_static_analysis.sh; \
-	else \
-		echo "[asx] lint-static-analysis: SKIP (runner not found)"; \
-	fi
+	@CPPCHECK="$(CPPCHECK)" CLANG_TIDY="$(CLANG_TIDY)" \
+		FAIL_ON_MISSING_LINTER="$(FAIL_ON_MISSING_LINTER)" tools/ci/run_static_analysis.sh
 
 # ---------------------------------------------------------------------------
 # lint-semantic-delta — semantic delta budget gate (bd-66l.3)
@@ -747,6 +739,8 @@ test: test-unit test-invariants test-conformance-c test-vignettes
 # ---------------------------------------------------------------------------
 test-unit: $(UNIT_TEST_BIN)
 	@echo "[asx] test-unit: running $(words $(UNIT_TEST_BIN)) test(s)..."
+	@# tests/test_log.h writes structured JSONL only into an existing directory.
+	@mkdir -p build/test-logs
 	@if [ -z "$(strip $(UNIT_TEST_BIN))" ]; then \
 		if [ "$(FAIL_ON_EMPTY_UNIT_TESTS)" = "1" ]; then \
 			echo "[asx] test-unit: FAIL (no tests found; strict mode)"; \
@@ -1031,6 +1025,7 @@ $(TEST_DIR)/unit/%: tests/unit/%.c $(LIB_A) | test-dirs
 # ---------------------------------------------------------------------------
 test-invariants: $(INV_TEST_BIN)
 	@echo "[asx] test-invariants: running $(words $(INV_TEST_BIN)) test(s)..."
+	@mkdir -p build/test-logs
 	@if [ -z "$(strip $(INV_TEST_BIN))" ]; then \
 		if [ "$(FAIL_ON_EMPTY_INVARIANT_TESTS)" = "1" ]; then \
 			echo "[asx] test-invariants: FAIL (no tests found; strict mode)"; \
@@ -1059,6 +1054,7 @@ test-invariants: $(INV_TEST_BIN)
 # ---------------------------------------------------------------------------
 test-conformance-c: $(CONFORMANCE_TEST_BIN)
 	@echo "[asx] test-conformance-c: running $(words $(CONFORMANCE_TEST_BIN)) test(s)..."
+	@mkdir -p build/test-logs
 	@if [ -z "$(strip $(CONFORMANCE_TEST_BIN))" ]; then \
 		echo "[asx] test-conformance-c: no tests found (scaffold stage)"; \
 	else \
@@ -1082,6 +1078,7 @@ test-conformance-c: $(CONFORMANCE_TEST_BIN)
 # ---------------------------------------------------------------------------
 test-vignettes: $(VIGNETTE_TEST_BIN)
 	@echo "[asx] test-vignettes: running $(words $(VIGNETTE_TEST_BIN)) vignette(s)..."
+	@mkdir -p build/test-logs
 	@if [ -z "$(strip $(VIGNETTE_TEST_BIN))" ]; then \
 		echo "[asx] test-vignettes: FAIL (no vignettes found)"; \
 		exit 1; \
@@ -1736,8 +1733,12 @@ build-clang:
 	$(MAKE) build CC=clang
 
 build-msvc:
-	@echo "[asx] build-msvc: MSVC cross-build not yet wired (requires cl.exe on PATH)"
-	@echo "[asx] build-msvc: SKIP"
+	@echo "[asx] build-msvc: MSVC lane not wired yet (needs cl.exe; tracked by E2 bd-9kll.15.2)"
+	@if [ "$(FAIL_ON_MISSING_CROSS_TOOLCHAINS)" = "1" ]; then \
+		echo "[asx] build-msvc: FAIL (no MSVC lane; strict mode)"; \
+		exit 1; \
+	fi
+	@echo "[asx] build-msvc: SKIP (use STRICT_GATES=1 to fail)"
 
 build-32:
 	$(MAKE) build BITS=32
