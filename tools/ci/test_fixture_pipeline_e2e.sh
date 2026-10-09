@@ -205,10 +205,23 @@ step_fixture_capture() {
         return 1
     fi
 
-    if ! "$CAPTURE_BIN" --fixture-dir "$FIXTURE_DIR" >/dev/null 2>&1; then
+    # Capture into staging only (bd-9kll.2.1); the committed corpus must not
+    # change. The remaining steps validate the staged corpus.
+    local committed_before committed_after run_id staging
+    committed_before="$(corpus_digest "$FIXTURE_DIR")"
+    run_id="pipeline-e2e-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    staging="${PROJECT_ROOT}/build/fixture_staging/${run_id}"
+    if ! CAPTURE_BIN="$CAPTURE_BIN" FIXTURE_DIR="$FIXTURE_DIR" \
+        "${SCRIPT_DIR}/capture_rust_fixtures.sh" --run-id "$run_id" >/dev/null 2>&1; then
         fail_step "fixture_capture" "fixture capture failed" "$start_ns"
         return 1
     fi
+    committed_after="$(corpus_digest "$FIXTURE_DIR")"
+    if [ "$committed_before" != "$committed_after" ]; then
+        fail_step "fixture_capture" "capture modified the committed corpus $FIXTURE_DIR" "$start_ns"
+        return 1
+    fi
+    FIXTURE_DIR="$staging"
 
     local count
     count=$(command find "$FIXTURE_DIR" -name '*.json' -type f 2>/dev/null | wc -l | tr -d ' ')
@@ -220,8 +233,13 @@ step_fixture_capture() {
         return 1
     fi
 
-    emit_step "fixture_capture" "pass" "$count fixtures in $family_count families" "$start_ns"
+    emit_step "fixture_capture" "pass" "$count fixtures in $family_count families staged at $FIXTURE_DIR; committed corpus unchanged" "$start_ns"
     return 0
+}
+
+# Order-independent digest of every file under a corpus directory.
+corpus_digest() {
+    find "$1" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
 }
 
 # ── Step 4: Schema validation ──────────────────────────────────────────
