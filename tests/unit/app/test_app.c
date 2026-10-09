@@ -1166,6 +1166,7 @@ static void test_doctor_null_args(void) {
     asx_runtime rt;
     asx_doctor_report report;
 
+    memset(&rt, 0, sizeof(rt));
     ASSERT(asx_doctor_run(NULL, &report) == ASX_E_INVALID_ARGUMENT, "null rt");
     ASSERT(asx_doctor_run(&rt, NULL) == ASX_E_INVALID_ARGUMENT, "null report");
     ASSERT(asx_doctor_is_healthy(NULL) == 0, "null report not healthy");

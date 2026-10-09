@@ -187,6 +187,7 @@ TEST(evidence_to_sink_null_args) {
     asx_browser_evidence_report report;
 
     asx_evidence_sink_init(&sink);
+    memset(&report, 0, sizeof(report));
 
     ASSERT_EQ((int)asx_browser_evidence_to_sink(NULL, &sink), (int)ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ((int)asx_browser_evidence_to_sink(&report, NULL), (int)ASX_E_INVALID_ARGUMENT);

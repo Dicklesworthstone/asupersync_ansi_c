@@ -30,6 +30,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -80,11 +81,29 @@ TEST(blocking_wait_with_output_captures_everything) {
 TEST(spawn_failures_leave_nothing_behind) {
     asx_process_command cmd;
     asx_process_handle h;
+    static const char rest[] = ":/nonexistent/asx/a";
+    char denied[] = "/tmp/asx-proc-path-XXXXXX";
+    char path[sizeof(denied) + sizeof(rest)];
 
     asx_process_reset();
     ASSERT_EQ(asx_process_set_backend(ASX_PROCESS_BACKEND_NATIVE), ASX_OK);
+    /* The command's own PATH: no directory of the caller's can answer. */
     asx_process_command_init(&cmd, "asx-definitely-not-a-program");
+    ASSERT_EQ(asx_process_command_env(&cmd, "PATH", "/nonexistent/asx/a:/nonexistent/asx/b"),
+              ASX_OK);
     ASSERT_EQ(asx_process_command_spawn(&cmd, &h), ASX_E_NOT_FOUND);
+    /* As execvp: a PATH directory that refuses the search turns not-found
+     * into permission denied (root may search every directory). */
+    ASSERT_TRUE(mkdtemp(denied) != NULL);
+    ASSERT_EQ(chmod(denied, 0), 0);
+    memcpy(path, denied, sizeof(denied) - 1u); /* mkdtemp keeps the length */
+    memcpy(path + sizeof(denied) - 1u, rest, sizeof(rest));
+    asx_process_command_init(&cmd, "asx-definitely-not-a-program");
+    ASSERT_EQ(asx_process_command_env(&cmd, "PATH", path), ASX_OK);
+    ASSERT_EQ(asx_process_command_spawn(&cmd, &h),
+              geteuid() == 0 ? ASX_E_NOT_FOUND : ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(chmod(denied, 0700), 0);
+    ASSERT_EQ(rmdir(denied), 0);
     asx_process_command_init(&cmd, "/nonexistent/asx/prog");
     ASSERT_EQ(asx_process_command_spawn(&cmd, &h), ASX_E_NOT_FOUND);
     asx_process_command_init(&cmd, "/bin/sh");

@@ -347,8 +347,10 @@ static int proc_open_pidfd(pid_t pid) {
 /* Spawn plan                                                          */
 /* ------------------------------------------------------------------ */
 
+/* strchr and memchr are called as (strchr)(...): with _GNU_SOURCE, glibc
+ * 2.43 defines them as C23 _Generic macros, which clang rejects in C99. */
 static size_t proc_key_len(const char *kv) {
-    const char *eq = strchr(kv, '=');
+    const char *eq = (strchr)(kv, '=');
     return eq != NULL ? (size_t)(eq - kv) : strlen(kv);
 }
 
@@ -397,7 +399,7 @@ static asx_status proc_resolve(const asx_process_command *cmd) {
     size_t plen = strlen(cmd->program);
     int saw_eacces = 0;
 
-    if (strchr(cmd->program, '/') != NULL) {
+    if ((strchr)(cmd->program, '/') != NULL) {
         if (plen >= sizeof(g_plan.path)) return ASX_E_BUFFER_TOO_SMALL;
         memcpy(g_plan.path, cmd->program, plen + 1u);
         return ASX_OK;
@@ -410,7 +412,7 @@ static asx_status proc_resolve(const asx_process_command *cmd) {
         if (path_var == NULL) path_var = "/usr/local/bin:/usr/bin:/bin";
     }
     for (p = path_var;; p++) {
-        const char *end = strchr(p, ':');
+        const char *end = (strchr)(p, ':');
         size_t dlen = end != NULL ? (size_t)(end - p) : strlen(p);
         g_plan.path[0] = '\0';
         if (dlen == 0u) {
@@ -432,7 +434,7 @@ static asx_status proc_resolve(const asx_process_command *cmd) {
 }
 
 /* Builder strings must be NUL-terminated within their fixed buffers. */
-static int proc_terminated(const char *s, size_t cap) { return memchr(s, '\0', cap) != NULL; }
+static int proc_terminated(const char *s, size_t cap) { return (memchr)(s, '\0', cap) != NULL; }
 
 static asx_status proc_build_plan(const asx_process_command *cmd) {
     uint32_t i;

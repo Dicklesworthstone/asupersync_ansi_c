@@ -170,8 +170,10 @@ static void fixture_init(void) {
 /* ------------------------------------------------------------------ */
 
 TEST(aos_slot_size) {
-    /* AoS slot should contain all fields including cancel_reason */
-    ASSERT_TRUE(spike_sizeof_aos() > 100);
+    /* The AoS slot holds every field, cancel_reason included. Its four
+     * pointers are 4 or 8 bytes depending on the target. */
+    ASSERT_TRUE(spike_sizeof_aos() > sizeof(asx_cancel_reason) + sizeof(asx_outcome) +
+                                         sizeof(asx_region_id) + 4u * sizeof(void *));
     fprintf(stderr, "    AoS slot: %u bytes\n", spike_sizeof_aos());
 }
 

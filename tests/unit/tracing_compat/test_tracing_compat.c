@@ -93,6 +93,7 @@ static void test_tracing_null_args(void) {
     asx_trace_event event;
     asx_report_buf out;
 
+    memset(&event, 0, sizeof(event));
     ASSERT(asx_tracing_compat_format_event(NULL, &out) == ASX_E_INVALID_ARGUMENT, "null event");
     ASSERT(asx_tracing_compat_emit_event(&event, NULL, NULL) == ASX_E_INVALID_ARGUMENT,
            "null sink rejected");

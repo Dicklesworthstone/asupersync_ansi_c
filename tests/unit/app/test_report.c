@@ -206,6 +206,7 @@ static void test_doctor_render_null_args(void) {
     asx_doctor_report doctor;
     asx_report_buf buf;
 
+    memset(&doctor, 0, sizeof(doctor));
     ASSERT(asx_report_doctor_text(NULL, &buf) == ASX_E_INVALID_ARGUMENT, "null report");
     ASSERT(asx_report_doctor_text(&doctor, NULL) == ASX_E_INVALID_ARGUMENT, "null buf");
     ASSERT(asx_report_doctor_json(NULL, &buf) == ASX_E_INVALID_ARGUMENT, "null report json");
@@ -314,6 +315,7 @@ static void test_evidence_render_null_args(void) {
     asx_evidence_sink sink;
     asx_report_buf buf;
 
+    asx_evidence_sink_init(&sink);
     ASSERT(asx_report_evidence_text(NULL, &buf) == ASX_E_INVALID_ARGUMENT, "null sink");
     ASSERT(asx_report_evidence_text(&sink, NULL) == ASX_E_INVALID_ARGUMENT, "null buf");
 }
@@ -503,6 +505,7 @@ static void test_failure_artifact_null_args(void) {
     asx_runtime rt;
     asx_report_buf buf;
 
+    memset(&rt, 0, sizeof(rt));
     ASSERT(asx_report_failure_artifact(NULL, &buf) == ASX_E_INVALID_ARGUMENT, "null rt");
     ASSERT(asx_report_failure_artifact(&rt, NULL) == ASX_E_INVALID_ARGUMENT, "null buf");
 }

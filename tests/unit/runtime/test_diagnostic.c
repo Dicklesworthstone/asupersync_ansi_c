@@ -199,6 +199,7 @@ static void test_inspect_null_args(void) {
     asx_runtime rt;
     asx_inspection_report rpt;
 
+    memset(&rt, 0, sizeof(rt));
     ASSERT(asx_inspect(NULL, &rpt) == ASX_E_INVALID_ARGUMENT, "null rt");
     ASSERT(asx_inspect(&rt, NULL) == ASX_E_INVALID_ARGUMENT, "null out");
 }
@@ -408,6 +409,7 @@ static void test_inspect_to_evidence_null_args(void) {
     asx_runtime rt;
     asx_evidence_sink sink;
 
+    memset(&rt, 0, sizeof(rt));
     ASSERT(asx_inspect_to_evidence(NULL, &sink) == ASX_E_INVALID_ARGUMENT, "null rt");
     ASSERT(asx_inspect_to_evidence(&rt, NULL) == ASX_E_INVALID_ARGUMENT, "null sink");
 }

@@ -187,6 +187,8 @@ static void test_start_null_args(void) {
 
     asx_runtime_reset();
     r = make_region();
+    memset(&cfg, 0, sizeof(cfg));
+    memset(&spec, 0, sizeof(spec));
     cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
     cfg.max_restarts = 3;
 
