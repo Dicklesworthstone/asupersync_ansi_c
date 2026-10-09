@@ -17,6 +17,7 @@
 
 #include "runtime_internal.h"
 #include <asx/asx.h>
+#include <asx/platform/atomics.h>
 #include <asx/portable.h>
 #include <asx/runtime/snapshot.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
@@ -170,10 +171,43 @@ static asx_trace_observer_fn g_trace_observer;
 static void *g_trace_observer_ctx;
 static int g_trace_observing; /* guards against an observer that emits */
 
+/* Live builds emit from several threads (channel producers, the blocking
+ * pool), while the ring, the digest and the counters form one sequence:
+ * a writer holds this lock while it records. Single-thread builds have
+ * no other writer, and the lock compiles to nothing. Readers (event get,
+ * digest, replay, export) take no lock: read once emitting threads are
+ * quiet. */
+#if !ASX_LOCKFREE_SINGLE_THREAD
+static asx_atomic_u32 g_trace_lock;
+#endif
+
+static void trace_lock(void) {
+#if !ASX_LOCKFREE_SINGLE_THREAD
+    uint32_t expected;
+    for (;;) {
+        ASX_CHECKPOINT_WAIVER("bounded: the holder releases after recording one event");
+        expected = 0u;
+        if (asx_atomic_u32_compare_exchange(&g_trace_lock, &expected, 1u)) return;
+    }
+#endif
+}
+
+static void trace_unlock(void) {
+#if !ASX_LOCKFREE_SINGLE_THREAD
+    asx_atomic_u32_store(&g_trace_lock, 0u);
+#endif
+}
+
 static void trace_record(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux,
                          const asx_trace_payload *payload) {
     static const asx_trace_payload none = {NULL, NULL};
-    asx_trace_event *e = &g_trace_ring[g_trace_emitted % ASX_TRACE_CAPACITY];
+    asx_trace_event *e;
+    asx_trace_event copy;
+    asx_trace_observer_fn observer = NULL;
+    void *observer_ctx = NULL;
+
+    trace_lock();
+    e = &g_trace_ring[g_trace_emitted % ASX_TRACE_CAPACITY];
     e->sequence = (uint32_t)(g_trace_emitted & 0xFFFFFFFFu);
     e->kind = kind;
     e->entity_id = entity_id;
@@ -181,11 +215,19 @@ static void trace_record(asx_trace_event_kind kind, uint64_t entity_id, uint64_t
     g_trace_digest_state = trace_digest_fold(g_trace_digest_state, e);
     if ((uint32_t)kind < ASX_TRACE_KIND_SLOTS) g_trace_kind_totals[(uint32_t)kind]++;
     g_trace_emitted++;
+    copy = *e;
     if (g_trace_observer != NULL && !g_trace_observing) {
-        asx_trace_event copy = *e;
+        observer = g_trace_observer;
+        observer_ctx = g_trace_observer_ctx;
         g_trace_observing = 1;
-        g_trace_observer(g_trace_observer_ctx, &copy, payload != NULL ? payload : &none);
+    }
+    trace_unlock();
+    /* Outside the lock: an observer that emits records its own events. */
+    if (observer != NULL) {
+        observer(observer_ctx, &copy, payload != NULL ? payload : &none);
+        trace_lock();
         g_trace_observing = 0;
+        trace_unlock();
     }
 }
 
