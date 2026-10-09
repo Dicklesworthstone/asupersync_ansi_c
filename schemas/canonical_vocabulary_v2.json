@@ -1,0 +1,294 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asupersync.dev/schemas/canonical_vocabulary_v2.json",
+  "title": "asx.vocab.v2 scenario run",
+  "description": "Normative companion to docs/CANONICAL_VOCABULARY_V2.md (bead W1.2, bd-9kll.2.2): the projected run of one scenario by either engine.",
+  "type": "object",
+  "required": ["vocabulary", "trace", "snapshot", "observations"],
+  "additionalProperties": false,
+  "properties": {
+    "vocabulary": {"const": "asx.vocab.v2"},
+    "trace": {
+      "description": "Foata canonical form: layers of events, each layer sorted by canonical JSON bytes.",
+      "type": "array",
+      "items": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/event"}}
+    },
+    "snapshot": {"$ref": "#/$defs/snapshot"},
+    "observations": {"type": "array", "items": {"$ref": "#/$defs/observation"}}
+  },
+  "$defs": {
+    "name": {"type": "string", "minLength": 1},
+    "u64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "u32": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "cancel_kind": {
+      "enum": ["User", "Timeout", "Deadline", "PollQuota", "CostBudget", "FailFast", "RaceLost",
+               "ParentCancelled", "ResourceUnavailable", "Shutdown", "LinkedExit"]
+    },
+    "obligation_kind": {"enum": ["SendPermit", "Ack", "Lease", "IoOp", "SemaphorePermit", "Transaction"]},
+    "abort_reason": {"enum": ["Cancel", "Error", "Explicit"]},
+    "obligation_state": {"enum": ["Reserved", "Committed", "Aborted", "Leaked"]},
+    "task_state": {"enum": ["Created", "Running", "CancelRequested", "Cancelling", "Finalizing", "Completed"]},
+    "region_state": {"enum": ["Open", "Closing", "Draining", "Finalizing", "Closed"]},
+    "status": {"type": "string", "pattern": "^ASX_(OK|E_[A-Z0-9_]+)$"},
+    "reason": {
+      "type": "object",
+      "required": ["kind", "origin_region", "origin_task", "timestamp_ns", "message", "cause_chain_len", "truncated"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"$ref": "#/$defs/cancel_kind"},
+        "origin_region": {"$ref": "#/$defs/name"},
+        "origin_task": {"oneOf": [{"$ref": "#/$defs/name"}, {"type": "null"}]},
+        "timestamp_ns": {"$ref": "#/$defs/u64"},
+        "message": {"type": ["string", "null"]},
+        "cause_chain_len": {"$ref": "#/$defs/u32"},
+        "truncated": {"type": "boolean"}
+      }
+    },
+    "outcome": {
+      "oneOf": [
+        {"type": "object", "required": ["tag"], "additionalProperties": false,
+         "properties": {"tag": {"const": "ok"}}},
+        {"type": "object", "required": ["tag", "status"], "additionalProperties": false,
+         "properties": {"tag": {"const": "err"}, "status": {"$ref": "#/$defs/status"}}},
+        {"type": "object", "required": ["tag", "reason"], "additionalProperties": false,
+         "properties": {"tag": {"const": "cancelled"}, "reason": {"$ref": "#/$defs/reason"}}},
+        {"type": "object", "required": ["tag", "message"], "additionalProperties": false,
+         "properties": {"tag": {"const": "panicked"}, "message": {"type": "string"}}}
+      ]
+    },
+    "event": {
+      "oneOf": [
+        {"$ref": "#/$defs/ev_task"},
+        {"$ref": "#/$defs/ev_region_created"},
+        {"$ref": "#/$defs/ev_region"},
+        {"$ref": "#/$defs/ev_region_cancelled"},
+        {"$ref": "#/$defs/ev_cancel_requested"},
+        {"$ref": "#/$defs/ev_obligation"},
+        {"$ref": "#/$defs/ev_obligation_aborted"},
+        {"$ref": "#/$defs/ev_obligation_handoff"},
+        {"$ref": "#/$defs/ev_timer_scheduled"},
+        {"$ref": "#/$defs/ev_timer"},
+        {"$ref": "#/$defs/ev_user_trace"}
+      ]
+    },
+    "ev_task": {
+      "type": "object", "required": ["k", "task"], "additionalProperties": false,
+      "properties": {
+        "k": {"enum": ["task.spawned", "task.completed"]},
+        "task": {"$ref": "#/$defs/name"},
+        "region": {"$ref": "#/$defs/name"}
+      },
+      "if": {"properties": {"k": {"const": "task.spawned"}}},
+      "then": {"required": ["region"]},
+      "else": {"not": {"required": ["region"]}}
+    },
+    "ev_region_created": {
+      "type": "object", "required": ["k", "region", "parent"], "additionalProperties": false,
+      "properties": {
+        "k": {"const": "region.created"},
+        "region": {"$ref": "#/$defs/name"},
+        "parent": {"oneOf": [{"$ref": "#/$defs/name"}, {"type": "null"}]}
+      }
+    },
+    "ev_region": {
+      "type": "object", "required": ["k", "region"], "additionalProperties": false,
+      "properties": {
+        "k": {"enum": ["region.close_begin", "region.closed"]},
+        "region": {"$ref": "#/$defs/name"}
+      }
+    },
+    "ev_region_cancelled": {
+      "type": "object", "required": ["k", "region", "reason"], "additionalProperties": false,
+      "properties": {
+        "k": {"const": "region.cancelled"},
+        "region": {"$ref": "#/$defs/name"},
+        "reason": {"$ref": "#/$defs/reason"}
+      }
+    },
+    "ev_cancel_requested": {
+      "type": "object", "required": ["k", "task", "region", "reason"], "additionalProperties": false,
+      "properties": {
+        "k": {"const": "cancel.requested"},
+        "task": {"$ref": "#/$defs/name"},
+        "region": {"$ref": "#/$defs/name"},
+        "reason": {"$ref": "#/$defs/reason"}
+      }
+    },
+    "ev_obligation": {
+      "type": "object", "required": ["k", "obligation", "task", "region", "kind"], "additionalProperties": false,
+      "properties": {
+        "k": {"enum": ["obligation.reserved", "obligation.committed", "obligation.leaked"]},
+        "obligation": {"$ref": "#/$defs/name"},
+        "task": {"$ref": "#/$defs/name"},
+        "region": {"$ref": "#/$defs/name"},
+        "kind": {"$ref": "#/$defs/obligation_kind"}
+      }
+    },
+    "ev_obligation_aborted": {
+      "type": "object", "required": ["k", "obligation", "task", "region", "kind", "abort_reason"], "additionalProperties": false,
+      "properties": {
+        "k": {"const": "obligation.aborted"},
+        "obligation": {"$ref": "#/$defs/name"},
+        "task": {"$ref": "#/$defs/name"},
+        "region": {"$ref": "#/$defs/name"},
+        "kind": {"$ref": "#/$defs/obligation_kind"},
+        "abort_reason": {"$ref": "#/$defs/abort_reason"}
+      }
+    },
+    "ev_obligation_handoff": {
+      "type": "object", "required": ["k", "obligation", "from_task", "to_task", "from_region", "to_region"], "additionalProperties": false,
+      "properties": {
+        "k": {"const": "obligation.handoff"},
+        "obligation": {"$ref": "#/$defs/name"},
+        "from_task": {"$ref": "#/$defs/name"},
+        "to_task": {"$ref": "#/$defs/name"},
+        "from_region": {"$ref": "#/$defs/name"},
+        "to_region": {"$ref": "#/$defs/name"}
+      }
+    },
+    "ev_timer_scheduled": {
+      "type": "object", "required": ["k", "timer", "deadline_ns"], "additionalProperties": false,
+      "properties": {
+        "k": {"const": "timer.scheduled"},
+        "timer": {"$ref": "#/$defs/name"},
+        "deadline_ns": {"$ref": "#/$defs/u64"}
+      }
+    },
+    "ev_timer": {
+      "type": "object", "required": ["k", "timer"], "additionalProperties": false,
+      "properties": {
+        "k": {"enum": ["timer.fired", "timer.cancelled"]},
+        "timer": {"$ref": "#/$defs/name"}
+      }
+    },
+    "ev_user_trace": {
+      "type": "object", "required": ["k", "message"], "additionalProperties": false,
+      "properties": {
+        "k": {"const": "user.trace"},
+        "message": {"type": "string"}
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "required": ["now_ns", "quiescent", "tasks", "regions", "obligations", "timers_pending", "channels"],
+      "additionalProperties": false,
+      "properties": {
+        "now_ns": {"$ref": "#/$defs/u64"},
+        "quiescent": {"type": "boolean"},
+        "tasks": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object", "required": ["state", "outcome", "cancel_reason", "cleanup_budget"], "additionalProperties": false,
+            "properties": {
+              "state": {"$ref": "#/$defs/task_state"},
+              "outcome": {"oneOf": [{"$ref": "#/$defs/outcome"}, {"type": "null"}]},
+              "cancel_reason": {"oneOf": [{"$ref": "#/$defs/reason"}, {"type": "null"}]},
+              "cleanup_budget": {
+                "oneOf": [
+                  {"type": "object", "required": ["poll_quota", "priority"], "additionalProperties": false,
+                   "properties": {"poll_quota": {"$ref": "#/$defs/u32"},
+                                  "priority": {"type": "integer", "minimum": 0, "maximum": 255}}},
+                  {"type": "null"}
+                ]
+              }
+            }
+          }
+        },
+        "regions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object", "required": ["state", "parent", "cancel_reason"], "additionalProperties": false,
+            "properties": {
+              "state": {"$ref": "#/$defs/region_state"},
+              "parent": {"oneOf": [{"$ref": "#/$defs/name"}, {"type": "null"}]},
+              "cancel_reason": {"oneOf": [{"$ref": "#/$defs/reason"}, {"type": "null"}]}
+            }
+          }
+        },
+        "obligations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object", "required": ["state", "kind", "holder", "region", "abort_reason"], "additionalProperties": false,
+            "properties": {
+              "state": {"$ref": "#/$defs/obligation_state"},
+              "kind": {"$ref": "#/$defs/obligation_kind"},
+              "holder": {"$ref": "#/$defs/name"},
+              "region": {"$ref": "#/$defs/name"},
+              "abort_reason": {"oneOf": [{"$ref": "#/$defs/abort_reason"}, {"type": "null"}]}
+            }
+          }
+        },
+        "timers_pending": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["timer", "deadline_ns"], "additionalProperties": false,
+            "properties": {"timer": {"$ref": "#/$defs/name"}, "deadline_ns": {"$ref": "#/$defs/u64"}}
+          }
+        },
+        "channels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object", "required": ["len", "reserved", "sender_closed", "receiver_closed"], "additionalProperties": false,
+            "properties": {
+              "len": {"$ref": "#/$defs/u32"},
+              "reserved": {"$ref": "#/$defs/u32"},
+              "sender_closed": {"type": "boolean"},
+              "receiver_closed": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "observation": {
+      "type": "object", "required": ["task", "step", "op", "status", "value"], "additionalProperties": false,
+      "properties": {
+        "task": {"$ref": "#/$defs/name"},
+        "step": {"$ref": "#/$defs/u32"},
+        "op": {"type": "string", "minLength": 1},
+        "status": {"$ref": "#/$defs/status"},
+        "value": {}
+      }
+    }
+  },
+  "examples": [
+    {
+      "vocabulary": "asx.vocab.v2",
+      "trace": [
+        [{"k": "region.created", "parent": null, "region": "root"},
+         {"k": "user.trace", "message": "oneshot::recv received value"},
+         {"k": "user.trace", "message": "oneshot::reserve creating permit"}],
+        [{"k": "task.spawned", "region": "root", "task": "t.consumer"},
+         {"k": "task.spawned", "region": "root", "task": "t.producer"},
+         {"k": "task.spawned", "region": "root", "task": "t.waiter"}],
+        [{"k": "obligation.reserved", "kind": "SendPermit", "obligation": "t.consumer/o1", "region": "root", "task": "t.consumer"},
+         {"k": "task.completed", "task": "t.producer"},
+         {"k": "task.completed", "task": "t.waiter"}],
+        [{"k": "obligation.committed", "kind": "SendPermit", "obligation": "t.consumer/o1", "region": "root", "task": "t.consumer"}],
+        [{"k": "task.completed", "task": "t.consumer"}]
+      ],
+      "snapshot": {
+        "now_ns": 0,
+        "quiescent": true,
+        "tasks": {
+          "t.consumer": {"state": "Completed", "outcome": {"tag": "ok"}, "cancel_reason": null, "cleanup_budget": null},
+          "t.producer": {"state": "Completed", "outcome": {"tag": "ok"}, "cancel_reason": null, "cleanup_budget": null},
+          "t.waiter": {"state": "Completed", "outcome": {"tag": "ok"}, "cancel_reason": null, "cleanup_budget": null}
+        },
+        "regions": {"root": {"state": "Open", "parent": null, "cancel_reason": null}},
+        "obligations": {
+          "t.consumer/o1": {"state": "Committed", "kind": "SendPermit", "holder": "t.consumer", "region": "root", "abort_reason": null}
+        },
+        "timers_pending": [],
+        "channels": {
+          "ch.data": {"len": 0, "reserved": 0, "sender_closed": true, "receiver_closed": false},
+          "ch.sum": {"len": 0, "reserved": 0, "sender_closed": true, "receiver_closed": true}
+        }
+      },
+      "observations": [
+        {"task": "t.consumer", "step": 1, "op": "mpsc.recv", "status": "ASX_OK", "value": 0},
+        {"task": "t.producer", "step": 1, "op": "mpsc.send", "status": "ASX_OK", "value": null},
+        {"task": "t.waiter", "step": 1, "op": "oneshot.recv", "status": "ASX_OK", "value": 6}
+      ]
+    }
+  ]
+}
