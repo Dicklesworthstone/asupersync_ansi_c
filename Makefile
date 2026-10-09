@@ -1648,7 +1648,11 @@ minimize-run: minimize-build
 # ---------------------------------------------------------------------------
 # ci-embedded-matrix — cross-target embedded builds + QEMU
 # ---------------------------------------------------------------------------
-ci-embedded-matrix: build-embedded-mipsel build-embedded-armv7 build-embedded-aarch64
+ci-embedded-matrix:
+	@# The canonical runner: OpenWrt musl or Debian glibc cross compiler per
+	@# arch, JSONL rows with the compiler used, size and layout reports; a
+	@# target with no compiler fails the run.
+	@tools/ci/run_embedded_matrix.sh
 	@if [ "$(RUN_QEMU_IN_MATRIX)" = "1" ]; then \
 		$(MAKE) qemu-smoke FAIL_ON_MISSING_RUNNERS=$(FAIL_ON_MISSING_RUNNERS); \
 	fi
