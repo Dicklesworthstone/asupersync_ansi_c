@@ -224,6 +224,10 @@ jobs:
         id: vignette_tests
         run: make test-vignettes
 
+      - name: Unit suite with every capacity macro raised 4x
+        id: capacity_x4_tests
+        run: make test-capacity-x4
+
       - name: Validate structured test logs
         id: validate_logs
         run: tools/ci/validate_test_logs.sh --strict
