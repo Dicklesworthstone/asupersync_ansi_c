@@ -34,6 +34,18 @@ asx_time asx_cancel_now_internal(void) {
     return now;
 }
 
+asx_cancel_reason asx_cancel_reason_testing_default(asx_cancel_kind kind, const char *message) {
+    asx_cancel_reason r;
+    r.kind = kind;
+    r.origin_region = asx_region_handle_for_slot(0u);
+    r.origin_task = ASX_INVALID_ID;
+    r.timestamp = (asx_time)1000000000u;
+    r.message = message;
+    r.cause = NULL;
+    r.truncated = 0;
+    return r;
+}
+
 static int reason_same(const asx_cancel_reason *a, const asx_cancel_reason *b) {
     return a->kind == b->kind && a->timestamp == b->timestamp &&
            a->origin_region == b->origin_region && a->origin_task == b->origin_task &&

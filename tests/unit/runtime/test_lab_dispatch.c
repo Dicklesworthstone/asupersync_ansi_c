@@ -165,6 +165,59 @@ TEST(auto_advance_moves_the_clock_to_the_next_timer) {
     ASSERT_EQ(s.woke_at, (asx_time)100);
 }
 
+/* Spends its one-poll quota yielding, then (pre-poll quota cancel on poll
+ * 2) either checkpoints or just completes. */
+typedef struct {
+    uint32_t polls;
+    int checkpoint;
+} quota_probe;
+
+static asx_status poll_quota_probe(void *ud, asx_task_id self) {
+    quota_probe *q = (quota_probe *)ud;
+    asx_checkpoint_result cr;
+    q->polls++;
+    if (q->polls == 1u) return ASX_E_PENDING;
+    if (q->checkpoint && asx_checkpoint(self, &cr) != ASX_OK) return ASX_E_INVALID_STATE;
+    return ASX_OK;
+}
+
+static asx_status quota_reason(int checkpoint, asx_region_id *out_root, asx_cancel_reason *out) {
+    asx_task_id t;
+    asx_budget tb;
+    asx_budget run;
+    quota_probe q;
+    asx_outcome o;
+    asx_status st = setup();
+    if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(42u);
+    if (st == ASX_OK) st = asx_region_open(out_root);
+    memset(&q, 0, sizeof(q));
+    q.checkpoint = checkpoint;
+    tb = asx_budget_from_polls(1);
+    if (st == ASX_OK) st = asx_task_spawn_with_budget(*out_root, poll_quota_probe, &q, &tb, &t);
+    run = asx_budget_from_polls(20);
+    if (st == ASX_OK) st = asx_scheduler_run(*out_root, &run);
+    if (st == ASX_OK) st = asx_task_get_outcome(t, &o);
+    if (st == ASX_OK) st = asx_task_get_cancel_reason(t, out);
+    return st;
+}
+
+/* Rust's lab stamps the pre-poll quota cancel with CancelReason::poll_quota()'s
+ * testing defaults (lab/runtime.rs:4667): region at arena index 0, no task,
+ * 1 s. A checkpoint afterwards re-attributes it (earlier timestamp wins). */
+TEST(pre_poll_quota_cancel_has_rust_lab_attribution) {
+    asx_region_id root;
+    asx_cancel_reason r;
+    ASSERT_EQ(quota_reason(0, &root, &r), ASX_OK);
+    ASSERT_EQ((int)r.kind, (int)ASX_CANCEL_POLL_QUOTA);
+    ASSERT_EQ(r.origin_region, root);
+    ASSERT_EQ(r.origin_task, ASX_INVALID_ID);
+    ASSERT_EQ(r.timestamp, (asx_time)1000000000u);
+    ASSERT_EQ(quota_reason(1, &root, &r), ASX_OK);
+    ASSERT_EQ((int)r.kind, (int)ASX_CANCEL_POLL_QUOTA);
+    ASSERT_TRUE(r.origin_task != ASX_INVALID_ID);
+    ASSERT_EQ(r.timestamp, (asx_time)0);
+}
+
 TEST(use_lab_dispatch_requires_no_live_task) {
     asx_region_id r;
     asx_task_id t;
@@ -186,6 +239,7 @@ int main(void) {
     RUN_TEST(ties_are_broken_by_the_step_value_in_generation_order);
     RUN_TEST(cancel_lane_is_served_first);
     RUN_TEST(auto_advance_moves_the_clock_to_the_next_timer);
+    RUN_TEST(pre_poll_quota_cancel_has_rust_lab_attribution);
     RUN_TEST(use_lab_dispatch_requires_no_live_task);
 
     TEST_REPORT();

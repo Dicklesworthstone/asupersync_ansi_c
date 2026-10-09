@@ -1774,11 +1774,12 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         if (t->phase == 0u) {
             /* ChildRegion::close enqueues a Close command, which the runtime
              * runs as a User cancel of the region with this message
-             * (lab/runtime.rs:4195): cancel the remaining tasks, close.
-             * Rust stamps it with CancelReason::user's testing defaults;
-             * C attributes it to the closing task (DSL §4). */
-            asx_cancel_reason r =
-                make_reason(ASX_CANCEL_USER, t->region, self, "owned child region body finished");
+             * (lab/runtime.rs:4195): cancel the remaining tasks, close. The
+             * reason is Rust's, CancelReason::user with its testing-default
+             * attribution (DSL §4, bd-wxep). */
+            asx_cancel_reason r = make_reason(ASX_CANCEL_USER, g_root, ASX_INVALID_ID,
+                                              "owned child region body finished");
+            r.timestamp = (asx_time)1000000000u; /* CancelReason::user: 1 s */
             st = asx_region_cancel(lr->id, &r, NULL);
             if (st != ASX_OK) {
                 observe_status(t, idx, op, st);

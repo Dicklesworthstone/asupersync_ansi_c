@@ -331,6 +331,20 @@ attribution, and the placeholder region happened to be named `"root"`.
 C builds the same reason and passes it whole: `asx_region_cancel(region,
 &reason, …)` and `asx_task_cancel_with_reason(task, &reason)`.
 
+Two reasons Rust itself creates do carry that testing default, and the C
+side reproduces them (bd-wxep, an upstream issue):
+
+- **The step `close_region`.** Rust's Close command uses
+  `CancelReason::user("owned child region body finished")`
+  (`lab/runtime.rs:4195`). The C interpreter passes the same reason:
+  origin `"root"`, no task, 1 s.
+- **A pre-poll poll-quota cancel.** It is raised when a task is
+  dispatched with its quota already spent, using `CancelReason::poll_quota()`
+  (`lab/runtime.rs:4667`). C stamps the same reason under lab dispatch
+  (`asx_scheduler_use_lab_dispatch`); the default sweep scheduler
+  attributes it to the task. A checkpoint that later observes the spent
+  quota re-attributes it in both engines (earlier timestamp wins).
+
 There is no allocation-failure fault and no backward or per-task clock skew:
 Rust has neither (`lab/runtime.rs:3357`). `region_limits` is the scripted
 stand-in for resource exhaustion. A denied spawn surfaces as the child's
