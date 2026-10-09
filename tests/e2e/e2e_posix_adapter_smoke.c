@@ -277,7 +277,15 @@ int main(void) {
             if (st == ASX_OK) token_registered = 1;
             if (st != ASX_OK) ok = 0;
         }
-        if (ok) {
+        /* The live backend arms the fd inside asx_io_register with the
+         * driver's (generation, slot) token; registering it with the reactor
+         * again would replace that token and the readiness would be dropped.
+         * The ghost backend only counts readiness, so the fd is registered
+         * with the reactor directly. */
+        if (ok && asx_io_driver_is_live()) {
+            scenario("posix_adapter_smoke.reactor_armed_by_io_register", asx_io_armed_count() == 1u,
+                     NULL);
+        } else if (ok) {
             st = asx_posix_reactor_register_fd(hooks.reactor.ctx, pipefd[0],
                                                ASX_POSIX_REACTOR_READABLE);
             scenario("posix_adapter_smoke.reactor_register_fd", st == ASX_OK, NULL);
@@ -292,6 +300,14 @@ int main(void) {
             event_count = asx_io_driver_poll(events, 2u, 25u);
             scenario("posix_adapter_smoke.io_driver_ready", event_count == 1u, NULL);
             scenario("posix_adapter_smoke.waker_signaled", asx_waker_is_signaled(&waker), NULL);
+        }
+        if (ok && asx_io_driver_is_live()) {
+            /* Live readiness is one-shot and the poll above consumed it; re-arm
+             * so the scheduler's own reactor pump observes the still-readable
+             * pipe (the ghost backend re-counts readiness on every poll). */
+            st = asx_io_set_interest(&token, ASX_IO_READABLE);
+            scenario("posix_adapter_smoke.rearm_after_poll", st == ASX_OK, NULL);
+            if (st != ASX_OK) ok = 0;
         }
         if (ok) {
             budget = asx_budget_from_polls(8u);
@@ -310,7 +326,9 @@ int main(void) {
         }
 
         if (pipefd[0] >= 0) {
-            asx_posix_reactor_deregister_fd(hooks.reactor.ctx, pipefd[0]);
+            if (!asx_io_driver_is_live()) {
+                asx_posix_reactor_deregister_fd(hooks.reactor.ctx, pipefd[0]);
+            }
             if (token_registered) { asx_io_deregister(&token); }
             close(pipefd[0]);
         }

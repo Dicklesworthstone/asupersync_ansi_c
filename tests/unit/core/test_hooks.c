@@ -217,7 +217,14 @@ TEST(hooks_config_init) {
     asx_runtime_config cfg;
     asx_runtime_config_init(&cfg);
     ASSERT_EQ(cfg.size, (uint32_t)sizeof(asx_runtime_config));
+    /* Per-profile defaults: docs/PROFILE_RESOURCE_CLASS_CAPABILITY_MATRIX.md 3.3. */
+#if defined(ASX_PROFILE_EMBEDDED_ROUTER) || defined(ASX_PROFILE_HFT)
+    ASSERT_EQ(cfg.wait_policy, ASX_WAIT_BUSY_SPIN);
+#elif defined(ASX_PROFILE_AUTOMOTIVE)
+    ASSERT_EQ(cfg.wait_policy, ASX_WAIT_SLEEP);
+#else
     ASSERT_EQ(cfg.wait_policy, ASX_WAIT_YIELD);
+#endif
     ASSERT_EQ(cfg.leak_response, ASX_LEAK_LOG);
     ASSERT_EQ(cfg.finalizer_poll_budget, (uint32_t)100);
     ASSERT_EQ(cfg.finalizer_time_budget_ns, (uint64_t)5000000000ULL);

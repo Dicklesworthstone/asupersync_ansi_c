@@ -35,6 +35,8 @@ CLANG_FORMAT_VERSION ?= 18.1.8
 CLANG_FORMAT ?= $(shell if clang-format --version 2>/dev/null | grep -q 'version $(CLANG_FORMAT_VERSION)'; then \
 	echo clang-format; elif command -v uvx >/dev/null 2>&1; then \
 	echo "uvx --from clang-format==$(CLANG_FORMAT_VERSION) clang-format"; fi)
+# Trees format-check covers (tests/gates point it at a scratch tree).
+FORMAT_PATHS ?= include src tests
 # Pinned analyzer: Cppcheck 2.22.0 (PyPI wheel cppcheck==1.5.3). Different
 # cppcheck versions report different findings, so local runs and CI must use
 # the same one; the system binary is used only when it is that version.
@@ -627,7 +629,7 @@ $(BIN_DIR):
 format-check:
 	@echo "[asx] format-check: verifying source formatting..."
 	@if [ -n "$(CLANG_FORMAT)" ]; then \
-		find include src tests \( -name '*.c' -o -name '*.h' \) -print0 | \
+		find $(FORMAT_PATHS) \( -name '*.c' -o -name '*.h' \) -print0 | \
 		xargs -0 $(CLANG_FORMAT) --dry-run --Werror 2>&1 && \
 		echo "[asx] format-check: PASS (clang-format $(CLANG_FORMAT_VERSION))" || \
 		{ echo "[asx] format-check: FAIL — run $(CLANG_FORMAT) -i on the files above"; exit 1; }; \
@@ -653,15 +655,11 @@ lint:
 		         -I include src/ && \
 		echo "[asx] lint: PASS (cppcheck $(CPPCHECK_VERSION))" || \
 		{ echo "[asx] lint: FAIL"; exit 1; }; \
-	elif command -v clang-tidy >/dev/null 2>&1; then \
-		find src -name '*.c' | xargs clang-tidy -- $(ALL_CFLAGS) && \
-		echo "[asx] lint: PASS (clang-tidy)" || \
-		{ echo "[asx] lint: FAIL"; exit 1; }; \
 	elif [ "$(FAIL_ON_MISSING_LINTER)" = "1" ]; then \
-		echo "[asx] lint: FAIL (no static analyzer found; strict mode)"; \
+		echo "[asx] lint: FAIL (cppcheck $(CPPCHECK_VERSION) not found and no uvx; strict mode)"; \
 		exit 1; \
 	else \
-		echo "[asx] lint: SKIP (no static analyzer found)"; \
+		echo "[asx] lint: SKIP (cppcheck $(CPPCHECK_VERSION) not found and no uvx; use STRICT_GATES=1 to fail)"; \
 	fi
 
 # ---------------------------------------------------------------------------
@@ -690,23 +688,15 @@ lint-anti-butchering:
 # ---------------------------------------------------------------------------
 lint-evidence:
 	@echo "[asx] lint-evidence: checking per-bead evidence linkage..."
-	@if [ -x tools/ci/check_evidence_linkage.sh ]; then \
-		tools/ci/check_evidence_linkage.sh; \
-	else \
-		echo "[asx] lint-evidence: SKIP (runner not found)"; \
-	fi
+	@tools/ci/check_evidence_linkage.sh
 
 # ---------------------------------------------------------------------------
 # lint-static-analysis — section 10.7 static analysis gate (bd-66l.10)
 # ---------------------------------------------------------------------------
 lint-static-analysis:
 	@echo "[asx] lint-static-analysis: section 10.7 gates..."
-	@if [ -x tools/ci/run_static_analysis.sh ]; then \
-		CPPCHECK="$(CPPCHECK)" CLANG_TIDY="$(CLANG_TIDY)" \
-		FAIL_ON_MISSING_LINTER="$(FAIL_ON_MISSING_LINTER)" tools/ci/run_static_analysis.sh; \
-	else \
-		echo "[asx] lint-static-analysis: SKIP (runner not found)"; \
-	fi
+	@CPPCHECK="$(CPPCHECK)" CLANG_TIDY="$(CLANG_TIDY)" \
+		FAIL_ON_MISSING_LINTER="$(FAIL_ON_MISSING_LINTER)" tools/ci/run_static_analysis.sh
 
 # ---------------------------------------------------------------------------
 # lint-semantic-delta — semantic delta budget gate (bd-66l.3)
@@ -747,6 +737,8 @@ test: test-unit test-invariants test-conformance-c test-vignettes
 # ---------------------------------------------------------------------------
 test-unit: $(UNIT_TEST_BIN)
 	@echo "[asx] test-unit: running $(words $(UNIT_TEST_BIN)) test(s)..."
+	@# tests/test_log.h writes structured JSONL only into an existing directory.
+	@mkdir -p build/test-logs
 	@if [ -z "$(strip $(UNIT_TEST_BIN))" ]; then \
 		if [ "$(FAIL_ON_EMPTY_UNIT_TESTS)" = "1" ]; then \
 			echo "[asx] test-unit: FAIL (no tests found; strict mode)"; \
@@ -1031,6 +1023,7 @@ $(TEST_DIR)/unit/%: tests/unit/%.c $(LIB_A) | test-dirs
 # ---------------------------------------------------------------------------
 test-invariants: $(INV_TEST_BIN)
 	@echo "[asx] test-invariants: running $(words $(INV_TEST_BIN)) test(s)..."
+	@mkdir -p build/test-logs
 	@if [ -z "$(strip $(INV_TEST_BIN))" ]; then \
 		if [ "$(FAIL_ON_EMPTY_INVARIANT_TESTS)" = "1" ]; then \
 			echo "[asx] test-invariants: FAIL (no tests found; strict mode)"; \
@@ -1059,6 +1052,7 @@ test-invariants: $(INV_TEST_BIN)
 # ---------------------------------------------------------------------------
 test-conformance-c: $(CONFORMANCE_TEST_BIN)
 	@echo "[asx] test-conformance-c: running $(words $(CONFORMANCE_TEST_BIN)) test(s)..."
+	@mkdir -p build/test-logs
 	@if [ -z "$(strip $(CONFORMANCE_TEST_BIN))" ]; then \
 		echo "[asx] test-conformance-c: no tests found (scaffold stage)"; \
 	else \
@@ -1082,6 +1076,7 @@ test-conformance-c: $(CONFORMANCE_TEST_BIN)
 # ---------------------------------------------------------------------------
 test-vignettes: $(VIGNETTE_TEST_BIN)
 	@echo "[asx] test-vignettes: running $(words $(VIGNETTE_TEST_BIN)) vignette(s)..."
+	@mkdir -p build/test-logs
 	@if [ -z "$(strip $(VIGNETTE_TEST_BIN))" ]; then \
 		echo "[asx] test-vignettes: FAIL (no vignettes found)"; \
 		exit 1; \
@@ -1651,7 +1646,11 @@ minimize-run: minimize-build
 # ---------------------------------------------------------------------------
 # ci-embedded-matrix — cross-target embedded builds + QEMU
 # ---------------------------------------------------------------------------
-ci-embedded-matrix: build-embedded-mipsel build-embedded-armv7 build-embedded-aarch64
+ci-embedded-matrix:
+	@# The canonical runner: OpenWrt musl or Debian glibc cross compiler per
+	@# arch, JSONL rows with the compiler used, size and layout reports; a
+	@# target with no compiler fails the run.
+	@tools/ci/run_embedded_matrix.sh
 	@if [ "$(RUN_QEMU_IN_MATRIX)" = "1" ]; then \
 		$(MAKE) qemu-smoke FAIL_ON_MISSING_RUNNERS=$(FAIL_ON_MISSING_RUNNERS); \
 	fi
@@ -1736,8 +1735,12 @@ build-clang:
 	$(MAKE) build CC=clang
 
 build-msvc:
-	@echo "[asx] build-msvc: MSVC cross-build not yet wired (requires cl.exe on PATH)"
-	@echo "[asx] build-msvc: SKIP"
+	@echo "[asx] build-msvc: MSVC lane not wired yet (needs cl.exe; tracked by E2 bd-9kll.15.2)"
+	@if [ "$(FAIL_ON_MISSING_CROSS_TOOLCHAINS)" = "1" ]; then \
+		echo "[asx] build-msvc: FAIL (no MSVC lane; strict mode)"; \
+		exit 1; \
+	fi
+	@echo "[asx] build-msvc: SKIP (use STRICT_GATES=1 to fail)"
 
 build-32:
 	$(MAKE) build BITS=32

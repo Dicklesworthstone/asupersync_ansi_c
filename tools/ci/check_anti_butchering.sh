@@ -73,15 +73,38 @@ mkdir -p "$ARTIFACT_DIR"
 tmp_changed="$(mktemp)"
 trap 'rm -f "$tmp_changed"' EXIT
 
+# The resolved diff range. RANGE_UNRESOLVED=1 means a range was requested but
+# could not be computed (unknown commit, shallow clone): that is a failure,
+# never a skip, because an empty changed-file list would pass every change.
+RANGE_BASE=""
+RANGE_HEAD=""
+RANGE_UNRESOLVED=0
+
+commit_exists() {
+    git -C "$REPO_ROOT" cat-file -e "${1}^{commit}" 2>/dev/null
+}
+
 add_changed_files_from_range() {
     local base="$1"
     local head="$2"
     if [[ -n "$base" && -n "$head" ]]; then
-        git -C "$REPO_ROOT" diff --name-only "${base}...${head}" 2>/dev/null >>"$tmp_changed" || true
+        if ! commit_exists "$base" || ! commit_exists "$head"; then
+            RANGE_UNRESOLVED=1
+            return
+        fi
+        RANGE_BASE="$base"
+        RANGE_HEAD="$head"
+        git -C "$REPO_ROOT" diff --name-only "${base}...${head}" 2>/dev/null >>"$tmp_changed" ||
+            RANGE_UNRESOLVED=1
         return
     fi
     if [[ -n "$base" ]]; then
-        git -C "$REPO_ROOT" diff --name-only "${base}" 2>/dev/null >>"$tmp_changed" || true
+        if ! commit_exists "$base"; then
+            RANGE_UNRESOLVED=1
+            return
+        fi
+        git -C "$REPO_ROOT" diff --name-only "${base}" 2>/dev/null >>"$tmp_changed" ||
+            RANGE_UNRESOLVED=1
     fi
 }
 
@@ -90,17 +113,33 @@ collect_changed_files() {
     if [[ -n "$BASE_REF" || -n "$HEAD_REF" ]]; then
         add_changed_files_from_range "$BASE_REF" "$HEAD_REF"
     elif [[ -n "${GITHUB_EVENT_PATH:-}" && -f "${GITHUB_EVENT_PATH:-}" ]]; then
-        local pr_base pr_head
-        pr_base="$(jq -r '.pull_request.base.sha // ""' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
-        pr_head="$(jq -r '.pull_request.head.sha // ""' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
-        add_changed_files_from_range "$pr_base" "$pr_head"
-    elif git -C "$REPO_ROOT" rev-parse --verify HEAD~1 >/dev/null 2>&1; then
-        git -C "$REPO_ROOT" diff --name-only HEAD~1..HEAD 2>/dev/null >>"$tmp_changed" || true
+        local event_base event_head
+        event_base="$(jq -r '.pull_request.base.sha // ""' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
+        event_head="$(jq -r '.pull_request.head.sha // ""' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
+        if [[ -z "$event_base" ]]; then
+            # Push event: the pushed range is before..after. A branch creation
+            # has an all-zero `before`; judge its tip commit.
+            event_base="$(jq -r '.before // ""' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
+            event_head="$(jq -r '.after // ""' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
+            if [[ "$event_base" =~ ^0+$ && -n "$event_head" ]]; then
+                event_base="${event_head}~1"
+            fi
+        fi
+        if [[ -z "$event_base" || -z "$event_head" ]]; then
+            RANGE_UNRESOLVED=1
+        else
+            add_changed_files_from_range "$event_base" "$event_head"
+        fi
+    else
+        # Developer run: the last commit plus local and staged diffs. A
+        # requested range (above) is judged on its own, never on whatever
+        # happens to be uncommitted in the working tree.
+        if git -C "$REPO_ROOT" rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            git -C "$REPO_ROOT" diff --name-only HEAD~1..HEAD 2>/dev/null >>"$tmp_changed" || true
+        fi
+        git -C "$REPO_ROOT" diff --name-only 2>/dev/null >>"$tmp_changed" || true
+        git -C "$REPO_ROOT" diff --name-only --cached 2>/dev/null >>"$tmp_changed" || true
     fi
-
-    # Include local/staged diffs for developer runs.
-    git -C "$REPO_ROOT" diff --name-only 2>/dev/null >>"$tmp_changed" || true
-    git -C "$REPO_ROOT" diff --name-only --cached 2>/dev/null >>"$tmp_changed" || true
 }
 
 collect_changed_files
@@ -191,6 +230,14 @@ write_artifact() {
       }' >"$ARTIFACT_FILE"
 }
 
+if [[ $RANGE_UNRESOLVED -eq 1 ]]; then
+    write_artifact "fail" false "none" \
+        "cannot resolve the diff range (unknown commit or shallow checkout)" \
+        '[]' '[]' '[]' '[]' '0' false '[]' '[]'
+    echo "[asx] anti-butchering: FAIL — cannot resolve the diff range; check out full history (fetch-depth: 0) artifact=$ARTIFACT_FILE" >&2
+    exit 1
+fi
+
 if [[ ${#sensitive_files[@]} -eq 0 ]]; then
     write_artifact "skip" true "none" \
         "no semantic-sensitive changes detected" \
@@ -212,6 +259,15 @@ if [[ -z "$impact_text" && -n "${GITHUB_EVENT_PATH:-}" && -f "${GITHUB_EVENT_PAT
     if [[ -n "$pr_body" ]]; then
         impact_text="$pr_body"
         impact_source="pull_request_body"
+    fi
+fi
+
+# A resolved range (push or explicit refs) is judged by every commit message in
+# it, so a multi-commit push is not judged by its last commit alone.
+if [[ -z "$impact_text" && -n "$RANGE_BASE" && -n "$RANGE_HEAD" ]]; then
+    impact_text="$(git -C "$REPO_ROOT" log --pretty=%B "${RANGE_BASE}..${RANGE_HEAD}" 2>/dev/null || true)"
+    if [[ -n "$impact_text" ]]; then
+        impact_source="commit_messages_in_range"
     fi
 fi
 

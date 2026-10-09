@@ -21,7 +21,6 @@
  */
 
 #ifndef ASX_RUNTIME_LAB_H
-#define ASX_RUNTIME_LAB_H
 
 #include <asx/asx_config.h>
 #include <asx/asx_export.h>
@@ -33,6 +32,8 @@
 
 #if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE ||                                      \
     defined(ASX_INTERNAL_TRACE_FAMILY_ACCESS)
+/* Guard defined only with the contents; see asx/runtime/trace.h. */
+#define ASX_RUNTIME_LAB_H
 
 #ifdef __cplusplus
 extern "C" {

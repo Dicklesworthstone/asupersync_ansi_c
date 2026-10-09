@@ -8,10 +8,12 @@ usage() {
   cat <<'EOF'
 Usage: run_embedded_matrix.sh [--run-id <id>] [--log-file <path>] [--dry-run]
 
-Runs cross-builds for router-class triplets:
-  - mipsel-openwrt-linux-musl
-  - armv7-openwrt-linux-muslgnueabi
-  - aarch64-openwrt-linux-musl
+Runs cross-builds for router-class triplets (OpenWrt SDK musl compiler when on
+PATH, else the Debian glibc cross compiler of the same ISA class):
+  - mipsel-openwrt-linux-musl        (fallback mipsel-linux-gnu)
+  - armv7-openwrt-linux-muslgnueabi  (fallback arm-linux-gnueabihf)
+  - aarch64-openwrt-linux-musl       (fallback aarch64-linux-gnu)
+A target with neither compiler is reported as unsupported and fails the run.
 
 Each row emits JSONL with status, diagnostics, binary size, and startup metric status.
 
@@ -124,10 +126,14 @@ fi
 layout_index_file="$artifact_root/${run_id}-layout-index.tsv"
 : >"$layout_index_file"
 
+# arch:preferred triplet (OpenWrt SDK, musl):fallback triplet (Debian cross
+# gcc, glibc):resource class. The fallback keeps the same ISA class (armv7 is
+# gnueabihf, not the armv5 gnueabi port) so CI cross-builds every architecture
+# even without an OpenWrt SDK; the JSONL row records which compiler was used.
 declare -a MATRIX=(
-  "mipsel-openwrt-linux-musl:mipsel-openwrt-linux-musl-gcc:R1"
-  "armv7-openwrt-linux-muslgnueabi:armv7-openwrt-linux-muslgnueabi-gcc:R2"
-  "aarch64-openwrt-linux-musl:aarch64-openwrt-linux-musl-gcc:R3"
+  "mipsel:mipsel-openwrt-linux-musl:mipsel-linux-gnu:R1"
+  "armv7:armv7-openwrt-linux-muslgnueabi:arm-linux-gnueabihf:R2"
+  "aarch64:aarch64-openwrt-linux-musl:aarch64-linux-gnu:R3"
 )
 
 total=0
@@ -136,7 +142,13 @@ planned=0
 unsupported=0
 
 for entry in "${MATRIX[@]}"; do
-  IFS=':' read -r triplet compiler resource_class <<<"$entry"
+  IFS=':' read -r arch preferred_triplet fallback_triplet resource_class <<<"$entry"
+  triplet="$preferred_triplet"
+  if ! command -v "${preferred_triplet}-gcc" >/dev/null 2>&1 &&
+    command -v "${fallback_triplet}-gcc" >/dev/null 2>&1; then
+    triplet="$fallback_triplet"
+  fi
+  compiler="${triplet}-gcc"
   ((total += 1))
   output_log="$artifact_root/${run_id}-${triplet}.log"
   make_cmd=(env "ASX_E2E_RESOURCE_CLASS=$resource_class" make -C "$REPO_ROOT" build "BUILD_DIR=$BUILD_DIR" "TARGET=$triplet" "PROFILE=EMBEDDED_ROUTER" "CODEC=BIN" "DETERMINISTIC=1")
@@ -149,7 +161,7 @@ for entry in "${MATRIX[@]}"; do
   fi
 
   if ! command -v "$compiler" >/dev/null 2>&1; then
-    diagnostic="missing toolchain '$compiler'; install OpenWrt SDK for $triplet or override PATH/toolchain prefix"
+    diagnostic="missing $arch toolchain: neither ${preferred_triplet}-gcc (OpenWrt SDK) nor ${fallback_triplet}-gcc (Debian cross gcc) is on PATH"
     emit_jsonl "$log_file" "$run_id" "$triplet" "$compiler" "$resource_class" "unsupported" 127 \
       "$diagnostic" "n/a" "$output_log" "0" "null" "missing_toolchain" "" "not_run"
     ((unsupported += 1))
