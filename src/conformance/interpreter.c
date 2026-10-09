@@ -1103,6 +1103,12 @@ static int spawn_group_members(it_task *t, uint32_t step, uint32_t idx) {
             it_fail_task(t, idx, "asx_task_group_spawn failed");
             return 0;
         }
+        if (id == ASX_INVALID_ID) {
+            /* Refused by its closing region: the group still joins it
+             * (asx_task_group_member_refusal). */
+            m->refused = ASX_E_REGION_CLOSED;
+            continue;
+        }
         m->id = id;
         m->spawned = 1;
         (void)asx_cx_init(&m->cx, m->region, id, ASX_CAP_CANCEL_CHECK);
@@ -1117,16 +1123,31 @@ static void bind_attempts(it_task *t) {
     uint32_t i;
     for (i = 0; i < t->group.spawned && i < t->n_group_members; i++) {
         it_task *m = &g_tasks[t->group_members[i]];
-        if (m->spawned) continue;
+        if (m->spawned || m->refused != ASX_OK) continue;
+        if (t->group.members[i] == ASX_INVALID_ID) {
+            m->refused = ASX_E_REGION_CLOSED; /* refused by its region */
+            continue;
+        }
         m->id = t->group.members[i];
         m->spawned = 1;
         (void)asx_cx_init(&m->cx, m->region, m->id, ASX_CAP_CANCEL_CHECK);
     }
 }
 
-/* Member i's outcome, captured at its completion. */
+/* Member i's outcome, captured at its completion; for a member its region
+ * refused, the cancellation its join reports. */
 static uint32_t group_member_outcome(it_task *t, uint32_t i) {
     it_task *m = &g_tasks[t->group_members[i]];
+    asx_cancel_reason r;
+    if (!m->member_done && m->refused != ASX_OK &&
+        asx_task_group_member_refusal(&t->group, i, &r) == ASX_OK) {
+        it_reason captured;
+        capture_reason(&r, &captured);
+        m->member_outcome = asx_json_new_object(g_out);
+        asx_json_set(g_out, m->member_outcome, "tag", asx_json_new_string(g_out, "cancelled"));
+        asx_json_set(g_out, m->member_outcome, "reason", reason_node(&captured));
+        m->member_done = 1;
+    }
     if (!m->member_done) {
         it_fail("group resolved with an unfinished member", m->name);
         return asx_json_new_null(g_out);
@@ -1626,8 +1647,15 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         if (in_region != NULL) {
             lr = local_region(t, in_region);
             if (lr == NULL) {
-                it_fail_task(t, idx, "spawn into a region this task did not open");
-                return STEP_END;
+                /* A region the task does not hold (its open failed, or it
+                 * was closed): the spawn observes ASX_E_NOT_FOUND, spawns
+                 * nothing, and so do the child's later steps (DSL §3). */
+                uint32_t program = asx_json_get(g_in, step, "program");
+                child = add_task(name, in_region, ASX_INVALID_ID, program);
+                if (child == NULL) return STEP_END;
+                child->refused = ASX_E_NOT_FOUND;
+                observe_status(t, idx, label, ASX_E_NOT_FOUND);
+                return STEP_NEXT;
             }
         }
         child = add_task(name, lr != NULL ? lr->name : t->region_name,
@@ -1676,9 +1704,11 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             return STEP_END;
         }
         /* A refused child's handle never gets a task: the abort is only
-         * cached (task_handle.rs:492-497). */
+         * cached (task_handle.rs:492-497). A child never spawned (its
+         * region not held) has no handle at all (DSL §3). */
         if (target != NULL && target->refused != ASX_OK) {
-            observe_status(t, idx, label, ASX_OK);
+            observe_status(t, idx, label,
+                           target->refused == ASX_E_NOT_FOUND ? ASX_E_NOT_FOUND : ASX_OK);
             return STEP_NEXT;
         }
         if (target == NULL || !target->spawned) {
@@ -1697,13 +1727,14 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
     if (strcmp(op, "cancel_region") == 0) {
         it_local_region *lr = local_region(t, it_str(step, "region"));
         asx_cancel_kind kind;
-        if (lr == NULL) {
-            it_fail_task(t, idx, "cancel_region of a region this task did not open");
-            return STEP_END;
-        }
         if (!cancel_kind_parse(it_str(step, "kind"), &kind)) {
             it_fail_task(t, idx, "cancel_region with an unknown cancel kind");
             return STEP_END;
+        }
+        if (lr == NULL) {
+            /* Not held (DSL §3). */
+            observe_status(t, idx, label, ASX_E_NOT_FOUND);
+            return STEP_NEXT;
         }
         {
             /* ChildRegion::cancel: a command the scheduler applies at its
@@ -1878,8 +1909,9 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         if (t->phase == 0u) {
             it_local_region *lr = local_region(t, it_str(step, "region"));
             if (lr == NULL) {
-                it_fail_task(t, idx, "close_region of a region this task did not open");
-                return STEP_END;
+                /* Not held (DSL §3). */
+                observe_status(t, idx, op, ASX_E_NOT_FOUND);
+                return STEP_NEXT;
             }
             t->closing = lr->id;
             *lr = t->regions[--t->n_regions];

@@ -124,6 +124,11 @@ typedef struct {
     asx_cancel_kind cancel_kinds[ASX_TASK_GROUP_MAX];
     uint8_t owner_cancelled;
     asx_cancel_reason owner_reason;
+    /* Members whose spawn the lab refused (asx_task_group_member_refusal):
+     * the lab refusal ticket, and the reason their join reports. */
+    uint8_t refused[ASX_TASK_GROUP_MAX];
+    uint32_t refusal[ASX_TASK_GROUP_MAX];
+    asx_cancel_reason refused_reason[ASX_TASK_GROUP_MAX];
 } asx_task_group;
 
 /* Initialize an empty group. `needed` is the QUORUM threshold (1..count,
@@ -144,7 +149,10 @@ ASX_API ASX_MUST_USE asx_status asx_task_group_add(asx_task_group *g, asx_task_i
 
 /* Spawn a task in `region` and adopt it as a member. Capacity is checked
  * before spawning, so a full group spawns nothing. Not for FIRST_OK
- * (ASX_E_INVALID_STATE): its attempts run one at a time. */
+ * (ASX_E_INVALID_STATE): its attempts run one at a time. Under lab
+ * dispatch a spawn from a poll that the closing region refuses still adds
+ * a member, with *out_id = ASX_INVALID_ID (asx_task_group_member_refusal);
+ * otherwise a refused spawn returns its error and adds nothing. */
 ASX_API ASX_MUST_USE asx_status asx_task_group_spawn(asx_task_group *g, asx_region_id region,
                                                      asx_task_poll_fn poll_fn, void *user_data,
                                                      asx_task_id *out_id);
@@ -163,7 +171,9 @@ ASX_API ASX_MUST_USE asx_status asx_task_group_spawn(asx_task_group *g, asx_regi
  *   - every attempt failed: the most severe member status (the first
  *     error among equals); no attempt registered: ASX_E_INVALID_ARGUMENT.
  * A spawn refused when an attempt's turn comes ends the group
- * ASX_E_CANCELLED (Rust: Cancelled(resource_unavailable)).
+ * ASX_E_CANCELLED: under lab dispatch once the next step's admission
+ * refuses it and its join reports Cancelled (asx_task_group_member_refusal),
+ * otherwise at once (Rust: Cancelled(resource_unavailable)).
  * Returns ASX_E_INVALID_STATE for another mode or once the group started,
  * ASX_E_RESOURCE_EXHAUSTED when full, ASX_E_INVALID_ARGUMENT for a NULL
  * poll function. */
@@ -203,6 +213,22 @@ ASX_API ASX_MUST_USE asx_status asx_task_group_member_result(const asx_task_grou
                                                              uint32_t index,
                                                              asx_outcome *out_outcome,
                                                              asx_status *out_status);
+
+/* A member whose spawn was refused under lab dispatch: spawned from a poll
+ * into a closing or closed region, it is still a member, as Rust's spawn
+ * mailbox keeps the child until the next step's admission refuses it
+ * (asx_task_group_spawn gives it ASX_INVALID_ID). From that step its join
+ * reports JoinError::Cancelled with a ParentCancelled reason with
+ * testing-default attribution (the denial, lab/runtime.rs:3994-4008),
+ * strengthened by the abort reasons the group sent it
+ * (task_handle.rs:544-554), and the group counts it as a CANCELLED
+ * member.
+ * Returns ASX_OK with *out once the refusal was delivered, ASX_E_PENDING
+ * before, ASX_E_NOT_FOUND for a member that was not refused, or
+ * ASX_E_INVALID_ARGUMENT for a bad index or NULL argument. */
+ASX_API ASX_MUST_USE asx_status asx_task_group_member_refusal(const asx_task_group *g,
+                                                              uint32_t index,
+                                                              asx_cancel_reason *out);
 
 #ifdef __cplusplus
 }

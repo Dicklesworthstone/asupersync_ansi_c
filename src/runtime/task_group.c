@@ -51,6 +51,29 @@ static asx_status group_worst_status(const asx_task_group *g) {
     return st;
 }
 
+/* Member i's spawn was refused under lab dispatch (refusal ticket): the
+ * denial resolves Rust's join of it as Cancelled(ParentCancelled), with
+ * testing-default attribution (lab/runtime.rs:3994-4008). */
+static void group_refuse_member(asx_task_group *g, uint32_t i, uint32_t ticket) {
+    g->members[i] = ASX_INVALID_ID;
+    g->refused[i] = 1u;
+    g->refusal[i] = ticket;
+    g->refused_reason[i] = asx_cancel_reason_testing_default(ASX_CANCEL_PARENT, NULL);
+}
+
+/* An abort of member i (Rust abort_with_reason): a live member takes it as
+ * a handle abort; a refused one has no task, and its join's reason is
+ * strengthened with it (strengthen_cancelled_result, task_handle.rs:
+ * 544-554). */
+static asx_status group_abort_member(asx_task_group *g, uint32_t i,
+                                     const asx_cancel_reason *reason) {
+    if (g->refused[i]) {
+        g->refused_reason[i] = asx_cancel_strengthen(&g->refused_reason[i], reason);
+        return ASX_OK;
+    }
+    return asx_task_abort_request(g->members[i], reason);
+}
+
 /* Collect completed members (joining them) and register the owner as the
  * completion watcher of the rest. */
 static void group_collect(asx_task_group *g, const asx_task_slot *owner) {
@@ -71,6 +94,21 @@ static void group_collect(asx_task_group *g, const asx_task_slot *owner) {
         asx_status st;
 
         if (g->completed[i]) continue;
+        if (g->refused[i]) {
+            /* Refused at spawn: its join resolves when the next step's
+             * admission refuses it; until then the poll registers on it. */
+            if (!asx_lab_refusal_delivered(g->refusal[i])) {
+                asx_lab_refusal_watch(g->refusal[i], owner);
+                if (sequential) break;
+                continue;
+            }
+            g->outcomes[i] = asx_outcome_make(ASX_OUTCOME_CANCELLED);
+            g->statuses[i] = ASX_E_CANCELLED;
+            g->cancel_kinds[i] = g->refused_reason[i].kind;
+            g->completed[i] = 1;
+            g->completed_count++;
+            continue;
+        }
         st = asx_task_slot_lookup(g->members[i], &t);
         if (st != ASX_OK) {
             /* Joined or released behind the group's back. */
@@ -118,7 +156,11 @@ static void group_send_cancels(asx_task_group *g) {
             asx_cancel_reason r =
                 g->owner_cancelled ? g->owner_reason
                                    : asx_cancel_reason_testing_default(ASX_CANCEL_RACE_LOST, NULL);
-            st = asx_task_abort_request(g->members[i], &r);
+            st = group_abort_member(g, i, &r);
+        } else if (g->refused[i]) {
+            /* No task to cancel: the drain's kind is what its join reports. */
+            asx_cancel_reason r = asx_cancel_reason_testing_default(g->drain_kind, NULL);
+            st = group_abort_member(g, i, &r);
         } else {
             st = asx_task_cancel(g->members[i], g->drain_kind);
         }
@@ -245,7 +287,7 @@ static asx_status group_first_ok_poll(asx_task_group *g, asx_task_slot *owner, a
              * with the caller's reason, and the attempt is still awaited. */
             if (!g->forwarded && !g->completed[cur] && asx_checkpoint(self, &cp) == ASX_OK &&
                 cp.cancelled) {
-                st = asx_task_abort_request(g->members[cur], &owner->cancel_reason);
+                st = group_abort_member(g, cur, &owner->cancel_reason);
                 (void)st; /* not collected yet: its record exists */
                 g->forwarded = 1u;
             }
@@ -288,10 +330,15 @@ static asx_status group_first_ok_poll(asx_task_group *g, asx_task_slot *owner, a
             asx_task_slot *t;
             st = asx_task_spawn(g->attempt_regions[i], g->attempt_fns[i], g->attempt_data[i],
                                 &g->members[i]);
-            if (st != ASX_OK) return group_finish(g, ASX_E_CANCELLED);
-            /* spawn_in_cancellation_dominant: a cancel pending when the
-             * attempt completes makes it CANCELLED whatever it returned. */
-            if (asx_task_slot_lookup(g->members[i], &t) == ASX_OK) {
+            if (st == ASX_E_REGION_CLOSED && asx_scheduler_last_spawn_refusal() != 0u) {
+                /* Joined like any attempt: Cancelled once refused. */
+                group_refuse_member(g, i, asx_scheduler_last_spawn_refusal());
+            } else if (st != ASX_OK) {
+                return group_finish(g, ASX_E_CANCELLED);
+            } else if (asx_task_slot_lookup(g->members[i], &t) == ASX_OK) {
+                /* spawn_in_cancellation_dominant: a cancel pending when the
+                 * attempt completes makes it CANCELLED whatever it
+                 * returned. */
                 t->spawned_in_poll = 0;
                 t->budget = g->attempt_budget;
             }
@@ -368,10 +415,31 @@ asx_status asx_task_group_spawn(asx_task_group *g, asx_region_id region, asx_tas
     if (g->mode == ASX_TASK_GROUP_FIRST_OK) return ASX_E_INVALID_STATE; /* add_attempt */
     if (g->count >= ASX_TASK_GROUP_MAX) return ASX_E_RESOURCE_EXHAUSTED;
     st = asx_task_spawn(region, poll_fn, user_data, &id);
+    if (st == ASX_E_REGION_CLOSED && asx_scheduler_last_spawn_refusal() != 0u) {
+        /* Rust's spawn mailbox keeps it until the next step refuses it. */
+        uint32_t i = g->count;
+        g->outcomes[i] = asx_outcome_make(ASX_OUTCOME_OK);
+        g->statuses[i] = ASX_E_PENDING;
+        g->completed[i] = 0;
+        g->cancel_sent[i] = 0;
+        group_refuse_member(g, i, asx_scheduler_last_spawn_refusal());
+        g->count++;
+        if (out_id != NULL) *out_id = ASX_INVALID_ID;
+        return ASX_OK;
+    }
     if (st != ASX_OK) return st;
     st = asx_task_group_add(g, id);
     if (st != ASX_OK) return st;
     if (out_id != NULL) *out_id = id;
+    return ASX_OK;
+}
+
+asx_status asx_task_group_member_refusal(const asx_task_group *g, uint32_t index,
+                                         asx_cancel_reason *out) {
+    if (g == NULL || out == NULL || index >= g->count) return ASX_E_INVALID_ARGUMENT;
+    if (!g->refused[index]) return ASX_E_NOT_FOUND;
+    if (!asx_lab_refusal_delivered(g->refusal[index])) return ASX_E_PENDING;
+    *out = g->refused_reason[index];
     return ASX_OK;
 }
 

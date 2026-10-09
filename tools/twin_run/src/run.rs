@@ -53,6 +53,9 @@ struct Shared {
     /// Child name -> index of the observation of the spawn step that
     /// created it (`project_denied_spawns`).
     spawn_observations: HashMap<String, usize>,
+    /// Children whose spawn named a region its task did not hold: nothing
+    /// was spawned, and steps on them observe `NOT_HELD` (DSL §3).
+    unspawned: HashSet<String>,
     /// Task name -> name of the region it runs in.
     task_regions: HashMap<String, String>,
     /// Declared sync objects by name.
@@ -737,10 +740,14 @@ fn exec_sync(
             });
             let factory = move |ccx: Cx| run_program(ccx, child_ctx, program, Vec::new());
             let spawned = if let Some(r) = step.get("region").and_then(Value::as_str) {
-                let region = local
-                    .regions
-                    .get(r)
-                    .ok_or_else(|| format!("spawn into unknown region {r:?}"))?;
+                let Some(region) = local.regions.get(r) else {
+                    // A region the task does not hold (its open failed, or
+                    // it was closed): nothing is spawned, and the child's
+                    // later steps observe that too (DSL §3).
+                    lock(&ctx.shared).unspawned.insert(child);
+                    observe(&ctx.shared, me, idx, label, NOT_HELD, Value::Null);
+                    return Ok(Flow::Continue);
+                };
                 region.cx().spawn(factory)
             } else if step.get("budget").is_some() {
                 let b = budget(step.get("budget"))?;
@@ -767,6 +774,12 @@ fn exec_sync(
         "try_join" => {
             let target = str_field(step, "task")?;
             let s = &mut *lock(&ctx.shared);
+            if s.unspawned.contains(target) {
+                s.observations.push(json!({
+                    "task": me, "step": idx, "op": label, "status": NOT_HELD, "value": Value::Null,
+                }));
+                return Ok(Flow::Continue);
+            }
             let handle = s
                 .handles
                 .get_mut(target)
@@ -791,6 +804,11 @@ fn exec_sync(
             // The requesting task initiates the cancel (cx.cancel_with).
             let reason = cancel_reason(step, cx.region_id(), Some(cx.task_id()), cx.now())?;
             let s = lock(&ctx.shared);
+            if s.unspawned.contains(target) {
+                drop(s);
+                observe(&ctx.shared, me, idx, label, NOT_HELD, Value::Null);
+                return Ok(Flow::Continue);
+            }
             let handle = s
                 .handles
                 .get(target)
@@ -801,11 +819,11 @@ fn exec_sync(
         }
         "cancel_region" => {
             let name = str_field(step, "region")?;
-            let region = local
-                .regions
-                .get(name)
-                .ok_or_else(|| format!("unknown child region {name:?}"))?;
             let reason = cancel_reason(step, cx.region_id(), Some(cx.task_id()), cx.now())?;
+            let Some(region) = local.regions.get(name) else {
+                observe(&ctx.shared, me, idx, label, NOT_HELD, Value::Null);
+                return Ok(Flow::Continue);
+            };
             let status = match region.cancel(reason) {
                 Ok(()) => "ASX_OK".to_string(),
                 Err(e) => child_region_status(&e)?,
@@ -1367,6 +1385,10 @@ async fn exec_step(
         }
         "join" => {
             let target = str_field(step, "task")?;
+            if lock(&ctx.shared).unspawned.contains(target) {
+                observe(&ctx.shared, me, idx, op, NOT_HELD, Value::Null);
+                return Ok(Flow::Continue);
+            }
             let handle = lock(&ctx.shared).handles.remove(target);
             let mut handle =
                 handle.ok_or_else(|| format!("unknown or already joined task {target:?}"))?;
@@ -1402,10 +1424,10 @@ async fn exec_step(
         }
         "close_region" => {
             let name = str_field(step, "region")?;
-            let region = local
-                .regions
-                .remove(name)
-                .ok_or_else(|| format!("unknown child region {name:?}"))?;
+            let Some(region) = local.regions.remove(name) else {
+                observe(&ctx.shared, me, idx, op, NOT_HELD, Value::Null);
+                return Ok(Flow::Continue);
+            };
             let status = match region.close().await {
                 Ok(()) => "ASX_OK".to_string(),
                 Err(e) => child_region_status(&e)?,
@@ -1841,7 +1863,11 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
                     )
                 })?;
                 let lane = format!("{:?}", d.lane()).to_lowercase();
-                Ok(Value::String(format!("{}@{} {name} {lane}", d.at_step(), d.at_nanos())))
+                Ok(Value::String(format!(
+                    "{}@{} {name} {lane}",
+                    d.at_step(),
+                    d.at_nanos()
+                )))
             })
             .collect::<RunResult<Vec<Value>>>()?
     };
@@ -2013,6 +2039,12 @@ fn resolve_admissions(lab: &LabRuntime, shared: &SharedRef) -> RunResult<()> {
 fn project_denied_spawns(s: &mut Shared) -> RunResult<()> {
     let denied: Vec<String> = s.provisional.values().cloned().collect();
     for name in denied {
+        if s.group_members.contains(&name) {
+            // A combinator's member: the combinator joined it (Cancelled),
+            // and its own observation reports that.
+            s.task_regions.remove(&name);
+            continue;
+        }
         if !matches!(
             s.raw_outcomes.get(&name),
             Some(Err(JoinError::Cancelled(_)))

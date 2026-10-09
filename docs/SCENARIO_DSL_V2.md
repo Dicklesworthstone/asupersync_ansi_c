@@ -165,10 +165,15 @@ step of the same task acquired:
 - `commit`, `abort`, `leak` name an obligation (from `reserve`);
 - `mutex_unlock` names a guard (from `mutex_lock`);
 - `sem_release` names a permit (from `sem_acquire`);
-- `permit_send`, `permit_abort` name a send permit (from `reserve_send`).
-When the acquiring step failed (for example a reserve refused, or a lock
-wait cancelled), or the resource was already resolved or released, the step
-does nothing and is observed as `ASX_E_NOT_FOUND` in both engines.
+- `permit_send`, `permit_abort` name a send permit (from `reserve_send`);
+- `cancel_region`, `close_region` and a `spawn` with `region` name a child
+  region (from `open_region`).
+When the acquiring step failed (for example a reserve refused, a lock wait
+cancelled, or an `open_region` refused because the task's region is
+closing), or the resource was already resolved or released (a region
+already closed), the step does nothing and is observed as `ASX_E_NOT_FOUND`
+in both engines. A `spawn` into such a region spawns nothing, and `join`,
+`try_join` and `abort_task` of its child observe `ASX_E_NOT_FOUND` too.
 `lint-scenarios-v2` fails a curated scenario that names an obligation or
 send permit no `reserve` / `reserve_send` in it acquires, so a misspelt name
 cannot pass this way. A commit after an abort of the same obligation
@@ -244,9 +249,21 @@ wait, queued for each held region in name order (twin_run keeps them in a
 
 A member program ends with `return` to give its outcome. The default is Ok.
 Members are named `"<owner>/g<s>.<i>"` (vocabulary §2) and are not in the
-snapshot (vocabulary §6). Not interpreted yet on either side: `race` with
-`deadline_ns` (Rust runs the race inside a separate `scope.timeout` task,
-which C has no combinator for) and `first_ok`.
+snapshot (vocabulary §6).
+
+A member spawned into the owner's region after that region was cancelled
+or began closing is refused, but it is still a member. Rust's spawn mailbox
+keeps it until the next step's admission refuses it (`runtime/state.rs:1702`).
+The denial resolves its join as `Cancelled` with a `ParentCancelled`
+reason, testing-default attribution (`lab/runtime.rs:3994-4008`). The abort
+reasons the group sent it strengthen that reason (`task_handle.rs:544-554`).
+The group counts it as a cancelled member: `join_all` lists it, `quorum`
+counts a failure, and `first_ok` ends cancelled. C:
+`asx_task_group_member_refusal`.
+
+Not interpreted yet on either side: `race` with `deadline_ns`. Rust runs
+that race inside a separate `scope.timeout` task, which C has no combinator
+for.
 
 ### 3.6 Channels
 

@@ -448,21 +448,29 @@ void asx_lab_defer_refused_admission(void) {
 
 uint32_t asx_scheduler_last_spawn_refusal(void) { return g_lab_last_refusal; }
 
-asx_status asx_task_await_refusal(asx_task_id self, uint32_t ticket) {
-    asx_task_slot *t;
+int asx_lab_refusal_delivered(uint32_t ticket) {
+    return ticket == 0u || ticket > g_lab_refusal_n || g_lab_refusal[ticket - 1u].delivered;
+}
+
+void asx_lab_refusal_watch(uint32_t ticket, const asx_task_slot *t) {
     lab_refusal *rf;
-    asx_status st;
-    if (ticket == 0u || ticket > g_lab_refusal_n) return ASX_OK;
+    if (asx_lab_refusal_delivered(ticket)) return;
     rf = &g_lab_refusal[ticket - 1u];
-    if (rf->delivered) return ASX_OK;
-    st = asx_task_slot_lookup(self, &t);
-    if (st != ASX_OK) return st;
-    if (!t->in_poll) return ASX_E_INVALID_STATE;
-    /* The join's registration: this poll's waker. */
     rf->has_waiter = 1u;
     rf->waiter = (uint32_t)(t - g_tasks);
     rf->waiter_gen = t->generation;
     rf->waiter_prio = t->lab_waker_prio;
+}
+
+asx_status asx_task_await_refusal(asx_task_id self, uint32_t ticket) {
+    asx_task_slot *t;
+    asx_status st;
+    if (asx_lab_refusal_delivered(ticket)) return ASX_OK;
+    st = asx_task_slot_lookup(self, &t);
+    if (st != ASX_OK) return st;
+    if (!t->in_poll) return ASX_E_INVALID_STATE;
+    /* The join's registration: this poll's waker. */
+    asx_lab_refusal_watch(ticket, t);
     t->park_requested = 1;
     return ASX_E_PENDING;
 }

@@ -575,6 +575,94 @@ TEST(quorum_checkpoint_raises_the_owner_poll_quota) {
     ASSERT_EQ(reason.timestamp, (asx_time)(1u * MS));
 }
 
+/* Under lab dispatch, members spawned from the owner's poll into a closed
+ * region still join the group, as Rust's spawn mailbox keeps them until
+ * the next step's admission refuses them; the group then joins them as
+ * CANCELLED with the denial's ParentCancelled reason (lab/runtime.rs:
+ * 3994-4008). Without lab dispatch the spawn fails at once and adds
+ * nothing. */
+typedef struct {
+    asx_region_id closed;
+    asx_task_group group;
+    uint32_t polls;
+    asx_status spawn_st[2];
+    asx_task_id ids[2];
+    asx_status result;
+    int done;
+} refused_owner;
+
+static asx_status poll_refused_owner(void *ud, asx_task_id self) {
+    refused_owner *o = (refused_owner *)ud;
+    asx_status st;
+    uint32_t i;
+    if (o->polls++ == 0u) {
+        if (asx_task_group_init(&o->group, ASX_TASK_GROUP_JOIN_ALL, 0) != ASX_OK) {
+            return ASX_E_INVALID_STATE;
+        }
+        for (i = 0; i < 2u; i++) {
+            o->spawn_st[i] =
+                asx_task_group_spawn(&o->group, o->closed, poll_member, &g_m[i], &o->ids[i]);
+        }
+    }
+    st = asx_task_group_poll(&o->group, self);
+    if (st == ASX_E_PENDING) return st;
+    o->result = st;
+    o->done = 1;
+    return ASX_OK;
+}
+
+static asx_status run_refused_owner(int lab, refused_owner *o) {
+    asx_region_id r;
+    asx_task_id owner;
+    asx_cancel_reason reason;
+    asx_budget run;
+    asx_status st;
+    setup();
+    st = lab ? asx_scheduler_use_lab_dispatch(3u) : ASX_OK;
+    if (st == ASX_OK) st = asx_region_open(&r);
+    memset(o, 0, sizeof(*o));
+    if (st == ASX_OK) st = asx_region_open_child(r, &o->closed);
+    memset(&reason, 0, sizeof(reason));
+    reason.kind = ASX_CANCEL_USER;
+    reason.origin_region = o->closed;
+    if (st == ASX_OK) st = asx_region_cancel(o->closed, &reason, NULL);
+    member_init(0, 0, ASX_OK);
+    member_init(1, 0, ASX_OK);
+    if (st == ASX_OK) st = asx_task_spawn(r, poll_refused_owner, o, &owner);
+    run = asx_budget_from_polls(50);
+    if (st == ASX_OK) st = asx_scheduler_run(r, &run);
+    return st;
+}
+
+TEST(lab_group_members_refused_by_their_region_are_joined_cancelled) {
+    refused_owner o;
+    asx_cancel_reason reason;
+    asx_outcome outcome;
+    asx_status status;
+    uint32_t i;
+
+    ASSERT_EQ(run_refused_owner(1, &o), ASX_OK);
+    ASSERT_TRUE(o.done);
+    /* Poll 1 spawns and waits; step 2 delivers both refusals. */
+    ASSERT_EQ(o.polls, 2u);
+    ASSERT_EQ(o.result, ASX_E_CANCELLED);
+    for (i = 0; i < 2u; i++) {
+        ASSERT_EQ(o.spawn_st[i], ASX_OK);
+        ASSERT_EQ(o.ids[i], ASX_INVALID_ID);
+        ASSERT_EQ(asx_task_group_member_result(&o.group, i, &outcome, &status), ASX_OK);
+        ASSERT_EQ((int)outcome.severity, (int)ASX_OUTCOME_CANCELLED);
+        ASSERT_EQ(asx_task_group_member_refusal(&o.group, i, &reason), ASX_OK);
+        ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_PARENT);
+        ASSERT_TRUE(reason.message == NULL);
+    }
+    ASSERT_EQ(g_m[0].polls, 0u);
+
+    /* The sweep scheduler refuses at once: no member. */
+    ASSERT_EQ(run_refused_owner(0, &o), ASX_OK);
+    ASSERT_EQ(o.spawn_st[0], ASX_E_REGION_CLOSED);
+    ASSERT_EQ(o.group.count, 0u);
+}
+
 TEST(quorum_rejects_invalid_threshold_after_draining) {
     asx_region_id r;
     asx_task_id owner;
@@ -778,6 +866,7 @@ int main(void) {
     RUN_TEST(quorum_reports_a_panic_even_when_met);
     RUN_TEST(quorum_owner_cancel_drains_with_the_owner_reason);
     RUN_TEST(quorum_checkpoint_raises_the_owner_poll_quota);
+    RUN_TEST(lab_group_members_refused_by_their_region_are_joined_cancelled);
     RUN_TEST(quorum_rejects_invalid_threshold_after_draining);
     RUN_TEST(owner_cancel_drains_members_with_parent_kind);
     RUN_TEST(deadline_times_out_and_drains_members);
