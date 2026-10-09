@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use asupersync::channel::{broadcast, mpsc, oneshot, watch};
 use asupersync::combinator::first_ok::FirstOkError;
+use asupersync::combinator::quorum::QuorumError;
 use asupersync::cx::{ChildRegion, ChildRegionSpec};
 use asupersync::lab::{LabConfig, LabRuntime};
 use asupersync::record::task::TaskState;
@@ -1243,6 +1244,18 @@ async fn exec_step(
                 })
                 .collect();
             let result = cx.scope().quorum(cx, needed, branches).await;
+            // An impossible threshold is refused before anything is spawned.
+            if let Err(QuorumError::InvalidQuorum { .. }) = result {
+                observe(
+                    &ctx.shared,
+                    me,
+                    idx,
+                    op,
+                    "ASX_E_INVALID_ARGUMENT",
+                    Value::Null,
+                );
+                return Ok(Flow::Continue);
+            }
             // The branches were spawned inside quorum, out of sight: name
             // them by their spawn enqueues, in order (resolve_admissions then
             // maps them to their canonical ids).
@@ -1276,21 +1289,37 @@ async fn exec_step(
                     s.group_members.insert(name);
                 }
             }
+            // Vocabulary §5: InsufficientSuccesses -> the first error (by
+            // index); Cancelled -> ASX_E_CANCELLED; Panicked ->
+            // ASX_E_INVALID_STATE. No value.
             match result {
                 Ok(successes) => {
                     observe(&ctx.shared, me, idx, op, "ASX_OK", json!(successes.len()))
                 }
-                Err(e) => {
-                    return Err(format!(
-                        "quorum error {e:?} has no vocabulary mapping yet (increment 3b)"
-                    ));
+                Err(QuorumError::InsufficientSuccesses { errors, .. }) => {
+                    let status = errors
+                        .into_iter()
+                        .next()
+                        .ok_or("quorum InsufficientSuccesses without errors")?;
+                    observe(&ctx.shared, me, idx, op, &status, Value::Null);
+                }
+                Err(QuorumError::Cancelled(_)) => {
+                    observe(&ctx.shared, me, idx, op, "ASX_E_CANCELLED", Value::Null)
+                }
+                Err(QuorumError::Panicked(_)) => {
+                    observe(&ctx.shared, me, idx, op, "ASX_E_INVALID_STATE", Value::Null)
+                }
+                Err(QuorumError::InvalidQuorum { .. }) => {
+                    return Err("quorum InvalidQuorum after spawning".to_string());
                 }
             }
         }
         "first_ok" => {
             let members = group_programs(step)?;
-            let buffer = cx.trace_buffer().ok_or("first_ok needs the lab trace")?;
-            let before = buffer.snapshot().last().map_or(0, |e| e.seq);
+            // The attempts are spawned one at a time inside first_ok, out of
+            // sight, while other tasks may be spawning too: each names
+            // itself when its factory runs, with the admitted task's own
+            // (canonical) id.
             let factories: Vec<_> = members
                 .iter()
                 .enumerate()
@@ -1301,42 +1330,26 @@ async fn exec_step(
                         region: ctx.region.clone(),
                     });
                     let program = program.clone();
-                    move |ccx: Cx| async move {
-                        match run_program(ccx, child_ctx, program, Vec::new()).await {
-                            Body::Ok => Ok(()),
-                            Body::Err(status) => Err(status),
+                    move |ccx: Cx| {
+                        {
+                            let mut s = lock(&child_ctx.shared);
+                            let id = ccx.task_id();
+                            s.task_ids.insert(child_ctx.me.clone(), id);
+                            s.task_names.insert(id, child_ctx.me.clone());
+                            s.task_regions
+                                .insert(child_ctx.me.clone(), child_ctx.region.clone());
+                            s.group_members.insert(child_ctx.me.clone());
+                        }
+                        async move {
+                            match run_program(ccx, child_ctx, program, Vec::new()).await {
+                                Body::Ok => Ok(()),
+                                Body::Err(status) => Err(status),
+                            }
                         }
                     }
                 })
                 .collect();
             let result = cx.scope().first_ok(cx, factories).await;
-            // The attempts were spawned one at a time inside first_ok: name
-            // them by their spawn enqueues in this region, in order, leaving
-            // out the tasks other steps spawned meanwhile.
-            {
-                let mut s = lock(&ctx.shared);
-                let spawned: Vec<TaskId> = buffer
-                    .snapshot()
-                    .iter()
-                    .filter(|e| e.seq > before)
-                    .filter_map(|e| match (&e.kind, &e.data) {
-                        (TraceEventKind::TaskSpawnEnqueued, TraceData::Task { task, region })
-                            if *region == cx.region_id() =>
-                        {
-                            Some(*task)
-                        }
-                        _ => None,
-                    })
-                    .filter(|task| !s.provisional.contains_key(task))
-                    .take(members.len())
-                    .collect();
-                for (i, task) in spawned.into_iter().enumerate() {
-                    let name = member_name(me, idx, i);
-                    s.provisional.insert(task, name.clone());
-                    s.task_regions.insert(name.clone(), ctx.region.clone());
-                    s.group_members.insert(name);
-                }
-            }
             // Vocabulary §5: Ok -> ASX_OK; AllFailed -> the first attempt's
             // error; Cancelled -> ASX_E_CANCELLED; Panicked ->
             // ASX_E_INVALID_STATE; Empty -> ASX_E_INVALID_ARGUMENT. No value.

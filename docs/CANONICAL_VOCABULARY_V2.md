@@ -285,6 +285,10 @@ are handled:
 - `FirstOkError` (the DSL step `first_ok`): `AllFailed` is the first
   attempt's error status, `Cancelled` is `ASX_E_CANCELLED`, `Panicked` is
   `ASX_E_INVALID_STATE` (lossy), `Empty` is `ASX_E_INVALID_ARGUMENT`.
+- `QuorumError` (the DSL step `quorum`): `InsufficientSuccesses` is the
+  first failing member's error status (by index), `Cancelled` is
+  `ASX_E_CANCELLED`, `Panicked` is `ASX_E_INVALID_STATE` (lossy),
+  `InvalidQuorum` is `ASX_E_INVALID_ARGUMENT`.
 
 Encoding, decoding, transport and distributed `ErrorKind`s are outside DSL
 v2's kernel scope (W1.3).

@@ -120,6 +120,10 @@ typedef struct {
     uint8_t region_wait;
     asx_status region_wait_status;
     asx_region_id region_wait_region;
+    /* When the task joined its region's membership (spawn, or lab
+     * admission for a child spawned in a poll): a region cancel visits its
+     * tasks in this order, as Rust's insertion-ordered Membership. */
+    uint64_t member_seq;
     asx_status last_error; /* status returned by a failing poll_fn */
     /* Task timer (EDF heap keyed by (wake_at, timer_seq)). */
     asx_time wake_at;
@@ -300,6 +304,9 @@ asx_region_id asx_region_handle_for_slot(uint32_t slot_idx);
  * after a bare asx_runtime_reset). */
 void asx_runtime_set_leak_policy_internal(asx_leak_response response,
                                           const asx_leak_escalation_config *escalation);
+
+/* The next region-membership sequence number (asx_task_slot.member_seq). */
+uint64_t asx_task_next_member_seq_internal(void);
 
 /* Opt-in hard cleanup bound (asx_runtime_config.cleanup_hard_bound; off
  * after a bare asx_runtime_reset). */

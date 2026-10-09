@@ -313,9 +313,17 @@ int asx_lab_admissions_pending(void) { return g_lab_admit_n > 0u; }
 /* cancel_task_for_handle (state.rs:3462): fails only for a task that is
  * gone, whose abort Rust ignores. */
 static void lab_apply_handle_cancel(const lab_handle_cancel *h) {
-    const asx_task_slot *t = &g_tasks[h->slot];
+    asx_task_slot *t = &g_tasks[h->slot];
     asx_status st;
     if (!t->alive || t->generation != h->task_gen) return;
+    /* Ended cancelled before the drain: Rust strengthened its Cx reason
+     * when the abort was requested, and its join reports that. */
+    if (asx_task_is_terminal(t->state)) {
+        if (asx_outcome_severity_of(&t->outcome) == ASX_OUTCOME_CANCELLED) {
+            t->cancel_reason = asx_cancel_strengthen(&t->cancel_reason, &h->reason);
+        }
+        return;
+    }
     st = asx_task_cancel_reason_internal(asx_task_handle_for_slot(h->slot), &h->reason,
                                          ASX_CANCEL_SRC_HANDLE);
     (void)st;
@@ -361,6 +369,8 @@ void asx_lab_admit_pending(void) {
         ASX_CHECKPOINT_WAIVER("bounded: admissions <= ASX_MAX_TASKS");
         if (!t->alive || !t->lab_admission_pending) continue;
         t->lab_admission_pending = 0u;
+        /* Admission adds it to its region's membership (state.rs:5212). */
+        t->member_seq = asx_task_next_member_seq_internal();
         lab_take_handle_cancels_for(g_lab_admit[i]);
         asx_lab_schedule(t, t->budget.priority);
     }

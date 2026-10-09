@@ -286,8 +286,11 @@ ASX_API ASX_MUST_USE asx_status asx_region_open_child_with_budget(asx_region_id 
  * The first call queues it, parks the task and returns ASX_E_PENDING; the
  * task is woken once it is applied, and the next call returns the open's
  * status (that of asx_region_open_child_with_budget) and the region.
- * Without lab dispatch the open is applied at once. A task awaits one
- * region command at a time (ASX_E_INVALID_STATE while it awaits a close).
+ * Without lab dispatch the open is applied at once. The child's budget is
+ * the meet of `self`'s current budget (unbounded poll quota once it is in
+ * cleanup), `budget` (may be NULL) and the parent region's, as Rust starts
+ * from the opener's Cx::inherited_budget. A task awaits one region command
+ * at a time (ASX_E_INVALID_STATE while it awaits a close).
  * ASX_E_RESOURCE_EXHAUSTED: the command queue is full; nothing changed. */
 ASX_API ASX_MUST_USE asx_status asx_region_open_child_poll(asx_task_id self, asx_region_id parent,
                                                            const asx_budget *budget,

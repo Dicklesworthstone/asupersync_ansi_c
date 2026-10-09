@@ -283,7 +283,16 @@ asx_status asx_task_abort_request(asx_task_id target, const asx_cancel_reason *r
     if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
     st = asx_task_slot_lookup(target, &t);
     if (st != ASX_OK) return st;
-    if (asx_task_is_terminal(t->state)) return ASX_OK;
+    if (asx_task_is_terminal(t->state)) {
+        /* Rust strengthens the target Cx's reason at once
+         * (apply_or_defer_cancel_reason, task_handle.rs:518-520): a task
+         * that ended cancelled and is not joined yet reports the stronger
+         * reason through its join (closed_reason, :1016). */
+        if (asx_outcome_severity_of(&t->outcome) == ASX_OUTCOME_CANCELLED) {
+            t->cancel_reason = asx_cancel_strengthen(&t->cancel_reason, reason);
+        }
+        return ASX_OK;
+    }
     if (asx_lab_dispatch_active()) return asx_lab_handle_cancel_command(t, reason);
     return asx_task_cancel_reason_internal(target, reason, ASX_CANCEL_SRC_HANDLE);
 }
@@ -316,6 +325,9 @@ static asx_cancel_reason g_propagate_reasons[ASX_MAX_REGIONS];
  * its region's reason from g_propagate_reasons. Under lab dispatch the
  * tasks' cancel wakes fire after all of them are cancelled, as Rust
  * dispatches a region cancel's wakes after the cancel (run.rs driver). */
+/* Task slots of the live tasks in a region, in membership order. */
+static uint32_t g_member_order[ASX_MAX_TASKS];
+
 static uint32_t cancel_subtree_tasks(uint32_t n) {
     uint32_t r;
     uint32_t i;
@@ -323,16 +335,29 @@ static uint32_t cancel_subtree_tasks(uint32_t n) {
     asx_lab_cancel_batch_begin();
     for (r = 0; r < n; r++) {
         uint32_t key = asx_handle_index(asx_region_handle_for_slot(g_propagate_slots[r]));
+        uint32_t m = 0;
+        uint32_t k;
+        /* Rust visits a region's tasks in its Membership's insertion order
+         * (record/region.rs:341-350, state.rs:7811-7830), not by slot. */
         for (i = 0; i < g_task_count; i++) {
             ASX_CHECKPOINT_WAIVER("kernel-propagation: single-pass cancel sweep bounded by "
                                   "g_task_count <= ASX_MAX_TASKS; O(1) per iteration");
             asx_task_slot *t = &g_tasks[i];
+            uint32_t j;
 
             if (!t->alive) continue;
             if (asx_handle_index(t->region) != key) continue;
             if (asx_task_is_terminal(t->state)) continue;
-
-            if (asx_task_cancel_reason_internal(asx_task_handle_for_slot(i),
+            for (j = m; j > 0u && g_tasks[g_member_order[j - 1u]].member_seq > t->member_seq; j--) {
+                ASX_CHECKPOINT_WAIVER("bounded: insertion into <= ASX_MAX_TASKS entries");
+                g_member_order[j] = g_member_order[j - 1u];
+            }
+            g_member_order[j] = i;
+            m++;
+        }
+        for (k = 0; k < m; k++) {
+            ASX_CHECKPOINT_WAIVER("bounded: m <= ASX_MAX_TASKS");
+            if (asx_task_cancel_reason_internal(asx_task_handle_for_slot(g_member_order[k]),
                                                 &g_propagate_reasons[r],
                                                 ASX_CANCEL_SRC_REGION) == ASX_OK) {
                 count++;

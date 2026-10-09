@@ -220,6 +220,14 @@ The priority changes when:
 - For timers within the first level (256 ms), the firing order is
   therefore (deadline tick, registration order), not deadline order.
 
+### Region cancel order
+
+A region cancel visits each region's live tasks in its membership's
+insertion order: when the task joined the region (creation, or admission for
+a child spawned in a poll), not by slot (record/region.rs:341-350,
+state.rs:7811-7830). The order is that of the cancel lane entries and the
+`cancel.requested` events. C: `asx_task_slot.member_seq`.
+
 ## Open points
 
 1. Join wake timing. Is the joiner woken during the child's final poll

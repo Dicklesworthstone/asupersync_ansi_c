@@ -4,7 +4,9 @@
  * A task group gathers spawned tasks and lets one owner task wait on them
  * under a completion mode:
  *
- *   JOIN_ALL  every member completes; succeeds when all succeeded.
+ *   JOIN_ALL  every member completes; succeeds when all succeeded. As Rust's
+ *             join_all, the members are awaited one by one in order and
+ *             the owner's own cancel does not reach them.
  *   RACE      the first member to complete wins (its result is the group's).
  *   FIRST_OK  attempts run one at a time, in order, until one completes OK
  *             (asx_task_group_add_attempt; Rust Scope::first_ok).
@@ -17,7 +19,8 @@
  * are resolved rather than abandoned. The same holds when the group ends
  * early:
  *
- *   - owner cancelled  -> members cancelled (PARENT), drained, ASX_E_CANCELLED
+ *   - owner cancelled  -> members cancelled (PARENT; QUORUM: with the owner's
+ *                         own reason), drained, ASX_E_CANCELLED
  *   - deadline reached -> members cancelled (TIMEOUT), drained,
  *                         ASX_E_TIMED_OUT (ASX_E_THRESHOLD_TIMEOUT for QUORUM)
  *   - asx_task_group_cancel() -> members cancelled with the given kind,
@@ -38,7 +41,12 @@
  *   RACE      the winner's status (ASX_OK, its error, or ASX_E_CANCELLED)
  *   FIRST_OK  ASX_OK, or the status of the attempt that ended it (see
  *             asx_task_group_add_attempt)
- *   QUORUM    ASX_OK, or the most severe member status when impossible
+ *   QUORUM    as Rust's Scope::quorum (cx/scope.rs:1811-1941, quorum.rs:398):
+ *             a member that panicked: its status (ASX_E_INVALID_STATE), even
+ *             when the quorum was met; met: ASX_OK; the owner cancelled
+ *             first: ASX_E_CANCELLED; a member cancelled by anything but the
+ *             group's RACE_LOST drain: ASX_E_CANCELLED; otherwise the first
+ *             failing member's error (by index)
  *
  * A member's status is ASX_OK for an OK outcome, the error its poll
  * function returned for ERR, and ASX_E_CANCELLED for CANCELLED. Among
@@ -106,6 +114,16 @@ typedef struct {
     asx_region_id attempt_regions[ASX_TASK_GROUP_MAX];
     uint32_t spawned;
     uint8_t forwarded; /* a cancel was passed to the running attempt */
+    /* The owner's budget when the group was first polled: every attempt
+     * runs with it (Rust's cx.scope() snapshots Cx::inherited_budget). */
+    asx_budget attempt_budget;
+    uint8_t attempt_budget_set;
+    /* QUORUM: the cancel kind a member that ended CANCELLED carried, and
+     * whether the owner's cancel ended collection (its reason drains the
+     * members, as Rust's quorum drains with the caller's reason). */
+    asx_cancel_kind cancel_kinds[ASX_TASK_GROUP_MAX];
+    uint8_t owner_cancelled;
+    asx_cancel_reason owner_reason;
 } asx_task_group;
 
 /* Initialize an empty group. `needed` is the QUORUM threshold (1..count,

@@ -13,8 +13,9 @@
 //!
 //! Left out on purpose: multi-permit acquire, race
 //! (same-round ties are an RNG pick in Rust and the lowest index in C, a
-//! known divergence, bd-g652), quorum and first_ok error paths,
-//! region_limits, actors and supervision.
+//! known divergence, bd-g652), quorum (its error mapping is open),
+//! region_limits, actors and supervision. join_all and first_ok groups are
+//! generated.
 
 use serde_json::{Value, json};
 
@@ -71,6 +72,7 @@ struct Held {
     /// Child regions opened and not closed yet (at most one at a time).
     regions: Vec<String>,
     opened: u32,
+    groups: u32,
     mutex: bool,
     permit: bool,
     reserves: u32,
@@ -108,7 +110,7 @@ fn child_program(rng: &mut Rng) -> Vec<Value> {
 /// One step of task `me`'s program, given what it holds.
 fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
     loop {
-        match rng.below(18) {
+        match rng.below(19) {
             0 | 1 => return json!({"op": "yield"}),
             2 | 3 => return sleep_step(rng),
             4 | 5 => return checkpoint_step(rng),
@@ -223,6 +225,20 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 }
                 let name = held.regions.remove(0);
                 return json!({"op": "close_region", "region": name});
+            }
+            // One task group per task: join_all or first_ok over small
+            // member programs (race is left out, see above).
+            18 if held.groups == 0 => {
+                held.groups += 1;
+                let op = if rng.chance(50) {
+                    "join_all"
+                } else {
+                    "first_ok"
+                };
+                let members: Vec<Value> = (0..1 + rng.below(3))
+                    .map(|_| Value::Array(child_program(rng)))
+                    .collect();
+                return json!({"op": op, "members": members});
             }
             _ => {}
         }

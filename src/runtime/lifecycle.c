@@ -74,6 +74,9 @@ static uint64_t g_leak_count = 0;
 
 /* Opt-in hard cleanup bound (runtime config); off is Rust's semantics. */
 static int g_cleanup_hard_bound = 0;
+static uint64_t g_member_seq = 0;
+
+uint64_t asx_task_next_member_seq_internal(void) { return ++g_member_seq; }
 
 /* -------------------------------------------------------------------
  * Reset (test support)
@@ -143,6 +146,7 @@ void asx_runtime_reset(void) {
     g_leak_escalation_set = 0;
     g_leak_count = 0;
     g_cleanup_hard_bound = 0;
+    g_member_seq = 0;
 
     /* Reset ghost safety monitors */
     asx_ghost_reset();
@@ -732,12 +736,20 @@ asx_status asx_region_open_child_poll(asx_task_id self, asx_region_id parent,
     asx_task_slot *t;
     asx_region_slot *p;
     asx_status st;
+    asx_budget inherited;
 
     if (out_child == NULL) return ASX_E_INVALID_ARGUMENT;
     st = asx_task_slot_lookup(self, &t);
     if (st != ASX_OK) return st;
+    /* The child's budget starts from the opener's inherited budget
+     * (Cx::inherited_budget, an unbounded poll quota in cleanup), met with
+     * the requested one; the mint then meets the parent region's
+     * (cx.rs:4505-4510, 2504-2511). */
+    inherited = t->budget;
+    if (t->cleanup_applied) inherited.poll_quota = UINT32_MAX;
+    if (budget != NULL) inherited = asx_budget_meet(&inherited, budget);
     if (!asx_lab_dispatch_active()) {
-        return asx_region_open_child_with_budget(parent, budget, out_child);
+        return asx_region_open_child_with_budget(parent, &inherited, out_child);
     }
     switch (t->region_wait) {
     case ASX_REGION_WAIT_OPENED:
@@ -748,7 +760,7 @@ asx_status asx_region_open_child_poll(asx_task_id self, asx_region_id parent,
     case ASX_REGION_WAIT_NONE:
         st = asx_region_slot_lookup(parent, &p);
         if (st != ASX_OK) return st;
-        st = asx_lab_region_open_command(t, parent, budget);
+        st = asx_lab_region_open_command(t, parent, &inherited);
         if (st != ASX_OK) return st;
         t->region_wait = ASX_REGION_WAIT_OPEN;
         break;
@@ -970,6 +982,7 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     g_tasks[idx].cancel_epoch = 0;
     g_tasks[idx].cleanup_budget = asx_budget_infinite();
     g_tasks[idx].cleanup_applied = 0;
+    g_tasks[idx].member_seq = asx_task_next_member_seq_internal();
     g_tasks[idx].cleanup_polls_remaining = 0;
     g_tasks[idx].cancel_unmaterialized = 0;
     memset(&g_tasks[idx].cancel_reason, 0, sizeof(g_tasks[idx].cancel_reason));

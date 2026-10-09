@@ -72,12 +72,17 @@ static void group_collect(asx_task_group *g, const asx_task_slot *owner) {
         } else if (asx_task_is_terminal(t->state)) {
             g->outcomes[i] = t->outcome;
             g->statuses[i] = group_member_status(t);
+            g->cancel_kinds[i] = t->cancel_reason.kind;
             t->watcher = ASX_SLOT_NONE;
             st = asx_task_join(g->members[i], NULL);
             (void)st;
         } else {
             t->watcher = owner_idx;
             t->watcher_gen = owner->generation;
+            /* Rust's join_all awaits the members' joins one by one, in
+             * order (cx/scope.rs:1479-1490): only the first unfinished
+             * member wakes the owner. */
+            if (g->mode == ASX_TASK_GROUP_JOIN_ALL) break;
             continue;
         }
         g->completed[i] = 1;
@@ -100,10 +105,48 @@ static void group_send_cancels(asx_task_group *g) {
         ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
         asx_status st;
         if (g->completed[i] || g->cancel_sent[i]) continue;
-        st = asx_task_cancel(g->members[i], g->drain_kind);
+        if (g->mode == ASX_TASK_GROUP_QUORUM &&
+            (g->owner_cancelled || g->drain_kind == ASX_CANCEL_RACE_LOST)) {
+            /* Rust's quorum drains with handle aborts: the caller's reason,
+             * or CancelReason::quorum_met() (race_loser, default
+             * attribution) (cx/scope.rs:1878-1891). */
+            asx_cancel_reason r =
+                g->owner_cancelled ? g->owner_reason
+                                   : asx_cancel_reason_testing_default(ASX_CANCEL_RACE_LOST, NULL);
+            st = asx_task_abort_request(g->members[i], &r);
+        } else {
+            st = asx_task_cancel(g->members[i], g->drain_kind);
+        }
         (void)st;
         g->cancel_sent[i] = 1;
     }
+}
+
+/* QUORUM's result once every member completed (Rust Scope::quorum and
+ * quorum_to_result, cx/scope.rs:1925-1941, combinator/quorum.rs:398-468):
+ * a panic first, even when the quorum was met; the owner cancelled before
+ * it was met; met; a member cancelled by anything but the RACE_LOST drain;
+ * the first error by index. */
+static asx_status group_quorum_result(const asx_task_group *g) {
+    uint32_t i;
+    for (i = 0; i < g->count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
+        if (asx_outcome_severity_of(&g->outcomes[i]) == ASX_OUTCOME_PANICKED) return g->statuses[i];
+    }
+    if (g->ok_count >= g->needed) return ASX_OK;
+    if (g->owner_cancelled) return ASX_E_CANCELLED;
+    for (i = 0; i < g->count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
+        if (asx_outcome_severity_of(&g->outcomes[i]) == ASX_OUTCOME_CANCELLED &&
+            g->cancel_kinds[i] != ASX_CANCEL_RACE_LOST) {
+            return ASX_E_CANCELLED;
+        }
+    }
+    for (i = 0; i < g->count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
+        if (asx_outcome_severity_of(&g->outcomes[i]) == ASX_OUTCOME_ERR) return g->statuses[i];
+    }
+    return ASX_E_CANCELLED;
 }
 
 /* Decide the group from the members collected so far. Member completion
@@ -140,7 +183,11 @@ static void group_decide(asx_task_group *g, const asx_task_slot *owner) {
     }
     if (g->phase != ASX_TASK_GROUP_COLLECTING) return;
 
-    if (owner->cancel_pending) {
+    /* join_all's joins are uninterruptible: the owner's cancel does not
+     * reach the members (Rust's join_all awaits every join). */
+    if (owner->cancel_pending && g->mode != ASX_TASK_GROUP_JOIN_ALL) {
+        g->owner_cancelled = 1u;
+        g->owner_reason = owner->cancel_reason;
         group_begin_drain(g, ASX_CANCEL_PARENT, ASX_E_CANCELLED, 1);
         return;
     }
@@ -164,21 +211,33 @@ static asx_status group_first_ok_poll(asx_task_group *g, asx_task_slot *owner, a
     asx_checkpoint_result cp;
     asx_status st;
 
+    /* cx.scope() is taken once, at the call: its budget is the owner's
+     * inherited budget then (an unbounded poll quota in cleanup,
+     * cx.rs:2504-2511), and every attempt is spawned with it. */
+    if (!g->attempt_budget_set) {
+        g->attempt_budget = owner->budget;
+        if (owner->cleanup_applied) g->attempt_budget.poll_quota = UINT32_MAX;
+        g->attempt_budget_set = 1u;
+    }
     for (;;) {
         ASX_CHECKPOINT_WAIVER("bounded: each pass starts or finishes one of <= "
                               "ASX_TASK_GROUP_MAX attempts");
         if (g->spawned > 0u) {
             uint32_t cur = g->spawned - 1u;
+            /* Every poll of the join checks the caller's cancel first, the
+             * poll that finds the attempt done included (cx/scope.rs:
+             * 2068-2079): it reaches the attempt once, as a handle abort
+             * with the caller's reason, and the attempt is still awaited. */
+            if (!g->forwarded && !g->completed[cur] && asx_checkpoint(self, &cp) == ASX_OK &&
+                cp.cancelled) {
+                st = asx_task_abort_request(g->members[cur], &owner->cancel_reason);
+                (void)st; /* not collected yet: its record exists */
+                g->forwarded = 1u;
+            }
             group_collect(g, owner);
             if (!g->completed[cur]) {
-                /* The caller's cancel reaches the attempt once, as a
-                 * handle abort with the caller's reason; it is still
-                 * awaited. A deadline ends it with TIMEOUT. */
-                if (!g->forwarded && asx_checkpoint(self, &cp) == ASX_OK && cp.cancelled) {
-                    st = asx_task_abort_request(g->members[cur], &owner->cancel_reason);
-                    (void)st; /* the attempt is live: its record exists */
-                    g->forwarded = 1u;
-                } else if (!g->forwarded && g->deadline != 0u && group_now() >= g->deadline) {
+                /* A deadline ends the attempt with TIMEOUT. */
+                if (!g->forwarded && g->deadline != 0u && group_now() >= g->deadline) {
                     st = asx_task_cancel(g->members[cur], ASX_CANCEL_TIMEOUT);
                     (void)st;
                     g->forwarded = 1u;
@@ -217,7 +276,10 @@ static asx_status group_first_ok_poll(asx_task_group *g, asx_task_slot *owner, a
             if (st != ASX_OK) return group_finish(g, ASX_E_CANCELLED);
             /* spawn_in_cancellation_dominant: a cancel pending when the
              * attempt completes makes it CANCELLED whatever it returned. */
-            if (asx_task_slot_lookup(g->members[i], &t) == ASX_OK) t->spawned_in_poll = 0;
+            if (asx_task_slot_lookup(g->members[i], &t) == ASX_OK) {
+                t->spawned_in_poll = 0;
+                t->budget = g->attempt_budget;
+            }
             g->spawned++;
             g->forwarded = 0u;
         }
@@ -268,6 +330,10 @@ asx_status asx_task_group_add(asx_task_group *g, asx_task_id task) {
         if (g->members[i] == task) return ASX_E_ALREADY_EXISTS;
     }
 
+    /* Rust spawns quorum branches cancellation-dominant
+     * (spawn_quorum_branches, cx/scope.rs:1962): a branch that acknowledges
+     * a cancel and still returns OK counts as CANCELLED. */
+    if (g->mode == ASX_TASK_GROUP_QUORUM) t->spawned_in_poll = 0;
     g->members[g->count] = task;
     g->outcomes[g->count] = asx_outcome_make(ASX_OUTCOME_OK);
     g->statuses[g->count] = ASX_E_PENDING;
@@ -331,6 +397,11 @@ asx_status asx_task_group_poll(asx_task_group *g, asx_task_id self) {
         group_collect(g, owner);
         if (g->completed_count == g->count) {
             g->phase = ASX_TASK_GROUP_DONE;
+            /* An invalid threshold, a deadline or an explicit cancel keeps
+             * its result; otherwise every member's final outcome counts. */
+            if (g->mode == ASX_TASK_GROUP_QUORUM && (!g->early || g->owner_cancelled)) {
+                g->result = group_quorum_result(g);
+            }
             return g->result;
         }
     }

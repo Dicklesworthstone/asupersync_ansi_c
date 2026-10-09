@@ -45,6 +45,7 @@ typedef struct {
     asx_region_id region;
     int hold_obligation; /* reserve an obligation on the first poll */
     asx_obligation_id ob;
+    int panic; /* panic at finish_at instead of returning `finish` */
 } member_state;
 
 static asx_status poll_member(void *ud, asx_task_id self) {
@@ -72,6 +73,9 @@ static asx_status poll_member(void *ud, asx_task_id self) {
     if (m->finish_at != 0u) {
         if (asx_task_wait_until(self, m->finish_at) == ASX_OK) {
             m->done_seq = ++g_seq;
+            if (m->panic && asx_task_panic(self, "member panicked") != ASX_OK) {
+                return ASX_E_INVALID_STATE;
+            }
             return m->finish;
         }
         return ASX_E_PENDING;
@@ -496,6 +500,44 @@ TEST(quorum_impossible_resolves_early) {
     ASSERT_TRUE(g_m[3].cancelled);
 }
 
+/* Rust's quorum_to_result checks for a panic before the quorum: a member
+ * that panicked decides the result even once enough members succeeded. */
+TEST(quorum_reports_a_panic_even_when_met) {
+    asx_region_id r;
+    asx_task_id owner;
+
+    setup();
+    member_init(0, 1, ASX_OK);
+    g_m[0].panic = 1;
+    member_init(1, 2, ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_QUORUM, 1, 2, &owner), ASX_OK);
+    ASSERT_TRUE(run_until_owner_done(r));
+    ASSERT_EQ(asx_task_group_ok_count(&g_owner.group), 1u);
+    ASSERT_EQ(g_owner.result, ASX_E_INVALID_STATE);
+}
+
+/* The owner's cancel drains a quorum's members with the owner's own reason
+ * (Rust drains with cx.cancel_reason()), not PARENT. */
+TEST(quorum_owner_cancel_drains_with_the_owner_reason) {
+    asx_region_id r;
+    asx_task_id owner;
+    asx_budget run;
+
+    setup();
+    member_init(0, 0, ASX_OK);
+    member_init(1, 0, ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_QUORUM, 2, 2, &owner), ASX_OK);
+    run = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_task_cancel(owner, ASX_CANCEL_SHUTDOWN), ASX_OK);
+    ASSERT_TRUE(run_until_owner_done(r));
+    ASSERT_EQ(g_owner.result, ASX_E_CANCELLED);
+    ASSERT_EQ((int)g_m[0].kind, (int)ASX_CANCEL_SHUTDOWN);
+    ASSERT_EQ((int)g_m[1].kind, (int)ASX_CANCEL_SHUTDOWN);
+}
+
 TEST(quorum_rejects_invalid_threshold_after_draining) {
     asx_region_id r;
     asx_task_id owner;
@@ -696,6 +738,8 @@ int main(void) {
     RUN_TEST(first_ok_fails_when_every_member_fails);
     RUN_TEST(quorum_reached_drains_remaining_members);
     RUN_TEST(quorum_impossible_resolves_early);
+    RUN_TEST(quorum_reports_a_panic_even_when_met);
+    RUN_TEST(quorum_owner_cancel_drains_with_the_owner_reason);
     RUN_TEST(quorum_rejects_invalid_threshold_after_draining);
     RUN_TEST(owner_cancel_drains_members_with_parent_kind);
     RUN_TEST(deadline_times_out_and_drains_members);

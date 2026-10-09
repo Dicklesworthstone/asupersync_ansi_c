@@ -1166,6 +1166,13 @@ static int exec_group(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
             *out = STEP_END;
             return 1;
         }
+        /* Rust's quorum refuses an impossible threshold before spawning
+         * anything (QuorumError::InvalidQuorum, cx/scope.rs:1831). */
+        if (mode == ASX_TASK_GROUP_QUORUM &&
+            (needed == 0u || needed > asx_json_count(g_in, asx_json_get(g_in, step, "members")))) {
+            observe(t, idx, op, status_node(ASX_E_INVALID_ARGUMENT), asx_json_new_null(g_out));
+            return 1;
+        }
         if (asx_task_group_init(&t->group, mode, (uint32_t)needed) != ASX_OK ||
             !spawn_group_members(t, step, idx)) {
             if (!g_failed) it_fail_task(t, idx, "task group setup failed");
@@ -1211,11 +1218,9 @@ static int exec_group(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
             asx_json_push(g_out, value, group_member_outcome(t, i));
         }
     } else {
+        /* A QuorumError (vocabulary §5): the status, no value. */
         if (st != ASX_OK) {
-            it_fail_task(t, idx,
-                         "quorum not met: the Rust QuorumError has no vocabulary mapping yet "
-                         "(increment 3b)");
-            *out = STEP_END;
+            observe(t, idx, op, status_node(st), asx_json_new_null(g_out));
             return 1;
         }
         value = asx_json_new_u64(g_out, asx_task_group_ok_count(&t->group));
