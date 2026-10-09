@@ -97,6 +97,13 @@ typedef struct {
         asx_semaphore_permit permit;
     } permits[IT_MAX_LOCAL];
     uint32_t n_permits;
+    /* Held mpsc send permits (DSL §3.6), by permit name. */
+    struct {
+        const char *name;
+        uint32_t channel; /* index in g_channels */
+        asx_send_permit permit;
+    } send_permits[IT_MAX_LOCAL];
+    uint32_t n_send_permits;
     /* Projection of the task's sleep timers (vocabulary §2: "<task>/tm<k>"). */
     uint32_t timers;         /* timers registered so far (k of the latest) */
     uint32_t timer_name_off; /* name of the latest, in g_text */
@@ -123,6 +130,20 @@ typedef struct {
 } it_sync;
 
 #define IT_MAX_SYNC 16u
+
+/* A declared mpsc channel (DSL §3.6). Its endpoints are bound to their
+ * owner tasks, as Rust moves them into the owners' bodies; an endpoint
+ * closes when its owner closes it or its owner's body ends. */
+typedef struct {
+    const char *name;
+    asx_channel_id id;
+    uint32_t sender;   /* owner, index in g_tasks */
+    uint32_t receiver; /* owner, index in g_tasks */
+    int sender_open;
+    int receiver_open;
+} it_channel;
+
+#define IT_MAX_CHANNELS ASX_MAX_CHANNELS
 
 /* A cancel reason captured when its event was emitted. */
 typedef struct {
@@ -160,6 +181,9 @@ static uint32_t g_n_regions;
 
 static it_sync g_sync[IT_MAX_SYNC];
 static uint32_t g_n_sync;
+
+static it_channel g_channels[IT_MAX_CHANNELS];
+static uint32_t g_n_channels;
 
 static it_event g_events[IT_MAX_EVENTS];
 static uint32_t g_n_events;
@@ -660,6 +684,120 @@ static it_sync *sync_by_name(const char *name, it_sync_type type) {
     return NULL;
 }
 
+/* The channel `name` if task `t` owns its still-open sender (`sender` 1)
+ * or receiver (0), else NULL: an endpoint is usable only in its owner's
+ * body (DSL §3.6). */
+static it_channel *owned_endpoint(const it_task *t, const char *name, int sender) {
+    uint32_t i;
+    uint32_t me = (uint32_t)(t - g_tasks);
+    if (name == NULL) return NULL;
+    for (i = 0; i < g_n_channels; i++) {
+        it_channel *c = &g_channels[i];
+        if (strcmp(c->name, name) != 0) continue;
+        if (sender) return c->sender == me && c->sender_open ? c : NULL;
+        return c->receiver == me && c->receiver_open ? c : NULL;
+    }
+    return NULL;
+}
+
+/* Rust's SendPermit drop without send (mpsc.rs:1663): the slot is
+ * released and the obligation aborted with reason Cancel, where an
+ * explicit abort says Explicit; C has no destructor, so the interpreter
+ * settles the obligation itself and releases the slot untracked. */
+static void drop_send_permit(asx_send_permit *permit) {
+    asx_obligation_id ob = permit->obligation;
+    asx_status st;
+    permit->obligation = ASX_INVALID_ID;
+    asx_send_permit_abort(permit);
+    if (ob == ASX_INVALID_ID) return;
+    st = asx_obligation_abort_with_reason(ob, ASX_OBLIGATION_ABORT_CANCEL);
+    (void)st;
+}
+
+static void close_endpoint(it_channel *c, int sender) {
+    asx_status st;
+    if (sender) {
+        c->sender_open = 0;
+        st = asx_channel_close_sender(c->id);
+    } else {
+        c->receiver_open = 0;
+        st = asx_channel_close_receiver(c->id);
+    }
+    (void)st; /* closing an already half-closed channel side cannot fail */
+}
+
+/* Release held guard / permit i, keeping the others in acquisition order
+ * (a name's most recent permit is the one sem_release pops, as Rust's
+ * Vec::pop). */
+static asx_status release_guard(it_task *t, uint32_t i) {
+    asx_status st = asx_mutex_unlock(t->guards[i].guard);
+    for (; i + 1u < t->n_guards; i++) t->guards[i] = t->guards[i + 1u];
+    t->n_guards--;
+    return st;
+}
+
+static asx_status release_permit(it_task *t, uint32_t i) {
+    asx_status st = asx_semaphore_release(t->permits[i].permit);
+    for (; i + 1u < t->n_permits; i++) t->permits[i] = t->permits[i + 1u];
+    t->n_permits--;
+    return st;
+}
+
+/* The task body ended (returned, acknowledged a cancel, or panicked): what
+ * it still holds is released the way Rust drops the body's locals
+ * (twin_run's Local, fields in declaration order): guards, then semaphore
+ * permits, each by object name, a name's permits oldest first; then send
+ * permits by permit name; then owned senders, then receivers, each by
+ * channel name. A dropped Rust semaphore permit commits its obligation
+ * (sync/semaphore.rs:1081); C has no destructors, so the interpreter
+ * releases explicitly. */
+static void drop_locals(it_task *t) {
+    uint32_t me = (uint32_t)(t - g_tasks);
+    int sender;
+    while (t->n_guards > 0u) {
+        uint32_t i;
+        uint32_t first = 0;
+        for (i = 1; i < t->n_guards; i++) {
+            if (strcmp(t->guards[i].name, t->guards[first].name) < 0) first = i;
+        }
+        (void)release_guard(t, first);
+    }
+    while (t->n_permits > 0u) {
+        uint32_t i;
+        uint32_t first = 0;
+        for (i = 1; i < t->n_permits; i++) {
+            if (strcmp(t->permits[i].name, t->permits[first].name) < 0) first = i;
+        }
+        (void)release_permit(t, first);
+    }
+    while (t->n_send_permits > 0u) {
+        uint32_t i;
+        uint32_t first = 0;
+        for (i = 1; i < t->n_send_permits; i++) {
+            if (strcmp(t->send_permits[i].name, t->send_permits[first].name) < 0) first = i;
+        }
+        drop_send_permit(&t->send_permits[first].permit);
+        for (i = first; i + 1u < t->n_send_permits; i++) {
+            t->send_permits[i] = t->send_permits[i + 1u];
+        }
+        t->n_send_permits--;
+    }
+    for (sender = 1; sender >= 0; sender--) {
+        for (;;) {
+            it_channel *next = NULL;
+            uint32_t i;
+            for (i = 0; i < g_n_channels; i++) {
+                it_channel *c = &g_channels[i];
+                int mine = sender ? (c->sender == me && c->sender_open)
+                                  : (c->receiver == me && c->receiver_open);
+                if (mine && (next == NULL || strcmp(c->name, next->name) < 0)) next = c;
+            }
+            if (next == NULL) break;
+            close_endpoint(next, sender);
+        }
+    }
+}
+
 /* A blocking sync wait's outcome: a status that ends the step, or
  * pending. A cancelled wait gives up its registration, as dropping the
  * Rust future does. */
@@ -684,6 +822,82 @@ static asx_status cancel_barrier_wait(void *w) {
 }
 static asx_status cancel_notify_wait(void *w) {
     return asx_notify_wait_cancel((asx_notify_waiter *)w);
+}
+
+/* Index of the held send permit `name`, or n_send_permits. */
+static uint32_t send_permit_index(const it_task *t, const char *name) {
+    uint32_t i;
+    for (i = 0; name != NULL && i < t->n_send_permits; i++) {
+        if (strcmp(t->send_permits[i].name, name) == 0) return i;
+    }
+    return t->n_send_permits;
+}
+
+/* Blocking mpsc steps (DSL §3.6). Returns 1 when `op` is one of them. A
+ * call is one poll of the Rust future: the library checks cancellation
+ * first and ASX_E_PENDING keeps the step waiting (the task parked in the
+ * channel's FIFO line). */
+static int exec_channel_wait(it_task *t, uint32_t step, uint32_t idx, const char *op,
+                             step_result *out) {
+    asx_status st;
+    uint64_t v = 0;
+    *out = STEP_NEXT;
+    if (strcmp(op, "reserve_send") == 0) {
+        it_channel *c = owned_endpoint(t, it_str(step, "channel"), 1);
+        const char *as = it_str(step, "as");
+        asx_send_permit permit;
+        if (c == NULL || as == NULL || t->n_send_permits >= IT_MAX_LOCAL ||
+            send_permit_index(t, as) < t->n_send_permits) {
+            it_fail_task(t, idx, "reserve_send needs an owned sender and a fresh permit name");
+            *out = STEP_END;
+            return 1;
+        }
+        st = asx_channel_reserve(c->id, &t->cx, &permit);
+        if (st == ASX_E_PENDING) {
+            *out = STEP_PENDING;
+            return 1;
+        }
+        if (st == ASX_OK) {
+            t->send_permits[t->n_send_permits].name = as;
+            t->send_permits[t->n_send_permits].channel = (uint32_t)(c - g_channels);
+            t->send_permits[t->n_send_permits].permit = permit;
+            t->n_send_permits++;
+        }
+        observe_status(t, idx, op, st);
+        return 1;
+    }
+    if (strcmp(op, "send") == 0) {
+        it_channel *c = owned_endpoint(t, it_str(step, "channel"), 1);
+        if (c == NULL || !asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &v)) {
+            it_fail_task(t, idx, "send needs an owned sender and a value");
+            *out = STEP_END;
+            return 1;
+        }
+        st = asx_channel_send(c->id, &t->cx, v);
+        if (st == ASX_E_PENDING) {
+            *out = STEP_PENDING;
+            return 1;
+        }
+        observe_status(t, idx, op, st);
+        return 1;
+    }
+    if (strcmp(op, "recv") == 0) {
+        it_channel *c = owned_endpoint(t, it_str(step, "channel"), 0);
+        if (c == NULL) {
+            it_fail_task(t, idx, "recv needs an owned receiver");
+            *out = STEP_END;
+            return 1;
+        }
+        st = asx_channel_recv(c->id, &t->cx, &v);
+        if (st == ASX_E_PENDING) {
+            *out = STEP_PENDING;
+            return 1;
+        }
+        observe(t, idx, op, status_node(st),
+                st == ASX_OK ? asx_json_new_u64(g_out, v) : ASX_JSON_NONE);
+        return 1;
+    }
+    return 0;
 }
 
 /* Blocking sync steps (DSL §3.7). Returns 1 when `op` is one of them. */
@@ -947,13 +1161,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             return STEP_END;
         }
         i--;
-        if (is_mutex) {
-            st = asx_mutex_unlock(t->guards[i].guard);
-            t->guards[i] = t->guards[--t->n_guards];
-        } else {
-            st = asx_semaphore_release(t->permits[i].permit);
-            t->permits[i] = t->permits[--t->n_permits];
-        }
+        st = is_mutex ? release_guard(t, i) : release_permit(t, i);
         observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
@@ -966,6 +1174,52 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         st = strcmp(op, "notify_one") == 0 ? asx_notify_one(s->notify) : asx_notify_all(s->notify);
         observe_status(t, idx, label, st);
         return STEP_NEXT;
+    }
+    /* Non-blocking mpsc steps (DSL §3.6). */
+    if (strcmp(op, "permit_send") == 0 || strcmp(op, "permit_abort") == 0) {
+        uint32_t i = send_permit_index(t, it_str(step, "permit"));
+        uint64_t v = 0;
+        if (i >= t->n_send_permits ||
+            (strcmp(op, "permit_send") == 0 &&
+             !asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &v))) {
+            it_fail_task(t, idx, "permit step on a permit this task does not hold");
+            return STEP_END;
+        }
+        if (strcmp(op, "permit_send") == 0) {
+            st = asx_send_permit_send(&t->send_permits[i].permit, v);
+        } else {
+            asx_send_permit_abort(&t->send_permits[i].permit);
+            st = ASX_OK;
+        }
+        for (; i + 1u < t->n_send_permits; i++) t->send_permits[i] = t->send_permits[i + 1u];
+        t->n_send_permits--;
+        observe_status(t, idx, label, st);
+        return STEP_NEXT;
+    }
+    if (strcmp(op, "close_sender") == 0 || strcmp(op, "close_receiver") == 0) {
+        int sender = strcmp(op, "close_sender") == 0;
+        it_channel *c = owned_endpoint(t, it_str(step, "channel"), sender);
+        uint32_t i;
+        if (c == NULL) {
+            it_fail_task(t, idx, "close of an endpoint this task does not own");
+            return STEP_END;
+        }
+        for (i = 0; sender && i < t->n_send_permits; i++) {
+            if (t->send_permits[i].channel == (uint32_t)(c - g_channels)) {
+                /* A Rust body cannot drop a sender a held permit borrows. */
+                it_fail_task(t, idx, "close_sender while holding one of its permits");
+                return STEP_END;
+            }
+        }
+        close_endpoint(c, sender);
+        observe_status(t, idx, label, ASX_OK);
+        return STEP_NEXT;
+    }
+    if (strcmp(op, "try_send") == 0 || strcmp(op, "try_recv") == 0) {
+        it_fail_task(t, idx,
+                     "try_send / try_recv: C's asx_channel_try_reserve / try_recv park the "
+                     "calling task when full / empty inside a poll; Rust's never park (DSL §7)");
+        return STEP_END;
     }
     if (strcmp(op, "spawn") == 0) {
         const char *name = it_str(step, "as");
@@ -1068,6 +1322,7 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
     {
         step_result r;
         if (exec_sync_wait(t, self, step, idx, op, &r)) return r;
+        if (exec_channel_wait(t, step, idx, op, &r)) return r;
     }
     if (strcmp(op, "yield") == 0) {
         if (t->phase == 0u) {
@@ -1236,8 +1491,12 @@ static asx_status interp_poll(void *user_data, asx_task_id self) {
         if (r == STEP_PENDING) return ASX_E_PENDING;
         t->pc++;
         t->phase = 0u;
-        if (r == STEP_END) return t->end;
+        if (r == STEP_END) {
+            drop_locals(t);
+            return t->end;
+        }
     }
+    drop_locals(t);
     return ASX_OK;
 }
 
@@ -1832,10 +2091,6 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
         it_fail("not an asx.scenario.v2 document", NULL);
         return ASX_E_INVALID_ARGUMENT;
     }
-    if (asx_json_count(in, asx_json_get(in, scenario, "channels")) > 0u) {
-        it_fail("channel declarations are not interpreted yet (increment 2b)", NULL);
-        return ASX_E_INVALID_ARGUMENT;
-    }
     if (!asx_json_u64(in, asx_json_get(in, asx_json_get(in, scenario, "lab"), "max_steps"),
                       &max_steps) ||
         max_steps == 0u || max_steps > UINT32_MAX) {
@@ -1942,6 +2197,39 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
         t->id = id;
         t->spawned = 1;
         (void)asx_cx_init(&t->cx, t->region, id, ASX_CAP_CANCEL_CHECK);
+    }
+
+    /* Channels (DSL §3.6), each endpoint bound to its owner, a top-level
+     * task. They live in the root region: Rust channels belong to none. */
+    asx_channel_reset();
+    g_n_channels = 0;
+    list = asx_json_get(in, scenario, "channels");
+    for (i = 0; i < asx_json_count(in, list) && !g_failed; i++) {
+        uint32_t d = asx_json_item(in, list, i);
+        const char *name = it_str(d, "name");
+        const char *type = it_str(d, "type");
+        it_task *tx = task_by_name(it_str(d, "sender"));
+        it_task *rx = task_by_name(it_str(d, "receiver"));
+        uint64_t cap = 0;
+        it_channel *c;
+        if (type == NULL || strcmp(type, "mpsc") != 0) {
+            it_fail("only mpsc channels are interpreted yet (increment 2c)", name);
+            break;
+        }
+        if (g_n_channels >= IT_MAX_CHANNELS || name == NULL || tx == NULL || rx == NULL ||
+            !asx_json_u64(in, asx_json_get(in, d, "capacity"), &cap) || cap > UINT32_MAX) {
+            it_fail("mpsc declaration needs a name, a capacity and top-level owner tasks", name);
+            break;
+        }
+        c = &g_channels[g_n_channels++];
+        c->name = name;
+        c->sender = (uint32_t)(tx - g_tasks);
+        c->receiver = (uint32_t)(rx - g_tasks);
+        c->sender_open = 1;
+        c->receiver_open = 1;
+        if (asx_channel_create(root, (uint32_t)cap, &c->id) != ASX_OK) {
+            it_fail("cannot create channel", name);
+        }
     }
 
     /* Script (DSL §2): run to idle, advance time, apply the op. */

@@ -406,7 +406,9 @@ ASX_API ASX_MUST_USE asx_status asx_task_cancel_with_origin(asx_task_id id, asx_
  *
  * asx_task_cancel stamps the current time and attributes the cancel to the
  * task's own region; asx_task_cancel_with_origin stamps the current time.
- * A newly cancelled task records ASX_TRACE_CANCEL_REQUEST.
+ * A direct task cancel records no ASX_TRACE_CANCEL_REQUEST, as Rust's
+ * RuntimeState::cancel_task and task-handle aborts record none
+ * (state.rs:3429); region cancellation does (asx_region_cancel).
  *
  * Returns ASX_OK (also for a completed task), ASX_E_INVALID_ARGUMENT if
  * reason is NULL, a lookup error for a bad handle.

@@ -42,9 +42,17 @@ typedef struct {
     uint16_t generation;
 } asx_semaphore_handle;
 
+/* `obligation` is the permit's SemaphorePermit runtime obligation, reserved
+ * when an acquire polled with a task Cx is granted and committed by
+ * release (Rust sync/semaphore.rs:119, :1274). ASX_INVALID_ID when the
+ * permit is untracked: try_acquire (no Cx), an acquire without a task Cx,
+ * a mutex guard (Rust's Mutex has no obligation), or a refused
+ * reservation. A permit still held when its task completes is reported
+ * leaked by the runtime. */
 typedef struct {
     uint32_t sem_slot;
     uint16_t generation;
+    asx_obligation_id obligation;
 } asx_semaphore_permit;
 
 typedef struct {

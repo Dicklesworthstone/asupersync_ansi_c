@@ -11,7 +11,9 @@
 #include "test_harness.h"
 #include <asx/asx.h>
 #include <asx/core/channel.h>
+#include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
+#include <string.h>
 #if defined(ASX_MPSC_PTHREAD_STRESS)
 #include <pthread.h>
 #endif
@@ -817,6 +819,171 @@ TEST(reset_clears_all) {
 }
 
 /* -------------------------------------------------------------------
+ * Cx-aware waits (Rust reserve / send / recv) and SendPermit obligations
+ * ------------------------------------------------------------------- */
+
+static asx_status poll_idle(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    return ASX_E_PENDING;
+}
+
+/* A task (never polled) whose Cx holds obligations in g_rid. */
+static asx_task_id cx_task(asx_cx *cx) {
+    asx_task_id t = ASX_INVALID_ID;
+    CH_IGNORE(asx_task_spawn(g_rid, poll_idle, NULL, &t));
+    asx_cx_init(cx, g_rid, t, ASX_CAP_CANCEL_CHECK);
+    return t;
+}
+
+static int obligation_is(asx_obligation_id id, asx_task_id holder, asx_obligation_state state,
+                         asx_obligation_abort_reason reason) {
+    asx_obligation_info info;
+    if (id == ASX_INVALID_ID || asx_obligation_get_info(id, &info) != ASX_OK) return 0;
+    return info.kind == ASX_OBLIGATION_KIND_SEND_PERMIT && info.state == state &&
+           info.abort_reason == reason && asx_handle_index(info.holder) == asx_handle_index(holder);
+}
+
+/* The last event the trace observer saw, with a user trace's text. */
+static asx_trace_event g_last_event;
+static char g_last_text[64];
+
+static void observe_last(void *ctx, const asx_trace_event *event,
+                         const asx_trace_payload *payload) {
+    (void)ctx;
+    g_last_event = *event;
+    g_last_text[0] = '\0';
+    if (payload->text != NULL) {
+        size_t n = strlen(payload->text);
+        if (n >= sizeof(g_last_text)) n = sizeof(g_last_text) - 1u;
+        memcpy(g_last_text, payload->text, n);
+        g_last_text[n] = '\0';
+    }
+}
+
+static int last_event_is_user_trace(asx_task_id task, const char *message) {
+    return g_last_event.kind == ASX_TRACE_USER && g_last_event.entity_id == task &&
+           strcmp(g_last_text, message) == 0;
+}
+
+TEST(reserve_with_cx_registers_send_permit_committed_by_send) {
+    asx_channel_id ch;
+    asx_send_permit p;
+    asx_cx cx;
+    asx_task_id t;
+    uint64_t v = 0;
+    setup();
+    t = cx_task(&cx);
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_reserve(ch, &cx, &p), ASX_OK);
+    ASSERT_TRUE(obligation_is(p.obligation, t, ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_ABORT_NONE));
+    {
+        asx_obligation_id ob = p.obligation;
+        ASSERT_EQ(asx_send_permit_send(&p, 7u), ASX_OK);
+        ASSERT_TRUE(obligation_is(ob, t, ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_ABORT_NONE));
+    }
+    ASSERT_EQ(asx_channel_recv(ch, &cx, &v), ASX_OK);
+    ASSERT_EQ(v, 7u);
+}
+
+TEST(reserved_permit_abort_and_disconnect_abort_the_obligation) {
+    asx_channel_id ch;
+    asx_send_permit p1;
+    asx_send_permit p2;
+    asx_obligation_id ob1;
+    asx_obligation_id ob2;
+    asx_cx cx;
+    asx_task_id t;
+    setup();
+    t = cx_task(&cx);
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_reserve(ch, &cx, &p1), ASX_OK);
+    ASSERT_EQ(asx_channel_reserve(ch, &cx, &p2), ASX_OK);
+    ob1 = p1.obligation;
+    ob2 = p2.obligation;
+    ASSERT_TRUE(ob1 != ob2);
+
+    /* permit.abort(): Explicit (mpsc.rs:1633). */
+    asx_send_permit_abort(&p1);
+    ASSERT_TRUE(obligation_is(ob1, t, ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_ABORT_EXPLICIT));
+
+    /* Sending into a closed receiver: Disconnected, aborted Error (:1477). */
+    ASSERT_EQ(asx_channel_close_receiver(ch), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&p2, 1u), ASX_E_DISCONNECTED);
+    ASSERT_TRUE(obligation_is(ob2, t, ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_ABORT_ERROR));
+}
+
+TEST(untracked_reserves_register_no_obligation) {
+    /* try_reserve (Rust try_reserve, mpsc.rs:749), the reserve inside send
+     * (TransientReserve, :1186) and a Cx without a task stay untracked. */
+    asx_channel_id ch;
+    asx_send_permit p;
+    asx_cx cx;
+    asx_cx no_task;
+    asx_obligation_id probe;
+    asx_obligation_id next;
+    uint64_t v = 0;
+    setup();
+    (void)cx_task(&cx);
+    asx_cx_init(&no_task, g_rid, ASX_INVALID_ID, ASX_CAP_CANCEL_CHECK);
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(g_rid, &probe), ASX_OK);
+
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_OK);
+    ASSERT_EQ(p.obligation, ASX_INVALID_ID);
+    ASSERT_EQ(asx_send_permit_send(&p, 1u), ASX_OK);
+    ASSERT_EQ(asx_channel_reserve(ch, &no_task, &p), ASX_OK);
+    ASSERT_EQ(p.obligation, ASX_INVALID_ID);
+    ASSERT_EQ(asx_send_permit_send(&p, 2u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, &cx, 3u), ASX_OK);
+
+    /* No obligation was reserved between the two probes. */
+    ASSERT_EQ(asx_obligation_reserve(g_rid, &next), ASX_OK);
+    ASSERT_EQ(asx_handle_index(next), asx_handle_index(probe) + 1u);
+    ASSERT_EQ(asx_obligation_commit(probe), ASX_OK);
+    ASSERT_EQ(asx_obligation_commit(next), ASX_OK);
+    ASSERT_EQ(asx_channel_recv(ch, NULL, &v), ASX_OK);
+    ASSERT_EQ(v, 1u);
+    ASSERT_EQ(asx_channel_recv(ch, NULL, &v), ASX_OK);
+    ASSERT_EQ(v, 2u);
+    ASSERT_EQ(asx_channel_recv(ch, NULL, &v), ASX_OK);
+    ASSERT_EQ(v, 3u);
+    ASSERT_EQ(asx_channel_recv(ch, NULL, &v), ASX_E_PENDING);
+}
+
+TEST(cancelled_cx_wins_over_ready_channel_and_traces) {
+    /* Rust checks cancellation first on every poll: a cancelled recv sees
+     * ASX_E_CANCELLED although a value is queued (mpsc.rs:1786), a
+     * cancelled reserve although there is room (:1061), and each records
+     * its user trace. The queued value stays for a later receiver. */
+    asx_channel_id ch;
+    asx_send_permit p;
+    asx_cx cx;
+    asx_task_id t;
+    uint64_t v = 0;
+    uint32_t reserved = 99;
+    setup();
+    t = cx_task(&cx);
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 5u), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_USER), ASX_OK);
+    asx_trace_set_observer(observe_last, NULL);
+
+    ASSERT_EQ(asx_channel_recv(ch, &cx, &v), ASX_E_CANCELLED);
+    ASSERT_TRUE(last_event_is_user_trace(t, "mpsc::recv cancelled"));
+    ASSERT_EQ(asx_channel_reserve(ch, &cx, &p), ASX_E_CANCELLED);
+    ASSERT_TRUE(last_event_is_user_trace(t, "mpsc::reserve cancelled"));
+    ASSERT_EQ(asx_channel_send(ch, &cx, 6u), ASX_E_CANCELLED);
+    ASSERT_TRUE(last_event_is_user_trace(t, "mpsc::reserve cancelled"));
+    asx_trace_set_observer(NULL, NULL);
+    ASSERT_EQ(asx_channel_reserved_count(ch, &reserved), ASX_OK);
+    ASSERT_EQ(reserved, 0u);
+
+    ASSERT_EQ(asx_channel_recv(ch, NULL, &v), ASX_OK);
+    ASSERT_EQ(v, 5u);
+}
+
+/* -------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------- */
 
@@ -885,6 +1052,11 @@ int main(void) {
     RUN_TEST(stale_permit_copy_cannot_send);
 
     RUN_TEST(reset_clears_all);
+
+    RUN_TEST(reserve_with_cx_registers_send_permit_committed_by_send);
+    RUN_TEST(reserved_permit_abort_and_disconnect_abort_the_obligation);
+    RUN_TEST(untracked_reserves_register_no_obligation);
+    RUN_TEST(cancelled_cx_wins_over_ready_channel_and_traces);
 
     TEST_REPORT();
     return test_failures;

@@ -56,6 +56,7 @@
 
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
+#include <asx/sync/semaphore.h>
 #include <stdint.h>
 
 /* Maximum capacity of one wait queue (woken flags live in a 64-bit mask). */
@@ -126,6 +127,12 @@ int asx_wait_park_current(asx_task_id *slot);
 
 /* Wake a recorded waiter task; invalid or stale handles are ignored. */
 void asx_wait_wake_task(asx_task_id task);
+
+/* A semaphore whose permits never register a SemaphorePermit obligation:
+ * the mutex is a one-permit semaphore, and Rust's Mutex guard is not an
+ * obligation (sync/mutex.rs registers none). Otherwise as
+ * asx_semaphore_create. */
+asx_status asx_semaphore_create_untracked(uint32_t initial_permits, asx_semaphore_handle *out);
 
 /* 1 if both handles name the same task slot generation (the state bits
  * embedded in task handles are ignored). */

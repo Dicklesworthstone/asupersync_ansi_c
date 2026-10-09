@@ -75,17 +75,17 @@ timer deadlines).
 | `region.created` | `region`, `parent` (name or `null`) | `RegionCreated`, `Region{region,parent}` (`:199`) | `ASX_TRACE_REGION_OPEN` |
 | `region.close_begin` | `region` | `RegionCloseBegin` (`:195`) | `ASX_TRACE_REGION_CLOSE` |
 | `region.closed` | `region` | `RegionCloseComplete` (`:197`) | `ASX_TRACE_REGION_CLOSED` |
-| `region.cancelled` | `region`, `reason` | `RegionCancelled`, `RegionCancel{region,reason}` (`:201`) | **missing in C** (§11) |
-| `cancel.requested` | `task`, `region`, `reason` | `CancelRequest`, `Cancel{task,region,reason}` (`:181`) | **missing in C** (§11) |
+| `region.cancelled` | `region`, `reason` | `RegionCancelled`, `RegionCancel{region,reason}` (`:201`) | `ASX_TRACE_REGION_CANCELLED` |
+| `cancel.requested` | `task`, `region`, `reason` | `CancelRequest`, `Cancel{task,region,reason}` (`:181`) | `ASX_TRACE_CANCEL_REQUEST` |
 | `obligation.reserved` | `obligation`, `task`, `region`, `kind` | `ObligationReserve` (`:203`) | `ASX_TRACE_OBLIGATION_RESERVE` |
 | `obligation.committed` | `obligation`, `task`, `region`, `kind` | `ObligationCommit` (`:205`) | `ASX_TRACE_OBLIGATION_COMMIT` |
 | `obligation.aborted` | `obligation`, `task`, `region`, `kind`, `abort_reason` | `ObligationAbort` (`:207`) | `ASX_TRACE_OBLIGATION_ABORT` |
-| `obligation.leaked` | `obligation`, `task`, `region`, `kind` | `ObligationLeak` (`:209`) | **missing in C** (§11) |
+| `obligation.leaked` | `obligation`, `task`, `region`, `kind` | `ObligationLeak` (`:209`) | `ASX_TRACE_OBLIGATION_LEAK` |
 | `obligation.handoff` | `obligation`, `from_task`, `to_task`, `from_region`, `to_region` | `UserTrace` carrying `obligation_handoff_v1 <json>` (`:24-76`) | **missing in C** (§11) |
 | `timer.scheduled` | `timer`, `deadline_ns` | `TimerScheduled`, `Timer{timer_id,deadline:Some}` (`:213`) | `ASX_TRACE_TIMER_SET` |
 | `timer.fired` | `timer` | `TimerFired` (`:215`) | `ASX_TRACE_TIMER_FIRE` |
 | `timer.cancelled` | `timer` | `TimerCancelled` (`:217`) | `ASX_TRACE_TIMER_CANCEL` |
-| `user.trace` | `message` | `UserTrace`, `Message(String)` (`:237`), not a handoff | **missing in C** (§11) |
+| `user.trace` | `message` | `UserTrace`, `Message(String)` (`:237`), not a handoff | `ASX_TRACE_USER` (oneshot messages: §11) |
 
 ### Emission rules both engines must follow
 
@@ -97,10 +97,14 @@ reproduce exactly for the projected streams to agree.
   ascending, on **every** call. The target carries the request's reason;
   each descendant carries a `ParentCancelled` reason whose cause is its
   parent's reason (`src/runtime/state.rs:7741-7758`).
-- **`cancel.requested` only when newly cancelled.** It is emitted per task
-  only when the task becomes newly cancelled (`state.rs:7863-7865`).
-  Strengthening the reason of a task or region that is already cancelled
-  emits **nothing**: there is no strengthen event (`state.rs:7794`).
+- **`cancel.requested` only when newly cancelled, by a region or policy.**
+  It is emitted per task only when the task becomes newly cancelled
+  through a region cancel (`state.rs:7863-7865`) or a policy's sibling
+  cancel (below). A direct task cancel (`RuntimeState::cancel_task`,
+  `state.rs:3429`, the driver's `cancel_task`) and a task-handle abort emit
+  **nothing**. Strengthening the reason of a task or region that is
+  already cancelled emits **nothing** either: there is no strengthen event
+  (`state.rs:7794`).
 - **Fail-fast sibling cancellation** emits `cancel.requested` for each
   sibling (`state.rs:7449`, `:7501-7503`).
 - **`region.close_begin`** is emitted when the region actually starts
@@ -416,14 +420,17 @@ the version they were captured under.
 
 ## 11. Work this vocabulary requires on the C side
 
-The C runtime does not yet emit several projected kinds. W1.5 (bd-9kll.2.5)
-must add them, in the runtime or as interpreter projections from runtime
-state, following the emission rules in §3:
-- `region.cancelled`, for every region of the subtree on every cancel call;
-- `cancel.requested`, newly-cancelled tasks only;
-- `obligation.leaked`;
+The C runtime does not yet emit every projected kind. W1.5 (bd-9kll.2.5)
+must add the rest, in the runtime or as interpreter projections from
+runtime state, following the emission rules in §3:
 - `obligation.handoff`;
-- `user.trace`, including the exact oneshot and mpsc messages.
+- `user.trace` with the exact oneshot messages.
+
+Emitted now, each verified by a matching fixture: `region.cancelled` and
+`cancel.requested` (`region-lifecycle-cancel-propagates-001`),
+`obligation.leaked` (`leak-policy-leak-reported-001`), and `user.trace`
+for the `trace` step and the mpsc cancel messages
+(`mpsc-recv-cancel-first-001`).
 
 C's `ASX_TRACE_CHANNEL_SEND` / `CHANNEL_RECV`, `ASX_TRACE_TASK_TRANSITION`
 and the `ASX_TRACE_SCHED_*` kinds other than `SCHED_COMPLETE` are not

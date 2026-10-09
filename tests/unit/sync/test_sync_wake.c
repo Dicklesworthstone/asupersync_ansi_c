@@ -110,6 +110,10 @@ typedef struct {
     int acquired;
     int cancel_aware;
     int abandon; /* complete without cancelling the queued acquire */
+    int use_cx;  /* poll the acquire with this task's Cx */
+    int keep;    /* complete still holding the permit */
+    asx_cx cx;
+    asx_obligation_id obligation; /* the permit's, as granted */
     uint32_t polls;
     asx_status result;
 } sem_task;
@@ -134,13 +138,17 @@ static asx_status poll_sem_task(void *ud, asx_task_id self) {
         s->begun = 1;
     }
     if (!s->acquired) {
-        st = asx_semaphore_poll_acquire(&s->waiter, &s->permit, NULL);
+        if (s->use_cx && s->cx.task_id == ASX_INVALID_ID) {
+            asx_cx_init(&s->cx, g_region, self, ASX_CAP_CANCEL_CHECK);
+        }
+        st = asx_semaphore_poll_acquire(&s->waiter, &s->permit, s->use_cx ? &s->cx : NULL);
         if (st == ASX_E_PENDING) return ASX_E_PENDING;
         if (st != ASX_OK) {
             s->result = st;
             return ASX_OK;
         }
         s->acquired = 1;
+        s->obligation = s->permit.obligation;
         record(s->id);
         g_holders++;
         if (g_holders > g_max_holders) g_max_holders = g_holders;
@@ -148,6 +156,7 @@ static asx_status poll_sem_task(void *ud, asx_task_id self) {
     st = sleep_once(&s->hold, s->hold_for, self);
     if (st != ASX_OK) return st;
     g_holders--;
+    if (s->keep) return ASX_OK;
     return asx_semaphore_release(s->permit);
 }
 
@@ -344,6 +353,112 @@ TEST(sem_waiter_of_dead_task_is_reclaimed) {
     ASSERT_EQ(g_sem[0].acquired, 0);
     ASSERT_EQ(g_sem[1].acquired, 1);
     ASSERT_EQ(asx_semaphore_available(h), 1u);
+}
+
+/* Obligation `id` is a SemaphorePermit in `state`, held by `task`. */
+static int sem_obligation_is(asx_obligation_id id, asx_task_id task, asx_obligation_state state) {
+    asx_obligation_info info;
+    if (id == ASX_INVALID_ID || asx_obligation_get_info(id, &info) != ASX_OK) return 0;
+    return info.kind == ASX_OBLIGATION_KIND_SEMAPHORE_PERMIT && info.state == state &&
+           asx_handle_index(info.holder) == asx_handle_index(task) && info.region == g_region;
+}
+
+TEST(sem_permit_polled_with_cx_is_an_obligation_until_release) {
+    /* Rust: a permit acquired with a task Cx registers a SemaphorePermit
+     * runtime obligation (sync/semaphore.rs:119) that dropping the permit
+     * commits (:1274). The second task's permit is granted by the first's
+     * release and carries its own obligation. */
+    asx_semaphore_handle h;
+    asx_task_id t[2];
+    asx_budget budget;
+    uint32_t i;
+    uint64_t leaks_before;
+
+    ASSERT_TRUE(setup());
+    reset_sem_fixtures();
+    leaks_before = asx_obligation_leak_count();
+    ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
+    for (i = 0; i < 2u; i++) {
+        g_sem[i].id = i;
+        g_sem[i].sem = h;
+        g_sem[i].use_cx = 1;
+        g_sem[i].hold_for = MS;
+        ASSERT_EQ(asx_task_spawn(g_region, poll_sem_task, &g_sem[i], &t[i]), ASX_OK);
+    }
+    budget = asx_budget_from_polls(200);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+
+    ASSERT_EQ(g_sem[0].acquired, 1);
+    ASSERT_EQ(g_sem[1].acquired, 1);
+    ASSERT_TRUE(g_sem[0].obligation != g_sem[1].obligation);
+    ASSERT_TRUE(sem_obligation_is(g_sem[0].obligation, t[0], ASX_OBLIGATION_COMMITTED));
+    ASSERT_TRUE(sem_obligation_is(g_sem[1].obligation, t[1], ASX_OBLIGATION_COMMITTED));
+    ASSERT_EQ(asx_obligation_leak_count(), leaks_before);
+    ASSERT_EQ(asx_semaphore_available(h), 1u);
+}
+
+TEST(sem_permit_held_past_task_completion_is_leaked) {
+    asx_semaphore_handle h;
+    asx_task_id t;
+    asx_budget budget;
+    uint64_t leaks_before;
+
+    ASSERT_TRUE(setup());
+    reset_sem_fixtures();
+    leaks_before = asx_obligation_leak_count();
+    ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
+    g_sem[0].sem = h;
+    g_sem[0].use_cx = 1;
+    g_sem[0].keep = 1;
+    ASSERT_EQ(asx_task_spawn(g_region, poll_sem_task, &g_sem[0], &t), ASX_OK);
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+
+    ASSERT_TRUE(sem_obligation_is(g_sem[0].obligation, t, ASX_OBLIGATION_LEAKED));
+    ASSERT_EQ(asx_obligation_leak_count(), leaks_before + 1u);
+    /* The late release still returns the permit; the commit is refused. */
+    ASSERT_EQ(asx_semaphore_release(g_sem[0].permit), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(h), 1u);
+    ASSERT_TRUE(sem_obligation_is(g_sem[0].obligation, t, ASX_OBLIGATION_LEAKED));
+}
+
+TEST(untracked_permits_hold_no_obligation) {
+    /* No Cx to hold it (try_acquire, an acquire polled without a Cx) and
+     * mutex guards (Rust's Mutex registers none) stay untracked. */
+    asx_semaphore_handle h;
+    asx_semaphore_permit p;
+    asx_semaphore_waiter w;
+    asx_mutex_handle m;
+    asx_mutex_lock_waiter mw;
+    asx_mutex_guard g;
+    asx_task_id holder;
+    asx_cx cx;
+
+    ASSERT_TRUE(setup());
+    reset_sem_fixtures();
+    ASSERT_EQ(asx_task_spawn(g_region, poll_sem_task, &g_sem[0], &holder), ASX_OK);
+    asx_cx_init(&cx, g_region, holder, ASX_CAP_CANCEL_CHECK);
+    ASSERT_EQ(asx_semaphore_create(2, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_try_acquire(h, &p), ASX_OK);
+    ASSERT_EQ(p.obligation, ASX_INVALID_ID);
+    ASSERT_EQ(asx_semaphore_release(p), ASX_OK);
+    ASSERT_EQ(asx_semaphore_acquire_begin(h, &w), ASX_OK);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w, &p, NULL), ASX_OK);
+    ASSERT_EQ(p.obligation, ASX_INVALID_ID);
+    ASSERT_EQ(asx_semaphore_release(p), ASX_OK);
+
+    /* Control: the same task Cx does make a semaphore permit an obligation. */
+    ASSERT_EQ(asx_semaphore_acquire_begin(h, &w), ASX_OK);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w, &p, &cx), ASX_OK);
+    ASSERT_TRUE(sem_obligation_is(p.obligation, holder, ASX_OBLIGATION_RESERVED));
+    ASSERT_EQ(asx_semaphore_release(p), ASX_OK);
+    ASSERT_TRUE(sem_obligation_is(p.obligation, holder, ASX_OBLIGATION_COMMITTED));
+
+    ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+    ASSERT_EQ(asx_mutex_lock_begin(m, &mw), ASX_OK);
+    ASSERT_EQ(asx_mutex_poll_lock(&mw, &g, &cx), ASX_OK);
+    ASSERT_EQ(g.permit.obligation, ASX_INVALID_ID);
+    ASSERT_EQ(asx_mutex_unlock(g), ASX_OK);
 }
 
 /* ===================================================================
@@ -1070,6 +1185,9 @@ int main(void) {
     RUN_TEST(sem_cancel_of_woken_waiter_passes_permit_on);
     RUN_TEST(sem_release_skips_cancelled_waiter);
     RUN_TEST(sem_waiter_of_dead_task_is_reclaimed);
+    RUN_TEST(sem_permit_polled_with_cx_is_an_obligation_until_release);
+    RUN_TEST(sem_permit_held_past_task_completion_is_leaked);
+    RUN_TEST(untracked_permits_hold_no_obligation);
     RUN_TEST(mutex_handoff_between_three_tasks);
     RUN_TEST(mutex_handoff_is_deterministic);
     RUN_TEST(contended_mutex_counts_one_contention_per_park);

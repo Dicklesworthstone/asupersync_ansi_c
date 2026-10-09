@@ -365,16 +365,42 @@ open gap with the gap named; `make conformance` lists them as ERROR.
 
 Open:
 
-- **Non-reserving channel sends.** `send` and `try_send` must not register
-  an obligation; `reserve_send` must register a `SendPermit`; a semaphore
-  permit must register a `SemaphorePermit`.
-- **Oneshot trace and obligation behaviour.** C's oneshot must register the
-  `SendPermit` and emit the exact `user.trace` messages (vocabulary §3).
+- **Non-parking `try_send` / `try_recv`.** C's `asx_channel_try_reserve`
+  and `asx_channel_try_recv` park the calling task when the channel is
+  full or empty inside a scheduler poll; Rust's `try_send` / `try_recv`
+  never park. The interpreter fails these steps closed until the C `try_*`
+  functions stop parking (their parking callers moving to the Cx-aware
+  `asx_channel_reserve` / `asx_channel_recv`).
+- **Oneshot, broadcast and watch channels** (increment 2c). C's oneshot
+  must also register the `SendPermit` and emit the exact `user.trace`
+  messages (vocabulary §3).
+- **Multi-permit semaphore acquire.** Rust acquires `count` permits
+  all-or-nothing; C grants one permit per acquire, so `sem_acquire` with
+  `count` > 1 fails closed.
 - **Region admission limits** for `region_limits`: no C API sets per-region
   task, child or obligation limits today. `ASX_E_ADMISSION_LIMIT` appears
   only in the status string table.
 
 Closed (each verified by a fixture that now matches):
+
+- **Channel obligations and cancel traces**: `asx_channel_reserve` with a
+  task Cx registers a `SendPermit` (committed by send, aborted `Explicit`
+  by abort and `Error` by a send to a closed receiver; the interpreter
+  aborts a permit its body still holds at the end with `Cancel`, as
+  Rust's drop does); `asx_channel_send` registers none; both cancel
+  checks come first and record Rust's `user.trace` messages
+  (`mpsc-two-phase-send-recv-001`, `mpsc-recv-cancel-first-001`).
+- **Semaphore permit obligations**: a permit acquired with a task Cx
+  registers a `SemaphorePermit` that release commits; mutex guards
+  register none (`sync-semaphore-barrier-001`, `sync-mutex-fifo-001`).
+- **Direct task cancels record no `cancel.requested`**, as Rust's
+  `RuntimeState::cancel_task` (`cancel-masked-checkpoint-001`).
+- **Cancel wakes, masking and Notify**: a cancel wakes a parked task once;
+  a masked task does not observe its cancel; Notify skips only
+  cancel-aware doomed waiters (`cancel-masked-checkpoint-001`,
+  `cancel-strengthen-severity-001`).
+- **Closed-region admission** reports `ASX_E_REGION_CLOSED`
+  (`obligation-reserve-closed-region-must-fail-001`).
 
 - **Cancel message and origin**: `asx_task_cancel_with_reason` and
   `asx_region_cancel` take a whole reason; budget cancels are attributed to

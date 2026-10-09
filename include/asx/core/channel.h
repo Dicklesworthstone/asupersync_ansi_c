@@ -35,6 +35,7 @@
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
+#include <asx/cx/cx.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -76,6 +77,11 @@ typedef struct asx_send_permit {
     asx_channel_id channel_id;
     uint32_t token; /* monotonic token for linearity check */
     int consumed;   /* 1 if already sent or aborted */
+    /* The permit's SendPermit obligation (asx_channel_reserve with a task
+     * Cx), ASX_INVALID_ID when untracked (asx_channel_try_reserve, the
+     * reserve inside asx_channel_send, or no task Cx), as Rust registers
+     * one only for `reserve(&cx)` (channel/mpsc.rs:1180-1196). */
+    asx_obligation_id obligation;
 } asx_send_permit;
 
 /* ------------------------------------------------------------------ */
@@ -145,6 +151,39 @@ ASX_API void asx_send_permit_abort(asx_send_permit *permit);
  *   close.
  * Returns ASX_E_DISCONNECTED if queue is empty and sender closed. */
 ASX_API ASX_MUST_USE asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value);
+
+/* ------------------------------------------------------------------ */
+/* Cx-aware waits (Rust's reserve / send / recv futures)              */
+/* ------------------------------------------------------------------ */
+
+/* Each call is one poll of the Rust future. Cancellation is checked first,
+ * every call: a Cx whose task observes a cancel (or exhausts its bound
+ * budget) ends the wait with ASX_E_CANCELLED even when the channel could
+ * serve it, records the user trace Rust records ("mpsc::reserve
+ * cancelled" / "mpsc::recv cancelled", mpsc.rs:1061, :1786) and withdraws
+ * the task from the wait line. Otherwise ASX_E_PENDING means not yet:
+ * inside a scheduler poll the task is parked in the FIFO line until a
+ * dequeue/abort (reserve, send) or a commit (recv), or a close. A NULL
+ * cx skips the cancellation check. */
+
+/* `tx.reserve(&cx)` (mpsc.rs:637). Status as asx_channel_try_reserve,
+ * with ASX_E_PENDING for full. A granted permit reserves a SendPermit
+ * obligation held by the Cx's task: asx_send_permit_send commits it (or
+ * aborts it with reason ERROR when the receiver is closed, mpsc.rs:1477),
+ * asx_send_permit_abort aborts it with reason EXPLICIT (:1633). A refused
+ * reservation or a Cx without a task leaves the permit untracked. */
+ASX_API ASX_MUST_USE asx_status asx_channel_reserve(asx_channel_id id, asx_cx *cx,
+                                                    asx_send_permit *out);
+
+/* `tx.send(&cx, v)` (mpsc.rs:715): reserve without an obligation (Rust's
+ * TransientReserve, :1186), then commit `value`. Its cancellation trace
+ * is the reserve's. */
+ASX_API ASX_MUST_USE asx_status asx_channel_send(asx_channel_id id, asx_cx *cx, uint64_t value);
+
+/* `rx.recv(&cx)` (mpsc.rs:1719). Status as asx_channel_try_recv, with
+ * ASX_E_PENDING for empty. */
+ASX_API ASX_MUST_USE asx_status asx_channel_recv(asx_channel_id id, asx_cx *cx,
+                                                 uint64_t *out_value);
 
 /* Withdraw `task` from this channel's recv and reserve wait queues — the
  * analog of dropping a Rust recv/reserve future. Call it when a task that

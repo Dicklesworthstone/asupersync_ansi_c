@@ -108,7 +108,10 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
         t->cancel_witness = witness;
     }
 
-    /* A newly cancelled task (vocabulary cancel.requested, state.rs:7863). */
+    /* A newly cancelled task (vocabulary cancel.requested). Rust records it
+     * only where a region or policy cancels tasks (cancel_request,
+     * state.rs:7864; cancel_sibling_tasks, :7502); a direct task cancel
+     * (RuntimeState::cancel_task, :3429) or a handle abort records none. */
     if (trace_request) {
         asx_trace_payload payload;
         payload.text = NULL;
@@ -142,11 +145,11 @@ asx_status asx_task_cancel_with_origin(asx_task_id id, asx_cancel_kind kind,
     reason.message = NULL;
     reason.cause = NULL;
     reason.truncated = 0;
-    return asx_task_cancel_reason_internal(id, &reason, 1);
+    return asx_task_cancel_reason_internal(id, &reason, 0);
 }
 
 asx_status asx_task_cancel_with_reason(asx_task_id id, const asx_cancel_reason *reason) {
-    return asx_task_cancel_reason_internal(id, reason, 1);
+    return asx_task_cancel_reason_internal(id, reason, 0);
 }
 
 asx_status asx_task_cancel_budget_internal(asx_task_id id, asx_cancel_kind kind, asx_time at) {

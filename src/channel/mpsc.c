@@ -34,6 +34,7 @@
 #include <asx/asx.h>
 #include <asx/core/channel.h>
 #include <asx/platform/atomics.h>
+#include <asx/runtime/runtime.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
@@ -586,6 +587,7 @@ asx_status asx_channel_try_reserve(asx_channel_id id, asx_send_permit *out) {
                 out->channel_id = id;
                 out->token = token;
                 out->consumed = 0;
+                out->obligation = ASX_INVALID_ID;
                 channel_atomic_inc(&s->reserved);
                 break;
             }
@@ -610,6 +612,19 @@ asx_status asx_channel_try_reserve(asx_channel_id id, asx_send_permit *out) {
 /* ------------------------------------------------------------------ */
 /* Two-phase send: commit (send value)                                */
 /* ------------------------------------------------------------------ */
+
+/* Settle a genuine permit's SendPermit obligation (callers have consumed
+ * its token, so a forged permit never reaches here): commit on delivery,
+ * else abort with `reason` (mpsc.rs:1477, :1633). */
+static void channel_permit_resolve(asx_send_permit *permit, int delivered,
+                                   asx_obligation_abort_reason reason) {
+    asx_status st;
+    if (permit->obligation == ASX_INVALID_ID) return;
+    st = delivered ? asx_obligation_commit(permit->obligation)
+                   : asx_obligation_abort_with_reason(permit->obligation, reason);
+    (void)st; /* refused only for an obligation the runtime already resolved */
+    permit->obligation = ASX_INVALID_ID;
+}
 
 asx_status asx_send_permit_send(asx_send_permit *permit, uint64_t value) {
     asx_channel_slot *s;
@@ -639,6 +654,7 @@ asx_status asx_send_permit_send(asx_send_permit *permit, uint64_t value) {
 #if ASX_CHANNEL_BACKEND_LOCKFREE
         channel_lf_release_capacity(s);
 #endif
+        channel_permit_resolve(permit, 0, ASX_OBLIGATION_ABORT_ERROR);
         return ASX_E_DISCONNECTED;
     }
 
@@ -646,11 +662,13 @@ asx_status asx_send_permit_send(asx_send_permit *permit, uint64_t value) {
     st = channel_lf_enqueue(s, value);
     if (st != ASX_OK) {
         channel_lf_release_capacity(s);
+        channel_permit_resolve(permit, 0, ASX_OBLIGATION_ABORT_ERROR);
         channel_settle(s); /* the consumed permit freed capacity */
         return st;
     }
 #else
     if (s->queue_len >= s->capacity) {
+        channel_permit_resolve(permit, 0, ASX_OBLIGATION_ABORT_ERROR);
         channel_settle(s); /* the consumed permit freed capacity */
         return ASX_E_CHANNEL_FULL;
     }
@@ -659,6 +677,7 @@ asx_status asx_send_permit_send(asx_send_permit *permit, uint64_t value) {
     s->queue_len++;
 #endif
     asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)permit->channel_id, value);
+    channel_permit_resolve(permit, 1, ASX_OBLIGATION_ABORT_NONE);
     channel_settle(s); /* one more message for a parked receiver */
 
     return ASX_OK;
@@ -683,6 +702,7 @@ void asx_send_permit_abort(asx_send_permit *permit) {
 #if ASX_CHANNEL_BACKEND_LOCKFREE
         channel_lf_release_capacity(s);
 #endif
+        channel_permit_resolve(permit, 0, ASX_OBLIGATION_ABORT_EXPLICIT);
         channel_settle(s); /* the slot is free again */
         /* With the sender side closed, the last outstanding permit going
          * away can turn an empty queue into a disconnect: re-check them. */
@@ -767,6 +787,67 @@ asx_status asx_channel_wait_cancel(asx_channel_id id, asx_task_id task) {
     /* A wake the withdrawn task held goes to the next waiter in line. */
     if (removed) channel_settle(s);
     return ASX_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Cx-aware waits                                                     */
+/* ------------------------------------------------------------------ */
+
+/* Rust's cancellation check at the top of every reserve / recv poll: any
+ * checkpoint failure ends the wait (mpsc.rs:1061, :1786). Returns 1 when
+ * it did: the trace is recorded and the task leaves the wait lines,
+ * passing on a wake it held. */
+static int channel_wait_cancelled(asx_channel_id id, asx_cx *cx, const char *message) {
+    asx_status st;
+    if (cx == NULL || asx_cx_checkpoint(cx) == ASX_OK) return 0;
+    asx_trace_user(cx->task_id, message);
+    st = asx_channel_wait_cancel(id, cx->task_id);
+    (void)st; /* a bad handle has no line to leave */
+    return 1;
+}
+
+asx_status asx_channel_reserve(asx_channel_id id, asx_cx *cx, asx_send_permit *out) {
+    asx_status st;
+
+    if (out == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (channel_wait_cancelled(id, cx, "mpsc::reserve cancelled")) { return ASX_E_CANCELLED; }
+
+    st = asx_channel_try_reserve(id, out);
+    if (st == ASX_E_CHANNEL_FULL) { return ASX_E_PENDING; }
+    if (st != ASX_OK) { return st; }
+
+    /* Registered after the slot is claimed, as Rust's Reserve does
+     * (mpsc.rs:1116); a refusal leaves the permit untracked (:1180). */
+    if (cx != NULL && cx->task_id != ASX_INVALID_ID) {
+        asx_obligation_id ob;
+        if (asx_obligation_reserve_ex(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id,
+                                      &ob) == ASX_OK) {
+            out->obligation = ob;
+        }
+    }
+    return ASX_OK;
+}
+
+asx_status asx_channel_send(asx_channel_id id, asx_cx *cx, uint64_t value) {
+    asx_send_permit permit;
+    asx_status st;
+
+    if (channel_wait_cancelled(id, cx, "mpsc::reserve cancelled")) { return ASX_E_CANCELLED; }
+
+    st = asx_channel_try_reserve(id, &permit);
+    if (st == ASX_E_CHANNEL_FULL) { return ASX_E_PENDING; }
+    if (st != ASX_OK) { return st; }
+    return asx_send_permit_send(&permit, value);
+}
+
+asx_status asx_channel_recv(asx_channel_id id, asx_cx *cx, uint64_t *out_value) {
+    asx_status st;
+
+    if (out_value == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (channel_wait_cancelled(id, cx, "mpsc::recv cancelled")) { return ASX_E_CANCELLED; }
+
+    st = asx_channel_try_recv(id, out_value);
+    return st == ASX_E_WOULD_BLOCK ? ASX_E_PENDING : st;
 }
 
 /* ------------------------------------------------------------------ */

@@ -21,10 +21,17 @@
  * skipped when granting so it never absorbs a permit another task needs.
  * Close wakes every parked waiter so it observes ASX_E_DISCONNECTED.
  *
+ * Obligations: a permit granted to an acquire polled with a task Cx
+ * reserves a SemaphorePermit obligation held by that task, and release
+ * commits it (Rust sync/semaphore.rs:119, :1274). A refused reservation
+ * leaves the permit untracked, as Rust's Option-returning registration
+ * does; mutex semaphores never track (Rust's Mutex has no obligation).
+ *
  * SPDX-License-Identifier: MIT
  */
 
 #include "wait_queue.h"
+#include <asx/runtime/runtime.h>
 #include <asx/sync/semaphore.h>
 #include <string.h>
 
@@ -48,7 +55,8 @@ typedef struct {
     uint32_t max_permits; /* initial capacity (for queries) */
     sem_waiter_slot waiters[ASX_SEMAPHORE_MAX_WAITERS];
     uint32_t waiter_count;
-    uint32_t next_seq; /* arrival stamp for the next waiter */
+    uint32_t next_seq;     /* arrival stamp for the next waiter */
+    int track_obligations; /* permits reserve SemaphorePermit obligations */
 } sem_slot;
 
 static sem_slot g_slots[ASX_SEMAPHORE_MAX];
@@ -136,7 +144,8 @@ static void sem_dispatch_parked(sem_slot *s) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_semaphore_create(uint32_t initial_permits, asx_semaphore_handle *out) {
+static asx_status sem_create(uint32_t initial_permits, int track_obligations,
+                             asx_semaphore_handle *out) {
     uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
@@ -148,6 +157,7 @@ asx_status asx_semaphore_create(uint32_t initial_permits, asx_semaphore_handle *
             g_slots[i].max_permits = initial_permits;
             g_slots[i].waiter_count = 0;
             g_slots[i].next_seq = 0;
+            g_slots[i].track_obligations = track_obligations;
             memset(g_slots[i].waiters, 0, sizeof(g_slots[i].waiters));
             out->slot = i;
             out->generation = g_slots[i].generation;
@@ -156,6 +166,14 @@ asx_status asx_semaphore_create(uint32_t initial_permits, asx_semaphore_handle *
         }
     }
     return ASX_E_RESOURCE_EXHAUSTED;
+}
+
+asx_status asx_semaphore_create(uint32_t initial_permits, asx_semaphore_handle *out) {
+    return sem_create(initial_permits, 1, out);
+}
+
+asx_status asx_semaphore_create_untracked(uint32_t initial_permits, asx_semaphore_handle *out) {
+    return sem_create(initial_permits, 0, out);
 }
 
 asx_status asx_semaphore_close(asx_semaphore_handle handle) {
@@ -192,6 +210,7 @@ asx_status asx_semaphore_try_acquire(asx_semaphore_handle handle, asx_semaphore_
         s->permits--;
         out->sem_slot = handle.slot;
         out->generation = handle.generation;
+        out->obligation = ASX_INVALID_ID; /* no Cx to hold it */
         return ASX_OK;
     }
     return ASX_E_WOULD_BLOCK;
@@ -237,14 +256,31 @@ asx_status asx_semaphore_acquire_begin(asx_semaphore_handle handle, asx_semaphor
     return ASX_OK;
 }
 
-/* Hand a granted permit to the polling caller and retire its waiter. */
-static asx_status sem_consume_grant(sem_slot *s, sem_waiter_slot *w,
-                                    const asx_semaphore_waiter *waiter, asx_semaphore_permit *out) {
-    w->acquired = 0; /* consumed by this caller, not returned to the pool */
-    sem_waiter_retire(s, w);
+/* Fill the permit handed to an acquire polled with `cx`, reserving its
+ * SemaphorePermit obligation for the Cx's task when the semaphore tracks
+ * them. A refused reservation leaves the permit untracked. */
+static asx_status sem_hand_out(const sem_slot *s, const asx_semaphore_waiter *waiter,
+                               asx_semaphore_permit *out, const asx_cx *cx) {
     out->sem_slot = waiter->sem_slot;
     out->generation = waiter->generation;
+    out->obligation = ASX_INVALID_ID;
+    if (s->track_obligations && cx != NULL && cx->task_id != ASX_INVALID_ID) {
+        asx_obligation_id id;
+        if (asx_obligation_reserve_ex(cx->region_id, ASX_OBLIGATION_KIND_SEMAPHORE_PERMIT,
+                                      cx->task_id, &id) == ASX_OK) {
+            out->obligation = id;
+        }
+    }
     return ASX_OK;
+}
+
+/* Hand a granted permit to the polling caller and retire its waiter. */
+static asx_status sem_consume_grant(sem_slot *s, sem_waiter_slot *w,
+                                    const asx_semaphore_waiter *waiter, asx_semaphore_permit *out,
+                                    const asx_cx *cx) {
+    w->acquired = 0; /* consumed by this caller, not returned to the pool */
+    sem_waiter_retire(s, w);
+    return sem_hand_out(s, waiter, out, cx);
 }
 
 asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphore_permit *out,
@@ -274,13 +310,13 @@ asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphor
     }
 
     /* Already acquired by a prior release? */
-    if (w->acquired) return sem_consume_grant(s, w, waiter, out);
+    if (w->acquired) return sem_consume_grant(s, w, waiter, out, cx);
 
     /* Settle the line: reclaim waiters of dead tasks (their grants return
      * to the pool) and hand pooled permits to parked waiters in order. */
     sem_reap(s);
     sem_dispatch_parked(s);
-    if (w->acquired) return sem_consume_grant(s, w, waiter, out);
+    if (w->acquired) return sem_consume_grant(s, w, waiter, out, cx);
 
     /* Take a pooled permit only when no earlier arrival is still waiting. */
     if (s->permits > 0 && sem_next_in_line(s, waiter->waiter_slot)) {
@@ -288,9 +324,7 @@ asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphor
         sem_waiter_retire(s, w);
         /* Permits left over belong to the parked waiters behind us. */
         sem_dispatch_parked(s);
-        out->sem_slot = waiter->sem_slot;
-        out->generation = waiter->generation;
-        return ASX_OK;
+        return sem_hand_out(s, waiter, out, cx);
     }
 
     /* Wait for a release; inside a scheduler poll, park until granted. */
@@ -318,12 +352,26 @@ asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter) {
 /* Release                                                             */
 /* ------------------------------------------------------------------ */
 
+/* Commit the permit's obligation, if it has one. Rust's permit drop
+ * commits even when the semaphore is gone (sync/semaphore.rs:1274); a
+ * permit whose task already completed was reported leaked and the commit
+ * is refused harmlessly. */
+static void sem_commit_obligation(const asx_semaphore_permit *permit) {
+    asx_status st;
+    if (permit->obligation == ASX_INVALID_ID) return;
+    st = asx_obligation_commit(permit->obligation);
+    (void)st; /* refused only for an obligation already reported leaked */
+}
+
 asx_status asx_semaphore_release(asx_semaphore_permit permit) {
     sem_slot *s;
     uint32_t i;
     if (permit.sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[permit.sem_slot];
-    if (!s->alive || s->generation != permit.generation) return ASX_E_STALE_HANDLE;
+    if (!s->alive || s->generation != permit.generation) {
+        sem_commit_obligation(&permit);
+        return ASX_E_STALE_HANDLE;
+    }
 
     /* FIFO: grant the permit to the oldest waiter still in line */
     sem_reap(s);
@@ -331,12 +379,12 @@ asx_status asx_semaphore_release(asx_semaphore_permit permit) {
     if (i != SEM_NO_WAITER) {
         sem_grant(&s->waiters[i]);
         sem_dispatch_parked(s); /* permits a reap returned */
-        return ASX_OK;
+    } else {
+        /* No waiters, return permit to pool */
+        s->permits++;
+        sem_dispatch_parked(s);
     }
-
-    /* No waiters, return permit to pool */
-    s->permits++;
-    sem_dispatch_parked(s);
+    sem_commit_obligation(&permit);
     return ASX_OK;
 }
 

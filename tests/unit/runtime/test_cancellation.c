@@ -956,7 +956,7 @@ TEST(region_cancel_of_an_idle_region_finalizes_at_once) {
     ASSERT_EQ(asx_region_cancel(rid, NULL, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(cancel_strengthen_replaces_the_whole_reason_and_records_one_request) {
+TEST(cancel_strengthen_replaces_the_whole_reason_and_records_no_event) {
     asx_region_id rid;
     asx_task_id tid;
     asx_cancel_reason got;
@@ -976,9 +976,36 @@ TEST(cancel_strengthen_replaces_the_whole_reason_and_records_one_request) {
     ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_SHUTDOWN);
     ASSERT_EQ(got.timestamp, (asx_time)20u);
     ASSERT_STR_EQ(got.message, "stop");
-    /* A weaker request leaves it unchanged; only the first request is an
-     * event (Rust has no strengthen event). */
+    /* A weaker request leaves it unchanged. A direct task cancel records no
+     * request event (Rust RuntimeState::cancel_task, state.rs:3429), and
+     * there is no strengthen event (:7794). */
     ASSERT_EQ(asx_task_cancel_with_reason(tid, &weak), ASX_OK);
+    ASSERT_EQ(asx_task_get_cancel_reason(tid, &got), ASX_OK);
+    ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_SHUTDOWN);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)0u);
+}
+
+TEST(region_cancel_records_one_request_per_newly_cancelled_task) {
+    /* Rust records CancelRequest when a region cancel newly cancels a task
+     * (cancel_request, state.rs:7864); strengthening it afterwards, by a
+     * region or a direct cancel, records nothing more. */
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_cancel_reason got;
+    asx_cancel_reason weak;
+    asx_cancel_reason strong;
+    uint32_t reached = 0;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    weak = test_reason(ASX_CANCEL_USER, rid, 10u, NULL);
+    strong = test_reason(ASX_CANCEL_SHUTDOWN, rid, 20u, "stop");
+    ASSERT_EQ(asx_region_cancel(rid, &weak, &reached), ASX_OK);
+    ASSERT_EQ(reached, 1u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)1u);
+    ASSERT_EQ(asx_task_cancel_with_reason(tid, &strong), ASX_OK);
+    ASSERT_EQ(asx_region_cancel(rid, &strong, &reached), ASX_OK);
     ASSERT_EQ(asx_task_get_cancel_reason(tid, &got), ASX_OK);
     ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_SHUTDOWN);
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)1u);
@@ -1060,7 +1087,8 @@ int main(void) {
     RUN_TEST(checkpoint_observes_budget_deadline_inline);
     RUN_TEST(region_cancel_closes_subtree_and_chains_parent_reasons);
     RUN_TEST(region_cancel_of_an_idle_region_finalizes_at_once);
-    RUN_TEST(cancel_strengthen_replaces_the_whole_reason_and_records_one_request);
+    RUN_TEST(cancel_strengthen_replaces_the_whole_reason_and_records_no_event);
+    RUN_TEST(region_cancel_records_one_request_per_newly_cancelled_task);
     RUN_TEST(budget_cancel_is_attributed_to_the_task_and_records_no_request);
     RUN_TEST(obligation_abort_with_reason_records_it);
 

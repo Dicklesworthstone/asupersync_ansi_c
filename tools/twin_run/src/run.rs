@@ -4,16 +4,18 @@
 //!
 //! Increment 1 implements the driver (setup, script, finish), the control,
 //! masking, obligation, spawn/join and child-region steps, trace projection
-//! and the snapshot. Channel, sync, group and actor steps are not yet
-//! interpreted: a scenario that uses one fails as a harness error, never
-//! silently.
+//! and the snapshot; increment 2 adds the sync (mutex, semaphore, barrier,
+//! notify) and mpsc steps. Oneshot, broadcast and watch channels, group and
+//! actor steps are not yet interpreted: a scenario that uses one fails as a
+//! harness error, never silently.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use asupersync::channel::mpsc;
 use asupersync::cx::{ChildRegion, ChildRegionSpec};
 use asupersync::lab::{LabConfig, LabRuntime};
 use asupersync::record::task::TaskState;
@@ -320,22 +322,105 @@ fn harness_error(shared: &SharedRef, msg: String) {
 // ---------------------------------------------------------------------------
 
 /// Per-task interpreter state that never leaves the task.
+///
+/// It is dropped when the task body ends (returns, is cancelled or panics),
+/// fields in declaration order, and what it still holds is released then,
+/// as a Rust body releases its locals: guards and permits are ordered maps
+/// so that release order (by name, a name's permits oldest first) is
+/// deterministic and the C interpreter can mirror it.
 #[derive(Default)]
 struct Local {
     tokens: HashMap<String, ObligationToken>,
     regions: HashMap<String, ChildRegion>,
     timers: u32,
     /// Held mutex guards and semaphore permits, by object name (DSL §3.7).
-    guards: HashMap<String, asx_sync::MutexGuard<'static, ()>>,
-    permits: HashMap<String, Vec<asx_sync::SemaphorePermit<'static>>>,
+    /// Guards are owned: a borrowed `MutexGuard` is not `Send` (sync/
+    /// mutex.rs:708) and a task body is; the owned lock acquires through the
+    /// same path (`OwnedMutexGuard::lock`, :913).
+    guards: BTreeMap<String, asx_sync::OwnedMutexGuard<()>>,
+    permits: BTreeMap<String, Vec<asx_sync::SemaphorePermit<'static>>>,
+    /// Held mpsc send permits by permit name, with their channel (DSL
+    /// §3.6). Declared before `cx` and `mpsc_tx` so they drop first: each
+    /// borrows its channel's sender and the Cx it was reserved with
+    /// (`Reserve<'a>` ties both to the permit, `channel/mpsc.rs:951`).
+    send_permits: BTreeMap<String, (String, mpsc::SendPermit<'static, u64>)>,
+    /// A clone of the task's Cx for permits to borrow (`lend`).
+    cx: Option<Box<Cx>>,
+    /// The channel endpoints this task owns, by channel name (DSL §3.6).
+    mpsc_tx: BTreeMap<String, Box<mpsc::Sender<u64>>>,
+    mpsc_rx: BTreeMap<String, mpsc::Receiver<u64>>,
 }
 
-/// A declared sync object (DSL §3.7). Each is leaked for the capture's
-/// lifetime, one allocation per declaration, so guards and permits can be
-/// held across steps the way a task body holds them across awaits.
-#[derive(Clone, Copy)]
+/// A channel endpoint, moved into its owner's body at setup (DSL §3.6).
+enum Endpoint {
+    MpscTx(mpsc::Sender<u64>),
+    MpscRx(mpsc::Receiver<u64>),
+}
+
+impl Local {
+    fn adopt(&mut self, channel: String, endpoint: Endpoint) {
+        match endpoint {
+            Endpoint::MpscTx(tx) => {
+                self.mpsc_tx.insert(channel, Box::new(tx));
+            }
+            Endpoint::MpscRx(rx) => {
+                self.mpsc_rx.insert(channel, rx);
+            }
+        }
+    }
+
+    /// `'static` borrows of this task's sender on `channel` and of its Cx,
+    /// so that a permit reserved with them can be held across steps, as a
+    /// Rust body holds one across awaits.
+    fn lend(&self, channel: &str) -> RunResult<(&'static mpsc::Sender<u64>, &'static Cx)> {
+        let tx = self
+            .mpsc_tx
+            .get(channel)
+            .ok_or_else(|| format!("this task does not own the sender of {channel:?}"))?;
+        let cx = self.cx.as_ref().ok_or("task Cx not anchored")?;
+        let tx: *const mpsc::Sender<u64> = &**tx;
+        let cx: *const Cx = &**cx;
+        // SAFETY: both are boxed, so their addresses do not move with the
+        // `Local`. The sender box is freed only by `close_sender`, which
+        // first requires that no permit on the channel is held; the Cx box
+        // is never replaced; and when `Local` drops, `send_permits` goes
+        // first (fields drop in declaration order). A borrow taken for a
+        // `send` or `reserve` future lives within one step, and the steps
+        // of a task never overlap.
+        Ok(unsafe { (&*tx, &*cx) })
+    }
+
+    fn receiver(&mut self, channel: &str) -> RunResult<&mut mpsc::Receiver<u64>> {
+        self.mpsc_rx
+            .get_mut(channel)
+            .ok_or_else(|| format!("this task does not own the receiver of {channel:?}"))
+    }
+}
+
+// Channel errors onto C statuses (vocabulary §5).
+fn send_error_status<T>(err: &mpsc::SendError<T>) -> &'static str {
+    match err {
+        mpsc::SendError::Disconnected(_) => "ASX_E_DISCONNECTED",
+        mpsc::SendError::Cancelled(_) => "ASX_E_CANCELLED",
+        mpsc::SendError::Full(_) => "ASX_E_CHANNEL_FULL",
+    }
+}
+
+fn recv_error_status(err: mpsc::RecvError) -> &'static str {
+    match err {
+        mpsc::RecvError::Disconnected => "ASX_E_DISCONNECTED",
+        mpsc::RecvError::Cancelled => "ASX_E_CANCELLED",
+        mpsc::RecvError::Empty => "ASX_E_CHANNEL_EMPTY",
+    }
+}
+
+/// A declared sync object (DSL §3.7). Each but the mutex is leaked for the
+/// capture's lifetime, one allocation per declaration, so permits can be
+/// held across steps the way a task body holds them across awaits; the
+/// mutex is shared for its owned guards.
+#[derive(Clone)]
 enum SyncObj {
-    Mutex(&'static asx_sync::Mutex<()>),
+    Mutex(Arc<asx_sync::Mutex<()>>),
     Semaphore(&'static asx_sync::Semaphore),
     Barrier(&'static asx_sync::Barrier),
     Notify(&'static asx_sync::Notify),
@@ -346,7 +431,7 @@ fn sync_obj(shared: &SharedRef, step: &Value, field: &str) -> RunResult<SyncObj>
     lock(shared)
         .sync
         .get(name)
-        .copied()
+        .cloned()
         .ok_or_else(|| format!("unknown sync object {name:?}"))
 }
 
@@ -392,9 +477,16 @@ fn run_program(
     cx: Cx,
     ctx: Arc<TaskCtx>,
     steps: Vec<Value>,
+    endpoints: Vec<(String, Endpoint)>,
 ) -> Pin<Box<dyn Future<Output = Body> + Send>> {
     Box::pin(async move {
-        let mut local = Local::default();
+        let mut local = Local {
+            cx: Some(Box::new(cx.clone())),
+            ..Local::default()
+        };
+        for (channel, endpoint) in endpoints {
+            local.adopt(channel, endpoint);
+        }
         for (i, step) in steps.iter().enumerate() {
             match exec_step(&cx, &ctx, &mut local, i + 1, step).await {
                 Ok(Flow::Continue) => {}
@@ -499,7 +591,7 @@ fn exec_sync(
                 me: child.clone(),
                 region: child_region,
             });
-            let factory = move |ccx: Cx| run_program(ccx, child_ctx, program);
+            let factory = move |ccx: Cx| run_program(ccx, child_ctx, program, Vec::new());
             let spawned = if let Some(r) = step.get("region").and_then(Value::as_str) {
                 let region = local
                     .regions
@@ -607,9 +699,73 @@ fn exec_sync(
             }
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
+        // Non-blocking mpsc steps (DSL §3.6).
+        "permit_send" | "permit_abort" => {
+            let name = str_field(step, "permit")?;
+            let (_, permit) = local
+                .send_permits
+                .remove(name)
+                .ok_or_else(|| format!("no held permit {name:?}"))?;
+            let status = if op == "permit_send" {
+                match permit.send(u64_field(step, "value")?) {
+                    asupersync::Outcome::Ok(()) => "ASX_OK",
+                    asupersync::Outcome::Err(e) => send_error_status(&e),
+                    other => return Err(format!("permit send outcome {other:?}")),
+                }
+            } else {
+                permit.abort();
+                "ASX_OK"
+            };
+            observe(&ctx.shared, me, idx, label, status, Value::Null);
+        }
+        "try_send" => {
+            let (tx, _) = local.lend(str_field(step, "channel")?)?;
+            let status = match tx.try_send(u64_field(step, "value")?) {
+                Ok(()) => "ASX_OK",
+                Err(e) => send_error_status(&e),
+            };
+            observe(&ctx.shared, me, idx, label, status, Value::Null);
+        }
+        "try_recv" => {
+            let rx = local.receiver(str_field(step, "channel")?)?;
+            match rx.try_recv() {
+                Ok(v) => observe(&ctx.shared, me, idx, label, "ASX_OK", json!(v)),
+                Err(e) => observe(
+                    &ctx.shared,
+                    me,
+                    idx,
+                    label,
+                    recv_error_status(e),
+                    Value::Null,
+                ),
+            }
+        }
+        "close_sender" => {
+            let ch = str_field(step, "channel")?;
+            if local.send_permits.values().any(|(c, _)| c == ch) {
+                return Err(format!(
+                    "close_sender on {ch:?} while holding one of its permits (a Rust body cannot drop a borrowed sender)"
+                ));
+            }
+            let tx = local
+                .mpsc_tx
+                .remove(ch)
+                .ok_or_else(|| format!("this task does not own the sender of {ch:?}"))?;
+            drop(tx);
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
+        "close_receiver" => {
+            let ch = str_field(step, "channel")?;
+            let rx = local
+                .mpsc_rx
+                .remove(ch)
+                .ok_or_else(|| format!("this task does not own the receiver of {ch:?}"))?;
+            drop(rx);
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
         other => {
             return Err(format!(
-                "op {other:?} is not interpreted yet (increment 2b)"
+                "op {other:?} is not interpreted yet (increment 2c)"
             ));
         }
     }
@@ -682,13 +838,45 @@ async fn exec_step(
     let op = str_field(step, "op")?;
     let me = ctx.me.as_str();
     match op {
+        // Blocking mpsc steps (DSL §3.6).
+        "reserve_send" => {
+            let ch = str_field(step, "channel")?.to_string();
+            let name = str_field(step, "as")?.to_string();
+            // The lent Cx is a clone of `cx`: the same task and state.
+            let (tx, lent_cx) = local.lend(&ch)?;
+            let status = match tx.reserve(lent_cx).await {
+                Ok(permit) => {
+                    if local.send_permits.insert(name, (ch, permit)).is_some() {
+                        return Err("reserve_send reuses a held permit name".to_string());
+                    }
+                    "ASX_OK"
+                }
+                Err(e) => send_error_status(&e),
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "send" => {
+            let (tx, _) = local.lend(str_field(step, "channel")?)?;
+            let status = match tx.send(cx, u64_field(step, "value")?).await {
+                Ok(()) => "ASX_OK",
+                Err(e) => send_error_status(&e),
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "recv" => {
+            let rx = local.receiver(str_field(step, "channel")?)?;
+            match rx.recv(cx).await {
+                Ok(v) => observe(&ctx.shared, me, idx, op, "ASX_OK", json!(v)),
+                Err(e) => observe(&ctx.shared, me, idx, op, recv_error_status(e), Value::Null),
+            }
+        }
         // Blocking sync steps (DSL §3.7).
         "mutex_lock" => {
             let name = str_field(step, "mutex")?.to_string();
             let SyncObj::Mutex(m) = sync_obj(&ctx.shared, step, "mutex")? else {
                 return Err(format!("{name:?} is not a mutex"));
             };
-            let status = match m.lock(cx).await {
+            let status = match asx_sync::OwnedMutexGuard::lock(m, cx).await {
                 Ok(guard) => {
                     local.guards.insert(name, guard);
                     "ASX_OK"
@@ -891,12 +1079,35 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
         .map_err(|e| format!("{e:?}"))?;
     let shared: SharedRef = Arc::new(Mutex::new(Shared::default()));
 
-    if scenario
+    // Channels (DSL §3.6): each endpoint goes to its owner's body.
+    let mut endpoints: HashMap<String, Vec<(String, Endpoint)>> = HashMap::new();
+    for decl in scenario
         .get("channels")
         .and_then(Value::as_array)
-        .is_some_and(|a| !a.is_empty())
+        .into_iter()
+        .flatten()
     {
-        return Err("channel declarations are not interpreted yet (increment 2b)".to_string());
+        let name = str_field(decl, "name")?.to_string();
+        match str_field(decl, "type")? {
+            "mpsc" => {
+                let capacity = usize::try_from(u64_field(decl, "capacity")?)
+                    .map_err(|_| "capacity out of range")?;
+                let (tx, rx) = mpsc::channel::<u64>(capacity);
+                endpoints
+                    .entry(str_field(decl, "sender")?.to_string())
+                    .or_default()
+                    .push((name.clone(), Endpoint::MpscTx(tx)));
+                endpoints
+                    .entry(str_field(decl, "receiver")?.to_string())
+                    .or_default()
+                    .push((name, Endpoint::MpscRx(rx)));
+            }
+            other => {
+                return Err(format!(
+                    "{other} channels are not interpreted yet (increment 2c)"
+                ));
+            }
+        }
     }
     // Sync objects (DSL §3.7), leaked for the capture's lifetime.
     for decl in scenario
@@ -910,7 +1121,7 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
             usize::try_from(u64_field(decl, field)?).map_err(|_| format!("{field} out of range"))
         };
         let obj = match str_field(decl, "type")? {
-            "mutex" => SyncObj::Mutex(Box::leak(Box::new(asx_sync::Mutex::new(())))),
+            "mutex" => SyncObj::Mutex(Arc::new(asx_sync::Mutex::new(()))),
             "semaphore" => SyncObj::Semaphore(Box::leak(Box::new(asx_sync::Semaphore::new(
                 count("permits")?,
             )))),
@@ -979,9 +1190,10 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
             me: name.clone(),
             region,
         });
+        let mine = endpoints.remove(&name).unwrap_or_default();
         let body = async move {
             match Cx::current() {
-                Some(cx) => run_program(cx, ctx, program).await,
+                Some(cx) => run_program(cx, ctx, program, mine).await,
                 None => {
                     harness_error(&ctx.shared, format!("task {}: no Cx", ctx.me));
                     Body::Err("ASX_E_INVALID_STATE".to_string())
@@ -997,6 +1209,12 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
         s.task_ids.insert(name.clone(), task_id);
         s.task_names.insert(task_id, name.clone());
         s.handles.insert(name, handle);
+    }
+
+    if let Some(owner) = endpoints.keys().next() {
+        return Err(format!(
+            "channel endpoint owner {owner:?} is not a declared top-level task"
+        ));
     }
 
     // Script: at each entry, run to idle, advance time, apply the op.
