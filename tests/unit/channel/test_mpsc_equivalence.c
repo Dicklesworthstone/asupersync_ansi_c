@@ -567,48 +567,53 @@ static uint64_t rdtsc_val(void) {
 TEST(throughput_comparison) {
 #if HAS_RDTSC
     uint32_t cap = 64;
-    uint32_t rounds = 1000;
-    uint32_t r, i;
-    uint64_t baseline_start, baseline_end;
-    uint64_t spike_start, spike_end;
+    uint32_t batches = 10;
+    uint32_t rounds = 100;
+    uint32_t b, r, i;
+    uint64_t start, end;
     asx_channel_id cid;
     spike_queue sq;
-    uint64_t ops, baseline_cycles, spike_cycles;
+    uint64_t ops;
+    uint64_t baseline_cycles = UINT64_MAX, spike_cycles = UINT64_MAX;
 
     eq_setup();
 
     EQ_IGNORE(asx_channel_create(g_rid, cap, &cid));
-
-    /* Baseline throughput: reserve+send+recv cycle */
-    baseline_start = rdtsc_val();
-    for (r = 0; r < rounds; r++) {
-        for (i = 0; i < cap; i++) {
-            asx_send_permit p;
-            EQ_IGNORE(asx_channel_try_reserve(cid, &p));
-            EQ_IGNORE(asx_send_permit_send(&p, (uint64_t)i));
-        }
-        for (i = 0; i < cap; i++) {
-            uint64_t val;
-            EQ_IGNORE(asx_channel_try_recv(cid, &val));
-        }
-    }
-    baseline_end = rdtsc_val();
-
-    /* Spike throughput: enqueue+dequeue cycle */
     spike_init(&sq, cap);
-    spike_start = rdtsc_val();
-    for (r = 0; r < rounds; r++) {
-        for (i = 0; i < cap; i++) { EQ_IGNORE(spike_enqueue(&sq, (uint64_t)i)); }
-        for (i = 0; i < cap; i++) {
-            uint64_t val;
-            EQ_IGNORE(spike_dequeue(&sq, &val));
+
+    /* Each side's fastest of `batches` interleaved batches, so a preemption
+     * during one batch is not counted against either side. */
+    for (b = 0; b < batches; b++) {
+        /* Baseline throughput: reserve+send+recv cycle */
+        start = rdtsc_val();
+        for (r = 0; r < rounds; r++) {
+            for (i = 0; i < cap; i++) {
+                asx_send_permit p;
+                EQ_IGNORE(asx_channel_try_reserve(cid, &p));
+                EQ_IGNORE(asx_send_permit_send(&p, (uint64_t)i));
+            }
+            for (i = 0; i < cap; i++) {
+                uint64_t val;
+                EQ_IGNORE(asx_channel_try_recv(cid, &val));
+            }
         }
+        end = rdtsc_val();
+        if (end - start < baseline_cycles) baseline_cycles = end - start;
+
+        /* Spike throughput: enqueue+dequeue cycle */
+        start = rdtsc_val();
+        for (r = 0; r < rounds; r++) {
+            for (i = 0; i < cap; i++) { EQ_IGNORE(spike_enqueue(&sq, (uint64_t)i)); }
+            for (i = 0; i < cap; i++) {
+                uint64_t val;
+                EQ_IGNORE(spike_dequeue(&sq, &val));
+            }
+        }
+        end = rdtsc_val();
+        if (end - start < spike_cycles) spike_cycles = end - start;
     }
-    spike_end = rdtsc_val();
 
     ops = (uint64_t)rounds * cap * 2u;
-    baseline_cycles = baseline_end - baseline_start;
-    spike_cycles = spike_end - spike_start;
 
     fprintf(stderr, "    baseline: %.1f cycles/op (%lu ops)\n",
             (double)baseline_cycles / (double)ops, (unsigned long)ops);
@@ -618,7 +623,9 @@ TEST(throughput_comparison) {
             (double)spike_cycles / (double)baseline_cycles);
 
     /* Spike should not be more than 3x slower (sanity) */
+#if !ASX_TEST_SANITIZED
     ASSERT_TRUE(spike_cycles < baseline_cycles * 3);
+#endif
 #else
     /* No rdtsc on this platform — pass vacuously */
     (void)0;

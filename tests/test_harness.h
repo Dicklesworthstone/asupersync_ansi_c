@@ -33,6 +33,19 @@
 #include <stdio.h>
 #include <string.h>
 
+/* 1 in ASan/TSan builds. Their instrumentation changes the cost model, so
+ * tests check timing bounds only when this is 0; the timed code still runs. */
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define ASX_TEST_SANITIZED 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define ASX_TEST_SANITIZED 1
+#endif
+#endif
+#ifndef ASX_TEST_SANITIZED
+#define ASX_TEST_SANITIZED 0
+#endif
+
 static int test_count = 0;
 static int test_failures = 0;
 static int test_skipped = 0;
