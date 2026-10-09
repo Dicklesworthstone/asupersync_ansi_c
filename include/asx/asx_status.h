@@ -126,6 +126,15 @@ typedef enum {
 /* Returns a human-readable string for a status code. Never returns NULL. */
 ASX_API ASX_MUST_USE const char *asx_status_str(asx_status s);
 
+/* Returns the enumerator name of a status code ("ASX_E_REGION_CLOSED"), the
+ * encoding the conformance vocabulary uses, or NULL for a value that is not
+ * an asx_status enumerator. */
+ASX_API ASX_MUST_USE const char *asx_status_name(asx_status s);
+
+/* Parses an enumerator name produced by asx_status_name(). Returns 1 and
+ * sets *out on a match, 0 otherwise (out may not be NULL). */
+ASX_API ASX_MUST_USE int asx_status_from_name(const char *name, asx_status *out);
+
 /* Returns nonzero if the status represents an error. */
 static inline int asx_is_error(asx_status s) { return s != ASX_OK; }
 
