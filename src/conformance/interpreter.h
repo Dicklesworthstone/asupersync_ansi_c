@@ -17,7 +17,9 @@
 /* Run the scenario object `scenario` of `in` and build the projection in
  * `out` as an object with the fields an asx.fixture.v2 file carries for
  * comparison: "scenario_id", "trace" (Foata layers), "snapshot",
- * "observations", "trace_digest", "snapshot_digest" and "semantic_digest".
+ * "observations", "dispatches" (the lab's dispatch order, compared with the
+ * fixture's "schedule"."dispatches"), "trace_digest", "snapshot_digest" and
+ * "semantic_digest".
  *
  * Fails closed: an op the interpreter or the C runtime cannot express, a
  * runtime event it cannot project, an exhausted max_steps budget, or a

@@ -47,6 +47,7 @@
 #define IT_MAX_REGIONS (ASX_MAX_REGIONS + 1u)
 #define IT_MAX_LOCAL 16u
 #define IT_MAX_EVENTS 4096u
+#define IT_MAX_DISPATCHES 16384u
 #define IT_TEXT_CAP (64u * 1024u)
 #define IT_MAX_OBLIGATION_NAMES 512u
 
@@ -71,6 +72,7 @@ typedef struct {
     asx_task_id id;
     int spawned;           /* asx_task_spawn succeeded */
     asx_status refused;    /* why asx_task_spawn failed (ASX_OK if it did not) */
+    uint32_t refusal;      /* its lab refusal ticket (asx_task_await_refusal) */
     uint32_t program;      /* array node in the scenario document */
     uint32_t pc;           /* 0-based index of the current step */
     uint32_t phase;        /* suspension state of the current step */
@@ -225,6 +227,9 @@ static uint32_t g_n_channels;
 
 static it_event g_events[IT_MAX_EVENTS];
 static uint32_t g_n_events;
+
+/* The lab's dispatches (asx_scheduler_record_dispatches). */
+static asx_dispatch_record g_dispatches[IT_MAX_DISPATCHES];
 static char g_text[IT_TEXT_CAP];
 static uint32_t g_text_used;
 
@@ -1636,6 +1641,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             (void)asx_cx_init(&child->cx, child->region, id, ASX_CAP_CANCEL_CHECK);
         } else {
             child->refused = st;
+            child->refusal = asx_scheduler_last_spawn_refusal();
         }
         observe_status(t, idx, label, st);
         return STEP_NEXT;
@@ -1819,6 +1825,14 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         it_task *target = task_by_name(it_str(step, "task"));
         asx_outcome ignored;
         if (target != NULL && target->refused != ASX_OK) {
+            /* Rust's join of a child its region refused resolves when the
+             * next step's admission refuses it. */
+            st = asx_task_await_refusal(self, target->refusal);
+            if (st == ASX_E_PENDING) return STEP_PENDING;
+            if (st != ASX_OK) {
+                it_fail_task(t, idx, "asx_task_await_refusal failed");
+                return STEP_END;
+            }
             observe_status(t, idx, op, target->refused);
             return STEP_NEXT;
         }
@@ -2154,6 +2168,27 @@ static const char *task_name_of(asx_task_id id) {
         return "";
     }
     return t->name;
+}
+
+/* The lab's dispatches in order, one "<step>@<ns> <task> <lane>" string
+ * each, as twin_run writes Rust's forced-schedule dispatches (bd-9kll.4.8). */
+static uint32_t project_dispatches(void) {
+    uint32_t list = asx_json_new_array(g_out);
+    uint32_t n = asx_scheduler_dispatches_recorded();
+    uint32_t i;
+    char buf[192];
+    if (n > IT_MAX_DISPATCHES) {
+        it_fail("more lab dispatches than the recorder holds", NULL);
+        return list;
+    }
+    for (i = 0; i < n && !g_failed; i++) {
+        const asx_dispatch_record *d = &g_dispatches[i];
+        (void)snprintf(buf, sizeof(buf), "%llu@%llu %s %s", (unsigned long long)d->step,
+                       (unsigned long long)d->at, task_name_of(d->task),
+                       d->lane == ASX_DISPATCH_LANE_CANCEL ? "cancel" : "ready");
+        asx_json_push(g_out, list, asx_json_new_string(g_out, buf));
+    }
+    return list;
 }
 
 /* Project the captured runtime events, in emission order, and collect the
@@ -2588,6 +2623,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     uint32_t trace = ASX_JSON_NONE;
     uint32_t snapshot;
     uint32_t observations;
+    uint32_t dispatches;
     uint32_t result;
     uint32_t semantic;
     const char *schema;
@@ -2633,6 +2669,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
         it_fail("runtime init failed", NULL);
         return st;
     }
+    asx_scheduler_record_dispatches(g_dispatches, IT_MAX_DISPATCHES);
     asx_trace_set_observer(it_observe, NULL);
     g_observations = asx_json_new_array(out);
 
@@ -2756,6 +2793,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     }
     snapshot = build_snapshot(obligations);
     observations = sorted_observations();
+    dispatches = project_dispatches();
     if (!g_failed) check_expectation(scenario, observations);
     if (g_failed) return ASX_E_INVALID_STATE;
 
@@ -2771,6 +2809,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     asx_json_set(out, result, "trace", trace);
     asx_json_set(out, result, "snapshot", snapshot);
     asx_json_set(out, result, "observations", observations);
+    asx_json_set(out, result, "dispatches", dispatches);
     set_digest(result, "trace_digest", trace);
     set_digest(result, "snapshot_digest", snapshot);
     set_digest(result, "semantic_digest", semantic);

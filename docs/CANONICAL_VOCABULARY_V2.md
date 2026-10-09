@@ -428,6 +428,18 @@ of the named events instead.
 Two runs agree in mode (a) iff their `snapshot_digest`s and observations
 match. They agree in mode (b) iff their `semantic_digest`s match.
 
+**Dispatch order.**
+- A fixture's `schedule.dispatches` lists the lab's dispatches in order,
+  one `"<step>@<ns> <task> <lane>"` string each; `lane` is `cancel` or
+  `ready`.
+- It comes from Rust's forced-schedule recorder (`ForcedDispatch`,
+  `lab/runtime.rs:131-137`).
+- `asx-conformance compare` requires C's list to match, because the
+  canonical trace drops the order of independent events: two runs can
+  agree on the trace and still have polled their tasks differently
+  (bd-9kll.4.8).
+- It is part of no digest.
+
 ## 10. Versioning
 
 The vocabulary id is `asx.vocab.v2`. Any change to kinds, fields, footprints,

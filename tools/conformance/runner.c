@@ -6,9 +6,10 @@
  *       Print the C run's projection (canonical JSON) to stdout.
  *   asx-conformance compare <fixture.json>...
  *       Execute each asx.fixture.v2 file's embedded scenario through the C
- *       runtime and compare trace, snapshot and observations with the Rust
- *       capture, canonical byte for byte. Prints PASS/FAIL/ERROR per fixture
- *       and the first differences; exits 1 unless every fixture passes.
+ *       runtime and compare trace, snapshot, observations and the lab's
+ *       dispatch order with the Rust capture, canonical byte for byte.
+ *       Prints PASS/FAIL/ERROR per fixture and the first differences; exits
+ *       1 unless every fixture passes.
  *   asx-conformance self-test <fixture.json>
  *       Negative control: compare against the fixture with one expected
  *       trace event corrupted in memory. Exits 0 only if that is reported
@@ -134,6 +135,33 @@ static int same_part(uint32_t want, uint32_t got) {
     return strcmp(g_a, g_b) == 0;
 }
 
+static const char *dispatch_at(const asx_json_doc *doc, uint32_t list, uint32_t i) {
+    uint32_t item = asx_json_item(doc, list, i);
+    return item != ASX_JSON_NONE ? asx_json_string(doc, item) : NULL;
+}
+
+/* Report the first dispatch that differs, with three on either side. */
+static void diff_dispatches(uint32_t want, uint32_t got) {
+    uint32_t nw = asx_json_count(&g_fixture, want);
+    uint32_t ng = asx_json_count(&g_run, got);
+    uint32_t i;
+    uint32_t k;
+    for (i = 0; i < nw && i < ng; i++) {
+        const char *w = dispatch_at(&g_fixture, want, i);
+        const char *g = dispatch_at(&g_run, got, i);
+        if (w == NULL || g == NULL || strcmp(w, g) != 0) break;
+    }
+    fprintf(stdout, "    dispatch %u differs (rust has %u, c has %u)\n", (unsigned)i, (unsigned)nw,
+            (unsigned)ng);
+    fprintf(stdout, "        %-30s %s\n", "rust", "c");
+    for (k = i >= 3u ? i - 3u : 0u; k < i + 4u && (k < nw || k < ng); k++) {
+        const char *w = dispatch_at(&g_fixture, want, k);
+        const char *g = dispatch_at(&g_run, got, k);
+        fprintf(stdout, "      %c %-30s %s\n", k == i ? '>' : ' ', w != NULL ? w : "-",
+                g != NULL ? g : "-");
+    }
+}
+
 typedef enum { CMP_PASS, CMP_FAIL, CMP_ERROR } cmp_result;
 
 /* Run one fixture's scenario through C and compare. `mutate` corrupts the
@@ -145,6 +173,8 @@ static cmp_result compare_one(const char *path, int mutate) {
     uint32_t want_trace;
     uint32_t want_snapshot;
     uint32_t want_obs;
+    uint32_t schedule;
+    uint32_t want_dispatches = ASX_JSON_NONE;
     const char *id;
     const char *schema;
     asx_status st;
@@ -157,12 +187,17 @@ static cmp_result compare_one(const char *path, int mutate) {
     want_trace = asx_json_get(&g_fixture, root, "trace");
     want_snapshot = asx_json_get(&g_fixture, root, "snapshot");
     want_obs = asx_json_get(&g_fixture, root, "observations");
+    schedule = asx_json_get(&g_fixture, root, "schedule");
+    if (schedule != ASX_JSON_NONE) {
+        want_dispatches = asx_json_get(&g_fixture, schedule, "dispatches");
+    }
     if (schema == NULL || strcmp(schema, "asx.fixture.v2") != 0 || id == NULL ||
         scenario == ASX_JSON_NONE || want_trace == ASX_JSON_NONE ||
-        want_snapshot == ASX_JSON_NONE || want_obs == ASX_JSON_NONE) {
+        want_snapshot == ASX_JSON_NONE || want_obs == ASX_JSON_NONE ||
+        want_dispatches == ASX_JSON_NONE) {
         fprintf(stdout,
-                "ERROR %s: not an asx.fixture.v2 file with scenario, trace, snapshot and "
-                "observations\n",
+                "ERROR %s: not an asx.fixture.v2 file with scenario, trace, snapshot, "
+                "observations and schedule.dispatches\n",
                 path);
         return CMP_ERROR;
     }
@@ -218,6 +253,14 @@ static cmp_result compare_one(const char *path, int mutate) {
         if (ok) fprintf(stdout, "FAIL %s: observations\n", id);
         ok = 0;
         (void)diff_items("observations", want_obs, asx_json_get(&g_run, run, "observations"));
+    }
+    /* The lab's dispatch order (bd-9kll.4.8): the canonical trace forgets
+     * the order of independent events, so two runs can agree on it and
+     * still have polled tasks differently. */
+    if (!same_part(want_dispatches, asx_json_get(&g_run, run, "dispatches"))) {
+        if (ok) fprintf(stdout, "FAIL %s: dispatches\n", id);
+        ok = 0;
+        diff_dispatches(want_dispatches, asx_json_get(&g_run, run, "dispatches"));
     }
     if (ok) {
         fprintf(stdout, "PASS %s %s\n", id, asx_json_get_string(&g_run, run, "semantic_digest"));

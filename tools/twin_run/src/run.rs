@@ -25,7 +25,7 @@ use asupersync::record::{ObligationAbortReason, ObligationKind};
 use asupersync::runtime::obligation_mailbox::ObligationToken;
 use asupersync::runtime::{JoinError, TaskHandle};
 use asupersync::sync as asx_sync;
-use asupersync::trace::{TraceData, TraceEventKind};
+use asupersync::trace::{CompactTaskId, TraceData, TraceEventKind};
 use asupersync::{Budget, CancelKind, CancelReason, Cx, RegionId, TaskId, Time};
 use serde_json::{Value, json};
 
@@ -1820,6 +1820,31 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
     resolve_admissions(&lab, &shared)?;
     project_denied_spawns(&mut lock(&shared))?;
     finish_outcomes(&mut lock(&shared))?;
+
+    // The lab's dispatches in order, one "<step>@<ns> <task> <lane>" string
+    // each; asx-conformance compares C's with them (bd-9kll.4.8).
+    let dispatches = {
+        let s = lock(&shared);
+        let names: HashMap<u64, &String> = s
+            .task_names
+            .iter()
+            .map(|(id, name)| (CompactTaskId::from(*id).0, name))
+            .collect();
+        schedule
+            .dispatches()
+            .iter()
+            .map(|d| {
+                let name = names.get(&d.task().0).ok_or_else(|| {
+                    format!(
+                        "dispatch of unnamed task {:?} (harness defect)",
+                        d.task().unpack()
+                    )
+                })?;
+                let lane = format!("{:?}", d.lane()).to_lowercase();
+                Ok(Value::String(format!("{}@{} {name} {lane}", d.at_step(), d.at_nanos())))
+            })
+            .collect::<RunResult<Vec<Value>>>()?
+    };
     let events = project_trace(&lab, &shared)?;
     let trace = canon::canonical_trace(&events.events)?;
     let snapshot = build_snapshot(&lab, &shared, &events)?;
@@ -1855,6 +1880,7 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
             "certificate_hash": format!("{:016x}", lab.certificate().hash()),
             "decisions": lab.certificate().decisions(),
             "forced_schedule": forced_schedule,
+            "dispatches": dispatches,
         },
     }))
 }

@@ -371,10 +371,11 @@ Rust parity: each fixture in `fixtures/rust_reference_v2` is the unmodified
 output of `tools/twin_run`, which runs an `asx.scenario.v2` scenario inside
 asupersync's LabRuntime at the pinned rev. `build/bin/asx-conformance` runs
 the same scenario through the C runtime (lab dispatch, same seed) and
-compares the trace, final snapshot and per-step observations exactly. The
-target fails on any difference and on an empty fixture set; CI runs it as a
-blocking step. A failing fixture is fixed on the C side, never by editing
-the fixture.
+compares the trace, final snapshot, per-step observations and the lab's
+dispatch order (which task each step polled, from which lane, at what time)
+exactly. The target fails on any difference and on an empty fixture set; CI
+runs it as a blocking step. A failing fixture is fixed on the C side, never
+by editing the fixture.
 
 `make fuzz-differential` does the same for seeded generated scenarios
 (`FUZZ_V2_SEED`, `FUZZ_V2_COUNT`), with Rust run live through twin_run; it
