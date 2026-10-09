@@ -435,10 +435,16 @@ jobs:
           # tests/gates/test_strict_gates.sh runs format-check over scratch
           # files with the pinned formatter.
           pipx install clang-format==18.1.8
+          # lint-scenarios-v2 validates the oracle's normative schemas.
+          pipx install check-jsonschema==0.38.2
 
       - name: Build
         id: build
         run: make build
+
+      - name: Oracle schemas (vocabulary v2, scenario DSL v2, example scenarios)
+        id: run_lint_scenarios_v2
+        run: make lint-scenarios-v2
 
       - name: Fixture integrity (schema, provenance, digest recompute, codec round trip)
         id: run_fixture_integrity

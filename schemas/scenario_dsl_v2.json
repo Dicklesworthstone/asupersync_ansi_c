@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asupersync.dev/schemas/scenario_dsl_v2.json",
+  "title": "asx.scenario.v2",
+  "description": "Normative companion to docs/SCENARIO_DSL_V2.md (bead W1.3, bd-9kll.2.3).",
+  "type": "object",
+  "required": ["schema", "id", "description", "unit", "rules", "seed", "lab", "regions", "channels", "sync", "tasks", "script", "expect"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "asx.scenario.v2"},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*-[0-9]{3}$"},
+    "description": {"type": "string", "minLength": 1},
+    "unit": {"enum": ["budget", "cancel", "task_lifecycle", "region_lifecycle", "obligation", "quiescence",
+                      "scheduler", "timers", "mpsc", "oneshot", "broadcast", "watch", "sync", "combinators",
+                      "task_groups", "actor", "supervision", "leak_policy"]},
+    "rules": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/rule"}},
+    "seed": {"$ref": "#/$defs/u64"},
+    "lab": {
+      "type": "object", "required": ["max_steps"], "additionalProperties": false,
+      "properties": {"panic_on_leak": {"type": "boolean"}, "max_steps": {"type": "integer", "minimum": 1}}
+    },
+    "regions": {"type": "array", "items": {
+      "type": "object", "required": ["name", "parent", "budget"], "additionalProperties": false,
+      "properties": {"name": {"$ref": "#/$defs/name"}, "parent": {"$ref": "#/$defs/name"}, "budget": {"$ref": "#/$defs/budget_or_null"}}
+    }},
+    "channels": {"type": "array", "items": {"$ref": "#/$defs/channel_decl"}},
+    "sync": {"type": "array", "items": {"$ref": "#/$defs/sync_decl"}},
+    "tasks": {"type": "array", "minItems": 1, "items": {
+      "type": "object", "required": ["name", "region", "budget", "program"], "additionalProperties": false,
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "region": {"$ref": "#/$defs/name"},
+        "budget": {"$ref": "#/$defs/budget_or_null"},
+        "program": {"$ref": "#/$defs/program"}
+      }
+    }},
+    "script": {"type": "array", "items": {
+      "type": "object", "required": ["at_ns", "op"], "additionalProperties": false,
+      "properties": {"at_ns": {"$ref": "#/$defs/u64"}, "op": {"$ref": "#/$defs/driver_op"}}
+    }},
+    "expect": {"oneOf": [
+      {"type": "object", "required": ["kind"], "additionalProperties": false, "properties": {"kind": {"const": "ok"}}},
+      {"type": "object", "required": ["kind", "error"], "additionalProperties": false, "properties": {
+        "kind": {"const": "must_fail"},
+        "error": {"type": "object", "required": ["task", "step", "status"], "additionalProperties": false, "properties": {
+          "task": {"$ref": "#/$defs/name"}, "step": {"type": "integer", "minimum": 1}, "status": {"$ref": "#/$defs/status"}
+        }}
+      }}
+    ]}
+  },
+  "$defs": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_.]*$"},
+    "u64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "status": {"type": "string", "pattern": "^ASX_(OK|E_[A-Z0-9_]+)$"},
+    "rule": {"enum": [
+      "rule.cancel.request", "rule.cancel.acknowledge", "rule.cancel.drain", "rule.cancel.finalize",
+      "inv.cancel.idempotence", "inv.cancel.propagates_down", "def.cancel.reason_kinds", "def.cancel.severity_ordering",
+      "prog.cancel.drains", "rule.cancel.checkpoint_masked", "inv.cancel.mask_bounded", "inv.cancel.mask_monotone",
+      "rule.obligation.reserve", "rule.obligation.commit", "rule.obligation.abort", "rule.obligation.leak",
+      "inv.obligation.no_leak", "inv.obligation.linear", "inv.obligation.bounded", "inv.obligation.ledger_empty_on_close",
+      "prog.obligation.resolves", "rule.region.close_begin", "rule.region.close_cancel_children",
+      "rule.region.close_children_done", "rule.region.close_run_finalizer", "rule.region.close_complete",
+      "inv.region.quiescence", "prog.region.close_terminates", "def.outcome.four_valued", "def.outcome.severity_lattice",
+      "def.outcome.join_semantics", "def.cancel.reason_ordering", "inv.ownership.single_owner", "inv.ownership.task_owned",
+      "def.ownership.region_tree", "rule.ownership.spawn", "comb.join", "comb.race", "comb.timeout",
+      "inv.combinator.loser_drained", "law.race.never_abandon", "law.join.assoc", "law.race.comm",
+      "inv.capability.no_ambient", "def.capability.cx_scope", "inv.determinism.replayable", "def.determinism.seed_equivalence"
+    ]},
+    "cancel_kind": {"enum": ["User", "Timeout", "Deadline", "PollQuota", "CostBudget", "FailFast", "RaceLost",
+                             "ParentCancelled", "ResourceUnavailable", "Shutdown", "LinkedExit"]},
+    "budget": {
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": {
+        "deadline_ns": {"$ref": "#/$defs/u64"},
+        "poll_quota": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "cost_quota": {"$ref": "#/$defs/u64"},
+        "priority": {"type": "integer", "minimum": 0, "maximum": 255}
+      }
+    },
+    "budget_or_null": {"oneOf": [{"$ref": "#/$defs/budget"}, {"type": "null"}]},
+    "outcome": {"oneOf": [
+      {"type": "object", "required": ["tag"], "additionalProperties": false, "properties": {"tag": {"const": "ok"}}},
+      {"type": "object", "required": ["tag", "status"], "additionalProperties": false,
+       "properties": {"tag": {"const": "err"}, "status": {"$ref": "#/$defs/status"}}},
+      {"type": "object", "required": ["tag", "message"], "additionalProperties": false,
+       "properties": {"tag": {"const": "panicked"}, "message": {"type": "string"}}}
+    ]},
+    "channel_decl": {"oneOf": [
+      {"type": "object", "required": ["name", "type", "capacity", "sender", "receiver"], "additionalProperties": false,
+       "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"const": "mpsc"}, "capacity": {"type": "integer", "minimum": 1},
+                      "sender": {"$ref": "#/$defs/name"}, "receiver": {"$ref": "#/$defs/name"}}},
+      {"type": "object", "required": ["name", "type", "sender", "receiver"], "additionalProperties": false,
+       "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"const": "oneshot"},
+                      "sender": {"$ref": "#/$defs/name"}, "receiver": {"$ref": "#/$defs/name"}}},
+      {"type": "object", "required": ["name", "type", "capacity", "sender", "subscribers"], "additionalProperties": false,
+       "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"const": "broadcast"}, "capacity": {"type": "integer", "minimum": 1},
+                      "sender": {"$ref": "#/$defs/name"}, "subscribers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/name"}}}},
+      {"type": "object", "required": ["name", "type", "initial", "sender", "subscribers"], "additionalProperties": false,
+       "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"const": "watch"}, "initial": {"$ref": "#/$defs/u64"},
+                      "sender": {"$ref": "#/$defs/name"}, "subscribers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/name"}}}}
+    ]},
+    "sync_decl": {"oneOf": [
+      {"type": "object", "required": ["name", "type"], "additionalProperties": false,
+       "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"enum": ["mutex", "notify"]}}},
+      {"type": "object", "required": ["name", "type", "permits"], "additionalProperties": false,
+       "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"const": "semaphore"}, "permits": {"type": "integer", "minimum": 0}}},
+      {"type": "object", "required": ["name", "type", "parties"], "additionalProperties": false,
+       "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"const": "barrier"}, "parties": {"type": "integer", "minimum": 1}}}
+    ]},
+    "program": {"type": "array", "items": {"$ref": "#/$defs/step"}},
+    "nonblocking_step": {"oneOf": [
+      {"$ref": "#/$defs/s_checkpoint"}, {"$ref": "#/$defs/s_trace"}, {"$ref": "#/$defs/s_reserve"},
+      {"$ref": "#/$defs/s_obligation_ref"}, {"$ref": "#/$defs/s_abort"}, {"$ref": "#/$defs/s_try_join"},
+      {"$ref": "#/$defs/s_abort_task"}, {"$ref": "#/$defs/s_spawn"}, {"$ref": "#/$defs/s_permit_send"},
+      {"$ref": "#/$defs/s_permit_ref"}, {"$ref": "#/$defs/s_chan_value_nb"}, {"$ref": "#/$defs/s_chan_ref_nb"},
+      {"$ref": "#/$defs/s_sync_ref_nb"}, {"$ref": "#/$defs/s_cancel_region"}
+    ]},
+    "step": {"oneOf": [
+      {"$ref": "#/$defs/nonblocking_step"},
+      {"$ref": "#/$defs/s_bare"}, {"$ref": "#/$defs/s_sleep"}, {"$ref": "#/$defs/s_sleep_until"},
+      {"$ref": "#/$defs/s_return"}, {"$ref": "#/$defs/s_masked"}, {"$ref": "#/$defs/s_join"},
+      {"$ref": "#/$defs/s_open_region"}, {"$ref": "#/$defs/s_close_region"}, {"$ref": "#/$defs/s_group"},
+      {"$ref": "#/$defs/s_quorum"}, {"$ref": "#/$defs/s_reserve_send"}, {"$ref": "#/$defs/s_chan_value_b"},
+      {"$ref": "#/$defs/s_chan_ref_b"}, {"$ref": "#/$defs/s_sync_ref_b"}, {"$ref": "#/$defs/s_sem_acquire"},
+      {"$ref": "#/$defs/s_server_spawn"}, {"$ref": "#/$defs/s_cast"}, {"$ref": "#/$defs/s_call"},
+      {"$ref": "#/$defs/s_server_ref"}, {"$ref": "#/$defs/s_supervise"}, {"$ref": "#/$defs/s_supervisor_join"}
+    ]},
+    "s_bare": {"type": "object", "required": ["op"], "additionalProperties": false, "properties": {"op": {"const": "yield"}}},
+    "s_checkpoint": {"type": "object", "required": ["op"], "additionalProperties": false,
+      "properties": {"op": {"const": "checkpoint"}, "on_cancel": {"enum": ["return", "continue"]}}},
+    "s_sleep": {"type": "object", "required": ["op", "ns"], "additionalProperties": false,
+      "properties": {"op": {"const": "sleep"}, "ns": {"$ref": "#/$defs/u64"}}},
+    "s_sleep_until": {"type": "object", "required": ["op", "at_ns"], "additionalProperties": false,
+      "properties": {"op": {"const": "sleep_until"}, "at_ns": {"$ref": "#/$defs/u64"}}},
+    "s_trace": {"type": "object", "required": ["op", "message"], "additionalProperties": false,
+      "properties": {"op": {"const": "trace"}, "message": {"type": "string"}}},
+    "s_return": {"type": "object", "required": ["op", "outcome"], "additionalProperties": false,
+      "properties": {"op": {"const": "return"}, "outcome": {"$ref": "#/$defs/outcome"}}},
+    "s_masked": {"type": "object", "required": ["op", "steps"], "additionalProperties": false,
+      "properties": {"op": {"const": "masked"}, "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonblocking_step"}}}},
+    "s_reserve": {"type": "object", "required": ["op", "kind", "as"], "additionalProperties": false,
+      "properties": {"op": {"const": "reserve"}, "as": {"$ref": "#/$defs/name"},
+                     "kind": {"enum": ["SendPermit", "Ack", "Lease", "IoOp", "SemaphorePermit", "Transaction"]}}},
+    "s_obligation_ref": {"type": "object", "required": ["op", "obligation"], "additionalProperties": false,
+      "properties": {"op": {"enum": ["commit", "leak"]}, "obligation": {"$ref": "#/$defs/name"}}},
+    "s_abort": {"type": "object", "required": ["op", "obligation", "reason"], "additionalProperties": false,
+      "properties": {"op": {"const": "abort"}, "obligation": {"$ref": "#/$defs/name"}, "reason": {"enum": ["Cancel", "Error", "Explicit"]}}},
+    "s_spawn": {"type": "object", "required": ["op", "as", "program"], "additionalProperties": false,
+      "properties": {"op": {"const": "spawn"}, "as": {"$ref": "#/$defs/name"}, "program": {"$ref": "#/$defs/program"},
+                     "budget": {"$ref": "#/$defs/budget"}, "region": {"$ref": "#/$defs/name"}}},
+    "s_join": {"type": "object", "required": ["op", "task"], "additionalProperties": false,
+      "properties": {"op": {"const": "join"}, "task": {"$ref": "#/$defs/name"}}},
+    "s_try_join": {"type": "object", "required": ["op", "task"], "additionalProperties": false,
+      "properties": {"op": {"const": "try_join"}, "task": {"$ref": "#/$defs/name"}}},
+    "s_abort_task": {"type": "object", "required": ["op", "task", "kind"], "additionalProperties": false,
+      "properties": {"op": {"const": "abort_task"}, "task": {"$ref": "#/$defs/name"}, "kind": {"$ref": "#/$defs/cancel_kind"},
+                     "message": {"type": "string"}}},
+    "s_open_region": {"type": "object", "required": ["op", "as"], "additionalProperties": false,
+      "properties": {"op": {"const": "open_region"}, "as": {"$ref": "#/$defs/name"}, "budget": {"$ref": "#/$defs/budget"}}},
+    "s_cancel_region": {"type": "object", "required": ["op", "region", "kind"], "additionalProperties": false,
+      "properties": {"op": {"const": "cancel_region"}, "region": {"$ref": "#/$defs/name"}, "kind": {"$ref": "#/$defs/cancel_kind"},
+                     "message": {"type": "string"}}},
+    "s_close_region": {"type": "object", "required": ["op", "region"], "additionalProperties": false,
+      "properties": {"op": {"const": "close_region"}, "region": {"$ref": "#/$defs/name"}}},
+    "s_group": {"type": "object", "required": ["op", "members"], "additionalProperties": false,
+      "properties": {"op": {"enum": ["race", "join_all", "first_ok"]},
+                     "members": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/program"}},
+                     "deadline_ns": {"$ref": "#/$defs/u64"}}},
+    "s_quorum": {"type": "object", "required": ["op", "members", "needed"], "additionalProperties": false,
+      "properties": {"op": {"const": "quorum"}, "needed": {"type": "integer", "minimum": 1},
+                     "members": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/program"}}}},
+    "s_reserve_send": {"type": "object", "required": ["op", "channel", "as"], "additionalProperties": false,
+      "properties": {"op": {"const": "reserve_send"}, "channel": {"$ref": "#/$defs/name"}, "as": {"$ref": "#/$defs/name"}}},
+    "s_permit_send": {"type": "object", "required": ["op", "permit", "value"], "additionalProperties": false,
+      "properties": {"op": {"const": "permit_send"}, "permit": {"$ref": "#/$defs/name"}, "value": {"$ref": "#/$defs/u64"}}},
+    "s_permit_ref": {"type": "object", "required": ["op", "permit"], "additionalProperties": false,
+      "properties": {"op": {"const": "permit_abort"}, "permit": {"$ref": "#/$defs/name"}}},
+    "s_chan_value_nb": {"type": "object", "required": ["op", "channel", "value"], "additionalProperties": false,
+      "properties": {"op": {"enum": ["try_send", "oneshot_send", "broadcast_send", "watch_send"]},
+                     "channel": {"$ref": "#/$defs/name"}, "value": {"$ref": "#/$defs/u64"}}},
+    "s_chan_value_b": {"type": "object", "required": ["op", "channel", "value"], "additionalProperties": false,
+      "properties": {"op": {"const": "send"}, "channel": {"$ref": "#/$defs/name"}, "value": {"$ref": "#/$defs/u64"}}},
+    "s_chan_ref_nb": {"type": "object", "required": ["op", "channel"], "additionalProperties": false,
+      "properties": {"op": {"enum": ["try_recv", "close_sender", "close_receiver"]}, "channel": {"$ref": "#/$defs/name"}}},
+    "s_chan_ref_b": {"type": "object", "required": ["op", "channel"], "additionalProperties": false,
+      "properties": {"op": {"enum": ["recv", "oneshot_recv", "broadcast_recv", "watch_changed"]}, "channel": {"$ref": "#/$defs/name"}}},
+    "s_sync_ref_nb": {"type": "object", "additionalProperties": false, "oneOf": [
+      {"required": ["op", "mutex"], "properties": {"op": {"const": "mutex_unlock"}, "mutex": {"$ref": "#/$defs/name"}}},
+      {"required": ["op", "semaphore"], "properties": {"op": {"const": "sem_release"}, "semaphore": {"$ref": "#/$defs/name"}}},
+      {"required": ["op", "notify"], "properties": {"op": {"enum": ["notify_one", "notify_all"]}, "notify": {"$ref": "#/$defs/name"}}}
+    ], "properties": {"op": true, "mutex": true, "semaphore": true, "notify": true}},
+    "s_sync_ref_b": {"type": "object", "additionalProperties": false, "oneOf": [
+      {"required": ["op", "mutex"], "properties": {"op": {"const": "mutex_lock"}, "mutex": {"$ref": "#/$defs/name"}}},
+      {"required": ["op", "barrier"], "properties": {"op": {"const": "barrier_wait"}, "barrier": {"$ref": "#/$defs/name"}}},
+      {"required": ["op", "notify"], "properties": {"op": {"const": "notify_wait"}, "notify": {"$ref": "#/$defs/name"}}}
+    ], "properties": {"op": true, "mutex": true, "barrier": true, "notify": true}},
+    "s_sem_acquire": {"type": "object", "required": ["op", "semaphore", "count"], "additionalProperties": false,
+      "properties": {"op": {"const": "sem_acquire"}, "semaphore": {"$ref": "#/$defs/name"}, "count": {"type": "integer", "minimum": 0}}},
+    "s_server_spawn": {"type": "object", "required": ["op", "as", "behavior", "mailbox"], "additionalProperties": false,
+      "properties": {"op": {"const": "server_spawn"}, "as": {"$ref": "#/$defs/name"}, "behavior": {"enum": ["counter", "echo"]},
+                     "mailbox": {"type": "integer", "minimum": 1}}},
+    "s_cast": {"type": "object", "required": ["op", "server", "value"], "additionalProperties": false,
+      "properties": {"op": {"const": "cast"}, "server": {"$ref": "#/$defs/name"}, "value": {"$ref": "#/$defs/u64"}}},
+    "s_call": {"type": "object", "required": ["op", "server", "request"], "additionalProperties": false,
+      "properties": {"op": {"const": "call"}, "server": {"$ref": "#/$defs/name"}, "request": {"$ref": "#/$defs/u64"}}},
+    "s_server_ref": {"type": "object", "required": ["op", "server"], "additionalProperties": false,
+      "properties": {"op": {"const": "server_stop"}, "server": {"$ref": "#/$defs/name"}}},
+    "s_supervise": {"type": "object", "required": ["op", "as", "policy", "max_restarts", "window_ns", "children"], "additionalProperties": false,
+      "properties": {"op": {"const": "supervise"}, "as": {"$ref": "#/$defs/name"},
+                     "policy": {"enum": ["one_for_one", "one_for_all", "rest_for_one"]},
+                     "max_restarts": {"type": "integer", "minimum": 0}, "window_ns": {"$ref": "#/$defs/u64"},
+                     "children": {"type": "array", "minItems": 1, "items": {
+                       "type": "object", "required": ["name", "mode", "program"], "additionalProperties": false,
+                       "properties": {"name": {"$ref": "#/$defs/name"}, "mode": {"enum": ["permanent", "transient", "temporary"]},
+                                      "program": {"$ref": "#/$defs/program"}}}}}},
+    "s_supervisor_join": {"type": "object", "required": ["op", "supervisor"], "additionalProperties": false,
+      "properties": {"op": {"const": "supervisor_join"}, "supervisor": {"$ref": "#/$defs/name"}}},
+    "driver_op": {"oneOf": [
+      {"type": "object", "required": ["op", "region", "kind"], "additionalProperties": false,
+       "properties": {"op": {"enum": ["cancel_region", "close_region"]}, "region": {"$ref": "#/$defs/name"},
+                      "kind": {"$ref": "#/$defs/cancel_kind"}, "message": {"type": "string"}}},
+      {"type": "object", "required": ["op", "task", "kind"], "additionalProperties": false,
+       "properties": {"op": {"const": "cancel_task"}, "task": {"$ref": "#/$defs/name"}, "kind": {"$ref": "#/$defs/cancel_kind"},
+                      "message": {"type": "string"}}},
+      {"type": "object", "required": ["op", "ns"], "additionalProperties": false,
+       "properties": {"op": {"const": "advance"}, "ns": {"$ref": "#/$defs/u64"}}},
+      {"type": "object", "required": ["op", "region"], "additionalProperties": false, "minProperties": 3,
+       "properties": {"op": {"const": "region_limits"}, "region": {"$ref": "#/$defs/name"},
+                      "max_tasks": {"type": "integer", "minimum": 0}, "max_children": {"type": "integer", "minimum": 0},
+                      "max_obligations": {"type": "integer", "minimum": 0}}}
+    ]}
+  }
+}

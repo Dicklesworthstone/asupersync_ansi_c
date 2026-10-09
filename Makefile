@@ -523,7 +523,7 @@ E2E_VERTICAL_SCRIPTS := \
 # ===================================================================
 
 .PHONY: all build clean install uninstall FORCE
-.PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation
+.PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation lint-scenarios-v2
 .PHONY: model-check fixture-integrity fixtures-promote test-gates test-capacity-x4
 .PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
@@ -711,6 +711,28 @@ lint-semantic-delta:
 lint-schema-validation:
 	@echo "[asx] lint-schema-validation: validating fixture schemas..."
 	@./tools/ci/validate_schemas.sh
+
+# lint-scenarios-v2 — the oracle's normative schemas (vocabulary v2, scenario
+# DSL v2) are valid JSON Schema, and every DSL v2 scenario and the vocabulary
+# example validate (bd-9kll.2.2, bd-9kll.2.3). Pinned check-jsonschema.
+CHECK_JSONSCHEMA_VERSION ?= 0.38.2
+CHECK_JSONSCHEMA ?= $(shell if check-jsonschema --version 2>/dev/null | grep -q 'version $(CHECK_JSONSCHEMA_VERSION)'; then \
+	echo check-jsonschema; elif command -v uvx >/dev/null 2>&1; then \
+	echo "uvx --from check-jsonschema==$(CHECK_JSONSCHEMA_VERSION) check-jsonschema"; fi)
+lint-scenarios-v2:
+	@echo "[asx] lint-scenarios-v2: vocabulary and scenario DSL v2 schemas..."
+	@if [ -z "$(CHECK_JSONSCHEMA)" ]; then \
+		if [ "$(FAIL_ON_MISSING_LINTER)" = "1" ]; then \
+			echo "[asx] lint-scenarios-v2: FAIL (check-jsonschema $(CHECK_JSONSCHEMA_VERSION) not found and no uvx; strict mode)"; exit 1; \
+		fi; \
+		echo "[asx] lint-scenarios-v2: SKIP (check-jsonschema not found; use STRICT_GATES=1 to fail)"; exit 0; \
+	fi
+	@$(CHECK_JSONSCHEMA) --check-metaschema schemas/canonical_vocabulary_v2.json schemas/scenario_dsl_v2.json
+	@$(CHECK_JSONSCHEMA) --schemafile schemas/scenario_dsl_v2.json tests/conformance/scenarios_v2/*.json
+	@mkdir -p build/conformance
+	@jq '.examples[0]' schemas/canonical_vocabulary_v2.json > build/conformance/vocab_v2_example.json
+	@$(CHECK_JSONSCHEMA) --schemafile schemas/canonical_vocabulary_v2.json build/conformance/vocab_v2_example.json
+	@echo "[asx] lint-scenarios-v2: PASS ($$(ls tests/conformance/scenarios_v2/*.json | wc -l | tr -d ' ') scenarios)"
 
 # ---------------------------------------------------------------------------
 # model-check — bounded model-check for state machine properties (bd-66l.10)
@@ -1931,7 +1953,7 @@ qemu-smoke:
 check: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build test model-check abi-check test-abi-shim formal-check
 
 check-ci: CI=1
-check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build build-browser test-browser-focused test-browser-minimal-focused test test-capacity-x4 model-check test-e2e-vertical fixture-integrity test-gates codec-equivalence profile-parity parallel-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
+check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation lint-scenarios-v2 build build-browser test-browser-focused test-browser-minimal-focused test test-capacity-x4 model-check test-e2e-vertical fixture-integrity test-gates codec-equivalence profile-parity parallel-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
 
 ci-embedded-baremetal:
 	@echo "[asx] ci-embedded-baremetal: bare-metal gate..."

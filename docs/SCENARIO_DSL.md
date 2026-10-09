@@ -1,7 +1,12 @@
 # Scenario DSL Specification (Shared Rust/C Fixture Contract)
 
+> **SUPERSEDED (2026-10-09)** by `docs/SCENARIO_DSL_V2.md` (`asx.scenario.v2`,
+> bead bd-9kll.2.3). DSL v1 ops cannot express task bodies, so no Rust capture
+> ever polled a task, and several opcodes below have no implementation. Kept
+> for the legacy fixtures that still use it; new scenarios use DSL v2.
+
 > **Bead:** `bd-296.5`
-> **Status:** Canonical DSL contract for scenario fixtures
+> **Status:** Superseded; see above
 > **Last updated:** 2026-02-27 by CopperSpire
 
 This DSL defines deterministic scenario inputs shared by Rust reference capture and ANSI C conformance/fuzz runners.
