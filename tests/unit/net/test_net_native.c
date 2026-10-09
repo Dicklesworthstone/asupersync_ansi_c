@@ -426,6 +426,60 @@ TEST(real_clock_sleep_blocks_in_reactor_without_spinning) {
     ASSERT_TRUE(s->polls <= 3u);
 }
 
+/* RB7 regression: a task parked on a socket that never becomes ready used
+ * to keep asx_scheduler_run blocked in epoll forever, ignoring the run
+ * budget's deadline. The deadline now bounds the reactor wait. */
+typedef struct {
+    asx_tcp_listener listener;
+    asx_tcp_stream conn;
+    uint32_t polls;
+} accept_forever_state;
+
+static asx_status accept_forever_poll(void *ud, asx_task_id self) {
+    accept_forever_state *a = (accept_forever_state *)ud;
+    asx_checkpoint_result cp;
+    asx_status st;
+    a->polls++;
+    if (asx_checkpoint(self, &cp) == ASX_OK && cp.cancelled) return ASX_E_CANCELLED;
+    st = asx_tcp_listener_poll_accept(a->listener, &a->conn, NULL);
+    if (st == ASX_OK) return ASX_E_INVALID_STATE; /* nobody connects */
+    return st;
+}
+
+TEST(run_deadline_bounds_reactor_wait) {
+    asx_region_id r;
+    asx_task_id t;
+    accept_forever_state *a = NULL;
+    asx_socket_addr any = asx_socket_addr_loopback(0);
+    asx_time start;
+    asx_time end;
+    asx_budget budget;
+
+    ASSERT_TRUE(setup());
+    ASSERT_EQ(asx_runtime_clock_is_virtual(), 0);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_captured(r, accept_forever_poll,
+                                      (uint32_t)sizeof(accept_forever_state), NULL, &t,
+                                      (void **)&a),
+              ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_bind(&a->listener, &any), ASX_OK);
+
+    ASSERT_EQ(asx_runtime_now_ns(&start), ASX_OK);
+    budget = asx_budget_from_polls(1000);
+    budget.deadline = start + 200u * 1000000u; /* now + 200 ms */
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_TIMED_OUT);
+    ASSERT_EQ(asx_runtime_now_ns(&end), ASX_OK);
+
+    ASSERT_TRUE(end - start >= (asx_time)(200u * 1000000u));
+    /* Not stuck in epoll, and parked rather than spinning. */
+    ASSERT_TRUE(end - start < (asx_time)(1500u * 1000000u));
+    ASSERT_TRUE(a->polls <= 3u);
+
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_region_drain(r, &budget), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_close(a->listener), ASX_OK);
+}
+
 /* -------------------------------------------------------------------
  * HTTP/1.1 server and client over real sockets
  * ------------------------------------------------------------------- */
@@ -654,6 +708,7 @@ static int run_native(void) {
     RUN_TEST(tcp_connect_refused_reports_disconnected);
     RUN_TEST(udp_datagram_between_real_sockets);
     RUN_TEST(real_clock_sleep_blocks_in_reactor_without_spinning);
+    RUN_TEST(run_deadline_bounds_reactor_wait);
     return 0;
 }
 

@@ -212,6 +212,38 @@ TEST(sleep_parks_and_virtual_time_jumps_to_deadline) {
     ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(3600u * 1000u * MS));
 }
 
+/* RB7 regression: the run budget's deadline bounds the run even while
+ * every task is parked. Before the fix the scheduler ignored
+ * budget.deadline entirely (live builds then blocked in epoll past it);
+ * here virtual time stops at the run deadline instead of jumping on to the
+ * sleeper's timer, and the run reports ASX_E_TIMED_OUT. */
+TEST(run_deadline_bounds_idle_waiting) {
+    asx_region_id r;
+    asx_task_id t;
+    sleeper_state *s = NULL;
+    asx_budget budget;
+
+    setup();
+    g_finish_count = 0;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
+                                      (void **)&s),
+              ASX_OK);
+    ASSERT_EQ(asx_sleep_init(&s->sleep, 10000u * MS), ASX_OK); /* 10 s */
+
+    budget = asx_budget_from_polls(100);
+    budget.deadline = asx_runtime_virtual_now() + 1000u * MS; /* 1 s */
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_TIMED_OUT);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(1000u * MS));
+    ASSERT_EQ(g_finish_count, 0u);
+
+    /* A later run without a deadline finishes the sleep at 10 s */
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(10000u * MS));
+    ASSERT_EQ(g_finish_count, 1u);
+}
+
 TEST(sleepers_finish_in_deadline_order) {
     asx_region_id r;
     asx_task_id t;
@@ -533,6 +565,7 @@ int main(void) {
     RUN_TEST(task_wakes_another_task);
     RUN_TEST(park_outside_poll_is_rejected);
     RUN_TEST(sleep_parks_and_virtual_time_jumps_to_deadline);
+    RUN_TEST(run_deadline_bounds_idle_waiting);
     RUN_TEST(sleepers_finish_in_deadline_order);
     RUN_TEST(timeout_fires_for_parked_inner);
     RUN_TEST(interval_ticks_on_virtual_time);

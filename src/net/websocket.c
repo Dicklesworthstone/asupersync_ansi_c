@@ -1030,7 +1030,7 @@ static asx_status ws_on_close_frame(asx_ws_engine *ws) {
     ws->close_received = 1u;
     if (!ws->close_sent) {
         /* Echo the status code (RFC 6455 §5.5.1); space was reserved. */
-        uint8_t payload[2];
+        uint8_t payload[2] = {0u, 0u};
         uint32_t plen = 0u;
         if (n >= 2u) {
             asx_store_be_u16(payload, code);
@@ -1208,7 +1208,7 @@ asx_status asx_ws_engine_send(asx_ws_engine *ws, asx_ws_opcode opcode, const uin
 }
 
 asx_status asx_ws_engine_close(asx_ws_engine *ws, uint16_t code, const char *reason) {
-    uint8_t payload[2u + ASX_WS_CLOSE_REASON_MAX];
+    uint8_t payload[2u + ASX_WS_CLOSE_REASON_MAX] = {0u};
     size_t rlen;
     uint32_t plen = 0u;
     asx_status st;

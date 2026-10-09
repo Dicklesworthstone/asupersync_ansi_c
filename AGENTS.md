@@ -120,9 +120,14 @@ make build
 make format-check STRICT_GATES=1
 make lint STRICT_GATES=1
 
-# Run core tests and conformance
+# Run core tests, fixture integrity, and the gate negative controls
 make test
-make conformance
+make fixture-integrity
+make test-gates
+# `make conformance` (Rust parity) currently FAILS by design: no fixture is
+# executed through the C runtime until the twin-run oracle lands (bridge
+# program W1, beads bd-9kll.2.*). Do not treat that failure as your
+# regression, and never make it pass without real executed comparisons.
 ```
 
 If you see errors, **carefully understand and resolve each issue**. Read sufficient context to fix them the RIGHT way.
@@ -158,10 +163,14 @@ make test-invariants
 ### Conformance and Profile Parity
 
 ```bash
-# Rust reference fixture parity
+# Rust parity (fails until the W1 oracle exists; see above)
 make conformance
 
-# Cross-profile semantic parity
+# Fixture integrity and gate negative controls
+make fixture-integrity
+make test-gates
+
+# Cross-profile digest comparison (recorded digests; runtime not executed yet)
 make profile-parity
 
 # Differential fuzzing smoke

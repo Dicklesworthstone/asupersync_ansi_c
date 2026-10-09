@@ -148,8 +148,10 @@ static void normalize_locality_config(asx_parallel_locality_config *locality,
     uint32_t shard_count;
 
     if (locality == NULL) { return; }
+    /* ASX_ANALYZER_WAIVER("config-dependent: sharding availability is per-profile") */
     if (!parallel_locality_sharding_available()) { locality->mode = ASX_PARALLEL_LOCALITY_COMPACT; }
 
+    /* ASX_ANALYZER_WAIVER("config-dependent: always COMPACT without sharding") */
     if (locality->mode == ASX_PARALLEL_LOCALITY_COMPACT || worker_count <= 1u) {
         locality->mode = ASX_PARALLEL_LOCALITY_COMPACT;
         locality->shard_count = 1u;

@@ -434,6 +434,40 @@ TEST(multipart_add_file) {
     ASSERT_EQ(part->data_len, 4u);
 }
 
+/* Regression (cppcheck bufferAccessOutOfBounds): content_type buffers were
+ * sized ASX_HTTP_HEADER_NAME_MAX (64) but filled up to
+ * ASX_HTTP_HEADER_VALUE_MAX (256), so a long Content-Type value overflowed
+ * into the adjacent data field. */
+TEST(long_content_type_fits_without_corrupting_data) {
+    static asx_web_multipart mp;
+    static asx_web_static_files sf;
+    const asx_web_multipart_part *part;
+    char ct[201];
+    uint8_t fdata[4] = {0xDE, 0xAD, 0xBE, 0xEF};
+    char too_long[ASX_HTTP_HEADER_VALUE_MAX + 1u];
+
+    memset(ct, 'x', 200);
+    memcpy(ct, "application/", 12);
+    ct[200] = '\0';
+
+    asx_web_multipart_init(&mp);
+    ASSERT_EQ(asx_web_multipart_add_file(&mp, "blob", "b.bin", ct, fdata, 4), ASX_OK);
+    part = asx_web_multipart_get(&mp, "blob");
+    ASSERT_TRUE(part != NULL);
+    ASSERT_STR_EQ(part->content_type, ct);
+    ASSERT_EQ(part->data_len, 4u);
+    ASSERT_TRUE(memcmp(part->data, fdata, 4) == 0);
+
+    asx_web_static_init(&sf);
+    ASSERT_EQ(asx_web_static_add(&sf, "/blob", ct, fdata, 4), ASX_OK);
+
+    /* A value that cannot fit is still rejected */
+    memset(too_long, 'y', ASX_HTTP_HEADER_VALUE_MAX);
+    too_long[ASX_HTTP_HEADER_VALUE_MAX] = '\0';
+    ASSERT_EQ(asx_web_multipart_add_file(&mp, "big", "c.bin", too_long, fdata, 4),
+              ASX_E_BUFFER_TOO_SMALL);
+}
+
 TEST(multipart_get_missing) {
     asx_web_multipart mp;
     asx_web_multipart_init(&mp);
@@ -628,6 +662,7 @@ int main(void) {
     /* Multipart */
     RUN_TEST(multipart_add_field_and_get);
     RUN_TEST(multipart_add_file);
+    RUN_TEST(long_content_type_fits_without_corrupting_data);
     RUN_TEST(multipart_get_missing);
 
     /* CORS */

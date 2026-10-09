@@ -11,8 +11,23 @@ Usage: run_conformance.sh [options]
 Run deterministic conformance/parity checks over canonical fixture metadata and
 emit machine-readable JSONL artifacts consumable by CI.
 
+Modes (be precise about what each one proves):
+  fixture-integrity   Fixture schema, provenance pinning, digest recomputation
+                      from the fixture's own events, capture_run_id format,
+                      unknown-op detection, and a C codec encode/decode round
+                      trip. Does NOT execute the C runtime.
+  conformance         Rust parity. Requires fixtures executed through the C
+                      runtime and compared against Rust-captured results.
+                      Until the C conformance interpreter exists (bridge
+                      program W1), there is no such evidence and this mode
+                      FAILS rather than passing with zero comparisons.
+  codec-equivalence   Compares semantic digests recorded in JSON vs BIN fixture
+                      files. Does NOT execute the runtime (real gate: W1.8).
+  profile-parity      Compares semantic digests recorded across profile
+                      variants. Does NOT execute the runtime (real gate: W1.8).
+
 Options:
-  --mode <conformance|codec-equivalence|profile-parity>
+  --mode <fixture-integrity|conformance|codec-equivalence|profile-parity>
   --fixtures-root <dir>       (default: fixtures/rust_reference)
   --report-dir <dir>          (default: tools/ci/artifacts/conformance)
   --run-id <id>               (default: <mode>-<utc timestamp>)
@@ -111,7 +126,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$MODE" in
-  conformance|codec-equivalence|profile-parity) ;;
+  fixture-integrity|conformance|codec-equivalence|profile-parity) ;;
   *)
     echo "[asx] conformance: unsupported mode '$MODE'" >&2
     exit 2
@@ -407,10 +422,15 @@ if [[ "${#fixture_files[@]}" -eq 0 ]]; then
 else
   for fixture in "${fixture_files[@]}"; do
     rel_fixture="${fixture#$REPO_ROOT/}"
+    # The capture tool's digest is SHA-256 over compact, key-sorted JSON of
+    # {error_codes, events, snapshot}. A fixture whose digest does not
+    # recompute from its own contents is not what it claims to be.
+    recomputed_digest="sha256:$(hash_hex "$(jq -cS '{error_codes: .expected_error_codes, events: .expected_events, snapshot: .expected_final_snapshot}' "$fixture")")"
     record="$(jq -c \
       --arg run_id "$RUN_ID" \
       --arg mode "$MODE" \
       --arg file "$rel_fixture" \
+      --arg recomputed_digest "$recomputed_digest" \
       --arg baseline_commit "$baseline_commit" \
       --arg baseline_toolchain_hash "$baseline_toolchain_hash" \
       --arg baseline_toolchain_release "$baseline_toolchain_release" \
@@ -432,8 +452,13 @@ else
         rust_toolchain_commit_hash: (.provenance.rust_toolchain_commit_hash // ""),
         rust_toolchain_release: (.provenance.rust_toolchain_release // ""),
         rust_toolchain_host: (.provenance.rust_toolchain_host // ""),
-        cargo_lock_sha256: (.provenance.cargo_lock_sha256 // "")
+        cargo_lock_sha256: (.provenance.cargo_lock_sha256 // ""),
+        capture_run_id: (.provenance.capture_run_id // ""),
+        unknown_ops: ([.. | strings | select(startswith("unknown_op:"))] | length)
       }
+      | .captured = (.capture_run_id
+          | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
+      | .digest_recomputes = (.semantic_digest == $recomputed_digest)
       | .diagnostics = [
           (if .scenario_id == "" then "missing scenario_id" else empty end),
           (if .codec != "json" and .codec != "bin" then "invalid codec" else empty end),
@@ -450,12 +475,22 @@ else
           (if .rust_toolchain_commit_hash != $baseline_toolchain_hash then "rust_toolchain_commit_hash mismatch" else empty end),
           (if .rust_toolchain_release != $baseline_toolchain_release then "rust_toolchain_release mismatch" else empty end),
           (if .rust_toolchain_host != $baseline_toolchain_host then "rust_toolchain_host mismatch" else empty end),
-          (if .cargo_lock_sha256 != $baseline_cargo_sha then "cargo_lock_sha256 mismatch" else empty end)
+          (if .cargo_lock_sha256 != $baseline_cargo_sha then "cargo_lock_sha256 mismatch" else empty end),
+          (if .unknown_ops > 0 then "fixture records unknown ops (capture tool traced an op it could not execute)" else empty end),
+          (if .captured and (.digest_recomputes | not) then "semantic_digest does not recompute from expected_events/snapshot/error_codes" else empty end)
         ]
-      | .status = (if (.diagnostics | length) > 0 then "fail" else "pass" end)
-      | .parity = (if .status == "pass" then "pass" else "fail" end)
-      | .delta_classification = (if .status == "pass" then "none" else "harness_defect" end)
-      | .diagnostic = (if (.diagnostics | length) > 0 then (.diagnostics | join("; ")) else "fixture metadata/provenance valid" end)
+      # A fixture whose capture_run_id is not a UUID was not produced by a
+      # capture run (e.g. written by hand). It is reported and excluded,
+      # never counted as Rust evidence.
+      | .status = (if (.diagnostics | length) > 0 then "fail"
+                   elif (.captured | not) then "skip"
+                   else "pass" end)
+      | .parity = .status
+      | .delta_classification = (if .status == "fail" then "harness_defect" else "none" end)
+      | .provenance_class = (if .captured then "captured" else "hand_authored" end)
+      | .diagnostic = (if (.diagnostics | length) > 0 then (.diagnostics | join("; "))
+                       elif (.captured | not) then "hand-authored fixture (capture_run_id is not a UUID" + (if .digest_recomputes then "" else "; semantic_digest does not recompute" end) + "): excluded from Rust parity; recapture via the twin-run oracle (W1.7)"
+                       else "fixture metadata/provenance valid; digest recomputes" end)
       | del(.diagnostics)
       ' \
       "$fixture")"
@@ -686,6 +721,10 @@ jq -s \
     fail: (map(select(.status == "fail")) | length),
     skip: (map(select(.status == "skip")) | length),
     fixture_records: (map(select(.kind == "fixture")) | length),
+    hand_authored_records: (map(select(.kind == "fixture" and .provenance_class == "hand_authored")) | length),
+    # Comparisons of C-runtime execution against Rust-captured results.
+    # Nothing produces these until the conformance interpreter exists (W1).
+    executed_parity_records: (map(select(.kind == "executed_parity")) | length),
     parity_records: (map(select(.kind == "codec_equivalence" or .kind == "profile_parity")) | length),
     comparable_parity_records: (
       map(select((.kind == "codec_equivalence" or .kind == "profile_parity") and .status != "skip"))
@@ -868,6 +907,8 @@ fail_count="$(jq -r '.fail' "$SUMMARY_FILE")"
 fixture_count="$(jq -r '.fixture_records' "$SUMMARY_FILE")"
 parity_count="$(jq -r '.parity_records' "$SUMMARY_FILE")"
 comparable_parity_count="$(jq -r '.comparable_parity_records' "$SUMMARY_FILE")"
+hand_authored_count="$(jq -r '.hand_authored_records' "$SUMMARY_FILE")"
+executed_parity_count="$(jq -r '.executed_parity_records' "$SUMMARY_FILE")"
 diff_count="$(jq -r '.diff_records' "$SUMMARY_FILE")"
 semantic_delta_pass_value="$(jq -r '.semantic_delta_pass' "$SUMMARY_FILE")"
 semantic_delta_count_value="$(jq -r '.semantic_delta_count' "$SUMMARY_FILE")"
@@ -875,7 +916,7 @@ semantic_delta_budget_allowed_value="$(jq -r '.semantic_delta_budget_allowed' "$
 non_budgetable_count_value="$(jq -r '.non_budgetable_fail_count' "$SUMMARY_FILE")"
 
 echo "[asx] conformance[$MODE]: report=$REPORT_FILE summary=$SUMMARY_FILE" >&2
-echo "[asx] conformance[$MODE]: fixture_records=$fixture_count parity_records=$parity_count comparable_parity_records=$comparable_parity_count fail=$fail_count diff_records=$diff_count" >&2
+echo "[asx] conformance[$MODE]: fixture_records=$fixture_count hand_authored_records=$hand_authored_count executed_parity_records=$executed_parity_count parity_records=$parity_count comparable_parity_records=$comparable_parity_count fail=$fail_count diff_records=$diff_count" >&2
 echo "[asx] conformance[$MODE]: semantic_delta_count=$semantic_delta_count_value allowed_budget=$semantic_delta_budget_allowed_value non_budgetable_fail_count=$non_budgetable_count_value pass=$semantic_delta_pass_value artifact=$SEMANTIC_DELTA_FILE" >&2
 
 exit_code=0
@@ -887,9 +928,25 @@ if [[ "$fixture_count" -eq 0 && "$FAIL_ON_EMPTY_FIXTURES" == "1" ]]; then
   echo "[asx] conformance[$MODE]: FAIL (no fixtures and strict empty-fixture policy enabled)" >&2
   exit_code=1
 fi
-if [[ "$MODE" != "conformance" && "$comparable_parity_count" -eq 0 && "$FAIL_ON_INCOMPLETE_PARITY" == "1" ]]; then
+if [[ ( "$MODE" == "codec-equivalence" || "$MODE" == "profile-parity" ) && "$comparable_parity_count" -eq 0 && "$FAIL_ON_INCOMPLETE_PARITY" == "1" ]]; then
   echo "[asx] conformance[$MODE]: FAIL (no comparable parity pairs and strict parity policy enabled)" >&2
   exit_code=1
 fi
+case "$MODE" in
+  codec-equivalence|profile-parity)
+    echo "[asx] conformance[$MODE]: scope: compares semantic digests recorded in fixture files; the C runtime is not executed (real gate: bridge bead W1.8)" >&2
+    ;;
+  fixture-integrity)
+    echo "[asx] conformance[$MODE]: scope: fixture schema/provenance/digest integrity and codec round trip; hand_authored_records=$hand_authored_count (excluded from Rust parity); the C runtime is not executed" >&2
+    ;;
+  conformance)
+    # Rust parity means: fixtures executed through the C runtime and compared
+    # with Rust-captured results. Zero such comparisons is not a pass.
+    if [[ "$executed_parity_count" -eq 0 ]]; then
+      echo "[asx] conformance[$MODE]: FAIL (NO RUST PARITY EVIDENCE: executed_parity_records=0; no fixture was executed through the C runtime. The conformance interpreter and twin-run oracle are bridge program W1, beads bd-9kll.2.*. Fixture integrity is checked by 'make fixture-integrity'.)" >&2
+      exit_code=1
+    fi
+    ;;
+esac
 
 exit "$exit_code"

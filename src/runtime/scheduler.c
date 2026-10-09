@@ -135,10 +135,12 @@ static void timer_heap_sift_down(uint32_t pos) {
 }
 
 static void timer_heap_remove_at(uint32_t pos) {
-    uint32_t removed = g_timer_heap[pos];
+    uint32_t removed;
+    if (pos >= g_timer_heap_len || pos >= ASX_MAX_TASKS) return; /* not in the heap */
+    removed = g_timer_heap[pos];
     g_timer_heap_len--;
     g_tasks[removed].timer_pos = ASX_SLOT_NONE;
-    if (pos == g_timer_heap_len) return;
+    if (pos >= g_timer_heap_len) return; /* removed the last entry */
     timer_heap_place(pos, g_timer_heap[g_timer_heap_len]);
     if (pos > 0u && timer_less(g_timer_heap[pos], g_timer_heap[(pos - 1u) / 2u])) {
         timer_heap_sift_up(pos);
@@ -162,6 +164,9 @@ static void timer_arm(uint32_t idx, asx_time deadline) {
         timer_heap_sift_up(t->timer_pos);
         return;
     }
+    /* Each task holds at most one heap entry, so the heap never exceeds
+     * ASX_MAX_TASKS; the guard keeps that invariant locally checkable. */
+    if (g_timer_heap_len >= ASX_MAX_TASKS) return;
     t->wake_at = deadline;
     t->timer_seq = g_timer_seq++;
     timer_heap_place(g_timer_heap_len, idx);
@@ -565,10 +570,22 @@ static int sched_external_pending(void) {
     return sched_io_pending();
 }
 
+/* Milliseconds to block before `deadline` (0 = none), capped at
+ * `cap_ms`; rounds up so a wake never lands just short of the deadline. */
+static uint32_t sched_ms_until(asx_time deadline, asx_time now, uint32_t cap_ms) {
+    uint64_t wait_ms;
+    if (deadline == 0u) return cap_ms;
+    if (now >= deadline) return 0u;
+    wait_ms = ((deadline - now) + 999999u) / 1000000u;
+    return wait_ms > cap_ms ? cap_ms : (uint32_t)wait_ms;
+}
+
 /* Called when every live task in scope is parked. Returns ASX_OK if the
  * scheduler should run another round, ASX_E_WOULD_BLOCK if nothing can
- * wake the parked tasks. */
-static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall) {
+ * wake the parked tasks. Blocking never extends past `run_deadline` (the
+ * caller's run budget deadline, 0 = none); the round loop then reports
+ * ASX_E_TIMED_OUT. */
+static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time run_deadline) {
     asx_time now;
 
     if (sched_unpark_cancelled() > 0u) return ASX_OK;
@@ -576,28 +593,33 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall) {
 
     if (g_timer_heap_len > 0u) {
         asx_time next = g_tasks[g_timer_heap[0]].wake_at;
+        asx_time target = next;
+        if (run_deadline != 0u && run_deadline < target) target = run_deadline;
         now = sched_now();
-        if (now < next && asx_runtime_clock_is_virtual()) {
-            asx_runtime_virtual_advance(next);
+        if (now < target && asx_runtime_clock_is_virtual()) {
+            asx_runtime_virtual_advance(target);
             now = sched_now();
         }
         if (timers_fire(now) > 0u) return ASX_OK;
-        if (now < next) {
-            uint64_t wait_ns = next - now;
-            uint64_t wait_ms = (wait_ns + 999999u) / 1000000u;
-            if (wait_ms > ASX_SCHED_MAX_IDLE_WAIT_MS) wait_ms = ASX_SCHED_MAX_IDLE_WAIT_MS;
-            sched_block((uint32_t)wait_ms);
+        if (now < target) {
+            sched_block(sched_ms_until(target, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
             (void)sched_drain_wakers();
             now = sched_now();
             (void)timers_fire(now);
         }
+        /* ASX_ANALYZER_WAIVER("config-dependent: 0 without blocking pool/native I/O") */
     } else if (sched_external_pending()) {
-        sched_block(ASX_SCHED_MAX_IDLE_WAIT_MS);
+        now = sched_now();
+        if (run_deadline != 0u && now >= run_deadline) return ASX_OK;
+        sched_block(sched_ms_until(run_deadline, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
         (void)sched_drain_wakers();
         now = sched_now();
     } else {
         return ASX_E_WOULD_BLOCK;
     }
+
+    /* The run deadline passed while idle: let the round loop report it. */
+    if (run_deadline != 0u && now >= run_deadline) return ASX_OK;
 
     /* Guard against a frozen custom clock: if repeated idle passes see no
      * clock movement, stop rather than spin. */
@@ -651,6 +673,14 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
             sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, round);
             asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
             return ASX_E_POLL_BUDGET_EXHAUSTED;
+        }
+
+        /* The run budget's deadline bounds the whole run, including time
+         * spent blocked in the reactor waiting for I/O. */
+        if (asx_budget_is_past_deadline(budget, sched_now())) {
+            sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, round);
+            asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, round);
+            return ASX_E_TIMED_OUT;
         }
 
         sched_compute_scope(region);
@@ -802,7 +832,7 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
         }
 
         if (progress == 0u) {
-            st = sched_idle(&last_idle_now, &idle_stall);
+            st = sched_idle(&last_idle_now, &idle_stall, budget->deadline);
             if (st != ASX_OK) return st;
         }
     }

@@ -14,6 +14,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../" && pwd)"
 
 OUT_DIR="${REPO_ROOT}/build/openwrt-package"
+# The router build gets its own build dir so it never overwrites the
+# caller's build/lib/libasx.a (which may be a different profile).
+PKG_BUILD_DIR="build/pkg-embedded-router"
 VERSION="0.1.0"
 RELEASE="1"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1700000000}"
@@ -30,12 +33,14 @@ Options:
   --version <ver>             Package version (default: 0.1.0)
   --release <n>               Package release number (default: 1)
   --source-date-epoch <secs>  Reproducible timestamp seed
-  --skip-build                Reuse existing build/lib/libasx.a
+  --skip-build                Reuse existing build/pkg-embedded-router/lib/libasx.a
   --dry-run                   Print plan and exit
   -h, --help                  Show this help
 
 Environment:
-  ASX_USE_RCH=1|0|auto        Offload build step via rch (default: auto)
+  ASX_USE_RCH=1|0|auto        Offload build step via rch (default: auto; auto
+                              builds locally when already running inside an
+                              rch job, to avoid a nested offload)
 USAGE
 }
 
@@ -63,6 +68,14 @@ run_build_cmd() {
     fi
 
     if [ "${ASX_USE_RCH}" = "0" ]; then
+        "$@"
+        return $?
+    fi
+
+    # Already inside an rch job (the worker environment sets
+    # RCH_CARGO_WRAPPER_BYPASS; callers may set ASX_IN_RCH): offloading again
+    # from the worker is slow (~12 min observed for this step) and pointless.
+    if [ -n "${RCH_CARGO_WRAPPER_BYPASS:-}" ] || [ -n "${ASX_IN_RCH:-}" ]; then
         "$@"
         return $?
     fi
@@ -104,10 +117,11 @@ rm -rf "${STAGE_DIR}" "${CONTROL_DIR}"
 mkdir -p "${STAGE_DIR}" "${CONTROL_DIR}"
 
 if [ "$SKIP_BUILD" != "1" ]; then
-    run_build_cmd make -C "${REPO_ROOT}" build PROFILE=EMBEDDED_ROUTER CODEC=BIN DETERMINISTIC=1
+    run_build_cmd make -C "${REPO_ROOT}" build PROFILE=EMBEDDED_ROUTER CODEC=BIN DETERMINISTIC=1 \
+        BUILD_DIR="${PKG_BUILD_DIR}"
 fi
 
-LIB_PATH="${REPO_ROOT}/build/lib/libasx.a"
+LIB_PATH="${REPO_ROOT}/${PKG_BUILD_DIR}/lib/libasx.a"
 if [ ! -f "${LIB_PATH}" ]; then
     echo "missing ${LIB_PATH}; run build first or remove --skip-build" >&2
     exit 1

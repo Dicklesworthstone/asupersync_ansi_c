@@ -47,6 +47,8 @@ static const asx_config_field_desc g_field_table[] = {
     FIELD_DESC("wait_policy", ASX_CONFIG_RELOADABLE, wait_policy),
     FIELD_DESC("io_backend", ASX_CONFIG_RESTART_REQUIRED, io_backend),
     FIELD_DESC("leak_response", ASX_CONFIG_RELOADABLE, leak_response),
+    /* ASX_ANALYZER_WAIVER("pointer field: the byte diff compares pointers, which is outcome-neutral
+     * only while leak_escalation is RELOADABLE; compare by value before reclassifying it") */
     FIELD_DESC("leak_escalation", ASX_CONFIG_RELOADABLE, leak_escalation),
     FIELD_DESC("finalizer_poll_budget", ASX_CONFIG_RELOADABLE, finalizer_poll_budget),
     FIELD_DESC("finalizer_time_budget_ns", ASX_CONFIG_RELOADABLE, finalizer_time_budget_ns),

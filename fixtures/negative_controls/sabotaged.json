@@ -1,0 +1,387 @@
+{
+  "codec": "json",
+  "expected_error_codes": [
+    "1 tasks leaked",
+    "refinement_firewall:RFW-REGION-004",
+    "refinement_firewall:minimal_counterexample_prefix_len=3"
+  ],
+  "expected_events": [
+    {
+      "seq": 0,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 1,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 2,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 3,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 4,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 5,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 6,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 7,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 8,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 9,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 10,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 11,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 12,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 13,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 14,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 15,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 16,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 17,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 18,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 19,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 20,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 21,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 22,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 23,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 24,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 25,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 26,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 27,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 28,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 29,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 30,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 31,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 32,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 33,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 34,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 35,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 36,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 37,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 38,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 39,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 40,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 41,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 42,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 43,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 44,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 45,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 46,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 47,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 48,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    },
+    {
+      "seq": 49,
+      "kind": "NonexistentKind",
+      "entity_id": 0,
+      "aux": 0,
+      "time_ns": 0
+    }
+  ],
+  "expected_final_snapshot": {
+    "obligations": 0,
+    "regions": 0,
+    "tasks": -1
+  },
+  "fixture_schema_version": "fixture-v1",
+  "input": {
+    "ops": [
+      {
+        "id": 1,
+        "op": "launch_missiles"
+      }
+    ]
+  },
+  "profile": "ASX_PROFILE_CORE",
+  "provenance": {
+    "capture_run_id": "72dc8b4a-dd4f-497a-9ad4-6bf470f48a52",
+    "cargo_lock_sha256": "ddf46a437b62698175bdc96183436813a4a81c220a55ed94c7eb766fe4f20ac9",
+    "rust_baseline_commit": "a9e737d869c04c2f6aa4222fe38be66b28628227",
+    "rust_toolchain_commit_hash": "3b1b0ef4d80d3117924d91352c8b6ca528708b3c",
+    "rust_toolchain_host": "x86_64-unknown-linux-gnu",
+    "rust_toolchain_release": "1.96.0-nightly"
+  },
+  "scenario_dsl_version": "dsl-v1",
+  "scenario_id": "budget-exhaustion-rollback-011",
+  "seed": 42,
+  "semantic_digest": "sha256:dededededededededededededededededededededededededededededededede"
+}

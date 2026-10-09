@@ -91,7 +91,11 @@ static inline asx_atomic_backend asx_atomic_u32_backend(void) {
 }
 
 static inline int asx_atomic_u32_is_single_threaded(void) {
-    return ASX_ATOMIC_U32_BACKEND == ASX_ATOMIC_BACKEND_SINGLE_THREAD ? 1 : 0;
+#if ASX_LOCKFREE_SINGLE_THREAD
+    return 1;
+#else
+    return 0;
+#endif
 }
 
 static inline void asx_atomic_u32_init(asx_atomic_u32 *a, uint32_t v) {
