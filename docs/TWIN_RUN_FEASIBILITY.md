@@ -38,24 +38,41 @@ W1.4 covers them with scenarios rather than another spike.
 
 ## Findings the oracle design must account for
 
-1. **mpsc traffic in the trace.** The 11 events were `RegionCreated=1, Spawn=3,
-   Complete=3, UserTrace=2, ObligationReserve=1, ObligationCommit=1`. Rust's mpsc
-   `send` goes through a reserve/commit obligation, which appears in the trace;
-   channel ops are not separate kinds. The canonical vocabulary (W1.2,
-   bd-9kll.2.2) must map the C side's channel events onto obligation events
-   plus whatever the `UserTrace` records carry, not invent channel kinds.
-2. **`race_all` winner.** With children `slow` (one `yield_now` then 3) and
+1. **Channel traffic in the trace.** The 11 events were `RegionCreated=1,
+   Spawn=3, Complete=3, UserTrace=2, ObligationReserve=1, ObligationCommit=1`.
+   All four non-lifecycle events come from the **oneshot**, not the mpsc
+   (source reading, `/dp/asupersync`): `oneshot::Sender::send` reserves a
+   SendPermit obligation and traces `"oneshot::reserve creating permit"`
+   (`src/channel/oneshot.rs:512`, `:528`), `permit.send` commits it (`:759`), and
+   `recv` traces `"oneshot::recv received value"` (`:1041`). `mpsc::Sender::send`
+   uses a transient reserve that registers no obligation and emits nothing
+   (`src/channel/mpsc.rs:715-727`, `:1190-1201`); only `reserve()` +
+   `permit.send()` produce `ObligationReserve` + `ObligationCommit`. Rust has no
+   channel event kinds, and successful mpsc sends are invisible in the trace.
+   The vocabulary (W1.2, bd-9kll.2.2) must therefore not compare channel traffic
+   through trace events alone: channel effects need the end-of-scenario
+   snapshot (queue lengths, reserved permits) or explicit scenario
+   observations. (An earlier version of this finding attributed the events
+   to the mpsc; that was wrong.)
+2. **Scheduling decisions are not in the lab trace.** The lab runtime never
+   pushes `Schedule`, `Poll`, `Yield`, `Wake` or `CancelAck` into its trace
+   buffer; those kinds come only from the production three-lane scheduler's
+   opt-in capture (`src/runtime/scheduler/three_lane.rs:8643-8691`). Dispatch
+   order lives in the replay recorder, the schedule certificate and the
+   forced-schedule receipt, which is why comparator mode (c) consumes the
+   receipt rather than the trace.
+3. **`race_all` winner.** With children `slow` (one `yield_now` then 3) and
    `fast` (returns 4), `race_all` returned `3` at index 0. The winner is decided
    by the lab's dispatch order and the combinator's polling order, not by "fewest
    polls". The oracle must capture this from the Rust run; C must not assume it.
-3. **`Cx::spawn` works for `create_task` tasks.** The spawn gateway is wired in
+4. **`Cx::spawn` works for `create_task` tasks.** The spawn gateway is wired in
    the lab, so scenarios can build task trees from inside task bodies; a
    `RuntimeUnavailable` error is not a concern for lab scenarios.
-4. **Forced schedules are a portable artifact.** The canonical bytes (301 bytes
+5. **Forced schedules are a portable artifact.** The canonical bytes (301 bytes
    for 7 dispatches) decode under explicit `ForcedScheduleDecodeLimits` and
    replay to the same certificate hash and trace fingerprint. They are the
    natural input for cross-engine forced replay (W1.6 mode (c), bd-9kll.4.8).
-5. **Certificates are comparable across runs.** The certificate hash after a
+6. **Certificates are comparable across runs.** The certificate hash after a
    forced replay equals the original's, and an unforced same-seed rerun
    reproduces it, so certificate equality is a sound cheap check before the
    trace comparison.
@@ -87,8 +104,10 @@ None to W1.4's architecture. Refinements to apply to the beads:
   `create_root_region` + `create_task` + `scheduler.lock().schedule`, task trees
   via `Cx::spawn`; capture `trace().snapshot()`, `certificate()`, and the
   forced-schedule receipt for every scenario.
-- W1.2 (vocabulary): channel operations map to obligation events plus
-  `UserTrace` records (finding 1).
+- W1.2 (vocabulary): Rust has no channel event kinds and successful mpsc
+  sends are not traced; compare channel effects through the snapshot and
+  scenario observations (finding 1). Scheduling order is compared through the
+  certificate and forced-schedule receipt, not the trace (finding 2).
 - W1.6 (comparator): mode (b) uses `trace::canonicalize`; mode (c) consumes
   `ForcedSchedule` canonical bytes; check certificate equality first.
 - W1.7 (corpus) and CI: capture off the per-push path; commit receipts.
