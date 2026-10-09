@@ -728,8 +728,8 @@ Tasks are **wake-driven**, not busy-polled. A poll function that must wait calls
 Each round:
 1. Polls every live, non-parked task in the subtree in index order. Deadline and poll-quota budgets are enforced before each poll, consuming one poll unit per call.
 2. Completes tasks that return a final status, joining the result into the severity lattice (Cancelled > Err > Ok). A cancelled task's error is its acknowledgement and is not a fault.
-3. Force-completes tasks whose cleanup budget is exhausted. Masked tasks are exempt.
-4. When nothing is runnable it **idles** instead of spinning: unpark cancelled tasks, drain wakers, fire due timers (an EDF heap keyed by `(deadline, sequence)`), and otherwise block in the reactor until I/O, a cross-thread wake, or the next timer. In deterministic builds the virtual clock jumps straight to the next timer. When nothing can ever wake the parked tasks, it returns `ASX_E_WOULD_BLOCK`.
+3. Never force-completes a cancelled task (as in Rust): a spent cleanup budget only strengthens its cancel reason to `POLL_QUOTA`. The opt-in `asx_runtime_config.cleanup_hard_bound` force-completes tasks whose cleanup polls are spent (masked tasks exempt), a deviation from Rust for deployments that need a hard bound.
+4. When nothing is runnable it **idles** instead of spinning: unpark cancelled tasks not yet polled since their cancel, drain wakers, fire due timers (an EDF heap keyed by `(deadline, sequence)`), and otherwise block in the reactor until I/O, a cross-thread wake, or the next timer. In deterministic builds the virtual clock jumps straight to the next timer. When nothing can ever wake the parked tasks, it returns `ASX_E_WOULD_BLOCK`.
 5. Returns `ASX_OK` at quiescence, or `ASX_E_POLL_BUDGET_EXHAUSTED` if the caller's budget runs out.
 
 Tasks in the FINALIZING phase complete without consuming poll units, ensuring cleanup can finish even under tight budgets. Tasks can be joined (`asx_task_join_poll` parks until the target completes), watched (`asx_task_watch`, monitor semantics), or detached. Arena slots are recycled with generation bumps, so long-running servers do not exhaust the task, region, or obligation arenas.
@@ -749,7 +749,7 @@ meet(a, b).priority   = max(a.priority,   b.priority)     // most urgent wins
 
 As in Rust asupersync's `Budget::combine`, priority meets upward: `asx_budget_infinite()` has priority 0 (the identity), `asx_budget_zero()` has 255 (absorbing), and ordinary budgets (`asx_budget_new()`, `asx_budget_from_polls()`) default to 128. The scheduler does not yet order tasks by budget priority (tracked as bridge bead S5).
 
-This means budgets compose correctly: if a task has a 100-poll budget and its region has a 50-poll budget, the effective budget is 50. Cleanup budgets for cancellation follow the same rule; severity 5 (SHUTDOWN) gets 50 cleanup polls, while severity 0 (USER) gets 1,000.
+This means budgets compose correctly: if a task has a 100-poll budget and its region has a 50-poll budget, the effective budget is 50. Cleanup budgets for cancellation follow the same rule: each cancel request's cleanup budget is met into the task's (severity 5, SHUTDOWN, gets 50 cleanup polls; severity 0, USER, gets 1,000). When the task acknowledges its cancel at a checkpoint, the cleanup budget replaces its budget (no deadline or cost quota, the cleanup priority), as Rust's `acknowledge_cancel` does; a later request during cleanup replaces it again with the met budget. Read it with `asx_task_get_cleanup_budget`.
 
 Budgets are **enforced**, not advisory. Regions carry a budget that child regions (`asx_region_open_child_with_budget`) and tasks (`asx_task_spawn_with_budget`) inherit through the meet, so a child can only tighten it:
 
@@ -772,7 +772,7 @@ Cancellation in `asx` is a structured protocol with 11 cancel kinds organized in
 | 4 | `PARENT`, `RESOURCE` | 200 polls |
 | 5 | `SHUTDOWN` | 50 polls |
 
-Cancellation strength can only increase, never decrease. If a task already has a pending `TIMEOUT` cancel (severity 1) and receives a `PARENT` cancel (severity 4), the stronger cancel wins. This monotonicity guarantee means cancel waves never weaken; the worst cancellation in the chain determines the cleanup budget.
+Cancellation strength can only increase, never decrease. If a task already has a pending `TIMEOUT` cancel (severity 1) and receives a `PARENT` cancel (severity 4), the stronger cancel wins. This monotonicity guarantee means cancel waves never weaken; the cleanup budget is the meet of every request's.
 
 The cancellation state machine progresses through four phases:
 
@@ -784,14 +784,13 @@ Each cancel carries an **origin attribution chain** (source region, source task,
 
 Cancelling a region (`asx_cancel_propagate`, `asx_region_drain`) reaches its whole subtree: the root's tasks get the requested kind, descendants get `PARENT`. Draining closes the subtree parent-first, cancels and runs it to completion, then finalizes it deepest-first. A parked task is woken by its cancel.
 
-**Masking** (`asx_task_mask` / `asx_task_unmask`, nestable to `ASX_MAX_MASK_DEPTH` = 64) defers acknowledgement for a critical section, such as committing a transaction or a finalizer. While a task is masked, `asx_checkpoint` reports `masked = 1` instead of `cancelled`, the cancel can still strengthen, and the scheduler neither consumes cleanup polls nor force-completes the task. The cancel becomes observable at the first checkpoint after the depth returns to zero.
+**Masking** (`asx_task_mask` / `asx_task_unmask`, nestable to `ASX_MAX_MASK_DEPTH` = 64) defers acknowledgement for a critical section, such as committing a transaction or a finalizer. While a task is masked, `asx_checkpoint` reports `masked = 1` instead of `cancelled`, the cancel can still strengthen, and even the opt-in hard cleanup bound neither consumes cleanup polls nor force-completes the task. The cancel becomes observable at the first checkpoint after the depth returns to zero.
 
 ### Obligations: Holders and Leak Policy
 
 An obligation (send permit, ack, lease, I/O op, semaphore permit, transaction) is a linear resource that must be committed or aborted exactly once. Each records its **kind** and its **holder task**: `asx_obligation_reserve` binds the task being polled, and `asx_obligation_reserve_ex` takes an explicit kind and holder. When a holder completes with obligations still reserved, the runtime resolves them deterministically:
 
-- If the holder was **cancelled**, they are aborted with reason `CANCEL`. Cancellation is not a leak.
-- Otherwise they are **leaks**, handled by the configured `leak_response`:
+- They are **leaks**, whether or not the holder was cancelled: a Rust task body that ends holding an unresolved obligation token drops it, and the drop posts a leak. They are handled by the configured `leak_response`:
   - `LOG` (the default) warns.
   - `SILENT` records them.
   - `RECOVER` aborts them with reason `LEAK_RECOVERED`.

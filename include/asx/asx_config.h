@@ -504,6 +504,17 @@ typedef struct {
     asx_finalizer_escalation finalizer_escalation; /* default: BOUNDED_LOG */
     uint16_t max_cancel_chain_depth;               /* default: 16 */
     uint32_t max_cancel_chain_memory;              /* default: 4096 */
+    /* Cleanup budgets as a hard bound (default 0, Rust's semantics). 0: a
+     * cancelled task's cleanup budget becomes its budget when it
+     * acknowledges the cancel, and a spent cleanup quota only strengthens
+     * the reason to POLL_QUOTA; no task is force-completed, and a
+     * cancelled task parked where nothing can wake it stays parked
+     * (asx_scheduler_run returns ASX_E_WOULD_BLOCK). 1: a cancelled task
+     * that has spent its cleanup polls, counted from the request, is
+     * force-completed CANCELLED (ASX_SCHED_EVENT_CANCEL_FORCED), and a
+     * stranded cancelled task is polled until it is. 1 is a semantic
+     * deviation from Rust, excluded from parity. */
+    uint32_t cleanup_hard_bound;
 } asx_runtime_config;
 
 /* Initialize config with profile-appropriate defaults */

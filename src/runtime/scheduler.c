@@ -625,12 +625,12 @@ static uint32_t sched_drain_wakers(void) {
  * sync/notify.rs:347). Only a task not yet polled since its cancel is
  * unparked so it can observe it.
  *
- * `stranded` = 1 (run-to-completion only, when nothing in the runtime can
- * wake anything): a cancelled task with no timer or join to wait on is
- * unparked anyway so its bounded cleanup budget drives it to completion.
- * Rust leaves such a task parked and reports a futurelock
- * (lab/runtime.rs:5612); the lab-style run_until_idle keeps that
- * behavior and returns to its caller, who may still wake the task. */
+ * `stranded` = 1 (the opt-in hard cleanup bound only, run-to-completion,
+ * when nothing in the runtime can wake anything): a cancelled task with no
+ * timer or join to wait on is unparked anyway so the hard bound drives it
+ * to completion. By default, as in Rust, such a task stays parked and the
+ * run reports ASX_E_WOULD_BLOCK (Rust reports a futurelock,
+ * lab/runtime.rs:5612; fuzz finding gen-1-93, bd-9kll.3.2). */
 static uint32_t sched_unpark_cancelled(int stranded) {
     uint32_t i;
     uint32_t n = 0;
@@ -767,7 +767,7 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
         sched_block(sched_ms_until(run_deadline, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
         (void)sched_drain_wakers();
         now = sched_now();
-    } else if (sched_unpark_cancelled(1) > 0u) {
+    } else if (asx_cleanup_hard_bound_internal() && sched_unpark_cancelled(1) > 0u) {
         return ASX_OK;
     } else {
         return ASX_E_WOULD_BLOCK;
@@ -886,11 +886,15 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
                 continue;
             }
 
-            /* Cleanup budget exhausted: force-complete with CANCELLED. The
+            /* Opt-in hard bound only (asx_runtime_config.cleanup_hard_bound):
+             * cleanup polls exhausted, force-complete with CANCELLED. The
              * task either never called checkpoint (CANCEL_REQUESTED) or ran
-             * out of cleanup polls (CANCELLING). Bounded cleanup. A masked
-             * task is inside a critical section and is never interrupted. */
-            if (t->cancel_pending && t->mask_depth == 0u &&
+             * out of cleanup polls (CANCELLING). A masked task is inside a
+             * critical section and is never interrupted. Rust never
+             * force-completes: its cleanup budget only strengthens the
+             * reason once spent (record/task.rs:1340, lab/runtime.rs:4663;
+             * three_lane.rs:1268-1279 keeps it advisory in production). */
+            if (asx_cleanup_hard_bound_internal() && t->cancel_pending && t->mask_depth == 0u &&
                 (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED) &&
                 t->cleanup_polls_remaining == 0) {
                 if (t->state == ASX_TASK_CANCEL_REQUESTED) {
@@ -906,6 +910,10 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             }
 
             if (t->parked) continue;
+
+            /* A cancel acknowledged outside any poll (a checkpoint called
+             * by the host) takes effect before the task's next poll. */
+            asx_task_apply_cleanup_budget_internal(t);
 
             /* Budget: deadline / poll quota -> cancellation before polling */
             sched_enforce_budget(t, tid, &round_now, &have_now);
@@ -953,6 +961,13 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             asx_error_ledger_bind_task(ASX_INVALID_ID);
             g_current_task = ASX_INVALID_ID;
             t->in_poll = 0;
+            /* Acknowledged during this poll and still running: the cleanup
+             * budget becomes the task's budget now (Rust applies the
+             * acknowledgement after the poll, lab/runtime.rs:4809). A task
+             * that completed keeps the budget it ended with. */
+            if (poll_result == ASX_E_PENDING && !t->panicked) {
+                asx_task_apply_cleanup_budget_internal(t);
+            }
 
             /* A panic ends the task whatever the poll returned (Rust catches
              * it at the poll boundary: Outcome::Panicked). It dominates a
@@ -1006,10 +1021,11 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
                 if (t->parked && !t->cancel_pending && t->budget.deadline != 0u) {
                     timer_arm(i, t->budget.deadline);
                 }
-                /* Each poll of a cancel-phase task consumes one cleanup
-                 * unit; the scheduler is the sole budget enforcer. Masked
-                 * polls do not count: the cancel is not yet acknowledged. */
-                if (t->cancel_pending && t->mask_depth == 0u && t->cleanup_polls_remaining > 0) {
+                /* Opt-in hard bound's counter: each poll of a cancel-phase
+                 * task consumes one cleanup unit. Masked polls do not
+                 * count: the cancel is not yet acknowledged. */
+                if (asx_cleanup_hard_bound_internal() && t->cancel_pending && t->mask_depth == 0u &&
+                    t->cleanup_polls_remaining > 0) {
                     t->cleanup_polls_remaining--;
                 }
             }

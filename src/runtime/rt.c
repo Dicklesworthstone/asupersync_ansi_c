@@ -158,6 +158,7 @@ asx_status asx_runtime_config_validate(const asx_runtime_config *config) {
         return ASX_E_INVALID_ARGUMENT;
     if (config->max_cancel_chain_depth == 0u) return ASX_E_INVALID_ARGUMENT;
     if (config->finalizer_poll_budget == 0u) return ASX_E_INVALID_ARGUMENT;
+    if (config->cleanup_hard_bound > 1u) return ASX_E_INVALID_ARGUMENT;
     return ASX_OK;
 }
 
@@ -234,6 +235,7 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
     memset(rt, 0, sizeof(*rt));
     runtime_config_copy(rt, config);
     asx_runtime_set_leak_policy_internal(config->leak_response, config->leak_escalation);
+    asx_runtime_set_cleanup_hard_bound_internal(config->cleanup_hard_bound != 0u);
     rt->hooks = *hooks;
     rt->generation = g_rt_generation++;
     rt->initialized = 1;

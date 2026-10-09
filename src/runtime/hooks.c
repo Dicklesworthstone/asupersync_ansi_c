@@ -773,6 +773,7 @@ void asx_runtime_config_init(asx_runtime_config *cfg) {
     cfg->finalizer_escalation = ASX_FINALIZER_BOUNDED_LOG;
     cfg->max_cancel_chain_depth = 16;
     cfg->max_cancel_chain_memory = 4096;
+    cfg->cleanup_hard_bound = 0;
 }
 
 const char *asx_io_backend_str(asx_io_backend backend) {

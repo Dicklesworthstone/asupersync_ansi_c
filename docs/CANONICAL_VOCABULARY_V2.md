@@ -319,7 +319,9 @@ named or that appeared in the trace, including completed ones.
   Its `cancel_reason` is the reason carried by `CancelRequested` /
   `Cancelling` / `Finalizing` (`src/record/task.rs:83-100`), or the
   cancellation reason of a cancelled outcome. `cleanup_budget` is the cleanup
-  budget those states carry, per kind (`cancel.rs:1027-1043`).
+  budget those states carry: the first request's, per kind
+  (`cancel.rs:1027-1043`), met with every later request's
+  (`record/task.rs:735-800`); null for any other state.
 - **Region fields.** A region's `cancel_reason` is its strongest reason
   after strengthening (§4).
 - **`timers_pending`** is sorted by (`deadline_ns`, `timer`).

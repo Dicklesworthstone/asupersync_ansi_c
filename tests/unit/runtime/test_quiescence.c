@@ -12,6 +12,7 @@
 #include <asx/asx.h>
 #include <asx/core/cleanup.h>
 #include <asx/core/ghost.h>
+#include <asx/runtime/rt.h>
 #include <asx/runtime/trace.h>
 
 /* Suppress warn_unused_result for intentionally-ignored scheduler calls. */
@@ -20,6 +21,21 @@
         asx_status s_ = asx_scheduler_run((rid), (bud));                                           \
         (void)s_;                                                                                  \
     } while (0)
+
+/* A fresh runtime with the opt-in hard cleanup bound
+ * (asx_runtime_config.cleanup_hard_bound): draining a tree of tasks that
+ * never finish relies on it (Rust never force-completes). */
+static asx_status reset_with_hard_cleanup_bound(void) {
+    static asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_status st;
+    asx_runtime_config_init(&cfg);
+    cfg.cleanup_hard_bound = 1u;
+    st = asx_runtime_hooks_init(&hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&rt, &cfg, &hooks);
+    return st;
+}
 
 static asx_status poll_pending(void *data, asx_task_id self) {
     (void)data;
@@ -492,7 +508,7 @@ TEST(region_drain_cancels_descendant_tasks_with_parent_attribution) {
     asx_outcome out;
     asx_budget budget;
 
-    asx_runtime_reset();
+    ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
     ASSERT_EQ(asx_region_open(&parent), ASX_OK);
     ASSERT_EQ(asx_region_open_child(parent, &child), ASX_OK);
@@ -500,8 +516,9 @@ TEST(region_drain_cancels_descendant_tasks_with_parent_attribution) {
     ASSERT_EQ(asx_task_spawn(child, q_poll_pending, NULL, &t_child), ASX_OK);
     ASSERT_EQ(asx_task_spawn(grandchild, q_poll_pending, NULL, &t_grand), ASX_OK);
 
-    /* Never-finishing tasks deep in the tree are cancelled and force-
-     * completed within their cleanup budget; every region closes. */
+    /* Never-finishing tasks deep in the tree are cancelled and, under the
+     * hard bound, force-completed within their cleanup budget; every
+     * region closes. */
     budget = asx_budget_from_polls(10000);
     ASSERT_EQ(asx_region_drain(parent, &budget), ASX_OK);
     ASSERT_EQ(asx_task_get_outcome(t_child, &out), ASX_OK);

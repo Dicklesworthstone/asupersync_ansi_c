@@ -241,8 +241,8 @@ Completed         .        .        .           .           .           .
 1. Cancel signals delivered by setting `CancelRequested` on the task
 2. Task does **not** see cancel until it calls `asx_checkpoint()` or `asx_is_cancelled()`
 3. Between `CancelRequested` and observation, task continues normal poll logic
-4. Once observed, task **must** transition to `Cancelling` within bounded cleanup budget
-5. If cleanup budget exceeded, scheduler may force-complete with `Cancelled` outcome
+4. Once observed (acknowledged at a checkpoint), the task transitions to `Cancelling` and its cleanup budget becomes its budget (`record/task.rs:1340`)
+5. A spent cleanup budget only strengthens the reason to `PollQuota` (lab, `lab/runtime.rs:4663`; advisory in production, `three_lane.rs:1268`): Rust never force-completes a task. C's opt-in `cleanup_hard_bound` does (a deviation excluded from parity, bd-9kll.3.2)
 6. **A task that completes naturally while in `CancelRequested` produces its natural outcome, NOT `Cancelled`**
 
 ### 4.6 Poll Contract
@@ -1009,9 +1009,9 @@ If finalization encounters unresolved obligations:
 
 ### 13.4 Cleanup Budget Under Cancellation
 
-- Cleanup budget activates when task enters `Cancelling`
-- Repeated cancellation only strengthens constraints (never widens)
-- Overrun produces deterministic force-complete with explicit metadata (never undefined stalling)
+- Cleanup budget activates when task enters `Cancelling` (it replaces the task's budget)
+- Repeated cancellation meets the cleanup budgets (never widens); a request during cleanup replaces the task's budget with the met one again
+- Overrun strengthens the reason to `PollQuota`; the task keeps running until it completes (no force-complete in Rust; C offers it only as the opt-in `cleanup_hard_bound`)
 
 ### 13.5 Runtime Shutdown Sequence
 
@@ -1274,7 +1274,7 @@ API endpoints perform `handle.state_mask & expected_mask` for O(1) state validat
 | `cancel-protocol-001` | Full cancel protocol happy path |
 | `cancel-protocol-002` | Cancel propagation through region tree |
 | `cancel-protocol-003` | Cancel with cleanup budget enforcement |
-| `cancel-protocol-004` | Cancel budget exceeded (force-completion) |
+| `cancel-protocol-004` | Cancel budget exceeded (reason strengthened to PollQuota; no force-completion) |
 | `cancel-protocol-005` | Multiple cancel on same target (idempotent) |
 | `cancel-protocol-006` | Cancel attribution chain recorded |
 | `cancel-protocol-007` | Each reason kind produces correct metadata |
@@ -1388,7 +1388,7 @@ API endpoints perform `handle.state_mask & expected_mask` for O(1) state validat
 | `finalization-leak-003` | Unresolved obligations leaked deterministically |
 | `finalization-channel-drain-004` | Non-drained channel blocks quiescence |
 | `finalization-timer-drain-005` | Pending timer blocks quiescence |
-| `finalization-cancel-budget-006` | Cleanup budget overrun -> deterministic force-complete |
+| `finalization-cancel-budget-006` | Cleanup budget overrun -> reason strengthened to PollQuota, task runs to its own completion |
 | `finalization-phase-regression-007` | Illegal phase regression rejected |
 
 ---

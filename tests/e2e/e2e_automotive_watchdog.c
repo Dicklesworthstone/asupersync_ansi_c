@@ -152,10 +152,26 @@ static void scenario_degraded_transition(void) {
     SCENARIO_END();
 }
 
-/* auto-deadline-miss-003: stubborn task force-completed by scheduler */
+/* A fresh runtime with the opt-in hard cleanup bound
+ * (asx_runtime_config.cleanup_hard_bound): the watchdog deployment that
+ * must end a stubborn cancelled task (Rust never force-completes). */
+static asx_status reset_with_hard_cleanup_bound(void) {
+    static asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_status st;
+    asx_runtime_config_init(&cfg);
+    cfg.cleanup_hard_bound = 1u;
+    st = asx_runtime_hooks_init(&hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&rt, &cfg, &hooks);
+    return st;
+}
+
+/* auto-deadline-miss-003: stubborn task force-completed by the scheduler
+ * under the hard cleanup bound */
 static void scenario_deadline_miss(void) {
     SCENARIO_BEGIN("auto-deadline-miss-003.forced_completion");
-    asx_runtime_reset();
+    SCENARIO_CHECK(reset_with_hard_cleanup_bound() == ASX_OK, "runtime with hard cleanup bound");
 
     asx_region_id rid;
     asx_task_id tid;

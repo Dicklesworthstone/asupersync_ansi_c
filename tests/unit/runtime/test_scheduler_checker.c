@@ -14,6 +14,7 @@
 #include "../../test_harness.h"
 #include <asx/asx.h>
 #include <asx/core/cancel.h>
+#include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 
 /* Suppress warn_unused_result for intentionally-ignored calls */
@@ -22,6 +23,21 @@
         asx_status s_ = asx_scheduler_run((rid), (bud));                                           \
         (void)s_;                                                                                  \
     } while (0)
+
+/* A fresh runtime with the opt-in hard cleanup bound
+ * (asx_runtime_config.cleanup_hard_bound), for the forced-completion
+ * check (Rust never force-completes). */
+static asx_status reset_with_hard_cleanup_bound(void) {
+    static asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_status st;
+    asx_runtime_config_init(&cfg);
+    cfg.cleanup_hard_bound = 1u;
+    st = asx_runtime_hooks_init(&hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&rt, &cfg, &hooks);
+    return st;
+}
 
 /* -------------------------------------------------------------------
  * Task behavior enum — determines what the poll function does
@@ -563,7 +579,7 @@ TEST(checker_cycle_budget_checkpoint) {
     asx_task_state state;
     asx_outcome out;
 
-    asx_runtime_reset();
+    ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Task that checkpoints but never completes on its own */
@@ -578,7 +594,8 @@ TEST(checker_cycle_budget_checkpoint) {
     /* Cancel with SHUTDOWN (tightest budget) */
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_SHUTDOWN), ASX_OK);
 
-    /* Run scheduler — should force-complete after cleanup budget exhaustion */
+    /* Run scheduler — the hard bound force-completes it once its cleanup
+     * polls are spent */
     budget = asx_budget_from_polls(200);
     SCHED_RUN_IGNORE(rid, &budget);
 

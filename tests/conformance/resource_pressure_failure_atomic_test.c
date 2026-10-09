@@ -83,6 +83,22 @@ static void reset_all(void) {
     asx_timer_wheel_reset(asx_timer_wheel_global());
 }
 
+/* reset_all plus the opt-in hard cleanup bound
+ * (asx_runtime_config.cleanup_hard_bound), the only mode in which an
+ * exhausted cleanup budget force-completes a task (Rust never does). */
+static asx_status reset_all_with_hard_cleanup_bound(void) {
+    static asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_status st;
+    reset_all();
+    asx_runtime_config_init(&cfg);
+    cfg.cleanup_hard_bound = 1u;
+    st = asx_runtime_hooks_init(&hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&rt, &cfg, &hooks);
+    return st;
+}
+
 static void metrics_capture(pressure_metrics *metrics) {
     if (metrics == NULL) return;
     memset(metrics, 0, sizeof(*metrics));
@@ -618,7 +634,10 @@ static void scenario_cancel_cleanup_budget_exhaustion(pressure_case_result *resu
     result->surface = "cancel_cleanup_budget";
     result->expected_status = ASX_E_CANCELLED;
     result->failure_atomic_expected = 0u;
-    reset_all();
+    if (reset_all_with_hard_cleanup_bound() != ASX_OK) {
+        result->diagnostic = "failed to start a runtime with the hard cleanup bound";
+        goto finish;
+    }
 
     if (asx_region_open(&region) != ASX_OK ||
         asx_task_spawn(region, poll_checkpoint_forever, NULL, &task) != ASX_OK) {

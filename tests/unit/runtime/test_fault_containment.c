@@ -13,6 +13,7 @@
 #include <asx/asx_config.h>
 #include <asx/core/cancel.h>
 #include <asx/core/ghost.h>
+#include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 
 /* Suppress warn_unused_result for intentionally-ignored scheduler calls. */
@@ -21,6 +22,21 @@
         asx_status s_ = asx_scheduler_run((rid), (bud));                                           \
         (void)s_;                                                                                  \
     } while (0)
+
+/* A fresh runtime with the opt-in hard cleanup bound
+ * (asx_runtime_config.cleanup_hard_bound): containment of cancelled tasks
+ * that never finish relies on it (Rust never force-completes). */
+static asx_status reset_with_hard_cleanup_bound(void) {
+    static asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_status st;
+    asx_runtime_config_init(&cfg);
+    cfg.cleanup_hard_bound = 1u;
+    st = asx_runtime_hooks_init(&hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&rt, &cfg, &hooks);
+    return st;
+}
 
 /* -------------------------------------------------------------------
  * Test poll functions
@@ -397,7 +413,7 @@ TEST(cancelled_task_on_poisoned_region) {
     asx_outcome out;
     asx_budget budget;
 
-    asx_runtime_reset();
+    ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
@@ -474,7 +490,7 @@ TEST(poison_plus_cancel_propagation_resolves_tasks) {
     asx_budget budget;
     uint32_t cancelled;
 
-    asx_runtime_reset();
+    ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid1), ASX_OK);

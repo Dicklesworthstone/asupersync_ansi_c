@@ -12,6 +12,7 @@
 #include <asx/asx.h>
 #include <asx/core/cancel.h>
 #include <asx/core/ghost.h>
+#include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <string.h>
 
@@ -22,6 +23,22 @@
         asx_status s_ = asx_scheduler_run((rid), (bud));                                           \
         (void)s_;                                                                                  \
     } while (0)
+
+/* A fresh runtime with the opt-in hard cleanup bound
+ * (asx_runtime_config.cleanup_hard_bound): for the tests about
+ * force-completing cancelled tasks that never finish, a deviation from
+ * Rust that a deployment must ask for. */
+static asx_status reset_with_hard_cleanup_bound(void) {
+    static asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_status st;
+    asx_runtime_config_init(&cfg);
+    cfg.cleanup_hard_bound = 1u;
+    st = asx_runtime_hooks_init(&hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&rt, &cfg, &hooks);
+    return st;
+}
 
 /* -------------------------------------------------------------------
  * Test poll functions
@@ -368,7 +385,8 @@ TEST(cancelled_task_completion_gets_cancelled_outcome) {
 }
 
 /* -------------------------------------------------------------------
- * Test: cleanup budget exhaustion forces task completion
+ * Test: cleanup budget exhaustion forces task completion (opt-in hard
+ * bound only; Rust never force-completes)
  * ------------------------------------------------------------------- */
 
 TEST(cleanup_budget_exhaustion_forces_completion) {
@@ -380,7 +398,7 @@ TEST(cleanup_budget_exhaustion_forces_completion) {
     asx_budget budget;
     asx_checkpoint_result cr;
 
-    asx_runtime_reset();
+    ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_forever, NULL, &tid), ASX_OK);
@@ -424,7 +442,7 @@ TEST(cancel_forced_event_emitted) {
     uint32_t i;
     int found_forced = 0;
 
-    asx_runtime_reset();
+    ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_forever, NULL, &tid), ASX_OK);
@@ -560,7 +578,8 @@ TEST(cancel_storm_all_tasks_resolve) {
     asx_budget budget;
     int k;
 
-    asx_runtime_reset();
+    /* The tasks never finish on their own: only the hard bound ends them. */
+    ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
@@ -801,7 +820,8 @@ TEST(masked_task_is_not_force_completed) {
     asx_outcome out;
     masked_section_state s;
 
-    asx_runtime_reset();
+    /* Even the hard bound never interrupts a masked section. */
+    ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
     s.polls = 0;
     s.unmask_at = 80u; /* well past SHUTDOWN's 50-poll cleanup budget */
     s.finished_itself = 0;
@@ -821,7 +841,7 @@ TEST(unmasked_task_is_force_completed_by_cleanup_budget) {
     asx_task_id tid;
     asx_budget budget;
 
-    asx_runtime_reset();
+    ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_mask(tid), ASX_OK);
@@ -1196,6 +1216,205 @@ TEST(obligation_abort_with_reason_records_it) {
     ASSERT_EQ((int)info.abort_reason, (int)ASX_OBLIGATION_ABORT_EXPLICIT);
 }
 
+/* -------------------------------------------------------------------
+ * Cleanup budgets, Rust semantics (bd-9kll.3.2): the cleanup budget
+ * becomes the task's budget when it acknowledges, a spent cleanup quota
+ * only strengthens the reason, and no task is force-completed.
+ * ------------------------------------------------------------------- */
+
+static int saw_cancel_forced(void) {
+    uint32_t i;
+    for (i = 0; i < asx_scheduler_event_count(); i++) {
+        asx_scheduler_event ev;
+        if (asx_scheduler_event_get(i, &ev) && ev.kind == ASX_SCHED_EVENT_CANCEL_FORCED) return 1;
+    }
+    return 0;
+}
+
+typedef struct {
+    uint32_t cleanup_polls; /* polls since the cancel was acknowledged */
+    uint32_t finish_after;  /* completes on this many cleanup polls */
+    asx_cancel_kind kind;   /* reason kind seen on the latest one */
+} cleanup_state;
+
+/* Checkpoints every poll; once cancelled, cleans up for `finish_after`
+ * polls and then completes. */
+static asx_status poll_cleanup(void *data, asx_task_id self) {
+    cleanup_state *s = (cleanup_state *)data;
+    asx_checkpoint_result cr;
+    if (asx_checkpoint(self, &cr) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (!cr.cancelled) return ASX_E_PENDING;
+    s->cleanup_polls++;
+    s->kind = cr.kind;
+    return s->cleanup_polls >= s->finish_after ? ASX_OK : ASX_E_PENDING;
+}
+
+/* Spawn poll_cleanup, run it once, cancel it with `kind`, run to the end. */
+static asx_status run_cleanup(cleanup_state *s, asx_cancel_kind kind, asx_task_id *out_tid) {
+    asx_region_id rid;
+    asx_budget budget;
+    asx_status st;
+    asx_runtime_reset();
+    st = asx_region_open(&rid);
+    if (st == ASX_OK) st = asx_task_spawn(rid, poll_cleanup, s, out_tid);
+    if (st != ASX_OK) return st;
+    budget = asx_budget_from_polls(1);
+    SCHED_RUN_IGNORE(rid, &budget);
+    st = asx_task_cancel(*out_tid, kind);
+    if (st != ASX_OK) return st;
+    budget = asx_budget_from_polls(5000);
+    return asx_scheduler_run(rid, &budget);
+}
+
+TEST(cleanup_within_its_quota_completes_with_the_cancel_reason) {
+    cleanup_state s;
+    asx_task_id tid;
+    asx_outcome out;
+    memset(&s, 0, sizeof(s));
+    s.finish_after = 300u; /* TIMEOUT's cleanup quota is 500 */
+    ASSERT_EQ(run_cleanup(&s, ASX_CANCEL_TIMEOUT, &tid), ASX_OK);
+    ASSERT_EQ(s.cleanup_polls, 300u);
+    ASSERT_EQ((int)s.kind, (int)ASX_CANCEL_TIMEOUT);
+    ASSERT_EQ(asx_task_get_outcome(tid, &out), ASX_OK);
+    ASSERT_EQ(asx_outcome_severity_of(&out), ASX_OUTCOME_CANCELLED);
+    ASSERT_FALSE(saw_cancel_forced());
+}
+
+TEST(cleanup_past_its_quota_is_strengthened_not_force_completed) {
+    cleanup_state s;
+    asx_task_id tid;
+    asx_outcome out;
+    asx_cancel_reason reason;
+    memset(&s, 0, sizeof(s));
+    s.finish_after = 600u; /* past TIMEOUT's 500 cleanup polls */
+    ASSERT_EQ(run_cleanup(&s, ASX_CANCEL_TIMEOUT, &tid), ASX_OK);
+    /* The task ran its whole cleanup: it was not cut short at 500. */
+    ASSERT_EQ(s.cleanup_polls, 600u);
+    /* The spent quota strengthened TIMEOUT (severity 1) to POLL_QUOTA. */
+    ASSERT_EQ((int)s.kind, (int)ASX_CANCEL_POLL_QUOTA);
+    ASSERT_EQ(asx_task_get_outcome(tid, &out), ASX_OK);
+    ASSERT_EQ(asx_outcome_severity_of(&out), ASX_OUTCOME_CANCELLED);
+    ASSERT_EQ(asx_task_get_cancel_reason(tid, &reason), ASX_OK);
+    ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_POLL_QUOTA);
+    ASSERT_FALSE(saw_cancel_forced());
+}
+
+TEST(unacknowledged_cancel_is_never_force_completed) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_task_state state;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_SHUTDOWN), ASX_OK);
+    /* Far past SHUTDOWN's 50 cleanup polls: the task, which never
+     * checkpoints, keeps running until the caller's budget runs out. */
+    budget = asx_budget_from_polls(200);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
+    ASSERT_EQ((int)state, (int)ASX_TASK_CANCEL_REQUESTED);
+    ASSERT_FALSE(saw_cancel_forced());
+}
+
+TEST(acknowledgement_replaces_the_budget_with_the_cleanup_budget) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget tb;
+    asx_budget budget;
+    asx_budget got;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    tb = asx_budget_from_polls(10);
+    tb.cost_quota = 50u;
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_checkpoint_forever, NULL, &tb, &tid), ASX_OK);
+    budget = asx_budget_from_polls(1);
+    SCHED_RUN_IGNORE(rid, &budget);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_DEADLINE), ASX_OK);
+    /* Not acknowledged yet: the task keeps its own budget. */
+    ASSERT_EQ(asx_task_get_budget(tid, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 9u);
+    /* The poll acknowledges; then DEADLINE's cleanup budget (500 polls,
+     * priority 210, no deadline or cost) replaces it. */
+    budget = asx_budget_from_polls(1);
+    SCHED_RUN_IGNORE(rid, &budget);
+    ASSERT_EQ(asx_task_get_budget(tid, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 500u);
+    ASSERT_EQ((int)got.priority, 210);
+    ASSERT_EQ(got.deadline, (asx_time)0);
+    ASSERT_EQ(got.cost_quota, UINT64_MAX);
+    /* The next poll is charged to it. */
+    budget = asx_budget_from_polls(1);
+    SCHED_RUN_IGNORE(rid, &budget);
+    ASSERT_EQ(asx_task_get_budget(tid, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 499u);
+}
+
+TEST(cancel_during_cleanup_meets_and_refills_the_budget) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_budget got;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_forever, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
+    budget = asx_budget_from_polls(11);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(asx_task_get_budget(tid, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 990u); /* USER: 1000, 10 polls since the ack */
+    /* A SHUTDOWN request meets the cleanup budget (min quota, max
+     * priority) and the task takes it whole (record/task.rs:752-770). */
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_SHUTDOWN), ASX_OK);
+    ASSERT_EQ(asx_task_get_budget(tid, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 50u);
+    ASSERT_EQ((int)got.priority, 255);
+    budget = asx_budget_from_polls(5);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(asx_task_get_budget(tid, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 45u);
+    /* A weaker request changes neither the reason nor the met budget, but
+     * the task takes the met budget again: its quota is refilled. */
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
+    ASSERT_EQ(asx_task_get_budget(tid, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 50u);
+}
+
+TEST(get_cleanup_budget_reports_the_met_budget_of_a_pending_cancel) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget got;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_get_cleanup_budget(tid, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_task_get_cleanup_budget(tid, &got), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_TIMEOUT), ASX_OK);
+    ASSERT_EQ(asx_task_get_cleanup_budget(tid, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 500u);
+    ASSERT_EQ((int)got.priority, 210);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_FAIL_FAST), ASX_OK);
+    ASSERT_EQ(asx_task_get_cleanup_budget(tid, &got), ASX_OK);
+    ASSERT_EQ(got.poll_quota, 200u);
+    ASSERT_EQ((int)got.priority, 220);
+    ASSERT_EQ(asx_task_get_cleanup_budget(ASX_INVALID_ID, &got), ASX_E_NOT_FOUND);
+}
+
+TEST(cleanup_hard_bound_config_is_validated) {
+    asx_runtime_config cfg;
+    asx_runtime_config_init(&cfg);
+    ASSERT_EQ(cfg.cleanup_hard_bound, 0u);
+    ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_OK);
+    cfg.cleanup_hard_bound = 1u;
+    ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_OK);
+    cfg.cleanup_hard_bound = 2u;
+    ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_E_INVALID_ARGUMENT);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_cancellation (runtime) ===\n");
 
@@ -1238,6 +1457,13 @@ int main(void) {
     RUN_TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline);
     RUN_TEST(budget_cancel_is_attributed_to_the_task_and_records_no_request);
     RUN_TEST(obligation_abort_with_reason_records_it);
+    RUN_TEST(cleanup_within_its_quota_completes_with_the_cancel_reason);
+    RUN_TEST(cleanup_past_its_quota_is_strengthened_not_force_completed);
+    RUN_TEST(unacknowledged_cancel_is_never_force_completed);
+    RUN_TEST(acknowledgement_replaces_the_budget_with_the_cleanup_budget);
+    RUN_TEST(cancel_during_cleanup_meets_and_refills_the_budget);
+    RUN_TEST(get_cleanup_budget_reports_the_met_budget_of_a_pending_cancel);
+    RUN_TEST(cleanup_hard_bound_config_is_validated);
 
     TEST_REPORT();
     return test_failures;

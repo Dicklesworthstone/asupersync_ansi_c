@@ -17,6 +17,7 @@
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
 #include <asx/core/outcome.h>
+#include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
 
@@ -26,6 +27,22 @@
         asx_status s_ = asx_scheduler_run((rid), (bud));                                           \
         (void)s_;                                                                                  \
     } while (0)
+
+/* A fresh runtime with the opt-in hard cleanup bound
+ * (asx_runtime_config.cleanup_hard_bound): a watchdog deployment that
+ * must end a stubborn cancelled task asks for it (Rust never
+ * force-completes). */
+static asx_status reset_with_hard_cleanup_bound(void) {
+    static asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_status st;
+    asx_runtime_config_init(&cfg);
+    cfg.cleanup_hard_bound = 1u;
+    st = asx_runtime_hooks_init(&hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&rt, &cfg, &hooks);
+    return st;
+}
 
 /* ===================================================================
  * Poll functions for automotive scenarios
@@ -354,7 +371,7 @@ TEST(auto_deadline_miss_003_forced_completion) {
     asx_outcome out;
     asx_checkpoint_result cr;
 
-    asx_runtime_reset();
+    ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     /* Stubborn task: checkpoints but never completes voluntarily */
@@ -395,7 +412,7 @@ TEST(auto_deadline_miss_003_cancel_forced_event) {
     uint32_t i;
     int found_forced = 0;
 
-    asx_runtime_reset();
+    ASSERT_EQ(reset_with_hard_cleanup_bound(), ASX_OK);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_stubborn, NULL, &tid), ASX_OK);

@@ -966,8 +966,9 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                 lane->tasks[j] = tid;
                 worker_idx = parallel_select_worker((asx_lane_class)li, tid);
 
-                /* Handle cancel force-completion */
-                if (t->cancel_pending &&
+                /* Cancel force-completion: the opt-in hard cleanup bound
+                 * only (see scheduler.c; Rust never force-completes). */
+                if (asx_cleanup_hard_bound_internal() && t->cancel_pending &&
                     (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED) &&
                     t->cleanup_polls_remaining == 0) {
                     if (t->state == ASX_TASK_CANCEL_REQUESTED) {
@@ -1078,6 +1079,12 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                 asx_error_ledger_bind_task(tid);
                 poll_result = t->poll_fn(t->user_data, tid);
                 asx_error_ledger_bind_task(ASX_INVALID_ID);
+                /* Acknowledged during this poll and still running: the
+                 * cleanup budget becomes the task's budget (as in
+                 * scheduler.c). */
+                if (poll_result == ASX_E_PENDING && !t->panicked) {
+                    asx_task_apply_cleanup_budget_internal(t);
+                }
                 /* A panic ends the task whatever the poll returned. */
                 if (t->panicked && poll_result == ASX_E_PENDING) poll_result = ASX_OK;
                 polls_this_lane++;
@@ -1172,8 +1179,9 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     continue;
                 }
 
-                /* PENDING — still active */
-                if (t->cancel_pending && t->cleanup_polls_remaining > 0) {
+                /* PENDING — still active (the hard bound's counter) */
+                if (asx_cleanup_hard_bound_internal() && t->cancel_pending &&
+                    t->cleanup_polls_remaining > 0) {
                     t->cleanup_polls_remaining--;
                 }
 

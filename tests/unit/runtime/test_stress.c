@@ -11,6 +11,7 @@
 #include "test_harness.h"
 #include "test_log.h"
 #include <asx/asx.h>
+#include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
 #include <asx/time/timer_wheel.h>
@@ -25,6 +26,23 @@ static void reset_all(void) {
     asx_ghost_reset();
     asx_trace_reset();
     asx_replay_clear_reference();
+}
+
+/* reset_all plus the opt-in hard cleanup bound
+ * (asx_runtime_config.cleanup_hard_bound): for the storms of cancelled
+ * tasks that never finish, which only the hard bound ends (Rust never
+ * force-completes). */
+static asx_status reset_all_with_hard_cleanup_bound(void) {
+    static asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_status st;
+    reset_all();
+    asx_runtime_config_init(&cfg);
+    cfg.cleanup_hard_bound = 1u;
+    st = asx_runtime_hooks_init(&hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&rt, &cfg, &hooks);
+    return st;
 }
 
 /* Immediate-complete poll */
@@ -153,7 +171,7 @@ TEST(cancel_all_tasks_in_region) {
     asx_task_id tids[16];
     uint32_t i;
 
-    reset_all();
+    ASSERT_EQ(reset_all_with_hard_cleanup_bound(), ASX_OK);
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Spawn 16 pending tasks */
@@ -193,7 +211,7 @@ TEST(cancel_storm_rapid_cancel_propagate) {
     asx_task_id tid;
     uint32_t i;
 
-    reset_all();
+    ASSERT_EQ(reset_all_with_hard_cleanup_bound(), ASX_OK);
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
     /* Spawn a single pending task */
@@ -272,7 +290,7 @@ TEST(multi_region_cancel_one_leaves_other_intact) {
     asx_region_id r1, r2;
     asx_task_id t1, t2;
 
-    reset_all();
+    ASSERT_EQ(reset_all_with_hard_cleanup_bound(), ASX_OK);
 
     ASSERT_EQ(asx_region_open(&r1), ASX_OK);
     ASSERT_EQ(asx_region_open(&r2), ASX_OK);

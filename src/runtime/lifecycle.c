@@ -72,6 +72,9 @@ static asx_leak_escalation_config g_leak_escalation;
 static int g_leak_escalation_set = 0;
 static uint64_t g_leak_count = 0;
 
+/* Opt-in hard cleanup bound (runtime config); off is Rust's semantics. */
+static int g_cleanup_hard_bound = 0;
+
 /* -------------------------------------------------------------------
  * Reset (test support)
  * ------------------------------------------------------------------- */
@@ -108,6 +111,8 @@ void asx_runtime_reset(void) {
         g_tasks[i].cancel_phase = 0;
         g_tasks[i].cancel_pending = 0;
         g_tasks[i].cancel_epoch = 0;
+        g_tasks[i].cleanup_budget = asx_budget_infinite();
+        g_tasks[i].cleanup_applied = 0;
         g_tasks[i].cleanup_polls_remaining = 0;
         g_tasks[i].detached = 0;
         g_tasks[i].next_free = ASX_SLOT_NONE;
@@ -136,6 +141,7 @@ void asx_runtime_reset(void) {
     g_leak_response = ASX_LEAK_LOG;
     g_leak_escalation_set = 0;
     g_leak_count = 0;
+    g_cleanup_hard_bound = 0;
 
     /* Reset ghost safety monitors */
     asx_ghost_reset();
@@ -440,6 +446,16 @@ void asx_runtime_set_leak_policy_internal(asx_leak_response response,
 }
 
 uint64_t asx_obligation_leak_count(void) { return g_leak_count; }
+
+void asx_runtime_set_cleanup_hard_bound_internal(int on) { g_cleanup_hard_bound = on ? 1 : 0; }
+
+int asx_cleanup_hard_bound_internal(void) { return g_cleanup_hard_bound; }
+
+void asx_task_apply_cleanup_budget_internal(asx_task_slot *t) {
+    if (t->cleanup_applied || t->state != ASX_TASK_CANCELLING) return;
+    t->budget = t->cleanup_budget;
+    t->cleanup_applied = 1u;
+}
 
 static asx_leak_response asx_leak_policy_effective(void) {
     if (g_leak_escalation_set && g_leak_count >= g_leak_escalation.threshold) {
@@ -848,6 +864,8 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     g_tasks[idx].cancel_phase = 0;
     g_tasks[idx].cancel_pending = 0;
     g_tasks[idx].cancel_epoch = 0;
+    g_tasks[idx].cleanup_budget = asx_budget_infinite();
+    g_tasks[idx].cleanup_applied = 0;
     g_tasks[idx].cleanup_polls_remaining = 0;
     memset(&g_tasks[idx].cancel_reason, 0, sizeof(g_tasks[idx].cancel_reason));
 
@@ -972,6 +990,17 @@ asx_status asx_task_get_budget(asx_task_id id, asx_budget *out) {
     st = asx_task_slot_lookup(id, &t);
     if (st != ASX_OK) return st;
     *out = t->budget;
+    return ASX_OK;
+}
+
+asx_status asx_task_get_cleanup_budget(asx_task_id id, asx_budget *out) {
+    asx_task_slot *t;
+    asx_status st;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
+    if (!t->cancel_pending || asx_task_is_terminal(t->state)) return ASX_E_INVALID_STATE;
+    *out = t->cleanup_budget;
     return ASX_OK;
 }
 

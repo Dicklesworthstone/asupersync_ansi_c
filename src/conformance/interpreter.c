@@ -2296,7 +2296,18 @@ static uint32_t build_snapshot(uint32_t obligations) {
                      outcome != ASX_JSON_NONE ? outcome : asx_json_new_null(g_out));
         asx_json_set(g_out, rec, "cancel_reason",
                      reason != ASX_JSON_NONE ? reason : asx_json_new_null(g_out));
-        asx_json_set(g_out, rec, "cleanup_budget", asx_json_new_null(g_out));
+        {
+            /* A cancelled live task's cleanup budget (Rust's TaskState
+             * cleanup_budget; vocabulary §6), null otherwise. */
+            asx_budget cb;
+            uint32_t node = asx_json_new_null(g_out);
+            if (t->spawned && !t->joined && asx_task_get_cleanup_budget(t->id, &cb) == ASX_OK) {
+                node = asx_json_new_object(g_out);
+                asx_json_set(g_out, node, "poll_quota", asx_json_new_u64(g_out, cb.poll_quota));
+                asx_json_set(g_out, node, "priority", asx_json_new_u64(g_out, cb.priority));
+            }
+            asx_json_set(g_out, rec, "cleanup_budget", node);
+        }
         asx_json_set(g_out, tasks, t->name, rec);
     }
     for (i = 0; i < g_n_regions; i++) {

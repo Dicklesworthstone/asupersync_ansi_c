@@ -36,6 +36,7 @@
  *   - io_backend: changes reactor bootstrap/backend contract
  *   - max_cancel_chain_depth: existing chains may exceed new limit
  *   - max_cancel_chain_memory: existing allocations may exceed new cap
+ *   - cleanup_hard_bound: changes whether cancelled tasks are force-completed
  */
 
 #define FIELD_DESC(name_str, cls, field)                                                           \
@@ -55,6 +56,7 @@ static const asx_config_field_desc g_field_table[] = {
     FIELD_DESC("finalizer_escalation", ASX_CONFIG_RELOADABLE, finalizer_escalation),
     FIELD_DESC("max_cancel_chain_depth", ASX_CONFIG_RESTART_REQUIRED, max_cancel_chain_depth),
     FIELD_DESC("max_cancel_chain_memory", ASX_CONFIG_RESTART_REQUIRED, max_cancel_chain_memory),
+    FIELD_DESC("cleanup_hard_bound", ASX_CONFIG_RESTART_REQUIRED, cleanup_hard_bound),
 };
 
 #define FIELD_COUNT (sizeof(g_field_table) / sizeof(g_field_table[0]))

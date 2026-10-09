@@ -50,16 +50,18 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
 
     if (t->cancel_pending) {
         /* Strengthen: the winning reason replaces the current one whole
-         * (Rust CancelReason::strengthen); a more severe kind also tightens
-         * the cleanup budget. Strengthening records no trace event: Rust
-         * has no strengthen event (state.rs:7794). */
+         * (Rust CancelReason::strengthen). Every request's cleanup budget
+         * is met into the task's, whether or not the reason changes, and
+         * a task already cleaning up takes the met budget as its budget,
+         * its quota refilled (record/task.rs:735-800). Strengthening
+         * records no trace event: Rust has no strengthen event
+         * (state.rs:7794). */
         asx_cancel_reason winner = asx_cancel_strengthen(&t->cancel_reason, reason);
-        if (asx_cancel_severity(winner.kind) > asx_cancel_severity(t->cancel_reason.kind)) {
-            cleanup = asx_cancel_cleanup_budget(winner.kind);
-            /* Tighten budget: take the minimum polls remaining */
-            if (asx_budget_polls(&cleanup) < t->cleanup_polls_remaining) {
-                t->cleanup_polls_remaining = asx_budget_polls(&cleanup);
-            }
+        cleanup = asx_cancel_cleanup_budget(reason->kind);
+        t->cleanup_budget = asx_budget_meet(&t->cleanup_budget, &cleanup);
+        if (t->cleanup_applied) t->budget = t->cleanup_budget;
+        if (asx_budget_polls(&t->cleanup_budget) < t->cleanup_polls_remaining) {
+            t->cleanup_polls_remaining = asx_budget_polls(&t->cleanup_budget);
         }
         t->cancel_reason = winner;
         t->cancel_epoch++;
@@ -94,6 +96,8 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
     t->cancel_epoch = 1;
 
     cleanup = asx_cancel_cleanup_budget(reason->kind);
+    t->cleanup_budget = cleanup;
+    t->cleanup_applied = 0;
     t->cleanup_polls_remaining = asx_budget_polls(&cleanup);
 
     /* Cancellation must be observed: a parked task becomes runnable so it
@@ -330,6 +334,14 @@ asx_status asx_region_get_cancel_reason(asx_region_id region, asx_cancel_reason 
  * Task checkpoint
  * ------------------------------------------------------------------- */
 
+/* Cleanup polls left: the cleanup budget's quota until the acknowledgement
+ * applies it, then what is left of the task's budget; under the opt-in
+ * hard bound, the force-completion counter. */
+static uint32_t cleanup_polls_left(const asx_task_slot *t) {
+    if (asx_cleanup_hard_bound_internal()) return t->cleanup_polls_remaining;
+    return t->cleanup_applied ? t->budget.poll_quota : asx_budget_polls(&t->cleanup_budget);
+}
+
 asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
     asx_task_slot *t;
     asx_status st;
@@ -381,7 +393,7 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
         out->cancelled = 0;
         out->masked = 1;
         out->phase = t->cancel_phase;
-        out->polls_remaining = t->cleanup_polls_remaining;
+        out->polls_remaining = cleanup_polls_left(t);
         out->kind = t->cancel_reason.kind;
         return ASX_OK;
     }
@@ -403,11 +415,12 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
 
     out->cancelled = 1;
     out->phase = t->cancel_phase;
-    out->polls_remaining = t->cleanup_polls_remaining;
+    out->polls_remaining = cleanup_polls_left(t);
     out->kind = t->cancel_reason.kind;
 
-    /* Budget is decremented by the scheduler after each poll,
-     * not here. Checkpoint only observes and transitions phases. */
+    /* The cleanup budget becomes the task's budget when this poll
+     * returns (asx_task_apply_cleanup_budget_internal), as Rust applies
+     * the acknowledgement after the poll. */
 
     return ASX_OK;
 }

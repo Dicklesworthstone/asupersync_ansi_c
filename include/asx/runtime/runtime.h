@@ -284,6 +284,15 @@ ASX_API ASX_MUST_USE asx_status asx_region_get_budget(asx_region_id id, asx_budg
 /* Read a task's remaining budget. Same errors as asx_region_get_budget. */
 ASX_API ASX_MUST_USE asx_status asx_task_get_budget(asx_task_id id, asx_budget *out);
 
+/* Read the cleanup budget a cancelled task carries: its cancel's cleanup
+ * budget, met with every later request's (it becomes the task's budget
+ * once the task acknowledges the cancel).
+ * Returns ASX_OK, ASX_E_INVALID_STATE if the task has no pending cancel or
+ * has completed, ASX_E_INVALID_ARGUMENT if out is NULL, ASX_E_NOT_FOUND /
+ * ASX_E_STALE_HANDLE for invalid handles.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_get_cleanup_budget(asx_task_id id, asx_budget *out);
+
 /* Charge `cost` units against the task's cost quota. When the quota cannot
  * cover it, the task is cancelled with ASX_CANCEL_COST_BUDGET and
  * ASX_E_COST_QUOTA_EXHAUSTED is returned (the quota is left untouched).

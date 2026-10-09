@@ -62,6 +62,17 @@ typedef struct {
     asx_cancel_reason cancel_reason;
     asx_cancel_witness_id cancel_witness;
     uint32_t cancel_epoch;
+    /* The cleanup budget the cancel carries (Rust TaskState::CancelRequested
+     * cleanup_budget, record/task.rs:730-820): the request's cleanup budget,
+     * met with every later request's. Once the task acknowledges, it becomes
+     * the task's budget (after that poll, as the lab applies the
+     * acknowledgement, lab/runtime.rs:4809, record/task.rs:1340), and it
+     * replaces the budget again on any request during cleanup. A spent
+     * cleanup quota then only strengthens the reason to POLL_QUOTA. */
+    asx_budget cleanup_budget;
+    uint8_t cleanup_applied; /* budget == cleanup_budget since acknowledgement */
+    /* Opt-in hard bound only (asx_runtime_config.cleanup_hard_bound): polls
+     * left, counted from the request, before the task is force-completed. */
     uint32_t cleanup_polls_remaining;
     int cancel_pending;  /* 1 if cancel signal delivered */
     uint32_t mask_depth; /* asx_task_mask() nesting; cancel deferred while > 0 */
@@ -228,9 +239,18 @@ asx_region_id asx_region_handle_for_slot(uint32_t slot_idx);
 void asx_runtime_set_leak_policy_internal(asx_leak_response response,
                                           const asx_leak_escalation_config *escalation);
 
-/* Resolve the obligations a completing task still holds: aborted with
- * reason CANCEL if the task was cancelled, otherwise handled as leaks per
- * the active policy. Returns the number of leaks recorded. Sets
+/* Opt-in hard cleanup bound (asx_runtime_config.cleanup_hard_bound; off
+ * after a bare asx_runtime_reset). */
+void asx_runtime_set_cleanup_hard_bound_internal(int on);
+int asx_cleanup_hard_bound_internal(void);
+
+/* A task that acknowledged its cancel takes its cleanup budget as its
+ * budget, once (see asx_task_slot.cleanup_budget). */
+void asx_task_apply_cleanup_budget_internal(asx_task_slot *t);
+
+/* Resolve the obligations a completing task still holds, cancelled or
+ * not, as leaks per the active policy (RECOVER aborts them with
+ * LEAK_RECOVERED). Returns the number of leaks recorded. Sets
  * *out_fail_fast when the policy demands fail-fast containment. */
 uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *out_fail_fast);
 

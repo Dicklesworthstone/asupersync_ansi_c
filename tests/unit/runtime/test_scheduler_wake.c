@@ -19,13 +19,19 @@ static asx_runtime g_rt;
 /* Always run on the runtime's virtual clock (default stub hooks), even in
  * live POSIX builds where asx_runtime_init_default installs a real clock:
  * these scenarios sleep for virtual hours. */
-static void setup(void) {
+static asx_status setup_with_cleanup_bound(uint32_t hard_bound) {
     asx_runtime_config cfg;
     asx_runtime_hooks hooks;
     asx_status st;
     asx_runtime_config_init(&cfg);
+    cfg.cleanup_hard_bound = hard_bound;
     st = asx_runtime_hooks_init(&hooks);
     if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);
+    return st;
+}
+
+static void setup(void) {
+    asx_status st = setup_with_cleanup_bound(0u);
     (void)st;
 }
 
@@ -443,7 +449,7 @@ TEST(cancel_wakes_parked_task) {
     asx_region_id r;
     asx_task_id t;
     park_state ps;
-    asx_outcome out;
+    asx_task_state state;
     asx_budget budget;
 
     setup();
@@ -452,10 +458,37 @@ TEST(cancel_wakes_parked_task) {
     ASSERT_EQ(asx_task_spawn(r, poll_park_until_done, &ps, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(ps.polls, 1u);
 
-    /* The cancelled task keeps parking without ever reaching completion:
-     * bounded cleanup (SHUTDOWN: 50 polls) force-completes it instead of
-     * blocking forever. */
+    /* The cancel wakes the parked task once. It parks again without ever
+     * observing the cancel, and nothing else can wake it: as in Rust
+     * (a futurelock, lab/runtime.rs:5612), it stays parked and the run
+     * reports that it would block. */
+    ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_SHUTDOWN), ASX_OK);
+    budget = asx_budget_from_polls(1000);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(ps.polls, 2u);
+    ASSERT_EQ(asx_task_get_state(t, &state), ASX_OK);
+    ASSERT_EQ((int)state, (int)ASX_TASK_CANCEL_REQUESTED);
+}
+
+TEST(hard_cleanup_bound_completes_a_stranded_cancelled_task) {
+    asx_region_id r;
+    asx_task_id t;
+    park_state ps;
+    asx_outcome out;
+    asx_budget budget;
+
+    ASSERT_EQ(setup_with_cleanup_bound(1u), ASX_OK);
+    memset(&ps, 0, sizeof(ps));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_park_until_done, &ps, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+
+    /* Under the opt-in hard bound the stranded cancelled task is polled
+     * through its cleanup budget (SHUTDOWN: 50 polls) and force-completed
+     * instead of blocking forever. */
     ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_SHUTDOWN), ASX_OK);
     budget = asx_budget_from_polls(1000);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
@@ -790,6 +823,7 @@ int main(void) {
     RUN_TEST(join_poll_rejects_self_join);
     RUN_TEST(get_error_reports_failure_status);
     RUN_TEST(cancel_wakes_parked_task);
+    RUN_TEST(hard_cleanup_bound_completes_a_stranded_cancelled_task);
     RUN_TEST(scheduler_runs_whole_region_subtree);
     RUN_TEST(drain_cancels_sleepers_without_waiting_for_deadline);
     RUN_TEST(wake_driven_run_is_deterministic);
