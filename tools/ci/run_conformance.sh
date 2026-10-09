@@ -215,7 +215,9 @@ if ! make -C "$REPO_ROOT" build "BUILD_DIR=$BUILD_DIR" >"$BUILD_LOG" 2>&1; then
     '{kind:"smoke",run_id:$run_id,mode:$mode,status:"fail",parity:"fail",delta_classification:"harness_defect",diagnostic:("make build failed; inspect " + $log)}' \
     >>"$REPORT_FILE"
 else
-  smoke_bin="$BUILD_DIR/tests/conformance/codec_json_baseline_test"
+  # One binary per mode: gates run in parallel under make -j must not
+  # build and run the same file (bd-4a9t).
+  smoke_bin="$BUILD_DIR/tests/conformance/codec_json_baseline_test.$MODE"
   mkdir -p "$(dirname "$smoke_bin")"
   smoke_cmd=(
     "$cc_bin"

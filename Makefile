@@ -1561,8 +1561,11 @@ fuzz-differential: $(CONFORMANCE_RUNNER)
 # fixture-integrity — fixture schema, provenance, digest recomputation,
 # capture_run_id format, unknown ops, and a codec round trip. It proves the
 # fixtures are well-formed captures; it does NOT execute the C runtime.
+# It and the two gates below depend on `build` so the build their script
+# starts (tools/ci/run_conformance.sh) finds nothing to do when make -j runs
+# them side by side (bd-4a9t).
 # ---------------------------------------------------------------------------
-fixture-integrity:
+fixture-integrity: build
 	@echo "[asx] fixture-integrity: fixture schema/provenance/digest check..."
 	@tools/ci/run_conformance.sh --mode fixture-integrity
 
@@ -1625,7 +1628,7 @@ test-capacity-x4:
 # ---------------------------------------------------------------------------
 # codec-equivalence — JSON vs BIN semantic digest parity
 # ---------------------------------------------------------------------------
-codec-equivalence:
+codec-equivalence: build
 	@echo "[asx] codec-equivalence: JSON vs BIN parity check..."
 	@if [ -x tools/ci/run_codec_equivalence.sh ]; then \
 		tools/ci/run_codec_equivalence.sh; \
@@ -1639,7 +1642,7 @@ codec-equivalence:
 # ---------------------------------------------------------------------------
 # profile-parity — cross-profile canonical digest parity
 # ---------------------------------------------------------------------------
-profile-parity:
+profile-parity: build
 	@echo "[asx] profile-parity: cross-profile digest check..."
 	@if [ -x tools/ci/run_profile_parity.sh ]; then \
 		tools/ci/run_profile_parity.sh; \
