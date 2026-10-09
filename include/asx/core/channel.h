@@ -44,8 +44,15 @@ extern "C" {
 /* Capacity limits (walking skeleton: fixed-size arenas)              */
 /* ------------------------------------------------------------------ */
 
+#ifndef ASX_MAX_CHANNELS
 #define ASX_MAX_CHANNELS 16u
+#endif
+#ifndef ASX_CHANNEL_MAX_CAPACITY
 #define ASX_CHANNEL_MAX_CAPACITY 64u
+#endif
+#if (ASX_MAX_CHANNELS) < 1 || (ASX_CHANNEL_MAX_CAPACITY) < 1
+#error "ASX_MAX_CHANNELS and ASX_CHANNEL_MAX_CAPACITY must be at least 1"
+#endif
 /* Parked tasks per wait direction (recv / reserve) per channel. Further
  * waiters are not parked: they yield and are re-polled every round. */
 #define ASX_CHANNEL_MAX_WAITERS 32u

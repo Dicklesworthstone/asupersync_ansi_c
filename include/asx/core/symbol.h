@@ -32,7 +32,12 @@ extern "C" {
 typedef uint16_t asx_symbol_id;
 
 #define ASX_SYMBOL_INVALID ((asx_symbol_id)0)
+#ifndef ASX_SYMBOL_REGISTRY_CAPACITY
 #define ASX_SYMBOL_REGISTRY_CAPACITY 256u
+#endif
+#if (ASX_SYMBOL_REGISTRY_CAPACITY) < 1
+#error "ASX_SYMBOL_REGISTRY_CAPACITY must be at least 1"
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Symbol registry                                                     */

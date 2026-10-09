@@ -59,7 +59,12 @@
 #include <stdint.h>
 
 /* Maximum capacity of one wait queue (woken flags live in a 64-bit mask). */
+#ifndef ASX_WAIT_QUEUE_MAX_CAPACITY
 #define ASX_WAIT_QUEUE_MAX_CAPACITY 64u
+#endif
+#if (ASX_WAIT_QUEUE_MAX_CAPACITY) < 1 || (ASX_WAIT_QUEUE_MAX_CAPACITY) > 64
+#error "ASX_WAIT_QUEUE_MAX_CAPACITY must be 1..64 (woken flags are a 64-bit mask)"
+#endif
 
 /* A bounded FIFO of parked tasks. Storage is owned by the primitive. */
 typedef struct {

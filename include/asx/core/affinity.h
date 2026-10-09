@@ -47,7 +47,12 @@ typedef uint32_t asx_affinity_domain;
 #define ASX_AFFINITY_DOMAIN_NONE ((asx_affinity_domain)0xFFFFFFFFu)
 
 /* Tracking table capacity */
+#ifndef ASX_AFFINITY_TABLE_CAPACITY
 #define ASX_AFFINITY_TABLE_CAPACITY 256u
+#endif
+#if (ASX_AFFINITY_TABLE_CAPACITY) < 1
+#error "ASX_AFFINITY_TABLE_CAPACITY must be at least 1"
+#endif
 
 /* ------------------------------------------------------------------ */
 /* API (real implementations when ASX_DEBUG_AFFINITY is defined)       */

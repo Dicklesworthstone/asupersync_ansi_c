@@ -26,7 +26,12 @@ extern "C" {
 #endif
 
 #if ASX_HAS_BLOCKING_SURFACE
+#ifndef ASX_MAX_BLOCKING_TASKS
 #define ASX_MAX_BLOCKING_TASKS 16u
+#endif
+#if (ASX_MAX_BLOCKING_TASKS) < 1
+#error "ASX_MAX_BLOCKING_TASKS must be at least 1"
+#endif
 
 /* -------------------------------------------------------------------
  * Blocking task function signature

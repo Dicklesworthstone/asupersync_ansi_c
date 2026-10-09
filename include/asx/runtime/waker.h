@@ -23,7 +23,12 @@
 extern "C" {
 #endif
 
+#ifndef ASX_MAX_WAKERS
 #define ASX_MAX_WAKERS 64u
+#endif
+#if (ASX_MAX_WAKERS) < 1
+#error "ASX_MAX_WAKERS must be at least 1"
+#endif
 
 /* -------------------------------------------------------------------
  * Waker handle

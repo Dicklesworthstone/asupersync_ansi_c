@@ -25,7 +25,12 @@
 extern "C" {
 #endif
 
+#ifndef ASX_MAX_DEADLINE_MONITORS
 #define ASX_MAX_DEADLINE_MONITORS 32u
+#endif
+#if (ASX_MAX_DEADLINE_MONITORS) < 1
+#error "ASX_MAX_DEADLINE_MONITORS must be at least 1"
+#endif
 
 /* -------------------------------------------------------------------
  * Deadline entry state

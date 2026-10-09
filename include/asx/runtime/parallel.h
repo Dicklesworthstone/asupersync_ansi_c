@@ -62,7 +62,12 @@ extern "C" {
 #define ASX_PARALLEL_GENERIC_TARGET_WORKERS 64u
 #define ASX_PARALLEL_MAX_LOCALITY_SHARDS ASX_MAX_WORKERS
 #define ASX_MAX_LANES 3u /* READY, CANCEL, TIMED */
+#ifndef ASX_LANE_TASK_CAPACITY
 #define ASX_LANE_TASK_CAPACITY 64u
+#endif
+#if (ASX_LANE_TASK_CAPACITY) < 1
+#error "ASX_LANE_TASK_CAPACITY must be at least 1"
+#endif
 
 /* -------------------------------------------------------------------
  * Lane classification

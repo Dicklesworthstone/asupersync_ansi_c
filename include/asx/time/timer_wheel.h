@@ -22,7 +22,12 @@ extern "C" {
 #endif
 
 /* Maximum number of concurrent timers in the wheel */
+#ifndef ASX_MAX_TIMERS
 #define ASX_MAX_TIMERS 128u
+#endif
+#if (ASX_MAX_TIMERS) < 1
+#error "ASX_MAX_TIMERS must be at least 1"
+#endif
 
 /* Default maximum timer duration (24 hours in nanoseconds) */
 #define ASX_TIMER_MAX_DURATION_NS ((uint64_t)86400ULL * 1000000000ULL)

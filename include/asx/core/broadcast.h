@@ -28,8 +28,15 @@
 extern "C" {
 #endif
 
+#ifndef ASX_MAX_BROADCASTS
 #define ASX_MAX_BROADCASTS 8u
+#endif
+#ifndef ASX_BROADCAST_MAX_CAPACITY
 #define ASX_BROADCAST_MAX_CAPACITY 32u
+#endif
+#if (ASX_MAX_BROADCASTS) < 1 || (ASX_BROADCAST_MAX_CAPACITY) < 1
+#error "ASX_MAX_BROADCASTS and ASX_BROADCAST_MAX_CAPACITY must be at least 1"
+#endif
 #define ASX_BROADCAST_MAX_RECEIVERS 8u
 
 /* -------------------------------------------------------------------
