@@ -481,6 +481,8 @@ uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *ou
                 }
             } else {
                 o->state = ASX_OBLIGATION_LEAKED;
+                /* Vocabulary obligation.leaked (Rust ObligationLeak). */
+                asx_trace_emit(ASX_TRACE_OBLIGATION_LEAK, oid, 0);
                 if (g_leak_count < UINT64_MAX) g_leak_count++;
                 leaks++;
                 if (policy == ASX_LEAK_LOG) {
@@ -1095,8 +1097,20 @@ asx_status asx_obligation_commit(asx_obligation_id id) {
 }
 
 asx_status asx_obligation_abort(asx_obligation_id id) {
+    return asx_obligation_abort_with_reason(id, ASX_OBLIGATION_ABORT_EXPLICIT);
+}
+
+asx_status asx_obligation_abort_with_reason(asx_obligation_id id,
+                                            asx_obligation_abort_reason reason) {
     asx_obligation_slot *o;
     asx_status st;
+
+    /* The reasons a caller may give (Rust ObligationAbortReason); NONE and
+     * LEAK_RECOVERED are the runtime's own. */
+    if (reason != ASX_OBLIGATION_ABORT_EXPLICIT && reason != ASX_OBLIGATION_ABORT_CANCEL &&
+        reason != ASX_OBLIGATION_ABORT_ERROR) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
 
     st = asx_obligation_slot_lookup(id, &o);
     if (st != ASX_OK) return st;
@@ -1109,7 +1123,7 @@ asx_status asx_obligation_abort(asx_obligation_id id) {
 
     asx_obligation_unlink_holder((uint32_t)(o - g_obligations));
     o->state = ASX_OBLIGATION_ABORTED;
-    o->abort_reason = ASX_OBLIGATION_ABORT_EXPLICIT;
+    o->abort_reason = reason;
 
     /* Ghost linearity monitor: track obligation resolution */
     asx_ghost_obligation_resolved(id);

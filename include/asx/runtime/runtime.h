@@ -636,6 +636,15 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_commit(asx_obligation_id id);
  * See: API_MISUSE_CATALOG.md § Obligation Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_obligation_abort(asx_obligation_id id);
 
+/* Abort a reserved obligation, recording why (Rust ObligationToken::abort
+ * with ObligationAbortReason): ASX_OBLIGATION_ABORT_EXPLICIT (what
+ * asx_obligation_abort records), _CANCEL or _ERROR.
+ * Returns the errors of asx_obligation_abort, or ASX_E_INVALID_ARGUMENT for
+ * any other reason (NONE and LEAK_RECOVERED are recorded by the runtime).
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status
+asx_obligation_abort_with_reason(asx_obligation_id id, asx_obligation_abort_reason reason);
+
 /* Query the current state of an obligation.
  *
  * Preconditions: out_state must not be NULL; id must be a valid handle.
@@ -755,6 +764,13 @@ ASX_API ASX_MUST_USE asx_status asx_task_arm_timer(asx_task_id self, asx_time de
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_wait_until(asx_task_id self, asx_time deadline);
 
+/* Drop the task's sleep timer before its deadline (a sleep that ended
+ * early): records ASX_TRACE_TIMER_CANCEL if a traced timer is registered
+ * and disarms the task's wake. No-op when nothing is armed.
+ * Returns ASX_OK or a lookup error for a bad handle.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_cancel_timer(asx_task_id self);
+
 /* Wake `watcher` when `target` completes, without joining it (a monitor:
  * supervisors, task groups). A task has at most one watcher; a new call
  * replaces the previous one. If `target` has already completed, the
@@ -780,6 +796,23 @@ ASX_API ASX_MUST_USE asx_status asx_task_watch(asx_task_id target, asx_task_id w
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_join_poll(asx_task_id self, asx_task_id target,
                                                    asx_outcome *out_outcome);
+
+/* Panic the calling task (Rust: a panic in the task body, caught at the
+ * poll boundary). Call from the task's own poll function; when that poll
+ * returns, whatever it returns, the task completes with outcome PANICKED
+ * and `message` (borrowed: it must outlive the task's record; NULL means
+ * "unknown panic"). A panic dominates a pending cancel and is not a
+ * containment fault.
+ *
+ * Returns ASX_OK, a lookup error for a bad handle, or ASX_E_INVALID_STATE
+ * if `self` is not being polled.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_panic(asx_task_id self, const char *message);
+
+/* Read a panicked task's message (while its slot is held). Returns ASX_OK,
+ * ASX_E_INVALID_ARGUMENT if out is NULL, a lookup error, or
+ * ASX_E_NOT_FOUND if the task did not panic. */
+ASX_API ASX_MUST_USE asx_status asx_task_get_panic_message(asx_task_id id, const char **out);
 
 /* Report the error status a task's poll function returned when it
  * failed (ASX_OK if it completed successfully or was cancelled).

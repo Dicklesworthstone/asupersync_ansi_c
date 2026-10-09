@@ -870,6 +870,163 @@ TEST(checkpoint_observes_budget_deadline_inline) {
     ASSERT_EQ((int)cr.kind, (int)ASX_CANCEL_DEADLINE);
 }
 
+/* -------------------------------------------------------------------
+ * Region cancel (Rust RuntimeState::cancel_request) and reason semantics
+ * ------------------------------------------------------------------- */
+
+static asx_cancel_reason test_reason(asx_cancel_kind kind, asx_region_id origin, asx_time ts,
+                                     const char *message) {
+    asx_cancel_reason r;
+    r.kind = kind;
+    r.origin_region = origin;
+    r.origin_task = ASX_INVALID_ID;
+    r.timestamp = ts;
+    r.message = message;
+    r.cause = NULL;
+    r.truncated = 0;
+    return r;
+}
+
+TEST(region_cancel_closes_subtree_and_chains_parent_reasons) {
+    asx_region_id parent;
+    asx_region_id child;
+    asx_task_id tp;
+    asx_task_id tc;
+    asx_task_id late;
+    asx_region_state rs;
+    asx_cancel_reason got;
+    asx_cancel_reason req;
+    uint32_t reached = 0;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&parent), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(parent, &child), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(parent, poll_checkpoint_then_complete, NULL, &tp), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(child, poll_checkpoint_then_complete, NULL, &tc), ASX_OK);
+
+    req = test_reason(ASX_CANCEL_USER, parent, 5u, "why");
+    ASSERT_EQ(asx_region_cancel(parent, &req, &reached), ASX_OK);
+    ASSERT_EQ(reached, 2u);
+
+    /* Every region of the subtree begins closing and admits no new task. */
+    ASSERT_EQ(asx_region_get_state(parent, &rs), ASX_OK);
+    ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSING);
+    ASSERT_EQ(asx_region_get_state(child, &rs), ASX_OK);
+    ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSING);
+    ASSERT_NE(asx_task_spawn(child, poll_complete, NULL, &late), ASX_OK);
+
+    /* The target's tasks take the request; a descendant's take
+     * ParentCancelled from the immediate parent, caused by its reason. */
+    ASSERT_EQ(asx_task_get_cancel_reason(tp, &got), ASX_OK);
+    ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_USER);
+    ASSERT_EQ(got.origin_region, parent);
+    ASSERT_EQ(got.timestamp, (asx_time)5u);
+    ASSERT_STR_EQ(got.message, "why");
+    ASSERT_EQ(asx_task_get_cancel_reason(tc, &got), ASX_OK);
+    ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_PARENT);
+    ASSERT_EQ(got.origin_region, parent);
+    ASSERT_EQ(got.timestamp, (asx_time)5u);
+    ASSERT_TRUE(got.message == NULL);
+    ASSERT_TRUE(got.cause != NULL && got.cause->kind == ASX_CANCEL_USER);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_REGION_CANCELLED), (uint64_t)2u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)2u);
+
+    /* Both regions finalize when their last task completes. */
+    budget = asx_budget_from_polls(32);
+    ASSERT_EQ(asx_scheduler_run(parent, &budget), ASX_OK);
+    ASSERT_EQ(asx_region_get_state(child, &rs), ASX_OK);
+    ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_region_get_state(parent, &rs), ASX_OK);
+    ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_REGION_CLOSED), (uint64_t)2u);
+}
+
+TEST(region_cancel_of_an_idle_region_finalizes_at_once) {
+    asx_region_id rid;
+    asx_region_state rs;
+    asx_cancel_reason req;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    req = test_reason(ASX_CANCEL_SHUTDOWN, rid, 0u, NULL);
+    ASSERT_EQ(asx_region_cancel(rid, &req, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_get_state(rid, &rs), ASX_OK);
+    ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_region_cancel(rid, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(cancel_strengthen_replaces_the_whole_reason_and_records_one_request) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_cancel_reason got;
+    asx_cancel_reason weak;
+    asx_cancel_reason strong;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_get_cancel_reason(tid, &got), ASX_E_NOT_FOUND);
+
+    weak = test_reason(ASX_CANCEL_USER, rid, 10u, NULL);
+    strong = test_reason(ASX_CANCEL_SHUTDOWN, rid, 20u, "stop");
+    ASSERT_EQ(asx_task_cancel_with_reason(tid, &weak), ASX_OK);
+    ASSERT_EQ(asx_task_cancel_with_reason(tid, &strong), ASX_OK);
+    ASSERT_EQ(asx_task_get_cancel_reason(tid, &got), ASX_OK);
+    ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_SHUTDOWN);
+    ASSERT_EQ(got.timestamp, (asx_time)20u);
+    ASSERT_STR_EQ(got.message, "stop");
+    /* A weaker request leaves it unchanged; only the first request is an
+     * event (Rust has no strengthen event). */
+    ASSERT_EQ(asx_task_cancel_with_reason(tid, &weak), ASX_OK);
+    ASSERT_EQ(asx_task_get_cancel_reason(tid, &got), ASX_OK);
+    ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_SHUTDOWN);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)1u);
+}
+
+TEST(budget_cancel_is_attributed_to_the_task_and_records_no_request) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_cancel_reason got;
+    asx_budget quota;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    quota = asx_budget_infinite();
+    quota.poll_quota = 1u;
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_checkpoint_then_complete, NULL, &quota, &tid),
+              ASX_OK);
+    budget = asx_budget_from_polls(16);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_get_cancel_reason(tid, &got), ASX_OK);
+    ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_POLL_QUOTA);
+    ASSERT_EQ(got.origin_region, rid);
+    ASSERT_TRUE(asx_handle_index(got.origin_task) == asx_handle_index(tid));
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)0u);
+}
+
+TEST(obligation_abort_with_reason_records_it) {
+    asx_region_id rid;
+    asx_obligation_id a;
+    asx_obligation_id b;
+    asx_obligation_info info;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_LEASE, ASX_INVALID_ID, &a),
+              ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_ACK, ASX_INVALID_ID, &b), ASX_OK);
+    ASSERT_EQ(asx_obligation_abort_with_reason(a, ASX_OBLIGATION_ABORT_LEAK_RECOVERED),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_obligation_abort_with_reason(a, ASX_OBLIGATION_ABORT_ERROR), ASX_OK);
+    ASSERT_EQ(asx_obligation_get_info(a, &info), ASX_OK);
+    ASSERT_EQ((int)info.abort_reason, (int)ASX_OBLIGATION_ABORT_ERROR);
+    ASSERT_EQ(asx_obligation_abort(b), ASX_OK);
+    ASSERT_EQ(asx_obligation_get_info(b, &info), ASX_OK);
+    ASSERT_EQ((int)info.abort_reason, (int)ASX_OBLIGATION_ABORT_EXPLICIT);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_cancellation (runtime) ===\n");
 
@@ -901,6 +1058,11 @@ int main(void) {
     RUN_TEST(unmasked_task_is_force_completed_by_cleanup_budget);
     RUN_TEST(mask_depth_is_bounded);
     RUN_TEST(checkpoint_observes_budget_deadline_inline);
+    RUN_TEST(region_cancel_closes_subtree_and_chains_parent_reasons);
+    RUN_TEST(region_cancel_of_an_idle_region_finalizes_at_once);
+    RUN_TEST(cancel_strengthen_replaces_the_whole_reason_and_records_one_request);
+    RUN_TEST(budget_cancel_is_attributed_to_the_task_and_records_no_request);
+    RUN_TEST(obligation_abort_with_reason_records_it);
 
     TEST_REPORT();
     return test_failures;

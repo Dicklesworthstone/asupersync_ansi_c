@@ -365,18 +365,6 @@ open gap with the gap named; `make conformance` lists them as ERROR.
 
 Open:
 
-- **Panicked outcome.** C never produces `ASX_OUTCOME_PANICKED` from task
-  completion; only the outcome-join code mentions it. `return {"tag":"panicked"}`
-  needs a completion path that records a panic with its message.
-- **Abort reason.** `asx_obligation_abort(id)` takes no abort reason. The
-  vocabulary requires `Cancel`/`Error`/`Explicit`, and a dropped permit
-  aborts with `Cancel`.
-- **Obligation leak.** C needs leak reporting with the
-  `obligation.leaked` vocabulary event.
-- **Budget-deadline sleep.** C wakes a sleeping task at its budget deadline
-  and its bounded cleanup force-completes it; Rust lets a Deadline-kind
-  sleep run to its own deadline and reports the cancel at the next
-  checkpoint (`budget-deadline-sleep-checkpoint-001`).
 - **Non-reserving channel sends.** `send` and `try_send` must not register
   an obligation; `reserve_send` must register a `SendPermit`; a semaphore
   permit must register a `SemaphorePermit`.
@@ -399,6 +387,17 @@ Closed (each verified by a fixture that now matches):
 - **`user.trace` emission** for the `trace` step (`asx_trace_user`).
 - **Timer events** for sleeps (`timers-same-deadline-001`,
   `quiescence-pending-timer-001`).
+- **Sleep as a cancellation point**: `asx_sleep_poll` ends early on a cancel
+  that is neither Timeout nor Deadline (one extra scheduler trip when first
+  polled after it) and keeps sleeping through a budget deadline; idle
+  scheduling no longer forces awake a cancelled task whose timer or join
+  wake is pending (`budget-deadline-sleep-checkpoint-001`).
+- **Panicked outcome**: `asx_task_panic(self, message)` completes the task
+  PANICKED with its message (`task-lifecycle-panic-001`).
+- **Abort reason**: `asx_obligation_abort_with_reason` records
+  `Explicit`/`Cancel`/`Error` (`obligation-abort-reasons-001`).
+- **Obligation leak**: a leaked obligation records `obligation.leaked`
+  (`leak-policy-leak-reported-001`).
 - **Close semantics**: the `close_region` step is a region cancel followed
   by waiting for Closed. Its remaining difference is Rust's: the lab
   runtime stamps the close with `CancelReason::user`'s testing defaults

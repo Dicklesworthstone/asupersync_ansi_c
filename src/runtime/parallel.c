@@ -1077,6 +1077,8 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                 asx_error_ledger_bind_task(tid);
                 poll_result = t->poll_fn(t->user_data, tid);
                 asx_error_ledger_bind_task(ASX_INVALID_ID);
+                /* A panic ends the task whatever the poll returned. */
+                if (t->panicked && poll_result == ASX_E_PENDING) poll_result = ASX_OK;
                 polls_this_lane++;
                 sat_inc_u32(&g_workers[worker_idx].polls_total);
                 any_polled = 1;
@@ -1112,8 +1114,9 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                             (void)w_st_;
                         }
                     }
-                    t->outcome = asx_outcome_make(t->cancel_pending ? ASX_OUTCOME_CANCELLED
-                                                                    : ASX_OUTCOME_OK);
+                    t->outcome = asx_outcome_make(t->panicked         ? ASX_OUTCOME_PANICKED
+                                                  : t->cancel_pending ? ASX_OUTCOME_CANCELLED
+                                                                      : ASX_OUTCOME_OK);
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
@@ -1143,8 +1146,9 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                             (void)w_st_;
                         }
                     }
-                    t->outcome = asx_outcome_make(t->cancel_pending ? ASX_OUTCOME_CANCELLED
-                                                                    : ASX_OUTCOME_ERR);
+                    t->outcome = asx_outcome_make(t->panicked         ? ASX_OUTCOME_PANICKED
+                                                  : t->cancel_pending ? ASX_OUTCOME_CANCELLED
+                                                                      : ASX_OUTCOME_ERR);
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
@@ -1157,7 +1161,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     asx_region_settle_internal(
                         asx_region_handle_for_slot((uint32_t)(rslot - g_regions)));
 
-                    {
+                    if (!t->panicked) {
                         asx_status fc_ = asx_region_contain_fault(region, poll_result);
                         if (fc_ != ASX_OK &&
                             asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {

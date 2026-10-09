@@ -450,7 +450,7 @@ jobs:
   # oracle exists; see bridge program W1, beads bd-9kll.2.*)
   # ---------------------------------------------------------------------------
   conformance:
-    name: "conformance (fixture integrity + codec equiv; Rust parity pending oracle)"
+    name: "conformance (fixture integrity + codec equiv + executed Rust parity)"
     runs-on: ubuntu-latest
     needs: [check]
     steps:

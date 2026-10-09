@@ -234,6 +234,30 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->watcher_gen = 0;
     task->mask_depth = 0;
     task->traced_deadline = 0;
+    task->panicked = 0;
+    task->panic_message = NULL;
+}
+
+asx_status asx_task_panic(asx_task_id self, const char *message) {
+    asx_task_slot *t;
+    asx_status st = asx_task_slot_lookup(self, &t);
+    if (st != ASX_OK) return st;
+    if (!t->in_poll) return ASX_E_INVALID_STATE;
+    t->panicked = 1;
+    /* Rust reports a non-string payload as "unknown panic" (cx/scope.rs:181-187). */
+    t->panic_message = message != NULL ? message : "unknown panic";
+    return ASX_OK;
+}
+
+asx_status asx_task_get_panic_message(asx_task_id id, const char **out) {
+    asx_task_slot *t;
+    asx_status st;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
+    if (!t->panicked) return ASX_E_NOT_FOUND;
+    *out = t->panic_message;
+    return ASX_OK;
 }
 
 void asx_task_wake_slot_internal(asx_task_slot *task) {
@@ -347,6 +371,20 @@ asx_status asx_task_wait_until(asx_task_id self, asx_time deadline) {
         t->park_requested = 1;
     }
     return ASX_E_PENDING;
+}
+
+asx_status asx_task_cancel_timer(asx_task_id self) {
+    asx_task_slot *t;
+    asx_status st = asx_task_slot_lookup(self, &t);
+    if (st != ASX_OK) return st;
+    /* A sleep dropped before its deadline (Rust: cancel_active_registration,
+     * TimerCancelled). */
+    if (t->traced_deadline != 0u) {
+        asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, t->traced_deadline);
+        t->traced_deadline = 0u;
+    }
+    if (t->timer_pos != ASX_SLOT_NONE) timer_heap_remove_at(t->timer_pos);
+    return ASX_OK;
 }
 
 asx_status asx_task_watch(asx_task_id target, asx_task_id watcher) {
@@ -555,6 +593,13 @@ static uint32_t sched_unpark_cancelled(void) {
         asx_task_slot *t = &g_tasks[i];
         if (!t->alive || !t->parked || !t->cancel_pending) continue;
         if (sched_scope_region(t) == NULL) continue;
+        /* A wake that will come is not overridden: a task sleeping on its
+         * timer or waiting on a join target saw its cancel when the request
+         * woke it, and chose to keep waiting (a Deadline-kind sleep, an
+         * uninterruptible join); Rust lets it wait (sleep.rs:789-812,
+         * task_handle.rs:1080-1126). Only a task with no wake source left
+         * is unparked so its bounded cleanup can run. */
+        if (t->timer_pos != ASX_SLOT_NONE || t->waiting_on != ASX_SLOT_NONE) continue;
         t->parked = 0;
         n++;
     }
@@ -832,6 +877,18 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             t->in_poll = 0;
             if (t->budget.poll_quota != UINT32_MAX && t->budget.poll_quota > 0u) {
                 t->budget.poll_quota--;
+            }
+
+            /* A panic ends the task whatever the poll returned (Rust catches
+             * it at the poll boundary: Outcome::Panicked). It dominates a
+             * pending cancel in the outcome lattice and is not a containment
+             * fault: the 0.6.0 runtime applies no policy action to it. */
+            if (t->panicked) {
+                st = sched_complete(t, tid, rslot, ASX_OUTCOME_PANICKED, ASX_SCHED_EVENT_COMPLETE,
+                                    round);
+                if (st != ASX_OK) return st;
+                active--;
+                continue;
             }
 
             if (poll_result == ASX_OK) {

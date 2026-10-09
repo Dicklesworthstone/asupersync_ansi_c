@@ -22,6 +22,7 @@
 #include <asx/asx.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
+#include <asx/time/sleep.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
@@ -59,14 +60,14 @@ typedef struct {
     const char *region_name;
     asx_region_id region;
     asx_task_id id;
-    int spawned;       /* asx_task_spawn succeeded */
-    uint32_t program;  /* array node in the scenario document */
-    uint32_t pc;       /* 0-based index of the current step */
-    uint32_t phase;    /* suspension state of the current step */
-    asx_time deadline; /* target of the current sleep */
-    asx_status end;    /* poll result once the program has ended */
-    int joined;        /* outcome taken by a join; the slot is gone */
-    uint32_t outcome;  /* projected outcome node (out document) when joined */
+    int spawned;           /* asx_task_spawn succeeded */
+    uint32_t program;      /* array node in the scenario document */
+    uint32_t pc;           /* 0-based index of the current step */
+    uint32_t phase;        /* suspension state of the current step */
+    asx_sleep_state sleep; /* the current sleep step */
+    asx_status end;        /* poll result once the program has ended */
+    int joined;            /* outcome taken by a join; the slot is gone */
+    uint32_t outcome;      /* projected outcome node (out document) when joined */
     it_local_obligation obligations[IT_MAX_LOCAL];
     uint32_t n_obligations;
     it_local_region regions[IT_MAX_LOCAL];
@@ -454,9 +455,16 @@ static uint32_t outcome_node(asx_task_id id) {
         asx_json_set(g_out, o, "reason", reason_node(&captured));
         break;
     }
-    case ASX_OUTCOME_PANICKED:
-        it_fail("panicked outcome", "C has no panic message to project (DSL §7, R10)");
+    case ASX_OUTCOME_PANICKED: {
+        const char *message = NULL;
+        if (asx_task_get_panic_message(id, &message) != ASX_OK || message == NULL) {
+            it_fail("panicked task without a panic message", NULL);
+            break;
+        }
+        asx_json_set(g_out, o, "tag", asx_json_new_string(g_out, "panicked"));
+        asx_json_set(g_out, o, "message", asx_json_new_string(g_out, message));
         break;
+    }
     }
     return o;
 }
@@ -617,16 +625,6 @@ static asx_cancel_reason make_reason(asx_cancel_kind kind, asx_region_id origin_
     return r;
 }
 
-/* Whether a pending cancel ends a sleep early: an unmasked cancel whose
- * kind is neither Timeout nor Deadline (DSL §3.1, sleep.rs:789-812). */
-static int sleep_cancel_applies(asx_task_id self) {
-    asx_cancel_reason r;
-    uint32_t depth = 0;
-    if (asx_task_get_cancel_reason(self, &r) != ASX_OK) return 0;
-    if (asx_task_mask_depth(self, &depth) != ASX_OK || depth > 0u) return 0;
-    return r.kind != ASX_CANCEL_TIMEOUT && r.kind != ASX_CANCEL_DEADLINE;
-}
-
 /* Capture a completed target's outcome, then release it with a join. */
 static uint32_t take_outcome(it_task *target, asx_status *join_status) {
     uint32_t value = outcome_node(target->id);
@@ -714,13 +712,18 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             st = asx_obligation_commit(o->id);
         } else if (strcmp(op, "abort") == 0) {
             const char *reason = it_str(step, "reason");
-            if (reason == NULL || strcmp(reason, "Explicit") != 0) {
-                it_fail_task(t, idx,
-                             "abort reason other than Explicit: C has no abort-reason API "
-                             "(DSL §7, R9)");
+            asx_obligation_abort_reason why;
+            if (reason != NULL && strcmp(reason, "Explicit") == 0) {
+                why = ASX_OBLIGATION_ABORT_EXPLICIT;
+            } else if (reason != NULL && strcmp(reason, "Cancel") == 0) {
+                why = ASX_OBLIGATION_ABORT_CANCEL;
+            } else if (reason != NULL && strcmp(reason, "Error") == 0) {
+                why = ASX_OBLIGATION_ABORT_ERROR;
+            } else {
+                it_fail_task(t, idx, "abort needs reason Explicit, Cancel or Error");
                 return STEP_END;
             }
-            st = asx_obligation_abort(o->id);
+            st = asx_obligation_abort_with_reason(o->id, why);
         } else {
             /* Dropped: left reserved, so the runtime resolves it when the
              * holder completes (a leak unless the holder was cancelled). */
@@ -836,41 +839,27 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         return STEP_NEXT;
     }
     if (strcmp(op, "sleep") == 0 || strcmp(op, "sleep_until") == 0) {
-        asx_time now = asx_runtime_virtual_now();
+        /* The runtime's Sleep (asx_sleep_poll) carries Rust's semantics:
+         * traced timer, early completion on an observable cancel, one extra
+         * trip when first polled after it. */
         if (t->phase == 0u) {
             uint64_t v;
-            const char *field = strcmp(op, "sleep") == 0 ? "ns" : "at_ns";
-            if (!asx_json_u64(g_in, asx_json_get(g_in, step, field), &v)) {
+            int is_sleep = strcmp(op, "sleep") == 0;
+            if (!asx_json_u64(g_in, asx_json_get(g_in, step, is_sleep ? "ns" : "at_ns"), &v)) {
                 it_fail_task(t, idx, "sleep without its time");
                 return STEP_END;
             }
-            t->deadline = strcmp(op, "sleep") == 0 ? now + v : v;
-            if (sleep_cancel_applies(self)) {
-                /* First polled after the cancel: one extra trip. */
-                t->phase = 2u;
-                return STEP_PENDING;
+            st = is_sleep ? asx_sleep_init(&t->sleep, v) : asx_sleep_init_until(&t->sleep, v);
+            if (st != ASX_OK) {
+                it_fail_task(t, idx, "sleep init failed");
+                return STEP_END;
             }
             t->phase = 1u;
         }
-        if (t->phase == 2u || sleep_cancel_applies(self)) {
-            asx_checkpoint_result cr;
-            if (asx_checkpoint(self, &cr) != ASX_OK) {
-                it_fail_task(t, idx, "asx_checkpoint failed");
-                return STEP_END;
-            }
-            observe_status(t, idx, op, ASX_OK);
-            return STEP_NEXT;
-        }
-        if (now >= t->deadline) {
-            observe_status(t, idx, op, ASX_OK);
-            return STEP_NEXT;
-        }
-        st = asx_task_wait_until(self, t->deadline);
-        if (st == ASX_OK) {
-            observe_status(t, idx, op, ASX_OK);
-            return STEP_NEXT;
-        }
-        return STEP_PENDING;
+        st = asx_sleep_poll(&t->sleep, self);
+        if (st == ASX_E_PENDING) return STEP_PENDING;
+        observe_status(t, idx, op, st);
+        return STEP_NEXT;
     }
     if (strcmp(op, "return") == 0) {
         uint32_t outcome = asx_json_get(g_in, step, "outcome");
@@ -890,7 +879,13 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
             }
             t->end = err;
         } else if (strcmp(tag, "panicked") == 0) {
-            it_fail_task(t, idx, "return panicked: C has no panicked outcome (DSL §7, R10)");
+            /* The step is a panic: the observation is recorded first, as in
+             * Rust where the step's observation precedes panic_any. */
+            observe_status(t, idx, op, ASX_OK);
+            if (asx_task_panic(self, it_str(outcome, "message")) != ASX_OK) {
+                it_fail_task(t, idx, "asx_task_panic failed");
+            }
+            t->end = ASX_OK;
             return STEP_END;
         } else {
             it_fail_task(t, idx, "unknown outcome tag");

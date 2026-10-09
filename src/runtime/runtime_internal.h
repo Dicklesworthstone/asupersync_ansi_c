@@ -84,6 +84,10 @@ typedef struct {
      * due, TIMER_CANCEL when the task completes first. Internal wakeups
      * (budget deadlines, asx_task_arm_timer) are not traced timers. */
     asx_time traced_deadline;
+    /* asx_task_panic() during the current poll: the task completes as
+     * PANICKED with this (borrowed) message when the poll returns. */
+    int panicked;
+    const char *panic_message;
     /* Join waiters: intrusive singly-linked list of slot indices. */
     uint32_t first_waiter; /* first task parked in join on this one */
     uint32_t next_waiter;  /* link while waiting on another task */

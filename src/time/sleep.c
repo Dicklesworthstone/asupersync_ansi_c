@@ -32,6 +32,29 @@ asx_status asx_sleep_init(asx_sleep_state *state, uint64_t duration_ns) {
     return ASX_OK;
 }
 
+asx_status asx_sleep_init_until(asx_sleep_state *state, asx_time until_ns) {
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    memset(state, 0, sizeof(*state));
+    state->absolute = 1;
+    state->until_ns = until_ns;
+    return ASX_OK;
+}
+
+/* Rust Sleep's cancellation point (time/sleep.rs:788-794): a cancel is
+ * observed when one is requested, its kind is neither Timeout nor
+ * Deadline, and a checkpoint reports it (an unmasked task); the checkpoint
+ * acknowledges it. The kind is read first, so a Timeout or Deadline
+ * cancel is not acknowledged here. */
+static int sleep_observes_cancel(asx_task_id self) {
+    asx_cancel_reason reason;
+    asx_checkpoint_result cr;
+    if (asx_task_get_cancel_reason(self, &reason) != ASX_OK) return 0;
+    if (reason.kind == ASX_CANCEL_TIMEOUT || reason.kind == ASX_CANCEL_DEADLINE) return 0;
+    if (asx_checkpoint(self, &cr) != ASX_OK) return 0;
+    return cr.cancelled;
+}
+
 asx_status asx_sleep_poll(void *user_data, asx_task_id self) {
     asx_sleep_state *s = (asx_sleep_state *)user_data;
     asx_time now;
@@ -39,22 +62,32 @@ asx_status asx_sleep_poll(void *user_data, asx_task_id self) {
 
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    /* First poll: compute the deadline, then park on the task timer */
+    /* First poll: fix the deadline. */
     if (!s->initialized) {
-        st = asx_deadline_after(&s->deadline, s->duration_ns);
+        st = s->absolute ? asx_deadline_init(&s->deadline, s->until_ns)
+                         : asx_deadline_after(&s->deadline, s->duration_ns);
         if (st != ASX_OK) return st;
-
         s->initialized = 1;
-
-        /* Zero-duration sleep completes immediately */
-        if (s->duration_ns == 0) { return ASX_OK; }
-        return park_until(self, asx_deadline_target(&s->deadline));
     }
 
-    /* Subsequent polls (timer fired or spurious wake): re-check */
+    if (sleep_observes_cancel(self)) {
+        /* First polled after the cancel: one trip through the scheduler
+         * (the task stays runnable), so a loop of fresh sleeps cannot spin
+         * inside one poll. A sleep already waiting completes at once. */
+        if (!s->polled) {
+            s->polled = 1;
+            return ASX_E_PENDING;
+        }
+        st = asx_task_cancel_timer(self);
+        (void)st;
+        return ASX_OK;
+    }
+    s->polled = 1;
+
+    /* Due (or a zero-length sleep): done. Otherwise wait on the timer;
+     * a later poll (timer fired or spurious wake) re-checks. */
     st = asx_runtime_now_ns(&now);
     if (st != ASX_OK) return st;
-
     if (asx_deadline_is_expired_at(&s->deadline, now)) { return ASX_OK; }
 
     return park_until(self, asx_deadline_target(&s->deadline));

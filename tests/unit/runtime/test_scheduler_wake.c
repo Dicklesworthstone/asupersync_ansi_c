@@ -605,6 +605,105 @@ TEST(run_until_idle_reports_would_block_without_wake_sources) {
     ASSERT_EQ(ps.polls, 1u);
 }
 
+TEST(sleep_ends_early_on_a_user_cancel_and_drops_its_timer) {
+    asx_region_id r;
+    asx_task_id t;
+    sleeper_state *s = NULL;
+    asx_budget budget;
+    asx_outcome out;
+
+    setup();
+    g_finish_count = 0;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
+                                      (void **)&s),
+              ASX_OK);
+    ASSERT_EQ(asx_sleep_init(&s->sleep, 3600u * 1000u * MS), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_SET), (uint64_t)1u);
+
+    /* A User cancel wakes the sleeper, which acknowledges it and ends
+     * without waiting for its hour (Rust Sleep is a cancellation point). */
+    ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_USER), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)0);
+    ASSERT_EQ(asx_task_get_outcome(t, &out), ASX_OK);
+    ASSERT_EQ((int)asx_outcome_severity_of(&out), (int)ASX_OUTCOME_CANCELLED);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)0u);
+}
+
+TEST(deadline_cancelled_sleeper_sleeps_to_its_own_deadline) {
+    static sleeper_state s;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+    asx_budget deadline;
+    asx_cancel_reason reason;
+    asx_outcome out;
+
+    setup();
+    g_finish_count = 0;
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    deadline = asx_budget_infinite();
+    deadline.deadline = 100u;
+    ASSERT_EQ(asx_sleep_init(&s.sleep, 200u), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(r, poll_sleeper, &s, &deadline, &t), ASX_OK);
+
+    /* The budget deadline cancels the task at 100 (attributed to the task,
+     * stamped with the deadline, no cancel.requested), but a Deadline cancel
+     * does not end a sleep: it runs to 200 and fires its timer, as Rust's
+     * Sleep does; the task then completes Cancelled. */
+    budget = asx_budget_from_polls(1000);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)200u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_FIRE), (uint64_t)1u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_TIMER_CANCEL), (uint64_t)0u);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)0u);
+    ASSERT_EQ(asx_task_get_cancel_reason(t, &reason), ASX_OK);
+    ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_DEADLINE);
+    ASSERT_EQ(reason.timestamp, (asx_time)100u);
+    ASSERT_TRUE(asx_handle_index(reason.origin_task) == asx_handle_index(t));
+    ASSERT_EQ(asx_task_get_outcome(t, &out), ASX_OK);
+    ASSERT_EQ((int)asx_outcome_severity_of(&out), (int)ASX_OUTCOME_CANCELLED);
+}
+
+static int g_panic_poll_cancel;
+static asx_status poll_panics(void *ud, asx_task_id self) {
+    (void)ud;
+    if (g_panic_poll_cancel) {
+        asx_status st = asx_task_cancel(self, ASX_CANCEL_USER);
+        (void)st;
+    }
+    if (asx_task_panic(self, "boom") != ASX_OK) return ASX_E_INVALID_STATE;
+    return ASX_E_PENDING; /* the panic ends the task whatever the poll returns */
+}
+
+TEST(panic_completes_the_task_as_panicked_even_when_cancelled) {
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+    asx_outcome out;
+    const char *message = NULL;
+    int cancelled_case;
+
+    for (cancelled_case = 0; cancelled_case < 2; cancelled_case++) {
+        setup();
+        g_panic_poll_cancel = cancelled_case;
+        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        ASSERT_EQ(asx_task_spawn(r, poll_panics, NULL, &t), ASX_OK);
+        ASSERT_EQ(asx_task_panic(t, "outside a poll"), ASX_E_INVALID_STATE);
+        budget = asx_budget_from_polls(8);
+        ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+        ASSERT_EQ(asx_task_get_outcome(t, &out), ASX_OK);
+        ASSERT_EQ((int)asx_outcome_severity_of(&out), (int)ASX_OUTCOME_PANICKED);
+        ASSERT_EQ(asx_task_get_panic_message(t, &message), ASX_OK);
+        ASSERT_STR_EQ(message, "boom");
+    }
+}
+
 int main(void) {
     fprintf(stderr, "=== test_scheduler_wake ===\n");
 
@@ -627,6 +726,9 @@ int main(void) {
     RUN_TEST(wake_driven_run_is_deterministic);
     RUN_TEST(run_until_idle_leaves_the_clock_to_the_caller);
     RUN_TEST(run_until_idle_reports_would_block_without_wake_sources);
+    RUN_TEST(sleep_ends_early_on_a_user_cancel_and_drops_its_timer);
+    RUN_TEST(deadline_cancelled_sleeper_sleeps_to_its_own_deadline);
+    RUN_TEST(panic_completes_the_task_as_panicked_even_when_cancelled);
 
     TEST_REPORT();
     return test_failures;
