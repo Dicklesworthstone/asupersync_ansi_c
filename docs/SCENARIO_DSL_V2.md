@@ -371,9 +371,6 @@ Open:
   never park. The interpreter fails these steps closed until the C `try_*`
   functions stop parking (their parking callers moving to the Cx-aware
   `asx_channel_reserve` / `asx_channel_recv`).
-- **Oneshot, broadcast and watch channels** (increment 2c). C's oneshot
-  must also register the `SendPermit` and emit the exact `user.trace`
-  messages (vocabulary §3).
 - **Multi-permit semaphore acquire.** Rust acquires `count` permits
   all-or-nothing; C grants one permit per acquire, so `sem_acquire` with
   `count` > 1 fails closed.
@@ -382,6 +379,14 @@ Open:
   only in the status string table.
 
 Closed (each verified by a fixture that now matches):
+
+- **Oneshot, broadcast and watch**: `asx_oneshot_send` / `asx_oneshot_recv`
+  (SendPermit obligation; the exact oneshot traces; value and close before
+  cancel), `asx_broadcast_send` with a Cx (cancel first, Closed with no
+  receiver, SendPermit) and `asx_broadcast_recv` (cancel first and traced,
+  lag count), `asx_watch_changed_begin` / `asx_watch_poll_changed` with a
+  Cx (the watch traces) (`oneshot-send-recv-001`, `broadcast-fanout-001`,
+  `watch-changed-001`).
 
 - **Channel obligations and cancel traces**: `asx_channel_reserve` with a
   task Cx registers a `SendPermit` (committed by send, aborted `Explicit`

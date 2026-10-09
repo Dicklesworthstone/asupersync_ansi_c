@@ -7,7 +7,8 @@
  * Semantics:
  *   - Single sender, multiple receivers
  *   - FIFO ordering per receiver
- *   - Bounded capacity: send fails with ASX_E_CHANNEL_FULL when buffer full
+ *   - Bounded capacity: a send never fails for space; it overwrites the
+ *     oldest message
  *   - Lagging receivers: when a receiver falls behind by more than capacity,
  *     its next recv returns ASX_E_LAGGED and the cursor advances to the
  *     oldest available message
@@ -23,6 +24,7 @@
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
+#include <asx/cx/cx.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -87,12 +89,17 @@ ASX_API void asx_broadcast_receiver_drop(asx_broadcast_receiver *receiver);
  * API: Send
  * ------------------------------------------------------------------- */
 
-/* Send a value to all receivers.
- * Returns ASX_OK on success.
- * Returns ASX_E_CHANNEL_FULL if buffer is full (all receiver cursors
- *   must advance before more sends are possible).
- * Returns ASX_E_INVALID_STATE if sender was dropped. */
-ASX_API ASX_MUST_USE asx_status asx_broadcast_send(asx_broadcast_sender *sender, uint64_t value);
+/* Send a value to all receivers (Rust `tx.send(&cx, v)`,
+ * channel/broadcast.rs:494). The ring never refuses a send: the oldest
+ * message is overwritten and a receiver that falls behind sees
+ * ASX_E_LAGGED. Cancellation is checked first: a cancelled Cx gives
+ * ASX_E_CANCELLED (no trace, :418). With no live receiver the send fails
+ * with ASX_E_DISCONNECTED (Rust Closed, :423). Otherwise a Cx with a task
+ * reserves a SendPermit obligation that the delivery commits (:430, :719).
+ * A NULL cx skips the cancellation check and the obligation.
+ * Returns ASX_E_INVALID_STATE if the sender was dropped. */
+ASX_API ASX_MUST_USE asx_status asx_broadcast_send(asx_broadcast_sender *sender, asx_cx *cx,
+                                                   uint64_t value);
 
 /* -------------------------------------------------------------------
  * API: Receive
@@ -104,10 +111,18 @@ ASX_API ASX_MUST_USE asx_status asx_broadcast_send(asx_broadcast_sender *sender,
  *   calling task is then parked until the next send or the sender drop
  *   (every send wakes every parked receiver task, FIFO).
  * Returns ASX_E_DISCONNECTED if sender dropped and no messages remain.
- * Returns ASX_E_LAGGED if this receiver fell behind — cursor is
- *   advanced to oldest available message (call recv again). */
+ * Returns ASX_E_LAGGED if this receiver fell behind — *out_value receives
+ *   the number of messages it missed (Rust Lagged(n)) and the cursor is
+ *   advanced to the oldest available message (call recv again). */
 ASX_API ASX_MUST_USE asx_status asx_broadcast_try_recv(asx_broadcast_receiver *receiver,
                                                        uint64_t *out_value);
+
+/* `rx.recv(&cx)` (broadcast.rs:894), one poll. Cancellation is checked
+ * first: ASX_E_CANCELLED with the trace "broadcast::recv cancelled"
+ * (:919) for the Cx's task. Otherwise as asx_broadcast_try_recv, with
+ * ASX_E_PENDING for no new message. A NULL cx skips the check. */
+ASX_API ASX_MUST_USE asx_status asx_broadcast_recv(asx_broadcast_receiver *receiver, asx_cx *cx,
+                                                   uint64_t *out_value);
 
 /* -------------------------------------------------------------------
  * API: Query

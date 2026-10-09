@@ -209,7 +209,16 @@ int asx_watch_has_changed(const asx_watch_receiver *receiver) {
     return s->version != receiver->last_seen_version;
 }
 
-asx_status asx_watch_poll_changed(asx_watch_receiver *receiver) {
+static void watch_trace(const asx_cx *cx, const char *message) {
+    if (cx != NULL) asx_trace_user(cx->task_id, message);
+}
+
+void asx_watch_changed_begin(const asx_watch_receiver *receiver, asx_cx *cx) {
+    if (receiver == NULL) return;
+    watch_trace(cx, "watch::changed starting wait");
+}
+
+asx_status asx_watch_poll_changed(asx_watch_receiver *receiver, asx_cx *cx) {
     asx_watch_slot *s;
 
     if (receiver == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -218,14 +227,24 @@ asx_status asx_watch_poll_changed(asx_watch_receiver *receiver) {
     s = &g_slots[receiver->slot];
     if (s->generation != receiver->generation) return ASX_E_STALE_HANDLE;
 
+    /* Rust's poll_changed order: cancellation, a newer version, the sender
+     * gone (watch.rs:735-761). */
+    if (cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) {
+        asx_wait_queue_leave_current(&s->waiters);
+        watch_trace(cx, "watch::changed cancelled");
+        return ASX_E_CANCELLED;
+    }
+
     if (s->version != receiver->last_seen_version) {
         receiver->last_seen_version = s->version;
         asx_wait_queue_leave_current(&s->waiters);
+        watch_trace(cx, "watch::changed received update");
         return ASX_OK;
     }
 
     if (!s->sender_alive) {
         asx_wait_queue_leave_current(&s->waiters);
+        watch_trace(cx, "watch::changed sender dropped");
         return ASX_E_DISCONNECTED;
     }
 

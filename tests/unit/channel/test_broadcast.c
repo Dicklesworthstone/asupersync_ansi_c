@@ -62,7 +62,7 @@ TEST(send_and_recv_single) {
     uint64_t val;
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
-    MUST_OK(asx_broadcast_send(&tx, 42));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 42));
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)42);
 }
@@ -73,9 +73,9 @@ TEST(fifo_ordering) {
     uint64_t val;
     setup();
     MUST_OK(asx_broadcast_create(8, &tx, &rx));
-    MUST_OK(asx_broadcast_send(&tx, 1));
-    MUST_OK(asx_broadcast_send(&tx, 2));
-    MUST_OK(asx_broadcast_send(&tx, 3));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 1));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 2));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 3));
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)1);
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
@@ -113,7 +113,7 @@ TEST(all_receivers_get_message) {
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx1));
     MUST_OK(asx_broadcast_subscribe(&tx, &rx2));
-    MUST_OK(asx_broadcast_send(&tx, 99));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 99));
     ASSERT_EQ(asx_broadcast_try_recv(&rx1, &v1), ASX_OK);
     ASSERT_EQ(asx_broadcast_try_recv(&rx2, &v2), ASX_OK);
     ASSERT_EQ(v1, (uint64_t)99);
@@ -126,8 +126,8 @@ TEST(late_subscriber_no_backfill) {
     uint64_t val;
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx1));
-    MUST_OK(asx_broadcast_send(&tx, 1));
-    MUST_OK(asx_broadcast_send(&tx, 2));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 1));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 2));
     /* rx2 subscribes after messages sent */
     MUST_OK(asx_broadcast_subscribe(&tx, &rx2));
     /* rx2 should not see old messages */
@@ -149,7 +149,7 @@ TEST(lagging_receiver_gets_lagged) {
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
     /* Send more than capacity without rx reading */
-    for (i = 0; i < 8; i++) { MUST_OK(asx_broadcast_send(&tx, i + 1)); }
+    for (i = 0; i < 8; i++) { MUST_OK(asx_broadcast_send(&tx, NULL, i + 1)); }
     /* Receiver has lagged */
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_E_LAGGED);
     /* After lag, cursor is advanced — next recv should succeed */
@@ -168,7 +168,7 @@ TEST(sender_drop_drain_then_disconnected) {
     uint64_t val;
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
-    MUST_OK(asx_broadcast_send(&tx, 10));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 10));
     asx_broadcast_sender_drop(&tx);
     /* Can still drain remaining messages */
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
@@ -183,7 +183,7 @@ TEST(send_after_sender_drop_fails) {
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
     asx_broadcast_sender_drop(&tx);
-    ASSERT_EQ(asx_broadcast_send(&tx, 1), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 1), ASX_E_INVALID_STATE);
 }
 
 TEST(receiver_drop_decrements_count) {
@@ -200,7 +200,7 @@ TEST(receiver_drop_decrements_count) {
 /* Null safety                                                         */
 /* ------------------------------------------------------------------ */
 
-TEST(send_null_fails) { ASSERT_EQ(asx_broadcast_send(NULL, 1), ASX_E_INVALID_ARGUMENT); }
+TEST(send_null_fails) { ASSERT_EQ(asx_broadcast_send(NULL, NULL, 1), ASX_E_INVALID_ARGUMENT); }
 
 TEST(recv_null_fails) {
     uint64_t val;
@@ -220,8 +220,8 @@ TEST(total_sent_increments) {
     asx_broadcast_receiver rx;
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
-    MUST_OK(asx_broadcast_send(&tx, 1));
-    MUST_OK(asx_broadcast_send(&tx, 2));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 1));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 2));
     ASSERT_EQ(asx_broadcast_total_sent(&tx), 2u);
 }
 

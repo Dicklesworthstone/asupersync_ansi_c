@@ -85,7 +85,7 @@ timer deadlines).
 | `timer.scheduled` | `timer`, `deadline_ns` | `TimerScheduled`, `Timer{timer_id,deadline:Some}` (`:213`) | `ASX_TRACE_TIMER_SET` |
 | `timer.fired` | `timer` | `TimerFired` (`:215`) | `ASX_TRACE_TIMER_FIRE` |
 | `timer.cancelled` | `timer` | `TimerCancelled` (`:217`) | `ASX_TRACE_TIMER_CANCEL` |
-| `user.trace` | `message` | `UserTrace`, `Message(String)` (`:237`), not a handoff | `ASX_TRACE_USER` (oneshot messages: §11) |
+| `user.trace` | `message` | `UserTrace`, `Message(String)` (`:237`), not a handoff | `ASX_TRACE_USER` |
 
 ### Emission rules both engines must follow
 
@@ -423,14 +423,14 @@ the version they were captured under.
 The C runtime does not yet emit every projected kind. W1.5 (bd-9kll.2.5)
 must add the rest, in the runtime or as interpreter projections from
 runtime state, following the emission rules in §3:
-- `obligation.handoff`;
-- `user.trace` with the exact oneshot messages.
+- `obligation.handoff`.
 
 Emitted now, each verified by a matching fixture: `region.cancelled` and
 `cancel.requested` (`region-lifecycle-cancel-propagates-001`),
 `obligation.leaked` (`leak-policy-leak-reported-001`), and `user.trace`
-for the `trace` step and the mpsc cancel messages
-(`mpsc-recv-cancel-first-001`).
+for the `trace` step and the mpsc, oneshot and watch messages
+(`mpsc-recv-cancel-first-001`, `oneshot-send-recv-001`,
+`watch-changed-001`).
 
 C's `ASX_TRACE_CHANNEL_SEND` / `CHANNEL_RECV`, `ASX_TRACE_TASK_TRANSITION`
 and the `ASX_TRACE_SCHED_*` kinds other than `SCHED_COMPLETE` are not

@@ -22,6 +22,7 @@
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
+#include <asx/cx/cx.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -95,6 +96,34 @@ ASX_API ASX_MUST_USE asx_status asx_oneshot_try_send(asx_oneshot_sender *sender,
  * Returns ASX_E_DISCONNECTED if sender dropped without sending. */
 ASX_API ASX_MUST_USE asx_status asx_oneshot_try_recv(asx_oneshot_receiver *receiver,
                                                      uint64_t *out_value);
+
+/* -------------------------------------------------------------------
+ * API: Cx-aware send / receive (Rust Sender::send, Receiver::recv)
+ *
+ * With a Cx, these record the user traces Rust's oneshot records
+ * (vocabulary §3) for the Cx's task; a NULL cx skips cancellation checks,
+ * traces and obligations.
+ * ------------------------------------------------------------------- */
+
+/* `tx.send(&cx, v)` (channel/oneshot.rs:556): consumes the sender. A
+ * cancelled Cx gives ASX_E_CANCELLED, traces "oneshot::reserve cancelled"
+ * and closes the channel (the receiver sees ASX_E_DISCONNECTED). Otherwise
+ * traces "oneshot::reserve creating permit", reserves a SendPermit
+ * obligation for the Cx's task and delivers: the obligation is committed,
+ * or, with the receiver gone, aborted with reason ERROR and the result is
+ * ASX_E_DISCONNECTED (:492-535, :731-772). A refused reservation leaves
+ * the send untracked. */
+ASX_API ASX_MUST_USE asx_status asx_oneshot_send(asx_oneshot_sender *sender, asx_cx *cx,
+                                                 uint64_t value);
+
+/* `rx.recv(&cx)` (:1250), one poll. A sent value comes first (ASX_OK,
+ * trace "oneshot::recv received value"), then a closed channel
+ * (ASX_E_DISCONNECTED, "oneshot::recv channel closed"), then cancellation
+ * (ASX_E_CANCELLED, "oneshot::recv cancelled while waiting"; :1084-1180).
+ * Otherwise ASX_E_PENDING: inside a scheduler poll the task is parked
+ * until the send or a drop. */
+ASX_API ASX_MUST_USE asx_status asx_oneshot_recv(asx_oneshot_receiver *receiver, asx_cx *cx,
+                                                 uint64_t *out_value);
 
 /* -------------------------------------------------------------------
  * API: Query

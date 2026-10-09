@@ -20,6 +20,9 @@
 #include "canon.h"
 
 #include <asx/asx.h>
+#include <asx/core/broadcast.h>
+#include <asx/core/oneshot.h>
+#include <asx/core/watch.h>
 #include <asx/cx/cx.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
@@ -131,16 +134,35 @@ typedef struct {
 
 #define IT_MAX_SYNC 16u
 
-/* A declared mpsc channel (DSL §3.6). Its endpoints are bound to their
- * owner tasks, as Rust moves them into the owners' bodies; an endpoint
- * closes when its owner closes it or its owner's body ends. */
+/* A declared channel (DSL §3.6). Its endpoints are bound to their owner
+ * tasks, as Rust moves them into the owners' bodies; an endpoint closes
+ * when its owner closes it or its owner's body ends. Broadcast and watch
+ * channels have one receiver per subscriber; the receivers carry their
+ * own cursor / seen version. The type order is the order twin_run's Local
+ * drops endpoint maps in. */
+typedef enum { IT_CH_MPSC, IT_CH_ONESHOT, IT_CH_BROADCAST, IT_CH_WATCH, IT_CH_TYPES } it_ch_type;
+
+#define IT_MAX_SUBSCRIBERS 8u
+
+typedef struct {
+    uint32_t task; /* owner, index in g_tasks */
+    int open;
+    asx_oneshot_receiver oneshot;
+    asx_broadcast_receiver broadcast;
+    asx_watch_receiver watch;
+} it_receiver;
+
 typedef struct {
     const char *name;
-    asx_channel_id id;
-    uint32_t sender;   /* owner, index in g_tasks */
-    uint32_t receiver; /* owner, index in g_tasks */
+    it_ch_type type;
+    asx_channel_id id; /* mpsc */
+    asx_oneshot_sender oneshot;
+    asx_broadcast_sender broadcast;
+    asx_watch_sender watch;
+    uint32_t sender; /* owner, index in g_tasks */
     int sender_open;
-    int receiver_open;
+    it_receiver receivers[IT_MAX_SUBSCRIBERS];
+    uint32_t n_receivers;
 } it_channel;
 
 #define IT_MAX_CHANNELS ASX_MAX_CHANNELS
@@ -684,18 +706,31 @@ static it_sync *sync_by_name(const char *name, it_sync_type type) {
     return NULL;
 }
 
-/* The channel `name` if task `t` owns its still-open sender (`sender` 1)
- * or receiver (0), else NULL: an endpoint is usable only in its owner's
- * body (DSL §3.6). */
-static it_channel *owned_endpoint(const it_task *t, const char *name, int sender) {
+static it_channel *channel_by_name(const char *name) {
     uint32_t i;
-    uint32_t me = (uint32_t)(t - g_tasks);
-    if (name == NULL) return NULL;
-    for (i = 0; i < g_n_channels; i++) {
-        it_channel *c = &g_channels[i];
-        if (strcmp(c->name, name) != 0) continue;
-        if (sender) return c->sender == me && c->sender_open ? c : NULL;
-        return c->receiver == me && c->receiver_open ? c : NULL;
+    for (i = 0; name != NULL && i < g_n_channels; i++) {
+        if (strcmp(g_channels[i].name, name) == 0) return &g_channels[i];
+    }
+    return NULL;
+}
+
+/* The channel `name` of `type` if task `t` owns its still-open sender,
+ * else NULL: an endpoint is usable only in its owner's body (DSL §3.6). */
+static it_channel *owned_sender(const it_task *t, const char *name, it_ch_type type) {
+    it_channel *c = channel_by_name(name);
+    if (c == NULL || c->type != type || !c->sender_open) return NULL;
+    return c->sender == (uint32_t)(t - g_tasks) ? c : NULL;
+}
+
+/* Task `t`'s still-open receiver on channel `name` of `type`, else NULL. */
+static it_receiver *owned_receiver(const it_task *t, const char *name, it_ch_type type) {
+    it_channel *c = channel_by_name(name);
+    uint32_t i;
+    if (c == NULL || c->type != type) return NULL;
+    for (i = 0; i < c->n_receivers; i++) {
+        if (c->receivers[i].task == (uint32_t)(t - g_tasks) && c->receivers[i].open) {
+            return &c->receivers[i];
+        }
     }
     return NULL;
 }
@@ -714,16 +749,30 @@ static void drop_send_permit(asx_send_permit *permit) {
     (void)st;
 }
 
-static void close_endpoint(it_channel *c, int sender) {
-    asx_status st;
-    if (sender) {
+/* Drop the sender of `c` (`r` NULL) or receiver `r`, as Rust drops the
+ * endpoint. */
+static void close_endpoint(it_channel *c, it_receiver *r) {
+    asx_status st = ASX_OK;
+    if (r == NULL) {
         c->sender_open = 0;
-        st = asx_channel_close_sender(c->id);
+        switch (c->type) {
+        case IT_CH_MPSC: st = asx_channel_close_sender(c->id); break;
+        case IT_CH_ONESHOT: asx_oneshot_sender_drop(&c->oneshot); break;
+        case IT_CH_BROADCAST: asx_broadcast_sender_drop(&c->broadcast); break;
+        case IT_CH_WATCH: asx_watch_sender_drop(&c->watch); break;
+        case IT_CH_TYPES: break;
+        }
     } else {
-        c->receiver_open = 0;
-        st = asx_channel_close_receiver(c->id);
+        r->open = 0;
+        switch (c->type) {
+        case IT_CH_MPSC: st = asx_channel_close_receiver(c->id); break;
+        case IT_CH_ONESHOT: asx_oneshot_receiver_drop(&r->oneshot); break;
+        case IT_CH_BROADCAST: asx_broadcast_receiver_drop(&r->broadcast); break;
+        case IT_CH_WATCH: asx_watch_receiver_drop(&r->watch); break;
+        case IT_CH_TYPES: break;
+        }
     }
-    (void)st; /* closing an already half-closed channel side cannot fail */
+    (void)st; /* closing an already half-closed mpsc side cannot fail */
 }
 
 /* Release held guard / permit i, keeping the others in acquisition order
@@ -743,16 +792,46 @@ static asx_status release_permit(it_task *t, uint32_t i) {
     return st;
 }
 
+/* The endpoint task `me` still owns that drops first: of channel type
+ * `type`, its sender (`sender` 1) or a receiver (0), the least channel
+ * name first. Returns the channel (and *out_r, NULL for a sender), or
+ * NULL when none is left. */
+static it_channel *next_owned(uint32_t me, it_ch_type type, int sender, it_receiver **out_r) {
+    it_channel *best = NULL;
+    uint32_t i;
+    uint32_t k;
+    *out_r = NULL;
+    for (i = 0; i < g_n_channels; i++) {
+        it_channel *c = &g_channels[i];
+        it_receiver *mine = NULL;
+        if (c->type != type) continue;
+        if (best != NULL && strcmp(c->name, best->name) >= 0) continue;
+        if (sender) {
+            if (c->sender != me || !c->sender_open) continue;
+        } else {
+            for (k = 0; k < c->n_receivers && mine == NULL; k++) {
+                if (c->receivers[k].task == me && c->receivers[k].open) mine = &c->receivers[k];
+            }
+            if (mine == NULL) continue;
+        }
+        best = c;
+        *out_r = mine;
+    }
+    return best;
+}
+
 /* The task body ended (returned, acknowledged a cancel, or panicked): what
  * it still holds is released the way Rust drops the body's locals
  * (twin_run's Local, fields in declaration order): guards, then semaphore
  * permits, each by object name, a name's permits oldest first; then send
- * permits by permit name; then owned senders, then receivers, each by
- * channel name. A dropped Rust semaphore permit commits its obligation
+ * permits by permit name; then, per channel type (mpsc, oneshot,
+ * broadcast, watch), owned senders, then receivers, each by channel name.
+ * A dropped Rust semaphore permit commits its obligation
  * (sync/semaphore.rs:1081); C has no destructors, so the interpreter
  * releases explicitly. */
 static void drop_locals(it_task *t) {
     uint32_t me = (uint32_t)(t - g_tasks);
+    int type;
     int sender;
     while (t->n_guards > 0u) {
         uint32_t i;
@@ -782,18 +861,14 @@ static void drop_locals(it_task *t) {
         }
         t->n_send_permits--;
     }
-    for (sender = 1; sender >= 0; sender--) {
-        for (;;) {
-            it_channel *next = NULL;
-            uint32_t i;
-            for (i = 0; i < g_n_channels; i++) {
-                it_channel *c = &g_channels[i];
-                int mine = sender ? (c->sender == me && c->sender_open)
-                                  : (c->receiver == me && c->receiver_open);
-                if (mine && (next == NULL || strcmp(c->name, next->name) < 0)) next = c;
+    for (type = 0; type < (int)IT_CH_TYPES; type++) {
+        for (sender = 1; sender >= 0; sender--) {
+            for (;;) {
+                it_receiver *r;
+                it_channel *c = next_owned(me, (it_ch_type)type, sender, &r);
+                if (c == NULL) break;
+                close_endpoint(c, r);
             }
-            if (next == NULL) break;
-            close_endpoint(next, sender);
         }
     }
 }
@@ -833,17 +908,64 @@ static uint32_t send_permit_index(const it_task *t, const char *name) {
     return t->n_send_permits;
 }
 
-/* Blocking mpsc steps (DSL §3.6). Returns 1 when `op` is one of them. A
- * call is one poll of the Rust future: the library checks cancellation
- * first and ASX_E_PENDING keeps the step waiting (the task parked in the
- * channel's FIFO line). */
+/* A receive step's poll result: pending keeps the step waiting; anything
+ * else is observed, with the received value (or a lag count) when `value`
+ * is set. */
+static void channel_received(it_task *t, uint32_t idx, const char *op, asx_status st, int value,
+                             uint64_t v, step_result *out) {
+    if (st == ASX_E_PENDING) {
+        *out = STEP_PENDING;
+        return;
+    }
+    observe(t, idx, op, status_node(st), value ? asx_json_new_u64(g_out, v) : ASX_JSON_NONE);
+}
+
+/* Blocking channel steps (DSL §3.6). Returns 1 when `op` is one of them.
+ * A call is one poll of the Rust future (the library orders the checks as
+ * Rust does) and ASX_E_PENDING keeps the step waiting, the task parked on
+ * the channel. */
 static int exec_channel_wait(it_task *t, uint32_t step, uint32_t idx, const char *op,
                              step_result *out) {
     asx_status st;
     uint64_t v = 0;
+    const char *ch = it_str(step, "channel");
     *out = STEP_NEXT;
+    if (strcmp(op, "oneshot_recv") == 0 || strcmp(op, "broadcast_recv") == 0 ||
+        strcmp(op, "watch_changed") == 0) {
+        it_ch_type type = op[0] == 'o'   ? IT_CH_ONESHOT
+                          : op[0] == 'b' ? IT_CH_BROADCAST
+                                         : IT_CH_WATCH;
+        it_receiver *r = owned_receiver(t, ch, type);
+        if (r == NULL) {
+            it_fail_task(t, idx, "receive on a channel this task holds no receiver of");
+            *out = STEP_END;
+            return 1;
+        }
+        if (type == IT_CH_ONESHOT) {
+            st = asx_oneshot_recv(&r->oneshot, &t->cx, &v);
+            channel_received(t, idx, op, st, st == ASX_OK, v, out);
+        } else if (type == IT_CH_BROADCAST) {
+            st = asx_broadcast_recv(&r->broadcast, &t->cx, &v);
+            channel_received(t, idx, op, st, st == ASX_OK || st == ASX_E_LAGGED, v, out);
+        } else {
+            /* Rust's changed() traces when the wait is created (watch.rs:723);
+             * the value is read with borrow_and_update once it resolves. */
+            if (t->phase == 0u) {
+                asx_watch_changed_begin(&r->watch, &t->cx);
+                t->phase = 1u;
+            }
+            st = asx_watch_poll_changed(&r->watch, &t->cx);
+            if (st == ASX_OK && asx_watch_recv(&r->watch, &v) != ASX_OK) {
+                it_fail_task(t, idx, "asx_watch_recv failed after a change");
+                *out = STEP_END;
+                return 1;
+            }
+            channel_received(t, idx, op, st, st == ASX_OK, v, out);
+        }
+        return 1;
+    }
     if (strcmp(op, "reserve_send") == 0) {
-        it_channel *c = owned_endpoint(t, it_str(step, "channel"), 1);
+        it_channel *c = owned_sender(t, ch, IT_CH_MPSC);
         const char *as = it_str(step, "as");
         asx_send_permit permit;
         if (c == NULL || as == NULL || t->n_send_permits >= IT_MAX_LOCAL ||
@@ -867,7 +989,7 @@ static int exec_channel_wait(it_task *t, uint32_t step, uint32_t idx, const char
         return 1;
     }
     if (strcmp(op, "send") == 0) {
-        it_channel *c = owned_endpoint(t, it_str(step, "channel"), 1);
+        it_channel *c = owned_sender(t, ch, IT_CH_MPSC);
         if (c == NULL || !asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &v)) {
             it_fail_task(t, idx, "send needs an owned sender and a value");
             *out = STEP_END;
@@ -882,19 +1004,14 @@ static int exec_channel_wait(it_task *t, uint32_t step, uint32_t idx, const char
         return 1;
     }
     if (strcmp(op, "recv") == 0) {
-        it_channel *c = owned_endpoint(t, it_str(step, "channel"), 0);
-        if (c == NULL) {
+        it_channel *c = channel_by_name(ch);
+        if (c == NULL || owned_receiver(t, ch, IT_CH_MPSC) == NULL) {
             it_fail_task(t, idx, "recv needs an owned receiver");
             *out = STEP_END;
             return 1;
         }
         st = asx_channel_recv(c->id, &t->cx, &v);
-        if (st == ASX_E_PENDING) {
-            *out = STEP_PENDING;
-            return 1;
-        }
-        observe(t, idx, op, status_node(st),
-                st == ASX_OK ? asx_json_new_u64(g_out, v) : ASX_JSON_NONE);
+        channel_received(t, idx, op, st, st == ASX_OK, v, out);
         return 1;
     }
     return 0;
@@ -1198,9 +1315,12 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
     }
     if (strcmp(op, "close_sender") == 0 || strcmp(op, "close_receiver") == 0) {
         int sender = strcmp(op, "close_sender") == 0;
-        it_channel *c = owned_endpoint(t, it_str(step, "channel"), sender);
+        const char *ch = it_str(step, "channel");
+        it_channel *c = channel_by_name(ch);
+        it_receiver *r = NULL;
         uint32_t i;
-        if (c == NULL) {
+        if (c != NULL && !sender) r = owned_receiver(t, ch, c->type);
+        if (c == NULL || (sender ? owned_sender(t, ch, c->type) == NULL : r == NULL)) {
             it_fail_task(t, idx, "close of an endpoint this task does not own");
             return STEP_END;
         }
@@ -1211,8 +1331,32 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
                 return STEP_END;
             }
         }
-        close_endpoint(c, sender);
+        close_endpoint(c, r);
         observe_status(t, idx, label, ASX_OK);
+        return STEP_NEXT;
+    }
+    /* Non-blocking oneshot, broadcast and watch sends (DSL §3.6). */
+    if (strcmp(op, "oneshot_send") == 0 || strcmp(op, "broadcast_send") == 0 ||
+        strcmp(op, "watch_send") == 0) {
+        it_ch_type type = op[0] == 'o'   ? IT_CH_ONESHOT
+                          : op[0] == 'b' ? IT_CH_BROADCAST
+                                         : IT_CH_WATCH;
+        it_channel *c = owned_sender(t, it_str(step, "channel"), type);
+        uint64_t v = 0;
+        if (c == NULL || !asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &v)) {
+            it_fail_task(t, idx, "send needs an owned sender and a value");
+            return STEP_END;
+        }
+        if (type == IT_CH_ONESHOT) {
+            st = asx_oneshot_send(&c->oneshot, &t->cx, v);
+            c->sender_open = 0; /* Rust's send consumes the sender */
+        } else if (type == IT_CH_BROADCAST) {
+            st = asx_broadcast_send(&c->broadcast, &t->cx, v);
+        } else {
+            /* Rust's watch send takes no Cx (watch.rs:488). */
+            st = asx_watch_send(&c->watch, v);
+        }
+        observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
     if (strcmp(op, "try_send") == 0 || strcmp(op, "try_recv") == 0) {
@@ -1505,6 +1649,95 @@ static asx_status interp_poll(void *user_data, asx_task_id self) {
 /* ------------------------------------------------------------------ */
 
 typedef asx_status (*it_run_fn)(asx_region_id region, asx_budget *budget);
+
+/* The receiver owners of a channel declaration: `receiver` (mpsc,
+ * oneshot) or `subscribers` (broadcast, watch), all top-level tasks.
+ * Returns their count, 0 on a bad declaration. */
+static uint32_t channel_receivers(uint32_t d, int subscribed, it_channel *c) {
+    uint32_t k;
+    uint32_t list = asx_json_get(g_in, d, "subscribers");
+    uint32_t n = subscribed ? asx_json_count(g_in, list) : 1u;
+    if (n == 0u || n > IT_MAX_SUBSCRIBERS) return 0;
+    for (k = 0; k < n; k++) {
+        it_task *owner =
+            task_by_name(subscribed ? asx_json_string(g_in, asx_json_item(g_in, list, k))
+                                    : it_str(d, "receiver"));
+        if (owner == NULL) return 0;
+        c->receivers[k].task = (uint32_t)(owner - g_tasks);
+        c->receivers[k].open = 1;
+    }
+    return n;
+}
+
+/* Channels (DSL §3.6), each endpoint bound to its owner, a top-level task.
+ * Broadcast and watch subscribers after the first subscribe at setup,
+ * before any send, as twin_run does. mpsc channels live in the root
+ * region: Rust channels belong to none. */
+static void setup_channels(uint32_t scenario, asx_region_id root) {
+    uint32_t list = asx_json_get(g_in, scenario, "channels");
+    uint32_t i;
+    asx_channel_reset();
+    asx_oneshot_reset();
+    asx_broadcast_reset();
+    asx_watch_reset();
+    g_n_channels = 0;
+    for (i = 0; i < asx_json_count(g_in, list); i++) {
+        uint32_t d = asx_json_item(g_in, list, i);
+        const char *name = it_str(d, "name");
+        const char *type = it_str(d, "type");
+        it_task *tx = task_by_name(it_str(d, "sender"));
+        uint64_t n = 0;
+        uint32_t k;
+        int subscribed;
+        it_channel *c;
+        asx_status st = ASX_E_INVALID_ARGUMENT;
+        if (g_n_channels >= IT_MAX_CHANNELS || name == NULL || type == NULL || tx == NULL ||
+            channel_by_name(name) != NULL) {
+            it_fail("channel declaration needs a fresh name, a type and a top-level sender", name);
+            return;
+        }
+        c = &g_channels[g_n_channels++];
+        memset(c, 0, sizeof(*c));
+        c->name = name;
+        c->sender = (uint32_t)(tx - g_tasks);
+        c->sender_open = 1;
+        subscribed = strcmp(type, "broadcast") == 0 || strcmp(type, "watch") == 0;
+        c->n_receivers = channel_receivers(d, subscribed, c);
+        if (c->n_receivers == 0u) {
+            it_fail("channel receivers must be declared top-level tasks", name);
+            return;
+        }
+        if (strcmp(type, "mpsc") == 0) {
+            c->type = IT_CH_MPSC;
+            if (asx_json_u64(g_in, asx_json_get(g_in, d, "capacity"), &n) && n <= UINT32_MAX) {
+                st = asx_channel_create(root, (uint32_t)n, &c->id);
+            }
+        } else if (strcmp(type, "oneshot") == 0) {
+            c->type = IT_CH_ONESHOT;
+            st = asx_oneshot_create(&c->oneshot, &c->receivers[0].oneshot);
+        } else if (strcmp(type, "broadcast") == 0) {
+            c->type = IT_CH_BROADCAST;
+            if (asx_json_u64(g_in, asx_json_get(g_in, d, "capacity"), &n) && n <= UINT32_MAX) {
+                st = asx_broadcast_create((uint32_t)n, &c->broadcast, &c->receivers[0].broadcast);
+            }
+            for (k = 1; st == ASX_OK && k < c->n_receivers; k++) {
+                st = asx_broadcast_subscribe(&c->broadcast, &c->receivers[k].broadcast);
+            }
+        } else if (strcmp(type, "watch") == 0) {
+            c->type = IT_CH_WATCH;
+            if (asx_json_u64(g_in, asx_json_get(g_in, d, "initial"), &n)) {
+                st = asx_watch_create(n, &c->watch, &c->receivers[0].watch);
+            }
+            for (k = 1; st == ASX_OK && k < c->n_receivers; k++) {
+                st = asx_watch_subscribe(&c->watch, &c->receivers[k].watch);
+            }
+        }
+        if (st != ASX_OK) {
+            it_fail("cannot create channel (unknown type or bad parameters)", name);
+            return;
+        }
+    }
+}
 
 /* Run the scheduler the way the lab runs: to idle (or quiescence), whatever
  * a task returns. Under fail-fast containment (the DEBUG safety profile)
@@ -2199,38 +2432,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
         (void)asx_cx_init(&t->cx, t->region, id, ASX_CAP_CANCEL_CHECK);
     }
 
-    /* Channels (DSL §3.6), each endpoint bound to its owner, a top-level
-     * task. They live in the root region: Rust channels belong to none. */
-    asx_channel_reset();
-    g_n_channels = 0;
-    list = asx_json_get(in, scenario, "channels");
-    for (i = 0; i < asx_json_count(in, list) && !g_failed; i++) {
-        uint32_t d = asx_json_item(in, list, i);
-        const char *name = it_str(d, "name");
-        const char *type = it_str(d, "type");
-        it_task *tx = task_by_name(it_str(d, "sender"));
-        it_task *rx = task_by_name(it_str(d, "receiver"));
-        uint64_t cap = 0;
-        it_channel *c;
-        if (type == NULL || strcmp(type, "mpsc") != 0) {
-            it_fail("only mpsc channels are interpreted yet (increment 2c)", name);
-            break;
-        }
-        if (g_n_channels >= IT_MAX_CHANNELS || name == NULL || tx == NULL || rx == NULL ||
-            !asx_json_u64(in, asx_json_get(in, d, "capacity"), &cap) || cap > UINT32_MAX) {
-            it_fail("mpsc declaration needs a name, a capacity and top-level owner tasks", name);
-            break;
-        }
-        c = &g_channels[g_n_channels++];
-        c->name = name;
-        c->sender = (uint32_t)(tx - g_tasks);
-        c->receiver = (uint32_t)(rx - g_tasks);
-        c->sender_open = 1;
-        c->receiver_open = 1;
-        if (asx_channel_create(root, (uint32_t)cap, &c->id) != ASX_OK) {
-            it_fail("cannot create channel", name);
-        }
-    }
+    if (!g_failed) setup_channels(scenario, root);
 
     /* Script (DSL §2): run to idle, advance time, apply the op. */
     list = asx_json_get(in, scenario, "script");

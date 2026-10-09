@@ -12,6 +12,7 @@
 
 #include "../sync/wait_queue.h"
 #include <asx/core/oneshot.h>
+#include <asx/runtime/runtime.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
@@ -206,6 +207,78 @@ asx_status asx_oneshot_try_recv(asx_oneshot_receiver *receiver, uint64_t *out_va
 
     (void)asx_wait_queue_park_current(&s->waiters);
     return ASX_E_WOULD_BLOCK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Cx-aware send / receive                                             */
+/* ------------------------------------------------------------------ */
+
+static void oneshot_trace(const asx_cx *cx, const char *message) {
+    if (cx != NULL) asx_trace_user(cx->task_id, message);
+}
+
+asx_status asx_oneshot_send(asx_oneshot_sender *sender, asx_cx *cx, uint64_t value) {
+    asx_oneshot_slot *s;
+    asx_obligation_id ob = ASX_INVALID_ID;
+    asx_status st;
+
+    if (sender == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (sender->slot >= g_slot_count) return ASX_E_NOT_FOUND;
+    s = &g_slots[sender->slot];
+    if (s->generation != sender->generation) return ASX_E_STALE_HANDLE;
+    if (!s->sender_alive) return ASX_E_INVALID_STATE;
+
+    /* Rust's reserve: cancellation consumes the sender, closing the
+     * channel (oneshot.rs:497-510). */
+    if (cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) {
+        oneshot_trace(cx, "oneshot::reserve cancelled");
+        asx_oneshot_sender_drop(sender);
+        return ASX_E_CANCELLED;
+    }
+    oneshot_trace(cx, "oneshot::reserve creating permit");
+    if (cx != NULL && cx->task_id != ASX_INVALID_ID &&
+        asx_obligation_reserve_ex(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id,
+                                  &ob) != ASX_OK) {
+        ob = ASX_INVALID_ID;
+    }
+
+    /* The permit's send: delivered commits, a dropped receiver aborts
+     * with reason Error (:731-772). */
+    st = asx_oneshot_try_send(sender, value);
+    if (ob != ASX_INVALID_ID) {
+        asx_status rs = st == ASX_OK
+                            ? asx_obligation_commit(ob)
+                            : asx_obligation_abort_with_reason(ob, ASX_OBLIGATION_ABORT_ERROR);
+        (void)rs; /* the obligation was reserved just above */
+    }
+    return st;
+}
+
+asx_status asx_oneshot_recv(asx_oneshot_receiver *receiver, asx_cx *cx, uint64_t *out_value) {
+    asx_oneshot_slot *s;
+    asx_status st;
+
+    if (receiver == NULL || out_value == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (receiver->slot >= g_slot_count) return ASX_E_NOT_FOUND;
+    s = &g_slots[receiver->slot];
+    if (s->generation != receiver->generation) return ASX_E_STALE_HANDLE;
+
+    /* A value, then a closed channel, take precedence over cancellation
+     * (oneshot.rs:1088-1116). */
+    if (s->receiver_alive && (s->state == ASX_ONESHOT_FILLED ||
+                              s->state == ASX_ONESHOT_SENDER_DROPPED || !s->sender_alive)) {
+        st = asx_oneshot_try_recv(receiver, out_value);
+        oneshot_trace(cx, st == ASX_OK ? "oneshot::recv received value"
+                                       : "oneshot::recv channel closed");
+        return st;
+    }
+    if (s->receiver_alive && cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) {
+        asx_wait_queue_leave_current(&s->waiters);
+        oneshot_trace(cx, "oneshot::recv cancelled while waiting");
+        return ASX_E_CANCELLED;
+    }
+    st = asx_oneshot_try_recv(receiver, out_value);
+    return st == ASX_E_WOULD_BLOCK ? ASX_E_PENDING : st;
 }
 
 /* ------------------------------------------------------------------ */

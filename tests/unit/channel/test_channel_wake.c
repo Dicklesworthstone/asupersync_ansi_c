@@ -20,6 +20,7 @@
 #include <asx/core/watch.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/trace.h>
 #include <asx/time/sleep.h>
 #include <string.h>
 
@@ -630,7 +631,7 @@ TEST(broadcast_send_wakes_every_receiver) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
 
-    ASSERT_EQ(asx_broadcast_send(&tx, 7u), ASX_OK);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 7u), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
     ASSERT_EQ(polls_used(100, &budget), 3u);
@@ -666,7 +667,7 @@ static asx_status poll_watch_rx(void *ud, asx_task_id self) {
     (void)self;
     s->polls++;
     for (;;) {
-        asx_status st = asx_watch_poll_changed(&s->rx);
+        asx_status st = asx_watch_poll_changed(&s->rx, NULL);
         if (st == ASX_E_PENDING) return ASX_E_PENDING;
         if (st != ASX_OK) {
             s->result = st;
@@ -722,14 +723,14 @@ TEST(watch_poll_changed_outside_scheduler) {
 
     ASSERT_TRUE(setup());
     ASSERT_EQ(asx_watch_create(5u, &tx, &rx), ASX_OK);
-    ASSERT_EQ(asx_watch_poll_changed(&rx), ASX_E_PENDING); /* initial value is not a change */
+    ASSERT_EQ(asx_watch_poll_changed(&rx, NULL), ASX_E_PENDING); /* initial value is not a change */
     ASSERT_FALSE(asx_watch_has_changed(&rx));
-    ASSERT_EQ(asx_watch_poll_changed(&rx), ASX_E_PENDING);
+    ASSERT_EQ(asx_watch_poll_changed(&rx, NULL), ASX_E_PENDING);
     ASSERT_EQ(asx_watch_send(&tx, 6u), ASX_OK);
-    ASSERT_EQ(asx_watch_poll_changed(&rx), ASX_OK);
+    ASSERT_EQ(asx_watch_poll_changed(&rx, NULL), ASX_OK);
     asx_watch_sender_drop(&tx);
-    ASSERT_EQ(asx_watch_poll_changed(&rx), ASX_E_DISCONNECTED);
-    ASSERT_EQ(asx_watch_poll_changed(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_watch_poll_changed(&rx, NULL), ASX_E_DISCONNECTED);
+    ASSERT_EQ(asx_watch_poll_changed(NULL, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
 /* ===================================================================
@@ -832,6 +833,249 @@ TEST(session_drop_wakes_receiver) {
     ASSERT_EQ(rx.result, ASX_E_DISCONNECTED);
 }
 
+/* ===================================================================
+ * Cx-aware oneshot / broadcast / watch: Rust's check order, user traces
+ * and SendPermit obligations (vocabulary §3; DSL §3.6)
+ * =================================================================== */
+
+#define CAP_MAX 16u
+
+/* User traces and obligation events recorded while capturing, in order. */
+static struct {
+    asx_trace_event_kind kind;
+    uint64_t entity;
+    char text[48];
+} g_cap[CAP_MAX];
+static uint32_t g_ncap;
+
+static void cap_observe(void *ctx, const asx_trace_event *ev, const asx_trace_payload *p) {
+    (void)ctx;
+    if (ev->kind != ASX_TRACE_USER && ev->kind != ASX_TRACE_OBLIGATION_RESERVE &&
+        ev->kind != ASX_TRACE_OBLIGATION_COMMIT && ev->kind != ASX_TRACE_OBLIGATION_ABORT) {
+        return;
+    }
+    if (g_ncap >= CAP_MAX) return;
+    g_cap[g_ncap].kind = ev->kind;
+    g_cap[g_ncap].entity = ev->entity_id;
+    g_cap[g_ncap].text[0] = '\0';
+    if (p->text != NULL) {
+        size_t n = strlen(p->text);
+        if (n >= sizeof(g_cap[0].text)) n = sizeof(g_cap[0].text) - 1u;
+        memcpy(g_cap[g_ncap].text, p->text, n);
+        g_cap[g_ncap].text[n] = '\0';
+    }
+    g_ncap++;
+}
+
+/* Start (1: forgetting earlier captures) or stop (0) capturing. */
+static void capture(int on) {
+    if (on) g_ncap = 0;
+    asx_trace_set_observer(on ? cap_observe : NULL, NULL);
+}
+
+static int cap_user(uint32_t i, asx_task_id task, const char *message) {
+    return i < g_ncap && g_cap[i].kind == ASX_TRACE_USER && g_cap[i].entity == task &&
+           strcmp(g_cap[i].text, message) == 0;
+}
+
+/* Event i is `kind` on a SendPermit held by `task`, now aborted with
+ * `reason` (ASX_OBLIGATION_ABORT_NONE: not aborted). */
+static int cap_permit(uint32_t i, asx_trace_event_kind kind, asx_task_id task,
+                      asx_obligation_abort_reason reason) {
+    asx_obligation_info info;
+    if (i >= g_ncap || g_cap[i].kind != kind) return 0;
+    if (asx_obligation_get_info((asx_obligation_id)g_cap[i].entity, &info) != ASX_OK) return 0;
+    return info.kind == ASX_OBLIGATION_KIND_SEND_PERMIT && info.abort_reason == reason &&
+           asx_handle_index(info.holder) == asx_handle_index(task);
+}
+
+static asx_status poll_idle(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    return ASX_E_PENDING;
+}
+
+/* A task (never polled) of g_region and its Cx. */
+static asx_task_id cx_task(asx_cx *cx) {
+    asx_task_id t = ASX_INVALID_ID;
+    if (asx_task_spawn(g_region, poll_idle, NULL, &t) != ASX_OK) return ASX_INVALID_ID;
+    asx_cx_init(cx, g_region, t, ASX_CAP_CANCEL_CHECK);
+    return t;
+}
+
+TEST(oneshot_send_with_cx_traces_and_commits_a_send_permit) {
+    asx_oneshot_sender tx;
+    asx_oneshot_receiver rx;
+    asx_cx a;
+    asx_cx b;
+    asx_task_id ta;
+    asx_task_id tb;
+    uint64_t v = 0;
+
+    ASSERT_TRUE(setup());
+    ta = cx_task(&a);
+    tb = cx_task(&b);
+    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    capture(1);
+    ASSERT_EQ(asx_oneshot_recv(&rx, &b, &v), ASX_E_PENDING); /* nothing traced */
+    ASSERT_EQ(asx_oneshot_send(&tx, &a, 6u), ASX_OK);
+    ASSERT_EQ(asx_oneshot_recv(&rx, &b, &v), ASX_OK);
+    capture(0);
+    ASSERT_EQ(v, 6u);
+    ASSERT_EQ(g_ncap, 4u);
+    ASSERT_TRUE(cap_user(0, ta, "oneshot::reserve creating permit"));
+    ASSERT_TRUE(cap_permit(1, ASX_TRACE_OBLIGATION_RESERVE, ta, ASX_OBLIGATION_ABORT_NONE));
+    ASSERT_TRUE(cap_permit(2, ASX_TRACE_OBLIGATION_COMMIT, ta, ASX_OBLIGATION_ABORT_NONE));
+    ASSERT_TRUE(cap_user(3, tb, "oneshot::recv received value"));
+}
+
+TEST(oneshot_cancelled_send_closes_and_value_beats_cancel_on_recv) {
+    asx_oneshot_sender tx;
+    asx_oneshot_receiver rx;
+    asx_oneshot_sender tx2;
+    asx_oneshot_receiver rx2;
+    asx_cx a;
+    asx_cx b;
+    asx_task_id ta;
+    asx_task_id tb;
+    uint64_t v = 0;
+
+    ASSERT_TRUE(setup());
+    ta = cx_task(&a);
+    tb = cx_task(&b);
+    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_create(&tx2, &rx2), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(ta, ASX_CANCEL_USER), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tb, ASX_CANCEL_USER), ASX_OK);
+    capture(1);
+    /* A cancelled send consumes the sender: the receiver sees it closed,
+     * which (like a value) is reported before its own cancellation. */
+    ASSERT_EQ(asx_oneshot_send(&tx, &a, 1u), ASX_E_CANCELLED);
+    ASSERT_EQ(asx_oneshot_recv(&rx, &b, &v), ASX_E_DISCONNECTED);
+    /* With nothing sent yet, the receiver's cancellation ends the wait. */
+    ASSERT_EQ(asx_oneshot_recv(&rx2, &b, &v), ASX_E_CANCELLED);
+    capture(0);
+    ASSERT_EQ(g_ncap, 3u);
+    ASSERT_TRUE(cap_user(0, ta, "oneshot::reserve cancelled"));
+    ASSERT_TRUE(cap_user(1, tb, "oneshot::recv channel closed"));
+    ASSERT_TRUE(cap_user(2, tb, "oneshot::recv cancelled while waiting"));
+    /* A value already sent is received despite the cancel. */
+    ASSERT_EQ(asx_oneshot_send(&tx2, NULL, 9u), ASX_OK);
+    ASSERT_EQ(asx_oneshot_recv(&rx2, &b, &v), ASX_OK);
+    ASSERT_EQ(v, 9u);
+}
+
+TEST(oneshot_send_to_dropped_receiver_aborts_the_permit_with_error) {
+    asx_oneshot_sender tx;
+    asx_oneshot_receiver rx;
+    asx_cx a;
+    asx_task_id ta;
+
+    ASSERT_TRUE(setup());
+    ta = cx_task(&a);
+    ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
+    asx_oneshot_receiver_drop(&rx);
+    capture(1);
+    ASSERT_EQ(asx_oneshot_send(&tx, &a, 1u), ASX_E_DISCONNECTED);
+    capture(0);
+    ASSERT_EQ(g_ncap, 3u);
+    ASSERT_TRUE(cap_user(0, ta, "oneshot::reserve creating permit"));
+    ASSERT_TRUE(cap_permit(2, ASX_TRACE_OBLIGATION_ABORT, ta, ASX_OBLIGATION_ABORT_ERROR));
+}
+
+TEST(broadcast_send_checks_cancel_then_receivers_and_commits_a_permit) {
+    asx_broadcast_sender tx;
+    asx_broadcast_receiver rx;
+    asx_cx a;
+    asx_task_id ta;
+    uint64_t v = 0;
+
+    ASSERT_TRUE(setup());
+    ta = cx_task(&a);
+    ASSERT_EQ(asx_broadcast_create(2u, &tx, &rx), ASX_OK);
+    capture(1);
+    ASSERT_EQ(asx_broadcast_send(&tx, &a, 1u), ASX_OK);
+    capture(0);
+    ASSERT_EQ(g_ncap, 2u);
+    ASSERT_TRUE(cap_permit(0, ASX_TRACE_OBLIGATION_RESERVE, ta, ASX_OBLIGATION_ABORT_NONE));
+    ASSERT_TRUE(cap_permit(1, ASX_TRACE_OBLIGATION_COMMIT, ta, ASX_OBLIGATION_ABORT_NONE));
+    /* Lag: two more sends into capacity 2 drop the first; the receiver
+     * learns how many it missed (Rust Lagged(n)). */
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 2u), ASX_OK);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 3u), ASX_OK);
+    ASSERT_EQ(asx_broadcast_recv(&rx, NULL, &v), ASX_E_LAGGED);
+    ASSERT_EQ(v, 1u);
+    ASSERT_EQ(asx_broadcast_recv(&rx, NULL, &v), ASX_OK);
+    ASSERT_EQ(v, 2u);
+    /* Cancelled: no trace on the send side, nothing published. */
+    ASSERT_EQ(asx_task_cancel(ta, ASX_CANCEL_USER), ASX_OK);
+    capture(1);
+    ASSERT_EQ(asx_broadcast_send(&tx, &a, 4u), ASX_E_CANCELLED);
+    capture(0);
+    ASSERT_EQ(g_ncap, 0u);
+    ASSERT_EQ(asx_broadcast_total_sent(&tx), 3u);
+    /* No receiver left: Rust's Closed. */
+    asx_broadcast_receiver_drop(&rx);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 5u), ASX_E_DISCONNECTED);
+}
+
+TEST(broadcast_recv_checks_cancel_first) {
+    asx_broadcast_sender tx;
+    asx_broadcast_receiver rx;
+    asx_cx b;
+    asx_task_id tb;
+    uint64_t v = 0;
+
+    ASSERT_TRUE(setup());
+    tb = cx_task(&b);
+    ASSERT_EQ(asx_broadcast_create(4u, &tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_broadcast_recv(&rx, &b, &v), ASX_E_PENDING);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 7u), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tb, ASX_CANCEL_USER), ASX_OK);
+    capture(1);
+    ASSERT_EQ(asx_broadcast_recv(&rx, &b, &v), ASX_E_CANCELLED);
+    capture(0);
+    ASSERT_EQ(g_ncap, 1u);
+    ASSERT_TRUE(cap_user(0, tb, "broadcast::recv cancelled"));
+    ASSERT_EQ(asx_broadcast_recv(&rx, NULL, &v), ASX_OK); /* the value stays */
+    ASSERT_EQ(v, 7u);
+}
+
+TEST(watch_changed_traces_each_rust_outcome) {
+    asx_watch_sender tx;
+    asx_watch_receiver rx;
+    asx_cx b;
+    asx_cx c;
+    asx_task_id tb;
+    asx_task_id tc;
+    asx_watch_receiver rc;
+
+    ASSERT_TRUE(setup());
+    tb = cx_task(&b);
+    tc = cx_task(&c);
+    ASSERT_EQ(asx_watch_create(0u, &tx, &rx), ASX_OK);
+    ASSERT_EQ(asx_watch_subscribe(&tx, &rc), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tc, ASX_CANCEL_USER), ASX_OK);
+    capture(1);
+    asx_watch_changed_begin(&rx, &b);
+    ASSERT_EQ(asx_watch_poll_changed(&rx, &b), ASX_E_PENDING);
+    ASSERT_EQ(asx_watch_send(&tx, 5u), ASX_OK);
+    ASSERT_EQ(asx_watch_poll_changed(&rx, &b), ASX_OK);
+    asx_watch_changed_begin(&rc, &c);
+    ASSERT_EQ(asx_watch_poll_changed(&rc, &c), ASX_E_CANCELLED); /* cancel first */
+    asx_watch_sender_drop(&tx);
+    asx_watch_changed_begin(&rx, &b);
+    ASSERT_EQ(asx_watch_poll_changed(&rx, &b), ASX_E_DISCONNECTED);
+    capture(0);
+    ASSERT_EQ(g_ncap, 6u);
+    ASSERT_TRUE(cap_user(0, tb, "watch::changed starting wait"));
+    ASSERT_TRUE(cap_user(1, tb, "watch::changed received update"));
+    ASSERT_TRUE(cap_user(2, tc, "watch::changed starting wait"));
+    ASSERT_TRUE(cap_user(3, tc, "watch::changed cancelled"));
+    ASSERT_TRUE(cap_user(4, tb, "watch::changed starting wait"));
+    ASSERT_TRUE(cap_user(5, tb, "watch::changed sender dropped"));
+}
+
 int main(void) {
     fprintf(stderr, "=== test_channel_wake ===\n");
 
@@ -852,6 +1096,12 @@ int main(void) {
     RUN_TEST(watch_poll_changed_outside_scheduler);
     RUN_TEST(session_directions_wake_each_other);
     RUN_TEST(session_drop_wakes_receiver);
+    RUN_TEST(oneshot_send_with_cx_traces_and_commits_a_send_permit);
+    RUN_TEST(oneshot_cancelled_send_closes_and_value_beats_cancel_on_recv);
+    RUN_TEST(oneshot_send_to_dropped_receiver_aborts_the_permit_with_error);
+    RUN_TEST(broadcast_send_checks_cancel_then_receivers_and_commits_a_permit);
+    RUN_TEST(broadcast_recv_checks_cancel_first);
+    RUN_TEST(watch_changed_traces_each_rust_outcome);
 
     TEST_REPORT();
     return test_failures;

@@ -63,7 +63,7 @@ TEST(has_changed_initially_false) {
     setup();
     MUST_OK(asx_watch_create(1, &tx, &rx));
     ASSERT_FALSE(asx_watch_has_changed(&rx));
-    ASSERT_EQ(asx_watch_poll_changed(&rx), ASX_E_PENDING);
+    ASSERT_EQ(asx_watch_poll_changed(&rx, NULL), ASX_E_PENDING);
     MUST_OK(asx_watch_send(&tx, 2));
     ASSERT_TRUE(asx_watch_has_changed(&rx));
 }

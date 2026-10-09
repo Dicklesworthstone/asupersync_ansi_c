@@ -5,9 +5,9 @@
 //! Increment 1 implements the driver (setup, script, finish), the control,
 //! masking, obligation, spawn/join and child-region steps, trace projection
 //! and the snapshot; increment 2 adds the sync (mutex, semaphore, barrier,
-//! notify) and mpsc steps. Oneshot, broadcast and watch channels, group and
-//! actor steps are not yet interpreted: a scenario that uses one fails as a
-//! harness error, never silently.
+//! notify) and channel (mpsc, oneshot, broadcast, watch) steps. Group,
+//! combinator and actor steps are not yet interpreted: a scenario that uses
+//! one fails as a harness error, never silently.
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -15,7 +15,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use asupersync::channel::mpsc;
+use asupersync::channel::{broadcast, mpsc, oneshot, watch};
 use asupersync::cx::{ChildRegion, ChildRegionSpec};
 use asupersync::lab::{LabConfig, LabRuntime};
 use asupersync::record::task::TaskState;
@@ -347,14 +347,28 @@ struct Local {
     /// A clone of the task's Cx for permits to borrow (`lend`).
     cx: Option<Box<Cx>>,
     /// The channel endpoints this task owns, by channel name (DSL §3.6).
+    /// They drop in this order (each map by name) when the body ends; the C
+    /// interpreter closes them in the same order.
     mpsc_tx: BTreeMap<String, Box<mpsc::Sender<u64>>>,
     mpsc_rx: BTreeMap<String, mpsc::Receiver<u64>>,
+    oneshot_tx: BTreeMap<String, oneshot::Sender<u64>>,
+    oneshot_rx: BTreeMap<String, oneshot::Receiver<u64>>,
+    broadcast_tx: BTreeMap<String, broadcast::Sender<u64>>,
+    broadcast_rx: BTreeMap<String, broadcast::Receiver<u64>>,
+    watch_tx: BTreeMap<String, watch::Sender<u64>>,
+    watch_rx: BTreeMap<String, watch::Receiver<u64>>,
 }
 
 /// A channel endpoint, moved into its owner's body at setup (DSL §3.6).
 enum Endpoint {
     MpscTx(mpsc::Sender<u64>),
     MpscRx(mpsc::Receiver<u64>),
+    OneshotTx(oneshot::Sender<u64>),
+    OneshotRx(oneshot::Receiver<u64>),
+    BroadcastTx(broadcast::Sender<u64>),
+    BroadcastRx(broadcast::Receiver<u64>),
+    WatchTx(watch::Sender<u64>),
+    WatchRx(watch::Receiver<u64>),
 }
 
 impl Local {
@@ -366,6 +380,48 @@ impl Local {
             Endpoint::MpscRx(rx) => {
                 self.mpsc_rx.insert(channel, rx);
             }
+            Endpoint::OneshotTx(tx) => {
+                self.oneshot_tx.insert(channel, tx);
+            }
+            Endpoint::OneshotRx(rx) => {
+                self.oneshot_rx.insert(channel, rx);
+            }
+            Endpoint::BroadcastTx(tx) => {
+                self.broadcast_tx.insert(channel, tx);
+            }
+            Endpoint::BroadcastRx(rx) => {
+                self.broadcast_rx.insert(channel, rx);
+            }
+            Endpoint::WatchTx(tx) => {
+                self.watch_tx.insert(channel, tx);
+            }
+            Endpoint::WatchRx(rx) => {
+                self.watch_rx.insert(channel, rx);
+            }
+        }
+    }
+
+    /// Drop this task's sender (`sender`) or receiver on `channel`, of
+    /// whatever type it is (DSL `close_sender` / `close_receiver`).
+    fn close(&mut self, channel: &str, sender: bool) -> RunResult<()> {
+        let dropped = if sender {
+            self.mpsc_tx.remove(channel).map(drop).is_some()
+                || self.oneshot_tx.remove(channel).map(drop).is_some()
+                || self.broadcast_tx.remove(channel).map(drop).is_some()
+                || self.watch_tx.remove(channel).map(drop).is_some()
+        } else {
+            self.mpsc_rx.remove(channel).map(drop).is_some()
+                || self.oneshot_rx.remove(channel).map(drop).is_some()
+                || self.broadcast_rx.remove(channel).map(drop).is_some()
+                || self.watch_rx.remove(channel).map(drop).is_some()
+        };
+        if dropped {
+            Ok(())
+        } else {
+            Err(format!(
+                "this task does not own the {} of {channel:?}",
+                if sender { "sender" } else { "receiver" }
+            ))
         }
     }
 
@@ -411,6 +467,47 @@ fn recv_error_status(err: mpsc::RecvError) -> &'static str {
         mpsc::RecvError::Disconnected => "ASX_E_DISCONNECTED",
         mpsc::RecvError::Cancelled => "ASX_E_CANCELLED",
         mpsc::RecvError::Empty => "ASX_E_CHANNEL_EMPTY",
+    }
+}
+
+fn oneshot_send_status<T>(err: &oneshot::SendError<T>) -> &'static str {
+    match err {
+        oneshot::SendError::Disconnected(_) => "ASX_E_DISCONNECTED",
+        oneshot::SendError::Cancelled(_) => "ASX_E_CANCELLED",
+    }
+}
+
+fn oneshot_recv_status(err: oneshot::RecvError) -> &'static str {
+    match err {
+        oneshot::RecvError::Closed => "ASX_E_DISCONNECTED",
+        oneshot::RecvError::Cancelled => "ASX_E_CANCELLED",
+        oneshot::RecvError::PolledAfterCompletion => "ASX_E_INVALID_STATE",
+    }
+}
+
+fn broadcast_send_status<T>(err: &broadcast::SendError<T>) -> &'static str {
+    match err {
+        broadcast::SendError::Closed(_) => "ASX_E_DISCONNECTED",
+        broadcast::SendError::Cancelled(_) => "ASX_E_CANCELLED",
+    }
+}
+
+/// A broadcast receive error's status and observation value: `Lagged(n)`
+/// carries `n` (vocabulary §5).
+fn broadcast_recv_status(err: broadcast::RecvError) -> (&'static str, Value) {
+    match err {
+        broadcast::RecvError::Lagged(n) => ("ASX_E_LAGGED", json!(n)),
+        broadcast::RecvError::Closed => ("ASX_E_DISCONNECTED", Value::Null),
+        broadcast::RecvError::Cancelled => ("ASX_E_CANCELLED", Value::Null),
+        broadcast::RecvError::PolledAfterCompletion => ("ASX_E_INVALID_STATE", Value::Null),
+    }
+}
+
+fn watch_recv_status(err: watch::RecvError) -> &'static str {
+    match err {
+        watch::RecvError::Closed => "ASX_E_DISCONNECTED",
+        watch::RecvError::Cancelled => "ASX_E_CANCELLED",
+        watch::RecvError::PolledAfterCompletion => "ASX_E_INVALID_STATE",
     }
 }
 
@@ -747,26 +844,52 @@ fn exec_sync(
                     "close_sender on {ch:?} while holding one of its permits (a Rust body cannot drop a borrowed sender)"
                 ));
             }
-            let tx = local
-                .mpsc_tx
-                .remove(ch)
-                .ok_or_else(|| format!("this task does not own the sender of {ch:?}"))?;
-            drop(tx);
+            local.close(ch, true)?;
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
         "close_receiver" => {
-            let ch = str_field(step, "channel")?;
-            let rx = local
-                .mpsc_rx
-                .remove(ch)
-                .ok_or_else(|| format!("this task does not own the receiver of {ch:?}"))?;
-            drop(rx);
+            local.close(str_field(step, "channel")?, false)?;
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
+        // Non-blocking oneshot, broadcast and watch sends (DSL §3.6).
+        "oneshot_send" => {
+            let ch = str_field(step, "channel")?;
+            let tx = local
+                .oneshot_tx
+                .remove(ch)
+                .ok_or_else(|| format!("this task does not own the oneshot sender of {ch:?}"))?;
+            let status = match tx.send(cx, u64_field(step, "value")?) {
+                Ok(()) => "ASX_OK",
+                Err(e) => oneshot_send_status(&e),
+            };
+            observe(&ctx.shared, me, idx, label, status, Value::Null);
+        }
+        "broadcast_send" => {
+            let ch = str_field(step, "channel")?;
+            let tx = local
+                .broadcast_tx
+                .get(ch)
+                .ok_or_else(|| format!("this task does not own the broadcast sender of {ch:?}"))?;
+            let status = match tx.send(cx, u64_field(step, "value")?) {
+                Ok(_) => "ASX_OK",
+                Err(e) => broadcast_send_status(&e),
+            };
+            observe(&ctx.shared, me, idx, label, status, Value::Null);
+        }
+        "watch_send" => {
+            let ch = str_field(step, "channel")?;
+            let tx = local
+                .watch_tx
+                .get(ch)
+                .ok_or_else(|| format!("this task does not own the watch sender of {ch:?}"))?;
+            let status = match tx.send(u64_field(step, "value")?) {
+                Ok(()) => "ASX_OK",
+                Err(watch::SendError::Closed(_)) => "ASX_E_DISCONNECTED",
+            };
+            observe(&ctx.shared, me, idx, label, status, Value::Null);
+        }
         other => {
-            return Err(format!(
-                "op {other:?} is not interpreted yet (increment 2c)"
-            ));
+            return Err(format!("op {other:?} is not interpreted yet (increment 3)"));
         }
     }
     Ok(Flow::Continue)
@@ -868,6 +991,53 @@ async fn exec_step(
             match rx.recv(cx).await {
                 Ok(v) => observe(&ctx.shared, me, idx, op, "ASX_OK", json!(v)),
                 Err(e) => observe(&ctx.shared, me, idx, op, recv_error_status(e), Value::Null),
+            }
+        }
+        // Blocking oneshot, broadcast and watch receives (DSL §3.6).
+        "oneshot_recv" => {
+            let ch = str_field(step, "channel")?;
+            let rx = local
+                .oneshot_rx
+                .get_mut(ch)
+                .ok_or_else(|| format!("this task does not own the oneshot receiver of {ch:?}"))?;
+            match rx.recv(cx).await {
+                Ok(v) => observe(&ctx.shared, me, idx, op, "ASX_OK", json!(v)),
+                Err(e) => observe(
+                    &ctx.shared,
+                    me,
+                    idx,
+                    op,
+                    oneshot_recv_status(e),
+                    Value::Null,
+                ),
+            }
+        }
+        "broadcast_recv" => {
+            let ch = str_field(step, "channel")?;
+            let rx = local
+                .broadcast_rx
+                .get_mut(ch)
+                .ok_or_else(|| format!("this task does not own a broadcast receiver of {ch:?}"))?;
+            match rx.recv(cx).await {
+                Ok(v) => observe(&ctx.shared, me, idx, op, "ASX_OK", json!(v)),
+                Err(e) => {
+                    let (status, value) = broadcast_recv_status(e);
+                    observe(&ctx.shared, me, idx, op, status, value);
+                }
+            }
+        }
+        "watch_changed" => {
+            let ch = str_field(step, "channel")?;
+            let rx = local
+                .watch_rx
+                .get_mut(ch)
+                .ok_or_else(|| format!("this task does not own a watch receiver of {ch:?}"))?;
+            match rx.changed(cx).await {
+                Ok(()) => {
+                    let v = *rx.borrow_and_update();
+                    observe(&ctx.shared, me, idx, op, "ASX_OK", json!(v));
+                }
+                Err(e) => observe(&ctx.shared, me, idx, op, watch_recv_status(e), Value::Null),
             }
         }
         // Blocking sync steps (DSL §3.7).
@@ -1088,25 +1258,62 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
         .flatten()
     {
         let name = str_field(decl, "name")?.to_string();
+        let mut give = |owner: &str, endpoint: Endpoint| {
+            endpoints
+                .entry(owner.to_string())
+                .or_default()
+                .push((name.clone(), endpoint));
+        };
+        // Broadcast and watch: the first subscriber takes the channel's own
+        // receiver, the others subscribe at setup, before any send.
+        let subscribers = || -> RunResult<Vec<String>> {
+            let list = decl
+                .get("subscribers")
+                .and_then(Value::as_array)
+                .filter(|a| !a.is_empty())
+                .ok_or("broadcast/watch channel without subscribers")?;
+            list.iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| "subscriber is not a task name".to_string())
+                })
+                .collect()
+        };
+        let capacity = || -> RunResult<usize> {
+            usize::try_from(u64_field(decl, "capacity")?)
+                .map_err(|_| "capacity out of range".to_string())
+        };
         match str_field(decl, "type")? {
             "mpsc" => {
-                let capacity = usize::try_from(u64_field(decl, "capacity")?)
-                    .map_err(|_| "capacity out of range")?;
-                let (tx, rx) = mpsc::channel::<u64>(capacity);
-                endpoints
-                    .entry(str_field(decl, "sender")?.to_string())
-                    .or_default()
-                    .push((name.clone(), Endpoint::MpscTx(tx)));
-                endpoints
-                    .entry(str_field(decl, "receiver")?.to_string())
-                    .or_default()
-                    .push((name, Endpoint::MpscRx(rx)));
+                let (tx, rx) = mpsc::channel::<u64>(capacity()?);
+                give(str_field(decl, "sender")?, Endpoint::MpscTx(tx));
+                give(str_field(decl, "receiver")?, Endpoint::MpscRx(rx));
             }
-            other => {
-                return Err(format!(
-                    "{other} channels are not interpreted yet (increment 2c)"
-                ));
+            "oneshot" => {
+                let (tx, rx) = oneshot::channel::<u64>();
+                give(str_field(decl, "sender")?, Endpoint::OneshotTx(tx));
+                give(str_field(decl, "receiver")?, Endpoint::OneshotRx(rx));
             }
+            "broadcast" => {
+                let (tx, rx) = broadcast::channel::<u64>(capacity()?);
+                let subs = subscribers()?;
+                for sub in &subs[1..] {
+                    give(sub, Endpoint::BroadcastRx(tx.subscribe()));
+                }
+                give(&subs[0], Endpoint::BroadcastRx(rx));
+                give(str_field(decl, "sender")?, Endpoint::BroadcastTx(tx));
+            }
+            "watch" => {
+                let (tx, rx) = watch::channel::<u64>(u64_field(decl, "initial")?);
+                let subs = subscribers()?;
+                for sub in &subs[1..] {
+                    give(sub, Endpoint::WatchRx(tx.subscribe()));
+                }
+                give(&subs[0], Endpoint::WatchRx(rx));
+                give(str_field(decl, "sender")?, Endpoint::WatchTx(tx));
+            }
+            other => return Err(format!("unknown channel type {other:?}")),
         }
     }
     // Sync objects (DSL §3.7), leaked for the capture's lifetime.

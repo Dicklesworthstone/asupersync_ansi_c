@@ -14,6 +14,7 @@
 
 #include "../sync/wait_queue.h"
 #include <asx/core/broadcast.h>
+#include <asx/runtime/runtime.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
@@ -161,9 +162,10 @@ void asx_broadcast_receiver_drop(asx_broadcast_receiver *receiver) {
 /* Send                                                                */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_broadcast_send(asx_broadcast_sender *sender, uint64_t value) {
+asx_status asx_broadcast_send(asx_broadcast_sender *sender, asx_cx *cx, uint64_t value) {
     asx_broadcast_slot *s;
     uint32_t ring_idx;
+    asx_obligation_id ob = ASX_INVALID_ID;
 
     if (sender == NULL) return ASX_E_INVALID_ARGUMENT;
     if (sender->slot >= g_slot_count) return ASX_E_NOT_FOUND;
@@ -171,6 +173,18 @@ asx_status asx_broadcast_send(asx_broadcast_sender *sender, uint64_t value) {
     s = &g_slots[sender->slot];
     if (s->generation != sender->generation) return ASX_E_STALE_HANDLE;
     if (!s->sender_alive) return ASX_E_INVALID_STATE;
+
+    /* Rust's reserve: cancellation, then a receiver to send to
+     * (broadcast.rs:409-432). */
+    if (cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) return ASX_E_CANCELLED;
+    if (s->receiver_count == 0u) return ASX_E_DISCONNECTED;
+    if (cx != NULL && cx->task_id != ASX_INVALID_ID &&
+        asx_obligation_reserve_ex(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id,
+                                  &ob) == ASX_OK) {
+        /* The permit's send commits before publishing (:719-724). */
+        asx_status cs = asx_obligation_commit(ob);
+        (void)cs; /* reserved just above */
+    }
 
     /* Write into ring buffer (overwrites old messages) */
     ring_idx = s->write_seq % s->capacity;
@@ -216,7 +230,9 @@ asx_status asx_broadcast_try_recv(asx_broadcast_receiver *receiver, uint64_t *ou
     if (s->write_seq > s->capacity) { oldest_available = s->write_seq - s->capacity; }
 
     if (receiver->cursor < oldest_available) {
-        /* Receiver has lagged — advance cursor to oldest available */
+        /* Receiver has lagged — report how far, advance cursor to oldest
+         * available */
+        *out_value = (uint64_t)(oldest_available - receiver->cursor);
         receiver->cursor = oldest_available;
         return ASX_E_LAGGED;
     }
@@ -229,6 +245,22 @@ asx_status asx_broadcast_try_recv(asx_broadcast_receiver *receiver, uint64_t *ou
     asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)receiver->slot, *out_value);
 
     return ASX_OK;
+}
+
+asx_status asx_broadcast_recv(asx_broadcast_receiver *receiver, asx_cx *cx, uint64_t *out_value) {
+    asx_status st;
+
+    if (receiver == NULL || out_value == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (receiver->slot >= g_slot_count) return ASX_E_NOT_FOUND;
+    if (g_slots[receiver->slot].generation != receiver->generation) return ASX_E_STALE_HANDLE;
+
+    if (cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) {
+        asx_wait_queue_leave_current(&g_slots[receiver->slot].waiters);
+        asx_trace_user(cx->task_id, "broadcast::recv cancelled");
+        return ASX_E_CANCELLED;
+    }
+    st = asx_broadcast_try_recv(receiver, out_value);
+    return st == ASX_E_WOULD_BLOCK ? ASX_E_PENDING : st;
 }
 
 /* ------------------------------------------------------------------ */

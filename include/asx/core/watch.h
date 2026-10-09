@@ -22,6 +22,7 @@
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
+#include <asx/cx/cx.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -98,18 +99,29 @@ ASX_API ASX_MUST_USE asx_status asx_watch_recv(asx_watch_receiver *receiver, uin
  */
 ASX_API int asx_watch_has_changed(const asx_watch_receiver *receiver);
 
+/* Start waiting for a change: Rust's `rx.changed(&cx)` records the trace
+ * "watch::changed starting wait" when the wait is created, before its
+ * first poll (channel/watch.rs:723). Call once per wait, then poll it with
+ * asx_watch_poll_changed. A NULL cx records nothing. */
+ASX_API void asx_watch_changed_begin(const asx_watch_receiver *receiver, asx_cx *cx);
+
 /* Wait for a change (upstream Receiver::changed). Poll-style.
+ * With a Cx, cancellation is checked first: ASX_E_CANCELLED with the trace
+ *   "watch::changed cancelled" (watch.rs:736).
  * Returns ASX_OK if a version this receiver has not seen is available and
- *   marks it seen (read it with asx_watch_recv).
+ *   marks it seen (read it with asx_watch_recv); trace "watch::changed
+ *   received update".
  * Returns ASX_E_PENDING if nothing changed; inside a scheduler poll the
  *   calling task is then parked until the next send or the sender drop
  *   (every send wakes every parked receiver task, FIFO).
  * Returns ASX_E_DISCONNECTED if the sender was dropped and no unseen
- *   version remains.
+ *   version remains; trace "watch::changed sender dropped".
+ * Traces are recorded for the Cx's task; a NULL cx skips the cancellation
+ *   check and the traces.
  * Returns ASX_E_INVALID_ARGUMENT for a NULL receiver, ASX_E_NOT_FOUND /
  *   ASX_E_STALE_HANDLE for invalid handles.
  * Thread-safety: not thread-safe; single-threaded mode only. */
-ASX_API ASX_MUST_USE asx_status asx_watch_poll_changed(asx_watch_receiver *receiver);
+ASX_API ASX_MUST_USE asx_status asx_watch_poll_changed(asx_watch_receiver *receiver, asx_cx *cx);
 
 /* -------------------------------------------------------------------
  * API: Query
