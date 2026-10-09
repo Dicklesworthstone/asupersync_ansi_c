@@ -365,7 +365,9 @@ it as conflicting with everything, `independence.rs:310-314`.)
 
 The relation is checked by a table test on both sides: a C test under
 `tests/unit/runtime/` and a Rust test in `tools/twin_run`. Both use the same
-JSON table of event pairs and expected answers.
+JSON table of event pairs and expected answers,
+`tests/conformance/vocab_v2_independence_table.json`. Its 21 cases cover
+every footprint rule; `"$reason"` stands for its `reason_fixture`.
 
 ### Foata layers
 
