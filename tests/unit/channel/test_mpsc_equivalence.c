@@ -561,8 +561,7 @@ static uint64_t rdtsc_val(void) {
 }
 #define HAS_RDTSC 1
 #else
-#define HAS_RDTSC 0
-static uint64_t rdtsc_val(void) { return 0; }
+#define HAS_RDTSC 0 /* throughput_comparison measures nothing here */
 #endif
 
 TEST(throughput_comparison) {

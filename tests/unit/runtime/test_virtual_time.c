@@ -408,8 +408,7 @@ static uint64_t vt_rdtsc(void) {
 }
 #define HAS_RDTSC 1
 #else
-#define HAS_RDTSC 0
-static uint64_t vt_rdtsc(void) { return 0; }
+#define HAS_RDTSC 0 /* overhead_measurement measures nothing here */
 #endif
 
 TEST(overhead_measurement) {
