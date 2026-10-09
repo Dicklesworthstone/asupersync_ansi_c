@@ -289,7 +289,9 @@ uint32_t asx_ebr_reader_enter(asx_ebr_state *ebr, uint32_t reader_id) {
     if (ebr == NULL || reader_id >= ebr->reader_count) return 0;
     epoch = asx_atomic_u32_load(&ebr->global_epoch);
     asx_atomic_u32_store(&ebr->reader_epoch[reader_id], epoch);
-    asx_atomic_fence_acquire();
+    /* The announcement must be visible before this reader loads anything
+     * it protects (store->load: a full fence; pairs with try_advance). */
+    asx_atomic_fence_seq_cst();
     return epoch;
 }
 
@@ -351,6 +353,9 @@ int asx_ebr_try_advance(asx_ebr_state *ebr, asx_ebr_reclaim_fn reclaim_fn, void 
      */
     reclaim_epoch = (current + ASX_EBR_EPOCH_COUNT - 2u) % ASX_EBR_EPOCH_COUNT;
 
+    /* The retirer's unlinking stores must be visible before the reader
+     * epochs are scanned (store->load: pairs with reader_enter). */
+    asx_atomic_fence_seq_cst();
     if (!ebr_epoch_quiesced(ebr, reclaim_epoch)) return 0;
 
     /* Reclaim items from the old epoch */

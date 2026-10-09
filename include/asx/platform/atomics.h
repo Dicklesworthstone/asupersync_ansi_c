@@ -46,7 +46,7 @@
  *   - compare-exchange success: acq_rel
  *   - compare-exchange failure: acquire
  *   - exchange/fetch_add: acq_rel
- *   - fences: acquire or release as named
+ *   - fences: acquire, release or seq_cst as named
  *
  * The policy is intentionally stronger than some consumers need. It gives
  * channel publication, task metadata, cancellation flags, and future trace
@@ -216,6 +216,21 @@ static inline void asx_atomic_fence_release(void) {
     _ReadWriteBarrier();
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
     atomic_thread_fence(memory_order_release);
+#endif
+}
+
+/* Full fence: also orders an earlier store before a later load, which
+ * acquire and release fences do not (x86 reorders exactly that pair). */
+static inline void asx_atomic_fence_seq_cst(void) {
+#if ASX_LOCKFREE_SINGLE_THREAD
+    return;
+#elif defined(__clang__) || defined(__GNUC__)
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+#elif defined(_MSC_VER)
+    static volatile long fence_word;
+    (void)_InterlockedOr(&fence_word, 0);
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+    atomic_thread_fence(memory_order_seq_cst);
 #endif
 }
 

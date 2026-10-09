@@ -14,9 +14,21 @@
 
 /* ASX_CHECKPOINT_WAIVER_FILE() -- seqlock/EBR test, no checkpoint coverage needed */
 
+#define _POSIX_C_SOURCE 200809L /* sched_yield */
+
 #include "test_harness.h"
 #include <asx/asx.h>
+#include <asx/platform/atomics.h>
 #include <string.h>
+
+/* Live POSIX builds have real atomics and threads. */
+#if defined(ASX_PROFILE_POSIX) && !ASX_LOCKFREE_SINGLE_THREAD
+#define ASX_SB_LITMUS 1
+#include <pthread.h>
+#include <sched.h>
+#else
+#define ASX_SB_LITMUS 0
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Types from spike (not in public headers)                           */
@@ -820,6 +832,70 @@ TEST(integration_seqlock_protects_slot_during_ebr_reclaim) {
     (void)reader_epoch;
 }
 
+#if ASX_SB_LITMUS
+/* ------------------------------------------------------------------ */
+/* Store buffering under real threads (live POSIX builds)             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * EBR's reader_enter and try_advance each store, fence, then load what
+ * the other side stored. Only a full fence forbids both loads missing
+ * both stores; with acquire fences x86 store buffers produce that outcome
+ * in most rounds of this loop. With fewer than three CPUs the threads do
+ * not overlap and the forbidden outcome cannot appear either way.
+ */
+enum { SB_ROUNDS = 20000 };
+
+static asx_atomic_u32 sb_flag[2];
+static asx_atomic_u32 sb_round;
+static asx_atomic_u32 sb_done;
+static uint32_t sb_seen[2];
+
+static void sb_wait_for(asx_atomic_u32 *a, uint32_t v) {
+    uint32_t spins = 0u;
+    while (asx_atomic_u32_load(a) != v) {
+        if (++spins >= 1000u) {
+            spins = 0u;
+            (void)sched_yield();
+        }
+    }
+}
+
+static void *sb_worker(void *arg) {
+    uint32_t self = (uint32_t)(size_t)arg;
+    uint32_t r;
+    for (r = 1u; r <= SB_ROUNDS; r++) {
+        sb_wait_for(&sb_round, r);
+        asx_atomic_u32_store(&sb_flag[self], 1u);
+        asx_atomic_fence_seq_cst();
+        sb_seen[self] = asx_atomic_u32_load(&sb_flag[1u - self]);
+        (void)asx_atomic_u32_fetch_add(&sb_done, 1u);
+    }
+    return NULL;
+}
+
+TEST(full_fence_forbids_store_buffering) {
+    pthread_t workers[2];
+    uint32_t r;
+    uint32_t forbidden = 0u;
+
+    asx_atomic_u32_init(&sb_round, 0u);
+    ASSERT_EQ(pthread_create(&workers[0], NULL, sb_worker, (void *)(size_t)0u), 0);
+    ASSERT_EQ(pthread_create(&workers[1], NULL, sb_worker, (void *)(size_t)1u), 0);
+    for (r = 1u; r <= SB_ROUNDS; r++) {
+        asx_atomic_u32_store(&sb_flag[0], 0u);
+        asx_atomic_u32_store(&sb_flag[1], 0u);
+        asx_atomic_u32_store(&sb_done, 0u);
+        asx_atomic_u32_store(&sb_round, r);
+        sb_wait_for(&sb_done, 2u);
+        if (sb_seen[0] == 0u && sb_seen[1] == 0u) forbidden++;
+    }
+    ASSERT_EQ(pthread_join(workers[0], NULL), 0);
+    ASSERT_EQ(pthread_join(workers[1], NULL), 0);
+    ASSERT_EQ(forbidden, 0u);
+}
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Main                                                               */
 /* ------------------------------------------------------------------ */
@@ -850,6 +926,9 @@ int main(void) {
     RUN_TEST(ebr_reclaim_fires_callback);
     RUN_TEST(ebr_full_lifecycle);
     RUN_TEST(ebr_null_safety);
+#if ASX_SB_LITMUS
+    RUN_TEST(full_fence_forbids_store_buffering);
+#endif
 
     /* Spinlock (4) */
     RUN_TEST(spinlock_init_unlocked);
