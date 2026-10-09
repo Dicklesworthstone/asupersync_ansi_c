@@ -802,11 +802,21 @@ fn extract_aux(ev: &TraceEvent) -> u64 {
     }
 }
 
+/// The asupersync commit this tool links, read from the git source recorded in
+/// its own Cargo.lock (`...?rev=<sha>#<sha>`), so the provenance stamp cannot
+/// drift from the pin in Cargo.toml. An unrelated checkout's HEAD cannot
+/// identify the linked code.
+fn linked_asupersync_commit() -> String {
+    include_str!("../Cargo.lock")
+        .lines()
+        .find(|l| l.starts_with("source = \"git+https://github.com/Dicklesworthstone/asupersync"))
+        .and_then(|l| l.rsplit('#').next())
+        .map(|sha| sha.trim_end_matches('"').to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 fn build_provenance() -> serde_json::Value {
-    // This tool links the exact registry dependency in Cargo.toml. An unrelated
-    // checkout's HEAD cannot identify that code. The release archive's
-    // .cargo_vcs_info.json records this commit for asupersync 0.5.0.
-    let rust_commit = "78b64636e99fea4ea2d868096576021dd3b8e519";
+    let rust_commit = linked_asupersync_commit();
 
     let rustc_version = Command::new("rustc")
         .args(["--version", "--verbose"])
@@ -868,9 +878,10 @@ mod tests {
             captured["expected_final_snapshot"],
             serde_json::json!({"regions": 0, "tasks": 0, "obligations": 0}),
         );
+        // The pinned rev in Cargo.toml (bridge program W1.1).
         assert_eq!(
             captured["provenance"]["rust_baseline_commit"],
-            "78b64636e99fea4ea2d868096576021dd3b8e519",
+            "5e60b1c4c53d62aaddae68de3ee7de4732f1755b",
         );
         let tool_lock = include_bytes!("../Cargo.lock");
         assert_eq!(
