@@ -68,10 +68,13 @@ make build
 # 2) Run the current local test gate
 make test
 
-# 3) Verify Rust fixture parity and codec/profile equivalence
-make conformance
+# 3) Check fixture integrity and recorded codec/profile digests
+make fixture-integrity
 make codec-equivalence
 make profile-parity
+# Rust parity (fixtures executed through the C runtime) has no evidence yet:
+# `make conformance` fails until the twin-run oracle lands (see
+# docs/REALITY_CHECK_AND_BRIDGE_PLAN.md, workstream W1).
 
 # 4) Produce deterministic release bundles (libasx.a + headers/docs)
 make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=linux-x86_64 PROFILE=CORE CODEC=BIN DETERMINISTIC=1
@@ -246,9 +249,9 @@ make build
 ```bash
 make test
 ```
-3. Run the parity-focused gates:
+3. Run the fixture and recorded-digest gates:
 ```bash
-make conformance
+make fixture-integrity
 make codec-equivalence
 make profile-parity
 ```
@@ -362,10 +365,18 @@ make test-vignettes
 
 ### `make conformance`
 
-Run Rust fixture parity.
+Rust parity: fixtures executed through the C runtime and compared with
+results captured from Rust asupersync. No such evidence exists yet: the
+checked-in fixtures were largely synthesized by the capture tool, and no C
+code executes a fixture's ops. The target therefore **fails** with
+`NO RUST PARITY EVIDENCE` instead of passing on zero comparisons, and CI runs
+it as a visible non-blocking step until the twin-run oracle (bridge program
+W1) lands.
 
 ```bash
-make conformance
+make conformance        # fails until the oracle exists
+make fixture-integrity  # schema, provenance, digest recompute, codec round trip
+make test-gates         # negative controls: the gates must reject bad fixtures
 ```
 
 ### `make codec-equivalence`
@@ -648,9 +659,11 @@ make test-invariants    # Lifecycle and quiescence invariants
 make test-conformance-c # C-level conformance tests (codec equiv + profile parity)
 make test-vignettes     # API ergonomics demonstrations
 make test-e2e           # End-to-end scenario lanes
-make conformance        # Rust fixture parity
-make codec-equivalence  # JSON vs BIN semantic equivalence
-make profile-parity     # Cross-profile semantic digest comparison
+make fixture-integrity  # Fixture schema, provenance, digest recompute, codec round trip
+make test-gates         # Gate negative controls (bad fixtures must be rejected)
+make conformance        # Rust parity: FAILS until the twin-run oracle exists (W1)
+make codec-equivalence  # JSON vs BIN digests recorded in fixtures (runtime not executed)
+make profile-parity     # Cross-profile digests recorded in fixtures (runtime not executed)
 make fuzz-smoke         # Differential fuzzing smoke
 make formal-check       # All formal verification (CBMC + algebraic + litmus)
 make ci-embedded-matrix # Cross-target embedded builds + QEMU
@@ -1865,12 +1878,12 @@ Yes. `ASX_PROFILE_EMBEDDED_ROUTER` plus `R1/R2` resource classes target OpenWrt/
 
 ### How do I validate parity against Rust asupersync?
 
-Use the shipped make targets:
-
-```bash
-make conformance
-make fuzz-smoke
-```
+Today you cannot: there is no harness yet that runs the same scenario
+through Rust asupersync and the C runtime. `make conformance` reports that
+honestly and fails. `make fuzz-smoke` checks C self-determinism; its Rust
+comparison is optional and informational. The plan to build a real
+differential oracle against asupersync 0.6.0 is in
+`docs/REALITY_CHECK_AND_BRIDGE_PLAN.md` (workstream W1).
 
 ### Is deterministic mode slower?
 

@@ -516,7 +516,7 @@ E2E_VERTICAL_SCRIPTS := \
 
 .PHONY: all build clean install uninstall FORCE
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation
-.PHONY: model-check
+.PHONY: model-check fixture-integrity test-gates
 .PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
@@ -1471,18 +1471,43 @@ resource-pressure-gate:
 	@ASX_GIT_COMMIT="$(ASX_GIT_COMMIT)" tools/ci/run_resource_pressure_gate.sh
 
 # ---------------------------------------------------------------------------
-# conformance — Rust fixture parity verification
+# conformance — Rust parity: fixtures executed through the C runtime and
+# compared with Rust-captured results. Until the conformance interpreter and
+# twin-run oracle exist (bridge program W1, beads bd-9kll.2.*) there is no
+# such evidence, and this target FAILS instead of passing on zero
+# comparisons. It is deliberately not part of check-ci until milestone M-beta;
+# CI runs it as a visible, non-blocking job.
 # ---------------------------------------------------------------------------
 conformance:
-	@echo "[asx] conformance: Rust fixture parity check..."
+	@echo "[asx] conformance: Rust parity check (requires executed fixtures)..."
 	@if [ -x tools/ci/run_conformance.sh ]; then \
-		tools/ci/run_conformance.sh; \
+		tools/ci/run_conformance.sh --mode conformance; \
 	elif [ "$(FAIL_ON_MISSING_RUNNERS)" = "1" ]; then \
 		echo "[asx] conformance: FAIL (runner missing; strict mode)"; \
 		exit 1; \
 	else \
 		echo "[asx] conformance: SKIP (runner not yet implemented)"; \
 	fi
+
+# ---------------------------------------------------------------------------
+# fixture-integrity — fixture schema, provenance, digest recomputation,
+# capture_run_id format, unknown ops, and a codec round trip. It proves the
+# fixtures are well-formed captures; it does NOT execute the C runtime.
+# ---------------------------------------------------------------------------
+fixture-integrity:
+	@echo "[asx] fixture-integrity: fixture schema/provenance/digest check..."
+	@tools/ci/run_conformance.sh --mode fixture-integrity
+
+# ---------------------------------------------------------------------------
+# test-gates — negative controls: the gates themselves must fail on bad input
+# ---------------------------------------------------------------------------
+test-gates:
+	@echo "[asx] test-gates: running gate negative controls..."
+	@for t in tests/gates/*.sh; do \
+		echo "  RUN  $$t"; \
+		bash "$$t" || exit 1; \
+	done
+	@echo "[asx] test-gates: PASS"
 
 # ---------------------------------------------------------------------------
 # codec-equivalence — JSON vs BIN semantic digest parity
@@ -1851,7 +1876,7 @@ qemu-smoke:
 check: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build test model-check abi-check test-abi-shim formal-check
 
 check-ci: CI=1
-check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build build-browser test-browser-focused test-browser-minimal-focused test model-check test-e2e-vertical conformance codec-equivalence profile-parity parallel-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
+check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build build-browser test-browser-focused test-browser-minimal-focused test model-check test-e2e-vertical fixture-integrity test-gates codec-equivalence profile-parity parallel-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
 
 ci-embedded-baremetal:
 	@echo "[asx] ci-embedded-baremetal: bare-metal gate..."
