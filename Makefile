@@ -35,6 +35,15 @@ CLANG_FORMAT_VERSION ?= 18.1.8
 CLANG_FORMAT ?= $(shell if clang-format --version 2>/dev/null | grep -q 'version $(CLANG_FORMAT_VERSION)'; then \
 	echo clang-format; elif command -v uvx >/dev/null 2>&1; then \
 	echo "uvx --from clang-format==$(CLANG_FORMAT_VERSION) clang-format"; fi)
+# Pinned analyzer: Cppcheck 2.22.0 (PyPI wheel cppcheck==1.5.3). Different
+# cppcheck versions report different findings, so local runs and CI must use
+# the same one; the system binary is used only when it is that version.
+CPPCHECK_VERSION ?= 2.22.0
+CPPCHECK_WHEEL ?= 1.5.3
+CPPCHECK_JOBS ?= 8
+CPPCHECK ?= $(shell if cppcheck --version 2>/dev/null | grep -q 'Cppcheck $(CPPCHECK_VERSION)'; then \
+	echo cppcheck; elif command -v uvx >/dev/null 2>&1; then \
+	echo "uvx --from cppcheck==$(CPPCHECK_WHEEL) cppcheck"; fi)
 FAIL_ON_EMPTY_INVARIANT_TESTS ?= 0
 RUN_QEMU_IN_MATRIX ?= 0
 
@@ -628,14 +637,15 @@ format-check:
 # ---------------------------------------------------------------------------
 lint:
 	@echo "[asx] lint: running static analysis..."
-	@if command -v cppcheck >/dev/null 2>&1; then \
-		cppcheck --enable=warning,performance,portability --std=c99 --error-exitcode=1 \
+	@if [ -n "$(CPPCHECK)" ]; then \
+		$(CPPCHECK) -j $(CPPCHECK_JOBS) --enable=warning,performance,portability --std=c99 \
+		         --error-exitcode=1 \
 		         --suppress=missingIncludeSystem \
 		         --suppress=unusedFunction \
 		         --suppress=normalCheckLevelMaxBranches \
 		         --suppress=toomanyconfigs \
 		         -I include src/ && \
-		echo "[asx] lint: PASS (cppcheck)" || \
+		echo "[asx] lint: PASS (cppcheck $(CPPCHECK_VERSION))" || \
 		{ echo "[asx] lint: FAIL"; exit 1; }; \
 	elif command -v clang-tidy >/dev/null 2>&1; then \
 		find src -name '*.c' | xargs clang-tidy -- $(ALL_CFLAGS) && \

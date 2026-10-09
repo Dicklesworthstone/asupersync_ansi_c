@@ -135,10 +135,12 @@ static void timer_heap_sift_down(uint32_t pos) {
 }
 
 static void timer_heap_remove_at(uint32_t pos) {
-    uint32_t removed = g_timer_heap[pos];
+    uint32_t removed;
+    if (pos >= g_timer_heap_len || pos >= ASX_MAX_TASKS) return; /* not in the heap */
+    removed = g_timer_heap[pos];
     g_timer_heap_len--;
     g_tasks[removed].timer_pos = ASX_SLOT_NONE;
-    if (pos == g_timer_heap_len) return;
+    if (pos >= g_timer_heap_len) return; /* removed the last entry */
     timer_heap_place(pos, g_timer_heap[g_timer_heap_len]);
     if (pos > 0u && timer_less(g_timer_heap[pos], g_timer_heap[(pos - 1u) / 2u])) {
         timer_heap_sift_up(pos);
@@ -162,6 +164,9 @@ static void timer_arm(uint32_t idx, asx_time deadline) {
         timer_heap_sift_up(t->timer_pos);
         return;
     }
+    /* Each task holds at most one heap entry, so the heap never exceeds
+     * ASX_MAX_TASKS; the guard keeps that invariant locally checkable. */
+    if (g_timer_heap_len >= ASX_MAX_TASKS) return;
     t->wake_at = deadline;
     t->timer_seq = g_timer_seq++;
     timer_heap_place(g_timer_heap_len, idx);
