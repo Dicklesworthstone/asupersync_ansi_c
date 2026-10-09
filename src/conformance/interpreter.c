@@ -2268,6 +2268,7 @@ static uint32_t build_snapshot(uint32_t obligations) {
         uint32_t outcome = ASX_JSON_NONE;
         uint32_t reason = ASX_JSON_NONE;
         const char *state = "Completed";
+        int in_cancel = 0;
         if (!t->spawned) continue; /* a refused spawn has no task */
         if (t->group_member) {
             /* Reported through its group step only (vocabulary §6). */
@@ -2288,7 +2289,12 @@ static uint32_t build_snapshot(uint32_t obligations) {
             } else {
                 asx_cancel_reason r;
                 quiescent = 0;
-                if (asx_task_get_cancel_reason(t->id, &r) == ASX_OK) {
+                /* Only the cancel states carry a reason: a budget cancel a
+                 * Running task has not acknowledged is not on its record
+                 * (Rust, bd-mex3). */
+                in_cancel = s == ASX_TASK_CANCEL_REQUESTED || s == ASX_TASK_CANCELLING ||
+                            s == ASX_TASK_FINALIZING;
+                if (in_cancel && asx_task_get_cancel_reason(t->id, &r) == ASX_OK) {
                     it_reason captured;
                     capture_reason(&r, &captured);
                     reason = reason_node(&captured);
@@ -2309,7 +2315,7 @@ static uint32_t build_snapshot(uint32_t obligations) {
              * cleanup_budget; vocabulary §6), null otherwise. */
             asx_budget cb;
             uint32_t node = asx_json_new_null(g_out);
-            if (t->spawned && !t->joined && asx_task_get_cleanup_budget(t->id, &cb) == ASX_OK) {
+            if (in_cancel && asx_task_get_cleanup_budget(t->id, &cb) == ASX_OK) {
                 node = asx_json_new_object(g_out);
                 asx_json_set(g_out, node, "poll_quota", asx_json_new_u64(g_out, cb.poll_quota));
                 asx_json_set(g_out, node, "priority", asx_json_new_u64(g_out, cb.priority));

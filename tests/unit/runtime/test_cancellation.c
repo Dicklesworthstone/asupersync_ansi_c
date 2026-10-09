@@ -14,6 +14,7 @@
 #include <asx/core/ghost.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/trace.h>
 #include <string.h>
 
 /* Suppress warn_unused_result for intentionally-ignored scheduler calls.
@@ -1404,6 +1405,73 @@ TEST(get_cleanup_budget_reports_the_met_budget_of_a_pending_cancel) {
     ASSERT_EQ(asx_task_get_cleanup_budget(ASX_INVALID_ID, &got), ASX_E_NOT_FOUND);
 }
 
+/* -------------------------------------------------------------------
+ * Budget cancels the record has not taken (bd-mex3): Rust raises them on
+ * the task's Cx; the record stays Running until a checkpoint acknowledges.
+ * ------------------------------------------------------------------- */
+
+/* Poll 1 spends its only quota unit; a masked checkpoint sees it spent
+ * (a budget cancel it cannot acknowledge yet); then it parks for good. */
+static asx_status poll_spend_masked_then_park(void *data, asx_task_id self) {
+    asx_checkpoint_result cr;
+    (void)data;
+    if (asx_task_mask(self) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (asx_checkpoint(self, &cr) != ASX_OK || cr.cancelled || !cr.masked) {
+        return ASX_E_INVALID_STATE;
+    }
+    if (asx_task_unmask(self) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (asx_task_park(self) != ASX_OK) return ASX_E_INVALID_STATE;
+    return ASX_E_PENDING;
+}
+
+static asx_status spend_masked(asx_region_id *out_rid, asx_task_id *out_tid) {
+    asx_budget tb = asx_budget_from_polls(1);
+    asx_budget run = asx_budget_from_polls(10);
+    asx_status st;
+    asx_runtime_reset();
+    st = asx_region_open(out_rid);
+    if (st == ASX_OK) {
+        st = asx_task_spawn_with_budget(*out_rid, poll_spend_masked_then_park, NULL, &tb, out_tid);
+    }
+    if (st == ASX_OK) st = asx_scheduler_run(*out_rid, &run);
+    return st;
+}
+
+TEST(budget_cancel_stays_off_the_record_until_acknowledged) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_task_state state;
+    asx_cancel_reason r;
+
+    /* Parked with no waker: the run reports it would block. The task was
+     * not woken by its own budget cancel. */
+    ASSERT_EQ(spend_masked(&rid, &tid), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
+    ASSERT_EQ((int)state, (int)ASX_TASK_RUNNING);
+    /* The cancel is pending (what the task's own checks see). */
+    ASSERT_EQ(asx_task_get_cancel_reason(tid, &r), ASX_OK);
+    ASSERT_EQ((int)r.kind, (int)ASX_CANCEL_POLL_QUOTA);
+}
+
+TEST(cancel_request_newly_cancels_a_record_with_a_pending_budget_cancel) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_task_state state;
+    asx_cancel_reason r;
+    uint64_t requests_before;
+
+    ASSERT_EQ(spend_masked(&rid, &tid), ASX_E_WOULD_BLOCK);
+    /* A region cancel newly cancels the record (a cancel.requested event),
+     * its reason the stronger of the two: Shutdown over PollQuota. */
+    requests_before = asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST);
+    ASSERT_EQ(asx_cancel_propagate(rid, ASX_CANCEL_SHUTDOWN), (uint32_t)1);
+    ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), requests_before + 1u);
+    ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
+    ASSERT_EQ((int)state, (int)ASX_TASK_CANCEL_REQUESTED);
+    ASSERT_EQ(asx_task_get_cancel_reason(tid, &r), ASX_OK);
+    ASSERT_EQ((int)r.kind, (int)ASX_CANCEL_SHUTDOWN);
+}
+
 TEST(cleanup_hard_bound_config_is_validated) {
     asx_runtime_config cfg;
     asx_runtime_config_init(&cfg);
@@ -1463,6 +1531,8 @@ int main(void) {
     RUN_TEST(acknowledgement_replaces_the_budget_with_the_cleanup_budget);
     RUN_TEST(cancel_during_cleanup_meets_and_refills_the_budget);
     RUN_TEST(get_cleanup_budget_reports_the_met_budget_of_a_pending_cancel);
+    RUN_TEST(budget_cancel_stays_off_the_record_until_acknowledged);
+    RUN_TEST(cancel_request_newly_cancels_a_record_with_a_pending_budget_cancel);
     RUN_TEST(cleanup_hard_bound_config_is_validated);
 
     TEST_REPORT();

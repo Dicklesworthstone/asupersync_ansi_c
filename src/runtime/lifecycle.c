@@ -114,6 +114,7 @@ void asx_runtime_reset(void) {
         g_tasks[i].cleanup_budget = asx_budget_infinite();
         g_tasks[i].cleanup_applied = 0;
         g_tasks[i].cleanup_polls_remaining = 0;
+        g_tasks[i].cancel_unmaterialized = 0;
         g_tasks[i].detached = 0;
         g_tasks[i].next_free = ASX_SLOT_NONE;
         g_tasks[i].budget = asx_budget_infinite();
@@ -874,6 +875,7 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     g_tasks[idx].cleanup_budget = asx_budget_infinite();
     g_tasks[idx].cleanup_applied = 0;
     g_tasks[idx].cleanup_polls_remaining = 0;
+    g_tasks[idx].cancel_unmaterialized = 0;
     memset(&g_tasks[idx].cancel_reason, 0, sizeof(g_tasks[idx].cancel_reason));
     /* Lab dispatch: a task the host creates is scheduled at once at
      * priority 0, as the Rust lab driver does (run.rs:1648); one spawned

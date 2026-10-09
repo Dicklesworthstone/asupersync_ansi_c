@@ -969,8 +969,10 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                 /* Cancel force-completion: the opt-in hard cleanup bound
                  * only (see scheduler.c; Rust never force-completes). */
                 if (asx_cleanup_hard_bound_internal() && t->cancel_pending &&
-                    (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED) &&
+                    (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED ||
+                     t->cancel_unmaterialized) &&
                     t->cleanup_polls_remaining == 0) {
+                    asx_task_materialize_cancel_internal(t);
                     if (t->state == ASX_TASK_CANCEL_REQUESTED) {
                         asx_task_state from = t->state;
                         (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_CANCELLING);

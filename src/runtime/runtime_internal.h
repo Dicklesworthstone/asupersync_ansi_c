@@ -74,7 +74,14 @@ typedef struct {
     /* Opt-in hard bound only (asx_runtime_config.cleanup_hard_bound): polls
      * left, counted from the request, before the task is force-completed. */
     uint32_t cleanup_polls_remaining;
-    int cancel_pending;  /* 1 if cancel signal delivered */
+    int cancel_pending; /* 1 if cancel signal delivered */
+    /* A budget cancel the task raised itself (its quota, cost or deadline
+     * observed at a poll or checkpoint) that its record has not taken yet:
+     * Rust sets it on the task's Cx only, the record stays Running, and an
+     * acknowledging checkpoint reconciles it into the record
+     * (consume_checkpoint_cancel_ack, record/task.rs:1104-1170; bd-mex3).
+     * cancel_pending and cancel_reason are set; the state is unchanged. */
+    uint8_t cancel_unmaterialized;
     uint32_t mask_depth; /* asx_task_mask() nesting; cancel deferred while > 0 */
     int detached;        /* 1 if the slot is released at completion */
     uint32_t next_free;  /* free-list link while !alive */
@@ -240,6 +247,11 @@ typedef enum {
     ASX_CANCEL_SRC_REGION = 1,
     ASX_CANCEL_SRC_BUDGET = 2
 } asx_cancel_source;
+
+/* Move a budget cancel the record has not taken (cancel_unmaterialized)
+ * into the record: Running → CancelRequested, no trace event (Rust
+ * reconcile_checkpoint_cancel). No-op otherwise. */
+void asx_task_materialize_cancel_internal(asx_task_slot *t);
 
 /* Rust's CancelReason::new / ::user / ::poll_quota (types/cancel.rs:596-631):
  * testing-default attribution, the region at arena index 0 (which the lab's

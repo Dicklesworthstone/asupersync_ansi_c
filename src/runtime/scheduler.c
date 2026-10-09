@@ -1214,8 +1214,10 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
              * reason once spent (record/task.rs:1340, lab/runtime.rs:4663;
              * three_lane.rs:1268-1279 keeps it advisory in production). */
             if (asx_cleanup_hard_bound_internal() && t->cancel_pending && t->mask_depth == 0u &&
-                (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED) &&
+                (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED ||
+                 t->cancel_unmaterialized) &&
                 t->cleanup_polls_remaining == 0) {
+                asx_task_materialize_cancel_internal(t);
                 if (t->state == ASX_TASK_CANCEL_REQUESTED) {
                     sched_transition(t, tid, ASX_TASK_CANCELLING, ASX_CANCEL_PHASE_CANCELLING);
                 }
