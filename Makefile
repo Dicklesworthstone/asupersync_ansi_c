@@ -1541,8 +1541,11 @@ conformance: $(CONFORMANCE_RUNNER)
 # twin_run generates FUZZ_V2_COUNT scenarios for FUZZ_V2_SEED, runs them in
 # asupersync's LabRuntime, and the C runtime runs every scenario Rust could
 # capture (only this run's captures are compared). Every FAIL is a candidate
-# drift to root-cause. Not yet a CI gate: open divergences are tracked in
-# bd-ij9w until they are fixed or classified.
+# drift to root-cause. Runs nightly in CI (nightly.yml,
+# fuzz-rust-differential). Rust refuses a few generated scenarios (a step
+# naming a resource whose acquisition failed, ~2.5%). If the capture never
+# finishes or under 90% is captured, the oracle itself broke; that fails
+# here rather than letting a near-empty compare pass.
 # ---------------------------------------------------------------------------
 FUZZ_V2_SEED ?= 1
 FUZZ_V2_COUNT ?= 100
@@ -1556,6 +1559,12 @@ fuzz-differential: $(CONFORMANCE_RUNNER)
 	@$(TWIN_RUN) generate --seed $(FUZZ_V2_SEED) --count $(FUZZ_V2_COUNT) --out $(FUZZ_V2_DIR)/scenarios
 	@$(TWIN_RUN) capture $(FUZZ_V2_DIR)/scenarios/*.json --out $(FUZZ_V2_DIR)/fixtures > $(FUZZ_V2_DIR)/capture.log || true
 	@tail -1 $(FUZZ_V2_DIR)/capture.log
+	@grep -q '^twin_run capture: ' $(FUZZ_V2_DIR)/capture.log || \
+		{ echo "[asx] fuzz-differential: twin_run capture did not finish"; exit 1; }
+	@captured=$$(grep -c '^PASS ' $(FUZZ_V2_DIR)/capture.log); \
+		if [ $$((captured * 10)) -lt $$(($(FUZZ_V2_COUNT) * 9)) ]; then \
+			echo "[asx] fuzz-differential: only $$captured of $(FUZZ_V2_COUNT) scenarios captured"; exit 1; \
+		fi
 	@$(CONFORMANCE_RUNNER) compare $$(sed -n 's|^PASS \([^ ]*\) .*|$(FUZZ_V2_DIR)/fixtures/\1.json|p' $(FUZZ_V2_DIR)/capture.log)
 
 # ---------------------------------------------------------------------------

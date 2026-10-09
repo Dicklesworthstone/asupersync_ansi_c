@@ -74,6 +74,26 @@ static uint32_t g_lab_wake[ASX_MAX_TASKS];
 static uint32_t g_lab_wake_n = 0;
 static uint32_t g_lab_batch = 0;
 
+/* Region commands tasks queued (Rust RegionCommand, LR:4135-4217): a
+ * Create mints a child of `region` for its opener; a Cancel (Rust's Cancel,
+ * and Close with its fixed reason) cancels `region` with `reason`. FIFO; a
+ * step applies at most LAB_REGION_BATCH (REGION_COMMAND_BATCH, LR:4136). */
+#define LAB_REGION_BATCH 8u
+#define LAB_REGION_CMD_CAP ((uint32_t)ASX_MAX_TASKS + (uint32_t)ASX_MAX_REGIONS)
+
+typedef struct {
+    uint8_t cancel;
+    uint16_t opener_gen;
+    uint32_t opener; /* Create: the opener's slot */
+    asx_region_id region;
+    int has_budget;
+    asx_budget budget;
+    asx_cancel_reason reason; /* Cancel */
+} lab_region_cmd;
+
+static lab_region_cmd g_lab_rcmd[LAB_REGION_CMD_CAP];
+static uint32_t g_lab_rcmd_n = 0;
+
 void asx_lab_dispatch_reset_internal(void) {
     g_lab_active = 0;
     g_lab_rng = 0;
@@ -86,6 +106,7 @@ void asx_lab_dispatch_reset_internal(void) {
     g_lab_admit_n = 0;
     g_lab_wake_n = 0;
     g_lab_batch = 0;
+    g_lab_rcmd_n = 0;
 }
 
 int asx_lab_dispatch_active(void) { return g_lab_active; }
@@ -313,5 +334,96 @@ void asx_lab_cancel_batch_end(void) {
         asx_task_slot *t = &g_tasks[g_lab_wake[i]];
         ASX_CHECKPOINT_WAIVER("bounded: wakes <= ASX_MAX_TASKS");
         asx_lab_schedule_cancel(t, t->lab_waker_prio);
+    }
+}
+
+asx_status asx_lab_region_open_command(asx_task_slot *opener, asx_region_id parent,
+                                       const asx_budget *budget) {
+    lab_region_cmd *c;
+    if (g_lab_rcmd_n >= LAB_REGION_CMD_CAP) return ASX_E_RESOURCE_EXHAUSTED;
+    c = &g_lab_rcmd[g_lab_rcmd_n++];
+    c->cancel = 0u;
+    c->opener = (uint32_t)(opener - g_tasks);
+    c->opener_gen = opener->generation;
+    c->region = parent;
+    c->has_budget = budget != NULL;
+    if (budget != NULL) c->budget = *budget;
+    return ASX_OK;
+}
+
+asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_reason *reason) {
+    lab_region_cmd *c;
+    if (g_lab_rcmd_n >= LAB_REGION_CMD_CAP) return ASX_E_RESOURCE_EXHAUSTED;
+    c = &g_lab_rcmd[g_lab_rcmd_n++];
+    c->cancel = 1u;
+    c->opener = ASX_SLOT_NONE;
+    c->opener_gen = 0u;
+    c->region = region;
+    c->has_budget = 0;
+    c->reason = *reason;
+    return ASX_OK;
+}
+
+int asx_lab_region_commands_pending(void) { return g_lab_rcmd_n > 0u; }
+
+/* asx_region_cancel fails only for a region that is gone (closed and
+ * reused); a late cancel of one changes nothing, as in Rust. */
+static void lab_cancel_region(asx_region_id region, const asx_cancel_reason *reason) {
+    asx_status st = asx_region_cancel(region, reason, NULL);
+    (void)st;
+}
+
+/* drain_region_commands (LR:4135-4217): up to 8 commands in order. A
+ * Cancel cancels its region now (a closed or gone region is left alone);
+ * its tasks' cancel lane entries and wakes are dispatched together after
+ * the batch (drain_deferred_cancel_dispatches, LR:4219-4239). Each
+ * Create's result is published, waking its opener, after every command of
+ * the batch is applied. A Create whose opener is gone still mints the
+ * region, which then closes, as Rust's abandoned slot closes a region
+ * minted for it (child_region.rs:264-275). */
+void asx_lab_drain_region_commands(void) {
+    lab_region_cmd batch[LAB_REGION_BATCH];
+    uint32_t opened[LAB_REGION_BATCH];
+    uint32_t n_opened = 0;
+    uint32_t n = g_lab_rcmd_n < LAB_REGION_BATCH ? g_lab_rcmd_n : LAB_REGION_BATCH;
+    uint32_t i;
+
+    if (n == 0u) return;
+    memcpy(batch, g_lab_rcmd, (size_t)n * sizeof(lab_region_cmd));
+    if (g_lab_rcmd_n > n) {
+        memmove(&g_lab_rcmd[0], &g_lab_rcmd[n],
+                (size_t)(g_lab_rcmd_n - n) * sizeof(lab_region_cmd));
+    }
+    g_lab_rcmd_n -= n;
+
+    asx_lab_cancel_batch_begin();
+    for (i = 0; i < n; i++) {
+        const lab_region_cmd *c = &batch[i];
+        asx_task_slot *t;
+        asx_region_id id = ASX_INVALID_ID;
+        asx_status st;
+        ASX_CHECKPOINT_WAIVER("bounded: n <= LAB_REGION_BATCH");
+        if (c->cancel) {
+            lab_cancel_region(c->region, &c->reason);
+            continue;
+        }
+        st = asx_region_open_child_with_budget(c->region, c->has_budget ? &c->budget : NULL, &id);
+        t = &g_tasks[c->opener];
+        if (!t->alive || t->generation != c->opener_gen || t->region_wait != ASX_REGION_WAIT_OPEN) {
+            if (st == ASX_OK) {
+                asx_cancel_reason close = asx_region_close_reason_internal();
+                lab_cancel_region(id, &close);
+            }
+            continue;
+        }
+        t->region_wait = ASX_REGION_WAIT_OPENED;
+        t->region_wait_status = st;
+        t->region_wait_region = id;
+        opened[n_opened++] = c->opener;
+    }
+    asx_lab_cancel_batch_end();
+    for (i = 0; i < n_opened; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n_opened <= LAB_REGION_BATCH");
+        asx_task_wake_slot_internal(&g_tasks[opened[i]]);
     }
 }

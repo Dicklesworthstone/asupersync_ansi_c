@@ -491,12 +491,10 @@ jobs:
         run: make codec-equivalence
 
       # Rust parity: the Rust-captured v2 fixtures are executed through the
-      # C runtime and compared (asx-conformance). It fails until every
-      # fixture matches; it is shown, not hidden, and becomes blocking at
-      # milestone M-beta.
-      - name: "Rust parity: executed C-vs-Rust fixture comparison (non-blocking until all match)"
+      # C runtime and compared (asx-conformance). Every fixture matches, so a
+      # FAIL or ERROR now blocks: fix the C side, never the fixture.
+      - name: "Rust parity: executed C-vs-Rust fixture comparison"
         id: run_conformance
-        continue-on-error: true
         run: make conformance
 
       - name: Validate conformance summaries

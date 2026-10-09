@@ -202,13 +202,22 @@ event times.
 | `join` | `task` | `handle.join(&cx).await` (`runtime/task_handle.rs:793`) | `asx_task_join_poll(self, target, &outcome)` until done | until the child completes | Ignored: join is uninterruptible (`task_handle.rs:1080-1126`). The observation `value` is the child's outcome (vocabulary §4); a refused child (`spawn` above) is observed as `ASX_E_REGION_CLOSED` with no value. |
 | `try_join` | `task` | `handle.try_join()` (`:863`) | `asx_task_join(target, &outcome)` | no | ignored. A running child gives `ASX_E_TASK_NOT_COMPLETED`; a refused child `ASX_E_REGION_CLOSED`. |
 | `abort_task` | `task`, `kind`, optional `message` | `handle.abort_with_reason(reason)` (`task_handle.rs:1005`), reason attributed to the requester (§4, "Reason attribution") | `asx_task_cancel_with_origin(target, kind, own_region, self)` plus message (C gap, §7) | no | ignored |
-| `open_region` | `as`, optional `budget` | `cx.open_child_region(ChildRegionSpec::inherit().with_budget(b)).await` (`cx.rs:4491`; `child_region.rs:76`, `:87`) | `asx_region_open_child_with_budget(own_region, budget, &id)` | until the next lab step creates the region | ignored. A closing parent gives `ASX_E_REGION_CLOSED`. |
-| `cancel_region` | `region` (one this task opened), `kind`, optional `message` | `child.cancel(reason)` (`child_region.rs:381`), reason attributed to the requester (§4, "Reason attribution") | `asx_region_cancel(region, &reason, NULL)` | no | ignored |
-| `close_region` | `region` (one this task opened) | `child.close().await` (`child_region.rs:424`): cancels the remaining tasks, drains, finalizes, waits for Closed | `asx_region_cancel(region, &reason, NULL)` with the User reason the Rust close command carries (`"owned child region body finished"`, `lab/runtime.rs:4195`), then wait for Closed (the region finalizes when its last task completes) | until Closed | Ignored: the closer's own cancellation is not observed. |
+| `open_region` | `as`, optional `budget` | `cx.open_child_region(ChildRegionSpec::inherit().with_budget(b)).await` (`cx.rs:4491`; `child_region.rs:76`, `:87`) | `asx_region_open_child_poll(self, own_region, budget, &id)` until done | parked until the next lab step applies the Create command and wakes it | ignored. A closing parent gives `ASX_E_REGION_CLOSED`. |
+| `cancel_region` | `region` (one this task opened), `kind`, optional `message` | `child.cancel(reason)` (`child_region.rs:381`), reason attributed to the requester (§4, "Reason attribution") | `asx_region_cancel_request(region, &reason)` | no; the next lab step applies the Cancel command | ignored |
+| `close_region` | `region` (one this task opened) | `child.close().await` (`child_region.rs:424`): a Close command, then a wait for Closed | `asx_region_close_poll(self, region)` until done: the next lab step applies the Close (a region cancel with the User reason Rust's Close carries, `"owned child region body finished"`, `lab/runtime.rs:4195`); the region's Closed transition wakes the task | parked until Closed | Ignored: the closer's own cancellation is not observed. |
 
 A task can cancel or close only regions it opened itself. Rust's region
 command queue is crate-private (`runtime/spawn_mailbox.rs:2311`).
 Cancelling or closing any other region is a driver operation (§4).
+
+Region commands take effect at a lab step boundary, as in Rust
+(`drain_region_commands`, `lab/runtime.rs:4135-4217`): a step first admits
+the children spawned during the previous one, then applies up to 8 queued
+commands in order, then draws its value and picks a task. A child region a
+task still holds when its program ends is closed by the drop backstop
+(`ChildRegion`'s `Drop`, `child_region.rs:517`): a Close command with no
+wait, queued for each held region in name order (twin_run keeps them in a
+`BTreeMap`).
 
 ### 3.5 Task groups
 
@@ -336,8 +345,9 @@ side reproduces them (bd-wxep, an upstream issue):
 
 - **The step `close_region`.** Rust's Close command uses
   `CancelReason::user("owned child region body finished")`
-  (`lab/runtime.rs:4195`). The C interpreter passes the same reason:
-  origin `"root"`, no task, 1 s.
+  (`lab/runtime.rs:4195`). C's Close command (`asx_region_close_request`,
+  `asx_region_close_poll`) uses the same reason: origin `"root"`, no
+  task, 1 s.
 - **A pre-poll poll-quota cancel.** It is raised when a task is
   dispatched with its quota already spent, using `CancelReason::poll_quota()`
   (`lab/runtime.rs:4667`). C stamps the same reason under lab dispatch

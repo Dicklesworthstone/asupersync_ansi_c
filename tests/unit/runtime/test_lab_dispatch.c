@@ -218,6 +218,182 @@ TEST(pre_poll_quota_cancel_has_rust_lab_attribution) {
     ASSERT_EQ(r.timestamp, (asx_time)0);
 }
 
+/* Child-region commands (Rust RegionCommand, LR:4135-4217). The opener
+ * opens a child region of `parent`, optionally spawns a kid into it that
+ * yields until a checkpoint reports its cancel, then closes the region. */
+typedef struct {
+    asx_region_id parent;
+    int spawn_kid;
+    uint32_t polls;
+    uint32_t phase;
+    asx_status first; /* the first open call */
+    asx_region_id child;
+    asx_task_id kid;
+} opener;
+
+static asx_status poll_kid(void *ud, asx_task_id self) {
+    asx_checkpoint_result cr;
+    (void)ud;
+    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) return ASX_OK;
+    return ASX_E_PENDING; /* a yield */
+}
+
+static asx_status poll_opener(void *ud, asx_task_id self) {
+    opener *o = (opener *)ud;
+    asx_status st;
+    o->polls++;
+    if (o->phase == 0u) {
+        st = asx_region_open_child_poll(self, o->parent, NULL, &o->child);
+        if (o->polls == 1u) o->first = st;
+        if (st != ASX_OK) return st;
+        if (o->spawn_kid && asx_task_spawn(o->child, poll_kid, NULL, &o->kid) != ASX_OK) {
+            return ASX_E_INVALID_STATE;
+        }
+        o->phase = 1u;
+    }
+    return asx_region_close_poll(self, o->child);
+}
+
+static asx_status run_opener(int lab, int spawn_kid, opener *o) {
+    asx_task_id t;
+    asx_budget budget;
+    asx_status st = setup();
+    if (st == ASX_OK && lab) st = asx_scheduler_use_lab_dispatch(42u);
+    memset(o, 0, sizeof(*o));
+    o->spawn_kid = spawn_kid;
+    o->child = ASX_INVALID_ID;
+    if (st == ASX_OK) st = asx_region_open(&o->parent);
+    if (st == ASX_OK) st = asx_task_spawn(o->parent, poll_opener, o, &t);
+    budget = asx_budget_from_polls(100);
+    if (st == ASX_OK) st = asx_scheduler_run(o->parent, &budget);
+    return st;
+}
+
+/* The open is applied at the start of the next step: the first call parks
+ * the opener; it is woken once with the region. The close is a command
+ * too; the opener stays parked until the CLOSED transition wakes it, so it
+ * is polled exactly three times. The kid is cancelled with the reason
+ * Rust's Close carries. */
+TEST(child_region_open_and_close_are_next_step_commands) {
+    opener o;
+    asx_region_state rs;
+    asx_outcome out;
+    asx_cancel_reason reason;
+
+    ASSERT_EQ(run_opener(1, 1, &o), ASX_OK);
+    ASSERT_EQ(o.first, ASX_E_PENDING);
+    ASSERT_EQ(o.polls, 3u);
+    ASSERT_EQ(asx_region_get_state(o.child, &rs), ASX_OK);
+    ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_task_get_outcome(o.kid, &out), ASX_OK);
+    ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_CANCELLED);
+    ASSERT_EQ(asx_task_get_cancel_reason(o.kid, &reason), ASX_OK);
+    ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_USER);
+    ASSERT_EQ(strcmp(reason.message, "owned child region body finished"), 0);
+    ASSERT_EQ(reason.origin_task, ASX_INVALID_ID);
+    ASSERT_EQ(reason.timestamp, (asx_time)1000000000u);
+}
+
+/* Closing an empty child region: the Close command finalizes it at once
+ * when applied, and that wakes the parked closer. */
+TEST(closing_an_empty_child_region_wakes_the_closer) {
+    opener o;
+    asx_region_state rs;
+    ASSERT_EQ(run_opener(1, 0, &o), ASX_OK);
+    ASSERT_EQ(o.polls, 3u);
+    ASSERT_EQ(asx_region_get_state(o.child, &rs), ASX_OK);
+    ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSED);
+}
+
+/* Without lab dispatch the commands apply at once: the open completes in
+ * the first call, the close cancels the kid at once and the closer waits
+ * parked for CLOSED only. */
+TEST(child_region_commands_apply_at_once_without_lab_dispatch) {
+    opener o;
+    asx_region_state rs;
+    asx_outcome out;
+    ASSERT_EQ(run_opener(0, 1, &o), ASX_OK);
+    ASSERT_EQ(o.first, ASX_OK);
+    ASSERT_EQ(o.polls, 2u);
+    ASSERT_EQ(asx_region_get_state(o.child, &rs), ASX_OK);
+    ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_task_get_outcome(o.kid, &out), ASX_OK);
+    ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_CANCELLED);
+}
+
+/* A region cancel request from a task (Rust ChildRegion::cancel) leaves
+ * the region open until the next step applies it. */
+typedef struct {
+    asx_region_id target;
+    uint32_t polls;
+    asx_status request;
+    asx_region_state at_request;
+    asx_region_state next_poll;
+} canceller;
+
+static asx_status poll_canceller(void *ud, asx_task_id self) {
+    canceller *c = (canceller *)ud;
+    (void)self;
+    c->polls++;
+    if (c->polls == 1u) {
+        asx_cancel_reason reason;
+        memset(&reason, 0, sizeof(reason));
+        reason.kind = ASX_CANCEL_SHUTDOWN;
+        reason.origin_region = c->target;
+        reason.origin_task = ASX_INVALID_ID;
+        c->request = asx_region_cancel_request(c->target, &reason);
+        if (asx_region_get_state(c->target, &c->at_request) != ASX_OK) return ASX_E_INVALID_STATE;
+        return ASX_E_PENDING; /* a yield */
+    }
+    if (asx_region_get_state(c->target, &c->next_poll) != ASX_OK) return ASX_E_INVALID_STATE;
+    return ASX_OK;
+}
+
+TEST(region_cancel_request_applies_at_the_next_step) {
+    asx_region_id root;
+    asx_task_id t;
+    asx_budget budget;
+    canceller c;
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(3u), ASX_OK);
+    memset(&c, 0, sizeof(c));
+    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(root, &c.target), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(root, poll_canceller, &c, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(root, &budget), ASX_OK);
+    ASSERT_EQ(c.request, ASX_OK);
+    ASSERT_EQ((int)c.at_request, (int)ASX_REGION_OPEN);
+    ASSERT_EQ((int)c.next_poll, (int)ASX_REGION_CLOSED);
+}
+
+/* A full command queue refuses the request and changes nothing; the
+ * queued commands still apply, at most eight per step. */
+TEST(region_command_queue_full_is_failure_atomic) {
+    asx_region_id root;
+    asx_region_id child;
+    asx_region_state rs;
+    asx_budget budget;
+    uint32_t i;
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(5u), ASX_OK);
+    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(root, &child), ASX_OK);
+    for (i = 0; i < (uint32_t)ASX_MAX_TASKS + (uint32_t)ASX_MAX_REGIONS; i++) {
+        ASSERT_EQ(asx_region_close_request(child), ASX_OK);
+    }
+    ASSERT_EQ(asx_region_close_request(child), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_region_get_state(child, &rs), ASX_OK);
+    ASSERT_EQ((int)rs, (int)ASX_REGION_OPEN);
+    budget = asx_budget_from_polls(1000);
+    ASSERT_EQ(asx_scheduler_run_until_idle(root, &budget), ASX_OK);
+    ASSERT_EQ(asx_region_get_state(child, &rs), ASX_OK);
+    ASSERT_EQ((int)rs, (int)ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_lab_region_commands_pending(), 0);
+}
+
 TEST(use_lab_dispatch_requires_no_live_task) {
     asx_region_id r;
     asx_task_id t;
@@ -240,6 +416,11 @@ int main(void) {
     RUN_TEST(cancel_lane_is_served_first);
     RUN_TEST(auto_advance_moves_the_clock_to_the_next_timer);
     RUN_TEST(pre_poll_quota_cancel_has_rust_lab_attribution);
+    RUN_TEST(child_region_open_and_close_are_next_step_commands);
+    RUN_TEST(closing_an_empty_child_region_wakes_the_closer);
+    RUN_TEST(child_region_commands_apply_at_once_without_lab_dispatch);
+    RUN_TEST(region_cancel_request_applies_at_the_next_step);
+    RUN_TEST(region_command_queue_full_is_failure_atomic);
     RUN_TEST(use_lab_dispatch_requires_no_live_task);
 
     TEST_REPORT();

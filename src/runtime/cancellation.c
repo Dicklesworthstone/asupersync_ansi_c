@@ -46,6 +46,11 @@ asx_cancel_reason asx_cancel_reason_testing_default(asx_cancel_kind kind, const 
     return r;
 }
 
+asx_cancel_reason asx_region_close_reason_internal(void) {
+    static const char message[] = "owned child region body finished";
+    return asx_cancel_reason_testing_default(ASX_CANCEL_USER, message);
+}
+
 static int reason_same(const asx_cancel_reason *a, const asx_cancel_reason *b) {
     return a->kind == b->kind && a->timestamp == b->timestamp &&
            a->origin_region == b->origin_region && a->origin_task == b->origin_task &&

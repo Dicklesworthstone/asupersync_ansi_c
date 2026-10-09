@@ -81,6 +81,14 @@ Pending: cache (waker, prio); if acknowledged: schedule_cancel(t, cleanup priori
 Consequences:
 - A child spawned during step N's poll is admitted at the start of step
   N+1, before that step's draw.
+- A region command a task queued during step N (Create, Cancel, Close:
+  `Cx::open_child_region`, `ChildRegion::cancel`, `ChildRegion::close`
+  and its drop backstop) is applied at the start of step N+1, after the
+  admissions. A Create wakes its opener once the batch is applied; a
+  closer waits parked until the region's Closed transition wakes it. C:
+  `asx_region_open_child_poll`, `asx_region_cancel_request`,
+  `asx_region_close_poll` / `asx_region_close_request`
+  (`lab_dispatch.c`, `asx_lab_drain_region_commands`).
 - Timers due at the current time fire inside the step, after the draw and
   before the pick.
 - Wakes that happen during a poll get their generation before the
@@ -210,10 +218,11 @@ The priority changes when:
 1. Join wake timing. Is the joiner woken during the child's final poll
    (result channel), or in the completion branch (retirement barrier)? C
    wakes joiners at completion. No fixture has distinguished the two yet.
-2. Handle aborts and region commands are deferred to the next step in
-   Rust (`drain_handle_cancel_requests`, `drain_region_commands`). C applies
-   them synchronously. The scheduling effect is the same entry, but its
-   step can differ.
+2. Handle aborts are deferred to the next step in Rust
+   (`drain_handle_cancel_requests`): the target's Cx sees the cancel at
+   once (`apply_or_defer_cancel_reason`, `task_handle.rs:470-560`), while
+   its record and cancel lane change at the next step. C's `abort_task`
+   applies the whole cancel at once. Region commands follow Rust (§2).
 3. A spawn that is never admitted (its region closed before the next
    step): Rust never creates the task. C refuses it synchronously when the
    region is already closing. A cancel in the window between enqueue and

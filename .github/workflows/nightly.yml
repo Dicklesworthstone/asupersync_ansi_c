@@ -5,9 +5,10 @@
 # test suites that are impractical for PR-level CI.
 #
 # Jobs:
-#   fuzz-nightly     Extended differential fuzzing (100K iterations)
-#   e2e-extended     Full e2e suite including vertical lanes
-#   schema-check     Strict schema validation of all fixtures
+#   fuzz-nightly             Extended C differential fuzzing (100K iterations)
+#   fuzz-rust-differential   Rust-vs-C differential fuzzing over DSL v2 (bd-ij9w)
+#   e2e-extended             Full e2e suite including vertical lanes
+#   schema-check             Strict schema validation of all fixtures
 # =============================================================================
 
 name: Nightly
@@ -27,6 +28,56 @@ env:
   ASX_CI_ARTIFACT_ROOT: build/ci-manifests
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # fuzz-rust-differential — Rust vs C over DSL v2 (bd-ij9w). twin_run
+  # generates seeded scenarios and runs them in asupersync's LabRuntime at
+  # the pinned rev; the C runtime runs every one Rust captured (lab
+  # dispatch, same seed) and must match trace, snapshot and observations
+  # exactly. Any divergence fails the job; its scenarios and fixtures are
+  # uploaded. Seeds change daily and are printed, so a failure replays with
+  # `make fuzz-differential FUZZ_V2_SEED=<seed> FUZZ_V2_COUNT=200`.
+  # ---------------------------------------------------------------------------
+  fuzz-rust-differential:
+    name: "fuzz: Rust vs C differential (DSL v2)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq
+
+      - name: Rust toolchain (rust-toolchain.toml pin)
+        run: rustup toolchain install
+
+      - name: Cache twin_run build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tools/twin_run/target
+          key: twin-run-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'tools/twin_run/Cargo.lock') }}
+
+      - name: Differential fuzzing (3 seeds x 200 scenarios)
+        run: |
+          day=$(( $(date -u +%s) / 86400 ))
+          for i in 0 1 2; do
+            seed=$(( day * 3 + i ))
+            echo "== seed $seed"
+            make fuzz-differential FUZZ_V2_SEED=$seed FUZZ_V2_COUNT=200
+          done
+
+      - name: Upload divergent scenarios
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-rust-differential-${{ env.ASX_CI_RUN_TAG }}
+          path: build/fuzz_v2/
+          if-no-files-found: ignore
+
   # ---------------------------------------------------------------------------
   # fuzz-nightly — extended differential fuzzing (100K iterations)
   # ---------------------------------------------------------------------------

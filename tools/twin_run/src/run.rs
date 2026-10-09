@@ -368,7 +368,9 @@ fn harness_error(shared: &SharedRef, msg: String) {
 #[derive(Default)]
 struct Local {
     tokens: HashMap<String, ObligationToken>,
-    regions: HashMap<String, ChildRegion>,
+    /// Child regions still open; an ordered map so the drop backstop's
+    /// Close commands (ChildRegion's Drop) queue by name.
+    regions: BTreeMap<String, ChildRegion>,
     timers: u32,
     /// Held mutex guards and semaphore permits, by object name (DSL §3.7).
     /// Guards are owned: a borrowed `MutexGuard` is not `Send` (sync/

@@ -72,9 +72,11 @@ make test
 make fixture-integrity
 make codec-equivalence
 make profile-parity
-# Rust parity (fixtures executed through the C runtime) has no evidence yet:
-# `make conformance` fails until the twin-run oracle lands (see
-# docs/REALITY_CHECK_AND_BRIDGE_PLAN.md, workstream W1).
+# Rust parity: every Rust-captured fixture in fixtures/rust_reference_v2 is
+# executed through the C runtime and compared (blocking in CI)
+make conformance
+# Seeded differential fuzzing against asupersync itself (builds twin_run)
+make fuzz-differential FUZZ_V2_SEED=1 FUZZ_V2_COUNT=100
 
 # 4) Produce deterministic release bundles (libasx.a + headers/docs)
 make release-artifacts RELEASE_VERSION=0.1.0 RELEASE_TARGET=linux-x86_64 PROFILE=CORE CODEC=BIN DETERMINISTIC=1
@@ -365,16 +367,22 @@ make test-vignettes
 
 ### `make conformance`
 
-Rust parity: fixtures executed through the C runtime and compared with
-results captured from Rust asupersync. No such evidence exists yet: the
-checked-in fixtures were largely synthesized by the capture tool, and no C
-code executes a fixture's ops. The target therefore **fails** with
-`NO RUST PARITY EVIDENCE` instead of passing on zero comparisons, and CI runs
-it as a visible non-blocking step until the twin-run oracle (bridge program
-W1) lands.
+Rust parity: each fixture in `fixtures/rust_reference_v2` is the unmodified
+output of `tools/twin_run`, which runs an `asx.scenario.v2` scenario inside
+asupersync's LabRuntime at the pinned rev. `build/bin/asx-conformance` runs
+the same scenario through the C runtime (lab dispatch, same seed) and
+compares the trace, final snapshot and per-step observations exactly. The
+target fails on any difference and on an empty fixture set; CI runs it as a
+blocking step. A failing fixture is fixed on the C side, never by editing
+the fixture.
+
+`make fuzz-differential` does the same for seeded generated scenarios
+(`FUZZ_V2_SEED`, `FUZZ_V2_COUNT`), with Rust run live through twin_run; it
+needs the Rust toolchain from `rust-toolchain.toml` and runs nightly in CI.
 
 ```bash
-make conformance        # fails until the oracle exists
+make conformance        # executed C-vs-Rust comparison of every v2 fixture
+make fuzz-differential FUZZ_V2_SEED=7 FUZZ_V2_COUNT=200
 make fixture-integrity  # schema, provenance, digest recompute, codec round trip
 make test-gates         # negative controls: the gates must reject bad fixtures
 ```
@@ -661,7 +669,8 @@ make test-vignettes     # API ergonomics demonstrations
 make test-e2e           # End-to-end scenario lanes
 make fixture-integrity  # Fixture schema, provenance, digest recompute, codec round trip
 make test-gates         # Gate negative controls (bad fixtures must be rejected)
-make conformance        # Rust parity: FAILS until the twin-run oracle exists (W1)
+make conformance        # Rust parity: every v2 fixture executed in C and compared
+make fuzz-differential  # Seeded Rust-vs-C differential fuzzing (needs Rust)
 make codec-equivalence  # JSON vs BIN digests recorded in fixtures (runtime not executed)
 make profile-parity     # Cross-profile digests recorded in fixtures (runtime not executed)
 make fuzz-smoke         # Differential fuzzing smoke
@@ -1583,7 +1592,7 @@ The fuzz harness (`tests/fuzz/fuzz_differential.c`) generates random operation s
 
 1. **Self-consistency**: Running the same scenario with the same seed produces identical semantic digests.
 2. **Crash freedom**: Mutated scenarios (randomized operation reordering, argument perturbation) must not crash or trigger undefined behavior.
-3. **Rust parity**: When Rust reference fixtures are available, the C runtime's semantic digest must match.
+3. **Rust parity**: only with `--rust-binary`; otherwise the summary reports the comparison as skipped. Rust-vs-C differential fuzzing proper is `make fuzz-differential`, which runs generated DSL v2 scenarios in asupersync itself (twin_run) and in C, and compares them exactly.
 
 The fuzzer covers cancellation, timers, channels, obligations, budget exhaustion, region lifecycle, and quiescence. A companion minimizer (`fuzz_minimize.c`) performs delta-minimization on failing cases to produce minimal reproducing scenarios.
 

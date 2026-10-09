@@ -112,6 +112,14 @@ typedef struct {
      * changed waker, time/sleep.rs:883-998). */
     uint32_t lab_waker_epoch;
     uint32_t traced_waker_epoch;
+    /* The child-region command this task awaits (asx_region_open_child_poll,
+     * asx_region_close_poll; Rust's ChildRegionOpening and
+     * RegionQuiescence): ASX_REGION_WAIT_*. An applied open leaves its
+     * status and region here for the next poll; a close waits for CLOSED of
+     * region_wait_region. */
+    uint8_t region_wait;
+    asx_status region_wait_status;
+    asx_region_id region_wait_region;
     asx_status last_error; /* status returned by a failing poll_fn */
     /* Task timer (EDF heap keyed by (wake_at, timer_seq)). */
     asx_time wake_at;
@@ -321,6 +329,33 @@ void asx_lab_admit_pending(void);
 void asx_lab_cancel_wake(asx_task_slot *t);
 void asx_lab_cancel_batch_begin(void);
 void asx_lab_cancel_batch_end(void);
+/* Region commands (Rust RegionCommand Create/Cancel/Close, LR:4135-4217):
+ * queued by a task's child-region open, cancel or close, applied in order
+ * at the start of the next step, after spawn admissions. An open's result
+ * wakes its opener once every command of the batch is applied. Queueing
+ * fails with ASX_E_RESOURCE_EXHAUSTED when the queue is full, changing
+ * nothing. A Cancel's reason (and its message) must outlive the command. */
+asx_status asx_lab_region_open_command(asx_task_slot *opener, asx_region_id parent,
+                                       const asx_budget *budget);
+asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_reason *reason);
+int asx_lab_region_commands_pending(void);
+void asx_lab_drain_region_commands(void);
+
+/* asx_task_slot.region_wait */
+enum {
+    ASX_REGION_WAIT_NONE = 0,
+    ASX_REGION_WAIT_OPEN,   /* open queued, not applied yet */
+    ASX_REGION_WAIT_OPENED, /* open applied: region_wait_status/_region */
+    ASX_REGION_WAIT_CLOSE   /* close requested: waiting for CLOSED */
+};
+
+/* Wake the tasks waiting for this region to close (Rust RegionCloseState
+ * waiters, woken at Finalizing -> Closed, record/region.rs:1845-1853). */
+void asx_region_wake_close_waiters_internal(asx_region_id id);
+/* The reason Rust's Close command cancels a child region with:
+ * CancelReason::user("owned child region body finished") and its testing
+ * default attribution (lab/runtime.rs:4193-4196). */
+asx_cancel_reason asx_region_close_reason_internal(void);
 
 /* Resolve the obligations a completing task still holds, cancelled or
  * not, as leaks per the active policy (RECOVER aborts them with

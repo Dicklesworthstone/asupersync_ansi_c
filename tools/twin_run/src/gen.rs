@@ -8,6 +8,9 @@
 //! non-quiescent end state. A scenario Rust cannot run (twin_run fails it)
 //! is simply not captured; one Rust runs and C does not is a finding.
 //!
+//! Child regions: a task opens at most one at a time (two in all), may
+//! spawn into it, and closes it or leaves it to the drop backstop.
+//!
 //! Left out on purpose: try_send / try_recv, multi-permit acquire, race
 //! (same-round ties are an RNG pick in Rust and the lowest index in C, a
 //! known divergence, bd-g652), quorum and first_ok error paths,
@@ -65,6 +68,9 @@ struct World {
 struct Held {
     obligations: Vec<String>,
     children: Vec<String>,
+    /// Child regions opened and not closed yet (at most one at a time).
+    regions: Vec<String>,
+    opened: u32,
     mutex: bool,
     permit: bool,
     reserves: u32,
@@ -102,7 +108,7 @@ fn child_program(rng: &mut Rng) -> Vec<Value> {
 /// One step of task `me`'s program, given what it holds.
 fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
     loop {
-        match rng.below(16) {
+        match rng.below(18) {
             0 | 1 => return json!({"op": "yield"}),
             2 | 3 => return sleep_step(rng),
             4 | 5 => return checkpoint_step(rng),
@@ -131,7 +137,11 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 held.spawns += 1;
                 let name = format!("{me}.c{}", held.spawns);
                 held.children.push(name.clone());
-                return json!({"op": "spawn", "as": name, "program": child_program(rng)});
+                let mut s = json!({"op": "spawn", "as": name, "program": child_program(rng)});
+                if !held.regions.is_empty() && rng.chance(60) {
+                    s["region"] = json!(held.regions[0]);
+                }
+                return s;
             }
             10 if !held.children.is_empty() => {
                 let name = held.children.remove(0);
@@ -183,6 +193,26 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                         return json!({"op": "recv", "channel": ch});
                     }
                 }
+            }
+            // A child region opened here is closed by a later step, or by
+            // the drop backstop when the program ends with it open.
+            16 if held.regions.is_empty() && held.opened < 2 => {
+                held.opened += 1;
+                let name = format!("{me}.r{}", held.opened);
+                held.regions.push(name.clone());
+                let mut s = json!({"op": "open_region", "as": name});
+                if rng.chance(20) {
+                    s["budget"] = json!({"poll_quota": 2 + rng.below(6)});
+                }
+                return s;
+            }
+            17 if !held.regions.is_empty() => {
+                if rng.chance(25) {
+                    return json!({"op": "cancel_region", "region": held.regions[0],
+                                  "kind": *rng.pick(&CANCEL_KINDS)});
+                }
+                let name = held.regions.remove(0);
+                return json!({"op": "close_region", "region": name});
             }
             _ => {}
         }

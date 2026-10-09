@@ -287,6 +287,9 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->lab_admission_pending = 0;
     task->lab_waker_epoch = 0;
     task->traced_waker_epoch = 0;
+    task->region_wait = ASX_REGION_WAIT_NONE;
+    task->region_wait_status = ASX_OK;
+    task->region_wait_region = ASX_INVALID_ID;
 }
 
 /* Whether a pending cancel makes a completing task's outcome CANCELLED
@@ -379,6 +382,17 @@ void asx_task_join_wake_waiters_internal(asx_task_slot *task) {
         ws->waiting_on = ASX_SLOT_NONE;
         asx_task_wake_slot_internal(ws);
         w = next;
+    }
+}
+
+void asx_region_wake_close_waiters_internal(asx_region_id id) {
+    uint32_t i;
+    for (i = 0; i < g_task_count; i++) {
+        asx_task_slot *t = &g_tasks[i];
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        if (t->alive && t->region_wait == ASX_REGION_WAIT_CLOSE && t->region_wait_region == id) {
+            asx_task_wake_slot_internal(t);
+        }
     }
 }
 
@@ -1036,7 +1050,10 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
     asx_status st;
 
     *out_dispatched = 0;
+    /* step_inner (LR:4481-4500): spawn admissions, then region commands,
+     * then the step's draw. */
     asx_lab_admit_pending();
+    asx_lab_drain_region_commands();
     r = asx_lab_rng_next();
     if (g_timer_heap_len > 0u) (void)timers_fire(sched_now());
     (void)sched_drain_wakers();
@@ -1058,7 +1075,8 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
 }
 
 /* Rust's run_until_idle (LR:3428-3450) when !advance_clock: step while a
- * task is scheduled or awaits admission. run_with_auto_advance
+ * task is scheduled, awaits admission or a region command is queued
+ * (has_pending_dispatch_commands, LR:2872). run_with_auto_advance
  * (LR:3224-3316) otherwise: when nothing is scheduled, move the clock to
  * the next timer and fire it outside any step, and stop at quiescence or
  * after 1000 steps without a dispatch. The budget counts steps. */
@@ -1071,7 +1089,8 @@ static asx_status sched_lab_run(asx_budget *budget, int advance_clock) {
         int dispatched = 0;
         ASX_CHECKPOINT_WAIVER("kernel-scheduler: the lab step loop; the step budget and the "
                               "1000-step stuck bound end it");
-        if (asx_lab_scheduled_count() > 0u || asx_lab_admissions_pending()) {
+        if (asx_lab_scheduled_count() > 0u || asx_lab_admissions_pending() ||
+            asx_lab_region_commands_pending()) {
             if (asx_budget_consume_poll(budget) == 0) {
                 sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, step);
                 asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, step);

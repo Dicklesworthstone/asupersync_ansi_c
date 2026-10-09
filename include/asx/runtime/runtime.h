@@ -277,6 +277,44 @@ ASX_API ASX_MUST_USE asx_status asx_region_open_child_with_budget(asx_region_id 
                                                                   const asx_budget *budget,
                                                                   asx_region_id *out_child);
 
+/* Open a child region from inside task `self`'s poll, as Rust's
+ * Cx::open_child_region does: under lab dispatch the open is a command the
+ * scheduler applies at the start of its next step, after spawn admissions.
+ * The first call queues it, parks the task and returns ASX_E_PENDING; the
+ * task is woken once it is applied, and the next call returns the open's
+ * status (that of asx_region_open_child_with_budget) and the region.
+ * Without lab dispatch the open is applied at once. A task awaits one
+ * region command at a time (ASX_E_INVALID_STATE while it awaits a close).
+ * ASX_E_RESOURCE_EXHAUSTED: the command queue is full; nothing changed. */
+ASX_API ASX_MUST_USE asx_status asx_region_open_child_poll(asx_task_id self, asx_region_id parent,
+                                                           const asx_budget *budget,
+                                                           asx_region_id *out_child);
+
+/* Cancel a child region from inside a task, as Rust's ChildRegion::cancel
+ * does: under lab dispatch a command applied at the start of the next
+ * step, after spawn admissions (the region's tasks are cancelled then);
+ * without it, asx_region_cancel at once. The reason is copied; its message
+ * and cause must stay valid, as for asx_region_cancel. A region that has
+ * closed and whose handle is stale is left alone (ASX_OK).
+ * ASX_E_RESOURCE_EXHAUSTED: the command queue is full; nothing changed. */
+ASX_API ASX_MUST_USE asx_status asx_region_cancel_request(asx_region_id region,
+                                                          const asx_cancel_reason *reason);
+
+/* Request the close of a child region without waiting (Rust's ChildRegion
+ * Close command, also its drop backstop): asx_region_cancel_request with
+ * the reason Rust closes with, a User cancel "owned child region body
+ * finished" with CancelReason::user's default attribution (the region in
+ * slot 0, the first one opened; no task; 1 s). Its remaining tasks are
+ * cancelled and it closes when they end. */
+ASX_API ASX_MUST_USE asx_status asx_region_close_request(asx_region_id region);
+
+/* Close a child region from inside task `self`'s poll and wait until it is
+ * CLOSED (Rust ChildRegion::close): the first call requests the close as
+ * asx_region_close_request does; while the region is not CLOSED the task
+ * parks and the call returns ASX_E_PENDING; the region's CLOSED transition
+ * wakes it, and the next call returns ASX_OK. */
+ASX_API ASX_MUST_USE asx_status asx_region_close_poll(asx_task_id self, asx_region_id region);
+
 /* Read a region's budget. Returns ASX_OK, ASX_E_INVALID_ARGUMENT if out is
  * NULL, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for invalid handles. */
 ASX_API ASX_MUST_USE asx_status asx_region_get_budget(asx_region_id id, asx_budget *out);

@@ -82,6 +82,9 @@ typedef struct {
     uint32_t n_obligations;
     it_local_region regions[IT_MAX_LOCAL];
     uint32_t n_regions;
+    /* The region the current close_region step waits on: close takes the
+     * handle out of `regions` (Rust's ChildRegion::close consumes it). */
+    asx_region_id closing;
     /* The task's context for cancel-aware sync waits (cancel check). */
     asx_cx cx;
     /* The current blocking sync step's registration (DSL §3.7). */
@@ -856,6 +859,20 @@ static void drop_locals(it_task *t) {
     uint32_t me = (uint32_t)(t - g_tasks);
     int type;
     int sender;
+    /* Child regions still open are closed, by name: Rust's ChildRegion drop
+     * backstop requests a Close without waiting, and its Local drops
+     * `regions` before the guards. */
+    while (t->n_regions > 0u) {
+        uint32_t i;
+        uint32_t first = 0;
+        for (i = 1; i < t->n_regions; i++) {
+            if (strcmp(t->regions[i].name, t->regions[first].name) < 0) first = i;
+        }
+        if (asx_region_close_request(t->regions[first].id) != ASX_OK) {
+            it_fail("the close of a dropped child region failed", t->regions[first].name);
+        }
+        t->regions[first] = t->regions[--t->n_regions];
+    }
     while (t->n_guards > 0u) {
         uint32_t i;
         uint32_t first = 0;
@@ -1609,8 +1626,10 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             return STEP_END;
         }
         {
+            /* ChildRegion::cancel: a command the scheduler applies at its
+             * next step. */
             asx_cancel_reason r = make_reason(kind, t->region, self, it_str(step, "message"));
-            st = asx_region_cancel(lr->id, &r, NULL);
+            st = asx_region_cancel_request(lr->id, &r);
         }
         observe_status(t, idx, label, st);
         return STEP_NEXT;
@@ -1754,7 +1773,10 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
             it_fail_task(t, idx, "open_region needs `as` (and a free local slot)");
             return STEP_END;
         }
-        st = asx_region_open_child_with_budget(t->region, has_budget ? &budget : NULL, &id);
+        /* Cx::open_child_region: a command the scheduler applies at its
+         * next step; the task waits parked for the result. */
+        st = asx_region_open_child_poll(self, t->region, has_budget ? &budget : NULL, &id);
+        if (st == ASX_E_PENDING) return STEP_PENDING;
         if (st == ASX_OK) {
             if (!add_region(name, t->region_name, id)) return STEP_END;
             t->regions[t->n_regions].name = name;
@@ -1765,33 +1787,22 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         return STEP_NEXT;
     }
     if (strcmp(op, "close_region") == 0) {
-        it_local_region *lr = local_region(t, it_str(step, "region"));
-        asx_region_state rs;
-        if (lr == NULL) {
-            it_fail_task(t, idx, "close_region of a region this task did not open");
-            return STEP_END;
-        }
         if (t->phase == 0u) {
-            /* ChildRegion::close enqueues a Close command, which the runtime
-             * runs as a User cancel of the region with this message
-             * (lab/runtime.rs:4195): cancel the remaining tasks, close. The
-             * reason is Rust's, CancelReason::user with its testing-default
-             * attribution (DSL §4, bd-wxep). */
-            asx_cancel_reason r = make_reason(ASX_CANCEL_USER, g_root, ASX_INVALID_ID,
-                                              "owned child region body finished");
-            r.timestamp = (asx_time)1000000000u; /* CancelReason::user: 1 s */
-            st = asx_region_cancel(lr->id, &r, NULL);
-            if (st != ASX_OK) {
-                observe_status(t, idx, op, st);
-                return STEP_NEXT;
+            it_local_region *lr = local_region(t, it_str(step, "region"));
+            if (lr == NULL) {
+                it_fail_task(t, idx, "close_region of a region this task did not open");
+                return STEP_END;
             }
+            t->closing = lr->id;
+            *lr = t->regions[--t->n_regions];
             t->phase = 1u;
         }
-        /* Wait for Closed: the region finalizes when its last task ends. */
-        if (asx_region_get_state(lr->id, &rs) != ASX_OK || rs != ASX_REGION_CLOSED) {
-            return STEP_PENDING;
-        }
-        observe_status(t, idx, op, ASX_OK);
+        /* ChildRegion::close: a Close command (the region is cancelled with
+         * Rust's "owned child region body finished" User reason, its
+         * remaining tasks cancelled), then a parked wait for CLOSED. */
+        st = asx_region_close_poll(self, t->closing);
+        if (st == ASX_E_PENDING) return STEP_PENDING;
+        observe_status(t, idx, op, st);
         return STEP_NEXT;
     }
     return exec_sync(t, self, step, idx, op);

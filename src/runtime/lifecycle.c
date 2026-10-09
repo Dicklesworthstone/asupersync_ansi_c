@@ -709,6 +709,79 @@ asx_status asx_region_open_child_with_budget(asx_region_id parent, const asx_bud
     return ASX_OK;
 }
 
+asx_status asx_region_open_child_poll(asx_task_id self, asx_region_id parent,
+                                      const asx_budget *budget, asx_region_id *out_child) {
+    asx_task_slot *t;
+    asx_region_slot *p;
+    asx_status st;
+
+    if (out_child == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_task_slot_lookup(self, &t);
+    if (st != ASX_OK) return st;
+    if (!asx_lab_dispatch_active()) {
+        return asx_region_open_child_with_budget(parent, budget, out_child);
+    }
+    switch (t->region_wait) {
+    case ASX_REGION_WAIT_OPENED:
+        t->region_wait = ASX_REGION_WAIT_NONE;
+        *out_child = t->region_wait_region;
+        return t->region_wait_status;
+    case ASX_REGION_WAIT_OPEN: break;
+    case ASX_REGION_WAIT_NONE:
+        st = asx_region_slot_lookup(parent, &p);
+        if (st != ASX_OK) return st;
+        st = asx_lab_region_open_command(t, parent, budget);
+        if (st != ASX_OK) return st;
+        t->region_wait = ASX_REGION_WAIT_OPEN;
+        break;
+    default: return ASX_E_INVALID_STATE; /* awaiting a close */
+    }
+    if (t->in_poll) t->park_requested = 1;
+    return ASX_E_PENDING;
+}
+
+asx_status asx_region_cancel_request(asx_region_id region, const asx_cancel_reason *reason) {
+    asx_region_slot *r;
+    asx_status st;
+    if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(region, &r);
+    /* A stale handle names a region that closed and was reused. */
+    if (st == ASX_E_STALE_HANDLE) return ASX_OK;
+    if (st != ASX_OK) return st;
+    if (asx_lab_dispatch_active()) return asx_lab_region_cancel_command(region, reason);
+    return asx_region_cancel(region, reason, NULL);
+}
+
+asx_status asx_region_close_request(asx_region_id region) {
+    asx_cancel_reason close = asx_region_close_reason_internal();
+    return asx_region_cancel_request(region, &close);
+}
+
+asx_status asx_region_close_poll(asx_task_id self, asx_region_id region) {
+    asx_task_slot *t;
+    asx_region_slot *r;
+    asx_status st = asx_task_slot_lookup(self, &t);
+
+    if (st != ASX_OK) return st;
+    if (t->region_wait == ASX_REGION_WAIT_OPEN || t->region_wait == ASX_REGION_WAIT_OPENED) {
+        return ASX_E_INVALID_STATE;
+    }
+    if (t->region_wait != ASX_REGION_WAIT_CLOSE || t->region_wait_region != region) {
+        st = asx_region_close_request(region);
+        if (st != ASX_OK) return st;
+        t->region_wait = ASX_REGION_WAIT_CLOSE;
+        t->region_wait_region = region;
+    }
+    st = asx_region_slot_lookup(region, &r);
+    if (st == ASX_OK && r->state != ASX_REGION_CLOSED) {
+        if (t->in_poll) t->park_requested = 1;
+        return ASX_E_PENDING;
+    }
+    t->region_wait = ASX_REGION_WAIT_NONE;
+    t->region_wait_region = ASX_INVALID_ID;
+    return st == ASX_E_STALE_HANDLE ? ASX_OK : st;
+}
+
 asx_status asx_region_get_budget(asx_region_id id, asx_budget *out) {
     asx_region_slot *r;
     asx_status st;
