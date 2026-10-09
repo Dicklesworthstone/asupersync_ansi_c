@@ -477,16 +477,18 @@ does not currently ship a TOML parser or `asx.toml` generator.
 
 ```c
 #include <asx/asx.h>
+#include <asx/runtime/builder.h>
 
-asx_runtime_builder builder;
-asx_runtime runtime;
-
-asx_runtime_builder_init_current_thread(&builder);
-asx_runtime_builder_set_wait_policy(&builder, ASX_WAIT_YIELD);
-asx_runtime_builder_set_io_backend(&builder, ASX_IO_BACKEND_GHOST);
-asx_runtime_builder_set_finalizer_poll_budget(&builder, 512u);
-asx_runtime_builder_set_finalizer_time_budget_ns(&builder, 5000000u);
-asx_runtime_builder_build(&builder, &runtime);
+asx_status build_runtime(asx_runtime *runtime) {
+    asx_runtime_builder builder;
+    asx_status st = asx_runtime_builder_init_current_thread(&builder);
+    if (st == ASX_OK) st = asx_runtime_builder_set_wait_policy(&builder, ASX_WAIT_YIELD);
+    if (st == ASX_OK) st = asx_runtime_builder_set_io_backend(&builder, ASX_IO_BACKEND_GHOST);
+    if (st == ASX_OK) st = asx_runtime_builder_set_finalizer_poll_budget(&builder, 512u);
+    if (st == ASX_OK) st = asx_runtime_builder_set_finalizer_time_budget_ns(&builder, 5000000u);
+    if (st == ASX_OK) st = asx_runtime_builder_build(&builder, runtime);
+    return st;
+}
 ```
 
 Environment-driven overrides use the `ASX_RUNTIME_` prefix:
@@ -977,8 +979,9 @@ Resource classes (R1/R2/R3) scale these capacities for different deployment targ
 
 ## Stackless Coroutines via Protothread Macros
 
-`asx` implements cooperative multitasking without threads, fibers, or `setjmp`/`longjmp`. Instead, tasks use protothread macros that compile to a switch-case state machine:
+`asx` implements cooperative multitasking without threads, fibers, or `setjmp`/`longjmp`. Instead, tasks use protothread macros that compile to a switch-case state machine (simplified from `include/asx/runtime/runtime.h`):
 
+<!-- readme-c: excerpt, not compiled (simplified from include/asx/runtime/runtime.h) -->
 ```c
 #define ASX_CO_BEGIN(state)   switch ((state)->line) { case 0u:
 #define ASX_CO_YIELD(state)   do { (state)->line = (uint32_t)__LINE__; \
@@ -992,9 +995,11 @@ On first call, `line` is 0, so execution starts at `case 0u`. When `ASX_CO_YIELD
 Example usage:
 
 ```c
+#include <asx/asx.h>
+
 typedef struct { uint32_t line; int progress; } my_task_state;
 
-static asx_status my_task_poll(void *user_data, asx_task_id self) {
+asx_status my_task_poll(void *user_data, asx_task_id self) {
     my_task_state *s = (my_task_state *)user_data;
     (void)self;
     ASX_CO_BEGIN(s);
@@ -1071,17 +1076,21 @@ Supervision is event-driven:
 The capability context (`asx_cx`) carries the authority a task needs to operate: region ID, task ID, capability bitmask, budget, clock source, and entropy state. Capabilities flow downward through explicit narrowing:
 
 ```c
-asx_cx parent_cx;
-asx_cx child_cx;
+#include <asx/asx.h>
 
-// Child gets a strict subset of parent capabilities
-asx_cx_narrow(&child_cx, &parent_cx, ASX_CAP_SPAWN | ASX_CAP_TIMER);
+/* A child context for a worker that may spawn and set timers, and nothing
+ * else the parent holds. */
+asx_status worker_cx(const asx_cx *parent_cx, asx_cx *child_cx) {
+    return asx_cx_narrow(parent_cx, child_cx, ASX_CAP_SPAWN | ASX_CAP_TIMER);
+}
 
-// Or attenuate by removing specific capabilities
-asx_cx_attenuate(&child_cx, &parent_cx, ~ASX_CAP_NETWORK);
+/* Or keep everything except the right to spawn. */
+asx_status no_spawn_cx(const asx_cx *parent_cx, asx_cx *child_cx) {
+    return asx_cx_attenuate(parent_cx, child_cx, (asx_cap_flags)~ASX_CAP_SPAWN);
+}
 ```
 
-Scopes bind a capability context to a region for spawning child tasks. The `ASX_CAP_SPAWN` capability is required to spawn; if a task's context lacks it, `asx_scope_spawn()` fails. This prevents ambient authority: no task can create children, open timers, or access the network unless its parent explicitly granted that capability.
+Scopes bind a capability context to a region for spawning child tasks. The `ASX_CAP_SPAWN` capability is required to spawn; if a task's context lacks it, `asx_scope_spawn()` fails with `ASX_E_PERMISSION_DENIED`, so no task creates children through a scope unless its parent granted that capability. Today the context's own operations check their bits (cancel check, budget read/consume, clock read, entropy) and `src/net/net.c` checks `ASX_CAP_CHANNEL`; `ASX_CAP_TIMER`, `ASX_CAP_OBLIGATION`, `ASX_CAP_TRACE` and `ASX_CAP_CANCEL_REQUEST` are carried and narrowed but not yet checked by the timer, obligation, trace or cancel APIs.
 
 All capability contexts are borrowed from static runtime tables, requiring no allocation. The design mirrors Rust's ownership-based authority model, adapted for C's manual lifetime management.
 
@@ -1115,10 +1124,24 @@ For deterministic testing of timing-sensitive code, `asx` provides a virtual tim
 Virtual time is installed via the clock hook system:
 
 ```c
-asx_runtime_hooks hooks;
-asx_runtime_hooks_init(&hooks);
-hooks.clock.logical_now_ns_fn = asx_vtime_now_ns;
-hooks.clock.ctx = &vtime_state;
+#include <asx/asx.h>
+#include <asx/runtime/rt.h>
+#include <asx/runtime/virtual_time.h>
+
+/* A runtime whose logical clock is `vtime`, starting at 0 with 1 µs ticks */
+asx_status runtime_on_virtual_time(asx_runtime *rt, asx_vtime_state *vtime) {
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_status st;
+
+    asx_vtime_init(vtime, 0, 1000);
+    asx_runtime_config_init(&cfg);
+    st = asx_runtime_hooks_init(&hooks);
+    if (st != ASX_OK) return st;
+    hooks.clock.logical_now_ns_fn = asx_vtime_now_ns;
+    hooks.clock.ctx = vtime;
+    return asx_runtime_init(rt, &cfg, &hooks);
+}
 ```
 
 Combined with fault injection (`ASX_FAULT_CLOCK_SKEW`, `ASX_FAULT_CLOCK_REVERSE`, `ASX_FAULT_ENTROPY_CONST`, `ASX_FAULT_ALLOC_FAIL`), this lets you reproduce production timing anomalies in a deterministic test environment. Every injected fault has a trigger-after count and a duration, so you can say "after the 50th clock read, add 100ms of skew for the next 10 reads."
@@ -1215,18 +1238,24 @@ Config structs use a size-field pattern for forward compatibility: `cfg.size = s
 The plan module lets you express structured concurrency as a directed acyclic graph before execution:
 
 ```c
-asx_plan_dag_id leaf_a = asx_plan_dag_leaf(&dag, "fetch-config");
-asx_plan_dag_id leaf_b = asx_plan_dag_leaf(&dag, "fetch-secrets");
-asx_plan_dag_id leaf_c = asx_plan_dag_leaf(&dag, "health-check");
+#include <asx/plan/plan.h>
 
-// All three must complete
-asx_plan_dag_id join = asx_plan_dag_join(&dag, children, 3);
+asx_status startup_plan(asx_plan_dag *dag) {
+    asx_plan_id children[3];
+    asx_plan_id join;
 
-// ... but give up after 5 seconds
-asx_plan_dag_id root = asx_plan_dag_timeout(&dag, join, 5000000);
+    asx_plan_dag_init(dag);
+    children[0] = asx_plan_dag_leaf(dag, "fetch-config");
+    children[1] = asx_plan_dag_leaf(dag, "fetch-secrets");
+    children[2] = asx_plan_dag_leaf(dag, "health-check");
 
-asx_plan_dag_set_root(&dag, root);
-asx_plan_dag_validate(&dag);  // checks acyclicity, bounds, references
+    /* All three must complete... */
+    join = asx_plan_dag_join(dag, children, 3);
+
+    /* ...but give up after 5 seconds (the duration is in microseconds). */
+    asx_plan_dag_set_root(dag, asx_plan_dag_timeout(dag, join, 5000000u));
+    return asx_plan_dag_validate(dag); /* missing children, empty groups, cycles */
+}
 ```
 
 DAG node types: **leaf** (unit of work), **join** (all children), **race** (first child), **timeout** (child with deadline). Forward references are prohibited (child IDs must be less than parent ID), which guarantees acyclicity by construction. The DAG is checksum-verifiable and supports algebraic rewriting for optimization.
@@ -1236,11 +1265,21 @@ DAG node types: **leaf** (unit of work), **join** (all children), **race** (firs
 C has no destructors, so `asx` provides deterministic cleanup stacks, the closest analog to Rust's `Drop` or C++ RAII available in plain C99. Each region owns a fixed-size cleanup stack (32 entries). Handlers are pushed in registration order and executed in strict LIFO (reverse) order during region drain:
 
 ```c
-asx_cleanup_push(&region_cleanup, my_release_fn, my_resource);
-asx_cleanup_push(&region_cleanup, another_release_fn, another_resource);
-// ... on drain:
-//   another_release_fn(another_resource)  ← called first (LIFO)
-//   my_release_fn(my_resource)            ← called second
+#include <asx/asx.h>
+
+void release_file(void *file);
+void release_lock(void *lock);
+
+asx_status hold_both(asx_cleanup_stack *cleanup, void *file, void *lock) {
+    asx_cleanup_handle h_file;
+    asx_cleanup_handle h_lock;
+    asx_status st = asx_cleanup_push(cleanup, release_file, file, &h_file);
+    if (st != ASX_OK) return st;
+    return asx_cleanup_push(cleanup, release_lock, lock, &h_lock);
+    /* asx_cleanup_drain(cleanup) then calls release_lock(lock) first and
+     * release_file(file) second (LIFO); asx_cleanup_pop(cleanup, h) resolves
+     * an entry early so drain skips it. */
+}
 ```
 
 Each entry carries a generation counter so stale cleanup handles cannot accidentally fire against a recycled slot. When a region reaches the FINALIZING state, the cleanup stack is drained completely before transitioning to CLOSED. Quiescence condition Q4 verifies `asx_cleanup_pending() == 0`; the region cannot close until every registered handler has run.
@@ -1280,15 +1319,17 @@ This catches the same class of bugs that Rust's ownership system catches, but at
 Every lifecycle transition in `asx` is validated against precomputed boolean tables:
 
 ```c
-// Encoded as: allowed[from_state][to_state]
-static const int region_allowed[5][5] = { ... };  // 5 states, 13 valid transitions
-static const int task_allowed[6][6]   = { ... };  // 6 states, 13 valid transitions
-static const int obligation_allowed[4][4] = { ... }; // 4 states, 3 valid transitions
+#include <asx/asx.h>
+
+/* ASX_OK, or ASX_E_INVALID_TRANSITION for a move the table forbids. */
+asx_status finish_task(asx_task_state from) {
+    return asx_task_transition_check(from, ASX_TASK_COMPLETED);
+}
 ```
 
-A transition check is a single array lookup: `allowed[from][to]`. No switch statements, no iteration, no hash maps. This O(1) validation runs on every state change: in debug builds via ghost monitors, and in production as a direct return-code check.
+A transition check is a single array lookup, `allowed[from][to]`, in the tables of `src/core/transition_tables.c`. No switch statements, no iteration, no hash maps. This O(1) validation runs on every state change: in debug builds via ghost monitors, and in production as a direct return-code check.
 
-Helper functions classify states: `asx_task_state_is_terminal()`, `asx_region_state_is_closing()`, `asx_region_can_spawn()`. These are also table lookups. The transition tables are the authoritative specification of lifecycle legality. If the table says a transition is forbidden, no code path may perform it.
+Helper functions classify states: `asx_task_is_terminal()`, `asx_region_is_closing()`, `asx_region_can_spawn()`. The transition tables are the authoritative specification of lifecycle legality. If the table says a transition is forbidden, no code path may perform it.
 
 ## Waker System: Bridging I/O to Scheduling
 
@@ -1405,14 +1446,36 @@ Both types are stack-allocable and designed for cursor-based I/O patterns: write
 The stream subsystem provides poll-based async iterators with zero dynamic allocation:
 
 ```c
-// Create a stream that maps items through a transform function
-asx_stream_map map_state;
-asx_stream_map_init(&map_state, source_poll, source_state, my_transform, xform_ctx);
+#include <asx/stream/stream.h>
+#include <stdio.h>
 
-// Poll the stream
-void *item;
-asx_stream_status st = asx_stream_map_poll(&map_state, &waker, &item);
-// st = ASX_STREAM_READY (item available) | ASX_STREAM_PENDING | ASX_STREAM_DONE
+static int g_doubled;
+
+static void *double_it(void *item, void *user_data) {
+    (void)user_data;
+    g_doubled = *(const int *)item * 2;
+    return &g_doubled;
+}
+
+int main(void) {
+    static const int numbers[] = {1, 2, 3};
+    asx_stream source;
+    asx_stream doubled;
+    asx_stream_iter_state source_state;
+    asx_stream_map_state map_state;
+    void *item;
+
+    /* An array source, mapped through double_it */
+    asx_stream_iter_init(&source, &source_state, numbers, sizeof numbers[0], 3);
+    asx_stream_map_init(&doubled, &map_state, source, double_it, NULL);
+
+    /* ASX_STREAM_READY (item available) | ASX_STREAM_PENDING | ASX_STREAM_DONE;
+     * a pending stream signals the waker passed here (none needed for an array) */
+    while (asx_stream_poll_next(&doubled, NULL, &item) == ASX_STREAM_READY) {
+        printf("%d\n", *(const int *)item); /* 2, 4, 6 */
+    }
+    return 0;
+}
 ```
 
 Available combinators:
@@ -1439,23 +1502,48 @@ The audit produces evidence entries and a pass/fail verdict. If a code change in
 The lab runtime wires together virtual time, seeded PRNG, and scenario execution into a single convenient testing harness:
 
 ```c
-asx_lab_config lab_cfg = { .seed = 42, .tick_ns = 1000000, .start_time_ns = 0, .max_polls_per_step = 100 };
-asx_lab lab;
-asx_lab_init(&lab, &lab_cfg);
+#include <asx/asx.h>
+#include <asx/runtime/lab.h>
+#include <stdio.h>
 
-// Execute a scenario as a sequence of steps
-asx_lab_scenario scenario = { .steps = my_step_fns, .step_count = 5 };
-asx_lab_result result;
-asx_lab_run(&lab, &scenario, &result);
+static asx_status open_and_tick(asx_lab *lab, void *user_data) {
+    asx_region_id region;
+    (void)user_data;
+    asx_lab_advance_time(lab, 5); /* five ticks of virtual time */
+    return asx_lab_open_region(lab, &region);
+}
 
-// result.steps_completed, result.elapsed_ns, result.total_polls
-asx_lab_shutdown(&lab);
+int main(void) {
+    asx_lab_config cfg;
+    asx_lab lab;
+    asx_lab_scenario scenario;
+    asx_lab_result result;
+    asx_status st;
+
+    asx_lab_config_init(&cfg);
+    cfg.seed = 42;
+    cfg.tick_ns = 1000000; /* 1 ms per tick */
+    cfg.max_polls = 100;   /* per scenario step */
+    st = asx_lab_init(&lab, &cfg);
+    if (st != ASX_OK) return 1;
+
+    /* A scenario is a sequence of step functions */
+    asx_lab_scenario_init(&scenario, "open-and-tick");
+    st = asx_lab_scenario_add_step(&scenario, open_and_tick, NULL);
+    if (st == ASX_OK) {
+        st = asx_lab_run_scenario(&lab, &scenario, &result);
+        printf("%u/%u steps, %llu ns, %llu polls\n", result.steps_completed, result.steps_total,
+               (unsigned long long)result.elapsed_ns, (unsigned long long)result.polls_total);
+    }
+    asx_lab_shutdown(&lab);
+    return st == ASX_OK ? 0 : 1;
+}
 ```
 
 The lab provides:
 - **Seeded entropy**: `asx_lab_random_u64()` uses a deterministic PRNG seeded at init.
 - **Virtual time**: Time advances in configurable tick increments, controllable by the test.
-- **Bounded execution**: `max_polls_per_step` prevents infinite loops in buggy task implementations.
+- **Bounded execution**: `max_polls` (per scenario step) prevents infinite loops in buggy task implementations.
 - **Region convenience**: `asx_lab_open_region()` wires the lab's Cx into the opened region.
 
 This is the primary mechanism for writing tests that are 100% reproducible across platforms: no real clocks, no real entropy, no real I/O.
@@ -1649,11 +1737,16 @@ Fixtures are organized by semantic unit (core_budget, core_cancel, core_channel,
 `include/asx/portable.h` provides alignment-safe, endian-aware load/store functions for cross-platform binary I/O:
 
 ```c
-// Alignment-safe little-endian load (works on any address)
-uint32_t val = asx_load_le_u32(wire_ptr);
+#include <asx/portable.h>
 
-// Big-endian store for network byte order
-asx_store_be_u16(out_ptr, port_number);
+void rewrite_port(const uint8_t *wire, uint8_t *out, uint16_t port) {
+    /* Alignment-safe little-endian load (works on any address) */
+    uint32_t header = asx_load_le_u32(wire);
+    (void)header;
+
+    /* Big-endian store for network byte order */
+    asx_store_be_u16(out, port);
+}
 ```
 
 Endianness is detected at compile time via byte-order canaries (`0x04030201` for little-endian, `0x01020304` for big-endian). All functions use byte-by-byte access, with no pointer casts, no platform intrinsics, and no undefined behavior from misaligned reads. The binary codec runs identically on ARM, MIPS, RISC-V, and x86 without `#ifdef` forests.
@@ -1664,9 +1757,9 @@ Wire format conventions: binary fixture codec uses big-endian (network byte orde
 
 The ABI module (`include/asx/abi/wasm_abi.h`) defines the contract between `asx` and external host environments (primarily WebAssembly):
 
-**Feature flags** (8-bit bitmask): Each bit indicates a subsystem available in the current build: deterministic mode, channels, timers, obligations, symbols, JSON codec, BIN codec, ghost monitors. The host can query `asx_abi_feature_flags()` to discover available capabilities before calling any API.
+**Feature flags** (8-bit bitmask): Each bit indicates a subsystem available in the current build: deterministic mode, channels, timers, obligations, symbols, JSON codec, BIN codec, ghost monitors. The host reads them from `asx_abi_version_current().feature_flags` to discover available capabilities before calling any API.
 
-**Compatibility classification**: `COMPATIBLE` (full feature parity), `DEGRADED` (partial; some operations return `ASX_E_NOT_SUPPORTED`), or `INCOMPATIBLE` (major version mismatch, refuse to initialize).
+**Compatibility classification** (`asx_abi_check_compat`): `COMPATIBLE` (full feature parity), `DEGRADED` (this build's minor version is older than the remote's, or it lacks features the remote wants; `missing_features` lists them and the host must not use them), or `INCOMPATIBLE` (major version mismatch, refuse to initialize).
 
 **Bootstrap state machine** (9 phases): `UNINITIALIZED → ABI_CHECK → HOOKS_BIND → PROVIDER_INIT → RUNTIME_INIT → READY → SHUTDOWN → TERMINATED`. Each phase transition is validated; skipping phases or going backward returns `ASX_E_INVALID_TRANSITION`. This prevents the common WASM integration bug of calling runtime functions before hooks are bound.
 
@@ -1737,11 +1830,18 @@ The diagnostic also checks allocator sealability and reports a surface availabil
 The tracing compatibility layer (`src/tracing_compat/`) bridges `asx` event traces to external observability systems (OpenTelemetry, journald, custom collectors):
 
 ```c
-// Export all trace events as JSONL to a custom sink
-void my_sink(const char *json_line, void *ctx) { /* write to file, network, etc. */ }
+#include <asx/tracing_compat/tracing_compat.h>
+#include <stdio.h>
 
-uint32_t exported;
-asx_tracing_compat_export_current(my_sink, my_ctx, &exported);
+/* Called once per event with one JSON line */
+static void write_line(const char *json_line, void *user_data) {
+    fprintf((FILE *)user_data, "%s\n", json_line);
+}
+
+/* Export every trace event as JSONL */
+asx_status export_trace(FILE *out, uint32_t *exported) {
+    return asx_tracing_compat_export_current(write_line, out, exported);
+}
 ```
 
 Each event is formatted as a single-line JSON object with `sequence`, `kind`, `entity` (hex64), and `aux` (hex64) fields. The sink function receives complete, self-contained JSON strings that can be appended to any JSONL-consuming pipeline.
@@ -1846,8 +1946,13 @@ re-run the replay/conformance-focused suites (`make conformance`,
 The breaker tripped due to failure threshold exceeded. Transition to half-open for probing, or reset.
 
 ```c
-asx_status st = asx_breaker_half_open(&cb);  // Probe recovery
-// If probe succeeds, breaker returns to CLOSED automatically
+#include <asx/asx.h>
+
+/* Move an OPEN breaker to HALF_OPEN to probe recovery; once
+ * config.success_threshold probes record success it closes again. */
+asx_status probe_recovery(asx_circuit_breaker *cb) {
+    return asx_breaker_half_open(cb);
+}
 ```
 
 ### Deadline monitor reports unexpected misses

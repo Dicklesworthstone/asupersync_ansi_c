@@ -683,9 +683,11 @@ lint:
 # ---------------------------------------------------------------------------
 # lint-docs — public API documentation coverage gate (bd-hwb.16)
 # ---------------------------------------------------------------------------
-lint-docs:
+lint-docs: $(LIB_A)
 	@echo "[asx] lint-docs: checking public API documentation coverage..."
 	@./tools/ci/check_api_docs.sh
+	@echo "[asx] lint-docs: compiling the README's C samples..."
+	@./tools/ci/check_readme_samples.sh README.md $(LIB_A) $(BUILD_DIR)/readme_samples
 
 # ---------------------------------------------------------------------------
 # lint-checkpoint — checkpoint-coverage gate for kernel loops (bd-66l.6)

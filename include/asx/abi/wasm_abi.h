@@ -69,7 +69,7 @@ typedef struct {
 
 typedef enum {
     ASX_ABI_COMPATIBLE = 0,  /* full feature parity, safe to use */
-    ASX_ABI_DEGRADED = 1,    /* partial features, some ops will return ASX_E_NOT_SUPPORTED */
+    ASX_ABI_DEGRADED = 1,    /* older local minor, or missing_features != 0 */
     ASX_ABI_INCOMPATIBLE = 2 /* major version mismatch, must not proceed */
 } asx_abi_compat;
 
