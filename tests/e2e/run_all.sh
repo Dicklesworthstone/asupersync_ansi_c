@@ -46,6 +46,9 @@
 #   GATE-E2E-DEPLOY-HFT   market_open_burst.sh
 #   GATE-E2E-DEPLOY-AUTO   automotive_fault_burst.sh
 #   GATE-E2E-PACKAGE       openwrt_package.sh
+#   GATE-E2E-ACTOR-SUPERVISION actor_supervision.sh
+#   GATE-E2E-RAPTORQ       raptorq_erasure.sh
+#   GATE-E2E-CLI           cli_smoke.sh
 #
 # SPDX-License-Identifier: MIT
 
@@ -143,6 +146,9 @@ E2E_FAMILIES=(
     "GATE-E2E-DEPLOY-HFT:market_open_burst.sh"
     "GATE-E2E-DEPLOY-AUTO:automotive_fault_burst.sh"
     "GATE-E2E-PACKAGE:openwrt_package.sh"
+    "GATE-E2E-ACTOR-SUPERVISION:actor_supervision.sh"
+    "GATE-E2E-RAPTORQ:raptorq_erasure.sh"
+    "GATE-E2E-CLI:cli_smoke.sh"
 )
 
 # Opt-in self-test of the hang guard: replace the registry with one generated
@@ -208,14 +214,22 @@ for entry in "${E2E_FAMILIES[@]}"; do
         script_path="${SCRIPT_DIR}/${script}"
     fi
 
+    total_families=$((total_families + 1))
+
+    # A registered family that cannot run is a failure, not a skip: a lost
+    # executable bit must not silently drop a gate from the suite.
     if [ ! -x "$script_path" ]; then
-        echo "  SKIP ${script} (not executable)"
-        family_results="${family_results}$(printf '    {"gate": %s, "script": %s, "status": "skip"},\n' \
-            "$(json_str "$gate")" "$(json_str "$script")")"
+        echo "  FAIL ${script} (missing or not executable)"
+        failed_families=$((failed_families + 1))
+        if [ -z "$first_failure_family" ]; then
+            first_failure_family="$script"
+            first_failure_log="$script_path"
+        fi
+        family_results="${family_results}$(printf '    {"gate": %s, "script": %s, "status": "fail", "exit_code": 126, "seconds": 0, "log": %s},\n' \
+            "$(json_str "$gate")" "$(json_str "$script")" "$(json_str "$script_path")")"
         continue
     fi
 
-    total_families=$((total_families + 1))
     family_log="${SUITE_LOG_DIR}/${script%.sh}.log"
 
     printf "  RUN  %-35s [%s] " "$script" "$gate"

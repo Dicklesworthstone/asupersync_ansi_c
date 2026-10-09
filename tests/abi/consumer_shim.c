@@ -309,9 +309,11 @@ static void test_actor_surface_smoke(void) {
     }
     SHIM_CHECK(st == ASX_OK, "actor_spawn succeeds through umbrella header");
 
+    /* An actor with an empty mailbox parks, and a run whose every live task
+     * is parked with no wake source returns ASX_E_WOULD_BLOCK. */
     budget = asx_budget_from_polls(4u);
     st = asx_scheduler_run(rid, &budget);
-    SHIM_CHECK(shim_is_progress_status(st), "actor init run succeeds");
+    SHIM_CHECK(st == ASX_E_WOULD_BLOCK, "actor init run parks the idle actor");
 
     st = asx_actor_cast(actor, 9u);
     SHIM_CHECK(st == ASX_OK, "actor_cast succeeds");
@@ -320,7 +322,7 @@ static void test_actor_surface_smoke(void) {
 
     budget = asx_budget_from_polls(4u);
     st = asx_scheduler_run(rid, &budget);
-    SHIM_CHECK(shim_is_progress_status(st), "actor message run succeeds");
+    SHIM_CHECK(st == ASX_E_WOULD_BLOCK, "actor message run drains the mailbox and parks");
 
     st = asx_call_token_poll(token, &reply);
     SHIM_CHECK(st == ASX_OK && reply == 42u, "actor call reply roundtrip");
@@ -345,7 +347,7 @@ static void test_actor_surface_smoke(void) {
 
     budget = asx_budget_from_polls(4u);
     st = asx_scheduler_run(rid, &budget);
-    SHIM_CHECK(shim_is_progress_status(st), "supervisor init run succeeds");
+    SHIM_CHECK(st == ASX_E_WOULD_BLOCK, "supervisor init run parks the quiet tree");
 
     st = asx_supervisor_stop(supervisor);
     SHIM_CHECK(st == ASX_OK, "supervisor_stop succeeds");

@@ -224,6 +224,18 @@ jobs:
         id: vignette_tests
         run: make test-vignettes
 
+      - name: C conformance suites (codec, profile, parallel, misuse, resource pressure)
+        id: conformance_c_tests
+        run: make test-conformance-c
+
+      - name: ABI stability check and consumer shim
+        id: abi_tests
+        run: make abi-check test-abi-shim
+
+      - name: Formal harnesses (transition/lattice/witness, algebraic, litmus, codegen)
+        id: formal_tests
+        run: make formal-check
+
       - name: Unit suite with every capacity macro raised 4x
         id: capacity_x4_tests
         run: make test-capacity-x4
@@ -252,6 +264,18 @@ jobs:
           elif [ "${{ steps.vignette_tests.outcome }}" = "failure" ]; then
             first_failure="test-vignettes"
             rerun="make test-vignettes"
+          elif [ "${{ steps.conformance_c_tests.outcome }}" = "failure" ]; then
+            first_failure="test-conformance-c"
+            rerun="make test-conformance-c"
+          elif [ "${{ steps.abi_tests.outcome }}" = "failure" ]; then
+            first_failure="abi"
+            rerun="make abi-check test-abi-shim"
+          elif [ "${{ steps.formal_tests.outcome }}" = "failure" ]; then
+            first_failure="formal-check"
+            rerun="make formal-check"
+          elif [ "${{ steps.capacity_x4_tests.outcome }}" = "failure" ]; then
+            first_failure="test-capacity-x4"
+            rerun="make test-capacity-x4"
           elif [ "${{ steps.validate_logs.outcome }}" = "failure" ]; then
             first_failure="validate-test-logs"
             rerun="tools/ci/validate_test_logs.sh --strict"
@@ -273,6 +297,10 @@ jobs:
             --arg unit_outcome "${{ steps.unit_tests.outcome }}" \
             --arg invariant_outcome "${{ steps.invariant_tests.outcome }}" \
             --arg vignette_outcome "${{ steps.vignette_tests.outcome }}" \
+            --arg conformance_c_outcome "${{ steps.conformance_c_tests.outcome }}" \
+            --arg abi_outcome "${{ steps.abi_tests.outcome }}" \
+            --arg formal_outcome "${{ steps.formal_tests.outcome }}" \
+            --arg capacity_x4_outcome "${{ steps.capacity_x4_tests.outcome }}" \
             --arg validate_outcome "${{ steps.validate_logs.outcome }}" \
             --arg first_failure "$first_failure" \
             --arg rerun "$rerun" \
@@ -288,6 +316,10 @@ jobs:
                 {id: "test-unit", outcome: $unit_outcome, rerun: "make test-unit"},
                 {id: "test-invariants", outcome: $invariant_outcome, rerun: "make test-invariants"},
                 {id: "test-vignettes", outcome: $vignette_outcome, rerun: "make test-vignettes"},
+                {id: "test-conformance-c", outcome: $conformance_c_outcome, rerun: "make test-conformance-c"},
+                {id: "abi", outcome: $abi_outcome, rerun: "make abi-check test-abi-shim"},
+                {id: "formal-check", outcome: $formal_outcome, rerun: "make formal-check"},
+                {id: "test-capacity-x4", outcome: $capacity_x4_outcome, rerun: "make test-capacity-x4"},
                 {id: "validate-test-logs", outcome: $validate_outcome, rerun: "tools/ci/validate_test_logs.sh --strict"}
               ],
               first_failure: (if $first_failure == "" then null else {step: $first_failure, rerun: $rerun} end)
