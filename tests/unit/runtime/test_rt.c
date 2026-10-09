@@ -13,6 +13,11 @@
  * SPDX-License-Identifier: MIT
  */
 
+/* pipe, write, close: the io-driver tests register real descriptors. */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "../../../src/runtime/runtime_internal.h"
 #include "../../test_harness.h"
 #include <asx/asx.h>
@@ -29,6 +34,33 @@ extern int setenv(const char *name, const char *value, int overwrite);
 extern int unsetenv(const char *name);
 static void rt_setenv(const char *name, const char *value) { (void)setenv(name, value, 1); }
 static void rt_unsetenv(const char *name) { (void)unsetenv(name); }
+#endif
+
+#if ASX_HAS_NATIVE_IO_DRIVER
+#if defined(_WIN32)
+static int rt_io_fd_open(int fds[2]) {
+    fds[0] = fds[1] = -1;
+    return 42;
+}
+static void rt_io_fd_close(const int fds[2]) { (void)fds; }
+static void rt_io_fd_make_readable(const int fds[2]) { (void)fds; }
+#else
+#include <unistd.h>
+/* A pipe's read end. A live build registers descriptors with the native
+ * reactor, which refuses a number that is not an open descriptor; the
+ * deterministic driver takes any number. A byte written to the pipe makes
+ * it readable for real. */
+static int rt_io_fd_open(int fds[2]) { return pipe(fds) == 0 ? fds[0] : -1; }
+static void rt_io_fd_close(const int fds[2]) {
+    (void)close(fds[0]);
+    (void)close(fds[1]);
+}
+static void rt_io_fd_make_readable(const int fds[2]) {
+    char byte = 1;
+    ssize_t n = write(fds[1], &byte, 1);
+    (void)n;
+}
+#endif
 #endif
 
 /* Suppress warn_unused_result in test helpers where we don't check */
@@ -489,8 +521,12 @@ TEST(init_default_wires_io_surface) {
 
 #if ASX_HAS_NATIVE_IO_DRIVER
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
-        ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_OK);
+        int fds[2];
+        int fd = rt_io_fd_open(fds);
+        ASSERT_TRUE(fd >= 0);
+        ASSERT_EQ(asx_io_register(fd, ASX_IO_READABLE, &w, &tok), ASX_OK);
         asx_io_deregister(&tok);
+        rt_io_fd_close(fds);
     } else {
         ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_E_PERMISSION_DENIED);
     }
@@ -522,15 +558,22 @@ TEST(init_default_io_poll_wakes_registered_task) {
 
 #if ASX_HAS_NATIVE_IO_DRIVER
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
-        ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_OK);
+        int fds[2];
+        int fd = rt_io_fd_open(fds);
+        ASSERT_TRUE(fd >= 0);
+        ASSERT_EQ(asx_io_register(fd, ASX_IO_READABLE, &w, &tok), ASX_OK);
         ASSERT_FALSE(asx_waker_is_signaled(&w));
+        /* Readable for the ghost reactor (deterministic) and for real
+         * (the native reactor of a live build). */
         g_rt_ready_count = 1u;
+        rt_io_fd_make_readable(fds);
         ASSERT_EQ(asx_io_driver_poll(&event, 1u, 5u), 1u);
         ASSERT_EQ(event.token.slot, tok.slot);
         ASSERT_EQ(event.token.generation, tok.generation);
         ASSERT_EQ(event.ready, ASX_IO_READABLE);
         ASSERT_TRUE(asx_waker_is_signaled(&w));
         asx_io_deregister(&tok);
+        rt_io_fd_close(fds);
     } else {
         ASSERT_EQ(asx_io_register(42, ASX_IO_READABLE, &w, &tok), ASX_E_PERMISSION_DENIED);
     }
@@ -965,13 +1008,17 @@ TEST(runtime_is_quiescent_false_with_active_io_registration) {
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
         asx_waker w;
         asx_io_token tok;
+        int fds[2];
+        int fd = rt_io_fd_open(fds);
 
+        ASSERT_TRUE(fd >= 0);
         ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
         ASSERT_EQ(asx_waker_register(88, &w), ASX_OK);
-        ASSERT_EQ(asx_io_register(88, ASX_IO_READABLE, &w, &tok), ASX_OK);
+        ASSERT_EQ(asx_io_register(fd, ASX_IO_READABLE, &w, &tok), ASX_OK);
         ASSERT_FALSE(asx_runtime_is_quiescent(&rt));
         asx_io_deregister(&tok);
         ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
+        rt_io_fd_close(fds);
     } else {
         ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
     }
@@ -997,13 +1044,17 @@ TEST(runtime_subsystem_queries_track_live_state) {
 
 #if ASX_HAS_NATIVE_IO_DRIVER
     if (asx_surface_available_active(ASX_SURFACE_IO_DRIVER)) {
+        int fds[2];
+        int fd = rt_io_fd_open(fds);
+        ASSERT_TRUE(fd >= 0);
         ASSERT_TRUE(asx_runtime_io_driver_initialized(&rt));
         ASSERT_EQ(asx_runtime_io_registration_count(&rt), 0u);
         ASSERT_EQ(asx_waker_register(77, &w), ASX_OK);
-        ASSERT_EQ(asx_io_register(77, ASX_IO_READABLE, &w, &tok), ASX_OK);
+        ASSERT_EQ(asx_io_register(fd, ASX_IO_READABLE, &w, &tok), ASX_OK);
         ASSERT_EQ(asx_runtime_io_registration_count(&rt), 1u);
         asx_io_deregister(&tok);
         ASSERT_EQ(asx_runtime_io_registration_count(&rt), 0u);
+        rt_io_fd_close(fds);
     } else {
         ASSERT_FALSE(asx_runtime_io_driver_initialized(&rt));
         ASSERT_EQ(asx_runtime_io_registration_count(&rt), 0u);
@@ -1016,9 +1067,19 @@ TEST(runtime_subsystem_queries_track_live_state) {
 
 #if ASX_HAS_BLOCKING_SURFACE
     if (asx_surface_available_active(ASX_SURFACE_BLOCKING)) {
+        uint64_t blocking_result = 0u;
+        uint32_t spins = 0u;
+        asx_status got;
         ASSERT_TRUE(asx_runtime_blocking_pool_initialized(&rt));
         ASSERT_EQ(asx_runtime_blocking_active_count(&rt), 0u);
         ASSERT_EQ(asx_spawn_blocking(add_one, &blocking_input, NULL, &blocking), ASX_OK);
+        /* CORE completes inline; live POSIX builds complete on a pool
+         * worker, so wait (bounded) for the result before counting. */
+        do {
+            got = asx_blocking_get_result(&blocking, &blocking_result);
+        } while (got == ASX_E_PENDING && ++spins < 2000000000u);
+        ASSERT_EQ(got, ASX_OK);
+        ASSERT_EQ(blocking_result, (uint64_t)6);
         ASSERT_EQ(asx_runtime_blocking_active_count(&rt), 0u);
     } else {
         ASSERT_FALSE(asx_runtime_blocking_pool_initialized(&rt));

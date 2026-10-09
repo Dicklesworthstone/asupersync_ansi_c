@@ -631,7 +631,7 @@ TEST(now_ns_no_hooks_returns_hook_missing) {
     ASSERT_EQ(asx_runtime_now_ns(&t), ASX_E_HOOK_MISSING);
 }
 
-TEST(now_ns_dispatches_to_logical_clock) {
+TEST(now_ns_dispatches_by_build_mode) {
     asx_time t = 0;
 
     asx_runtime_reset();
@@ -639,8 +639,13 @@ TEST(now_ns_dispatches_to_logical_clock) {
     ASSERT_EQ(install_test_hooks(), ASX_OK);
 
     ASSERT_EQ(asx_runtime_now_ns(&t), ASX_OK);
-    /* In deterministic mode, dispatches to logical clock (returns 42) */
+    /* Deterministic builds read the logical clock (42), live builds the
+     * wall clock (1000000). */
+#if ASX_DETERMINISTIC
     ASSERT_EQ(t, (asx_time)42);
+#else
+    ASSERT_EQ(t, (asx_time)1000000);
+#endif
     ASSERT_TRUE(g_clock_count > 0);
 }
 
@@ -660,7 +665,7 @@ TEST(random_u64_no_hooks_returns_hook_missing) {
     ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_HOOK_MISSING);
 }
 
-TEST(random_u64_missing_entropy_stream_returns_invalid_state) {
+TEST(random_u64_missing_entropy_stream_is_refused) {
     asx_runtime_hooks hooks;
     uint64_t v = 0;
 
@@ -669,7 +674,13 @@ TEST(random_u64_missing_entropy_stream_returns_invalid_state) {
     hooks.entropy.random_u64_fn = NULL;
     hooks.deterministic_seeded_prng = 1;
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+    /* A configuration error in deterministic builds, a missing hook in
+     * live ones. */
+#if ASX_DETERMINISTIC
     ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_INVALID_STATE);
+#else
+    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_HOOK_MISSING);
+#endif
 }
 
 TEST(random_u64_dispatches_to_hook) {
@@ -707,9 +718,16 @@ TEST(reactor_wait_dispatches_to_ghost_hook) {
     reset_counters();
     ASSERT_EQ(install_test_hooks(), ASX_OK);
 
+#if ASX_DETERMINISTIC
     ASSERT_EQ(asx_runtime_reactor_wait(100, &ready, 5), ASX_OK);
     ASSERT_EQ(ready, 3u);
     ASSERT_TRUE(g_reactor_count > 0);
+#else
+    /* Live builds never wait on the ghost reactor: with no native hook
+     * there is nothing to wait on. */
+    ASSERT_EQ(asx_runtime_reactor_wait(100, &ready, 5), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(g_reactor_count, 0);
+#endif
 }
 
 TEST(reactor_wait_prefers_native_hook_when_both_are_installed) {
@@ -849,8 +867,13 @@ TEST(fault_clock_skew_adds_offset) {
     ASSERT_EQ(asx_fault_inject(&fi), ASX_OK);
 
     ASSERT_EQ(asx_runtime_now_ns(&t), ASX_OK);
-    /* logical clock returns 42, skew adds 1000 → 1042 */
+    /* The skew adds 1000 to the clock the build reads: the logical clock
+     * (42) or, live, the wall clock (1000000). */
+#if ASX_DETERMINISTIC
     ASSERT_EQ(t, (asx_time)1042);
+#else
+    ASSERT_EQ(t, (asx_time)1001000);
+#endif
 
     ASSERT_EQ(asx_fault_clear(), ASX_OK);
 }
@@ -1010,7 +1033,7 @@ int main(void) {
     asx_runtime_reset();
     RUN_TEST(now_ns_null_returns_error);
     asx_runtime_reset();
-    RUN_TEST(now_ns_dispatches_to_logical_clock);
+    RUN_TEST(now_ns_dispatches_by_build_mode);
 
     /* Entropy dispatch */
     asx_runtime_reset();
@@ -1018,7 +1041,7 @@ int main(void) {
     asx_runtime_reset();
     RUN_TEST(random_u64_no_hooks_returns_hook_missing);
     asx_runtime_reset();
-    RUN_TEST(random_u64_missing_entropy_stream_returns_invalid_state);
+    RUN_TEST(random_u64_missing_entropy_stream_is_refused);
     asx_runtime_reset();
     RUN_TEST(random_u64_dispatches_to_hook);
 

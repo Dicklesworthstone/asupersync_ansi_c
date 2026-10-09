@@ -27,6 +27,13 @@ static asx_status fixed_ready_reactor(void *ctx, uint64_t logical_step, uint32_t
     return ASX_OK;
 }
 
+/* The same readiness through the native hook, which live builds wait on
+ * instead of the ghost reactor (asx_runtime_reactor_wait). */
+static asx_status fixed_ready_native(void *ctx, uint32_t timeout_ms, uint32_t *ready_count) {
+    (void)timeout_ms;
+    return fixed_ready_reactor(ctx, 0u, ready_count);
+}
+
 static int setup(void) {
     asx_status st;
     asx_runtime_hooks hooks;
@@ -325,6 +332,7 @@ TEST(poll_collects_ready_events_and_wakes_registrations) {
 
     MUST_OK(asx_runtime_hooks_init(&hooks));
     hooks.reactor.ghost_wait_fn = fixed_ready_reactor;
+    hooks.reactor.wait_fn = fixed_ready_native;
     MUST_OK(asx_runtime_set_hooks(&hooks));
 
     MUST_OK(asx_waker_register(1, &w1));
@@ -356,6 +364,7 @@ TEST(poll_caps_ready_delivery_to_max_events) {
 
     MUST_OK(asx_runtime_hooks_init(&hooks));
     hooks.reactor.ghost_wait_fn = fixed_ready_reactor;
+    hooks.reactor.wait_fn = fixed_ready_native;
     MUST_OK(asx_runtime_set_hooks(&hooks));
 
     MUST_OK(asx_waker_register(1, &w1));

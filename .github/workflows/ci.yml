@@ -840,6 +840,15 @@ jobs:
             CC=${{ matrix.compiler }} PROFILE=POSIX DETERMINISTIC=0 LDFLAGS="-lpthread -lrt"
           timeout 120 ./build/live/tests/unit/net/test_net_native
 
+      # The whole unit suite in the live POSIX build: real clock, reactor and
+      # entropy hooks, native backends (bd-9kll.10.5). Tests that depend on
+      # the build mode assert each mode's documented behaviour.
+      - name: Unit suite, live POSIX (DETERMINISTIC=0)
+        if: matrix.profile == 'POSIX'
+        run: |
+          make test-unit BUILD_DIR=build/live CC=${{ matrix.compiler }} \
+            PROFILE=POSIX DETERMINISTIC=0 LDFLAGS="-lpthread -lrt"
+
   # ---------------------------------------------------------------------------
   # embedded-matrix — router-class cross-target builds + QEMU
   # ---------------------------------------------------------------------------

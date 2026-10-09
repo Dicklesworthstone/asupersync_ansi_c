@@ -80,7 +80,9 @@ TEST(runtime_random_seeded_entropy_ok) {
     ASSERT_EQ(out, (uint64_t)42U);
 }
 
-TEST(runtime_reactor_wait_prefers_ghost_in_deterministic) {
+/* Deterministic builds wait on the ghost reactor (a logical step); live
+ * builds on the native reactor hook (a timeout in ms). */
+TEST(runtime_reactor_wait_dispatch_follows_build_mode) {
     asx_runtime_hooks hooks;
     uint32_t ready = 0;
     asx_time logical_now = 99;
@@ -96,9 +98,15 @@ TEST(runtime_reactor_wait_prefers_ghost_in_deterministic) {
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
 
     ASSERT_EQ(asx_runtime_reactor_wait(50, &ready, 7), ASX_OK);
+#if ASX_DETERMINISTIC
     ASSERT_EQ(ready, (uint32_t)8);
     ASSERT_EQ(g_wait_calls, 0);
     ASSERT_EQ(g_ghost_wait_calls, 1);
+#else
+    ASSERT_EQ(ready, (uint32_t)50);
+    ASSERT_EQ(g_wait_calls, 1);
+    ASSERT_EQ(g_ghost_wait_calls, 0);
+#endif
 }
 
 TEST(runtime_allocator_seal_blocks_new_allocations) {
@@ -138,7 +146,7 @@ int main(void) {
     RUN_TEST(deterministic_requires_ghost_reactor);
     RUN_TEST(deterministic_requires_logical_clock);
     RUN_TEST(runtime_random_seeded_entropy_ok);
-    RUN_TEST(runtime_reactor_wait_prefers_ghost_in_deterministic);
+    RUN_TEST(runtime_reactor_wait_dispatch_follows_build_mode);
     RUN_TEST(runtime_allocator_seal_blocks_new_allocations);
     RUN_TEST(runtime_log_sink_silent_when_missing);
     RUN_TEST(runtime_log_sink_invoked);

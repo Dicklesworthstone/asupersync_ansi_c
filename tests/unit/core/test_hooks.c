@@ -198,7 +198,13 @@ TEST(hooks_clock_dispatch) {
     asx_runtime_set_hooks(&hooks);
 
     ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    /* Deterministic builds read the logical clock; live builds the wall
+     * clock hook (asx_runtime_now_ns). */
+#if ASX_DETERMINISTIC
     ASSERT_EQ(now, (asx_time)fake_time);
+#else
+    ASSERT_EQ(now, (asx_time)1000000000ULL);
+#endif
 }
 
 TEST(hooks_log_dispatch) {
@@ -243,8 +249,13 @@ TEST(hooks_entropy_forbidden_without_prng) {
     hooks.deterministic_seeded_prng = 1;
     asx_runtime_set_hooks(&hooks);
 
-    /* Should fail: entropy function not installed */
+    /* No entropy function: a configuration error in deterministic builds,
+     * a missing hook in live ones (asx_runtime_random_u64). */
+#if ASX_DETERMINISTIC
     ASSERT_EQ(asx_runtime_random_u64(&val), ASX_E_INVALID_STATE);
+#else
+    ASSERT_EQ(asx_runtime_random_u64(&val), ASX_E_HOOK_MISSING);
+#endif
 }
 
 int main(void) {

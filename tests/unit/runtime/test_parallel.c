@@ -98,6 +98,14 @@ static asx_status parallel_test_ghost_reactor(void *ctx, uint64_t logical_step,
     return ASX_OK;
 }
 
+/* The same readiness through the native hook, which live builds wait on
+ * instead of the ghost reactor (asx_runtime_reactor_wait). */
+static asx_status parallel_test_native_reactor(void *ctx, uint32_t timeout_ms,
+                                               uint32_t *ready_count) {
+    (void)timeout_ms;
+    return parallel_test_ghost_reactor(ctx, 0u, ready_count);
+}
+
 static int g_parallel_dtor_calls;
 static uint32_t g_parallel_dtor_last_size;
 
@@ -950,6 +958,7 @@ TEST(reactor_readiness_promotes_timed_waker) {
     reset_all();
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
     hooks.reactor.ghost_wait_fn = parallel_test_ghost_reactor;
+    hooks.reactor.wait_fn = parallel_test_native_reactor;
     hooks.deterministic_seeded_prng = 1;
     ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
     ASSERT_EQ(asx_io_driver_init(), ASX_OK);

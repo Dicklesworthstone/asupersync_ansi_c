@@ -35,9 +35,11 @@ static void setup(void) {
     MUST_OK(asx_runtime_init_default(&g_rt));
     /* 1ms per query for easy reasoning */
     asx_vtime_init(&g_vt, 0, 1000000ULL);
-    /* Manually install vtime as the logical clock hook */
+    /* Manually install vtime as the clock: the logical clock hook, and the
+     * wall clock hook a live build reads (asx_runtime_now_ns). */
     orig = asx_runtime_get_hooks();
     memcpy(&hooks, orig, sizeof(hooks));
+    hooks.clock.now_ns_fn = asx_vtime_now_ns;
     hooks.clock.logical_now_ns_fn = asx_vtime_now_ns;
     hooks.clock.ctx = &g_vt;
     MUST_OK(asx_runtime_set_hooks(&hooks));

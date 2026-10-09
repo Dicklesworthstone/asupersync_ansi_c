@@ -234,11 +234,18 @@ TEST(partial_hook_setter_rejects_invalid_clock_and_preserves_old_hooks) {
     ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
     ASSERT_EQ(asx_runtime_builder_get_hooks(&builder, &before), ASX_OK);
 
+    /* Invalid for the build's mode (asx_runtime_hooks_validate): no logical
+     * clock in a deterministic build, no wall clock in a live one. */
     memset(&clock, 0, sizeof(clock));
+#if ASX_DETERMINISTIC
     clock.now_ns_fn = fake_time;
     clock.logical_now_ns_fn = NULL;
-
     ASSERT_EQ(asx_runtime_builder_set_clock_hooks(&builder, &clock), ASX_E_DETERMINISM_VIOLATION);
+#else
+    clock.now_ns_fn = NULL;
+    clock.logical_now_ns_fn = fake_time;
+    ASSERT_EQ(asx_runtime_builder_set_clock_hooks(&builder, &clock), ASX_E_INVALID_ARGUMENT);
+#endif
     ASSERT_EQ(asx_runtime_builder_get_hooks(&builder, &after), ASX_OK);
     ASSERT_EQ(memcmp(&before, &after, sizeof(before)), 0);
 }
@@ -261,8 +268,14 @@ TEST(set_hooks_rejects_invalid_full_hook_table) {
     ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
     ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
 
+    /* Invalid for the build's mode, as above. */
+#if ASX_DETERMINISTIC
     hooks.clock.logical_now_ns_fn = NULL;
     ASSERT_EQ(asx_runtime_builder_set_hooks(&builder, &hooks), ASX_E_DETERMINISM_VIOLATION);
+#else
+    hooks.clock.now_ns_fn = NULL;
+    ASSERT_EQ(asx_runtime_builder_set_hooks(&builder, &hooks), ASX_E_INVALID_ARGUMENT);
+#endif
 }
 
 TEST(set_hooks_accepts_valid_full_hook_table) {

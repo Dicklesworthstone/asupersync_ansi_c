@@ -35,7 +35,14 @@ static uint64_t test_entropy(void *ctx) {
 static void install_test_hooks(void) {
     asx_runtime_hooks hooks;
     asx_runtime_hooks_init(&hooks);
+#if ASX_DETERMINISTIC
     hooks.clock.now_ns_fn = test_wall_clock;
+#else
+    /* Live builds read the wall-clock hook (asx_runtime_now_ns): it reads
+     * the time the clock-fault tests check. */
+    (void)test_wall_clock;
+    hooks.clock.now_ns_fn = test_logical_clock;
+#endif
     hooks.clock.logical_now_ns_fn = test_logical_clock;
     hooks.entropy.random_u64_fn = test_entropy;
     hooks.deterministic_seeded_prng = 1;

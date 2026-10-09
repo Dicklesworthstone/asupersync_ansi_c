@@ -63,8 +63,11 @@ static asx_status lab_bootstrap_runtime(asx_lab *lab) {
     /* Set up runtime config */
     asx_runtime_config_init(&rt_cfg);
 
-    /* Set up hooks with virtual time and seeded entropy */
+    /* Set up hooks with virtual time and seeded entropy. The virtual clock
+     * is the wall clock too: a live build reads that one
+     * (asx_runtime_now_ns), and lab time must be what it reads. */
     asx_runtime_hooks_init(&hooks);
+    hooks.clock.now_ns_fn = asx_vtime_now_ns;
     hooks.clock.logical_now_ns_fn = asx_vtime_now_ns;
     hooks.clock.ctx = &lab->vtime;
     hooks.entropy.random_u64_fn = lab_entropy_u64;
