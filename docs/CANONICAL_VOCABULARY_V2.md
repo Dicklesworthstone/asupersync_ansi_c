@@ -226,7 +226,7 @@ table covers all 67 C codes. Each row is one of three things:
 | `ASX_E_PENDING` (1) | `Poll::Pending`, or `try_join` → `Ok(None)` | exact |
 | `ASX_E_INVALID_ARGUMENT` (100) | `ErrorKind::InvalidInput` (`src/error.rs:46`) | exact |
 | `ASX_E_INVALID_STATE` (101) | `ErrorKind::InvalidStateTransition`; every `PolledAfterCompletion` variant (oneshot/watch/broadcast `RecvError`, `JoinError`, `LockError`, `AcquireError`, `RwLockError`, `BarrierWaitError`); `LockError::Poisoned` | lossy: all misuse-after-terminal maps here |
-| `ASX_E_NOT_FOUND` (102) | — | C-only: handle lookup miss (Rust handles are typed) |
+| `ASX_E_NOT_FOUND` (102) | — | DSL v2 (both engines): a step names an obligation, guard or permit the task does not hold (SCENARIO_DSL_V2 §3). Otherwise C-only: handle lookup miss (Rust handles are typed) |
 | `ASX_E_ALREADY_EXISTS` (103) | — | C-only |
 | `ASX_E_BUFFER_TOO_SMALL` (104) | — | C-only: caller-supplied buffers |
 | `ASX_E_INVALID_TRANSITION` (200) | `ErrorKind::InvalidStateTransition` (lifecycle tables) | exact for lifecycle-table rejections |

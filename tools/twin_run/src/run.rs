@@ -640,6 +640,11 @@ fn run_program(
     })
 }
 
+/// The observation of a step naming an obligation, guard, semaphore permit
+/// or send permit the task does not hold, because the step that would have
+/// acquired it failed or it was already released (DSL §3).
+const NOT_HELD: &str = "ASX_E_NOT_FOUND";
+
 /// Non-blocking steps; also the only steps allowed inside `masked`.
 fn exec_sync(
     cx: &Cx,
@@ -685,10 +690,11 @@ fn exec_sync(
         }
         "commit" | "abort" | "leak" => {
             let name = str_field(step, "obligation")?;
-            let token = local
-                .tokens
-                .remove(name)
-                .ok_or_else(|| format!("unknown obligation {name:?}"))?;
+            let Some(token) = local.tokens.remove(name) else {
+                // Its reserve failed, or a step resolved it (DSL §3).
+                observe(&ctx.shared, me, idx, label, NOT_HELD, Value::Null);
+                return Ok(Flow::Continue);
+            };
             let delivered = match op {
                 "commit" => token.commit(),
                 "abort" => token.abort(abort_reason(str_field(step, "reason")?)?),
@@ -807,22 +813,25 @@ fn exec_sync(
         // Non-blocking sync steps (DSL §3.7).
         "mutex_unlock" => {
             let name = str_field(step, "mutex")?;
-            let guard = local
-                .guards
-                .remove(name)
-                .ok_or_else(|| format!("mutex {name:?} is not held"))?;
-            drop(guard);
-            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+            let status = match local.guards.remove(name) {
+                Some(guard) => {
+                    drop(guard);
+                    "ASX_OK"
+                }
+                None => NOT_HELD, // its mutex_lock failed (DSL §3)
+            };
+            observe(&ctx.shared, me, idx, label, status, Value::Null);
         }
         "sem_release" => {
             let name = str_field(step, "semaphore")?;
-            let permit = local
-                .permits
-                .get_mut(name)
-                .and_then(Vec::pop)
-                .ok_or_else(|| format!("no permit held on semaphore {name:?}"))?;
-            drop(permit);
-            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+            let status = match local.permits.get_mut(name).and_then(Vec::pop) {
+                Some(permit) => {
+                    drop(permit);
+                    "ASX_OK"
+                }
+                None => NOT_HELD, // its sem_acquire failed (DSL §3)
+            };
+            observe(&ctx.shared, me, idx, label, status, Value::Null);
         }
         "notify_one" | "notify_all" => {
             let SyncObj::Notify(n) = sync_obj(&ctx.shared, step, "notify")? else {
@@ -840,10 +849,11 @@ fn exec_sync(
         // Non-blocking mpsc steps (DSL §3.6).
         "permit_send" | "permit_abort" => {
             let name = str_field(step, "permit")?;
-            let (_, permit) = local
-                .send_permits
-                .remove(name)
-                .ok_or_else(|| format!("no held permit {name:?}"))?;
+            let Some((_, permit)) = local.send_permits.remove(name) else {
+                // Its reserve_send failed (DSL §3).
+                observe(&ctx.shared, me, idx, label, NOT_HELD, Value::Null);
+                return Ok(Flow::Continue);
+            };
             let status = if op == "permit_send" {
                 match permit.send(u64_field(step, "value")?) {
                     asupersync::Outcome::Ok(()) => "ASX_OK",

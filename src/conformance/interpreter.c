@@ -1413,8 +1413,9 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
     if (strcmp(op, "commit") == 0 || strcmp(op, "abort") == 0 || strcmp(op, "leak") == 0) {
         it_local_obligation *o = local_obligation(t, it_str(step, "obligation"));
         if (o == NULL) {
-            it_fail_task(t, idx, "unknown obligation");
-            return STEP_END;
+            /* Its reserve failed, or a step resolved it (DSL §3). */
+            observe_status(t, idx, label, ASX_E_NOT_FOUND);
+            return STEP_NEXT;
         }
         if (strcmp(op, "commit") == 0) {
             st = asx_obligation_commit(o->id);
@@ -1452,8 +1453,9 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             i--;
         }
         if (i == 0u) {
-            it_fail_task(t, idx, "release of a guard or permit this task does not hold");
-            return STEP_END;
+            /* Its mutex_lock or sem_acquire failed (DSL §3). */
+            observe_status(t, idx, label, ASX_E_NOT_FOUND);
+            return STEP_NEXT;
         }
         i--;
         st = is_mutex ? release_guard(t, i) : release_permit(t, i);
@@ -1474,10 +1476,14 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
     if (strcmp(op, "permit_send") == 0 || strcmp(op, "permit_abort") == 0) {
         uint32_t i = send_permit_index(t, it_str(step, "permit"));
         uint64_t v = 0;
-        if (i >= t->n_send_permits ||
-            (strcmp(op, "permit_send") == 0 &&
-             !asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &v))) {
-            it_fail_task(t, idx, "permit step on a permit this task does not hold");
+        if (i >= t->n_send_permits) {
+            /* Its reserve_send failed (DSL §3). */
+            observe_status(t, idx, label, ASX_E_NOT_FOUND);
+            return STEP_NEXT;
+        }
+        if (strcmp(op, "permit_send") == 0 &&
+            !asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &v)) {
+            it_fail_task(t, idx, "permit_send needs a value");
             return STEP_END;
         }
         if (strcmp(op, "permit_send") == 0) {

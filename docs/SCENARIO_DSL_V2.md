@@ -160,6 +160,20 @@ Rust that is an `async` body; in C, a poll function with a program counter.
 Every step is an object with `"op"` and the op's fields. "Blocks" means the
 step can suspend. "Cancel" says what a pending, unmasked cancellation does.
 
+**Resources the task does not hold.** Some steps name something an earlier
+step of the same task acquired:
+- `commit`, `abort`, `leak` name an obligation (from `reserve`);
+- `mutex_unlock` names a guard (from `mutex_lock`);
+- `sem_release` names a permit (from `sem_acquire`);
+- `permit_send`, `permit_abort` name a send permit (from `reserve_send`).
+When the acquiring step failed (for example a reserve refused, or a lock
+wait cancelled), or the resource was already resolved or released, the step
+does nothing and is observed as `ASX_E_NOT_FOUND` in both engines.
+`lint-scenarios-v2` fails a curated scenario that names an obligation or
+send permit no `reserve` / `reserve_send` in it acquires, so a misspelt name
+cannot pass this way. A commit after an abort of the same obligation
+observes `ASX_E_NOT_FOUND`: the abort consumed the token.
+
 ### 3.1 Control
 
 | op | Fields | Rust | C | Blocks | Cancel |
@@ -369,7 +383,9 @@ scenario whose step succeeds is a divergence in the failing engine.
 
 The status names come from `CANONICAL_VOCABULARY_V2.md` §5. Typical uses:
 
-- commit after abort: `ASX_E_OBLIGATION_ALREADY_RESOLVED`;
+- commit after abort of the same obligation: `ASX_E_NOT_FOUND` (§3: the
+  abort consumed the token, so the runtime's
+  `ASX_E_OBLIGATION_ALREADY_RESOLVED` is not reachable from the DSL);
 - reserve in a closed region: `ASX_E_REGION_CLOSED`;
 - send on a closed channel: `ASX_E_DISCONNECTED`;
 - reserve over a region limit: `ASX_E_ADMISSION_LIMIT`.
