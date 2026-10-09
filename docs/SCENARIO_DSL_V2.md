@@ -137,12 +137,18 @@ Rust that is an `async` body; in C, a poll function with a program counter.
   returned (`state.rs:104-108`; `runtime/task_handle.rs:172-199`). Children
   spawned with `spawn` keep their returned value if they acknowledged an
   attributed cancel after their first poll (`cx.rs:4901`).
-- **Observations.** Every step that calls a runtime API produces one
-  observation (`CANONICAL_VOCABULARY_V2.md` §7): `{task, step, op, status,
-  value}`. `step` is the 1-based index in the program. Nested programs
-  (`masked`, `spawn`, group members) number their steps as
-  `<outer>.<inner>` in the `op` field, and the outer `step` is that of the
-  enclosing step.
+- **Observations.** Every executed step produces exactly one observation
+  (`CANONICAL_VOCABULARY_V2.md` §7), `{task, step, op, status, value}`.
+  This includes `yield`, `trace` and `return`, so both interpreters record
+  the same list.
+  - `step` is the 1-based index in the program, and `op` is the step's op.
+  - A `masked` step produces one observation per inner step, all with the
+    `masked` step's index and with `op` = `masked/<j>/<inner op>`, where j
+    is 1-based.
+  - Programs of spawned children and of group members are separate tasks
+    with their own names, so their steps are observed under those names.
+  - A step that never runs (because the program ended earlier) produces
+    nothing.
 
 ## 3. Task steps
 

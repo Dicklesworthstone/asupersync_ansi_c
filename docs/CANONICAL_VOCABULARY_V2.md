@@ -47,7 +47,8 @@ gets a canonical name instead:
 | region created by a scenario step | the step's `name` (DSL v2), e.g. `"r.main"` |
 | the root region | `"root"` |
 | task spawned by a scenario step | the step's `name`, e.g. `"t.producer"` |
-| task spawned by another task's program (`Cx::spawn`) | `"<parent>/<k>"`, k = 1-based spawn index within the parent's program |
+| task spawned by a `spawn` step of another task's program | the step's `as` |
+| member of a task group (`race`, `join_all`, `first_ok`, `quorum`) | `"<owner>/g<s>.<i>"`, s = the group step's index in the owner's program, i = 1-based member index |
 | obligation | `"<holder>/o<k>"`, k = 1-based reservation index within the holder task |
 | timer | `"<owner>/tm<k>"`, k = 1-based timer index within the owner task |
 | channel / sync primitive | the step's `name` |
