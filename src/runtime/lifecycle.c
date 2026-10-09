@@ -932,6 +932,7 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
 
     if (out_id == NULL) return ASX_E_INVALID_ARGUMENT;
     if (poll_fn == NULL) return ASX_E_INVALID_ARGUMENT;
+    asx_lab_note_spawn_internal();
 
     st = asx_region_slot_lookup(region, &r);
     if (st != ASX_OK) return st;
@@ -940,7 +941,12 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     /* Finalizing regions may still spawn cleanup tasks; broader admissions
      * like obligations remain OPEN-only. A rejected spawn is Rust's
      * SpawnError::RegionClosed ("closed or draining"; vocabulary §5). */
-    if (!asx_region_can_accept_work(r->state)) return ASX_E_REGION_CLOSED;
+    if (!asx_region_can_accept_work(r->state)) {
+        if (asx_lab_dispatch_active() && asx_task_current() != ASX_INVALID_ID) {
+            asx_lab_defer_refused_admission();
+        }
+        return ASX_E_REGION_CLOSED;
+    }
 
     st = asx_task_slot_alloc(&idx);
     if (st != ASX_OK) return st;
@@ -994,6 +1000,7 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
         if (g_tasks[idx].spawned_in_poll) {
             asx_lab_defer_admission(&g_tasks[idx]);
         } else {
+            asx_lab_arm_budget_deadline_internal(&g_tasks[idx]);
             asx_lab_schedule(&g_tasks[idx], 0u);
         }
     }
@@ -1108,7 +1115,14 @@ asx_status asx_task_spawn_with_budget(asx_region_id region, asx_task_poll_fn pol
     if (st != ASX_OK) return st;
     st = asx_task_slot_lookup(*out_id, &t);
     if (st != ASX_OK) return st;
-    if (budget != NULL) t->budget = asx_budget_meet(&t->budget, budget);
+    if (budget != NULL) {
+        t->budget = asx_budget_meet(&t->budget, budget);
+        /* Lab dispatch: a host-created task's budget-deadline timer runs
+         * on the met budget (a child's is armed at admission). */
+        if (asx_lab_dispatch_active() && !t->spawned_in_poll) {
+            asx_lab_arm_budget_deadline_internal(t);
+        }
+    }
     return ASX_OK;
 }
 

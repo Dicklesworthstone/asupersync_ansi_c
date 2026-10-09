@@ -815,6 +815,54 @@ ASX_API ASX_MUST_USE asx_status asx_scheduler_run_until_idle(asx_region_id regio
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_scheduler_use_lab_dispatch(uint64_t seed);
 
+/* Lanes a lab dispatch comes from, numbered as Rust's forced-schedule
+ * artifact tags them (forced_schedule_lane_tag, lab/runtime.rs:1547). The
+ * lab never feeds a timed lane at the pinned rev. */
+#define ASX_DISPATCH_LANE_CANCEL 0u
+#define ASX_DISPATCH_LANE_READY 2u
+
+/* One lab dispatch, as Rust's forced-schedule recorder writes it
+ * (ForcedDispatch, lab/runtime.rs:131-137, 4627-4644): the task picked,
+ * its lane, the lab step (counted from 1 over every run since
+ * asx_scheduler_use_lab_dispatch) and the clock at the pick. */
+typedef struct {
+    asx_task_id task;
+    uint64_t step;
+    asx_time at;
+    uint8_t lane;
+} asx_dispatch_record;
+
+/* Record each later lab dispatch into buf[0 .. capacity), in order; NULL
+ * or a zero capacity stops recording. asx_scheduler_use_lab_dispatch and
+ * asx_runtime_reset stop it too.
+ *
+ * asx_scheduler_dispatches_recorded() returns how many dispatches happened
+ * since recording started, which exceeds the capacity when buf was too
+ * small (only the first `capacity` are stored).
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API void asx_scheduler_record_dispatches(asx_dispatch_record *buf, uint32_t capacity);
+ASX_API uint32_t asx_scheduler_dispatches_recorded(void);
+
+/* Spawn refusals under lab dispatch. Rust's cx.spawn queues a child even
+ * when its region is closing or closed, and the next step's admission
+ * refuses it (in FIFO order with the other admissions); only then does a
+ * join of it resolve and wake the joiner. asx_task_spawn refuses such a
+ * child at once (ASX_E_REGION_CLOSED); called from a poll under lab
+ * dispatch it also queues the refusal for the next step, and
+ * asx_scheduler_last_spawn_refusal() returns its ticket right after the
+ * call (0 when the last spawn queued none).
+ *
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API uint32_t asx_scheduler_last_spawn_refusal(void);
+
+/* Wait, from self's poll, for the refusal with this ticket (see
+ * asx_scheduler_last_spawn_refusal). Returns ASX_OK once it was delivered,
+ * and for ticket 0; otherwise parks self until then (woken at the priority
+ * of this poll's waker) and returns ASX_E_PENDING, for the poll to return.
+ * ASX_E_INVALID_STATE outside self's poll, or a lookup error.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_await_refusal(asx_task_id self, uint32_t ticket);
+
 /* -------------------------------------------------------------------
  * Wake-driven waiting (park / wake / timers / join)
  * ------------------------------------------------------------------- */

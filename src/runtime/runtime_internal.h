@@ -106,6 +106,13 @@ typedef struct {
     uint8_t lab_scheduled;
     uint8_t lab_waker_prio;
     uint8_t lab_admission_pending;
+    /* A checkpoint of the current poll observed the cancel (Rust's
+     * cancel_acknowledged, consumed after the poll, LR:4809); a budget
+     * cancel a checkpoint raised whose cancel waker has not fired yet
+     * (Rust's cancel_wakers_pending, cx.rs:2824-2840, fired with the
+     * acknowledgement, record/task.rs:1216-1237). */
+    uint8_t lab_ack_in_poll;
+    uint8_t cancel_wakers_pending;
     /* Bumped whenever a poll gets a new waker (the first poll, or a
      * priority different from the last poll's); the traced sleep timer
      * remembers the epoch it was registered under (Sleep re-registers on a
@@ -129,6 +136,12 @@ typedef struct {
     asx_time wake_at;
     uint64_t timer_seq;
     uint32_t timer_pos; /* heap index, ASX_SLOT_NONE when disarmed */
+    /* Lab dispatch: the budget-deadline timer Rust arms for the task when
+     * it is created or admitted (Cx::arm_budget_deadline), a wheel timer of
+     * its own, pending until it fires or the task ends. */
+    uint8_t deadline_timer_armed;
+    asx_time deadline_timer_at;
+    uint64_t deadline_timer_seq;
     /* Deadline of the task's traced sleep timer (asx_task_wait_until),
      * 0 when none: ASX_TRACE_TIMER_SET when registered, TIMER_FIRE when
      * due, TIMER_CANCEL when the task completes first. Internal wakeups
@@ -146,6 +159,11 @@ typedef struct {
      * completes, if that slot still holds generation `watcher_gen`. */
     uint32_t watcher;
     uint16_t watcher_gen;
+    /* Under lab dispatch, the waker priority of the watcher's poll that
+     * registered the watch: a join registration keeps that waker until the
+     * join is polled again (task_handle.rs:115-133), so a watcher that has
+     * since changed priority is woken at the old one. */
+    uint8_t watcher_prio;
     /* Budget: deadline -> DEADLINE cancel, poll quota -> POLL_QUOTA cancel,
      * cost quota -> COST_BUDGET cancel. Inherited from the region. */
     asx_budget budget;
@@ -329,11 +347,31 @@ int asx_lab_is_scheduled(const asx_task_slot *t);
 /* Ready lane (no-op when already scheduled) / cancel lane (always pushes). */
 void asx_lab_schedule(asx_task_slot *t, uint8_t priority);
 void asx_lab_schedule_cancel(asx_task_slot *t, uint8_t priority);
-/* The step's pick for value r: 1 and the slot, or 0 when nothing is live. */
-int asx_lab_pick(uint64_t r, uint32_t *out_slot, int *out_cancel_lane);
+/* The step's pick for value r: 1 with the slot and the generation of the
+ * task picked, or 0 when nothing is scheduled. A generation that is not
+ * the slot's live task's, or a terminal task, is a retired task: its
+ * dispatch polls nothing. */
+int asx_lab_pick(uint64_t r, uint32_t *out_slot, uint16_t *out_task_gen, int *out_cancel_lane);
+/* Arm a task's budget-deadline timer as Rust does when the task is created
+ * or admitted (lab dispatch only; scheduler.c). */
+void asx_lab_arm_budget_deadline_internal(asx_task_slot *t);
+/* A cancel waker that fires after its task (slot, generation) completed:
+ * Rust schedules the retired task id, and the next pick of it dispatches
+ * nothing. */
+void asx_lab_schedule_cancel_retired(uint32_t slot, uint16_t task_gen, uint8_t priority);
+/* A step begins: its number, from 1 (Rust's LabRuntime::steps). */
+uint64_t asx_lab_step_begin_internal(void);
+/* A pick, for asx_scheduler_record_dispatches. */
+void asx_lab_record_dispatch_internal(uint32_t slot, uint16_t task_gen, int cancel_lane,
+                                      uint64_t step, asx_time at);
 /* A completed task: purge its entries if it is still scheduled. */
 void asx_lab_forget(asx_task_slot *t);
 void asx_lab_defer_admission(asx_task_slot *t);
+/* A spawn call starts (clears the last refusal ticket); one refused from a
+ * poll because its region is closing is queued for the next step's
+ * admission, as Rust's spawn mailbox refuses it then. */
+void asx_lab_note_spawn_internal(void);
+void asx_lab_defer_refused_admission(void);
 int asx_lab_admissions_pending(void);
 void asx_lab_admit_pending(void);
 /* A cancel request's wake of the task's CancelTaskWaker; held back while a

@@ -166,13 +166,17 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
         /* Lab dispatch: a region cancel or handle abort that changed
          * anything schedules the task on the cancel lane at its request's
          * cleanup priority; a changed reason also reaches its cancel
-         * waker. */
+         * waker, as does a wake a budget cancel left due
+         * (record/task.rs:840-866). */
         if (asx_lab_dispatch_active() && source != ASX_CANCEL_SRC_BUDGET) {
             if ((source == ASX_CANCEL_SRC_REGION || source == ASX_CANCEL_SRC_HANDLE) &&
                 (reason_changed || budget_changed)) {
                 asx_lab_schedule_cancel(t, cleanup.priority);
             }
-            if (reason_changed) asx_lab_cancel_wake(t);
+            if (reason_changed || t->cancel_wakers_pending) {
+                t->cancel_wakers_pending = 0u;
+                asx_lab_cancel_wake(t);
+            }
         }
         return ASX_OK;
     }
@@ -507,17 +511,31 @@ static uint32_t cleanup_polls_left(const asx_task_slot *t) {
 asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
     asx_task_slot *t;
     asx_status st;
+    asx_cancel_reason before;
+    int was_pending;
+    int budget_cancel = 0;
+    int reason_changed;
 
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
     st = asx_task_slot_lookup(self, &t);
     if (st != ASX_OK) return st;
+    before = t->cancel_reason;
+    was_pending = t->cancel_pending;
 
-    /* Budget deadline observed inline, between scheduler polls. */
-    if (!t->cancel_pending && t->budget.deadline != 0u && !asx_task_is_terminal(t->state)) {
-        if (asx_cancel_now_internal() >= t->budget.deadline) {
-            st = asx_task_cancel_budget_internal(self, ASX_CANCEL_DEADLINE, t->budget.deadline);
+    /* Budget deadline observed inline, between scheduler polls. Under lab
+     * dispatch, as Rust's checkpoint does (checkpoint_budget_exhaustion,
+     * cx.rs:3112-3130): a passed deadline is a DEADLINE candidate stamped
+     * now, strengthening a cancel already pending; the budget-deadline
+     * timer has stamped the first one with the deadline itself. */
+    if (t->budget.deadline != 0u && !asx_task_is_terminal(t->state) &&
+        (asx_lab_dispatch_active() || !t->cancel_pending)) {
+        asx_time now = asx_cancel_now_internal();
+        if (now >= t->budget.deadline) {
+            asx_time stamp = asx_lab_dispatch_active() ? now : t->budget.deadline;
+            st = asx_task_cancel_budget_internal(self, ASX_CANCEL_DEADLINE, stamp);
             (void)st;
+            budget_cancel = 1;
         }
     }
 
@@ -532,12 +550,20 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
             st = asx_task_cancel_budget_internal(self, ASX_CANCEL_POLL_QUOTA,
                                                  asx_cancel_now_internal());
             (void)st;
+            budget_cancel = 1;
         } else if (t->budget.cost_quota == 0u) {
             st = asx_task_cancel_budget_internal(self, ASX_CANCEL_COST_BUDGET,
                                                  asx_cancel_now_internal());
             (void)st;
+            budget_cancel = 1;
         }
     }
+    /* A budget cancel that changed the reason leaves the task's cancel
+     * waker due; it fires with the poll's acknowledgement, even when the
+     * poll completes the task (cx.rs:2834-2840, record/task.rs:1227-1233,
+     * lab/runtime.rs:5011). */
+    reason_changed = !was_pending || !reason_same(&before, &t->cancel_reason);
+    if (budget_cancel && t->cancel_pending && reason_changed) t->cancel_wakers_pending = 1u;
 
     out->masked = 0;
 
@@ -583,6 +609,10 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
     out->phase = t->cancel_phase;
     out->polls_remaining = cleanup_polls_left(t);
     out->kind = t->cancel_reason.kind;
+    /* Every unmasked observation acknowledges (Rust's checkpoint sets
+     * cancel_acknowledged each time, cx.rs:2842-2844); the scheduler
+     * consumes it after the poll. */
+    if (t->in_poll) t->lab_ack_in_poll = 1u;
 
     /* The cleanup budget becomes the task's budget when this poll
      * returns (asx_task_apply_cleanup_budget_internal), as Rust applies

@@ -57,6 +57,13 @@ static void group_collect(asx_task_group *g, const asx_task_slot *owner) {
     uint32_t owner_idx = (uint32_t)(owner - g_tasks);
     uint32_t n = g->mode == ASX_TASK_GROUP_FIRST_OK ? g->spawned : g->count;
     uint32_t i;
+    /* Rust's join_all awaits the members' joins one by one, in order
+     * (cx/scope.rs:1479-1490), and so does a quorum's drain (:1897-1903):
+     * this poll joins only the first unfinished member. A member whose join
+     * an earlier poll registered keeps that registration, at that poll's
+     * waker priority, until it fires (task_handle.rs:115-133). */
+    int sequential = g->mode == ASX_TASK_GROUP_JOIN_ALL ||
+                     (g->mode == ASX_TASK_GROUP_QUORUM && g->phase == ASX_TASK_GROUP_DRAINING);
 
     for (i = 0; i < n; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
@@ -79,10 +86,8 @@ static void group_collect(asx_task_group *g, const asx_task_slot *owner) {
         } else {
             t->watcher = owner_idx;
             t->watcher_gen = owner->generation;
-            /* Rust's join_all awaits the members' joins one by one, in
-             * order (cx/scope.rs:1479-1490): only the first unfinished
-             * member wakes the owner. */
-            if (g->mode == ASX_TASK_GROUP_JOIN_ALL) break;
+            t->watcher_prio = owner->lab_waker_prio;
+            if (sequential) break;
             continue;
         }
         g->completed[i] = 1;
@@ -151,8 +156,9 @@ static asx_status group_quorum_result(const asx_task_group *g) {
 
 /* Decide the group from the members collected so far. Member completion
  * takes precedence over owner cancellation and the deadline. */
-static void group_decide(asx_task_group *g, const asx_task_slot *owner) {
+static void group_decide(asx_task_group *g, const asx_task_slot *owner, asx_task_id self) {
     uint32_t i;
+    int owner_cancelled;
 
     switch (g->mode) {
     case ASX_TASK_GROUP_JOIN_ALL:
@@ -184,8 +190,17 @@ static void group_decide(asx_task_group *g, const asx_task_slot *owner) {
     if (g->phase != ASX_TASK_GROUP_COLLECTING) return;
 
     /* join_all's joins are uninterruptible: the owner's cancel does not
-     * reach the members (Rust's join_all awaits every join). */
-    if (owner->cancel_pending && g->mode != ASX_TASK_GROUP_JOIN_ALL) {
+     * reach the members (Rust's join_all awaits every join). QUORUM sees
+     * it through a checkpoint (cx/scope.rs:1874), which also raises a
+     * spent poll quota, attributed to the owner and stamped now, and
+     * acknowledges the cancel. */
+    if (g->mode == ASX_TASK_GROUP_QUORUM) {
+        asx_checkpoint_result cp;
+        owner_cancelled = asx_checkpoint(self, &cp) == ASX_OK && cp.cancelled;
+    } else {
+        owner_cancelled = owner->cancel_pending && g->mode != ASX_TASK_GROUP_JOIN_ALL;
+    }
+    if (owner_cancelled) {
         g->owner_cancelled = 1u;
         g->owner_reason = owner->cancel_reason;
         group_begin_drain(g, ASX_CANCEL_PARENT, ASX_E_CANCELLED, 1);
@@ -391,7 +406,7 @@ asx_status asx_task_group_poll(asx_task_group *g, asx_task_id self) {
     if (g->mode == ASX_TASK_GROUP_FIRST_OK) return group_first_ok_poll(g, owner, self);
 
     group_collect(g, owner);
-    if (g->phase == ASX_TASK_GROUP_COLLECTING) group_decide(g, owner);
+    if (g->phase == ASX_TASK_GROUP_COLLECTING) group_decide(g, owner, self);
     if (g->phase == ASX_TASK_GROUP_DRAINING) {
         group_send_cancels(g);
         group_collect(g, owner);

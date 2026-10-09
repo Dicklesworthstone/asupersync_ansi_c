@@ -538,6 +538,43 @@ TEST(quorum_owner_cancel_drains_with_the_owner_reason) {
     ASSERT_EQ((int)g_m[1].kind, (int)ASX_CANCEL_SHUTDOWN);
 }
 
+/* A quorum polls its owner's checkpoint while undecided (Rust Scope::quorum,
+ * cx/scope.rs:1874). The poll that spends the owner's last quota unit
+ * raises POLL_QUOTA there, attributed to the owner and stamped now, and
+ * the members are drained with that reason (fuzz finding gen-4-42). */
+TEST(quorum_checkpoint_raises_the_owner_poll_quota) {
+    asx_region_id r;
+    asx_task_id owner;
+    asx_budget quota;
+    asx_cancel_reason reason;
+    uint32_t i;
+
+    setup();
+    member_init(0, 1, ASX_E_TIMED_OUT);
+    member_init(1, 0, ASX_OK);
+    member_init(2, 0, ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    memset(&g_owner, 0, sizeof(g_owner));
+    ASSERT_EQ(asx_task_group_init(&g_owner.group, ASX_TASK_GROUP_QUORUM, 1), ASX_OK);
+    /* Poll 1 starts waiting; poll 2, woken by member 0's failure, takes
+     * the last unit and finds the quorum still possible. */
+    quota = asx_budget_from_polls(2);
+    ASSERT_EQ(asx_task_spawn_with_budget(r, poll_owner, &g_owner, &quota, &owner), ASX_OK);
+    for (i = 0; i < 3u; i++) {
+        g_m[i].region = r;
+        ASSERT_EQ(asx_task_group_spawn(&g_owner.group, r, poll_member, &g_m[i], NULL), ASX_OK);
+    }
+    ASSERT_TRUE(run_until_owner_done(r));
+    ASSERT_EQ(g_owner.result, ASX_E_CANCELLED);
+    ASSERT_EQ((int)g_m[1].kind, (int)ASX_CANCEL_POLL_QUOTA);
+    ASSERT_EQ((int)g_m[2].kind, (int)ASX_CANCEL_POLL_QUOTA);
+    ASSERT_EQ(asx_task_get_cancel_reason(owner, &reason), ASX_OK);
+    ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_POLL_QUOTA);
+    ASSERT_TRUE(asx_handle_index(reason.origin_task) == asx_handle_index(owner));
+    ASSERT_TRUE(asx_handle_index(reason.origin_region) == asx_handle_index(r));
+    ASSERT_EQ(reason.timestamp, (asx_time)(1u * MS));
+}
+
 TEST(quorum_rejects_invalid_threshold_after_draining) {
     asx_region_id r;
     asx_task_id owner;
@@ -740,6 +777,7 @@ int main(void) {
     RUN_TEST(quorum_impossible_resolves_early);
     RUN_TEST(quorum_reports_a_panic_even_when_met);
     RUN_TEST(quorum_owner_cancel_drains_with_the_owner_reason);
+    RUN_TEST(quorum_checkpoint_raises_the_owner_poll_quota);
     RUN_TEST(quorum_rejects_invalid_threshold_after_draining);
     RUN_TEST(owner_cancel_drains_members_with_parent_kind);
     RUN_TEST(deadline_times_out_and_drains_members);

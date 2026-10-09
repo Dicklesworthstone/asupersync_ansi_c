@@ -67,6 +67,25 @@ static lab_lane g_lab_ready;
 static uint32_t g_lab_admit[ASX_MAX_TASKS];
 static uint32_t g_lab_admit_n = 0;
 
+/* Spawns from a poll into a closing or closed region. C refuses them at
+ * once, Rust queues them in the spawn mailbox and the next step's admission
+ * refuses them (state.rs:1702), in FIFO order with the other admissions:
+ * only then does a join of one resolve, waking its joiner. g_lab_admit
+ * holds LAB_ADMIT_REFUSAL | record for them. */
+#define LAB_ADMIT_REFUSAL 0x80000000u
+
+typedef struct {
+    uint8_t delivered;
+    uint8_t has_waiter;
+    uint8_t waiter_prio;
+    uint16_t waiter_gen;
+    uint32_t waiter;
+} lab_refusal;
+
+static lab_refusal g_lab_refusal[ASX_MAX_TASKS];
+static uint32_t g_lab_refusal_n = 0;
+static uint32_t g_lab_last_refusal = 0; /* ticket of the last spawn's refusal */
+
 /* Cancel wakes held back while a region cancel visits its tasks: Rust
  * schedules every task's cancel first and dispatches the cancel wakers
  * after (state.rs:7811-7876, run.rs driver). */
@@ -114,6 +133,28 @@ typedef struct {
 static lab_handle_cancel g_lab_hc[LAB_HANDLE_CAP];
 static uint32_t g_lab_hc_n = 0;
 
+/* Retired tasks a cancel waker scheduled after they completed: Rust's
+ * scheduled set holds task ids, so the next pick of one is a dispatch that
+ * polls nothing (a stale wake names a retired future, LR:4772-4790). By
+ * slot and generation, so a released and reused slot is not confused with
+ * its old task. */
+#define LAB_RETIRED_CAP ((uint32_t)ASX_MAX_TASKS)
+
+typedef struct {
+    uint32_t slot;
+    uint16_t task_gen;
+} lab_retired;
+
+static lab_retired g_lab_retired[LAB_RETIRED_CAP];
+static uint32_t g_lab_retired_n = 0;
+
+/* Rust's LabRuntime::steps (LR:4484), and the caller's dispatch record
+ * buffer (asx_scheduler_record_dispatches). */
+static uint64_t g_lab_steps = 0;
+static asx_dispatch_record *g_lab_rec = NULL;
+static uint32_t g_lab_rec_cap = 0;
+static uint32_t g_lab_rec_n = 0;
+
 void asx_lab_dispatch_reset_internal(void) {
     g_lab_active = 0;
     g_lab_rng = 0;
@@ -124,13 +165,45 @@ void asx_lab_dispatch_reset_internal(void) {
     g_lab_cancel.n = 0;
     g_lab_ready.n = 0;
     g_lab_admit_n = 0;
+    g_lab_refusal_n = 0;
+    g_lab_last_refusal = 0;
     g_lab_wake_n = 0;
     g_lab_batch = 0;
     g_lab_rcmd_n = 0;
     g_lab_hc_n = 0;
+    g_lab_retired_n = 0;
+    g_lab_steps = 0;
+    g_lab_rec = NULL;
+    g_lab_rec_cap = 0;
+    g_lab_rec_n = 0;
 }
 
 int asx_lab_dispatch_active(void) { return g_lab_active; }
+
+uint64_t asx_lab_step_begin_internal(void) { return ++g_lab_steps; }
+
+void asx_lab_record_dispatch_internal(uint32_t slot, uint16_t task_gen, int cancel_lane,
+                                      uint64_t step, asx_time at) {
+    if (g_lab_rec_n < g_lab_rec_cap) {
+        asx_dispatch_record *d = &g_lab_rec[g_lab_rec_n];
+        d->task = g_tasks[slot].generation == task_gen
+                      ? asx_task_handle_for_slot(slot)
+                      : asx_handle_pack(ASX_TYPE_TASK, 0u,
+                                        asx_handle_pack_index(task_gen, (uint16_t)slot));
+        d->step = step;
+        d->at = at;
+        d->lane = (uint8_t)(cancel_lane ? ASX_DISPATCH_LANE_CANCEL : ASX_DISPATCH_LANE_READY);
+    }
+    if (g_lab_rec_n < UINT32_MAX) g_lab_rec_n++;
+}
+
+void asx_scheduler_record_dispatches(asx_dispatch_record *buf, uint32_t capacity) {
+    g_lab_rec = buf;
+    g_lab_rec_cap = buf != NULL ? capacity : 0u;
+    g_lab_rec_n = 0;
+}
+
+uint32_t asx_scheduler_dispatches_recorded(void) { return g_lab_rec_n; }
 
 int asx_lab_dispatch_overflowed(void) { return g_lab_overflow; }
 
@@ -208,6 +281,48 @@ void asx_lab_schedule_cancel(asx_task_slot *t, uint8_t priority) {
     lab_push(&g_lab_cancel, t, priority);
 }
 
+void asx_lab_schedule_cancel_retired(uint32_t slot, uint16_t task_gen, uint8_t priority) {
+    uint32_t k;
+    lab_entry *e;
+    for (k = 0; k < g_lab_retired_n; k++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_lab_retired_n <= LAB_RETIRED_CAP");
+        if (g_lab_retired[k].slot == slot && g_lab_retired[k].task_gen == task_gen) break;
+    }
+    if (k == g_lab_retired_n) {
+        if (g_lab_retired_n >= LAB_RETIRED_CAP) {
+            g_lab_overflow = 1;
+            return;
+        }
+        g_lab_retired[g_lab_retired_n].slot = slot;
+        g_lab_retired[g_lab_retired_n].task_gen = task_gen;
+        g_lab_retired_n++;
+        g_lab_scheduled++;
+    }
+    if (g_lab_cancel.n >= LAB_LANE_CAP) {
+        g_lab_overflow = 1;
+        return;
+    }
+    e = &g_lab_cancel.e[g_lab_cancel.n++];
+    e->slot = slot;
+    e->task_gen = task_gen;
+    e->priority = priority;
+    e->gen = g_lab_next_gen++;
+}
+
+/* A retired id leaves the scheduled set as it is picked. */
+static int lab_retired_take(uint32_t slot, uint16_t task_gen) {
+    uint32_t k;
+    for (k = 0; k < g_lab_retired_n; k++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_lab_retired_n <= LAB_RETIRED_CAP");
+        if (g_lab_retired[k].slot == slot && g_lab_retired[k].task_gen == task_gen) {
+            g_lab_retired[k] = g_lab_retired[--g_lab_retired_n];
+            g_lab_scheduled--;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int lab_entry_live(const lab_entry *e) {
     const asx_task_slot *t;
     if (e->slot >= g_task_count) return 0;
@@ -224,8 +339,9 @@ static void lab_remove_at(lab_lane *lane, uint32_t k) {
 
 /* pop_cancel / pop_ready (PR:674-685, 985-998): the group of entries at the
  * highest priority, in generation order and capped at 256, yields entry
- * r % n; a dead one is dropped and the pick retried with the same r. */
-static int lab_pop(lab_lane *lane, uint64_t r, uint32_t *out_slot) {
+ * r % n; a dead one is dropped and the pick retried with the same r. A
+ * retired task still in the scheduled set is a pick. */
+static int lab_pop(lab_lane *lane, uint64_t r, uint32_t *out_slot, uint16_t *out_task_gen) {
     uint32_t group[LAB_GROUP_CAP];
     for (;;) {
         uint32_t k;
@@ -250,24 +366,31 @@ static int lab_pop(lab_lane *lane, uint64_t r, uint32_t *out_slot) {
             g_tasks[e.slot].lab_scheduled = 0u;
             g_lab_scheduled--;
             *out_slot = e.slot;
+            *out_task_gen = e.task_gen;
+            return 1;
+        }
+        if (lab_retired_take(e.slot, e.task_gen)) {
+            *out_slot = e.slot;
+            *out_task_gen = e.task_gen;
             return 1;
         }
     }
 }
 
-int asx_lab_pick(uint64_t r, uint32_t *out_slot, int *out_cancel_lane) {
+int asx_lab_pick(uint64_t r, uint32_t *out_slot, uint16_t *out_task_gen, int *out_cancel_lane) {
     *out_cancel_lane = 0;
-    if (g_lab_streak < LAB_CANCEL_STREAK_LIMIT && lab_pop(&g_lab_cancel, r, out_slot)) {
+    if (g_lab_streak < LAB_CANCEL_STREAK_LIMIT &&
+        lab_pop(&g_lab_cancel, r, out_slot, out_task_gen)) {
         g_lab_streak++;
         *out_cancel_lane = 1;
         return 1;
     }
     /* The timed lane is never fed by the lab at the pinned rev (LR:7658). */
-    if (lab_pop(&g_lab_ready, r, out_slot)) {
+    if (lab_pop(&g_lab_ready, r, out_slot, out_task_gen)) {
         g_lab_streak = 0;
         return 1;
     }
-    if (lab_pop(&g_lab_cancel, r, out_slot)) {
+    if (lab_pop(&g_lab_cancel, r, out_slot, out_task_gen)) {
         g_lab_streak = 1;
         *out_cancel_lane = 1;
         return 1;
@@ -306,6 +429,42 @@ void asx_lab_defer_admission(asx_task_slot *t) {
     }
     t->lab_admission_pending = 1u;
     g_lab_admit[g_lab_admit_n++] = (uint32_t)(t - g_tasks);
+}
+
+void asx_lab_note_spawn_internal(void) { g_lab_last_refusal = 0; }
+
+void asx_lab_defer_refused_admission(void) {
+    lab_refusal *rf;
+    if (g_lab_admit_n >= ASX_MAX_TASKS || g_lab_refusal_n >= ASX_MAX_TASKS) {
+        g_lab_overflow = 1;
+        return;
+    }
+    rf = &g_lab_refusal[g_lab_refusal_n];
+    memset(rf, 0, sizeof(*rf));
+    g_lab_admit[g_lab_admit_n++] = LAB_ADMIT_REFUSAL | g_lab_refusal_n;
+    g_lab_refusal_n++;
+    g_lab_last_refusal = g_lab_refusal_n; /* tickets count from 1 */
+}
+
+uint32_t asx_scheduler_last_spawn_refusal(void) { return g_lab_last_refusal; }
+
+asx_status asx_task_await_refusal(asx_task_id self, uint32_t ticket) {
+    asx_task_slot *t;
+    lab_refusal *rf;
+    asx_status st;
+    if (ticket == 0u || ticket > g_lab_refusal_n) return ASX_OK;
+    rf = &g_lab_refusal[ticket - 1u];
+    if (rf->delivered) return ASX_OK;
+    st = asx_task_slot_lookup(self, &t);
+    if (st != ASX_OK) return st;
+    if (!t->in_poll) return ASX_E_INVALID_STATE;
+    /* The join's registration: this poll's waker. */
+    rf->has_waiter = 1u;
+    rf->waiter = (uint32_t)(t - g_tasks);
+    rf->waiter_gen = t->generation;
+    rf->waiter_prio = t->lab_waker_prio;
+    t->park_requested = 1;
+    return ASX_E_PENDING;
 }
 
 int asx_lab_admissions_pending(void) { return g_lab_admit_n > 0u; }
@@ -365,12 +524,27 @@ void asx_lab_admit_pending(void) {
     uint32_t n = g_lab_admit_n;
     g_lab_admit_n = 0;
     for (i = 0; i < n; i++) {
-        asx_task_slot *t = &g_tasks[g_lab_admit[i]];
+        asx_task_slot *t;
         ASX_CHECKPOINT_WAIVER("bounded: admissions <= ASX_MAX_TASKS");
+        if (g_lab_admit[i] & LAB_ADMIT_REFUSAL) {
+            /* Refused: its join resolves, waking the joiner's waker. */
+            lab_refusal *rf = &g_lab_refusal[g_lab_admit[i] & ~LAB_ADMIT_REFUSAL];
+            rf->delivered = 1u;
+            if (rf->has_waiter) {
+                asx_task_slot *w = &g_tasks[rf->waiter];
+                if (w->alive && w->generation == rf->waiter_gen) {
+                    asx_lab_schedule(w, rf->waiter_prio);
+                }
+            }
+            continue;
+        }
+        t = &g_tasks[g_lab_admit[i]];
         if (!t->alive || !t->lab_admission_pending) continue;
         t->lab_admission_pending = 0u;
-        /* Admission adds it to its region's membership (state.rs:5212). */
+        /* Admission adds it to its region's membership (state.rs:5212)
+         * and arms its budget-deadline timer (state.rs:4892). */
         t->member_seq = asx_task_next_member_seq_internal();
+        asx_lab_arm_budget_deadline_internal(t);
         lab_take_handle_cancels_for(g_lab_admit[i]);
         asx_lab_schedule(t, t->budget.priority);
     }

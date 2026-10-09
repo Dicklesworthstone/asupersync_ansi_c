@@ -13,9 +13,8 @@
 //!
 //! Left out on purpose: multi-permit acquire, race
 //! (same-round ties are an RNG pick in Rust and the lowest index in C, a
-//! known divergence, bd-g652), quorum (its error mapping is open),
-//! region_limits, actors and supervision. join_all and first_ok groups are
-//! generated.
+//! known divergence, bd-g652), region_limits, actors and supervision.
+//! join_all, first_ok and quorum groups are generated.
 
 use serde_json::{Value, json};
 
@@ -230,15 +229,18 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
             // member programs (race is left out, see above).
             18 if held.groups == 0 => {
                 held.groups += 1;
-                let op = if rng.chance(50) {
-                    "join_all"
-                } else {
-                    "first_ok"
-                };
                 let members: Vec<Value> = (0..1 + rng.below(3))
                     .map(|_| Value::Array(child_program(rng)))
                     .collect();
-                return json!({"op": op, "members": members});
+                return match rng.below(3) {
+                    0 => json!({"op": "join_all", "members": members}),
+                    1 => json!({"op": "first_ok", "members": members}),
+                    _ => {
+                        // Sometimes one more than the members: InvalidQuorum.
+                        let needed = 1 + rng.below(members.len() as u64 + 1);
+                        json!({"op": "quorum", "needed": needed, "members": members})
+                    }
+                };
             }
             _ => {}
         }

@@ -74,13 +74,23 @@ prio = cx.budget.priority
 waker = cached waker if its prio == prio else new TaskWaker{t, prio}   (§6)
 poll
 consume_cancel_ack -> acknowledge_cancel (budget := cleanup budget)
-Ready:   forget_task(t) (purges t's entries only if t is scheduled); complete; wake waiters
-Pending: cache (waker, prio); if acknowledged: schedule_cancel(t, cleanup priority)
+Ready:   forget_task(t) (purges t's entries only if t is scheduled); complete; wake waiters;
+         then t's cancel waker, if acknowledged and due (§5)
+Pending: cache (waker, prio); if acknowledged: schedule_cancel(t, cleanup priority);
+         then t's cancel waker, if due (§5)
 ```
+
+A pick of a task that already completed (a retired id a due cancel waker
+scheduled, §5) is a dispatch that polls nothing (LR:4772-4790).
 
 Consequences:
 - A child spawned during step N's poll is admitted at the start of step
   N+1, before that step's draw.
+- A child spawned into a closing or closed region also waits in the spawn
+  mailbox. Step N+1's admission refuses it (`state.rs:1702`), but the step
+  still runs and draws. C refuses the spawn at once and still takes that
+  step (`asx_lab_defer_refused_admission`; fixture
+  `spawn-into-cancelled-region-step-001`).
 - A region command a task queued during step N (Create, Cancel, Close:
   `Cx::open_child_region`, `ChildRegion::cancel`, `ChildRegion::close`
   and its drop backstop) is applied at the start of step N+1, after the
@@ -173,6 +183,26 @@ A CancelTaskWaker:
 - fires when the Cx is newly cancel-requested or its reason strengthened
   (TR:700-870).
 
+### Acknowledgements and due cancel wakers
+
+- Every unmasked checkpoint that observes the cancel acknowledges it, not
+  only the first (`cx.rs:2842-2844`). The lab consumes the acknowledgement
+  after the poll (`consume_cancel_ack`, TR:1171-1245). A pending poll that
+  acknowledged goes to the cancel lane at the cleanup priority.
+- A checkpoint whose budget check changes the reason marks the task's
+  cancel waker due (`cx.rs:2824-2840`). The check covers a passed deadline,
+  a poll quota of 0 and a cost quota of 0.
+- The acknowledgement fires a due waker after the poll:
+  - on Pending, after the cleanup `schedule_cancel`;
+  - on Ready, after the completion (LR:5011). Rust then schedules the
+    retired task id, and the next pick of it polls nothing.
+- A later region cancel or handle abort fires a due waker too (TR:840-866).
+  The lab's own dispatch-time PollQuota (§2) marks nothing due.
+- C: `asx_checkpoint` (`lab_ack_in_poll`, `cancel_wakers_pending`),
+  `sched_poll_slot`, `asx_lab_schedule_cancel_retired`. Found by the
+  dispatch comparison (bd-9kll.4.8) in fixtures
+  `budget-poll-quota-exhaustion-001` and `budget-inherit-before-cleanup-001`.
+
 Default priorities:
 - `Budget::INFINITE` = 0; `Budget::new()` = 128.
 - Cleanup priorities: User 200; Timeout/Deadline 210; PollQuota/CostBudget
@@ -194,6 +224,25 @@ A pending `Sleep` polled with a changed waker re-registers its timer
 The priority changes when:
 - acknowledgement replaces the budget with the cleanup budget;
 - a request during cleanup replaces it again.
+
+### Join registrations
+
+- A join's poll registers the joiner's waker of that poll on the joined
+  task's handle (`poll_join`, `task_handle.rs:925-965`; the retirement
+  barrier, `:115-133`). It stays until the same join is polled again (a
+  waker of another priority replaces it) or until it fires, which consumes
+  it.
+- So a joiner that changed priority since it last polled a join is woken by
+  that join at the old priority.
+- Groups:
+  - `join_all` polls only the join it is waiting on.
+  - A quorum's collecting poll polls every branch's join (phase 1).
+  - A quorum's drain joins one branch at a time, in order (phase 2,
+    `cx/scope.rs:1897-1903`). The phase-1 registrations of the branches
+    after it stay, at the collecting poll's priority.
+- C: `asx_task_slot.watcher_prio`, `group_collect`. Found by the dispatch
+  comparison in fuzz scenarios gen-5-75 and gen-8-30 (fixtures
+  `task-groups-quorum-drain-wakers-001`, `-002`).
 
 ## 7. Run loops and time
 
@@ -220,6 +269,25 @@ The priority changes when:
 - For timers within the first level (256 ms), the firing order is
   therefore (deadline tick, registration order), not deadline order.
 
+### Budget-deadline timer
+
+- Rust arms a timer for every work task whose budget has a deadline
+  (`Cx::arm_budget_deadline`, `cx.rs:3860-3890`). It is a wheel timer of its
+  own, registered when the task is created (`state.rs:4400-4403`) or
+  admitted (`state.rs:4892`).
+- When it fires (`BudgetDeadlineWake`, `cx.rs:313-367`), it does nothing if
+  the task is already cancel-requested or its budget lost that deadline (an
+  acknowledged cancel's cleanup budget replaced it). Otherwise it cancels
+  the task, Cx only, with Deadline stamped with the deadline, and fires the
+  cancel waker at once: the task goes to the cancel lane.
+- It leaves the wheel when the task completes (`task_context.rs:1118-1124`).
+  Until then it is a pending timer for `run_with_auto_advance`.
+- The lab checks no deadline at dispatch. A checkpoint past the deadline
+  adds a Deadline candidate stamped now (`cx.rs:3112-3130`).
+- C: `asx_lab_arm_budget_deadline_internal`, `lab_deadline_fire`, and the
+  wheel-order firing in `timers_fire_wheel_order`. Found by the dispatch
+  comparison in fixture `budget-deadline-sleep-checkpoint-001`.
+
 ### Region cancel order
 
 A region cancel visits each region's live tasks in its membership's
@@ -240,10 +308,15 @@ state.rs:7811-7830). The order is that of the cancel lane entries and the
    observable with one worker: the drain runs before the next poll.
 3. A spawn that is never admitted (its region closed before the next
    step): Rust never creates the task. C refuses it synchronously when the
-   region is already closing. A cancel in the window between enqueue and
+   region is already closing, and takes the step its admission costs in
+   Rust. A region that starts closing in the window between enqueue and
    admission is not modelled.
 4. The timer wheel beyond level 0: cascades from level 1 land after level-0
    entries of the same tick. C orders by (tick, registration) only.
-5. Dispatch certificates. Rust's `ScheduleCertificate`
-   (`(task, lane, step)` records) is not yet computed in C, so
-   certificate equality (bd-9kll.4.8) is still open.
+5. Dispatch certificates (bd-9kll.4.8).
+   - Done: C records every lab dispatch (`asx_scheduler_record_dispatches`).
+     twin_run writes Rust's forced-schedule dispatches into each fixture
+     (`schedule.dispatches`), and `asx-conformance compare` requires the
+     two to match.
+   - Still open: Rust's `ScheduleCertificate` hash is not computed in C,
+     and no forced schedule is replayed across engines.

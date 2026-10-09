@@ -218,6 +218,154 @@ TEST(pre_poll_quota_cancel_has_rust_lab_attribution) {
     ASSERT_EQ(r.timestamp, (asx_time)0);
 }
 
+/* Dispatch records (asx_scheduler_record_dispatches): Rust's
+ * ForcedDispatch fields, steps counted from 1 across runs. Two tasks that
+ * yield once each: four ready-lane dispatches at time 0. A buffer too
+ * small keeps the first records and still counts every dispatch. */
+TEST(dispatch_records_carry_task_lane_step_and_time) {
+    asx_region_id r;
+    asx_task_id ta;
+    asx_task_id tb;
+    asx_budget run;
+    probe a = {'a', 1u, 0};
+    probe b = {'b', 1u, 0};
+    asx_dispatch_record rec[3];
+    uint32_t i;
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
+    memset(rec, 0, sizeof(rec));
+    asx_scheduler_record_dispatches(rec, 3u);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_probe, &a, &ta), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_probe, &b, &tb), ASX_OK);
+    run = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+    ASSERT_EQ(asx_scheduler_dispatches_recorded(), 4u);
+    for (i = 0; i < 3u; i++) {
+        ASSERT_EQ(rec[i].step, (uint64_t)(i + 1u));
+        ASSERT_EQ(rec[i].at, (asx_time)0);
+        ASSERT_EQ(rec[i].lane, (uint8_t)ASX_DISPATCH_LANE_READY);
+        ASSERT_TRUE(asx_handle_index(rec[i].task) == asx_handle_index(ta) ||
+                    asx_handle_index(rec[i].task) == asx_handle_index(tb));
+    }
+    /* A new lab stops recording. */
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
+    ASSERT_EQ(asx_scheduler_dispatches_recorded(), 0u);
+}
+
+/* A checkpoint that raises a budget cancel leaves the task's cancel waker
+ * due; it fires with the acknowledgement, after the poll, even when that
+ * poll completes the task: Rust then schedules the retired task id and the
+ * next step dispatches it, polling nothing (record/task.rs:1227-1233,
+ * lab/runtime.rs:5011, 4772-4790; fixture budget-poll-quota-exhaustion-001).
+ * Without the checkpoint nothing is due. */
+static asx_status run_quota_probe(int checkpoint, quota_probe *q, asx_dispatch_record *rec,
+                                  uint32_t cap, asx_task_id *out_t) {
+    asx_region_id root;
+    asx_budget tb;
+    asx_budget run;
+    asx_status st = setup();
+    if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(42u);
+    asx_scheduler_record_dispatches(rec, cap);
+    if (st == ASX_OK) st = asx_region_open(&root);
+    memset(q, 0, sizeof(*q));
+    q->checkpoint = checkpoint;
+    tb = asx_budget_from_polls(1);
+    if (st == ASX_OK) st = asx_task_spawn_with_budget(root, poll_quota_probe, q, &tb, out_t);
+    run = asx_budget_from_polls(20);
+    if (st == ASX_OK) st = asx_scheduler_run(root, &run);
+    return st;
+}
+
+TEST(budget_cancel_at_a_completing_checkpoint_dispatches_the_retired_task) {
+    asx_cancel_reason reason;
+    asx_dispatch_record rec[8];
+    asx_task_id t;
+    quota_probe q;
+
+    memset(rec, 0, sizeof(rec));
+    ASSERT_EQ(run_quota_probe(1, &q, rec, 8u, &t), ASX_OK);
+    ASSERT_EQ(q.polls, 2u);
+    ASSERT_EQ(asx_scheduler_dispatches_recorded(), 3u);
+    ASSERT_EQ(rec[0].lane, (uint8_t)ASX_DISPATCH_LANE_READY);
+    ASSERT_EQ(rec[1].lane, (uint8_t)ASX_DISPATCH_LANE_READY);
+    ASSERT_EQ(rec[2].lane, (uint8_t)ASX_DISPATCH_LANE_CANCEL);
+    ASSERT_EQ(rec[2].step, (uint64_t)3);
+    ASSERT_TRUE(asx_handle_index(rec[2].task) == asx_handle_index(t));
+    ASSERT_EQ(asx_task_get_cancel_reason(t, &reason), ASX_OK);
+    ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_POLL_QUOTA);
+    /* No checkpoint, no acknowledgement: two dispatches. */
+    ASSERT_EQ(run_quota_probe(0, &q, rec, 8u, &t), ASX_OK);
+    ASSERT_EQ(q.polls, 2u);
+    ASSERT_EQ(asx_scheduler_dispatches_recorded(), 2u);
+}
+
+/* The budget-deadline timer (Rust Cx::arm_budget_deadline, armed at
+ * creation): at the deadline it cancels with DEADLINE stamped with the
+ * deadline and wakes the task on the cancel lane, though the task waits
+ * for a later time (fixture budget-deadline-sleep-checkpoint-001). It is a
+ * pending timer: auto-advance moves the clock to it for a task parked with
+ * nothing else to wake it. */
+typedef struct {
+    uint32_t polls;
+    asx_time wait_until; /* 0: park */
+} deadline_probe;
+
+static asx_status poll_deadline_probe(void *ud, asx_task_id self) {
+    deadline_probe *d = (deadline_probe *)ud;
+    asx_checkpoint_result cr;
+    asx_status st;
+    d->polls++;
+    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) return ASX_OK;
+    if (d->wait_until != 0u) return asx_task_wait_until(self, d->wait_until);
+    st = asx_task_park(self);
+    return st == ASX_OK ? ASX_E_PENDING : st;
+}
+
+static asx_status run_deadline_probe(deadline_probe *d, asx_dispatch_record *rec, uint32_t cap,
+                                     asx_task_id *out_t) {
+    asx_region_id r;
+    asx_budget b = asx_budget_infinite();
+    asx_budget run;
+    asx_status st = setup();
+    if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(9u);
+    asx_scheduler_record_dispatches(rec, cap);
+    if (st == ASX_OK) st = asx_region_open(&r);
+    b.deadline = 100u;
+    if (st == ASX_OK) st = asx_task_spawn_with_budget(r, poll_deadline_probe, d, &b, out_t);
+    run = asx_budget_from_polls(50);
+    if (st == ASX_OK) st = asx_scheduler_run(r, &run);
+    return st;
+}
+
+TEST(budget_deadline_timer_cancels_on_the_cancel_lane) {
+    deadline_probe d;
+    asx_dispatch_record rec[4];
+    asx_task_id t;
+    asx_cancel_reason reason;
+
+    memset(&d, 0, sizeof(d));
+    d.wait_until = 200u;
+    memset(rec, 0, sizeof(rec));
+    ASSERT_EQ(run_deadline_probe(&d, rec, 4u, &t), ASX_OK);
+    ASSERT_EQ(d.polls, 2u);
+    ASSERT_EQ(asx_scheduler_dispatches_recorded(), 2u);
+    ASSERT_EQ(rec[1].at, (asx_time)100);
+    ASSERT_EQ(rec[1].lane, (uint8_t)ASX_DISPATCH_LANE_CANCEL);
+    ASSERT_EQ(asx_task_get_cancel_reason(t, &reason), ASX_OK);
+    ASSERT_EQ((int)reason.kind, (int)ASX_CANCEL_DEADLINE);
+    ASSERT_EQ(reason.timestamp, (asx_time)100);
+
+    /* Parked with no timer of its own: the clock moves to the deadline. */
+    memset(&d, 0, sizeof(d));
+    ASSERT_EQ(run_deadline_probe(&d, rec, 4u, &t), ASX_OK);
+    ASSERT_EQ(d.polls, 2u);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)100);
+    ASSERT_EQ(rec[1].lane, (uint8_t)ASX_DISPATCH_LANE_CANCEL);
+}
+
 /* Child-region commands (Rust RegionCommand, LR:4135-4217). The opener
  * opens a child region of `parent`, optionally spawns a kid into it that
  * yields until a checkpoint reports its cancel, then closes the region. */
@@ -490,6 +638,67 @@ TEST(handle_abort_applies_at_once_without_lab_dispatch) {
     ASSERT_TRUE(cancelled_with(a.target, ASX_CANCEL_USER));
 }
 
+/* A spawn from a poll into a closed region: refused at once, but Rust's
+ * spawn mailbox refuses it at the next step's admission, and a join of it
+ * waits for that (fixture spawn-into-cancelled-region-step-001). */
+typedef struct {
+    asx_region_id closed;
+    uint32_t polls;
+    uint32_t ticket;
+    asx_status spawn;
+} refuser;
+
+static asx_status poll_noop(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    return ASX_OK;
+}
+
+static asx_status poll_refuser(void *ud, asx_task_id self) {
+    refuser *f = (refuser *)ud;
+    f->polls++;
+    if (f->polls == 1u) {
+        asx_task_id kid = ASX_INVALID_ID;
+        f->spawn = asx_task_spawn(f->closed, poll_noop, NULL, &kid);
+        f->ticket = asx_scheduler_last_spawn_refusal();
+    }
+    return asx_task_await_refusal(self, f->ticket);
+}
+
+TEST(spawn_refusal_reaches_a_join_at_the_next_step) {
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget run;
+    asx_cancel_reason reason;
+    asx_dispatch_record rec[4];
+    refuser f;
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(5u), ASX_OK);
+    asx_scheduler_record_dispatches(rec, 4u);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    memset(&f, 0, sizeof(f));
+    ASSERT_EQ(asx_region_open_child(r, &f.closed), ASX_OK);
+    memset(&reason, 0, sizeof(reason));
+    reason.kind = ASX_CANCEL_USER;
+    reason.origin_region = f.closed;
+    ASSERT_EQ(asx_region_cancel(f.closed, &reason, NULL), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_refuser, &f, &t), ASX_OK);
+    ASSERT_EQ(asx_scheduler_last_spawn_refusal(), 0u);
+    run = asx_budget_from_polls(20);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+    ASSERT_EQ(f.spawn, ASX_E_REGION_CLOSED);
+    ASSERT_TRUE(f.ticket != 0u);
+    /* Poll 1 refuses and waits; step 2's admission delivers the refusal
+     * and wakes it on the ready lane; poll 2 sees it delivered. */
+    ASSERT_EQ(f.polls, 2u);
+    ASSERT_EQ(asx_scheduler_dispatches_recorded(), 2u);
+    ASSERT_EQ(rec[1].step, (uint64_t)2);
+    ASSERT_EQ(rec[1].lane, (uint8_t)ASX_DISPATCH_LANE_READY);
+    ASSERT_EQ(asx_task_await_refusal(t, f.ticket), ASX_OK);
+    ASSERT_EQ(asx_task_await_refusal(t, 0u), ASX_OK);
+}
+
 TEST(use_lab_dispatch_requires_no_live_task) {
     asx_region_id r;
     asx_task_id t;
@@ -512,6 +721,9 @@ int main(void) {
     RUN_TEST(cancel_lane_is_served_first);
     RUN_TEST(auto_advance_moves_the_clock_to_the_next_timer);
     RUN_TEST(pre_poll_quota_cancel_has_rust_lab_attribution);
+    RUN_TEST(dispatch_records_carry_task_lane_step_and_time);
+    RUN_TEST(budget_cancel_at_a_completing_checkpoint_dispatches_the_retired_task);
+    RUN_TEST(budget_deadline_timer_cancels_on_the_cancel_lane);
     RUN_TEST(child_region_open_and_close_are_next_step_commands);
     RUN_TEST(closing_an_empty_child_region_wakes_the_closer);
     RUN_TEST(child_region_commands_apply_at_once_without_lab_dispatch);
@@ -521,6 +733,7 @@ int main(void) {
     RUN_TEST(handle_abort_of_an_unadmitted_child_applies_at_admission);
     RUN_TEST(handle_aborts_in_one_step_coalesce_to_the_strongest);
     RUN_TEST(handle_abort_applies_at_once_without_lab_dispatch);
+    RUN_TEST(spawn_refusal_reaches_a_join_at_the_next_step);
     RUN_TEST(use_lab_dispatch_requires_no_live_task);
 
     TEST_REPORT();
