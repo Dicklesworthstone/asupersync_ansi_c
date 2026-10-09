@@ -726,6 +726,21 @@ ASX_API ASX_MUST_USE asx_status asx_scheduler_run(asx_region_id region, asx_budg
 ASX_API ASX_MUST_USE asx_status asx_scheduler_run_until_idle(asx_region_id region,
                                                              asx_budget *budget);
 
+/* Dispatch as Rust asupersync's LabRuntime does with one worker, seeded
+ * with `seed`, instead of sweeping every runnable task each round: each
+ * step draws one value from a seeded xorshift64 and polls one task, chosen
+ * by lane (cancel before ready), priority, and wake order, with ties
+ * broken by the drawn value. The two run functions above then step as
+ * Rust's run_until_idle and run_with_auto_advance do, every live task
+ * counts (the region argument only has to be valid), and the budget counts
+ * steps. Same scenario and seed, same dispatch order as the Rust lab
+ * (bd-9kll.4.2). It stays on until asx_runtime_reset or asx_runtime_init.
+ *
+ * Preconditions: no task is alive yet.
+ * Returns ASX_OK, or ASX_E_INVALID_STATE if a task is alive.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_scheduler_use_lab_dispatch(uint64_t seed);
+
 /* -------------------------------------------------------------------
  * Wake-driven waiting (park / wake / timers / join)
  * ------------------------------------------------------------------- */

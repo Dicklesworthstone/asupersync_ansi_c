@@ -34,8 +34,19 @@ asx_time asx_cancel_now_internal(void) {
     return now;
 }
 
+static int reason_same(const asx_cancel_reason *a, const asx_cancel_reason *b) {
+    return a->kind == b->kind && a->timestamp == b->timestamp &&
+           a->origin_region == b->origin_region && a->origin_task == b->origin_task &&
+           a->message == b->message && a->cause == b->cause && a->truncated == b->truncated;
+}
+
+static int budget_same(const asx_budget *a, const asx_budget *b) {
+    return a->deadline == b->deadline && a->poll_quota == b->poll_quota &&
+           a->cost_quota == b->cost_quota && a->priority == b->priority;
+}
+
 asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reason *reason,
-                                           int trace_request) {
+                                           asx_cancel_source source) {
     asx_task_slot *t;
     asx_status st;
     asx_budget cleanup;
@@ -57,14 +68,28 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
          * records no trace event: Rust has no strengthen event
          * (state.rs:7794). */
         asx_cancel_reason winner = asx_cancel_strengthen(&t->cancel_reason, reason);
+        asx_budget met;
+        int reason_changed = !reason_same(&winner, &t->cancel_reason);
+        int budget_changed;
         cleanup = asx_cancel_cleanup_budget(reason->kind);
-        t->cleanup_budget = asx_budget_meet(&t->cleanup_budget, &cleanup);
+        met = asx_budget_meet(&t->cleanup_budget, &cleanup);
+        budget_changed = !budget_same(&met, &t->cleanup_budget);
+        t->cleanup_budget = met;
         if (t->cleanup_applied) t->budget = t->cleanup_budget;
         if (asx_budget_polls(&t->cleanup_budget) < t->cleanup_polls_remaining) {
             t->cleanup_polls_remaining = asx_budget_polls(&t->cleanup_budget);
         }
         t->cancel_reason = winner;
         t->cancel_epoch++;
+        /* Lab dispatch: a region cancel that changed anything schedules
+         * the task on the cancel lane at its request's cleanup priority;
+         * a changed reason also reaches its cancel waker. */
+        if (asx_lab_dispatch_active() && source != ASX_CANCEL_SRC_BUDGET) {
+            if (source == ASX_CANCEL_SRC_REGION && (reason_changed || budget_changed)) {
+                asx_lab_schedule_cancel(t, cleanup.priority);
+            }
+            if (reason_changed) asx_lab_cancel_wake(t);
+        }
         return ASX_OK;
     }
 
@@ -101,8 +126,19 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
     t->cleanup_polls_remaining = asx_budget_polls(&cleanup);
 
     /* Cancellation must be observed: a parked task becomes runnable so it
-     * can reach a checkpoint and run its bounded cleanup. */
-    asx_task_wake_slot_internal(t);
+     * can reach a checkpoint and run its bounded cleanup. Under lab
+     * dispatch the task goes to the cancel lane at its cleanup priority,
+     * then its cancel waker fires (Rust: the driver's or the region's
+     * schedule_cancel, then the CancelTaskWaker); a budget cancel the task
+     * raised itself schedules nothing. */
+    if (asx_lab_dispatch_active()) {
+        if (source != ASX_CANCEL_SRC_BUDGET) {
+            asx_lab_schedule_cancel(t, cleanup.priority);
+            asx_lab_cancel_wake(t);
+        }
+    } else {
+        asx_task_wake_slot_internal(t);
+    }
 
     /* Create a cancel witness to track this cancellation's lifecycle */
     {
@@ -116,7 +152,7 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
      * only where a region or policy cancels tasks (cancel_request,
      * state.rs:7864; cancel_sibling_tasks, :7502); a direct task cancel
      * (RuntimeState::cancel_task, :3429) or a handle abort records none. */
-    if (trace_request) {
+    if (source == ASX_CANCEL_SRC_REGION) {
         asx_trace_payload payload;
         payload.text = NULL;
         payload.reason = &t->cancel_reason;
@@ -149,11 +185,11 @@ asx_status asx_task_cancel_with_origin(asx_task_id id, asx_cancel_kind kind,
     reason.message = NULL;
     reason.cause = NULL;
     reason.truncated = 0;
-    return asx_task_cancel_reason_internal(id, &reason, 0);
+    return asx_task_cancel_reason_internal(id, &reason, ASX_CANCEL_SRC_DIRECT);
 }
 
 asx_status asx_task_cancel_with_reason(asx_task_id id, const asx_cancel_reason *reason) {
-    return asx_task_cancel_reason_internal(id, reason, 0);
+    return asx_task_cancel_reason_internal(id, reason, ASX_CANCEL_SRC_DIRECT);
 }
 
 asx_status asx_task_cancel_budget_internal(asx_task_id id, asx_cancel_kind kind, asx_time at) {
@@ -168,7 +204,7 @@ asx_status asx_task_cancel_budget_internal(asx_task_id id, asx_cancel_kind kind,
     reason.message = NULL;
     reason.cause = NULL;
     reason.truncated = 0;
-    return asx_task_cancel_reason_internal(id, &reason, 0);
+    return asx_task_cancel_reason_internal(id, &reason, ASX_CANCEL_SRC_BUDGET);
 }
 
 /* -------------------------------------------------------------------
@@ -181,11 +217,14 @@ static uint32_t g_propagate_slots[ASX_MAX_REGIONS];
 static asx_cancel_reason g_propagate_reasons[ASX_MAX_REGIONS];
 
 /* Cancel every live task of the subtree (rooted at subtree entry 0) with
- * its region's reason from g_propagate_reasons. */
+ * its region's reason from g_propagate_reasons. Under lab dispatch the
+ * tasks' cancel wakes fire after all of them are cancelled, as Rust
+ * dispatches a region cancel's wakes after the cancel (run.rs driver). */
 static uint32_t cancel_subtree_tasks(uint32_t n) {
     uint32_t r;
     uint32_t i;
     uint32_t count = 0;
+    asx_lab_cancel_batch_begin();
     for (r = 0; r < n; r++) {
         uint32_t key = asx_handle_index(asx_region_handle_for_slot(g_propagate_slots[r]));
         for (i = 0; i < g_task_count; i++) {
@@ -198,11 +237,13 @@ static uint32_t cancel_subtree_tasks(uint32_t n) {
             if (asx_task_is_terminal(t->state)) continue;
 
             if (asx_task_cancel_reason_internal(asx_task_handle_for_slot(i),
-                                                &g_propagate_reasons[r], 1) == ASX_OK) {
+                                                &g_propagate_reasons[r],
+                                                ASX_CANCEL_SRC_REGION) == ASX_OK) {
                 count++;
             }
         }
     }
+    asx_lab_cancel_batch_end();
     return count;
 }
 

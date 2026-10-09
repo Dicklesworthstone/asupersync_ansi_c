@@ -147,6 +147,7 @@ void asx_runtime_reset(void) {
     asx_ghost_reset();
     asx_scheduler_event_reset();
     asx_scheduler_reset_internal();
+    asx_lab_dispatch_reset_internal();
     asx_parallel_reset();
     asx_channel_reset();
     asx_oneshot_reset();
@@ -868,6 +869,17 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     g_tasks[idx].cleanup_applied = 0;
     g_tasks[idx].cleanup_polls_remaining = 0;
     memset(&g_tasks[idx].cancel_reason, 0, sizeof(g_tasks[idx].cancel_reason));
+    /* Lab dispatch: a task the host creates is scheduled at once at
+     * priority 0, as the Rust lab driver does (run.rs:1648); one spawned
+     * from a poll is admitted at the start of the next step (cx.spawn's
+     * mailbox, LR:3957-4012). */
+    if (asx_lab_dispatch_active()) {
+        if (g_tasks[idx].spawned_in_poll) {
+            asx_lab_defer_admission(&g_tasks[idx]);
+        } else {
+            asx_lab_schedule(&g_tasks[idx], 0u);
+        }
+    }
 
     r->task_count++;
     r->task_total++;

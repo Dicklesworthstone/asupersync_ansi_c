@@ -49,8 +49,13 @@ Companion files:
   Rule Index of `/dp/asupersync/asupersync_v4_formal_semantics.md` (lines
   23-73, for example `rule.cancel.request`). The coverage report (W1.7)
   counts fixtures per rule.
-- **`seed`** is `LabConfig::new(seed)` (`lab/config.rs:187`) in Rust and the C
-  lab seed in C.
+- **`seed`** is `LabConfig::new(seed)` (`lab/config.rs:187`) in Rust. In C it
+  seeds the lab dispatch model (`asx_scheduler_use_lab_dispatch`,
+  `src/runtime/lab_dispatch.c`, bd-9kll.4.2): one task per step, picked by
+  lane, priority and wake order with ties broken by the step's xorshift64
+  value, and due timers firing in the timer wheel's order. The two runtimes
+  dispatch in the same order, so contention between tasks resolves the
+  same way on both sides.
 - **`lab`** configures the run:
   - `worker_count` is always 1.
   - `panic_on_leak` maps to `LabConfig::panic_on_leak` (`lab/config.rs:258`).

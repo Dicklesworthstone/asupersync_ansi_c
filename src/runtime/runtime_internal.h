@@ -93,6 +93,18 @@ typedef struct {
     uint8_t spawned_in_poll;
     uint8_t first_polled;
     uint8_t cancel_before_first_poll;
+    /* Lab dispatch (lab_dispatch.c): scheduled on a lane; the priority of
+     * the waker of its last poll (Rust's cached TaskWaker, LR:4686-4692);
+     * spawned from a poll and not yet admitted. */
+    uint8_t lab_scheduled;
+    uint8_t lab_waker_prio;
+    uint8_t lab_admission_pending;
+    /* Bumped whenever a poll gets a new waker (the first poll, or a
+     * priority different from the last poll's); the traced sleep timer
+     * remembers the epoch it was registered under (Sleep re-registers on a
+     * changed waker, time/sleep.rs:883-998). */
+    uint32_t lab_waker_epoch;
+    uint32_t traced_waker_epoch;
     asx_status last_error; /* status returned by a failing poll_fn */
     /* Task timer (EDF heap keyed by (wake_at, timer_seq)). */
     asx_time wake_at;
@@ -211,13 +223,31 @@ void asx_trace_emit_payload_internal(asx_trace_event_kind kind, uint64_t entity_
 /* The time a cancel reason is stamped with (runtime clock, else virtual). */
 asx_time asx_cancel_now_internal(void);
 
+/* Where a cancel request comes from. It decides the trace event and, under
+ * lab dispatch, how the task is scheduled (Rust: run.rs driver cancels,
+ * state.rs:7811-7876, cx.rs:2824-2836):
+ *   DIRECT — a task cancel (RuntimeState::cancel_task, a handle abort): no
+ *            cancel.requested event; lab: the cleanup-priority cancel entry
+ *            only when newly cancelled.
+ *   REGION — a region or policy cancel (cancel_request): cancel.requested
+ *            for a newly cancelled task; lab: the cleanup-priority entry
+ *            whenever the request changed the reason or cleanup budget, the
+ *            cancel wakes held until the whole region is visited.
+ *   BUDGET — budget exhaustion the task observes itself: no event and no
+ *            scheduling (Rust raises it on the task's Cx only). */
+typedef enum {
+    ASX_CANCEL_SRC_DIRECT = 0,
+    ASX_CANCEL_SRC_REGION = 1,
+    ASX_CANCEL_SRC_BUDGET = 2
+} asx_cancel_source;
+
 /* The core of every task cancel: a newly cancelled task takes `reason`
- * whole and records ASX_TRACE_CANCEL_REQUEST when `trace_request` is set;
- * an already cancelled one is strengthened (asx_cancel_strengthen) and
+ * whole and records ASX_TRACE_CANCEL_REQUEST for a REGION source; an
+ * already cancelled one is strengthened (asx_cancel_strengthen) and
  * records nothing. A terminal task is left alone (ASX_OK). */
 ASX_MUST_USE asx_status asx_task_cancel_reason_internal(asx_task_id id,
                                                         const asx_cancel_reason *reason,
-                                                        int trace_request);
+                                                        asx_cancel_source source);
 
 /* Budget exhaustion observed for task `id` (deadline, poll quota, cost):
  * attributed to the task and its region and stamped `at`, recorded on the
@@ -247,6 +277,31 @@ int asx_cleanup_hard_bound_internal(void);
 /* A task that acknowledged its cancel takes its cleanup budget as its
  * budget, once (see asx_task_slot.cleanup_budget). */
 void asx_task_apply_cleanup_budget_internal(asx_task_slot *t);
+
+/* Lab dispatch (lab_dispatch.c, bd-9kll.4.2): the Rust LabRuntime's
+ * one-task-per-step dispatch model, on when asx_scheduler_use_lab_dispatch
+ * was called (off after asx_runtime_reset). */
+void asx_lab_dispatch_reset_internal(void);
+int asx_lab_dispatch_active(void);
+int asx_lab_dispatch_overflowed(void);
+uint64_t asx_lab_rng_next(void);
+uint32_t asx_lab_scheduled_count(void);
+int asx_lab_is_scheduled(const asx_task_slot *t);
+/* Ready lane (no-op when already scheduled) / cancel lane (always pushes). */
+void asx_lab_schedule(asx_task_slot *t, uint8_t priority);
+void asx_lab_schedule_cancel(asx_task_slot *t, uint8_t priority);
+/* The step's pick for value r: 1 and the slot, or 0 when nothing is live. */
+int asx_lab_pick(uint64_t r, uint32_t *out_slot, int *out_cancel_lane);
+/* A completed task: purge its entries if it is still scheduled. */
+void asx_lab_forget(asx_task_slot *t);
+void asx_lab_defer_admission(asx_task_slot *t);
+int asx_lab_admissions_pending(void);
+void asx_lab_admit_pending(void);
+/* A cancel request's wake of the task's CancelTaskWaker; held back while a
+ * region cancel batch is open. */
+void asx_lab_cancel_wake(asx_task_slot *t);
+void asx_lab_cancel_batch_begin(void);
+void asx_lab_cancel_batch_end(void);
 
 /* Resolve the obligations a completing task still holds, cancelled or
  * not, as leaks per the active policy (RECOVER aborts them with

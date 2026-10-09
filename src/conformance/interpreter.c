@@ -202,6 +202,7 @@ typedef struct {
     int has_reason;
     uint32_t text_off; /* USER */
     uint32_t text_len;
+    int rearm; /* TIMER_SET: the same sleep timer registered again */
 } it_event;
 
 static const asx_json_doc *g_in;
@@ -630,6 +631,8 @@ static void it_observe(void *ctx, const asx_trace_event *ev, const asx_trace_pay
         }
         capture_reason(payload->reason, &e->reason);
         e->has_reason = 1;
+    } else if (ev->kind == ASX_TRACE_TIMER_SET) {
+        e->rearm = payload != NULL && payload->text != NULL && strcmp(payload->text, "rearm") == 0;
     } else if (ev->kind == ASX_TRACE_USER) {
         const char *text = payload->text != NULL ? payload->text : "";
         size_t len = strlen(text);
@@ -2211,10 +2214,14 @@ static uint32_t project_events(uint32_t obligations) {
                 break;
             }
             if (e->kind == ASX_TRACE_TIMER_SET) {
-                char buf[160];
-                t->timers++;
-                (void)snprintf(buf, sizeof(buf), "%s/tm%u", t->name, (unsigned)t->timers);
-                t->timer_name_off = text_store(buf, strlen(buf));
+                /* A re-registration of the same sleep (a new waker) keeps
+                 * its name, as twin_run's NamedSleep does. */
+                if (!e->rearm || t->timers == 0u) {
+                    char buf[160];
+                    t->timers++;
+                    (void)snprintf(buf, sizeof(buf), "%s/tm%u", t->name, (unsigned)t->timers);
+                    t->timer_name_off = text_store(buf, strlen(buf));
+                }
                 t->timer_pending = 1;
                 t->timer_deadline = e->aux;
                 ev = event_object("timer.scheduled");
@@ -2481,6 +2488,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     asx_budget budget;
     asx_region_id root = ASX_INVALID_ID;
     uint64_t max_steps = 0;
+    uint64_t seed = 0;
     uint32_t list;
     uint32_t i;
     uint32_t raw_events;
@@ -2518,10 +2526,17 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
         return ASX_E_INVALID_ARGUMENT;
     }
 
-    /* Runtime on its virtual clock (default stub hooks), trace observed. */
+    /* Runtime on its virtual clock (default stub hooks), trace observed,
+     * dispatching as the Rust lab does with the scenario's seed
+     * (LabConfig::new(seed).worker_count(1); bd-9kll.4.2). */
+    if (!asx_json_u64(in, asx_json_get(in, scenario, "seed"), &seed)) {
+        it_fail("scenario seed must be an unsigned integer", NULL);
+        return ASX_E_INVALID_ARGUMENT;
+    }
     asx_runtime_config_init(&cfg);
     st = asx_runtime_hooks_init(&hooks);
     if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);
+    if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(seed);
     if (st != ASX_OK) {
         it_fail("runtime init failed", NULL);
         return st;
