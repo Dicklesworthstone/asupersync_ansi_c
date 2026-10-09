@@ -128,34 +128,25 @@ static void fuzz_generate_scenario(fuzz_rng *rng, fuzz_scenario *sc, uint32_t ma
     }
 }
 
-/* FNV-1a (same as harness) */
+/* FNV-1a over each field's little-endian bytes, as the harness hashes them
+ * (fuzz_differential.c fuzz_hasher_u32/u64): one digest on every byte
+ * order. */
+static uint64_t fnv1a_le(uint64_t hash, uint64_t v, uint32_t nbytes) {
+    uint32_t i;
+    for (i = 0u; i < nbytes; i++) {
+        hash ^= (v >> (8u * i)) & 0xFFu;
+        hash *= 0x100000001b3ULL;
+    }
+    return hash;
+}
+
 static uint64_t fnv1a_scenario(const fuzz_scenario *sc) {
     uint64_t hash = 0xcbf29ce484222325ULL;
     uint32_t i;
-    uint8_t *ptr;
 
-    ptr = (uint8_t *)&sc->seed;
-    for (i = 0u; i < 8u; i++) {
-        hash ^= (uint64_t)ptr[i];
-        hash *= 0x100000001b3ULL;
-    }
-    ptr = (uint8_t *)&sc->op_count;
-    for (i = 0u; i < 4u; i++) {
-        hash ^= (uint64_t)ptr[i];
-        hash *= 0x100000001b3ULL;
-    }
-    for (i = 0u; i < sc->op_count; i++) {
-        uint32_t k = (uint32_t)sc->ops[i].kind;
-        ptr = (uint8_t *)&k;
-        hash ^= (uint64_t)ptr[0];
-        hash *= 0x100000001b3ULL;
-        hash ^= (uint64_t)ptr[1];
-        hash *= 0x100000001b3ULL;
-        hash ^= (uint64_t)ptr[2];
-        hash *= 0x100000001b3ULL;
-        hash ^= (uint64_t)ptr[3];
-        hash *= 0x100000001b3ULL;
-    }
+    hash = fnv1a_le(hash, sc->seed, 8u);
+    hash = fnv1a_le(hash, sc->op_count, 4u);
+    for (i = 0u; i < sc->op_count; i++) { hash = fnv1a_le(hash, (uint32_t)sc->ops[i].kind, 4u); }
     return hash;
 }
 
