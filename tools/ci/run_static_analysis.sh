@@ -6,6 +6,12 @@
 # Supports explicit waivers via ASX_ANALYZER_WAIVER comments.
 # Produces machine-readable JSON report for CI consumption.
 #
+# Analyzer commands come from CPPCHECK / CLANG_TIDY (the Makefile resolves
+# the pinned versions; a multi-word "uvx --from ..." command is allowed). Set
+# but empty means the pinned tool could not be resolved. A missing analyzer
+# is a SKIP unless FAIL_ON_MISSING_LINTER=1, and an analyzer that exits
+# abnormally is always a failure: no analyzer output is not a clean result.
+#
 # Exit 0 = pass, Exit 1 = violations, Exit 2 = usage/config error
 #
 # SPDX-License-Identifier: MIT
@@ -26,12 +32,17 @@ WAIVER_PATTERN='ASX_ANALYZER_WAIVER'
 JSON_OUTPUT=0
 VERBOSE=0
 STRICT=0
+read -r -a CPPCHECK_CMD <<< "${CPPCHECK-cppcheck}"
+read -r -a CLANG_TIDY_CMD <<< "${CLANG_TIDY-clang-tidy}"
+FAIL_ON_MISSING_LINTER="${FAIL_ON_MISSING_LINTER:-0}"
 
 # Counters
 CPPCHECK_FINDINGS=0
 CPPCHECK_WAIVERS=0
 CLANG_TIDY_FINDINGS=0
 CLANG_TIDY_WAIVERS=0
+MISSING_TOOLS=0
+TOOL_ERRORS=0
 TOTAL_PASS=0
 TOTAL_FAIL=0
 
@@ -87,23 +98,51 @@ has_waiver() {
 }
 
 # ---------------------------------------------------------------------------
+# Analyzer availability
+# ---------------------------------------------------------------------------
+# analyzer_available <name> <cmd...>: 0 when the command resolves; otherwise
+# records a SKIP, or a failure under FAIL_ON_MISSING_LINTER=1, and returns 1.
+analyzer_available() {
+    local name="$1"
+    shift
+    if [[ $# -gt 0 ]] && command -v "$1" >/dev/null 2>&1; then
+        return 0
+    fi
+    if [[ "$FAIL_ON_MISSING_LINTER" == "1" ]]; then
+        MISSING_TOOLS=$((MISSING_TOOLS + 1))
+        if [[ $JSON_OUTPUT -eq 0 ]]; then
+            echo "[asx] static-analysis: FAIL — pinned $name not available (FAIL_ON_MISSING_LINTER=1)"
+        fi
+    elif [[ $JSON_OUTPUT -eq 0 ]]; then
+        echo "[asx] static-analysis: $name not available, skipping (STRICT_GATES=1 makes this fail)"
+    fi
+    return 1
+}
+
+# tool_error <name> <exit-code>: an analyzer that exited abnormally.
+tool_error() {
+    TOOL_ERRORS=$((TOOL_ERRORS + 1))
+    if [[ $JSON_OUTPUT -eq 0 ]]; then
+        echo "[asx] static-analysis: FAIL — $1 exited with status $2 without reporting findings"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # cppcheck analysis
 # ---------------------------------------------------------------------------
 run_cppcheck() {
-    if ! command -v cppcheck >/dev/null 2>&1; then
-        if [[ $JSON_OUTPUT -eq 0 ]]; then
-            echo "[asx] static-analysis: cppcheck not available, skipping"
-        fi
+    if ! analyzer_available cppcheck "${CPPCHECK_CMD[@]}"; then
         return 0
     fi
 
-    local cppcheck_output
     local cppcheck_exit=0
     local tmpfile
     tmpfile=$(mktemp)
 
-    # Run cppcheck with XML output for machine parsing
-    cppcheck \
+    # Findings go to stderr in a one-line template for machine parsing.
+    # --error-exitcode=0 means a non-zero exit is cppcheck itself failing.
+    "${CPPCHECK_CMD[@]}" \
+        --quiet \
         --enable=warning,performance,portability,style \
         --std=c99 \
         --error-exitcode=0 \
@@ -119,7 +158,7 @@ run_cppcheck() {
         --template='{file}:{line}:{severity}:{id}:{message}' \
         -I "$REPO_ROOT/include" \
         "${SCAN_DIRS[@]/#/$REPO_ROOT/}" \
-        2>"$tmpfile" || true
+        2>"$tmpfile" || cppcheck_exit=$?
 
     local finding_count=0
     local waiver_count=0
@@ -149,6 +188,13 @@ run_cppcheck() {
         fi
     done < "$tmpfile"
 
+    if [[ $cppcheck_exit -ne 0 ]]; then
+        if [[ $JSON_OUTPUT -eq 0 ]]; then
+            sed 's/^/  cppcheck: /' "$tmpfile" | tail -20
+        fi
+        tool_error cppcheck "$cppcheck_exit"
+    fi
+
     rm -f "$tmpfile"
     CPPCHECK_FINDINGS=$finding_count
     CPPCHECK_WAIVERS=$waiver_count
@@ -162,15 +208,13 @@ run_cppcheck() {
 # clang-tidy analysis (if available)
 # ---------------------------------------------------------------------------
 run_clang_tidy() {
-    if ! command -v clang-tidy >/dev/null 2>&1; then
-        if [[ $JSON_OUTPUT -eq 0 ]]; then
-            echo "[asx] static-analysis: clang-tidy not available, skipping"
-        fi
+    if ! analyzer_available clang-tidy "${CLANG_TIDY_CMD[@]}"; then
         return 0
     fi
 
     local finding_count=0
     local waiver_count=0
+    local tidy_exit=0
     local tmpfile
     tmpfile=$(mktemp)
 
@@ -189,13 +233,17 @@ run_clang_tidy() {
         return 0
     fi
 
-    # Run clang-tidy with curated checks
-    clang-tidy \
-        --checks='-*,bugprone-*,cert-*,misc-*,performance-*,portability-*,-bugprone-easily-swappable-parameters,-cert-dcl37-c,-cert-dcl51-c,-cert-err33-c,-misc-unused-parameters,-misc-include-cleaner' \
+    # Run clang-tidy with curated checks. Diagnostics are printed on stdout, so
+    # both streams are captured (stderr alone only carries the summary lines).
+    # bugprone-branch-clone is excluded: the exhaustive enum switches here list
+    # every enumerator on purpose so -Wswitch flags a newly added value, which
+    # merging identical case bodies would defeat.
+    "${CLANG_TIDY_CMD[@]}" \
+        --checks='-*,bugprone-*,cert-*,misc-*,performance-*,portability-*,-bugprone-easily-swappable-parameters,-bugprone-branch-clone,-cert-dcl37-c,-cert-dcl51-c,-cert-err33-c,-misc-unused-parameters,-misc-include-cleaner' \
         "${src_files[@]}" \
         -- -std=c99 -I"$REPO_ROOT/include" \
            -DASX_PROFILE_CORE -DASX_CODEC_JSON -DASX_DETERMINISTIC=1 \
-        2>"$tmpfile" || true
+        >"$tmpfile" 2>&1 || tidy_exit=$?
 
     while IFS= read -r line; do
         if [[ "$line" =~ ^[^:]+:[0-9]+:[0-9]+:\ (warning|error): ]]; then
@@ -218,6 +266,15 @@ run_clang_tidy() {
             fi
         fi
     done < "$tmpfile"
+
+    # Compiler errors are reported as error: lines and counted above, so a
+    # non-zero exit with nothing parsed means clang-tidy itself failed.
+    if [[ $tidy_exit -ne 0 && $finding_count -eq 0 && $waiver_count -eq 0 ]]; then
+        if [[ $JSON_OUTPUT -eq 0 ]]; then
+            sed 's/^/  clang-tidy: /' "$tmpfile" | tail -20
+        fi
+        tool_error clang-tidy "$tidy_exit"
+    fi
 
     rm -f "$tmpfile"
     CLANG_TIDY_FINDINGS=$finding_count
@@ -275,7 +332,11 @@ run_clang_tidy
 # Compute totals
 total_findings=$((CPPCHECK_FINDINGS + CLANG_TIDY_FINDINGS))
 total_waivers=$((CPPCHECK_WAIVERS + CLANG_TIDY_WAIVERS))
-pass=$([[ $total_findings -eq 0 ]] && echo "true" || echo "false")
+if [[ $total_findings -eq 0 && $MISSING_TOOLS -eq 0 && $TOOL_ERRORS -eq 0 ]]; then
+    pass="true"
+else
+    pass="false"
+fi
 
 # ---------------------------------------------------------------------------
 # Report
@@ -296,6 +357,8 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
   },
   "total_findings": $total_findings,
   "total_waivers": $total_waivers,
+  "missing_tools": $MISSING_TOOLS,
+  "tool_errors": $TOOL_ERRORS,
   "strict_mode": $([[ $STRICT -eq 1 ]] && echo "true" || echo "false"),
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -304,14 +367,20 @@ EOF
 else
     echo ""
     echo "[asx] static-analysis: $total_findings finding(s), $total_waivers waived"
-    if [[ $total_findings -eq 0 ]]; then
+    if [[ "$pass" == "true" ]]; then
         echo "[asx] static-analysis: PASS"
-    else
+    elif [[ $total_findings -gt 0 ]]; then
         echo "[asx] static-analysis: FAIL — $total_findings unwaived finding(s)"
         echo ""
         echo "To waive a finding, add before the flagged line:"
         echo '  /* ASX_ANALYZER_WAIVER("reason: brief justification") */'
+    else
+        echo "[asx] static-analysis: FAIL — $MISSING_TOOLS missing analyzer(s), $TOOL_ERRORS analyzer error(s)"
     fi
 fi
 
-exit $total_findings
+# Exit status is pass/fail, never a count: a count would wrap modulo 256.
+if [[ "$pass" == "true" ]]; then
+    exit 0
+fi
+exit 1

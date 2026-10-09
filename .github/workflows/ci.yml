@@ -49,8 +49,10 @@ jobs:
           # runs resolve the same versions through uvx; see Makefile).
           pipx install clang-format==18.1.8
           pipx install cppcheck==1.5.3
+          pipx install clang-tidy==18.1.8
           clang-format --version
           cppcheck --version
+          clang-tidy --version
 
       - name: Format check
         id: format_check

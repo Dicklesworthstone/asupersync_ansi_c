@@ -607,6 +607,7 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
             now = sched_now();
             (void)timers_fire(now);
         }
+        /* ASX_ANALYZER_WAIVER("config-dependent: 0 without blocking pool/native I/O") */
     } else if (sched_external_pending()) {
         now = sched_now();
         if (run_deadline != 0u && now >= run_deadline) return ASX_OK;

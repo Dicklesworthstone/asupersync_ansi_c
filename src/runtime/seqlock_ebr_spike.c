@@ -42,12 +42,12 @@
  *   3. seq++ (now even — marks write-complete)
  *
  * Reader protocol:
- *   1. s1 = load seq (if odd, spin/retry)
+ *   1. seq_before = load seq (if odd, spin/retry)
  *   2. acquire fence
  *   3. copy data into local snapshot
  *   4. acquire fence
- *   5. s2 = load seq
- *   6. if s1 != s2, goto 1 (writer intervened)
+ *   5. seq_after = load seq
+ *   6. if seq_before != seq_after, goto 1 (writer intervened)
  *
  * Properties:
  *   - Readers never block the writer (unlike rwlock)
@@ -119,8 +119,9 @@ void asx_seqlock_write_end(asx_seqlock *sl) {
  * artificially made odd (simulating a concurrent write).
  */
 int asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size) {
-    uint32_t s1, s2;
+    uint32_t seq_before;
     uint32_t read_size;
+    int consistent;
     int retries = 0;
     int max_retries = 100;
 
@@ -129,22 +130,20 @@ int asx_seqlock_read(const asx_seqlock *sl, void *out, uint32_t size) {
     read_size = (size < sl->data_size) ? size : sl->data_size;
 
     do {
-        s1 = asx_atomic_u32_load(&sl->sequence);
-        if (s1 & 1u) {
-            /* Writer in progress — retry */
+        seq_before = asx_atomic_u32_load(&sl->sequence);
+        consistent = 0;
+        /* An odd sequence means a writer is in progress: retry without copying. */
+        if ((seq_before & 1u) == 0u) {
+            asx_atomic_fence_acquire();
+            memcpy(out, sl->data, read_size);
+            asx_atomic_fence_acquire();
+            consistent = (asx_atomic_u32_load(&sl->sequence) == seq_before);
+        }
+        if (!consistent) {
             retries++;
             if (retries >= max_retries) return 0; /* give up */
-            continue;
         }
-        asx_atomic_fence_acquire();
-        memcpy(out, sl->data, read_size);
-        asx_atomic_fence_acquire();
-        s2 = asx_atomic_u32_load(&sl->sequence);
-        if (s1 != s2) {
-            retries++;
-            if (retries >= max_retries) return 0;
-        }
-    } while (s1 != s2);
+    } while (!consistent);
 
     return (retries == 0) ? 1 : 0;
 }

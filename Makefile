@@ -44,6 +44,12 @@ CPPCHECK_JOBS ?= 8
 CPPCHECK ?= $(shell if cppcheck --version 2>/dev/null | grep -q 'Cppcheck $(CPPCHECK_VERSION)'; then \
 	echo cppcheck; elif command -v uvx >/dev/null 2>&1; then \
 	echo "uvx --from cppcheck==$(CPPCHECK_WHEEL) cppcheck"; fi)
+# Pinned clang-tidy for the section 10.7 static-analysis gate, resolved the
+# same way as clang-format.
+CLANG_TIDY_VERSION ?= 18.1.8
+CLANG_TIDY ?= $(shell if clang-tidy --version 2>/dev/null | grep -q 'version $(CLANG_TIDY_VERSION)'; then \
+	echo clang-tidy; elif command -v uvx >/dev/null 2>&1; then \
+	echo "uvx --from clang-tidy==$(CLANG_TIDY_VERSION) clang-tidy"; fi)
 FAIL_ON_EMPTY_INVARIANT_TESTS ?= 0
 RUN_QEMU_IN_MATRIX ?= 0
 
@@ -696,7 +702,8 @@ lint-evidence:
 lint-static-analysis:
 	@echo "[asx] lint-static-analysis: section 10.7 gates..."
 	@if [ -x tools/ci/run_static_analysis.sh ]; then \
-		tools/ci/run_static_analysis.sh; \
+		CPPCHECK="$(CPPCHECK)" CLANG_TIDY="$(CLANG_TIDY)" \
+		FAIL_ON_MISSING_LINTER="$(FAIL_ON_MISSING_LINTER)" tools/ci/run_static_analysis.sh; \
 	else \
 		echo "[asx] lint-static-analysis: SKIP (runner not found)"; \
 	fi

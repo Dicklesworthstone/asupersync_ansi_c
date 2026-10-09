@@ -156,6 +156,8 @@ static void *static_arena_malloc(void *ctx, size_t size) {
         return NULL;
     }
 
+    /* ASX_ANALYZER_WAIVER("aligned: the header ends at an aligned user address, and
+     * alignment >= sizeof(void *) is validated") */
     header = (asx_static_arena_block_header *)(void *)(arena->base + header_offset);
     header->magic = ASX_STATIC_ARENA_BLOCK_MAGIC;
     header->requested_size = requested;
@@ -179,6 +181,8 @@ static asx_static_arena_block_header *static_arena_header_for(asx_static_arena *
     if (ptr_addr < base_addr) return NULL;
     ptr_offset = (size_t)(ptr_addr - base_addr);
     if (ptr_offset > arena->capacity || ptr_offset < sizeof(*header)) return NULL;
+    /* ASX_ANALYZER_WAIVER("aligned: ptr is an arena user address, so the slot before it is the
+     * aligned header; the magic check rejects foreign pointers") */
     header = (asx_static_arena_block_header *)(void *)(arena->base + ptr_offset - sizeof(*header));
     if (header->magic != ASX_STATIC_ARENA_BLOCK_MAGIC) return NULL;
     if (!static_arena_span_within(header->header_offset, header->total_span, arena->capacity)) {
@@ -876,6 +880,7 @@ static asx_status asx_codec_json_scan_number(const char *cursor, const char **ou
 static asx_status asx_codec_json_scan_value(const char *cursor, const char **out_next,
                                             uint32_t depth);
 
+/* ASX_ANALYZER_WAIVER("bounded recursion: array/object nesting deeper than 64 is rejected") */
 static asx_status asx_codec_json_scan_array(const char *cursor, const char **out_next,
                                             uint32_t depth) {
     const char *scan;
@@ -906,6 +911,7 @@ static asx_status asx_codec_json_scan_array(const char *cursor, const char **out
     }
 }
 
+/* ASX_ANALYZER_WAIVER("bounded recursion: array/object nesting deeper than 64 is rejected") */
 static asx_status asx_codec_json_scan_object(const char *cursor, const char **out_next,
                                              uint32_t depth) {
     const char *scan;
@@ -941,6 +947,7 @@ static asx_status asx_codec_json_scan_object(const char *cursor, const char **ou
     }
 }
 
+/* ASX_ANALYZER_WAIVER("bounded recursion: array/object nesting deeper than 64 is rejected") */
 static asx_status asx_codec_json_scan_value(const char *cursor, const char **out_next,
                                             uint32_t depth) {
     const char *scan;
