@@ -528,6 +528,15 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
     if (task->detached) { asx_task_slot_release((uint32_t)(task - g_tasks)); }
 }
 
+void asx_region_settle_internal(asx_region_id rid) {
+    asx_region_slot *region;
+    if (asx_region_slot_lookup(rid, &region) != ASX_OK) return;
+    /* The last task of a closing region lets it finalize. */
+    if (region->task_count == 0u && region->state != ASX_REGION_OPEN) {
+        asx_region_advance_internal(rid);
+    }
+}
+
 asx_region_id asx_region_handle_for_slot(uint32_t slot_idx) {
     return asx_handle_pack(ASX_TYPE_REGION, (uint16_t)(1u << (unsigned)ASX_REGION_OPEN),
                            asx_handle_pack_index(g_regions[slot_idx].generation,
@@ -610,6 +619,14 @@ asx_status asx_region_open(asx_region_id *out_id) {
     asx_cleanup_init(&g_regions[idx].cleanup);
     g_regions[idx].budget = asx_budget_infinite();
     g_regions[idx].capture_used = 0;
+    g_regions[idx].cancel_requested = 0;
+    g_regions[idx].cancel_reason.kind = ASX_CANCEL_USER;
+    g_regions[idx].cancel_reason.origin_region = ASX_INVALID_ID;
+    g_regions[idx].cancel_reason.origin_task = ASX_INVALID_ID;
+    g_regions[idx].cancel_reason.timestamp = 0;
+    g_regions[idx].cancel_reason.message = NULL;
+    g_regions[idx].cancel_reason.cause = NULL;
+    g_regions[idx].cancel_reason.truncated = 0;
 
     if (idx >= g_region_count) { g_region_count = idx + 1; }
 
@@ -934,7 +951,7 @@ asx_status asx_task_consume_cost(asx_task_id self, uint64_t cost) {
     if (st != ASX_OK) return st;
     if (asx_budget_consume_cost(&t->budget, cost)) return ASX_OK;
     /* Cost quota cannot cover the charge: COST_BUDGET cancellation. */
-    st = asx_task_cancel(self, ASX_CANCEL_COST_BUDGET);
+    st = asx_task_cancel_budget_internal(self, ASX_CANCEL_COST_BUDGET, asx_cancel_now_internal());
     (void)st;
     return ASX_E_COST_QUOTA_EXHAUSTED;
 }

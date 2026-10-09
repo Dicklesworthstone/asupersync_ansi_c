@@ -155,7 +155,16 @@ static void timer_heap_remove_at(uint32_t pos) {
 }
 
 void asx_task_timer_disarm_internal(asx_task_slot *task) {
-    if (task == NULL || task->timer_pos == ASX_SLOT_NONE) return;
+    if (task == NULL) return;
+    /* A sleep timer that never fired is dropped with its task (Rust: the
+     * Sleep future is dropped, TimerCancelled). */
+    if (task->traced_deadline != 0u) {
+        asx_trace_emit(ASX_TRACE_TIMER_CANCEL,
+                       (uint64_t)asx_task_handle_for_slot((uint32_t)(task - g_tasks)),
+                       task->traced_deadline);
+        task->traced_deadline = 0u;
+    }
+    if (task->timer_pos == ASX_SLOT_NONE) return;
     timer_heap_remove_at(task->timer_pos);
 }
 
@@ -188,6 +197,11 @@ static uint32_t timers_fire(asx_time now) {
         uint32_t idx = g_timer_heap[0];
         if (g_tasks[idx].wake_at > now) break;
         timer_heap_remove_at(0u);
+        if (g_tasks[idx].traced_deadline != 0u && g_tasks[idx].traced_deadline <= now) {
+            asx_trace_emit(ASX_TRACE_TIMER_FIRE, (uint64_t)asx_task_handle_for_slot(idx),
+                           g_tasks[idx].traced_deadline);
+            g_tasks[idx].traced_deadline = 0u;
+        }
         asx_task_wake_slot_internal(&g_tasks[idx]);
         fired++;
     }
@@ -219,6 +233,7 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->watcher = ASX_SLOT_NONE;
     task->watcher_gen = 0;
     task->mask_depth = 0;
+    task->traced_deadline = 0;
 }
 
 void asx_task_wake_slot_internal(asx_task_slot *task) {
@@ -318,6 +333,16 @@ asx_status asx_task_wait_until(asx_task_id self, asx_time deadline) {
 
     if (now >= deadline) return ASX_OK;
     if (asx_task_slot_lookup(self, &t) == ASX_OK && t->in_poll) {
+        /* A traced sleep timer: registered once per deadline (re-polls of
+         * the same sleep add nothing); a new deadline drops the old timer
+         * first, as re-arming a Rust Sleep does (sleep.rs:985-988). */
+        if (t->traced_deadline != deadline) {
+            if (t->traced_deadline != 0u) {
+                asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, t->traced_deadline);
+            }
+            t->traced_deadline = deadline;
+            asx_trace_emit(ASX_TRACE_TIMER_SET, (uint64_t)self, deadline);
+        }
         timer_arm((uint32_t)(t - g_tasks), deadline);
         t->park_requested = 1;
     }
@@ -443,6 +468,7 @@ static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_s
                                  asx_outcome_severity severity, asx_scheduler_event_kind ev,
                                  uint32_t round) {
     asx_task_state from = t->state;
+    asx_region_id region = t->region;
     (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
     t->state = ASX_TASK_COMPLETED;
     if (t->cancel_pending) sched_cancel_phase_complete(t);
@@ -452,6 +478,7 @@ static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_s
     asx_task_on_complete_internal(t, rslot);
     sched_emit(ev, tid, round);
     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
+    asx_region_settle_internal(region);
     return asx_runtime_take_pending_fault_internal();
 }
 
@@ -467,13 +494,19 @@ static void sched_enforce_budget(asx_task_slot *t, asx_task_id tid, asx_time *no
             *have_now = 1;
         }
         if (*now >= t->budget.deadline) {
-            st = asx_task_cancel(tid, ASX_CANCEL_DEADLINE);
+            /* Stamped with the deadline itself, as Rust's deadline timer
+             * stamps it (cx.rs:357). */
+            st = asx_task_cancel_budget_internal(tid, ASX_CANCEL_DEADLINE, t->budget.deadline);
             (void)st;
             return;
         }
     }
     if (t->budget.poll_quota == 0u) {
-        st = asx_task_cancel(tid, ASX_CANCEL_POLL_QUOTA);
+        if (!*have_now) {
+            *now = sched_now();
+            *have_now = 1;
+        }
+        st = asx_task_cancel_budget_internal(tid, ASX_CANCEL_POLL_QUOTA, *now);
         (void)st;
     }
 }

@@ -26,10 +26,21 @@ static uint64_t asx_trace_task_transition_aux(asx_task_state from, asx_task_stat
  * Task cancel request
  * ------------------------------------------------------------------- */
 
-asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind) {
+/* The time a cancel reason is stamped with: the runtime clock, or the
+ * virtual clock when no clock hook is installed. */
+asx_time asx_cancel_now_internal(void) {
+    asx_time now;
+    if (asx_runtime_now_ns(&now) != ASX_OK) now = asx_runtime_virtual_now();
+    return now;
+}
+
+asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reason *reason,
+                                           int trace_request) {
     asx_task_slot *t;
     asx_status st;
     asx_budget cleanup;
+
+    if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
 
     st = asx_task_slot_lookup(id, &t);
     if (st != ASX_OK) return st;
@@ -38,15 +49,19 @@ asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind) {
     if (asx_task_is_terminal(t->state)) { return ASX_OK; /* no-op for completed tasks */ }
 
     if (t->cancel_pending) {
-        /* Strengthen: if new cancel is higher severity, upgrade */
-        if (asx_cancel_severity(kind) > asx_cancel_severity(t->cancel_reason.kind)) {
-            t->cancel_reason.kind = kind;
-            cleanup = asx_cancel_cleanup_budget(kind);
+        /* Strengthen: the winning reason replaces the current one whole
+         * (Rust CancelReason::strengthen); a more severe kind also tightens
+         * the cleanup budget. Strengthening records no trace event: Rust
+         * has no strengthen event (state.rs:7794). */
+        asx_cancel_reason winner = asx_cancel_strengthen(&t->cancel_reason, reason);
+        if (asx_cancel_severity(winner.kind) > asx_cancel_severity(t->cancel_reason.kind)) {
+            cleanup = asx_cancel_cleanup_budget(winner.kind);
             /* Tighten budget: take the minimum polls remaining */
             if (asx_budget_polls(&cleanup) < t->cleanup_polls_remaining) {
                 t->cleanup_polls_remaining = asx_budget_polls(&cleanup);
             }
         }
+        t->cancel_reason = winner;
         t->cancel_epoch++;
         return ASX_OK;
     }
@@ -74,16 +89,10 @@ asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind) {
     }
 
     t->cancel_pending = 1;
-    t->cancel_reason.kind = kind;
-    t->cancel_reason.origin_region = ASX_INVALID_ID;
-    t->cancel_reason.origin_task = ASX_INVALID_ID;
-    t->cancel_reason.timestamp = 0;
-    t->cancel_reason.message = NULL;
-    t->cancel_reason.cause = NULL;
-    t->cancel_reason.truncated = 0;
+    t->cancel_reason = *reason;
     t->cancel_epoch = 1;
 
-    cleanup = asx_cancel_cleanup_budget(kind);
+    cleanup = asx_cancel_cleanup_budget(reason->kind);
     t->cleanup_polls_remaining = asx_budget_polls(&cleanup);
 
     /* Cancellation must be observed: a parked task becomes runnable so it
@@ -98,7 +107,24 @@ asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind) {
         t->cancel_witness = witness;
     }
 
+    /* A newly cancelled task (vocabulary cancel.requested, state.rs:7863). */
+    if (trace_request) {
+        asx_trace_payload payload;
+        payload.text = NULL;
+        payload.reason = &t->cancel_reason;
+        asx_trace_emit_payload_internal(ASX_TRACE_CANCEL_REQUEST, (uint64_t)id,
+                                        (uint64_t)reason->kind, &payload);
+    }
+
     return ASX_OK;
+}
+
+asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind) {
+    asx_task_slot *t;
+    asx_status st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
+    /* No requester given: the cancel originates at the task's own region. */
+    return asx_task_cancel_with_origin(id, kind, t->region, ASX_INVALID_ID);
 }
 
 /* -------------------------------------------------------------------
@@ -107,54 +133,53 @@ asx_status asx_task_cancel(asx_task_id id, asx_cancel_kind kind) {
 
 asx_status asx_task_cancel_with_origin(asx_task_id id, asx_cancel_kind kind,
                                        asx_region_id origin_region, asx_task_id origin_task) {
+    asx_cancel_reason reason;
+    reason.kind = kind;
+    reason.origin_region = origin_region;
+    reason.origin_task = origin_task;
+    reason.timestamp = asx_cancel_now_internal();
+    reason.message = NULL;
+    reason.cause = NULL;
+    reason.truncated = 0;
+    return asx_task_cancel_reason_internal(id, &reason, 1);
+}
+
+asx_status asx_task_cancel_with_reason(asx_task_id id, const asx_cancel_reason *reason) {
+    return asx_task_cancel_reason_internal(id, reason, 1);
+}
+
+asx_status asx_task_cancel_budget_internal(asx_task_id id, asx_cancel_kind kind, asx_time at) {
     asx_task_slot *t;
-    asx_status st;
-    int was_pending;
-    asx_cancel_kind old_kind;
-
-    /* Capture pre-cancel state to decide if origin should be updated */
-    st = asx_task_slot_lookup(id, &t);
+    asx_cancel_reason reason;
+    asx_status st = asx_task_slot_lookup(id, &t);
     if (st != ASX_OK) return st;
-
-    was_pending = t->cancel_pending;
-    old_kind = t->cancel_reason.kind;
-
-    st = asx_task_cancel(id, kind);
-    if (st != ASX_OK) return st;
-
-    /* Only set origin if this was the first cancel or if the cancel
-     * was actually strengthened (higher severity). Otherwise, the
-     * existing stronger cancel's origin attribution is preserved. */
-    if (!was_pending || asx_cancel_severity(kind) > asx_cancel_severity(old_kind)) {
-        t->cancel_reason.origin_region = origin_region;
-        t->cancel_reason.origin_task = origin_task;
-    }
-
-    return ASX_OK;
+    reason.kind = kind;
+    reason.origin_region = t->region;
+    reason.origin_task = id;
+    reason.timestamp = at;
+    reason.message = NULL;
+    reason.cause = NULL;
+    reason.truncated = 0;
+    return asx_task_cancel_reason_internal(id, &reason, 0);
 }
 
 /* -------------------------------------------------------------------
  * Region-wide propagation
  * ------------------------------------------------------------------- */
 
-/* Region subtree scratch: parent-first slot order (see lifecycle.c). */
+/* Region subtree scratch: parent-first slot order (see lifecycle.c), and
+ * the reason each subtree region's tasks are cancelled with. */
 static uint32_t g_propagate_slots[ASX_MAX_REGIONS];
+static asx_cancel_reason g_propagate_reasons[ASX_MAX_REGIONS];
 
-uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind) {
-    uint32_t i;
+/* Cancel every live task of the subtree (rooted at subtree entry 0) with
+ * its region's reason from g_propagate_reasons. */
+static uint32_t cancel_subtree_tasks(uint32_t n) {
     uint32_t r;
-    uint32_t n;
+    uint32_t i;
     uint32_t count = 0;
-
-    /* Structured cancellation: the region's own tasks receive `kind`;
-     * tasks in every descendant region receive PARENT, attributed to the
-     * region where the cancel originated. Regions are visited parent-first
-     * so attribution and trace order are deterministic. */
-    n = asx_region_subtree_internal(region, g_propagate_slots, ASX_MAX_REGIONS);
     for (r = 0; r < n; r++) {
         uint32_t key = asx_handle_index(asx_region_handle_for_slot(g_propagate_slots[r]));
-        asx_cancel_kind effective = (r == 0u) ? kind : ASX_CANCEL_PARENT;
-
         for (i = 0; i < g_task_count; i++) {
             ASX_CHECKPOINT_WAIVER("kernel-propagation: single-pass cancel sweep bounded by "
                                   "g_task_count <= ASX_MAX_TASKS; O(1) per iteration");
@@ -164,14 +189,137 @@ uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind) {
             if (asx_handle_index(t->region) != key) continue;
             if (asx_task_is_terminal(t->state)) continue;
 
-            if (asx_task_cancel_with_origin(asx_task_handle_for_slot(i), effective, region,
-                                            ASX_INVALID_ID) == ASX_OK) {
+            if (asx_task_cancel_reason_internal(asx_task_handle_for_slot(i),
+                                                &g_propagate_reasons[r], 1) == ASX_OK) {
                 count++;
             }
         }
     }
-
     return count;
+}
+
+/* A descendant's reason (state.rs:7737-7748): ParentCancelled, attributed
+ * to its immediate parent, stamped with the request's time, caused by the
+ * parent's reason. */
+static void parent_cancelled_reason(asx_cancel_reason *out, asx_region_id parent,
+                                    const asx_cancel_reason *parent_reason, asx_time timestamp) {
+    out->kind = ASX_CANCEL_PARENT;
+    out->origin_region = parent;
+    out->origin_task = ASX_INVALID_ID;
+    out->timestamp = timestamp;
+    out->message = NULL;
+    out->cause = (asx_cancel_reason *)parent_reason;
+    out->truncated = 0;
+}
+
+uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind) {
+    uint32_t r;
+    uint32_t n;
+    asx_time now = asx_cancel_now_internal();
+
+    /* Task-only structured cancellation: the region's own tasks receive
+     * `kind`, attributed to the region; tasks of each descendant region a
+     * ParentCancelled reason caused by its parent's. Regions stay open (see
+     * asx_region_cancel for the region-level cancel). Parent-first order
+     * keeps attribution and trace order deterministic. */
+    n = asx_region_subtree_internal(region, g_propagate_slots, ASX_MAX_REGIONS);
+    for (r = 0; r < n; r++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
+        if (r == 0u) {
+            g_propagate_reasons[0].kind = kind;
+            g_propagate_reasons[0].origin_region = region;
+            g_propagate_reasons[0].origin_task = ASX_INVALID_ID;
+            g_propagate_reasons[0].timestamp = now;
+            g_propagate_reasons[0].message = NULL;
+            g_propagate_reasons[0].cause = NULL;
+            g_propagate_reasons[0].truncated = 0;
+        } else {
+            /* No cause chain here: these reasons live in scratch storage
+             * that the next propagation reuses. */
+            parent_cancelled_reason(&g_propagate_reasons[r],
+                                    g_regions[g_propagate_slots[r]].parent_id, NULL, now);
+        }
+    }
+    return cancel_subtree_tasks(n);
+}
+
+asx_status asx_region_cancel(asx_region_id region, const asx_cancel_reason *reason,
+                             uint32_t *out_cancelled) {
+    asx_region_slot *root;
+    uint32_t r;
+    uint32_t n;
+    uint32_t count;
+    asx_status st;
+
+    if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(region, &root);
+    if (st != ASX_OK) return st;
+
+    /* Rust RuntimeState::cancel_request (state.rs:7625-7900). First pass,
+     * parent-first: each region's reason, its region.cancelled event (every
+     * call), and the close transition or a strengthened reason. */
+    n = asx_region_subtree_internal(region, g_propagate_slots, ASX_MAX_REGIONS);
+    for (r = 0; r < n; r++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
+        uint32_t slot = g_propagate_slots[r];
+        asx_region_slot *rs = &g_regions[slot];
+        asx_region_id rid = asx_region_handle_for_slot(slot);
+        asx_trace_payload payload;
+
+        if (r == 0u) {
+            g_propagate_reasons[0] = *reason;
+        } else {
+            /* The cause is the parent's stored reason, which outlives this
+             * call; parents precede children in the subtree order. */
+            asx_region_slot *parent = &g_regions[asx_handle_slot(rs->parent_id)];
+            parent_cancelled_reason(&g_propagate_reasons[r], rs->parent_id, &parent->cancel_reason,
+                                    reason->timestamp);
+        }
+        payload.text = NULL;
+        payload.reason = &g_propagate_reasons[r];
+        asx_trace_emit_payload_internal(ASX_TRACE_REGION_CANCELLED, rid,
+                                        (uint64_t)g_propagate_reasons[r].kind, &payload);
+
+        if (rs->state == ASX_REGION_CLOSED) continue;
+        if (!rs->cancel_requested) {
+            rs->cancel_reason = g_propagate_reasons[r];
+            rs->cancel_requested = 1;
+        } else {
+            rs->cancel_reason = asx_cancel_strengthen(&rs->cancel_reason, &g_propagate_reasons[r]);
+        }
+        if (rs->state == ASX_REGION_OPEN && !rs->poisoned) {
+            (void)asx_ghost_check_region_transition(rid, rs->state, ASX_REGION_CLOSING);
+            rs->state = ASX_REGION_CLOSING;
+            asx_trace_emit(ASX_TRACE_REGION_CLOSE, rid, 0);
+        }
+    }
+
+    /* Second pass: every live task takes its region's reason. */
+    count = cancel_subtree_tasks(n);
+
+    /* Third pass: regions already without live work finalize now; the
+     * others close as their last task completes. */
+    for (r = 0; r < n; r++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
+        asx_region_slot *rs = &g_regions[g_propagate_slots[r]];
+        if (rs->task_count == 0u && rs->child_count == 0u) {
+            asx_region_advance_internal(asx_region_handle_for_slot(g_propagate_slots[r]));
+        }
+    }
+
+    if (out_cancelled != NULL) *out_cancelled = count;
+    return ASX_OK;
+}
+
+asx_status asx_region_get_cancel_reason(asx_region_id region, asx_cancel_reason *out) {
+    asx_region_slot *rs;
+    asx_status st;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(region, &rs);
+    if (st != ASX_OK) return st;
+    if (!rs->cancel_requested) return ASX_E_NOT_FOUND;
+    *out = rs->cancel_reason;
+    return ASX_OK;
 }
 
 /* -------------------------------------------------------------------
@@ -189,10 +337,8 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
 
     /* Budget deadline observed inline, between scheduler polls. */
     if (!t->cancel_pending && t->budget.deadline != 0u && !asx_task_is_terminal(t->state)) {
-        asx_time now;
-        if (asx_runtime_now_ns(&now) != ASX_OK) now = asx_runtime_virtual_now();
-        if (now >= t->budget.deadline) {
-            st = asx_task_cancel(self, ASX_CANCEL_DEADLINE);
+        if (asx_cancel_now_internal() >= t->budget.deadline) {
+            st = asx_task_cancel_budget_internal(self, ASX_CANCEL_DEADLINE, t->budget.deadline);
             (void)st;
         }
     }

@@ -261,6 +261,25 @@ static asx_status asx_region_finalize_one(asx_region_id id, asx_region_slot *r) 
     return ASX_OK;
 }
 
+void asx_region_advance_internal(asx_region_id id) {
+    uint32_t depth;
+    /* Rust advance_region_state: a closing region whose live work is gone
+     * finalizes without anyone draining it, and its closing parent may then
+     * finalize too. An Open region is never advanced here: only a close or
+     * a cancel starts closing. Bounded by the region tree's height. */
+    for (depth = 0; depth < ASX_MAX_REGIONS && id != ASX_INVALID_ID; depth++) {
+        asx_region_slot *r;
+        asx_region_id parent;
+        if (asx_region_slot_lookup(id, &r) != ASX_OK) return;
+        if (r->state == ASX_REGION_OPEN || r->state == ASX_REGION_CLOSED) return;
+        if (r->poisoned || r->task_count > 0u) return;
+        parent = r->parent_id;
+        if (asx_region_finalize_one(id, r) != ASX_OK) return; /* children or obligations remain */
+        if (r->state != ASX_REGION_CLOSED) return;
+        id = parent;
+    }
+}
+
 asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
     asx_region_slot *r;
     asx_status st;

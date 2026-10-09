@@ -10,6 +10,7 @@
 #include <asx/core/cancel.h>
 #include <asx/runtime/runtime.h>
 #include <stddef.h>
+#include <string.h>
 
 /* Default cleanup poll quota per severity group (0-5) */
 static const uint32_t quota_by_severity[] = {
@@ -40,8 +41,22 @@ asx_budget asx_cancel_cleanup_budget(asx_cancel_kind kind) {
     return b;
 }
 
+/* Whether candidate `b` replaces current reason `a` (Rust
+ * CancelReason::strengthen, types/cancel.rs:956-1008; vocabulary §4):
+ * the more severe kind wins; on equal severity the earlier timestamp wins;
+ * on equal timestamps a message beats none and the smaller message (byte
+ * order) beats the larger. Otherwise the current reason is kept. */
+static int strengthen_replaces(const asx_cancel_reason *a, const asx_cancel_reason *b) {
+    int sev_a = asx_cancel_severity(a->kind);
+    int sev_b = asx_cancel_severity(b->kind);
+    if (sev_b != sev_a) return sev_b > sev_a;
+    if (b->timestamp != a->timestamp) return b->timestamp < a->timestamp;
+    if (b->message == NULL) return 0;
+    if (a->message == NULL) return 1;
+    return strcmp(b->message, a->message) < 0;
+}
+
 asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a, const asx_cancel_reason *b) {
-    int sev_a, sev_b;
     asx_cancel_reason fallback;
     if (!a && !b) {
         fallback.kind = ASX_CANCEL_USER;
@@ -55,13 +70,7 @@ asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a, const asx_ca
     }
     if (!a) return *b;
     if (!b) return *a;
-    sev_a = asx_cancel_severity(a->kind);
-    sev_b = asx_cancel_severity(b->kind);
-    if (sev_a > sev_b) return *a;
-    if (sev_b > sev_a) return *b;
-    /* Equal severity: earlier timestamp wins */
-    if (a->timestamp <= b->timestamp) return *a;
-    return *b;
+    return strengthen_replaces(a, b) ? *b : *a;
 }
 
 /* -------------------------------------------------------------------
@@ -178,8 +187,9 @@ asx_status asx_cancel_request(asx_task_id task, const asx_cancel_reason *reason)
     if (task == ASX_INVALID_ID) return ASX_E_NOT_FOUND;
 
     /* Delegate to the runtime's task cancellation mechanism, which handles
-     * state transitions, cleanup budget, witness creation, and ghost checks. */
-    return asx_task_cancel(task, reason->kind);
+     * state transitions, cleanup budget, witness creation, and ghost checks.
+     * The whole reason travels (origin, timestamp, message, cause). */
+    return asx_task_cancel_with_reason(task, reason);
 }
 
 /* -------------------------------------------------------------------

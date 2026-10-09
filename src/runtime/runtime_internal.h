@@ -39,6 +39,11 @@ typedef struct {
     asx_budget budget;         /* inherited by tasks and child regions */
     uint8_t capture_arena[ASX_REGION_CAPTURE_ARENA_BYTES];
     uint32_t capture_used;
+    /* Region cancellation (Rust RegionRecord cancel reason): set by the
+     * first asx_region_cancel reaching the region, strengthened by later
+     * ones. Descendants' reasons chain to their parent's via `cause`. */
+    int cancel_requested;
+    asx_cancel_reason cancel_reason;
 } asx_region_slot;
 
 typedef struct {
@@ -74,6 +79,11 @@ typedef struct {
     asx_time wake_at;
     uint64_t timer_seq;
     uint32_t timer_pos; /* heap index, ASX_SLOT_NONE when disarmed */
+    /* Deadline of the task's traced sleep timer (asx_task_wait_until),
+     * 0 when none: ASX_TRACE_TIMER_SET when registered, TIMER_FIRE when
+     * due, TIMER_CANCEL when the task completes first. Internal wakeups
+     * (budget deadlines, asx_task_arm_timer) are not traced timers. */
+    asx_time traced_deadline;
     /* Join waiters: intrusive singly-linked list of slot indices. */
     uint32_t first_waiter; /* first task parked in join on this one */
     uint32_t next_waiter;  /* link while waiting on another task */
@@ -160,6 +170,38 @@ void asx_task_timer_disarm_internal(asx_task_slot *task);
 void asx_task_join_detach_internal(asx_task_slot *task);
 /* Wakes join waiters and the completion watcher of a completing task. */
 void asx_task_join_wake_waiters_internal(asx_task_slot *task);
+
+/* After a task's completion is recorded (ASX_TRACE_SCHED_COMPLETE): let
+ * its region finalize if it is closing and that was its last task. The
+ * region event must follow the completion it depends on. */
+void asx_region_settle_internal(asx_region_id rid);
+
+/* Finalize a closing region whose tasks have all completed, then its
+ * closing ancestors in turn (Rust advance_region_state). No-op for an Open
+ * or Closed region. Defined in quiescence.c. */
+void asx_region_advance_internal(asx_region_id id);
+
+/* Emit an event whose observer call carries `payload` (trace.c). */
+void asx_trace_emit_payload_internal(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux,
+                                     const asx_trace_payload *payload);
+
+/* The time a cancel reason is stamped with (runtime clock, else virtual). */
+asx_time asx_cancel_now_internal(void);
+
+/* The core of every task cancel: a newly cancelled task takes `reason`
+ * whole and records ASX_TRACE_CANCEL_REQUEST when `trace_request` is set;
+ * an already cancelled one is strengthened (asx_cancel_strengthen) and
+ * records nothing. A terminal task is left alone (ASX_OK). */
+ASX_MUST_USE asx_status asx_task_cancel_reason_internal(asx_task_id id,
+                                                        const asx_cancel_reason *reason,
+                                                        int trace_request);
+
+/* Budget exhaustion observed for task `id` (deadline, poll quota, cost):
+ * attributed to the task and its region and stamped `at`, recorded on the
+ * task only, as Rust's checkpoint budget check does (cx.rs:3112-3160): no
+ * cancel.requested event. */
+ASX_MUST_USE asx_status asx_task_cancel_budget_internal(asx_task_id id, asx_cancel_kind kind,
+                                                        asx_time at);
 
 /* Collect the region subtree rooted at `root` in parent-first (BFS)
  * order as region slot indices. Returns the count written (bounded by

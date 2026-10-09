@@ -32,7 +32,11 @@ typedef struct asx_cancel_reason {
 /* Return the cleanup budget for a cancel kind */
 ASX_API asx_budget asx_cancel_cleanup_budget(asx_cancel_kind kind);
 
-/* Strengthen: returns the reason with higher severity. Equal severity: earlier timestamp wins. */
+/* Strengthen current reason `a` with candidate `b` and return the winner,
+ * whole (Rust CancelReason::strengthen): the more severe kind wins; equal
+ * severity: the earlier timestamp wins; equal timestamps: a message beats
+ * none and the smaller message (byte order) beats the larger; otherwise
+ * `a` is kept. */
 ASX_API asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a,
                                                 const asx_cancel_reason *b);
 

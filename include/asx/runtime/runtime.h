@@ -398,6 +398,22 @@ ASX_API ASX_MUST_USE asx_status asx_task_cancel_with_origin(asx_task_id id, asx_
                                                             asx_region_id origin_region,
                                                             asx_task_id origin_task);
 
+/* Cancel with a complete reason: kind, origin region and task, timestamp,
+ * message and cause (Rust CancelReason). A task already cancelled is
+ * strengthened: the winning reason replaces the current one whole (see
+ * asx_cancel_strengthen). The message and cause are borrowed and must
+ * outlive the task's record.
+ *
+ * asx_task_cancel stamps the current time and attributes the cancel to the
+ * task's own region; asx_task_cancel_with_origin stamps the current time.
+ * A newly cancelled task records ASX_TRACE_CANCEL_REQUEST.
+ *
+ * Returns ASX_OK (also for a completed task), ASX_E_INVALID_ARGUMENT if
+ * reason is NULL, a lookup error for a bad handle.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_cancel_with_reason(asx_task_id id,
+                                                            const asx_cancel_reason *reason);
+
 /* Propagate cancellation to all tasks in a region.
  *
  * Preconditions: region must be a valid region handle.
@@ -405,6 +421,34 @@ ASX_API ASX_MUST_USE asx_status asx_task_cancel_with_origin(asx_task_id id, asx_
  * Returns the number of tasks that received the cancel signal.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API uint32_t asx_cancel_propagate(asx_region_id region, asx_cancel_kind kind);
+
+/* Cancel a region (Rust RuntimeState::cancel_request). Every region of
+ * the subtree, parent first:
+ *   - records ASX_TRACE_REGION_CANCELLED with its reason: `reason` for
+ *     `region`; for a descendant, ParentCancelled attributed to its parent,
+ *     stamped with reason->timestamp and caused by the parent's reason;
+ *   - begins closing (Open -> Closing, ASX_TRACE_REGION_CLOSE), or, if
+ *     already closing, strengthens its stored reason (asx_cancel_strengthen).
+ * Then every live task of the subtree is cancelled with its region's
+ * reason (a newly cancelled task records ASX_TRACE_CANCEL_REQUEST). Regions
+ * already without live work finalize at once; the others close as their
+ * last task completes. Closing regions admit no new tasks.
+ *
+ * The message and cause of `reason` are borrowed and must outlive the
+ * region. *out_cancelled (if non-NULL) receives the number of tasks
+ * reached.
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if reason is NULL, or a lookup
+ * error for a bad handle.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_region_cancel(asx_region_id region,
+                                                  const asx_cancel_reason *reason,
+                                                  uint32_t *out_cancelled);
+
+/* Read a region's (strengthened) cancel reason. Returns ASX_OK,
+ * ASX_E_INVALID_ARGUMENT if out is NULL, a lookup error for a bad handle,
+ * or ASX_E_NOT_FOUND if the region was never cancelled. */
+ASX_API ASX_MUST_USE asx_status asx_region_get_cancel_reason(asx_region_id region,
+                                                             asx_cancel_reason *out);
 
 /* Task checkpoint: observe cancel status and advance phase.
  * If in CancelRequested, transitions to Cancelling and applies

@@ -198,8 +198,8 @@ event times.
 | `try_join` | `task` | `handle.try_join()` (`:863`) | `asx_task_join(target, &outcome)` | no | ignored. A running child gives `ASX_E_TASK_NOT_COMPLETED`. |
 | `abort_task` | `task`, `kind`, optional `message` | `handle.abort_with_reason(reason)` (`task_handle.rs:1005`), reason attributed to the requester (§4, "Reason attribution") | `asx_task_cancel_with_origin(target, kind, own_region, self)` plus message (C gap, §7) | no | ignored |
 | `open_region` | `as`, optional `budget` | `cx.open_child_region(ChildRegionSpec::inherit().with_budget(b)).await` (`cx.rs:4491`; `child_region.rs:76`, `:87`) | `asx_region_open_child_with_budget(own_region, budget, &id)` | until the next lab step creates the region | ignored. A closing parent gives `ASX_E_REGION_CLOSED`. |
-| `cancel_region` | `region` (one this task opened), `kind`, optional `message` | `child.cancel(reason)` (`child_region.rs:381`), reason attributed to the requester (§4, "Reason attribution") | `asx_cancel_propagate(region, kind)` plus origin and message (C gap, §7) | no | ignored |
-| `close_region` | `region` (one this task opened) | `child.close().await` (`child_region.rs:424`): cancels the remaining tasks, drains, finalizes, waits for Closed | `asx_region_close(region)`, then wait for Closed, with the same cancel-then-drain semantics | until Closed | Ignored: the closer's own cancellation is not observed. |
+| `cancel_region` | `region` (one this task opened), `kind`, optional `message` | `child.cancel(reason)` (`child_region.rs:381`), reason attributed to the requester (§4, "Reason attribution") | `asx_region_cancel(region, &reason, NULL)` | no | ignored |
+| `close_region` | `region` (one this task opened) | `child.close().await` (`child_region.rs:424`): cancels the remaining tasks, drains, finalizes, waits for Closed | `asx_region_cancel(region, &reason, NULL)` with the User reason the Rust close command carries (`"owned child region body finished"`, `lab/runtime.rs:4195`), then wait for Closed (the region finalizes when its last task completes) | until Closed | Ignored: the closer's own cancellation is not observed. |
 
 A task can cancel or close only regions it opened itself. Rust's region
 command queue is crate-private (`runtime/spawn_mailbox.rs:2311`).
@@ -295,9 +295,9 @@ idle and virtual time is advanced to `t` (§2).
 
 | op | Fields | Rust | C |
 |---|---|---|---|
-| `cancel_region` | `region`, `kind`, optional `message` | `lab.state.cancel_request(region, &reason, None)` (`state.rs:7547`); the effects are routed with `into_parts()`, `scheduler.schedule_cancel` and `dispatch()` (pattern: `tests/api_v2_integration.rs:347-358`) | `asx_cancel_propagate(region, kind)` plus message (C gap, §7) |
+| `cancel_region` | `region`, `kind`, optional `message` | `lab.state.cancel_request(region, &reason, None)` (`state.rs:7547`); the effects are routed with `into_parts()`, `scheduler.schedule_cancel` and `dispatch()` (pattern: `tests/api_v2_integration.rs:347-358`) | `asx_region_cancel(region, &reason, NULL)` |
 | `cancel_task` | `task`, `kind`, optional `message` | `lab.state.cancel_task(task, &reason)` (`state.rs:3429`), effects routed as above | `asx_task_cancel_with_origin(task, kind, task_region, ASX_INVALID_ID)` plus message |
-| `close_region` | `region`, `kind` | `cancel_request(region, kind)`, then `advance_region_state(region)` (`state.rs:10057`) after each idle until Closed | `asx_region_close(region)` with the same cancel-then-drain semantics |
+| `close_region` | `region`, `kind` | `cancel_request(region, kind)`, then `advance_region_state(region)` (`state.rs:10057`) after each idle until Closed | `asx_region_cancel(region, &reason, NULL)`, then `asx_scheduler_run_until_idle` until Closed |
 | `advance` | `ns` | `lab.advance_time(ns)` (`lab/runtime.rs:3076`; a forward jump, the only clock fault Rust offers) | `asx_lab_advance_time(ns)` |
 | `region_limits` | `region`, optional `max_tasks`, `max_children`, `max_obligations` | `lab.state.set_region_limits(region, RegionLimits{…})` (`state.rs:4103`; `record/region.rs:208`) | region admission limits (C gap, §7) |
 
@@ -319,9 +319,8 @@ way asupersync's own request paths build one:
 stamps `RegionId::testing_default()` and a fixed 1 s timestamp
 (`types/cancel.rs:590-605`). Captures made with it recorded placeholder
 attribution, and the placeholder region happened to be named `"root"`.
-C stamps the same fields: `asx_cancel_propagate` already attributes a region
-cancel to the target region, and the requester-attributed cases need the
-origin and message parameters listed in §7.
+C builds the same reason and passes it whole: `asx_region_cancel(region,
+&reason, …)` and `asx_task_cancel_with_reason(task, &reason)`.
 
 There is no allocation-failure fault and no backward or per-task clock skew:
 Rust has neither (`lab/runtime.rs:3357`). `region_limits` is the scripted
@@ -360,7 +359,11 @@ no public form of them:
 ## 7. Work this DSL requires on the C side (W1.5)
 
 Each gap is a missing capability in the C runtime that W1.5 (bd-9kll.2.5)
-must close. Some are also drift findings in their own right.
+must close. Some are also drift findings in their own right. The
+interpreter (`src/conformance/interpreter.c`) fails a run that reaches an
+open gap with the gap named; `make conformance` lists them as ERROR.
+
+Open:
 
 - **Panicked outcome.** C never produces `ASX_OUTCOME_PANICKED` from task
   completion; only the outcome-join code mentions it. `return {"tag":"panicked"}`
@@ -370,20 +373,34 @@ must close. Some are also drift findings in their own right.
   aborts with `Cancel`.
 - **Obligation leak.** C needs leak reporting with the
   `obligation.leaked` vocabulary event.
-- **Cancel message and origin.** `asx_cancel_propagate(region, kind)` and
-  `asx_task_cancel_with_origin(...)` take no message, and region cancel
-  takes no origin task. Reasons carry both (vocabulary §4).
-- **`region.cancelled` and `cancel.requested` emission** per the rules in
-  `CANONICAL_VOCABULARY_V2.md` §3.
+- **Budget-deadline sleep.** C wakes a sleeping task at its budget deadline
+  and its bounded cleanup force-completes it; Rust lets a Deadline-kind
+  sleep run to its own deadline and reports the cancel at the next
+  checkpoint (`budget-deadline-sleep-checkpoint-001`).
 - **Non-reserving channel sends.** `send` and `try_send` must not register
   an obligation; `reserve_send` must register a `SendPermit`; a semaphore
   permit must register a `SemaphorePermit`.
 - **Oneshot trace and obligation behaviour.** C's oneshot must register the
   `SendPermit` and emit the exact `user.trace` messages (vocabulary §3).
-- **`user.trace` emission** for the `trace` step.
 - **Region admission limits** for `region_limits`: no C API sets per-region
   task, child or obligation limits today. `ASX_E_ADMISSION_LIMIT` appears
   only in the status string table.
-- **Close semantics.** `asx_region_close` must cancel the remaining tasks
-  and drain, as Rust's close does. Any difference will show up as a
-  divergence on the first `close_region` scenario.
+
+Closed (each verified by a fixture that now matches):
+
+- **Cancel message and origin**: `asx_task_cancel_with_reason` and
+  `asx_region_cancel` take a whole reason; budget cancels are attributed to
+  the task and stamped (`budget-poll-quota-exhaustion-001`).
+- **`region.cancelled` and `cancel.requested` emission** and Rust's
+  `cancel_request` semantics: `asx_region_cancel` begins closing the
+  subtree, chains ParentCancelled causes to the immediate parent, and
+  regions finalize when their last task completes
+  (`region-lifecycle-cancel-propagates-001`).
+- **`user.trace` emission** for the `trace` step (`asx_trace_user`).
+- **Timer events** for sleeps (`timers-same-deadline-001`,
+  `quiescence-pending-timer-001`).
+- **Close semantics**: the `close_region` step is a region cancel followed
+  by waiting for Closed. Its remaining difference is Rust's: the lab
+  runtime stamps the close with `CancelReason::user`'s testing defaults
+  (`lab/runtime.rs:4195`), which `region-lifecycle-close-cancels-children-001`
+  reports.

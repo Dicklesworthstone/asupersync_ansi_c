@@ -9,15 +9,14 @@
 #include <stdint.h>
 #include <string.h>
 
-/* Arm the calling task's timer for `target` and park it. Both steps are
- * best-effort: outside a scheduler poll (or with an invalid `self`) the
- * primitive degrades to plain re-polling. Always returns ASX_E_PENDING. */
+/* Wait on the calling task's traced sleep timer for `target` (registered
+ * once, fired or cancelled in the trace like a Rust Sleep). Best-effort:
+ * outside a scheduler poll (or with an invalid `self`) the primitive
+ * degrades to plain re-polling. Callers have checked that `target` is
+ * still ahead, so this returns ASX_E_PENDING. */
 static asx_status park_until(asx_task_id self, asx_time target) {
-    if (asx_task_arm_timer(self, target) == ASX_OK) {
-        asx_status st = asx_task_park(self);
-        (void)st;
-    }
-    return ASX_E_PENDING;
+    asx_status st = asx_task_wait_until(self, target);
+    return st == ASX_OK ? ASX_E_PENDING : st;
 }
 
 /* ===================================================================

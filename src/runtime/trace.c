@@ -171,7 +171,8 @@ static void *g_trace_observer_ctx;
 static int g_trace_observing; /* guards against an observer that emits */
 
 static void trace_record(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux,
-                         const char *text) {
+                         const asx_trace_payload *payload) {
+    static const asx_trace_payload none = {NULL, NULL};
     asx_trace_event *e = &g_trace_ring[g_trace_emitted % ASX_TRACE_CAPACITY];
     e->sequence = (uint32_t)(g_trace_emitted & 0xFFFFFFFFu);
     e->kind = kind;
@@ -183,9 +184,14 @@ static void trace_record(asx_trace_event_kind kind, uint64_t entity_id, uint64_t
     if (g_trace_observer != NULL && !g_trace_observing) {
         asx_trace_event copy = *e;
         g_trace_observing = 1;
-        g_trace_observer(g_trace_observer_ctx, &copy, text);
+        g_trace_observer(g_trace_observer_ctx, &copy, payload != NULL ? payload : &none);
         g_trace_observing = 0;
     }
+}
+
+void asx_trace_emit_payload_internal(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux,
+                                     const asx_trace_payload *payload) {
+    trace_record(kind, entity_id, aux, payload);
 }
 
 void asx_trace_set_observer(asx_trace_observer_fn fn, void *ctx) {
@@ -194,9 +200,12 @@ void asx_trace_set_observer(asx_trace_observer_fn fn, void *ctx) {
 }
 
 void asx_trace_user(asx_task_id task, const char *message) {
-    const char *text = message == NULL ? "" : message;
-    uint64_t hash = fnv1a_mix(ASX_TRACE_DIGEST_SEED, text, (uint32_t)strlen(text));
-    trace_record(ASX_TRACE_USER, (uint64_t)task, hash, text);
+    asx_trace_payload payload;
+    payload.text = message == NULL ? "" : message;
+    payload.reason = NULL;
+    trace_record(ASX_TRACE_USER, (uint64_t)task,
+                 fnv1a_mix(ASX_TRACE_DIGEST_SEED, payload.text, (uint32_t)strlen(payload.text)),
+                 &payload);
 }
 
 static uint32_t trace_retained(void) {

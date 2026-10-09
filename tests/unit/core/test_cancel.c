@@ -108,11 +108,30 @@ TEST(cancel_severity_out_of_range_clamps) {
 }
 
 TEST(cancel_strengthen_equal_severity_same_timestamp) {
-    /* Equal severity, equal timestamp: first argument wins (left-bias) */
+    /* Equal severity, equal timestamp, larger candidate message: kept. */
     asx_cancel_reason a = {ASX_CANCEL_TIMEOUT, 0, 0, 100, "a", NULL, 0};
     asx_cancel_reason b = {ASX_CANCEL_DEADLINE, 0, 0, 100, "b", NULL, 0};
     asx_cancel_reason result = asx_cancel_strengthen(&a, &b);
     ASSERT_EQ(result.kind, ASX_CANCEL_TIMEOUT);
+}
+
+TEST(cancel_strengthen_tie_prefers_a_message_then_the_smaller_one) {
+    /* Rust CancelReason::strengthen (types/cancel.rs:991-1007): on equal
+     * severity and timestamp a reason with a message replaces one without,
+     * and the smaller message replaces the larger, whole reason included. */
+    asx_cancel_reason none = {ASX_CANCEL_TIMEOUT, 0, 0, 100, NULL, NULL, 0};
+    asx_cancel_reason late = {ASX_CANCEL_DEADLINE, 0, 0, 100, "late", NULL, 0};
+    asx_cancel_reason early = {ASX_CANCEL_TIMEOUT, 0, 0, 100, "early", NULL, 0};
+    asx_cancel_reason result = asx_cancel_strengthen(&none, &late);
+    ASSERT_EQ(result.kind, ASX_CANCEL_DEADLINE);
+    ASSERT_STR_EQ(result.message, "late");
+    result = asx_cancel_strengthen(&late, &none);
+    ASSERT_STR_EQ(result.message, "late");
+    result = asx_cancel_strengthen(&late, &early);
+    ASSERT_EQ(result.kind, ASX_CANCEL_TIMEOUT);
+    ASSERT_STR_EQ(result.message, "early");
+    result = asx_cancel_strengthen(&early, &late);
+    ASSERT_STR_EQ(result.message, "early");
 }
 
 /* ------------------------------------------------------------------ */
@@ -276,6 +295,7 @@ int main(void) {
     RUN_TEST(cancel_strengthen_equal_severity_earlier_wins);
     RUN_TEST(cancel_severity_out_of_range_clamps);
     RUN_TEST(cancel_strengthen_equal_severity_same_timestamp);
+    RUN_TEST(cancel_strengthen_tie_prefers_a_message_then_the_smaller_one);
 
     /* Witness lifecycle */
     RUN_TEST(witness_create_and_query_phase);

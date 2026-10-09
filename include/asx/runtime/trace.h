@@ -178,14 +178,24 @@ ASX_API void asx_trace_emit(asx_trace_event_kind kind, uint64_t entity_id, uint6
  * the text itself reaches only the observer. NULL is the empty message. */
 ASX_API void asx_trace_user(asx_task_id task, const char *message);
 
+/* What an event refers to beyond its record, valid only during the
+ * observer call: the message of an ASX_TRACE_USER event, and the cancel
+ * reason an ASX_TRACE_CANCEL_REQUEST or ASX_TRACE_REGION_CANCELLED event
+ * was emitted with. Absent fields are NULL. */
+struct asx_cancel_reason;
+typedef struct {
+    const char *text;
+    const struct asx_cancel_reason *reason;
+} asx_trace_payload;
+
 /* Streaming observer: called synchronously for every event after it is
  * recorded, so a consumer sees the whole trace whatever the ring retains.
- * `text` is the message of an ASX_TRACE_USER event and NULL otherwise; it
- * is valid only during the call. The observer must not emit events (such
+ * `payload` is never NULL. The observer must not emit events (such
  * emissions are recorded but not re-observed). One observer at a time;
  * NULL removes it. asx_trace_reset() leaves it installed.
  * Thread-safety: none (single-threaded runtime). */
-typedef void (*asx_trace_observer_fn)(void *ctx, const asx_trace_event *event, const char *text);
+typedef void (*asx_trace_observer_fn)(void *ctx, const asx_trace_event *event,
+                                      const asx_trace_payload *payload);
 ASX_API void asx_trace_set_observer(asx_trace_observer_fn fn, void *ctx);
 
 /* Number of events currently retained in the ring (<= ASX_TRACE_CAPACITY). */

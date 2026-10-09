@@ -71,6 +71,11 @@ typedef struct {
     uint32_t n_obligations;
     it_local_region regions[IT_MAX_LOCAL];
     uint32_t n_regions;
+    /* Projection of the task's sleep timers (vocabulary §2: "<task>/tm<k>"). */
+    uint32_t timers;         /* timers registered so far (k of the latest) */
+    uint32_t timer_name_off; /* name of the latest, in g_text */
+    int timer_pending;       /* the latest is scheduled and not yet fired/cancelled */
+    asx_time timer_deadline;
 } it_task;
 
 typedef struct {
@@ -121,6 +126,10 @@ static uint32_t g_text_used;
 static char *g_error;
 static size_t g_error_cap;
 static int g_failed;
+
+/* The run's root region and its max_steps poll budget (DSL §1). */
+static asx_region_id g_root;
+static asx_budget *g_budget;
 
 static asx_runtime g_rt;
 
@@ -456,7 +465,7 @@ static uint32_t outcome_node(asx_task_id id) {
 /* Trace observer: the runtime's events, captured as they are emitted   */
 /* ------------------------------------------------------------------ */
 
-static void it_observe(void *ctx, const asx_trace_event *ev, const char *text) {
+static void it_observe(void *ctx, const asx_trace_event *ev, const asx_trace_payload *payload) {
     it_event *e;
     (void)ctx;
     switch (ev->kind) {
@@ -504,17 +513,19 @@ static void it_observe(void *ctx, const asx_trace_event *ev, const char *text) {
         if (asx_obligation_get_info((asx_obligation_id)ev->entity_id, &e->obligation) != ASX_OK) {
             it_fail("obligation event for an unreadable obligation", NULL);
         }
-    } else if (ev->kind == ASX_TRACE_CANCEL_REQUEST) {
-        asx_cancel_reason r;
-        if (asx_task_get_cancel_reason((asx_task_id)ev->entity_id, &r) != ASX_OK) {
-            it_fail("cancel.requested for a task without a reason", NULL);
+    } else if (ev->kind == ASX_TRACE_CANCEL_REQUEST || ev->kind == ASX_TRACE_REGION_CANCELLED) {
+        /* The reason the event was emitted with, not a later strengthened
+         * one. */
+        if (payload->reason == NULL) {
+            it_fail("cancel event without its reason", asx_trace_event_kind_str(ev->kind));
             return;
         }
-        capture_reason(&r, &e->reason);
+        capture_reason(payload->reason, &e->reason);
         e->has_reason = 1;
     } else if (ev->kind == ASX_TRACE_USER) {
-        size_t len = text != NULL ? strlen(text) : 0u;
-        e->text_off = text_store(text != NULL ? text : "", len);
+        const char *text = payload->text != NULL ? payload->text : "";
+        size_t len = strlen(text);
+        e->text_off = text_store(text, len);
         e->text_len = (uint32_t)len;
     }
 }
@@ -588,6 +599,22 @@ static it_local_region *local_region(it_task *t, const char *name) {
         if (strcmp(t->regions[i].name, name) == 0) return &t->regions[i];
     }
     return NULL;
+}
+
+/* A reason attributed as DSL §4 "Reason attribution" prescribes, stamped
+ * now, with the step's optional message (scenario text, which outlives
+ * the run). */
+static asx_cancel_reason make_reason(asx_cancel_kind kind, asx_region_id origin_region,
+                                     asx_task_id origin_task, const char *message) {
+    asx_cancel_reason r;
+    r.kind = kind;
+    r.origin_region = origin_region;
+    r.origin_task = origin_task;
+    r.timestamp = asx_runtime_virtual_now();
+    r.message = message;
+    r.cause = NULL;
+    r.truncated = 0;
+    return r;
 }
 
 /* Whether a pending cancel ends a sleep early: an unmasked cancel whose
@@ -757,9 +784,11 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             it_fail_task(t, idx, "abort_task with an unknown cancel kind");
             return STEP_END;
         }
-        /* The message is a C gap (DSL §7): the reason carries none, and the
-         * comparison reports it. */
-        st = asx_task_cancel_with_origin(target->id, kind, t->region, self);
+        {
+            /* The requesting task initiates the cancel (DSL §4). */
+            asx_cancel_reason r = make_reason(kind, t->region, self, it_str(step, "message"));
+            st = asx_task_cancel_with_reason(target->id, &r);
+        }
         observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
@@ -774,8 +803,11 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             it_fail_task(t, idx, "cancel_region with an unknown cancel kind");
             return STEP_END;
         }
-        (void)asx_cancel_propagate(lr->id, kind);
-        observe_status(t, idx, label, ASX_OK);
+        {
+            asx_cancel_reason r = make_reason(kind, t->region, self, it_str(step, "message"));
+            st = asx_region_cancel(lr->id, &r, NULL);
+        }
+        observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
     {
@@ -926,10 +958,33 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         return STEP_NEXT;
     }
     if (strcmp(op, "close_region") == 0) {
-        it_fail_task(t, idx,
-                     "close_region: C regions do not advance to Closed on their own "
-                     "(DSL §7 close semantics, R13)");
-        return STEP_END;
+        it_local_region *lr = local_region(t, it_str(step, "region"));
+        asx_region_state rs;
+        if (lr == NULL) {
+            it_fail_task(t, idx, "close_region of a region this task did not open");
+            return STEP_END;
+        }
+        if (t->phase == 0u) {
+            /* ChildRegion::close enqueues a Close command, which the runtime
+             * runs as a User cancel of the region with this message
+             * (lab/runtime.rs:4195): cancel the remaining tasks, close.
+             * Rust stamps it with CancelReason::user's testing defaults;
+             * C attributes it to the closing task (DSL §4). */
+            asx_cancel_reason r =
+                make_reason(ASX_CANCEL_USER, t->region, self, "owned child region body finished");
+            st = asx_region_cancel(lr->id, &r, NULL);
+            if (st != ASX_OK) {
+                observe_status(t, idx, op, st);
+                return STEP_NEXT;
+            }
+            t->phase = 1u;
+        }
+        /* Wait for Closed: the region finalizes when its last task ends. */
+        if (asx_region_get_state(lr->id, &rs) != ASX_OK || rs != ASX_REGION_CLOSED) {
+            return STEP_PENDING;
+        }
+        observe_status(t, idx, op, ASX_OK);
+        return STEP_NEXT;
     }
     return exec_sync(t, self, step, idx, op);
 }
@@ -999,23 +1054,43 @@ static void apply_driver_op(uint32_t op) {
         it_fail("script entry without op", NULL);
         return;
     }
-    if (strcmp(name, "cancel_region") == 0) {
+    if (strcmp(name, "cancel_region") == 0 || strcmp(name, "close_region") == 0) {
         it_region *r = region_by_name(it_str(op, "region"));
+        asx_cancel_reason reason;
         if (r == NULL || !cancel_kind_parse(it_str(op, "kind"), &kind)) {
-            it_fail("cancel_region needs a known region and kind", NULL);
+            it_fail("cancel_region/close_region needs a known region and kind", NULL);
             return;
         }
-        (void)asx_cancel_propagate(r->id, kind);
+        /* No task requests it: the cancel originates at the target region
+         * (DSL §4). A region cancel also begins closing the subtree, so
+         * close_region is the same request followed by running until the
+         * region is Closed (twin_run: cancel_request + advance). */
+        reason = make_reason(kind, r->id, ASX_INVALID_ID, it_str(op, "message"));
+        if (asx_region_cancel(r->id, &reason, NULL) != ASX_OK) {
+            it_fail("asx_region_cancel failed", r->name);
+            return;
+        }
+        if (strcmp(name, "close_region") == 0) {
+            uint32_t round;
+            for (round = 0; round < 1000u && !g_failed; round++) {
+                asx_region_state s;
+                if (asx_region_get_state(r->id, &s) == ASX_OK && s == ASX_REGION_CLOSED) return;
+                run_scheduler(asx_scheduler_run_until_idle, g_root, g_budget, "close_region");
+            }
+            it_fail("close_region: region did not close within 1000 idle rounds", r->name);
+        }
         return;
     }
     if (strcmp(name, "cancel_task") == 0) {
         it_task *t = task_by_name(it_str(op, "task"));
+        asx_cancel_reason reason;
         if (t == NULL || !t->spawned || !cancel_kind_parse(it_str(op, "kind"), &kind)) {
             it_fail("cancel_task needs a known task and kind", NULL);
             return;
         }
-        if (asx_task_cancel_with_origin(t->id, kind, t->region, ASX_INVALID_ID) != ASX_OK &&
-            !t->joined) {
+        /* A driver cancel originates at the task's own region (DSL §4). */
+        reason = make_reason(kind, t->region, ASX_INVALID_ID, it_str(op, "message"));
+        if (asx_task_cancel_with_reason(t->id, &reason) != ASX_OK && !t->joined) {
             it_fail("cancel_task failed", t->name);
         }
         return;
@@ -1217,13 +1292,50 @@ static uint32_t project_events(uint32_t obligations) {
                          asx_json_new_string_len(g_out, &g_text[e->text_off], e->text_len));
             break;
         case ASX_TRACE_REGION_CANCELLED:
-            it_fail("region.cancelled projection needs region cancel reasons (R5)", NULL);
+            ev = event_object("region.cancelled");
+            if (!e->has_reason) {
+                it_fail("region.cancelled without a reason", NULL);
+                break;
+            }
+            asx_json_set(g_out, ev, "region",
+                         asx_json_new_string(g_out, region_name_of((asx_region_id)e->entity)));
+            asx_json_set(g_out, ev, "reason", reason_node(&e->reason));
             break;
         case ASX_TRACE_TIMER_SET:
         case ASX_TRACE_TIMER_FIRE:
-        case ASX_TRACE_TIMER_CANCEL:
-            it_fail("timer events are not projected yet (R11)", NULL);
+        case ASX_TRACE_TIMER_CANCEL: {
+            /* Task sleep timers carry the task as entity; timer-wheel
+             * timers (a timer handle) have no DSL counterpart yet. */
+            it_task *t = asx_handle_type_tag(e->entity) == ASX_TYPE_TASK
+                             ? task_by_id((asx_task_id)e->entity)
+                             : NULL;
+            if (t == NULL) {
+                it_fail("timer event that is not a task sleep timer", NULL);
+                break;
+            }
+            if (e->kind == ASX_TRACE_TIMER_SET) {
+                char buf[160];
+                t->timers++;
+                (void)snprintf(buf, sizeof(buf), "%s/tm%u", t->name, (unsigned)t->timers);
+                t->timer_name_off = text_store(buf, strlen(buf));
+                t->timer_pending = 1;
+                t->timer_deadline = e->aux;
+                ev = event_object("timer.scheduled");
+                asx_json_set(g_out, ev, "timer",
+                             asx_json_new_string(g_out, &g_text[t->timer_name_off]));
+                asx_json_set(g_out, ev, "deadline_ns", asx_json_new_u64(g_out, e->aux));
+                break;
+            }
+            if (t->timers == 0u) {
+                it_fail("timer fired or cancelled before it was scheduled", t->name);
+                break;
+            }
+            t->timer_pending = 0;
+            ev = event_object(e->kind == ASX_TRACE_TIMER_FIRE ? "timer.fired" : "timer.cancelled");
+            asx_json_set(g_out, ev, "timer",
+                         asx_json_new_string(g_out, &g_text[t->timer_name_off]));
             break;
+        }
         case ASX_TRACE_SCHED_POLL:
         case ASX_TRACE_SCHED_BUDGET:
         case ASX_TRACE_SCHED_QUIESCENT:
@@ -1290,14 +1402,31 @@ static uint32_t build_snapshot(uint32_t obligations) {
         uint32_t rec = asx_json_new_object(g_out);
         asx_region_state s;
         const char *state = "Closed";
-        if (asx_region_get_state(r->id, &s) == ASX_OK) state = region_state_name(s);
+        if (asx_region_get_state(r->id, &s) == ASX_OK) {
+            state = region_state_name(s);
+            /* Rust is_quiescent: no region may still be closing
+             * (state.rs:7407-7413). */
+            if (s != ASX_REGION_OPEN && s != ASX_REGION_CLOSED) quiescent = 0;
+        }
         asx_json_set(g_out, rec, "state", asx_json_new_string(g_out, state));
         asx_json_set(g_out, rec, "parent",
                      r->parent != NULL ? asx_json_new_string(g_out, r->parent)
                                        : asx_json_new_null(g_out));
-        /* Region cancel reasons are a C gap (R5): null, reported by the
-         * comparison wherever Rust records one. */
-        asx_json_set(g_out, rec, "cancel_reason", asx_json_new_null(g_out));
+        /* A Closed region's record is gone in Rust (lab.state.region()
+         * returns None), so its reason projects as null; a live region's
+         * is its strengthened cancel reason. */
+        {
+            asx_cancel_reason cr;
+            uint32_t reason = ASX_JSON_NONE;
+            if (strcmp(state, "Closed") != 0 &&
+                asx_region_get_cancel_reason(r->id, &cr) == ASX_OK) {
+                it_reason captured;
+                capture_reason(&cr, &captured);
+                reason = reason_node(&captured);
+            }
+            asx_json_set(g_out, rec, "cancel_reason",
+                         reason != ASX_JSON_NONE ? reason : asx_json_new_null(g_out));
+        }
         asx_json_set(g_out, regions, r->name, rec);
     }
     {
@@ -1313,7 +1442,39 @@ static uint32_t build_snapshot(uint32_t obligations) {
     asx_json_set(g_out, snap, "tasks", tasks);
     asx_json_set(g_out, snap, "regions", regions);
     asx_json_set(g_out, snap, "obligations", obligations);
-    asx_json_set(g_out, snap, "timers_pending", asx_json_new_array(g_out));
+    {
+        /* Scheduled timers that never fired or were cancelled, ordered by
+         * (deadline, name) as twin_run orders them. */
+        uint32_t pending = asx_json_new_array(g_out);
+        uint32_t order[IT_MAX_TASKS];
+        uint32_t n = 0;
+        uint32_t j;
+        for (i = 0; i < g_n_tasks; i++) {
+            uint32_t pos;
+            if (!g_tasks[i].timer_pending) continue;
+            pos = n++;
+            while (pos > 0u) {
+                const it_task *a = &g_tasks[order[pos - 1u]];
+                const it_task *b = &g_tasks[i];
+                if (a->timer_deadline < b->timer_deadline ||
+                    (a->timer_deadline == b->timer_deadline &&
+                     strcmp(&g_text[a->timer_name_off], &g_text[b->timer_name_off]) <= 0)) {
+                    break;
+                }
+                order[pos] = order[pos - 1u];
+                pos--;
+            }
+            order[pos] = i;
+        }
+        for (j = 0; j < n; j++) {
+            const it_task *t = &g_tasks[order[j]];
+            uint32_t o = asx_json_new_object(g_out);
+            asx_json_set(g_out, o, "timer", asx_json_new_string(g_out, &g_text[t->timer_name_off]));
+            asx_json_set(g_out, o, "deadline_ns", asx_json_new_u64(g_out, t->timer_deadline));
+            asx_json_push(g_out, pending, o);
+        }
+        asx_json_set(g_out, snap, "timers_pending", pending);
+    }
     asx_json_set(g_out, snap, "channels", asx_json_new_object(g_out));
     return snap;
 }
@@ -1462,7 +1623,9 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     budget = asx_budget_from_polls((uint32_t)max_steps);
 
     /* Setup (DSL §2): root, regions, tasks in array order. */
+    g_budget = &budget;
     st = asx_region_open(&root);
+    g_root = root;
     if (st != ASX_OK || !add_region("root", NULL, root)) {
         it_fail("cannot open the root region", NULL);
     }

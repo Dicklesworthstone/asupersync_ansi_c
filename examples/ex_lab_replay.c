@@ -83,10 +83,20 @@ static void scenario_trace_events(void) {
     uint32_t count = asx_trace_event_count();
     SCENARIO_CHECK(count > 0, "events_emitted");
 
-    /* Last event should be REGION_CLOSED */
+    /* The task's completion is recorded, and the region closes after it:
+     * a closing region finalizes when its last task completes. */
     asx_trace_event ev;
-    SCENARIO_CHECK(asx_trace_event_get(count - 1u, &ev), "get_last_event");
-    SCENARIO_CHECK(ev.kind == ASX_TRACE_REGION_CLOSED, "last_event_region_closed");
+    uint32_t i;
+    uint32_t completed_at = UINT32_MAX;
+    uint32_t closed_at = UINT32_MAX;
+    for (i = 0; i < count; i++) {
+        SCENARIO_CHECK(asx_trace_event_get(i, &ev), "get_event");
+        if (ev.kind == ASX_TRACE_SCHED_COMPLETE) completed_at = i;
+        if (ev.kind == ASX_TRACE_REGION_CLOSED) closed_at = i;
+    }
+    SCENARIO_CHECK(completed_at != UINT32_MAX, "task_completion_emitted");
+    SCENARIO_CHECK(closed_at != UINT32_MAX, "region_closed_emitted");
+    SCENARIO_CHECK(closed_at > completed_at, "region_closed_after_last_task");
 
     SCENARIO_END();
 }

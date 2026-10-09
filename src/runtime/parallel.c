@@ -1024,6 +1024,8 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     sat_inc_u32(&g_workers[worker_idx].tasks_completed);
                     parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
+                    asx_region_settle_internal(
+                        asx_region_handle_for_slot((uint32_t)(rslot - g_regions)));
                     continue;
                 }
 
@@ -1051,6 +1053,8 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     sat_inc_u32(&g_workers[worker_idx].tasks_completed);
                     parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
+                    asx_region_settle_internal(
+                        asx_region_handle_for_slot((uint32_t)(rslot - g_regions)));
                     continue;
                 }
 
@@ -1119,6 +1123,8 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     sat_inc_u32(&g_workers[worker_idx].tasks_completed);
                     parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
+                    asx_region_settle_internal(
+                        asx_region_handle_for_slot((uint32_t)(rslot - g_regions)));
                     continue;
                 } else if (poll_result != ASX_E_PENDING) {
                     asx_task_state from = t->state;
@@ -1148,6 +1154,8 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     sat_inc_u32(&g_workers[worker_idx].tasks_completed);
                     parallel_commit_worker_event(worker_idx);
                     asx_trace_emit(ASX_TRACE_SCHED_COMPLETE, (uint64_t)tid, round);
+                    asx_region_settle_internal(
+                        asx_region_handle_for_slot((uint32_t)(rslot - g_regions)));
 
                     {
                         asx_status fc_ = asx_region_contain_fault(region, poll_result);
