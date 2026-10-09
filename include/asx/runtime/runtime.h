@@ -624,6 +624,9 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_get_state(asx_obligation_id id,
  *   populated; budget is decremented once per poll.
  * Returns ASX_OK when all tasks complete (quiescent),
  *   ASX_E_POLL_BUDGET_EXHAUSTED if polls ran out before completion,
+ *   ASX_E_TIMED_OUT if the budget's deadline passed before completion
+ *     (the deadline also bounds time spent blocked waiting for I/O,
+ *     timers or cross-thread wakes),
  *   ASX_E_WOULD_BLOCK if all live tasks are parked and no timer, waker,
  *   or I/O registration can wake them,
  *   ASX_E_NOT_FOUND if region is invalid,
