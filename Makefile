@@ -35,6 +35,8 @@ CLANG_FORMAT_VERSION ?= 18.1.8
 CLANG_FORMAT ?= $(shell if clang-format --version 2>/dev/null | grep -q 'version $(CLANG_FORMAT_VERSION)'; then \
 	echo clang-format; elif command -v uvx >/dev/null 2>&1; then \
 	echo "uvx --from clang-format==$(CLANG_FORMAT_VERSION) clang-format"; fi)
+# Trees format-check covers (tests/gates point it at a scratch tree).
+FORMAT_PATHS ?= include src tests
 # Pinned analyzer: Cppcheck 2.22.0 (PyPI wheel cppcheck==1.5.3). Different
 # cppcheck versions report different findings, so local runs and CI must use
 # the same one; the system binary is used only when it is that version.
@@ -627,7 +629,7 @@ $(BIN_DIR):
 format-check:
 	@echo "[asx] format-check: verifying source formatting..."
 	@if [ -n "$(CLANG_FORMAT)" ]; then \
-		find include src tests \( -name '*.c' -o -name '*.h' \) -print0 | \
+		find $(FORMAT_PATHS) \( -name '*.c' -o -name '*.h' \) -print0 | \
 		xargs -0 $(CLANG_FORMAT) --dry-run --Werror 2>&1 && \
 		echo "[asx] format-check: PASS (clang-format $(CLANG_FORMAT_VERSION))" || \
 		{ echo "[asx] format-check: FAIL — run $(CLANG_FORMAT) -i on the files above"; exit 1; }; \
@@ -653,15 +655,11 @@ lint:
 		         -I include src/ && \
 		echo "[asx] lint: PASS (cppcheck $(CPPCHECK_VERSION))" || \
 		{ echo "[asx] lint: FAIL"; exit 1; }; \
-	elif command -v clang-tidy >/dev/null 2>&1; then \
-		find src -name '*.c' | xargs clang-tidy -- $(ALL_CFLAGS) && \
-		echo "[asx] lint: PASS (clang-tidy)" || \
-		{ echo "[asx] lint: FAIL"; exit 1; }; \
 	elif [ "$(FAIL_ON_MISSING_LINTER)" = "1" ]; then \
-		echo "[asx] lint: FAIL (no static analyzer found; strict mode)"; \
+		echo "[asx] lint: FAIL (cppcheck $(CPPCHECK_VERSION) not found and no uvx; strict mode)"; \
 		exit 1; \
 	else \
-		echo "[asx] lint: SKIP (no static analyzer found)"; \
+		echo "[asx] lint: SKIP (cppcheck $(CPPCHECK_VERSION) not found and no uvx; use STRICT_GATES=1 to fail)"; \
 	fi
 
 # ---------------------------------------------------------------------------

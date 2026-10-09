@@ -428,6 +428,9 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq jq
+          # tests/gates/test_strict_gates.sh runs format-check over scratch
+          # files with the pinned formatter.
+          pipx install clang-format==18.1.8
 
       - name: Build
         id: build
