@@ -26,6 +26,7 @@
 #include <asx/cx/cx.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/task_group.h>
 #include <asx/sync/barrier.h>
 #include <asx/sync/mutex.h>
 #include <asx/sync/notify.h>
@@ -107,6 +108,16 @@ typedef struct {
         asx_send_permit permit;
     } send_permits[IT_MAX_LOCAL];
     uint32_t n_send_permits;
+    /* The current task-group step (DSL §3.5) and its members' tasks. */
+    asx_task_group group;
+    uint32_t group_members[ASX_TASK_GROUP_MAX]; /* indices in g_tasks */
+    uint32_t n_group_members;
+    /* As a member of a group: its outcome, captured when it completed (the
+     * group releases its slot), and the snapshot leaves it out (Rust's
+     * combinators consume members' handles; vocabulary §6). */
+    int group_member;
+    int member_done;
+    uint32_t member_outcome;
     /* Projection of the task's sleep timers (vocabulary §2: "<task>/tm<k>"). */
     uint32_t timers;         /* timers registered so far (k of the latest) */
     uint32_t timer_name_off; /* name of the latest, in g_text */
@@ -623,6 +634,14 @@ static void it_observe(void *ctx, const asx_trace_event *ev, const asx_trace_pay
         size_t len = strlen(text);
         e->text_off = text_store(text, len);
         e->text_len = (uint32_t)len;
+    } else if (ev->kind == ASX_TRACE_SCHED_COMPLETE) {
+        /* A group member's outcome, read while its slot still exists: the
+         * group joins it (releasing the slot) when it collects it. */
+        it_task *m = task_by_id((asx_task_id)ev->entity_id);
+        if (m != NULL && m->group_member && !m->member_done) {
+            m->member_outcome = outcome_node(m->id);
+            m->member_done = 1;
+        }
     }
 }
 
@@ -1015,6 +1034,142 @@ static int exec_channel_wait(it_task *t, uint32_t step, uint32_t idx, const char
         return 1;
     }
     return 0;
+}
+
+/* Spawn the members of the group step `step` (1-based `idx` in `t`'s
+ * program) into t->group: interpreter tasks named "<owner>/g<idx>.<i>"
+ * (vocabulary §2), run in the owner's region. Returns 0 on failure. */
+static int spawn_group_members(it_task *t, uint32_t step, uint32_t idx) {
+    uint32_t members = asx_json_get(g_in, step, "members");
+    uint32_t n = asx_json_count(g_in, members);
+    uint32_t i;
+    if (n == 0u || n > ASX_TASK_GROUP_MAX) {
+        it_fail_task(t, idx, "group needs 1..ASX_TASK_GROUP_MAX members");
+        return 0;
+    }
+    t->n_group_members = 0;
+    for (i = 0; i < n; i++) {
+        char buf[160];
+        uint32_t off;
+        it_task *m;
+        asx_task_id id = ASX_INVALID_ID;
+        int len =
+            snprintf(buf, sizeof(buf), "%s/g%u.%u", t->name, (unsigned)idx, (unsigned)(i + 1u));
+        if (len < 0 || (size_t)len >= sizeof(buf)) {
+            it_fail_task(t, idx, "group member name too long");
+            return 0;
+        }
+        off = text_store(buf, (size_t)len);
+        if (off == IT_NO_TEXT) return 0;
+        m = add_task(&g_text[off], t->region_name, t->region, asx_json_item(g_in, members, i));
+        if (m == NULL) return 0;
+        m->group_member = 1;
+        if (asx_task_group_spawn(&t->group, t->region, interp_poll, m, &id) != ASX_OK) {
+            it_fail_task(t, idx, "asx_task_group_spawn failed");
+            return 0;
+        }
+        m->id = id;
+        m->spawned = 1;
+        (void)asx_cx_init(&m->cx, m->region, id, ASX_CAP_CANCEL_CHECK);
+        t->group_members[t->n_group_members++] = (uint32_t)(m - g_tasks);
+    }
+    return 1;
+}
+
+/* Member i's outcome, captured at its completion. */
+static uint32_t group_member_outcome(it_task *t, uint32_t i) {
+    it_task *m = &g_tasks[t->group_members[i]];
+    if (!m->member_done) {
+        it_fail("group resolved with an unfinished member", m->name);
+        return asx_json_new_null(g_out);
+    }
+    return asx_json_copy(g_out, g_out, m->member_outcome);
+}
+
+/* Task-group steps (DSL §3.5). Returns 1 when `op` is one of them. The
+ * observation is what the Rust combinator returns: race, {winner_index,
+ * outcome} (the index only for a winner that succeeded, as Rust reports
+ * it); join_all, every member's outcome; quorum, the number of members
+ * that succeeded. */
+static int exec_group(it_task *t, asx_task_id self, uint32_t step, uint32_t idx, const char *op,
+                      step_result *out) {
+    asx_task_group_mode mode;
+    uint64_t needed = 1;
+    asx_status st;
+    uint32_t value;
+    uint32_t i;
+    *out = STEP_NEXT;
+    if (strcmp(op, "race") == 0) {
+        mode = ASX_TASK_GROUP_RACE;
+    } else if (strcmp(op, "join_all") == 0) {
+        mode = ASX_TASK_GROUP_JOIN_ALL;
+    } else if (strcmp(op, "quorum") == 0) {
+        mode = ASX_TASK_GROUP_QUORUM;
+    } else {
+        return 0;
+    }
+    if (t->phase == 0u) {
+        if (asx_json_get(g_in, step, "deadline_ns") != ASX_JSON_NONE) {
+            it_fail_task(t, idx, "race deadline_ns is not interpreted yet (increment 3b)");
+            *out = STEP_END;
+            return 1;
+        }
+        if (mode == ASX_TASK_GROUP_QUORUM &&
+            (!asx_json_u64(g_in, asx_json_get(g_in, step, "needed"), &needed) ||
+             needed > UINT32_MAX)) {
+            it_fail_task(t, idx, "quorum needs `needed`");
+            *out = STEP_END;
+            return 1;
+        }
+        if (asx_task_group_init(&t->group, mode, (uint32_t)needed) != ASX_OK ||
+            !spawn_group_members(t, step, idx)) {
+            if (!g_failed) it_fail_task(t, idx, "task group setup failed");
+            *out = STEP_END;
+            return 1;
+        }
+        t->phase = 1u;
+    }
+    st = asx_task_group_poll(&t->group, self);
+    if (st == ASX_E_PENDING) {
+        *out = STEP_PENDING;
+        return 1;
+    }
+    if (mode == ASX_TASK_GROUP_RACE) {
+        int32_t w = asx_task_group_winner(&t->group);
+        uint32_t outcome;
+        uint32_t tag;
+        const char *tag_text;
+        if (w < 0) {
+            it_fail_task(t, idx, "race resolved without a winner");
+            *out = STEP_END;
+            return 1;
+        }
+        outcome = group_member_outcome(t, (uint32_t)w);
+        tag = asx_json_get(g_out, outcome, "tag");
+        tag_text = tag != ASX_JSON_NONE ? asx_json_string(g_out, tag) : NULL;
+        value = asx_json_new_object(g_out);
+        asx_json_set(g_out, value, "winner_index",
+                     tag_text != NULL && strcmp(tag_text, "ok") == 0
+                         ? asx_json_new_u64(g_out, (uint64_t)w)
+                         : asx_json_new_null(g_out));
+        asx_json_set(g_out, value, "outcome", outcome);
+    } else if (mode == ASX_TASK_GROUP_JOIN_ALL) {
+        value = asx_json_new_array(g_out);
+        for (i = 0; i < t->n_group_members; i++) {
+            asx_json_push(g_out, value, group_member_outcome(t, i));
+        }
+    } else {
+        if (st != ASX_OK) {
+            it_fail_task(t, idx,
+                         "quorum not met: the Rust QuorumError has no vocabulary mapping yet "
+                         "(increment 3b)");
+            *out = STEP_END;
+            return 1;
+        }
+        value = asx_json_new_u64(g_out, asx_task_group_ok_count(&t->group));
+    }
+    observe(t, idx, op, status_node(ASX_OK), value);
+    return 1;
 }
 
 /* Blocking sync steps (DSL §3.7). Returns 1 when `op` is one of them. */
@@ -1467,6 +1622,7 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         step_result r;
         if (exec_sync_wait(t, self, step, idx, op, &r)) return r;
         if (exec_channel_wait(t, step, idx, op, &r)) return r;
+        if (exec_group(t, self, step, idx, op, &r)) return r;
     }
     if (strcmp(op, "yield") == 0) {
         if (t->phase == 0u) {
@@ -2090,6 +2246,11 @@ static uint32_t build_snapshot(uint32_t obligations) {
         uint32_t reason = ASX_JSON_NONE;
         const char *state = "Completed";
         if (!t->spawned) continue; /* a refused spawn has no task */
+        if (t->group_member) {
+            /* Reported through its group step only (vocabulary §6). */
+            if (!t->member_done) quiescent = 0;
+            continue;
+        }
         if (t->joined) {
             outcome = asx_json_copy(g_out, g_out, t->outcome);
         } else {

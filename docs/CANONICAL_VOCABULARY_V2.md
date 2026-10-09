@@ -309,6 +309,12 @@ named or that appeared in the trace, including completed ones.
 }
 ```
 
+- **Task-group members are not in `tasks`.** Rust's combinators consume
+  the members' handles and discard losers' results (`cx/scope.rs:1306`,
+  `:1811`), so a member's outcome is not observable there; members appear
+  in the trace under their §2 names, and their results reach the comparison
+  only through the group step's observation (DSL §3.5). Both engines still
+  count an unfinished member against `quiescent`.
 - **Task fields.** A task's `outcome` is set iff its state is `Completed`.
   Its `cancel_reason` is the reason carried by `CancelRequested` /
   `Cancelling` / `Finalizing` (`src/record/task.rs:83-100`), or the
@@ -319,7 +325,8 @@ named or that appeared in the trace, including completed ones.
 - **`timers_pending`** is sorted by (`deadline_ns`, `timer`).
 - **`channels`** is the only place channel effects are compared (§1). `len`
   is the number of queued values and `reserved` the number of outstanding
-  send permits.
+  send permits. Not populated yet: both engines emit `{}`, so channel
+  state is compared only through observations and the channel user traces.
 
 ## 7. Observations
 

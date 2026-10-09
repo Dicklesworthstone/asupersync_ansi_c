@@ -209,12 +209,16 @@ Cancelling or closing any other region is a driver operation (§4).
 
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|
-| `race` | `members` (list of programs), optional `deadline_ns` | spawn each member with `cx.spawn`, then `cx.scope().race_all(&cx, handles).await` (`cx/scope.rs:1306`). A `deadline_ns` runs this inside `cx.scope().timeout(&cx, d, …)` (`:2130`). | `asx_task_group_init(g, RACE, 1)`, `asx_task_group_spawn` per member, then `asx_task_group_poll` | until a winner, or until all are drained | The owner's cancel before a winner cancels and drains every member. Losers are always cancelled and drained (`inv.combinator.loser_drained`). The observation `value` is `{winner_index, outcome}`. |
+| `race` | `members` (list of programs), optional `deadline_ns` | spawn each member with `cx.spawn`, then `cx.scope().race_all(&cx, handles).await` (`cx/scope.rs:1306`). A `deadline_ns` runs this inside `cx.scope().timeout(&cx, d, …)` (`:2130`). | `asx_task_group_init(g, RACE, 1)`, `asx_task_group_spawn` per member, then `asx_task_group_poll` | until a winner, or until all are drained | The owner's cancel before a winner cancels and drains every member. Losers are always cancelled and drained (`inv.combinator.loser_drained`). The status is `ASX_OK`; the `value` is `{winner_index, outcome}`, the winner's outcome, with `winner_index` null when the winner did not succeed (Rust's `Err` carries no index). |
 | `join_all` | `members` | `cx.scope().join_all(&cx, handles).await` (`:1479`) | group mode JOIN | until all complete | Ignored: join_all joins one by one. The `value` is the list of member outcomes. |
 | `first_ok` | `members` | `cx.scope().first_ok(&cx, factories).await` (`:2023`) | group mode FIRST_OK | until a member succeeds or all fail | The owner's cancel gives `ASX_E_CANCELLED` after draining. |
-| `quorum` | `members`, `needed` | `cx.scope().quorum(&cx, needed, branches).await` (`:1811`) | `asx_task_group_init(g, QUORUM, needed)` | until `needed` succeed or that becomes impossible | as `first_ok` |
+| `quorum` | `members`, `needed` | `cx.scope().quorum(&cx, needed, branches).await` (`:1811`) | `asx_task_group_init(g, QUORUM, needed)` | until `needed` succeed or that becomes impossible | as `first_ok`. Met: status `ASX_OK`, `value` = the number of members that succeeded. A `QuorumError` has no vocabulary mapping yet; both interpreters fail such a run closed. |
 
 A member program ends with `return` to give its outcome. The default is Ok.
+Members are named `"<owner>/g<s>.<i>"` (vocabulary §2) and are not in the
+snapshot (vocabulary §6). Not interpreted yet on either side: `race` with
+`deadline_ns` (Rust runs the race inside a separate `scope.timeout` task,
+which C has no combinator for) and `first_ok`.
 
 ### 3.6 Channels
 

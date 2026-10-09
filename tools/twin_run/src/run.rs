@@ -9,7 +9,7 @@
 //! combinator and actor steps are not yet interpreted: a scenario that uses
 //! one fails as a harness error, never silently.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -67,6 +67,23 @@ struct Shared {
     observations: Vec<Value>,
     /// Harness errors raised inside task bodies. Any entry fails the run.
     errors: Vec<String>,
+    /// Members of task groups (DSL §3.5). Rust's combinators consume their
+    /// handles and discard losers' results, so their outcomes are reported
+    /// only through the group step's observation, and the snapshot leaves
+    /// them out (vocabulary §6).
+    group_members: HashSet<String>,
+    /// (observation index, raw group result), projected with the join
+    /// results once every task name is resolved.
+    group_values: Vec<(usize, GroupValue)>,
+}
+
+/// What a group step returned, before projection (DSL §3.5).
+enum GroupValue {
+    /// `race_all`: the winner's index (Rust reports it only on success) and
+    /// result.
+    Race(Option<usize>, Result<Body, JoinError>),
+    /// `join_all`: every member's result, in member order.
+    JoinAll(Vec<Result<Body, JoinError>>),
 }
 
 type SharedRef = Arc<Mutex<Shared>>;
@@ -308,6 +325,21 @@ fn finish_outcomes(s: &mut Shared) -> RunResult<()> {
             .get(&target)
             .cloned()
             .ok_or_else(|| format!("join of {target:?} has no outcome"))?;
+        s.observations[index]["value"] = value;
+    }
+    for (index, group) in std::mem::take(&mut s.group_values) {
+        let value = match group {
+            GroupValue::Race(winner, result) => json!({
+                "winner_index": winner,
+                "outcome": project_outcome(s, result)?,
+            }),
+            GroupValue::JoinAll(results) => Value::Array(
+                results
+                    .into_iter()
+                    .map(|r| project_outcome(s, r))
+                    .collect::<RunResult<Vec<_>>>()?,
+            ),
+        };
         s.observations[index]["value"] = value;
     }
     Ok(())
@@ -1138,6 +1170,97 @@ async fn exec_step(
             });
             return result;
         }
+        // Task groups (DSL §3.5).
+        "race" | "join_all" => {
+            if step.get("deadline_ns").is_some() {
+                return Err("race deadline_ns is not interpreted yet (increment 3b)".to_string());
+            }
+            let handles = spawn_members(cx, ctx, idx, step)?;
+            let group = if op == "race" {
+                match cx.scope().race_all(cx, handles).await {
+                    Ok((body, winner)) => GroupValue::Race(Some(winner), Ok(body)),
+                    // Rust reports a failed winner without its index.
+                    Err(e) => GroupValue::Race(None, Err(e)),
+                }
+            } else {
+                GroupValue::JoinAll(cx.scope().join_all(cx, handles).await)
+            };
+            let mut s = lock(&ctx.shared);
+            let index = s.observations.len();
+            s.group_values.push((index, group));
+            s.observations.push(json!({
+                "task": me, "step": idx, "op": op, "status": "ASX_OK", "value": Value::Null,
+            }));
+        }
+        "quorum" => {
+            let needed =
+                usize::try_from(u64_field(step, "needed")?).map_err(|_| "needed out of range")?;
+            let members = group_programs(step)?;
+            let buffer = cx.trace_buffer().ok_or("quorum needs the lab trace")?;
+            let before = buffer.snapshot().last().map_or(0, |e| e.seq);
+            let branches: Vec<_> = members
+                .iter()
+                .enumerate()
+                .map(|(i, program)| {
+                    let child_ctx = Arc::new(TaskCtx {
+                        shared: ctx.shared.clone(),
+                        me: member_name(me, idx, i),
+                        region: ctx.region.clone(),
+                    });
+                    let program = program.clone();
+                    move |ccx: Cx| async move {
+                        match run_program(ccx, child_ctx, program, Vec::new()).await {
+                            Body::Ok => Ok(()),
+                            Body::Err(status) => Err(status),
+                        }
+                    }
+                })
+                .collect();
+            let result = cx.scope().quorum(cx, needed, branches).await;
+            // The branches were spawned inside quorum, out of sight: name
+            // them by their spawn enqueues, in order (resolve_admissions then
+            // maps them to their canonical ids).
+            let spawned: Vec<TaskId> = buffer
+                .snapshot()
+                .iter()
+                .filter(|e| e.seq > before)
+                .filter_map(|e| match (&e.kind, &e.data) {
+                    (TraceEventKind::TaskSpawnEnqueued, TraceData::Task { task, region })
+                        if *region == cx.region_id() =>
+                    {
+                        Some(*task)
+                    }
+                    _ => None,
+                })
+                .take(members.len())
+                .collect();
+            if spawned.len() != members.len() {
+                return Err(format!(
+                    "quorum spawned {} branches, the trace shows {}",
+                    members.len(),
+                    spawned.len()
+                ));
+            }
+            {
+                let mut s = lock(&ctx.shared);
+                for (i, task) in spawned.into_iter().enumerate() {
+                    let name = member_name(me, idx, i);
+                    s.provisional.insert(task, name.clone());
+                    s.task_regions.insert(name.clone(), ctx.region.clone());
+                    s.group_members.insert(name);
+                }
+            }
+            match result {
+                Ok(successes) => {
+                    observe(&ctx.shared, me, idx, op, "ASX_OK", json!(successes.len()))
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "quorum error {e:?} has no vocabulary mapping yet (increment 3b)"
+                    ));
+                }
+            }
+        }
         "join" => {
             let target = str_field(step, "task")?;
             let handle = lock(&ctx.shared).handles.remove(target);
@@ -1188,6 +1311,53 @@ async fn exec_step(
         _ => return exec_sync(cx, ctx, local, idx, op, step),
     }
     Ok(Flow::Continue)
+}
+
+/// Name of member `i` (0-based) of the group step at 1-based index `step`
+/// of `owner`'s program (vocabulary §2).
+fn member_name(owner: &str, step: usize, i: usize) -> String {
+    format!("{owner}/g{step}.{}", i + 1)
+}
+
+fn group_programs(step: &Value) -> RunResult<Vec<Vec<Value>>> {
+    step.get("members")
+        .and_then(Value::as_array)
+        .ok_or("group without members")?
+        .iter()
+        .map(|m| {
+            m.as_array()
+                .cloned()
+                .ok_or_else(|| "group member is not a program".to_string())
+        })
+        .collect()
+}
+
+/// Spawn a group's members with `cx.spawn`, in member order, named for the
+/// trace; they stay out of the snapshot (`Shared::group_members`).
+fn spawn_members(
+    cx: &Cx,
+    ctx: &Arc<TaskCtx>,
+    step_idx: usize,
+    step: &Value,
+) -> RunResult<Vec<TaskHandle<Body>>> {
+    let mut handles = Vec::new();
+    for (i, program) in group_programs(step)?.into_iter().enumerate() {
+        let name = member_name(&ctx.me, step_idx, i);
+        let child_ctx = Arc::new(TaskCtx {
+            shared: ctx.shared.clone(),
+            me: name.clone(),
+            region: ctx.region.clone(),
+        });
+        let handle = cx
+            .spawn(move |ccx: Cx| run_program(ccx, child_ctx, program, Vec::new()))
+            .map_err(|e| format!("group member spawn failed: {e:?}"))?;
+        let mut s = lock(&ctx.shared);
+        s.provisional.insert(handle.task_id(), name.clone());
+        s.task_regions.insert(name.clone(), ctx.region.clone());
+        s.group_members.insert(name);
+        handles.push(handle);
+    }
+    Ok(handles)
 }
 
 /// Await a sleep, naming the timer it schedules on its first poll. The lab
@@ -1859,6 +2029,9 @@ fn build_snapshot(lab: &LabRuntime, shared: &SharedRef, projected: &Projected) -
     let s = lock(shared);
     let mut tasks = serde_json::Map::new();
     for (name, id) in &s.task_ids {
+        if s.group_members.contains(name) {
+            continue;
+        }
         let (state, reason, cleanup) = match lab.state.task(*id) {
             Some(record) => task_state(&record.state),
             None => ("Completed", None, None),
