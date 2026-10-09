@@ -258,7 +258,7 @@ TEST(finalizing_region_still_rejects_obligation_reserve) {
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
     region->state = ASX_REGION_FINALIZING;
 
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_REGION_NOT_OPEN);
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_REGION_CLOSED);
 }
 
 TEST(region_open_child_null_out_fails) {
@@ -289,7 +289,7 @@ TEST(region_open_child_rejects_non_open_parent) {
     ASSERT_EQ(asx_region_slot_lookup(parent, &parent_slot), ASX_OK);
     parent_slot->state = ASX_REGION_CLOSING;
 
-    ASSERT_EQ(asx_region_open_child(parent, &child), ASX_E_REGION_NOT_OPEN);
+    ASSERT_EQ(asx_region_open_child(parent, &child), ASX_E_REGION_CLOSED);
 }
 
 TEST(region_open_child_rejects_closed_parent) {
@@ -304,7 +304,7 @@ TEST(region_open_child_rejects_closed_parent) {
     parent_slot->state = ASX_REGION_CLOSED;
     log_child_summary("closed-parent", parent, parent_slot);
 
-    ASSERT_EQ(asx_region_open_child(parent, &child), ASX_E_REGION_NOT_OPEN);
+    ASSERT_EQ(asx_region_open_child(parent, &child), ASX_E_REGION_CLOSED);
 }
 
 TEST(region_open_child_rejects_poisoned_parent) {

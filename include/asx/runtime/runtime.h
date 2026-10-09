@@ -126,7 +126,7 @@ ASX_API ASX_MUST_USE asx_status asx_region_open(asx_region_id *out_id);
  *   parent's bounded children[] list.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out_child is NULL,
  *   ASX_E_NOT_FOUND if parent is invalid, ASX_E_STALE_HANDLE if generation
- *   mismatch, ASX_E_REGION_NOT_OPEN if parent is not OPEN,
+ *   mismatch, ASX_E_REGION_CLOSED if parent is not OPEN (closing or closed),
  *   ASX_E_REGION_POISONED if parent is poisoned, or
  *   ASX_E_RESOURCE_EXHAUSTED if the parent's child list or region arena is full.
  * Thread-safety: not thread-safe; single-threaded mode only. */
@@ -214,7 +214,7 @@ ASX_API ASX_MUST_USE asx_status asx_region_contain_fault(asx_region_id id, asx_s
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if poll_fn or
  *   out_id is NULL, ASX_E_NOT_FOUND if region is invalid,
  *   ASX_E_STALE_HANDLE if generation mismatch,
- *   ASX_E_REGION_NOT_OPEN if region is closed,
+ *   ASX_E_REGION_CLOSED if region is closing or closed,
  *   ASX_E_REGION_POISONED if region is poisoned,
  *   ASX_E_RESOURCE_EXHAUSTED if the task arena is full.
  * Ownership: user_data is borrowed (caller retains ownership).
@@ -233,7 +233,7 @@ ASX_API ASX_MUST_USE asx_status asx_task_spawn(asx_region_id region, asx_task_po
  *   (if non-NULL) points to region-owned memory of state_size bytes.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if poll_fn or
  *   out_id is NULL, ASX_E_NOT_FOUND if region is invalid,
- *   ASX_E_REGION_NOT_OPEN if region is closed,
+ *   ASX_E_REGION_CLOSED if region is closing or closed,
  *   ASX_E_REGION_POISONED if poisoned,
  *   ASX_E_RESOURCE_EXHAUSTED if task or capture arena is full.
  * Ownership: state memory is region-owned; freed on region drain.
@@ -609,6 +609,7 @@ ASX_API uint64_t asx_obligation_leak_count(void);
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out_id is NULL,
  *   ASX_E_NOT_FOUND if region is invalid, ASX_E_STALE_HANDLE if
  *   generation mismatch, ASX_E_REGION_POISONED if poisoned,
+ *   ASX_E_REGION_CLOSED if the region is not OPEN,
  *   ASX_E_RESOURCE_EXHAUSTED if the obligation arena is full.
  * Ownership: caller owns the obligation; must commit or abort.
  * Thread-safety: not thread-safe; single-threaded mode only.

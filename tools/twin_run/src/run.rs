@@ -20,6 +20,7 @@ use asupersync::record::task::TaskState;
 use asupersync::record::{ObligationAbortReason, ObligationKind};
 use asupersync::runtime::obligation_mailbox::ObligationToken;
 use asupersync::runtime::{JoinError, TaskHandle};
+use asupersync::sync as asx_sync;
 use asupersync::trace::{TraceData, TraceEventKind};
 use asupersync::{Budget, CancelKind, CancelReason, Cx, RegionId, TaskId, Time};
 use serde_json::{Value, json};
@@ -47,6 +48,8 @@ struct Shared {
     provisional: HashMap<TaskId, String>,
     /// Task name -> name of the region it runs in.
     task_regions: HashMap<String, String>,
+    /// Declared sync objects by name.
+    sync: HashMap<String, SyncObj>,
     region_ids: HashMap<String, RegionId>,
     region_names: HashMap<RegionId, String>,
     region_parents: HashMap<String, Option<String>>,
@@ -322,6 +325,56 @@ struct Local {
     tokens: HashMap<String, ObligationToken>,
     regions: HashMap<String, ChildRegion>,
     timers: u32,
+    /// Held mutex guards and semaphore permits, by object name (DSL §3.7).
+    guards: HashMap<String, asx_sync::MutexGuard<'static, ()>>,
+    permits: HashMap<String, Vec<asx_sync::SemaphorePermit<'static>>>,
+}
+
+/// A declared sync object (DSL §3.7). Each is leaked for the capture's
+/// lifetime, one allocation per declaration, so guards and permits can be
+/// held across steps the way a task body holds them across awaits.
+#[derive(Clone, Copy)]
+enum SyncObj {
+    Mutex(&'static asx_sync::Mutex<()>),
+    Semaphore(&'static asx_sync::Semaphore),
+    Barrier(&'static asx_sync::Barrier),
+    Notify(&'static asx_sync::Notify),
+}
+
+fn sync_obj(shared: &SharedRef, step: &Value, field: &str) -> RunResult<SyncObj> {
+    let name = str_field(step, field)?;
+    lock(shared)
+        .sync
+        .get(name)
+        .copied()
+        .ok_or_else(|| format!("unknown sync object {name:?}"))
+}
+
+// Sync errors onto C statuses (vocabulary §5).
+fn lock_error_status(err: asx_sync::LockError) -> &'static str {
+    use asx_sync::LockError as E;
+    match err {
+        E::Cancelled => "ASX_E_CANCELLED",
+        E::TimedOut(_) => "ASX_E_TIMED_OUT",
+        E::Poisoned | E::PolledAfterCompletion => "ASX_E_INVALID_STATE",
+    }
+}
+
+fn acquire_error_status(err: asx_sync::AcquireError) -> &'static str {
+    use asx_sync::AcquireError as E;
+    match err {
+        E::Cancelled => "ASX_E_CANCELLED",
+        E::Closed => "ASX_E_DISCONNECTED",
+        E::PolledAfterCompletion => "ASX_E_INVALID_STATE",
+    }
+}
+
+fn barrier_error_status(err: asx_sync::BarrierWaitError) -> &'static str {
+    use asx_sync::BarrierWaitError as E;
+    match err {
+        E::Cancelled => "ASX_E_CANCELLED",
+        E::PolledAfterCompletion => "ASX_E_INVALID_STATE",
+    }
 }
 
 enum Flow {
@@ -521,7 +574,44 @@ fn exec_sync(
             };
             observe(&ctx.shared, me, idx, label, &status, Value::Null);
         }
-        other => return Err(format!("op {other:?} is not interpreted yet (increment 1)")),
+        // Non-blocking sync steps (DSL §3.7).
+        "mutex_unlock" => {
+            let name = str_field(step, "mutex")?;
+            let guard = local
+                .guards
+                .remove(name)
+                .ok_or_else(|| format!("mutex {name:?} is not held"))?;
+            drop(guard);
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
+        "sem_release" => {
+            let name = str_field(step, "semaphore")?;
+            let permit = local
+                .permits
+                .get_mut(name)
+                .and_then(Vec::pop)
+                .ok_or_else(|| format!("no permit held on semaphore {name:?}"))?;
+            drop(permit);
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
+        "notify_one" | "notify_all" => {
+            let SyncObj::Notify(n) = sync_obj(&ctx.shared, step, "notify")? else {
+                return Err(format!("{op} on a non-notify"));
+            };
+            if op == "notify_one" {
+                // Whether a waiter was woken (else a permit is stored) is
+                // not observable in the vocabulary.
+                let _woken = n.notify_one();
+            } else {
+                n.notify_waiters();
+            }
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
+        other => {
+            return Err(format!(
+                "op {other:?} is not interpreted yet (increment 2b)"
+            ));
+        }
     }
     Ok(Flow::Continue)
 }
@@ -592,6 +682,56 @@ async fn exec_step(
     let op = str_field(step, "op")?;
     let me = ctx.me.as_str();
     match op {
+        // Blocking sync steps (DSL §3.7).
+        "mutex_lock" => {
+            let name = str_field(step, "mutex")?.to_string();
+            let SyncObj::Mutex(m) = sync_obj(&ctx.shared, step, "mutex")? else {
+                return Err(format!("{name:?} is not a mutex"));
+            };
+            let status = match m.lock(cx).await {
+                Ok(guard) => {
+                    local.guards.insert(name, guard);
+                    "ASX_OK"
+                }
+                Err(e) => lock_error_status(e),
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "sem_acquire" => {
+            let name = str_field(step, "semaphore")?.to_string();
+            let SyncObj::Semaphore(s) = sync_obj(&ctx.shared, step, "semaphore")? else {
+                return Err(format!("{name:?} is not a semaphore"));
+            };
+            let count =
+                usize::try_from(u64_field(step, "count")?).map_err(|_| "count out of range")?;
+            let status = match s.acquire(cx, count).await {
+                Ok(permit) => {
+                    local.permits.entry(name).or_default().push(permit);
+                    "ASX_OK"
+                }
+                Err(e) => acquire_error_status(e),
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "barrier_wait" => {
+            let SyncObj::Barrier(b) = sync_obj(&ctx.shared, step, "barrier")? else {
+                return Err("barrier_wait on a non-barrier".to_string());
+            };
+            let status = match b.wait(cx).await {
+                Ok(_) => "ASX_OK",
+                Err(e) => barrier_error_status(e),
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "notify_wait" => {
+            let SyncObj::Notify(n) = sync_obj(&ctx.shared, step, "notify")? else {
+                return Err("notify_wait on a non-notify".to_string());
+            };
+            // Not cancel-aware (DSL §3.7): a cancelled waiter stays parked
+            // until notified.
+            n.notified().await;
+            observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
+        }
         "yield" => {
             asupersync::runtime::yield_now().await;
             observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
@@ -751,15 +891,37 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
         .map_err(|e| format!("{e:?}"))?;
     let shared: SharedRef = Arc::new(Mutex::new(Shared::default()));
 
-    for (field, _) in [("channels", ()), ("sync", ())] {
-        if scenario
-            .get(field)
-            .and_then(Value::as_array)
-            .is_some_and(|a| !a.is_empty())
-        {
-            return Err(format!(
-                "{field} declarations are not interpreted yet (increment 1)"
-            ));
+    if scenario
+        .get("channels")
+        .and_then(Value::as_array)
+        .is_some_and(|a| !a.is_empty())
+    {
+        return Err("channel declarations are not interpreted yet (increment 2b)".to_string());
+    }
+    // Sync objects (DSL §3.7), leaked for the capture's lifetime.
+    for decl in scenario
+        .get("sync")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let name = str_field(decl, "name")?.to_string();
+        let count = |field: &str| -> RunResult<usize> {
+            usize::try_from(u64_field(decl, field)?).map_err(|_| format!("{field} out of range"))
+        };
+        let obj = match str_field(decl, "type")? {
+            "mutex" => SyncObj::Mutex(Box::leak(Box::new(asx_sync::Mutex::new(())))),
+            "semaphore" => SyncObj::Semaphore(Box::leak(Box::new(asx_sync::Semaphore::new(
+                count("permits")?,
+            )))),
+            "barrier" => SyncObj::Barrier(Box::leak(Box::new(asx_sync::Barrier::new(count(
+                "parties",
+            )?)))),
+            "notify" => SyncObj::Notify(Box::leak(Box::new(asx_sync::Notify::new()))),
+            other => return Err(format!("unknown sync type {other:?}")),
+        };
+        if lock(&shared).sync.insert(name.clone(), obj).is_some() {
+            return Err(format!("duplicate sync object {name:?}"));
         }
     }
 

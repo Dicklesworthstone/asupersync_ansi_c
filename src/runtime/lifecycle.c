@@ -650,7 +650,9 @@ asx_status asx_region_open_child(asx_region_id parent, asx_region_id *out_child)
     st = asx_region_slot_lookup(parent, &parent_slot);
     if (st != ASX_OK) return st;
     if (parent_slot->poisoned) return ASX_E_REGION_POISONED;
-    if (parent_slot->state != ASX_REGION_OPEN) return ASX_E_REGION_NOT_OPEN;
+    /* A closing or closed parent rejects children as Rust's
+     * RegionCreateError::ParentClosed does (vocabulary §5: REGION_CLOSED). */
+    if (parent_slot->state != ASX_REGION_OPEN) return ASX_E_REGION_CLOSED;
     if (parent_slot->child_count >= ASX_MAX_REGION_CHILDREN) return ASX_E_RESOURCE_EXHAUSTED;
 
     st = asx_region_open(out_child);
@@ -798,8 +800,9 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     if (r->poisoned) return ASX_E_REGION_POISONED;
 
     /* Finalizing regions may still spawn cleanup tasks; broader admissions
-     * like obligations remain OPEN-only. */
-    if (!asx_region_can_accept_work(r->state)) return ASX_E_REGION_NOT_OPEN;
+     * like obligations remain OPEN-only. A rejected spawn is Rust's
+     * SpawnError::RegionClosed ("closed or draining"; vocabulary §5). */
+    if (!asx_region_can_accept_work(r->state)) return ASX_E_REGION_CLOSED;
 
     st = asx_task_slot_alloc(&idx);
     if (st != ASX_OK) return st;
@@ -848,7 +851,7 @@ asx_status asx_task_spawn_captured(asx_region_id region, asx_task_poll_fn poll_f
 
     st = asx_region_slot_lookup(region, &r);
     if (st != ASX_OK) return st;
-    if (!asx_region_can_accept_work(r->state)) return ASX_E_REGION_NOT_OPEN;
+    if (!asx_region_can_accept_work(r->state)) return ASX_E_REGION_CLOSED;
 
     captured = asx_region_capture_alloc(r, state_size, &old_capture_used);
     if (captured == NULL) return ASX_E_RESOURCE_EXHAUSTED;
@@ -995,8 +998,9 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
     if (st != ASX_OK) return st;
     if (r->poisoned) return ASX_E_REGION_POISONED;
 
-    /* Only open regions can reserve obligations */
-    if (!asx_region_can_spawn(r->state)) return ASX_E_REGION_NOT_OPEN;
+    /* Only open regions can reserve obligations (Rust
+     * ObligationAdmissionError::RegionClosed; vocabulary §5). */
+    if (!asx_region_can_spawn(r->state)) return ASX_E_REGION_CLOSED;
 
     st = asx_obligation_slot_alloc(&idx);
     if (st != ASX_OK) return st;

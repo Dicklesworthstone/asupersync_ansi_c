@@ -299,7 +299,7 @@ TEST(spawn_on_closed_region_rejected) {
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
-    ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_E_REGION_NOT_OPEN);
+    ASSERT_EQ(asx_task_spawn(rid, noop_poll, NULL, &tid), ASX_E_REGION_CLOSED);
 }
 
 TEST(obligation_double_commit_rejected) {

@@ -236,6 +236,7 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->traced_deadline = 0;
     task->panicked = 0;
     task->panic_message = NULL;
+    task->cancel_polled = 0;
 }
 
 asx_status asx_task_panic(asx_task_id self, const char *message) {
@@ -585,7 +586,20 @@ static uint32_t sched_drain_wakers(void) {
 }
 
 /* Unpark every cancel-pending task in scope. Returns the count. */
-static uint32_t sched_unpark_cancelled(void) {
+/* `stranded` = 0: the cancel request woke the task; once it has been
+ * polled since, it saw the cancel and chose to keep waiting (a
+ * Deadline-kind sleep, an uninterruptible join, a Notify wait), and Rust
+ * lets it wait (sleep.rs:789-812, task_handle.rs:1080-1126,
+ * sync/notify.rs:347). Only a task not yet polled since its cancel is
+ * unparked so it can observe it.
+ *
+ * `stranded` = 1 (run-to-completion only, when nothing in the runtime can
+ * wake anything): a cancelled task with no timer or join to wait on is
+ * unparked anyway so its bounded cleanup budget drives it to completion.
+ * Rust leaves such a task parked and reports a futurelock
+ * (lab/runtime.rs:5612); the lab-style run_until_idle keeps that
+ * behavior and returns to its caller, who may still wake the task. */
+static uint32_t sched_unpark_cancelled(int stranded) {
     uint32_t i;
     uint32_t n = 0;
     for (i = 0; i < g_task_count; i++) {
@@ -593,13 +607,11 @@ static uint32_t sched_unpark_cancelled(void) {
         asx_task_slot *t = &g_tasks[i];
         if (!t->alive || !t->parked || !t->cancel_pending) continue;
         if (sched_scope_region(t) == NULL) continue;
-        /* A wake that will come is not overridden: a task sleeping on its
-         * timer or waiting on a join target saw its cancel when the request
-         * woke it, and chose to keep waiting (a Deadline-kind sleep, an
-         * uninterruptible join); Rust lets it wait (sleep.rs:789-812,
-         * task_handle.rs:1080-1126). Only a task with no wake source left
-         * is unparked so its bounded cleanup can run. */
-        if (t->timer_pos != ASX_SLOT_NONE || t->waiting_on != ASX_SLOT_NONE) continue;
+        if (stranded) {
+            if (t->timer_pos != ASX_SLOT_NONE || t->waiting_on != ASX_SLOT_NONE) continue;
+        } else if (t->cancel_polled) {
+            continue;
+        }
         t->parked = 0;
         n++;
     }
@@ -672,7 +684,7 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
                              int advance_clock) {
     asx_time now;
 
-    if (sched_unpark_cancelled() > 0u) return ASX_OK;
+    if (sched_unpark_cancelled(0) > 0u) return ASX_OK;
     if (sched_drain_wakers() > 0u) return ASX_OK;
 
     /* Run-until-idle: only what is due now may make progress; the clock is
@@ -707,6 +719,8 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
         sched_block(sched_ms_until(run_deadline, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
         (void)sched_drain_wakers();
         now = sched_now();
+    } else if (sched_unpark_cancelled(1) > 0u) {
+        return ASX_OK;
     } else {
         return ASX_E_WOULD_BLOCK;
     }
@@ -866,6 +880,7 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
 
             /* Call the task's poll function */
             task_region = t->region;
+            if (t->cancel_pending) t->cancel_polled = 1;
             t->in_poll = 1;
             t->park_requested = 0;
             t->notified = 0;

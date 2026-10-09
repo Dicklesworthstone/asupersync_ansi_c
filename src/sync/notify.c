@@ -39,6 +39,7 @@ typedef struct {
     int active;       /* waiter is registered */
     uint32_t seq;     /* arrival order */
     asx_task_id task; /* task parked on this waiter, ASX_INVALID_ID if none */
+    int cancel_aware; /* last polled with a cancel-checking Cx */
 } notify_waiter_slot;
 
 typedef struct {
@@ -69,7 +70,11 @@ static uint16_t next_gen(uint16_t g) {
 /* Wrap-safe "a arrived before b". */
 static int seq_before(uint32_t a, uint32_t b) { return (int32_t)(a - b) < 0; }
 
-/* Oldest active, un-notified waiter whose task is not cancel-pending. */
+/* Oldest active, un-notified waiter that will not give up: a cancel-aware
+ * waiter (polled with a cancel-checking Cx) whose task is cancel-pending
+ * abandons on its next poll, so it is skipped. A waiter polled without a
+ * Cx, like Rust's Notified (sync/notify.rs:347), waits on through a cancel
+ * and is notified like any other. */
 static uint32_t notify_first_in_line(const notify_slot *s) {
     uint32_t i;
     uint32_t best = NOTIFY_NO_WAITER;
@@ -77,7 +82,7 @@ static uint32_t notify_first_in_line(const notify_slot *s) {
         const notify_waiter_slot *w = &s->waiters[i];
         if (!w->active || w->notified != NOTIFY_NONE) continue;
         if (best != NOTIFY_NO_WAITER && !seq_before(w->seq, s->waiters[best].seq)) continue;
-        if (asx_handle_is_valid(w->task) &&
+        if (w->cancel_aware && asx_handle_is_valid(w->task) &&
             asx_wait_task_liveness(w->task) == ASX_WAIT_TASK_DOOMED) {
             continue;
         }
@@ -232,6 +237,7 @@ asx_status asx_notify_wait_begin(asx_notify_handle handle, asx_notify_waiter *ou
     s->waiters[i].notified = NOTIFY_NONE;
     s->waiters[i].seq = s->next_seq++;
     s->waiters[i].task = ASX_INVALID_ID;
+    s->waiters[i].cancel_aware = 0;
     s->waiter_count++;
     /* Claim a stored notification. It behaves like a notify_one delivery,
      * so a waiter that gives up passes it on (or stores it again). */
@@ -262,6 +268,7 @@ asx_status asx_notify_poll_wait(asx_notify_waiter *waiter, asx_cx *cx) {
     if (!w->active) return ASX_E_INVALID_STATE;
 
     /* Cx cancellation/budget checkpoint */
+    w->cancel_aware = cx != NULL && asx_cx_has_cap(cx, ASX_CAP_CANCEL_CHECK);
     if (cx != NULL) {
         asx_status cst = asx_cx_checkpoint(cx);
         if (cst != ASX_OK) {

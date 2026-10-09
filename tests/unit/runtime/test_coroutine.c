@@ -498,7 +498,7 @@ TEST(co_spawn_captured_in_closed_region) {
     /* Spawning in a closed region should fail */
     ASSERT_EQ(asx_task_spawn_captured(rid, yield_n_poll, (uint32_t)sizeof(yield_n_state), NULL,
                                       &tid, &state_ptr),
-              ASX_E_REGION_NOT_OPEN);
+              ASX_E_REGION_CLOSED);
 }
 
 TEST(co_captured_state_zero_initialized) {

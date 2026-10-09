@@ -74,6 +74,7 @@ typedef struct {
     uint8_t park_requested; /* asx_task_park() called during this poll */
     uint8_t notified;       /* woken while in_poll */
     uint8_t parked;         /* not runnable until asx_task_wake() */
+    uint8_t cancel_polled;  /* polled since its cancel was requested */
     asx_status last_error;  /* status returned by a failing poll_fn */
     /* Task timer (EDF heap keyed by (wake_at, timer_seq)). */
     asx_time wake_at;

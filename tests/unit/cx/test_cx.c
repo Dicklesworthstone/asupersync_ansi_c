@@ -32,6 +32,16 @@ asx_status asx_task_get_state(asx_task_id id, asx_task_state *out_state) {
     return ASX_OK;
 }
 
+/* Stub for asx_task_mask_depth, the other runtime query Cx makes. */
+static uint32_t g_stub_mask_depth = 0;
+asx_status asx_task_mask_depth(asx_task_id id, uint32_t *out_depth);
+asx_status asx_task_mask_depth(asx_task_id id, uint32_t *out_depth) {
+    if (out_depth == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (id == ASX_INVALID_ID || id != g_stub_task_id) return ASX_E_NOT_FOUND;
+    *out_depth = g_stub_mask_depth;
+    return ASX_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* Lifecycle tests                                                     */
 /* ------------------------------------------------------------------ */
@@ -622,6 +632,21 @@ TEST(is_cancelled_cancel_requested_returns_nonzero) {
     ASSERT_TRUE(asx_cx_is_cancelled(&cx));
 }
 
+TEST(is_cancelled_masked_task_returns_zero) {
+    /* A masked task does not observe its cancel (Rust Cx::checkpoint is
+     * Ok inside masked, cx.rs:2749); unmasking makes it observable. */
+    asx_cx cx;
+    g_stub_task_id = 13;
+    g_stub_task_state = ASX_TASK_CANCEL_REQUESTED;
+    g_stub_mask_depth = 1;
+    asx_cx_init(&cx, 1, 13, ASX_CAP_CANCEL_CHECK);
+    ASSERT_FALSE(asx_cx_is_cancelled(&cx));
+    ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_OK);
+    g_stub_mask_depth = 0;
+    ASSERT_TRUE(asx_cx_is_cancelled(&cx));
+    ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
+}
+
 TEST(is_cancelled_cancelling_returns_nonzero) {
     asx_cx cx;
     g_stub_task_id = 12;
@@ -768,6 +793,7 @@ int main(void) {
     RUN_TEST(is_cancelled_no_task_returns_zero);
     RUN_TEST(is_cancelled_running_returns_zero);
     RUN_TEST(is_cancelled_cancel_requested_returns_nonzero);
+    RUN_TEST(is_cancelled_masked_task_returns_zero);
     RUN_TEST(is_cancelled_cancelling_returns_nonzero);
 
     /* Checkpoint */

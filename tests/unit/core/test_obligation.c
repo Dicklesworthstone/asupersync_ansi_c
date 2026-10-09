@@ -120,7 +120,7 @@ TEST(obligation_reserve_rejected_after_close) {
     asx_runtime_reset();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_REGION_NOT_OPEN);
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_REGION_CLOSED);
 
     /* Also rejected after drain */
     budget = asx_budget_infinite();

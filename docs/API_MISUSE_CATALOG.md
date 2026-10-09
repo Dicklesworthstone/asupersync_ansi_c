@@ -63,7 +63,7 @@ records.
 | `asx_task_spawn(stale, fn, d, &t)` | Stale region | ASX_E_STALE_HANDLE | test_safety_posture:stale_handle_spawn_after_recycle |
 | `asx_task_spawn(rid, NULL, d, &t)` | NULL poll function | ASX_E_INVALID_ARGUMENT | test_safety_posture:null_poll_fn_rejected |
 | `asx_task_spawn(rid, fn, d, NULL)` | NULL output | ASX_E_INVALID_ARGUMENT | test_safety_posture:null_out_pointers_rejected |
-| `asx_task_spawn(closed, fn, d, &t)` | Closed region | ASX_E_REGION_NOT_OPEN | test_safety_posture:spawn_on_closed_region_rejected |
+| `asx_task_spawn(closed, fn, d, &t)` | Closing or closed region | ASX_E_REGION_CLOSED (Rust SpawnError::RegionClosed) | test_safety_posture:spawn_on_closed_region_rejected |
 | `asx_task_spawn(poisoned, fn, d, &t)` | Poisoned region | ASX_E_REGION_POISONED | test_safety_posture:poison_blocks_spawn |
 | `asx_task_get_state(INVALID_ID, &s)` | Invalid handle | ASX_E_NOT_FOUND | test_safety_posture:zero_handle_rejected_everywhere |
 | `asx_task_get_state(tid, NULL)` | NULL output | ASX_E_INVALID_ARGUMENT | test_safety_posture:null_out_pointers_rejected |

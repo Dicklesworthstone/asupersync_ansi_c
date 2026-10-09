@@ -338,7 +338,7 @@ TEST(spawn_rejected_after_close) {
 
     /* Spawn in closed region should fail */
     st = asx_task_spawn(rid, noop_poll, NULL, &tid);
-    ASSERT_EQ(st, ASX_E_REGION_NOT_OPEN);
+    ASSERT_EQ(st, ASX_E_REGION_CLOSED);
 }
 
 TEST(multiple_tasks_in_region) {

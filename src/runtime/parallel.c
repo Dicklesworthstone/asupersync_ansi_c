@@ -1074,6 +1074,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                 parallel_commit_worker_event(worker_idx);
 
                 /* Poll the task */
+                if (t->cancel_pending) t->cancel_polled = 1;
                 asx_error_ledger_bind_task(tid);
                 poll_result = t->poll_fn(t->user_data, tid);
                 asx_error_ledger_bind_task(ASX_INVALID_ID);

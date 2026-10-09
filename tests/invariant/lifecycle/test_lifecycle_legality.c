@@ -71,7 +71,7 @@ TEST(region_spawn_after_close_rejected) {
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
 
     /* Spawn in a CLOSING region should fail */
-    ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_E_REGION_NOT_OPEN);
+    ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_E_REGION_CLOSED);
 }
 
 TEST(region_finalizing_admits_work_but_not_strict_spawn) {
@@ -98,7 +98,7 @@ TEST(region_obligation_after_close_rejected) {
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
 
     /* Obligation reserve in CLOSING region should fail */
-    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_REGION_NOT_OPEN);
+    ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_E_REGION_CLOSED);
 }
 
 TEST(region_spawn_after_poison_rejected) {

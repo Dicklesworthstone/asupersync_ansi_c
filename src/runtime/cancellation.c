@@ -89,6 +89,7 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
     }
 
     t->cancel_pending = 1;
+    t->cancel_polled = 0;
     t->cancel_reason = *reason;
     t->cancel_epoch = 1;
 

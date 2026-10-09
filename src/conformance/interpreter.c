@@ -20,8 +20,13 @@
 #include "canon.h"
 
 #include <asx/asx.h>
+#include <asx/cx/cx.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
+#include <asx/sync/barrier.h>
+#include <asx/sync/mutex.h>
+#include <asx/sync/notify.h>
+#include <asx/sync/semaphore.h>
 #include <asx/time/sleep.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
@@ -72,6 +77,26 @@ typedef struct {
     uint32_t n_obligations;
     it_local_region regions[IT_MAX_LOCAL];
     uint32_t n_regions;
+    /* The task's context for cancel-aware sync waits (cancel check). */
+    asx_cx cx;
+    /* The current blocking sync step's registration (DSL §3.7). */
+    union {
+        asx_notify_waiter notify;
+        asx_mutex_lock_waiter mutex;
+        asx_semaphore_waiter sem;
+        asx_barrier_waiter barrier;
+    } wait;
+    /* Held mutex guards and semaphore permits, by object name. */
+    struct {
+        const char *name;
+        asx_mutex_guard guard;
+    } guards[IT_MAX_LOCAL];
+    uint32_t n_guards;
+    struct {
+        const char *name;
+        asx_semaphore_permit permit;
+    } permits[IT_MAX_LOCAL];
+    uint32_t n_permits;
     /* Projection of the task's sleep timers (vocabulary §2: "<task>/tm<k>"). */
     uint32_t timers;         /* timers registered so far (k of the latest) */
     uint32_t timer_name_off; /* name of the latest, in g_text */
@@ -84,6 +109,20 @@ typedef struct {
     const char *parent; /* NULL for the root */
     asx_region_id id;
 } it_region;
+
+/* A declared sync object (DSL §3.7). */
+typedef enum { IT_SYNC_MUTEX, IT_SYNC_SEMAPHORE, IT_SYNC_BARRIER, IT_SYNC_NOTIFY } it_sync_type;
+
+typedef struct {
+    const char *name;
+    it_sync_type type;
+    asx_mutex_handle mutex;
+    asx_semaphore_handle semaphore;
+    asx_barrier_handle barrier;
+    asx_notify_handle notify;
+} it_sync;
+
+#define IT_MAX_SYNC 16u
 
 /* A cancel reason captured when its event was emitted. */
 typedef struct {
@@ -118,6 +157,9 @@ static it_task g_tasks[IT_MAX_TASKS];
 static uint32_t g_n_tasks;
 static it_region g_regions[IT_MAX_REGIONS];
 static uint32_t g_n_regions;
+
+static it_sync g_sync[IT_MAX_SYNC];
+static uint32_t g_n_sync;
 
 static it_event g_events[IT_MAX_EVENTS];
 static uint32_t g_n_events;
@@ -609,6 +651,163 @@ static it_local_region *local_region(it_task *t, const char *name) {
     return NULL;
 }
 
+static it_sync *sync_by_name(const char *name, it_sync_type type) {
+    uint32_t i;
+    if (name == NULL) return NULL;
+    for (i = 0; i < g_n_sync; i++) {
+        if (strcmp(g_sync[i].name, name) == 0) return g_sync[i].type == type ? &g_sync[i] : NULL;
+    }
+    return NULL;
+}
+
+/* A blocking sync wait's outcome: a status that ends the step, or
+ * pending. A cancelled wait gives up its registration, as dropping the
+ * Rust future does. */
+typedef enum { WAIT_DONE, WAIT_PENDING } wait_result;
+
+static wait_result sync_wait(it_task *t, uint32_t idx, const char *op, asx_status st,
+                             asx_status (*cancel_fn)(void *), void *waiter) {
+    if (st == ASX_E_PENDING) return WAIT_PENDING;
+    if (st != ASX_OK && cancel_fn != NULL) (void)cancel_fn(waiter);
+    observe_status(t, idx, op, st);
+    return WAIT_DONE;
+}
+
+static asx_status cancel_mutex_wait(void *w) {
+    return asx_mutex_lock_cancel((asx_mutex_lock_waiter *)w);
+}
+static asx_status cancel_sem_wait(void *w) {
+    return asx_semaphore_acquire_cancel((asx_semaphore_waiter *)w);
+}
+static asx_status cancel_barrier_wait(void *w) {
+    return asx_barrier_wait_cancel((asx_barrier_waiter *)w);
+}
+static asx_status cancel_notify_wait(void *w) {
+    return asx_notify_wait_cancel((asx_notify_waiter *)w);
+}
+
+/* Blocking sync steps (DSL §3.7). Returns 1 when `op` is one of them. */
+static int exec_sync_wait(it_task *t, asx_task_id self, uint32_t step, uint32_t idx, const char *op,
+                          step_result *out) {
+    asx_status st;
+    *out = STEP_NEXT;
+    if (strcmp(op, "notify_wait") == 0) {
+        it_sync *s = sync_by_name(it_str(step, "notify"), IT_SYNC_NOTIFY);
+        if (s == NULL) {
+            it_fail_task(t, idx, "notify_wait on an undeclared notify");
+            *out = STEP_END;
+            return 1;
+        }
+        if (t->phase == 0u) {
+            if (asx_notify_wait_begin(s->notify, &t->wait.notify) != ASX_OK) {
+                it_fail_task(t, idx, "asx_notify_wait_begin failed");
+                *out = STEP_END;
+                return 1;
+            }
+            t->phase = 1u;
+        }
+        /* Rust's Notified takes no Cx: a cancelled waiter stays parked until
+         * notified (DSL §3.7), so the wait is not cancel-checked. */
+        st = asx_notify_poll_wait(&t->wait.notify, NULL);
+        if (sync_wait(t, idx, op, st, cancel_notify_wait, &t->wait.notify) == WAIT_PENDING) {
+            *out = STEP_PENDING;
+        }
+        return 1;
+    }
+    if (strcmp(op, "mutex_lock") == 0) {
+        const char *name = it_str(step, "mutex");
+        it_sync *s = sync_by_name(name, IT_SYNC_MUTEX);
+        asx_mutex_guard guard;
+        if (s == NULL || t->n_guards >= IT_MAX_LOCAL) {
+            it_fail_task(t, idx, "mutex_lock on an undeclared mutex (or too many guards)");
+            *out = STEP_END;
+            return 1;
+        }
+        if (t->phase == 0u) {
+            if (asx_mutex_lock_begin(s->mutex, &t->wait.mutex) != ASX_OK) {
+                it_fail_task(t, idx, "asx_mutex_lock_begin failed");
+                *out = STEP_END;
+                return 1;
+            }
+            t->phase = 1u;
+        }
+        st = asx_mutex_poll_lock(&t->wait.mutex, &guard, &t->cx);
+        if (st == ASX_OK) {
+            t->guards[t->n_guards].name = name;
+            t->guards[t->n_guards].guard = guard;
+            t->n_guards++;
+        }
+        if (sync_wait(t, idx, op, st, cancel_mutex_wait, &t->wait.mutex) == WAIT_PENDING) {
+            *out = STEP_PENDING;
+        }
+        return 1;
+    }
+    if (strcmp(op, "sem_acquire") == 0) {
+        const char *name = it_str(step, "semaphore");
+        it_sync *s = sync_by_name(name, IT_SYNC_SEMAPHORE);
+        asx_semaphore_permit permit;
+        uint64_t count = 0;
+        if (s == NULL || !asx_json_u64(g_in, asx_json_get(g_in, step, "count"), &count) ||
+            t->n_permits >= IT_MAX_LOCAL) {
+            it_fail_task(t, idx, "sem_acquire needs a declared semaphore and a count");
+            *out = STEP_END;
+            return 1;
+        }
+        if (count == 0u) { /* Rust: count 0 succeeds at once, no permit */
+            observe_status(t, idx, op, ASX_OK);
+            return 1;
+        }
+        if (count > 1u) {
+            it_fail_task(t, idx,
+                         "sem_acquire count > 1: C semaphores grant one permit per acquire "
+                         "(Rust acquires n all-or-nothing)");
+            *out = STEP_END;
+            return 1;
+        }
+        if (t->phase == 0u) {
+            if (asx_semaphore_acquire_begin(s->semaphore, &t->wait.sem) != ASX_OK) {
+                it_fail_task(t, idx, "asx_semaphore_acquire_begin failed");
+                *out = STEP_END;
+                return 1;
+            }
+            t->phase = 1u;
+        }
+        st = asx_semaphore_poll_acquire(&t->wait.sem, &permit, &t->cx);
+        if (st == ASX_OK) {
+            t->permits[t->n_permits].name = name;
+            t->permits[t->n_permits].permit = permit;
+            t->n_permits++;
+        }
+        if (sync_wait(t, idx, op, st, cancel_sem_wait, &t->wait.sem) == WAIT_PENDING) {
+            *out = STEP_PENDING;
+        }
+        return 1;
+    }
+    if (strcmp(op, "barrier_wait") == 0) {
+        it_sync *s = sync_by_name(it_str(step, "barrier"), IT_SYNC_BARRIER);
+        if (s == NULL) {
+            it_fail_task(t, idx, "barrier_wait on an undeclared barrier");
+            *out = STEP_END;
+            return 1;
+        }
+        if (t->phase == 0u) {
+            if (asx_barrier_wait_begin(s->barrier, &t->wait.barrier) != ASX_OK) {
+                it_fail_task(t, idx, "asx_barrier_wait_begin failed");
+                *out = STEP_END;
+                return 1;
+            }
+            t->phase = 1u;
+        }
+        st = asx_barrier_poll_wait(&t->wait.barrier, &t->cx);
+        if (sync_wait(t, idx, op, st, cancel_barrier_wait, &t->wait.barrier) == WAIT_PENDING) {
+            *out = STEP_PENDING;
+        }
+        return 1;
+    }
+    (void)self;
+    return 0;
+}
+
 /* A reason attributed as DSL §4 "Reason attribution" prescribes, stamped
  * now, with the step's optional message (scenario text, which outlives
  * the run). */
@@ -733,6 +932,41 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
+    if (strcmp(op, "mutex_unlock") == 0 || strcmp(op, "sem_release") == 0) {
+        /* Release the most recent guard or permit held on the object. */
+        int is_mutex = strcmp(op, "mutex_unlock") == 0;
+        const char *name = it_str(step, is_mutex ? "mutex" : "semaphore");
+        uint32_t i = is_mutex ? t->n_guards : t->n_permits;
+        while (i > 0u) {
+            const char *held = is_mutex ? t->guards[i - 1u].name : t->permits[i - 1u].name;
+            if (name != NULL && strcmp(held, name) == 0) break;
+            i--;
+        }
+        if (i == 0u) {
+            it_fail_task(t, idx, "release of a guard or permit this task does not hold");
+            return STEP_END;
+        }
+        i--;
+        if (is_mutex) {
+            st = asx_mutex_unlock(t->guards[i].guard);
+            t->guards[i] = t->guards[--t->n_guards];
+        } else {
+            st = asx_semaphore_release(t->permits[i].permit);
+            t->permits[i] = t->permits[--t->n_permits];
+        }
+        observe_status(t, idx, label, st);
+        return STEP_NEXT;
+    }
+    if (strcmp(op, "notify_one") == 0 || strcmp(op, "notify_all") == 0) {
+        it_sync *s = sync_by_name(it_str(step, "notify"), IT_SYNC_NOTIFY);
+        if (s == NULL) {
+            it_fail_task(t, idx, "notify on an undeclared notify");
+            return STEP_END;
+        }
+        st = strcmp(op, "notify_one") == 0 ? asx_notify_one(s->notify) : asx_notify_all(s->notify);
+        observe_status(t, idx, label, st);
+        return STEP_NEXT;
+    }
     if (strcmp(op, "spawn") == 0) {
         const char *name = it_str(step, "as");
         const char *in_region = it_str(step, "region");
@@ -756,6 +990,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         if (st == ASX_OK) {
             child->id = id;
             child->spawned = 1;
+            (void)asx_cx_init(&child->cx, child->region, id, ASX_CAP_CANCEL_CHECK);
         }
         observe_status(t, idx, label, st);
         return STEP_NEXT;
@@ -829,6 +1064,10 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
     if (op == NULL) {
         it_fail_task(t, idx, "step without op");
         return STEP_END;
+    }
+    {
+        step_result r;
+        if (exec_sync_wait(t, self, step, idx, op, &r)) return r;
     }
     if (strcmp(op, "yield") == 0) {
         if (t->phase == 0u) {
@@ -1593,9 +1832,8 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
         it_fail("not an asx.scenario.v2 document", NULL);
         return ASX_E_INVALID_ARGUMENT;
     }
-    if (asx_json_count(in, asx_json_get(in, scenario, "channels")) > 0u ||
-        asx_json_count(in, asx_json_get(in, scenario, "sync")) > 0u) {
-        it_fail("channel and sync declarations are not interpreted yet", NULL);
+    if (asx_json_count(in, asx_json_get(in, scenario, "channels")) > 0u) {
+        it_fail("channel declarations are not interpreted yet (increment 2b)", NULL);
         return ASX_E_INVALID_ARGUMENT;
     }
     if (!asx_json_u64(in, asx_json_get(in, asx_json_get(in, scenario, "lab"), "max_steps"),
@@ -1615,6 +1853,46 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     }
     asx_trace_set_observer(it_observe, NULL);
     g_observations = asx_json_new_array(out);
+
+    /* Sync objects (DSL §3.7); their arenas are not part of the runtime
+     * reset. */
+    asx_notify_reset();
+    asx_semaphore_reset();
+    asx_barrier_reset();
+    g_n_sync = 0;
+    list = asx_json_get(in, scenario, "sync");
+    for (i = 0; i < asx_json_count(in, list) && !g_failed; i++) {
+        uint32_t d = asx_json_item(in, list, i);
+        const char *type = it_str(d, "type");
+        it_sync *s;
+        uint64_t n = 0;
+        if (g_n_sync >= IT_MAX_SYNC || it_str(d, "name") == NULL || type == NULL) {
+            it_fail("sync declaration needs a name and a type (and a free slot)", NULL);
+            break;
+        }
+        s = &g_sync[g_n_sync++];
+        memset(s, 0, sizeof(*s));
+        s->name = it_str(d, "name");
+        if (strcmp(type, "mutex") == 0) {
+            s->type = IT_SYNC_MUTEX;
+            st = asx_mutex_create(&s->mutex);
+        } else if (strcmp(type, "notify") == 0) {
+            s->type = IT_SYNC_NOTIFY;
+            st = asx_notify_create(&s->notify);
+        } else if (strcmp(type, "semaphore") == 0 &&
+                   asx_json_u64(in, asx_json_get(in, d, "permits"), &n) && n <= UINT32_MAX) {
+            s->type = IT_SYNC_SEMAPHORE;
+            st = asx_semaphore_create((uint32_t)n, &s->semaphore);
+        } else if (strcmp(type, "barrier") == 0 &&
+                   asx_json_u64(in, asx_json_get(in, d, "parties"), &n) && n <= UINT32_MAX) {
+            s->type = IT_SYNC_BARRIER;
+            st = asx_barrier_create((uint32_t)n, &s->barrier);
+        } else {
+            it_fail("unknown or incomplete sync declaration", s->name);
+            break;
+        }
+        if (st != ASX_OK) it_fail("cannot create sync object", s->name);
+    }
     budget = asx_budget_from_polls((uint32_t)max_steps);
 
     /* Setup (DSL §2): root, regions, tasks in array order. */
@@ -1663,6 +1941,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
         }
         t->id = id;
         t->spawned = 1;
+        (void)asx_cx_init(&t->cx, t->region, id, ASX_CAP_CANCEL_CHECK);
     }
 
     /* Script (DSL §2): run to idle, advance time, apply the op. */
