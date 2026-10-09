@@ -72,15 +72,12 @@
       ]
     },
     "ev_task": {
-      "type": "object", "required": ["k", "task"], "additionalProperties": false,
+      "type": "object", "required": ["k", "task", "region"], "additionalProperties": false,
       "properties": {
         "k": {"enum": ["task.spawned", "task.completed"]},
         "task": {"$ref": "#/$defs/name"},
         "region": {"$ref": "#/$defs/name"}
-      },
-      "if": {"properties": {"k": {"const": "task.spawned"}}},
-      "then": {"required": ["region"]},
-      "else": {"not": {"required": ["region"]}}
+      }
     },
     "ev_region_created": {
       "type": "object", "required": ["k", "region", "parent"], "additionalProperties": false,
@@ -261,10 +258,10 @@
          {"k": "task.spawned", "region": "root", "task": "t.producer"},
          {"k": "task.spawned", "region": "root", "task": "t.waiter"}],
         [{"k": "obligation.reserved", "kind": "SendPermit", "obligation": "t.consumer/o1", "region": "root", "task": "t.consumer"},
-         {"k": "task.completed", "task": "t.producer"},
-         {"k": "task.completed", "task": "t.waiter"}],
+         {"k": "task.completed", "region": "root", "task": "t.producer"},
+         {"k": "task.completed", "region": "root", "task": "t.waiter"}],
         [{"k": "obligation.committed", "kind": "SendPermit", "obligation": "t.consumer/o1", "region": "root", "task": "t.consumer"}],
-        [{"k": "task.completed", "task": "t.consumer"}]
+        [{"k": "task.completed", "region": "root", "task": "t.consumer"}]
       ],
       "snapshot": {
         "now_ns": 0,

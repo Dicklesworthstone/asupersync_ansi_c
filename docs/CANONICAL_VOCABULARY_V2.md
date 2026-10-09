@@ -70,7 +70,7 @@ timer deadlines).
 | `k` | Fields | Rust source (`TraceEventKind`, `TraceData`) | C source |
 |---|---|---|---|
 | `task.spawned` | `task`, `region` | `Spawn`, `Task{task,region}` (`src/trace/event.rs:169`) | `ASX_TRACE_TASK_SPAWN` |
-| `task.completed` | `task` | `Complete`, `Task` (`:179`) | `ASX_TRACE_SCHED_COMPLETE` |
+| `task.completed` | `task`, `region` | `Complete`, `Task{task,region}` (`:179`) | `ASX_TRACE_SCHED_COMPLETE` |
 | `region.created` | `region`, `parent` (name or `null`) | `RegionCreated`, `Region{region,parent}` (`:199`) | `ASX_TRACE_REGION_OPEN` |
 | `region.close_begin` | `region` | `RegionCloseBegin` (`:195`) | `ASX_TRACE_REGION_CLOSE` |
 | `region.closed` | `region` | `RegionCloseComplete` (`:197`) | `ASX_TRACE_REGION_CLOSED` |
@@ -366,7 +366,7 @@ it as conflicting with everything, `independence.rs:310-314`.)
 The relation is checked by a table test on both sides: a C test under
 `tests/unit/runtime/` and a Rust test in `tools/twin_run`. Both use the same
 JSON table of event pairs and expected answers,
-`tests/conformance/vocab_v2_independence_table.json`. Its 21 cases cover
+`tests/conformance/vocab_v2_independence_table.json`. Its 22 cases cover
 every footprint rule; `"$reason"` stands for its `reason_fixture`.
 
 ### Foata layers
