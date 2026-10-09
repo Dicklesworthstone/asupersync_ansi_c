@@ -408,7 +408,7 @@ TEST(timer_update_allows_null_old_handle) {
     ASSERT_EQ(wakers[0], (void *)0xCAFE);
 }
 
-TEST(timer_update_resource_failure_preserves_old_timer) {
+TEST(timer_update_on_a_full_wheel_reuses_the_slot) {
     asx_timer_wheel *w = asx_timer_wheel_global();
     asx_timer_handle handles[ASX_MAX_TIMERS];
     asx_timer_handle replacement;
@@ -423,13 +423,56 @@ TEST(timer_update_resource_failure_preserves_old_timer) {
                   ASX_OK);
     }
 
-    ASSERT_EQ(asx_timer_update(w, &handles[0], 200, (void *)0xBB, &replacement),
-              ASX_E_RESOURCE_EXHAUSTED);
+    /* As Rust (cancel, then register into the freed slab id). */
+    ASSERT_EQ(asx_timer_update(w, &handles[0], 200, (void *)0xBB, &replacement), ASX_OK);
+    ASSERT_EQ(replacement.slot, handles[0].slot);
+    ASSERT_TRUE(replacement.generation != handles[0].generation);
     ASSERT_EQ(asx_timer_active_count(w), ASX_MAX_TIMERS);
+    ASSERT_FALSE(asx_timer_cancel(w, &handles[0]));
 
     count = asx_timer_collect_expired(w, 100, wakers, 4);
+    ASSERT_EQ(count, (uint32_t)0);
+    count = asx_timer_collect_expired(w, 200, wakers, 4);
     ASSERT_EQ(count, (uint32_t)1);
-    ASSERT_EQ(wakers[0], (void *)0xAA);
+    ASSERT_EQ(wakers[0], (void *)0xBB);
+}
+
+TEST(timer_update_refuses_stale_handles_and_registers_nothing) {
+    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_handle fired, cancelled, reused, out;
+    void *wakers[4];
+    uint32_t count;
+
+    asx_timer_wheel_reset(w);
+
+    /* Fired: updating it must not bring the timer back. */
+    ASSERT_EQ(asx_timer_register(w, 100, (void *)0xAA, &fired), ASX_OK);
+    ASSERT_EQ(asx_timer_collect_expired(w, 100, wakers, 4), (uint32_t)1);
+    out.slot = 77u;
+    out.generation = 77u;
+    ASSERT_EQ(asx_timer_update(w, &fired, 300, (void *)0xBB, &out), ASX_E_STALE_HANDLE);
+    ASSERT_EQ(out.slot, 77u);
+    ASSERT_EQ(out.generation, 77u);
+    ASSERT_EQ(asx_timer_active_count(w), (uint32_t)0);
+
+    /* Cancelled, then its slot re-armed: the new timer is unaffected. */
+    ASSERT_EQ(asx_timer_register(w, 400, (void *)0xCC, &cancelled), ASX_OK);
+    ASSERT_TRUE(asx_timer_cancel(w, &cancelled));
+    ASSERT_EQ(asx_timer_register(w, 500, (void *)0xDD, &reused), ASX_OK);
+    ASSERT_EQ(reused.slot, cancelled.slot);
+    ASSERT_EQ(asx_timer_update(w, &cancelled, 300, (void *)0xBB, &out), ASX_E_STALE_HANDLE);
+    ASSERT_EQ(asx_timer_active_count(w), (uint32_t)1);
+
+    count = asx_timer_collect_expired(w, 450, wakers, 4);
+    ASSERT_EQ(count, (uint32_t)0);
+    count = asx_timer_collect_expired(w, 500, wakers, 4);
+    ASSERT_EQ(count, (uint32_t)1);
+    ASSERT_EQ(wakers[0], (void *)0xDD);
+
+    /* A slot outside the arena. */
+    out = reused;
+    out.slot = ASX_MAX_TIMERS;
+    ASSERT_EQ(asx_timer_update(w, &out, 600, (void *)0xBB, &out), ASX_E_STALE_HANDLE);
 }
 
 TEST(timer_update_duration_failure_preserves_old_timer) {
@@ -682,7 +725,8 @@ int main(void) {
     RUN_TEST(timer_collect_zero_capacity_advances_time);
     RUN_TEST(timer_update_cancels_old_and_registers_new);
     RUN_TEST(timer_update_allows_null_old_handle);
-    RUN_TEST(timer_update_resource_failure_preserves_old_timer);
+    RUN_TEST(timer_update_on_a_full_wheel_reuses_the_slot);
+    RUN_TEST(timer_update_refuses_stale_handles_and_registers_nothing);
     RUN_TEST(timer_update_duration_failure_preserves_old_timer);
     RUN_TEST(timer_churn_register_cancel);
     RUN_TEST(timer_generation_increments_on_reuse);

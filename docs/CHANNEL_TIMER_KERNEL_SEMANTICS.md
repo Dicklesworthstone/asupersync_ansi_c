@@ -286,7 +286,9 @@ bool asx_timer_cancel(asx_timer_wheel *wheel, const asx_timer_handle *handle);
 asx_timer_handle asx_timer_update(asx_timer_wheel *wheel, const asx_timer_handle *old_handle, asx_time new_deadline, asx_waker waker);
 ```
 
-Cancel the old handle (logically), register a new timer with fresh `id`/`generation`.
+Rust's `TimerDriver::update` (`src/time/driver.rs`) cancels the old handle and registers the new timer **only if that cancel succeeded**; a stale handle (fired, cancelled, or its id reused) leaves the wheel untouched and is returned as is. The slab reuses the freed `id`, so the replacement gets the same `id` with a new `generation`.
+
+C (`asx_timer_update`) refuses a stale handle with `ASX_E_STALE_HANDLE` and registers nothing. A live timer is re-armed in its own slot under a new generation, so a full arena cannot refuse an update. `ASX_E_TIMER_DURATION_EXCEEDED` is checked before anything changes.
 
 ### 2.5 Timer Error Conditions
 

@@ -115,18 +115,34 @@ void asx_timer_wheel_reset(asx_timer_wheel *wheel) {
  * Timer registration
  * ------------------------------------------------------------------- */
 
+static int asx_timer_duration_exceeded(const asx_timer_wheel *wheel, asx_time deadline) {
+    return deadline > wheel->current_time &&
+           deadline - wheel->current_time > wheel->max_duration_ns;
+}
+
+/* Arm slot idx with a fresh generation, so earlier handles to it go stale. */
+static void asx_timer_arm(asx_timer_wheel *wheel, uint32_t idx, asx_time deadline, void *waker_data,
+                          asx_timer_handle *out_handle) {
+    wheel->slots[idx].deadline = deadline;
+    wheel->slots[idx].waker_data = waker_data;
+    wheel->slots[idx].insertion_seq = wheel->next_insertion++;
+    wheel->slots[idx].generation = asx_timer_next_generation(wheel->slots[idx].generation);
+    wheel->slots[idx].alive = 1;
+
+    wheel->active_count++;
+
+    out_handle->slot = idx;
+    out_handle->generation = wheel->slots[idx].generation;
+    asx_trace_emit(ASX_TRACE_TIMER_SET, asx_timer_trace_entity_id(out_handle), deadline);
+}
+
 asx_status asx_timer_register(asx_timer_wheel *wheel, asx_time deadline, void *waker_data,
                               asx_timer_handle *out_handle) {
     uint32_t idx;
-    uint64_t delta;
 
     if (wheel == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    /* Validate duration */
-    if (deadline > wheel->current_time) {
-        delta = deadline - wheel->current_time;
-        if (delta > wheel->max_duration_ns) { return ASX_E_TIMER_DURATION_EXCEEDED; }
-    }
+    if (asx_timer_duration_exceeded(wheel, deadline)) { return ASX_E_TIMER_DURATION_EXCEEDED; }
 
     /* Find a free slot: try recycling a dead slot first */
     idx = ASX_MAX_TIMERS; /* sentinel */
@@ -147,18 +163,7 @@ asx_status asx_timer_register(asx_timer_wheel *wheel, asx_time deadline, void *w
         idx = wheel->slot_count++;
     }
 
-    wheel->slots[idx].deadline = deadline;
-    wheel->slots[idx].waker_data = waker_data;
-    wheel->slots[idx].insertion_seq = wheel->next_insertion++;
-    wheel->slots[idx].generation = asx_timer_next_generation(wheel->slots[idx].generation);
-    wheel->slots[idx].alive = 1;
-
-    wheel->active_count++;
-
-    out_handle->slot = idx;
-    out_handle->generation = wheel->slots[idx].generation;
-    asx_trace_emit(ASX_TRACE_TIMER_SET, asx_timer_trace_entity_id(out_handle), deadline);
-
+    asx_timer_arm(wheel, idx, deadline, waker_data, out_handle);
     return ASX_OK;
 }
 
@@ -266,17 +271,22 @@ uint32_t asx_timer_collect_expired(asx_timer_wheel *wheel, asx_time now, void **
 
 asx_status asx_timer_update(asx_timer_wheel *wheel, const asx_timer_handle *old_handle,
                             asx_time new_deadline, void *waker_data, asx_timer_handle *out_handle) {
-    asx_status st;
+    const asx_timer_slot *s;
 
     if (wheel == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (old_handle == NULL) return asx_timer_register(wheel, new_deadline, waker_data, out_handle);
 
-    /* Register new timer first so update is failure-atomic. */
-    st = asx_timer_register(wheel, new_deadline, waker_data, out_handle);
-    if (st != ASX_OK) return st;
+    /* As the Rust driver's update: a timer that fired, was cancelled or
+     * whose slot was reused is not re-armed. */
+    if (old_handle->slot >= wheel->slot_count) return ASX_E_STALE_HANDLE;
+    s = &wheel->slots[old_handle->slot];
+    if (!s->alive || s->generation != old_handle->generation) return ASX_E_STALE_HANDLE;
+    if (asx_timer_duration_exceeded(wheel, new_deadline)) return ASX_E_TIMER_DURATION_EXCEEDED;
 
-    /* Retire old timer only after the replacement exists. */
-    if (old_handle != NULL) { (void)asx_timer_cancel(wheel, old_handle); }
-
+    /* Cancel, then register into the freed slot under a new generation
+     * (Rust's slab reuses the freed id), so a full wheel cannot refuse. */
+    (void)asx_timer_cancel(wheel, old_handle);
+    asx_timer_arm(wheel, old_handle->slot, new_deadline, waker_data, out_handle);
     return ASX_OK;
 }
 

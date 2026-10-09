@@ -104,19 +104,21 @@ ASX_API uint32_t asx_timer_collect_expired(asx_timer_wheel *wheel, asx_time now,
 /* -------------------------------------------------------------------
  * Timer update (cancel + re-register)
  *
- * Registers the replacement timer before retiring the old one so the
- * operation is failure-atomic. If the new registration fails, the old
- * timer remains live. If the old handle is stale, the new timer is
- * still registered (old cancel is a no-op).
+ * As the Rust timer driver's update: only a live timer is moved. A stale
+ * handle (fired, cancelled, or its slot reused) is refused and nothing
+ * is registered. A live timer is re-armed in its own slot under a new
+ * generation, so the old handle goes stale and a full wheel cannot
+ * refuse the update.
  * ------------------------------------------------------------------- */
 
-/* Register a new timer and then retire the old one with updated deadline.
+/* Move a live timer to a new deadline and waker.
  *
  * Preconditions: wheel and out_handle must not be NULL.
  * old_handle may be NULL (treated as a pure register operation).
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if NULL params,
- *   ASX_E_RESOURCE_EXHAUSTED if timer arena is full, and leaves the old
- *   timer untouched on registration failure.
+ *   ASX_E_STALE_HANDLE if old_handle is not a live timer, and
+ *   ASX_E_TIMER_DURATION_EXCEEDED if new_deadline is beyond the maximum
+ *   duration. On failure the wheel and out_handle are unchanged.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_timer_update(asx_timer_wheel *wheel,
                                                  const asx_timer_handle *old_handle,
