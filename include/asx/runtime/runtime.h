@@ -657,6 +657,18 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_abort(asx_obligation_id id);
 ASX_API ASX_MUST_USE asx_status
 asx_obligation_abort_with_reason(asx_obligation_id id, asx_obligation_abort_reason reason);
 
+/* Give up a reserved obligation unresolved, as dropping a Rust
+ * ObligationToken does: it is leaked now, under the leak policy a leak at
+ * its holder's completion would get (LEAKED; RECOVER aborts it with
+ * ASX_OBLIGATION_ABORT_LEAK_RECOVERED; PANIC also routes the leak through
+ * the region's containment policy, surfaced by the scheduler).
+ *
+ * Preconditions: id must be a valid obligation handle in RESERVED state.
+ * Returns ASX_OK, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for an invalid
+ *   handle, ASX_E_INVALID_TRANSITION if it is not RESERVED.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_obligation_drop(asx_obligation_id id);
+
 /* Query the current state of an obligation.
  *
  * Preconditions: out_state must not be NULL; id must be a valid handle.

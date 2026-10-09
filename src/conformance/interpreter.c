@@ -1416,9 +1416,9 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             }
             st = asx_obligation_abort_with_reason(o->id, why);
         } else {
-            /* Dropped: left reserved, so the runtime resolves it when the
-             * holder completes (a leak unless the holder was cancelled). */
-            st = ASX_OK;
+            /* drop(token): leaked at once (Rust posts the Leak when the
+             * token drops). */
+            st = asx_obligation_drop(o->id);
         }
         o->name = NULL;
         observe_status(t, idx, label, st);

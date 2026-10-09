@@ -475,6 +475,33 @@ static asx_leak_response asx_leak_policy_effective(void) {
  * state.rs:8454) only reaches tokens that were never dropped, which C, with
  * no destructors, cannot tell apart. The leak policy then applies; RECOVER
  * aborts with ASX_OBLIGATION_ABORT_LEAK_RECOVERED. */
+/* Leak the reserved obligation in slot `idx` under the active policy:
+ * RECOVER aborts it with ASX_OBLIGATION_ABORT_LEAK_RECOVERED, the others
+ * mark it LEAKED (vocabulary obligation.leaked, Rust ObligationLeak), LOG
+ * also warning with `log_message`. Returns 1 when the policy (PANIC)
+ * demands fail-fast containment. */
+static int obligation_leak_slot(uint32_t idx, const char *log_message) {
+    asx_obligation_slot *o = &g_obligations[idx];
+    asx_obligation_id oid =
+        asx_handle_pack(ASX_TYPE_OBLIGATION, (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
+                        asx_handle_pack_index(o->generation, (uint16_t)idx));
+    asx_leak_response policy = asx_leak_policy_effective();
+    if (g_leak_count < UINT64_MAX) g_leak_count++;
+    if (policy == ASX_LEAK_RECOVER) {
+        /* Recovered leak: abort. */
+        o->state = ASX_OBLIGATION_ABORTED;
+        o->abort_reason = ASX_OBLIGATION_ABORT_LEAK_RECOVERED;
+        asx_ghost_obligation_resolved(oid);
+        (void)asx_event_emit(ASX_EVENT_OBLIGATION_ABORT, oid, 0u, ASX_OK);
+        asx_trace_emit(ASX_TRACE_OBLIGATION_ABORT, oid, 0);
+        return 0;
+    }
+    o->state = ASX_OBLIGATION_LEAKED;
+    asx_trace_emit(ASX_TRACE_OBLIGATION_LEAK, oid, 0);
+    if (policy == ASX_LEAK_LOG) (void)asx_runtime_log_write(ASX_LOG_WARN, log_message);
+    return policy == ASX_LEAK_PANIC;
+}
+
 uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *out_fail_fast) {
     uint32_t leaks = 0;
     uint32_t idx = task->first_held;
@@ -485,36 +512,15 @@ uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *ou
         ASX_CHECKPOINT_WAIVER("bounded: held list length <= ASX_MAX_OBLIGATIONS");
         asx_obligation_slot *o = &g_obligations[idx];
         uint32_t next = o->next_held;
-        asx_obligation_id oid =
-            asx_handle_pack(ASX_TYPE_OBLIGATION,
-                            (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
-                            asx_handle_pack_index(o->generation, (uint16_t)idx));
 
         o->next_held = ASX_SLOT_NONE;
         if (o->alive && o->state == ASX_OBLIGATION_RESERVED) {
-            asx_leak_response policy = asx_leak_policy_effective();
-            if (policy == ASX_LEAK_RECOVER) {
-                /* Recovered leak: abort. */
-                o->state = ASX_OBLIGATION_ABORTED;
-                o->abort_reason = ASX_OBLIGATION_ABORT_LEAK_RECOVERED;
-                asx_ghost_obligation_resolved(oid);
-                (void)asx_event_emit(ASX_EVENT_OBLIGATION_ABORT, oid, 0u, ASX_OK);
-                asx_trace_emit(ASX_TRACE_OBLIGATION_ABORT, oid, 0);
-                if (g_leak_count < UINT64_MAX) g_leak_count++;
-                leaks++;
-            } else {
-                o->state = ASX_OBLIGATION_LEAKED;
-                /* Vocabulary obligation.leaked (Rust ObligationLeak). */
-                asx_trace_emit(ASX_TRACE_OBLIGATION_LEAK, oid, 0);
-                if (g_leak_count < UINT64_MAX) g_leak_count++;
-                leaks++;
-                if (policy == ASX_LEAK_LOG) {
-                    (void)asx_runtime_log_write(
-                        ASX_LOG_WARN, "obligation leaked: holder task completed with it reserved");
-                } else if (policy == ASX_LEAK_PANIC && out_fail_fast != NULL) {
-                    *out_fail_fast = 1;
-                }
+            if (obligation_leak_slot(idx, "obligation leaked: holder task completed with it "
+                                          "reserved") &&
+                out_fail_fast != NULL) {
+                *out_fail_fast = 1;
             }
+            leaks++;
         }
         idx = next;
     }
@@ -852,10 +858,10 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
             g_tasks[idx].spawned_in_poll = 1u;
             if (asx_handle_index(spawner->region) == asx_handle_index(region)) {
                 g_tasks[idx].budget = spawner->budget;
-                if (spawner->state == ASX_TASK_CANCELLING ||
-                    spawner->state == ASX_TASK_FINALIZING) {
-                    g_tasks[idx].budget.poll_quota = UINT32_MAX;
-                }
+                /* Rust's cleanup_phase starts when the acknowledgement is
+                 * applied after the poll, not at the checkpoint that
+                 * acknowledges (fuzz gen-7-54, bd-ij9w). */
+                if (spawner->cleanup_applied) g_tasks[idx].budget.poll_quota = UINT32_MAX;
             }
         }
     }
@@ -1168,6 +1174,28 @@ asx_status asx_obligation_commit(asx_obligation_id id) {
 
 asx_status asx_obligation_abort(asx_obligation_id id) {
     return asx_obligation_abort_with_reason(id, ASX_OBLIGATION_ABORT_EXPLICIT);
+}
+
+/* A dropped Rust ObligationToken posts a Leak (obligation_mailbox.rs:897),
+ * drained right after the poll that dropped it: the obligation is leaked
+ * there, not when its holder completes (fuzz gen-12-2, bd-ij9w). */
+asx_status asx_obligation_drop(asx_obligation_id id) {
+    asx_obligation_slot *o;
+    uint32_t idx;
+    asx_status st = asx_obligation_slot_lookup(id, &o);
+    if (st != ASX_OK) return st;
+    st = asx_obligation_transition_check(o->state, ASX_OBLIGATION_LEAKED);
+    if (st != ASX_OK) return st;
+    idx = (uint32_t)(o - g_obligations);
+    asx_obligation_unlink_holder(idx);
+    if (obligation_leak_slot(idx, "obligation leaked: dropped unresolved")) {
+        /* PANIC policy: as for a leak at completion. */
+        asx_status fc = asx_region_contain_fault(o->region, ASX_E_UNRESOLVED_OBLIGATIONS);
+        if (fc != ASX_OK && asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {
+            g_pending_fault = fc;
+        }
+    }
+    return ASX_OK;
 }
 
 asx_status asx_obligation_abort_with_reason(asx_obligation_id id,

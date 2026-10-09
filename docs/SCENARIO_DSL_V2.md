@@ -187,7 +187,7 @@ so a blocking step inside `masked` is a schema error.
 | `reserve` | `kind` (`SendPermit`, `Ack`, `Lease`, `IoOp`, `SemaphorePermit`, `Transaction`), `as` | `cx.try_register_obligation_checked(kind, cx.task_id())` → `Ok(Some(token))` (`cx.rs:1746`) | `asx_obligation_reserve_ex(own_region, kind, self, &id)` | no | Ignored. A region that is no longer Open gives `ASX_E_REGION_CLOSED` (Rust `ObligationAdmissionError::RegionClosed`, `runtime/obligation_mailbox.rs:68`). |
 | `commit` | `obligation` | `token.commit()` (`obligation_mailbox.rs:879`) | `asx_obligation_commit(id)` | no | ignored |
 | `abort` | `obligation`, `reason` (`Cancel`, `Error`, `Explicit`) | `token.abort(reason)` (`:888`) | `asx_obligation_abort(id)` plus reason (C gap, §7) | no | ignored |
-| `leak` | `obligation` | `drop(token)`, which posts a Leak (`:897`) | the obligation is left unresolved; C reports a leak (`ASX_TRACE` leak gap, §7) | no | ignored |
+| `leak` | `obligation` | `drop(token)`, which posts a Leak (`:897`) | `asx_obligation_drop(id)`: leaked at once, under the leak policy | no | ignored |
 
 `kind` is required: C's `ASX_OBLIGATION_KIND_GENERIC` has no Rust counterpart
 and is not allowed. Rust applies reservations at the next lab step

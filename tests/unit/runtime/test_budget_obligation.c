@@ -294,6 +294,61 @@ TEST(consume_cost_rejects_stale_handle) {
     ASSERT_EQ(asx_task_consume_cost(ASX_INVALID_ID, 1u), ASX_E_NOT_FOUND);
 }
 
+/* Poll 1: cancels itself, acknowledges at a checkpoint, spawns child A and
+ * yields. Poll 2 (the acknowledgement applied): spawns child B. Records
+ * the poll quota each child starts with. */
+typedef struct {
+    asx_region_id region;
+    uint32_t polls;
+    uint32_t quota_a;
+    uint32_t quota_b;
+} inherit_state;
+
+static asx_status poll_inheritor(void *ud, asx_task_id self) {
+    inherit_state *s = (inherit_state *)ud;
+    asx_checkpoint_result cr;
+    asx_task_id child;
+    asx_budget b;
+    s->polls++;
+    if (s->polls == 1u) {
+        if (asx_task_cancel(self, ASX_CANCEL_USER) != ASX_OK) return ASX_E_INVALID_STATE;
+        if (asx_checkpoint(self, &cr) != ASX_OK || !cr.cancelled) return ASX_E_INVALID_STATE;
+        if (asx_task_spawn(s->region, poll_complete, NULL, &child) != ASX_OK) {
+            return ASX_E_INVALID_STATE;
+        }
+        if (asx_task_get_budget(child, &b) == ASX_OK) s->quota_a = b.poll_quota;
+        return ASX_E_PENDING;
+    }
+    if (asx_task_spawn(s->region, poll_complete, NULL, &child) != ASX_OK)
+        return ASX_E_INVALID_STATE;
+    if (asx_task_get_budget(child, &b) == ASX_OK) s->quota_b = b.poll_quota;
+    return ASX_OK;
+}
+
+/* Rust Cx::inherited_budget (cx.rs:2504-2511): new work inherits the
+ * spawner's budget, with no poll quota only once the spawner is in its
+ * cleanup phase, which starts when the acknowledgement is applied after
+ * the poll, not at the acknowledging checkpoint (fuzz gen-7-54). */
+TEST(spawned_child_inherits_the_quota_until_the_cleanup_phase_starts) {
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget tb;
+    asx_budget run;
+    inherit_state s;
+
+    setup();
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    s.region = r;
+    tb = asx_budget_from_polls(5);
+    ASSERT_EQ(asx_task_spawn_with_budget(r, poll_inheritor, &s, &tb, &t), ASX_OK);
+    run = asx_budget_from_polls(20);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+    ASSERT_EQ(s.polls, 2u);
+    ASSERT_EQ(s.quota_a, 4u); /* 5 minus the poll that spawned it */
+    ASSERT_EQ(s.quota_b, UINT32_MAX);
+}
+
 TEST(budgets_tighten_down_the_region_tree) {
     asx_region_id root;
     asx_region_id child;
@@ -468,6 +523,73 @@ TEST(reserve_in_poll_binds_current_task_and_leaks_under_log) {
     ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
 }
 
+/* Reserves an obligation, then drops it unresolved in the same poll, as a
+ * Rust body dropping its ObligationToken does. */
+typedef struct {
+    asx_region_id region;
+    asx_obligation_id ob;
+    asx_status drop_status;
+    asx_obligation_state after_drop;
+} dropper_state;
+
+static asx_status poll_dropper(void *ud, asx_task_id self) {
+    dropper_state *s = (dropper_state *)ud;
+    asx_obligation_info info;
+    (void)self;
+    if (asx_obligation_reserve(s->region, &s->ob) != ASX_OK) return ASX_E_INVALID_STATE;
+    s->drop_status = asx_obligation_drop(s->ob);
+    if (asx_obligation_get_info(s->ob, &info) == ASX_OK) s->after_drop = info.state;
+    return ASX_OK;
+}
+
+TEST(drop_leaks_the_obligation_at_once_not_at_completion) {
+    asx_region_id r;
+    asx_task_id t;
+    dropper_state s;
+    asx_budget run;
+
+    ASSERT_EQ(setup_with_policy(ASX_LEAK_LOG, NULL), ASX_OK);
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    s.region = r;
+    ASSERT_EQ(asx_task_spawn(r, poll_dropper, &s, &t), ASX_OK);
+    run = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+    ASSERT_EQ(s.drop_status, ASX_OK);
+    /* Leaked inside the poll, before the holder completed. */
+    ASSERT_EQ((int)s.after_drop, (int)ASX_OBLIGATION_LEAKED);
+    /* Unlinked from its holder: its completion leaks nothing more. */
+    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+}
+
+TEST(drop_under_recover_aborts_with_leak_recovered) {
+    asx_region_id r;
+    asx_obligation_id ob;
+    asx_obligation_info info;
+
+    ASSERT_EQ(setup_with_policy(ASX_LEAK_RECOVER, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(r, &ob), ASX_OK);
+    ASSERT_EQ(asx_obligation_drop(ob), ASX_OK);
+    ASSERT_EQ(asx_obligation_get_info(ob, &info), ASX_OK);
+    ASSERT_EQ((int)info.state, (int)ASX_OBLIGATION_ABORTED);
+    ASSERT_EQ((int)info.abort_reason, (int)ASX_OBLIGATION_ABORT_LEAK_RECOVERED);
+    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+}
+
+TEST(drop_rejects_a_resolved_or_unknown_obligation) {
+    asx_region_id r;
+    asx_obligation_id ob;
+
+    setup();
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(r, &ob), ASX_OK);
+    ASSERT_EQ(asx_obligation_commit(ob), ASX_OK);
+    ASSERT_EQ(asx_obligation_drop(ob), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_drop(ASX_INVALID_ID), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+}
+
 TEST(cancelled_holder_leaks_its_unresolved_obligation) {
     asx_region_id r;
     asx_task_id t;
@@ -616,12 +738,16 @@ int main(void) {
     RUN_TEST(spent_poll_quota_keeps_a_stronger_pending_cancel);
     RUN_TEST(cost_quota_exhaustion_cancels_with_cost_budget);
     RUN_TEST(consume_cost_rejects_stale_handle);
+    RUN_TEST(spawned_child_inherits_the_quota_until_the_cleanup_phase_starts);
     RUN_TEST(budgets_tighten_down_the_region_tree);
     RUN_TEST(region_deadline_cancels_its_tasks);
     RUN_TEST(reserve_ex_records_kind_and_holder);
     RUN_TEST(reserve_ex_validates_arguments);
     RUN_TEST(reserve_outside_poll_has_no_holder);
     RUN_TEST(reserve_in_poll_binds_current_task_and_leaks_under_log);
+    RUN_TEST(drop_leaks_the_obligation_at_once_not_at_completion);
+    RUN_TEST(drop_under_recover_aborts_with_leak_recovered);
+    RUN_TEST(drop_rejects_a_resolved_or_unknown_obligation);
     RUN_TEST(cancelled_holder_leaks_its_unresolved_obligation);
     RUN_TEST(recover_policy_aborts_leaked_obligation);
     RUN_TEST(panic_policy_routes_leak_through_containment);
