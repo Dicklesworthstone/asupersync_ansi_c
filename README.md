@@ -678,7 +678,9 @@ make codec-equivalence  # JSON vs BIN digests recorded in fixtures (runtime not 
 make profile-parity     # Cross-profile digests recorded in fixtures (runtime not executed)
 make fuzz-smoke         # Differential fuzzing smoke
 make formal-check       # All formal verification (CBMC + algebraic + litmus)
-make ci-embedded-matrix # Cross-target embedded builds + QEMU
+make ci-embedded-matrix # Cross-target embedded builds (size/layout rows; not run)
+make test-unit TARGET=mips-linux-gnu PROFILE=EMBEDDED_ROUTER BUILD_DIR=build/qemu-mips \
+  LDFLAGS=-static TEST_EXEC=qemu-mips-static  # Unit suite under QEMU (also: make conformance ...)
 make check              # Full CI gate: format + lint + build + all tests
 ```
 
@@ -1883,24 +1885,24 @@ architecture, decisions, verification, and risk:
 
 ## CI Pipeline Architecture
 
-The primary CI workflow (`.github/workflows/ci.yml`) currently runs 8 top-level
-jobs on pushes and PRs:
+The primary CI workflow (`.github/workflows/ci.yml`) runs 11 top-level jobs on
+pushes and PRs:
 
-```
-┌────────────┐┌────────────────┐┌────────────────┐┌────────────────┐
-│   check    ││ unit-invariant ││  conformance   ││ profile-parity │
-│ format +   ││  148 unit      ││  Rust fixture  ││  cross-profile │
-│ lint/docs/ ││  3 invariant   ││  parity        ││  digest match  │
-│ browser/MC ││  vignettes     ││  codec equiv   ││                │
-└────────────┘└────────────────┘└────────────────┘└────────────────┘
-┌──────────────┐┌──────────────────┐┌──────────────┐┌────────────────┐
-│  fuzz-parity ││  embedded-matrix ││     e2e      ││compiler-matrix │
-│  diff fuzz   ││  mipsel/armv7/   ││  17 scen-    ││ GCC/Clang x    │
-│  minimize    ││  aarch64/RISC-V  ││  arios       ││ 4 profiles     │
-└──────────────┘└──────────────────┘└──────────────┘└────────────────┘
-```
+| Job | Runs |
+|-----|------|
+| `check` | format, cppcheck, API docs, checkpoint coverage, anti-butchering proof block, static analysis, strict build, browser profile suites, bounded model check |
+| `unit-invariant` | unit, invariant and vignette suites; C conformance suites; ABI check; formal harnesses; the unit suite with every capacity macro raised 4x |
+| `e2e` | vertical end-to-end lanes (HFT, automotive, continuity) |
+| `conformance` | oracle schemas, fixture integrity, gate negative controls, recorded codec digests, and the Rust-captured fixtures executed in C and compared |
+| `profile-parity` | recorded cross-profile and parallel-worker digests |
+| `fuzz-parity` | fuzz smoke and artifact validation |
+| `compiler-matrix` | GCC and Clang × CORE/POSIX/FREESTANDING/EMBEDDED_ROUTER, plus Clang 21 on CORE and POSIX; the POSIX legs also run the live unit suite and native I/O |
+| `sanitizers` | the unit suite under ASan+UBSan (deterministic and live POSIX) and TSan (live POSIX) |
+| `cross-qemu` | the unit suite and the Rust fixture replay, cross-compiled for mipsel, big-endian mips, armv7, aarch64 and riscv64 (Debian glibc, static) and run under QEMU user mode |
+| `m32` | the unit suite and the Rust fixture replay on 32-bit x86 |
+| `embedded-matrix` | router-class cross builds with size and layout rows (built, not run) |
 
-All 8 jobs must pass before merge. A nightly workflow extends fuzz runs to
+All 11 jobs must pass before merge. A nightly workflow extends fuzz runs to
 100K iterations and collects performance baselines. The release workflow is
 tag-triggered (`v*`) and produces signed artifact bundles with SHA-256
 checksums and Sigstore signatures.
@@ -1995,7 +1997,7 @@ JSON is ideal for diagnostics, debugging, and diffing. Binary is optimized for p
 
 ### Can I run this on cheap routers?
 
-Yes. `ASX_PROFILE_EMBEDDED_ROUTER` plus `R1/R2` resource classes target OpenWrt/BusyBox-class systems. The CI pipeline includes cross-target builds for mipsel, armv7, aarch64, and RISC-V, plus QEMU/device smoke validation.
+Yes. `ASX_PROFILE_EMBEDDED_ROUTER` plus `R1/R2` resource classes target OpenWrt/BusyBox-class systems. CI cross-compiles the whole unit suite and the Rust fixture replay for mipsel, big-endian mips, armv7, aarch64 and riscv64 and runs both under QEMU user mode (Debian glibc cross compilers, static). No real device runs in CI, and the OpenWrt musl toolchains are used only when present.
 
 ### How do I validate parity against Rust asupersync?
 
