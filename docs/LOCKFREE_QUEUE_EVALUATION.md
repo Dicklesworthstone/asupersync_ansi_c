@@ -105,7 +105,7 @@ shadow path produces identical observable behavior to the baseline for:
 |------|----------|------------|
 | Cancel-safety drift | **CRITICAL** | Capacity is claimed before reserve and released by abort/disconnect; tests cover mixed send/abort |
 | Semantic fork by profile | **HIGH** | CORE and atomic paths share the public API and are compared by scripted equivalence |
-| Producer contention | MEDIUM | Atomic CAS loops claim capacity, tokens, and enqueue slots; pthread stress is available behind `ASX_MPSC_PTHREAD_STRESS` |
+| Producer contention | MEDIUM | Atomic CAS loops claim capacity, tokens, and enqueue slots; live POSIX builds run a pthread stress test (also under TSan) |
 | Sequence number wraparound | LOW | Bounded `uint32_t` sequence model remains documented; long-run fuzz/benchmark gates should continue to watch it |
 | Debug complexity | MEDIUM | Queue length/reserved count remain observable through existing query APIs |
 
@@ -146,8 +146,9 @@ The public MPSC channel remains the first-class implementation:
 - CORE unit path: `test_mpsc` covers 51 default channel tests
 - Atomic live path: the same unit test passes under `PROFILE=PARALLEL`
   with `ASX_LOCKFREE_SINGLE_THREAD=0`
-- Optional pthread stress: `ASX_MPSC_PTHREAD_STRESS=1` adds a
-  multi-producer/single-consumer contention test
+- Pthread stress: every live POSIX build (`PROFILE=POSIX DETERMINISTIC=0`,
+  so also `make test-tsan`) runs a multi-producer/single-consumer
+  contention test; `ASX_MPSC_PTHREAD_STRESS=1` enables it elsewhere
 - Equivalence path: `test_mpsc_equivalence` covers 10 baseline/atomic
   scripted parity checks
 - Capacity invariant remains `queue_len + reserved_count <= capacity`

@@ -808,6 +808,13 @@ jobs:
       matrix:
         compiler: [gcc, clang]
         profile: [CORE, POSIX, FREESTANDING, EMBEDDED_ROUTER]
+        # The newest clang catches what the distribution's does not yet
+        # (clang 21 added -Wuninitialized-const-pointer; bd-f8fd).
+        include:
+          - compiler: clang-21
+            profile: CORE
+          - compiler: clang-21
+            profile: POSIX
     steps:
       - uses: actions/checkout@v4
 
@@ -816,6 +823,13 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
+
+      - name: Install Clang 21 (apt.llvm.org)
+        if: matrix.compiler == 'clang-21'
+        run: |
+          wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh 21
+          clang-21 --version
 
       - name: Build (${{ matrix.compiler }}, ${{ matrix.profile }})
         run: |
@@ -848,6 +862,91 @@ jobs:
         run: |
           make test-unit BUILD_DIR=build/live CC=${{ matrix.compiler }} \
             PROFILE=POSIX DETERMINISTIC=0 LDFLAGS="-lpthread -lrt"
+
+  # ---------------------------------------------------------------------------
+  # sanitizers — the unit suite under ASan+UBSan (deterministic and live POSIX)
+  # and TSan (live POSIX: blocking pool, cross-thread wakers). Any report
+  # fails the run (bd-9kll.15.5).
+  # ---------------------------------------------------------------------------
+  sanitizers:
+    name: "sanitizers (${{ matrix.target }})"
+    runs-on: ubuntu-latest
+    needs: [check]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [test-asan, test-asan-live, test-tsan]
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner kernel randomizes 32 mmap bits; GCC's TSan/ASan runtimes
+      # abort on the resulting mappings unless the entropy is lowered.
+      - name: Lower mmap ASLR entropy for the sanitizer runtimes
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Unit suite (${{ matrix.target }})
+        run: make ${{ matrix.target }}
+
+  # ---------------------------------------------------------------------------
+  # cross-qemu — the whole unit suite and the Rust-parity fixture replay,
+  # cross-compiled (EMBEDDED_ROUTER, static) and run under QEMU user mode on
+  # router-class ISAs: little- and big-endian MIPS, ARMv7, AArch64, RISC-V
+  # (bd-9kll.15.1). The fixtures were captured from Rust on x86_64, so a
+  # pass means the same semantic results on each ISA.
+  # ---------------------------------------------------------------------------
+  cross-qemu:
+    name: "cross + qemu (${{ matrix.arch }})"
+    runs-on: ubuntu-latest
+    needs: [check]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: mipsel, triplet: mipsel-linux-gnu, qemu: qemu-mipsel-static}
+          - {arch: mips, triplet: mips-linux-gnu, qemu: qemu-mips-static}
+          - {arch: armv7, triplet: arm-linux-gnueabihf, qemu: qemu-arm-static}
+          - {arch: aarch64, triplet: aarch64-linux-gnu, qemu: qemu-aarch64-static}
+          - {arch: riscv64, triplet: riscv64-linux-gnu, qemu: qemu-riscv64-static}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the cross compiler and QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-${{ matrix.triplet }} qemu-user-static
+          ${{ matrix.triplet }}-gcc --version | head -1
+
+      - name: Unit suite under QEMU (${{ matrix.arch }})
+        run: |
+          make test-unit TARGET=${{ matrix.triplet }} PROFILE=EMBEDDED_ROUTER \
+            BUILD_DIR=build/qemu-${{ matrix.arch }} LDFLAGS=-static TEST_EXEC=${{ matrix.qemu }}
+
+      - name: Rust-parity fixture replay under QEMU (${{ matrix.arch }})
+        run: |
+          make conformance TARGET=${{ matrix.triplet }} PROFILE=EMBEDDED_ROUTER \
+            BUILD_DIR=build/qemu-${{ matrix.arch }} LDFLAGS=-static TEST_EXEC=${{ matrix.qemu }}
+
+  # ---------------------------------------------------------------------------
+  # m32 — 32-bit x86: unit suite and Rust-parity fixture replay (bd-9kll.15.3).
+  # gcc-multilib conflicts with the cross compilers, hence its own job.
+  # ---------------------------------------------------------------------------
+  m32:
+    name: "32-bit x86 (-m32)"
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install multilib
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-multilib
+
+      - name: Unit suite (-m32)
+        run: make test-unit CFLAGS=-m32 LDFLAGS=-m32 BUILD_DIR=build/m32
+
+      - name: Rust-parity fixture replay (-m32)
+        run: make conformance CFLAGS=-m32 LDFLAGS=-m32 BUILD_DIR=build/m32
 
   # ---------------------------------------------------------------------------
   # embedded-matrix — router-class cross-target builds + QEMU

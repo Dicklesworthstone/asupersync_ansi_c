@@ -503,6 +503,9 @@ From `.github/workflows/ci.yml`:
 | `profile-parity` | PR, push | `check` | Yes |
 | `fuzz-parity` | PR, push | `check` | Yes |
 | `compiler-matrix` | PR, push | `check` | Yes |
+| `sanitizers` | PR, push | `check` | Yes |
+| `cross-qemu` | PR, push | `check` | Yes |
+| `m32` | PR, push | `check` | Yes |
 | `embedded-matrix` | PR, push | `check` | Yes |
 
 From `.github/workflows/perf.yml`:

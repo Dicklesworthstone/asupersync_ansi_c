@@ -786,7 +786,13 @@ test: test-unit test-invariants test-conformance-c test-vignettes
 
 # ---------------------------------------------------------------------------
 # test-unit — per-module correctness tests
+#
+# TEST_EXEC prefixes each test binary (and the conformance runner), e.g. an
+# emulator for a cross build:
+#   make test-unit TARGET=mips-linux-gnu PROFILE=EMBEDDED_ROUTER \
+#     BUILD_DIR=build/qemu-mips LDFLAGS=-static TEST_EXEC=qemu-mips-static
 # ---------------------------------------------------------------------------
+TEST_EXEC ?=
 test-unit: $(UNIT_TEST_BIN)
 	@echo "[asx] test-unit: running $(words $(UNIT_TEST_BIN)) test(s)..."
 	@# tests/test_log.h writes structured JSONL only into an existing directory.
@@ -802,7 +808,7 @@ test-unit: $(UNIT_TEST_BIN)
 		pass=0; fail=0; \
 		for t in $(UNIT_TEST_BIN); do \
 			echo "  RUN  $$(basename $$t)"; \
-			if $$t; then \
+			if $(TEST_EXEC) $$t; then \
 				echo "  PASS $$(basename $$t)"; \
 				pass=$$((pass + 1)); \
 			else \
@@ -1545,8 +1551,8 @@ conformance: $(CONFORMANCE_RUNNER)
 		echo "[asx] conformance: FAIL (no fixtures in fixtures/rust_reference_v2)"; \
 		exit 1; \
 	fi
-	@$(CONFORMANCE_RUNNER) self-test $(CONFORMANCE_SELF_TEST_FIXTURE)
-	@$(CONFORMANCE_RUNNER) compare $(CONFORMANCE_V2_FIXTURES)
+	@$(TEST_EXEC) $(CONFORMANCE_RUNNER) self-test $(CONFORMANCE_SELF_TEST_FIXTURE)
+	@$(TEST_EXEC) $(CONFORMANCE_RUNNER) compare $(CONFORMANCE_V2_FIXTURES)
 
 # ---------------------------------------------------------------------------
 # fuzz-differential — Rust-vs-C differential fuzzing over DSL v2 (bd-ij9w):
@@ -1677,7 +1683,12 @@ test-capacity-x4:
 # Any finding fails the run: UBSan does not recover, ASan and TSan halt.
 # ---------------------------------------------------------------------------
 SAN_ASAN_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
-SAN_TSAN_FLAGS := -fsanitize=thread -fno-omit-frame-pointer
+# GCC refuses (-Werror=tsan) the atomic_thread_fence in platform/atomics.h
+# because TSan does not model standalone fences. The fences stay in the
+# binary; TSan sees the mpsc queue's publication through the acquire load
+# and release store next to them. Clang has no -Wtsan and rejects the name.
+SAN_TSAN_FLAGS := -fsanitize=thread -fno-omit-frame-pointer \
+	$(if $(findstring clang,$(shell $(CC) --version 2>/dev/null)),,-Wno-tsan)
 SAN_ENV := ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 TSAN_OPTIONS=halt_on_error=1
 

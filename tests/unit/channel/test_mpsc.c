@@ -11,9 +11,15 @@
 #include "test_harness.h"
 #include <asx/asx.h>
 #include <asx/core/channel.h>
+#include <asx/platform/atomics.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
 #include <string.h>
+/* A live POSIX build runs the channel on its lock-free backend with real
+ * atomics, so producers on separate threads race on it for real. */
+#if defined(ASX_PROFILE_POSIX) && !ASX_LOCKFREE_SINGLE_THREAD && !defined(ASX_MPSC_PTHREAD_STRESS)
+#define ASX_MPSC_PTHREAD_STRESS 1
+#endif
 #if defined(ASX_MPSC_PTHREAD_STRESS)
 #include <pthread.h>
 #endif
@@ -370,7 +376,7 @@ TEST(scripted_multi_producer_fifo_stress) {
 }
 
 #if defined(ASX_MPSC_PTHREAD_STRESS)
-enum { PTHREAD_PRODUCERS = 4, PTHREAD_PER_PRODUCER = 8 };
+enum { PTHREAD_PRODUCERS = 4, PTHREAD_PER_PRODUCER = ASX_CHANNEL_MAX_CAPACITY / 4 };
 
 typedef struct {
     asx_channel_id ch;
