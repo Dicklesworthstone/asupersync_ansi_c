@@ -27,7 +27,12 @@
 extern "C" {
 #endif
 
+#ifndef ASX_MAX_WATCHES
 #define ASX_MAX_WATCHES 16u
+#endif
+#if (ASX_MAX_WATCHES) < 1
+#error "ASX_MAX_WATCHES must be at least 1"
+#endif
 #define ASX_WATCH_MAX_RECEIVERS 8u
 
 /* -------------------------------------------------------------------

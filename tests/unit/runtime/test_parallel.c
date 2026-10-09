@@ -1235,10 +1235,10 @@ TEST(parallel_worker_sharded_locality_routes_by_contiguous_slot_ranges) {
     ASSERT_EQ((int)snapshot.mode, (int)ASX_PARALLEL_LOCALITY_WORKER_SHARDED);
     ASSERT_EQ(snapshot.shard_count, 4u);
     ASSERT_EQ(snapshot.tasks_per_shard, 2u);
-    ASSERT_EQ(snapshot.shard_task_counts[0], 2u);
-    ASSERT_EQ(snapshot.shard_task_counts[1], 2u);
-    ASSERT_EQ(snapshot.shard_task_counts[2], 2u);
-    ASSERT_EQ(snapshot.shard_task_counts[3], 2u);
+    /* Indexed through i: the test is compiled (and skipped) on profiles whose
+     * shard_task_counts has fewer than 4 entries, where constant indices
+     * would trip -Warray-bounds. */
+    for (i = 0u; i < 4u; i++) { ASSERT_EQ(snapshot.shard_task_counts[i], 2u); }
     ASSERT_EQ(snapshot.max_shard_tasks, 2u);
 
     ASSERT_EQ(asx_parallel_task_locality(tids[0], &shard, &worker), ASX_OK);
@@ -1253,6 +1253,24 @@ TEST(parallel_worker_sharded_locality_routes_by_contiguous_slot_ranges) {
 
     ASSERT_EQ(asx_worker_get_state(3u, &ws), ASX_OK);
     ASSERT_EQ(ws.lane_depths[ASX_LANE_READY], 2u);
+
+    asx_parallel_reset();
+}
+
+/* Profiles without worker-sharded locality accept the request and run COMPACT. */
+TEST(parallel_sharded_request_falls_back_to_compact_without_sharding) {
+    asx_parallel_config cfg = default_config();
+    asx_parallel_locality_snapshot snapshot;
+
+    cfg.worker_count = ASX_MAX_WORKERS;
+    cfg.locality.mode = ASX_PARALLEL_LOCALITY_WORKER_SHARDED;
+    cfg.locality.shard_count = ASX_MAX_WORKERS;
+    cfg.locality.tasks_per_shard = 2u;
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_parallel_get_locality_snapshot(&snapshot), ASX_OK);
+    ASSERT_EQ((int)snapshot.mode, (int)ASX_PARALLEL_LOCALITY_COMPACT);
 
     asx_parallel_reset();
 }
@@ -1560,13 +1578,16 @@ int main(void) {
     RUN_TEST(lane_get_state_null_out);
     RUN_TEST(lane_get_state_invalid_class);
 
-    /* Worker state */
-    RUN_TEST(worker_get_state_valid);
+    /* Worker state. Multi-worker tests run only on profiles whose
+     * ASX_MAX_WORKERS can host them (FREESTANDING/BROWSER have 1). */
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 2u, worker_get_state_valid, "needs 2 workers");
     RUN_TEST(worker_get_state_out_of_range);
     RUN_TEST(worker_get_state_null_out);
-    RUN_TEST(worker_lifecycle_drains_on_quiescence);
-    RUN_TEST(worker_lifecycle_marks_draining_on_budget_exhaustion);
-    RUN_TEST(worker_lane_depths_track_manual_injection);
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 4u, worker_lifecycle_drains_on_quiescence, "needs 4 workers");
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 2u, worker_lifecycle_marks_draining_on_budget_exhaustion,
+                "needs 2 workers");
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 4u, worker_lane_depths_track_manual_injection,
+                "needs 4 workers");
 
     /* Parallel run */
     RUN_TEST(parallel_run_single_task_completes);
@@ -1593,13 +1614,17 @@ int main(void) {
     RUN_TEST(parallel_starvation_limit_in_lane_state);
 
     /* Timed lane / wakers / reactor readiness */
-    RUN_TEST(timed_lane_waits_for_waker_before_polling);
-    RUN_TEST(timed_equal_deadline_wakers_preserve_fire_order);
-    RUN_TEST(reactor_readiness_promotes_timed_waker);
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 2u, timed_lane_waits_for_waker_before_polling,
+                "needs 2 workers");
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 2u, timed_equal_deadline_wakers_preserve_fire_order,
+                "needs 2 workers");
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 2u, reactor_readiness_promotes_timed_waker, "needs 2 workers");
 
     /* Worker routing */
-    RUN_TEST(parallel_multi_worker_steals_preserve_completion);
-    RUN_TEST(parallel_multi_worker_trace_matches_single_worker);
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 4u, parallel_multi_worker_steals_preserve_completion,
+                "needs 4 workers");
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 4u, parallel_multi_worker_trace_matches_single_worker,
+                "needs 4 workers");
 
     /* Replay identity */
     RUN_TEST(parallel_replay_identity);
@@ -1607,11 +1632,21 @@ int main(void) {
 
     /* Multi-worker */
     RUN_TEST(parallel_multi_worker_init);
-    RUN_TEST(parallel_locality_default_compact_snapshot);
-    RUN_TEST(parallel_worker_sharded_locality_routes_by_contiguous_slot_ranges);
-    RUN_TEST(parallel_worker_sharded_locality_defaults_to_worker_shards);
-    RUN_TEST(parallel_task_locality_rejects_stale_handle);
-    RUN_TEST(parallel_worker_sharded_trace_matches_compact);
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 4u, parallel_locality_default_compact_snapshot,
+                "needs 4 workers");
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 4u && ASX_PARALLEL_HAS_LOCALITY_SHARDING,
+                parallel_worker_sharded_locality_routes_by_contiguous_slot_ranges,
+                "needs 4 workers and worker-sharded locality");
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 8u && ASX_PARALLEL_HAS_LOCALITY_SHARDING,
+                parallel_worker_sharded_locality_defaults_to_worker_shards,
+                "needs 8 workers and worker-sharded locality");
+    RUN_TEST_IF(!ASX_PARALLEL_HAS_LOCALITY_SHARDING,
+                parallel_sharded_request_falls_back_to_compact_without_sharding,
+                "profile has worker-sharded locality");
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 2u, parallel_task_locality_rejects_stale_handle,
+                "needs 2 workers");
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 4u, parallel_worker_sharded_trace_matches_compact,
+                "needs 4 workers");
 
     /* Lane weight query */
     RUN_TEST(parallel_lane_weight_query);
@@ -1619,8 +1654,10 @@ int main(void) {
     /* Admission and telemetry evidence */
     RUN_TEST(parallel_admission_evaluate_modes);
     RUN_TEST(parallel_admission_enforced_backpressure_is_atomic);
-    RUN_TEST(parallel_telemetry_snapshot_and_jsonl_are_failure_atomic);
-    RUN_TEST(parallel_commit_authority_snapshot_tracks_single_commit_stream);
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 4u, parallel_telemetry_snapshot_and_jsonl_are_failure_atomic,
+                "needs 4 workers");
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 4u,
+                parallel_commit_authority_snapshot_tracks_single_commit_stream, "needs 4 workers");
 
     TEST_REPORT();
     return test_failures;

@@ -26,15 +26,10 @@ E2E_RUNTIME_RESET_EXTRA=(
     "${E2E_PROJECT_ROOT}/src/net/net.c"
 )
 
-# Offload through rch when it is installed; fail open to a local build.
-RCH_BIN="${HOME}/.local/bin/rch"
-if [ -x "$RCH_BIN" ]; then
-    BUILD_CMD=("$RCH_BIN" exec -- make -B build)
-else
-    BUILD_CMD=(make -B build)
-fi
-
-if ! "${BUILD_CMD[@]}"; then
+# Plain make: the caller decides where the suite runs (rch offloads the whole
+# suite), and a nested rch exec inside an offloaded run fails closed. The
+# build-config stamp already rebuilds objects whose flags changed.
+if ! "${MAKE:-make}" -C "$E2E_PROJECT_ROOT" build; then
     e2e_scenario "native_host.lib_build" "make build failed" "fail"
     e2e_finish
     exit $?

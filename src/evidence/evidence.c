@@ -6,6 +6,11 @@
 
 #include <asx/evidence/evidence.h>
 #include <asx/evidence_sink/evidence_sink.h>
+/* Incident bundles record ASX_TRACE_SCHEMA_VERSION in every profile, including
+ * browser profiles whose public surface hides the trace family. */
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
+#include <asx/runtime/trace.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <string.h>
 
 static int nonempty(const char *value) { return value != NULL && value[0] != '\0'; }

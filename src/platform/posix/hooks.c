@@ -525,8 +525,15 @@ static asx_status posix_ghost_reactor_wait(void *ctx, uint64_t logical_step,
 
 #include <pthread.h>
 
+#ifndef ASX_POSIX_BLOCKING_WORKERS
 #define ASX_POSIX_BLOCKING_WORKERS 4u
+#endif
+#ifndef ASX_POSIX_BLOCKING_QUEUE_CAPACITY
 #define ASX_POSIX_BLOCKING_QUEUE_CAPACITY 8u
+#endif
+#if (ASX_POSIX_BLOCKING_WORKERS) < 1 || (ASX_POSIX_BLOCKING_QUEUE_CAPACITY) < 1
+#error "ASX_POSIX_BLOCKING_WORKERS and ASX_POSIX_BLOCKING_QUEUE_CAPACITY must be at least 1"
+#endif
 
 typedef struct {
     asx_blocking_job_fn job_fn;

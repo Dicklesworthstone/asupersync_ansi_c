@@ -40,6 +40,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # lint-anti-butchering diffs the pushed range (before..after) and
+          # fails when it cannot resolve it, so the check job needs history.
+          fetch-depth: 0
 
       - name: Install dependencies
         run: |
@@ -415,11 +419,18 @@ jobs:
     needs: [check]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # tests/gates/test_anti_butchering_push_range.sh replays pushes over
+          # commits in main's history.
+          fetch-depth: 0
 
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq jq
+          # tests/gates/test_strict_gates.sh runs format-check over scratch
+          # files with the pinned formatter.
+          pipx install clang-format==18.1.8
 
       - name: Build
         id: build
@@ -803,7 +814,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             gcc-mipsel-linux-gnu \
-            gcc-arm-linux-gnueabi \
+            gcc-arm-linux-gnueabihf \
             gcc-aarch64-linux-gnu \
             qemu-user-static \
             jq
@@ -811,8 +822,6 @@ jobs:
       - name: Run embedded build matrix
         id: run_embedded_matrix
         run: make ci-embedded-matrix
-        env:
-          FAIL_ON_MISSING_CROSS_TOOLCHAINS: 0
 
       - name: Validate embedded matrix artifacts
         id: validate_manifest

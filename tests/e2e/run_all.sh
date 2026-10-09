@@ -21,6 +21,11 @@
 #   ASX_E2E_STRICT        Strict mode (default: 0)
 #   ASX_E2E_VERBOSE       Verbose output (default: 0)
 #   ASX_E2E_FAMILY_TIMEOUT Seconds before a family is failed as hung (default: 600)
+#   ASX_E2E_SELFTEST_TIMEOUT 1 = run only a generated family that sleeps past
+#                          the timeout; the suite must report it FAIL (timeout)
+#
+# The suite also fails if any family rewrites build/lib/libasx.a: families
+# that build other profiles must use their own BUILD_DIR.
 #
 # Hard gate mapping:
 #   GATE-E2E-FOUNDATIONAL  foundational_contracts.sh
@@ -140,6 +145,16 @@ E2E_FAMILIES=(
     "GATE-E2E-PACKAGE:openwrt_package.sh"
 )
 
+# Opt-in self-test of the hang guard: replace the registry with one generated
+# family that outlives ASX_E2E_FAMILY_TIMEOUT.
+if [ "${ASX_E2E_SELFTEST_TIMEOUT:-0}" = "1" ]; then
+    selftest_script="${SUITE_ARTIFACT_DIR}/selftest_hang.sh"
+    # exec: timeout(1) signals the sleep itself, so no orphan outlives the test.
+    printf '#!/usr/bin/env bash\nexec sleep %d\n' "$((E2E_FAMILY_TIMEOUT + 600))" >"$selftest_script"
+    chmod +x "$selftest_script"
+    E2E_FAMILIES=("GATE-E2E-SELFTEST:${selftest_script}")
+fi
+
 # -------------------------------------------------------------------
 # JSON helper
 # -------------------------------------------------------------------
@@ -166,6 +181,16 @@ echo "  artifacts: ${SUITE_ARTIFACT_DIR}"
 echo "================================================================="
 echo ""
 
+lib_digest() {
+    if [ -f "${PROJECT_ROOT}/build/lib/libasx.a" ]; then
+        { sha256sum "${PROJECT_ROOT}/build/lib/libasx.a" 2>/dev/null ||
+            shasum -a 256 "${PROJECT_ROOT}/build/lib/libasx.a"; } | cut -d' ' -f1
+    else
+        echo "absent"
+    fi
+}
+lib_digest_before="$(lib_digest)"
+
 total_families=0
 passed_families=0
 failed_families=0
@@ -176,7 +201,12 @@ family_results=""  # accumulated JSON array entries
 for entry in "${E2E_FAMILIES[@]}"; do
     gate="${entry%%:*}"
     script="${entry##*:}"
-    script_path="${SCRIPT_DIR}/${script}"
+    if [[ "$script" = /* ]]; then
+        script_path="$script"
+        script="$(basename "$script")"
+    else
+        script_path="${SCRIPT_DIR}/${script}"
+    fi
 
     if [ ! -x "$script_path" ]; then
         echo "  SKIP ${script} (not executable)"
@@ -299,6 +329,13 @@ if [ -n "$first_failure_family" ]; then
 fi
 
 echo "================================================================="
+
+lib_digest_after="$(lib_digest)"
+if [ "$lib_digest_before" != "absent" ] && [ "$lib_digest_after" != "$lib_digest_before" ]; then
+    echo "  FAIL: a family rewrote build/lib/libasx.a (${lib_digest_before} -> ${lib_digest_after});"
+    echo "        builds for other profiles must use their own BUILD_DIR"
+    exit 1
+fi
 
 if [ "$failed_families" -gt 0 ]; then
     exit 1

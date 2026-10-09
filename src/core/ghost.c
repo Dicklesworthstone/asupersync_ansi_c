@@ -35,7 +35,12 @@ static int g_ghost_ring_overflow;   /* set once ring wraps */
  *   - resolved flag
  * ------------------------------------------------------------------- */
 
+#ifndef ASX_GHOST_LINEARITY_CAPACITY
 #define ASX_GHOST_LINEARITY_CAPACITY 256u
+#endif
+#if (ASX_GHOST_LINEARITY_CAPACITY) < 1
+#error "ASX_GHOST_LINEARITY_CAPACITY must be at least 1"
+#endif
 
 typedef struct {
     asx_obligation_id id;

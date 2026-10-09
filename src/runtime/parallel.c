@@ -134,14 +134,7 @@ static uint32_t ceil_div_u32(uint32_t numerator, uint32_t denominator) {
     return (numerator + denominator - 1u) / denominator;
 }
 
-static int parallel_locality_sharding_available(void) {
-#if defined(ASX_PROFILE_FREESTANDING) || defined(ASX_PROFILE_BROWSER) ||                           \
-    defined(ASX_PROFILE_EMBEDDED_ROUTER)
-    return 0;
-#else
-    return 1;
-#endif
-}
+static int parallel_locality_sharding_available(void) { return ASX_PARALLEL_HAS_LOCALITY_SHARDING; }
 
 static void normalize_locality_config(asx_parallel_locality_config *locality,
                                       uint32_t worker_count) {

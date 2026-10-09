@@ -13,7 +13,6 @@
  */
 
 #ifndef ASX_RUNTIME_TRACE_H
-#define ASX_RUNTIME_TRACE_H
 
 #include <asx/asx_config.h>
 #include <asx/asx_export.h>
@@ -22,6 +21,9 @@
 
 #if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE ||                                      \
     defined(ASX_INTERNAL_TRACE_FAMILY_ACCESS)
+/* The include guard is defined only when the contents are emitted, so an
+ * include without trace-family access cannot hide them from a later one. */
+#define ASX_RUNTIME_TRACE_H
 
 #ifdef __cplusplus
 extern "C" {

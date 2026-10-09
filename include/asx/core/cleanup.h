@@ -23,7 +23,12 @@ extern "C" {
 #endif
 
 /* Maximum entries per cleanup stack (walking skeleton) */
+#ifndef ASX_CLEANUP_STACK_CAPACITY
 #define ASX_CLEANUP_STACK_CAPACITY 32
+#endif
+#if (ASX_CLEANUP_STACK_CAPACITY) < 1
+#error "ASX_CLEANUP_STACK_CAPACITY must be at least 1"
+#endif
 
 /* Cleanup action callback: called with user context during drain.
  * Must not fail — cleanup actions are best-effort during unwind. */

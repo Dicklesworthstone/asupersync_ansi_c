@@ -40,7 +40,12 @@
  * Event log (ring buffer for deterministic sequencing)
  * ------------------------------------------------------------------- */
 
+#ifndef ASX_SCHED_EVENT_LOG_CAPACITY
 #define ASX_SCHED_EVENT_LOG_CAPACITY 256u
+#endif
+#if (ASX_SCHED_EVENT_LOG_CAPACITY) < 1
+#error "ASX_SCHED_EVENT_LOG_CAPACITY must be at least 1"
+#endif
 
 /* Consecutive idle passes without clock movement before a run with a
  * frozen custom clock gives up instead of spinning forever. */

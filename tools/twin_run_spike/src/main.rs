@@ -78,6 +78,65 @@ fn build(lab: &mut LabRuntime) -> impl Sized + use<> {
     (producer_join, consumer_join, waiter_join)
 }
 
+/// Capability 7 beyond channels: a lab task spawns children through
+/// `Cx::spawn`, joins and races them through its `Scope`, and moves a value
+/// through an mpsc reserve/commit obligation. Returns (ok, detail).
+fn run_combinators() -> (bool, String) {
+    let mut lab = LabRuntime::new(config());
+    let root = lab.state.create_root_region(Budget::INFINITE);
+    let (task, mut join) = lab
+        .state
+        .create_task(root, Budget::INFINITE, async move {
+            let cx = Cx::current().expect("parent cx");
+            let a = cx.spawn(|_cx| async move { 1u32 }).expect("spawn a");
+            let b = cx.spawn(|_cx| async move { 2u32 }).expect("spawn b");
+            let joined: u32 = cx
+                .scope()
+                .join_all(&cx, vec![a, b])
+                .await
+                .into_iter()
+                .map(|r| r.expect("joined child"))
+                .sum();
+
+            let slow = cx
+                .spawn(|_cx| async move {
+                    asupersync::runtime::yield_now().await;
+                    3u32
+                })
+                .expect("spawn slow");
+            let fast = cx.spawn(|_cx| async move { 4u32 }).expect("spawn fast");
+            let (winner, index) = cx
+                .scope()
+                .race_all(&cx, vec![slow, fast])
+                .await
+                .expect("race_all");
+
+            let (tx, mut rx) = mpsc::channel::<u32>(1);
+            let permit = tx.reserve(&cx).await.expect("reserve");
+            let _ = permit.send(7);
+            let committed = rx.recv(&cx).await.expect("recv committed");
+            (joined, winner, index, committed)
+        })
+        .expect("create parent");
+    lab.scheduler.lock().schedule(task, 0);
+    let steps = lab.run_until_quiescent();
+    let pending_obligations = lab
+        .state
+        .obligations_iter()
+        .filter(|(_, o)| o.is_pending())
+        .count();
+    match join.try_join() {
+        Ok(Some((joined, winner, index, committed))) => (
+            joined == 3 && committed == 7 && lab.is_quiescent() && pending_obligations == 0,
+            format!(
+                "steps={steps} join_all_sum={joined} race_winner={winner}@{index} \
+                 reserve_commit={committed} pending_obligations={pending_obligations}"
+            ),
+        ),
+        other => (false, format!("steps={steps} parent={other:?}")),
+    }
+}
+
 fn kind_histogram(events: &[TraceEvent]) -> String {
     let mut counts: Vec<(String, usize)> = Vec::new();
     for event in events {
@@ -232,6 +291,9 @@ fn main() {
             rerun_fingerprint == fingerprint
         ),
     );
+
+    let (combinators_ok, combinators_detail) = run_combinators();
+    all_ok &= report("7_spawn_join_race_obligation", combinators_ok, combinators_detail);
 
     println!("SPIKE {}", if all_ok { "GO" } else { "NO-GO" });
     if !all_ok {

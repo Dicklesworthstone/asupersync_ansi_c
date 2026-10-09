@@ -28,7 +28,12 @@ extern "C" {
  * Hindsight ring capacity (configurable at init time)
  * ------------------------------------------------------------------- */
 
+#ifndef ASX_HINDSIGHT_CAPACITY
 #define ASX_HINDSIGHT_CAPACITY 256u
+#endif
+#if (ASX_HINDSIGHT_CAPACITY) < 1
+#error "ASX_HINDSIGHT_CAPACITY must be at least 1"
+#endif
 
 /* -------------------------------------------------------------------
  * Nondeterminism event kinds

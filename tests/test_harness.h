@@ -35,6 +35,7 @@
 
 static int test_count = 0;
 static int test_failures = 0;
+static int test_skipped = 0;
 static int test_current_failed = 0;
 static const char *test_fail_file = NULL;
 static int test_fail_line = 0;
@@ -58,14 +59,33 @@ static const char *test_fail_expr = NULL;
         TEST_LOG_RESULT_(#name);                                                                   \
     } while (0)
 
+/*
+ * Runs a test only when the build profile provides what it needs (for
+ * example enough workers). Otherwise the test is reported as SKIP with the
+ * reason and is neither run nor counted as passed. The test still compiles
+ * in every profile.
+ */
+#define RUN_TEST_IF(cond, name, reason)                                                            \
+    do {                                                                                           \
+        if (cond) {                                                                                \
+            RUN_TEST(name);                                                                        \
+        } else {                                                                                   \
+            test_skipped++;                                                                        \
+            fprintf(stderr, "  SKIP: %s (%s)\n", #name, reason);                                   \
+            TEST_LOG_SKIP_(#name);                                                                 \
+        }                                                                                          \
+    } while (0)
+
 /* Structured log hook — no-op unless test_log.h is included before this. */
 #ifdef ASX_TEST_LOG_H
 #define TEST_LOG_RESULT_(name)                                                                     \
     test_log_result(name, test_current_failed ? "fail" : "pass", test_fail_file, test_fail_line,   \
                     test_fail_expr)
+#define TEST_LOG_SKIP_(name) test_log_result(name, "skip", NULL, 0, NULL)
 #define TEST_LOG_SUMMARY_() test_log_summary(test_count, test_count - test_failures, test_failures)
 #else
 #define TEST_LOG_RESULT_(name) ((void)0)
+#define TEST_LOG_SKIP_(name) ((void)0)
 #define TEST_LOG_SUMMARY_() ((void)0)
 #endif
 
@@ -128,7 +148,9 @@ static const char *test_fail_expr = NULL;
 
 #define TEST_REPORT()                                                                              \
     do {                                                                                           \
-        fprintf(stderr, "\n%d/%d tests passed\n", test_count - test_failures, test_count);         \
+        fprintf(stderr, "\n%d/%d tests passed", test_count - test_failures, test_count);           \
+        if (test_skipped > 0) { fprintf(stderr, " (%d skipped)", test_skipped); }                  \
+        fprintf(stderr, "\n");                                                                     \
         if (test_failures > 0) { fprintf(stderr, "%d FAILURES\n", test_failures); }                \
         TEST_LOG_SUMMARY_();                                                                       \
     } while (0)

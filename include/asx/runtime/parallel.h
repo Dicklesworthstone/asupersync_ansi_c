@@ -50,10 +50,24 @@ extern "C" {
 #error "ASX_MAX_WORKERS must be at least 1"
 #endif
 
+/* Worker-sharded locality is available only on profiles built for multiple
+ * workers; elsewhere asx_parallel_init always applies COMPACT locality. */
+#if defined(ASX_PROFILE_FREESTANDING) || defined(ASX_PROFILE_BROWSER) ||                           \
+    defined(ASX_PROFILE_EMBEDDED_ROUTER)
+#define ASX_PARALLEL_HAS_LOCALITY_SHARDING 0
+#else
+#define ASX_PARALLEL_HAS_LOCALITY_SHARDING 1
+#endif
+
 #define ASX_PARALLEL_GENERIC_TARGET_WORKERS 64u
 #define ASX_PARALLEL_MAX_LOCALITY_SHARDS ASX_MAX_WORKERS
 #define ASX_MAX_LANES 3u /* READY, CANCEL, TIMED */
+#ifndef ASX_LANE_TASK_CAPACITY
 #define ASX_LANE_TASK_CAPACITY 64u
+#endif
+#if (ASX_LANE_TASK_CAPACITY) < 1
+#error "ASX_LANE_TASK_CAPACITY must be at least 1"
+#endif
 
 /* -------------------------------------------------------------------
  * Lane classification
