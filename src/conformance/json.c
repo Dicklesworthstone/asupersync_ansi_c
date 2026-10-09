@@ -147,12 +147,10 @@ static int text_push_utf8(asx_json_doc *doc, uint32_t start, uint32_t cp) {
 static size_t utf8_seq_len(const unsigned char *s, size_t avail) {
     unsigned char c = s[0];
     if (c < 0x80u) return 1;
-    if (c >= 0xC2u && c <= 0xDFu) {
-        return (avail >= 2u && (s[1] & 0xC0u) == 0x80u) ? 2u : 0u;
-    }
+    if (c >= 0xC2u && c <= 0xDFu) { return (avail >= 2u && (s[1] & 0xC0u) == 0x80u) ? 2u : 0u; }
     if (c >= 0xE0u && c <= 0xEFu) {
         if (avail < 3u || (s[1] & 0xC0u) != 0x80u || (s[2] & 0xC0u) != 0x80u) return 0;
-        if (c == 0xE0u && s[1] < 0xA0u) return 0; /* overlong */
+        if (c == 0xE0u && s[1] < 0xA0u) return 0;  /* overlong */
         if (c == 0xEDu && s[1] >= 0xA0u) return 0; /* surrogate */
         return 3;
     }
@@ -161,7 +159,7 @@ static size_t utf8_seq_len(const unsigned char *s, size_t avail) {
             (s[3] & 0xC0u) != 0x80u) {
             return 0;
         }
-        if (c == 0xF0u && s[1] < 0x90u) return 0; /* overlong */
+        if (c == 0xF0u && s[1] < 0x90u) return 0;  /* overlong */
         if (c == 0xF4u && s[1] >= 0x90u) return 0; /* above U+10FFFF */
         return 4;
     }
@@ -528,8 +526,9 @@ void asx_json_push(asx_json_doc *doc, uint32_t arr, uint32_t child) {
     link_child(doc, arr, child);
 }
 
-void asx_json_set(asx_json_doc *doc, uint32_t obj, const char *key, uint32_t child) {
-    size_t len;
+/* Add or replace member `key` (exactly `len` bytes, which may include NUL). */
+static void set_member(asx_json_doc *doc, uint32_t obj, const char *key, size_t len,
+                       uint32_t child) {
     uint32_t prev = ASX_JSON_NONE;
     uint32_t m;
     uint32_t off;
@@ -537,7 +536,6 @@ void asx_json_set(asx_json_doc *doc, uint32_t obj, const char *key, uint32_t chi
         if (doc->error == NULL) doc->error = "set of a missing node";
         return;
     }
-    len = strlen(key);
     off = text_store(doc, key, len);
     if (off == ASX_JSON_NONE) return;
     doc->nodes[child].key = off;
@@ -557,6 +555,10 @@ void asx_json_set(asx_json_doc *doc, uint32_t obj, const char *key, uint32_t chi
         }
     }
     link_child(doc, obj, child);
+}
+
+void asx_json_set(asx_json_doc *doc, uint32_t obj, const char *key, uint32_t child) {
+    set_member(doc, obj, key, key == NULL ? 0u : strlen(key), child);
 }
 
 static uint32_t copy_node(asx_json_doc *dst, const asx_json_doc *src, uint32_t node,
@@ -586,7 +588,7 @@ static uint32_t copy_node(asx_json_doc *dst, const asx_json_doc *src, uint32_t n
             uint32_t cc = copy_node(dst, src, c, depth + 1u);
             if (cc == ASX_JSON_NONE) return ASX_JSON_NONE;
             if (s->type == ASX_JSON_OBJECT) {
-                asx_json_set(dst, n, &src->text[src->nodes[c].key], cc);
+                set_member(dst, n, &src->text[src->nodes[c].key], src->nodes[c].key_len, cc);
             } else {
                 asx_json_push(dst, n, cc);
             }
@@ -609,10 +611,32 @@ void asx_json_out_init(asx_json_out *out, char *storage, size_t cap) {
     out->cap = cap;
     out->len = 0;
     out->overflow = 0;
+    out->flush = NULL;
+    out->flush_ctx = NULL;
+}
+
+void asx_json_out_init_stream(asx_json_out *out, char *storage, size_t cap, asx_json_flush_fn flush,
+                              void *ctx) {
+    asx_json_out_init(out, storage, cap);
+    out->flush = flush;
+    out->flush_ctx = ctx;
 }
 
 void asx_json_out_append(asx_json_out *out, const char *bytes, size_t len) {
     if (out->overflow) return;
+    if (out->flush != NULL) {
+        if (out->cap == 0u || len > out->cap - out->len) {
+            if (out->len > 0u) out->flush(out->flush_ctx, out->data, out->len);
+            out->len = 0;
+            if (out->cap == 0u || len > out->cap) {
+                out->flush(out->flush_ctx, bytes, len);
+                return;
+            }
+        }
+        memcpy(out->data + out->len, bytes, len);
+        out->len += len;
+        return;
+    }
     if (out->cap == 0u || len > out->cap - 1u - out->len) {
         out->overflow = 1;
         return;
@@ -624,6 +648,11 @@ void asx_json_out_append(asx_json_out *out, const char *bytes, size_t len) {
 void asx_json_out_cstr(asx_json_out *out, const char *s) { asx_json_out_append(out, s, strlen(s)); }
 
 asx_status asx_json_out_finish(asx_json_out *out) {
+    if (out->flush != NULL) {
+        if (out->len > 0u) out->flush(out->flush_ctx, out->data, out->len);
+        out->len = 0;
+        return ASX_OK;
+    }
     if (out->overflow || out->cap == 0u) return ASX_E_BUFFER_TOO_SMALL;
     out->data[out->len] = '\0';
     return ASX_OK;
@@ -687,7 +716,8 @@ static void write_string(asx_json_out *out, const char *s, size_t len) {
 
 /* Next UTF-16 code unit of a UTF-8 string; *pending carries the low half
  * of a surrogate pair. Invalid bytes are returned as themselves. */
-static uint32_t next_utf16_unit(const unsigned char *s, size_t len, size_t *pos, uint32_t *pending) {
+static uint32_t next_utf16_unit(const unsigned char *s, size_t len, size_t *pos,
+                                uint32_t *pending) {
     uint32_t cp;
     size_t n;
     if (*pending != 0u) {

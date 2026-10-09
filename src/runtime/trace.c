@@ -158,14 +158,46 @@ static uint64_t trace_digest_of(const asx_trace_event *events, uint32_t count) {
  * equals a fold over the stored events.
  * ------------------------------------------------------------------- */
 
-/* Kinds are grouped 0x00-0x4F; per-kind totals are exact even after the
+/* Kinds are grouped 0x00-0x5F; per-kind totals are exact even after the
  * ring wraps, so callers never need retained events to count them. */
-#define ASX_TRACE_KIND_SLOTS 0x50u
+#define ASX_TRACE_KIND_SLOTS 0x60u
 
 static asx_trace_event g_trace_ring[ASX_TRACE_CAPACITY];
 static uint64_t g_trace_emitted;
 static uint64_t g_trace_digest_state = ASX_TRACE_DIGEST_SEED;
 static uint64_t g_trace_kind_totals[ASX_TRACE_KIND_SLOTS];
+static asx_trace_observer_fn g_trace_observer;
+static void *g_trace_observer_ctx;
+static int g_trace_observing; /* guards against an observer that emits */
+
+static void trace_record(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux,
+                         const char *text) {
+    asx_trace_event *e = &g_trace_ring[g_trace_emitted % ASX_TRACE_CAPACITY];
+    e->sequence = (uint32_t)(g_trace_emitted & 0xFFFFFFFFu);
+    e->kind = kind;
+    e->entity_id = entity_id;
+    e->aux = aux;
+    g_trace_digest_state = trace_digest_fold(g_trace_digest_state, e);
+    if ((uint32_t)kind < ASX_TRACE_KIND_SLOTS) g_trace_kind_totals[(uint32_t)kind]++;
+    g_trace_emitted++;
+    if (g_trace_observer != NULL && !g_trace_observing) {
+        asx_trace_event copy = *e;
+        g_trace_observing = 1;
+        g_trace_observer(g_trace_observer_ctx, &copy, text);
+        g_trace_observing = 0;
+    }
+}
+
+void asx_trace_set_observer(asx_trace_observer_fn fn, void *ctx) {
+    g_trace_observer = fn;
+    g_trace_observer_ctx = ctx;
+}
+
+void asx_trace_user(asx_task_id task, const char *message) {
+    const char *text = message == NULL ? "" : message;
+    uint64_t hash = fnv1a_mix(ASX_TRACE_DIGEST_SEED, text, (uint32_t)strlen(text));
+    trace_record(ASX_TRACE_USER, (uint64_t)task, hash, text);
+}
 
 static uint32_t trace_retained(void) {
     return g_trace_emitted < ASX_TRACE_CAPACITY ? (uint32_t)g_trace_emitted : ASX_TRACE_CAPACITY;
@@ -178,14 +210,7 @@ static uint32_t trace_seq_to_u32(uint64_t seq) {
 }
 
 void asx_trace_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux) {
-    asx_trace_event *e = &g_trace_ring[g_trace_emitted % ASX_TRACE_CAPACITY];
-    e->sequence = (uint32_t)(g_trace_emitted & 0xFFFFFFFFu);
-    e->kind = kind;
-    e->entity_id = entity_id;
-    e->aux = aux;
-    g_trace_digest_state = trace_digest_fold(g_trace_digest_state, e);
-    if ((uint32_t)kind < ASX_TRACE_KIND_SLOTS) g_trace_kind_totals[(uint32_t)kind]++;
-    g_trace_emitted++;
+    trace_record(kind, entity_id, aux, NULL);
 }
 
 uint32_t asx_trace_event_count(void) { return trace_retained(); }
@@ -492,14 +517,18 @@ const char *asx_trace_event_kind_str(asx_trace_event_kind kind) {
     case ASX_TRACE_REGION_CLOSED: return "region_closed";
     case ASX_TRACE_TASK_SPAWN: return "task_spawn";
     case ASX_TRACE_TASK_TRANSITION: return "task_transition";
+    case ASX_TRACE_REGION_CANCELLED: return "region_cancelled";
+    case ASX_TRACE_CANCEL_REQUEST: return "cancel_request";
     case ASX_TRACE_OBLIGATION_RESERVE: return "obligation_reserve";
     case ASX_TRACE_OBLIGATION_COMMIT: return "obligation_commit";
     case ASX_TRACE_OBLIGATION_ABORT: return "obligation_abort";
+    case ASX_TRACE_OBLIGATION_LEAK: return "obligation_leak";
     case ASX_TRACE_CHANNEL_SEND: return "channel_send";
     case ASX_TRACE_CHANNEL_RECV: return "channel_recv";
     case ASX_TRACE_TIMER_SET: return "timer_set";
     case ASX_TRACE_TIMER_FIRE: return "timer_fire";
     case ASX_TRACE_TIMER_CANCEL: return "timer_cancel";
+    case ASX_TRACE_USER: return "user";
     default: return "unknown";
     }
 }

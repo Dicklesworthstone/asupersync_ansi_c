@@ -311,6 +311,20 @@ asx_status asx_task_finalize(asx_task_id id) {
  * Cancel phase query
  * ------------------------------------------------------------------- */
 
+asx_status asx_task_get_cancel_reason(asx_task_id id, asx_cancel_reason *out) {
+    asx_task_slot *t;
+    asx_status st;
+
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+
+    st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
+
+    if (!t->cancel_pending) return ASX_E_NOT_FOUND;
+    *out = t->cancel_reason;
+    return ASX_OK;
+}
+
 asx_status asx_task_get_cancel_phase(asx_task_id id, asx_cancel_phase *out) {
     asx_task_slot *t;
     asx_status st;

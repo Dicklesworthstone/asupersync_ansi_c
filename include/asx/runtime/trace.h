@@ -50,11 +50,14 @@ typedef enum {
     ASX_TRACE_REGION_CLOSED = 0x12,
     ASX_TRACE_TASK_SPAWN = 0x13,
     ASX_TRACE_TASK_TRANSITION = 0x14,
+    ASX_TRACE_REGION_CANCELLED = 0x15, /* a region of a cancelled subtree (aux: cancel kind) */
+    ASX_TRACE_CANCEL_REQUEST = 0x16,   /* a task newly cancelled (aux: cancel kind) */
 
     /* Obligation events (0x20–0x2F) */
     ASX_TRACE_OBLIGATION_RESERVE = 0x20,
     ASX_TRACE_OBLIGATION_COMMIT = 0x21,
     ASX_TRACE_OBLIGATION_ABORT = 0x22,
+    ASX_TRACE_OBLIGATION_LEAK = 0x23, /* a holder completed with it still reserved */
 
     /* Channel events (0x30–0x3F) */
     ASX_TRACE_CHANNEL_SEND = 0x30,
@@ -63,7 +66,10 @@ typedef enum {
     /* Timer events (0x40–0x4F) */
     ASX_TRACE_TIMER_SET = 0x40,
     ASX_TRACE_TIMER_FIRE = 0x41,
-    ASX_TRACE_TIMER_CANCEL = 0x42
+    ASX_TRACE_TIMER_CANCEL = 0x42,
+
+    /* User events (0x50–0x5F) */
+    ASX_TRACE_USER = 0x50 /* user trace message (entity: task, aux: FNV-1a 64 of the text) */
 } asx_trace_event_kind;
 
 /* -------------------------------------------------------------------
@@ -166,6 +172,21 @@ ASX_API const char *asx_trace_schema_compat_str(asx_trace_schema_compat compat);
 
 /* Emit a trace event. Thread-safe: none (single-threaded runtime). */
 ASX_API void asx_trace_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux);
+
+/* Emit an ASX_TRACE_USER event for `task` carrying `message` (Rust
+ * Cx::trace). The ring and the digest store the message's FNV-1a 64 hash;
+ * the text itself reaches only the observer. NULL is the empty message. */
+ASX_API void asx_trace_user(asx_task_id task, const char *message);
+
+/* Streaming observer: called synchronously for every event after it is
+ * recorded, so a consumer sees the whole trace whatever the ring retains.
+ * `text` is the message of an ASX_TRACE_USER event and NULL otherwise; it
+ * is valid only during the call. The observer must not emit events (such
+ * emissions are recorded but not re-observed). One observer at a time;
+ * NULL removes it. asx_trace_reset() leaves it installed.
+ * Thread-safety: none (single-threaded runtime). */
+typedef void (*asx_trace_observer_fn)(void *ctx, const asx_trace_event *event, const char *text);
+ASX_API void asx_trace_set_observer(asx_trace_observer_fn fn, void *ctx);
 
 /* Number of events currently retained in the ring (<= ASX_TRACE_CAPACITY). */
 ASX_API uint32_t asx_trace_event_count(void);

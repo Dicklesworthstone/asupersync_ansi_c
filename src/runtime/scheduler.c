@@ -590,11 +590,21 @@ static uint32_t sched_ms_until(asx_time deadline, asx_time now, uint32_t cap_ms)
  * wake the parked tasks. Blocking never extends past `run_deadline` (the
  * caller's run budget deadline, 0 = none); the round loop then reports
  * ASX_E_TIMED_OUT. */
-static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time run_deadline) {
+static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time run_deadline,
+                             int advance_clock) {
     asx_time now;
 
     if (sched_unpark_cancelled() > 0u) return ASX_OK;
     if (sched_drain_wakers() > 0u) return ASX_OK;
+
+    /* Run-until-idle: only what is due now may make progress; the clock is
+     * the caller's to move (lab run_until_idle semantics). */
+    if (!advance_clock) {
+        if (g_timer_heap_len > 0u && timers_fire(sched_now()) > 0u) return ASX_OK;
+        /* ASX_ANALYZER_WAIVER("config-dependent: 0 without blocking pool/native I/O") */
+        return (g_timer_heap_len > 0u || sched_external_pending()) ? ASX_E_PENDING
+                                                                   : ASX_E_WOULD_BLOCK;
+    }
 
     if (g_timer_heap_len > 0u) {
         asx_time next = g_tasks[g_timer_heap[0]].wake_at;
@@ -646,7 +656,17 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
  * for any given input and seed combination.
  * ------------------------------------------------------------------- */
 
+static asx_status sched_run(asx_region_id region, asx_budget *budget, int advance_clock);
+
 asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
+    return sched_run(region, budget, 1);
+}
+
+asx_status asx_scheduler_run_until_idle(asx_region_id region, asx_budget *budget) {
+    return sched_run(region, budget, 0);
+}
+
+static asx_status sched_run(asx_region_id region, asx_budget *budget, int advance_clock) {
     asx_region_slot *root;
     asx_status st;
     uint32_t round;
@@ -837,7 +857,7 @@ asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget) {
         }
 
         if (progress == 0u) {
-            st = sched_idle(&last_idle_now, &idle_stall, budget->deadline);
+            st = sched_idle(&last_idle_now, &idle_stall, budget->deadline, advance_clock);
             if (st != ASX_OK) return st;
         }
     }

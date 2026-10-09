@@ -490,10 +490,11 @@ jobs:
         id: run_codec_equivalence
         run: make codec-equivalence
 
-      # Rust parity requires fixtures executed through the C runtime; that
-      # evidence does not exist yet, so this step fails by design. It is
-      # shown, not hidden, and becomes blocking at milestone M-beta.
-      - name: "Rust parity (EXPECTED TO FAIL until the W1 oracle lands; non-blocking)"
+      # Rust parity: the Rust-captured v2 fixtures are executed through the
+      # C runtime and compared (asx-conformance). It fails until every
+      # fixture matches; it is shown, not hidden, and becomes blocking at
+      # milestone M-beta.
+      - name: "Rust parity: executed C-vs-Rust fixture comparison (non-blocking until all match)"
         id: run_conformance
         continue-on-error: true
         run: make conformance

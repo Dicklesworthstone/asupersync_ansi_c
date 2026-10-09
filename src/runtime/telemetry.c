@@ -85,6 +85,9 @@ int asx_telemetry_retains(asx_telemetry_tier tier, asx_trace_event_kind kind) {
     case ASX_TRACE_REGION_CLOSED:
     case ASX_TRACE_TASK_SPAWN:
     case ASX_TRACE_TASK_TRANSITION:
+    case ASX_TRACE_REGION_CANCELLED:
+    case ASX_TRACE_CANCEL_REQUEST:
+    case ASX_TRACE_OBLIGATION_LEAK:
     case ASX_TRACE_SCHED_COMPLETE:
     case ASX_TRACE_SCHED_QUIESCENT:
     case ASX_TRACE_SCHED_BUDGET: return 1;
@@ -98,7 +101,8 @@ int asx_telemetry_retains(asx_telemetry_tier tier, asx_trace_event_kind kind) {
     case ASX_TRACE_CHANNEL_RECV:
     case ASX_TRACE_TIMER_SET:
     case ASX_TRACE_TIMER_FIRE:
-    case ASX_TRACE_TIMER_CANCEL: return 0;
+    case ASX_TRACE_TIMER_CANCEL:
+    case ASX_TRACE_USER: return 0;
 
     default: return 0;
     }

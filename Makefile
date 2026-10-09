@@ -322,6 +322,13 @@ REMOTE_SRC := \
 SPORK_SRC := \
 	src/spork/spork.c
 
+# Rust-parity oracle (bridge W1.5): JSON DOM and canonical form for DSL v2
+# scenarios and asx.fixture.v2 files. Private headers under src/conformance.
+CONFORMANCE_SRC := \
+	src/conformance/json.c \
+	src/conformance/canon.c \
+	src/conformance/interpreter.c
+
 # Platform sources selected by profile
 ifeq ($(PROFILE),POSIX)
   PLATFORM_SRC := src/platform/posix/hooks.c src/platform/posix/net_posix.c \
@@ -341,7 +348,7 @@ CLI_SRC := src/cli/cli.c
 
 ABI_SRC := src/abi/wasm_abi.c
 
-LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(ENCODING_SRC) $(DECODING_SRC) $(RAPTORQ_SRC) $(MIGRATION_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(SERVICE_SRC) $(TRANSPORT_SRC) $(REMOTE_SRC) $(SPORK_SRC) $(ABI_SRC) $(CLI_SRC) $(PLATFORM_SRC)
+LIB_SRC := $(CORE_SRC) $(RUNTIME_SRC) $(CHANNEL_SRC) $(SYNC_SRC) $(ACTOR_SRC) $(NET_SRC) $(BYTES_SRC) $(ENCODING_SRC) $(DECODING_SRC) $(RAPTORQ_SRC) $(MIGRATION_SRC) $(TIME_SRC) $(SECURITY_SRC) $(STREAM_SRC) $(FS_SRC) $(PROCESS_SRC) $(SIGNAL_SRC) $(PLAN_SRC) $(CX_SRC) $(LINK_SRC) $(EVIDENCE_SRC) $(EVIDENCE_SINK_SRC) $(MONITOR_SRC) $(OBSERVABILITY_SRC) $(APP_SRC) $(CONSOLE_SRC) $(TRACING_COMPAT_SRC) $(SERVICE_SRC) $(TRANSPORT_SRC) $(REMOTE_SRC) $(SPORK_SRC) $(CONFORMANCE_SRC) $(ABI_SRC) $(CLI_SRC) $(PLATFORM_SRC)
 
 # ---------------------------------------------------------------------------
 # Object files and output
@@ -433,7 +440,8 @@ UNIT_TEST_SRC := $(wildcard tests/unit/core/*_test.c) \
                  $(wildcard tests/unit/fuzz/*_test.c) \
                  $(wildcard tests/unit/fuzz/test_*.c) \
                  $(wildcard tests/unit/observability/*_test.c) \
-                 $(wildcard tests/unit/observability/test_*.c)
+                 $(wildcard tests/unit/observability/test_*.c) \
+                 $(wildcard tests/unit/conformance/test_*.c)
 UNIT_TEST_SRC := $(sort $(UNIT_TEST_SRC))
 
 INVARIANT_TEST_SRC := $(wildcard tests/invariant/lifecycle/*_test.c) \
@@ -522,7 +530,7 @@ E2E_VERTICAL_SCRIPTS := \
 # PRIMARY TARGETS — map 1:1 to quality gate commands
 # ===================================================================
 
-.PHONY: all build clean install uninstall FORCE
+.PHONY: all build clean install uninstall FORCE conformance-runner
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation lint-scenarios-v2
 .PHONY: model-check fixture-integrity fixtures-promote test-gates test-capacity-x4
 .PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
@@ -578,6 +586,15 @@ cli: $(LIB_A) src/cli/main.c
 	$(CC) $(ALL_CFLAGS) -o build/bin/asx src/cli/main.c $(LIB_A) $(LDFLAGS)
 	@echo "[asx] cli binary: build/bin/asx"
 
+# Rust-parity oracle runner (bridge W1.5/W1.6): executes DSL v2 scenarios
+# through this runtime and compares them with Rust captures.
+CONFORMANCE_RUNNER := $(BIN_DIR)/asx-conformance
+
+conformance-runner: $(CONFORMANCE_RUNNER)
+
+$(CONFORMANCE_RUNNER): tools/conformance/runner.c $(LIB_A) | $(BIN_DIR)
+	$(CC) $(ALL_CFLAGS) -I$(CURDIR)/src -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
+
 $(LIB_A): $(LIB_OBJ) | $(LIB_DIR)
 	@tmp="$@.$$$$.tmp"; \
 	$(AR) rcs "$$tmp" $^ && \
@@ -613,7 +630,7 @@ obj-dirs:
 	          $(OBJ_DIR)/observability \
 	          $(OBJ_DIR)/plan $(OBJ_DIR)/cx $(OBJ_DIR)/abi \
 	          $(OBJ_DIR)/service $(OBJ_DIR)/transport \
-	          $(OBJ_DIR)/remote $(OBJ_DIR)/spork $(OBJ_DIR)/cli \
+	          $(OBJ_DIR)/remote $(OBJ_DIR)/spork $(OBJ_DIR)/cli $(OBJ_DIR)/conformance \
 	          $(OBJ_DIR)/platform/posix \
 	          $(OBJ_DIR)/platform/win32 $(OBJ_DIR)/platform/freestanding
 
@@ -1495,23 +1512,28 @@ resource-pressure-gate:
 	@ASX_GIT_COMMIT="$(ASX_GIT_COMMIT)" tools/ci/run_resource_pressure_gate.sh
 
 # ---------------------------------------------------------------------------
-# conformance — Rust parity: fixtures executed through the C runtime and
-# compared with Rust-captured results. Until the conformance interpreter and
-# twin-run oracle exist (bridge program W1, beads bd-9kll.2.*) there is no
-# such evidence, and this target FAILS instead of passing on zero
-# comparisons. It is deliberately not part of check-ci until milestone M-beta;
-# CI runs it as a visible, non-blocking job.
+# conformance — Rust parity: every Rust-captured DSL v2 fixture in
+# fixtures/rust_reference_v2 (captured by tools/twin_run from asupersync's
+# LabRuntime at the pinned rev) is executed through this C runtime by
+# asx-conformance and compared canonical byte for byte: trace (Foata
+# layers), snapshot and observations. The comparator's negative control
+# (self-test: a corrupted expectation must FAIL) runs first. The target
+# fails until every fixture matches; a FAIL is a C/Rust divergence, an
+# ERROR an op or capability the C side cannot express yet (DSL §7). It is
+# deliberately not part of check-ci until milestone M-beta; CI runs it as a
+# visible, non-blocking job.
 # ---------------------------------------------------------------------------
-conformance:
-	@echo "[asx] conformance: Rust parity check (requires executed fixtures)..."
-	@if [ -x tools/ci/run_conformance.sh ]; then \
-		tools/ci/run_conformance.sh --mode conformance; \
-	elif [ "$(FAIL_ON_MISSING_RUNNERS)" = "1" ]; then \
-		echo "[asx] conformance: FAIL (runner missing; strict mode)"; \
+CONFORMANCE_V2_FIXTURES := $(sort $(wildcard fixtures/rust_reference_v2/*.json))
+CONFORMANCE_SELF_TEST_FIXTURE := fixtures/rust_reference_v2/obligation-reserve-commit-001.json
+
+conformance: $(CONFORMANCE_RUNNER)
+	@echo "[asx] conformance: executing $(words $(CONFORMANCE_V2_FIXTURES)) Rust-captured v2 fixture(s) through the C runtime..."
+	@if [ -z "$(CONFORMANCE_V2_FIXTURES)" ]; then \
+		echo "[asx] conformance: FAIL (no fixtures in fixtures/rust_reference_v2)"; \
 		exit 1; \
-	else \
-		echo "[asx] conformance: SKIP (runner not yet implemented)"; \
 	fi
+	@$(CONFORMANCE_RUNNER) self-test $(CONFORMANCE_SELF_TEST_FIXTURE)
+	@$(CONFORMANCE_RUNNER) compare $(CONFORMANCE_V2_FIXTURES)
 
 # ---------------------------------------------------------------------------
 # fixture-integrity — fixture schema, provenance, digest recomputation,

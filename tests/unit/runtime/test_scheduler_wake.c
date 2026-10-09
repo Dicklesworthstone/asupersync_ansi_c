@@ -558,6 +558,53 @@ TEST(wake_driven_run_is_deterministic) {
     ASSERT_EQ(order[0][1], 3u);
 }
 
+TEST(run_until_idle_leaves_the_clock_to_the_caller) {
+    asx_region_id r;
+    asx_task_id t;
+    sleeper_state *s = NULL;
+    asx_budget budget;
+
+    setup();
+    g_finish_count = 0;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_captured(r, poll_sleeper, (uint32_t)sizeof(sleeper_state), NULL, &t,
+                                      (void **)&s),
+              ASX_OK);
+    ASSERT_EQ(asx_sleep_init(&s->sleep, 10u * MS), ASX_OK);
+
+    /* Idle with a timer armed: PENDING, and the clock has not moved. */
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)0);
+    ASSERT_EQ(s->polls, 1u);
+
+    /* Short of the deadline nothing fires. */
+    asx_runtime_virtual_advance(5u * MS);
+    ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_PENDING);
+    ASSERT_EQ(s->polls, 1u);
+
+    /* At the deadline the due timer fires and the sleeper completes. */
+    asx_runtime_virtual_advance(10u * MS);
+    ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_OK);
+    ASSERT_EQ(s->polls, 2u);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(10u * MS));
+}
+
+TEST(run_until_idle_reports_would_block_without_wake_sources) {
+    asx_region_id r;
+    asx_task_id t;
+    park_state ps;
+    asx_budget budget;
+
+    setup();
+    memset(&ps, 0, sizeof(ps));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_park_until_done, &ps, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run_until_idle(r, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(ps.polls, 1u);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_scheduler_wake ===\n");
 
@@ -578,6 +625,8 @@ int main(void) {
     RUN_TEST(scheduler_runs_whole_region_subtree);
     RUN_TEST(drain_cancels_sleepers_without_waiting_for_deadline);
     RUN_TEST(wake_driven_run_is_deterministic);
+    RUN_TEST(run_until_idle_leaves_the_clock_to_the_caller);
+    RUN_TEST(run_until_idle_reports_would_block_without_wake_sources);
 
     TEST_REPORT();
     return test_failures;

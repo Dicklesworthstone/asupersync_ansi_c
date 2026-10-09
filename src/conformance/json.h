@@ -69,13 +69,20 @@ typedef struct {
     const char *error;
 } asx_json_doc;
 
-/* Output buffer over caller storage. An overflow sets `overflow` and
- * makes every later write a no-op; asx_json_out_finish reports it. */
+/* Receives the bytes of a streaming output buffer in order. */
+typedef void (*asx_json_flush_fn)(void *ctx, const char *bytes, size_t len);
+
+/* Output buffer over caller storage. In buffered mode an overflow sets
+ * `overflow` and makes every later write a no-op; asx_json_out_finish
+ * reports it. In streaming mode (`flush` set) a full buffer is handed to
+ * `flush` instead, so output of any length fits. */
 typedef struct {
     char *data;
     size_t cap;
     size_t len;
     int overflow;
+    asx_json_flush_fn flush;
+    void *flush_ctx;
 } asx_json_out;
 
 void asx_json_doc_init(asx_json_doc *doc);
@@ -131,7 +138,12 @@ int asx_json_doc_ok(const asx_json_doc *doc);
 /* ---- canonical form --------------------------------------------------- */
 
 void asx_json_out_init(asx_json_out *out, char *storage, size_t cap);
-/* NUL-terminates; returns ASX_E_BUFFER_TOO_SMALL after an overflow. */
+/* Streaming mode: bytes go to `flush` whenever `storage` fills, and the
+ * rest at asx_json_out_finish. */
+void asx_json_out_init_stream(asx_json_out *out, char *storage, size_t cap, asx_json_flush_fn flush,
+                              void *ctx);
+/* Buffered mode: NUL-terminates; returns ASX_E_BUFFER_TOO_SMALL after an
+ * overflow. Streaming mode: flushes what remains (no terminator). */
 ASX_MUST_USE asx_status asx_json_out_finish(asx_json_out *out);
 void asx_json_out_append(asx_json_out *out, const char *bytes, size_t len);
 void asx_json_out_cstr(asx_json_out *out, const char *s);

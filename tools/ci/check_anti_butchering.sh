@@ -151,7 +151,7 @@ is_sensitive_path() {
     [[ "$path" =~ ^src/(core|runtime|channel|time)/ ]] && return 0
     [[ "$path" =~ ^include/asx/ ]] && return 0
     [[ "$path" =~ ^tests/invariant/ ]] && return 0
-    [[ "$path" =~ ^fixtures/rust_reference/ ]] && return 0
+    [[ "$path" =~ ^fixtures/rust_reference(_v2)?/ ]] && return 0
     [[ "$path" =~ ^docs/(EXISTING_ASUPERSYNC_STRUCTURE|LIFECYCLE_TRANSITION_TABLES|INVARIANT_SCHEMA|GUARANTEE_SUBSTITUTION_MATRIX|FEATURE_PARITY|PLAN_EXECUTION_TRACEABILITY_INDEX|RISK_CONTROLS_SEMANTIC_FIDELITY)\.md$ ]] && return 0
     return 1
 }

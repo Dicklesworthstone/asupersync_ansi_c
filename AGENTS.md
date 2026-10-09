@@ -124,10 +124,13 @@ make lint STRICT_GATES=1
 make test
 make fixture-integrity
 make test-gates
-# `make conformance` (Rust parity) currently FAILS by design: no fixture is
-# executed through the C runtime until the twin-run oracle lands (bridge
-# program W1, beads bd-9kll.2.*). Do not treat that failure as your
-# regression, and never make it pass without real executed comparisons.
+# `make conformance` (Rust parity) executes every Rust-captured fixture in
+# fixtures/rust_reference_v2 through the C runtime (build/bin/asx-conformance)
+# and fails until all of them match. Its FAIL lines are known C/Rust
+# divergences and its ERROR lines C gaps (docs/SCENARIO_DSL_V2.md §7) that
+# the bridge program (beads bd-9kll.*) is closing; compare its pass count
+# before and after your change. A fixture that passed and now fails is your
+# regression. Never edit a fixture to make it pass: fix the C side.
 ```
 
 If you see errors, **carefully understand and resolve each issue**. Read sufficient context to fix them the RIGHT way.
@@ -163,7 +166,7 @@ make test-invariants
 ### Conformance and Profile Parity
 
 ```bash
-# Rust parity (fails until the W1 oracle exists; see above)
+# Rust parity: executed C-vs-Rust comparison (see above)
 make conformance
 
 # Fixture integrity and gate negative controls

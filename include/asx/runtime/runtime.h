@@ -16,6 +16,7 @@
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
 #include <asx/core/budget.h>
+#include <asx/core/cancel.h>
 #include <asx/core/outcome.h>
 
 #ifdef __cplusplus
@@ -445,6 +446,16 @@ ASX_API ASX_MUST_USE asx_status asx_task_finalize(asx_task_id id);
  * See: API_MISUSE_CATALOG.md § Task Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_task_get_cancel_phase(asx_task_id id, asx_cancel_phase *out);
 
+/* Read the reason a task was cancelled with (the strengthened reason once
+ * several cancels arrived). Available while the task's slot is held, so
+ * also for a completed, not yet joined task: a cancelled outcome's reason.
+ *
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if out is NULL, a lookup error
+ * for a bad handle, or ASX_E_NOT_FOUND if the task was never cancelled.
+ * The message and cause pointers are borrowed from the runtime.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_task_get_cancel_reason(asx_task_id id, asx_cancel_reason *out);
+
 /* Enter a cancel-masked critical section (nestable).
  *
  * While a task's mask depth is nonzero, cancellation is deferred: it is
@@ -635,6 +646,20 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_get_state(asx_obligation_id id,
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Scheduler. */
 ASX_API ASX_MUST_USE asx_status asx_scheduler_run(asx_region_id region, asx_budget *budget);
+
+/* Run the region subtree until no task is runnable, without moving the
+ * clock: timers already due fire, later ones wait. This is the lab
+ * runtime's run_until_idle; asx_scheduler_run is run_with_auto_advance.
+ * A caller drives virtual time itself (asx_runtime_virtual_advance) between
+ * calls, as a deterministic test or replay driver does.
+ *
+ * Returns ASX_OK when the subtree is quiescent, ASX_E_PENDING when it is
+ * idle but a timer or external wake source remains, ASX_E_WOULD_BLOCK when
+ * nothing can ever wake the parked tasks, and otherwise the errors of
+ * asx_scheduler_run.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_scheduler_run_until_idle(asx_region_id region,
+                                                             asx_budget *budget);
 
 /* -------------------------------------------------------------------
  * Wake-driven waiting (park / wake / timers / join)
