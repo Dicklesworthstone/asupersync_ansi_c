@@ -1,0 +1,18 @@
+[package]
+name = "twin-run-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "W1.4s go/no-go spike (bd-9kll.2.16): can an external crate drive the asupersync lab runtime at the pinned rev?"
+
+[[bin]]
+name = "twin_run_spike"
+path = "src/main.rs"
+
+[dependencies]
+# The semantic authority for the port: asupersync 0.6.0 at the bridge
+# program's pinned commit. 0.6.0 is not on crates.io, so it is pinned by rev.
+asupersync = { git = "https://github.com/Dicklesworthstone/asupersync", rev = "5e60b1c4c53d62aaddae68de3ee7de4732f1755b" }
+
+# Standalone: not a member of any parent workspace.
+[workspace]
