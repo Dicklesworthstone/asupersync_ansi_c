@@ -6,7 +6,8 @@
  *
  *   JOIN_ALL  every member completes; succeeds when all succeeded.
  *   RACE      the first member to complete wins (its result is the group's).
- *   FIRST_OK  the first member to complete OK wins; fails when all fail.
+ *   FIRST_OK  attempts run one at a time, in order, until one completes OK
+ *             (asx_task_group_add_attempt; Rust Scope::first_ok).
  *   QUORUM    `needed` members complete OK; fails once that is impossible.
  *
  * Losers are drained. Once the group is decided, every unfinished member
@@ -35,7 +36,8 @@
  *
  *   JOIN_ALL  ASX_OK, or the status of the most severe failing member
  *   RACE      the winner's status (ASX_OK, its error, or ASX_E_CANCELLED)
- *   FIRST_OK  ASX_OK, or the most severe member status when all failed
+ *   FIRST_OK  ASX_OK, or the status of the attempt that ended it (see
+ *             asx_task_group_add_attempt)
  *   QUORUM    ASX_OK, or the most severe member status when impossible
  *
  * A member's status is ASX_OK for an OK outcome, the error its poll
@@ -97,6 +99,13 @@ typedef struct {
     asx_status result;          /* group result, final once DONE */
     asx_time deadline;          /* 0 = none */
     uint8_t early;              /* resolved by cancel / deadline / bad quorum */
+    /* FIRST_OK attempts (asx_task_group_add_attempt), spawned one at a
+     * time: members[i] is valid for i < spawned. */
+    asx_task_poll_fn attempt_fns[ASX_TASK_GROUP_MAX];
+    void *attempt_data[ASX_TASK_GROUP_MAX];
+    asx_region_id attempt_regions[ASX_TASK_GROUP_MAX];
+    uint32_t spawned;
+    uint8_t forwarded; /* a cancel was passed to the running attempt */
 } asx_task_group;
 
 /* Initialize an empty group. `needed` is the QUORUM threshold (1..count,
@@ -116,10 +125,33 @@ ASX_API ASX_MUST_USE asx_status asx_task_group_set_deadline(asx_task_group *g, a
 ASX_API ASX_MUST_USE asx_status asx_task_group_add(asx_task_group *g, asx_task_id task);
 
 /* Spawn a task in `region` and adopt it as a member. Capacity is checked
- * before spawning, so a full group spawns nothing. */
+ * before spawning, so a full group spawns nothing. Not for FIRST_OK
+ * (ASX_E_INVALID_STATE): its attempts run one at a time. */
 ASX_API ASX_MUST_USE asx_status asx_task_group_spawn(asx_task_group *g, asx_region_id region,
                                                      asx_task_poll_fn poll_fn, void *user_data,
                                                      asx_task_id *out_id);
+
+/* FIRST_OK only: register an attempt, spawned in `region` when its turn
+ * comes (Rust Scope::first_ok, cx/scope.rs:2023-2099). The owner's polls
+ * run the attempts in registration order, one at a time:
+ *   - before each attempt the owner checkpoints; once it is cancelled no
+ *     further attempt starts and the group resolves ASX_E_CANCELLED;
+ *   - an attempt runs cancellation-dominant; a cancel of the owner while
+ *     it runs is passed to it once (a handle abort with the owner's reason)
+ *     and the attempt is still awaited to completion;
+ *   - an attempt completing OK wins (ASX_OK, asx_task_group_winner);
+ *     an ERR moves on to the next attempt; CANCELLED or PANICKED ends the
+ *     group with that member's status;
+ *   - every attempt failed: the most severe member status (the first
+ *     error among equals); no attempt registered: ASX_E_INVALID_ARGUMENT.
+ * A spawn refused when an attempt's turn comes ends the group
+ * ASX_E_CANCELLED (Rust: Cancelled(resource_unavailable)).
+ * Returns ASX_E_INVALID_STATE for another mode or once the group started,
+ * ASX_E_RESOURCE_EXHAUSTED when full, ASX_E_INVALID_ARGUMENT for a NULL
+ * poll function. */
+ASX_API ASX_MUST_USE asx_status asx_task_group_add_attempt(asx_task_group *g, asx_region_id region,
+                                                           asx_task_poll_fn poll_fn,
+                                                           void *user_data);
 
 /* Drive the group from the owner task `self`. Returns ASX_E_PENDING (owner
  * parked until a member completes or the deadline passes) while

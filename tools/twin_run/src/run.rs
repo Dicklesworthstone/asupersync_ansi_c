@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use asupersync::channel::{broadcast, mpsc, oneshot, watch};
+use asupersync::combinator::first_ok::FirstOkError;
 use asupersync::cx::{ChildRegion, ChildRegionSpec};
 use asupersync::lab::{LabConfig, LabRuntime};
 use asupersync::record::task::TaskState;
@@ -1285,6 +1286,71 @@ async fn exec_step(
                     ));
                 }
             }
+        }
+        "first_ok" => {
+            let members = group_programs(step)?;
+            let buffer = cx.trace_buffer().ok_or("first_ok needs the lab trace")?;
+            let before = buffer.snapshot().last().map_or(0, |e| e.seq);
+            let factories: Vec<_> = members
+                .iter()
+                .enumerate()
+                .map(|(i, program)| {
+                    let child_ctx = Arc::new(TaskCtx {
+                        shared: ctx.shared.clone(),
+                        me: member_name(me, idx, i),
+                        region: ctx.region.clone(),
+                    });
+                    let program = program.clone();
+                    move |ccx: Cx| async move {
+                        match run_program(ccx, child_ctx, program, Vec::new()).await {
+                            Body::Ok => Ok(()),
+                            Body::Err(status) => Err(status),
+                        }
+                    }
+                })
+                .collect();
+            let result = cx.scope().first_ok(cx, factories).await;
+            // The attempts were spawned one at a time inside first_ok: name
+            // them by their spawn enqueues in this region, in order, leaving
+            // out the tasks other steps spawned meanwhile.
+            {
+                let mut s = lock(&ctx.shared);
+                let spawned: Vec<TaskId> = buffer
+                    .snapshot()
+                    .iter()
+                    .filter(|e| e.seq > before)
+                    .filter_map(|e| match (&e.kind, &e.data) {
+                        (TraceEventKind::TaskSpawnEnqueued, TraceData::Task { task, region })
+                            if *region == cx.region_id() =>
+                        {
+                            Some(*task)
+                        }
+                        _ => None,
+                    })
+                    .filter(|task| !s.provisional.contains_key(task))
+                    .take(members.len())
+                    .collect();
+                for (i, task) in spawned.into_iter().enumerate() {
+                    let name = member_name(me, idx, i);
+                    s.provisional.insert(task, name.clone());
+                    s.task_regions.insert(name.clone(), ctx.region.clone());
+                    s.group_members.insert(name);
+                }
+            }
+            // Vocabulary §5: Ok -> ASX_OK; AllFailed -> the first attempt's
+            // error; Cancelled -> ASX_E_CANCELLED; Panicked ->
+            // ASX_E_INVALID_STATE; Empty -> ASX_E_INVALID_ARGUMENT. No value.
+            let status = match result {
+                Ok(()) => "ASX_OK".to_string(),
+                Err(FirstOkError::AllFailed { errors, .. }) => errors
+                    .into_iter()
+                    .next()
+                    .ok_or("first_ok AllFailed without errors")?,
+                Err(FirstOkError::Cancelled { .. }) => "ASX_E_CANCELLED".to_string(),
+                Err(FirstOkError::Panicked(_)) => "ASX_E_INVALID_STATE".to_string(),
+                Err(FirstOkError::Empty) => "ASX_E_INVALID_ARGUMENT".to_string(),
+            };
+            observe(&ctx.shared, me, idx, op, &status, Value::Null);
         }
         "join" => {
             let target = str_field(step, "task")?;

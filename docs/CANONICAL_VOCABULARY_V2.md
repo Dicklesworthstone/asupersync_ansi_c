@@ -282,6 +282,9 @@ are handled:
 - `JoinError::Panicked` is not a status: it is the `panicked` outcome (§4).
 - `OnceCellError::AlreadyInitialized` maps to `ASX_E_ALREADY_EXISTS`. It is
   the one Rust use of that code, so the row stays C-only for everything else.
+- `FirstOkError` (the DSL step `first_ok`): `AllFailed` is the first
+  attempt's error status, `Cancelled` is `ASX_E_CANCELLED`, `Panicked` is
+  `ASX_E_INVALID_STATE` (lossy), `Empty` is `ASX_E_INVALID_ARGUMENT`.
 
 Encoding, decoding, transport and distributed `ErrorKind`s are outside DSL
 v2's kernel scope (W1.3).

@@ -1085,6 +1085,15 @@ static int spawn_group_members(it_task *t, uint32_t step, uint32_t idx) {
         m = add_task(&g_text[off], t->region_name, t->region, asx_json_item(g_in, members, i));
         if (m == NULL) return 0;
         m->group_member = 1;
+        t->group_members[t->n_group_members++] = (uint32_t)(m - g_tasks);
+        if (t->group.mode == ASX_TASK_GROUP_FIRST_OK) {
+            /* Spawned by the group when its turn comes (bind_attempts). */
+            if (asx_task_group_add_attempt(&t->group, t->region, interp_poll, m) != ASX_OK) {
+                it_fail_task(t, idx, "asx_task_group_add_attempt failed");
+                return 0;
+            }
+            continue;
+        }
         if (asx_task_group_spawn(&t->group, t->region, interp_poll, m, &id) != ASX_OK) {
             it_fail_task(t, idx, "asx_task_group_spawn failed");
             return 0;
@@ -1092,9 +1101,22 @@ static int spawn_group_members(it_task *t, uint32_t step, uint32_t idx) {
         m->id = id;
         m->spawned = 1;
         (void)asx_cx_init(&m->cx, m->region, id, ASX_CAP_CANCEL_CHECK);
-        t->group_members[t->n_group_members++] = (uint32_t)(m - g_tasks);
     }
     return 1;
+}
+
+/* FIRST_OK attempts the group spawned during its last poll: bind each to
+ * its task. An attempt runs only from a later step, so it is bound before
+ * any of its events can be projected. */
+static void bind_attempts(it_task *t) {
+    uint32_t i;
+    for (i = 0; i < t->group.spawned && i < t->n_group_members; i++) {
+        it_task *m = &g_tasks[t->group_members[i]];
+        if (m->spawned) continue;
+        m->id = t->group.members[i];
+        m->spawned = 1;
+        (void)asx_cx_init(&m->cx, m->region, m->id, ASX_CAP_CANCEL_CHECK);
+    }
 }
 
 /* Member i's outcome, captured at its completion. */
@@ -1126,6 +1148,8 @@ static int exec_group(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
         mode = ASX_TASK_GROUP_JOIN_ALL;
     } else if (strcmp(op, "quorum") == 0) {
         mode = ASX_TASK_GROUP_QUORUM;
+    } else if (strcmp(op, "first_ok") == 0) {
+        mode = ASX_TASK_GROUP_FIRST_OK;
     } else {
         return 0;
     }
@@ -1151,8 +1175,15 @@ static int exec_group(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
         t->phase = 1u;
     }
     st = asx_task_group_poll(&t->group, self);
+    if (mode == ASX_TASK_GROUP_FIRST_OK) bind_attempts(t);
     if (st == ASX_E_PENDING) {
         *out = STEP_PENDING;
+        return 1;
+    }
+    if (mode == ASX_TASK_GROUP_FIRST_OK) {
+        /* Ok(value) or a FirstOkError (vocabulary §5): the status is the
+         * group result, the value null. */
+        observe(t, idx, op, status_node(st), asx_json_new_null(g_out));
         return 1;
     }
     if (mode == ASX_TASK_GROUP_RACE) {

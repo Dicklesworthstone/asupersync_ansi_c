@@ -327,6 +327,26 @@ TEST(race_loser_obligations_are_leaked_before_resolve) {
  * FIRST_OK / QUORUM
  * ------------------------------------------------------------------- */
 
+/* FIRST_OK: the owner first, then `n` attempts (from g_m), spawned by the
+ * group one at a time. */
+static asx_status first_ok_group(asx_region_id r, uint32_t n, asx_task_id *owner) {
+    asx_status st;
+    uint32_t i;
+    memset(&g_owner, 0, sizeof(g_owner));
+    st = asx_task_group_init(&g_owner.group, ASX_TASK_GROUP_FIRST_OK, 0);
+    if (st != ASX_OK) return st;
+    st = asx_task_spawn(r, poll_owner, &g_owner, owner);
+    if (st != ASX_OK) return st;
+    for (i = 0; i < n; i++) {
+        g_m[i].region = r;
+        st = asx_task_group_add_attempt(&g_owner.group, r, poll_member, &g_m[i]);
+        if (st != ASX_OK) return st;
+    }
+    return ASX_OK;
+}
+
+/* An error moves on to the next attempt; the first OK wins and later
+ * attempts never start. */
 TEST(first_ok_skips_failures) {
     asx_region_id r;
     asx_task_id owner;
@@ -338,13 +358,82 @@ TEST(first_ok_skips_failures) {
     member_init(1, 2, ASX_OK);
     member_init(2, 0, ASX_OK);
     ASSERT_EQ(asx_region_open(&r), ASX_OK);
-    ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_FIRST_OK, 0, 3, &owner), ASX_OK);
+    ASSERT_EQ(first_ok_group(r, 3, &owner), ASX_OK);
     ASSERT_TRUE(run_until_owner_done(r));
     ASSERT_EQ(g_owner.result, ASX_OK);
     ASSERT_EQ(asx_task_group_winner(&g_owner.group), 1);
-    ASSERT_TRUE(g_m[2].cancelled);
+    ASSERT_EQ(g_m[2].polls, 0u);
     ASSERT_EQ(asx_task_group_member_result(&g_owner.group, 0, &out, &mst), ASX_OK);
     ASSERT_EQ(mst, ASX_E_DISCONNECTED);
+    ASSERT_EQ(asx_task_group_member_result(&g_owner.group, 2, &out, &mst),
+              ASX_E_TASK_NOT_COMPLETED);
+}
+
+/* Attempts do not overlap: the second starts only after the first ended,
+ * so although its deadline (1 ms) is earlier, it completes second. */
+TEST(first_ok_runs_attempts_one_at_a_time) {
+    asx_region_id r;
+    asx_task_id owner;
+
+    setup();
+    member_init(0, 5, ASX_E_DISCONNECTED);
+    member_init(1, 1, ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(first_ok_group(r, 2, &owner), ASX_OK);
+    ASSERT_TRUE(run_until_owner_done(r));
+    ASSERT_EQ(g_owner.result, ASX_OK);
+    ASSERT_EQ(asx_task_group_winner(&g_owner.group), 1);
+    ASSERT_TRUE(g_m[0].done_seq < g_m[1].done_seq);
+}
+
+/* The owner's cancel is passed to the running attempt (with the owner's
+ * reason), which is still awaited; no further attempt starts. */
+TEST(first_ok_owner_cancel_reaches_the_running_attempt) {
+    asx_region_id r;
+    asx_task_id owner;
+    asx_budget run;
+    asx_status st;
+
+    setup();
+    member_init(0, 0, ASX_OK); /* parks until cancelled */
+    member_init(1, 1, ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(first_ok_group(r, 2, &owner), ASX_OK);
+    run = asx_budget_from_polls(50);
+    st = asx_scheduler_run(r, &run);
+    ASSERT_TRUE(st != ASX_OK);
+    ASSERT_TRUE(!g_owner.done);
+    ASSERT_EQ(g_m[0].polls > 0u, 1);
+    ASSERT_EQ(asx_task_cancel(owner, ASX_CANCEL_SHUTDOWN), ASX_OK);
+    ASSERT_TRUE(run_until_owner_done(r));
+    ASSERT_EQ(g_owner.result, ASX_E_CANCELLED);
+    ASSERT_TRUE(g_m[0].cancelled);
+    ASSERT_EQ((int)g_m[0].kind, (int)ASX_CANCEL_SHUTDOWN);
+    ASSERT_EQ(g_m[1].polls, 0u);
+}
+
+/* Attempts are the only FIRST_OK members; an empty FIRST_OK fails. */
+TEST(first_ok_api) {
+    asx_region_id r;
+    asx_task_id owner;
+    asx_task_id t;
+    asx_task_group g;
+
+    setup();
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_group_init(&g, ASX_TASK_GROUP_FIRST_OK, 0), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_member, &g_m[0], &t), ASX_OK);
+    ASSERT_EQ(asx_task_group_add(&g, t), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_task_group_spawn(&g, r, poll_member, &g_m[1], NULL), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_task_group_add_attempt(&g, r, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_task_group_init(&g, ASX_TASK_GROUP_RACE, 0), ASX_OK);
+    ASSERT_EQ(asx_task_group_add_attempt(&g, r, poll_member, &g_m[1]), ASX_E_INVALID_STATE);
+
+    setup();
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(first_ok_group(r, 0, &owner), ASX_OK);
+    ASSERT_TRUE(run_until_owner_done(r));
+    ASSERT_EQ(g_owner.result, ASX_E_INVALID_ARGUMENT);
 }
 
 TEST(first_ok_fails_when_every_member_fails) {
@@ -356,7 +445,7 @@ TEST(first_ok_fails_when_every_member_fails) {
     member_init(0, 1, ASX_E_DISCONNECTED);
     member_init(1, 2, ASX_E_WOULD_BLOCK);
     ASSERT_EQ(asx_region_open(&r), ASX_OK);
-    ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_FIRST_OK, 0, 2, &owner), ASX_OK);
+    ASSERT_EQ(first_ok_group(r, 2, &owner), ASX_OK);
     ASSERT_TRUE(run_until_owner_done(r));
     ASSERT_EQ(g_owner.result, ASX_E_DISCONNECTED);
     ASSERT_EQ(asx_task_group_winner(&g_owner.group), -1);
@@ -601,6 +690,9 @@ int main(void) {
     RUN_TEST(race_same_round_completion_picks_lowest_index);
     RUN_TEST(race_loser_obligations_are_leaked_before_resolve);
     RUN_TEST(first_ok_skips_failures);
+    RUN_TEST(first_ok_runs_attempts_one_at_a_time);
+    RUN_TEST(first_ok_owner_cancel_reaches_the_running_attempt);
+    RUN_TEST(first_ok_api);
     RUN_TEST(first_ok_fails_when_every_member_fails);
     RUN_TEST(quorum_reached_drains_remaining_members);
     RUN_TEST(quorum_impossible_resolves_early);
