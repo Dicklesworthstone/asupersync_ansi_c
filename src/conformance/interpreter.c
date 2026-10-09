@@ -70,6 +70,7 @@ typedef struct {
     asx_region_id region;
     asx_task_id id;
     int spawned;           /* asx_task_spawn succeeded */
+    asx_status refused;    /* why asx_task_spawn failed (ASX_OK if it did not) */
     uint32_t program;      /* array node in the scenario document */
     uint32_t pc;           /* 0-based index of the current step */
     uint32_t phase;        /* suspension state of the current step */
@@ -1546,12 +1547,20 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             child->id = id;
             child->spawned = 1;
             (void)asx_cx_init(&child->cx, child->region, id, ASX_CAP_CANCEL_CHECK);
+        } else {
+            child->refused = st;
         }
         observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
     if (strcmp(op, "try_join") == 0) {
         it_task *target = task_by_name(it_str(step, "task"));
+        /* A refused spawn has no task; joining it observes the refusal, as
+         * Rust's join of a child admission refused does (DSL §3.4). */
+        if (target != NULL && target->refused != ASX_OK) {
+            observe_status(t, idx, label, target->refused);
+            return STEP_NEXT;
+        }
         if (target == NULL || !target->spawned || target->joined) {
             it_fail_task(t, idx, "try_join of an unknown or already joined task");
             return STEP_END;
@@ -1713,6 +1722,10 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
     if (strcmp(op, "join") == 0) {
         it_task *target = task_by_name(it_str(step, "task"));
         asx_outcome ignored;
+        if (target != NULL && target->refused != ASX_OK) {
+            observe_status(t, idx, op, target->refused);
+            return STEP_NEXT;
+        }
         if (target == NULL || !target->spawned || target->joined) {
             it_fail_task(t, idx, "join of an unknown or already joined task");
             return STEP_END;

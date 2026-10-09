@@ -767,21 +767,24 @@ ASX_API ASX_MUST_USE asx_status asx_task_arm_timer(asx_task_id self, asx_time de
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_wait_until(asx_task_id self, asx_time deadline);
 
-/* A sleep's timer is traced by the sleep itself, as Rust's Sleep does
+/* End a sleep that did not complete at its deadline (cancelled, dropped).
+ * A sleep's timer is traced by the sleep itself, as Rust's Sleep does
  * (sleep.rs:660-690): the scheduler firing a due timer only wakes the
- * task; the sleep then records how it ended.
- *
- * asx_task_cancel_timer: the sleep ended without completing at its
- * deadline (cancelled, dropped): records ASX_TRACE_TIMER_CANCEL if a
- * traced timer is registered, even one that already woke the task, and
- * disarms the task's wake.
- * asx_task_complete_timer: the sleep completed at its deadline: records
- * ASX_TRACE_TIMER_FIRE if a traced timer is registered (a sleep ready at
- * its first poll registered none) and disarms the wake.
- * Both are no-ops when nothing is registered.
- * Return ASX_OK or a lookup error for a bad handle.
+ * task; the sleep then records how it ended. This records
+ * ASX_TRACE_TIMER_CANCEL if a traced timer is registered, even one that
+ * already woke the task, and disarms the task's wake; a no-op when
+ * nothing is registered.
+ * Returns ASX_OK, or ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for a bad handle.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_cancel_timer(asx_task_id self);
+
+/* End a sleep that completed at its deadline: records
+ * ASX_TRACE_TIMER_FIRE if a traced timer is registered (a sleep ready at
+ * its first poll registered none) and disarms the wake, as Rust's
+ * Sleep::complete_ready_registration (sleep.rs:677); a no-op when nothing
+ * is registered.
+ * Returns ASX_OK, or ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for a bad handle.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_complete_timer(asx_task_id self);
 
 /* Wake `watcher` when `target` completes, without joining it (a monitor:

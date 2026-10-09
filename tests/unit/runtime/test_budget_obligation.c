@@ -182,6 +182,87 @@ TEST(unbounded_poll_quota_is_not_consumed) {
     ASSERT_EQ(left.deadline, (asx_time)0);
 }
 
+typedef struct {
+    uint32_t polls;
+    asx_cancel_kind self_cancel; /* cancel kind it requests on poll 1 */
+    int checkpoint;              /* checkpoint on poll 2 (else read the reason) */
+    asx_cancel_kind kind;        /* kind seen on poll 2 */
+    int cancelled;               /* the poll-2 checkpoint reported a cancel */
+} spent_state;
+
+/* Poll 1: requests its own cancel (no checkpoint) and yields. Poll 2:
+ * checkpoints, or only reads its cancel reason, and completes. */
+static asx_status poll_spent(void *ud, asx_task_id self) {
+    spent_state *s = (spent_state *)ud;
+    asx_checkpoint_result cp;
+    asx_cancel_reason reason;
+    s->polls++;
+    if (s->polls == 1u) {
+        if (asx_task_cancel(self, s->self_cancel) != ASX_OK) return ASX_E_INVALID_STATE;
+        return ASX_E_PENDING;
+    }
+    if (s->checkpoint) {
+        if (asx_checkpoint(self, &cp) != ASX_OK) return ASX_E_INVALID_STATE;
+        s->cancelled = cp.cancelled;
+        s->kind = cp.kind;
+    } else {
+        if (asx_task_get_cancel_reason(self, &reason) != ASX_OK) return ASX_E_INVALID_STATE;
+        s->kind = reason.kind;
+    }
+    return ASX_OK;
+}
+
+static void run_spent(spent_state *s, uint32_t quota) {
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget tb;
+    asx_budget run;
+    asx_status st;
+    setup();
+    tb = asx_budget_from_polls(quota);
+    run = asx_budget_from_polls(100);
+    st = asx_region_open(&r);
+    if (st == ASX_OK) st = asx_task_spawn_with_budget(r, poll_spent, s, &tb, &t);
+    if (st == ASX_OK) st = asx_scheduler_run(r, &run);
+    (void)st;
+}
+
+/* A spent poll quota strengthens a weaker cancel already pending, at the
+ * checkpoint (Rust Cx::checkpoint, cx.rs:2824-2836) and before a poll (the
+ * lab, lab/runtime.rs:4663-4670); fuzz finding gen-1-73 (bd-ij9w). */
+TEST(spent_poll_quota_strengthens_pending_cancel_at_checkpoint) {
+    spent_state s;
+    memset(&s, 0, sizeof(s));
+    s.self_cancel = ASX_CANCEL_DEADLINE;
+    s.checkpoint = 1;
+    /* Poll 2 spends the last unit; its checkpoint sees the quota at 0. */
+    run_spent(&s, 2u);
+    ASSERT_EQ(s.polls, 2u);
+    ASSERT_TRUE(s.cancelled);
+    ASSERT_EQ(s.kind, ASX_CANCEL_POLL_QUOTA);
+}
+
+TEST(spent_poll_quota_strengthens_pending_cancel_before_poll) {
+    spent_state s;
+    memset(&s, 0, sizeof(s));
+    s.self_cancel = ASX_CANCEL_DEADLINE;
+    /* Poll 1 spends the only unit; poll 2 is admitted with none left. */
+    run_spent(&s, 1u);
+    ASSERT_EQ(s.polls, 2u);
+    ASSERT_EQ(s.kind, ASX_CANCEL_POLL_QUOTA);
+}
+
+TEST(spent_poll_quota_keeps_a_stronger_pending_cancel) {
+    spent_state s;
+    memset(&s, 0, sizeof(s));
+    s.self_cancel = ASX_CANCEL_SHUTDOWN;
+    s.checkpoint = 1;
+    run_spent(&s, 2u);
+    ASSERT_EQ(s.polls, 2u);
+    ASSERT_TRUE(s.cancelled);
+    ASSERT_EQ(s.kind, ASX_CANCEL_SHUTDOWN);
+}
+
 TEST(cost_quota_exhaustion_cancels_with_cost_budget) {
     asx_region_id r;
     asx_task_id t;
@@ -530,6 +611,9 @@ int main(void) {
     RUN_TEST(expired_deadline_cancels_before_first_poll);
     RUN_TEST(poll_quota_cancels_after_quota_polls);
     RUN_TEST(unbounded_poll_quota_is_not_consumed);
+    RUN_TEST(spent_poll_quota_strengthens_pending_cancel_at_checkpoint);
+    RUN_TEST(spent_poll_quota_strengthens_pending_cancel_before_poll);
+    RUN_TEST(spent_poll_quota_keeps_a_stronger_pending_cancel);
     RUN_TEST(cost_quota_exhaustion_cancels_with_cost_budget);
     RUN_TEST(consume_cost_rejects_stale_handle);
     RUN_TEST(budgets_tighten_down_the_region_tree);

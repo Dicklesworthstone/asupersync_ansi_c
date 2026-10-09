@@ -553,12 +553,13 @@ static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_s
 }
 
 /* Enforce a task's budget before polling it: deadline -> DEADLINE cancel,
- * exhausted poll quota -> POLL_QUOTA cancel. `*now`/`*have_now` cache one
- * clock read per round (only taken when a deadline is set). */
+ * exhausted poll quota -> POLL_QUOTA cancel, which also strengthens a
+ * cancel already pending (Rust's lab, lab/runtime.rs:4663-4670; fuzz
+ * finding gen-1-73, bd-ij9w). `*now`/`*have_now` cache one clock read per
+ * round (only taken when one is needed). */
 static void sched_enforce_budget(asx_task_slot *t, asx_task_id tid, asx_time *now, int *have_now) {
     asx_status st;
-    if (t->cancel_pending) return;
-    if (t->budget.deadline != 0u) {
+    if (!t->cancel_pending && t->budget.deadline != 0u) {
         if (!*have_now) {
             *now = sched_now();
             *have_now = 1;

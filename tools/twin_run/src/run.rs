@@ -48,6 +48,9 @@ struct Shared {
     /// Children spawned through `cx.spawn` by provisional mailbox id, until
     /// their admission is resolved.
     provisional: HashMap<TaskId, String>,
+    /// Child name -> index of the observation of the spawn step that
+    /// created it (`project_denied_spawns`).
+    spawn_observations: HashMap<String, usize>,
     /// Task name -> name of the region it runs in.
     task_regions: HashMap<String, String>,
     /// Declared sync objects by name.
@@ -55,7 +58,8 @@ struct Shared {
     region_ids: HashMap<String, RegionId>,
     region_names: HashMap<RegionId, String>,
     region_parents: HashMap<String, Option<String>>,
-    /// Timer names by the trace seq of their TimerScheduled event.
+    /// Timer names by the trace seq of each Timer event their sleep recorded
+    /// (`NamedSleep`).
     timer_names: HashMap<u64, String>,
     handles: HashMap<String, TaskHandle<Body>>,
     /// Join results, projected only after the run (`finish_outcomes`): a
@@ -741,6 +745,8 @@ fn exec_sync(
                     let mut s = lock(&ctx.shared);
                     s.provisional.insert(handle.task_id(), child.clone());
                     s.task_regions.insert(child.clone(), child_region_name);
+                    let at = s.observations.len();
+                    s.spawn_observations.insert(child.clone(), at);
                     s.handles.insert(child, handle);
                     drop(s);
                     observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
@@ -1138,7 +1144,15 @@ async fn exec_step(
             } else {
                 asupersync::time::sleep_until(deadline)
             };
-            name_timer_on_first_poll(cx, &ctx.shared, me, &mut local.timers, sleep).await;
+            NamedSleep {
+                sleep: Some(Box::pin(sleep)),
+                buffer: cx.trace_buffer(),
+                shared: ctx.shared.clone(),
+                owner: me,
+                counter: &mut local.timers,
+                name: None,
+            }
+            .await;
             observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
         }
         "return" => {
@@ -1359,46 +1373,84 @@ fn spawn_members(
     Ok(handles)
 }
 
-/// Await a sleep, naming the timer it schedules on its first poll. The lab
-/// trace's Timer events carry no task, so the owner is identified by being
-/// the task that is polling when TimerScheduled is recorded (worker_count 1).
-async fn name_timer_on_first_poll<F: Future<Output = ()>>(
-    cx: &Cx,
-    shared: &SharedRef,
-    owner: &str,
-    counter: &mut u32,
-    sleep: F,
-) {
-    let buffer = cx.trace_buffer();
-    let before = buffer
-        .as_ref()
-        .map_or(0, |b| b.snapshot().last().map_or(0, |e| e.seq));
-    let mut sleep = std::pin::pin!(sleep);
-    let mut first = true;
-    std::future::poll_fn(|pcx| {
-        let polled = sleep.as_mut().poll(pcx);
-        if first {
-            first = false;
-            if let Some(buffer) = &buffer {
-                let mut s = lock(shared);
-                for event in buffer.snapshot().iter().filter(|e| e.seq > before) {
-                    if let (TraceEventKind::TimerScheduled, TraceData::Timer { .. }) =
-                        (&event.kind, &event.data)
-                    {
-                        // Numbered by timers actually scheduled (a sleep that
-                        // schedules none takes no number), keyed by the
-                        // scheduling event, not the timer id: the lab reuses a
-                        // fired timer's id for later sleeps.
-                        *counter += 1;
-                        s.timer_names
-                            .insert(event.seq, format!("{owner}/tm{}", *counter));
-                    }
-                }
+/// A sleep that names the Timer events it records. Those events carry no
+/// task, and their timer id is a wheel slab index that is reused once the
+/// timer fires (time/wheel.rs:554): a sleep records its TimerFired when it
+/// is next polled (time/sleep.rs:688), by which time another sleep may have
+/// been scheduled under the same id. So every Timer event is named by the
+/// sleep that records it, the one being polled or dropped at that moment
+/// (worker_count 1): its first TimerScheduled takes the owner's next timer
+/// number (a sleep that schedules none takes no number, as C counts them),
+/// and a re-arm, the fire and a cancel keep that name.
+struct NamedSleep<'a, F> {
+    sleep: Option<Pin<Box<F>>>,
+    buffer: Option<asupersync::trace::TraceBufferHandle>,
+    shared: SharedRef,
+    owner: &'a str,
+    counter: &'a mut u32,
+    name: Option<String>,
+}
+
+impl<F> NamedSleep<'_, F> {
+    fn last_seq(&self) -> Option<u64> {
+        self.buffer.as_ref()?.snapshot().last().map(|e| e.seq)
+    }
+
+    /// Name the Timer events recorded after `after`.
+    fn name_events(&mut self, after: Option<u64>) {
+        let Some(events) = self.buffer.as_ref().map(|b| b.snapshot()) else {
+            return;
+        };
+        let mut s = lock(&self.shared);
+        for event in events.iter().filter(|e| after.is_none_or(|a| e.seq > a)) {
+            if !matches!(event.data, TraceData::Timer { .. }) {
+                continue;
             }
+            let name = match (&event.kind, &self.name) {
+                (_, Some(name)) => name.clone(),
+                (TraceEventKind::TimerScheduled, None) => {
+                    *self.counter += 1;
+                    let name = format!("{}/tm{}", self.owner, *self.counter);
+                    self.name = Some(name.clone());
+                    name
+                }
+                // Fired or cancelled before this sleep scheduled anything:
+                // not its event (project_trace fails it as unnamed).
+                (_, None) => continue,
+            };
+            s.timer_names.insert(event.seq, name);
         }
+    }
+}
+
+impl<F: Future<Output = ()>> Future for NamedSleep<'_, F> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, pcx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        let this = self.get_mut();
+        let before = this.last_seq();
+        let Some(sleep) = this.sleep.as_mut() else {
+            return std::task::Poll::Ready(());
+        };
+        let polled = sleep.as_mut().poll(pcx);
+        if polled.is_ready() {
+            this.sleep = None;
+        }
+        this.name_events(before);
         polled
-    })
-    .await;
+    }
+}
+
+impl<F> Drop for NamedSleep<'_, F> {
+    /// A sleep dropped while pending (its task cancelled) records the
+    /// cancel of its timer as it drops.
+    fn drop(&mut self) {
+        if let Some(sleep) = self.sleep.take() {
+            let before = self.last_seq();
+            drop(sleep);
+            self.name_events(before);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1627,6 +1679,13 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
 
     // Finish: run to quiescence with timer auto-advance.
     lab.run_with_auto_advance();
+    // Before anything can fail the run: a failing scenario is the one to
+    // diagnose.
+    if let Some(raw) = raw {
+        for e in lab.trace().snapshot().iter() {
+            raw.push(format!("{} {:?} {:?}", e.seq, e.kind, e.data));
+        }
+    }
 
     let errors = std::mem::take(&mut lock(&shared).errors);
     if !errors.is_empty() {
@@ -1636,9 +1695,17 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
     let schedule = lab
         .finish_forced_schedule_recording()
         .map_err(|e| format!("{e:?}"))?;
-    let schedule_bytes = schedule
-        .to_canonical_bytes()
-        .map_err(|e| format!("{e:?}"))?;
+    // A forced schedule only replays a run that reached quiescence (its
+    // canonical form refuses a partial source, lab/runtime.rs:1587); a
+    // scenario that ends with work stuck has none, and its snapshot says so.
+    let forced_schedule = if schedule.terminal_quiescent() {
+        let bytes = schedule
+            .to_canonical_bytes()
+            .map_err(|e| format!("{e:?}"))?;
+        Value::String(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    } else {
+        Value::Null
+    };
 
     // Harvest the outcomes of tasks nobody joined.
     {
@@ -1660,17 +1727,8 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
     }
 
     resolve_admissions(&lab, &shared)?;
-    if let Some(unadmitted) = lock(&shared).provisional.values().next() {
-        return Err(format!(
-            "spawned task {unadmitted:?} was never admitted (scenario or harness defect)"
-        ));
-    }
+    project_denied_spawns(&mut lock(&shared))?;
     finish_outcomes(&mut lock(&shared))?;
-    if let Some(raw) = raw {
-        for e in lab.trace().snapshot().iter() {
-            raw.push(format!("{} {:?} {:?}", e.seq, e.kind, e.data));
-        }
-    }
     let events = project_trace(&lab, &shared)?;
     let trace = canon::canonical_trace(&events.events)?;
     let snapshot = build_snapshot(&lab, &shared, &events)?;
@@ -1705,7 +1763,7 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
         "schedule": {
             "certificate_hash": format!("{:016x}", lab.certificate().hash()),
             "decisions": lab.certificate().decisions(),
-            "forced_schedule": schedule_bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+            "forced_schedule": forced_schedule,
         },
     }))
 }
@@ -1826,6 +1884,44 @@ fn resolve_admissions(lab: &LabRuntime, shared: &SharedRef) -> RunResult<()> {
     Ok(())
 }
 
+/// Spawns their region never admitted. Rust's `cx.spawn` accepts a child
+/// into the spawn mailbox and admission later refuses it when the region is
+/// closing or closed (`SpawnError::RegionClosed`, runtime/state.rs:1702),
+/// resolving the handle as cancelled (spawn_mailbox.rs:1394-1417); the
+/// child never runs and has no trace events. C refuses the same spawn
+/// synchronously with `ASX_E_REGION_CLOSED`, so the refusal is projected
+/// onto the spawn step, and a join of the child observes it too (DSL §3.4).
+/// An unadmitted spawn whose handle did not resolve as cancelled is a
+/// scenario or harness defect.
+fn project_denied_spawns(s: &mut Shared) -> RunResult<()> {
+    let denied: Vec<String> = s.provisional.values().cloned().collect();
+    for name in denied {
+        if !matches!(
+            s.raw_outcomes.get(&name),
+            Some(Err(JoinError::Cancelled(_)))
+        ) {
+            return Err(format!(
+                "spawned task {name:?} was never admitted (scenario or harness defect)"
+            ));
+        }
+        s.raw_outcomes.remove(&name);
+        let spawn_at = s.spawn_observations.get(&name).copied();
+        let join_at = s
+            .outcome_observations
+            .iter()
+            .filter(|(_, target)| *target == name)
+            .map(|(i, _)| *i);
+        for i in spawn_at.into_iter().chain(join_at).collect::<Vec<_>>() {
+            s.observations[i]["status"] = json!("ASX_E_REGION_CLOSED");
+            s.observations[i]["value"] = Value::Null;
+        }
+        s.outcome_observations.retain(|(_, target)| *target != name);
+        s.task_regions.remove(&name);
+    }
+    s.provisional.clear();
+    Ok(())
+}
+
 struct Projected {
     events: Vec<Value>,
     /// obligation name -> (kind, holder, region, last state, abort reason)
@@ -1926,18 +2022,21 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
                 K::TimerScheduled | K::TimerFired | K::TimerCancelled,
                 TraceData::Timer { timer_id, deadline },
             ) => {
-                // A scheduling event carries the name its sleep recorded (a
-                // re-arm of the same timer keeps its name); fired and
-                // cancelled events refer to the timer's current schedule.
-                if event.kind == K::TimerScheduled {
-                    if let Some(name) = s.timer_names.get(&event.seq) {
-                        timer_current.insert(*timer_id, name.clone());
+                // Every event its sleep recorded carries the sleep's name
+                // (NamedSleep); one recorded outside the sleep falls back to
+                // the timer id's current schedule.
+                let name = match s.timer_names.get(&event.seq) {
+                    Some(name) => {
+                        if event.kind == K::TimerScheduled {
+                            timer_current.insert(*timer_id, name.clone());
+                        }
+                        name.clone()
                     }
-                }
-                let name = timer_current
-                    .get(timer_id)
-                    .cloned()
-                    .ok_or_else(|| format!("unnamed timer {timer_id}"))?;
+                    None => timer_current
+                        .get(timer_id)
+                        .cloned()
+                        .ok_or_else(|| format!("unnamed timer {timer_id}"))?,
+                };
                 match event.kind {
                     K::TimerScheduled => {
                         let d = deadline.map_or(0, |t| t.as_nanos());
