@@ -1,0 +1,21 @@
+[package]
+name = "twin-run"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "W1.4 twin-run oracle (bd-9kll.2.4): runs asx.scenario.v2 scenarios inside the real asupersync LabRuntime and projects them into asx.vocab.v2."
+
+[[bin]]
+name = "twin_run"
+path = "src/main.rs"
+
+[dependencies]
+# The semantic authority, pinned by rev (0.6.0 is not on crates.io). Keep in
+# sync with docs/rust_baseline_inventory.json (pending_rebase / active).
+asupersync = { git = "https://github.com/Dicklesworthstone/asupersync", rev = "5e60b1c4c53d62aaddae68de3ee7de4732f1755b" }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+
+# Standalone: not a member of any parent workspace.
+[workspace]
