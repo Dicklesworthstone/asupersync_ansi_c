@@ -16,7 +16,9 @@ E2E_BIN="${E2E_ARTIFACT_DIR}/e2e_server_shutdown"
 # Build libasx.a if not present
 LIB_A="${E2E_PROJECT_ROOT}/build/lib/libasx.a"
 if [ ! -f "$LIB_A" ]; then
-    if ! ~/.local/bin/rch exec -- make -C "${E2E_PROJECT_ROOT}" build 2>/dev/null; then
+    # Plain make: the caller decides where the suite runs; a nested rch exec
+    # inside an offloaded run fails closed.
+    if ! "${MAKE:-make}" -C "${E2E_PROJECT_ROOT}" build; then
         e2e_scenario "server_shutdown.build" "library build failed" "fail"
         e2e_finish
         exit $?
