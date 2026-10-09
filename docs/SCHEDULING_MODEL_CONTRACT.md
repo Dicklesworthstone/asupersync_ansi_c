@@ -174,7 +174,7 @@ generation order.
 | `Cx::spawn` child | Admitted at the next step: `schedule(t, budget.priority)` | Inherited budget priority |
 | Waker wake (timer fire, channel, notify, join) | `schedule(t, waker.priority)`, on the ready lane | Priority at the task's last poll |
 | `yield_now` | Wake during the poll, then Pending | Current poll's priority |
-| Driver `cancel_task` | If newly cancelled: `schedule_cancel(t, cleanup priority)`. Then the CancelTaskWaker: `schedule_cancel(t, waker priority)` | Cleanup, then last-poll priority |
+| Driver `cancel_task` | If the request changed the reason or cleanup budget (`cancel_task` returns `changed && published`, ST:3426-3448; a strengthening counts, not only a new cancel): `schedule_cancel(t, cleanup priority)`. Then the CancelTaskWaker: `schedule_cancel(t, waker priority)` | Cleanup, then last-poll priority |
 | Region cancel (`cancel_request`, ST:7811-7876) | For each task whose reason or cleanup budget changed: `schedule_cancel(t, request's cleanup priority)`, all tasks first. Then every task's CancelTaskWaker | As left |
 | Checkpoint ack + Pending | `schedule_cancel(t, cleanup priority)` | Cleanup |
 

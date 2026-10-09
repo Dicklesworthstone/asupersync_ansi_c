@@ -163,16 +163,14 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
         }
         t->cancel_reason = winner;
         t->cancel_epoch++;
-        /* Lab dispatch: a region cancel or handle abort that changed
-         * anything schedules the task on the cancel lane at its request's
-         * cleanup priority; a changed reason also reaches its cancel
-         * waker, as does a wake a budget cancel left due
+        /* Lab dispatch: a region cancel, handle abort or direct cancel that
+         * changed anything schedules the task on the cancel lane at its
+         * request's cleanup priority (RuntimeState::cancel_task reports
+         * changed && published, state.rs:3426-3448); a changed reason also
+         * reaches its cancel waker, as does a wake a budget cancel left due
          * (record/task.rs:840-866). */
         if (asx_lab_dispatch_active() && source != ASX_CANCEL_SRC_BUDGET) {
-            if ((source == ASX_CANCEL_SRC_REGION || source == ASX_CANCEL_SRC_HANDLE) &&
-                (reason_changed || budget_changed)) {
-                asx_lab_schedule_cancel(t, cleanup.priority);
-            }
+            if (reason_changed || budget_changed) asx_lab_schedule_cancel(t, cleanup.priority);
             if (reason_changed || t->cancel_wakers_pending) {
                 t->cancel_wakers_pending = 0u;
                 asx_lab_cancel_wake(t);
