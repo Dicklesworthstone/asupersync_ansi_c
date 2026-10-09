@@ -89,6 +89,13 @@ Consequences:
   `asx_region_open_child_poll`, `asx_region_cancel_request`,
   `asx_region_close_poll` / `asx_region_close_request`
   (`lab_dispatch.c`, `asx_lab_drain_region_commands`).
+- A join-handle abort queued during step N (`JoinHandle::abort_with_reason`)
+  is applied at the start of step N+1: after the admissions, and again
+  after the region commands, at most 16 per drain, several for one task
+  strengthened into one. A target spawned in step N takes its abort as it
+  is admitted and goes to the cancel lane only. A later abort that changes
+  the reason or cleanup budget schedules the cancel again
+  (`record/task.rs:1019-1049`). C: `asx_task_abort_request`.
 - Timers due at the current time fire inside the step, after the draw and
   before the pick.
 - Wakes that happen during a poll get their generation before the
@@ -218,11 +225,11 @@ The priority changes when:
 1. Join wake timing. Is the joiner woken during the child's final poll
    (result channel), or in the completion branch (retirement barrier)? C
    wakes joiners at completion. No fixture has distinguished the two yet.
-2. Handle aborts are deferred to the next step in Rust
-   (`drain_handle_cancel_requests`): the target's Cx sees the cancel at
-   once (`apply_or_defer_cancel_reason`, `task_handle.rs:470-560`), while
-   its record and cancel lane change at the next step. C's `abort_task`
-   applies the whole cancel at once. Region commands follow Rust (§2).
+2. Handle aborts: Rust's target Cx sees the cancel at once
+   (`apply_or_defer_cancel_reason`, `task_handle.rs:470-542`); its record
+   and cancel lane change at the next step. C applies the whole abort at
+   the next step (`asx_task_abort_request`, §2). The Cx-only window is not
+   observable with one worker: the drain runs before the next poll.
 3. A spawn that is never admitted (its region closed before the next
    step): Rust never creates the task. C refuses it synchronously when the
    region is already closing. A cancel in the window between enqueue and

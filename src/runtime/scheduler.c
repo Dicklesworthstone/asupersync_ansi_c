@@ -1050,10 +1050,12 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
     asx_status st;
 
     *out_dispatched = 0;
-    /* step_inner (LR:4481-4500): spawn admissions, then region commands,
-     * then the step's draw. */
+    /* step_inner (LR:4481-4500): spawn admissions, handle aborts, region
+     * commands, handle aborts again, then the step's draw. */
     asx_lab_admit_pending();
+    asx_lab_drain_handle_cancels();
     asx_lab_drain_region_commands();
+    asx_lab_drain_handle_cancels();
     r = asx_lab_rng_next();
     if (g_timer_heap_len > 0u) (void)timers_fire(sched_now());
     (void)sched_drain_wakers();
@@ -1075,8 +1077,8 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
 }
 
 /* Rust's run_until_idle (LR:3428-3450) when !advance_clock: step while a
- * task is scheduled, awaits admission or a region command is queued
- * (has_pending_dispatch_commands, LR:2872). run_with_auto_advance
+ * task is scheduled, awaits admission or a region command or handle abort
+ * is queued (has_pending_dispatch_commands, LR:2872). run_with_auto_advance
  * (LR:3224-3316) otherwise: when nothing is scheduled, move the clock to
  * the next timer and fire it outside any step, and stop at quiescence or
  * after 1000 steps without a dispatch. The budget counts steps. */
@@ -1090,7 +1092,7 @@ static asx_status sched_lab_run(asx_budget *budget, int advance_clock) {
         ASX_CHECKPOINT_WAIVER("kernel-scheduler: the lab step loop; the step budget and the "
                               "1000-step stuck bound end it");
         if (asx_lab_scheduled_count() > 0u || asx_lab_admissions_pending() ||
-            asx_lab_region_commands_pending()) {
+            asx_lab_region_commands_pending() || asx_lab_handle_cancels_pending()) {
             if (asx_budget_consume_poll(budget) == 0) {
                 sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, step);
                 asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, step);

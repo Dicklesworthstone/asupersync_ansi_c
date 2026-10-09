@@ -241,19 +241,24 @@ asx_time asx_cancel_now_internal(void);
 /* Where a cancel request comes from. It decides the trace event and, under
  * lab dispatch, how the task is scheduled (Rust: run.rs driver cancels,
  * state.rs:7811-7876, cx.rs:2824-2836):
- *   DIRECT — a task cancel (RuntimeState::cancel_task, a handle abort): no
- *            cancel.requested event; lab: the cleanup-priority cancel entry
- *            only when newly cancelled.
+ *   DIRECT — a task cancel (RuntimeState::cancel_task): no cancel.requested
+ *            event; lab: the cleanup-priority cancel entry only when newly
+ *            cancelled.
  *   REGION — a region or policy cancel (cancel_request): cancel.requested
  *            for a newly cancelled task; lab: the cleanup-priority entry
  *            whenever the request changed the reason or cleanup budget, the
  *            cancel wakes held until the whole region is visited.
+ *   HANDLE — a join handle's abort, as the runtime applies it
+ *            (cancel_task_for_handle, state.rs:3462; record/task.rs:1019):
+ *            no event; lab: the cleanup-priority entry whenever the request
+ *            changed the reason or cleanup budget.
  *   BUDGET — budget exhaustion the task observes itself: no event and no
  *            scheduling (Rust raises it on the task's Cx only). */
 typedef enum {
     ASX_CANCEL_SRC_DIRECT = 0,
     ASX_CANCEL_SRC_REGION = 1,
-    ASX_CANCEL_SRC_BUDGET = 2
+    ASX_CANCEL_SRC_BUDGET = 2,
+    ASX_CANCEL_SRC_HANDLE = 3
 } asx_cancel_source;
 
 /* Move a budget cancel the record has not taken (cancel_unmaterialized)
@@ -340,6 +345,15 @@ asx_status asx_lab_region_open_command(asx_task_slot *opener, asx_region_id pare
 asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_reason *reason);
 int asx_lab_region_commands_pending(void);
 void asx_lab_drain_region_commands(void);
+/* Join-handle aborts (Rust JoinHandle::abort_with_reason): queued, applied
+ * at the start of the next step after admissions and around the region
+ * commands (at most 16 per drain, coalesced per task); a target awaiting
+ * admission takes its aborts at admission, onto the cancel lane only.
+ * Queueing fails with ASX_E_RESOURCE_EXHAUSTED when full, changing
+ * nothing. */
+asx_status asx_lab_handle_cancel_command(const asx_task_slot *t, const asx_cancel_reason *reason);
+int asx_lab_handle_cancels_pending(void);
+void asx_lab_drain_handle_cancels(void);
 
 /* asx_task_slot.region_wait */
 enum {
@@ -356,6 +370,12 @@ void asx_region_wake_close_waiters_internal(asx_region_id id);
  * CancelReason::user("owned child region body finished") and its testing
  * default attribution (lab/runtime.rs:4193-4196). */
 asx_cancel_reason asx_region_close_reason_internal(void);
+/* A region command reaching a region that closed and whose slot was
+ * reused: Rust's cancel_request still records region.cancelled for the
+ * region, whose record is gone (state.rs:7756-7758), and does nothing
+ * else. */
+void asx_region_trace_cancel_of_gone_internal(asx_region_id region,
+                                              const asx_cancel_reason *reason);
 
 /* Resolve the obligations a completing task still holds, cancelled or
  * not, as leaks per the active policy (RECOVER aborts them with

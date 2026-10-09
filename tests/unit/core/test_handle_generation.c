@@ -164,6 +164,35 @@ TEST(task_lookup_validates_generation) {
     }
 }
 
+/* A completed task nobody joined keeps its closed region's slot: the new
+ * region gets another slot, and the outcome stays joinable (a Rust
+ * JoinHandle outlives its region's record). Once joined, the slot is
+ * recycled. */
+TEST(unjoined_task_keeps_closed_region_slot) {
+    asx_region_id first;
+    asx_region_id second;
+    asx_region_id third;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_outcome out;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&first), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(first, noop_poll, NULL, &tid), ASX_OK);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_scheduler_run(first, &budget), ASX_OK); /* completes OK */
+    ASSERT_EQ(asx_region_drain(first, &budget), ASX_OK);
+
+    ASSERT_EQ(asx_region_open(&second), ASX_OK);
+    ASSERT_NE(asx_handle_slot(second), asx_handle_slot(first));
+    ASSERT_EQ(asx_task_join(tid, &out), ASX_OK);
+    ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_OK);
+
+    ASSERT_EQ(asx_region_open(&third), ASX_OK);
+    ASSERT_EQ(asx_handle_slot(third), asx_handle_slot(first));
+    ASSERT_NE(asx_handle_generation(third), asx_handle_generation(first));
+}
+
 int main(void) {
     fprintf(stderr, "=== test_handle_generation ===\n");
     RUN_TEST(handle_pack_index_roundtrip);
@@ -176,6 +205,7 @@ int main(void) {
     RUN_TEST(region_reclaimed_handle_generation_increments);
     RUN_TEST(task_handle_has_generation_zero);
     RUN_TEST(task_lookup_validates_generation);
+    RUN_TEST(unjoined_task_keeps_closed_region_slot);
     TEST_REPORT();
     return test_failures;
 }

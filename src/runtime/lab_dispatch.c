@@ -94,6 +94,26 @@ typedef struct {
 static lab_region_cmd g_lab_rcmd[LAB_REGION_CMD_CAP];
 static uint32_t g_lab_rcmd_n = 0;
 
+/* Join-handle aborts (Rust JoinHandle::abort_with_reason,
+ * runtime/task_handle.rs:1005, 470-542): the runtime applies them at the
+ * start of the next step, after spawn admissions and around the region
+ * commands, at most LAB_HANDLE_BATCH per drain, requests for one task
+ * coalesced into the first (drain_handle_cancel_requests, LR:4018-4128;
+ * coalesce_handle_cancel_requests, spawn_mailbox.rs:1470). A target still
+ * awaiting admission takes its aborts as it is admitted, onto the cancel
+ * lane only (drain_spawn_admissions, LR:3972-3986). */
+#define LAB_HANDLE_BATCH 16u
+#define LAB_HANDLE_CAP (2u * (uint32_t)ASX_MAX_TASKS)
+
+typedef struct {
+    uint32_t slot;
+    uint16_t task_gen;
+    asx_cancel_reason reason;
+} lab_handle_cancel;
+
+static lab_handle_cancel g_lab_hc[LAB_HANDLE_CAP];
+static uint32_t g_lab_hc_n = 0;
+
 void asx_lab_dispatch_reset_internal(void) {
     g_lab_active = 0;
     g_lab_rng = 0;
@@ -107,6 +127,7 @@ void asx_lab_dispatch_reset_internal(void) {
     g_lab_wake_n = 0;
     g_lab_batch = 0;
     g_lab_rcmd_n = 0;
+    g_lab_hc_n = 0;
 }
 
 int asx_lab_dispatch_active(void) { return g_lab_active; }
@@ -289,8 +310,48 @@ void asx_lab_defer_admission(asx_task_slot *t) {
 
 int asx_lab_admissions_pending(void) { return g_lab_admit_n > 0u; }
 
+/* cancel_task_for_handle (state.rs:3462): fails only for a task that is
+ * gone, whose abort Rust ignores. */
+static void lab_apply_handle_cancel(const lab_handle_cancel *h) {
+    const asx_task_slot *t = &g_tasks[h->slot];
+    asx_status st;
+    if (!t->alive || t->generation != h->task_gen) return;
+    st = asx_task_cancel_reason_internal(asx_task_handle_for_slot(h->slot), &h->reason,
+                                         ASX_CANCEL_SRC_HANDLE);
+    (void)st;
+}
+
+/* The queued aborts of the task in `slot`, taken off the queue and applied
+ * as one, strengthened in order. */
+static void lab_take_handle_cancels_for(uint32_t slot) {
+    lab_handle_cancel merged;
+    int found = 0;
+    uint32_t k = 0;
+    memset(&merged, 0, sizeof(merged));
+    while (k < g_lab_hc_n) {
+        ASX_CHECKPOINT_WAIVER("bounded: queue length <= LAB_HANDLE_CAP");
+        if (g_lab_hc[k].slot != slot) {
+            k++;
+            continue;
+        }
+        if (!found) {
+            merged = g_lab_hc[k];
+            found = 1;
+        } else {
+            merged.reason = asx_cancel_strengthen(&merged.reason, &g_lab_hc[k].reason);
+        }
+        if (k + 1u < g_lab_hc_n) {
+            memmove(&g_lab_hc[k], &g_lab_hc[k + 1u],
+                    (size_t)(g_lab_hc_n - k - 1u) * sizeof(lab_handle_cancel));
+        }
+        g_lab_hc_n--;
+    }
+    if (found) lab_apply_handle_cancel(&merged);
+}
+
 /* drain_spawn_admissions (LR:3957-4012, state.rs:5212-5217): FIFO, each
- * scheduled at its budget priority. */
+ * scheduled at its budget priority, or on the cancel lane when it was
+ * aborted before admission (the abort applied now schedules it there). */
 void asx_lab_admit_pending(void) {
     uint32_t i;
     uint32_t n = g_lab_admit_n;
@@ -300,6 +361,7 @@ void asx_lab_admit_pending(void) {
         ASX_CHECKPOINT_WAIVER("bounded: admissions <= ASX_MAX_TASKS");
         if (!t->alive || !t->lab_admission_pending) continue;
         t->lab_admission_pending = 0u;
+        lab_take_handle_cancels_for(g_lab_admit[i]);
         asx_lab_schedule(t, t->budget.priority);
     }
 }
@@ -367,10 +429,10 @@ asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_
 int asx_lab_region_commands_pending(void) { return g_lab_rcmd_n > 0u; }
 
 /* asx_region_cancel fails only for a region that is gone (closed and
- * reused); a late cancel of one changes nothing, as in Rust. */
+ * reused): as in Rust, a late cancel of one only records region.cancelled. */
 static void lab_cancel_region(asx_region_id region, const asx_cancel_reason *reason) {
     asx_status st = asx_region_cancel(region, reason, NULL);
-    (void)st;
+    if (st == ASX_E_STALE_HANDLE) asx_region_trace_cancel_of_gone_internal(region, reason);
 }
 
 /* drain_region_commands (LR:4135-4217): up to 8 commands in order. A
@@ -426,4 +488,55 @@ void asx_lab_drain_region_commands(void) {
         ASX_CHECKPOINT_WAIVER("bounded: n_opened <= LAB_REGION_BATCH");
         asx_task_wake_slot_internal(&g_tasks[opened[i]]);
     }
+}
+
+asx_status asx_lab_handle_cancel_command(const asx_task_slot *t, const asx_cancel_reason *reason) {
+    lab_handle_cancel *h;
+    if (g_lab_hc_n >= LAB_HANDLE_CAP) return ASX_E_RESOURCE_EXHAUSTED;
+    h = &g_lab_hc[g_lab_hc_n++];
+    h->slot = (uint32_t)(t - g_tasks);
+    h->task_gen = t->generation;
+    h->reason = *reason;
+    return ASX_OK;
+}
+
+int asx_lab_handle_cancels_pending(void) { return g_lab_hc_n > 0u; }
+
+/* drain_handle_cancel_requests (LR:4018-4128): up to 16 requests, those for
+ * one task strengthened into the first, applied in order; the cancel lane
+ * entries come in that order and the cancel wakes after the batch. */
+void asx_lab_drain_handle_cancels(void) {
+    lab_handle_cancel batch[LAB_HANDLE_BATCH];
+    uint32_t n = g_lab_hc_n < LAB_HANDLE_BATCH ? g_lab_hc_n : LAB_HANDLE_BATCH;
+    uint32_t kept = 0;
+    uint32_t i;
+    uint32_t j;
+
+    if (n == 0u) return;
+    memset(batch, 0, sizeof(batch));
+    for (i = 0; i < n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= LAB_HANDLE_BATCH");
+        for (j = 0; j < kept; j++) {
+            ASX_CHECKPOINT_WAIVER("bounded: kept <= LAB_HANDLE_BATCH");
+            if (batch[j].slot == g_lab_hc[i].slot && batch[j].task_gen == g_lab_hc[i].task_gen) {
+                break;
+            }
+        }
+        if (j < kept) {
+            batch[j].reason = asx_cancel_strengthen(&batch[j].reason, &g_lab_hc[i].reason);
+        } else {
+            batch[kept++] = g_lab_hc[i];
+        }
+    }
+    if (g_lab_hc_n > n) {
+        memmove(&g_lab_hc[0], &g_lab_hc[n], (size_t)(g_lab_hc_n - n) * sizeof(lab_handle_cancel));
+    }
+    g_lab_hc_n -= n;
+
+    asx_lab_cancel_batch_begin();
+    for (i = 0; i < kept; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: kept <= LAB_HANDLE_BATCH");
+        lab_apply_handle_cancel(&batch[i]);
+    }
+    asx_lab_cancel_batch_end();
 }

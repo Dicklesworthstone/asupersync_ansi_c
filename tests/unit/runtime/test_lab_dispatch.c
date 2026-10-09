@@ -394,6 +394,102 @@ TEST(region_command_queue_full_is_failure_atomic) {
     ASSERT_EQ(asx_lab_region_commands_pending(), 0);
 }
 
+/* Join-handle aborts (Rust JoinHandle::abort_with_reason): applied at the
+ * next step. The aborter aborts `target` (or a child it spawns first) on
+ * its first poll, records the target's state right after, and yields. */
+typedef struct {
+    asx_region_id region;
+    asx_task_id target;
+    int spawn_child;
+    int twice;
+    uint32_t polls;
+    asx_status request;
+    asx_task_state at_request;
+} aborter;
+
+static asx_status poll_aborter(void *ud, asx_task_id self) {
+    aborter *a = (aborter *)ud;
+    asx_cancel_reason reason;
+    a->polls++;
+    if (a->polls > 1u) return ASX_OK;
+    if (a->spawn_child && asx_task_spawn(a->region, poll_kid, NULL, &a->target) != ASX_OK) {
+        return ASX_E_INVALID_STATE;
+    }
+    memset(&reason, 0, sizeof(reason));
+    reason.kind = ASX_CANCEL_USER;
+    reason.origin_region = a->region;
+    reason.origin_task = self;
+    a->request = asx_task_abort_request(a->target, &reason);
+    if (a->twice && a->request == ASX_OK) {
+        reason.kind = ASX_CANCEL_SHUTDOWN;
+        a->request = asx_task_abort_request(a->target, &reason);
+    }
+    if (asx_task_get_state(a->target, &a->at_request) != ASX_OK) return ASX_E_INVALID_STATE;
+    return ASX_E_PENDING; /* a yield */
+}
+
+static asx_status run_aborter(int lab, int spawn_child, int twice, aborter *a) {
+    asx_task_id t;
+    asx_budget budget;
+    asx_status st = setup();
+    if (st == ASX_OK && lab) st = asx_scheduler_use_lab_dispatch(9u);
+    memset(a, 0, sizeof(*a));
+    a->spawn_child = spawn_child;
+    a->twice = twice;
+    if (st == ASX_OK) st = asx_region_open(&a->region);
+    if (st == ASX_OK && !spawn_child) st = asx_task_spawn(a->region, poll_kid, NULL, &a->target);
+    if (st == ASX_OK) st = asx_task_spawn(a->region, poll_aborter, a, &t);
+    budget = asx_budget_from_polls(100);
+    if (st == ASX_OK) st = asx_scheduler_run(a->region, &budget);
+    return st;
+}
+
+static int cancelled_with(asx_task_id t, asx_cancel_kind kind) {
+    asx_outcome out;
+    asx_cancel_reason reason;
+    if (asx_task_get_outcome(t, &out) != ASX_OK) return 0;
+    if (out.severity != ASX_OUTCOME_CANCELLED) return 0;
+    if (asx_task_get_cancel_reason(t, &reason) != ASX_OK) return 0;
+    return reason.kind == kind;
+}
+
+/* The abort leaves the target's record alone until the next step applies
+ * it; the target then ends cancelled with the abort's reason. */
+TEST(handle_abort_applies_at_the_next_step) {
+    aborter a;
+    ASSERT_EQ(run_aborter(1, 0, 0, &a), ASX_OK);
+    ASSERT_EQ(a.request, ASX_OK);
+    ASSERT_TRUE(a.at_request != ASX_TASK_CANCEL_REQUESTED);
+    ASSERT_TRUE(cancelled_with(a.target, ASX_CANCEL_USER));
+}
+
+/* A child aborted in the poll that spawned it takes the abort as it is
+ * admitted: its first poll already sees the cancel. */
+TEST(handle_abort_of_an_unadmitted_child_applies_at_admission) {
+    aborter a;
+    ASSERT_EQ(run_aborter(1, 1, 0, &a), ASX_OK);
+    ASSERT_EQ(a.request, ASX_OK);
+    ASSERT_TRUE(cancelled_with(a.target, ASX_CANCEL_USER));
+}
+
+/* Two aborts of one task in a step coalesce; the stronger reason wins. */
+TEST(handle_aborts_in_one_step_coalesce_to_the_strongest) {
+    aborter a;
+    ASSERT_EQ(run_aborter(1, 0, 1, &a), ASX_OK);
+    ASSERT_EQ(a.request, ASX_OK);
+    ASSERT_TRUE(a.at_request != ASX_TASK_CANCEL_REQUESTED);
+    ASSERT_TRUE(cancelled_with(a.target, ASX_CANCEL_SHUTDOWN));
+}
+
+/* Without lab dispatch the abort applies at once. */
+TEST(handle_abort_applies_at_once_without_lab_dispatch) {
+    aborter a;
+    ASSERT_EQ(run_aborter(0, 0, 0, &a), ASX_OK);
+    ASSERT_EQ(a.request, ASX_OK);
+    ASSERT_EQ((int)a.at_request, (int)ASX_TASK_CANCEL_REQUESTED);
+    ASSERT_TRUE(cancelled_with(a.target, ASX_CANCEL_USER));
+}
+
 TEST(use_lab_dispatch_requires_no_live_task) {
     asx_region_id r;
     asx_task_id t;
@@ -421,6 +517,10 @@ int main(void) {
     RUN_TEST(child_region_commands_apply_at_once_without_lab_dispatch);
     RUN_TEST(region_cancel_request_applies_at_the_next_step);
     RUN_TEST(region_command_queue_full_is_failure_atomic);
+    RUN_TEST(handle_abort_applies_at_the_next_step);
+    RUN_TEST(handle_abort_of_an_unadmitted_child_applies_at_admission);
+    RUN_TEST(handle_aborts_in_one_step_coalesce_to_the_strongest);
+    RUN_TEST(handle_abort_applies_at_once_without_lab_dispatch);
     RUN_TEST(use_lab_dispatch_requires_no_live_task);
 
     TEST_REPORT();

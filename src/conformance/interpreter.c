@@ -1598,18 +1598,25 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
     if (strcmp(op, "abort_task") == 0) {
         it_task *target = task_by_name(it_str(step, "task"));
         asx_cancel_kind kind;
-        if (target == NULL || !target->spawned) {
-            it_fail_task(t, idx, "abort_task of an unknown task");
-            return STEP_END;
-        }
         if (!cancel_kind_parse(it_str(step, "kind"), &kind)) {
             it_fail_task(t, idx, "abort_task with an unknown cancel kind");
             return STEP_END;
         }
+        /* A refused child's handle never gets a task: the abort is only
+         * cached (task_handle.rs:492-497). */
+        if (target != NULL && target->refused != ASX_OK) {
+            observe_status(t, idx, label, ASX_OK);
+            return STEP_NEXT;
+        }
+        if (target == NULL || !target->spawned) {
+            it_fail_task(t, idx, "abort_task of an unknown task");
+            return STEP_END;
+        }
         {
-            /* The requesting task initiates the cancel (DSL §4). */
+            /* The requesting task initiates the cancel (DSL §4). A handle
+             * abort is a command the scheduler applies at its next step. */
             asx_cancel_reason r = make_reason(kind, t->region, self, it_str(step, "message"));
-            st = asx_task_cancel_with_reason(target->id, &r);
+            st = asx_task_abort_request(target->id, &r);
         }
         observe_status(t, idx, label, st);
         return STEP_NEXT;

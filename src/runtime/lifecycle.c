@@ -604,13 +604,30 @@ uint32_t asx_region_subtree_internal(asx_region_id root, uint32_t *out_slots, ui
  * Region lifecycle
  * ------------------------------------------------------------------- */
 
+/* Whether a task slot still holds a record of the region in slot `idx`: a
+ * live task, or a completed one whose outcome nobody has joined. */
+static int region_has_task_records(uint32_t idx) {
+    uint32_t i;
+    for (i = 0; i < g_task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        if (g_tasks[i].alive && asx_handle_slot(g_tasks[i].region) == idx &&
+            asx_handle_generation(g_tasks[i].region) == g_regions[idx].generation) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 asx_status asx_region_open(asx_region_id *out_id) {
     uint32_t idx;
     int reclaim;
 
     if (out_id == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    /* Scan for a recyclable slot: unused (alive=0) or CLOSED with no tasks.
+    /* Scan for a recyclable slot: unused (alive=0), or CLOSED with no task
+     * record left. A completed task nobody joined keeps its region's slot:
+     * its outcome stays joinable, as a Rust JoinHandle keeps the result
+     * after the region's record is gone.
      * When ASX_DEBUG_QUARANTINE is defined, CLOSED slots are never recycled
      * so that any stale-handle dereference surfaces as RESOURCE_EXHAUSTED
      * instead of silently aliasing a new region. Zero-cost when disabled. */
@@ -618,7 +635,8 @@ asx_status asx_region_open(asx_region_id *out_id) {
     for (idx = 0; idx < ASX_MAX_REGIONS; idx++) {
         if (!g_regions[idx].alive) break;
 #ifndef ASX_DEBUG_QUARANTINE
-        if (g_regions[idx].state == ASX_REGION_CLOSED && g_regions[idx].task_count == 0) {
+        if (g_regions[idx].state == ASX_REGION_CLOSED && g_regions[idx].task_count == 0 &&
+            !region_has_task_records(idx)) {
             reclaim = 1;
             break;
         }
@@ -745,10 +763,15 @@ asx_status asx_region_cancel_request(asx_region_id region, const asx_cancel_reas
     asx_status st;
     if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
     st = asx_region_slot_lookup(region, &r);
-    /* A stale handle names a region that closed and was reused. */
-    if (st == ASX_E_STALE_HANDLE) return ASX_OK;
-    if (st != ASX_OK) return st;
+    if (st != ASX_OK && st != ASX_E_STALE_HANDLE) return st;
+    /* The drain (or here, without lab dispatch) handles a region that is
+     * gone, closed and its slot reused, as Rust does: region.cancelled
+     * only. */
     if (asx_lab_dispatch_active()) return asx_lab_region_cancel_command(region, reason);
+    if (st == ASX_E_STALE_HANDLE) {
+        asx_region_trace_cancel_of_gone_internal(region, reason);
+        return ASX_OK;
+    }
     return asx_region_cancel(region, reason, NULL);
 }
 

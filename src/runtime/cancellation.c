@@ -46,6 +46,15 @@ asx_cancel_reason asx_cancel_reason_testing_default(asx_cancel_kind kind, const 
     return r;
 }
 
+void asx_region_trace_cancel_of_gone_internal(asx_region_id region,
+                                              const asx_cancel_reason *reason) {
+    asx_trace_payload payload;
+    payload.text = NULL;
+    payload.reason = reason;
+    asx_trace_emit_payload_internal(ASX_TRACE_REGION_CANCELLED, region, (uint64_t)reason->kind,
+                                    &payload);
+}
+
 asx_cancel_reason asx_region_close_reason_internal(void) {
     static const char message[] = "owned child region body finished";
     return asx_cancel_reason_testing_default(ASX_CANCEL_USER, message);
@@ -154,11 +163,13 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
         }
         t->cancel_reason = winner;
         t->cancel_epoch++;
-        /* Lab dispatch: a region cancel that changed anything schedules
-         * the task on the cancel lane at its request's cleanup priority;
-         * a changed reason also reaches its cancel waker. */
+        /* Lab dispatch: a region cancel or handle abort that changed
+         * anything schedules the task on the cancel lane at its request's
+         * cleanup priority; a changed reason also reaches its cancel
+         * waker. */
         if (asx_lab_dispatch_active() && source != ASX_CANCEL_SRC_BUDGET) {
-            if (source == ASX_CANCEL_SRC_REGION && (reason_changed || budget_changed)) {
+            if ((source == ASX_CANCEL_SRC_REGION || source == ASX_CANCEL_SRC_HANDLE) &&
+                (reason_changed || budget_changed)) {
                 asx_lab_schedule_cancel(t, cleanup.priority);
             }
             if (reason_changed) asx_lab_cancel_wake(t);
@@ -264,6 +275,17 @@ asx_status asx_task_cancel_with_origin(asx_task_id id, asx_cancel_kind kind,
 
 asx_status asx_task_cancel_with_reason(asx_task_id id, const asx_cancel_reason *reason) {
     return asx_task_cancel_reason_internal(id, reason, ASX_CANCEL_SRC_DIRECT);
+}
+
+asx_status asx_task_abort_request(asx_task_id target, const asx_cancel_reason *reason) {
+    asx_task_slot *t;
+    asx_status st;
+    if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_task_slot_lookup(target, &t);
+    if (st != ASX_OK) return st;
+    if (asx_task_is_terminal(t->state)) return ASX_OK;
+    if (asx_lab_dispatch_active()) return asx_lab_handle_cancel_command(t, reason);
+    return asx_task_cancel_reason_internal(target, reason, ASX_CANCEL_SRC_HANDLE);
 }
 
 asx_status asx_task_cancel_budget_internal(asx_task_id id, asx_cancel_kind kind, asx_time at) {

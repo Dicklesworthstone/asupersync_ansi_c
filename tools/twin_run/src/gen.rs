@@ -144,6 +144,12 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 return s;
             }
             10 if !held.children.is_empty() => {
+                // An aborted child stays joinable.
+                if rng.chance(30) {
+                    let i = usize::try_from(rng.below(held.children.len() as u64)).unwrap_or(0);
+                    return json!({"op": "abort_task", "task": held.children[i],
+                                  "kind": *rng.pick(&CANCEL_KINDS)});
+                }
                 let name = held.children.remove(0);
                 return json!({"op": "join", "task": name});
             }

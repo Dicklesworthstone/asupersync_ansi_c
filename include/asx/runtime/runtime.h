@@ -111,6 +111,9 @@ typedef struct asx_co_state {
  * Postconditions: on success, *out_id holds a valid region handle in OPEN state.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if out_id is NULL,
  *   ASX_E_RESOURCE_EXHAUSTED if the region arena is full.
+ * Slots: a CLOSED region's slot is reused (its handle then goes stale) once
+ *   no task record of it remains: a completed task whose outcome has not been
+ *   joined keeps the slot, so its join still works after the region closed.
  * Ownership: caller owns the returned handle; must close via asx_region_close
  *   or asx_region_drain.
  * Thread-safety: not thread-safe; single-threaded mode only.
@@ -295,7 +298,9 @@ ASX_API ASX_MUST_USE asx_status asx_region_open_child_poll(asx_task_id self, asx
  * step, after spawn admissions (the region's tasks are cancelled then);
  * without it, asx_region_cancel at once. The reason is copied; its message
  * and cause must stay valid, as for asx_region_cancel. A region that has
- * closed and whose handle is stale is left alone (ASX_OK).
+ * closed and whose slot was reused (stale handle) only gets the
+ * ASX_TRACE_REGION_CANCELLED event, as Rust records region.cancelled for a
+ * region whose record is gone; the call returns ASX_OK.
  * ASX_E_RESOURCE_EXHAUSTED: the command queue is full; nothing changed. */
 ASX_API ASX_MUST_USE asx_status asx_region_cancel_request(asx_region_id region,
                                                           const asx_cancel_reason *reason);
@@ -462,6 +467,22 @@ ASX_API ASX_MUST_USE asx_status asx_task_cancel_with_origin(asx_task_id id, asx_
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_cancel_with_reason(asx_task_id id,
                                                             const asx_cancel_reason *reason);
+
+/* Abort a task through its join handle, as Rust's
+ * JoinHandle::abort_with_reason does: under lab dispatch the abort is a
+ * command applied at the start of the next scheduler step, after spawn
+ * admissions (a target spawned in the current step takes it as it is
+ * admitted, onto the cancel lane only); aborts of one task queued in the
+ * same step are strengthened into one. Applied, it cancels like
+ * asx_task_cancel_with_reason, and a later abort that strengthens the
+ * reason or cleanup budget schedules the task's cancel again. Without lab
+ * dispatch it applies at once. The reason is copied; its message and cause
+ * must stay valid. Returns ASX_OK (also for a completed task),
+ * ASX_E_INVALID_ARGUMENT if reason is NULL, a lookup error for a bad
+ * handle, ASX_E_RESOURCE_EXHAUSTED if the command queue is full (nothing
+ * changed). */
+ASX_API ASX_MUST_USE asx_status asx_task_abort_request(asx_task_id target,
+                                                       const asx_cancel_reason *reason);
 
 /* Propagate cancellation to all tasks in a region.
  *
