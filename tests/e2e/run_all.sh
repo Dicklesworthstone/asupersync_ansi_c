@@ -20,6 +20,7 @@
 #   ASX_E2E_LOG_DIR       Override log directory
 #   ASX_E2E_STRICT        Strict mode (default: 0)
 #   ASX_E2E_VERBOSE       Verbose output (default: 0)
+#   ASX_E2E_FAMILY_TIMEOUT Seconds before a family is failed as hung (default: 600)
 #
 # Hard gate mapping:
 #   GATE-E2E-FOUNDATIONAL  foundational_contracts.sh
@@ -95,6 +96,16 @@ RESOURCE_CLASS="${ASX_E2E_RESOURCE_CLASS:-R3}"
 SUITE_ARTIFACT_DIR="${ASX_E2E_ARTIFACT_DIR:-${PROJECT_ROOT}/build/e2e-artifacts/${RUN_ID}}"
 SUITE_LOG_DIR="${ASX_E2E_LOG_DIR:-${PROJECT_ROOT}/build/test-logs}"
 mkdir -p "$SUITE_ARTIFACT_DIR" "$SUITE_LOG_DIR"
+
+E2E_FAMILY_TIMEOUT="${ASX_E2E_FAMILY_TIMEOUT:-600}"
+E2E_TIMEOUT_CMD=""
+if command -v timeout >/dev/null 2>&1; then
+    E2E_TIMEOUT_CMD="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+    E2E_TIMEOUT_CMD="gtimeout"
+else
+    echo "  NOTE: no timeout(1) available; families run without a hang guard"
+fi
 
 export ASX_E2E_ARTIFACT_DIR="$SUITE_ARTIFACT_DIR"
 export ASX_E2E_LOG_DIR="$SUITE_LOG_DIR"
@@ -179,25 +190,37 @@ for entry in "${E2E_FAMILIES[@]}"; do
 
     printf "  RUN  %-35s [%s] " "$script" "$gate"
 
+    # A hung family must fail with its log instead of stalling the suite
+    # until the outer runner's kill. 124 is timeout(1)'s exit status.
+    family_start=$(date +%s)
     set +e
-    "$script_path" > "$family_log" 2>&1
+    if [ -n "$E2E_TIMEOUT_CMD" ]; then
+        "$E2E_TIMEOUT_CMD" "$E2E_FAMILY_TIMEOUT" "$script_path" > "$family_log" 2>&1
+    else
+        "$script_path" > "$family_log" 2>&1
+    fi
     family_rc=$?
     set -e
+    family_secs=$(( $(date +%s) - family_start ))
 
     if [ "$family_rc" -eq 0 ]; then
-        echo "PASS"
+        echo "PASS (${family_secs}s)"
         passed_families=$((passed_families + 1))
-        family_results="${family_results}$(printf '    {"gate": %s, "script": %s, "status": "pass", "log": %s},\n' \
-            "$(json_str "$gate")" "$(json_str "$script")" "$(json_str "$family_log")")"
+        family_results="${family_results}$(printf '    {"gate": %s, "script": %s, "status": "pass", "seconds": %d, "log": %s},\n' \
+            "$(json_str "$gate")" "$(json_str "$script")" "$family_secs" "$(json_str "$family_log")")"
     else
-        echo "FAIL (rc=${family_rc})"
+        if [ "$family_rc" -eq 124 ] && [ -n "$E2E_TIMEOUT_CMD" ]; then
+            echo "FAIL (timeout after ${E2E_FAMILY_TIMEOUT}s)"
+        else
+            echo "FAIL (rc=${family_rc}, ${family_secs}s)"
+        fi
         failed_families=$((failed_families + 1))
         if [ -z "$first_failure_family" ]; then
             first_failure_family="$script"
             first_failure_log="$family_log"
         fi
-        family_results="${family_results}$(printf '    {"gate": %s, "script": %s, "status": "fail", "exit_code": %d, "log": %s},\n' \
-            "$(json_str "$gate")" "$(json_str "$script")" "$family_rc" "$(json_str "$family_log")")"
+        family_results="${family_results}$(printf '    {"gate": %s, "script": %s, "status": "fail", "exit_code": %d, "seconds": %d, "log": %s},\n' \
+            "$(json_str "$gate")" "$(json_str "$script")" "$family_rc" "$family_secs" "$(json_str "$family_log")")"
     fi
 done
 
