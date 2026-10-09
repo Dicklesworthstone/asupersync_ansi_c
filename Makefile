@@ -534,6 +534,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: all build clean install uninstall FORCE conformance-runner
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation lint-scenarios-v2
 .PHONY: model-check fixture-integrity fixtures-promote test-gates test-capacity-x4
+.PHONY: test-asan test-asan-live test-tsan
 .PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
@@ -1665,6 +1666,40 @@ test-capacity-x4:
 	@$(MAKE) --no-print-directory test-unit BUILD_DIR=build/capacity-x4 \
 		CFLAGS='$(CAPACITY_X4_CFLAGS)'
 	@echo "[asx] test-capacity-x4: PASS"
+
+# ---------------------------------------------------------------------------
+# test-asan / test-asan-live / test-tsan — the unit suite under sanitizers
+# (bd-9kll.15.5), each in its own BUILD_DIR, so build/ is untouched:
+#   test-asan       ASan + UBSan, deterministic CORE build;
+#   test-asan-live  ASan + UBSan, live POSIX build (real threads, reactor);
+#   test-tsan       TSan, live POSIX build (blocking pool, cross-thread
+#                   wakers, signal self-pipe).
+# Any finding fails the run: UBSan does not recover, ASan and TSan halt.
+# ---------------------------------------------------------------------------
+SAN_ASAN_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+SAN_TSAN_FLAGS := -fsanitize=thread -fno-omit-frame-pointer
+SAN_ENV := ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
+	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 TSAN_OPTIONS=halt_on_error=1
+
+test-asan:
+	@echo "[asx] test-asan: unit suite under ASan+UBSan (CORE, deterministic)..."
+	@$(SAN_ENV) $(MAKE) --no-print-directory test-unit BUILD_DIR=build/asan \
+		CFLAGS='$(SAN_ASAN_FLAGS)' LDFLAGS='$(SAN_ASAN_FLAGS)'
+	@echo "[asx] test-asan: PASS"
+
+test-asan-live:
+	@echo "[asx] test-asan-live: unit suite under ASan+UBSan (POSIX, live)..."
+	@$(SAN_ENV) $(MAKE) --no-print-directory test-unit BUILD_DIR=build/asan-live \
+		PROFILE=POSIX DETERMINISTIC=0 CFLAGS='$(SAN_ASAN_FLAGS)' \
+		LDFLAGS='$(SAN_ASAN_FLAGS) -lpthread -lrt'
+	@echo "[asx] test-asan-live: PASS"
+
+test-tsan:
+	@echo "[asx] test-tsan: unit suite under TSan (POSIX, live)..."
+	@$(SAN_ENV) $(MAKE) --no-print-directory test-unit BUILD_DIR=build/tsan \
+		PROFILE=POSIX DETERMINISTIC=0 CFLAGS='$(SAN_TSAN_FLAGS)' \
+		LDFLAGS='$(SAN_TSAN_FLAGS) -lpthread -lrt'
+	@echo "[asx] test-tsan: PASS"
 
 # ---------------------------------------------------------------------------
 # codec-equivalence — JSON vs BIN semantic digest parity
