@@ -8,6 +8,7 @@
 //! status, and no fixture is written for it.
 
 mod canon;
+mod minimize;
 mod run;
 // `gen` is a reserved keyword in edition 2024.
 #[path = "gen.rs"]
@@ -23,6 +24,7 @@ fn usage() -> ExitCode {
     eprintln!(
         "usage: twin_run capture <scenario.json>... --out <dir>\n       \
          twin_run generate --seed <u64> --count <n> --out <dir>\n       \
+         twin_run minimize <scenario.json> --runner <asx-conformance> --out <dir>\n       \
          twin_run trace <scenario.json>   (raw lab trace, for diagnosis)"
     );
     ExitCode::from(2)
@@ -214,6 +216,33 @@ fn main() -> ExitCode {
             match (seed, count, out) {
                 (Some(seed), Some(count), Some(out)) => generate(seed, count, &out),
                 _ => usage(),
+            }
+        }
+        Some("minimize") => {
+            let mut path = None;
+            let mut runner = None;
+            let mut out = None;
+            let mut rest = args[1..].iter();
+            while let Some(arg) = rest.next() {
+                match arg.as_str() {
+                    "--runner" => runner = rest.next().map(PathBuf::from),
+                    "--out" => out = rest.next().map(PathBuf::from),
+                    _ => path = Some(PathBuf::from(arg)),
+                }
+            }
+            let (Some(path), Some(runner), Some(out)) = (path, runner, out) else {
+                return usage();
+            };
+            let result = std::fs::read_to_string(&path)
+                .map_err(|e| format!("{}: {e}", path.display()))
+                .and_then(|s| serde_json::from_str::<Value>(&s).map_err(|e| e.to_string()))
+                .and_then(|scenario| minimize::minimize(&scenario, &runner, &out, &provenance()?));
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("twin_run minimize: {err}");
+                    ExitCode::from(1)
+                }
             }
         }
         _ => usage(),

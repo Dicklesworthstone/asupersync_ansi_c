@@ -33,8 +33,10 @@ jobs:
   # generates seeded scenarios and runs them in asupersync's LabRuntime at
   # the pinned rev; the C runtime runs every one Rust captured (lab
   # dispatch, same seed) and must match trace, snapshot and observations
-  # exactly. Any divergence fails the job; its scenarios and fixtures are
-  # uploaded. Seeds change daily and are printed, so a failure replays with
+  # exactly. Any divergence fails the job; twin_run minimize reduces each
+  # one (build/fuzz_v2/seed-<seed>/minimized) and the scenarios, fixtures
+  # and reductions are uploaded. Seeds change daily and are printed, so a
+  # failure replays with
   # `make fuzz-differential FUZZ_V2_SEED=<seed> FUZZ_V2_COUNT=200`.
   # ---------------------------------------------------------------------------
   fuzz-rust-differential:
@@ -67,7 +69,11 @@ jobs:
           for i in 0 1 2; do
             seed=$(( day * 3 + i ))
             echo "== seed $seed"
-            make fuzz-differential FUZZ_V2_SEED=$seed FUZZ_V2_COUNT=200
+            if ! make fuzz-differential FUZZ_V2_SEED=$seed FUZZ_V2_COUNT=200; then
+              # Reduce each divergence for the artifact; the job fails either way.
+              make fuzz-minimize FUZZ_V2_SEED=$seed || true
+              exit 1
+            fi
           done
 
       - name: Upload divergent scenarios

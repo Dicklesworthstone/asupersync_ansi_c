@@ -1565,7 +1565,27 @@ fuzz-differential: $(CONFORMANCE_RUNNER)
 		if [ $$((captured * 10)) -lt $$(($(FUZZ_V2_COUNT) * 9)) ]; then \
 			echo "[asx] fuzz-differential: only $$captured of $(FUZZ_V2_COUNT) scenarios captured"; exit 1; \
 		fi
-	@$(CONFORMANCE_RUNNER) compare $$(sed -n 's|^PASS \([^ ]*\) .*|$(FUZZ_V2_DIR)/fixtures/\1.json|p' $(FUZZ_V2_DIR)/capture.log)
+	@$(CONFORMANCE_RUNNER) compare $$(sed -n 's|^PASS \([^ ]*\) .*|$(FUZZ_V2_DIR)/fixtures/\1.json|p' $(FUZZ_V2_DIR)/capture.log) \
+		> $(FUZZ_V2_DIR)/compare.log; rc=$$?; cat $(FUZZ_V2_DIR)/compare.log; \
+		if [ $$rc -ne 0 ]; then \
+			echo "[asx] fuzz-differential: reduce with make fuzz-minimize FUZZ_V2_SEED=$(FUZZ_V2_SEED)"; \
+		fi; exit $$rc
+
+# ---------------------------------------------------------------------------
+# fuzz-minimize — reduce every scenario the last fuzz-differential run of
+# FUZZ_V2_SEED FAILed to a 1-minimal reproduction (twin_run minimize: delete
+# steps, tasks, script entries and declarations while Rust still runs it and
+# C still FAILs it the same way). Writes <id>-min.scenario.json and its Rust
+# fixture to $(FUZZ_V2_DIR)/minimized.
+# ---------------------------------------------------------------------------
+.PHONY: fuzz-minimize
+fuzz-minimize: $(CONFORMANCE_RUNNER)
+	@test -f $(FUZZ_V2_DIR)/compare.log || \
+		{ echo "[asx] fuzz-minimize: run make fuzz-differential FUZZ_V2_SEED=$(FUZZ_V2_SEED) first"; exit 1; }
+	@for id in $$(sed -n 's/^FAIL \([^:]*\):.*/\1/p' $(FUZZ_V2_DIR)/compare.log); do \
+		$(TWIN_RUN) minimize $(FUZZ_V2_DIR)/scenarios/$$id.json --runner $(CONFORMANCE_RUNNER) \
+			--out $(FUZZ_V2_DIR)/minimized || exit 1; \
+	done
 
 # ---------------------------------------------------------------------------
 # fixture-integrity — fixture schema, provenance, digest recomputation,
