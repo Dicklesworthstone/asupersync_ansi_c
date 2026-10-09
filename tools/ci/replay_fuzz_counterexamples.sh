@@ -339,6 +339,9 @@ for fixture in "${FIXTURES[@]}"; do
     summary="$(jq -sc 'map(select(.kind == "summary")) | last // {}' "$case_report" 2>/dev/null || echo '{}')"
     actual_det="$(printf '%s\n' "$summary" | jq -r '.determinism_failures // -1')"
     actual_crashes="$(printf '%s\n' "$summary" | jq -r '.crashes // -1')"
+    # Without a Rust binary the fuzzer reports rust_comparison "skipped" and
+    # rust_divergences null: there is no count to check (-1 = not measured).
+    rust_comparison="$(printf '%s\n' "$summary" | jq -r '.rust_comparison // "ran"')"
     actual_rust="$(printf '%s\n' "$summary" | jq -r '.rust_divergences // -1')"
 
     diagnostic=""
@@ -352,7 +355,7 @@ for fixture in "${FIXTURES[@]}"; do
     elif [ "$actual_crashes" -ne "$expected_crashes" ]; then
         status="fail"
         diagnostic="crash count mismatch"
-    elif [ "$actual_rust" -ne "$expected_rust" ]; then
+    elif [ "$rust_comparison" = "ran" ] && [ "$actual_rust" -ne "$expected_rust" ]; then
         status="fail"
         diagnostic="Rust divergence count mismatch"
     fi

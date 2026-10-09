@@ -174,7 +174,9 @@ fi
 if [ -n "${SUMMARY_LINE:-}" ]; then
     DET_FAILURES=$(echo "$SUMMARY_LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); print(d.get('determinism_failures',0))" 2>/dev/null || echo "0")
     CRASHES=$(echo "$SUMMARY_LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); print(d.get('crashes',0))" 2>/dev/null || echo "0")
-    RUST_DIV=$(echo "$SUMMARY_LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); print(d.get('rust_divergences',0))" 2>/dev/null || echo "0")
+    # null when no Rust comparison ran (rust_comparison "skipped"); kept as
+    # null, never coerced to a measured 0.
+    RUST_DIV=$(echo "$SUMMARY_LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); v=d.get('rust_divergences'); print('null' if v is None else v)" 2>/dev/null || echo "null")
     ITERS_SEC=$(echo "$SUMMARY_LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); print(d.get('iterations_per_sec',0))" 2>/dev/null || echo "0")
 
     if [ "$DET_FAILURES" -gt 0 ] 2>/dev/null; then
@@ -201,7 +203,7 @@ d = {
     'end_ts': '$END_TS',
     'determinism_failures': int('${DET_FAILURES:-0}'),
     'crashes': int('${CRASHES:-0}'),
-    'rust_divergences': int('${RUST_DIV:-0}'),
+    'rust_divergences': None if '${RUST_DIV:-null}' == 'null' else int('${RUST_DIV:-null}'),
     'iterations_per_sec': float('${ITERS_SEC:-0}'),
     'report_path': '$REPORT_PATH'
 }

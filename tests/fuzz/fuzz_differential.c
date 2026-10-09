@@ -30,10 +30,13 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -812,23 +815,53 @@ static void fuzz_report_mismatch(FILE *out, const char *kind, uint64_t iteration
     fflush(out);
 }
 
+/* Without --rust-binary no Rust comparison runs: the summary says so
+ * (rust_comparison "skipped", rust_divergences null) instead of reporting a
+ * zero that was never measured. */
 static void fuzz_report_summary(FILE *out, uint64_t initial_seed, uint64_t iterations,
-                                uint64_t determinism_failures, uint64_t crash_count,
+                                uint64_t determinism_failures, uint64_t crash_count, int have_rust,
                                 uint64_t rust_divergences, double duration_sec) {
+    char divergences[32];
+    if (have_rust) {
+        (void)snprintf(divergences, sizeof(divergences), "%llu",
+                       (unsigned long long)rust_divergences);
+    } else {
+        (void)snprintf(divergences, sizeof(divergences), "null");
+    }
     fprintf(out,
             "{\"kind\":\"summary\","
             "\"initial_seed\":%llu,"
             "\"iterations\":%llu,"
             "\"determinism_failures\":%llu,"
             "\"crashes\":%llu,"
-            "\"rust_divergences\":%llu,"
+            "\"rust_comparison\":\"%s\","
+            "\"rust_divergences\":%s,"
             "\"duration_sec\":%.3f,"
             "\"iterations_per_sec\":%.1f}\n",
             (unsigned long long)initial_seed, (unsigned long long)iterations,
             (unsigned long long)determinism_failures, (unsigned long long)crash_count,
-            (unsigned long long)rust_divergences, duration_sec,
+            have_rust ? "ran" : "skipped", divergences, duration_sec,
             iterations > 0 ? (double)iterations / duration_sec : 0.0);
     fflush(out);
+}
+
+/* `mkdir -p` without a shell: create each missing component of `path`.
+ * Returns 0 when the directory exists afterwards. */
+static int fuzz_mkdir_p(const char *path) {
+    char buf[512];
+    size_t i;
+    size_t len = strlen(path);
+    if (len == 0u || len >= sizeof(buf)) return -1;
+    memcpy(buf, path, len + 1u);
+    for (i = 1; i <= len; i++) {
+        if (buf[i] == '/' || buf[i] == '\0') {
+            char saved = buf[i];
+            buf[i] = '\0';
+            if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+            buf[i] = saved;
+        }
+    }
+    return 0;
 }
 
 /* Forward declaration — defined in CLI section below */
@@ -1030,24 +1063,42 @@ static void fuzz_save_and_minimize(const fuzz_scenario *sc, const fuzz_execution
     fprintf(f, "\n");
     fclose(f);
 
-    /* Invoke minimizer if available */
+    /* Invoke minimizer if available: fork+exec with the finding on stdin, no
+     * shell (paths and digests never pass through a command line). */
     if (minimize_binary != NULL) {
-        char cmd[2048];
         char out_path[512];
+        char digest_arg[32];
+        pid_t pid;
+        int status = 0;
 
         snprintf(out_path, sizeof(out_path), "%s/seed_%llu.minimized.json", findings_dir,
                  (unsigned long long)sc->seed);
-        snprintf(cmd, sizeof(cmd),
-                 "%s --stdin-scenario --failure-digest %016llx --output %s %s < %s",
-                 minimize_binary, (unsigned long long)c_digest, out_path,
-                 verbose ? "--verbose" : "", path);
+        snprintf(digest_arg, sizeof(digest_arg), "%016llx", (unsigned long long)c_digest);
 
         if (verbose) {
             fprintf(stderr, "[fuzz] minimizing seed=%llu...\n", (unsigned long long)sc->seed);
         }
 
-        if (system(cmd) == 0) {
+        pid = fork();
+        if (pid == 0) {
+            int fd = open(path, O_RDONLY);
+            if (fd < 0 || dup2(fd, 0) < 0) _exit(126);
+            close(fd);
+            if (verbose) {
+                execl(minimize_binary, minimize_binary, "--stdin-scenario", "--failure-digest",
+                      digest_arg, "--output", out_path, "--verbose", (char *)NULL);
+            } else {
+                execl(minimize_binary, minimize_binary, "--stdin-scenario", "--failure-digest",
+                      digest_arg, "--output", out_path, (char *)NULL);
+            }
+            _exit(127);
+        }
+        if (pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+            WEXITSTATUS(status) == 0) {
             if (verbose) { fprintf(stderr, "[fuzz] minimized saved to %s\n", out_path); }
+        } else if (verbose) {
+            fprintf(stderr, "[fuzz] minimizer failed for seed=%llu\n",
+                    (unsigned long long)sc->seed);
         }
     }
 
@@ -1116,12 +1167,8 @@ static int fuzz_run(const fuzz_config *cfg) {
             cfg->max_ops, cfg->mutations_per_scenario);
 
     /* ---- Create findings directory if --minimize specified ---- */
-    if (cfg->minimize_binary != NULL) {
-        char mkdir_cmd[512];
-        snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p %s", cfg->findings_dir);
-        if (system(mkdir_cmd) != 0) {
-            fprintf(stderr, "[fuzz] warning: cannot create findings dir: %s\n", cfg->findings_dir);
-        }
+    if (cfg->minimize_binary != NULL && fuzz_mkdir_p(cfg->findings_dir) != 0) {
+        fprintf(stderr, "[fuzz] warning: cannot create findings dir: %s\n", cfg->findings_dir);
     }
 
     /* ---- Pre-compute Rust digests if --rust-binary specified ---- */
@@ -1277,15 +1324,20 @@ static int fuzz_run(const fuzz_config *cfg) {
     end_time = fuzz_clock_sec();
 
     fuzz_report_summary(report, cfg->initial_seed, cfg->iterations, determinism_failures,
-                        crash_count, rust_divergences, end_time - start_time);
+                        crash_count, have_rust, rust_divergences, end_time - start_time);
 
     fprintf(stderr,
             "[fuzz] complete: %llu iterations in %.3fs (%.1f/s)\n"
-            "[fuzz] determinism_failures=%llu crashes=%llu rust_divergences=%llu\n",
+            "[fuzz] determinism_failures=%llu crashes=%llu\n",
             (unsigned long long)cfg->iterations, end_time - start_time,
             (double)cfg->iterations / (end_time - start_time),
-            (unsigned long long)determinism_failures, (unsigned long long)crash_count,
-            (unsigned long long)rust_divergences);
+            (unsigned long long)determinism_failures, (unsigned long long)crash_count);
+    if (have_rust) {
+        fprintf(stderr, "[fuzz] rust_divergences=%llu\n", (unsigned long long)rust_divergences);
+    } else {
+        fprintf(stderr, "[fuzz] rust_comparison=skipped (no --rust-binary): this run checks "
+                        "C determinism and crashes only\n");
+    }
 
     if (determinism_failures > 0u || crash_count > 0u) {
         fprintf(stderr, "[fuzz] FAIL: issues detected\n");
@@ -1295,7 +1347,8 @@ static int fuzz_run(const fuzz_config *cfg) {
                 (unsigned long long)rust_divergences);
         /* Divergences are informational, not failures (runtimes may differ) */
     } else {
-        fprintf(stderr, "[fuzz] PASS: no issues detected\n");
+        fprintf(stderr, "[fuzz] PASS: no determinism failures or crashes%s\n",
+                have_rust ? ", no Rust divergences" : "");
     }
 
     if (have_rust) { fuzz_rust_digests_free(&rust_digests); }
