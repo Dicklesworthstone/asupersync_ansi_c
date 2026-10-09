@@ -887,15 +887,20 @@ The **loser-drain protocol** is central to race/select/quorum semantics. When a 
 
 This bounded drain prevents indefinite hangs on losing branches while giving them a chance to release resources. The drain is deterministic: same input, same drain order, same result.
 
-**Task groups** (`asx/runtime/task_group.h`) provide the full "losers are drained" guarantee over real spawned tasks, porting asupersync's `Scope::race_all` / `join_all` / `first_ok` / `quorum`. The owner drives the group with `asx_task_group_poll(&group, self)`; it parks, and members wake it as they complete. Once the group is decided, every unfinished member is cancelled with `RACE_LOST` and **awaited to completion** before the group resolves, so a loser's obligations, finalizers, and handles are resolved, never abandoned. Ending early drains members the same way:
+**Task groups** (`asx/runtime/task_group.h`) provide the full "losers are drained" guarantee over real spawned tasks, porting asupersync's `Scope::race_all` / `join_all` / `first_ok` / `quorum`. The owner drives the group with `asx_task_group_poll(&group, self)`; it parks, and members wake it as they complete. Once a race or quorum is decided, every unfinished member is cancelled with `RACE_LOST` and **awaited to completion** before the group resolves, so a loser's obligations, finalizers, and handles are resolved, never abandoned. Per mode, as in Rust:
+- `join_all` awaits its members one by one, in order, and the owner's cancel does not reach them (joins are uninterruptible).
+- `first_ok` runs registered attempts (`asx_task_group_add_attempt`) one at a time, in order, until one succeeds; the owner's cancel is passed to the running attempt and stops further attempts.
+- `quorum` reports a member's panic even when met, and maps the rest of Rust's `QuorumError` cases onto statuses (see the header).
+
+Ending early drains members the same way:
 
 | Trigger | Members cancelled with | Group result |
 |---|---|---|
-| owner cancelled | `PARENT` | `ASX_E_CANCELLED` |
+| owner cancelled | `PARENT` for race; the owner's own reason for quorum and first_ok; not at all for join_all | `ASX_E_CANCELLED` |
 | group deadline | `TIMEOUT` | `ASX_E_TIMED_OUT` (`ASX_E_THRESHOLD_TIMEOUT` for quorum) |
 | `asx_task_group_cancel` | the requested kind | `ASX_E_CANCELLED` |
 
-Members completing in the same round are tie-broken by lowest index, so results are deterministic.
+Members of a race completing in the same round are tie-broken by lowest index, so results are deterministic. Rust breaks that tie with the owner's entropy instead, an open divergence (bd-g652).
 
 **Outcome aggregation** in join uses a severity lattice: `Ok < Err < Cancelled < Panicked`. The combined outcome of a join is the maximum severity across all branches. This means a join of (Ok, Ok, Err) produces Err, and a join of (Ok, Cancelled) produces Cancelled.
 
