@@ -13,7 +13,8 @@ fn main() -> Result<(), String> {
     if !output.status.success() {
         return Err(format!("twin_run build: {rustc} -Vv failed"));
     }
-    let text = String::from_utf8(output.stdout).map_err(|_| "twin_run build: rustc -Vv is not UTF-8".to_string())?;
+    let text = String::from_utf8(output.stdout)
+        .map_err(|_| "twin_run build: rustc -Vv is not UTF-8".to_string())?;
     for (key, var) in [
         ("commit-hash:", "TWIN_RUN_RUSTC_COMMIT_HASH"),
         ("release:", "TWIN_RUN_RUSTC_RELEASE"),

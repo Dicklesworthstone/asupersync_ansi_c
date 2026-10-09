@@ -96,7 +96,10 @@ fn capture(paths: &[PathBuf], out: &PathBuf) -> ExitCode {
                     failed += 1;
                     continue;
                 }
-                println!("PASS {id} {}", fixture["semantic_digest"].as_str().unwrap_or(""));
+                println!(
+                    "PASS {id} {}",
+                    fixture["semantic_digest"].as_str().unwrap_or("")
+                );
             }
             Err(err) => {
                 eprintln!("FAIL {id}: {err}");
@@ -104,8 +107,15 @@ fn capture(paths: &[PathBuf], out: &PathBuf) -> ExitCode {
             }
         }
     }
-    println!("twin_run capture: {} scenario(s), {failed} failed", paths.len());
-    if failed > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
+    println!(
+        "twin_run capture: {} scenario(s), {failed} failed",
+        paths.len()
+    );
+    if failed > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn main() -> ExitCode {

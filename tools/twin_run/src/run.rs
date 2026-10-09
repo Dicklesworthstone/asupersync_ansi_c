@@ -39,14 +39,26 @@ pub enum Body {
 /// State shared between the driver and every interpreted task body.
 #[derive(Default)]
 struct Shared {
+    /// Canonical (admitted) task ids; see `resolve_admissions`.
     task_ids: HashMap<String, TaskId>,
     task_names: HashMap<TaskId, String>,
+    /// Children spawned through `cx.spawn` by provisional mailbox id, until
+    /// their admission is resolved.
+    provisional: HashMap<TaskId, String>,
+    /// Task name -> name of the region it runs in.
+    task_regions: HashMap<String, String>,
     region_ids: HashMap<String, RegionId>,
     region_names: HashMap<RegionId, String>,
     region_parents: HashMap<String, Option<String>>,
     timer_names: HashMap<u64, String>,
     handles: HashMap<String, TaskHandle<Body>>,
+    /// Join results, projected only after the run (`finish_outcomes`): a
+    /// cancel reason may name a child whose canonical id is not resolved yet.
+    raw_outcomes: HashMap<String, Result<Body, JoinError>>,
     outcomes: HashMap<String, Value>,
+    /// (observation index, joined task) for join observations whose value is
+    /// the projected outcome.
+    outcome_observations: Vec<(usize, String)>,
     observations: Vec<Value>,
     /// Harness errors raised inside task bodies. Any entry fails the run.
     errors: Vec<String>,
@@ -57,7 +69,9 @@ type SharedRef = Arc<Mutex<Shared>>;
 fn lock(shared: &SharedRef) -> MutexGuard<'_, Shared> {
     // A panicking task body (the DSL `return panicked` step) must not make
     // the shared state unusable for the driver.
-    shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 // ---------------------------------------------------------------------------
@@ -65,11 +79,15 @@ fn lock(shared: &SharedRef) -> MutexGuard<'_, Shared> {
 // ---------------------------------------------------------------------------
 
 fn str_field<'a>(v: &'a Value, key: &str) -> RunResult<&'a str> {
-    v.get(key).and_then(Value::as_str).ok_or_else(|| format!("missing string field {key:?} in {v}"))
+    v.get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("missing string field {key:?} in {v}"))
 }
 
 fn u64_field(v: &Value, key: &str) -> RunResult<u64> {
-    v.get(key).and_then(Value::as_u64).ok_or_else(|| format!("missing integer field {key:?} in {v}"))
+    v.get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("missing integer field {key:?} in {v}"))
 }
 
 fn budget(v: Option<&Value>) -> RunResult<Budget> {
@@ -81,7 +99,9 @@ fn budget(v: Option<&Value>) -> RunResult<Budget> {
         b = b.with_deadline(Time::from_nanos(d));
     }
     if let Some(p) = v.get("poll_quota").and_then(Value::as_u64) {
-        b = b.with_poll_quota(u32::try_from(p).map_err(|_| format!("poll_quota out of range: {p}"))?);
+        b = b.with_poll_quota(
+            u32::try_from(p).map_err(|_| format!("poll_quota out of range: {p}"))?,
+        );
     }
     if let Some(c) = v.get("cost_quota").and_then(Value::as_u64) {
         b = b.with_cost_quota(c);
@@ -109,8 +129,22 @@ fn cancel_kind(name: &str) -> RunResult<CancelKind> {
     })
 }
 
-fn cancel_reason(v: &Value) -> RunResult<CancelReason> {
-    let reason = CancelReason::new(cancel_kind(str_field(v, "kind")?)?);
+/// A cancel reason with real attribution, built the way asupersync's own
+/// request paths build one (`CancelReason::with_origin(kind, region, now)
+/// .with_task(task)`, cx/cx.rs:3940). `CancelReason::new` is a testing
+/// default (origin `RegionId::testing_default()`, timestamp fixed at 1 s,
+/// types/cancel.rs:590-605) and must not reach a fixture.
+fn cancel_reason(
+    v: &Value,
+    origin_region: RegionId,
+    origin_task: Option<TaskId>,
+    now: Time,
+) -> RunResult<CancelReason> {
+    let mut reason =
+        CancelReason::with_origin(cancel_kind(str_field(v, "kind")?)?, origin_region, now);
+    if let Some(task) = origin_task {
+        reason = reason.with_task(task);
+    }
     Ok(match v.get("message").and_then(Value::as_str) {
         // `with_message` takes `&'static str`; one capture process runs a
         // bounded set of scenarios, so leaking each scenario message is bounded.
@@ -164,7 +198,11 @@ fn status_of_error(err: &asupersync::error::Error) -> RunResult<String> {
         K::DuplicateSymbol => "ASX_E_DUPLICATE_SYMBOL",
         K::ObjectMismatch => "ASX_E_OBJECT_MISMATCH",
         K::CorruptedSymbol => "ASX_E_CORRUPTED_SYMBOL",
-        other => return Err(format!("Rust ErrorKind::{other:?} has no status in vocabulary §5")),
+        other => {
+            return Err(format!(
+                "Rust ErrorKind::{other:?} has no status in vocabulary §5"
+            ));
+        }
     }
     .to_string())
 }
@@ -178,11 +216,19 @@ fn kind_name(kind: CancelKind) -> String {
 }
 
 fn region_name(shared: &Shared, id: RegionId) -> RunResult<String> {
-    shared.region_names.get(&id).cloned().ok_or_else(|| format!("unnamed region {id:?} (harness defect)"))
+    shared
+        .region_names
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unnamed region {id:?} (harness defect)"))
 }
 
 fn task_name(shared: &Shared, id: TaskId) -> RunResult<String> {
-    shared.task_names.get(&id).cloned().ok_or_else(|| format!("unnamed task {id:?} (harness defect)"))
+    shared
+        .task_names
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unnamed task {id:?} (harness defect)"))
 }
 
 fn project_reason(shared: &Shared, reason: &CancelReason) -> RunResult<Value> {
@@ -210,8 +256,12 @@ fn project_outcome(shared: &Shared, result: Result<Body, JoinError>) -> RunResul
     Ok(match result {
         Ok(Body::Ok) => json!({"tag": "ok"}),
         Ok(Body::Err(status)) => json!({"tag": "err", "status": status}),
-        Err(JoinError::Cancelled(reason)) => json!({"tag": "cancelled", "reason": project_reason(shared, &reason)?}),
-        Err(JoinError::Panicked(payload)) => json!({"tag": "panicked", "message": payload.message()}),
+        Err(JoinError::Cancelled(reason)) => {
+            json!({"tag": "cancelled", "reason": project_reason(shared, &reason)?})
+        }
+        Err(JoinError::Panicked(payload)) => {
+            json!({"tag": "panicked", "message": payload.message()})
+        }
         Err(other) => return Err(format!("unexpected join result {other:?}")),
     })
 }
@@ -220,6 +270,42 @@ fn observe(shared: &SharedRef, task: &str, step: usize, op: &str, status: &str, 
     lock(shared).observations.push(json!({
         "task": task, "step": step, "op": op, "status": status, "value": value,
     }));
+}
+
+/// Record a successful join of `target`: its raw result, and an observation
+/// whose value `finish_outcomes` fills with the projected outcome.
+fn observe_join(
+    s: &mut Shared,
+    task: &str,
+    step: usize,
+    op: &str,
+    target: &str,
+    result: Result<Body, JoinError>,
+) {
+    s.raw_outcomes.insert(target.to_string(), result);
+    s.outcome_observations
+        .push((s.observations.len(), target.to_string()));
+    s.observations.push(
+        json!({"task": task, "step": step, "op": op, "status": "ASX_OK", "value": Value::Null}),
+    );
+}
+
+/// Project every join result, once all task names are resolved.
+fn finish_outcomes(s: &mut Shared) -> RunResult<()> {
+    let raw = std::mem::take(&mut s.raw_outcomes);
+    for (name, result) in raw {
+        let value = project_outcome(s, result)?;
+        s.outcomes.insert(name, value);
+    }
+    for (index, target) in std::mem::take(&mut s.outcome_observations) {
+        let value = s
+            .outcomes
+            .get(&target)
+            .cloned()
+            .ok_or_else(|| format!("join of {target:?} has no outcome"))?;
+        s.observations[index]["value"] = value;
+    }
+    Ok(())
 }
 
 fn harness_error(shared: &SharedRef, msg: String) {
@@ -249,7 +335,11 @@ struct TaskCtx {
     region: String,
 }
 
-fn run_program(cx: Cx, ctx: Arc<TaskCtx>, steps: Vec<Value>) -> Pin<Box<dyn Future<Output = Body> + Send>> {
+fn run_program(
+    cx: Cx,
+    ctx: Arc<TaskCtx>,
+    steps: Vec<Value>,
+) -> Pin<Box<dyn Future<Output = Body> + Send>> {
     Box::pin(async move {
         let mut local = Local::default();
         for (i, step) in steps.iter().enumerate() {
@@ -257,7 +347,10 @@ fn run_program(cx: Cx, ctx: Arc<TaskCtx>, steps: Vec<Value>) -> Pin<Box<dyn Futu
                 Ok(Flow::Continue) => {}
                 Ok(Flow::Return(body)) => return body,
                 Err(err) => {
-                    harness_error(&ctx.shared, format!("task {} step {}: {err}", ctx.me, i + 1));
+                    harness_error(
+                        &ctx.shared,
+                        format!("task {} step {}: {err}", ctx.me, i + 1),
+                    );
                     return Body::Err("ASX_E_INVALID_STATE".to_string());
                 }
             }
@@ -267,7 +360,14 @@ fn run_program(cx: Cx, ctx: Arc<TaskCtx>, steps: Vec<Value>) -> Pin<Box<dyn Futu
 }
 
 /// Non-blocking steps; also the only steps allowed inside `masked`.
-fn exec_sync(cx: &Cx, ctx: &Arc<TaskCtx>, local: &mut Local, idx: usize, label: &str, step: &Value) -> RunResult<Flow> {
+fn exec_sync(
+    cx: &Cx,
+    ctx: &Arc<TaskCtx>,
+    local: &mut Local,
+    idx: usize,
+    label: &str,
+    step: &Value,
+) -> RunResult<Flow> {
     let op = str_field(step, "op")?;
     let me = ctx.me.as_str();
     match op {
@@ -277,7 +377,10 @@ fn exec_sync(cx: &Cx, ctx: &Arc<TaskCtx>, local: &mut Local, idx: usize, label: 
                 Err(e) => status_of_error(&e)?,
             };
             observe(&ctx.shared, me, idx, label, &status, Value::Null);
-            let on_cancel = step.get("on_cancel").and_then(Value::as_str).unwrap_or("return");
+            let on_cancel = step
+                .get("on_cancel")
+                .and_then(Value::as_str)
+                .unwrap_or("return");
             if status == "ASX_E_CANCELLED" && on_cancel == "return" {
                 return Ok(Flow::Return(Body::Ok));
             }
@@ -301,7 +404,10 @@ fn exec_sync(cx: &Cx, ctx: &Arc<TaskCtx>, local: &mut Local, idx: usize, label: 
         }
         "commit" | "abort" | "leak" => {
             let name = str_field(step, "obligation")?;
-            let token = local.tokens.remove(name).ok_or_else(|| format!("unknown obligation {name:?}"))?;
+            let token = local
+                .tokens
+                .remove(name)
+                .ok_or_else(|| format!("unknown obligation {name:?}"))?;
             let delivered = match op {
                 "commit" => token.commit(),
                 "abort" => token.abort(abort_reason(str_field(step, "reason")?)?),
@@ -310,19 +416,42 @@ fn exec_sync(cx: &Cx, ctx: &Arc<TaskCtx>, local: &mut Local, idx: usize, label: 
                     true
                 }
             };
-            observe(&ctx.shared, me, idx, label, if delivered { "ASX_OK" } else { "ASX_E_INVALID_STATE" }, Value::Null);
+            observe(
+                &ctx.shared,
+                me,
+                idx,
+                label,
+                if delivered {
+                    "ASX_OK"
+                } else {
+                    "ASX_E_INVALID_STATE"
+                },
+                Value::Null,
+            );
         }
         "spawn" => {
             let child = str_field(step, "as")?.to_string();
-            let program = step.get("program").and_then(Value::as_array).cloned().ok_or("spawn without program")?;
+            let program = step
+                .get("program")
+                .and_then(Value::as_array)
+                .cloned()
+                .ok_or("spawn without program")?;
             let child_region = match step.get("region").and_then(Value::as_str) {
                 Some(r) => r.to_string(),
                 None => ctx.region.clone(),
             };
-            let child_ctx = Arc::new(TaskCtx { shared: ctx.shared.clone(), me: child.clone(), region: child_region });
+            let child_region_name = child_region.clone();
+            let child_ctx = Arc::new(TaskCtx {
+                shared: ctx.shared.clone(),
+                me: child.clone(),
+                region: child_region,
+            });
             let factory = move |ccx: Cx| run_program(ccx, child_ctx, program);
             let spawned = if let Some(r) = step.get("region").and_then(Value::as_str) {
-                let region = local.regions.get(r).ok_or_else(|| format!("spawn into unknown region {r:?}"))?;
+                let region = local
+                    .regions
+                    .get(r)
+                    .ok_or_else(|| format!("spawn into unknown region {r:?}"))?;
                 region.cx().spawn(factory)
             } else if step.get("budget").is_some() {
                 let b = budget(step.get("budget"))?;
@@ -332,9 +461,11 @@ fn exec_sync(cx: &Cx, ctx: &Arc<TaskCtx>, local: &mut Local, idx: usize, label: 
             };
             match spawned {
                 Ok(handle) => {
+                    // `handle.task_id()` is the provisional mailbox id here;
+                    // resolve_admissions maps it to the canonical id.
                     let mut s = lock(&ctx.shared);
-                    s.task_ids.insert(child.clone(), handle.task_id());
-                    s.task_names.insert(handle.task_id(), child.clone());
+                    s.provisional.insert(handle.task_id(), child.clone());
+                    s.task_regions.insert(child.clone(), child_region_name);
                     s.handles.insert(child, handle);
                     drop(s);
                     observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
@@ -344,34 +475,47 @@ fn exec_sync(cx: &Cx, ctx: &Arc<TaskCtx>, local: &mut Local, idx: usize, label: 
         }
         "try_join" => {
             let target = str_field(step, "task")?;
-            let mut s = lock(&ctx.shared);
-            let handle = s.handles.get_mut(target).ok_or_else(|| format!("unknown task {target:?}"))?;
-            let polled = handle.try_join();
-            let (status, value) = match polled {
-                Ok(None) => ("ASX_E_TASK_NOT_COMPLETED", Value::Null),
-                Ok(Some(body)) => ("ASX_OK", project_outcome(&s, Ok(body))?),
-                Err(e) => ("ASX_OK", project_outcome(&s, Err(e))?),
+            let s = &mut *lock(&ctx.shared);
+            let handle = s
+                .handles
+                .get_mut(target)
+                .ok_or_else(|| format!("unknown task {target:?}"))?;
+            let result = match handle.try_join() {
+                Ok(None) => None,
+                Ok(Some(body)) => Some(Ok(body)),
+                Err(e) => Some(Err(e)),
             };
-            if status == "ASX_OK" {
-                s.handles.remove(target);
-                s.outcomes.insert(target.to_string(), value.clone());
+            match result {
+                None => s.observations.push(json!({
+                    "task": me, "step": idx, "op": label, "status": "ASX_E_TASK_NOT_COMPLETED", "value": Value::Null,
+                })),
+                Some(result) => {
+                    s.handles.remove(target);
+                    observe_join(s, me, idx, label, target, result);
+                }
             }
-            drop(s);
-            observe(&ctx.shared, me, idx, label, status, value);
         }
         "abort_task" => {
             let target = str_field(step, "task")?;
-            let reason = cancel_reason(step)?;
+            // The requesting task initiates the cancel (cx.cancel_with).
+            let reason = cancel_reason(step, cx.region_id(), Some(cx.task_id()), cx.now())?;
             let s = lock(&ctx.shared);
-            let handle = s.handles.get(target).ok_or_else(|| format!("unknown task {target:?}"))?;
+            let handle = s
+                .handles
+                .get(target)
+                .ok_or_else(|| format!("unknown task {target:?}"))?;
             handle.abort_with_reason(reason);
             drop(s);
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
         "cancel_region" => {
             let name = str_field(step, "region")?;
-            let region = local.regions.get(name).ok_or_else(|| format!("unknown child region {name:?}"))?;
-            let status = match region.cancel(cancel_reason(step)?) {
+            let region = local
+                .regions
+                .get(name)
+                .ok_or_else(|| format!("unknown child region {name:?}"))?;
+            let reason = cancel_reason(step, cx.region_id(), Some(cx.task_id()), cx.now())?;
+            let status = match region.cancel(reason) {
                 Ok(()) => "ASX_OK".to_string(),
                 Err(e) => child_region_status(&e)?,
             };
@@ -394,7 +538,11 @@ fn obligation_admission_status(
         E::RegionClosed => "ASX_E_REGION_CLOSED",
         E::LimitReached { .. } => "ASX_E_ADMISSION_LIMIT",
         E::CapacityExhausted => "ASX_E_RESOURCE_EXHAUSTED",
-        other => return Err(format!("obligation admission error {other:?} has no status in vocabulary §5")),
+        other => {
+            return Err(format!(
+                "obligation admission error {other:?} has no status in vocabulary §5"
+            ));
+        }
     }
     .to_string())
 }
@@ -408,7 +556,11 @@ fn child_region_status(err: &asupersync::cx::ChildRegionError) -> RunResult<Stri
         E::Create(C::ParentClosed { .. }) => "ASX_E_REGION_CLOSED",
         E::Create(C::ParentAtCapacity { .. }) => "ASX_E_ADMISSION_LIMIT",
         #[allow(unreachable_patterns)]
-        other => return Err(format!("child region error {other:?} has no status in vocabulary §5")),
+        other => {
+            return Err(format!(
+                "child region error {other:?} has no status in vocabulary §5"
+            ));
+        }
     }
     .to_string())
 }
@@ -421,12 +573,22 @@ fn spawn_status(err: &asupersync::runtime::state::SpawnError) -> RunResult<Strin
         E::RegionClosed(_) => "ASX_E_REGION_CLOSED",
         E::RegionAtCapacity { .. } => "ASX_E_ADMISSION_LIMIT",
         #[allow(unreachable_patterns)]
-        other => return Err(format!("spawn error {other:?} has no status in vocabulary §5")),
+        other => {
+            return Err(format!(
+                "spawn error {other:?} has no status in vocabulary §5"
+            ));
+        }
     }
     .to_string())
 }
 
-async fn exec_step(cx: &Cx, ctx: &Arc<TaskCtx>, local: &mut Local, idx: usize, step: &Value) -> RunResult<Flow> {
+async fn exec_step(
+    cx: &Cx,
+    ctx: &Arc<TaskCtx>,
+    local: &mut Local,
+    idx: usize,
+    step: &Value,
+) -> RunResult<Flow> {
     let op = str_field(step, "op")?;
     let me = ctx.me.as_str();
     match op {
@@ -463,7 +625,10 @@ async fn exec_step(cx: &Cx, ctx: &Arc<TaskCtx>, local: &mut Local, idx: usize, s
             }));
         }
         "masked" => {
-            let steps = step.get("steps").and_then(Value::as_array).ok_or("masked without steps")?;
+            let steps = step
+                .get("steps")
+                .and_then(Value::as_array)
+                .ok_or("masked without steps")?;
             let result = cx.masked(|| -> RunResult<Flow> {
                 for (j, inner) in steps.iter().enumerate() {
                     let label = format!("masked/{}/{}", j + 1, str_field(inner, "op")?);
@@ -478,12 +643,10 @@ async fn exec_step(cx: &Cx, ctx: &Arc<TaskCtx>, local: &mut Local, idx: usize, s
         "join" => {
             let target = str_field(step, "task")?;
             let handle = lock(&ctx.shared).handles.remove(target);
-            let mut handle = handle.ok_or_else(|| format!("unknown or already joined task {target:?}"))?;
+            let mut handle =
+                handle.ok_or_else(|| format!("unknown or already joined task {target:?}"))?;
             let result = handle.join(cx).await;
-            let s = &mut *lock(&ctx.shared);
-            let value = project_outcome(s, result)?;
-            s.outcomes.insert(target.to_string(), value.clone());
-            s.observations.push(json!({"task": me, "step": idx, "op": op, "status": "ASX_OK", "value": value}));
+            observe_join(&mut lock(&ctx.shared), me, idx, op, target, result);
         }
         "open_region" => {
             let name = str_field(step, "as")?.to_string();
@@ -496,17 +659,28 @@ async fn exec_step(cx: &Cx, ctx: &Arc<TaskCtx>, local: &mut Local, idx: usize, s
                     let mut s = lock(&ctx.shared);
                     s.region_ids.insert(name.clone(), child.region_id());
                     s.region_names.insert(child.region_id(), name.clone());
-                    s.region_parents.insert(name.clone(), Some(ctx.region.clone()));
+                    s.region_parents
+                        .insert(name.clone(), Some(ctx.region.clone()));
                     drop(s);
                     local.regions.insert(name, child);
                     observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
                 }
-                Err(e) => observe(&ctx.shared, me, idx, op, &child_region_status(&e)?, Value::Null),
+                Err(e) => observe(
+                    &ctx.shared,
+                    me,
+                    idx,
+                    op,
+                    &child_region_status(&e)?,
+                    Value::Null,
+                ),
             }
         }
         "close_region" => {
             let name = str_field(step, "region")?;
-            let region = local.regions.remove(name).ok_or_else(|| format!("unknown child region {name:?}"))?;
+            let region = local
+                .regions
+                .remove(name)
+                .ok_or_else(|| format!("unknown child region {name:?}"))?;
             let status = match region.close().await {
                 Ok(()) => "ASX_OK".to_string(),
                 Err(e) => child_region_status(&e)?,
@@ -521,9 +695,16 @@ async fn exec_step(cx: &Cx, ctx: &Arc<TaskCtx>, local: &mut Local, idx: usize, s
 /// Await a sleep, naming the timer it schedules on its first poll. The lab
 /// trace's Timer events carry no task, so the owner is identified by being
 /// the task that is polling when TimerScheduled is recorded (worker_count 1).
-async fn name_timer_on_first_poll<F: Future<Output = ()>>(cx: &Cx, shared: &SharedRef, name: String, sleep: F) {
+async fn name_timer_on_first_poll<F: Future<Output = ()>>(
+    cx: &Cx,
+    shared: &SharedRef,
+    name: String,
+    sleep: F,
+) {
     let buffer = cx.trace_buffer();
-    let before = buffer.as_ref().map_or(0, |b| b.snapshot().last().map_or(0, |e| e.seq));
+    let before = buffer
+        .as_ref()
+        .map_or(0, |b| b.snapshot().last().map_or(0, |e| e.seq));
     let mut sleep = std::pin::pin!(sleep);
     let mut first = true;
     std::future::poll_fn(|pcx| {
@@ -533,7 +714,9 @@ async fn name_timer_on_first_poll<F: Future<Output = ()>>(cx: &Cx, shared: &Shar
             if let Some(buffer) = &buffer {
                 let mut s = lock(shared);
                 for event in buffer.snapshot().iter().filter(|e| e.seq > before) {
-                    if let (TraceEventKind::TimerScheduled, TraceData::Timer { timer_id, .. }) = (&event.kind, &event.data) {
+                    if let (TraceEventKind::TimerScheduled, TraceData::Timer { timer_id, .. }) =
+                        (&event.kind, &event.data)
+                    {
                         s.timer_names.insert(*timer_id, name.clone());
                     }
                 }
@@ -557,14 +740,26 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
         .worker_count(1)
         .trace_capacity(1 << 20)
         .max_steps(u64_field(lab_cfg, "max_steps")?)
-        .panic_on_leak(lab_cfg.get("panic_on_leak").and_then(Value::as_bool).unwrap_or(false));
+        .panic_on_leak(
+            lab_cfg
+                .get("panic_on_leak")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        );
     let mut lab = LabRuntime::new(config);
-    lab.start_forced_schedule_recording(1 << 20).map_err(|e| format!("{e:?}"))?;
+    lab.start_forced_schedule_recording(1 << 20)
+        .map_err(|e| format!("{e:?}"))?;
     let shared: SharedRef = Arc::new(Mutex::new(Shared::default()));
 
     for (field, _) in [("channels", ()), ("sync", ())] {
-        if scenario.get(field).and_then(Value::as_array).is_some_and(|a| !a.is_empty()) {
-            return Err(format!("{field} declarations are not interpreted yet (increment 1)"));
+        if scenario
+            .get(field)
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty())
+        {
+            return Err(format!(
+                "{field} declarations are not interpreted yet (increment 1)"
+            ));
         }
     }
 
@@ -576,10 +771,18 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
         s.region_names.insert(root, "root".into());
         s.region_parents.insert("root".into(), None);
     }
-    for r in scenario.get("regions").and_then(Value::as_array).into_iter().flatten() {
+    for r in scenario
+        .get("regions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         let name = str_field(r, "name")?.to_string();
         let parent = str_field(r, "parent")?.to_string();
-        let parent_id = *lock(&shared).region_ids.get(&parent).ok_or_else(|| format!("unknown parent {parent:?}"))?;
+        let parent_id = *lock(&shared)
+            .region_ids
+            .get(&parent)
+            .ok_or_else(|| format!("unknown parent {parent:?}"))?;
         let id = lab
             .state
             .create_child_region(parent_id, budget(r.get("budget"))?)
@@ -589,12 +792,31 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
         s.region_names.insert(id, name.clone());
         s.region_parents.insert(name, Some(parent));
     }
-    for t in scenario.get("tasks").and_then(Value::as_array).into_iter().flatten() {
+    for t in scenario
+        .get("tasks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         let name = str_field(t, "name")?.to_string();
         let region = str_field(t, "region")?.to_string();
-        let region_id = *lock(&shared).region_ids.get(&region).ok_or_else(|| format!("unknown region {region:?}"))?;
-        let program = t.get("program").and_then(Value::as_array).cloned().ok_or("task without program")?;
-        let ctx = Arc::new(TaskCtx { shared: shared.clone(), me: name.clone(), region });
+        let region_id = *lock(&shared)
+            .region_ids
+            .get(&region)
+            .ok_or_else(|| format!("unknown region {region:?}"))?;
+        let program = t
+            .get("program")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or("task without program")?;
+        lock(&shared)
+            .task_regions
+            .insert(name.clone(), region.clone());
+        let ctx = Arc::new(TaskCtx {
+            shared: shared.clone(),
+            me: name.clone(),
+            region,
+        });
         let body = async move {
             match Cx::current() {
                 Some(cx) => run_program(cx, ctx, program).await,
@@ -616,13 +838,22 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
     }
 
     // Script: at each entry, run to idle, advance time, apply the op.
-    for entry in scenario.get("script").and_then(Value::as_array).into_iter().flatten() {
+    for entry in scenario
+        .get("script")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         lab.run_until_idle();
         let at = u64_field(entry, "at_ns")?;
         if at > lab.now().as_nanos() {
             lab.advance_time_to(Time::from_nanos(at));
         }
-        apply_driver_op(&mut lab, &shared, entry.get("op").ok_or("script entry without op")?)?;
+        apply_driver_op(
+            &mut lab,
+            &shared,
+            entry.get("op").ok_or("script entry without op")?,
+        )?;
     }
 
     // Finish: run to quiescence with timer auto-advance.
@@ -633,8 +864,12 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
         return Err(format!("harness errors: {}", errors.join("; ")));
     }
 
-    let schedule = lab.finish_forced_schedule_recording().map_err(|e| format!("{e:?}"))?;
-    let schedule_bytes = schedule.to_canonical_bytes().map_err(|e| format!("{e:?}"))?;
+    let schedule = lab
+        .finish_forced_schedule_recording()
+        .map_err(|e| format!("{e:?}"))?;
+    let schedule_bytes = schedule
+        .to_canonical_bytes()
+        .map_err(|e| format!("{e:?}"))?;
 
     // Harvest the outcomes of tasks nobody joined.
     {
@@ -644,25 +879,36 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
             if let Some(mut handle) = s.handles.remove(&name) {
                 match handle.try_join() {
                     Ok(Some(body)) => {
-                        let v = project_outcome(s, Ok(body))?;
-                        s.outcomes.insert(name, v);
+                        s.raw_outcomes.insert(name, Ok(body));
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        let v = project_outcome(s, Err(e))?;
-                        s.outcomes.insert(name, v);
+                        s.raw_outcomes.insert(name, Err(e));
                     }
                 }
             }
         }
     }
 
+    resolve_admissions(&lab, &shared)?;
+    if let Some(unadmitted) = lock(&shared).provisional.values().next() {
+        return Err(format!(
+            "spawned task {unadmitted:?} was never admitted (scenario or harness defect)"
+        ));
+    }
+    finish_outcomes(&mut lock(&shared))?;
     let events = project_trace(&lab, &shared)?;
     let trace = canon::canonical_trace(&events.events)?;
     let snapshot = build_snapshot(&lab, &shared, &events)?;
     let mut observations = std::mem::take(&mut lock(&shared).observations);
     observations.sort_by(|a, b| {
-        let key = |v: &Value| (v["task"].as_str().unwrap_or("").to_string(), v["step"].as_u64().unwrap_or(0), v["op"].as_str().unwrap_or("").to_string());
+        let key = |v: &Value| {
+            (
+                v["task"].as_str().unwrap_or("").to_string(),
+                v["step"].as_u64().unwrap_or(0),
+                v["op"].as_str().unwrap_or("").to_string(),
+            )
+        };
         key(a).cmp(&key(b))
     });
     check_expectation(scenario, &observations)?;
@@ -693,12 +939,18 @@ pub fn run_scenario(scenario: &Value) -> RunResult<Value> {
 fn apply_driver_op(lab: &mut LabRuntime, shared: &SharedRef, op: &Value) -> RunResult<()> {
     let region_id = |field: &str| -> RunResult<RegionId> {
         let name = str_field(op, field)?;
-        lock(shared).region_ids.get(name).copied().ok_or_else(|| format!("unknown region {name:?}"))
+        lock(shared)
+            .region_ids
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("unknown region {name:?}"))
     };
     match str_field(op, "op")? {
         "cancel_region" | "close_region" => {
             let region = region_id("region")?;
-            let reason = cancel_reason(op)?;
+            // No task requests a driver cancel; it originates at the target
+            // region (as app.rs:348 attributes a region's own deadline).
+            let reason = cancel_reason(op, region, None, lab.now())?;
             let (tasks, wakes) = lab.state.cancel_request(region, &reason, None).into_parts();
             for (task, priority) in tasks {
                 lab.scheduler.lock().schedule_cancel(task, priority);
@@ -712,13 +964,34 @@ fn apply_driver_op(lab: &mut LabRuntime, shared: &SharedRef, op: &Value) -> RunR
                         return Ok(());
                     }
                 }
-                return Err("close_region: region did not close within 1000 idle rounds".to_string());
+                return Err(
+                    "close_region: region did not close within 1000 idle rounds".to_string()
+                );
             }
         }
         "cancel_task" => {
             let name = str_field(op, "task")?;
-            let task = lock(shared).task_ids.get(name).copied().ok_or_else(|| format!("unknown task {name:?}"))?;
-            let reason = cancel_reason(op)?;
+            resolve_admissions(lab, shared)?;
+            let (task, owner) = {
+                let s = lock(shared);
+                let task = s
+                    .task_ids
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| format!("unknown task {name:?}"))?;
+                let region = s
+                    .task_regions
+                    .get(name)
+                    .ok_or_else(|| format!("task {name:?} has no region"))?;
+                let owner = s
+                    .region_ids
+                    .get(region)
+                    .copied()
+                    .ok_or_else(|| format!("unknown region {region:?}"))?;
+                (task, owner)
+            };
+            // A driver cancel originates at the task's own region.
+            let reason = cancel_reason(op, owner, None, lab.now())?;
             let priority = reason.cleanup_budget().priority;
             let (newly, wakes) = lab.state.cancel_task(task, &reason).into_parts();
             if newly {
@@ -727,7 +1000,11 @@ fn apply_driver_op(lab: &mut LabRuntime, shared: &SharedRef, op: &Value) -> RunR
             wakes.dispatch();
         }
         "advance" => lab.advance_time(u64_field(op, "ns")?),
-        other => return Err(format!("driver op {other:?} is not interpreted yet (increment 1)")),
+        other => {
+            return Err(format!(
+                "driver op {other:?} is not interpreted yet (increment 1)"
+            ));
+        }
     }
     Ok(())
 }
@@ -735,6 +1012,45 @@ fn apply_driver_op(lab: &mut LabRuntime, shared: &SharedRef, op: &Value) -> RunR
 // ---------------------------------------------------------------------------
 // Trace projection and snapshot
 // ---------------------------------------------------------------------------
+
+/// Name the canonical ids of children spawned through `cx.spawn`. The spawn
+/// returns a handle carrying a provisional mailbox id; admission assigns the
+/// canonical arena id every later trace event uses. The trace pairs the two:
+/// `TaskSpawnEnqueued` (provisional) and `TaskAdmitted` (canonical) match in
+/// per-region FIFO order (src/trace/event.rs, `task_admitted`). Idempotent:
+/// it rescans the trace and moves each newly admitted child out of
+/// `provisional`.
+fn resolve_admissions(lab: &LabRuntime, shared: &SharedRef) -> RunResult<()> {
+    use std::collections::VecDeque;
+    let mut pending: HashMap<RegionId, VecDeque<TaskId>> = HashMap::new();
+    let mut s = lock(shared);
+    for event in lab.trace().snapshot() {
+        match (&event.kind, &event.data) {
+            (TraceEventKind::TaskSpawnEnqueued, TraceData::Task { task, region }) => {
+                pending.entry(*region).or_default().push_back(*task);
+            }
+            (TraceEventKind::TaskAdmitted, TraceData::Task { task, region }) => {
+                let provisional = pending
+                    .get_mut(region)
+                    .and_then(VecDeque::pop_front)
+                    .ok_or_else(|| {
+                        format!("TaskAdmitted {task:?} has no pending enqueue in {region:?}")
+                    })?;
+                if let Some(name) = s.provisional.remove(&provisional) {
+                    if let Some(other) = s.task_names.get(task) {
+                        return Err(format!(
+                            "canonical {task:?} of {name:?} is already named {other:?}"
+                        ));
+                    }
+                    s.task_ids.insert(name.clone(), *task);
+                    s.task_names.insert(*task, name);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
 
 struct Projected {
     events: Vec<Value>,
@@ -773,13 +1089,27 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
             (K::RegionCancelled, TraceData::RegionCancel { region, reason }) => {
                 json!({"k": "region.cancelled", "region": region_name(&s, *region)?, "reason": project_reason(&s, reason)?})
             }
-            (K::CancelRequest, TraceData::Cancel { task, region, reason }) => json!({
+            (
+                K::CancelRequest,
+                TraceData::Cancel {
+                    task,
+                    region,
+                    reason,
+                },
+            ) => json!({
                 "k": "cancel.requested", "task": task_name(&s, *task)?, "region": region_name(&s, *region)?,
                 "reason": project_reason(&s, reason)?,
             }),
             (
                 K::ObligationReserve | K::ObligationCommit | K::ObligationAbort | K::ObligationLeak,
-                TraceData::Obligation { obligation, task, region, kind, abort_reason, .. },
+                TraceData::Obligation {
+                    obligation,
+                    task,
+                    region,
+                    kind,
+                    abort_reason,
+                    ..
+                },
             ) => {
                 let holder = task_name(&s, *task)?;
                 let name = match obligation_names.get(obligation) {
@@ -816,8 +1146,15 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
                 }
                 ev
             }
-            (K::TimerScheduled | K::TimerFired | K::TimerCancelled, TraceData::Timer { timer_id, deadline }) => {
-                let name = s.timer_names.get(timer_id).cloned().ok_or_else(|| format!("unnamed timer {timer_id}"))?;
+            (
+                K::TimerScheduled | K::TimerFired | K::TimerCancelled,
+                TraceData::Timer { timer_id, deadline },
+            ) => {
+                let name = s
+                    .timer_names
+                    .get(timer_id)
+                    .cloned()
+                    .ok_or_else(|| format!("unnamed timer {timer_id}"))?;
                 match event.kind {
                     K::TimerScheduled => {
                         let d = deadline.map_or(0, |t| t.as_nanos());
@@ -849,38 +1186,84 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
             }
             // docs/VOCABULARY_EXCLUSIONS.md
             (
-                K::Schedule | K::Yield | K::Wake | K::Poll | K::CancelAck | K::WorkerCancelRequested
-                | K::WorkerCancelAcknowledged | K::WorkerDrainStarted | K::WorkerDrainCompleted
-                | K::WorkerFinalizeCompleted | K::TaskSpawnEnqueued | K::TaskAdmitted | K::TimeAdvance
-                | K::IoRequested | K::IoReady | K::IoResult | K::IoError | K::RngSeed | K::RngValue
-                | K::Checkpoint | K::MonitorCreated | K::MonitorDropped | K::DownDelivered | K::LinkCreated
-                | K::LinkDropped | K::ExitDelivered | K::BudgetInstalled | K::BudgetConsumed,
+                K::Schedule
+                | K::Yield
+                | K::Wake
+                | K::Poll
+                | K::CancelAck
+                | K::WorkerCancelRequested
+                | K::WorkerCancelAcknowledged
+                | K::WorkerDrainStarted
+                | K::WorkerDrainCompleted
+                | K::WorkerFinalizeCompleted
+                | K::TaskSpawnEnqueued
+                | K::TaskAdmitted
+                | K::TimeAdvance
+                | K::IoRequested
+                | K::IoReady
+                | K::IoResult
+                | K::IoError
+                | K::RngSeed
+                | K::RngValue
+                | K::Checkpoint
+                | K::MonitorCreated
+                | K::MonitorDropped
+                | K::DownDelivered
+                | K::LinkCreated
+                | K::LinkDropped
+                | K::ExitDelivered
+                | K::BudgetInstalled
+                | K::BudgetConsumed,
                 _,
             ) => continue,
             (K::FuturelockDetected | K::ChaosInjection, _) => {
-                return Err(format!("{:?} in a conformance run (harness failure)", event.kind));
+                return Err(format!(
+                    "{:?} in a conformance run (harness failure)",
+                    event.kind
+                ));
             }
-            (kind, data) => return Err(format!("unprojectable trace event {kind:?} with {data:?}")),
+            (kind, data) => {
+                return Err(format!("unprojectable trace event {kind:?} with {data:?}"));
+            }
         };
         events.push(ev);
     }
     let mut timers_pending: Vec<Value> = timer_order
         .iter()
-        .filter_map(|n| timers.get(n).filter(|t| t.1).map(|t| json!({"timer": n, "deadline_ns": t.0})))
+        .filter_map(|n| {
+            timers
+                .get(n)
+                .filter(|t| t.1)
+                .map(|t| json!({"timer": n, "deadline_ns": t.0}))
+        })
         .collect();
     timers_pending.sort_by(|a, b| {
-        (a["deadline_ns"].as_u64(), a["timer"].as_str()).cmp(&(b["deadline_ns"].as_u64(), b["timer"].as_str()))
+        (a["deadline_ns"].as_u64(), a["timer"].as_str())
+            .cmp(&(b["deadline_ns"].as_u64(), b["timer"].as_str()))
     });
-    Ok(Projected { events, obligations, timers_pending })
+    Ok(Projected {
+        events,
+        obligations,
+        timers_pending,
+    })
 }
 
 fn task_state(state: &TaskState) -> (&'static str, Option<&CancelReason>, Option<&Budget>) {
     match state {
         TaskState::Created => ("Created", None, None),
         TaskState::Running => ("Running", None, None),
-        TaskState::CancelRequested { reason, cleanup_budget } => ("CancelRequested", Some(reason), Some(cleanup_budget)),
-        TaskState::Cancelling { reason, cleanup_budget } => ("Cancelling", Some(reason), Some(cleanup_budget)),
-        TaskState::Finalizing { reason, cleanup_budget } => ("Finalizing", Some(reason), Some(cleanup_budget)),
+        TaskState::CancelRequested {
+            reason,
+            cleanup_budget,
+        } => ("CancelRequested", Some(reason), Some(cleanup_budget)),
+        TaskState::Cancelling {
+            reason,
+            cleanup_budget,
+        } => ("Cancelling", Some(reason), Some(cleanup_budget)),
+        TaskState::Finalizing {
+            reason,
+            cleanup_budget,
+        } => ("Finalizing", Some(reason), Some(cleanup_budget)),
         TaskState::Completed(_) => ("Completed", None, None),
     }
 }
@@ -896,7 +1279,10 @@ fn build_snapshot(lab: &LabRuntime, shared: &SharedRef, projected: &Projected) -
         let outcome = if state == "Completed" {
             // Every completed task's outcome is harvested (by a join step or
             // the driver's final try_join); a gap is a harness bug.
-            s.outcomes.get(name).cloned().ok_or_else(|| format!("completed task {name:?} has no harvested outcome"))?
+            s.outcomes
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("completed task {name:?} has no harvested outcome"))?
         } else {
             Value::Null
         };
@@ -923,7 +1309,8 @@ fn build_snapshot(lab: &LabRuntime, shared: &SharedRef, projected: &Projected) -
             "cancel_reason": match reason { Some(r) => project_reason(&s, &r)?, None => Value::Null },
         }));
     }
-    let obligations: serde_json::Map<String, Value> = projected.obligations.iter().cloned().collect();
+    let obligations: serde_json::Map<String, Value> =
+        projected.obligations.iter().cloned().collect();
     Ok(json!({
         "now_ns": lab.now().as_nanos(),
         "quiescent": lab.is_quiescent(),
@@ -949,7 +1336,10 @@ fn check_expectation(scenario: &Value, observations: &[Value]) -> RunResult<()> 
         .find(|o| o["task"] == task && o["step"] == step)
         .ok_or_else(|| format!("must_fail: no observation for {task} step {step}"))?;
     if observed["status"] != status {
-        return Err(format!("must_fail: {task} step {step} returned {} (expected {status})", observed["status"]));
+        return Err(format!(
+            "must_fail: {task} step {step} returned {} (expected {status})",
+            observed["status"]
+        ));
     }
     Ok(())
 }

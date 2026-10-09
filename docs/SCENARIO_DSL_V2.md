@@ -196,9 +196,9 @@ event times.
 | `spawn` | `as`, `program`, optional `budget`, optional `region` (a child region this task opened) | `cx.spawn(…)` (`cx.rs:4880`). A `budget` uses `cx.spawn_in(&cx.scope_with_budget(b), …)` (`:4976`, `:4547`). `region` uses `child.cx().spawn(…)` (`cx/child_region.rs:334`). | `asx_task_spawn_with_budget(region, interpreter_poll, program, budget, &id)` | no | ignored. Admission denied surfaces later as the child's `Cancelled` outcome (Rust `JoinError::Cancelled`). |
 | `join` | `task` | `handle.join(&cx).await` (`runtime/task_handle.rs:793`) | `asx_task_join_poll(self, target, &outcome)` until done | until the child completes | Ignored: join is uninterruptible (`task_handle.rs:1080-1126`). The observation `value` is the child's outcome (vocabulary §4). |
 | `try_join` | `task` | `handle.try_join()` (`:863`) | `asx_task_join(target, &outcome)` | no | ignored. A running child gives `ASX_E_TASK_NOT_COMPLETED`. |
-| `abort_task` | `task`, `kind`, optional `message` | `handle.abort_with_reason(CancelReason::new(kind).with_message(m))` (`task_handle.rs:1005`; `types/cancel.rs:596`, `:673`) | `asx_task_cancel_with_origin(target, kind, own_region, self)` plus message (C gap, §7) | no | ignored |
+| `abort_task` | `task`, `kind`, optional `message` | `handle.abort_with_reason(reason)` (`task_handle.rs:1005`), reason attributed to the requester (§4, "Reason attribution") | `asx_task_cancel_with_origin(target, kind, own_region, self)` plus message (C gap, §7) | no | ignored |
 | `open_region` | `as`, optional `budget` | `cx.open_child_region(ChildRegionSpec::inherit().with_budget(b)).await` (`cx.rs:4491`; `child_region.rs:76`, `:87`) | `asx_region_open_child_with_budget(own_region, budget, &id)` | until the next lab step creates the region | ignored. A closing parent gives `ASX_E_REGION_CLOSED`. |
-| `cancel_region` | `region` (one this task opened), `kind`, optional `message` | `child.cancel(CancelReason::new(kind)…)` (`child_region.rs:381`) | `asx_cancel_propagate(region, kind)` plus origin and message (C gap, §7) | no | ignored |
+| `cancel_region` | `region` (one this task opened), `kind`, optional `message` | `child.cancel(reason)` (`child_region.rs:381`), reason attributed to the requester (§4, "Reason attribution") | `asx_cancel_propagate(region, kind)` plus origin and message (C gap, §7) | no | ignored |
 | `close_region` | `region` (one this task opened) | `child.close().await` (`child_region.rs:424`): cancels the remaining tasks, drains, finalizes, waits for Closed | `asx_region_close(region)`, then wait for Closed, with the same cancel-then-drain semantics | until Closed | Ignored: the closer's own cancellation is not observed. |
 
 A task can cancel or close only regions it opened itself. Rust's region
@@ -296,10 +296,32 @@ idle and virtual time is advanced to `t` (§2).
 | op | Fields | Rust | C |
 |---|---|---|---|
 | `cancel_region` | `region`, `kind`, optional `message` | `lab.state.cancel_request(region, &reason, None)` (`state.rs:7547`); the effects are routed with `into_parts()`, `scheduler.schedule_cancel` and `dispatch()` (pattern: `tests/api_v2_integration.rs:347-358`) | `asx_cancel_propagate(region, kind)` plus message (C gap, §7) |
-| `cancel_task` | `task`, `kind`, optional `message` | `lab.state.cancel_task(task, &reason)` (`state.rs:3429`), effects routed as above | `asx_task_cancel(task, kind)` |
+| `cancel_task` | `task`, `kind`, optional `message` | `lab.state.cancel_task(task, &reason)` (`state.rs:3429`), effects routed as above | `asx_task_cancel_with_origin(task, kind, task_region, ASX_INVALID_ID)` plus message |
 | `close_region` | `region`, `kind` | `cancel_request(region, kind)`, then `advance_region_state(region)` (`state.rs:10057`) after each idle until Closed | `asx_region_close(region)` with the same cancel-then-drain semantics |
 | `advance` | `ns` | `lab.advance_time(ns)` (`lab/runtime.rs:3076`; a forward jump, the only clock fault Rust offers) | `asx_lab_advance_time(ns)` |
 | `region_limits` | `region`, optional `max_tasks`, `max_children`, `max_obligations` | `lab.state.set_region_limits(region, RegionLimits{…})` (`state.rs:4103`; `record/region.rs:208`) | region admission limits (C gap, §7) |
+
+### Reason attribution
+
+Every cancel reason a scenario creates carries real attribution, built the
+way asupersync's own request paths build one:
+`CancelReason::with_origin(kind, origin_region, now)`, plus
+`.with_task(origin_task)` when a task requested it, plus `.with_message(m)`
+(`cx/cx.rs:3940`, `app.rs:348`). `now` is the virtual time of the request.
+
+| Request | `origin_region` | `origin_task` |
+|---|---|---|
+| driver `cancel_region`, `close_region` | the target region | none |
+| driver `cancel_task` | the target task's region | none |
+| step `abort_task`, `cancel_region` | the requesting task's region | the requesting task |
+
+`CancelReason::new(kind)` must not be used. It is a testing default that
+stamps `RegionId::testing_default()` and a fixed 1 s timestamp
+(`types/cancel.rs:590-605`). Captures made with it recorded placeholder
+attribution, and the placeholder region happened to be named `"root"`.
+C stamps the same fields: `asx_cancel_propagate` already attributes a region
+cancel to the target region, and the requester-attributed cases need the
+origin and message parameters listed in §7.
 
 There is no allocation-failure fault and no backward or per-task clock skew:
 Rust has neither (`lab/runtime.rs:3357`). `region_limits` is the scripted

@@ -130,7 +130,10 @@ fn footprint(event: &Value) -> CanonResult<Vec<Access>> {
         "region.close_begin" | "region.closed" | "region.cancelled" => {
             vec![w(format!("region:{}", field(event, "region")?))]
         }
-        "obligation.reserved" | "obligation.committed" | "obligation.aborted" | "obligation.leaked" => vec![
+        "obligation.reserved"
+        | "obligation.committed"
+        | "obligation.aborted"
+        | "obligation.leaked" => vec![
             w(format!("obligation:{}", field(event, "obligation")?)),
             r(format!("task:{}", field(event, "task")?)),
             r(format!("region:{}", field(event, "region")?)),
@@ -143,7 +146,10 @@ fn footprint(event: &Value) -> CanonResult<Vec<Access>> {
             w(format!("region:{}", field(event, "to_region")?)),
         ],
         "timer.scheduled" | "timer.fired" | "timer.cancelled" => {
-            vec![w(format!("timer:{}", field(event, "timer")?)), r("clock".to_string())]
+            vec![
+                w(format!("timer:{}", field(event, "timer")?)),
+                r("clock".to_string()),
+            ]
         }
         "user.trace" => vec![],
         other => return Err(format!("not a vocabulary v2 event kind: {other:?}")),
@@ -236,15 +242,21 @@ mod tests {
     #[test]
     fn unknown_kind_is_an_error() {
         assert!(
-            independent(&json!({"k": "task.polled", "task": "t"}), &json!({"k": "user.trace", "message": ""}))
-                .is_err()
+            independent(
+                &json!({"k": "task.polled", "task": "t"}),
+                &json!({"k": "user.trace", "message": ""})
+            )
+            .is_err()
         );
     }
 
     /// The normative vectors shared with the C table test (W1.2).
     #[test]
     fn independence_table_vectors() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/conformance/vocab_v2_independence_table.json");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/conformance/vocab_v2_independence_table.json"
+        );
         let table: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let reason = table["reason_fixture"].clone();
         let resolve = |mut ev: Value| {
@@ -259,8 +271,18 @@ mod tests {
             let a = resolve(case["a"].clone());
             let b = resolve(case["b"].clone());
             let expected = case["independent"].as_bool().unwrap();
-            assert_eq!(independent(&a, &b).unwrap(), expected, "case {}", case["id"]);
-            assert_eq!(independent(&b, &a).unwrap(), expected, "case {} (symmetry)", case["id"]);
+            assert_eq!(
+                independent(&a, &b).unwrap(),
+                expected,
+                "case {}",
+                case["id"]
+            );
+            assert_eq!(
+                independent(&b, &a).unwrap(),
+                expected,
+                "case {} (symmetry)",
+                case["id"]
+            );
         }
     }
 
@@ -268,7 +290,11 @@ mod tests {
     fn foata_layers_match_the_spec_example() {
         // The worked example in schemas/canonical_vocabulary_v2.json.
         let schema: Value = serde_json::from_str(
-            &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/canonical_vocabulary_v2.json")).unwrap(),
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../schemas/canonical_vocabulary_v2.json"
+            ))
+            .unwrap(),
         )
         .unwrap();
         let expected = schema["examples"][0]["trace"].clone();
@@ -280,17 +306,50 @@ mod tests {
         // One emission order of the spike scenario.
         let stream = vec![
             ev("region.created", json!({"region": "root", "parent": null})),
-            ev("task.spawned", json!({"task": "t.producer", "region": "root"})),
-            ev("task.spawned", json!({"task": "t.consumer", "region": "root"})),
-            ev("task.spawned", json!({"task": "t.waiter", "region": "root"})),
-            ev("user.trace", json!({"message": "oneshot::reserve creating permit"})),
-            ev("obligation.reserved", json!({"obligation": "t.consumer/o1", "task": "t.consumer", "region": "root", "kind": "SendPermit"})),
-            ev("obligation.committed", json!({"obligation": "t.consumer/o1", "task": "t.consumer", "region": "root", "kind": "SendPermit"})),
-            ev("task.completed", json!({"task": "t.producer", "region": "root"})),
-            ev("task.completed", json!({"task": "t.consumer", "region": "root"})),
-            ev("user.trace", json!({"message": "oneshot::recv received value"})),
-            ev("task.completed", json!({"task": "t.waiter", "region": "root"})),
+            ev(
+                "task.spawned",
+                json!({"task": "t.producer", "region": "root"}),
+            ),
+            ev(
+                "task.spawned",
+                json!({"task": "t.consumer", "region": "root"}),
+            ),
+            ev(
+                "task.spawned",
+                json!({"task": "t.waiter", "region": "root"}),
+            ),
+            ev(
+                "user.trace",
+                json!({"message": "oneshot::reserve creating permit"}),
+            ),
+            ev(
+                "obligation.reserved",
+                json!({"obligation": "t.consumer/o1", "task": "t.consumer", "region": "root", "kind": "SendPermit"}),
+            ),
+            ev(
+                "obligation.committed",
+                json!({"obligation": "t.consumer/o1", "task": "t.consumer", "region": "root", "kind": "SendPermit"}),
+            ),
+            ev(
+                "task.completed",
+                json!({"task": "t.producer", "region": "root"}),
+            ),
+            ev(
+                "task.completed",
+                json!({"task": "t.consumer", "region": "root"}),
+            ),
+            ev(
+                "user.trace",
+                json!({"message": "oneshot::recv received value"}),
+            ),
+            ev(
+                "task.completed",
+                json!({"task": "t.waiter", "region": "root"}),
+            ),
         ];
-        assert_eq!(serde_json::to_value(canonical_trace(&stream).unwrap()).unwrap(), expected);
+        assert_eq!(
+            serde_json::to_value(canonical_trace(&stream).unwrap()).unwrap(),
+            expected
+        );
     }
 }
