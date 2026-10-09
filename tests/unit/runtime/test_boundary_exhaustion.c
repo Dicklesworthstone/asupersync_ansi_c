@@ -361,18 +361,19 @@ TEST(timer_fire_frees_slots_for_reregister) {
 
     asx_timer_wheel_reset(wheel);
 
-    /* Fill to capacity with deadlines at t=100..227 */
+    /* Fill to capacity with deadlines at t=100..100+ASX_MAX_TIMERS-1 */
     for (i = 0; i < ASX_MAX_TIMERS; i++) {
         ASSERT_EQ(asx_timer_register(wheel, (asx_time)(100 + i), NULL, &handles[i]), ASX_OK);
     }
 
-    /* Fire half (deadlines 100..163) */
-    fired = asx_timer_collect_expired(wheel, 163, wakers, ASX_MAX_TIMERS);
-    ASSERT_EQ(fired, (uint32_t)64);
-    ASSERT_EQ(asx_timer_active_count(wheel), (uint32_t)64);
+    /* Fire the first half (deadlines 100..100+half-1) */
+    fired = asx_timer_collect_expired(wheel, (asx_time)(100u + ASX_MAX_TIMERS / 2u - 1u), wakers,
+                                      ASX_MAX_TIMERS);
+    ASSERT_EQ(fired, (uint32_t)(ASX_MAX_TIMERS / 2u));
+    ASSERT_EQ(asx_timer_active_count(wheel), (uint32_t)(ASX_MAX_TIMERS - ASX_MAX_TIMERS / 2u));
 
     /* Re-register into freed slots */
-    for (i = 0; i < 64; i++) {
+    for (i = 0; i < ASX_MAX_TIMERS / 2u; i++) {
         ASSERT_EQ(asx_timer_register(wheel, (asx_time)(10000 + i), NULL, &fresh), ASX_OK);
     }
     ASSERT_EQ(asx_timer_active_count(wheel), (uint32_t)ASX_MAX_TIMERS);

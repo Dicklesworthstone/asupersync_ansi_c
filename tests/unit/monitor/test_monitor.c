@@ -150,14 +150,17 @@ static void test_monitor_io_threshold_equality_does_not_trigger(void) {
         MUST_OK(asx_waker_register(89u, &w));
         MUST_OK(asx_io_register(test_io_fd(89), ASX_IO_READABLE, &w, &tok));
         MUST_OK(asx_inspect(&rt, &inspection));
-        pct = (inspection.io_driver.capacity == 0u)
-                  ? 0u
-                  : (inspection.io_driver.active_count * 100u) / inspection.io_driver.capacity;
+        /* Utilization rounded up, so the exact utilization is at or below it. */
+        pct =
+            (inspection.io_driver.capacity == 0u)
+                ? 0u
+                : (inspection.io_driver.active_count * 100u + inspection.io_driver.capacity - 1u) /
+                      inspection.io_driver.capacity;
         policy.max_io_utilization_pct = pct;
 
         MUST_OK(asx_monitor_evaluate(&rt, &policy, &report, &sink));
         ASSERT((report.triggered_mask & ASX_MONITOR_IO_HIGH) == 0u,
-               "io threshold should not trigger at equality");
+               "io threshold at or above utilization should not trigger");
         asx_io_deregister(&tok);
 #else
         ASSERT(0, "io surface should not be active when io-driver types are compile-hidden");

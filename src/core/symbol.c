@@ -144,35 +144,39 @@ static uint16_t popcount64(uint64_t x) {
 
 uint16_t asx_symbol_set_count(const asx_symbol_set *set) {
     uint16_t total = 0;
-    int i;
+    uint32_t i;
     if (set == NULL) return 0;
-    for (i = 0; i < 4; i++) total += popcount64(set->bits[i]);
+    for (i = 0; i < ASX_SYMBOL_SET_WORDS; i++) total += popcount64(set->bits[i]);
     return total;
 }
 
 int asx_symbol_set_is_empty(const asx_symbol_set *set) {
+    uint32_t i;
     if (set == NULL) return 1;
-    return (set->bits[0] | set->bits[1] | set->bits[2] | set->bits[3]) == 0;
+    for (i = 0; i < ASX_SYMBOL_SET_WORDS; i++) {
+        if (set->bits[i] != 0) return 0;
+    }
+    return 1;
 }
 
 void asx_symbol_set_union(asx_symbol_set *result, const asx_symbol_set *a,
                           const asx_symbol_set *b) {
-    int i;
+    uint32_t i;
     if (result == NULL || a == NULL || b == NULL) return;
-    for (i = 0; i < 4; i++) result->bits[i] = a->bits[i] | b->bits[i];
+    for (i = 0; i < ASX_SYMBOL_SET_WORDS; i++) result->bits[i] = a->bits[i] | b->bits[i];
 }
 
 void asx_symbol_set_intersect(asx_symbol_set *result, const asx_symbol_set *a,
                               const asx_symbol_set *b) {
-    int i;
+    uint32_t i;
     if (result == NULL || a == NULL || b == NULL) return;
-    for (i = 0; i < 4; i++) result->bits[i] = a->bits[i] & b->bits[i];
+    for (i = 0; i < ASX_SYMBOL_SET_WORDS; i++) result->bits[i] = a->bits[i] & b->bits[i];
 }
 
 int asx_symbol_set_is_subset(const asx_symbol_set *a, const asx_symbol_set *b) {
-    int i;
+    uint32_t i;
     if (a == NULL || b == NULL) return 0;
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < ASX_SYMBOL_SET_WORDS; i++) {
         if ((a->bits[i] & ~b->bits[i]) != 0) return 0;
     }
     return 1;
@@ -299,7 +303,7 @@ int asx_typed_value_equals(const asx_typed_value *a, const asx_typed_value *b) {
 void asx_symbol_set_iterate(const asx_symbol_set *set, asx_symbol_set_iter_fn fn, void *ctx) {
     uint32_t word, bit;
     if (set == NULL || fn == NULL) return;
-    for (word = 0; word < 4; word++) {
+    for (word = 0; word < ASX_SYMBOL_SET_WORDS; word++) {
         uint64_t w = set->bits[word];
         if (w == 0) continue;
         for (bit = 0; bit < 64; bit++) {

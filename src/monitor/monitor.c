@@ -18,16 +18,18 @@ void asx_monitor_policy_init_default(asx_monitor_policy *policy) {
     policy->max_watchdog_violations = 0u;
 }
 
-static uint32_t utilization_pct(uint32_t count, uint32_t capacity) {
-    if (capacity == 0u) return 0u;
-    return (count * 100u) / capacity;
+/* Nonzero when count/capacity exceeds threshold_pct percent, compared exactly:
+ * a truncated integer percentage hides small but nonzero utilization of large
+ * pools (1 of 256 is 0%), so a threshold of 0 would never fire. */
+static int utilization_exceeds(uint32_t count, uint32_t capacity, uint32_t threshold_pct) {
+    if (capacity == 0u) return 0;
+    return (uint64_t)count * 100u > (uint64_t)threshold_pct * capacity;
 }
 
 asx_status asx_monitor_evaluate(const asx_runtime *rt, const asx_monitor_policy *policy,
                                 asx_monitor_report *out, asx_evidence_sink *sink) {
     asx_monitor_policy defaults;
     asx_status st;
-    uint32_t pct;
 
     if (rt == NULL || out == NULL || sink == NULL) return ASX_E_INVALID_ARGUMENT;
     if (policy == NULL) {
@@ -47,42 +49,42 @@ asx_status asx_monitor_evaluate(const asx_runtime *rt, const asx_monitor_policy 
                                    "runtime not initialized", 0);
     }
 
-    pct = utilization_pct(out->inspection.regions.active_count, out->inspection.regions.capacity);
-    if (pct > policy->max_region_utilization_pct) {
+    if (utilization_exceeds(out->inspection.regions.active_count, out->inspection.regions.capacity,
+                            policy->max_region_utilization_pct)) {
         out->triggered_mask |= ASX_MONITOR_REGIONS_HIGH;
         st = asx_evidence_record(sink, "monitor:regions", ASX_EVIDENCE_WARN,
                                  "region utilization crossed threshold", 0);
         if (st != ASX_OK) return st;
     }
 
-    pct = utilization_pct(out->inspection.tasks.active_count, out->inspection.tasks.capacity);
-    if (pct > policy->max_task_utilization_pct) {
+    if (utilization_exceeds(out->inspection.tasks.active_count, out->inspection.tasks.capacity,
+                            policy->max_task_utilization_pct)) {
         out->triggered_mask |= ASX_MONITOR_TASKS_HIGH;
         st = asx_evidence_record(sink, "monitor:tasks", ASX_EVIDENCE_WARN,
                                  "task utilization crossed threshold", 0);
         if (st != ASX_OK) return st;
     }
 
-    pct = utilization_pct(out->inspection.obligations.active_count,
-                          out->inspection.obligations.capacity);
-    if (pct > policy->max_obligation_utilization_pct) {
+    if (utilization_exceeds(out->inspection.obligations.active_count,
+                            out->inspection.obligations.capacity,
+                            policy->max_obligation_utilization_pct)) {
         out->triggered_mask |= ASX_MONITOR_OBLIGATIONS_HIGH;
         st = asx_evidence_record(sink, "monitor:obligations", ASX_EVIDENCE_WARN,
                                  "obligation utilization crossed threshold", 0);
         if (st != ASX_OK) return st;
     }
 
-    pct =
-        utilization_pct(out->inspection.io_driver.active_count, out->inspection.io_driver.capacity);
-    if (pct > policy->max_io_utilization_pct) {
+    if (utilization_exceeds(out->inspection.io_driver.active_count,
+                            out->inspection.io_driver.capacity, policy->max_io_utilization_pct)) {
         out->triggered_mask |= ASX_MONITOR_IO_HIGH;
         st = asx_evidence_record(sink, "monitor:io_driver", ASX_EVIDENCE_WARN,
                                  "io registration utilization crossed threshold", 0);
         if (st != ASX_OK) return st;
     }
 
-    pct = utilization_pct(out->inspection.blocking.active_count, out->inspection.blocking.capacity);
-    if (pct > policy->max_blocking_utilization_pct) {
+    if (utilization_exceeds(out->inspection.blocking.active_count,
+                            out->inspection.blocking.capacity,
+                            policy->max_blocking_utilization_pct)) {
         out->triggered_mask |= ASX_MONITOR_BLOCKING_HIGH;
         st = asx_evidence_record(sink, "monitor:blocking", ASX_EVIDENCE_WARN,
                                  "blocking utilization crossed threshold", 0);

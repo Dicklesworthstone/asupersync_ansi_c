@@ -1286,7 +1286,8 @@ TEST(parallel_worker_sharded_locality_defaults_to_worker_shards) {
     ASSERT_EQ(asx_parallel_get_locality_snapshot(&snapshot), ASX_OK);
     ASSERT_EQ((int)snapshot.mode, (int)ASX_PARALLEL_LOCALITY_WORKER_SHARDED);
     ASSERT_EQ(snapshot.shard_count, 8u);
-    ASSERT_EQ(snapshot.tasks_per_shard, 8u);
+    /* Default shard size covers the task arena: ceil(ASX_MAX_TASKS / shards). */
+    ASSERT_EQ(snapshot.tasks_per_shard, (uint32_t)((ASX_MAX_TASKS + 7u) / 8u));
 
     asx_parallel_reset();
 }
@@ -1437,10 +1438,14 @@ TEST(parallel_admission_evaluate_modes) {
 }
 
 TEST(parallel_admission_enforced_backpressure_is_atomic) {
+    /* Lane depth at which pressure first reaches the 2% threshold:
+     * depth * 100 >= 2 * ASX_LANE_TASK_CAPACITY (2 for the default 64). */
+    const uint32_t trip = (2u * ASX_LANE_TASK_CAPACITY + 99u) / 100u;
     asx_parallel_config cfg = default_config();
     asx_region_id rid;
-    asx_task_id t1, t2;
+    asx_task_id tids[ASX_LANE_TASK_CAPACITY];
     asx_scheduling_metrics metrics;
+    uint32_t i;
 
     cfg.admission_policy.mode = ASX_PARALLEL_ADMISSION_BACKPRESSURE;
     cfg.admission_policy.pressure_threshold_pct = 2u;
@@ -1449,12 +1454,15 @@ TEST(parallel_admission_enforced_backpressure_is_atomic) {
     reset_all();
     ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t1), ASX_OK);
-    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &t2), ASX_OK);
+    for (i = 0u; i < trip; i++) {
+        ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tids[i]), ASX_OK);
+    }
 
-    ASSERT_EQ(asx_lane_assign(t1, ASX_LANE_READY), ASX_OK);
-    ASSERT_EQ(asx_lane_assign(t2, ASX_LANE_READY), ASX_E_WOULD_BLOCK);
-    ASSERT_EQ(asx_lane_total_tasks(), 1u);
+    for (i = 0u; i + 1u < trip; i++) {
+        ASSERT_EQ(asx_lane_assign(tids[i], ASX_LANE_READY), ASX_OK);
+    }
+    ASSERT_EQ(asx_lane_assign(tids[trip - 1u], ASX_LANE_READY), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_lane_total_tasks(), trip - 1u);
 
     ASSERT_EQ(asx_parallel_get_metrics(&metrics), ASX_OK);
     ASSERT_EQ(metrics.admission_backpressure, 1u);
@@ -1654,8 +1662,9 @@ int main(void) {
     /* Admission and telemetry evidence */
     RUN_TEST(parallel_admission_evaluate_modes);
     RUN_TEST(parallel_admission_enforced_backpressure_is_atomic);
-    RUN_TEST_IF(ASX_MAX_WORKERS >= 4u, parallel_telemetry_snapshot_and_jsonl_are_failure_atomic,
-                "needs 4 workers");
+    RUN_TEST_IF(ASX_MAX_WORKERS >= 4u && ASX_LANE_TASK_CAPACITY <= 100u,
+                parallel_telemetry_snapshot_and_jsonl_are_failure_atomic,
+                "needs 4 workers; its shed counts assume one queued task reaches 1% of a lane");
     RUN_TEST_IF(ASX_MAX_WORKERS >= 4u,
                 parallel_commit_authority_snapshot_tracks_single_commit_stream, "needs 4 workers");
 

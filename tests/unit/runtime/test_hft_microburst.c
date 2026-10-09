@@ -152,17 +152,20 @@ TEST(hft_burst_admission_gate_precheck) {
     reset_all();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
-    /* Pre-check: can we admit 32 tasks? */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, 32), ASX_OK);
+    /* Pre-check: can we admit half the task arena? */
+    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, ASX_MAX_TASKS / 2u), ASX_OK);
 
-    /* Spawn 32 */
-    for (i = 0; i < 32; i++) { ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK); }
+    /* Spawn half */
+    for (i = 0; i < ASX_MAX_TASKS / 2u; i++) {
+        ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK);
+    }
 
-    /* Pre-check: can we admit 33 more? No (32 + 33 = 65 > 64) */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, 33), ASX_E_RESOURCE_EXHAUSTED);
+    /* Pre-check: one more than the remaining half does not fit */
+    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, ASX_MAX_TASKS - ASX_MAX_TASKS / 2u + 1u),
+              ASX_E_RESOURCE_EXHAUSTED);
 
-    /* But 32 more is OK */
-    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, 32), ASX_OK);
+    /* But exactly the remaining half is OK */
+    ASSERT_EQ(asx_resource_admit(ASX_RESOURCE_TASK, ASX_MAX_TASKS - ASX_MAX_TASKS / 2u), ASX_OK);
 }
 
 /* -------------------------------------------------------------------

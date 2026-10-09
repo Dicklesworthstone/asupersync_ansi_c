@@ -35,8 +35,8 @@ typedef uint16_t asx_symbol_id;
 #ifndef ASX_SYMBOL_REGISTRY_CAPACITY
 #define ASX_SYMBOL_REGISTRY_CAPACITY 256u
 #endif
-#if (ASX_SYMBOL_REGISTRY_CAPACITY) < 1
-#error "ASX_SYMBOL_REGISTRY_CAPACITY must be at least 1"
+#if (ASX_SYMBOL_REGISTRY_CAPACITY) < 1 || (ASX_SYMBOL_REGISTRY_CAPACITY) > 65535
+#error "ASX_SYMBOL_REGISTRY_CAPACITY must be 1..65535 (IDs are uint16_t, 0 is invalid)"
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -69,9 +69,11 @@ ASX_API ASX_MUST_USE int asx_symbol_is_valid(asx_symbol_id id);
 /* Symbol set — bitfield for efficient membership testing              */
 /* ------------------------------------------------------------------ */
 
-/* 256-bit bitfield: one bit per possible symbol ID */
+/* One bit per symbol ID 1..ASX_SYMBOL_REGISTRY_CAPACITY (4 words by default). */
+#define ASX_SYMBOL_SET_WORDS (((ASX_SYMBOL_REGISTRY_CAPACITY) + 63u) / 64u)
+
 typedef struct {
-    uint64_t bits[4]; /* bits[i] covers IDs [64*i .. 64*i+63] */
+    uint64_t bits[ASX_SYMBOL_SET_WORDS]; /* bits[i] covers IDs [64*i+1 .. 64*i+64] */
 } asx_symbol_set;
 
 /* Initialize an empty set. */

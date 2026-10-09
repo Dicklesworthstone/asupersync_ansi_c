@@ -524,7 +524,7 @@ E2E_VERTICAL_SCRIPTS := \
 
 .PHONY: all build clean install uninstall FORCE
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation
-.PHONY: model-check fixture-integrity test-gates
+.PHONY: model-check fixture-integrity test-gates test-capacity-x4
 .PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
@@ -1510,6 +1510,44 @@ test-gates:
 		bash "$$t" || exit 1; \
 	done
 	@echo "[asx] test-gates: PASS"
+
+# ---------------------------------------------------------------------------
+# test-capacity-x4 — the unit suite with every capacity macro raised 4x
+# (bd-9kll.10.4). Proves the overrides take effect and that no test or module
+# hardcodes a default capacity. ASX_WAIT_QUEUE_MAX_CAPACITY stays at its
+# 64-bit-mask maximum. Separate BUILD_DIR, so build/ is untouched.
+# ---------------------------------------------------------------------------
+CAPACITY_X4_CFLAGS := \
+	-DASX_ACTOR_MAILBOX_CAPACITY=64u -DASX_AFFINITY_TABLE_CAPACITY=1024u \
+	-DASX_BROADCAST_MAX_CAPACITY=128u -DASX_BUF_CAPACITY=16384u \
+	-DASX_CHANNEL_MAX_CAPACITY=256u -DASX_CLEANUP_STACK_CAPACITY=128 \
+	-DASX_EVIDENCE_SINK_CAPACITY=256u -DASX_FS_FILE_CAPACITY=4096u \
+	-DASX_GHOST_BORROW_TABLE_CAPACITY=512u -DASX_GHOST_DETERMINISM_CAPACITY=1024u \
+	-DASX_GHOST_LINEARITY_CAPACITY=1024u -DASX_GHOST_RING_CAPACITY=256u \
+	-DASX_HINDSIGHT_CAPACITY=1024u -DASX_IDEMPOTENCY_STORE_CAPACITY=64u \
+	-DASX_LANE_TASK_CAPACITY=256u -DASX_MAX_ACTORS=64u -DASX_MAX_BLOCKING_TASKS=64u \
+	-DASX_MAX_BROADCASTS=32u -DASX_MAX_CANCEL_WITNESSES=256u -DASX_MAX_CHANNELS=64u \
+	-DASX_MAX_DEADLINE_MONITORS=128u -DASX_MAX_EPOCH_OBSERVERS=32u -DASX_MAX_EPOCHS=64u \
+	-DASX_MAX_FS_ENTRIES=64u -DASX_MAX_IO_TOKENS=256u -DASX_MAX_MASK_DEPTH=256u \
+	-DASX_MAX_OBLIGATIONS=512u -DASX_MAX_ONESHOTS=128u -DASX_MAX_OPEN_DIRS=32u \
+	-DASX_MAX_OPEN_FILES=64u -DASX_MAX_PIPES=32u -DASX_MAX_PROCESSES=32u \
+	-DASX_MAX_QUIC_CONNECTIONS=16u -DASX_MAX_QUIC_STREAMS=64u -DASX_MAX_REGION_CHILDREN=32u \
+	-DASX_MAX_REGIONS=32u -DASX_MAX_SESSIONS=32u -DASX_MAX_SIGNAL_SUBSCRIPTIONS=64u \
+	-DASX_MAX_SUPERVISORS=32u -DASX_MAX_SUSPECTS=16u -DASX_MAX_TASKS=256u \
+	-DASX_MAX_TCP_LISTENERS=16u -DASX_MAX_TCP_STREAMS=64u -DASX_MAX_TIMERS=512u \
+	-DASX_MAX_TLS_STREAMS=32u -DASX_MAX_UDP_SOCKETS=64u -DASX_MAX_UNIX_DGRAM_SOCKETS=32u \
+	-DASX_MAX_UNIX_LISTENERS=16u -DASX_MAX_UNIX_STREAMS=64u -DASX_MAX_WAKERS=256u \
+	-DASX_MAX_WATCHES=64u -DASX_MAX_WS_CONNECTIONS=32u -DASX_POSIX_BLOCKING_QUEUE_CAPACITY=32u \
+	-DASX_POSIX_BLOCKING_WORKERS=16u -DASX_RESOLVER_CACHE_CAPACITY=32u \
+	-DASX_RESOLVER_HOST_CAPACITY=1024u -DASX_SCHED_EVENT_LOG_CAPACITY=1024u \
+	-DASX_SERVICE_BUFFER_CAPACITY=32u -DASX_SESSION_MAX_CAPACITY=64u \
+	-DASX_SYMBOL_REGISTRY_CAPACITY=1024u -DASX_TRACE_CAPACITY=4096u
+
+test-capacity-x4:
+	@echo "[asx] test-capacity-x4: unit suite with every capacity macro raised 4x..."
+	@$(MAKE) --no-print-directory test-unit BUILD_DIR=build/capacity-x4 \
+		CFLAGS='$(CAPACITY_X4_CFLAGS)'
+	@echo "[asx] test-capacity-x4: PASS"
 
 # ---------------------------------------------------------------------------
 # codec-equivalence — JSON vs BIN semantic digest parity
