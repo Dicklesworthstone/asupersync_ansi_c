@@ -201,6 +201,7 @@ asx_status asx_spawn_blocking(asx_blocking_fn fn, void *user_data,
     active_inc();
     pool_unlock();
 
+    /* ASX_ANALYZER_WAIVER("config-dependent: constant 0 under ASX_DETERMINISTIC") */
     if (hooks_use_blocking_submit(hooks)) {
         st = hooks->blocking.submit_fn(hooks->blocking.ctx, blocking_job_run, &g_job_ctx[idx]);
         if (st != ASX_OK) {
@@ -224,6 +225,7 @@ asx_status asx_spawn_blocking(asx_blocking_fn fn, void *user_data,
     return ASX_OK;
 }
 
+/* ASX_ANALYZER_WAIVER("callback signature: a const job_ctx would need a function-pointer cast") */
 static void blocking_job_run(void *job_ctx) {
     const asx_blocking_job_ctx *ctx = (const asx_blocking_job_ctx *)job_ctx;
     asx_blocking_fn fn;

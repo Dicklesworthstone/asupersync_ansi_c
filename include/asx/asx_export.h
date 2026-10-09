@@ -28,7 +28,9 @@
 #ifndef ASX_MUST_USE
 #if defined(__cplusplus) && __cplusplus >= 201703L
 #define ASX_MUST_USE [[nodiscard]]
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L && !defined(__CPPCHECK__)
+/* cppcheck explores this branch while parsing as C99 (--std=c99), where
+ * [[nodiscard]] is a syntax error; it never applies to a C99 lint run. */
 #define ASX_MUST_USE [[nodiscard]]
 #elif defined(__GNUC__) || defined(__clang__)
 #define ASX_MUST_USE __attribute__((warn_unused_result))

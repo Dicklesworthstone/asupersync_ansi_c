@@ -32,7 +32,7 @@ uint64_t asx_backoff_delay_for_attempt(const asx_backoff_config *cfg, uint32_t a
     case ASX_BACKOFF_NONE: return 0;
     case ASX_BACKOFF_CONSTANT: return cfg->initial_delay_ns;
     case ASX_BACKOFF_LINEAR: {
-        uint64_t factor = (uint64_t)(attempt + 1u);
+        uint64_t factor = (uint64_t)attempt + 1u;
         /* Overflow-safe: check before multiply */
         if (cfg->initial_delay_ns > 0u && factor > cfg->max_delay_ns / cfg->initial_delay_ns) {
             return cfg->max_delay_ns;

@@ -35,6 +35,21 @@ CLANG_FORMAT_VERSION ?= 18.1.8
 CLANG_FORMAT ?= $(shell if clang-format --version 2>/dev/null | grep -q 'version $(CLANG_FORMAT_VERSION)'; then \
 	echo clang-format; elif command -v uvx >/dev/null 2>&1; then \
 	echo "uvx --from clang-format==$(CLANG_FORMAT_VERSION) clang-format"; fi)
+# Pinned analyzer: Cppcheck 2.22.0 (PyPI wheel cppcheck==1.5.3). Different
+# cppcheck versions report different findings, so local runs and CI must use
+# the same one; the system binary is used only when it is that version.
+CPPCHECK_VERSION ?= 2.22.0
+CPPCHECK_WHEEL ?= 1.5.3
+CPPCHECK_JOBS ?= 8
+CPPCHECK ?= $(shell if cppcheck --version 2>/dev/null | grep -q 'Cppcheck $(CPPCHECK_VERSION)'; then \
+	echo cppcheck; elif command -v uvx >/dev/null 2>&1; then \
+	echo "uvx --from cppcheck==$(CPPCHECK_WHEEL) cppcheck"; fi)
+# Pinned clang-tidy for the section 10.7 static-analysis gate, resolved the
+# same way as clang-format.
+CLANG_TIDY_VERSION ?= 18.1.8
+CLANG_TIDY ?= $(shell if clang-tidy --version 2>/dev/null | grep -q 'version $(CLANG_TIDY_VERSION)'; then \
+	echo clang-tidy; elif command -v uvx >/dev/null 2>&1; then \
+	echo "uvx --from clang-tidy==$(CLANG_TIDY_VERSION) clang-tidy"; fi)
 FAIL_ON_EMPTY_INVARIANT_TESTS ?= 0
 RUN_QEMU_IN_MATRIX ?= 0
 
@@ -507,7 +522,7 @@ E2E_VERTICAL_SCRIPTS := \
 
 .PHONY: all build clean install uninstall FORCE
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation
-.PHONY: model-check
+.PHONY: model-check fixture-integrity test-gates
 .PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
@@ -628,14 +643,15 @@ format-check:
 # ---------------------------------------------------------------------------
 lint:
 	@echo "[asx] lint: running static analysis..."
-	@if command -v cppcheck >/dev/null 2>&1; then \
-		cppcheck --enable=warning,performance,portability --std=c99 --error-exitcode=1 \
+	@if [ -n "$(CPPCHECK)" ]; then \
+		$(CPPCHECK) -j $(CPPCHECK_JOBS) --enable=warning,performance,portability --std=c99 \
+		         --error-exitcode=1 \
 		         --suppress=missingIncludeSystem \
 		         --suppress=unusedFunction \
 		         --suppress=normalCheckLevelMaxBranches \
 		         --suppress=toomanyconfigs \
 		         -I include src/ && \
-		echo "[asx] lint: PASS (cppcheck)" || \
+		echo "[asx] lint: PASS (cppcheck $(CPPCHECK_VERSION))" || \
 		{ echo "[asx] lint: FAIL"; exit 1; }; \
 	elif command -v clang-tidy >/dev/null 2>&1; then \
 		find src -name '*.c' | xargs clang-tidy -- $(ALL_CFLAGS) && \
@@ -686,7 +702,8 @@ lint-evidence:
 lint-static-analysis:
 	@echo "[asx] lint-static-analysis: section 10.7 gates..."
 	@if [ -x tools/ci/run_static_analysis.sh ]; then \
-		tools/ci/run_static_analysis.sh; \
+		CPPCHECK="$(CPPCHECK)" CLANG_TIDY="$(CLANG_TIDY)" \
+		FAIL_ON_MISSING_LINTER="$(FAIL_ON_MISSING_LINTER)" tools/ci/run_static_analysis.sh; \
 	else \
 		echo "[asx] lint-static-analysis: SKIP (runner not found)"; \
 	fi
@@ -1461,18 +1478,43 @@ resource-pressure-gate:
 	@ASX_GIT_COMMIT="$(ASX_GIT_COMMIT)" tools/ci/run_resource_pressure_gate.sh
 
 # ---------------------------------------------------------------------------
-# conformance — Rust fixture parity verification
+# conformance — Rust parity: fixtures executed through the C runtime and
+# compared with Rust-captured results. Until the conformance interpreter and
+# twin-run oracle exist (bridge program W1, beads bd-9kll.2.*) there is no
+# such evidence, and this target FAILS instead of passing on zero
+# comparisons. It is deliberately not part of check-ci until milestone M-beta;
+# CI runs it as a visible, non-blocking job.
 # ---------------------------------------------------------------------------
 conformance:
-	@echo "[asx] conformance: Rust fixture parity check..."
+	@echo "[asx] conformance: Rust parity check (requires executed fixtures)..."
 	@if [ -x tools/ci/run_conformance.sh ]; then \
-		tools/ci/run_conformance.sh; \
+		tools/ci/run_conformance.sh --mode conformance; \
 	elif [ "$(FAIL_ON_MISSING_RUNNERS)" = "1" ]; then \
 		echo "[asx] conformance: FAIL (runner missing; strict mode)"; \
 		exit 1; \
 	else \
 		echo "[asx] conformance: SKIP (runner not yet implemented)"; \
 	fi
+
+# ---------------------------------------------------------------------------
+# fixture-integrity — fixture schema, provenance, digest recomputation,
+# capture_run_id format, unknown ops, and a codec round trip. It proves the
+# fixtures are well-formed captures; it does NOT execute the C runtime.
+# ---------------------------------------------------------------------------
+fixture-integrity:
+	@echo "[asx] fixture-integrity: fixture schema/provenance/digest check..."
+	@tools/ci/run_conformance.sh --mode fixture-integrity
+
+# ---------------------------------------------------------------------------
+# test-gates — negative controls: the gates themselves must fail on bad input
+# ---------------------------------------------------------------------------
+test-gates:
+	@echo "[asx] test-gates: running gate negative controls..."
+	@for t in tests/gates/*.sh; do \
+		echo "  RUN  $$t"; \
+		bash "$$t" || exit 1; \
+	done
+	@echo "[asx] test-gates: PASS"
 
 # ---------------------------------------------------------------------------
 # codec-equivalence — JSON vs BIN semantic digest parity
@@ -1841,7 +1883,7 @@ qemu-smoke:
 check: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build test model-check abi-check test-abi-shim formal-check
 
 check-ci: CI=1
-check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build build-browser test-browser-focused test-browser-minimal-focused test model-check test-e2e-vertical conformance codec-equivalence profile-parity parallel-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
+check-ci: format-check lint lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation build build-browser test-browser-focused test-browser-minimal-focused test model-check test-e2e-vertical fixture-integrity test-gates codec-equivalence profile-parity parallel-parity fuzz-smoke ci-embedded-matrix ci-embedded-baremetal
 
 ci-embedded-baremetal:
 	@echo "[asx] ci-embedded-baremetal: bare-metal gate..."

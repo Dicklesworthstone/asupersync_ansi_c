@@ -373,6 +373,7 @@ int asx_runtime_is_quiescent(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0;
     if (runtime_has_live_tasks()) return 0;
     if (runtime_has_pending_obligations()) return 0;
+    /* ASX_ANALYZER_WAIVER("config-dependent: 0 without ASX_HAS_NATIVE_IO_DRIVER") */
     if (asx_runtime_io_registration_count(rt) != 0u) return 0;
     if (runtime_has_pending_region_cleanup()) return 0;
     if (!runtime_all_regions_closed()) return 0;
