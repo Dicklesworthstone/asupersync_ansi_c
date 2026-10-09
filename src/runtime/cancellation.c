@@ -103,6 +103,7 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
     asx_budget cleanup;
     asx_cancel_reason merged;
     asx_budget prior_cleanup = asx_budget_infinite();
+    const asx_cancel_reason *requested = reason;
 
     if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
 
@@ -238,13 +239,16 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
     /* A newly cancelled task (vocabulary cancel.requested). Rust records it
      * only where a region or policy cancels tasks (cancel_request,
      * state.rs:7864; cancel_sibling_tasks, :7502); a direct task cancel
-     * (RuntimeState::cancel_task, :3429) or a handle abort records none. */
+     * (RuntimeState::cancel_task, :3429) or a handle abort records none.
+     * The event carries the request's own reason, not the one a pending
+     * budget cancel strengthened it to (state.rs:7861-7864; fuzz finding
+     * gen-50-10). */
     if (source == ASX_CANCEL_SRC_REGION) {
         asx_trace_payload payload;
         payload.text = NULL;
-        payload.reason = &t->cancel_reason;
+        payload.reason = requested;
         asx_trace_emit_payload_internal(ASX_TRACE_CANCEL_REQUEST, (uint64_t)id,
-                                        (uint64_t)reason->kind, &payload);
+                                        (uint64_t)requested->kind, &payload);
     }
 
     return ASX_OK;
