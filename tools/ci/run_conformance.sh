@@ -193,6 +193,9 @@ baseline_toolchain_hash="$(jq -r '.rust_toolchain.commit_hash // ""' "$BASELINE_
 baseline_toolchain_release="$(jq -r '.rust_toolchain.release // ""' "$BASELINE_FILE")"
 baseline_toolchain_host="$(jq -r '.rust_toolchain.host // ""' "$BASELINE_FILE")"
 baseline_cargo_sha="$(jq -r '.cargo_lock.sha256 // ""' "$BASELINE_FILE")"
+# A rebase in progress: fixtures captured on it live in build/fixture_staging
+# until `make fixtures-promote` makes it the active baseline.
+pending_commit="$(jq -r '.pending_rebase.source_repo.commit // ""' "$BASELINE_FILE")"
 
 if [[ -z "$baseline_commit" || -z "$baseline_toolchain_hash" || -z "$baseline_cargo_sha" ]]; then
   echo "[asx] conformance: FAIL (baseline inventory missing required provenance fields)" >&2
@@ -432,6 +435,7 @@ else
       --arg file "$rel_fixture" \
       --arg recomputed_digest "$recomputed_digest" \
       --arg baseline_commit "$baseline_commit" \
+      --arg pending_commit "$pending_commit" \
       --arg baseline_toolchain_hash "$baseline_toolchain_hash" \
       --arg baseline_toolchain_release "$baseline_toolchain_release" \
       --arg baseline_toolchain_host "$baseline_toolchain_host" \
@@ -472,6 +476,7 @@ else
           (if .rust_toolchain_host == "" then "missing provenance.rust_toolchain_host" else empty end),
           (if .cargo_lock_sha256 == "" then "missing provenance.cargo_lock_sha256" else empty end),
           (if .rust_baseline_commit != $baseline_commit then "rust_baseline_commit mismatch" else empty end),
+          (if $pending_commit != "" and .rust_baseline_commit == $pending_commit then "captured on the pending rebase baseline but committed before promotion (mixing generations; use make fixtures-promote)" else empty end),
           (if .rust_toolchain_commit_hash != $baseline_toolchain_hash then "rust_toolchain_commit_hash mismatch" else empty end),
           (if .rust_toolchain_release != $baseline_toolchain_release then "rust_toolchain_release mismatch" else empty end),
           (if .rust_toolchain_host != $baseline_toolchain_host then "rust_toolchain_host mismatch" else empty end),

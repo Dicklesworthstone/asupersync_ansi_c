@@ -524,7 +524,7 @@ E2E_VERTICAL_SCRIPTS := \
 
 .PHONY: all build clean install uninstall FORCE
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation
-.PHONY: model-check fixture-integrity test-gates test-capacity-x4
+.PHONY: model-check fixture-integrity fixtures-promote test-gates test-capacity-x4
 .PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
@@ -1499,6 +1499,13 @@ conformance:
 fixture-integrity:
 	@echo "[asx] fixture-integrity: fixture schema/provenance/digest check..."
 	@tools/ci/run_conformance.sh --mode fixture-integrity
+
+# fixtures-promote — copy a staged capture (tools/ci/capture_rust_fixtures.sh)
+# into fixtures/rust_reference; a baseline rebase needs owner sign-off in the
+# rebase record (bd-9kll.2.1).
+fixtures-promote:
+	@[ -n "$(RUN_ID)" ] || { echo "usage: make fixtures-promote RUN_ID=<run_id>"; exit 2; }
+	@tools/ci/promote_fixtures.sh --run-id "$(RUN_ID)"
 
 # ---------------------------------------------------------------------------
 # test-gates — negative controls: the gates themselves must fail on bad input
