@@ -1235,10 +1235,10 @@ TEST(parallel_worker_sharded_locality_routes_by_contiguous_slot_ranges) {
     ASSERT_EQ((int)snapshot.mode, (int)ASX_PARALLEL_LOCALITY_WORKER_SHARDED);
     ASSERT_EQ(snapshot.shard_count, 4u);
     ASSERT_EQ(snapshot.tasks_per_shard, 2u);
-    ASSERT_EQ(snapshot.shard_task_counts[0], 2u);
-    ASSERT_EQ(snapshot.shard_task_counts[1], 2u);
-    ASSERT_EQ(snapshot.shard_task_counts[2], 2u);
-    ASSERT_EQ(snapshot.shard_task_counts[3], 2u);
+    /* Indexed through i: the test is compiled (and skipped) on profiles whose
+     * shard_task_counts has fewer than 4 entries, where constant indices
+     * would trip -Warray-bounds. */
+    for (i = 0u; i < 4u; i++) { ASSERT_EQ(snapshot.shard_task_counts[i], 2u); }
     ASSERT_EQ(snapshot.max_shard_tasks, 2u);
 
     ASSERT_EQ(asx_parallel_task_locality(tids[0], &shard, &worker), ASX_OK);
