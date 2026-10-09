@@ -35,6 +35,7 @@ BOUNDED_PATTERNS=(
     'ASX_AFFINITY_TABLE_CAPACITY'
     'ASX_TRACE_CAPACITY'
     'ASX_HINDSIGHT_CAPACITY'
+    'ASX_SYMBOL_SET_WORDS'
     'ASX_ERROR_LEDGER_'
     'sizeof('
     '< 4'
@@ -178,11 +179,12 @@ is_debug_only() {
             break
         fi
 
-        # Track preprocessor conditionals
+        # Track preprocessor conditionals. #ifndef opens a block too: missing it
+        # let the #endif of a capacity guard close an enclosing ASX_DEBUG block.
         if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*(ifdef|if)[[:space:]].*ASX_DEBUG ]]; then
             in_debug=$((in_debug + 1))
             ifdef_depth=$((ifdef_depth + 1))
-        elif [[ "$line" =~ ^[[:space:]]*#[[:space:]]*(ifdef|if)[[:space:]] ]]; then
+        elif [[ "$line" =~ ^[[:space:]]*#[[:space:]]*(ifdef|ifndef|if)[[:space:]] ]]; then
             ifdef_depth=$((ifdef_depth + 1))
         elif [[ "$line" =~ ^[[:space:]]*#[[:space:]]*endif ]]; then
             if [[ $ifdef_depth -gt 0 ]]; then
