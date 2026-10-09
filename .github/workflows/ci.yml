@@ -419,6 +419,10 @@ jobs:
     needs: [check]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # tests/gates/test_anti_butchering_push_range.sh replays pushes over
+          # commits in main's history.
+          fetch-depth: 0
 
       - name: Install dependencies
         run: |
