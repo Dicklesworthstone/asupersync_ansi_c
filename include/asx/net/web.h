@@ -265,7 +265,7 @@ ASX_API int asx_web_sse_is_open(const asx_web_sse_stream *stream);
 typedef struct {
     char name[ASX_WEB_MULTIPART_NAME_MAX];
     char filename[ASX_WEB_MULTIPART_FILENAME_MAX];
-    char content_type[ASX_HTTP_HEADER_NAME_MAX];
+    char content_type[ASX_HTTP_HEADER_VALUE_MAX]; /* a header value, not a name */
     uint8_t data[ASX_WEB_MULTIPART_DATA_MAX];
     uint32_t data_len;
     uint8_t is_file;
@@ -361,7 +361,7 @@ ASX_API int asx_web_csrf_validate(const asx_web_csrf *csrf, const char *submitte
 
 typedef struct {
     char path[ASX_WEB_PATH_MAX];
-    char content_type[ASX_HTTP_HEADER_NAME_MAX];
+    char content_type[ASX_HTTP_HEADER_VALUE_MAX]; /* a header value, not a name */
     const uint8_t *data;
     uint32_t data_len;
 } asx_web_static_entry;
