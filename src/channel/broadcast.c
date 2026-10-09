@@ -4,8 +4,9 @@
  * Walking skeleton: fixed-size arena, single-threaded.
  * Ring buffer with per-receiver cursors.
  *
- * Wake-driven waiting: try_recv reporting ASX_E_WOULD_BLOCK inside a
- * scheduler poll parks the calling task. Every send (each receiver has its
+ * Wake-driven waiting: asx_broadcast_recv finding nothing new inside a
+ * scheduler poll parks the calling task (try_recv never parks, bd-vc1v).
+ * Every send (each receiver has its
  * own cursor, so every receiver gains a message) and the sender drop wake
  * all parked tasks, in FIFO order.
  *
@@ -32,7 +33,7 @@ typedef struct {
     uint32_t write_seq; /* next write position (monotonic) */
     uint32_t receiver_count;
     asx_task_id wait_slots[ASX_BROADCAST_MAX_RECEIVERS];
-    asx_wait_queue waiters; /* tasks parked in try_recv */
+    asx_wait_queue waiters; /* tasks parked in asx_broadcast_recv */
 } asx_broadcast_slot;
 
 /* ------------------------------------------------------------------ */
@@ -201,7 +202,11 @@ asx_status asx_broadcast_send(asx_broadcast_sender *sender, asx_cx *cx, uint64_t
 /* Receive                                                             */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_broadcast_try_recv(asx_broadcast_receiver *receiver, uint64_t *out_value) {
+/* Receive the next value. Nothing new: a waiting receive
+ * (asx_broadcast_recv) parks the calling task until a send or the sender
+ * drops; try_recv never parks (Rust try_recv registers no waker). */
+static asx_status broadcast_recv_impl(asx_broadcast_receiver *receiver, uint64_t *out_value,
+                                      int park) {
     asx_broadcast_slot *s;
     uint32_t oldest_available;
     uint32_t ring_idx;
@@ -218,7 +223,7 @@ asx_status asx_broadcast_try_recv(asx_broadcast_receiver *receiver, uint64_t *ou
             asx_wait_queue_leave_current(&s->waiters);
             return ASX_E_DISCONNECTED;
         }
-        (void)asx_wait_queue_park_current(&s->waiters);
+        if (park) (void)asx_wait_queue_park_current(&s->waiters);
         return ASX_E_WOULD_BLOCK;
     }
 
@@ -247,6 +252,10 @@ asx_status asx_broadcast_try_recv(asx_broadcast_receiver *receiver, uint64_t *ou
     return ASX_OK;
 }
 
+asx_status asx_broadcast_try_recv(asx_broadcast_receiver *receiver, uint64_t *out_value) {
+    return broadcast_recv_impl(receiver, out_value, 0);
+}
+
 asx_status asx_broadcast_recv(asx_broadcast_receiver *receiver, asx_cx *cx, uint64_t *out_value) {
     asx_status st;
 
@@ -259,7 +268,7 @@ asx_status asx_broadcast_recv(asx_broadcast_receiver *receiver, asx_cx *cx, uint
         asx_trace_user(cx->task_id, "broadcast::recv cancelled");
         return ASX_E_CANCELLED;
     }
-    st = asx_broadcast_try_recv(receiver, out_value);
+    st = broadcast_recv_impl(receiver, out_value, 1);
     return st == ASX_E_WOULD_BLOCK ? ASX_E_PENDING : st;
 }
 

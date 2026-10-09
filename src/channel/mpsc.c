@@ -12,14 +12,16 @@
  *
  * Capacity invariant: queue_len + reserved_count <= capacity
  *
- * Wake-driven waiting: inside a scheduler poll, try_recv (empty) and
- * try_reserve (full) park the calling task in the channel's FIFO recv /
- * reserve wait queue. After every state change the queues are settled:
- * each committed message is owed to one parked receiver, and free capacity
- * to the head of the reserve line (a commit wakes one receiver, a dequeue
- * or abort wakes the oldest producer). As upstream, try_reserve never
- * jumps the line: with a live producer parked ahead it reports FULL even
- * if capacity is free. Closing either side wakes everyone.
+ * Wake-driven waiting: inside a scheduler poll, the waiting operations
+ * asx_channel_recv (empty) and asx_channel_reserve / asx_channel_send
+ * (full) park the calling task in the channel's FIFO recv / reserve wait
+ * queue. try_recv and try_reserve never park, as Rust's try_* register no
+ * waker (bd-vc1v). After every state change the queues are settled: each
+ * committed message is owed to one parked receiver, and free capacity to
+ * the head of the reserve line (a commit wakes one receiver, a dequeue or
+ * abort wakes the oldest producer). As upstream, no reserve jumps the
+ * line: with a live producer parked ahead it reports FULL even if capacity
+ * is free. Closing either side wakes everyone.
  * asx_channel_wait_cancel() withdraws a task that stops waiting and passes
  * any wake it held on. Outside a scheduler poll nothing parks.
  *
@@ -525,16 +527,20 @@ asx_status asx_channel_reserved_count(asx_channel_id id, uint32_t *out) {
 /* Two-phase send: reserve                                            */
 /* ------------------------------------------------------------------ */
 
-/* try_reserve found no capacity: park the calling task until a dequeue or
- * abort frees a slot. Settling first re-issues any wake that a receiver
- * which died after being woken can no longer act on. */
-static asx_status channel_reserve_full(asx_channel_slot *s) {
-    channel_settle(s);
-    (void)asx_wait_queue_park_current(&s->reserve_waiters);
+/* No capacity. A waiting reserve (asx_channel_reserve / asx_channel_send)
+ * parks the calling task until a dequeue or abort frees a slot; settling
+ * first re-issues any wake that a receiver which died after being woken
+ * can no longer act on. A try_reserve never parks (Rust try_reserve and
+ * try_send never register a waker, mpsc.rs:732-797). */
+static asx_status channel_reserve_full(asx_channel_slot *s, int park) {
+    if (park) {
+        channel_settle(s);
+        (void)asx_wait_queue_park_current(&s->reserve_waiters);
+    }
     return ASX_E_CHANNEL_FULL;
 }
 
-asx_status asx_channel_try_reserve(asx_channel_id id, asx_send_permit *out) {
+static asx_status channel_reserve_impl(asx_channel_id id, asx_send_permit *out, int park) {
     asx_channel_slot *s;
     asx_status st;
 
@@ -557,14 +563,14 @@ asx_status asx_channel_try_reserve(asx_channel_id id, asx_send_permit *out) {
      * belongs to the head of the line until it claims it or stops waiting,
      * so anyone with a live producer ahead of them reports FULL. */
     if (s->reserve_waiters.len > 0u && asx_wait_queue_live_ahead(&s->reserve_waiters) > 0u) {
-        return channel_reserve_full(s);
+        return channel_reserve_full(s, park);
     }
 
 #if ASX_CHANNEL_BACKEND_LOCKFREE
-    if (!channel_lf_claim_capacity(s)) { return channel_reserve_full(s); }
+    if (!channel_lf_claim_capacity(s)) { return channel_reserve_full(s, park); }
 #else
     if (s->queue_len + channel_atomic_load(&s->reserved) >= s->capacity) {
-        return channel_reserve_full(s);
+        return channel_reserve_full(s, park);
     }
 #endif
 
@@ -607,6 +613,10 @@ asx_status asx_channel_try_reserve(asx_channel_id id, asx_send_permit *out) {
         channel_settle(s);
     }
     return ASX_OK;
+}
+
+asx_status asx_channel_try_reserve(asx_channel_id id, asx_send_permit *out) {
+    return channel_reserve_impl(id, out, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -723,7 +733,10 @@ static void channel_recv_done(asx_channel_slot *s) {
     channel_settle(s);
 }
 
-asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value) {
+/* Receive one message. Empty: a waiting receive (asx_channel_recv) parks
+ * the calling task until a commit or a close; a try_recv never parks (Rust
+ * try_recv registers no waker, mpsc.rs:1956-1983). */
+static asx_status channel_recv_impl(asx_channel_id id, uint64_t *out_value, int park) {
     asx_channel_slot *s;
     asx_status st;
 
@@ -765,9 +778,15 @@ asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value) {
 
     /* Empty: park until a commit (or a close). Settling first re-issues any
      * wake that a producer which died after being woken can no longer use. */
-    channel_settle(s);
-    (void)asx_wait_queue_park_current(&s->recv_waiters);
+    if (park) {
+        channel_settle(s);
+        (void)asx_wait_queue_park_current(&s->recv_waiters);
+    }
     return ASX_E_WOULD_BLOCK;
+}
+
+asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value) {
+    return channel_recv_impl(id, out_value, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -812,7 +831,7 @@ asx_status asx_channel_reserve(asx_channel_id id, asx_cx *cx, asx_send_permit *o
     if (out == NULL) { return ASX_E_INVALID_ARGUMENT; }
     if (channel_wait_cancelled(id, cx, "mpsc::reserve cancelled")) { return ASX_E_CANCELLED; }
 
-    st = asx_channel_try_reserve(id, out);
+    st = channel_reserve_impl(id, out, 1);
     if (st == ASX_E_CHANNEL_FULL) { return ASX_E_PENDING; }
     if (st != ASX_OK) { return st; }
 
@@ -834,7 +853,7 @@ asx_status asx_channel_send(asx_channel_id id, asx_cx *cx, uint64_t value) {
 
     if (channel_wait_cancelled(id, cx, "mpsc::reserve cancelled")) { return ASX_E_CANCELLED; }
 
-    st = asx_channel_try_reserve(id, &permit);
+    st = channel_reserve_impl(id, &permit, 1);
     if (st == ASX_E_CHANNEL_FULL) { return ASX_E_PENDING; }
     if (st != ASX_OK) { return st; }
     return asx_send_permit_send(&permit, value);
@@ -846,7 +865,7 @@ asx_status asx_channel_recv(asx_channel_id id, asx_cx *cx, uint64_t *out_value) 
     if (out_value == NULL) { return ASX_E_INVALID_ARGUMENT; }
     if (channel_wait_cancelled(id, cx, "mpsc::recv cancelled")) { return ASX_E_CANCELLED; }
 
-    st = asx_channel_try_recv(id, out_value);
+    st = channel_recv_impl(id, out_value, 1);
     return st == ASX_E_WOULD_BLOCK ? ASX_E_PENDING : st;
 }
 

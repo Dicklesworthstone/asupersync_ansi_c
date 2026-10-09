@@ -3,9 +3,10 @@
  *
  * Walking skeleton: fixed-size arena, single-threaded.
  *
- * Wake-driven waiting: try_recv reporting ASX_E_WOULD_BLOCK inside a
+ * Wake-driven waiting: asx_oneshot_recv finding no value inside a
  * scheduler poll parks the calling task; the send, a sender drop, or a
  * receiver drop wakes every parked task so it observes the final state.
+ * try_recv never parks (bd-vc1v).
  *
  * SPDX-License-Identifier: MIT
  */
@@ -33,7 +34,7 @@ typedef struct {
     int sender_alive;
     int receiver_alive;
     asx_task_id wait_slots[ONESHOT_MAX_WAITERS];
-    asx_wait_queue waiters; /* tasks parked in try_recv */
+    asx_wait_queue waiters; /* tasks parked in asx_oneshot_recv */
 } asx_oneshot_slot;
 
 /* ------------------------------------------------------------------ */
@@ -174,7 +175,10 @@ asx_status asx_oneshot_try_send(asx_oneshot_sender *sender, uint64_t value) {
     return ASX_OK;
 }
 
-asx_status asx_oneshot_try_recv(asx_oneshot_receiver *receiver, uint64_t *out_value) {
+/* Receive the value. Empty: a waiting receive (asx_oneshot_recv) parks the
+ * calling task until a send or a drop; try_recv never parks (Rust
+ * try_recv registers no waker). */
+static asx_status oneshot_recv_impl(asx_oneshot_receiver *receiver, uint64_t *out_value, int park) {
     asx_oneshot_slot *s;
 
     if (receiver == NULL || out_value == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -205,8 +209,12 @@ asx_status asx_oneshot_try_recv(asx_oneshot_receiver *receiver, uint64_t *out_va
         return ASX_E_DISCONNECTED;
     }
 
-    (void)asx_wait_queue_park_current(&s->waiters);
+    if (park) (void)asx_wait_queue_park_current(&s->waiters);
     return ASX_E_WOULD_BLOCK;
+}
+
+asx_status asx_oneshot_try_recv(asx_oneshot_receiver *receiver, uint64_t *out_value) {
+    return oneshot_recv_impl(receiver, out_value, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -277,7 +285,7 @@ asx_status asx_oneshot_recv(asx_oneshot_receiver *receiver, asx_cx *cx, uint64_t
         oneshot_trace(cx, "oneshot::recv cancelled while waiting");
         return ASX_E_CANCELLED;
     }
-    st = asx_oneshot_try_recv(receiver, out_value);
+    st = oneshot_recv_impl(receiver, out_value, 1);
     return st == ASX_E_WOULD_BLOCK ? ASX_E_PENDING : st;
 }
 

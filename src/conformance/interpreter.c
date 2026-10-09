@@ -1543,11 +1543,36 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
-    if (strcmp(op, "try_send") == 0 || strcmp(op, "try_recv") == 0) {
-        it_fail_task(t, idx,
-                     "try_send / try_recv: C's asx_channel_try_reserve / try_recv park the "
-                     "calling task when full / empty inside a poll; Rust's never park (DSL §7)");
-        return STEP_END;
+    if (strcmp(op, "try_send") == 0) {
+        const char *ch = it_str(step, "channel");
+        it_channel *c = owned_sender(t, ch, IT_CH_MPSC);
+        asx_send_permit permit;
+        uint64_t v = 0;
+        if (c == NULL || !asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &v)) {
+            it_fail_task(t, idx, "try_send needs an owned sender and a value");
+            return STEP_END;
+        }
+        /* tx.try_send(v) (mpsc.rs:773): never parks, no permit obligation. */
+        st = asx_channel_try_reserve(c->id, &permit);
+        if (st == ASX_OK) st = asx_send_permit_send(&permit, v);
+        observe_status(t, idx, label, st);
+        return STEP_NEXT;
+    }
+    if (strcmp(op, "try_recv") == 0) {
+        const char *ch = it_str(step, "channel");
+        it_channel *c = channel_by_name(ch);
+        uint64_t v = 0;
+        if (c == NULL || owned_receiver(t, ch, IT_CH_MPSC) == NULL) {
+            it_fail_task(t, idx, "try_recv needs an owned receiver");
+            return STEP_END;
+        }
+        /* rx.try_recv() (mpsc.rs:1956): never parks; empty is
+         * RecvError::Empty. */
+        st = asx_channel_try_recv(c->id, &v);
+        if (st == ASX_E_WOULD_BLOCK) st = ASX_E_CHANNEL_EMPTY;
+        observe(t, idx, label, status_node(st),
+                st == ASX_OK ? asx_json_new_u64(g_out, v) : ASX_JSON_NONE);
+        return STEP_NEXT;
     }
     if (strcmp(op, "spawn") == 0) {
         const char *name = it_str(step, "as");

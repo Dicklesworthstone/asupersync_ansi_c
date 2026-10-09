@@ -99,8 +99,8 @@ static asx_status poll_receiver(void *ud, asx_task_id self) {
     if (st0 != ASX_OK) return st0;
     while (s->got < s->want) {
         uint64_t v = 0;
-        asx_status st = asx_channel_try_recv(s->ch, &v);
-        if (st == ASX_E_WOULD_BLOCK) return ASX_E_PENDING;
+        asx_status st = asx_channel_recv(s->ch, NULL, &v); /* parks when empty */
+        if (st == ASX_E_PENDING) return ASX_E_PENDING;
         if (st != ASX_OK) {
             s->last = st;
             return ASX_OK;
@@ -138,8 +138,8 @@ static asx_status poll_sender(void *ud, asx_task_id self) {
     if (st0 != ASX_OK) return st0;
     while (s->sent < s->to_send) {
         asx_send_permit permit;
-        asx_status st = asx_channel_try_reserve(s->ch, &permit);
-        if (st == ASX_E_CHANNEL_FULL) return ASX_E_PENDING;
+        asx_status st = asx_channel_reserve(s->ch, NULL, &permit); /* parks when full */
+        if (st == ASX_E_PENDING) return ASX_E_PENDING;
         if (st != ASX_OK) {
             s->last = st;
             return ASX_OK;
@@ -531,6 +531,49 @@ TEST(try_ops_outside_scheduler_never_park) {
     ASSERT_EQ(asx_channel_wait_cancel(ch, ASX_INVALID_ID), ASX_OK);
 }
 
+/* Inside a poll too, try_recv / try_reserve never park (Rust's try_* register
+ * no waker; bd-vc1v): a task that gets EMPTY or FULL and yields is polled
+ * again on the next round, and nothing waits in the channel's lines. */
+typedef struct {
+    asx_channel_id ch;
+    uint32_t polls;
+    asx_status recv;
+    asx_status reserve;
+} try_state;
+
+static asx_status poll_try_then_yield(void *ud, asx_task_id self) {
+    try_state *s = (try_state *)ud;
+    asx_send_permit permit;
+    uint64_t v;
+    (void)self;
+    s->polls++;
+    s->recv = asx_channel_try_recv(s->ch, &v);
+    s->reserve = asx_channel_try_reserve(s->ch, &permit);
+    return s->polls < 3u ? ASX_E_PENDING : ASX_OK; /* yield twice */
+}
+
+TEST(try_ops_inside_a_poll_never_park) {
+    asx_send_permit permit;
+    asx_task_id t;
+    asx_budget budget;
+    try_state s;
+
+    ASSERT_TRUE(setup());
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(asx_channel_create(g_region, 1, &s.ch), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(s.ch, &permit), ASX_OK); /* full from now on */
+    ASSERT_EQ(asx_task_spawn(g_region, poll_try_then_yield, &s, &t), ASX_OK);
+    budget = asx_budget_from_polls(20);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+    ASSERT_EQ(s.polls, 3u);
+    ASSERT_EQ(s.recv, ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(s.reserve, ASX_E_CHANNEL_FULL);
+    /* Nothing queued: the outstanding permit's abort frees the slot, and a
+     * reserve from outside any task gets it at once. */
+    asx_send_permit_abort(&permit);
+    ASSERT_EQ(asx_channel_try_reserve(s.ch, &permit), ASX_OK);
+}
+
 /* ===================================================================
  * Oneshot
  * =================================================================== */
@@ -547,8 +590,8 @@ static asx_status poll_oneshot_rx(void *ud, asx_task_id self) {
     asx_status st;
     (void)self;
     s->polls++;
-    st = asx_oneshot_try_recv(&s->rx, &s->value);
-    if (st == ASX_E_WOULD_BLOCK) return ASX_E_PENDING;
+    st = asx_oneshot_recv(&s->rx, NULL, &s->value); /* parks until a send or drop */
+    if (st == ASX_E_PENDING) return ASX_E_PENDING;
     s->result = st;
     return ASX_OK;
 }
@@ -602,8 +645,8 @@ static asx_status poll_bcast_rx(void *ud, asx_task_id self) {
     s->polls++;
     for (;;) {
         uint64_t v;
-        asx_status st = asx_broadcast_try_recv(&s->rx, &v);
-        if (st == ASX_E_WOULD_BLOCK) return ASX_E_PENDING;
+        asx_status st = asx_broadcast_recv(&s->rx, NULL, &v); /* parks until a send */
+        if (st == ASX_E_PENDING) return ASX_E_PENDING;
         if (st != ASX_OK) {
             s->result = st;
             return ASX_OK;
@@ -1090,6 +1133,7 @@ int main(void) {
     RUN_TEST(wait_cancel_rejects_bad_channel);
     RUN_TEST(waiter_overflow_degrades_to_polling);
     RUN_TEST(try_ops_outside_scheduler_never_park);
+    RUN_TEST(try_ops_inside_a_poll_never_park);
     RUN_TEST(oneshot_receiver_parks_until_send_or_drop);
     RUN_TEST(broadcast_send_wakes_every_receiver);
     RUN_TEST(watch_publish_wakes_receivers);

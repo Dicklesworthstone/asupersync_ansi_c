@@ -265,19 +265,19 @@ interpreter (C). Values are unsigned 64-bit integers; C channels carry
 
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|
-| `reserve_send` | `channel`, `as` | `tx.reserve(&cx).await` (`channel/mpsc.rs:637`) | `asx_channel_try_reserve`, waiting while full | while full, FIFO | Checked on every poll: `ASX_E_CANCELLED` even when there is room (`mpsc.rs:1061`). The permit registers a `SendPermit` obligation. |
+| `reserve_send` | `channel`, `as` | `tx.reserve(&cx).await` (`channel/mpsc.rs:637`) | `asx_channel_reserve(id, cx, &permit)` until done | while full, FIFO | Checked on every poll: `ASX_E_CANCELLED` even when there is room (`mpsc.rs:1061`). The permit registers a `SendPermit` obligation. |
 | `permit_send` | `permit`, `value` | `permit.send(v)` (`:1565`) | `asx_send_permit_send(&permit, v)` | no | ignored |
 | `permit_abort` | `permit` | `permit.abort()` (`:1633`) | `asx_send_permit_abort(&permit)` | no | ignored. The obligation is aborted with reason `Explicit`. |
 | `send` | `channel`, `value` | `tx.send(&cx, v).await` (`:715`) | send without registering an obligation (C gap, §7) | while full | `ASX_E_CANCELLED`. No obligation and no trace event. |
 | `try_send` | `channel`, `value` | `tx.try_send(v)` (`:773`) | `asx_channel_try_reserve` + `asx_send_permit_send`, without an obligation | no | ignored. Full gives `ASX_E_CHANNEL_FULL`. |
-| `recv` | `channel` | `rx.recv(&cx).await` (`:1719`) | `asx_channel_try_recv`, waiting while empty | while empty | Checked first: `ASX_E_CANCELLED` even when a value is queued (`:1786`). The observation `value` is the received integer. |
-| `try_recv` | `channel` | `rx.try_recv()` (`:1956`) | `asx_channel_try_recv` | no | ignored. Empty gives `ASX_E_CHANNEL_EMPTY`; closed gives `ASX_E_DISCONNECTED`. |
+| `recv` | `channel` | `rx.recv(&cx).await` (`:1719`) | `asx_channel_recv(id, cx, &v)` until done | while empty | Checked first: `ASX_E_CANCELLED` even when a value is queued (`:1786`). The observation `value` is the received integer. |
+| `try_recv` | `channel` | `rx.try_recv()` (`:1956`) | `asx_channel_try_recv` (never parks) | no | ignored. Empty gives `ASX_E_CHANNEL_EMPTY`; closed gives `ASX_E_DISCONNECTED`. |
 | `close_sender` | `channel` | `drop(tx)` (`:1241`) | `asx_channel_close_sender` | no | ignored |
 | `close_receiver` | `channel` | `drop(rx)` (`:2122`) | `asx_channel_close_receiver` | no | ignored |
 | `oneshot_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/oneshot.rs:556`): reserves a SendPermit, traces `"oneshot::reserve creating permit"`, commits | `asx_oneshot_try_send` plus the obligation and trace (C gap, §7) | no | Checked first: `ASX_E_CANCELLED`. |
-| `oneshot_recv` | `channel` | `rx.recv(&cx).await` (`oneshot.rs:1250`): traces `"oneshot::recv received value"` / `"…channel closed"` | `asx_oneshot_try_recv`, waiting | until sent or dropped | `ASX_E_CANCELLED`, tracing `"oneshot::recv cancelled while waiting"`. |
+| `oneshot_recv` | `channel` | `rx.recv(&cx).await` (`oneshot.rs:1250`): traces `"oneshot::recv received value"` / `"…channel closed"` | `asx_oneshot_recv(rx, cx, &v)` until done | until sent or dropped | `ASX_E_CANCELLED`, tracing `"oneshot::recv cancelled while waiting"`. |
 | `broadcast_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/broadcast.rs:494`) | `asx_broadcast_send` | no | `ASX_E_CANCELLED` (`broadcast.rs:418`) |
-| `broadcast_recv` | `channel` | `rx.recv(&cx).await` (`:894`) | `asx_broadcast_try_recv`, waiting | while empty | `ASX_E_CANCELLED`. Lagged gives `ASX_E_LAGGED` with `value` = n. |
+| `broadcast_recv` | `channel` | `rx.recv(&cx).await` (`:894`) | `asx_broadcast_recv(rx, cx, &v)` until done | while empty | `ASX_E_CANCELLED`. Lagged gives `ASX_E_LAGGED` with `value` = n. |
 | `watch_send` | `channel`, `value` | `tx.send(v)` (`channel/watch.rs:488`) | `asx_watch_send` | no | ignored (no `Cx`) |
 | `watch_changed` | `channel` | `rx.changed(&cx).await` (`:722`), then `borrow_and_update` (`:917`) | `asx_watch_poll_changed` / `asx_watch_recv` | until a newer version | `ASX_E_CANCELLED` (`:736`). The `value` is the new value. |
 
@@ -414,12 +414,6 @@ open gap with the gap named; `make conformance` lists them as ERROR.
 
 Open:
 
-- **Non-parking `try_send` / `try_recv`.** C's `asx_channel_try_reserve`
-  and `asx_channel_try_recv` park the calling task when the channel is
-  full or empty inside a scheduler poll; Rust's `try_send` / `try_recv`
-  never park. The interpreter fails these steps closed until the C `try_*`
-  functions stop parking (their parking callers moving to the Cx-aware
-  `asx_channel_reserve` / `asx_channel_recv`).
 - **Multi-permit semaphore acquire.** Rust acquires `count` permits
   all-or-nothing; C grants one permit per acquire, so `sem_acquire` with
   `count` > 1 fails closed.
@@ -428,6 +422,12 @@ Open:
   only in the status string table.
 
 Closed (each verified by a fixture that now matches):
+
+- **Non-parking `try_send` / `try_recv`** (bd-vc1v): C's mpsc, oneshot and
+  broadcast `try_*` functions no longer park; the waiting
+  `asx_channel_reserve` / `asx_channel_send` / `asx_channel_recv`,
+  `asx_oneshot_recv` and `asx_broadcast_recv` do. Verified by generated
+  scenarios using both steps (`make fuzz-differential`).
 
 - **Oneshot, broadcast and watch**: `asx_oneshot_send` / `asx_oneshot_recv`
   (SendPermit obligation; the exact oneshot traces; value and close before

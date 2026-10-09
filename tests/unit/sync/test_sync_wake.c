@@ -909,8 +909,7 @@ static asx_status init_from_oneshot(void *user_data, uint64_t *out_value) {
     asx_oneshot_receiver *rx = (asx_oneshot_receiver *)user_data;
     asx_status st;
     g_init_calls++;
-    st = asx_oneshot_try_recv(rx, out_value);
-    if (st == ASX_E_WOULD_BLOCK) return ASX_E_PENDING;
+    st = asx_oneshot_recv(rx, NULL, out_value); /* parks until the send */
     return st;
 }
 

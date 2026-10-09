@@ -359,13 +359,15 @@ static asx_stream_result receiver_poll(void *state, const asx_waker *waker, void
     asx_status s;
     (void)waker;
 
-    s = asx_channel_try_recv(rs->channel_id, (uint64_t *)rs->recv_buf);
+    /* A waiting receive: inside a poll an empty channel parks the task,
+     * and a commit or close wakes it (Rust's stream polls poll_recv). */
+    s = asx_channel_recv(rs->channel_id, NULL, (uint64_t *)rs->recv_buf);
     if (s == ASX_OK) {
         *out_item = rs->recv_buf;
         return ASX_STREAM_READY;
     }
     if (s == ASX_E_DISCONNECTED) { return ASX_STREAM_DONE; }
-    /* ASX_E_WOULD_BLOCK = pending */
+    /* ASX_E_PENDING */
     return ASX_STREAM_PENDING;
 }
 
@@ -415,7 +417,8 @@ static asx_stream_result broadcast_poll(void *state, const asx_waker *waker, voi
     asx_status s;
     (void)waker;
 
-    s = asx_broadcast_try_recv(bs->broadcast_rx, (uint64_t *)bs->recv_buf);
+    /* A waiting receive: inside a poll the task parks until a send. */
+    s = asx_broadcast_recv(bs->broadcast_rx, NULL, (uint64_t *)bs->recv_buf);
     if (s == ASX_OK) {
         *out_item = bs->recv_buf;
         return ASX_STREAM_READY;

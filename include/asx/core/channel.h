@@ -13,11 +13,12 @@
  * builds may select the atomic committed-message backend while preserving
  * the same public reserve/send/abort semantics.
  *
- * Wake-driven waiting: when asx_channel_try_recv() reports
- * ASX_E_WOULD_BLOCK or asx_channel_try_reserve() reports
- * ASX_E_CHANNEL_FULL from inside a scheduler poll, the calling task is
- * queued (FIFO, at most ASX_CHANNEL_MAX_WAITERS per direction) and parked
- * (asx_task_park); the caller just propagates ASX_E_PENDING. A commit
+ * Wake-driven waiting: when asx_channel_recv() finds the channel empty, or
+ * asx_channel_reserve() / asx_channel_send() find it full, from inside a
+ * scheduler poll, the calling task is queued (FIFO, at most
+ * ASX_CHANNEL_MAX_WAITERS per direction) and parked (asx_task_park), and
+ * the call returns ASX_E_PENDING. The try_* functions never queue or park,
+ * as Rust's try_send / try_reserve / try_recv register no waker. A commit
  * wakes one parked receiver, a dequeue or abort wakes the oldest parked
  * producer (no one may jump that line), and closing either side wakes
  * every waiter so it observes the new state.
@@ -121,12 +122,13 @@ ASX_API ASX_MUST_USE asx_status asx_channel_reserved_count(asx_channel_id id, ui
 /* Two-phase send protocol                                            */
 /* ------------------------------------------------------------------ */
 
-/* Try to reserve a send slot. Non-blocking.
+/* Try to reserve a send slot. Non-blocking, never parks (Rust try_reserve,
+ *   mpsc.rs:732).
  * Returns ASX_OK and fills *out_permit on success.
  * Returns ASX_E_CHANNEL_FULL if capacity exhausted, or if a parked producer
  *   is ahead in line (FIFO: freed capacity belongs to the oldest parked
- *   producer, no queue jumping); inside a scheduler poll the calling task
- *   is then parked until it is at the head of the line with capacity.
+ *   producer, no queue jumping). To wait for capacity use
+ *   asx_channel_reserve.
  * Returns ASX_E_DISCONNECTED if receiver closed.
  * Returns ASX_E_INVALID_STATE if sender side closed. */
 ASX_API ASX_MUST_USE asx_status asx_channel_try_reserve(asx_channel_id id, asx_send_permit *out);
@@ -144,11 +146,11 @@ ASX_API void asx_send_permit_abort(asx_send_permit *permit);
 /* Receive API                                                        */
 /* ------------------------------------------------------------------ */
 
-/* Try to receive a message. Non-blocking.
+/* Try to receive a message. Non-blocking, never parks (Rust try_recv,
+ *   mpsc.rs:1956).
  * Returns ASX_OK and fills *out_value on success.
- * Returns ASX_E_WOULD_BLOCK if queue is empty but channel is open; inside
- *   a scheduler poll the calling task is then parked until a commit or a
- *   close.
+ * Returns ASX_E_WOULD_BLOCK if queue is empty but channel is open. To wait
+ *   for a message use asx_channel_recv.
  * Returns ASX_E_DISCONNECTED if queue is empty and sender closed. */
 ASX_API ASX_MUST_USE asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value);
 

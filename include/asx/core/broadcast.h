@@ -105,11 +105,11 @@ ASX_API ASX_MUST_USE asx_status asx_broadcast_send(asx_broadcast_sender *sender,
  * API: Receive
  * ------------------------------------------------------------------- */
 
-/* Try to receive the next message for this receiver.
+/* Try to receive the next message for this receiver. Never parks (Rust
+ *   try_recv); to wait use asx_broadcast_recv, whose parked tasks every
+ *   send or the sender drop wakes (FIFO).
  * Returns ASX_OK and fills *out_value on success.
- * Returns ASX_E_WOULD_BLOCK if no new messages; inside a scheduler poll the
- *   calling task is then parked until the next send or the sender drop
- *   (every send wakes every parked receiver task, FIFO).
+ * Returns ASX_E_WOULD_BLOCK if no new messages.
  * Returns ASX_E_DISCONNECTED if sender dropped and no messages remain.
  * Returns ASX_E_LAGGED if this receiver fell behind — *out_value receives
  *   the number of messages it missed (Rust Lagged(n)) and the cursor is

@@ -89,10 +89,10 @@ ASX_API void asx_oneshot_receiver_drop(asx_oneshot_receiver *receiver);
  * Returns ASX_E_INVALID_STATE if already sent. */
 ASX_API ASX_MUST_USE asx_status asx_oneshot_try_send(asx_oneshot_sender *sender, uint64_t value);
 
-/* Try to receive the value. Non-blocking.
+/* Try to receive the value. Non-blocking, never parks (Rust try_recv).
  * Returns ASX_OK and fills *out_value if a value is available.
- * Returns ASX_E_WOULD_BLOCK if sender hasn't sent yet; inside a scheduler
- *   poll the calling task is then parked until the send or a drop.
+ * Returns ASX_E_WOULD_BLOCK if sender hasn't sent yet. To wait for the
+ *   value use asx_oneshot_recv.
  * Returns ASX_E_DISCONNECTED if sender dropped without sending. */
 ASX_API ASX_MUST_USE asx_status asx_oneshot_try_recv(asx_oneshot_receiver *receiver,
                                                      uint64_t *out_value);

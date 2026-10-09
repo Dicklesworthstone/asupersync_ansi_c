@@ -11,7 +11,7 @@
 //! Child regions: a task opens at most one at a time (two in all), may
 //! spawn into it, and closes it or leaves it to the drop backstop.
 //!
-//! Left out on purpose: try_send / try_recv, multi-permit acquire, race
+//! Left out on purpose: multi-permit acquire, race
 //! (same-round ties are an RNG pick in Rust and the lowest index in C, a
 //! known divergence, bd-g652), quorum and first_ok error paths,
 //! region_limits, actors and supervision.
@@ -187,6 +187,9 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 if let Some((ch, producer, consumer)) = &world.mpsc {
                     if me == producer {
                         held.sends += 1;
+                        if rng.chance(25) {
+                            return json!({"op": "try_send", "channel": ch, "value": held.sends});
+                        }
                         if rng.chance(50) {
                             return json!({"op": "send", "channel": ch, "value": held.sends});
                         }
@@ -196,7 +199,8 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                         return json!({"op": "reserve_send", "channel": ch, "as": format!("{me}.p{}", held.reserves)});
                     }
                     if me == consumer {
-                        return json!({"op": "recv", "channel": ch});
+                        let op = if rng.chance(30) { "try_recv" } else { "recv" };
+                        return json!({"op": op, "channel": ch});
                     }
                 }
             }
