@@ -104,6 +104,7 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
     asx_cancel_reason merged;
     asx_budget prior_cleanup = asx_budget_infinite();
     const asx_cancel_reason *requested = reason;
+    int cx_reason_changed = 1; /* a first request newly cancels the Cx */
 
     if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
 
@@ -136,6 +137,10 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
      * publication, record/task.rs:716-722). */
     if (t->cancel_pending && t->cancel_unmaterialized && source != ASX_CANCEL_SRC_BUDGET) {
         merged = asx_cancel_strengthen(reason, &t->cancel_reason);
+        /* The Cx was already cancel-requested: its cancel waker becomes due
+         * only if this request changes the reason (record/task.rs:716-725,
+         * 840-866; bd-yx6l). */
+        cx_reason_changed = !reason_same(&merged, &t->cancel_reason);
         prior_cleanup = t->cleanup_budget;
         reason = &merged;
         t->cancel_pending = 0;
@@ -222,7 +227,10 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
     if (asx_lab_dispatch_active()) {
         if (source != ASX_CANCEL_SRC_BUDGET) {
             asx_lab_schedule_cancel(t, cleanup.priority);
-            asx_lab_cancel_wake(t);
+            if (cx_reason_changed || t->cancel_wakers_pending) {
+                t->cancel_wakers_pending = 0u;
+                asx_lab_cancel_wake(t);
+            }
         }
     } else {
         asx_task_wake_slot_internal(t);
