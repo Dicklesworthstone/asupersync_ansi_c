@@ -145,7 +145,7 @@ Drop for SendPermit: if !self.sent { release_capacity(); obligation.abort(Cancel
 
 **Rust source:** `mpsc.rs:1663-1673`
 
-**C status:** not implemented in the library (C has no destructors): a permit that is neither sent nor aborted keeps its slot reserved. The conformance interpreter emulates the Rust drop by aborting the permit and its obligation with reason `Cancel` (`src/conformance/interpreter.c:780-792`).
+**C status:** not implemented in the library (C has no destructors): a permit that is neither sent nor aborted keeps its slot reserved. The conformance interpreter emulates the Rust drop by aborting the permit and its obligation with reason `Cancel` (`drop_send_permit` in `src/conformance/interpreter.c`).
 
 ### 1.4 Backpressure and Waiter Queue
 
@@ -790,7 +790,7 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 | `INV-CH-06` | Cancelled recv does not consume message | Cancel safety | Yes (`mpsc.c:865`) |
 | `INV-CH-07` | `receiver_dropped` monotone: `false -> true`, never reverses | State monotonicity | Yes: no transition back to `OPEN` (a slot is reused only after `FULLY_CLOSED`, `mpsc.c:392`) |
 | `INV-CH-08` | `sender_count` never rises from 0 (`WeakSender::upgrade` refuses, `mpsc.rs:1283-1287`); `Sender::clone` raises it while non-zero | State monotonicity | One sender side; `SENDER_CLOSED` never reopens |
-| `INV-CH-09` | Permit drop without send/abort releases the slot, wakes the head waiter and aborts the obligation (`Cancel`) | RAII safety | No destructor; emulated by the conformance interpreter (`interpreter.c:780-792`) |
+| `INV-CH-09` | Permit drop without send/abort releases the slot, wakes the head waiter and aborts the obligation (`Cancel`) | RAII safety | No destructor; emulated by the conformance interpreter (`drop_send_permit` in `src/conformance/interpreter.c`) |
 | `INV-CH-10` | Session-tracked permit leaked -> panic (obligation linearity) | Obligation | Not implemented |
 
 ### 8.2 Timer Invariants

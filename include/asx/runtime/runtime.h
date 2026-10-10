@@ -1116,7 +1116,9 @@ ASX_API int asx_region_is_quiescent(asx_region_id id);
  *   completed; cleanup destructors called in LIFO order.
  * Returns ASX_OK on success, ASX_E_NOT_FOUND if id is invalid,
  *   ASX_E_INVALID_ARGUMENT if budget is NULL,
- *   ASX_E_BUDGET_EXHAUSTED if not all tasks completed within budget,
+ *   the scheduler's status when its run stops early (for example
+ *   ASX_E_POLL_BUDGET_EXHAUSTED, ASX_E_TIMED_OUT, ASX_E_WOULD_BLOCK),
+ *   ASX_E_QUIESCENCE_TASKS_LIVE if tasks are still live after the run,
  *   ASX_E_PENDING while the region is closing but still waiting for
  *   child regions to close.
  * Thread-safety: not thread-safe; single-threaded mode only.

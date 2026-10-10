@@ -235,9 +235,9 @@ ASX_API asx_status asx_cx_bind_budget(asx_cx *cx, asx_budget *budget);
 /* Get the remaining budget. Returns NULL if no budget bound or cap missing. */
 ASX_API const asx_budget *asx_cx_budget(const asx_cx *cx);
 
-/* Consume one poll from the budget. Returns ASX_OK if poll consumed,
- * ASX_E_BUDGET_EXHAUSTED if no polls remain, ASX_E_PERMISSION_DENIED
- * if ASX_CAP_BUDGET_CONSUME not set. */
+/* Consume one poll from the budget. Returns ASX_OK if poll consumed (or
+ * no budget is bound), ASX_E_POLL_BUDGET_EXHAUSTED if no polls remain,
+ * ASX_E_PERMISSION_DENIED if ASX_CAP_BUDGET_CONSUME not set. */
 ASX_API asx_status asx_cx_consume_poll(asx_cx *cx);
 
 /* ------------------------------------------------------------------ */
