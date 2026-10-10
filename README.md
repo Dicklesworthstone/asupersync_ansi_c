@@ -614,7 +614,7 @@ it drifts from the headers or a new capacity macro is missing.
 |---|---|---|
 | `ASX_PROFILE_CORE` | General-purpose (default) | Deterministic single-thread kernel, no OS assumptions |
 | `ASX_PROFILE_POSIX` | Linux/macOS | Optional worker/reactor integration |
-| `ASX_PROFILE_WIN32` | Windows | Windows runtime integration |
+| `ASX_PROFILE_WIN32` | Windows (MSVC) | QueryPerformanceCounter clock, BCrypt entropy in live builds, debugger/stderr logging. No native I/O yet: no sockets or IOCP (the reactor is a timed sleep that reports no readiness), no blocking pool, and net/fs run on the in-memory backends |
 | `ASX_PROFILE_FREESTANDING` | Bare-metal/embedded | User-supplied hooks, no FS/network assumptions |
 | `ASX_PROFILE_EMBEDDED_ROUTER` | OpenWrt/router-class | Low-memory defaults, RAM-ring diagnostics, wear-safe tracing |
 | `ASX_PROFILE_HFT` | High-frequency trading | Tail-latency histograms, jitter tracking, overload admission control |
@@ -2006,13 +2006,13 @@ architecture, decisions, verification, and risk:
 
 ## CI Pipeline Architecture
 
-The primary CI workflow (`.github/workflows/ci.yml`) runs 11 top-level jobs on
+The primary CI workflow (`.github/workflows/ci.yml`) runs 12 top-level jobs on
 pushes and PRs:
 
 | Job | Runs |
 |-----|------|
 | `check` | format, cppcheck, API docs, checkpoint coverage, anti-butchering proof block, static analysis, strict build, browser profile suites, bounded model check |
-| `unit-invariant` | unit, invariant and vignette suites; C conformance suites; ABI check; formal harnesses; the unit suite with every capacity macro raised 4x |
+| `unit-invariant` | unit, invariant and vignette suites; C conformance suites; ABI check; formal harnesses; the unit suite with every capacity macro raised 4x and built for each resource class; the resource-pressure gate |
 | `e2e` | vertical end-to-end lanes (HFT, automotive, continuity) |
 | `conformance` | oracle schemas, fixture integrity, gate negative controls, recorded codec digests, and the Rust-captured fixtures executed in C and compared |
 | `profile-parity` | recorded cross-profile and parallel-worker digests |
@@ -2021,9 +2021,10 @@ pushes and PRs:
 | `sanitizers` | the unit suite under ASan+UBSan (deterministic and live POSIX) and TSan (live POSIX) |
 | `cross-qemu` | the unit suite and the Rust fixture replay, cross-compiled for mipsel, big-endian mips, armv7, aarch64 and riscv64 (Debian glibc, static) and run under QEMU user mode |
 | `m32` | the unit suite and the Rust fixture replay on 32-bit x86 |
+| `msvc` | the library and the unit suite built by MSVC (x64, `/W4 /WX`, via CMake) and run with CTest, for CORE and WIN32 (deterministic builds) |
 | `embedded-matrix` | router-class cross builds with size and layout rows (built, not run) |
 
-All 11 jobs must pass before merge. A nightly workflow extends fuzz runs to
+All 12 jobs must pass before merge. A nightly workflow extends fuzz runs to
 100K iterations and collects performance baselines. The release workflow is
 tag-triggered (`v*`) and produces signed artifact bundles with SHA-256
 checksums and Sigstore signatures.

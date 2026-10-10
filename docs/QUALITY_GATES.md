@@ -538,7 +538,7 @@ Per `docs/WAVE_GATING_PROTOCOL.md`:
 | Gap | Status | Tracking |
 |-----|--------|----------|
 | HFT p99/jitter numeric SLO enforcement in perf.yml | Done | HFT baselines in `slo_baselines.json`, `--strict` gate in `perf.yml` (bd-39o) |
-| MSVC build integration | Stub only | `build-msvc` prints SKIP; requires `cl.exe` on PATH |
+| MSVC build integration | Done | CI `msvc` job: CMake + MSVC x64 `/W4 /WX`, unit suite under CTest, CORE and WIN32 (deterministic builds); `make build-msvc` runs the same on a Windows host (bd-9kll.15.2). The WIN32 adapter has no native I/O yet (`bd-v12u.3`) |
 | Real-device smoke run for embedded | Manual | One device smoke required before milestone closure per plan |
 | Machine-readable traceability export | Done | `make traceability-export` generates `build/traceability/traceability_index.json` (bd-3gn) |
 

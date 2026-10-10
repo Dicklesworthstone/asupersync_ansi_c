@@ -1976,13 +1976,25 @@ build-gcc:
 build-clang:
 	$(MAKE) build CC=clang
 
+# build-msvc — what CI's msvc job runs: CMake's Visual Studio generator (x64,
+# /W4 /WX), then the unit suite under CTest, for MSVC_PROFILE (CORE or
+# WIN32). It needs Windows with Visual Studio and cmake; elsewhere it skips.
+MSVC_PROFILE ?= WIN32
 build-msvc:
-	@echo "[asx] build-msvc: MSVC lane not wired yet (needs cl.exe; tracked by E2 bd-9kll.15.2)"
-	@if [ "$(FAIL_ON_MISSING_CROSS_TOOLCHAINS)" = "1" ]; then \
-		echo "[asx] build-msvc: FAIL (no MSVC lane; strict mode)"; \
-		exit 1; \
-	fi
-	@echo "[asx] build-msvc: SKIP (use STRICT_GATES=1 to fail)"
+	@case "$$(uname -s 2>/dev/null)" in \
+		MINGW*|MSYS*|CYGWIN*|Windows_NT) on_windows=1 ;; *) on_windows=0 ;; esac; \
+	if [ "$$on_windows" != 1 ] || ! command -v cmake >/dev/null 2>&1; then \
+		echo "[asx] build-msvc: needs Windows with Visual Studio and cmake (CI: msvc job)"; \
+		if [ "$(FAIL_ON_MISSING_CROSS_TOOLCHAINS)" = "1" ]; then \
+			echo "[asx] build-msvc: FAIL (strict mode)"; \
+			exit 1; \
+		fi; \
+		echo "[asx] build-msvc: SKIP (use STRICT_GATES=1 to fail)"; \
+		exit 0; \
+	fi; \
+	cmake -S . -B build-msvc -A x64 -DASX_PROFILE=$(MSVC_PROFILE) && \
+	cmake --build build-msvc --config Debug --parallel && \
+	ctest --test-dir build-msvc -C Debug --output-on-failure --parallel 4
 
 build-32:
 	$(MAKE) build BITS=32
