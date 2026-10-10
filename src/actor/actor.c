@@ -32,8 +32,8 @@ typedef struct {
 
 #define ACTOR_ENVELOPES ((ASX_ACTOR_MAILBOX_CAPACITY) + 1u)
 
-/* Messages served (or drained) between two yields (gen_server.rs:2097). */
-#define ACTOR_YIELD_INTERVAL 8u
+/* ACTOR_YIELD_INTERVAL: messages served (or drained) between two yields
+ * (runtime_internal.h). */
 
 /* Where the server task's next poll resumes. */
 typedef enum {

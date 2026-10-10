@@ -8,6 +8,7 @@
 //! status, and no fixture is written for it.
 
 mod canon;
+mod constants;
 mod minimize;
 mod run;
 // `gen` is a reserved keyword in edition 2024.
@@ -26,7 +27,8 @@ fn usage() -> ExitCode {
          twin_run generate --seed <u64> --count <n> --out <dir>\n       \
          twin_run canon-fuzz --seed <u64> --count <n> --out <file.jsonl>\n       \
          twin_run minimize <scenario.json> --runner <asx-conformance> --out <dir>\n       \
-         twin_run trace <scenario.json>   (raw lab trace, for diagnosis)"
+         twin_run trace <scenario.json>   (raw lab trace, for diagnosis)\n       \
+         twin_run constants --source <asupersync crate dir> --out <file.json>"
     );
     ExitCode::from(2)
 }
@@ -306,6 +308,38 @@ fn main() -> ExitCode {
                 }
                 (Some(seed), Some(count), Some(out)) => canon_fuzz(seed, count, &out),
                 _ => usage(),
+            }
+        }
+        Some("constants") => {
+            // The kernel constants of the linked asupersync (constants.rs).
+            let mut source = None;
+            let mut out = None;
+            let mut rest = args[1..].iter();
+            while let Some(arg) = rest.next() {
+                match arg.as_str() {
+                    "--source" => source = rest.next().map(PathBuf::from),
+                    "--out" => out = rest.next().map(PathBuf::from),
+                    _ => return usage(),
+                }
+            }
+            let (Some(source), Some(out)) = (source, out) else {
+                return usage();
+            };
+            let result = linked_asupersync_commit()
+                .and_then(|rev| constants::constants(&source, &rev))
+                .and_then(|doc| canon::canonical_json(&doc))
+                .and_then(|text| {
+                    std::fs::write(&out, text + "\n").map_err(|e| format!("{}: {e}", out.display()))
+                });
+            match result {
+                Ok(()) => {
+                    println!("twin_run constants: wrote {}", out.display());
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("twin_run constants: {err}");
+                    ExitCode::from(1)
+                }
             }
         }
         Some("minimize") => {

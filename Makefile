@@ -1664,6 +1664,40 @@ canon-differential: $(CONFORMANCE_RUNNER)
 		--out $(BUILD_DIR)/canon/seed-$(CANON_SEED).jsonl
 	@$(CONFORMANCE_RUNNER) canon $(BUILD_DIR)/canon/seed-$(CANON_SEED).jsonl
 
+# check-rust-constants — the C runtime's kernel constants and defaults
+# against Rust's (bd-9kll.2.13). schemas/rust_kernel_constants.json holds
+# Rust's values, which `twin_run constants` reads from the pinned asupersync:
+# its public API through the linked crate, its private constants from its
+# source (syn). asx-conformance compares each with the C value. A constant
+# without a C counterpart is declared N/A, a known difference is KNOWN with
+# its bead, and anything else fails. No cargo needed.
+# rust-constants-fresh re-derives the document (needs cargo) and fails
+# unless it equals the checked-in one. To refresh it after moving the pin,
+# copy build/rust_kernel_constants.json over it unmodified.
+RUST_CONSTANTS := schemas/rust_kernel_constants.json
+.PHONY: check-rust-constants rust-constants-fresh
+check-rust-constants: $(CONFORMANCE_RUNNER)
+	@echo "[asx] check-rust-constants: C values vs $(RUST_CONSTANTS)"
+	@$(CONFORMANCE_RUNNER) constants $(RUST_CONSTANTS)
+
+rust-constants-fresh:
+	@echo "[asx] rust-constants-fresh: re-deriving $(RUST_CONSTANTS) from the pinned asupersync"
+	@mkdir -p $(BUILD_DIR)
+	@host="$$(rustc -vV | sed -n 's/^host: //p')"; \
+	manifest="$$(cargo metadata --locked --format-version 1 \
+		--manifest-path tools/twin_run/Cargo.toml --filter-platform "$$host" | \
+		jq -r '.packages[] | select(.name == "asupersync") | .manifest_path')"; \
+	[ -n "$$manifest" ] || { echo "[asx] rust-constants-fresh: asupersync not found"; exit 1; }; \
+	$(TWIN_RUN) constants --source "$$(dirname "$$manifest")" \
+		--out $(BUILD_DIR)/rust_kernel_constants.json && \
+	if cmp -s $(BUILD_DIR)/rust_kernel_constants.json $(RUST_CONSTANTS); then \
+		echo "[asx] rust-constants-fresh: PASS ($(RUST_CONSTANTS) is current)"; \
+	else \
+		echo "[asx] rust-constants-fresh: FAIL: $(RUST_CONSTANTS) differs from the pinned asupersync"; \
+		diff $(RUST_CONSTANTS) $(BUILD_DIR)/rust_kernel_constants.json | head -40; \
+		exit 1; \
+	fi
+
 # ---------------------------------------------------------------------------
 # fixture-integrity — fixture schema, provenance, digest recomputation,
 # capture_run_id format, unknown ops, and a codec round trip. It proves the

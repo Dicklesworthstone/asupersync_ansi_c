@@ -52,6 +52,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include "wait_queue.h"
 #include <asx/sync/rwlock.h>
 #include <stddef.h>
@@ -63,8 +64,8 @@
 #define RW_WRITE 0x2u    /* write waiter (else read waiter) */
 #define RW_QUEUED 0x4u   /* in line, not granted (a poll had to wait) */
 
-/* Rust's MAX_CONSECUTIVE_WRITERS_BEFORE_READER_BATCH. */
-#define RW_MAX_WRITER_STREAK 16u
+/* RW_MAX_WRITER_STREAK is Rust's MAX_CONSECUTIVE_WRITERS_BEFORE_READER_BATCH
+ * (runtime_internal.h). */
 
 /* ------------------------------------------------------------------ */
 /* Arena                                                               */

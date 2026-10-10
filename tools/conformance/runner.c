@@ -21,6 +21,14 @@
  *       `twin_run canon-fuzz` (Rust's canon.rs); C's canon.c must give the
  *       same Foata layers, byte for byte, and the same digest. Exits 1 on
  *       any difference.
+ *   asx-conformance constants <rust_kernel_constants.json>
+ *       Kernel constants and defaults (bd-9kll.2.13): every constant of the
+ *       Rust document (`twin_run constants`) must have a C counterpart here
+ *       with the same value, or be declared without one (N/A, with the
+ *       reason), or be a recorded difference (KNOWN, with its bead or
+ *       reason). Exits 1 on an unrecorded difference, on a recorded one
+ *       that no longer differs, on a constant either side lacks, or when
+ *       nothing was compared.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -28,6 +36,16 @@
 #include "conformance/canon.h"
 #include "conformance/interpreter.h"
 #include "conformance/json.h"
+#include "runtime/runtime_internal.h"
+
+#include <asx/actor/actor.h>
+#include <asx/actor/supervisor.h>
+#include <asx/asx_config.h>
+#include <asx/core/budget.h>
+#include <asx/core/cancel.h>
+#include <asx/runtime/lab.h>
+#include <asx/runtime/runtime.h>
+#include <asx/time/timer_wheel.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -352,11 +370,401 @@ static int cmd_canon(const char *path) {
     return fail == 0u && pass > 0u ? 0 : 1;
 }
 
+/* ---- constants (bd-9kll.2.13) ----------------------------------------- */
+
+typedef enum { CK_U64, CK_NULL, CK_STR, CK_BOOL, CK_NA } ck_kind;
+
+typedef struct {
+    char key[64];
+    ck_kind kind;
+    uint64_t u;        /* CK_U64; CK_BOOL as 0/1 */
+    char s[160];       /* CK_STR: the value; CK_NA: why C has no counterpart */
+    const char *known; /* a recorded difference: its bead or reason */
+    int seen;
+} ck_entry;
+
+#define CK_CAP 128u
+static ck_entry g_ck[CK_CAP];
+static uint32_t g_ck_n;
+static int g_ck_overflow;
+
+static ck_entry *ck_add(const char *key, ck_kind kind) {
+    ck_entry *e;
+    if (g_ck_n >= CK_CAP || strlen(key) >= sizeof(e->key)) {
+        g_ck_overflow = 1;
+        return NULL;
+    }
+    e = &g_ck[g_ck_n++];
+    memset(e, 0, sizeof(*e));
+    (void)snprintf(e->key, sizeof(e->key), "%s", key);
+    e->kind = kind;
+    return e;
+}
+
+static void ck_u64(const char *key, uint64_t v) {
+    ck_entry *e = ck_add(key, CK_U64);
+    if (e != NULL) e->u = v;
+}
+
+static void ck_str(const char *key, const char *v) {
+    ck_entry *e = ck_add(key, CK_STR);
+    if (e != NULL) (void)snprintf(e->s, sizeof(e->s), "%s", v);
+}
+
+static void ck_bool(const char *key, int v) {
+    ck_entry *e = ck_add(key, CK_BOOL);
+    if (e != NULL) e->u = v != 0 ? 1u : 0u;
+}
+
+static void ck_null(const char *key) { (void)ck_add(key, CK_NULL); }
+
+static void ck_na(const char *key, const char *why) {
+    ck_entry *e = ck_add(key, CK_NA);
+    if (e != NULL) (void)snprintf(e->s, sizeof(e->s), "%s", why);
+}
+
+/* Record that `key` is known to differ from Rust: `why` names the bead
+ * that tracks it, or the reason it is accepted. */
+static void ck_known(const char *key, const char *why) {
+    uint32_t i;
+    for (i = 0; i < g_ck_n; i++) {
+        if (strcmp(g_ck[i].key, key) == 0) {
+            g_ck[i].known = why;
+            return;
+        }
+    }
+    g_ck_overflow = 1;
+}
+
+/* C's "unconstrained" encodings (deadline 0, cost UINT64_MAX) are Rust's
+ * None. */
+static void ck_budget(const char *prefix, asx_budget b) {
+    char key[64];
+    (void)snprintf(key, sizeof(key), "%s.deadline_ns", prefix);
+    if (b.deadline == 0u) {
+        ck_null(key);
+    } else {
+        ck_u64(key, (uint64_t)b.deadline);
+    }
+    (void)snprintf(key, sizeof(key), "%s.poll_quota", prefix);
+    ck_u64(key, (uint64_t)b.poll_quota);
+    (void)snprintf(key, sizeof(key), "%s.cost_quota", prefix);
+    if (b.cost_quota == UINT64_MAX) {
+        ck_null(key);
+    } else {
+        ck_u64(key, b.cost_quota);
+    }
+    (void)snprintf(key, sizeof(key), "%s.priority", prefix);
+    ck_u64(key, (uint64_t)b.priority);
+}
+
+static const struct {
+    const char *rust;
+    asx_cancel_kind c;
+} k_cancel_kinds[] = {
+    {"User", ASX_CANCEL_USER},
+    {"Timeout", ASX_CANCEL_TIMEOUT},
+    {"Deadline", ASX_CANCEL_DEADLINE},
+    {"PollQuota", ASX_CANCEL_POLL_QUOTA},
+    {"CostBudget", ASX_CANCEL_COST_BUDGET},
+    {"FailFast", ASX_CANCEL_FAIL_FAST},
+    {"RaceLost", ASX_CANCEL_RACE_LOST},
+    {"ParentCancelled", ASX_CANCEL_PARENT},
+    {"ResourceUnavailable", ASX_CANCEL_RESOURCE},
+    {"Shutdown", ASX_CANCEL_SHUTDOWN},
+    {"LinkedExit", ASX_CANCEL_LINKED_EXIT},
+};
+#define K_CANCEL_KINDS (sizeof(k_cancel_kinds) / sizeof(k_cancel_kinds[0]))
+
+static const char *leak_name(asx_leak_response r) {
+    switch (r) {
+    case ASX_LEAK_PANIC: return "Panic";
+    case ASX_LEAK_LOG: return "Log";
+    case ASX_LEAK_SILENT: return "Silent";
+    case ASX_LEAK_RECOVER: return "Recover";
+    }
+    return "?";
+}
+
+static const char *finalizer_name(asx_finalizer_escalation e) {
+    switch (e) {
+    case ASX_FINALIZER_SOFT: return "Soft";
+    case ASX_FINALIZER_BOUNDED_LOG: return "BoundedLog";
+    case ASX_FINALIZER_BOUNDED_PANIC: return "BoundedPanic";
+    }
+    return "?";
+}
+
+static const char *strategy_name(asx_supervisor_strategy s) {
+    switch (s) {
+    case ASX_SUPERVISOR_ONE_FOR_ONE: return "OneForOne";
+    case ASX_SUPERVISOR_ONE_FOR_ALL: return "OneForAll";
+    case ASX_SUPERVISOR_REST_FOR_ONE: return "RestForOne";
+    }
+    return "?";
+}
+
+static const char *escalation_name(asx_supervisor_escalation e) {
+    switch (e) {
+    case ASX_ESCALATION_STOP: return "Stop";
+    case ASX_ESCALATION_ESCALATE: return "Escalate";
+    case ASX_ESCALATION_RESET_COUNTER: return "ResetCounter";
+    }
+    return "?";
+}
+
+static const char *backoff_name(asx_restart_backoff_kind k) {
+    switch (k) {
+    case ASX_RESTART_BACKOFF_NONE: return "None";
+    case ASX_RESTART_BACKOFF_FIXED: return "Fixed";
+    case ASX_RESTART_BACKOFF_EXPONENTIAL: return "Exponential";
+    }
+    return "?";
+}
+
+/* The C side of every constant in schemas/rust_kernel_constants.json. */
+static void ck_build(void) {
+    asx_runtime_config rt;
+    asx_lab_config lab;
+    asx_supervisor_config sup;
+    asx_cancel_reason reason;
+    char key[64];
+    char order[160];
+    size_t used = 0;
+    uint32_t i;
+    int ordinal;
+
+    g_ck_n = 0;
+    g_ck_overflow = 0;
+
+    /* CancelKind: C's declaration order, by Rust name, then each kind. */
+    order[0] = '\0';
+    for (ordinal = 0; ordinal < (int)K_CANCEL_KINDS; ordinal++) {
+        for (i = 0; i < (uint32_t)K_CANCEL_KINDS; i++) {
+            if ((int)k_cancel_kinds[i].c == ordinal) {
+                int n = snprintf(order + used, sizeof(order) - used, "%s%s", used > 0u ? "," : "",
+                                 k_cancel_kinds[i].rust);
+                if (n > 0 && (size_t)n < sizeof(order) - used) used += (size_t)n;
+            }
+        }
+    }
+    ck_str("cancel_kind.variants", order);
+    for (i = 0; i < (uint32_t)K_CANCEL_KINDS; i++) {
+        asx_budget cleanup = asx_cancel_cleanup_budget(k_cancel_kinds[i].c);
+        (void)snprintf(key, sizeof(key), "cancel_kind.%s.ordinal", k_cancel_kinds[i].rust);
+        ck_u64(key, (uint64_t)k_cancel_kinds[i].c);
+        (void)snprintf(key, sizeof(key), "cancel_kind.%s.severity", k_cancel_kinds[i].rust);
+        ck_u64(key, (uint64_t)asx_cancel_severity(k_cancel_kinds[i].c));
+        (void)snprintf(key, sizeof(key), "cancel_kind.%s.cleanup_poll_quota",
+                       k_cancel_kinds[i].rust);
+        ck_u64(key, (uint64_t)cleanup.poll_quota);
+        (void)snprintf(key, sizeof(key), "cancel_kind.%s.cleanup_priority", k_cancel_kinds[i].rust);
+        ck_u64(key, (uint64_t)cleanup.priority);
+    }
+    reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+    ck_u64("cancel_reason.default_timestamp_ns", (uint64_t)reason.timestamp);
+
+    asx_runtime_config_init(&rt);
+    ck_u64("cancel_attribution.max_depth", (uint64_t)rt.max_cancel_chain_depth);
+    ck_u64("cancel_attribution.max_memory", (uint64_t)rt.max_cancel_chain_memory);
+    ck_u64("task.max_mask_depth", (uint64_t)ASX_MAX_MASK_DEPTH);
+    ck_str("runtime.default.obligation_leak_response", leak_name(rt.leak_response));
+    ck_u64("finalizer.poll_budget", (uint64_t)rt.finalizer_poll_budget);
+    ck_u64("finalizer.time_budget_ns", rt.finalizer_time_budget_ns);
+    ck_str("finalizer.default_escalation", finalizer_name(rt.finalizer_escalation));
+
+    ck_budget("budget.infinite", asx_budget_infinite());
+    ck_budget("budget.zero", asx_budget_zero());
+    ck_budget("budget.default", asx_budget_new());
+
+    ck_u64("timer.max_duration_ns", (uint64_t)ASX_TIMER_MAX_DURATION_NS);
+    ck_u64("timer.level0_resolution_ns", (uint64_t)LAB_WHEEL_TICK_NS);
+
+    asx_supervisor_config_init(&sup, "constants", 0u, 0u);
+    ck_str("supervision.default.restart_policy", strategy_name(sup.strategy));
+    ck_str("supervision.default.escalation", escalation_name(sup.escalation));
+    ck_na("supervision.default.max_restarts", "asx_supervisor_config_init takes it as an argument");
+    ck_na("supervision.default.restart_window_ns",
+          "asx_supervisor_config_init takes it as an argument");
+    ck_str("supervision.default.backoff.kind", backoff_name(sup.backoff.kind));
+    ck_u64("supervision.default.backoff.initial_ns", sup.backoff.initial_ns);
+    ck_u64("supervision.default.backoff.max_ns", sup.backoff.max_ns);
+    ck_u64("supervision.default.backoff.multiplier", (uint64_t)sup.backoff.multiplier);
+
+    /* C's mailbox capacity is a spawn argument bounded by this maximum,
+     * which must hold Rust's default. */
+    ck_u64("gen_server.default_mailbox_capacity", (uint64_t)ASX_ACTOR_MAILBOX_CAPACITY);
+    ck_u64("gen_server.yield_interval", (uint64_t)ACTOR_YIELD_INTERVAL);
+    ck_na("actor.default_mailbox_capacity", "C ports GenServers only, not the plain Actor");
+    ck_na("actor.yield_interval", "C ports GenServers only, not the plain Actor");
+
+    asx_lab_config_init(&lab);
+    ck_u64("lab.default.seed", lab.seed);
+    ck_na("lab.default.max_steps",
+          "asx_lab counts scenario steps (ASX_LAB_MAX_STEPS), not scheduler steps");
+    ck_bool("lab.default.panic_on_obligation_leak", rt.leak_response == ASX_LEAK_PANIC);
+    ck_u64("lab.cancel_streak_limit", (uint64_t)LAB_CANCEL_STREAK_LIMIT);
+    ck_u64("lab.runtime_cancel_streak_limit", (uint64_t)LAB_CANCEL_STREAK_LIMIT);
+    ck_u64("lab.handle_cancel_batch", (uint64_t)LAB_HANDLE_BATCH);
+    ck_u64("lab.region_command_batch", (uint64_t)LAB_REGION_BATCH);
+    ck_u64("rwlock.max_consecutive_writers", (uint64_t)RW_MAX_WRITER_STREAK);
+
+    /* Recorded differences. */
+    ck_known("cancel_kind.variants", "bd-9kll.2.18: C declares LinkedExit seventh");
+    ck_known("cancel_kind.ParentCancelled.ordinal", "bd-9kll.2.18");
+    ck_known("cancel_kind.ResourceUnavailable.ordinal", "bd-9kll.2.18");
+    ck_known("cancel_kind.Shutdown.ordinal", "bd-9kll.2.18");
+    ck_known("cancel_kind.LinkedExit.ordinal", "bd-9kll.2.18");
+    ck_known("budget.zero.deadline_ns",
+             "accepted: C encodes no deadline as 0, so its earliest deadline is 1 ns");
+    ck_known("runtime.default.obligation_leak_response", "bd-9kll.2.19: C defaults to Log");
+    ck_known("lab.default.panic_on_obligation_leak", "bd-9kll.2.19");
+}
+
+/* The JSON value as C text, for messages. */
+static void ck_rust_text(uint32_t v, char *buf, size_t cap) {
+    if (!canonical(&g_fixture, v, g_a)) {
+        (void)snprintf(buf, cap, "?");
+        return;
+    }
+    (void)snprintf(buf, cap, "%s", g_a);
+}
+
+static void ck_c_text(const ck_entry *e, char *buf, size_t cap) {
+    switch (e->kind) {
+    case CK_U64: (void)snprintf(buf, cap, "%llu", (unsigned long long)e->u); return;
+    case CK_NULL: (void)snprintf(buf, cap, "null"); return;
+    case CK_STR: (void)snprintf(buf, cap, "\"%s\"", e->s); return;
+    case CK_BOOL: (void)snprintf(buf, cap, "%s", e->u != 0u ? "true" : "false"); return;
+    case CK_NA: (void)snprintf(buf, cap, "n/a"); return;
+    }
+}
+
+/* Whether the Rust value `v` equals the C entry. An array of strings is
+ * compared as its comma-joined text. */
+static int ck_equal(uint32_t v, const ck_entry *e) {
+    asx_json_type t = asx_json_type_of(&g_fixture, v);
+    uint64_t u = 0;
+    int b = 0;
+    switch (e->kind) {
+    case CK_U64: return t == ASX_JSON_INT && asx_json_u64(&g_fixture, v, &u) && u == e->u;
+    case CK_NULL: return t == ASX_JSON_NULL;
+    case CK_BOOL:
+        return t == ASX_JSON_BOOL && asx_json_bool(&g_fixture, v, &b) && (uint64_t)b == e->u;
+    case CK_STR:
+        if (t == ASX_JSON_STRING) return strcmp(asx_json_string(&g_fixture, v), e->s) == 0;
+        if (t == ASX_JSON_ARRAY) {
+            char joined[160];
+            size_t used = 0;
+            uint32_t m;
+            joined[0] = '\0';
+            for (m = asx_json_item(&g_fixture, v, 0); m != ASX_JSON_NONE;
+                 m = g_fixture.nodes[m].next) {
+                const char *s = asx_json_string(&g_fixture, m);
+                int n;
+                if (s == NULL) return 0;
+                n = snprintf(joined + used, sizeof(joined) - used, "%s%s", used > 0u ? "," : "", s);
+                if (n < 0 || (size_t)n >= sizeof(joined) - used) return 0;
+                used += (size_t)n;
+            }
+            return strcmp(joined, e->s) == 0;
+        }
+        return 0;
+    case CK_NA: return 0;
+    }
+    return 0;
+}
+
+static int cmd_constants(const char *path) {
+    uint32_t root;
+    uint32_t constants;
+    uint32_t m;
+    uint32_t i;
+    const char *schema;
+    unsigned ok = 0;
+    unsigned known = 0;
+    unsigned na = 0;
+    unsigned fail = 0;
+    char rust[256];
+    char c[256];
+
+    if (!load(path, &g_fixture, &root)) return 2;
+    schema = asx_json_get_string(&g_fixture, root, "schema");
+    constants = asx_json_get(&g_fixture, root, "constants");
+    if (schema == NULL || strcmp(schema, "asx.rust_kernel_constants.v1") != 0 ||
+        asx_json_type_of(&g_fixture, constants) != ASX_JSON_OBJECT) {
+        fprintf(stderr, "asx-conformance: %s is not an asx.rust_kernel_constants.v1 document\n",
+                path);
+        return 1;
+    }
+    ck_build();
+    if (g_ck_overflow) {
+        fprintf(stderr, "asx-conformance: the C constants table overflowed or names an "
+                        "unknown key\n");
+        return 1;
+    }
+    for (m = asx_json_item(&g_fixture, constants, 0); m != ASX_JSON_NONE;
+         m = g_fixture.nodes[m].next) {
+        const char *key = asx_json_key(&g_fixture, m);
+        uint32_t value = asx_json_get(&g_fixture, m, "value");
+        const char *source = asx_json_get_string(&g_fixture, m, "source");
+        ck_entry *e = NULL;
+        for (i = 0; i < g_ck_n; i++) {
+            if (strcmp(g_ck[i].key, key) == 0) e = &g_ck[i];
+        }
+        ck_rust_text(value, rust, sizeof(rust));
+        if (e == NULL) {
+            fprintf(stdout, "FAIL %s: rust=%s (%s) has no C counterpart declared\n", key, rust,
+                    source != NULL ? source : "?");
+            fail++;
+            continue;
+        }
+        e->seen = 1;
+        if (e->kind == CK_NA) {
+            fprintf(stdout, "N/A  %s: rust=%s; %s\n", key, rust, e->s);
+            na++;
+            continue;
+        }
+        ck_c_text(e, c, sizeof(c));
+        if (ck_equal(value, e)) {
+            if (e->known != NULL) {
+                fprintf(stdout,
+                        "FAIL %s: c=%s now equals rust; remove the recorded difference (%s)\n", key,
+                        c, e->known);
+                fail++;
+            } else {
+                ok++;
+            }
+        } else if (e->known != NULL) {
+            fprintf(stdout, "KNOWN %s: rust=%s c=%s (%s)\n", key, rust, c, e->known);
+            known++;
+        } else {
+            fprintf(stdout, "FAIL %s: rust=%s c=%s (rust: %s)\n", key, rust, c,
+                    source != NULL ? source : "?");
+            fail++;
+        }
+    }
+    for (i = 0; i < g_ck_n; i++) {
+        if (!g_ck[i].seen) {
+            fprintf(stdout, "FAIL %s: C declares it, the Rust document does not\n", g_ck[i].key);
+            fail++;
+        }
+    }
+    fprintf(stdout,
+            "asx-conformance constants: rust=%s compared=%u ok=%u known=%u n/a=%u fail=%u\n",
+            asx_json_get_string(&g_fixture, root, "asupersync_rev") != NULL
+                ? asx_json_get_string(&g_fixture, root, "asupersync_rev")
+                : "?",
+            ok + known + fail, ok, known, na, fail);
+    return fail == 0u && ok > 0u ? 0 : 1;
+}
+
 static int usage(void) {
     fprintf(stderr, "usage: asx-conformance run <scenario.json>\n"
                     "       asx-conformance compare <fixture.json>...\n"
                     "       asx-conformance self-test <fixture.json>\n"
-                    "       asx-conformance canon <cases.jsonl>\n");
+                    "       asx-conformance canon <cases.jsonl>\n"
+                    "       asx-conformance constants <rust_kernel_constants.json>\n");
     return 2;
 }
 
@@ -368,6 +776,7 @@ int main(int argc, char **argv) {
     if (argc < 3) return usage();
     if (strcmp(argv[1], "run") == 0 && argc == 3) return cmd_run(argv[2]);
     if (strcmp(argv[1], "canon") == 0 && argc == 3) return cmd_canon(argv[2]);
+    if (strcmp(argv[1], "constants") == 0 && argc == 3) return cmd_constants(argv[2]);
     if (strcmp(argv[1], "self-test") == 0 && argc == 3) {
         cmp_result r = compare_one(argv[2], 1);
         if (r == CMP_FAIL) {

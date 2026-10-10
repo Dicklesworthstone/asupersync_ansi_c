@@ -37,8 +37,8 @@
 #include <string.h>
 
 #define LAB_LANE_CAP (8u * (uint32_t)ASX_MAX_TASKS)
-#define LAB_GROUP_CAP 256u          /* scratch capacity, PR:425-446 */
-#define LAB_CANCEL_STREAK_LIMIT 16u /* DEFAULT_LAB_CANCEL_STREAK_LIMIT, LR:6051 */
+/* LAB_GROUP_CAP, LAB_CANCEL_STREAK_LIMIT, LAB_REGION_BATCH and
+ * LAB_HANDLE_BATCH are Rust's (runtime_internal.h). */
 
 typedef struct {
     uint32_t slot;
@@ -124,7 +124,6 @@ static uint32_t g_lab_batch = 0;
  * Create mints a child of `region` for its opener; a Cancel (Rust's Cancel,
  * and Close with its fixed reason) cancels `region` with `reason`. FIFO; a
  * step applies at most LAB_REGION_BATCH (REGION_COMMAND_BATCH, LR:4136). */
-#define LAB_REGION_BATCH 8u
 #define LAB_REGION_CMD_CAP ((uint32_t)ASX_MAX_TASKS + (uint32_t)ASX_MAX_REGIONS)
 
 typedef struct {
@@ -150,7 +149,6 @@ static uint32_t g_lab_rcmd_n = 0;
  * awaiting admission keeps its aborts until it is admitted, which queues
  * them as one abort behind the pending ones, its first lane publication
  * (drain_spawn_admissions, LR:3972-3986; spawn_mailbox.rs:629-660). */
-#define LAB_HANDLE_BATCH 16u
 #define LAB_HANDLE_CAP (2u * (uint32_t)ASX_MAX_TASKS)
 
 /* A region command's cancel (close_region_command, state.rs:4936-4955) is

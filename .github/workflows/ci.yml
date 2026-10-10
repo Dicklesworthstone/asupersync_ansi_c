@@ -511,6 +511,14 @@ jobs:
         id: run_conformance
         run: make conformance
 
+      # Kernel constants and defaults no fixture observes (cancel-kind
+      # tables, budgets, timer limits, supervision defaults, lab batch
+      # sizes): the C values against schemas/rust_kernel_constants.json,
+      # which the fuzz lane re-derives from the pinned asupersync.
+      - name: "Rust parity: kernel constants (C vs Rust document)"
+        id: run_rust_constants
+        run: make check-rust-constants
+
       - name: Validate conformance summaries
         id: validate_manifest
         run: |
@@ -542,6 +550,9 @@ jobs:
           elif [ "${{ steps.run_conformance.outcome }}" = "failure" ]; then
             first_failure="conformance"
             rerun="make conformance"
+          elif [ "${{ steps.run_rust_constants.outcome }}" = "failure" ]; then
+            first_failure="rust-constants"
+            rerun="make check-rust-constants"
           elif [ "${{ steps.run_codec_equivalence.outcome }}" = "failure" ]; then
             first_failure="codec-equivalence"
             rerun="make codec-equivalence"
@@ -1009,6 +1020,9 @@ jobs:
 
       - name: Trace canonicalizer differential (seed 9, 100000 traces)
         run: make canon-differential CANON_SEED=9 CANON_COUNT=100000
+
+      - name: Rust kernel constants re-derived from the pinned asupersync
+        run: make rust-constants-fresh
 
       - name: Upload divergent scenarios
         if: failure()

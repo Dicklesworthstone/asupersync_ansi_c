@@ -47,7 +47,7 @@ static uint64_t lab_entropy_u64(void *ctx) {
 
 void asx_lab_config_init(asx_lab_config *cfg) {
     if (cfg == NULL) return;
-    cfg->seed = 0;
+    cfg->seed = 42u; /* Rust LabConfig::default() (lab/config.rs:444) */
     cfg->start_time_ns = 0;
     cfg->max_polls = 1024;
     cfg->auto_advance = 0u;

@@ -63,9 +63,10 @@ extern "C" {
 #define ASX_MAX_ACTORS 16u
 #endif
 
-/* The largest mailbox capacity a spawn may ask for (Rust takes any; its
- * plain actors default to 64, actor.rs:275-286). Each server reserves an
- * envelope table of this size plus one. */
+/* The largest mailbox capacity a spawn may ask for. Rust takes any and
+ * defaults GenServers to 64 (DEFAULT_GENSERVER_MAILBOX_CAPACITY,
+ * gen_server.rs:2071; checked by make check-rust-constants). Each server
+ * reserves an envelope table of this size plus one. */
 #ifndef ASX_ACTOR_MAILBOX_CAPACITY
 #define ASX_ACTOR_MAILBOX_CAPACITY 64u
 #endif

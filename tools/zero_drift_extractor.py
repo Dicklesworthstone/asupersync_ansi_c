@@ -2,6 +2,12 @@
 """
 zero_drift_extractor.py — Rust-AST zero-drift extractor prototype (bd-3vt.10)
 
+RETIRED (bd-9kll.2.13): it parses Rust fragments embedded in this file, not
+asupersync, so it cannot detect upstream drift. `twin_run constants` reads
+the constants from the pinned crate itself (schemas/rust_kernel_constants.json)
+and `make check-rust-constants` compares C with them. Nothing calls this
+file; it stays until the owner approves its deletion.
+
 Extracts state machine transition tables and invariant schema fragments from
 Rust enum definitions and transition implementations.
 

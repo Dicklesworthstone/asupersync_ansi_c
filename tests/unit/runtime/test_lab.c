@@ -25,8 +25,8 @@ static asx_status st_sink_;
 TEST(config_init_defaults) {
     asx_lab_config cfg;
     asx_lab_config_init(&cfg);
-    ASSERT_EQ(cfg.seed, (uint64_t)0);
-    ASSERT_EQ(cfg.auto_advance, 0u); /* Rust LabConfig::auto_advance */
+    ASSERT_EQ(cfg.seed, (uint64_t)42); /* Rust LabConfig::default() */
+    ASSERT_EQ(cfg.auto_advance, 0u);   /* Rust LabConfig::auto_advance */
     ASSERT_EQ(cfg.start_time_ns, (asx_time)0);
     ASSERT_EQ(cfg.max_polls, 1024u);
 }

@@ -44,6 +44,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
   - `make conformance` runs <!-- fact:rust_fixtures -->113<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
+  - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches, or is a recorded difference that names its bead.
   - Covered areas: region/task/obligation lifecycle, cancellation and masking, budgets, mpsc/oneshot/broadcast/watch channels, mutex/rwlock/semaphore/notify/barrier, task groups (join_all, race with a deadline, first_ok, quorum), region admission limits, GenServers (cast, call, stop, cancellation and the mailbox drain) and managed supervisors (one_for_one, one_for_all and rest_for_one restarts, restart intensity and backoff, stop or escalate when the limit is reached). All of it runs under the lab's single-worker dispatch model.
 - **Known differences, open:** none in what the scenario language expresses ([`docs/SCENARIO_DSL_V2.md`](docs/SCENARIO_DSL_V2.md) §7 lists the closed ones); rule by rule in [`docs/C_REFINEMENT_MAP.md`](docs/C_REFINEMENT_MAP.md).
 - **Not compared with Rust; tested in C only:** networking, files, processes and HTTP; live, non-lab scheduling.
@@ -426,6 +427,8 @@ C-side gaps found and closed.
 ```bash
 make conformance        # executed C-vs-Rust comparison of every v2 fixture
 make fuzz-differential FUZZ_V2_SEED=7 FUZZ_V2_COUNT=200
+make check-rust-constants  # C kernel constants vs schemas/rust_kernel_constants.json
+make rust-constants-fresh  # re-derive that document from the pinned asupersync (cargo)
 make fixture-integrity  # schema, provenance, digest recompute, codec round trip
 make test-gates         # negative controls: the gates must reject bad fixtures
 ```

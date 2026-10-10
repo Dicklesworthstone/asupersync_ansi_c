@@ -49,7 +49,7 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 typedef struct {
-    uint64_t seed;          /* PRNG seed for deterministic entropy */
+    uint64_t seed;          /* PRNG seed for deterministic entropy (default 42, as Rust) */
     asx_time start_time_ns; /* Virtual time start (0 = default) */
     uint32_t max_polls;     /* Max polls per scenario step (0 = 1024 default) */
     /* Rust LabConfig::auto_advance (default off): asx_lab_run jumps the

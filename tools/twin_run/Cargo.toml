@@ -15,6 +15,11 @@ path = "src/main.rs"
 asupersync = { git = "https://github.com/Dicklesworthstone/asupersync", rev = "5e60b1c4c53d62aaddae68de3ee7de4732f1755b" }
 serde_json = "1"
 sha2 = "0.10"
+# `twin_run constants` parses asupersync's private constants from its source
+# (src/constants.rs); span-locations gives their line numbers. Both are
+# already in the lock graph through asupersync's own dependencies.
+syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
 uuid = { version = "1", features = ["v4"] }
 
 # Standalone: not a member of any parent workspace.

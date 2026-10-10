@@ -566,4 +566,31 @@ void asx_waker_finish_block_internal(void);
 /* Reset private hook installation state during runtime teardown. */
 void asx_runtime_hooks_reset_internal(void);
 
+/* ------------------------------------------------------------------ */
+/* Constants pinned to Rust's (asupersync 5e60b1c4c). The values are     */
+/* private on both sides; `asx-conformance constants` compares them with  */
+/* schemas/rust_kernel_constants.json, which twin_run reads from the      */
+/* Rust source (bd-9kll.2.13).                                            */
+/* ------------------------------------------------------------------ */
+
+/* Lab dispatch (lab_dispatch.c, scheduler.c). The scratch capacity of a
+ * tie group (PR:425-446), the cancel-lane streak before a ready pick
+ * (DEFAULT_LAB_CANCEL_STREAK_LIMIT, LR:6051), the region commands a step
+ * applies (REGION_COMMAND_BATCH, LR:4136), the handle cancels a drain
+ * applies (HANDLE_CANCEL_BATCH, LR:4019), and the timer wheel's first-level
+ * tick (LEVEL0_RESOLUTION_NS, time/wheel.rs:49). */
+#define LAB_GROUP_CAP 256u
+#define LAB_CANCEL_STREAK_LIMIT 16u
+#define LAB_REGION_BATCH 8u
+#define LAB_HANDLE_BATCH 16u
+#define LAB_WHEEL_TICK_NS ((asx_time)1000000u)
+
+/* The writer hand-offs in a row an rwlock grants while a reader waits
+ * (MAX_CONSECUTIVE_WRITERS_BEFORE_READER_BATCH, sync/rwlock.rs:99). */
+#define RW_MAX_WRITER_STREAK 16u
+
+/* Messages a GenServer serves (or drains) between two yields
+ * (YIELD_INTERVAL, gen_server.rs:2100). */
+#define ACTOR_YIELD_INTERVAL 8u
+
 #endif /* ASX_RUNTIME_INTERNAL_H */

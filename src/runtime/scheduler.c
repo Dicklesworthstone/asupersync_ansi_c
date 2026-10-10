@@ -264,8 +264,8 @@ int asx_scheduler_next_timer_internal(asx_time *out_next) {
  * of the ready vector, keeping the others in order (time/wheel.rs:710-754,
  * 921-968): (deadline tick, registration) for timers within the first
  * level's 256 ms. A task's wake timer and its budget-deadline timer are
- * separate entries; due[] marks the latter with LAB_DUE_DEADLINE. */
-#define LAB_WHEEL_TICK_NS ((asx_time)1000000u)
+ * separate entries; due[] marks the latter with LAB_DUE_DEADLINE. The tick
+ * is LAB_WHEEL_TICK_NS (runtime_internal.h). */
 #define LAB_DUE_DEADLINE 0x80000000u
 
 static void lab_due_key(uint32_t entry, asx_time *out_tick, uint64_t *out_seq) {
