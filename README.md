@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![1364 API declarations](https://img.shields.io/badge/public%20API-1%2C364%20declarations-blue)
-![204 test programs](https://img.shields.io/badge/tests-204%20programs-brightgreen)
+![Public API declarations](https://img.shields.io/badge/public%20API-1%2C963%20declarations-blue)
+![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. 1,364 exported `ASX_API` declarations across 38 public header families, backed by 204 C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,963<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -40,17 +40,17 @@ make test
 
 | Feature | What It Gives You |
 |---|---|
-| **1,364 exported `ASX_API` declarations across 38 header families** | Full async runtime: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->1,963<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Full async runtime: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Reproduce production failures exactly; diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and bounded cleanup budgets |
 | **11 async combinators** | Join, race, select, timeout, retry, bracket, pipeline, bulkhead, rate-limit, quorum, first-ok |
 | **Circuit breaker and epoch-based execution** | Failure containment with open/half-open/closed states; phase-scoped execution with barrier triggers |
 | **Dual codecs (JSON + binary)** | JSON for debug/conformance, binary for production; both produce equivalent semantic digests |
-| **66 typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
+| **<!-- fact:status_codes -->66<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
-| **204 tracked C test programs across 7 categories** | 149 unit, 20 e2e, 3 invariant, 12 vignette, 3 conformance, 4 fuzz, and 13 formal files in the current tree |
+| **<!-- fact:test_programs -->225<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->164<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->4<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
 | **Cross-profile semantic parity gates** | All profiles produce identical semantic digests for shared fixture sets |
 
 The current repository is library-first: it ships the static library, public
@@ -680,41 +680,49 @@ All profiles produce identical canonical semantic digests for shared fixture set
 ## Repository Layout
 
 ```text
-include/asx/                 125 public C headers in the current tree
+include/asx/                 Public C headers
   asx.h                      Umbrella header (single #include entry point)
-  asx_status.h               66 error codes with categories and recovery guidance
+  asx_status.h               Error codes with categories and recovery guidance
   asx_config.h               Profile, resource class, hook, and fault injection types
   asx_ids.h                  Handle types, type tags, lifecycle enums, cancel kinds
-  core/                      19 headers: symbols, budgets, cancel, combinators, epochs, circuit breakers
-  runtime/                   28 headers: scheduler, builder, blocking, I/O, deadline, HFT, automotive
-  channel/                   Channel family headers (MPSC, oneshot, broadcast, watch, session)
+  core/                      Symbols, budgets, cancel, channels, combinators, epochs, circuit breakers
+  runtime/                   Scheduler, builder, blocking, I/O, deadline, HFT, automotive
   sync/                      Sync primitives (mutex, semaphore, barrier, once, notify)
   codec/                     Codec abstraction + equivalence checking
   ...                        + actor, cx, time, bytes, stream, security, net, fs, evidence, monitor, etc.
 
-src/                         123 C source files in the current tree
-  core/                      19 files: status, cancel, combinators, symbols, epochs, circuit breakers
-  runtime/                   37 files: scheduler, lifecycle, builder, blocking, I/O, deadline, instruments
-  channel/                   6 files: MPSC, oneshot, broadcast, watch, session
-  sync/                      8 files | actor/ 3 files | time/ 3 files | bytes/ 3 files
-  platform/                  3 files: POSIX, Win32, freestanding adapters
-  ...                        + cx, codec, security, net, fs, process, signal, stream, evidence, etc.
+src/                         C sources, one directory per subsystem
+  core/                      Status, cancel, combinators, symbols, epochs, circuit breakers
+  runtime/                   Scheduler, lifecycle, builder, blocking, I/O, deadline, instruments
+  channel/                   MPSC, oneshot, broadcast, watch, session
+  platform/                  POSIX (hooks, net, fs, process, signal), Win32, freestanding adapters
+  ...                        + sync, actor, time, bytes, cx, codec, security, net, fs, process, etc.
 
-tests/                       204 tracked C test programs across the main verification lanes
-  unit/                      149 C test files across the current subsystem directories
-  e2e/                       20 end-to-end scenario programs (+ shell harnesses)
-  invariant/                 3 lifecycle/quiescence invariant suites
-  vignettes/                 12 API ergonomics demonstrations
-  conformance/               3 Rust parity + codec/profile equivalence suites
-  fuzz/                      4 differential fuzzing harnesses
-  formal/                    13 algebraic, CBMC, and litmus verification
+tests/                       C test programs across the verification lanes
+  unit/                      Module unit tests, by subsystem
+  e2e/                       End-to-end scenario programs (+ shell harnesses)
+  invariant/                 Lifecycle/quiescence invariant suites
+  vignettes/                 API ergonomics demonstrations
+  conformance/               Rust parity + codec/profile equivalence suites
+  fuzz/                      Differential fuzzing harnesses
+  formal/                    Algebraic, CBMC, and litmus verification
   ...                        + ABI, bench, and embedded support programs under tests/abi, tests/bench, tests/embedded
 
-examples/                    14 example programs
-fixtures/rust_reference/     Canonical fixtures captured from Rust runtime
+examples/                    Example programs
+fixtures/rust_reference_v2/  Fixtures captured from the Rust runtime (tools/twin_run), replayed by make conformance
 tools/                       CI, capture, replay, fuzz, and minimization tooling
 docs/                        Port architecture, parity tracking, deployment hardening
 ```
+
+The tree holds <!-- fact:header_files -->127<!-- /fact --> public headers
+(<!-- fact:headers_core -->22<!-- /fact --> in `core/`,
+<!-- fact:headers_runtime -->29<!-- /fact --> in `runtime/`), <!-- fact:source_files -->135<!-- /fact -->
+C sources (<!-- fact:sources_core -->19<!-- /fact --> in `core/`,
+<!-- fact:sources_runtime -->39<!-- /fact --> in `runtime/`,
+<!-- fact:sources_platform -->7<!-- /fact --> in `platform/`),
+<!-- fact:test_programs -->225<!-- /fact --> C test programs and
+<!-- fact:examples -->14<!-- /fact --> examples (`make lint-docs` checks these numbers
+against `tools/count_inventory.sh`).
 
 ## Performance and Footprint
 
@@ -743,20 +751,20 @@ make profile-parity
 
 ## Testing and Quality Gates
 
-`asx` currently ships with 204 tracked C test programs across 7 categories in
+`asx` currently ships with <!-- fact:test_programs -->225<!-- /fact --> tracked C test programs across 7 categories in
 the checked-in `tests/` tree. Individual assertion counts evolve over time; see
 `tests/TEST.md` for the current indexed suite inventory and per-suite case
 totals where tracked.
 
 | Category | Files | Coverage |
 |---|---|---|
-| **Unit tests** | 149 | Broad public API and subsystem coverage across the current tree |
-| **End-to-end scenarios** | 20 | Core lifecycle, automotive, HFT, codec parity, continuity, browser, network, POSIX adapter |
-| **Invariant tests** | 3 | Lifecycle transition legality, quiescence, obligation linearity |
-| **API vignettes** | 12 | Ergonomics and usage pattern demonstrations |
-| **Conformance** | 3 | Rust parity, cross-codec equivalence, cross-profile parity |
-| **Differential fuzz** | 4 | Rust-vs-C drift detection + deterministic minimization |
-| **Formal verification** | 13 | Algebraic laws (6 suites), CBMC bounded model checking (6 harnesses), litmus tests |
+| **Unit tests** | <!-- fact:test_unit -->164<!-- /fact --> | Broad public API and subsystem coverage across the current tree |
+| **End-to-end scenarios** | <!-- fact:test_e2e -->23<!-- /fact --> | Core lifecycle, automotive, HFT, codec parity, continuity, browser, network, POSIX adapter, HTTP server on real sockets |
+| **Invariant tests** | <!-- fact:test_invariant -->3<!-- /fact --> | Lifecycle transition legality, quiescence, obligation linearity |
+| **API vignettes** | <!-- fact:test_vignettes -->12<!-- /fact --> | Ergonomics and usage pattern demonstrations |
+| **Conformance** | <!-- fact:test_conformance -->6<!-- /fact --> | Rust parity, cross-codec equivalence, cross-profile parity |
+| **Differential fuzz** | <!-- fact:test_fuzz -->4<!-- /fact --> | Rust-vs-C drift detection + deterministic minimization |
+| **Formal verification** | <!-- fact:test_formal -->13<!-- /fact --> | Algebraic laws (6 suites), CBMC bounded model checking (6 harnesses), litmus tests |
 
 CI command set:
 
@@ -2010,7 +2018,7 @@ architecture, decisions, verification, and risk:
 
 ## CI Pipeline Architecture
 
-The primary CI workflow (`.github/workflows/ci.yml`) runs 12 top-level jobs on
+The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->12<!-- /fact --> top-level jobs on
 pushes and PRs:
 
 | Job | Runs |
@@ -2028,7 +2036,7 @@ pushes and PRs:
 | `msvc` | the library and the unit suite built by MSVC (x64, `/W4 /WX`, via CMake) and run with CTest, for CORE and WIN32 (deterministic builds) |
 | `embedded-matrix` | router-class cross builds with size and layout rows (built, not run) |
 
-All 12 jobs must pass before merge. A nightly workflow extends fuzz runs to
+All <!-- fact:ci_jobs -->12<!-- /fact --> jobs must pass before merge. A nightly workflow extends fuzz runs to
 100K iterations and collects performance baselines. The release workflow is
 tag-triggered (`v*`) and produces signed artifact bundles with SHA-256
 checksums and Sigstore signatures.
@@ -2140,7 +2148,7 @@ Usually slightly, depending on workload and trace settings. In exchange you gain
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: 1,364 exported `ASX_API` declarations across 38
+Yes. The C API is first-class: <!-- fact:api_declarations -->1,963<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The current repository ships a library-first surface:
 runtime/app/doctor/report helpers are present in headers and sources, but a

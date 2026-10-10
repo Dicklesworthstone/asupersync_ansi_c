@@ -697,6 +697,8 @@ lint-docs: $(LIB_A)
 	@./tools/ci/check_api_docs.sh
 	@echo "[asx] lint-docs: compiling the README's C samples..."
 	@./tools/ci/check_readme_samples.sh README.md $(LIB_A) $(BUILD_DIR)/readme_samples
+	@echo "[asx] lint-docs: checking the README's inventory numbers..."
+	@./tools/ci/check_readme_facts.sh README.md
 	@echo "[asx] lint-docs: checking the README's capacity table against the headers..."
 	@./tools/ci/capacity_table.sh --check README.md --out-dir $(BUILD_DIR)/capacity-table \
 		-- $(CC) $(ALL_CFLAGS)
