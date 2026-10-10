@@ -273,6 +273,13 @@ void asx_region_advance_internal(asx_region_id id) {
         asx_region_id parent;
         if (asx_region_slot_lookup(id, &r) != ASX_OK) return;
         if (r->state == ASX_REGION_OPEN || r->state == ASX_REGION_CLOSED) return;
+        /* A closing region with child regions waits in DRAINING whether or
+         * not its own tasks are done (Rust advance_region_state calls
+         * begin_drain whenever child_count > 0; bd-kovo). */
+        if (r->state == ASX_REGION_CLOSING && r->child_count > 0u &&
+            asx_region_set_state(id, r, ASX_REGION_DRAINING) != ASX_OK) {
+            return;
+        }
         if (r->poisoned || r->task_count > 0u) return;
         parent = r->parent_id;
         if (asx_region_finalize_one(id, r) != ASX_OK) return; /* children or obligations remain */

@@ -567,10 +567,10 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
 void asx_region_settle_internal(asx_region_id rid) {
     asx_region_slot *region;
     if (asx_region_slot_lookup(rid, &region) != ASX_OK) return;
-    /* The last task of a closing region lets it finalize. */
-    if (region->task_count == 0u && region->state != ASX_REGION_OPEN) {
-        asx_region_advance_internal(rid);
-    }
+    /* Every task completion advances a closing region, as Rust's
+     * complete_task does: a region with child regions moves to DRAINING
+     * even while tasks remain, and the last task lets it finalize. */
+    if (region->state != ASX_REGION_OPEN) asx_region_advance_internal(rid);
 }
 
 asx_region_id asx_region_handle_for_slot(uint32_t slot_idx) {
