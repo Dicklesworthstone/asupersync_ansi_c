@@ -352,7 +352,7 @@ register(deadline, waker) -> TimerHandle
 
 **Duplicate handling:** no deduplication. Timers with the same deadline in the same slot keep `Vec::push` order.
 
-**C status:** partly implemented. `asx_timer_register` (`src/time/timer_wheel.c:139-168`) returns `ASX_E_TIMER_DURATION_EXCEEDED` when `deadline - current > max_duration` (`:118-121`, `:145`); the default maximum is 24 h (`ASX_TIMER_MAX_DURATION_NS`, `include/asx/time/timer_wheel.h:38-39`), not Rust's 7 days, and `asx_timer_set_max_duration` changes it (`timer_wheel.c:302-305`). There is no clamping variant. A registration takes the first dead slot or a new one (`:147-164`) and fails with `ASX_E_RESOURCE_EXHAUSTED` when every slot is live (`:162`); it records a monotonic `insertion_seq` and advances the slot's generation (`:124-137`). No levels, ready vector or overflow heap. Unit tests: `tests/unit/time/test_timer_wheel.c` `timer_duration_exceeded`, `timer_resource_exhaustion`, `timer_slot_recycling_after_cancel`.
+**C status:** partly implemented. `asx_timer_register` (`src/time/timer_wheel.c:139-168`) returns `ASX_E_TIMER_DURATION_EXCEEDED` when `deadline - current > max_duration` (`:118-121`, `:145`); the default maximum is Rust's 7 days (`ASX_TIMER_MAX_DURATION_NS`, `include/asx/time/timer_wheel.h:38-40`; 24 h before 2026-10-10), and `asx_timer_set_max_duration` changes it (`timer_wheel.c:302-305`). There is no clamping variant. A registration takes the first dead slot or a new one (`:147-164`) and fails with `ASX_E_RESOURCE_EXHAUSTED` when every slot is live (`:162`); it records a monotonic `insertion_seq` and advances the slot's generation (`:124-137`). No levels, ready vector or overflow heap. Unit tests: `tests/unit/time/test_timer_wheel.c` `timer_duration_exceeded`, `timer_resource_exhaustion`, `timer_slot_recycling_after_cancel`.
 
 ### 2.4 Fire Semantics
 
@@ -410,7 +410,7 @@ TimerHandle { id: u64, generation: u64 }   // wheel.rs:225-228
 
 **Rust source:** `wheel.rs:80-105` (`TimerWheelConfig`), `wheel.rs:137-165` (`CoalescingConfig`)
 
-**C status:** only a maximum duration, default 24 h (`include/asx/time/timer_wheel.h:38-39`), settable with `asx_timer_set_max_duration` (`src/time/timer_wheel.c:302-305`). This default differs from Rust's 7-day `max_timer_duration`.
+**C status:** only a maximum duration, default 7 days, Rust's `max_timer_duration` (`include/asx/time/timer_wheel.h:38-40`; 24 h before 2026-10-10), settable with `asx_timer_set_max_duration` (`src/time/timer_wheel.c:302-305`).
 
 ### 2.8 Timer Ordering Within Deadline
 
@@ -700,7 +700,7 @@ For deterministic parity with Rust, and the current C status of each:
 
 | Failure | Rust detection | Rust result | C |
 |---------|-----------|----------|---|
-| Duration exceeded | `deadline - current > max_timer_duration` (`wheel.rs:530-546`) | `TimerDurationExceeded` from `try_register`; `register` clamps | `ASX_E_TIMER_DURATION_EXCEEDED` (`timer_wheel.c:118-121`, `:145`), default max 24 h |
+| Duration exceeded | `deadline - current > max_timer_duration` (`wheel.rs:530-546`) | `TimerDurationExceeded` from `try_register`; `register` clamps | `ASX_E_TIMER_DURATION_EXCEEDED` (`timer_wheel.c:118-121`, `:145`), default max 7 days |
 | Cancel with stale handle | Generation mismatch in `active` (`wheel.rs:577-597`) | `false` | Returns 0 (`timer_wheel.c:174-192`) |
 | Cancel already-cancelled or fired timer | Id not in `active` | `false` | Returns 0 (slot not alive) |
 | Fire cancelled timer | `is_live()` false (`wheel.rs:1071-1075`) | Skipped | Dead slots are skipped (`timer_wheel.c:221`) |
@@ -750,7 +750,7 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 | `tm-cancel-001` | Insert -> cancel -> advance -> not fired | Cancel | Not materialized; no direct v2 fixture (`lab-dispatch-waker-rearm-001` cancels and re-registers a sleep timer) |
 | `tm-cancel-stale-001` | Cancel with stale generation -> rejected | Invalid handle | Not materialized; no v2 fixture (C unit test `timer_stale_handle_cancel_returns_false`) |
 | `tm-cancel-reuse-001` | Same ID, different generation -> independent | Generation safety | Not materialized; no v2 fixture (C unit test `timer_generation_increments_on_reuse`) |
-| `tm-duration-exceeded-001` | Insert beyond max duration -> error | Validation | Not materialized; no v2 fixture (C unit test `timer_duration_exceeded`; C max 24 h vs Rust 7 days) |
+| `tm-duration-exceeded-001` | Insert beyond max duration -> error | Validation | Not materialized; no v2 fixture (C unit tests `timer_duration_exceeded`, `timer_default_max_duration_is_seven_days`) |
 | `tm-cascade-001` | Level 0 wrap triggers Level 1 cascade | Cascade | Not materialized; not implemented in C |
 | `tm-overflow-001` | Far-future timer in overflow heap | Overflow | Not materialized; not implemented in C |
 | `tm-coalesce-001` | Timers within coalescing window fire together | Coalescing | Not materialized; not implemented in C |
@@ -800,7 +800,7 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 | `INV-TM-01` | Cancel requires exact `(id, generation)` match | Handle safety | Yes (`timer_wheel.c:174-192`) |
 | `INV-TM-02` | Cancelled timers silently skipped at fire time via `is_live()` | Lazy deletion | Cancel marks the slot dead at once; dead slots are skipped (`timer_wheel.c:221`) |
 | `INV-TM-03` | Same-deadline timers fire in insertion order | Ordering | Yes (`timer_wheel.c:230-248`) |
-| `INV-TM-04` | `try_register` rejects duration > `max_timer_duration`; `register` clamps | Validation | Rejects; default max 24 h, no clamping variant |
+| `INV-TM-04` | `try_register` rejects duration > `max_timer_duration`; `register` clamps | Validation | Rejects; default max 7 days, no clamping variant |
 | `INV-TM-05` | All-cancelled triggers `purge_inactive_storage()`; many cancellations trigger compaction | Cleanup | Not applicable (no lazy storage) |
 | `INV-TM-06` | Generation wrap does not make handles collide (slab ids, wrapping `u64` generation) | Wrap safety | 32-bit generation skipping 0 |
 | `INV-TM-07` | Cascade respects generation: dead entries dropped during level promotion | Cascade safety | Not applicable (no cascade) |

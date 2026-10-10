@@ -275,7 +275,7 @@ asx_status asx_timer_register(asx_timer_wheel *wheel, asx_time deadline,
                               void *waker_data, asx_timer_handle *out_handle);
 ```
 
-**C status:** partly implemented (`src/time/timer_wheel.c:139-168`). `ASX_E_TIMER_DURATION_EXCEEDED` when `deadline - current > max_duration` (`:118-121`, `:145`); the default maximum is 24 h (`ASX_TIMER_MAX_DURATION_NS`, `include/asx/time/timer_wheel.h:37-38`), not Rust's 7 days, and there is no clamping `register`. A registration takes the first dead slot or a new one (`:147-164`) and fails with `ASX_E_RESOURCE_EXHAUSTED` when every slot is live (`:162`). Each arm records a monotonic `insertion_seq` and advances the slot's 32-bit generation (`:124-137`). The handle is `{ slot, generation }`, both `uint32_t` (`include/asx/time/timer_wheel.h:47-50`). No levels, ready vector or overflow heap.
+**C status:** partly implemented (`src/time/timer_wheel.c:139-168`). `ASX_E_TIMER_DURATION_EXCEEDED` when `deadline - current > max_duration` (`:118-121`, `:145`); the default maximum is Rust's 7 days (`ASX_TIMER_MAX_DURATION_NS`, `include/asx/time/timer_wheel.h:38-40`; 24 h before 2026-10-10), and there is no clamping `register`. A registration takes the first dead slot or a new one (`:147-164`) and fails with `ASX_E_RESOURCE_EXHAUSTED` when every slot is live (`:162`). Each arm records a monotonic `insertion_seq` and advances the slot's 32-bit generation (`:124-137`). The handle is `{ slot, generation }`, both `uint32_t` (`include/asx/time/timer_wheel.h:47-50`). No levels, ready vector or overflow heap.
 
 ### 2.3 Timer Firing
 
@@ -330,7 +330,7 @@ asx_status asx_timer_update(asx_timer_wheel *wheel, const asx_timer_handle *old_
 
 | Error | Rust | C |
 |-------|------|---|
-| Duration exceeded | `TimerDurationExceeded` from `try_register` (default max 7 days); `register` and `TimerDriver::update` clamp | `ASX_E_TIMER_DURATION_EXCEEDED` (`include/asx/asx_status.h:74`), default max 24 h, settable with `asx_timer_set_max_duration` (`src/time/timer_wheel.c:302-305`); no clamping |
+| Duration exceeded | `TimerDurationExceeded` from `try_register` (default max 7 days); `register` and `TimerDriver::update` clamp | `ASX_E_TIMER_DURATION_EXCEEDED` (`include/asx/asx_status.h:74`), default max 7 days as in Rust, settable with `asx_timer_set_max_duration` (`src/time/timer_wheel.c:302-305`); no clamping |
 | Stale handle on cancel | `false` | 0 |
 | Capacity exhaustion | None: the slab grows | `ASX_E_RESOURCE_EXHAUSTED` when all `ASX_MAX_TIMERS` slots are live (`src/time/timer_wheel.c:162`) |
 

@@ -119,8 +119,8 @@ TEST(arm_double_arm_fails) {
 /* bd-bf6i: the global wheel's time moves only when it is collected, and
  * the runtime never collects it, so arming measured the max duration
  * from time 0: on a clock past ASX_TIMER_MAX_DURATION_NS (a live host up
- * for more than a day) every arm failed. */
-TEST(arm_after_a_day_of_uptime) {
+ * for longer than that) every arm failed. */
+TEST(arm_after_long_uptime) {
     asx_deadline soon;
     asx_deadline far;
     setup();
@@ -266,7 +266,7 @@ int main(void) {
     RUN_TEST(arm_null_fails);
     RUN_TEST(arm_registers_timer);
     RUN_TEST(arm_double_arm_fails);
-    RUN_TEST(arm_after_a_day_of_uptime);
+    RUN_TEST(arm_after_long_uptime);
     RUN_TEST(arm_keeps_earlier_timers_pending);
     RUN_TEST(disarm_null_fails);
     RUN_TEST(disarm_cancels_timer);

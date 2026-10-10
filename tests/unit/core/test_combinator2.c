@@ -585,10 +585,11 @@ static asx_status hedge_backup_counted(void *user_data, asx_task_id self) {
     return ASX_OK;
 }
 
-/* bd-bf6i: on a clock past a day of uptime the hedge could not arm its
- * deadline (the global wheel measured from time 0), so it started the
- * backup on the first poll instead of after the hedge delay. */
-TEST(hedge_waits_for_its_delay_after_a_day_of_uptime) {
+/* bd-bf6i: on a clock past the maximum timer duration of uptime the hedge
+ * could not arm its deadline (the global wheel measured from time 0), so
+ * it started the backup on the first poll instead of after the hedge
+ * delay. */
+TEST(hedge_waits_for_its_delay_after_long_uptime) {
     const asx_runtime_hooks *active = asx_runtime_get_hooks();
     asx_runtime_hooks saved;
     asx_runtime_hooks hooks;
@@ -762,7 +763,7 @@ int main(void) {
     RUN_TEST(law_map_reduce_single_is_identity);
 
     /* Last: installs a clock hook */
-    RUN_TEST(hedge_waits_for_its_delay_after_a_day_of_uptime);
+    RUN_TEST(hedge_waits_for_its_delay_after_long_uptime);
 
     TEST_REPORT();
     return test_failures;

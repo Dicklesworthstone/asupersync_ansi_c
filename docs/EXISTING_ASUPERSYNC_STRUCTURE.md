@@ -832,7 +832,7 @@ register(deadline, waker) -> TimerHandle                                      //
 
 **Duplicate handling:** No deduplication. Multiple timers with same deadline stored in insertion order in same slot Vec (`src/time/wheel.rs:744`); see §10.7 for cascades.
 
-**Validation:** `try_register` returns `TimerDurationExceeded` if the duration is strictly greater than the configured max (default 7 days; `src/time/wheel.rs:536`). C: `asx_timer_register` rejects past **24 h** with `ASX_E_TIMER_DURATION_EXCEEDED` and has no clamping variant (`src/time/timer_wheel.c:145`); C task sleeps (the scheduler heap) have no limit at all; a full C table returns `ASX_E_RESOURCE_EXHAUSTED` (`src/time/timer_wheel.c:162`), where Rust's slab has no count limit.
+**Validation:** `try_register` returns `TimerDurationExceeded` if the duration is strictly greater than the configured max (default 7 days; `src/time/wheel.rs:536`). C: `asx_timer_register` rejects past the same 7 days (24 h before 2026-10-10) with `ASX_E_TIMER_DURATION_EXCEEDED` and has no clamping variant (`src/time/timer_wheel.c:145`); C task sleeps (the scheduler heap) have no limit at all; a full C table returns `ASX_E_RESOURCE_EXHAUSTED` (`src/time/timer_wheel.c:162`), where Rust's slab has no count limit.
 
 **Generation tracking:** Each registration gets a generation (`wrapping_add(1)`, `src/time/wheel.rs:551`) and an id that is the slab index, reused after removal (`src/time/wheel.rs:554`). Only the generation wraps. C: a per-slot `uint32` generation that skips 0, plus a global u64 `insertion_seq`.
 
@@ -841,7 +841,7 @@ register(deadline, waker) -> TimerHandle                                      //
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
 | `max_wheel_duration` | 24 hours | Max for wheel placement (beyond = overflow heap); also capped at the physical range |
-| `max_timer_duration` | 7 days | Max accepted by `try_register()` (C: one limit, 24 h, settable) |
+| `max_timer_duration` | 7 days | Max accepted by `try_register()` (C: one limit, the same 7 days, settable) |
 
 ### 10.4 Fire Semantics
 
@@ -1350,7 +1350,7 @@ These IDs are this document's own (they are also in `schemas/invariant_schema.js
 | `INV-TM-01` | Cancel requires exact `(id, generation)` match | Handle safety | Holds (`src/time/wheel.rs:577`); C `src/time/timer_wheel.c:174` |
 | `INV-TM-02` | Cancelled timers skipped at fire time via `is_live()` | Lazy deletion | Holds; compaction may also remove them earlier |
 | `INV-TM-03` | Same-deadline timers fire in insertion order | Ordering | Only within one slot or the ready list; a cascade from level 1 can put an earlier registration after later ones (§10.7). C enforces it unconditionally |
-| `INV-TM-04` | `try_register` rejects duration > `max_timer_duration` | Validation | Holds for `try_register`; the runtime path clamps instead. C rejects past 24 h; C sleeps are unbounded |
+| `INV-TM-04` | `try_register` rejects duration > `max_timer_duration` | Validation | Holds for `try_register`; the runtime path clamps instead. C rejects past 7 days, as `try_register`; C sleeps are unbounded |
 | `INV-TM-05` | All-cancelled triggers `purge_inactive_storage()` | Cleanup | Holds (`src/time/wheel.rs:585`); n/a in C |
 | `INV-TM-06` | Timer handle reuse is collision-safe: ids are reused slab indices and generations wrap (`wrapping_add`); a stale handle fails the generation check | Wrap safety | Corrected (the first extraction said u64 id wrap and a HashMap). C: 32-bit per-slot generation |
 | `INV-TM-07` | Dead entries dropped during cascade level promotion | Cascade safety | Holds; n/a in C |

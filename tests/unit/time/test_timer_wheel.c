@@ -326,6 +326,21 @@ TEST(timer_duration_exceeded) {
  * Test: max_wakers limit respected
  * ------------------------------------------------------------------- */
 
+/* The default limit is Rust's: TimerWheelConfig::max_timer_duration is 7
+ * days (time/wheel.rs:98-104); C's was 24 h. */
+TEST(timer_default_max_duration_is_seven_days) {
+    asx_timer_wheel *w = asx_timer_wheel_global();
+    asx_timer_handle h;
+    const uint64_t day = 86400ULL * 1000000000ULL;
+
+    asx_timer_wheel_reset(w);
+    ASSERT_EQ(ASX_TIMER_MAX_DURATION_NS, 7u * day);
+    ASSERT_EQ(asx_timer_register(w, 2u * day, NULL, &h), ASX_OK);
+    ASSERT_EQ(asx_timer_register(w, 7u * day, NULL, &h), ASX_OK);
+    ASSERT_EQ(asx_timer_register(w, 7u * day + 1u, NULL, &h), ASX_E_TIMER_DURATION_EXCEEDED);
+    asx_timer_wheel_reset(w);
+}
+
 TEST(timer_collect_respects_max_wakers) {
     asx_timer_wheel *w = asx_timer_wheel_global();
     asx_timer_handle h;
@@ -721,6 +736,7 @@ int main(void) {
     RUN_TEST(timer_resource_exhaustion);
     RUN_TEST(timer_slot_recycling_after_cancel);
     RUN_TEST(timer_duration_exceeded);
+    RUN_TEST(timer_default_max_duration_is_seven_days);
     RUN_TEST(timer_collect_respects_max_wakers);
     RUN_TEST(timer_collect_zero_capacity_advances_time);
     RUN_TEST(timer_update_cancels_old_and_registers_new);

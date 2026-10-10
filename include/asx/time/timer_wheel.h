@@ -35,8 +35,9 @@ extern "C" {
 #error "ASX_MAX_TIMERS must be at least 1"
 #endif
 
-/* Default maximum timer duration (24 hours in nanoseconds) */
-#define ASX_TIMER_MAX_DURATION_NS ((uint64_t)86400ULL * 1000000000ULL)
+/* Default maximum timer duration: 7 days in nanoseconds, Rust's
+ * TimerWheelConfig::max_timer_duration (time/wheel.rs:98-104). */
+#define ASX_TIMER_MAX_DURATION_NS ((uint64_t)604800ULL * 1000000000ULL)
 
 /* -------------------------------------------------------------------
  * Timer handle
