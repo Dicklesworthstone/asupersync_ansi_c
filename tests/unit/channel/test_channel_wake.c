@@ -121,6 +121,10 @@ typedef struct {
     uint64_t base; /* value of the first message */
     int give_up;   /* stop waiting (withdraw) on the next poll */
     int cancel_aware;
+    int use_cx; /* reserve with the task's Cx: the channel observes a cancel */
+    int masked; /* reserve inside a mask; unmask and checkpoint after sending */
+    int cx_ready;
+    asx_cx cx;
     asx_status last;
 } send_state;
 
@@ -136,9 +140,19 @@ static asx_status poll_sender(void *ud, asx_task_id self) {
     }
     st0 = initial_sleep(&s->sleep, &s->slept, s->delay_ns, self);
     if (st0 != ASX_OK) return st0;
+    if ((s->use_cx || s->masked) && !s->cx_ready) {
+        st0 = asx_cx_init(&s->cx, g_region, self, ASX_CAP_CANCEL_CHECK);
+        if (st0 != ASX_OK) return st0;
+        s->cx_ready = 1;
+        if (s->masked) {
+            st0 = asx_task_mask(self);
+            if (st0 != ASX_OK) return st0;
+        }
+    }
     while (s->sent < s->to_send) {
         asx_send_permit permit;
-        asx_status st = asx_channel_reserve(s->ch, NULL, &permit); /* parks when full */
+        asx_status st = asx_channel_reserve(s->ch, s->use_cx || s->masked ? &s->cx : NULL,
+                                            &permit); /* parks when full */
         if (st == ASX_E_PENDING) return ASX_E_PENDING;
         if (st != ASX_OK) {
             s->last = st;
@@ -150,6 +164,13 @@ static asx_status poll_sender(void *ud, asx_task_id self) {
             return ASX_OK;
         }
         s->sent++;
+    }
+    if (s->masked) {
+        /* The cancel the mask held back is seen at the first checkpoint
+         * after unmasking. */
+        st0 = asx_task_unmask(self);
+        if (st0 != ASX_OK) return st0;
+        if (cancel_requested(self)) s->last = ASX_E_CANCELLED;
     }
     return ASX_OK;
 }
@@ -518,6 +539,103 @@ TEST(many_producers_park_and_send_in_arrival_order) {
         ASSERT_EQ(g_rx[0].values[i], (uint64_t)i);
         if (i > 0u) ASSERT_EQ(g_tx[i].polls, 2u);
     }
+}
+
+TEST(cancel_storm_on_full_channel_keeps_fifo_progress) {
+    /* Producers park on a full channel; every other one is cancelled. Each
+     * cancelled reserve observes the cancel through its Cx, returns
+     * ASX_E_CANCELLED and leaves the line by itself (Rust Reserve::poll
+     * checks cx first, channel/mpsc.rs:1003-1012); the rest send in
+     * arrival order, and nothing stalls (bd-9kll.5.2). */
+    asx_channel_id ch;
+    asx_send_permit permit;
+    asx_task_id t[MANY_PRODUCERS];
+    asx_task_id rx;
+    asx_budget budget;
+    uint32_t i;
+    uint32_t k = 1;
+
+    ASSERT_TRUE(setup());
+    reset_fixtures();
+    ASSERT_EQ(asx_channel_create(g_region, 1, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&permit, 999u), ASX_OK);
+    for (i = 0; i < (uint32_t)MANY_PRODUCERS; i++) {
+        g_tx[i].ch = ch;
+        g_tx[i].to_send = 1;
+        g_tx[i].base = i;
+        g_tx[i].use_cx = 1;
+        ASSERT_EQ(asx_task_spawn(g_region, poll_sender, &g_tx[i], &t[i]), ASX_OK);
+    }
+    budget = asx_budget_from_polls(1000);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK); /* all parked */
+
+    for (i = 1; i < (uint32_t)MANY_PRODUCERS; i += 2u) {
+        ASSERT_EQ(asx_task_cancel(t[i], ASX_CANCEL_USER), ASX_OK);
+    }
+    g_rx[0].ch = ch;
+    g_rx[0].want = 1u + (uint32_t)MANY_PRODUCERS / 2u;
+    ASSERT_EQ(asx_task_spawn(g_region, poll_receiver, &g_rx[0], &rx), ASX_OK);
+    budget = asx_budget_from_polls(100000);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+
+    ASSERT_EQ(g_rx[0].got, 1u + (uint32_t)MANY_PRODUCERS / 2u);
+    ASSERT_EQ(g_rx[0].values[0], 999u);
+    for (i = 0; i < (uint32_t)MANY_PRODUCERS; i++) {
+        if ((i % 2u) == 1u) {
+            ASSERT_EQ(g_tx[i].sent, 0u);
+            ASSERT_EQ(g_tx[i].last, ASX_E_CANCELLED);
+            ASSERT_EQ(g_tx[i].polls, 2u); /* park, then observe the cancel */
+        } else {
+            ASSERT_EQ(g_tx[i].sent, 1u);
+            ASSERT_EQ(g_rx[0].values[k], (uint64_t)i);
+            k++;
+        }
+    }
+    ASSERT_EQ(asx_channel_queue_len(ch, &k), ASX_OK);
+    ASSERT_EQ(k, 0u);
+}
+
+TEST(masked_producer_is_not_cancelled_until_unmask) {
+    /* A cancel requested while a producer waits inside a mask does not end
+     * its reserve: the checkpoint sees nothing while masked, so it keeps
+     * its place, sends when space frees, and observes the cancel only
+     * after unmasking (bd-9kll.5.2). */
+    asx_channel_id ch;
+    asx_send_permit permit;
+    asx_task_id t;
+    asx_budget budget;
+    uint64_t v = 0;
+
+    ASSERT_TRUE(setup());
+    reset_fixtures();
+    ASSERT_EQ(asx_channel_create(g_region, 1, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&permit, 999u), ASX_OK);
+    g_tx[0].ch = ch;
+    g_tx[0].to_send = 1;
+    g_tx[0].base = 7;
+    g_tx[0].masked = 1;
+    ASSERT_EQ(asx_task_spawn(g_region, poll_sender, &g_tx[0], &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
+
+    /* The cancel wakes it, but the masked reserve waits on. */
+    ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_USER), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(g_tx[0].sent, 0u);
+    ASSERT_EQ(g_tx[0].last, ASX_OK);
+
+    /* Space frees: it sends, then sees the cancel after unmasking. */
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 999u);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+    ASSERT_EQ(g_tx[0].sent, 1u);
+    ASSERT_EQ(g_tx[0].last, ASX_E_CANCELLED);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 7u);
 }
 
 TEST(try_ops_outside_scheduler_never_park) {
@@ -1139,6 +1257,10 @@ int main(void) {
      * hold fewer tasks than that. */
     RUN_TEST_IF(MANY_PRODUCERS + 1 <= ASX_MAX_TASKS, many_producers_park_and_send_in_arrival_order,
                 "the task arena holds fewer tasks than the producers");
+    RUN_TEST_IF(MANY_PRODUCERS + 1 <= ASX_MAX_TASKS,
+                cancel_storm_on_full_channel_keeps_fifo_progress,
+                "the task arena holds fewer tasks than the producers");
+    RUN_TEST(masked_producer_is_not_cancelled_until_unmask);
     RUN_TEST(try_ops_outside_scheduler_never_park);
     RUN_TEST(try_ops_inside_a_poll_never_park);
     RUN_TEST(oneshot_receiver_parks_until_send_or_drop);
