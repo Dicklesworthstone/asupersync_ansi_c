@@ -62,7 +62,7 @@ int main(int argc, char **argv) {
     asx_resource_class resource_class = parse_resource_class(class_arg);
     asx_resource_limits limits = asx_resource_limits_for_class(resource_class);
     asx_region_id region;
-    asx_task_id task;
+    asx_task_id task = ASX_INVALID_ID;
     asx_task_state task_state;
     asx_budget budget;
     asx_status status;

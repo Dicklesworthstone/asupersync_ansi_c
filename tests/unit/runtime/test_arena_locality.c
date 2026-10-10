@@ -313,7 +313,11 @@ TEST(working_set_sizes) {
 /* Test: throughput benchmark                                         */
 /* ------------------------------------------------------------------ */
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(_MSC_VER) && defined(_M_X64)
+#include <intrin.h>
+static inline uint64_t rdtsc_spike(void) { return __rdtsc(); }
+#define HAS_RDTSC 1
+#elif defined(__x86_64__)
 static inline uint64_t rdtsc_spike(void) {
     uint32_t lo, hi;
     __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));

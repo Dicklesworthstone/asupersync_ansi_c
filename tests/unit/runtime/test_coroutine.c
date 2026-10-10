@@ -542,7 +542,7 @@ TEST(co_capture_arena_exhaustion) {
     asx_task_id tid;
     void *state_ptr;
     uint32_t i;
-    asx_status st;
+    asx_status st = ASX_OK;
     uint32_t spawned;
 
     asx_runtime_reset();

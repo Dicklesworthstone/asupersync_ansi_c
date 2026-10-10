@@ -706,7 +706,7 @@ TEST(scheduler_partial_drain_budget_boundary) {
 TEST(no_corruption_after_task_spawn_failure) {
     asx_region_id rid;
     asx_task_id tid;
-    asx_task_id last_valid;
+    asx_task_id last_valid = ASX_INVALID_ID;
     asx_outcome out;
     asx_outcome_severity sev;
     uint32_t i;

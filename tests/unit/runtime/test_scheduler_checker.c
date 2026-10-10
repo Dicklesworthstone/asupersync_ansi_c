@@ -475,7 +475,7 @@ TEST(checker_3task_adversarial_mix) {
 
 TEST(checker_deterministic_replay) {
     scenario sc;
-    uint32_t digest1, digest2;
+    uint32_t digest1 = 0u, digest2 = 0u;
     int run;
 
     sc.ntasks = 2;

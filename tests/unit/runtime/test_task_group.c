@@ -612,7 +612,7 @@ static asx_status poll_refused_owner(void *ud, asx_task_id self) {
 }
 
 static asx_status run_refused_owner(int lab, refused_owner *o) {
-    asx_region_id r;
+    asx_region_id r = ASX_INVALID_ID;
     asx_task_id owner;
     asx_cancel_reason reason;
     asx_budget run;

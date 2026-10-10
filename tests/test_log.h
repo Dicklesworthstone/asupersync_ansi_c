@@ -55,7 +55,7 @@ static char tlog_ts_buf[64];
  * Timestamp helper
  * ------------------------------------------------------------------- */
 
-__attribute__((unused)) static void tlog_now(void) {
+static inline void tlog_now(void) {
     time_t t = time(NULL);
     struct tm *gm = gmtime(&t);
     if (gm != NULL) {
@@ -70,7 +70,7 @@ __attribute__((unused)) static void tlog_now(void) {
  * JSON string escaping (minimal: handles \, ", newlines)
  * ------------------------------------------------------------------- */
 
-__attribute__((unused)) static void tlog_write_json_str(FILE *f, const char *s) {
+static inline void tlog_write_json_str(FILE *f, const char *s) {
     fputc('"', f);
     if (s != NULL) {
         while (*s) {
@@ -92,8 +92,7 @@ __attribute__((unused)) static void tlog_write_json_str(FILE *f, const char *s) 
  * Open / close
  * ------------------------------------------------------------------- */
 
-__attribute__((unused)) static void test_log_open(const char *layer, const char *subsystem,
-                                                  const char *suite) {
+static inline void test_log_open(const char *layer, const char *subsystem, const char *suite) {
     char path[512];
     char run_id_buf[128];
 
@@ -137,7 +136,7 @@ __attribute__((unused)) static void test_log_open(const char *layer, const char 
     }
 }
 
-__attribute__((unused)) static void test_log_close(void) {
+static inline void test_log_close(void) {
     if (tlog_fp != NULL) {
         fclose(tlog_fp);
         tlog_fp = NULL;
@@ -148,9 +147,8 @@ __attribute__((unused)) static void test_log_close(void) {
  * Record emission: test result
  * ------------------------------------------------------------------- */
 
-__attribute__((unused)) static void test_log_result(const char *test_name, const char *status,
-                                                    const char *err_file, int err_line,
-                                                    const char *err_assertion) {
+static inline void test_log_result(const char *test_name, const char *status, const char *err_file,
+                                   int err_line, const char *err_assertion) {
     if (tlog_fp == NULL) return;
 
     tlog_now();
@@ -191,7 +189,7 @@ __attribute__((unused)) static void test_log_result(const char *test_name, const
  * Record emission: suite summary
  * ------------------------------------------------------------------- */
 
-__attribute__((unused)) static void test_log_summary(int total, int passed, int failed) {
+static inline void test_log_summary(int total, int passed, int failed) {
     if (tlog_fp == NULL) return;
 
     tlog_now();

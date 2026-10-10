@@ -182,7 +182,7 @@ static asx_status poll_quota_probe(void *ud, asx_task_id self) {
 }
 
 static asx_status quota_reason(int checkpoint, asx_region_id *out_root, asx_cancel_reason *out) {
-    asx_task_id t;
+    asx_task_id t = ASX_INVALID_ID;
     asx_budget tb;
     asx_budget run;
     quota_probe q;
@@ -263,7 +263,7 @@ TEST(dispatch_records_carry_task_lane_step_and_time) {
  * Without the checkpoint nothing is due. */
 static asx_status run_quota_probe(int checkpoint, quota_probe *q, asx_dispatch_record *rec,
                                   uint32_t cap, asx_task_id *out_t) {
-    asx_region_id root;
+    asx_region_id root = ASX_INVALID_ID;
     asx_budget tb;
     asx_budget run;
     asx_status st = setup();
@@ -326,7 +326,7 @@ static asx_status poll_deadline_probe(void *ud, asx_task_id self) {
 
 static asx_status run_deadline_probe(deadline_probe *d, asx_dispatch_record *rec, uint32_t cap,
                                      asx_task_id *out_t) {
-    asx_region_id r;
+    asx_region_id r = ASX_INVALID_ID;
     asx_budget b = asx_budget_infinite();
     asx_budget run;
     asx_status st = setup();
