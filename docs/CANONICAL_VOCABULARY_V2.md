@@ -146,6 +146,16 @@ These fields project the Rust `CancelReason` (`src/types/cancel.rs:521-549`).
 `cause_chain_len` counts the `cause` links. `truncated` mirrors Rust's flag,
 whose chains are capped at depth 64 on deserialization.
 
+One message is normalized: a spawn refused at its region's live-task limit
+resolves `CancelReason::user` carrying `SpawnError::RegionAtCapacity`'s
+text (`src/cx/cx.rs:5526-5534`, `src/runtime/state.rs:1726`), which spells
+the region's `RegionId`, the limit and the live count; its `message` is
+projected as the prefix `[ASUP-E006] region admission limit reached`, the
+text C records. The default attribution of `CancelReason::new` /
+`CancelReason::user` (`RegionId::testing_default`, timestamp 1 s) projects
+as `origin_region` `root`, as C's `asx_cancel_reason_default` (region slot
+0, the scenario root).
+
 ### Outcome
 
 ```json

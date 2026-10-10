@@ -71,17 +71,19 @@ typedef struct {
     const char *region_name;
     asx_region_id region;
     asx_task_id id;
-    int spawned;           /* asx_task_spawn succeeded */
-    asx_status refused;    /* why asx_task_spawn failed (ASX_OK if it did not) */
-    uint32_t refusal;      /* its lab refusal ticket (asx_task_await_refusal) */
-    uint32_t program;      /* array node in the scenario document */
-    uint32_t pc;           /* 0-based index of the current step */
-    uint32_t phase;        /* suspension state of the current step */
-    asx_sleep_state sleep; /* the current sleep step */
-    asx_status end;        /* poll result once the program has ended */
-    int panicking;         /* the program ended with a panicked return */
-    int joined;            /* outcome taken by a join; the slot is gone */
-    uint32_t outcome;      /* projected outcome node (out document) when joined */
+    int spawned;                  /* asx_task_spawn succeeded */
+    asx_status refused;           /* why asx_task_spawn failed (ASX_OK if it did not) */
+    uint32_t refusal;             /* its lab refusal ticket (asx_task_await_refusal) */
+    uint32_t program;             /* array node in the scenario document */
+    uint32_t pc;                  /* 0-based index of the current step */
+    uint32_t phase;               /* suspension state of the current step */
+    asx_sleep_state sleep;        /* the current sleep step */
+    asx_status end;               /* poll result once the program has ended */
+    int panicking;                /* the program ended with a panicked return */
+    uint32_t spawn_obs;           /* its spawn step's observation (ASX_JSON_NONE if none) */
+    asx_status admission_refusal; /* why its admission refused it (ASX_OK: it did not) */
+    int joined;                   /* outcome taken by a join; the slot is gone */
+    uint32_t outcome;             /* projected outcome node (out document) when joined */
     it_local_obligation obligations[IT_MAX_LOCAL];
     uint32_t n_obligations;
     it_local_region regions[IT_MAX_LOCAL];
@@ -385,6 +387,7 @@ static it_task *add_task(const char *name, const char *region_name, asx_region_i
     t->region = region;
     t->program = program;
     t->end = ASX_OK;
+    t->spawn_obs = ASX_JSON_NONE;
     return t;
 }
 
@@ -690,8 +693,9 @@ static void it_observe(void *ctx, const asx_trace_event *ev, const asx_trace_pay
 /* Observations                                                        */
 /* ------------------------------------------------------------------ */
 
-static void observe(const it_task *t, uint32_t step, const char *op, uint32_t status,
-                    uint32_t value) {
+/* Returns the observation's node. */
+static uint32_t observe(const it_task *t, uint32_t step, const char *op, uint32_t status,
+                        uint32_t value) {
     uint32_t o = asx_json_new_object(g_out);
     asx_json_set(g_out, o, "task", asx_json_new_string(g_out, t->name));
     asx_json_set(g_out, o, "step", asx_json_new_u64(g_out, step));
@@ -699,10 +703,20 @@ static void observe(const it_task *t, uint32_t step, const char *op, uint32_t st
     asx_json_set(g_out, o, "status", status);
     asx_json_set(g_out, o, "value", value == ASX_JSON_NONE ? asx_json_new_null(g_out) : value);
     asx_json_push(g_out, g_observations, o);
+    return o;
 }
 
-static void observe_status(const it_task *t, uint32_t step, const char *op, asx_status st) {
-    observe(t, step, op, status_node(st), ASX_JSON_NONE);
+static uint32_t observe_status(const it_task *t, uint32_t step, const char *op, asx_status st) {
+    return observe(t, step, op, status_node(st), ASX_JSON_NONE);
+}
+
+/* Why the admission of a child spawned from a poll refused it (lab
+ * dispatch): ASX_E_ADMISSION_LIMIT or ASX_E_REGION_CLOSED, as twin_run's
+ * project_denied_spawns tells Rust's refused handles apart; ASX_OK if it
+ * was admitted or is still pending. */
+static asx_status admission_refusal(asx_task_id id) {
+    asx_status st = asx_task_admission_status(id);
+    return st == ASX_E_ADMISSION_LIMIT || st == ASX_E_REGION_CLOSED ? st : ASX_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1196,6 +1210,24 @@ static void bind_attempts(it_task *t) {
     }
 }
 
+/* Members their admission refused at max_tasks complete without a
+ * completion event (nothing ran, lab dispatch): their outcome, the
+ * refusal's Cancelled(User), is read before the group poll that may
+ * collect them and release their slots. */
+static void capture_refused_members(it_task *t) {
+    uint32_t i;
+    for (i = 0; i < t->n_group_members; i++) {
+        it_task *m = &g_tasks[t->group_members[i]];
+        asx_status why;
+        if (!m->spawned || m->member_done) continue;
+        why = admission_refusal(m->id);
+        if (why == ASX_OK) continue;
+        m->member_outcome = outcome_node(m->id);
+        m->member_done = 1;
+        m->admission_refusal = why;
+    }
+}
+
 /* Member i's outcome, captured at its completion; for a member its region
  * refused, the cancellation its join reports. */
 static uint32_t group_member_outcome(it_task *t, uint32_t i) {
@@ -1326,6 +1358,7 @@ static int exec_group(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
         }
         t->phase = 1u;
     }
+    capture_refused_members(t);
     st = asx_task_group_poll(&t->group, self);
     if (mode == ASX_TASK_GROUP_FIRST_OK) bind_attempts(t);
     if (st == ASX_E_PENDING) {
@@ -1673,10 +1706,14 @@ static void exec_race_deadline(it_task *t, asx_task_id self, uint32_t step, uint
         t->phase = 2u;
         return;
     }
-    /* The wrapper completed: join it, drop the deadline timer, observe. */
+    /* The wrapper completed: join it, drop the deadline timer, observe. A
+     * wrapper its admission refused never ran: it is done, as a member. */
     {
         int in_time = t->phase == 1u;
-        uint32_t wrapper_outcome = take_outcome(w, &st);
+        uint32_t wrapper_outcome;
+        w->admission_refusal = admission_refusal(w->id);
+        if (w->admission_refusal != ASX_OK) w->member_done = 1;
+        wrapper_outcome = take_outcome(w, &st);
         uint32_t value;
         if (st != ASX_OK) {
             it_fail_task(t, idx, "join of the race wrapper failed");
@@ -2082,7 +2119,9 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             child->refused = st;
             child->refusal = asx_scheduler_last_spawn_refusal();
         }
-        observe_status(t, idx, label, st);
+        /* Kept: an admission that refuses the child later turns this into
+         * ASX_E_ADMISSION_LIMIT (project_refused_admissions). */
+        child->spawn_obs = observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
     if (strcmp(op, "try_join") == 0) {
@@ -2106,8 +2145,14 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             return STEP_NEXT;
         }
         {
+            asx_status why = admission_refusal(target->id);
             uint32_t value = take_outcome(target, &st);
-            observe(t, idx, label, status_node(st), value);
+            if (why != ASX_OK && st == ASX_OK) {
+                target->admission_refusal = why;
+                observe_status(t, idx, label, why);
+            } else {
+                observe(t, idx, label, status_node(st), value);
+            }
         }
         return STEP_NEXT;
     }
@@ -2289,7 +2334,15 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
             return STEP_END;
         }
         if (task_completed(target->id)) {
+            /* A child its admission refused: the join observes the
+             * refusal, as twin_run projects Rust's (DSL §3.4). */
+            asx_status why = admission_refusal(target->id);
             uint32_t value = take_outcome(target, &st);
+            if (why != ASX_OK && st == ASX_OK) {
+                target->admission_refusal = why;
+                observe_status(t, idx, op, why);
+                return STEP_NEXT;
+            }
             observe(t, idx, op, status_node(st), value);
             return STEP_NEXT;
         }
@@ -2853,6 +2906,24 @@ static uint32_t project_events(uint32_t obligations) {
     return events;
 }
 
+/* Children their admission refused at max_tasks after the spawn step
+ * observed ASX_OK (lab dispatch): the spawn observation becomes the
+ * refusal, as twin_run's project_denied_spawns projects Rust's
+ * RegionAtCapacity onto the spawn step; their joins already observed it. */
+static void project_refused_admissions(void) {
+    uint32_t i;
+    for (i = 0; i < g_n_tasks; i++) {
+        it_task *t = &g_tasks[i];
+        if (!t->spawned) continue;
+        if (!t->joined && t->admission_refusal == ASX_OK) {
+            t->admission_refusal = admission_refusal(t->id);
+        }
+        if (t->admission_refusal == ASX_OK || t->spawn_obs == ASX_JSON_NONE) continue;
+        asx_json_set(g_out, t->spawn_obs, "status", status_node(t->admission_refusal));
+        asx_json_set(g_out, t->spawn_obs, "value", asx_json_new_null(g_out));
+    }
+}
+
 static uint32_t build_snapshot(uint32_t obligations) {
     uint32_t snap = asx_json_new_object(g_out);
     uint32_t tasks = asx_json_new_object(g_out);
@@ -2867,7 +2938,9 @@ static uint32_t build_snapshot(uint32_t obligations) {
         uint32_t reason = ASX_JSON_NONE;
         const char *state = "Completed";
         int in_cancel = 0;
-        if (!t->spawned) continue; /* a refused spawn has no task */
+        /* A refused spawn has no task; one its admission refused never ran
+         * and is left out as Rust leaves out a handle never admitted. */
+        if (!t->spawned || t->admission_refusal != ASX_OK) continue;
         if (t->group_member) {
             /* Reported through its group step only (vocabulary §6). */
             if (!t->member_done) quiescent = 0;
@@ -3273,6 +3346,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     if (!g_failed && asx_canon_trace(out, raw_events, out, &trace) != ASX_OK) {
         it_fail("canonicalization failed", asx_canon_error());
     }
+    project_refused_admissions();
     snapshot = build_snapshot(obligations);
     observations = sorted_observations();
     dispatches = project_dispatches();

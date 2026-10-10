@@ -752,6 +752,7 @@ asx_status asx_region_open(asx_region_id *out_id) {
     g_regions[idx].limits.max_children = ASX_REGION_UNLIMITED;
     g_regions[idx].limits.max_obligations = ASX_REGION_UNLIMITED;
     memset(&g_regions[idx].lab_principal, 0, sizeof(g_regions[idx].lab_principal));
+    g_regions[idx].lab_pending_admissions = 0;
     g_regions[idx].capture_used = 0;
     g_regions[idx].cancel_requested = 0;
     g_regions[idx].cancel_reason.kind = ASX_CANCEL_USER;
@@ -1033,6 +1034,9 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     asx_region_slot *r;
     asx_status st;
     uint32_t idx;
+    /* Under lab dispatch a spawn from a poll waits for the next step's
+     * admission (Rust's spawn mailbox), which checks max_tasks. */
+    int deferred = asx_lab_dispatch_active() && asx_task_current() != ASX_INVALID_ID;
 
     if (out_id == NULL) return ASX_E_INVALID_ARGUMENT;
     if (poll_fn == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -1046,18 +1050,16 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
      * like obligations remain OPEN-only. A rejected spawn is Rust's
      * SpawnError::RegionClosed ("closed or draining"; vocabulary §5). */
     if (!asx_region_can_accept_work(r->state)) {
-        if (asx_lab_dispatch_active() && asx_task_current() != ASX_INVALID_ID) {
-            asx_lab_defer_refused_admission();
-        }
+        if (deferred) asx_lab_defer_refused_admission();
         return ASX_E_REGION_CLOSED;
     }
     /* At its live-task limit: Rust's admission refuses the child with
      * SpawnError::RegionAtCapacity; cleanup work in a Finalizing region is
-     * exempt (record/region.rs add_task_internal). */
-    if (r->state != ASX_REGION_FINALIZING && r->task_count >= r->limits.max_tasks) {
-        if (asx_lab_dispatch_active() && asx_task_current() != ASX_INVALID_ID) {
-            asx_lab_defer_refused_admission();
-        }
+     * exempt (record/region.rs add_task_internal). A deferred spawn is
+     * checked at its admission instead (asx_lab_admit_pending): tasks that
+     * complete before it, the spawner included, no longer count. */
+    if (!deferred && r->state != ASX_REGION_FINALIZING &&
+        asx_region_live_admitted_internal(r) >= r->limits.max_tasks) {
         return ASX_E_ADMISSION_LIMIT;
     }
 
@@ -1142,8 +1144,47 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
                               asx_handle_pack_index(g_tasks[idx].generation, (uint16_t)idx));
 
     (void)asx_event_emit(ASX_EVENT_TASK_SPAWN, *out_id, (uint64_t)region, ASX_OK);
-    asx_trace_emit(ASX_TRACE_TASK_SPAWN, *out_id, (uint64_t)region);
+    /* A deferred spawn is traced when it is admitted, as Rust records its
+     * Spawn event at admission (runtime/state.rs:1119); a refused one
+     * never is. */
+    if (!deferred) asx_trace_emit(ASX_TRACE_TASK_SPAWN, *out_id, (uint64_t)region);
     return ASX_OK;
+}
+
+asx_status asx_task_admission_status(asx_task_id id) {
+    asx_task_slot *t;
+    asx_status st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
+    if (t->lab_admission_pending) return ASX_E_PENDING;
+    return t->lab_admission_refusal;
+}
+
+uint32_t asx_region_live_admitted_internal(const asx_region_slot *r) {
+    return r->task_count >= r->lab_pending_admissions ? r->task_count - r->lab_pending_admissions
+                                                      : 0u;
+}
+
+void asx_task_refuse_admission_internal(asx_task_slot *t, asx_region_slot *r, asx_status why) {
+    asx_region_id region = t->region;
+    /* Rust resolves the refused handle Cancelled: a closed region with
+     * CancelReason::new(ParentCancelled) (lab/runtime.rs:3999-4003), the
+     * live-task limit with CancelReason::user carrying the error's text
+     * (cx/cx.rs:5526-5534), both with the default attribution
+     * (types/cancel.rs:596-623). The text is its fixed prefix: Rust's
+     * spells the region's RegionId, its limit and live count. */
+    t->state = ASX_TASK_COMPLETED;
+    t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
+    t->cancel_reason =
+        why == ASX_E_REGION_CLOSED
+            ? asx_cancel_reason_default(ASX_CANCEL_PARENT, NULL)
+            : asx_cancel_reason_default(ASX_CANCEL_USER,
+                                        "[ASUP-E006] region admission limit reached");
+    t->cancel_pending = 1; /* its reason reads as any cancelled task's */
+    t->lab_admission_refusal = why;
+    asx_task_on_complete_internal(t, r);
+    /* Releasing the pending-spawn credit re-advances the region
+     * (lab/runtime.rs drain_spawn_admissions). */
+    asx_region_settle_internal(region);
 }
 
 asx_status asx_task_spawn_captured(asx_region_id region, asx_task_poll_fn poll_fn,

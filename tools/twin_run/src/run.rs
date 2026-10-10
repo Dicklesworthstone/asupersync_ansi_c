@@ -50,6 +50,15 @@ struct Shared {
     /// Children spawned through `cx.spawn` by provisional mailbox id, until
     /// their admission is resolved.
     provisional: HashMap<TaskId, String>,
+    /// Canonical ids that task bodies recorded under their own names when
+    /// they first ran (`run_program`), and the provisional ids already
+    /// paired with a canonical one (`resolve_admissions`).
+    self_ids: HashMap<String, TaskId>,
+    paired: HashSet<TaskId>,
+    /// Join results of children an `abort_task` found already refused by
+    /// their admission, taken before the abort strengthened their reason
+    /// (which would hide why they were refused, `project_denied_spawns`).
+    denied: HashMap<String, Result<Body, JoinError>>,
     /// Child name -> index of the observation of the spawn step that
     /// created it (`project_denied_spawns`).
     spawn_observations: HashMap<String, usize>,
@@ -263,6 +272,11 @@ fn task_name(shared: &Shared, id: TaskId) -> RunResult<String> {
         .ok_or_else(|| format!("unnamed task {id:?} (harness defect)"))
 }
 
+/// The prefix a refused spawn's message is projected to (vocabulary §4):
+/// Rust's full text (SpawnError::RegionAtCapacity, runtime/state.rs:1726)
+/// embeds a RegionId, limit and live count the C runtime cannot spell.
+const ADMISSION_LIMIT_MESSAGE: &str = "[ASUP-E006] region admission limit reached";
+
 fn project_reason(shared: &Shared, reason: &CancelReason) -> RunResult<Value> {
     let mut chain = 0u64;
     let mut cause = reason.cause.as_deref();
@@ -270,6 +284,15 @@ fn project_reason(shared: &Shared, reason: &CancelReason) -> RunResult<Value> {
         chain += 1;
         cause = c.cause.as_deref();
     }
+    // A spawn refused at a region's live-task limit resolves its handle with
+    // CancelReason::user carrying the error's text (cx/cx.rs:5526-5534):
+    // projected with the message's fixed prefix.
+    let message = match reason.message.as_deref() {
+        Some(m) if reason.kind == CancelKind::User && m.starts_with(ADMISSION_LIMIT_MESSAGE) => {
+            Some(ADMISSION_LIMIT_MESSAGE.to_string())
+        }
+        other => other.map(str::to_string),
+    };
     Ok(json!({
         "kind": kind_name(reason.kind),
         "origin_region": region_name(shared, reason.origin_region)?,
@@ -278,7 +301,7 @@ fn project_reason(shared: &Shared, reason: &CancelReason) -> RunResult<Value> {
             None => Value::Null,
         },
         "timestamp_ns": reason.timestamp.as_nanos(),
-        "message": reason.message.clone(),
+        "message": message,
         "cause_chain_len": chain,
         "truncated": reason.truncated,
     }))
@@ -640,6 +663,13 @@ fn run_program(
     endpoints: Vec<(String, Endpoint)>,
 ) -> Pin<Box<dyn Future<Output = Body> + Send>> {
     Box::pin(async move {
+        // Its canonical id under its own name: a spawn its admission refused
+        // has no TaskAdmitted event, so resolve_admissions names admitted
+        // children by this rather than by enqueue order alone.
+        lock(&ctx.shared)
+            .self_ids
+            .entry(ctx.me.clone())
+            .or_insert_with(|| cx.task_id());
         let mut local = Local {
             cx: Some(Box::new(cx.clone())),
             ..Local::default()
@@ -808,6 +838,10 @@ fn exec_sync(
                 Ok(Some(body)) => Some(Ok(body)),
                 Err(e) => Some(Err(e)),
             };
+            let result = match s.denied.remove(target) {
+                Some(denied) => Some(denied),
+                None => result,
+            };
             match result {
                 None => s.observations.push(json!({
                     "task": me, "step": idx, "op": label, "status": "ASX_E_TASK_NOT_COMPLETED", "value": Value::Null,
@@ -822,17 +856,27 @@ fn exec_sync(
             let target = str_field(step, "task")?;
             // The requesting task initiates the cancel (cx.cancel_with).
             let reason = cancel_reason(step, cx.region_id(), Some(cx.task_id()), cx.now())?;
-            let s = lock(&ctx.shared);
+            let mut s = lock(&ctx.shared);
             if s.unspawned.contains(target) {
                 drop(s);
                 observe(&ctx.shared, me, idx, label, NOT_HELD, Value::Null);
                 return Ok(Flow::Continue);
             }
+            let ran = s.self_ids.contains_key(target);
             let handle = s
                 .handles
-                .get(target)
+                .get_mut(target)
                 .ok_or_else(|| format!("unknown task {target:?}"))?;
+            // Finished without ever running: its admission refused it.
+            let denied = if !ran && handle.is_finished() {
+                handle.try_join().err()
+            } else {
+                None
+            };
             handle.abort_with_reason(reason);
+            if let Some(err) = denied {
+                s.denied.insert(target.to_string(), Err(err));
+            }
             drop(s);
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
@@ -1484,10 +1528,16 @@ async fn exec_step(
                 observe(&ctx.shared, me, idx, op, NOT_HELD, Value::Null);
                 return Ok(Flow::Continue);
             }
-            let handle = lock(&ctx.shared).handles.remove(target);
+            let (handle, denied) = {
+                let mut s = lock(&ctx.shared);
+                (s.handles.remove(target), s.denied.remove(target))
+            };
             let mut handle =
                 handle.ok_or_else(|| format!("unknown or already joined task {target:?}"))?;
-            let result = handle.join(cx).await;
+            let result = match denied {
+                Some(result) => result,
+                None => handle.join(cx).await,
+            };
             observe_join(&mut lock(&ctx.shared), me, idx, op, target, result);
         }
         "open_region" => {
@@ -2005,6 +2055,11 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
         let s = &mut *lock(&shared);
         let names: Vec<String> = s.handles.keys().cloned().collect();
         for name in names {
+            if let Some(result) = s.denied.remove(&name) {
+                s.handles.remove(&name);
+                s.raw_outcomes.insert(name, result);
+                continue;
+            }
             if let Some(mut handle) = s.handles.remove(&name) {
                 match handle.try_join() {
                     Ok(Some(body)) => {
@@ -2202,14 +2257,37 @@ fn apply_driver_op(lab: &mut LabRuntime, shared: &SharedRef, op: &Value) -> RunR
 /// `provisional`.
 fn resolve_admissions(lab: &LabRuntime, shared: &SharedRef) -> RunResult<()> {
     use std::collections::VecDeque;
-    let mut pending: HashMap<RegionId, VecDeque<TaskId>> = HashMap::new();
     let mut s = lock(shared);
+    // A child that ran recorded its canonical id under its name
+    // (run_program): name it directly. Enqueue order alone cannot pair a
+    // region's spawns with its admissions once one was refused
+    // (RegionAtCapacity under region_limits): the refused spawn has an
+    // enqueue and no TaskAdmitted.
+    let direct: Vec<(TaskId, String, TaskId)> = s
+        .provisional
+        .iter()
+        .filter_map(|(p, n)| s.self_ids.get(n).map(|id| (*p, n.clone(), *id)))
+        .collect();
+    for (provisional, name, task) in direct {
+        s.provisional.remove(&provisional);
+        s.paired.insert(provisional);
+        name_admitted(&mut s, name, task)?;
+    }
+    // Children that never ran: the enqueues and admissions not accounted
+    // for, paired in per-region FIFO order (src/trace/event.rs,
+    // `task_admitted`).
+    let mut pending: HashMap<RegionId, VecDeque<TaskId>> = HashMap::new();
     for event in lab.trace().snapshot() {
         match (&event.kind, &event.data) {
             (TraceEventKind::TaskSpawnEnqueued, TraceData::Task { task, region }) => {
-                pending.entry(*region).or_default().push_back(*task);
+                if !s.paired.contains(task) {
+                    pending.entry(*region).or_default().push_back(*task);
+                }
             }
             (TraceEventKind::TaskAdmitted, TraceData::Task { task, region }) => {
+                if s.task_names.contains_key(task) {
+                    continue;
+                }
                 let provisional = pending
                     .get_mut(region)
                     .and_then(VecDeque::pop_front)
@@ -2217,18 +2295,27 @@ fn resolve_admissions(lab: &LabRuntime, shared: &SharedRef) -> RunResult<()> {
                         format!("TaskAdmitted {task:?} has no pending enqueue in {region:?}")
                     })?;
                 if let Some(name) = s.provisional.remove(&provisional) {
-                    if let Some(other) = s.task_names.get(task) {
-                        return Err(format!(
-                            "canonical {task:?} of {name:?} is already named {other:?}"
-                        ));
-                    }
-                    s.task_ids.insert(name.clone(), *task);
-                    s.task_names.insert(*task, name);
+                    s.paired.insert(provisional);
+                    name_admitted(&mut s, name, *task)?;
                 }
             }
             _ => {}
         }
     }
+    Ok(())
+}
+
+fn name_admitted(s: &mut Shared, name: String, task: TaskId) -> RunResult<()> {
+    if let Some(other) = s.task_names.get(&task)
+        && *other != name
+    {
+        return Err(format!(
+            "canonical {task:?} of {name:?} is already named {other:?}"
+        ));
+    }
+    s.self_ids.entry(name.clone()).or_insert(task);
+    s.task_ids.insert(name.clone(), task);
+    s.task_names.insert(task, name);
     Ok(())
 }
 
@@ -2238,11 +2325,12 @@ fn resolve_admissions(lab: &LabRuntime, shared: &SharedRef) -> RunResult<()> {
 /// at its live-task limit (`SpawnError::RegionAtCapacity` under
 /// `region_limits`), resolving the handle as cancelled
 /// (spawn_mailbox.rs:1394-1417); the child never runs and has no trace
-/// events. C refuses the same spawn synchronously with
-/// `ASX_E_REGION_CLOSED` or `ASX_E_ADMISSION_LIMIT`, so the refusal is
-/// projected onto the spawn step, and a join of the child observes it too
-/// (DSL §3.4). An unadmitted spawn whose handle did not resolve as
-/// cancelled is a scenario or harness defect.
+/// events. The refusal is projected onto the spawn step as
+/// `ASX_E_REGION_CLOSED` or `ASX_E_ADMISSION_LIMIT`, and a join of the
+/// child observes it too (DSL §3.4); C's interpreter projects its
+/// admission refusals the same way (`asx_task_admission_status`). An
+/// unadmitted spawn whose handle did not resolve as cancelled is a
+/// scenario or harness defect.
 fn project_denied_spawns(s: &mut Shared) -> RunResult<()> {
     let denied: Vec<String> = s.provisional.values().cloned().collect();
     for name in denied {

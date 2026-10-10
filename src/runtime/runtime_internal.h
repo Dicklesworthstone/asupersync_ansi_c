@@ -72,6 +72,11 @@ typedef struct {
      * task opened (Rust mints its Cx with a fork of the runtime source,
      * state.rs:5093); a task spawned into it forks from this. */
     asx_lab_entropy lab_principal;
+    /* Lab dispatch: tasks spawned from a poll into this region that the
+     * next step has not admitted yet (counted in task_count). Admission
+     * checks max_tasks against the admitted ones only, as Rust's mailbox
+     * admission counts the region's live members. */
+    uint32_t lab_pending_admissions;
 } asx_region_slot;
 
 typedef struct {
@@ -134,6 +139,9 @@ typedef struct {
     uint8_t lab_scheduled;
     uint8_t lab_waker_prio;
     uint8_t lab_admission_pending;
+    /* Why its admission refused it (ASX_E_ADMISSION_LIMIT or
+     * ASX_E_REGION_CLOSED; ASX_OK if not refused): it never ran. */
+    asx_status lab_admission_refusal;
     /* A checkpoint of the current poll observed the cancel (Rust's
      * cancel_acknowledged, consumed after the poll, LR:4809); a budget
      * cancel a checkpoint raised whose cancel waker has not fired yet
@@ -288,6 +296,17 @@ void asx_task_join_wake_waiters_internal(asx_task_slot *task);
  * regions; to finalization once that was its last task). The region event
  * must follow the completion it depends on. */
 void asx_region_settle_internal(asx_region_id rid);
+
+/* Tasks of the region admitted and not yet completed (under lab dispatch,
+ * spawns still waiting for admission are left out). */
+uint32_t asx_region_live_admitted_internal(const asx_region_slot *r);
+
+/* The task, spawned from a poll under lab dispatch, is refused by its
+ * admission: the region is closed (`why` ASX_E_REGION_CLOSED) or at
+ * max_tasks (ASX_E_ADMISSION_LIMIT). It completes without running or
+ * leaving a trace, Cancelled as Rust resolves the refused handle, waking
+ * its joiners, and the region is re-advanced. */
+void asx_task_refuse_admission_internal(asx_task_slot *t, asx_region_slot *r, asx_status why);
 
 /* The earliest armed task timer (task wake timers and, under lab
  * dispatch, budget-deadline timers): 1 and *out_next, or 0 when none is

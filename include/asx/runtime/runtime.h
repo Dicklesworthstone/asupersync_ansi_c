@@ -917,6 +917,17 @@ ASX_API ASX_MUST_USE asx_status asx_task_await_refusal(asx_task_id self, uint32_
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API int asx_task_refusal_delivered(uint32_t ticket);
 
+/* Under lab dispatch a spawn made from a poll returns its task at once and
+ * is admitted at the next step (Rust's spawn mailbox), which can still
+ * refuse it: ASX_E_REGION_CLOSED when the region no longer accepts work,
+ * ASX_E_ADMISSION_LIMIT at the region's max_tasks counted then. A refused
+ * task never runs and completes Cancelled: ParentCancelled, or User with
+ * the "[ASUP-E006] region admission limit reached" message. Returns that
+ * status for a refused task, ASX_E_PENDING while its admission is pending,
+ * ASX_OK otherwise, or a lookup error.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API asx_status asx_task_admission_status(asx_task_id id);
+
 /* -------------------------------------------------------------------
  * Wake-driven waiting (park / wake / timers / join)
  * ------------------------------------------------------------------- */

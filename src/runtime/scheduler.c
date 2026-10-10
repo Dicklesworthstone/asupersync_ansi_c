@@ -383,6 +383,7 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->lab_scheduled = 0;
     task->lab_waker_prio = 0;
     task->lab_admission_pending = 0;
+    task->lab_admission_refusal = ASX_OK;
     task->lab_ack_in_poll = 0;
     task->cancel_wakers_pending = 0;
     task->lab_waker_epoch = 0;

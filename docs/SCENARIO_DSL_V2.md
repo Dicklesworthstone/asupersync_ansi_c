@@ -459,17 +459,6 @@ open gap with the gap named; `make conformance` lists them as ERROR.
 
 Open:
 
-- **When `max_tasks` is checked under lab dispatch.** Rust checks a spawn
-  against the region's live-task limit when the next lab step admits it
-  from the spawn mailbox, after the spawns queued before it and after the
-  spawner's own completion; C checks when `asx_task_spawn` is called. A
-  spawn the two decide differently diverges (generated scenarios set
-  `max_tasks` only in that way, so the generator leaves it out; the
-  curated `region-limits-admission-001` spawns within one poll, where both
-  agree). A task-group member refused by the limit also stops the C
-  interpreter (`asx_task_group_spawn failed`) where Rust records the member
-  cancelled.
-
 - **When a permit's obligation counts against `max_obligations`.** A
   semaphore or channel permit registers its obligation through Rust's
   obligation mailbox (`Cx::try_register_obligation`, `cx/cx.rs:1808`):
@@ -484,6 +473,27 @@ Open:
   `max_obligations` only when no permit can register an obligation.
 
 Closed (each verified by a fixture that now matches):
+
+- **When `max_tasks` is checked under lab dispatch** (bd-orxy): as Rust's
+  spawn mailbox does, a spawn from a poll returns its task at once and the
+  next step's admission checks it, FIFO, against the region's live tasks
+  then: the spawner, completed in the same poll, no longer counts; spawns
+  admitted before it in that step do (`asx_lab_admit_pending`). A refused
+  child never runs, leaves no trace (its `task.spawned` is recorded at
+  admission, as Rust's Spawn event is, state.rs:1119) and completes
+  Cancelled(User) with the default attribution and the message
+  `[ASUP-E006] region admission limit reached` (Rust's text, which spells
+  the RegionId, limit and live count, is projected to that prefix);
+  `asx_task_admission_status` reports why. The spawn step and joins
+  observe `ASX_E_ADMISSION_LIMIT`, as twin_run's `project_denied_spawns`
+  projects Rust's; a refused task-group member is a cancelled member.
+  twin_run names admitted children by the canonical id each records when
+  it first runs (an enqueue whose spawn was refused has no TaskAdmitted
+  to pair with), and keeps a refused child's result when an abort names
+  it, before the abort strengthens its reason. Fixtures
+  `region-limits-late-admission-001`,
+  `region-limits-group-member-refused-001`; the generator sets `max_tasks`
+  again (30 seeds x 200: no divergence, 304 scenarios with `max_tasks`).
 
 - **Lock poisoning** (bd-9kll.6.5): a Rust mutex guard, or rwlock write
   guard, dropped while its task panics poisons the lock (`sync/mutex.rs:758-763`,
@@ -531,8 +541,9 @@ Closed (each verified by a fixture that now matches):
   caps a region's live tasks, live child regions and pending obligations;
   an admission past a cap is refused with `ASX_E_ADMISSION_LIMIT` and
   changes nothing (cleanup spawns into a Finalizing region are exempt, as
-  in Rust) (`region-limits-admission-001`; about one generated scenario in
-  ten sets child and obligation limits; for `max_tasks` see Open).
+  in Rust) (`region-limits-admission-001`, `region-limits-late-admission-001`;
+  about one generated scenario in ten sets task, child and obligation
+  limits; a spawn's `max_tasks` is checked at its admission, see Closed).
 
 - **Multi-permit semaphore acquire**: `asx_semaphore_acquire_many_begin` /
   `asx_semaphore_try_acquire_many` take `count` permits all or nothing, at

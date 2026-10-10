@@ -793,6 +793,132 @@ TEST(spawn_refusal_reaches_a_join_at_the_next_step) {
     ASSERT_EQ(asx_task_await_refusal(t, 0u), ASX_OK);
 }
 
+/* bd-orxy: under lab dispatch a spawn from a poll is admitted at the next
+ * step, as Rust's spawn mailbox is, and the admission checks the region:
+ * max_tasks against the live tasks then (the spawner, completed in the
+ * same poll, no longer counts; spawns admitted earlier in the step do),
+ * and whether the region still accepts work. A refused child never runs
+ * and completes Cancelled. */
+typedef struct {
+    asx_region_id into;
+    uint32_t spawns;
+    int cancel_into; /* cancel `into` right after spawning (synchronously) */
+    asx_task_id kids[3];
+    asx_status spawned[3];
+    asx_status pending[3]; /* asx_task_admission_status right after the spawn */
+} admitter;
+
+static uint32_t g_kid_polls;
+
+static asx_status poll_counted_kid(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    g_kid_polls++;
+    return ASX_OK;
+}
+
+static asx_status poll_admitter(void *ud, asx_task_id self) {
+    admitter *a = (admitter *)ud;
+    uint32_t i;
+    (void)self;
+    for (i = 0; i < a->spawns; i++) {
+        a->spawned[i] = asx_task_spawn(a->into, poll_counted_kid, NULL, &a->kids[i]);
+        a->pending[i] = asx_task_admission_status(a->kids[i]);
+    }
+    if (a->cancel_into) {
+        asx_cancel_reason reason;
+        memset(&reason, 0, sizeof(reason));
+        reason.kind = ASX_CANCEL_USER;
+        reason.origin_region = a->into;
+        if (asx_region_cancel(a->into, &reason, NULL) != ASX_OK) return ASX_E_INVALID_STATE;
+    }
+    return ASX_OK; /* completes in the spawning poll */
+}
+
+TEST(spawn_limit_is_checked_at_the_next_step_admission) {
+    asx_region_id r;
+    asx_region_limits limits;
+    asx_task_id ta;
+    asx_task_id tb;
+    asx_budget run;
+    asx_outcome outcome;
+    asx_cancel_reason reason;
+    admitter a;
+    probe b = {'B', 10u, 0};
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(3u), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    memset(&a, 0, sizeof(a));
+    a.into = r;
+    a.spawns = 2u;
+    g_kid_polls = 0;
+    ASSERT_EQ(asx_task_spawn(r, poll_admitter, &a, &ta), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_probe, &b, &tb), ASX_OK);
+    limits.max_tasks = 2u;
+    limits.max_children = ASX_REGION_UNLIMITED;
+    limits.max_obligations = ASX_REGION_UNLIMITED;
+    ASSERT_EQ(asx_region_set_limits(r, &limits), ASX_OK);
+    ASSERT_EQ(asx_task_admission_status(ta), ASX_OK); /* host tasks are not deferred */
+    run = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+
+    /* Both spawns returned their task: the call checks nothing. */
+    ASSERT_EQ(a.spawned[0], ASX_OK);
+    ASSERT_EQ(a.spawned[1], ASX_OK);
+    ASSERT_EQ(a.pending[0], ASX_E_PENDING);
+    ASSERT_EQ(a.pending[1], ASX_E_PENDING);
+    /* At admission the spawner had completed: B and the first child make
+     * 2 live tasks, so the second child is refused, without running. */
+    ASSERT_EQ(asx_task_admission_status(a.kids[0]), ASX_OK);
+    ASSERT_EQ(asx_task_admission_status(a.kids[1]), ASX_E_ADMISSION_LIMIT);
+    ASSERT_EQ(g_kid_polls, 1u);
+    ASSERT_EQ(asx_task_get_outcome(a.kids[1], &outcome), ASX_OK);
+    ASSERT_EQ(outcome.severity, ASX_OUTCOME_CANCELLED);
+    ASSERT_EQ(asx_task_get_cancel_reason(a.kids[1], &reason), ASX_OK);
+    ASSERT_EQ(reason.kind, ASX_CANCEL_USER);
+    ASSERT_TRUE(reason.message != NULL &&
+                strcmp(reason.message, "[ASUP-E006] region admission limit reached") == 0);
+    ASSERT_EQ(reason.timestamp, (asx_time)1000000000u);
+    ASSERT_TRUE(asx_runtime_is_quiescent(&g_rt));
+}
+
+TEST(spawn_into_a_region_closed_before_admission_is_refused) {
+    asx_region_id r;
+    asx_region_id c;
+    asx_task_id ta;
+    asx_budget run;
+    asx_cancel_reason reason;
+    admitter a;
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(3u), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(r, &c), ASX_OK);
+    memset(&a, 0, sizeof(a));
+    a.into = c;
+    a.spawns = 1u;
+    a.cancel_into = 1;
+    g_kid_polls = 0;
+    ASSERT_EQ(asx_task_spawn(r, poll_admitter, &a, &ta), ASX_OK);
+    run = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+
+    ASSERT_EQ(a.spawned[0], ASX_OK);
+    /* The region closed before the next step: Rust's admission refuses the
+     * spawn (SpawnError::RegionClosed), resolving it ParentCancelled. */
+    ASSERT_EQ(asx_task_admission_status(a.kids[0]), ASX_E_REGION_CLOSED);
+    ASSERT_EQ(g_kid_polls, 0u);
+    ASSERT_EQ(asx_task_get_cancel_reason(a.kids[0], &reason), ASX_OK);
+    ASSERT_EQ(reason.kind, ASX_CANCEL_PARENT);
+    ASSERT_TRUE(asx_runtime_is_quiescent(&g_rt));
+}
+
+TEST(admission_status_of_a_bad_handle_is_a_lookup_error) {
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_TRUE(asx_task_admission_status(ASX_INVALID_ID) != ASX_OK);
+}
+
 TEST(use_lab_dispatch_requires_no_live_task) {
     asx_region_id r;
     asx_task_id t;
@@ -830,6 +956,9 @@ int main(void) {
     RUN_TEST(handle_aborts_in_one_step_coalesce_to_the_strongest);
     RUN_TEST(handle_abort_applies_at_once_without_lab_dispatch);
     RUN_TEST(spawn_refusal_reaches_a_join_at_the_next_step);
+    RUN_TEST(spawn_limit_is_checked_at_the_next_step_admission);
+    RUN_TEST(spawn_into_a_region_closed_before_admission_is_refused);
+    RUN_TEST(admission_status_of_a_bad_handle_is_a_lookup_error);
     RUN_TEST(use_lab_dispatch_requires_no_live_task);
 
     TEST_REPORT();

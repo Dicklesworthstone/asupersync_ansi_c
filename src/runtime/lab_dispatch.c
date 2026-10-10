@@ -578,6 +578,10 @@ void asx_lab_defer_admission(asx_task_slot *t) {
     g_lab_mailbox_ids++; /* its provisional id */
     t->lab_admission_pending = 1u;
     g_lab_admit[g_lab_admit_n++] = (uint32_t)(t - g_tasks);
+    {
+        asx_region_slot *r;
+        if (asx_region_slot_lookup(t->region, &r) == ASX_OK) r->lab_pending_admissions++;
+    }
 }
 
 void asx_lab_note_spawn_internal(void) { g_lab_last_refusal = 0; }
@@ -699,11 +703,42 @@ void asx_lab_admit_pending(void) {
         t = &g_tasks[g_lab_admit[i]];
         if (!t->alive || !t->lab_admission_pending) continue;
         t->lab_admission_pending = 0u;
-        lab_arena_insert(t); /* its task-arena id */
-        /* Admission adds it to its region's membership (state.rs:5212)
-         * and arms its budget-deadline timer (state.rs:4892). */
+        {
+            asx_region_slot *r;
+            if (asx_region_slot_lookup(t->region, &r) == ASX_OK) {
+                if (r->lab_pending_admissions > 0u) r->lab_pending_admissions--;
+                /* Rust's admit_spawn_record_in: a region that no longer
+                 * accepts work refuses the spawn before the task table is
+                 * touched (SpawnError::RegionClosed). */
+                if (!asx_region_can_accept_work(r->state)) {
+                    asx_task_refuse_admission_internal(t, r, ASX_E_REGION_CLOSED);
+                    lab_take_handle_cancels_for(g_lab_admit[i]);
+                    continue;
+                }
+                lab_arena_insert(t); /* its task-arena id */
+                /* Region admission (record/region.rs add_task) at its
+                 * live-task limit, the task itself left out: Rust recycles
+                 * the record it inserted and refuses the spawn
+                 * (SpawnError::RegionAtCapacity); cleanup work in a
+                 * Finalizing region is exempt. */
+                if (r->state != ASX_REGION_FINALIZING &&
+                    asx_region_live_admitted_internal(r) > r->limits.max_tasks) {
+                    asx_lab_task_retired_internal(t);
+                    asx_task_refuse_admission_internal(t, r, ASX_E_ADMISSION_LIMIT);
+                    lab_take_handle_cancels_for(g_lab_admit[i]);
+                    continue;
+                }
+            } else {
+                lab_arena_insert(t);
+            }
+        }
+        /* Admission adds it to its region's membership (state.rs:5212),
+         * arms its budget-deadline timer (state.rs:4892), then records its
+         * Spawn event (state.rs:1119). */
         t->member_seq = asx_task_next_member_seq_internal();
         asx_lab_arm_budget_deadline_internal(t);
+        asx_trace_emit(ASX_TRACE_TASK_SPAWN, (uint64_t)asx_task_handle_for_slot(g_lab_admit[i]),
+                       (uint64_t)t->region);
         lab_take_handle_cancels_for(g_lab_admit[i]);
         asx_lab_schedule(t, t->budget.priority);
     }
