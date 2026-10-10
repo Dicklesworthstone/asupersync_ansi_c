@@ -47,6 +47,9 @@ extern "C" {
 #ifndef ASX_MAX_SIGNAL_SUBSCRIPTIONS
 #define ASX_MAX_SIGNAL_SUBSCRIPTIONS 16u
 #endif
+#if (ASX_MAX_SIGNAL_SUBSCRIPTIONS) < 1
+#error "ASX_MAX_SIGNAL_SUBSCRIPTIONS must be at least 1"
+#endif
 
 /* Signal kinds (values follow the Linux numbering; NATIVE maps each kind
  * to the platform's own signal number). */

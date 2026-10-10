@@ -39,6 +39,10 @@ extern "C" {
 #define ASX_ACTOR_MAILBOX_CAPACITY 16u
 #endif
 
+#if (ASX_MAX_ACTORS) < 1 || (ASX_ACTOR_MAILBOX_CAPACITY) < 1
+#error "ASX_MAX_ACTORS and ASX_ACTOR_MAILBOX_CAPACITY must be at least 1"
+#endif
+
 #ifndef ASX_ACTOR_MAX_PENDING_CALLS
 #define ASX_ACTOR_MAX_PENDING_CALLS 8u
 #endif

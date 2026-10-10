@@ -30,6 +30,9 @@ extern "C" {
 #ifndef ASX_BUF_CAPACITY
 #define ASX_BUF_CAPACITY 4096u
 #endif
+#if (ASX_BUF_CAPACITY) < 1
+#error "ASX_BUF_CAPACITY must be at least 1"
+#endif
 
 /* -------------------------------------------------------------------
  * asx_buf — immutable byte slice

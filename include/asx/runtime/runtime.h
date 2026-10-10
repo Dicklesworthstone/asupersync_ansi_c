@@ -446,6 +446,9 @@ typedef struct {
 #ifndef ASX_MAX_MASK_DEPTH
 #define ASX_MAX_MASK_DEPTH 64u
 #endif
+#if (ASX_MAX_MASK_DEPTH) < 1
+#error "ASX_MAX_MASK_DEPTH must be at least 1"
+#endif
 
 /* Request cancellation of a task. Transitions Running → CancelRequested.
  * No-op if already in cancel or terminal state.

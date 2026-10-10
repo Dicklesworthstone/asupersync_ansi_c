@@ -167,6 +167,9 @@ ASX_API int asx_idempotency_record_expired(const asx_idempotency_record *rec, ui
 #ifndef ASX_IDEMPOTENCY_STORE_CAPACITY
 #define ASX_IDEMPOTENCY_STORE_CAPACITY 16u
 #endif
+#if (ASX_IDEMPOTENCY_STORE_CAPACITY) < 1
+#error "ASX_IDEMPOTENCY_STORE_CAPACITY must be at least 1"
+#endif
 
 typedef struct {
     asx_idempotency_record records[ASX_IDEMPOTENCY_STORE_CAPACITY];

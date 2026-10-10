@@ -70,6 +70,14 @@ extern "C" {
 #define ASX_MAX_WS_CONNECTIONS 8u
 #endif
 
+/* 14: the longest frame header (2 + 8-byte length + 4-byte mask). */
+#if (ASX_WS_TX_CAPACITY) < (ASX_WS_MAX_MESSAGE) + 14
+#error "ASX_WS_TX_CAPACITY must hold one max-size frame (ASX_WS_MAX_MESSAGE + 14)"
+#endif
+#if (ASX_MAX_WS_CONNECTIONS) < 1
+#error "ASX_MAX_WS_CONNECTIONS must be at least 1"
+#endif
+
 #define ASX_WS_MAX_FRAME_HEADER 14u  /* 2 + 8 (64-bit length) + 4 (mask) */
 #define ASX_WS_CONTROL_MAX 125u      /* control frame payload limit */
 #define ASX_WS_CLOSE_REASON_MAX 123u /* 125 - 2-byte status code */

@@ -147,6 +147,9 @@
 #ifndef ASX_MAX_REGION_CHILDREN
 #define ASX_MAX_REGION_CHILDREN 8u
 #endif
+#if (ASX_MAX_REGION_CHILDREN) < 1
+#error "ASX_MAX_REGION_CHILDREN must be at least 1"
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Resource classes                                                     */

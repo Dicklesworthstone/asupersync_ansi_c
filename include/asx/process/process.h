@@ -52,6 +52,9 @@ extern "C" {
 #ifndef ASX_MAX_PROCESSES
 #define ASX_MAX_PROCESSES 8u
 #endif
+#if (ASX_MAX_PROCESSES) < 1
+#error "ASX_MAX_PROCESSES must be at least 1"
+#endif
 
 #ifndef ASX_PROCESS_WAIT_MAX_POLLS
 #define ASX_PROCESS_WAIT_MAX_POLLS 10000u

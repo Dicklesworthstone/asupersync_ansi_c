@@ -34,6 +34,9 @@ extern "C" {
 #ifndef ASX_MAX_SUPERVISORS
 #define ASX_MAX_SUPERVISORS 8u
 #endif
+#if (ASX_MAX_SUPERVISORS) < 1
+#error "ASX_MAX_SUPERVISORS must be at least 1"
+#endif
 
 #ifndef ASX_SUPERVISOR_MAX_CHILDREN
 #define ASX_SUPERVISOR_MAX_CHILDREN 8u

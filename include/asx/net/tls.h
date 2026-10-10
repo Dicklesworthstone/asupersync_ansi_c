@@ -57,6 +57,9 @@ typedef enum {
 #ifndef ASX_MAX_TLS_STREAMS
 #define ASX_MAX_TLS_STREAMS 8u
 #endif
+#if (ASX_MAX_TLS_STREAMS) < 1
+#error "ASX_MAX_TLS_STREAMS must be at least 1"
+#endif
 
 /* -------------------------------------------------------------------
  * TLS configuration (value type)

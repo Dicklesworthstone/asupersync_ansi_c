@@ -142,6 +142,9 @@ typedef struct {
 #ifndef ASX_EVIDENCE_SINK_CAPACITY
 #define ASX_EVIDENCE_SINK_CAPACITY 64u
 #endif
+#if (ASX_EVIDENCE_SINK_CAPACITY) < 1
+#error "ASX_EVIDENCE_SINK_CAPACITY must be at least 1"
+#endif
 
 /* Evidence sink — collects structured findings */
 typedef struct {

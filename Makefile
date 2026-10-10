@@ -541,6 +541,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: all build clean install uninstall FORCE conformance-runner
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation lint-scenarios-v2
 .PHONY: model-check fixture-integrity fixtures-promote test-gates test-capacity-x4 test-resource-classes
+.PHONY: print-capacity-macros capacity-table
 .PHONY: test-asan test-asan-live test-tsan
 .PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
@@ -696,6 +697,9 @@ lint-docs: $(LIB_A)
 	@./tools/ci/check_api_docs.sh
 	@echo "[asx] lint-docs: compiling the README's C samples..."
 	@./tools/ci/check_readme_samples.sh README.md $(LIB_A) $(BUILD_DIR)/readme_samples
+	@echo "[asx] lint-docs: checking the README's capacity table against the headers..."
+	@./tools/ci/capacity_table.sh --check README.md --out-dir $(BUILD_DIR)/capacity-table \
+		-- $(CC) $(ALL_CFLAGS)
 
 # ---------------------------------------------------------------------------
 # lint-checkpoint — checkpoint-coverage gate for kernel loops (bd-66l.6)
@@ -1668,17 +1672,32 @@ CAPACITY_X4_CFLAGS := \
 	-DASX_MAX_TCP_LISTENERS=16u -DASX_MAX_TCP_STREAMS=64u -DASX_MAX_TIMERS=512u \
 	-DASX_MAX_TLS_STREAMS=32u -DASX_MAX_UDP_SOCKETS=64u -DASX_MAX_UNIX_DGRAM_SOCKETS=32u \
 	-DASX_MAX_UNIX_LISTENERS=16u -DASX_MAX_UNIX_STREAMS=64u -DASX_MAX_WAKERS=256u \
-	-DASX_MAX_WATCHES=64u -DASX_MAX_WS_CONNECTIONS=32u -DASX_POSIX_BLOCKING_QUEUE_CAPACITY=32u \
+	-DASX_MAX_WATCHES=64u -DASX_MAX_WORKERS=256u -DASX_MAX_WS_CONNECTIONS=32u \
+	-DASX_POSIX_BLOCKING_QUEUE_CAPACITY=32u \
 	-DASX_POSIX_BLOCKING_WORKERS=16u -DASX_RESOLVER_CACHE_CAPACITY=32u \
 	-DASX_RESOLVER_HOST_CAPACITY=1024u -DASX_SCHED_EVENT_LOG_CAPACITY=1024u \
 	-DASX_SERVICE_BUFFER_CAPACITY=32u -DASX_SESSION_MAX_CAPACITY=64u \
-	-DASX_SYMBOL_REGISTRY_CAPACITY=1024u -DASX_TRACE_CAPACITY=4096u
+	-DASX_SYMBOL_REGISTRY_CAPACITY=1024u -DASX_TRACE_CAPACITY=4096u \
+	-DASX_WS_TX_CAPACITY=67584u
 
 test-capacity-x4:
 	@echo "[asx] test-capacity-x4: unit suite with every capacity macro raised 4x..."
 	@$(MAKE) --no-print-directory test-unit BUILD_DIR=build/capacity-x4 \
 		CFLAGS='$(CAPACITY_X4_CFLAGS)'
 	@echo "[asx] test-capacity-x4: PASS"
+
+# Overridable capacities test-capacity-x4 leaves at their maximum.
+CAPACITY_FIXED := ASX_WAIT_QUEUE_MAX_CAPACITY
+
+# The capacity macros: CAPACITY_X4_CFLAGS's names plus CAPACITY_FIXED. The
+# README's capacity table (make capacity-table) lists exactly these, and
+# tools/ci/capacity_table.sh fails if a guarded capacity macro is missing.
+print-capacity-macros:
+	@echo $(foreach f,$(CAPACITY_X4_CFLAGS),$(firstword $(subst =, ,$(patsubst -D%,%,$(f))))) \
+		$(CAPACITY_FIXED)
+
+capacity-table:
+	@tools/ci/capacity_table.sh --out-dir $(BUILD_DIR)/capacity-table -- $(CC) $(ALL_CFLAGS)
 
 # ---------------------------------------------------------------------------
 # test-resource-classes — the unit suite built for each resource class

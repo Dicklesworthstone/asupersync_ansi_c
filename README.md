@@ -527,6 +527,87 @@ unclassed defaults: 8 regions, 64 tasks, 128 timers, 128 obligations,
 16 channels and 1,024 trace events. `make test-resource-classes` runs the
 unit suite built for each class.
 
+### Capacity Macros
+
+Every fixed capacity is a macro you can override at build time, e.g.
+`make CFLAGS=-DASX_MAX_TCP_STREAMS=64u` (a value below a macro's minimum
+fails the build with `#error`). The defaults below are a CORE build's,
+without a resource class. `ASX_MAX_WORKERS` depends on the profile (1 for
+FREESTANDING, 4 for EMBEDDED_ROUTER, 16 for HFT and AUTOMOTIVE, else 64).
+`make test-capacity-x4` runs the unit suite with each of these raised 4x
+(`ASX_WAIT_QUEUE_MAX_CAPACITY` is already its 64-waiter maximum). The table
+is generated: `make capacity-table` prints it, and `make lint-docs` fails if
+it drifts from the headers or a new capacity macro is missing.
+
+<!-- capacity-table:begin -->
+| Macro | Default | Defined in |
+|---|---|---|
+| `ASX_ACTOR_MAILBOX_CAPACITY` | 16 | `include/asx/actor/actor.h` |
+| `ASX_AFFINITY_TABLE_CAPACITY` | 256 | `include/asx/core/affinity.h` |
+| `ASX_BROADCAST_MAX_CAPACITY` | 32 | `include/asx/core/broadcast.h` |
+| `ASX_BUF_CAPACITY` | 4096 | `include/asx/bytes/buf.h` |
+| `ASX_CHANNEL_MAX_CAPACITY` | 64 | `include/asx/core/channel.h` |
+| `ASX_CLEANUP_STACK_CAPACITY` | 32 | `include/asx/core/cleanup.h` |
+| `ASX_EVIDENCE_SINK_CAPACITY` | 64 | `include/asx/runtime/diagnostic.h` |
+| `ASX_FS_FILE_CAPACITY` | 1024 | `include/asx/fs/fs.h` |
+| `ASX_GHOST_BORROW_TABLE_CAPACITY` | 128 | `include/asx/core/ghost.h` |
+| `ASX_GHOST_DETERMINISM_CAPACITY` | 256 | `include/asx/core/ghost.h` |
+| `ASX_GHOST_LINEARITY_CAPACITY` | 256 | `src/core/ghost.c` |
+| `ASX_GHOST_RING_CAPACITY` | 64 | `include/asx/core/ghost.h` |
+| `ASX_HINDSIGHT_CAPACITY` | 256 | `include/asx/runtime/hindsight.h` |
+| `ASX_IDEMPOTENCY_STORE_CAPACITY` | 16 | `include/asx/remote/remote.h` |
+| `ASX_LANE_TASK_CAPACITY` | 64 | `include/asx/runtime/parallel.h` |
+| `ASX_MAX_ACTORS` | 16 | `include/asx/actor/actor.h` |
+| `ASX_MAX_BLOCKING_TASKS` | 16 | `include/asx/runtime/blocking.h` |
+| `ASX_MAX_BROADCASTS` | 8 | `include/asx/core/broadcast.h` |
+| `ASX_MAX_CANCEL_WITNESSES` | 64 | `src/core/cancel.c` |
+| `ASX_MAX_CHANNELS` | 16 | `include/asx/core/channel.h` |
+| `ASX_MAX_DEADLINE_MONITORS` | 32 | `include/asx/runtime/deadline_monitor.h` |
+| `ASX_MAX_EPOCHS` | 16 | `include/asx/core/epoch.h` |
+| `ASX_MAX_EPOCH_OBSERVERS` | 8 | `include/asx/core/epoch.h` |
+| `ASX_MAX_FS_ENTRIES` | 16 | `include/asx/fs/fs.h` |
+| `ASX_MAX_IO_TOKENS` | 64 | `include/asx/runtime/io_driver.h` |
+| `ASX_MAX_MASK_DEPTH` | 64 | `include/asx/runtime/runtime.h` |
+| `ASX_MAX_OBLIGATIONS` | 128 | `include/asx/runtime/runtime.h` |
+| `ASX_MAX_ONESHOTS` | 32 | `include/asx/core/oneshot.h` |
+| `ASX_MAX_OPEN_DIRS` | 8 | `include/asx/fs/fs.h` |
+| `ASX_MAX_OPEN_FILES` | 16 | `include/asx/fs/fs.h` |
+| `ASX_MAX_PIPES` | 8 | `include/asx/net/pipe.h` |
+| `ASX_MAX_PROCESSES` | 8 | `include/asx/process/process.h` |
+| `ASX_MAX_QUIC_CONNECTIONS` | 4 | `include/asx/net/quic.h` |
+| `ASX_MAX_QUIC_STREAMS` | 16 | `include/asx/net/quic.h` |
+| `ASX_MAX_REGIONS` | 8 | `include/asx/runtime/runtime.h` |
+| `ASX_MAX_REGION_CHILDREN` | 8 | `include/asx/asx_config.h` |
+| `ASX_MAX_SESSIONS` | 8 | `include/asx/core/session.h` |
+| `ASX_MAX_SIGNAL_SUBSCRIPTIONS` | 16 | `include/asx/signal/signal.h` |
+| `ASX_MAX_SUPERVISORS` | 8 | `include/asx/actor/supervisor.h` |
+| `ASX_MAX_SUSPECTS` | 4 | `include/asx/runtime/regression_localize.h` |
+| `ASX_MAX_TASKS` | 64 | `include/asx/runtime/runtime.h` |
+| `ASX_MAX_TCP_LISTENERS` | 4 | `include/asx/net/net.h` |
+| `ASX_MAX_TCP_STREAMS` | 16 | `include/asx/net/net.h` |
+| `ASX_MAX_TIMERS` | 128 | `include/asx/time/timer_wheel.h` |
+| `ASX_MAX_TLS_STREAMS` | 8 | `include/asx/net/tls.h` |
+| `ASX_MAX_UDP_SOCKETS` | 16 | `include/asx/net/net.h` |
+| `ASX_MAX_UNIX_DGRAM_SOCKETS` | 8 | `include/asx/net/net.h` |
+| `ASX_MAX_UNIX_LISTENERS` | 4 | `include/asx/net/net.h` |
+| `ASX_MAX_UNIX_STREAMS` | 16 | `include/asx/net/net.h` |
+| `ASX_MAX_WAKERS` | 64 | `include/asx/runtime/waker.h` |
+| `ASX_MAX_WATCHES` | 16 | `include/asx/core/watch.h` |
+| `ASX_MAX_WORKERS` | 64 | `include/asx/runtime/parallel.h` |
+| `ASX_MAX_WS_CONNECTIONS` | 8 | `include/asx/net/websocket.h` |
+| `ASX_POSIX_BLOCKING_QUEUE_CAPACITY` | 8 | `src/platform/posix/hooks.c` |
+| `ASX_POSIX_BLOCKING_WORKERS` | 4 | `src/platform/posix/hooks.c` |
+| `ASX_RESOLVER_CACHE_CAPACITY` | 8 | `include/asx/net/net.h` |
+| `ASX_RESOLVER_HOST_CAPACITY` | 256 | `include/asx/net/net.h` |
+| `ASX_SCHED_EVENT_LOG_CAPACITY` | 256 | `src/runtime/scheduler.c` |
+| `ASX_SERVICE_BUFFER_CAPACITY` | 8 | `include/asx/service/service.h` |
+| `ASX_SESSION_MAX_CAPACITY` | 16 | `include/asx/core/session.h` |
+| `ASX_SYMBOL_REGISTRY_CAPACITY` | 256 | `include/asx/core/symbol.h` |
+| `ASX_TRACE_CAPACITY` | 1024 | `include/asx/runtime/trace.h` |
+| `ASX_WAIT_QUEUE_MAX_CAPACITY` | 64 | `src/sync/wait_queue.h` |
+| `ASX_WS_TX_CAPACITY` | 16896 | `include/asx/net/websocket.h` |
+<!-- capacity-table:end -->
+
 ## Deployment Profiles
 
 | Profile | Target | Key Properties |

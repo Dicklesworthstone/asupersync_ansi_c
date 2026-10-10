@@ -23,6 +23,9 @@ extern "C" {
 #ifndef ASX_MAX_PIPES
 #define ASX_MAX_PIPES 8u
 #endif
+#if (ASX_MAX_PIPES) < 1
+#error "ASX_MAX_PIPES must be at least 1"
+#endif
 
 typedef struct {
     uint32_t slot;

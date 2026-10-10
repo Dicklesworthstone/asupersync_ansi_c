@@ -42,6 +42,10 @@ typedef enum { ASX_QUIC_STREAM_BIDI = 0, ASX_QUIC_STREAM_UNI = 1 } asx_quic_stre
 #define ASX_MAX_QUIC_STREAMS 16u
 #endif
 
+#if (ASX_MAX_QUIC_CONNECTIONS) < 1 || (ASX_MAX_QUIC_STREAMS) < 1
+#error "ASX_MAX_QUIC_CONNECTIONS and ASX_MAX_QUIC_STREAMS must be at least 1"
+#endif
+
 #ifndef ASX_QUIC_MAX_DGRAM
 #define ASX_QUIC_MAX_DGRAM 1200u
 #endif

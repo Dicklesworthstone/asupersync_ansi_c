@@ -65,6 +65,13 @@ extern "C" {
 #define ASX_FS_FILE_CAPACITY 1024u
 #endif
 
+#if (ASX_MAX_FS_ENTRIES) < 1 || (ASX_FS_FILE_CAPACITY) < 1
+#error "ASX_MAX_FS_ENTRIES and ASX_FS_FILE_CAPACITY must be at least 1"
+#endif
+#if (ASX_MAX_OPEN_FILES) < 1 || (ASX_MAX_OPEN_DIRS) < 1
+#error "ASX_MAX_OPEN_FILES and ASX_MAX_OPEN_DIRS must be at least 1"
+#endif
+
 typedef struct {
     char text[ASX_FS_PATH_MAX];
     uint32_t len;

@@ -83,6 +83,13 @@ ASX_API int asx_socket_addr_eq(const asx_socket_addr *a, const asx_socket_addr *
 #define ASX_RESOLVER_HOST_CAPACITY 256u /* DNS names are at most 253 octets */
 #endif
 
+#if (ASX_MAX_TCP_LISTENERS) < 1 || (ASX_MAX_TCP_STREAMS) < 1 || (ASX_MAX_UDP_SOCKETS) < 1
+#error "ASX_MAX_TCP_LISTENERS, ASX_MAX_TCP_STREAMS and ASX_MAX_UDP_SOCKETS must be at least 1"
+#endif
+#if (ASX_RESOLVER_CACHE_CAPACITY) < 1 || (ASX_RESOLVER_HOST_CAPACITY) < 1
+#error "ASX_RESOLVER_CACHE_CAPACITY and ASX_RESOLVER_HOST_CAPACITY must be at least 1"
+#endif
+
 #ifndef ASX_RESOLVE_MAX_INFLIGHT
 #define ASX_RESOLVE_MAX_INFLIGHT 8u /* concurrent native lookups */
 #endif
@@ -450,6 +457,13 @@ ASX_API int asx_unix_addr_eq(const asx_unix_addr *a, const asx_unix_addr *b);
 
 #ifndef ASX_MAX_UNIX_DGRAM_SOCKETS
 #define ASX_MAX_UNIX_DGRAM_SOCKETS 8u
+#endif
+
+#if (ASX_MAX_UNIX_LISTENERS) < 1 || (ASX_MAX_UNIX_STREAMS) < 1
+#error "ASX_MAX_UNIX_LISTENERS and ASX_MAX_UNIX_STREAMS must be at least 1"
+#endif
+#if (ASX_MAX_UNIX_DGRAM_SOCKETS) < 1
+#error "ASX_MAX_UNIX_DGRAM_SOCKETS must be at least 1"
 #endif
 
 /* -------------------------------------------------------------------

@@ -112,6 +112,9 @@ ASX_API uint32_t asx_service_rate_limit_remaining(const asx_service_rate_limit_s
 #ifndef ASX_SERVICE_BUFFER_CAPACITY
 #define ASX_SERVICE_BUFFER_CAPACITY 8u
 #endif
+#if (ASX_SERVICE_BUFFER_CAPACITY) < 1
+#error "ASX_SERVICE_BUFFER_CAPACITY must be at least 1"
+#endif
 
 typedef struct {
     const void *request;
