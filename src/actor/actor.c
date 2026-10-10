@@ -71,6 +71,10 @@ typedef struct {
 
 static asx_actor_slot g_actors[ASX_MAX_ACTORS];
 
+/* Servers spawned and not yet Stopped: asx_actor_task_finished runs on
+ * every task completion and returns at once while there are none. */
+static uint32_t g_live_servers;
+
 /* Ops: call phases (cast uses 0 and 1). */
 #define OP_CHECK 0u
 #define OP_SEND 1u
@@ -165,6 +169,7 @@ static void actor_discard_mailbox(asx_actor_slot *s) {
  * released once drained (publish_server_final, :2438). */
 static void actor_publish(asx_actor_slot *s) {
     asx_status st;
+    if (s->state != ASX_ACTOR_STOPPED && g_live_servers > 0u) g_live_servers--;
     s->state = ASX_ACTOR_STOPPED;
     s->phase = PH_DONE;
     st = asx_channel_close_sender(s->mailbox);
@@ -410,6 +415,7 @@ asx_status asx_actor_spawn(asx_actor_handle *out, asx_region_id region,
     s->generation = next_gen(s->generation);
     s->in_use = 1;
     s->state = ASX_ACTOR_CREATED;
+    g_live_servers++;
     s->behavior = *behavior;
     s->user_state = state;
     s->task_id = tid;
@@ -697,6 +703,7 @@ void asx_actor_op_drop(asx_actor_handle actor, asx_actor_op *op) {
 
 void asx_actor_task_finished(asx_task_id task) {
     uint32_t i;
+    if (g_live_servers == 0u) return;
     for (i = 0; i < ASX_MAX_ACTORS; i++) {
         asx_actor_slot *s = &g_actors[i];
         if (!s->in_use || s->state == ASX_ACTOR_STOPPED || s->task_id == ASX_INVALID_ID) continue;
@@ -705,4 +712,7 @@ void asx_actor_task_finished(asx_task_id task) {
     }
 }
 
-void asx_actor_reset(void) { memset(g_actors, 0, sizeof(g_actors)); }
+void asx_actor_reset(void) {
+    memset(g_actors, 0, sizeof(g_actors));
+    g_live_servers = 0;
+}
