@@ -254,7 +254,7 @@ asx_status asx_notify_poll_wait(asx_notify_waiter *waiter, asx_cx *cx) {
     if (cx != NULL && asx_cx_has_cap(cx, ASX_CAP_CANCEL_CHECK)) {
         w->flags |= NOTIFY_CANCEL_AWARE;
     } else {
-        w->flags &= (uint8_t)~NOTIFY_CANCEL_AWARE;
+        w->flags = (uint8_t)(w->flags & ~NOTIFY_CANCEL_AWARE);
     }
     if (cx != NULL) {
         asx_status cst = asx_cx_checkpoint(cx);

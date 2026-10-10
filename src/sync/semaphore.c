@@ -320,7 +320,8 @@ static asx_status sem_hand_out(const sem_slot *s, const asx_semaphore_waiter *wa
 /* Hand a granted permit to the polling caller and retire its waiter. */
 static asx_status sem_consume_grant(sem_slot *s, uint32_t i, const asx_semaphore_waiter *waiter,
                                     asx_semaphore_permit *out, const asx_cx *cx) {
-    sem_node(i)->flags &= (uint8_t)~SEM_ACQUIRED; /* consumed, not returned to the pool */
+    /* consumed, not returned to the pool */
+    sem_node(i)->flags = (uint8_t)(sem_node(i)->flags & ~SEM_ACQUIRED);
     sem_waiter_retire(s, i);
     return sem_hand_out(s, waiter, out, cx);
 }
