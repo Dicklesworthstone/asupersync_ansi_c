@@ -1,0 +1,439 @@
+{
+  "schema": "asx.v4_rule_index.v1",
+  "source": "asupersync_v4_formal_semantics.md@5e60b1c4c",
+  "extracted_from": "git -C /dp/asupersync show 5e60b1c4c:asupersync_v4_formal_semantics.md, section 'Canonical Rule Index'",
+  "tag_convention": "A DSL v2 scenario's rules[] names a rule by its canonical id verbatim (tests/conformance/scenarios_v2/*.json). scenario_tag is that id when at least one scenario uses it, else null; tools/ci/check_refinement_map.sh checks both directions.",
+  "kinds": {
+    "rule": "transition rule",
+    "invariant": "safety invariant",
+    "definition": "definition",
+    "progress": "conditional liveness property",
+    "combinator": "derived combinator",
+    "law": "algebraic law"
+  },
+  "rules": [
+    {
+      "name": "rule.cancel.request",
+      "number": 1,
+      "section": "§3.2",
+      "construct": "CANCEL-REQUEST",
+      "kind": "rule",
+      "index_line": 28,
+      "scenario_tag": "rule.cancel.request"
+    },
+    {
+      "name": "rule.cancel.acknowledge",
+      "number": 2,
+      "section": "§3.2",
+      "construct": "CANCEL-ACKNOWLEDGE",
+      "kind": "rule",
+      "index_line": 29,
+      "scenario_tag": "rule.cancel.acknowledge"
+    },
+    {
+      "name": "rule.cancel.drain",
+      "number": 3,
+      "section": "§3.2",
+      "construct": "CANCEL-DRAIN",
+      "kind": "rule",
+      "index_line": 30,
+      "scenario_tag": null
+    },
+    {
+      "name": "rule.cancel.finalize",
+      "number": 4,
+      "section": "§3.2",
+      "construct": "CANCEL-FINALIZE",
+      "kind": "rule",
+      "index_line": 31,
+      "scenario_tag": null
+    },
+    {
+      "name": "inv.cancel.idempotence",
+      "number": 5,
+      "section": "§3.2.2",
+      "construct": "3.2.2 Idempotence; §3.2.5 automaton (Request events)",
+      "kind": "invariant",
+      "index_line": 32,
+      "scenario_tag": "inv.cancel.idempotence"
+    },
+    {
+      "name": "inv.cancel.propagates_down",
+      "number": 6,
+      "section": "§5",
+      "construct": "INV-CANCEL-PROPAGATES; §3.2 CANCEL-REQUEST descendants clause",
+      "kind": "invariant",
+      "index_line": 33,
+      "scenario_tag": "inv.cancel.propagates_down"
+    },
+    {
+      "name": "def.cancel.reason_kinds",
+      "number": 7,
+      "section": "§1.3",
+      "construct": "CancelKind",
+      "kind": "definition",
+      "index_line": 34,
+      "scenario_tag": "def.cancel.reason_kinds"
+    },
+    {
+      "name": "def.cancel.severity_ordering",
+      "number": 8,
+      "section": "§1.3",
+      "construct": "Severity tiers (total order)",
+      "kind": "definition",
+      "index_line": 35,
+      "scenario_tag": "def.cancel.severity_ordering"
+    },
+    {
+      "name": "prog.cancel.drains",
+      "number": 9,
+      "section": "§6",
+      "construct": "PROG-CANCEL; §3.2.3 Bounded cleanup",
+      "kind": "progress",
+      "index_line": 36,
+      "scenario_tag": null
+    },
+    {
+      "name": "rule.cancel.checkpoint_masked",
+      "number": 10,
+      "section": "§3.2",
+      "construct": "CHECKPOINT-MASKED",
+      "kind": "rule",
+      "index_line": 37,
+      "scenario_tag": "rule.cancel.checkpoint_masked"
+    },
+    {
+      "name": "inv.cancel.mask_bounded",
+      "number": 11,
+      "section": "§5",
+      "construct": "INV-MASK-BOUNDED (finite)",
+      "kind": "invariant",
+      "index_line": 38,
+      "scenario_tag": "inv.cancel.mask_bounded"
+    },
+    {
+      "name": "inv.cancel.mask_monotone",
+      "number": 12,
+      "section": "§5",
+      "construct": "INV-MASK-BOUNDED (only decreases at CHECKPOINT-MASKED)",
+      "kind": "invariant",
+      "index_line": 39,
+      "scenario_tag": null
+    },
+    {
+      "name": "rule.obligation.reserve",
+      "number": 13,
+      "section": "§3.4",
+      "construct": "RESERVE",
+      "kind": "rule",
+      "index_line": 40,
+      "scenario_tag": "rule.obligation.reserve"
+    },
+    {
+      "name": "rule.obligation.commit",
+      "number": 14,
+      "section": "§3.4",
+      "construct": "COMMIT",
+      "kind": "rule",
+      "index_line": 41,
+      "scenario_tag": "rule.obligation.commit"
+    },
+    {
+      "name": "rule.obligation.abort",
+      "number": 15,
+      "section": "§3.4",
+      "construct": "ABORT",
+      "kind": "rule",
+      "index_line": 42,
+      "scenario_tag": "rule.obligation.abort"
+    },
+    {
+      "name": "rule.obligation.leak",
+      "number": 16,
+      "section": "§3.4",
+      "construct": "LEAK",
+      "kind": "rule",
+      "index_line": 43,
+      "scenario_tag": "rule.obligation.leak"
+    },
+    {
+      "name": "inv.obligation.no_leak",
+      "number": 17,
+      "section": "§3.4.6",
+      "construct": "No silent drop; §1.9 Held(t)",
+      "kind": "invariant",
+      "index_line": 44,
+      "scenario_tag": "inv.obligation.no_leak"
+    },
+    {
+      "name": "inv.obligation.linear",
+      "number": 18,
+      "section": "§5",
+      "construct": "INV-OBLIGATION-LINEAR; §3.4.4 state machine",
+      "kind": "invariant",
+      "index_line": 45,
+      "scenario_tag": "inv.obligation.linear"
+    },
+    {
+      "name": "inv.obligation.bounded",
+      "number": 19,
+      "section": "§5",
+      "construct": "INV-OBLIGATION-BOUNDED; §3.4.7 drain requirement",
+      "kind": "invariant",
+      "index_line": 46,
+      "scenario_tag": "inv.obligation.bounded"
+    },
+    {
+      "name": "inv.obligation.ledger_empty_on_close",
+      "number": 20,
+      "section": "§5",
+      "construct": "INV-LEDGER-EMPTY-ON-CLOSE; §3.4.5 ledger view",
+      "kind": "invariant",
+      "index_line": 47,
+      "scenario_tag": null
+    },
+    {
+      "name": "prog.obligation.resolves",
+      "number": 21,
+      "section": "§6",
+      "construct": "PROG-OBLIGATION",
+      "kind": "progress",
+      "index_line": 48,
+      "scenario_tag": null
+    },
+    {
+      "name": "rule.region.close_begin",
+      "number": 22,
+      "section": "§3.3",
+      "construct": "CLOSE-BEGIN",
+      "kind": "rule",
+      "index_line": 49,
+      "scenario_tag": "rule.region.close_begin"
+    },
+    {
+      "name": "rule.region.close_cancel_children",
+      "number": 23,
+      "section": "§3.3",
+      "construct": "CLOSE-CANCEL-CHILDREN",
+      "kind": "rule",
+      "index_line": 50,
+      "scenario_tag": "rule.region.close_cancel_children"
+    },
+    {
+      "name": "rule.region.close_children_done",
+      "number": 24,
+      "section": "§3.3",
+      "construct": "CLOSE-CHILDREN-DONE",
+      "kind": "rule",
+      "index_line": 51,
+      "scenario_tag": "rule.region.close_children_done"
+    },
+    {
+      "name": "rule.region.close_run_finalizer",
+      "number": 25,
+      "section": "§3.3",
+      "construct": "CLOSE-RUN-FINALIZER",
+      "kind": "rule",
+      "index_line": 52,
+      "scenario_tag": null
+    },
+    {
+      "name": "rule.region.close_complete",
+      "number": 26,
+      "section": "§3.3",
+      "construct": "CLOSE-COMPLETE",
+      "kind": "rule",
+      "index_line": 53,
+      "scenario_tag": "rule.region.close_complete"
+    },
+    {
+      "name": "inv.region.quiescence",
+      "number": 27,
+      "section": "§5",
+      "construct": "INV-QUIESCENCE; §1.12 Quiescent(r)",
+      "kind": "invariant",
+      "index_line": 54,
+      "scenario_tag": "inv.region.quiescence"
+    },
+    {
+      "name": "prog.region.close_terminates",
+      "number": 28,
+      "section": "§6",
+      "construct": "PROG-REGION",
+      "kind": "progress",
+      "index_line": 55,
+      "scenario_tag": "prog.region.close_terminates"
+    },
+    {
+      "name": "def.outcome.four_valued",
+      "number": 29,
+      "section": "§1.2",
+      "construct": "Outcome",
+      "kind": "definition",
+      "index_line": 56,
+      "scenario_tag": "def.outcome.four_valued"
+    },
+    {
+      "name": "def.outcome.severity_lattice",
+      "number": 30,
+      "section": "§1.2",
+      "construct": "Severity: Ok < Err < Cancelled < Panicked",
+      "kind": "definition",
+      "index_line": 57,
+      "scenario_tag": "def.outcome.severity_lattice"
+    },
+    {
+      "name": "def.outcome.join_semantics",
+      "number": 31,
+      "section": "§1.2",
+      "construct": "worst wins (monotone aggregation); §4.1 join",
+      "kind": "definition",
+      "index_line": 58,
+      "scenario_tag": "def.outcome.join_semantics"
+    },
+    {
+      "name": "def.cancel.reason_ordering",
+      "number": 32,
+      "section": "§3.2",
+      "construct": "strengthen; §1.3 severity tiers",
+      "kind": "definition",
+      "index_line": 59,
+      "scenario_tag": null
+    },
+    {
+      "name": "inv.ownership.single_owner",
+      "number": 33,
+      "section": "§2.2",
+      "construct": "TaskRecord.region (one RegionId); §8 no_task_leaks",
+      "kind": "invariant",
+      "index_line": 60,
+      "scenario_tag": "inv.ownership.single_owner"
+    },
+    {
+      "name": "inv.ownership.task_owned",
+      "number": 34,
+      "section": "§5",
+      "construct": "INV-TASK-OWNED",
+      "kind": "invariant",
+      "index_line": 61,
+      "scenario_tag": "inv.ownership.task_owned"
+    },
+    {
+      "name": "def.ownership.region_tree",
+      "number": 35,
+      "section": "§5",
+      "construct": "INV-TREE; §2.1 RegionRecord parent/subregions",
+      "kind": "definition",
+      "index_line": 62,
+      "scenario_tag": "def.ownership.region_tree"
+    },
+    {
+      "name": "rule.ownership.spawn",
+      "number": 36,
+      "section": "§3.1",
+      "construct": "SPAWN",
+      "kind": "rule",
+      "index_line": 63,
+      "scenario_tag": "rule.ownership.spawn"
+    },
+    {
+      "name": "comb.join",
+      "number": 37,
+      "section": "§4.1",
+      "construct": "join(f1, f2)",
+      "kind": "combinator",
+      "index_line": 64,
+      "scenario_tag": "comb.join"
+    },
+    {
+      "name": "comb.race",
+      "number": 38,
+      "section": "§4.2",
+      "construct": "race(f1, f2)",
+      "kind": "combinator",
+      "index_line": 65,
+      "scenario_tag": "comb.race"
+    },
+    {
+      "name": "comb.timeout",
+      "number": 39,
+      "section": "§4.3",
+      "construct": "timeout(duration, f)",
+      "kind": "combinator",
+      "index_line": 66,
+      "scenario_tag": "comb.timeout"
+    },
+    {
+      "name": "inv.combinator.loser_drained",
+      "number": 40,
+      "section": "§5",
+      "construct": "INV-LOSER-DRAINED; §4.2 Lemma L-LOSER-DRAINED",
+      "kind": "invariant",
+      "index_line": 67,
+      "scenario_tag": "inv.combinator.loser_drained"
+    },
+    {
+      "name": "law.race.never_abandon",
+      "number": 41,
+      "section": "§4.2",
+      "construct": "losers are always drained, never abandoned",
+      "kind": "law",
+      "index_line": 68,
+      "scenario_tag": "law.race.never_abandon"
+    },
+    {
+      "name": "law.join.assoc",
+      "number": 42,
+      "section": "§7",
+      "construct": "LAW-JOIN-ASSOC",
+      "kind": "law",
+      "index_line": 69,
+      "scenario_tag": null
+    },
+    {
+      "name": "law.race.comm",
+      "number": 43,
+      "section": "§7",
+      "construct": "LAW-RACE-COMM",
+      "kind": "law",
+      "index_line": 70,
+      "scenario_tag": null
+    },
+    {
+      "name": "inv.capability.no_ambient",
+      "number": 44,
+      "section": "index only",
+      "construct": "no body section; §9.1 names NoAmbientAuthority",
+      "kind": "invariant",
+      "index_line": 71,
+      "scenario_tag": null
+    },
+    {
+      "name": "def.capability.cx_scope",
+      "number": 45,
+      "section": "index only",
+      "construct": "no body section",
+      "kind": "definition",
+      "index_line": 72,
+      "scenario_tag": null
+    },
+    {
+      "name": "inv.determinism.replayable",
+      "number": 46,
+      "section": "§8.3",
+      "construct": "deterministic and stable under replay; §7.1 lab configuration; §1.8 traces",
+      "kind": "invariant",
+      "index_line": 73,
+      "scenario_tag": "inv.determinism.replayable"
+    },
+    {
+      "name": "def.determinism.seed_equivalence",
+      "number": 47,
+      "section": "§7.1",
+      "construct": "fixed lab configuration C (seed suite); §8.3 seed_hash",
+      "kind": "definition",
+      "index_line": 74,
+      "scenario_tag": "def.determinism.seed_equivalence"
+    }
+  ]
+}
