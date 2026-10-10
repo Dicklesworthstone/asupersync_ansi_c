@@ -16,11 +16,12 @@ asx_status asx_tracing_compat_format_event(const asx_trace_event *event, asx_rep
     asx_report_buf_append_u32(out, event->sequence);
     asx_report_buf_append(out, ",\"kind\":\"");
     asx_report_buf_append(out, asx_trace_event_kind_str(event->kind));
-    asx_report_buf_append(out, "\",\"entity\":");
+    /* Hex ids are JSON strings: a bare 0x... is not a JSON number. */
+    asx_report_buf_append(out, "\",\"entity\":\"");
     asx_report_buf_append_hex64(out, event->entity_id);
-    asx_report_buf_append(out, ",\"aux\":");
+    asx_report_buf_append(out, "\",\"aux\":\"");
     asx_report_buf_append_hex64(out, event->aux);
-    asx_report_buf_append(out, "}");
+    asx_report_buf_append(out, "\"}");
 
     return ASX_OK;
 }

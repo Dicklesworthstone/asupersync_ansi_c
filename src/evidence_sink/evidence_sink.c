@@ -85,9 +85,9 @@ asx_status asx_evidence_sink_render_ndjson(const asx_evidence_sink *sink, asx_re
         asx_report_buf_append(out, asx_evidence_level_str(entry->level));
         asx_report_buf_append(out, "\",\"message\":\"");
         append_json_escaped(out, entry->message ? entry->message : "");
-        asx_report_buf_append(out, "\",\"entity\":");
+        asx_report_buf_append(out, "\",\"entity\":\""); /* hex id as a JSON string */
         asx_report_buf_append_hex64(out, entry->entity_id);
-        asx_report_buf_append(out, "}\n");
+        asx_report_buf_append(out, "\"}\n");
     }
 
     return ASX_OK;

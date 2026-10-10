@@ -460,8 +460,8 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # conformance — fixture integrity, gate negative controls, recorded-digest
-  # codec equivalence (blocking), and Rust parity (non-blocking until the
-  # oracle exists; see bridge program W1, beads bd-9kll.2.*)
+  # codec equivalence, and Rust parity (the Rust-captured v2 fixtures
+  # executed through the C runtime); all blocking
   # ---------------------------------------------------------------------------
   conformance:
     name: "conformance (fixture integrity + codec equiv + executed Rust parity)"

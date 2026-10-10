@@ -1553,9 +1553,9 @@ resource-pressure-gate:
 # layers), snapshot and observations. The comparator's negative control
 # (self-test: a corrupted expectation must FAIL) runs first. The target
 # fails until every fixture matches; a FAIL is a C/Rust divergence, an
-# ERROR an op or capability the C side cannot express yet (DSL §7). It is
-# deliberately not part of check-ci until milestone M-beta; CI runs it as a
-# visible, non-blocking job.
+# ERROR an op or capability the C side cannot express yet (DSL §7). Every
+# fixture matches, and CI's conformance job runs it as a blocking step (also
+# under QEMU and -m32); it is not part of check-ci.
 # ---------------------------------------------------------------------------
 CONFORMANCE_V2_FIXTURES := $(sort $(wildcard fixtures/rust_reference_v2/*.json))
 CONFORMANCE_SELF_TEST_FIXTURE := fixtures/rust_reference_v2/obligation-reserve-commit-001.json
@@ -1574,8 +1574,8 @@ conformance: $(CONFORMANCE_RUNNER)
 # twin_run generates FUZZ_V2_COUNT scenarios for FUZZ_V2_SEED, runs them in
 # asupersync's LabRuntime, and the C runtime runs every scenario Rust could
 # capture (only this run's captures are compared). Every FAIL is a candidate
-# drift to root-cause. Runs nightly in CI (nightly.yml,
-# fuzz-rust-differential). Rust refuses a few generated scenarios (a step
+# drift to root-cause. CI runs it on every push with seed 9 (ci.yml) and on
+# three new seeds nightly (nightly.yml). Rust refuses a few generated scenarios (a step
 # naming a resource whose acquisition failed, ~2.5%). If the capture never
 # finishes or under 90% is captured, the oracle itself broke; that fails
 # here rather than letting a near-empty compare pass.

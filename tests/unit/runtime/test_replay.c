@@ -335,9 +335,11 @@ TEST(replay_render_result_json_contains_core_fields) {
     MUST_OK(asx_replay_render_result_json(&result, &out));
     ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"result\":\"kind_mismatch\"") != NULL);
     ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"divergence_index\":7") != NULL);
-    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"expected_digest\":0x0000000000000012") !=
+    /* Hex digests are JSON strings (a bare 0x... is not valid JSON). */
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"expected_digest\":\"0x0000000000000012\"") !=
                 NULL);
-    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"actual_digest\":0x0000000000000034") != NULL);
+    ASSERT_TRUE(strstr(asx_report_buf_cstr(&out), "\"actual_digest\":\"0x0000000000000034\"") !=
+                NULL);
 }
 
 TEST(replay_render_current_diff_json_reports_mismatch_context) {

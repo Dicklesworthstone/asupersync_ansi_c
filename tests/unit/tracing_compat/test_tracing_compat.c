@@ -60,6 +60,11 @@ static void test_tracing_format_event(void) {
     MUST_OK(asx_tracing_compat_format_event(&event, &out));
     ASSERT(strstr(asx_report_buf_cstr(&out), "\"sequence\":7") != NULL, "sequence rendered");
     ASSERT(strstr(asx_report_buf_cstr(&out), "task_spawn") != NULL, "kind rendered");
+    /* Hex ids are JSON strings, so the line is strict JSON. */
+    ASSERT(strstr(asx_report_buf_cstr(&out), "\"entity\":\"0x0000000000000024\"") != NULL,
+           "entity is a quoted hex string");
+    ASSERT(strstr(asx_report_buf_cstr(&out), "\"aux\":\"0x0000000000000099\"}") != NULL,
+           "aux is a quoted hex string");
 }
 
 static void test_tracing_emit_event(void) {

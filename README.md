@@ -2041,7 +2041,7 @@ asx_status export_trace(FILE *out, uint32_t *exported) {
 }
 ```
 
-Each event is formatted as one line with `sequence`, `kind`, `entity` and `aux` fields, for example `{"sequence":7,"kind":"task_spawn","entity":0x0000000000000024,"aux":0x0000000000000099}`. `entity` and `aux` are written as bare `0x...` literals, so the lines are not strict JSON yet: a strict JSON parser rejects them.
+Each event is formatted as one JSON line with `sequence`, `kind`, `entity` and `aux` fields, for example `{"sequence":7,"kind":"task_spawn","entity":"0x0000000000000024","aux":"0x0000000000000099"}`; `entity` and `aux` are hex strings.
 
 ## Structured Test Logging
 

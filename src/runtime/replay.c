@@ -139,11 +139,12 @@ static void replay_append_event_json(asx_report_buf *out, const asx_trace_event 
     asx_report_buf_append_u32(out, event->sequence);
     asx_report_buf_append(out, ",\"kind\":\"");
     replay_append_json_escaped(out, asx_trace_event_kind_str(event->kind));
-    asx_report_buf_append(out, "\",\"entity_id\":");
+    /* Hex ids are JSON strings: a bare 0x... is not a JSON number. */
+    asx_report_buf_append(out, "\",\"entity_id\":\"");
     asx_report_buf_append_hex64(out, event->entity_id);
-    asx_report_buf_append(out, ",\"aux\":");
+    asx_report_buf_append(out, "\",\"aux\":\"");
     asx_report_buf_append_hex64(out, event->aux);
-    asx_report_buf_append(out, "}");
+    asx_report_buf_append(out, "\"}");
 }
 
 static void replay_append_result_json(asx_report_buf *out, const asx_replay_result *result) {
@@ -153,11 +154,11 @@ static void replay_append_result_json(asx_report_buf *out, const asx_replay_resu
     replay_append_json_escaped(out, asx_replay_result_kind_str(result->result));
     asx_report_buf_append(out, "\",\"divergence_index\":");
     asx_report_buf_append_u32(out, result->divergence_index);
-    asx_report_buf_append(out, ",\"expected_digest\":");
+    asx_report_buf_append(out, ",\"expected_digest\":\"");
     asx_report_buf_append_hex64(out, result->expected_digest);
-    asx_report_buf_append(out, ",\"actual_digest\":");
+    asx_report_buf_append(out, "\",\"actual_digest\":\"");
     asx_report_buf_append_hex64(out, result->actual_digest);
-    asx_report_buf_append(out, "}");
+    asx_report_buf_append(out, "\"}");
 }
 
 asx_oracle_result asx_oracle_quiescence(const asx_lab *lab, void *ctx) {
