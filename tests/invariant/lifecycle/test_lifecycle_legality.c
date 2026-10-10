@@ -194,8 +194,9 @@ TEST(obligation_double_commit_rejected) {
 
     ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
 
-    /* Second commit should fail (already in COMMITTED state) */
-    ASSERT_EQ(asx_obligation_commit(oid), ASX_E_INVALID_TRANSITION);
+    /* Second commit should fail (already in COMMITTED state): Rust's
+     * ObligationAlreadyResolved */
+    ASSERT_EQ(asx_obligation_commit(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
 TEST(obligation_commit_then_abort_rejected) {
@@ -209,7 +210,7 @@ TEST(obligation_commit_then_abort_rejected) {
     ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
 
     /* Abort after commit should fail */
-    ASSERT_EQ(asx_obligation_abort(oid), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_abort(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
 TEST(obligation_abort_then_commit_rejected) {
@@ -223,7 +224,7 @@ TEST(obligation_abort_then_commit_rejected) {
     ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
 
     /* Commit after abort should fail */
-    ASSERT_EQ(asx_obligation_commit(oid), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_commit(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
 TEST(obligation_double_abort_rejected) {
@@ -237,7 +238,7 @@ TEST(obligation_double_abort_rejected) {
     ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
 
     /* Second abort should fail */
-    ASSERT_EQ(asx_obligation_abort(oid), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_abort(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
 TEST(obligation_invalid_handle_rejected) {

@@ -82,8 +82,9 @@ records.
 | `asx_obligation_reserve(stale, &o)` | Stale region | ASX_E_STALE_HANDLE | test_safety_posture:stale_handle_obligation_reserve_after_recycle |
 | `asx_obligation_reserve(poisoned, &o)` | Poisoned region | ASX_E_REGION_POISONED | test_safety_posture:poison_blocks_obligation_reserve |
 | `asx_obligation_reserve(rid, NULL)` | NULL output | ASX_E_INVALID_ARGUMENT | test_safety_posture:null_out_pointers_rejected |
-| `asx_obligation_commit(oid)` x2 | Double commit | ASX_E_INVALID_TRANSITION | test_safety_posture:obligation_double_commit_rejected |
-| `asx_obligation_abort(committed)` | Abort after commit | ASX_E_INVALID_TRANSITION | test_safety_posture:obligation_commit_then_abort_rejected |
+| `asx_obligation_commit(oid)` x2 | Double commit | ASX_E_OBLIGATION_ALREADY_RESOLVED | test_safety_posture:obligation_double_commit_rejected |
+| `asx_obligation_abort(committed)` | Abort after commit | ASX_E_OBLIGATION_ALREADY_RESOLVED | test_safety_posture:obligation_commit_then_abort_rejected |
+| `asx_obligation_reserve_ex(other_region, kind, holder, &o)` | Holder owned by another region (Rust TaskNotOwned) | ASX_E_INVALID_STATE | test_budget_obligation:reserve_holder_must_belong_to_the_region |
 | `asx_obligation_get_state(oid, NULL)` | NULL output | ASX_E_INVALID_ARGUMENT | test_safety_posture:null_out_pointers_rejected |
 
 ## Scheduler

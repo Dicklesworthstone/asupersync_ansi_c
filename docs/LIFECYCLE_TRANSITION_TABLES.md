@@ -254,16 +254,16 @@ C's authority table is `src/core/transition_tables.c:65`.
 
 ### 3.3 Forbidden Transitions (Must-Fail)
 
-The first extraction listed `ASX_E_OBLIGATION_ALREADY_RESOLVED` and `ASX_E_OBLIGATION_LEAKED` here. C returns neither: `ASX_E_OBLIGATION_LEAKED` does not exist, and `ASX_E_OBLIGATION_ALREADY_RESOLVED` is declared (`include/asx/asx_status.h:52`) but no code returns it. Every resolve of a non-`Reserved` obligation fails the table check with `ASX_E_INVALID_TRANSITION` (`src/runtime/lifecycle.c:1377` for commit; the same check in abort and drop). Rust returns `ErrorKind::ObligationAlreadyResolved` (`src/runtime/obligation_table.rs:577`), which `docs/CANONICAL_VOCABULARY_V2.md` §5 maps to `ASX_E_OBLIGATION_ALREADY_RESOLVED`. DSL v2 cannot reach this case (`docs/SCENARIO_DSL_V2.md` §5), so no fixture compares it.
+The first extraction also listed `ASX_E_OBLIGATION_LEAKED`, which does not exist. A commit or abort of a non-`Reserved` obligation returns `ASX_E_OBLIGATION_ALREADY_RESOLVED` (`src/runtime/lifecycle.c:1443` for commit, `:1504` for abort), as Rust returns `ErrorKind::ObligationAlreadyResolved` (`src/runtime/obligation_table.rs:577`, `:630`), which `docs/CANONICAL_VOCABULARY_V2.md` §5 maps to that status. Until 2026-10-10 C returned `ASX_E_INVALID_TRANSITION` (bd-91rf). Dropping a resolved obligation (`asx_obligation_drop`, C-only) and the pure table check still return `ASX_E_INVALID_TRANSITION`. DSL v2 cannot reach this case (`docs/SCENARIO_DSL_V2.md` §5), so no fixture compares it.
 
 | From | To | Expected Error | Rationale |
 |------|----|----------------|-----------|
-| `Committed` | (any) | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` | Terminal state; exactly-once semantics |
-| `Aborted` | (any) | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` | Terminal state; exactly-once semantics |
-| `Leaked` | (any) | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` | Terminal error state |
+| `Committed` | (any) | commit/abort `ASX_E_OBLIGATION_ALREADY_RESOLVED` (Rust `ObligationAlreadyResolved`); drop `ASX_E_INVALID_TRANSITION` | Terminal state; exactly-once semantics |
+| `Aborted` | (any) | commit/abort `ASX_E_OBLIGATION_ALREADY_RESOLVED` (Rust `ObligationAlreadyResolved`); drop `ASX_E_INVALID_TRANSITION` | Terminal state; exactly-once semantics |
+| `Leaked` | (any) | commit/abort `ASX_E_OBLIGATION_ALREADY_RESOLVED` (Rust `ObligationAlreadyResolved`); drop `ASX_E_INVALID_TRANSITION` | Terminal error state |
 | `Reserved` | `Reserved` | C `ASX_E_INVALID_TRANSITION` (table) | Cannot re-reserve; a reserve always creates a new obligation |
-| `Committed` | `Aborted` | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` | Cannot change resolved outcome |
-| `Aborted` | `Committed` | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` | Cannot change resolved outcome |
+| `Committed` | `Aborted` | `ASX_E_OBLIGATION_ALREADY_RESOLVED` (Rust `ObligationAlreadyResolved`) | Cannot change resolved outcome |
+| `Aborted` | `Committed` | `ASX_E_OBLIGATION_ALREADY_RESOLVED` (Rust `ObligationAlreadyResolved`) | Cannot change resolved outcome |
 
 ### 3.4 Linearity Enforcement
 
@@ -707,7 +707,7 @@ Each transition rule and forbidden behavior maps to candidate fixture IDs for co
 | obligation-lifecycle-001 | Reserved -> Committed (happy path) | Legal transition | `obligation-reserve-commit-001` |
 | obligation-lifecycle-002 | Reserved -> Aborted (rollback path) | Legal transition | `obligation-abort-reasons-001` |
 | obligation-lifecycle-003 | Reserved -> Leaked (holder completes or drops it; not "region finalization") | Leak detection | `obligation-cancelled-holder-leaks-001`, `leak-policy-leak-reported-001`, `obligation-drop-leaks-at-once-001` |
-| obligation-lifecycle-004 | Double-commit | Must fail; C `ASX_E_INVALID_TRANSITION` (was `ASX_E_OBLIGATION_ALREADY_RESOLVED`, §3.3) | C test `tests/invariant/lifecycle/test_lifecycle_legality.c` (`obligation_double_commit_rejected`); not reachable from DSL v2 |
+| obligation-lifecycle-004 | Double-commit | Must fail with `ASX_E_OBLIGATION_ALREADY_RESOLVED` (§3.3) | C test `tests/invariant/lifecycle/test_lifecycle_legality.c` (`obligation_double_commit_rejected`); not reachable from DSL v2 |
 | obligation-lifecycle-005 | Double-abort | Must fail; C `ASX_E_INVALID_TRANSITION` | Same file (`obligation_double_abort_rejected`) |
 | obligation-lifecycle-006 | Commit then abort | Must fail; C `ASX_E_INVALID_TRANSITION` | Same file (`obligation_commit_then_abort_rejected`) |
 | obligation-lifecycle-007 | Abort then commit | Must fail; C `ASX_E_INVALID_TRANSITION` | Same file (`obligation_abort_then_commit_rejected`) |
@@ -807,7 +807,7 @@ Values are from `include/asx/asx_status.h`. "Never returned" means no code under
 | `ASX_E_INVALID_TRANSITION` | 200 | Attempted illegal state transition (every C table check; also a double obligation resolve, §3.3) |
 | `ASX_E_REGION_NOT_OPEN` | 303 | Declared; never returned. Admission failures return `ASX_E_REGION_CLOSED` |
 | `ASX_E_REGION_CLOSED` | 301 | Spawn, child region, obligation or captured spawn refused by a region that is not admitting (§1.4) |
-| `ASX_E_OBLIGATION_ALREADY_RESOLVED` | 500 | Declared; never returned (C returns `ASX_E_INVALID_TRANSITION`; Rust returns `ObligationAlreadyResolved`) |
+| `ASX_E_OBLIGATION_ALREADY_RESOLVED` | 500 | Commit or abort of a resolved obligation (Rust `ObligationAlreadyResolved`) |
 | `ASX_E_OBLIGATION_LEAKED` | — | Does not exist in C |
 | `ASX_E_UNRESOLVED_OBLIGATIONS` | 501 | Fault status for a leak under the PANIC leak policy, routed to region containment (`src/runtime/lifecycle.c:557`); not returned by finalization |
 | `ASX_E_INCOMPLETE_CHILDREN` | 903 | Declared; never returned (`bd-udlh`) |

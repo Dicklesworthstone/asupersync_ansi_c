@@ -255,12 +255,12 @@ static int scenario_state_query(void) {
     printf("  obligation state: %s\n", asx_obligation_state_str(ostate));
 
     /*
-     * ERGO: Double-commit returns ASX_E_INVALID_TRANSITION — clear
-     * error for linearity violation. The error name is descriptive.
+     * ERGO: Double-commit returns ASX_E_OBLIGATION_ALREADY_RESOLVED (Rust
+     * ObligationAlreadyResolved) — clear error for a linearity violation.
      */
     st = asx_obligation_commit(obl);
-    if (st != ASX_E_INVALID_TRANSITION) {
-        printf("  FAIL: double commit should return INVALID_TRANSITION, "
+    if (st != ASX_E_OBLIGATION_ALREADY_RESOLVED) {
+        printf("  FAIL: double commit should return OBLIGATION_ALREADY_RESOLVED, "
                "got %s\n",
                asx_status_str(st));
         return 1;

@@ -157,7 +157,7 @@ TEST(obligation_illegal_transitions_fail_without_events) {
     ASSERT_EQ(asx_obligation_reserve(region, &obligation), ASX_OK);
     ASSERT_EQ(asx_obligation_commit(obligation), ASX_OK);
     guard_capture(&guard);
-    ASSERT_EQ(asx_obligation_commit(obligation), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_commit(obligation), ASX_E_OBLIGATION_ALREADY_RESOLVED);
     guard_assert_no_semantic_mutation(&guard);
 
     reset_all();
@@ -165,7 +165,7 @@ TEST(obligation_illegal_transitions_fail_without_events) {
     ASSERT_EQ(asx_obligation_reserve(region, &obligation), ASX_OK);
     ASSERT_EQ(asx_obligation_commit(obligation), ASX_OK);
     guard_capture(&guard);
-    ASSERT_EQ(asx_obligation_abort(obligation), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_abort(obligation), ASX_E_OBLIGATION_ALREADY_RESOLVED);
     guard_assert_no_semantic_mutation(&guard);
 
     reset_all();
@@ -173,8 +173,8 @@ TEST(obligation_illegal_transitions_fail_without_events) {
     ASSERT_EQ(asx_obligation_reserve(region, &obligation), ASX_OK);
     ASSERT_EQ(asx_obligation_abort(obligation), ASX_OK);
     guard_capture(&guard);
-    ASSERT_EQ(asx_obligation_commit(obligation), ASX_E_INVALID_TRANSITION);
-    ASSERT_EQ(asx_obligation_abort(obligation), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_commit(obligation), ASX_E_OBLIGATION_ALREADY_RESOLVED);
+    ASSERT_EQ(asx_obligation_abort(obligation), ASX_E_OBLIGATION_ALREADY_RESOLVED);
     guard_assert_no_semantic_mutation(&guard);
 }
 

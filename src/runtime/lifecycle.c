@@ -1338,6 +1338,12 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
     st = asx_region_slot_lookup(region, &r);
     if (st != ASX_OK) return st;
     if (r->poisoned) return ASX_E_REGION_POISONED;
+    /* The holder must be a task of this region (Rust create_obligation_in,
+     * runtime/state.rs:6130-6135: ErrorKind::TaskNotOwned, which the
+     * vocabulary maps to ASX_E_INVALID_STATE). */
+    if (holder_slot != NULL && asx_handle_index(holder_slot->region) != asx_handle_index(region)) {
+        return ASX_E_INVALID_STATE;
+    }
 
     /* Only open regions can reserve obligations (Rust
      * ObligationAdmissionError::RegionClosed; vocabulary §5). */
@@ -1432,6 +1438,9 @@ asx_status asx_obligation_commit(asx_obligation_id id) {
     /* Ghost protocol monitor: validate obligation transition */
     (void)asx_ghost_check_obligation_transition(id, o->state, ASX_OBLIGATION_COMMITTED);
 
+    /* Rust: committing an obligation that is no longer pending is
+     * ObligationAlreadyResolved (runtime/obligation_table.rs:577). */
+    if (o->state != ASX_OBLIGATION_RESERVED) return ASX_E_OBLIGATION_ALREADY_RESOLVED;
     st = asx_obligation_transition_check(o->state, ASX_OBLIGATION_COMMITTED);
     if (st != ASX_OK) return st;
 
@@ -1490,6 +1499,9 @@ asx_status asx_obligation_abort_with_reason(asx_obligation_id id,
     /* Ghost protocol monitor: validate obligation transition */
     (void)asx_ghost_check_obligation_transition(id, o->state, ASX_OBLIGATION_ABORTED);
 
+    /* Rust: aborting an obligation that is no longer pending is
+     * ObligationAlreadyResolved (runtime/obligation_table.rs:630). */
+    if (o->state != ASX_OBLIGATION_RESERVED) return ASX_E_OBLIGATION_ALREADY_RESOLVED;
     st = asx_obligation_transition_check(o->state, ASX_OBLIGATION_ABORTED);
     if (st != ASX_OK) return st;
 

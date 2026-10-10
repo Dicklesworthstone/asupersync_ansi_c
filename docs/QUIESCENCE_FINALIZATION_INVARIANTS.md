@@ -252,7 +252,7 @@ Reserved ──(commit)──> Committed    (terminal)
 
 Summary. `ObligationToken` (`src/obligation/graded.rs:874-875`) is `#[must_use]` and is consumed by `commit()`/`abort()`. Correction to the earlier version: a double resolution does not always panic. Through the runtime, it is an error: `ObligationTable::commit` returns `ErrorKind::ObligationAlreadyResolved` for a record that is no longer pending (`src/runtime/obligation_table.rs:576-578`; code `ASUP-E102`, `src/error.rs:73`, `:167`), and a commit after the region was finalized returns `RegionFinalized` (`src/runtime/obligation_table.rs:567-571`). Only the record-level methods `ObligationRecord::commit`/`abort`/`mark_leaked` assert and panic with "obligation already resolved" (`src/record/obligation.rs:391`).
 
-**C status:** Committed, Aborted and Leaked are absorbing in the transition table (`src/core/transition_tables.c:65-70`). A second commit or abort returns `ASX_E_INVALID_TRANSITION` (`asx_obligation_commit`, `src/runtime/lifecycle.c:1377`; `asx_obligation_abort_with_reason`, `:1435`). `ASX_E_OBLIGATION_ALREADY_RESOLVED` (`include/asx/asx_status.h:52`) is declared but no file under `src/` returns it. Tests: `tests/invariant/lifecycle/test_lifecycle_legality.c` `obligation_double_commit_rejected`, `obligation_commit_then_abort_rejected`.
+**C status:** Committed, Aborted and Leaked are absorbing in the transition table (`src/core/transition_tables.c:65-70`). A second commit or abort returns `ASX_E_OBLIGATION_ALREADY_RESOLVED`, as Rust's `ObligationAlreadyResolved` (`asx_obligation_commit`, `src/runtime/lifecycle.c:1443`; `asx_obligation_abort_with_reason`, `:1504`; C returned `ASX_E_INVALID_TRANSITION` until 2026-10-10, bd-91rf). Tests: `tests/invariant/lifecycle/test_lifecycle_legality.c` `obligation_double_commit_rejected`, `obligation_commit_then_abort_rejected`.
 
 ### 4.2 Detection Point 1: Holder Completion and Token Drop
 
@@ -815,7 +815,7 @@ None of the candidate fixture IDs below exists in the repository: none is `fixtu
 | `ASX_E_REGIONS_NOT_CLOSED` | Regions not closed (quiescence check) | No; C uses `ASX_E_QUIESCENCE_NOT_REACHED` |
 | `ASX_E_TIMERS_PENDING` | Timers remain (quiescence check) | No |
 | `ASX_E_CHANNEL_NOT_DRAINED` | Channel messages remain (quiescence check) | No |
-| `ASX_E_OBLIGATION_ALREADY_RESOLVED` | Double-resolve attempt | No; C returns `ASX_E_INVALID_TRANSITION` |
+| `ASX_E_OBLIGATION_ALREADY_RESOLVED` | Double-resolve attempt | Yes: commit or abort of a resolved obligation |
 | `ASX_E_INVALID_TRANSITION` | Backward or skip state transition | Yes (`src/core/transition_tables.c:72-85`) |
 | `ASX_E_SCHEDULER_UNAVAILABLE` | No local scheduler | No |
 | `ASX_E_NAME_CONFLICT` | Named task conflict | No |

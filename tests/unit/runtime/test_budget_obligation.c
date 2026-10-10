@@ -476,6 +476,44 @@ TEST(reserve_ex_validates_arguments) {
     ASSERT_EQ(asx_obligation_get_info(o, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
+/* Rust's create_obligation_in refuses a holder owned by another region
+ * (ErrorKind::TaskNotOwned, runtime/state.rs:6130-6135), which the
+ * vocabulary maps to ASX_E_INVALID_STATE (bd-91rf). */
+static asx_region_id g_other_region;
+static asx_status g_other_reserve;
+
+static asx_status poll_reserve_in_other_region(void *ud, asx_task_id self) {
+    asx_obligation_id o;
+    (void)ud;
+    (void)self;
+    g_other_reserve = asx_obligation_reserve(g_other_region, &o);
+    return ASX_OK;
+}
+
+TEST(reserve_holder_must_belong_to_the_region) {
+    asx_region_id a;
+    asx_region_id b;
+    asx_task_id t;
+    asx_obligation_id o;
+    asx_budget run;
+
+    setup();
+    ASSERT_EQ(asx_region_open(&a), ASX_OK);
+    ASSERT_EQ(asx_region_open(&b), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(a, poll_complete, NULL, &t), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve_ex(b, ASX_OBLIGATION_KIND_ACK, t, &o), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_obligation_reserve_ex(a, ASX_OBLIGATION_KIND_ACK, t, &o), ASX_OK);
+    ASSERT_EQ(asx_obligation_commit(o), ASX_OK);
+
+    /* asx_obligation_reserve's implicit holder is the polled task. */
+    g_other_region = b;
+    g_other_reserve = ASX_OK;
+    ASSERT_EQ(asx_task_spawn(a, poll_reserve_in_other_region, NULL, &t), ASX_OK);
+    run = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(a, &run), ASX_OK);
+    ASSERT_EQ(g_other_reserve, ASX_E_INVALID_STATE);
+}
+
 TEST(reserve_outside_poll_has_no_holder) {
     asx_region_id r;
     asx_obligation_id o;
@@ -743,6 +781,7 @@ int main(void) {
     RUN_TEST(region_deadline_cancels_its_tasks);
     RUN_TEST(reserve_ex_records_kind_and_holder);
     RUN_TEST(reserve_ex_validates_arguments);
+    RUN_TEST(reserve_holder_must_belong_to_the_region);
     RUN_TEST(reserve_outside_poll_has_no_holder);
     RUN_TEST(reserve_in_poll_binds_current_task_and_leaks_under_log);
     RUN_TEST(drop_leaks_the_obligation_at_once_not_at_completion);

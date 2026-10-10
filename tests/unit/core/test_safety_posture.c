@@ -309,7 +309,7 @@ TEST(obligation_double_commit_rejected) {
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
     ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
-    ASSERT_EQ(asx_obligation_commit(oid), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_commit(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
 TEST(obligation_commit_then_abort_rejected) {
@@ -319,7 +319,7 @@ TEST(obligation_commit_then_abort_rejected) {
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);
     ASSERT_EQ(asx_obligation_commit(oid), ASX_OK);
-    ASSERT_EQ(asx_obligation_abort(oid), ASX_E_INVALID_TRANSITION);
+    ASSERT_EQ(asx_obligation_abort(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
 TEST(task_outcome_before_completion_rejected) {
