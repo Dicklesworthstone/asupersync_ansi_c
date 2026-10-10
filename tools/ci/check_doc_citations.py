@@ -39,6 +39,8 @@ DEFAULT_DOCS = [
     "docs/QUIESCENCE_FINALIZATION_INVARIANTS.md",
     "docs/CHANNEL_TIMER_DETERMINISM.md",
     "docs/CHANNEL_TIMER_KERNEL_SEMANTICS.md",
+    "docs/EXISTING_ASUPERSYNC_STRUCTURE.md",
+    "docs/LIFECYCLE_TRANSITION_TABLES.md",
 ]
 REPO_DIRS = ("src/", "include/", "tests/", "tools/", "docs/", "schemas/", "fixtures/", ".github/")
 PATH_RE = re.compile(r"`((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+|Makefile)(?::([0-9]+)(?:-([0-9]+))?)?`")
