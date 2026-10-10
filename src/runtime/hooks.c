@@ -257,6 +257,8 @@ void asx_runtime_virtual_advance(asx_time to) {
     if (to > g_virtual_now) g_virtual_now = to;
 }
 
+void asx_runtime_virtual_set_internal(asx_time to) { g_virtual_now = to; }
+
 static uint64_t default_seeded_entropy(void *ctx) {
     /* Deterministic PRNG: simple counter-based default.
      * Real deployments should provide a proper seeded PRNG. */

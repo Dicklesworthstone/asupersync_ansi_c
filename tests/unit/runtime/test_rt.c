@@ -1161,7 +1161,6 @@ TEST(umbrella_runtime_lab_deadline_roundtrip) {
 
     asx_lab_config_init(&cfg);
     cfg.seed = 42u;
-    cfg.tick_ns = 100u;
     MUST_OK(asx_lab_init(&lab, &cfg));
     ASSERT_EQ(asx_runtime_region_count(&lab.rt), 0u);
     ASSERT_EQ(asx_runtime_task_count(&lab.rt), 0u);
@@ -1169,7 +1168,7 @@ TEST(umbrella_runtime_lab_deadline_roundtrip) {
 
     asx_lab_scenario_init(&scenario, "runtime-lab-deadline-roundtrip");
     MUST_OK(asx_lab_scenario_add_step(&scenario, lab_noop_step, &rid));
-    asx_lab_advance_time(&lab, 3u);
+    asx_lab_advance_time(&lab, 300u);
     MUST_OK(asx_lab_run_scenario(&lab, &scenario, &result));
 
     ASSERT_TRUE(rid != ASX_INVALID_ID);

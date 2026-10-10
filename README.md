@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-1%2C963%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-1%2C966%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,963<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,966<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -40,7 +40,7 @@ make test
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->1,963<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->1,966<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and bounded cleanup budgets |
@@ -1291,6 +1291,12 @@ asx_status runtime_on_virtual_time(asx_runtime *rt, asx_vtime_state *vtime) {
 }
 ```
 
+On a runtime that is already up, `asx_vtime_install(&vt)` makes `vt` its
+clock (wall and logical, through `asx_runtime_set_hooks`, so the hook
+contract is still validated) and `asx_vtime_uninstall(&vt)` restores the
+clock it replaced. A vtime advances on every read; the lab runtime instead
+uses a frozen clock (below).
+
 Combined with fault injection (`ASX_FAULT_CLOCK_SKEW`, `ASX_FAULT_CLOCK_REVERSE`, `ASX_FAULT_ENTROPY_CONST`, `ASX_FAULT_ALLOC_FAIL`), this lets you reproduce production timing anomalies in a deterministic test environment. Every injected fault has a trigger-after count and a duration, so you can say "after the 50th clock read, add 100ms of skew for the next 10 reads."
 
 ## Hot Config Reload
@@ -1677,7 +1683,7 @@ The lab runtime wires together virtual time, seeded PRNG, and scenario execution
 static asx_status open_and_tick(asx_lab *lab, void *user_data) {
     asx_region_id region;
     (void)user_data;
-    asx_lab_advance_time(lab, 5); /* five ticks of virtual time */
+    asx_lab_advance_time(lab, 5000000); /* 5 ms of virtual time */
     return asx_lab_open_region(lab, &region);
 }
 
@@ -1690,8 +1696,7 @@ int main(void) {
 
     asx_lab_config_init(&cfg);
     cfg.seed = 42;
-    cfg.tick_ns = 1000000; /* 1 ms per tick */
-    cfg.max_polls = 100;   /* per scenario step */
+    cfg.max_polls = 100; /* per scenario step */
     st = asx_lab_init(&lab, &cfg);
     if (st != ASX_OK) return 1;
 
@@ -1710,7 +1715,7 @@ int main(void) {
 
 The lab provides:
 - **Seeded entropy**: `asx_lab_random_u64()` uses a deterministic PRNG seeded at init.
-- **Virtual time**: Time advances in configurable tick increments, controllable by the test.
+- **Virtual time**: the clock is frozen, as in Rust's `LabRuntime`: reading it never moves it. `asx_lab_advance_time(lab, ns)` moves it; `asx_lab_advance_to_next_timer()` moves it to the earliest armed timer and fires the timers then due; `asx_lab_next_timer_deadline()` reports that deadline. `asx_lab_run(lab, region, &budget)` runs the scheduler until idle, leaving the clock alone, unless `config.auto_advance` is set (off by default, like Rust's), in which case it jumps the clock to the next timer whenever every task waits on one.
 - **Bounded execution**: a step whose scheduler polls exceed `max_polls` (default 1,024) fails with `ASX_E_POLL_BUDGET_EXHAUSTED`; the check runs after the step returns, so it cannot interrupt a step that never returns.
 - **Region convenience**: `asx_lab_open_region()` opens a region after checking the lab is initialized.
 
@@ -2233,7 +2238,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->1,963<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->1,966<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

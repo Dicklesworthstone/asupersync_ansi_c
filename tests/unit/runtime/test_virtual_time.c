@@ -411,6 +411,32 @@ static uint64_t vt_rdtsc(void) {
 #define HAS_RDTSC 0 /* overhead_measurement measures nothing here */
 #endif
 
+/* install makes the vtime the runtime clock (through the validated hook
+ * path) and uninstall restores the clock it replaced (bd-9kll.4.5). */
+TEST(install_and_uninstall_swap_the_runtime_clock) {
+    asx_runtime_hooks hooks;
+    asx_vtime_state vt;
+    asx_time now = 0;
+
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+    asx_vtime_init(&vt, 5000u, 10u);
+    ASSERT_EQ(asx_vtime_install(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_vtime_install(&vt), ASX_OK);
+    ASSERT_EQ(asx_vtime_install(&vt), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(now, (asx_time)5000u);
+    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(now, (asx_time)5010u); /* a vtime ticks per query */
+
+    asx_vtime_uninstall(&vt);
+    ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
+    ASSERT_EQ(now, asx_runtime_virtual_now()); /* the default clock again */
+    asx_vtime_uninstall(&vt);                  /* a second one is a no-op */
+    ASSERT_EQ(asx_vtime_install(&vt), ASX_OK);
+    asx_vtime_uninstall(&vt);
+}
+
 TEST(overhead_measurement) {
 #if HAS_RDTSC
     asx_vtime_state vt;
@@ -470,6 +496,7 @@ int main(void) {
     RUN_TEST(hook_callback_integration);
     RUN_TEST(null_safety);
     RUN_TEST(multiple_jitters_same_query);
+    RUN_TEST(install_and_uninstall_swap_the_runtime_clock);
     RUN_TEST(overhead_measurement);
 
     TEST_REPORT();

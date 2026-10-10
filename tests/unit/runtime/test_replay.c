@@ -30,7 +30,7 @@ static asx_status step_noop(asx_lab *lab, void *user_data) {
 
 static asx_status step_advance_5(asx_lab *lab, void *user_data) {
     (void)user_data;
-    asx_lab_advance_time(lab, 5);
+    asx_lab_advance_time(lab, 5000000u); /* 5 ms */
     return ASX_OK;
 }
 
@@ -62,11 +62,10 @@ TEST(snapshot_take_restore) {
     asx_snapshot_reset();
     asx_lab_config_init(&cfg);
     cfg.seed = 42;
-    cfg.tick_ns = 1000000ULL;
     MUST_OK(asx_lab_init(&lab, &cfg));
 
     /* Advance time and consume entropy */
-    asx_lab_advance_time(&lab, 10);
+    asx_lab_advance_time(&lab, 10000000ULL);
     (void)asx_lab_random_u64(&lab);
 
     /* Take snapshot */
@@ -75,7 +74,7 @@ TEST(snapshot_take_restore) {
     expected_runtime_entropy = asx_lab_random_u64(&lab);
 
     /* Advance more */
-    asx_lab_advance_time(&lab, 20);
+    asx_lab_advance_time(&lab, 20000000ULL);
     (void)asx_lab_random_u64(&lab);
 
     /* Restore snapshot */
@@ -643,7 +642,6 @@ TEST(snapshot_replay_integration) {
     asx_snapshot_reset();
     asx_lab_config_init(&cfg);
     cfg.seed = 777;
-    cfg.tick_ns = 1000000ULL;
 
     asx_lab_scenario_init(&sc, "replay-test");
     MUST_OK(asx_lab_scenario_add_step(&sc, step_advance_5, NULL));

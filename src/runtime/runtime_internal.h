@@ -243,10 +243,24 @@ void asx_task_join_detach_internal(asx_task_slot *task);
 /* Wakes join waiters and the completion watcher of a completing task. */
 void asx_task_join_wake_waiters_internal(asx_task_slot *task);
 
-/* After a task's completion is recorded (ASX_TRACE_SCHED_COMPLETE): let
- * its region finalize if it is closing and that was its last task. The
- * region event must follow the completion it depends on. */
+/* After a task's completion is recorded (ASX_TRACE_SCHED_COMPLETE):
+ * advance its region if it is closing (to DRAINING while it has child
+ * regions; to finalization once that was its last task). The region event
+ * must follow the completion it depends on. */
 void asx_region_settle_internal(asx_region_id rid);
+
+/* The earliest armed task timer (task wake timers and, under lab
+ * dispatch, budget-deadline timers): 1 and *out_next, or 0 when none is
+ * armed. Defined in scheduler.c. */
+int asx_scheduler_next_timer_internal(asx_time *out_next);
+
+/* Fire the task timers due now (waking their tasks); the number woken.
+ * Defined in scheduler.c. */
+uint32_t asx_scheduler_fire_due_timers_internal(void);
+
+/* Set the runtime virtual clock, backwards too (a lab snapshot restore).
+ * Defined in hooks.c. */
+void asx_runtime_virtual_set_internal(asx_time to);
 
 /* Finalize a closing region whose tasks have all completed, then its
  * closing ancestors in turn (Rust advance_region_state). No-op for an Open

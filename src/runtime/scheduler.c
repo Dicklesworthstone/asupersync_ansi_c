@@ -234,8 +234,9 @@ static void lab_deadline_fire(uint32_t slot) {
     asx_lab_cancel_wake(t);
 }
 
-/* Lab dispatch: whether a timer is pending, and the earliest deadline. */
-static int lab_next_timer(asx_time *out_next) {
+/* Whether a timer is pending, and the earliest deadline (lab
+ * budget-deadline timers included). */
+int asx_scheduler_next_timer_internal(asx_time *out_next) {
     int any = 0;
     asx_time next = 0;
     uint32_t i;
@@ -511,6 +512,8 @@ static asx_time sched_now(void) {
     if (asx_runtime_now_ns(&now) != ASX_OK) now = asx_runtime_virtual_now();
     return now;
 }
+
+uint32_t asx_scheduler_fire_due_timers_internal(void) { return timers_fire(sched_now()); }
 
 /* -------------------------------------------------------------------
  * Public wake/park/timer/join API
@@ -1264,7 +1267,7 @@ static asx_status sched_lab_run(asx_budget *budget, int advance_clock) {
             asx_trace_emit(ASX_TRACE_SCHED_QUIESCENT, ASX_INVALID_ID, step);
             return ASX_OK;
         }
-        has_timer = lab_next_timer(&next);
+        has_timer = asx_scheduler_next_timer_internal(&next);
         if (!advance_clock) {
             /* ASX_ANALYZER_WAIVER("config-dependent: 0 without blocking pool/native I/O") */
             return (has_timer || sched_external_pending()) ? ASX_E_PENDING : ASX_E_WOULD_BLOCK;

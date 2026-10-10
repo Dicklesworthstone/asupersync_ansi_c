@@ -25,7 +25,7 @@ static asx_status lab_region_roundtrip(asx_lab *lab, void *user_data) {
     asx_region_id region;
 
     (void)user_data;
-    asx_lab_advance_time(lab, 3u);
+    asx_lab_advance_time(lab, 3000u);
     if (asx_lab_open_region(lab, &region) != ASX_OK) { return ASX_E_INVALID_STATE; }
     return asx_region_close(region);
 }
@@ -216,7 +216,6 @@ int main(void) {
 
     asx_lab_config_init(&lab_cfg);
     lab_cfg.seed = 42u;
-    lab_cfg.tick_ns = 1000u;
 
     if (asx_lab_init(&lab, &lab_cfg) != ASX_OK) {
         printf("SCENARIO native_host.lab fail init_failed\n");

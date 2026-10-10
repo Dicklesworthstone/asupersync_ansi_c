@@ -10,6 +10,7 @@
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
+#include "runtime_internal.h"
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -47,9 +48,9 @@ static uint64_t lab_entropy_u64(void *ctx) {
 void asx_lab_config_init(asx_lab_config *cfg) {
     if (cfg == NULL) return;
     cfg->seed = 0;
-    cfg->tick_ns = 1000000ULL; /* 1ms default tick */
     cfg->start_time_ns = 0;
     cfg->max_polls = 1024;
+    cfg->auto_advance = 0u;
 }
 
 /* ------------------------------------------------------------------ */
@@ -59,22 +60,23 @@ void asx_lab_config_init(asx_lab_config *cfg) {
 static asx_status lab_bootstrap_runtime(asx_lab *lab) {
     asx_runtime_config rt_cfg;
     asx_runtime_hooks hooks;
+    asx_status st;
 
     /* Set up runtime config */
     asx_runtime_config_init(&rt_cfg);
 
-    /* Set up hooks with virtual time and seeded entropy. The virtual clock
-     * is the wall clock too: a live build reads that one
-     * (asx_runtime_now_ns), and lab time must be what it reads. */
+    /* Seeded entropy, and the default clocks: both read the runtime's
+     * virtual clock (asx_runtime_virtual_now), frozen until the lab
+     * advances it, so the scheduler sees a virtual clock it may jump. */
     asx_runtime_hooks_init(&hooks);
-    hooks.clock.now_ns_fn = asx_vtime_now_ns;
-    hooks.clock.logical_now_ns_fn = asx_vtime_now_ns;
-    hooks.clock.ctx = &lab->vtime;
     hooks.entropy.random_u64_fn = lab_entropy_u64;
     hooks.entropy.ctx = lab;
     hooks.deterministic_seeded_prng = 1;
 
-    return asx_runtime_init(&lab->rt, &rt_cfg, &hooks);
+    st = asx_runtime_init(&lab->rt, &rt_cfg, &hooks);
+    if (st != ASX_OK) return st;
+    asx_runtime_virtual_set_internal(lab->config.start_time_ns);
+    return ASX_OK;
 }
 
 asx_status asx_lab_init(asx_lab *lab, const asx_lab_config *cfg) {
@@ -86,14 +88,10 @@ asx_status asx_lab_init(asx_lab *lab, const asx_lab_config *cfg) {
     lab->config = *cfg;
 
     /* Apply defaults */
-    if (lab->config.tick_ns == 0) lab->config.tick_ns = 1000000ULL;
     if (lab->config.max_polls == 0) lab->config.max_polls = 1024;
 
     /* Initialize seeded PRNG */
     lab->entropy_state = lab->config.seed;
-
-    /* Initialize virtual time */
-    asx_vtime_init(&lab->vtime, lab->config.start_time_ns, lab->config.tick_ns);
 
     st = lab_bootstrap_runtime(lab);
     if (st != ASX_OK) return st;
@@ -115,7 +113,6 @@ void asx_lab_reset(asx_lab *lab) {
 
     if (lab == NULL || !lab->initialized) return;
     asx_runtime_shutdown(&lab->rt);
-    asx_vtime_init(&lab->vtime, lab->config.start_time_ns, lab->config.tick_ns);
     lab->entropy_state = lab->config.seed;
     st = lab_bootstrap_runtime(lab);
     if (st != ASX_OK) lab->initialized = 0;
@@ -125,20 +122,41 @@ void asx_lab_reset(asx_lab *lab) {
 /* Time control                                                        */
 /* ------------------------------------------------------------------ */
 
-void asx_lab_advance_time(asx_lab *lab, uint32_t ticks) {
-    uint64_t delta;
+void asx_lab_advance_time(asx_lab *lab, asx_time ns) {
+    asx_time now;
     if (lab == NULL) return;
-    delta = (uint64_t)ticks * lab->vtime.tick_ns;
-    if (lab->vtime.current_time <= UINT64_MAX - delta) {
-        lab->vtime.current_time += delta;
-    } else {
-        lab->vtime.current_time = UINT64_MAX;
-    }
+    now = asx_runtime_virtual_now();
+    asx_runtime_virtual_advance(now <= UINT64_MAX - ns ? now + ns : UINT64_MAX);
+}
+
+asx_status asx_lab_next_timer_deadline(const asx_lab *lab, asx_time *out) {
+    if (lab == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!lab->initialized) return ASX_E_INVALID_STATE;
+    return asx_scheduler_next_timer_internal(out) ? ASX_OK : ASX_E_NOT_FOUND;
+}
+
+asx_status asx_lab_advance_to_next_timer(asx_lab *lab, uint32_t *out_woken) {
+    asx_time next;
+    uint32_t woken;
+    if (lab == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!lab->initialized) return ASX_E_INVALID_STATE;
+    if (!asx_scheduler_next_timer_internal(&next)) return ASX_E_NOT_FOUND;
+    asx_runtime_virtual_advance(next);
+    woken = asx_scheduler_fire_due_timers_internal();
+    if (out_woken != NULL) *out_woken = woken;
+    return ASX_OK;
 }
 
 asx_time asx_lab_now(const asx_lab *lab) {
     if (lab == NULL) return 0;
-    return asx_vtime_current(&lab->vtime);
+    return asx_runtime_virtual_now();
+}
+
+asx_status asx_lab_run(asx_lab *lab, asx_region_id region, asx_budget *budget) {
+    if (lab == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!lab->initialized) return ASX_E_INVALID_STATE;
+    return lab->config.auto_advance ? asx_scheduler_run(region, budget)
+                                    : asx_scheduler_run_until_idle(region, budget);
 }
 
 /* ------------------------------------------------------------------ */

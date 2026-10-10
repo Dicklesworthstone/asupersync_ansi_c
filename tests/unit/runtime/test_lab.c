@@ -26,7 +26,7 @@ TEST(config_init_defaults) {
     asx_lab_config cfg;
     asx_lab_config_init(&cfg);
     ASSERT_EQ(cfg.seed, (uint64_t)0);
-    ASSERT_EQ(cfg.tick_ns, 1000000ULL);
+    ASSERT_EQ(cfg.auto_advance, 0u); /* Rust LabConfig::auto_advance */
     ASSERT_EQ(cfg.start_time_ns, (asx_time)0);
     ASSERT_EQ(cfg.max_polls, 1024u);
 }
@@ -94,26 +94,29 @@ TEST(advance_time) {
     asx_lab lab;
     asx_lab_config cfg;
     asx_lab_config_init(&cfg);
-    cfg.tick_ns = 1000000ULL; /* 1ms per tick */
     MUST_OK(asx_lab_init(&lab, &cfg));
-    asx_lab_advance_time(&lab, 10);
+    asx_lab_advance_time(&lab, 10000000ULL);
     ASSERT_EQ(asx_lab_now(&lab), 10000000ULL); /* 10ms */
     asx_lab_shutdown(&lab);
 }
 
+/* The runtime reads the lab clock, and reading never moves it (Rust's
+ * frozen LabRuntime clock; it used to gain a tick per read). */
 TEST(time_integrates_with_runtime) {
     asx_lab lab;
     asx_lab_config cfg;
     asx_time now;
+    asx_time again;
     asx_lab_config_init(&cfg);
-    cfg.tick_ns = 1000000ULL;
     MUST_OK(asx_lab_init(&lab, &cfg));
 
-    /* Runtime's now_ns should use virtual time */
-    asx_lab_advance_time(&lab, 5);
+    asx_lab_advance_time(&lab, 5000000ULL);
     MUST_OK(asx_runtime_now_ns(&now));
-    /* now should be > 0 due to advance + query */
-    ASSERT_TRUE(now > 0);
+    MUST_OK(asx_runtime_now_ns(&again));
+    ASSERT_EQ(now, (asx_time)5000000ULL);
+    ASSERT_EQ(again, now);
+    ASSERT_EQ(asx_lab_now(&lab), now);
+    ASSERT_TRUE(asx_runtime_clock_is_virtual());
     asx_lab_shutdown(&lab);
 }
 
@@ -197,10 +200,9 @@ TEST(reset_restores_runtime_hooks) {
 
     asx_lab_config_init(&cfg);
     cfg.seed = 123u;
-    cfg.tick_ns = 1000000ULL;
     MUST_OK(asx_lab_init(&lab, &cfg));
 
-    asx_lab_advance_time(&lab, 7u);
+    asx_lab_advance_time(&lab, 7000000u);
     MUST_OK(asx_runtime_now_ns(&now));
     ASSERT_TRUE(now > 0);
     MUST_OK(asx_runtime_random_u64(&entropy));
@@ -228,7 +230,7 @@ static asx_status step_noop(asx_lab *lab, void *user_data) {
 
 static asx_status step_advance_5(asx_lab *lab, void *user_data) {
     (void)user_data;
-    asx_lab_advance_time(lab, 5);
+    asx_lab_advance_time(lab, 5000000u); /* 5 ms */
     return ASX_OK;
 }
 
@@ -318,7 +320,6 @@ TEST(scenario_multi_step) {
     asx_lab_result result;
 
     asx_lab_config_init(&cfg);
-    cfg.tick_ns = 1000000ULL;
     MUST_OK(asx_lab_init(&lab, &cfg));
     asx_lab_scenario_init(&sc, "multi");
     MUST_OK(asx_lab_scenario_add_step(&sc, step_advance_5, NULL));
@@ -464,6 +465,89 @@ TEST(scenario_overflow) {
 /* Deterministic replay test                                           */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Clock control: frozen, advanced explicitly or by auto_advance      */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_time until;
+    int done;
+} lab_sleeper;
+
+static asx_status poll_lab_sleeper(void *ud, asx_task_id self) {
+    lab_sleeper *s = (lab_sleeper *)ud;
+    asx_status st = asx_task_wait_until(self, s->until);
+    if (st != ASX_OK) return st;
+    s->done = 1;
+    return ASX_OK;
+}
+
+/* Without auto_advance (Rust's default) the run leaves a sleeper waiting
+ * and the clock where it was. advance_time only moves the clock (the due
+ * timer still waits for a step); advance_to_next_timer moves it and fires
+ * the timer, and the next run completes the sleeper. */
+TEST(run_without_auto_advance_keeps_the_clock) {
+    asx_lab lab;
+    asx_lab_config cfg;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget b;
+    asx_time next = 0;
+    uint32_t woken = 0;
+    lab_sleeper s = {1000000u, 0};
+
+    asx_lab_config_init(&cfg);
+    MUST_OK(asx_lab_init(&lab, &cfg));
+    MUST_OK(asx_lab_open_region(&lab, &r));
+    MUST_OK(asx_task_spawn(r, poll_lab_sleeper, &s, &t));
+    b = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_lab_run(&lab, r, &b), ASX_E_PENDING);
+    ASSERT_EQ(s.done, 0);
+    ASSERT_EQ(asx_lab_now(&lab), (asx_time)0);
+    MUST_OK(asx_lab_next_timer_deadline(&lab, &next));
+    ASSERT_EQ(next, (asx_time)1000000u);
+
+    asx_lab_advance_time(&lab, 500000u);
+    b = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_lab_run(&lab, r, &b), ASX_E_PENDING);
+    ASSERT_EQ(s.done, 0);
+
+    MUST_OK(asx_lab_advance_to_next_timer(&lab, &woken));
+    ASSERT_EQ(woken, 1u);
+    ASSERT_EQ(asx_lab_now(&lab), (asx_time)1000000u);
+    b = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_lab_run(&lab, r, &b), ASX_OK);
+    ASSERT_EQ(s.done, 1);
+    ASSERT_EQ(asx_lab_advance_to_next_timer(&lab, &woken), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_lab_next_timer_deadline(&lab, &next), ASX_E_NOT_FOUND);
+    asx_lab_shutdown(&lab);
+}
+
+/* With auto_advance the run jumps to each timer in turn: every sleeper
+ * completes and the clock ends at the latest deadline. */
+TEST(run_with_auto_advance_completes_sleepers) {
+    asx_lab lab;
+    asx_lab_config cfg;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget b;
+    lab_sleeper s1 = {1000000u, 0};
+    lab_sleeper s3 = {3000000u, 0};
+
+    asx_lab_config_init(&cfg);
+    cfg.auto_advance = 1u;
+    MUST_OK(asx_lab_init(&lab, &cfg));
+    MUST_OK(asx_lab_open_region(&lab, &r));
+    MUST_OK(asx_task_spawn(r, poll_lab_sleeper, &s3, &t));
+    MUST_OK(asx_task_spawn(r, poll_lab_sleeper, &s1, &t));
+    b = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_lab_run(&lab, r, &b), ASX_OK);
+    ASSERT_EQ(s1.done, 1);
+    ASSERT_EQ(s3.done, 1);
+    ASSERT_EQ(asx_lab_now(&lab), (asx_time)3000000u);
+    asx_lab_shutdown(&lab);
+}
+
 TEST(replay_determinism) {
     asx_lab lab;
     asx_lab_config cfg;
@@ -472,7 +556,6 @@ TEST(replay_determinism) {
 
     asx_lab_config_init(&cfg);
     cfg.seed = 12345;
-    cfg.tick_ns = 500000ULL;
 
     asx_lab_scenario_init(&sc, "replay");
     MUST_OK(asx_lab_scenario_add_step(&sc, step_advance_5, NULL));
@@ -556,6 +639,8 @@ int main(void) {
     RUN_TEST(scenario_corrupt_step_count_fails_closed);
     RUN_TEST(scenario_overflow);
 
+    RUN_TEST(run_without_auto_advance_keeps_the_clock);
+    RUN_TEST(run_with_auto_advance_completes_sleepers);
     RUN_TEST(replay_determinism);
 
     RUN_TEST(open_region);

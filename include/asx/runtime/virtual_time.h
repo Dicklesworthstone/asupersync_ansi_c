@@ -26,6 +26,7 @@
 #ifndef ASX_RUNTIME_VIRTUAL_TIME_H
 #define ASX_RUNTIME_VIRTUAL_TIME_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <stdint.h>
@@ -73,6 +74,10 @@ typedef struct {
 
     /* Stall tracking */
     uint32_t stall_remaining; /* Queries remaining in current stall */
+
+    /* The runtime clock hooks asx_vtime_install replaced */
+    asx_clock_hooks saved_clock;
+    uint8_t installed;
 } asx_vtime_state;
 
 /* ------------------------------------------------------------------ */
@@ -109,12 +114,16 @@ ASX_API asx_status asx_vtime_add_jump(asx_vtime_state *vt, uint32_t trigger_quer
  * Thread-safe: no — single-threaded only (walking skeleton). */
 ASX_API asx_time asx_vtime_now_ns(void *ctx);
 
-/* Install as the runtime logical clock.
- * Saves and replaces the current clock hooks.
- * Call asx_vtime_uninstall() to restore. */
-ASX_API asx_status asx_vtime_install(asx_vtime_state *vt);
+/* Install as the runtime clock (wall and logical), through
+ * asx_runtime_set_hooks so the hook contract is still validated. Saves
+ * the current clock hooks; asx_vtime_uninstall() restores them.
+ * Returns ASX_E_INVALID_ARGUMENT for NULL, ASX_E_INVALID_STATE when no
+ * hooks are installed yet or vt is already installed, or the status of
+ * asx_runtime_set_hooks. */
+ASX_API ASX_MUST_USE asx_status asx_vtime_install(asx_vtime_state *vt);
 
-/* Uninstall and restore previous clock hooks. */
+/* Restore the clock hooks asx_vtime_install saved, if vt is still the
+ * installed clock. */
 ASX_API void asx_vtime_uninstall(asx_vtime_state *vt);
 
 /* Query: current virtual time without advancing. */

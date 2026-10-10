@@ -154,29 +154,42 @@ asx_time asx_vtime_now_ns(void *ctx) {
 /* Install / uninstall                                                 */
 /* ------------------------------------------------------------------ */
 
-/*
- * Installation is intentionally lightweight: callers set up hooks
- * manually via asx_runtime_set_hooks() since the hook contract
- * requires deterministic validation. This function provides a
- * convenience for the common case.
- */
+/* Both go through asx_runtime_set_hooks, so the hook contract is
+ * validated as for any other clock. */
 
 asx_status asx_vtime_install(asx_vtime_state *vt) {
-    (void)vt;
-    /*
-     * Walking skeleton: callers install via asx_runtime_set_hooks()
-     * with clock.logical_now_ns_fn = asx_vtime_now_ns and
-     * clock.ctx = vt. This preserves the hook contract validation.
-     *
-     * A convenience wrapper would bypass hook validation, which
-     * violates the architectural contract. Deferred.
-     */
-    return ASX_OK;
+    const asx_runtime_hooks *current;
+    asx_runtime_hooks hooks;
+    asx_status st;
+
+    if (vt == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (vt->installed) return ASX_E_INVALID_STATE;
+    current = asx_runtime_get_hooks();
+    if (current == NULL) return ASX_E_INVALID_STATE;
+    hooks = *current;
+    vt->saved_clock = hooks.clock;
+    hooks.clock.ctx = vt;
+    hooks.clock.now_ns_fn = asx_vtime_now_ns;
+    hooks.clock.logical_now_ns_fn = asx_vtime_now_ns;
+    st = asx_runtime_set_hooks(&hooks);
+    if (st == ASX_OK) vt->installed = 1u;
+    return st;
 }
 
 void asx_vtime_uninstall(asx_vtime_state *vt) {
-    (void)vt;
-    /* Symmetric with install — callers restore hooks manually */
+    const asx_runtime_hooks *current;
+    asx_runtime_hooks hooks;
+    asx_status st;
+
+    if (vt == NULL || !vt->installed) return;
+    vt->installed = 0u;
+    current = asx_runtime_get_hooks();
+    /* Another clock replaced this one since: leave it in place. */
+    if (current == NULL || current->clock.ctx != vt) return;
+    hooks = *current;
+    hooks.clock = vt->saved_clock;
+    st = asx_runtime_set_hooks(&hooks);
+    (void)st;
 }
 
 /* ------------------------------------------------------------------ */
