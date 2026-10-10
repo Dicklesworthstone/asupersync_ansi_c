@@ -47,8 +47,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
   - Covered areas: region/task/obligation lifecycle, cancellation and masking, budgets, mpsc/oneshot/broadcast/watch channels, mutex/rwlock/semaphore/notify/barrier, task groups (join_all, race with a deadline, first_ok, quorum) and region admission limits. All of it runs under the lab's single-worker dispatch model.
 - **Known differences, open:** listed in [`docs/SCENARIO_DSL_V2.md`](docs/SCENARIO_DSL_V2.md) §7 and rule by rule in [`docs/C_REFINEMENT_MAP.md`](docs/C_REFINEMENT_MAP.md). Examples:
   - lock poisoning;
-  - when a region's `max_tasks` and permit-obligation limits are checked;
-  - the runtime-quiescence predicate (bd-me9t).
+  - when a region's `max_tasks` and permit-obligation limits are checked.
 - **Not compared with Rust; tested in C only:** actors (GenServer) and supervision, which neither oracle interprets yet; networking, files, processes and HTTP; live, non-lab scheduling.
 
 ### Why Use `asx`?

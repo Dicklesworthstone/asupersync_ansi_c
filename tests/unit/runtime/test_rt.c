@@ -922,13 +922,61 @@ TEST(counts_uninitialized_returns_zero) {
     ASSERT_FALSE(asx_runtime_is_quiescent(&rt));
 }
 
-TEST(runtime_is_quiescent_false_with_open_region) {
+/* Rust's RuntimeState::is_quiescent (bd-me9t): an idle Open region does
+ * not block quiescence; a region still closing (Closing, Draining,
+ * Finalizing) does. */
+TEST(runtime_is_quiescent_true_with_idle_open_region) {
     asx_runtime rt;
     asx_region_id rid;
 
     MUST_OK(asx_runtime_init_default(&rt));
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
+    asx_runtime_shutdown(&rt);
+}
+
+TEST(runtime_is_quiescent_false_with_closing_region) {
+    static const asx_region_state closing[3] = {ASX_REGION_CLOSING, ASX_REGION_DRAINING,
+                                                ASX_REGION_FINALIZING};
+    asx_runtime rt;
+    asx_region_id rid;
+    asx_region_slot *region = NULL;
+    uint32_t i;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
+    for (i = 0; i < 3u; i++) {
+        region->state = closing[i];
+        ASSERT_FALSE(asx_runtime_is_quiescent(&rt));
+    }
+    region->state = ASX_REGION_CLOSED;
+    ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
+    asx_runtime_shutdown(&rt);
+}
+
+/* Under lab dispatch a cancel request waits in the lab's command mailbox
+ * until the next step (Rust's pending cancel dispatch): not quiescent
+ * until it is applied. */
+TEST(runtime_is_quiescent_false_with_pending_lab_cancel_command) {
+    asx_runtime rt;
+    asx_region_id rid;
+    asx_cancel_reason reason;
+    asx_budget budget;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(7u), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
+    memset(&reason, 0, sizeof(reason));
+    reason.kind = ASX_CANCEL_SHUTDOWN;
+    reason.origin_region = rid;
+    reason.origin_task = ASX_INVALID_ID;
+    ASSERT_EQ(asx_region_cancel_request(rid, &reason), ASX_OK);
     ASSERT_FALSE(asx_runtime_is_quiescent(&rt));
+    budget = asx_budget_from_polls(8);
+    MUST_OK(asx_scheduler_run(rid, &budget));
+    ASSERT_TRUE(asx_runtime_is_quiescent(&rt));
     asx_runtime_shutdown(&rt);
 }
 
@@ -1299,7 +1347,9 @@ int main(void) {
     RUN_TEST(counts_reflect_spawned_task);
     RUN_TEST(task_count_retains_completed_task_slot_until_reset);
     RUN_TEST(counts_uninitialized_returns_zero);
-    RUN_TEST(runtime_is_quiescent_false_with_open_region);
+    RUN_TEST(runtime_is_quiescent_true_with_idle_open_region);
+    RUN_TEST(runtime_is_quiescent_false_with_closing_region);
+    RUN_TEST(runtime_is_quiescent_false_with_pending_lab_cancel_command);
     RUN_TEST(runtime_is_quiescent_false_with_live_task);
     RUN_TEST(runtime_is_quiescent_true_with_completed_task_in_closed_region);
     RUN_TEST(runtime_is_quiescent_false_with_pending_obligation);

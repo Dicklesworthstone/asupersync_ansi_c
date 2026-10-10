@@ -105,16 +105,20 @@ static int runtime_has_pending_region_cleanup(void) {
     return 0;
 }
 
-static int runtime_all_regions_closed(void) {
+/* Rust's RegionState::is_closing (record/region.rs:162-164): Closing,
+ * Draining or Finalizing. An Open region is not closing. */
+static int runtime_has_closing_region(void) {
     uint32_t i;
 
     for (i = 0; i < g_region_count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded arena scan over static region slots") */
         if (!g_regions[i].alive) continue;
-        if (g_regions[i].state != ASX_REGION_CLOSED) return 0;
+        if (g_regions[i].state != ASX_REGION_OPEN && g_regions[i].state != ASX_REGION_CLOSED) {
+            return 1;
+        }
     }
 
-    return 1;
+    return 0;
 }
 
 static int runtime_finalizer_escalation_valid(asx_finalizer_escalation escalation) {
@@ -371,6 +375,11 @@ uint32_t asx_runtime_obligation_count(const asx_runtime *rt) {
     return g_obligation_live;
 }
 
+/* Rust's RuntimeState::is_quiescent (runtime/state.rs:7400-7413): no live
+ * task, no pending obligation, no pending cancel dispatch, an empty I/O
+ * driver, and no region with a pending finalizer, still closing, or with
+ * a pending spawn. An idle Open region is quiescent. Under lab dispatch
+ * the deferred spawns and cancel commands are the lab's mailboxes. */
 int asx_runtime_is_quiescent(const asx_runtime *rt) {
     if (rt == NULL || !asx_runtime_is_initialized(rt)) return 0;
     if (runtime_has_live_tasks()) return 0;
@@ -378,7 +387,11 @@ int asx_runtime_is_quiescent(const asx_runtime *rt) {
     /* ASX_ANALYZER_WAIVER("config-dependent: 0 without ASX_HAS_NATIVE_IO_DRIVER") */
     if (asx_runtime_io_registration_count(rt) != 0u) return 0;
     if (runtime_has_pending_region_cleanup()) return 0;
-    if (!runtime_all_regions_closed()) return 0;
+    if (runtime_has_closing_region()) return 0;
+    if (asx_lab_admissions_pending() || asx_lab_region_commands_pending() ||
+        asx_lab_handle_cancels_pending()) {
+        return 0;
+    }
     return 1;
 }
 
