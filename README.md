@@ -1447,8 +1447,25 @@ not on the OS:
 make build PROFILE=POSIX DETERMINISTIC=0 LDFLAGS="-lpthread -lrt"
 ```
 
-At run time, `asx_net_get_backend()` reports which backend is active
-(`ASX_NET_BACKEND_MEMORY` or `ASX_NET_BACKEND_NATIVE`).
+With CMake, configure the same build, or pull the library into your own
+project (the `asx` target carries its include path and thread library):
+
+```bash
+cmake -S . -B build-posix -DASX_PROFILE=POSIX -DASX_DETERMINISTIC=OFF
+cmake --build build-posix
+```
+
+```cmake
+set(ASX_PROFILE POSIX CACHE STRING "" FORCE)
+set(ASX_DETERMINISTIC OFF CACHE BOOL "" FORCE)
+set(ASX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(asupersync_ansi_c)
+target_link_libraries(my_server PRIVATE asx)
+```
+
+Once `asx_runtime_init` has run, `asx_net_get_backend()` reports which
+backend is active (`ASX_NET_BACKEND_MEMORY` or `ASX_NET_BACKEND_NATIVE`), and
+`asx doctor` lists it as its `net` check.
 
 ## In-Memory Network Transport
 

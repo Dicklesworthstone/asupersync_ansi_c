@@ -110,6 +110,10 @@ add_library(asx STATIC
 )
 if(ASX_PROFILE STREQUAL "WIN32")
     target_link_libraries(asx PUBLIC bcrypt)
+elseif(ASX_PROFILE STREQUAL "POSIX")
+    # The live POSIX runtime runs its reactor and blocking pool on threads.
+    find_package(Threads REQUIRED)
+    target_link_libraries(asx PUBLIC Threads::Threads)
 endif()
 
 target_include_directories(asx

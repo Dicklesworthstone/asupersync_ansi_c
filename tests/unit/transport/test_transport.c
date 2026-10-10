@@ -624,6 +624,10 @@ TEST(framed_write_retries_partial_body_without_duplicate_header) {
     asx_framed_transport_state frame;
     asx_transport_conn conn = {1u, 1u};
     const uint8_t expected[] = {0u, 0u, 0u, 5u, 'h', 'e', 'l', 'l', 'o'};
+    /* One buffer for every retry: the API requires the same data pointer,
+     * and identical string literals need not share an address (MSVC
+     * Debug builds don't pool them). */
+    static const char msg[] = "hello";
     size_t written = 0u;
 
     memset(&mock, 0, sizeof(mock));
@@ -631,15 +635,15 @@ TEST(framed_write_retries_partial_body_without_duplicate_header) {
     t = make_framed_partial_mock_transport(&mock);
     asx_framed_transport_init(&frame, t, conn);
 
-    ASSERT_EQ(asx_framed_transport_write(&frame, "hello", 5u, &written), ASX_E_PENDING);
+    ASSERT_EQ(asx_framed_transport_write(&frame, msg, 5u, &written), ASX_E_PENDING);
     ASSERT_EQ(mock.written_len, 3u);
     ASSERT_EQ(written, 0u);
 
-    ASSERT_EQ(asx_framed_transport_write(&frame, "hello", 5u, &written), ASX_E_PENDING);
+    ASSERT_EQ(asx_framed_transport_write(&frame, msg, 5u, &written), ASX_E_PENDING);
     ASSERT_EQ(mock.written_len, 7u);
     ASSERT_EQ(written, 3u);
 
-    ASSERT_EQ(asx_framed_transport_write(&frame, "hello", 5u, &written), ASX_OK);
+    ASSERT_EQ(asx_framed_transport_write(&frame, msg, 5u, &written), ASX_OK);
     ASSERT_EQ(written, 5u);
     ASSERT_EQ(mock.written_len, sizeof(expected));
     ASSERT_TRUE(memcmp(mock.written, expected, sizeof(expected)) == 0);
