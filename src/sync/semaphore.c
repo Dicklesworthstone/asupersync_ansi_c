@@ -24,8 +24,10 @@
  *   the permit directly to the oldest un-granted waiter, waking its task,
  *   or returns it to the pool; a pooled permit owed to the waiters next in
  *   line is granted to them as soon as they are parked; a waiter that
- *   gives up passes a grant on; a cancel-pending waiter is skipped when
- *   granting.
+ *   gives up passes a grant on. A cancel-pending waiter keeps its place:
+ *   it is handed the baton like any other and passes it on when its next
+ *   poll observes the cancel (Rust's unlock pops the front waiter
+ *   unconditionally, mutex.rs:344-360; fuzz gen-18-54, bd-z783).
  *
  * Wake-driven waiting: poll_acquire returning ASX_E_PENDING inside a
  * scheduler poll records the calling task on the waiter and parks it. A
@@ -83,12 +85,6 @@ static uint16_t next_gen(uint16_t g) {
 
 static asx_wait_node *sem_node(uint32_t i) { return asx_wait_node_at(i); }
 
-/* A waiter whose parked task has a cancel request pending: it is skipped
- * when granting (it would not consume the permit). */
-static int sem_waiter_doomed(const asx_wait_node *w) {
-    return asx_handle_is_valid(w->task) && asx_wait_task_liveness(w->task) == ASX_WAIT_TASK_DOOMED;
-}
-
 /* Release a waiter record, returning a permit it was granted but never
  * consumed to the pool. */
 static void sem_waiter_retire(sem_slot *s, uint32_t i) {
@@ -143,15 +139,13 @@ static void sem_reap(sem_slot *s) {
     }
 }
 
-/* Mutex: the oldest un-granted, not cancel-pending waiter other than
- * `except` (ASX_WAIT_NIL for none), or ASX_WAIT_NIL. */
+/* Mutex: the oldest un-granted waiter other than `except` (ASX_WAIT_NIL
+ * for none), or ASX_WAIT_NIL. */
 static uint32_t sem_first_in_line(const sem_slot *s, uint32_t except) {
     uint32_t i;
     for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL; i = asx_wait_queue_next(i)) {
-        const asx_wait_node *w = sem_node(i);
         ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
-        if (i == except || (w->flags & SEM_ACQUIRED) != 0u) continue;
-        if (sem_waiter_doomed(w)) continue;
+        if (i == except || (sem_node(i)->flags & SEM_ACQUIRED) != 0u) continue;
         return i;
     }
     return ASX_WAIT_NIL;
@@ -162,9 +156,8 @@ static int sem_next_in_line(const sem_slot *s, uint32_t idx) {
     uint32_t i;
     for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL && i != idx;
          i = asx_wait_queue_next(i)) {
-        const asx_wait_node *w = sem_node(i);
         ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
-        if ((w->flags & SEM_ACQUIRED) == 0u && !sem_waiter_doomed(w)) return 0;
+        if ((sem_node(i)->flags & SEM_ACQUIRED) == 0u) return 0;
     }
     return 1;
 }

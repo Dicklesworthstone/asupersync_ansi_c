@@ -303,7 +303,7 @@ TEST(sem_cancel_of_woken_waiter_passes_permit_on) {
     ASSERT_EQ(asx_semaphore_available(h), 1u);
 }
 
-TEST(sem_release_skips_cancelled_waiter) {
+TEST(sem_cancel_pending_front_waiter_leaves_when_polled) {
     asx_semaphore_handle h;
     asx_semaphore_permit held;
     asx_task_id t[2];
@@ -323,7 +323,9 @@ TEST(sem_release_skips_cancelled_waiter) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
 
-    /* Cancel the head of the line first: the release skips it. */
+    /* Cancel the head of the line first: it keeps its place, and its next
+     * poll, observing the cancel, leaves the line and wakes the next
+     * waiter. */
     ASSERT_EQ(asx_task_cancel(t[0], ASX_CANCEL_USER), ASX_OK);
     ASSERT_EQ(asx_semaphore_release(held), ASX_OK);
     budget = asx_budget_from_polls(100);
@@ -674,6 +676,60 @@ TEST(mutex_flood_serves_every_waiter_in_arrival_order) {
         for (i = 0; i < FLOOD_TASKS; i++) ASSERT_EQ(asx_task_join(ids[i], NULL), ASX_OK);
         ASSERT_EQ(asx_mutex_close(m), ASX_OK);
     }
+}
+
+/* Lock without a Cx (a cancel request does not make it give up), record
+ * the locking order, unlock. */
+static asx_status poll_lock_record_task(void *ud, asx_task_id self) {
+    flood_task *s = (flood_task *)ud;
+    asx_status st;
+    (void)self;
+    s->polls++;
+    if (!s->begun) {
+        st = asx_mutex_lock_begin(s->mutex, &s->waiter);
+        if (st != ASX_OK) return st;
+        s->begun = 1;
+    }
+    st = asx_mutex_poll_lock(&s->waiter, &s->guard, NULL);
+    if (st != ASX_OK) return st;
+    g_flood_order[g_flood_len++] = s->id;
+    return asx_mutex_unlock(s->guard);
+}
+
+TEST(mutex_unlock_hands_the_lock_to_a_cancel_pending_front_waiter) {
+    /* Rust's unlock pops the front waiter unconditionally
+     * (sync/mutex.rs:344-360): a cancel request does not cost a waiter its
+     * place, and only its own poll decides whether it gives up (bd-z783). */
+    asx_mutex_handle m;
+    asx_mutex_guard held;
+    asx_task_id ids[2];
+    asx_budget budget;
+    uint32_t i;
+
+    ASSERT_TRUE(setup());
+    memset(g_flood, 0, sizeof(g_flood));
+    g_flood_len = 0;
+    ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+    ASSERT_EQ(asx_mutex_try_lock(m, &held), ASX_OK);
+    for (i = 0; i < 2u; i++) {
+        g_flood[i].id = i;
+        g_flood[i].mutex = m;
+        ASSERT_EQ(asx_task_spawn(g_region, poll_lock_record_task, &g_flood[i], &ids[i]), ASX_OK);
+    }
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK); /* both parked */
+    ASSERT_EQ(asx_task_cancel(ids[0], ASX_CANCEL_USER), ASX_OK);
+    ASSERT_EQ(asx_mutex_unlock(held), ASX_OK);
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+
+    /* The cancel-pending front waiter was handed the lock and kept it; the
+     * waiter behind it locked after it. */
+    ASSERT_EQ(g_flood_len, 2u);
+    ASSERT_EQ(g_flood_order[0], 0u);
+    ASSERT_EQ(g_flood_order[1], 1u);
+    ASSERT_EQ(g_flood[1].polls, 2u); /* park, then lock once handed it */
+    ASSERT_EQ(asx_mutex_close(m), ASX_OK);
 }
 
 typedef struct {
@@ -1348,7 +1404,7 @@ int main(void) {
     RUN_TEST(sem_later_arrival_cannot_overtake_at_poll);
     RUN_TEST(sem_tasks_acquire_in_arrival_order);
     RUN_TEST(sem_cancel_of_woken_waiter_passes_permit_on);
-    RUN_TEST(sem_release_skips_cancelled_waiter);
+    RUN_TEST(sem_cancel_pending_front_waiter_leaves_when_polled);
     RUN_TEST(sem_waiter_of_dead_task_is_reclaimed);
     RUN_TEST(sem_permit_polled_with_cx_is_an_obligation_until_release);
     RUN_TEST(sem_permit_held_past_task_completion_is_leaked);
@@ -1356,6 +1412,7 @@ int main(void) {
     RUN_TEST(mutex_handoff_between_three_tasks);
     RUN_TEST(mutex_handoff_is_deterministic);
     RUN_TEST(mutex_flood_serves_every_waiter_in_arrival_order);
+    RUN_TEST(mutex_unlock_hands_the_lock_to_a_cancel_pending_front_waiter);
     RUN_TEST(barrier_with_every_task_as_a_party_trips);
     RUN_TEST(contended_mutex_counts_one_contention_per_park);
     RUN_TEST(close_wakes_all_sync_waiters);
