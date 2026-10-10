@@ -1,7 +1,9 @@
 [toolchain]
-# Keep RCH from wrapping C-only `make` lanes with a host-specific dated nightly
-# inferred from the operator machine. Generic nightly is sufficient for the
-# auxiliary Rust tooling under `tools/` and is present across the worker fleet.
+# The fleet-wide dated nightly that asupersync itself pins (its
+# rust-toolchain.toml at 5e60b1c4c): the Rust tooling under `tools/` builds
+# against asupersync, and a pinned file keeps RCH from wrapping C-only `make`
+# lanes with a host-specific nightly inferred from the operator machine.
+# Bump only together with asupersync's pin (AGENTS.md, RCH section).
 channel = "nightly-2026-08-31"
 components = ["rustfmt", "clippy"]
 profile = "default"

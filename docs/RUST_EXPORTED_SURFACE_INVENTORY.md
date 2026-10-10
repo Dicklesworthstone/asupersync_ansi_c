@@ -3,7 +3,14 @@
 > **Bead:** `bd-1eqo.1.1`  
 > **Status:** Canonical inventory of `/dp/asupersync` exported modules, root
 > re-exports, and adjacent public contracts that define the parity target  
-> **Last updated:** 2026-03-12 by CrimsonHarbor
+> **Last updated:** 2026-03-12 by CrimsonHarbor  
+> **Baseline:** pinned to asupersync `a9e737d8` (2026-03-12), as recorded in
+> `docs/rust_baseline_inventory.json`; the port now targets `5e60b1c4c`
+> (2026-10), which exports more than this inventory lists: `src/` holds 1,778
+> `.rs` files and 2.42M lines there, against 554 files and 575K lines at
+> `a9e737d8` (`git ls-tree` / `git grep -c ""`, tests and comments
+> included). The refresh is tracked by
+> `bd-9kll.2.11` (upstream-drift lane) and `bd-9kll.18.3` (G3 FeatureUniverse).
 
 This document answers a narrow but foundational question:
 

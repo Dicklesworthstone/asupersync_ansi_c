@@ -703,6 +703,8 @@ lint-docs: $(LIB_A)
 	@./tools/ci/check_readme_facts.sh README.md
 	@echo "[asx] lint-docs: checking the C refinement map against the v4 rule index..."
 	@./tools/ci/check_refinement_map.sh
+	@echo "[asx] lint-docs: checking the parity docs' citations against the tree..."
+	@python3 tools/ci/check_doc_citations.py
 	@echo "[asx] lint-docs: checking the README's capacity table against the headers..."
 	@./tools/ci/capacity_table.sh --check README.md --out-dir $(BUILD_DIR)/capacity-table \
 		-- $(CC) $(ALL_CFLAGS)

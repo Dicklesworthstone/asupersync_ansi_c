@@ -3,6 +3,7 @@
 > Explicit registry of all surfaces, features, and capabilities deferred from the initial (Wave A/B kernel) release.
 > Bead: `bd-296.24`
 > Inputs: Plan Sections 2.4.1, 4, 5; ADR-001 through ADR-004 (docs/OPEN_DECISIONS_ADR.md)
+> Rust sizes: line counts (`git grep -c ""`, tests and comments included) of asupersync `5e60b1c4c`, the port's current reference; the register was written against `a9e737d8` (2026-03-12), and the `was ~Nk LOC` figures are from then. Refreshing the surface list itself is tracked by `bd-9kll.2.11` and `bd-9kll.18.3`.
 
 ---
 
@@ -36,7 +37,7 @@ This register ensures that deferred work is:
 
 **Status:** Wave C contract active under `bd-v12u.9`; bounded pipe-backed/reactor-readiness e2e evidence lands under `bd-v12u.10`.
 **Rationale:** Networking requires platform adapters (POSIX sockets, Win32 IOCP, embedded poll/select), reactor integration, and connection lifecycle management that are outside the kernel's semantic scope. Kernel parity must be proven before adding I/O surfaces.
-**Rust source:** `src/net/` (~26k LOC)
+**Rust source:** `src/net/` (290K lines; was ~26k LOC)
 **Activation beads:** `bd-v12u.9` (Wave C networking primitive spec), `bd-v12u.10` (first deterministic network reactor/socket e2e evidence)
 **Unblock criteria:**
 - Wave A quality gates green (all kernel conformance/parity/embedded gates pass)
@@ -65,7 +66,7 @@ Current executable coverage is `make test-e2e-network-surface` plus focused `tes
 
 **Status:** Wave C contract active under `bd-v12u.11`; actor/supervision harness evidence lands under `bd-v12u.12`.
 **Rationale:** Combinators (join, race, select, timeout, retry) compose kernel primitives. They require a stable task/region/cancellation substrate before they can be faithfully ported.
-**Rust source:** `src/combinator/` (~17k LOC)
+**Rust source:** `src/combinator/` (41K lines; was ~17k LOC)
 **Activation beads:** `bd-v12u.11` (combinator parity contracts and conformance fixture expansion)
 **Unblock criteria:**
 - Wave A task lifecycle, cancellation protocol, and obligation resolution stable
@@ -93,7 +94,7 @@ Current executable coverage is `make test-combinator-contract`, `make test-actor
 
 **Status:** Deferred to Wave C
 **Rationale:** Observability (metrics, spans, structured logging beyond trace) builds on the trace/replay layer (Wave B). Adding observability before trace is stable would create untested instrumentation.
-**Rust source:** Parts of `src/trace/` (~36k LOC), observability layers
+**Rust source:** Parts of `src/trace/` (60K lines; was ~36k LOC), observability layers
 **Activation beads:** `bd-v12u.7` (operator incident bundle), `bd-v12u.8` (deterministic counterexample minimizer), `bd-v12u.13` (versioned Rust/C trace schema)
 **Unblock criteria:**
 - Wave B trace/replay layer operational
@@ -130,8 +131,8 @@ surface-specific obligations above. Expensive gates must run through
 ### DS-D01: Full HTTP/2 and gRPC Parity
 
 **Status:** Wave C deterministic harness coverage under `bd-v12u.12`; full OTP parity remains deferred to Wave D.
-**Rationale:** HTTP/2 framing, HPACK, gRPC protobuf handling, and TLS integration represent massive surface area (~23k LOC for HTTP alone). Porting before kernel and networking are stable would create unmaintainable code.
-**Rust source:** `src/http/` (~23k LOC), gRPC layers
+**Rationale:** HTTP/2 framing, HPACK, gRPC protobuf handling, and TLS integration represent massive surface area (89K lines for HTTP alone; ~23k LOC when this was written). Porting before kernel and networking are stable would create unmaintainable code.
+**Rust source:** `src/http/` (89K lines; was ~23k LOC), gRPC layers
 **Unblock criteria:**
 - Wave C networking primitives stable
 - HTTP/2 semantic spec extracted (framing, flow control, stream lifecycle)
@@ -172,7 +173,7 @@ surface-specific obligations above. Expensive gates must run through
 
 **Status:** Deferred to Wave D
 **Rationale:** Advanced trace topology (DAG visualization, causal analysis, distributed trace correlation) builds on basic trace (Wave B) and observability (Wave C).
-**Rust source:** Parts of `src/trace/` (~36k LOC), `src/lab/` (~37k LOC)
+**Rust source:** Parts of `src/trace/` (60K lines; was ~36k LOC), `src/lab/` (115K lines; was ~37k LOC)
 **Unblock criteria:**
 - Wave B basic trace + replay stable
 - Wave C observability surfaces implemented
@@ -186,7 +187,7 @@ surface-specific obligations above. Expensive gates must run through
 **Status:** RaptorQ codec landed (2026-10-06); advanced policy stack still deferred to Wave D
 **RaptorQ (landed):** `src/raptorq/raptorq.c` is a standards-conformant RFC 6330 systematic encoder/decoder (GF(256), Table 2 parameters, LDPC/HDPC/LT constraint matrix, inactivation-decoding solver, any-ESI encoding, OTI wire format, Z>1 source blocks and N>=1 sub-blocks) running in caller-supplied workspaces with no allocation. Encoding symbols are bit-identical to an independent RFC 6330 implementation (golden vectors in `tests/unit/raptorq/test_raptorq.c`, K up to 8192). Still unported: upstream pipeline/proof/journal/decision-contract layers built on top of the codec.
 **Rationale:** RaptorQ (fountain codes for erasure coding) and advanced policy engines are specialized surfaces not needed for kernel parity.
-**Rust source:** `src/raptorq/` (~18k LOC)
+**Rust source:** `src/raptorq/` (49K lines; was ~18k LOC)
 **Unblock criteria:**
 - Kernel stable
 - RaptorQ semantic spec extracted
