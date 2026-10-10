@@ -1007,6 +1007,9 @@ jobs:
             exit 1
           fi
 
+      - name: Trace canonicalizer differential (seed 9, 100000 traces)
+        run: make canon-differential CANON_SEED=9 CANON_COUNT=100000
+
       - name: Upload divergent scenarios
         if: failure()
         uses: actions/upload-artifact@v4

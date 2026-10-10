@@ -15,6 +15,12 @@
  *       trace event corrupted in memory. Exits 0 only if that is reported
  *       as a FAIL, so a comparator that passes everything cannot go
  *       unnoticed.
+ *   asx-conformance canon <cases.jsonl>
+ *       Canonicalizer differential (bd-9kll.9.1): each line is
+ *       {"events":[...],"canonical":[[...]],"digest":"sha256:..."} from
+ *       `twin_run canon-fuzz` (Rust's canon.rs); C's canon.c must give the
+ *       same Foata layers, byte for byte, and the same digest. Exits 1 on
+ *       any difference.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -288,10 +294,69 @@ static int cmd_run(const char *path) {
     return 0;
 }
 
+/* Canonicalize each case's events with C's canon.c and compare with the
+ * Rust layers and digest on the same line. */
+static int cmd_canon(const char *path) {
+    FILE *f = fopen(path, "rb");
+    unsigned long line = 0;
+    unsigned long pass = 0;
+    unsigned long fail = 0;
+    if (f == NULL) {
+        fprintf(stderr, "asx-conformance: cannot open %s\n", path);
+        return 1;
+    }
+    while (fgets(g_file, (int)FILE_CAP, f) != NULL) {
+        size_t n = strlen(g_file);
+        uint32_t root;
+        uint32_t layers;
+        const char *want_digest;
+        char digest[ASX_CANON_DIGEST_LEN];
+        line++;
+        if (n == 0u || g_file[n - 1u] != '\n') {
+            fprintf(stderr, "asx-conformance: %s:%lu: line too long or unterminated\n", path, line);
+            fclose(f);
+            return 1;
+        }
+        asx_json_doc_init(&g_fixture);
+        if (asx_json_parse(&g_fixture, g_file, n, &root) != ASX_OK) {
+            fprintf(stderr, "asx-conformance: %s:%lu: invalid JSON\n", path, line);
+            fclose(f);
+            return 1;
+        }
+        want_digest = asx_json_get_string(&g_fixture, root, "digest");
+        if (want_digest == NULL ||
+            !canonical(&g_fixture, asx_json_get(&g_fixture, root, "canonical"), g_b) ||
+            asx_canon_trace(&g_fixture, asx_json_get(&g_fixture, root, "events"), &g_fixture,
+                            &layers) != ASX_OK ||
+            !canonical(&g_fixture, layers, g_a) ||
+            asx_canon_digest(&g_fixture, layers, digest) != ASX_OK) {
+            const char *why = asx_canon_error();
+            fprintf(stdout, "ERROR %s:%lu: %s\n", path, line, why != NULL ? why : "malformed case");
+            fail++;
+            continue;
+        }
+        if (strcmp(g_a, g_b) == 0 && strcmp(digest, want_digest) == 0) {
+            pass++;
+            continue;
+        }
+        fail++;
+        if (fail <= 5u) {
+            fprintf(stdout, "FAIL %s:%lu: canonical form differs\n", path, line);
+            show("rust:", g_b);
+            show("c:   ", g_a);
+        }
+    }
+    fclose(f);
+    fprintf(stdout, "asx-conformance canon: traces=%lu pass=%lu fail=%lu\n", pass + fail, pass,
+            fail);
+    return fail == 0u && pass > 0u ? 0 : 1;
+}
+
 static int usage(void) {
     fprintf(stderr, "usage: asx-conformance run <scenario.json>\n"
                     "       asx-conformance compare <fixture.json>...\n"
-                    "       asx-conformance self-test <fixture.json>\n");
+                    "       asx-conformance self-test <fixture.json>\n"
+                    "       asx-conformance canon <cases.jsonl>\n");
     return 2;
 }
 
@@ -302,6 +367,7 @@ int main(int argc, char **argv) {
     unsigned error = 0;
     if (argc < 3) return usage();
     if (strcmp(argv[1], "run") == 0 && argc == 3) return cmd_run(argv[2]);
+    if (strcmp(argv[1], "canon") == 0 && argc == 3) return cmd_canon(argv[2]);
     if (strcmp(argv[1], "self-test") == 0 && argc == 3) {
         cmp_result r = compare_one(argv[2], 1);
         if (r == CMP_FAIL) {

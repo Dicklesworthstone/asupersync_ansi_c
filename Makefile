@@ -1625,6 +1625,23 @@ fuzz-minimize: $(CONFORMANCE_RUNNER)
 	done
 
 # ---------------------------------------------------------------------------
+# canon-differential — the two trace canonicalizers agree (bd-9kll.9.1):
+# twin_run writes CANON_COUNT random vocabulary traces for CANON_SEED with
+# their Foata canonical form and digest from Rust's canon.rs; asx-conformance
+# canon recomputes both with C's canon.c and fails on any difference. CI runs
+# it next to fuzz-differential.
+# ---------------------------------------------------------------------------
+CANON_SEED ?= 1
+CANON_COUNT ?= 100000
+
+.PHONY: canon-differential
+canon-differential: $(CONFORMANCE_RUNNER)
+	@echo "[asx] canon-differential: seed=$(CANON_SEED) count=$(CANON_COUNT)"
+	@$(TWIN_RUN) canon-fuzz --seed $(CANON_SEED) --count $(CANON_COUNT) \
+		--out $(BUILD_DIR)/canon/seed-$(CANON_SEED).jsonl
+	@$(CONFORMANCE_RUNNER) canon $(BUILD_DIR)/canon/seed-$(CANON_SEED).jsonl
+
+# ---------------------------------------------------------------------------
 # fixture-integrity — fixture schema, provenance, digest recomputation,
 # capture_run_id format, unknown ops, and a codec round trip. It proves the
 # fixtures are well-formed captures; it does NOT execute the C runtime.

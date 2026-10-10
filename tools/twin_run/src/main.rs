@@ -24,6 +24,7 @@ fn usage() -> ExitCode {
     eprintln!(
         "usage: twin_run capture <scenario.json>... --out <dir>\n       \
          twin_run generate --seed <u64> --count <n> --out <dir>\n       \
+         twin_run canon-fuzz --seed <u64> --count <n> --out <file.jsonl>\n       \
          twin_run minimize <scenario.json> --runner <asx-conformance> --out <dir>\n       \
          twin_run trace <scenario.json>   (raw lab trace, for diagnosis)"
     );
@@ -52,6 +53,92 @@ fn generate(seed: u64, count: u64, out: &PathBuf) -> ExitCode {
         }
     }
     println!("twin_run generate: {count} scenario(s) for seed {seed}");
+    ExitCode::SUCCESS
+}
+
+/// One random vocabulary v2 event over small name pools, so that events
+/// often share a task, region, obligation or timer (dependent) and often do
+/// not (independent). Messages include characters canonical JSON must
+/// escape, and non-ASCII text.
+fn random_event(rng: &mut scenario_gen::Rng) -> Value {
+    fn pick(rng: &mut scenario_gen::Rng, items: &[&str]) -> String {
+        items[usize::try_from(rng.below(items.len() as u64)).unwrap_or(0)].to_string()
+    }
+    const TASKS: [&str; 4] = ["t.0", "t.1", "t.2", "t.0.c1"];
+    const REGIONS: [&str; 3] = ["root", "r.main", "r.side"];
+    const OBLIGATIONS: [&str; 4] = ["t.0/o1", "t.0/o2", "t.1/o1", "t.2/o1"];
+    const TIMERS: [&str; 3] = ["t.0/tm1", "t.1/tm1", "t.2/tm1"];
+    const MESSAGES: [&str; 6] = ["m", "a\"b", "x\\y", "line\nbreak", "\u{1}\u{1f}", "café ✓"];
+    match rng.below(13) {
+        0 => json!({"k": "task.spawned", "task": pick(rng, &TASKS), "region": pick(rng, &REGIONS)}),
+        1 => {
+            json!({"k": "task.completed", "task": pick(rng, &TASKS), "region": pick(rng, &REGIONS)})
+        }
+        2 => json!({"k": "cancel.requested", "task": pick(rng, &TASKS),
+                    "region": pick(rng, &REGIONS), "reason": pick(rng, &["User", "Shutdown"])}),
+        3 => {
+            let parent = if rng.chance(30) {
+                Value::Null
+            } else {
+                json!(pick(rng, &REGIONS))
+            };
+            json!({"k": "region.created", "region": pick(rng, &REGIONS), "parent": parent})
+        }
+        4 => json!({"k": pick(rng, &["region.close_begin", "region.closed", "region.cancelled"]),
+                    "region": pick(rng, &REGIONS)}),
+        5..=7 => json!({
+            "k": pick(rng, &["obligation.reserved", "obligation.committed",
+                             "obligation.aborted", "obligation.leaked"]),
+            "obligation": pick(rng, &OBLIGATIONS), "task": pick(rng, &TASKS),
+            "region": pick(rng, &REGIONS), "kind": pick(rng, &["Lease", "SendPermit"])}),
+        8 => json!({"k": "obligation.handoff", "obligation": pick(rng, &OBLIGATIONS),
+                    "from_task": pick(rng, &TASKS), "to_task": pick(rng, &TASKS),
+                    "from_region": pick(rng, &REGIONS), "to_region": pick(rng, &REGIONS)}),
+        9 => json!({"k": "timer.scheduled", "timer": pick(rng, &TIMERS),
+                    "deadline_ns": 50 * rng.below(8)}),
+        10 => json!({"k": pick(rng, &["timer.fired", "timer.cancelled"]),
+                     "timer": pick(rng, &TIMERS)}),
+        _ => json!({"k": "user.trace", "message": pick(rng, &MESSAGES)}),
+    }
+}
+
+/// `count` random vocabulary traces for batch `seed`, each with its Foata
+/// canonical form and digest (canon.rs), one canonical JSON object per line
+/// of `out`: the Rust side of the canonicalizer differential that
+/// `asx-conformance canon` checks against C's canon.c (bd-9kll.9.1).
+fn canon_fuzz(seed: u64, count: u64, out: &PathBuf) -> ExitCode {
+    let mut text = String::new();
+    let mut rng = scenario_gen::Rng::new(seed);
+    for _ in 0..count {
+        let len = 1 + rng.below(40);
+        let events: Vec<Value> = (0..len).map(|_| random_event(&mut rng)).collect();
+        let line = canon::canonical_trace(&events).and_then(|layers| {
+            let layers = Value::Array(layers.into_iter().map(Value::Array).collect());
+            let digest = canon::digest(&layers)?;
+            canon::canonical_json(&json!({"events": events, "canonical": layers, "digest": digest}))
+        });
+        match line {
+            Ok(l) => {
+                text.push_str(&l);
+                text.push('\n');
+            }
+            Err(err) => {
+                eprintln!("twin_run canon-fuzz: {err}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+    if let Some(dir) = out.parent() {
+        if let Err(err) = std::fs::create_dir_all(dir) {
+            eprintln!("twin_run: cannot create {}: {err}", dir.display());
+            return ExitCode::from(1);
+        }
+    }
+    if let Err(err) = std::fs::write(out, text) {
+        eprintln!("twin_run: cannot write {}: {err}", out.display());
+        return ExitCode::from(1);
+    }
+    println!("twin_run canon-fuzz: {count} trace(s) for seed {seed}");
     ExitCode::SUCCESS
 }
 
@@ -199,7 +286,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Some("generate") => {
+        Some(cmd @ ("generate" | "canon-fuzz")) => {
             let mut seed = None;
             let mut count = None;
             let mut out = None;
@@ -214,7 +301,10 @@ fn main() -> ExitCode {
                 }
             }
             match (seed, count, out) {
-                (Some(seed), Some(count), Some(out)) => generate(seed, count, &out),
+                (Some(seed), Some(count), Some(out)) if cmd == "generate" => {
+                    generate(seed, count, &out)
+                }
+                (Some(seed), Some(count), Some(out)) => canon_fuzz(seed, count, &out),
                 _ => usage(),
             }
         }
