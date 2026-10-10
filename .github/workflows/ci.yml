@@ -927,6 +927,30 @@ jobs:
             BUILD_DIR=build/qemu-${{ matrix.arch }} LDFLAGS=-static TEST_EXEC=${{ matrix.qemu }}
 
   # ---------------------------------------------------------------------------
+  # msvc — the library and the unit suite built by MSVC (/W4 /WX) through
+  # CMake on windows-latest, CORE and WIN32 profiles (bd-9kll.15.2).
+  # ---------------------------------------------------------------------------
+  msvc:
+    name: "MSVC (${{ matrix.profile }})"
+    runs-on: windows-latest
+    needs: [check]
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [CORE, WIN32]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (CMake, Visual Studio, x64)
+        run: cmake -S . -B build-msvc -A x64 -DASX_PROFILE=${{ matrix.profile }}
+
+      - name: Build (/W4 /WX)
+        run: cmake --build build-msvc --config Debug --parallel
+
+      - name: Unit suite
+        run: ctest --test-dir build-msvc -C Debug --output-on-failure --parallel 4
+
+  # ---------------------------------------------------------------------------
   # m32 — 32-bit x86: unit suite and Rust-parity fixture replay (bd-9kll.15.3).
   # gcc-multilib conflicts with the cross compilers, hence its own job.
   # ---------------------------------------------------------------------------
