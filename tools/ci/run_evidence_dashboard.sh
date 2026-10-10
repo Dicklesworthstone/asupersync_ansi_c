@@ -337,7 +337,7 @@ snapshot_json="$(jq -cn \
       adaptive: $adaptive
     }')"
 
-if ! rg -q "\"run_id\"[[:space:]]*:[[:space:]]*\"$RUN_ID\"" "$HISTORY_FILE"; then
+if ! grep -Eq "\"run_id\"[[:space:]]*:[[:space:]]*\"$RUN_ID\"" "$HISTORY_FILE"; then
     printf '%s\n' "$snapshot_json" >> "$HISTORY_FILE"
 fi
 
