@@ -835,6 +835,67 @@ static asx_status poll_admitter(void *ud, asx_task_id self) {
     return ASX_OK; /* completes in the spawning poll */
 }
 
+/* Arms a wake timer at 100 on its first poll; a later poll before then
+ * parks without polling that sleep again; at 100 it completes. */
+typedef struct {
+    char name;
+    int phase;
+} stale_sleeper;
+
+static asx_status poll_stale_sleeper(void *ud, asx_task_id self) {
+    stale_sleeper *s = (stale_sleeper *)ud;
+    asx_time now = 0;
+    if (g_order_n + 1u < sizeof(g_order)) g_order[g_order_n++] = s->name;
+    if (asx_runtime_now_ns(&now) == ASX_OK && now >= 100u) return ASX_OK;
+    if (s->phase == 0) {
+        s->phase = 1;
+        return asx_task_wait_until(self, 100u);
+    }
+    if (asx_task_park(self) != ASX_OK) return ASX_E_INVALID_STATE;
+    return ASX_E_PENDING;
+}
+
+/* A Rust Sleep wakes the waker it registered last, at that waker's
+ * priority. S arms its timer at priority 0; its budget priority then
+ * becomes 200 (in Rust a cancel's cleanup budget does that; set directly
+ * here so no cancel lane is involved) and S is polled again, getting a new
+ * waker, without polling its sleep. At 100 the timer still wakes S at 0,
+ * behind M (150), although S's timer is first in registration order (fuzz
+ * gen-17-81, bd-1maj). */
+TEST(a_timer_wakes_the_waker_it_was_armed_with) {
+    asx_region_id r;
+    asx_task_id ts;
+    asx_task_id tm;
+    asx_task_slot *slot;
+    asx_budget run;
+    asx_budget high = asx_budget_infinite();
+    stale_sleeper s = {'S', 0};
+    stale_sleeper m = {'M', 0};
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(5u), ASX_OK);
+    order_reset();
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_stale_sleeper, &s, &ts), ASX_OK);
+    high.priority = 150u;
+    ASSERT_EQ(asx_task_spawn_with_budget(r, poll_stale_sleeper, &m, &high, &tm), ASX_OK);
+    run = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run_until_idle(r, &run), ASX_E_PENDING);
+    ASSERT_EQ(g_order_n, 2u); /* both armed their timers at 100 */
+
+    ASSERT_EQ(asx_task_slot_lookup(ts, &slot), ASX_OK);
+    slot->budget.priority = 200u;
+    ASSERT_EQ(asx_task_wake(ts), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run_until_idle(r, &run), ASX_E_PENDING);
+    ASSERT_EQ(g_order_n, 3u); /* S polled again, with a new waker at 200 */
+    ASSERT_EQ(slot->lab_waker_prio, 200u);
+
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+    ASSERT_EQ(g_order_n, 5u);
+    ASSERT_EQ(g_order[3], 'M');
+    ASSERT_EQ(g_order[4], 'S');
+}
+
 TEST(spawn_limit_is_checked_at_the_next_step_admission) {
     asx_region_id r;
     asx_region_limits limits;
@@ -956,6 +1017,7 @@ int main(void) {
     RUN_TEST(handle_aborts_in_one_step_coalesce_to_the_strongest);
     RUN_TEST(handle_abort_applies_at_once_without_lab_dispatch);
     RUN_TEST(spawn_refusal_reaches_a_join_at_the_next_step);
+    RUN_TEST(a_timer_wakes_the_waker_it_was_armed_with);
     RUN_TEST(spawn_limit_is_checked_at_the_next_step_admission);
     RUN_TEST(spawn_into_a_region_closed_before_admission_is_refused);
     RUN_TEST(admission_status_of_a_bad_handle_is_a_lookup_error);

@@ -172,7 +172,7 @@ generation order.
 |---|---|---|
 | Driver task creation | `schedule(t, 0)` (twin_run run.rs:1648) | 0, whatever the budget |
 | `Cx::spawn` child | Admitted at the next step: `schedule(t, budget.priority)` | Inherited budget priority |
-| Waker wake (timer fire, channel, notify, join) | `schedule(t, waker.priority)`, on the ready lane | Priority at the task's last poll |
+| Waker wake (timer fire, channel, notify, join) | `schedule(t, waker.priority)`, on the ready lane | Priority of the poll that registered that waker: usually the task's last poll; for a join or a sleep timer, the poll that last polled it (see Join registrations, Timer registrations) |
 | `yield_now` | Wake during the poll, then Pending | Current poll's priority |
 | Driver `cancel_task` | If the request changed the reason or cleanup budget (`cancel_task` returns `changed && published`, ST:3426-3448; a strengthening counts, not only a new cancel): `schedule_cancel(t, cleanup priority)`. Then the CancelTaskWaker: `schedule_cancel(t, waker priority)` | Cleanup, then last-poll priority |
 | Region cancel (`cancel_request`, ST:7811-7876) | For each task whose reason or cleanup budget changed: `schedule_cancel(t, request's cleanup priority)`, all tasks first. Then every task's CancelTaskWaker | As left |
@@ -243,6 +243,23 @@ The priority changes when:
 - C: `asx_task_slot.watcher_prio`, `group_collect`. Found by the dispatch
   comparison in fuzz scenarios gen-5-75 and gen-8-30 (fixtures
   `task-groups-quorum-drain-wakers-001`, `-002`).
+
+### Timer registrations
+
+- A sleep registers its timer with the waker of the poll that polls it
+  (`Sleep::poll_inner`, `time/sleep.rs:880-998`); a later poll of the same
+  sleep with a waker of another priority moves the registration.
+- A task polled again without polling its sleep keeps the old waker: when
+  the timer fires it is woken at the old priority. `Scope::timeout`'s owner
+  does this once cancelled: it stops polling its deadline sleep and only
+  joins the operation (`cx/scope.rs:2152-2186`), so at the deadline its
+  timer wakes it at its pre-cancel priority, behind members re-armed at
+  their cleanup priority.
+- C: `asx_task_slot.timer_waker_prio`, set when the timer is armed or
+  re-armed, used by the lab's timer fire. Found by the dispatch comparison
+  in fuzz scenarios gen-17-81 and gen-29-127 (fixtures
+  `race-deadline-timer-old-waker-001`,
+  `race-deadline-region-cancel-member-order-001`; bd-1maj).
 
 ## 7. Run loops and time
 

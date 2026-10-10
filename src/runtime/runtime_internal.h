@@ -172,6 +172,11 @@ typedef struct {
     asx_time wake_at;
     uint64_t timer_seq;
     uint32_t timer_pos; /* heap index, ASX_SLOT_NONE when disarmed */
+    /* Lab dispatch: the priority of the waker the timer was (re)armed
+     * with, the waker of that poll. A Rust Sleep wakes the waker it last
+     * registered, so a task polled again without re-polling its sleep (its
+     * waker's priority changed meanwhile) is woken at the old priority. */
+    uint8_t timer_waker_prio;
     /* Lab dispatch: the budget-deadline timer Rust arms for the task when
      * it is created or admitted (Cx::arm_budget_deadline), a wheel timer of
      * its own, pending until it fires or the task ends. */

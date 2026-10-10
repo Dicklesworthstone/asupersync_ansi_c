@@ -186,6 +186,7 @@ static void timer_arm(uint32_t idx, asx_time deadline) {
         if (deadline >= t->wake_at) return;
         t->wake_at = deadline;
         t->timer_seq = g_timer_seq++;
+        t->timer_waker_prio = t->lab_waker_prio;
         timer_heap_sift_up(t->timer_pos);
         return;
     }
@@ -194,6 +195,7 @@ static void timer_arm(uint32_t idx, asx_time deadline) {
     if (g_timer_heap_len >= ASX_MAX_TASKS) return;
     t->wake_at = deadline;
     t->timer_seq = g_timer_seq++;
+    t->timer_waker_prio = t->lab_waker_prio;
     timer_heap_place(g_timer_heap_len, idx);
     g_timer_heap_len++;
     timer_heap_sift_up(g_timer_heap_len - 1u);
@@ -319,7 +321,9 @@ static uint32_t timers_fire_wheel_order(asx_time now) {
             continue;
         }
         if (t->timer_pos != ASX_SLOT_NONE) timer_heap_remove_at(t->timer_pos);
-        asx_task_wake_slot_internal(t);
+        /* The timer wakes the waker it was armed with, at that waker's
+         * priority, not the task's latest (bd-1maj). */
+        asx_lab_schedule(t, t->timer_waker_prio);
     }
     return n;
 }
@@ -382,6 +386,7 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->cancel_before_first_poll = 0;
     task->lab_scheduled = 0;
     task->lab_waker_prio = 0;
+    task->timer_waker_prio = 0;
     task->lab_admission_pending = 0;
     task->lab_admission_refusal = ASX_OK;
     task->lab_ack_in_poll = 0;
