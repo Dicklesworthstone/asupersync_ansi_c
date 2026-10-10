@@ -133,6 +133,7 @@ TEST(try_read_fails_when_write_locked) {
 TEST(writer_preference_blocks_new_readers) {
     asx_rwlock_handle h;
     asx_rwlock_read_guard rg1, rg2;
+    asx_rwlock_write_guard wg;
     asx_rwlock_waiter ww;
     setup();
     ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
@@ -140,17 +141,23 @@ TEST(writer_preference_blocks_new_readers) {
     /* Acquire a read lock */
     ASSERT_EQ(asx_rwlock_try_read(h, &rg1), ASX_OK);
 
-    /* Writer begins waiting */
+    /* A writer that has not been polled is not waiting yet (Rust's write
+     * future joins the line at its first poll). */
     ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
+    ASSERT_EQ(asx_rwlock_try_read(h, &rg2), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_unlock(rg2), ASX_OK);
 
-    /* New reader should be blocked due to writer-preference */
+    /* Once it waits, new readers are blocked (writer-preference), and so
+     * is a try_write. */
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
     ASSERT_EQ(asx_rwlock_try_read(h, &rg2), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_rwlock_try_write(h, &wg), ASX_E_WOULD_BLOCK);
 
-    /* Release reader, writer should get lock on next poll */
+    /* The last reader's release hands the writer the lock. */
     ASSERT_EQ(asx_rwlock_read_unlock(rg1), ASX_OK);
-
-    /* Cancel the writer waiter to clean up */
-    ASSERT_EQ(asx_rwlock_waiter_cancel(&ww), ASX_OK);
+    ASSERT_TRUE(asx_rwlock_is_write_locked(h));
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_write_unlock(wg), ASX_OK);
     asx_rwlock_close(h);
 }
 
@@ -246,11 +253,13 @@ TEST(cancel_read_waiter) {
 TEST(cancel_write_waiter) {
     asx_rwlock_handle h;
     asx_rwlock_read_guard rg;
+    asx_rwlock_write_guard wg;
     asx_rwlock_waiter ww;
     setup();
     ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_read(h, &rg), ASX_OK);
     ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
     ASSERT_EQ(asx_rwlock_waiter_cancel(&ww), ASX_OK);
     /* After cancel, new readers should succeed (no writer waiting) */
     {
@@ -348,10 +357,10 @@ TEST(write_unlock_wakes_all_readers) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Writer waiter preference over readers                               */
+/* Release order (Rust release_writer / release_reader)                */
 /* ------------------------------------------------------------------ */
 
-TEST(writer_wakes_before_readers_after_write_unlock) {
+TEST(queued_writer_ahead_of_reader_goes_first) {
     asx_rwlock_handle h;
     asx_rwlock_write_guard wg1, wg2;
     asx_rwlock_waiter ww, rw;
@@ -360,22 +369,167 @@ TEST(writer_wakes_before_readers_after_write_unlock) {
     ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
     ASSERT_EQ(asx_rwlock_try_write(h, &wg1), ASX_OK);
 
-    /* Both a writer and reader begin waiting */
+    /* A writer, then a reader, queue */
     ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
     ASSERT_EQ(asx_rwlock_read_begin(h, &rw), ASX_OK);
-
-    /* Release first write lock — writer-preference: writer wakes first */
-    ASSERT_EQ(asx_rwlock_write_unlock(wg1), ASX_OK);
-    ASSERT_TRUE(asx_rwlock_is_write_locked(h));
-
-    /* Writer should succeed, reader should still be pending */
-    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg2, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg2, NULL), ASX_E_PENDING);
     ASSERT_EQ(asx_rwlock_poll_read(&rw, &rg, NULL), ASX_E_PENDING);
 
-    /* Release second writer — now reader wakes */
+    /* The writer arrived first, so the release hands it the lock */
+    ASSERT_EQ(asx_rwlock_write_unlock(wg1), ASX_OK);
+    ASSERT_TRUE(asx_rwlock_is_write_locked(h));
+    ASSERT_EQ(asx_rwlock_poll_read(&rw, &rg, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg2, NULL), ASX_OK);
+
+    /* Release second writer — now reader is granted */
     ASSERT_EQ(asx_rwlock_write_unlock(wg2), ASX_OK);
+    ASSERT_EQ(asx_rwlock_reader_count(h), 1u);
     ASSERT_EQ(asx_rwlock_poll_read(&rw, &rg, NULL), ASX_OK);
     ASSERT_EQ(asx_rwlock_read_unlock(rg), ASX_OK);
+    asx_rwlock_close(h);
+}
+
+TEST(reader_queued_before_writer_goes_first) {
+    /* Rust's should_wake_writer compares arrival: readers queued before
+     * the first queued writer are admitted ahead of it. */
+    asx_rwlock_handle h;
+    asx_rwlock_write_guard held, wg;
+    asx_rwlock_waiter ww, rw1, rw2;
+    asx_rwlock_read_guard rg1, rg2;
+    setup();
+    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_try_write(h, &held), ASX_OK);
+
+    /* Arrival order: reader 1, writer, reader 2 */
+    ASSERT_EQ(asx_rwlock_read_begin(h, &rw1), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw1, &rg1, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_read_begin(h, &rw2), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw2, &rg2, NULL), ASX_E_PENDING);
+
+    /* Only reader 1, older than the writer, is admitted */
+    ASSERT_EQ(asx_rwlock_write_unlock(held), ASX_OK);
+    ASSERT_FALSE(asx_rwlock_is_write_locked(h));
+    ASSERT_EQ(asx_rwlock_reader_count(h), 1u);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw2, &rg2, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw1, &rg1, NULL), ASX_OK);
+
+    /* Its release hands the writer the lock, then reader 2 follows */
+    ASSERT_EQ(asx_rwlock_read_unlock(rg1), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw2, &rg2, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_write_unlock(wg), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw2, &rg2, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_unlock(rg2), ASX_OK);
+    asx_rwlock_close(h);
+}
+
+TEST(forced_reader_turn_after_sixteen_writer_handoffs) {
+    /* Rust's MAX_CONSECUTIVE_WRITERS_BEFORE_READER_BATCH: after 16 writer
+     * hand-offs in a row while a reader waits, the oldest queued reader
+     * gets a turn before the head writer, even though it arrived after
+     * that writer. */
+    asx_rwlock_handle h;
+    asx_rwlock_write_guard held, wg;
+    asx_rwlock_waiter ww[18];
+    asx_rwlock_waiter rw;
+    asx_rwlock_read_guard rg;
+    uint32_t i;
+    setup();
+    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_try_write(h, &held), ASX_OK);
+
+    /* Arrival order: writers 0..16, the reader, writer 17 */
+    for (i = 0; i < 18u; i++) {
+        if (i == 17u) {
+            ASSERT_EQ(asx_rwlock_read_begin(h, &rw), ASX_OK);
+            ASSERT_EQ(asx_rwlock_poll_read(&rw, &rg, NULL), ASX_E_PENDING);
+        }
+        ASSERT_EQ(asx_rwlock_write_begin(h, &ww[i]), ASX_OK);
+        ASSERT_EQ(asx_rwlock_poll_write(&ww[i], &wg, NULL), ASX_E_PENDING);
+    }
+    ASSERT_EQ(asx_rwlock_write_unlock(held), ASX_OK);
+
+    /* Writers 0..15 in turn: sixteen hand-offs while the reader waits */
+    for (i = 0; i < 16u; i++) {
+        ASSERT_EQ(asx_rwlock_poll_read(&rw, &rg, NULL), ASX_E_PENDING);
+        ASSERT_EQ(asx_rwlock_poll_write(&ww[i], &wg, NULL), ASX_OK);
+        ASSERT_EQ(asx_rwlock_write_unlock(wg), ASX_OK);
+    }
+
+    /* The reader's forced turn comes before writer 16 */
+    ASSERT_EQ(asx_rwlock_poll_write(&ww[16], &wg, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw, &rg, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_unlock(rg), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww[16], &wg, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_write_unlock(wg), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww[17], &wg, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_write_unlock(wg), ASX_OK);
+    asx_rwlock_close(h);
+}
+
+TEST(abandoned_last_writer_admits_queued_readers) {
+    /* Rust's abandon_write_waiter: when the last waiting writer gives up
+     * and no writer holds the lock, every queued reader is admitted. */
+    asx_rwlock_handle h;
+    asx_rwlock_read_guard held, rg1, rg2;
+    asx_rwlock_write_guard wg;
+    asx_rwlock_waiter ww, rw1, rw2;
+    setup();
+    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_try_read(h, &held), ASX_OK);
+    ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_read_begin(h, &rw1), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw1, &rg1, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_read_begin(h, &rw2), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw2, &rg2, NULL), ASX_E_PENDING);
+
+    ASSERT_EQ(asx_rwlock_waiter_cancel(&ww), ASX_OK);
+    ASSERT_EQ(asx_rwlock_reader_count(h), 3u);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw1, &rg1, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw2, &rg2, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_unlock(held), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_unlock(rg1), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_unlock(rg2), ASX_OK);
+    asx_rwlock_close(h);
+}
+
+TEST(abandoned_granted_writer_passes_the_lock_on) {
+    /* A writer granted the lock that gives up before taking it releases
+     * the lock as its guard would (Rust abandon_write_waiter). */
+    asx_rwlock_handle h;
+    asx_rwlock_read_guard held, rg;
+    asx_rwlock_write_guard wg;
+    asx_rwlock_waiter ww, rw;
+    setup();
+    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_try_read(h, &held), ASX_OK);
+    ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_read_begin(h, &rw), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw, &rg, NULL), ASX_E_PENDING);
+
+    ASSERT_EQ(asx_rwlock_read_unlock(held), ASX_OK); /* grants the writer */
+    ASSERT_TRUE(asx_rwlock_is_write_locked(h));
+    ASSERT_EQ(asx_rwlock_waiter_cancel(&ww), ASX_OK);
+    ASSERT_FALSE(asx_rwlock_is_write_locked(h));
+    ASSERT_EQ(asx_rwlock_poll_read(&rw, &rg, NULL), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_unlock(rg), ASX_OK);
+    asx_rwlock_close(h);
+}
+
+TEST(poll_of_the_other_kind_is_refused) {
+    asx_rwlock_handle h;
+    asx_rwlock_waiter ww;
+    asx_rwlock_read_guard rg;
+    setup();
+    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&ww, &rg, NULL), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_rwlock_waiter_cancel(&ww), ASX_OK);
     asx_rwlock_close(h);
 }
 
@@ -417,7 +571,12 @@ int main(void) {
     RUN_TEST(reset_invalidates_handles);
 
     RUN_TEST(write_unlock_wakes_all_readers);
-    RUN_TEST(writer_wakes_before_readers_after_write_unlock);
+    RUN_TEST(queued_writer_ahead_of_reader_goes_first);
+    RUN_TEST(reader_queued_before_writer_goes_first);
+    RUN_TEST(forced_reader_turn_after_sixteen_writer_handoffs);
+    RUN_TEST(abandoned_last_writer_admits_queued_readers);
+    RUN_TEST(abandoned_granted_writer_passes_the_lock_on);
+    RUN_TEST(poll_of_the_other_kind_is_refused);
 
     TEST_REPORT();
     return test_failures;

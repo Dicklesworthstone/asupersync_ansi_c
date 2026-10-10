@@ -1025,7 +1025,7 @@ static asx_status poll_rw_task(void *ud, asx_task_id self) {
     return s->is_write ? asx_rwlock_write_unlock(s->wg) : asx_rwlock_read_unlock(s->rg);
 }
 
-TEST(rwlock_writer_preferred_then_readers_together) {
+TEST(rwlock_serves_the_line_in_arrival_order) {
     rw_task r[4];
     asx_rwlock_handle h;
     asx_rwlock_write_guard held;
@@ -1053,15 +1053,67 @@ TEST(rwlock_writer_preferred_then_readers_together) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
 
-    /* Writers first, in arrival order, then both readers at once. */
+    /* Rust's release order (sync/rwlock.rs should_wake_writer): a reader
+     * queued before the first queued writer goes ahead of it, so the line
+     * is served in arrival order, one holder at a time. */
     ASSERT_EQ(g_order_len, 4u);
-    ASSERT_EQ(g_order[0], 1u);
-    ASSERT_EQ(g_order[1], 3u);
-    ASSERT_EQ(g_order[2], 0u);
-    ASSERT_EQ(g_order[3], 2u);
-    for (i = 0; i < 4u; i++) ASSERT_EQ(r[i].polls, 3u);
-    /* 1 ms per writer, readers overlap: 3 ms of virtual time in total. */
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(3u * MS));
+    for (i = 0; i < 4u; i++) {
+        ASSERT_EQ(g_order[i], i);
+        ASSERT_EQ(r[i].polls, 3u);
+    }
+    /* 1 ms per holder: 4 ms of virtual time in total. */
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(4u * MS));
+}
+
+/* Write-lock without a Cx (a cancel request does not make it give up),
+ * record the locking order, unlock. */
+static asx_status poll_rw_record_task(void *ud, asx_task_id self) {
+    rw_task *s = (rw_task *)ud;
+    asx_status st;
+    (void)self;
+    s->polls++;
+    if (!s->begun) {
+        st = asx_rwlock_write_begin(s->h, &s->w);
+        if (st != ASX_OK) return st;
+        s->begun = 1;
+    }
+    st = asx_rwlock_poll_write(&s->w, &s->wg, NULL);
+    if (st != ASX_OK) return st;
+    record(s->id);
+    return asx_rwlock_write_unlock(s->wg);
+}
+
+TEST(rwlock_unlock_hands_the_lock_to_a_cancel_pending_front_writer) {
+    /* Rust pops the front writer unconditionally (pop_writer_waiter): a
+     * cancel request does not cost a waiter its place (bd-rm2d). */
+    rw_task r[2];
+    asx_rwlock_handle h;
+    asx_rwlock_write_guard held;
+    asx_task_id ids[2];
+    asx_budget budget;
+    uint32_t i;
+
+    ASSERT_TRUE(setup());
+    memset(r, 0, sizeof(r));
+    g_order_len = 0;
+    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_try_write(h, &held), ASX_OK);
+    for (i = 0; i < 2u; i++) {
+        r[i].id = i;
+        r[i].h = h;
+        ASSERT_EQ(asx_task_spawn(g_region, poll_rw_record_task, &r[i], &ids[i]), ASX_OK);
+    }
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK); /* both parked */
+    ASSERT_EQ(asx_task_cancel(ids[0], ASX_CANCEL_USER), ASX_OK);
+    ASSERT_EQ(asx_rwlock_write_unlock(held), ASX_OK);
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+
+    ASSERT_EQ(g_order_len, 2u);
+    ASSERT_EQ(g_order[0], 0u);
+    ASSERT_EQ(g_order[1], 1u);
+    ASSERT_EQ(r[1].polls, 2u); /* park, then lock once handed it */
 }
 
 /* ===================================================================
@@ -1417,7 +1469,8 @@ int main(void) {
     RUN_TEST(contended_mutex_counts_one_contention_per_park);
     RUN_TEST(close_wakes_all_sync_waiters);
     RUN_TEST(notify_one_wakes_oldest_and_passes_on_when_abandoned);
-    RUN_TEST(rwlock_writer_preferred_then_readers_together);
+    RUN_TEST(rwlock_serves_the_line_in_arrival_order);
+    RUN_TEST(rwlock_unlock_hands_the_lock_to_a_cancel_pending_front_writer);
     RUN_TEST(barrier_parks_until_last_arrival);
     RUN_TEST(once_async_init_parks_other_callers);
     RUN_TEST(once_abandoned_init_passes_turn_to_next_waiter);

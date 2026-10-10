@@ -101,7 +101,7 @@
     ]},
     "sync_decl": {"oneOf": [
       {"type": "object", "required": ["name", "type"], "additionalProperties": false,
-       "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"enum": ["mutex", "notify"]}}},
+       "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"enum": ["mutex", "rwlock", "notify"]}}},
       {"type": "object", "required": ["name", "type", "permits"], "additionalProperties": false,
        "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"const": "semaphore"}, "permits": {"type": "integer", "minimum": 0}}},
       {"type": "object", "required": ["name", "type", "parties"], "additionalProperties": false,
@@ -186,14 +186,16 @@
       "properties": {"op": {"enum": ["recv", "oneshot_recv", "broadcast_recv", "watch_changed"]}, "channel": {"$ref": "#/$defs/name"}}},
     "s_sync_ref_nb": {"type": "object", "additionalProperties": false, "oneOf": [
       {"required": ["op", "mutex"], "properties": {"op": {"const": "mutex_unlock"}, "mutex": {"$ref": "#/$defs/name"}}},
+      {"required": ["op", "rwlock"], "properties": {"op": {"const": "rwlock_unlock"}, "rwlock": {"$ref": "#/$defs/name"}}},
       {"required": ["op", "semaphore"], "properties": {"op": {"const": "sem_release"}, "semaphore": {"$ref": "#/$defs/name"}}},
       {"required": ["op", "notify"], "properties": {"op": {"enum": ["notify_one", "notify_all"]}, "notify": {"$ref": "#/$defs/name"}}}
-    ], "properties": {"op": true, "mutex": true, "semaphore": true, "notify": true}},
+    ], "properties": {"op": true, "mutex": true, "rwlock": true, "semaphore": true, "notify": true}},
     "s_sync_ref_b": {"type": "object", "additionalProperties": false, "oneOf": [
       {"required": ["op", "mutex"], "properties": {"op": {"const": "mutex_lock"}, "mutex": {"$ref": "#/$defs/name"}}},
+      {"required": ["op", "rwlock"], "properties": {"op": {"enum": ["rwlock_read", "rwlock_write"]}, "rwlock": {"$ref": "#/$defs/name"}}},
       {"required": ["op", "barrier"], "properties": {"op": {"const": "barrier_wait"}, "barrier": {"$ref": "#/$defs/name"}}},
       {"required": ["op", "notify"], "properties": {"op": {"const": "notify_wait"}, "notify": {"$ref": "#/$defs/name"}}}
-    ], "properties": {"op": true, "mutex": true, "barrier": true, "notify": true}},
+    ], "properties": {"op": true, "mutex": true, "rwlock": true, "barrier": true, "notify": true}},
     "s_sem_acquire": {"type": "object", "required": ["op", "semaphore", "count"], "additionalProperties": false,
       "properties": {"op": {"const": "sem_acquire"}, "semaphore": {"$ref": "#/$defs/name"}, "count": {"type": "integer", "minimum": 0}}},
     "s_server_spawn": {"type": "object", "required": ["op", "as", "behavior", "mailbox"], "additionalProperties": false,

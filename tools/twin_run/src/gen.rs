@@ -11,15 +11,18 @@
 //! Child regions: a task opens at most one at a time (two in all), may
 //! spawn into it, and closes it or leaves it to the drop backstop.
 //!
-//! Contention: when the scenario has a mutex or semaphore, most tasks open
-//! with a critical section (acquire, a few steps that let others run,
+//! Contention: when the scenario has a mutex, rwlock (reads and writes) or
+//! semaphore, most tasks open with a critical section (acquire, a few
+//! steps that let others run,
 //! release), so several tasks queue on one lock and every release must
 //! hand it on in arrival order. Random lock toggles alone almost never
 //! park two waiters at once: a lock granting newest-first passed 200
 //! scenarios without them.
 //!
 //! Crowds: about one scenario in twelve has 17 to 32 tasks queueing on one
-//! lock, more than the C runtime once let wait on it (bd-9kll.5.1).
+//! lock, more than the C runtime once let wait on it (bd-9kll.5.1); an
+//! rwlock crowd can run 16 writer hand-offs in a row and reach the forced
+//! reader turn (bd-rm2d).
 //!
 //! Channels and sync: besides mpsc (send / try_send / reserve with
 //! permit_send or permit_abort, recv / try_recv, close of either end),
@@ -76,6 +79,7 @@ const ERR_STATUSES: [&str; 2] = ["ASX_E_TIMED_OUT", "ASX_E_INVALID_STATE"];
 /// What the scenario declares that programs may use.
 struct World {
     mutex: bool,
+    rwlock: bool,
     semaphore: bool,
     notify: bool,
     /// Parties of the barrier `b`.
@@ -100,6 +104,9 @@ struct Held {
     opened: u32,
     groups: u32,
     mutex: bool,
+    /// This task holds a guard on the rwlock (one at a time: a second
+    /// acquire by the holder could wait on itself).
+    rw: bool,
     permit: bool,
     reserves: u32,
     spawns: u32,
@@ -139,10 +146,20 @@ fn child_program(rng: &mut Rng) -> Vec<Value> {
     steps
 }
 
+/// An rwlock acquire: a write 40% of the time, else a read.
+fn rw_acquire(rng: &mut Rng) -> Value {
+    let op = if rng.chance(40) {
+        "rwlock_write"
+    } else {
+        "rwlock_read"
+    };
+    json!({"op": op, "rwlock": "rw"})
+}
+
 /// One step of task `me`'s program, given what it holds.
 fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
     loop {
-        match rng.below(24) {
+        match rng.below(25) {
             0 | 1 => return json!({"op": "yield"}),
             2 | 3 => return sleep_step(rng),
             4 | 5 => return checkpoint_step(rng),
@@ -333,6 +350,14 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 return json!({"op": "barrier_wait", "barrier": "b"});
             }
             23 => return json!({"op": "sleep_until", "at_ns": 50 * (1 + rng.below(12))}),
+            24 if world.rwlock => {
+                held.rw = !held.rw;
+                return if held.rw {
+                    rw_acquire(rng)
+                } else {
+                    json!({"op": "rwlock_unlock", "rwlock": "rw"})
+                };
+            }
             _ => {}
         }
     }
@@ -350,16 +375,29 @@ fn permit_count(rng: &mut Rng) -> u64 {
 /// It opens the program, so nothing is held yet and the random lock
 /// toggles of `step` that follow start from released.
 fn critical_section(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Vec<Value> {
-    let (acquire, release) = if world.semaphore && (!world.mutex || rng.chance(50)) {
-        (
+    let mut locks = Vec::new();
+    if world.semaphore {
+        locks.push("s");
+    }
+    if world.mutex {
+        locks.push("m");
+    }
+    if world.rwlock {
+        locks.push("rw");
+    }
+    let (acquire, release) = match *rng.pick(&locks) {
+        "s" => (
             json!({"op": "sem_acquire", "semaphore": "s", "count": permit_count(rng)}),
             json!({"op": "sem_release", "semaphore": "s"}),
-        )
-    } else {
-        (
+        ),
+        "m" => (
             json!({"op": "mutex_lock", "mutex": "m"}),
             json!({"op": "mutex_unlock", "mutex": "m"}),
-        )
+        ),
+        _ => (
+            rw_acquire(rng),
+            json!({"op": "rwlock_unlock", "rwlock": "rw"}),
+        ),
     };
     let mut steps = vec![acquire];
     for _ in 0..1 + rng.below(3) {
@@ -404,10 +442,13 @@ pub fn scenario(seed: u64, index: u64) -> Value {
         region_names.push("r.side");
     }
     let world = if crowd {
-        let mutex = rng.chance(50);
+        // One lock or two; an rwlock crowd mixes readers and writers, long
+        // enough to reach the forced reader turn after 16 writers.
+        let lock = rng.below(3);
         World {
-            mutex,
-            semaphore: !mutex || rng.chance(50),
+            mutex: lock == 0,
+            rwlock: lock == 1,
+            semaphore: lock == 2 || rng.chance(30),
             notify: false,
             barrier: None,
             mpsc: None,
@@ -422,6 +463,7 @@ pub fn scenario(seed: u64, index: u64) -> Value {
         let several = task_count >= 2;
         World {
             mutex: rng.chance(35),
+            rwlock: rng.chance(25),
             semaphore: rng.chance(25),
             notify: rng.chance(20),
             // Fewer arrivals than parties leave the waiters parked until
@@ -439,6 +481,9 @@ pub fn scenario(seed: u64, index: u64) -> Value {
     let mut sync = Vec::new();
     if world.mutex {
         sync.push(json!({"name": "m", "type": "mutex"}));
+    }
+    if world.rwlock {
+        sync.push(json!({"name": "rw", "type": "rwlock"}));
     }
     if world.semaphore {
         sync.push(json!({"name": "s", "type": "semaphore", "permits": 1 + rng.below(2)}));
@@ -489,7 +534,7 @@ pub fn scenario(seed: u64, index: u64) -> Value {
             }));
             continue;
         }
-        if (world.mutex || world.semaphore) && rng.chance(75) {
+        if (world.mutex || world.semaphore || world.rwlock) && rng.chance(75) {
             program.extend(critical_section(&mut rng, &world, me, &mut held));
         }
         for _ in 0..1 + rng.below(7) {
@@ -526,13 +571,21 @@ pub fn scenario(seed: u64, index: u64) -> Value {
     // child regions and reservations past them are refused
     // (ASX_E_ADMISSION_LIMIT). A field left out is unlimited. No
     // max_tasks: Rust checks it when the next lab step admits a spawn,
-    // C when the spawn is made (DSL §7, open).
+    // C when the spawn is made (DSL §7, open). max_obligations only where
+    // every obligation is a checked `reserve`: Rust admits and resolves a
+    // semaphore or channel permit's obligation at the next lab step, C at
+    // the call (DSL §7, open).
+    let permit_obligations = world.semaphore
+        || world.mpsc.is_some()
+        || world.oneshot.is_some()
+        || world.broadcast.is_some()
+        || world.watch.is_some();
     if rng.chance(10) {
         let mut op = json!({"op": "region_limits", "region": *rng.pick(&region_names)});
         if rng.chance(70) {
             op["max_children"] = json!(rng.below(3));
         }
-        if rng.chance(70) {
+        if rng.chance(70) && !permit_obligations {
             op["max_obligations"] = json!(rng.below(3));
         }
         script.push(json!({"at_ns": 0, "op": op}));

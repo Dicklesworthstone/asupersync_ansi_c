@@ -323,6 +323,7 @@ Sync objects are declared at the top level:
 
 ```json
 {"name": "m", "type": "mutex"}
+{"name": "rw", "type": "rwlock"}
 {"name": "s", "type": "semaphore", "permits": 2}
 {"name": "b", "type": "barrier", "parties": 2}
 {"name": "n", "type": "notify"}
@@ -332,6 +333,8 @@ Sync objects are declared at the top level:
 |---|---|---|---|---|---|
 | `mutex_lock` | `mutex` | `m.lock(&cx).await` (`sync/mutex.rs:191`), guard kept | `asx_mutex_lock_begin` + `asx_mutex_poll_lock` | while held, FIFO | Checked on every poll: `ASX_E_CANCELLED` even when free (`mutex.rs:554-558`). |
 | `mutex_unlock` | `mutex` | `drop(guard)` (`:758`) | `asx_mutex_unlock` | no | ignored |
+| `rwlock_read` / `rwlock_write` | `rwlock` | `OwnedRwLockReadGuard::read(lock, &cx).await` / `OwnedRwLockWriteGuard::write(lock, &cx).await` (`sync/rwlock.rs:1155`, `:1212`), guard kept | `asx_rwlock_read_begin` / `asx_rwlock_write_begin` + `asx_rwlock_poll_read` / `asx_rwlock_poll_write` | while a writer holds or (for a read) waits; release order is bounded writer-preference by arrival (`release_writer`, `:531`) | Checked on every poll: `ASX_E_CANCELLED` (`:1339`, `:1464`). A granted lock the waiter gives up passes on. |
+| `rwlock_unlock` | `rwlock` | drops the task's most recent guard on the lock (`release_reader` / `release_writer`) | `asx_rwlock_read_unlock` / `asx_rwlock_write_unlock` | no | ignored |
 | `sem_acquire` | `semaphore`, `count` | `s.acquire(&cx, n).await` (`sync/semaphore.rs:430`), permit kept | `asx_semaphore_acquire_many_begin(s, n)` + `asx_semaphore_poll_acquire` | until n are available (all-or-nothing, FIFO) | `ASX_E_CANCELLED` (`:847`); count 0 succeeds at once with an empty permit and no obligation. Otherwise the permit registers a `SemaphorePermit` obligation. |
 | `sem_release` | `semaphore` | `drop(permit)` (`:1080`) | `asx_semaphore_release` | no | ignored |
 | `barrier_wait` | `barrier` | `b.wait(&cx).await` (`sync/barrier.rs:135`) | `asx_barrier_wait_begin` + `asx_barrier_poll_wait` | until `parties` have arrived | `ASX_E_CANCELLED` (`:304`) |
@@ -465,7 +468,39 @@ Open:
   interpreter (`asx_task_group_spawn failed`) where Rust records the member
   cancelled.
 
+- **When a permit's obligation counts against `max_obligations`.** A
+  semaphore or channel permit registers its obligation through Rust's
+  obligation mailbox (`Cx::try_register_obligation`, `cx/cx.rs:1808`):
+  the reservation, with its limit check, and the permit's commit or abort
+  are applied at the next lab step's drain (`apply_obligation_post_from_dispatch_table`,
+  `runtime/state.rs:5893`). A `reserve` step is admitted at once
+  (`try_register_obligation_checked`, `cx/cx.rs:1746`). C admits and
+  resolves every obligation at the call, so under a region's
+  `max_obligations` a permit taken while a `reserve`d obligation is still
+  pending, or a `reserve` right after a permit's release, is decided
+  differently (fuzz gen-9-120, gen-10-146). Generated scenarios set
+  `max_obligations` only when no permit can register an obligation.
+
+- **Lock poisoning.** A Rust mutex or rwlock write guard dropped while its
+  task panics poisons the lock, and later acquires fail with `Poisoned`
+  (`ASX_E_INVALID_STATE`; owned guards poison at `sync/mutex.rs:1010`,
+  `sync/rwlock.rs:1264`). C
+  locks have no poisoned state, so a `return` with outcome `panicked` while
+  a guard is held diverges. Generated scenarios never panic.
+
 Closed (each verified by a fixture that now matches):
+
+- **RwLock** (`rwlock_read` / `rwlock_write` / `rwlock_unlock`): C's
+  rwlock follows Rust's grant policy: an acquire joins the line at its
+  first poll that has to wait and is only granted after that; a release
+  serves the head writer unless readers queued before it, who go first;
+  16 writer hand-offs in a row with a reader queued force one reader turn;
+  grants go to the front whatever its task's cancel state; giving up
+  follows `abandon_read_waiter` / `abandon_write_waiter`; `try_write`
+  fails while a writer waits (`sync-rwlock-arrival-order-001`,
+  `sync-rwlock-forced-reader-turn-001`,
+  `sync-rwlock-cancelled-front-writer-001`; generated scenarios declare an
+  rwlock at times, and rwlock crowds). Downgrade has no step.
 
 - **Region admission limits** for `region_limits`: `asx_region_set_limits`
   caps a region's live tasks, live child regions and pending obligations;

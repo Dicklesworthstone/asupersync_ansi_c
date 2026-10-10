@@ -30,6 +30,7 @@
 #include <asx/sync/barrier.h>
 #include <asx/sync/mutex.h>
 #include <asx/sync/notify.h>
+#include <asx/sync/rwlock.h>
 #include <asx/sync/semaphore.h>
 #include <asx/time/sleep.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
@@ -93,6 +94,7 @@ typedef struct {
     union {
         asx_notify_waiter notify;
         asx_mutex_lock_waiter mutex;
+        asx_rwlock_waiter rwlock;
         asx_semaphore_waiter sem;
         asx_barrier_waiter barrier;
     } wait;
@@ -107,6 +109,14 @@ typedef struct {
         asx_semaphore_permit permit;
     } permits[IT_MAX_LOCAL];
     uint32_t n_permits;
+    /* Held rwlock guards, by lock name, oldest first. */
+    struct {
+        const char *name;
+        int is_write;
+        asx_rwlock_read_guard read;
+        asx_rwlock_write_guard write;
+    } rw_guards[IT_MAX_LOCAL];
+    uint32_t n_rw_guards;
     /* Held mpsc send permits (DSL §3.6), by permit name. */
     struct {
         const char *name;
@@ -149,12 +159,19 @@ typedef struct {
 } it_region;
 
 /* A declared sync object (DSL §3.7). */
-typedef enum { IT_SYNC_MUTEX, IT_SYNC_SEMAPHORE, IT_SYNC_BARRIER, IT_SYNC_NOTIFY } it_sync_type;
+typedef enum {
+    IT_SYNC_MUTEX,
+    IT_SYNC_RWLOCK,
+    IT_SYNC_SEMAPHORE,
+    IT_SYNC_BARRIER,
+    IT_SYNC_NOTIFY
+} it_sync_type;
 
 typedef struct {
     const char *name;
     it_sync_type type;
     asx_mutex_handle mutex;
+    asx_rwlock_handle rwlock;
     asx_semaphore_handle semaphore;
     asx_barrier_handle barrier;
     asx_notify_handle notify;
@@ -834,6 +851,14 @@ static asx_status release_permit(it_task *t, uint32_t i) {
     return st;
 }
 
+static asx_status release_rw_guard(it_task *t, uint32_t i) {
+    asx_status st = t->rw_guards[i].is_write ? asx_rwlock_write_unlock(t->rw_guards[i].write)
+                                             : asx_rwlock_read_unlock(t->rw_guards[i].read);
+    for (; i + 1u < t->n_rw_guards; i++) t->rw_guards[i] = t->rw_guards[i + 1u];
+    t->n_rw_guards--;
+    return st;
+}
+
 /* The endpoint task `me` still owns that drops first: of channel type
  * `type`, its sender (`sender` 1) or a receiver (0), the least channel
  * name first. Returns the channel (and *out_r, NULL for a sender), or
@@ -865,8 +890,9 @@ static it_channel *next_owned(uint32_t me, it_ch_type type, int sender, it_recei
 /* The task body ended (returned, acknowledged a cancel, or panicked): what
  * it still holds is released the way Rust drops the body's locals
  * (twin_run's Local, fields in declaration order): guards, then semaphore
- * permits, each by object name, a name's permits oldest first; then send
- * permits by permit name; then, per channel type (mpsc, oneshot,
+ * permits, then rwlock guards, each by object name, a name's permits and
+ * rwlock guards oldest first; then send permits by permit name; then, per
+ * channel type (mpsc, oneshot,
  * broadcast, watch), owned senders, then receivers, each by channel name.
  * A dropped Rust semaphore permit commits its obligation
  * (sync/semaphore.rs:1081); C has no destructors, so the interpreter
@@ -904,6 +930,14 @@ static void drop_locals(it_task *t) {
             if (strcmp(t->permits[i].name, t->permits[first].name) < 0) first = i;
         }
         (void)release_permit(t, first);
+    }
+    while (t->n_rw_guards > 0u) {
+        uint32_t i;
+        uint32_t first = 0;
+        for (i = 1; i < t->n_rw_guards; i++) {
+            if (strcmp(t->rw_guards[i].name, t->rw_guards[first].name) < 0) first = i;
+        }
+        (void)release_rw_guard(t, first);
     }
     while (t->n_send_permits > 0u) {
         uint32_t i;
@@ -944,6 +978,9 @@ static wait_result sync_wait(it_task *t, uint32_t idx, const char *op, asx_statu
 
 static asx_status cancel_mutex_wait(void *w) {
     return asx_mutex_lock_cancel((asx_mutex_lock_waiter *)w);
+}
+static asx_status cancel_rwlock_wait(void *w) {
+    return asx_rwlock_waiter_cancel((asx_rwlock_waiter *)w);
 }
 static asx_status cancel_sem_wait(void *w) {
     return asx_semaphore_acquire_cancel((asx_semaphore_waiter *)w);
@@ -1373,6 +1410,38 @@ static int exec_sync_wait(it_task *t, asx_task_id self, uint32_t step, uint32_t 
         }
         return 1;
     }
+    if (strcmp(op, "rwlock_read") == 0 || strcmp(op, "rwlock_write") == 0) {
+        const char *name = it_str(step, "rwlock");
+        it_sync *s = sync_by_name(name, IT_SYNC_RWLOCK);
+        int is_write = strcmp(op, "rwlock_write") == 0;
+        uint32_t k = t->n_rw_guards;
+        if (s == NULL || k >= IT_MAX_LOCAL) {
+            it_fail_task(t, idx, "rwlock step on an undeclared rwlock (or too many guards)");
+            *out = STEP_END;
+            return 1;
+        }
+        if (t->phase == 0u) {
+            st = is_write ? asx_rwlock_write_begin(s->rwlock, &t->wait.rwlock)
+                          : asx_rwlock_read_begin(s->rwlock, &t->wait.rwlock);
+            if (st != ASX_OK) {
+                it_fail_task(t, idx, "asx_rwlock_*_begin failed");
+                *out = STEP_END;
+                return 1;
+            }
+            t->phase = 1u;
+        }
+        st = is_write ? asx_rwlock_poll_write(&t->wait.rwlock, &t->rw_guards[k].write, &t->cx)
+                      : asx_rwlock_poll_read(&t->wait.rwlock, &t->rw_guards[k].read, &t->cx);
+        if (st == ASX_OK) {
+            t->rw_guards[k].name = name;
+            t->rw_guards[k].is_write = is_write;
+            t->n_rw_guards++;
+        }
+        if (sync_wait(t, idx, op, st, cancel_rwlock_wait, &t->wait.rwlock) == WAIT_PENDING) {
+            *out = STEP_PENDING;
+        }
+        return 1;
+    }
     if (strcmp(op, "sem_acquire") == 0) {
         const char *name = it_str(step, "semaphore");
         it_sync *s = sync_by_name(name, IT_SYNC_SEMAPHORE);
@@ -1716,6 +1785,20 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         }
         i--;
         st = is_mutex ? release_guard(t, i) : release_permit(t, i);
+        observe_status(t, idx, label, st);
+        return STEP_NEXT;
+    }
+    if (strcmp(op, "rwlock_unlock") == 0) {
+        /* Release the most recent guard (read or write) held on the lock. */
+        const char *name = it_str(step, "rwlock");
+        uint32_t i = t->n_rw_guards;
+        while (i > 0u && (name == NULL || strcmp(t->rw_guards[i - 1u].name, name) != 0)) i--;
+        if (i == 0u) {
+            /* Its rwlock_read or rwlock_write failed (DSL §3). */
+            observe_status(t, idx, label, ASX_E_NOT_FOUND);
+            return STEP_NEXT;
+        }
+        st = release_rw_guard(t, i - 1u);
         observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
@@ -2937,6 +3020,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
      * reset. */
     asx_notify_reset();
     asx_semaphore_reset();
+    asx_rwlock_reset();
     asx_barrier_reset();
     g_n_sync = 0;
     list = asx_json_get(in, scenario, "sync");
@@ -2955,6 +3039,9 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
         if (strcmp(type, "mutex") == 0) {
             s->type = IT_SYNC_MUTEX;
             st = asx_mutex_create(&s->mutex);
+        } else if (strcmp(type, "rwlock") == 0) {
+            s->type = IT_SYNC_RWLOCK;
+            st = asx_rwlock_create(&s->rwlock);
         } else if (strcmp(type, "notify") == 0) {
             s->type = IT_SYNC_NOTIFY;
             st = asx_notify_create(&s->notify);

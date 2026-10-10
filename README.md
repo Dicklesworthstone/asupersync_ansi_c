@@ -273,7 +273,7 @@ The main subsystem families are below. Their public headers live under `include/
 | **core** | Fundamental types: IDs, outcomes, budgets, symbols, cancellation, ghost monitors, combinators, epochs, circuit breakers |
 | **runtime** | Wake-driven scheduler (park/wake, task timers, join/watch), lifecycle engine, budgets, obligation holders and leak policy, cancel masking, task groups (race/join/first-ok/quorum with loser drain), builder, blocking pool, readiness reactor and I/O driver, deadline monitor, waker system, virtual time, telemetry, diagnostics, HFT/automotive instrumentation |
 | **channel** | Bounded MPSC, oneshot, broadcast, watch channels, and session endpoints |
-| **sync** | Mutex, semaphore, barrier (N-way rendezvous with leader election), once, notify |
+| **sync** | Mutex, rwlock, semaphore, barrier (N-way rendezvous with leader election), once, notify |
 | **actor** | Wake-driven actors (mailboxes, cast/call) with event-driven supervision trees |
 | **cx** | Capability context and structured concurrency scoping |
 | **codec** | JSON + binary codecs with equivalence checking and schema validation |
@@ -387,7 +387,7 @@ needs the Rust toolchain from `rust-toolchain.toml`. CI runs it on every push
 and pull request with a fixed seed (9, 200 scenarios), and the nightly
 workflow tries a new seed each day. The generator (`tools/twin_run/src/gen.rs`)
 draws lifecycle, cancellation, budget, obligation, region, task-group,
-mpsc, oneshot, broadcast, watch, mutex, semaphore, notify and barrier steps,
+mpsc, oneshot, broadcast, watch, mutex, rwlock, semaphore, notify and barrier steps,
 and about one scenario in twelve queues 17 to 32 tasks on one lock; it
 leaves out race groups (a known tie-break divergence), actors and
 supervision.
@@ -396,8 +396,8 @@ What this covers is what the scenario language (`docs/SCENARIO_DSL_V2.md`)
 can express: lifecycle, cancellation, budgets, obligations, task groups,
 channels, sync primitives, actors and supervision, run under the lab's
 single-worker dispatch. Networking, files, processes, HTTP and live
-(non-deterministic) builds are outside it. Open C-side gaps, such as
-multi-permit semaphore acquires, are listed in that document's §7.
+(non-deterministic) builds are outside it. Open C-side gaps, such as lock
+poisoning, are listed in that document's §7.
 
 ```bash
 make conformance        # executed C-vs-Rust comparison of every v2 fixture
@@ -718,7 +718,7 @@ include/asx/                 Public C headers
   asx_ids.h                  Handle types, type tags, lifecycle enums, cancel kinds
   core/                      Symbols, budgets, cancel, channels, combinators, epochs, circuit breakers
   runtime/                   Scheduler, builder, blocking, I/O, deadline, HFT, automotive
-  sync/                      Sync primitives (mutex, semaphore, barrier, once, notify)
+  sync/                      Sync primitives (mutex, rwlock, semaphore, barrier, once, notify)
   codec/                     Codec abstraction + equivalence checking
   ...                        + actor, cx, time, bytes, stream, security, net, fs, evidence, monitor, etc.
 
@@ -1507,6 +1507,8 @@ Waiters of every primitive and channel are nodes in one runtime-wide pool (`ASX_
 **Mutex**: Cooperative mutual exclusion implemented as a semaphore with count 1. `try_lock()` returns immediately; `lock_begin()`/`poll_lock()` yield until available. No priority inheritance: a waiting task does not raise the lock holder's priority.
 
 **Semaphore**: Counting permit system with configurable initial count, following Rust's `Semaphore`. An acquire takes one permit, or `n` at once with `asx_semaphore_acquire_many_begin` / `asx_semaphore_try_acquire_many` (all or nothing; the permit returns all `n` on release). Waiters queue in arrival order (a waiter joins the line at its first poll that has to wait), and only the front of the line takes permits: a release wakes the front waiter if it can now run, and that waiter, taking its permit, wakes the next. `try_acquire()` is non-blocking and fails while anyone is queued. Integrates with the obligation system for permit tracking. (The mutex instead hands the lock straight to the front waiter on unlock, as Rust's `Mutex` does.)
+
+**RwLock**: Many readers or one writer, following Rust's `RwLock` and its bounded writer-preference policy. A read or write takes the lock at its first poll if it can (a read when no writer holds or waits for it, a write when nobody holds it and no writer is queued); otherwise it joins the line and waits for a grant. A writer's release serves the oldest queued writer unless readers queued before it, who go first; the last reader's release serves the oldest queued writer; after 16 writer hand-offs in a row while a reader waits, the oldest queued reader gets a turn. Grants go to the front of the line even when its task has a cancel request pending; that waiter gives the lock back at its next poll. `try_read` / `try_write` fail while a writer waits. Unlike Rust, a C lock is never poisoned, and a write guard cannot be downgraded.
 
 **Barrier**: N-way rendezvous with leader election, following Rust's `Barrier`. A waiter arrives at its first `poll_wait` (not at `wait_begin`), after the Cx checkpoint that every poll starts with, so an already-cancelled task never arrives. All N must arrive before any proceed; the arrival that completes N trips the barrier and is elected leader (`is_leader = 1`), and the next arrival starts a new round. Cancel-safe: a cancelled waiter withdraws its arrival without tripping the barrier, unless its round already tripped, in which case release wins and the wait succeeds.
 

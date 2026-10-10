@@ -1,10 +1,13 @@
 /*
  * asx/sync/rwlock.h — async read-write lock with guard obligations
  *
- * Allows multiple concurrent readers or a single exclusive writer.
- * Writer-preference fairness: when a writer is waiting, new read
- * requests are blocked until the writer completes. Cancel-safe:
- * cancellation during acquisition does not acquire the lock.
+ * Allows multiple concurrent readers or a single exclusive writer, with
+ * Rust's bounded writer-preference fairness (sync/rwlock.rs): while a
+ * writer waits, new reads queue; a release serves the oldest queued
+ * writer unless readers queued before it, who go first; after 16
+ * consecutive writer hand-offs while readers were queued, the oldest
+ * queued reader gets a turn. Cancel-safe: cancellation during acquisition
+ * does not acquire the lock.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -84,20 +87,25 @@ ASX_API asx_status asx_rwlock_try_read(asx_rwlock_handle handle, asx_rwlock_read
  * ------------------------------------------------------------------- */
 
 /* Try to acquire a write lock immediately. Returns ASX_OK + guard if
- * no readers or writer hold the lock, ASX_E_WOULD_BLOCK otherwise. */
+ * nobody holds the lock and no writer is waiting, ASX_E_WOULD_BLOCK
+ * otherwise. */
 ASX_API asx_status asx_rwlock_try_write(asx_rwlock_handle handle, asx_rwlock_write_guard *out);
 
 /* -------------------------------------------------------------------
  * Read lock (async / poll-based)
  * ------------------------------------------------------------------- */
 
-/* Begin async read-lock. Must be followed by poll_read calls. */
+/* Begin async read-lock. Must be followed by poll_read calls. The waiter
+ * joins the line at its first poll that has to wait, not here. */
 ASX_API ASX_MUST_USE asx_status asx_rwlock_read_begin(asx_rwlock_handle handle,
                                                       asx_rwlock_waiter *out);
 
-/* Poll for read lock. Returns ASX_OK + guard when acquired,
- * ASX_E_PENDING when waiting; inside a scheduler poll the calling task is
- * then parked until an unlock grants it the lock (or close). */
+/* Poll for read lock (a non-NULL cx is checkpointed first; giving up
+ * returns its status). The first poll takes the lock if no writer holds
+ * or waits for it; otherwise the waiter joins the line, and later polls
+ * return ASX_OK only once an unlock has granted it the lock. Returns
+ * ASX_E_PENDING while waiting; inside a scheduler poll the calling task is
+ * then parked until a grant (or close). */
 ASX_API asx_status asx_rwlock_poll_read(asx_rwlock_waiter *waiter, asx_rwlock_read_guard *out,
                                         asx_cx *cx);
 
@@ -105,14 +113,19 @@ ASX_API asx_status asx_rwlock_poll_read(asx_rwlock_waiter *waiter, asx_rwlock_re
  * Write lock (async / poll-based)
  * ------------------------------------------------------------------- */
 
-/* Begin async write-lock. Must be followed by poll_write calls. */
+/* Begin async write-lock. Must be followed by poll_write calls. The
+ * waiter joins the line at its first poll that has to wait, not here. */
 ASX_API ASX_MUST_USE asx_status asx_rwlock_write_begin(asx_rwlock_handle handle,
                                                        asx_rwlock_waiter *out);
 
-/* Poll for write lock. Returns ASX_OK + guard when acquired,
- * ASX_E_PENDING when waiting. Writers are served in arrival (FIFO) order;
- * inside a scheduler poll the calling task is then parked until an unlock
- * grants it the lock (or close). */
+/* Poll for write lock (a non-NULL cx is checkpointed first). The first
+ * poll takes the lock if nobody holds it and no writer is queued;
+ * otherwise the waiter joins the line, counts as a waiting writer, and
+ * later polls return ASX_OK only once an unlock has granted it the lock.
+ * Writers are served in arrival (FIFO) order. Returns ASX_E_PENDING while
+ * waiting; inside a scheduler poll the calling task is then parked until a
+ * grant (or close). Polling a waiter of the other kind returns
+ * ASX_E_INVALID_STATE. */
 ASX_API asx_status asx_rwlock_poll_write(asx_rwlock_waiter *waiter, asx_rwlock_write_guard *out,
                                          asx_cx *cx);
 
@@ -121,8 +134,9 @@ ASX_API asx_status asx_rwlock_poll_write(asx_rwlock_waiter *waiter, asx_rwlock_w
  * ------------------------------------------------------------------- */
 
 /* Cancel an async read or write acquisition (safe even if acquired). A
- * lock already granted to the waiter is returned and passes on to the
- * parked waiters it unblocks. */
+ * lock already granted to the waiter is released as an unlock would;
+ * a queued writer that was the last waiting writer, with no writer
+ * holding the lock, admits every queued reader. */
 ASX_API asx_status asx_rwlock_waiter_cancel(asx_rwlock_waiter *waiter);
 
 /* -------------------------------------------------------------------

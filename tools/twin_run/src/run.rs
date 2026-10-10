@@ -383,6 +383,9 @@ struct Local {
     /// same path (`OwnedMutexGuard::lock`, :913).
     guards: BTreeMap<String, asx_sync::OwnedMutexGuard<()>>,
     permits: BTreeMap<String, Vec<asx_sync::SemaphorePermit<'static>>>,
+    /// Held rwlock guards by lock name, oldest first (owned, as for
+    /// mutexes: `OwnedRwLockReadGuard::read`, sync/rwlock.rs:1155).
+    rw_guards: BTreeMap<String, Vec<RwGuard>>,
     /// Held mpsc send permits by permit name, with their channel (DSL
     /// §3.6). Declared before `cx` and `mpsc_tx` so they drop first: each
     /// borrows its channel's sender and the Cx it was reserved with
@@ -562,9 +565,17 @@ fn watch_recv_status(err: watch::RecvError) -> &'static str {
 #[derive(Clone)]
 enum SyncObj {
     Mutex(Arc<asx_sync::Mutex<()>>),
+    RwLock(Arc<asx_sync::RwLock<()>>),
     Semaphore(&'static asx_sync::Semaphore),
     Barrier(&'static asx_sync::Barrier),
     Notify(&'static asx_sync::Notify),
+}
+
+/// A held rwlock guard; dropping it releases the lock.
+#[expect(dead_code, reason = "a guard is held only for its Drop")]
+enum RwGuard {
+    Read(asx_sync::OwnedRwLockReadGuard<()>),
+    Write(asx_sync::OwnedRwLockWriteGuard<()>),
 }
 
 fn sync_obj(shared: &SharedRef, step: &Value, field: &str) -> RunResult<SyncObj> {
@@ -582,6 +593,14 @@ fn lock_error_status(err: asx_sync::LockError) -> &'static str {
     match err {
         E::Cancelled => "ASX_E_CANCELLED",
         E::TimedOut(_) => "ASX_E_TIMED_OUT",
+        E::Poisoned | E::PolledAfterCompletion => "ASX_E_INVALID_STATE",
+    }
+}
+
+fn rwlock_error_status(err: asx_sync::RwLockError) -> &'static str {
+    use asx_sync::RwLockError as E;
+    match err {
+        E::Cancelled => "ASX_E_CANCELLED",
         E::Poisoned | E::PolledAfterCompletion => "ASX_E_INVALID_STATE",
     }
 }
@@ -839,6 +858,18 @@ fn exec_sync(
                     "ASX_OK"
                 }
                 None => NOT_HELD, // its mutex_lock failed (DSL §3)
+            };
+            observe(&ctx.shared, me, idx, label, status, Value::Null);
+        }
+        "rwlock_unlock" => {
+            // Drops the task's most recent guard on the lock (read or write).
+            let name = str_field(step, "rwlock")?;
+            let status = match local.rw_guards.get_mut(name).and_then(Vec::pop) {
+                Some(guard) => {
+                    drop(guard);
+                    "ASX_OK"
+                }
+                None => NOT_HELD, // its rwlock_read / rwlock_write failed (DSL §3)
             };
             observe(&ctx.shared, me, idx, label, status, Value::Null);
         }
@@ -1123,6 +1154,29 @@ async fn exec_step(
                     "ASX_OK"
                 }
                 Err(e) => lock_error_status(e),
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "rwlock_read" | "rwlock_write" => {
+            let name = str_field(step, "rwlock")?.to_string();
+            let SyncObj::RwLock(l) = sync_obj(&ctx.shared, step, "rwlock")? else {
+                return Err(format!("{name:?} is not an rwlock"));
+            };
+            let acquired = if op == "rwlock_read" {
+                asx_sync::OwnedRwLockReadGuard::read(l, cx)
+                    .await
+                    .map(RwGuard::Read)
+            } else {
+                asx_sync::OwnedRwLockWriteGuard::write(l, cx)
+                    .await
+                    .map(RwGuard::Write)
+            };
+            let status = match acquired {
+                Ok(guard) => {
+                    local.rw_guards.entry(name).or_default().push(guard);
+                    "ASX_OK"
+                }
+                Err(e) => rwlock_error_status(e),
             };
             observe(&ctx.shared, me, idx, op, status, Value::Null);
         }
@@ -1778,6 +1832,7 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
         };
         let obj = match str_field(decl, "type")? {
             "mutex" => SyncObj::Mutex(Arc::new(asx_sync::Mutex::new(()))),
+            "rwlock" => SyncObj::RwLock(Arc::new(asx_sync::RwLock::new(()))),
             "semaphore" => SyncObj::Semaphore(Box::leak(Box::new(asx_sync::Semaphore::new(
                 count("permits")?,
             )))),
