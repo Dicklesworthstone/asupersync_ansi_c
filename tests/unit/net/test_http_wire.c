@@ -16,6 +16,7 @@
 #include <asx/net/net.h>
 #include <asx/net/server.h>
 #include <asx/runtime/browser_boundary.h>
+#include <asx/runtime/runtime.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -1334,7 +1335,7 @@ static int e2e_setup(uint16_t port, const asx_http_server_config *override) {
         return 0;
     }
     asx_server_config_init(&scfg);
-    scfg.listen_port = port;
+    scfg.listen_addr = asx_socket_addr_loopback(port);
     asx_server_init(&g_srv, &scfg);
     if (asx_server_listen(&g_srv) != ASX_OK) return 0;
     if (override != NULL) {
@@ -1818,6 +1819,235 @@ TEST(e2e_max_requests_and_drain) {
     ASSERT_EQ(asx_http_client_conn_close(&g_client), ASX_OK);
 }
 
+/* Timeouts and limits (bd-9kll.10.3) run on a clock the test moves, in
+ * deterministic and live builds alike. */
+static asx_time g_test_now;
+
+static asx_time test_clock(void *ctx) {
+    (void)ctx;
+    return g_test_now;
+}
+
+static int use_test_clock(void) {
+    asx_runtime_hooks hooks;
+    g_test_now = 0u;
+    if (asx_runtime_hooks_init(&hooks) != ASX_OK) return 0;
+    hooks.clock.now_ns_fn = test_clock;
+    hooks.clock.logical_now_ns_fn = test_clock;
+    return asx_runtime_set_hooks(&hooks) == ASX_OK;
+}
+
+static void restore_default_clock(void) {
+    asx_runtime_hooks hooks;
+    if (asx_runtime_hooks_init(&hooks) == ASX_OK) (void)asx_runtime_set_hooks(&hooks);
+}
+
+static void set_ms(uint32_t ms) { g_test_now = (asx_time)ms * 1000000u; }
+
+/* The server closed `s`: a read finds end of stream. */
+static int peer_closed(asx_tcp_stream s) {
+    static asx_buf_mut rx;
+    uint32_t n = 1u;
+    asx_buf_mut_init(&rx);
+    return asx_tcp_stream_poll_read(s, &rx, &n) == ASX_OK && n == 0u;
+}
+
+/* An idle keep-alive connection is closed once idle_timeout_ms passes
+ * after its last response (Rust's Http1Config::idle_timeout). */
+TEST(e2e_idle_keepalive_connection_times_out) {
+    asx_http_server_config cfg;
+    asx_socket_addr addr;
+    asx_tcp_stream stream;
+
+    if (!server_available()) return;
+    ASSERT_TRUE(use_test_clock());
+    asx_http_server_config_init(&cfg, NULL);
+    ASSERT_EQ(cfg.idle_timeout_ms, 60000u);
+    ASSERT_EQ(cfg.max_requests, 1000u);
+    cfg.idle_timeout_ms = 1000u;
+    ASSERT_TRUE(e2e_setup(18090u, &cfg));
+    addr = asx_socket_addr_loopback(18090u);
+
+    set_ms(100u);
+    ASSERT_EQ(asx_tcp_connect(&stream, &addr), ASX_OK);
+    ASSERT_EQ(asx_http_client_conn_init(&g_client, stream, NULL), ASX_OK);
+    asx_http_request_init(&g_req, ASX_HTTP_GET, "/users/1");
+    ASSERT_EQ(asx_http_headers_add(&g_req.headers, "Host", "a"), ASX_OK);
+    ASSERT_EQ(asx_http_client_conn_send(&g_client, &g_req, NULL), ASX_OK);
+    ASSERT_EQ(exchange(&g_client, &g_resp), ASX_OK);
+    ASSERT_TRUE(asx_http_client_conn_reusable(&g_client));
+
+    set_ms(1099u); /* response sent at 100 ms: 999 ms idle */
+    pump(2u);
+    ASSERT_EQ(asx_http_server_active_conns(&g_hs), 1u);
+    set_ms(1100u);
+    pump(1u);
+    ASSERT_EQ(asx_http_server_active_conns(&g_hs), 0u);
+    ASSERT_EQ(g_hs.connections_timed_out, 1u);
+    ASSERT_TRUE(peer_closed(stream));
+    ASSERT_EQ(asx_http_client_conn_close(&g_client), ASX_OK);
+    restore_default_clock();
+}
+
+/* Slowloris: a client trickling a request head keeps no slot past the
+ * idle timeout (the whole request reads under one window), and clients
+ * that arrive meanwhile are served. */
+TEST(e2e_slow_request_times_out_while_others_are_served) {
+    asx_http_server_config cfg;
+    asx_socket_addr addr;
+    asx_tcp_stream slow;
+    asx_tcp_stream stream;
+
+    if (!server_available()) return;
+    ASSERT_TRUE(use_test_clock());
+    asx_http_server_config_init(&cfg, NULL);
+    cfg.idle_timeout_ms = 1000u;
+    ASSERT_TRUE(e2e_setup(18091u, &cfg));
+    addr = asx_socket_addr_loopback(18091u);
+
+    ASSERT_EQ(asx_tcp_connect(&slow, &addr), ASX_OK);
+    ASSERT_TRUE(raw_write(slow, LIT("GET /users/1 HTTP/1.1\r\nHo")));
+    pump(2u);
+    set_ms(600u);
+    ASSERT_TRUE(raw_write(slow, LIT("st: a\r\n"))); /* progress does not extend it */
+    pump(2u);
+    ASSERT_EQ(asx_http_server_active_conns(&g_hs), 1u);
+
+    ASSERT_EQ(asx_tcp_connect(&stream, &addr), ASX_OK);
+    ASSERT_EQ(asx_http_client_conn_init(&g_client, stream, NULL), ASX_OK);
+    asx_http_request_init(&g_req, ASX_HTTP_GET, "/users/2");
+    ASSERT_EQ(asx_http_headers_add(&g_req.headers, "Host", "a"), ASX_OK);
+    ASSERT_EQ(asx_http_client_conn_send(&g_client, &g_req, NULL), ASX_OK);
+    ASSERT_EQ(exchange(&g_client, &g_resp), ASX_OK);
+    ASSERT_TRUE(resp_body_is(&g_resp, "id=2 page=none"));
+
+    set_ms(1000u);
+    pump(1u);
+    ASSERT_EQ(g_hs.connections_timed_out, 1u);
+    ASSERT_EQ(asx_http_server_active_conns(&g_hs), 1u); /* the fresh one stays */
+    ASSERT_EQ(raw_read_all(slow), 0u);                  /* no response, just closed */
+    ASSERT_TRUE(peer_closed(slow));
+    (void)asx_tcp_stream_close(slow);
+    ASSERT_EQ(asx_http_client_conn_close(&g_client), ASX_OK);
+    restore_default_clock();
+}
+
+/* At its connection limit the server accepts and closes extra clients at
+ * once (Rust's listener drops them), so they fail fast instead of waiting
+ * in the backlog behind idle connections; the held connection still works. */
+TEST(e2e_full_server_rejects_extra_clients_fast) {
+    asx_socket_addr addr;
+    asx_tcp_stream stream;
+    asx_tcp_stream extra;
+
+    if (!server_available()) return;
+    ASSERT_TRUE(e2e_setup(18092u, NULL));
+    g_srv.config.max_connections = 1u;
+    addr = asx_socket_addr_loopback(18092u);
+
+    ASSERT_EQ(asx_tcp_connect(&stream, &addr), ASX_OK);
+    ASSERT_EQ(asx_http_client_conn_init(&g_client, stream, NULL), ASX_OK);
+    asx_http_request_init(&g_req, ASX_HTTP_GET, "/users/1");
+    ASSERT_EQ(asx_http_headers_add(&g_req.headers, "Host", "a"), ASX_OK);
+    ASSERT_EQ(asx_http_client_conn_send(&g_client, &g_req, NULL), ASX_OK);
+    ASSERT_EQ(exchange(&g_client, &g_resp), ASX_OK);
+
+    ASSERT_EQ(asx_tcp_connect(&extra, &addr), ASX_OK);
+    pump(1u);
+    ASSERT_EQ(asx_server_total_rejected(&g_srv), 1u);
+    ASSERT_TRUE(peer_closed(extra));
+    ASSERT_EQ(asx_http_server_active_conns(&g_hs), 1u);
+
+    ASSERT_EQ(asx_http_client_conn_send(&g_client, &g_req, NULL), ASX_OK);
+    ASSERT_EQ(exchange(&g_client, &g_resp), ASX_OK);
+    ASSERT_EQ(g_resp.status, ASX_HTTP_200_OK);
+    (void)asx_tcp_stream_close(extra);
+    ASSERT_EQ(asx_http_client_conn_close(&g_client), ASX_OK);
+}
+
+/* drain_timeout_ms is enforced: a connection stuck mid-request is closed
+ * at the drain deadline and the server stops. */
+TEST(e2e_drain_deadline_closes_stuck_connections) {
+    asx_http_server_config cfg;
+    asx_socket_addr addr;
+    asx_tcp_stream stuck;
+    asx_time deadline = 0u;
+
+    if (!server_available()) return;
+    ASSERT_TRUE(use_test_clock());
+    asx_http_server_config_init(&cfg, NULL);
+    cfg.idle_timeout_ms = 0u; /* only the drain deadline applies */
+    ASSERT_TRUE(e2e_setup(18093u, &cfg));
+    g_srv.config.drain_timeout_ms = 500u;
+    addr = asx_socket_addr_loopback(18093u);
+
+    ASSERT_EQ(asx_tcp_connect(&stuck, &addr), ASX_OK);
+    ASSERT_TRUE(
+        raw_write(stuck, LIT("POST /echo HTTP/1.1\r\nHost: a\r\nContent-Length: 9\r\n\r\nab")));
+    pump(2u);
+    ASSERT_EQ(asx_http_server_active_conns(&g_hs), 1u);
+
+    set_ms(200u);
+    ASSERT_EQ(asx_server_shutdown(&g_srv), ASX_OK);
+    ASSERT_EQ(asx_server_drain_deadline(&g_srv, &deadline), ASX_OK);
+    ASSERT_EQ(deadline, (asx_time)700u * 1000000u);
+    ASSERT_EQ(asx_http_server_poll(&g_hs), ASX_E_PENDING);
+    set_ms(699u);
+    ASSERT_EQ(asx_http_server_poll(&g_hs), ASX_E_PENDING);
+    ASSERT_EQ(asx_http_server_active_conns(&g_hs), 1u);
+
+    set_ms(700u);
+    ASSERT_EQ(asx_http_server_poll(&g_hs), ASX_OK);
+    ASSERT_EQ(asx_http_server_active_conns(&g_hs), 0u);
+    ASSERT_EQ(g_hs.connections_drain_closed, 1u);
+    ASSERT_EQ(asx_server_get_state(&g_srv), ASX_SERVER_STATE_STOPPED);
+    ASSERT_TRUE(peer_closed(stuck));
+    (void)asx_tcp_stream_close(stuck);
+    restore_default_clock();
+}
+
+#if ASX_DETERMINISTIC
+static asx_status http_server_task(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    return asx_http_server_poll(&g_hs);
+}
+
+/* Under the scheduler the server task parks on I/O and its timer: with
+ * nothing else to do, the virtual clock jumps to the idle deadline, the
+ * task wakes and closes the connection, then waits for clients again. */
+TEST(e2e_idle_timeout_wakes_the_server_task) {
+    asx_http_server_config cfg;
+    asx_socket_addr addr;
+    asx_tcp_stream stream;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget b;
+    asx_time start;
+
+    if (!server_available()) return;
+    asx_runtime_reset();
+    restore_default_clock();
+    asx_http_server_config_init(&cfg, NULL);
+    cfg.idle_timeout_ms = 5000u;
+    ASSERT_TRUE(e2e_setup(18094u, &cfg));
+    addr = asx_socket_addr_loopback(18094u);
+    ASSERT_EQ(asx_tcp_connect(&stream, &addr), ASX_OK);
+    start = asx_runtime_virtual_now();
+
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, http_server_task, NULL, &t), ASX_OK);
+    b = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &b), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(g_hs.connections_timed_out, 1u);
+    ASSERT_EQ(asx_http_server_active_conns(&g_hs), 0u);
+    ASSERT_TRUE(asx_runtime_virtual_now() >= start + (asx_time)5000u * 1000000u);
+    ASSERT_TRUE(peer_closed(stream));
+    (void)asx_tcp_stream_close(stream);
+    asx_runtime_reset();
+}
+#endif
+
 TEST(e2e_client_parses_chunked_and_close_delimited) {
     static const char chunked[] = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
                                   "4\r\nWiki\r\n5;x=y\r\npedia\r\n0\r\nX-T: 1\r\n\r\n";
@@ -1944,6 +2174,13 @@ int main(void) {
     RUN_TEST(e2e_head_mirrors_get_without_body);
     RUN_TEST(e2e_streaming_request_body_sink);
     RUN_TEST(e2e_max_requests_and_drain);
+    RUN_TEST(e2e_idle_keepalive_connection_times_out);
+    RUN_TEST(e2e_slow_request_times_out_while_others_are_served);
+    RUN_TEST(e2e_full_server_rejects_extra_clients_fast);
+    RUN_TEST(e2e_drain_deadline_closes_stuck_connections);
+#if ASX_DETERMINISTIC
+    RUN_TEST(e2e_idle_timeout_wakes_the_server_task);
+#endif
     RUN_TEST(e2e_client_parses_chunked_and_close_delimited);
     RUN_TEST(e2e_client_rejects_malformed_response);
 #endif

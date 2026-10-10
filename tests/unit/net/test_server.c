@@ -19,7 +19,7 @@ TEST(server_config_defaults) {
     asx_server_config cfg;
     asx_server_config_init(&cfg);
     ASSERT_EQ(cfg.max_connections, ASX_SERVER_MAX_CONNECTIONS);
-    ASSERT_EQ(cfg.drain_timeout_ms, 5000u);
+    ASSERT_EQ(cfg.drain_timeout_ms, 30000u);
 }
 
 TEST(server_init_and_state) {
@@ -41,7 +41,7 @@ TEST(server_listen_and_accept) {
 
     asx_net_reset();
     asx_server_config_init(&cfg);
-    cfg.listen_port = 14000;
+    cfg.listen_addr = asx_socket_addr_loopback(14000);
     asx_server_init(&srv, &cfg);
 
     if (!server_surface_available()) {
@@ -72,7 +72,7 @@ TEST(server_close_conn) {
 
     asx_net_reset();
     asx_server_config_init(&cfg);
-    cfg.listen_port = 14001;
+    cfg.listen_addr = asx_socket_addr_loopback(14001);
     asx_server_init(&srv, &cfg);
     if (!server_surface_available()) {
         ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
@@ -103,7 +103,7 @@ TEST(server_accept_empty_pending) {
 
     asx_net_reset();
     asx_server_config_init(&cfg);
-    cfg.listen_port = 14002;
+    cfg.listen_addr = asx_socket_addr_loopback(14002);
     asx_server_init(&srv, &cfg);
     if (!server_surface_available()) {
         ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
@@ -121,7 +121,7 @@ TEST(server_graceful_shutdown) {
 
     asx_net_reset();
     asx_server_config_init(&cfg);
-    cfg.listen_port = 14003;
+    cfg.listen_addr = asx_socket_addr_loopback(14003);
     asx_server_init(&srv, &cfg);
     if (!server_surface_available()) {
         ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
@@ -144,7 +144,7 @@ TEST(server_shutdown_with_active_conns_drains) {
 
     asx_net_reset();
     asx_server_config_init(&cfg);
-    cfg.listen_port = 14004;
+    cfg.listen_addr = asx_socket_addr_loopback(14004);
     asx_server_init(&srv, &cfg);
     if (!server_surface_available()) {
         ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
@@ -176,7 +176,7 @@ TEST(server_listen_twice_fails) {
 
     asx_net_reset();
     asx_server_config_init(&cfg);
-    cfg.listen_port = 14005;
+    cfg.listen_addr = asx_socket_addr_loopback(14005);
     asx_server_init(&srv, &cfg);
     if (!server_surface_available()) {
         ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
@@ -202,7 +202,7 @@ TEST(server_multiple_clients) {
 
     asx_net_reset();
     asx_server_config_init(&cfg);
-    cfg.listen_port = 14010;
+    cfg.listen_addr = asx_socket_addr_loopback(14010);
     asx_server_init(&srv, &cfg);
     if (!server_surface_available()) {
         ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
@@ -261,7 +261,7 @@ TEST(memory_accept_parks_until_a_client_connects) {
     asx_runtime_reset();
     asx_net_reset();
     asx_server_config_init(&cfg);
-    cfg.listen_port = 14100;
+    cfg.listen_addr = asx_socket_addr_loopback(14100);
     asx_server_init(&srv, &cfg);
     if (!server_surface_available() || asx_net_get_backend() != ASX_NET_BACKEND_MEMORY) return;
     ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
@@ -290,7 +290,7 @@ TEST(server_stop_idempotent) {
 
     asx_net_reset();
     asx_server_config_init(&cfg);
-    cfg.listen_port = 14011;
+    cfg.listen_addr = asx_socket_addr_loopback(14011);
     asx_server_init(&srv, &cfg);
     if (!server_surface_available()) {
         ASSERT_EQ(asx_server_listen(&srv), ASX_E_PERMISSION_DENIED);
@@ -310,7 +310,7 @@ TEST(server_shutdown_idle_goes_stopped) {
 
     asx_net_reset();
     asx_server_config_init(&cfg);
-    cfg.listen_port = 14012;
+    cfg.listen_addr = asx_socket_addr_loopback(14012);
     asx_server_init(&srv, &cfg);
     if (!server_surface_available()) {
         ASSERT_EQ(asx_server_shutdown(&srv), ASX_E_PERMISSION_DENIED);

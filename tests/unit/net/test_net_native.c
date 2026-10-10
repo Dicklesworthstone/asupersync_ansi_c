@@ -581,7 +581,7 @@ TEST(http_keepalive_exchange_over_real_sockets) {
                                         NULL),
               ASX_OK);
     asx_server_config_init(&scfg);
-    scfg.listen_port = 0u; /* ephemeral */
+    scfg.listen_addr = asx_socket_addr_loopback(0u); /* ephemeral */
     asx_server_init(&g_srv, &scfg);
     ASSERT_EQ(asx_server_listen(&g_srv), ASX_OK);
     asx_http_server_config_init(&hcfg, &g_router);

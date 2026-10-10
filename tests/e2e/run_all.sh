@@ -36,6 +36,7 @@
 #                           robustness_endian.sh, robustness_exhaustion.sh
 #   GATE-E2E-NATIVE-HOST   native_host.sh
 #   GATE-E2E-SERVER        server_shutdown.sh
+#   GATE-E2E-HTTP          http_robustness.sh
 #   GATE-E2E-PARALLEL-SWARM parallel_swarm.sh
 #   GATE-E2E-EXAMPLES      examples_smoke.sh
 #   GATE-E2E-BROWSER       browser_smoke.sh
@@ -135,6 +136,7 @@ E2E_FAMILIES=(
     "GATE-E2E-ROBUSTNESS:robustness_exhaustion.sh"
     "GATE-E2E-NATIVE-HOST:native_host.sh"
     "GATE-E2E-SERVER:server_shutdown.sh"
+    "GATE-E2E-HTTP:http_robustness.sh"
     "GATE-E2E-PARALLEL-SWARM:parallel_swarm.sh"
     "GATE-E2E-EXAMPLES:examples_smoke.sh"
     "GATE-E2E-BROWSER:browser_smoke.sh"

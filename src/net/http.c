@@ -12,6 +12,7 @@
 #include <asx/fs/fs.h>
 #include <asx/net/http.h>
 #include <asx/runtime/browser_boundary.h>
+#include <asx/runtime/runtime.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -3248,12 +3249,18 @@ void asx_http_server_config_init(asx_http_server_config *cfg, asx_http_router *r
     memset(cfg, 0, sizeof(*cfg));
     cfg->router = router;
     asx_http_limits_init(&cfg->limits);
-    cfg->max_requests = 0u;
+    cfg->max_requests = 1000u;
+    cfg->idle_timeout_ms = 60000u;
     cfg->keep_alive_enabled = 1u;
     cfg->auto_continue = 1u;
     cfg->emit_date = 0u;
     cfg->body_sink = NULL;
     cfg->body_sink_ctx = NULL;
+}
+
+/* Start a new idle-timeout window now (no window without a runtime clock). */
+static void http_server_window_restart(asx_http_server_conn *c) {
+    c->window_open = (uint8_t)(asx_runtime_now_ns(&c->window_start) == ASX_OK);
 }
 
 asx_status asx_http_server_conn_init(asx_http_server_conn *c, asx_tcp_stream stream,
@@ -3274,11 +3281,20 @@ asx_status asx_http_server_conn_init(asx_http_server_conn *c, asx_tcp_stream str
     asx_http_response_init(&c->response, ASX_HTTP_200_OK);
     c->state = ASX_HTTP_CONN_READING;
     c->last_error = ASX_HTTP_PERR_NONE;
+    http_server_window_restart(c);
     return ASX_OK;
 }
 
 static int http_server_tx_pending(const asx_http_server_conn *c) {
     return c->tx_pos < c->tx_len || (c->tx_body != NULL && c->tx_body_pos < c->tx_body_len);
+}
+
+/* The idle-timeout deadline of the current window; 0 when there is none
+ * (no timeout configured, or no runtime clock when the window opened). */
+static int http_server_deadline(const asx_http_server_conn *c, asx_time *out) {
+    if (c->config.idle_timeout_ms == 0u || !c->window_open) return 0;
+    *out = c->window_start + (asx_time)c->config.idle_timeout_ms * 1000000u;
+    return 1;
 }
 
 static void http_server_close(asx_http_server_conn *c) {
@@ -3333,6 +3349,7 @@ static void http_server_queue_response(asx_http_server_conn *c, int keep, int he
     c->tx_body_pos = 0u;
     c->close_after_write = (uint8_t)!keep;
     c->state = ASX_HTTP_CONN_WRITING;
+    http_server_window_restart(c);
 }
 
 /* Answer a protocol failure with the mapped status and close afterwards. */
@@ -3358,6 +3375,7 @@ static void http_server_queue_continue(asx_http_server_conn *c) {
     c->tx_body_len = 0u;
     c->tx_body_pos = 0u;
     c->state = ASX_HTTP_CONN_WRITING;
+    http_server_window_restart(c);
 }
 
 static void http_server_dispatch(asx_http_server_conn *c) {
@@ -3461,19 +3479,22 @@ static asx_status http_server_process_input(asx_http_server_conn *c) {
     return ASX_OK;
 }
 
-asx_status asx_http_server_conn_poll(asx_http_server_conn *c) {
+static asx_status http_server_conn_step(asx_http_server_conn *c) {
     uint32_t guard;
-
-    if (c == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (c->state == ASX_HTTP_CONN_CLOSED) return ASX_OK;
 
     for (guard = 0u; guard < HTTP_CONN_POLL_STEPS; guard++) {
         asx_status st;
 
         if (http_server_tx_pending(c)) {
+            uint32_t head_pos = c->tx_pos;
+            uint32_t body_pos = c->tx_body_pos;
             st = http_stream_flush(c->stream, c->tx, c->tx_len, &c->tx_pos);
             if (st == ASX_OK && c->tx_body != NULL) {
                 st = http_stream_flush(c->stream, c->tx_body, c->tx_body_len, &c->tx_body_pos);
+            }
+            /* Bytes went out: the stalled-write window starts over. */
+            if (c->tx_pos != head_pos || c->tx_body_pos != body_pos) {
+                http_server_window_restart(c);
             }
             if (http_is_wait_status(st)) return ASX_E_PENDING;
             if (st != ASX_OK) {
@@ -3533,6 +3554,29 @@ asx_status asx_http_server_conn_poll(asx_http_server_conn *c) {
     return ASX_E_PENDING;
 }
 
+asx_status asx_http_server_conn_poll(asx_http_server_conn *c) {
+    asx_time deadline;
+    asx_time now;
+    asx_status st;
+
+    if (c == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (c->state == ASX_HTTP_CONN_CLOSED) return ASX_OK;
+
+    if (http_server_deadline(c, &deadline) && asx_runtime_now_ns(&now) == ASX_OK &&
+        now >= deadline) {
+        c->timed_out = 1u;
+        http_server_close(c);
+        return ASX_E_TIMED_OUT;
+    }
+    st = http_server_conn_step(c);
+    if (st == ASX_E_PENDING && http_server_deadline(c, &deadline)) {
+        /* Wake the polling task (if any) to enforce the deadline. */
+        asx_status armed = asx_task_arm_timer(asx_task_current(), deadline);
+        (void)armed;
+    }
+    return st;
+}
+
 void asx_http_server_conn_request_close(asx_http_server_conn *c) {
     if (c == NULL || c->state == ASX_HTTP_CONN_CLOSED) return;
     c->drain_requested = 1u;
@@ -3568,19 +3612,59 @@ asx_status asx_http_server_init(asx_http_server *hs, asx_server *srv,
     return ASX_OK;
 }
 
+/* Accepts per poll, so a burst of clients cannot monopolize one poll. */
+#define HTTP_SERVER_ACCEPT_STEPS (ASX_HTTP_SERVER_MAX_CONNS + 8u)
+
+/* Accept pending clients into free slots; with no slot (or the asx_server
+ * at max_connections), accept and close them, so they fail fast. */
 static void http_server_accept_pending(asx_http_server *hs) {
-    uint32_t slot;
+    uint32_t slot = 0u;
+    uint32_t guard;
 
-    for (slot = 0u; slot < ASX_HTTP_SERVER_MAX_CONNS; slot++) {
+    for (guard = 0u; guard < HTTP_SERVER_ACCEPT_STEPS; guard++) {
         asx_server_conn conn;
+        asx_status st;
 
-        if (hs->conn_ids[slot] != 0u) continue;
-        if (asx_server_poll_accept(hs->server, &conn) != ASX_OK) return;
+        while (slot < ASX_HTTP_SERVER_MAX_CONNS && hs->conn_ids[slot] != 0u) slot++;
+        st = slot < ASX_HTTP_SERVER_MAX_CONNS ? asx_server_poll_accept(hs->server, &conn)
+                                              : ASX_E_RESOURCE_EXHAUSTED;
+        if (st == ASX_E_RESOURCE_EXHAUSTED) {
+            if (asx_server_reject_pending(hs->server) != ASX_OK) return;
+            continue;
+        }
+        if (st != ASX_OK) return;
         if (asx_http_server_conn_init(&hs->conns[slot], conn.stream, &hs->config) != ASX_OK) {
             (void)asx_server_close_conn(hs->server, conn.id);
             return;
         }
         hs->conn_ids[slot] = conn.id;
+    }
+    /* More may be pending: poll again rather than wait for a new wake. */
+    {
+        asx_status woke = asx_task_wake(asx_task_current());
+        (void)woke;
+    }
+}
+
+/* At the drain deadline, close whatever is left; before it, wake the
+ * polling task then. */
+static void http_server_enforce_drain(asx_http_server *hs) {
+    asx_time deadline;
+    asx_time now;
+    uint32_t slot;
+
+    if (asx_server_drain_deadline(hs->server, &deadline) != ASX_OK) return;
+    if (asx_http_server_active_conns(hs) == 0u) return;
+    if (asx_runtime_now_ns(&now) != ASX_OK) return;
+    if (now < deadline) {
+        asx_status armed = asx_task_arm_timer(asx_task_current(), deadline);
+        (void)armed;
+        return;
+    }
+    for (slot = 0u; slot < ASX_HTTP_SERVER_MAX_CONNS; slot++) {
+        if (hs->conn_ids[slot] == 0u || hs->conns[slot].state == ASX_HTTP_CONN_CLOSED) continue;
+        http_server_close(&hs->conns[slot]);
+        hs->connections_drain_closed++;
     }
 }
 
@@ -3596,6 +3680,7 @@ asx_status asx_http_server_poll(asx_http_server *hs) {
     state = asx_server_get_state(hs->server);
     if (state == ASX_SERVER_STATE_LISTENING) http_server_accept_pending(hs);
     state = asx_server_get_state(hs->server);
+    if (state == ASX_SERVER_STATE_DRAINING) http_server_enforce_drain(hs);
 
     for (slot = 0u; slot < ASX_HTTP_SERVER_MAX_CONNS; slot++) {
         asx_http_server_conn *c = &hs->conns[slot];
@@ -3604,6 +3689,7 @@ asx_status asx_http_server_poll(asx_http_server *hs) {
         if (state != ASX_SERVER_STATE_LISTENING) asx_http_server_conn_request_close(c);
         /* Per-connection transport failures close that connection only. */
         st = asx_http_server_conn_poll(c);
+        if (st == ASX_E_TIMED_OUT) hs->connections_timed_out++;
         if (st != ASX_OK && st != ASX_E_PENDING) c->state = ASX_HTTP_CONN_CLOSED;
         if (c->state == ASX_HTTP_CONN_CLOSED) {
             hs->requests_completed_conns += c->requests_served;

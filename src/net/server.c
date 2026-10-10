@@ -21,8 +21,8 @@ void asx_server_config_init(asx_server_config *cfg) {
     if (cfg == NULL) return;
     memset(cfg, 0, sizeof(*cfg));
     cfg->max_connections = ASX_SERVER_MAX_CONNECTIONS;
-    cfg->drain_timeout_ms = 5000u;
-    cfg->listen_port = 0u;
+    cfg->drain_timeout_ms = 30000u;
+    cfg->listen_addr = asx_socket_addr_loopback(0u);
 }
 
 /* ------------------------------------------------------------------ */
@@ -42,7 +42,6 @@ void asx_server_init(asx_server *srv, const asx_server_config *cfg) {
 }
 
 asx_status asx_server_listen(asx_server *srv) {
-    asx_socket_addr addr;
     asx_status st;
 
     if (srv == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -50,8 +49,7 @@ asx_status asx_server_listen(asx_server *srv) {
     if (st != ASX_OK) return st;
     if (srv->state != ASX_SERVER_STATE_IDLE) return ASX_E_INVALID_STATE;
 
-    addr = asx_socket_addr_loopback(srv->config.listen_port);
-    st = asx_tcp_listener_bind(&srv->listener, &addr);
+    st = asx_tcp_listener_bind(&srv->listener, &srv->config.listen_addr);
     if (st != ASX_OK) return st;
 
     srv->listener_bound = 1u;
@@ -78,6 +76,7 @@ asx_status asx_server_poll_accept(asx_server *srv, asx_server_conn *out) {
     }
     if (idx >= ASX_SERVER_MAX_CONNECTIONS) {
         asx_tcp_stream_close(stream);
+        srv->total_rejected++;
         return ASX_E_RESOURCE_EXHAUSTED;
     }
 
@@ -88,6 +87,22 @@ asx_status asx_server_poll_accept(asx_server *srv, asx_server_conn *out) {
     srv->total_accepted++;
 
     *out = srv->connections[idx];
+    return ASX_OK;
+}
+
+asx_status asx_server_reject_pending(asx_server *srv) {
+    asx_tcp_stream stream;
+    asx_status st;
+
+    if (srv == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_surface_gate(ASX_SURFACE_SERVER);
+    if (st != ASX_OK) return st;
+    if (srv->state != ASX_SERVER_STATE_LISTENING) return ASX_E_INVALID_STATE;
+
+    st = asx_tcp_listener_poll_accept(srv->listener, &stream, NULL);
+    if (st != ASX_OK) return st;
+    (void)asx_tcp_stream_close(stream);
+    srv->total_rejected++;
     return ASX_OK;
 }
 
@@ -124,6 +139,14 @@ asx_status asx_server_shutdown(asx_server *srv) {
     if (srv->state != ASX_SERVER_STATE_LISTENING) return ASX_E_INVALID_STATE;
 
     srv->state = ASX_SERVER_STATE_DRAINING;
+    {
+        asx_time now;
+        srv->drain_has_deadline = 0u;
+        if (asx_runtime_now_ns(&now) == ASX_OK) {
+            srv->drain_deadline = now + (asx_time)srv->config.drain_timeout_ms * 1000000u;
+            srv->drain_has_deadline = 1u;
+        }
+    }
     if (srv->listener_bound) {
         asx_tcp_listener_close(srv->listener);
         srv->listener_bound = 0u;
@@ -160,6 +183,19 @@ asx_status asx_server_stop(asx_server *srv) {
 asx_server_state asx_server_get_state(const asx_server *srv) {
     if (srv == NULL) return ASX_SERVER_STATE_STOPPED;
     return srv->state;
+}
+
+asx_status asx_server_drain_deadline(const asx_server *srv, asx_time *out) {
+    if (srv == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (srv->state != ASX_SERVER_STATE_DRAINING) return ASX_E_INVALID_STATE;
+    if (!srv->drain_has_deadline) return ASX_E_HOOK_MISSING;
+    *out = srv->drain_deadline;
+    return ASX_OK;
+}
+
+uint32_t asx_server_total_rejected(const asx_server *srv) {
+    if (srv == NULL) return 0u;
+    return srv->total_rejected;
 }
 
 uint32_t asx_server_active_count(const asx_server *srv) {

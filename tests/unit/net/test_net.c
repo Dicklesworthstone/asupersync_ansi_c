@@ -158,6 +158,39 @@ TEST(tcp_memory_port_namespace) {
     asx_tcp_listener_close(dup);
 }
 
+/* A listener on the unspecified address (0.0.0.0 / ::) takes connections
+ * to its port, and holds that port against specific binds and vice versa,
+ * as the OS's does (bd-9kll.10.3). */
+TEST(tcp_memory_wildcard_listener) {
+    static const uint8_t v6_any[16] = {0};
+    asx_tcp_listener lis, dup;
+    asx_tcp_stream client, server;
+    asx_socket_addr wild4 = asx_socket_addr_ipv4(0, 0, 0, 0, 6200);
+    asx_socket_addr wild6 = asx_socket_addr_ipv6(v6_any, 6201);
+    asx_socket_addr lo4 = asx_socket_addr_loopback(6200);
+    asx_socket_addr lo6 = asx_socket_addr_ipv6_loopback(6201);
+
+    asx_net_reset();
+    if (asx_net_get_backend() != ASX_NET_BACKEND_MEMORY) return;
+    ASSERT_EQ(asx_tcp_listener_bind(&lis, &wild4), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_bind(&dup, &lo4), ASX_E_ALREADY_EXISTS);
+    ASSERT_EQ(asx_tcp_connect(&client, &lo4), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &server, NULL), ASX_OK);
+    asx_tcp_stream_close(client);
+    asx_tcp_stream_close(server);
+    asx_tcp_listener_close(lis);
+
+    ASSERT_EQ(asx_tcp_listener_bind(&lis, &lo6), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_bind(&dup, &wild6), ASX_E_ALREADY_EXISTS);
+    asx_tcp_listener_close(lis);
+    ASSERT_EQ(asx_tcp_listener_bind(&lis, &wild6), ASX_OK);
+    ASSERT_EQ(asx_tcp_connect(&client, &lo6), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &server, NULL), ASX_OK);
+    asx_tcp_stream_close(client);
+    asx_tcp_stream_close(server);
+    asx_tcp_listener_close(lis);
+}
+
 /* ------------------------------------------------------------------ */
 /* TCP stream tests                                                    */
 /* ------------------------------------------------------------------ */
@@ -1232,6 +1265,7 @@ int main(void) {
     RUN_TEST(tcp_listener_accept_empty_returns_pending);
     RUN_TEST(tcp_listener_exhaustion);
     RUN_TEST(tcp_memory_port_namespace);
+    RUN_TEST(tcp_memory_wildcard_listener);
 
     /* TCP stream */
     RUN_TEST(tcp_connect_loopback_creates_linked_pair);

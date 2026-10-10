@@ -479,6 +479,47 @@ static tcp_listener_slot *listener_find_by_addr(const asx_socket_addr *addr) {
     return NULL;
 }
 
+static int net_is_unspecified_addr(const asx_socket_addr *addr) {
+    uint32_t n = addr->family == ASX_AF_INET4 ? 4u : 16u;
+    uint32_t i;
+
+    for (i = 0u; i < n; i++) {
+        if (addr->addr[i] != 0u) return 0;
+    }
+    return 1;
+}
+
+/* A listener on the unspecified address (0.0.0.0 / ::) of addr's family
+ * and port: it takes every connection to that port, as the OS's does. */
+static tcp_listener_slot *listener_find_wildcard(const asx_socket_addr *addr) {
+    uint32_t idx;
+
+    for (idx = 0u; idx < ASX_MAX_TCP_LISTENERS; idx++) {
+        const asx_socket_addr *bound = &g_listeners[idx].addr;
+        if (g_listeners[idx].alive && bound->family == addr->family && bound->port == addr->port &&
+            net_is_unspecified_addr(bound)) {
+            return &g_listeners[idx];
+        }
+    }
+    return NULL;
+}
+
+/* Whether binding addr collides with a listener: the same address, or the
+ * same port when either side is the unspecified address. */
+static int listener_port_taken(const asx_socket_addr *addr) {
+    uint32_t idx;
+
+    if (listener_find_by_addr(addr) != NULL || listener_find_wildcard(addr) != NULL) return 1;
+    if (!net_is_unspecified_addr(addr)) return 0;
+    for (idx = 0u; idx < ASX_MAX_TCP_LISTENERS; idx++) {
+        if (g_listeners[idx].alive && g_listeners[idx].addr.family == addr->family &&
+            g_listeners[idx].addr.port == addr->port) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static tcp_stream_slot *stream_lookup(asx_tcp_stream h) {
     tcp_stream_slot *s;
 
@@ -634,10 +675,12 @@ asx_status asx_tcp_listener_bind_with_cx(asx_tcp_listener *out, const asx_socket
 #endif
 
     /* The in-memory port namespace behaves as the OS's does: an address
-     * already listening is refused (as EADDRINUSE maps natively), and port
-     * 0 takes an ephemeral port (deterministic: the counter restarts at
-     * asx_net_reset), so local_addr reports a port a client can connect to. */
-    if (addr->port != 0u && listener_find_by_addr(addr) != NULL) return ASX_E_ALREADY_EXISTS;
+     * already listening is refused (as EADDRINUSE maps natively), as is a
+     * port held by a listener on the unspecified address or wanted by one;
+     * port 0 takes an ephemeral port (deterministic: the counter restarts
+     * at asx_net_reset), so local_addr reports a port a client can connect
+     * to. */
+    if (addr->port != 0u && listener_port_taken(addr)) return ASX_E_ALREADY_EXISTS;
     for (idx = 0u; idx < ASX_MAX_TCP_LISTENERS; idx++) {
         if (!g_listeners[idx].alive) break;
     }
@@ -800,6 +843,7 @@ asx_status asx_tcp_connect_with_cx(asx_tcp_stream *out, const asx_socket_addr *a
     if (st != ASX_OK) return st;
 
     listener = listener_find_by_addr(addr);
+    if (listener == NULL) listener = listener_find_wildcard(addr);
     if (listener != NULL && net_is_loopback_addr(addr)) {
         asx_tcp_stream accepted_handle;
         tcp_stream_slot *accepted;

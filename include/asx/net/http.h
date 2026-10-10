@@ -924,7 +924,15 @@ typedef struct {
     asx_session_pair *session;
     asx_security_context *security;
     asx_http_limits limits;
-    uint32_t max_requests;           /* per connection; 0 = unlimited */
+    uint32_t max_requests; /* per connection; 0 = unlimited */
+    /* Rust's Http1Config::idle_timeout: how long a connection may wait for
+     * and read one whole request (head and body), idle between keep-alive
+     * requests included, and how long a response write may make no progress
+     * (each write that sends bytes starts a new window). When it elapses the
+     * connection is closed (poll returns ASX_E_TIMED_OUT), so slow or idle
+     * clients cannot hold a slot. 0 = no timeout. Measured on the runtime
+     * clock; without one there is no timeout. */
+    uint32_t idle_timeout_ms;
     uint8_t keep_alive_enabled;      /* 0: close after every response */
     uint8_t auto_continue;           /* answer Expect: 100-continue with 100 Continue */
     uint8_t emit_date;               /* Date header via the runtime clock hook */
@@ -932,8 +940,9 @@ typedef struct {
     void *body_sink_ctx;
 } asx_http_server_config;
 
-/* Initialize server-connection config with defaults (keep-alive on,
- * auto 100-continue on, unlimited requests, default limits). */
+/* Initialize server-connection config with defaults: keep-alive on, auto
+ * 100-continue on, at most 1000 requests per connection and a 60 s idle
+ * timeout (Rust's Http1Config defaults), default limits. */
 ASX_API void asx_http_server_config_init(asx_http_server_config *cfg, asx_http_router *router);
 
 /* Server connection: read request -> dispatch through the router/middleware
@@ -956,10 +965,13 @@ typedef struct {
     asx_http_conn_state state;
     uint32_t requests_served;
     asx_http_parse_error last_error;
+    asx_time window_start; /* start of the current idle-timeout window */
+    uint8_t window_open;   /* the runtime clock gave window_start */
     uint8_t in_message;
     uint8_t close_after_write;
     uint8_t drain_requested;
     uint8_t peer_eof;
+    uint8_t timed_out; /* closed by the idle timeout */
 } asx_http_server_conn;
 
 /* Bind a server connection to an accepted stream. Fails with
@@ -970,7 +982,10 @@ ASX_API ASX_MUST_USE asx_status asx_http_server_conn_init(asx_http_server_conn *
 
 /* Drive the connection. Returns ASX_OK once the connection has finished and
  * its stream is closed, ASX_E_PENDING while it waits on I/O (or idles in
- * keep-alive), or a transport error (the connection is then closed). */
+ * keep-alive), ASX_E_TIMED_OUT once the idle timeout closed it, or a
+ * transport error (the connection is then closed). While pending inside a
+ * task's poll, it arms that task's timer for the idle deadline, so the task
+ * is woken to enforce it. */
 ASX_API ASX_MUST_USE asx_status asx_http_server_conn_poll(asx_http_server_conn *c);
 
 /* Ask the connection to finish gracefully: the in-flight response (if any)
@@ -980,8 +995,18 @@ ASX_API void asx_http_server_conn_request_close(asx_http_server_conn *c);
 /* Return 1 when no request is in flight and nothing is queued for writing. */
 ASX_API int asx_http_server_conn_is_idle(const asx_http_server_conn *c);
 
+/* Connection slots of an asx_http_server (each holds an
+ * asx_http_server_conn, about 38 KB). The live limit is also bounded by the
+ * asx_server's max_connections. */
 #ifndef ASX_HTTP_SERVER_MAX_CONNS
+#if defined(ASX_PROFILE_EMBEDDED_ROUTER) || defined(ASX_PROFILE_FREESTANDING)
 #define ASX_HTTP_SERVER_MAX_CONNS 4u
+#else
+#define ASX_HTTP_SERVER_MAX_CONNS 16u
+#endif
+#endif
+#if (ASX_HTTP_SERVER_MAX_CONNS) < 1
+#error "ASX_HTTP_SERVER_MAX_CONNS must be at least 1"
 #endif
 
 /* HTTP server wired to asx_server accept/drain accounting. */
@@ -992,17 +1017,25 @@ typedef struct {
     uint32_t conn_ids[ASX_HTTP_SERVER_MAX_CONNS]; /* asx_server conn id, 0 = free */
     uint32_t connections_completed;
     uint32_t requests_completed_conns; /* requests answered by already-finished connections */
+    uint32_t connections_timed_out;    /* closed by the idle timeout */
+    uint32_t connections_drain_closed; /* closed at the drain deadline */
 } asx_http_server;
 
 /* Bind an HTTP server to an asx_server (which must already be listening). */
 ASX_API ASX_MUST_USE asx_status asx_http_server_init(asx_http_server *hs, asx_server *srv,
                                                      const asx_http_server_config *cfg);
 
-/* Accept pending connections (while the server is listening and slots are
- * free) and drive every connection once. While the server drains, idle
+/* Accept pending connections and drive every connection once. With every
+ * slot taken (ASX_HTTP_SERVER_MAX_CONNS, or the asx_server's
+ * max_connections) a pending client is accepted and closed at once
+ * (asx_server_reject_pending), as Rust's listener does at its limit, so it
+ * fails fast instead of hanging in the backlog. A connection idle or stalled
+ * past config.idle_timeout_ms is closed. While the server drains, idle
  * keep-alive connections are closed and in-flight responses finish with
- * Connection: close. Returns ASX_OK once the server is stopped with no
- * connections left, ASX_E_PENDING otherwise. */
+ * Connection: close; at the drain deadline (asx_server_drain_deadline) the
+ * remaining connections are closed. Inside a task's poll it arms the task's
+ * timer for the next deadline. Returns ASX_OK once the server is stopped
+ * with no connections left, ASX_E_PENDING otherwise. */
 ASX_API ASX_MUST_USE asx_status asx_http_server_poll(asx_http_server *hs);
 
 /* Return the number of live HTTP connections. */
