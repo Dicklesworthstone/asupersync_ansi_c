@@ -20,15 +20,18 @@
 #define ASX_TESTING_LOG_DIR "build/test-logs"
 #endif
 
-__attribute__((unused)) static FILE *asx_test_log_fp = NULL;
-__attribute__((unused)) static uint32_t asx_test_log_event_idx = 0;
-__attribute__((unused)) static const char *asx_test_log_run_id = NULL;
-__attribute__((unused)) static const char *asx_test_log_layer = NULL;
-__attribute__((unused)) static const char *asx_test_log_subsystem = NULL;
-__attribute__((unused)) static const char *asx_test_log_suite = NULL;
-__attribute__((unused)) static char asx_test_log_ts_buf[64];
+/* Static inline (and state referenced only from those bodies): no compiler
+ * warns when an includer uses none of it, and the header stays portable
+ * C (MSVC has no __attribute__). */
+static FILE *asx_test_log_fp = NULL;
+static uint32_t asx_test_log_event_idx = 0;
+static const char *asx_test_log_run_id = NULL;
+static const char *asx_test_log_layer = NULL;
+static const char *asx_test_log_subsystem = NULL;
+static const char *asx_test_log_suite = NULL;
+static char asx_test_log_ts_buf[64];
 
-__attribute__((unused)) static void asx_test_log_now(void) {
+static inline void asx_test_log_now(void) {
     time_t t = time(NULL);
     struct tm *gm = gmtime(&t);
     if (gm != NULL) {
@@ -39,7 +42,7 @@ __attribute__((unused)) static void asx_test_log_now(void) {
     }
 }
 
-__attribute__((unused)) static void asx_test_log_write_json_str(FILE *f, const char *s) {
+static inline void asx_test_log_write_json_str(FILE *f, const char *s) {
     fputc('"', f);
     if (s != NULL) {
         while (*s) {
@@ -57,8 +60,7 @@ __attribute__((unused)) static void asx_test_log_write_json_str(FILE *f, const c
     fputc('"', f);
 }
 
-__attribute__((unused)) static void asx_test_log_open(const char *layer, const char *subsystem,
-                                                      const char *suite) {
+static inline void asx_test_log_open(const char *layer, const char *subsystem, const char *suite) {
     char path[512];
     char run_id_buf[128];
     const char *log_dir = ASX_TESTING_LOG_DIR;
@@ -92,16 +94,16 @@ __attribute__((unused)) static void asx_test_log_open(const char *layer, const c
     asx_test_log_fp = fopen(path, "a");
 }
 
-__attribute__((unused)) static void asx_test_log_close(void) {
+static inline void asx_test_log_close(void) {
     if (asx_test_log_fp != NULL) {
         fclose(asx_test_log_fp);
         asx_test_log_fp = NULL;
     }
 }
 
-__attribute__((unused)) static void asx_test_log_result(const char *test_name, const char *status,
-                                                        const char *err_file, int err_line,
-                                                        const char *err_assertion) {
+static inline void asx_test_log_result(const char *test_name, const char *status,
+                                       const char *err_file, int err_line,
+                                       const char *err_assertion) {
     if (asx_test_log_fp == NULL) return;
 
     asx_test_log_now();
@@ -138,7 +140,7 @@ __attribute__((unused)) static void asx_test_log_result(const char *test_name, c
     fflush(asx_test_log_fp);
 }
 
-__attribute__((unused)) static void asx_test_log_summary(int total, int passed, int failed) {
+static inline void asx_test_log_summary(int total, int passed, int failed) {
     if (asx_test_log_fp == NULL) return;
 
     asx_test_log_now();

@@ -60,7 +60,8 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         -Wno-unused-parameter
     )
 elseif(MSVC)
-    add_compile_options(/W4 /WX)
+    # /wd4100 (unreferenced parameter) mirrors GCC's -Wno-unused-parameter.
+    add_compile_options(/W4 /WX /wd4100)
     # The CRT's "use the _s variant" deprecations (C4996) are not about the
     # code's correctness; every other /W4 warning stays an error.
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
