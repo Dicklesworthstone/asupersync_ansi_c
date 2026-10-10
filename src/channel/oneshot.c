@@ -59,7 +59,7 @@ void asx_oneshot_reset(void) {
         g_slots[i].value = 0;
         g_slots[i].sender_alive = 0;
         g_slots[i].receiver_alive = 0;
-        asx_wait_queue_init(&g_slots[i].waiters);
+        asx_wait_queue_init(&g_slots[i].waiters, NULL);
     }
     g_slot_count = 0;
 }
@@ -101,7 +101,7 @@ asx_status asx_oneshot_create(asx_oneshot_sender *out_sender, asx_oneshot_receiv
     s->value = 0;
     s->sender_alive = 1;
     s->receiver_alive = 1;
-    asx_wait_queue_init(&s->waiters);
+    asx_wait_queue_init(&s->waiters, NULL);
 
     out_sender->slot = idx;
     out_sender->generation = s->generation;

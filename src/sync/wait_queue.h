@@ -30,19 +30,22 @@
  *     success or a terminal result removes it (leave), another "not yet"
  *     re-arms it in place (park).
  *   - settle(q, available) hands out `available` units of progress in FIFO
- *     order: outstanding wakes of live tasks count against `available`, and
- *     un-woken waiters are woken until the two match. Primitives call it
- *     after every state change, so one unit wakes exactly one waiter, a
- *     waiter that dies after being woken is replaced on the next settle,
- *     and a cancel-pending waiter never absorbs a unit (it is woken, but
- *     the unit also goes to the next live waiter).
+ *     order: outstanding wakes of unfinished tasks count against
+ *     `available`, and un-woken waiters are woken until the two match.
+ *     Primitives call it after every state change, so one unit wakes
+ *     exactly one waiter and a waiter that dies after being woken is
+ *     replaced on the next settle. A cancel-pending waiter keeps its place
+ *     and absorbs a unit like any other; it passes the unit on when its
+ *     next poll observes the cancel and removes it (Rust's waiters stay
+ *     queued until their future is polled or dropped).
  *   - remove(q, task) withdraws a waiter that gives up (the analog of
  *     dropping a Rust wait future); re-settling then passes any wake it
  *     held on to the next waiter.
  *   - live_ahead(q) supports queue-jump prevention: competitive primitives
- *     let a caller take a unit only while fewer live waiters are queued
- *     ahead of it than there are units, so the units a settle handed out
- *     cannot be stolen before their waiters re-poll.
+ *     let a caller take a unit only while fewer unfinished waiters
+ *     (cancel-pending ones included) are queued ahead of it than there are
+ *     units, so the units a settle handed out cannot be stolen before their
+ *     waiters re-poll.
  *   - If the pool is exhausted the caller is not parked and simply yields
  *     cooperatively (it is re-polled next round), so exhaustion degrades
  *     to polling, never to a lost wakeup.
@@ -54,7 +57,10 @@
  * its per-waiter state in the node's `flags` and `value`. A queue
  * of records registers a reap function that retires its dead waiters with
  * the primitive's own semantics (returning grants, passing notifications
- * on), so pool reclamation never bypasses them.
+ * on), so pool reclamation never bypasses them. Plain queues whose
+ * primitive hands out units with settle register one too
+ * (asx_wait_queue_init); both kinds are also reaped when a task holding
+ * an entry finishes (asx_wait_task_finished).
  *
  * Lifetime. Queue storage must be zero-initialized or previously
  * initialized. Initializing a queue releases the nodes it still holds,
@@ -139,12 +145,26 @@ void asx_wait_pool_reset(void);
 /* Nodes currently held by queues (tests and diagnostics). */
 uint32_t asx_wait_nodes_in_use(void);
 
+/* `task` finished. As Rust drops a finished task's wait futures, each
+ * queue still holding one of its entries is reaped (record queues retire
+ * the waiter, plain queues drop it and re-settle), so a wake or grant the
+ * entry held passes on; a queue without a reap function drops the entry.
+ * The task must already be COMPLETED. */
+void asx_wait_task_finished(asx_task_id task);
+
 /* ------------------------------------------------------------------ */
 /* Plain queues                                                        */
 /* ------------------------------------------------------------------ */
 
-/* Empty a queue, releasing the nodes it still holds. */
-void asx_wait_queue_init(asx_wait_queue *q);
+/* Empty a queue, releasing the nodes it still holds. `reap` (NULL for
+ * none) drops the queue's dead entries and re-settles the primitive, so a
+ * wake a dead entry held passes on; it runs when a task holding an entry
+ * finishes (asx_wait_task_finished) and when the pool needs nodes back.
+ * Primitives that hand out units with settle register one. */
+void asx_wait_queue_init(asx_wait_queue *q, asx_wait_reap_fn reap);
+
+/* Drop every entry whose task is gone (for reap functions). */
+void asx_wait_queue_drop_dead(asx_wait_queue *q);
 
 /* Release every node (the primitive is closing; wake its waiters first). */
 void asx_wait_queue_clear(asx_wait_queue *q);
@@ -167,13 +187,13 @@ void asx_wait_queue_leave_current(asx_wait_queue *q);
 int asx_wait_queue_remove(asx_wait_queue *q, asx_task_id task);
 
 /* Hand out `available` units of progress in FIFO order (see above).
- * Returns the number of live waiters newly woken. */
+ * Returns the number of waiters newly woken. */
 uint32_t asx_wait_queue_settle(asx_wait_queue *q, uint32_t available);
 
-/* FIFO gating for queue-jump prevention: the number of live waiters queued
- * ahead of the current task — all live waiters if the current task is not
- * queued or there is no current task. Cancel-pending and dead waiters do
- * not count (they never hold a place in line). */
+/* FIFO gating for queue-jump prevention: the number of unfinished waiters
+ * queued ahead of the current task — all of them if the current task is
+ * not queued or there is no current task. A cancel-pending waiter counts
+ * (it holds its place until its next poll); a dead one does not. */
 uint32_t asx_wait_queue_live_ahead(const asx_wait_queue *q);
 
 /* Wake every queued waiter in FIFO order (broadcast events, close,

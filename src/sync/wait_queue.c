@@ -201,7 +201,9 @@ static uint32_t wq_add(asx_wait_queue *q, asx_task_id task) {
 /* Plain queues                                                        */
 /* ------------------------------------------------------------------ */
 
-void asx_wait_queue_init(asx_wait_queue *q) { asx_wait_records_init(q, NULL); }
+void asx_wait_queue_init(asx_wait_queue *q, asx_wait_reap_fn reap) {
+    asx_wait_records_init(q, reap);
+}
 
 void asx_wait_queue_clear(asx_wait_queue *q) {
     if (q == NULL) return;
@@ -232,6 +234,27 @@ static void wq_drop_dead(asx_wait_queue *q) {
         ASX_CHECKPOINT_WAIVER("bounded: queue length <= ASX_WAIT_NODE_CAPACITY");
         if (asx_wait_task_liveness(g_nodes[i].task) == ASX_WAIT_TASK_DEAD) wq_release(q, i);
         i = next;
+    }
+}
+
+void asx_wait_queue_drop_dead(asx_wait_queue *q) {
+    if (q == NULL || !wq_current(q)) return;
+    wq_drop_dead(q);
+}
+
+void asx_wait_task_finished(asx_task_id task) {
+    uint32_t i;
+    if (g_in_use == 0u || !asx_handle_is_valid(task)) return;
+    for (i = 0; i < g_high; i++) {
+        asx_wait_node *n = &g_nodes[i];
+        asx_wait_queue *q = n->queue;
+        ASX_CHECKPOINT_WAIVER("bounded: i < ASX_WAIT_NODE_CAPACITY");
+        if (q == NULL || !wq_current(q) || !asx_wait_same_task(n->task, task)) continue;
+        if (q->reap != NULL) {
+            q->reap(q);
+        } else {
+            wq_release(q, i);
+        }
     }
 }
 
@@ -290,30 +313,30 @@ uint32_t asx_wait_queue_settle(asx_wait_queue *q, uint32_t available) {
 
     if (q == NULL || !wq_current(q) || q->len == 0u || available == 0u) return 0u;
 
-    /* Count wakes still held by live waiters (dead entries never count). */
+    /* Count wakes still held by waiters whose task has not finished (dead
+     * entries never count). */
     for (i = q->head; i != ASX_WAIT_NIL; i = g_nodes[i].next) {
         ASX_CHECKPOINT_WAIVER("bounded: queue length <= ASX_WAIT_NODE_CAPACITY");
         if (g_nodes[i].woken != 0u &&
-            asx_wait_task_liveness(g_nodes[i].task) == ASX_WAIT_TASK_LIVE) {
+            asx_wait_task_liveness(g_nodes[i].task) != ASX_WAIT_TASK_DEAD) {
             pending++;
         }
     }
 
     /* Hand the remaining units to un-woken waiters, oldest first. A
-     * cancel-pending waiter is woken (so it reaches its cleanup) but does
-     * not absorb a unit. */
+     * cancel-pending waiter keeps its place and absorbs its unit like any
+     * other: it passes the unit on when its next poll observes the cancel
+     * and it leaves (remove, then the caller re-settles), as a Rust waiter
+     * stays queued until its future is polled or dropped (mpsc.rs:363-377,
+     * sync/pool.rs:1370-1382; bd-wy6n). A masked one keeps the unit. */
     for (i = q->head; i != ASX_WAIT_NIL && pending < available; i = g_nodes[i].next) {
-        asx_wait_task_liveness_kind k;
         ASX_CHECKPOINT_WAIVER("bounded: queue length <= ASX_WAIT_NODE_CAPACITY");
         if (g_nodes[i].woken != 0u) continue;
-        k = asx_wait_task_liveness(g_nodes[i].task);
-        if (k == ASX_WAIT_TASK_DEAD) continue;
+        if (asx_wait_task_liveness(g_nodes[i].task) == ASX_WAIT_TASK_DEAD) continue;
         g_nodes[i].woken = 1u;
         asx_wait_wake_task(g_nodes[i].task);
-        if (k == ASX_WAIT_TASK_LIVE) {
-            pending++;
-            woke++;
-        }
+        pending++;
+        woke++;
     }
     return woke;
 }
@@ -328,7 +351,7 @@ uint32_t asx_wait_queue_live_ahead(const asx_wait_queue *q) {
     for (i = q->head; i != ASX_WAIT_NIL; i = g_nodes[i].next) {
         ASX_CHECKPOINT_WAIVER("bounded: queue length <= ASX_WAIT_NODE_CAPACITY");
         if (self != ASX_INVALID_ID && asx_wait_same_task(g_nodes[i].task, self)) break;
-        if (asx_wait_task_liveness(g_nodes[i].task) == ASX_WAIT_TASK_LIVE) live++;
+        if (asx_wait_task_liveness(g_nodes[i].task) != ASX_WAIT_TASK_DEAD) live++;
     }
     return live;
 }

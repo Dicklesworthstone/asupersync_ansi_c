@@ -48,7 +48,9 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
-static void broadcast_waiters_init(asx_broadcast_slot *s) { asx_wait_queue_init(&s->waiters); }
+static void broadcast_waiters_init(asx_broadcast_slot *s) {
+    asx_wait_queue_init(&s->waiters, NULL);
+}
 
 /* New message or sender gone: every parked receiver task re-polls. */
 static void broadcast_wake_waiters(asx_broadcast_slot *s) {

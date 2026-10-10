@@ -464,7 +464,7 @@ TEST(woken_waiter_that_gives_up_passes_wake_on) {
     ASSERT_EQ(v, (uint64_t)11);
 }
 
-TEST(cancelled_waiter_does_not_absorb_wake) {
+TEST(cancelled_waiter_that_ends_passes_its_wake_on) {
     asx_channel_id ch;
     asx_send_permit permit;
     asx_task_id t[2];
@@ -487,8 +487,9 @@ TEST(cancelled_waiter_does_not_absorb_wake) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
 
-    /* The oldest queued producer is cancelled: the freed slot still goes to
-     * the second one, without anyone calling wait_cancel. */
+    /* The oldest queued producer is cancelled: the freed slot wakes it, and
+     * it ends without calling wait_cancel. Its task finishing passes the
+     * wake on to the second one, as dropping a Rust Reserve future does. */
     ASSERT_EQ(asx_task_cancel(t[0], ASX_CANCEL_USER), ASX_OK);
     ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
     budget = asx_budget_from_polls(100);
@@ -594,6 +595,57 @@ TEST(cancel_storm_on_full_channel_keeps_fifo_progress) {
     }
     ASSERT_EQ(asx_channel_queue_len(ch, &k), ASX_OK);
     ASSERT_EQ(k, 0u);
+}
+
+TEST(cancel_pending_front_producer_keeps_its_place) {
+    /* A producer whose task has a cancel request keeps its place at the
+     * front of the reserve line until its next poll, as a Rust waiter stays
+     * queued until its Reserve future is polled or dropped
+     * (channel/mpsc.rs:363-377, bd-wy6n): a freed slot wakes it and not
+     * the producer behind it. Masked, it sees no cancel at that poll and
+     * takes the slot, so the producer behind is not polled again until the
+     * next slot frees. */
+    asx_channel_id ch;
+    asx_send_permit permit;
+    asx_task_id t[2];
+    asx_budget budget;
+    uint64_t v = 0;
+
+    ASSERT_TRUE(setup());
+    reset_fixtures();
+    ASSERT_EQ(asx_channel_create(g_region, 1, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &permit), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&permit, 1u), ASX_OK);
+    g_tx[0].ch = ch;
+    g_tx[0].to_send = 1;
+    g_tx[0].base = 30u;
+    g_tx[0].masked = 1;
+    g_tx[1].ch = ch;
+    g_tx[1].to_send = 1;
+    g_tx[1].base = 31u;
+    g_tx[1].use_cx = 1;
+    ASSERT_EQ(asx_task_spawn(g_region, poll_sender, &g_tx[0], &t[0]), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_region, poll_sender, &g_tx[1], &t[1]), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK); /* both parked */
+
+    ASSERT_EQ(asx_task_cancel(t[0], ASX_CANCEL_USER), ASX_OK);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 1u);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(g_tx[0].sent, 1u);
+    ASSERT_EQ(g_tx[0].last, ASX_E_CANCELLED); /* seen after unmasking */
+    ASSERT_EQ(g_tx[1].sent, 0u);
+    ASSERT_EQ(g_tx[1].polls, 1u); /* parked once, never woken */
+
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 30u);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+    ASSERT_EQ(g_tx[1].sent, 1u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 31u);
 }
 
 TEST(masked_producer_is_not_cancelled_until_unmask) {
@@ -1251,7 +1303,7 @@ int main(void) {
     RUN_TEST(try_reserve_never_jumps_parked_producer);
     RUN_TEST(close_wakes_every_waiter);
     RUN_TEST(woken_waiter_that_gives_up_passes_wake_on);
-    RUN_TEST(cancelled_waiter_does_not_absorb_wake);
+    RUN_TEST(cancelled_waiter_that_ends_passes_its_wake_on);
     RUN_TEST(wait_cancel_rejects_bad_channel);
     /* The producers plus the receiver: a classed build (R1: 16 tasks) may
      * hold fewer tasks than that. */
@@ -1260,6 +1312,7 @@ int main(void) {
     RUN_TEST_IF(MANY_PRODUCERS + 1 <= ASX_MAX_TASKS,
                 cancel_storm_on_full_channel_keeps_fifo_progress,
                 "the task arena holds fewer tasks than the producers");
+    RUN_TEST(cancel_pending_front_producer_keeps_its_place);
     RUN_TEST(masked_producer_is_not_cancelled_until_unmask);
     RUN_TEST(try_ops_outside_scheduler_never_park);
     RUN_TEST(try_ops_inside_a_poll_never_park);

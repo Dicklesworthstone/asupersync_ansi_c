@@ -89,6 +89,20 @@ static void pool_settle(pool_slot *ps) {
     if (ps->waiters.len > 0u) (void)asx_wait_queue_settle(&ps->waiters, pool_available(ps));
 }
 
+/* A waiter's task finished while still queued (Rust drops its acquire
+ * future, which passes a wake on, sync/pool.rs:1370-1382): drop the dead
+ * entry and re-settle. */
+static void pool_reap_queue(asx_wait_queue *q) {
+    uint32_t i;
+    for (i = 0; i < ASX_POOL_MAX; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_POOL_MAX constant");
+        if (q != &g_slots[i].waiters) continue;
+        asx_wait_queue_drop_dead(q);
+        pool_settle(&g_slots[i]);
+        return;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
@@ -116,7 +130,7 @@ asx_status asx_pool_create(const asx_pool_config *config, asx_pool_handle *out) 
                 ps->resources[j].resource = NULL;
                 ps->resources[j].state = RESOURCE_EMPTY;
             }
-            asx_wait_queue_init(&ps->waiters);
+            asx_wait_queue_init(&ps->waiters, pool_reap_queue);
             out->slot = i;
             out->generation = ps->generation;
             if (i >= g_slot_count) g_slot_count = i + 1;
@@ -318,7 +332,7 @@ void asx_pool_reset(void) {
         g_slots[i].alive = 0;
         g_slots[i].closed = 0;
         g_slots[i].resource_count = 0;
-        asx_wait_queue_init(&g_slots[i].waiters);
+        asx_wait_queue_init(&g_slots[i].waiters, pool_reap_queue);
     }
     g_slot_count = 0;
 }

@@ -561,6 +561,9 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
         }
     }
     asx_task_timer_disarm_internal(task);
+    /* Rust drops a finished task's wait futures: a wake or grant one still
+     * held passes to the next waiter. */
+    asx_wait_task_finished(asx_task_handle_for_slot((uint32_t)(task - g_tasks)));
     asx_task_join_detach_internal(task);
     asx_task_join_wake_waiters_internal(task);
     task->parked = 0;

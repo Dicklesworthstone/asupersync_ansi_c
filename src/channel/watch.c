@@ -44,7 +44,7 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
-static void watch_waiters_init(asx_watch_slot *s) { asx_wait_queue_init(&s->waiters); }
+static void watch_waiters_init(asx_watch_slot *s) { asx_wait_queue_init(&s->waiters, NULL); }
 
 /* New version or sender gone: every parked receiver task re-polls. */
 static void watch_wake_waiters(asx_watch_slot *s) {

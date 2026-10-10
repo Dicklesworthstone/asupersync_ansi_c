@@ -46,11 +46,13 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
+static void once_reap_queue(asx_wait_queue *q);
+
 static void once_slot_clear(once_slot *s) {
     s->initialized = 0;
     s->value = 0;
     s->initializer = ASX_INVALID_ID;
-    asx_wait_queue_init(&s->waiters);
+    asx_wait_queue_init(&s->waiters, once_reap_queue);
 }
 
 /* The initialization in progress was abandoned or failed: the cell stays
@@ -58,6 +60,21 @@ static void once_slot_clear(once_slot *s) {
 static void once_pass_turn(once_slot *s) {
     s->initializer = ASX_INVALID_ID;
     if (s->waiters.len > 0u) (void)asx_wait_queue_settle(&s->waiters, 1u);
+}
+
+/* A waiter's task finished while still queued: drop the dead entry and,
+ * while no initialization is in flight, hand the turn it may have held to
+ * the next waiter. */
+static void once_reap_queue(asx_wait_queue *q) {
+    uint32_t i;
+    for (i = 0; i < ASX_ONCE_MAX; i++) {
+        once_slot *s = &g_slots[i];
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_ONCE_MAX constant");
+        if (q != &s->waiters) continue;
+        asx_wait_queue_drop_dead(q);
+        if (!s->initialized && !asx_handle_is_valid(s->initializer)) once_pass_turn(s);
+        return;
+    }
 }
 
 /* ------------------------------------------------------------------ */

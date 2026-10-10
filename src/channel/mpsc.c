@@ -322,10 +322,12 @@ static asx_status channel_lf_dequeue(asx_channel_slot *s, uint64_t *out_value) {
 /* Wait queues                                                        */
 /* ------------------------------------------------------------------ */
 
+static void channel_reap_queue(asx_wait_queue *q);
+
 /* Empty both queues, returning their nodes to the pool. */
 static void channel_waiters_init(asx_channel_slot *s) {
-    asx_wait_queue_init(&s->recv_waiters);
-    asx_wait_queue_init(&s->reserve_waiters);
+    asx_wait_queue_init(&s->recv_waiters, channel_reap_queue);
+    asx_wait_queue_init(&s->reserve_waiters, channel_reap_queue);
 }
 
 /* Committed messages ready for try_recv. */
@@ -360,6 +362,21 @@ static void channel_settle(asx_channel_slot *s) {
     }
     if (s->reserve_waiters.len > 0u) {
         (void)asx_wait_queue_settle(&s->reserve_waiters, channel_free_capacity(s) > 0u ? 1u : 0u);
+    }
+}
+
+/* A waiter's task finished while still queued (Rust drops its wait
+ * future, whose cleanup passes a wake on): drop the dead entry and
+ * re-settle. */
+static void channel_reap_queue(asx_wait_queue *q) {
+    uint16_t i;
+    for (i = 0; i < ASX_MAX_CHANNELS; i++) {
+        asx_channel_slot *s = &g_channels[i];
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_MAX_CHANNELS constant");
+        if (q != &s->recv_waiters && q != &s->reserve_waiters) continue;
+        asx_wait_queue_drop_dead(q);
+        channel_settle(s);
+        return;
     }
 }
 

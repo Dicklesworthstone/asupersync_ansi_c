@@ -80,11 +80,13 @@ typedef struct {
     asx_wait_queue waiters[SESSION_WQ_COUNT];
 } asx_session_slot;
 
+static void session_reap_queue(asx_wait_queue *q);
+
 static void session_waiters_init(asx_session_slot *s) {
     uint32_t i;
     for (i = 0; i < SESSION_WQ_COUNT; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: SESSION_WQ_COUNT constant");
-        asx_wait_queue_init(&s->waiters[i]);
+        asx_wait_queue_init(&s->waiters[i], session_reap_queue);
     }
 }
 
@@ -114,6 +116,23 @@ static void session_wake_everyone(asx_session_slot *s) {
 
 static asx_session_slot g_slots[ASX_MAX_SESSIONS];
 static uint32_t g_slot_count = 0;
+
+/* A waiter's task finished while still queued: drop the dead entry and
+ * re-settle its direction, so a wake it held passes on. */
+static void session_reap_queue(asx_wait_queue *q) {
+    uint32_t i;
+    uint32_t k;
+    for (i = 0; i < ASX_MAX_SESSIONS; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_MAX_SESSIONS constant");
+        for (k = 0; k < SESSION_WQ_COUNT; k++) {
+            ASX_CHECKPOINT_WAIVER("bounded: SESSION_WQ_COUNT constant");
+            if (q != &g_slots[i].waiters[k]) continue;
+            asx_wait_queue_drop_dead(q);
+            session_settle(&g_slots[i], k == SESSION_WQ_I2R_RECV || k == SESSION_WQ_I2R_SEND);
+            return;
+        }
+    }
+}
 
 static uint16_t next_gen(uint16_t g) {
     g++;
