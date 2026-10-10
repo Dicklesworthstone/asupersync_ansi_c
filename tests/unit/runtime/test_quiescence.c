@@ -444,7 +444,9 @@ TEST(region_drain_closed_child_unlinks_from_parent) {
     ASSERT_EQ(asx_region_drain(child, &budget), ASX_OK);
 
     ASSERT_EQ(child_slot->state, ASX_REGION_CLOSED);
-    ASSERT_EQ(child_slot->parent_id, ASX_INVALID_ID);
+    /* Unlinked from the parent's children; it still names its parent,
+     * which keeps its slot from being recycled while the parent lives. */
+    ASSERT_EQ(child_slot->parent_id, parent);
     ASSERT_EQ(parent_slot->child_count, 0u);
     ASSERT_EQ(parent_slot->children[0], ASX_INVALID_ID);
 }
@@ -469,7 +471,7 @@ TEST(region_drain_closed_child_tolerates_missing_parent_slot) {
     ASSERT_EQ(asx_region_drain(child, &budget), ASX_OK);
 
     ASSERT_EQ(child_slot->state, ASX_REGION_CLOSED);
-    ASSERT_EQ(child_slot->parent_id, ASX_INVALID_ID);
+    ASSERT_EQ(child_slot->parent_id, parent);
     ASSERT_EQ(parent_slot->child_count, 1u);
     ASSERT_EQ(parent_slot->children[0], child);
 }
@@ -493,7 +495,7 @@ TEST(region_drain_parent_closes_open_child_first) {
     budget = asx_budget_from_polls(1);
     ASSERT_EQ(asx_region_drain(parent, &budget), ASX_OK);
     ASSERT_EQ(child_slot->state, ASX_REGION_CLOSED);
-    ASSERT_EQ(child_slot->parent_id, ASX_INVALID_ID);
+    ASSERT_EQ(child_slot->parent_id, parent);
     ASSERT_EQ(parent_slot->child_count, 0u);
     ASSERT_EQ(parent_slot->state, ASX_REGION_CLOSED);
 }
@@ -533,6 +535,42 @@ TEST(region_drain_cancels_descendant_tasks_with_parent_attribution) {
     ASSERT_EQ(asx_region_is_quiescent(parent), 1);
 }
 
+/* A closed child of a live parent keeps its slot while others are free, so
+ * the handle its opener holds still names a closed region (Rust refuses a
+ * spawn into a recently closed region as RegionClosed; fuzz gen-26-180);
+ * only a full arena recycles it. */
+TEST(closed_child_of_live_parent_keeps_its_slot) {
+    asx_region_id parent;
+    asx_region_id child;
+    asx_region_id other;
+    asx_region_state state;
+    asx_task_id tid;
+    asx_budget budget;
+    uint32_t i;
+
+    asx_runtime_reset();
+
+    ASSERT_EQ(asx_region_open(&parent), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(parent, &child), ASX_OK);
+    budget = asx_budget_from_polls(1);
+    ASSERT_EQ(asx_region_drain(child, &budget), ASX_OK);
+    ASSERT_EQ(asx_region_open(&other), ASX_OK);
+
+    ASSERT_EQ(asx_region_get_state(child, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_task_spawn(child, q_poll_pending, NULL, &tid), ASX_E_REGION_CLOSED);
+
+    /* Fill the arena: the closed child is recycled only when no other slot
+     * is left, and its handle then goes stale. */
+    for (i = 0; i < ASX_MAX_REGIONS; i++) {
+        asx_region_id r;
+        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        if (asx_region_get_state(child, &state) == ASX_E_STALE_HANDLE) break;
+    }
+    ASSERT_TRUE(i < ASX_MAX_REGIONS);
+    ASSERT_EQ(asx_task_spawn(child, q_poll_pending, NULL, &tid), ASX_E_STALE_HANDLE);
+}
+
 TEST(region_drain_nested_grandchild_closes_inside_out) {
     asx_region_id parent;
     asx_region_id child;
@@ -566,14 +604,14 @@ TEST(region_drain_nested_grandchild_closes_inside_out) {
     ASSERT_EQ(asx_region_drain(grandchild, &budget), ASX_OK);
     log_child_summary("nested-child-after-grandchild", child, child_slot);
     ASSERT_EQ(grandchild_slot->state, ASX_REGION_CLOSED);
-    ASSERT_EQ(grandchild_slot->parent_id, ASX_INVALID_ID);
+    ASSERT_EQ(grandchild_slot->parent_id, child);
     ASSERT_EQ(child_slot->child_count, 0u);
 
     budget = asx_budget_from_polls(1);
     ASSERT_EQ(asx_region_drain(child, &budget), ASX_OK);
     log_child_summary("nested-parent-after-child", parent, parent_slot);
     ASSERT_EQ(child_slot->state, ASX_REGION_CLOSED);
-    ASSERT_EQ(child_slot->parent_id, ASX_INVALID_ID);
+    ASSERT_EQ(child_slot->parent_id, parent);
     ASSERT_EQ(parent_slot->child_count, 0u);
 
     budget = asx_budget_from_polls(1);
@@ -1174,6 +1212,7 @@ int main(void) {
     RUN_TEST(region_drain_parent_closes_open_child_first);
     RUN_TEST(region_drain_cancels_descendant_tasks_with_parent_attribution);
     asx_runtime_reset();
+    RUN_TEST(closed_child_of_live_parent_keeps_its_slot);
     RUN_TEST(region_drain_nested_grandchild_closes_inside_out);
     asx_runtime_reset();
     RUN_TEST(quiescence_invalid_handle_returns_not_found);

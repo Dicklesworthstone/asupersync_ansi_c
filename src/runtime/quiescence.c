@@ -40,8 +40,8 @@ static void asx_region_unlink_from_parent(asx_region_id id, asx_region_slot *r) 
         (void)asx_runtime_log_write(ASX_LOG_WARN,
                                     "child region closed after parent slot became unavailable");
     }
-
-    r->parent_id = ASX_INVALID_ID;
+    /* r->parent_id stays: a closed child still names its parent, so its
+     * slot is not recycled while the parent lives (asx_region_open). */
 }
 
 static asx_status asx_region_obligations_resolved(asx_region_id id) {

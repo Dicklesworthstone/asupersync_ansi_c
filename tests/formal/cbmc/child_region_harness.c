@@ -39,7 +39,8 @@ static int count_attached_children(asx_region_id parent, asx_region_id *children
     for (i = 0; i < count; i++) {
         asx_region_slot *child_slot = NULL;
         if (asx_region_slot_lookup(children[i], &child_slot) != ASX_OK) continue;
-        if (child_slot->parent_id == parent) attached++;
+        /* A closed child still names its parent but is no longer listed. */
+        if (child_slot->parent_id == parent && child_slot->state != ASX_REGION_CLOSED) attached++;
     }
 
     return attached;
@@ -62,7 +63,7 @@ static int verify_parent_child_consistency(asx_region_id parent, asx_region_slot
         asx_region_slot *child_slot = NULL;
         if (asx_region_slot_lookup(children[i], &child_slot) != ASX_OK) return 0;
 
-        if (child_slot->parent_id == parent) {
+        if (child_slot->parent_id == parent && child_slot->state != ASX_REGION_CLOSED) {
             if (parent_slot->child_count == 0u) return 0;
             if (!parent_lists_child(parent_slot, children[i])) return 0;
         } else if (parent_lists_child(parent_slot, children[i])) {
@@ -120,7 +121,8 @@ int main(void) {
         before = parent_slot->child_count;
         VERIFY(asx_region_drain(children[step], &budget) == ASX_OK);
         VERIFY(parent_slot->child_count + 1u == before);
-        VERIFY(child_slot->parent_id == ASX_INVALID_ID);
+        /* Unlinked from the parent's list; still names the parent. */
+        VERIFY(child_slot->parent_id == parent);
         VERIFY(!parent_lists_child(parent_slot, children[step]));
         VERIFY(verify_parent_child_consistency(parent, parent_slot, children, open_count));
 
@@ -202,7 +204,7 @@ int main(void) {
             before = parent_slot->child_count;
             check(asx_region_drain(children[i], &budget) == ASX_OK, "close child", open_count, i);
             check(parent_slot->child_count + 1u == before, "single decrement", open_count, i);
-            check(child_slot->parent_id == ASX_INVALID_ID, "child unlinked", open_count, i);
+            check(child_slot->parent_id == parent, "child names its parent", open_count, i);
             check(!parent_lists_child(parent_slot, children[i]), "parent removed child", open_count,
                   i);
             check(verify_parent_child_consistency(parent, parent_slot, children, open_count),

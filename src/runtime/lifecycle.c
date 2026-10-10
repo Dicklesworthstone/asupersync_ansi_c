@@ -615,6 +615,7 @@ uint32_t asx_region_subtree_internal(asx_region_id root, uint32_t *out_slots, ui
 
 /* Whether a task slot still holds a record of the region in slot `idx`: a
  * live task, or a completed one whose outcome nobody has joined. */
+#ifndef ASX_DEBUG_QUARANTINE
 static int region_has_task_records(uint32_t idx) {
     uint32_t i;
     for (i = 0; i < g_task_count; i++) {
@@ -627,6 +628,21 @@ static int region_has_task_records(uint32_t idx) {
     return 0;
 }
 
+/* A CLOSED region slot no task record still names. */
+static int region_slot_reclaimable(uint32_t idx) {
+    return g_regions[idx].alive && g_regions[idx].state == ASX_REGION_CLOSED &&
+           g_regions[idx].task_count == 0 && !region_has_task_records(idx);
+}
+
+/* 1 if the region in slot idx has a parent that has not closed. */
+static int region_parent_live(uint32_t idx) {
+    asx_region_slot *parent;
+    if (g_regions[idx].parent_id == ASX_INVALID_ID) return 0;
+    if (asx_region_slot_lookup(g_regions[idx].parent_id, &parent) != ASX_OK) return 0;
+    return parent->state != ASX_REGION_CLOSED;
+}
+#endif
+
 asx_status asx_region_open(asx_region_id *out_id) {
     uint32_t idx;
     int reclaim;
@@ -636,7 +652,12 @@ asx_status asx_region_open(asx_region_id *out_id) {
     /* Scan for a recyclable slot: unused (alive=0), or CLOSED with no task
      * record left. A completed task nobody joined keeps its region's slot:
      * its outcome stays joinable, as a Rust JoinHandle keeps the result
-     * after the region's record is gone.
+     * after the region's record is gone. A closed child of a live parent
+     * keeps its slot too while another slot is free, so the handle its
+     * opener holds still names a closed region: Rust remembers closed
+     * regions (recently_closed_regions, state.rs:10469) and refuses a
+     * spawn into one as RegionClosed, where a recycled C slot would make
+     * the handle stale (fuzz gen-26-180).
      * When ASX_DEBUG_QUARANTINE is defined, CLOSED slots are never recycled
      * so that any stale-handle dereference surfaces as RESOURCE_EXHAUSTED
      * instead of silently aliasing a new region. Zero-cost when disabled. */
@@ -644,13 +665,23 @@ asx_status asx_region_open(asx_region_id *out_id) {
     for (idx = 0; idx < ASX_MAX_REGIONS; idx++) {
         if (!g_regions[idx].alive) break;
 #ifndef ASX_DEBUG_QUARANTINE
-        if (g_regions[idx].state == ASX_REGION_CLOSED && g_regions[idx].task_count == 0 &&
-            !region_has_task_records(idx)) {
+        if (region_slot_reclaimable(idx) && !region_parent_live(idx)) {
             reclaim = 1;
             break;
         }
 #endif
     }
+#ifndef ASX_DEBUG_QUARANTINE
+    if (idx >= ASX_MAX_REGIONS) {
+        /* Arena full: closed children of live parents go too. */
+        for (idx = 0; idx < ASX_MAX_REGIONS; idx++) {
+            if (region_slot_reclaimable(idx)) {
+                reclaim = 1;
+                break;
+            }
+        }
+    }
+#endif
     if (idx >= ASX_MAX_REGIONS) return ASX_E_RESOURCE_EXHAUSTED;
 
     /* Increment generation on slot reclaim to invalidate stale handles.

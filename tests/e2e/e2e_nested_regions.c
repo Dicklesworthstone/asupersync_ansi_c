@@ -159,7 +159,10 @@ static void scenario_nested_lifecycle_full(void) {
     budget = asx_budget_from_polls(8);
     SCENARIO_CHECK(asx_region_drain(child1, &budget) == ASX_OK, "drain_child1_subtree");
     SCENARIO_CHECK(grandchild_slot->state == ASX_REGION_CLOSED, "grandchild_closed");
-    SCENARIO_CHECK(grandchild_slot->parent_id == ASX_INVALID_ID, "grandchild_unlinked");
+    /* Unlinked from child1's children; it still names child1 (a closed
+     * child keeps its slot while its parent lives). */
+    SCENARIO_CHECK(child1_slot->child_count == 0u, "grandchild_unlinked");
+    SCENARIO_CHECK(grandchild_slot->parent_id == child1, "grandchild_names_parent");
     SCENARIO_CHECK(child1_slot->state == ASX_REGION_CLOSED, "child1_closed");
     SCENARIO_CHECK(root_slot->child_count == 1u, "root_count_after_child1");
     SCENARIO_CHECK(child2_slot->state == ASX_REGION_OPEN, "child2_untouched");
