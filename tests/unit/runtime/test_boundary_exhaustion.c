@@ -764,6 +764,60 @@ TEST(no_corruption_after_obligation_reserve_failure) {
 }
 
 /* ====================================================================
+ * Region admission limits (Rust RegionLimits)
+ * ==================================================================== */
+
+/* Each limit caps live work: the admission past it is refused with
+ * ASX_E_ADMISSION_LIMIT and changes nothing; finishing work frees room. */
+TEST(region_limits_cap_live_tasks_children_and_obligations) {
+    asx_region_id rid;
+    asx_region_id child;
+    asx_region_id extra_child;
+    asx_region_limits limits;
+    asx_task_id t1;
+    asx_task_id t2;
+    asx_obligation_id o1;
+    asx_obligation_id o2;
+    asx_budget budget;
+
+    reset_all();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_get_limits(rid, &limits), ASX_OK);
+    ASSERT_EQ(limits.max_tasks, ASX_REGION_UNLIMITED);
+    ASSERT_EQ(limits.max_children, ASX_REGION_UNLIMITED);
+    ASSERT_EQ(limits.max_obligations, ASX_REGION_UNLIMITED);
+
+    limits.max_tasks = 1u;
+    limits.max_children = 1u;
+    limits.max_obligations = 1u;
+    ASSERT_EQ(asx_region_set_limits(rid, &limits), ASX_OK);
+
+    ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &t2), ASX_E_ADMISSION_LIMIT);
+    ASSERT_EQ(asx_region_open_child(rid, &child), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(rid, &extra_child), ASX_E_ADMISSION_LIMIT);
+    ASSERT_EQ(asx_obligation_reserve(rid, &o1), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(rid, &o2), ASX_E_ADMISSION_LIMIT);
+
+    /* Completing the task and resolving the obligation free their room. */
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &t2), ASX_OK);
+    ASSERT_EQ(asx_obligation_commit(o1), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(rid, &o2), ASX_OK);
+    ASSERT_EQ(asx_obligation_commit(o2), ASX_OK);
+
+    /* Unlimited again. */
+    limits.max_tasks = ASX_REGION_UNLIMITED;
+    ASSERT_EQ(asx_region_set_limits(rid, &limits), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &t1), ASX_OK);
+
+    ASSERT_EQ(asx_region_set_limits(rid, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_get_limits(rid, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_set_limits(ASX_INVALID_ID, &limits), ASX_E_NOT_FOUND);
+}
+
+/* ====================================================================
  * Main
  * ==================================================================== */
 
@@ -813,6 +867,9 @@ int main(void) {
     /* No corruption after failures */
     RUN_TEST(no_corruption_after_task_spawn_failure);
     RUN_TEST(no_corruption_after_obligation_reserve_failure);
+
+    /* Region admission limits */
+    RUN_TEST(region_limits_cap_live_tasks_children_and_obligations);
 
     TEST_REPORT();
     return test_failures;

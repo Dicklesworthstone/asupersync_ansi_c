@@ -2278,6 +2278,19 @@ static void run_scheduler(it_run_fn run, asx_region_id root, asx_budget *budget,
     }
 }
 
+/* A region_limits field: absent or null is ASX_REGION_UNLIMITED. */
+static int parse_region_limit(uint32_t op, const char *field, uint32_t *out) {
+    uint32_t node = asx_json_get(g_in, op, field);
+    uint64_t v;
+    if (node == ASX_JSON_NONE || asx_json_is_null(g_in, node)) {
+        *out = ASX_REGION_UNLIMITED;
+        return 1;
+    }
+    if (!asx_json_u64(g_in, node, &v) || v >= ASX_REGION_UNLIMITED) return 0;
+    *out = (uint32_t)v;
+    return 1;
+}
+
 static void apply_driver_op(uint32_t op) {
     const char *name = it_str(op, "op");
     asx_cancel_kind kind;
@@ -2333,6 +2346,22 @@ static void apply_driver_op(uint32_t op) {
             return;
         }
         asx_runtime_virtual_advance(asx_runtime_virtual_now() + ns);
+        return;
+    }
+    if (strcmp(name, "region_limits") == 0) {
+        /* Rust set_region_limits: the limits replace the region's; an
+         * omitted or null field is unlimited (DSL §4). */
+        it_region *r = region_by_name(it_str(op, "region"));
+        asx_region_limits limits;
+        if (r == NULL || !parse_region_limit(op, "max_tasks", &limits.max_tasks) ||
+            !parse_region_limit(op, "max_children", &limits.max_children) ||
+            !parse_region_limit(op, "max_obligations", &limits.max_obligations)) {
+            it_fail("region_limits needs a known region and counts", NULL);
+            return;
+        }
+        if (asx_region_set_limits(r->id, &limits) != ASX_OK) {
+            it_fail("asx_region_set_limits failed", r->name);
+        }
         return;
     }
     it_fail("driver op is not interpreted", name);

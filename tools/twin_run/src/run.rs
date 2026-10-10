@@ -2156,13 +2156,15 @@ fn resolve_admissions(lab: &LabRuntime, shared: &SharedRef) -> RunResult<()> {
 
 /// Spawns their region never admitted. Rust's `cx.spawn` accepts a child
 /// into the spawn mailbox and admission later refuses it when the region is
-/// closing or closed (`SpawnError::RegionClosed`, runtime/state.rs:1702),
-/// resolving the handle as cancelled (spawn_mailbox.rs:1394-1417); the
-/// child never runs and has no trace events. C refuses the same spawn
-/// synchronously with `ASX_E_REGION_CLOSED`, so the refusal is projected
-/// onto the spawn step, and a join of the child observes it too (DSL §3.4).
-/// An unadmitted spawn whose handle did not resolve as cancelled is a
-/// scenario or harness defect.
+/// closing or closed (`SpawnError::RegionClosed`, runtime/state.rs:1702) or
+/// at its live-task limit (`SpawnError::RegionAtCapacity` under
+/// `region_limits`), resolving the handle as cancelled
+/// (spawn_mailbox.rs:1394-1417); the child never runs and has no trace
+/// events. C refuses the same spawn synchronously with
+/// `ASX_E_REGION_CLOSED` or `ASX_E_ADMISSION_LIMIT`, so the refusal is
+/// projected onto the spawn step, and a join of the child observes it too
+/// (DSL §3.4). An unadmitted spawn whose handle did not resolve as
+/// cancelled is a scenario or harness defect.
 fn project_denied_spawns(s: &mut Shared) -> RunResult<()> {
     let denied: Vec<String> = s.provisional.values().cloned().collect();
     for name in denied {
@@ -2172,14 +2174,29 @@ fn project_denied_spawns(s: &mut Shared) -> RunResult<()> {
             s.task_regions.remove(&name);
             continue;
         }
-        if !matches!(
-            s.raw_outcomes.get(&name),
-            Some(Err(JoinError::Cancelled(_)))
-        ) {
-            return Err(format!(
-                "spawned task {name:?} was never admitted (scenario or harness defect)"
-            ));
-        }
+        // A closed region resolves the handle Cancelled(ParentCancelled); any
+        // other admission error resolves it Cancelled(User) with the
+        // SpawnError's text as the message (lab/runtime.rs:3999-4007;
+        // cx.rs:5528). RegionAtCapacity, under region_limits, is ASUP-E006.
+        let status = match s.raw_outcomes.get(&name) {
+            Some(Err(JoinError::Cancelled(reason))) => {
+                if reason.kind == CancelKind::User
+                    && reason
+                        .message
+                        .as_deref()
+                        .is_some_and(|m| m.starts_with("[ASUP-E006]"))
+                {
+                    "ASX_E_ADMISSION_LIMIT"
+                } else {
+                    "ASX_E_REGION_CLOSED"
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "spawned task {name:?} was never admitted (scenario or harness defect)"
+                ));
+            }
+        };
         s.raw_outcomes.remove(&name);
         let spawn_at = s.spawn_observations.get(&name).copied();
         let join_at = s
@@ -2188,7 +2205,7 @@ fn project_denied_spawns(s: &mut Shared) -> RunResult<()> {
             .filter(|(_, target)| *target == name)
             .map(|(i, _)| *i);
         for i in spawn_at.into_iter().chain(join_at).collect::<Vec<_>>() {
-            s.observations[i]["status"] = json!("ASX_E_REGION_CLOSED");
+            s.observations[i]["status"] = json!(status);
             s.observations[i]["value"] = Value::Null;
         }
         s.outcome_observations.retain(|(_, target)| *target != name);

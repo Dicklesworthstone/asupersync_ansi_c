@@ -367,7 +367,7 @@ idle and virtual time is advanced to `t` (§2).
 | `cancel_task` | `task`, `kind`, optional `message` | `lab.state.cancel_task(task, &reason)` (`state.rs:3429`), effects routed as above | `asx_task_cancel_with_origin(task, kind, task_region, ASX_INVALID_ID)` plus message |
 | `close_region` | `region`, `kind` | `cancel_request(region, kind)`, then `advance_region_state(region)` (`state.rs:10057`) after each idle until Closed | `asx_region_cancel(region, &reason, NULL)`, then `asx_scheduler_run_until_idle` until Closed |
 | `advance` | `ns` | `lab.advance_time(ns)` (`lab/runtime.rs:3076`; a forward jump, the only clock fault Rust offers) | `asx_lab_advance_time(ns)` |
-| `region_limits` | `region`, optional `max_tasks`, `max_children`, `max_obligations` | `lab.state.set_region_limits(region, RegionLimits{…})` (`state.rs:4103`; `record/region.rs:208`) | region admission limits (C gap, §7) |
+| `region_limits` | `region`, optional `max_tasks`, `max_children`, `max_obligations` | `lab.state.set_region_limits(region, RegionLimits{…})` (`state.rs:4103`; `record/region.rs:208`) | `asx_region_set_limits(region, &limits)`; an omitted or null field is `ASX_REGION_UNLIMITED` |
 
 ### Reason attribution
 
@@ -407,8 +407,12 @@ side reproduces them (bd-wxep, an upstream issue):
 
 There is no allocation-failure fault and no backward or per-task clock skew:
 Rust has neither (`lab/runtime.rs:3357`). `region_limits` is the scripted
-stand-in for resource exhaustion. A denied spawn surfaces as the child's
-`Cancelled` outcome, and a denied reservation as `ASX_E_ADMISSION_LIMIT`.
+stand-in for resource exhaustion. A spawn, child region or reservation past
+a limit is observed as `ASX_E_ADMISSION_LIMIT`: Rust resolves a denied
+spawn's handle `Cancelled(User)` with the `RegionAtCapacity` error
+(`[ASUP-E006]`) as its message, which twin_run projects onto the spawn step
+and the child's joins, as it projects a closed-region refusal as
+`ASX_E_REGION_CLOSED`.
 
 ## 5. Must-fail scenarios
 
@@ -450,11 +454,25 @@ open gap with the gap named; `make conformance` lists them as ERROR.
 
 Open:
 
-- **Region admission limits** for `region_limits`: no C API sets per-region
-  task, child or obligation limits today. `ASX_E_ADMISSION_LIMIT` appears
-  only in the status string table.
+- **When `max_tasks` is checked under lab dispatch.** Rust checks a spawn
+  against the region's live-task limit when the next lab step admits it
+  from the spawn mailbox, after the spawns queued before it and after the
+  spawner's own completion; C checks when `asx_task_spawn` is called. A
+  spawn the two decide differently diverges (generated scenarios set
+  `max_tasks` only in that way, so the generator leaves it out; the
+  curated `region-limits-admission-001` spawns within one poll, where both
+  agree). A task-group member refused by the limit also stops the C
+  interpreter (`asx_task_group_spawn failed`) where Rust records the member
+  cancelled.
 
 Closed (each verified by a fixture that now matches):
+
+- **Region admission limits** for `region_limits`: `asx_region_set_limits`
+  caps a region's live tasks, live child regions and pending obligations;
+  an admission past a cap is refused with `ASX_E_ADMISSION_LIMIT` and
+  changes nothing (cleanup spawns into a Finalizing region are exempt, as
+  in Rust) (`region-limits-admission-001`; about one generated scenario in
+  ten sets child and obligation limits; for `max_tasks` see Open).
 
 - **Multi-permit semaphore acquire**: `asx_semaphore_acquire_many_begin` /
   `asx_semaphore_try_acquire_many` take `count` permits all or nothing, at

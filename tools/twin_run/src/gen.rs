@@ -27,11 +27,12 @@
 //! channel and declare a barrier, whose waits may fall short of its
 //! parties.
 //!
-//! Semaphore acquires sometimes take 2 permits at once (all or nothing).
+//! Semaphore acquires sometimes take 2 permits at once (all or nothing),
+//! and about one scenario in ten sets admission limits on a region.
 //!
 //! Left out on purpose: race
 //! (same-round ties are an RNG pick in Rust and the lowest index in C, a
-//! known divergence, bd-g652), region_limits, actors and supervision.
+//! known divergence, bd-g652), actors and supervision.
 //! join_all, first_ok and quorum groups are generated.
 
 use serde_json::{Value, json};
@@ -521,6 +522,21 @@ pub fn scenario(seed: u64, index: u64) -> Value {
 
     let mut script = Vec::new();
     let mut at = 0u64;
+    // Admission limits on a region once the first burst has run: later
+    // child regions and reservations past them are refused
+    // (ASX_E_ADMISSION_LIMIT). A field left out is unlimited. No
+    // max_tasks: Rust checks it when the next lab step admits a spawn,
+    // C when the spawn is made (DSL §7, open).
+    if rng.chance(10) {
+        let mut op = json!({"op": "region_limits", "region": *rng.pick(&region_names)});
+        if rng.chance(70) {
+            op["max_children"] = json!(rng.below(3));
+        }
+        if rng.chance(70) {
+            op["max_obligations"] = json!(rng.below(3));
+        }
+        script.push(json!({"at_ns": 0, "op": op}));
+    }
     for _ in 0..rng.below(3) {
         at += 50 * rng.below(5);
         let op = match rng.below(3) {

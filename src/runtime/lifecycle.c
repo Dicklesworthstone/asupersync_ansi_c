@@ -270,7 +270,7 @@ static void *asx_region_capture_alloc(asx_region_slot *region, uint32_t size,
     if (end > ASX_REGION_CAPTURE_ARENA_BYTES) return NULL;
 
     region->capture_used = end;
-    return (void *)&region->capture_arena[start];
+    return (void *)&region->capture_arena.bytes[start];
 }
 
 /* -------------------------------------------------------------------
@@ -708,6 +708,9 @@ asx_status asx_region_open(asx_region_id *out_id) {
     g_regions[idx].poisoned = 0;
     asx_cleanup_init(&g_regions[idx].cleanup);
     g_regions[idx].budget = asx_budget_infinite();
+    g_regions[idx].limits.max_tasks = ASX_REGION_UNLIMITED;
+    g_regions[idx].limits.max_children = ASX_REGION_UNLIMITED;
+    g_regions[idx].limits.max_obligations = ASX_REGION_UNLIMITED;
     g_regions[idx].capture_used = 0;
     g_regions[idx].cancel_requested = 0;
     g_regions[idx].cancel_reason.kind = ASX_CANCEL_USER;
@@ -741,6 +744,10 @@ asx_status asx_region_open_child(asx_region_id parent, asx_region_id *out_child)
     /* A closing or closed parent rejects children as Rust's
      * RegionCreateError::ParentClosed does (vocabulary §5: REGION_CLOSED). */
     if (parent_slot->state != ASX_REGION_OPEN) return ASX_E_REGION_CLOSED;
+    /* Rust RegionCreateError::ParentAtCapacity (vocabulary §5). */
+    if (parent_slot->child_count >= parent_slot->limits.max_children) {
+        return ASX_E_ADMISSION_LIMIT;
+    }
     if (parent_slot->child_count >= ASX_MAX_REGION_CHILDREN) return ASX_E_RESOURCE_EXHAUSTED;
 
     st = asx_region_open(out_child);
@@ -863,6 +870,26 @@ asx_status asx_region_get_budget(asx_region_id id, asx_budget *out) {
     return ASX_OK;
 }
 
+asx_status asx_region_set_limits(asx_region_id id, const asx_region_limits *limits) {
+    asx_region_slot *r;
+    asx_status st;
+    if (limits == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
+    r->limits = *limits;
+    return ASX_OK;
+}
+
+asx_status asx_region_get_limits(asx_region_id id, asx_region_limits *out) {
+    asx_region_slot *r;
+    asx_status st;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
+    *out = r->limits;
+    return ASX_OK;
+}
+
 asx_status asx_region_close(asx_region_id id) {
     asx_region_slot *r;
     asx_status st;
@@ -982,6 +1009,15 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
             asx_lab_defer_refused_admission();
         }
         return ASX_E_REGION_CLOSED;
+    }
+    /* At its live-task limit: Rust's admission refuses the child with
+     * SpawnError::RegionAtCapacity; cleanup work in a Finalizing region is
+     * exempt (record/region.rs add_task_internal). */
+    if (r->state != ASX_REGION_FINALIZING && r->task_count >= r->limits.max_tasks) {
+        if (asx_lab_dispatch_active() && asx_task_current() != ASX_INVALID_ID) {
+            asx_lab_defer_refused_admission();
+        }
+        return ASX_E_ADMISSION_LIMIT;
     }
 
     st = asx_task_slot_alloc(&idx);
@@ -1218,6 +1254,20 @@ asx_status asx_obligation_slot_lookup(asx_obligation_id id, asx_obligation_slot 
     return ASX_OK;
 }
 
+/* Obligations reserved in `region` and not yet resolved. */
+static uint32_t region_pending_obligations(asx_region_id region) {
+    uint32_t i;
+    uint32_t n = 0;
+    for (i = 0; i < g_obligation_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+        if (g_obligations[i].alive && g_obligations[i].state == ASX_OBLIGATION_RESERVED &&
+            asx_handle_index(g_obligations[i].region) == asx_handle_index(region)) {
+            n++;
+        }
+    }
+    return n;
+}
+
 static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligation_kind kind,
                                               asx_task_slot *holder_slot, asx_task_id holder,
                                               asx_obligation_id *out_id) {
@@ -1234,6 +1284,11 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
     /* Only open regions can reserve obligations (Rust
      * ObligationAdmissionError::RegionClosed; vocabulary §5). */
     if (!asx_region_can_spawn(r->state)) return ASX_E_REGION_CLOSED;
+    /* At its pending-obligation limit (Rust try_reserve_obligation). */
+    if (r->limits.max_obligations != ASX_REGION_UNLIMITED &&
+        region_pending_obligations(region) >= r->limits.max_obligations) {
+        return ASX_E_ADMISSION_LIMIT;
+    }
 
     st = asx_obligation_slot_alloc(&idx);
     if (st != ASX_OK) return st;

@@ -342,6 +342,35 @@ ASX_API ASX_MUST_USE asx_status asx_region_close_poll(asx_task_id self, asx_regi
  * NULL, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for invalid handles. */
 ASX_API ASX_MUST_USE asx_status asx_region_get_budget(asx_region_id id, asx_budget *out);
 
+/* Region admission limits (Rust RegionLimits, record/region.rs:208): each
+ * caps the region's live work, and ASX_REGION_UNLIMITED (every field of a
+ * new region) means no cap. An admission that would exceed one is refused
+ * with ASX_E_ADMISSION_LIMIT and changes nothing:
+ *   max_tasks        tasks spawned into the region that have not completed
+ *                    (a spawn while the region is Finalizing, cleanup
+ *                    work, is exempt, as in Rust);
+ *   max_children     child regions that have not closed;
+ *   max_obligations  obligations reserved in the region and not resolved.
+ * A refused spawn from a poll under lab dispatch is delivered like a
+ * closed-region refusal (asx_scheduler_last_spawn_refusal). */
+#define ASX_REGION_UNLIMITED UINT32_MAX
+
+typedef struct {
+    uint32_t max_tasks;
+    uint32_t max_children;
+    uint32_t max_obligations;
+} asx_region_limits;
+
+/* Replace a region's admission limits (Rust set_region_limits). Lowering a
+ * limit below the current count refuses new admissions only. Returns
+ * ASX_E_INVALID_ARGUMENT if limits is NULL, ASX_E_NOT_FOUND /
+ * ASX_E_STALE_HANDLE for invalid handles. */
+ASX_API ASX_MUST_USE asx_status asx_region_set_limits(asx_region_id id,
+                                                      const asx_region_limits *limits);
+
+/* Read a region's admission limits. Same errors as asx_region_set_limits. */
+ASX_API ASX_MUST_USE asx_status asx_region_get_limits(asx_region_id id, asx_region_limits *out);
+
 /* Read a task's remaining budget. Same errors as asx_region_get_budget. */
 ASX_API ASX_MUST_USE asx_status asx_task_get_budget(asx_task_id id, asx_budget *out);
 

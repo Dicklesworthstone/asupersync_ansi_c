@@ -37,7 +37,15 @@ typedef struct {
     int poisoned;              /* 1 if region has been poisoned (containment) */
     asx_cleanup_stack cleanup; /* LIFO cleanup for finalization */
     asx_budget budget;         /* inherited by tasks and child regions */
-    uint8_t capture_arena[ASX_REGION_CAPTURE_ARENA_BYTES];
+    asx_region_limits limits;  /* admission limits (unlimited by default) */
+    /* Captured task state is carved at 8-byte offsets: the union keeps the
+     * arena itself 8-byte aligned whatever fields precede it. */
+    union {
+        uint8_t bytes[ASX_REGION_CAPTURE_ARENA_BYTES];
+        uint64_t align_u64;
+        double align_double;
+        void *align_ptr;
+    } capture_arena;
     uint32_t capture_used;
     /* Region cancellation (Rust RegionRecord cancel reason): set by the
      * first asx_region_cancel reaching the region, strengthened by later
