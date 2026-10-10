@@ -28,6 +28,10 @@
  *   it is handed the baton like any other and passes it on when its next
  *   poll observes the cancel (Rust's unlock pops the front waiter
  *   unconditionally, mutex.rs:344-360; fuzz gen-18-54, bd-z783).
+ *   Poisoning: a guard released as dropped during a panic
+ *   (asx_mutex_unlock_poisoned) poisons the mutex; try_lock and every
+ *   lock poll after its checkpoint then fail with ASX_E_INVALID_STATE
+ *   (Rust LockError::Poisoned), a granted waiter passing the lock on.
  *
  * Wake-driven waiting: poll_acquire returning ASX_E_PENDING inside a
  * scheduler poll records the calling task on the waiter and parks it. A
@@ -69,6 +73,10 @@ typedef struct {
      * (Rust's Mutex registers none). Otherwise a Semaphore, whose permits
      * reserve SemaphorePermit obligations. */
     int is_mutex;
+    /* Mutex only: a holder's guard was dropped while its task panicked
+     * (Rust's MutexGuard drop, sync/mutex.rs:758-763). Every later lock
+     * fails with LockError::Poisoned, ASX_E_INVALID_STATE. */
+    int poisoned;
 } sem_slot;
 
 static sem_slot g_slots[ASX_SEMAPHORE_MAX];
@@ -215,6 +223,7 @@ static asx_status sem_create(uint32_t initial_permits, int is_mutex, asx_semapho
             g_slots[i].max_permits = initial_permits;
             g_slots[i].outstanding = 0u;
             g_slots[i].is_mutex = is_mutex;
+            g_slots[i].poisoned = 0;
             asx_wait_records_init(&g_slots[i].waiters, sem_reap_queue);
             out->slot = i;
             out->generation = g_slots[i].generation;
@@ -267,6 +276,8 @@ asx_status asx_semaphore_try_acquire_many(asx_semaphore_handle handle, uint32_t 
     s = &g_slots[handle.slot];
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
     if (s->is_mutex && count != 1u) return ASX_E_INVALID_ARGUMENT;
+    /* Rust's try_lock checks poisoning first (sync/mutex.rs:251). */
+    if (s->is_mutex && s->poisoned) return ASX_E_INVALID_STATE;
 
     out->sem_slot = handle.slot;
     out->generation = handle.generation;
@@ -415,6 +426,15 @@ asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphor
         }
     }
 
+    /* Poisoned (Rust's Lock future, after the checkpoint and before
+     * looking at a grant, sync/mutex.rs:582-587): give up, passing a
+     * granted lock on, and fail. */
+    if (s->poisoned) {
+        sem_waiter_retire(s, i);
+        sem_dispatch_parked(s);
+        return ASX_E_INVALID_STATE;
+    }
+
     /* Already acquired by a prior release? */
     if ((sem_node(i)->flags & SEM_ACQUIRED) != 0u) return sem_consume_grant(s, i, waiter, out, cx);
 
@@ -512,6 +532,27 @@ asx_status asx_semaphore_release(asx_semaphore_permit permit) {
     }
     sem_commit_obligation(&permit);
     return ASX_OK;
+}
+
+/* Rust's MutexGuard drop while its thread panics: poison, then unlock
+ * (sync/mutex.rs:758-763). The unlock hands the lock on as usual; each
+ * waiter in turn fails at its next poll and passes it on. */
+asx_status asx_semaphore_mutex_release_poisoned(asx_semaphore_permit permit) {
+    sem_slot *s;
+    if (permit.sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
+    s = &g_slots[permit.sem_slot];
+    if (!s->alive || s->generation != permit.generation) return ASX_E_STALE_HANDLE;
+    if (!s->is_mutex || permit.count > s->outstanding) return ASX_E_INVALID_STATE;
+    s->poisoned = 1;
+    return asx_semaphore_release(permit);
+}
+
+int asx_semaphore_mutex_poisoned(asx_semaphore_handle handle) {
+    if (handle.slot >= ASX_SEMAPHORE_MAX) return 0;
+    if (!g_slots[handle.slot].alive || g_slots[handle.slot].generation != handle.generation) {
+        return 0;
+    }
+    return g_slots[handle.slot].poisoned;
 }
 
 asx_status asx_semaphore_forget(asx_semaphore_permit permit) {

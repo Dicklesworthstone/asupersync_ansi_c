@@ -52,6 +52,14 @@ asx_status asx_mutex_lock_cancel(asx_mutex_lock_waiter *waiter) {
 
 asx_status asx_mutex_unlock(asx_mutex_guard guard) { return asx_semaphore_release(guard.permit); }
 
+asx_status asx_mutex_unlock_poisoned(asx_mutex_guard guard) {
+    return asx_semaphore_mutex_release_poisoned(guard.permit);
+}
+
+int asx_mutex_is_poisoned(asx_mutex_handle handle) {
+    return asx_semaphore_mutex_poisoned(handle.sem);
+}
+
 /* ------------------------------------------------------------------ */
 /* Queries                                                             */
 /* ------------------------------------------------------------------ */

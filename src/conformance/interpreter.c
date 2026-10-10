@@ -79,6 +79,7 @@ typedef struct {
     uint32_t phase;        /* suspension state of the current step */
     asx_sleep_state sleep; /* the current sleep step */
     asx_status end;        /* poll result once the program has ended */
+    int panicking;         /* the program ended with a panicked return */
     int joined;            /* outcome taken by a join; the slot is gone */
     uint32_t outcome;      /* projected outcome node (out document) when joined */
     it_local_obligation obligations[IT_MAX_LOCAL];
@@ -838,7 +839,10 @@ static void close_endpoint(it_channel *c, it_receiver *r) {
  * (a name's most recent permit is the one sem_release pops, as Rust's
  * Vec::pop). */
 static asx_status release_guard(it_task *t, uint32_t i) {
-    asx_status st = asx_mutex_unlock(t->guards[i].guard);
+    /* A guard dropped while the task panics poisons the mutex (Rust's
+     * MutexGuard drop, sync/mutex.rs:758-763). */
+    asx_status st = t->panicking ? asx_mutex_unlock_poisoned(t->guards[i].guard)
+                                 : asx_mutex_unlock(t->guards[i].guard);
     for (; i + 1u < t->n_guards; i++) t->guards[i] = t->guards[i + 1u];
     t->n_guards--;
     return st;
@@ -852,8 +856,16 @@ static asx_status release_permit(it_task *t, uint32_t i) {
 }
 
 static asx_status release_rw_guard(it_task *t, uint32_t i) {
-    asx_status st = t->rw_guards[i].is_write ? asx_rwlock_write_unlock(t->rw_guards[i].write)
-                                             : asx_rwlock_read_unlock(t->rw_guards[i].read);
+    /* Only a write guard dropped while the task panics poisons the lock
+     * (rwlock.rs:1083-1090); read guards never do. */
+    asx_status st;
+    if (!t->rw_guards[i].is_write) {
+        st = asx_rwlock_read_unlock(t->rw_guards[i].read);
+    } else if (t->panicking) {
+        st = asx_rwlock_write_unlock_poisoned(t->rw_guards[i].write);
+    } else {
+        st = asx_rwlock_write_unlock(t->rw_guards[i].write);
+    }
     for (; i + 1u < t->n_rw_guards; i++) t->rw_guards[i] = t->rw_guards[i + 1u];
     t->n_rw_guards--;
     return st;
@@ -2221,8 +2233,10 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
             t->end = err;
         } else if (strcmp(tag, "panicked") == 0) {
             /* The step is a panic: the observation is recorded first, as in
-             * Rust where the step's observation precedes panic_any. */
+             * Rust where the step's observation precedes panic_any. The
+             * locals then drop while panicking (drop_locals). */
             observe_status(t, idx, op, ASX_OK);
+            t->panicking = 1;
             if (asx_task_panic(self, it_str(outcome, "message")) != ASX_OK) {
                 it_fail_task(t, idx, "asx_task_panic failed");
             }

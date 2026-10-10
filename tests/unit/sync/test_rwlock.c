@@ -533,6 +533,54 @@ TEST(poll_of_the_other_kind_is_refused) {
     asx_rwlock_close(h);
 }
 
+/* Rust poisons the lock when a write guard drops while its task panics
+ * (rwlock.rs:1083-1090); a read guard never does. */
+TEST(write_unlock_poisoned_poisons_the_lock) {
+    asx_rwlock_handle h;
+    asx_rwlock_write_guard wg;
+    asx_rwlock_read_guard rg;
+    asx_rwlock_waiter rw;
+    asx_rwlock_waiter ww;
+    setup();
+    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_try_write(h, &wg), ASX_OK);
+    ASSERT_EQ(asx_rwlock_read_begin(h, &rw), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_read(&rw, &rg, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_rwlock_write_begin(h, &ww), ASX_OK);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_PENDING);
+
+    ASSERT_EQ(asx_rwlock_write_unlock_poisoned(wg), ASX_OK);
+    ASSERT_TRUE(asx_rwlock_is_poisoned(h));
+    ASSERT_FALSE(asx_rwlock_is_write_locked(h));
+    ASSERT_EQ(asx_rwlock_reader_count(h), 0u); /* nothing was granted */
+    ASSERT_EQ(asx_rwlock_poll_read(&rw, &rg, NULL), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_rwlock_poll_write(&ww, &wg, NULL), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_rwlock_try_read(h, &rg), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_rwlock_try_write(h, &wg), ASX_E_INVALID_STATE);
+    /* Not write-locked any more: refused, as a released guard. */
+    ASSERT_EQ(asx_rwlock_write_unlock_poisoned(wg), ASX_E_INVALID_STATE);
+    asx_rwlock_close(h);
+}
+
+TEST(read_guards_never_poison) {
+    asx_rwlock_handle h;
+    asx_rwlock_read_guard rg;
+    asx_rwlock_write_guard wg;
+    setup();
+    ASSERT_EQ(asx_rwlock_create(&h), ASX_OK);
+    ASSERT_EQ(asx_rwlock_try_read(h, &rg), ASX_OK);
+    /* Only a write guard can be released poisoned. */
+    wg.rw_slot = rg.rw_slot;
+    wg.generation = rg.generation;
+    ASSERT_EQ(asx_rwlock_write_unlock_poisoned(wg), ASX_E_INVALID_STATE);
+    ASSERT_FALSE(asx_rwlock_is_poisoned(h));
+    ASSERT_EQ(asx_rwlock_read_unlock(rg), ASX_OK);
+    ASSERT_EQ(asx_rwlock_try_write(h, &wg), ASX_OK);
+    ASSERT_EQ(asx_rwlock_write_unlock(wg), ASX_OK);
+    ASSERT_FALSE(asx_rwlock_is_poisoned(h));
+    asx_rwlock_close(h);
+}
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -577,6 +625,8 @@ int main(void) {
     RUN_TEST(abandoned_last_writer_admits_queued_readers);
     RUN_TEST(abandoned_granted_writer_passes_the_lock_on);
     RUN_TEST(poll_of_the_other_kind_is_refused);
+    RUN_TEST(write_unlock_poisoned_poisons_the_lock);
+    RUN_TEST(read_guards_never_poison);
 
     TEST_REPORT();
     return test_failures;

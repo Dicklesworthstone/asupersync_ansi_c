@@ -55,7 +55,7 @@ ASX_API asx_status asx_mutex_close(asx_mutex_handle handle);
  * ------------------------------------------------------------------- */
 
 /* Try to lock immediately. Returns ASX_OK + guard if unlocked,
- * ASX_E_WOULD_BLOCK if locked. */
+ * ASX_E_WOULD_BLOCK if locked, ASX_E_INVALID_STATE if poisoned. */
 ASX_API asx_status asx_mutex_try_lock(asx_mutex_handle handle, asx_mutex_guard *out);
 
 /* -------------------------------------------------------------------
@@ -82,6 +82,16 @@ ASX_API asx_status asx_mutex_lock_cancel(asx_mutex_lock_waiter *waiter);
 
 /* Unlock the mutex (release the guard). Wakes one waiter if any. */
 ASX_API asx_status asx_mutex_unlock(asx_mutex_guard guard);
+
+/* Release the guard as Rust's MutexGuard does when dropped while its task
+ * panics (sync/mutex.rs:758-763): the mutex is poisoned, then unlocked.
+ * From then on try_lock, and every lock poll after its Cx checkpoint,
+ * fail with ASX_E_INVALID_STATE (Rust LockError::Poisoned, vocabulary
+ * §5); a waiter handed the lock passes it on as it fails. */
+ASX_API asx_status asx_mutex_unlock_poisoned(asx_mutex_guard guard);
+
+/* 1 if the mutex is poisoned (asx_mutex_unlock_poisoned). */
+ASX_API int asx_mutex_is_poisoned(asx_mutex_handle handle);
 
 /* -------------------------------------------------------------------
  * Queries

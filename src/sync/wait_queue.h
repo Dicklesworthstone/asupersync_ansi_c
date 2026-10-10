@@ -252,6 +252,11 @@ void asx_wait_wake_task(asx_task_id task);
  * asx_semaphore_create. */
 asx_status asx_semaphore_create_untracked(uint32_t initial_permits, asx_semaphore_handle *out);
 
+/* Mutex slots: release `permit` as a guard dropped while its task panics
+ * (the slot is poisoned first), and whether the slot is poisoned. */
+asx_status asx_semaphore_mutex_release_poisoned(asx_semaphore_permit permit);
+int asx_semaphore_mutex_poisoned(asx_semaphore_handle handle);
+
 /* 1 if both handles name the same task slot generation (the state bits
  * embedded in task handles are ignored). */
 int asx_wait_same_task(asx_task_id a, asx_task_id b);

@@ -586,6 +586,51 @@ TEST(mutex_lock_cancel) {
     ASSERT_EQ(asx_mutex_close(h), ASX_OK);
 }
 
+/* Rust poisons a mutex whose guard drops while its task panics; try_lock
+ * and the queued lock then fail with Poisoned (ASX_E_INVALID_STATE). */
+TEST(mutex_unlock_poisoned_poisons) {
+    asx_mutex_handle h;
+    asx_mutex_guard g1, g2;
+    asx_mutex_lock_waiter w;
+    setup();
+    MUST_OK(asx_mutex_create(&h));
+    MUST_OK(asx_mutex_try_lock(h, &g1));
+    MUST_OK(asx_mutex_lock_begin(h, &w));
+    ASSERT_EQ(asx_mutex_poll_lock(&w, &g2, NULL), ASX_E_PENDING);
+    ASSERT_FALSE(asx_mutex_is_poisoned(h));
+
+    ASSERT_EQ(asx_mutex_unlock_poisoned(g1), ASX_OK);
+    ASSERT_TRUE(asx_mutex_is_poisoned(h));
+    /* The queued waiter was handed the lock and gives it back failing. */
+    ASSERT_EQ(asx_mutex_poll_lock(&w, &g2, NULL), ASX_E_INVALID_STATE);
+    ASSERT_FALSE(asx_mutex_is_locked(h));
+    ASSERT_EQ(asx_mutex_try_lock(h, &g2), ASX_E_INVALID_STATE);
+    MUST_OK(asx_mutex_lock_begin(h, &w));
+    ASSERT_EQ(asx_mutex_poll_lock(&w, &g2, NULL), ASX_E_INVALID_STATE);
+    /* A guard released twice poisons nothing more and is refused. */
+    ASSERT_EQ(asx_mutex_unlock_poisoned(g1), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_mutex_close(h), ASX_OK);
+    ASSERT_FALSE(asx_mutex_is_poisoned(h)); /* closed: stale handle */
+}
+
+TEST(mutex_plain_unlock_does_not_poison) {
+    asx_mutex_handle h;
+    asx_mutex_guard g;
+    asx_mutex_guard stale;
+    setup();
+    MUST_OK(asx_mutex_create(&h));
+    MUST_OK(asx_mutex_try_lock(h, &g));
+    stale = g;
+    MUST_OK(asx_mutex_unlock(g));
+    ASSERT_FALSE(asx_mutex_is_poisoned(h));
+    /* Releasing an already released guard refuses and poisons nothing. */
+    ASSERT_EQ(asx_mutex_unlock_poisoned(stale), ASX_E_INVALID_STATE);
+    ASSERT_FALSE(asx_mutex_is_poisoned(h));
+    ASSERT_EQ(asx_mutex_try_lock(h, &g), ASX_OK);
+    MUST_OK(asx_mutex_unlock(g));
+    ASSERT_EQ(asx_mutex_close(h), ASX_OK);
+}
+
 /* ================================================================== */
 /* Barrier tests                                                       */
 /* ================================================================== */
@@ -969,6 +1014,8 @@ int main(void) {
     RUN_TEST(mutex_double_lock_blocks);
     RUN_TEST(mutex_async_lock);
     RUN_TEST(mutex_lock_cancel);
+    RUN_TEST(mutex_unlock_poisoned_poisons);
+    RUN_TEST(mutex_plain_unlock_does_not_poison);
 
     /* Barrier */
     RUN_TEST(barrier_create_close);

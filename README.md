@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-1%2C973%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-1%2C977%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,973<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,977<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -41,20 +41,18 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->71<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
+  - `make conformance` runs <!-- fact:rust_fixtures -->75<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
   - Covered areas: region/task/obligation lifecycle, cancellation and masking, budgets, mpsc/oneshot/broadcast/watch channels, mutex/rwlock/semaphore/notify/barrier, task groups (join_all, race with a deadline, first_ok, quorum) and region admission limits. All of it runs under the lab's single-worker dispatch model.
-- **Known differences, open:** listed in [`docs/SCENARIO_DSL_V2.md`](docs/SCENARIO_DSL_V2.md) §7 and rule by rule in [`docs/C_REFINEMENT_MAP.md`](docs/C_REFINEMENT_MAP.md). Examples:
-  - lock poisoning;
-  - when a region's `max_tasks` and permit-obligation limits are checked.
+- **Known differences, open:** listed in [`docs/SCENARIO_DSL_V2.md`](docs/SCENARIO_DSL_V2.md) §7 and rule by rule in [`docs/C_REFINEMENT_MAP.md`](docs/C_REFINEMENT_MAP.md). For example, when a region's `max_tasks` and permit-obligation limits are checked.
 - **Not compared with Rust; tested in C only:** actors (GenServer) and supervision, which neither oracle interprets yet; networking, files, processes and HTTP; live, non-lab scheduling.
 
 ### Why Use `asx`?
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->1,973<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->1,977<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -411,8 +409,8 @@ What this covers is what the scenario language (`docs/SCENARIO_DSL_V2.md`)
 can express: lifecycle, cancellation, budgets, obligations, task groups,
 channels, sync primitives, actors and supervision, run under the lab's
 single-worker dispatch. Networking, files, processes, HTTP and live
-(non-deterministic) builds are outside it. Open C-side gaps, such as lock
-poisoning, are listed in that document's §7.
+(non-deterministic) builds are outside it. Open C-side gaps, such as when
+region limits are checked, are listed in that document's §7.
 
 ```bash
 make conformance        # executed C-vs-Rust comparison of every v2 fixture
@@ -1519,11 +1517,11 @@ All sync primitives are cooperative (no OS-level blocking), async-friendly (begi
 
 Waiters of every primitive and channel are nodes in one runtime-wide pool (`ASX_WAIT_NODE_CAPACITY`, four per task slot by default), so no primitive has a waiter limit of its own; as in Rust, whose waiter queues are unbounded, every task of the runtime can wait on one mutex and is served in arrival order. Only an exhausted pool is reported (`ASX_E_RESOURCE_EXHAUSTED` from a `*_begin`; a channel waiter yields and is re-polled instead), after the nodes of dead tasks have been reclaimed.
 
-**Mutex**: Cooperative mutual exclusion implemented as a semaphore with count 1. `try_lock()` returns immediately; `lock_begin()`/`poll_lock()` yield until available. No priority inheritance: a waiting task does not raise the lock holder's priority.
+**Mutex**: Cooperative mutual exclusion implemented as a semaphore with count 1. `try_lock()` returns immediately; `lock_begin()`/`poll_lock()` yield until available. No priority inheritance: a waiting task does not raise the lock holder's priority. Releasing the guard with `asx_mutex_unlock_poisoned()`, the analog of Rust's guard dropped during a panic, poisons the mutex: every later lock fails with `ASX_E_INVALID_STATE`, as Rust's `LockError::Poisoned`.
 
 **Semaphore**: Counting permit system with configurable initial count, following Rust's `Semaphore`. An acquire takes one permit, or `n` at once with `asx_semaphore_acquire_many_begin` / `asx_semaphore_try_acquire_many` (all or nothing; the permit returns all `n` on release). Waiters queue in arrival order (a waiter joins the line at its first poll that has to wait), and only the front of the line takes permits: a release wakes the front waiter if it can now run, and that waiter, taking its permit, wakes the next. `try_acquire()` is non-blocking and fails while anyone is queued. `asx_semaphore_add_permits` grows the pool (saturating) and wakes the front waiter if it can now run; `asx_semaphore_forget` drops a permit without returning its permits, aborting its obligation. A permit value is released once: a second release that would return permits nobody holds is refused with `ASX_E_INVALID_STATE` (C cannot consume a permit the way Rust's drop does). Integrates with the obligation system for permit tracking. (The mutex instead hands the lock straight to the front waiter on unlock, as Rust's `Mutex` does.)
 
-**RwLock**: Many readers or one writer, following Rust's `RwLock` and its bounded writer-preference policy. A read or write takes the lock at its first poll if it can (a read when no writer holds or waits for it, a write when nobody holds it and no writer is queued); otherwise it joins the line and waits for a grant. A writer's release serves the oldest queued writer unless readers queued before it, who go first; the last reader's release serves the oldest queued writer; after 16 writer hand-offs in a row while a reader waits, the oldest queued reader gets a turn. Grants go to the front of the line even when its task has a cancel request pending; that waiter gives the lock back at its next poll. `try_read` / `try_write` fail while a writer waits. Unlike Rust, a C lock is never poisoned, and a write guard cannot be downgraded.
+**RwLock**: Many readers or one writer, following Rust's `RwLock` and its bounded writer-preference policy. A read or write takes the lock at its first poll if it can (a read when no writer holds or waits for it, a write when nobody holds it and no writer is queued); otherwise it joins the line and waits for a grant. A writer's release serves the oldest queued writer unless readers queued before it, who go first; the last reader's release serves the oldest queued writer; after 16 writer hand-offs in a row while a reader waits, the oldest queued reader gets a turn. Grants go to the front of the line even when its task has a cancel request pending; that waiter gives the lock back at its next poll. `try_read` / `try_write` fail while a writer waits. A write guard released with `asx_rwlock_write_unlock_poisoned()` (Rust's write guard dropped during a panic) poisons the lock: it wakes every queued waiter, and every later read or write fails with `ASX_E_INVALID_STATE`; read guards never poison. Unlike Rust, a write guard cannot be downgraded.
 
 **Barrier**: N-way rendezvous with leader election, following Rust's `Barrier`. A waiter arrives at its first `poll_wait` (not at `wait_begin`), after the Cx checkpoint that every poll starts with, so an already-cancelled task never arrives. All N must arrive before any proceed; the arrival that completes N trips the barrier and is elected leader (`is_leader = 1`), and the next arrival starts a new round. Cancel-safe: a cancelled waiter withdraws its arrival without tripping the barrier, unless its round already tripped, in which case release wins and the wait succeeds.
 
@@ -2263,7 +2261,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->1,973<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->1,977<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

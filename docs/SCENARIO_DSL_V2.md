@@ -483,14 +483,22 @@ Open:
   differently (fuzz gen-9-120, gen-10-146). Generated scenarios set
   `max_obligations` only when no permit can register an obligation.
 
-- **Lock poisoning.** A Rust mutex or rwlock write guard dropped while its
-  task panics poisons the lock, and later acquires fail with `Poisoned`
-  (`ASX_E_INVALID_STATE`; owned guards poison at `sync/mutex.rs:1010`,
-  `sync/rwlock.rs:1264`). C
-  locks have no poisoned state, so a `return` with outcome `panicked` while
-  a guard is held diverges. Generated scenarios never panic.
-
 Closed (each verified by a fixture that now matches):
+
+- **Lock poisoning** (bd-9kll.6.5): a Rust mutex guard, or rwlock write
+  guard, dropped while its task panics poisons the lock (`sync/mutex.rs:758-763`,
+  `sync/rwlock.rs:1083-1090`); later acquires, and queued waiters at
+  their next poll, fail with `Poisoned` (`ASX_E_INVALID_STATE`). A
+  poisoned rwlock release wakes every queued waiter, readers then writers,
+  granting nothing; a poisoned mutex unlock hands the lock on as usual and
+  each waiter passes it on as it fails. The interpreter releases a
+  panicking task's guards with `asx_mutex_unlock_poisoned` /
+  `asx_rwlock_write_unlock_poisoned`. Fixtures
+  `sync-mutex-poisoned-by-panic-001`,
+  `sync-mutex-poisoned-hand-off-chain-001`,
+  `sync-rwlock-poisoned-by-panic-001` (a read guard does not poison),
+  `sync-rwlock-poisoned-wakes-queued-001`. Generated scenarios still never
+  panic while holding a lock.
 
 - **Race ties within one round** (bd-g652): Rust picks the winner among
   the members ready at the owner's poll with `cx.random_usize` over the

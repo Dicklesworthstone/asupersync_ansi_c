@@ -149,6 +149,13 @@ ASX_API asx_status asx_rwlock_read_unlock(asx_rwlock_read_guard guard);
 /* Release a write lock. May wake waiting readers or a writer. */
 ASX_API asx_status asx_rwlock_write_unlock(asx_rwlock_write_guard guard);
 
+/* Release a write lock as Rust's RwLockWriteGuard does when dropped while
+ * its task panics (rwlock.rs:1083-1090): the lock is poisoned, then
+ * released, waking every queued waiter. From then on try_read, try_write
+ * and every poll after its Cx checkpoint fail with ASX_E_INVALID_STATE
+ * (Rust RwLockError::Poisoned, vocabulary §5). Read guards never poison. */
+ASX_API asx_status asx_rwlock_write_unlock_poisoned(asx_rwlock_write_guard guard);
+
 /* -------------------------------------------------------------------
  * Queries
  * ------------------------------------------------------------------- */
@@ -158,6 +165,9 @@ ASX_API uint32_t asx_rwlock_reader_count(asx_rwlock_handle handle);
 
 /* Check if the rwlock is currently write-locked. */
 ASX_API int asx_rwlock_is_write_locked(asx_rwlock_handle handle);
+
+/* 1 if the rwlock is poisoned (asx_rwlock_write_unlock_poisoned). */
+ASX_API int asx_rwlock_is_poisoned(asx_rwlock_handle handle);
 
 /* -------------------------------------------------------------------
  * Arena management
