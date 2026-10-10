@@ -1,13 +1,39 @@
 # Scenario DSL Specification (Shared Rust/C Fixture Contract)
 
 > **SUPERSEDED (2026-10-09)** by `docs/SCENARIO_DSL_V2.md` (`asx.scenario.v2`,
-> bead bd-9kll.2.3). DSL v1 ops cannot express task bodies, so no Rust capture
-> ever polled a task, and several opcodes below have no implementation. Kept
-> for the legacy fixtures that still use it; new scenarios use DSL v2.
+> bead bd-9kll.2.3). New scenarios use DSL v2 (`tests/conformance/scenarios_v2/`,
+> captured by `tools/twin_run`). Everything below the line is a historical
+> record of the v1 design; no code reads this format as written.
+>
+> What exists instead (checked 2026-10-10, bd-9kll.1.8):
+>
+> - The envelope of section 2 (`version`, `forbidden_ids`, `expected`) is not
+>   read by any code; `forbidden_ids` occurs only in docs
+>   (`grep -rl forbidden_ids` outside `.git`).
+> - The legacy fixtures in `fixtures/rust_reference/` declare
+>   `"scenario_dsl_version": "dsl-v1"` but use a different shape (`input.ops`,
+>   `expected_events`, `expected_final_snapshot`, `expected_error_codes`) and
+>   snake_case ops (`region_open`, `task_spawn`, `obligation_reserve`,
+>   `channel_create`, `timer_register`, `scheduler_run`, ...), interpreted by
+>   `tools/fixture_capture/src/main.rs:226-453`. That tool inserts task
+>   records without futures (`main.rs:279-301`), so no Rust capture of those
+>   fixtures polled a task. See `docs/RUST_FIXTURE_CAPTURE_TOOLING.md`.
+> - Twelve of the sixteen opcodes in section 3.1 (`SpawnRegion`,
+>   `CloseRegion`, `SpawnTask`, `ReserveObligation`, `CommitObligation`,
+>   `AbortObligation`, `ChannelReserve`, `ChannelSend`, `ChannelAbort`,
+>   `TimerRegister`, `TimerCancel`, `AdvanceTime`) are op names in the older
+>   C differential-fuzz grammar (`tests/fuzz/fuzz_differential.c:161-167`)
+>   and `tools/rust_fuzz_target/src/main.rs:210-230`, which use a compact
+>   `{op, a, b, u32, u64}` record (`tests/fuzz/grammar_test_vectors.json`),
+>   not the `{id, op, args, expect}` record of section 3.2. `PollTask`,
+>   `RequestCancel`, `AckCancel` and `Assert` have no implementation anywhere
+>   in the repository.
 
 > **Bead:** `bd-296.5`
 > **Status:** Superseded; see above
-> **Last updated:** 2026-02-27 by CopperSpire
+> **Last updated:** 2026-02-27 by CopperSpire (body); header 2026-10-10 (bd-9kll.1.8)
+
+---
 
 This DSL defines deterministic scenario inputs shared by Rust reference capture and ANSI C conformance/fuzz runners.
 
