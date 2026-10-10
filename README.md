@@ -47,6 +47,13 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
   - Covered areas: region/task/obligation lifecycle, cancellation and masking, budgets, mpsc/oneshot/broadcast/watch channels, mutex/rwlock/semaphore/notify/barrier, task groups (join_all, race with a deadline, first_ok, quorum), region admission limits, GenServers (cast, call, stop, cancellation and the mailbox drain) and managed supervisors (one_for_one, one_for_all and rest_for_one restarts, restart intensity and backoff, stop or escalate when the limit is reached). All of it runs under the lab's single-worker dispatch model.
 - **Known differences, open:** none in what the scenario language expresses ([`docs/SCENARIO_DSL_V2.md`](docs/SCENARIO_DSL_V2.md) §7 lists the closed ones); rule by rule in [`docs/C_REFINEMENT_MAP.md`](docs/C_REFINEMENT_MAP.md).
 - **Not compared with Rust; tested in C only:** networking, files, processes and HTTP; live, non-lab scheduling.
+- **Not ported:**
+  - actors: the plain `Actor` trait, system messages, overflow policies, names, monitors and links;
+  - supervision: registries, dynamic supervisors with shared restart domains, restart storm detection, per-child shutdown budgets;
+  - sync: `Mutex::lock_until`;
+  - I/O: kqueue, IOCP and io_uring reactors, and Windows native I/O.
+
+  The module-by-module accounting is in [`docs/RUST_EXPORTED_SURFACE_INVENTORY.md`](docs/RUST_EXPORTED_SURFACE_INVENTORY.md) §11 and, per semantic unit, in [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md).
 
 ### Why Use `asx`?
 
