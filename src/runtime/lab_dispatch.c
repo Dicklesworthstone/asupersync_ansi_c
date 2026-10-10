@@ -448,13 +448,13 @@ void asx_lab_defer_refused_admission(void) {
 
 uint32_t asx_scheduler_last_spawn_refusal(void) { return g_lab_last_refusal; }
 
-int asx_lab_refusal_delivered(uint32_t ticket) {
+int asx_task_refusal_delivered(uint32_t ticket) {
     return ticket == 0u || ticket > g_lab_refusal_n || g_lab_refusal[ticket - 1u].delivered;
 }
 
 void asx_lab_refusal_watch(uint32_t ticket, const asx_task_slot *t) {
     lab_refusal *rf;
-    if (asx_lab_refusal_delivered(ticket)) return;
+    if (asx_task_refusal_delivered(ticket)) return;
     rf = &g_lab_refusal[ticket - 1u];
     rf->has_waiter = 1u;
     rf->waiter = (uint32_t)(t - g_tasks);
@@ -465,7 +465,7 @@ void asx_lab_refusal_watch(uint32_t ticket, const asx_task_slot *t) {
 asx_status asx_task_await_refusal(asx_task_id self, uint32_t ticket) {
     asx_task_slot *t;
     asx_status st;
-    if (asx_lab_refusal_delivered(ticket)) return ASX_OK;
+    if (asx_task_refusal_delivered(ticket)) return ASX_OK;
     st = asx_task_slot_lookup(self, &t);
     if (st != ASX_OK) return st;
     if (!t->in_poll) return ASX_E_INVALID_STATE;

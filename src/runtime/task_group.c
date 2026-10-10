@@ -99,7 +99,7 @@ static void group_collect(asx_task_group *g, const asx_task_slot *owner) {
         if (g->refused[i]) {
             /* Refused at spawn: its join resolves when the next step's
              * admission refuses it; until then the poll registers on it. */
-            if (!asx_lab_refusal_delivered(g->refusal[i])) {
+            if (!asx_task_refusal_delivered(g->refusal[i])) {
                 asx_lab_refusal_watch(g->refusal[i], owner);
                 if (sequential) break;
                 continue;
@@ -448,7 +448,7 @@ asx_status asx_task_group_member_refusal(const asx_task_group *g, uint32_t index
                                          asx_cancel_reason *out) {
     if (g == NULL || out == NULL || index >= g->count) return ASX_E_INVALID_ARGUMENT;
     if (!g->refused[index]) return ASX_E_NOT_FOUND;
-    if (!asx_lab_refusal_delivered(g->refusal[index])) return ASX_E_PENDING;
+    if (!asx_task_refusal_delivered(g->refusal[index])) return ASX_E_PENDING;
     *out = g->refused_reason[index];
     return ASX_OK;
 }

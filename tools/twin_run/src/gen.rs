@@ -18,6 +18,15 @@
 //! park two waiters at once: a lock granting newest-first passed 200
 //! scenarios without them.
 //!
+//! Crowds: about one scenario in twelve has 17 to 32 tasks queueing on one
+//! lock, more than the C runtime once let wait on it (bd-9kll.5.1).
+//!
+//! Channels and sync: besides mpsc (send / try_send / reserve with
+//! permit_send or permit_abort, recv / try_recv, close of either end),
+//! a scenario may connect its tasks with a oneshot, a broadcast or a watch
+//! channel and declare a barrier, whose waits may fall short of its
+//! parties.
+//!
 //! Left out on purpose: multi-permit acquire, race
 //! (same-round ties are an RNG pick in Rust and the lowest index in C, a
 //! known divergence, bd-g652), region_limits, actors and supervision.
@@ -66,8 +75,16 @@ struct World {
     mutex: bool,
     semaphore: bool,
     notify: bool,
+    /// Parties of the barrier `b`.
+    barrier: Option<u64>,
     /// (channel, producer task, consumer task)
     mpsc: Option<(String, String, String)>,
+    /// (channel, sender task, receiver task)
+    oneshot: Option<(String, String, String)>,
+    /// (channel, sender task, subscriber tasks)
+    broadcast: Option<(String, String, Vec<String>)>,
+    /// (channel, sender task, subscriber tasks)
+    watch: Option<(String, String, Vec<String>)>,
 }
 
 /// Per-task generation state: what the program holds so far.
@@ -85,6 +102,12 @@ struct Held {
     spawns: u32,
     messages: u32,
     sends: u32,
+    /// This task closed its end of the mpsc channel.
+    closed: bool,
+    /// This task used its end of the oneshot (it sends or receives once).
+    oneshot_used: bool,
+    /// This task waited at the barrier (each party arrives once).
+    barrier_waited: bool,
 }
 
 fn sleep_step(rng: &mut Rng) -> Value {
@@ -116,7 +139,7 @@ fn child_program(rng: &mut Rng) -> Vec<Value> {
 /// One step of task `me`'s program, given what it holds.
 fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
     loop {
-        match rng.below(19) {
+        match rng.below(24) {
             0 | 1 => return json!({"op": "yield"}),
             2 | 3 => return sleep_step(rng),
             4 | 5 => return checkpoint_step(rng),
@@ -159,6 +182,11 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                                   "kind": *rng.pick(&CANCEL_KINDS)});
                 }
                 let name = held.children.remove(0);
+                // try_join consumes the handle whether or not the child is
+                // done (a running child gives TASK_NOT_COMPLETED).
+                if rng.chance(25) {
+                    return json!({"op": "try_join", "task": name});
+                }
                 return json!({"op": "join", "task": name});
             }
             11 if world.mutex => {
@@ -178,10 +206,10 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 };
             }
             13 if world.notify => {
-                return if rng.chance(70) {
-                    json!({"op": "notify_one", "notify": "n"})
-                } else {
-                    json!({"op": "notify_wait", "notify": "n"})
+                return match rng.below(10) {
+                    0..=5 => json!({"op": "notify_one", "notify": "n"}),
+                    6 => json!({"op": "notify_all", "notify": "n"}),
+                    _ => json!({"op": "notify_wait", "notify": "n"}),
                 };
             }
             14 => {
@@ -193,6 +221,19 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
             }
             15 => {
                 if let Some((ch, producer, consumer)) = &world.mpsc {
+                    if held.closed {
+                        continue;
+                    }
+                    // Dropping an end wakes and fails the other side.
+                    if (me == producer || me == consumer) && rng.chance(8) {
+                        held.closed = true;
+                        let op = if me == producer {
+                            "close_sender"
+                        } else {
+                            "close_receiver"
+                        };
+                        return json!({"op": op, "channel": ch});
+                    }
                     if me == producer {
                         held.sends += 1;
                         if rng.chance(25) {
@@ -249,6 +290,46 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                     }
                 };
             }
+            19 if !held.oneshot_used => {
+                if let Some((ch, sender, receiver)) = &world.oneshot {
+                    if me == sender {
+                        held.oneshot_used = true;
+                        held.sends += 1;
+                        return json!({"op": "oneshot_send", "channel": ch, "value": held.sends});
+                    }
+                    if me == receiver {
+                        held.oneshot_used = true;
+                        return json!({"op": "oneshot_recv", "channel": ch});
+                    }
+                }
+            }
+            20 => {
+                if let Some((ch, sender, subscribers)) = &world.broadcast {
+                    if me == sender {
+                        held.sends += 1;
+                        return json!({"op": "broadcast_send", "channel": ch, "value": held.sends});
+                    }
+                    if subscribers.iter().any(|s| s == me) {
+                        return json!({"op": "broadcast_recv", "channel": ch});
+                    }
+                }
+            }
+            21 => {
+                if let Some((ch, sender, subscribers)) = &world.watch {
+                    if me == sender {
+                        held.sends += 1;
+                        return json!({"op": "watch_send", "channel": ch, "value": held.sends});
+                    }
+                    if subscribers.iter().any(|s| s == me) {
+                        return json!({"op": "watch_changed", "channel": ch});
+                    }
+                }
+            }
+            22 if world.barrier.is_some() && !held.barrier_waited => {
+                held.barrier_waited = true;
+                return json!({"op": "barrier_wait", "barrier": "b"});
+            }
+            23 => return json!({"op": "sleep_until", "at_ns": 50 * (1 + rng.below(12))}),
             _ => {}
         }
     }
@@ -296,7 +377,15 @@ fn budget(rng: &mut Rng) -> Value {
 /// Scenario `index` of the batch seeded `seed`.
 pub fn scenario(seed: u64, index: u64) -> Value {
     let mut rng = Rng::new(seed ^ index.wrapping_mul(0xA24B_AED4_963E_E407));
-    let task_count = 1 + rng.below(4);
+    // A crowd: more tasks than the C runtime once let wait on one mutex or
+    // semaphore (16), all queueing on that lock (bd-9kll.5.1). Rust's
+    // waiter queues are unbounded; C's must serve them the same way.
+    let crowd = rng.chance(8);
+    let task_count = if crowd {
+        17 + rng.below(16)
+    } else {
+        1 + rng.below(4)
+    };
     let tasks: Vec<String> = (0..task_count).map(|i| format!("t.{i}")).collect();
     let mut regions = vec![json!({"name": "r.main", "parent": "root", "budget": null})];
     let mut region_names = vec!["r.main"];
@@ -304,12 +393,38 @@ pub fn scenario(seed: u64, index: u64) -> Value {
         regions.push(json!({"name": "r.side", "parent": "root", "budget": null}));
         region_names.push("r.side");
     }
-    let world = World {
-        mutex: rng.chance(35),
-        semaphore: rng.chance(25),
-        notify: rng.chance(20),
-        mpsc: (task_count >= 2 && rng.chance(35))
-            .then(|| ("ch".to_string(), tasks[0].clone(), tasks[1].clone())),
+    let world = if crowd {
+        let mutex = rng.chance(50);
+        World {
+            mutex,
+            semaphore: !mutex || rng.chance(50),
+            notify: false,
+            barrier: None,
+            mpsc: None,
+            oneshot: None,
+            broadcast: None,
+            watch: None,
+        }
+    } else {
+        // Channels other than mpsc connect the last task to the others.
+        let last = tasks[tasks.len() - 1].clone();
+        let others: Vec<String> = tasks[..tasks.len() - 1].to_vec();
+        let several = task_count >= 2;
+        World {
+            mutex: rng.chance(35),
+            semaphore: rng.chance(25),
+            notify: rng.chance(20),
+            // Fewer arrivals than parties leave the waiters parked until
+            // lab.max_steps: both engines must agree on that end state too.
+            barrier: (several && rng.chance(15)).then(|| 2 + rng.below(task_count - 1)),
+            mpsc: (several && rng.chance(35))
+                .then(|| ("ch".to_string(), tasks[0].clone(), tasks[1].clone())),
+            oneshot: (several && rng.chance(15))
+                .then(|| ("os".to_string(), last.clone(), tasks[0].clone())),
+            broadcast: (several && rng.chance(15))
+                .then(|| ("bc".to_string(), tasks[0].clone(), tasks[1..].to_vec())),
+            watch: (several && rng.chance(15)).then(|| ("wt".to_string(), last, others)),
+        }
     };
     let mut sync = Vec::new();
     if world.mutex {
@@ -321,28 +436,65 @@ pub fn scenario(seed: u64, index: u64) -> Value {
     if world.notify {
         sync.push(json!({"name": "n", "type": "notify"}));
     }
-    let channels: Vec<Value> = world
+    if let Some(parties) = world.barrier {
+        sync.push(json!({"name": "b", "type": "barrier", "parties": parties}));
+    }
+    let mut channels: Vec<Value> = world
         .mpsc
         .iter()
         .map(|(ch, tx, rx)| {
             json!({"name": ch, "type": "mpsc", "capacity": 1 + rng.below(2), "sender": tx, "receiver": rx})
         })
         .collect();
+    if let Some((ch, tx, rx)) = &world.oneshot {
+        channels.push(json!({"name": ch, "type": "oneshot", "sender": tx, "receiver": rx}));
+    }
+    if let Some((ch, tx, subs)) = &world.broadcast {
+        channels.push(
+            json!({"name": ch, "type": "broadcast", "capacity": 1 + rng.below(3),
+                             "sender": tx, "subscribers": subs}),
+        );
+    }
+    if let Some((ch, tx, subs)) = &world.watch {
+        channels.push(
+            json!({"name": ch, "type": "watch", "initial": 0, "sender": tx,
+                             "subscribers": subs}),
+        );
+    }
 
     let mut task_values = Vec::new();
     for me in &tasks {
         let mut held = Held::default();
         let mut program = Vec::new();
+        if crowd {
+            // Queue on the lock, then a short tail that holds nothing (no
+            // spawns: the crowd alone fills most of C's task arena).
+            program.extend(critical_section(&mut rng, &world, me, &mut held));
+            program.extend(child_program(&mut rng));
+            task_values.push(json!({
+                "name": me,
+                "region": *rng.pick(&region_names),
+                "budget": budget(&mut rng),
+                "program": program,
+            }));
+            continue;
+        }
         if (world.mutex || world.semaphore) && rng.chance(75) {
             program.extend(critical_section(&mut rng, &world, me, &mut held));
         }
         for _ in 0..1 + rng.below(7) {
             let s = step(&mut rng, &world, me, &mut held);
-            // A reserved send permit is sent at once (see step 15).
+            // A reserved send permit is sent (or aborted) at once (see
+            // step 15).
             if s["op"] == "reserve_send" {
                 let permit = s["as"].clone();
                 program.push(s);
-                program.push(json!({"op": "permit_send", "permit": permit, "value": held.sends}));
+                if rng.chance(20) {
+                    program.push(json!({"op": "permit_abort", "permit": permit}));
+                } else {
+                    program
+                        .push(json!({"op": "permit_send", "permit": permit, "value": held.sends}));
+                }
             } else {
                 program.push(s);
             }

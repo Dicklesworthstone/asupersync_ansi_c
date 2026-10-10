@@ -1875,9 +1875,13 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
     if (strcmp(op, "try_join") == 0) {
         it_task *target = task_by_name(it_str(step, "task"));
         /* A refused spawn has no task; joining it observes the refusal, as
-         * Rust's join of a child admission refused does (DSL §3.4). */
+         * Rust's join of a child admission refused does (DSL §3.4), but
+         * only once the next step's admission refused it: until then
+         * Rust's try_join reports the child not ready. */
         if (target != NULL && target->refused != ASX_OK) {
-            observe_status(t, idx, label, target->refused);
+            observe_status(t, idx, label,
+                           asx_task_refusal_delivered(target->refusal) ? target->refused
+                                                                       : ASX_E_TASK_NOT_COMPLETED);
             return STEP_NEXT;
         }
         if (target == NULL || !target->spawned || target->joined) {

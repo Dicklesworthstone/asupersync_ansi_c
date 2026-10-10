@@ -379,8 +379,6 @@ void asx_lab_defer_admission(asx_task_slot *t);
  * admission, as Rust's spawn mailbox refuses it then. */
 void asx_lab_note_spawn_internal(void);
 void asx_lab_defer_refused_admission(void);
-/* A refusal ticket was delivered by its admission step (ticket 0: none). */
-int asx_lab_refusal_delivered(uint32_t ticket);
 /* Register `t`, at its current poll's waker priority, to be woken when
  * the refusal is delivered (one registration per refusal: the latest). */
 void asx_lab_refusal_watch(uint32_t ticket, const asx_task_slot *t);

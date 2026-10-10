@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-1%2C966%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-1%2C967%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,966<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,967<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -40,7 +40,7 @@ make test
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->1,966<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->1,967<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and bounded cleanup budgets |
@@ -385,7 +385,12 @@ by editing the fixture.
 (`FUZZ_V2_SEED`, `FUZZ_V2_COUNT`), with Rust run live through twin_run; it
 needs the Rust toolchain from `rust-toolchain.toml`. CI runs it on every push
 and pull request with a fixed seed (9, 200 scenarios), and the nightly
-workflow tries a new seed each day.
+workflow tries a new seed each day. The generator (`tools/twin_run/src/gen.rs`)
+draws lifecycle, cancellation, budget, obligation, region, task-group,
+mpsc, oneshot, broadcast, watch, mutex, semaphore, notify and barrier steps,
+and about one scenario in twelve queues 17 to 32 tasks on one lock; it
+leaves out race groups (a known tie-break divergence), actors and
+supervision.
 
 What this covers is what the scenario language (`docs/SCENARIO_DSL_V2.md`)
 can express: lifecycle, cancellation, budgets, obligations, task groups,
@@ -1501,7 +1506,7 @@ Waiters of every primitive and channel are nodes in one runtime-wide pool (`ASX_
 
 **Semaphore**: Counting permit system with configurable initial count, following Rust's `Semaphore`. Waiters queue in arrival order (a waiter joins the line at its first poll that has to wait), and only the front of the line takes permits: a release wakes the front waiter if it can now run, and that waiter, taking its permit, wakes the next. `try_acquire()` is non-blocking and fails while anyone is queued. Integrates with the obligation system for permit tracking. (The mutex instead hands the lock straight to the front waiter on unlock, as Rust's `Mutex` does.)
 
-**Barrier**: N-way rendezvous with leader election. All N tasks must arrive before any proceed. The last task to arrive is elected leader (`is_leader = 1`). Cancel-safe: cancelling a waiter decrements the arrival count without tripping the barrier. Integrated with Cx checkpoint for structured concurrency cancellation.
+**Barrier**: N-way rendezvous with leader election, following Rust's `Barrier`. A waiter arrives at its first `poll_wait` (not at `wait_begin`), after the Cx checkpoint that every poll starts with, so an already-cancelled task never arrives. All N must arrive before any proceed; the arrival that completes N trips the barrier and is elected leader (`is_leader = 1`), and the next arrival starts a new round. Cancel-safe: a cancelled waiter withdraws its arrival without tripping the barrier, unless its round already tripped, in which case release wins and the wait succeeds.
 
 **Once**: Compute-once cell storing a 64-bit value. `get_or_init(init_fn)` caches the first successful result and later calls return it; a failed or cancelled initialization leaves the cell empty and the next caller retries. Deterministic initialization order (first caller wins).
 
@@ -2239,7 +2244,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->1,966<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->1,967<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

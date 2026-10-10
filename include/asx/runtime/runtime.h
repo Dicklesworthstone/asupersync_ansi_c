@@ -881,6 +881,13 @@ ASX_API uint32_t asx_scheduler_last_spawn_refusal(void);
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_await_refusal(asx_task_id self, uint32_t ticket);
 
+/* 1 once the refusal with this ticket was delivered (and for ticket 0),
+ * else 0. A non-blocking join of the refused child sees the refusal only
+ * then: before it, Rust's TaskHandle::try_join reports the child not
+ * ready (Ok(None)), as the admission is still pending.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API int asx_task_refusal_delivered(uint32_t ticket);
+
 /* -------------------------------------------------------------------
  * Wake-driven waiting (park / wake / timers / join)
  * ------------------------------------------------------------------- */

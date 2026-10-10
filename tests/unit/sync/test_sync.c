@@ -470,17 +470,20 @@ TEST(barrier_two_tasks) {
     setup();
     MUST_OK(asx_barrier_create(2, &h));
 
-    /* First arrives, pending */
+    /* A waiter arrives at its first poll (Rust's BarrierWaitFuture), not
+     * at wait_begin. The first arrives and waits. */
     MUST_OK(asx_barrier_wait_begin(h, &w1));
+    ASSERT_EQ(asx_barrier_waiting_count(h), 0u);
     ASSERT_EQ(asx_barrier_poll_wait(&w1, NULL), ASX_E_PENDING);
     ASSERT_EQ(asx_barrier_waiting_count(h), 1u);
 
-    /* Second arrives, both released */
+    /* The second arrival trips it and leads; the first is released */
     MUST_OK(asx_barrier_wait_begin(h, &w2));
-    ASSERT_EQ(asx_barrier_poll_wait(&w1, NULL), ASX_OK);
+    ASSERT_EQ(asx_barrier_waiting_count(h), 1u);
     ASSERT_EQ(asx_barrier_poll_wait(&w2, NULL), ASX_OK);
+    ASSERT_EQ(asx_barrier_waiting_count(h), 0u);
+    ASSERT_EQ(asx_barrier_poll_wait(&w1, NULL), ASX_OK);
 
-    /* Last to arrive is leader */
     ASSERT_TRUE(w2.is_leader);
     ASSERT_FALSE(w1.is_leader);
 
@@ -499,10 +502,12 @@ TEST(barrier_three_tasks) {
     ASSERT_EQ(asx_barrier_poll_wait(&w2, NULL), ASX_E_PENDING);
 
     MUST_OK(asx_barrier_wait_begin(h, &w3));
+    ASSERT_EQ(asx_barrier_poll_wait(&w3, NULL), ASX_OK); /* trips it */
     ASSERT_EQ(asx_barrier_poll_wait(&w1, NULL), ASX_OK);
     ASSERT_EQ(asx_barrier_poll_wait(&w2, NULL), ASX_OK);
-    ASSERT_EQ(asx_barrier_poll_wait(&w3, NULL), ASX_OK);
     ASSERT_TRUE(w3.is_leader);
+    ASSERT_FALSE(w1.is_leader);
+    ASSERT_FALSE(w2.is_leader);
 
     ASSERT_EQ(asx_barrier_close(h), ASX_OK);
 }
@@ -510,11 +515,18 @@ TEST(barrier_three_tasks) {
 TEST(barrier_wait_cancel) {
     asx_barrier_handle h;
     asx_barrier_waiter w;
+    asx_barrier_waiter idle;
     setup();
     MUST_OK(asx_barrier_create(2, &h));
     MUST_OK(asx_barrier_wait_begin(h, &w));
+    ASSERT_EQ(asx_barrier_poll_wait(&w, NULL), ASX_E_PENDING);
     ASSERT_EQ(asx_barrier_waiting_count(h), 1u);
     MUST_OK(asx_barrier_wait_cancel(&w));
+    ASSERT_EQ(asx_barrier_waiting_count(h), 0u);
+    /* A waiter that never polled never arrived: cancelling it changes
+     * nothing. */
+    MUST_OK(asx_barrier_wait_begin(h, &idle));
+    MUST_OK(asx_barrier_wait_cancel(&idle));
     ASSERT_EQ(asx_barrier_waiting_count(h), 0u);
     ASSERT_EQ(asx_barrier_close(h), ASX_OK);
 }
@@ -547,12 +559,12 @@ TEST(barrier_reusable_across_rounds) {
         ASSERT_EQ(asx_barrier_poll_wait(&w2, NULL), ASX_E_PENDING);
         ASSERT_EQ(asx_barrier_waiting_count(h), 2u);
 
-        MUST_OK(asx_barrier_wait_begin(h, &w3)); /* trips this round */
+        MUST_OK(asx_barrier_wait_begin(h, &w3));
+        ASSERT_EQ(asx_barrier_poll_wait(&w3, NULL), ASX_OK); /* trips this round */
         ASSERT_EQ(asx_barrier_waiting_count(h), 0u);
 
         ASSERT_EQ(asx_barrier_poll_wait(&w1, NULL), ASX_OK);
         ASSERT_EQ(asx_barrier_poll_wait(&w2, NULL), ASX_OK);
-        ASSERT_EQ(asx_barrier_poll_wait(&w3, NULL), ASX_OK);
         /* Exactly one leader per round: the arrival that tripped it */
         ASSERT_FALSE(w1.is_leader);
         ASSERT_FALSE(w2.is_leader);
@@ -568,19 +580,23 @@ TEST(barrier_cancel_counts_only_current_round) {
     setup();
     MUST_OK(asx_barrier_create(2, &h));
 
-    /* Round 1 trips; a and b are released but have not polled yet */
+    /* Round 1 trips at b's arrival; a is released but has not polled
+     * since */
     MUST_OK(asx_barrier_wait_begin(h, &a));
+    ASSERT_EQ(asx_barrier_poll_wait(&a, NULL), ASX_E_PENDING);
     MUST_OK(asx_barrier_wait_begin(h, &b));
+    ASSERT_EQ(asx_barrier_poll_wait(&b, NULL), ASX_OK);
+    ASSERT_TRUE(b.is_leader);
     ASSERT_EQ(asx_barrier_waiting_count(h), 0u);
 
     /* Round 2 starts with c */
     MUST_OK(asx_barrier_wait_begin(h, &c));
+    ASSERT_EQ(asx_barrier_poll_wait(&c, NULL), ASX_E_PENDING);
     ASSERT_EQ(asx_barrier_waiting_count(h), 1u);
 
     /* Withdrawing a released round-1 waiter must not touch round 2 */
     MUST_OK(asx_barrier_wait_cancel(&a));
     ASSERT_EQ(asx_barrier_waiting_count(h), 1u);
-    ASSERT_EQ(asx_barrier_poll_wait(&b, NULL), ASX_OK);
 
     /* Cancelling c withdraws its round-2 arrival; round 2 still needs two */
     MUST_OK(asx_barrier_wait_cancel(&c));
@@ -588,8 +604,8 @@ TEST(barrier_cancel_counts_only_current_round) {
     MUST_OK(asx_barrier_wait_begin(h, &d));
     ASSERT_EQ(asx_barrier_poll_wait(&d, NULL), ASX_E_PENDING);
     MUST_OK(asx_barrier_wait_begin(h, &c));
-    ASSERT_EQ(asx_barrier_poll_wait(&d, NULL), ASX_OK);
     ASSERT_EQ(asx_barrier_poll_wait(&c, NULL), ASX_OK);
+    ASSERT_EQ(asx_barrier_poll_wait(&d, NULL), ASX_OK);
     ASSERT_FALSE(d.is_leader);
     ASSERT_TRUE(c.is_leader);
 

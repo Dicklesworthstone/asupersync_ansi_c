@@ -64,14 +64,20 @@ ASX_API asx_status asx_barrier_close(asx_barrier_handle handle);
  * Wait
  * ------------------------------------------------------------------- */
 
-/* Register at the barrier. Must be followed by poll_wait calls. */
+/* Create a waiter (Rust's Barrier::wait future). It has not arrived yet:
+ * it arrives at its first poll_wait. Must be followed by poll_wait calls. */
 ASX_API ASX_MUST_USE asx_status asx_barrier_wait_begin(asx_barrier_handle handle,
                                                        asx_barrier_waiter *out);
 
-/* Poll for barrier release. Returns ASX_OK when all N arrived
- * (check waiter->is_leader for leader election),
- * ASX_E_PENDING when still waiting; inside a scheduler poll the calling
- * task is then parked until the last arrival (or close) wakes it. */
+/* Poll the waiter, as Rust's BarrierWaitFuture::poll: with a Cx, first
+ * its checkpoint, at every poll. A failed checkpoint withdraws the
+ * waiter's arrival and returns the checkpoint status, unless its round
+ * already tripped: release wins, and the waiter completes with ASX_OK
+ * (not as leader) although its Cx is now cancelled. Otherwise the first
+ * poll arrives; the arrival that completes N trips the barrier, releases
+ * the round and returns ASX_OK with waiter->is_leader set. A released
+ * waiter returns ASX_OK; one still waiting ASX_E_PENDING, and inside a
+ * scheduler poll its task is parked until the trip (or close) wakes it. */
 ASX_API asx_status asx_barrier_poll_wait(asx_barrier_waiter *waiter, asx_cx *cx);
 
 /* Cancel a barrier wait. */
@@ -81,7 +87,7 @@ ASX_API asx_status asx_barrier_wait_cancel(asx_barrier_waiter *waiter);
  * Queries
  * ------------------------------------------------------------------- */
 
-/* Get the number of tasks currently waiting. */
+/* Get the number of waiters that arrived in the current round. */
 ASX_API uint32_t asx_barrier_waiting_count(asx_barrier_handle handle);
 
 /* -------------------------------------------------------------------

@@ -5,6 +5,10 @@
  * in arrival order, so a barrier has no waiter limit of its own and any
  * party count can trip it.
  *
+ * A waiter arrives at its first poll, after the Cx checkpoint that every
+ * poll starts with, as Rust's BarrierWaitFuture does (sync/barrier.rs:
+ * 300-312): a task already cancelled or out of budget never arrives.
+ *
  * Wake-driven waiting: poll_wait returning ASX_E_PENDING inside a
  * scheduler poll records the calling task on the waiter and parks it. The
  * arrival that trips the barrier wakes every parked waiter (in arrival
@@ -23,6 +27,7 @@
 /* Waiter record flags. */
 #define BARRIER_RELEASED 0x1u /* its round has tripped */
 #define BARRIER_LEADER 0x2u   /* the arrival that tripped it */
+#define BARRIER_ARRIVED 0x4u  /* counted in a round (from its first poll) */
 
 /* ------------------------------------------------------------------ */
 /* Arena                                                               */
@@ -52,7 +57,10 @@ static asx_wait_node *barrier_node(uint32_t i) { return asx_wait_node_at(i); }
  * been released still counts toward the current round; a released waiter
  * belongs to a round that already tripped and reset `arrived`. */
 static void barrier_waiter_withdraw(barrier_slot *s, uint32_t i) {
-    if ((barrier_node(i)->flags & BARRIER_RELEASED) == 0u && s->arrived > 0) s->arrived--;
+    if ((barrier_node(i)->flags & (BARRIER_ARRIVED | BARRIER_RELEASED)) == BARRIER_ARRIVED &&
+        s->arrived > 0) {
+        s->arrived--;
+    }
     asx_wait_record_release(&s->waiters, i);
 }
 
@@ -135,34 +143,34 @@ asx_status asx_barrier_wait_begin(asx_barrier_handle handle, asx_barrier_waiter 
 
     i = asx_wait_record_add(&s->waiters);
     if (i == ASX_WAIT_NIL) return ASX_E_RESOURCE_EXHAUSTED;
-    s->arrived++;
     out->barrier_slot = handle.slot;
     out->waiter_slot = i;
     out->generation = handle.generation;
     out->waiter_generation = barrier_node(i)->generation;
     out->is_leader = 0;
-
-    /* Check if barrier trips */
-    if (s->arrived >= s->threshold) {
-        uint32_t j;
-        s->tripped = 1;
-        /* Last to arrive is leader */
-        barrier_node(i)->flags |= BARRIER_LEADER;
-        /* Release this round's waiters and wake the parked ones */
-        for (j = asx_wait_queue_first(&s->waiters); j != ASX_WAIT_NIL; j = asx_wait_queue_next(j)) {
-            asx_wait_node *w = barrier_node(j);
-            ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
-            if ((w->flags & BARRIER_RELEASED) != 0u) continue;
-            w->flags |= BARRIER_RELEASED;
-            asx_wait_wake_task(w->task);
-        }
-        /* The barrier is cyclic: the next arrival starts a new round
-         * (Rust sync/barrier.rs resets arrived and advances the
-         * generation on trip). */
-        s->arrived = 0;
-    }
-
     return ASX_OK;
+}
+
+/* Waiter i arrives. The arrival that completes the round trips the
+ * barrier: it leads, every other arrival of the round is released and
+ * woken, and the next arrival starts a new round (Rust resets arrived and
+ * advances the generation on trip). Returns 1 if i tripped it. */
+static int barrier_arrive(barrier_slot *s, uint32_t i) {
+    uint32_t j;
+    barrier_node(i)->flags |= BARRIER_ARRIVED;
+    s->arrived++;
+    if (s->arrived < s->threshold) return 0;
+    s->tripped = 1;
+    barrier_node(i)->flags |= BARRIER_RELEASED | BARRIER_LEADER;
+    for (j = asx_wait_queue_first(&s->waiters); j != ASX_WAIT_NIL; j = asx_wait_queue_next(j)) {
+        asx_wait_node *w = barrier_node(j);
+        ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
+        if ((w->flags & (BARRIER_ARRIVED | BARRIER_RELEASED)) != BARRIER_ARRIVED) continue;
+        w->flags |= BARRIER_RELEASED;
+        asx_wait_wake_task(w->task);
+    }
+    s->arrived = 0;
+    return 1;
 }
 
 asx_status asx_barrier_poll_wait(asx_barrier_waiter *waiter, asx_cx *cx) {
@@ -179,22 +187,34 @@ asx_status asx_barrier_poll_wait(asx_barrier_waiter *waiter, asx_cx *cx) {
     w = asx_wait_record_get(&s->waiters, waiter->waiter_slot, waiter->waiter_generation);
     if (w == NULL) return ASX_E_INVALID_STATE;
 
-    /* Release wins a race with cancellation: a waiter whose round already
-     * tripped completes successfully even if a cancel is now pending
-     * (Rust sync/barrier.rs finish_cancelled). */
-    if ((w->flags & BARRIER_RELEASED) != 0u) {
-        waiter->is_leader = (w->flags & BARRIER_LEADER) != 0u;
+    /* Every poll checkpoints first (sync/barrier.rs:304). A cancelled
+     * waiter withdraws its arrival, if it made one; but release wins the
+     * race: a waiter whose round already tripped completes successfully,
+     * never as leader, though its Cx stays cancelled (finish_cancelled). */
+    if (cx != NULL) {
+        asx_status cst = asx_cx_checkpoint(cx);
+        if (cst != ASX_OK) {
+            if ((w->flags & BARRIER_RELEASED) != 0u) {
+                waiter->is_leader = 0;
+                asx_wait_record_release(&s->waiters, waiter->waiter_slot);
+                return ASX_OK;
+            }
+            barrier_waiter_withdraw(s, waiter->waiter_slot);
+            return cst;
+        }
+    }
+
+    /* The first poll arrives; the arrival that completes N leads. */
+    if ((w->flags & BARRIER_ARRIVED) == 0u && barrier_arrive(s, waiter->waiter_slot)) {
+        waiter->is_leader = 1;
         asx_wait_record_release(&s->waiters, waiter->waiter_slot);
         return ASX_OK;
     }
 
-    /* Cx cancellation/budget checkpoint */
-    if (cx != NULL) {
-        asx_status cst = asx_cx_checkpoint(cx);
-        if (cst != ASX_OK) {
-            barrier_waiter_withdraw(s, waiter->waiter_slot);
-            return cst;
-        }
+    if ((w->flags & BARRIER_RELEASED) != 0u) {
+        waiter->is_leader = 0;
+        asx_wait_record_release(&s->waiters, waiter->waiter_slot);
+        return ASX_OK;
     }
 
     /* Inside a scheduler poll, park until the barrier trips (or closes). */
