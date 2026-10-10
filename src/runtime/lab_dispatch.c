@@ -55,6 +55,33 @@ typedef struct {
 
 static int g_lab_active = 0;
 static uint64_t g_lab_rng = 0;
+
+/* Entropy (Rust DetEntropy, util/entropy.rs:66-150): the runtime's source
+ * is seeded with the lab seed as given (LabConfig::entropy_seed, set by
+ * LabConfig::new(seed), lab/config.rs:190) and counts its forks. A task's
+ * fork is keyed by its task-arena id (the arena shadow below); the spawn
+ * mailbox numbers its provisional ids TaskId(i:2^31) (spawn_mailbox.rs:1935)
+ * for in-poll spawns and region principals. */
+#define LAB_GOLDEN UINT64_C(0x9E3779B97F4A7C15)
+#define LAB_MAILBOX_GENERATION (UINT64_C(0x80000000) << 32)
+
+static uint64_t g_lab_ent_seed = 0;
+static uint64_t g_lab_ent_forks = 0;
+static uint32_t g_lab_mailbox_ids = 0;
+
+/* Rust's task arena (util/arena.rs:151-280): a slot per index with its
+ * generation; insertion takes the most recently freed index (LIFO free
+ * list), else a new one; removal bumps the generation. Rust removes a task
+ * when it completes (state.rs:8497-8503). The live tasks bound the
+ * indices, so LAB_ARENA_CAP is never reached unless C keeps more tasks
+ * than Rust can; overflow fails the run like a lane overflow. */
+#define LAB_ARENA_CAP (2u * (uint32_t)ASX_MAX_TASKS)
+#define LAB_ARENA_NONE UINT32_MAX
+
+static uint32_t g_lab_arena_gen[LAB_ARENA_CAP];
+static uint32_t g_lab_arena_next[LAB_ARENA_CAP];
+static uint32_t g_lab_arena_len = 0;
+static uint32_t g_lab_arena_free = LAB_ARENA_NONE;
 static uint64_t g_lab_next_gen = 0;
 static uint32_t g_lab_streak = 0;
 static uint32_t g_lab_scheduled = 0;
@@ -103,7 +130,8 @@ static uint32_t g_lab_batch = 0;
 typedef struct {
     uint8_t cancel;
     uint16_t opener_gen;
-    uint32_t opener; /* Create: the opener's slot */
+    uint32_t opener;       /* Create: the opener's slot */
+    uint32_t principal_id; /* Create: the principal's mailbox id */
     asx_region_id region;
     int has_budget;
     asx_budget budget;
@@ -176,6 +204,142 @@ void asx_lab_dispatch_reset_internal(void) {
     g_lab_rec = NULL;
     g_lab_rec_cap = 0;
     g_lab_rec_n = 0;
+    g_lab_ent_seed = 0;
+    g_lab_ent_forks = 0;
+    g_lab_mailbox_ids = 0;
+    g_lab_arena_len = 0;
+    g_lab_arena_free = LAB_ARENA_NONE;
+}
+
+/* Insert task `t` into the arena shadow: its Rust index and generation. */
+static void lab_arena_insert(asx_task_slot *t) {
+    uint32_t i;
+    if (g_lab_arena_free != LAB_ARENA_NONE) {
+        i = g_lab_arena_free;
+        g_lab_arena_free = g_lab_arena_next[i];
+    } else if (g_lab_arena_len < LAB_ARENA_CAP) {
+        i = g_lab_arena_len++;
+        g_lab_arena_gen[i] = 0;
+    } else {
+        g_lab_overflow = 1;
+        t->lab_rust_live = 0u;
+        return;
+    }
+    t->lab_rust_index = i;
+    t->lab_rust_gen = g_lab_arena_gen[i];
+    t->lab_rust_live = 1u;
+}
+
+void asx_lab_task_retired_internal(asx_task_slot *t) {
+    uint32_t i = t->lab_rust_index;
+    if (!t->lab_rust_live || i >= g_lab_arena_len) return;
+    t->lab_rust_live = 0u;
+    g_lab_arena_gen[i]++;
+    g_lab_arena_next[i] = g_lab_arena_free;
+    g_lab_arena_free = i;
+}
+
+/* A task's arena id packed as Rust's task_seed: (generation << 32) | index. */
+static uint64_t lab_task_seed(const asx_task_slot *t) {
+    return ((uint64_t)t->lab_rust_gen << 32) | (uint64_t)t->lab_rust_index;
+}
+
+/* DetRng::new's seed correction (det_rng.rs:63-68, 129-158): 0 becomes 1;
+ * the degenerate seeds are offset by the golden-ratio constant. */
+static uint64_t lab_rng_seed(uint64_t seed) {
+    if (seed == 0u) return 1u;
+    if (seed == UINT64_C(0xFFFFFFFFFFFFFFFF) || seed == UINT64_C(0x00000000FFFFFFFF) ||
+        seed == UINT64_C(0xFFFFFFFF00000000) || seed == UINT64_C(0x5555555555555555) ||
+        seed == UINT64_C(0xAAAAAAAAAAAAAAAA)) {
+        return seed + LAB_GOLDEN;
+    }
+    return seed;
+}
+
+/* xorshift64 (det_rng.rs:267-276). */
+static uint64_t lab_xorshift(uint64_t *state) {
+    uint64_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    return x;
+}
+
+/* DetEntropy::mix_seed (splitmix64's finalizer). */
+static uint64_t lab_mix_seed(uint64_t s) {
+    s ^= s >> 30;
+    s *= UINT64_C(0xBF58476D1CE4E5B9);
+    s ^= s >> 27;
+    s *= UINT64_C(0x94D049BB133111EB);
+    s ^= s >> 31;
+    return s;
+}
+
+/* DetEntropy::fork: the child of a source with seed `parent_seed` and
+ * fork counter *forks, for the task whose arena id packs to `task_seed`
+ * ((generation << 32) | index). */
+static void lab_fork(asx_lab_entropy *child, uint64_t parent_seed, uint64_t *forks,
+                     uint64_t task_seed) {
+    uint64_t seed = lab_mix_seed(parent_seed + LAB_GOLDEN + task_seed + *forks);
+    (*forks)++;
+    child->seed = seed;
+    child->rng = lab_rng_seed(seed);
+    child->forks = 0;
+    child->state = ASX_LAB_ENTROPY_READY;
+}
+
+void asx_lab_entropy_direct_internal(asx_task_slot *t) {
+    lab_arena_insert(t);
+    lab_fork(&t->lab_ent, g_lab_ent_seed, &g_lab_ent_forks, lab_task_seed(t));
+}
+
+void asx_lab_entropy_spawned_internal(asx_task_slot *t, const asx_task_slot *spawner,
+                                      asx_region_slot *parent_region) {
+    memset(&t->lab_ent, 0, sizeof(t->lab_ent));
+    t->lab_ent.state = ASX_LAB_ENTROPY_OWED;
+    if (parent_region != NULL) {
+        t->lab_ent_parent_region = 1u;
+        t->lab_ent_parent = (uint32_t)(parent_region - g_regions);
+        t->lab_ent_parent_gen = parent_region->generation;
+    } else {
+        t->lab_ent_parent_region = 0u;
+        t->lab_ent_parent = (uint32_t)(spawner - g_tasks);
+        t->lab_ent_parent_gen = spawner->generation;
+    }
+}
+
+void asx_lab_entropy_first_poll_internal(asx_task_slot *t) {
+    asx_lab_entropy *parent = NULL;
+    if (t->lab_ent.state != ASX_LAB_ENTROPY_OWED) return;
+    if (t->lab_ent_parent_region) {
+        asx_region_slot *r = &g_regions[t->lab_ent_parent];
+        if (r->alive && r->generation == t->lab_ent_parent_gen) parent = &r->lab_principal;
+    } else {
+        asx_task_slot *p = &g_tasks[t->lab_ent_parent];
+        if (p->alive && p->generation == t->lab_ent_parent_gen) parent = &p->lab_ent;
+    }
+    /* A source C no longer holds (its task or region slot was reused):
+     * the task gets no entropy, and draws fall back. */
+    if (parent == NULL || parent->state != ASX_LAB_ENTROPY_READY) {
+        t->lab_ent.state = ASX_LAB_ENTROPY_NONE;
+        return;
+    }
+    lab_fork(&t->lab_ent, parent->seed, &parent->forks, lab_task_seed(t));
+}
+
+int asx_lab_entropy_index_internal(asx_task_slot *t, uint32_t bound, uint32_t *out) {
+    uint64_t threshold;
+    if (!g_lab_active || t->lab_ent.state != ASX_LAB_ENTROPY_READY || bound == 0u) return 0;
+    threshold = UINT64_MAX - (UINT64_MAX % (uint64_t)bound);
+    for (;;) {
+        uint64_t v = lab_xorshift(&t->lab_ent.rng);
+        ASX_CHECKPOINT_WAIVER("rejection sampling: v < threshold with probability > 1/2");
+        if (v < threshold) {
+            *out = (uint32_t)(v % (uint64_t)bound);
+            return 1;
+        }
+    }
 }
 
 int asx_lab_dispatch_active(void) { return g_lab_active; }
@@ -214,29 +378,13 @@ asx_status asx_scheduler_use_lab_dispatch(uint64_t seed) {
         if (g_tasks[i].alive) return ASX_E_INVALID_STATE;
     }
     asx_lab_dispatch_reset_internal();
-    /* DetRng::new (det_rng.rs:63-68, 129-158): seed 0 becomes 1; the
-     * degenerate seeds are offset by the golden-ratio constant. */
-    if (seed == 0u) {
-        seed = 1u;
-    } else if (seed == UINT64_C(0xFFFFFFFFFFFFFFFF) || seed == UINT64_C(0x00000000FFFFFFFF) ||
-               seed == UINT64_C(0xFFFFFFFF00000000) || seed == UINT64_C(0x5555555555555555) ||
-               seed == UINT64_C(0xAAAAAAAAAAAAAAAA)) {
-        seed += UINT64_C(0x9E3779B97F4A7C15);
-    }
-    g_lab_rng = seed;
+    g_lab_rng = lab_rng_seed(seed);
+    g_lab_ent_seed = seed;
     g_lab_active = 1;
     return ASX_OK;
 }
 
-uint64_t asx_lab_rng_next(void) {
-    /* xorshift64 (det_rng.rs:267-276) */
-    uint64_t x = g_lab_rng;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    g_lab_rng = x;
-    return x;
-}
+uint64_t asx_lab_rng_next(void) { return lab_xorshift(&g_lab_rng); }
 
 uint32_t asx_lab_scheduled_count(void) { return g_lab_scheduled; }
 
@@ -427,6 +575,7 @@ void asx_lab_defer_admission(asx_task_slot *t) {
         g_lab_overflow = 1;
         return;
     }
+    g_lab_mailbox_ids++; /* its provisional id */
     t->lab_admission_pending = 1u;
     g_lab_admit[g_lab_admit_n++] = (uint32_t)(t - g_tasks);
 }
@@ -439,6 +588,7 @@ void asx_lab_defer_refused_admission(void) {
         g_lab_overflow = 1;
         return;
     }
+    g_lab_mailbox_ids++; /* the refused spawn's provisional id */
     rf = &g_lab_refusal[g_lab_refusal_n];
     memset(rf, 0, sizeof(*rf));
     g_lab_admit[g_lab_admit_n++] = LAB_ADMIT_REFUSAL | g_lab_refusal_n;
@@ -549,6 +699,7 @@ void asx_lab_admit_pending(void) {
         t = &g_tasks[g_lab_admit[i]];
         if (!t->alive || !t->lab_admission_pending) continue;
         t->lab_admission_pending = 0u;
+        lab_arena_insert(t); /* its task-arena id */
         /* Admission adds it to its region's membership (state.rs:5212)
          * and arms its budget-deadline timer (state.rs:4892). */
         t->member_seq = asx_task_next_member_seq_internal();
@@ -599,6 +750,9 @@ asx_status asx_lab_region_open_command(asx_task_slot *opener, asx_region_id pare
     c->cancel = 0u;
     c->opener = (uint32_t)(opener - g_tasks);
     c->opener_gen = opener->generation;
+    /* The principal's id comes from the spawn mailbox at the request
+     * (cx.rs:4502). */
+    c->principal_id = g_lab_mailbox_ids++;
     c->region = parent;
     c->has_budget = budget != NULL;
     if (budget != NULL) c->budget = *budget;
@@ -612,6 +766,7 @@ asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_
     c->cancel = 1u;
     c->opener = ASX_SLOT_NONE;
     c->opener_gen = 0u;
+    c->principal_id = 0u;
     c->region = region;
     c->has_budget = 0;
     c->reason = *reason;
@@ -662,6 +817,15 @@ void asx_lab_drain_region_commands(void) {
             continue;
         }
         st = asx_region_open_child_with_budget(c->region, c->has_budget ? &c->budget : NULL, &id);
+        if (st == ASX_OK) {
+            /* Minting gives the principal a fork of the runtime source
+             * (mint_child_region_parts, state.rs:5093). */
+            asx_region_slot *minted;
+            if (asx_region_slot_lookup(id, &minted) == ASX_OK) {
+                lab_fork(&minted->lab_principal, g_lab_ent_seed, &g_lab_ent_forks,
+                         LAB_MAILBOX_GENERATION | (uint64_t)c->principal_id);
+            }
+        }
         t = &g_tasks[c->opener];
         if (!t->alive || t->generation != c->opener_gen || t->region_wait != ASX_REGION_WAIT_OPEN) {
             if (st == ASX_OK) {

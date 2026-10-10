@@ -242,7 +242,7 @@ wait, queued for each held region in name order (twin_run keeps them in a
 
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|
-| `race` | `members` (list of programs), optional `deadline_ns` | spawn each member with `cx.spawn`, then `cx.scope().race_all(&cx, handles).await` (`cx/scope.rs:1306`). A `deadline_ns` runs this inside `cx.scope().timeout(&cx, d, …)` (`:2130`). | `asx_task_group_init(g, RACE, 1)`, `asx_task_group_spawn` per member, then `asx_task_group_poll` | until a winner, or until all are drained | The owner's cancel before a winner, once its checkpoint observes it, aborts every unfinished member with the owner's own reason and joins them in order; the outcome is that cancellation (or the first member panic). Losers are always cancelled and drained (`inv.combinator.loser_drained`). The status is `ASX_OK`; the `value` is `{winner_index, outcome}`, the winner's outcome, with `winner_index` null when the race has no successful winner (Rust's `Err` carries no index). |
+| `race` | `members` (list of programs), optional `deadline_ns` | spawn each member with `cx.spawn`, then `cx.scope().race_all(&cx, handles).await` (`cx/scope.rs:1306`). A `deadline_ns` runs this inside `cx.scope().timeout(&cx, d, …)` (`:2130`). | `asx_task_group_init(g, RACE, 1)`, `asx_task_group_spawn` per member, then `asx_task_group_poll` | until a winner, or until all are drained | The owner's cancel before a winner, once its checkpoint observes it, aborts every unfinished member with the owner's own reason and joins them in order; the outcome is that cancellation (or the first member panic). Losers are always cancelled and drained (`inv.combinator.loser_drained`). The status is `ASX_OK`; the `value` is `{winner_index, outcome}`, the winner's outcome, with `winner_index` null when the winner was cancelled or panicked (Rust's `Err` carries no index); a winner whose program returned, ok or err, has its index (Rust's `Ok((body, index))`). |
 | `join_all` | `members` | `cx.scope().join_all(&cx, handles).await` (`:1479`) | group mode JOIN_ALL: the owner waits on one member at a time, in order | until all complete | Ignored: join_all joins one by one and its joins are uninterruptible, so the owner's cancel reaches no member. The `value` is the list of member outcomes. |
 | `first_ok` | `members` | `cx.scope().first_ok(&cx, factories).await` (`:2023`): one attempt at a time, in order | group mode FIRST_OK with `asx_task_group_add_attempt` per member | until an attempt succeeds, one ends cancelled or panicked, or all fail | The owner's cancel is passed to the running attempt (which is still awaited) and stops further attempts. Status: `ASX_OK`; all failed: the first attempt's error; `ASX_E_CANCELLED`; panicked: `ASX_E_INVALID_STATE`. No value. Attempts that never start have no name. |
 | `quorum` | `members`, `needed` | `cx.scope().quorum(&cx, needed, branches).await` (`:1811`) | `asx_task_group_init(g, QUORUM, needed)` | until `needed` succeed or that becomes impossible | The owner's cancel drains the members with the owner's own reason; status `ASX_E_CANCELLED`. Met: `ASX_OK`, `value` = the number of members that succeeded. Members run cancellation-dominant. A `QuorumError` (vocabulary §5): a panicked member gives `ASX_E_INVALID_STATE` even when met; otherwise not met gives `ASX_E_CANCELLED` if a member was cancelled by anything but the quorum's own drain, else the first failing member's error; no value. `needed` of 0 or above the member count: `ASX_E_INVALID_ARGUMENT` and nothing is spawned. |
@@ -483,15 +483,6 @@ Open:
   differently (fuzz gen-9-120, gen-10-146). Generated scenarios set
   `max_obligations` only when no permit can register an obligation.
 
-- **Race ties within one round.** When several race members are ready in
-  the same round, Rust picks the winner with `cx.random_usize` over the
-  owner's per-task entropy stream (`Scope::race_all`, `cx/scope.rs:1340-1365`;
-  the stream is forked per task from the lab seed, task arena id and fork
-  counter), C picks the lowest member index (`include/asx/runtime/task_group.h`).
-  Matching it needs C to reproduce Rust's task arena numbering and fork
-  order (bd-g652). Generated scenarios leave race out; curated race
-  fixtures avoid same-round ties.
-
 - **Lock poisoning.** A Rust mutex or rwlock write guard dropped while its
   task panics poisons the lock, and later acquires fail with `Poisoned`
   (`ASX_E_INVALID_STATE`; owned guards poison at `sync/mutex.rs:1010`,
@@ -500,6 +491,21 @@ Open:
   a guard is held diverges. Generated scenarios never panic.
 
 Closed (each verified by a fixture that now matches):
+
+- **Race ties within one round** (bd-g652): Rust picks the winner among
+  the members ready at the owner's poll with `cx.random_usize` over the
+  owner's entropy (`Scope::race_all`, `cx/scope.rs:1340-1365`). Under lab
+  dispatch C keeps Rust's per-task DetEntropy: the runtime source seeded
+  with the lab seed, forked for each host-created task (`state.rs:4356`)
+  and each child region's principal (`:5093`), a spawned task forked from
+  its spawner (or the region's principal) at its first poll
+  (`DeferredFork`, `cx.rs:239-286`), each fork keyed by the task's id in a
+  shadow of Rust's task arena (LIFO reuse of completed tasks' indices,
+  `util/arena.rs`, `state.rs:8497`) and the source's fork counter
+  (`src/runtime/lab_dispatch.c`). Fixtures
+  `task-groups-race-same-round-tie-001` and
+  `task-groups-race-deadline-tie-001` (the tie drawn in Scope::timeout's
+  wrapper); generated scenarios include race groups again.
 
 - **RwLock** (`rwlock_read` / `rwlock_write` / `rwlock_unlock`): C's
   rwlock follows Rust's grant policy: an acquire joins the line at its

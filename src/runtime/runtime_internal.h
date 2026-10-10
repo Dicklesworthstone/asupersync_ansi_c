@@ -25,6 +25,22 @@
  * Arena slot types (walking skeleton: fixed-size)
  * ------------------------------------------------------------------- */
 
+/* Under lab dispatch, a Rust DetEntropy source (util/entropy.rs:66-150):
+ * the seed it was made with (its children fork from it), its DetRng
+ * xorshift64 state and its fork counter. ASX_LAB_ENTROPY_OWED: the task's
+ * fork from its spawner is still owed (Rust's DeferredFork, forced at the
+ * task's first poll). */
+#define ASX_LAB_ENTROPY_NONE 0u
+#define ASX_LAB_ENTROPY_OWED 1u
+#define ASX_LAB_ENTROPY_READY 2u
+
+typedef struct {
+    uint64_t seed;
+    uint64_t rng;
+    uint64_t forks;
+    uint8_t state;
+} asx_lab_entropy;
+
 typedef struct {
     asx_region_state state;
     asx_region_id parent_id;
@@ -52,6 +68,10 @@ typedef struct {
      * ones. Descendants' reasons chain to their parent's via `cause`. */
     int cancel_requested;
     asx_cancel_reason cancel_reason;
+    /* Lab dispatch: the entropy of the region's principal, a child region a
+     * task opened (Rust mints its Cx with a fork of the runtime source,
+     * state.rs:5093); a task spawned into it forks from this. */
+    asx_lab_entropy lab_principal;
 } asx_region_slot;
 
 typedef struct {
@@ -177,6 +197,18 @@ typedef struct {
     asx_budget budget;
     /* Obligations held by this task (intrusive list of obligation slots). */
     uint32_t first_held;
+    /* Lab dispatch: the task's Rust task-arena id (index and generation;
+     * assigned at creation, or at admission for a child spawned in a poll,
+     * and freed when it completes, as Rust's arena does), its entropy, and,
+     * while its fork is owed, the source it forks from: a task slot or
+     * (lab_ent_parent_region) a region's principal. */
+    uint32_t lab_rust_index;
+    uint32_t lab_rust_gen;
+    uint8_t lab_rust_live;
+    asx_lab_entropy lab_ent;
+    uint32_t lab_ent_parent;
+    uint16_t lab_ent_parent_gen;
+    uint8_t lab_ent_parent_region;
 } asx_task_slot;
 
 typedef struct {
@@ -392,6 +424,24 @@ void asx_lab_defer_refused_admission(void);
 void asx_lab_refusal_watch(uint32_t ticket, const asx_task_slot *t);
 int asx_lab_admissions_pending(void);
 void asx_lab_admit_pending(void);
+/* Per-task entropy under lab dispatch (Rust DetEntropy, see
+ * asx_lab_entropy). A task the host creates takes the next task-arena
+ * index and forks the runtime source at once (state.rs:4356); one spawned
+ * in a poll owes a fork from `parent_region`'s principal (a task spawning
+ * into a child region it opened: Rust's child.cx().spawn) or else from its
+ * spawner, made at its first poll (DeferredFork, cx.rs:239-286, forced in
+ * overlay_parent_inheritance, :5876-5879). */
+void asx_lab_entropy_direct_internal(asx_task_slot *t);
+/* A completed task leaves Rust's task arena (recycle_task, state.rs:8497):
+ * its index is reused next, with the generation bumped. */
+void asx_lab_task_retired_internal(asx_task_slot *t);
+void asx_lab_entropy_spawned_internal(asx_task_slot *t, const asx_task_slot *spawner,
+                                      asx_region_slot *parent_region);
+void asx_lab_entropy_first_poll_internal(asx_task_slot *t);
+/* Rust's Cx::random_usize(bound) (cx.rs:3622-3634) from the task's stream:
+ * 1 and *out in [0, bound), or 0 when lab dispatch is off or the task has
+ * no entropy (the caller decides deterministically then). bound > 0. */
+int asx_lab_entropy_index_internal(asx_task_slot *t, uint32_t bound, uint32_t *out);
 /* A cancel request's wake of the task's CancelTaskWaker; held back while a
  * region cancel batch is open. */
 void asx_lab_cancel_wake(asx_task_slot *t);

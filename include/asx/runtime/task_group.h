@@ -54,10 +54,12 @@
  *             failing member's error (by index)
  *
  * A member's status is ASX_OK for an OK outcome, the error its poll
- * function returned for ERR, and ASX_E_CANCELLED for CANCELLED. Among
- * members completing in the same poll, the lowest index wins
- * (deterministic). Members are joined (their slots released) as they are
- * collected; their outcomes stay readable through the group.
+ * function returned for ERR, and ASX_E_CANCELLED for CANCELLED. When
+ * several race members are found ready by the same owner poll, the winner
+ * is drawn from the owner's entropy under lab dispatch, as Rust's race_all
+ * draws it from the owner's Cx (asx_scheduler_use_lab_dispatch); otherwise
+ * the lowest index wins. Members are joined (their slots released) as they
+ * are collected; their outcomes stay readable through the group.
  *
  * Members must be scheduled by the same asx_scheduler_run() subtree as
  * the owner, and must not be joined or detached by anyone else.

@@ -35,10 +35,9 @@
 //! sometimes grows (add_permits); about one scenario in ten sets admission
 //! limits on a region.
 //!
-//! Left out on purpose: race
-//! (same-round ties are an RNG pick in Rust and the lowest index in C, a
-//! known divergence, bd-g652), actors and supervision.
-//! join_all, first_ok and quorum groups are generated.
+//! Task groups: join_all, first_ok, quorum and race (sometimes with a
+//! deadline); a race's same-round tie is drawn from the owner's entropy in
+//! both runtimes (bd-g652). Left out on purpose: actors and supervision.
 
 use serde_json::{Value, json};
 
@@ -303,16 +302,25 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 let name = held.regions.remove(0);
                 return json!({"op": "close_region", "region": name});
             }
-            // One task group per task: join_all or first_ok over small
-            // member programs (race is left out, see above).
+            // One task group per task: join_all, first_ok, race or quorum
+            // over small member programs.
             18 if held.groups == 0 => {
                 held.groups += 1;
                 let members: Vec<Value> = (0..1 + rng.below(3))
                     .map(|_| Value::Array(child_program(rng)))
                     .collect();
-                return match rng.below(3) {
+                return match rng.below(4) {
                     0 => json!({"op": "join_all", "members": members}),
                     1 => json!({"op": "first_ok", "members": members}),
+                    2 => {
+                        // Same-round ties are drawn from the owner's (or the
+                        // deadline wrapper's) entropy in both runtimes.
+                        let mut s = json!({"op": "race", "members": members});
+                        if rng.chance(25) {
+                            s["deadline_ns"] = json!(50 * (1 + rng.below(6)));
+                        }
+                        s
+                    }
                     _ => {
                         // Sometimes one more than the members: InvalidQuorum.
                         let needed = 1 + rng.below(members.len() as u64 + 1);

@@ -711,6 +711,7 @@ asx_status asx_region_open(asx_region_id *out_id) {
     g_regions[idx].limits.max_tasks = ASX_REGION_UNLIMITED;
     g_regions[idx].limits.max_children = ASX_REGION_UNLIMITED;
     g_regions[idx].limits.max_obligations = ASX_REGION_UNLIMITED;
+    memset(&g_regions[idx].lab_principal, 0, sizeof(g_regions[idx].lab_principal));
     g_regions[idx].capture_used = 0;
     g_regions[idx].cancel_requested = 0;
     g_regions[idx].cancel_reason.kind = ASX_CANCEL_USER;
@@ -1033,6 +1034,10 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     g_tasks[idx].budget = r->budget;
     g_tasks[idx].first_held = ASX_SLOT_NONE;
     asx_task_sched_init_internal(&g_tasks[idx]);
+    memset(&g_tasks[idx].lab_ent, 0, sizeof(g_tasks[idx].lab_ent));
+    g_tasks[idx].lab_rust_index = 0;
+    g_tasks[idx].lab_rust_gen = 0;
+    g_tasks[idx].lab_rust_live = 0;
     /* Spawned by a running task: Rust's cx.spawn. It takes cx.spawn's
      * completion policy, and, in the spawner's own region, the spawner's
      * current budget (Cx::inherited_budget, cx.rs:2504), with an unbounded
@@ -1043,6 +1048,18 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
         asx_task_id cur = asx_task_current();
         if (cur != ASX_INVALID_ID && asx_task_slot_lookup(cur, &spawner) == ASX_OK) {
             g_tasks[idx].spawned_in_poll = 1u;
+            /* Its entropy forks from the spawning Cx: a child region's
+             * principal for a spawn into a region the spawner opened
+             * (child.cx().spawn), else the spawner's own. */
+            if (asx_lab_dispatch_active()) {
+                asx_lab_entropy_spawned_internal(&g_tasks[idx], spawner,
+                                                 asx_handle_index(spawner->region) !=
+                                                             asx_handle_index(region) &&
+                                                         r->lab_principal.state ==
+                                                             ASX_LAB_ENTROPY_READY
+                                                     ? r
+                                                     : NULL);
+            }
             if (asx_handle_index(spawner->region) == asx_handle_index(region)) {
                 g_tasks[idx].budget = spawner->budget;
                 /* Rust's cleanup_phase starts when the acknowledgement is
@@ -1072,6 +1089,7 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
         if (g_tasks[idx].spawned_in_poll) {
             asx_lab_defer_admission(&g_tasks[idx]);
         } else {
+            asx_lab_entropy_direct_internal(&g_tasks[idx]);
             asx_lab_arm_budget_deadline_internal(&g_tasks[idx]);
             asx_lab_schedule(&g_tasks[idx], 0u);
         }

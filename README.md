@@ -41,14 +41,14 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->67<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
+  - `make conformance` runs <!-- fact:rust_fixtures -->69<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
   - Covered areas: region/task/obligation lifecycle, cancellation and masking, budgets, mpsc/oneshot/broadcast/watch channels, mutex/rwlock/semaphore/notify/barrier, task groups (join_all, race with a deadline, first_ok, quorum) and region admission limits. All of it runs under the lab's single-worker dispatch model.
 - **Known differences, open:** listed in [`docs/SCENARIO_DSL_V2.md`](docs/SCENARIO_DSL_V2.md) §7 and rule by rule in [`docs/C_REFINEMENT_MAP.md`](docs/C_REFINEMENT_MAP.md). Examples:
   - lock poisoning;
   - when a region's `max_tasks` and permit-obligation limits are checked;
-  - race tie-breaks within one round (Rust uses per-task entropy, C the lowest index).
+  - the runtime-quiescence predicate (bd-me9t).
 - **Not compared with Rust; tested in C only:** actors (GenServer) and supervision, which neither oracle interprets yet; networking, files, processes and HTTP; live, non-lab scheduling.
 
 ### Why Use `asx`?
@@ -404,8 +404,9 @@ workflow tries a new seed each day. The generator (`tools/twin_run/src/gen.rs`)
 draws lifecycle, cancellation, budget, obligation, region, task-group,
 mpsc, oneshot, broadcast, watch, mutex, rwlock, semaphore, notify and barrier steps,
 and about one scenario in twelve queues 17 to 32 tasks on one lock; it
-leaves out race groups (a known tie-break divergence), actors and
-supervision.
+leaves out actors and supervision. Race groups are generated: a
+same-round tie is drawn from the owner's entropy, which C keeps as Rust's
+per-task DetEntropy streams under lab dispatch.
 
 What this covers is what the scenario language (`docs/SCENARIO_DSL_V2.md`)
 can express: lifecycle, cancellation, budgets, obligations, task groups,
@@ -895,7 +896,7 @@ Region, task, obligation and channel lookups check the type tag, so type confusi
 
 `asx_scheduler_run(region, budget)` drives a whole region **subtree**. Runnable tasks are polled in ascending arena index within each round, so the same tasks and seed produce identical event sequences across runs, platforms, and profiles.
 
-`asx_scheduler_use_lab_dispatch(seed)` switches to the dispatch model of Rust asupersync's `LabRuntime` (one worker): each step draws one value from a seeded xorshift64 and polls a single task. The task comes from the cancel lane (up to 16 in a row) before the ready lane, at the highest priority, the step's value picking among equal-priority entries in wake order. Due timers wake their tasks in timer-wheel order. The conformance oracle runs every scenario this way, and with the same scenario and seed the C and Rust runs dispatch identically (`make conformance`, `make fuzz-differential`).
+`asx_scheduler_use_lab_dispatch(seed)` switches to the dispatch model of Rust asupersync's `LabRuntime` (one worker): each step draws one value from a seeded xorshift64 and polls a single task. The task comes from the cancel lane (up to 16 in a row) before the ready lane, at the highest priority, the step's value picking among equal-priority entries in wake order. Due timers wake their tasks in timer-wheel order. Each task also gets Rust's per-task entropy stream (a DetEntropy fork keyed by the task's id in a shadow of Rust's task arena), from which a race picks its winner among members ready in the same round, as Rust's `race_all` does. The conformance oracle runs every scenario this way, and with the same scenario and seed the C and Rust runs dispatch identically (`make conformance`, `make fuzz-differential`).
 
 Tasks are **wake-driven**, not busy-polled. A poll function that must wait calls `asx_task_park(self)` (directly, or through a primitive that does it for it: sleep, join, channel receive, mutex, socket read, actor mailbox, ...) and returns `ASX_E_PENDING`. The task is not polled again until something wakes it: `asx_task_wake`, a waker signal, a task timer, I/O readiness, a joined task completing, or cancellation. A task that returns `ASX_E_PENDING` without parking simply yields.
 

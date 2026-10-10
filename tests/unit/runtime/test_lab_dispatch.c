@@ -105,6 +105,100 @@ TEST(ties_are_broken_by_the_step_value_in_generation_order) {
     ASSERT_EQ(strcmp(g_order, "BCAB"), 0);
 }
 
+/* First `n` Cx::random_usize(bound) draws of task `t`'s entropy stream. */
+static int entropy_draws(asx_task_id t, uint32_t bound, uint32_t n, uint32_t *out) {
+    asx_task_slot *slot;
+    uint32_t i;
+    if (asx_task_slot_lookup(t, &slot) != ASX_OK) return 0;
+    for (i = 0; i < n; i++) {
+        if (!asx_lab_entropy_index_internal(slot, bound, &out[i])) return 0;
+    }
+    return 1;
+}
+
+/* Host-spawned tasks fork the runtime's DetEntropy (seeded with the lab
+ * seed) in creation order: task k (arena index k, fork counter k) draws
+ * from xorshift64 seeded with mix_seed(seed + 0x9e3779b97f4a7c15 + k + k)
+ * (util/entropy.rs:66-150). Expected values computed from Rust's
+ * formulas; seed 10, task 0, bound 2 starts with 1, the pick the
+ * Rust-captured fixture task-groups-race-same-round-tie-001 shows. */
+TEST(host_tasks_draw_from_rust_detentropy_streams) {
+    static const uint32_t want10[3][3] = {{1u, 1u, 1u}, {1u, 0u, 1u}, {0u, 0u, 1u}};
+    static const uint32_t want42[3][2] = {{1u, 2u}, {2u, 0u}, {2u, 1u}};
+    asx_region_id r;
+    asx_task_id t[3];
+    probe p = {'P', 0u, 0};
+    uint32_t got[3];
+    uint32_t i;
+    uint32_t k;
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(10u), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    for (i = 0; i < 3u; i++) ASSERT_EQ(asx_task_spawn(r, poll_probe, &p, &t[i]), ASX_OK);
+    for (i = 0; i < 3u; i++) {
+        ASSERT_TRUE(entropy_draws(t[i], 2u, 3u, got));
+        for (k = 0; k < 3u; k++) ASSERT_EQ(got[k], want10[i][k]);
+    }
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    for (i = 0; i < 3u; i++) ASSERT_EQ(asx_task_spawn(r, poll_probe, &p, &t[i]), ASX_OK);
+    for (i = 0; i < 3u; i++) {
+        ASSERT_TRUE(entropy_draws(t[i], 3u, 2u, got));
+        for (k = 0; k < 2u; k++) ASSERT_EQ(got[k], want42[i][k]);
+    }
+}
+
+/* Rust's task arena frees a completed task's index (state.rs:8497-8503):
+ * the next task reuses it with the generation bumped, and its entropy is
+ * keyed by (1 << 32) | 1 at the runtime's third fork. Without lab
+ * dispatch there is no stream and the caller decides. */
+TEST(completed_tasks_free_their_arena_index_for_the_next_task) {
+    asx_region_id r;
+    asx_task_id a;
+    asx_task_id b;
+    asx_task_id c;
+    asx_task_slot *slot;
+    asx_budget budget;
+    probe pa = {'A', 30u, 0};
+    probe pb = {'B', 0u, 0};
+    probe pc = {'C', 0u, 0};
+    uint32_t got[3];
+    uint32_t i;
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
+    order_reset();
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_probe, &pa, &a), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_probe, &pb, &b), ASX_OK);
+    budget = asx_budget_from_polls(10);
+    /* B completes within these polls; A keeps yielding. */
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(asx_task_slot_lookup(b, &slot), ASX_OK);
+    ASSERT_EQ(slot->state, ASX_TASK_COMPLETED);
+    ASSERT_EQ(asx_task_spawn(r, poll_probe, &pc, &c), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(c, &slot), ASX_OK);
+    ASSERT_EQ(slot->lab_rust_index, 1u);
+    ASSERT_EQ(slot->lab_rust_gen, 1u);
+    ASSERT_TRUE(entropy_draws(c, 5u, 3u, got));
+    ASSERT_EQ(got[0], 2u);
+    ASSERT_EQ(got[1], 4u);
+    ASSERT_EQ(got[2], 4u);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+
+    ASSERT_EQ(setup(), ASX_OK); /* no lab dispatch */
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_probe, &pb, &b), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(b, &slot), ASX_OK);
+    i = 7u;
+    ASSERT_FALSE(asx_lab_entropy_index_internal(slot, 2u, &i));
+    ASSERT_EQ(i, 7u);
+}
+
 /* A cancelled task goes to the cancel lane, which is served before the
  * ready lane whatever the step value. */
 TEST(cancel_lane_is_served_first) {
@@ -718,6 +812,8 @@ int main(void) {
     RUN_TEST(rng_replicates_rust_xorshift64);
     RUN_TEST(rng_remaps_degenerate_seeds);
     RUN_TEST(ties_are_broken_by_the_step_value_in_generation_order);
+    RUN_TEST(host_tasks_draw_from_rust_detentropy_streams);
+    RUN_TEST(completed_tasks_free_their_arena_index_for_the_next_task);
     RUN_TEST(cancel_lane_is_served_first);
     RUN_TEST(auto_advance_moves_the_clock_to_the_next_timer);
     RUN_TEST(pre_poll_quota_cancel_has_rust_lab_attribution);

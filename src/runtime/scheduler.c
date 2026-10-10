@@ -736,6 +736,7 @@ static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_s
     asx_region_id region = t->region;
     (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
     t->state = ASX_TASK_COMPLETED;
+    if (asx_lab_dispatch_active()) asx_lab_task_retired_internal(t);
     if (t->cancel_pending) sched_cancel_phase_complete(t);
     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
@@ -1058,6 +1059,9 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
     if (!t->first_polled) {
         t->first_polled = 1;
         t->cancel_before_first_poll = t->cancel_pending ? 1u : 0u;
+        /* Rust forks a spawned task's entropy before its code first runs
+         * (overlay_parent_inheritance, cx.rs:5876-5879). */
+        if (lab) asx_lab_entropy_first_poll_internal(t);
     }
     /* Charge the poll before running it, as Rust's lab does
      * (lab/runtime.rs:4663): a checkpoint in the poll that spends

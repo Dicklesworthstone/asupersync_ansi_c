@@ -203,7 +203,7 @@ static asx_status group_quorum_result(const asx_task_group *g) {
 
 /* Decide the group from the members collected so far. Member completion
  * takes precedence over owner cancellation and the deadline. */
-static void group_decide(asx_task_group *g, const asx_task_slot *owner, asx_task_id self) {
+static void group_decide(asx_task_group *g, asx_task_slot *owner, asx_task_id self) {
     uint32_t i;
     int owner_cancelled;
 
@@ -213,15 +213,25 @@ static void group_decide(asx_task_group *g, const asx_task_slot *owner, asx_task
             group_begin_drain(g, ASX_CANCEL_RACE_LOST, group_worst_status(g), 0);
         }
         break;
-    case ASX_TASK_GROUP_RACE:
+    case ASX_TASK_GROUP_RACE: {
+        /* The members ready by this poll, in index order (Rust's
+         * newly_ready): Rust picks newly_ready[cx.random_usize(n)] from the
+         * owner's entropy, drawing even for one (race_all,
+         * cx/scope.rs:1340-1365); under lab dispatch C does the same from
+         * the owner's stream, and otherwise takes the lowest index. */
+        uint32_t ready[ASX_TASK_GROUP_MAX];
+        uint32_t n = 0;
+        uint32_t pick = 0;
         for (i = 0; i < g->count; i++) {
             ASX_CHECKPOINT_WAIVER("bounded: count <= ASX_TASK_GROUP_MAX");
-            if (!g->completed[i]) continue;
-            g->winner = (int32_t)i;
-            group_begin_drain(g, ASX_CANCEL_RACE_LOST, g->statuses[i], 0);
-            break;
+            if (g->completed[i]) ready[n++] = i;
         }
+        if (n == 0u) break;
+        if (!asx_lab_entropy_index_internal(owner, n, &pick)) pick = 0;
+        g->winner = (int32_t)ready[pick];
+        group_begin_drain(g, ASX_CANCEL_RACE_LOST, g->statuses[ready[pick]], 0);
         break;
+    }
     case ASX_TASK_GROUP_FIRST_OK: break; /* sequential: group_first_ok_poll */
     case ASX_TASK_GROUP_QUORUM:
         if (g->needed == 0u || g->needed > g->count) {
