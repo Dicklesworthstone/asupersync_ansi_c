@@ -483,6 +483,15 @@ Open:
   differently (fuzz gen-9-120, gen-10-146). Generated scenarios set
   `max_obligations` only when no permit can register an obligation.
 
+- **Race ties within one round.** When several race members are ready in
+  the same round, Rust picks the winner with `cx.random_usize` over the
+  owner's per-task entropy stream (`Scope::race_all`, `cx/scope.rs:1340-1365`;
+  the stream is forked per task from the lab seed, task arena id and fork
+  counter), C picks the lowest member index (`include/asx/runtime/task_group.h`).
+  Matching it needs C to reproduce Rust's task arena numbering and fork
+  order (bd-g652). Generated scenarios leave race out; curated race
+  fixtures avoid same-round ties.
+
 - **Lock poisoning.** A Rust mutex or rwlock write guard dropped while its
   task panics poisons the lock, and later acquires fail with `Poisoned`
   (`ASX_E_INVALID_STATE`; owned guards poison at `sync/mutex.rs:1010`,

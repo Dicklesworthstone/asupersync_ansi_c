@@ -36,6 +36,21 @@ make test
 
 **The Solution:** `asx` ports the core of asupersync's semantics to ANSI C: region/task/obligation lifecycle, structured cancellation, budgets, channels, synchronization, task groups and actors, plus deterministic replay, fixed-size arenas that fail with explicit errors instead of degrading, and build profiles from servers to router-class targets. It is a partial port, and parity is measured rather than assumed: `make conformance` runs scenarios captured from asupersync's LabRuntime through the C runtime and compares the results exactly, and CI runs seeded Rust-vs-C differential fuzzing on every push. Surfaces the scenario language cannot express (networking, files, processes, HTTP) are not parity-checked. In a deterministic build, the same scenario and seed reproduce the same run.
 
+### Status against asupersync (Rust)
+
+The port targets asupersync commit `5e60b1c4c` (2026-10).
+
+- **Compared with the Rust runtime, and matching:**
+  - `make conformance` runs <!-- fact:rust_fixtures -->67<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
+  - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
+  - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
+  - Covered areas: region/task/obligation lifecycle, cancellation and masking, budgets, mpsc/oneshot/broadcast/watch channels, mutex/rwlock/semaphore/notify/barrier, task groups (join_all, race with a deadline, first_ok, quorum) and region admission limits. All of it runs under the lab's single-worker dispatch model.
+- **Known differences, open:** listed in [`docs/SCENARIO_DSL_V2.md`](docs/SCENARIO_DSL_V2.md) §7 and rule by rule in [`docs/C_REFINEMENT_MAP.md`](docs/C_REFINEMENT_MAP.md). Examples:
+  - lock poisoning;
+  - when a region's `max_tasks` and permit-obligation limits are checked;
+  - race tie-breaks within one round (Rust uses per-task entropy, C the lowest index).
+- **Not compared with Rust; tested in C only:** actors (GenServer) and supervision, which neither oracle interprets yet; networking, files, processes and HTTP; live, non-lab scheduling.
+
 ### Why Use `asx`?
 
 | Feature | What It Gives You |

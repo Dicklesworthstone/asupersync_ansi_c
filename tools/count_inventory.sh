@@ -59,6 +59,8 @@ formal=$(count_c "$ROOT/tests/formal")
 test_total=$((unit + e2e_c + invariant + vignettes + conformance + fuzz + formal))
 
 examples=$(count_c "$ROOT/examples")
+# Rust-captured fixtures `make conformance` executes (twin_run captures).
+rust_fixtures=$(find "$ROOT/fixtures/rust_reference_v2" -maxdepth 1 -name '*.json' | wc -l | tr -d ' ')
 ci_jobs=$(awk '/^jobs:/ { in_jobs = 1; next }
     in_jobs && /^[^ #]/ { in_jobs = 0 }
     in_jobs && /^  [A-Za-z0-9_-]+:[ \t]*$/ { n++ }
@@ -79,6 +81,7 @@ if [ "${1:-}" = "--facts" ]; then
     printf 'test_fuzz=%s\n' "$fuzz"
     printf 'test_formal=%s\n' "$formal"
     printf 'examples=%s\n' "$examples"
+    printf 'rust_fixtures=%s\n' "$rust_fixtures"
     printf 'ci_jobs=%s\n' "$ci_jobs"
     for d in "$ROOT"/include/asx/*/; do
         printf 'headers_%s=%s\n' "$(basename "$d")" "$(count_h "$d")"
