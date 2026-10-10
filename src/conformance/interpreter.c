@@ -2405,10 +2405,12 @@ static int exec_server(it_task *t, uint32_t step, uint32_t idx, const char *op, 
     }
     srv->released = 1;
     if (srv->task != IT_NO_SERVER_TASK) {
-        /* The join retires the server's task. */
+        /* The join retires the server's task. One its admission refused
+         * never ran and stays out of the snapshot, as in Rust. */
         it_task *task = &g_tasks[srv->task];
         uint32_t value = server_outcome_node(task->id);
         asx_outcome ignored;
+        task->admission_refusal = admission_refusal(task->id);
         if (asx_task_join(task->id, &ignored) != ASX_OK) {
             it_fail_task(t, idx, "server task outcome not joinable");
         } else {

@@ -41,7 +41,13 @@
 //!
 //! Task groups: join_all, first_ok, quorum and race (sometimes with a
 //! deadline); a race's same-round tie is drawn from the owner's entropy in
-//! both runtimes (bd-g652). Left out on purpose: actors and supervision.
+//! both runtimes (bd-g652).
+//!
+//! Servers (DSL §3.8, bd-86np): a task may spawn up to two counter or echo
+//! servers with a mailbox of 1 to 4, cast to and call them and stop them;
+//! a stopped server is never named again. Tasks never run in `root`, so a
+//! call is never refused as a scenario error. Left out on purpose:
+//! supervision, which neither oracle interprets.
 
 use serde_json::{Value, json};
 
@@ -123,6 +129,9 @@ struct Held {
     oneshot_used: bool,
     /// This task waited at the barrier (each party arrives once).
     barrier_waited: bool,
+    /// Servers this task spawned and has not stopped.
+    servers: Vec<String>,
+    server_spawns: u32,
 }
 
 fn sleep_step(rng: &mut Rng) -> Value {
@@ -164,7 +173,7 @@ fn rw_acquire(rng: &mut Rng) -> Value {
 /// One step of task `me`'s program, given what it holds.
 fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
     loop {
-        match rng.below(25) {
+        match rng.below(27) {
             0 | 1 => return json!({"op": "yield"}),
             2 | 3 => return sleep_step(rng),
             4 | 5 => return checkpoint_step(rng),
@@ -380,7 +389,33 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                     json!({"op": "rwlock_unlock", "rwlock": "rw"})
                 };
             }
+            25 if held.servers.len() < 2 && (held.servers.is_empty() || rng.chance(25)) => {
+                held.server_spawns += 1;
+                let name = format!("{me}.srv{}", held.server_spawns);
+                held.servers.push(name.clone());
+                let behavior = if rng.chance(50) { "counter" } else { "echo" };
+                return json!({"op": "server_spawn", "as": name, "behavior": behavior,
+                              "mailbox": 1 + rng.below(4)});
+            }
+            25 | 26 if !held.servers.is_empty() => return server_step(rng, held),
             _ => {}
+        }
+    }
+}
+
+/// A cast, call or stop on one of the task's live servers.
+fn server_step(rng: &mut Rng, held: &mut Held) -> Value {
+    let i = usize::try_from(rng.below(held.servers.len() as u64)).unwrap_or(0);
+    let server = held.servers[i].clone();
+    match rng.below(10) {
+        0..=3 => {
+            held.sends += 1;
+            json!({"op": "cast", "server": server, "value": held.sends})
+        }
+        4..=7 => json!({"op": "call", "server": server, "request": rng.below(100)}),
+        _ => {
+            held.servers.remove(i);
+            json!({"op": "server_stop", "server": server})
         }
     }
 }
@@ -576,6 +611,17 @@ pub fn scenario(seed: u64, index: u64) -> Value {
                 } else {
                     program
                         .push(json!({"op": "permit_send", "permit": permit, "value": held.sends}));
+                }
+            } else if s["op"] == "server_spawn" {
+                // A burst of casts and calls right after the spawn, before
+                // the server first runs, fills small mailboxes (casts wait)
+                // and leaves messages queued for a cancel to drain.
+                program.push(s);
+                for _ in 0..rng.below(6) {
+                    if held.servers.is_empty() {
+                        break;
+                    }
+                    program.push(server_step(&mut rng, &mut held));
                 }
             } else {
                 program.push(s);

@@ -496,8 +496,10 @@ Closed (each verified by a fixture that now matches):
   region) keeps its handle, as Rust's queued spawn does, and the refusal
   drops its cell. Fixtures `actor-*` (11), among them
   `actor-cancel-before-start-drains-001` and
-  `actor-cancel-caller-and-server-001`. The generator does not emit
-  server steps yet.
+  `actor-cancel-caller-and-server-001`. The generator emits server steps
+  (bd-86np): a task spawns up to two servers and casts to, calls and
+  stops them; twin_run names a server by the id it records from its own
+  hooks, as a spawned child records its own.
 
 - **When `max_tasks` is checked under lab dispatch** (bd-orxy): as Rust's
   spawn mailbox does, a spawn from a poll returns its task at once and the

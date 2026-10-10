@@ -81,79 +81,6 @@ fn without(doc: &Value, path: &[Seg]) -> Option<Value> {
     Some(copy)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn paths(doc: &Value) -> Vec<String> {
-        let mut out = Vec::new();
-        deletable(doc, &mut Vec::new(), false, &mut out);
-        out.iter()
-            .map(|p| {
-                p.iter()
-                    .map(|s| match s {
-                        Seg::Key(k) => k.clone(),
-                        Seg::Idx(i) => i.to_string(),
-                    })
-                    .collect::<Vec<_>>()
-                    .join("/")
-            })
-            .collect()
-    }
-
-    #[test]
-    fn enumerates_nested_programs_members_and_declarations() {
-        let doc = json!({
-            "id": "x", "seed": 1, "lab": {"max_steps": 10},
-            "regions": [{"name": "r.main"}],
-            "tasks": [{"name": "t", "program": [
-                {"op": "spawn", "as": "c", "program": [{"op": "yield"}]},
-                {"op": "masked", "steps": [{"op": "checkpoint"}]},
-                {"op": "join_all", "members": [[{"op": "yield"}, {"op": "yield"}]]},
-            ]}],
-            "script": [{"at_ns": 0, "op": {"op": "advance", "ns": 5}}],
-        });
-        let mut got = paths(&doc);
-        got.sort();
-        let mut want = vec![
-            "regions/0",
-            "script/0",
-            "tasks/0",
-            "tasks/0/program/0",
-            "tasks/0/program/0/program/0",
-            "tasks/0/program/1",
-            "tasks/0/program/1/steps/0",
-            "tasks/0/program/2",
-            "tasks/0/program/2/members/0",
-            "tasks/0/program/2/members/0/0",
-            "tasks/0/program/2/members/0/1",
-        ];
-        want.sort_unstable();
-        assert_eq!(got, want);
-    }
-
-    #[test]
-    fn deletes_exactly_one_element() {
-        let doc = json!({"tasks": [{"program": [{"op": "a"}, {"op": "b"}, {"op": "c"}]}]});
-        let path = vec![
-            Seg::Key("tasks".into()),
-            Seg::Idx(0),
-            Seg::Key("program".into()),
-            Seg::Idx(1),
-        ];
-        let smaller = without(&doc, &path).expect("deletable");
-        assert_eq!(
-            smaller,
-            json!({"tasks": [{"program": [{"op": "a"}, {"op": "c"}]}]})
-        );
-        // The source is untouched; a path past the end deletes nothing.
-        assert_eq!(doc["tasks"][0]["program"].as_array().map(Vec::len), Some(3));
-        let past = vec![Seg::Key("tasks".into()), Seg::Idx(4)];
-        assert!(without(&doc, &past).is_none());
-    }
-}
-
 /// Rust's fixture for `scenario`, or None when Rust cannot run it.
 fn capture(scenario: &Value, provenance: &Value) -> Option<Value> {
     let mut fixture = run::run_scenario(scenario).ok()?;
@@ -245,4 +172,77 @@ pub fn minimize(
         count_deletable(&current)
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn paths(doc: &Value) -> Vec<String> {
+        let mut out = Vec::new();
+        deletable(doc, &mut Vec::new(), false, &mut out);
+        out.iter()
+            .map(|p| {
+                p.iter()
+                    .map(|s| match s {
+                        Seg::Key(k) => k.clone(),
+                        Seg::Idx(i) => i.to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn enumerates_nested_programs_members_and_declarations() {
+        let doc = json!({
+            "id": "x", "seed": 1, "lab": {"max_steps": 10},
+            "regions": [{"name": "r.main"}],
+            "tasks": [{"name": "t", "program": [
+                {"op": "spawn", "as": "c", "program": [{"op": "yield"}]},
+                {"op": "masked", "steps": [{"op": "checkpoint"}]},
+                {"op": "join_all", "members": [[{"op": "yield"}, {"op": "yield"}]]},
+            ]}],
+            "script": [{"at_ns": 0, "op": {"op": "advance", "ns": 5}}],
+        });
+        let mut got = paths(&doc);
+        got.sort();
+        let mut want = vec![
+            "regions/0",
+            "script/0",
+            "tasks/0",
+            "tasks/0/program/0",
+            "tasks/0/program/0/program/0",
+            "tasks/0/program/1",
+            "tasks/0/program/1/steps/0",
+            "tasks/0/program/2",
+            "tasks/0/program/2/members/0",
+            "tasks/0/program/2/members/0/0",
+            "tasks/0/program/2/members/0/1",
+        ];
+        want.sort_unstable();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn deletes_exactly_one_element() {
+        let doc = json!({"tasks": [{"program": [{"op": "a"}, {"op": "b"}, {"op": "c"}]}]});
+        let path = vec![
+            Seg::Key("tasks".into()),
+            Seg::Idx(0),
+            Seg::Key("program".into()),
+            Seg::Idx(1),
+        ];
+        let smaller = without(&doc, &path).expect("deletable");
+        assert_eq!(
+            smaller,
+            json!({"tasks": [{"program": [{"op": "a"}, {"op": "c"}]}]})
+        );
+        // The source is untouched; a path past the end deletes nothing.
+        assert_eq!(doc["tasks"][0]["program"].as_array().map(Vec::len), Some(3));
+        let past = vec![Seg::Key("tasks".into()), Seg::Idx(4)];
+        assert!(without(&doc, &past).is_none());
+    }
 }

@@ -70,7 +70,8 @@ struct Shared {
     task_regions: HashMap<String, String>,
     /// Names of spawned servers (DSL §3.8). A server's snapshot outcome is
     /// its join's (vocabulary §6): taken by `server_stop`, else harvested
-    /// from its task record (`harvest_servers`).
+    /// from its task record (`harvest_servers`). A server records its own
+    /// canonical id in `self_ids` from its hooks (`ServerName`).
     servers: HashSet<String>,
     /// Declared sync objects by name.
     sync: HashMap<String, SyncObj>,
@@ -436,12 +437,33 @@ struct Local {
     servers: BTreeMap<String, Server>,
 }
 
+/// A server's name and the shared state: the server records its canonical
+/// id under its name from its own Cx, as `run_program` does for spawned
+/// children, since enqueue order alone cannot pair spawns with admissions
+/// once one was refused or named another way. It records from `on_start`
+/// and `on_stop`, one of which every admitted server runs (terminate runs
+/// even when init is skipped), and from its handlers. The hooks stay
+/// no-ops otherwise: nothing observable changes.
+struct ServerName {
+    name: String,
+    shared: SharedRef,
+}
+
+impl ServerName {
+    fn record(&self, cx: &Cx) {
+        lock(&self.shared)
+            .self_ids
+            .entry(self.name.clone())
+            .or_insert_with(|| cx.task_id());
+    }
+}
+
 /// The DSL's built-in GenServer behaviours (§3.8): `counter` keeps a u64
 /// that a cast adds to and a call returns; `echo` replies to a call with
 /// its request. Both keep the trait's defaults (budgets, Reject overflow,
-/// no-op info, start and stop hooks).
-struct CounterServer(u64);
-struct EchoServer;
+/// no-op info); their start and stop hooks only record their ids.
+struct CounterServer(u64, ServerName);
+struct EchoServer(ServerName);
 
 impl GenServer for CounterServer {
     type Call = u64;
@@ -451,18 +473,30 @@ impl GenServer for CounterServer {
 
     fn handle_call(
         &mut self,
-        _cx: &Cx,
+        cx: &Cx,
         _request: u64,
         reply: Reply<u64>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.1.record(cx);
         let value = self.0;
         Box::pin(async move {
             let _ = reply.send(value);
         })
     }
 
-    fn handle_cast(&mut self, _cx: &Cx, msg: u64) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+    fn handle_cast(&mut self, cx: &Cx, msg: u64) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.1.record(cx);
         self.0 = self.0.wrapping_add(msg);
+        Box::pin(async {})
+    }
+
+    fn on_start(&mut self, cx: &Cx) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.1.record(cx);
+        Box::pin(async {})
+    }
+
+    fn on_stop(&mut self, cx: &Cx) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.1.record(cx);
         Box::pin(async {})
     }
 }
@@ -475,13 +509,29 @@ impl GenServer for EchoServer {
 
     fn handle_call(
         &mut self,
-        _cx: &Cx,
+        cx: &Cx,
         request: u64,
         reply: Reply<u64>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.0.record(cx);
         Box::pin(async move {
             let _ = reply.send(request);
         })
+    }
+
+    fn handle_cast(&mut self, cx: &Cx, _msg: u64) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.0.record(cx);
+        Box::pin(async {})
+    }
+
+    fn on_start(&mut self, cx: &Cx) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.0.record(cx);
+        Box::pin(async {})
+    }
+
+    fn on_stop(&mut self, cx: &Cx) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.0.record(cx);
+        Box::pin(async {})
     }
 }
 
@@ -1588,12 +1638,16 @@ async fn exec_step(
             let name = str_field(step, "as")?.to_string();
             let mailbox =
                 usize::try_from(u64_field(step, "mailbox")?).map_err(|e| e.to_string())?;
+            let named = ServerName {
+                name: name.clone(),
+                shared: Arc::clone(&ctx.shared),
+            };
             let spawned = match str_field(step, "behavior")? {
                 "counter" => cx
-                    .spawn_gen_server(CounterServer(0), mailbox)
+                    .spawn_gen_server(CounterServer(0, named), mailbox)
                     .map(|h| (h.task_id(), Server::Counter(h))),
                 "echo" => cx
-                    .spawn_gen_server(EchoServer, mailbox)
+                    .spawn_gen_server(EchoServer(named), mailbox)
                     .map(|h| (h.task_id(), Server::Echo(h))),
                 other => return Err(format!("unknown behavior {other:?}")),
             };
@@ -1673,8 +1727,8 @@ async fn exec_step(
                 Err(JoinError::Cancelled(_)) => "ASX_E_CANCELLED",
                 Err(_) => "ASX_E_INVALID_STATE",
             };
-            // The server task's outcome for the snapshot: its body returns
-            // once the loop has stopped and the state is published.
+            // The server task's outcome for the snapshot: its join's
+            // (vocabulary §6).
             lock(&ctx.shared)
                 .raw_outcomes
                 .insert(name.to_string(), result.map(|()| Body::Ok));
@@ -2446,7 +2500,8 @@ fn resolve_admissions(lab: &LabRuntime, shared: &SharedRef) -> RunResult<()> {
     use std::collections::VecDeque;
     let mut s = lock(shared);
     // A child that ran recorded its canonical id under its name
-    // (run_program): name it directly. Enqueue order alone cannot pair a
+    // (run_program; a server from its hooks, `ServerName`): name it
+    // directly. Enqueue order alone cannot pair a
     // region's spawns with its admissions once one was refused
     // (RegionAtCapacity under region_limits): the refused spawn has an
     // enqueue and no TaskAdmitted.
@@ -2521,6 +2576,14 @@ fn name_admitted(s: &mut Shared, name: String, task: TaskId) -> RunResult<()> {
 fn project_denied_spawns(s: &mut Shared) -> RunResult<()> {
     let denied: Vec<String> = s.provisional.values().cloned().collect();
     for name in denied {
+        if s.servers.contains(&name) {
+            // A server the lab never admitted: `spawn_gen_server` returned
+            // its handle (the step observed ASX_OK), and a join observed the
+            // refusal itself (Cancelled). Its task is not in the snapshot.
+            s.raw_outcomes.remove(&name);
+            s.task_regions.remove(&name);
+            continue;
+        }
         if s.group_members.contains(&name) {
             // A combinator's member: the combinator joined it (Cancelled),
             // and its own observation reports that.

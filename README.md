@@ -399,9 +399,10 @@ needs the Rust toolchain from `rust-toolchain.toml`. CI runs it on every push
 and pull request with a fixed seed (9, 200 scenarios), and the nightly
 workflow tries a new seed each day. The generator (`tools/twin_run/src/gen.rs`)
 draws lifecycle, cancellation, budget, obligation, region, task-group,
-mpsc, oneshot, broadcast, watch, mutex, rwlock, semaphore, notify and barrier steps,
-and about one scenario in twelve queues 17 to 32 tasks on one lock; it
-leaves out actors and supervision. Race groups are generated: a
+mpsc, oneshot, broadcast, watch, mutex, rwlock, semaphore, notify, barrier
+and GenServer (spawn, cast, call, stop) steps, and about one scenario in
+twelve queues 17 to 32 tasks on one lock; it leaves out supervision. Race
+groups are generated: a
 same-round tie is drawn from the owner's entropy, which C keeps as Rust's
 per-task DetEntropy streams under lab dispatch.
 
