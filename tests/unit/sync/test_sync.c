@@ -425,6 +425,100 @@ TEST(sem_acquire_zero_and_mutex_count) {
     ASSERT_EQ(asx_mutex_close(m), ASX_OK);
 }
 
+/* A permit is released once: a second release of the same value would
+ * return permits nobody holds, so it is refused and changes nothing (Rust
+ * consumes the permit on drop). The same holds for a mutex guard. */
+TEST(sem_double_release_is_refused) {
+    asx_semaphore_handle h;
+    asx_semaphore_permit p;
+    asx_mutex_handle m;
+    asx_mutex_guard g;
+    asx_mutex_guard g2;
+    setup();
+    MUST_OK(asx_semaphore_create(2, &h));
+    ASSERT_EQ(asx_semaphore_try_acquire_many(h, 2, &p), ASX_OK);
+    ASSERT_EQ(asx_semaphore_release(p), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(h), 2u);
+    ASSERT_EQ(asx_semaphore_release(p), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_semaphore_available(h), 2u);
+    ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
+
+    MUST_OK(asx_mutex_create(&m));
+    ASSERT_EQ(asx_mutex_try_lock(m, &g), ASX_OK);
+    ASSERT_EQ(asx_mutex_unlock(g), ASX_OK);
+    ASSERT_EQ(asx_mutex_unlock(g), ASX_E_INVALID_STATE);
+    /* Still one lock: a second locker is refused while the first holds. */
+    ASSERT_EQ(asx_mutex_try_lock(m, &g), ASX_OK);
+    ASSERT_EQ(asx_mutex_try_lock(m, &g2), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_mutex_unlock(g), ASX_OK);
+    ASSERT_EQ(asx_mutex_close(m), ASX_OK);
+}
+
+/* Rust SemaphorePermit::forget: the permits never return to the pool, and
+ * forgetting (or releasing) the permit afterwards is refused. */
+TEST(sem_forget_keeps_permits_out_of_the_pool) {
+    asx_semaphore_handle h;
+    asx_semaphore_permit p;
+    asx_mutex_handle m;
+    asx_mutex_guard g;
+    setup();
+    MUST_OK(asx_semaphore_create(3, &h));
+    ASSERT_EQ(asx_semaphore_try_acquire_many(h, 2, &p), ASX_OK);
+    ASSERT_EQ(asx_semaphore_forget(p), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(h), 1u);
+    ASSERT_EQ(asx_semaphore_forget(p), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_semaphore_release(p), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_semaphore_available(h), 1u);
+    ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_forget(p), ASX_E_STALE_HANDLE);
+
+    MUST_OK(asx_mutex_create(&m));
+    ASSERT_EQ(asx_mutex_try_lock(m, &g), ASX_OK);
+    ASSERT_EQ(asx_semaphore_forget(g.permit), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_mutex_unlock(g), ASX_OK);
+    ASSERT_EQ(asx_mutex_close(m), ASX_OK);
+}
+
+/* Rust Semaphore::add_permits: saturating; the front waiter is woken if it
+ * can now take what it asked for, and only it (FIFO: a large waiter at
+ * the front is not passed by a smaller one behind it). */
+TEST(sem_add_permits_serves_the_front_of_the_line) {
+    asx_semaphore_handle h;
+    asx_semaphore_permit p2;
+    asx_semaphore_permit p1;
+    asx_semaphore_waiter w2;
+    asx_semaphore_waiter w1;
+    asx_mutex_handle m;
+    setup();
+    MUST_OK(asx_semaphore_create(0, &h));
+    MUST_OK(asx_semaphore_acquire_many_begin(h, 2, &w2));
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w2, &p2, NULL), ASX_E_PENDING);
+    MUST_OK(asx_semaphore_acquire_begin(h, &w1));
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w1, &p1, NULL), ASX_E_PENDING);
+
+    ASSERT_EQ(asx_semaphore_add_permits(h, 0), ASX_OK);
+    ASSERT_EQ(asx_semaphore_add_permits(h, 1), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(h), 1u);
+    /* One free is not enough for the front (2), and w1 may not pass it. */
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w1, &p1, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_semaphore_add_permits(h, 2), ASX_OK);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w2, &p2, NULL), ASX_OK);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w1, &p1, NULL), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(h), 0u);
+    ASSERT_EQ(asx_semaphore_release(p2), ASX_OK);
+    ASSERT_EQ(asx_semaphore_release(p1), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(h), 3u);
+
+    ASSERT_EQ(asx_semaphore_add_permits(h, UINT32_MAX), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(h), UINT32_MAX);
+    ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_add_permits(h, 1), ASX_E_STALE_HANDLE);
+
+    MUST_OK(asx_mutex_create(&m));
+    ASSERT_EQ(asx_semaphore_add_permits(m.sem, 1), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_mutex_close(m), ASX_OK);
+}
+
 /* ================================================================== */
 /* Mutex tests                                                         */
 /* ================================================================== */
@@ -865,6 +959,9 @@ int main(void) {
     RUN_TEST(sem_zero_permits);
     RUN_TEST(sem_acquire_many_all_or_nothing_in_line);
     RUN_TEST(sem_acquire_zero_and_mutex_count);
+    RUN_TEST(sem_double_release_is_refused);
+    RUN_TEST(sem_forget_keeps_permits_out_of_the_pool);
+    RUN_TEST(sem_add_permits_serves_the_front_of_the_line);
 
     /* Mutex */
     RUN_TEST(mutex_create_close);

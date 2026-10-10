@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-1%2C971%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-1%2C973%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,971<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,973<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -40,10 +40,10 @@ make test
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->1,971<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->1,973<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
-| **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and bounded cleanup budgets |
+| **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
 | **Async combinators** | Poll-based join, race, select, timeout, retry, bracket, pipeline, quorum, first-ok, hedge and map-reduce (plus race and retry with a timeout), and bulkhead and rate-limit admission counters |
 | **Circuit breaker and epoch-based execution** | Failure containment with open/half-open/closed states; phase-scoped execution with barrier triggers |
 | **Dual codecs (JSON + binary)** | JSON for debugging and diffing, binary for compact encoding; both encode the same canonical fixture model, and round trips through each are checked to agree |
@@ -1506,7 +1506,7 @@ Waiters of every primitive and channel are nodes in one runtime-wide pool (`ASX_
 
 **Mutex**: Cooperative mutual exclusion implemented as a semaphore with count 1. `try_lock()` returns immediately; `lock_begin()`/`poll_lock()` yield until available. No priority inheritance: a waiting task does not raise the lock holder's priority.
 
-**Semaphore**: Counting permit system with configurable initial count, following Rust's `Semaphore`. An acquire takes one permit, or `n` at once with `asx_semaphore_acquire_many_begin` / `asx_semaphore_try_acquire_many` (all or nothing; the permit returns all `n` on release). Waiters queue in arrival order (a waiter joins the line at its first poll that has to wait), and only the front of the line takes permits: a release wakes the front waiter if it can now run, and that waiter, taking its permit, wakes the next. `try_acquire()` is non-blocking and fails while anyone is queued. Integrates with the obligation system for permit tracking. (The mutex instead hands the lock straight to the front waiter on unlock, as Rust's `Mutex` does.)
+**Semaphore**: Counting permit system with configurable initial count, following Rust's `Semaphore`. An acquire takes one permit, or `n` at once with `asx_semaphore_acquire_many_begin` / `asx_semaphore_try_acquire_many` (all or nothing; the permit returns all `n` on release). Waiters queue in arrival order (a waiter joins the line at its first poll that has to wait), and only the front of the line takes permits: a release wakes the front waiter if it can now run, and that waiter, taking its permit, wakes the next. `try_acquire()` is non-blocking and fails while anyone is queued. `asx_semaphore_add_permits` grows the pool (saturating) and wakes the front waiter if it can now run; `asx_semaphore_forget` drops a permit without returning its permits, aborting its obligation. A permit value is released once: a second release that would return permits nobody holds is refused with `ASX_E_INVALID_STATE` (C cannot consume a permit the way Rust's drop does). Integrates with the obligation system for permit tracking. (The mutex instead hands the lock straight to the front waiter on unlock, as Rust's `Mutex` does.)
 
 **RwLock**: Many readers or one writer, following Rust's `RwLock` and its bounded writer-preference policy. A read or write takes the lock at its first poll if it can (a read when no writer holds or waits for it, a write when nobody holds it and no writer is queued); otherwise it joins the line and waits for a grant. A writer's release serves the oldest queued writer unless readers queued before it, who go first; the last reader's release serves the oldest queued writer; after 16 writer hand-offs in a row while a reader waits, the oldest queued reader gets a turn. Grants go to the front of the line even when its task has a cancel request pending; that waiter gives the lock back at its next poll. `try_read` / `try_write` fail while a writer waits. Unlike Rust, a C lock is never poisoned, and a write guard cannot be downgraded.
 
@@ -2248,7 +2248,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->1,971<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->1,973<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

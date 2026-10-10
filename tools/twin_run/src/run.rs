@@ -873,6 +873,29 @@ fn exec_sync(
             };
             observe(&ctx.shared, me, idx, label, status, Value::Null);
         }
+        "sem_forget" => {
+            // Forgets the task's latest permit on the semaphore: its
+            // permits never return (SemaphorePermit::forget,
+            // sync/semaphore.rs:1041).
+            let name = str_field(step, "semaphore")?;
+            let status = match local.permits.get_mut(name).and_then(Vec::pop) {
+                Some(permit) => {
+                    permit.forget();
+                    "ASX_OK"
+                }
+                None => NOT_HELD, // its sem_acquire failed (DSL §3)
+            };
+            observe(&ctx.shared, me, idx, label, status, Value::Null);
+        }
+        "sem_add_permits" => {
+            let SyncObj::Semaphore(s) = sync_obj(&ctx.shared, step, "semaphore")? else {
+                return Err("sem_add_permits on a non-semaphore".to_string());
+            };
+            let count =
+                usize::try_from(u64_field(step, "count")?).map_err(|_| "count out of range")?;
+            s.add_permits(count);
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
         "sem_release" => {
             let name = str_field(step, "semaphore")?;
             let status = match local.permits.get_mut(name).and_then(Vec::pop) {

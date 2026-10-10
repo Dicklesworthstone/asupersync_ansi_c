@@ -123,7 +123,8 @@ ASX_API asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter,
 /* Cancel an async acquire (safe even if already acquired). A permit that
  * was already granted to the waiter passes on to the next waiter in line.
  * Waiters whose parked task completed without cancelling are reclaimed
- * lazily, and cancel-pending waiters are skipped when granting. */
+ * lazily. A cancel-pending waiter keeps its place until its own poll or
+ * cancel gives it up, as in Rust. */
 ASX_API asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter);
 
 /* -------------------------------------------------------------------
@@ -133,8 +134,28 @@ ASX_API asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter);
 /* Release a permit's `count` permits back to the semaphore. A semaphore
  * pools them and wakes the front waiter if it can now take what it asked
  * for; a mutex hands the lock to the oldest waiter (waking its task if
- * parked), else returns it to the pool. */
+ * parked), else returns it to the pool. The permit's obligation, if any,
+ * is committed. A permit value is released once: when its count exceeds
+ * what the semaphore's handed-out permits still hold (a second release of
+ * the same permit, with no other permit outstanding to absorb it), the
+ * release is refused with ASX_E_INVALID_STATE and nothing changes, so
+ * releases never return more permits than were handed out. */
 ASX_API asx_status asx_semaphore_release(asx_semaphore_permit permit);
+
+/* Forget a permit (Rust SemaphorePermit::forget): its permits are not
+ * returned to the pool, and its obligation, if any, is aborted with
+ * ASX_OBLIGATION_ABORT_EXPLICIT. ASX_E_INVALID_STATE for a permit already
+ * released or forgotten (as for release), ASX_E_INVALID_ARGUMENT for a
+ * mutex's semaphore, ASX_E_STALE_HANDLE for a closed semaphore (the
+ * obligation is still aborted). */
+ASX_API asx_status asx_semaphore_forget(asx_semaphore_permit permit);
+
+/* Add `count` permits to the pool, saturating (Rust
+ * Semaphore::add_permits): the front waiter is woken if it can now take
+ * what it asked for, and nobody else. A count of 0 does nothing.
+ * ASX_E_STALE_HANDLE for a closed semaphore, ASX_E_INVALID_ARGUMENT for a
+ * mutex's semaphore. */
+ASX_API asx_status asx_semaphore_add_permits(asx_semaphore_handle handle, uint32_t count);
 
 /* -------------------------------------------------------------------
  * Queries

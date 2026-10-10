@@ -63,6 +63,7 @@ typedef struct {
     int alive;
     uint32_t permits;       /* available permits */
     uint32_t max_permits;   /* initial capacity (for queries) */
+    uint32_t outstanding;   /* permits held by handed-out permit values */
     asx_wait_queue waiters; /* waiter records, arrival order */
     /* The lock under asx_mutex: Rust's Mutex hand-off, and no obligation
      * (Rust's Mutex registers none). Otherwise a Semaphore, whose permits
@@ -212,6 +213,7 @@ static asx_status sem_create(uint32_t initial_permits, int is_mutex, asx_semapho
             g_slots[i].generation = next_gen(g_slots[i].generation);
             g_slots[i].permits = initial_permits;
             g_slots[i].max_permits = initial_permits;
+            g_slots[i].outstanding = 0u;
             g_slots[i].is_mutex = is_mutex;
             asx_wait_records_init(&g_slots[i].waiters, sem_reap_queue);
             out->slot = i;
@@ -276,6 +278,7 @@ asx_status asx_semaphore_try_acquire_many(asx_semaphore_handle handle, uint32_t 
     if (!s->is_mutex) sem_reap(s);
     if (s->permits >= count && (s->is_mutex || sem_front(s) == ASX_WAIT_NIL)) {
         s->permits -= count;
+        s->outstanding += count;
         out->count = count;
         return ASX_OK;
     }
@@ -315,8 +318,9 @@ asx_status asx_semaphore_acquire_many_begin(asx_semaphore_handle handle, uint32_
  * reserving its SemaphorePermit obligation for the Cx's task (a
  * semaphore's, not the mutex's). A refused reservation leaves the permit
  * untracked. */
-static asx_status sem_hand_out(const sem_slot *s, const asx_semaphore_waiter *waiter,
-                               uint32_t count, asx_semaphore_permit *out, const asx_cx *cx) {
+static asx_status sem_hand_out(sem_slot *s, const asx_semaphore_waiter *waiter, uint32_t count,
+                               asx_semaphore_permit *out, const asx_cx *cx) {
+    s->outstanding += count;
     out->sem_slot = waiter->sem_slot;
     out->generation = waiter->generation;
     out->count = count;
@@ -479,6 +483,10 @@ asx_status asx_semaphore_release(asx_semaphore_permit permit) {
         sem_commit_obligation(&permit);
         return ASX_E_STALE_HANDLE;
     }
+    /* More than the permit values hold: a permit released twice (Rust's
+     * permit is consumed by its drop). Nothing changes. */
+    if (permit.count > s->outstanding) return ASX_E_INVALID_STATE;
+    s->outstanding -= permit.count;
 
     sem_reap(s);
     if (!s->is_mutex) {
@@ -506,6 +514,46 @@ asx_status asx_semaphore_release(asx_semaphore_permit permit) {
     return ASX_OK;
 }
 
+asx_status asx_semaphore_forget(asx_semaphore_permit permit) {
+    sem_slot *s;
+    asx_status st = ASX_OK;
+    if (permit.sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
+    s = &g_slots[permit.sem_slot];
+    if (!s->alive || s->generation != permit.generation) {
+        st = ASX_E_STALE_HANDLE;
+    } else if (s->is_mutex) {
+        return ASX_E_INVALID_ARGUMENT;
+    } else if (permit.count > s->outstanding) {
+        return ASX_E_INVALID_STATE; /* already released or forgotten */
+    } else {
+        s->outstanding -= permit.count; /* gone: not back to the pool */
+    }
+    /* The permit was intentionally leaked: abort its obligation
+     * (SemaphorePermit::forget, sync/semaphore.rs:1041). */
+    if (permit.obligation != ASX_INVALID_ID) {
+        asx_status ost =
+            asx_obligation_abort_with_reason(permit.obligation, ASX_OBLIGATION_ABORT_EXPLICIT);
+        (void)ost; /* refused only for an obligation already reported leaked */
+    }
+    return st;
+}
+
+asx_status asx_semaphore_add_permits(asx_semaphore_handle handle, uint32_t count) {
+    sem_slot *s;
+    if (handle.slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
+    s = &g_slots[handle.slot];
+    if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
+    if (s->is_mutex) return ASX_E_INVALID_ARGUMENT;
+    if (count == 0u) return ASX_OK;
+    /* Saturating, then the front waiter is woken if it can now take what
+     * it asked for, and nobody else (add_permits_deferred,
+     * sync/semaphore.rs:625). */
+    sem_reap(s);
+    s->permits = count > UINT32_MAX - s->permits ? UINT32_MAX : s->permits + count;
+    sem_wake_front(s);
+    return ASX_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* Queries                                                             */
 /* ------------------------------------------------------------------ */
@@ -527,6 +575,7 @@ void asx_semaphore_reset(void) {
         g_slots[i].generation = next_gen(g_slots[i].generation);
         g_slots[i].alive = 0;
         g_slots[i].permits = 0;
+        g_slots[i].outstanding = 0;
         asx_wait_records_init(&g_slots[i].waiters, sem_reap_queue);
     }
     g_slot_count = 0;

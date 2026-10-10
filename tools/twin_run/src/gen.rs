@@ -31,7 +31,9 @@
 //! parties.
 //!
 //! Semaphore acquires sometimes take 2 permits at once (all or nothing),
-//! and about one scenario in ten sets admission limits on a region.
+//! a held permit is sometimes forgotten instead of released, and the pool
+//! sometimes grows (add_permits); about one scenario in ten sets admission
+//! limits on a region.
 //!
 //! Left out on purpose: race
 //! (same-round ties are an RNG pick in Rust and the lowest index in C, a
@@ -218,9 +220,17 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 };
             }
             12 if world.semaphore => {
+                // Sometimes the pool grows; sometimes a held permit is
+                // forgotten instead of released, so the pool shrinks.
+                if rng.chance(10) {
+                    return json!({"op": "sem_add_permits", "semaphore": "s",
+                                  "count": 1 + rng.below(2)});
+                }
                 held.permit = !held.permit;
                 return if held.permit {
                     json!({"op": "sem_acquire", "semaphore": "s", "count": permit_count(rng)})
+                } else if rng.chance(15) {
+                    json!({"op": "sem_forget", "semaphore": "s"})
                 } else {
                     json!({"op": "sem_release", "semaphore": "s"})
                 };

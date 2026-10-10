@@ -113,7 +113,8 @@
       {"$ref": "#/$defs/s_obligation_ref"}, {"$ref": "#/$defs/s_abort"}, {"$ref": "#/$defs/s_try_join"},
       {"$ref": "#/$defs/s_abort_task"}, {"$ref": "#/$defs/s_spawn"}, {"$ref": "#/$defs/s_permit_send"},
       {"$ref": "#/$defs/s_permit_ref"}, {"$ref": "#/$defs/s_chan_value_nb"}, {"$ref": "#/$defs/s_chan_ref_nb"},
-      {"$ref": "#/$defs/s_sync_ref_nb"}, {"$ref": "#/$defs/s_cancel_region"}
+      {"$ref": "#/$defs/s_sync_ref_nb"}, {"$ref": "#/$defs/s_sem_add_permits"},
+      {"$ref": "#/$defs/s_cancel_region"}
     ]},
     "step": {"oneOf": [
       {"$ref": "#/$defs/nonblocking_step"},
@@ -187,7 +188,7 @@
     "s_sync_ref_nb": {"type": "object", "additionalProperties": false, "oneOf": [
       {"required": ["op", "mutex"], "properties": {"op": {"const": "mutex_unlock"}, "mutex": {"$ref": "#/$defs/name"}}},
       {"required": ["op", "rwlock"], "properties": {"op": {"const": "rwlock_unlock"}, "rwlock": {"$ref": "#/$defs/name"}}},
-      {"required": ["op", "semaphore"], "properties": {"op": {"const": "sem_release"}, "semaphore": {"$ref": "#/$defs/name"}}},
+      {"required": ["op", "semaphore"], "properties": {"op": {"enum": ["sem_release", "sem_forget"]}, "semaphore": {"$ref": "#/$defs/name"}}},
       {"required": ["op", "notify"], "properties": {"op": {"enum": ["notify_one", "notify_all"]}, "notify": {"$ref": "#/$defs/name"}}}
     ], "properties": {"op": true, "mutex": true, "rwlock": true, "semaphore": true, "notify": true}},
     "s_sync_ref_b": {"type": "object", "additionalProperties": false, "oneOf": [
@@ -198,6 +199,8 @@
     ], "properties": {"op": true, "mutex": true, "rwlock": true, "barrier": true, "notify": true}},
     "s_sem_acquire": {"type": "object", "required": ["op", "semaphore", "count"], "additionalProperties": false,
       "properties": {"op": {"const": "sem_acquire"}, "semaphore": {"$ref": "#/$defs/name"}, "count": {"type": "integer", "minimum": 0}}},
+    "s_sem_add_permits": {"type": "object", "required": ["op", "semaphore", "count"], "additionalProperties": false,
+      "properties": {"op": {"const": "sem_add_permits"}, "semaphore": {"$ref": "#/$defs/name"}, "count": {"type": "integer", "minimum": 0, "maximum": 4294967295}}},
     "s_server_spawn": {"type": "object", "required": ["op", "as", "behavior", "mailbox"], "additionalProperties": false,
       "properties": {"op": {"const": "server_spawn"}, "as": {"$ref": "#/$defs/name"}, "behavior": {"enum": ["counter", "echo"]},
                      "mailbox": {"type": "integer", "minimum": 1}}},

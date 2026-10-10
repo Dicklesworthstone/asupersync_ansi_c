@@ -1788,6 +1788,36 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
+    if (strcmp(op, "sem_forget") == 0) {
+        /* Forget the most recent permit held on the semaphore: its
+         * permits never return (Rust SemaphorePermit::forget). */
+        const char *name = it_str(step, "semaphore");
+        uint32_t i = t->n_permits;
+        while (i > 0u && (name == NULL || strcmp(t->permits[i - 1u].name, name) != 0)) i--;
+        if (i == 0u) {
+            /* Its sem_acquire failed (DSL §3). */
+            observe_status(t, idx, label, ASX_E_NOT_FOUND);
+            return STEP_NEXT;
+        }
+        i--;
+        st = asx_semaphore_forget(t->permits[i].permit);
+        for (; i + 1u < t->n_permits; i++) t->permits[i] = t->permits[i + 1u];
+        t->n_permits--;
+        observe_status(t, idx, label, st);
+        return STEP_NEXT;
+    }
+    if (strcmp(op, "sem_add_permits") == 0) {
+        it_sync *s = sync_by_name(it_str(step, "semaphore"), IT_SYNC_SEMAPHORE);
+        uint64_t count = 0;
+        if (s == NULL || !asx_json_u64(g_in, asx_json_get(g_in, step, "count"), &count) ||
+            count > UINT32_MAX) {
+            it_fail_task(t, idx, "sem_add_permits needs a declared semaphore and a count");
+            return STEP_END;
+        }
+        st = asx_semaphore_add_permits(s->semaphore, (uint32_t)count);
+        observe_status(t, idx, label, st);
+        return STEP_NEXT;
+    }
     if (strcmp(op, "rwlock_unlock") == 0) {
         /* Release the most recent guard (read or write) held on the lock. */
         const char *name = it_str(step, "rwlock");

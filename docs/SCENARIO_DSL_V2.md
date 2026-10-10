@@ -337,6 +337,8 @@ Sync objects are declared at the top level:
 | `rwlock_unlock` | `rwlock` | drops the task's most recent guard on the lock (`release_reader` / `release_writer`) | `asx_rwlock_read_unlock` / `asx_rwlock_write_unlock` | no | ignored |
 | `sem_acquire` | `semaphore`, `count` | `s.acquire(&cx, n).await` (`sync/semaphore.rs:430`), permit kept | `asx_semaphore_acquire_many_begin(s, n)` + `asx_semaphore_poll_acquire` | until n are available (all-or-nothing, FIFO) | `ASX_E_CANCELLED` (`:847`); count 0 succeeds at once with an empty permit and no obligation. Otherwise the permit registers a `SemaphorePermit` obligation. |
 | `sem_release` | `semaphore` | `drop(permit)` (`:1080`) | `asx_semaphore_release` | no | ignored |
+| `sem_forget` | `semaphore` | `permit.forget()` on the task's latest permit (`:1041`): the permits never return and its obligation is aborted (Explicit) | `asx_semaphore_forget` | no | ignored |
+| `sem_add_permits` | `semaphore`, `count` | `s.add_permits(count)` (`:625`): saturating; wakes the front waiter if it can now run | `asx_semaphore_add_permits` | no | ignored |
 | `barrier_wait` | `barrier` | `b.wait(&cx).await` (`sync/barrier.rs:135`) | `asx_barrier_wait_begin` + `asx_barrier_poll_wait` | until `parties` have arrived | `ASX_E_CANCELLED` (`:304`) |
 | `notify_wait` | `notify` | `n.notified().await` (`sync/notify.rs:347`) | `asx_notify_wait_begin` + `asx_notify_poll_wait` | until notified | **Ignored**: a cancelled waiter stays parked until notified. Avoid pairing it with cancellation unless that is the point. |
 | `notify_one` | `notify` | `n.notify_one()` (`:436`); stores a permit if nobody waits | `asx_notify_one` | no | ignored |
