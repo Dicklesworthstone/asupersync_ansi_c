@@ -921,6 +921,62 @@ TEST(trace_digest_within_capacity_matches_fold_of_events) {
     asx_replay_clear_reference();
 }
 
+/* The digest contract, byte by byte: FNV-1a steps from the asx digest
+ * seed over each event's sequence (u32), kind (u32), entity_id (u64) and
+ * aux (u64), little-endian. The runtime folds runs of zero high bytes as
+ * one multiply; these values put zeros high, low, in the middle and
+ * nowhere, so a fold that differs from the byte loop changes the digest. */
+static uint64_t fnv1a_le_reference(uint64_t hash, uint64_t v, uint32_t width) {
+    uint32_t i;
+    for (i = 0; i < width; i++) {
+        hash ^= (v >> (8u * i)) & 0xFFu;
+        hash *= 0x00000100000001B3ULL;
+    }
+    return hash;
+}
+
+TEST(trace_digest_is_fnv1a_over_le_event_fields) {
+    static const uint64_t values[] = {0u,
+                                      1u,
+                                      0xFFu,
+                                      0x100u,
+                                      0x10000u,
+                                      0xFF000000u,
+                                      0x0001000000000000ULL,
+                                      0x8000000000000000ULL,
+                                      0x00FF00FF00FF00FFULL,
+                                      0x1234000000005678ULL,
+                                      0xFFFFFFFFFFFFFFFFULL};
+    uint32_t n = (uint32_t)(sizeof(values) / sizeof(values[0]));
+    uint64_t expected = 0x517cc1b727220a95ULL;
+    uint32_t seq = 0, i, j;
+
+    asx_trace_reset();
+    for (i = 0; i < n; i++) {
+        for (j = 0; j < n; j++) {
+            asx_trace_event_kind kind =
+                (i % 2u == 0u) ? ASX_TRACE_SCHED_POLL : ASX_TRACE_TASK_SPAWN;
+            asx_trace_emit(kind, values[i], values[j]);
+            expected = fnv1a_le_reference(expected, seq, 4u);
+            expected = fnv1a_le_reference(expected, (uint32_t)kind, 4u);
+            expected = fnv1a_le_reference(expected, values[i], 8u);
+            expected = fnv1a_le_reference(expected, values[j], 8u);
+            seq++;
+        }
+    }
+    ASSERT_EQ(asx_trace_digest(), expected);
+
+    /* Sequences with zero and non-zero high bytes */
+    for (i = seq; i < 300u; i++) asx_trace_emit(ASX_TRACE_SCHED_POLL, 0u, 0u);
+    for (; seq < 300u; seq++) {
+        expected = fnv1a_le_reference(expected, seq, 4u);
+        expected = fnv1a_le_reference(expected, (uint32_t)ASX_TRACE_SCHED_POLL, 4u);
+        expected = fnv1a_le_reference(expected, 0u, 8u);
+        expected = fnv1a_le_reference(expected, 0u, 8u);
+    }
+    ASSERT_EQ(asx_trace_digest(), expected);
+}
+
 TEST(trace_kind_totals_exact_beyond_capacity) {
     uint32_t i;
 
@@ -1153,6 +1209,7 @@ int main(void) {
     RUN_TEST(trace_ring_keeps_most_recent_beyond_capacity);
     RUN_TEST(trace_digest_covers_events_beyond_capacity);
     RUN_TEST(trace_digest_within_capacity_matches_fold_of_events);
+    RUN_TEST(trace_digest_is_fnv1a_over_le_event_fields);
     RUN_TEST(trace_kind_totals_exact_beyond_capacity);
     RUN_TEST(trace_truncated_export_roundtrip_and_continuity);
     RUN_TEST(trace_import_rejects_inconsistent_truncation);

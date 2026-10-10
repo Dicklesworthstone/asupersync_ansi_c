@@ -84,7 +84,18 @@ CLASS_DEF := $(if $(RESOURCE_CLASS),-DASX_RESOURCE_CLASS=$(RESOURCE_CLASS),)
 
 # ---------------------------------------------------------------------------
 # Debug / Release mode
+#
+# Goals that run or size the benchmark binary measure the optimized
+# library, so they default to release. The build-config stamp rebuilds
+# every object when the flags change: without this, `make release` then
+# `make bench` (the perf workflow) rebuilt the library at -O0 and timed
+# and sized that.
 # ---------------------------------------------------------------------------
+BENCH_GOALS := bench bench-json bench-build parallel-bench-json parallel-bench-gate slo-gate \
+               size-gate evidence-dashboard
+ifneq ($(filter $(BENCH_GOALS),$(MAKECMDGOALS)),)
+BUILD_TYPE ?= release
+endif
 BUILD_TYPE ?= debug
 ifeq ($(BUILD_TYPE),release)
   OPT_FLAGS := -O2 -DNDEBUG

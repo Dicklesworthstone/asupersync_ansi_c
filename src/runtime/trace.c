@@ -97,6 +97,7 @@ const char *asx_trace_schema_compat_str(asx_trace_schema_compat compat) {
  * ------------------------------------------------------------------- */
 
 #define ASX_TRACE_DIGEST_SEED 0x517cc1b727220a95ULL
+#define ASX_TRACE_FNV_PRIME 0x00000100000001B3ULL
 
 static uint64_t fnv1a_mix(uint64_t hash, const void *data, uint32_t len) {
     const uint8_t *p = (const uint8_t *)data;
@@ -104,40 +105,47 @@ static uint64_t fnv1a_mix(uint64_t hash, const void *data, uint32_t len) {
 
     for (i = 0; i < len; i++) {
         hash ^= (uint64_t)p[i];
-        hash *= 0x00000100000001B3ULL;
+        hash *= ASX_TRACE_FNV_PRIME;
     }
     return hash;
 }
 
-static uint64_t fnv1a_mix_u32(uint64_t hash, uint32_t v) {
-    uint8_t bytes[4];
-    bytes[0] = (uint8_t)(v & 0xFFu);
-    bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
-    bytes[2] = (uint8_t)((v >> 16) & 0xFFu);
-    bytes[3] = (uint8_t)((v >> 24) & 0xFFu);
-    return fnv1a_mix(hash, bytes, 4);
-}
+/* ASX_TRACE_FNV_PRIME^k mod 2^64 for k = 0..8. */
+static const uint64_t g_fnv_prime_pow[9] = {
+    0x1ULL,
+    0x100000001b3ULL,
+    0x366000002e329ULL,
+    0x8a97b0004e7feabULL,
+    0x9ffaac085635bc91ULL,
+    0xcaee32a7d4f6a63ULL,
+    0xdc966432edf1c639ULL,
+    0xc5527b8a51d3d2dbULL,
+    0x1efac7090aef4a21ULL,
+};
 
-static uint64_t fnv1a_mix_u64(uint64_t hash, uint64_t v) {
-    uint8_t bytes[8];
-    bytes[0] = (uint8_t)(v & 0xFFu);
-    bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
-    bytes[2] = (uint8_t)((v >> 16) & 0xFFu);
-    bytes[3] = (uint8_t)((v >> 24) & 0xFFu);
-    bytes[4] = (uint8_t)((v >> 32) & 0xFFu);
-    bytes[5] = (uint8_t)((v >> 40) & 0xFFu);
-    bytes[6] = (uint8_t)((v >> 48) & 0xFFu);
-    bytes[7] = (uint8_t)((v >> 56) & 0xFFu);
-    return fnv1a_mix(hash, bytes, 8);
+/* FNV-1a over the `width` little-endian bytes of v. Every event is
+ * folded as it is emitted, so this is on the scheduler's hot path, and
+ * an FNV step is a serial xor-multiply. A zero byte's step is a bare
+ * multiply by the prime, so the run of zero high bytes (most sequences,
+ * kinds and aux values have one) folds as one multiply by a power of the
+ * prime: the same digest as the byte loop, in fewer serial steps
+ * (test_trace's trace_digest_is_fnv1a_over_le_event_fields checks it). */
+static uint64_t fnv1a_mix_le(uint64_t hash, uint64_t v, uint32_t width) {
+    while (v != 0u) {
+        hash = (hash ^ (v & 0xFFu)) * ASX_TRACE_FNV_PRIME;
+        v >>= 8;
+        width--;
+    }
+    return hash * g_fnv_prime_pow[width];
 }
 
 /* Fold one event into a digest. The field order is part of the digest
  * contract (ASX_TRACE_SCHEMA_DIGEST_EVENT_FIELDS); it must not change. */
 static uint64_t trace_digest_fold(uint64_t hash, const asx_trace_event *e) {
-    hash = fnv1a_mix_u32(hash, e->sequence);
-    hash = fnv1a_mix_u32(hash, (uint32_t)e->kind);
-    hash = fnv1a_mix_u64(hash, e->entity_id);
-    hash = fnv1a_mix_u64(hash, e->aux);
+    hash = fnv1a_mix_le(hash, e->sequence, 4u);
+    hash = fnv1a_mix_le(hash, (uint32_t)e->kind, 4u);
+    hash = fnv1a_mix_le(hash, e->entity_id, 8u);
+    hash = fnv1a_mix_le(hash, e->aux, 8u);
     return hash;
 }
 
