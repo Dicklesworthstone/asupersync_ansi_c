@@ -38,7 +38,12 @@
  * final status is the group's result (stable across further polls):
  *
  *   JOIN_ALL  ASX_OK, or the status of the most severe failing member
- *   RACE      the winner's status (ASX_OK, its error, or ASX_E_CANCELLED)
+ *   RACE      the winner's status (ASX_OK, its error, or ASX_E_CANCELLED);
+ *             once the owner's cancel is requested its checkpoint observes
+ *             it (Rust race_all, cx/scope.rs:1371-1375): every unfinished
+ *             member is aborted with the owner's own reason and joined in
+ *             order, and the result is ASX_E_CANCELLED, or the status of the
+ *             first member that panicked (drain_owner_cancelled_race)
  *   FIRST_OK  ASX_OK, or the status of the attempt that ended it (see
  *             asx_task_group_add_attempt)
  *   QUORUM    as Rust's Scope::quorum (cx/scope.rs:1811-1941, quorum.rs:398):
@@ -118,9 +123,10 @@ typedef struct {
      * runs with it (Rust's cx.scope() snapshots Cx::inherited_budget). */
     asx_budget attempt_budget;
     uint8_t attempt_budget_set;
-    /* QUORUM: the cancel kind a member that ended CANCELLED carried, and
-     * whether the owner's cancel ended collection (its reason drains the
-     * members, as Rust's quorum drains with the caller's reason). */
+    /* QUORUM: the cancel kind a member that ended CANCELLED carried. QUORUM
+     * and RACE: whether the owner's cancel ended collection (its reason
+     * drains the members, as Rust's quorum and race_all drain with the
+     * caller's reason). */
     asx_cancel_kind cancel_kinds[ASX_TASK_GROUP_MAX];
     uint8_t owner_cancelled;
     asx_cancel_reason owner_reason;

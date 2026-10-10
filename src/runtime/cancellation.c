@@ -34,7 +34,7 @@ asx_time asx_cancel_now_internal(void) {
     return now;
 }
 
-asx_cancel_reason asx_cancel_reason_testing_default(asx_cancel_kind kind, const char *message) {
+asx_cancel_reason asx_cancel_reason_default(asx_cancel_kind kind, const char *message) {
     asx_cancel_reason r;
     r.kind = kind;
     r.origin_region = asx_region_handle_for_slot(0u);
@@ -57,7 +57,7 @@ void asx_region_trace_cancel_of_gone_internal(asx_region_id region,
 
 asx_cancel_reason asx_region_close_reason_internal(void) {
     static const char message[] = "owned child region body finished";
-    return asx_cancel_reason_testing_default(ASX_CANCEL_USER, message);
+    return asx_cancel_reason_default(ASX_CANCEL_USER, message);
 }
 
 static int reason_same(const asx_cancel_reason *a, const asx_cancel_reason *b) {

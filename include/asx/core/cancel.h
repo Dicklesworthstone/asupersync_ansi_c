@@ -40,6 +40,15 @@ ASX_API asx_budget asx_cancel_cleanup_budget(asx_cancel_kind kind);
 ASX_API asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a,
                                                 const asx_cancel_reason *b);
 
+/* A reason of `kind` with Rust's default attribution, as its Cx-free
+ * constructors make one (CancelReason::new / ::user / ::timeout /
+ * ::race_loser / ::poll_quota, types/cancel.rs:596-631): origin the region
+ * at arena index 0 (which the lab's root region also is), no task, stamped
+ * 1 s, with `message` (may be NULL). Rust's lab stamps a pre-poll quota
+ * cancel (lab/runtime.rs:4667), a ChildRegion close, a refused spawn's join
+ * and Scope::timeout's abort with it. */
+ASX_API asx_cancel_reason asx_cancel_reason_default(asx_cancel_kind kind, const char *message);
+
 /* -------------------------------------------------------------------
  * Cancel witness protocol — lifecycle and query
  * ------------------------------------------------------------------- */

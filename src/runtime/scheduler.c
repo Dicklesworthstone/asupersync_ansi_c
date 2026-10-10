@@ -771,7 +771,7 @@ static void sched_enforce_budget(asx_task_slot *t, asx_task_id tid, asx_time *no
             /* Rust's lab stamps this one with CancelReason::poll_quota()'s
              * testing defaults (lab/runtime.rs:4667); a later checkpoint
              * re-attributes it, earlier timestamp winning (bd-wxep). */
-            asx_cancel_reason r = asx_cancel_reason_testing_default(ASX_CANCEL_POLL_QUOTA, NULL);
+            asx_cancel_reason r = asx_cancel_reason_default(ASX_CANCEL_POLL_QUOTA, NULL);
             st = asx_task_cancel_reason_internal(tid, &r, ASX_CANCEL_SRC_BUDGET);
             (void)st;
             return;

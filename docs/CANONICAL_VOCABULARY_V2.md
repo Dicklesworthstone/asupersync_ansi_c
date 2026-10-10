@@ -49,6 +49,7 @@ gets a canonical name instead:
 | task spawned by a scenario step | the step's `name`, e.g. `"t.producer"` |
 | task spawned by a `spawn` step of another task's program | the step's `as` |
 | member of a task group (`race`, `join_all`, `first_ok`, `quorum`) | `"<owner>/g<s>.<i>"`, s = the group step's index in the owner's program, i = 1-based member index |
+| the wrapper task of a `race` with `deadline_ns` (`Scope::timeout`) | `"<owner>/g<s>.timeout"`; its members keep `"<owner>/g<s>.<i>"` |
 | obligation | `"<holder>/o<k>"`, k = 1-based reservation index within the holder task |
 | timer | `"<owner>/tm<k>"`, k = 1-based timer index within the owner task |
 | channel / sync primitive | the step's `name` |

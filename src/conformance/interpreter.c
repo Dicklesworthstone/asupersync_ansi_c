@@ -124,6 +124,17 @@ typedef struct {
     int group_member;
     int member_done;
     uint32_t member_outcome;
+    /* A race with deadline_ns (exec_race_deadline). As its owner: the
+     * wrapper (index in g_tasks), the deadline, and whether the deadline
+     * timer is registered and has neither fired nor been cancelled. As the
+     * wrapper: it runs the owner's race step only, names the members after
+     * the owner, and keeps the race's value for the owner. */
+    uint32_t race_wrapper_task;
+    asx_time race_deadline;
+    int race_timer_armed;
+    int race_wrapper;
+    uint32_t race_owner;
+    uint32_t race_result; /* ASX_JSON_NONE until the race resolves */
     /* Projection of the task's sleep timers (vocabulary §2: "<task>/tm<k>"). */
     uint32_t timers;         /* timers registered so far (k of the latest) */
     uint32_t timer_name_off; /* name of the latest, in g_text */
@@ -1064,10 +1075,13 @@ static int exec_channel_wait(it_task *t, uint32_t step, uint32_t idx, const char
 
 /* Spawn the members of the group step `step` (1-based `idx` in `t`'s
  * program) into t->group: interpreter tasks named "<owner>/g<idx>.<i>"
- * (vocabulary §2), run in the owner's region. Returns 0 on failure. */
+ * (vocabulary §2), run in the owner's region (a deadline wrapper's owner
+ * is the task whose step it runs). Returns 0 on failure. */
 static int spawn_group_members(it_task *t, uint32_t step, uint32_t idx) {
     uint32_t members = asx_json_get(g_in, step, "members");
     uint32_t n = asx_json_count(g_in, members);
+    /* A deadline wrapper's members keep their plain-race names. */
+    const char *base = t->race_wrapper ? g_tasks[t->race_owner].name : t->name;
     uint32_t i;
     if (n == 0u || n > ASX_TASK_GROUP_MAX) {
         it_fail_task(t, idx, "group needs 1..ASX_TASK_GROUP_MAX members");
@@ -1079,8 +1093,7 @@ static int spawn_group_members(it_task *t, uint32_t step, uint32_t idx) {
         uint32_t off;
         it_task *m;
         asx_task_id id = ASX_INVALID_ID;
-        int len =
-            snprintf(buf, sizeof(buf), "%s/g%u.%u", t->name, (unsigned)idx, (unsigned)(i + 1u));
+        int len = snprintf(buf, sizeof(buf), "%s/g%u.%u", base, (unsigned)idx, (unsigned)(i + 1u));
         if (len < 0 || (size_t)len >= sizeof(buf)) {
             it_fail_task(t, idx, "group member name too long");
             return 0;
@@ -1155,6 +1168,55 @@ static uint32_t group_member_outcome(it_task *t, uint32_t i) {
     return asx_json_copy(g_out, g_out, m->member_outcome);
 }
 
+static void exec_race_deadline(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
+                               step_result *out);
+
+/* A resolved race's value, as Rust's race_all returns it: {winner_index,
+ * outcome}, the index only for a winner that succeeded. An owner-cancelled
+ * race has no winner: its outcome is the first member panic, else the
+ * cancellation with the owner's reason (drain_owner_cancelled_race).
+ * ASX_JSON_NONE after a harness failure. */
+static uint32_t race_value(it_task *t, uint32_t idx) {
+    int32_t w = asx_task_group_winner(&t->group);
+    uint32_t outcome = ASX_JSON_NONE;
+    uint32_t tag;
+    const char *tag_text;
+    uint32_t value;
+    uint32_t i;
+    if (w < 0) {
+        if (!t->group.owner_cancelled) {
+            it_fail_task(t, idx, "race resolved without a winner");
+            return ASX_JSON_NONE;
+        }
+        for (i = 0; i < t->n_group_members && outcome == ASX_JSON_NONE; i++) {
+            asx_outcome o;
+            asx_status st;
+            if (asx_task_group_member_result(&t->group, i, &o, &st) == ASX_OK &&
+                asx_outcome_severity_of(&o) == ASX_OUTCOME_PANICKED) {
+                outcome = group_member_outcome(t, i);
+            }
+        }
+        if (outcome == ASX_JSON_NONE) {
+            it_reason captured;
+            capture_reason(&t->group.owner_reason, &captured);
+            outcome = asx_json_new_object(g_out);
+            asx_json_set(g_out, outcome, "tag", asx_json_new_string(g_out, "cancelled"));
+            asx_json_set(g_out, outcome, "reason", reason_node(&captured));
+        }
+    } else {
+        outcome = group_member_outcome(t, (uint32_t)w);
+    }
+    tag = asx_json_get(g_out, outcome, "tag");
+    tag_text = tag != ASX_JSON_NONE ? asx_json_string(g_out, tag) : NULL;
+    value = asx_json_new_object(g_out);
+    asx_json_set(g_out, value, "winner_index",
+                 w >= 0 && tag_text != NULL && strcmp(tag_text, "ok") == 0
+                     ? asx_json_new_u64(g_out, (uint64_t)w)
+                     : asx_json_new_null(g_out));
+    asx_json_set(g_out, value, "outcome", outcome);
+    return value;
+}
+
 /* Task-group steps (DSL §3.5). Returns 1 when `op` is one of them. The
  * observation is what the Rust combinator returns: race, {winner_index,
  * outcome} (the index only for a winner that succeeded, as Rust reports
@@ -1179,12 +1241,16 @@ static int exec_group(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
     } else {
         return 0;
     }
-    if (t->phase == 0u) {
-        if (asx_json_get(g_in, step, "deadline_ns") != ASX_JSON_NONE) {
-            it_fail_task(t, idx, "race deadline_ns is not interpreted yet (increment 3b)");
+    if (!t->race_wrapper && asx_json_get(g_in, step, "deadline_ns") != ASX_JSON_NONE) {
+        if (mode != ASX_TASK_GROUP_RACE) {
+            it_fail_task(t, idx, "deadline_ns is only defined for race");
             *out = STEP_END;
             return 1;
         }
+        exec_race_deadline(t, self, step, idx, out);
+        return 1;
+    }
+    if (t->phase == 0u) {
         if (mode == ASX_TASK_GROUP_QUORUM &&
             (!asx_json_u64(g_in, asx_json_get(g_in, step, "needed"), &needed) ||
              needed > UINT32_MAX)) {
@@ -1220,24 +1286,20 @@ static int exec_group(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
         return 1;
     }
     if (mode == ASX_TASK_GROUP_RACE) {
-        int32_t w = asx_task_group_winner(&t->group);
-        uint32_t outcome;
-        uint32_t tag;
-        const char *tag_text;
-        if (w < 0) {
-            it_fail_task(t, idx, "race resolved without a winner");
+        value = race_value(t, idx);
+        if (value == ASX_JSON_NONE) {
             *out = STEP_END;
             return 1;
         }
-        outcome = group_member_outcome(t, (uint32_t)w);
-        tag = asx_json_get(g_out, outcome, "tag");
-        tag_text = tag != ASX_JSON_NONE ? asx_json_string(g_out, tag) : NULL;
-        value = asx_json_new_object(g_out);
-        asx_json_set(g_out, value, "winner_index",
-                     tag_text != NULL && strcmp(tag_text, "ok") == 0
-                         ? asx_json_new_u64(g_out, (uint64_t)w)
-                         : asx_json_new_null(g_out));
-        asx_json_set(g_out, value, "outcome", outcome);
+        if (t->race_wrapper) {
+            /* The race inside a deadline wrapper: its owner observes it,
+             * and the wrapper returns the race's result (Ok, or Err with
+             * the failed winner's JoinError). */
+            t->race_result = value;
+            t->end = st;
+            *out = STEP_END;
+            return 1;
+        }
     } else if (mode == ASX_TASK_GROUP_JOIN_ALL) {
         value = asx_json_new_array(g_out);
         for (i = 0; i < t->n_group_members; i++) {
@@ -1408,6 +1470,142 @@ static uint32_t take_outcome(it_task *target, asx_status *join_status) {
 static int task_completed(asx_task_id id) {
     asx_task_state s;
     return asx_task_get_state(id, &s) == ASX_OK && s == ASX_TASK_COMPLETED;
+}
+
+/* A race with deadline_ns (DSL §3.5), as Rust's Scope::timeout runs it
+ * (cx/scope.rs:2130-2196). The race runs in a wrapper task spawned into
+ * the owner's region and named "<owner>/g<idx>.timeout" (vocabulary §2):
+ * it runs the owner's race step and nothing else, its members keep their
+ * plain-race names, and the snapshot lists none of them (vocabulary §6).
+ * Each owner poll checks the wrapper's join, then the owner's own cancel
+ * (a checkpoint), then the deadline: a sleep timer of the owner's
+ * ("<owner>/tm<k>"), registered at the first poll. The deadline aborts
+ * the wrapper with CancelReason::timeout() (default attribution), the
+ * owner's cancel with the owner's reason, and the owner joins it. The
+ * observation is the race's, as a plain race's; a wrapper that ended
+ * cancelled without running the race, after the deadline, is TimedOut
+ * (ASX_E_TIMED_OUT). A deadline timer still pending at the end is
+ * cancelled (Rust drops the sleep). */
+static void exec_race_deadline(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
+                               step_result *out) {
+    it_task *w;
+    asx_outcome ignored;
+    asx_status st;
+    *out = STEP_PENDING;
+    if (t->phase == 0u) {
+        uint64_t d;
+        asx_time now;
+        char buf[160];
+        int len;
+        uint32_t off;
+        asx_task_id id = ASX_INVALID_ID;
+        if (!asx_json_u64(g_in, asx_json_get(g_in, step, "deadline_ns"), &d) ||
+            asx_runtime_now_ns(&now) != ASX_OK || d > UINT64_MAX - now) {
+            it_fail_task(t, idx, "race deadline_ns must be a reachable integer");
+            *out = STEP_END;
+            return;
+        }
+        len = snprintf(buf, sizeof(buf), "%s/g%u.timeout", t->name, (unsigned)idx);
+        if (len < 0 || (size_t)len >= sizeof(buf)) {
+            it_fail_task(t, idx, "race wrapper name too long");
+            *out = STEP_END;
+            return;
+        }
+        off = text_store(buf, (size_t)len);
+        w = off == IT_NO_TEXT ? NULL
+                              : add_task(&g_text[off], t->region_name, t->region, t->program);
+        if (w == NULL) {
+            *out = STEP_END;
+            return;
+        }
+        w->pc = t->pc;
+        w->race_wrapper = 1;
+        w->race_owner = (uint32_t)(t - g_tasks);
+        w->race_result = ASX_JSON_NONE;
+        w->group_member = 1;
+        if (asx_task_spawn(w->region, interp_poll, w, &id) != ASX_OK) {
+            it_fail_task(t, idx, "race timeout wrapper spawn refused");
+            *out = STEP_END;
+            return;
+        }
+        w->id = id;
+        w->spawned = 1;
+        (void)asx_cx_init(&w->cx, w->region, id, ASX_CAP_CANCEL_CHECK);
+        t->race_wrapper_task = (uint32_t)(w - g_tasks);
+        t->race_deadline = now + d;
+        t->race_timer_armed = 0;
+        t->phase = 1u;
+    }
+    w = &g_tasks[t->race_wrapper_task];
+    if (!task_completed(w->id)) {
+        asx_checkpoint_result cr;
+        asx_cancel_reason r;
+        asx_time now;
+        if (asx_task_join_poll(self, w->id, &ignored) != ASX_E_PENDING) {
+            it_fail_task(t, idx, "join of the race wrapper did not wait");
+            *out = STEP_END;
+            return;
+        }
+        if (t->phase == 2u) return;
+        if (asx_checkpoint(self, &cr) != ASX_OK || asx_runtime_now_ns(&now) != ASX_OK) {
+            it_fail_task(t, idx, "race deadline checkpoint failed");
+            *out = STEP_END;
+            return;
+        }
+        if (cr.cancelled) {
+            if (asx_task_get_cancel_reason(self, &r) != ASX_OK) {
+                it_fail_task(t, idx, "cancelled owner without a reason");
+                *out = STEP_END;
+                return;
+            }
+        } else if (now >= t->race_deadline) {
+            if (t->race_timer_armed) {
+                st = asx_task_complete_timer(self);
+                (void)st;
+                t->race_timer_armed = 0;
+            }
+            r = asx_cancel_reason_default(ASX_CANCEL_TIMEOUT, NULL);
+        } else {
+            st = asx_task_wait_until(self, t->race_deadline);
+            (void)st;
+            t->race_timer_armed = 1;
+            return;
+        }
+        st = asx_task_abort_request(w->id, &r);
+        (void)st;
+        t->phase = 2u;
+        return;
+    }
+    /* The wrapper completed: join it, drop the deadline timer, observe. */
+    {
+        int in_time = t->phase == 1u;
+        uint32_t wrapper_outcome = take_outcome(w, &st);
+        uint32_t value;
+        if (st != ASX_OK) {
+            it_fail_task(t, idx, "join of the race wrapper failed");
+            *out = STEP_END;
+            return;
+        }
+        if (t->race_timer_armed) {
+            st = asx_task_cancel_timer(self);
+            (void)st;
+            t->race_timer_armed = 0;
+        }
+        *out = STEP_NEXT;
+        if (w->race_result != ASX_JSON_NONE) {
+            value = w->race_result;
+        } else if (in_time) {
+            /* Ended (cancelled) before running the race: Completed with the
+             * wrapper's own outcome, as a failed winner without an index. */
+            value = asx_json_new_object(g_out);
+            asx_json_set(g_out, value, "winner_index", asx_json_new_null(g_out));
+            asx_json_set(g_out, value, "outcome", wrapper_outcome);
+        } else {
+            observe_status(t, idx, "race", ASX_E_TIMED_OUT);
+            return;
+        }
+        observe(t, idx, "race", status_node(ASX_OK), value);
+    }
 }
 
 /* Steps that never suspend; the only ones allowed inside `masked`. */

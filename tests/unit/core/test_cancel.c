@@ -115,6 +115,23 @@ TEST(cancel_strengthen_equal_severity_same_timestamp) {
     ASSERT_EQ(result.kind, ASX_CANCEL_TIMEOUT);
 }
 
+TEST(cancel_reason_default_has_rust_default_attribution) {
+    /* Rust's Cx-free constructors (types/cancel.rs:596-631): the region at
+     * arena index 0, no task, stamped 1 s, the given message. */
+    asx_cancel_reason r = asx_cancel_reason_default(ASX_CANCEL_TIMEOUT, "late");
+    ASSERT_EQ(r.kind, ASX_CANCEL_TIMEOUT);
+    ASSERT_EQ(asx_handle_index(r.origin_region), 0u);
+    ASSERT_TRUE(r.origin_region != ASX_INVALID_ID);
+    ASSERT_EQ(r.origin_task, ASX_INVALID_ID);
+    ASSERT_EQ(r.timestamp, (asx_time)1000000000u);
+    ASSERT_TRUE(r.message != NULL && strcmp(r.message, "late") == 0);
+    ASSERT_TRUE(r.cause == NULL);
+    ASSERT_EQ(r.truncated, 0);
+    r = asx_cancel_reason_default(ASX_CANCEL_RACE_LOST, NULL);
+    ASSERT_EQ(r.kind, ASX_CANCEL_RACE_LOST);
+    ASSERT_TRUE(r.message == NULL);
+}
+
 TEST(cancel_strengthen_tie_prefers_a_message_then_the_smaller_one) {
     /* Rust CancelReason::strengthen (types/cancel.rs:991-1007): on equal
      * severity and timestamp a reason with a message replaces one without,
@@ -296,6 +313,7 @@ int main(void) {
     RUN_TEST(cancel_severity_out_of_range_clamps);
     RUN_TEST(cancel_strengthen_equal_severity_same_timestamp);
     RUN_TEST(cancel_strengthen_tie_prefers_a_message_then_the_smaller_one);
+    RUN_TEST(cancel_reason_default_has_rust_default_attribution);
 
     /* Witness lifecycle */
     RUN_TEST(witness_create_and_query_phase);

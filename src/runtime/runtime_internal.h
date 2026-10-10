@@ -288,13 +288,6 @@ typedef enum {
  * reconcile_checkpoint_cancel). No-op otherwise. */
 void asx_task_materialize_cancel_internal(asx_task_slot *t);
 
-/* Rust's CancelReason::new / ::user / ::poll_quota (types/cancel.rs:596-631):
- * testing-default attribution, the region at arena index 0 (which the lab's
- * root region also is), no task, 1 s. Rust's lab stamps a pre-poll quota
- * cancel (lab/runtime.rs:4667) and a ChildRegion close with it; lab
- * dispatch reproduces that (bd-wxep). */
-asx_cancel_reason asx_cancel_reason_testing_default(asx_cancel_kind kind, const char *message);
-
 /* The core of every task cancel: a newly cancelled task takes `reason`
  * whole and records ASX_TRACE_CANCEL_REQUEST for a REGION source; an
  * already cancelled one is strengthened (asx_cancel_strengthen) and

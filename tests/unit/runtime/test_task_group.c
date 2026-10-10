@@ -685,7 +685,10 @@ TEST(quorum_rejects_invalid_threshold_after_draining) {
  * Early resolution: owner cancel, deadline, explicit cancel
  * ------------------------------------------------------------------- */
 
-TEST(owner_cancel_drains_members_with_parent_kind) {
+/* Rust's race_all (cx/scope.rs:1371-1375, 960-988): the owner's cancel,
+ * once its checkpoint observes it, reaches every unfinished member as an
+ * abort with the owner's own reason; the race reports the cancellation. */
+TEST(owner_cancel_drains_race_members_with_the_owner_reason) {
     asx_region_id r;
     asx_task_id owner;
     asx_budget run;
@@ -705,8 +708,11 @@ TEST(owner_cancel_drains_members_with_parent_kind) {
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
     ASSERT_TRUE(g_owner.done);
     ASSERT_EQ(g_owner.result, ASX_E_CANCELLED);
-    ASSERT_EQ(g_m[0].kind, ASX_CANCEL_PARENT);
-    ASSERT_EQ(g_m[1].kind, ASX_CANCEL_PARENT);
+    ASSERT_TRUE(g_owner.group.owner_cancelled);
+    ASSERT_EQ(g_owner.group.owner_reason.kind, ASX_CANCEL_USER);
+    ASSERT_EQ(asx_task_group_winner(&g_owner.group), -1);
+    ASSERT_EQ(g_m[0].kind, ASX_CANCEL_USER);
+    ASSERT_EQ(g_m[1].kind, ASX_CANCEL_USER);
     ASSERT_TRUE(g_owner.done_seq > max_member_seq(2));
     out = asx_task_group_outcome(&g_owner.group);
     ASSERT_EQ(asx_outcome_severity_of(&out), ASX_OUTCOME_CANCELLED);
@@ -868,7 +874,7 @@ int main(void) {
     RUN_TEST(quorum_checkpoint_raises_the_owner_poll_quota);
     RUN_TEST(lab_group_members_refused_by_their_region_are_joined_cancelled);
     RUN_TEST(quorum_rejects_invalid_threshold_after_draining);
-    RUN_TEST(owner_cancel_drains_members_with_parent_kind);
+    RUN_TEST(owner_cancel_drains_race_members_with_the_owner_reason);
     RUN_TEST(deadline_times_out_and_drains_members);
     RUN_TEST(quorum_deadline_reports_threshold_timeout);
     RUN_TEST(explicit_group_cancel_drains_and_resolves_cancelled);

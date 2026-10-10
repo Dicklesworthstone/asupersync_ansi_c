@@ -1217,8 +1217,26 @@ async fn exec_step(
         }
         // Task groups (DSL §3.5).
         "race" | "join_all" => {
-            if step.get("deadline_ns").is_some() {
-                return Err("race deadline_ns is not interpreted yet (increment 3b)".to_string());
+            let deadline = match step.get("deadline_ns") {
+                None => None,
+                Some(_) if op != "race" => {
+                    return Err("deadline_ns is only defined for race".to_string());
+                }
+                Some(d) => Some(d.as_u64().ok_or("deadline_ns must be an integer")?),
+            };
+            if let Some(d) = deadline {
+                let Some(group) = race_with_deadline(cx, ctx, local, idx, step, d).await? else {
+                    // Vocabulary §5: TimeoutError -> ASX_E_TIMED_OUT.
+                    observe(&ctx.shared, me, idx, op, "ASX_E_TIMED_OUT", Value::Null);
+                    return Ok(Flow::Continue);
+                };
+                let mut s = lock(&ctx.shared);
+                let index = s.observations.len();
+                s.group_values.push((index, group));
+                s.observations.push(json!({
+                    "task": me, "step": idx, "op": op, "status": "ASX_OK", "value": Value::Null,
+                }));
+                return Ok(Flow::Continue);
             }
             let handles = spawn_members(cx, ctx, idx, step)?;
             let group = if op == "race" {
@@ -1486,6 +1504,77 @@ fn spawn_members(
     Ok(handles)
 }
 
+/// A `race` with `deadline_ns` (DSL §3.5), as Rust's `Scope::timeout`
+/// (cx/scope.rs:2130) runs it: the race runs in a wrapper task spawned into
+/// the owner's region, which names itself `{owner}/g{step}.timeout`; its
+/// members keep their plain-race names. Like the members, the wrapper is
+/// internal to the combinator: the trace shows it, the snapshot does not
+/// list it. At the deadline the owner aborts
+/// the wrapper with `CancelReason::timeout()` and joins it. `None` is
+/// `TimedResult::TimedOut`: the wrapper never acknowledged the
+/// cancellation.
+async fn race_with_deadline(
+    cx: &Cx,
+    ctx: &Arc<TaskCtx>,
+    local: &mut Local,
+    idx: usize,
+    step: &Value,
+    deadline_ns: u64,
+) -> RunResult<Option<GroupValue>> {
+    use asupersync::Outcome;
+    use asupersync::combinator::timeout::TimedResult;
+
+    let wrapper = Arc::new(TaskCtx {
+        shared: ctx.shared.clone(),
+        me: format!("{}/g{idx}.timeout", ctx.me),
+        region: ctx.region.clone(),
+    });
+    let owner = ctx.clone();
+    let race = step.clone();
+    let operation = move |wcx: Cx| {
+        {
+            let mut s = lock(&wrapper.shared);
+            let id = wcx.task_id();
+            s.task_ids.insert(wrapper.me.clone(), id);
+            s.task_names.insert(id, wrapper.me.clone());
+            s.task_regions
+                .insert(wrapper.me.clone(), wrapper.region.clone());
+            s.group_members.insert(wrapper.me.clone());
+        }
+        async move {
+            let handles = spawn_members(&wcx, &owner, idx, &race)
+                .unwrap_or_else(|e| panic!("race member spawn in the timeout wrapper: {e}"));
+            wcx.scope().race_all(&wcx, handles).await
+        }
+    };
+    let timed = NamedSleep {
+        sleep: Some(Box::pin(cx.scope().timeout(
+            cx,
+            Duration::from_nanos(deadline_ns),
+            operation,
+        ))),
+        buffer: cx.trace_buffer(),
+        shared: ctx.shared.clone(),
+        owner: &ctx.me,
+        counter: &mut local.timers,
+        name: None,
+    }
+    .await
+    .map_err(|e| format!("race timeout wrapper spawn refused: {e:?}"))?;
+    let outcome = match timed {
+        TimedResult::TimedOut(_) => return Ok(None),
+        TimedResult::Completed(outcome) => outcome,
+    };
+    // A failed race (or a wrapper that ended cancelled or panicked) reports
+    // its result without a winner index, as a plain race does.
+    Ok(Some(match outcome {
+        Outcome::Ok((body, winner)) => GroupValue::Race(Some(winner), Ok(body)),
+        Outcome::Err(e) => GroupValue::Race(None, Err(e)),
+        Outcome::Cancelled(reason) => GroupValue::Race(None, Err(JoinError::Cancelled(reason))),
+        Outcome::Panicked(p) => GroupValue::Race(None, Err(JoinError::Panicked(p))),
+    }))
+}
+
 /// A sleep that names the Timer events it records. Those events carry no
 /// task, and their timer id is a wheel slab index that is reused once the
 /// timer fires (time/wheel.rs:554): a sleep records its TimerFired when it
@@ -1494,7 +1583,9 @@ fn spawn_members(
 /// sleep that records it, the one being polled or dropped at that moment
 /// (worker_count 1): its first TimerScheduled takes the owner's next timer
 /// number (a sleep that schedules none takes no number, as C counts them),
-/// and a re-arm, the fire and a cancel keep that name.
+/// and a re-arm, the fire and a cancel keep that name. A `race` with a
+/// deadline wraps its `Scope::timeout` future the same way: the only timer
+/// that future records is its deadline sleep (cx/scope.rs:2146).
 struct NamedSleep<'a, F> {
     sleep: Option<Pin<Box<F>>>,
     buffer: Option<asupersync::trace::TraceBufferHandle>,
@@ -1536,14 +1627,15 @@ impl<F> NamedSleep<'_, F> {
     }
 }
 
-impl<F: Future<Output = ()>> Future for NamedSleep<'_, F> {
-    type Output = ();
+impl<F: Future> Future for NamedSleep<'_, F> {
+    type Output = F::Output;
 
-    fn poll(self: Pin<&mut Self>, pcx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+    fn poll(self: Pin<&mut Self>, pcx: &mut std::task::Context<'_>) -> std::task::Poll<F::Output> {
         let this = self.get_mut();
         let before = this.last_seq();
+        // Awaited once, so never polled again after it completes.
         let Some(sleep) = this.sleep.as_mut() else {
-            return std::task::Poll::Ready(());
+            return std::task::Poll::Pending;
         };
         let polled = sleep.as_mut().poll(pcx);
         if polled.is_ready() {

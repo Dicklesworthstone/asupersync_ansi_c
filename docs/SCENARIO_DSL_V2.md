@@ -242,7 +242,7 @@ wait, queued for each held region in name order (twin_run keeps them in a
 
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|
-| `race` | `members` (list of programs), optional `deadline_ns` | spawn each member with `cx.spawn`, then `cx.scope().race_all(&cx, handles).await` (`cx/scope.rs:1306`). A `deadline_ns` runs this inside `cx.scope().timeout(&cx, d, …)` (`:2130`). | `asx_task_group_init(g, RACE, 1)`, `asx_task_group_spawn` per member, then `asx_task_group_poll` | until a winner, or until all are drained | The owner's cancel before a winner cancels and drains every member. Losers are always cancelled and drained (`inv.combinator.loser_drained`). The status is `ASX_OK`; the `value` is `{winner_index, outcome}`, the winner's outcome, with `winner_index` null when the winner did not succeed (Rust's `Err` carries no index). |
+| `race` | `members` (list of programs), optional `deadline_ns` | spawn each member with `cx.spawn`, then `cx.scope().race_all(&cx, handles).await` (`cx/scope.rs:1306`). A `deadline_ns` runs this inside `cx.scope().timeout(&cx, d, …)` (`:2130`). | `asx_task_group_init(g, RACE, 1)`, `asx_task_group_spawn` per member, then `asx_task_group_poll` | until a winner, or until all are drained | The owner's cancel before a winner, once its checkpoint observes it, aborts every unfinished member with the owner's own reason and joins them in order; the outcome is that cancellation (or the first member panic). Losers are always cancelled and drained (`inv.combinator.loser_drained`). The status is `ASX_OK`; the `value` is `{winner_index, outcome}`, the winner's outcome, with `winner_index` null when the race has no successful winner (Rust's `Err` carries no index). |
 | `join_all` | `members` | `cx.scope().join_all(&cx, handles).await` (`:1479`) | group mode JOIN_ALL: the owner waits on one member at a time, in order | until all complete | Ignored: join_all joins one by one and its joins are uninterruptible, so the owner's cancel reaches no member. The `value` is the list of member outcomes. |
 | `first_ok` | `members` | `cx.scope().first_ok(&cx, factories).await` (`:2023`): one attempt at a time, in order | group mode FIRST_OK with `asx_task_group_add_attempt` per member | until an attempt succeeds, one ends cancelled or panicked, or all fail | The owner's cancel is passed to the running attempt (which is still awaited) and stops further attempts. Status: `ASX_OK`; all failed: the first attempt's error; `ASX_E_CANCELLED`; panicked: `ASX_E_INVALID_STATE`. No value. Attempts that never start have no name. |
 | `quorum` | `members`, `needed` | `cx.scope().quorum(&cx, needed, branches).await` (`:1811`) | `asx_task_group_init(g, QUORUM, needed)` | until `needed` succeed or that becomes impossible | The owner's cancel drains the members with the owner's own reason; status `ASX_E_CANCELLED`. Met: `ASX_OK`, `value` = the number of members that succeeded. Members run cancellation-dominant. A `QuorumError` (vocabulary §5): a panicked member gives `ASX_E_INVALID_STATE` even when met; otherwise not met gives `ASX_E_CANCELLED` if a member was cancelled by anything but the quorum's own drain, else the first failing member's error; no value. `needed` of 0 or above the member count: `ASX_E_INVALID_ARGUMENT` and nothing is spawned. |
@@ -261,9 +261,28 @@ The group counts it as a cancelled member: `join_all` lists it, `quorum`
 counts a failure, and `first_ok` ends cancelled. C:
 `asx_task_group_member_refusal`.
 
-Not interpreted yet on either side: `race` with `deadline_ns`. Rust runs
-that race inside a separate `scope.timeout` task, which C has no combinator
-for.
+A `race` with `deadline_ns` runs as Rust's `Scope::timeout` runs it
+(`cx/scope.rs:2130-2196`):
+- The race runs in a wrapper task spawned into the owner's region, named
+  `"<owner>/g<s>.timeout"` (vocabulary §2). The members keep their
+  plain-race names, and the snapshot lists neither the wrapper nor the
+  members.
+- Each owner poll checks the wrapper's join, then the owner's own cancel (a
+  checkpoint), then the deadline. The deadline is a sleep timer of the
+  owner's (`"<owner>/tm<k>"`), registered at the first poll.
+- At the deadline the owner aborts the wrapper with `CancelReason::timeout()`
+  (default attribution). On the owner's own cancel it aborts the wrapper
+  with the owner's reason. Either way the owner then joins it.
+- The wrapper's race sees that abort as its owner's cancel and drains the
+  members with that reason. A `Timeout` reason does not end a member's
+  sleep, so the members finish their sleeps.
+- The observation is the race's (status `ASX_OK`, `{winner_index,
+  outcome}`). A wrapper that ended cancelled without running the race, and
+  only after the deadline, is `TimedOut`: status `ASX_E_TIMED_OUT`, no
+  value.
+- A deadline timer still pending when the step ends is cancelled.
+
+C: `exec_race_deadline` in the interpreter.
 
 ### 3.6 Channels
 
