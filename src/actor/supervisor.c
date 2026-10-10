@@ -121,12 +121,12 @@ static int child_should_restart(const asx_supervisor_slot *s, uint32_t idx) {
     switch (s->specs[idx].restart) {
     case ASX_CHILD_PERMANENT: return 1;
 
-    case ASX_CHILD_TRANSIENT:
-        /* Only restart on abnormal exit (non-OK exit reason) */
-        if (asx_actor_exit_reason(s->children[idx]) == ASX_OK) {
-            return 0; /* normal exit, don't restart */
-        }
-        return 1; /* error exit, restart */
+    case ASX_CHILD_TRANSIENT: {
+        /* Rust ManagedRestartMode::Transient: application errors and
+         * panics restart; success and cancellation stop. */
+        asx_status why = asx_actor_exit_reason(s->children[idx]);
+        return why != ASX_OK && why != ASX_E_CANCELLED;
+    }
 
     case ASX_CHILD_TEMPORARY: return 0;
     }

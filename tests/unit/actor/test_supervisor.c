@@ -710,6 +710,43 @@ static void test_supervisor_parks_and_wakes_on_child_death(void) {
     ASSERT(!asx_supervisor_is_alive(sup), "supervisor done");
 }
 
+/* TRANSIENT follows Rust's ManagedRestartMode::Transient: an application
+ * error restarts the child; a cancellation, like success, does not. */
+static void test_transient_restarts_on_error_not_on_cancel(void) {
+    asx_supervisor_handle sup;
+    asx_supervisor_config cfg;
+    asx_child_spec spec;
+    asx_region_id r;
+    asx_status st;
+    asx_task_id tid;
+
+    asx_runtime_reset();
+    g_start_count = 0;
+    r = make_region();
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
+    cfg.max_restarts = 5;
+    spec.start_fn = capture_start;
+    spec.user_data = NULL;
+    spec.restart = ASX_CHILD_TRANSIENT;
+    MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1));
+    (void)run_counting(r, &st);
+    ASSERT(g_start_count == 1u, "child started once");
+
+    /* An error exit restarts it. */
+    MUST_OK(asx_actor_cast(g_captured, 1u));
+    (void)run_counting(r, &st);
+    ASSERT(g_start_count == 2u, "an error exit restarts a transient child");
+
+    /* A cancelled one stays stopped. */
+    MUST_OK(asx_actor_task_id(g_captured, &tid));
+    MUST_OK(asx_task_cancel(tid, ASX_CANCEL_USER));
+    (void)run_counting(r, &st);
+    ASSERT(g_start_count == 2u, "a cancellation does not restart a transient child");
+    ASSERT(!asx_supervisor_child_alive(sup, 0), "the cancelled child stays stopped");
+    ASSERT(asx_supervisor_restart_count(sup) == 1u, "only the error restarted");
+}
+
 static void test_draining_region_cancels_supervision_tree(void) {
     asx_supervisor_handle sup;
     asx_supervisor_config cfg;
@@ -932,6 +969,7 @@ int main(void) {
 
     /* Reset */
     RUN(test_supervisor_parks_and_wakes_on_child_death);
+    RUN(test_transient_restarts_on_error_not_on_cancel);
     RUN(test_draining_region_cancels_supervision_tree);
     RUN(test_reset);
 

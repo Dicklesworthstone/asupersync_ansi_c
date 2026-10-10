@@ -1207,7 +1207,7 @@ The actor subsystem implements Erlang-style supervision trees with three restart
 
 Each child has a restart policy:
 - **PERMANENT**: Always restart, even after normal completion.
-- **TRANSIENT**: Restart on any non-OK exit (including `ASX_E_CANCELLED` when only the child was cancelled), not on normal completion. Rust's supervisor never restarts a child that ended Ok, Cancelled or Panicked, so this is an open divergence.
+- **TRANSIENT**: Restart after an application error or a panic; not after normal completion or a cancellation (`ASX_E_CANCELLED`), as Rust's `ManagedRestartMode::Transient` decides.
 - **TEMPORARY**: Never restart. The child is gone.
 
 The supervisor state machine progresses through INIT, RUNNING, STOPPING, RESTART, SHUTDOWN, and DONE phases. This structured lifecycle means supervision decisions are deterministic and auditable. The same failure sequence always produces the same restart pattern.
@@ -1216,7 +1216,7 @@ Supervision is event-driven:
 - An actor parks on an empty mailbox, and every cast, call or stop wakes it.
 - A caller polling a call token parks until the reply, or until the actor drops the call or exits.
 - A supervisor watches its children's tasks (`asx_task_watch`) and sleeps until one exits, so a quiet tree costs no polls.
-- A cancelled actor runs its `terminate` callback with `ASX_E_CANCELLED`, and a cancelled supervisor cancels its children and shuts down without restarting them. A child cancelled on its own counts as a non-OK exit (see TRANSIENT above).
+- A cancelled actor runs its `terminate` callback with `ASX_E_CANCELLED`, and a cancelled supervisor cancels its children and shuts down without restarting them. A child cancelled on its own is restarted only if it is PERMANENT (see above).
 
 ## Structured Concurrency and Capability Flow
 

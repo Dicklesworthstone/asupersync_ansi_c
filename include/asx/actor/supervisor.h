@@ -63,7 +63,7 @@ typedef enum {
 
 typedef enum {
     ASX_CHILD_PERMANENT = 0, /* always restart */
-    ASX_CHILD_TRANSIENT = 1, /* restart only on abnormal exit */
+    ASX_CHILD_TRANSIENT = 1, /* restart after an error or panic, not after success or cancel */
     ASX_CHILD_TEMPORARY = 2  /* never restart */
 } asx_child_restart;
 
