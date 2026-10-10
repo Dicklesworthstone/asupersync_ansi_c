@@ -529,9 +529,13 @@ unit suite built for each class.
 
 ### Capacity Macros
 
-Every fixed capacity is a macro you can override at build time, e.g.
+Every arena and pool capacity (the macros named `ASX_MAX_*` or
+`ASX_*_CAPACITY`) can be overridden at build time, e.g.
 `make CFLAGS=-DASX_MAX_TCP_STREAMS=64u` (a value below a macro's minimum
-fails the build with `#error`). The defaults below are a CORE build's,
+fails the build with `#error`). Per-module size limits with other names,
+such as `ASX_HTTP_SERVER_MAX_CONNS`, `ASX_HTTP_MAX_HEADERS` or
+`ASX_WS_MAX_MESSAGE`, are `#ifndef`-guarded in their headers too, but are
+not listed or bound-checked here yet. The defaults below are a CORE build's,
 without a resource class. `ASX_MAX_WORKERS` depends on the profile (1 for
 FREESTANDING, 4 for EMBEDDED_ROUTER, 16 for HFT and AUTOMOTIVE, else 64).
 `make test-capacity-x4` runs the unit suite with each of these raised 4x
