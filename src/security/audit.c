@@ -25,19 +25,31 @@
 
 /*
  * Each entry documents one intentional use of ambient authority.
- * Provider modules (e.g., time driver, entropy source) ARE the
+ * Provider modules (the platform runtime hooks, which deterministic builds
+ * and the lab replace with a virtual clock and a seeded PRNG) ARE the
  * capability boundary, so their ambient access is exempted.
  *
  * Non-provider modules must NOT appear here; their ambient access
- * is a violation.
+ * is a violation. tools/ci/check_ambient_authority.py (make lint) reads
+ * this table: it fails on an ambient clock or entropy call in any file not
+ * listed here, and on a path below that does not exist.
  */
 static const asx_ambient_finding s_known_findings[] = {
-    /* Time driver — IS the clock provider */
-    {"src/runtime/time.c", 0, ASX_AMBIENT_TIME, ASX_AMBIENT_INFO, 1,
-     "time driver is the clock provider", "clock_gettime"},
-    /* Entropy provider — IS the RNG boundary */
-    {"src/runtime/entropy.c", 0, ASX_AMBIENT_ENTROPY, ASX_AMBIENT_INFO, 1,
-     "entropy module is the RNG provider", "getrandom"}};
+    /* POSIX hooks — the clock and entropy providers of live POSIX builds */
+    {"src/platform/posix/hooks.c", 0, ASX_AMBIENT_TIME, ASX_AMBIENT_INFO, 1,
+     "POSIX runtime hooks are the clock provider", "clock_gettime"},
+    {"src/platform/posix/hooks.c", 0, ASX_AMBIENT_ENTROPY, ASX_AMBIENT_INFO, 1,
+     "POSIX runtime hooks are the entropy provider", "getrandom (urandom device fallback)"},
+    /* Win32 hooks — the clock and entropy providers of Win32 builds */
+    {"src/platform/win32/hooks.c", 0, ASX_AMBIENT_TIME, ASX_AMBIENT_INFO, 1,
+     "Win32 runtime hooks are the clock provider",
+     "QueryPerformanceCounter, GetSystemTimeAsFileTime"},
+    {"src/platform/win32/hooks.c", 0, ASX_AMBIENT_ENTROPY, ASX_AMBIENT_INFO, 1,
+     "Win32 runtime hooks are the entropy provider", "BCryptGenRandom"},
+    /* Test-log timestamps: wall-clock stamps on JSONL test logs, never
+     * read by the runtime */
+    {"include/asx/testing/log.h", 0, ASX_AMBIENT_TIME, ASX_AMBIENT_INFO, 1,
+     "test-log helper stamps log lines with wall-clock time", "time"}};
 
 #define KNOWN_COUNT (sizeof(s_known_findings) / sizeof(s_known_findings[0]))
 
@@ -59,8 +71,8 @@ size_t asx_ambient_violation_ceiling(void) { return AMBIENT_VIOLATION_CEILING; }
 /* Pristine module list                                                 */
 /* ------------------------------------------------------------------ */
 
-static const char *s_pristine_modules[] = {"src/core/channel.c",      "src/core/obligation.c",
-                                           "src/core/region.c",       "src/core/task.c",
+static const char *s_pristine_modules[] = {"src/channel/mpsc.c",      "src/runtime/lifecycle.c",
+                                           "src/runtime/scheduler.c", "src/runtime/cancellation.c",
                                            "src/security/security.c", "src/stream/stream.c"};
 
 #define PRISTINE_COUNT (sizeof(s_pristine_modules) / sizeof(s_pristine_modules[0]))

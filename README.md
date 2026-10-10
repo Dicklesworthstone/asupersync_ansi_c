@@ -1675,7 +1675,7 @@ The **audit runner** (`asx_ambient_audit`) walks a hand-maintained catalog of am
 - **Exempted**: the clock and entropy providers (capability boundaries by design).
 - **Pristine list** (`asx_audit_pristine_modules`): modules meant to use no ambient authority.
 
-It does not scan source code, so a new ambient access is caught only if someone adds it to the catalog; nothing checks the pristine list automatically. Several catalog and pristine-list paths name files that no longer exist (the kernel now lives in `src/runtime/lifecycle.c` and `src/channel/`), so the catalog needs updating before it describes the tree.
+The catalog exempts the clock and entropy providers: the POSIX and Win32 runtime hooks (`src/platform/*/hooks.c`), which deterministic builds and the lab replace with a virtual clock and a seeded PRNG, and the test-log helper's wall-clock timestamps. `make lint` scans the source (`tools/ci/check_ambient_authority.py`): it fails on an ambient clock or entropy call (`clock_gettime`, `time`, `rand`, `getrandom`, `/dev/urandom`, `QueryPerformanceCounter`, `BCryptGenRandom` and the like) in any file the catalog does not exempt, and on a catalog or pristine-list path that does not exist.
 
 ## Lab Runtime: Deterministic Test Execution
 

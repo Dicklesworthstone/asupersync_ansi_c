@@ -57,10 +57,11 @@ TEST(catalog_all_exempted_are_providers) {
     for (i = 0; i < count; i++) {
         if (catalog[i].exempted) {
             /* Must be in a known provider path */
-            int is_provider = (strstr(catalog[i].file, "time") != NULL) ||
-                              (strstr(catalog[i].file, "entropy") != NULL) ||
-                              (strstr(catalog[i].file, "io") != NULL) ||
-                              (strstr(catalog[i].file, "driver") != NULL);
+            /* The platform runtime hooks, or the test-log helper's
+             * wall-clock timestamps */
+            int is_provider = (strncmp(catalog[i].file, "src/platform/", 13) == 0 &&
+                               strstr(catalog[i].file, "/hooks.c") != NULL) ||
+                              strcmp(catalog[i].file, "include/asx/testing/log.h") == 0;
             ASSERT_TRUE(is_provider);
         }
     }

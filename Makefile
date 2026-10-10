@@ -671,6 +671,8 @@ format-check:
 # lint — static analysis gate
 # ---------------------------------------------------------------------------
 lint:
+	@echo "[asx] lint: ambient clock/entropy only in the cataloged providers..."
+	@python3 tools/ci/check_ambient_authority.py
 	@echo "[asx] lint: running static analysis..."
 	@if [ -n "$(CPPCHECK)" ]; then \
 		$(CPPCHECK) -j $(CPPCHECK_JOBS) --enable=warning,performance,portability --std=c99 \
