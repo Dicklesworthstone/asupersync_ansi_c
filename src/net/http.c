@@ -3625,6 +3625,7 @@ static void http_server_accept_pending(asx_http_server *hs) {
         asx_server_conn conn;
         asx_status st;
 
+        memset(&conn, 0, sizeof(conn));
         while (slot < ASX_HTTP_SERVER_MAX_CONNS && hs->conn_ids[slot] != 0u) slot++;
         st = slot < ASX_HTTP_SERVER_MAX_CONNS ? asx_server_poll_accept(hs->server, &conn)
                                               : ASX_E_RESOURCE_EXHAUSTED;
