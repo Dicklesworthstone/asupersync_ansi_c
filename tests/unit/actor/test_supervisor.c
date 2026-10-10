@@ -20,7 +20,7 @@
 /* Test harness                                                        */
 /* ------------------------------------------------------------------ */
 
-static int g_pass, g_fail;
+static int g_pass, g_fail, g_skip;
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
     do {                                                                                           \
@@ -40,9 +40,23 @@ static asx_status st_sink_;
 #define RUN(fn)                                                                                    \
     do {                                                                                           \
         int before_ = g_fail;                                                                      \
+        int skipped_ = g_skip;                                                                     \
         printf("  " #fn "...\n");                                                                  \
         fn();                                                                                      \
-        if (g_fail == before_) g_pass++;                                                           \
+        if (g_fail == before_ && g_skip == skipped_) g_pass++;                                     \
+    } while (0)
+
+/* Every child generation runs in a region of its own, so a test with n
+ * children needs n regions beyond the root, the owner's and the
+ * supervisor's. A resource class with fewer (R1 has 4) skips it, reported. */
+#define NEEDS_CHILD_REGIONS(n)                                                                     \
+    do {                                                                                           \
+        if ((unsigned)ASX_MAX_REGIONS < 3u + (unsigned)(n)) {                                      \
+            printf("  SKIP: needs %u regions, this build has %u\n", 3u + (unsigned)(n),            \
+                   (unsigned)ASX_MAX_REGIONS);                                                     \
+            g_skip++;                                                                              \
+            return;                                                                                \
+        }                                                                                          \
     } while (0)
 
 /* ------------------------------------------------------------------ */
@@ -306,6 +320,7 @@ static void test_dependencies_order_the_start(void) {
     behaviour first;
     behaviour second;
     behaviour third;
+    NEEDS_CHILD_REGIONS(3);
     setup();
     memset(&first, 0, sizeof(first));
     memset(&second, 0, sizeof(second));
@@ -541,6 +556,7 @@ static void test_one_for_all_restarts_the_siblings(void) {
     behaviour failing;
     behaviour sibling;
     const asx_supervisor_completion *c;
+    NEEDS_CHILD_REGIONS(2);
     setup();
     memset(&failing, 0, sizeof(failing));
     memset(&sibling, 0, sizeof(sibling));
@@ -564,6 +580,7 @@ static void test_rest_for_one_restarts_the_later_ones(void) {
     behaviour earlier;
     behaviour failing;
     behaviour later;
+    NEEDS_CHILD_REGIONS(3);
     setup();
     memset(&earlier, 0, sizeof(earlier));
     memset(&failing, 0, sizeof(failing));
@@ -588,6 +605,7 @@ static void test_one_for_one_leaves_siblings_alone(void) {
     owner o;
     behaviour failing;
     behaviour sibling;
+    NEEDS_CHILD_REGIONS(2);
     setup();
     memset(&failing, 0, sizeof(failing));
     memset(&sibling, 0, sizeof(sibling));
@@ -662,6 +680,7 @@ static void test_restart_without_its_dependency_fails(void) {
     owner o;
     behaviour dependency;
     behaviour dependent;
+    NEEDS_CHILD_REGIONS(2);
     setup();
     memset(&dependency, 0, sizeof(dependency));
     memset(&dependent, 0, sizeof(dependent));
@@ -757,6 +776,6 @@ int main(void) {
 
     RUN(test_handles);
 
-    printf("\n  %d passed, %d failed\n", g_pass, g_fail);
+    printf("\n  %d passed, %d failed, %d skipped\n", g_pass, g_fail, g_skip);
     return g_fail ? 1 : 0;
 }

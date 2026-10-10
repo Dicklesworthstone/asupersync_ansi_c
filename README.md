@@ -1228,7 +1228,7 @@ GenServers are ported from Rust's `gen_server.rs`:
 - `asx_actor_stop` lets the server serve what is queued and stop; `asx_actor_join` waits for its task.
 - A cancelled server stops at its next loop check or receive. It seals its mailbox and drains it without handling the casts, drops the queued calls (their callers get no reply), then runs `terminate` with `ASX_E_CANCELLED`. A failing callback is the C form of a Rust panic: the server stops at once and its task completes PANICKED.
 
-A managed supervisor (Rust's `ManagedSupervisor` in `supervision.rs`) is a controller task that runs each child as a series of generations: every generation is a task in a region of its own, below the supervisor's region. `asx_supervisor_spawn` takes the children's specs (a start function that returns the generation's body, a restart mode, dependencies on other children) and a config; `asx_supervisor_join` waits for the controller's report, and `asx_supervisor_abort` cancels the controller, which then drains every generation.
+A managed supervisor (Rust's `ManagedSupervisor` in `supervision.rs`) is a controller task that runs each child as a series of generations: every generation is a task in a region of its own, below the supervisor's region. A supervisor of n children therefore holds up to n + 1 regions and n + 1 tasks at once, which counts against `ASX_MAX_REGIONS` (4 in resource class R1). `asx_supervisor_spawn` takes the children's specs (a start function that returns the generation's body, a restart mode, dependencies on other children) and a config; `asx_supervisor_join` waits for the controller's report, and `asx_supervisor_abort` cancels the controller, which then drains every generation.
 
 | Strategy | When a child ends and may be restarted |
 |---|---|
