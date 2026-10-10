@@ -8,6 +8,9 @@
 #include <asx/core/combinator.h>
 #include <asx/core/combinator2.h>
 #include <asx/runtime/runtime.h>
+#include <asx/runtime/virtual_time.h>
+#include <asx/time/timer_wheel.h>
+#include <string.h>
 
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
@@ -576,6 +579,46 @@ TEST(hedge_primary_fail_result) {
     ASSERT_EQ(asx_hedge_winner(&hs), 0);
 }
 
+static asx_status hedge_backup_counted(void *user_data, asx_task_id self) {
+    (void)self;
+    (*(int *)user_data)++;
+    return ASX_OK;
+}
+
+/* bd-bf6i: on a clock past a day of uptime the hedge could not arm its
+ * deadline (the global wheel measured from time 0), so it started the
+ * backup on the first poll instead of after the hedge delay. */
+TEST(hedge_waits_for_its_delay_after_a_day_of_uptime) {
+    const asx_runtime_hooks *active = asx_runtime_get_hooks();
+    asx_runtime_hooks saved;
+    asx_runtime_hooks hooks;
+    asx_vtime_state vt;
+    asx_hedge_state hs;
+    int backup_polls = 0;
+
+    if (active != NULL) {
+        memcpy(&saved, active, sizeof(saved));
+    } else {
+        ASSERT_EQ(asx_runtime_hooks_init(&saved), ASX_OK);
+    }
+    memcpy(&hooks, &saved, sizeof(hooks));
+    asx_vtime_init(&vt, ASX_TIMER_MAX_DURATION_NS + 3600000000000ULL, 1000000ULL);
+    hooks.clock.now_ns_fn = asx_vtime_now_ns;
+    hooks.clock.logical_now_ns_fn = asx_vtime_now_ns;
+    hooks.clock.ctx = &vt;
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    hedge_primary_pending_count = 0;
+    MUST_OK(asx_hedge_init(&hs, hedge_primary_pending, NULL, hedge_backup_counted, &backup_polls,
+                           1000000000ULL));
+    ASSERT_EQ(asx_hedge_poll(&hs, 0), ASX_E_PENDING);
+    ASSERT_EQ(asx_hedge_current_phase(&hs), ASX_HEDGE_PRIMARY_ONLY);
+    ASSERT_EQ(hedge_primary_pending_count, 1);
+    ASSERT_EQ(backup_polls, 0);
+
+    MUST_OK(asx_runtime_set_hooks(&saved));
+}
+
 /* ================================================================== */
 /* MapReduce tests                                                     */
 /* ================================================================== */
@@ -717,6 +760,9 @@ int main(void) {
     RUN_TEST(law_bracket_release_guarantee);
     RUN_TEST(law_hedge_immediate_is_primary);
     RUN_TEST(law_map_reduce_single_is_identity);
+
+    /* Last: installs a clock hook */
+    RUN_TEST(hedge_waits_for_its_delay_after_a_day_of_uptime);
 
     TEST_REPORT();
     return test_failures;

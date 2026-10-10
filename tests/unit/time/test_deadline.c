@@ -116,6 +116,47 @@ TEST(arm_double_arm_fails) {
     teardown();
 }
 
+/* bd-bf6i: the global wheel's time moves only when it is collected, and
+ * the runtime never collects it, so arming measured the max duration
+ * from time 0: on a clock past ASX_TIMER_MAX_DURATION_NS (a live host up
+ * for more than a day) every arm failed. */
+TEST(arm_after_a_day_of_uptime) {
+    asx_deadline soon;
+    asx_deadline far;
+    setup();
+    asx_vtime_init(&g_vt, ASX_TIMER_MAX_DURATION_NS + 3600000000000ULL, 1000000ULL);
+    ASSERT_EQ(asx_deadline_after(&soon, 1000000ULL), ASX_OK);
+    ASSERT_EQ(asx_deadline_arm(&soon, NULL), ASX_OK);
+    ASSERT_TRUE(asx_deadline_is_armed(&soon));
+    /* The limit still holds, measured from now */
+    ASSERT_EQ(asx_deadline_after(&far, ASX_TIMER_MAX_DURATION_NS + 1000000000ULL), ASX_OK);
+    ASSERT_EQ(asx_deadline_arm(&far, NULL), ASX_E_TIMER_DURATION_EXCEEDED);
+    ASSERT_FALSE(asx_deadline_is_armed(&far));
+    MUST_OK(asx_deadline_disarm(&soon));
+    teardown();
+}
+
+/* Bringing the wheel to now keeps a timer armed earlier for a deadline
+ * that has since passed: it still fires on the next collection. */
+TEST(arm_keeps_earlier_timers_pending) {
+    asx_deadline first;
+    asx_deadline second;
+    void *fired[4];
+    int tag_first = 1;
+    int tag_second = 2;
+    setup();
+    MUST_OK(asx_deadline_init(&first, 5000000ULL));
+    ASSERT_EQ(asx_deadline_arm(&first, &tag_first), ASX_OK);
+    asx_vtime_init(&g_vt, 50000000ULL, 1000000ULL);
+    MUST_OK(asx_deadline_init(&second, 60000000ULL));
+    ASSERT_EQ(asx_deadline_arm(&second, &tag_second), ASX_OK);
+    ASSERT_EQ(asx_timer_collect_expired(asx_timer_wheel_global(), 50000000ULL, fired, 4u), 1u);
+    ASSERT_TRUE(fired[0] == (void *)&tag_first);
+    ASSERT_EQ(asx_timer_collect_expired(asx_timer_wheel_global(), 60000000ULL, fired, 4u), 1u);
+    ASSERT_TRUE(fired[0] == (void *)&tag_second);
+    teardown();
+}
+
 TEST(disarm_null_fails) { ASSERT_EQ(asx_deadline_disarm(NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(disarm_cancels_timer) {
@@ -225,6 +266,8 @@ int main(void) {
     RUN_TEST(arm_null_fails);
     RUN_TEST(arm_registers_timer);
     RUN_TEST(arm_double_arm_fails);
+    RUN_TEST(arm_after_a_day_of_uptime);
+    RUN_TEST(arm_keeps_earlier_timers_pending);
     RUN_TEST(disarm_null_fails);
     RUN_TEST(disarm_cancels_timer);
     RUN_TEST(disarm_unarmed_is_noop);
