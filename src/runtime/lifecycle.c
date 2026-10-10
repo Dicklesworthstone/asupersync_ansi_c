@@ -584,27 +584,64 @@ asx_region_id asx_region_handle_for_slot(uint32_t slot_idx) {
                                                  (uint16_t)slot_idx));
 }
 
+/* Scratch for asx_region_subtree_internal: the walk's stack and the depth
+ * of each output entry. */
+static uint32_t g_subtree_stack[ASX_MAX_REGIONS];
+static uint32_t g_subtree_stack_depth[ASX_MAX_REGIONS];
+static uint32_t g_subtree_depth[ASX_MAX_REGIONS];
+
 uint32_t asx_region_subtree_internal(asx_region_id root, uint32_t *out_slots, uint32_t max) {
     asx_region_slot *r;
-    uint32_t head = 0;
+    uint32_t top = 0;
     uint32_t count = 0;
+    uint32_t i;
 
     if (out_slots == NULL || max == 0u) return 0u;
     if (asx_region_slot_lookup(root, &r) != ASX_OK) return 0u;
+    if (max > ASX_MAX_REGIONS) max = ASX_MAX_REGIONS;
 
-    out_slots[count++] = asx_handle_slot(root);
-    /* Breadth-first over the bounded children[] lists: parents always
-     * precede their descendants in the output. */
-    while (head < count) {
-        ASX_CHECKPOINT_WAIVER("bounded: count <= max <= ASX_MAX_REGIONS");
-        asx_region_slot *cur = &g_regions[out_slots[head++]];
+    /* Rust's cancel_request order (state.rs:7647-7652, :7904-7931): a
+     * depth-first walk with a stack, children pushed in insertion order
+     * (so the last child is visited first), then a stable sort by depth.
+     * Parents precede their descendants; regions at one depth keep the
+     * walk's order. A cancel visits regions, and their tasks, in this
+     * order. */
+    g_subtree_stack[top] = asx_handle_slot(root);
+    g_subtree_stack_depth[top] = 0u;
+    top++;
+    while (top > 0u && count < max) {
+        ASX_CHECKPOINT_WAIVER("bounded: each live region is pushed once, top <= ASX_MAX_REGIONS");
+        asx_region_slot *cur;
+        uint32_t depth;
         uint32_t c;
-        for (c = 0; c < cur->child_count && count < max; c++) {
+        top--;
+        depth = g_subtree_stack_depth[top];
+        out_slots[count] = g_subtree_stack[top];
+        g_subtree_depth[count] = depth;
+        cur = &g_regions[out_slots[count]];
+        count++;
+        for (c = 0; c < cur->child_count && top < ASX_MAX_REGIONS; c++) {
             ASX_CHECKPOINT_WAIVER("bounded: child_count <= ASX_MAX_REGION_CHILDREN");
             asx_region_slot *child;
             if (asx_region_slot_lookup(cur->children[c], &child) != ASX_OK) continue;
-            out_slots[count++] = asx_handle_slot(cur->children[c]);
+            g_subtree_stack[top] = asx_handle_slot(cur->children[c]);
+            g_subtree_stack_depth[top] = depth + 1u;
+            top++;
         }
+    }
+    for (i = 1; i < count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: insertion sort over count <= ASX_MAX_REGIONS");
+        uint32_t slot = out_slots[i];
+        uint32_t depth = g_subtree_depth[i];
+        uint32_t j = i;
+        while (j > 0u && g_subtree_depth[j - 1u] > depth) {
+            ASX_CHECKPOINT_WAIVER("bounded: j <= count <= ASX_MAX_REGIONS");
+            out_slots[j] = out_slots[j - 1u];
+            g_subtree_depth[j] = g_subtree_depth[j - 1u];
+            j--;
+        }
+        out_slots[j] = slot;
+        g_subtree_depth[j] = depth;
     }
     return count;
 }

@@ -450,7 +450,7 @@ A transition from `prev` to `next` is valid when ALL hold (Rust `validate_transi
 > **Superseded by `asupersync_v4_formal_semantics.md` §3.2 `CANCEL-REQUEST` (`rule.cancel.request` #1) and §5 INV-CANCEL-PROPAGATES (`inv.cancel.propagates_down` #6); C status: see C_REFINEMENT_MAP.md rows `rule.cancel.request` and `inv.cancel.propagates_down`.**
 
 1. A region **cancel** propagates to every task of its subtree (Rust `cancel_request`, `src/runtime/state.rs:7547`; C `asx_region_cancel`, `src/runtime/cancellation.c:430`). A plain C `asx_region_close` cancels no task
-2. Propagation is parents-before-descendants, **not depth-first**. Rust: stack-based collection, then a stable sort by depth (`src/runtime/state.rs:7904`, `src/runtime/state.rs:7653`), so siblings come in reverse insertion order. C: breadth-first over `children[]` (`src/runtime/lifecycle.c:587`), insertion order until a child closes and is swap-removed (`src/runtime/quiescence.c:35`). The sibling order therefore differs; no Rust-captured fixture cancels a region with two child regions
+2. Propagation is parents-before-descendants, **not depth-first**. Rust: stack-based collection, then a stable sort by depth (`src/runtime/state.rs:7904`, `src/runtime/state.rs:7653`), so siblings come in reverse insertion order. C walks the same way (`asx_region_subtree_internal`, `src/runtime/lifecycle.c:593`) over `children[]`, which unlinking keeps in insertion order (`src/runtime/quiescence.c:21`); fixtures `cancel-subtree-order-001` and `cancel-subtree-order-after-child-close-001` check it (bd-e038; C walked breadth-first and swap-removed before 2026-10-10)
 3. Each task takes its region's reason: ParentCancelled from the immediate parent for descendants, with the parent's reason as cause. C does not extend its witness with a chain
 4. Cancel does NOT propagate to sibling regions (parent-to-child only)
 5. Already-cancelled tasks: strengthening only (T6/T9/T12); completed tasks are skipped
@@ -1183,7 +1183,7 @@ The Rust runtime shutdown sequence was not re-verified at `5e60b1c4c` (unverifie
 | Scheduler ready lane | Priority (u8, higher first) | Generation (heap only) | Task id; RNG pick; the global queue is plain FIFO |
 | Lab dispatch (Rust `LabScheduler`; C `src/runtime/lab_dispatch.c`) | Lane (cancel while streak < 16, due timed, ready, fallback cancel) | Priority | `rng % n` over the top-priority group in generation order (≤ 256) |
 | Work stealing | Lab: RNG-start circular scan skipping the thief; production: see §11.7 | First available | — |
-| Cancel propagation | Depth (parents first) | Rust: stack-pop order (siblings reversed); C: `children[]` order, breadth-first (§6.8) | Within a region: membership insertion order |
+| Cancel propagation | Depth (parents first) | Stack-pop order (siblings reversed), Rust and C (§6.8) | Within a region: membership insertion order |
 | Event journal | `event_seq` (strictly monotonic; C trace `sequence`, `src/runtime/trace.c:211`) | — | — |
 
 ### 14.2 Determinism Invariants

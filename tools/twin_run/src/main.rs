@@ -128,11 +128,11 @@ fn canon_fuzz(seed: u64, count: u64, out: &PathBuf) -> ExitCode {
             }
         }
     }
-    if let Some(dir) = out.parent() {
-        if let Err(err) = std::fs::create_dir_all(dir) {
-            eprintln!("twin_run: cannot create {}: {err}", dir.display());
-            return ExitCode::from(1);
-        }
+    if let Some(dir) = out.parent()
+        && let Err(err) = std::fs::create_dir_all(dir)
+    {
+        eprintln!("twin_run: cannot create {}: {err}", dir.display());
+        return ExitCode::from(1);
     }
     if let Err(err) = std::fs::write(out, text) {
         eprintln!("twin_run: cannot write {}: {err}", out.display());

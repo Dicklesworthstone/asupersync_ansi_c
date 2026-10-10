@@ -8,8 +8,12 @@
 //! non-quiescent end state. A scenario Rust cannot run (twin_run fails it)
 //! is simply not captured; one Rust runs and C does not is a finding.
 //!
-//! Child regions: a task opens at most one at a time (two in all), may
-//! spawn into it, and closes it or leaves it to the drop backstop.
+//! Child regions: a task holds at most two at a time (two in all), may
+//! spawn into either, and closes or cancels the older first or leaves them
+//! to the drop backstop. The declared side regions are sometimes children
+//! of `r.main`, so a driver cancel of `r.main` reaches sibling child
+//! regions holding tasks, in an order both runtimes must agree on
+//! (bd-e038).
 //!
 //! Contention: when the scenario has a mutex, rwlock (reads and writes) or
 //! semaphore, most tasks open with a critical section (acquire, a few
@@ -191,7 +195,7 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 held.children.push(name.clone());
                 let mut s = json!({"op": "spawn", "as": name, "program": child_program(rng)});
                 if !held.regions.is_empty() && rng.chance(60) {
-                    s["region"] = json!(held.regions[0]);
+                    s["region"] = json!(rng.pick(&held.regions));
                 }
                 return s;
             }
@@ -284,7 +288,7 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
             }
             // A child region opened here is closed by a later step, or by
             // the drop backstop when the program ends with it open.
-            16 if held.regions.is_empty() && held.opened < 2 => {
+            16 if held.regions.len() < 2 && held.opened < 2 => {
                 held.opened += 1;
                 let name = format!("{me}.r{}", held.opened);
                 held.regions.push(name.clone());
@@ -456,8 +460,13 @@ pub fn scenario(seed: u64, index: u64) -> Value {
     let mut regions = vec![json!({"name": "r.main", "parent": "root", "budget": null})];
     let mut region_names = vec!["r.main"];
     if rng.chance(40) {
-        regions.push(json!({"name": "r.side", "parent": "root", "budget": null}));
+        let parent = if rng.chance(50) { "r.main" } else { "root" };
+        regions.push(json!({"name": "r.side", "parent": parent, "budget": null}));
         region_names.push("r.side");
+        if parent == "r.main" && rng.chance(50) {
+            regions.push(json!({"name": "r.side2", "parent": "r.main", "budget": null}));
+            region_names.push("r.side2");
+        }
     }
     let world = if crowd {
         // One lock or two; an rwlock crowd mixes readers and writers, long

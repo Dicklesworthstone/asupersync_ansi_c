@@ -31,8 +31,14 @@ static void asx_region_unlink_from_parent(asx_region_id id, asx_region_slot *r) 
             /* ASX_CHECKPOINT_WAIVER("bounded scan over parent's child array") */
             if (parent->children[i] != id) continue;
 
+            /* Keep the siblings in insertion order, as Rust's Membership
+             * remove does (record/region.rs:416-425): a cancel walks the
+             * children in this order (asx_region_subtree_internal). */
             parent->child_count--;
-            parent->children[i] = parent->children[parent->child_count];
+            for (; i < parent->child_count; i++) {
+                /* ASX_CHECKPOINT_WAIVER("bounded shift over parent's child array") */
+                parent->children[i] = parent->children[i + 1u];
+            }
             parent->children[parent->child_count] = ASX_INVALID_ID;
             break;
         }
