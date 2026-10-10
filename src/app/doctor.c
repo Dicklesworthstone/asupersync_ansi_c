@@ -5,6 +5,7 @@
  */
 
 #include <asx/app/doctor.h>
+#include <asx/net/net.h>
 #include <asx/runtime/blocking.h>
 #include <asx/runtime/browser_boundary.h>
 #include <asx/runtime/io_driver.h>
@@ -200,6 +201,18 @@ static void check_containment_policy(const asx_runtime *rt, asx_doctor_report *r
               (uint32_t)pol, 2);
 }
 
+/* Which transport serves the net surface. A default (deterministic) build
+ * listens in memory, not on the OS: an operator sees it here
+ * (bd-9kll.10.2). Both are healthy; a live POSIX build is NATIVE. */
+static void check_net_backend(asx_doctor_report *r) {
+    asx_net_backend b = asx_net_get_backend();
+
+    add_check(r, "net", ASX_DOCTOR_OK,
+              b == ASX_NET_BACKEND_NATIVE ? "native OS sockets"
+                                          : "in-memory transport (no OS sockets)",
+              (uint32_t)b, 1);
+}
+
 /* ------------------------------------------------------------------ */
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
@@ -217,6 +230,7 @@ asx_status asx_doctor_run(const asx_runtime *rt, asx_doctor_report *report) {
     check_blocking_pool_state(rt, report);
     check_safety_profile(rt, report);
     check_containment_policy(rt, report);
+    check_net_backend(report);
 
     return ASX_OK;
 }

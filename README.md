@@ -1436,11 +1436,22 @@ In live (non-deterministic) POSIX builds, `asx_runtime_init` installs a real rea
 | Processes | fork/execve with PATH lookup, env, and cwd. Exec failures come back through an error pipe. Non-blocking stdio pipes park on readiness, exit waits park on a pidfd on Linux, and children are always reaped. |
 | Signals | Refcounted `sigaction` handlers feed a self-pipe, and each subscriber parks on its own duplicate. The app runner turns SIGTERM/SIGINT into a `SHUTDOWN` cancel of the server region. |
 
+Real sockets need a live POSIX build. A plain `make build` is CORE and
+deterministic, so its server listens on the in-memory transport below,
+not on the OS:
+
+```bash
+make build PROFILE=POSIX DETERMINISTIC=0 LDFLAGS="-lpthread -lrt"
+```
+
+At run time, `asx_net_get_backend()` reports which backend is active
+(`ASX_NET_BACKEND_MEMORY` or `ASX_NET_BACKEND_NATIVE`).
+
 ## In-Memory Network Transport
 
 The MEMORY backend provides a deterministic in-memory transport that mirrors real socket semantics without touching the OS network stack. This enables network-aware scenarios to run deterministically in lab mode:
 
-**TCP**: Listener with accept queue (16 deep), stream handles with send/recv buffers (1,460 bytes, matching typical MTU payload). `listen()` → `accept()` → `connect()` → `send()`/`recv()` → `close()`.
+**TCP**: Listener with accept queue (16 deep), stream handles with send/recv buffers (1,460 bytes, matching typical MTU payload). `listen()` → `accept()` → `connect()` → `send()`/`recv()` → `close()`. The port namespace behaves like the OS's: port 0 takes an ephemeral port (from 49152, deterministic), and an address already listening is refused with `ASX_E_ALREADY_EXISTS`. An accept with no client, a read of an empty stream, or a write to a full peer parks the polling task until a connection, data, the peer's close, or inbox space wakes it, so an idle server costs no polls.
 
 **UDP**: Socket with 4-deep datagram queue (576 bytes per datagram, matching minimum IP reassembly buffer). `bind()` → `sendto()`/`recvfrom()` → `close()`.
 

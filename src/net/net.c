@@ -348,6 +348,7 @@ typedef struct {
     uint32_t accept_head;
     uint32_t accept_count;
     int alive;
+    asx_task_id accept_waiter; /* parked in poll_accept (mem_wait) */
 } tcp_listener_slot;
 
 static tcp_listener_slot g_listeners[ASX_MAX_TCP_LISTENERS];
@@ -366,12 +367,41 @@ typedef struct {
     uint32_t peer_generation;
     int alive;
     int linked;
-    int peer_closed; /* linked peer closed: reads drain then report EOF */
-    int write_shut;  /* local write side shut down */
+    int peer_closed;          /* linked peer closed: reads drain then report EOF */
+    int write_shut;           /* local write side shut down */
+    asx_task_id read_waiter;  /* parked on an empty inbox (mem_wait) */
+    asx_task_id write_waiter; /* parked on the peer's full inbox */
 } tcp_stream_slot;
 
 static tcp_stream_slot g_streams[ASX_MAX_TCP_STREAMS];
 static uint32_t g_stream_count;
+
+/* Wake-driven waiting on the in-memory backend: an operation that cannot
+ * proceed records the polling task (asx_task_current) as the slot's waiter
+ * and parks it; the event that makes the slot ready (a connection, data,
+ * inbox space, the peer's close) wakes it. A different task already
+ * waiting there is woken first, so it re-polls instead of sleeping on.
+ * Outside a poll nothing is recorded and the caller just sees PENDING. */
+static void mem_wait(asx_task_id *waiter) {
+    asx_task_id me = asx_task_current();
+    asx_status st;
+    if (me == ASX_INVALID_ID) return;
+    if (*waiter != ASX_INVALID_ID && *waiter != me) {
+        st = asx_task_wake(*waiter);
+        (void)st;
+    }
+    *waiter = me;
+    st = asx_task_park(me);
+    (void)st;
+}
+
+static void mem_wake(asx_task_id *waiter) {
+    asx_status st;
+    if (*waiter == ASX_INVALID_ID) return;
+    st = asx_task_wake(*waiter);
+    (void)st;
+    *waiter = ASX_INVALID_ID;
+}
 
 /* ------------------------------------------------------------------ */
 /* UDP socket arena                                                    */
@@ -484,10 +514,19 @@ static void stream_unlink_peer(tcp_stream_slot *s) {
         peer->peer_slot = 0u;
         peer->peer_generation = 0u;
         peer->peer_closed = 1;
+        /* Its reader now sees EOF, its writer DISCONNECTED. */
+        mem_wake(&peer->read_waiter);
+        mem_wake(&peer->write_waiter);
     }
     s->linked = 0;
     s->peer_slot = 0u;
     s->peer_generation = 0u;
+}
+
+/* s's inbox gave up bytes: the peer writing into it may proceed. */
+static void stream_inbox_drained(tcp_stream_slot *s) {
+    tcp_stream_slot *peer = stream_linked_peer(s);
+    if (peer != NULL) mem_wake(&peer->write_waiter);
 }
 
 static asx_status stream_alloc(const asx_socket_addr *local, const asx_socket_addr *peer,
@@ -531,6 +570,7 @@ static asx_status listener_queue_accept(tcp_listener_slot *listener, asx_tcp_str
     tail = (listener->accept_head + listener->accept_count) % ASX_NET_TCP_ACCEPT_QUEUE_DEPTH;
     listener->pending[tail] = accepted;
     listener->accept_count++;
+    mem_wake(&listener->accept_waiter);
     return ASX_OK;
 }
 
@@ -593,6 +633,11 @@ asx_status asx_tcp_listener_bind_with_cx(asx_tcp_listener *out, const asx_socket
     }
 #endif
 
+    /* The in-memory port namespace behaves as the OS's does: an address
+     * already listening is refused (as EADDRINUSE maps natively), and port
+     * 0 takes an ephemeral port (deterministic: the counter restarts at
+     * asx_net_reset), so local_addr reports a port a client can connect to. */
+    if (addr->port != 0u && listener_find_by_addr(addr) != NULL) return ASX_E_ALREADY_EXISTS;
     for (idx = 0u; idx < ASX_MAX_TCP_LISTENERS; idx++) {
         if (!g_listeners[idx].alive) break;
     }
@@ -607,6 +652,7 @@ asx_status asx_tcp_listener_bind_with_cx(asx_tcp_listener *out, const asx_socket
     }
     s->alive = 1;
     s->addr = *addr;
+    if (s->addr.port == 0u) s->addr.port = net_ephemeral_addr(addr->family).port;
 
     if (idx >= g_listener_count) g_listener_count = idx + 1u;
 
@@ -645,7 +691,11 @@ asx_status asx_tcp_listener_poll_accept_with_cx(asx_tcp_listener listener, asx_t
 
     s = listener_lookup(listener);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (s->accept_count == 0u) return ASX_E_PENDING;
+    if (s->accept_count == 0u) {
+        /* Parks until a connection arrives (or the listener closes). */
+        mem_wait(&s->accept_waiter);
+        return ASX_E_PENDING;
+    }
 
     *out = s->pending[s->accept_head];
     s->accept_head = (s->accept_head + 1u) % ASX_NET_TCP_ACCEPT_QUEUE_DEPTH;
@@ -679,6 +729,7 @@ asx_status asx_tcp_listener_close(asx_tcp_listener listener) {
         uint32_t idx = (s->accept_head + i) % ASX_NET_TCP_ACCEPT_QUEUE_DEPTH;
         (void)asx_tcp_stream_close(s->pending[idx]);
     }
+    mem_wake(&s->accept_waiter); /* its next poll finds the listener gone */
 
     {
         /* Keep the generation so stale handles never alias the next owner. */
@@ -811,7 +862,9 @@ asx_status asx_tcp_stream_poll_read_with_cx(asx_tcp_stream stream, asx_buf_mut *
     if (asx_buf_mut_remaining(&s->inbox) == 0u) {
         *bytes_read = 0u;
         /* Drained and the peer will send no more: EOF. */
-        return s->peer_closed ? ASX_OK : ASX_E_PENDING;
+        if (s->peer_closed) return ASX_OK;
+        mem_wait(&s->read_waiter); /* until data or the peer's close */
+        return ASX_E_PENDING;
     }
     if (asx_buf_mut_writable(dst) == 0u) return ASX_E_BUFFER_TOO_SMALL;
 
@@ -824,6 +877,7 @@ asx_status asx_tcp_stream_poll_read_with_cx(asx_tcp_stream stream, asx_buf_mut *
     st = asx_buf_mut_advance(&s->inbox, to_copy);
     if (st != ASX_OK) return st;
     if (asx_buf_mut_remaining(&s->inbox) == 0u) asx_buf_mut_clear(&s->inbox);
+    stream_inbox_drained(s);
 
     *bytes_read = to_copy;
     return ASX_OK;
@@ -845,7 +899,11 @@ asx_status asx_tcp_stream_read(asx_tcp_stream stream, uint8_t *dst, uint32_t cap
 #endif
     s = stream_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (asx_buf_mut_remaining(&s->inbox) == 0u) return s->peer_closed ? ASX_OK : ASX_E_PENDING;
+    if (asx_buf_mut_remaining(&s->inbox) == 0u) {
+        if (s->peer_closed) return ASX_OK;
+        mem_wait(&s->read_waiter); /* until data or the peer's close */
+        return ASX_E_PENDING;
+    }
     if (cap == 0u) return ASX_E_BUFFER_TOO_SMALL;
 
     readable = asx_buf_mut_readable(&s->inbox);
@@ -854,6 +912,7 @@ asx_status asx_tcp_stream_read(asx_tcp_stream stream, uint8_t *dst, uint32_t cap
     st = asx_buf_mut_advance(&s->inbox, n);
     if (st != ASX_OK) return st;
     if (asx_buf_mut_remaining(&s->inbox) == 0u) asx_buf_mut_clear(&s->inbox);
+    stream_inbox_drained(s);
     *out_read = n;
     return ASX_OK;
 }
@@ -881,10 +940,14 @@ asx_status asx_tcp_stream_write(asx_tcp_stream stream, const uint8_t *src, uint3
     if (len == 0u) return ASX_OK;
     asx_buf_mut_compact(&peer->inbox);
     n = asx_buf_mut_writable(&peer->inbox);
-    if (n == 0u) return ASX_E_PENDING;
+    if (n == 0u) {
+        mem_wait(&s->write_waiter); /* until the peer drains its inbox */
+        return ASX_E_PENDING;
+    }
     if (n > len) n = len;
     st = asx_buf_mut_put(&peer->inbox, src, n);
     if (st != ASX_OK) return st;
+    mem_wake(&peer->read_waiter);
     *out_written = n;
     return ASX_OK;
 }
@@ -902,7 +965,10 @@ asx_status asx_tcp_stream_shutdown_write(asx_tcp_stream stream) {
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     s->write_shut = 1;
     peer = stream_linked_peer(s);
-    if (peer != NULL) peer->peer_closed = 1;
+    if (peer != NULL) {
+        peer->peer_closed = 1;
+        mem_wake(&peer->read_waiter); /* EOF once its inbox drains */
+    }
     return ASX_OK;
 }
 
@@ -952,6 +1018,7 @@ asx_status asx_tcp_stream_poll_write_with_cx(asx_tcp_stream stream, const asx_bu
 
     st = asx_buf_mut_put(&peer->inbox, src->ptr, src->len);
     if (st != ASX_OK) return st;
+    mem_wake(&peer->read_waiter);
 
     *bytes_written = src->len;
     return ASX_OK;
@@ -967,6 +1034,9 @@ asx_status asx_tcp_stream_close(asx_tcp_stream stream) {
     s = stream_lookup(stream);
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     stream_unlink_peer(s);
+    /* A task parked on this stream finds it gone at its next poll. */
+    mem_wake(&s->read_waiter);
+    mem_wake(&s->write_waiter);
     /* Keep the generation so stale handles never alias the next owner. */
     gen = s->generation;
     memset(s, 0, sizeof(*s));

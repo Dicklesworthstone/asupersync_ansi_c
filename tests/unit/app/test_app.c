@@ -1139,13 +1139,20 @@ static void test_doctor_initialized_runtime(void) {
 
     st = asx_doctor_run(&rt, &report);
     ASSERT(st == ASX_OK, "doctor run ok");
-    ASSERT(report.check_count == 8, "8 checks");
+    ASSERT(report.check_count == 9, "9 checks");
     ASSERT(asx_doctor_is_healthy(&report), "healthy");
     ASSERT(asx_doctor_overall(&report) == ASX_DOCTOR_OK, "overall ok");
 
     /* First check should be runtime=OK */
     ASSERT(strcmp(report.checks[0].name, "runtime") == 0, "first check is runtime");
     ASSERT(report.checks[0].severity == ASX_DOCTOR_OK, "runtime ok");
+
+    /* The last names the active net backend (bd-9kll.10.2). */
+    ASSERT(strcmp(report.checks[8].name, "net") == 0, "net check present");
+    ASSERT(report.checks[8].value == (uint32_t)asx_net_get_backend(), "net check reports backend");
+    ASSERT(strstr(report.checks[8].message,
+                  asx_net_get_backend() == ASX_NET_BACKEND_NATIVE ? "native" : "in-memory") != NULL,
+           "net check names the backend");
 
     asx_runtime_shutdown(&rt);
 }

@@ -10,6 +10,7 @@
 
 #include "../../test_harness.h"
 #include <asx/net/net.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -129,6 +130,34 @@ TEST(tcp_listener_exhaustion) {
     for (i = 0; i < ASX_MAX_TCP_LISTENERS; i++) { asx_tcp_listener_close(listeners[i]); }
 }
 
+/* The in-memory port namespace (bd-9kll.10.2): port 0 takes an ephemeral
+ * port a client can connect to, a listening address cannot be bound twice,
+ * and it is free again once that listener closes. */
+TEST(tcp_memory_port_namespace) {
+    asx_tcp_listener lis, dup;
+    asx_tcp_stream client, server;
+    asx_socket_addr any = asx_socket_addr_loopback(0);
+    asx_socket_addr bound;
+    asx_socket_addr fixed = asx_socket_addr_loopback(6100);
+
+    asx_net_reset();
+    if (asx_net_get_backend() != ASX_NET_BACKEND_MEMORY) return;
+    ASSERT_EQ(asx_tcp_listener_bind(&lis, &any), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_local_addr(lis, &bound), ASX_OK);
+    ASSERT_TRUE(bound.port >= 49152u);
+    ASSERT_EQ(asx_tcp_connect(&client, &bound), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &server, NULL), ASX_OK);
+    asx_tcp_stream_close(client);
+    asx_tcp_stream_close(server);
+    asx_tcp_listener_close(lis);
+
+    ASSERT_EQ(asx_tcp_listener_bind(&lis, &fixed), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_bind(&dup, &fixed), ASX_E_ALREADY_EXISTS);
+    asx_tcp_listener_close(lis);
+    ASSERT_EQ(asx_tcp_listener_bind(&dup, &fixed), ASX_OK);
+    asx_tcp_listener_close(dup);
+}
+
 /* ------------------------------------------------------------------ */
 /* TCP stream tests                                                    */
 /* ------------------------------------------------------------------ */
@@ -216,6 +245,77 @@ TEST(tcp_read_empty_returns_pending) {
     ASSERT_EQ(read_n, 0u);
 
     asx_tcp_stream_close(client);
+    asx_tcp_stream_close(server);
+    asx_tcp_listener_close(lis);
+}
+
+typedef struct {
+    asx_tcp_stream stream;
+    uint32_t polls;
+    uint32_t got;
+    int eof;
+} read_loop;
+
+static asx_status read_loop_poll(void *ud, asx_task_id self) {
+    read_loop *rl = (read_loop *)ud;
+    uint8_t buf[16];
+    uint32_t n = 0u;
+    asx_status st;
+    (void)self;
+    for (;;) {
+        rl->polls++;
+        st = asx_tcp_stream_read(rl->stream, buf, sizeof(buf), &n);
+        if (st != ASX_OK) return st;
+        if (n == 0u) {
+            rl->eof = 1;
+            return ASX_OK;
+        }
+        rl->got += n;
+    }
+}
+
+/* An empty in-memory stream parks its reader (bd-9kll.10.2): the peer's
+ * write wakes it with the data, the peer's close with EOF, and in between
+ * it is not polled. */
+TEST(tcp_memory_read_parks_until_data_or_eof) {
+    asx_tcp_listener lis;
+    asx_tcp_stream client, server;
+    asx_socket_addr addr = asx_socket_addr_loopback(7012);
+    read_loop rl;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget b;
+    uint32_t written;
+    uint32_t polls;
+
+    asx_runtime_reset();
+    asx_net_reset();
+    if (asx_net_get_backend() != ASX_NET_BACKEND_MEMORY) return;
+    ASSERT_EQ(asx_tcp_listener_bind(&lis, &addr), ASX_OK);
+    ASSERT_EQ(asx_tcp_connect(&client, &addr), ASX_OK);
+    ASSERT_EQ(asx_tcp_listener_poll_accept(lis, &server, NULL), ASX_OK);
+    memset(&rl, 0, sizeof(rl));
+    rl.stream = server;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, read_loop_poll, &rl, &t), ASX_OK);
+
+    b = asx_budget_from_polls(1000000);
+    ASSERT_EQ(asx_scheduler_run(r, &b), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(rl.polls, 1u);
+
+    ASSERT_EQ(asx_tcp_stream_write(client, (const uint8_t *)"hello", 5u, &written), ASX_OK);
+    b = asx_budget_from_polls(1000000);
+    ASSERT_EQ(asx_scheduler_run(r, &b), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(rl.got, 5u);
+    polls = rl.polls;
+    ASSERT_TRUE(polls < 10u);
+
+    ASSERT_EQ(asx_tcp_stream_close(client), ASX_OK);
+    b = asx_budget_from_polls(1000);
+    ASSERT_EQ(asx_scheduler_run(r, &b), ASX_OK);
+    ASSERT_TRUE(rl.eof);
+    ASSERT_TRUE(rl.polls < polls + 3u);
+
     asx_tcp_stream_close(server);
     asx_tcp_listener_close(lis);
 }
@@ -1131,11 +1231,13 @@ int main(void) {
     RUN_TEST(tcp_listener_close_makes_dead);
     RUN_TEST(tcp_listener_accept_empty_returns_pending);
     RUN_TEST(tcp_listener_exhaustion);
+    RUN_TEST(tcp_memory_port_namespace);
 
     /* TCP stream */
     RUN_TEST(tcp_connect_loopback_creates_linked_pair);
     RUN_TEST(tcp_bidirectional_io);
     RUN_TEST(tcp_read_empty_returns_pending);
+    RUN_TEST(tcp_memory_read_parks_until_data_or_eof);
     RUN_TEST(tcp_close_unlinks_peer);
     RUN_TEST(tcp_shutdown_write_delivers_eof_after_data);
     RUN_TEST(tcp_stale_handle_after_close_does_not_alias);

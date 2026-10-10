@@ -7,6 +7,7 @@
 #include "../../test_harness.h"
 #include <asx/net/server.h>
 #include <asx/runtime/browser_boundary.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
 
 #if ASX_HAS_SERVER_SURFACE
@@ -226,6 +227,63 @@ TEST(server_multiple_clients) {
     asx_server_stop(&srv);
 }
 
+typedef struct {
+    asx_server *srv;
+    uint32_t polls;
+    uint32_t accepted;
+} accept_loop;
+
+static asx_status accept_loop_poll(void *ud, asx_task_id self) {
+    accept_loop *a = (accept_loop *)ud;
+    asx_server_conn conn;
+    asx_status st;
+    (void)self;
+    a->polls++;
+    st = asx_server_poll_accept(a->srv, &conn);
+    if (st != ASX_OK) return st;
+    a->accepted++;
+    return ASX_OK;
+}
+
+/* The in-memory backend's accept parks the polling task until a client
+ * connects (bd-9kll.10.2): an accept loop with no client stops after its
+ * first poll instead of spinning through the run budget. */
+TEST(memory_accept_parks_until_a_client_connects) {
+    asx_server srv;
+    asx_server_config cfg;
+    accept_loop a;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget b;
+    asx_tcp_stream client;
+    asx_socket_addr addr;
+
+    asx_runtime_reset();
+    asx_net_reset();
+    asx_server_config_init(&cfg);
+    cfg.listen_port = 14100;
+    asx_server_init(&srv, &cfg);
+    if (!server_surface_available() || asx_net_get_backend() != ASX_NET_BACKEND_MEMORY) return;
+    ASSERT_EQ(asx_server_listen(&srv), ASX_OK);
+    memset(&a, 0, sizeof(a));
+    a.srv = &srv;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, accept_loop_poll, &a, &t), ASX_OK);
+
+    b = asx_budget_from_polls(1000000);
+    ASSERT_EQ(asx_scheduler_run(r, &b), ASX_E_WOULD_BLOCK);
+    ASSERT_TRUE(a.polls < 10u);
+    ASSERT_EQ(a.accepted, 0u);
+
+    /* A client connects: the parked task wakes and accepts. */
+    addr = asx_socket_addr_loopback(14100);
+    ASSERT_EQ(asx_tcp_connect(&client, &addr), ASX_OK);
+    b = asx_budget_from_polls(1000);
+    ASSERT_EQ(asx_scheduler_run(r, &b), ASX_OK);
+    ASSERT_EQ(a.accepted, 1u);
+    ASSERT_TRUE(a.polls < 10u);
+}
+
 TEST(server_stop_idempotent) {
     asx_server srv;
     asx_server_config cfg;
@@ -282,6 +340,7 @@ int main(void) {
     RUN_TEST(server_listen_twice_fails);
     RUN_TEST(server_null_args);
     RUN_TEST(server_multiple_clients);
+    RUN_TEST(memory_accept_parks_until_a_client_connects);
     RUN_TEST(server_stop_idempotent);
     RUN_TEST(server_shutdown_idle_goes_stopped);
 #else
