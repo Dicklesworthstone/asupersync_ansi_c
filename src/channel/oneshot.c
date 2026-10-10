@@ -19,10 +19,6 @@
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <string.h>
 
-/* Parked receiver tasks per oneshot (one receiver handle; slack for tasks
- * sharing it). */
-#define ONESHOT_MAX_WAITERS 4u
-
 /* ------------------------------------------------------------------ */
 /* Internal slot                                                       */
 /* ------------------------------------------------------------------ */
@@ -33,7 +29,6 @@ typedef struct {
     uint64_t value;
     int sender_alive;
     int receiver_alive;
-    asx_task_id wait_slots[ONESHOT_MAX_WAITERS];
     asx_wait_queue waiters; /* tasks parked in asx_oneshot_recv */
 } asx_oneshot_slot;
 
@@ -64,7 +59,7 @@ void asx_oneshot_reset(void) {
         g_slots[i].value = 0;
         g_slots[i].sender_alive = 0;
         g_slots[i].receiver_alive = 0;
-        asx_wait_queue_init(&g_slots[i].waiters, g_slots[i].wait_slots, ONESHOT_MAX_WAITERS);
+        asx_wait_queue_init(&g_slots[i].waiters);
     }
     g_slot_count = 0;
 }
@@ -106,7 +101,7 @@ asx_status asx_oneshot_create(asx_oneshot_sender *out_sender, asx_oneshot_receiv
     s->value = 0;
     s->sender_alive = 1;
     s->receiver_alive = 1;
-    asx_wait_queue_init(&s->waiters, s->wait_slots, ONESHOT_MAX_WAITERS);
+    asx_wait_queue_init(&s->waiters);
 
     out_sender->slot = idx;
     out_sender->generation = s->generation;

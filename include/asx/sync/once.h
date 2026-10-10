@@ -29,12 +29,6 @@ extern "C" {
 #define ASX_ONCE_MAX 16u
 #endif
 
-/* Tasks that can park behind one in-flight asynchronous initializer;
- * further callers yield and are re-polled every round. */
-#ifndef ASX_ONCE_MAX_WAITERS
-#define ASX_ONCE_MAX_WAITERS 8u
-#endif
-
 /* -------------------------------------------------------------------
  * Handles
  * ------------------------------------------------------------------- */

@@ -574,6 +574,160 @@ TEST(mutex_handoff_is_deterministic) {
     ASSERT_EQ(end1, asx_runtime_virtual_now());
 }
 
+/* ------------------------------------------------------------------ */
+/* Waiter floods (bd-9kll.5.1)                                         */
+/* ------------------------------------------------------------------ */
+
+/* Every task slot but one: more waiters than any per-primitive cap the
+ * runtime used to have (16 for a mutex, 32 for a barrier), as Rust's
+ * waiter queues are unbounded. */
+#define FLOOD_TASKS ((uint32_t)(ASX_MAX_TASKS) - 1u)
+
+typedef struct {
+    uint32_t id;
+    asx_mutex_handle mutex;
+    asx_mutex_lock_waiter waiter;
+    asx_mutex_guard guard;
+    int begun;
+    int locked;
+    uint32_t polls;
+} flood_task;
+
+static flood_task g_flood[ASX_MAX_TASKS];
+static uint32_t g_flood_arrival[ASX_MAX_TASKS]; /* ids in lock_begin order */
+static uint32_t g_flood_arrived;
+static uint32_t g_flood_order[ASX_MAX_TASKS]; /* ids in locking order */
+static uint32_t g_flood_len;
+
+/* Lock (giving up if cancelled while waiting), hold the lock across one
+ * yield, unlock. */
+static asx_status poll_flood_task(void *ud, asx_task_id self) {
+    flood_task *s = (flood_task *)ud;
+    asx_status st;
+    s->polls++;
+    if (!s->begun) {
+        st = asx_mutex_lock_begin(s->mutex, &s->waiter);
+        if (st != ASX_OK) return st;
+        s->begun = 1;
+        g_flood_arrival[g_flood_arrived++] = s->id;
+    }
+    if (!s->locked) {
+        if (cancel_requested(self)) return asx_mutex_lock_cancel(&s->waiter);
+        st = asx_mutex_poll_lock(&s->waiter, &s->guard, NULL);
+        if (st != ASX_OK) return st;
+        s->locked = 1;
+        g_flood_order[g_flood_len++] = s->id;
+        return ASX_E_PENDING; /* yield while holding the lock */
+    }
+    return asx_mutex_unlock(s->guard);
+}
+
+TEST(mutex_flood_serves_every_waiter_in_arrival_order) {
+    asx_mutex_handle m;
+    asx_mutex_guard held;
+    asx_task_id ids[ASX_MAX_TASKS];
+    asx_budget budget;
+    uint32_t round;
+    uint32_t i;
+
+    ASSERT_TRUE(setup());
+    /* Six rounds reuse the joined task slots and must reuse the wait
+     * nodes: they hold more waiters in total than the node pool. */
+    for (round = 0; round < 6u; round++) {
+        /* Round 0 cancels a waiter in the middle of the line. */
+        uint32_t skipped = round == 0u ? FLOOD_TASKS / 2u : FLOOD_TASKS;
+        uint32_t k = 0;
+        memset(g_flood, 0, sizeof(g_flood));
+        g_flood_arrived = 0;
+        g_flood_len = 0;
+        ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+        ASSERT_EQ(asx_mutex_try_lock(m, &held), ASX_OK);
+        for (i = 0; i < FLOOD_TASKS; i++) {
+            g_flood[i].id = i;
+            g_flood[i].mutex = m;
+            ASSERT_EQ(asx_task_spawn(g_region, poll_flood_task, &g_flood[i], &ids[i]), ASX_OK);
+        }
+        budget = asx_budget_from_polls(10u * FLOOD_TASKS);
+        ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK); /* all parked */
+        ASSERT_EQ(g_flood_arrived, FLOOD_TASKS);
+        if (skipped < FLOOD_TASKS) {
+            ASSERT_EQ(asx_task_cancel(ids[skipped], ASX_CANCEL_USER), ASX_OK);
+        }
+        ASSERT_EQ(asx_mutex_unlock(held), ASX_OK);
+        budget = asx_budget_from_polls(10u * FLOOD_TASKS);
+        ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+
+        /* The lock goes round in arrival order, the cancelled waiter
+         * skipped; each waiter is polled to park, to take the lock, and
+         * to unlock. */
+        for (i = 0; i < FLOOD_TASKS; i++) {
+            uint32_t id = g_flood_arrival[i];
+            if (id == skipped) {
+                ASSERT_TRUE(task_cancelled(ids[id]));
+                continue;
+            }
+            ASSERT_EQ(g_flood_order[k], id);
+            ASSERT_EQ(g_flood[id].polls, 3u);
+            k++;
+        }
+        ASSERT_EQ(g_flood_len, k);
+        for (i = 0; i < FLOOD_TASKS; i++) ASSERT_EQ(asx_task_join(ids[i], NULL), ASX_OK);
+        ASSERT_EQ(asx_mutex_close(m), ASX_OK);
+    }
+}
+
+typedef struct {
+    asx_barrier_handle barrier;
+    asx_barrier_waiter waiter;
+    int begun;
+    int leader;
+    uint32_t polls;
+} flood_barrier_task;
+
+static flood_barrier_task g_flood_barrier[ASX_MAX_TASKS];
+
+static asx_status poll_flood_barrier_task(void *ud, asx_task_id self) {
+    flood_barrier_task *s = (flood_barrier_task *)ud;
+    asx_status st;
+    (void)self;
+    s->polls++;
+    if (!s->begun) {
+        st = asx_barrier_wait_begin(s->barrier, &s->waiter);
+        if (st != ASX_OK) return st;
+        s->begun = 1;
+    }
+    st = asx_barrier_poll_wait(&s->waiter, NULL);
+    if (st != ASX_OK) return st;
+    s->leader = s->waiter.is_leader;
+    return ASX_OK;
+}
+
+TEST(barrier_with_every_task_as_a_party_trips) {
+    asx_barrier_handle b;
+    asx_task_id t;
+    asx_budget budget;
+    uint32_t i;
+
+    ASSERT_TRUE(setup());
+    memset(g_flood_barrier, 0, sizeof(g_flood_barrier));
+    ASSERT_EQ(asx_barrier_create(FLOOD_TASKS, &b), ASX_OK);
+    for (i = 0; i < FLOOD_TASKS; i++) {
+        g_flood_barrier[i].barrier = b;
+        ASSERT_EQ(asx_task_spawn(g_region, poll_flood_barrier_task, &g_flood_barrier[i], &t),
+                  ASX_OK);
+    }
+    budget = asx_budget_from_polls(10u * FLOOD_TASKS);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+    /* Every arrival but the last parks once; the last trips the barrier
+     * and leads. */
+    for (i = 0; i + 1u < FLOOD_TASKS; i++) {
+        ASSERT_EQ(g_flood_barrier[i].polls, 2u);
+        ASSERT_EQ(g_flood_barrier[i].leader, 0);
+    }
+    ASSERT_EQ(g_flood_barrier[FLOOD_TASKS - 1u].polls, 1u);
+    ASSERT_EQ(g_flood_barrier[FLOOD_TASKS - 1u].leader, 1);
+}
+
 typedef struct {
     asx_contended_mutex_handle mutex;
     asx_mutex_lock_waiter waiter;
@@ -1201,6 +1355,8 @@ int main(void) {
     RUN_TEST(untracked_permits_hold_no_obligation);
     RUN_TEST(mutex_handoff_between_three_tasks);
     RUN_TEST(mutex_handoff_is_deterministic);
+    RUN_TEST(mutex_flood_serves_every_waiter_in_arrival_order);
+    RUN_TEST(barrier_with_every_task_as_a_party_trips);
     RUN_TEST(contended_mutex_counts_one_contention_per_park);
     RUN_TEST(close_wakes_all_sync_waiters);
     RUN_TEST(notify_one_wakes_oldest_and_passes_on_when_abandoned);

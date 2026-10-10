@@ -61,10 +61,6 @@ static int queue_pop(asx_session_queue *q, uint64_t *out) {
 /* Internal slot                                                       */
 /* ------------------------------------------------------------------ */
 
-/* Parked tasks per wait queue (one endpoint per side; slack for tasks
- * sharing an endpoint). */
-#define SESSION_MAX_WAITERS 4u
-
 /* Wait queue indices: per direction, receivers then senders. */
 #define SESSION_WQ_I2R_RECV 0u
 #define SESSION_WQ_I2R_SEND 1u
@@ -81,7 +77,6 @@ typedef struct {
     asx_session_queue i2r; /* initiator → responder */
     asx_session_queue r2i; /* responder → initiator */
     uint32_t obligations;  /* outstanding request count */
-    asx_task_id wait_slots[SESSION_WQ_COUNT][SESSION_MAX_WAITERS];
     asx_wait_queue waiters[SESSION_WQ_COUNT];
 } asx_session_slot;
 
@@ -89,7 +84,7 @@ static void session_waiters_init(asx_session_slot *s) {
     uint32_t i;
     for (i = 0; i < SESSION_WQ_COUNT; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: SESSION_WQ_COUNT constant");
-        asx_wait_queue_init(&s->waiters[i], s->wait_slots[i], SESSION_MAX_WAITERS);
+        asx_wait_queue_init(&s->waiters[i]);
     }
 }
 

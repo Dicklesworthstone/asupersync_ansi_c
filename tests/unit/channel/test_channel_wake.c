@@ -483,37 +483,41 @@ TEST(wait_cancel_rejects_bad_channel) {
     ASSERT_EQ(asx_channel_wait_cancel(ASX_INVALID_ID, ASX_INVALID_ID), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(waiter_overflow_degrades_to_polling) {
-    enum { PRODUCERS = ASX_CHANNEL_MAX_WAITERS + 2 };
+/* More producers than the 32 reserve waiters a channel used to hold: every
+ * one parks (no busy polling) and they send in arrival order, as with
+ * Rust's unbounded waiter queue (bd-9kll.5.1). */
+enum { MANY_PRODUCERS = 38 };
+
+TEST(many_producers_park_and_send_in_arrival_order) {
     asx_channel_id ch;
     asx_task_id t;
     asx_budget budget;
     uint32_t i;
-    uint32_t seen = 0;
 
     ASSERT_TRUE(setup());
     reset_fixtures();
     ASSERT_EQ(asx_channel_create(g_region, 1, &ch), ASX_OK);
-    for (i = 0; i < (uint32_t)PRODUCERS; i++) {
+    for (i = 0; i < (uint32_t)MANY_PRODUCERS; i++) {
         g_tx[i].ch = ch;
         g_tx[i].to_send = 1;
         g_tx[i].base = i;
         ASSERT_EQ(asx_task_spawn(g_region, poll_sender, &g_tx[i], &t), ASX_OK);
     }
     g_rx[0].ch = ch;
-    g_rx[0].want = (uint32_t)PRODUCERS;
+    g_rx[0].want = (uint32_t)MANY_PRODUCERS;
     ASSERT_EQ(asx_task_spawn(g_region, poll_receiver, &g_rx[0], &t), ASX_OK);
 
-    /* More producers than queue slots: the overflow yields instead of
-     * parking, and every message still gets through. */
     budget = asx_budget_from_polls(100000);
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
-    ASSERT_EQ(g_rx[0].got, (uint32_t)PRODUCERS);
-    for (i = 0; i < (uint32_t)PRODUCERS; i++) {
+    ASSERT_EQ(g_rx[0].got, (uint32_t)MANY_PRODUCERS);
+    /* The first producer takes the free slot; each later one parks once
+     * and sends when the head of the line is woken. */
+    ASSERT_EQ(g_tx[0].polls, 1u);
+    for (i = 0; i < (uint32_t)MANY_PRODUCERS; i++) {
         ASSERT_EQ(g_tx[i].sent, 1u);
-        seen += (uint32_t)g_rx[0].values[i];
+        ASSERT_EQ(g_rx[0].values[i], (uint64_t)i);
+        if (i > 0u) ASSERT_EQ(g_tx[i].polls, 2u);
     }
-    ASSERT_EQ(seen, (uint32_t)(PRODUCERS * (PRODUCERS - 1) / 2));
 }
 
 TEST(try_ops_outside_scheduler_never_park) {
@@ -1131,10 +1135,10 @@ int main(void) {
     RUN_TEST(woken_waiter_that_gives_up_passes_wake_on);
     RUN_TEST(cancelled_waiter_does_not_absorb_wake);
     RUN_TEST(wait_cancel_rejects_bad_channel);
-    /* More producers than waiter slots, plus the receiver: a classed build
-     * (R1: 16 tasks) may hold fewer tasks than that. */
-    RUN_TEST_IF(ASX_CHANNEL_MAX_WAITERS + 3 <= ASX_MAX_TASKS, waiter_overflow_degrades_to_polling,
-                "the task arena holds no more tasks than the waiter slots");
+    /* The producers plus the receiver: a classed build (R1: 16 tasks) may
+     * hold fewer tasks than that. */
+    RUN_TEST_IF(MANY_PRODUCERS + 1 <= ASX_MAX_TASKS, many_producers_park_and_send_in_arrival_order,
+                "the task arena holds fewer tasks than the producers");
     RUN_TEST(try_ops_outside_scheduler_never_park);
     RUN_TEST(try_ops_inside_a_poll_never_park);
     RUN_TEST(oneshot_receiver_parks_until_send_or_drop);

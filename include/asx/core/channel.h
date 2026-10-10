@@ -15,9 +15,9 @@
  *
  * Wake-driven waiting: when asx_channel_recv() finds the channel empty, or
  * asx_channel_reserve() / asx_channel_send() find it full, from inside a
- * scheduler poll, the calling task is queued (FIFO, at most
- * ASX_CHANNEL_MAX_WAITERS per direction) and parked (asx_task_park), and
- * the call returns ASX_E_PENDING. The try_* functions never queue or park,
+ * scheduler poll, the calling task is queued (FIFO, as many waiters as
+ * there are tasks, as Rust's waiter queues are unbounded) and parked
+ * (asx_task_park), and the call returns ASX_E_PENDING. The try_* functions never queue or park,
  * as Rust's try_send / try_reserve / try_recv register no waker. A commit
  * wakes one parked receiver, a dequeue or abort wakes the oldest parked
  * producer (no one may jump that line), and closing either side wakes
@@ -60,9 +60,6 @@ extern "C" {
 #if (ASX_MAX_CHANNELS) < 1 || (ASX_CHANNEL_MAX_CAPACITY) < 1
 #error "ASX_MAX_CHANNELS and ASX_CHANNEL_MAX_CAPACITY must be at least 1"
 #endif
-/* Parked tasks per wait direction (recv / reserve) per channel. Further
- * waiters are not parked: they yield and are re-polled every round. */
-#define ASX_CHANNEL_MAX_WAITERS 32u
 
 /* ------------------------------------------------------------------ */
 /* Channel lifecycle states                                           */

@@ -30,10 +30,6 @@ extern "C" {
 #define ASX_RWLOCK_MAX 16u
 #endif
 
-#ifndef ASX_RWLOCK_MAX_WAITERS
-#define ASX_RWLOCK_MAX_WAITERS 16u
-#endif
-
 /* -------------------------------------------------------------------
  * Handles
  * ------------------------------------------------------------------- */
@@ -53,11 +49,16 @@ typedef struct {
     uint16_t generation;
 } asx_rwlock_write_guard;
 
+/* A waiter names a record in the runtime's shared wait-node pool, so an
+ * rwlock has no waiter limit of its own; *_begin reports
+ * ASX_E_RESOURCE_EXHAUSTED only when the whole pool
+ * (ASX_WAIT_NODE_CAPACITY) is in use. */
 typedef struct {
     uint32_t rw_slot;
-    uint32_t waiter_slot;
-    uint16_t generation;
-    int is_write; /* 1 = write waiter, 0 = read waiter */
+    uint32_t waiter_slot;       /* wait-node index */
+    uint16_t generation;        /* the rwlock's */
+    uint16_t waiter_generation; /* the wait node's */
+    int is_write;               /* 1 = write waiter, 0 = read waiter */
 } asx_rwlock_waiter;
 
 /* -------------------------------------------------------------------

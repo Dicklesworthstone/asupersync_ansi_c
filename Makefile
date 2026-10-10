@@ -1653,8 +1653,7 @@ test-gates:
 # ---------------------------------------------------------------------------
 # test-capacity-x4 — the unit suite with every capacity macro raised 4x
 # (bd-9kll.10.4). Proves the overrides take effect and that no test or module
-# hardcodes a default capacity. ASX_WAIT_QUEUE_MAX_CAPACITY stays at its
-# 64-bit-mask maximum. Separate BUILD_DIR, so build/ is untouched.
+# hardcodes a default capacity. Separate BUILD_DIR, so build/ is untouched.
 # ---------------------------------------------------------------------------
 CAPACITY_X4_CFLAGS := \
 	-DASX_ACTOR_MAILBOX_CAPACITY=64u -DASX_AFFINITY_TABLE_CAPACITY=1024u \
@@ -1682,7 +1681,7 @@ CAPACITY_X4_CFLAGS := \
 	-DASX_RESOLVER_HOST_CAPACITY=1024u -DASX_SCHED_EVENT_LOG_CAPACITY=1024u \
 	-DASX_SERVICE_BUFFER_CAPACITY=32u -DASX_SESSION_MAX_CAPACITY=64u \
 	-DASX_SYMBOL_REGISTRY_CAPACITY=1024u -DASX_TRACE_CAPACITY=4096u \
-	-DASX_WS_TX_CAPACITY=67584u
+	-DASX_WAIT_NODE_CAPACITY=1024u -DASX_WS_TX_CAPACITY=67584u
 
 test-capacity-x4:
 	@echo "[asx] test-capacity-x4: unit suite with every capacity macro raised 4x..."
@@ -1690,15 +1689,11 @@ test-capacity-x4:
 		CFLAGS='$(CAPACITY_X4_CFLAGS)'
 	@echo "[asx] test-capacity-x4: PASS"
 
-# Overridable capacities test-capacity-x4 leaves at their maximum.
-CAPACITY_FIXED := ASX_WAIT_QUEUE_MAX_CAPACITY
-
-# The capacity macros: CAPACITY_X4_CFLAGS's names plus CAPACITY_FIXED. The
-# README's capacity table (make capacity-table) lists exactly these, and
+# The capacity macros: CAPACITY_X4_CFLAGS's names. The README's capacity
+# table (make capacity-table) lists exactly these, and
 # tools/ci/capacity_table.sh fails if a guarded capacity macro is missing.
 print-capacity-macros:
-	@echo $(foreach f,$(CAPACITY_X4_CFLAGS),$(firstword $(subst =, ,$(patsubst -D%,%,$(f))))) \
-		$(CAPACITY_FIXED)
+	@echo $(foreach f,$(CAPACITY_X4_CFLAGS),$(firstword $(subst =, ,$(patsubst -D%,%,$(f)))))
 
 capacity-table:
 	@tools/ci/capacity_table.sh --out-dir $(BUILD_DIR)/capacity-table -- $(CC) $(ALL_CFLAGS)

@@ -42,10 +42,6 @@
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <string.h>
 
-#if (ASX_CHANNEL_MAX_WAITERS) < 1 || (ASX_CHANNEL_MAX_WAITERS) > (ASX_WAIT_QUEUE_MAX_CAPACITY)
-#error "ASX_CHANNEL_MAX_WAITERS must be in [1, ASX_WAIT_QUEUE_MAX_CAPACITY]"
-#endif
-
 #ifndef ASX_CHANNEL_BACKEND_LOCKFREE
 #if (defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_PARALLEL)) && !ASX_LOCKFREE_SINGLE_THREAD
 #define ASX_CHANNEL_BACKEND_LOCKFREE 1
@@ -95,8 +91,6 @@ typedef struct {
 #endif
 
     /* Parked tasks (scheduler-thread state; FIFO by arrival) */
-    asx_task_id recv_wait_slots[ASX_CHANNEL_MAX_WAITERS];
-    asx_task_id reserve_wait_slots[ASX_CHANNEL_MAX_WAITERS];
     asx_wait_queue recv_waiters;    /* waiting for a committed message */
     asx_wait_queue reserve_waiters; /* waiting for free capacity */
 } asx_channel_slot;
@@ -328,9 +322,10 @@ static asx_status channel_lf_dequeue(asx_channel_slot *s, uint64_t *out_value) {
 /* Wait queues                                                        */
 /* ------------------------------------------------------------------ */
 
+/* Empty both queues, returning their nodes to the pool. */
 static void channel_waiters_init(asx_channel_slot *s) {
-    asx_wait_queue_init(&s->recv_waiters, s->recv_wait_slots, ASX_CHANNEL_MAX_WAITERS);
-    asx_wait_queue_init(&s->reserve_waiters, s->reserve_wait_slots, ASX_CHANNEL_MAX_WAITERS);
+    asx_wait_queue_init(&s->recv_waiters);
+    asx_wait_queue_init(&s->reserve_waiters);
 }
 
 /* Committed messages ready for try_recv. */
@@ -438,6 +433,8 @@ asx_status asx_channel_close_sender(asx_channel_id id) {
     case ASX_CHANNEL_RECEIVER_CLOSED:
         s->state = ASX_CHANNEL_FULLY_CLOSED;
         channel_wake_everyone(s);
+        /* Nobody waits on a fully closed channel again. */
+        channel_waiters_init(s);
         return ASX_OK;
     case ASX_CHANNEL_SENDER_CLOSED:
     case ASX_CHANNEL_FULLY_CLOSED: return ASX_E_INVALID_STATE;
@@ -471,6 +468,8 @@ asx_status asx_channel_close_receiver(asx_channel_id id) {
         s->queue_head = 0;
 #endif
         channel_wake_everyone(s);
+        /* Nobody waits on a fully closed channel again. */
+        channel_waiters_init(s);
         return ASX_OK;
     case ASX_CHANNEL_RECEIVER_CLOSED:
     case ASX_CHANNEL_FULLY_CLOSED: return ASX_E_INVALID_STATE;

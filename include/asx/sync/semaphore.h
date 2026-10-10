@@ -29,10 +29,6 @@ extern "C" {
 #define ASX_SEMAPHORE_MAX 16u
 #endif
 
-#ifndef ASX_SEMAPHORE_MAX_WAITERS
-#define ASX_SEMAPHORE_MAX_WAITERS 16u
-#endif
-
 /* -------------------------------------------------------------------
  * Handles
  * ------------------------------------------------------------------- */
@@ -55,10 +51,16 @@ typedef struct {
     asx_obligation_id obligation;
 } asx_semaphore_permit;
 
+/* A waiter names a record in the runtime's shared wait-node pool, so a
+ * semaphore has no waiter limit of its own (Rust's waiter queue is
+ * unbounded); *_begin reports ASX_E_RESOURCE_EXHAUSTED only when the whole
+ * pool (ASX_WAIT_NODE_CAPACITY, four nodes per task slot by default) is
+ * in use. */
 typedef struct {
     uint32_t sem_slot;
-    uint32_t waiter_slot;
-    uint16_t generation;
+    uint32_t waiter_slot;       /* wait-node index */
+    uint16_t generation;        /* the semaphore's */
+    uint16_t waiter_generation; /* the wait node's */
 } asx_semaphore_waiter;
 
 /* -------------------------------------------------------------------

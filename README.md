@@ -565,8 +565,7 @@ not listed or bound-checked here yet. The defaults below are a CORE build's,
 without a resource class. `ASX_MAX_WORKERS` depends on the profile (1 for
 FREESTANDING and BROWSER, 4 for EMBEDDED_ROUTER, 16 for HFT and AUTOMOTIVE,
 else 64).
-`make test-capacity-x4` runs the unit suite with each of these raised 4x
-(`ASX_WAIT_QUEUE_MAX_CAPACITY` is already its 64-waiter maximum). The table
+`make test-capacity-x4` runs the unit suite with each of these raised 4x. The table
 is generated: `make capacity-table` prints it, and `make lint-docs` fails if
 it drifts from the headers or a new capacity macro is missing.
 
@@ -635,7 +634,7 @@ it drifts from the headers or a new capacity macro is missing.
 | `ASX_SESSION_MAX_CAPACITY` | 16 | `include/asx/core/session.h` |
 | `ASX_SYMBOL_REGISTRY_CAPACITY` | 256 | `include/asx/core/symbol.h` |
 | `ASX_TRACE_CAPACITY` | 1024 | `include/asx/runtime/trace.h` |
-| `ASX_WAIT_QUEUE_MAX_CAPACITY` | 64 | `src/sync/wait_queue.h` |
+| `ASX_WAIT_NODE_CAPACITY` | 256 | `src/sync/wait_queue.h` |
 | `ASX_WS_TX_CAPACITY` | 16896 | `include/asx/net/websocket.h` |
 <!-- capacity-table:end -->
 
@@ -1496,15 +1495,17 @@ Wakers are also the **cross-thread** path. Blocking-pool workers (`asx_spawn_blo
 
 All sync primitives are cooperative (no OS-level blocking), async-friendly (begin/poll/cancel; Once uses `get_or_init` called again while pending, plus `wait_cancel`), and cancel-safe (cancellation removes the waiter without corrupting shared state). They are meant for tasks on the scheduler thread, not for cross-thread use.
 
+Waiters of every primitive and channel are nodes in one runtime-wide pool (`ASX_WAIT_NODE_CAPACITY`, four per task slot by default), so no primitive has a waiter limit of its own; as in Rust, whose waiter queues are unbounded, every task of the runtime can wait on one mutex and is served in arrival order. Only an exhausted pool is reported (`ASX_E_RESOURCE_EXHAUSTED` from a `*_begin`; a channel waiter yields and is re-polled instead), after the nodes of dead tasks have been reclaimed.
+
 **Mutex**: Cooperative mutual exclusion implemented as a semaphore with count 1. `try_lock()` returns immediately; `lock_begin()`/`poll_lock()` yield until available. No priority inheritance: a waiting task does not raise the lock holder's priority.
 
-**Semaphore**: Counting permit system with configurable initial count, following Rust's `Semaphore`. Waiters queue in arrival order (a waiter joins the line at its first poll that has to wait; 16 waiter slots), and only the front of the line takes permits: a release wakes the front waiter if it can now run, and that waiter, taking its permit, wakes the next. `try_acquire()` is non-blocking and fails while anyone is queued. Integrates with the obligation system for permit tracking. (The mutex instead hands the lock straight to the front waiter on unlock, as Rust's `Mutex` does.)
+**Semaphore**: Counting permit system with configurable initial count, following Rust's `Semaphore`. Waiters queue in arrival order (a waiter joins the line at its first poll that has to wait), and only the front of the line takes permits: a release wakes the front waiter if it can now run, and that waiter, taking its permit, wakes the next. `try_acquire()` is non-blocking and fails while anyone is queued. Integrates with the obligation system for permit tracking. (The mutex instead hands the lock straight to the front waiter on unlock, as Rust's `Mutex` does.)
 
 **Barrier**: N-way rendezvous with leader election. All N tasks must arrive before any proceed. The last task to arrive is elected leader (`is_leader = 1`). Cancel-safe: cancelling a waiter decrements the arrival count without tripping the barrier. Integrated with Cx checkpoint for structured concurrency cancellation.
 
 **Once**: Compute-once cell storing a 64-bit value. `get_or_init(init_fn)` caches the first successful result and later calls return it; a failed or cancelled initialization leaves the cell empty and the next caller retries. Deterministic initialization order (first caller wins).
 
-**Notify**: Async event signaling supporting `notify_one()` (FIFO single-waiter wake) and `notify_all()` (broadcast). Up to 16 concurrent waiters. Close wakes all waiters with `ASX_E_DISCONNECTED`.
+**Notify**: Async event signaling supporting `notify_one()` (FIFO single-waiter wake) and `notify_all()` (broadcast). Close wakes all waiters with `ASX_E_DISCONNECTED`.
 
 ## Evidence Collection and Verdict Derivation
 

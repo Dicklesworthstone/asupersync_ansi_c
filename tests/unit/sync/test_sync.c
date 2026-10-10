@@ -216,7 +216,7 @@ TEST(notify_waiter_slot_bounds_checked) {
     MUST_OK(asx_notify_create(&h));
     MUST_OK(asx_notify_wait_begin(h, &w));
 
-    w.waiter_slot = ASX_NOTIFY_MAX_WAITERS;
+    w.waiter_slot = UINT32_MAX; /* beyond the wait-node pool */
     ASSERT_EQ(asx_notify_poll_wait(&w, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_notify_wait_cancel(&w), ASX_E_INVALID_ARGUMENT);
 

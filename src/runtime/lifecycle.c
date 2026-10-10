@@ -10,6 +10,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../sync/wait_queue.h"
 #include "runtime_internal.h"
 #include <asx/actor/actor.h>
 #include <asx/actor/supervisor.h>
@@ -41,6 +42,7 @@
 #include <asx/sync/barrier.h>
 #include <asx/sync/notify.h>
 #include <asx/sync/once.h>
+#include <asx/sync/rwlock.h>
 #include <asx/sync/semaphore.h>
 #include <asx/time/timer_wheel.h>
 #include <string.h>
@@ -153,6 +155,8 @@ void asx_runtime_reset(void) {
     asx_scheduler_event_reset();
     asx_scheduler_reset_internal();
     asx_lab_dispatch_reset_internal();
+    /* Before the primitives: every wait queue is empty afterwards. */
+    asx_wait_pool_reset();
     asx_parallel_reset();
     asx_channel_reset();
     asx_oneshot_reset();
@@ -177,6 +181,7 @@ void asx_runtime_reset(void) {
     asx_error_ledger_reset();
     asx_notify_reset();
     asx_semaphore_reset();
+    asx_rwlock_reset();
     asx_barrier_reset();
     asx_once_reset();
     asx_actor_reset();

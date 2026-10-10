@@ -32,7 +32,6 @@ typedef struct {
     uint64_t buffer[ASX_BROADCAST_MAX_CAPACITY];
     uint32_t write_seq; /* next write position (monotonic) */
     uint32_t receiver_count;
-    asx_task_id wait_slots[ASX_BROADCAST_MAX_RECEIVERS];
     asx_wait_queue waiters; /* tasks parked in asx_broadcast_recv */
 } asx_broadcast_slot;
 
@@ -49,9 +48,7 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
-static void broadcast_waiters_init(asx_broadcast_slot *s) {
-    asx_wait_queue_init(&s->waiters, s->wait_slots, ASX_BROADCAST_MAX_RECEIVERS);
-}
+static void broadcast_waiters_init(asx_broadcast_slot *s) { asx_wait_queue_init(&s->waiters); }
 
 /* New message or sender gone: every parked receiver task re-polls. */
 static void broadcast_wake_waiters(asx_broadcast_slot *s) {

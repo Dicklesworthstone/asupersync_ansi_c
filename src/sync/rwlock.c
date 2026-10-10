@@ -4,7 +4,8 @@
  * Multiple concurrent readers or a single exclusive writer.
  * When a writer is waiting, new readers are blocked (writer-preference).
  *
- * Waiters are slot records stamped with an arrival sequence number.
+ * Waiters are records in the shared wait-node pool (wait_queue.h), linked
+ * in arrival order, so an rwlock has no waiter limit of its own.
  * Unlocking grants the lock directly: to the oldest waiting writer if any
  * writer waits, otherwise to every waiting reader. A writer acquires at
  * poll time only when it is the oldest waiting writer, so writers are
@@ -26,21 +27,16 @@
 
 #include "wait_queue.h"
 #include <asx/sync/rwlock.h>
+#include <stddef.h>
 #include <string.h>
 
-#define RW_NO_WAITER ASX_RWLOCK_MAX_WAITERS
+/* Waiter record flags. */
+#define RW_ACQUIRED 0x1u /* the lock was granted to this waiter */
+#define RW_WRITE 0x2u    /* write waiter (else read waiter) */
 
 /* ------------------------------------------------------------------ */
 /* Arena                                                               */
 /* ------------------------------------------------------------------ */
-
-typedef struct {
-    int active;
-    int acquired;     /* lock was granted to this waiter */
-    int is_write;     /* 1 = write waiter, 0 = read waiter */
-    uint32_t seq;     /* arrival order */
-    asx_task_id task; /* task parked on this waiter, ASX_INVALID_ID if none */
-} rw_waiter_slot;
 
 typedef struct {
     uint16_t generation;
@@ -48,9 +44,7 @@ typedef struct {
     uint32_t readers;         /* active reader count */
     int write_locked;         /* 1 if a writer holds the lock */
     uint32_t writers_waiting; /* count of waiting writers (for preference) */
-    rw_waiter_slot waiters[ASX_RWLOCK_MAX_WAITERS];
-    uint32_t waiter_count;
-    uint32_t next_seq; /* arrival stamp for the next waiter */
+    asx_wait_queue waiters;   /* waiter records, arrival order */
 } rw_slot;
 
 static rw_slot g_slots[ASX_RWLOCK_MAX];
@@ -74,18 +68,18 @@ static rw_slot *slot_lookup(uint32_t idx, uint16_t gen) {
 /* Waiter line                                                         */
 /* ------------------------------------------------------------------ */
 
-/* Wrap-safe "a arrived before b". */
-static int seq_before(uint32_t a, uint32_t b) { return (int32_t)(a - b) < 0; }
+static asx_wait_node *rw_node(uint32_t i) { return asx_wait_node_at(i); }
 
 /* A waiter whose parked task has a cancel request pending: it is skipped
  * when granting (it would not consume the lock). */
-static int rw_waiter_doomed(const rw_waiter_slot *w) {
+static int rw_waiter_doomed(const asx_wait_node *w) {
     return asx_handle_is_valid(w->task) && asx_wait_task_liveness(w->task) == ASX_WAIT_TASK_DOOMED;
 }
 
-static void rw_grant(rw_slot *s, rw_waiter_slot *w) {
-    w->acquired = 1;
-    if (w->is_write) {
+static void rw_grant(rw_slot *s, uint32_t i) {
+    asx_wait_node *w = rw_node(i);
+    w->flags |= RW_ACQUIRED;
+    if ((w->flags & RW_WRITE) != 0u) {
         s->write_locked = 1;
     } else {
         s->readers++;
@@ -93,36 +87,43 @@ static void rw_grant(rw_slot *s, rw_waiter_slot *w) {
     asx_wait_wake_task(w->task);
 }
 
-/* Oldest active, un-granted, not cancel-pending writer other than
- * `except` (RW_NO_WAITER for none), or RW_NO_WAITER. */
+/* Oldest un-granted, not cancel-pending writer other than `except`
+ * (ASX_WAIT_NIL for none), or ASX_WAIT_NIL. */
 static uint32_t rw_first_writer(const rw_slot *s, uint32_t except) {
     uint32_t i;
-    uint32_t best = RW_NO_WAITER;
-    for (i = 0; i < ASX_RWLOCK_MAX_WAITERS; i++) {
-        const rw_waiter_slot *w = &s->waiters[i];
-        if (i == except || !w->active || w->acquired || !w->is_write) continue;
-        if (best != RW_NO_WAITER && !seq_before(w->seq, s->waiters[best].seq)) continue;
+    for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL; i = asx_wait_queue_next(i)) {
+        const asx_wait_node *w = rw_node(i);
+        ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
+        if (i == except || (w->flags & (RW_ACQUIRED | RW_WRITE)) != RW_WRITE) continue;
         if (rw_waiter_doomed(w)) continue;
-        best = i;
+        return i;
     }
-    return best;
+    return ASX_WAIT_NIL;
 }
 
 /* 1 if no writer that arrived before waiter `idx` still waits. */
 static int rw_writer_next_in_line(const rw_slot *s, uint32_t idx) {
-    uint32_t first = rw_first_writer(s, idx);
-    return first == RW_NO_WAITER || !seq_before(s->waiters[first].seq, s->waiters[idx].seq);
+    uint32_t i;
+    for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL && i != idx;
+         i = asx_wait_queue_next(i)) {
+        const asx_wait_node *w = rw_node(i);
+        ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
+        if ((w->flags & (RW_ACQUIRED | RW_WRITE)) == RW_WRITE && !rw_waiter_doomed(w)) return 0;
+    }
+    return 1;
 }
 
-/* Grant waiting readers (all of them, or only the parked ones). */
+/* Grant waiting readers (all of them, or only the parked ones), oldest
+ * first. */
 static void rw_grant_readers(rw_slot *s, int parked_only) {
     uint32_t i;
-    for (i = 0; i < ASX_RWLOCK_MAX_WAITERS; i++) {
-        rw_waiter_slot *w = &s->waiters[i];
-        if (!w->active || w->acquired || w->is_write) continue;
+    for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL; i = asx_wait_queue_next(i)) {
+        const asx_wait_node *w = rw_node(i);
+        ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
+        if ((w->flags & (RW_ACQUIRED | RW_WRITE)) != 0u) continue;
         if (parked_only && !asx_handle_is_valid(w->task)) continue;
         if (rw_waiter_doomed(w)) continue;
-        rw_grant(s, w);
+        rw_grant(s, i);
     }
 }
 
@@ -134,9 +135,9 @@ static void wake_waiters(rw_slot *s) {
     if (s->write_locked || s->readers > 0) return;
 
     if (s->writers_waiting > 0) {
-        i = rw_first_writer(s, RW_NO_WAITER);
-        if (i != RW_NO_WAITER) {
-            rw_grant(s, &s->waiters[i]);
+        i = rw_first_writer(s, ASX_WAIT_NIL);
+        if (i != ASX_WAIT_NIL) {
+            rw_grant(s, i);
             return;
         }
     }
@@ -155,69 +156,57 @@ static void rw_dispatch_parked(rw_slot *s) {
 
     if (s->writers_waiting > 0) {
         if (s->readers > 0) return;
-        i = rw_first_writer(s, RW_NO_WAITER);
-        if (i != RW_NO_WAITER && asx_handle_is_valid(s->waiters[i].task)) {
-            rw_grant(s, &s->waiters[i]);
-        }
+        i = rw_first_writer(s, ASX_WAIT_NIL);
+        if (i != ASX_WAIT_NIL && asx_handle_is_valid(rw_node(i)->task)) rw_grant(s, i);
         return;
     }
 
     rw_grant_readers(s, 1);
 }
 
-/* Deactivate a waiter that leaves without consuming its grant: a granted
+/* Release a waiter that leaves without consuming its grant: a granted
  * lock is returned, a write waiter stops counting toward preference. */
-static void rw_waiter_retire(rw_slot *s, rw_waiter_slot *w) {
-    if (w->acquired) {
+static void rw_waiter_retire(rw_slot *s, uint32_t i) {
+    const asx_wait_node *w = rw_node(i);
+    if ((w->flags & RW_ACQUIRED) != 0u) {
         /* Permit was granted — return it */
-        if (w->is_write) {
+        if ((w->flags & RW_WRITE) != 0u) {
             s->write_locked = 0;
         } else {
             if (s->readers > 0) s->readers--;
         }
     }
-    if (w->is_write && s->writers_waiting > 0) { s->writers_waiting--; }
-    w->active = 0;
-    w->acquired = 0;
-    w->task = ASX_INVALID_ID;
-    s->waiter_count--;
+    if ((w->flags & RW_WRITE) != 0u && s->writers_waiting > 0) s->writers_waiting--;
+    asx_wait_record_release(&s->waiters, i);
 }
 
 /* Reclaim parked waiters whose task completed without cancelling, then
  * pass on whatever they held. */
 static void rw_reap(rw_slot *s) {
-    uint32_t i;
+    uint32_t i = asx_wait_queue_first(&s->waiters);
     int reaped = 0;
-    for (i = 0; i < ASX_RWLOCK_MAX_WAITERS; i++) {
-        rw_waiter_slot *w = &s->waiters[i];
-        if (!w->active || !asx_handle_is_valid(w->task)) continue;
-        if (asx_wait_task_liveness(w->task) == ASX_WAIT_TASK_DEAD) {
-            rw_waiter_retire(s, w);
+    while (i != ASX_WAIT_NIL) {
+        uint32_t next = asx_wait_queue_next(i);
+        const asx_wait_node *w = rw_node(i);
+        ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
+        if (asx_handle_is_valid(w->task) && asx_wait_task_liveness(w->task) == ASX_WAIT_TASK_DEAD) {
+            rw_waiter_retire(s, i);
             reaped = 1;
         }
+        i = next;
     }
     if (reaped) rw_dispatch_parked(s);
 }
 
-static uint32_t rw_free_waiter(rw_slot *s) {
-    uint32_t i;
-    for (i = 0; i < ASX_RWLOCK_MAX_WAITERS; i++) {
-        if (!s->waiters[i].active) return i;
-    }
-    rw_reap(s);
-    for (i = 0; i < ASX_RWLOCK_MAX_WAITERS; i++) {
-        if (!s->waiters[i].active) return i;
-    }
-    return RW_NO_WAITER;
+/* Wait-node pool reclamation: retire this rwlock's dead waiters. */
+static void rw_reap_queue(asx_wait_queue *q) {
+    rw_reap((rw_slot *)(void *)((char *)q - offsetof(rw_slot, waiters)));
 }
 
 /* Consume a granted lock: the waiter record is done. */
-static void rw_waiter_consume(rw_slot *s, rw_waiter_slot *w) {
-    if (w->is_write && s->writers_waiting > 0) s->writers_waiting--;
-    w->active = 0;
-    w->acquired = 0;
-    w->task = ASX_INVALID_ID;
-    s->waiter_count--;
+static void rw_waiter_consume(rw_slot *s, uint32_t i) {
+    if ((rw_node(i)->flags & RW_WRITE) != 0u && s->writers_waiting > 0) s->writers_waiting--;
+    asx_wait_record_release(&s->waiters, i);
 }
 
 /* ------------------------------------------------------------------ */
@@ -235,9 +224,7 @@ asx_status asx_rwlock_create(asx_rwlock_handle *out) {
             g_slots[i].readers = 0;
             g_slots[i].write_locked = 0;
             g_slots[i].writers_waiting = 0;
-            g_slots[i].waiter_count = 0;
-            g_slots[i].next_seq = 0;
-            memset(g_slots[i].waiters, 0, sizeof(g_slots[i].waiters));
+            asx_wait_records_init(&g_slots[i].waiters, rw_reap_queue);
             out->slot = i;
             out->generation = g_slots[i].generation;
             if (i >= g_slot_count) g_slot_count = i + 1;
@@ -253,13 +240,12 @@ asx_status asx_rwlock_close(asx_rwlock_handle handle) {
     if (s == NULL) return ASX_E_STALE_HANDLE;
 
     /* Wake all waiters as disconnected */
-    for (i = 0; i < ASX_RWLOCK_MAX_WAITERS; i++) {
-        if (s->waiters[i].active) asx_wait_wake_task(s->waiters[i].task);
-        s->waiters[i].active = 0;
-        s->waiters[i].task = ASX_INVALID_ID;
+    for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL; i = asx_wait_queue_next(i)) {
+        ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
+        asx_wait_wake_task(rw_node(i)->task);
     }
+    asx_wait_queue_clear(&s->waiters);
     s->alive = 0;
-    s->waiter_count = 0;
     s->writers_waiting = 0;
     return ASX_OK;
 }
@@ -312,19 +298,17 @@ static asx_status rw_begin(asx_rwlock_handle handle, asx_rwlock_waiter *out, int
     s = slot_lookup(handle.slot, handle.generation);
     if (s == NULL) return ASX_E_STALE_HANDLE;
 
-    i = rw_free_waiter(s);
-    if (i == RW_NO_WAITER) return ASX_E_RESOURCE_EXHAUSTED;
+    i = asx_wait_record_add(&s->waiters);
+    if (i == ASX_WAIT_NIL) return ASX_E_RESOURCE_EXHAUSTED;
 
-    s->waiters[i].active = 1;
-    s->waiters[i].acquired = 0;
-    s->waiters[i].is_write = is_write;
-    s->waiters[i].seq = s->next_seq++;
-    s->waiters[i].task = ASX_INVALID_ID;
-    s->waiter_count++;
-    if (is_write) s->writers_waiting++;
+    if (is_write) {
+        rw_node(i)->flags = RW_WRITE;
+        s->writers_waiting++;
+    }
     out->rw_slot = handle.slot;
     out->waiter_slot = i;
     out->generation = handle.generation;
+    out->waiter_generation = rw_node(i)->generation;
     out->is_write = is_write;
     return ASX_OK;
 }
@@ -336,28 +320,28 @@ asx_status asx_rwlock_read_begin(asx_rwlock_handle handle, asx_rwlock_waiter *ou
 /* Shared prologue of poll_read / poll_write: validate, run the Cx
  * checkpoint (giving up passes the lock on), and settle the line. */
 static asx_status rw_poll_prologue(asx_rwlock_waiter *waiter, asx_cx *cx, rw_slot **out_s,
-                                   rw_waiter_slot **out_w) {
+                                   asx_wait_node **out_w) {
     rw_slot *s;
-    rw_waiter_slot *w;
+    asx_wait_node *w;
 
     s = slot_lookup(waiter->rw_slot, waiter->generation);
     if (s == NULL) return ASX_E_DISCONNECTED;
-    if (waiter->waiter_slot >= ASX_RWLOCK_MAX_WAITERS) return ASX_E_INVALID_ARGUMENT;
+    if (waiter->waiter_slot >= ASX_WAIT_NODE_CAPACITY) return ASX_E_INVALID_ARGUMENT;
 
-    w = &s->waiters[waiter->waiter_slot];
-    if (!w->active) return ASX_E_INVALID_STATE;
+    w = asx_wait_record_get(&s->waiters, waiter->waiter_slot, waiter->waiter_generation);
+    if (w == NULL) return ASX_E_INVALID_STATE;
 
     /* Cx cancellation/budget checkpoint */
     if (cx != NULL) {
         asx_status cst = asx_cx_checkpoint(cx);
         if (cst != ASX_OK) {
-            rw_waiter_retire(s, w);
+            rw_waiter_retire(s, waiter->waiter_slot);
             rw_dispatch_parked(s);
             return cst;
         }
     }
 
-    if (!w->acquired) rw_reap(s);
+    if ((w->flags & RW_ACQUIRED) == 0u) rw_reap(s);
     *out_s = s;
     *out_w = w;
     return ASX_OK;
@@ -365,7 +349,7 @@ static asx_status rw_poll_prologue(asx_rwlock_waiter *waiter, asx_cx *cx, rw_slo
 
 asx_status asx_rwlock_poll_read(asx_rwlock_waiter *waiter, asx_rwlock_read_guard *out, asx_cx *cx) {
     rw_slot *s;
-    rw_waiter_slot *w;
+    asx_wait_node *w;
     asx_status st;
 
     if (waiter == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -373,8 +357,8 @@ asx_status asx_rwlock_poll_read(asx_rwlock_waiter *waiter, asx_rwlock_read_guard
     if (st != ASX_OK) return st;
 
     /* Already granted by a prior unlock? */
-    if (w->acquired) {
-        rw_waiter_consume(s, w);
+    if ((w->flags & RW_ACQUIRED) != 0u) {
+        rw_waiter_consume(s, waiter->waiter_slot);
         out->rw_slot = waiter->rw_slot;
         out->generation = waiter->generation;
         return ASX_OK;
@@ -383,7 +367,7 @@ asx_status asx_rwlock_poll_read(asx_rwlock_waiter *waiter, asx_rwlock_read_guard
     /* Writer-preference: block if write-locked or writer waiting */
     if (!s->write_locked && s->writers_waiting == 0) {
         s->readers++;
-        rw_waiter_consume(s, w);
+        rw_waiter_consume(s, waiter->waiter_slot);
         out->rw_slot = waiter->rw_slot;
         out->generation = waiter->generation;
         return ASX_OK;
@@ -405,7 +389,7 @@ asx_status asx_rwlock_write_begin(asx_rwlock_handle handle, asx_rwlock_waiter *o
 asx_status asx_rwlock_poll_write(asx_rwlock_waiter *waiter, asx_rwlock_write_guard *out,
                                  asx_cx *cx) {
     rw_slot *s;
-    rw_waiter_slot *w;
+    asx_wait_node *w;
     asx_status st;
 
     if (waiter == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -413,8 +397,8 @@ asx_status asx_rwlock_poll_write(asx_rwlock_waiter *waiter, asx_rwlock_write_gua
     if (st != ASX_OK) return st;
 
     /* Already granted by a prior unlock? */
-    if (w->acquired) {
-        rw_waiter_consume(s, w);
+    if ((w->flags & RW_ACQUIRED) != 0u) {
+        rw_waiter_consume(s, waiter->waiter_slot);
         out->rw_slot = waiter->rw_slot;
         out->generation = waiter->generation;
         return ASX_OK;
@@ -423,7 +407,7 @@ asx_status asx_rwlock_poll_write(asx_rwlock_waiter *waiter, asx_rwlock_write_gua
     /* Can acquire only if no readers, no writer, and no earlier writer */
     if (!s->write_locked && s->readers == 0 && rw_writer_next_in_line(s, waiter->waiter_slot)) {
         s->write_locked = 1;
-        rw_waiter_consume(s, w);
+        rw_waiter_consume(s, waiter->waiter_slot);
         out->rw_slot = waiter->rw_slot;
         out->generation = waiter->generation;
         return ASX_OK;
@@ -440,17 +424,14 @@ asx_status asx_rwlock_poll_write(asx_rwlock_waiter *waiter, asx_rwlock_write_gua
 
 asx_status asx_rwlock_waiter_cancel(asx_rwlock_waiter *waiter) {
     rw_slot *s;
-    rw_waiter_slot *w;
     if (waiter == NULL) return ASX_E_INVALID_ARGUMENT;
     s = slot_lookup(waiter->rw_slot, waiter->generation);
     if (s == NULL) return ASX_OK; /* already closed */
 
-    if (waiter->waiter_slot >= ASX_RWLOCK_MAX_WAITERS) return ASX_E_INVALID_ARGUMENT;
-    w = &s->waiters[waiter->waiter_slot];
-
-    if (w->active) {
+    if (waiter->waiter_slot >= ASX_WAIT_NODE_CAPACITY) return ASX_E_INVALID_ARGUMENT;
+    if (asx_wait_record_get(&s->waiters, waiter->waiter_slot, waiter->waiter_generation) != NULL) {
         /* A granted lock is returned and passes on to parked waiters. */
-        rw_waiter_retire(s, w);
+        rw_waiter_retire(s, waiter->waiter_slot);
         rw_dispatch_parked(s);
     }
     return ASX_OK;
@@ -515,9 +496,7 @@ void asx_rwlock_reset(void) {
         g_slots[i].readers = 0;
         g_slots[i].write_locked = 0;
         g_slots[i].writers_waiting = 0;
-        g_slots[i].waiter_count = 0;
-        g_slots[i].next_seq = 0;
-        memset(g_slots[i].waiters, 0, sizeof(g_slots[i].waiters));
+        asx_wait_records_init(&g_slots[i].waiters, rw_reap_queue);
     }
     g_slot_count = 0;
 }

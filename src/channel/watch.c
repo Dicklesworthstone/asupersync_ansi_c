@@ -28,7 +28,6 @@ typedef struct {
     uint64_t value;
     uint64_t version; /* incremented on each send; 0 = initial value */
     uint32_t receiver_count;
-    asx_task_id wait_slots[ASX_WATCH_MAX_RECEIVERS];
     asx_wait_queue waiters; /* tasks parked in poll_changed */
 } asx_watch_slot;
 
@@ -45,9 +44,7 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
-static void watch_waiters_init(asx_watch_slot *s) {
-    asx_wait_queue_init(&s->waiters, s->wait_slots, ASX_WATCH_MAX_RECEIVERS);
-}
+static void watch_waiters_init(asx_watch_slot *s) { asx_wait_queue_init(&s->waiters); }
 
 /* New version or sender gone: every parked receiver task re-polls. */
 static void watch_wake_waiters(asx_watch_slot *s) {

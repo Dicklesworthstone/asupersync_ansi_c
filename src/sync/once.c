@@ -24,10 +24,6 @@
 #include <asx/sync/once.h>
 #include <string.h>
 
-#if (ASX_ONCE_MAX_WAITERS) < 1 || (ASX_ONCE_MAX_WAITERS) > (ASX_WAIT_QUEUE_MAX_CAPACITY)
-#error "ASX_ONCE_MAX_WAITERS must be in [1, ASX_WAIT_QUEUE_MAX_CAPACITY]"
-#endif
-
 /* ------------------------------------------------------------------ */
 /* Arena                                                               */
 /* ------------------------------------------------------------------ */
@@ -38,8 +34,7 @@ typedef struct {
     int initialized;
     uint64_t value;
     asx_task_id initializer; /* task running a pending init, or ASX_INVALID_ID */
-    asx_task_id wait_slots[ASX_ONCE_MAX_WAITERS];
-    asx_wait_queue waiters; /* tasks parked behind the initializer */
+    asx_wait_queue waiters;  /* tasks parked behind the initializer */
 } once_slot;
 
 static once_slot g_slots[ASX_ONCE_MAX];
@@ -55,7 +50,7 @@ static void once_slot_clear(once_slot *s) {
     s->initialized = 0;
     s->value = 0;
     s->initializer = ASX_INVALID_ID;
-    asx_wait_queue_init(&s->waiters, s->wait_slots, ASX_ONCE_MAX_WAITERS);
+    asx_wait_queue_init(&s->waiters);
 }
 
 /* The initialization in progress was abandoned or failed: the cell stays
@@ -94,8 +89,10 @@ asx_status asx_once_close(asx_once_handle handle) {
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     s->alive = 0;
-    /* Parked waiters re-poll and observe the stale handle. */
+    /* Parked waiters re-poll and observe the stale handle; they never come
+     * back to this queue, so its nodes return to the pool. */
     if (s->waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->waiters);
+    asx_wait_queue_clear(&s->waiters);
     s->initializer = ASX_INVALID_ID;
     return ASX_OK;
 }

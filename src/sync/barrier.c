@@ -1,10 +1,14 @@
 /*
  * barrier.c — N-way rendezvous with leader election
  *
+ * Waiters are records in the shared wait-node pool (wait_queue.h), linked
+ * in arrival order, so a barrier has no waiter limit of its own and any
+ * party count can trip it.
+ *
  * Wake-driven waiting: poll_wait returning ASX_E_PENDING inside a
  * scheduler poll records the calling task on the waiter and parks it. The
  * arrival that trips the barrier wakes every parked waiter (in arrival
- * slot order); close wakes them all so they observe ASX_E_DISCONNECTED.
+ * order); close wakes them all so they observe ASX_E_DISCONNECTED.
  * A parked waiter whose task completed without cancelling is reclaimed
  * lazily and its arrival withdrawn, exactly like wait_cancel.
  *
@@ -13,31 +17,25 @@
 
 #include "wait_queue.h"
 #include <asx/sync/barrier.h>
+#include <stddef.h>
 #include <string.h>
+
+/* Waiter record flags. */
+#define BARRIER_RELEASED 0x1u /* its round has tripped */
+#define BARRIER_LEADER 0x2u   /* the arrival that tripped it */
 
 /* ------------------------------------------------------------------ */
 /* Arena                                                               */
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    int active;
-    int released; /* barrier has tripped */
-    int is_leader;
-    asx_task_id task; /* task parked on this waiter, ASX_INVALID_ID if none */
-} barrier_waiter_slot;
-
-typedef struct {
     uint16_t generation;
     int alive;
-    uint32_t threshold; /* N tasks required */
-    uint32_t arrived;   /* tasks currently waiting */
-    int tripped;        /* barrier released */
-    uint32_t waiter_count;
-    barrier_waiter_slot waiters[ASX_BARRIER_MAX * 4]; /* up to 4x threshold */
+    uint32_t threshold;     /* N tasks required */
+    uint32_t arrived;       /* tasks currently waiting */
+    int tripped;            /* barrier released */
+    asx_wait_queue waiters; /* waiter records, arrival order */
 } barrier_slot;
-
-/* Use a generous waiter limit per barrier */
-#define BARRIER_MAX_WAITERS (ASX_BARRIER_MAX * 4u)
 
 static barrier_slot g_slots[ASX_BARRIER_MAX];
 static uint32_t g_slot_count;
@@ -48,26 +46,33 @@ static uint16_t next_gen(uint16_t g) {
     return g;
 }
 
+static asx_wait_node *barrier_node(uint32_t i) { return asx_wait_node_at(i); }
+
 /* Withdraw a waiter (wait_cancel semantics). Only an arrival that has not
  * been released still counts toward the current round; a released waiter
  * belongs to a round that already tripped and reset `arrived`. */
-static void barrier_waiter_withdraw(barrier_slot *s, barrier_waiter_slot *w) {
-    if (!w->released && s->arrived > 0) s->arrived--;
-    w->active = 0;
-    w->task = ASX_INVALID_ID;
-    s->waiter_count--;
+static void barrier_waiter_withdraw(barrier_slot *s, uint32_t i) {
+    if ((barrier_node(i)->flags & BARRIER_RELEASED) == 0u && s->arrived > 0) s->arrived--;
+    asx_wait_record_release(&s->waiters, i);
 }
 
 /* Reclaim parked waiters whose task completed without cancelling. */
 static void barrier_reap(barrier_slot *s) {
-    uint32_t i;
-    for (i = 0; i < BARRIER_MAX_WAITERS; i++) {
-        barrier_waiter_slot *w = &s->waiters[i];
-        if (!w->active || !asx_handle_is_valid(w->task)) continue;
-        if (asx_wait_task_liveness(w->task) == ASX_WAIT_TASK_DEAD) {
-            barrier_waiter_withdraw(s, w);
+    uint32_t i = asx_wait_queue_first(&s->waiters);
+    while (i != ASX_WAIT_NIL) {
+        uint32_t next = asx_wait_queue_next(i);
+        const asx_wait_node *w = barrier_node(i);
+        ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
+        if (asx_handle_is_valid(w->task) && asx_wait_task_liveness(w->task) == ASX_WAIT_TASK_DEAD) {
+            barrier_waiter_withdraw(s, i);
         }
+        i = next;
     }
+}
+
+/* Wait-node pool reclamation: withdraw this barrier's dead waiters. */
+static void barrier_reap_queue(asx_wait_queue *q) {
+    barrier_reap((barrier_slot *)(void *)((char *)q - offsetof(barrier_slot, waiters)));
 }
 
 /* ------------------------------------------------------------------ */
@@ -85,8 +90,7 @@ asx_status asx_barrier_create(uint32_t count, asx_barrier_handle *out) {
             g_slots[i].threshold = count;
             g_slots[i].arrived = 0;
             g_slots[i].tripped = 0;
-            g_slots[i].waiter_count = 0;
-            memset(g_slots[i].waiters, 0, sizeof(g_slots[i].waiters));
+            asx_wait_records_init(&g_slots[i].waiters, barrier_reap_queue);
             out->slot = i;
             out->generation = g_slots[i].generation;
             if (i >= g_slot_count) g_slot_count = i + 1;
@@ -104,14 +108,13 @@ asx_status asx_barrier_close(asx_barrier_handle handle) {
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
     /* Wake all waiters as disconnected */
-    for (i = 0; i < BARRIER_MAX_WAITERS; i++) {
-        if (s->waiters[i].active) asx_wait_wake_task(s->waiters[i].task);
-        s->waiters[i].active = 0;
-        s->waiters[i].task = ASX_INVALID_ID;
+    for (i = asx_wait_queue_first(&s->waiters); i != ASX_WAIT_NIL; i = asx_wait_queue_next(i)) {
+        ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
+        asx_wait_wake_task(barrier_node(i)->task);
     }
+    asx_wait_queue_clear(&s->waiters);
 
     s->alive = 0;
-    s->waiter_count = 0;
     return ASX_OK;
 }
 
@@ -130,66 +133,58 @@ asx_status asx_barrier_wait_begin(asx_barrier_handle handle, asx_barrier_waiter 
     /* Arrivals of tasks that died while parked no longer count. */
     barrier_reap(s);
 
-    for (i = 0; i < BARRIER_MAX_WAITERS; i++) {
-        if (!s->waiters[i].active) {
-            s->waiters[i].active = 1;
-            s->waiters[i].released = 0;
-            s->waiters[i].is_leader = 0;
-            s->waiters[i].task = ASX_INVALID_ID;
-            s->arrived++;
-            s->waiter_count++;
-            out->barrier_slot = handle.slot;
-            out->waiter_slot = i;
-            out->generation = handle.generation;
-            out->is_leader = 0;
+    i = asx_wait_record_add(&s->waiters);
+    if (i == ASX_WAIT_NIL) return ASX_E_RESOURCE_EXHAUSTED;
+    s->arrived++;
+    out->barrier_slot = handle.slot;
+    out->waiter_slot = i;
+    out->generation = handle.generation;
+    out->waiter_generation = barrier_node(i)->generation;
+    out->is_leader = 0;
 
-            /* Check if barrier trips */
-            if (s->arrived >= s->threshold) {
-                uint32_t j;
-                s->tripped = 1;
-                /* Last to arrive is leader */
-                s->waiters[i].is_leader = 1;
-                /* Release this round's waiters and wake the parked ones */
-                for (j = 0; j < BARRIER_MAX_WAITERS; j++) {
-                    if (s->waiters[j].active && !s->waiters[j].released) {
-                        s->waiters[j].released = 1;
-                        asx_wait_wake_task(s->waiters[j].task);
-                    }
-                }
-                /* The barrier is cyclic: the next arrival starts a new
-                 * round (Rust sync/barrier.rs resets arrived and advances
-                 * the generation on trip). */
-                s->arrived = 0;
-            }
-
-            return ASX_OK;
+    /* Check if barrier trips */
+    if (s->arrived >= s->threshold) {
+        uint32_t j;
+        s->tripped = 1;
+        /* Last to arrive is leader */
+        barrier_node(i)->flags |= BARRIER_LEADER;
+        /* Release this round's waiters and wake the parked ones */
+        for (j = asx_wait_queue_first(&s->waiters); j != ASX_WAIT_NIL; j = asx_wait_queue_next(j)) {
+            asx_wait_node *w = barrier_node(j);
+            ASX_CHECKPOINT_WAIVER("bounded: waiters <= ASX_WAIT_NODE_CAPACITY");
+            if ((w->flags & BARRIER_RELEASED) != 0u) continue;
+            w->flags |= BARRIER_RELEASED;
+            asx_wait_wake_task(w->task);
         }
+        /* The barrier is cyclic: the next arrival starts a new round
+         * (Rust sync/barrier.rs resets arrived and advances the
+         * generation on trip). */
+        s->arrived = 0;
     }
-    return ASX_E_RESOURCE_EXHAUSTED;
+
+    return ASX_OK;
 }
 
 asx_status asx_barrier_poll_wait(asx_barrier_waiter *waiter, asx_cx *cx) {
     barrier_slot *s;
-    barrier_waiter_slot *w;
+    asx_wait_node *w;
 
     if (waiter == NULL) return ASX_E_INVALID_ARGUMENT;
     if (waiter->barrier_slot >= ASX_BARRIER_MAX) return ASX_E_INVALID_ARGUMENT;
 
     s = &g_slots[waiter->barrier_slot];
     if (!s->alive || s->generation != waiter->generation) return ASX_E_DISCONNECTED;
-    if (waiter->waiter_slot >= BARRIER_MAX_WAITERS) return ASX_E_INVALID_ARGUMENT;
+    if (waiter->waiter_slot >= ASX_WAIT_NODE_CAPACITY) return ASX_E_INVALID_ARGUMENT;
 
-    w = &s->waiters[waiter->waiter_slot];
-    if (!w->active) return ASX_E_INVALID_STATE;
+    w = asx_wait_record_get(&s->waiters, waiter->waiter_slot, waiter->waiter_generation);
+    if (w == NULL) return ASX_E_INVALID_STATE;
 
     /* Release wins a race with cancellation: a waiter whose round already
      * tripped completes successfully even if a cancel is now pending
      * (Rust sync/barrier.rs finish_cancelled). */
-    if (w->released) {
-        waiter->is_leader = w->is_leader;
-        w->active = 0;
-        w->task = ASX_INVALID_ID;
-        s->waiter_count--;
+    if ((w->flags & BARRIER_RELEASED) != 0u) {
+        waiter->is_leader = (w->flags & BARRIER_LEADER) != 0u;
+        asx_wait_record_release(&s->waiters, waiter->waiter_slot);
         return ASX_OK;
     }
 
@@ -197,7 +192,7 @@ asx_status asx_barrier_poll_wait(asx_barrier_waiter *waiter, asx_cx *cx) {
     if (cx != NULL) {
         asx_status cst = asx_cx_checkpoint(cx);
         if (cst != ASX_OK) {
-            barrier_waiter_withdraw(s, w);
+            barrier_waiter_withdraw(s, waiter->waiter_slot);
             return cst;
         }
     }
@@ -213,10 +208,10 @@ asx_status asx_barrier_wait_cancel(asx_barrier_waiter *waiter) {
     if (waiter->barrier_slot >= ASX_BARRIER_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[waiter->barrier_slot];
     if (!s->alive || s->generation != waiter->generation) return ASX_OK;
-    if (waiter->waiter_slot >= BARRIER_MAX_WAITERS) return ASX_E_INVALID_ARGUMENT;
+    if (waiter->waiter_slot >= ASX_WAIT_NODE_CAPACITY) return ASX_E_INVALID_ARGUMENT;
 
-    if (s->waiters[waiter->waiter_slot].active) {
-        barrier_waiter_withdraw(s, &s->waiters[waiter->waiter_slot]);
+    if (asx_wait_record_get(&s->waiters, waiter->waiter_slot, waiter->waiter_generation) != NULL) {
+        barrier_waiter_withdraw(s, waiter->waiter_slot);
     }
     return ASX_OK;
 }
@@ -243,8 +238,7 @@ void asx_barrier_reset(void) {
         g_slots[i].alive = 0;
         g_slots[i].arrived = 0;
         g_slots[i].tripped = 0;
-        g_slots[i].waiter_count = 0;
-        memset(g_slots[i].waiters, 0, sizeof(g_slots[i].waiters));
+        asx_wait_records_init(&g_slots[i].waiters, barrier_reap_queue);
     }
     g_slot_count = 0;
 }

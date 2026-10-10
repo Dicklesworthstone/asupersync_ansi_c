@@ -17,10 +17,6 @@
 #include <asx/sync/pool.h>
 #include <string.h>
 
-#if (ASX_POOL_MAX_WAITERS) < 1 || (ASX_POOL_MAX_WAITERS) > (ASX_WAIT_QUEUE_MAX_CAPACITY)
-#error "ASX_POOL_MAX_WAITERS must be in [1, ASX_WAIT_QUEUE_MAX_CAPACITY]"
-#endif
-
 /* ------------------------------------------------------------------ */
 /* Arena                                                               */
 /* ------------------------------------------------------------------ */
@@ -42,7 +38,6 @@ typedef struct {
     uint64_t total_acquisitions;
     uint64_t total_creates;
     uint64_t health_failures;
-    asx_task_id wait_slots[ASX_POOL_MAX_WAITERS];
     asx_wait_queue waiters; /* tasks parked in try_acquire */
 } pool_slot;
 
@@ -121,7 +116,7 @@ asx_status asx_pool_create(const asx_pool_config *config, asx_pool_handle *out) 
                 ps->resources[j].resource = NULL;
                 ps->resources[j].state = RESOURCE_EMPTY;
             }
-            asx_wait_queue_init(&ps->waiters, ps->wait_slots, ASX_POOL_MAX_WAITERS);
+            asx_wait_queue_init(&ps->waiters);
             out->slot = i;
             out->generation = ps->generation;
             if (i >= g_slot_count) g_slot_count = i + 1;
@@ -323,7 +318,7 @@ void asx_pool_reset(void) {
         g_slots[i].alive = 0;
         g_slots[i].closed = 0;
         g_slots[i].resource_count = 0;
-        asx_wait_queue_init(&g_slots[i].waiters, g_slots[i].wait_slots, ASX_POOL_MAX_WAITERS);
+        asx_wait_queue_init(&g_slots[i].waiters);
     }
     g_slot_count = 0;
 }

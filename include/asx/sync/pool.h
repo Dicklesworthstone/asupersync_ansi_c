@@ -36,12 +36,6 @@ extern "C" {
 #define ASX_POOL_MAX_RESOURCES 16u
 #endif
 
-/* Tasks that can park in try_acquire per pool; further waiters yield and
- * are re-polled every round. */
-#ifndef ASX_POOL_MAX_WAITERS
-#define ASX_POOL_MAX_WAITERS 8u
-#endif
-
 /* -------------------------------------------------------------------
  * Factory and health check function types
  * ------------------------------------------------------------------- */

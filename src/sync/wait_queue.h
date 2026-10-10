@@ -6,18 +6,26 @@
  * "not yet" (ASX_E_PENDING, ASX_E_WOULD_BLOCK, ASX_E_CHANNEL_FULL, ...).
  * When such an operation runs inside a scheduler poll
  * (asx_task_current() != ASX_INVALID_ID) the primitive records the calling
- * task in a bounded FIFO wait queue and parks it; the state change that can
+ * task in a FIFO wait queue and parks it; the state change that can
  * satisfy the waiter wakes it with asx_task_wake(). Outside a scheduler poll
  * nothing is recorded or parked, so try-style callers keep their exact
  * pre-existing semantics.
  *
- * Contract shared by every queue:
+ * Storage. Every queue is a doubly linked list of nodes drawn from one
+ * runtime-wide pool of ASX_WAIT_NODE_CAPACITY nodes, so a queue holds as
+ * many waiters as there are tasks (Rust's waiter queues are unbounded
+ * VecDeques/Slabs; there is no per-primitive cap). Only the pool as a
+ * whole can run out; before reporting that, every node whose task has
+ * died is reclaimed through its queue (see asx_wait_reap_fn).
+ *
+ * Plain queues (park / leave / remove / settle / wake_all), used by
+ * channels, once and pool:
  *   - FIFO by arrival. A task appears at most once per queue; a task that
  *     re-polls and still has to wait keeps its original position.
  *   - Entries hold generation-checked task handles (the state bits embedded
  *     in task handles are ignored for identity). Entries whose task has
- *     completed or whose slot was reclaimed are dropped lazily when the
- *     queue is scanned; waking them is never counted as a delivery.
+ *     completed or whose slot was reclaimed never count and are unlinked
+ *     on the next park; waking them is never counted as a delivery.
  *   - A woken entry stays queued (flagged woken) until its task re-polls:
  *     success or a terminal result removes it (leave), another "not yet"
  *     re-arms it in place (park).
@@ -35,18 +43,32 @@
  *     let a caller take a unit only while fewer live waiters are queued
  *     ahead of it than there are units, so the units a settle handed out
  *     cannot be stolen before their waiters re-poll.
- *   - A full queue first drops dead entries, then evicts the oldest entry
- *     that already holds a wake; if every entry is a live, un-woken waiter
- *     the caller is not parked and simply yields cooperatively (it is
- *     re-polled next round), so overflow degrades to polling, never to a
- *     lost wakeup.
+ *   - If the pool is exhausted the caller is not parked and simply yields
+ *     cooperatively (it is re-polled next round), so exhaustion degrades
+ *     to polling, never to a lost wakeup.
+ *
+ * Waiter records (asx_wait_record_*), used by semaphore/mutex, rwlock,
+ * notify and barrier, whose public waiter handles name a record: a record
+ * is a node the primitive owns from *_begin until the waiter consumes its
+ * result or gives up. List order is arrival order; the primitive keeps
+ * its per-waiter state in the node's `flags` byte. A queue
+ * of records registers a reap function that retires its dead waiters with
+ * the primitive's own semantics (returning grants, passing notifications
+ * on), so pool reclamation never bypasses them.
+ *
+ * Lifetime. Queue storage must be zero-initialized or previously
+ * initialized. Initializing a queue releases the nodes it still holds,
+ * clear() releases them all, and asx_wait_pool_reset() (runtime reset)
+ * empties every queue at once: each queue remembers the pool epoch it
+ * was built in and treats itself as empty after a reset.
  *
  * All operations are deterministic: identical call sequences produce
  * identical wake sequences.
  *
  * Thread-safety: scheduler-thread state, like asx_task_wake(). Producers on
  * foreign threads (lock-free channel backend) only reach queue code when a
- * scheduler task is parked on that channel, and must not race with it.
+ * scheduler task is parked on that channel, and must not race with it;
+ * settle and wake_all never allocate or release nodes.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -56,24 +78,48 @@
 
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
+#include <asx/runtime/runtime.h>
 #include <asx/sync/semaphore.h>
 #include <stdint.h>
 
-/* Maximum capacity of one wait queue (woken flags live in a 64-bit mask). */
-#ifndef ASX_WAIT_QUEUE_MAX_CAPACITY
-#define ASX_WAIT_QUEUE_MAX_CAPACITY 64u
+/* Wait nodes shared by every wait queue: by default four per task slot,
+ * enough for a task to wait on several primitives at once plus waiter
+ * records created outside a scheduler poll. */
+#ifndef ASX_WAIT_NODE_CAPACITY
+#define ASX_WAIT_NODE_CAPACITY (4u * (ASX_MAX_TASKS))
 #endif
-#if (ASX_WAIT_QUEUE_MAX_CAPACITY) < 1 || (ASX_WAIT_QUEUE_MAX_CAPACITY) > 64
-#error "ASX_WAIT_QUEUE_MAX_CAPACITY must be 1..64 (woken flags are a 64-bit mask)"
+#if (ASX_WAIT_NODE_CAPACITY) < 1
+#error "ASX_WAIT_NODE_CAPACITY must be at least 1"
 #endif
 
-/* A bounded FIFO of parked tasks. Storage is owned by the primitive. */
+/* No node: list ends and the "no record" result. */
+#define ASX_WAIT_NIL UINT32_MAX
+
+typedef struct asx_wait_queue asx_wait_queue;
+
+/* Retire the dead waiters of a record queue with the primitive's own
+ * semantics. Called when the pool needs nodes back. */
+typedef void (*asx_wait_reap_fn)(asx_wait_queue *q);
+
+/* A FIFO of wait nodes. Storage is owned by the primitive. */
+struct asx_wait_queue {
+    uint32_t head;         /* oldest node, ASX_WAIT_NIL if empty */
+    uint32_t tail;         /* newest node, ASX_WAIT_NIL if empty */
+    uint32_t len;          /* linked nodes */
+    uint32_t epoch;        /* pool epoch the links belong to */
+    asx_wait_reap_fn reap; /* record queues; NULL for plain queues */
+};
+
+/* One waiter. `flags` belongs to the owning primitive. */
 typedef struct {
-    asx_task_id *tasks; /* FIFO storage, index 0 = oldest */
-    uint32_t cap;       /* usable entries (<= ASX_WAIT_QUEUE_MAX_CAPACITY) */
-    uint32_t len;       /* queued entries */
-    uint64_t woken;     /* bit i: tasks[i] holds an undelivered wake */
-} asx_wait_queue;
+    asx_task_id task;      /* parked task, ASX_INVALID_ID if none */
+    asx_wait_queue *queue; /* owning queue, NULL when free */
+    uint32_t prev;
+    uint32_t next;
+    uint16_t generation; /* changes on every release */
+    uint8_t woken;       /* plain queues: holds an undelivered wake */
+    uint8_t flags;
+} asx_wait_node;
 
 /* Liveness classes reported by asx_wait_task_liveness(). */
 typedef enum {
@@ -82,16 +128,32 @@ typedef enum {
     ASX_WAIT_TASK_DOOMED = 2 /* cancel requested / cancelling / finalizing */
 } asx_wait_task_liveness_kind;
 
-/* Bind a queue to its storage and empty it. cap is clamped to
- * ASX_WAIT_QUEUE_MAX_CAPACITY. */
-void asx_wait_queue_init(asx_wait_queue *q, asx_task_id *storage, uint32_t cap);
+/* ------------------------------------------------------------------ */
+/* Pool                                                                */
+/* ------------------------------------------------------------------ */
 
-/* Number of queued entries (live or not yet reaped). */
+/* Release every node and empty every queue (runtime reset). */
+void asx_wait_pool_reset(void);
+
+/* Nodes currently held by queues (tests and diagnostics). */
+uint32_t asx_wait_nodes_in_use(void);
+
+/* ------------------------------------------------------------------ */
+/* Plain queues                                                        */
+/* ------------------------------------------------------------------ */
+
+/* Empty a queue, releasing the nodes it still holds. */
+void asx_wait_queue_init(asx_wait_queue *q);
+
+/* Release every node (the primitive is closing; wake its waiters first). */
+void asx_wait_queue_clear(asx_wait_queue *q);
+
+/* Number of queued entries (live or not yet unlinked). */
 uint32_t asx_wait_queue_len(const asx_wait_queue *q);
 
 /* The calling operation is "not yet": enqueue the current task (or re-arm
  * its existing entry) and park it. Returns 1 if the caller was parked, 0 if
- * there is no current task or the queue is full of live un-woken waiters. */
+ * there is no current task or the node pool is exhausted. */
 int asx_wait_queue_park_current(asx_wait_queue *q);
 
 /* The current task stopped waiting on this queue because it got what it
@@ -117,11 +179,46 @@ uint32_t asx_wait_queue_live_ahead(const asx_wait_queue *q);
  * disconnect). Returns the number of live tasks woken. */
 uint32_t asx_wait_queue_wake_all(asx_wait_queue *q);
 
+/* ------------------------------------------------------------------ */
+/* Waiter records                                                      */
+/* ------------------------------------------------------------------ */
+
+/* Empty a record queue (releasing the nodes it still holds) and register
+ * its reap function. */
+void asx_wait_records_init(asx_wait_queue *q, asx_wait_reap_fn reap);
+
+/* Append a new record (task ASX_INVALID_ID, flags 0). Returns
+ * its index, or ASX_WAIT_NIL if the pool is exhausted even after
+ * reclaiming the nodes of dead tasks. */
+uint32_t asx_wait_record_add(asx_wait_queue *q);
+
+/* The record `index` of queue `q` if `generation` still names it, else
+ * NULL (released, reused, or another queue's). */
+asx_wait_node *asx_wait_record_get(asx_wait_queue *q, uint32_t index, uint16_t generation);
+
+/* Node `index` (from add, first or next) without validation. */
+asx_wait_node *asx_wait_node_at(uint32_t index);
+
+/* Release a record of `q`. */
+void asx_wait_record_release(asx_wait_queue *q, uint32_t index);
+
+/* Move a record of `q` to the tail (it arrives now). */
+void asx_wait_record_move_to_tail(asx_wait_queue *q, uint32_t index);
+
+/* Iterate a queue in arrival order: the oldest node, and the node after
+ * `index`; ASX_WAIT_NIL at the end. Fetch the next index before
+ * releasing the current record. */
+uint32_t asx_wait_queue_first(const asx_wait_queue *q);
+uint32_t asx_wait_queue_next(uint32_t index);
+
+/* ------------------------------------------------------------------ */
+/* Tasks                                                               */
+/* ------------------------------------------------------------------ */
+
 /* Classify a waiter task handle (see asx_wait_task_liveness_kind). */
 asx_wait_task_liveness_kind asx_wait_task_liveness(asx_task_id task);
 
-/* Explicit-waiter helpers (primitives whose waiters are slot records):
- * record the current task in *slot and park it. Returns 1 if parked, 0 if
+/* Record the current task in *slot and park it. Returns 1 if parked, 0 if
  * there is no current task (*slot is then set to ASX_INVALID_ID). */
 int asx_wait_park_current(asx_task_id *slot);
 

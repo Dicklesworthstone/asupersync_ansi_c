@@ -32,10 +32,6 @@ extern "C" {
 #define ASX_NOTIFY_MAX 16u
 #endif
 
-#ifndef ASX_NOTIFY_MAX_WAITERS
-#define ASX_NOTIFY_MAX_WAITERS 16u
-#endif
-
 /* -------------------------------------------------------------------
  * Handles
  * ------------------------------------------------------------------- */
@@ -45,10 +41,15 @@ typedef struct {
     uint16_t generation;
 } asx_notify_handle;
 
+/* A waiter names a record in the runtime's shared wait-node pool, so a
+ * notify has no waiter limit of its own (Rust's is unbounded);
+ * wait_begin reports ASX_E_RESOURCE_EXHAUSTED only when the whole pool
+ * (ASX_WAIT_NODE_CAPACITY) is in use. */
 typedef struct {
     uint32_t notify_slot;
-    uint32_t waiter_slot;
-    uint16_t generation;
+    uint32_t waiter_slot;       /* wait-node index */
+    uint16_t generation;        /* the notify's */
+    uint16_t waiter_generation; /* the wait node's */
 } asx_notify_waiter;
 
 /* -------------------------------------------------------------------
