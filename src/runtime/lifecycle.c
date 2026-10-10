@@ -494,7 +494,13 @@ void asx_task_apply_cleanup_budget_internal(asx_task_slot *t) {
     t->cleanup_applied = 1u;
 }
 
-static asx_leak_response asx_leak_policy_effective(void) {
+/* The response to a batch of `n` leaks found together: Rust counts the
+ * batch first, then picks one response for all of it, escalated once the
+ * cumulative count reaches the threshold (handle_obligation_leaks,
+ * runtime/state.rs:5711-5717). A threshold of 0 therefore acts as 1, as
+ * LeakEscalation::new makes it (runtime/config.rs:1354). */
+static asx_leak_response obligation_leak_batch_policy(uint64_t n) {
+    g_leak_count = n > UINT64_MAX - g_leak_count ? UINT64_MAX : g_leak_count + n;
     if (g_leak_escalation_set && g_leak_count >= g_leak_escalation.threshold) {
         return g_leak_escalation.escalate_to;
     }
@@ -514,15 +520,17 @@ static asx_leak_response asx_leak_policy_effective(void) {
 /* Leak the reserved obligation in slot `idx` under the active policy:
  * RECOVER aborts it with ASX_OBLIGATION_ABORT_LEAK_RECOVERED, the others
  * mark it LEAKED (vocabulary obligation.leaked, Rust ObligationLeak), LOG
- * also warning with `log_message`. Returns 1 when the policy (PANIC)
+ * also warning with `log_message`. Each leak is a batch of its own, as each
+ * dropped token posts its own leak (state.rs:7036-7042): it is counted
+ * before the policy is picked, so the leak that reaches the escalation
+ * threshold is the first escalated one. Returns 1 when the policy (PANIC)
  * demands fail-fast containment. */
 static int obligation_leak_slot(uint32_t idx, const char *log_message) {
     asx_obligation_slot *o = &g_obligations[idx];
     asx_obligation_id oid =
         asx_handle_pack(ASX_TYPE_OBLIGATION, (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
                         asx_handle_pack_index(o->generation, (uint16_t)idx));
-    asx_leak_response policy = asx_leak_policy_effective();
-    if (g_leak_count < UINT64_MAX) g_leak_count++;
+    asx_leak_response policy = obligation_leak_batch_policy(1u);
     o->counted = 0;
     if (policy == ASX_LEAK_RECOVER) {
         /* Recovered leak: abort. */

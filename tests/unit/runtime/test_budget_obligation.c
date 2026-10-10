@@ -733,16 +733,47 @@ TEST(leak_escalation_switches_policy_at_threshold) {
     run = asx_budget_from_polls(10);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
 
-    /* Tasks complete in slot order: two silent leaks, then the escalated
-     * policy (RECOVER) aborts the third. */
+    /* Tasks complete in slot order. Rust counts a leak before it picks the
+     * response (runtime/state.rs:5711-5717): the first leak is silent, the
+     * second reaches the threshold and is the first escalated (RECOVER
+     * aborts it), and so is the third. */
     ASSERT_EQ(asx_obligation_get_info(s[0].ob, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
     ASSERT_EQ(asx_obligation_get_info(s[1].ob, &info), ASX_OK);
-    ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
+    ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_LEAK_RECOVERED);
     ASSERT_EQ(asx_obligation_get_info(s[2].ob, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
     ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_LEAK_RECOVERED);
     ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)3u);
+}
+
+TEST(leak_escalation_threshold_zero_escalates_the_first_leak) {
+    /* Rust's LeakEscalation::new turns a threshold of 0 into 1
+     * (runtime/config.rs:1354); either way the first leak escalates. */
+    asx_leak_escalation_config esc;
+    asx_region_id r;
+    asx_task_id t;
+    reserver_state s;
+    asx_obligation_info info;
+    asx_budget run;
+    uint64_t threshold;
+
+    for (threshold = 0u; threshold <= 1u; threshold++) {
+        esc.threshold = threshold;
+        esc.escalate_to = ASX_LEAK_RECOVER;
+        ASSERT_EQ(setup_with_policy(ASX_LEAK_SILENT, &esc), ASX_OK);
+        memset(&s, 0, sizeof(s));
+        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        s.region = r;
+        s.ob = ASX_INVALID_ID;
+        ASSERT_EQ(asx_task_spawn(r, poll_reserver, &s, &t), ASX_OK);
+        run = asx_budget_from_polls(10);
+        ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+        ASSERT_EQ(asx_obligation_get_info(s.ob, &info), ASX_OK);
+        ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
+        ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_LEAK_RECOVERED);
+    }
 }
 
 TEST(runtime_reset_clears_leak_count) {
@@ -791,6 +822,7 @@ int main(void) {
     RUN_TEST(recover_policy_aborts_leaked_obligation);
     RUN_TEST(panic_policy_routes_leak_through_containment);
     RUN_TEST(leak_escalation_switches_policy_at_threshold);
+    RUN_TEST(leak_escalation_threshold_zero_escalates_the_first_leak);
     RUN_TEST(runtime_reset_clears_leak_count);
 
     TEST_REPORT();
