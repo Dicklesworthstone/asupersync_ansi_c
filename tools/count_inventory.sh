@@ -86,6 +86,9 @@ if [ "${1:-}" = "--facts" ]; then
     for d in "$ROOT"/src/*/; do
         printf 'sources_%s=%s\n' "$(basename "$d")" "$(count_c "$d")"
     done
+    # Resource-class limits, e.g. class_r1_max_regions=4 (asx_config.h).
+    sed -nE 's/^#define ASX_CLASS_(R[123])_(MAX_[A-Z_]+) ([0-9]+)u?$/class_\1_\2=\3/p' \
+        "$ROOT/include/asx/asx_config.h" | tr 'A-Z' 'a-z'
     exit 0
 fi
 

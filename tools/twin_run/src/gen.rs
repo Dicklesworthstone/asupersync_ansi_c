@@ -11,6 +11,13 @@
 //! Child regions: a task opens at most one at a time (two in all), may
 //! spawn into it, and closes it or leaves it to the drop backstop.
 //!
+//! Contention: when the scenario has a mutex or semaphore, most tasks open
+//! with a critical section (acquire, a few steps that let others run,
+//! release), so several tasks queue on one lock and every release must
+//! hand it on in arrival order. Random lock toggles alone almost never
+//! park two waiters at once: a lock granting newest-first passed 200
+//! scenarios without them.
+//!
 //! Left out on purpose: multi-permit acquire, race
 //! (same-round ties are an RNG pick in Rust and the lowest index in C, a
 //! known divergence, bd-g652), region_limits, actors and supervision.
@@ -247,6 +254,37 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
     }
 }
 
+/// A critical section on one of the scenario's locks: acquire, one to
+/// three steps that let other tasks run (they queue behind it), release.
+/// It opens the program, so nothing is held yet and the random lock
+/// toggles of `step` that follow start from released.
+fn critical_section(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Vec<Value> {
+    let (acquire, release) = if world.semaphore && (!world.mutex || rng.chance(50)) {
+        (
+            json!({"op": "sem_acquire", "semaphore": "s", "count": 1}),
+            json!({"op": "sem_release", "semaphore": "s"}),
+        )
+    } else {
+        (
+            json!({"op": "mutex_lock", "mutex": "m"}),
+            json!({"op": "mutex_unlock", "mutex": "m"}),
+        )
+    };
+    let mut steps = vec![acquire];
+    for _ in 0..1 + rng.below(3) {
+        steps.push(match rng.below(3) {
+            0 => json!({"op": "yield"}),
+            1 => sleep_step(rng),
+            _ => {
+                held.messages += 1;
+                json!({"op": "trace", "message": format!("{me}:m{}", held.messages)})
+            }
+        });
+    }
+    steps.push(release);
+    steps
+}
+
 fn budget(rng: &mut Rng) -> Value {
     if rng.chance(15) {
         json!({"poll_quota": 2 + rng.below(6)})
@@ -295,6 +333,9 @@ pub fn scenario(seed: u64, index: u64) -> Value {
     for me in &tasks {
         let mut held = Held::default();
         let mut program = Vec::new();
+        if (world.mutex || world.semaphore) && rng.chance(75) {
+            program.extend(critical_section(&mut rng, &world, me, &mut held));
+        }
         for _ in 0..1 + rng.below(7) {
             let s = step(&mut rng, &world, me, &mut held);
             // A reserved send permit is sent at once (see step 15).

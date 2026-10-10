@@ -965,6 +965,57 @@ jobs:
         run: ctest --test-dir build-msvc -C Debug --output-on-failure --parallel 4
 
   # ---------------------------------------------------------------------------
+  # fuzz-rust-differential — 200 generated DSL v2 scenarios per push run in
+  # asupersync's LabRuntime at the pinned rev (twin_run) and in the C
+  # runtime (lab dispatch, same seed), which must match each exactly: trace,
+  # snapshot, observations, dispatch order (bd-ij9w). A fixed seed makes it a
+  # regression gate: every scenario of seed 9 matches today, semaphore
+  # contention included. New seeds are explored by the nightly job, so a
+  # divergence it finds does not turn unrelated pushes red. A failure
+  # replays with `make fuzz-differential FUZZ_V2_SEED=9 FUZZ_V2_COUNT=200`;
+  # the divergent scenarios, reduced by twin_run minimize, are uploaded.
+  # ---------------------------------------------------------------------------
+  fuzz-rust-differential:
+    name: "fuzz: Rust vs C differential (200 scenarios)"
+    runs-on: ubuntu-latest
+    needs: [check]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq
+
+      - name: Rust toolchain (rust-toolchain.toml pin)
+        run: rustup toolchain install
+
+      - name: Cache twin_run build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tools/twin_run/target
+          key: twin-run-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'tools/twin_run/Cargo.lock') }}
+
+      - name: Differential fuzzing (seed 9, 200 scenarios)
+        run: |
+          if ! make fuzz-differential FUZZ_V2_SEED=9 FUZZ_V2_COUNT=200; then
+            make fuzz-minimize FUZZ_V2_SEED=9 || true
+            exit 1
+          fi
+
+      - name: Upload divergent scenarios
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-rust-differential-${{ github.run_id }}
+          path: build/fuzz_v2/
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # m32 — 32-bit x86: unit suite and Rust-parity fixture replay (bd-9kll.15.3).
   # gcc-multilib conflicts with the cross compilers, hence its own job.
   # ---------------------------------------------------------------------------

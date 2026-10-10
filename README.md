@@ -511,21 +511,21 @@ Each resource class defines concrete capacity limits:
 
 | Resource | R1 (Tight) | R2 (Balanced) | R3 (Roomy) |
 |---|---|---|---|
-| Max regions | 4 | 16 | 64 |
-| Max tasks | 16 | 64 | 256 |
-| Max timers | 32 | 128 | 512 |
-| Max obligations | 16 | 64 | 256 |
-| Max channels | 8 | 32 | 128 |
-| Max trace events | 64 | 256 | 1,024 |
+| Max regions | <!-- fact:class_r1_max_regions -->4<!-- /fact --> | <!-- fact:class_r2_max_regions -->16<!-- /fact --> | <!-- fact:class_r3_max_regions -->64<!-- /fact --> |
+| Max tasks | <!-- fact:class_r1_max_tasks -->16<!-- /fact --> | <!-- fact:class_r2_max_tasks -->64<!-- /fact --> | <!-- fact:class_r3_max_tasks -->256<!-- /fact --> |
+| Max timers | <!-- fact:class_r1_max_timers -->32<!-- /fact --> | <!-- fact:class_r2_max_timers -->128<!-- /fact --> | <!-- fact:class_r3_max_timers -->512<!-- /fact --> |
+| Max obligations | <!-- fact:class_r1_max_obligations -->16<!-- /fact --> | <!-- fact:class_r2_max_obligations -->64<!-- /fact --> | <!-- fact:class_r3_max_obligations -->256<!-- /fact --> |
+| Max channels | <!-- fact:class_r1_max_channels -->8<!-- /fact --> | <!-- fact:class_r2_max_channels -->32<!-- /fact --> | <!-- fact:class_r3_max_channels -->128<!-- /fact --> |
+| Max trace events | <!-- fact:class_r1_max_trace_events -->64<!-- /fact --> | <!-- fact:class_r2_max_trace_events -->256<!-- /fact --> | <!-- fact:class_r3_max_trace_events -->1,024<!-- /fact --> |
 
 To build for a class, use `make RESOURCE_CLASS=1` (or `2`, `3`; the C
 macro is `-DASX_RESOURCE_CLASS=N`). Every arena is then sized from that
 class: the class limit is both the compiled capacity and the point where
 allocation fails with `ASX_E_RESOURCE_EXHAUSTED`. An explicit
 `-DASX_MAX_*` still overrides it. Without a class, the arenas keep the
-unclassed defaults: 8 regions, 64 tasks, 128 timers, 128 obligations,
-16 channels and 1,024 trace events. `make test-resource-classes` runs the
-unit suite built for each class.
+unclassed defaults listed in the capacity table below (`ASX_MAX_REGIONS`,
+`ASX_MAX_TASKS`, ...). `make test-resource-classes` runs the unit suite built
+for each class.
 
 ### Capacity Macros
 
@@ -1464,7 +1464,7 @@ All sync primitives are cooperative (no OS-level blocking), async-friendly (thre
 
 **Mutex**: Cooperative mutual exclusion implemented as a semaphore with count 1. `try_lock()` returns immediately; `lock_begin()`/`poll_lock()` yield until available. No priority inversion guards (single-threaded walking skeleton).
 
-**Semaphore**: Counting permit system with configurable initial count. `try_acquire()` is non-blocking; async acquire uses FIFO waiter queue (16 slots). Permits are distributed to the longest-waiting waiter first. Integrates with the obligation system for permit tracking.
+**Semaphore**: Counting permit system with configurable initial count, following Rust's `Semaphore`. Waiters queue in arrival order (a waiter joins the line at its first poll that has to wait; 16 waiter slots), and only the front of the line takes permits: a release wakes the front waiter if it can now run, and that waiter, taking its permit, wakes the next. `try_acquire()` is non-blocking and fails while anyone is queued. Integrates with the obligation system for permit tracking. (The mutex instead hands the lock straight to the front waiter on unlock, as Rust's `Mutex` does.)
 
 **Barrier**: N-way rendezvous with leader election. All N tasks must arrive before any proceed. The last task to arrive is elected leader (`is_leader = 1`). Cancel-safe: cancelling a waiter decrements the arrival count without tripping the barrier. Integrated with Cx checkpoint for structured concurrency cancellation.
 
@@ -2018,7 +2018,7 @@ architecture, decisions, verification, and risk:
 
 ## CI Pipeline Architecture
 
-The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->12<!-- /fact --> top-level jobs on
+The primary CI workflow (`.github/workflows/ci.yml`) runs <!-- fact:ci_jobs -->13<!-- /fact --> top-level jobs on
 pushes and PRs:
 
 | Job | Runs |
@@ -2029,6 +2029,7 @@ pushes and PRs:
 | `conformance` | oracle schemas, fixture integrity, gate negative controls, recorded codec digests, and the Rust-captured fixtures executed in C and compared |
 | `profile-parity` | recorded cross-profile and parallel-worker digests |
 | `fuzz-parity` | fuzz smoke and artifact validation |
+| `fuzz-rust-differential` | 200 generated scenarios (a fixed seed, so a regression gate) executed by asupersync's LabRuntime (`tools/twin_run`) and by the C runtime, which must match each one exactly; divergences are reduced by `twin_run minimize` and uploaded. The nightly workflow explores new seeds daily |
 | `compiler-matrix` | GCC and Clang × CORE/POSIX/FREESTANDING/EMBEDDED_ROUTER, plus Clang 21 on CORE and POSIX; the POSIX legs also run the live unit suite and native I/O |
 | `sanitizers` | the unit suite under ASan+UBSan (deterministic and live POSIX) and TSan (live POSIX) |
 | `cross-qemu` | the unit suite and the Rust fixture replay, cross-compiled for mipsel, big-endian mips, armv7, aarch64 and riscv64 (Debian glibc, static) and run under QEMU user mode |
@@ -2036,7 +2037,7 @@ pushes and PRs:
 | `msvc` | the library and the unit suite built by MSVC (x64, `/W4 /WX`, via CMake) and run with CTest, for CORE and WIN32 (deterministic builds) |
 | `embedded-matrix` | router-class cross builds with size and layout rows (built, not run) |
 
-All <!-- fact:ci_jobs -->12<!-- /fact --> jobs must pass before merge. A nightly workflow extends fuzz runs to
+All <!-- fact:ci_jobs -->13<!-- /fact --> jobs must pass before merge. A nightly workflow extends fuzz runs to
 100K iterations and collects performance baselines. The release workflow is
 tag-triggered (`v*`) and produces signed artifact bundles with SHA-256
 checksums and Sigstore signatures.
