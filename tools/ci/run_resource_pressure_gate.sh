@@ -56,8 +56,12 @@ run_lane() {
     bin="build/tests/conformance/resource_pressure_failure_atomic_test"
 
     echo "[asx] resource-pressure-gate: lane=${lane} profile=${profile} class=${resource_class}"
-    make --no-print-directory build PROFILE="$profile" CODEC=JSON DETERMINISTIC=1 CFLAGS="${extra_cflags}"
-    make --no-print-directory "$bin" PROFILE="$profile" CODEC=JSON DETERMINISTIC=1 CFLAGS="${extra_cflags}"
+    # The lane's class sizes the arenas (ASX_RESOURCE_CLASS), so its
+    # exhaustion scenarios hit that class's limits.
+    make --no-print-directory build PROFILE="$profile" CODEC=JSON DETERMINISTIC=1 \
+        RESOURCE_CLASS="${resource_class#R}" CFLAGS="${extra_cflags}"
+    make --no-print-directory "$bin" PROFILE="$profile" CODEC=JSON DETERMINISTIC=1 \
+        RESOURCE_CLASS="${resource_class#R}" CFLAGS="${extra_cflags}"
     ASX_RESOURCE_PRESSURE_REPORT_JSONL="$REPORT_JSONL" \
         ASX_RESOURCE_PRESSURE_LANE="$lane" \
         ASX_RESOURCE_PRESSURE_PROFILE="ASX_PROFILE_${profile}" \
@@ -76,6 +80,13 @@ jq -e --slurpfile report "$REPORT_JSONL" '
 
 jq -s -e 'all(.[]; .schema == "asx.resource_pressure.case.v1" and .status == "pass")' \
     "$REPORT_JSONL" >/dev/null
+
+# Each lane exhausted its class's limits, not a default arena.
+if ! jq -s -e 'all(.[]; .arena == .resource_limits)' "$REPORT_JSONL" >/dev/null; then
+    echo "[asx] resource-pressure-gate: FAIL (a lane's arenas are not its class limits)" >&2
+    jq -c '{lane, resource_class, arena, resource_limits}' "$REPORT_JSONL" | sort -u >&2
+    exit 1
+fi
 
 jq -s -e '
   sort_by(.scenario_id)

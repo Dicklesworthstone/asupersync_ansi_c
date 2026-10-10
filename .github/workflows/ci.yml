@@ -244,6 +244,10 @@ jobs:
         id: resource_class_tests
         run: make test-resource-classes
 
+      - name: Resource-pressure gate (exhaustion at the R3 and R1 class limits)
+        id: resource_pressure_gate
+        run: make resource-pressure-gate
+
       - name: Validate structured test logs
         id: validate_logs
         run: tools/ci/validate_test_logs.sh --strict
@@ -280,6 +284,12 @@ jobs:
           elif [ "${{ steps.capacity_x4_tests.outcome }}" = "failure" ]; then
             first_failure="test-capacity-x4"
             rerun="make test-capacity-x4"
+          elif [ "${{ steps.resource_class_tests.outcome }}" = "failure" ]; then
+            first_failure="test-resource-classes"
+            rerun="make test-resource-classes"
+          elif [ "${{ steps.resource_pressure_gate.outcome }}" = "failure" ]; then
+            first_failure="resource-pressure-gate"
+            rerun="make resource-pressure-gate"
           elif [ "${{ steps.validate_logs.outcome }}" = "failure" ]; then
             first_failure="validate-test-logs"
             rerun="tools/ci/validate_test_logs.sh --strict"

@@ -256,6 +256,15 @@ static void emit_report_record(const pressure_case_result *result) {
             (unsigned)limits.max_regions, (unsigned)limits.max_tasks, (unsigned)limits.max_timers,
             (unsigned)limits.max_obligations, (unsigned)limits.max_channels,
             (unsigned)limits.max_trace_events);
+    /* The arenas this binary was built with: a classed build
+     * (ASX_RESOURCE_CLASS) makes them the class limits above. */
+    fprintf(stream,
+            ",\"arena\":{\"max_regions\":%u,\"max_tasks\":%u,"
+            "\"max_timers\":%u,\"max_obligations\":%u,\"max_channels\":%u,"
+            "\"max_trace_events\":%u}",
+            (unsigned)ASX_MAX_REGIONS, (unsigned)ASX_MAX_TASKS, (unsigned)ASX_MAX_TIMERS,
+            (unsigned)ASX_MAX_OBLIGATIONS, (unsigned)ASX_MAX_CHANNELS,
+            (unsigned)ASX_TRACE_CAPACITY);
     fputs(",\"scenario_id\":", stream);
     json_string(stream, result->scenario_id);
     fputs(",\"surface\":", stream);

@@ -428,8 +428,11 @@ make fuzz-counterexample-replay RUST_FUZZ_BINARY=tools/rust_fuzz_target/target/r
 
 Replay the resource-pressure failure-atomic scenario pack. The gate runs the
 same region/task/obligation/channel/timer/scheduler/cancel cleanup scenarios
-for CORE/R3 and EMBEDDED_ROUTER/R1 lanes, checks exact error outcomes, writes
-per-case snapshots, and rejects cross-lane semantic digest drift.
+for CORE/R3 and EMBEDDED_ROUTER/R1 lanes, each built with its class's arenas
+(`RESOURCE_CLASS=3` / `1`), so an R1 lane exhausts at 4 regions and 16 tasks.
+It checks exact error outcomes and that each lane's arenas are its class
+limits, writes per-case snapshots, and rejects cross-lane semantic digest
+drift.
 
 ```bash
 make resource-pressure-gate
