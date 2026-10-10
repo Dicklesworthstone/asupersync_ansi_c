@@ -19,6 +19,7 @@
 
 #include "canon.h"
 
+#include <asx/actor/actor.h>
 #include <asx/asx.h>
 #include <asx/core/broadcast.h>
 #include <asx/core/oneshot.h>
@@ -148,6 +149,9 @@ typedef struct {
     int race_wrapper;
     uint32_t race_owner;
     uint32_t race_result; /* ASX_JSON_NONE until the race resolves */
+    /* The current cast, call or server_stop step's progress (DSL §3.8). */
+    asx_actor_op actor_op;
+    int server; /* the task of a server (no program) */
     /* Projection of the task's sleep timers (vocabulary §2: "<task>/tm<k>"). */
     uint32_t timers;         /* timers registered so far (k of the latest) */
     uint32_t timer_name_off; /* name of the latest, in g_text */
@@ -215,6 +219,20 @@ typedef struct {
 
 #define IT_MAX_CHANNELS ASX_MAX_CHANNELS
 
+/* A spawned server (DSL §3.8): its handle, its task's entry in g_tasks
+ * (named by `as`), and the state of its built-in behavior. A server_stop
+ * consumes the handle, as Rust's join takes the GenServerHandle. */
+typedef struct {
+    const char *name;
+    asx_actor_handle handle;
+    uint32_t task; /* index in g_tasks */
+    int released;
+    uint64_t value; /* counter: the running sum */
+} it_server;
+
+#define IT_MAX_SERVERS ASX_MAX_ACTORS
+#define IT_NO_SERVER_TASK UINT32_MAX
+
 /* A cancel reason captured when its event was emitted. */
 typedef struct {
     asx_cancel_kind kind;
@@ -255,6 +273,9 @@ static uint32_t g_n_sync;
 
 static it_channel g_channels[IT_MAX_CHANNELS];
 static uint32_t g_n_channels;
+
+static it_server g_servers[IT_MAX_SERVERS];
+static uint32_t g_n_servers;
 
 static it_event g_events[IT_MAX_EVENTS];
 static uint32_t g_n_events;
@@ -607,6 +628,21 @@ static uint32_t outcome_node(asx_task_id id) {
         break;
     }
     }
+    return o;
+}
+
+/* A server's outcome is its join's (vocabulary §6): an admitted server
+ * always runs to its end (ok), unless a callback panicked; its task's own
+ * outcome (cancelled when cancelled before its first poll) is not
+ * observable in Rust. */
+static uint32_t server_outcome_node(asx_task_id id) {
+    asx_outcome outcome;
+    uint32_t o;
+    if (asx_task_get_outcome(id, &outcome) == ASX_OK && outcome.severity == ASX_OUTCOME_PANICKED) {
+        return outcome_node(id);
+    }
+    o = asx_json_new_object(g_out);
+    asx_json_set(g_out, o, "tag", asx_json_new_string(g_out, "ok"));
     return o;
 }
 
@@ -2214,6 +2250,176 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
     return STEP_END;
 }
 
+/* ------------------------------------------------------------------ */
+/* Actors (DSL §3.8)                                                   */
+/* ------------------------------------------------------------------ */
+
+/* The built-in behaviors, twin_run's CounterServer and EchoServer. */
+static asx_status counter_cast(void *state, uint64_t msg, asx_actor_handle self) {
+    uint64_t *sum = (uint64_t *)state;
+    (void)self;
+    *sum += msg; /* wrapping, as Rust's wrapping_add */
+    return ASX_OK;
+}
+
+static asx_status counter_call(void *state, uint64_t request, uint64_t *reply,
+                               asx_actor_handle self) {
+    (void)request;
+    (void)self;
+    *reply = *(const uint64_t *)state;
+    return ASX_OK;
+}
+
+static asx_status echo_call(void *state, uint64_t request, uint64_t *reply, asx_actor_handle self) {
+    (void)state;
+    (void)self;
+    *reply = request;
+    return ASX_OK;
+}
+
+static const asx_actor_behavior g_counter_behavior = {NULL, counter_cast, counter_call, NULL};
+static const asx_actor_behavior g_echo_behavior = {NULL, NULL, echo_call, NULL};
+
+static it_server *server_by_name(const char *name) {
+    uint32_t i;
+    if (name == NULL) return NULL;
+    for (i = 0; i < g_n_servers; i++) {
+        if (strcmp(g_servers[i].name, name) == 0) return &g_servers[i];
+    }
+    return NULL;
+}
+
+/* server_spawn, cast, call and server_stop. Returns 0 for other ops. */
+static int exec_server(it_task *t, uint32_t step, uint32_t idx, const char *op, step_result *out) {
+    asx_status st;
+    it_server *srv;
+    asx_task_id id;
+
+    *out = STEP_NEXT;
+    if (strcmp(op, "server_spawn") == 0) {
+        const char *name = it_str(step, "as");
+        const char *behavior = it_str(step, "behavior");
+        const asx_actor_behavior *b = NULL;
+        uint64_t mailbox = 0;
+        if (behavior != NULL && strcmp(behavior, "counter") == 0) b = &g_counter_behavior;
+        if (behavior != NULL && strcmp(behavior, "echo") == 0) b = &g_echo_behavior;
+        if (name == NULL || b == NULL ||
+            !asx_json_u64(g_in, asx_json_get(g_in, step, "mailbox"), &mailbox) ||
+            mailbox > UINT32_MAX || server_by_name(name) != NULL || g_n_servers >= IT_MAX_SERVERS) {
+            it_fail_task(t, idx, "server_spawn needs a new `as`, a known behavior and a mailbox");
+            *out = STEP_END;
+            return 1;
+        }
+        srv = &g_servers[g_n_servers];
+        memset(srv, 0, sizeof(*srv));
+        srv->name = name;
+        srv->task = IT_NO_SERVER_TASK;
+        st = asx_actor_spawn(&srv->handle, t->region, b, &srv->value, (uint32_t)mailbox);
+        if (st == ASX_OK) g_n_servers++;
+        if (st == ASX_OK && asx_actor_task_id(srv->handle, &id) == ASX_OK) {
+            /* The server's task, named by `as` (vocabulary §2). A server
+             * whose spawn the lab refused has none, as Rust never admits
+             * its task. */
+            it_task *task;
+            if (g_n_tasks >= IT_MAX_TASKS || task_by_name(name) != NULL) {
+                it_fail("too many tasks, or a server named like a task", name);
+                *out = STEP_END;
+                return 1;
+            }
+            task = &g_tasks[g_n_tasks];
+            memset(task, 0, sizeof(*task));
+            task->name = name;
+            task->region_name = t->region_name;
+            task->region = t->region;
+            task->program = ASX_JSON_NONE;
+            task->end = ASX_OK;
+            task->spawn_obs = ASX_JSON_NONE;
+            task->id = id;
+            task->spawned = 1;
+            task->server = 1;
+            srv->task = g_n_tasks++;
+        }
+        observe_status(t, idx, op, st);
+        return 1;
+    }
+    if (strcmp(op, "cast") != 0 && strcmp(op, "call") != 0 && strcmp(op, "server_stop") != 0) {
+        return 0;
+    }
+    srv = server_by_name(it_str(step, "server"));
+    if (srv == NULL || srv->released) {
+        it_fail_task(t, idx, "unknown or stopped server");
+        *out = STEP_END;
+        return 1;
+    }
+    if (t->phase == 0u) {
+        memset(&t->actor_op, 0, sizeof(t->actor_op));
+        t->phase = 1u;
+    }
+    if (strcmp(op, "cast") == 0) {
+        uint64_t value = 0;
+        if (!asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &value)) {
+            it_fail_task(t, idx, "cast without a value");
+            *out = STEP_END;
+            return 1;
+        }
+        st = asx_actor_cast(srv->handle, &t->cx, value, &t->actor_op);
+        if (st == ASX_E_PENDING) {
+            *out = STEP_PENDING;
+            return 1;
+        }
+        observe_status(t, idx, op, st);
+        return 1;
+    }
+    if (strcmp(op, "call") == 0) {
+        uint64_t request = 0;
+        uint64_t reply = 0;
+        if (!asx_json_u64(g_in, asx_json_get(g_in, step, "request"), &request)) {
+            it_fail_task(t, idx, "call without a request");
+            *out = STEP_END;
+            return 1;
+        }
+        if (strcmp(t->region_name, "root") == 0) {
+            /* A scenario error in both interpreters (DSL §3.8). */
+            it_fail_task(t, idx, "call from a root-region task");
+            *out = STEP_END;
+            return 1;
+        }
+        st = asx_actor_call(srv->handle, &t->cx, request, &t->actor_op, &reply);
+        if (st == ASX_E_PENDING) {
+            *out = STEP_PENDING;
+            return 1;
+        }
+        observe(t, idx, op, status_node(st),
+                st == ASX_OK ? asx_json_new_u64(g_out, reply) : ASX_JSON_NONE);
+        return 1;
+    }
+    /* server_stop: h.stop(), then h.join(&cx). */
+    if (t->phase == 1u) {
+        (void)asx_actor_stop(srv->handle);
+        t->phase = 2u;
+    }
+    st = asx_actor_join(srv->handle, &t->cx);
+    if (st == ASX_E_PENDING) {
+        *out = STEP_PENDING;
+        return 1;
+    }
+    srv->released = 1;
+    if (srv->task != IT_NO_SERVER_TASK) {
+        /* The join retires the server's task. */
+        it_task *task = &g_tasks[srv->task];
+        uint32_t value = server_outcome_node(task->id);
+        asx_outcome ignored;
+        if (asx_task_join(task->id, &ignored) != ASX_OK) {
+            it_fail_task(t, idx, "server task outcome not joinable");
+        } else {
+            task->joined = 1;
+            task->outcome = value;
+        }
+    }
+    observe_status(t, idx, op, st);
+    return 1;
+}
+
 static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32_t idx) {
     const char *op = it_str(step, "op");
     asx_status st;
@@ -2227,6 +2433,7 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         if (exec_sync_wait(t, self, step, idx, op, &r)) return r;
         if (exec_channel_wait(t, step, idx, op, &r)) return r;
         if (exec_group(t, self, step, idx, op, &r)) return r;
+        if (exec_server(t, step, idx, op, &r)) return r;
     }
     if (strcmp(op, "yield") == 0) {
         if (t->phase == 0u) {
@@ -2956,7 +3163,7 @@ static uint32_t build_snapshot(uint32_t obligations) {
             }
             state = task_state_name(s);
             if (s == ASX_TASK_COMPLETED) {
-                outcome = outcome_node(t->id);
+                outcome = t->server ? server_outcome_node(t->id) : outcome_node(t->id);
             } else {
                 asx_cancel_reason r;
                 quiescent = 0;
@@ -3187,6 +3394,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     g_error_cap = error_cap;
     g_failed = 0;
     g_n_tasks = 0;
+    g_n_servers = 0;
     g_n_regions = 0;
     g_n_events = 0;
     g_text_used = 0;

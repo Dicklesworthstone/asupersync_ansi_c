@@ -990,6 +990,111 @@ TEST(cancelled_cx_wins_over_ready_channel_and_traces) {
 }
 
 /* -------------------------------------------------------------------
+ * Receiver close (seal), wake_receiver, creation in a closing region
+ * ------------------------------------------------------------------- */
+
+TEST(seal_keeps_the_queue_receivable) {
+    /* Rust rx.close() (mpsc.rs:1698): sends and outstanding permits see
+     * Disconnected, the queued messages stay receivable, then a receive
+     * sees Disconnected. asx_channel_close_receiver (the drop) would have
+     * discarded them. */
+    asx_channel_id ch;
+    asx_send_permit p;
+    asx_channel_state cs;
+    uint64_t v = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 1u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 2u), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_OK);
+    ASSERT_EQ(asx_channel_seal(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &cs), ASX_OK);
+    ASSERT_EQ(cs, ASX_CHANNEL_RECEIVER_CLOSED);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 3u), ASX_E_DISCONNECTED);
+    ASSERT_EQ(asx_send_permit_send(&p, 4u), ASX_E_DISCONNECTED);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 1u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 2u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_E_DISCONNECTED);
+    ASSERT_EQ(asx_channel_seal(ch), ASX_E_INVALID_STATE);
+}
+
+TEST(sealed_channel_slot_is_not_reused_until_drained) {
+    /* Sealed then sender-closed with a message left: the slot stays the
+     * channel's until the message is received. */
+    asx_channel_id ch;
+    asx_channel_id other;
+    uint64_t v = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 9u), ASX_OK);
+    ASSERT_EQ(asx_channel_seal(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &other), ASX_OK);
+    ASSERT_TRUE(other != ch);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 9u);
+}
+
+static uint32_t g_recv_polls;
+static asx_channel_id g_recv_ch;
+
+static asx_status poll_recv_counting(void *ud, asx_task_id self) {
+    uint64_t v = 0;
+    (void)ud;
+    (void)self;
+    g_recv_polls++;
+    return asx_channel_recv(g_recv_ch, NULL, &v) == ASX_OK ? ASX_OK : ASX_E_PENDING;
+}
+
+static void run_region(void) {
+    asx_budget b = asx_budget_from_polls(16);
+    CH_IGNORE(asx_scheduler_run(g_rid, &b));
+}
+
+TEST(wake_receiver_repolls_a_parked_receiver) {
+    /* Rust tx.wake_receiver() (mpsc.rs:808): the parked receiver is polled
+     * again without a message; it parks again. */
+    asx_task_id t;
+    asx_task_state ts;
+    setup();
+    g_recv_polls = 0;
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &g_recv_ch), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_recv_counting, NULL, &t), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_recv_polls, 1u);
+    run_region();
+    ASSERT_EQ(g_recv_polls, 1u); /* parked: nothing wakes it */
+    ASSERT_EQ(asx_channel_wake_receiver(g_recv_ch), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_recv_polls, 2u);
+    ASSERT_EQ(asx_channel_send(g_recv_ch, NULL, 5u), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_recv_polls, 3u);
+    ASSERT_EQ(asx_task_get_state(t, &ts), ASX_OK);
+    ASSERT_EQ(ts, ASX_TASK_COMPLETED);
+}
+
+TEST(create_accepts_a_closing_region) {
+    /* Rust's channels belong to no region: only a closed one refuses
+     * (create_rejects_closed_region). */
+    asx_region_id r;
+    asx_region_state rs;
+    asx_task_id t;
+    asx_channel_id ch;
+    asx_cancel_reason reason;
+    setup();
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_idle, NULL, &t), ASX_OK);
+    reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+    ASSERT_EQ(asx_region_cancel(r, &reason, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_get_state(r, &rs), ASX_OK);
+    ASSERT_TRUE(rs != ASX_REGION_OPEN && rs != ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_channel_create(r, 4, &ch), ASX_OK);
+}
+
+/* -------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------- */
 
@@ -1063,6 +1168,10 @@ int main(void) {
     RUN_TEST(reserved_permit_abort_and_disconnect_abort_the_obligation);
     RUN_TEST(untracked_reserves_register_no_obligation);
     RUN_TEST(cancelled_cx_wins_over_ready_channel_and_traces);
+    RUN_TEST(seal_keeps_the_queue_receivable);
+    RUN_TEST(sealed_channel_slot_is_not_reused_until_drained);
+    RUN_TEST(wake_receiver_repolls_a_parked_receiver);
+    RUN_TEST(create_accepts_a_closing_region);
 
     TEST_REPORT();
     return test_failures;

@@ -151,7 +151,7 @@ there are 0 open beads.
 | V18 | Timers: deterministic ordering, O(1) cancel | Plan §6; README L800 | DRIFTED | Same-tick order differs; timeout boundary; interval first tick/burst; 24h/128 limits |
 | V19 | 11 combinators with bounded loser drain | README L852 | DRIFTED | Poll-based race marks losers cancelled without drain; empty race; first_ok cancel |
 | V20 | Task groups (race/join/first_ok/quorum) with loser drain | README L863 | DRIFTED | FIRST_OK concurrent vs sequential; tie-break; owner reason; quorum validation timing; sealed branch regions |
-| V21 | Actors + supervision | README L1021; Plan Wave D | PARTIAL / DRIFTED | Strategies MATCH; GenServer synchronous; no restart window/backoff; transient-cancelled restarted; reply-loss bug; monitor/link absent |
+| V21 | Actors + supervision | README L1021; Plan Wave D | PARTIAL | GenServer ported (task + mpsc mailbox, call reply obligations, drain on stop/cancel; 11 Rust fixtures, 2026-10-10); strategies MATCH; supervision not fixture-checked (C supervises servers, Rust tasks); no restart window/backoff; no system messages, cast overflow policy or name registry; monitor/link absent |
 | V22 | Native I/O: POSIX reactor, sockets, DNS, HTTP/1.1, WS, fs, process, signal | README L1343 | WORKING (POSIX/Linux) / UNPROVEN cross-platform | Real code; e2e native lanes skip in default profile; no kqueue/IOCP; Win32 has no native I/O |
 | V23 | Win32 profile | Plan §8.3; README L503 | STUB | Clock/entropy/log real; reactor is SleepEx; no sockets/IOCP; never built in CI |
 | V24 | Browser/WASM profile | README L508,L1638 | STUB | Host-compiled only; no wasm32 target anywhere; `bd-1eqo.16` closed anyway |
@@ -755,20 +755,26 @@ Y*, T*, A*, L*, R*, P*, E*, X*) are referenced by the beads.
 ### Actors / GenServer / supervision (A)
 
 - **A1. Bug fix.** In `actor.c:404`, check `replied` before `alive`.
-- **A2.** Stop seals the mailbox instead of queuing a message.
+  Done; superseded by the A3 port, whose replies are oneshots.
+- **A2.** Stop seals the mailbox instead of queuing a message. Done as
+  Rust does it: stop marks the server Stopping and wakes it; the server
+  seals and drains its mailbox (`asx_channel_seal`).
 - **A3. GenServer.**
-  - Runs on its own actor task.
-  - `call` returns a token backed by a reply obligation.
-  - System-message queue.
-  - Cast overflow policy: REJECT by default, DROP_OLDEST optional.
-  - Name registry.
+  - Runs on its own actor task. Done (bd-g652).
+  - `call` backed by reply obligations. Done: the mailbox slot and the
+    reply permit are SendPermit obligations held by the caller.
+  - System-message queue. Open.
+  - Cast overflow policy: REJECT by default, DROP_OLDEST optional. Open
+    (REJECT only).
+  - Name registry. Open.
 - **A4. Supervision.**
   - Sliding restart window (3 per 60 s, virtual time).
   - Exponential backoff 100 ms to 10 s, doubling.
   - Escalation: Stop, Escalate, ResetCounter.
   - Transient children: a cancelled exit is normal.
   - Stop children in reverse start order.
-- **A5.** Mailbox capacity 64; send waits for space.
+- **A5.** Mailbox capacity 64; send waits for space. Done: the capacity
+  is the spawn's (up to `ASX_ACTOR_MAILBOX_CAPACITY`) and a cast waits.
 - **A6.** Monitors and links (with K13).
 
 ### Lab / trace parity (L)

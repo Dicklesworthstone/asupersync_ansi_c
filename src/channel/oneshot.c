@@ -29,6 +29,7 @@ typedef struct {
     uint64_t value;
     int sender_alive;
     int receiver_alive;
+    int reserved;           /* a permit holds the sending side (asx_oneshot_reserve) */
     asx_wait_queue waiters; /* tasks parked in asx_oneshot_recv */
 } asx_oneshot_slot;
 
@@ -59,6 +60,7 @@ void asx_oneshot_reset(void) {
         g_slots[i].value = 0;
         g_slots[i].sender_alive = 0;
         g_slots[i].receiver_alive = 0;
+        g_slots[i].reserved = 0;
         asx_wait_queue_init(&g_slots[i].waiters, NULL);
     }
     g_slot_count = 0;
@@ -101,6 +103,7 @@ asx_status asx_oneshot_create(asx_oneshot_sender *out_sender, asx_oneshot_receiv
     s->value = 0;
     s->sender_alive = 1;
     s->receiver_alive = 1;
+    s->reserved = 0;
     asx_wait_queue_init(&s->waiters, NULL);
 
     out_sender->slot = idx;
@@ -117,7 +120,8 @@ void asx_oneshot_sender_drop(asx_oneshot_sender *sender) {
     if (sender->slot >= g_slot_count) return;
     s = &g_slots[sender->slot];
     if (s->generation != sender->generation) return;
-    if (!s->sender_alive) return;
+    /* A reserved sender was consumed: its permit owns the sending side. */
+    if (!s->sender_alive || s->reserved) return;
 
     s->sender_alive = 0;
     if (s->state == ASX_ONESHOT_EMPTY) { s->state = ASX_ONESHOT_SENDER_DROPPED; }
@@ -143,16 +147,9 @@ void asx_oneshot_receiver_drop(asx_oneshot_receiver *receiver) {
 /* Send / Receive                                                      */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_oneshot_try_send(asx_oneshot_sender *sender, uint64_t value) {
-    asx_oneshot_slot *s;
-
-    if (sender == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (sender->slot >= g_slot_count) return ASX_E_NOT_FOUND;
-
-    s = &g_slots[sender->slot];
-    if (s->generation != sender->generation) return ASX_E_STALE_HANDLE;
-    if (!s->sender_alive) return ASX_E_INVALID_STATE;
-
+/* The send itself, for a live sender or the permit holding it. */
+static asx_status oneshot_deliver(const asx_oneshot_sender *sender, asx_oneshot_slot *s,
+                                  uint64_t value) {
     if (!s->receiver_alive) {
         s->sender_alive = 0;
         return ASX_E_DISCONNECTED;
@@ -168,6 +165,25 @@ asx_status asx_oneshot_try_send(asx_oneshot_sender *sender, uint64_t value) {
     oneshot_wake_waiters(s);
 
     return ASX_OK;
+}
+
+/* Look up a sender's slot. */
+static asx_status oneshot_sender_slot(const asx_oneshot_sender *sender, asx_oneshot_slot **out) {
+    if (sender->slot >= g_slot_count) return ASX_E_NOT_FOUND;
+    *out = &g_slots[sender->slot];
+    if ((*out)->generation != sender->generation) return ASX_E_STALE_HANDLE;
+    return ASX_OK;
+}
+
+asx_status asx_oneshot_try_send(asx_oneshot_sender *sender, uint64_t value) {
+    asx_oneshot_slot *s;
+    asx_status st;
+
+    if (sender == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = oneshot_sender_slot(sender, &s);
+    if (st != ASX_OK) return st;
+    if (!s->sender_alive || s->reserved) return ASX_E_INVALID_STATE;
+    return oneshot_deliver(sender, s, value);
 }
 
 /* Receive the value. Empty: a waiting receive (asx_oneshot_recv) parks the
@@ -220,41 +236,86 @@ static void oneshot_trace(const asx_cx *cx, const char *message) {
     if (cx != NULL) asx_trace_user(cx->task_id, message);
 }
 
-asx_status asx_oneshot_send(asx_oneshot_sender *sender, asx_cx *cx, uint64_t value) {
+asx_status asx_oneshot_reserve(asx_oneshot_sender *sender, asx_cx *cx, asx_oneshot_permit *out) {
     asx_oneshot_slot *s;
-    asx_obligation_id ob = ASX_INVALID_ID;
     asx_status st;
 
-    if (sender == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (sender->slot >= g_slot_count) return ASX_E_NOT_FOUND;
-    s = &g_slots[sender->slot];
-    if (s->generation != sender->generation) return ASX_E_STALE_HANDLE;
-    if (!s->sender_alive) return ASX_E_INVALID_STATE;
+    if (sender == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = oneshot_sender_slot(sender, &s);
+    if (st != ASX_OK) return st;
+    /* A consumed sender leaves *out alone: it may be the live permit. */
+    if (!s->sender_alive || s->reserved) return ASX_E_INVALID_STATE;
+    out->live = 0;
+    out->obligation = ASX_INVALID_ID;
 
-    /* Rust's reserve: cancellation consumes the sender, closing the
-     * channel (oneshot.rs:497-510). */
+    /* Cancellation consumes the sender, closing the channel
+     * (oneshot.rs:497-510). */
     if (cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) {
         oneshot_trace(cx, "oneshot::reserve cancelled");
         asx_oneshot_sender_drop(sender);
         return ASX_E_CANCELLED;
     }
     oneshot_trace(cx, "oneshot::reserve creating permit");
-    if (cx != NULL && cx->task_id != ASX_INVALID_ID &&
-        asx_obligation_reserve_ex(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id,
-                                  &ob) != ASX_OK) {
-        ob = ASX_INVALID_ID;
+    s->reserved = 1;
+    out->sender = *sender;
+    out->live = 1;
+    /* Registered after the permit exists (:519-528); a refusal leaves the
+     * permit untracked. */
+    if (cx != NULL && cx->task_id != ASX_INVALID_ID) {
+        asx_obligation_id ob;
+        if (asx_obligation_reserve_ex(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id,
+                                      &ob) == ASX_OK) {
+            out->obligation = ob;
+        }
     }
+    return ASX_OK;
+}
 
-    /* The permit's send: delivered commits, a dropped receiver aborts
-     * with reason Error (:731-772). */
-    st = asx_oneshot_try_send(sender, value);
-    if (ob != ASX_INVALID_ID) {
-        asx_status rs = st == ASX_OK
-                            ? asx_obligation_commit(ob)
-                            : asx_obligation_abort_with_reason(ob, ASX_OBLIGATION_ABORT_ERROR);
-        (void)rs; /* the obligation was reserved just above */
-    }
+/* Resolve a permit's obligation and release the slot's reservation. */
+static asx_oneshot_slot *oneshot_permit_take(asx_oneshot_permit *permit) {
+    asx_oneshot_slot *s;
+    permit->live = 0;
+    if (oneshot_sender_slot(&permit->sender, &s) != ASX_OK) return NULL;
+    s->reserved = 0;
+    return s;
+}
+
+static void oneshot_permit_resolve(asx_oneshot_permit *permit, int delivered,
+                                   asx_obligation_abort_reason reason) {
+    asx_status st;
+    if (permit->obligation == ASX_INVALID_ID) return;
+    st = delivered ? asx_obligation_commit(permit->obligation)
+                   : asx_obligation_abort_with_reason(permit->obligation, reason);
+    (void)st; /* refused only for an obligation the runtime already resolved */
+    permit->obligation = ASX_INVALID_ID;
+}
+
+asx_status asx_oneshot_permit_send(asx_oneshot_permit *permit, uint64_t value) {
+    asx_oneshot_slot *s;
+    asx_status st;
+
+    if (permit == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!permit->live) return ASX_E_INVALID_STATE;
+    s = oneshot_permit_take(permit);
+    st = s != NULL ? oneshot_deliver(&permit->sender, s, value) : ASX_E_STALE_HANDLE;
+    /* Delivered commits; a dropped receiver aborts with reason Error
+     * (:731-772). */
+    oneshot_permit_resolve(permit, st == ASX_OK, ASX_OBLIGATION_ABORT_ERROR);
     return st;
+}
+
+void asx_oneshot_permit_abort(asx_oneshot_permit *permit) {
+    if (permit == NULL || !permit->live) return;
+    /* The channel closes: the receiver sees it closed (:774-799). */
+    if (oneshot_permit_take(permit) != NULL) asx_oneshot_sender_drop(&permit->sender);
+    oneshot_permit_resolve(permit, 0, ASX_OBLIGATION_ABORT_EXPLICIT);
+}
+
+asx_status asx_oneshot_send(asx_oneshot_sender *sender, asx_cx *cx, uint64_t value) {
+    asx_oneshot_permit permit;
+    asx_status st = asx_oneshot_reserve(sender, cx, &permit);
+    if (st != ASX_OK) return st;
+    return asx_oneshot_permit_send(&permit, value);
 }
 
 asx_status asx_oneshot_recv(asx_oneshot_receiver *receiver, asx_cx *cx, uint64_t *out_value) {

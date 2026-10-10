@@ -2,12 +2,12 @@
 //! projects it into asx.vocab.v2 (docs/SCENARIO_DSL_V2.md,
 //! docs/CANONICAL_VOCABULARY_V2.md).
 //!
-//! Increment 1 implements the driver (setup, script, finish), the control,
-//! masking, obligation, spawn/join and child-region steps, trace projection
-//! and the snapshot; increment 2 adds the sync (mutex, semaphore, barrier,
-//! notify) and channel (mpsc, oneshot, broadcast, watch) steps. Group,
-//! combinator and actor steps are not yet interpreted: a scenario that uses
-//! one fails as a harness error, never silently.
+//! It interprets the driver (setup, script, finish), the control, masking,
+//! obligation, spawn/join and child-region steps, the sync (mutex,
+//! semaphore, rwlock, barrier, notify), channel (mpsc, oneshot, broadcast,
+//! watch), group and combinator steps and the server steps (DSL §3.8), and
+//! projects the trace and the snapshot. A step it does not interpret (the
+//! supervision steps) fails the run as a harness error, never silently.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
@@ -19,6 +19,7 @@ use asupersync::channel::{broadcast, mpsc, oneshot, watch};
 use asupersync::combinator::first_ok::FirstOkError;
 use asupersync::combinator::quorum::QuorumError;
 use asupersync::cx::{ChildRegion, ChildRegionSpec};
+use asupersync::gen_server::{CallError, CastError, GenServer, GenServerHandle, Reply, SystemMsg};
 use asupersync::lab::{LabConfig, LabRuntime};
 use asupersync::record::task::TaskState;
 use asupersync::record::{ObligationAbortReason, ObligationKind, RegionLimits};
@@ -67,6 +68,10 @@ struct Shared {
     unspawned: HashSet<String>,
     /// Task name -> name of the region it runs in.
     task_regions: HashMap<String, String>,
+    /// Names of spawned servers (DSL §3.8). A server's snapshot outcome is
+    /// its join's (vocabulary §6): taken by `server_stop`, else harvested
+    /// from its task record (`harvest_servers`).
+    servers: HashSet<String>,
     /// Declared sync objects by name.
     sync: HashMap<String, SyncObj>,
     region_ids: HashMap<String, RegionId>,
@@ -427,6 +432,62 @@ struct Local {
     broadcast_rx: BTreeMap<String, broadcast::Receiver<u64>>,
     watch_tx: BTreeMap<String, watch::Sender<u64>>,
     watch_rx: BTreeMap<String, watch::Receiver<u64>>,
+    /// GenServers this task spawned, by name (DSL §3.8).
+    servers: BTreeMap<String, Server>,
+}
+
+/// The DSL's built-in GenServer behaviours (§3.8): `counter` keeps a u64
+/// that a cast adds to and a call returns; `echo` replies to a call with
+/// its request. Both keep the trait's defaults (budgets, Reject overflow,
+/// no-op info, start and stop hooks).
+struct CounterServer(u64);
+struct EchoServer;
+
+impl GenServer for CounterServer {
+    type Call = u64;
+    type Reply = u64;
+    type Cast = u64;
+    type Info = SystemMsg;
+
+    fn handle_call(
+        &mut self,
+        _cx: &Cx,
+        _request: u64,
+        reply: Reply<u64>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let value = self.0;
+        Box::pin(async move {
+            let _ = reply.send(value);
+        })
+    }
+
+    fn handle_cast(&mut self, _cx: &Cx, msg: u64) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.0 = self.0.wrapping_add(msg);
+        Box::pin(async {})
+    }
+}
+
+impl GenServer for EchoServer {
+    type Call = u64;
+    type Reply = u64;
+    type Cast = u64;
+    type Info = SystemMsg;
+
+    fn handle_call(
+        &mut self,
+        _cx: &Cx,
+        request: u64,
+        reply: Reply<u64>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let _ = reply.send(request);
+        })
+    }
+}
+
+enum Server {
+    Counter(GenServerHandle<CounterServer>),
+    Echo(GenServerHandle<EchoServer>),
 }
 
 /// A channel endpoint, moved into its owner's body at setup (DSL §3.6).
@@ -1522,6 +1583,103 @@ async fn exec_step(
             };
             observe(&ctx.shared, me, idx, op, &status, Value::Null);
         }
+        // Actors (DSL §3.8).
+        "server_spawn" => {
+            let name = str_field(step, "as")?.to_string();
+            let mailbox =
+                usize::try_from(u64_field(step, "mailbox")?).map_err(|e| e.to_string())?;
+            let spawned = match str_field(step, "behavior")? {
+                "counter" => cx
+                    .spawn_gen_server(CounterServer(0), mailbox)
+                    .map(|h| (h.task_id(), Server::Counter(h))),
+                "echo" => cx
+                    .spawn_gen_server(EchoServer, mailbox)
+                    .map(|h| (h.task_id(), Server::Echo(h))),
+                other => return Err(format!("unknown behavior {other:?}")),
+            };
+            let (task, server) = spawned.map_err(|e| format!("server_spawn failed: {e:?}"))?;
+            {
+                let mut s = lock(&ctx.shared);
+                s.provisional.insert(task, name.clone());
+                s.task_regions.insert(name.clone(), ctx.region.clone());
+                s.servers.insert(name.clone());
+            }
+            local.servers.insert(name, server);
+            observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
+        }
+        "cast" => {
+            let name = str_field(step, "server")?;
+            let value = u64_field(step, "value")?;
+            let result = match local
+                .servers
+                .get(name)
+                .ok_or_else(|| format!("unknown server {name:?}"))?
+            {
+                Server::Counter(h) => h.cast(cx, value).await,
+                Server::Echo(h) => h.cast(cx, value).await,
+            };
+            let status = match result {
+                Ok(()) => "ASX_OK",
+                Err(CastError::Full) => "ASX_E_CHANNEL_FULL",
+                Err(CastError::ServerStopped) => "ASX_E_DISCONNECTED",
+                Err(CastError::Cancelled(_)) => "ASX_E_CANCELLED",
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "call" => {
+            let name = str_field(step, "server")?;
+            let request = u64_field(step, "request")?;
+            if ctx.region == "root" {
+                return Err("call from a root-region task (DSL §3.8)".to_string());
+            }
+            let result = match local
+                .servers
+                .get(name)
+                .ok_or_else(|| format!("unknown server {name:?}"))?
+            {
+                Server::Counter(h) => h.call(cx, request).await,
+                Server::Echo(h) => h.call(cx, request).await,
+            };
+            match result {
+                Ok(v) => observe(&ctx.shared, me, idx, op, "ASX_OK", json!(v)),
+                Err(e) => {
+                    let status = match e {
+                        CallError::ServerStopped => "ASX_E_DISCONNECTED",
+                        CallError::NoReply => "ASX_E_INVALID_STATE",
+                        CallError::Cancelled(_) => "ASX_E_CANCELLED",
+                    };
+                    observe(&ctx.shared, me, idx, op, status, Value::Null);
+                }
+            }
+        }
+        "server_stop" => {
+            let name = str_field(step, "server")?;
+            let mut server = local
+                .servers
+                .remove(name)
+                .ok_or_else(|| format!("unknown server {name:?}"))?;
+            let result = match &mut server {
+                Server::Counter(h) => {
+                    h.stop();
+                    h.join(cx).await.map(|_| ())
+                }
+                Server::Echo(h) => {
+                    h.stop();
+                    h.join(cx).await.map(|_| ())
+                }
+            };
+            let status = match &result {
+                Ok(()) => "ASX_OK",
+                Err(JoinError::Cancelled(_)) => "ASX_E_CANCELLED",
+                Err(_) => "ASX_E_INVALID_STATE",
+            };
+            // The server task's outcome for the snapshot: its body returns
+            // once the loop has stopped and the state is published.
+            lock(&ctx.shared)
+                .raw_outcomes
+                .insert(name.to_string(), result.map(|()| Body::Ok));
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
         "join" => {
             let target = str_field(step, "task")?;
             if lock(&ctx.shared).unspawned.contains(target) {
@@ -2075,6 +2233,7 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
     }
 
     resolve_admissions(&lab, &shared)?;
+    harvest_servers(&lab, &mut lock(&shared));
     project_denied_spawns(&mut lock(&shared))?;
     finish_outcomes(&mut lock(&shared))?;
 
@@ -2247,6 +2406,34 @@ fn apply_driver_op(lab: &mut LabRuntime, shared: &SharedRef, op: &Value) -> RunR
 // ---------------------------------------------------------------------------
 // Trace projection and snapshot
 // ---------------------------------------------------------------------------
+
+/// The outcome of each completed server no `server_stop` joined, as its join
+/// would report it (vocabulary §6): an admitted server always runs, so it
+/// publishes its final state (ok) unless it panicked. Its task's own
+/// outcome is not observable (`GenServerHandle` keeps the task handle).
+/// A record the lab already reaped (its region closed) belongs to a
+/// finished server; the built-in behaviors cannot panic (every call is
+/// replied to), so it joins ok.
+fn harvest_servers(lab: &LabRuntime, s: &mut Shared) {
+    let mut names: Vec<String> = s.servers.iter().cloned().collect();
+    names.sort();
+    for name in names {
+        if s.raw_outcomes.contains_key(&name) {
+            continue;
+        }
+        let Some(id) = s.task_ids.get(&name) else {
+            continue; // never admitted: not in the snapshot
+        };
+        let result = match lab.state.task(*id).map(|record| &record.state) {
+            Some(TaskState::Completed(asupersync::Outcome::Panicked(payload))) => {
+                Err(JoinError::Panicked(payload.clone()))
+            }
+            Some(TaskState::Completed(_)) | None => Ok(Body::Ok),
+            Some(_) => continue, // still running
+        };
+        s.raw_outcomes.insert(name, result);
+    }
+}
 
 /// Name the canonical ids of children spawned through `cx.spawn`. The spawn
 /// returns a handle carrying a provisional mailbox id; admission assigns the

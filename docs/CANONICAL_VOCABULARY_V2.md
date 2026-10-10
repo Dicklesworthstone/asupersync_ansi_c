@@ -48,6 +48,7 @@ gets a canonical name instead:
 | the root region | `"root"` |
 | task spawned by a scenario step | the step's `name`, e.g. `"t.producer"` |
 | task spawned by a `spawn` step of another task's program | the step's `as` |
+| the task of a server (`server_spawn`) | the step's `as`, e.g. `"srv.counter"`; obligations its callers reserve are named after the caller |
 | member of a task group (`race`, `join_all`, `first_ok`, `quorum`) | `"<owner>/g<s>.<i>"`, s = the group step's index in the owner's program, i = 1-based member index |
 | the wrapper task of a `race` with `deadline_ns` (`Scope::timeout`) | `"<owner>/g<s>.timeout"`; its members keep `"<owner>/g<s>.<i>"` |
 | obligation | `"<holder>/o<k>"`, k = 1-based reservation index within the holder task |
@@ -128,6 +129,23 @@ reproduce exactly for the projected streams to agree.
   `"mpsc::recv_many cancelled"` (`:1882`, `:2102`).
 - **Scenario `user.trace`:** the DSL `trace` step emits `user.trace` with the
   step's message (Rust `Cx::trace`, `cx.rs:3362-3376`).
+- **GenServer `user.trace` messages** (`gen_server.rs`): the server task
+  records `"gen_server::init"` or `"gen_server::init_skipped_cancelled"`,
+  `"gen_server::cancel_requested"`, `"gen_server::recv_cancelled"`,
+  `"gen_server::mailbox_disconnected"`, `"gen_server::reply_committed"`
+  or `"gen_server::reply_caller_gone"`,
+  `"gen_server::yield_after_ready_batch"`, `"gen_server::drain_abort_call"`,
+  `"gen_server::yield_during_drain"`, `"gen_server::mailbox_drained"` and
+  `"gen_server::terminate"`; its callers record
+  `"gen_server::cast_rejected_cancelled"` / `_stopped`,
+  `"gen_server::cast_send_cancelled"` / `_failed`,
+  `"gen_server::call_rejected_cancelled"` / `_stopped` / `_root_region`,
+  `"gen_server::call_send_cancelled"` / `_failed`,
+  `"gen_server::call_enqueued"`, `"gen_server::call_no_reply"` and
+  `"gen_server::call_reply_cancelled"`, plus the mpsc and oneshot
+  messages of the channels underneath (a call's reply is a oneshot).
+  Obligation events: a call's mailbox reservation and its reply permit
+  are each a SendPermit held by the caller; a cast's send registers none.
 - **Timers:** re-arming a sleep emits `timer.cancelled` then
   `timer.scheduled` (`src/time/sleep.rs:985-988`). A fire is recorded with
   time `max(now, deadline)` (`sleep.rs:688`); only the event and the snapshot's
@@ -333,6 +351,14 @@ named or that appeared in the trace, including completed ones.
   in the trace under their §2 names, and their results reach the comparison
   only through the group step's observation (DSL §3.5). Both engines still
   count an unfinished member against `quiescent`.
+- **A server's outcome is its join's.** `GenServerHandle` keeps the
+  server task's handle, so Rust exposes only the join
+  (`gen_server.rs:1552-1603`): an admitted server always runs and
+  publishes its final state, so a completed server's `outcome` is `ok`
+  (also when its task was cancelled before its first poll, which its task
+  handle would report as cancelled), or `panicked` when a callback
+  panicked. A server whose spawn its admission refused is not in `tasks`,
+  as for any refused spawn.
 - **Task fields.** A task's `outcome` is set iff its state is `Completed`.
   Its `cancel_reason` is the reason carried by `CancelRequested` /
   `Cancelling` / `Finalizing` (`src/record/task.rs:83-100`), or the

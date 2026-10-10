@@ -175,8 +175,10 @@ static void test_symbol_resolution(void) {
     /* Actor + supervision surface */
     SHIM_CHECK(asx_actor_spawn != NULL, "asx_actor_spawn resolves");
     SHIM_CHECK(asx_actor_cast != NULL, "asx_actor_cast resolves");
+    SHIM_CHECK(asx_actor_try_cast != NULL, "asx_actor_try_cast resolves");
     SHIM_CHECK(asx_actor_call != NULL, "asx_actor_call resolves");
     SHIM_CHECK(asx_actor_stop != NULL, "asx_actor_stop resolves");
+    SHIM_CHECK(asx_actor_join != NULL, "asx_actor_join resolves");
     SHIM_CHECK(asx_supervisor_start != NULL, "asx_supervisor_start resolves");
     SHIM_CHECK(asx_supervisor_stop != NULL, "asx_supervisor_stop resolves");
 
@@ -255,7 +257,26 @@ static asx_status shim_child_start(void *user_data, asx_region_id region, asx_ac
     behavior.handle_cast = shim_actor_cast;
     behavior.handle_call = shim_actor_call;
     behavior.terminate = NULL;
-    return asx_actor_spawn(out, region, &behavior, user_data);
+    return asx_actor_spawn(out, region, &behavior, user_data, 4u);
+}
+
+/* A task in a child region calling the server once. */
+typedef struct {
+    asx_actor_handle server;
+    asx_cx cx;
+    asx_actor_op op;
+    asx_status status;
+    uint64_t reply;
+} shim_caller;
+
+static asx_status shim_caller_poll(void *user_data, asx_task_id self) {
+    shim_caller *c = (shim_caller *)user_data;
+    asx_status st;
+    (void)self;
+    st = asx_actor_call(c->server, &c->cx, 41u, &c->op, &c->reply);
+    if (st == ASX_E_PENDING) return st;
+    c->status = st;
+    return ASX_OK;
 }
 
 static void test_lifecycle_smoke(void) {
@@ -283,12 +304,13 @@ static void test_actor_surface_smoke(void) {
     asx_region_id rid;
     asx_actor_handle actor;
     asx_supervisor_handle supervisor;
-    asx_call_token token;
+    asx_region_id callers;
+    asx_task_id caller_id;
+    shim_caller caller;
     shim_actor_state state;
     asx_supervisor_config cfg;
     asx_child_spec spec;
     asx_budget budget;
-    uint64_t reply = 0u;
     asx_status st;
 
     fprintf(stderr, "--- Actor surface smoke ---\n");
@@ -305,7 +327,7 @@ static void test_actor_surface_smoke(void) {
         behavior.handle_cast = shim_actor_cast;
         behavior.handle_call = shim_actor_call;
         behavior.terminate = NULL;
-        st = asx_actor_spawn(&actor, rid, &behavior, &state);
+        st = asx_actor_spawn(&actor, rid, &behavior, &state, 4u);
     }
     SHIM_CHECK(st == ASX_OK, "actor_spawn succeeds through umbrella header");
 
@@ -315,17 +337,21 @@ static void test_actor_surface_smoke(void) {
     st = asx_scheduler_run(rid, &budget);
     SHIM_CHECK(st == ASX_E_WOULD_BLOCK, "actor init run parks the idle actor");
 
-    st = asx_actor_cast(actor, 9u);
-    SHIM_CHECK(st == ASX_OK, "actor_cast succeeds");
-    st = asx_actor_call(actor, 41u, &token);
-    SHIM_CHECK(st == ASX_OK, "actor_call succeeds");
+    st = asx_actor_try_cast(actor, 9u);
+    SHIM_CHECK(st == ASX_OK, "actor_try_cast succeeds");
+    memset(&caller, 0, sizeof(caller));
+    caller.server = actor;
+    caller.status = ASX_E_PENDING;
+    st = asx_region_open_child(rid, &callers);
+    if (st == ASX_OK) st = asx_task_spawn(callers, shim_caller_poll, &caller, &caller_id);
+    if (st == ASX_OK) st = asx_cx_init(&caller.cx, callers, caller_id, ASX_CAP_CANCEL_CHECK);
+    SHIM_CHECK(st == ASX_OK, "caller task spawns in a child region");
 
-    budget = asx_budget_from_polls(4u);
+    budget = asx_budget_from_polls(16u);
     st = asx_scheduler_run(rid, &budget);
     SHIM_CHECK(st == ASX_E_WOULD_BLOCK, "actor message run drains the mailbox and parks");
 
-    st = asx_call_token_poll(token, &reply);
-    SHIM_CHECK(st == ASX_OK && reply == 42u, "actor call reply roundtrip");
+    SHIM_CHECK(caller.status == ASX_OK && caller.reply == 42u, "actor call reply roundtrip");
     SHIM_CHECK(state.last_cast == 41u, "actor state updated through reply handler");
 
     st = asx_actor_stop(actor);

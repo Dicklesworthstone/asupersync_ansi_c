@@ -86,7 +86,7 @@ static asx_actor_behavior stable_behavior(void) {
 
 static asx_status stable_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
     asx_actor_behavior b = stable_behavior();
-    return asx_actor_spawn(out, region, &b, user_data);
+    return asx_actor_spawn(out, region, &b, user_data, 4u);
 }
 
 /* Fragile actor: dies on first cast message */
@@ -113,7 +113,7 @@ static asx_status counting_start(void *user_data, asx_region_id region, asx_acto
     asx_actor_behavior b = fragile_behavior();
     (void)user_data;
     g_start_count++;
-    return asx_actor_spawn(out, region, &b, NULL);
+    return asx_actor_spawn(out, region, &b, NULL, 4u);
 }
 
 /* Failing start function */
@@ -138,7 +138,7 @@ static asx_status ordered_start(void *user_data, asx_region_id region, asx_actor
     tagged_data *tag = (tagged_data *)user_data;
     asx_actor_behavior b = fragile_behavior();
     if (g_start_order_count < 16) { g_start_order[g_start_order_count++] = tag->id; }
-    return asx_actor_spawn(out, region, &b, user_data);
+    return asx_actor_spawn(out, region, &b, user_data, 4u);
 }
 
 /* ------------------------------------------------------------------ */
@@ -358,7 +358,7 @@ static asx_status dying_start(void *user_data, asx_region_id region, asx_actor_h
     b.handle_call = NULL;
     b.terminate = NULL;
     g_start_count++;
-    return asx_actor_spawn(out, region, &b, NULL);
+    return asx_actor_spawn(out, region, &b, NULL, 4u);
 }
 
 static void test_one_for_one_child_dies_and_restarts(void) {
@@ -695,7 +695,7 @@ static void test_supervisor_parks_and_wakes_on_child_death(void) {
 
     /* Kill the fragile child: its completion wakes the supervisor, which
      * restarts it, and the tree parks again. */
-    MUST_OK(asx_actor_cast(g_captured, 1u));
+    MUST_OK(asx_actor_try_cast(g_captured, 1u));
     used = run_counting(r, &st);
     ASSERT(st == ASX_E_WOULD_BLOCK, "parks again after restart");
     ASSERT(used < 10u, "restart is event-driven");
@@ -734,7 +734,7 @@ static void test_transient_restarts_on_error_not_on_cancel(void) {
     ASSERT(g_start_count == 1u, "child started once");
 
     /* An error exit restarts it. */
-    MUST_OK(asx_actor_cast(g_captured, 1u));
+    MUST_OK(asx_actor_try_cast(g_captured, 1u));
     (void)run_counting(r, &st);
     ASSERT(g_start_count == 2u, "an error exit restarts a transient child");
 

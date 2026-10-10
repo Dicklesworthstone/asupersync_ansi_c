@@ -197,7 +197,7 @@ Rust `Drop for Receiver` (`src/channel/mpsc.rs:2122-2149`):
 
 `Receiver::close()` (`src/channel/mpsc.rs:1698-1711`) differs: it sets `receiver_dropped` and wakes the senders but leaves queued messages receivable.
 
-**C status:** `asx_channel_close_receiver` (`src/channel/mpsc.c:446-479`) is the drop: queued messages are discarded and every waiter is woken. C has no equivalent of `Receiver::close()`. Rust parity: `lab-dispatch-mpsc-disconnect-order-001` (the receiver's task completes first, dropping the receiver; the later send reports `ASX_E_DISCONNECTED`).
+**C status:** `asx_channel_close_receiver` (`src/channel/mpsc.c:469-502`) is the drop: queued messages are discarded and every waiter is woken. `asx_channel_seal` (`src/channel/mpsc.c:504-521`) is `Receiver::close()`: senders are woken and the queue stays receivable (fixture `actor-cancel-before-start-drains-001`, where a GenServer drains its sealed mailbox). Rust parity of the drop: `lab-dispatch-mpsc-disconnect-order-001` (the receiver's task completes first, dropping the receiver; the later send reports `ASX_E_DISCONNECTED`).
 
 #### Last Sender Drop (Close from Sender Side)
 

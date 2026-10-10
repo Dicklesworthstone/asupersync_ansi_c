@@ -93,7 +93,9 @@ typedef struct asx_send_permit {
 
 /* Create a bounded channel within a region.
  * capacity must be > 0 and <= ASX_CHANNEL_MAX_CAPACITY.
- * Returns ASX_OK and sets *out_id on success. */
+ * Returns ASX_OK and sets *out_id on success, ASX_E_INVALID_STATE for a
+ * closed region (a closing one is accepted: Rust's channels belong to no
+ * region). */
 ASX_API ASX_MUST_USE asx_status asx_channel_create(asx_region_id region, uint32_t capacity,
                                                    asx_channel_id *out_id);
 
@@ -106,6 +108,20 @@ ASX_API ASX_MUST_USE asx_status asx_channel_close_sender(asx_channel_id id);
  * Future sends via permits return ASX_E_DISCONNECTED.
  * Open → ReceiverClosed; SenderClosed → FullyClosed. */
 ASX_API ASX_MUST_USE asx_status asx_channel_close_receiver(asx_channel_id id);
+
+/* Close the channel from the receiver side, keeping its queue: Rust's
+ * `rx.close()` (mpsc.rs:1698), where asx_channel_close_receiver is the
+ * receiver's drop. Later reservations and permit sends see
+ * ASX_E_DISCONNECTED and parked producers are woken; queued messages stay
+ * receivable, then receives see ASX_E_DISCONNECTED.
+ * Open → ReceiverClosed; SenderClosed → FullyClosed. Returns
+ * ASX_E_INVALID_STATE when the receiver side is already closed. */
+ASX_API ASX_MUST_USE asx_status asx_channel_seal(asx_channel_id id);
+
+/* Wake a task parked in asx_channel_recv without enqueueing anything
+ * (Rust's `tx.wake_receiver()`, mpsc.rs:808): an out-of-band protocol
+ * such as a server's stop request interrupts a blocked receiver. */
+ASX_API ASX_MUST_USE asx_status asx_channel_wake_receiver(asx_channel_id id);
 
 /* ------------------------------------------------------------------ */
 /* Channel query API                                                  */

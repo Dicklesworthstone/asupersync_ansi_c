@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-1%2C978%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-1%2C987%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,978<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,987<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -41,18 +41,18 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->77<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
+  - `make conformance` runs <!-- fact:rust_fixtures -->88<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
-  - Covered areas: region/task/obligation lifecycle, cancellation and masking, budgets, mpsc/oneshot/broadcast/watch channels, mutex/rwlock/semaphore/notify/barrier, task groups (join_all, race with a deadline, first_ok, quorum) and region admission limits. All of it runs under the lab's single-worker dispatch model.
+  - Covered areas: region/task/obligation lifecycle, cancellation and masking, budgets, mpsc/oneshot/broadcast/watch channels, mutex/rwlock/semaphore/notify/barrier, task groups (join_all, race with a deadline, first_ok, quorum), region admission limits and GenServers (cast, call, stop, cancellation and the mailbox drain). All of it runs under the lab's single-worker dispatch model.
 - **Known differences, open:** listed in [`docs/SCENARIO_DSL_V2.md`](docs/SCENARIO_DSL_V2.md) §7 and rule by rule in [`docs/C_REFINEMENT_MAP.md`](docs/C_REFINEMENT_MAP.md). For example, when a semaphore or channel permit's obligation counts against a region's `max_obligations`.
-- **Not compared with Rust; tested in C only:** actors (GenServer) and supervision, which neither oracle interprets yet; networking, files, processes and HTTP; live, non-lab scheduling.
+- **Not compared with Rust; tested in C only:** supervision, which neither oracle interprets yet (C's supervisor supervises servers, Rust's supervises tasks); networking, files, processes and HTTP; live, non-lab scheduling.
 
 ### Why Use `asx`?
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->1,978<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->1,987<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -286,7 +286,7 @@ The main subsystem families are below. Their public headers live under `include/
 | **runtime** | Wake-driven scheduler (park/wake, task timers, join/watch), lifecycle engine, budgets, obligation holders and leak policy, cancel masking, task groups (race/join/first-ok/quorum with loser drain), builder, blocking pool, readiness reactor and I/O driver, deadline monitor, waker system, virtual time, telemetry, diagnostics, HFT/automotive instrumentation |
 | **channel** | Bounded MPSC, oneshot, broadcast, watch channels, and session endpoints |
 | **sync** | Mutex, rwlock, semaphore, barrier (N-way rendezvous with leader election), once, notify |
-| **actor** | Wake-driven actors (mailboxes, cast/call) with event-driven supervision trees |
+| **actor** | GenServers (task, mpsc mailbox, cast/call/stop/join, drain on cancel) with event-driven supervision trees |
 | **cx** | Capability context and structured concurrency scoping |
 | **codec** | JSON + binary codecs with equivalence checking and schema validation |
 | **time** | Deadline abstraction, sleep primitives, timer wheel with generation-safe handles |
@@ -591,7 +591,7 @@ it drifts from the headers or a new capacity macro is missing.
 <!-- capacity-table:begin -->
 | Macro | Default | Defined in |
 |---|---|---|
-| `ASX_ACTOR_MAILBOX_CAPACITY` | 16 | `include/asx/actor/actor.h` |
+| `ASX_ACTOR_MAILBOX_CAPACITY` | 64 | `include/asx/actor/actor.h` |
 | `ASX_AFFINITY_TABLE_CAPACITY` | 256 | `include/asx/core/affinity.h` |
 | `ASX_BROADCAST_MAX_CAPACITY` | 32 | `include/asx/core/broadcast.h` |
 | `ASX_BUF_CAPACITY` | 4096 | `include/asx/bytes/buf.h` |
@@ -1232,11 +1232,15 @@ Each child has a restart policy:
 
 The supervisor state machine progresses through INIT, RUNNING, STOPPING, RESTART, SHUTDOWN, and DONE phases. This structured lifecycle means supervision decisions are deterministic and auditable. The same failure sequence always produces the same restart pattern.
 
+The children are GenServers, ported from Rust's `gen_server.rs` and checked against it (the `actor-*` fixtures):
+- A server is a task with an mpsc mailbox. It waits in the mailbox's receive, and every cast, call or stop wakes it. It serves eight messages per poll, then yields.
+- `asx_actor_cast` and `asx_actor_call` take the caller's `asx_cx` and are polled like the Rust futures: a cast waits while the mailbox is full; a call reserves a mailbox slot and a reply permit (two SendPermit obligations held by the caller), then parks until the reply. Calls from a root-region task are refused, as in Rust. `asx_actor_try_cast` needs no task.
+- `asx_actor_stop` lets the server serve what is queued and stop; `asx_actor_join` waits for its task.
+- A cancelled server stops at its next loop check or receive. It seals its mailbox and drains it without handling the casts, drops the queued calls (their callers get no reply), then runs `terminate` with `ASX_E_CANCELLED`. A failing callback is the C form of a Rust panic: the server stops at once and its task completes PANICKED.
+
 Supervision is event-driven:
-- An actor parks on an empty mailbox, and every cast, call or stop wakes it.
-- A caller polling a call token parks until the reply, or until the actor drops the call or exits.
 - A supervisor watches its children's tasks (`asx_task_watch`) and sleeps until one exits, so a quiet tree costs no polls.
-- A cancelled actor runs its `terminate` callback with `ASX_E_CANCELLED`, and a cancelled supervisor cancels its children and shuts down without restarting them. A child cancelled on its own is restarted only if it is PERMANENT (see above).
+- A cancelled supervisor cancels its children and shuts down without restarting them. A child cancelled on its own is restarted only if it is PERMANENT (see above).
 
 ## Structured Concurrency and Capability Flow
 
@@ -2262,7 +2266,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->1,978<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->1,987<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

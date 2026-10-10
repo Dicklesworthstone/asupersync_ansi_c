@@ -26,6 +26,7 @@ void asx_semaphore_reset(void) {}
 void asx_barrier_reset(void) {}
 void asx_once_reset(void) {}
 void asx_actor_reset(void) {}
+void asx_actor_task_finished(asx_task_id task) { (void)task; }
 void asx_supervisor_reset(void) {}
 void asx_net_reset(void) {}
 void asx_diagnostic_reset(void) {}

@@ -105,14 +105,41 @@ ASX_API ASX_MUST_USE asx_status asx_oneshot_try_recv(asx_oneshot_receiver *recei
  * traces and obligations.
  * ------------------------------------------------------------------- */
 
-/* `tx.send(&cx, v)` (channel/oneshot.rs:556): consumes the sender. A
- * cancelled Cx gives ASX_E_CANCELLED, traces "oneshot::reserve cancelled"
- * and closes the channel (the receiver sees ASX_E_DISCONNECTED). Otherwise
- * traces "oneshot::reserve creating permit", reserves a SendPermit
- * obligation for the Cx's task and delivers: the obligation is committed,
- * or, with the receiver gone, aborted with reason ERROR and the result is
- * ASX_E_DISCONNECTED (:492-535, :731-772). A refused reservation leaves
- * the send untracked. */
+/* A reserved send (Rust oneshot::SendPermit, channel/oneshot.rs:690): it
+ * holds the sending side until asx_oneshot_permit_send or
+ * asx_oneshot_permit_abort, and the SendPermit obligation reserved for the
+ * reserving Cx's task (ASX_INVALID_ID when untracked). */
+typedef struct {
+    asx_oneshot_sender sender;
+    asx_obligation_id obligation;
+    int live; /* reserved, neither sent nor aborted */
+} asx_oneshot_permit;
+
+/* `tx.reserve(&cx)` (:492): consumes the sender (asx_oneshot_try_send and
+ * asx_oneshot_sender_drop no longer act on it). A cancelled Cx gives
+ * ASX_E_CANCELLED, traces "oneshot::reserve cancelled" and closes the
+ * channel (the receiver sees ASX_E_DISCONNECTED). Otherwise traces
+ * "oneshot::reserve creating permit" and reserves a SendPermit obligation
+ * for the Cx's task; a refused reservation, or a Cx without a task, leaves
+ * the permit untracked. A dropped receiver is reported by the send, not
+ * here. Returns ASX_E_INVALID_STATE for a sender already consumed, leaving
+ * *out untouched. */
+ASX_API ASX_MUST_USE asx_status asx_oneshot_reserve(asx_oneshot_sender *sender, asx_cx *cx,
+                                                    asx_oneshot_permit *out);
+
+/* `permit.send(v)` (:730): delivers and commits the obligation, or, with
+ * the receiver gone, aborts it with reason ERROR and returns
+ * ASX_E_DISCONNECTED. Consumes the permit (ASX_E_INVALID_STATE once
+ * consumed). */
+ASX_API ASX_MUST_USE asx_status asx_oneshot_permit_send(asx_oneshot_permit *permit, uint64_t value);
+
+/* `permit.abort()` (:774): closes the channel without a value (the
+ * receiver sees ASX_E_DISCONNECTED) and aborts the obligation with reason
+ * EXPLICIT. A consumed permit is left alone. */
+ASX_API void asx_oneshot_permit_abort(asx_oneshot_permit *permit);
+
+/* `tx.send(&cx, v)` (:556): asx_oneshot_reserve, then
+ * asx_oneshot_permit_send. */
 ASX_API ASX_MUST_USE asx_status asx_oneshot_send(asx_oneshot_sender *sender, asx_cx *cx,
                                                  uint64_t value);
 

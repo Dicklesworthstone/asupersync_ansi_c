@@ -350,14 +350,20 @@ These steps use built-in behaviours, so programs never define handlers.
 
 - **`counter`:** state is a u64 starting at 0; a cast adds its value; a call
   returns the state.
-- **`echo`:** a call returns its request.
+- **`echo`:** a call returns its request; a cast does nothing.
+
+Neither behaviour defines `on_start` or `on_stop`, so the trace shows the
+server loop's own `gen_server::*` user traces (`include/asx/actor/actor.h`).
+A server is only usable by the task that spawned it (twin_run keeps the
+handle in that task's locals), and its task is named by `as`. Its
+snapshot outcome is its join's (vocabulary §6).
 
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|
-| `server_spawn` | `as`, `behavior`, `mailbox` | `cx.spawn_gen_server(server, cap)` (`gen_server.rs:2511`) | `asx_actor_spawn(&h, own_region, behavior, state)` | no | ignored |
-| `cast` | `server`, `value` | `h.cast(&cx, msg).await` (`gen_server.rs:1268`) | `asx_actor_cast` | while the mailbox is full | Checked first: `ASX_E_CANCELLED`. |
-| `call` | `server`, `request` | `h.call(&cx, req).await` (`:1171`) | `asx_actor_call` + `asx_call_token_poll` | until the reply arrives | Checked first: `ASX_E_CANCELLED`. The caller must not be in `"root"` (Rust rejects root-region callers, `gen_server.rs:1086-1094`); both interpreters reject such a scenario as a scenario error before running it. |
-| `server_stop` | `server` | `h.stop()` (`:1453`), then `join` | `asx_actor_stop` | until stopped | ignored |
+| `server_spawn` | `as`, `behavior`, `mailbox` | `cx.spawn_gen_server(server, cap)` (`gen_server.rs:2511`) | `asx_actor_spawn(&h, own_region, behavior, state, mailbox)` | no | ignored; a spawn its admission refuses is `ASX_OK`, its server never runs |
+| `cast` | `server`, `value` | `h.cast(&cx, msg).await` (`gen_server.rs:1268`) | `asx_actor_cast(h, &cx, value, &op)` | while the mailbox is full | Checked first: `ASX_E_CANCELLED`; a stopping server: `ASX_E_DISCONNECTED`. |
+| `call` | `server`, `request` | `h.call(&cx, req).await` (`:1171`) | `asx_actor_call(h, &cx, request, &op, &reply)` | until the reply arrives | Checked first: `ASX_E_CANCELLED`; a stopping server: `ASX_E_DISCONNECTED`; a dropped call: `ASX_E_INVALID_STATE` (NoReply). The caller must not be in `"root"` (Rust rejects root-region callers, `gen_server.rs:1086-1094`); both interpreters reject such a scenario as a scenario error before running it. |
+| `server_stop` | `server` | `h.stop()` (`:1453`), then `h.join(&cx)` (`:1489`) | `asx_actor_stop`, then `asx_actor_join` | until its task finished | ignored; a server that never ran: `ASX_E_CANCELLED`. Later steps may not name the server. |
 | `supervise` | `as`, `policy` (`one_for_one`, `one_for_all`, `rest_for_one`), `max_restarts`, `window_ns`, `children` (`{name, mode: permanent\|transient\|temporary, program}`) | `SupervisorBuilder::new(name).with_restart_policy(p).child(…).compile()?.bind_managed(bindings, SupervisionConfig::new(max, window))?.spawn(&cx)` (`supervision.rs:894`, `:924`, `:931`, `:973`, `:2093`, `:3497`) | `asx_supervisor_start(&h, own_region, &config, children, n)` | no | ignored |
 | `supervisor_join` | `supervisor` | `handle.join(&cx).await` (`supervision.rs:3429`) | wait for `asx_supervisor_is_alive` to become false | until it exits | ignored |
 
@@ -473,6 +479,25 @@ Open:
   `max_obligations` only when no permit can register an obligation.
 
 Closed (each verified by a fixture that now matches):
+
+- **GenServers** (bd-g652): `src/actor/actor.c` runs Rust's
+  `run_gen_server_loop` as a task on an mpsc mailbox (the C actor was a
+  ring buffer served one message per poll, with a synchronous call
+  token). The init, the loop's cancel check, the receive (a stop with an
+  empty mailbox ends it as a disconnect), the batch yield after eight
+  messages, the sealed-mailbox drain (casts skipped once cancelled, calls'
+  replies aborted), terminate, and the client side (cast's transient send
+  without an obligation, call's mailbox and reply permits, each a
+  SendPermit held by the caller) follow `gen_server.rs` step for step with
+  its user traces. New primitives: `asx_channel_seal` (Rust
+  `Receiver::close`, keeping the queue), `asx_channel_wake_receiver`, and
+  `asx_oneshot_reserve` / `asx_oneshot_permit_send` / `_abort` (the
+  tracked reply permit). A spawn the lab refuses at once (a closing
+  region) keeps its handle, as Rust's queued spawn does, and the refusal
+  drops its cell. Fixtures `actor-*` (11), among them
+  `actor-cancel-before-start-drains-001` and
+  `actor-cancel-caller-and-server-001`. The generator does not emit
+  server steps yet.
 
 - **When `max_tasks` is checked under lab dispatch** (bd-orxy): as Rust's
   spawn mailbox does, a spawn from a poll returns its task at once and the

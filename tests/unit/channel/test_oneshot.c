@@ -6,6 +6,7 @@
 
 #include "../../test_harness.h"
 #include <asx/core/oneshot.h>
+#include <asx/runtime/runtime.h>
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -192,6 +193,119 @@ TEST(arena_exhaustion) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Reserve and permits (Rust Sender::reserve, SendPermit)              */
+/* ------------------------------------------------------------------ */
+
+TEST(reserve_consumes_the_sender_until_the_permit_sends) {
+    asx_oneshot_sender tx;
+    asx_oneshot_receiver rx;
+    asx_oneshot_permit p;
+    asx_oneshot_permit again;
+    uint64_t val = 0;
+    setup();
+    MUST_OK(asx_oneshot_create(&tx, &rx));
+    ASSERT_EQ(asx_oneshot_reserve(&tx, NULL, &p), ASX_OK);
+    ASSERT_EQ(p.obligation, ASX_INVALID_ID); /* no Cx: untracked */
+    ASSERT_EQ(asx_oneshot_try_send(&tx, 1), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_oneshot_reserve(&tx, NULL, &again), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_oneshot_reserve(&tx, NULL, &p), ASX_E_INVALID_STATE);
+    ASSERT_EQ(p.live, 1);         /* the refused reserve left the live permit alone */
+    asx_oneshot_sender_drop(&tx); /* the permit holds the sending side */
+    ASSERT_EQ(asx_oneshot_try_recv(&rx, &val), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_oneshot_permit_send(&p, 7), ASX_OK);
+    ASSERT_EQ(asx_oneshot_permit_send(&p, 8), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_oneshot_try_recv(&rx, &val), ASX_OK);
+    ASSERT_EQ(val, (uint64_t)7);
+}
+
+TEST(permit_abort_closes_the_channel) {
+    asx_oneshot_sender tx;
+    asx_oneshot_receiver rx;
+    asx_oneshot_permit p;
+    uint64_t val = 0;
+    setup();
+    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_reserve(&tx, NULL, &p));
+    asx_oneshot_permit_abort(&p);
+    ASSERT_EQ(asx_oneshot_try_recv(&rx, &val), ASX_E_DISCONNECTED);
+    ASSERT_EQ(asx_oneshot_permit_send(&p, 1), ASX_E_INVALID_STATE);
+}
+
+/* A task (never polled) whose Cx holds obligations in its region. */
+static asx_status poll_idle(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    return ASX_E_PENDING;
+}
+
+static asx_task_id cx_task(asx_cx *cx) {
+    asx_region_id r = ASX_INVALID_ID;
+    asx_task_id t = ASX_INVALID_ID;
+    asx_runtime_reset();
+    setup();
+    MUST_OK(asx_region_open(&r));
+    MUST_OK(asx_task_spawn(r, poll_idle, NULL, &t));
+    MUST_OK(asx_cx_init(cx, r, t, ASX_CAP_CANCEL_CHECK));
+    return t;
+}
+
+static int obligation_is(asx_obligation_id id, asx_obligation_state state,
+                         asx_obligation_abort_reason reason) {
+    asx_obligation_info info;
+    if (id == ASX_INVALID_ID || asx_obligation_get_info(id, &info) != ASX_OK) return 0;
+    return info.kind == ASX_OBLIGATION_KIND_SEND_PERMIT && info.state == state &&
+           info.abort_reason == reason;
+}
+
+TEST(tracked_permit_resolves_its_obligation) {
+    /* The permit's SendPermit obligation (oneshot.rs:528): committed by a
+     * delivered send, aborted ERROR when the receiver is gone, EXPLICIT by
+     * an abort (:731-799). */
+    asx_cx cx;
+    asx_oneshot_sender tx;
+    asx_oneshot_receiver rx;
+    asx_oneshot_permit p;
+    asx_obligation_id ob;
+    (void)cx_task(&cx);
+
+    MUST_OK(asx_oneshot_create(&tx, &rx));
+    ASSERT_EQ(asx_oneshot_reserve(&tx, &cx, &p), ASX_OK);
+    ob = p.obligation;
+    ASSERT_TRUE(obligation_is(ob, ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_ABORT_NONE));
+    ASSERT_EQ(asx_oneshot_permit_send(&p, 1), ASX_OK);
+    ASSERT_TRUE(obligation_is(ob, ASX_OBLIGATION_COMMITTED, ASX_OBLIGATION_ABORT_NONE));
+
+    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_reserve(&tx, &cx, &p));
+    ob = p.obligation;
+    asx_oneshot_receiver_drop(&rx);
+    ASSERT_EQ(asx_oneshot_permit_send(&p, 2), ASX_E_DISCONNECTED);
+    ASSERT_TRUE(obligation_is(ob, ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_ABORT_ERROR));
+
+    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_oneshot_reserve(&tx, &cx, &p));
+    ob = p.obligation;
+    asx_oneshot_permit_abort(&p);
+    ASSERT_TRUE(obligation_is(ob, ASX_OBLIGATION_ABORTED, ASX_OBLIGATION_ABORT_EXPLICIT));
+}
+
+TEST(cancelled_reserve_closes_the_channel) {
+    /* A cancelled Cx consumes the sender and closes the channel
+     * (oneshot.rs:497-510). */
+    asx_cx cx;
+    asx_task_id t = cx_task(&cx);
+    asx_oneshot_sender tx;
+    asx_oneshot_receiver rx;
+    asx_oneshot_permit p;
+    uint64_t val = 0;
+    MUST_OK(asx_oneshot_create(&tx, &rx));
+    MUST_OK(asx_task_cancel(t, ASX_CANCEL_USER));
+    ASSERT_EQ(asx_oneshot_reserve(&tx, &cx, &p), ASX_E_CANCELLED);
+    ASSERT_EQ(p.live, 0);
+    ASSERT_EQ(asx_oneshot_try_recv(&rx, &val), ASX_E_DISCONNECTED);
+}
+
+/* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -220,6 +334,11 @@ int main(void) {
     RUN_TEST(state_sender_dropped);
 
     RUN_TEST(arena_exhaustion);
+
+    RUN_TEST(reserve_consumes_the_sender_until_the_permit_sends);
+    RUN_TEST(permit_abort_closes_the_channel);
+    RUN_TEST(tracked_permit_resolves_its_obligation);
+    RUN_TEST(cancelled_reserve_closes_the_channel);
 
     TEST_REPORT();
     return test_failures;

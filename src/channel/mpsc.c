@@ -403,10 +403,16 @@ asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_chann
 
     st = asx_region_get_state(region, &region_state);
     if (st != ASX_OK) { return st; }
-    if (region_state != ASX_REGION_OPEN) { return ASX_E_INVALID_STATE; }
+    /* Rust's channels belong to no region: only a closed one refuses
+     * (a server spawned by a task of a closing region still gets its
+     * mailbox; its admission then refuses the task). */
+    if (region_state == ASX_REGION_CLOSED) { return ASX_E_INVALID_STATE; }
 
     for (i = 0; i < ASX_MAX_CHANNELS; i++) {
-        if (!g_channels[i].alive || g_channels[i].state == ASX_CHANNEL_FULLY_CLOSED) {
+        /* A fully closed channel is free once drained: a sealed one keeps
+         * its queue receivable (asx_channel_seal). */
+        if (!g_channels[i].alive || (g_channels[i].state == ASX_CHANNEL_FULLY_CLOSED &&
+                                     channel_message_count(&g_channels[i]) == 0u)) {
             s = &g_channels[i];
 
             s->generation++;
@@ -493,6 +499,35 @@ asx_status asx_channel_close_receiver(asx_channel_id id) {
     }
 
     return ASX_E_INVALID_STATE;
+}
+
+asx_status asx_channel_seal(asx_channel_id id) {
+    asx_channel_slot *s;
+    asx_status st;
+
+    st = channel_slot_lookup(id, &s);
+    if (st != ASX_OK) { return st; }
+
+    switch (s->state) {
+    case ASX_CHANNEL_OPEN: s->state = ASX_CHANNEL_RECEIVER_CLOSED; break;
+    case ASX_CHANNEL_SENDER_CLOSED: s->state = ASX_CHANNEL_FULLY_CLOSED; break;
+    case ASX_CHANNEL_RECEIVER_CLOSED:
+    case ASX_CHANNEL_FULLY_CLOSED: return ASX_E_INVALID_STATE;
+    }
+    /* Rust's close wakes the parked producers only; the receiver is the
+     * caller (mpsc.rs:1698-1711). The queue stays receivable. */
+    if (s->reserve_waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->reserve_waiters);
+    return ASX_OK;
+}
+
+asx_status asx_channel_wake_receiver(asx_channel_id id) {
+    asx_channel_slot *s;
+    asx_status st;
+
+    st = channel_slot_lookup(id, &s);
+    if (st != ASX_OK) { return st; }
+    if (s->recv_waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->recv_waiters);
+    return ASX_OK;
 }
 
 /* ------------------------------------------------------------------ */

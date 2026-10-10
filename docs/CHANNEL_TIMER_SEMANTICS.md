@@ -269,7 +269,7 @@ The `session` module wraps the base channel with an `ObligationToken` per permit
 
 `Receiver::close()` (`mpsc.rs:1698-1711`) differs: it sets `receiver_dropped` and wakes the senders but leaves queued messages receivable; `poll_recv` pops them before reporting `Disconnected` (`mpsc.rs:1801-1821`).
 
-**C status:** the drop behaviour is implemented: `asx_channel_close_receiver` (`src/channel/mpsc.c:446-479`) discards queued messages and wakes every waiter. C has no equivalent of `Receiver::close()` that keeps queued messages. Rust parity: `lab-dispatch-mpsc-disconnect-order-001` (the receiver is dropped when its task completes; the later send reports `ASX_E_DISCONNECTED`). A sender parked at the moment of the receiver drop is not covered by a v2 fixture; unit test `test_channel_wake.c` `close_wakes_every_waiter`.
+**C status:** both are implemented. The drop: `asx_channel_close_receiver` (`src/channel/mpsc.c:469-502`) discards queued messages and wakes every waiter. `Receiver::close()`: `asx_channel_seal` (`src/channel/mpsc.c:504-521`) wakes the parked senders and keeps the queue receivable; the GenServer's stop drains its mailbox through it (fixture `actor-cancel-before-start-drains-001`; unit test `test_mpsc.c` `seal_keeps_the_queue_receivable`). Rust parity of the drop: `lab-dispatch-mpsc-disconnect-order-001` (the receiver is dropped when its task completes; the later send reports `ASX_E_DISCONNECTED`). A sender parked at the moment of the receiver drop is not covered by a v2 fixture; unit test `test_channel_wake.c` `close_wakes_every_waiter`.
 
 #### Last Sender Drop
 

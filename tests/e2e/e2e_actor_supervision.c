@@ -169,13 +169,43 @@ static asx_actor_behavior e2e_actor_behavior(void) {
     return behavior;
 }
 
+/* A task calling the server once (a call needs a task outside the root
+ * region, as in Rust). */
+typedef struct {
+    asx_actor_handle server;
+    asx_cx cx;
+    asx_actor_op op;
+    asx_status status;
+    uint64_t reply;
+} e2e_caller;
+
+static asx_status e2e_caller_poll(void *user_data, asx_task_id self) {
+    e2e_caller *c = (e2e_caller *)user_data;
+    asx_status st;
+    (void)self;
+    st = asx_actor_call(c->server, &c->cx, 35u, &c->op, &c->reply);
+    if (st == ASX_E_PENDING) return st;
+    c->status = st;
+    return ASX_OK;
+}
+
+static int start_caller(e2e_caller *c, asx_actor_handle server, asx_region_id parent) {
+    asx_region_id child = ASX_INVALID_ID;
+    asx_task_id id = ASX_INVALID_ID;
+    memset(c, 0, sizeof(*c));
+    c->server = server;
+    c->status = ASX_E_PENDING;
+    if (asx_region_open_child(parent, &child) != ASX_OK) return 0;
+    if (asx_task_spawn(child, e2e_caller_poll, c, &id) != ASX_OK) return 0;
+    return asx_cx_init(&c->cx, child, id, ASX_CAP_CANCEL_CHECK) == ASX_OK;
+}
+
 static int run_actor_lifecycle(unsigned long long *digest) {
     asx_actor_handle actor;
     asx_actor_behavior behavior = e2e_actor_behavior();
-    asx_call_token token;
+    e2e_caller caller;
     e2e_actor_state state;
     asx_region_id region;
-    uint64_t reply = 0u;
 
     asx_runtime_reset();
     memset(&state, 0, sizeof(state));
@@ -186,7 +216,7 @@ static int run_actor_lifecycle(unsigned long long *digest) {
     }
     state.region = region;
 
-    if (asx_actor_spawn(&actor, region, &behavior, &state) != ASX_OK) {
+    if (asx_actor_spawn(&actor, region, &behavior, &state, 4u) != ASX_OK) {
         scenario_line("actor.lifecycle", 0, "spawn_failed");
         return 0;
     }
@@ -196,12 +226,12 @@ static int run_actor_lifecycle(unsigned long long *digest) {
         return 0;
     }
 
-    if (asx_actor_cast(actor, 41u) != ASX_OK || asx_actor_call(actor, 35u, &token) != ASX_OK) {
+    if (asx_actor_try_cast(actor, 41u) != ASX_OK || !start_caller(&caller, actor, region)) {
         scenario_line("actor.lifecycle", 0, "send_failed");
         return 0;
     }
     drive_region(region, 8u);
-    if (asx_call_token_poll(token, &reply) != ASX_OK || reply != 42u || state.cast_count != 1u ||
+    if (caller.status != ASX_OK || caller.reply != 42u || state.cast_count != 1u ||
         state.last_cast != 41u) {
         scenario_line("actor.lifecycle", 0, "reply_or_cast_mismatch");
         return 0;
@@ -218,7 +248,7 @@ static int run_actor_lifecycle(unsigned long long *digest) {
     }
 
     scenario_line("actor.lifecycle", 1, "casts=1 reply=42 terminate=1");
-    *digest = mix_u64(*digest, reply);
+    *digest = mix_u64(*digest, caller.reply);
     *digest = mix_u64(*digest, state.cast_count);
     return 1;
 }
@@ -310,7 +340,7 @@ static asx_status stable_start(void *user_data, asx_region_id region, asx_actor_
     behavior.handle_cast = stable_cast;
     behavior.handle_call = NULL;
     behavior.terminate = NULL;
-    return asx_actor_spawn(out, region, &behavior, NULL);
+    return asx_actor_spawn(out, region, &behavior, NULL, 4u);
 }
 
 static asx_status failing_init(void *state, asx_actor_handle self) {
@@ -329,7 +359,7 @@ static asx_status failing_start(void *user_data, asx_region_id region, asx_actor
     behavior.handle_cast = stable_cast;
     behavior.handle_call = NULL;
     behavior.terminate = NULL;
-    return asx_actor_spawn(out, region, &behavior, NULL);
+    return asx_actor_spawn(out, region, &behavior, NULL, 4u);
 }
 
 static asx_supervisor_config supervisor_config(asx_supervisor_strategy strategy,
@@ -541,7 +571,7 @@ static int run_obligation_cleanup(unsigned long long *digest) {
     state.region = region;
     state.reserve_obligation = 1;
 
-    if (asx_actor_spawn(&actor, region, &behavior, &state) != ASX_OK) {
+    if (asx_actor_spawn(&actor, region, &behavior, &state, 4u) != ASX_OK) {
         scenario_line("actor.obligation_cleanup", 0, "spawn_failed");
         return 0;
     }

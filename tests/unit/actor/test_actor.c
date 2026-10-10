@@ -1,11 +1,18 @@
 /*
- * test_actor.c — unit tests for actor model and gen_server semantics
+ * test_actor.c — unit tests for the GenServer port (Rust gen_server.rs):
+ * a server task on an mpsc mailbox, casts and calls from client tasks,
+ * stop and join, cancellation and drain, failing callbacks.
+ *
+ * Rust parity of the traces, obligations and schedules is covered by the
+ * conformance fixtures fixtures/rust_reference_v2/actor-*.json; these tests
+ * cover the C API's own contract.
  *
  * SPDX-License-Identifier: MIT
  */
 
 #include <asx/actor/actor.h>
 #include <asx/core/budget.h>
+#include <asx/core/cancel.h>
 #include <asx/runtime/runtime.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,963 +40,615 @@ static asx_status st_sink_;
 
 #define RUN(fn)                                                                                    \
     do {                                                                                           \
+        int before_ = g_fail;                                                                      \
         printf("  " #fn "...\n");                                                                  \
         fn();                                                                                      \
-        g_pass++;                                                                                  \
+        if (g_fail == before_) g_pass++;                                                           \
     } while (0)
 
 /* ------------------------------------------------------------------ */
-/* Helpers: region + scheduler                                         */
+/* Regions and scheduling                                              */
 /* ------------------------------------------------------------------ */
 
-static asx_region_id make_region(void) {
-    asx_region_id r;
-    MUST_OK(asx_region_open(&r));
+static asx_region_id g_root;
+
+/* A fresh runtime with one root region. */
+static void setup(void) {
+    asx_runtime_reset();
+    MUST_OK(asx_region_open(&g_root));
+}
+
+static asx_region_id child_region(void) {
+    asx_region_id r = ASX_INVALID_ID;
+    MUST_OK(asx_region_open_child(g_root, &r));
     return r;
 }
 
-static void pump_region(asx_region_id region, uint32_t rounds) {
-    asx_budget budget = asx_budget_infinite();
-    uint32_t i;
-    budget.poll_quota = 1000;
-    for (i = 0; i < rounds; i++) {
-        asx_budget b = budget;
-        MUST_OK(asx_scheduler_run(region, &b));
-    }
-}
-
-/* Single-poll: advance exactly one poll unit */
-static void pump_one_poll(asx_region_id region) {
-    asx_budget b = asx_budget_infinite();
-    b.poll_quota = 1;
+/* Run a region's subtree until nothing is runnable. */
+static void run(asx_region_id region) {
+    asx_budget b = asx_budget_from_polls(1000);
     st_sink_ = asx_scheduler_run(region, &b);
     (void)st_sink_;
 }
 
+/* Exactly one poll in a region's subtree. */
+static void run_one_poll(asx_region_id region) {
+    asx_budget b = asx_budget_from_polls(1);
+    st_sink_ = asx_scheduler_run(region, &b);
+    (void)st_sink_;
+}
+
+static asx_outcome_severity task_outcome(asx_actor_handle h) {
+    asx_task_id tid = ASX_INVALID_ID;
+    asx_outcome o;
+    MUST_OK(asx_actor_task_id(h, &tid));
+    o.severity = ASX_OUTCOME_OK;
+    MUST_OK(asx_task_get_outcome(tid, &o));
+    return o.severity;
+}
+
 /* ------------------------------------------------------------------ */
-/* Test behaviors                                                      */
+/* Behaviors                                                           */
 /* ------------------------------------------------------------------ */
 
-/* Simple echo actor: stores last received cast message */
+/* Records what it was given: casts in order, the call count, init and
+ * terminate. A call replies with the sum of the casts plus the request. */
 typedef struct {
-    uint64_t last_msg;
-    uint32_t msg_count;
+    uint64_t log[80];
+    uint32_t casts;
+    uint32_t calls;
+    uint64_t sum;
     int init_called;
     int term_called;
     asx_status term_reason;
-} echo_state;
+    uint32_t fail_cast_at; /* 1-based cast that fails, 0 for none */
+    int fail_init;
+} rec_state;
 
-static asx_status echo_init(void *state, asx_actor_handle self) {
-    echo_state *s = (echo_state *)state;
+static asx_status rec_init(void *state, asx_actor_handle self) {
+    rec_state *s = (rec_state *)state;
     (void)self;
-    s->init_called = 1;
+    s->init_called++;
+    return s->fail_init ? ASX_E_INVALID_STATE : ASX_OK;
+}
+
+static asx_status rec_cast(void *state, uint64_t msg, asx_actor_handle self) {
+    rec_state *s = (rec_state *)state;
+    (void)self;
+    if (s->casts < 80u) s->log[s->casts] = msg;
+    s->casts++;
+    s->sum += msg;
+    if (s->fail_cast_at != 0u && s->casts == s->fail_cast_at) return ASX_E_INVALID_STATE;
     return ASX_OK;
 }
 
-static asx_status echo_cast(void *state, uint64_t msg, asx_actor_handle self) {
-    echo_state *s = (echo_state *)state;
+static asx_status rec_call(void *state, uint64_t request, uint64_t *reply, asx_actor_handle self) {
+    rec_state *s = (rec_state *)state;
     (void)self;
-    s->last_msg = msg;
-    s->msg_count++;
+    s->calls++;
+    *reply = s->sum + request;
     return ASX_OK;
 }
 
-static asx_status echo_call(void *state, uint64_t request, uint64_t *reply, asx_actor_handle self) {
-    (void)state;
+static void rec_terminate(void *state, asx_status reason, asx_actor_handle self) {
+    rec_state *s = (rec_state *)state;
     (void)self;
-    /* Echo back the request doubled */
-    *reply = request * 2;
-    return ASX_OK;
-}
-
-static void echo_terminate(void *state, asx_status reason, asx_actor_handle self) {
-    echo_state *s = (echo_state *)state;
-    (void)self;
-    s->term_called = 1;
+    s->term_called++;
     s->term_reason = reason;
 }
 
-static asx_actor_behavior echo_behavior(void) {
-    asx_actor_behavior b;
-    b.init = echo_init;
-    b.handle_cast = echo_cast;
-    b.handle_call = echo_call;
-    b.terminate = echo_terminate;
-    return b;
-}
+static const asx_actor_behavior g_rec = {rec_init, rec_cast, rec_call, rec_terminate};
 
-/* Minimal actor: cast only, no init/call/terminate */
-static asx_status noop_cast(void *state, uint64_t msg, asx_actor_handle self) {
-    (void)state;
-    (void)msg;
-    (void)self;
-    return ASX_OK;
-}
-
-static asx_actor_behavior minimal_behavior(void) {
-    asx_actor_behavior b;
-    b.init = NULL;
-    b.handle_cast = noop_cast;
-    b.handle_call = NULL;
-    b.terminate = NULL;
-    return b;
-}
-
-/* Failing init actor */
-static asx_status fail_init(void *state, asx_actor_handle self) {
-    (void)state;
-    (void)self;
-    return ASX_E_INVALID_STATE;
-}
-
-/* Failing cast actor */
-static uint32_t g_fail_after_count;
-static uint32_t g_fail_cast_count;
-
-static asx_status fail_cast(void *state, uint64_t msg, asx_actor_handle self) {
-    (void)state;
-    (void)msg;
-    (void)self;
-    g_fail_cast_count++;
-    if (g_fail_cast_count >= g_fail_after_count) { return ASX_E_INVALID_STATE; }
-    return ASX_OK;
-}
-
-/* Accumulator actor: sums all cast messages */
-typedef struct {
-    uint64_t sum;
-} accum_state;
-
-static asx_status accum_cast(void *state, uint64_t msg, asx_actor_handle self) {
-    accum_state *s = (accum_state *)state;
-    (void)self;
-    s->sum += msg;
-    return ASX_OK;
-}
-
-/* ------------------------------------------------------------------ */
-/* Tests: Wake-driven mailbox                                          */
-/* ------------------------------------------------------------------ */
-
-/* Run the region; return how many poll units were used. */
-static uint32_t run_counting(asx_region_id region, asx_status *out_st) {
-    asx_budget b = asx_budget_from_polls(1000);
-    *out_st = asx_scheduler_run(region, &b);
-    return 1000u - b.poll_quota;
-}
-
-static void test_idle_actor_parks_and_cast_wakes_it(void) {
+static asx_actor_handle spawn_rec(asx_region_id region, rec_state *state, uint32_t capacity) {
     asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_status st;
-    uint32_t used;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-
-    /* Init poll, then the empty mailbox parks the actor: the scheduler
-     * reports WOULD_BLOCK instead of burning the whole budget. */
-    used = run_counting(r, &st);
-    ASSERT(st == ASX_E_WOULD_BLOCK, "idle actor parks");
-    ASSERT(used == 1u, "one poll for init");
-    ASSERT(state.init_called, "init ran");
-
-    MUST_OK(asx_actor_cast(h, 41u));
-    MUST_OK(asx_actor_cast(h, 42u));
-    used = run_counting(r, &st);
-    ASSERT(st == ASX_E_WOULD_BLOCK, "parks again after draining");
-    ASSERT(used == 2u, "one poll per message");
-    ASSERT(state.msg_count == 2u, "both casts handled");
-    ASSERT(state.last_msg == 42u, "in order");
+    memset(state, 0, sizeof(*state));
+    h.slot = UINT32_MAX;
+    h.generation = 0;
+    MUST_OK(asx_actor_spawn(&h, region, &g_rec, state, capacity));
+    return h;
 }
 
+/* ------------------------------------------------------------------ */
+/* A client task running a short script of server operations          */
+/* ------------------------------------------------------------------ */
+
+typedef enum { CL_CAST, CL_CALL, CL_STOP_JOIN } cl_kind;
+
 typedef struct {
-    asx_actor_handle actor;
-    asx_call_token token;
-    int called;
+    cl_kind kind;
+    uint64_t arg;
+    asx_status status; /* ASX_E_PENDING until the step returned */
     uint64_t reply;
-    asx_status result;
-    uint32_t polls;
-} caller_state;
+} cl_step;
 
-static asx_status caller_poll(void *ud, asx_task_id self) {
-    caller_state *c = (caller_state *)ud;
-    asx_status st;
+typedef struct {
+    asx_actor_handle server;
+    asx_cx cx;
+    cl_step steps[8];
+    uint32_t n;
+    uint32_t pc;
+    asx_actor_op op;
+    int stop_sent;
+} client;
+
+static asx_status client_poll(void *user_data, asx_task_id self) {
+    client *c = (client *)user_data;
     (void)self;
-    c->polls++;
-    if (!c->called) {
-        st = asx_actor_call(c->actor, 21u, &c->token);
-        if (st != ASX_OK) return st;
-        c->called = 1;
+    while (c->pc < c->n) {
+        cl_step *s = &c->steps[c->pc];
+        asx_status st = ASX_E_INVALID_STATE;
+        switch (s->kind) {
+        case CL_CAST: st = asx_actor_cast(c->server, &c->cx, s->arg, &c->op); break;
+        case CL_CALL: st = asx_actor_call(c->server, &c->cx, s->arg, &c->op, &s->reply); break;
+        case CL_STOP_JOIN:
+            if (!c->stop_sent) {
+                MUST_OK(asx_actor_stop(c->server));
+                c->stop_sent = 1;
+            }
+            st = asx_actor_join(c->server, &c->cx);
+            break;
+        }
+        if (st == ASX_E_PENDING) return ASX_E_PENDING;
+        s->status = st;
+        c->pc++;
+        memset(&c->op, 0, sizeof(c->op));
+        c->stop_sent = 0;
     }
-    st = asx_call_token_poll(c->token, &c->reply);
-    if (st == ASX_E_PENDING) return st;
-    c->result = st;
     return ASX_OK;
 }
 
-static void test_call_parks_caller_until_reply(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    caller_state c;
-    asx_region_id r;
-    asx_task_id t;
-    asx_status st;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    memset(&c, 0, sizeof(c));
-    r = make_region();
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    c.actor = h;
-    MUST_OK(asx_task_spawn(r, caller_poll, &c, &t));
-    (void)run_counting(r, &st);
-    ASSERT(st == ASX_E_WOULD_BLOCK, "only the idle actor remains");
-    ASSERT(c.result == ASX_OK, "call completed");
-    ASSERT(c.reply == 42u, "reply delivered");
-    ASSERT(c.polls == 2u, "caller polled once to call, once on the reply wake");
+static void client_add(client *c, cl_kind kind, uint64_t arg) {
+    c->steps[c->n].kind = kind;
+    c->steps[c->n].arg = arg;
+    c->steps[c->n].status = ASX_E_PENDING;
+    c->steps[c->n].reply = 0;
+    c->n++;
 }
 
-static void test_dropped_call_wakes_caller(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    caller_state c;
-    asx_region_id r;
-    asx_task_id t;
-    asx_status st;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    memset(&c, 0, sizeof(c));
-    b.handle_call = NULL; /* calls are dropped: the caller must not hang */
-    r = make_region();
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    c.actor = h;
-    MUST_OK(asx_task_spawn(r, caller_poll, &c, &t));
-    (void)run_counting(r, &st);
-    ASSERT(st == ASX_E_WOULD_BLOCK, "caller did not hang");
-    ASSERT(c.result == ASX_E_INVALID_STATE, "dropped call reported");
-}
-
-static void test_cancelled_actor_runs_terminate(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_budget budget;
-    asx_status st;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    (void)run_counting(r, &st);
-    ASSERT(st == ASX_E_WOULD_BLOCK, "actor parked");
-
-    /* Draining the region cancels the parked actor: it wakes, runs its
-     * terminate callback with ASX_E_CANCELLED, and the region closes. */
-    budget = asx_budget_from_polls(100);
-    ASSERT(asx_region_drain(r, &budget) == ASX_OK, "region drains");
-    ASSERT(state.term_called, "terminate ran");
-    ASSERT(state.term_reason == ASX_E_CANCELLED, "reason is CANCELLED");
-    ASSERT(!asx_actor_is_alive(h), "actor gone");
-    ASSERT(asx_actor_exit_reason(h) == ASX_E_CANCELLED, "exit reason recorded");
+static void client_start(client *c, asx_actor_handle server, asx_region_id region) {
+    asx_task_id id = ASX_INVALID_ID;
+    c->server = server;
+    c->pc = 0;
+    memset(&c->op, 0, sizeof(c->op));
+    c->stop_sent = 0;
+    MUST_OK(asx_task_spawn(region, client_poll, c, &id));
+    MUST_OK(asx_cx_init(&c->cx, region, id, ASX_CAP_CANCEL_CHECK));
 }
 
 /* ------------------------------------------------------------------ */
-/* Tests: Spawn and lifecycle                                          */
+/* Spawn                                                               */
 /* ------------------------------------------------------------------ */
 
 static void test_spawn_basic(void) {
+    rec_state s;
     asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_status st;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-
-    st = asx_actor_spawn(&h, r, &b, &state);
-    ASSERT(st == ASX_OK, "spawn should succeed");
-    ASSERT(asx_actor_is_alive(h), "actor should be alive");
-    ASSERT(h.generation != 0, "generation should be non-zero");
+    asx_task_id tid = ASX_INVALID_ID;
+    setup();
+    h = spawn_rec(g_root, &s, 4);
+    ASSERT(asx_actor_is_alive(h), "a spawned server is alive");
+    ASSERT(asx_actor_get_state(h) == ASX_ACTOR_CREATED, "Created until first polled");
+    ASSERT(asx_actor_task_id(h, &tid) == ASX_OK && tid != ASX_INVALID_ID, "it has a task");
+    ASSERT(asx_actor_mailbox_count(h) == 0u, "empty mailbox");
+    ASSERT(asx_actor_exit_reason(h) == ASX_OK, "no exit reason while alive");
+    ASSERT(s.init_called == 0, "init waits for the first poll");
 }
 
-static void test_spawn_null_args(void) {
+static void test_spawn_rejects_bad_arguments(void) {
+    rec_state s;
     asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    asx_region_id r;
-    asx_status st;
-
-    asx_runtime_reset();
-    r = make_region();
-
-    st = asx_actor_spawn(NULL, r, &b, NULL);
-    ASSERT(st == ASX_E_INVALID_ARGUMENT, "null out should fail");
-
-    st = asx_actor_spawn(&h, r, NULL, NULL);
-    ASSERT(st == ASX_E_INVALID_ARGUMENT, "null behavior should fail");
-
-    /* handle_cast is required */
-    {
-        asx_actor_behavior bad;
-        bad.init = NULL;
-        bad.handle_cast = NULL;
-        bad.handle_call = NULL;
-        bad.terminate = NULL;
-        st = asx_actor_spawn(&h, r, &bad, NULL);
-        ASSERT(st == ASX_E_INVALID_ARGUMENT, "null handle_cast should fail");
-    }
+    setup();
+    ASSERT(asx_actor_spawn(NULL, g_root, &g_rec, &s, 4) == ASX_E_INVALID_ARGUMENT, "NULL out");
+    ASSERT(asx_actor_spawn(&h, g_root, NULL, &s, 4) == ASX_E_INVALID_ARGUMENT, "NULL behavior");
+    ASSERT(asx_actor_spawn(&h, g_root, &g_rec, &s, 0) == ASX_E_INVALID_ARGUMENT, "capacity 0");
+    ASSERT(asx_actor_spawn(&h, g_root, &g_rec, &s, ASX_ACTOR_MAILBOX_CAPACITY + 1u) ==
+               ASX_E_INVALID_ARGUMENT,
+           "capacity above the maximum");
 }
 
 static void test_spawn_arena_exhaustion(void) {
-    asx_actor_handle handles[ASX_MAX_ACTORS + 1];
-    asx_actor_behavior b = minimal_behavior();
-    asx_region_id r;
-    uint32_t i;
-    asx_status st;
-
-    asx_runtime_reset();
-    r = make_region();
-
-    for (i = 0; i < ASX_MAX_ACTORS; i++) {
-        st = asx_actor_spawn(&handles[i], r, &b, NULL);
-        ASSERT(st == ASX_OK, "spawn within limit should succeed");
+    rec_state s;
+    asx_actor_handle h;
+    asx_status st = ASX_OK;
+    uint32_t n = 0;
+    setup();
+    while (n <= ASX_MAX_ACTORS) {
+        st = asx_actor_spawn(&h, g_root, &g_rec, &s, 1);
+        if (st != ASX_OK) break;
+        n++;
     }
-
-    st = asx_actor_spawn(&handles[ASX_MAX_ACTORS], r, &b, NULL);
-    ASSERT(st == ASX_E_RESOURCE_EXHAUSTED, "spawn beyond limit should fail");
+    ASSERT(n >= 1u && n <= ASX_MAX_ACTORS, "at most ASX_MAX_ACTORS live servers");
+    ASSERT(st == ASX_E_RESOURCE_EXHAUSTED, "a full arena refuses with RESOURCE_EXHAUSTED");
 }
 
-static void test_init_callback(void) {
+static void test_spawn_refused_by_region_limit(void) {
+    rec_state s;
     asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    ASSERT(!state.init_called, "init should not be called before polling");
-
-    pump_region(r, 1);
-    ASSERT(state.init_called, "init should be called on first poll");
-}
-
-static void test_init_failure_terminates(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    b.init = fail_init;
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 2);
-
-    ASSERT(state.term_called, "terminate should be called on init failure");
-    ASSERT(state.term_reason == ASX_E_INVALID_STATE, "terminate reason should be init error");
-    ASSERT(!asx_actor_is_alive(h), "actor should be dead after init failure");
-}
-
-static void test_minimal_no_init_no_terminate(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = minimal_behavior();
-    asx_region_id r;
-    asx_status st;
-
-    asx_runtime_reset();
-    r = make_region();
-
-    st = asx_actor_spawn(&h, r, &b, NULL);
-    ASSERT(st == ASX_OK, "minimal actor should spawn");
-
-    /* Init poll (no init callback) */
-    pump_region(r, 1);
-    ASSERT(asx_actor_is_alive(h), "minimal actor should survive init");
+    asx_region_limits limits;
+    setup();
+    MUST_OK(asx_region_get_limits(g_root, &limits));
+    limits.max_tasks = 0;
+    MUST_OK(asx_region_set_limits(g_root, &limits));
+    ASSERT(asx_actor_spawn(&h, g_root, &g_rec, &s, 2) == ASX_E_ADMISSION_LIMIT,
+           "the region's task limit refuses the server");
+    limits.max_tasks = ASX_REGION_UNLIMITED;
+    MUST_OK(asx_region_set_limits(g_root, &limits));
+    ASSERT(asx_actor_spawn(&h, g_root, &g_rec, &s, 2) == ASX_OK,
+           "the refused spawn kept no actor slot or mailbox");
 }
 
 /* ------------------------------------------------------------------ */
-/* Tests: Cast (fire-and-forget)                                       */
+/* Init and the message loop                                           */
 /* ------------------------------------------------------------------ */
 
-static void test_cast_basic(void) {
+static void test_init_runs_once_on_first_poll(void) {
+    rec_state s;
     asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_status st;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 1); /* init */
-
-    st = asx_actor_cast(h, 42);
-    ASSERT(st == ASX_OK, "cast should succeed");
-    ASSERT(asx_actor_mailbox_count(h) == 1, "mailbox should have 1 message");
-
-    pump_region(r, 1); /* process cast */
-    ASSERT(state.last_msg == 42, "should have received message 42");
-    ASSERT(state.msg_count == 1, "should have processed 1 message");
+    setup();
+    h = spawn_rec(g_root, &s, 4);
+    run(g_root);
+    ASSERT(s.init_called == 1, "init ran on the first poll");
+    ASSERT(asx_actor_get_state(h) == ASX_ACTOR_RUNNING, "Running while it waits");
+    MUST_OK(asx_actor_try_cast(h, 1));
+    run(g_root);
+    ASSERT(s.init_called == 1, "init runs once");
+    ASSERT(s.casts == 1u, "the cast woke the waiting server");
 }
 
-static void test_cast_ordering(void) {
+static void test_try_cast_delivers_in_order(void) {
+    rec_state s;
     asx_actor_handle h;
-    asx_actor_behavior b;
-    accum_state state;
-    asx_region_id r;
+    setup();
+    h = spawn_rec(g_root, &s, 4);
+    MUST_OK(asx_actor_try_cast(h, 10));
+    MUST_OK(asx_actor_try_cast(h, 20));
+    MUST_OK(asx_actor_try_cast(h, 30));
+    ASSERT(asx_actor_mailbox_count(h) == 3u, "three queued");
+    run(g_root);
+    ASSERT(s.casts == 3u, "all three handled");
+    ASSERT(s.log[0] == 10u && s.log[1] == 20u && s.log[2] == 30u, "in arrival order");
+    ASSERT(asx_actor_mailbox_count(h) == 0u, "mailbox empty again");
+}
+
+static void test_try_cast_reports_a_full_mailbox(void) {
+    rec_state s;
+    asx_actor_handle h;
+    setup();
+    h = spawn_rec(g_root, &s, 2);
+    MUST_OK(asx_actor_try_cast(h, 1));
+    MUST_OK(asx_actor_try_cast(h, 2));
+    ASSERT(asx_actor_try_cast(h, 3) == ASX_E_CHANNEL_FULL, "capacity 2 holds two");
+    run(g_root);
+    ASSERT(s.casts == 2u, "the queued two were handled");
+    ASSERT(asx_actor_try_cast(h, 4) == ASX_OK, "room again");
+}
+
+static void test_ready_batch_yields_after_eight(void) {
+    rec_state s;
+    asx_actor_handle h;
     uint32_t i;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    b.init = NULL;
-    b.handle_cast = accum_cast;
-    b.handle_call = NULL;
-    b.terminate = NULL;
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 1); /* init */
-
-    /* Send multiple messages */
-    for (i = 1; i <= 5; i++) { MUST_OK(asx_actor_cast(h, (uint64_t)i)); }
-    ASSERT(asx_actor_mailbox_count(h) == 5, "mailbox should have 5 messages");
-
-    /* Process all (one per poll) */
-    pump_region(r, 5);
-    ASSERT(state.sum == 15, "sum should be 1+2+3+4+5=15");
+    setup();
+    h = spawn_rec(g_root, &s, 16);
+    for (i = 1; i <= 10u; i++) MUST_OK(asx_actor_try_cast(h, i));
+    run_one_poll(g_root);
+    ASSERT(s.casts == 8u, "one poll serves a batch of eight, then yields");
+    ASSERT(asx_actor_mailbox_count(h) == 2u, "two left for the next poll");
+    run(g_root);
+    ASSERT(s.casts == 10u && s.sum == 55u, "the rest after the yield");
 }
 
-static void test_cast_mailbox_full(void) {
+/* ------------------------------------------------------------------ */
+/* Calls and casts from tasks                                          */
+/* ------------------------------------------------------------------ */
+
+static void test_call_from_task_gets_reply(void) {
+    rec_state s;
     asx_actor_handle h;
-    asx_actor_behavior b = minimal_behavior();
-    asx_region_id r;
+    client c;
+    asx_region_id cr;
+    setup();
+    cr = child_region();
+    h = spawn_rec(g_root, &s, 4);
+    MUST_OK(asx_actor_try_cast(h, 5));
+    memset(&c, 0, sizeof(c));
+    client_add(&c, CL_CALL, 37);
+    client_start(&c, h, cr);
+    run(g_root);
+    ASSERT(c.steps[0].status == ASX_OK, "the call returned");
+    ASSERT(c.steps[0].reply == 42u, "reply = casts so far (5) + request (37)");
+    ASSERT(s.calls == 1u, "handled once");
+}
+
+static void test_call_from_root_region_is_rejected(void) {
+    rec_state s;
+    asx_actor_handle h;
+    client c;
+    setup();
+    h = spawn_rec(g_root, &s, 4);
+    memset(&c, 0, sizeof(c));
+    client_add(&c, CL_CALL, 1);
+    client_start(&c, h, g_root);
+    run(g_root);
+    ASSERT(c.steps[0].status == ASX_E_CANCELLED, "Rust's [ASUP-E103] rejection");
+    ASSERT(s.calls == 0u, "nothing reached the server");
+}
+
+static void test_cast_from_task_waits_for_capacity(void) {
+    rec_state s;
+    asx_actor_handle h;
+    client c;
+    asx_region_id cr;
+    setup();
+    cr = child_region();
+    h = spawn_rec(g_root, &s, 1);
+    memset(&c, 0, sizeof(c));
+    client_add(&c, CL_CAST, 1);
+    client_add(&c, CL_CAST, 2);
+    client_add(&c, CL_CAST, 4);
+    client_add(&c, CL_CALL, 0);
+    client_start(&c, h, cr);
+    run(g_root);
+    ASSERT(c.steps[0].status == ASX_OK && c.steps[1].status == ASX_OK &&
+               c.steps[2].status == ASX_OK,
+           "each cast waited for room and was sent");
+    ASSERT(s.log[0] == 1u && s.log[1] == 2u && s.log[2] == 4u, "in order");
+    ASSERT(c.steps[3].status == ASX_OK && c.steps[3].reply == 7u, "the call sees all three");
+}
+
+static void test_full_mailbox_of_64_parks_the_next_cast(void) {
+    rec_state s;
+    asx_actor_handle h;
+    client c;
+    asx_region_id cr;
     uint32_t i;
-    asx_status st;
-
-    asx_runtime_reset();
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, NULL));
-    pump_region(r, 1); /* init */
-
-    /* Fill mailbox */
-    for (i = 0; i < ASX_ACTOR_MAILBOX_CAPACITY; i++) {
-        st = asx_actor_cast(h, (uint64_t)i);
-        ASSERT(st == ASX_OK, "cast within capacity should succeed");
-    }
-
-    /* Next cast should fail */
-    st = asx_actor_cast(h, 999);
-    ASSERT(st == ASX_E_WOULD_BLOCK, "cast to full mailbox should block");
-}
-
-static void test_cast_to_dead_actor(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_status st;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    b.init = fail_init;
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 2); /* init fails, actor dies */
-
-    st = asx_actor_cast(h, 42);
-    ASSERT(st == ASX_E_INVALID_ARGUMENT, "cast to dead actor should fail");
+    int in_order = 1;
+    setup();
+    cr = child_region();
+    h = spawn_rec(g_root, &s, 64);
+    for (i = 0; i < 64u; i++) MUST_OK(asx_actor_try_cast(h, i));
+    ASSERT(asx_actor_try_cast(h, 999) == ASX_E_CHANNEL_FULL, "the 65th try_cast is refused");
+    memset(&c, 0, sizeof(c));
+    client_add(&c, CL_CAST, 64);
+    client_start(&c, h, cr);
+    run(cr); /* the client's cast waits: the server has not run */
+    ASSERT(c.steps[0].status == ASX_E_PENDING, "the 65th cast parks");
+    run(g_root);
+    ASSERT(c.steps[0].status == ASX_OK, "a receive woke it and it was sent");
+    ASSERT(s.casts == 65u, "all 65 handled");
+    for (i = 0; i < 65u; i++) in_order = in_order && s.log[i] == i;
+    ASSERT(in_order, "in FIFO order, the parked cast last");
 }
 
 /* ------------------------------------------------------------------ */
-/* Tests: Call (request/reply)                                         */
+/* Stop and join                                                       */
 /* ------------------------------------------------------------------ */
 
-static void test_call_basic(void) {
+static void test_stop_runs_terminate(void) {
+    rec_state s;
     asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_call_token token;
-    uint64_t reply;
-    asx_status st;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 1); /* init */
-
-    st = asx_actor_call(h, 21, &token);
-    ASSERT(st == ASX_OK, "call should succeed");
-
-    /* Reply not ready yet */
-    st = asx_call_token_poll(token, &reply);
-    ASSERT(st == ASX_E_PENDING, "reply should be pending before processing");
-
-    pump_region(r, 1); /* process call */
-
-    st = asx_call_token_poll(token, &reply);
-    ASSERT(st == ASX_OK, "reply should be available");
-    ASSERT(reply == 42, "reply should be 21*2=42");
-}
-
-/* Replies, then asks its own actor to stop: the actor exits in the same
- * poll that delivered the reply. */
-static asx_status reply_then_stop_call(void *state, uint64_t request, uint64_t *reply,
-                                       asx_actor_handle self) {
-    asx_status st;
-    (void)state;
-    *reply = request + 1u;
-    st = asx_actor_stop(self);
-    return st;
-}
-
-/* A1 regression: asx_call_token_poll checked `alive` before `replied`, so
- * a reply delivered just before the actor exited was reported as
- * ASX_E_INVALID_STATE and lost. Rust delivers a reply sent before exit. */
-static void test_call_reply_survives_actor_exit(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_call_token token;
-    asx_call_token unanswered;
-    uint64_t reply = 0;
-    asx_status st;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    b.handle_call = reply_then_stop_call;
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 1); /* init */
-
-    MUST_OK(asx_actor_call(h, 41, &token));
-    pump_region(r, 4); /* handle call, process stop, exit */
-    ASSERT(state.term_called, "actor should have exited");
-
-    st = asx_call_token_poll(token, &reply);
-    ASSERT(st == ASX_OK, "reply sent before exit must be delivered");
-    ASSERT(reply == 42u, "reply should be request + 1");
-
-    /* Consumed once: a second poll sees the call is gone */
-    st = asx_call_token_poll(token, &reply);
-    ASSERT(st == ASX_E_INVALID_STATE, "a consumed reply is not delivered twice");
-
-    /* A call to an exited actor is not answered */
-    st = asx_actor_call(h, 1, &unanswered);
-    ASSERT(st != ASX_OK || asx_call_token_poll(unanswered, &reply) == ASX_E_INVALID_STATE,
-           "an exited actor does not answer new calls");
-}
-
-static void test_call_multiple(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_call_token tokens[3];
-    uint64_t reply;
-    uint32_t i;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 1); /* init */
-
-    for (i = 0; i < 3; i++) { MUST_OK(asx_actor_call(h, (uint64_t)(i + 1), &tokens[i])); }
-
-    pump_region(r, 3); /* process all 3 calls */
-
-    for (i = 0; i < 3; i++) {
-        MUST_OK(asx_call_token_poll(tokens[i], &reply));
-        ASSERT(reply == (uint64_t)(i + 1) * 2, "each reply should be request*2");
-    }
-}
-
-static void test_call_pending_exhaustion(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_call_token tokens[ASX_ACTOR_MAX_PENDING_CALLS + 1];
-    uint32_t i;
-    asx_status st;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 1); /* init */
-
-    for (i = 0; i < ASX_ACTOR_MAX_PENDING_CALLS; i++) {
-        st = asx_actor_call(h, (uint64_t)i, &tokens[i]);
-        ASSERT(st == ASX_OK, "call within pending limit should succeed");
-    }
-
-    st = asx_actor_call(h, 999, &tokens[ASX_ACTOR_MAX_PENDING_CALLS]);
-    ASSERT(st == ASX_E_RESOURCE_EXHAUSTED, "call beyond pending limit should fail");
-}
-
-static void test_call_null_handler(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = minimal_behavior(); /* no call handler */
-    asx_region_id r;
-    asx_call_token token;
-    uint64_t reply;
-    asx_status st;
-
-    asx_runtime_reset();
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, NULL));
-    pump_region(r, 1); /* init */
-
-    MUST_OK(asx_actor_call(h, 42, &token));
-    pump_region(r, 1); /* process — no handler, slot released */
-
-    st = asx_call_token_poll(token, &reply);
-    ASSERT(st == ASX_E_INVALID_STATE, "call with no handler should return invalid state");
-}
-
-/* ------------------------------------------------------------------ */
-/* Tests: Stop (graceful shutdown)                                     */
-/* ------------------------------------------------------------------ */
-
-static void test_stop_basic(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 1); /* init */
-    ASSERT(asx_actor_is_alive(h), "should be alive after init");
-
+    setup();
+    h = spawn_rec(g_root, &s, 4);
+    run(g_root);
     MUST_OK(asx_actor_stop(h));
-    pump_region(r, 2); /* process stop, then terminate */
-
-    ASSERT(!asx_actor_is_alive(h), "should be dead after stop");
-    ASSERT(state.term_called, "terminate should be called");
-    ASSERT(state.term_reason == ASX_OK, "graceful stop reason should be OK");
-}
-
-static void test_stop_processes_remaining_messages(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 1); /* init */
-
-    /* Send messages then stop */
-    MUST_OK(asx_actor_cast(h, 10));
-    MUST_OK(asx_actor_cast(h, 20));
+    ASSERT(asx_actor_get_state(h) == ASX_ACTOR_STOPPING, "Stopping once asked");
+    run(g_root);
+    ASSERT(s.term_called == 1 && s.term_reason == ASX_OK, "terminate ran with ASX_OK");
+    ASSERT(!asx_actor_is_alive(h) && asx_actor_get_state(h) == ASX_ACTOR_STOPPED, "Stopped");
+    ASSERT(asx_actor_exit_reason(h) == ASX_OK, "a stop is a normal exit");
+    ASSERT(task_outcome(h) == ASX_OUTCOME_OK, "its task completed OK");
     MUST_OK(asx_actor_stop(h));
-
-    /* Messages should be processed before stop takes effect */
-    pump_region(r, 5);
-    ASSERT(!asx_actor_is_alive(h), "should be dead after draining");
-    ASSERT(state.msg_count == 2, "both messages should be processed");
-    ASSERT(state.last_msg == 20, "last message should be 20");
+    ASSERT(asx_actor_get_state(h) == ASX_ACTOR_STOPPED, "a later stop does not revive it");
 }
 
-/* ------------------------------------------------------------------ */
-/* Tests: Error handling                                               */
-/* ------------------------------------------------------------------ */
-
-static void test_cast_handler_failure(void) {
+static void test_stop_before_first_poll_skips_init(void) {
+    rec_state s;
     asx_actor_handle h;
-    asx_actor_behavior b;
-    echo_state state;
-    asx_region_id r;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    g_fail_after_count = 2;
-    g_fail_cast_count = 0;
-
-    b.init = NULL;
-    b.handle_cast = fail_cast;
-    b.handle_call = NULL;
-    b.terminate = echo_terminate;
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 1); /* init */
-
-    MUST_OK(asx_actor_cast(h, 1));
-    MUST_OK(asx_actor_cast(h, 2));
-    MUST_OK(asx_actor_cast(h, 3));
-
-    pump_region(r, 5);
-
-    ASSERT(!asx_actor_is_alive(h), "should be dead after handler failure");
-    ASSERT(state.term_called, "terminate should be called");
-    ASSERT(state.term_reason == ASX_E_INVALID_STATE, "terminate reason should be handler error");
-    ASSERT(g_fail_cast_count == 2, "should have processed 2 messages before failure");
-}
-
-static void test_stale_handle(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_actor_handle stale;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    stale = h;
-    pump_region(r, 1); /* init */
-
-    /* Kill actor */
-    b.init = fail_init;
+    setup();
+    h = spawn_rec(g_root, &s, 4);
+    MUST_OK(asx_actor_try_cast(h, 2));
+    MUST_OK(asx_actor_try_cast(h, 3));
     MUST_OK(asx_actor_stop(h));
-    pump_region(r, 2);
-    ASSERT(!asx_actor_is_alive(stale), "stale handle should report dead");
+    run(g_root);
+    ASSERT(s.init_called == 0, "a stop before start skips init");
+    ASSERT(s.casts == 2u && s.sum == 5u, "the queued casts are still served");
+    ASSERT(s.term_called == 1 && s.term_reason == ASX_OK, "then it terminates");
+}
 
-    /* Spawn new actor in same slot */
-    b.init = echo_init;
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    ASSERT(h.slot == stale.slot, "should reuse same slot");
-    ASSERT(h.generation != stale.generation, "generation should differ");
+static void test_stop_succeeds_on_a_full_mailbox(void) {
+    rec_state s;
+    asx_actor_handle h;
+    setup();
+    h = spawn_rec(g_root, &s, 2);
+    run(g_root);
+    MUST_OK(asx_actor_try_cast(h, 1));
+    MUST_OK(asx_actor_try_cast(h, 2));
+    ASSERT(asx_actor_try_cast(h, 3) == ASX_E_CHANNEL_FULL, "full");
+    ASSERT(asx_actor_stop(h) == ASX_OK, "a stop is a state change, never a queued message");
+    ASSERT(asx_actor_try_cast(h, 4) == ASX_E_DISCONNECTED, "sends after the stop fail");
+    run(g_root);
+    ASSERT(s.casts == 2u && s.sum == 3u, "the queued messages are still served");
+    ASSERT(s.term_called == 1 && !asx_actor_is_alive(h), "then it stops");
+}
 
-    /* Stale handle should not work */
-    ASSERT(!asx_actor_is_alive(stale), "stale handle should not find new actor");
-    ASSERT(asx_actor_cast(stale, 1) == ASX_E_INVALID_ARGUMENT,
-           "cast with stale handle should fail");
+static void test_messages_after_stop_are_refused(void) {
+    rec_state s;
+    asx_actor_handle h;
+    client c;
+    asx_region_id cr;
+    setup();
+    cr = child_region();
+    h = spawn_rec(g_root, &s, 4);
+    MUST_OK(asx_actor_stop(h));
+    ASSERT(asx_actor_try_cast(h, 1) == ASX_E_DISCONNECTED, "try_cast to a stopping server");
+    memset(&c, 0, sizeof(c));
+    client_add(&c, CL_CAST, 1);
+    client_add(&c, CL_CALL, 1);
+    client_start(&c, h, cr);
+    run(g_root);
+    ASSERT(c.steps[0].status == ASX_E_DISCONNECTED, "cast_rejected_stopped");
+    ASSERT(c.steps[1].status == ASX_E_DISCONNECTED, "call_rejected_stopped");
+    ASSERT(s.casts == 0u && s.calls == 0u, "nothing reached the server");
+}
+
+static void test_join_waits_for_the_server(void) {
+    rec_state s;
+    asx_actor_handle h;
+    client c;
+    asx_region_id cr;
+    setup();
+    cr = child_region();
+    h = spawn_rec(g_root, &s, 4);
+    memset(&c, 0, sizeof(c));
+    client_add(&c, CL_CAST, 5);
+    client_add(&c, CL_STOP_JOIN, 0);
+    client_start(&c, h, cr);
+    run(g_root);
+    ASSERT(c.steps[1].status == ASX_OK, "the join returned once the server finished");
+    ASSERT(s.casts == 1u && s.term_called == 1, "it served the cast and terminated first");
+    ASSERT(!asx_actor_is_alive(h), "finished");
 }
 
 /* ------------------------------------------------------------------ */
-/* Tests: Task integration                                             */
+/* Cancellation                                                        */
 /* ------------------------------------------------------------------ */
 
-static void test_task_id_retrieval(void) {
+static void cancel(asx_region_id region) {
+    asx_cancel_reason r = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+    MUST_OK(asx_region_cancel(region, &r, NULL));
+}
+
+static void test_region_cancel_skips_queued_casts(void) {
+    rec_state s;
     asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_task_id tid;
+    asx_region_id sr;
+    setup();
+    sr = child_region();
+    h = spawn_rec(sr, &s, 4);
+    MUST_OK(asx_actor_try_cast(h, 1));
+    MUST_OK(asx_actor_try_cast(h, 2));
+    cancel(sr);
+    run(g_root);
+    ASSERT(s.init_called == 0, "cancelled before its first poll: init skipped");
+    ASSERT(s.casts == 0u, "a cancelled server drains its casts without handling them");
+    ASSERT(s.term_called == 1 && s.term_reason == ASX_E_CANCELLED, "terminate still runs");
+    ASSERT(asx_actor_exit_reason(h) == ASX_E_CANCELLED, "exit reason CANCELLED");
+}
 
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
+static void test_cancelled_server_drops_queued_call(void) {
+    rec_state s;
+    asx_actor_handle h;
+    client c;
+    asx_region_id sr;
+    asx_region_id cr;
+    setup();
+    sr = child_region();
+    cr = child_region();
+    h = spawn_rec(sr, &s, 4);
+    memset(&c, 0, sizeof(c));
+    client_add(&c, CL_CALL, 1);
+    client_start(&c, h, cr);
+    run(cr); /* the call is enqueued; the server has not run */
+    ASSERT(c.steps[0].status == ASX_E_PENDING, "waiting for the reply");
+    cancel(sr);
+    run(g_root);
+    ASSERT(s.calls == 0u, "the call was drained, not handled");
+    ASSERT(c.steps[0].status == ASX_E_INVALID_STATE, "the caller sees no reply (NoReply)");
+    ASSERT(s.term_called == 1 && s.term_reason == ASX_E_CANCELLED, "terminated");
+}
 
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-
-    MUST_OK(asx_actor_task_id(h, &tid));
-    ASSERT(asx_handle_is_valid(tid), "task id should be valid");
+static void test_cancel_reaches_a_waiting_server(void) {
+    rec_state s;
+    asx_actor_handle h;
+    asx_region_id sr;
+    setup();
+    sr = child_region();
+    h = spawn_rec(sr, &s, 4);
+    run(g_root);
+    ASSERT(s.init_called == 1 && asx_actor_is_alive(h), "running, waiting for messages");
+    cancel(sr);
+    run(g_root);
+    ASSERT(s.term_called == 1 && s.term_reason == ASX_E_CANCELLED,
+           "the receive saw the cancel and the server terminated");
+    ASSERT(task_outcome(h) == ASX_OUTCOME_CANCELLED,
+           "a task spawned outside a poll is cancellation-dominant");
 }
 
 /* ------------------------------------------------------------------ */
-/* Tests: Reset                                                        */
+/* Failing callbacks (Rust panics)                                     */
 /* ------------------------------------------------------------------ */
 
-static void test_reset(void) {
+static void test_failing_cast_panics_the_server(void) {
+    rec_state s;
     asx_actor_handle h;
-    asx_actor_behavior b = minimal_behavior();
-    asx_region_id r;
+    client c;
+    asx_region_id sr;
+    asx_region_id cr;
+    setup();
+    sr = child_region();
+    cr = child_region();
+    h = spawn_rec(sr, &s, 4);
+    s.fail_cast_at = 1;
+    MUST_OK(asx_actor_try_cast(h, 1));
+    memset(&c, 0, sizeof(c));
+    client_add(&c, CL_CALL, 1);
+    client_start(&c, h, cr);
+    run(cr); /* the call queues behind the failing cast */
+    run(g_root);
+    ASSERT(task_outcome(h) == ASX_OUTCOME_PANICKED, "its task completed PANICKED");
+    ASSERT(s.term_called == 0, "no terminate after a panic");
+    ASSERT(asx_actor_exit_reason(h) == ASX_E_INVALID_STATE, "exit reason: the callback's");
+    ASSERT(!asx_actor_is_alive(h), "stopped");
+    ASSERT(s.calls == 0u && c.steps[0].status == ASX_E_INVALID_STATE,
+           "the queued call's reply was aborted: no reply");
+}
 
-    asx_runtime_reset();
-    r = make_region();
+static void test_call_without_handler_panics_the_server(void) {
+    rec_state s;
+    asx_actor_handle h;
+    asx_actor_behavior no_call = g_rec;
+    client c;
+    asx_region_id cr;
+    setup();
+    cr = child_region();
+    no_call.handle_call = NULL;
+    memset(&s, 0, sizeof(s));
+    MUST_OK(asx_actor_spawn(&h, g_root, &no_call, &s, 4));
+    memset(&c, 0, sizeof(c));
+    client_add(&c, CL_CALL, 1);
+    client_start(&c, h, cr);
+    run(g_root);
+    ASSERT(c.steps[0].status == ASX_E_INVALID_STATE, "the dropped reply: no reply");
+    ASSERT(task_outcome(h) == ASX_OUTCOME_PANICKED, "Rust's reply drop bomb panics it");
+}
 
-    MUST_OK(asx_actor_spawn(&h, r, &b, NULL));
-    ASSERT(asx_actor_is_alive(h), "should be alive before reset");
+static void test_failing_init_panics_the_server(void) {
+    rec_state s;
+    asx_actor_handle h;
+    setup();
+    h = spawn_rec(g_root, &s, 4);
+    s.fail_init = 1;
+    run(g_root);
+    ASSERT(s.init_called == 1, "init ran");
+    ASSERT(task_outcome(h) == ASX_OUTCOME_PANICKED, "PANICKED");
+    ASSERT(s.term_called == 0, "no terminate");
+}
 
+/* ------------------------------------------------------------------ */
+/* Handles                                                             */
+/* ------------------------------------------------------------------ */
+
+static void test_forged_and_reset_handles_are_rejected(void) {
+    rec_state s;
+    asx_actor_handle h;
+    asx_actor_handle forged;
+    setup();
+    h = spawn_rec(g_root, &s, 4);
+    forged = h;
+    forged.generation++;
+    ASSERT(asx_actor_try_cast(forged, 1) == ASX_E_INVALID_ARGUMENT, "wrong generation");
+    ASSERT(asx_actor_stop(forged) == ASX_E_INVALID_ARGUMENT, "stop of a forged handle");
     asx_actor_reset();
-    ASSERT(!asx_actor_is_alive(h), "should be dead after reset");
-}
-
-/* ------------------------------------------------------------------ */
-/* Tests: Law/invariant tests                                          */
-/* ------------------------------------------------------------------ */
-
-/* Law: FIFO ordering — messages processed in send order */
-static uint64_t g_order_log[16];
-static uint32_t g_order_count;
-
-static asx_status order_cast(void *state, uint64_t msg, asx_actor_handle self) {
-    (void)state;
-    (void)self;
-    if (g_order_count < 16) { g_order_log[g_order_count++] = msg; }
-    return ASX_OK;
-}
-
-static void test_law_fifo_ordering(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b;
-    asx_region_id r;
-    uint32_t i;
-
-    asx_runtime_reset();
-    g_order_count = 0;
-    b.init = NULL;
-    b.handle_cast = order_cast;
-    b.handle_call = NULL;
-    b.terminate = NULL;
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, NULL));
-    pump_region(r, 1); /* init */
-
-    for (i = 0; i < 8; i++) { MUST_OK(asx_actor_cast(h, (uint64_t)(i * 10))); }
-
-    pump_region(r, 8);
-
-    ASSERT(g_order_count == 8, "should have received 8 messages");
-    for (i = 0; i < 8; i++) {
-        ASSERT(g_order_log[i] == (uint64_t)(i * 10), "messages should be in FIFO order");
-    }
-}
-
-/* Law: call reply is consumed exactly once */
-static void test_law_call_consumed_once(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_call_token token;
-    uint64_t reply;
-    asx_status st;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 1); /* init */
-
-    MUST_OK(asx_actor_call(h, 5, &token));
-    pump_region(r, 1); /* process call */
-
-    /* First poll consumes */
-    st = asx_call_token_poll(token, &reply);
-    ASSERT(st == ASX_OK, "first poll should succeed");
-    ASSERT(reply == 10, "reply should be 5*2=10");
-
-    /* Second poll fails (slot released) */
-    st = asx_call_token_poll(token, &reply);
-    ASSERT(st == ASX_E_INVALID_STATE, "second poll should fail (consumed)");
-}
-
-/* Law: terminate is always called (even on error) */
-static void test_law_terminate_always_called(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-
-    /* Test 1: graceful stop */
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 1);
-    MUST_OK(asx_actor_stop(h));
-    pump_region(r, 2);
-    ASSERT(state.term_called, "terminate should be called on graceful stop");
-
-    /* Test 2: init failure */
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    b.init = fail_init;
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 2);
-    ASSERT(state.term_called, "terminate should be called on init failure");
-}
-
-/* Law: mailbox count is accurate */
-static void test_law_mailbox_count(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = minimal_behavior();
-    asx_region_id r;
-
-    asx_runtime_reset();
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, NULL));
-    pump_one_poll(r); /* init (single poll) */
-    ASSERT(asx_actor_mailbox_count(h) == 0, "empty mailbox");
-
-    MUST_OK(asx_actor_cast(h, 1));
-    MUST_OK(asx_actor_cast(h, 2));
-    ASSERT(asx_actor_mailbox_count(h) == 2, "2 messages");
-
-    pump_one_poll(r); /* process 1 message */
-    ASSERT(asx_actor_mailbox_count(h) == 1, "1 message after processing");
-
-    pump_one_poll(r); /* process 2nd message */
-    ASSERT(asx_actor_mailbox_count(h) == 0, "0 messages after processing all");
-}
-
-/* ------------------------------------------------------------------ */
-/* Tests: Interleaved cast and call                                    */
-/* ------------------------------------------------------------------ */
-
-static void test_interleaved_cast_call(void) {
-    asx_actor_handle h;
-    asx_actor_behavior b = echo_behavior();
-    echo_state state;
-    asx_region_id r;
-    asx_call_token token;
-    uint64_t reply;
-
-    asx_runtime_reset();
-    memset(&state, 0, sizeof(state));
-    r = make_region();
-
-    MUST_OK(asx_actor_spawn(&h, r, &b, &state));
-    pump_region(r, 1); /* init */
-
-    /* Cast, call, cast */
-    MUST_OK(asx_actor_cast(h, 100));
-    MUST_OK(asx_actor_call(h, 50, &token));
-    MUST_OK(asx_actor_cast(h, 200));
-
-    pump_region(r, 3); /* process all 3 */
-
-    ASSERT(state.msg_count == 2, "2 cast messages processed");
-    ASSERT(state.last_msg == 200, "last cast was 200");
-    MUST_OK(asx_call_token_poll(token, &reply));
-    ASSERT(reply == 100, "call reply should be 50*2=100");
+    ASSERT(!asx_actor_is_alive(h), "reset forgets every server");
+    ASSERT(asx_actor_try_cast(h, 1) == ASX_E_INVALID_ARGUMENT, "stale after reset");
 }
 
 /* ------------------------------------------------------------------ */
@@ -999,53 +658,36 @@ static void test_interleaved_cast_call(void) {
 int main(void) {
     printf("test_actor:\n");
 
-    /* Spawn and lifecycle */
     RUN(test_spawn_basic);
-    RUN(test_spawn_null_args);
+    RUN(test_spawn_rejects_bad_arguments);
     RUN(test_spawn_arena_exhaustion);
-    RUN(test_init_callback);
-    RUN(test_init_failure_terminates);
-    RUN(test_minimal_no_init_no_terminate);
+    RUN(test_spawn_refused_by_region_limit);
 
-    /* Cast */
-    RUN(test_cast_basic);
-    RUN(test_cast_ordering);
-    RUN(test_cast_mailbox_full);
-    RUN(test_cast_to_dead_actor);
+    RUN(test_init_runs_once_on_first_poll);
+    RUN(test_try_cast_delivers_in_order);
+    RUN(test_try_cast_reports_a_full_mailbox);
+    RUN(test_ready_batch_yields_after_eight);
 
-    /* Call */
-    RUN(test_call_basic);
-    RUN(test_call_reply_survives_actor_exit);
-    RUN(test_call_multiple);
-    RUN(test_call_pending_exhaustion);
-    RUN(test_call_null_handler);
+    RUN(test_call_from_task_gets_reply);
+    RUN(test_call_from_root_region_is_rejected);
+    RUN(test_cast_from_task_waits_for_capacity);
+    RUN(test_full_mailbox_of_64_parks_the_next_cast);
 
-    /* Stop */
-    RUN(test_stop_basic);
-    RUN(test_stop_processes_remaining_messages);
+    RUN(test_stop_runs_terminate);
+    RUN(test_stop_before_first_poll_skips_init);
+    RUN(test_stop_succeeds_on_a_full_mailbox);
+    RUN(test_messages_after_stop_are_refused);
+    RUN(test_join_waits_for_the_server);
 
-    /* Error handling */
-    RUN(test_cast_handler_failure);
-    RUN(test_stale_handle);
+    RUN(test_region_cancel_skips_queued_casts);
+    RUN(test_cancelled_server_drops_queued_call);
+    RUN(test_cancel_reaches_a_waiting_server);
 
-    /* Task integration */
-    RUN(test_task_id_retrieval);
+    RUN(test_failing_cast_panics_the_server);
+    RUN(test_call_without_handler_panics_the_server);
+    RUN(test_failing_init_panics_the_server);
 
-    /* Reset */
-    RUN(test_reset);
-
-    /* Law tests */
-    RUN(test_law_fifo_ordering);
-    RUN(test_law_call_consumed_once);
-    RUN(test_law_terminate_always_called);
-    RUN(test_law_mailbox_count);
-
-    /* Interleaved */
-    RUN(test_interleaved_cast_call);
-    RUN(test_idle_actor_parks_and_cast_wakes_it);
-    RUN(test_call_parks_caller_until_reply);
-    RUN(test_dropped_call_wakes_caller);
-    RUN(test_cancelled_actor_runs_terminate);
+    RUN(test_forged_and_reset_handles_are_rejected);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
