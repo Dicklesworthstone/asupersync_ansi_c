@@ -963,6 +963,14 @@ static void drop_locals(it_task *t) {
     uint32_t me = (uint32_t)(t - g_tasks);
     int type;
     int sender;
+    /* Unresolved obligation tokens drop first (twin_run's Local declares
+     * them first): each posts a Leak (obligation_mailbox.rs:897), and a
+     * checked token releases its region count at once (bd-2fga). Leaks of
+     * different obligations commute, so their order is not observable. */
+    while (t->n_obligations > 0u) {
+        asx_status st = asx_obligation_drop(t->obligations[--t->n_obligations].id);
+        (void)st; /* an obligation resolved some other way stays as it is */
+    }
     /* Child regions still open are closed, by name: Rust's ChildRegion drop
      * backstop requests a Close without waiting, and its Local drops
      * `regions` before the guards. */

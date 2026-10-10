@@ -890,8 +890,8 @@ asx_status asx_channel_reserve(asx_channel_id id, asx_cx *cx, asx_send_permit *o
      * (mpsc.rs:1116); a refusal leaves the permit untracked (:1180). */
     if (cx != NULL && cx->task_id != ASX_INVALID_ID) {
         asx_obligation_id ob;
-        if (asx_obligation_reserve_ex(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id,
-                                      &ob) == ASX_OK) {
+        if (asx_obligation_register(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id,
+                                    &ob) == ASX_OK) {
             out->obligation = ob;
         }
     }

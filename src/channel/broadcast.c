@@ -179,8 +179,8 @@ asx_status asx_broadcast_send(asx_broadcast_sender *sender, asx_cx *cx, uint64_t
     if (cx != NULL && asx_cx_checkpoint(cx) != ASX_OK) return ASX_E_CANCELLED;
     if (s->receiver_count == 0u) return ASX_E_DISCONNECTED;
     if (cx != NULL && cx->task_id != ASX_INVALID_ID &&
-        asx_obligation_reserve_ex(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id,
-                                  &ob) == ASX_OK) {
+        asx_obligation_register(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id, &ob) ==
+            ASX_OK) {
         /* The permit's send commits before publishing (:719-724). */
         asx_status cs = asx_obligation_commit(ob);
         (void)cs; /* reserved just above */

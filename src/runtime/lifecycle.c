@@ -68,6 +68,27 @@ uint32_t g_obligation_live;
 static uint32_t g_task_free_head = ASX_SLOT_NONE;
 static uint32_t g_obligation_free_head = ASX_SLOT_NONE;
 
+/* Rust's obligation mailbox (bd-2fga): under lab dispatch a Cx's
+ * obligation operations made inside a poll are posts, applied in order
+ * when the poll returns (lab/runtime.rs:4797-4808). */
+typedef enum {
+    OB_POST_RESERVE = 1,
+    OB_POST_COMMIT = 2,
+    OB_POST_ABORT = 3,
+    OB_POST_LEAK = 4
+} ob_post_kind;
+
+typedef struct {
+    uint8_t kind;
+    uint32_t idx;
+    uint16_t generation;
+} ob_post;
+
+/* A reservation and one resolution per slot. */
+#define OB_POST_CAP (2u * (uint32_t)(ASX_MAX_OBLIGATIONS))
+static ob_post g_ob_posts[OB_POST_CAP];
+static uint32_t g_ob_post_n;
+
 /* Obligation leak policy (runtime config) and cumulative leak count. */
 static asx_leak_response g_leak_response = ASX_LEAK_LOG;
 static asx_leak_escalation_config g_leak_escalation;
@@ -140,10 +161,14 @@ void asx_runtime_reset(void) {
         g_obligations[i].holder = ASX_INVALID_ID;
         g_obligations[i].next_held = ASX_SLOT_NONE;
         g_obligations[i].abort_reason = ASX_OBLIGATION_ABORT_NONE;
+        g_obligations[i].counted = 0;
+        g_obligations[i].checked = 0;
+        g_obligations[i].posts = 0;
     }
     g_obligation_count = 0;
     g_obligation_live = 0;
     g_obligation_free_head = ASX_SLOT_NONE;
+    g_ob_post_n = 0;
     g_leak_response = ASX_LEAK_LOG;
     g_leak_escalation_set = 0;
     g_leak_count = 0;
@@ -384,7 +409,8 @@ static uint32_t asx_obligation_reclaim_resolved(void) {
     for (i = g_obligation_count; i > 0u; i--) {
         ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
         asx_obligation_slot *o = &g_obligations[i - 1u];
-        if (!o->alive || o->state == ASX_OBLIGATION_RESERVED) continue;
+        /* A slot a pending post names stays until the post is applied. */
+        if (!o->alive || o->state == ASX_OBLIGATION_RESERVED || o->posts > 0u) continue;
         asx_obligation_slot_release(i - 1u);
         freed++;
     }
@@ -497,6 +523,7 @@ static int obligation_leak_slot(uint32_t idx, const char *log_message) {
                         asx_handle_pack_index(o->generation, (uint16_t)idx));
     asx_leak_response policy = asx_leak_policy_effective();
     if (g_leak_count < UINT64_MAX) g_leak_count++;
+    o->counted = 0;
     if (policy == ASX_LEAK_RECOVER) {
         /* Recovered leak: abort. */
         o->state = ASX_OBLIGATION_ABORTED;
@@ -1355,13 +1382,16 @@ asx_status asx_obligation_slot_lookup(asx_obligation_id id, asx_obligation_slot 
     return ASX_OK;
 }
 
-/* Obligations reserved in `region` and not yet resolved. */
+/* Obligations counted against `region`'s max_obligations: reserved and
+ * not resolved, as the region's pending count sees them (a checked
+ * reservation and its resolution count at the call, a permit's at the
+ * drain of its post). */
 static uint32_t region_pending_obligations(asx_region_id region) {
     uint32_t i;
     uint32_t n = 0;
     for (i = 0; i < g_obligation_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
-        if (g_obligations[i].alive && g_obligations[i].state == ASX_OBLIGATION_RESERVED &&
+        if (g_obligations[i].alive && g_obligations[i].counted &&
             asx_handle_index(g_obligations[i].region) == asx_handle_index(region)) {
             n++;
         }
@@ -1369,12 +1399,114 @@ static uint32_t region_pending_obligations(asx_region_id region) {
     return n;
 }
 
+/* Whether obligation operations are posts: lab dispatch, inside a poll. */
+static int obligation_posting(void) {
+    return asx_lab_dispatch_active() && asx_task_current() != ASX_INVALID_ID;
+}
+
+static asx_obligation_id obligation_handle(uint32_t idx) {
+    return asx_handle_pack(ASX_TYPE_OBLIGATION, (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
+                           asx_handle_pack_index(g_obligations[idx].generation, (uint16_t)idx));
+}
+
+/* The applied effects of each operation: record visible, ghost monitor,
+ * event log and trace. */
+static void obligation_apply_reserve(uint32_t idx) {
+    asx_obligation_id id = obligation_handle(idx);
+    asx_ghost_obligation_reserved(id);
+    (void)asx_event_emit(ASX_EVENT_OBLIGATION_CREATE, id, (uint64_t)g_obligations[idx].region,
+                         ASX_OK);
+    asx_trace_emit(ASX_TRACE_OBLIGATION_RESERVE, id, (uint64_t)g_obligations[idx].region);
+}
+
+static void obligation_apply_resolution(uint32_t idx, asx_obligation_state to) {
+    asx_obligation_id id = obligation_handle(idx);
+    (void)asx_ghost_check_obligation_transition(id, ASX_OBLIGATION_RESERVED, to);
+    asx_ghost_obligation_resolved(id);
+    if (to == ASX_OBLIGATION_COMMITTED) {
+        (void)asx_event_emit(ASX_EVENT_OBLIGATION_COMMIT, id, 0u, ASX_OK);
+        asx_trace_emit(ASX_TRACE_OBLIGATION_COMMIT, id, 0);
+    } else {
+        (void)asx_event_emit(ASX_EVENT_OBLIGATION_ABORT, id, 0u, ASX_OK);
+        asx_trace_emit(ASX_TRACE_OBLIGATION_ABORT, id, 0);
+    }
+}
+
+/* A dropped token's leak: the leak policy's effects. */
+static void obligation_apply_leak(uint32_t idx) {
+    if (obligation_leak_slot(idx, "obligation leaked: dropped unresolved")) {
+        /* PANIC policy: as for a leak at completion. */
+        asx_status fc =
+            asx_region_contain_fault(g_obligations[idx].region, ASX_E_UNRESOLVED_OBLIGATIONS);
+        if (fc != ASX_OK && asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {
+            g_pending_fault = fc;
+        }
+    }
+}
+
+/* Queue a post; a full queue is drained first, keeping the order. */
+static void obligation_post(ob_post_kind kind, uint32_t idx) {
+    if (g_ob_post_n >= OB_POST_CAP) asx_obligation_drain_posts_internal();
+    g_ob_posts[g_ob_post_n].kind = (uint8_t)kind;
+    g_ob_posts[g_ob_post_n].idx = idx;
+    g_ob_posts[g_ob_post_n].generation = g_obligations[idx].generation;
+    g_ob_post_n++;
+    g_obligations[idx].posts++;
+}
+
+/* Apply the posts in order (Rust's drain at the end of the poll). A
+ * permit's reservation is admitted now, against the region's count, and a
+ * refused one is dropped with the posts that name it: the permit is
+ * untracked. A permit's resolution releases its count now. */
+void asx_obligation_drain_posts_internal(void) {
+    uint32_t i;
+    uint32_t n = g_ob_post_n;
+    g_ob_post_n = 0;
+    for (i = 0; i < n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: n <= OB_POST_CAP");
+        const ob_post *p = &g_ob_posts[i];
+        asx_obligation_slot *o = &g_obligations[p->idx];
+        if (!o->alive || o->generation != p->generation) continue; /* refused */
+        if (o->posts > 0u) o->posts--;
+        switch ((ob_post_kind)p->kind) {
+        case OB_POST_RESERVE:
+            if (!o->checked) {
+                asx_region_slot *r;
+                if (asx_region_slot_lookup(o->region, &r) == ASX_OK &&
+                    r->limits.max_obligations != ASX_REGION_UNLIMITED &&
+                    region_pending_obligations(o->region) >= r->limits.max_obligations) {
+                    o->posts = 0;
+                    asx_obligation_unlink_holder(p->idx);
+                    asx_obligation_slot_release(p->idx);
+                    continue;
+                }
+                o->counted = 1;
+            }
+            obligation_apply_reserve(p->idx);
+            break;
+        case OB_POST_COMMIT:
+            if (!o->checked) o->counted = 0;
+            obligation_apply_resolution(p->idx, ASX_OBLIGATION_COMMITTED);
+            break;
+        case OB_POST_ABORT:
+            if (!o->checked) o->counted = 0;
+            obligation_apply_resolution(p->idx, ASX_OBLIGATION_ABORTED);
+            break;
+        case OB_POST_LEAK: obligation_apply_leak(p->idx); break;
+        }
+    }
+}
+
+/* checked: Rust's try_register_obligation_checked, admitted against the
+ * region's limit at the call; otherwise try_register_obligation, whose
+ * post (inside a poll under lab dispatch) is admitted at the drain. */
 static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligation_kind kind,
                                               asx_task_slot *holder_slot, asx_task_id holder,
-                                              asx_obligation_id *out_id) {
+                                              int checked, asx_obligation_id *out_id) {
     asx_region_slot *r;
     asx_status st;
     uint32_t idx;
+    int posting = obligation_posting();
 
     if (out_id == NULL) return ASX_E_INVALID_ARGUMENT;
 
@@ -1391,8 +1523,9 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
     /* Only open regions can reserve obligations (Rust
      * ObligationAdmissionError::RegionClosed; vocabulary §5). */
     if (!asx_region_can_spawn(r->state)) return ASX_E_REGION_CLOSED;
-    /* At its pending-obligation limit (Rust try_reserve_obligation). */
-    if (r->limits.max_obligations != ASX_REGION_UNLIMITED &&
+    /* At its pending-obligation limit (Rust try_reserve_obligation): at
+     * the call, unless a permit's post is admitted at the drain. */
+    if ((checked || !posting) && r->limits.max_obligations != ASX_REGION_UNLIMITED &&
         region_pending_obligations(region) >= r->limits.max_obligations) {
         return ASX_E_ADMISSION_LIMIT;
     }
@@ -1407,6 +1540,9 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
     g_obligations[idx].abort_reason = ASX_OBLIGATION_ABORT_NONE;
     g_obligations[idx].next_held = ASX_SLOT_NONE;
     g_obligations[idx].holder = ASX_INVALID_ID;
+    g_obligations[idx].checked = checked ? 1u : 0u;
+    g_obligations[idx].counted = (checked || !posting) ? 1u : 0u;
+    g_obligations[idx].posts = 0;
     if (holder_slot != NULL) {
         /* Link into the holder's held list (resolved at its completion). */
         g_obligations[idx].holder = holder;
@@ -1414,15 +1550,12 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
         holder_slot->first_held = idx;
     }
 
-    *out_id =
-        asx_handle_pack(ASX_TYPE_OBLIGATION, (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
-                        asx_handle_pack_index(g_obligations[idx].generation, (uint16_t)idx));
-
-    /* Ghost linearity monitor: track obligation reservation */
-    asx_ghost_obligation_reserved(*out_id);
-
-    (void)asx_event_emit(ASX_EVENT_OBLIGATION_CREATE, *out_id, (uint64_t)region, ASX_OK);
-    asx_trace_emit(ASX_TRACE_OBLIGATION_RESERVE, *out_id, (uint64_t)region);
+    *out_id = obligation_handle(idx);
+    if (posting) {
+        obligation_post(OB_POST_RESERVE, idx);
+    } else {
+        obligation_apply_reserve(idx);
+    }
     return ASX_OK;
 }
 
@@ -1436,11 +1569,12 @@ asx_status asx_obligation_reserve(asx_region_id region, asx_obligation_id *out_i
         t = NULL;
     }
     return asx_obligation_reserve_impl(region, ASX_OBLIGATION_KIND_GENERIC, t,
-                                       t != NULL ? holder : ASX_INVALID_ID, out_id);
+                                       t != NULL ? holder : ASX_INVALID_ID, 1, out_id);
 }
 
-asx_status asx_obligation_reserve_ex(asx_region_id region, asx_obligation_kind kind,
-                                     asx_task_id holder, asx_obligation_id *out_id) {
+static asx_status obligation_reserve_kind(asx_region_id region, asx_obligation_kind kind,
+                                          asx_task_id holder, int checked,
+                                          asx_obligation_id *out_id) {
     asx_task_slot *t = NULL;
     asx_status st;
 
@@ -1453,7 +1587,17 @@ asx_status asx_obligation_reserve_ex(asx_region_id region, asx_obligation_kind k
         if (st != ASX_OK) return st;
         if (asx_task_is_terminal(t->state)) return ASX_E_INVALID_STATE;
     }
-    return asx_obligation_reserve_impl(region, kind, t, holder, out_id);
+    return asx_obligation_reserve_impl(region, kind, t, holder, checked, out_id);
+}
+
+asx_status asx_obligation_reserve_ex(asx_region_id region, asx_obligation_kind kind,
+                                     asx_task_id holder, asx_obligation_id *out_id) {
+    return obligation_reserve_kind(region, kind, holder, 1, out_id);
+}
+
+asx_status asx_obligation_register(asx_region_id region, asx_obligation_kind kind,
+                                   asx_task_id holder, asx_obligation_id *out_id) {
+    return obligation_reserve_kind(region, kind, holder, 0, out_id);
 }
 
 asx_status asx_obligation_get_info(asx_obligation_id id, asx_obligation_info *out) {
@@ -1471,6 +1615,23 @@ asx_status asx_obligation_get_info(asx_obligation_id id, asx_obligation_info *ou
     return ASX_OK;
 }
 
+/* Resolve a reserved obligation: its state changes now; a checked token
+ * releases its region count now and a permit at the drain of its post;
+ * the record's trace is applied now or at the drain (bd-2fga). */
+static asx_status obligation_resolve(uint32_t idx, asx_obligation_state to) {
+    asx_obligation_slot *o = &g_obligations[idx];
+    int posting = obligation_posting();
+    asx_obligation_unlink_holder(idx);
+    o->state = to;
+    if (o->checked || !posting) o->counted = 0;
+    if (posting) {
+        obligation_post(to == ASX_OBLIGATION_COMMITTED ? OB_POST_COMMIT : OB_POST_ABORT, idx);
+    } else {
+        obligation_apply_resolution(idx, to);
+    }
+    return ASX_OK;
+}
+
 asx_status asx_obligation_commit(asx_obligation_id id) {
     asx_obligation_slot *o;
     asx_status st;
@@ -1478,24 +1639,17 @@ asx_status asx_obligation_commit(asx_obligation_id id) {
     st = asx_obligation_slot_lookup(id, &o);
     if (st != ASX_OK) return st;
 
-    /* Ghost protocol monitor: validate obligation transition */
-    (void)asx_ghost_check_obligation_transition(id, o->state, ASX_OBLIGATION_COMMITTED);
-
     /* Rust: committing an obligation that is no longer pending is
-     * ObligationAlreadyResolved (runtime/obligation_table.rs:577). */
-    if (o->state != ASX_OBLIGATION_RESERVED) return ASX_E_OBLIGATION_ALREADY_RESOLVED;
+     * ObligationAlreadyResolved (runtime/obligation_table.rs:577). The
+     * ghost monitor sees the invalid attempt; a valid transition is
+     * checked when it is applied. */
+    if (o->state != ASX_OBLIGATION_RESERVED) {
+        (void)asx_ghost_check_obligation_transition(id, o->state, ASX_OBLIGATION_COMMITTED);
+        return ASX_E_OBLIGATION_ALREADY_RESOLVED;
+    }
     st = asx_obligation_transition_check(o->state, ASX_OBLIGATION_COMMITTED);
     if (st != ASX_OK) return st;
-
-    asx_obligation_unlink_holder((uint32_t)(o - g_obligations));
-    o->state = ASX_OBLIGATION_COMMITTED;
-
-    /* Ghost linearity monitor: track obligation resolution */
-    asx_ghost_obligation_resolved(id);
-
-    (void)asx_event_emit(ASX_EVENT_OBLIGATION_COMMIT, id, 0u, ASX_OK);
-    asx_trace_emit(ASX_TRACE_OBLIGATION_COMMIT, id, 0);
-    return ASX_OK;
+    return obligation_resolve((uint32_t)(o - g_obligations), ASX_OBLIGATION_COMMITTED);
 }
 
 asx_status asx_obligation_abort(asx_obligation_id id) {
@@ -1504,7 +1658,8 @@ asx_status asx_obligation_abort(asx_obligation_id id) {
 
 /* A dropped Rust ObligationToken posts a Leak (obligation_mailbox.rs:897),
  * drained right after the poll that dropped it: the obligation is leaked
- * there, not when its holder completes (fuzz gen-12-2, bd-ij9w). */
+ * there, not when its holder completes (fuzz gen-12-2, bd-ij9w). Outside
+ * a poll under lab dispatch it leaks at once. */
 asx_status asx_obligation_drop(asx_obligation_id id) {
     asx_obligation_slot *o;
     uint32_t idx;
@@ -1514,12 +1669,16 @@ asx_status asx_obligation_drop(asx_obligation_id id) {
     if (st != ASX_OK) return st;
     idx = (uint32_t)(o - g_obligations);
     asx_obligation_unlink_holder(idx);
-    if (obligation_leak_slot(idx, "obligation leaked: dropped unresolved")) {
-        /* PANIC policy: as for a leak at completion. */
-        asx_status fc = asx_region_contain_fault(o->region, ASX_E_UNRESOLVED_OBLIGATIONS);
-        if (fc != ASX_OK && asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {
-            g_pending_fault = fc;
-        }
+    if (obligation_posting()) {
+        /* A checked token's drop releases its region count at once, as its
+         * commit or abort does (fuzz gen-10-146). The state is no longer
+         * Reserved from now on, so a second drop or a resolution fails; the
+         * drain applies the leak policy (Leaked, or a recovered abort). */
+        if (o->checked) o->counted = 0;
+        o->state = ASX_OBLIGATION_LEAKED;
+        obligation_post(OB_POST_LEAK, idx);
+    } else {
+        obligation_apply_leak(idx);
     }
     return ASX_OK;
 }
@@ -1539,26 +1698,16 @@ asx_status asx_obligation_abort_with_reason(asx_obligation_id id,
     st = asx_obligation_slot_lookup(id, &o);
     if (st != ASX_OK) return st;
 
-    /* Ghost protocol monitor: validate obligation transition */
-    (void)asx_ghost_check_obligation_transition(id, o->state, ASX_OBLIGATION_ABORTED);
-
     /* Rust: aborting an obligation that is no longer pending is
      * ObligationAlreadyResolved (runtime/obligation_table.rs:630). */
-    if (o->state != ASX_OBLIGATION_RESERVED) return ASX_E_OBLIGATION_ALREADY_RESOLVED;
+    if (o->state != ASX_OBLIGATION_RESERVED) {
+        (void)asx_ghost_check_obligation_transition(id, o->state, ASX_OBLIGATION_ABORTED);
+        return ASX_E_OBLIGATION_ALREADY_RESOLVED;
+    }
     st = asx_obligation_transition_check(o->state, ASX_OBLIGATION_ABORTED);
     if (st != ASX_OK) return st;
-
-    asx_obligation_unlink_holder((uint32_t)(o - g_obligations));
-    o->state = ASX_OBLIGATION_ABORTED;
     o->abort_reason = reason;
-
-    /* Ghost linearity monitor: track obligation resolution */
-    asx_ghost_obligation_resolved(id);
-
-    (void)asx_event_emit(ASX_EVENT_OBLIGATION_ABORT, id, 0u, ASX_OK);
-    asx_trace_emit(ASX_TRACE_OBLIGATION_ABORT, id, 0);
-
-    return ASX_OK;
+    return obligation_resolve((uint32_t)(o - g_obligations), ASX_OBLIGATION_ABORTED);
 }
 
 asx_status asx_obligation_get_state(asx_obligation_id id, asx_obligation_state *out_state) {

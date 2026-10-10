@@ -643,15 +643,9 @@ pub fn scenario(seed: u64, index: u64) -> Value {
     // Admission limits on a region once the first burst has run: later
     // spawns, child regions and reservations past them are refused
     // (ASX_E_ADMISSION_LIMIT). A field left out is unlimited. max_tasks is
-    // checked when the next lab step admits a spawn, in both runtimes
-    // (bd-orxy). max_obligations only where every obligation is a checked
-    // `reserve`: Rust admits and resolves a semaphore or channel permit's
-    // obligation at the next lab step, C at the call (DSL §7, open).
-    let permit_obligations = world.semaphore
-        || world.mpsc.is_some()
-        || world.oneshot.is_some()
-        || world.broadcast.is_some()
-        || world.watch.is_some();
+    // checked when the next lab step admits a spawn (bd-orxy), and a
+    // permit's obligation when the poll that registered it returns
+    // (bd-2fga), in both runtimes.
     if rng.chance(10) {
         let mut op = json!({"op": "region_limits", "region": *rng.pick(&region_names)});
         if rng.chance(50) {
@@ -660,7 +654,7 @@ pub fn scenario(seed: u64, index: u64) -> Value {
         if rng.chance(70) {
             op["max_children"] = json!(rng.below(3));
         }
-        if rng.chance(70) && !permit_obligations {
+        if rng.chance(70) {
             op["max_obligations"] = json!(rng.below(3));
         }
         script.push(json!({"at_ns": 0, "op": op}));

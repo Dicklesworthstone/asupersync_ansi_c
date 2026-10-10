@@ -1084,6 +1084,9 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
     asx_error_ledger_bind_task(ASX_INVALID_ID);
     g_current_task = ASX_INVALID_ID;
     t->in_poll = 0;
+    /* Obligation posts made during this poll are applied while the task
+     * record still exists (lab/runtime.rs:4797-4808; bd-2fga). */
+    if (lab) asx_obligation_drain_posts_internal();
     /* Acknowledged during this poll and still running: the cleanup
      * budget becomes the task's budget now (Rust applies the
      * acknowledgement after the poll, lab/runtime.rs:4809). A task

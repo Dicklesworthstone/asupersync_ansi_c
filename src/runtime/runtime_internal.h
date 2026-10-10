@@ -234,6 +234,15 @@ typedef struct {
     asx_task_id holder;                       /* ASX_INVALID_ID if unowned */
     uint32_t next_held;                       /* link in the holder's list */
     asx_obligation_abort_reason abort_reason; /* why it was aborted */
+    /* Rust's obligation mailbox (bd-2fga): under lab dispatch the
+     * operations made inside a poll are posts applied, in order, when the
+     * poll returns. counted: it counts against its region's
+     * max_obligations; checked: reserved through the checked path, whose
+     * admission and resolutions count at the call; posts: posts still to
+     * apply that name it. */
+    uint8_t counted;
+    uint8_t checked;
+    uint8_t posts;
 } asx_obligation_slot;
 
 /* Free-list terminator for arena slot links. */
@@ -279,6 +288,10 @@ asx_task_id asx_task_handle_for_slot(uint32_t slot_idx);
  * the task was detached. The caller must already have set
  * state/outcome. */
 void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region);
+
+/* Apply the obligation posts the poll that just returned made (Rust's
+ * obligation-mailbox drain at the end of a lab poll, bd-2fga). */
+void asx_obligation_drain_posts_internal(void);
 
 /* Reset wake-driven scheduler state (timer heap, sequence counters).
  * Called from asx_runtime_reset(). Defined in scheduler.c. */

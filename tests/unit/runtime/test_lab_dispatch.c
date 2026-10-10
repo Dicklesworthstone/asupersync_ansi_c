@@ -896,6 +896,136 @@ TEST(a_timer_wakes_the_waker_it_was_armed_with) {
     ASSERT_EQ(g_order[4], 'S');
 }
 
+/* Obligation posts (bd-2fga): a poll's obligation operations, under lab
+ * dispatch, are applied in order when the poll returns, as Rust's
+ * obligation mailbox does. */
+static uint32_t g_ob_events;
+static uint32_t g_ob_events_in_poll;
+static asx_trace_event_kind g_ob_kinds[8];
+
+static void observe_obligations(void *ctx, const asx_trace_event *ev,
+                                const asx_trace_payload *payload) {
+    (void)ctx;
+    (void)payload;
+    if (ev->kind != ASX_TRACE_OBLIGATION_RESERVE && ev->kind != ASX_TRACE_OBLIGATION_COMMIT &&
+        ev->kind != ASX_TRACE_OBLIGATION_ABORT && ev->kind != ASX_TRACE_OBLIGATION_LEAK) {
+        return;
+    }
+    if (g_ob_events < 8u) g_ob_kinds[g_ob_events] = ev->kind;
+    g_ob_events++;
+}
+
+typedef struct {
+    asx_region_id region;
+    int permit_first; /* register the permit before the checked reserve */
+    asx_obligation_id checked;
+    asx_obligation_id permit;
+    asx_status checked_st;
+    asx_status permit_st;
+} oblig_poster;
+
+static asx_status poll_oblig_poster(void *ud, asx_task_id self) {
+    oblig_poster *p = (oblig_poster *)ud;
+    if (p->permit_first) {
+        p->permit_st =
+            asx_obligation_register(p->region, ASX_OBLIGATION_KIND_SEND_PERMIT, self, &p->permit);
+        p->checked_st =
+            asx_obligation_reserve_ex(p->region, ASX_OBLIGATION_KIND_LEASE, self, &p->checked);
+    } else {
+        p->checked_st =
+            asx_obligation_reserve_ex(p->region, ASX_OBLIGATION_KIND_LEASE, self, &p->checked);
+        p->permit_st =
+            asx_obligation_register(p->region, ASX_OBLIGATION_KIND_SEND_PERMIT, self, &p->permit);
+        /* A checked token's commit releases its count at once. */
+        if (p->checked_st == ASX_OK && asx_obligation_commit(p->checked) != ASX_OK) {
+            return ASX_E_INVALID_STATE;
+        }
+        if (p->permit_st == ASX_OK && asx_obligation_commit(p->permit) != ASX_OK) {
+            return ASX_E_INVALID_STATE;
+        }
+    }
+    g_ob_events_in_poll = g_ob_events;
+    return ASX_OK;
+}
+
+static asx_status oblig_region(asx_region_id *r) {
+    asx_region_limits limits;
+    asx_status st = asx_region_open(r);
+    if (st != ASX_OK) return st;
+    limits.max_tasks = ASX_REGION_UNLIMITED;
+    limits.max_children = ASX_REGION_UNLIMITED;
+    limits.max_obligations = 1u;
+    return asx_region_set_limits(*r, &limits);
+}
+
+/* max_obligations 1: reserve (checked), register a permit, commit both, in
+ * one poll. The permit is admitted when the poll returns, after the
+ * checked commit released the count; nothing is traced during the poll,
+ * then the four events in call order (probe p1). */
+TEST(a_permit_registration_is_admitted_when_the_poll_returns) {
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget run;
+    asx_obligation_state s;
+    oblig_poster p;
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(1u), ASX_OK);
+    ASSERT_EQ(oblig_region(&r), ASX_OK);
+    memset(&p, 0, sizeof(p));
+    p.region = r;
+    g_ob_events = 0;
+    asx_trace_set_observer(observe_obligations, NULL);
+    ASSERT_EQ(asx_task_spawn(r, poll_oblig_poster, &p, &t), ASX_OK);
+    run = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+    asx_trace_set_observer(NULL, NULL);
+
+    ASSERT_EQ(p.checked_st, ASX_OK);
+    ASSERT_EQ(p.permit_st, ASX_OK);
+    ASSERT_EQ(g_ob_events_in_poll, 0u);
+    ASSERT_EQ(g_ob_events, 4u);
+    ASSERT_EQ(g_ob_kinds[0], ASX_TRACE_OBLIGATION_RESERVE);
+    ASSERT_EQ(g_ob_kinds[1], ASX_TRACE_OBLIGATION_RESERVE);
+    ASSERT_EQ(g_ob_kinds[2], ASX_TRACE_OBLIGATION_COMMIT);
+    ASSERT_EQ(g_ob_kinds[3], ASX_TRACE_OBLIGATION_COMMIT);
+    ASSERT_EQ(asx_obligation_get_state(p.permit, &s), ASX_OK);
+    ASSERT_EQ(s, ASX_OBLIGATION_COMMITTED);
+}
+
+/* max_obligations 1: register a permit, then reserve (checked) in one
+ * poll. The checked reserve is admitted at the call (the permit does not
+ * count yet); at the drain the region is full, so the permit is refused:
+ * untracked, its id no longer resolves, nothing traced for it. */
+TEST(a_permit_registration_past_the_limit_is_refused_at_the_drain) {
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget run;
+    asx_obligation_state s;
+    oblig_poster p;
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(1u), ASX_OK);
+    ASSERT_EQ(oblig_region(&r), ASX_OK);
+    memset(&p, 0, sizeof(p));
+    p.region = r;
+    p.permit_first = 1;
+    g_ob_events = 0;
+    asx_trace_set_observer(observe_obligations, NULL);
+    ASSERT_EQ(asx_task_spawn(r, poll_oblig_poster, &p, &t), ASX_OK);
+    run = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+    asx_trace_set_observer(NULL, NULL);
+
+    ASSERT_EQ(p.permit_st, ASX_OK);  /* posted */
+    ASSERT_EQ(p.checked_st, ASX_OK); /* admitted at the call */
+    ASSERT_TRUE(asx_obligation_get_state(p.permit, &s) != ASX_OK);
+    /* The checked reservation, then its leak when its holder completed. */
+    ASSERT_EQ(g_ob_events, 2u);
+    ASSERT_EQ(g_ob_kinds[0], ASX_TRACE_OBLIGATION_RESERVE);
+    ASSERT_EQ(g_ob_kinds[1], ASX_TRACE_OBLIGATION_LEAK);
+}
+
 TEST(spawn_limit_is_checked_at_the_next_step_admission) {
     asx_region_id r;
     asx_region_limits limits;
@@ -1018,6 +1148,8 @@ int main(void) {
     RUN_TEST(handle_abort_applies_at_once_without_lab_dispatch);
     RUN_TEST(spawn_refusal_reaches_a_join_at_the_next_step);
     RUN_TEST(a_timer_wakes_the_waker_it_was_armed_with);
+    RUN_TEST(a_permit_registration_is_admitted_when_the_poll_returns);
+    RUN_TEST(a_permit_registration_past_the_limit_is_refused_at_the_drain);
     RUN_TEST(spawn_limit_is_checked_at_the_next_step_admission);
     RUN_TEST(spawn_into_a_region_closed_before_admission_is_refused);
     RUN_TEST(admission_status_of_a_bad_handle_is_a_lookup_error);

@@ -206,12 +206,16 @@ so a blocking step inside `masked` is a schema error.
 | `reserve` | `kind` (`SendPermit`, `Ack`, `Lease`, `IoOp`, `SemaphorePermit`, `Transaction`), `as` | `cx.try_register_obligation_checked(kind, cx.task_id())` → `Ok(Some(token))` (`cx.rs:1746`) | `asx_obligation_reserve_ex(own_region, kind, self, &id)` | no | Ignored. A region that is no longer Open gives `ASX_E_REGION_CLOSED` (Rust `ObligationAdmissionError::RegionClosed`, `runtime/obligation_mailbox.rs:68`). |
 | `commit` | `obligation` | `token.commit()` (`obligation_mailbox.rs:879`) | `asx_obligation_commit(id)` | no | ignored |
 | `abort` | `obligation`, `reason` (`Cancel`, `Error`, `Explicit`) | `token.abort(reason)` (`:888`) | `asx_obligation_abort(id)` plus reason (C gap, §7) | no | ignored |
-| `leak` | `obligation` | `drop(token)`, which posts a Leak (`:897`) | `asx_obligation_drop(id)`: leaked at once, under the leak policy | no | ignored |
+| `leak` | `obligation` | `drop(token)`, which posts a Leak (`:897`) | `asx_obligation_drop(id)`: leaked when the poll returns, under the leak policy | no | ignored |
 
 `kind` is required: C's `ASX_OBLIGATION_KIND_GENERIC` has no Rust counterpart
-and is not allowed. Rust applies reservations at the next lab step
-(obligation mailbox). That is invisible to the vocabulary, which carries no
-event times.
+and is not allowed. Both runtimes apply a poll's obligation operations, in
+order, when the poll returns (Rust's obligation mailbox; C's posts under lab
+dispatch, bd-2fga): the trace events come then. A `reserve` step, and the
+commit, abort or drop of its token, count against the region's
+`max_obligations` at the call; a permit's registration (semaphore, channel,
+oneshot, a server call) and its resolutions count when applied. A body that
+ends holding tokens drops them first, as twin_run's locals do.
 
 ### 3.4 Spawning, joining, child regions
 
@@ -463,22 +467,29 @@ must close. Some are also drift findings in their own right. The
 interpreter (`src/conformance/interpreter.c`) fails a run that reaches an
 open gap with the gap named; `make conformance` lists them as ERROR.
 
-Open:
-
-- **When a permit's obligation counts against `max_obligations`.** A
-  semaphore or channel permit registers its obligation through Rust's
-  obligation mailbox (`Cx::try_register_obligation`, `cx/cx.rs:1808`):
-  the reservation, with its limit check, and the permit's commit or abort
-  are applied at the next lab step's drain (`apply_obligation_post_from_dispatch_table`,
-  `runtime/state.rs:5893`). A `reserve` step is admitted at once
-  (`try_register_obligation_checked`, `cx/cx.rs:1746`). C admits and
-  resolves every obligation at the call, so under a region's
-  `max_obligations` a permit taken while a `reserve`d obligation is still
-  pending, or a `reserve` right after a permit's release, is decided
-  differently (fuzz gen-9-120, gen-10-146). Generated scenarios set
-  `max_obligations` only when no permit can register an obligation.
+Open: none.
 
 Closed (each verified by a fixture that now matches):
+
+- **When a permit's obligation counts against `max_obligations`**
+  (bd-2fga). Rust routes a Cx's obligation operations through its
+  obligation mailbox and applies them, in post order, when the poll
+  returns (`lab/runtime.rs:4797-4808`): a permit's registration
+  (`Cx::try_register_obligation`, `cx/cx.rs:1808`) is admitted against
+  the region's limit only then, and its commit or abort releases the count
+  then; a checked registration (`try_register_obligation_checked`,
+  `:1746`, the DSL `reserve`) is admitted at the call, and its commit,
+  abort or drop releases the count at the call. C now does the same under
+  lab dispatch: obligation operations made inside a poll are posts drained
+  after the poll (`asx_obligation_drain_posts_internal`), permits register
+  through `asx_obligation_register`, a refused registration leaves the
+  permit untracked, and the interpreter drops a body's leftover tokens
+  first, as twin_run's locals do. Fixtures
+  `obligation-limit-permit-admitted-at-poll-end-001`,
+  `obligation-limit-permit-release-at-poll-end-001` (fuzz gen-9-120),
+  `obligation-limit-token-drop-releases-count-001` (fuzz gen-10-146); the
+  generator sets `max_obligations` with permits again (30 seeds x 200: no
+  divergence, 452 scenarios with `max_obligations`).
 
 - **GenServers** (bd-g652): `src/actor/actor.c` runs Rust's
   `run_gen_server_loop` as a task on an mpsc mailbox (the C actor was a

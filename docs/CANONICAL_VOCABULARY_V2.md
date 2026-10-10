@@ -64,11 +64,11 @@ doesn't know is a harness defect, not a divergence.
 
 Every event is a JSON object with `"k"` (kind) and the kind's fields. Field
 values are canonical names (§2), enumeration names, or integers. Events
-carry **no** `seq`, `time` or logical time. Event time differs structurally
-between engines (Rust stamps obligation events when its obligation mailbox
-drains, `src/runtime/obligation_mailbox.rs:936`; C stamps them at the API
-call), and times that matter are compared through the snapshot (`now_ns`,
-timer deadlines).
+carry **no** `seq`, `time` or logical time. Event time is not compared
+(both engines stamp obligation events when the obligation posts of a poll
+are applied as it returns, `src/runtime/obligation_mailbox.rs:936`; C
+under lab dispatch since bd-2fga), and times that matter are compared
+through the snapshot (`now_ns`, timer deadlines).
 
 | `k` | Fields | Rust source (`TraceEventKind`, `TraceData`) | C source |
 |---|---|---|---|

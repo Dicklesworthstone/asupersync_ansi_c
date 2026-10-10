@@ -702,11 +702,32 @@ typedef struct {
  *   ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for a bad region or holder,
  *   ASX_E_INVALID_STATE if the holder already completed, plus the region
  *   errors of asx_obligation_reserve.
+ *
+ * This is Rust's checked registration (Cx::try_register_obligation_checked,
+ * cx/cx.rs:1746): it is admitted against the region's max_obligations at
+ * the call. Under lab dispatch, inside a poll, the obligation operations of
+ * the poll (reserve, commit, abort, drop) are posts applied in order when
+ * the poll returns, as Rust's obligation mailbox does: their trace events
+ * are emitted then; a checked obligation's resolution releases its region
+ * count at the call.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_obligation_reserve_ex(asx_region_id region,
                                                           asx_obligation_kind kind,
                                                           asx_task_id holder,
                                                           asx_obligation_id *out_id);
+
+/* Register a permit's obligation, as Rust's unchecked registration does
+ * for a semaphore, channel or oneshot permit (Cx::try_register_obligation,
+ * cx/cx.rs:1808). Under lab dispatch, inside a poll, the registration is
+ * a post admitted against the region's max_obligations only when the poll
+ * returns, and a refused one leaves the permit untracked: its id stops
+ * resolving (later commit/abort return a lookup error); its resolutions
+ * release the region count when applied too. Otherwise it is
+ * asx_obligation_reserve_ex. Same errors. */
+ASX_API ASX_MUST_USE asx_status asx_obligation_register(asx_region_id region,
+                                                        asx_obligation_kind kind,
+                                                        asx_task_id holder,
+                                                        asx_obligation_id *out_id);
 
 /* Query kind/holder/state/abort reason of an obligation.
  * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if out is NULL, or

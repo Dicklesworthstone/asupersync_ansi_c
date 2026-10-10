@@ -338,8 +338,8 @@ static asx_status sem_hand_out(sem_slot *s, const asx_semaphore_waiter *waiter, 
     out->obligation = ASX_INVALID_ID;
     if (!s->is_mutex && cx != NULL && cx->task_id != ASX_INVALID_ID) {
         asx_obligation_id id;
-        if (asx_obligation_reserve_ex(cx->region_id, ASX_OBLIGATION_KIND_SEMAPHORE_PERMIT,
-                                      cx->task_id, &id) == ASX_OK) {
+        if (asx_obligation_register(cx->region_id, ASX_OBLIGATION_KIND_SEMAPHORE_PERMIT,
+                                    cx->task_id, &id) == ASX_OK) {
             out->obligation = id;
         }
     }

@@ -263,8 +263,8 @@ asx_status asx_oneshot_reserve(asx_oneshot_sender *sender, asx_cx *cx, asx_onesh
      * permit untracked. */
     if (cx != NULL && cx->task_id != ASX_INVALID_ID) {
         asx_obligation_id ob;
-        if (asx_obligation_reserve_ex(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id,
-                                      &ob) == ASX_OK) {
+        if (asx_obligation_register(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id,
+                                    &ob) == ASX_OK) {
             out->obligation = ob;
         }
     }
