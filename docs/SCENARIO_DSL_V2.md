@@ -510,7 +510,7 @@ Closed (each verified by a fixture that now matches):
   refuses, and traces `managed_supervisor_v1` as Rust does. New runtime
   pieces: `asx_task_catch_panic_internal` (the controller catches a
   generation's panic, as Rust's factory future does) and
-  `asx_region_get_parent`. Fixtures `supervision-*` (15); the generator
+  `asx_region_get_parent`. Fixtures `supervision-*` (16); the generator
   starts supervisors (60 seeds x 200: no divergence, 4781 scenarios with
   one). Its scenarios exposed four lab dispatch differences, each fixed
   in C and pinned by a fixture that fails without the fix:
