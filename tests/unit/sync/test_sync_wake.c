@@ -187,13 +187,18 @@ TEST(sem_grants_by_arrival_not_slot_index) {
     ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
     ASSERT_EQ(asx_semaphore_try_acquire(h, &p), ASX_OK);
 
-    /* wa takes waiter slot 0, wb slot 1; wa leaves and the later wc
-     * reuses slot 0. The next permit belongs to wb, the oldest waiter. */
+    /* A waiter joins the line at its first poll that has to wait (Rust
+     * enqueues on the first Pending poll). wa takes waiter slot 0, wb slot
+     * 1; wa leaves and the later wc reuses slot 0. The next permit belongs
+     * to wb, the oldest waiter in line. */
     ASSERT_EQ(asx_semaphore_acquire_begin(h, &wa), ASX_OK);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&wa, &pc, NULL), ASX_E_PENDING);
     ASSERT_EQ(asx_semaphore_acquire_begin(h, &wb), ASX_OK);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&wb, &pb, NULL), ASX_E_PENDING);
     ASSERT_EQ(asx_semaphore_acquire_cancel(&wa), ASX_OK);
     ASSERT_EQ(asx_semaphore_acquire_begin(h, &wc), ASX_OK);
     ASSERT_EQ(wc.waiter_slot, wa.waiter_slot);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&wc, &pc, NULL), ASX_E_PENDING);
 
     ASSERT_EQ(asx_semaphore_release(p), ASX_OK);
     ASSERT_EQ(asx_semaphore_poll_acquire(&wc, &pc, NULL), ASX_E_PENDING);
@@ -206,6 +211,7 @@ TEST(sem_grants_by_arrival_not_slot_index) {
 
 TEST(sem_later_arrival_cannot_overtake_at_poll) {
     asx_semaphore_handle h;
+    asx_semaphore_permit p0;
     asx_semaphore_permit p1;
     asx_semaphore_permit p2;
     asx_semaphore_waiter w1;
@@ -213,11 +219,17 @@ TEST(sem_later_arrival_cannot_overtake_at_poll) {
 
     ASSERT_TRUE(setup());
     ASSERT_EQ(asx_semaphore_create(1, &h), ASX_OK);
+    ASSERT_EQ(asx_semaphore_try_acquire(h, &p0), ASX_OK);
     ASSERT_EQ(asx_semaphore_acquire_begin(h, &w1), ASX_OK);
     ASSERT_EQ(asx_semaphore_acquire_begin(h, &w2), ASX_OK);
-
-    /* A permit is free, but w1 arrived first: w2 must wait its turn. */
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w1, &p1, NULL), ASX_E_PENDING);
     ASSERT_EQ(asx_semaphore_poll_acquire(&w2, &p2, NULL), ASX_E_PENDING);
+
+    /* A permit is free, but w1 is ahead in line: w2 must wait its turn,
+     * and so must a newcomer (try_acquire is FIFO-blocked too). */
+    ASSERT_EQ(asx_semaphore_release(p0), ASX_OK);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w2, &p2, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_semaphore_try_acquire(h, &p0), ASX_E_WOULD_BLOCK);
     ASSERT_EQ(asx_semaphore_poll_acquire(&w1, &p1, NULL), ASX_OK);
     ASSERT_EQ(asx_semaphore_poll_acquire(&w2, &p2, NULL), ASX_E_PENDING);
     ASSERT_EQ(asx_semaphore_release(p1), ASX_OK);

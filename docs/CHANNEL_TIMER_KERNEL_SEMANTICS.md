@@ -571,7 +571,8 @@ yet"), but waiting is wake-driven, mirroring Rust's waker registration:
 The same contract covers oneshot/broadcast/watch/session receives (send or
 drop wakes every parked receiver task; `asx_watch_poll_changed` is the
 wake-driven form of watch `changed()`), and the sync primitives in
-`src/sync/` (semaphore/mutex/rwlock grants in arrival order, notify,
-barrier trip, async `asx_once_get_or_init`, pool checkout with the same
-no-queue-jumping window). The shared mechanism lives in
-`src/sync/wait_queue.{h,c}`.
+`src/sync/` (mutex/rwlock grants in arrival order; the semaphore serves
+the front of its line, a release waking the front waiter only and each
+acquire waking the next, as Rust's `Semaphore` does; notify, barrier trip,
+async `asx_once_get_or_init`, pool checkout with the same no-queue-jumping
+window). The shared mechanism lives in `src/sync/wait_queue.{h,c}`.

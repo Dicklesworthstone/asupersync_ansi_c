@@ -1,24 +1,33 @@
 /*
- * semaphore.c — counting semaphore with permit obligations
+ * semaphore.c — counting semaphore with permit obligations, and the lock
+ * under asx_mutex
  *
- * Waiters are slot records stamped with an arrival sequence number, and
- * permits are handed over strictly in arrival (FIFO) order:
- *   - release() grants the permit directly to the oldest un-granted waiter
- *     (waking its task if it is parked) or returns it to the pool;
- *   - an un-granted waiter takes a pooled permit at poll time only when it
- *     is next in line, so later arrivals never overtake earlier ones;
- *   - a pooled permit owed to the waiters next in line is granted to them
- *     (and their tasks woken) as soon as they are parked: after a poll
- *     acquires, after a cancel, and after a dead waiter is reclaimed.
+ * Waiters are slot records stamped with an arrival sequence number and
+ * served in arrival (FIFO) order. A semaphore and the mutex's one-permit
+ * semaphore follow their Rust counterparts, which differ:
+ *
+ *   Semaphore (Rust sync/semaphore.rs): permits stay pooled. A waiter joins
+ *   the line at its first poll that cannot take a permit. Only the front of
+ *   the line may take permits, and a newcomer only while nobody is queued.
+ *   A release adds the permit and wakes the front waiter, if it can now
+ *   run, and nobody else (add_permits_deferred); a waiter that takes a
+ *   permit leaves the line and wakes the new front, if it can run
+ *   (poll_with_registration). One that leaves without a permit (cancel,
+ *   dropped) wakes the next one only if it was the front
+ *   (remove_waiter_and_take_next_waker). Cancel-pending waiters keep their
+ *   place: they leave when polled. try_acquire fails while anyone is
+ *   queued.
+ *
+ *   Mutex (Rust sync/mutex.rs): unlock hands the lock to the front waiter
+ *   (the baton): release grants the permit directly to the oldest
+ *   un-granted waiter, waking its task, or returns it to the pool; a
+ *   pooled permit owed to the waiters next in line is granted to them as
+ *   soon as they are parked; a waiter that gives up passes a grant on; a
+ *   cancel-pending waiter is skipped when granting.
  *
  * Wake-driven waiting: poll_acquire returning ASX_E_PENDING inside a
- * scheduler poll records the calling task on the waiter and parks it.
- *
- * Cancel safety: a waiter that gives up (acquire_cancel, or a failing Cx
- * checkpoint) passes a permit it was granted on to the next waiter in
- * line. A parked waiter whose task completed without cancelling is
- * reclaimed lazily (its grant passed on), and a cancel-pending waiter is
- * skipped when granting so it never absorbs a permit another task needs.
+ * scheduler poll records the calling task on the waiter and parks it. A
+ * waiter whose task completed without cancelling is reclaimed lazily.
  * Close wakes every parked waiter so it observes ASX_E_DISCONNECTED.
  *
  * Obligations: a permit granted to an acquire polled with a task Cx
@@ -43,7 +52,8 @@
 
 typedef struct {
     int active;
-    int acquired;     /* permit was granted to this waiter */
+    int acquired;     /* mutex: the lock was handed to this waiter */
+    int queued;       /* semaphore: in line (a poll had to wait) */
     uint32_t seq;     /* arrival order */
     asx_task_id task; /* task parked on this waiter, ASX_INVALID_ID if none */
 } sem_waiter_slot;
@@ -55,8 +65,11 @@ typedef struct {
     uint32_t max_permits; /* initial capacity (for queries) */
     sem_waiter_slot waiters[ASX_SEMAPHORE_MAX_WAITERS];
     uint32_t waiter_count;
-    uint32_t next_seq;     /* arrival stamp for the next waiter */
-    int track_obligations; /* permits reserve SemaphorePermit obligations */
+    uint32_t next_seq; /* arrival stamp for the next waiter */
+    /* The lock under asx_mutex: Rust's Mutex hand-off, and no obligation
+     * (Rust's Mutex registers none). Otherwise a Semaphore, whose permits
+     * reserve SemaphorePermit obligations. */
+    int is_mutex;
 } sem_slot;
 
 static sem_slot g_slots[ASX_SEMAPHORE_MAX];
@@ -87,8 +100,37 @@ static void sem_waiter_retire(sem_slot *s, sem_waiter_slot *w) {
     if (w->acquired) s->permits++;
     w->active = 0;
     w->acquired = 0;
+    w->queued = 0;
     w->task = ASX_INVALID_ID;
     s->waiter_count--;
+}
+
+/* Semaphore: the front of the line, the oldest queued waiter, or
+ * SEM_NO_WAITER. */
+static uint32_t sem_front(const sem_slot *s) {
+    uint32_t i;
+    uint32_t best = SEM_NO_WAITER;
+    for (i = 0; i < ASX_SEMAPHORE_MAX_WAITERS; i++) {
+        const sem_waiter_slot *w = &s->waiters[i];
+        if (!w->active || !w->queued) continue;
+        if (best == SEM_NO_WAITER || seq_before(w->seq, s->waiters[best].seq)) best = i;
+    }
+    return best;
+}
+
+/* Semaphore: wake the front waiter if it can take a permit now
+ * (front_waiter_waker_if_runnable). */
+static void sem_wake_front(const sem_slot *s) {
+    uint32_t i = sem_front(s);
+    if (i != SEM_NO_WAITER && s->permits >= 1u) asx_wait_wake_task(s->waiters[i].task);
+}
+
+/* Semaphore: a waiter leaves the line without a permit; the next one is
+ * woken only if this one was the front (remove_waiter_and_take_next_waker). */
+static void sem_leave(sem_slot *s, sem_waiter_slot *w) {
+    int was_front = w->queued && sem_front(s) == (uint32_t)(w - s->waiters);
+    sem_waiter_retire(s, w);
+    if (was_front) sem_wake_front(s);
 }
 
 /* Reclaim waiters whose parked task completed (or whose slot was reused)
@@ -98,12 +140,17 @@ static void sem_reap(sem_slot *s) {
     for (i = 0; i < ASX_SEMAPHORE_MAX_WAITERS; i++) {
         sem_waiter_slot *w = &s->waiters[i];
         if (!w->active || !asx_handle_is_valid(w->task)) continue;
-        if (asx_wait_task_liveness(w->task) == ASX_WAIT_TASK_DEAD) sem_waiter_retire(s, w);
+        if (asx_wait_task_liveness(w->task) != ASX_WAIT_TASK_DEAD) continue;
+        if (s->is_mutex) {
+            sem_waiter_retire(s, w);
+        } else {
+            sem_leave(s, w);
+        }
     }
 }
 
-/* The oldest active, un-granted, not cancel-pending waiter other than
- * `except` (SEM_NO_WAITER for none), or SEM_NO_WAITER. */
+/* Mutex: the oldest active, un-granted, not cancel-pending waiter other
+ * than `except` (SEM_NO_WAITER for none), or SEM_NO_WAITER. */
 static uint32_t sem_first_in_line(const sem_slot *s, uint32_t except) {
     uint32_t i;
     uint32_t best = SEM_NO_WAITER;
@@ -117,7 +164,7 @@ static uint32_t sem_first_in_line(const sem_slot *s, uint32_t except) {
     return best;
 }
 
-/* 1 if no waiter that arrived before `idx` still waits for a permit. */
+/* Mutex: 1 if no waiter that arrived before `idx` still waits. */
 static int sem_next_in_line(const sem_slot *s, uint32_t idx) {
     uint32_t first = sem_first_in_line(s, idx);
     return first == SEM_NO_WAITER || !seq_before(s->waiters[first].seq, s->waiters[idx].seq);
@@ -128,10 +175,12 @@ static void sem_grant(sem_waiter_slot *w) {
     asx_wait_wake_task(w->task);
 }
 
-/* Grant pooled permits to the waiters next in line while they are parked.
- * Stops at the first one that is not parked: it takes its permit when it
- * polls, so granting past it would break arrival order. */
+/* Mutex: grant a pooled lock to the waiters next in line while they are
+ * parked. Stops at the first one that is not parked: it takes the lock
+ * when it polls, so granting past it would break arrival order. A
+ * semaphore grants nothing: its waiters take permits when they poll. */
 static void sem_dispatch_parked(sem_slot *s) {
+    if (!s->is_mutex) return;
     while (s->permits > 0) {
         uint32_t i = sem_first_in_line(s, SEM_NO_WAITER);
         if (i == SEM_NO_WAITER || !asx_handle_is_valid(s->waiters[i].task)) break;
@@ -144,8 +193,7 @@ static void sem_dispatch_parked(sem_slot *s) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-static asx_status sem_create(uint32_t initial_permits, int track_obligations,
-                             asx_semaphore_handle *out) {
+static asx_status sem_create(uint32_t initial_permits, int is_mutex, asx_semaphore_handle *out) {
     uint32_t i;
     if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
@@ -157,7 +205,7 @@ static asx_status sem_create(uint32_t initial_permits, int track_obligations,
             g_slots[i].max_permits = initial_permits;
             g_slots[i].waiter_count = 0;
             g_slots[i].next_seq = 0;
-            g_slots[i].track_obligations = track_obligations;
+            g_slots[i].is_mutex = is_mutex;
             memset(g_slots[i].waiters, 0, sizeof(g_slots[i].waiters));
             out->slot = i;
             out->generation = g_slots[i].generation;
@@ -169,11 +217,11 @@ static asx_status sem_create(uint32_t initial_permits, int track_obligations,
 }
 
 asx_status asx_semaphore_create(uint32_t initial_permits, asx_semaphore_handle *out) {
-    return sem_create(initial_permits, 1, out);
+    return sem_create(initial_permits, 0, out);
 }
 
 asx_status asx_semaphore_create_untracked(uint32_t initial_permits, asx_semaphore_handle *out) {
-    return sem_create(initial_permits, 0, out);
+    return sem_create(initial_permits, 1, out);
 }
 
 asx_status asx_semaphore_close(asx_semaphore_handle handle) {
@@ -206,7 +254,9 @@ asx_status asx_semaphore_try_acquire(asx_semaphore_handle handle, asx_semaphore_
     s = &g_slots[handle.slot];
     if (!s->alive || s->generation != handle.generation) return ASX_E_STALE_HANDLE;
 
-    if (s->permits > 0) {
+    /* A semaphore with anyone queued is FIFO-blocked (Rust try_acquire). */
+    if (!s->is_mutex) sem_reap(s);
+    if (s->permits > 0 && (s->is_mutex || sem_front(s) == SEM_NO_WAITER)) {
         s->permits--;
         out->sem_slot = handle.slot;
         out->generation = handle.generation;
@@ -247,6 +297,7 @@ asx_status asx_semaphore_acquire_begin(asx_semaphore_handle handle, asx_semaphor
 
     s->waiters[i].active = 1;
     s->waiters[i].acquired = 0;
+    s->waiters[i].queued = 0;
     s->waiters[i].seq = s->next_seq++;
     s->waiters[i].task = ASX_INVALID_ID;
     s->waiter_count++;
@@ -257,14 +308,14 @@ asx_status asx_semaphore_acquire_begin(asx_semaphore_handle handle, asx_semaphor
 }
 
 /* Fill the permit handed to an acquire polled with `cx`, reserving its
- * SemaphorePermit obligation for the Cx's task when the semaphore tracks
- * them. A refused reservation leaves the permit untracked. */
+ * SemaphorePermit obligation for the Cx's task (a semaphore's, not the
+ * mutex's). A refused reservation leaves the permit untracked. */
 static asx_status sem_hand_out(const sem_slot *s, const asx_semaphore_waiter *waiter,
                                asx_semaphore_permit *out, const asx_cx *cx) {
     out->sem_slot = waiter->sem_slot;
     out->generation = waiter->generation;
     out->obligation = ASX_INVALID_ID;
-    if (s->track_obligations && cx != NULL && cx->task_id != ASX_INVALID_ID) {
+    if (!s->is_mutex && cx != NULL && cx->task_id != ASX_INVALID_ID) {
         asx_obligation_id id;
         if (asx_obligation_reserve_ex(cx->region_id, ASX_OBLIGATION_KIND_SEMAPHORE_PERMIT,
                                       cx->task_id, &id) == ASX_OK) {
@@ -297,6 +348,38 @@ asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphor
 
     w = &s->waiters[waiter->waiter_slot];
     if (!w->active) return ASX_E_INVALID_STATE;
+
+    if (!s->is_mutex) {
+        uint32_t front;
+        /* Cancelled or out of budget: leave the line (Rust's checkpoint
+         * comes before any permit check). */
+        if (cx != NULL) {
+            asx_status cst = asx_cx_checkpoint(cx);
+            if (cst != ASX_OK) {
+                sem_leave(s, w);
+                return cst;
+            }
+        }
+        sem_reap(s);
+        /* The front of the line, or a newcomer while nobody is queued, may
+         * take a permit; it then wakes the new front if that can run. */
+        front = sem_front(s);
+        if ((w->queued ? front == waiter->waiter_slot : front == SEM_NO_WAITER) &&
+            s->permits >= 1u) {
+            asx_status st;
+            s->permits--;
+            sem_waiter_retire(s, w);
+            st = sem_hand_out(s, waiter, out, cx);
+            sem_wake_front(s);
+            return st;
+        }
+        if (!w->queued) {
+            w->queued = 1;
+            w->seq = s->next_seq++;
+        }
+        (void)asx_wait_park_current(&w->task);
+        return ASX_E_PENDING;
+    }
 
     /* Cx cancellation/budget checkpoint */
     if (cx != NULL) {
@@ -341,7 +424,11 @@ asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter) {
     if (waiter->waiter_slot >= ASX_SEMAPHORE_MAX_WAITERS) return ASX_E_INVALID_ARGUMENT;
 
     if (s->waiters[waiter->waiter_slot].active) {
-        /* A permit already granted goes back and on to the next waiter. */
+        if (!s->is_mutex) {
+            sem_leave(s, &s->waiters[waiter->waiter_slot]);
+            return ASX_OK;
+        }
+        /* A lock already handed over goes back and on to the next waiter. */
         sem_waiter_retire(s, &s->waiters[waiter->waiter_slot]);
         sem_dispatch_parked(s);
     }
@@ -373,8 +460,15 @@ asx_status asx_semaphore_release(asx_semaphore_permit permit) {
         return ASX_E_STALE_HANDLE;
     }
 
-    /* FIFO: grant the permit to the oldest waiter still in line */
     sem_reap(s);
+    if (!s->is_mutex) {
+        /* Back to the pool; the front waiter is woken if it can run. */
+        s->permits++;
+        sem_wake_front(s);
+        sem_commit_obligation(&permit);
+        return ASX_OK;
+    }
+    /* Mutex: hand the lock to the oldest waiter still in line */
     i = sem_first_in_line(s, SEM_NO_WAITER);
     if (i != SEM_NO_WAITER) {
         sem_grant(&s->waiters[i]);
