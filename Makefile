@@ -76,6 +76,13 @@ DETERMINISTIC ?= 1
 DET_DEF := -DASX_DETERMINISTIC=$(DETERMINISTIC)
 
 # ---------------------------------------------------------------------------
+# Build-time resource class (asx_config.h): RESOURCE_CLASS=1, 2 or 3 sizes
+# the arenas from R1, R2 or R3. Empty: the unclassed defaults.
+# ---------------------------------------------------------------------------
+RESOURCE_CLASS ?=
+CLASS_DEF := $(if $(RESOURCE_CLASS),-DASX_RESOURCE_CLASS=$(RESOURCE_CLASS),)
+
+# ---------------------------------------------------------------------------
 # Debug / Release mode
 # ---------------------------------------------------------------------------
 BUILD_TYPE ?= debug
@@ -136,7 +143,7 @@ INC_FLAGS := -I$(CURDIR)/include
 # Combined compiler flags
 # ---------------------------------------------------------------------------
 ALL_CFLAGS := $(STD_FLAGS) $(WARN_FLAGS) $(OPT_FLAGS) $(BITS_FLAGS) \
-              $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) $(CFLAGS)
+              $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) $(CLASS_DEF) $(CFLAGS)
 
 ALL_LDFLAGS := $(BITS_FLAGS) $(LDFLAGS)
 
@@ -466,7 +473,7 @@ VIGNETTE_TEST_BIN := $(patsubst tests/%.c,$(TEST_DIR)/%,$(VIGNETTE_TEST_SRC))
 # ---------------------------------------------------------------------------
 TEST_CFLAGS := $(ALL_CFLAGS) -I$(CURDIR)/tests -I$(CURDIR)/src
 VIGNETTE_CFLAGS := $(STD_FLAGS) $(WARN_FLAGS) $(OPT_FLAGS) $(BITS_FLAGS) \
-                   $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) $(CFLAGS)
+                   $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) $(CLASS_DEF) $(CFLAGS)
 
 CX_TEST_EXTRA_SRC := \
 	src/bytes/buf.c \
@@ -533,7 +540,7 @@ E2E_VERTICAL_SCRIPTS := \
 
 .PHONY: all build clean install uninstall FORCE conformance-runner
 .PHONY: format-check lint lint-docs lint-checkpoint lint-anti-butchering lint-evidence lint-semantic-delta lint-static-analysis lint-schema-validation lint-scenarios-v2
-.PHONY: model-check fixture-integrity fixtures-promote test-gates test-capacity-x4
+.PHONY: model-check fixture-integrity fixtures-promote test-gates test-capacity-x4 test-resource-classes
 .PHONY: test-asan test-asan-live test-tsan
 .PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
@@ -1672,6 +1679,21 @@ test-capacity-x4:
 	@$(MAKE) --no-print-directory test-unit BUILD_DIR=build/capacity-x4 \
 		CFLAGS='$(CAPACITY_X4_CFLAGS)'
 	@echo "[asx] test-capacity-x4: PASS"
+
+# ---------------------------------------------------------------------------
+# test-resource-classes — the unit suite built for each resource class
+# (bd-9kll.13.1). RESOURCE_CLASS=1/2/3 sizes every arena from R1/R2/R3
+# (asx_config.h), so test_boundary_exhaustion exhausts each class at its own
+# limits and test_profile_compat checks the compiled capacities equal the
+# class table. Each class builds in its own BUILD_DIR.
+# ---------------------------------------------------------------------------
+test-resource-classes:
+	@for c in 1 2 3; do \
+		echo "[asx] test-resource-classes: unit suite built for R$$c..."; \
+		$(MAKE) --no-print-directory test-unit BUILD_DIR=build/class-r$$c \
+			RESOURCE_CLASS=$$c || exit 1; \
+	done
+	@echo "[asx] test-resource-classes: PASS"
 
 # ---------------------------------------------------------------------------
 # test-asan / test-asan-live / test-tsan — the unit suite under sanitizers

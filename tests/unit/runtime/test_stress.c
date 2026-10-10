@@ -333,6 +333,9 @@ TEST(multi_region_cancel_one_leaves_other_intact) {
  * Timer churn
  * ------------------------------------------------------------------- */
 
+/* As many timers as the wheel holds, up to 64 (even: half are cancelled). */
+#define CHURN_TIMERS ((ASX_MAX_TIMERS) < 64u ? ((ASX_MAX_TIMERS) & ~1u) : 64u)
+
 TEST(timer_rapid_register_cancel_churn) {
     asx_timer_wheel *wheel = asx_timer_wheel_global();
     asx_timer_handle handles[64];
@@ -340,28 +343,28 @@ TEST(timer_rapid_register_cancel_churn) {
 
     asx_timer_wheel_reset(wheel);
 
-    /* Register 64 timers */
-    for (i = 0; i < 64; i++) {
+    /* Fill (up to 64 timers) */
+    for (i = 0; i < CHURN_TIMERS; i++) {
         ASSERT_EQ(asx_timer_register(wheel, (asx_time)(1000 + i * 10), NULL, &handles[i]), ASX_OK);
     }
-    ASSERT_EQ(asx_timer_active_count(wheel), 64u);
+    ASSERT_EQ(asx_timer_active_count(wheel), CHURN_TIMERS);
 
     /* Cancel every other one */
-    for (i = 0; i < 64; i += 2) { ASSERT_TRUE(asx_timer_cancel(wheel, &handles[i])); }
-    ASSERT_EQ(asx_timer_active_count(wheel), 32u);
+    for (i = 0; i < CHURN_TIMERS; i += 2) { ASSERT_TRUE(asx_timer_cancel(wheel, &handles[i])); }
+    ASSERT_EQ(asx_timer_active_count(wheel), CHURN_TIMERS / 2u);
 
-    /* Register 32 more in the freed slots */
-    for (i = 0; i < 32; i++) {
+    /* Register as many again in the freed slots */
+    for (i = 0; i < CHURN_TIMERS / 2u; i++) {
         asx_timer_handle h;
         ASSERT_EQ(asx_timer_register(wheel, (asx_time)(2000 + i * 10), NULL, &h), ASX_OK);
     }
-    ASSERT_EQ(asx_timer_active_count(wheel), 64u);
+    ASSERT_EQ(asx_timer_active_count(wheel), CHURN_TIMERS);
 
     /* Fire all by advancing time far enough */
     {
         void *wakers[128];
         uint32_t fired = asx_timer_collect_expired(wheel, 99999, wakers, 128);
-        ASSERT_EQ(fired, 64u);
+        ASSERT_EQ(fired, CHURN_TIMERS);
     }
     ASSERT_EQ(asx_timer_active_count(wheel), 0u);
 }
@@ -459,15 +462,18 @@ TEST(tight_budget_one_poll_per_call) {
  * ------------------------------------------------------------------- */
 
 TEST(trace_ring_high_event_volume) {
+    /* The ring keeps the latest ASX_TRACE_CAPACITY events (a classed build's
+     * ring can be smaller than 500: then it wraps). */
+    const uint32_t kept = 500u < ASX_TRACE_CAPACITY ? 500u : ASX_TRACE_CAPACITY;
     uint32_t i;
     uint64_t digest;
 
     reset_all();
 
-    /* Emit events up to near capacity */
     for (i = 0; i < 500; i++) { asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0); }
 
-    ASSERT_EQ(asx_trace_event_count(), 500u);
+    ASSERT_EQ(asx_trace_event_count(), kept);
+    ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)500u);
 
     /* Digest should be non-zero */
     digest = asx_trace_digest();
@@ -477,8 +483,8 @@ TEST(trace_ring_high_event_volume) {
     {
         asx_trace_event ev;
         ASSERT_TRUE(asx_trace_event_get(0, &ev));
-        ASSERT_EQ(ev.entity_id, 0u);
-        ASSERT_TRUE(asx_trace_event_get(499, &ev));
+        ASSERT_EQ(ev.entity_id, (uint64_t)(500u - kept));
+        ASSERT_TRUE(asx_trace_event_get(kept - 1u, &ev));
         ASSERT_EQ(ev.entity_id, 499u);
     }
 }
@@ -594,6 +600,9 @@ TEST(closed_region_tasks_reclaimed_under_pressure) {
     ASSERT_EQ(asx_task_get_outcome(first, &out), ASX_E_STALE_HANDLE);
 }
 
+/* Up to 32 obligations, as many as the arena holds. */
+#define MIXED_OBLIGATIONS ((ASX_MAX_OBLIGATIONS) < 32 ? (ASX_MAX_OBLIGATIONS) : 32)
+
 TEST(obligation_mixed_commit_abort_pattern) {
     asx_region_id rid;
     asx_obligation_id oids[32];
@@ -602,11 +611,12 @@ TEST(obligation_mixed_commit_abort_pattern) {
     reset_all();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
-    /* Reserve 32 obligations */
-    for (i = 0; i < 32; i++) { ASSERT_EQ(asx_obligation_reserve(rid, &oids[i]), ASX_OK); }
+    for (i = 0; i < MIXED_OBLIGATIONS; i++) {
+        ASSERT_EQ(asx_obligation_reserve(rid, &oids[i]), ASX_OK);
+    }
 
     /* Commit even-indexed, abort odd-indexed */
-    for (i = 0; i < 32; i++) {
+    for (i = 0; i < MIXED_OBLIGATIONS; i++) {
         if (i % 2 == 0) {
             ASSERT_EQ(asx_obligation_commit(oids[i]), ASX_OK);
         } else {
@@ -615,7 +625,7 @@ TEST(obligation_mixed_commit_abort_pattern) {
     }
 
     /* Verify states */
-    for (i = 0; i < 32; i++) {
+    for (i = 0; i < MIXED_OBLIGATIONS; i++) {
         asx_obligation_state s;
         ASSERT_EQ(asx_obligation_get_state(oids[i], &s), ASX_OK);
         if (i % 2 == 0) {

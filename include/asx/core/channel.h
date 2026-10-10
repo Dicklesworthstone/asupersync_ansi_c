@@ -33,6 +33,7 @@
 #ifndef ASX_CORE_CHANNEL_H
 #define ASX_CORE_CHANNEL_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -47,7 +48,11 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 
 #ifndef ASX_MAX_CHANNELS
+#ifdef ASX_CLASS_MAX_CHANNELS /* a build-time resource class (asx_config.h) */
+#define ASX_MAX_CHANNELS ASX_CLASS_MAX_CHANNELS
+#else
 #define ASX_MAX_CHANNELS 16u
+#endif
 #endif
 #ifndef ASX_CHANNEL_MAX_CAPACITY
 #define ASX_CHANNEL_MAX_CAPACITY 64u

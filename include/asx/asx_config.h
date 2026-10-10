@@ -184,6 +184,63 @@ typedef struct {
 /* Return the default resource limits for a resource class. */
 ASX_API asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls);
 
+/* The classes' limits (README "Resource Classes"), the one table that
+ * asx_resource_limits_for_class() and a classed build both read. Each
+ * literal has the type of the arena macro it can size. */
+#define ASX_CLASS_R1_MAX_REGIONS 4
+#define ASX_CLASS_R1_MAX_TASKS 16
+#define ASX_CLASS_R1_MAX_TIMERS 32u
+#define ASX_CLASS_R1_MAX_OBLIGATIONS 16
+#define ASX_CLASS_R1_MAX_CHANNELS 8u
+#define ASX_CLASS_R1_MAX_TRACE_EVENTS 64u
+#define ASX_CLASS_R2_MAX_REGIONS 16
+#define ASX_CLASS_R2_MAX_TASKS 64
+#define ASX_CLASS_R2_MAX_TIMERS 128u
+#define ASX_CLASS_R2_MAX_OBLIGATIONS 64
+#define ASX_CLASS_R2_MAX_CHANNELS 32u
+#define ASX_CLASS_R2_MAX_TRACE_EVENTS 256u
+#define ASX_CLASS_R3_MAX_REGIONS 64
+#define ASX_CLASS_R3_MAX_TASKS 256
+#define ASX_CLASS_R3_MAX_TIMERS 512u
+#define ASX_CLASS_R3_MAX_OBLIGATIONS 256
+#define ASX_CLASS_R3_MAX_CHANNELS 128u
+#define ASX_CLASS_R3_MAX_TRACE_EVENTS 1024u
+
+/* Build-time resource class: -DASX_RESOURCE_CLASS=1, 2 or 3 (`make
+ * RESOURCE_CLASS=...`) sizes the arenas from R1, R2 or R3. Each of
+ * ASX_MAX_REGIONS, ASX_MAX_TASKS, ASX_MAX_TIMERS, ASX_MAX_OBLIGATIONS,
+ * ASX_MAX_CHANNELS and ASX_TRACE_CAPACITY not set explicitly takes the
+ * class's limit, so the class limit is both the footprint and the point of
+ * deterministic exhaustion. Without it the arenas keep their unclassed
+ * defaults (8 regions, 64 tasks, 128 timers, 128 obligations, 16 channels,
+ * 1024 trace events). */
+#ifdef ASX_RESOURCE_CLASS
+#if ASX_RESOURCE_CLASS == 1
+#define ASX_CLASS_MAX_REGIONS ASX_CLASS_R1_MAX_REGIONS
+#define ASX_CLASS_MAX_TASKS ASX_CLASS_R1_MAX_TASKS
+#define ASX_CLASS_MAX_TIMERS ASX_CLASS_R1_MAX_TIMERS
+#define ASX_CLASS_MAX_OBLIGATIONS ASX_CLASS_R1_MAX_OBLIGATIONS
+#define ASX_CLASS_MAX_CHANNELS ASX_CLASS_R1_MAX_CHANNELS
+#define ASX_CLASS_MAX_TRACE_EVENTS ASX_CLASS_R1_MAX_TRACE_EVENTS
+#elif ASX_RESOURCE_CLASS == 2
+#define ASX_CLASS_MAX_REGIONS ASX_CLASS_R2_MAX_REGIONS
+#define ASX_CLASS_MAX_TASKS ASX_CLASS_R2_MAX_TASKS
+#define ASX_CLASS_MAX_TIMERS ASX_CLASS_R2_MAX_TIMERS
+#define ASX_CLASS_MAX_OBLIGATIONS ASX_CLASS_R2_MAX_OBLIGATIONS
+#define ASX_CLASS_MAX_CHANNELS ASX_CLASS_R2_MAX_CHANNELS
+#define ASX_CLASS_MAX_TRACE_EVENTS ASX_CLASS_R2_MAX_TRACE_EVENTS
+#elif ASX_RESOURCE_CLASS == 3
+#define ASX_CLASS_MAX_REGIONS ASX_CLASS_R3_MAX_REGIONS
+#define ASX_CLASS_MAX_TASKS ASX_CLASS_R3_MAX_TASKS
+#define ASX_CLASS_MAX_TIMERS ASX_CLASS_R3_MAX_TIMERS
+#define ASX_CLASS_MAX_OBLIGATIONS ASX_CLASS_R3_MAX_OBLIGATIONS
+#define ASX_CLASS_MAX_CHANNELS ASX_CLASS_R3_MAX_CHANNELS
+#define ASX_CLASS_MAX_TRACE_EVENTS ASX_CLASS_R3_MAX_TRACE_EVENTS
+#else
+#error "ASX_RESOURCE_CLASS must be 1 (R1), 2 (R2) or 3 (R3)"
+#endif
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Trace mode selection                                                */
 /*                                                                     */

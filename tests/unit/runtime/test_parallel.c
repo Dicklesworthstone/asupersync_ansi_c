@@ -1591,7 +1591,8 @@ int main(void) {
     RUN_TEST(lane_assign_to_all_classes);
     RUN_TEST(lane_remove_existing);
     RUN_TEST(lane_remove_not_found);
-    RUN_TEST(lane_assign_fills_capacity);
+    RUN_TEST_IF(ASX_LANE_TASK_CAPACITY <= ASX_MAX_TASKS, lane_assign_fills_capacity,
+                "a lane holds more tasks than the task arena (classed build)");
     RUN_TEST(lane_get_state_null_out);
     RUN_TEST(lane_get_state_invalid_class);
 

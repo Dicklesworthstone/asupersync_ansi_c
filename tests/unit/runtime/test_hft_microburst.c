@@ -176,6 +176,10 @@ TEST(hft_burst_admission_gate_precheck) {
  * should be done. Verify no starvation.
  * ------------------------------------------------------------------- */
 
+/* A burst of `n` tasks, capped at the task arena (a classed build, R1,
+ * holds 16). */
+#define BURST(n) ((uint32_t)(n) < (uint32_t)ASX_MAX_TASKS ? (uint32_t)(n) : (uint32_t)ASX_MAX_TASKS)
+
 static yield_ctx g_fairness_ctx[32];
 
 TEST(hft_burst_fairness_no_starvation) {
@@ -188,8 +192,8 @@ TEST(hft_burst_fairness_no_starvation) {
     reset_all();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
-    /* Spawn 32 tasks, each needing 2 polls */
-    for (i = 0; i < 32; i++) {
+    /* Spawn 32 tasks (up to the arena), each needing 2 polls */
+    for (i = 0; i < BURST(32); i++) {
         g_fairness_ctx[i].target_polls = 2;
         g_fairness_ctx[i].polls_done = 0;
         ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &g_fairness_ctx[i], &tids[i]), ASX_OK);
@@ -201,15 +205,15 @@ TEST(hft_burst_fairness_no_starvation) {
 
     /* All tasks should have completed */
     completed = 0;
-    for (i = 0; i < 32; i++) {
+    for (i = 0; i < BURST(32); i++) {
         asx_task_state state;
         ASSERT_EQ(asx_task_get_state(tids[i], &state), ASX_OK);
         if (state == ASX_TASK_COMPLETED) completed++;
     }
-    ASSERT_EQ(completed, 32u);
+    ASSERT_EQ(completed, BURST(32));
 
     /* Each task should have been polled exactly its target number */
-    for (i = 0; i < 32; i++) { ASSERT_EQ(g_fairness_ctx[i].polls_done, 2); }
+    for (i = 0; i < BURST(32); i++) { ASSERT_EQ(g_fairness_ctx[i].polls_done, 2); }
 }
 
 TEST(hft_burst_fairness_round_robin_order) {
@@ -312,22 +316,24 @@ TEST(hft_burst_mixed_completion_times) {
     asx_region_id rid = ASX_INVALID_ID;
     asx_task_id tids[24];
     asx_budget budget;
+    const uint32_t third = BURST(24) / 3u;
     uint32_t i;
     uint32_t completed;
 
     reset_all();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
-    /* 8 immediate, 8 yield-once (2 polls), 8 yield-many (5 polls) */
-    for (i = 0; i < 8; i++) {
+    /* 8 immediate, 8 yield-once (2 polls), 8 yield-many (5 polls): thirds
+     * of up to 24 tasks */
+    for (i = 0; i < third; i++) {
         ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tids[i]), ASX_OK);
     }
-    for (i = 8; i < 16; i++) {
+    for (i = third; i < 2u * third; i++) {
         g_mixed_ctx[i].target_polls = 2;
         g_mixed_ctx[i].polls_done = 0;
         ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &g_mixed_ctx[i], &tids[i]), ASX_OK);
     }
-    for (i = 16; i < 24; i++) {
+    for (i = 2u * third; i < 3u * third; i++) {
         g_mixed_ctx[i].target_polls = 5;
         g_mixed_ctx[i].polls_done = 0;
         ASSERT_EQ(asx_task_spawn(rid, poll_yield_n, &g_mixed_ctx[i], &tids[i]), ASX_OK);
@@ -337,14 +343,14 @@ TEST(hft_burst_mixed_completion_times) {
     budget = asx_budget_from_polls(500);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
 
-    /* All 24 must complete */
+    /* All must complete */
     completed = 0;
-    for (i = 0; i < 24; i++) {
+    for (i = 0; i < 3u * third; i++) {
         asx_task_state state;
         ASSERT_EQ(asx_task_get_state(tids[i], &state), ASX_OK);
         if (state == ASX_TASK_COMPLETED) completed++;
     }
-    ASSERT_EQ(completed, 24u);
+    ASSERT_EQ(completed, 3u * third);
 
     /* Quiescent event at end */
     {
@@ -506,8 +512,10 @@ TEST(hft_burst_drain_quiescence) {
     reset_all();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
-    /* Spawn 32 immediate tasks */
-    for (i = 0; i < 32; i++) { ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK); }
+    /* Spawn 32 immediate tasks (up to the arena) */
+    for (i = 0; i < BURST(32); i++) {
+        ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK);
+    }
 
     /* Run to completion */
     budget = asx_budget_from_polls(100);
@@ -610,7 +618,9 @@ TEST(hft_burst_event_monotonicity) {
     reset_all();
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
 
-    for (i = 0; i < 32; i++) { ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK); }
+    for (i = 0; i < BURST(32); i++) {
+        ASSERT_EQ(asx_task_spawn(rid, poll_immediate, NULL, &tid), ASX_OK);
+    }
 
     budget = asx_budget_from_polls(200);
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);

@@ -414,7 +414,12 @@ TEST(region_open_child_real_capacity_exhaustion) {
     }
     ASSERT_EQ(asx_region_slot_lookup(parent, &parent_slot), ASX_OK);
     log_child_summary("real-max", parent, parent_slot);
-    ASSERT_EQ(opened, (uint32_t)(ASX_MAX_REGIONS - 1));
+    /* Whichever runs out first: the region arena (the parent holds one
+     * slot) or the parent's child slots (a classed build can have more
+     * regions than child slots). */
+    ASSERT_EQ(opened, (uint32_t)(ASX_MAX_REGIONS - 1) < (uint32_t)ASX_MAX_REGION_CHILDREN
+                          ? (uint32_t)(ASX_MAX_REGIONS - 1)
+                          : (uint32_t)ASX_MAX_REGION_CHILDREN);
     ASSERT_EQ(parent_slot->child_count, opened);
 
     ASSERT_EQ(asx_region_open_child(parent, &child), ASX_E_RESOURCE_EXHAUSTED);

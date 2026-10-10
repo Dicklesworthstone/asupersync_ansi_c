@@ -240,6 +240,10 @@ jobs:
         id: capacity_x4_tests
         run: make test-capacity-x4
 
+      - name: Unit suite built for each resource class (R1, R2, R3)
+        id: resource_class_tests
+        run: make test-resource-classes
+
       - name: Validate structured test logs
         id: validate_logs
         run: tools/ci/validate_test_logs.sh --strict

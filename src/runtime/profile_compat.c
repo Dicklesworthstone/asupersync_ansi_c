@@ -160,10 +160,10 @@ asx_status asx_trace_config_init(asx_trace_config *cfg, asx_resource_class cls) 
     cfg->flush_interval_ms = 0;
 
     switch (cls) {
-    case ASX_CLASS_R1: cfg->ring_capacity = 64; break;
-    case ASX_CLASS_R2: cfg->ring_capacity = 256; break;
-    case ASX_CLASS_R3: cfg->ring_capacity = 1024; break;
-    case ASX_CLASS_COUNT: cfg->ring_capacity = 256; break;
+    case ASX_CLASS_R1: cfg->ring_capacity = ASX_CLASS_R1_MAX_TRACE_EVENTS; break;
+    case ASX_CLASS_R2: cfg->ring_capacity = ASX_CLASS_R2_MAX_TRACE_EVENTS; break;
+    case ASX_CLASS_R3: cfg->ring_capacity = ASX_CLASS_R3_MAX_TRACE_EVENTS; break;
+    case ASX_CLASS_COUNT: cfg->ring_capacity = ASX_CLASS_R2_MAX_TRACE_EVENTS; break;
     }
 
     return ASX_OK;
@@ -175,31 +175,33 @@ asx_status asx_trace_config_init(asx_trace_config *cfg, asx_resource_class cls) 
 
 asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls) {
     asx_resource_limits lim;
+    /* The class table in asx_config.h, which a classed build's arenas
+     * (ASX_RESOURCE_CLASS) read too. */
     switch (cls) {
     case ASX_CLASS_R1:
-        lim.max_regions = 4;
-        lim.max_tasks = 16;
-        lim.max_timers = 32;
-        lim.max_obligations = 16;
-        lim.max_channels = 8;
-        lim.max_trace_events = 64;
+        lim.max_regions = (uint32_t)ASX_CLASS_R1_MAX_REGIONS;
+        lim.max_tasks = (uint32_t)ASX_CLASS_R1_MAX_TASKS;
+        lim.max_timers = ASX_CLASS_R1_MAX_TIMERS;
+        lim.max_obligations = (uint32_t)ASX_CLASS_R1_MAX_OBLIGATIONS;
+        lim.max_channels = ASX_CLASS_R1_MAX_CHANNELS;
+        lim.max_trace_events = ASX_CLASS_R1_MAX_TRACE_EVENTS;
         break;
     case ASX_CLASS_R2:
-        lim.max_regions = 16;
-        lim.max_tasks = 64;
-        lim.max_timers = 128;
-        lim.max_obligations = 64;
-        lim.max_channels = 32;
-        lim.max_trace_events = 256;
+        lim.max_regions = (uint32_t)ASX_CLASS_R2_MAX_REGIONS;
+        lim.max_tasks = (uint32_t)ASX_CLASS_R2_MAX_TASKS;
+        lim.max_timers = ASX_CLASS_R2_MAX_TIMERS;
+        lim.max_obligations = (uint32_t)ASX_CLASS_R2_MAX_OBLIGATIONS;
+        lim.max_channels = ASX_CLASS_R2_MAX_CHANNELS;
+        lim.max_trace_events = ASX_CLASS_R2_MAX_TRACE_EVENTS;
         break;
     case ASX_CLASS_R3:
     case ASX_CLASS_COUNT:
-        lim.max_regions = 64;
-        lim.max_tasks = 256;
-        lim.max_timers = 512;
-        lim.max_obligations = 256;
-        lim.max_channels = 128;
-        lim.max_trace_events = 1024;
+        lim.max_regions = (uint32_t)ASX_CLASS_R3_MAX_REGIONS;
+        lim.max_tasks = (uint32_t)ASX_CLASS_R3_MAX_TASKS;
+        lim.max_timers = ASX_CLASS_R3_MAX_TIMERS;
+        lim.max_obligations = (uint32_t)ASX_CLASS_R3_MAX_OBLIGATIONS;
+        lim.max_channels = ASX_CLASS_R3_MAX_CHANNELS;
+        lim.max_trace_events = ASX_CLASS_R3_MAX_TRACE_EVENTS;
         break;
     }
     return lim;

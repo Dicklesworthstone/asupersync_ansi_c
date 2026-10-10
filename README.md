@@ -515,6 +515,15 @@ Each resource class defines concrete capacity limits:
 | Max channels | 8 | 32 | 128 |
 | Max trace events | 64 | 256 | 1,024 |
 
+To build for a class, use `make RESOURCE_CLASS=1` (or `2`, `3`; the C
+macro is `-DASX_RESOURCE_CLASS=N`). Every arena is then sized from that
+class: the class limit is both the compiled capacity and the point where
+allocation fails with `ASX_E_RESOURCE_EXHAUSTED`. An explicit
+`-DASX_MAX_*` still overrides it. Without a class, the arenas keep the
+unclassed defaults: 8 regions, 64 tasks, 128 timers, 128 obligations,
+16 channels and 1,024 trace events. `make test-resource-classes` runs the
+unit suite built for each class.
+
 ## Deployment Profiles
 
 | Profile | Target | Key Properties |

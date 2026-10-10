@@ -793,7 +793,6 @@ TEST(group_api_validation) {
     asx_task_id d;
     asx_outcome out;
     asx_status mst;
-    uint32_t i;
 
     setup();
     ASSERT_EQ(asx_task_group_init(NULL, ASX_TASK_GROUP_RACE, 0), ASX_E_INVALID_ARGUMENT);
@@ -813,10 +812,17 @@ TEST(group_api_validation) {
     ASSERT_EQ(asx_task_group_member_result(&g, 0, &out, &mst), ASX_E_TASK_NOT_COMPLETED);
     ASSERT_EQ(asx_task_group_member_result(&g, 5, &out, &mst), ASX_E_INVALID_ARGUMENT);
 
-    for (i = 1; i < ASX_TASK_GROUP_MAX; i++) {
-        ASSERT_EQ(asx_task_group_spawn(&g, r, poll_member, &g_m[i], NULL), ASX_OK);
+#if ASX_TASK_GROUP_MAX + 2 <= ASX_MAX_TASKS
+    /* A full group refuses another member (needs the group's worth of
+     * tasks beside t and d: a classed build may hold fewer). */
+    {
+        uint32_t i;
+        for (i = 1; i < ASX_TASK_GROUP_MAX; i++) {
+            ASSERT_EQ(asx_task_group_spawn(&g, r, poll_member, &g_m[i], NULL), ASX_OK);
+        }
     }
     ASSERT_EQ(asx_task_group_spawn(&g, r, poll_member, &g_m[0], NULL), ASX_E_RESOURCE_EXHAUSTED);
+#endif
 
     ASSERT_EQ(asx_task_group_cancel(&g, ASX_CANCEL_USER), ASX_OK);
     ASSERT_EQ(asx_task_group_add(&g, t), ASX_E_INVALID_STATE);

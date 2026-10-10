@@ -155,7 +155,11 @@ ASX_API const char *asx_trace_schema_compat_str(asx_trace_schema_compat compat);
 /* Number of most-recent events the ring retains. The digest and the
  * per-kind totals cover every emitted event regardless of this size. */
 #ifndef ASX_TRACE_CAPACITY
+#ifdef ASX_CLASS_MAX_TRACE_EVENTS /* a build-time resource class (asx_config.h) */
+#define ASX_TRACE_CAPACITY ASX_CLASS_MAX_TRACE_EVENTS
+#else
 #define ASX_TRACE_CAPACITY 1024u
+#endif
 #endif
 #if (ASX_TRACE_CAPACITY) < 1
 #error "ASX_TRACE_CAPACITY must be at least 1"

@@ -12,6 +12,7 @@
 #ifndef ASX_RUNTIME_H
 #define ASX_RUNTIME_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -37,14 +38,28 @@ extern "C" {
  * 65535 slots.
  * ------------------------------------------------------------------- */
 
+/* A build-time resource class (ASX_RESOURCE_CLASS, asx_config.h) sizes
+ * the arenas it does not find set explicitly. */
 #ifndef ASX_MAX_REGIONS
+#ifdef ASX_CLASS_MAX_REGIONS
+#define ASX_MAX_REGIONS ASX_CLASS_MAX_REGIONS
+#else
 #define ASX_MAX_REGIONS 8
 #endif
+#endif
 #ifndef ASX_MAX_TASKS
+#ifdef ASX_CLASS_MAX_TASKS
+#define ASX_MAX_TASKS ASX_CLASS_MAX_TASKS
+#else
 #define ASX_MAX_TASKS 64
 #endif
+#endif
 #ifndef ASX_MAX_OBLIGATIONS
+#ifdef ASX_CLASS_MAX_OBLIGATIONS
+#define ASX_MAX_OBLIGATIONS ASX_CLASS_MAX_OBLIGATIONS
+#else
 #define ASX_MAX_OBLIGATIONS 128
+#endif
 #endif
 #ifndef ASX_REGION_CAPTURE_ARENA_BYTES
 #define ASX_REGION_CAPTURE_ARENA_BYTES 16384u

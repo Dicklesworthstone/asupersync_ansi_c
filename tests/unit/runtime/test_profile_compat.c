@@ -13,9 +13,11 @@
  */
 
 #include "test_harness.h"
+#include <asx/core/channel.h>
 #include <asx/runtime/profile_compat.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/telemetry.h>
+#include <asx/runtime/trace.h>
 #include <asx/time/timer_wheel.h>
 #include <string.h>
 
@@ -518,6 +520,22 @@ TEST(resource_limits_for_class_match_static_arena_contract) {
     ASSERT_EQ(r3.max_trace_events, 1024u);
 }
 
+#ifdef ASX_RESOURCE_CLASS
+/* A classed build (ASX_RESOURCE_CLASS, make RESOURCE_CLASS=) sizes every
+ * arena from its class, so the compiled capacities are the class's limits
+ * (make test-resource-classes; bd-9kll.13.1). */
+TEST(classed_build_arenas_are_the_class_limits) {
+    asx_resource_limits lim =
+        asx_resource_limits_for_class((asx_resource_class)(ASX_RESOURCE_CLASS - 1));
+    ASSERT_EQ((uint32_t)ASX_MAX_REGIONS, lim.max_regions);
+    ASSERT_EQ((uint32_t)ASX_MAX_TASKS, lim.max_tasks);
+    ASSERT_EQ((uint32_t)ASX_MAX_TIMERS, lim.max_timers);
+    ASSERT_EQ((uint32_t)ASX_MAX_OBLIGATIONS, lim.max_obligations);
+    ASSERT_EQ((uint32_t)ASX_MAX_CHANNELS, lim.max_channels);
+    ASSERT_EQ((uint32_t)ASX_TRACE_CAPACITY, lim.max_trace_events);
+}
+#endif
+
 /* -------------------------------------------------------------------
  * Trace config initialization tests (bd-j4m.2)
  *
@@ -692,6 +710,9 @@ int main(void) {
     RUN_TEST(resource_class_name_r3);
     RUN_TEST(resource_class_name_out_of_range);
     RUN_TEST(resource_limits_for_class_match_static_arena_contract);
+#ifdef ASX_RESOURCE_CLASS
+    RUN_TEST(classed_build_arenas_are_the_class_limits);
+#endif
 
     /* Trace config (bd-j4m.2) */
     RUN_TEST(trace_config_null_returns_error);

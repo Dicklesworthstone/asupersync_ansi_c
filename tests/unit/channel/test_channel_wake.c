@@ -1131,7 +1131,10 @@ int main(void) {
     RUN_TEST(woken_waiter_that_gives_up_passes_wake_on);
     RUN_TEST(cancelled_waiter_does_not_absorb_wake);
     RUN_TEST(wait_cancel_rejects_bad_channel);
-    RUN_TEST(waiter_overflow_degrades_to_polling);
+    /* More producers than waiter slots, plus the receiver: a classed build
+     * (R1: 16 tasks) may hold fewer tasks than that. */
+    RUN_TEST_IF(ASX_CHANNEL_MAX_WAITERS + 3 <= ASX_MAX_TASKS, waiter_overflow_degrades_to_polling,
+                "the task arena holds no more tasks than the waiter slots");
     RUN_TEST(try_ops_outside_scheduler_never_park);
     RUN_TEST(try_ops_inside_a_poll_never_park);
     RUN_TEST(oneshot_receiver_parks_until_send_or_drop);
