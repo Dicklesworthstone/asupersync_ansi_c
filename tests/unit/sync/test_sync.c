@@ -367,6 +367,64 @@ TEST(sem_zero_permits) {
     ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
 }
 
+/* Rust's Semaphore::acquire(cx, n) takes n permits all or nothing, in
+ * line: a waiter for 2 at the front holds up a later waiter for 1 even
+ * while 1 permit is free. */
+TEST(sem_acquire_many_all_or_nothing_in_line) {
+    asx_semaphore_handle h;
+    asx_semaphore_permit held, p2, p1, extra;
+    asx_semaphore_waiter w2, w1;
+    setup();
+    MUST_OK(asx_semaphore_create(3, &h));
+    ASSERT_EQ(asx_semaphore_try_acquire_many(h, 2, &held), ASX_OK);
+    ASSERT_EQ(held.count, 2u);
+    ASSERT_EQ(asx_semaphore_available(h), 1u);
+
+    MUST_OK(asx_semaphore_acquire_many_begin(h, 2, &w2));
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w2, &p2, NULL), ASX_E_PENDING);       /* 1 free < 2 */
+    ASSERT_EQ(asx_semaphore_try_acquire_many(h, 1, &extra), ASX_E_WOULD_BLOCK); /* queued */
+    MUST_OK(asx_semaphore_acquire_begin(h, &w1));
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w1, &p1, NULL), ASX_E_PENDING); /* behind w2 */
+    ASSERT_EQ(asx_semaphore_available(h), 1u);
+
+    /* Releasing the 2 held makes 3: w2 takes 2, then w1 the last one. */
+    ASSERT_EQ(asx_semaphore_release(held), ASX_OK);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w2, &p2, NULL), ASX_OK);
+    ASSERT_EQ(p2.count, 2u);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w1, &p1, NULL), ASX_OK);
+    ASSERT_EQ(p1.count, 1u);
+    ASSERT_EQ(asx_semaphore_available(h), 0u);
+
+    ASSERT_EQ(asx_semaphore_release(p2), ASX_OK);
+    ASSERT_EQ(asx_semaphore_release(p1), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(h), 3u);
+    ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
+}
+
+/* Acquiring 0 permits succeeds at once with an empty permit (Rust), and
+ * the mutex's semaphore only ever takes 1. */
+TEST(sem_acquire_zero_and_mutex_count) {
+    asx_semaphore_handle h;
+    asx_semaphore_permit p;
+    asx_semaphore_waiter w;
+    asx_mutex_handle m;
+    setup();
+    MUST_OK(asx_semaphore_create(0, &h));
+    ASSERT_EQ(asx_semaphore_try_acquire_many(h, 0, &p), ASX_OK);
+    ASSERT_EQ(p.count, 0u);
+    MUST_OK(asx_semaphore_acquire_many_begin(h, 0, &w));
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w, &p, NULL), ASX_OK);
+    ASSERT_EQ(p.count, 0u);
+    ASSERT_EQ(asx_semaphore_release(p), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(h), 0u);
+    ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
+
+    MUST_OK(asx_mutex_create(&m));
+    ASSERT_EQ(asx_semaphore_try_acquire_many(m.sem, 2, &p), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_semaphore_acquire_many_begin(m.sem, 2, &w), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_mutex_close(m), ASX_OK);
+}
+
 /* ================================================================== */
 /* Mutex tests                                                         */
 /* ================================================================== */
@@ -805,6 +863,8 @@ int main(void) {
     RUN_TEST(sem_close_disconnects);
     RUN_TEST(sem_stale_handle);
     RUN_TEST(sem_zero_permits);
+    RUN_TEST(sem_acquire_many_all_or_nothing_in_line);
+    RUN_TEST(sem_acquire_zero_and_mutex_count);
 
     /* Mutex */
     RUN_TEST(mutex_create_close);

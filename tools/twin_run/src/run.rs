@@ -21,7 +21,7 @@ use asupersync::combinator::quorum::QuorumError;
 use asupersync::cx::{ChildRegion, ChildRegionSpec};
 use asupersync::lab::{LabConfig, LabRuntime};
 use asupersync::record::task::TaskState;
-use asupersync::record::{ObligationAbortReason, ObligationKind};
+use asupersync::record::{ObligationAbortReason, ObligationKind, RegionLimits};
 use asupersync::runtime::obligation_mailbox::ObligationToken;
 use asupersync::runtime::{JoinError, TaskHandle};
 use asupersync::sync as asx_sync;
@@ -1542,9 +1542,19 @@ async fn race_with_deadline(
             s.group_members.insert(wrapper.me.clone());
         }
         async move {
-            let handles = spawn_members(&wcx, &owner, idx, &race)
-                .unwrap_or_else(|e| panic!("race member spawn in the timeout wrapper: {e}"));
-            wcx.scope().race_all(&wcx, handles).await
+            match spawn_members(&wcx, &owner, idx, &race) {
+                Ok(handles) => wcx.scope().race_all(&wcx, handles).await,
+                Err(e) => {
+                    // The recorded harness error fails the run.
+                    harness_error(
+                        &owner.shared,
+                        format!("race member spawn in the timeout wrapper: {e}"),
+                    );
+                    Err(JoinError::Cancelled(CancelReason::user(
+                        "race member spawn failed",
+                    )))
+                }
+            }
         }
     };
     let timed = NamedSleep {
@@ -2067,6 +2077,31 @@ fn apply_driver_op(lab: &mut LabRuntime, shared: &SharedRef, op: &Value) -> RunR
             wakes.dispatch();
         }
         "advance" => lab.advance_time(u64_field(op, "ns")?),
+        "region_limits" => {
+            // Admission limits on live tasks, live child regions and
+            // pending obligations (record/region.rs:208); an omitted or
+            // null field is unlimited.
+            let region = region_id("region")?;
+            let limit = |field: &str| -> RunResult<Option<usize>> {
+                match op.get(field) {
+                    None | Some(Value::Null) => Ok(None),
+                    Some(v) => v
+                        .as_u64()
+                        .and_then(|n| usize::try_from(n).ok())
+                        .map(Some)
+                        .ok_or_else(|| format!("region_limits: {field} must be a count")),
+                }
+            };
+            let limits = RegionLimits {
+                max_children: limit("max_children")?,
+                max_tasks: limit("max_tasks")?,
+                max_obligations: limit("max_obligations")?,
+                ..RegionLimits::UNLIMITED
+            };
+            if !lab.state.set_region_limits(region, limits) {
+                return Err("region_limits: the region is gone".to_string());
+            }
+        }
         other => {
             return Err(format!(
                 "driver op {other:?} is not interpreted yet (increment 1)"

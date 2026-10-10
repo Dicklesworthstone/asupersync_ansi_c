@@ -1384,20 +1384,17 @@ static int exec_sync_wait(it_task *t, asx_task_id self, uint32_t step, uint32_t 
             *out = STEP_END;
             return 1;
         }
-        if (count == 0u) { /* Rust: count 0 succeeds at once, no permit */
-            observe_status(t, idx, op, ASX_OK);
-            return 1;
-        }
-        if (count > 1u) {
-            it_fail_task(t, idx,
-                         "sem_acquire count > 1: C semaphores grant one permit per acquire "
-                         "(Rust acquires n all-or-nothing)");
+        if (count > UINT32_MAX) {
+            it_fail_task(t, idx, "sem_acquire count out of range");
             *out = STEP_END;
             return 1;
         }
         if (t->phase == 0u) {
-            if (asx_semaphore_acquire_begin(s->semaphore, &t->wait.sem) != ASX_OK) {
-                it_fail_task(t, idx, "asx_semaphore_acquire_begin failed");
+            /* All or nothing, as Rust's Semaphore::acquire(cx, count); a
+             * count of 0 yields an empty permit at once. */
+            if (asx_semaphore_acquire_many_begin(s->semaphore, (uint32_t)count, &t->wait.sem) !=
+                ASX_OK) {
+                it_fail_task(t, idx, "asx_semaphore_acquire_many_begin failed");
                 *out = STEP_END;
                 return 1;
             }

@@ -131,6 +131,7 @@ static void wq_release(asx_wait_queue *q, uint32_t i) {
     n->task = ASX_INVALID_ID;
     n->woken = 0u;
     n->flags = 0u;
+    n->value = 0u;
     n->generation++;
     n->next = g_free_head;
     g_free_head = i;
@@ -191,6 +192,7 @@ static uint32_t wq_add(asx_wait_queue *q, asx_task_id task) {
     n->task = task;
     n->woken = 0u;
     n->flags = 0u;
+    n->value = 0u;
     wq_link_tail(q, i);
     return i;
 }

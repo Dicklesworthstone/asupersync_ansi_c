@@ -332,7 +332,7 @@ Sync objects are declared at the top level:
 |---|---|---|---|---|---|
 | `mutex_lock` | `mutex` | `m.lock(&cx).await` (`sync/mutex.rs:191`), guard kept | `asx_mutex_lock_begin` + `asx_mutex_poll_lock` | while held, FIFO | Checked on every poll: `ASX_E_CANCELLED` even when free (`mutex.rs:554-558`). |
 | `mutex_unlock` | `mutex` | `drop(guard)` (`:758`) | `asx_mutex_unlock` | no | ignored |
-| `sem_acquire` | `semaphore`, `count` | `s.acquire(&cx, n).await` (`sync/semaphore.rs:430`), permit kept | `asx_semaphore_acquire_begin` + `asx_semaphore_poll_acquire` | until n are available (all-or-nothing, FIFO) | `ASX_E_CANCELLED` (`:847`); count 0 succeeds at once. The permit registers a `SemaphorePermit` obligation (C gap, §7). |
+| `sem_acquire` | `semaphore`, `count` | `s.acquire(&cx, n).await` (`sync/semaphore.rs:430`), permit kept | `asx_semaphore_acquire_many_begin(s, n)` + `asx_semaphore_poll_acquire` | until n are available (all-or-nothing, FIFO) | `ASX_E_CANCELLED` (`:847`); count 0 succeeds at once with an empty permit and no obligation. Otherwise the permit registers a `SemaphorePermit` obligation. |
 | `sem_release` | `semaphore` | `drop(permit)` (`:1080`) | `asx_semaphore_release` | no | ignored |
 | `barrier_wait` | `barrier` | `b.wait(&cx).await` (`sync/barrier.rs:135`) | `asx_barrier_wait_begin` + `asx_barrier_poll_wait` | until `parties` have arrived | `ASX_E_CANCELLED` (`:304`) |
 | `notify_wait` | `notify` | `n.notified().await` (`sync/notify.rs:347`) | `asx_notify_wait_begin` + `asx_notify_poll_wait` | until notified | **Ignored**: a cancelled waiter stays parked until notified. Avoid pairing it with cancellation unless that is the point. |
@@ -450,14 +450,17 @@ open gap with the gap named; `make conformance` lists them as ERROR.
 
 Open:
 
-- **Multi-permit semaphore acquire.** Rust acquires `count` permits
-  all-or-nothing; C grants one permit per acquire, so `sem_acquire` with
-  `count` > 1 fails closed.
 - **Region admission limits** for `region_limits`: no C API sets per-region
   task, child or obligation limits today. `ASX_E_ADMISSION_LIMIT` appears
   only in the status string table.
 
 Closed (each verified by a fixture that now matches):
+
+- **Multi-permit semaphore acquire**: `asx_semaphore_acquire_many_begin` /
+  `asx_semaphore_try_acquire_many` take `count` permits all or nothing, at
+  the front of the line, and a permit releases its whole count; a count of
+  0 succeeds at once with an empty permit (`sync-semaphore-acquire-many-001`;
+  generated scenarios ask for 2 permits at times).
 
 - **Non-parking `try_send` / `try_recv`** (bd-vc1v): C's mpsc, oneshot and
   broadcast `try_*` functions no longer park; the waiting

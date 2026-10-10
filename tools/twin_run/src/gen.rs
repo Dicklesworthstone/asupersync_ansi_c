@@ -27,7 +27,9 @@
 //! channel and declare a barrier, whose waits may fall short of its
 //! parties.
 //!
-//! Left out on purpose: multi-permit acquire, race
+//! Semaphore acquires sometimes take 2 permits at once (all or nothing).
+//!
+//! Left out on purpose: race
 //! (same-round ties are an RNG pick in Rust and the lowest index in C, a
 //! known divergence, bd-g652), region_limits, actors and supervision.
 //! join_all, first_ok and quorum groups are generated.
@@ -200,7 +202,7 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
             12 if world.semaphore => {
                 held.permit = !held.permit;
                 return if held.permit {
-                    json!({"op": "sem_acquire", "semaphore": "s", "count": 1})
+                    json!({"op": "sem_acquire", "semaphore": "s", "count": permit_count(rng)})
                 } else {
                     json!({"op": "sem_release", "semaphore": "s"})
                 };
@@ -335,6 +337,13 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
     }
 }
 
+/// Permits one semaphore acquire takes, all or nothing: usually 1,
+/// sometimes 2 (the semaphore holds 1 or 2; asking for more than it holds
+/// waits until lab.max_steps, and both engines must agree on that too).
+fn permit_count(rng: &mut Rng) -> u64 {
+    if rng.chance(20) { 2 } else { 1 }
+}
+
 /// A critical section on one of the scenario's locks: acquire, one to
 /// three steps that let other tasks run (they queue behind it), release.
 /// It opens the program, so nothing is held yet and the random lock
@@ -342,7 +351,7 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
 fn critical_section(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Vec<Value> {
     let (acquire, release) = if world.semaphore && (!world.mutex || rng.chance(50)) {
         (
-            json!({"op": "sem_acquire", "semaphore": "s", "count": 1}),
+            json!({"op": "sem_acquire", "semaphore": "s", "count": permit_count(rng)}),
             json!({"op": "sem_release", "semaphore": "s"}),
         )
     } else {

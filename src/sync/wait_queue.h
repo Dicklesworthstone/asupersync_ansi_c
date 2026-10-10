@@ -51,7 +51,7 @@
  * notify and barrier, whose public waiter handles name a record: a record
  * is a node the primitive owns from *_begin until the waiter consumes its
  * result or gives up. List order is arrival order; the primitive keeps
- * its per-waiter state in the node's `flags` byte. A queue
+ * its per-waiter state in the node's `flags` and `value`. A queue
  * of records registers a reap function that retires its dead waiters with
  * the primitive's own semantics (returning grants, passing notifications
  * on), so pool reclamation never bypasses them.
@@ -110,12 +110,13 @@ struct asx_wait_queue {
     asx_wait_reap_fn reap; /* record queues; NULL for plain queues */
 };
 
-/* One waiter. `flags` belongs to the owning primitive. */
+/* One waiter. `flags` and `value` belong to the owning primitive. */
 typedef struct {
     asx_task_id task;      /* parked task, ASX_INVALID_ID if none */
     asx_wait_queue *queue; /* owning queue, NULL when free */
     uint32_t prev;
     uint32_t next;
+    uint32_t value;      /* e.g. the permits a semaphore waiter asks for */
     uint16_t generation; /* changes on every release */
     uint8_t woken;       /* plain queues: holds an undelivered wake */
     uint8_t flags;
@@ -187,7 +188,7 @@ uint32_t asx_wait_queue_wake_all(asx_wait_queue *q);
  * its reap function. */
 void asx_wait_records_init(asx_wait_queue *q, asx_wait_reap_fn reap);
 
-/* Append a new record (task ASX_INVALID_ID, flags 0). Returns
+/* Append a new record (task ASX_INVALID_ID, flags and value 0). Returns
  * its index, or ASX_WAIT_NIL if the pool is exhausted even after
  * reclaiming the nodes of dead tasks. */
 uint32_t asx_wait_record_add(asx_wait_queue *q);

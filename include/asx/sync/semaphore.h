@@ -44,10 +44,12 @@ typedef struct {
  * permit is untracked: try_acquire (no Cx), an acquire without a task Cx,
  * a mutex guard (Rust's Mutex has no obligation), or a refused
  * reservation. A permit still held when its task completes is reported
- * leaked by the runtime. */
+ * leaked by the runtime. `count` is the number of permits it holds (an
+ * acquire of n takes n at once); release returns them all. */
 typedef struct {
     uint32_t sem_slot;
     uint16_t generation;
+    uint32_t count;
     asx_obligation_id obligation;
 } asx_semaphore_permit;
 
@@ -83,19 +85,38 @@ ASX_API asx_status asx_semaphore_close(asx_semaphore_handle handle);
 ASX_API asx_status asx_semaphore_try_acquire(asx_semaphore_handle handle,
                                              asx_semaphore_permit *out);
 
+/* Try to acquire `count` permits at once, all or nothing (Rust
+ * Semaphore::try_acquire(count)). ASX_E_WOULD_BLOCK while fewer than
+ * `count` are free or anyone is queued; a count of 0 succeeds at once with
+ * a permit holding none. ASX_E_INVALID_ARGUMENT for a mutex's semaphore
+ * and a count other than 1. */
+ASX_API asx_status asx_semaphore_try_acquire_many(asx_semaphore_handle handle, uint32_t count,
+                                                  asx_semaphore_permit *out);
+
 /* -------------------------------------------------------------------
  * Acquire (async / poll-based)
  * ------------------------------------------------------------------- */
 
-/* Begin async acquire. Must be followed by poll_acquire calls. */
+/* Begin async acquire of one permit. Must be followed by poll_acquire
+ * calls. */
 ASX_API ASX_MUST_USE asx_status asx_semaphore_acquire_begin(asx_semaphore_handle handle,
                                                             asx_semaphore_waiter *out);
 
-/* Poll for permit. Returns ASX_OK + permit when acquired,
+/* Begin async acquire of `count` permits as one all-or-nothing operation
+ * (Rust Semaphore::acquire(cx, count)): the waiter takes them only when
+ * `count` are free and it is at the front of the line; a count of 0
+ * succeeds at its first poll with a permit holding none and no
+ * obligation. ASX_E_INVALID_ARGUMENT for a mutex's semaphore and a count
+ * other than 1. */
+ASX_API ASX_MUST_USE asx_status asx_semaphore_acquire_many_begin(asx_semaphore_handle handle,
+                                                                 uint32_t count,
+                                                                 asx_semaphore_waiter *out);
+
+/* Poll for the permits. Returns ASX_OK + permit when acquired,
  * ASX_E_PENDING when waiting. Permits go to waiters in arrival (FIFO)
- * order: a waiter takes a free permit only when no earlier waiter is still
+ * order: a waiter takes free permits only when no earlier waiter is still
  * queued. Inside a scheduler poll an ASX_E_PENDING result parks the
- * calling task until a release grants it the permit (or close). */
+ * calling task until a release lets it take them (or close). */
 ASX_API asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter,
                                               asx_semaphore_permit *out, asx_cx *cx);
 
@@ -109,8 +130,10 @@ ASX_API asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter);
  * Release
  * ------------------------------------------------------------------- */
 
-/* Release a permit back to the semaphore. Grants it to the oldest waiter
- * (waking its task if parked) if any, else returns it to the pool. */
+/* Release a permit's `count` permits back to the semaphore. A semaphore
+ * pools them and wakes the front waiter if it can now take what it asked
+ * for; a mutex hands the lock to the oldest waiter (waking its task if
+ * parked), else returns it to the pool. */
 ASX_API asx_status asx_semaphore_release(asx_semaphore_permit permit);
 
 /* -------------------------------------------------------------------
