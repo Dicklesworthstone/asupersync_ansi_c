@@ -276,7 +276,7 @@ asx_exit_code asx_app_run_server_with_cx(asx_app *app, const asx_cx *app_cx,
     asx_status st;
     asx_signal_subscription subscription;
     int have_subscription = 0;
-    asx_process_handle process;
+    asx_process_handle process = {0u, 0u}; /* read only when have_process */
     int have_process = 0;
     int32_t process_exit_code = 0;
     uint32_t signal_count = 0;

@@ -174,7 +174,8 @@ asx_status asx_trace_config_init(asx_trace_config *cfg, asx_resource_class cls) 
  * ------------------------------------------------------------------- */
 
 asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls) {
-    asx_resource_limits lim;
+    /* An out-of-range class gets all-zero limits. */
+    asx_resource_limits lim = {0u, 0u, 0u, 0u, 0u, 0u};
     /* The class table in asx_config.h, which a classed build's arenas
      * (ASX_RESOURCE_CLASS) read too. */
     switch (cls) {

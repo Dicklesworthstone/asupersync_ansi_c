@@ -520,6 +520,16 @@ TEST(resource_limits_for_class_match_static_arena_contract) {
     ASSERT_EQ(r3.max_trace_events, 1024u);
 }
 
+TEST(resource_limits_for_out_of_range_class_are_zero) {
+    asx_resource_limits bad = asx_resource_limits_for_class((asx_resource_class)99);
+    ASSERT_EQ(bad.max_regions, 0u);
+    ASSERT_EQ(bad.max_tasks, 0u);
+    ASSERT_EQ(bad.max_timers, 0u);
+    ASSERT_EQ(bad.max_obligations, 0u);
+    ASSERT_EQ(bad.max_channels, 0u);
+    ASSERT_EQ(bad.max_trace_events, 0u);
+}
+
 #ifdef ASX_RESOURCE_CLASS
 /* A classed build (ASX_RESOURCE_CLASS, make RESOURCE_CLASS=) sizes every
  * arena from its class, so the compiled capacities are the class's limits
@@ -710,6 +720,7 @@ int main(void) {
     RUN_TEST(resource_class_name_r3);
     RUN_TEST(resource_class_name_out_of_range);
     RUN_TEST(resource_limits_for_class_match_static_arena_contract);
+    RUN_TEST(resource_limits_for_out_of_range_class_are_zero);
 #ifdef ASX_RESOURCE_CLASS
     RUN_TEST(classed_build_arenas_are_the_class_limits);
 #endif
