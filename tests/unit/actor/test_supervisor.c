@@ -1,12 +1,17 @@
 /*
- * test_supervisor.c — unit tests for supervision trees
+ * test_supervisor.c — unit tests for the managed supervisor
+ *
+ * An owner task spawns a supervisor in its region and joins it; the
+ * children are generations of test bodies whose behaviour is set per
+ * child: fail, succeed, yield a while, wait until cancelled, panic, or a
+ * start function that fails.
  *
  * SPDX-License-Identifier: MIT
  */
 
-#include <asx/actor/actor.h>
 #include <asx/actor/supervisor.h>
 #include <asx/core/budget.h>
+#include <asx/core/cancel.h>
 #include <asx/runtime/runtime.h>
 #include <stdio.h>
 #include <string.h>
@@ -34,952 +39,723 @@ static asx_status st_sink_;
 
 #define RUN(fn)                                                                                    \
     do {                                                                                           \
+        int before_ = g_fail;                                                                      \
         printf("  " #fn "...\n");                                                                  \
         fn();                                                                                      \
-        g_pass++;                                                                                  \
+        if (g_fail == before_) g_pass++;                                                           \
     } while (0)
 
 /* ------------------------------------------------------------------ */
-/* Helpers                                                             */
+/* Children                                                            */
 /* ------------------------------------------------------------------ */
 
-static asx_region_id make_region(void) {
-    asx_region_id r;
-    MUST_OK(asx_region_open(&r));
-    return r;
-}
-
-static void pump(asx_region_id region, uint32_t polls) {
-    asx_budget budget = asx_budget_infinite();
-    budget.poll_quota = polls;
-    st_sink_ = asx_scheduler_run(region, &budget);
-    (void)st_sink_;
-}
-
-static void pump_budget(asx_region_id region, uint32_t polls) {
-    asx_budget budget = asx_budget_infinite();
-    budget.poll_quota = polls;
-    st_sink_ = asx_scheduler_run(region, &budget);
-    (void)st_sink_;
-}
-
-/* ------------------------------------------------------------------ */
-/* Test actors                                                         */
-/* ------------------------------------------------------------------ */
-
-/* Simple stable actor: never dies unless stopped */
-static asx_status stable_cast(void *state, uint64_t msg, asx_actor_handle self) {
-    (void)state;
-    (void)msg;
-    (void)self;
-    return ASX_OK;
-}
-
-static asx_actor_behavior stable_behavior(void) {
-    asx_actor_behavior b;
-    b.init = NULL;
-    b.handle_cast = stable_cast;
-    b.handle_call = NULL;
-    b.terminate = NULL;
-    return b;
-}
-
-static asx_status stable_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
-    asx_actor_behavior b = stable_behavior();
-    return asx_actor_spawn(out, region, &b, user_data, 4u);
-}
-
-/* Fragile actor: dies on first cast message */
-static asx_status fragile_cast(void *state, uint64_t msg, asx_actor_handle self) {
-    (void)state;
-    (void)msg;
-    (void)self;
-    return ASX_E_INVALID_STATE; /* always fails */
-}
-
-static asx_actor_behavior fragile_behavior(void) {
-    asx_actor_behavior b;
-    b.init = NULL;
-    b.handle_cast = fragile_cast;
-    b.handle_call = NULL;
-    b.terminate = NULL;
-    return b;
-}
-
-/* Counting actor: tracks how many times it was started */
-static uint32_t g_start_count;
-
-static asx_status counting_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
-    asx_actor_behavior b = fragile_behavior();
-    (void)user_data;
-    g_start_count++;
-    return asx_actor_spawn(out, region, &b, NULL, 4u);
-}
-
-/* Failing start function */
-static asx_status fail_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
-    (void)user_data;
-    (void)region;
-    (void)out;
-    return ASX_E_INVALID_STATE;
-}
-
-/* Start tracking actor: records order of starts */
-static uint32_t g_start_order[16];
-static uint32_t g_start_order_count;
+/* What every generation of a child does. */
+typedef struct {
+    uint32_t yields;        /* polls that yield before the end */
+    asx_status result;      /* the body's end status (ASX_OK: ok) */
+    uint64_t fail_below;    /* generations numbered below this end with result */
+    asx_status later;       /* ...and later ones with this one */
+    int block;              /* wait until cancelled, then end ASX_E_CANCELLED */
+    int blind;              /* wait until woken, then end with result, never checking */
+    int panic;              /* panic instead of ending */
+    int fail_start;         /* the start function fails */
+    uint64_t sleep_ns;      /* virtual time each generation waits before its end */
+    asx_task_id task;       /* the latest generation's task */
+    uint32_t started;       /* start function calls */
+    uint64_t last_number;   /* the latest generation's number */
+    uint32_t order;         /* g_order when it last started */
+    asx_time started_at[8]; /* when each of the first eight started */
+} behaviour;
 
 typedef struct {
-    uint32_t id;
-} tagged_data;
+    behaviour *b;
+    uint64_t number;
+    uint32_t polls;
+    asx_time wake_at; /* the end of its sleep, 0 before its first poll */
+} body;
 
-static tagged_data g_tags[8];
+static body g_bodies[128];
+static uint32_t g_n_bodies;
+static uint32_t g_order;
 
-static asx_status ordered_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
-    tagged_data *tag = (tagged_data *)user_data;
-    asx_actor_behavior b = fragile_behavior();
-    if (g_start_order_count < 16) { g_start_order[g_start_order_count++] = tag->id; }
-    return asx_actor_spawn(out, region, &b, user_data, 4u);
+static asx_time now_ns(void) {
+    asx_time t = 0;
+    if (asx_runtime_now_ns(&t) != ASX_OK) t = asx_runtime_virtual_now();
+    return t;
 }
 
-/* ------------------------------------------------------------------ */
-/* Tests: Basic lifecycle                                              */
-/* ------------------------------------------------------------------ */
-
-static void test_start_basic(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec specs[2];
-    asx_region_id r;
-    asx_status st;
-
-    asx_runtime_reset();
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 3;
-
-    specs[0].start_fn = stable_start;
-    specs[0].user_data = NULL;
-    specs[0].restart = ASX_CHILD_PERMANENT;
-
-    specs[1].start_fn = stable_start;
-    specs[1].user_data = NULL;
-    specs[1].restart = ASX_CHILD_PERMANENT;
-
-    st = asx_supervisor_start(&sup, r, &cfg, specs, 2);
-    ASSERT(st == ASX_OK, "supervisor start should succeed");
-    ASSERT(asx_supervisor_is_alive(sup), "supervisor should be alive");
-    ASSERT(asx_supervisor_child_count(sup) == 2, "should have 2 children");
-
-    /* Run init phase */
-    pump(r, 100);
-
-    ASSERT(asx_supervisor_child_alive(sup, 0), "child 0 should be alive");
-    ASSERT(asx_supervisor_child_alive(sup, 1), "child 1 should be alive");
-}
-
-static void test_start_null_args(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
-    asx_region_id r;
-    asx_status st;
-
-    asx_runtime_reset();
-    r = make_region();
-    memset(&cfg, 0, sizeof(cfg));
-    memset(&spec, 0, sizeof(spec));
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 3;
-
-    st = asx_supervisor_start(NULL, r, &cfg, &spec, 1);
-    ASSERT(st == ASX_E_INVALID_ARGUMENT, "null out should fail");
-
-    st = asx_supervisor_start(&sup, r, NULL, &spec, 1);
-    ASSERT(st == ASX_E_INVALID_ARGUMENT, "null config should fail");
-
-    spec.start_fn = NULL;
-    spec.user_data = NULL;
-    spec.restart = ASX_CHILD_PERMANENT;
-    st = asx_supervisor_start(&sup, r, &cfg, &spec, 1);
-    ASSERT(st == ASX_E_INVALID_ARGUMENT, "null start_fn should fail");
-}
-
-static void test_start_zero_children(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_region_id r;
-    asx_status st;
-
-    asx_runtime_reset();
-    r = make_region();
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 3;
-
-    st = asx_supervisor_start(&sup, r, &cfg, NULL, 0);
-    ASSERT(st == ASX_OK, "zero children should be allowed");
-    ASSERT(asx_supervisor_child_count(sup) == 0, "should have 0 children");
-}
-
-static void test_start_child_failure(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec specs[2];
-    asx_region_id r;
-
-    asx_runtime_reset();
-    r = make_region();
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 3;
-
-    specs[0].start_fn = stable_start;
-    specs[0].user_data = NULL;
-    specs[0].restart = ASX_CHILD_PERMANENT;
-
-    specs[1].start_fn = fail_start;
-    specs[1].user_data = NULL;
-    specs[1].restart = ASX_CHILD_PERMANENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, specs, 2));
-    pump(r, 200); /* init phase: child 1 fails, shutdown */
-
-    ASSERT(!asx_supervisor_is_alive(sup), "supervisor should die when child start fails");
-}
-
-/* ------------------------------------------------------------------ */
-/* Tests: Graceful stop                                                */
-/* ------------------------------------------------------------------ */
-
-static void test_stop_basic(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
-    asx_region_id r;
-
-    asx_runtime_reset();
-    r = make_region();
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 3;
-
-    spec.start_fn = stable_start;
-    spec.user_data = NULL;
-    spec.restart = ASX_CHILD_PERMANENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1));
-    pump(r, 100); /* init + running */
-
-    ASSERT(asx_supervisor_is_alive(sup), "should be alive");
-
-    MUST_OK(asx_supervisor_stop(sup));
-    pump(r, 200); /* shutdown */
-
-    ASSERT(!asx_supervisor_is_alive(sup), "should be dead after stop");
-}
-
-/* ------------------------------------------------------------------ */
-/* Tests: one_for_one restart strategy                                 */
-/* ------------------------------------------------------------------ */
-
-static void test_one_for_one_restart(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec specs[2];
-    asx_region_id r;
-
-    asx_runtime_reset();
-    g_start_count = 0;
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 5;
-
-    /* Child 0: fragile (will die on cast), counted starts */
-    specs[0].start_fn = counting_start;
-    specs[0].user_data = NULL;
-    specs[0].restart = ASX_CHILD_PERMANENT;
-
-    /* Child 1: stable */
-    specs[1].start_fn = stable_start;
-    specs[1].user_data = NULL;
-    specs[1].restart = ASX_CHILD_PERMANENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, specs, 2));
-    pump(r, 100); /* init */
-
-    ASSERT(g_start_count == 1, "child 0 started once");
-
-    /* Kill child 0 by sending it a cast */
-    {
-        /* Need child 0's actor handle - pump to get it initialized */
-        ASSERT(asx_supervisor_child_alive(sup, 0), "child 0 alive");
+static asx_status body_poll(void *user_data, asx_task_id self) {
+    body *bd = (body *)user_data;
+    const behaviour *b = bd->b;
+    if (b->block) {
+        asx_checkpoint_result cr;
+        if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) return ASX_E_CANCELLED;
+        MUST_OK(asx_task_park(self));
+        return ASX_E_PENDING;
     }
-
-    /* Send a cast to kill the fragile actor */
-    /* We need to access the child's handle. Let's kill it by pumping
-     * and letting the supervisor detect its death. We need to get
-     * a cast into the fragile actor's mailbox.
-     * Since we don't have direct access to the child handle from outside,
-     * let's use a different approach: make the fragile actor die on its
-     * own (init failure). */
-
-    /* Actually, the fragile actor only dies when it receives a cast.
-     * Without access to the child handle from outside, we need to
-     * make the child die differently. Let me test with a self-dying actor. */
-
-    /* For now, test that restart count starts at 0 */
-    ASSERT(asx_supervisor_restart_count(sup) == 0, "restart count should be 0 initially");
-    ASSERT(asx_supervisor_child_alive(sup, 1), "child 1 should be alive");
+    if (b->blind && bd->polls++ == 0u) {
+        MUST_OK(asx_task_park(self));
+        return ASX_E_PENDING;
+    }
+    if (b->sleep_ns != 0u) {
+        if (bd->wake_at == 0u) bd->wake_at = now_ns() + b->sleep_ns;
+        if (asx_task_wait_until(self, bd->wake_at) == ASX_E_PENDING) return ASX_E_PENDING;
+        MUST_OK(asx_task_complete_timer(self));
+    }
+    if (bd->polls++ < b->yields) return ASX_E_PENDING;
+    if (b->panic) {
+        MUST_OK(asx_task_panic(self, "boom"));
+        return ASX_OK;
+    }
+    if (b->fail_below != 0u) return bd->number < b->fail_below ? b->result : b->later;
+    return b->result;
 }
 
-/* Self-dying actor for restart testing */
-static uint32_t g_die_on_poll;
-static uint32_t g_poll_counter;
-
-static asx_status dying_cast(void *state, uint64_t msg, asx_actor_handle self) {
-    (void)state;
-    (void)msg;
-    (void)self;
+static asx_status start_child(void *user_data, const asx_supervisor_generation *gen,
+                              asx_task_poll_fn *out_poll, void **out_data) {
+    behaviour *b = (behaviour *)user_data;
+    if (b->started < 8u) b->started_at[b->started] = now_ns();
+    b->started++;
+    b->last_number = gen->number;
+    b->task = gen->task;
+    b->order = ++g_order;
+    if (b->fail_start || g_n_bodies >= 128u) return ASX_E_INVALID_STATE;
+    g_bodies[g_n_bodies].b = b;
+    g_bodies[g_n_bodies].number = gen->number;
+    g_bodies[g_n_bodies].polls = 0;
+    g_bodies[g_n_bodies].wake_at = 0;
+    *out_poll = body_poll;
+    *out_data = &g_bodies[g_n_bodies++];
     return ASX_OK;
 }
 
-static asx_status dying_init(void *state, asx_actor_handle self) {
-    (void)state;
-    (void)self;
-    g_poll_counter++;
-    if (g_poll_counter <= g_die_on_poll) { return ASX_E_INVALID_STATE; /* die during init */ }
+/* ------------------------------------------------------------------ */
+/* The owner                                                           */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    asx_region_id region; /* the owner's, where the supervisor is spawned */
+    asx_supervisor_config cfg;
+    asx_child_spec specs[4];
+    uint32_t n;
+    uint32_t abort_after;  /* polls before an abort, 0 for none */
+    behaviour *victim;     /* a child whose generation it cancels directly... */
+    uint32_t cancel_after; /* ...after this many polls, 0 for none */
+    asx_status cancel_st;
+    uint32_t polls;
+    int spawned;
+    asx_status spawn_st;
+    asx_supervisor_handle h;
+    asx_status join_st;
+    int joined;
+    asx_supervisor_report report;
+} owner;
+
+static asx_status owner_poll(void *user_data, asx_task_id self) {
+    owner *o = (owner *)user_data;
+    if (!o->spawned) {
+        o->spawned = 1;
+        o->spawn_st = asx_supervisor_spawn(&o->h, o->region, &o->cfg, o->specs, o->n);
+        if (o->spawn_st != ASX_OK) return ASX_OK;
+    }
+    o->polls++;
+    if (o->cancel_after != 0u) {
+        if (o->polls < o->cancel_after) return ASX_E_PENDING; /* yield */
+        if (o->polls == o->cancel_after) {
+            o->cancel_st = asx_task_cancel(o->victim->task, ASX_CANCEL_USER);
+        }
+    }
+    if (o->abort_after != 0u) {
+        if (o->polls < o->abort_after) return ASX_E_PENDING; /* yield */
+        if (o->polls == o->abort_after) MUST_OK(asx_supervisor_abort(o->h));
+    }
+    o->join_st = asx_supervisor_join(o->h, self, &o->report);
+    if (o->join_st == ASX_E_PENDING) return ASX_E_PENDING;
+    o->joined = 1;
     return ASX_OK;
 }
 
-static asx_status dying_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
-    asx_actor_behavior b;
-    (void)user_data;
-    b.init = dying_init;
-    b.handle_cast = dying_cast;
-    b.handle_call = NULL;
-    b.terminate = NULL;
-    g_start_count++;
-    return asx_actor_spawn(out, region, &b, NULL, 4u);
-}
+static asx_region_id g_root;
+static asx_region_id g_owner_region;
 
-static void test_one_for_one_child_dies_and_restarts(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec specs[2];
-    asx_region_id r;
-
+static void setup(void) {
     asx_runtime_reset();
-    g_start_count = 0;
-    g_die_on_poll = 1; /* die on first init only, survive after */
-    g_poll_counter = 0;
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 5;
-
-    specs[0].start_fn = dying_start;
-    specs[0].user_data = NULL;
-    specs[0].restart = ASX_CHILD_PERMANENT;
-
-    specs[1].start_fn = stable_start;
-    specs[1].user_data = NULL;
-    specs[1].restart = ASX_CHILD_PERMANENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, specs, 2));
-
-    /* Init and restart cycle */
-    pump(r, 500);
-
-    /* Child 0 started initially and restarted once (total 2 starts) */
-    ASSERT(g_start_count == 2, "child 0 should have been restarted once");
-    ASSERT(asx_supervisor_restart_count(sup) == 1, "restart count should be 1");
-    ASSERT(asx_supervisor_is_alive(sup), "supervisor should still be alive");
-
-    /* Child 1 should still be alive (one_for_one doesn't touch it) */
-    ASSERT(asx_supervisor_child_alive(sup, 1), "child 1 should be alive (one_for_one)");
+    g_n_bodies = 0;
+    g_order = 0;
+    MUST_OK(asx_region_open(&g_root));
+    MUST_OK(asx_region_open_child(g_root, &g_owner_region));
 }
 
-static void test_one_for_one_max_restarts_escalation(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
-    asx_region_id r;
-
-    asx_runtime_reset();
-    g_start_count = 0;
-    g_die_on_poll = 999; /* die on every init (counter never exceeds 999) */
-    g_poll_counter = 0;
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 3;
-
-    spec.start_fn = dying_start;
-    spec.user_data = NULL;
-    spec.restart = ASX_CHILD_PERMANENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1));
-    pump(r, 1000);
-
-    ASSERT(!asx_supervisor_is_alive(sup), "supervisor should die after max restarts exceeded");
+static void owner_init(owner *o, uint32_t max_restarts) {
+    memset(o, 0, sizeof(*o));
+    asx_supervisor_config_init(&o->cfg, "sup", max_restarts, 60000000000u);
+    o->cfg.backoff.kind = ASX_RESTART_BACKOFF_NONE;
 }
 
-/* ------------------------------------------------------------------ */
-/* Tests: one_for_all restart strategy                                 */
-/* ------------------------------------------------------------------ */
-
-static void test_one_for_all_restarts_all(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec specs[3];
-    asx_region_id r;
-
-    asx_runtime_reset();
-    g_start_order_count = 0;
-    memset(g_start_order, 0, sizeof(g_start_order));
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ALL;
-    cfg.max_restarts = 5;
-
-    /* Use ordered starts with tags */
-    g_tags[0].id = 10;
-    g_tags[1].id = 20;
-    g_tags[2].id = 30;
-
-    /* Child 0: will die (fragile with ordered tracking) */
-    specs[0].start_fn = ordered_start;
-    specs[0].user_data = &g_tags[0];
-    specs[0].restart = ASX_CHILD_PERMANENT;
-
-    specs[1].start_fn = ordered_start;
-    specs[1].user_data = &g_tags[1];
-    specs[1].restart = ASX_CHILD_PERMANENT;
-
-    specs[2].start_fn = ordered_start;
-    specs[2].user_data = &g_tags[2];
-    specs[2].restart = ASX_CHILD_PERMANENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, specs, 3));
-
-    /* Init: all 3 started in order */
-    pump(r, 100);
-
-    ASSERT(g_start_order_count >= 3, "all 3 children should have started");
-    /* Verify initial order */
-    ASSERT(g_start_order[0] == 10, "child 0 first");
-    ASSERT(g_start_order[1] == 20, "child 1 second");
-    ASSERT(g_start_order[2] == 30, "child 2 third");
+static void add_child(owner *o, const char *name, asx_child_restart restart, behaviour *b) {
+    asx_child_spec_init(&o->specs[o->n++], name, restart, start_child, b);
 }
 
-/* ------------------------------------------------------------------ */
-/* Tests: Restart policies                                             */
-/* ------------------------------------------------------------------ */
-
-static void test_temporary_never_restarts(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
-    asx_region_id r;
-
-    asx_runtime_reset();
-    g_start_count = 0;
-    g_die_on_poll = 999; /* always die */
-    g_poll_counter = 0;
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 10;
-
-    spec.start_fn = dying_start;
-    spec.user_data = NULL;
-    spec.restart = ASX_CHILD_TEMPORARY;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1));
-    pump(r, 500);
-
-    /* Temporary child should have been started once but never restarted */
-    ASSERT(g_start_count == 1, "temporary child should only start once");
-    ASSERT(asx_supervisor_restart_count(sup) == 0, "no restarts for temporary child");
-    ASSERT(asx_supervisor_is_alive(sup), "supervisor should stay alive");
+/* Spawn the owner and run until nothing is runnable. */
+static void run_owner(owner *o) {
+    asx_task_id id = ASX_INVALID_ID;
+    asx_budget b = asx_budget_from_polls(5000);
+    o->region = g_owner_region;
+    MUST_OK(asx_task_spawn(g_owner_region, owner_poll, o, &id));
+    st_sink_ = asx_scheduler_run(g_root, &b);
+    (void)st_sink_;
 }
 
-static void test_transient_no_restart_on_normal_exit(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
-    asx_region_id r;
-    uint32_t start_count_saved;
-
-    asx_runtime_reset();
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 10;
-
-    /* Use stable actor that will be stopped normally */
-    spec.start_fn = stable_start;
-    spec.user_data = NULL;
-    spec.restart = ASX_CHILD_TRANSIENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1));
-    pump(r, 100); /* init + running */
-
-    ASSERT(asx_supervisor_child_alive(sup, 0), "child should be alive");
-    start_count_saved = asx_supervisor_restart_count(sup);
-
-    /* Supervisor stays alive even though child is running */
-    ASSERT(asx_supervisor_is_alive(sup), "supervisor alive");
-    ASSERT(start_count_saved == 0, "no restarts yet");
-}
-
-static void test_restart_intensity_window_contract(void) {
-    asx_restart_intensity ri;
-
-    asx_restart_intensity_init(&ri, 2u, 10u);
-
-    ASSERT(!asx_restart_intensity_record(&ri, 100u), "first restart stays under threshold");
-    ASSERT(!asx_restart_intensity_record(&ri, 105u), "second restart reaches threshold");
-    ASSERT(asx_restart_intensity_record(&ri, 109u), "third restart exceeds threshold");
-    ASSERT(asx_restart_intensity_is_storm(&ri, 109u), "intensity should report storm");
-    ASSERT(asx_restart_intensity_count(&ri, 125u) == 0u, "window should age out old restarts");
-}
-
-static void test_ext_child_names_are_queryable(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec_ext specs[2];
-    asx_region_id r;
-
-    asx_runtime_reset();
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 3u;
-    cfg.restart_window_ns = 0u;
-    cfg.shutdown_budget_polls = 0u;
-
-    asx_child_spec_ext_init(&specs[0], "alpha", stable_start, NULL);
-    asx_child_spec_ext_init(&specs[1], "beta", stable_start, NULL);
-
-    MUST_OK(asx_supervisor_start_ext(&sup, r, &cfg, specs, 2u));
-
-    ASSERT(strcmp(asx_supervisor_child_name(sup, 0u), "alpha") == 0,
-           "child 0 name should be stored");
-    ASSERT(strcmp(asx_supervisor_child_name(sup, 1u), "beta") == 0,
-           "child 1 name should be stored");
-    ASSERT(strcmp(asx_supervisor_child_name(sup, 2u), "") == 0,
-           "out-of-range child name should be empty");
-}
-
-static void test_escalation_accessors_after_death(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
-    asx_region_id r;
-
-    asx_runtime_reset();
-    g_start_count = 0u;
-    g_die_on_poll = 999u;
-    g_poll_counter = 0u;
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 2u;
-    cfg.restart_window_ns = 0u;
-    cfg.shutdown_budget_polls = 0u;
-
-    spec.start_fn = dying_start;
-    spec.user_data = NULL;
-    spec.restart = ASX_CHILD_PERMANENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1u));
-    pump(r, 1000u);
-
-    ASSERT(!asx_supervisor_is_alive(sup), "supervisor should be dead after escalation");
-    ASSERT(asx_supervisor_restart_count(sup) >= 2u,
-           "restart count should remain queryable after escalation");
-    ASSERT(asx_supervisor_intensity_exceeded(sup), "intensity should remain queryable");
-    ASSERT(asx_supervisor_exit_reason(sup) == ASX_E_RESOURCE_EXHAUSTED,
-           "exit reason should be resource exhausted");
-}
-
-static void test_stop_during_pending_restart_prevents_restart(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec specs[2];
-    asx_region_id r;
-    uint32_t starts_before_stop;
-
-    asx_runtime_reset();
-    g_start_count = 0u;
-    g_die_on_poll = 999u;
-    g_poll_counter = 0u;
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 5u;
-    cfg.restart_window_ns = 0u;
-    cfg.shutdown_budget_polls = 0u;
-
-    specs[0].start_fn = dying_start;
-    specs[0].user_data = NULL;
-    specs[0].restart = ASX_CHILD_PERMANENT;
-
-    specs[1].start_fn = stable_start;
-    specs[1].user_data = NULL;
-    specs[1].restart = ASX_CHILD_PERMANENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, specs, 2u));
-    pump_budget(r, 4u);
-
-    ASSERT(asx_supervisor_restart_count(sup) == 1u, "restart should be pending");
-    starts_before_stop = g_start_count;
-
-    MUST_OK(asx_supervisor_stop(sup));
-    pump(r, 500u);
-
-    ASSERT(!asx_supervisor_is_alive(sup), "supervisor should stop cleanly");
-    ASSERT(g_start_count == starts_before_stop, "pending restart should not start after stop");
-    ASSERT(asx_supervisor_exit_reason(sup) == ASX_OK, "stop should preserve OK exit reason");
-}
-
-/* ------------------------------------------------------------------ */
-/* Tests: Reset                                                        */
-/* ------------------------------------------------------------------ */
-
-/* ------------------------------------------------------------------ */
-/* Wake-driven supervision                                             */
-/* ------------------------------------------------------------------ */
-
-static asx_actor_handle g_captured;
-
-/* Fragile child whose handle the test can reach. */
-static asx_status capture_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
-    asx_status st = counting_start(user_data, region, out);
-    if (st == ASX_OK) g_captured = *out;
-    return st;
-}
-
-static uint32_t run_counting(asx_region_id region, asx_status *out_st) {
-    asx_budget b = asx_budget_from_polls(1000);
-    *out_st = asx_scheduler_run(region, &b);
-    return 1000u - b.poll_quota;
-}
-
-static void test_supervisor_parks_and_wakes_on_child_death(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec specs[2];
-    asx_region_id r;
-    asx_status st;
-    uint32_t used;
-
-    asx_runtime_reset();
-    g_start_count = 0;
-    r = make_region();
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 5;
-    specs[0].start_fn = capture_start;
-    specs[0].user_data = NULL;
-    specs[0].restart = ASX_CHILD_PERMANENT;
-    specs[1].start_fn = stable_start;
-    specs[1].user_data = NULL;
-    specs[1].restart = ASX_CHILD_PERMANENT;
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, specs, 2));
-
-    /* Everything parks: supervisor watching, children on empty mailboxes. */
-    used = run_counting(r, &st);
-    ASSERT(st == ASX_E_WOULD_BLOCK, "quiet supervision tree parks");
-    ASSERT(used < 10u, "no busy polling");
-    ASSERT(g_start_count == 1u, "child started once");
-
-    /* Kill the fragile child: its completion wakes the supervisor, which
-     * restarts it, and the tree parks again. */
-    MUST_OK(asx_actor_try_cast(g_captured, 1u));
-    used = run_counting(r, &st);
-    ASSERT(st == ASX_E_WOULD_BLOCK, "parks again after restart");
-    ASSERT(used < 10u, "restart is event-driven");
-    ASSERT(g_start_count == 2u, "child restarted");
-    ASSERT(asx_supervisor_restart_count(sup) == 1u, "one restart");
-    ASSERT(asx_supervisor_child_alive(sup, 0), "child 0 back");
-
-    /* Graceful stop wakes the parked supervisor and drains the tree. */
-    MUST_OK(asx_supervisor_stop(sup));
-    used = run_counting(r, &st);
-    ASSERT(st == ASX_OK, "tree finishes");
-    ASSERT(!asx_supervisor_is_alive(sup), "supervisor done");
-}
-
-/* TRANSIENT follows Rust's ManagedRestartMode::Transient: an application
- * error restarts the child; a cancellation, like success, does not. */
-static void test_transient_restarts_on_error_not_on_cancel(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
-    asx_region_id r;
-    asx_status st;
-    asx_task_id tid;
-
-    asx_runtime_reset();
-    g_start_count = 0;
-    r = make_region();
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 5;
-    spec.start_fn = capture_start;
-    spec.user_data = NULL;
-    spec.restart = ASX_CHILD_TRANSIENT;
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1));
-    (void)run_counting(r, &st);
-    ASSERT(g_start_count == 1u, "child started once");
-
-    /* An error exit restarts it. */
-    MUST_OK(asx_actor_try_cast(g_captured, 1u));
-    (void)run_counting(r, &st);
-    ASSERT(g_start_count == 2u, "an error exit restarts a transient child");
-
-    /* A cancelled one stays stopped. */
-    MUST_OK(asx_actor_task_id(g_captured, &tid));
-    MUST_OK(asx_task_cancel(tid, ASX_CANCEL_USER));
-    (void)run_counting(r, &st);
-    ASSERT(g_start_count == 2u, "a cancellation does not restart a transient child");
-    ASSERT(!asx_supervisor_child_alive(sup, 0), "the cancelled child stays stopped");
-    ASSERT(asx_supervisor_restart_count(sup) == 1u, "only the error restarted");
-}
-
-static void test_draining_region_cancels_supervision_tree(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec specs[2];
-    asx_region_id r;
-    asx_status st;
-    asx_budget budget;
-
-    asx_runtime_reset();
-    g_start_count = 0;
-    r = make_region();
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ALL;
-    cfg.max_restarts = 5;
-    specs[0].start_fn = capture_start;
-    specs[0].user_data = NULL;
-    specs[0].restart = ASX_CHILD_PERMANENT;
-    specs[1].start_fn = stable_start;
-    specs[1].user_data = NULL;
-    specs[1].restart = ASX_CHILD_PERMANENT;
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, specs, 2));
-    (void)run_counting(r, &st);
-    ASSERT(st == ASX_E_WOULD_BLOCK, "tree parked");
-
-    /* Cancellation is not a crash: no restarts, everything exits. */
-    budget = asx_budget_from_polls(200);
-    ASSERT(asx_region_drain(r, &budget) == ASX_OK, "region drains");
-    ASSERT(g_start_count == 1u, "no restart during shutdown");
-    ASSERT(!asx_supervisor_is_alive(sup), "supervisor gone");
-    ASSERT(asx_actor_exit_reason(g_captured) == ASX_E_CANCELLED, "child cancelled");
-}
-
-static void test_reset(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
-    asx_region_id r;
-
-    asx_runtime_reset();
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 3;
-    spec.start_fn = stable_start;
-    spec.user_data = NULL;
-    spec.restart = ASX_CHILD_PERMANENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1));
-    ASSERT(asx_supervisor_is_alive(sup), "alive before reset");
-
-    asx_supervisor_reset();
-    ASSERT(!asx_supervisor_is_alive(sup), "dead after reset");
-}
-
-/* ------------------------------------------------------------------ */
-/* Tests: Arena exhaustion                                             */
-/* ------------------------------------------------------------------ */
-
-static void test_arena_exhaustion(void) {
-    asx_supervisor_handle handles[ASX_MAX_SUPERVISORS + 1];
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
-    asx_region_id r;
+static const asx_supervisor_completion *completion_of(const owner *o, uint32_t child) {
     uint32_t i;
-    asx_status st;
-
-    asx_runtime_reset();
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 3;
-    spec.start_fn = stable_start;
-    spec.user_data = NULL;
-    spec.restart = ASX_CHILD_PERMANENT;
-
-    for (i = 0; i < ASX_MAX_SUPERVISORS; i++) {
-        st = asx_supervisor_start(&handles[i], r, &cfg, &spec, 1);
-        ASSERT(st == ASX_OK, "start within limit should succeed");
+    for (i = 0; i < o->report.completion_count; i++) {
+        if (o->report.completions[i].child == child) return &o->report.completions[i];
     }
-
-    st = asx_supervisor_start(&handles[ASX_MAX_SUPERVISORS], r, &cfg, &spec, 1);
-    ASSERT(st == ASX_E_RESOURCE_EXHAUSTED, "start beyond limit should fail");
+    return NULL;
 }
 
 /* ------------------------------------------------------------------ */
-/* Tests: Law/invariant tests                                          */
+/* Configuration and compilation                                       */
 /* ------------------------------------------------------------------ */
 
-/* Law: children start in spec order */
-static void test_law_start_order(void) {
-    asx_supervisor_handle sup;
+static void test_config_defaults(void) {
+    asx_supervisor_config cfg;
+    asx_child_spec spec;
+    asx_supervisor_config_init(&cfg, "s", 3, 1000u);
+    ASSERT(cfg.strategy == ASX_SUPERVISOR_ONE_FOR_ONE, "one_for_one by default");
+    ASSERT(cfg.escalation == ASX_ESCALATION_STOP, "stop by default");
+    ASSERT(cfg.backoff.kind == ASX_RESTART_BACKOFF_EXPONENTIAL, "exponential backoff");
+    ASSERT(cfg.backoff.initial_ns == 100000000u && cfg.backoff.max_ns == 10000000000u &&
+               cfg.backoff.multiplier == 2u,
+           "Rust's default backoff: 100 ms doubling up to 10 s");
+    ASSERT(cfg.budget == NULL && cfg.max_restarts == 3u && cfg.window_ns == 1000u, "limits");
+    asx_child_spec_init(&spec, "c", ASX_CHILD_TRANSIENT, start_child, NULL);
+    ASSERT(spec.required == 1u && spec.start_immediately == 1u && spec.dep_count == 0u,
+           "ChildSpec::new's defaults");
+    ASSERT(asx_child_spec_depends_on(&spec, 1) == ASX_OK, "a dependency");
+    ASSERT(asx_child_spec_depends_on(&spec, 2) == ASX_OK, "a second dependency");
+    ASSERT(asx_child_spec_depends_on(&spec, 3) == ASX_OK, "a third dependency");
+    ASSERT(asx_child_spec_depends_on(&spec, 4) == ASX_OK, "a fourth dependency");
+    ASSERT(asx_child_spec_depends_on(&spec, 5) == ASX_E_RESOURCE_EXHAUSTED, "too many");
+}
+
+static void test_spawn_rejects_bad_arguments(void) {
+    asx_supervisor_config cfg;
+    asx_child_spec specs[ASX_SUPERVISOR_MAX_CHILDREN + 1u];
+    asx_supervisor_handle h;
+    behaviour b;
+    uint32_t i;
+    setup();
+    memset(&b, 0, sizeof(b));
+    asx_supervisor_config_init(&cfg, "s", 1, 1000u);
+    for (i = 0; i < ASX_SUPERVISOR_MAX_CHILDREN + 1u; i++) {
+        asx_child_spec_init(&specs[i], "c", ASX_CHILD_PERMANENT, start_child, &b);
+    }
+    ASSERT(asx_supervisor_spawn(NULL, g_root, &cfg, specs, 1) == ASX_E_INVALID_ARGUMENT, "out");
+    ASSERT(asx_supervisor_spawn(&h, g_root, NULL, specs, 1) == ASX_E_INVALID_ARGUMENT, "config");
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, NULL, 1) == ASX_E_INVALID_ARGUMENT, "children");
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, specs, 0) == ASX_E_INVALID_ARGUMENT, "none");
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, specs, ASX_SUPERVISOR_MAX_CHILDREN + 1u) ==
+               ASX_E_INVALID_ARGUMENT,
+           "too many children");
+    cfg.max_restarts = ASX_SUPERVISOR_MAX_RESTARTS + 1u;
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, specs, 1) == ASX_E_INVALID_ARGUMENT,
+           "max_restarts above the history bound");
+    cfg.max_restarts = 1;
+    specs[0].start = NULL;
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, specs, 1) == ASX_E_INVALID_ARGUMENT,
+           "no start function");
+    specs[0].start = start_child;
+    specs[0].name = "a-name-that-is-far-too-long-for-a-child";
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, specs, 1) == ASX_E_INVALID_ARGUMENT,
+           "name too long");
+}
+
+static void test_spawn_compiles_the_topology(void) {
     asx_supervisor_config cfg;
     asx_child_spec specs[3];
-    asx_region_id r;
-
-    asx_runtime_reset();
-    g_start_order_count = 0;
-    memset(g_start_order, 0, sizeof(g_start_order));
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 3;
-
-    g_tags[0].id = 1;
-    g_tags[1].id = 2;
-    g_tags[2].id = 3;
-
-    specs[0].start_fn = ordered_start;
-    specs[0].user_data = &g_tags[0];
-    specs[0].restart = ASX_CHILD_PERMANENT;
-
-    specs[1].start_fn = ordered_start;
-    specs[1].user_data = &g_tags[1];
-    specs[1].restart = ASX_CHILD_PERMANENT;
-
-    specs[2].start_fn = ordered_start;
-    specs[2].user_data = &g_tags[2];
-    specs[2].restart = ASX_CHILD_PERMANENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, specs, 3));
-    pump(r, 100);
-
-    ASSERT(g_start_order_count >= 3, "all 3 should have started");
-    ASSERT(g_start_order[0] == 1, "first child started first");
-    ASSERT(g_start_order[1] == 2, "second child started second");
-    ASSERT(g_start_order[2] == 3, "third child started third");
+    asx_supervisor_handle h;
+    behaviour b;
+    setup();
+    memset(&b, 0, sizeof(b));
+    asx_supervisor_config_init(&cfg, "s", 1, 1000u);
+    asx_child_spec_init(&specs[0], "a", ASX_CHILD_PERMANENT, start_child, &b);
+    asx_child_spec_init(&specs[1], "a", ASX_CHILD_PERMANENT, start_child, &b);
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, specs, 2) == ASX_E_NAME_CONFLICT,
+           "duplicate names");
+    specs[1].name = "b";
+    MUST_OK(asx_child_spec_depends_on(&specs[1], 1));
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, specs, 2) == ASX_E_INVALID_ARGUMENT,
+           "a child depending on itself");
+    specs[1].dep_count = 0;
+    MUST_OK(asx_child_spec_depends_on(&specs[1], 7));
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, specs, 2) == ASX_E_INVALID_ARGUMENT,
+           "an unknown dependency");
+    specs[1].dep_count = 0;
+    MUST_OK(asx_child_spec_depends_on(&specs[0], 1));
+    MUST_OK(asx_child_spec_depends_on(&specs[1], 0));
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, specs, 2) == ASX_E_INVALID_ARGUMENT, "a cycle");
+    specs[0].dep_count = 0;
+    specs[0].start_immediately = 0;
+    ASSERT(asx_supervisor_spawn(&h, g_root, &cfg, specs, 2) == ASX_E_INVALID_ARGUMENT,
+           "a child started at boot depending on a deferred one");
 }
 
-/* Law: escalation on max restarts */
-static void test_law_escalation(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
-    asx_region_id r;
-
-    asx_runtime_reset();
-    g_start_count = 0;
-    g_die_on_poll = 999; /* always die */
-    g_poll_counter = 0;
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 2;
-
-    spec.start_fn = dying_start;
-    spec.user_data = NULL;
-    spec.restart = ASX_CHILD_PERMANENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1));
-    pump(r, 1000);
-
-    /* Supervisor should have died due to restart limit */
-    ASSERT(!asx_supervisor_is_alive(sup), "supervisor should escalate after max restarts");
-    /* Child was started: initial + up to max_restarts */
-    ASSERT(g_start_count >= 2, "child should have been started multiple times");
-}
-
-/* Law: stale supervisor handle */
-static void test_law_stale_handle(void) {
-    asx_supervisor_handle sup;
-    asx_supervisor_handle stale;
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
-    asx_region_id r;
-
-    asx_runtime_reset();
-    r = make_region();
-
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 3;
-    spec.start_fn = stable_start;
-    spec.user_data = NULL;
-    spec.restart = ASX_CHILD_PERMANENT;
-
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1));
-    stale = sup;
-    pump(r, 100);
-
-    /* Stop supervisor */
-    MUST_OK(asx_supervisor_stop(sup));
-    pump(r, 200);
-
-    /* Spawn new supervisor in same slot */
-    MUST_OK(asx_supervisor_start(&sup, r, &cfg, &spec, 1));
-    ASSERT(sup.slot == stale.slot, "should reuse same slot");
-    ASSERT(sup.generation != stale.generation, "generation should differ");
-    ASSERT(!asx_supervisor_is_alive(stale), "stale handle should not find new supervisor");
+static void test_dependencies_order_the_start(void) {
+    owner o;
+    behaviour first;
+    behaviour second;
+    behaviour third;
+    setup();
+    memset(&first, 0, sizeof(first));
+    memset(&second, 0, sizeof(second));
+    memset(&third, 0, sizeof(third));
+    owner_init(&o, 0);
+    /* "second" depends on "first" though listed before it. */
+    add_child(&o, "second", ASX_CHILD_TEMPORARY, &second);
+    add_child(&o, "first", ASX_CHILD_TEMPORARY, &first);
+    add_child(&o, "third", ASX_CHILD_TEMPORARY, &third);
+    MUST_OK(asx_child_spec_depends_on(&o.specs[0], 1));
+    run_owner(&o);
+    ASSERT(o.joined && o.join_st == ASX_OK, "joined");
+    ASSERT(first.order < second.order, "a dependency starts first");
+    ASSERT(third.order == 3u, "the others keep spec order");
+    ASSERT(o.report.completion_count == 3u && o.report.completions[0].child == 1u &&
+               o.report.completions[1].child == 0u,
+           "completions in compiled order, with spec indices");
 }
 
 /* ------------------------------------------------------------------ */
-/* Main                                                                */
+/* Restart modes and intensity                                         */
 /* ------------------------------------------------------------------ */
+
+static void test_transient_child_restarts_until_the_limit(void) {
+    owner o;
+    behaviour b;
+    const asx_supervisor_completion *c;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_E_INVALID_STATE;
+    owner_init(&o, 2);
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.spawn_st == ASX_OK && o.joined && o.join_st == ASX_OK, "spawned and joined");
+    ASSERT(b.started == 3u, "the first generation and two restarts");
+    ASSERT(o.report.outcome == ASX_OUTCOME_OK, "a refused restart under STOP is not an error");
+    ASSERT(o.report.restart_batches == 2u && o.report.started == 3u && o.report.joined == 3u,
+           "counters");
+    c = completion_of(&o, 0);
+    ASSERT(c != NULL && c->generation.number == 3u, "the latest generation is kept");
+    ASSERT(c->outcome == ASX_OUTCOME_ERR && c->status == ASX_E_INVALID_STATE, "its error");
+    ASSERT(c->task_outcome == ASX_OUTCOME_OK, "its task itself completed ok");
+    ASSERT(!asx_supervisor_is_alive(o.h) && asx_supervisor_finished(o.h), "finished");
+}
+
+static void test_transient_child_that_succeeds_stays_stopped(void) {
+    owner o;
+    behaviour b;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_OK;
+    owner_init(&o, 3);
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && b.started == 1u && o.report.restart_batches == 0u, "not restarted");
+    ASSERT(completion_of(&o, 0)->outcome == ASX_OUTCOME_OK, "ok");
+}
+
+static void test_permanent_child_restarts_after_success(void) {
+    owner o;
+    behaviour b;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_OK;
+    owner_init(&o, 1);
+    add_child(&o, "worker", ASX_CHILD_PERMANENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && b.started == 2u && o.report.restart_batches == 1u,
+           "restarted once, then refused");
+}
+
+static void test_temporary_child_never_restarts(void) {
+    owner o;
+    behaviour b;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_E_INVALID_STATE;
+    owner_init(&o, 5);
+    add_child(&o, "worker", ASX_CHILD_TEMPORARY, &b);
+    run_owner(&o);
+    ASSERT(o.joined && b.started == 1u && o.report.restart_batches == 0u, "never restarted");
+}
+
+static void test_max_restarts_zero_refuses_at_once(void) {
+    owner o;
+    behaviour b;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_E_INVALID_STATE;
+    owner_init(&o, 0);
+    add_child(&o, "worker", ASX_CHILD_PERMANENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && b.started == 1u && o.report.outcome == ASX_OUTCOME_OK, "stopped");
+}
+
+static void test_reset_counter_keeps_restarting(void) {
+    owner o;
+    behaviour b;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_E_INVALID_STATE;
+    b.fail_below = 5;
+    b.later = ASX_OK;
+    owner_init(&o, 1);
+    o.cfg.escalation = ASX_ESCALATION_RESET_COUNTER;
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && b.started == 5u, "restarted past the limit until it succeeded");
+    ASSERT(o.report.restart_batches == 4u, "four batches");
+}
+
+/* Each generation lives 2 us, then fails; the fourth succeeds. One restart
+ * a minute stops the child after its first replacement, one restart per
+ * microsecond lets every restart through: the earlier one has aged out of
+ * the window by the next failure (RestartTracker's sliding window). */
+static void test_restarts_age_out_of_the_window(void) {
+    owner o;
+    behaviour b;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.sleep_ns = 2000u;
+    b.result = ASX_E_INVALID_STATE;
+    b.fail_below = 4;
+    b.later = ASX_OK;
+    owner_init(&o, 1);
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && b.started == 2u && o.report.restart_batches == 1u,
+           "a 60 s window refuses the second restart");
+
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.sleep_ns = 2000u;
+    b.result = ASX_E_INVALID_STATE;
+    b.fail_below = 4;
+    b.later = ASX_OK;
+    owner_init(&o, 1);
+    o.cfg.window_ns = 1000u;
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && b.started == 4u && o.report.restart_batches == 3u,
+           "a 1 us window lets each restart through");
+    ASSERT(b.started_at[3] - b.started_at[0] == 6000u, "three generations of 2 us each before");
+    ASSERT(completion_of(&o, 0)->outcome == ASX_OUTCOME_OK, "the fourth ended ok");
+}
+
+/* A transient generation whose task ends cancelled stopped normally for
+ * Rust (ManagedRestartMode::eligible): the task's join is Cancelled when
+ * the cancel dominates a return the body never acknowledged, and such a
+ * child is not replaced, even when that return was an error. A body that
+ * observed the cancel and returned
+ * ASX_E_CANCELLED returned an error, which its acknowledged cancel does not
+ * dominate (Rust's join gives the user's return), so it is replaced; and a
+ * permanent child is replaced either way. */
+static void test_cancelled_transient_child_is_not_restarted(void) {
+    owner o;
+    behaviour b;
+    const asx_supervisor_completion *c;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.blind = 1;
+    b.result = ASX_E_INVALID_STATE;
+    owner_init(&o, 3);
+    o.victim = &b;
+    o.cancel_after = 6;
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.cancel_st == ASX_OK, "the generation's task was cancelled");
+    ASSERT(o.joined && b.started == 1u && o.report.restart_batches == 0u, "not replaced");
+    c = completion_of(&o, 0);
+    ASSERT(c != NULL && c->task_outcome == ASX_OUTCOME_CANCELLED && c->outcome == ASX_OUTCOME_ERR &&
+               !c->shutdown_requested_before_completion,
+           "its task ended cancelled over its body's error, not stopped by the supervisor");
+    ASSERT(o.report.outcome == ASX_OUTCOME_OK, "the supervisor stopped normally");
+
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.block = 1;
+    owner_init(&o, 1);
+    o.victim = &b;
+    o.cancel_after = 6;
+    o.abort_after = 12;
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.cancel_st == ASX_OK && o.joined, "cancelled, then the supervisor aborted");
+    ASSERT(b.started == 2u && o.report.restart_batches == 1u,
+           "an acknowledged cancel's ASX_E_CANCELLED is an error: replaced");
+
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.blind = 1;
+    b.result = ASX_OK;
+    owner_init(&o, 1);
+    o.victim = &b;
+    o.cancel_after = 6;
+    o.abort_after = 12;
+    add_child(&o, "worker", ASX_CHILD_PERMANENT, &b);
+    run_owner(&o);
+    ASSERT(o.cancel_st == ASX_OK && o.joined, "cancelled, then the supervisor aborted");
+    ASSERT(b.started == 2u && o.report.restart_batches == 1u, "a permanent one is replaced");
+}
+
+static void test_escalate_cancels_the_owner_region(void) {
+    owner o;
+    behaviour b;
+    asx_cancel_reason r;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_E_INVALID_STATE;
+    owner_init(&o, 0);
+    o.cfg.escalation = ASX_ESCALATION_ESCALATE;
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && o.join_st == ASX_OK, "the join is not interrupted");
+    ASSERT(o.report.outcome == ASX_OUTCOME_ERR &&
+               o.report.error == ASX_SUPERVISOR_ERR_RESTART_LIMIT && o.report.error_child == 0u,
+           "RestartLimit for the child");
+    ASSERT(o.report.escalations == 1u, "one escalation");
+    ASSERT(asx_region_get_cancel_reason(g_owner_region, &r) == ASX_OK &&
+               r.kind == ASX_CANCEL_FAIL_FAST,
+           "the owner's region was cancelled FailFast");
+    ASSERT(r.message != NULL &&
+               strcmp(r.message, "managed supervisor restart intensity exhausted") == 0,
+           "with Rust's message");
+}
+
+/* ------------------------------------------------------------------ */
+/* Strategies                                                          */
+/* ------------------------------------------------------------------ */
+
+static void test_one_for_all_restarts_the_siblings(void) {
+    owner o;
+    behaviour failing;
+    behaviour sibling;
+    const asx_supervisor_completion *c;
+    setup();
+    memset(&failing, 0, sizeof(failing));
+    memset(&sibling, 0, sizeof(sibling));
+    failing.result = ASX_E_INVALID_STATE;
+    sibling.yields = 3;
+    sibling.result = ASX_OK;
+    owner_init(&o, 1);
+    o.cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ALL;
+    add_child(&o, "failing", ASX_CHILD_TRANSIENT, &failing);
+    add_child(&o, "sibling", ASX_CHILD_TRANSIENT, &sibling);
+    run_owner(&o);
+    ASSERT(o.joined && o.report.restart_batches == 1u, "one batch");
+    ASSERT(failing.started == 2u && sibling.started == 2u, "both restarted");
+    c = completion_of(&o, 1);
+    ASSERT(c != NULL && c->generation.number == 2u && c->outcome == ASX_OUTCOME_OK,
+           "the sibling's second generation ended ok");
+}
+
+static void test_rest_for_one_restarts_the_later_ones(void) {
+    owner o;
+    behaviour earlier;
+    behaviour failing;
+    behaviour later;
+    setup();
+    memset(&earlier, 0, sizeof(earlier));
+    memset(&failing, 0, sizeof(failing));
+    memset(&later, 0, sizeof(later));
+    earlier.yields = 6;
+    later.yields = 6;
+    failing.result = ASX_E_INVALID_STATE;
+    failing.fail_below = 2;
+    failing.later = ASX_OK;
+    owner_init(&o, 2);
+    o.cfg.strategy = ASX_SUPERVISOR_REST_FOR_ONE;
+    add_child(&o, "earlier", ASX_CHILD_TRANSIENT, &earlier);
+    add_child(&o, "failing", ASX_CHILD_TRANSIENT, &failing);
+    add_child(&o, "later", ASX_CHILD_TRANSIENT, &later);
+    run_owner(&o);
+    ASSERT(o.joined && o.report.restart_batches == 1u, "one batch");
+    ASSERT(earlier.started == 1u, "an earlier child is left running");
+    ASSERT(failing.started == 2u && later.started == 2u, "the failed and later ones restart");
+}
+
+static void test_one_for_one_leaves_siblings_alone(void) {
+    owner o;
+    behaviour failing;
+    behaviour sibling;
+    setup();
+    memset(&failing, 0, sizeof(failing));
+    memset(&sibling, 0, sizeof(sibling));
+    failing.result = ASX_E_INVALID_STATE;
+    sibling.yields = 4;
+    owner_init(&o, 1);
+    add_child(&o, "failing", ASX_CHILD_TRANSIENT, &failing);
+    add_child(&o, "sibling", ASX_CHILD_TRANSIENT, &sibling);
+    run_owner(&o);
+    ASSERT(o.joined && failing.started == 2u && sibling.started == 1u, "only the failed one");
+}
+
+/* ------------------------------------------------------------------ */
+/* Cancellation, panics and dependencies                               */
+/* ------------------------------------------------------------------ */
+
+static void test_abort_drains_without_restarting(void) {
+    owner o;
+    behaviour b;
+    const asx_supervisor_completion *c;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.block = 1;
+    owner_init(&o, 3);
+    o.abort_after = 3;
+    add_child(&o, "worker", ASX_CHILD_PERMANENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && o.join_st == ASX_OK, "the join waits for the drain");
+    ASSERT(b.started == 1u && o.report.restart_batches == 0u, "a drained child is not replaced");
+    ASSERT(o.report.outcome == ASX_OUTCOME_CANCELLED && o.report.cancel_reason.message != NULL &&
+               strcmp(o.report.cancel_reason.message, "abort") == 0,
+           "cancelled with the abort's reason");
+    c = completion_of(&o, 0);
+    ASSERT(c != NULL && c->shutdown_requested_before_completion, "it was asked to stop");
+}
+
+static void test_a_panic_in_the_body_is_caught(void) {
+    owner o;
+    behaviour b;
+    const asx_supervisor_completion *c;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.panic = 1;
+    b.yields = 1;
+    owner_init(&o, 1);
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && b.started == 2u, "a panic is a transient failure");
+    c = completion_of(&o, 0);
+    ASSERT(c != NULL && c->outcome == ASX_OUTCOME_PANICKED && c->panic_message != NULL &&
+               strcmp(c->panic_message, "boom") == 0,
+           "the panic and its message");
+    ASSERT(c->task_outcome == ASX_OUTCOME_OK, "the generation's task completed normally");
+}
+
+static void test_a_failing_start_function_is_a_panic(void) {
+    owner o;
+    behaviour b;
+    const asx_supervisor_completion *c;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.fail_start = 1;
+    owner_init(&o, 0);
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && o.report.started == 1u, "it counts as started");
+    c = completion_of(&o, 0);
+    ASSERT(c != NULL && c->outcome == ASX_OUTCOME_PANICKED, "panicked");
+}
+
+static void test_restart_without_its_dependency_fails(void) {
+    owner o;
+    behaviour dependency;
+    behaviour dependent;
+    setup();
+    memset(&dependency, 0, sizeof(dependency));
+    memset(&dependent, 0, sizeof(dependent));
+    dependency.result = ASX_OK; /* temporary: stays stopped */
+    dependent.yields = 4;
+    dependent.result = ASX_E_INVALID_STATE;
+    owner_init(&o, 3);
+    add_child(&o, "dependency", ASX_CHILD_TEMPORARY, &dependency);
+    add_child(&o, "dependent", ASX_CHILD_TRANSIENT, &dependent);
+    MUST_OK(asx_child_spec_depends_on(&o.specs[1], 0));
+    run_owner(&o);
+    ASSERT(o.joined && o.report.outcome == ASX_OUTCOME_ERR &&
+               o.report.error == ASX_SUPERVISOR_ERR_DEPENDENCY_UNAVAILABLE &&
+               o.report.error_child == 1u,
+           "DependencyUnavailable for the required dependent");
+    ASSERT(dependent.started == 1u, "not restarted");
+}
+
+static void test_backoff_delays_the_restart(void) {
+    owner o;
+    behaviour b;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_E_INVALID_STATE;
+    owner_init(&o, 2);
+    o.cfg.backoff.kind = ASX_RESTART_BACKOFF_EXPONENTIAL;
+    o.cfg.backoff.initial_ns = 1000u;
+    o.cfg.backoff.max_ns = 1500u;
+    o.cfg.backoff.multiplier = 2u;
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && b.started == 3u, "two restarts");
+    ASSERT(b.started_at[1] - b.started_at[0] >= 1000u, "the first waits the initial delay");
+    ASSERT(b.started_at[2] - b.started_at[1] >= 1500u && b.started_at[2] - b.started_at[1] < 2000u,
+           "the second waits the doubled delay, capped");
+}
+
+/* ------------------------------------------------------------------ */
+/* Handles                                                             */
+/* ------------------------------------------------------------------ */
+
+static void test_handles(void) {
+    owner o;
+    behaviour b;
+    asx_supervisor_handle forged;
+    asx_supervisor_report r;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_OK;
+    owner_init(&o, 0);
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined, "joined");
+    ASSERT(asx_supervisor_region(o.h) != ASX_INVALID_ID, "its region");
+    ASSERT(asx_supervisor_task(o.h) != ASX_INVALID_ID, "its controller");
+    ASSERT(asx_supervisor_join(o.h, asx_supervisor_task(o.h), &r) == ASX_E_INVALID_STATE,
+           "a second join");
+    forged = o.h;
+    forged.generation++;
+    ASSERT(asx_supervisor_abort(forged) == ASX_E_INVALID_ARGUMENT, "a forged handle");
+    ASSERT(!asx_supervisor_is_alive(forged) && !asx_supervisor_finished(forged), "unknown");
+    asx_supervisor_reset();
+    ASSERT(asx_supervisor_region(o.h) == ASX_INVALID_ID, "reset forgets every supervisor");
+}
 
 int main(void) {
     printf("test_supervisor:\n");
 
-    /* Basic lifecycle */
-    RUN(test_start_basic);
-    RUN(test_start_null_args);
-    RUN(test_start_zero_children);
-    RUN(test_start_child_failure);
+    RUN(test_config_defaults);
+    RUN(test_spawn_rejects_bad_arguments);
+    RUN(test_spawn_compiles_the_topology);
+    RUN(test_dependencies_order_the_start);
 
-    /* Graceful stop */
-    RUN(test_stop_basic);
+    RUN(test_transient_child_restarts_until_the_limit);
+    RUN(test_transient_child_that_succeeds_stays_stopped);
+    RUN(test_permanent_child_restarts_after_success);
+    RUN(test_temporary_child_never_restarts);
+    RUN(test_max_restarts_zero_refuses_at_once);
+    RUN(test_reset_counter_keeps_restarting);
+    RUN(test_restarts_age_out_of_the_window);
+    RUN(test_cancelled_transient_child_is_not_restarted);
+    RUN(test_escalate_cancels_the_owner_region);
 
-    /* one_for_one */
-    RUN(test_one_for_one_restart);
-    RUN(test_one_for_one_child_dies_and_restarts);
-    RUN(test_one_for_one_max_restarts_escalation);
+    RUN(test_one_for_all_restarts_the_siblings);
+    RUN(test_rest_for_one_restarts_the_later_ones);
+    RUN(test_one_for_one_leaves_siblings_alone);
 
-    /* one_for_all */
-    RUN(test_one_for_all_restarts_all);
+    RUN(test_abort_drains_without_restarting);
+    RUN(test_a_panic_in_the_body_is_caught);
+    RUN(test_a_failing_start_function_is_a_panic);
+    RUN(test_restart_without_its_dependency_fails);
+    RUN(test_backoff_delays_the_restart);
 
-    /* Restart policies */
-    RUN(test_temporary_never_restarts);
-    RUN(test_transient_no_restart_on_normal_exit);
-    RUN(test_restart_intensity_window_contract);
-    RUN(test_ext_child_names_are_queryable);
-    RUN(test_escalation_accessors_after_death);
-    RUN(test_stop_during_pending_restart_prevents_restart);
-
-    /* Reset */
-    RUN(test_supervisor_parks_and_wakes_on_child_death);
-    RUN(test_transient_restarts_on_error_not_on_cancel);
-    RUN(test_draining_region_cancels_supervision_tree);
-    RUN(test_reset);
-
-    /* Arena */
-    RUN(test_arena_exhaustion);
-
-    /* Law tests */
-    RUN(test_law_start_order);
-    RUN(test_law_escalation);
-    RUN(test_law_stale_handle);
+    RUN(test_handles);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

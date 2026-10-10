@@ -20,6 +20,7 @@
 #include "canon.h"
 
 #include <asx/actor/actor.h>
+#include <asx/actor/supervisor.h>
 #include <asx/asx.h>
 #include <asx/core/broadcast.h>
 #include <asx/core/oneshot.h>
@@ -45,8 +46,10 @@
 /* Bounds                                                              */
 /* ------------------------------------------------------------------ */
 
-#define IT_MAX_TASKS ASX_MAX_TASKS
-#define IT_MAX_REGIONS (ASX_MAX_REGIONS + 1u)
+/* Names, never reused: a supervisor's generations each name a task and a
+ * region of their own while the runtime recycles the slots. */
+#define IT_MAX_TASKS (ASX_MAX_TASKS * 2u)
+#define IT_MAX_REGIONS (ASX_MAX_REGIONS * 8u + 1u)
 #define IT_MAX_LOCAL 16u
 #define IT_MAX_EVENTS 4096u
 #define IT_MAX_DISPATCHES 16384u
@@ -152,6 +155,10 @@ typedef struct {
     /* The current cast, call or server_stop step's progress (DSL §3.8). */
     asx_actor_op actor_op;
     int server; /* the task of a server (no program) */
+    /* A supervisor's controller (no program), and a generation of a
+     * supervised child, left out of the snapshot (vocabulary §6). */
+    int supervisor;
+    int supervised;
     /* Projection of the task's sleep timers (vocabulary §2: "<task>/tm<k>"). */
     uint32_t timers;         /* timers registered so far (k of the latest) */
     uint32_t timer_name_off; /* name of the latest, in g_text */
@@ -163,6 +170,10 @@ typedef struct {
     const char *name;
     const char *parent; /* NULL for the root */
     asx_region_id id;
+    /* A supervisor's region, and the unstarted generation regions named
+     * under it so far (name_unstarted_regions). */
+    int supervisor_region;
+    uint32_t unstarted;
 } it_region;
 
 /* A declared sync object (DSL §3.7). */
@@ -233,6 +244,29 @@ typedef struct {
 #define IT_MAX_SERVERS ASX_MAX_ACTORS
 #define IT_NO_SERVER_TASK UINT32_MAX
 
+/* A supervised child's start context (DSL §3.8): its program and name. */
+typedef struct {
+    const char *name;
+    uint32_t program;
+    uint32_t sup; /* index in g_sups */
+} it_sup_child;
+
+/* A spawned supervisor (DSL §3.8): its handle, its owner, its
+ * controller's entry in g_tasks (named by `as`; IT_NO_SERVER_TASK when
+ * its spawn was refused) and its children's start contexts. */
+typedef struct {
+    const char *name;
+    asx_supervisor_handle handle;
+    uint32_t owner; /* index in g_tasks */
+    uint32_t task;
+    int joined;
+    int dropped;
+    int region_named;
+    it_sup_child children[ASX_SUPERVISOR_MAX_CHILDREN];
+} it_supervisor;
+
+#define IT_MAX_SUPERVISORS ASX_MAX_SUPERVISORS
+
 /* A cancel reason captured when its event was emitted. */
 typedef struct {
     asx_cancel_kind kind;
@@ -256,7 +290,8 @@ typedef struct {
     int has_reason;
     uint32_t text_off; /* USER */
     uint32_t text_len;
-    int rearm; /* TIMER_SET: the same sleep timer registered again */
+    int rearm;            /* TIMER_SET: the same sleep timer registered again */
+    asx_region_id parent; /* REGION_OPEN: the new region's parent */
 } it_event;
 
 static const asx_json_doc *g_in;
@@ -276,6 +311,9 @@ static uint32_t g_n_channels;
 
 static it_server g_servers[IT_MAX_SERVERS];
 static uint32_t g_n_servers;
+
+static it_supervisor g_sups[IT_MAX_SUPERVISORS];
+static uint32_t g_n_sups;
 
 static it_event g_events[IT_MAX_EVENTS];
 static uint32_t g_n_events;
@@ -382,6 +420,8 @@ static int add_region(const char *name, const char *parent, asx_region_id id) {
     g_regions[g_n_regions].name = name;
     g_regions[g_n_regions].parent = parent;
     g_regions[g_n_regions].id = id;
+    g_regions[g_n_regions].supervisor_region = 0;
+    g_regions[g_n_regions].unstarted = 0;
     g_n_regions++;
     return 1;
 }
@@ -646,6 +686,214 @@ static uint32_t server_outcome_node(asx_task_id id) {
     return o;
 }
 
+static asx_status interp_poll(void *user_data, asx_task_id self);
+
+/* ------------------------------------------------------------------ */
+/* Supervisor names (vocabulary §2)                                    */
+/* ------------------------------------------------------------------ */
+
+static it_supervisor *sup_by_name(const char *name) {
+    uint32_t i;
+    if (name == NULL) return NULL;
+    for (i = 0; i < g_n_sups; i++) {
+        if (strcmp(g_sups[i].name, name) == 0) return &g_sups[i];
+    }
+    return NULL;
+}
+
+/* The supervisor region, named after its supervisor once the controller
+ * opened it; its parent is the controller's (its owner's) region. */
+static int supervisor_region(it_supervisor *sv) {
+    asx_region_id id;
+    if (sv->region_named) return 1;
+    id = asx_supervisor_region(sv->handle);
+    if (id == ASX_INVALID_ID) return 1;
+    if (!add_region(sv->name, g_tasks[sv->owner].region_name, id)) return 0;
+    g_regions[g_n_regions - 1u].supervisor_region = 1;
+    sv->region_named = 1;
+    return 1;
+}
+
+/* A generation's task and region, both "<supervisor>/<child>#<n>",
+ * entered on first sight: when its start function runs, or from the
+ * controller's trace for a generation that never started. */
+static it_task *generation_entry(it_supervisor *sv, const char *child, unsigned long long number,
+                                 asx_region_id region, asx_task_id task) {
+    char buf[160];
+    const char *name;
+    uint32_t off;
+    it_task *t;
+    int len = snprintf(buf, sizeof(buf), "%s/%s#%llu", sv->name, child, number);
+    if (len < 0 || (size_t)len >= sizeof(buf)) {
+        it_fail("supervised child name too long", child);
+        return NULL;
+    }
+    t = task_by_name(buf);
+    if (t != NULL) return t;
+    if (!supervisor_region(sv)) return NULL;
+    off = text_store(buf, (size_t)len);
+    if (off == IT_NO_TEXT) return NULL;
+    name = &g_text[off];
+    if (region_by_id(region) == NULL && !add_region(name, sv->name, region)) return NULL;
+    if (g_n_tasks >= IT_MAX_TASKS) {
+        it_fail("too many tasks", name);
+        return NULL;
+    }
+    t = &g_tasks[g_n_tasks++];
+    memset(t, 0, sizeof(*t));
+    t->name = name;
+    t->region_name = name;
+    t->region = region;
+    t->program = ASX_JSON_NONE;
+    t->end = ASX_OK;
+    t->spawn_obs = ASX_JSON_NONE;
+    t->id = task;
+    t->spawned = 1;
+    t->supervised = 1;
+    (void)asx_cx_init(&t->cx, region, task, ASX_CAP_CANCEL_CHECK);
+    return t;
+}
+
+/* A supervised child's start function: its generation runs the child's
+ * program. */
+static asx_status it_start_generation(void *user_data, const asx_supervisor_generation *gen,
+                                      asx_task_poll_fn *out_poll, void **out_data) {
+    const it_sup_child *c = (const it_sup_child *)user_data;
+    it_task *t = generation_entry(&g_sups[c->sup], c->name, (unsigned long long)gen->number,
+                                  gen->region, gen->task);
+    if (t == NULL) return ASX_E_RESOURCE_EXHAUSTED;
+    t->program = c->program;
+    *out_poll = interp_poll;
+    *out_data = t;
+    return ASX_OK;
+}
+
+/* A controller's "managed_supervisor_v1 ..." trace (supervisor.h), split. */
+typedef struct {
+    char action[40];
+    char supervisor[64];
+    char child[64];
+    unsigned long long generation;
+    unsigned long long region;
+    unsigned long long task;
+    char outcome[16];
+} it_sup_trace;
+
+static int parse_sup_trace(const char *text, it_sup_trace *out) {
+    if (strncmp(text, "managed_supervisor_v1 ", 22u) != 0) return 0;
+    return sscanf(text,
+                  "managed_supervisor_v1 action=%39s supervisor=\"%63[^\"]\" child=\"%63[^\"]\" "
+                  "generation=%llu region=0x%llx task=0x%llx outcome=%15s",
+                  out->action, out->supervisor, out->child, &out->generation, &out->region,
+                  &out->task, out->outcome) == 7;
+}
+
+/* Add a region named `name` (copied) under `parent`, a supervisor region. */
+static int add_supervisor_region(const char *name, const char *parent, asx_region_id id) {
+    uint32_t off = text_store(name, strlen(name));
+    if (off == IT_NO_TEXT || !add_region(&g_text[off], parent, id)) return 0;
+    g_regions[g_n_regions - 1u].supervisor_region = 1;
+    return 1;
+}
+
+/* The region of a supervisor that started no generation, as twin_run
+ * names it: the supervisor's own name when it is the one unnamed region
+ * created under its controller's region and no other such supervisor
+ * runs there; else every unnamed region created there is
+ * "<region>/supervisor<k>", k in creation order (the trace cannot tell
+ * whose is whose). Its controller learns it only once the open is
+ * applied, so its handle cannot settle every case. */
+static void name_generationless_regions(void) {
+    int unnamed[IT_MAX_SUPERVISORS];
+    uint32_t k;
+    for (k = 0; k < g_n_sups; k++) unnamed[k] = !g_sups[k].region_named;
+    for (k = 0; k < g_n_sups && !g_failed; k++) {
+        const it_task *owner = &g_tasks[g_sups[k].owner];
+        uint32_t i;
+        uint32_t siblings = 0;
+        uint32_t found = 0;
+        asx_region_id region = ASX_INVALID_ID;
+        if (!unnamed[k]) continue;
+        for (i = 0; i < g_n_sups; i++) {
+            if (unnamed[i] && same_entity(g_tasks[g_sups[i].owner].region, owner->region)) {
+                siblings++;
+            }
+        }
+        for (i = 0; i < g_n_events; i++) {
+            const it_event *e = &g_events[i];
+            if (e->kind == ASX_TRACE_REGION_OPEN && e->parent != ASX_INVALID_ID &&
+                same_entity(e->parent, owner->region) &&
+                region_by_id((asx_region_id)e->entity) == NULL) {
+                found++;
+                region = (asx_region_id)e->entity;
+            }
+        }
+        if (found == 1u && siblings == 1u) {
+            if (add_supervisor_region(g_sups[k].name, owner->region_name, region)) {
+                g_sups[k].region_named = 1;
+            }
+            continue;
+        }
+        found = 0;
+        for (i = 0; i < g_n_events && !g_failed; i++) {
+            const it_event *e = &g_events[i];
+            char buf[160];
+            if (e->kind != ASX_TRACE_REGION_OPEN || e->parent == ASX_INVALID_ID ||
+                !same_entity(e->parent, owner->region) ||
+                region_by_id((asx_region_id)e->entity) != NULL) {
+                continue;
+            }
+            found++;
+            (void)snprintf(buf, sizeof(buf), "%s/supervisor%u", owner->region_name,
+                           (unsigned)found);
+            (void)add_supervisor_region(buf, owner->region_name, (asx_region_id)e->entity);
+        }
+    }
+}
+
+/* A region a controller opened for a generation it then did not start (it
+ * was cancelled first) appears in no trace of it:
+ * "<supervisor region>/unstarted<k>", k in creation order. */
+static void name_unstarted_regions(void) {
+    uint32_t i;
+    for (i = 0; i < g_n_events && !g_failed; i++) {
+        const it_event *e = &g_events[i];
+        it_region *parent;
+        char buf[160];
+        if (e->kind != ASX_TRACE_REGION_OPEN || e->parent == ASX_INVALID_ID ||
+            region_by_id((asx_region_id)e->entity) != NULL) {
+            continue;
+        }
+        parent = region_by_id(e->parent);
+        if (parent == NULL || !parent->supervisor_region) continue;
+        parent->unstarted++;
+        (void)snprintf(buf, sizeof(buf), "%s/unstarted%u", parent->name,
+                       (unsigned)parent->unstarted);
+        {
+            uint32_t off = text_store(buf, strlen(buf));
+            if (off != IT_NO_TEXT)
+                (void)add_region(&g_text[off], parent->name, (asx_region_id)e->entity);
+        }
+    }
+}
+
+/* Name the generation a controller's trace identifies. */
+static void name_generation(const char *text) {
+    it_sup_trace p;
+    it_supervisor *sv;
+    if (strncmp(text, "managed_supervisor_v1 ", 22u) != 0) return;
+    if (!parse_sup_trace(text, &p)) {
+        it_fail("malformed supervisor trace", text);
+        return;
+    }
+    sv = sup_by_name(p.supervisor);
+    if (sv == NULL) {
+        it_fail("trace of an unknown supervisor", p.supervisor);
+        return;
+    }
+    (void)generation_entry(sv, p.child, p.generation, (asx_region_id)p.region, (asx_task_id)p.task);
+}
+
 /* ------------------------------------------------------------------ */
 /* Trace observer: the runtime's events, captured as they are emitted   */
 /* ------------------------------------------------------------------ */
@@ -714,6 +962,11 @@ static void it_observe(void *ctx, const asx_trace_event *ev, const asx_trace_pay
         size_t len = strlen(text);
         e->text_off = text_store(text, len);
         e->text_len = (uint32_t)len;
+        name_generation(text);
+    } else if (ev->kind == ASX_TRACE_REGION_OPEN) {
+        if (asx_region_get_parent((asx_region_id)ev->entity_id, &e->parent) != ASX_OK) {
+            e->parent = ASX_INVALID_ID;
+        }
     } else if (ev->kind == ASX_TRACE_SCHED_COMPLETE) {
         /* A group member's outcome, read while its slot still exists: the
          * group joins it (releasing the slot) when it collects it. */
@@ -746,13 +999,28 @@ static uint32_t observe_status(const it_task *t, uint32_t step, const char *op, 
     return observe(t, step, op, status_node(st), ASX_JSON_NONE);
 }
 
-/* Why the admission of a child spawned from a poll refused it (lab
- * dispatch): ASX_E_ADMISSION_LIMIT or ASX_E_REGION_CLOSED, as twin_run's
- * project_denied_spawns tells Rust's refused handles apart; ASX_OK if it
- * was admitted or is still pending. */
+/* A refused child's status as its join reports it, which is what twin_run's
+ * project_denied_spawns reads from Rust's refused handles: the admission
+ * limit's User reason ("[ASUP-E006] ...") is ASX_E_ADMISSION_LIMIT, any
+ * other ASX_E_REGION_CLOSED. An abort requested before the admission has
+ * already strengthened that reason (Rust caches it in the handle, which
+ * strengthens the refusal it resolves with, task_handle.rs:470-542). */
+static asx_status refusal_as_joined(asx_task_id id) {
+    asx_cancel_reason r;
+    if (asx_task_get_cancel_reason(id, &r) == ASX_OK && r.kind == ASX_CANCEL_USER &&
+        r.message != NULL && strncmp(r.message, "[ASUP-E006]", 11u) == 0) {
+        return ASX_E_ADMISSION_LIMIT;
+    }
+    return ASX_E_REGION_CLOSED;
+}
+
+/* Whether the admission of a child spawned from a poll refused it (lab
+ * dispatch), and then its status as its join reports it; ASX_OK if it was
+ * admitted or is still pending. */
 static asx_status admission_refusal(asx_task_id id) {
     asx_status st = asx_task_admission_status(id);
-    return st == ASX_E_ADMISSION_LIMIT || st == ASX_E_REGION_CLOSED ? st : ASX_OK;
+    if (st != ASX_E_ADMISSION_LIMIT && st != ASX_E_REGION_CLOSED) return ASX_OK;
+    return refusal_as_joined(id);
 }
 
 /* ------------------------------------------------------------------ */
@@ -784,8 +1052,6 @@ static int parse_budget(uint32_t node, asx_budget *out) {
 /* ------------------------------------------------------------------ */
 
 typedef enum { STEP_NEXT, STEP_PENDING, STEP_END } step_result;
-
-static asx_status interp_poll(void *user_data, asx_task_id self);
 
 static it_local_obligation *local_obligation(it_task *t, const char *name) {
     uint32_t i;
@@ -1029,6 +1295,22 @@ static void drop_locals(it_task *t) {
                 if (c == NULL) break;
                 close_endpoint(c, r);
             }
+        }
+    }
+    /* Supervisor handles last, joined or not, by name: each one's drop
+     * aborts its controller (ManagedSupervisorHandle's Drop). */
+    for (;;) {
+        it_supervisor *first = NULL;
+        uint32_t i;
+        for (i = 0; i < g_n_sups; i++) {
+            it_supervisor *sv = &g_sups[i];
+            if (sv->owner != me || sv->dropped) continue;
+            if (first == NULL || strcmp(sv->name, first->name) < 0) first = sv;
+        }
+        if (first == NULL) break;
+        first->dropped = 1;
+        if (asx_supervisor_abort(first->handle) != ASX_OK) {
+            it_fail("the abort of a dropped supervisor failed", first->name);
         }
     }
 }
@@ -2189,7 +2471,8 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             return STEP_NEXT;
         }
         {
-            asx_status why = admission_refusal(target->id);
+            asx_status why = target->admission_refusal != ASX_OK ? target->admission_refusal
+                                                                 : admission_refusal(target->id);
             uint32_t value = take_outcome(target, &st);
             if (why != ASX_OK && st == ASX_OK) {
                 target->admission_refusal = why;
@@ -2221,8 +2504,14 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         }
         {
             /* The requesting task initiates the cancel (DSL §4). A handle
-             * abort is a command the scheduler applies at its next step. */
+             * abort is a command the scheduler applies at its next step. A
+             * child its admission already refused keeps the refusal it
+             * showed before the abort strengthened its reason, as twin_run
+             * takes Rust's (`denied`). */
             asx_cancel_reason r = make_reason(kind, t->region, self, it_str(step, "message"));
+            if (target->admission_refusal == ASX_OK && !target->joined) {
+                target->admission_refusal = admission_refusal(target->id);
+            }
             st = asx_task_abort_request(target->id, &r);
         }
         observe_status(t, idx, label, st);
@@ -2430,6 +2719,293 @@ static int exec_server(it_task *t, uint32_t step, uint32_t idx, const char *op, 
     return 1;
 }
 
+static const char *supervisor_error_name(asx_supervisor_error e) {
+    switch (e) {
+    case ASX_SUPERVISOR_ERR_REGION: return "Region";
+    case ASX_SUPERVISOR_ERR_SPAWN: return "Spawn";
+    case ASX_SUPERVISOR_ERR_CHILD_NOT_STARTED: return "ChildNotStarted";
+    case ASX_SUPERVISOR_ERR_DEPENDENCY_UNAVAILABLE: return "DependencyUnavailable";
+    case ASX_SUPERVISOR_ERR_RESTART_LIMIT: return "RestartLimit";
+    case ASX_SUPERVISOR_ERR_GENERATION_EXHAUSTED: return "GenerationExhausted";
+    case ASX_SUPERVISOR_ERR_ESCALATION: return "Escalation";
+    case ASX_SUPERVISOR_ERR_NONE: break;
+    }
+    return NULL;
+}
+
+/* A cancelled outcome's reason, captured now: its cause chain is
+ * borrowed. */
+static uint32_t cancelled_node(const asx_cancel_reason *r) {
+    uint32_t o = asx_json_new_object(g_out);
+    it_reason captured;
+    capture_reason(r, &captured);
+    asx_json_set(g_out, o, "tag", asx_json_new_string(g_out, "cancelled"));
+    asx_json_set(g_out, o, "reason", reason_node(&captured));
+    return o;
+}
+
+static uint32_t panicked_node(const char *message) {
+    uint32_t o = asx_json_new_object(g_out);
+    asx_json_set(g_out, o, "tag", asx_json_new_string(g_out, "panicked"));
+    asx_json_set(g_out, o, "message",
+                 asx_json_new_string(g_out, message != NULL ? message : "unknown panic"));
+    return o;
+}
+
+/* A supervisor_join's report (DSL §3.8): its outcome, its counters and
+ * each child's latest ended generation, in start order. */
+static uint32_t report_node(const it_supervisor *sv, const asx_supervisor_report *r) {
+    uint32_t o = asx_json_new_object(g_out);
+    uint32_t outcome = ASX_JSON_NONE;
+    uint32_t children = asx_json_new_array(g_out);
+    uint32_t i;
+    switch (r->outcome) {
+    case ASX_OUTCOME_OK:
+        outcome = asx_json_new_object(g_out);
+        asx_json_set(g_out, outcome, "tag", asx_json_new_string(g_out, "ok"));
+        break;
+    case ASX_OUTCOME_ERR: {
+        const char *kind = supervisor_error_name(r->error);
+        if (kind == NULL) {
+            it_fail("supervisor error without a kind", sv->name);
+            return o;
+        }
+        outcome = asx_json_new_object(g_out);
+        asx_json_set(g_out, outcome, "tag", asx_json_new_string(g_out, "err"));
+        asx_json_set(g_out, outcome, "error", asx_json_new_string(g_out, kind));
+        asx_json_set(g_out, outcome, "child",
+                     r->error_child < ASX_SUPERVISOR_MAX_CHILDREN
+                         ? asx_json_new_string(g_out, sv->children[r->error_child].name)
+                         : asx_json_new_null(g_out));
+        break;
+    }
+    case ASX_OUTCOME_CANCELLED: outcome = cancelled_node(&r->cancel_reason); break;
+    case ASX_OUTCOME_PANICKED: outcome = panicked_node(r->panic_message); break;
+    }
+    for (i = 0; i < r->completion_count; i++) {
+        const asx_supervisor_completion *c = &r->completions[i];
+        uint32_t entry = asx_json_new_object(g_out);
+        uint32_t co = ASX_JSON_NONE;
+        switch (c->outcome) {
+        case ASX_OUTCOME_OK:
+            co = asx_json_new_object(g_out);
+            asx_json_set(g_out, co, "tag", asx_json_new_string(g_out, "ok"));
+            break;
+        case ASX_OUTCOME_ERR:
+            co = asx_json_new_object(g_out);
+            asx_json_set(g_out, co, "tag", asx_json_new_string(g_out, "err"));
+            asx_json_set(g_out, co, "status", status_node(c->status));
+            break;
+        case ASX_OUTCOME_CANCELLED: co = cancelled_node(&c->cancel_reason); break;
+        case ASX_OUTCOME_PANICKED: co = panicked_node(c->panic_message); break;
+        }
+        asx_json_set(g_out, entry, "child",
+                     asx_json_new_string(g_out, sv->children[c->child].name));
+        asx_json_set(g_out, entry, "generation", asx_json_new_u64(g_out, c->generation.number));
+        asx_json_set(g_out, entry, "outcome", co);
+        asx_json_push(g_out, children, entry);
+    }
+    asx_json_set(g_out, o, "outcome", outcome);
+    asx_json_set(g_out, o, "started", asx_json_new_u64(g_out, r->started));
+    asx_json_set(g_out, o, "joined", asx_json_new_u64(g_out, r->joined));
+    asx_json_set(g_out, o, "restart_batches", asx_json_new_u64(g_out, r->restart_batches));
+    asx_json_set(g_out, o, "escalations", asx_json_new_u64(g_out, r->escalations));
+    asx_json_set(g_out, o, "children", children);
+    return o;
+}
+
+/* The first step in a program, or in the member programs of its steps,
+ * that names a task, region, server or supervisor by `as` (DSL §3.8):
+ * every generation of a supervised child runs its program again, so such
+ * a name would repeat. NULL if none. */
+static const char *naming_step(uint32_t program) {
+    uint32_t i;
+    for (i = 0; i < asx_json_count(g_in, program); i++) {
+        uint32_t step = asx_json_item(g_in, program, i);
+        const char *op = it_str(step, "op");
+        uint32_t members = asx_json_get(g_in, step, "members");
+        uint32_t m;
+        if (op != NULL && (strcmp(op, "spawn") == 0 || strcmp(op, "open_region") == 0 ||
+                           strcmp(op, "server_spawn") == 0 || strcmp(op, "supervise") == 0)) {
+            return op;
+        }
+        for (m = 0; m < asx_json_count(g_in, members); m++) {
+            const char *nested = naming_step(asx_json_item(g_in, members, m));
+            if (nested != NULL) return nested;
+        }
+    }
+    return NULL;
+}
+
+/* A completed controller's outcome is its join's (vocabulary §6): ok once
+ * it published its report, else its task's (cancelled before it ran). */
+static uint32_t supervisor_outcome_node(const it_supervisor *sv) {
+    uint32_t o;
+    if (!asx_supervisor_finished(sv->handle)) return outcome_node(g_tasks[sv->task].id);
+    o = asx_json_new_object(g_out);
+    asx_json_set(g_out, o, "tag", asx_json_new_string(g_out, "ok"));
+    return o;
+}
+
+/* supervise and supervisor_join (DSL §3.8). Returns 0 for other ops. */
+static int exec_supervisor(it_task *t, asx_task_id self, uint32_t step, uint32_t idx,
+                           const char *op, step_result *out) {
+    asx_status st;
+    it_supervisor *sv;
+
+    *out = STEP_NEXT;
+    if (strcmp(op, "supervise") == 0) {
+        const char *name = it_str(step, "as");
+        const char *policy = it_str(step, "policy");
+        const char *escalation = it_str(step, "escalation");
+        uint32_t list = asx_json_get(g_in, step, "children");
+        uint32_t n = asx_json_count(g_in, list);
+        uint64_t max_restarts = 0;
+        uint64_t window = 0;
+        asx_supervisor_config cfg;
+        asx_child_spec specs[ASX_SUPERVISOR_MAX_CHILDREN];
+        asx_task_id id;
+        uint32_t i;
+        if (name == NULL || policy == NULL || sup_by_name(name) != NULL ||
+            g_n_sups >= IT_MAX_SUPERVISORS || n == 0u || n > ASX_SUPERVISOR_MAX_CHILDREN ||
+            !asx_json_u64(g_in, asx_json_get(g_in, step, "max_restarts"), &max_restarts) ||
+            max_restarts > UINT32_MAX ||
+            !asx_json_u64(g_in, asx_json_get(g_in, step, "window_ns"), &window)) {
+            it_fail_task(t, idx, "supervise needs a new `as`, a policy, limits and children");
+            *out = STEP_END;
+            return 1;
+        }
+        sv = &g_sups[g_n_sups];
+        memset(sv, 0, sizeof(*sv));
+        sv->name = name;
+        sv->owner = (uint32_t)(t - g_tasks);
+        sv->task = IT_NO_SERVER_TASK;
+        asx_supervisor_config_init(&cfg, name, (uint32_t)max_restarts, window);
+        if (strcmp(policy, "one_for_one") == 0) {
+            cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
+        } else if (strcmp(policy, "one_for_all") == 0) {
+            cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ALL;
+        } else if (strcmp(policy, "rest_for_one") == 0) {
+            cfg.strategy = ASX_SUPERVISOR_REST_FOR_ONE;
+        } else {
+            it_fail_task(t, idx, "unknown supervise policy");
+            *out = STEP_END;
+            return 1;
+        }
+        if (escalation == NULL || strcmp(escalation, "stop") == 0) {
+            cfg.escalation = ASX_ESCALATION_STOP;
+        } else if (strcmp(escalation, "escalate") == 0) {
+            cfg.escalation = ASX_ESCALATION_ESCALATE;
+        } else {
+            it_fail_task(t, idx, "unknown supervise escalation");
+            *out = STEP_END;
+            return 1;
+        }
+        for (i = 0; i < n; i++) {
+            uint32_t c = asx_json_item(g_in, list, i);
+            const char *mode = it_str(c, "mode");
+            asx_child_restart restart = ASX_CHILD_PERMANENT;
+            uint32_t program = asx_json_get(g_in, c, "program");
+            if (mode != NULL && strcmp(mode, "transient") == 0) restart = ASX_CHILD_TRANSIENT;
+            if (mode != NULL && strcmp(mode, "temporary") == 0) restart = ASX_CHILD_TEMPORARY;
+            if (it_str(c, "name") == NULL || mode == NULL ||
+                (restart == ASX_CHILD_PERMANENT && strcmp(mode, "permanent") != 0) ||
+                asx_json_type_of(g_in, program) != ASX_JSON_ARRAY) {
+                it_fail_task(t, idx, "a supervised child needs a name, a mode and a program");
+                *out = STEP_END;
+                return 1;
+            }
+            if (naming_step(program) != NULL) {
+                it_fail_task(t, idx,
+                             "a supervised child's program names an entity a restart "
+                             "would name again");
+                *out = STEP_END;
+                return 1;
+            }
+            sv->children[i].name = it_str(c, "name");
+            sv->children[i].program = program;
+            sv->children[i].sup = g_n_sups;
+            asx_child_spec_init(&specs[i], sv->children[i].name, restart, it_start_generation,
+                                &sv->children[i]);
+        }
+        st = asx_supervisor_spawn(&sv->handle, t->region, &cfg, specs, n);
+        if (st != ASX_OK) {
+            /* twin_run fails the run on a compile or spawn error too. */
+            it_fail_task(t, idx, "supervise could not compile or spawn the supervisor");
+            *out = STEP_END;
+            return 1;
+        }
+        g_n_sups++;
+        id = asx_supervisor_task(sv->handle);
+        if (id != ASX_INVALID_ID) {
+            /* The controller's task, named by `as` (vocabulary §2). One
+             * whose spawn the lab refused has none, as Rust never admits
+             * its task. */
+            it_task *task;
+            if (g_n_tasks >= IT_MAX_TASKS || task_by_name(name) != NULL) {
+                it_fail("too many tasks, or a supervisor named like a task", name);
+                *out = STEP_END;
+                return 1;
+            }
+            task = &g_tasks[g_n_tasks];
+            memset(task, 0, sizeof(*task));
+            task->name = name;
+            task->region_name = t->region_name;
+            task->region = t->region;
+            task->program = ASX_JSON_NONE;
+            task->end = ASX_OK;
+            task->spawn_obs = ASX_JSON_NONE;
+            task->id = id;
+            task->spawned = 1;
+            task->supervisor = 1;
+            sv->task = g_n_tasks++;
+        }
+        observe_status(t, idx, op, ASX_OK);
+        return 1;
+    }
+    if (strcmp(op, "supervisor_join") == 0) {
+        asx_supervisor_report report;
+        uint32_t outcome = ASX_JSON_NONE;
+        it_task *ctl;
+        asx_task_state s;
+        sv = sup_by_name(it_str(step, "supervisor"));
+        if (sv == NULL || sv->joined || sv->owner != (uint32_t)(t - g_tasks)) {
+            it_fail_task(t, idx, "unknown or already joined supervisor");
+            *out = STEP_END;
+            return 1;
+        }
+        ctl = sv->task != IT_NO_SERVER_TASK ? &g_tasks[sv->task] : NULL;
+        /* The controller's outcome, read before the join retires its task:
+         * its join's (vocabulary §6). */
+        if (ctl != NULL && asx_task_get_state(ctl->id, &s) == ASX_OK && s == ASX_TASK_COMPLETED) {
+            ctl->admission_refusal = admission_refusal(ctl->id);
+            outcome = supervisor_outcome_node(sv);
+        }
+        st = asx_supervisor_join(sv->handle, self, &report);
+        if (st == ASX_E_PENDING) {
+            *out = STEP_PENDING;
+            return 1;
+        }
+        sv->joined = 1;
+        if (ctl != NULL) {
+            if (outcome == ASX_JSON_NONE) {
+                it_fail_task(t, idx, "supervisor joined before its controller completed");
+                *out = STEP_END;
+                return 1;
+            }
+            ctl->joined = 1;
+            ctl->outcome = outcome;
+        }
+        if (st == ASX_OK) {
+            observe(t, idx, op, status_node(st), report_node(sv, &report));
+        } else {
+            observe_status(t, idx, op, st);
+        }
+        return 1;
+    }
+    return 0;
+}
+
 static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32_t idx) {
     const char *op = it_str(step, "op");
     asx_status st;
@@ -2444,6 +3020,7 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         if (exec_channel_wait(t, step, idx, op, &r)) return r;
         if (exec_group(t, self, step, idx, op, &r)) return r;
         if (exec_server(t, step, idx, op, &r)) return r;
+        if (exec_supervisor(t, self, step, idx, op, &r)) return r;
     }
     if (strcmp(op, "yield") == 0) {
         if (t->phase == 0u) {
@@ -2553,7 +3130,8 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         if (task_completed(target->id)) {
             /* A child its admission refused: the join observes the
              * refusal, as twin_run projects Rust's (DSL §3.4). */
-            asx_status why = admission_refusal(target->id);
+            asx_status why = target->admission_refusal != ASX_OK ? target->admission_refusal
+                                                                 : admission_refusal(target->id);
             uint32_t value = take_outcome(target, &st);
             if (why != ASX_OK && st == ASX_OK) {
                 target->admission_refusal = why;
@@ -3055,11 +3633,25 @@ static uint32_t project_events(uint32_t obligations) {
             asx_json_set(g_out, obligations, name, record);
             break;
         }
-        case ASX_TRACE_USER:
+        case ASX_TRACE_USER: {
+            it_sup_trace p;
             ev = event_object("user.trace");
-            asx_json_set(g_out, ev, "message",
-                         asx_json_new_string_len(g_out, &g_text[e->text_off], e->text_len));
+            if (parse_sup_trace(&g_text[e->text_off], &p)) {
+                /* Its raw ids replaced by their names (vocabulary §3). */
+                char buf[384];
+                (void)snprintf(buf, sizeof(buf),
+                               "managed_supervisor_v1 action=%s supervisor=\"%s\" child=\"%s\" "
+                               "generation=%llu region=%s task=%s outcome=%s",
+                               p.action, p.supervisor, p.child, p.generation,
+                               region_name_of((asx_region_id)p.region),
+                               task_name_of((asx_task_id)p.task), p.outcome);
+                asx_json_set(g_out, ev, "message", asx_json_new_string(g_out, buf));
+            } else {
+                asx_json_set(g_out, ev, "message",
+                             asx_json_new_string_len(g_out, &g_text[e->text_off], e->text_len));
+            }
             break;
+        }
         case ASX_TRACE_REGION_CANCELLED:
             ev = event_object("region.cancelled");
             if (!e->has_reason) {
@@ -3163,6 +3755,12 @@ static uint32_t build_snapshot(uint32_t obligations) {
             if (!t->member_done) quiescent = 0;
             continue;
         }
+        if (t->supervised) {
+            /* Reported through its supervisor's trace and report only. */
+            asx_task_state s;
+            if (asx_task_get_state(t->id, &s) == ASX_OK && s != ASX_TASK_COMPLETED) quiescent = 0;
+            continue;
+        }
         if (t->joined) {
             outcome = asx_json_copy(g_out, g_out, t->outcome);
         } else {
@@ -3173,7 +3771,16 @@ static uint32_t build_snapshot(uint32_t obligations) {
             }
             state = task_state_name(s);
             if (s == ASX_TASK_COMPLETED) {
-                outcome = t->server ? server_outcome_node(t->id) : outcome_node(t->id);
+                if (t->server) {
+                    outcome = server_outcome_node(t->id);
+                } else if (t->supervisor) {
+                    uint32_t k;
+                    for (k = 0; k < g_n_sups; k++) {
+                        if (g_sups[k].task == i) outcome = supervisor_outcome_node(&g_sups[k]);
+                    }
+                } else {
+                    outcome = outcome_node(t->id);
+                }
             } else {
                 asx_cancel_reason r;
                 quiescent = 0;
@@ -3405,6 +4012,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     g_failed = 0;
     g_n_tasks = 0;
     g_n_servers = 0;
+    g_n_sups = 0;
     g_n_regions = 0;
     g_n_events = 0;
     g_text_used = 0;
@@ -3557,6 +4165,10 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     if (!g_failed) run_scheduler(asx_scheduler_run, root, &budget, "run_with_auto_advance");
     asx_trace_set_observer(NULL, NULL);
     if (g_failed) return ASX_E_INVALID_STATE;
+
+    /* Supervisor regions no generation named. */
+    name_generationless_regions();
+    name_unstarted_regions();
 
     /* Project (DSL §2). */
     obligations = asx_json_new_object(out);

@@ -342,6 +342,11 @@ ASX_API ASX_MUST_USE asx_status asx_region_close_poll(asx_task_id self, asx_regi
  * NULL, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for invalid handles. */
 ASX_API ASX_MUST_USE asx_status asx_region_get_budget(asx_region_id id, asx_budget *out);
 
+/* Read a region's parent (ASX_INVALID_ID for a root region). Returns
+ * ASX_OK, ASX_E_INVALID_ARGUMENT if out is NULL, ASX_E_NOT_FOUND /
+ * ASX_E_STALE_HANDLE for invalid handles. */
+ASX_API ASX_MUST_USE asx_status asx_region_get_parent(asx_region_id id, asx_region_id *out);
+
 /* Region admission limits (Rust RegionLimits, record/region.rs:208): each
  * caps the region's live work, and ASX_REGION_UNLIMITED (every field of a
  * new region) means no cap. An admission that would exceed one is refused

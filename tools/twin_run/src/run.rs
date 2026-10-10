@@ -5,9 +5,9 @@
 //! It interprets the driver (setup, script, finish), the control, masking,
 //! obligation, spawn/join and child-region steps, the sync (mutex,
 //! semaphore, rwlock, barrier, notify), channel (mpsc, oneshot, broadcast,
-//! watch), group and combinator steps and the server steps (DSL §3.8), and
-//! projects the trace and the snapshot. A step it does not interpret (the
-//! supervision steps) fails the run as a harness error, never silently.
+//! watch), group and combinator steps and the server and supervisor steps
+//! (DSL §3.8), and projects the trace and the snapshot. A step it does not
+//! interpret fails the run as a harness error, never silently.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
@@ -25,6 +25,11 @@ use asupersync::record::task::TaskState;
 use asupersync::record::{ObligationAbortReason, ObligationKind, RegionLimits};
 use asupersync::runtime::obligation_mailbox::ObligationToken;
 use asupersync::runtime::{JoinError, TaskHandle};
+use asupersync::supervision::{
+    ChildSpec, EscalationPolicy, ManagedChildBinding, ManagedGeneration, ManagedRestartMode,
+    ManagedSupervisorError, ManagedSupervisorReport, RestartPolicy, SupervisionConfig,
+    SupervisorBuilder,
+};
 use asupersync::sync as asx_sync;
 use asupersync::trace::{CompactTaskId, TraceData, TraceEventKind};
 use asupersync::{Budget, CancelKind, CancelReason, Cx, RegionId, TaskId, Time};
@@ -100,6 +105,34 @@ struct Shared {
     /// (observation index, raw group result), projected with the join
     /// results once every task name is resolved.
     group_values: Vec<(usize, GroupValue)>,
+    /// Supervisors (DSL §3.8) in `supervise` order. A supervisor's snapshot
+    /// outcome is its join's (vocabulary §6): taken by `supervisor_join`,
+    /// else harvested (`harvest_supervisors`).
+    supervisors: Vec<SupervisorInfo>,
+    /// Controller handles of supervisors whose owner dropped them unjoined
+    /// (`Supervisor`'s Drop), kept for the harvest. A TaskHandle has no
+    /// Drop, so holding it changes nothing in the run.
+    dropped_supervisors: HashMap<String, TaskHandle<()>>,
+    /// Generation tasks (`<supervisor>/<child>#<n>`). Like group members,
+    /// their results reach the comparison only through the supervisor's
+    /// trace and report, and the snapshot leaves them out (vocabulary §6).
+    supervised: HashSet<String>,
+    /// (observation index, report) of `supervisor_join` steps that got one,
+    /// projected once every name is resolved.
+    supervisor_values: Vec<(usize, ManagedSupervisorReport<String>)>,
+}
+
+/// The report slot a controller publishes into (`ManagedSupervisor::spawn`).
+type ReportSlot = Arc<Mutex<Option<ManagedSupervisorReport<String>>>>;
+
+struct SupervisorInfo {
+    name: String,
+    /// The region its controller runs in: its supervisor region's parent.
+    region: String,
+    report: ReportSlot,
+    /// Its controller's provisional (mailbox) id; once admitted, its handle
+    /// reports the canonical one (TaskHandle::task_id).
+    provisional: TaskId,
 }
 
 /// What a group step returned, before projection (DSL §3.5).
@@ -381,6 +414,10 @@ fn finish_outcomes(s: &mut Shared) -> RunResult<()> {
         };
         s.observations[index]["value"] = value;
     }
+    for (index, report) in std::mem::take(&mut s.supervisor_values) {
+        let value = project_report(s, report)?;
+        s.observations[index]["value"] = value;
+    }
     Ok(())
 }
 
@@ -435,6 +472,115 @@ struct Local {
     watch_rx: BTreeMap<String, watch::Receiver<u64>>,
     /// GenServers this task spawned, by name (DSL §3.8).
     servers: BTreeMap<String, Server>,
+    /// Supervisors this task spawned, by name, joined or not (DSL §3.8):
+    /// each aborts its controller when dropped, in name order.
+    supervisors: BTreeMap<String, Supervisor>,
+}
+
+/// `ManagedSupervisorHandle` (supervision.rs:3402-3450), built the way
+/// `ManagedSupervisor::spawn` builds it (:3497-3505), so the harness can see
+/// whether the controller published its report.
+struct Supervisor {
+    name: String,
+    task: Option<TaskHandle<()>>,
+    report: ReportSlot,
+    joined: bool,
+    shared: SharedRef,
+}
+
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+            if !self.joined {
+                lock(&self.shared)
+                    .dropped_supervisors
+                    .insert(self.name.clone(), task);
+            }
+        }
+    }
+}
+
+fn lock_report(slot: &ReportSlot) -> MutexGuard<'_, Option<ManagedSupervisorReport<String>>> {
+    slot.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// A supervised child's managed factory (DSL §3.8): each generation runs
+/// the child's program in its own task and region, both named
+/// `<supervisor>/<child>#<n>`, recorded when the factory runs inside the
+/// generation's task (`name_supervision` names a generation that never
+/// started from the supervisor's trace). Its program's return is the
+/// generation's outcome; a `return panicked` panics inside the factory's
+/// future, which the controller catches.
+fn generation_binding(
+    shared: &SharedRef,
+    supervisor: &str,
+    child: String,
+    mode: ManagedRestartMode,
+    program: Vec<Value>,
+) -> ManagedChildBinding<String> {
+    let shared = Arc::clone(shared);
+    let prefix = format!("{supervisor}/{child}");
+    ManagedChildBinding::new(
+        child,
+        mode,
+        move |ccx: Cx, generation: ManagedGeneration| {
+            let name = format!("{prefix}#{}", generation.number);
+            {
+                let mut s = lock(&shared);
+                let id = ccx.task_id();
+                s.self_ids.entry(name.clone()).or_insert(id);
+                s.task_ids.insert(name.clone(), id);
+                s.task_names.insert(id, name.clone());
+                s.task_regions.insert(name.clone(), name.clone());
+                s.supervised.insert(name.clone());
+                s.region_names
+                    .entry(generation.region)
+                    .or_insert_with(|| name.clone());
+                s.region_ids.insert(name.clone(), generation.region);
+            }
+            let ctx = Arc::new(TaskCtx {
+                shared: Arc::clone(&shared),
+                me: name.clone(),
+                region: name,
+            });
+            let program = program.clone();
+            async move {
+                match run_program(ccx, ctx, program, Vec::new()).await {
+                    Body::Ok => asupersync::Outcome::Ok(()),
+                    Body::Err(status) => asupersync::Outcome::Err(status),
+                }
+            }
+        },
+    )
+}
+
+/// The first step in a program, or in the member programs of its steps,
+/// that names a task, region, server or supervisor by `as` (DSL §3.8).
+fn naming_step(program: &Value) -> Option<String> {
+    for step in program.as_array()? {
+        let op = step.get("op").and_then(Value::as_str).unwrap_or("");
+        if matches!(op, "spawn" | "open_region" | "server_spawn" | "supervise") {
+            return Some(op.to_string());
+        }
+        if let Some(members) = step.get("members").and_then(Value::as_array)
+            && let Some(op) = members.iter().find_map(naming_step)
+        {
+            return Some(op);
+        }
+    }
+    None
+}
+
+/// The ChildStart a managed binding never invokes: the compiled topology
+/// needs one per child, and `bind_managed` consumes it unused.
+fn unused_child_start(
+    _: &asupersync::cx::Scope<'static, asupersync::types::policy::FailFast>,
+    _: &mut asupersync::runtime::RuntimeState,
+    _: &Cx,
+) -> Result<TaskId, asupersync::runtime::SpawnError> {
+    unreachable!("a managed supervisor never runs a legacy ChildStart")
 }
 
 /// A server's name and the shared state: the server records its canonical
@@ -1734,6 +1880,178 @@ async fn exec_step(
                 .insert(name.to_string(), result.map(|()| Body::Ok));
             observe(&ctx.shared, me, idx, op, status, Value::Null);
         }
+        "supervise" => {
+            let name = str_field(step, "as")?.to_string();
+            let policy = match str_field(step, "policy")? {
+                "one_for_one" => RestartPolicy::OneForOne,
+                "one_for_all" => RestartPolicy::OneForAll,
+                "rest_for_one" => RestartPolicy::RestForOne,
+                other => return Err(format!("unknown policy {other:?}")),
+            };
+            let escalation = match step.get("escalation").and_then(Value::as_str) {
+                None | Some("stop") => EscalationPolicy::Stop,
+                Some("escalate") => EscalationPolicy::Escalate,
+                Some(other) => return Err(format!("unknown escalation {other:?}")),
+            };
+            let max_restarts =
+                u32::try_from(u64_field(step, "max_restarts")?).map_err(|e| e.to_string())?;
+            let window = Duration::from_nanos(u64_field(step, "window_ns")?);
+            let children = step
+                .get("children")
+                .and_then(Value::as_array)
+                .ok_or("supervise without children")?;
+            let mut builder = SupervisorBuilder::new(name.clone()).with_restart_policy(policy);
+            let mut bindings = Vec::with_capacity(children.len());
+            for child in children {
+                let child_name = str_field(child, "name")?.to_string();
+                if let Some(op) = child.get("program").and_then(naming_step) {
+                    return Err(format!(
+                        "supervised child {child_name:?} uses {op:?}, whose name a restart would reuse (DSL §3.8)"
+                    ));
+                }
+                let mode = match str_field(child, "mode")? {
+                    "permanent" => ManagedRestartMode::Permanent,
+                    "transient" => ManagedRestartMode::Transient,
+                    "temporary" => ManagedRestartMode::Temporary,
+                    other => return Err(format!("unknown child mode {other:?}")),
+                };
+                let program = child
+                    .get("program")
+                    .and_then(Value::as_array)
+                    .ok_or("supervised child without a program")?
+                    .clone();
+                builder = builder.child(ChildSpec::new(child_name.clone(), unused_child_start));
+                bindings.push(generation_binding(
+                    &ctx.shared,
+                    &name,
+                    child_name,
+                    mode,
+                    program,
+                ));
+            }
+            let compiled = builder
+                .compile()
+                .map_err(|e| format!("supervise {name:?}: {e}"))?;
+            let config = SupervisionConfig::new(max_restarts, window)
+                .with_restart_policy(policy)
+                .with_escalation(escalation);
+            let supervisor = compiled
+                .bind_managed(bindings, config)
+                .map_err(|e| format!("supervise {name:?}: {e:?}"))?;
+            // ManagedSupervisor::spawn (supervision.rs:3497-3505); NamedTimers
+            // only names the controller's backoff timers.
+            let report: ReportSlot = Arc::new(Mutex::new(None));
+            let publication = Arc::clone(&report);
+            let shared = Arc::clone(&ctx.shared);
+            let owner = name.clone();
+            let task = cx
+                .spawn(move |controller_cx| async move {
+                    // Its canonical id under its name, as run_program
+                    // records a child's (resolve_admissions).
+                    lock(&shared)
+                        .self_ids
+                        .entry(owner.clone())
+                        .or_insert_with(|| controller_cx.task_id());
+                    let buffer = controller_cx.trace_buffer();
+                    let result = NamedTimers {
+                        inner: Box::pin(supervisor.run(&controller_cx)),
+                        buffer,
+                        shared,
+                        owner,
+                        counter: 0,
+                        active: None,
+                    }
+                    .await;
+                    *lock_report(&publication) = Some(result);
+                })
+                .map_err(|e| format!("supervise spawn failed: {e:?}"))?;
+            {
+                let mut s = lock(&ctx.shared);
+                s.provisional.insert(task.task_id(), name.clone());
+                s.task_regions.insert(name.clone(), ctx.region.clone());
+                s.supervisors.push(SupervisorInfo {
+                    name: name.clone(),
+                    region: ctx.region.clone(),
+                    report: Arc::clone(&report),
+                    provisional: task.task_id(),
+                });
+            }
+            let previous = local.supervisors.insert(
+                name.clone(),
+                Supervisor {
+                    name,
+                    task: Some(task),
+                    report,
+                    joined: false,
+                    shared: Arc::clone(&ctx.shared),
+                },
+            );
+            if previous.is_some() {
+                return Err("supervise reuses a supervisor name".to_string());
+            }
+            observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
+        }
+        "supervisor_join" => {
+            let name = str_field(step, "supervisor")?;
+            let supervisor = local
+                .supervisors
+                .get_mut(name)
+                .filter(|s| !s.joined)
+                .ok_or_else(|| format!("unknown or already joined supervisor {name:?}"))?;
+            // ManagedSupervisorHandle::join (supervision.rs:3429-3443).
+            let task = supervisor
+                .task
+                .as_mut()
+                .ok_or("supervisor without a task")?;
+            let terminal = std::future::poll_fn(|c| task.poll_join(c)).await;
+            supervisor.joined = true;
+            // Joined, the handle knows its controller's canonical id (one
+            // that never ran recorded none itself).
+            let id = task.task_id();
+            {
+                let mut s = lock(&ctx.shared);
+                if s.supervisors
+                    .iter()
+                    .any(|i| i.name == name && i.provisional != id)
+                {
+                    s.self_ids.entry(name.to_string()).or_insert(id);
+                }
+            }
+            let result = match lock_report(&supervisor.report).take() {
+                Some(mut report) => {
+                    if let Err(JoinError::Panicked(payload)) = &terminal {
+                        report.outcome = asupersync::Outcome::Panicked(payload.clone());
+                    }
+                    Ok(report)
+                }
+                None => match terminal {
+                    Err(error) => Err(error),
+                    Ok(()) => return Err("managed controller omitted its report".to_string()),
+                },
+            };
+            let status = match &result {
+                Ok(_) => "ASX_OK",
+                Err(JoinError::Cancelled(_)) => "ASX_E_CANCELLED",
+                Err(_) => "ASX_E_INVALID_STATE",
+            };
+            let index = {
+                let mut s = lock(&ctx.shared);
+                // The controller's outcome for the snapshot: its join's
+                // (vocabulary §6).
+                let outcome = match &result {
+                    Ok(_) => Ok(Body::Ok),
+                    Err(JoinError::Cancelled(reason)) => Err(JoinError::Cancelled(reason.clone())),
+                    Err(JoinError::Panicked(payload)) => Err(JoinError::Panicked(payload.clone())),
+                    Err(other) => return Err(format!("supervisor join gave {other:?}")),
+                };
+                s.raw_outcomes.insert(name.to_string(), outcome);
+                s.observations.len()
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+            if let Ok(report) = result {
+                lock(&ctx.shared).supervisor_values.push((index, report));
+            }
+        }
         "join" => {
             let target = str_field(step, "task")?;
             if lock(&ctx.shared).unspawned.contains(target) {
@@ -2004,6 +2322,79 @@ impl<F> Drop for NamedSleep<'_, F> {
             drop(sleep);
             self.name_events(before);
         }
+    }
+}
+
+/// `NamedSleep` for a future that sleeps more than once, one sleep at a
+/// time: a supervisor's controller, whose only timers are its restart
+/// backoffs (supervision.rs:2984-3013). Each new sleep takes the owner's
+/// next timer number; a re-arm (the sleep cancels its timer and schedules
+/// another in the same poll, time/sleep.rs:880-998), the fire and a cancel
+/// keep that sleep's name.
+struct NamedTimers<F> {
+    inner: Pin<Box<F>>,
+    buffer: Option<asupersync::trace::TraceBufferHandle>,
+    shared: SharedRef,
+    owner: String,
+    counter: u32,
+    /// The current sleep's timer id and name.
+    active: Option<(u64, String)>,
+}
+
+impl<F> NamedTimers<F> {
+    fn last_seq(&self) -> Option<u64> {
+        self.buffer.as_ref()?.snapshot().last().map(|e| e.seq)
+    }
+
+    fn name_events(&mut self, after: Option<u64>) {
+        let Some(events) = self.buffer.as_ref().map(|b| b.snapshot()) else {
+            return;
+        };
+        let mut s = lock(&self.shared);
+        // A sleep that cancelled its timer in this poll: the next schedule
+        // is its re-arm.
+        let mut rearming: Option<String> = None;
+        for event in events.iter().filter(|e| after.is_none_or(|a| e.seq > a)) {
+            let TraceData::Timer { timer_id, .. } = event.data else {
+                continue;
+            };
+            let name = match event.kind {
+                TraceEventKind::TimerScheduled => {
+                    let name = rearming.take().unwrap_or_else(|| {
+                        self.counter += 1;
+                        format!("{}/tm{}", self.owner, self.counter)
+                    });
+                    self.active = Some((timer_id, name.clone()));
+                    name
+                }
+                _ => match self.active.take() {
+                    Some((id, name)) if id == timer_id => {
+                        if event.kind == TraceEventKind::TimerCancelled {
+                            rearming = Some(name.clone());
+                        }
+                        name
+                    }
+                    other => {
+                        // Not this future's timer.
+                        self.active = other;
+                        continue;
+                    }
+                },
+            };
+            s.timer_names.insert(event.seq, name);
+        }
+    }
+}
+
+impl<F: Future> Future for NamedTimers<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, pcx: &mut std::task::Context<'_>) -> std::task::Poll<F::Output> {
+        let this = self.get_mut();
+        let before = this.last_seq();
+        let polled = this.inner.as_mut().poll(pcx);
+        this.name_events(before);
+        polled
     }
 }
 
@@ -2287,7 +2678,9 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
     }
 
     resolve_admissions(&lab, &shared)?;
+    name_supervision(&lab, &shared)?;
     harvest_servers(&lab, &mut lock(&shared));
+    harvest_supervisors(&lab, &mut lock(&shared))?;
     project_denied_spawns(&mut lock(&shared))?;
     finish_outcomes(&mut lock(&shared))?;
 
@@ -2489,6 +2882,377 @@ fn harvest_servers(lab: &LabRuntime, s: &mut Shared) {
     }
 }
 
+/// The outcome of each supervisor nobody joined: its join's (vocabulary
+/// §6). A controller that published its report is `ok`; one that never ran
+/// is its task's own (cancelled before its first poll).
+fn harvest_supervisors(lab: &LabRuntime, s: &mut Shared) -> RunResult<()> {
+    let supervisors: Vec<(String, ReportSlot)> = s
+        .supervisors
+        .iter()
+        .map(|i| (i.name.clone(), Arc::clone(&i.report)))
+        .collect();
+    for (name, report) in supervisors {
+        if s.raw_outcomes.contains_key(&name) {
+            continue;
+        }
+        let Some(id) = s.task_ids.get(&name).copied() else {
+            continue; // never admitted: not in the snapshot
+        };
+        if lock_report(&report).is_some() {
+            s.raw_outcomes.insert(name, Ok(Body::Ok));
+            continue;
+        }
+        if let Some(mut task) = s.dropped_supervisors.remove(&name) {
+            match task.try_join() {
+                Ok(Some(())) => {
+                    return Err(format!("supervisor {name:?} finished without its report"));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    s.raw_outcomes.insert(name, Err(error));
+                }
+            }
+            continue;
+        }
+        let result = match lab.state.task(id).map(|record| &record.state) {
+            Some(TaskState::Completed(asupersync::Outcome::Panicked(payload))) => {
+                Err(JoinError::Panicked(payload.clone()))
+            }
+            Some(TaskState::Completed(asupersync::Outcome::Cancelled(reason))) => {
+                Err(JoinError::Cancelled(reason.clone()))
+            }
+            Some(TaskState::Completed(_)) => {
+                return Err(format!("supervisor {name:?} finished without its report"));
+            }
+            Some(_) => continue, // still running
+            None => return Err(format!("supervisor {name:?} finished out of sight")),
+        };
+        s.raw_outcomes.insert(name, result);
+    }
+    Ok(())
+}
+
+/// One `managed_supervisor_v1` user trace of a supervisor's controller
+/// (supervision.rs:2458-2480), split into its fields. Its region and task
+/// are raw ids; the projection replaces them with names.
+struct SupervisorTrace<'a> {
+    action: &'a str,
+    supervisor: &'a str,
+    child: &'a str,
+    generation: u64,
+    region: &'a str,
+    task: &'a str,
+    outcome: &'a str,
+}
+
+const SUPERVISOR_TRACE: &str = "managed_supervisor_v1 ";
+
+/// Every region and task id the trace mentions, by its Debug spelling,
+/// with each created region's parent and the first task enqueued and the
+/// first admitted in each region (a generation's region gets its
+/// generation's task first, before anything that task spawns).
+#[derive(Default)]
+struct IdsSeen {
+    regions: HashMap<String, RegionId>,
+    parents: HashMap<RegionId, Option<RegionId>>,
+    created: Vec<RegionId>,
+    tasks: HashMap<String, TaskId>,
+    first_in: HashMap<RegionId, Vec<TaskId>>,
+}
+
+impl IdsSeen {
+    fn from_trace(lab: &LabRuntime) -> Self {
+        use TraceEventKind as K;
+        let mut ids = Self::default();
+        for event in lab.trace().snapshot() {
+            match (&event.kind, &event.data) {
+                (K::RegionCreated, TraceData::Region { region, parent }) => {
+                    ids.regions.insert(format!("{region:?}"), *region);
+                    ids.parents.insert(*region, *parent);
+                    ids.created.push(*region);
+                }
+                (
+                    K::Spawn | K::TaskSpawnEnqueued | K::TaskAdmitted,
+                    TraceData::Task { task, region },
+                ) => {
+                    ids.tasks.insert(format!("{task:?}"), *task);
+                    let first = ids.first_in.entry(*region).or_default();
+                    // The first enqueue (its provisional id) and the first
+                    // admission (its canonical id).
+                    if first.len() < 2
+                        && matches!(event.kind, K::TaskSpawnEnqueued | K::TaskAdmitted)
+                        && !first.contains(task)
+                    {
+                        first.push(*task);
+                    }
+                }
+                _ => {}
+            }
+        }
+        ids
+    }
+}
+
+fn parse_supervisor_trace(message: &str) -> RunResult<Option<SupervisorTrace<'_>>> {
+    let Some(rest) = message.strip_prefix(SUPERVISOR_TRACE) else {
+        return Ok(None);
+    };
+    let mut fields: HashMap<&str, &str> = HashMap::new();
+    for field in rest.split(' ') {
+        let (key, value) = field
+            .split_once('=')
+            .ok_or_else(|| format!("malformed supervisor trace {message:?}"))?;
+        fields.insert(key, value);
+    }
+    let get = |key: &str| {
+        fields
+            .get(key)
+            .copied()
+            .ok_or_else(|| format!("supervisor trace without {key}: {message:?}"))
+    };
+    // ChildName's Debug is its str's: quoted, and DSL names need no escapes.
+    let unquote = |key: &str| {
+        get(key).and_then(|v| {
+            v.strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .ok_or_else(|| format!("unquoted {key} in supervisor trace {message:?}"))
+        })
+    };
+    Ok(Some(SupervisorTrace {
+        action: get("action")?,
+        supervisor: unquote("supervisor")?,
+        child: unquote("child")?,
+        generation: get("generation")?
+            .parse()
+            .map_err(|_| format!("bad generation in {message:?}"))?,
+        region: get("region")?,
+        task: get("task")?,
+        outcome: get("outcome")?,
+    }))
+}
+
+/// Name what supervisors created (vocabulary §2) before anything is
+/// projected. Each generation's region and task are
+/// `<supervisor>/<child>#<n>`; the controller's traces carry every
+/// generation's identity, so one whose factory never ran (cancelled before
+/// its first poll) is named too, with the id its handle held. A
+/// supervisor's region is the parent of its generations' regions. For one
+/// that started no generation it is the supervisor's name when it is the
+/// one unnamed region created under its controller's region and no other
+/// such supervisor runs there; else the trace cannot tell whose is whose,
+/// and every unnamed region created there is `<region>/supervisor<k>`, k in
+/// creation order. A region opened for a generation that never started is
+/// `<supervisor region>/unstarted<k>`.
+fn name_supervision(lab: &LabRuntime, shared: &SharedRef) -> RunResult<()> {
+    use TraceEventKind as K;
+    let mut s = lock(shared);
+    if s.supervisors.is_empty() {
+        return Ok(());
+    }
+    let ids = IdsSeen::from_trace(lab);
+    let mut generations: Vec<(String, String, String, String)> = Vec::new();
+    for event in lab.trace().snapshot() {
+        if let (K::UserTrace, TraceData::Message(message)) = (&event.kind, &event.data)
+            && let Some(t) = parse_supervisor_trace(message)?
+        {
+            generations.push((
+                t.supervisor.to_string(),
+                format!("{}/{}#{}", t.supervisor, t.child, t.generation),
+                t.region.to_string(),
+                t.task.to_string(),
+            ));
+        }
+    }
+    let owner_regions: HashMap<String, String> = s
+        .supervisors
+        .iter()
+        .map(|i| (i.name.clone(), i.region.clone()))
+        .collect();
+    for (supervisor, name, region_token, task_token) in generations {
+        let region = *ids
+            .regions
+            .get(&region_token)
+            .ok_or_else(|| format!("supervisor trace names an unknown {region_token}"))?;
+        name_region(&mut s, region, &name)?;
+        let parent = ids
+            .parents
+            .get(&region)
+            .copied()
+            .flatten()
+            .ok_or_else(|| format!("generation region {name:?} has no parent"))?;
+        name_region(&mut s, parent, &supervisor)?;
+        s.region_parents
+            .insert(name.clone(), Some(supervisor.clone()));
+        let owner = owner_regions
+            .get(&supervisor)
+            .ok_or_else(|| format!("trace of an unknown supervisor {supervisor:?}"))?;
+        s.region_parents
+            .insert(supervisor.clone(), Some(owner.clone()));
+        let mut tasks: Vec<TaskId> = ids.first_in.get(&region).cloned().unwrap_or_default();
+        if let Some(task) = ids.tasks.get(&task_token) {
+            tasks.push(*task);
+        }
+        for task in tasks {
+            name_task(&mut s, task, &name)?;
+        }
+        s.supervised.insert(name.clone());
+        s.task_regions.insert(name.clone(), name);
+    }
+    // Supervisors whose region holds no generation.
+    let mut fallback: Vec<(RegionId, String)> = Vec::new();
+    let unnamed: Vec<(String, String)> = s
+        .supervisors
+        .iter()
+        .filter(|i| !s.region_ids.contains_key(&i.name))
+        .map(|i| (i.name.clone(), i.region.clone()))
+        .collect();
+    for (supervisor, owner) in &unnamed {
+        let Some(owner_id) = s.region_ids.get(owner).copied() else {
+            continue;
+        };
+        let candidates: Vec<RegionId> = ids
+            .created
+            .iter()
+            .copied()
+            .filter(|r| ids.parents.get(r).copied().flatten() == Some(owner_id))
+            .filter(|r| !s.region_names.contains_key(r))
+            .collect();
+        let siblings = unnamed.iter().filter(|(_, o)| o == owner).count();
+        match candidates.as_slice() {
+            [] => {}
+            [region] if siblings == 1 => {
+                name_region(&mut s, *region, supervisor)?;
+                s.region_parents
+                    .insert(supervisor.clone(), Some(owner.clone()));
+            }
+            _ => {
+                // Several: the trace cannot tell whose is whose, so they are
+                // named after their parent, in creation order.
+                for (k, region) in candidates.iter().enumerate() {
+                    let name = format!("{owner}/supervisor{}", k + 1);
+                    name_region(&mut s, *region, &name)?;
+                    s.region_parents.insert(name.clone(), Some(owner.clone()));
+                    fallback.push((*region, name));
+                }
+            }
+        }
+    }
+    // A region a controller opened for a generation it then did not start
+    // (it was cancelled first) appears in no trace of it:
+    // "<supervisor>/unstarted<k>", k in creation order.
+    let supervisor_regions: HashMap<RegionId, String> = s
+        .supervisors
+        .iter()
+        .filter_map(|i| s.region_ids.get(&i.name).map(|r| (*r, i.name.clone())))
+        .chain(fallback)
+        .collect();
+    let mut unstarted: HashMap<String, u32> = HashMap::new();
+    for region in &ids.created {
+        if s.region_names.contains_key(region) {
+            continue;
+        }
+        let Some(supervisor) = ids
+            .parents
+            .get(region)
+            .copied()
+            .flatten()
+            .and_then(|p| supervisor_regions.get(&p))
+        else {
+            continue;
+        };
+        let k = unstarted.entry(supervisor.clone()).or_insert(0);
+        *k += 1;
+        let name = format!("{supervisor}/unstarted{k}");
+        name_region(&mut s, *region, &name)?;
+        s.region_parents.insert(name, Some(supervisor.clone()));
+    }
+    Ok(())
+}
+
+fn name_region(s: &mut Shared, region: RegionId, name: &str) -> RunResult<()> {
+    if let Some(other) = s.region_names.get(&region)
+        && other != name
+    {
+        return Err(format!(
+            "region {region:?} of {name:?} is already named {other:?}"
+        ));
+    }
+    s.region_names.insert(region, name.to_string());
+    s.region_ids.insert(name.to_string(), region);
+    Ok(())
+}
+
+fn name_task(s: &mut Shared, task: TaskId, name: &str) -> RunResult<()> {
+    if let Some(other) = s.task_names.get(&task)
+        && other != name
+    {
+        return Err(format!(
+            "task {task:?} of {name:?} is already named {other:?}"
+        ));
+    }
+    s.task_names.insert(task, name.to_string());
+    s.task_ids.entry(name.to_string()).or_insert(task);
+    Ok(())
+}
+
+/// A supervisor's join report (DSL §3.8): its outcome, its counters and
+/// each child's latest completed generation, in start order.
+fn project_report(s: &Shared, report: ManagedSupervisorReport<String>) -> RunResult<Value> {
+    use asupersync::Outcome;
+    let outcome = match report.outcome {
+        Outcome::Ok(()) => json!({"tag": "ok"}),
+        Outcome::Err(error) => {
+            let (kind, child) = match &error {
+                ManagedSupervisorError::Region(_) => ("Region", None),
+                ManagedSupervisorError::Spawn(_) => ("Spawn", None),
+                ManagedSupervisorError::ChildNotStarted { child, .. } => {
+                    ("ChildNotStarted", Some(child))
+                }
+                ManagedSupervisorError::DependencyUnavailable { child, .. } => {
+                    ("DependencyUnavailable", Some(child))
+                }
+                ManagedSupervisorError::RestartLimit { child, .. } => ("RestartLimit", Some(child)),
+                ManagedSupervisorError::GenerationExhausted(child) => {
+                    ("GenerationExhausted", Some(child))
+                }
+                ManagedSupervisorError::Cleanup { child, .. } => ("Cleanup", Some(child)),
+                ManagedSupervisorError::SupervisorCleanup(_) => ("SupervisorCleanup", None),
+                ManagedSupervisorError::Escalation(_) => ("Escalation", None),
+                other => return Err(format!("supervisor error outside DSL v2: {other:?}")),
+            };
+            json!({"tag": "err", "error": kind, "child": child.map(|c| c.as_str())})
+        }
+        Outcome::Cancelled(reason) => {
+            json!({"tag": "cancelled", "reason": project_reason(s, &reason)?})
+        }
+        Outcome::Panicked(payload) => json!({"tag": "panicked", "message": payload.message()}),
+    };
+    let mut children = Vec::with_capacity(report.children.len());
+    for child in &report.children {
+        let outcome = match &child.outcome {
+            Outcome::Ok(()) => json!({"tag": "ok"}),
+            Outcome::Err(status) => json!({"tag": "err", "status": status}),
+            Outcome::Cancelled(reason) => {
+                json!({"tag": "cancelled", "reason": project_reason(s, reason)?})
+            }
+            Outcome::Panicked(payload) => json!({"tag": "panicked", "message": payload.message()}),
+        };
+        children.push(json!({
+            "child": child.name.as_str(),
+            "generation": child.generation.number,
+            "outcome": outcome,
+        }));
+    }
+    Ok(json!({
+        "outcome": outcome,
+        "started": report.started,
+        "joined": report.joined,
+        "restart_batches": report.restart_batches,
+        "escalations": report.escalations,
+        "children": children,
+    }))
+}
+
 /// Name the canonical ids of children spawned through `cx.spawn`. The spawn
 /// returns a handle carrying a provisional mailbox id; admission assigns the
 /// canonical arena id every later trace event uses. The trace pairs the two:
@@ -2499,6 +3263,22 @@ fn harvest_servers(lab: &LabRuntime, s: &mut Shared) {
 fn resolve_admissions(lab: &LabRuntime, shared: &SharedRef) -> RunResult<()> {
     use std::collections::VecDeque;
     let mut s = lock(shared);
+    // A dropped supervisor's handle knows its controller's canonical id
+    // once the controller was admitted, also when it never ran.
+    let admitted: Vec<(String, TaskId)> = s
+        .dropped_supervisors
+        .iter()
+        .filter_map(|(name, task)| {
+            let id = task.task_id();
+            s.supervisors
+                .iter()
+                .any(|i| i.name == *name && i.provisional != id)
+                .then(|| (name.clone(), id))
+        })
+        .collect();
+    for (name, id) in admitted {
+        s.self_ids.entry(name).or_insert(id);
+    }
     // A child that ran recorded its canonical id under its name
     // (run_program; a server from its hooks, `ServerName`): name it
     // directly. Enqueue order alone cannot pair a
@@ -2576,10 +3356,11 @@ fn name_admitted(s: &mut Shared, name: String, task: TaskId) -> RunResult<()> {
 fn project_denied_spawns(s: &mut Shared) -> RunResult<()> {
     let denied: Vec<String> = s.provisional.values().cloned().collect();
     for name in denied {
-        if s.servers.contains(&name) {
-            // A server the lab never admitted: `spawn_gen_server` returned
-            // its handle (the step observed ASX_OK), and a join observed the
-            // refusal itself (Cancelled). Its task is not in the snapshot.
+        if s.servers.contains(&name) || s.supervisors.iter().any(|i| i.name == name) {
+            // A server or supervisor the lab never admitted: its spawn
+            // returned a handle (the step observed ASX_OK), and a join
+            // observed the refusal itself (Cancelled). Its task is not in
+            // the snapshot.
             s.raw_outcomes.remove(&name);
             s.task_regions.remove(&name);
             continue;
@@ -2649,6 +3430,7 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
     let mut timer_order: Vec<String> = Vec::new();
     // timer id -> the name of its current schedule (ids are reused).
     let mut timer_current: HashMap<u64, String> = HashMap::new();
+    let ids_seen = IdsSeen::from_trace(lab);
     for event in lab.trace().snapshot() {
         let ev = match (&event.kind, &event.data) {
             (K::Spawn, TraceData::Task { task, region }) => {
@@ -2773,7 +3555,25 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
                 if message.starts_with("obligation_handoff_v") {
                     return Err("obligation handoff projection is not implemented yet".to_string());
                 }
-                json!({"k": "user.trace", "message": message})
+                match parse_supervisor_trace(message)? {
+                    // Its raw ids replaced by their names (vocabulary §3).
+                    Some(t) => {
+                        let region = ids_seen
+                            .regions
+                            .get(t.region)
+                            .ok_or_else(|| format!("supervisor trace names {}", t.region))?;
+                        let task = ids_seen
+                            .tasks
+                            .get(t.task)
+                            .ok_or_else(|| format!("supervisor trace names {}", t.task))?;
+                        json!({"k": "user.trace", "message": format!(
+                            "{SUPERVISOR_TRACE}action={} supervisor={:?} child={:?} generation={} region={} task={} outcome={}",
+                            t.action, t.supervisor, t.child, t.generation,
+                            region_name(&s, *region)?, task_name(&s, *task)?, t.outcome,
+                        )})
+                    }
+                    None => json!({"k": "user.trace", "message": message}),
+                }
             }
             // docs/VOCABULARY_EXCLUSIONS.md
             (
@@ -2863,7 +3663,7 @@ fn build_snapshot(lab: &LabRuntime, shared: &SharedRef, projected: &Projected) -
     let s = lock(shared);
     let mut tasks = serde_json::Map::new();
     for (name, id) in &s.task_ids {
-        if s.group_members.contains(name) {
+        if s.group_members.contains(name) || s.supervised.contains(name) {
             continue;
         }
         let (state, reason, cleanup) = match lab.state.task(*id) {

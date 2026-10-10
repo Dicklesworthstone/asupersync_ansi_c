@@ -433,6 +433,14 @@ asx_status asx_task_get_panic_message(asx_task_id id, const char **out) {
     return ASX_OK;
 }
 
+int asx_task_catch_panic_internal(asx_task_slot *t, const char **out_message) {
+    if (t == NULL || !t->in_poll || !t->panicked) return 0;
+    if (out_message != NULL) *out_message = t->panic_message;
+    t->panicked = 0;
+    t->panic_message = NULL;
+    return 1;
+}
+
 void asx_task_wake_slot_internal(asx_task_slot *task) {
     if (task == NULL || !task->alive) return;
     if (asx_task_is_terminal(task->state)) return;
@@ -1211,12 +1219,17 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
     uint64_t lab_step = asx_lab_step_begin_internal();
 
     *out_dispatched = 0;
-    /* step_inner (LR:4481-4500): spawn admissions, handle aborts, region
-     * commands, handle aborts again, then the step's draw. */
+    /* step_inner (LR:4481-4500): deferred cancel dispatches, spawn
+     * admissions, handle aborts, region commands, handle aborts again,
+     * deferred cancel dispatches again; reentrant cancellation left over
+     * gets the next step, before ready work. Then the step's draw. */
+    asx_lab_drain_deferred_cancels();
     asx_lab_admit_pending();
     asx_lab_drain_handle_cancels();
     asx_lab_drain_region_commands();
     asx_lab_drain_handle_cancels();
+    asx_lab_drain_deferred_cancels();
+    if (asx_lab_handle_cancels_pending() || asx_lab_deferred_cancels_pending()) return ASX_OK;
     r = asx_lab_rng_next();
     if (g_timer_heap_len > 0u || g_lab_deadline_armed > 0u) (void)timers_fire(sched_now());
     (void)sched_drain_wakers();
@@ -1259,8 +1272,16 @@ static asx_status sched_lab_run(asx_budget *budget, int advance_clock) {
         asx_time next = 0;
         ASX_CHECKPOINT_WAIVER("kernel-scheduler: the lab step loop; the step budget and the "
                               "1000-step stuck bound end it");
+        if (!advance_clock && (budget == NULL || budget->poll_quota > 0u)) {
+            /* run_until_idle applies queued handle aborts and deferred
+             * cancel dispatches before each step, once it has steps left
+             * (LR:3431-3438). */
+            asx_lab_drain_handle_cancels();
+            asx_lab_drain_deferred_cancels();
+        }
         if (asx_lab_scheduled_count() > 0u || asx_lab_admissions_pending() ||
-            asx_lab_region_commands_pending() || asx_lab_handle_cancels_pending()) {
+            asx_lab_region_commands_pending() || asx_lab_handle_cancels_pending() ||
+            asx_lab_deferred_cancels_pending()) {
             if (asx_budget_consume_poll(budget) == 0) {
                 sched_emit(ASX_SCHED_EVENT_BUDGET, ASX_INVALID_ID, step);
                 asx_trace_emit(ASX_TRACE_SCHED_BUDGET, ASX_INVALID_ID, step);

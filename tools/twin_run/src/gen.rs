@@ -46,8 +46,12 @@
 //! Servers (DSL §3.8, bd-86np): a task may spawn up to two counter or echo
 //! servers with a mailbox of 1 to 4, cast to and call them and stop them;
 //! a stopped server is never named again. Tasks never run in `root`, so a
-//! call is never refused as a scenario error. Left out on purpose:
-//! supervision, which neither oracle interprets.
+//! call is never refused as a scenario error.
+//!
+//! Supervisors (DSL §3.8): a task may spawn one supervisor of one to three
+//! children (any policy and restart modes, up to three restarts in a 1 s
+//! or 60 s window, sometimes escalating) and later join it, or leave it to
+//! the drop at its body's end, which aborts it.
 
 use serde_json::{Value, json};
 
@@ -132,6 +136,10 @@ struct Held {
     /// Servers this task spawned and has not stopped.
     servers: Vec<String>,
     server_spawns: u32,
+    /// The supervisor this task spawned (at most one) and whether it was
+    /// joined.
+    supervisor: Option<String>,
+    supervisor_joined: bool,
 }
 
 fn sleep_step(rng: &mut Rng) -> Value {
@@ -173,7 +181,7 @@ fn rw_acquire(rng: &mut Rng) -> Value {
 /// One step of task `me`'s program, given what it holds.
 fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
     loop {
-        match rng.below(27) {
+        match rng.below(29) {
             0 | 1 => return json!({"op": "yield"}),
             2 | 3 => return sleep_step(rng),
             4 | 5 => return checkpoint_step(rng),
@@ -398,9 +406,48 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                               "mailbox": 1 + rng.below(4)});
             }
             25 | 26 if !held.servers.is_empty() => return server_step(rng, held),
+            27 if held.supervisor.is_none() => {
+                let name = format!("{me}.sup");
+                held.supervisor = Some(name.clone());
+                return supervise_step(rng, &name);
+            }
+            28 if held.supervisor.is_some() && !held.supervisor_joined => {
+                held.supervisor_joined = true;
+                return json!({"op": "supervisor_join", "supervisor": held.supervisor});
+            }
             _ => {}
         }
     }
+}
+
+/// A supervisor of one to three children running small programs (no
+/// names of their own, which a restart would repeat; DSL §3.8), one in ten
+/// ending in a panic. Its restarts are bounded: every refused restart stops
+/// its child (or escalates), so it ends once its children do.
+fn supervise_step(rng: &mut Rng, name: &str) -> Value {
+    let policy = *rng.pick(&["one_for_one", "one_for_all", "rest_for_one"]);
+    let mut children = Vec::new();
+    for i in 0..1 + rng.below(3) {
+        let mut program = child_program(rng);
+        if rng.chance(10) {
+            program.push(
+                json!({"op": "return", "outcome": {"tag": "panicked", "message": "child panic"}}),
+            );
+        }
+        children.push(json!({
+            "name": format!("c{}", i + 1),
+            "mode": *rng.pick(&["permanent", "transient", "temporary"]),
+            "program": program,
+        }));
+    }
+    let mut step = json!({
+        "op": "supervise", "as": name, "policy": policy, "max_restarts": rng.below(4),
+        "window_ns": *rng.pick(&[1_000_000_000u64, 60_000_000_000]), "children": children,
+    });
+    if rng.chance(30) {
+        step["escalation"] = json!("escalate");
+    }
+    step
 }
 
 /// A cast, call or stop on one of the task's live servers.

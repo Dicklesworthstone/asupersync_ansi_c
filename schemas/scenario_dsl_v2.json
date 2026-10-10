@@ -50,6 +50,7 @@
   },
   "$defs": {
     "name": {"type": "string", "pattern": "^[a-z][a-z0-9_.]*$"},
+    "task_name": {"type": "string", "pattern": "^[a-z][a-z0-9_.]*(/[a-z][a-z0-9_.]*(#[1-9][0-9]*)?)*$"},
     "u64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
     "status": {"type": "string", "pattern": "^ASX_(OK|E_[A-Z0-9_]+)$"},
     "rule": {"enum": [
@@ -213,8 +214,9 @@
     "s_supervise": {"type": "object", "required": ["op", "as", "policy", "max_restarts", "window_ns", "children"], "additionalProperties": false,
       "properties": {"op": {"const": "supervise"}, "as": {"$ref": "#/$defs/name"},
                      "policy": {"enum": ["one_for_one", "one_for_all", "rest_for_one"]},
-                     "max_restarts": {"type": "integer", "minimum": 0}, "window_ns": {"$ref": "#/$defs/u64"},
-                     "children": {"type": "array", "minItems": 1, "items": {
+                     "escalation": {"enum": ["stop", "escalate"]},
+                     "max_restarts": {"type": "integer", "minimum": 0, "maximum": 32}, "window_ns": {"$ref": "#/$defs/u64"},
+                     "children": {"type": "array", "minItems": 1, "maxItems": 8, "items": {
                        "type": "object", "required": ["name", "mode", "program"], "additionalProperties": false,
                        "properties": {"name": {"$ref": "#/$defs/name"}, "mode": {"enum": ["permanent", "transient", "temporary"]},
                                       "program": {"$ref": "#/$defs/program"}}}}}},
@@ -225,7 +227,7 @@
        "properties": {"op": {"enum": ["cancel_region", "close_region"]}, "region": {"$ref": "#/$defs/name"},
                       "kind": {"$ref": "#/$defs/cancel_kind"}, "message": {"type": "string"}}},
       {"type": "object", "required": ["op", "task", "kind"], "additionalProperties": false,
-       "properties": {"op": {"const": "cancel_task"}, "task": {"$ref": "#/$defs/name"}, "kind": {"$ref": "#/$defs/cancel_kind"},
+       "properties": {"op": {"const": "cancel_task"}, "task": {"$ref": "#/$defs/task_name"}, "kind": {"$ref": "#/$defs/cancel_kind"},
                       "message": {"type": "string"}}},
       {"type": "object", "required": ["op", "ns"], "additionalProperties": false,
        "properties": {"op": {"const": "advance"}, "ns": {"$ref": "#/$defs/u64"}}},

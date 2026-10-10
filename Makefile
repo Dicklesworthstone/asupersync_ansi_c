@@ -608,13 +608,25 @@ cli: $(LIB_A) src/cli/main.c
 	@echo "[asx] cli binary: build/bin/asx"
 
 # Rust-parity oracle runner (bridge W1.5/W1.6): executes DSL v2 scenarios
-# through this runtime and compares them with Rust captures.
+# through this runtime and compares them with Rust captures. It links a
+# library built with the R3 arenas (64 regions, 256 tasks; asx_config.h) in
+# its own build directory: Rust has no fixed capacity, so a scenario must
+# never meet the unclassed build's 8-region arena, a footprint setting and
+# not semantics (a supervisor opens a region per generation).
 CONFORMANCE_RUNNER := $(BIN_DIR)/asx-conformance
+CONFORMANCE_BUILD_DIR := $(BUILD_DIR)/conformance-r3
+CONFORMANCE_LIB := $(CONFORMANCE_BUILD_DIR)/lib/libasx.a
 
 conformance-runner: $(CONFORMANCE_RUNNER)
 
-$(CONFORMANCE_RUNNER): tools/conformance/runner.c $(LIB_A) | $(BIN_DIR)
-	$(CC) $(ALL_CFLAGS) -I$(CURDIR)/src -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
+.PHONY: conformance-lib
+conformance-lib:
+	@$(MAKE) --no-print-directory BUILD_DIR=$(CONFORMANCE_BUILD_DIR) RESOURCE_CLASS=3 \
+		$(CONFORMANCE_LIB)
+
+$(CONFORMANCE_RUNNER): tools/conformance/runner.c conformance-lib | $(BIN_DIR)
+	$(CC) $(filter-out -DASX_RESOURCE_CLASS=%,$(ALL_CFLAGS)) -DASX_RESOURCE_CLASS=3 \
+		-I$(CURDIR)/src -o $@ $< $(CONFORMANCE_LIB) $(ALL_LDFLAGS)
 
 $(LIB_A): $(LIB_OBJ) | $(LIB_DIR)
 	@tmp="$@.$$$$.tmp"; \

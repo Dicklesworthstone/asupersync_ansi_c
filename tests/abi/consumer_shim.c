@@ -179,8 +179,9 @@ static void test_symbol_resolution(void) {
     SHIM_CHECK(asx_actor_call != NULL, "asx_actor_call resolves");
     SHIM_CHECK(asx_actor_stop != NULL, "asx_actor_stop resolves");
     SHIM_CHECK(asx_actor_join != NULL, "asx_actor_join resolves");
-    SHIM_CHECK(asx_supervisor_start != NULL, "asx_supervisor_start resolves");
-    SHIM_CHECK(asx_supervisor_stop != NULL, "asx_supervisor_stop resolves");
+    SHIM_CHECK(asx_supervisor_spawn != NULL, "asx_supervisor_spawn resolves");
+    SHIM_CHECK(asx_supervisor_join != NULL, "asx_supervisor_join resolves");
+    SHIM_CHECK(asx_supervisor_abort != NULL, "asx_supervisor_abort resolves");
 
     /* Typed symbol surface */
     SHIM_CHECK(asx_typed_symbol_register != NULL, "asx_typed_symbol_register resolves");
@@ -251,13 +252,13 @@ static asx_status shim_actor_call(void *state, uint64_t request, uint64_t *reply
     return ASX_OK;
 }
 
-static asx_status shim_child_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
-    asx_actor_behavior behavior;
-    behavior.init = NULL;
-    behavior.handle_cast = shim_actor_cast;
-    behavior.handle_call = shim_actor_call;
-    behavior.terminate = NULL;
-    return asx_actor_spawn(out, region, &behavior, user_data, 4u);
+/* A supervised child: each generation runs noop_poll. */
+static asx_status shim_child_start(void *user_data, const asx_supervisor_generation *gen,
+                                   asx_task_poll_fn *out_poll, void **out_data) {
+    (void)gen;
+    *out_poll = noop_poll;
+    *out_data = user_data;
+    return ASX_OK;
 }
 
 /* A task in a child region calling the server once. */
@@ -361,26 +362,23 @@ static void test_actor_surface_smoke(void) {
     st = asx_scheduler_run(rid, &budget);
     SHIM_CHECK(shim_is_progress_status(st), "actor stop run succeeds");
 
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 1u;
-    spec.start_fn = shim_child_start;
-    spec.user_data = &state;
-    spec.restart = ASX_CHILD_TEMPORARY;
+    asx_supervisor_config_init(&cfg, "shim", 1u, 1000000000u);
+    asx_child_spec_init(&spec, "child", ASX_CHILD_TEMPORARY, shim_child_start, NULL);
 
-    st = asx_supervisor_start(&supervisor, rid, &cfg, &spec, 1u);
-    SHIM_CHECK(st == ASX_OK, "supervisor_start succeeds");
-    SHIM_CHECK(asx_supervisor_child_count(supervisor) == 1u, "supervisor child count visible");
+    st = asx_supervisor_spawn(&supervisor, rid, &cfg, &spec, 1u);
+    SHIM_CHECK(st == ASX_OK, "supervisor_spawn succeeds");
+    SHIM_CHECK(asx_supervisor_task(supervisor) != ASX_INVALID_ID, "supervisor controller visible");
 
-    budget = asx_budget_from_polls(4u);
+    /* The temporary child's one generation ends; nothing is left to
+     * supervise, so the controller closes its region and finishes. */
+    budget = asx_budget_from_polls(64u);
     st = asx_scheduler_run(rid, &budget);
-    SHIM_CHECK(st == ASX_E_WOULD_BLOCK, "supervisor init run parks the quiet tree");
+    SHIM_CHECK(shim_is_progress_status(st), "supervisor run succeeds");
+    SHIM_CHECK(asx_supervisor_finished(supervisor), "supervisor finished");
+    SHIM_CHECK(!asx_supervisor_is_alive(supervisor), "supervisor no longer alive");
 
-    st = asx_supervisor_stop(supervisor);
-    SHIM_CHECK(st == ASX_OK, "supervisor_stop succeeds");
-
-    budget = asx_budget_from_polls(8u);
-    st = asx_scheduler_run(rid, &budget);
-    SHIM_CHECK(shim_is_progress_status(st), "supervisor stop drain succeeds");
+    st = asx_supervisor_abort(supervisor);
+    SHIM_CHECK(st == ASX_OK, "supervisor_abort of a finished supervisor is harmless");
 }
 
 /* --- Main --- */

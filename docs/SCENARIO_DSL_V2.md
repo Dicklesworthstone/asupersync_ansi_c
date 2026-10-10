@@ -224,7 +224,7 @@ ends holding tokens drops them first, as twin_run's locals do.
 | `spawn` | `as`, `program`, optional `budget`, optional `region` (a child region this task opened) | `cx.spawn(…)` (`cx.rs:4880`). A `budget` uses `cx.spawn_in(&cx.scope_with_budget(b), …)` (`:4976`, `:4547`). `region` uses `child.cx().spawn(…)` (`cx/child_region.rs:334`). | `asx_task_spawn_with_budget(region, interpreter_poll, program, budget, &id)` | no | ignored. A region that is closing or closed refuses the child, observed as `ASX_E_REGION_CLOSED`: C refuses at the spawn; Rust accepts the spawn into its mailbox and admission refuses it later (`SpawnError::RegionClosed`, `runtime/state.rs:1702`), resolving the handle as `JoinError::Cancelled`, which twin_run projects onto the spawn step. A refused child has no trace events and no snapshot entry. |
 | `join` | `task` | `handle.join(&cx).await` (`runtime/task_handle.rs:793`) | `asx_task_join_poll(self, target, &outcome)` until done | until the child completes | Ignored: join is uninterruptible (`task_handle.rs:1080-1126`). The observation `value` is the child's outcome (vocabulary §4); a refused child (`spawn` above) is observed as `ASX_E_REGION_CLOSED` with no value. |
 | `try_join` | `task` | `handle.try_join()` (`:863`) | `asx_task_join(target, &outcome)` | no | ignored. A running child gives `ASX_E_TASK_NOT_COMPLETED`; a refused child `ASX_E_REGION_CLOSED` once the next lab step's admission refused it, and before that (in the poll that spawned it) `ASX_E_TASK_NOT_COMPLETED`, as Rust's `try_join` reports not-ready while the admission is pending (`asx_task_refusal_delivered`). |
-| `abort_task` | `task`, `kind`, optional `message` | `handle.abort_with_reason(reason)` (`task_handle.rs:1005`), reason attributed to the requester (§4, "Reason attribution") | `asx_task_abort_request(target, &reason)` | no; the next lab step applies it (`drain_handle_cancel_requests`), or admission does for a child spawned in the same step. A refused child's handle only caches it: `ASX_OK`. | ignored |
+| `abort_task` | `task`, `kind`, optional `message` | `handle.abort_with_reason(reason)` (`task_handle.rs:1005`), reason attributed to the requester (§4, "Reason attribution") | `asx_task_abort_request(target, &reason)` | no; the next lab step applies it (`drain_handle_cancel_requests`). A child spawned in the same step caches it until its admission, which queues it as one handle-cancel command behind those already queued (`runtime/spawn_mailbox.rs:629-660`). A refused child's handle only caches it: `ASX_OK`, and its spawn and joins then observe `ASX_E_REGION_CLOSED` (§4, `region_limits`). | ignored |
 | `open_region` | `as`, optional `budget` | `cx.open_child_region(ChildRegionSpec::inherit().with_budget(b)).await` (`cx.rs:4491`; `child_region.rs:76`, `:87`) | `asx_region_open_child_poll(self, own_region, budget, &id)` until done | parked until the next lab step applies the Create command and wakes it | ignored. A closing parent gives `ASX_E_REGION_CLOSED`. |
 | `cancel_region` | `region` (one this task opened), `kind`, optional `message` | `child.cancel(reason)` (`child_region.rs:381`), reason attributed to the requester (§4, "Reason attribution") | `asx_region_cancel_request(region, &reason)` | no; the next lab step applies the Cancel command | ignored |
 | `close_region` | `region` (one this task opened) | `child.close().await` (`child_region.rs:424`): a Close command, then a wait for Closed | `asx_region_close_poll(self, region)` until done: the next lab step applies the Close (a region cancel with the User reason Rust's Close carries, `"owned child region body finished"`, `lab/runtime.rs:4195`); the region's Closed transition wakes the task | parked until Closed | Ignored: the closer's own cancellation is not observed. |
@@ -368,8 +368,31 @@ snapshot outcome is its join's (vocabulary §6).
 | `cast` | `server`, `value` | `h.cast(&cx, msg).await` (`gen_server.rs:1268`) | `asx_actor_cast(h, &cx, value, &op)` | while the mailbox is full | Checked first: `ASX_E_CANCELLED`; a stopping server: `ASX_E_DISCONNECTED`. |
 | `call` | `server`, `request` | `h.call(&cx, req).await` (`:1171`) | `asx_actor_call(h, &cx, request, &op, &reply)` | until the reply arrives | Checked first: `ASX_E_CANCELLED`; a stopping server: `ASX_E_DISCONNECTED`; a dropped call: `ASX_E_INVALID_STATE` (NoReply). The caller must not be in `"root"` (Rust rejects root-region callers, `gen_server.rs:1086-1094`); both interpreters reject such a scenario as a scenario error before running it. |
 | `server_stop` | `server` | `h.stop()` (`:1453`), then `h.join(&cx)` (`:1489`) | `asx_actor_stop`, then `asx_actor_join` | until its task finished | ignored; a server that never ran: `ASX_E_CANCELLED`. Later steps may not name the server. |
-| `supervise` | `as`, `policy` (`one_for_one`, `one_for_all`, `rest_for_one`), `max_restarts`, `window_ns`, `children` (`{name, mode: permanent\|transient\|temporary, program}`) | `SupervisorBuilder::new(name).with_restart_policy(p).child(…).compile()?.bind_managed(bindings, SupervisionConfig::new(max, window))?.spawn(&cx)` (`supervision.rs:894`, `:924`, `:931`, `:973`, `:2093`, `:3497`) | `asx_supervisor_start(&h, own_region, &config, children, n)` | no | ignored |
-| `supervisor_join` | `supervisor` | `handle.join(&cx).await` (`supervision.rs:3429`) | wait for `asx_supervisor_is_alive` to become false | until it exits | ignored |
+| `supervise` | `as`, `policy` (`one_for_one`, `one_for_all`, `rest_for_one`), optional `escalation` (`stop`, the default, or `escalate`), `max_restarts` (at most 32), `window_ns`, `children` (1 to 8 `{name, mode: permanent\|transient\|temporary, program}`) | `SupervisorBuilder::new(name).with_restart_policy(p)`, one `.child(ChildSpec::new(child, …))` each, `.compile()?` (`supervision.rs:894`, `:924`, `:655`, `:973`); `.bind_managed(bindings, SupervisionConfig::new(max, window).with_restart_policy(p).with_escalation(e))` (`:2093`, `:470`, `:491`, `:505`) with one `ManagedChildBinding::new(child, mode, factory)` each (`:1900`); then `ManagedSupervisor::spawn(&cx)` (`:3497`), which twin_run performs itself to keep the report | `asx_supervisor_spawn(&h, own_region, &config, specs, n)`, the config's backoff and budget left at `asx_supervisor_config_init`'s (Rust's defaults) | no | ignored |
+| `supervisor_join` | `supervisor` | `handle.join().await` (`supervision.rs:3429`) | `asx_supervisor_join(h, self, &report)` until it stops returning `ASX_E_PENDING` | until the controller published its report | Ignored: the join is not interrupted. The observation `value` is the report (below); a controller that never ran gives `ASX_E_CANCELLED` and no value. |
+
+A supervised child's program runs once per generation, as the task
+`<supervisor>/<child>#<n>` in a region of the same name (vocabulary §2);
+its `return` is the generation's outcome (`ok`, `err` with the step's
+status, or `panicked`, which both engines catch inside the generation),
+and a program that ends without one returns `ok`. Every generation reruns
+the same program, so it may not use `spawn`, `open_region`,
+`server_spawn` or `supervise`, also in group members: their `as` names
+would repeat. Both interpreters reject such a scenario as a scenario
+error. Group members are named after the generation, so groups are
+allowed.
+
+The `supervisor_join` value is
+`{"outcome", "started", "joined", "restart_batches", "escalations", "children"}`:
+`outcome` is `{"tag": "ok"}`, `{"tag": "err", "error": <kind>, "child": <name> | null}`
+with the `ManagedSupervisorError` kind (`RestartLimit`,
+`DependencyUnavailable`, `ChildNotStarted`, `GenerationExhausted`,
+`Region`, `Spawn` or `Escalation`), or a cancelled or panicked outcome
+(vocabulary §4); `children` holds each child's latest finished
+generation, in start order, as `{"child", "generation", "outcome"}`. A
+supervisor its owner did not join is aborted when the owner's program
+ends, as dropping a `ManagedSupervisorHandle` aborts the controller
+(`supervision.rs:3446`); the controller then drains every generation.
 
 ## 4. Driver operations (`script`)
 
@@ -379,7 +402,7 @@ idle and virtual time is advanced to `t` (§2).
 | op | Fields | Rust | C |
 |---|---|---|---|
 | `cancel_region` | `region`, `kind`, optional `message` | `lab.state.cancel_request(region, &reason, None)` (`state.rs:7547`); the effects are routed with `into_parts()`, `scheduler.schedule_cancel` and `dispatch()` (pattern: `tests/api_v2_integration.rs:347-358`) | `asx_region_cancel(region, &reason, NULL)` |
-| `cancel_task` | `task`, `kind`, optional `message` | `lab.state.cancel_task(task, &reason)` (`state.rs:3429`), effects routed as above | `asx_task_cancel_with_origin(task, kind, task_region, ASX_INVALID_ID)` plus message |
+| `cancel_task` | `task` (a task's canonical name, vocabulary §2, so also a supervised child's generation `<supervisor>/<child>#<n>` once it started), `kind`, optional `message` | `lab.state.cancel_task(task, &reason)` (`state.rs:3429`), effects routed as above | `asx_task_cancel_with_origin(task, kind, task_region, ASX_INVALID_ID)` plus message |
 | `close_region` | `region`, `kind` | `cancel_request(region, kind)`, then `advance_region_state(region)` (`state.rs:10057`) after each idle until Closed | `asx_region_cancel(region, &reason, NULL)`, then `asx_scheduler_run_until_idle` until Closed |
 | `advance` | `ns` | `lab.advance_time(ns)` (`lab/runtime.rs:3076`; a forward jump, the only clock fault Rust offers) | `asx_lab_advance_time(ns)` |
 | `region_limits` | `region`, optional `max_tasks`, `max_children`, `max_obligations` | `lab.state.set_region_limits(region, RegionLimits{…})` (`state.rs:4103`; `record/region.rs:208`) | `asx_region_set_limits(region, &limits)`; an omitted or null field is `ASX_REGION_UNLIMITED` |
@@ -427,7 +450,10 @@ a limit is observed as `ASX_E_ADMISSION_LIMIT`: Rust resolves a denied
 spawn's handle `Cancelled(User)` with the `RegionAtCapacity` error
 (`[ASUP-E006]`) as its message, which twin_run projects onto the spawn step
 and the child's joins, as it projects a closed-region refusal as
-`ASX_E_REGION_CLOSED`.
+`ASX_E_REGION_CLOSED`. Both harnesses classify a refusal by the reason
+its handle resolves with, so a child aborted before its admission refused
+it resolves with the abort's reason and is observed as
+`ASX_E_REGION_CLOSED`, not `ASX_E_ADMISSION_LIMIT`.
 
 ## 5. Must-fail scenarios
 
@@ -470,6 +496,35 @@ open gap with the gap named; `make conformance` lists them as ERROR.
 Open: none.
 
 Closed (each verified by a fixture that now matches):
+
+- **Managed supervision** (bd-g652): C's supervisor was a state machine
+  that restarted GenServers, which no oracle could compare. It is now
+  Rust's managed supervisor (`supervision.rs:1795-3506`,
+  `src/actor/supervisor.c`): a controller task with a region of its own
+  that runs each child generation as a task in a child region, starts
+  them in compiled (dependency) order, takes simultaneous ends by (end
+  time, task), restarts by strategy and restart mode within the restart
+  intensity, drains the restart set in reverse order with the "managed
+  supervisor generation drain" reason, sleeps the backoff, stops, resets
+  or escalates (a FailFast cancel of its own region) when the intensity
+  refuses, and traces `managed_supervisor_v1` as Rust does. New runtime
+  pieces: `asx_task_catch_panic_internal` (the controller catches a
+  generation's panic, as Rust's factory future does) and
+  `asx_region_get_parent`. Fixtures `supervision-*` (15); the generator
+  starts supervisors (60 seeds x 200: no divergence, 4781 scenarios with
+  one). Its scenarios exposed four lab dispatch differences, each fixed
+  in C and pinned by a fixture that fails without the fix:
+  an abort of a child not yet admitted is cached and queued at admission
+  behind the handle cancels already queued
+  (`lab-dispatch-cached-abort-at-admission-001`); a region command's
+  cancel-lane publications and wakes wait for the end of the command
+  drain, lanes first (`lab-dispatch-region-command-deferred-wakes-001`);
+  a region command advances the region it cancels
+  (`close_region_command` is `cancel_request`, `advance_region_state`,
+  then `defer_cancel_dispatch`, `runtime/state.rs:4936-4940`;
+  `lab-dispatch-region-command-advances-region-001`);
+  and a refused child aborted before its admission is observed as
+  `ASX_E_REGION_CLOSED` (`region-limits-refused-spawn-aborted-001`).
 
 - **When a permit's obligation counts against `max_obligations`**
   (bd-2fga). Rust routes a Cx's obligation operations through its

@@ -61,9 +61,10 @@ W:            cancel_lane, ready_lane: max-heap<SchedulerEntry>
 ## 2. One step (`step_inner`, LR:4460-5045)
 
 ```
-steps += 1
+steps += 1                                                             (LR:4483-4499)
 drain deferred cancel dispatches; drain spawn admissions (Cx::spawn children, FIFO)
 drain handle cancel requests (<= 16, coalesced); drain region commands (<= 8)
+drain handle cancel requests; drain deferred cancel dispatches
 if handle cancels or deferred cancel dispatches remain: return         (no draw)
 r = rng.next_u64()
 check_futurelocks(); timer_driver.process_timers(); poll_io(); schedule_async_finalizers()
@@ -95,17 +96,30 @@ Consequences:
   `Cx::open_child_region`, `ChildRegion::cancel`, `ChildRegion::close`
   and its drop backstop) is applied at the start of step N+1, after the
   admissions. A Create wakes its opener once the batch is applied; a
-  closer waits parked until the region's Closed transition wakes it. C:
+  closer waits parked until the region's Closed transition wakes it. A
+  Cancel or Close is `close_region_command`: the cancel request, then an
+  advance of the region's state (a cancelled region with live work goes on
+  to Draining), and its cancel effects are deferred, not dispatched
+  (`state.rs:4936-4940`). The deferred dispatches are drained after the
+  handle cancels the commands queued: every cancel-lane entry first, then
+  the wakes, batch by batch (LR:4219-4237). C:
   `asx_region_open_child_poll`, `asx_region_cancel_request`,
   `asx_region_close_poll` / `asx_region_close_request`
-  (`lab_dispatch.c`, `asx_lab_drain_region_commands`).
+  (`lab_dispatch.c`, `asx_lab_drain_region_commands`,
+  `asx_lab_drain_deferred_cancels`); fixtures
+  `lab-dispatch-region-command-deferred-wakes-001`,
+  `lab-dispatch-region-command-advances-region-001`.
 - A join-handle abort queued during step N (`JoinHandle::abort_with_reason`)
   is applied at the start of step N+1: after the admissions, and again
   after the region commands, at most 16 per drain, several for one task
-  strengthened into one. A target spawned in step N takes its abort as it
-  is admitted and goes to the cancel lane only. A later abort that changes
-  the reason or cleanup budget schedules the cancel again
-  (`record/task.rs:1019-1049`). C: `asx_task_abort_request`.
+  strengthened into one. An abort of a target spawned in step N, not yet
+  admitted, is cached in its spawn slot; its admission turns the cached
+  reason into one handle-cancel command queued behind those already
+  queued, applied by the drain that follows (`spawn_mailbox.rs:629-660`;
+  fixture `lab-dispatch-cached-abort-at-admission-001`). A later abort that
+  changes the reason or cleanup budget schedules the cancel again
+  (`record/task.rs:1019-1049`). C: `asx_task_abort_request`, the cache in
+  `lab_dispatch.c`.
 - Timers due at the current time fire inside the step, after the draw and
   before the pick.
 - Wakes that happen during a poll get their generation before the
@@ -263,9 +277,11 @@ The priority changes when:
 
 ## 7. Run loops and time
 
-- **`run_until_idle`** (LR:3428-3450): step while the scheduled set is not
-  empty, or spawns await admission. It never moves time and never fires
-  timers by itself.
+- **`run_until_idle`** (LR:3428-3450): drain the handle cancels and the
+  deferred cancel dispatches, then step while the scheduled set is not
+  empty, or spawns, handle cancels, region commands or deferred cancel
+  dispatches wait (`has_pending_dispatch_commands`, LR:2872). It never
+  moves time and never fires timers by itself.
 - **`advance_time_to`**: sets the clock only.
 - **`run_with_auto_advance`** (LR:3224-3316):
   - Step while anything is scheduled. More than 1000 steps without a

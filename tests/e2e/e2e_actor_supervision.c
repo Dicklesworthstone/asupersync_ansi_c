@@ -320,238 +320,251 @@ static int run_gen_server(unsigned long long *digest) {
     return 1;
 }
 
-static uint32_t g_fail_until_init;
-static uint32_t g_init_count;
-static uint32_t g_child_start_count;
-static uint32_t g_stable_start_count;
+/* A supervised child (asx/actor/supervisor.h): each generation yields
+ * `yields` times, then ends with `fail_status` while its number is below
+ * `fail_until` and ASX_OK afterwards; `block` waits until cancelled. */
+typedef struct {
+    uint32_t yields;
+    uint64_t fail_until;
+    asx_status fail_status;
+    int block;
+    uint32_t starts;
+    uint32_t order;
+} e2e_child;
 
-static asx_status stable_cast(void *state, uint64_t msg, asx_actor_handle self) {
-    (void)state;
-    (void)msg;
-    (void)self;
+typedef struct {
+    e2e_child *child;
+    uint64_t number;
+    uint32_t polls;
+} e2e_body;
+
+static e2e_body g_e2e_bodies[64];
+static uint32_t g_e2e_bodies_used;
+static uint32_t g_e2e_start_order;
+
+static asx_status e2e_body_poll(void *user_data, asx_task_id self) {
+    e2e_body *b = (e2e_body *)user_data;
+    if (b->child->block) {
+        asx_checkpoint_result cr;
+        if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) return ASX_E_CANCELLED;
+        g_status_sink = asx_task_park(self);
+        return ASX_E_PENDING;
+    }
+    if (b->polls++ < b->child->yields) return ASX_E_PENDING;
+    return b->number < b->child->fail_until ? b->child->fail_status : ASX_OK;
+}
+
+static asx_status e2e_child_start(void *user_data, const asx_supervisor_generation *gen,
+                                  asx_task_poll_fn *out_poll, void **out_data) {
+    e2e_child *c = (e2e_child *)user_data;
+    e2e_body *b;
+    c->starts++;
+    c->order = ++g_e2e_start_order;
+    if (g_e2e_bodies_used >= 64u) return ASX_E_RESOURCE_EXHAUSTED;
+    b = &g_e2e_bodies[g_e2e_bodies_used++];
+    b->child = c;
+    b->number = gen->number;
+    b->polls = 0u;
+    *out_poll = e2e_body_poll;
+    *out_data = b;
     return ASX_OK;
 }
 
-static asx_status stable_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
-    asx_actor_behavior behavior;
-    (void)user_data;
-    g_stable_start_count++;
-    behavior.init = NULL;
-    behavior.handle_cast = stable_cast;
-    behavior.handle_call = NULL;
-    behavior.terminate = NULL;
-    return asx_actor_spawn(out, region, &behavior, NULL, 4u);
-}
-
-static asx_status failing_init(void *state, asx_actor_handle self) {
-    (void)state;
-    (void)self;
-    g_init_count++;
-    if (g_init_count <= g_fail_until_init) { return ASX_E_INVALID_STATE; }
-    return ASX_OK;
-}
-
-static asx_status failing_start(void *user_data, asx_region_id region, asx_actor_handle *out) {
-    asx_actor_behavior behavior;
-    (void)user_data;
-    g_child_start_count++;
-    behavior.init = failing_init;
-    behavior.handle_cast = stable_cast;
-    behavior.handle_call = NULL;
-    behavior.terminate = NULL;
-    return asx_actor_spawn(out, region, &behavior, NULL, 4u);
-}
-
-static asx_supervisor_config supervisor_config(asx_supervisor_strategy strategy,
-                                               uint32_t max_restarts) {
-    asx_supervisor_config cfg;
-    cfg.strategy = strategy;
-    cfg.max_restarts = max_restarts;
-    cfg.restart_window_ns = 0u;
-    cfg.shutdown_budget_polls = 0u;
-    return cfg;
-}
-
-static int run_supervisor_restart_policy(unsigned long long *digest) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec specs[2];
-    asx_child_spec temp;
+/* The task that spawns the supervisor in its own region and joins it,
+ * aborting it first after `abort_after` polls when that is set. */
+typedef struct {
     asx_region_id region;
+    asx_supervisor_config cfg;
+    asx_child_spec specs[3];
+    uint32_t n;
+    uint32_t abort_after;
+    uint32_t polls;
+    int spawned;
+    asx_status spawn_status;
+    asx_supervisor_handle handle;
+    asx_status join_status;
+    asx_supervisor_report report;
+} e2e_owner;
+
+static asx_status e2e_owner_poll(void *user_data, asx_task_id self) {
+    e2e_owner *o = (e2e_owner *)user_data;
+    if (!o->spawned) {
+        o->spawned = 1;
+        o->spawn_status = asx_supervisor_spawn(&o->handle, o->region, &o->cfg, o->specs, o->n);
+        if (o->spawn_status != ASX_OK) return ASX_OK;
+    }
+    o->polls++;
+    if (o->abort_after != 0u) {
+        if (o->polls < o->abort_after) return ASX_E_PENDING;
+        if (o->polls == o->abort_after) g_status_sink = asx_supervisor_abort(o->handle);
+    }
+    o->join_status = asx_supervisor_join(o->handle, self, &o->report);
+    return o->join_status == ASX_E_PENDING ? ASX_E_PENDING : ASX_OK;
+}
+
+/* A fresh runtime, an owner region under a root, and a supervisor config
+ * without backoff. */
+static asx_region_id e2e_supervisor_setup(e2e_owner *o, uint32_t max_restarts) {
+    asx_region_id root = make_region();
+    asx_region_id region = ASX_INVALID_ID;
+    if (asx_region_open_child(root, &region) != ASX_OK) return ASX_INVALID_ID;
+    memset(o, 0, sizeof(*o));
+    o->region = region;
+    o->join_status = ASX_E_PENDING;
+    asx_supervisor_config_init(&o->cfg, "sup", max_restarts, 60000000000u);
+    o->cfg.backoff.kind = ASX_RESTART_BACKOFF_NONE;
+    g_e2e_bodies_used = 0u;
+    g_e2e_start_order = 0u;
+    return root;
+}
+
+static void e2e_add_child(e2e_owner *o, const char *name, asx_child_restart restart, e2e_child *c) {
+    asx_child_spec_init(&o->specs[o->n++], name, restart, e2e_child_start, c);
+}
+
+static void e2e_run_owner(e2e_owner *o, asx_region_id root) {
+    asx_task_id id = ASX_INVALID_ID;
+    if (asx_task_spawn(o->region, e2e_owner_poll, o, &id) != ASX_OK) return;
+    drive_region(root, 5000u);
+}
+
+/* A permanent child is replaced after every end, a temporary one never. */
+static int run_supervisor_restart_policy(unsigned long long *digest) {
+    e2e_owner o;
+    e2e_child permanent;
+    e2e_child temporary;
+    asx_region_id root;
 
     asx_runtime_reset();
-    g_fail_until_init = 1u;
-    g_init_count = 0u;
-    g_child_start_count = 0u;
-    g_stable_start_count = 0u;
-    region = make_region();
-    cfg = supervisor_config(ASX_SUPERVISOR_ONE_FOR_ONE, 5u);
-
-    specs[0].start_fn = failing_start;
-    specs[0].user_data = NULL;
-    specs[0].restart = ASX_CHILD_PERMANENT;
-    specs[1].start_fn = stable_start;
-    specs[1].user_data = NULL;
-    specs[1].restart = ASX_CHILD_PERMANENT;
-    if (asx_supervisor_start(&sup, region, &cfg, specs, 2u) != ASX_OK) {
-        scenario_line("supervisor.restart_policy", 0, "start_failed");
+    memset(&permanent, 0, sizeof(permanent));
+    memset(&temporary, 0, sizeof(temporary));
+    permanent.fail_until = 2u; /* the first generation fails, later ones end ok */
+    permanent.fail_status = ASX_E_INVALID_STATE;
+    temporary.fail_until = 999u;
+    temporary.fail_status = ASX_E_INVALID_STATE;
+    root = e2e_supervisor_setup(&o, 1u);
+    e2e_add_child(&o, "permanent", ASX_CHILD_PERMANENT, &permanent);
+    e2e_add_child(&o, "temporary", ASX_CHILD_TEMPORARY, &temporary);
+    e2e_run_owner(&o, root);
+    if (o.spawn_status != ASX_OK || o.join_status != ASX_OK) {
+        scenario_line("supervisor.restart_policy", 0, "spawn_or_join_failed");
         return 0;
     }
-    drive_region(region, 500u);
-    if (!asx_supervisor_is_alive(sup) || g_child_start_count != 2u || g_stable_start_count != 1u ||
-        asx_supervisor_restart_count(sup) != 1u || !asx_supervisor_child_alive(sup, 1u)) {
-        scenario_line("supervisor.restart_policy", 0, "permanent_restart_mismatch");
+    if (permanent.starts != 2u || temporary.starts != 1u || o.report.restart_batches != 1u ||
+        o.report.outcome != ASX_OUTCOME_OK) {
+        scenario_line("supervisor.restart_policy", 0, "restart_mismatch");
         return 0;
     }
-    (void)asx_supervisor_stop(sup);
-    drive_region(region, 500u);
-
-    asx_runtime_reset();
-    g_fail_until_init = 999u;
-    g_init_count = 0u;
-    g_child_start_count = 0u;
-    region = make_region();
-    temp.start_fn = failing_start;
-    temp.user_data = NULL;
-    temp.restart = ASX_CHILD_TEMPORARY;
-    if (asx_supervisor_start(&sup, region, &cfg, &temp, 1u) != ASX_OK) {
-        scenario_line("supervisor.restart_policy", 0, "temporary_start_failed");
-        return 0;
-    }
-    drive_region(region, 200u);
-    if (!asx_supervisor_is_alive(sup) || g_child_start_count != 1u ||
-        asx_supervisor_restart_count(sup) != 0u) {
-        scenario_line("supervisor.restart_policy", 0, "temporary_restart_mismatch");
-        return 0;
-    }
-    (void)asx_supervisor_stop(sup);
-    drive_region(region, 200u);
 
     scenario_line("supervisor.restart_policy", 1, "permanent=restart temporary=no_restart");
-    *digest = mix_u64(*digest, g_child_start_count);
-    *digest = mix_u64(*digest, 1u);
+    *digest = mix_u64(*digest, permanent.starts);
+    *digest = mix_u64(*digest, o.report.restart_batches);
     return 1;
 }
 
+/* Restarts past max_restarts in the window are refused: under STOP the
+ * child stays stopped; under ESCALATE the supervisor stops with
+ * RestartLimit and cancels its owner's region. */
 static int run_restart_intensity(unsigned long long *digest) {
-    asx_restart_intensity ri;
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
-    asx_region_id region;
+    e2e_owner o;
+    e2e_child child;
+    asx_region_id root;
+    asx_cancel_reason reason;
 
-    asx_restart_intensity_init(&ri, 2u, 10u);
-    if (asx_restart_intensity_record(&ri, 100u) || asx_restart_intensity_record(&ri, 105u) ||
-        !asx_restart_intensity_record(&ri, 109u) || asx_restart_intensity_count(&ri, 125u) != 0u) {
-        scenario_line("supervisor.restart_intensity", 0, "window_contract_failed");
+    asx_runtime_reset();
+    memset(&child, 0, sizeof(child));
+    child.fail_until = 999u;
+    child.fail_status = ASX_E_INVALID_STATE;
+    root = e2e_supervisor_setup(&o, 2u);
+    e2e_add_child(&o, "worker", ASX_CHILD_PERMANENT, &child);
+    e2e_run_owner(&o, root);
+    if (o.join_status != ASX_OK || child.starts != 3u || o.report.restart_batches != 2u ||
+        o.report.outcome != ASX_OUTCOME_OK) {
+        scenario_line("supervisor.restart_intensity", 0, "stop_mismatch");
         return 0;
     }
 
     asx_runtime_reset();
-    g_fail_until_init = 999u;
-    g_init_count = 0u;
-    g_child_start_count = 0u;
-    region = make_region();
-    cfg = supervisor_config(ASX_SUPERVISOR_ONE_FOR_ONE, 2u);
-    spec.start_fn = failing_start;
-    spec.user_data = NULL;
-    spec.restart = ASX_CHILD_PERMANENT;
-    if (asx_supervisor_start(&sup, region, &cfg, &spec, 1u) != ASX_OK) {
-        scenario_line("supervisor.restart_intensity", 0, "supervisor_start_failed");
-        return 0;
-    }
-    drive_region(region, 1000u);
-    if (asx_supervisor_is_alive(sup) || !asx_supervisor_intensity_exceeded(sup) ||
-        asx_supervisor_exit_reason(sup) != ASX_E_RESOURCE_EXHAUSTED) {
+    memset(&child, 0, sizeof(child));
+    child.fail_until = 999u;
+    child.fail_status = ASX_E_INVALID_STATE;
+    root = e2e_supervisor_setup(&o, 1u);
+    o.cfg.escalation = ASX_ESCALATION_ESCALATE;
+    e2e_add_child(&o, "worker", ASX_CHILD_PERMANENT, &child);
+    e2e_run_owner(&o, root);
+    if (o.join_status != ASX_OK || child.starts != 2u || o.report.outcome != ASX_OUTCOME_ERR ||
+        o.report.error != ASX_SUPERVISOR_ERR_RESTART_LIMIT || o.report.escalations != 1u ||
+        asx_region_get_cancel_reason(o.region, &reason) != ASX_OK ||
+        reason.kind != ASX_CANCEL_FAIL_FAST) {
         scenario_line("supervisor.restart_intensity", 0, "escalation_mismatch");
         return 0;
     }
 
-    scenario_line("supervisor.restart_intensity", 1, "window=pass escalation=resource_exhausted");
-    *digest = mix_u64(*digest, asx_supervisor_restart_count(sup));
+    scenario_line("supervisor.restart_intensity", 1, "stop=stays_stopped escalate=restart_limit");
+    *digest = mix_u64(*digest, o.report.restart_batches);
     return 1;
 }
 
+/* An abort while a replacement waits for its backoff: the controller
+ * stops, drains every generation, and starts no new one. */
 static int run_cancel_during_restart(unsigned long long *digest) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec specs[2];
-    asx_region_id region;
-    uint32_t starts_before_stop;
+    e2e_owner o;
+    e2e_child failing;
+    e2e_child stable;
+    asx_region_id root;
 
     asx_runtime_reset();
-    g_fail_until_init = 999u;
-    g_init_count = 0u;
-    g_child_start_count = 0u;
-    g_stable_start_count = 0u;
-    region = make_region();
-    cfg = supervisor_config(ASX_SUPERVISOR_ONE_FOR_ONE, 5u);
-
-    specs[0].start_fn = failing_start;
-    specs[0].user_data = NULL;
-    specs[0].restart = ASX_CHILD_PERMANENT;
-    specs[1].start_fn = stable_start;
-    specs[1].user_data = NULL;
-    specs[1].restart = ASX_CHILD_PERMANENT;
-    if (asx_supervisor_start(&sup, region, &cfg, specs, 2u) != ASX_OK) {
-        scenario_line("supervisor.cancel_during_restart", 0, "start_failed");
-        return 0;
-    }
-
-    drive_region(region, 4u);
-    if (asx_supervisor_restart_count(sup) != 1u) {
-        scenario_line("supervisor.cancel_during_restart", 0, "restart_not_pending");
-        return 0;
-    }
-    starts_before_stop = g_child_start_count;
-    if (asx_supervisor_stop(sup) != ASX_OK) {
-        scenario_line("supervisor.cancel_during_restart", 0, "stop_failed");
-        return 0;
-    }
-    drive_region(region, 500u);
-    if (asx_supervisor_is_alive(sup) || g_child_start_count != starts_before_stop ||
-        asx_supervisor_exit_reason(sup) != ASX_OK) {
+    memset(&failing, 0, sizeof(failing));
+    memset(&stable, 0, sizeof(stable));
+    failing.fail_until = 999u;
+    failing.fail_status = ASX_E_INVALID_STATE;
+    stable.block = 1;
+    root = e2e_supervisor_setup(&o, 5u);
+    o.cfg.backoff.kind = ASX_RESTART_BACKOFF_FIXED;
+    o.cfg.backoff.initial_ns = 1000000u;
+    o.abort_after = 6u;
+    e2e_add_child(&o, "failing", ASX_CHILD_PERMANENT, &failing);
+    e2e_add_child(&o, "stable", ASX_CHILD_PERMANENT, &stable);
+    e2e_run_owner(&o, root);
+    if (o.join_status != ASX_OK || o.report.outcome != ASX_OUTCOME_CANCELLED ||
+        failing.starts != 1u || stable.starts != 1u || o.report.restart_batches != 0u ||
+        o.report.joined != 2u) {
         scenario_line("supervisor.cancel_during_restart", 0, "pending_restart_not_cancelled");
         return 0;
     }
 
     scenario_line("supervisor.cancel_during_restart", 1, "pending_restart_cancelled=1");
-    *digest = mix_u64(*digest, starts_before_stop);
+    *digest = mix_u64(*digest, o.report.joined);
     return 1;
 }
 
+/* Child specs: a dependency starts first whatever the spec order, and the
+ * report lists the children in that compiled order. */
 static int run_child_specs(unsigned long long *digest) {
-    asx_supervisor_handle sup;
-    asx_supervisor_config cfg;
-    asx_child_spec_ext specs[2];
-    asx_region_id region;
+    e2e_owner o;
+    e2e_child alpha;
+    e2e_child beta;
+    asx_region_id root;
 
     asx_runtime_reset();
-    region = make_region();
-    cfg = supervisor_config(ASX_SUPERVISOR_ONE_FOR_ONE, 3u);
-    asx_child_spec_ext_init(&specs[0], "alpha", stable_start, NULL);
-    asx_child_spec_ext_init(&specs[1], "beta", stable_start, NULL);
-    if (asx_child_spec_ext_depends_on(&specs[1], 0u) != ASX_OK ||
-        asx_supervisor_start_ext(&sup, region, &cfg, specs, 2u) != ASX_OK) {
-        scenario_line("supervisor.child_specs", 0, "start_ext_failed");
+    memset(&alpha, 0, sizeof(alpha));
+    memset(&beta, 0, sizeof(beta));
+    root = e2e_supervisor_setup(&o, 3u);
+    e2e_add_child(&o, "beta", ASX_CHILD_TRANSIENT, &beta);
+    e2e_add_child(&o, "alpha", ASX_CHILD_TRANSIENT, &alpha);
+    if (asx_child_spec_depends_on(&o.specs[0], 1u) != ASX_OK) {
+        scenario_line("supervisor.child_specs", 0, "depends_on_failed");
         return 0;
     }
-    if (strcmp(asx_supervisor_child_name(sup, 0u), "alpha") != 0 ||
-        strcmp(asx_supervisor_child_name(sup, 1u), "beta") != 0 ||
-        asx_supervisor_child_count(sup) != 2u) {
-        scenario_line("supervisor.child_specs", 0, "name_or_count_mismatch");
+    e2e_run_owner(&o, root);
+    if (o.join_status != ASX_OK || alpha.order != 1u || beta.order != 2u ||
+        o.report.completion_count != 2u || o.report.completions[0].child != 1u) {
+        scenario_line("supervisor.child_specs", 0, "order_mismatch");
         return 0;
     }
-    drive_region(region, 100u);
-    if (!asx_supervisor_child_alive(sup, 0u) || !asx_supervisor_child_alive(sup, 1u)) {
-        scenario_line("supervisor.child_specs", 0, "children_not_alive");
-        return 0;
-    }
-    (void)asx_supervisor_stop(sup);
-    drive_region(region, 200u);
 
-    scenario_line("supervisor.child_specs", 1, "names=alpha,beta dep_recorded=1");
-    *digest = mix_u64(*digest, asx_supervisor_child_count(sup));
+    scenario_line("supervisor.child_specs", 1, "order=alpha,beta dependency_first=1");
+    *digest = mix_u64(*digest, o.report.completion_count);
     return 1;
 }
 

@@ -303,6 +303,12 @@ void asx_task_sched_init_internal(asx_task_slot *task);
 /* Make a task runnable (or record the wake if it is mid-poll). */
 void asx_task_wake_slot_internal(asx_task_slot *task);
 
+/* Catch a panic of the poll in progress (Rust catch_unwind inside a task
+ * body): if `t` is being polled and asx_task_panic was called, the panic
+ * is cleared, its message written to *out_message (may be NULL) and 1
+ * returned; the task then completes as its poll returns. 0 otherwise. */
+int asx_task_catch_panic_internal(asx_task_slot *t, const char **out_message);
+
 /* Timer / join-wait teardown for a task leaving the live set. */
 void asx_task_timer_disarm_internal(asx_task_slot *task);
 void asx_task_join_detach_internal(asx_task_slot *task);
@@ -495,6 +501,10 @@ asx_status asx_lab_region_open_command(asx_task_slot *opener, asx_region_id pare
 asx_status asx_lab_region_cancel_command(asx_region_id region, const asx_cancel_reason *reason);
 int asx_lab_region_commands_pending(void);
 void asx_lab_drain_region_commands(void);
+/* drain_deferred_cancel_dispatches (LR:4219-4239): publish the cancel lane
+ * entries, then the cancel wakes, a region command's cancel deferred. */
+int asx_lab_deferred_cancels_pending(void);
+void asx_lab_drain_deferred_cancels(void);
 /* Join-handle aborts (Rust JoinHandle::abort_with_reason): queued, applied
  * at the start of the next step after admissions and around the region
  * commands (at most 16 per drain, coalesced per task); a target awaiting
@@ -512,6 +522,14 @@ enum {
     ASX_REGION_WAIT_OPENED, /* open applied: region_wait_status/_region */
     ASX_REGION_WAIT_CLOSE   /* close requested: waiting for CLOSED */
 };
+
+/* asx_region_open_child_poll for task `t` with the opener's inherited
+ * budget given whole: the opener is then another Cx than t's (Rust's
+ * ChildRegion::cx() opening a grandchild, whose inherited budget is its
+ * region's), while `t` awaits the open. */
+asx_status asx_region_open_child_poll_internal(asx_task_slot *t, asx_region_id parent,
+                                               const asx_budget *inherited,
+                                               asx_region_id *out_child);
 
 /* Wake the tasks waiting for this region to close (Rust RegionCloseState
  * waiters, woken at Finalizing -> Closed, record/region.rs:1845-1853). */

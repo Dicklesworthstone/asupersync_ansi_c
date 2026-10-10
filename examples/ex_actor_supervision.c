@@ -5,7 +5,7 @@
  *   1. Spawning an actor through the umbrella header surface
  *   2. Cast + call mailbox semantics with deterministic replies
  *   3. Graceful stop with terminate callback observation
- *   4. one_for_one supervisor restart after child failure
+ *   4. A one_for_one supervisor replacing a failed child generation
  *
  * Output: SCENARIO lines for smoke-test validation plus ARTIFACT lines
  * carrying restart details for log retention.
@@ -96,35 +96,54 @@ static asx_actor_behavior echo_behavior(void) {
     return behavior;
 }
 
+/* A supervised child: each generation is a task running this body. The
+ * first generation fails; the ones after it finish their work. */
 typedef struct {
-    asx_actor_handle handle;
     uint32_t starts;
+    uint64_t last_generation;
 } fragile_child_ctx;
 
-static asx_status fragile_cast(void *state, uint64_t msg, asx_actor_handle self) {
-    (void)state;
-    (void)msg;
+static uint64_t g_generation_numbers[8];
+
+static asx_status fragile_body(void *user_data, asx_task_id self) {
+    uint64_t number = *(const uint64_t *)user_data;
     (void)self;
-    return ASX_E_INVALID_STATE;
+    return number == 1u ? ASX_E_INVALID_STATE : ASX_OK;
 }
 
-static asx_status fragile_child_start(void *user_data, asx_region_id region,
-                                      asx_actor_handle *out) {
+static asx_status fragile_child_start(void *user_data, const asx_supervisor_generation *gen,
+                                      asx_task_poll_fn *out_poll, void **out_data) {
     fragile_child_ctx *ctx = (fragile_child_ctx *)user_data;
-    asx_actor_behavior behavior;
-    asx_status st;
+    uint64_t *slot = &g_generation_numbers[ctx->starts % 8u];
+    ctx->starts++;
+    ctx->last_generation = gen->number;
+    *slot = gen->number;
+    *out_poll = fragile_body;
+    *out_data = slot;
+    return ASX_OK;
+}
 
-    behavior.init = NULL;
-    behavior.handle_cast = fragile_cast;
-    behavior.handle_call = NULL;
-    behavior.terminate = NULL;
+/* The task that spawns the supervisor in its own region and joins it. */
+typedef struct {
+    asx_region_id region;
+    asx_supervisor_config cfg;
+    asx_child_spec spec;
+    asx_supervisor_handle supervisor;
+    int spawned;
+    asx_status spawn_status;
+    asx_status join_status;
+    asx_supervisor_report report;
+} supervisor_owner;
 
-    st = asx_actor_spawn(out, region, &behavior, NULL, 4u);
-    if (st == ASX_OK) {
-        ctx->handle = *out;
-        ctx->starts++;
+static asx_status supervisor_owner_poll(void *user_data, asx_task_id self) {
+    supervisor_owner *o = (supervisor_owner *)user_data;
+    if (!o->spawned) {
+        o->spawned = 1;
+        o->spawn_status = asx_supervisor_spawn(&o->supervisor, o->region, &o->cfg, &o->spec, 1u);
+        if (o->spawn_status != ASX_OK) return ASX_OK;
     }
-    return st;
+    o->join_status = asx_supervisor_join(o->supervisor, self, &o->report);
+    return o->join_status == ASX_E_PENDING ? ASX_E_PENDING : ASX_OK;
 }
 
 /* A task that calls the server once. A call is polled like the Rust
@@ -197,53 +216,49 @@ static void scenario_actor_mailbox_roundtrip(void) {
 }
 
 static void scenario_supervisor_restart(void) {
-    asx_region_id region;
-    asx_supervisor_handle supervisor;
-    asx_supervisor_config cfg;
-    asx_child_spec spec;
+    asx_region_id root;
+    asx_task_id owner_id;
+    supervisor_owner owner;
     fragile_child_ctx ctx;
-    asx_actor_handle original;
+    const asx_supervisor_completion *latest;
 
     SCENARIO_BEGIN("actor.supervisor_restart");
 
     asx_runtime_reset();
     memset(&ctx, 0, sizeof(ctx));
+    memset(&owner, 0, sizeof(owner));
 
-    cfg.strategy = ASX_SUPERVISOR_ONE_FOR_ONE;
-    cfg.max_restarts = 2u;
-    spec.start_fn = fragile_child_start;
-    spec.user_data = &ctx;
-    spec.restart = ASX_CHILD_PERMANENT;
+    /* A one_for_one supervisor allowing two restarts a minute; the child
+     * is transient: replaced after an error, not after success. */
+    asx_supervisor_config_init(&owner.cfg, "workers", 2u, 60000000000u);
+    owner.cfg.backoff.kind = ASX_RESTART_BACKOFF_NONE;
+    asx_child_spec_init(&owner.spec, "fragile", ASX_CHILD_TRANSIENT, fragile_child_start, &ctx);
 
-    SCENARIO_CHECK(asx_region_open(&region) == ASX_OK, "region_open");
-    SCENARIO_CHECK(asx_supervisor_start(&supervisor, region, &cfg, &spec, 1u) == ASX_OK,
-                   "supervisor_start");
+    SCENARIO_CHECK(asx_region_open(&root) == ASX_OK, "region_open");
+    SCENARIO_CHECK(asx_region_open_child(root, &owner.region) == ASX_OK, "owner_region");
+    SCENARIO_CHECK(asx_task_spawn(owner.region, supervisor_owner_poll, &owner, &owner_id) == ASX_OK,
+                   "owner_spawn");
 
-    pump_region(region, 2u);
-    SCENARIO_CHECK(asx_supervisor_child_alive(supervisor, 0u), "child_alive_initial");
+    /* The controller starts the child in a region of its own; the first
+     * generation fails, its region is drained and closed, and a second
+     * generation replaces it and finishes. With no child left running
+     * the supervisor closes its region and reports. */
+    pump_region(root, 200u);
 
-    original = ctx.handle;
-    SCENARIO_CHECK(asx_actor_try_cast(ctx.handle, 1u) == ASX_OK, "kill_child_cast");
-
-    pump_region(region, 4u);
-
-    SCENARIO_CHECK(asx_supervisor_is_alive(supervisor), "supervisor_alive_after_restart");
-    SCENARIO_CHECK(asx_supervisor_restart_count(supervisor) == 1u, "restart_count");
+    SCENARIO_CHECK(owner.spawn_status == ASX_OK, "supervisor_spawn");
+    SCENARIO_CHECK(owner.join_status == ASX_OK, "supervisor_join");
     SCENARIO_CHECK(ctx.starts == 2u, "child_restarted");
-    SCENARIO_CHECK(asx_supervisor_child_alive(supervisor, 0u), "child_alive_after_restart");
-    /* The restarted child is a new server: a different handle, and the
-     * failed one is gone. */
-    SCENARIO_CHECK(ctx.handle.slot != original.slot || ctx.handle.generation != original.generation,
-                   "new_child_handle");
-    SCENARIO_CHECK(!asx_actor_is_alive(original), "failed_child_gone");
+    SCENARIO_CHECK(owner.report.restart_batches == 1u, "restart_batches");
+    SCENARIO_CHECK(owner.report.outcome == ASX_OUTCOME_OK, "supervisor_outcome");
+    latest = &owner.report.completions[0];
+    SCENARIO_CHECK(owner.report.completion_count == 1u && latest->generation.number == 2u &&
+                       latest->outcome == ASX_OUTCOME_OK,
+                   "second_generation_succeeded");
+    SCENARIO_CHECK(!asx_supervisor_is_alive(owner.supervisor), "supervisor_finished");
 
-    printf("ARTIFACT supervisor.restart before=%u:%u after=%u:%u restarts=%u\n", original.slot,
-           original.generation, ctx.handle.slot, ctx.handle.generation,
-           asx_supervisor_restart_count(supervisor));
-
-    SCENARIO_CHECK(asx_supervisor_stop(supervisor) == ASX_OK, "supervisor_stop");
-    pump_region(region, 8u);
-    SCENARIO_CHECK(!asx_supervisor_is_alive(supervisor), "supervisor_dead_after_stop");
+    printf("ARTIFACT supervisor.restart generations=%u restarts=%llu joined=%llu\n", ctx.starts,
+           (unsigned long long)owner.report.restart_batches,
+           (unsigned long long)owner.report.joined);
 
     SCENARIO_END();
 }

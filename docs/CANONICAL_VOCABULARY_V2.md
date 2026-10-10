@@ -54,9 +54,18 @@ gets a canonical name instead:
 | obligation | `"<holder>/o<k>"`, k = 1-based reservation index within the holder task |
 | timer | `"<owner>/tm<k>"`, k = 1-based timer index within the owner task |
 | channel / sync primitive | the step's `name` |
+| a supervisor's controller task (`supervise`) | the step's `as`; its backoff sleeps are its timers |
+| a supervisor's region | the step's `as` (the parent of its generations' regions) |
+| a supervised child's generation: its task and its region | `"<supervisor>/<child>#<n>"`, n = the generation number (1-based) |
+| a region a controller opened for a generation it then did not start (cancelled first) | `"<supervisor region>/unstarted<k>"`, k in creation order |
+| the regions of several supervisors that started no generation, under one region | `"<region>/supervisor<k>"`, k in creation order (the trace cannot tell whose is whose) |
 
 Each name depends only on the scenario program, so it is the same in both
-engines, whatever order the scheduler runs independent work in. The harness
+engines, whatever order the scheduler runs independent work in. The last
+two supervision rules depend on creation order, which both engines share
+under lab dispatch; a generation is named from the controller's
+`managed_supervisor_v1` traces, which carry its region and task, so one
+cancelled before its first poll is named too. The harness
 of each engine keeps the id → name map. An event naming an id the map
 doesn't know is a harness defect, not a divergence.
 
@@ -87,7 +96,7 @@ through the snapshot (`now_ns`, timer deadlines).
 | `timer.scheduled` | `timer`, `deadline_ns` | `TimerScheduled`, `Timer{timer_id,deadline:Some}` (`:213`) | `ASX_TRACE_TIMER_SET` |
 | `timer.fired` | `timer` | `TimerFired` (`:215`) | `ASX_TRACE_TIMER_FIRE` |
 | `timer.cancelled` | `timer` | `TimerCancelled` (`:217`) | `ASX_TRACE_TIMER_CANCEL` |
-| `user.trace` | `message` | `UserTrace`, `Message(String)` (`:237`), not a handoff | `ASX_TRACE_USER` |
+| `user.trace` | `message` | `UserTrace`, `Message(String)` (`:237`), not a handoff. A `managed_supervisor_v1` message has its `region=` and `task=` ids replaced by their §2 names | `ASX_TRACE_USER`; the supervisor's ids (hex handles) are replaced the same way |
 
 ### Emission rules both engines must follow
 
@@ -359,6 +368,15 @@ named or that appeared in the trace, including completed ones.
   handle would report as cancelled), or `panicked` when a callback
   panicked. A server whose spawn its admission refused is not in `tasks`,
   as for any refused spawn.
+- **A supervisor's outcome is its join's; its generations are not in
+  `tasks`.** `ManagedSupervisorHandle` keeps the controller's handle and
+  a report slot (`supervision.rs:3423-3505`): a controller that published
+  its report is `ok`, whatever stopped it (the report carries that,
+  DSL §3.8), and one that never ran is cancelled. A generation's task is
+  owned by its controller, which consumes its handle, so its outcome is
+  observable only through the controller's report and traces; generations
+  appear in the trace, their regions in `regions`, and an unfinished one
+  counts against `quiescent`.
 - **Task fields.** A task's `outcome` is set iff its state is `Completed`.
   Its `cancel_reason` is the reason carried by `CancelRequested` /
   `Cancelling` / `Finalizing` (`src/record/task.rs:83-100`), or the

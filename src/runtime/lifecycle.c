@@ -712,7 +712,9 @@ static int region_parent_live(uint32_t idx) {
 }
 #endif
 
-asx_status asx_region_open(asx_region_id *out_id) {
+/* Open a region whose parent is `parent` (ASX_INVALID_ID for a root),
+ * recorded before its ASX_TRACE_REGION_OPEN, so an observer can read it. */
+static asx_status region_open_with_parent(asx_region_id parent, asx_region_id *out_id) {
     uint32_t idx;
     int reclaim;
 
@@ -766,7 +768,7 @@ asx_status asx_region_open(asx_region_id *out_id) {
     }
 
     g_regions[idx].state = ASX_REGION_OPEN;
-    g_regions[idx].parent_id = ASX_INVALID_ID;
+    g_regions[idx].parent_id = parent;
     g_regions[idx].child_count = 0;
     for (uint32_t child_idx = 0; child_idx < ASX_MAX_REGION_CHILDREN; child_idx++) {
         g_regions[idx].children[child_idx] = ASX_INVALID_ID;
@@ -802,6 +804,10 @@ asx_status asx_region_open(asx_region_id *out_id) {
     return ASX_OK;
 }
 
+asx_status asx_region_open(asx_region_id *out_id) {
+    return region_open_with_parent(ASX_INVALID_ID, out_id);
+}
+
 asx_status asx_region_open_child(asx_region_id parent, asx_region_id *out_child) {
     asx_region_slot *parent_slot;
     asx_region_slot *child_slot;
@@ -821,13 +827,12 @@ asx_status asx_region_open_child(asx_region_id parent, asx_region_id *out_child)
     }
     if (parent_slot->child_count >= ASX_MAX_REGION_CHILDREN) return ASX_E_RESOURCE_EXHAUSTED;
 
-    st = asx_region_open(out_child);
+    st = region_open_with_parent(parent, out_child);
     if (st != ASX_OK) return st;
 
     st = asx_region_slot_lookup(*out_child, &child_slot);
     if (st != ASX_OK) return st;
 
-    child_slot->parent_id = parent;
     child_slot->budget = parent_slot->budget; /* children inherit the budget */
     parent_slot->children[parent_slot->child_count] = *out_child;
     parent_slot->child_count++;
@@ -848,7 +853,6 @@ asx_status asx_region_open_child_with_budget(asx_region_id parent, const asx_bud
 asx_status asx_region_open_child_poll(asx_task_id self, asx_region_id parent,
                                       const asx_budget *budget, asx_region_id *out_child) {
     asx_task_slot *t;
-    asx_region_slot *p;
     asx_status st;
     asx_budget inherited;
 
@@ -862,8 +866,16 @@ asx_status asx_region_open_child_poll(asx_task_id self, asx_region_id parent,
     inherited = t->budget;
     if (t->cleanup_applied) inherited.poll_quota = UINT32_MAX;
     if (budget != NULL) inherited = asx_budget_meet(&inherited, budget);
+    return asx_region_open_child_poll_internal(t, parent, &inherited, out_child);
+}
+
+asx_status asx_region_open_child_poll_internal(asx_task_slot *t, asx_region_id parent,
+                                               const asx_budget *inherited,
+                                               asx_region_id *out_child) {
+    asx_region_slot *p;
+    asx_status st;
     if (!asx_lab_dispatch_active()) {
-        return asx_region_open_child_with_budget(parent, &inherited, out_child);
+        return asx_region_open_child_with_budget(parent, inherited, out_child);
     }
     switch (t->region_wait) {
     case ASX_REGION_WAIT_OPENED:
@@ -874,7 +886,7 @@ asx_status asx_region_open_child_poll(asx_task_id self, asx_region_id parent,
     case ASX_REGION_WAIT_NONE:
         st = asx_region_slot_lookup(parent, &p);
         if (st != ASX_OK) return st;
-        st = asx_lab_region_open_command(t, parent, &inherited);
+        st = asx_lab_region_open_command(t, parent, inherited);
         if (st != ASX_OK) return st;
         t->region_wait = ASX_REGION_WAIT_OPEN;
         break;
@@ -938,6 +950,16 @@ asx_status asx_region_get_budget(asx_region_id id, asx_budget *out) {
     st = asx_region_slot_lookup(id, &r);
     if (st != ASX_OK) return st;
     *out = r->budget;
+    return ASX_OK;
+}
+
+asx_status asx_region_get_parent(asx_region_id id, asx_region_id *out) {
+    asx_region_slot *r;
+    asx_status st;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
+    *out = r->parent_id;
     return ASX_OK;
 }
 

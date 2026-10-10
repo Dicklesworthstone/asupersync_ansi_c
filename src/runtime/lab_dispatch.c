@@ -147,10 +147,30 @@ static uint32_t g_lab_rcmd_n = 0;
  * commands, at most LAB_HANDLE_BATCH per drain, requests for one task
  * coalesced into the first (drain_handle_cancel_requests, LR:4018-4128;
  * coalesce_handle_cancel_requests, spawn_mailbox.rs:1470). A target still
- * awaiting admission takes its aborts as it is admitted, onto the cancel
- * lane only (drain_spawn_admissions, LR:3972-3986). */
+ * awaiting admission keeps its aborts until it is admitted, which queues
+ * them as one abort behind the pending ones, its first lane publication
+ * (drain_spawn_admissions, LR:3972-3986; spawn_mailbox.rs:629-660). */
 #define LAB_HANDLE_BATCH 16u
 #define LAB_HANDLE_CAP (2u * (uint32_t)ASX_MAX_TASKS)
+
+/* A region command's cancel (close_region_command, state.rs:4936-4955) is
+ * not dispatched as it is applied: its tasks' cancel lane entries and then
+ * their cancel wakes wait until drain_deferred_cancel_dispatches
+ * (LR:4219-4239) publishes every deferred batch, lane entries first, after
+ * the step's second handle-abort drain. A region the cancel closed has
+ * woken its close waiters by then, onto the ready lane. */
+#define LAB_DEFER_CAP (4u * (uint32_t)ASX_MAX_TASKS)
+
+typedef struct {
+    uint32_t slot;
+    uint16_t task_gen;
+    uint8_t priority;
+    uint8_t wake; /* a cancel wake (at the waker's priority), else a lane entry */
+} lab_deferred;
+
+static lab_deferred g_lab_deferred[LAB_DEFER_CAP];
+static uint32_t g_lab_deferred_n = 0;
+static int g_lab_deferring = 0;
 
 typedef struct {
     uint32_t slot;
@@ -160,6 +180,11 @@ typedef struct {
 
 static lab_handle_cancel g_lab_hc[LAB_HANDLE_CAP];
 static uint32_t g_lab_hc_n = 0;
+/* Aborts of tasks still awaiting admission: Rust caches them in the
+ * handle (task_handle.rs:492-497) and the admission turns them into one
+ * command; a refused admission never publishes them. */
+static lab_handle_cancel g_lab_cached[LAB_HANDLE_CAP];
+static uint32_t g_lab_cached_n = 0;
 
 /* Retired tasks a cancel waker scheduled after they completed: Rust's
  * scheduled set holds task ids, so the next pick of one is a dispatch that
@@ -199,6 +224,9 @@ void asx_lab_dispatch_reset_internal(void) {
     g_lab_batch = 0;
     g_lab_rcmd_n = 0;
     g_lab_hc_n = 0;
+    g_lab_cached_n = 0;
+    g_lab_deferred_n = 0;
+    g_lab_deferring = 0;
     g_lab_retired_n = 0;
     g_lab_steps = 0;
     g_lab_rec = NULL;
@@ -423,10 +451,48 @@ void asx_lab_schedule(asx_task_slot *t, uint8_t priority) {
     lab_push(&g_lab_ready, t, priority);
 }
 
+static void lab_defer(const asx_task_slot *t, uint8_t priority, uint8_t wake) {
+    lab_deferred *d;
+    if (g_lab_deferred_n >= LAB_DEFER_CAP) {
+        g_lab_overflow = 1;
+        return;
+    }
+    d = &g_lab_deferred[g_lab_deferred_n++];
+    d->slot = (uint32_t)(t - g_tasks);
+    d->task_gen = t->generation;
+    d->priority = priority;
+    d->wake = wake;
+}
+
 void asx_lab_schedule_cancel(asx_task_slot *t, uint8_t priority) {
     if (t == NULL || !t->alive || asx_task_is_terminal(t->state)) return;
+    if (g_lab_deferring) {
+        lab_defer(t, priority, 0u);
+        return;
+    }
     lab_mark_scheduled(t);
     lab_push(&g_lab_cancel, t, priority);
+}
+
+int asx_lab_deferred_cancels_pending(void) { return g_lab_deferred_n > 0u; }
+
+void asx_lab_drain_deferred_cancels(void) {
+    lab_deferred batch[LAB_DEFER_CAP];
+    uint32_t n = g_lab_deferred_n;
+    uint32_t pass;
+    uint32_t i;
+    if (n == 0u) return;
+    memcpy(batch, g_lab_deferred, (size_t)n * sizeof(lab_deferred));
+    g_lab_deferred_n = 0;
+    for (pass = 0; pass < 2u; pass++) {
+        for (i = 0; i < n; i++) {
+            asx_task_slot *t = &g_tasks[batch[i].slot];
+            ASX_CHECKPOINT_WAIVER("bounded: n <= LAB_DEFER_CAP");
+            if (batch[i].wake != (uint8_t)pass) continue;
+            if (!t->alive || t->generation != batch[i].task_gen) continue;
+            asx_lab_schedule_cancel(t, pass == 0u ? batch[i].priority : t->lab_waker_prio);
+        }
+    }
 }
 
 void asx_lab_schedule_cancel_retired(uint32_t slot, uint16_t task_gen, uint8_t priority) {
@@ -650,32 +716,37 @@ static void lab_apply_handle_cancel(const lab_handle_cancel *h) {
     (void)st;
 }
 
-/* The queued aborts of the task in `slot`, taken off the queue and applied
- * as one, strengthened in order. */
-static void lab_take_handle_cancels_for(uint32_t slot) {
-    lab_handle_cancel merged;
+/* The cached aborts of the task in `slot`, taken as one, strengthened in
+ * order, into *out. Returns 1 if there were any. */
+static int lab_take_handle_cancels_for(uint32_t slot, lab_handle_cancel *out) {
     int found = 0;
     uint32_t k = 0;
-    memset(&merged, 0, sizeof(merged));
-    while (k < g_lab_hc_n) {
-        ASX_CHECKPOINT_WAIVER("bounded: queue length <= LAB_HANDLE_CAP");
-        if (g_lab_hc[k].slot != slot) {
+    memset(out, 0, sizeof(*out));
+    while (k < g_lab_cached_n) {
+        ASX_CHECKPOINT_WAIVER("bounded: cache length <= LAB_HANDLE_CAP");
+        if (g_lab_cached[k].slot != slot) {
             k++;
             continue;
         }
         if (!found) {
-            merged = g_lab_hc[k];
+            *out = g_lab_cached[k];
             found = 1;
         } else {
-            merged.reason = asx_cancel_strengthen(&merged.reason, &g_lab_hc[k].reason);
+            out->reason = asx_cancel_strengthen(&out->reason, &g_lab_cached[k].reason);
         }
-        if (k + 1u < g_lab_hc_n) {
-            memmove(&g_lab_hc[k], &g_lab_hc[k + 1u],
-                    (size_t)(g_lab_hc_n - k - 1u) * sizeof(lab_handle_cancel));
+        if (k + 1u < g_lab_cached_n) {
+            memmove(&g_lab_cached[k], &g_lab_cached[k + 1u],
+                    (size_t)(g_lab_cached_n - k - 1u) * sizeof(lab_handle_cancel));
         }
-        g_lab_hc_n--;
+        g_lab_cached_n--;
     }
-    if (found) lab_apply_handle_cancel(&merged);
+    return found;
+}
+
+/* A refused spawn's aborts strengthen the reason its join reports. */
+static void lab_apply_handle_cancels_for(uint32_t slot) {
+    lab_handle_cancel merged;
+    if (lab_take_handle_cancels_for(slot, &merged)) lab_apply_handle_cancel(&merged);
 }
 
 /* drain_spawn_admissions (LR:3957-4012, state.rs:5212-5217): FIFO, each
@@ -712,7 +783,7 @@ void asx_lab_admit_pending(void) {
                  * touched (SpawnError::RegionClosed). */
                 if (!asx_region_can_accept_work(r->state)) {
                     asx_task_refuse_admission_internal(t, r, ASX_E_REGION_CLOSED);
-                    lab_take_handle_cancels_for(g_lab_admit[i]);
+                    lab_apply_handle_cancels_for(g_lab_admit[i]);
                     continue;
                 }
                 lab_arena_insert(t); /* its task-arena id */
@@ -725,7 +796,7 @@ void asx_lab_admit_pending(void) {
                     asx_region_live_admitted_internal(r) > r->limits.max_tasks) {
                     asx_lab_task_retired_internal(t);
                     asx_task_refuse_admission_internal(t, r, ASX_E_ADMISSION_LIMIT);
-                    lab_take_handle_cancels_for(g_lab_admit[i]);
+                    lab_apply_handle_cancels_for(g_lab_admit[i]);
                     continue;
                 }
             } else {
@@ -739,8 +810,24 @@ void asx_lab_admit_pending(void) {
         asx_lab_arm_budget_deadline_internal(t);
         asx_trace_emit(ASX_TRACE_TASK_SPAWN, (uint64_t)asx_task_handle_for_slot(g_lab_admit[i]),
                        (uint64_t)t->region);
-        lab_take_handle_cancels_for(g_lab_admit[i]);
-        asx_lab_schedule(t, t->budget.priority);
+        {
+            /* Aborted before admission: admission hands the first lane
+             * publication to one abort command carrying the strongest
+             * reason, queued behind the aborts already pending, which this
+             * step's drain applies in order (AdmissionPublication's managed
+             * path, spawn_mailbox.rs:629-660); it does not go on the ready
+             * lane. */
+            lab_handle_cancel pending;
+            if (lab_take_handle_cancels_for(g_lab_admit[i], &pending)) {
+                if (g_lab_hc_n >= LAB_HANDLE_CAP) {
+                    g_lab_overflow = 1;
+                } else {
+                    g_lab_hc[g_lab_hc_n++] = pending;
+                }
+            } else {
+                asx_lab_schedule(t, t->budget.priority);
+            }
+        }
     }
 }
 
@@ -749,6 +836,10 @@ void asx_lab_admit_pending(void) {
  * task polled at least once has one. */
 void asx_lab_cancel_wake(asx_task_slot *t) {
     if (!t->first_polled) return;
+    if (g_lab_deferring) {
+        lab_defer(t, 0u, 1u);
+        return;
+    }
     if (g_lab_batch > 0u) {
         if (g_lab_wake_n >= ASX_MAX_TASKS) {
             g_lab_overflow = 1;
@@ -814,13 +905,20 @@ int asx_lab_region_commands_pending(void) { return g_lab_rcmd_n > 0u; }
  * reused): as in Rust, a late cancel of one only records region.cancelled. */
 static void lab_cancel_region(asx_region_id region, const asx_cancel_reason *reason) {
     asx_status st = asx_region_cancel(region, reason, NULL);
-    if (st == ASX_E_STALE_HANDLE) asx_region_trace_cancel_of_gone_internal(region, reason);
+    if (st == ASX_E_STALE_HANDLE) {
+        asx_region_trace_cancel_of_gone_internal(region, reason);
+    } else if (st == ASX_OK) {
+        /* close_region_command advances the region after the cancel
+         * (state.rs:4936-4940): one with child regions starts draining. */
+        asx_region_advance_internal(region);
+    }
 }
 
 /* drain_region_commands (LR:4135-4217): up to 8 commands in order. A
  * Cancel cancels its region now (a closed or gone region is left alone);
- * its tasks' cancel lane entries and wakes are dispatched together after
- * the batch (drain_deferred_cancel_dispatches, LR:4219-4239). Each
+ * its tasks' cancel lane entries and wakes are deferred
+ * (asx_lab_drain_deferred_cancels publishes them), while a region it
+ * closes wakes its close waiters at once. Each
  * Create's result is published, waking its opener, after every command of
  * the batch is applied. A Create whose opener is gone still mints the
  * region, which then closes, as Rust's abandoned slot closes a region
@@ -840,7 +938,7 @@ void asx_lab_drain_region_commands(void) {
     }
     g_lab_rcmd_n -= n;
 
-    asx_lab_cancel_batch_begin();
+    g_lab_deferring = 1;
     for (i = 0; i < n; i++) {
         const lab_region_cmd *c = &batch[i];
         asx_task_slot *t;
@@ -874,7 +972,7 @@ void asx_lab_drain_region_commands(void) {
         t->region_wait_region = id;
         opened[n_opened++] = c->opener;
     }
-    asx_lab_cancel_batch_end();
+    g_lab_deferring = 0;
     for (i = 0; i < n_opened; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n_opened <= LAB_REGION_BATCH");
         asx_task_wake_slot_internal(&g_tasks[opened[i]]);
@@ -883,8 +981,13 @@ void asx_lab_drain_region_commands(void) {
 
 asx_status asx_lab_handle_cancel_command(const asx_task_slot *t, const asx_cancel_reason *reason) {
     lab_handle_cancel *h;
-    if (g_lab_hc_n >= LAB_HANDLE_CAP) return ASX_E_RESOURCE_EXHAUSTED;
-    h = &g_lab_hc[g_lab_hc_n++];
+    if (t->lab_admission_pending) {
+        if (g_lab_cached_n >= LAB_HANDLE_CAP) return ASX_E_RESOURCE_EXHAUSTED;
+        h = &g_lab_cached[g_lab_cached_n++];
+    } else {
+        if (g_lab_hc_n >= LAB_HANDLE_CAP) return ASX_E_RESOURCE_EXHAUSTED;
+        h = &g_lab_hc[g_lab_hc_n++];
+    }
     h->slot = (uint32_t)(t - g_tasks);
     h->task_gen = t->generation;
     h->reason = *reason;
