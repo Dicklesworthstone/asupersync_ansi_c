@@ -33,6 +33,11 @@ static uint32_t g_rt_generation = 1u;
 static uint32_t g_active_rt_generation = 0u;
 static asx_io_backend g_active_io_backend = ASX_IO_BACKEND_GHOST;
 
+void asx_runtime_release_active_internal(void) {
+    g_active_rt_generation = 0u;
+    g_active_io_backend = ASX_IO_BACKEND_GHOST;
+}
+
 static int runtime_wait_policy_valid(asx_wait_policy policy) {
     switch (policy) {
     case ASX_WAIT_BUSY_SPIN:
@@ -184,6 +189,15 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
     /* Step 2: validate hooks */
     st = asx_runtime_hooks_validate(hooks, ASX_DETERMINISTIC);
     if (st != ASX_OK) return st;
+
+    /* Step 2a: the runtime state is process-wide, so initializing a second
+     * runtime would silently destroy the live one's regions and tasks.
+     * Refuse it, changing nothing, until that runtime is shut down;
+     * re-initializing the live runtime object itself restarts it. */
+    if (g_active_rt_generation != 0u &&
+        !(rt->initialized && rt->generation == g_active_rt_generation)) {
+        return ASX_E_INVALID_STATE;
+    }
 
     /* Step 3: reset all internal state (deterministic clean slate) */
     asx_runtime_reset();

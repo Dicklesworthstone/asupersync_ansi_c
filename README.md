@@ -2201,6 +2201,15 @@ Provide the required hook families through `asx_runtime_hooks`,
 `asx_runtime_builder_set_*_hooks()`, or the freestanding patterns exercised in
 `tests/vignettes/vignette_hooks.c`.
 
+### Runtime init returns `ASX_E_INVALID_STATE`
+
+Another runtime object is still initialized. The runtime's state (arenas,
+hooks, scheduler) is process-wide, so initializing a second runtime would
+destroy the first one's regions and tasks; the call refuses and changes
+nothing. Shut the live runtime down first (`asx_runtime_shutdown`; tests may
+use `asx_runtime_reset`). Initializing the live runtime object itself again
+restarts it.
+
 ### Non-deterministic replay mismatch
 
 Determinism can be broken by non-seeded entropy or profile mismatch.

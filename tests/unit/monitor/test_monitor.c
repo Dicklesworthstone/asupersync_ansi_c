@@ -222,7 +222,12 @@ static void test_monitor_stale_runtime_fails_closed(void) {
     asx_monitor_report report;
     asx_evidence_sink sink;
 
-    MUST_OK(asx_runtime_init_default(&a));
+    /* A stale runtime object: a copy of one that has since shut down,
+     * another runtime now live (a second init while one is live is
+     * refused, bd-9kll.3.20). */
+    MUST_OK(asx_runtime_init_default(&b));
+    a = b;
+    asx_runtime_shutdown(&b);
     MUST_OK(asx_runtime_init_default(&b));
     asx_monitor_policy_init_default(&policy);
     MUST_OK(asx_monitor_evaluate(&a, &policy, &report, &sink));

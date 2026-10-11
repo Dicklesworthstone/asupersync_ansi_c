@@ -64,7 +64,12 @@ typedef struct {
  * Postconditions: runtime is initialized and ready for use.
  * Returns ASX_OK on success,
  *   ASX_E_INVALID_ARGUMENT if any pointer is NULL or config->size is wrong,
- *   ASX_E_HOOK_INVALID if hook validation fails.
+ *   ASX_E_HOOK_INVALID if hook validation fails,
+ *   ASX_E_INVALID_STATE while another runtime object is initialized: the
+ *   runtime state (arenas, hooks, scheduler) is process-wide, so a second
+ *   runtime would destroy the live one's regions and tasks. Nothing changes;
+ *   shut the live runtime down (or asx_runtime_reset) first. Initializing
+ *   the live runtime object itself again restarts it.
  *
  * Thread-safety: not thread-safe. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,

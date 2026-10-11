@@ -230,9 +230,14 @@ static void test_inspect_stale_runtime_fails_closed(void) {
     asx_inspection_report rpt;
     asx_region_id region;
 
-    MUST_OK(asx_runtime_init_default(&a));
-    MUST_OK(asx_region_open(&region));
+    /* A stale runtime object: a copy of one that has since shut down while
+     * another runtime is live with state of its own (a second init while
+     * one is live is refused, bd-9kll.3.20). */
     MUST_OK(asx_runtime_init_default(&b));
+    a = b;
+    asx_runtime_shutdown(&b);
+    MUST_OK(asx_runtime_init_default(&b));
+    MUST_OK(asx_region_open(&region));
 
     MUST_OK(asx_inspect(&a, &rpt));
     ASSERT(!rpt.initialized, "stale runtime not initialized");

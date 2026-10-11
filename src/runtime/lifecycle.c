@@ -203,6 +203,9 @@ void asx_runtime_reset(void) {
     asx_adapter_reset_all();
     asx_fault_clear();
     asx_runtime_hooks_reset_internal();
+    /* The state the active runtime object owned is gone with its hooks: it
+     * is no longer initialized, and a new runtime may be. */
+    asx_runtime_release_active_internal();
     asx_event_log_reset();
     asx_error_ledger_reset();
     asx_notify_reset();

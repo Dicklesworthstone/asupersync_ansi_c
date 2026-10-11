@@ -1269,7 +1269,9 @@ ASX_API ASX_MUST_USE asx_status asx_quiescence_check_detailed(asx_region_id id,
 
 /* Reset all runtime state (test support only).
  * Clears lifecycle arenas plus global scheduler/parallel/channel/timer/
- * trace/telemetry/adapter/fault-injection diagnostic state.
+ * trace/telemetry/adapter/fault-injection diagnostic state and the hooks.
+ * The runtime object that was initialized is not any more, and
+ * asx_runtime_init may start another.
  * Not for production use. */
 ASX_API void asx_runtime_reset(void);
 

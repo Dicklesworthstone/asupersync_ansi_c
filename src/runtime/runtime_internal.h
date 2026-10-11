@@ -654,6 +654,9 @@ void asx_waker_finish_block_internal(void);
 
 /* Reset private hook installation state during runtime teardown. */
 void asx_runtime_hooks_reset_internal(void);
+/* No runtime object is active any more (asx_runtime_reset): the one that
+ * was reports uninitialized, and asx_runtime_init may start another. */
+void asx_runtime_release_active_internal(void);
 
 /* ------------------------------------------------------------------ */
 /* Constants pinned to Rust's (asupersync 5e60b1c4c). The values are     */
