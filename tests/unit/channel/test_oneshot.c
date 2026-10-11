@@ -306,6 +306,173 @@ TEST(cancelled_reserve_closes_the_channel) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Closed notification (Rust is_closed / is_ready / poll_closed)       */
+/* ------------------------------------------------------------------ */
+
+TEST(closed_predicates_follow_rust) {
+    /* Sender::is_closed and SendPermit::is_closed: the receiver is gone
+     * (oneshot.rs:596, :801); Receiver::is_ready: a value is waiting
+     * (:1350); Receiver::is_closed: sender consumed, no permit, no value
+     * (:236, :1357), so also after the value is received. */
+    asx_oneshot_sender tx;
+    asx_oneshot_receiver rx;
+    asx_oneshot_permit p;
+    uint64_t val = 0;
+
+    setup();
+    MUST_OK(asx_oneshot_create(&tx, &rx));
+    ASSERT_FALSE(asx_oneshot_sender_is_closed(&tx));
+    ASSERT_FALSE(asx_oneshot_receiver_is_ready(&rx));
+    ASSERT_FALSE(asx_oneshot_receiver_is_closed(&rx));
+    ASSERT_EQ(asx_oneshot_try_send(&tx, 5), ASX_OK);
+    ASSERT_TRUE(asx_oneshot_receiver_is_ready(&rx));
+    ASSERT_FALSE(asx_oneshot_receiver_is_closed(&rx));
+    ASSERT_EQ(asx_oneshot_try_recv(&rx, &val), ASX_OK);
+    ASSERT_FALSE(asx_oneshot_receiver_is_ready(&rx));
+    ASSERT_TRUE(asx_oneshot_receiver_is_closed(&rx));
+
+    MUST_OK(asx_oneshot_create(&tx, &rx));
+    asx_oneshot_receiver_drop(&rx);
+    ASSERT_TRUE(asx_oneshot_sender_is_closed(&tx));
+
+    MUST_OK(asx_oneshot_create(&tx, &rx));
+    ASSERT_EQ(asx_oneshot_reserve(&tx, NULL, &p), ASX_OK);
+    ASSERT_FALSE(asx_oneshot_receiver_is_closed(&rx)); /* permit outstanding */
+    ASSERT_FALSE(asx_oneshot_permit_is_closed(&p));
+    asx_oneshot_receiver_drop(&rx);
+    ASSERT_TRUE(asx_oneshot_permit_is_closed(&p));
+
+    MUST_OK(asx_oneshot_create(&tx, &rx));
+    asx_oneshot_sender_drop(&tx);
+    ASSERT_TRUE(asx_oneshot_receiver_is_closed(&rx));
+}
+
+TEST(poll_closed_outside_a_task) {
+    asx_oneshot_sender tx;
+    asx_oneshot_receiver rx;
+
+    setup();
+    MUST_OK(asx_oneshot_create(&tx, &rx));
+    ASSERT_EQ(asx_oneshot_poll_closed(&tx), ASX_E_PENDING);
+    ASSERT_EQ(asx_oneshot_receiver_poll_closed(&rx), ASX_E_PENDING);
+    asx_oneshot_receiver_drop(&rx);
+    ASSERT_EQ(asx_oneshot_poll_closed(&tx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_receiver_poll_closed(&rx), ASX_E_INVALID_STATE);
+
+    MUST_OK(asx_oneshot_create(&tx, &rx));
+    asx_oneshot_sender_drop(&tx);
+    ASSERT_EQ(asx_oneshot_receiver_poll_closed(&rx), ASX_OK);
+    ASSERT_EQ(asx_oneshot_poll_closed(&tx), ASX_E_INVALID_STATE); /* consumed */
+}
+
+/* Waits in poll_closed on one side; records its polls and the result. */
+typedef struct {
+    asx_oneshot_sender tx;
+    asx_oneshot_receiver rx;
+    int receiver_side;
+    uint32_t polls;
+    asx_status result;
+} closed_waiter;
+
+static asx_status poll_closed_waiter(void *ud, asx_task_id self) {
+    closed_waiter *w = (closed_waiter *)ud;
+    (void)self;
+    w->polls++;
+    w->result = w->receiver_side ? asx_oneshot_receiver_poll_closed(&w->rx)
+                                 : asx_oneshot_poll_closed(&w->tx);
+    return w->result == ASX_E_PENDING ? ASX_E_PENDING : ASX_OK;
+}
+
+TEST(closed_waiters_wake_as_rust_wakers_do) {
+    /* The sender's waiter wakes on the receiver drop (:1440). The
+     * receiver's does not wake on a send (:731-760), and wakes when the
+     * value is taken (:1318-1340). */
+    static closed_waiter w[2];
+    asx_oneshot_sender tx_a;
+    asx_oneshot_receiver rx_a;
+    asx_oneshot_sender tx_b;
+    asx_oneshot_receiver rx_b;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+    uint64_t val = 0;
+
+    asx_runtime_reset();
+    setup();
+    memset(w, 0, sizeof(w));
+    MUST_OK(asx_region_open(&r));
+    MUST_OK(asx_oneshot_create(&tx_a, &rx_a));
+    MUST_OK(asx_oneshot_create(&tx_b, &rx_b));
+    w[0].tx = tx_a;
+    w[1].rx = rx_b;
+    w[1].receiver_side = 1;
+    MUST_OK(asx_task_spawn(r, poll_closed_waiter, &w[0], &t));
+    MUST_OK(asx_task_spawn(r, poll_closed_waiter, &w[1], &t));
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(w[0].polls, 1u);
+    ASSERT_EQ(w[1].polls, 1u);
+
+    ASSERT_EQ(asx_oneshot_try_send(&tx_b, 7), ASX_OK);
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(w[1].polls, 1u);
+
+    ASSERT_EQ(asx_oneshot_try_recv(&rx_b, &val), ASX_OK);
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(w[1].polls, 2u);
+    ASSERT_EQ(w[1].result, ASX_OK);
+    ASSERT_EQ(w[0].polls, 1u);
+
+    asx_oneshot_receiver_drop(&rx_a);
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(w[0].polls, 2u);
+    ASSERT_EQ(w[0].result, ASX_OK);
+}
+
+TEST(receiver_closed_waiter_wakes_on_sender_drop_and_abort) {
+    static closed_waiter w[2];
+    asx_oneshot_sender tx_a;
+    asx_oneshot_receiver rx_a;
+    asx_oneshot_sender tx_b;
+    asx_oneshot_receiver rx_b;
+    asx_oneshot_permit p;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    setup();
+    memset(w, 0, sizeof(w));
+    MUST_OK(asx_region_open(&r));
+    MUST_OK(asx_oneshot_create(&tx_a, &rx_a));
+    MUST_OK(asx_oneshot_create(&tx_b, &rx_b));
+    w[0].rx = rx_a;
+    w[0].receiver_side = 1;
+    w[1].rx = rx_b;
+    w[1].receiver_side = 1;
+    MUST_OK(asx_task_spawn(r, poll_closed_waiter, &w[0], &t));
+    MUST_OK(asx_task_spawn(r, poll_closed_waiter, &w[1], &t));
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+
+    asx_oneshot_sender_drop(&tx_a);
+    ASSERT_EQ(asx_oneshot_reserve(&tx_b, NULL, &p), ASX_OK);
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(w[0].result, ASX_OK);
+    ASSERT_EQ(w[1].polls, 1u); /* a reserve is no close */
+
+    asx_oneshot_permit_abort(&p);
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(w[1].polls, 2u);
+    ASSERT_EQ(w[1].result, ASX_OK);
+}
+
+/* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -339,6 +506,11 @@ int main(void) {
     RUN_TEST(permit_abort_closes_the_channel);
     RUN_TEST(tracked_permit_resolves_its_obligation);
     RUN_TEST(cancelled_reserve_closes_the_channel);
+
+    RUN_TEST(closed_predicates_follow_rust);
+    RUN_TEST(poll_closed_outside_a_task);
+    RUN_TEST(closed_waiters_wake_as_rust_wakers_do);
+    RUN_TEST(receiver_closed_waiter_wakes_on_sender_drop_and_abort);
 
     TEST_REPORT();
     return test_failures;

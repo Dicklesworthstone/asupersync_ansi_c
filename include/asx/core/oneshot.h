@@ -164,6 +164,41 @@ ASX_API ASX_MUST_USE asx_status asx_oneshot_recv(asx_oneshot_receiver *receiver,
  * Returns ASX_ONESHOT_EMPTY if state cannot be determined. */
 ASX_API asx_oneshot_state asx_oneshot_get_state(uint32_t slot, uint16_t generation);
 
+/* `tx.is_closed()` (oneshot.rs:596) / `permit.is_closed()` (:801): the
+ * receiver has been dropped. 0 for a stale handle. */
+ASX_API int asx_oneshot_sender_is_closed(const asx_oneshot_sender *sender);
+ASX_API int asx_oneshot_permit_is_closed(const asx_oneshot_permit *permit);
+
+/* `rx.is_ready()` (:1350): a sent value is waiting to be received. */
+ASX_API int asx_oneshot_receiver_is_ready(const asx_oneshot_receiver *receiver);
+
+/* `rx.is_closed()` (:1357, :236): the sending side is gone (sent, dropped,
+ * aborted or its reserve cancelled), no permit is outstanding and no value
+ * is waiting; so also true once the value has been received. */
+ASX_API int asx_oneshot_receiver_is_closed(const asx_oneshot_receiver *receiver);
+
+/* -------------------------------------------------------------------
+ * API: Closed notification (Rust poll_closed)
+ *
+ * One poll each, cancel-oblivious (no Cx), as Rust's. ASX_E_PENDING parks
+ * the calling task inside a scheduler poll. The wakes follow Rust's
+ * separate closed wakers: the sender's waiter wakes only when the receiver
+ * is dropped (a send or reserve retires it, leaving its task parked); the
+ * receiver's wakes when the channel closes (sender dropped, permit aborted
+ * or dropped, reserve cancelled, the value received or the close
+ * observed), not on a send, and is retired by a receiver drop that leaves
+ * the channel open.
+ * ------------------------------------------------------------------- */
+
+/* `tx.poll_closed(cx)` (:619): ASX_OK once the receiver is dropped.
+ * ASX_E_INVALID_STATE for a sender already consumed (sent, reserved or
+ * dropped). */
+ASX_API ASX_MUST_USE asx_status asx_oneshot_poll_closed(asx_oneshot_sender *sender);
+
+/* `rx.poll_closed(cx)` (:1373): ASX_OK once asx_oneshot_receiver_is_closed
+ * holds. ASX_E_INVALID_STATE for a dropped receiver. */
+ASX_API ASX_MUST_USE asx_status asx_oneshot_receiver_poll_closed(asx_oneshot_receiver *receiver);
+
 /* -------------------------------------------------------------------
  * Reset (test support)
  * ------------------------------------------------------------------- */

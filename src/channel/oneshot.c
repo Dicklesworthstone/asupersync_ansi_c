@@ -30,8 +30,12 @@ typedef struct {
     uint64_t value;
     int sender_alive;
     int receiver_alive;
-    int reserved;           /* a permit holds the sending side (asx_oneshot_reserve) */
-    asx_wait_queue waiters; /* tasks parked in asx_oneshot_recv */
+    int receiver_dropped;     /* asx_oneshot_receiver_drop ran (Rust receiver_dropped) */
+    int reserved;             /* a permit holds the sending side (asx_oneshot_reserve) */
+    asx_wait_queue waiters;   /* tasks parked in asx_oneshot_recv */
+    asx_wait_queue tx_closed; /* parked in asx_oneshot_poll_closed (Rust sender_waker) */
+    asx_wait_queue rx_closed; /* parked in asx_oneshot_receiver_poll_closed
+                               * (Rust receiver_closed_waker) */
 } asx_oneshot_slot;
 
 /* ------------------------------------------------------------------ */
@@ -53,16 +57,43 @@ static void oneshot_wake_waiters(asx_oneshot_slot *s) {
     if (s->waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->waiters);
 }
 
+/* Rust's closed wakers: a woken one re-polls, a retired one is dropped
+ * without a wake (its task stays parked, as in Rust). */
+static void oneshot_wake_queue(asx_wait_queue *q) {
+    if (q->len > 0u) (void)asx_wait_queue_wake_all(q);
+}
+
+static void oneshot_retire_queue(asx_wait_queue *q) {
+    if (q->len > 0u) asx_wait_queue_clear(q);
+}
+
+/* Rust OneShotInner::is_closed (oneshot.rs:236): the sending side is
+ * consumed, no permit is outstanding and no value is waiting. */
+static int oneshot_rx_closed_now(const asx_oneshot_slot *s) {
+    return !s->sender_alive && !s->reserved && s->state != ASX_ONESHOT_FILLED;
+}
+
+/* The sending side is consumed (sent, reserved or dropped): Rust's Sender
+ * drop retires its poll_closed waker (oneshot.rs:658-664). */
+static void oneshot_sender_consumed(asx_oneshot_slot *s) { oneshot_retire_queue(&s->tx_closed); }
+
+static void oneshot_slot_init(asx_oneshot_slot *s) {
+    s->state = ASX_ONESHOT_EMPTY;
+    s->value = 0;
+    s->sender_alive = 0;
+    s->receiver_alive = 0;
+    s->receiver_dropped = 0;
+    s->reserved = 0;
+    asx_wait_queue_init(&s->waiters, NULL);
+    asx_wait_queue_init(&s->tx_closed, NULL);
+    asx_wait_queue_init(&s->rx_closed, NULL);
+}
+
 void asx_oneshot_reset(void) {
     uint32_t i;
     for (i = 0; i < ASX_MAX_ONESHOTS; i++) {
         g_slots[i].generation = next_gen(g_slots[i].generation);
-        g_slots[i].state = ASX_ONESHOT_EMPTY;
-        g_slots[i].value = 0;
-        g_slots[i].sender_alive = 0;
-        g_slots[i].receiver_alive = 0;
-        g_slots[i].reserved = 0;
-        asx_wait_queue_init(&g_slots[i].waiters, NULL);
+        oneshot_slot_init(&g_slots[i]);
     }
     g_slot_count = 0;
 }
@@ -99,13 +130,10 @@ asx_status asx_oneshot_create(asx_oneshot_sender *out_sender, asx_oneshot_receiv
     }
 
     s = &g_slots[idx];
-    s->state = ASX_ONESHOT_EMPTY;
     s->generation = next_gen(s->generation);
-    s->value = 0;
+    oneshot_slot_init(s);
     s->sender_alive = 1;
     s->receiver_alive = 1;
-    s->reserved = 0;
-    asx_wait_queue_init(&s->waiters, NULL);
 
     out_sender->slot = idx;
     out_sender->generation = s->generation;
@@ -126,7 +154,12 @@ void asx_oneshot_sender_drop(asx_oneshot_sender *sender) {
 
     s->sender_alive = 0;
     if (s->state == ASX_ONESHOT_EMPTY) { s->state = ASX_ONESHOT_SENDER_DROPPED; }
+    oneshot_sender_consumed(s);
     oneshot_wake_waiters(s);
+    /* The channel is now closed: the receiver's poll_closed waiter wakes
+     * (Sender drop, permit abort or drop, cancelled reserve; oneshot.rs:
+     * 497-508, :660-678, :782-799). */
+    oneshot_wake_queue(&s->rx_closed);
 }
 
 void asx_oneshot_receiver_drop(asx_oneshot_receiver *receiver) {
@@ -135,13 +168,25 @@ void asx_oneshot_receiver_drop(asx_oneshot_receiver *receiver) {
     if (receiver->slot >= g_slot_count) return;
     s = &g_slots[receiver->slot];
     if (s->generation != receiver->generation) return;
-    if (!s->receiver_alive) return;
+    if (s->receiver_dropped) return;
 
-    s->receiver_alive = 0;
-    if (s->state == ASX_ONESHOT_EMPTY || s->state == ASX_ONESHOT_FILLED) {
-        s->state = ASX_ONESHOT_RECEIVER_DROPPED;
+    s->receiver_dropped = 1;
+    if (s->receiver_alive) {
+        s->receiver_alive = 0;
+        if (s->state == ASX_ONESHOT_EMPTY || s->state == ASX_ONESHOT_FILLED) {
+            s->state = ASX_ONESHOT_RECEIVER_DROPPED;
+        }
+        oneshot_wake_waiters(s);
     }
-    oneshot_wake_waiters(s);
+    /* Receiver drop (oneshot.rs:1410-1445): the sender's poll_closed waiter
+     * wakes; the receiver's own wakes only if the channel is closed after
+     * the drop, else it is retired. */
+    oneshot_wake_queue(&s->tx_closed);
+    if (oneshot_rx_closed_now(s)) {
+        oneshot_wake_queue(&s->rx_closed);
+    } else {
+        oneshot_retire_queue(&s->rx_closed);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -153,6 +198,7 @@ static asx_status oneshot_deliver(const asx_oneshot_sender *sender, asx_oneshot_
                                   uint64_t value) {
     if (!s->receiver_alive) {
         s->sender_alive = 0;
+        oneshot_sender_consumed(s);
         return ASX_E_DISCONNECTED;
     }
 
@@ -161,8 +207,11 @@ static asx_status oneshot_deliver(const asx_oneshot_sender *sender, asx_oneshot_
     s->value = value;
     s->state = ASX_ONESHOT_FILLED;
     s->sender_alive = 0;
+    oneshot_sender_consumed(s);
 
     asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)sender->slot, value);
+    /* The receiver's recv waiter wakes; its poll_closed waiter stays
+     * registered (a value is not a close; oneshot.rs:731-760). */
     oneshot_wake_waiters(s);
 
     return ASX_OK;
@@ -203,6 +252,8 @@ static asx_status oneshot_recv_impl(asx_oneshot_receiver *receiver, uint64_t *ou
         return ASX_E_INVALID_STATE;
     }
 
+    /* Taking the value, or finding the channel closed, makes it closed: a
+     * poll_closed waiter wakes (oneshot.rs:1318-1340). */
     if (s->state == ASX_ONESHOT_FILLED) {
         *out_value = s->value;
         s->state = ASX_ONESHOT_CONSUMED;
@@ -211,6 +262,7 @@ static asx_status oneshot_recv_impl(asx_oneshot_receiver *receiver, uint64_t *ou
         asx_wait_queue_leave_current(&s->waiters);
         /* The receiver is spent: any other task parked on it must see that. */
         oneshot_wake_waiters(s);
+        oneshot_wake_queue(&s->rx_closed);
         return ASX_OK;
     }
 
@@ -218,6 +270,7 @@ static asx_status oneshot_recv_impl(asx_oneshot_receiver *receiver, uint64_t *ou
         s->receiver_alive = 0;
         asx_wait_queue_leave_current(&s->waiters);
         oneshot_wake_waiters(s);
+        oneshot_wake_queue(&s->rx_closed);
         return ASX_E_DISCONNECTED;
     }
 
@@ -274,6 +327,7 @@ asx_status asx_oneshot_reserve(asx_oneshot_sender *sender, asx_cx *cx, asx_onesh
     }
     oneshot_trace(cx, "oneshot::reserve creating permit");
     s->reserved = 1;
+    oneshot_sender_consumed(s);
     out->sender = *sender;
     out->live = 1;
     /* Registered after the permit exists (:519-528); a refusal leaves the
@@ -380,4 +434,63 @@ asx_oneshot_state asx_oneshot_get_state(uint32_t slot, uint16_t generation) {
     if (slot >= g_slot_count) return ASX_ONESHOT_EMPTY;
     if (g_slots[slot].generation != generation) return ASX_ONESHOT_EMPTY;
     return g_slots[slot].state;
+}
+
+/* The slot a handle names, or NULL for a stale or unknown one. */
+static asx_oneshot_slot *oneshot_slot_of(uint32_t slot, uint16_t generation) {
+    if (slot >= g_slot_count || g_slots[slot].generation != generation) return NULL;
+    return &g_slots[slot];
+}
+
+int asx_oneshot_sender_is_closed(const asx_oneshot_sender *sender) {
+    const asx_oneshot_slot *s =
+        sender != NULL ? oneshot_slot_of(sender->slot, sender->generation) : NULL;
+    return s != NULL && s->receiver_dropped;
+}
+
+int asx_oneshot_permit_is_closed(const asx_oneshot_permit *permit) {
+    return permit != NULL && asx_oneshot_sender_is_closed(&permit->sender);
+}
+
+asx_status asx_oneshot_poll_closed(asx_oneshot_sender *sender) {
+    asx_oneshot_slot *s;
+    asx_status st;
+    if (sender == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = oneshot_sender_slot(sender, &s);
+    if (st != ASX_OK) return st;
+    /* Only a sender not yet consumed can wait (Rust: &mut Sender). */
+    if (!s->sender_alive || s->reserved) return ASX_E_INVALID_STATE;
+    if (s->receiver_dropped) {
+        asx_wait_queue_leave_current(&s->tx_closed);
+        return ASX_OK;
+    }
+    (void)asx_wait_queue_park_current(&s->tx_closed);
+    return ASX_E_PENDING;
+}
+
+int asx_oneshot_receiver_is_ready(const asx_oneshot_receiver *receiver) {
+    const asx_oneshot_slot *s =
+        receiver != NULL ? oneshot_slot_of(receiver->slot, receiver->generation) : NULL;
+    return s != NULL && !s->receiver_dropped && s->state == ASX_ONESHOT_FILLED;
+}
+
+int asx_oneshot_receiver_is_closed(const asx_oneshot_receiver *receiver) {
+    const asx_oneshot_slot *s =
+        receiver != NULL ? oneshot_slot_of(receiver->slot, receiver->generation) : NULL;
+    return s != NULL && !s->receiver_dropped && oneshot_rx_closed_now(s);
+}
+
+asx_status asx_oneshot_receiver_poll_closed(asx_oneshot_receiver *receiver) {
+    asx_oneshot_slot *s;
+    if (receiver == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (receiver->slot >= g_slot_count) return ASX_E_NOT_FOUND;
+    s = &g_slots[receiver->slot];
+    if (s->generation != receiver->generation) return ASX_E_STALE_HANDLE;
+    if (s->receiver_dropped) return ASX_E_INVALID_STATE;
+    if (oneshot_rx_closed_now(s)) {
+        asx_wait_queue_leave_current(&s->rx_closed);
+        return ASX_OK;
+    }
+    (void)asx_wait_queue_park_current(&s->rx_closed);
+    return ASX_E_PENDING;
 }
