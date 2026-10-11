@@ -107,32 +107,66 @@ ASX_API asx_status asx_timeout_poll(void *user_data, asx_task_id self);
 /* -------------------------------------------------------------------
  * Interval
  *
- * A periodic timer that fires at fixed intervals. Each period
- * increments a tick counter. The interval completes when max_ticks
- * is reached (set to 0 for unlimited — will never return ASX_OK).
+ * A periodic timer with the tick times of Rust's Interval
+ * (time/interval.rs). The first tick is at the interval's start: the
+ * first poll's time for asx_interval_init (Rust interval(now, period)) or
+ * the given time for asx_interval_init_at (Rust interval_at). Each tick
+ * sets the next deadline as its missed-tick behavior says (Burst by
+ * default, as in Rust). Each tick increments a counter, and a poll counts
+ * every tick due at its time, as back-to-back Rust ticks at that time
+ * would: a Burst interval polled late catches up on the missed ticks at
+ * once. The interval completes when max_ticks is reached (0 = unlimited:
+ * it never returns ASX_OK).
+ *
+ * Rust saturates deadlines at the last representable time, fires a tick
+ * there and then stays silent; a C interval that reaches that point
+ * returns ASX_E_TIMER_DURATION_EXCEEDED instead of waiting forever.
  *
  * The tick counter can be read by external code for progress tracking.
  * ------------------------------------------------------------------- */
 
+/* Where the deadline after a tick goes (Rust MissedTickBehavior). */
+typedef enum {
+    ASX_MISSED_TICK_BURST = 0, /* a period after the previous deadline (the default) */
+    ASX_MISSED_TICK_DELAY = 1, /* a period after the tick's time */
+    ASX_MISSED_TICK_SKIP = 2   /* the first period boundary after the tick's time */
+} asx_missed_tick_behavior;
+
 typedef struct {
-    asx_deadline deadline;
-    int initialized;    /* 1 after first poll */
-    uint64_t period_ns; /* interval period */
-    uint32_t ticks;     /* number of times interval has fired */
-    uint32_t max_ticks; /* stop after this many (0 = unlimited) */
+    asx_deadline deadline; /* the next tick */
+    int initialized;       /* 1 after first poll */
+    uint64_t period_ns;    /* interval period */
+    uint32_t ticks;        /* number of times interval has fired */
+    uint32_t max_ticks;    /* stop after this many (0 = unlimited) */
+    int has_start;         /* 1: the first tick is at start_ns */
+    asx_time start_ns;
+    asx_missed_tick_behavior missed_tick_behavior;
+    int exhausted; /* the tick at the last representable time fired */
 } asx_interval_state;
 
-/* Initialize an interval state for the given period.
+/* Initialize an interval whose first tick is at its first poll.
  * max_ticks=0 means unlimited (interval never completes on its own).
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if state is NULL
  *   or period_ns is 0. */
 ASX_API ASX_MUST_USE asx_status asx_interval_init(asx_interval_state *state, uint64_t period_ns,
                                                   uint32_t max_ticks);
 
+/* Initialize an interval whose first tick is at runtime-clock time
+ * `start_ns` (Rust interval_at). Same returns as asx_interval_init. */
+ASX_API ASX_MUST_USE asx_status asx_interval_init_at(asx_interval_state *state, asx_time start_ns,
+                                                     uint64_t period_ns, uint32_t max_ticks);
+
+/* Set the missed-tick behavior (Rust Interval::set_missed_tick_behavior);
+ * it applies from the next tick on. Returns ASX_E_INVALID_ARGUMENT for a
+ * NULL state or an unknown behavior. */
+ASX_API ASX_MUST_USE asx_status
+asx_interval_set_missed_tick_behavior(asx_interval_state *state, asx_missed_tick_behavior behavior);
+
 /* Poll function for interval. Use as the poll_fn for a task.
  * user_data must point to an initialized asx_interval_state.
  * Returns ASX_E_PENDING between ticks, ASX_OK when max_ticks reached
- *   (never returns ASX_OK if max_ticks is 0). */
+ *   (never returns ASX_OK if max_ticks is 0), and
+ *   ASX_E_TIMER_DURATION_EXCEEDED once no later tick exists. */
 ASX_API asx_status asx_interval_poll(void *user_data, asx_task_id self);
 
 /* Get the current tick count of an interval.

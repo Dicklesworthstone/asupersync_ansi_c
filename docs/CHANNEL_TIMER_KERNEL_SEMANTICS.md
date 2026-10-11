@@ -417,6 +417,12 @@ Rust: a `Sleep` completes early when its task has a cancel whose kind is neither
 
 **C status:** implemented for sleeps: `sleep_observes_cancel` (`src/time/sleep.c:49-56`) applies the same kind rule, and a sleep that observes the cancel cancels its timer (`asx_task_cancel_timer`, `src/time/sleep.c:73-84`). A finished task's sleep timer and budget-deadline timer are removed with it (`asx_task_timer_disarm_internal`, `src/runtime/scheduler.c:165-180`). Rust parity: `budget-deadline-sleep-checkpoint-001`, `lab-dispatch-waker-rearm-001` (a pending sleep's timer is cancelled and registered again).
 
+### 4.3a Interval Ticks
+
+Rust's `Interval` (`src/time/interval.rs`) is a synchronous schedule the caller ticks with the current time. Its first tick is at its start: `interval(now, period)` starts now and `interval_at(start, period)` at `start` (`:443-471`). Each tick moves the deadline as its `MissedTickBehavior` says (`advance_deadline`, `:385-420`): `Burst`, the default, adds one period to the deadline, so a late caller gets the missed ticks back to back; `Delay` sets it a period after the tick's time; `Skip` moves it to the first period boundary after that time. Deadlines saturate at `Time::MAX`; the tick there is the last (`exhausted`).
+
+**C status:** `asx_interval_poll` (`src/time/sleep.c:247`) is a task poll function over the same schedule: the first tick is at the first poll (`asx_interval_init`) or at a given time (`asx_interval_init_at`, `src/time/sleep.c:186`), `asx_interval_set_missed_tick_behavior` (`src/time/sleep.c:195`) picks Burst (default), Delay or Skip, and a poll counts every tick due at its time (`interval_take_due`, `src/time/sleep.c:215`), up to `max_ticks`. Rust has no async wrapper to compare with past the last representable tick: C returns `ASX_E_TIMER_DURATION_EXCEEDED` there instead of waiting forever. Unit tests in `tests/unit/time/test_sleep.c` (first tick, `interval_at`, the three behaviours at a 7 ms stall with a 2 ms period, `max_ticks` during a burst, saturation) match the tick counts and deadlines that Rust's `Interval` gives at the pinned revision for the same schedules (checked once with a scratch program against the pinned crate, 2026-10-10). No DSL op drives an interval, so there is no fixture (`bd-9kll.7.3`).
+
 ### 4.4 Exhaustion Behavior
 
 | Resource | Rust | C |

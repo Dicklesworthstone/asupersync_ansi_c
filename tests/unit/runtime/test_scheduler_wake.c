@@ -333,10 +333,12 @@ TEST(interval_ticks_on_virtual_time) {
               ASX_OK);
     ASSERT_EQ(asx_interval_init(&f->interval, 5u * MS, 4u), ASX_OK);
 
+    /* Ticks at 0, 5, 10 and 15 ms: the first is at the start (Rust
+     * interval(now, period)). */
     budget = asx_budget_from_polls(20);
     ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
     ASSERT_EQ(asx_interval_ticks(&f->interval), 4u);
-    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(20u * MS));
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(15u * MS));
 }
 
 TEST(arm_timer_keeps_earliest_deadline) {

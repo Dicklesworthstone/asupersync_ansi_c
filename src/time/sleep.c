@@ -179,9 +179,69 @@ asx_status asx_interval_init(asx_interval_state *state, uint64_t period_ns, uint
     memset(state, 0, sizeof(*state));
     state->period_ns = period_ns;
     state->max_ticks = max_ticks;
-    state->ticks = 0;
-    state->initialized = 0;
+    state->missed_tick_behavior = ASX_MISSED_TICK_BURST;
     return ASX_OK;
+}
+
+asx_status asx_interval_init_at(asx_interval_state *state, asx_time start_ns, uint64_t period_ns,
+                                uint32_t max_ticks) {
+    asx_status st = asx_interval_init(state, period_ns, max_ticks);
+    if (st != ASX_OK) return st;
+    state->has_start = 1;
+    state->start_ns = start_ns;
+    return ASX_OK;
+}
+
+asx_status asx_interval_set_missed_tick_behavior(asx_interval_state *state,
+                                                 asx_missed_tick_behavior behavior) {
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+    if ((int)behavior < (int)ASX_MISSED_TICK_BURST || (int)behavior > (int)ASX_MISSED_TICK_SKIP) {
+        return ASX_E_INVALID_ARGUMENT;
+    }
+    state->missed_tick_behavior = behavior;
+    return ASX_OK;
+}
+
+static asx_time interval_add(asx_time t, uint64_t ns) {
+    return ns > UINT64_MAX - t ? UINT64_MAX : t + ns;
+}
+
+/* Count the ticks due at `now` from the current deadline on and move the
+ * deadline past them (Rust Interval::tick and advance_deadline,
+ * time/interval.rs:293-303, :385-420), at most `room` of them. Burst
+ * steps a period from the deadline, so the ticks due are counted at once;
+ * Delay and Skip leave the next deadline after `now`, so one tick is due.
+ * Deadlines saturate: the tick at UINT64_MAX is the last one. */
+static uint64_t interval_take_due(asx_interval_state *s, asx_time now, uint64_t room) {
+    asx_time d = asx_deadline_target(&s->deadline);
+    uint64_t due = 1u;
+    asx_time next;
+    if (d == UINT64_MAX) {
+        s->exhausted = 1;
+        return 1u;
+    }
+    switch (s->missed_tick_behavior) {
+    case ASX_MISSED_TICK_DELAY: next = interval_add(now, s->period_ns); break;
+    case ASX_MISSED_TICK_SKIP: {
+        uint64_t skip = (now - d) / s->period_ns;
+        skip = skip == UINT64_MAX ? skip : skip + 1u;
+        next = skip > UINT64_MAX / s->period_ns ? UINT64_MAX : interval_add(d, skip * s->period_ns);
+        break;
+    }
+    case ASX_MISSED_TICK_BURST:
+    default: {
+        uint64_t q = (now - d) / s->period_ns;
+        due = q == UINT64_MAX ? q : q + 1u;
+        if (due > room) due = room;
+        next = due > UINT64_MAX / s->period_ns ? UINT64_MAX : interval_add(d, due * s->period_ns);
+        break;
+    }
+    }
+    {
+        asx_status d_st_ = asx_deadline_init(&s->deadline, next); /* fails only for NULL */
+        (void)d_st_;
+    }
+    return due;
 }
 
 asx_status asx_interval_poll(void *user_data, asx_task_id self) {
@@ -190,36 +250,30 @@ asx_status asx_interval_poll(void *user_data, asx_task_id self) {
     asx_status st;
 
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (s->max_ticks > 0u && s->ticks >= s->max_ticks) return ASX_OK; /* completed */
 
-    /* First poll or after a tick: set up the next deadline */
-    if (!s->initialized) {
-        st = asx_deadline_after(&s->deadline, s->period_ns);
-        if (st != ASX_OK) return st;
-
-        s->initialized = 1;
-        return park_until(self, asx_deadline_target(&s->deadline));
-    }
-
-    /* Check if current period has elapsed */
     st = asx_runtime_now_ns(&now);
     if (st != ASX_OK) return st;
 
-    if (asx_deadline_is_expired_at(&s->deadline, now)) {
-        asx_time next_target;
-
-        s->ticks++;
-
-        /* Check if we've reached max ticks */
-        if (s->max_ticks > 0 && s->ticks >= s->max_ticks) return ASX_OK;
-
-        /* Next period. Check overflow first so the old deadline state is
-         * preserved on failure. */
-        if (s->period_ns > UINT64_MAX - now) return ASX_E_TIMER_DURATION_EXCEEDED;
-        next_target = now + s->period_ns;
-
-        st = asx_deadline_init(&s->deadline, next_target);
+    /* First poll: the first tick is at the start (Rust Interval::new). */
+    if (!s->initialized) {
+        st = asx_deadline_init(&s->deadline, s->has_start ? s->start_ns : now);
         if (st != ASX_OK) return st;
+        s->initialized = 1;
     }
+
+    /* Every tick due now. Each pass leaves the deadline after `now` or at
+     * UINT64_MAX, whose tick ends the interval: at most three passes. */
+    while (!s->exhausted && now >= asx_deadline_target(&s->deadline)) {
+        uint64_t room = s->max_ticks > 0u ? (uint64_t)(s->max_ticks - s->ticks) : UINT64_MAX;
+        uint64_t taken;
+        ASX_CHECKPOINT_WAIVER("bounded: each pass passes now or exhausts the interval");
+        taken = interval_take_due(s, now, room);
+        s->ticks =
+            taken > (uint64_t)(UINT32_MAX - s->ticks) ? UINT32_MAX : s->ticks + (uint32_t)taken;
+        if (s->max_ticks > 0u && s->ticks >= s->max_ticks) return ASX_OK;
+    }
+    if (s->exhausted) return ASX_E_TIMER_DURATION_EXCEEDED;
 
     return park_until(self, asx_deadline_target(&s->deadline));
 }

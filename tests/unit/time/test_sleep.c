@@ -281,23 +281,129 @@ TEST(interval_poll_null_fails) {
     ASSERT_EQ(asx_interval_poll(NULL, ASX_INVALID_ID), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(interval_overflow_preserves_current_deadline_state) {
+/* Rust interval(now, period) (time/interval.rs:443): the first tick is at
+ * the start, then one every period: ticks at 0, 2 and 4 ms. */
+TEST(interval_first_tick_is_at_the_first_poll) {
     asx_interval_state is;
-    asx_time original_target;
-
     setup();
+    clock_at(0);
+    MUST_OK(asx_interval_init(&is, 2000000ULL, 3));
+    ASSERT_EQ((int)is.missed_tick_behavior, (int)ASX_MISSED_TICK_BURST);
+    ASSERT_NE(asx_interval_poll(&is, ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_interval_ticks(&is), 1u);
+    clock_at(1999999ULL);
+    ASSERT_NE(asx_interval_poll(&is, ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_interval_ticks(&is), 1u);
+    clock_at(2000000ULL);
+    ASSERT_NE(asx_interval_poll(&is, ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_interval_ticks(&is), 2u);
+    clock_at(4000000ULL);
+    ASSERT_EQ(asx_interval_poll(&is, ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_interval_ticks(&is), 3u);
+    /* A completed interval stays completed. */
+    clock_at(9000000ULL);
+    ASSERT_EQ(asx_interval_poll(&is, ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_interval_ticks(&is), 3u);
+    teardown();
+}
+
+/* Rust interval_at(start, period): the first tick is at `start`. */
+TEST(interval_at_starts_at_the_given_time) {
+    asx_interval_state is;
+    setup();
+    clock_at(1000000ULL);
+    MUST_OK(asx_interval_init_at(&is, 5000000ULL, 2000000ULL, 2));
+    ASSERT_NE(asx_interval_poll(&is, ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_interval_ticks(&is), 0u);
+    clock_at(5000000ULL);
+    ASSERT_NE(asx_interval_poll(&is, ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_interval_ticks(&is), 1u);
+    clock_at(7000000ULL);
+    ASSERT_EQ(asx_interval_poll(&is, ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_interval_ticks(&is), 2u);
+    ASSERT_EQ(asx_interval_init_at(NULL, 0u, 1u, 1u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_interval_init_at(&is, 0u, 0u, 1u), ASX_E_INVALID_ARGUMENT);
+    teardown();
+}
+
+/* MissedTickBehavior (time/interval.rs:385-420), ticks at 0 then polled at
+ * 7 ms with a 2 ms period. Burst (the default) fires the ticks due at 2, 4
+ * and 6 ms at once and keeps its schedule (next at 8 ms); Delay fires one
+ * and restarts the period at 7 ms (next at 9 ms); Skip fires one and moves
+ * to the next boundary of the original schedule (next at 8 ms). */
+TEST(interval_missed_ticks_follow_the_behavior) {
+    asx_interval_state burst;
+    asx_interval_state delay;
+    asx_interval_state skip;
+    setup();
+    clock_at(0);
+    MUST_OK(asx_interval_init(&burst, 2000000ULL, 0));
+    MUST_OK(asx_interval_init(&delay, 2000000ULL, 0));
+    MUST_OK(asx_interval_init(&skip, 2000000ULL, 0));
+    ASSERT_EQ(asx_interval_set_missed_tick_behavior(&delay, ASX_MISSED_TICK_DELAY), ASX_OK);
+    ASSERT_EQ(asx_interval_set_missed_tick_behavior(&skip, ASX_MISSED_TICK_SKIP), ASX_OK);
+    (void)asx_interval_poll(&burst, ASX_INVALID_ID);
+    (void)asx_interval_poll(&delay, ASX_INVALID_ID);
+    (void)asx_interval_poll(&skip, ASX_INVALID_ID);
+
+    clock_at(7000000ULL);
+    (void)asx_interval_poll(&burst, ASX_INVALID_ID);
+    (void)asx_interval_poll(&delay, ASX_INVALID_ID);
+    (void)asx_interval_poll(&skip, ASX_INVALID_ID);
+    ASSERT_EQ(asx_interval_ticks(&burst), 4u);
+    ASSERT_EQ(asx_interval_ticks(&delay), 2u);
+    ASSERT_EQ(asx_interval_ticks(&skip), 2u);
+    ASSERT_EQ(asx_deadline_target(&burst.deadline), (asx_time)8000000ULL);
+    ASSERT_EQ(asx_deadline_target(&delay.deadline), (asx_time)9000000ULL);
+    ASSERT_EQ(asx_deadline_target(&skip.deadline), (asx_time)8000000ULL);
+
+    clock_at(8000000ULL);
+    (void)asx_interval_poll(&burst, ASX_INVALID_ID);
+    (void)asx_interval_poll(&delay, ASX_INVALID_ID);
+    (void)asx_interval_poll(&skip, ASX_INVALID_ID);
+    ASSERT_EQ(asx_interval_ticks(&burst), 5u);
+    ASSERT_EQ(asx_interval_ticks(&delay), 2u);
+    ASSERT_EQ(asx_interval_ticks(&skip), 3u);
+
+    ASSERT_EQ(asx_interval_set_missed_tick_behavior(NULL, ASX_MISSED_TICK_SKIP),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_interval_set_missed_tick_behavior(&skip, (asx_missed_tick_behavior)3),
+              ASX_E_INVALID_ARGUMENT);
+    teardown();
+}
+
+/* A burst never counts past max_ticks. */
+TEST(interval_burst_stops_at_max_ticks) {
+    asx_interval_state is;
+    setup();
+    clock_at(0);
+    MUST_OK(asx_interval_init(&is, 2000000ULL, 3));
+    ASSERT_NE(asx_interval_poll(&is, ASX_INVALID_ID), ASX_OK);
+    clock_at(100000000ULL);
+    ASSERT_EQ(asx_interval_poll(&is, ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_interval_ticks(&is), 3u);
+    teardown();
+}
+
+/* Rust saturates the deadline at Time::MAX, fires the tick there and then
+ * stays silent (Interval::advance_deadline, `exhausted`); C then reports
+ * ASX_E_TIMER_DURATION_EXCEEDED rather than waiting forever. */
+TEST(interval_saturates_and_ends_after_the_last_tick) {
+    asx_interval_state is;
+    setup();
+    clock_at(UINT64_MAX - 3u);
     MUST_OK(asx_interval_init(&is, 2u, 0u));
-    MUST_OK(asx_interval_poll(&is, ASX_INVALID_ID));
-
-    is.deadline.expired = 1;
-    is.deadline.registered = 1;
-    original_target = is.deadline.target_ns;
-    asx_vtime_init(&g_vt, UINT64_MAX - 1u, 1u);
-
+    ASSERT_NE(asx_interval_poll(&is, ASX_INVALID_ID), ASX_E_TIMER_DURATION_EXCEEDED);
+    ASSERT_EQ(asx_interval_ticks(&is), 1u);
+    clock_at(UINT64_MAX - 1u);
+    ASSERT_NE(asx_interval_poll(&is, ASX_INVALID_ID), ASX_E_TIMER_DURATION_EXCEEDED);
+    ASSERT_EQ(asx_interval_ticks(&is), 2u);
+    ASSERT_EQ(asx_deadline_target(&is.deadline), (asx_time)UINT64_MAX);
+    clock_at(UINT64_MAX);
     ASSERT_EQ(asx_interval_poll(&is, ASX_INVALID_ID), ASX_E_TIMER_DURATION_EXCEEDED);
-    ASSERT_EQ(is.deadline.target_ns, original_target);
-    ASSERT_EQ(is.deadline.expired, 1);
-    ASSERT_EQ(is.deadline.registered, 1);
+    ASSERT_EQ(asx_interval_ticks(&is), 3u);
+    ASSERT_EQ(asx_interval_poll(&is, ASX_INVALID_ID), ASX_E_TIMER_DURATION_EXCEEDED);
+    ASSERT_EQ(asx_interval_ticks(&is), 3u);
     teardown();
 }
 
@@ -331,18 +437,6 @@ TEST(interval_ticks_increment) {
         (void)st;
     }
     ASSERT_TRUE(asx_interval_ticks(&is) >= 1);
-    teardown();
-}
-
-TEST(interval_rearm_overflow_fails) {
-    asx_interval_state is;
-
-    setup();
-    MUST_OK(asx_interval_init(&is, 1u, 0u));
-    asx_vtime_init(&g_vt, UINT64_MAX, 0u);
-    MUST_OK(asx_deadline_init(&is.deadline, UINT64_MAX));
-    is.initialized = 1;
-    ASSERT_EQ(asx_interval_poll(&is, ASX_INVALID_ID), ASX_E_TIMER_DURATION_EXCEEDED);
     teardown();
 }
 
@@ -385,10 +479,13 @@ int main(void) {
     /* Interval poll */
     RUN_TEST(interval_ticks_null_returns_zero);
     RUN_TEST(interval_poll_null_fails);
-    RUN_TEST(interval_overflow_preserves_current_deadline_state);
+    RUN_TEST(interval_first_tick_is_at_the_first_poll);
+    RUN_TEST(interval_at_starts_at_the_given_time);
+    RUN_TEST(interval_missed_ticks_follow_the_behavior);
+    RUN_TEST(interval_burst_stops_at_max_ticks);
+    RUN_TEST(interval_saturates_and_ends_after_the_last_tick);
     RUN_TEST(interval_completes_after_max_ticks);
     RUN_TEST(interval_ticks_increment);
-    RUN_TEST(interval_rearm_overflow_fails);
 
     TEST_REPORT();
     return test_failures;
