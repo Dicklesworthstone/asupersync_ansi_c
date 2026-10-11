@@ -86,6 +86,10 @@ typedef struct {
     asx_status result;           /* final result (phase DONE) */
     asx_sleep_state sleep;       /* the delay before the next attempt */
     asx_combinator_branch inner; /* current attempt branch */
+    /* Releases an attempt abandoned in flight (a retry timeout's deadline
+     * passing while it runs), as Rust drops the attempt's future: called
+     * once with user_data. NULL after asx_retry_init; set it after. */
+    asx_combinator_drop_fn drop_fn;
 } asx_retry_state;
 
 /* Initialize a retry of poll_fn under `policy` (NULL: asx_retry_policy_new).
@@ -114,7 +118,8 @@ ASX_API asx_status asx_retry_last_error(const asx_retry_state *state);
  *
  * Rust's timeout(retry(...)): the deadline is fixed at the first poll;
  * each poll past it ends the retry ASX_E_TIMED_OUT (an attempt in flight
- * is abandoned, a pending delay's timer cancelled); before it, the retry
+ * is dropped, its retry.drop_fn called, a pending delay's timer
+ * cancelled); before it, the retry
  * is polled and, while pending, the owner is woken at the deadline.
  * ------------------------------------------------------------------- */
 
@@ -279,7 +284,10 @@ ASX_API uint32_t asx_rate_limit_available(const asx_rate_limit_state *state);
  * launch a backup. Return whichever completes first. The owner's
  * checkpoint at each poll, before the backup starts and before returning
  * pending ends the hedge with ASX_E_CANCELLED, both attempts dropped
- * (Rust's HedgeFuture; the winner reads as the primary).
+ * (Rust's HedgeFuture; the winner reads as the primary). The attempt that
+ * does not win is dropped, a backup never started included (Rust drops
+ * its factory): set primary.drop_fn / backup.drop_fn after asx_hedge_init
+ * to release what their user_data holds (see asx_combinator_branch).
  *
  * Phases:
  *   PRIMARY_ONLY — polling primary, deadline not expired
@@ -364,8 +372,8 @@ ASX_API uint32_t asx_adaptive_hedge_observations(const asx_adaptive_hedge_policy
  * 1-12), the first failure stops it: the first branch to end with an
  * error or ASX_E_CANCELLED ends the map-reduce with that status without a
  * reduce, and the branches still pending are dropped as in race (never
- * polled again, resolved ASX_E_CANCELLED; dropping them is cleanup, not
- * another failure).
+ * polled again, resolved ASX_E_CANCELLED, each drop_fn called once;
+ * dropping them is cleanup, not another failure).
  * ------------------------------------------------------------------- */
 
 typedef asx_status (*asx_map_reduce_fn)(const asx_status *results, uint32_t count, void *user_data);

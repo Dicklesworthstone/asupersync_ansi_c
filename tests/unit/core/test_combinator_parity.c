@@ -176,6 +176,48 @@ TEST(retry_timeout_expires_during_the_delay) {
     asx_runtime_reset();
 }
 
+/* An attempt that parks its task and never finishes; counts its polls
+ * (+1) and releases (+100). */
+static asx_status poll_park_counted(void *ud, asx_task_id self) {
+    asx_status st = asx_task_park(self);
+    (void)st;
+    (*(int *)ud)++;
+    return ASX_E_PENDING;
+}
+
+static void release_counted(void *ud) { (*(int *)ud) += 100; }
+
+TEST(retry_timeout_releases_the_attempt_it_abandons) {
+    /* The first attempt parks and is still running at the 30 ms deadline:
+     * the timeout drops it, as Rust's timeout drops the retry and its
+     * attempt future; retry.drop_fn releases it once. */
+    static retry_timeout_task t;
+    static int attempt;
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_region_id r;
+    asx_task_id id;
+    asx_budget budget;
+
+    asx_runtime_config_init(&cfg);
+    MUST_OK(asx_runtime_hooks_init(&hooks));
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+    memset(&t, 0, sizeof(t));
+    attempt = 0;
+    MUST_OK(asx_retry_timeout_init(&t.rt, poll_park_counted, &attempt, NULL, 30000000ULL));
+    ASSERT_TRUE(t.rt.retry.drop_fn == NULL);
+    t.rt.retry.drop_fn = release_counted;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_retry_timeout_task, &t, &id), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(t.result, ASX_E_TIMED_OUT);
+    ASSERT_EQ(attempt, 101); /* polled once, released once */
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)30000000u);
+    asx_runtime_reset();
+}
+
 TEST(retry_timeout_null_attempts) { ASSERT_EQ(asx_retry_timeout_attempts(NULL), 0u); }
 
 /* ================================================================== */
@@ -347,6 +389,7 @@ int main(void) {
     RUN_TEST(retry_timeout_exhausted);
     RUN_TEST(retry_timeout_null);
     RUN_TEST(retry_timeout_expires_during_the_delay);
+    RUN_TEST(retry_timeout_releases_the_attempt_it_abandons);
     RUN_TEST(retry_timeout_null_attempts);
 
     /* Algebraic laws */

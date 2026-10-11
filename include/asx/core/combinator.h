@@ -39,13 +39,38 @@ extern "C" {
 
 /* -------------------------------------------------------------------
  * Branch — a single inner future
+ *
+ * A combinator drops a branch when it stops polling it before the branch
+ * finished: a race or select loser, the branches a quorum or map-reduce
+ * leaves pending at its decision, a timed-out inner future, the hedge
+ * attempt that lost or that a cancel abandoned, the first_ok branches
+ * after the chain ends (started or not). A dropped branch is never polled
+ * again and resolves as ASX_E_CANCELLED (ASX_E_TIMED_OUT for a timeout's
+ * inner future).
+ *
+ * Rust drops the losing future, and its Drop releases what it holds
+ * (Cx::race, cx/cx.rs:4305-4338). C has no destructor for a branch's
+ * user_data: drop_fn is that release. The combinator calls it exactly
+ * once, when it drops the branch, with the branch's user_data, and never
+ * for a branch that finished (its poll released what it held). It is
+ * NULL after *_init; set it after adding the branch:
+ *
+ *     asx_race_add(&race, fetch_poll, &fetch);
+ *     race.branches[race.count - 1u].drop_fn = fetch_release;
+ *
+ * Abandoning the combinator state itself (its owner no longer polls it)
+ * drops nothing: the owner releases what it never finished.
  * ------------------------------------------------------------------- */
+
+/* Releases what a dropped branch's user_data holds. */
+typedef void (*asx_combinator_drop_fn)(void *user_data);
 
 typedef struct {
     asx_combinator_poll_fn poll_fn;
     void *user_data;
-    asx_status result; /* final status when done */
-    int done;          /* 1 when poll returned non-PENDING */
+    asx_status result;              /* final status when done */
+    int done;                       /* 1 when poll returned non-PENDING */
+    asx_combinator_drop_fn drop_fn; /* called once if the branch is dropped */
 } asx_combinator_branch;
 
 /* -------------------------------------------------------------------

@@ -1140,6 +1140,93 @@ TEST(map_reduce_null_fails) {
 }
 
 /* ================================================================== */
+/* Dropped attempts release what they hold (bd-9kll.3.11)             */
+/* ================================================================== */
+
+/* Counts releases of the branch whose user_data it is. */
+static void release_counted(void *user_data) { (*(int *)user_data) += 100; }
+
+TEST(map_reduce_releases_the_branches_a_failure_leaves_pending) {
+    /* The counters take +1 per poll and +100 per release. */
+    asx_map_reduce_state ms;
+    int first = 0;
+    int last = 0;
+    int failing = 0;
+
+    MUST_OK(asx_map_reduce_init(&ms, reduce_counting, NULL));
+    MUST_OK(asx_map_reduce_add(&ms, poll_pending_counted, &first));
+    MUST_OK(asx_map_reduce_add(&ms, poll_fail, &failing));
+    MUST_OK(asx_map_reduce_add(&ms, poll_pending_counted, &last));
+    ms.branches[0].drop_fn = release_counted;
+    ms.branches[1].drop_fn = release_counted;
+    ms.branches[2].drop_fn = release_counted;
+    ASSERT_EQ(asx_map_reduce_poll(&ms, 0), ASX_E_INVALID_STATE);
+    ASSERT_EQ(first, 101); /* polled once, released once */
+    ASSERT_EQ(last, 100);  /* never polled, released once */
+    ASSERT_EQ(failing, 0); /* finished: not released */
+    ASSERT_EQ(asx_map_reduce_poll(&ms, 0), ASX_E_INVALID_STATE);
+    ASSERT_EQ(first, 101);
+    ASSERT_EQ(last, 100);
+}
+
+TEST(hedge_releases_the_attempt_that_did_not_win) {
+    /* Primary wins before the hedge delay: the backup never started and
+     * is released once with its own user_data (Rust drops the backup
+     * factory). Then a 0 ns delay: the backup wins and the pending
+     * primary is released once. */
+    asx_hedge_state hs;
+    int primary = 0;
+    int backup = 0;
+
+    MUST_OK(asx_hedge_init(&hs, poll_ok, &primary, poll_ok, &backup, 1000000));
+    hs.primary.drop_fn = release_counted;
+    hs.backup.drop_fn = release_counted;
+    ASSERT_EQ(asx_hedge_poll(&hs, 0), ASX_OK);
+    ASSERT_EQ(asx_hedge_winner(&hs), 0);
+    ASSERT_EQ(primary, 0);
+    ASSERT_EQ(backup, 100);
+    ASSERT_EQ(asx_hedge_poll(&hs, 0), ASX_OK);
+    ASSERT_EQ(backup, 100);
+
+    primary = 0;
+    backup = 0;
+    MUST_OK(asx_hedge_init(&hs, poll_pending_counted, &primary, poll_ok, &backup, 0));
+    hs.primary.drop_fn = release_counted;
+    hs.backup.drop_fn = release_counted;
+    ASSERT_EQ(asx_hedge_poll(&hs, 0), ASX_OK);
+    ASSERT_EQ(asx_hedge_winner(&hs), 1);
+    ASSERT_EQ(primary, 101); /* polled once, released once */
+    ASSERT_EQ(backup, 0);
+
+    /* The owner is cancelled while the primary runs: both attempts are
+     * released once, the backup never polled. */
+    {
+        static hedge_task h;
+        asx_runtime rt;
+        asx_region_id r;
+        asx_task_id t;
+        asx_budget budget;
+
+        primary = 0;
+        backup = 0;
+        MUST_OK(asx_runtime_init_default(&rt));
+        memset(&h, 0, sizeof(h));
+        MUST_OK(asx_hedge_init(&h.hs, hedge_primary_cancels_owner, &primary, poll_pending_counted,
+                               &backup, 5000000ULL));
+        h.hs.primary.drop_fn = release_counted;
+        h.hs.backup.drop_fn = release_counted;
+        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        ASSERT_EQ(asx_task_spawn(r, poll_hedge_task, &h, &t), ASX_OK);
+        budget = asx_budget_from_polls(100);
+        ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+        ASSERT_EQ(h.result, ASX_E_CANCELLED);
+        ASSERT_EQ(primary, 100);
+        ASSERT_EQ(backup, 100);
+        asx_runtime_reset();
+    }
+}
+
+/* ================================================================== */
 /* Additional Laws                                                     */
 /* ================================================================== */
 
@@ -1228,6 +1315,8 @@ int main(void) {
     RUN_TEST(map_reduce_reduces_once_all_succeed);
     RUN_TEST(map_reduce_empty);
     RUN_TEST(map_reduce_null_fails);
+    RUN_TEST(map_reduce_releases_the_branches_a_failure_leaves_pending);
+    RUN_TEST(hedge_releases_the_attempt_that_did_not_win);
 
     /* Adaptive hedge */
     RUN_TEST(adaptive_hedge_init_defaults);

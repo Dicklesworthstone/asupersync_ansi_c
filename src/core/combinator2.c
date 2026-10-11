@@ -18,6 +18,18 @@ static void branch_init(asx_combinator_branch *b) {
     b->user_data = NULL;
     b->result = ASX_E_PENDING;
     b->done = 0;
+    b->drop_fn = NULL;
+}
+
+/* Drop a branch that has not finished (as in combinator.c): never polled
+ * again, ASX_E_CANCELLED, its drop_fn called once. Returns 1 if it was
+ * still pending. */
+static int branch_drop(asx_combinator_branch *b) {
+    if (b->done) return 0;
+    b->done = 1;
+    b->result = ASX_E_CANCELLED;
+    if (b->drop_fn != NULL) b->drop_fn(b->user_data);
+    return 1;
 }
 
 static asx_status branch_poll(asx_combinator_branch *b, asx_task_id self) {
@@ -215,6 +227,7 @@ static asx_status retry_start_next(asx_retry_state *state, asx_task_id self) {
         branch_init(&state->inner);
         state->inner.poll_fn = state->poll_fn;
         state->inner.user_data = state->user_data;
+        state->inner.drop_fn = state->drop_fn;
         state->phase = ASX_RETRY_POLLING;
         return ASX_OK;
     }
@@ -268,6 +281,7 @@ asx_status asx_retry_poll(void *user_data, asx_task_id self) {
             branch_init(&state->inner);
             state->inner.poll_fn = state->poll_fn;
             state->inner.user_data = state->user_data;
+            state->inner.drop_fn = state->drop_fn;
             state->phase = ASX_RETRY_POLLING;
             break;
         case ASX_RETRY_POLLING:
@@ -347,6 +361,8 @@ asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self) {
         if (state->retry.phase == ASX_RETRY_SLEEPING) {
             st = asx_task_cancel_timer(self);
             (void)st;
+        } else if (state->retry.phase == ASX_RETRY_POLLING) {
+            (void)branch_drop(&state->retry.inner);
         }
         state->retry.phase = ASX_RETRY_DONE;
         state->retry.result = ASX_E_TIMED_OUT;
@@ -605,6 +621,7 @@ asx_status asx_hedge_init(asx_hedge_state *state, asx_combinator_poll_fn primary
     state->primary.user_data = primary_data;
 
     branch_init(&state->backup);
+    state->backup.user_data = backup_data; /* polled only once it starts */
     state->backup_fn = backup_fn;
     state->backup_data = backup_data;
 
@@ -616,12 +633,21 @@ asx_status asx_hedge_init(asx_hedge_state *state, asx_combinator_poll_fn primary
     return ASX_OK;
 }
 
+/* The hedge is decided: the attempts that did not finish are dropped, a
+ * backup never started included (Rust drops the backup future or its
+ * factory, combinator/hedge.rs:637-658). */
+static void hedge_drop_unfinished(asx_hedge_state *state) {
+    (void)branch_drop(&state->primary);
+    (void)branch_drop(&state->backup);
+}
+
 /* The caller was cancelled: both attempts are dropped, never polled again,
  * and the hedge ends ASX_E_CANCELLED with the primary as the deterministic
  * representative, as Rust's finish_cancelled (combinator/hedge.rs:637-658). */
 static asx_status hedge_cancelled(asx_hedge_state *state) {
     asx_status dd = asx_deadline_disarm(&state->deadline);
     (void)dd;
+    hedge_drop_unfinished(state);
     state->phase = ASX_HEDGE_DECIDED;
     state->winner = 0;
     state->result = ASX_E_CANCELLED;
@@ -668,6 +694,7 @@ asx_status asx_hedge_poll(void *user_data, asx_task_id self) {
                 asx_status dd_ = asx_deadline_disarm(&state->deadline);
                 (void)dd_;
             }
+            hedge_drop_unfinished(state);
             return st;
         }
 
@@ -703,6 +730,7 @@ racing:
             state->phase = ASX_HEDGE_DECIDED;
             state->winner = 0;
             state->result = st;
+            hedge_drop_unfinished(state);
             return st;
         }
     }
@@ -714,6 +742,7 @@ poll_backup:
             state->phase = ASX_HEDGE_DECIDED;
             state->winner = 1;
             state->result = st;
+            hedge_drop_unfinished(state);
             return st;
         }
     }
@@ -859,11 +888,7 @@ asx_status asx_map_reduce_poll(void *user_data, asx_task_id self) {
                 uint32_t j;
                 for (j = 0; j < state->count; j++) {
                     /* ASX_CHECKPOINT_WAIVER("bounded drop loop") */
-                    if (!state->branches[j].done) {
-                        state->branches[j].done = 1;
-                        state->branches[j].result = ASX_E_CANCELLED;
-                        state->dropped++;
-                    }
+                    state->dropped += (uint32_t)branch_drop(&state->branches[j]);
                 }
                 state->result = st;
                 state->done = 1;

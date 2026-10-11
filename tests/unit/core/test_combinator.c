@@ -654,6 +654,195 @@ TEST(race_timeout_wakes_a_parked_owner_at_its_deadline) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Dropped branches release what they hold (bd-9kll.3.11)             */
+/* ------------------------------------------------------------------ */
+
+/* A branch holding a resource: it returns `result` after `pending`
+ * pending polls (UINT32_MAX: pending forever, parking its task when
+ * `park`); its polls are counted and its drop_fn counts releases. */
+typedef struct {
+    uint32_t pending;
+    asx_status result;
+    int park;
+    uint32_t polls;
+    uint32_t drops;
+} drop_probe;
+
+static void probe_init(drop_probe *p, uint32_t pending, asx_status result, int park) {
+    memset(p, 0, sizeof(*p));
+    p->pending = pending;
+    p->result = result;
+    p->park = park;
+}
+
+static asx_status poll_probe(void *user_data, asx_task_id self) {
+    drop_probe *p = (drop_probe *)user_data;
+    p->polls++;
+    if (p->pending == UINT32_MAX) {
+        if (p->park) {
+            asx_status st = asx_task_park(self);
+            (void)st;
+        }
+        return ASX_E_PENDING;
+    }
+    if (p->pending > 0u) {
+        p->pending--;
+        return ASX_E_PENDING;
+    }
+    return p->result;
+}
+
+static void probe_release(void *user_data) { ((drop_probe *)user_data)->drops++; }
+
+TEST(race_releases_each_dropped_loser_once_and_never_its_winner) {
+    /* Rust drops the losing futures of Cx::race (cx/cx.rs:4305-4338),
+     * which releases what they hold; drop_fn is that release. */
+    asx_race_state rs;
+    drop_probe slow, win, never;
+    uint32_t slow_polls;
+
+    probe_init(&slow, UINT32_MAX, ASX_OK, 0);
+    probe_init(&win, 1u, ASX_OK, 0);
+    probe_init(&never, UINT32_MAX, ASX_OK, 0);
+    MUST_OK(asx_race_init(&rs));
+    ASSERT_TRUE(rs.branches[0].drop_fn == NULL);
+    MUST_OK(asx_race_add(&rs, poll_probe, &slow));
+    rs.branches[rs.count - 1u].drop_fn = probe_release;
+    MUST_OK(asx_race_add(&rs, poll_probe, &win));
+    rs.branches[rs.count - 1u].drop_fn = probe_release;
+    MUST_OK(asx_race_add(&rs, poll_probe, &never));
+    rs.branches[rs.count - 1u].drop_fn = probe_release;
+
+    ASSERT_EQ(asx_race_poll(&rs, 0), ASX_E_PENDING);
+    ASSERT_EQ(slow.drops + win.drops + never.drops, 0u);
+    ASSERT_EQ(asx_race_poll(&rs, 0), ASX_OK);
+    ASSERT_EQ(asx_race_winner(&rs), 1);
+    ASSERT_EQ(slow.drops, 1u);
+    ASSERT_EQ(never.drops, 1u);
+    ASSERT_EQ(win.drops, 0u);
+    ASSERT_EQ(never.polls, 1u); /* polled in the first round only */
+    ASSERT_EQ(rs.dropped, 2u);
+
+    /* Decided: polling again neither polls nor releases anything. */
+    slow_polls = slow.polls;
+    ASSERT_EQ(asx_race_poll(&rs, 0), ASX_OK);
+    ASSERT_EQ(slow.polls, slow_polls);
+    ASSERT_EQ(slow.drops, 1u);
+    ASSERT_EQ(never.drops, 1u);
+}
+
+TEST(select_and_quorum_release_their_dropped_branches_once) {
+    asx_select_state ss;
+    asx_quorum_state qs;
+    drop_probe a, b, c;
+
+    probe_init(&a, UINT32_MAX, ASX_OK, 0);
+    probe_init(&b, 0u, ASX_OK, 0);
+    MUST_OK(asx_select_init(&ss));
+    MUST_OK(asx_select_add(&ss, poll_probe, &a));
+    ss.branches[0].drop_fn = probe_release;
+    MUST_OK(asx_select_add(&ss, poll_probe, &b));
+    ss.branches[1].drop_fn = probe_release;
+    ASSERT_EQ(asx_select_poll(&ss, 0), ASX_OK);
+    ASSERT_EQ(asx_select_winner(&ss), 1);
+    ASSERT_EQ(a.drops, 1u);
+    ASSERT_EQ(b.drops, 0u);
+    ASSERT_EQ(asx_select_poll(&ss, 0), ASX_OK);
+    ASSERT_EQ(a.drops, 1u);
+
+    /* Quorum 1 of 3: decided by the first branch, the two still pending
+     * are dropped and released once. */
+    probe_init(&a, 0u, ASX_OK, 0);
+    probe_init(&b, UINT32_MAX, ASX_OK, 0);
+    probe_init(&c, UINT32_MAX, ASX_OK, 0);
+    MUST_OK(asx_quorum_init(&qs, 1u));
+    MUST_OK(asx_quorum_add(&qs, poll_probe, &a));
+    MUST_OK(asx_quorum_add(&qs, poll_probe, &b));
+    MUST_OK(asx_quorum_add(&qs, poll_probe, &c));
+    qs.branches[0].drop_fn = probe_release;
+    qs.branches[1].drop_fn = probe_release;
+    qs.branches[2].drop_fn = probe_release;
+    ASSERT_EQ(asx_quorum_poll(&qs, 0), ASX_OK);
+    ASSERT_EQ(a.drops, 0u);
+    ASSERT_EQ(b.drops, 1u);
+    ASSERT_EQ(c.drops, 1u);
+    ASSERT_EQ(asx_quorum_poll(&qs, 0), ASX_OK);
+    ASSERT_EQ(b.drops + c.drops, 2u);
+}
+
+TEST(first_ok_releases_the_branches_it_will_not_run) {
+    /* Success at branch 1: branch 0 failed (it finished: not released),
+     * branches 2 and 3 never run and are released once each. */
+    asx_first_ok_state fs;
+    drop_probe failed, ok, later, last;
+
+    probe_init(&failed, 0u, ASX_E_INVALID_STATE, 0);
+    probe_init(&ok, 0u, ASX_OK, 0);
+    probe_init(&later, 0u, ASX_OK, 0);
+    probe_init(&last, 0u, ASX_OK, 0);
+    MUST_OK(asx_first_ok_init(&fs));
+    MUST_OK(asx_first_ok_add(&fs, poll_probe, &failed));
+    MUST_OK(asx_first_ok_add(&fs, poll_probe, &ok));
+    MUST_OK(asx_first_ok_add(&fs, poll_probe, &later));
+    MUST_OK(asx_first_ok_add(&fs, poll_probe, &last));
+    fs.branches[0].drop_fn = probe_release;
+    fs.branches[1].drop_fn = probe_release;
+    fs.branches[2].drop_fn = probe_release;
+    fs.branches[3].drop_fn = probe_release;
+    ASSERT_EQ(asx_first_ok_poll(&fs, 0), ASX_OK);
+    ASSERT_EQ(asx_first_ok_winner(&fs), 1);
+    ASSERT_EQ(failed.drops, 0u);
+    ASSERT_EQ(ok.drops, 0u);
+    ASSERT_EQ(later.drops, 1u);
+    ASSERT_EQ(last.drops, 1u);
+    ASSERT_EQ(later.polls + last.polls, 0u);
+    ASSERT_EQ(asx_first_ok_poll(&fs, 0), ASX_OK);
+    ASSERT_EQ(later.drops + last.drops, 2u);
+
+    /* A cancelled attempt stops the chain: the rest are released. */
+    probe_init(&failed, 0u, ASX_E_CANCELLED, 0);
+    probe_init(&later, 0u, ASX_OK, 0);
+    MUST_OK(asx_first_ok_init(&fs));
+    MUST_OK(asx_first_ok_add(&fs, poll_probe, &failed));
+    MUST_OK(asx_first_ok_add(&fs, poll_probe, &later));
+    fs.branches[0].drop_fn = probe_release;
+    fs.branches[1].drop_fn = probe_release;
+    ASSERT_EQ(asx_first_ok_poll(&fs, 0), ASX_E_CANCELLED);
+    ASSERT_EQ(failed.drops, 0u);
+    ASSERT_EQ(later.drops, 1u);
+    ASSERT_EQ(later.polls, 0u);
+}
+
+TEST(timeout_releases_its_inner_future_when_the_deadline_passes) {
+    /* The inner future parks its task; the owner's wake at the deadline
+     * times the combinator out, which drops the inner future: released
+     * once, never polled again. */
+    asx_timeout_combinator_state ts;
+    drop_probe inner;
+    combinator_task c;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+
+    setup_virtual_runtime();
+    probe_init(&inner, UINT32_MAX, ASX_OK, 1);
+    MUST_OK(asx_timeout_combinator_init(&ts, poll_probe, &inner, 5000000u));
+    ts.inner.drop_fn = probe_release;
+    memset(&c, 0, sizeof(c));
+    c.poll = asx_timeout_combinator_poll;
+    c.state = &ts;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_combinator_task, &c, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(c.result, ASX_E_TIMED_OUT);
+    ASSERT_EQ(inner.polls, 1u);
+    ASSERT_EQ(inner.drops, 1u);
+    ASSERT_EQ(ts.inner.result, ASX_E_TIMED_OUT);
+    teardown_runtime();
+}
+
+/* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -714,6 +903,12 @@ int main(void) {
     RUN_TEST(quorum_null_fails);
     RUN_TEST(quorum_1_of_3_early_decide);
     RUN_TEST(quorum_drops_the_pending_branches_once_decided);
+
+    /* Dropped branches release what they hold */
+    RUN_TEST(race_releases_each_dropped_loser_once_and_never_its_winner);
+    RUN_TEST(select_and_quorum_release_their_dropped_branches_once);
+    RUN_TEST(first_ok_releases_the_branches_it_will_not_run);
+    RUN_TEST(timeout_releases_its_inner_future_when_the_deadline_passes);
 
     TEST_REPORT();
     return test_failures;
