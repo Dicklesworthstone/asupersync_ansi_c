@@ -1528,7 +1528,7 @@ asx_status asx_supervisor_spawn(asx_supervisor_handle *out, asx_region_id region
     s->task = tid;
     s->refusal = refusal;
     s->owner_region = region;
-    (void)asx_cx_init(&s->cx, region, tid, ASX_CAP_CANCEL_CHECK);
+    (void)asx_cx_init(&s->cx, region, tid, ASX_CAP_NONE);
     s->root = ASX_INVALID_ID;
     s->report.outcome = ASX_OUTCOME_OK;
     s->report.error = ASX_SUPERVISOR_ERR_NONE;

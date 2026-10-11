@@ -212,7 +212,7 @@ static void client_start(client *c, asx_actor_handle server, asx_region_id regio
     memset(&c->op, 0, sizeof(c->op));
     c->stop_sent = 0;
     MUST_OK(asx_task_spawn(region, client_poll, c, &id));
-    MUST_OK(asx_cx_init(&c->cx, region, id, ASX_CAP_CANCEL_CHECK));
+    MUST_OK(asx_cx_init(&c->cx, region, id, ASX_CAP_NONE));
 }
 
 /* ------------------------------------------------------------------ */

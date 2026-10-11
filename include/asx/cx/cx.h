@@ -40,14 +40,16 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 /* Capability flags                                                    */
 /*                                                                     */
-/* Each bit gates access to a specific runtime capability.             */
-/* A Cx with no flags set is inert — it can only query identity.       */
+/* Each bit gates access to a specific runtime capability. A Cx with   */
+/* no flags set can only query identity and observe cancellation:      */
+/* cancellation is never a capability (Rust's Cx::checkpoint and       */
+/* is_cancel_requested need none), so narrowing a Cx cannot make it    */
+/* blind to its task's cancel. Bit 0 is unused (it was CANCEL_CHECK).  */
 /* ------------------------------------------------------------------ */
 
 typedef uint32_t asx_cap_flags;
 
 #define ASX_CAP_NONE ((asx_cap_flags)0)
-#define ASX_CAP_CANCEL_CHECK ((asx_cap_flags)(1u << 0))   /* can check cancellation */
 #define ASX_CAP_CANCEL_REQUEST ((asx_cap_flags)(1u << 1)) /* can request cancellation */
 #define ASX_CAP_BUDGET_READ ((asx_cap_flags)(1u << 2))    /* can read budget */
 #define ASX_CAP_BUDGET_CONSUME ((asx_cap_flags)(1u << 3)) /* can consume budget */
@@ -60,7 +62,7 @@ typedef uint32_t asx_cap_flags;
 #define ASX_CAP_TRACE ((asx_cap_flags)(1u << 10))         /* can emit trace events */
 
 /* All capabilities */
-#define ASX_CAP_ALL ((asx_cap_flags)0x7FFu)
+#define ASX_CAP_ALL ((asx_cap_flags)0x7FEu)
 
 /* ------------------------------------------------------------------ */
 /* Cx type                                                             */
@@ -275,14 +277,19 @@ ASX_API uint64_t asx_cx_random_u64(asx_cx *cx);
  * requested, a budget cancel a checkpoint raised included, and stays so
  * after the task completes. A mask does not hide it (a mask defers only
  * the checkpoint's acknowledgement), and it acknowledges nothing.
- * Requires ASX_CAP_CANCEL_CHECK. Returns 0 if cap missing, or for a task
- * handle the runtime no longer holds. */
+ * Needs no capability. Returns 0 for a NULL cx, a Cx without a task, or a
+ * task handle the runtime no longer holds. */
 ASX_API int asx_cx_is_cancelled(const asx_cx *cx);
 
-/* Cooperative cancellation checkpoint.
+/* Cooperative cancellation checkpoint (Rust Cx::checkpoint): the task's
+ * asx_checkpoint, which observes and acknowledges a pending cancel and
+ * raises a passed budget deadline or a spent quota as a cancel; a masked
+ * task sees none. Needs no capability.
  * Returns ASX_OK if not cancelled, ASX_E_CANCELLED if cancel requested.
  * Should be called periodically in long-running operations.
- * Also consumes a poll from the budget if bound. */
+ * Also consumes a poll from the budget bound with asx_cx_bind_budget (a
+ * C-only budget, separate from the task's): ASX_E_POLL_BUDGET_EXHAUSTED
+ * once it is spent, with ASX_CAP_BUDGET_CONSUME. */
 ASX_API asx_status asx_cx_checkpoint(asx_cx *cx);
 
 #ifdef __cplusplus

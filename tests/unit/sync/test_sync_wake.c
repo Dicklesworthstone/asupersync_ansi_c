@@ -147,7 +147,7 @@ static asx_status poll_sem_task(void *ud, asx_task_id self) {
     }
     if (!s->acquired) {
         if (s->use_cx && s->cx.task_id == ASX_INVALID_ID) {
-            asx_cx_init(&s->cx, g_region, self, ASX_CAP_CANCEL_CHECK);
+            asx_cx_init(&s->cx, g_region, self, ASX_CAP_NONE);
         }
         st = asx_semaphore_poll_acquire(&s->waiter, &s->permit, s->use_cx ? &s->cx : NULL);
         if (st == ASX_E_PENDING) return ASX_E_PENDING;
@@ -518,7 +518,7 @@ TEST(untracked_permits_hold_no_obligation) {
     ASSERT_TRUE(setup());
     reset_sem_fixtures();
     ASSERT_EQ(asx_task_spawn(g_region, poll_sem_task, &g_sem[0], &holder), ASX_OK);
-    asx_cx_init(&cx, g_region, holder, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, g_region, holder, ASX_CAP_NONE);
     ASSERT_EQ(asx_semaphore_create(2, &h), ASX_OK);
     ASSERT_EQ(asx_semaphore_try_acquire(h, &p), ASX_OK);
     ASSERT_EQ(p.obligation, ASX_INVALID_ID);
@@ -557,7 +557,7 @@ TEST(tracked_permit_released_or_forgotten_once_while_others_are_out) {
     ASSERT_TRUE(setup());
     reset_sem_fixtures();
     ASSERT_EQ(asx_task_spawn(g_region, poll_sem_task, &g_sem[0], &holder), ASX_OK);
-    asx_cx_init(&cx, g_region, holder, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, g_region, holder, ASX_CAP_NONE);
     ASSERT_EQ(asx_semaphore_create(3, &h), ASX_OK);
     for (i = 0; i < 3u; i++) {
         ASSERT_EQ(asx_semaphore_acquire_begin(h, &w), ASX_OK);

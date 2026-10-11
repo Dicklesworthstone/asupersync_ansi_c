@@ -142,7 +142,7 @@ static asx_status poll_sender(void *ud, asx_task_id self) {
     st0 = initial_sleep(&s->sleep, &s->slept, s->delay_ns, self);
     if (st0 != ASX_OK) return st0;
     if ((s->use_cx || s->masked) && !s->cx_ready) {
-        st0 = asx_cx_init(&s->cx, g_region, self, ASX_CAP_CANCEL_CHECK);
+        st0 = asx_cx_init(&s->cx, g_region, self, ASX_CAP_NONE);
         if (st0 != ASX_OK) return st0;
         s->cx_ready = 1;
         if (s->masked) {
@@ -1234,7 +1234,7 @@ static asx_status poll_idle(void *ud, asx_task_id self) {
 static asx_task_id cx_task(asx_cx *cx) {
     asx_task_id t = ASX_INVALID_ID;
     if (asx_task_spawn(g_region, poll_idle, NULL, &t) != ASX_OK) return ASX_INVALID_ID;
-    asx_cx_init(cx, g_region, t, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(cx, g_region, t, ASX_CAP_NONE);
     return t;
 }
 
@@ -1434,7 +1434,7 @@ static asx_status poll_permit_holder(void *ud, asx_task_id self) {
     holder_state *h = (holder_state *)ud;
     asx_status st;
     if (!h->reserved) {
-        asx_cx_init(&h->cx, g_region, self, ASX_CAP_CANCEL_CHECK);
+        asx_cx_init(&h->cx, g_region, self, ASX_CAP_NONE);
         st = h->oneshot ? asx_oneshot_reserve(&h->tx, &h->cx, &h->oneshot_permit)
                         : asx_channel_reserve(h->ch, &h->cx, &h->permit);
         if (st != ASX_OK) return st;

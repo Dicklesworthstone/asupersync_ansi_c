@@ -749,7 +749,7 @@ static it_task *generation_entry(it_supervisor *sv, const char *child, unsigned 
     t->id = task;
     t->spawned = 1;
     t->supervised = 1;
-    (void)asx_cx_init(&t->cx, region, task, ASX_CAP_CANCEL_CHECK);
+    (void)asx_cx_init(&t->cx, region, task, ASX_CAP_NONE);
     return t;
 }
 
@@ -1535,7 +1535,7 @@ static int spawn_group_members(it_task *t, uint32_t step, uint32_t idx) {
         }
         m->id = id;
         m->spawned = 1;
-        (void)asx_cx_init(&m->cx, m->region, id, ASX_CAP_CANCEL_CHECK);
+        (void)asx_cx_init(&m->cx, m->region, id, ASX_CAP_NONE);
     }
     return 1;
 }
@@ -1554,7 +1554,7 @@ static void bind_attempts(it_task *t) {
         }
         m->id = t->group.members[i];
         m->spawned = 1;
-        (void)asx_cx_init(&m->cx, m->region, m->id, ASX_CAP_CANCEL_CHECK);
+        (void)asx_cx_init(&m->cx, m->region, m->id, ASX_CAP_NONE);
     }
 }
 
@@ -2035,7 +2035,7 @@ static void exec_race_deadline(it_task *t, asx_task_id self, uint32_t step, uint
         } else {
             w->id = id;
             w->spawned = 1;
-            (void)asx_cx_init(&w->cx, w->region, id, ASX_CAP_CANCEL_CHECK);
+            (void)asx_cx_init(&w->cx, w->region, id, ASX_CAP_NONE);
         }
         t->race_wrapper_task = (uint32_t)(w - g_tasks);
         t->race_deadline = now + d;
@@ -2228,7 +2228,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
     if (strcmp(op, "is_cancel_requested") == 0) {
         /* cx.is_cancel_requested() (cx.rs:2641): the task's Cx, read only. */
         asx_cx cx;
-        (void)asx_cx_init(&cx, t->region, self, ASX_CAP_CANCEL_CHECK);
+        (void)asx_cx_init(&cx, t->region, self, ASX_CAP_NONE);
         observe(t, idx, label, status_node(ASX_OK),
                 asx_json_new_bool(g_out, asx_cx_is_cancelled(&cx) ? 1 : 0));
         return STEP_NEXT;
@@ -2527,7 +2527,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         if (st == ASX_OK) {
             child->id = id;
             child->spawned = 1;
-            (void)asx_cx_init(&child->cx, child->region, id, ASX_CAP_CANCEL_CHECK);
+            (void)asx_cx_init(&child->cx, child->region, id, ASX_CAP_NONE);
         } else {
             child->refused = st;
             child->refusal = asx_scheduler_last_spawn_refusal();
@@ -4234,7 +4234,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
         }
         t->id = id;
         t->spawned = 1;
-        (void)asx_cx_init(&t->cx, t->region, id, ASX_CAP_CANCEL_CHECK);
+        (void)asx_cx_init(&t->cx, t->region, id, ASX_CAP_NONE);
     }
 
     if (!g_failed) setup_channels(scenario, root);

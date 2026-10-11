@@ -1230,7 +1230,7 @@ TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline) {
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
-    asx_cx_init(&cx, rid, tid, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, rid, tid, ASX_CAP_NONE);
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
     ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
     ASSERT_EQ((int)state, (int)ASX_TASK_CANCELLING);
@@ -1239,7 +1239,7 @@ TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline) {
     b.deadline = 1u; /* already passed: the clock is past 1 ns */
     asx_runtime_virtual_advance(10u);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &b, &late), ASX_OK);
-    asx_cx_init(&cx, rid, late, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, rid, late, ASX_CAP_NONE);
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
     ASSERT_EQ(asx_task_get_cancel_reason(late, &got), ASX_OK);
     ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_DEADLINE);
@@ -1271,12 +1271,12 @@ TEST(cx_is_cancelled_reports_whether_a_cancel_was_requested) {
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
     ASSERT_EQ(asx_task_get_state(done, &state), ASX_OK);
     ASSERT_EQ((int)state, (int)ASX_TASK_COMPLETED);
-    asx_cx_init(&cx, rid, done, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, rid, done, ASX_CAP_NONE);
     ASSERT_FALSE(asx_cx_is_cancelled(&cx));
 
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &masked), ASX_OK);
     ASSERT_EQ(asx_task_mask(masked), ASX_OK);
-    asx_cx_init(&cx, rid, masked, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, rid, masked, ASX_CAP_NONE);
     ASSERT_FALSE(asx_cx_is_cancelled(&cx));
     ASSERT_EQ(asx_task_cancel(masked, ASX_CANCEL_USER), ASX_OK);
     ASSERT_TRUE(asx_cx_is_cancelled(&cx));
@@ -1293,7 +1293,7 @@ TEST(cx_is_cancelled_reports_whether_a_cancel_was_requested) {
     asx_runtime_virtual_advance(10u);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &b, &late), ASX_OK);
     ASSERT_EQ(asx_task_mask(late), ASX_OK);
-    asx_cx_init(&cx, rid, late, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, rid, late, ASX_CAP_NONE);
     ASSERT_FALSE(asx_cx_is_cancelled(&cx));
     ASSERT_EQ(asx_checkpoint(late, &cr), ASX_OK);
     ASSERT_FALSE(cr.cancelled);

@@ -245,7 +245,7 @@ static asx_task_id cx_task(asx_cx *cx) {
     setup();
     MUST_OK(asx_region_open(&r));
     MUST_OK(asx_task_spawn(r, poll_idle, NULL, &t));
-    MUST_OK(asx_cx_init(cx, r, t, ASX_CAP_CANCEL_CHECK));
+    MUST_OK(asx_cx_init(cx, r, t, ASX_CAP_NONE));
     return t;
 }
 

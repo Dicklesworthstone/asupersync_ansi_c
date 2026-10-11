@@ -838,7 +838,7 @@ static asx_status poll_idle(void *ud, asx_task_id self) {
 static asx_task_id cx_task(asx_cx *cx) {
     asx_task_id t = ASX_INVALID_ID;
     CH_IGNORE(asx_task_spawn(g_rid, poll_idle, NULL, &t));
-    asx_cx_init(cx, g_rid, t, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(cx, g_rid, t, ASX_CAP_NONE);
     return t;
 }
 
@@ -931,7 +931,7 @@ TEST(untracked_reserves_register_no_obligation) {
     uint64_t v = 0;
     setup();
     (void)cx_task(&cx);
-    asx_cx_init(&no_task, g_rid, ASX_INVALID_ID, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&no_task, g_rid, ASX_INVALID_ID, ASX_CAP_NONE);
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(g_rid, &probe), ASX_OK);
 

@@ -1111,7 +1111,7 @@ Rust only; C has no tracked permits (`bd-9kll.5.9`).
 | Channel send fails (Disconnected) | The channel returns `Err(Disconnected(value))`; the task's outcome is whatever its body returns |
 | Channel send cancelled | The channel returns `Err(SendError::Cancelled(value))`. The task ends `Cancelled` through the cancel protocol (T8/T11), not because of the channel error (the recv case is fixture `mpsc-recv-cancel-first-001`; no fixture for send) |
 | Timer fires deadline miss | Triggers cancellation with `Deadline` cancel kind (budget-deadline wake, `src/cx/cx.rs:357`; C `src/runtime/scheduler.c:224`) |
-| Budget exhaustion during channel ops | There is no budget logic in `src/channel/mpsc.rs` (the first extraction's "remaining aborted" is wrong). Exhaustion surfaces through `cx.checkpoint()` as `Cancelled` at reserve/recv; held permits are not aborted. C differs: `asx_cx_checkpoint` spends a poll unit when a budget is bound and returns `ASX_E_POLL_BUDGET_EXHAUSTED` (`src/cx/cx.c:431`), which the channel reports as `ASX_E_CANCELLED` (`src/channel/mpsc.c:904`); Rust's checkpoint spends no quota (`bd-9kll.3.8`) |
+| Budget exhaustion during channel ops | There is no budget logic in `src/channel/mpsc.rs` (the first extraction's "remaining aborted" is wrong). Exhaustion surfaces through `cx.checkpoint()` as `Cancelled` at reserve/recv; held permits are not aborted. C differs: `asx_cx_checkpoint` spends a poll unit when a budget is bound and returns `ASX_E_POLL_BUDGET_EXHAUSTED` (`src/cx/cx.c:432`), which the channel reports as `ASX_E_CANCELLED` (`src/channel/mpsc.c:904`); Rust's checkpoint spends no quota (`bd-9kll.3.8`) |
 
 ---
 
