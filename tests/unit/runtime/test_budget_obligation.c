@@ -980,6 +980,123 @@ TEST(runtime_reset_clears_leak_count) {
     ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
 }
 
+/* -------------------------------------------------------------------
+ * Region close: finalizers, then the leak audit, then close (bd-9kll.3.4)
+ * ------------------------------------------------------------------- */
+
+TEST(region_close_leak_audits_obligations_still_reserved) {
+    /* Rust's Finalizing arm leak-audits the obligations still Reserved
+     * once no task is left and closes (runtime/state.rs:10266-10317). C
+     * refused to close (ASX_E_OBLIGATIONS_UNRESOLVED, stuck Finalizing). */
+    asx_region_id r;
+    asx_obligation_id a;
+    asx_obligation_id b;
+    asx_obligation_info info;
+    asx_region_state rs;
+    asx_budget run;
+
+    ASSERT_EQ(setup_with_policy(ASX_LEAK_LOG, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(r, &a), ASX_OK); /* outside a poll: no holder */
+    ASSERT_EQ(asx_obligation_reserve(r, &b), ASX_OK);
+    run = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
+    ASSERT_EQ(asx_region_get_state(r, &rs), ASX_OK);
+    ASSERT_EQ(rs, ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_obligation_get_info(a, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
+    ASSERT_EQ(asx_obligation_get_info(b, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
+    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)2u);
+}
+
+TEST(region_close_leak_audit_is_one_batch) {
+    /* The audit's leaks are one batch (handle_obligation_leaks counts them
+     * together, then picks one response, state.rs:5711-5717): with a
+     * threshold of 2 both escalate, where two holders' completions (one
+     * leak each) leave the first under the base policy. */
+    asx_leak_escalation_config esc;
+    asx_region_id r;
+    asx_obligation_id a;
+    asx_obligation_id b;
+    asx_obligation_info info;
+    asx_budget run;
+
+    esc.threshold = 2u;
+    esc.escalate_to = ASX_LEAK_RECOVER;
+    ASSERT_EQ(setup_with_policy(ASX_LEAK_SILENT, &esc), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(r, &a), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(r, &b), ASX_OK);
+    run = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
+    ASSERT_EQ(asx_obligation_get_info(a, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
+    ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_ERROR);
+    ASSERT_EQ(asx_obligation_get_info(b, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
+    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)2u);
+}
+
+TEST(region_close_leak_audit_under_panic_fails_before_closing) {
+    /* PANIC: Rust marks them leaked, then fails fast before the region
+     * closes (state.rs:5735-5756). The leaked obligation no longer holds
+     * the region, so a later drain closes it. */
+    asx_region_id r;
+    asx_obligation_id a;
+    asx_obligation_info info;
+    asx_region_state rs;
+    asx_budget run;
+
+    ASSERT_EQ(setup_with_policy(ASX_LEAK_PANIC, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(r, &a), ASX_OK);
+    run = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(r, &run), ASX_E_UNRESOLVED_OBLIGATIONS);
+    ASSERT_EQ(asx_obligation_get_info(a, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
+    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
+    ASSERT_EQ(asx_region_get_state(r, &rs), ASX_OK);
+    ASSERT_EQ(rs, ASX_REGION_FINALIZING);
+    if (asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {
+        run = asx_budget_infinite();
+        ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
+        ASSERT_EQ(asx_region_get_state(r, &rs), ASX_OK);
+        ASSERT_EQ(rs, ASX_REGION_CLOSED);
+    }
+}
+
+static void cleanup_commits_obligation(void *ud) {
+    asx_status st = asx_obligation_commit(*(asx_obligation_id *)ud);
+    (void)st;
+}
+
+TEST(region_close_runs_finalizers_before_the_leak_audit) {
+    /* Finalizers run first (state.rs:10256-10264, before the audit at
+     * :10266): one that resolves the obligation leaves nothing to leak.
+     * Before, close refused at the obligation check and never ran it. */
+    static asx_obligation_id ob;
+    asx_region_id r;
+    asx_region_slot *slot;
+    asx_cleanup_handle h;
+    asx_obligation_info info;
+    asx_region_state rs;
+    asx_budget run;
+
+    ASSERT_EQ(setup_with_policy(ASX_LEAK_LOG, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(r, &ob), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(r, &slot), ASX_OK);
+    ASSERT_EQ(asx_cleanup_push(&slot->cleanup, cleanup_commits_obligation, &ob, &h), ASX_OK);
+    run = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
+    ASSERT_EQ(asx_region_get_state(r, &rs), ASX_OK);
+    ASSERT_EQ(rs, ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_obligation_get_info(ob, &info), ASX_OK);
+    ASSERT_EQ(info.state, ASX_OBLIGATION_COMMITTED);
+    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_budget_obligation ===\n");
 
@@ -1012,6 +1129,10 @@ int main(void) {
     RUN_TEST(leak_escalation_switches_policy_at_threshold);
     RUN_TEST(leak_escalation_threshold_zero_escalates_the_first_leak);
     RUN_TEST(runtime_reset_clears_leak_count);
+    RUN_TEST(region_close_leak_audits_obligations_still_reserved);
+    RUN_TEST(region_close_leak_audit_is_one_batch);
+    RUN_TEST(region_close_leak_audit_under_panic_fails_before_closing);
+    RUN_TEST(region_close_runs_finalizers_before_the_leak_audit);
 
     TEST_REPORT();
     return test_failures;

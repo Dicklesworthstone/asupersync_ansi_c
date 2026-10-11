@@ -520,21 +520,16 @@ static asx_leak_response obligation_leak_batch_policy(uint64_t n) {
  * aborts with ASX_OBLIGATION_ABORT_ERROR. A permit's obligation is dropped
  * with the body instead (obligation_drop_permit): its Drop gives the
  * resource back and leaks nothing. */
-/* Leak the reserved obligation in slot `idx` under the active policy:
- * RECOVER aborts it with ASX_OBLIGATION_ABORT_ERROR, as Rust's Recover
- * aborts with ObligationAbortReason::Error (state.rs:5781-5797), the others
- * mark it LEAKED (vocabulary obligation.leaked, Rust ObligationLeak), LOG
- * also warning with `log_message`. Each leak is a batch of its own, as each
- * dropped token posts its own leak (state.rs:7036-7042): it is counted
- * before the policy is picked, so the leak that reaches the escalation
- * threshold is the first escalated one. Returns 1 when the policy (PANIC)
- * demands fail-fast containment. */
-static int obligation_leak_slot(uint32_t idx, const char *log_message) {
+/* Leak the reserved obligation in slot `idx` under `policy`: RECOVER
+ * aborts it with ASX_OBLIGATION_ABORT_ERROR, as Rust's Recover aborts with
+ * ObligationAbortReason::Error (state.rs:5781-5797), the others mark it
+ * LEAKED (vocabulary obligation.leaked, Rust ObligationLeak). Returns 1
+ * when the policy (PANIC) demands fail-fast containment. */
+static int obligation_leak_apply(uint32_t idx, asx_leak_response policy) {
     asx_obligation_slot *o = &g_obligations[idx];
     asx_obligation_id oid =
         asx_handle_pack(ASX_TYPE_OBLIGATION, (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
                         asx_handle_pack_index(o->generation, (uint16_t)idx));
-    asx_leak_response policy = obligation_leak_batch_policy(1u);
     o->counted = 0;
     if (policy == ASX_LEAK_RECOVER) {
         /* Recovered leak: abort, still counted as a leak. */
@@ -547,8 +542,19 @@ static int obligation_leak_slot(uint32_t idx, const char *log_message) {
     }
     o->state = ASX_OBLIGATION_LEAKED;
     asx_trace_emit(ASX_TRACE_OBLIGATION_LEAK, oid, 0);
-    if (policy == ASX_LEAK_LOG) (void)asx_runtime_log_write(ASX_LOG_WARN, log_message);
     return policy == ASX_LEAK_PANIC;
+}
+
+/* One leak as a batch of its own, as each dropped token posts its own
+ * leak (state.rs:7036-7042): it is counted before the policy is picked, so
+ * the leak that reaches the escalation threshold is the first escalated
+ * one; LOG warns with `log_message`. Returns 1 when the policy (PANIC)
+ * demands fail-fast containment. */
+static int obligation_leak_slot(uint32_t idx, const char *log_message) {
+    asx_leak_response policy = obligation_leak_batch_policy(1u);
+    int fail_fast = obligation_leak_apply(idx, policy);
+    if (policy == ASX_LEAK_LOG) (void)asx_runtime_log_write(ASX_LOG_WARN, log_message);
+    return fail_fast;
 }
 
 static void obligation_apply_resolution(uint32_t idx, asx_obligation_state to);
@@ -616,6 +622,50 @@ asx_status asx_runtime_take_pending_fault_internal(void) {
     asx_status st = g_pending_fault;
     g_pending_fault = ASX_OK;
     return st;
+}
+
+asx_status asx_region_audit_leaks_internal(asx_region_id region) {
+    uint32_t i;
+    uint32_t n = 0;
+    int fail_fast = 0;
+    asx_leak_response policy;
+
+    /* Rust's Finalizing-arm leak audit (state.rs:10266-10295): the
+     * obligations of the region still Reserved once its tasks are gone are
+     * one leak batch (collect_obligation_leaks, then handle_obligation_leaks
+     * with no task): counted together, one response for all of them,
+     * logged once under LOG (state.rs:5711-5760). */
+    for (i = 0; i < g_obligation_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+        if (g_obligations[i].alive && g_obligations[i].region == region &&
+            g_obligations[i].state == ASX_OBLIGATION_RESERVED) {
+            n++;
+        }
+    }
+    if (n == 0u) return ASX_OK;
+    policy = obligation_leak_batch_policy(n);
+    for (i = 0; i < g_obligation_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+        if (g_obligations[i].alive && g_obligations[i].region == region &&
+            g_obligations[i].state == ASX_OBLIGATION_RESERVED && obligation_leak_apply(i, policy)) {
+            fail_fast = 1;
+        }
+    }
+    if (policy == ASX_LEAK_LOG) {
+        (void)asx_runtime_log_write(ASX_LOG_WARN,
+                                    "obligation leaked: still reserved when its region closed");
+    }
+    if (!fail_fast) return ASX_OK;
+    /* PANIC: Rust marks them leaked, then fails fast (state.rs:5735-5756)
+     * before the region closes. C routes the fault through the region's
+     * containment policy, as a leak at a holder's completion does. */
+    {
+        asx_status fc = asx_region_contain_fault(region, ASX_E_UNRESOLVED_OBLIGATIONS);
+        if (fc != ASX_OK && asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {
+            g_pending_fault = fc;
+        }
+    }
+    return ASX_E_UNRESOLVED_OBLIGATIONS;
 }
 
 void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region) {

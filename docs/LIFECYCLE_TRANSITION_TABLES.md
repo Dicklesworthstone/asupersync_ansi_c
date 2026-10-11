@@ -48,13 +48,13 @@ C's authority table is `src/core/transition_tables.c:22` (`asx_region_transition
 
 | # | From | To | Trigger | Preconditions | Postconditions |
 |---|------|----|---------|---------------|----------------|
-| R1 | `Open` | `Closing` | Rust `begin_close(reason)` (`src/record/region.rs:1699`); C `asx_region_close` (`src/runtime/lifecycle.c:1031`) | state == Open (Rust CAS in `begin_close_transition`, `src/record/region.rs:1719`; C table check, `src/runtime/lifecycle.c:940`) | No new normal spawns, child regions or obligations. Rust sets or strengthens the region's cancel reason when one is given, even if the region is already closing (a no-op once Closed). `asx_region_close` itself cancels no task |
+| R1 | `Open` | `Closing` | Rust `begin_close(reason)` (`src/record/region.rs:1699`); C `asx_region_close` (`src/runtime/lifecycle.c:1081`) | state == Open (Rust CAS in `begin_close_transition`, `src/record/region.rs:1719`; C table check, `src/runtime/lifecycle.c:990`) | No new normal spawns, child regions or obligations. Rust sets or strengthens the region's cancel reason when one is given, even if the region is already closing (a no-op once Closed). `asx_region_close` itself cancels no task |
 | R1a | `Open` | `Closing` | An ancestor region is cancelled | The cancel request walks the whole subtree, parents before descendants (Rust `cancel_request`, `src/runtime/state.rs:7547`, sort at `src/runtime/state.rs:7653`; C `asx_region_cancel`, `src/runtime/cancellation.c:517`) | Each descendant gets ParentCancelled attributed to its immediate parent, caused by the parent's reason, and moves Open → Closing (Rust `src/runtime/state.rs:7779`; C `src/runtime/cancellation.c:561`); a region already closing has its reason strengthened (Rust `src/runtime/state.rs:7794`). The tasks of every region in the subtree are then cancelled (§4.9) |
 | R1b | `Open` | `Closing` | This region is cancelled (Rust `cancel_request`; C `asx_region_cancel_request` → `asx_region_cancel`) | none beyond a live region | Region reason set or strengthened; region moves to Closing; its live tasks get CancelRequested with the region's reason; a region with no live task or child region advances at once (Rust `src/runtime/state.rs:7880`; C third pass, `src/runtime/cancellation.c:571`) |
-| R2 | `Closing` | `Draining` | Rust `begin_drain()` (`src/record/region.rs:1743`), called by `advance_region_state` when `child_count() > 0` (`src/runtime/state.rs:10220`); C `src/runtime/quiescence.c:233` and `src/runtime/quiescence.c:265` | state == Closing and the region has at least one child **region** | Waits for the child regions to close. Not a cancel step: when the close came from a cancel request (Rust's region close command is one, `src/runtime/state.rs:5004`), the tasks were already cancelled by it. The spec enters Draining whenever a child task is still live (Variant, C_REFINEMENT_MAP row `rule.region.close_cancel_children`) |
+| R2 | `Closing` | `Draining` | Rust `begin_drain()` (`src/record/region.rs:1743`), called by `advance_region_state` when `child_count() > 0` (`src/runtime/state.rs:10220`); C `src/runtime/quiescence.c:233` and `src/runtime/quiescence.c:266` | state == Closing and the region has at least one child **region** | Waits for the child regions to close. Not a cancel step: when the close came from a cancel request (Rust's region close command is one, `src/runtime/state.rs:5004`), the tasks were already cancelled by it. The spec enters Draining whenever a child task is still live (Variant, C_REFINEMENT_MAP row `rule.region.close_cancel_children`) |
 | R3 | `Closing` | `Finalizing` | Rust `begin_finalize()` (`src/record/region.rs:1756`) from `advance_region_state` (`src/runtime/state.rs:10181`); C `asx_region_finalize_one` (`src/runtime/quiescence.c:230`) | Rust `can_region_finalize` (`src/runtime/state.rs:7938`): every task terminal, every child region Closed, no pending spawn. C: `child_count == 0` and, from `asx_region_advance_internal`, `task_count == 0` | Draining is skipped. Region finalizers run next (LIFO) |
 | R4 | `Draining` | `Finalizing` | Same functions as R3 | Same as R3 (the last child region has closed and unlinked) | Region finalizers run next (LIFO) |
-| R5 | `Finalizing` | `Closed` | Rust `complete_close()` (`src/record/region.rs:1786`) from `advance_region_state` (`src/runtime/state.rs:10317`); C `asx_region_finalize_one` (`src/runtime/quiescence.c:230`) | Rust: no child region, no task, no pending or unapplied obligation, empty finalizer stack, no pending spawn; before that, with no task left, Rust leak-audits any still-Reserved obligation (`src/runtime/state.rs:10271`). C: no Reserved obligation (else it stays Finalizing with `ASX_E_OBLIGATIONS_UNRESOLVED`, `src/runtime/quiescence.c:243`), cleanup stack drained, no live task | Rust records the close outcome (default `Cancelled(reason)` if the region was cancelled, else `Ok`, `src/record/region.rs:1820`), reclaims the heap and wakes close waiters. C unlinks the region from its parent, emits `region.closed` and wakes close waiters (`src/runtime/quiescence.c:257`). The order and the leak audit differ: C_REFINEMENT_MAP rows `rule.region.close_run_finalizer`, `rule.region.close_complete`, `inv.obligation.ledger_empty_on_close` (`bd-9kll.3.4`) |
+| R5 | `Finalizing` | `Closed` | Rust `complete_close()` (`src/record/region.rs:1786`) from `advance_region_state` (`src/runtime/state.rs:10317`); C `asx_region_finalize_one` (`src/runtime/quiescence.c:230`) | Rust: no child region, no task, no pending or unapplied obligation, empty finalizer stack, no pending spawn; before that, with no task left, Rust leak-audits any still-Reserved obligation (`src/runtime/state.rs:10271`). C, in the same order: cleanup stack drained, no live task, then the same leak audit of any still-Reserved obligation (`src/runtime/quiescence.c:259`) | Rust records the close outcome (default `Cancelled(reason)` if the region was cancelled, else `Ok`, `src/record/region.rs:1820`), reclaims the heap and wakes close waiters. C unlinks the region from its parent, emits `region.closed` and wakes close waiters (`src/runtime/quiescence.c:265-266`); it records no close outcome (C_REFINEMENT_MAP row `rule.region.close_complete`, `bd-9kll.3.4`) |
 
 ### 1.3 Forbidden Transitions (Must-Fail)
 
@@ -81,12 +81,12 @@ The error column is C's: every pair outside the table fails `asx_region_transiti
 
 | Operation | Allowed States | Error if Wrong State |
 |-----------|---------------|---------------------|
-| Create child task | Rust: `Open` for a normal task (`add_task` → `can_accept_work`, `src/record/region.rs:1381`); `Open` or `Finalizing` for a cleanup task (`add_cleanup_task`, `src/record/region.rs:1438`). C: `Open` or `Finalizing` for **every** spawn (`asx_region_can_accept_work`, `src/core/transition_tables.c:89`) | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1150`), as Rust's `AdmissionError::Closed`; `ASX_E_ADMISSION_LIMIT` at the region's task limit |
-| Create child region | `Open` (Rust `add_child` → `can_spawn`, `src/record/region.rs:1343`; C `src/runtime/lifecycle.c:867`) | C `ASX_E_REGION_CLOSED` |
-| Create obligation | `Open` (Rust `try_reserve_obligation`, `src/record/region.rs:1449`; C `asx_region_can_spawn`, `src/runtime/lifecycle.c:1606`) | C `ASX_E_REGION_CLOSED` |
-| Close region | `Open` | C `asx_region_close`: `ASX_E_INVALID_TRANSITION` if not `Open` (`src/runtime/lifecycle.c:1042-1044`). Rust `begin_close` returns `false` but still strengthens the reason of a region that is not yet Closed (`src/record/region.rs:1719`) |
+| Create child task | Rust: `Open` for a normal task (`add_task` → `can_accept_work`, `src/record/region.rs:1381`); `Open` or `Finalizing` for a cleanup task (`add_cleanup_task`, `src/record/region.rs:1438`). C: `Open` or `Finalizing` for **every** spawn (`asx_region_can_accept_work`, `src/core/transition_tables.c:89`) | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1200`), as Rust's `AdmissionError::Closed`; `ASX_E_ADMISSION_LIMIT` at the region's task limit |
+| Create child region | `Open` (Rust `add_child` → `can_spawn`, `src/record/region.rs:1343`; C `src/runtime/lifecycle.c:917`) | C `ASX_E_REGION_CLOSED` |
+| Create obligation | `Open` (Rust `try_reserve_obligation`, `src/record/region.rs:1449`; C `asx_region_can_spawn`, `src/runtime/lifecycle.c:1656`) | C `ASX_E_REGION_CLOSED` |
+| Close region | `Open` | C `asx_region_close`: `ASX_E_INVALID_TRANSITION` if not `Open` (`src/runtime/lifecycle.c:1092-1094`). Rust `begin_close` returns `false` but still strengthens the reason of a region that is not yet Closed (`src/record/region.rs:1719`) |
 | Query region status | (any) | `asx_region_get_state` fails only on a bad handle (`ASX_E_NOT_FOUND`, `ASX_E_STALE_HANDLE`) |
-| Access region arena (internal) | C: the only arena user is `asx_task_spawn_captured`, gated like a spawn (`src/runtime/lifecycle.c:1141`). Rust reclaims the region heap at Closed (`complete_close`, `src/record/region.rs:1786`) | C `ASX_E_REGION_CLOSED` |
+| Access region arena (internal) | C: the only arena user is `asx_task_spawn_captured`, gated like a spawn (`src/runtime/lifecycle.c:1191`). Rust reclaims the region heap at Closed (`complete_close`, `src/record/region.rs:1786`) | C `ASX_E_REGION_CLOSED` |
 
 `ASX_E_REGION_NOT_OPEN` and `ASX_E_ADMISSION_CLOSED`, which the first extraction listed here, are never returned by the kernel admission paths (`src/runtime/lifecycle.c`); `ASX_E_ADMISSION_CLOSED` appears only outside the kernel (for example `src/runtime/adapter.c`).
 
@@ -101,10 +101,10 @@ Before a region transitions from `Finalizing` to `Closed`:
 1. All child tasks in terminal state (`Completed`)
 2. All child sub-regions in `Closed` state
 3. No obligation of the region is `Reserved` (`Committed`, `Aborted` and `Leaked` are all terminal)
-4. Finalizers drained. Rust: the finalizer stack is empty (`src/record/region.rs:1786`). C: the cleanup stack is drained LIFO inside `asx_region_finalize_one` (`src/core/cleanup.c:92`, called at `src/runtime/quiescence.c:252`)
+4. Finalizers drained. Rust: the finalizer stack is empty (`src/record/region.rs:1786`). C: the cleanup stack is drained LIFO inside `asx_region_finalize_one` (`src/core/cleanup.c:92`, called at `src/runtime/quiescence.c:254`), before the leak audit, as Rust drains its finalizers first
 5. C only: the ghost linearity monitor reports unresolved obligations (`asx_ghost_check_obligation_leaks`, `src/core/ghost.c:182`, called at `src/runtime/quiescence.c:247`); it reports, it does not block
 
-What happens when item 3 fails differs. Rust, once no task is left, leak-audits the Reserved obligations (marks them `Leaked` under the leak policy) and then closes (`src/runtime/state.rs:10271`). C keeps the region in `Finalizing` and `asx_region_finalize_one` returns `ASX_E_OBLIGATIONS_UNRESOLVED` (`src/runtime/quiescence.c:61`, from `src/runtime/quiescence.c:47`); it never returns `ASX_E_UNRESOLVED_OBLIGATIONS` or `ASX_E_INCOMPLETE_CHILDREN` here (the latter is declared and never returned, `bd-udlh`). This drift is recorded (`bd-9kll.3.4`).
+When item 3 fails, both, once no task is left, leak-audit the Reserved obligations (mark them `Leaked` under the leak policy, as one leak batch) and then close: Rust at `src/runtime/state.rs:10271`, C at `src/runtime/quiescence.c:259` (`asx_region_audit_leaks_internal`; `bd-9kll.3.4`). Under PANIC the audit fails fast before the close; C returns `ASX_E_UNRESOLVED_OBLIGATIONS` and the region stays `Finalizing` until a later advance. C never returns `ASX_E_INCOMPLETE_CHILDREN` here (declared and never returned, `bd-udlh`).
 
 ---
 
@@ -248,13 +248,13 @@ C's authority table is `src/core/transition_tables.c:65`.
 
 | From | To | Trigger | Preconditions | Postconditions |
 |------|----|---------|---------------|----------------|
-| `Reserved` | `Committed` | Rust `commit_obligation` (`src/runtime/state.rs:6534`); C `asx_obligation_commit` (`src/runtime/lifecycle.c:1717`) | Obligation `Reserved`. The spec also requires the caller to be the holder; Rust enforces that through the token-bound holder check, C does not check it (C_REFINEMENT_MAP row `rule.obligation.commit`, Partial) | Effect takes place; the region's pending count drops; C ghost monitor records the resolution |
-| `Reserved` | `Aborted` | Rust `abort_obligation` (`src/runtime/state.rs:6745`); C `asx_obligation_abort` / `asx_obligation_abort_with_reason` (`src/runtime/lifecycle.c:1774`, `src/runtime/lifecycle.c:1467`) | Obligation `Reserved` | Resource released, no effect; abort reason recorded |
-| `Reserved` | `Leaked` | The holder completes while holding it (Rust `audit_completion_obligation_leaks`, `src/runtime/state.rs:8341`; C `asx_task_resolve_held_obligations_internal`, `src/runtime/lifecycle.c:584`). A tracked permit (send or semaphore) is not leaked: C drops it with its holder, as Rust drops the body's locals, and its obligation resolves as that permit's Drop resolves it (`obligation_drop_permit`, `src/runtime/lifecycle.c:562`). Also: C `asx_obligation_drop` leaks at once (`src/runtime/lifecycle.c:1745`), as a dropped Rust token does; Rust's Finalizing leak audit (`src/runtime/state.rs:10271`) leaks what is still Reserved when no task is left | Holder Completed with the obligation still `Reserved` | Leak handled under the leak policy. Rust default is Panic (`src/runtime/state.rs:2338`); C default is LOG (`src/runtime/lifecycle.c:93`). RECOVER aborts with Error instead of marking Leaked, in both. The default's drift is recorded in C_REFINEMENT_MAP row `rule.obligation.leak` (`bd-9kll.3.6`) |
+| `Reserved` | `Committed` | Rust `commit_obligation` (`src/runtime/state.rs:6534`); C `asx_obligation_commit` (`src/runtime/lifecycle.c:1767`) | Obligation `Reserved`. The spec also requires the caller to be the holder; Rust enforces that through the token-bound holder check, C does not check it (C_REFINEMENT_MAP row `rule.obligation.commit`, Partial) | Effect takes place; the region's pending count drops; C ghost monitor records the resolution |
+| `Reserved` | `Aborted` | Rust `abort_obligation` (`src/runtime/state.rs:6745`); C `asx_obligation_abort` / `asx_obligation_abort_with_reason` (`src/runtime/lifecycle.c:1824`, `src/runtime/lifecycle.c:1517`) | Obligation `Reserved` | Resource released, no effect; abort reason recorded |
+| `Reserved` | `Leaked` | The holder completes while holding it (Rust `audit_completion_obligation_leaks`, `src/runtime/state.rs:8341`; C `asx_task_resolve_held_obligations_internal`, `src/runtime/lifecycle.c:590`). A tracked permit (send or semaphore) is not leaked: C drops it with its holder, as Rust drops the body's locals, and its obligation resolves as that permit's Drop resolves it (`obligation_drop_permit`, `src/runtime/lifecycle.c:568`). Also: C `asx_obligation_drop` leaks at once (`src/runtime/lifecycle.c:1795`), as a dropped Rust token does; Rust's Finalizing leak audit (`src/runtime/state.rs:10271`) leaks what is still Reserved when no task is left | Holder Completed with the obligation still `Reserved` | Leak handled under the leak policy. Rust default is Panic (`src/runtime/state.rs:2338`); C default is LOG (`src/runtime/lifecycle.c:93`). RECOVER aborts with Error instead of marking Leaked, in both. The default's drift is recorded in C_REFINEMENT_MAP row `rule.obligation.leak` (`bd-9kll.3.6`) |
 
 ### 3.3 Forbidden Transitions (Must-Fail)
 
-The first extraction also listed `ASX_E_OBLIGATION_LEAKED`, which does not exist. A commit or abort of a non-`Reserved` obligation returns `ASX_E_OBLIGATION_ALREADY_RESOLVED` (`src/runtime/lifecycle.c:1730` for commit, `:1793` for abort), as Rust returns `ErrorKind::ObligationAlreadyResolved` (`src/runtime/obligation_table.rs:577`, `:630`), which `docs/CANONICAL_VOCABULARY_V2.md` §5 maps to that status. Until 2026-10-10 C returned `ASX_E_INVALID_TRANSITION` (bd-91rf). Dropping a resolved obligation (`asx_obligation_drop`, C-only) and the pure table check still return `ASX_E_INVALID_TRANSITION`. DSL v2 cannot reach this case (`docs/SCENARIO_DSL_V2.md` §5), so no fixture compares it.
+The first extraction also listed `ASX_E_OBLIGATION_LEAKED`, which does not exist. A commit or abort of a non-`Reserved` obligation returns `ASX_E_OBLIGATION_ALREADY_RESOLVED` (`src/runtime/lifecycle.c:1780` for commit, `:1843` for abort), as Rust returns `ErrorKind::ObligationAlreadyResolved` (`src/runtime/obligation_table.rs:577`, `:630`), which `docs/CANONICAL_VOCABULARY_V2.md` §5 maps to that status. Until 2026-10-10 C returned `ASX_E_INVALID_TRANSITION` (bd-91rf). Dropping a resolved obligation (`asx_obligation_drop`, C-only) and the pure table check still return `ASX_E_INVALID_TRANSITION`. DSL v2 cannot reach this case (`docs/SCENARIO_DSL_V2.md` §5), so no fixture compares it.
 
 | From | To | Expected Error | Rationale |
 |------|----|----------------|-----------|
@@ -271,17 +271,17 @@ The first extraction also listed `ASX_E_OBLIGATION_LEAKED`, which does not exist
 
 The obligation lifecycle enforces **exactly-once resolution** (linear use). Neither engine keeps a bit-per-obligation ledger with a `popcnt` (the first extraction described one):
 
-1. Rust keeps the obligation table plus a per-region pending count (`try_reserve_obligation`, `src/record/region.rs:1449`; `resolve_obligation`, `src/record/region.rs:1487`). C keeps the obligation slots, each Reserved one linked into its holder's held list (`src/runtime/lifecycle.c:1315`)
+1. Rust keeps the obligation table plus a per-region pending count (`try_reserve_obligation`, `src/record/region.rs:1449`; `resolve_obligation`, `src/record/region.rs:1487`). C keeps the obligation slots, each Reserved one linked into its holder's held list (`src/runtime/lifecycle.c:1365`)
 2. `commit` and `abort` resolve exactly once; the terminal states are absorbing (C table, `src/core/transition_tables.c:65`). The C ghost monitor records reserve and resolve and flags a double resolution (`src/core/ghost.c`)
 3. Leaks are detected when the holder completes, not at region close: each plain obligation still Reserved in the holder's held set is leaked; a tracked permit is dropped with the holder instead (§3.2)
-4. At region close: Rust leak-audits any remaining Reserved obligation and then closes; C refuses to close while one is Reserved and stays `Finalizing` (§1.5; `bd-9kll.3.4`). An obligation C reserved outside any poll has no holder and so can never leak at a completion (C_REFINEMENT_MAP rows `rule.obligation.reserve` and `inv.obligation.bounded`, `bd-9kll.3.4` item 5)
+4. At region close both leak-audit any remaining Reserved obligation and then close (§1.5; `bd-9kll.3.4`). An obligation C reserved outside any poll has no holder, so it can never leak at a completion; the close audit leaks it. Rust has no holderless obligation (C_REFINEMENT_MAP rows `rule.obligation.reserve` and `inv.obligation.bounded`, `bd-9kll.3.4` item 5)
 
 ### 3.5 Obligation-Region Interaction
 
 | Region State | Obligation Creation Allowed | Obligation Resolution Allowed |
 |-------------|---------------------------|------------------------------|
 | `Open` | Yes | Yes |
-| `Closing` | No (C `ASX_E_REGION_CLOSED`, `src/runtime/lifecycle.c:1330`; Rust `AdmissionError::Closed`) | Yes |
+| `Closing` | No (C `ASX_E_REGION_CLOSED`, `src/runtime/lifecycle.c:1380`; Rust `AdmissionError::Closed`) | Yes |
 | `Draining` | No | Yes |
 | `Finalizing` | No | Yes. Rust: until the region's Finalizing leak audit; C: any time, since C does not close with Reserved obligations |
 | `Closed` | No | No Reserved obligation can remain. Rust rejects a late resolve with `ErrorKind::RegionFinalized` (`src/runtime/obligation_table.rs:569`) |
@@ -443,7 +443,7 @@ Each cancellation carries these operational fields:
 > **Superseded by `asupersync_v4_formal_semantics.md` §3.2 `CANCEL-REQUEST` (rule `rule.cancel.request` #1) and §5 INV-CANCEL-PROPAGATES (rule `inv.cancel.propagates_down` #6); C status: see C_REFINEMENT_MAP.md rows `rule.cancel.request` and `inv.cancel.propagates_down`.**
 
 1. A region **cancel** propagates to every task of the region's subtree (Rust `cancel_request`, `src/runtime/state.rs:7547`; C `asx_region_cancel`, `src/runtime/cancellation.c:517`). A plain C `asx_region_close` cancels no task; `asx_region_drain` uses the task-only `asx_cancel_propagate` with ParentCancelled (C_REFINEMENT_MAP row `rule.region.close_cancel_children`)
-2. Order: parents before descendants in both, but not depth-first and not in the same sibling order. Rust collects the subtree with a stack-based walk and stable-sorts it by depth (`src/runtime/state.rs:7904`, sort at `src/runtime/state.rs:7653`): level by level, and within a level the last-inserted child comes first. C walks breadth-first over each region's `children[]` (`asx_region_subtree_internal`, `src/runtime/lifecycle.c:622`): within a level, `children[]` order, which is insertion order until a child closes and is swap-removed (`src/runtime/quiescence.c:35`). Within one region, both cancel tasks in membership insertion order (Rust `src/record/region.rs` membership; C `member_seq`, `src/runtime/cancellation.c:452`)
+2. Order: parents before descendants in both, but not depth-first and not in the same sibling order. Rust collects the subtree with a stack-based walk and stable-sorts it by depth (`src/runtime/state.rs:7904`, sort at `src/runtime/state.rs:7653`): level by level, and within a level the last-inserted child comes first. C walks breadth-first over each region's `children[]` (`asx_region_subtree_internal`, `src/runtime/lifecycle.c:672`): within a level, `children[]` order, which is insertion order until a child closes and is swap-removed (`src/runtime/quiescence.c:35`). Within one region, both cancel tasks in membership insertion order (Rust `src/record/region.rs` membership; C `member_seq`, `src/runtime/cancellation.c:452`)
 3. Each task takes its region's reason: the target region's tasks the request's reason; a descendant region's tasks `ParentCancelled`, attributed to the immediate parent and caused by the parent's reason (§4.7). The C witness is not extended with a chain
 4. Cancel does **not** propagate to sibling regions (only parent-to-child)
 5. A task already in `CancelRequested` or later is strengthened (T6/T9/T12), not ignored; a Completed task is skipped (Rust `src/record/task.rs:705`; C `src/runtime/cancellation.c:162`)
@@ -538,16 +538,16 @@ If nothing was folded, the default is `Cancelled(reason)` when the region was ca
 1. A normal task can only be created in a region that is `Open`. Rust also admits cleanup tasks in `Finalizing`; C admits every spawn in `Finalizing` (§1.4, `bd-9kll.3.5`)
 2. A task's owning region must remain in a non-`Closed` state while the task is non-terminal (both engines close a region only with no live task)
 3. Region `Closing`/`Draining` -> `Finalizing` requires all owned tasks to be `Completed` and all child regions `Closed`
-4. Task completion advances the owning region: Rust unlinks the task and calls `advance_region_state` (`src/runtime/state.rs:8509`); C calls `asx_region_settle_internal` (`src/runtime/lifecycle.c:648`)
+4. Task completion advances the owning region: Rust unlinks the task and calls `advance_region_state` (`src/runtime/state.rs:8509`); C calls `asx_region_settle_internal` (`src/runtime/lifecycle.c:698`)
 
 ### 6.2 Task-Obligation Ordering
 
 > **Superseded by `asupersync_v4_formal_semantics.md` §3.4 `RESERVE` (`rule.obligation.reserve` #13), §3.4.7 (cancellation does not resolve obligations) and §5 INV-OBLIGATION-BOUNDED (`inv.obligation.bounded` #19); C status: see C_REFINEMENT_MAP.md rows `rule.obligation.reserve` (Partial) and `inv.obligation.bounded` (Partial).**
 
-1. An obligation is reserved by a Running holder in an `Open` region. Rust requires the holder to belong to that region and rejects otherwise with `ErrorKind::TaskNotOwned` (`create_obligation_in`, `src/runtime/state.rs:6130`). C checks neither that the holder belongs to the region nor, for `asx_obligation_reserve` outside a poll, that there is a holder at all (`src/runtime/lifecycle.c:1366`; the missing holder is `bd-9kll.3.4` item 5)
+1. An obligation is reserved by a Running holder in an `Open` region. Rust requires the holder to belong to that region and rejects otherwise with `ErrorKind::TaskNotOwned` (`create_obligation_in`, `src/runtime/state.rs:6130`). C checks neither that the holder belongs to the region nor, for `asx_obligation_reserve` outside a poll, that there is a holder at all (`src/runtime/lifecycle.c:1416`; the missing holder is `bd-9kll.3.4` item 5)
 2. Obligations are associated with both the holder task and the region
-3. Cancellation does **not** resolve obligations. When the holder completes, each plain obligation it still holds is leaked (Rust `src/runtime/state.rs:8341`; C `src/runtime/lifecycle.c:584`); a tracked permit is dropped with it, its obligation aborted with Cancel (send permit) or committed (semaphore permit) as its Rust Drop does (C `src/runtime/lifecycle.c:562`)
-4. Outstanding obligations at region `Finalizing`: Rust leak-audits them once no task is left; C refuses to close (§1.5)
+3. Cancellation does **not** resolve obligations. When the holder completes, each plain obligation it still holds is leaked (Rust `src/runtime/state.rs:8341`; C `src/runtime/lifecycle.c:590`); a tracked permit is dropped with it, its obligation aborted with Cancel (send permit) or committed (semaphore permit) as its Rust Drop does (C `src/runtime/lifecycle.c:568`)
+4. Outstanding obligations at region `Finalizing`: both leak-audit them once no task is left, then close (§1.5)
 
 ### 6.3 Cancel-Region Ordering
 
@@ -601,14 +601,14 @@ C has two region-level checks: `asx_quiescence_check` (`src/runtime/quiescence.c
 
 ### 7.3 Quiescence and Runtime Shutdown
 
-The Rust runtime-shutdown sequence was not re-verified at `5e60b1c4c` (unverified). What was verified: a Rust region close command is a `cancel_request` with an optional shutdown budget followed by `advance_region_state` (`close_region_command_in_task_table`, `src/runtime/state.rs:5004`). C's structured shutdown of a subtree is `asx_region_drain` (`src/runtime/quiescence.c:297`):
+The Rust runtime-shutdown sequence was not re-verified at `5e60b1c4c` (unverified). What was verified: a Rust region close command is a `cancel_request` with an optional shutdown budget followed by `advance_region_state` (`close_region_command_in_task_table`, `src/runtime/state.rs:5004`). C's structured shutdown of a subtree is `asx_region_drain` (`src/runtime/quiescence.c:298`):
 
 1. Every `Open` region in the subtree moves to `Closing`, parents first
 2. Every live task of the subtree is cancelled with `ParentCancelled` through the task-only `asx_cancel_propagate` (the regions' own reasons are not set; C_REFINEMENT_MAP row `inv.cancel.propagates_down` notes)
 3. The scheduler runs over the subtree until no task is live (resumable after budget exhaustion)
-4. Regions finalize bottom-up (children before parents), draining cleanup stacks LIFO
+4. Regions finalize bottom-up (children before parents), draining cleanup stacks LIFO, then leak-auditing obligations still `Reserved`
 5. Timers and channels are not drained by this sequence (unverified for Rust)
-6. The call returns `ASX_OK`, or the first blocking status (`ASX_E_QUIESCENCE_TASKS_LIVE`, `ASX_E_OBLIGATIONS_UNRESOLVED`, …)
+6. The call returns `ASX_OK`, or the first blocking status (`ASX_E_QUIESCENCE_TASKS_LIVE`, `ASX_E_UNRESOLVED_OBLIGATIONS` when the PANIC leak policy fails the audit, …)
 
 ---
 
@@ -620,9 +620,9 @@ The Expected Result column gives C's actual status (verified in `src/runtime/lif
 
 | ID | Forbidden Behavior | Expected Result | Fixture Category |
 |----|-------------------|-----------------|------------------|
-| FB-001 | Create child task in non-`Open` region | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1150`), Rust `SpawnError::RegionClosed`; but C admits the spawn in `Finalizing` (`bd-9kll.3.5`). Fixtures: `spawn-into-cancelled-region-step-001`, `task-groups-refused-members-001`, `region-lifecycle-closed-child-spawn-001` | region-gate |
-| FB-002 | Create obligation in non-`Open` region | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1606`), Rust `ObligationAdmissionError::RegionClosed`. Fixture: `obligation-reserve-closed-region-must-fail-001` | region-gate |
-| FB-003 | Double-commit obligation | C `ASX_E_INVALID_TRANSITION` (`src/runtime/lifecycle.c:1426`); Rust `ObligationAlreadyResolved` (§3.3). Not reachable from DSL v2; C test `tests/invariant/lifecycle/test_lifecycle_legality.c` (`obligation_double_commit_rejected`) | obligation-linearity |
+| FB-001 | Create child task in non-`Open` region | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1200`), Rust `SpawnError::RegionClosed`; but C admits the spawn in `Finalizing` (`bd-9kll.3.5`). Fixtures: `spawn-into-cancelled-region-step-001`, `task-groups-refused-members-001`, `region-lifecycle-closed-child-spawn-001` | region-gate |
+| FB-002 | Create obligation in non-`Open` region | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1656`), Rust `ObligationAdmissionError::RegionClosed`. Fixture: `obligation-reserve-closed-region-must-fail-001` | region-gate |
+| FB-003 | Double-commit obligation | C `ASX_E_INVALID_TRANSITION` (`src/runtime/lifecycle.c:1476`); Rust `ObligationAlreadyResolved` (§3.3). Not reachable from DSL v2; C test `tests/invariant/lifecycle/test_lifecycle_legality.c` (`obligation_double_commit_rejected`) | obligation-linearity |
 | FB-004 | Double-abort obligation | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` | obligation-linearity |
 | FB-005 | Commit then abort obligation | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` (C test `obligation_commit_then_abort_rejected`) | obligation-linearity |
 | FB-006 | Abort then commit obligation | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` | obligation-linearity |
@@ -630,10 +630,10 @@ The Expected Result column gives C's actual status (verified in `src/runtime/lif
 | FB-008 | Skip intermediate state in region close | `ASX_E_INVALID_TRANSITION` | transition-legality |
 | FB-009 | Skip intermediate state in task lifecycle (e.g., Created->Cancelling, Running->Finalizing) | `ASX_E_INVALID_TRANSITION` | transition-legality |
 | FB-010 | Operate on stale/freed handle | C `ASX_E_STALE_HANDLE` when the slot was reused (generation mismatch), `ASX_E_NOT_FOUND` when the slot is free (`src/runtime/lifecycle.c:207`). Rust ids are typed arena ids | handle-safety |
-| FB-011 | Close region with unresolved obligations | C: the region stays `Finalizing` and `asx_region_finalize_one` returns `ASX_E_OBLIGATIONS_UNRESOLVED`. Rust: leak-audits them (Leaked under the leak policy) and closes. Drift, `bd-9kll.3.4` (§1.5) | obligation-leak |
+| FB-011 | Close region with unresolved obligations | Both leak-audit them (Leaked under the leak policy) and close (§1.5, `bd-9kll.3.4`) | obligation-leak |
 | FB-012 | Close region with active child tasks | The region stays `Closing` (or `Draining` if it has child regions) until its tasks complete. Fixtures: `region-lifecycle-close-cancels-children-001`, `region-lifecycle-draining-with-child-region-001` | region-drain |
 | FB-013 | Cancel already-completed task | Idempotent no-op returning OK (Rust `src/record/task.rs:705`; C `src/runtime/cancellation.c:162`). C's handle abort (`asx_task_abort_request`) of a task that ended `Cancelled` and is not yet joined strengthens its stored reason, following Rust's handle-side reason cache (`apply_or_defer_cancel_reason`, `src/runtime/task_handle.rs:470`; the terminal case is unverified) | cancel-idempotent |
-| FB-014 | Access region arena after `Closed` | C `ASX_E_REGION_CLOSED` (the only arena user is `asx_task_spawn_captured`, `src/runtime/lifecycle.c:1141`) | region-access |
+| FB-014 | Access region arena after `Closed` | C `ASX_E_REGION_CLOSED` (the only arena user is `asx_task_spawn_captured`, `src/runtime/lifecycle.c:1191`) | region-access |
 | FB-015 | Non-deterministic behavior in deterministic mode | Detected by the conformance oracle: every fixture compares the Foata-canonical trace and the exact lab dispatch order with Rust's (C_REFINEMENT_MAP row `inv.determinism.replayable`). The ghost determinism monitor (`src/core/ghost.c`) has no runtime call site | determinism |
 
 ### 8.2 Resource Exhaustion Forbidden Behaviors
@@ -674,7 +674,7 @@ Each transition rule and forbidden behavior maps to candidate fixture IDs for co
 | region-lifecycle-001 | Open -> Closing -> Draining -> Finalizing -> Closed (happy path) | Legal transition sequence | Partly: `region-lifecycle-close-cancels-children-001` (closes without Draining), `region-lifecycle-draining-with-child-region-001` (ends in Draining) |
 | region-lifecycle-002 | Open -> Closing with active children (drain required) | Drain blocking behavior | `region-lifecycle-close-cancels-children-001` |
 | region-lifecycle-003 | Nested region cascade close | Parent cancel propagates to children | `region-lifecycle-cancel-propagates-001` (a parent-child chain; no sibling regions) |
-| region-lifecycle-004 | Region close with unresolved obligations | Leak detection and reporting | None for an obligation still Reserved at close (C and Rust differ, §1.5); C test `tests/invariant/lifecycle/skeleton_test.c` (`region_drain_blocks_unresolved_obligations`) |
+| region-lifecycle-004 | Region close with unresolved obligations | Leak detection and reporting | No Rust fixture for an obligation still Reserved at close (both leak-audit it, §1.5); C tests `tests/invariant/lifecycle/skeleton_test.c` (`region_drain_leak_audits_unresolved_obligations`), `tests/unit/runtime/test_budget_obligation.c` (`region_close_*`) |
 | region-lifecycle-005 | Attempted backward transition (Closing -> Open) | Must fail with `ASX_E_INVALID_TRANSITION` | C test `tests/unit/core/test_transition.c` (`region_forbidden_backward`) |
 | region-lifecycle-006 | Attempted skip transition (Open -> Draining) | Must fail with `ASX_E_INVALID_TRANSITION` | C test `tests/unit/core/test_transition.c` (`region_forbidden_skip`) |
 | region-lifecycle-007 | Create task in non-Open region | Must fail with `ASX_E_REGION_CLOSED` (was `ASX_E_REGION_NOT_OPEN`) | `spawn-into-cancelled-region-step-001`, `region-lifecycle-closed-child-spawn-001` |
@@ -711,7 +711,7 @@ Each transition rule and forbidden behavior maps to candidate fixture IDs for co
 | obligation-lifecycle-005 | Double-abort | Must fail; C `ASX_E_INVALID_TRANSITION` | Same file (`obligation_double_abort_rejected`) |
 | obligation-lifecycle-006 | Commit then abort | Must fail; C `ASX_E_INVALID_TRANSITION` | Same file (`obligation_commit_then_abort_rejected`) |
 | obligation-lifecycle-007 | Abort then commit | Must fail; C `ASX_E_INVALID_TRANSITION` | Same file (`obligation_abort_then_commit_rejected`) |
-| obligation-lifecycle-008 | No Reserved obligation at region close | Region close blocked (C) or leak-audited (Rust) | C test `tests/invariant/lifecycle/skeleton_test.c` (`region_drain_blocks_unresolved_obligations`) |
+| obligation-lifecycle-008 | No Reserved obligation at region close | Leak-audited, then closed (C and Rust) | C tests `tests/invariant/lifecycle/skeleton_test.c` (`region_drain_leak_audits_unresolved_obligations`), `tests/unit/runtime/test_budget_obligation.c` (`region_close_leak_audits_obligations_still_reserved`) |
 | obligation-lifecycle-009 | Multiple obligations in single region | Independent lifecycle tracking | `obligation-abort-reasons-001` (three obligations) |
 | obligation-lifecycle-010 | Obligation in non-Open region | Must fail with `ASX_E_REGION_CLOSED` (was `ASX_E_REGION_NOT_OPEN`) | `obligation-reserve-closed-region-must-fail-001` |
 
@@ -809,12 +809,12 @@ Values are from `include/asx/asx_status.h`. "Never returned" means no code under
 | `ASX_E_REGION_CLOSED` | 301 | Spawn, child region, obligation or captured spawn refused by a region that is not admitting (§1.4) |
 | `ASX_E_OBLIGATION_ALREADY_RESOLVED` | 500 | Commit or abort of a resolved obligation (Rust `ObligationAlreadyResolved`) |
 | `ASX_E_OBLIGATION_LEAKED` | — | Does not exist in C |
-| `ASX_E_UNRESOLVED_OBLIGATIONS` | 501 | Fault status for a leak under the PANIC leak policy, routed to region containment (`src/runtime/lifecycle.c:590`); not returned by finalization |
+| `ASX_E_UNRESOLVED_OBLIGATIONS` | 501 | Fault status for a leak under the PANIC leak policy, routed to region containment (`src/runtime/lifecycle.c:596`); not returned by finalization |
 | `ASX_E_INCOMPLETE_CHILDREN` | 903 | Declared; never returned (`bd-udlh`) |
 | `ASX_E_STALE_HANDLE` | 1100 | Handle generation mismatch (use-after-free defense); `ASX_E_NOT_FOUND` (102) when the slot is free |
 | `ASX_E_RESOURCE_EXHAUSTED` | 1000 | Resource contract ceiling exceeded |
 | `ASX_E_TASKS_STILL_ACTIVE` | 900 | Declared; never returned (`bd-udlh`). Region checks return `ASX_E_QUIESCENCE_TASKS_LIVE` (905) |
-| `ASX_E_OBLIGATIONS_UNRESOLVED` | 901 | Region still has a Reserved obligation (`asx_region_finalize_one`, `asx_quiescence_check`; `src/runtime/quiescence.c:47`) |
+| `ASX_E_OBLIGATIONS_UNRESOLVED` | 901 | Region still has a Reserved obligation (`asx_quiescence_check`; `src/runtime/quiescence.c:53`) |
 | `ASX_E_REGIONS_NOT_CLOSED` | 902 | Declared; never returned. Region checks return `ASX_E_QUIESCENCE_NOT_REACHED` (904) |
 | `ASX_E_TIMERS_PENDING` | 801 | Declared; never returned |
 | `ASX_E_CHANNEL_NOT_DRAINED` | 703 | Declared; never returned |

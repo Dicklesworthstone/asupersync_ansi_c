@@ -632,6 +632,12 @@ int asx_task_cancel_dominates_internal(const asx_task_slot *t);
  * obligation leak under the PANIC policy. ASX_OK when none is pending. */
 asx_status asx_runtime_take_pending_fault_internal(void);
 
+/* Leak-audit a finalizing region whose tasks are gone: every obligation of
+ * it still Reserved is leaked as one batch under the leak policy (Rust's
+ * Finalizing-arm audit). ASX_OK, or ASX_E_UNRESOLVED_OBLIGATIONS when the
+ * PANIC policy routed the leaks through the region's containment. */
+asx_status asx_region_audit_leaks_internal(asx_region_id region);
+
 /* Scheduler block handshake with cross-thread wakers (waker.c). Call
  * prepare right before a blocking reactor wait: it returns 0 (do not
  * block) when a waker is already signaled, else marks the scheduler as

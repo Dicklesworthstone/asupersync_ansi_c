@@ -989,6 +989,8 @@ An obligation (send permit, ack, lease, I/O op, semaphore permit, transaction) i
   - `PANIC` routes the leak through region fault containment, so FAIL_FAST surfaces `ASX_E_UNRESOLVED_OBLIGATIONS` from the scheduler.
 - `leak_escalation` switches to a stricter response once the leak count reaches a threshold. As in Rust, the leak that reaches it is the first one escalated.
 
+A region's close runs in Rust's order: its cleanup stack drains (LIFO), then any obligation of the region still reserved (one with no holder, reserved outside a poll, for instance) is leaked under the same policy as one batch, and the region closes. Under `PANIC` the close fails fast with `ASX_E_UNRESOLVED_OBLIGATIONS` first.
+
 `asx_obligation_get_info` and `asx_obligation_leak_count` expose the results.
 
 ### Two-Phase Channel Protocol

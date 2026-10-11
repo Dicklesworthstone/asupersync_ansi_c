@@ -246,17 +246,18 @@ static asx_status asx_region_finalize_one(asx_region_id id, asx_region_slot *r) 
     }
 
     if (r->state == ASX_REGION_FINALIZING) {
-        st = asx_region_obligations_resolved(id);
-        if (st != ASX_OK) return st;
-
-        /* Ghost linearity monitor: check for leaked obligations before close */
-        (void)asx_ghost_check_obligation_leaks(id);
-
-        /* Drain cleanup stack in LIFO order before closing. Finalizers are
-         * allowed to spawn cleanup tasks in FINALIZING, so we must confirm
-         * the region is still task-free before sealing it CLOSED. */
+        /* Rust's Finalizing arm (runtime/state.rs:10246-10317): the
+         * finalizers run first (C: the cleanup stack, LIFO, synchronously).
+         * They may spawn cleanup tasks, so the region must still be
+         * task-free afterwards. Then the obligations still Reserved are
+         * leak-audited under the leak policy, and the region closes. */
         asx_cleanup_drain(&r->cleanup);
         if (r->task_count > 0u) return ASX_E_QUIESCENCE_TASKS_LIVE;
+
+        /* Ghost linearity monitor: report what is still unresolved. */
+        (void)asx_ghost_check_obligation_leaks(id);
+        st = asx_region_audit_leaks_internal(id);
+        if (st != ASX_OK) return st;
 
         st = asx_region_set_state(id, r, ASX_REGION_CLOSED);
         if (st != ASX_OK) return st;
@@ -288,7 +289,7 @@ void asx_region_advance_internal(asx_region_id id) {
         }
         if (r->poisoned || r->task_count > 0u) return;
         parent = r->parent_id;
-        if (asx_region_finalize_one(id, r) != ASX_OK) return; /* children or obligations remain */
+        if (asx_region_finalize_one(id, r) != ASX_OK) return; /* children remain, or PANIC leaks */
         if (r->state != ASX_REGION_CLOSED) return;
         id = parent;
     }
