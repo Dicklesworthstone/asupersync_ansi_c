@@ -82,6 +82,20 @@ else
     e2e_scenario "cli_smoke.unknown_cmd" "" "pass"
 fi
 
+# Scenario: an unknown output format is refused, not silently ignored
+if "$CLI_BIN" doctor --format=yaml >/dev/null 2>&1; then
+    e2e_scenario "cli_smoke.unknown_format" "should have exited non-zero" "fail"
+else
+    e2e_scenario "cli_smoke.unknown_format" "" "pass"
+fi
+
+# Scenario: an unknown option is refused
+if "$CLI_BIN" doctor --verbose >/dev/null 2>&1; then
+    e2e_scenario "cli_smoke.unknown_option" "should have exited non-zero" "fail"
+else
+    e2e_scenario "cli_smoke.unknown_option" "" "pass"
+fi
+
 # Scenario: no args exits 1
 if "$CLI_BIN" >/dev/null 2>&1; then
     e2e_scenario "cli_smoke.no_args" "should have exited non-zero" "fail"

@@ -36,7 +36,8 @@ static void print_usage(FILE *out) {
                  "  help             Print this help message\n"
                  "\n"
                  "Options:\n"
-                 "  --format=json    Output in JSON format (doctor only)\n"
+                 "  --format=json    Output in JSON format (doctor only; or --json)\n"
+                 "  --format=text    Output as text (the default)\n"
                  "  -h, --help       Print help\n");
 }
 
@@ -199,10 +200,23 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Check for global flags */
+    /* Global flags; anything else, an unknown --format=<x> included, is an
+     * error rather than silently ignored. */
     for (i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--format=json") == 0 || strcmp(argv[i], "--json") == 0) {
             json_fmt = 1;
+        } else if (strcmp(argv[i], "--format=text") == 0) {
+            json_fmt = 0;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage(stdout);
+            return 0;
+        } else if (strncmp(argv[i], "--format=", 9) == 0) {
+            fprintf(stderr, "asx: unknown format '%s' (text or json)\n", argv[i] + 9);
+            return 1;
+        } else {
+            fprintf(stderr, "asx: unknown option '%s'\n\n", argv[i]);
+            print_usage(stderr);
+            return 1;
         }
     }
 
