@@ -5,6 +5,7 @@
  */
 
 #include <asx/core/combinator2.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
@@ -386,6 +387,11 @@ asx_status asx_hedge_poll(void *user_data, asx_task_id self) {
             state->backup.poll_fn = state->backup_fn;
             state->backup.user_data = state->backup_data;
         } else {
+            /* The hedge delay wakes the owner, as the Sleep of Rust's hedge
+             * does, so the backup starts on time even while the primary is
+             * parked. */
+            asx_status wake_st = asx_task_arm_timer(self, asx_deadline_target(&state->deadline));
+            (void)wake_st; /* no runtime task: nothing to wake */
             return ASX_E_PENDING;
         }
     }

@@ -7,6 +7,7 @@
 #include "../../test_harness.h"
 #include <asx/core/combinator.h>
 #include <asx/core/combinator2.h>
+#include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/virtual_time.h>
 #include <asx/time/timer_wheel.h>
@@ -620,6 +621,52 @@ TEST(hedge_waits_for_its_delay_after_long_uptime) {
     MUST_OK(asx_runtime_set_hooks(&saved));
 }
 
+/* Parks its task and never completes. */
+static asx_status hedge_primary_parks(void *user_data, asx_task_id self) {
+    asx_status st = asx_task_park(self);
+    (void)user_data;
+    (void)st;
+    return ASX_E_PENDING;
+}
+
+typedef struct {
+    asx_hedge_state hs;
+    uint32_t polls;
+    asx_status result;
+} hedge_task;
+
+/* Drives a hedge from a task's poll; the task itself ends OK. */
+static asx_status poll_hedge_task(void *user_data, asx_task_id self) {
+    hedge_task *h = (hedge_task *)user_data;
+    h->polls++;
+    h->result = asx_hedge_poll(&h->hs, self);
+    return h->result == ASX_E_PENDING ? ASX_E_PENDING : ASX_OK;
+}
+
+TEST(hedge_delay_wakes_a_parked_owner) {
+    /* The primary parks its task; the hedge delay (5 ms) wakes the owner,
+     * as the Sleep of Rust's hedge does, and the backup then wins. Before,
+     * nothing woke the owner and the run would block. */
+    static hedge_task h;
+    asx_runtime rt;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    memset(&h, 0, sizeof(h));
+    MUST_OK(asx_hedge_init(&h.hs, hedge_primary_parks, NULL, poll_ok, NULL, 5000000ULL));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_hedge_task, &h, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(h.polls, 2u);
+    ASSERT_EQ(h.result, ASX_OK);
+    ASSERT_EQ(asx_hedge_winner(&h.hs), 1);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)5000000u);
+    asx_runtime_reset();
+}
+
 /* ================================================================== */
 /* MapReduce tests                                                     */
 /* ================================================================== */
@@ -764,6 +811,7 @@ int main(void) {
 
     /* Last: installs a clock hook */
     RUN_TEST(hedge_waits_for_its_delay_after_long_uptime);
+    RUN_TEST(hedge_delay_wakes_a_parked_owner);
 
     TEST_REPORT();
     return test_failures;
