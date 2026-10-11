@@ -141,6 +141,7 @@ void asx_runtime_reset(void) {
         g_tasks[i].cleanup_applied = 0;
         g_tasks[i].cleanup_polls_remaining = 0;
         g_tasks[i].cancel_unmaterialized = 0;
+        g_tasks[i].cx_reason_ahead = 0;
         g_tasks[i].detached = 0;
         g_tasks[i].next_free = ASX_SLOT_NONE;
         g_tasks[i].budget = asx_budget_infinite();
@@ -975,6 +976,7 @@ asx_status asx_region_close_poll(asx_task_id self, asx_region_id region) {
         if (st != ASX_OK) return st;
         t->region_wait = ASX_REGION_WAIT_CLOSE;
         t->region_wait_region = region;
+        t->region_wait_prio = t->lab_waker_prio;
     }
     st = asx_region_slot_lookup(region, &r);
     if (st == ASX_OK && r->state != ASX_REGION_CLOSED) {
@@ -1216,6 +1218,7 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     g_tasks[idx].member_seq = asx_task_next_member_seq_internal();
     g_tasks[idx].cleanup_polls_remaining = 0;
     g_tasks[idx].cancel_unmaterialized = 0;
+    g_tasks[idx].cx_reason_ahead = 0;
     memset(&g_tasks[idx].cancel_reason, 0, sizeof(g_tasks[idx].cancel_reason));
     /* Lab dispatch: a task the host creates is scheduled at once at
      * priority 0, as the Rust lab driver does (run.rs:1648); one spawned

@@ -693,6 +693,23 @@ Closed (each verified by a fixture that now matches):
 - **Cancel message and origin**: `asx_task_cancel_with_reason` and
   `asx_region_cancel` take a whole reason; budget cancels are attributed to
   the task and stamped (`budget-poll-quota-exhaustion-001`).
+- **A budget cancel on a cancelled task reaches its Cx only** (fuzz
+  findings gen-113-192, gen-125-92): the lab's poll-quota check before a
+  poll, or a masked checkpoint, strengthens the Cx's reason; the record
+  keeps the reason and cleanup budget of the request it holds until a
+  checkpoint acknowledges, which reconciles them
+  (`reconcile_checkpoint_cancel`, `record/task.rs:1096-1153`), a later
+  request is strengthened by the Cx's reason (`:716-722`), or the task
+  completes: its outcome takes the Cx's reason sampled at the terminal
+  poll (`classify_spawn_completion`, `runtime/task_handle.rs:173-200`). The
+  snapshot shows the record (`budget-quota-after-deadline-cancel-001`,
+  `budget-quota-cx-reason-reconciled-001`,
+  `budget-quota-cx-reason-at-completion-001`).
+- **A region close wakes with the waiter's first waker** (fuzz finding
+  gen-103-136): Rust's RegionQuiescence keeps every distinct waker it is
+  polled with and wakes them in order, so a waiter re-polled at another
+  priority is scheduled at the priority of its first close poll
+  (`cx/child_region.rs:560-571`; `region-close-wakes-first-waker-001`).
 - **`region.cancelled` and `cancel.requested` emission** and Rust's
   `cancel_request` semantics: `asx_region_cancel` begins closing the
   subtree, chains ParentCancelled causes to the immediate parent, and

@@ -396,6 +396,7 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->region_wait = ASX_REGION_WAIT_NONE;
     task->region_wait_status = ASX_OK;
     task->region_wait_region = ASX_INVALID_ID;
+    task->region_wait_prio = 0;
 }
 
 /* Rust classify_spawn_completion (task_handle.rs:173-202); see
@@ -509,7 +510,12 @@ void asx_region_wake_close_waiters_internal(asx_region_id id) {
         asx_task_slot *t = &g_tasks[i];
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
         if (t->alive && t->region_wait == ASX_REGION_WAIT_CLOSE && t->region_wait_region == id) {
-            asx_task_wake_slot_internal(t);
+            /* Lab dispatch: through the first waker the wait registered. */
+            if (asx_lab_dispatch_active() && !asx_task_is_terminal(t->state)) {
+                asx_lab_schedule(t, t->region_wait_prio);
+            } else {
+                asx_task_wake_slot_internal(t);
+            }
         }
     }
 }
@@ -764,6 +770,8 @@ static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_s
                                  uint32_t round) {
     asx_task_state from = t->state;
     asx_region_id region = t->region;
+    /* The outcome carries the Cx's reason (fuzz finding gen-145-163). */
+    asx_task_reconcile_cx_reason_internal(t);
     (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
     t->state = ASX_TASK_COMPLETED;
     if (asx_lab_dispatch_active()) asx_lab_task_retired_internal(t);

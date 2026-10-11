@@ -71,8 +71,31 @@ static int budget_same(const asx_budget *a, const asx_budget *b) {
            a->cost_quota == b->cost_quota && a->priority == b->priority;
 }
 
+/* The reason the task's Cx sees: the record's, or a stronger budget reason
+ * not yet reconciled into it. */
+static const asx_cancel_reason *task_cx_reason(const asx_task_slot *t) {
+    return t->cx_reason_ahead ? &t->cx_cancel_reason : &t->cancel_reason;
+}
+
+void asx_task_reconcile_cx_reason_internal(asx_task_slot *t) {
+    asx_budget cleanup;
+    if (!t->cx_reason_ahead) return;
+    /* reconcile_checkpoint_cancel (record/task.rs:1096-1153): the record's
+     * reason strengthened by the Cx's, the cleanup budgets met (a task
+     * already cleaning up takes the met budget). */
+    cleanup = asx_cancel_cleanup_budget(t->cx_cancel_reason.kind);
+    t->cx_reason_ahead = 0u;
+    t->cancel_reason = asx_cancel_strengthen(&t->cancel_reason, &t->cx_cancel_reason);
+    t->cleanup_budget = asx_budget_meet(&t->cleanup_budget, &cleanup);
+    if (t->cleanup_applied) t->budget = t->cleanup_budget;
+    if (asx_budget_polls(&t->cleanup_budget) < t->cleanup_polls_remaining) {
+        t->cleanup_polls_remaining = asx_budget_polls(&t->cleanup_budget);
+    }
+}
+
 void asx_task_materialize_cancel_internal(asx_task_slot *t) {
     asx_task_id id = asx_task_handle_for_slot((uint32_t)(t - g_tasks));
+    asx_task_reconcile_cx_reason_internal(t);
     if (!t->cancel_unmaterialized) return;
     t->cancel_unmaterialized = 0;
     /* Created or Running → CancelRequested in one step
@@ -144,6 +167,21 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
         t->cancel_unmaterialized = 0;
     }
 
+    /* A budget cancel the task raises once its record holds a request
+     * strengthens its Cx's reason only (the lab's poll-quota check,
+     * lab/runtime.rs:4661-4669, and a masked checkpoint write cx_inner);
+     * the record keeps its reason and cleanup budget until a checkpoint
+     * acknowledges it (asx_task_materialize_cancel_internal) or a request
+     * is strengthened by it (fuzz findings gen-113-192, gen-125-92). */
+    if (t->cancel_pending && !t->cancel_unmaterialized && source == ASX_CANCEL_SRC_BUDGET) {
+        asx_cancel_reason cx = asx_cancel_strengthen(task_cx_reason(t), reason);
+        if (!reason_same(&cx, &t->cancel_reason)) {
+            t->cx_cancel_reason = cx;
+            t->cx_reason_ahead = 1u;
+        }
+        return ASX_OK;
+    }
+
     if (t->cancel_pending) {
         /* Strengthen: the winning reason replaces the current one whole
          * (Rust CancelReason::strengthen). Every request's cleanup budget
@@ -151,12 +189,29 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
          * a task already cleaning up takes the met budget as its budget,
          * its quota refilled (record/task.rs:735-800). Strengthening
          * records no trace event: Rust has no strengthen event
-         * (state.rs:7794). */
-        asx_cancel_reason winner = asx_cancel_strengthen(&t->cancel_reason, reason);
+         * (state.rs:7794). A Cx reason ahead of the record first
+         * strengthens the request, its cleanup budget met in when it does
+         * (:716-722); the Cx then holds the record's new reason. */
+        asx_cancel_reason cx_before = *task_cx_reason(t);
+        asx_cancel_reason request = *reason;
+        asx_cancel_reason winner;
         asx_budget met;
-        int reason_changed = !reason_same(&winner, &t->cancel_reason);
+        int reason_changed;
+        int cx_changed;
         int budget_changed;
         cleanup = asx_cancel_cleanup_budget(reason->kind);
+        if (t->cx_reason_ahead) {
+            asx_cancel_reason folded = asx_cancel_strengthen(reason, &t->cx_cancel_reason);
+            if (!reason_same(&folded, reason)) {
+                asx_budget cx_cleanup = asx_cancel_cleanup_budget(t->cx_cancel_reason.kind);
+                cleanup = asx_budget_meet(&cleanup, &cx_cleanup);
+                request = folded;
+            }
+            t->cx_reason_ahead = 0u;
+        }
+        winner = asx_cancel_strengthen(&t->cancel_reason, &request);
+        reason_changed = !reason_same(&winner, &t->cancel_reason);
+        cx_changed = !reason_same(&winner, &cx_before);
         met = asx_budget_meet(&t->cleanup_budget, &cleanup);
         budget_changed = !budget_same(&met, &t->cleanup_budget);
         t->cleanup_budget = met;
@@ -170,12 +225,12 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
         /* Lab dispatch: a region cancel, handle abort or direct cancel that
          * changed anything schedules the task on the cancel lane at its
          * request's cleanup priority (RuntimeState::cancel_task reports
-         * changed && published, state.rs:3426-3448); a changed reason also
-         * reaches its cancel waker, as does a wake a budget cancel left due
-         * (record/task.rs:840-866). */
+         * changed && published, state.rs:3426-3448); a change of the Cx's
+         * reason also reaches its cancel waker, as does a wake a budget
+         * cancel left due (record/task.rs:840-866). */
         if (asx_lab_dispatch_active() && source != ASX_CANCEL_SRC_BUDGET) {
             if (reason_changed || budget_changed) asx_lab_schedule_cancel(t, cleanup.priority);
-            if (reason_changed || t->cancel_wakers_pending) {
+            if (cx_changed || t->cancel_wakers_pending) {
                 t->cancel_wakers_pending = 0u;
                 asx_lab_cancel_wake(t);
             }
@@ -521,7 +576,7 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
 
     st = asx_task_slot_lookup(self, &t);
     if (st != ASX_OK) return st;
-    before = t->cancel_reason;
+    before = *task_cx_reason(t);
     was_pending = t->cancel_pending;
 
     /* Budget deadline observed inline, between scheduler polls. Under lab
@@ -563,7 +618,7 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
      * waker due; it fires with the poll's acknowledgement, even when the
      * poll completes the task (cx.rs:2834-2840, record/task.rs:1227-1233,
      * lab/runtime.rs:5011). */
-    reason_changed = !was_pending || !reason_same(&before, &t->cancel_reason);
+    reason_changed = !was_pending || !reason_same(&before, task_cx_reason(t));
     if (budget_cancel && t->cancel_pending && reason_changed) t->cancel_wakers_pending = 1u;
 
     out->masked = 0;
@@ -583,12 +638,13 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
         out->masked = 1;
         out->phase = t->cancel_phase;
         out->polls_remaining = cleanup_polls_left(t);
-        out->kind = t->cancel_reason.kind;
+        out->kind = task_cx_reason(t)->kind;
         return ASX_OK;
     }
 
     /* A budget cancel the record has not taken: acknowledging reconciles
-     * it into the record first (Running → CancelRequested, no event). */
+     * it into the record first (Running → CancelRequested, no event; or a
+     * Cx reason ahead of the record strengthens it). */
     asx_task_materialize_cancel_internal(t);
 
     /* Transition CancelRequested → Cancelling on first checkpoint */
@@ -700,6 +756,17 @@ asx_status asx_task_get_cancel_reason(asx_task_id id, asx_cancel_reason *out) {
 
     if (!t->cancel_pending) return ASX_E_NOT_FOUND;
     *out = t->cancel_reason;
+    return ASX_OK;
+}
+
+asx_status asx_task_get_cx_cancel_reason_internal(asx_task_id id, asx_cancel_reason *out) {
+    asx_task_slot *t;
+    asx_status st;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
+    if (!t->cancel_pending) return ASX_E_NOT_FOUND;
+    *out = *task_cx_reason(t);
     return ASX_OK;
 }
 

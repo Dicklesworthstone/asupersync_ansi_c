@@ -1007,6 +1007,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     }
                     {
                         asx_task_state from = t->state;
+                        asx_task_reconcile_cx_reason_internal(t);
                         (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                         t->state = ASX_TASK_COMPLETED;
                         t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
@@ -1038,6 +1039,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
 
                 if (t->state == ASX_TASK_FINALIZING) {
                     asx_task_state from = t->state;
+                    asx_task_reconcile_cx_reason_internal(t);
                     (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                     t->state = ASX_TASK_COMPLETED;
                     t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
@@ -1118,6 +1120,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
 
                 if (poll_result == ASX_OK) {
                     asx_task_state from = t->state;
+                    asx_task_reconcile_cx_reason_internal(t);
                     (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                     t->state = ASX_TASK_COMPLETED;
                     if (t->cancel_pending) {
@@ -1158,6 +1161,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     int panicked = t->panicked;
                     int was_cancelled = !panicked && asx_task_cancel_dominates_internal(t);
                     if (!panicked && !was_cancelled) t->last_error = poll_result;
+                    asx_task_reconcile_cx_reason_internal(t);
                     (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                     t->state = ASX_TASK_COMPLETED;
                     if (t->cancel_pending) {

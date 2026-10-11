@@ -186,7 +186,7 @@ generation order.
 |---|---|---|
 | Driver task creation | `schedule(t, 0)` (twin_run run.rs:1648) | 0, whatever the budget |
 | `Cx::spawn` child | Admitted at the next step: `schedule(t, budget.priority)` | Inherited budget priority |
-| Waker wake (timer fire, channel, notify, join) | `schedule(t, waker.priority)`, on the ready lane | Priority of the poll that registered that waker: usually the task's last poll; for a join or a sleep timer, the poll that last polled it (see Join registrations, Timer registrations) |
+| Waker wake (timer fire, channel, notify, join) | `schedule(t, waker.priority)`, on the ready lane | Priority of the poll that registered that waker: usually the task's last poll; for a join or a sleep timer, the poll that last polled it (see Join registrations, Timer registrations); for a region close, the first poll that waited: RegionQuiescence keeps every distinct waker and wakes them in order, so the first schedules the task (`cx/child_region.rs:560-571`; `region-close-wakes-first-waker-001`) |
 | `yield_now` | Wake during the poll, then Pending | Current poll's priority |
 | Driver `cancel_task` | If the request changed the reason or cleanup budget (`cancel_task` returns `changed && published`, ST:3426-3448; a strengthening counts, not only a new cancel): `schedule_cancel(t, cleanup priority)`. Then the CancelTaskWaker: `schedule_cancel(t, waker priority)` | Cleanup, then last-poll priority |
 | Region cancel (`cancel_request`, ST:7811-7876) | For each task whose reason or cleanup budget changed: `schedule_cancel(t, request's cleanup priority)`, all tasks first. Then every task's CancelTaskWaker | As left |

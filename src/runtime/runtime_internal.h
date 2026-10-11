@@ -115,6 +115,15 @@ typedef struct {
      * (consume_checkpoint_cancel_ack, record/task.rs:1104-1170; bd-mex3).
      * cancel_pending and cancel_reason are set; the state is unchanged. */
     uint8_t cancel_unmaterialized;
+    /* The same for a budget cancel raised once the record already holds a
+     * request: Rust strengthens the Cx's reason only (the lab's poll-quota
+     * check, lab/runtime.rs:4661-4669; a masked checkpoint), so the record
+     * keeps its reason and cleanup budget until a checkpoint acknowledges
+     * (reconcile_checkpoint_cancel, record/task.rs:1096-1153) or a new
+     * request is strengthened by it (:716-722). Set when the Cx's reason
+     * (cx_cancel_reason) is stronger than cancel_reason. */
+    uint8_t cx_reason_ahead;
+    asx_cancel_reason cx_cancel_reason;
     uint32_t mask_depth; /* asx_task_mask() nesting; cancel deferred while > 0 */
     int detached;        /* 1 if the slot is released at completion */
     uint32_t next_free;  /* free-list link while !alive */
@@ -163,6 +172,12 @@ typedef struct {
     uint8_t region_wait;
     asx_status region_wait_status;
     asx_region_id region_wait_region;
+    /* The waker priority of the poll that started the close wait: Rust's
+     * RegionQuiescence keeps every distinct waker it is polled with
+     * (cx/child_region.rs:560-571) and wakes them in order, so the first
+     * one schedules the task; later ones find it scheduled (fuzz finding
+     * gen-103-136). */
+    uint8_t region_wait_prio;
     /* When the task joined its region's membership (spawn, or lab
      * admission for a child spawned in a poll): a region cancel visits its
      * tasks in this order, as Rust's insertion-ordered Membership. */
@@ -390,8 +405,22 @@ typedef enum {
 
 /* Move a budget cancel the record has not taken (cancel_unmaterialized)
  * into the record: Running → CancelRequested, no trace event (Rust
- * reconcile_checkpoint_cancel). No-op otherwise. */
+ * reconcile_checkpoint_cancel); likewise a Cx reason ahead of the record
+ * (cx_reason_ahead): the record's reason strengthened by it, the cleanup
+ * budgets met. No-op otherwise. */
 void asx_task_materialize_cancel_internal(asx_task_slot *t);
+
+/* Only the second half: a Cx reason ahead of the record strengthens it.
+ * Also at completion, where Rust's outcome takes the Cx's reason sampled
+ * at the terminal poll (classify_spawn_completion, runtime/
+ * task_handle.rs:173-200). */
+void asx_task_reconcile_cx_reason_internal(asx_task_slot *t);
+
+/* The task's cancel reason as its Cx sees it (Rust Cx::cancel_reason):
+ * the record's, or the stronger budget reason not yet reconciled into it.
+ * ASX_E_NOT_FOUND when no cancel is pending. asx_task_get_cancel_reason
+ * reads the record. */
+asx_status asx_task_get_cx_cancel_reason_internal(asx_task_id id, asx_cancel_reason *out);
 
 /* The core of every task cancel: a newly cancelled task takes `reason`
  * whole and records ASX_TRACE_CANCEL_REQUEST for a REGION source; an

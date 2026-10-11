@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/asx_config.h>
 #include <asx/time/sleep.h>
 #include <stdint.h>
@@ -49,7 +50,9 @@ asx_status asx_sleep_init_until(asx_sleep_state *state, asx_time until_ns) {
 static int sleep_observes_cancel(asx_task_id self) {
     asx_cancel_reason reason;
     asx_checkpoint_result cr;
-    if (asx_task_get_cancel_reason(self, &reason) != ASX_OK) return 0;
+    /* The Cx's reason, which a budget cancel may have strengthened ahead of
+     * the record (Rust reads cx.cancel_reason()). */
+    if (asx_task_get_cx_cancel_reason_internal(self, &reason) != ASX_OK) return 0;
     if (reason.kind == ASX_CANCEL_TIMEOUT || reason.kind == ASX_CANCEL_DEADLINE) return 0;
     if (asx_checkpoint(self, &cr) != ASX_OK) return 0;
     return cr.cancelled;

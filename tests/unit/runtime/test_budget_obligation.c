@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../../../src/runtime/runtime_internal.h"
 #include "test_harness.h"
 #include <asx/asx.h>
 #include <asx/runtime/rt.h>
@@ -186,7 +187,8 @@ typedef struct {
     uint32_t polls;
     asx_cancel_kind self_cancel; /* cancel kind it requests on poll 1 */
     int checkpoint;              /* checkpoint on poll 2 (else read the reason) */
-    asx_cancel_kind kind;        /* kind seen on poll 2 */
+    asx_cancel_kind kind;        /* kind seen on poll 2 (the Cx's) */
+    asx_cancel_kind record_kind; /* the record's on poll 2, without a checkpoint */
     int cancelled;               /* the poll-2 checkpoint reported a cancel */
 } spent_state;
 
@@ -206,8 +208,12 @@ static asx_status poll_spent(void *ud, asx_task_id self) {
         s->cancelled = cp.cancelled;
         s->kind = cp.kind;
     } else {
-        if (asx_task_get_cancel_reason(self, &reason) != ASX_OK) return ASX_E_INVALID_STATE;
+        if (asx_task_get_cx_cancel_reason_internal(self, &reason) != ASX_OK) {
+            return ASX_E_INVALID_STATE;
+        }
         s->kind = reason.kind;
+        if (asx_task_get_cancel_reason(self, &reason) != ASX_OK) return ASX_E_INVALID_STATE;
+        s->record_kind = reason.kind;
     }
     return ASX_OK;
 }
@@ -243,6 +249,9 @@ TEST(spent_poll_quota_strengthens_pending_cancel_at_checkpoint) {
 }
 
 TEST(spent_poll_quota_strengthens_pending_cancel_before_poll) {
+    /* The lab's check strengthens the Cx's reason only; the record keeps
+     * Deadline until a checkpoint acknowledges (fuzz findings gen-113-192,
+     * gen-125-92). */
     spent_state s;
     memset(&s, 0, sizeof(s));
     s.self_cancel = ASX_CANCEL_DEADLINE;
@@ -250,6 +259,7 @@ TEST(spent_poll_quota_strengthens_pending_cancel_before_poll) {
     run_spent(&s, 1u);
     ASSERT_EQ(s.polls, 2u);
     ASSERT_EQ(s.kind, ASX_CANCEL_POLL_QUOTA);
+    ASSERT_EQ(s.record_kind, ASX_CANCEL_DEADLINE);
 }
 
 TEST(spent_poll_quota_keeps_a_stronger_pending_cancel) {
