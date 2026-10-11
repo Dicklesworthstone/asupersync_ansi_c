@@ -20,6 +20,17 @@ static asx_runtime g_rt;
 static void setup_runtime(void) { MUST_OK(asx_runtime_init_default(&g_rt)); }
 static void teardown_runtime(void) { asx_runtime_reset(); }
 
+/* On the runtime's virtual clock (default stub hooks) even in live POSIX
+ * builds, where asx_runtime_init_default installs a real one: for tests
+ * that assert virtual time. */
+static void setup_virtual_runtime(void) {
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_runtime_config_init(&cfg);
+    MUST_OK(asx_runtime_hooks_init(&hooks));
+    MUST_OK(asx_runtime_init(&g_rt, &cfg, &hooks));
+}
+
 /* ------------------------------------------------------------------ */
 /* Test poll functions                                                  */
 /* ------------------------------------------------------------------ */
@@ -625,7 +636,7 @@ TEST(race_timeout_wakes_a_parked_owner_at_its_deadline) {
     asx_task_id t;
     asx_budget budget;
 
-    setup_runtime();
+    setup_virtual_runtime();
     MUST_OK(asx_race_timeout_init(&rts, 5000000u));
     MUST_OK(asx_race_timeout_add(&rts, poll_park_forever, NULL));
     memset(&c, 0, sizeof(c));

@@ -708,11 +708,17 @@ TEST(hedge_delay_wakes_a_parked_owner) {
      * nothing woke the owner and the run would block. */
     static hedge_task h;
     asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
     asx_region_id r;
     asx_task_id t;
     asx_budget budget;
 
-    MUST_OK(asx_runtime_init_default(&rt));
+    /* The virtual clock (default stub hooks) even in live POSIX builds,
+     * where asx_runtime_init_default installs a real one. */
+    asx_runtime_config_init(&cfg);
+    MUST_OK(asx_runtime_hooks_init(&hooks));
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
     memset(&h, 0, sizeof(h));
     MUST_OK(asx_hedge_init(&h.hs, hedge_primary_parks, NULL, poll_ok, NULL, 5000000ULL));
     ASSERT_EQ(asx_region_open(&r), ASX_OK);
