@@ -273,30 +273,49 @@ TEST(spent_poll_quota_keeps_a_stronger_pending_cancel) {
     ASSERT_EQ(s.kind, ASX_CANCEL_SHUTDOWN);
 }
 
-TEST(cost_quota_exhaustion_cancels_with_cost_budget) {
+TEST(cost_quota_spent_to_zero_cancels_at_the_next_checkpoint) {
     asx_region_id r;
     asx_task_id t;
     probe_state p;
     asx_budget tb;
     asx_budget run;
-    asx_budget left;
 
+    /* 10 -> 5 -> 0: the checkpoint of the third poll finds the cost quota
+     * spent to exactly 0 and cancels with COST_BUDGET (Cx::checkpoint,
+     * cx/cx.rs:3145). */
     setup();
     memset(&p, 0, sizeof(p));
-    p.cost = 4u;
+    p.cost = 5u;
     ASSERT_EQ(asx_region_open(&r), ASX_OK);
     tb = asx_budget_infinite();
     tb.cost_quota = 10u;
     ASSERT_EQ(asx_task_spawn_with_budget(r, poll_probe, &p, &tb, &t), ASX_OK);
     run = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
-    /* 10 -> 6 -> 2, third charge (4 > 2) fails and cancels. */
-    ASSERT_TRUE(p.cost_exhausted);
+    ASSERT_FALSE(p.cost_exhausted);
     ASSERT_TRUE(p.saw_cancel);
     ASSERT_EQ(p.kind, ASX_CANCEL_COST_BUDGET);
-    ASSERT_EQ(p.polls, 4u);
+    ASSERT_EQ(p.polls, 3u);
+}
+
+TEST(cost_charge_the_quota_cannot_cover_is_refused_and_cancels_nothing) {
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget tb;
+    asx_budget left;
+    asx_cancel_reason reason;
+
+    /* Rust's Budget::consume_cost (types/budget.rs:596-625): refused, the
+     * quota unchanged, and no cancel (a later checkpoint finds 2, not 0). */
+    setup();
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    tb = asx_budget_infinite();
+    tb.cost_quota = 2u;
+    ASSERT_EQ(asx_task_spawn_with_budget(r, poll_complete, NULL, &tb, &t), ASX_OK);
+    ASSERT_EQ(asx_task_consume_cost(t, 3u), ASX_E_COST_QUOTA_EXHAUSTED);
     ASSERT_EQ(asx_task_get_budget(t, &left), ASX_OK);
     ASSERT_EQ(left.cost_quota, (uint64_t)2u);
+    ASSERT_NE(asx_task_get_cancel_reason(t, &reason), ASX_OK);
 }
 
 TEST(consume_cost_rejects_stale_handle) {
@@ -921,7 +940,8 @@ int main(void) {
     RUN_TEST(spent_poll_quota_strengthens_pending_cancel_at_checkpoint);
     RUN_TEST(spent_poll_quota_strengthens_pending_cancel_before_poll);
     RUN_TEST(spent_poll_quota_keeps_a_stronger_pending_cancel);
-    RUN_TEST(cost_quota_exhaustion_cancels_with_cost_budget);
+    RUN_TEST(cost_quota_spent_to_zero_cancels_at_the_next_checkpoint);
+    RUN_TEST(cost_charge_the_quota_cannot_cover_is_refused_and_cancels_nothing);
     RUN_TEST(consume_cost_rejects_stale_handle);
     RUN_TEST(spawned_child_inherits_the_quota_until_the_cleanup_phase_starts);
     RUN_TEST(spawn_budget_from_a_task_keeps_its_priority_and_clamps_the_rest);

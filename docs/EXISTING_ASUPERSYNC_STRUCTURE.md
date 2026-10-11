@@ -206,7 +206,7 @@ If item 3 fails, Rust leak-audits the Reserved obligations (once no task is left
 |-----------|---------------|----------------|
 | Create child task | Rust: `Open` for normal tasks (`src/record/region.rs:140`), `Open`/`Finalizing` for cleanup tasks (`src/record/region.rs:150`). C: `Open`/`Finalizing` for every spawn (`src/core/transition_tables.c:89`) | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1150`) |
 | Create child region | `Open` | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:867`) |
-| Create obligation | `Open` | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1605`) |
+| Create obligation | `Open` | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1606`) |
 | Resolve obligation | `Open`, `Closing`, `Draining`, `Finalizing` | N/A while Reserved. Rust rejects a resolve after the region is finalized (`ErrorKind::RegionFinalized`, `src/runtime/obligation_table.rs:569`) |
 | Access arena | Not `Closed` | C `ASX_E_REGION_CLOSED` (only user: `asx_task_spawn_captured`, `src/runtime/lifecycle.c:1141`) |
 | Query status | Any | Fails only on a bad handle |
@@ -313,7 +313,7 @@ Rust `ObligationState`: `src/record/obligation.rs:192`. C `asx_obligation_state`
 |------|----|---------|----------------|
 | `Reserved` | `Committed` | Rust `commit_obligation` (`src/runtime/state.rs:6534`); C `asx_obligation_commit()` (`src/runtime/lifecycle.c:1416`) | Fulfilled; region pending count drops. The spec's holder-only precondition is not checked by C (row `rule.obligation.commit`, Partial) |
 | `Reserved` | `Aborted` | Rust `abort_obligation` (`src/runtime/state.rs:6745`); C `asx_obligation_abort()` / `asx_obligation_abort_with_reason()` | Released; abort reason recorded |
-| `Reserved` | `Leaked` | The holder completes while holding it (Rust `src/runtime/state.rs:8341`; C `src/runtime/lifecycle.c:584`), unless it tracks a permit, which C drops with the holder as Rust drops the body's locals (`src/runtime/lifecycle.c:562`); or C `asx_obligation_drop` (`src/runtime/lifecycle.c:1744`); Rust also leak-audits what is still Reserved in a Finalizing region with no task left | Leak handled under the leak policy: Rust default Panic (`src/runtime/state.rs:2338`), C default LOG (`src/runtime/lifecycle.c:93`); recorded drift `bd-9kll.3.6` |
+| `Reserved` | `Leaked` | The holder completes while holding it (Rust `src/runtime/state.rs:8341`; C `src/runtime/lifecycle.c:584`), unless it tracks a permit, which C drops with the holder as Rust drops the body's locals (`src/runtime/lifecycle.c:562`); or C `asx_obligation_drop` (`src/runtime/lifecycle.c:1745`); Rust also leak-audits what is still Reserved in a Finalizing region with no task left | Leak handled under the leak policy: Rust default Panic (`src/runtime/state.rs:2338`), C default LOG (`src/runtime/lifecycle.c:93`); recorded drift `bd-9kll.3.6` |
 
 ### 5.3 Forbidden Transitions (Must-Fail)
 
@@ -551,7 +551,7 @@ Componentwise tightening (Rust `Budget::combine`/`meet`, `src/types/budget.rs:50
 | Predicate | Trigger | Behavior |
 |-----------|---------|----------|
 | Poll quota depletion | `poll_quota == 0` (Rust lab charges the poll before polling, `src/lab/runtime.rs:4664`) | Cancel with `PollQuota` kind; C `src/runtime/scheduler.c:780`, `src/runtime/cancellation.c:608` |
-| Cost quota depletion | Rust: the remaining cost quota is exactly 0 at a checkpoint (`Cx::checkpoint_budget_exhaustion`, `src/cx/cx.rs:3112`) | Cancel with `CostBudget` kind. C also cancels at once when a charge exceeds the remainder (`asx_task_consume_cost`, `src/runtime/lifecycle.c:1266`); open bead `bd-9kll.3.10` |
+| Cost quota depletion | Rust: the remaining cost quota is exactly 0 at a checkpoint (`Cx::checkpoint_budget_exhaustion`, `src/cx/cx.rs:3112`) | Cancel with `CostBudget` kind. C the same (`src/runtime/cancellation.c:651`; `budget-cost-quota-zero-001`). Rust has no task-level charge; C's `asx_task_consume_cost` (`src/runtime/lifecycle.c:1430`) is `Budget::consume_cost` on the task's budget: a charge the quota cannot cover is refused and cancels nothing |
 | Deadline expiration | `now >= deadline` | Cancel with `Deadline` kind: the budget-deadline timer stamps it with the deadline (`src/cx/cx.rs:357`), a checkpoint with `now` (`src/cx/cx.rs:3122`); C does the same under lab dispatch (`src/runtime/scheduler.c:224`, `src/runtime/cancellation.c:608`) |
 
 ### 8.5 Consume Semantics

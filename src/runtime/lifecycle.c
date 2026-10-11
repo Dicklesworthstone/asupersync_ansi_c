@@ -1431,10 +1431,11 @@ asx_status asx_task_consume_cost(asx_task_id self, uint64_t cost) {
     asx_task_slot *t;
     asx_status st = asx_task_slot_lookup(self, &t);
     if (st != ASX_OK) return st;
+    /* Rust's Budget::consume_cost (types/budget.rs:596-625): a charge the
+     * quota cannot cover is refused and changes nothing. The task is
+     * cancelled with COST_BUDGET only by a checkpoint that finds the quota
+     * spent to exactly 0 (Cx::checkpoint, cx/cx.rs:3145; bd-9kll.3.10). */
     if (asx_budget_consume_cost(&t->budget, cost)) return ASX_OK;
-    /* Cost quota cannot cover the charge: COST_BUDGET cancellation. */
-    st = asx_task_cancel_budget_internal(self, ASX_CANCEL_COST_BUDGET, asx_cancel_now_internal());
-    (void)st;
     return ASX_E_COST_QUOTA_EXHAUSTED;
 }
 

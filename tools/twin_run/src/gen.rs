@@ -565,8 +565,9 @@ fn budget(rng: &mut Rng) -> Value {
 }
 
 /// A poll quota, a deadline, or both, sometimes with a priority (which the
-/// lab schedules an admitted spawn at). A deadline of 0 is already due
-/// (Rust's `Some(Time::ZERO)`); the others land among the scenario's waits.
+/// lab schedules an admitted spawn at) or a cost quota. A deadline of 0 is
+/// already due (Rust's `Some(Time::ZERO)`); the others land among the
+/// scenario's waits.
 fn some_budget(rng: &mut Rng) -> Value {
     let kind = rng.below(3);
     let mut b = json!({});
@@ -583,6 +584,11 @@ fn some_budget(rng: &mut Rng) -> Value {
     }
     if rng.chance(30) {
         b["priority"] = json!(rng.below(256));
+    }
+    // Nothing charges cost in Rust: a quota of 0 cancels at the first
+    // checkpoint (CostBudget), any other only meets into children.
+    if rng.chance(12) {
+        b["cost_quota"] = json!(if rng.chance(60) { 0 } else { 5 });
     }
     b
 }

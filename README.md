@@ -41,7 +41,7 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->129<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
+  - `make conformance` runs <!-- fact:rust_fixtures -->130<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
   - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches, or is a recorded difference that names its bead.
@@ -948,7 +948,7 @@ Budgets are **enforced**, not advisory. Regions carry a budget that child region
 |---|---|---|
 | deadline | checked before every poll and at every checkpoint; a parked task arms its deadline as a timer, so it wakes up in order to be cancelled | `DEADLINE` |
 | poll quota | decremented per poll; at zero the task is cancelled | `POLL_QUOTA` |
-| cost quota | `asx_task_consume_cost(self, n)` charges abstract cost; an unaffordable charge cancels the task and returns `ASX_E_COST_QUOTA_EXHAUSTED` | `COST_BUDGET` |
+| cost quota | `asx_task_consume_cost(self, n)` charges abstract cost, as Rust's `Budget::consume_cost`: a charge the quota cannot cover is refused (`ASX_E_COST_QUOTA_EXHAUSTED`, nothing changes); a checkpoint that finds the quota spent to exactly 0 cancels the task | `COST_BUDGET` |
 
 ### Cancellation Protocol and Severity Lattice
 

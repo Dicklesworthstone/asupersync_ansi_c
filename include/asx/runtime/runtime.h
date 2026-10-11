@@ -272,8 +272,8 @@ ASX_API ASX_MUST_USE asx_status asx_task_spawn_captured(asx_region_id region,
  *   - deadline reached     -> cancel with ASX_CANCEL_DEADLINE (a parked
  *                             task is woken by a timer at the deadline);
  *   - poll quota used up   -> cancel with ASX_CANCEL_POLL_QUOTA;
- *   - cost quota exceeded  -> asx_task_consume_cost() cancels with
- *                             ASX_CANCEL_COST_BUDGET.
+ *   - cost quota spent     -> a checkpoint that finds it exactly 0
+ *                             cancels with ASX_CANCEL_COST_BUDGET.
  * Cancelled tasks then run their bounded cleanup as usual. Deadlines use
  * the runtime clock (virtual time in deterministic builds). The default
  * budget is asx_budget_infinite(): nothing is enforced.
@@ -394,11 +394,12 @@ ASX_API ASX_MUST_USE asx_status asx_task_get_budget(asx_task_id id, asx_budget *
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_task_get_cleanup_budget(asx_task_id id, asx_budget *out);
 
-/* Charge `cost` units against the task's cost quota. When the quota cannot
- * cover it, the task is cancelled with ASX_CANCEL_COST_BUDGET and
- * ASX_E_COST_QUOTA_EXHAUSTED is returned (the quota is left untouched).
- * Returns ASX_OK when charged, ASX_E_NOT_FOUND / ASX_E_STALE_HANDLE for
- * invalid handles. */
+/* Charge `cost` units against the task's cost quota, as Rust's
+ * Budget::consume_cost. When the quota cannot cover it, the charge is
+ * refused: ASX_E_COST_QUOTA_EXHAUSTED, the quota untouched, no cancel. A
+ * quota spent to exactly 0 cancels the task with ASX_CANCEL_COST_BUDGET at
+ * its next checkpoint. Returns ASX_OK when charged, ASX_E_NOT_FOUND /
+ * ASX_E_STALE_HANDLE for invalid handles. */
 ASX_API ASX_MUST_USE asx_status asx_task_consume_cost(asx_task_id self, uint64_t cost);
 
 /* Query the current state of a task.
