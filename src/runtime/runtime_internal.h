@@ -525,6 +525,10 @@ void asx_lab_entropy_first_poll_internal(asx_task_slot *t);
  * 1 and *out in [0, bound), or 0 when lab dispatch is off or the task has
  * no entropy (the caller decides deterministically then). bound > 0. */
 int asx_lab_entropy_index_internal(asx_task_slot *t, uint32_t bound, uint32_t *out);
+/* Rust's Cx::random_u64 (cx.rs:3585-3589) for task `self`: the task's
+ * stream under lab dispatch, else the runtime entropy hook. 1 and *out, or
+ * 0 when `self` is no live task (no Cx) or no entropy is available. */
+int asx_task_random_u64_internal(asx_task_id self, uint64_t *out);
 /* A cancel request's wake of the task's CancelTaskWaker; held back while a
  * region cancel batch is open. */
 void asx_lab_cancel_wake(asx_task_slot *t);

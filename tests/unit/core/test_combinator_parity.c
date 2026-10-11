@@ -8,6 +8,8 @@
 #include "../../test_harness.h"
 #include <asx/core/combinator.h>
 #include <asx/core/combinator2.h>
+#include <asx/runtime/rt.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
 
 static asx_status st_sink_;
@@ -96,7 +98,8 @@ TEST(race_timeout_multiple_first_wins) {
 
 TEST(retry_timeout_immediate_success) {
     asx_retry_timeout_state state;
-    MUST_OK(asx_retry_timeout_init(&state, poll_ok, NULL, 3, 1000000000ULL));
+    asx_retry_policy p = asx_retry_policy_immediate(4);
+    MUST_OK(asx_retry_timeout_init(&state, poll_ok, NULL, &p, 1000000000ULL));
     ASSERT_EQ(asx_retry_timeout_poll(&state, 1), ASX_OK);
     ASSERT_EQ(asx_retry_timeout_attempts(&state), 1u);
 }
@@ -104,10 +107,11 @@ TEST(retry_timeout_immediate_success) {
 TEST(retry_timeout_fail_then_succeed) {
     int count = 0;
     asx_retry_timeout_state state;
+    asx_retry_policy p = asx_retry_policy_immediate(4);
     asx_status st;
-    MUST_OK(asx_retry_timeout_init(&state, poll_fail_then_ok, &count, 3, 1000000000ULL));
+    MUST_OK(asx_retry_timeout_init(&state, poll_fail_then_ok, &count, &p, 1000000000ULL));
     /* The first attempt fails and the second, started in the same poll as
-     * Rust's zero-delay Retry starts it, succeeds. */
+     * Rust's Retry starts it with no delay, succeeds. */
     st = asx_retry_timeout_poll(&state, 1);
     ASSERT_EQ(st, ASX_OK);
     ASSERT_EQ(asx_retry_timeout_attempts(&state), 2u);
@@ -115,16 +119,61 @@ TEST(retry_timeout_fail_then_succeed) {
 
 TEST(retry_timeout_exhausted) {
     asx_retry_timeout_state state;
+    asx_retry_policy p = asx_retry_policy_immediate(1);
     asx_status st;
-    MUST_OK(asx_retry_timeout_init(&state, poll_fail, NULL, 0, 1000000000ULL));
+    MUST_OK(asx_retry_timeout_init(&state, poll_fail, NULL, &p, 1000000000ULL));
     st = asx_retry_timeout_poll(&state, 1);
     ASSERT_EQ(st, ASX_E_INVALID_STATE);
 }
 
 TEST(retry_timeout_null) {
-    ASSERT_EQ(asx_retry_timeout_init(NULL, poll_ok, NULL, 3, 1000), ASX_E_INVALID_ARGUMENT);
     asx_retry_timeout_state state;
-    ASSERT_EQ(asx_retry_timeout_init(&state, NULL, NULL, 3, 1000), ASX_E_INVALID_ARGUMENT);
+    asx_retry_policy p = asx_retry_policy_new();
+    ASSERT_EQ(asx_retry_timeout_init(NULL, poll_ok, NULL, NULL, 1000), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_retry_timeout_init(&state, NULL, NULL, NULL, 1000), ASX_E_INVALID_ARGUMENT);
+    p.max_attempts = 0u;
+    ASSERT_EQ(asx_retry_timeout_init(&state, poll_ok, NULL, &p, 1000), ASX_E_INVALID_ARGUMENT);
+}
+
+typedef struct {
+    asx_retry_timeout_state rt;
+    asx_status result;
+} retry_timeout_task;
+
+static asx_status poll_retry_timeout_task(void *user_data, asx_task_id self) {
+    retry_timeout_task *t = (retry_timeout_task *)user_data;
+    t->result = asx_retry_timeout_poll(&t->rt, self);
+    return t->result == ASX_E_PENDING ? ASX_E_PENDING : ASX_OK;
+}
+
+TEST(retry_timeout_expires_during_the_delay) {
+    /* Rust's timeout(retry(...)): the first attempt fails and the retry
+     * waits 100 ms; the 30 ms deadline wakes the owner and ends it timed
+     * out, the pending delay abandoned (no second attempt). */
+    static retry_timeout_task t;
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_region_id r;
+    asx_task_id id;
+    asx_budget budget;
+    asx_retry_policy p = asx_retry_policy_new();
+
+    /* The virtual clock, also in live builds. */
+    asx_runtime_config_init(&cfg);
+    MUST_OK(asx_runtime_hooks_init(&hooks));
+    MUST_OK(asx_runtime_init(&rt, &cfg, &hooks));
+    p.jitter = 0.0;
+    memset(&t, 0, sizeof(t));
+    MUST_OK(asx_retry_timeout_init(&t.rt, poll_fail, NULL, &p, 30000000ULL));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_retry_timeout_task, &t, &id), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(t.result, ASX_E_TIMED_OUT);
+    ASSERT_EQ(asx_retry_timeout_attempts(&t.rt), 2u); /* attempt 2's delay had begun */
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)30000000u);
+    asx_runtime_reset();
 }
 
 TEST(retry_timeout_null_attempts) { ASSERT_EQ(asx_retry_timeout_attempts(NULL), 0u); }
@@ -238,7 +287,7 @@ TEST(composition_retry_race) {
     MUST_OK(asx_race_add(&race, poll_ok, NULL));
     MUST_OK(asx_race_add(&race, poll_pending, NULL));
 
-    MUST_OK(asx_retry_init(&retry, asx_race_poll, &race, 3));
+    MUST_OK(asx_retry_init(&retry, asx_race_poll, &race, NULL));
     ASSERT_EQ(asx_retry_poll(&retry, 1), ASX_OK);
     ASSERT_EQ(asx_retry_attempts(&retry), 1u);
 }
@@ -297,6 +346,7 @@ int main(void) {
     RUN_TEST(retry_timeout_fail_then_succeed);
     RUN_TEST(retry_timeout_exhausted);
     RUN_TEST(retry_timeout_null);
+    RUN_TEST(retry_timeout_expires_during_the_delay);
     RUN_TEST(retry_timeout_null_attempts);
 
     /* Algebraic laws */

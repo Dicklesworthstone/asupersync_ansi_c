@@ -302,42 +302,6 @@ ASX_API asx_status asx_race_timeout_add(asx_race_timeout_state *state,
 /* Poll the race-with-timeout. Returns ASX_E_TIMED_OUT on deadline expiry. */
 ASX_API asx_status asx_race_timeout_poll(void *user_data, asx_task_id self);
 
-/* -------------------------------------------------------------------
- * Retry with timeout — retry with per-overall-operation deadline
- *
- * Retries up to max_retries on failure, as asx_retry (the next attempt
- * in the same poll; a cancel of the owner before an attempt, or an attempt
- * returning ASX_E_CANCELLED, ends it with ASX_E_CANCELLED). If the total
- * elapsed time exceeds timeout_ns, stops retrying and returns
- * ASX_E_TIMED_OUT.
- * ------------------------------------------------------------------- */
-
-typedef struct {
-    asx_combinator_poll_fn poll_fn;
-    void *user_data;
-    uint32_t max_retries;
-    uint32_t attempt;
-    asx_status last_error;
-    int done;
-    asx_status result;
-    asx_deadline deadline;
-    uint64_t timeout_ns;
-    int deadline_initialized;
-    int running; /* 1 while the current attempt is pending */
-    asx_combinator_branch inner;
-} asx_retry_timeout_state;
-
-/* Initialize a retry-with-timeout combinator. */
-ASX_API asx_status asx_retry_timeout_init(asx_retry_timeout_state *state,
-                                          asx_combinator_poll_fn poll_fn, void *user_data,
-                                          uint32_t max_retries, uint64_t timeout_ns);
-
-/* Poll the retry-with-timeout. Returns ASX_E_TIMED_OUT on overall deadline expiry. */
-ASX_API asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self);
-
-/* Get the number of attempts made so far. */
-ASX_API uint32_t asx_retry_timeout_attempts(const asx_retry_timeout_state *state);
-
 #ifdef __cplusplus
 }
 #endif

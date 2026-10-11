@@ -66,19 +66,22 @@ static asx_status poll_count(void *user_data, asx_task_id self) {
 /* ================================================================== */
 
 TEST(retry_success_first_try) {
+    /* The default policy: the first attempt has no delay. */
     asx_retry_state rs;
-    MUST_OK(asx_retry_init(&rs, poll_ok, NULL, 3));
+    MUST_OK(asx_retry_init(&rs, poll_ok, NULL, NULL));
     ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_OK);
     ASSERT_EQ(asx_retry_attempts(&rs), 1u);
+    ASSERT_EQ(asx_retry_total_delay_ns(&rs), (uint64_t)0u);
 }
 
 TEST(retry_fail_then_succeed) {
     asx_retry_state rs;
+    asx_retry_policy p = asx_retry_policy_immediate(6);
     int count = 0;
-    MUST_OK(asx_retry_init(&rs, poll_fail_n_then_ok, &count, 5));
+    MUST_OK(asx_retry_init(&rs, poll_fail_n_then_ok, &count, &p));
 
-    /* Two attempts fail and the third succeeds, all in one poll: Rust's
-     * zero-delay Retry starts the next attempt at once (retry.rs:928-940). */
+    /* Two attempts fail and the third succeeds, all in one poll: with no
+     * delay Rust's Retry starts the next attempt at once (retry.rs:928-940). */
     ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_OK);
     ASSERT_EQ(asx_retry_attempts(&rs), 3u);
     ASSERT_EQ(count, 3);
@@ -86,7 +89,8 @@ TEST(retry_fail_then_succeed) {
 
 TEST(retry_exhausted) {
     asx_retry_state rs;
-    MUST_OK(asx_retry_init(&rs, poll_fail, NULL, 2));
+    asx_retry_policy p = asx_retry_policy_immediate(3);
+    MUST_OK(asx_retry_init(&rs, poll_fail, NULL, &p));
 
     /* Three attempts fail in one poll: exhausted */
     ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_E_INVALID_STATE);
@@ -105,7 +109,7 @@ TEST(retry_stops_at_a_cancelled_attempt) {
     /* An attempt that ends cancelled ends the retry (retry.rs:945-948). */
     asx_retry_state rs;
     int count = 0;
-    MUST_OK(asx_retry_init(&rs, poll_cancelled_count, &count, 3));
+    MUST_OK(asx_retry_init(&rs, poll_cancelled_count, &count, NULL));
     ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_E_CANCELLED);
     ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_E_CANCELLED);
     ASSERT_EQ(count, 1);
@@ -143,11 +147,12 @@ TEST(retry_starts_no_attempt_once_its_owner_is_cancelled) {
     asx_region_id r;
     asx_task_id t;
     asx_budget budget;
+    asx_retry_policy p = asx_retry_policy_immediate(4);
     int count = 0;
 
     MUST_OK(asx_runtime_init_default(&runtime));
     memset(&rt, 0, sizeof(rt));
-    MUST_OK(asx_retry_init(&rt.rs, poll_cancel_owner_then_fail, &count, 3));
+    MUST_OK(asx_retry_init(&rt.rs, poll_cancel_owner_then_fail, &count, &p));
     ASSERT_EQ(asx_region_open(&r), ASX_OK);
     ASSERT_EQ(asx_task_spawn(r, poll_retry_task, &rt, &t), ASX_OK);
     budget = asx_budget_from_polls(100);
@@ -158,9 +163,10 @@ TEST(retry_starts_no_attempt_once_its_owner_is_cancelled) {
     asx_runtime_reset();
 }
 
-TEST(retry_zero_retries) {
+TEST(retry_single_attempt) {
     asx_retry_state rs;
-    MUST_OK(asx_retry_init(&rs, poll_fail, NULL, 0));
+    asx_retry_policy p = asx_retry_policy_immediate(1);
+    MUST_OK(asx_retry_init(&rs, poll_fail, NULL, &p));
     /* Only one attempt, no retries */
     ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_retry_attempts(&rs), 1u);
@@ -168,8 +174,9 @@ TEST(retry_zero_retries) {
 
 TEST(retry_with_pending_inner) {
     asx_retry_state rs;
+    asx_retry_policy p = asx_retry_policy_immediate(1);
     int count = 0;
-    MUST_OK(asx_retry_init(&rs, poll_pending_then_ok, &count, 0));
+    MUST_OK(asx_retry_init(&rs, poll_pending_then_ok, &count, &p));
     /* First poll: inner returns pending */
     ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_E_PENDING);
     /* Second poll: inner returns OK */
@@ -178,7 +185,263 @@ TEST(retry_with_pending_inner) {
 }
 
 TEST(retry_null_fails) {
-    ASSERT_EQ(asx_retry_init(NULL, poll_ok, NULL, 0), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_retry_init(NULL, poll_ok, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_retry_init(NULL, NULL, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(retry_policy_constructors_are_rusts) {
+    /* RetryPolicy::new and ::immediate (retry.rs:73-82, 147-155). */
+    asx_retry_policy p = asx_retry_policy_new();
+    ASSERT_EQ(p.max_attempts, 3u);
+    ASSERT_EQ(p.initial_delay_ns, (uint64_t)100000000u);
+    ASSERT_EQ(p.max_delay_ns, UINT64_C(30000000000));
+    ASSERT_TRUE(p.multiplier == 2.0);
+    ASSERT_TRUE(p.jitter == 0.1);
+    p = asx_retry_policy_immediate(0);
+    ASSERT_EQ(p.max_attempts, 1u); /* max(1) */
+    ASSERT_EQ(p.initial_delay_ns, (uint64_t)0u);
+    ASSERT_EQ(p.max_delay_ns, (uint64_t)0u);
+    ASSERT_TRUE(p.multiplier == 1.0 && p.jitter == 0.0);
+}
+
+TEST(retry_init_refuses_what_rust_validate_refuses) {
+    /* RetryPolicy::validate (retry.rs:158-170). */
+    asx_retry_state rs;
+    asx_retry_policy p;
+    double zero = 0.0;
+
+    p = asx_retry_policy_new();
+    p.max_attempts = 0;
+    ASSERT_EQ(asx_retry_init(&rs, poll_ok, NULL, &p), ASX_E_INVALID_ARGUMENT);
+    p = asx_retry_policy_new();
+    p.multiplier = 0.5;
+    ASSERT_EQ(asx_retry_init(&rs, poll_ok, NULL, &p), ASX_E_INVALID_ARGUMENT);
+    p = asx_retry_policy_new();
+    p.jitter = 1.5;
+    ASSERT_EQ(asx_retry_init(&rs, poll_ok, NULL, &p), ASX_E_INVALID_ARGUMENT);
+    p.jitter = -0.1;
+    ASSERT_EQ(asx_retry_init(&rs, poll_ok, NULL, &p), ASX_E_INVALID_ARGUMENT);
+    p.jitter = zero / zero;
+    ASSERT_EQ(asx_retry_init(&rs, poll_ok, NULL, &p), ASX_E_INVALID_ARGUMENT);
+    /* A NaN multiplier passes validate, as in Rust. */
+    p = asx_retry_policy_new();
+    p.multiplier = zero / zero;
+    ASSERT_EQ(asx_retry_init(&rs, poll_ok, NULL, &p), ASX_OK);
+}
+
+/* Golden delays printed by Rust's own calculate_delay and DetRng (the
+ * asupersync 5e60b1c4c source, retry.rs:201-294 and det_rng.rs, compiled
+ * standalone): the jitter, exponent and conversion edges. */
+typedef struct {
+    uint64_t initial_ns;
+    uint64_t max_ns;
+    double multiplier;
+    double jitter;
+    uint32_t attempt;
+    int has_seed;
+    uint64_t seed;
+    uint64_t delay_ns;
+} retry_delay_golden;
+
+TEST(retry_policy_delay_matches_rust_calculate_delay) {
+    static const retry_delay_golden g[] = {
+        {100000000u, UINT64_C(30000000000), 2.0, 0.1, 0, 0, 0, 0u},
+        {100000000u, UINT64_C(30000000000), 2.0, 0.1, 1, 0, 0, 100000000u},
+        {100000000u, UINT64_C(30000000000), 2.0, 0.1, 5, 0, 0, 1600000000u},
+        {100000000u, UINT64_C(30000000000), 2.0, 0.1, 1, 1, 0, 100000000u},
+        {100000000u, UINT64_C(30000000000), 2.0, 0.1, 1, 1, UINT64_MAX, 108597941u},
+        {100000000u, UINT64_C(30000000000), 2.0, 0.1, 4, 1, UINT64_MAX, 868783529u},
+        {100000000u, UINT64_C(30000000000), 2.0, 0.1, 4, 1, UINT64_C(0x5555555555555555),
+         876823608u},
+        {100000000u, UINT64_C(30000000000), 2.0, 0.1, 4, 1, 123456789u, 800572895u},
+        {100000000u, UINT64_C(30000000000), 2.0, 0.1, 1, 1, UINT64_C(0xDEADBEEF), 102178590u},
+        {100000000u, UINT64_C(30000000000), 2.0, 0.1, 2000, 1, 7u, UINT64_C(30000000001)},
+        {100000000u, UINT64_C(30000000000), 2.0, 0.1, 2000, 0, 0, UINT64_C(30000000000)},
+        {5000000u, UINT64_C(30000000000), 1.0, 0.0, 70, 0, 0, 5000000u},
+        {0u, UINT64_C(30000000000), 2.0, 0.5, 1025, 1, 9u, 0u},
+        {UINT64_C(1) << 60, UINT64_MAX, 1.5, 0.5, 3, 1, 99u, UINT64_C(2594073392897801216)},
+        {UINT64_C(1) << 60, UINT64_MAX, 1.5, 0.5, 200, 1, 99u, UINT64_MAX},
+        {1234567u, UINT64_C(9000000000), 3.7, 1.0, 10, 1, UINT64_C(0xDEADBEEF),
+         UINT64_C(10960731619)},
+        {1234567u, UINT64_C(9000000000), 3.7, 1.0, 7, 1, 1u, UINT64_C(3167561155)},
+        {3u, UINT64_C(1000000000000), 1.1, 0.25, 37, 1, UINT64_C(0xFFFFFFFF00000000), 106u},
+    };
+    asx_retry_policy p;
+    double zero = 0.0;
+    uint32_t i;
+
+    for (i = 0; i < (uint32_t)(sizeof(g) / sizeof(g[0])); i++) {
+        p.max_attempts = 3u;
+        p.initial_delay_ns = g[i].initial_ns;
+        p.max_delay_ns = g[i].max_ns;
+        p.multiplier = g[i].multiplier;
+        p.jitter = g[i].jitter;
+        ASSERT_EQ(asx_retry_policy_delay(&p, g[i].attempt, g[i].has_seed ? &g[i].seed : NULL),
+                  g[i].delay_ns);
+    }
+    /* A NaN multiplier: every retry at max_delay. */
+    p.initial_delay_ns = 1000u;
+    p.max_delay_ns = 50000u;
+    p.multiplier = zero / zero;
+    p.jitter = 0.0;
+    ASSERT_EQ(asx_retry_policy_delay(&p, 2, NULL), (uint64_t)50000u);
+    ASSERT_EQ(asx_retry_policy_delay(NULL, 2, NULL), (uint64_t)0u);
+}
+
+/* Fails `fail_first` times (counting every attempt), then succeeds. */
+typedef struct {
+    uint32_t calls;
+    uint32_t fail_first;
+    asx_time at[8]; /* virtual time of each attempt */
+} retry_flaky;
+
+static asx_status poll_flaky(void *user_data, asx_task_id self) {
+    retry_flaky *f = (retry_flaky *)user_data;
+    (void)self;
+    if (f->calls < 8u) f->at[f->calls] = asx_runtime_virtual_now();
+    f->calls++;
+    return f->calls > f->fail_first ? ASX_OK : ASX_E_INVALID_STATE;
+}
+
+/* A runtime on the virtual clock (the default stub hooks), also in live
+ * POSIX builds, whose default runtime has a real clock. */
+static int init_virtual_runtime(asx_runtime *rt) {
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_runtime_config_init(&cfg);
+    if (asx_runtime_hooks_init(&hooks) != ASX_OK) return 0;
+    return asx_runtime_init(rt, &cfg, &hooks) == ASX_OK;
+}
+
+TEST(retry_backs_off_between_attempts) {
+    /* 1 ms, then 2 ms, then 4 ms before the retries (no jitter): each
+     * delay parks the owner on its sleep timer and the attempts start at
+     * 0, 1, 3 and 7 ms of virtual time (retry.rs:866-882, 888-911). */
+    static retry_task rt;
+    static retry_flaky f;
+    asx_runtime runtime;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+    asx_retry_policy p = asx_retry_policy_new();
+
+    ASSERT_TRUE(init_virtual_runtime(&runtime));
+    p.max_attempts = 5u;
+    p.initial_delay_ns = 1000000u;
+    p.max_delay_ns = 1000000000u;
+    p.jitter = 0.0;
+    memset(&rt, 0, sizeof(rt));
+    memset(&f, 0, sizeof(f));
+    f.fail_first = 3u;
+    MUST_OK(asx_retry_init(&rt.rs, poll_flaky, &f, &p));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_retry_task, &rt, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(rt.result, ASX_OK);
+    ASSERT_EQ(f.calls, 4u);
+    ASSERT_EQ(f.at[0], (asx_time)0u);
+    ASSERT_EQ(f.at[1], (asx_time)1000000u);
+    ASSERT_EQ(f.at[2], (asx_time)3000000u);
+    ASSERT_EQ(f.at[3], (asx_time)7000000u);
+    ASSERT_EQ(asx_retry_attempts(&rt.rs), 4u);
+    ASSERT_EQ(asx_retry_total_delay_ns(&rt.rs), (uint64_t)7000000u);
+    ASSERT_EQ(rt.polls, 4u); /* the first poll, then one wake per delay */
+    asx_runtime_reset();
+}
+
+TEST(retry_jitter_is_drawn_from_the_owner_entropy) {
+    /* The jitter seed is a draw from the owner's entropy: the same seeded
+     * runtime gives the same delays, within [d, d * (1 + jitter)]. */
+    static retry_task rt;
+    static retry_flaky f;
+    asx_runtime runtime;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+    asx_retry_policy p = asx_retry_policy_new();
+    uint64_t first_total = 0;
+    int run;
+
+    p.max_attempts = 3u;
+    p.initial_delay_ns = 1000000u;
+    p.max_delay_ns = 1000000000u;
+    p.jitter = 0.5;
+    for (run = 0; run < 2; run++) {
+        ASSERT_TRUE(init_virtual_runtime(&runtime));
+        memset(&rt, 0, sizeof(rt));
+        memset(&f, 0, sizeof(f));
+        f.fail_first = 2u;
+        MUST_OK(asx_retry_init(&rt.rs, poll_flaky, &f, &p));
+        ASSERT_EQ(asx_region_open(&r), ASX_OK);
+        ASSERT_EQ(asx_task_spawn(r, poll_retry_task, &rt, &t), ASX_OK);
+        budget = asx_budget_from_polls(100);
+        ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+        ASSERT_EQ(rt.result, ASX_OK);
+        ASSERT_EQ(f.calls, 3u);
+        /* 1 ms and 2 ms before jitter. */
+        ASSERT_TRUE(asx_retry_total_delay_ns(&rt.rs) >= (uint64_t)3000000u);
+        ASSERT_TRUE(asx_retry_total_delay_ns(&rt.rs) <= (uint64_t)4500000u);
+        ASSERT_EQ(f.at[2] - f.at[0], (asx_time)asx_retry_total_delay_ns(&rt.rs));
+        if (run == 0) {
+            first_total = asx_retry_total_delay_ns(&rt.rs);
+        } else {
+            ASSERT_EQ(asx_retry_total_delay_ns(&rt.rs), first_total);
+        }
+        asx_runtime_reset();
+    }
+    /* The seeded stream jitters at least one of the two delays. */
+    ASSERT_TRUE(first_total > (uint64_t)3000000u);
+}
+
+typedef struct {
+    asx_sleep_state sleep;
+    asx_task_id target;
+} retry_canceller;
+
+/* Sleeps, then cancels the target task. */
+static asx_status poll_cancel_after_sleep(void *user_data, asx_task_id self) {
+    retry_canceller *c = (retry_canceller *)user_data;
+    asx_status st = asx_sleep_poll(&c->sleep, self);
+    if (st != ASX_OK) return st;
+    return asx_task_cancel(c->target, ASX_CANCEL_USER);
+}
+
+TEST(retry_cancel_during_the_delay_starts_no_attempt) {
+    /* A cancel while the retry waits out its delay ends it cancelled at
+     * once (retry.rs:888-892): no second attempt, and the owner does not
+     * wait for the rest of the 100 ms delay. */
+    static retry_task rt;
+    static retry_flaky f;
+    static retry_canceller c;
+    asx_runtime runtime;
+    asx_region_id r;
+    asx_task_id t;
+    asx_task_id tc;
+    asx_budget budget;
+    asx_retry_policy p = asx_retry_policy_new();
+
+    ASSERT_TRUE(init_virtual_runtime(&runtime));
+    p.jitter = 0.0; /* 100 ms before the first retry */
+    memset(&rt, 0, sizeof(rt));
+    memset(&f, 0, sizeof(f));
+    memset(&c, 0, sizeof(c));
+    f.fail_first = 3u;
+    MUST_OK(asx_retry_init(&rt.rs, poll_flaky, &f, &p));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_retry_task, &rt, &t), ASX_OK);
+    MUST_OK(asx_sleep_init(&c.sleep, 10000000u));
+    c.target = t;
+    ASSERT_EQ(asx_task_spawn(r, poll_cancel_after_sleep, &c, &tc), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(rt.result, ASX_E_CANCELLED);
+    ASSERT_EQ(f.calls, 1u);
+    /* Rust's next_attempt counts attempt 2 when its delay begins. */
+    ASSERT_EQ(asx_retry_attempts(&rt.rs), 2u);
+    ASSERT_EQ(asx_retry_total_delay_ns(&rt.rs), (uint64_t)100000000u);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)10000000u);
+    asx_runtime_reset();
 }
 
 /* ================================================================== */
@@ -447,10 +710,11 @@ TEST(integration_join_with_retry_and_pipeline) {
     asx_retry_state retry;
     asx_pipeline_state pipeline;
     asx_join_state join;
+    asx_retry_policy p = asx_retry_policy_immediate(6);
     int retry_count = 0;
     int pipeline_count = 0;
 
-    MUST_OK(asx_retry_init(&retry, poll_fail_n_then_ok, &retry_count, 5));
+    MUST_OK(asx_retry_init(&retry, poll_fail_n_then_ok, &retry_count, &p));
     MUST_OK(asx_pipeline_init(&pipeline));
     MUST_OK(asx_pipeline_add_stage(&pipeline, poll_pending_then_ok, &pipeline_count));
     MUST_OK(asx_pipeline_add_stage(&pipeline, poll_ok, NULL));
@@ -530,9 +794,10 @@ TEST(adaptive_hedge_clamps_to_bounds) {
 /* Laws                                                                */
 /* ================================================================== */
 
-TEST(law_retry_zero_is_single) {
+TEST(law_retry_once_is_single) {
     asx_retry_state rs;
-    MUST_OK(asx_retry_init(&rs, poll_ok, NULL, 0));
+    asx_retry_policy p = asx_retry_policy_immediate(1);
+    MUST_OK(asx_retry_init(&rs, poll_ok, NULL, &p));
     ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_OK);
     ASSERT_EQ(asx_retry_attempts(&rs), 1u);
 }
@@ -847,9 +1112,15 @@ int main(void) {
     RUN_TEST(retry_exhausted);
     RUN_TEST(retry_stops_at_a_cancelled_attempt);
     RUN_TEST(retry_starts_no_attempt_once_its_owner_is_cancelled);
-    RUN_TEST(retry_zero_retries);
+    RUN_TEST(retry_single_attempt);
     RUN_TEST(retry_with_pending_inner);
     RUN_TEST(retry_null_fails);
+    RUN_TEST(retry_policy_constructors_are_rusts);
+    RUN_TEST(retry_init_refuses_what_rust_validate_refuses);
+    RUN_TEST(retry_policy_delay_matches_rust_calculate_delay);
+    RUN_TEST(retry_backs_off_between_attempts);
+    RUN_TEST(retry_jitter_is_drawn_from_the_owner_entropy);
+    RUN_TEST(retry_cancel_during_the_delay_starts_no_attempt);
 
     /* Bracket */
     RUN_TEST(bracket_success);
@@ -902,7 +1173,7 @@ int main(void) {
     RUN_TEST(adaptive_hedge_clamps_to_bounds);
 
     /* Laws */
-    RUN_TEST(law_retry_zero_is_single);
+    RUN_TEST(law_retry_once_is_single);
     RUN_TEST(law_bracket_identity);
     RUN_TEST(law_pipeline_single_identity);
     RUN_TEST(law_bulkhead_one_is_mutex_like);

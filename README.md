@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-1%2C993%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-1%2C997%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,993<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,997<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->1,993<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->1,997<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -1061,7 +1061,7 @@ A Rust parity mismatch is a semantic drift bug in the C port, not an acceptable 
 
 The poll-based combinators (join, race, select, timeout, first_ok, quorum, race_timeout, retry, retry_timeout, bracket, pipeline, hedge, map_reduce) share the `asx_combinator_poll_fn` interface: each is a poll state machine that returns `ASX_E_PENDING` until terminal, then a final status. This uniformity means combinators compose naturally: a retry combinator can wrap a race combinator, which itself contains timeout-wrapped branches. Bulkhead and rate-limit are non-blocking admission counters (`asx_bulkhead_try_enter`, `asx_rate_limit_try_acquire`), not poll functions.
 
-These combinators run their branches inline in the owner's task, like Rust's `Cx::race` / `Select` over futures, and like those they **drop** their losers rather than drain them. Once race, select or quorum is decided (or a race_timeout expires), every branch still pending is resolved as `ASX_E_CANCELLED` and never polled again; a branch holding resources must release them when its owner stops polling it. A race or select with no branches is pending until its owner task is cancelled. first_ok, retry and retry_timeout checkpoint the owner before each attempt and stop at a cancelled attempt; a failed retry attempt, like a completed pipeline stage, starts the next one in the same poll (retry has no backoff delay, unlike Rust's `RetryPolicy`). map_reduce runs every branch to completion and reduces their statuses, where Rust's executing map-reduce stops at the first failure. A timeout combinator that is still pending arms its owner's wake at the deadline, so it fires even while the inner work is parked. A branch that returns `ASX_E_CANCELLED` is Rust's `Outcome::Cancelled`: join ranks it above any other failure, and a quorum that can no longer be met returns `ASX_E_CANCELLED` if a branch did, else the first failed branch's status (Rust's `InsufficientSuccesses`); a quorum threshold above the branch count is `ASX_E_INVALID_ARGUMENT` before any branch runs.
+These combinators run their branches inline in the owner's task, like Rust's `Cx::race` / `Select` over futures, and like those they **drop** their losers rather than drain them. Once race, select or quorum is decided (or a race_timeout expires), every branch still pending is resolved as `ASX_E_CANCELLED` and never polled again; a branch holding resources must release them when its owner stops polling it. A race or select with no branches is pending until its owner task is cancelled. first_ok checkpoints the owner before each attempt and stops at a cancelled attempt, and a completed pipeline stage starts the next one in the same poll. retry is Rust's `retry` under a `RetryPolicy` (`asx_retry_policy`: attempts, initial and maximum delay, multiplier, jitter; `asx_retry_policy_new` gives Rust's defaults, `asx_retry_policy_immediate` no delay). Between attempts the owner sleeps on its traced timer for Rust's `calculate_delay` (`asx_retry_policy_delay`, bit-for-bit, the jitter seeded from the owner's entropy). A cancel before an attempt or during a delay ends the retry cancelled, and a cancelled attempt is not retried. retry_timeout is Rust's `timeout(retry(...))`. map_reduce runs every branch to completion and reduces their statuses, where Rust's executing map-reduce stops at the first failure. A timeout combinator that is still pending arms its owner's wake at the deadline, so it fires even while the inner work is parked. A branch that returns `ASX_E_CANCELLED` is Rust's `Outcome::Cancelled`: join ranks it above any other failure, and a quorum that can no longer be met returns `ASX_E_CANCELLED` if a branch did, else the first failed branch's status (Rust's `InsufficientSuccesses`); a quorum threshold above the branch count is `ASX_E_INVALID_ARGUMENT` before any branch runs.
 
 **Task groups** (`asx/runtime/task_group.h`) provide the full "losers are drained" guarantee over real spawned tasks, porting asupersync's `Scope::race_all` / `join_all` / `first_ok` / `quorum`. The owner drives the group with `asx_task_group_poll(&group, self)`; it parks, and members wake it as they complete. Once a race or quorum is decided, every unfinished member is cancelled with `RACE_LOST` and **awaited to completion** before the group resolves, so a loser's obligations, finalizers, and handles are resolved, never abandoned. Per mode, as in Rust:
 - `join_all` awaits its members one by one, in order, and the owner's cancel does not reach them (joins are uninterruptible).
@@ -2290,7 +2290,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->1,993<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->1,997<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

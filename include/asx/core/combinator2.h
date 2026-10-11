@@ -1,7 +1,8 @@
 /*
  * asx/core/combinator2.h — second-wave async control flow combinators
  *
- * Provides retry, bracket (resource-safe cleanup), pipeline (sequential
+ * Provides retry (with backoff, optionally under a deadline), bracket
+ * (resource-safe cleanup), pipeline (sequential
  * transform chain), bulkhead (concurrency limiter), and rate_limit
  * (token-bucket throttle) orchestration primitives.
  *
@@ -18,6 +19,8 @@
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
 #include <asx/core/combinator.h>
+#include <asx/time/deadline.h>
+#include <asx/time/sleep.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -25,39 +28,115 @@ extern "C" {
 #endif
 
 /* -------------------------------------------------------------------
- * Retry — poll inner with configurable retry on failure
+ * Retry — poll inner again after a failure, with backoff
  *
- * On failure, resets the inner branch and retries up to max_retries
- * times, the next attempt starting in the same poll (Rust's Retry with a
- * zero-delay policy; backoff delays are not ported). The owner's
- * checkpoint before each attempt ends the retry with ASX_E_CANCELLED, as
- * does an attempt that returns ASX_E_CANCELLED (it is not retried).
+ * Rust's retry(policy, AlwaysRetry, factory) (combinator/retry.rs:
+ * 786-967). Every pass first runs the owner's checkpoint. Before each
+ * retry the owner sleeps for asx_retry_policy_delay(policy, attempt - 1,
+ * seed), the seed a draw from the owner's entropy (its lab stream under
+ * lab dispatch, as Rust's Cx::random_u64), on its traced sleep timer
+ * (asx_sleep). A cancel seen before an attempt, during the sleep or right
+ * after it ends the retry ASX_E_CANCELLED (an abandoned sleep cancels its
+ * timer); an attempt already running continues. An attempt that returns
+ * ASX_E_CANCELLED is not retried; every other failure is retried while
+ * attempts remain. A zero delay starts the next attempt in the same poll.
  * ------------------------------------------------------------------- */
+
+/* Rust's RetryPolicy (retry.rs:47-170). */
+typedef struct {
+    uint32_t max_attempts;     /* attempts in all, the first included (>= 1) */
+    uint64_t initial_delay_ns; /* before the first retry */
+    uint64_t max_delay_ns;     /* cap on the exponential growth */
+    double multiplier;         /* growth per retry (>= 1.0) */
+    double jitter;             /* [0, 1]: up to this fraction of the delay is added */
+} asx_retry_policy;
+
+/* RetryPolicy::new(): 3 attempts, 100 ms initial delay, 30 s cap,
+ * multiplier 2, jitter 0.1. */
+ASX_API asx_retry_policy asx_retry_policy_new(void);
+
+/* RetryPolicy::immediate(max_attempts): no delay between attempts
+ * (max_attempts 0 counts as 1). */
+ASX_API asx_retry_policy asx_retry_policy_immediate(uint32_t max_attempts);
+
+/* Rust's calculate_delay (retry.rs:201-294): the delay before retry
+ * number `attempt` (1 = the first retry; 0 gives 0). initial_delay *
+ * multiplier^(attempt - 1), capped at max_delay; with jitter > 0 and a
+ * non-NULL jitter_seed, scaled by 1 + jitter * u, u the first draw of a
+ * DetRng seeded with *jitter_seed mapped to [0, 1]. Computed in IEEE
+ * double as Rust's f64 (powi by square-and-multiply). */
+ASX_API uint64_t asx_retry_policy_delay(const asx_retry_policy *policy, uint32_t attempt,
+                                        const uint64_t *jitter_seed);
+
+typedef enum {
+    ASX_RETRY_IDLE = 0,     /* the next attempt (or its delay) starts on the next pass */
+    ASX_RETRY_POLLING = 1,  /* an attempt is running */
+    ASX_RETRY_SLEEPING = 2, /* waiting out the delay before the next attempt */
+    ASX_RETRY_DONE = 3
+} asx_retry_phase;
 
 typedef struct {
     asx_combinator_poll_fn poll_fn;
     void *user_data;
-    uint32_t max_retries;        /* 0 = no retries (try once) */
-    uint32_t attempt;            /* current attempt (0-based) */
+    asx_retry_policy policy;
+    asx_retry_phase phase;
+    uint32_t attempt;            /* attempt number reached (Rust RetryState::attempt) */
+    uint64_t total_delay_ns;     /* delays taken before retries, summed */
     asx_status last_error;       /* last failure status */
-    int done;                    /* 1 when decided */
-    asx_status result;           /* final result */
-    int running;                 /* 1 while the current attempt is pending */
+    asx_status result;           /* final result (phase DONE) */
+    asx_sleep_state sleep;       /* the delay before the next attempt */
     asx_combinator_branch inner; /* current attempt branch */
 } asx_retry_state;
 
-/* Initialize a retry combinator with the given max retry count. */
+/* Initialize a retry of poll_fn under `policy` (NULL: asx_retry_policy_new).
+ * Returns ASX_E_INVALID_ARGUMENT for a NULL state or poll_fn, or a policy
+ * Rust's RetryPolicy::validate refuses: max_attempts 0, multiplier below
+ * 1.0, jitter outside [0, 1] (NaN included). */
 ASX_API asx_status asx_retry_init(asx_retry_state *state, asx_combinator_poll_fn poll_fn,
-                                  void *user_data, uint32_t max_retries);
+                                  void *user_data, const asx_retry_policy *policy);
 
 /* Poll function — compatible with asx_combinator_poll_fn. */
 ASX_API asx_status asx_retry_poll(void *user_data, asx_task_id self);
 
-/* Get the number of attempts made (1 = succeeded on first try). */
+/* The attempt number reached (Rust RetryState::attempt): an attempt
+ * counts once it starts or the delay before it begins, so a retry
+ * cancelled during its first delay reports 2 after one attempt ran. */
 ASX_API uint32_t asx_retry_attempts(const asx_retry_state *state);
+
+/* The delays taken before retries, summed (Rust RetryError::total_delay). */
+ASX_API uint64_t asx_retry_total_delay_ns(const asx_retry_state *state);
 
 /* Get the last error (meaningful if retry exhausted). */
 ASX_API asx_status asx_retry_last_error(const asx_retry_state *state);
+
+/* -------------------------------------------------------------------
+ * Retry with timeout — a retry under an overall deadline
+ *
+ * Rust's timeout(retry(...)): the deadline is fixed at the first poll;
+ * each poll past it ends the retry ASX_E_TIMED_OUT (an attempt in flight
+ * is abandoned, a pending delay's timer cancelled); before it, the retry
+ * is polled and, while pending, the owner is woken at the deadline.
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    asx_retry_state retry;
+    asx_deadline deadline;
+    uint64_t timeout_ns;
+    int deadline_initialized;
+    int done;
+    asx_status result;
+} asx_retry_timeout_state;
+
+/* Initialize a retry-with-timeout (policy as asx_retry_init). */
+ASX_API asx_status asx_retry_timeout_init(asx_retry_timeout_state *state,
+                                          asx_combinator_poll_fn poll_fn, void *user_data,
+                                          const asx_retry_policy *policy, uint64_t timeout_ns);
+
+/* Poll the retry-with-timeout. Returns ASX_E_TIMED_OUT on overall deadline expiry. */
+ASX_API asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self);
+
+/* The attempt number reached (as asx_retry_attempts). */
+ASX_API uint32_t asx_retry_timeout_attempts(const asx_retry_timeout_state *state);
 
 /* -------------------------------------------------------------------
  * Bracket — resource acquisition, use, and guaranteed cleanup
