@@ -140,6 +140,15 @@ calls `asx_codec_cross_codec_verify`. It is not evidence of Rust parity.
   'fixtures/rust_reference_v2/*.json' | wc -l`), and the CI "conformance" job
   of run 38051289151 printed 62 `PASS` lines. The same fixtures pass under
   QEMU (`PROFILE=EMBEDDED_ROUTER`) and -m32 in that run.
+- `tests/gates/test_oracle_mutants.sh` (run by `make test-gates`) shows the
+  corpus can fail: it builds the runner four times, each with one planted
+  semantic bug (`ASX_MUTANT_*` in the source: budget meet keeps the lower
+  priority, a cancel reason is never strengthened, the lab tie-break is
+  mirrored, a dropped obligation token commits instead of leaking), and
+  each must fail fixtures of its family (2026-10-11: 21, 11, 88 and 8
+  fixtures fail). A mutant on the holder-completion path was not caught:
+  the interpreter drops a task's remaining tokens itself before the task
+  completes, so no fixture reaches `asx_task_resolve_held_obligations_internal`.
 - `make fuzz-differential` (`Makefile:1590-1608`) generates DSL v2 scenarios
   with `twin_run generate`, captures them in Rust and compares the C run of
   each captured scenario the same way. CI job `fuzz-rust-differential` runs

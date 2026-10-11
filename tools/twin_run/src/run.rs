@@ -1289,6 +1289,33 @@ fn exec_sync(
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
         // Non-blocking oneshot, broadcast and watch sends (DSL §3.6).
+        "oneshot_is_closed" | "oneshot_is_ready" => {
+            let ch = str_field(step, "channel")?;
+            let end = if op == "oneshot_is_ready" {
+                "receiver"
+            } else {
+                str_field(step, "end")?
+            };
+            let value = match end {
+                "sender" => local
+                    .oneshot_tx
+                    .get(ch)
+                    .ok_or_else(|| format!("this task does not own the oneshot sender of {ch:?}"))?
+                    .is_closed(),
+                "receiver" => {
+                    let rx = local.oneshot_rx.get(ch).ok_or_else(|| {
+                        format!("this task does not own the oneshot receiver of {ch:?}")
+                    })?;
+                    if op == "oneshot_is_ready" {
+                        rx.is_ready()
+                    } else {
+                        rx.is_closed()
+                    }
+                }
+                other => return Err(format!("unknown oneshot end {other:?}")),
+            };
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Bool(value));
+        }
         "oneshot_send" => {
             let ch = str_field(step, "channel")?;
             let tx = local
@@ -1431,6 +1458,26 @@ async fn exec_step(
             }
         }
         // Blocking oneshot, broadcast and watch receives (DSL §3.6).
+        "oneshot_poll_closed" => {
+            // No Cx: a cancel does not end the wait (oneshot.rs:619, :1373).
+            let ch = str_field(step, "channel")?;
+            match str_field(step, "end")? {
+                "sender" => {
+                    let tx = local.oneshot_tx.get_mut(ch).ok_or_else(|| {
+                        format!("this task does not own the oneshot sender of {ch:?}")
+                    })?;
+                    std::future::poll_fn(|c| tx.poll_closed(c)).await;
+                }
+                "receiver" => {
+                    let rx = local.oneshot_rx.get_mut(ch).ok_or_else(|| {
+                        format!("this task does not own the oneshot receiver of {ch:?}")
+                    })?;
+                    std::future::poll_fn(|c| rx.poll_closed(c)).await;
+                }
+                other => return Err(format!("unknown oneshot end {other:?}")),
+            }
+            observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
+        }
         "oneshot_recv" => {
             let ch = str_field(step, "channel")?;
             let rx = local
@@ -2662,7 +2709,7 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
     }
 
     // Finish: run to quiescence with timer auto-advance.
-    lab.run_with_auto_advance();
+    let report = lab.run_with_auto_advance();
     // Before anything can fail the run: a failing scenario is the one to
     // diagnose.
     if let Some(raw) = raw {
@@ -2674,6 +2721,14 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
     let errors = std::mem::take(&mut lock(&shared).errors);
     if !errors.is_empty() {
         return Err(format!("harness errors: {}", errors.join("; ")));
+    }
+    // Exceeding lab.max_steps is a harness failure (DSL §2), as the C
+    // interpreter reports it; the lab itself just stops there.
+    if matches!(
+        report.termination,
+        asupersync::lab::AutoAdvanceTermination::StepLimitReached
+    ) {
+        return Err("lab.max_steps exceeded: run_with_auto_advance".to_string());
     }
 
     let schedule = lab
@@ -2875,9 +2930,9 @@ fn apply_driver_op(lab: &mut LabRuntime, shared: &SharedRef, op: &Value) -> RunR
                 max_obligations: limit("max_obligations")?,
                 ..RegionLimits::UNLIMITED
             };
-            if !lab.state.set_region_limits(region, limits) {
-                return Err("region_limits: the region is gone".to_string());
-            }
+            // A region already gone has nothing left to limit (DSL §4;
+            // fuzz gen-129-90, gen-136-92, gen-116-186).
+            let _applied = lab.state.set_region_limits(region, limits);
         }
         other => {
             return Err(format!(

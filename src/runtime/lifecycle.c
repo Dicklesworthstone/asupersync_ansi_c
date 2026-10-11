@@ -1734,6 +1734,12 @@ asx_status asx_obligation_drop(asx_obligation_id id) {
     uint32_t idx;
     asx_status st = asx_obligation_slot_lookup(id, &o);
     if (st != ASX_OK) return st;
+#ifdef ASX_MUTANT_OBLIGATION_DROP_COMMITS
+    /* Oracle self-test mutant (tests/gates/test_oracle_mutants.sh): a
+     * dropped token counts as committed, its leak lost. Never in a release
+     * build. */
+    return asx_obligation_commit(id);
+#endif
     st = asx_obligation_transition_check(o->state, ASX_OBLIGATION_LEAKED);
     if (st != ASX_OK) return st;
     idx = (uint32_t)(o - g_obligations);

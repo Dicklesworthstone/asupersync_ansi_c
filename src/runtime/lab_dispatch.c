@@ -571,7 +571,13 @@ static int lab_pop(lab_lane *lane, uint64_t r, uint32_t *out_slot, uint16_t *out
             ASX_CHECKPOINT_WAIVER("bounded: lane length <= LAB_LANE_CAP");
             if (lane->e[k].priority == top) group[n++] = k;
         }
+#ifdef ASX_MUTANT_SCHED_REVERSE_ORDER
+        /* Oracle self-test mutant (tests/gates/test_oracle_mutants.sh): the
+         * tie-break mirrored. Never in a release build. */
+        chosen = group[n - 1u - (uint32_t)(r % (uint64_t)n)];
+#else
         chosen = group[(uint32_t)(r % (uint64_t)n)];
+#endif
         e = lane->e[chosen];
         lab_remove_at(lane, chosen);
         if (lab_entry_live(&e)) {

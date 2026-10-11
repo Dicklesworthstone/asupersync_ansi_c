@@ -70,7 +70,14 @@ asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a, const asx_ca
     }
     if (!a) return *b;
     if (!b) return *a;
+#ifdef ASX_MUTANT_CANCEL_NO_STRENGTHEN
+    /* Oracle self-test mutant (tests/gates/test_oracle_mutants.sh): the
+     * current reason is never replaced. Never in a release build. */
+    (void)strengthen_replaces(a, b);
+    return *a;
+#else
     return strengthen_replaces(a, b) ? *b : *a;
+#endif
 }
 
 /* -------------------------------------------------------------------

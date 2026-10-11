@@ -362,6 +362,30 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
             }
             19 if !held.oneshot_used => {
                 if let Some((ch, sender, receiver)) = &world.oneshot {
+                    // Before using its end, at times a query or a closed
+                    // wait on it (a receiver's wait never ends once a value
+                    // is sent: a value is no close).
+                    let end = if me == sender {
+                        "sender"
+                    } else if me == receiver {
+                        "receiver"
+                    } else {
+                        ""
+                    };
+                    if !end.is_empty() {
+                        match rng.below(10) {
+                            0 => {
+                                return json!({"op": "oneshot_is_closed", "channel": ch, "end": end});
+                            }
+                            1 if end == "receiver" => {
+                                return json!({"op": "oneshot_is_ready", "channel": ch});
+                            }
+                            2 => {
+                                return json!({"op": "oneshot_poll_closed", "channel": ch, "end": end});
+                            }
+                            _ => {}
+                        }
+                    }
                     if me == sender {
                         held.oneshot_used = true;
                         held.sends += 1;

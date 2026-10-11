@@ -317,6 +317,9 @@ interpreter (C). Values are unsigned 64-bit integers; C channels carry
 | `close_receiver` | `channel` | `drop(rx)` (`:2122`) | `asx_channel_close_receiver` | no | ignored |
 | `oneshot_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/oneshot.rs:556`): reserves a SendPermit, traces `"oneshot::reserve creating permit"`, commits | `asx_oneshot_send(&tx, &cx, v)`: reserves the SendPermit obligation, traces, commits | no | Checked first: `ASX_E_CANCELLED`. |
 | `oneshot_recv` | `channel` | `rx.recv(&cx).await` (`oneshot.rs:1250`): traces `"oneshot::recv received value"` / `"…channel closed"` | `asx_oneshot_recv(rx, cx, &v)` until done | until sent or dropped | `ASX_E_CANCELLED`, tracing `"oneshot::recv cancelled while waiting"`. |
+| `oneshot_poll_closed` | `channel`, `end` (`sender` / `receiver`) | `poll_fn(\|c\| tx.poll_closed(c)).await` / the receiver's (`oneshot.rs:619`, `:1373`) | `asx_oneshot_poll_closed` / `asx_oneshot_receiver_poll_closed` until done | the sender's until the receiver is dropped; the receiver's until the channel is closed (sender gone, no permit, no value) | ignored: no `Cx`. The sender's wait is woken only by the receiver drop; the receiver's by the close and by the value received, never by a send. |
+| `oneshot_is_closed` | `channel`, `end` | `tx.is_closed()` (`:596`) / `rx.is_closed()` (`:1357`) | `asx_oneshot_sender_is_closed` / `asx_oneshot_receiver_is_closed` | no | ignored. Observes `ASX_OK` with a boolean `value`. |
+| `oneshot_is_ready` | `channel` (the receiver's) | `rx.is_ready()` (`:1350`) | `asx_oneshot_receiver_is_ready` | no | ignored. Observes `ASX_OK` with a boolean `value`. |
 | `broadcast_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/broadcast.rs:494`) | `asx_broadcast_send` | no | `ASX_E_CANCELLED` (`broadcast.rs:418`) |
 | `broadcast_recv` | `channel` | `rx.recv(&cx).await` (`:894`) | `asx_broadcast_recv(rx, cx, &v)` until done | while empty | `ASX_E_CANCELLED`. Lagged gives `ASX_E_LAGGED` with `value` = n. |
 | `watch_send` | `channel`, `value` | `tx.send(v)` (`channel/watch.rs:488`) | `asx_watch_send` | no | ignored (no `Cx`) |
@@ -407,7 +410,7 @@ idle and virtual time is advanced to `t` (§2).
 | `cancel_task` | `task` (a task's canonical name, vocabulary §2, so also a supervised child's generation `<supervisor>/<child>#<n>` once it started), `kind`, optional `message` | `lab.state.cancel_task(task, &reason)` (`state.rs:3429`), effects routed as above | `asx_task_cancel_with_origin(task, kind, task_region, ASX_INVALID_ID)` plus message |
 | `close_region` | `region`, `kind` | `cancel_request(region, kind)`, then `advance_region_state(region)` (`state.rs:10057`) after each idle until Closed | `asx_region_cancel(region, &reason, NULL)`, then `asx_scheduler_run_until_idle` until Closed |
 | `advance` | `ns` | `lab.advance_time(ns)` (`lab/runtime.rs:3076`; a forward jump, the only clock fault Rust offers) | `asx_lab_advance_time(ns)` |
-| `region_limits` | `region`, optional `max_tasks`, `max_children`, `max_obligations` | `lab.state.set_region_limits(region, RegionLimits{…})` (`state.rs:4103`; `record/region.rs:208`) | `asx_region_set_limits(region, &limits)`; an omitted or null field is `ASX_REGION_UNLIMITED` |
+| `region_limits` | `region`, optional `max_tasks`, `max_children`, `max_obligations` | `lab.state.set_region_limits(region, RegionLimits{…})` (`state.rs:4103`; `record/region.rs:208`); a region already gone has nothing to limit: no effect | `asx_region_set_limits(region, &limits)`; an omitted or null field is `ASX_REGION_UNLIMITED`; a region already gone: no effect |
 
 ### Reason attribution
 
@@ -670,6 +673,13 @@ Closed (each verified by a fixture that now matches):
   lag count), `asx_watch_changed_begin` / `asx_watch_poll_changed` with a
   Cx (the watch traces) (`oneshot-send-recv-001`, `broadcast-fanout-001`,
   `watch-changed-001`).
+- **Oneshot closed notifications**: `oneshot_poll_closed`,
+  `oneshot_is_closed`, `oneshot_is_ready` (bd-9kll.5.8): each end's wait is
+  woken only by what Rust's separate closed waker is woken by
+  (`oneshot-closed-001`; a cancelled send closes the channel,
+  `oneshot-closed-cancelled-send-001`; a send wakes no closed waiter,
+  `oneshot-closed-send-no-wake-001`). Generated scenarios use the three
+  steps before an end is used.
 
 - **Channel obligations and cancel traces**: `asx_channel_reserve` with a
   task Cx registers a `SendPermit` (committed by send, aborted `Explicit`

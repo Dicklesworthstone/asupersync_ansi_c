@@ -53,7 +53,13 @@ asx_budget asx_budget_meet(const asx_budget *a, const asx_budget *b) {
     result.deadline = min_deadline(a->deadline, b->deadline);
     result.poll_quota = min_u32(a->poll_quota, b->poll_quota);
     result.cost_quota = min_u64(a->cost_quota, b->cost_quota);
+#ifdef ASX_MUTANT_BUDGET_PRIORITY_MIN
+    /* Oracle self-test mutant (tests/gates/test_oracle_mutants.sh): the
+     * reversed priority semiring, min for max. Never in a release build. */
+    result.priority = (uint8_t)(a->priority + b->priority - max_u8(a->priority, b->priority));
+#else
     result.priority = max_u8(a->priority, b->priority);
+#endif
     return result;
 }
 

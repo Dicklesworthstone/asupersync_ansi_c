@@ -249,12 +249,12 @@ C's authority table is `src/core/transition_tables.c:65`.
 | From | To | Trigger | Preconditions | Postconditions |
 |------|----|---------|---------------|----------------|
 | `Reserved` | `Committed` | Rust `commit_obligation` (`src/runtime/state.rs:6534`); C `asx_obligation_commit` (`src/runtime/lifecycle.c:1704`) | Obligation `Reserved`. The spec also requires the caller to be the holder; Rust enforces that through the token-bound holder check, C does not check it (C_REFINEMENT_MAP row `rule.obligation.commit`, Partial) | Effect takes place; the region's pending count drops; C ghost monitor records the resolution |
-| `Reserved` | `Aborted` | Rust `abort_obligation` (`src/runtime/state.rs:6745`); C `asx_obligation_abort` / `asx_obligation_abort_with_reason` (`src/runtime/lifecycle.c:1755`, `src/runtime/lifecycle.c:1454`) | Obligation `Reserved` | Resource released, no effect; abort reason recorded |
+| `Reserved` | `Aborted` | Rust `abort_obligation` (`src/runtime/state.rs:6745`); C `asx_obligation_abort` / `asx_obligation_abort_with_reason` (`src/runtime/lifecycle.c:1761`, `src/runtime/lifecycle.c:1454`) | Obligation `Reserved` | Resource released, no effect; abort reason recorded |
 | `Reserved` | `Leaked` | The holder completes while holding it (Rust `audit_completion_obligation_leaks`, `src/runtime/state.rs:8341`; C `asx_task_resolve_held_obligations_internal`, `src/runtime/lifecycle.c:584`). A tracked permit (send or semaphore) is not leaked: C drops it with its holder, as Rust drops the body's locals, and its obligation resolves as that permit's Drop resolves it (`obligation_drop_permit`, `src/runtime/lifecycle.c:562`). Also: C `asx_obligation_drop` leaks at once (`src/runtime/lifecycle.c:1732`), as a dropped Rust token does; Rust's Finalizing leak audit (`src/runtime/state.rs:10271`) leaks what is still Reserved when no task is left | Holder Completed with the obligation still `Reserved` | Leak handled under the leak policy. Rust default is Panic (`src/runtime/state.rs:2338`); C default is LOG (`src/runtime/lifecycle.c:93`). RECOVER aborts with Error instead of marking Leaked, in both. The default's drift is recorded in C_REFINEMENT_MAP row `rule.obligation.leak` (`bd-9kll.3.6`) |
 
 ### 3.3 Forbidden Transitions (Must-Fail)
 
-The first extraction also listed `ASX_E_OBLIGATION_LEAKED`, which does not exist. A commit or abort of a non-`Reserved` obligation returns `ASX_E_OBLIGATION_ALREADY_RESOLVED` (`src/runtime/lifecycle.c:1717` for commit, `:1774` for abort), as Rust returns `ErrorKind::ObligationAlreadyResolved` (`src/runtime/obligation_table.rs:577`, `:630`), which `docs/CANONICAL_VOCABULARY_V2.md` §5 maps to that status. Until 2026-10-10 C returned `ASX_E_INVALID_TRANSITION` (bd-91rf). Dropping a resolved obligation (`asx_obligation_drop`, C-only) and the pure table check still return `ASX_E_INVALID_TRANSITION`. DSL v2 cannot reach this case (`docs/SCENARIO_DSL_V2.md` §5), so no fixture compares it.
+The first extraction also listed `ASX_E_OBLIGATION_LEAKED`, which does not exist. A commit or abort of a non-`Reserved` obligation returns `ASX_E_OBLIGATION_ALREADY_RESOLVED` (`src/runtime/lifecycle.c:1717` for commit, `:1780` for abort), as Rust returns `ErrorKind::ObligationAlreadyResolved` (`src/runtime/obligation_table.rs:577`, `:630`), which `docs/CANONICAL_VOCABULARY_V2.md` §5 maps to that status. Until 2026-10-10 C returned `ASX_E_INVALID_TRANSITION` (bd-91rf). Dropping a resolved obligation (`asx_obligation_drop`, C-only) and the pure table check still return `ASX_E_INVALID_TRANSITION`. DSL v2 cannot reach this case (`docs/SCENARIO_DSL_V2.md` §5), so no fixture compares it.
 
 | From | To | Expected Error | Rationale |
 |------|----|----------------|-----------|
@@ -314,7 +314,7 @@ Rust `CancelPhase` and its rank are at `src/types/cancel.rs:295` and `src/types/
 | `Finalizing` | 2 | `ASX_CANCEL_PHASE_FINALIZING` | Cleanup done; the task is running finalizers |
 | `Completed` | 3 | `ASX_CANCEL_PHASE_COMPLETED` | Task completed with a `Cancelled` outcome |
 
-**Note:** There is no `None` phase. Rust's `TaskRecord::cancel_witness` returns no witness while `cancel_epoch == 0` and none for a task that completed with a non-`Cancelled` outcome (`src/record/task.rs:1053`). The first witness of a stream must carry a non-zero epoch (`validate_initial`, `src/types/cancel.rs:369`). C creates a witness slot on the first cancel of a task (`asx_cancel_witness_create`, `src/core/cancel.c:114`, called from `src/runtime/cancellation.c:119`).
+**Note:** There is no `None` phase. Rust's `TaskRecord::cancel_witness` returns no witness while `cancel_epoch == 0` and none for a task that completed with a non-`Cancelled` outcome (`src/record/task.rs:1053`). The first witness of a stream must carry a non-zero epoch (`validate_initial`, `src/types/cancel.rs:369`). C creates a witness slot on the first cancel of a task (`asx_cancel_witness_create`, `src/core/cancel.c:121`, called from `src/runtime/cancellation.c:119`).
 
 ### 4.2 Legal Phase Transitions
 
@@ -323,7 +323,7 @@ Rust's `CancelWitness::validate_transition` (`src/types/cancel.rs:382`) accepts 
 | From | To | Trigger | Preconditions | Postconditions |
 |------|----|---------|---------------|----------------|
 | (initial) | `Requested` | First cancel request (T2/T4) | Target not terminal | Rust: `cancel_epoch` becomes non-zero. C: witness slot created in phase `Requested` |
-| `Requested` | `Requested` | Further request (T6) | Already CancelRequested | Strengthening only. C's `asx_cancel_witness_advance` is not called for it, and would reject a same-phase advance (`src/core/cancel.c:147`) |
+| `Requested` | `Requested` | Further request (T6) | Already CancelRequested | Strengthening only. C's `asx_cancel_witness_advance` is not called for it, and would reject a same-phase advance (`src/core/cancel.c:154`) |
 | `Requested` | `Cancelling` | Acknowledgement at an unmasked checkpoint (T7) | Mask depth 0 | Cleanup budget becomes the task's budget |
 | `Requested` | `Finalizing` | none | — | Rank-legal for the validator, but no runtime path produces it (Rust and C both forbid the task pair CancelRequested → Finalizing) |
 | `Requested` | `Completed` | Target completes before acknowledging (T8) | — | Outcome `Cancelled(reason)` (not the natural outcome; T8), so the final witness has phase `Completed`. A panic yields `Panicked` and no final witness |
@@ -336,7 +336,7 @@ Rust's `CancelWitness::validate_transition` (`src/types/cancel.rs:382`) accepts 
 
 ### 4.3 Forbidden Phase Transitions
 
-Phase transitions where `next.phase.rank() < prev.phase.rank()`. Rust reports `CancelWitnessError::PhaseRegression` (`src/types/cancel.rs:414`). C never returns `ASX_E_WITNESS_PHASE_REGRESSION` (declared, unused): `asx_cancel_witness_advance` returns `ASX_E_INVALID_TRANSITION` for any advance that does not strictly increase the phase, a repeated phase included (`src/core/cancel.c:147`). Recorded in `bd-9kll.3.7` ("Witness: no region or epoch; rejects a repeated phase").
+Phase transitions where `next.phase.rank() < prev.phase.rank()`. Rust reports `CancelWitnessError::PhaseRegression` (`src/types/cancel.rs:414`). C never returns `ASX_E_WITNESS_PHASE_REGRESSION` (declared, unused): `asx_cancel_witness_advance` returns `ASX_E_INVALID_TRANSITION` for any advance that does not strictly increase the phase, a repeated phase included (`src/core/cancel.c:154`). Recorded in `bd-9kll.3.7` ("Witness: no region or epoch; rejects a repeated phase").
 
 | From | To | Expected Error | Rationale |
 |------|----|----------------|-----------|
@@ -349,7 +349,7 @@ Phase transitions where `next.phase.rank() < prev.phase.rank()`. Rust reports `C
 
 **Note:** The cancellation protocol does NOT have a `None` phase state. In Rust, phase skips (e.g., `Requested` -> `Completed`) pass `validate_transition` because the rank does not decrease; C's advance also accepts a skip, since it only requires a strictly larger phase.
 
-**Additionally forbidden (Rust):** a witness pair whose reason severity decreases (`CancelWitnessError::ReasonWeakened`), or whose task, region or epoch differ (`TaskMismatch`, `RegionMismatch`, `EpochMismatch`). C has no witness-to-witness validator: its witness slot holds only an id, the phase and the reason (`src/core/cancel.c:91`), and the `ASX_E_WITNESS_*` codes are never returned.
+**Additionally forbidden (Rust):** a witness pair whose reason severity decreases (`CancelWitnessError::ReasonWeakened`), or whose task, region or epoch differ (`TaskMismatch`, `RegionMismatch`, `EpochMismatch`). C has no witness-to-witness validator: its witness slot holds only an id, the phase and the reason (`src/core/cancel.c:98`), and the `ASX_E_WITNESS_*` codes are never returned.
 
 ### 4.4 Cancellation Kinds (11 Variants with Severity Ladder)
 
@@ -384,7 +384,7 @@ Severities and cleanup budgets match Rust exactly: `CancelKind::severity` (`src/
 
 ### 4.5 Cancellation Witness Structure
 
-Rust's witness (`CancelWitness`, `src/types/cancel.rs:323`) carries the fields below. C's witness slot (`src/core/cancel.c:91`) holds only an id, the phase and the reason; it has no task, region or epoch field (`bd-9kll.3.7`).
+Rust's witness (`CancelWitness`, `src/types/cancel.rs:323`) carries the fields below. C's witness slot (`src/core/cancel.c:98`) holds only an id, the phase and the reason; it has no task, region or epoch field (`bd-9kll.3.7`).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -564,7 +564,7 @@ For deterministic scheduling and replay. The first extraction gave the plan's ke
 
 | Context | Tie-Break Key | Ordering |
 |---------|--------------|----------|
-| Ready queue (Rust lab, C lab dispatch) | lane first (cancel lane while the cancel streak is below 16, then due timed, then ready, then fallback cancel), then highest priority, then `rng % n` over the top-priority group in generation order (at most 256 entries) | One xorshift64 draw per step from the scenario seed. Rust: `pop_for_worker` (`src/lab/runtime.rs:6324`), `tie_break_index` (`src/runtime/scheduler/priority.rs:417`). C: `asx_lab_pick` (`src/runtime/lab_dispatch.c:592`), tie-break `lab_pop` (`src/runtime/lab_dispatch.c:556`). C has no timed lane; Rust feeds its timed lane from no non-test code at `5e60b1c4c` |
+| Ready queue (Rust lab, C lab dispatch) | lane first (cancel lane while the cancel streak is below 16, then due timed, then ready, then fallback cancel), then highest priority, then `rng % n` over the top-priority group in generation order (at most 256 entries) | One xorshift64 draw per step from the scenario seed. Rust: `pop_for_worker` (`src/lab/runtime.rs:6324`), `tie_break_index` (`src/runtime/scheduler/priority.rs:417`). C: `asx_lab_pick` (`src/runtime/lab_dispatch.c:598`), tie-break `lab_pop` (`src/runtime/lab_dispatch.c:556`). C has no timed lane; Rust feeds its timed lane from no non-test code at `5e60b1c4c` |
 | Ready queue (C round-robin `asx_scheduler_run`) | task slot index | Ascending; no lanes, priority unused (`src/runtime/scheduler.c:1320`; `bd-9kll.4.6`) |
 | Timer wheel | Rust: 1 ms tick, then insertion order within a wheel slot (a cascade from a higher level can put an earlier-registered timer after later ones). C lab: `(1 ms tick, registration)` (`src/runtime/scheduler.c:269`); C native task timers: `(exact deadline, arm sequence)` (`src/runtime/scheduler.c:101`) | Ascending (earlier = fires first). Same-tick ordering is recorded in `bd-9kll.7.1`; see `docs/CHANNEL_TIMER_SEMANTICS.md` |
 | Cancel propagation | Parents before descendants; sibling order differs between the engines (§4.9 item 2) | Deterministic tree walk order in each engine |

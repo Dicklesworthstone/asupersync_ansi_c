@@ -41,7 +41,7 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->121<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
+  - `make conformance` runs <!-- fact:rust_fixtures -->124<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
   - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches, or is a recorded difference that names its bead.
@@ -430,7 +430,8 @@ make fixtures-fresh        # every fixture reproduced by the pinned asupersync +
 make check-rust-constants  # C kernel constants vs schemas/rust_kernel_constants.json
 make rust-constants-fresh  # re-derive that document from the pinned asupersync (cargo)
 make fixture-integrity  # schema, provenance, digest recompute, codec round trip
-make test-gates         # negative controls: the gates must reject bad fixtures
+make test-gates         # negative controls: the gates must reject bad fixtures, and the
+                        # oracle must catch planted semantic bugs (ASX_MUTANT_*)
 ```
 
 ### `make codec-equivalence`
@@ -842,7 +843,7 @@ make test-conformance-c # The tests/conformance/*_test.c programs (codec, profil
 make test-vignettes     # API ergonomics demonstrations
 make test-e2e           # Every e2e family (tests/e2e/run_all.sh)
 make fixture-integrity  # Fixture schema, provenance, digest recompute, codec round trip
-make test-gates         # Gate negative controls (bad fixtures must be rejected)
+make test-gates         # Gate negative controls (bad fixtures rejected, planted bugs caught)
 make conformance        # Rust parity: every v2 fixture executed in C and compared
 make fuzz-differential  # Seeded Rust-vs-C differential fuzzing (needs Rust)
 make codec-equivalence  # JSON vs BIN digests recorded in fixtures (runtime not executed)

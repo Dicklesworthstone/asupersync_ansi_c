@@ -370,11 +370,11 @@ No `None` phase. Rust produces no witness while `cancel_epoch == 0` (`src/record
 
 ### 6.2 Legal Phase Transitions
 
-Rust (`validate_transition`, `src/types/cancel.rs:382`): valid when task, region and epoch match, `next.phase.rank() >= prev.phase.rank()`, and severity does not decrease. Same-phase pairs are strengthening. Skip transitions (e.g., `Requested -> Completed`) are allowed because rank is non-decreasing. C's `asx_cancel_witness_advance` (`src/core/cancel.c:141`) accepts only a strictly larger phase, so it rejects a same-phase advance (`bd-9kll.3.7`).
+Rust (`validate_transition`, `src/types/cancel.rs:382`): valid when task, region and epoch match, `next.phase.rank() >= prev.phase.rank()`, and severity does not decrease. Same-phase pairs are strengthening. Skip transitions (e.g., `Requested -> Completed`) are allowed because rank is non-decreasing. C's `asx_cancel_witness_advance` (`src/core/cancel.c:148`) accepts only a strictly larger phase, so it rejects a same-phase advance (`bd-9kll.3.7`).
 
 ### 6.3 Forbidden Phase Transitions
 
-Any `next.phase.rank() < prev.phase.rank()` is Rust `CancelWitnessError::PhaseRegression`; any `next.reason.severity() < prev.reason.severity()` is `ReasonWeakened` (`src/types/cancel.rs:414`). C returns `ASX_E_INVALID_TRANSITION` for a regression (`src/core/cancel.c:147`) and never returns `ASX_E_WITNESS_PHASE_REGRESSION` or `ASX_E_WITNESS_REASON_WEAKENED` (declared, unused).
+Any `next.phase.rank() < prev.phase.rank()` is Rust `CancelWitnessError::PhaseRegression`; any `next.reason.severity() < prev.reason.severity()` is `ReasonWeakened` (`src/types/cancel.rs:414`). C returns `ASX_E_INVALID_TRANSITION` for a regression (`src/core/cancel.c:154`) and never returns `ASX_E_WITNESS_PHASE_REGRESSION` or `ASX_E_WITNESS_REASON_WEAKENED` (declared, unused).
 
 ### 6.4 Cancellation Kinds (11 Variants)
 
@@ -407,7 +407,7 @@ Severities and cleanup budgets match Rust exactly (`CancelKind::severity`, `src/
 
 ### 6.5 Witness Structure
 
-Rust fields (`src/types/cancel.rs:323`). C's witness slot holds only an id, the phase and the reason (`src/core/cancel.c:91`; `bd-9kll.3.7`).
+Rust fields (`src/types/cancel.rs:323`). C's witness slot holds only an id, the phase and the reason (`src/core/cancel.c:98`; `bd-9kll.3.7`).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -566,11 +566,11 @@ Consumption is **failure-atomic**:
 Rust Budget::consume_poll(&mut self) -> Option<u32>    // src/types/budget.rs:447
   if poll_quota > 0: old = poll_quota; poll_quota -= 1; return Some(old)
   else: return None                                    // no mutation
-C asx_budget_consume_poll(asx_budget *b) -> uint32_t   // src/core/budget.c:60
+C asx_budget_consume_poll(asx_budget *b) -> uint32_t   // src/core/budget.c:66
   returns the old quota, or 0 (no mutation) when it is already 0
 ```
 
-**Cost consume:** Rust `consume_cost(cost) -> bool` (`src/types/budget.rs:613`) and C `asx_budget_consume_cost` (`src/core/budget.c:65`) both return failure without mutation when the remainder is smaller than the charge, and success with no change when there is no cost quota.
+**Cost consume:** Rust `consume_cost(cost) -> bool` (`src/types/budget.rs:613`) and C `asx_budget_consume_cost` (`src/core/budget.c:71`) both return failure without mutation when the remainder is smaller than the charge, and success with no change when there is no cost quota.
 
 ---
 

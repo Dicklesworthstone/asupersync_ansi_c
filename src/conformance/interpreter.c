@@ -1408,6 +1408,29 @@ static int exec_channel_wait(it_task *t, uint32_t step, uint32_t idx, const char
         }
         return 1;
     }
+    if (strcmp(op, "oneshot_poll_closed") == 0) {
+        /* poll_fn(|c| tx.poll_closed(c)) / rx.poll_closed (oneshot.rs:619,
+         * :1373): no Cx, so a cancel does not end the wait. */
+        const char *end = it_str(step, "end");
+        int sender = end != NULL && strcmp(end, "sender") == 0;
+        it_channel *c = sender ? owned_sender(t, ch, IT_CH_ONESHOT) : NULL;
+        it_receiver *r = !sender && end != NULL && strcmp(end, "receiver") == 0
+                             ? owned_receiver(t, ch, IT_CH_ONESHOT)
+                             : NULL;
+        if (c == NULL && r == NULL) {
+            it_fail_task(t, idx, "oneshot_poll_closed on an end this task does not hold");
+            *out = STEP_END;
+            return 1;
+        }
+        st = c != NULL ? asx_oneshot_poll_closed(&c->oneshot)
+                       : asx_oneshot_receiver_poll_closed(&r->oneshot);
+        if (st == ASX_E_PENDING) {
+            *out = STEP_PENDING;
+            return 1;
+        }
+        observe_status(t, idx, op, st);
+        return 1;
+    }
     if (strcmp(op, "reserve_send") == 0) {
         it_channel *c = owned_sender(t, ch, IT_CH_MPSC);
         const char *as = it_str(step, "as");
@@ -2392,6 +2415,29 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         }
         close_endpoint(c, r);
         observe_status(t, idx, label, ASX_OK);
+        return STEP_NEXT;
+    }
+    /* Oneshot queries (DSL §3.6): tx.is_closed() / rx.is_closed()
+     * (oneshot.rs:596, :1357) and rx.is_ready() (:1350), observed as a
+     * boolean value. */
+    if (strcmp(op, "oneshot_is_closed") == 0 || strcmp(op, "oneshot_is_ready") == 0) {
+        const char *ch = it_str(step, "channel");
+        int ready = strcmp(op, "oneshot_is_ready") == 0;
+        const char *end = ready ? "receiver" : it_str(step, "end");
+        int sender = end != NULL && strcmp(end, "sender") == 0;
+        it_channel *c = sender ? owned_sender(t, ch, IT_CH_ONESHOT) : NULL;
+        it_receiver *r = !sender && end != NULL && strcmp(end, "receiver") == 0
+                             ? owned_receiver(t, ch, IT_CH_ONESHOT)
+                             : NULL;
+        int value;
+        if (c == NULL && r == NULL) {
+            it_fail_task(t, idx, "oneshot query on an end this task does not hold");
+            return STEP_END;
+        }
+        value = c != NULL ? asx_oneshot_sender_is_closed(&c->oneshot)
+                : ready   ? asx_oneshot_receiver_is_ready(&r->oneshot)
+                          : asx_oneshot_receiver_is_closed(&r->oneshot);
+        observe(t, idx, label, status_node(ASX_OK), asx_json_new_bool(g_out, value ? 1 : 0));
         return STEP_NEXT;
     }
     /* Non-blocking oneshot, broadcast and watch sends (DSL §3.6). */
@@ -3458,13 +3504,16 @@ static void apply_driver_op(uint32_t op) {
          * omitted or null field is unlimited (DSL §4). */
         it_region *r = region_by_name(it_str(op, "region"));
         asx_region_limits limits;
+        asx_status st;
         if (r == NULL || !parse_region_limit(op, "max_tasks", &limits.max_tasks) ||
             !parse_region_limit(op, "max_children", &limits.max_children) ||
             !parse_region_limit(op, "max_obligations", &limits.max_obligations)) {
             it_fail("region_limits needs a known region and counts", NULL);
             return;
         }
-        if (asx_region_set_limits(r->id, &limits) != ASX_OK) {
+        /* A region already gone has nothing left to limit (DSL §4). */
+        st = asx_region_set_limits(r->id, &limits);
+        if (st != ASX_OK && st != ASX_E_STALE_HANDLE && st != ASX_E_NOT_FOUND) {
             it_fail("asx_region_set_limits failed", r->name);
         }
         return;
