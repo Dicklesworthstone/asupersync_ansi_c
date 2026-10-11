@@ -110,22 +110,92 @@ TEST(cancel_running_task_transitions_to_cancel_requested) {
  * Test: cancel a Created (not yet polled) task
  * ------------------------------------------------------------------- */
 
-TEST(cancel_created_task_transitions_through_running) {
+/* The task-transition events traced for `tid` from event `from` on. */
+static uint32_t task_transitions_since(uint32_t from, asx_task_id tid, uint64_t *out,
+                                       uint32_t cap) {
+    uint32_t i;
+    uint32_t n = 0;
+    asx_trace_event ev;
+    for (i = from; i < asx_trace_event_count(); i++) {
+        if (!asx_trace_event_get(i, &ev)) continue;
+        if (ev.kind != ASX_TRACE_TASK_TRANSITION || ev.entity_id != (uint64_t)tid) continue;
+        if (n < cap) out[n] = ev.aux;
+        n++;
+    }
+    return n;
+}
+
+#define TRANSITION_AUX(from, to) (((uint64_t)(uint32_t)(from) << 32) | (uint64_t)(uint32_t)(to))
+
+TEST(cancel_created_task_goes_straight_to_cancel_requested) {
+    /* Rust request_cancel* (record/task.rs:803-816) takes a task not yet
+     * polled from Created to CancelRequested in one step and sets the
+     * cancel epoch to 1; a later, stronger request strengthens the reason
+     * and leaves the epoch at 1. The never-polled task's first poll
+     * observes the cancel and it completes Cancelled. */
     asx_region_id rid;
     asx_task_id tid;
     asx_task_state state;
+    asx_task_slot *slot;
+    asx_outcome out;
+    asx_budget budget;
+    uint64_t seen[4];
+    uint32_t mark;
 
     asx_runtime_reset();
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &tid), ASX_OK);
 
-    /* Cancel before any scheduler run (task is still Created) */
+    mark = asx_trace_event_count();
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
-
-    /* Should have transitioned Created → Running → CancelRequested */
     ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
     ASSERT_EQ((int)state, (int)ASX_TASK_CANCEL_REQUESTED);
+    ASSERT_EQ(task_transitions_since(mark, tid, seen, 4u), (uint32_t)1u);
+    ASSERT_EQ(seen[0], TRANSITION_AUX(ASX_TASK_CREATED, ASX_TASK_CANCEL_REQUESTED));
+    ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
+    ASSERT_EQ(slot->cancel_epoch, (uint32_t)1u);
+
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_SHUTDOWN), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
+    ASSERT_EQ((int)slot->cancel_reason.kind, (int)ASX_CANCEL_SHUTDOWN);
+    ASSERT_EQ(slot->cancel_epoch, (uint32_t)1u);
+
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_get_outcome(tid, &out), ASX_OK);
+    ASSERT_EQ((int)asx_outcome_severity_of(&out), (int)ASX_OUTCOME_CANCELLED);
+}
+
+TEST(budget_cancel_of_a_created_task_materializes_in_one_step) {
+    /* A budget cancel a checkpoint raised reaches the record of a task
+     * not yet polled as Created → CancelRequested, epoch 1
+     * (reconcile_checkpoint_cancel, record/task.rs:1104-1122). */
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_task_state state;
+    asx_task_slot *slot;
+    asx_checkpoint_result cr;
+    asx_budget b;
+    uint64_t seen[4];
+    uint32_t mark;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    b = asx_budget_infinite();
+    b.deadline = 1u; /* already passed: the clock is past 1 ns */
+    asx_runtime_virtual_advance(10u);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &b, &tid), ASX_OK);
+
+    mark = asx_trace_event_count();
+    ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
+    ASSERT_TRUE(cr.cancelled);
+    ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
+    ASSERT_EQ((int)state, (int)ASX_TASK_CANCELLING);
+    ASSERT_TRUE(task_transitions_since(mark, tid, seen, 4u) >= 1u);
+    ASSERT_EQ(seen[0], TRANSITION_AUX(ASX_TASK_CREATED, ASX_TASK_CANCEL_REQUESTED));
+    ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
+    ASSERT_EQ(slot->cancel_epoch, (uint32_t)1u);
 }
 
 /* -------------------------------------------------------------------
@@ -1174,6 +1244,63 @@ TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline) {
     ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_DEADLINE);
 }
 
+TEST(cx_is_cancelled_reports_whether_a_cancel_was_requested) {
+    /* Rust Cx::is_cancel_requested (cx.rs:2641) reads the Cx's
+     * cancel_requested flag, set by a request and never cleared: false
+     * for a task that completed without one, true through a mask
+     * (cx.rs:6660-6664), true after the cancelled task completed, and
+     * true once a masked checkpoint raised a budget cancel the task's
+     * record does not show yet (cx.rs:2824-2836). */
+    asx_region_id rid;
+    asx_task_id done;
+    asx_task_id masked;
+    asx_task_id late;
+    asx_task_state state;
+    asx_checkpoint_result cr;
+    asx_outcome out;
+    asx_budget b;
+    asx_budget budget;
+    asx_cx cx;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &done), ASX_OK);
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_get_state(done, &state), ASX_OK);
+    ASSERT_EQ((int)state, (int)ASX_TASK_COMPLETED);
+    asx_cx_init(&cx, rid, done, ASX_CAP_CANCEL_CHECK);
+    ASSERT_FALSE(asx_cx_is_cancelled(&cx));
+
+    ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &masked), ASX_OK);
+    ASSERT_EQ(asx_task_mask(masked), ASX_OK);
+    asx_cx_init(&cx, rid, masked, ASX_CAP_CANCEL_CHECK);
+    ASSERT_FALSE(asx_cx_is_cancelled(&cx));
+    ASSERT_EQ(asx_task_cancel(masked, ASX_CANCEL_USER), ASX_OK);
+    ASSERT_TRUE(asx_cx_is_cancelled(&cx));
+    ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_OK);
+    ASSERT_EQ(asx_task_unmask(masked), ASX_OK);
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_get_outcome(masked, &out), ASX_OK);
+    ASSERT_EQ((int)asx_outcome_severity_of(&out), (int)ASX_OUTCOME_CANCELLED);
+    ASSERT_TRUE(asx_cx_is_cancelled(&cx));
+
+    b = asx_budget_infinite();
+    b.deadline = 1u; /* already passed: the clock is past 1 ns */
+    asx_runtime_virtual_advance(10u);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &b, &late), ASX_OK);
+    ASSERT_EQ(asx_task_mask(late), ASX_OK);
+    asx_cx_init(&cx, rid, late, ASX_CAP_CANCEL_CHECK);
+    ASSERT_FALSE(asx_cx_is_cancelled(&cx));
+    ASSERT_EQ(asx_checkpoint(late, &cr), ASX_OK);
+    ASSERT_FALSE(cr.cancelled);
+    ASSERT_EQ(asx_task_get_state(late, &state), ASX_OK);
+    ASSERT_EQ((int)state, (int)ASX_TASK_CREATED);
+    ASSERT_TRUE(asx_cx_is_cancelled(&cx));
+}
+
 TEST(budget_cancel_is_attributed_to_the_task_and_records_no_request) {
     asx_region_id rid;
     asx_task_id tid;
@@ -1489,7 +1616,8 @@ int main(void) {
     fprintf(stderr, "=== test_cancellation (runtime) ===\n");
 
     RUN_TEST(cancel_running_task_transitions_to_cancel_requested);
-    RUN_TEST(cancel_created_task_transitions_through_running);
+    RUN_TEST(cancel_created_task_goes_straight_to_cancel_requested);
+    RUN_TEST(budget_cancel_of_a_created_task_materializes_in_one_step);
     RUN_TEST(checkpoint_advances_to_cancelling);
     RUN_TEST(checkpoint_non_cancelled_task_reports_clean);
     RUN_TEST(finalize_transitions_cancelling_to_finalizing);
@@ -1525,6 +1653,7 @@ int main(void) {
     RUN_TEST(spawned_child_that_never_acknowledges_is_cancelled);
     RUN_TEST(top_level_task_that_acknowledges_is_still_cancelled);
     RUN_TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline);
+    RUN_TEST(cx_is_cancelled_reports_whether_a_cancel_was_requested);
     RUN_TEST(budget_cancel_is_attributed_to_the_task_and_records_no_request);
     RUN_TEST(obligation_abort_with_reason_records_it);
     RUN_TEST(cleanup_within_its_quota_completes_with_the_cancel_reason);

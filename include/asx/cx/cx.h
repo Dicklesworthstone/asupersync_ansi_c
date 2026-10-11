@@ -270,9 +270,13 @@ ASX_API uint64_t asx_cx_random_u64(asx_cx *cx);
 /* Cancellation checkpoint                                             */
 /* ------------------------------------------------------------------ */
 
-/* Check if cancellation has been requested for this context's task.
- * Returns nonzero if cancel was requested.
- * Requires ASX_CAP_CANCEL_CHECK. Returns 0 if cap missing. */
+/* Check if cancellation has been requested for this context's task
+ * (Rust Cx::is_cancel_requested). Returns nonzero once a cancel was
+ * requested, a budget cancel a checkpoint raised included, and stays so
+ * after the task completes. A mask does not hide it (a mask defers only
+ * the checkpoint's acknowledgement), and it acknowledges nothing.
+ * Requires ASX_CAP_CANCEL_CHECK. Returns 0 if cap missing, or for a task
+ * handle the runtime no longer holds. */
 ASX_API int asx_cx_is_cancelled(const asx_cx *cx);
 
 /* Cooperative cancellation checkpoint.

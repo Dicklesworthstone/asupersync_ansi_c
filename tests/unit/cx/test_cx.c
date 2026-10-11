@@ -4,8 +4,9 @@
  * Tests lifecycle, capability narrowing, budget/clock/entropy binding,
  * and cooperative checkpoints.
  *
- * We stub asx_task_get_state() so these tests don't depend on the
- * full runtime being initialized.
+ * We stub the runtime's task queries (asx_task_get_cancel_reason,
+ * asx_checkpoint) so these tests don't depend on the full runtime being
+ * initialized; test_cancellation.c checks Cx against the real runtime.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -18,28 +19,24 @@
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
-/* Stub for asx_task_get_state — avoids pulling in runtime/lifecycle   */
+/* Stub task — avoids pulling in runtime/lifecycle                     */
 /* ------------------------------------------------------------------ */
 
+/* The stub task is not completed; a state from CANCEL_REQUESTED on means
+ * a cancel was requested of it. */
 static asx_task_state g_stub_task_state = ASX_TASK_RUNNING;
 static asx_task_id g_stub_task_id = ASX_INVALID_ID;
-
-asx_status asx_task_get_state(asx_task_id id, asx_task_state *out_state);
-
-asx_status asx_task_get_state(asx_task_id id, asx_task_state *out_state) {
-    if (out_state == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (id == ASX_INVALID_ID || id != g_stub_task_id) return ASX_E_NOT_FOUND;
-    *out_state = g_stub_task_state;
-    return ASX_OK;
-}
-
-/* Stub for asx_task_mask_depth, the other runtime query Cx makes. */
 static uint32_t g_stub_mask_depth = 0;
-asx_status asx_task_mask_depth(asx_task_id id, uint32_t *out_depth);
-asx_status asx_task_mask_depth(asx_task_id id, uint32_t *out_depth) {
-    if (out_depth == NULL) return ASX_E_INVALID_ARGUMENT;
+
+/* Stub for asx_task_get_cancel_reason, which Cx's is_cancelled reads:
+ * found once a cancel was requested. */
+asx_status asx_task_get_cancel_reason(asx_task_id id, asx_cancel_reason *out);
+asx_status asx_task_get_cancel_reason(asx_task_id id, asx_cancel_reason *out) {
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
     if (id == ASX_INVALID_ID || id != g_stub_task_id) return ASX_E_NOT_FOUND;
-    *out_depth = g_stub_mask_depth;
+    if (g_stub_task_state < ASX_TASK_CANCEL_REQUESTED) return ASX_E_NOT_FOUND;
+    memset(out, 0, sizeof(*out));
+    out->kind = ASX_CANCEL_USER;
     return ASX_OK;
 }
 
@@ -648,15 +645,17 @@ TEST(is_cancelled_cancel_requested_returns_nonzero) {
     ASSERT_TRUE(asx_cx_is_cancelled(&cx));
 }
 
-TEST(is_cancelled_masked_task_returns_zero) {
-    /* A masked task does not observe its cancel (Rust Cx::checkpoint is
-     * Ok inside masked, cx.rs:2749); unmasking makes it observable. */
+TEST(is_cancelled_sees_the_cancel_of_a_masked_task) {
+    /* A mask defers the checkpoint, not the cancel's visibility (Rust
+     * is_cancel_requested_tracks_clear_and_mask_transitions,
+     * cx.rs:6660-6664): is_cancelled reports it while the checkpoint is
+     * Ok; unmasking lets the checkpoint observe it. */
     asx_cx cx;
     g_stub_task_id = 13;
     g_stub_task_state = ASX_TASK_CANCEL_REQUESTED;
     g_stub_mask_depth = 1;
     asx_cx_init(&cx, 1, 13, ASX_CAP_CANCEL_CHECK);
-    ASSERT_FALSE(asx_cx_is_cancelled(&cx));
+    ASSERT_TRUE(asx_cx_is_cancelled(&cx));
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_OK);
     g_stub_mask_depth = 0;
     ASSERT_TRUE(asx_cx_is_cancelled(&cx));
@@ -809,7 +808,7 @@ int main(void) {
     RUN_TEST(is_cancelled_no_task_returns_zero);
     RUN_TEST(is_cancelled_running_returns_zero);
     RUN_TEST(is_cancelled_cancel_requested_returns_nonzero);
-    RUN_TEST(is_cancelled_masked_task_returns_zero);
+    RUN_TEST(is_cancelled_sees_the_cancel_of_a_masked_task);
     RUN_TEST(is_cancelled_cancelling_returns_nonzero);
 
     /* Checkpoint */

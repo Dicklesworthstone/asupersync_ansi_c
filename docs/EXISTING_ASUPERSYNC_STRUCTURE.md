@@ -158,7 +158,7 @@ Rust `RegionState`: `src/record/region.rs:76`. C `asx_region_state`: `include/as
 | # | From | To | Trigger | Preconditions | Postconditions |
 |---|------|----|---------|---------------|----------------|
 | R1 | `Open` | `Closing` | Rust `begin_close(reason)` (`src/record/region.rs:1699`); C `asx_region_close` (`src/runtime/lifecycle.c:893`) | state==Open | No new spawns; Rust sets or strengthens the cancel reason if one is given. C's plain close cancels no task |
-| R1a | `Open` | `Closing` | An ancestor region is cancelled | The cancel walks the subtree, parents first (Rust `cancel_request`, `src/runtime/state.rs:7547`; C `asx_region_cancel`, `src/runtime/cancellation.c:430`) | Descendant gets ParentCancelled from its immediate parent; its tasks are cancelled |
+| R1a | `Open` | `Closing` | An ancestor region is cancelled | The cancel walks the subtree, parents first (Rust `cancel_request`, `src/runtime/state.rs:7547`; C `asx_region_cancel`, `src/runtime/cancellation.c:421`) | Descendant gets ParentCancelled from its immediate parent; its tasks are cancelled |
 | R1b | `Open` | `Closing` | This region is cancelled | Live region | Region reason set or strengthened; its tasks get CancelRequested |
 | R2 | `Closing` | `Draining` | Rust `begin_drain()` (`src/record/region.rs:1743`) from `advance_region_state` (`src/runtime/state.rs:10220`); C `src/runtime/quiescence.c:233` | state==Closing and at least one child region | Waits for child regions. Not a cancel step: when the close came from a cancel request, the tasks were already cancelled by it (Variant vs the spec, row `rule.region.close_cancel_children`) |
 | R3 | `Closing` | `Finalizing` | Rust `begin_finalize()` (`src/record/region.rs:1756`); C `src/runtime/quiescence.c:238` | Every task terminal, every child region Closed, no pending spawn (`can_region_finalize`, `src/runtime/state.rs:7938`) | **Fast path**: skip drain phase |
@@ -249,20 +249,20 @@ Completed         .        .        .           .           .           .
 | # | From | To | Trigger | Postconditions |
 |---|------|----|---------|----------------|
 | T1 | `Created` | `Running` | Rust `start_running()` (`src/record/task.rs:1078`); C first poll (`src/runtime/scheduler.c:1038`) | Task poll function invoked |
-| T2 | `Created` | `CancelRequested` | Rust `request_cancel*` (`src/record/task.rs:803`) | Cancel before first poll; Rust sets `cancel_epoch` to 1. **C never takes T2**: it goes Created → Running → CancelRequested (`src/runtime/cancellation.c:193`; open bead `bd-9kll.3.9`) |
+| T2 | `Created` | `CancelRequested` | Rust `request_cancel*` (`src/record/task.rs:803`) | Cancel before first poll; Rust sets `cancel_epoch` to 1. C takes T2 in one step, as does a budget cancel that reaches the record of a task not yet polled (`src/runtime/cancellation.c:186`, `src/runtime/cancellation.c:78`) |
 | T3 | `Created` | `Completed` | Rust `complete(outcome)` (`src/record/task.rs:1260`) | Completion before any poll. C never takes T3 (the scheduler always takes T1 first) |
-| T4 | `Running` | `CancelRequested` | Rust `request_cancel*`; C `asx_task_cancel_reason_internal` (`src/runtime/cancellation.c:99`) | Cancel delivered; `cancel_epoch` becomes 1 (C `src/runtime/cancellation.c:213`) |
+| T4 | `Running` | `CancelRequested` | Rust `request_cancel*`; C `asx_task_cancel_reason_internal` (`src/runtime/cancellation.c:96`) | Cancel delivered; `cancel_epoch` becomes 1 (C `src/runtime/cancellation.c:204`) |
 | T5 | `Running` | `Completed` | `complete(outcome)`; C `sched_complete` (`src/runtime/scheduler.c:732`) | Normal completion, error, or panic |
 | T6 | `CancelRequested` | `CancelRequested` | `request_cancel*` (`src/record/task.rs:735`) | **Strengthening**: reason strengthened, cleanup budgets met; not a new cancel |
-| T7 | `CancelRequested` | `Cancelling` | Rust `acknowledge_cancel()` (`src/record/task.rs:1341`); C `asx_checkpoint` (`src/runtime/cancellation.c:603`) | Unmasked checkpoint; cleanup budget becomes the task's budget, `polls_remaining` set (C applies it after the acknowledging poll, `src/runtime/lifecycle.c:465`) |
+| T7 | `CancelRequested` | `Cancelling` | Rust `acknowledge_cancel()` (`src/record/task.rs:1341`); C `asx_checkpoint` (`src/runtime/cancellation.c:594`) | Unmasked checkpoint; cleanup budget becomes the task's budget, `polls_remaining` set (C applies it after the acknowledging poll, `src/runtime/lifecycle.c:465`) |
 | T8 | `CancelRequested` | `Completed` | `complete(outcome)` | **Outcome is `Cancelled(reason)`**: Rust maps `Ok`/`Err` in any cancel state to `Cancelled(reason)` (`src/record/task.rs:1267`); C likewise (`sched_cancel_dominates`, `src/runtime/scheduler.c:402`). `Panicked` passes through. Exception in both: a task spawned inside another task's poll that acknowledged a cancel arriving after its first poll keeps its value (Rust `classify_spawn_completion`, `src/runtime/task_handle.rs:173`) |
 | T9 | `Cancelling` | `Cancelling` | `request_cancel*` (`src/record/task.rs:751`) | **Strengthening**: as T6; the met budget also becomes the task's budget |
-| T10 | `Cancelling` | `Finalizing` | Rust `cleanup_done()` (`src/record/task.rs:1378`); C `asx_task_finalize` (`src/runtime/cancellation.c:671`) | Cleanup finished. Rust's lab takes it when a task in a cancel state finishes its poll with `Ok` (`src/lab/runtime.rs:4876`; other results go through T11); C only when the task calls `asx_task_finalize`, otherwise T11 (Variant, row `rule.cancel.drain`) |
+| T10 | `Cancelling` | `Finalizing` | Rust `cleanup_done()` (`src/record/task.rs:1378`); C `asx_task_finalize` (`src/runtime/cancellation.c:662`) | Cleanup finished. Rust's lab takes it when a task in a cancel state finishes its poll with `Ok` (`src/lab/runtime.rs:4876`; other results go through T11); C only when the task calls `asx_task_finalize`, otherwise T11 (Variant, row `rule.cancel.drain`) |
 | T11 | `Cancelling` | `Completed` | `complete(outcome)` | `Ok`/`Err` become `Cancelled(reason)` as in T8; a panic stays `Panicked` |
 | T12 | `Finalizing` | `Finalizing` | `request_cancel*` (`src/record/task.rs:777`) | **Strengthening**: as T9 |
 | T13 | `Finalizing` | `Completed` | Rust `finalize_done()` (`src/record/task.rs:1416`); C at the next dispatch (`src/runtime/scheduler.c:1222`) | Rust returns a `CancelWitness` (phase Completed); outcome is `Cancelled(reason)` |
 
-**Strengthening (T6, T9, T12):** Not state changes. Cancel reason strengthened via `CancelReason::strengthen` (`src/types/cancel.rs:956`; §6.4). Cleanup budget combined via `Budget::combine` (min on deadline and quotas, max on priority). Rust leaves `cancel_epoch` unchanged; C increments it on every changed request (`src/runtime/cancellation.c:171`, `bd-9kll.3.7`).
+**Strengthening (T6, T9, T12):** Not state changes. Cancel reason strengthened via `CancelReason::strengthen` (`src/types/cancel.rs:956`; §6.4). Cleanup budget combined via `Budget::combine` (min on deadline and quotas, max on priority). Both leave `cancel_epoch` unchanged (C `src/runtime/cancellation.c:168`).
 
 ### 4.4 Forbidden Transitions (23 Must-Fail)
 
@@ -273,7 +273,7 @@ Completed         .        .        .           .           .           .
 > **Superseded by `asupersync_v4_formal_semantics.md` §3.2 `CANCEL-ACKNOWLEDGE` (`rule.cancel.acknowledge` #2), `CHECKPOINT-MASKED` (`rule.cancel.checkpoint_masked` #10) and §6 PROG-CANCEL (`prog.cancel.drains` #9); C status: see C_REFINEMENT_MAP.md rows `rule.cancel.acknowledge`, `rule.cancel.checkpoint_masked` (Variant) and `prog.cancel.drains` (Partial).**
 
 1. A cancel request moves the task to `CancelRequested` and wakes it so it can reach a checkpoint
-2. Task does **not** acknowledge the cancel until a checkpoint: Rust `Cx::checkpoint` (`src/cx/cx.rs:2749`), C `asx_checkpoint` (`src/runtime/cancellation.c:521`). C has no `asx_is_cancelled`
+2. Task does **not** acknowledge the cancel until a checkpoint: Rust `Cx::checkpoint` (`src/cx/cx.rs:2749`), C `asx_checkpoint` (`src/runtime/cancellation.c:512`). C has no `asx_is_cancelled`
 3. Between `CancelRequested` and acknowledgement, task continues normal poll logic
 4. Once acknowledged at an unmasked checkpoint, the task transitions to `Cancelling` and its cleanup budget becomes its budget (`acknowledge_cancel`, `src/record/task.rs:1341`). Under a mask (depth > 0, bounded by 64 in both) the cancel stays pending; neither engine consumes mask per checkpoint as the spec does (Variant)
 5. A spent cleanup budget only strengthens the reason to `PollQuota` (lab, `src/lab/runtime.rs:4664`; advisory in production, `src/runtime/scheduler/three_lane.rs:1273`): Rust never force-completes a task. C's opt-in `cleanup_hard_bound` does (a deviation excluded from parity, bd-9kll.3.2)
@@ -449,7 +449,7 @@ A transition from `prev` to `next` is valid when ALL hold (Rust `validate_transi
 
 > **Superseded by `asupersync_v4_formal_semantics.md` §3.2 `CANCEL-REQUEST` (`rule.cancel.request` #1) and §5 INV-CANCEL-PROPAGATES (`inv.cancel.propagates_down` #6); C status: see C_REFINEMENT_MAP.md rows `rule.cancel.request` and `inv.cancel.propagates_down`.**
 
-1. A region **cancel** propagates to every task of its subtree (Rust `cancel_request`, `src/runtime/state.rs:7547`; C `asx_region_cancel`, `src/runtime/cancellation.c:430`). A plain C `asx_region_close` cancels no task
+1. A region **cancel** propagates to every task of its subtree (Rust `cancel_request`, `src/runtime/state.rs:7547`; C `asx_region_cancel`, `src/runtime/cancellation.c:421`). A plain C `asx_region_close` cancels no task
 2. Propagation is parents-before-descendants, **not depth-first**. Rust: stack-based collection, then a stable sort by depth (`src/runtime/state.rs:7904`, `src/runtime/state.rs:7653`), so siblings come in reverse insertion order. C walks the same way (`asx_region_subtree_internal`, `src/runtime/lifecycle.c:593`) over `children[]`, which unlinking keeps in insertion order (`src/runtime/quiescence.c:21`); fixtures `cancel-subtree-order-001` and `cancel-subtree-order-after-child-close-001` check it (bd-e038; C walked breadth-first and swap-removed before 2026-10-10)
 3. Each task takes its region's reason: ParentCancelled from the immediate parent for descendants, with the parent's reason as cause. C does not extend its witness with a chain
 4. Cancel does NOT propagate to sibling regions (parent-to-child only)
@@ -550,9 +550,9 @@ Componentwise tightening (Rust `Budget::combine`/`meet`, `src/types/budget.rs:50
 
 | Predicate | Trigger | Behavior |
 |-----------|---------|----------|
-| Poll quota depletion | `poll_quota == 0` (Rust lab charges the poll before polling, `src/lab/runtime.rs:4664`) | Cancel with `PollQuota` kind; C `src/runtime/scheduler.c:755`, `src/runtime/cancellation.c:521` |
+| Poll quota depletion | `poll_quota == 0` (Rust lab charges the poll before polling, `src/lab/runtime.rs:4664`) | Cancel with `PollQuota` kind; C `src/runtime/scheduler.c:755`, `src/runtime/cancellation.c:512` |
 | Cost quota depletion | Rust: the remaining cost quota is exactly 0 at a checkpoint (`Cx::checkpoint_budget_exhaustion`, `src/cx/cx.rs:3112`) | Cancel with `CostBudget` kind. C also cancels at once when a charge exceeds the remainder (`asx_task_consume_cost`, `src/runtime/lifecycle.c:1222`); open bead `bd-9kll.3.10` |
-| Deadline expiration | `now >= deadline` | Cancel with `Deadline` kind: the budget-deadline timer stamps it with the deadline (`src/cx/cx.rs:357`), a checkpoint with `now` (`src/cx/cx.rs:3122`); C does the same under lab dispatch (`src/runtime/scheduler.c:224`, `src/runtime/cancellation.c:521`) |
+| Deadline expiration | `now >= deadline` | Cancel with `Deadline` kind: the budget-deadline timer stamps it with the deadline (`src/cx/cx.rs:357`), a checkpoint with `now` (`src/cx/cx.rs:3122`); C does the same under lab dispatch (`src/runtime/scheduler.c:224`, `src/runtime/cancellation.c:512`) |
 
 ### 8.5 Consume Semantics
 
@@ -1105,7 +1105,7 @@ Rust only; C has no tracked permits (`bd-9kll.5.9`).
 | Channel send fails (Disconnected) | The channel returns `Err(Disconnected(value))`; the task's outcome is whatever its body returns |
 | Channel send cancelled | The channel returns `Err(SendError::Cancelled(value))`. The task ends `Cancelled` through the cancel protocol (T8/T11), not because of the channel error (the recv case is fixture `mpsc-recv-cancel-first-001`; no fixture for send) |
 | Timer fires deadline miss | Triggers cancellation with `Deadline` cancel kind (budget-deadline wake, `src/cx/cx.rs:357`; C `src/runtime/scheduler.c:224`) |
-| Budget exhaustion during channel ops | There is no budget logic in `src/channel/mpsc.rs` (the first extraction's "remaining aborted" is wrong). Exhaustion surfaces through `cx.checkpoint()` as `Cancelled` at reserve/recv; held permits are not aborted. C differs: `asx_cx_checkpoint` spends a poll unit when a budget is bound and returns `ASX_E_POLL_BUDGET_EXHAUSTED` (`src/cx/cx.c:416`), which the channel reports as `ASX_E_CANCELLED` (`src/channel/mpsc.c:818`); Rust's checkpoint spends no quota (`bd-9kll.3.8`) |
+| Budget exhaustion during channel ops | There is no budget logic in `src/channel/mpsc.rs` (the first extraction's "remaining aborted" is wrong). Exhaustion surfaces through `cx.checkpoint()` as `Cancelled` at reserve/recv; held permits are not aborted. C differs: `asx_cx_checkpoint` spends a poll unit when a budget is bound and returns `ASX_E_POLL_BUDGET_EXHAUSTED` (`src/cx/cx.c:431`), which the channel reports as `ASX_E_CANCELLED` (`src/channel/mpsc.c:818`); Rust's checkpoint spends no quota (`bd-9kll.3.8`) |
 
 ---
 
@@ -1397,7 +1397,7 @@ These IDs are this document's own (they are also in `schemas/invariant_schema.js
 | task-lifecycle-001 | Created -> Running -> Completed(Ok) happy path | `task-lifecycle-spawn-join-001` |
 | task-lifecycle-002 | Full cancel: all phases traversed | Partly: `cancel-masked-checkpoint-001` (ends Completed(Cancelled); C usually skips Finalizing) |
 | task-lifecycle-003 | CancelRequested -> Completed: the outcome is `Cancelled(reason)` (the first extraction said the natural outcome is preserved; §4.3 T8) | None isolates it |
-| task-lifecycle-004 | Cancel before first poll | `task-abort-next-step-001` (a fresh child aborted at its admission; C passes through Running, `bd-9kll.3.9`) |
+| task-lifecycle-004 | Cancel before first poll | `task-abort-next-step-001` (a fresh child aborted at its admission); the single Created → CancelRequested step, which vocabulary v2 cannot see, by `tests/unit/runtime/test_cancellation.c::cancel_created_task_goes_straight_to_cancel_requested` |
 | task-lifecycle-005 | Error at spawn time | None; C never takes T3 |
 | task-lifecycle-006 | Cancel strengthen: repeated requests with increasing severity | `cancel-strengthen-severity-001`, `task-abort-next-step-001` |
 | task-lifecycle-007 | Cancel strengthen budget combine: min-plus algebra | C test `tests/unit/core/test_budget.c` (`budget_meet_tightens`) |
@@ -1406,7 +1406,7 @@ These IDs are this document's own (they are also in `schemas/invariant_schema.js
 | task-lifecycle-010 | Completed is absorbing: all transitions rejected | C test `tests/unit/core/test_transition.c` (`task_completed_absorbing`) |
 | task-lifecycle-011 | acknowledge_cancel() returns reason and applies budget | C test `tests/unit/runtime/test_cancellation.c` (`acknowledgement_replaces_the_budget_with_the_cleanup_budget`); `budget-inherit-before-cleanup-001` |
 | task-lifecycle-012 | finalize_done() produces CancelWitness | None (the C witness has no task, region or epoch) |
-| task-lifecycle-013 | cancel_epoch set only by the first cancel | None; C bumps it on every changed request (`bd-9kll.3.7`) |
+| task-lifecycle-013 | cancel_epoch set only by the first cancel | No fixture (the epoch is not in the vocabulary); `tests/unit/runtime/test_cancellation.c::cancel_created_task_goes_straight_to_cancel_requested` |
 
 ### 19.3 Obligation Fixtures
 

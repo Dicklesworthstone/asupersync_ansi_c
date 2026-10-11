@@ -658,12 +658,15 @@ TEST(trace_task_transitions_emitted_by_scheduler) {
 }
 
 TEST(trace_task_transitions_emitted_by_cancel_api) {
+    /* A cancel before the first poll takes the task from Created to
+     * CancelRequested in one traced step (Rust request_cancel*,
+     * record/task.rs:803-816); polling it never makes it Running. */
     asx_region_id rid;
     asx_task_id tid;
     asx_trace_event ev;
     uint32_t i;
-    int saw_created_running = 0;
-    int saw_running_cancel_requested = 0;
+    uint32_t transitions = 0;
+    int saw_created_cancel_requested = 0;
 
     asx_runtime_reset();
     asx_ghost_reset();
@@ -678,16 +681,14 @@ TEST(trace_task_transitions_emitted_by_cancel_api) {
         if (ev.kind != ASX_TRACE_TASK_TRANSITION) continue;
         if (ev.entity_id != (uint64_t)tid) continue;
 
-        if (ev.aux == task_transition_aux(ASX_TASK_CREATED, ASX_TASK_RUNNING)) {
-            saw_created_running = 1;
-        }
-        if (ev.aux == task_transition_aux(ASX_TASK_RUNNING, ASX_TASK_CANCEL_REQUESTED)) {
-            saw_running_cancel_requested = 1;
+        transitions++;
+        if (ev.aux == task_transition_aux(ASX_TASK_CREATED, ASX_TASK_CANCEL_REQUESTED)) {
+            saw_created_cancel_requested = 1;
         }
     }
 
-    ASSERT_TRUE(saw_created_running);
-    ASSERT_TRUE(saw_running_cancel_requested);
+    ASSERT_TRUE(saw_created_cancel_requested);
+    ASSERT_EQ(transitions, (uint32_t)1u);
 }
 
 TEST(trace_channel_events_emitted_by_runtime) {

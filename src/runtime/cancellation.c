@@ -75,17 +75,14 @@ void asx_task_materialize_cancel_internal(asx_task_slot *t) {
     asx_task_id id = asx_task_handle_for_slot((uint32_t)(t - g_tasks));
     if (!t->cancel_unmaterialized) return;
     t->cancel_unmaterialized = 0;
-    if (t->state == ASX_TASK_CREATED) {
-        (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_RUNNING);
-        t->state = ASX_TASK_RUNNING;
-        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
-                       asx_trace_task_transition_aux(ASX_TASK_CREATED, ASX_TASK_RUNNING));
-    }
-    if (t->state == ASX_TASK_RUNNING) {
-        (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_CANCEL_REQUESTED);
+    /* Created or Running → CancelRequested in one step
+     * (reconcile_checkpoint_cancel, record/task.rs:1104-1122). */
+    if (t->state == ASX_TASK_CREATED || t->state == ASX_TASK_RUNNING) {
+        asx_task_state from = t->state;
+        (void)asx_ghost_check_task_transition(id, from, ASX_TASK_CANCEL_REQUESTED);
         t->state = ASX_TASK_CANCEL_REQUESTED;
         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
-                       asx_trace_task_transition_aux(ASX_TASK_RUNNING, ASX_TASK_CANCEL_REQUESTED));
+                       asx_trace_task_transition_aux(from, ASX_TASK_CANCEL_REQUESTED));
     }
     t->cancel_epoch++;
     {
@@ -168,7 +165,8 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
             t->cleanup_polls_remaining = asx_budget_polls(&t->cleanup_budget);
         }
         t->cancel_reason = winner;
-        t->cancel_epoch++;
+        /* The epoch stays: Rust bumps it on the first request only
+         * (record/task.rs:803-809). */
         /* Lab dispatch: a region cancel, handle abort or direct cancel that
          * changed anything schedules the task on the cancel lane at its
          * request's cleanup priority (RuntimeState::cancel_task reports
@@ -185,18 +183,11 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
         return ASX_OK;
     }
 
-    /* First cancel signal — transition Running → CancelRequested */
+    /* First cancel signal: Created or Running → CancelRequested in one
+     * step, a task not yet polled included (request_cancel*,
+     * record/task.rs:803-816). */
     if (t->state != ASX_TASK_RUNNING && t->state != ASX_TASK_CREATED) {
         return ASX_E_INVALID_STATE;
-    }
-
-    /* If task hasn't been polled yet (Created), move to Running first */
-    if (t->state == ASX_TASK_CREATED) {
-        asx_task_state from = t->state;
-        (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_RUNNING);
-        t->state = ASX_TASK_RUNNING;
-        asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
-                       asx_trace_task_transition_aux(from, ASX_TASK_RUNNING));
     }
 
     {

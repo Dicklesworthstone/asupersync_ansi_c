@@ -402,15 +402,16 @@ uint64_t asx_cx_random_u64(asx_cx *cx) {
 /* ------------------------------------------------------------------ */
 
 int asx_cx_is_cancelled(const asx_cx *cx) {
-    asx_task_state state;
-    uint32_t mask_depth = 0;
+    asx_cancel_reason reason;
     if (cx == NULL || !asx_cx_has_cap(cx, ASX_CAP_CANCEL_CHECK)) return 0;
     if (cx->task_id == ASX_INVALID_ID) return 0;
-    if (asx_task_get_state(cx->task_id, &state) != ASX_OK) return 0;
-    /* A masked task does not observe its cancel (Rust Cx::checkpoint
-     * returns Ok inside masked, cx.rs:2749; asx_checkpoint agrees). */
-    if (asx_task_mask_depth(cx->task_id, &mask_depth) == ASX_OK && mask_depth > 0u) return 0;
-    return state >= ASX_TASK_CANCEL_REQUESTED;
+    /* Rust Cx::is_cancel_requested (cx.rs:2641): whether a cancel was
+     * requested of the task, a budget cancel its checkpoint raised
+     * included. It stays set once the task completes, and a mask does not
+     * hide it: "masking defers checkpoint delivery, not cancellation
+     * visibility" (cx.rs:6660-6664). The task's cancel reason is recorded
+     * exactly then. */
+    return asx_task_get_cancel_reason(cx->task_id, &reason) == ASX_OK;
 }
 
 asx_status asx_cx_checkpoint(asx_cx *cx) {
