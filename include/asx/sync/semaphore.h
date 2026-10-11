@@ -45,12 +45,15 @@ typedef struct {
  * a mutex guard (Rust's Mutex has no obligation), or a refused
  * reservation. A permit still held when its task completes is reported
  * leaked by the runtime. `count` is the number of permits it holds (an
- * acquire of n takes n at once); release returns them all. */
+ * acquire of n takes n at once); release returns them all. `serial`
+ * names a mutex guard's hold of the lock (0 for a semaphore's permit):
+ * only the current holder's guard unlocks. */
 typedef struct {
     uint32_t sem_slot;
     uint16_t generation;
     uint32_t count;
     asx_obligation_id obligation;
+    uint32_t serial;
 } asx_semaphore_permit;
 
 /* A waiter names a record in the runtime's shared wait-node pool, so a
@@ -135,11 +138,15 @@ ASX_API asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter);
  * pools them and wakes the front waiter if it can now take what it asked
  * for; a mutex hands the lock to the oldest waiter (waking its task if
  * parked), else returns it to the pool. The permit's obligation, if any,
- * is committed. A permit value is released once: when its count exceeds
- * what the semaphore's handed-out permits still hold (a second release of
- * the same permit, with no other permit outstanding to absorb it), the
- * release is refused with ASX_E_INVALID_STATE and nothing changes, so
- * releases never return more permits than were handed out. */
+ * is committed. A permit value is released once (Rust's permit is
+ * consumed by its drop); a second release is refused with
+ * ASX_E_INVALID_STATE and nothing changes. The runtime knows a permit
+ * was released when it is a mutex guard (its hold of the lock ended), a
+ * permit whose obligation was committed or explicitly aborted (forget),
+ * or one whose count exceeds what the semaphore's handed-out permits
+ * still hold, so releases never return more permits than were handed out.
+ * An untracked permit's copy released while other permits are out is
+ * beyond that check: release each permit value once. */
 ASX_API asx_status asx_semaphore_release(asx_semaphore_permit permit);
 
 /* Forget a permit (Rust SemaphorePermit::forget): its permits are not

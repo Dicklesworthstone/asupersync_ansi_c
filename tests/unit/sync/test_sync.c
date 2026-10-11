@@ -454,6 +454,41 @@ TEST(sem_double_release_is_refused) {
     ASSERT_EQ(asx_mutex_close(m), ASX_OK);
 }
 
+/* A guard copy kept past its unlock names a hold that ended, so it cannot
+ * unlock (or poison) the lock that a later holder took, whether that one
+ * took it with try_lock or was handed it by the unlock. Rust's guard is
+ * consumed by its drop: no stale guard exists. */
+TEST(mutex_stale_guard_does_not_unlock_a_later_holder) {
+    asx_mutex_handle m;
+    asx_mutex_guard first;
+    asx_mutex_guard second;
+    asx_mutex_guard third;
+    asx_mutex_guard other;
+    asx_mutex_lock_waiter w;
+    setup();
+    MUST_OK(asx_mutex_create(&m));
+    ASSERT_EQ(asx_mutex_try_lock(m, &first), ASX_OK);
+    ASSERT_EQ(asx_mutex_unlock(first), ASX_OK);
+    ASSERT_EQ(asx_mutex_try_lock(m, &second), ASX_OK);
+    ASSERT_EQ(asx_mutex_unlock(first), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_mutex_unlock_poisoned(first), ASX_E_INVALID_STATE);
+    ASSERT_FALSE(asx_mutex_is_poisoned(m));
+    ASSERT_TRUE(asx_mutex_is_locked(m));
+    ASSERT_EQ(asx_mutex_try_lock(m, &other), ASX_E_WOULD_BLOCK);
+
+    MUST_OK(asx_mutex_lock_begin(m, &w));
+    ASSERT_EQ(asx_mutex_poll_lock(&w, &third, NULL), ASX_E_PENDING);
+    ASSERT_EQ(asx_mutex_unlock(second), ASX_OK); /* handed to the waiter */
+    ASSERT_EQ(asx_mutex_unlock(second), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_mutex_poll_lock(&w, &third, NULL), ASX_OK);
+    ASSERT_EQ(asx_mutex_unlock(second), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_mutex_unlock(first), ASX_E_INVALID_STATE);
+    ASSERT_TRUE(asx_mutex_is_locked(m));
+    ASSERT_EQ(asx_mutex_unlock(third), ASX_OK);
+    ASSERT_FALSE(asx_mutex_is_locked(m));
+    ASSERT_EQ(asx_mutex_close(m), ASX_OK);
+}
+
 /* Rust SemaphorePermit::forget: the permits never return to the pool, and
  * forgetting (or releasing) the permit afterwards is refused. */
 TEST(sem_forget_keeps_permits_out_of_the_pool) {
@@ -1005,6 +1040,7 @@ int main(void) {
     RUN_TEST(sem_acquire_many_all_or_nothing_in_line);
     RUN_TEST(sem_acquire_zero_and_mutex_count);
     RUN_TEST(sem_double_release_is_refused);
+    RUN_TEST(mutex_stale_guard_does_not_unlock_a_later_holder);
     RUN_TEST(sem_forget_keeps_permits_out_of_the_pool);
     RUN_TEST(sem_add_permits_serves_the_front_of_the_line);
 

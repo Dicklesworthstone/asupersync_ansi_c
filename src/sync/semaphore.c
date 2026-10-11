@@ -77,6 +77,12 @@ typedef struct {
      * (Rust's MutexGuard drop, sync/mutex.rs:758-763). Every later lock
      * fails with LockError::Poisoned, ASX_E_INVALID_STATE. */
     int poisoned;
+    /* Mutex only: the serial of the guard holding the lock (0 while
+     * nobody holds it) and the last serial handed out. A guard unlocks
+     * only while it holds the lock, as Rust's guard is consumed by its
+     * drop. */
+    uint32_t holder_serial;
+    uint32_t last_serial;
 } sem_slot;
 
 static sem_slot g_slots[ASX_SEMAPHORE_MAX];
@@ -192,6 +198,34 @@ static void sem_dispatch_parked(sem_slot *s) {
     }
 }
 
+/* The serial of a permit just handed out: a mutex's new holder (never 0),
+ * else 0. */
+static uint32_t sem_hold_serial(sem_slot *s) {
+    if (!s->is_mutex) return 0u;
+    s->last_serial++;
+    if (s->last_serial == 0u) s->last_serial = 1u;
+    s->holder_serial = s->last_serial;
+    return s->holder_serial;
+}
+
+/* A permit already released or forgotten. A mutex guard no longer holds
+ * the lock; a semaphore permit's obligation was committed by its release
+ * or aborted by forget (a leak RECOVER aborts with Error and leaves the
+ * permit to release); otherwise its count exceeds what handed-out permits
+ * still hold. */
+static int sem_permit_spent(const sem_slot *s, const asx_semaphore_permit *permit) {
+    asx_obligation_info info;
+    if (s->is_mutex) return permit->count != 1u || permit->serial != s->holder_serial;
+    if (permit->obligation != ASX_INVALID_ID &&
+        asx_obligation_get_info(permit->obligation, &info) == ASX_OK &&
+        (info.state == ASX_OBLIGATION_COMMITTED ||
+         (info.state == ASX_OBLIGATION_ABORTED &&
+          info.abort_reason == ASX_OBLIGATION_ABORT_EXPLICIT))) {
+        return 1;
+    }
+    return permit->count > s->outstanding;
+}
+
 /* Wait-node pool reclamation: retire this semaphore's dead waiters. */
 static void sem_reap_queue(asx_wait_queue *q) {
     sem_slot *s = (sem_slot *)(void *)((char *)q - offsetof(sem_slot, waiters));
@@ -224,6 +258,7 @@ static asx_status sem_create(uint32_t initial_permits, int is_mutex, asx_semapho
             g_slots[i].outstanding = 0u;
             g_slots[i].is_mutex = is_mutex;
             g_slots[i].poisoned = 0;
+            g_slots[i].holder_serial = 0u;
             asx_wait_records_init(&g_slots[i].waiters, sem_reap_queue);
             out->slot = i;
             out->generation = g_slots[i].generation;
@@ -283,6 +318,7 @@ asx_status asx_semaphore_try_acquire_many(asx_semaphore_handle handle, uint32_t 
     out->generation = handle.generation;
     out->obligation = ASX_INVALID_ID; /* no Cx to hold it */
     out->count = 0u;
+    out->serial = 0u;
     if (count == 0u) return ASX_OK; /* nothing to take (Rust) */
 
     /* A semaphore with anyone queued is FIFO-blocked (Rust try_acquire). */
@@ -291,6 +327,7 @@ asx_status asx_semaphore_try_acquire_many(asx_semaphore_handle handle, uint32_t 
         s->permits -= count;
         s->outstanding += count;
         out->count = count;
+        out->serial = sem_hold_serial(s);
         return ASX_OK;
     }
     return ASX_E_WOULD_BLOCK;
@@ -336,6 +373,7 @@ static asx_status sem_hand_out(sem_slot *s, const asx_semaphore_waiter *waiter, 
     out->generation = waiter->generation;
     out->count = count;
     out->obligation = ASX_INVALID_ID;
+    out->serial = sem_hold_serial(s);
     if (!s->is_mutex && cx != NULL && cx->task_id != ASX_INVALID_ID) {
         asx_obligation_id id;
         if (asx_obligation_register(cx->region_id, ASX_OBLIGATION_KIND_SEMAPHORE_PERMIT,
@@ -381,6 +419,7 @@ asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphor
             out->generation = waiter->generation;
             out->count = 0u;
             out->obligation = ASX_INVALID_ID;
+            out->serial = 0u;
             return ASX_OK;
         }
         /* Cancelled or out of budget: leave the line (Rust's checkpoint
@@ -503,10 +542,11 @@ asx_status asx_semaphore_release(asx_semaphore_permit permit) {
         sem_commit_obligation(&permit);
         return ASX_E_STALE_HANDLE;
     }
-    /* More than the permit values hold: a permit released twice (Rust's
-     * permit is consumed by its drop). Nothing changes. */
-    if (permit.count > s->outstanding) return ASX_E_INVALID_STATE;
+    /* Released twice (Rust's permit is consumed by its drop): nothing
+     * changes. */
+    if (sem_permit_spent(s, &permit)) return ASX_E_INVALID_STATE;
     s->outstanding -= permit.count;
+    if (s->is_mutex) s->holder_serial = 0u;
 
     sem_reap(s);
     if (!s->is_mutex) {
@@ -542,7 +582,7 @@ asx_status asx_semaphore_mutex_release_poisoned(asx_semaphore_permit permit) {
     if (permit.sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[permit.sem_slot];
     if (!s->alive || s->generation != permit.generation) return ASX_E_STALE_HANDLE;
-    if (!s->is_mutex || permit.count > s->outstanding) return ASX_E_INVALID_STATE;
+    if (!s->is_mutex || sem_permit_spent(s, &permit)) return ASX_E_INVALID_STATE;
     s->poisoned = 1;
     return asx_semaphore_release(permit);
 }
@@ -564,7 +604,7 @@ asx_status asx_semaphore_forget(asx_semaphore_permit permit) {
         st = ASX_E_STALE_HANDLE;
     } else if (s->is_mutex) {
         return ASX_E_INVALID_ARGUMENT;
-    } else if (permit.count > s->outstanding) {
+    } else if (sem_permit_spent(s, &permit)) {
         return ASX_E_INVALID_STATE; /* already released or forgotten */
     } else {
         s->outstanding -= permit.count; /* gone: not back to the pool */

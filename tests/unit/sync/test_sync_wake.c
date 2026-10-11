@@ -523,6 +523,45 @@ TEST(untracked_permits_hold_no_obligation) {
     ASSERT_EQ(asx_mutex_unlock(g), ASX_OK);
 }
 
+TEST(tracked_permit_released_or_forgotten_once_while_others_are_out) {
+    /* A tracked permit's release commits its obligation and forget aborts
+     * it: a second release or forget of that permit is refused even while
+     * other permits are out to absorb its count (Rust's permit is consumed
+     * by its drop or forget). */
+    asx_semaphore_handle h;
+    asx_semaphore_waiter w;
+    asx_semaphore_permit p[3];
+    asx_task_id holder;
+    asx_cx cx;
+    uint32_t i;
+
+    ASSERT_TRUE(setup());
+    reset_sem_fixtures();
+    ASSERT_EQ(asx_task_spawn(g_region, poll_sem_task, &g_sem[0], &holder), ASX_OK);
+    asx_cx_init(&cx, g_region, holder, ASX_CAP_CANCEL_CHECK);
+    ASSERT_EQ(asx_semaphore_create(3, &h), ASX_OK);
+    for (i = 0; i < 3u; i++) {
+        ASSERT_EQ(asx_semaphore_acquire_begin(h, &w), ASX_OK);
+        ASSERT_EQ(asx_semaphore_poll_acquire(&w, &p[i], &cx), ASX_OK);
+        ASSERT_TRUE(sem_obligation_is(p[i].obligation, holder, ASX_OBLIGATION_RESERVED));
+    }
+
+    ASSERT_EQ(asx_semaphore_release(p[0]), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(h), 1u);
+    ASSERT_EQ(asx_semaphore_release(p[0]), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_semaphore_forget(p[0]), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_semaphore_available(h), 1u);
+
+    ASSERT_EQ(asx_semaphore_forget(p[1]), ASX_OK);
+    ASSERT_EQ(asx_semaphore_release(p[1]), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_semaphore_forget(p[1]), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_semaphore_available(h), 1u);
+
+    ASSERT_EQ(asx_semaphore_release(p[2]), ASX_OK);
+    ASSERT_EQ(asx_semaphore_available(h), 2u);
+    ASSERT_TRUE(sem_obligation_is(p[2].obligation, holder, ASX_OBLIGATION_COMMITTED));
+}
+
 /* ===================================================================
  * Mutex
  * =================================================================== */
@@ -1634,6 +1673,7 @@ int main(void) {
     RUN_TEST(sem_permit_held_past_task_completion_is_leaked);
     RUN_TEST(sem_permits_leaked_under_each_leak_policy);
     RUN_TEST(untracked_permits_hold_no_obligation);
+    RUN_TEST(tracked_permit_released_or_forgotten_once_while_others_are_out);
     RUN_TEST(mutex_handoff_between_three_tasks);
     RUN_TEST(mutex_handoff_is_deterministic);
     RUN_TEST(mutex_flood_serves_every_waiter_in_arrival_order);
