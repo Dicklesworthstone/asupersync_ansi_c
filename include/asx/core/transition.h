@@ -33,8 +33,9 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_transition_check(asx_obligation_s
  * as child regions and obligation reservation. */
 ASX_API int asx_region_can_spawn(asx_region_state s);
 
-/* Returns nonzero if the region state allows task admission, including
- * finalizer-spawned cleanup work during FINALIZING. */
+/* Returns nonzero if the region state allows task admission: OPEN only, as
+ * Rust's can_accept_work (a FINALIZING region admits no new task, not even
+ * one its finalizers spawn). */
 ASX_API int asx_region_can_accept_work(asx_region_state s);
 
 /* Returns nonzero if the region is in a closing or draining state. */

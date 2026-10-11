@@ -165,7 +165,8 @@ TEST(obligation_no_double_resolve) {
  *
  * asx_region_can_spawn gates strict admissions: child regions and
  * obligation reservation. Only OPEN state passes.
- * Task spawning uses asx_region_can_accept_work (OPEN + FINALIZING).
+ * Task spawning uses asx_region_can_accept_work: OPEN only too, as Rust's
+ * can_accept_work (record/region.rs:134-142).
  * ------------------------------------------------------------------- */
 
 TEST(region_spawn_only_in_open) {
@@ -181,11 +182,11 @@ TEST(region_spawn_only_in_open) {
 }
 
 TEST(region_work_acceptance) {
-    /* Work is accepted in OPEN (normal) and FINALIZING (late arrivals) */
+    /* Work is accepted in OPEN only: a FINALIZING region admits no task */
     int s;
     for (s = 0; s < REGION_STATE_COUNT; s++) {
         int can = asx_region_can_accept_work((asx_region_state)s);
-        if (s == ASX_REGION_OPEN || s == ASX_REGION_FINALIZING) {
+        if (s == ASX_REGION_OPEN) {
             ASSERT_TRUE(can);
         } else {
             ASSERT_TRUE(!can);

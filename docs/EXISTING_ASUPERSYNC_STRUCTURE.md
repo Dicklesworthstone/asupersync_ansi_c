@@ -204,14 +204,14 @@ If item 3 fails, both leak-audit the Reserved obligations once no task is left a
 
 | Operation | Allowed States | Error if Wrong |
 |-----------|---------------|----------------|
-| Create child task | Rust: `Open` for normal tasks (`src/record/region.rs:140`), `Open`/`Finalizing` for cleanup tasks (`src/record/region.rs:150`). C: `Open`/`Finalizing` for every spawn (`src/core/transition_tables.c:89`) | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1210`) |
+| Create child task | Rust: `Open` for normal tasks (`src/record/region.rs:140`), `Open`/`Finalizing` for cleanup tasks (`src/record/region.rs:150`). C: `Open` for every spawn (`src/core/transition_tables.c:97`) | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1210`) |
 | Create child region | `Open` | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:927`) |
-| Create obligation | `Open` | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1666`) |
+| Create obligation | `Open` | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1665`) |
 | Resolve obligation | `Open`, `Closing`, `Draining`, `Finalizing` | N/A while Reserved. Rust rejects a resolve after the region is finalized (`ErrorKind::RegionFinalized`, `src/runtime/obligation_table.rs:569`) |
 | Access arena | Not `Closed` | C `ASX_E_REGION_CLOSED` (only user: `asx_task_spawn_captured`, `src/runtime/lifecycle.c:1201`) |
 | Query status | Any | Fails only on a bad handle |
 
-**Edge case:** Rust admits only cleanup tasks in `Finalizing` (test `normal_task_admission_rejected_when_finalizing`, `src/record/region.rs:2826`; the earlier `admission_allowed_when_finalizing` test is gone). C admits every spawn there; that is recorded drift (`bd-9kll.3.5`). Child region creation is NOT allowed during `Finalizing` in either.
+**Edge case:** Rust admits only cleanup tasks in `Finalizing` (test `normal_task_admission_rejected_when_finalizing`, `src/record/region.rs:2826`; the earlier `admission_allowed_when_finalizing` test is gone). C admits no spawn there (`bd-9kll.3.5`): Rust's cleanup tasks are its async finalizers', which C does not have. Child region creation is NOT allowed during `Finalizing` in either.
 
 ---
 
@@ -311,9 +311,9 @@ Rust `ObligationState`: `src/record/obligation.rs:192`. C `asx_obligation_state`
 
 | From | To | Trigger | Postconditions |
 |------|----|---------|----------------|
-| `Reserved` | `Committed` | Rust `commit_obligation` (`src/runtime/state.rs:6534`); C `asx_obligation_commit()` (`src/runtime/lifecycle.c:1476`) | Fulfilled; region pending count drops. The spec's holder-only precondition is not checked by C (row `rule.obligation.commit`, Partial) |
+| `Reserved` | `Committed` | Rust `commit_obligation` (`src/runtime/state.rs:6534`); C `asx_obligation_commit()` (`src/runtime/lifecycle.c:1475`) | Fulfilled; region pending count drops. The spec's holder-only precondition is not checked by C (row `rule.obligation.commit`, Partial) |
 | `Reserved` | `Aborted` | Rust `abort_obligation` (`src/runtime/state.rs:6745`); C `asx_obligation_abort()` / `asx_obligation_abort_with_reason()` | Released; abort reason recorded |
-| `Reserved` | `Leaked` | The holder completes while holding it (Rust `src/runtime/state.rs:8341`; C `src/runtime/lifecycle.c:590`), unless it tracks a permit, which C drops with the holder as Rust drops the body's locals (`src/runtime/lifecycle.c:568`); or C `asx_obligation_drop` (`src/runtime/lifecycle.c:1805`); Rust also leak-audits what is still Reserved in a Finalizing region with no task left | Leak handled under the leak policy: Rust default Panic (`src/runtime/state.rs:2338`), C default LOG (`src/runtime/lifecycle.c:93`); recorded drift `bd-9kll.3.6` |
+| `Reserved` | `Leaked` | The holder completes while holding it (Rust `src/runtime/state.rs:8341`; C `src/runtime/lifecycle.c:590`), unless it tracks a permit, which C drops with the holder as Rust drops the body's locals (`src/runtime/lifecycle.c:568`); or C `asx_obligation_drop` (`src/runtime/lifecycle.c:1804`); Rust also leak-audits what is still Reserved in a Finalizing region with no task left | Leak handled under the leak policy: Rust default Panic (`src/runtime/state.rs:2338`), C default LOG (`src/runtime/lifecycle.c:93`); recorded drift `bd-9kll.3.6` |
 
 ### 5.3 Forbidden Transitions (Must-Fail)
 
@@ -321,7 +321,7 @@ C never returns `ASX_E_OBLIGATION_ALREADY_RESOLVED` (declared, unused) and has n
 
 | From | To | Error |
 |------|----|-------|
-| `Committed` | any | C `ASX_E_INVALID_TRANSITION` (`src/runtime/lifecycle.c:1486`); Rust `ObligationAlreadyResolved` |
+| `Committed` | any | C `ASX_E_INVALID_TRANSITION` (`src/runtime/lifecycle.c:1485`); Rust `ObligationAlreadyResolved` |
 | `Aborted` | any | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` |
 | `Leaked` | any | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` |
 | `Reserved` | `Reserved` | `ASX_E_INVALID_TRANSITION` (table) |
@@ -332,7 +332,7 @@ Double-resolution is **not** idempotent by design; it indicates a logic error.
 
 > **Superseded by `asupersync_v4_formal_semantics.md` §3.4.4 and §3.4.6 (`inv.obligation.linear` #18, `inv.obligation.no_leak` #17); C status: see C_REFINEMENT_MAP.md rows `inv.obligation.linear` and `inv.obligation.no_leak`.** Neither engine keeps the bit ledger with a `popcnt` that the first extraction described.
 
-1. `reserve` creates a Reserved obligation (Rust table plus region pending count, `src/record/region.rs:1449`; C slot linked into the holder's held list, `src/runtime/lifecycle.c:1375`)
+1. `reserve` creates a Reserved obligation (Rust table plus region pending count, `src/record/region.rs:1449`; C slot linked into the holder's held list, `src/runtime/lifecycle.c:1374`)
 2. `commit`/`abort` resolve it exactly once (terminal states absorbing, `src/core/transition_tables.c:65`)
 3. Leaks are detected when the holder completes: each obligation it still holds becomes `Leaked`
 4. At region close both leak-audit what is still Reserved and close (C: `src/runtime/quiescence.c:259`; `bd-9kll.3.4`)
@@ -551,7 +551,7 @@ Componentwise tightening (Rust `Budget::combine`/`meet`, `src/types/budget.rs:50
 | Predicate | Trigger | Behavior |
 |-----------|---------|----------|
 | Poll quota depletion | `poll_quota == 0` (Rust lab charges the poll before polling, `src/lab/runtime.rs:4664`) | Cancel with `PollQuota` kind; C `src/runtime/scheduler.c:780`, `src/runtime/cancellation.c:608` |
-| Cost quota depletion | Rust: the remaining cost quota is exactly 0 at a checkpoint (`Cx::checkpoint_budget_exhaustion`, `src/cx/cx.rs:3112`) | Cancel with `CostBudget` kind. C the same (`src/runtime/cancellation.c:651`; `budget-cost-quota-zero-001`). Rust has no task-level charge; C's `asx_task_consume_cost` (`src/runtime/lifecycle.c:1490`) is `Budget::consume_cost` on the task's budget: a charge the quota cannot cover is refused and cancels nothing |
+| Cost quota depletion | Rust: the remaining cost quota is exactly 0 at a checkpoint (`Cx::checkpoint_budget_exhaustion`, `src/cx/cx.rs:3112`) | Cancel with `CostBudget` kind. C the same (`src/runtime/cancellation.c:651`; `budget-cost-quota-zero-001`). Rust has no task-level charge; C's `asx_task_consume_cost` (`src/runtime/lifecycle.c:1489`) is `Budget::consume_cost` on the task's budget: a charge the quota cannot cover is refused and cancels nothing |
 | Deadline expiration | `now >= deadline` | Cancel with `Deadline` kind: the budget-deadline timer stamps it with the deadline (`src/cx/cx.rs:357`), a checkpoint with `now` (`src/cx/cx.rs:3122`); C does the same under lab dispatch (`src/runtime/scheduler.c:224`, `src/runtime/cancellation.c:608`) |
 
 ### 8.5 Consume Semantics

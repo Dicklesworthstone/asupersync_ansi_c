@@ -86,9 +86,12 @@ asx_status asx_obligation_transition_check(asx_obligation_state from, asx_obliga
 
 int asx_region_can_spawn(asx_region_state s) { return s == ASX_REGION_OPEN; }
 
-int asx_region_can_accept_work(asx_region_state s) {
-    return s == ASX_REGION_OPEN || s == ASX_REGION_FINALIZING;
-}
+/* Rust RegionState::can_accept_work (record/region.rs:134-142, commit
+ * 59bdc2baa): normal work only while Open. A Finalizing region has observed
+ * quiescence and started its finalizers; admitting ordinary tasks would
+ * reopen it. (Rust's cleanup-only admission, can_accept_cleanup_work, is
+ * for its async finalizer tasks, which C does not have.) */
+int asx_region_can_accept_work(asx_region_state s) { return s == ASX_REGION_OPEN; }
 
 int asx_region_is_closing(asx_region_state s) {
     return s == ASX_REGION_CLOSING || s == ASX_REGION_DRAINING || s == ASX_REGION_FINALIZING;

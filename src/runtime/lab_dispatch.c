@@ -804,10 +804,8 @@ void asx_lab_admit_pending(void) {
                 /* Region admission (record/region.rs add_task) at its
                  * live-task limit, the task itself left out: Rust recycles
                  * the record it inserted and refuses the spawn
-                 * (SpawnError::RegionAtCapacity); cleanup work in a
-                 * Finalizing region is exempt. */
-                if (r->state != ASX_REGION_FINALIZING &&
-                    asx_region_live_admitted_internal(r) > r->limits.max_tasks) {
+                 * (SpawnError::RegionAtCapacity). */
+                if (asx_region_live_admitted_internal(r) > r->limits.max_tasks) {
                     asx_lab_task_retired_internal(t);
                     asx_task_refuse_admission_internal(t, r, ASX_E_ADMISSION_LIMIT);
                     lab_apply_handle_cancels_for(g_lab_admit[i]);

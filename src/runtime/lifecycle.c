@@ -1202,20 +1202,19 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     if (st != ASX_OK) return st;
     if (r->poisoned) return ASX_E_REGION_POISONED;
 
-    /* Finalizing regions may still spawn cleanup tasks; broader admissions
-     * like obligations remain OPEN-only. A rejected spawn is Rust's
+    /* Only an Open region admits a task (Rust add_task, can_accept_work):
+     * a closing or Finalizing one refuses it with Rust's
      * SpawnError::RegionClosed ("closed or draining"; vocabulary §5). */
     if (!asx_region_can_accept_work(r->state)) {
         if (deferred) asx_lab_defer_refused_admission();
         return ASX_E_REGION_CLOSED;
     }
     /* At its live-task limit: Rust's admission refuses the child with
-     * SpawnError::RegionAtCapacity; cleanup work in a Finalizing region is
-     * exempt (record/region.rs add_task_internal). A deferred spawn is
-     * checked at its admission instead (asx_lab_admit_pending): tasks that
-     * complete before it, the spawner included, no longer count. */
-    if (!deferred && r->state != ASX_REGION_FINALIZING &&
-        asx_region_live_admitted_internal(r) >= r->limits.max_tasks) {
+     * SpawnError::RegionAtCapacity (record/region.rs add_task_internal). A
+     * deferred spawn is checked at its admission instead
+     * (asx_lab_admit_pending): tasks that complete before it, the spawner
+     * included, no longer count. */
+    if (!deferred && asx_region_live_admitted_internal(r) >= r->limits.max_tasks) {
         return ASX_E_ADMISSION_LIMIT;
     }
 

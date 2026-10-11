@@ -54,7 +54,7 @@ TEST(region_predicates) {
     ASSERT_FALSE(asx_region_can_spawn(ASX_REGION_CLOSING));
     ASSERT_FALSE(asx_region_can_spawn(ASX_REGION_FINALIZING));
     ASSERT_TRUE(asx_region_can_accept_work(ASX_REGION_OPEN));
-    ASSERT_TRUE(asx_region_can_accept_work(ASX_REGION_FINALIZING));
+    ASSERT_FALSE(asx_region_can_accept_work(ASX_REGION_FINALIZING));
     ASSERT_FALSE(asx_region_can_accept_work(ASX_REGION_DRAINING));
     ASSERT_TRUE(asx_region_is_closing(ASX_REGION_CLOSING));
     ASSERT_TRUE(asx_region_is_closing(ASX_REGION_DRAINING));
