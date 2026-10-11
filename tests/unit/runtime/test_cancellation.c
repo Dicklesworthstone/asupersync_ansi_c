@@ -1612,6 +1612,93 @@ TEST(cleanup_hard_bound_config_is_validated) {
     ASSERT_EQ(asx_runtime_config_validate(&cfg), ASX_E_INVALID_ARGUMENT);
 }
 
+/* bd-9kll.3.22: every task-state write goes through
+ * asx_task_set_state_internal, which applies the transition table in every
+ * build. For each of the 36 (from, to) pairs a legal move writes `to`; an
+ * illegal one leaves `from`, returns ASX_E_INVALID_TRANSITION and, in ghost
+ * builds, records a task-protocol violation. A state word outside the enum
+ * is refused too. */
+TEST(task_state_write_applies_the_transition_table_in_every_build) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_task_slot *slot;
+    int from;
+    int to;
+    uint32_t legal = 0;
+    uint32_t refused = 0;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
+
+    for (from = 0; from <= (int)ASX_TASK_COMPLETED; from++) {
+        for (to = 0; to <= (int)ASX_TASK_COMPLETED; to++) {
+            asx_status want = asx_task_transition_check((asx_task_state)from, (asx_task_state)to);
+            slot->state = (asx_task_state)from;
+            ASSERT_EQ(asx_task_set_state_internal(slot, tid, (asx_task_state)to), want);
+            ASSERT_EQ((int)slot->state, want == ASX_OK ? to : from);
+            if (want == ASX_OK) {
+                legal++;
+            } else {
+                ASSERT_EQ(want, ASX_E_INVALID_TRANSITION);
+                refused++;
+            }
+        }
+    }
+    /* T1-T13 of the table; the 23 other pairs are refused. */
+    ASSERT_EQ(legal, (uint32_t)13u);
+    ASSERT_EQ(refused, (uint32_t)23u);
+#ifdef ASX_DEBUG_GHOST
+    ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)23u);
+    {
+        asx_ghost_violation v;
+        ASSERT_TRUE(asx_ghost_violation_get(0u, &v));
+        ASSERT_EQ((int)v.kind, (int)ASX_GHOST_PROTOCOL_TASK);
+        ASSERT_EQ(v.entity_id, (uint64_t)tid);
+    }
+#endif
+
+    slot->state = (asx_task_state)6;
+    ASSERT_EQ(asx_task_set_state_internal(slot, tid, ASX_TASK_COMPLETED), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ((int)slot->state, 6);
+    slot->state = ASX_TASK_CREATED;
+}
+
+/* bd-9kll.3.22 negative control at a runtime boundary: a task whose state
+ * word is corrupt (outside the enum) returns Ready from its poll. The
+ * scheduler's completion write is refused and asx_scheduler_run reports
+ * it; the word is not overwritten with Completed and nothing of the
+ * completion happens (no transition trace, no outcome). Before the checked
+ * write, only the ghost monitor saw this and the task completed. */
+TEST(scheduler_refuses_to_complete_a_task_whose_state_is_corrupt) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_task_slot *slot;
+    asx_outcome out;
+    asx_budget budget;
+    uint64_t seen[4];
+    uint32_t mark;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
+    slot->state = (asx_task_state)6;
+
+    mark = asx_trace_event_count();
+    budget = asx_budget_from_polls(4);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
+    ASSERT_EQ((int)slot->state, 6);
+    ASSERT_EQ(task_transitions_since(mark, tid, seen, 4u), (uint32_t)0u);
+    ASSERT_EQ(asx_task_get_outcome(tid, &out), ASX_E_TASK_NOT_COMPLETED);
+#ifdef ASX_DEBUG_GHOST
+    ASSERT_EQ(asx_ghost_violation_count(), (uint32_t)1u);
+#endif
+    slot->state = ASX_TASK_CREATED;
+}
+
 int main(void) {
     fprintf(stderr, "=== test_cancellation (runtime) ===\n");
 
@@ -1665,6 +1752,8 @@ int main(void) {
     RUN_TEST(budget_cancel_stays_off_the_record_until_acknowledged);
     RUN_TEST(cancel_request_newly_cancels_a_record_with_a_pending_budget_cancel);
     RUN_TEST(cleanup_hard_bound_config_is_validated);
+    RUN_TEST(task_state_write_applies_the_transition_table_in_every_build);
+    RUN_TEST(scheduler_refuses_to_complete_a_task_whose_state_is_corrupt);
 
     TEST_REPORT();
     return test_failures;

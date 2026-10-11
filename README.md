@@ -1516,7 +1516,7 @@ asx_status finish_task(asx_task_state from) {
 }
 ```
 
-A transition check is a single array lookup, `allowed[from][to]`, in the tables of `src/core/transition_tables.c`. No switch statements, no iteration, no hash maps. Region and obligation state changes go through this check in every build and are refused on failure. Task state changes are checked only by the ghost protocol monitor (`ASX_DEBUG_GHOST`), which records a violation but does not block the write.
+A transition check is a single array lookup, `allowed[from][to]`, in the tables of `src/core/transition_tables.c`. No switch statements, no iteration, no hash maps. Region and obligation state changes go through this check in every build and are refused on failure. So do task state changes: the runtime writes a task's state only through one checked operation, which refuses a move the table forbids, or a state word outside the enum, and leaves the state as it was. The scheduler, cancellation or admission path that tried it stops and reports the error (`asx_scheduler_run` returns it). The ghost protocol monitor (`ASX_DEBUG_GHOST`) also records the violation.
 
 Helper functions classify states: `asx_task_is_terminal()`, `asx_region_is_closing()`, `asx_region_can_spawn()`. The transition tables are the authoritative specification of lifecycle legality. If the table says a transition is forbidden, no code path may perform it.
 

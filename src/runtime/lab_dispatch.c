@@ -766,7 +766,7 @@ static void lab_apply_handle_cancels_for(uint32_t slot) {
 /* drain_spawn_admissions (LR:3957-4012, state.rs:5212-5217): FIFO, each
  * scheduled at its budget priority, or on the cancel lane when it was
  * aborted before admission (the abort applied now schedules it there). */
-void asx_lab_admit_pending(void) {
+asx_status asx_lab_admit_pending(void) {
     uint32_t i;
     uint32_t n = g_lab_admit_n;
     g_lab_admit_n = 0;
@@ -796,7 +796,8 @@ void asx_lab_admit_pending(void) {
                  * accepts work refuses the spawn before the task table is
                  * touched (SpawnError::RegionClosed). */
                 if (!asx_region_can_accept_work(r->state)) {
-                    asx_task_refuse_admission_internal(t, r, ASX_E_REGION_CLOSED);
+                    asx_status st = asx_task_refuse_admission_internal(t, r, ASX_E_REGION_CLOSED);
+                    if (st != ASX_OK) return st;
                     lab_apply_handle_cancels_for(g_lab_admit[i]);
                     continue;
                 }
@@ -806,8 +807,10 @@ void asx_lab_admit_pending(void) {
                  * the record it inserted and refuses the spawn
                  * (SpawnError::RegionAtCapacity). */
                 if (asx_region_live_admitted_internal(r) > r->limits.max_tasks) {
+                    asx_status st;
                     asx_lab_task_retired_internal(t);
-                    asx_task_refuse_admission_internal(t, r, ASX_E_ADMISSION_LIMIT);
+                    st = asx_task_refuse_admission_internal(t, r, ASX_E_ADMISSION_LIMIT);
+                    if (st != ASX_OK) return st;
                     lab_apply_handle_cancels_for(g_lab_admit[i]);
                     continue;
                 }
@@ -841,6 +844,7 @@ void asx_lab_admit_pending(void) {
             }
         }
     }
+    return ASX_OK;
 }
 
 /* A cancel request reaches a task's CancelTaskWaker, which schedules it on

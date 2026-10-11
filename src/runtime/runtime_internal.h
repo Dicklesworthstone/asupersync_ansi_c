@@ -311,6 +311,20 @@ void asx_task_release_capture_internal(asx_task_slot *task);
 /* Build the public handle for an occupied task slot. */
 asx_task_id asx_task_handle_for_slot(uint32_t slot_idx);
 
+/* The one write of a task's state (bd-9kll.3.22): every transition the
+ * runtime makes goes through it. It checks the task transition table
+ * (asx_task_transition_check) in every build, not only under the ghost
+ * monitor. An illegal move -- or a state word outside the enum -- changes
+ * nothing: the state stays as it was, the ghost protocol monitor records
+ * the violation, and ASX_E_INVALID_TRANSITION (ASX_E_INVALID_ARGUMENT for
+ * an out-of-range state) is returned for the caller to stop on and report.
+ * Rust's TaskRecord transitions refuse the same way, matching the current
+ * state and returning false/None without writing (start_running, complete,
+ * acknowledge_cancel, cleanup_done, finalize_done_with_witness;
+ * record/task.rs:1078-1460). The caller emits the transition trace. */
+ASX_MUST_USE asx_status asx_task_set_state_internal(asx_task_slot *t, asx_task_id id,
+                                                    asx_task_state to);
+
 /* Completion bookkeeping shared by every path that drives a task to
  * COMPLETED: disarms its timer, wakes join waiters, releases captured
  * state, decrements the region's live-task count, and frees the slot if
@@ -358,8 +372,10 @@ uint32_t asx_region_live_admitted_internal(const asx_region_slot *r);
  * admission: the region is closed (`why` ASX_E_REGION_CLOSED) or at
  * max_tasks (ASX_E_ADMISSION_LIMIT). It completes without running or
  * leaving a trace, Cancelled as Rust resolves the refused handle, waking
- * its joiners, and the region is re-advanced. */
-void asx_task_refuse_admission_internal(asx_task_slot *t, asx_region_slot *r, asx_status why);
+ * its joiners, and the region is re-advanced. A task not Created cannot
+ * complete so: nothing changes and the transition refusal is returned. */
+ASX_MUST_USE asx_status asx_task_refuse_admission_internal(asx_task_slot *t, asx_region_slot *r,
+                                                           asx_status why);
 
 /* The earliest armed task timer (task wake timers and, under lab
  * dispatch, budget-deadline timers): 1 and *out_next, or 0 when none is
@@ -413,8 +429,9 @@ typedef enum {
  * into the record: Running → CancelRequested, no trace event (Rust
  * reconcile_checkpoint_cancel); likewise a Cx reason ahead of the record
  * (cx_reason_ahead): the record's reason strengthened by it, the cleanup
- * budgets met. No-op otherwise. */
-void asx_task_materialize_cancel_internal(asx_task_slot *t);
+ * budgets met. No-op otherwise. Fails only with the refusal of the task
+ * transition (asx_task_set_state_internal), the cancel left unmaterialized. */
+ASX_MUST_USE asx_status asx_task_materialize_cancel_internal(asx_task_slot *t);
 
 /* Only the second half: a Cx reason ahead of the record strengthens it;
  * the Cx keeps its own reason when a tie leaves the record's. */
@@ -512,7 +529,10 @@ void asx_lab_defer_refused_admission(void);
  * the refusal is delivered (one registration per refusal: the latest). */
 void asx_lab_refusal_watch(uint32_t ticket, const asx_task_slot *t);
 int asx_lab_admissions_pending(void);
-void asx_lab_admit_pending(void);
+/* Admits the queued spawns. Fails only when a refused admission's task
+ * transition is refused (asx_task_set_state_internal): that error, with
+ * the admissions after it left unadmitted. */
+ASX_MUST_USE asx_status asx_lab_admit_pending(void);
 /* Per-task entropy under lab dispatch (Rust DetEntropy, see
  * asx_lab_entropy). A task the host creates takes the next task-arena
  * index and forks the runtime source at once (state.rs:4356); one spawned

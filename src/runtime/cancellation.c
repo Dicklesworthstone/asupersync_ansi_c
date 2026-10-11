@@ -120,20 +120,20 @@ void asx_task_complete_cx_reason_internal(asx_task_slot *t) {
     t->cx_reason_ahead = 0u;
 }
 
-void asx_task_materialize_cancel_internal(asx_task_slot *t) {
+asx_status asx_task_materialize_cancel_internal(asx_task_slot *t) {
     asx_task_id id = asx_task_handle_for_slot((uint32_t)(t - g_tasks));
     asx_task_reconcile_cx_reason_internal(t);
-    if (!t->cancel_unmaterialized) return;
-    t->cancel_unmaterialized = 0;
+    if (!t->cancel_unmaterialized) return ASX_OK;
     /* Created or Running → CancelRequested in one step
      * (reconcile_checkpoint_cancel, record/task.rs:1104-1122). */
     if (t->state == ASX_TASK_CREATED || t->state == ASX_TASK_RUNNING) {
         asx_task_state from = t->state;
-        (void)asx_ghost_check_task_transition(id, from, ASX_TASK_CANCEL_REQUESTED);
-        t->state = ASX_TASK_CANCEL_REQUESTED;
+        asx_status st = asx_task_set_state_internal(t, id, ASX_TASK_CANCEL_REQUESTED);
+        if (st != ASX_OK) return st;
         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
                        asx_trace_task_transition_aux(from, ASX_TASK_CANCEL_REQUESTED));
     }
+    t->cancel_unmaterialized = 0;
     t->cancel_epoch++;
     {
         asx_cancel_witness_id witness = ASX_INVALID_ID;
@@ -141,6 +141,7 @@ void asx_task_materialize_cancel_internal(asx_task_slot *t) {
         (void)w_st_;
         t->cancel_witness = witness;
     }
+    return ASX_OK;
 }
 
 asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reason *reason,
@@ -286,8 +287,8 @@ asx_status asx_task_cancel_reason_internal(asx_task_id id, const asx_cancel_reas
 
     {
         asx_task_state from = t->state;
-        (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_CANCEL_REQUESTED);
-        t->state = ASX_TASK_CANCEL_REQUESTED;
+        st = asx_task_set_state_internal(t, id, ASX_TASK_CANCEL_REQUESTED);
+        if (st != ASX_OK) return st;
         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)id,
                        asx_trace_task_transition_aux(from, ASX_TASK_CANCEL_REQUESTED));
     }
@@ -686,13 +687,14 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
     /* A budget cancel the record has not taken: acknowledging reconciles
      * it into the record first (Running → CancelRequested, no event; or a
      * Cx reason ahead of the record strengthens it). */
-    asx_task_materialize_cancel_internal(t);
+    st = asx_task_materialize_cancel_internal(t);
+    if (st != ASX_OK) return st;
 
     /* Transition CancelRequested → Cancelling on first checkpoint */
     if (t->state == ASX_TASK_CANCEL_REQUESTED) {
         asx_task_state from = t->state;
-        (void)asx_ghost_check_task_transition(self, t->state, ASX_TASK_CANCELLING);
-        t->state = ASX_TASK_CANCELLING;
+        st = asx_task_set_state_internal(t, self, ASX_TASK_CANCELLING);
+        if (st != ASX_OK) return st;
         t->cancel_phase = ASX_CANCEL_PHASE_CANCELLING;
         {
             asx_status w_st_ =
@@ -767,8 +769,8 @@ asx_status asx_task_finalize(asx_task_id id) {
 
     {
         asx_task_state from = t->state;
-        (void)asx_ghost_check_task_transition(id, t->state, ASX_TASK_FINALIZING);
-        t->state = ASX_TASK_FINALIZING;
+        st = asx_task_set_state_internal(t, id, ASX_TASK_FINALIZING);
+        if (st != ASX_OK) return st;
         t->cancel_phase = ASX_CANCEL_PHASE_FINALIZING;
         {
             asx_status w_st_ =

@@ -272,6 +272,16 @@ asx_status asx_task_slot_lookup(asx_task_id id, asx_task_slot **out) {
     return ASX_OK;
 }
 
+asx_status asx_task_set_state_internal(asx_task_slot *t, asx_task_id id, asx_task_state to) {
+    asx_status st = asx_task_transition_check(t->state, to);
+    if (st != ASX_OK) {
+        (void)asx_ghost_check_task_transition(id, t->state, to);
+        return st;
+    }
+    t->state = to;
+    return ASX_OK;
+}
+
 static uint32_t asx_align_up_u32(uint32_t value, uint32_t align) {
     uint32_t rem = value % align;
     if (rem == 0u) return value;
@@ -1330,15 +1340,19 @@ uint32_t asx_region_live_admitted_internal(const asx_region_slot *r) {
                                                       : 0u;
 }
 
-void asx_task_refuse_admission_internal(asx_task_slot *t, asx_region_slot *r, asx_status why) {
+asx_status asx_task_refuse_admission_internal(asx_task_slot *t, asx_region_slot *r,
+                                              asx_status why) {
     asx_region_id region = t->region;
+    asx_status st;
     /* Rust resolves the refused handle Cancelled: a closed region with
      * CancelReason::new(ParentCancelled) (lab/runtime.rs:3999-4003), the
      * live-task limit with CancelReason::user carrying the error's text
      * (cx/cx.rs:5526-5534), both with the default attribution
      * (types/cancel.rs:596-623). The text is its fixed prefix: Rust's
      * spells the region's RegionId, its limit and live count. */
-    t->state = ASX_TASK_COMPLETED;
+    st = asx_task_set_state_internal(t, asx_task_handle_for_slot((uint32_t)(t - g_tasks)),
+                                     ASX_TASK_COMPLETED);
+    if (st != ASX_OK) return st;
     t->outcome = asx_outcome_make(ASX_OUTCOME_CANCELLED);
     t->cancel_reason =
         why == ASX_E_REGION_CLOSED
@@ -1351,6 +1365,7 @@ void asx_task_refuse_admission_internal(asx_task_slot *t, asx_region_slot *r, as
     /* Releasing the pending-spawn credit re-advances the region
      * (lab/runtime.rs drain_spawn_admissions). */
     asx_region_settle_internal(region);
+    return ASX_OK;
 }
 
 asx_status asx_task_spawn_captured(asx_region_id region, asx_task_poll_fn poll_fn,

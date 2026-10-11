@@ -764,17 +764,19 @@ static void sched_cancel_phase_complete(asx_task_slot *t) {
  * trace, runs completion bookkeeping, and logs `ev`. The slot may be
  * released (detached task) when this returns: do not touch `t` after.
  * Returns a fault raised by completion bookkeeping (obligation leak under
- * the PANIC policy with fail-fast containment), else ASX_OK. */
+ * the PANIC policy with fail-fast containment), else ASX_OK; a task that
+ * cannot complete from its state is left as it is, with the transition
+ * refusal returned. */
 static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_slot *rslot,
                                  asx_outcome_severity severity, asx_scheduler_event_kind ev,
                                  uint32_t round) {
     asx_task_state from = t->state;
     asx_region_id region = t->region;
+    asx_status st = asx_task_set_state_internal(t, tid, ASX_TASK_COMPLETED);
+    if (st != ASX_OK) return st;
     /* The outcome carries the Cx's reason (fuzz findings gen-145-163,
      * gen-294-194). */
     asx_task_complete_cx_reason_internal(t);
-    (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
-    t->state = ASX_TASK_COMPLETED;
     if (asx_lab_dispatch_active()) asx_lab_task_retired_internal(t);
     if (t->cancel_pending) sched_cancel_phase_complete(t);
     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
@@ -829,17 +831,18 @@ static void sched_enforce_budget(asx_task_slot *t, asx_task_id tid, asx_time *no
     }
 }
 
-static void sched_transition(asx_task_slot *t, asx_task_id tid, asx_task_state to,
-                             asx_cancel_phase phase) {
+static asx_status sched_transition(asx_task_slot *t, asx_task_id tid, asx_task_state to,
+                                   asx_cancel_phase phase) {
     asx_task_state from = t->state;
     asx_status w_st_;
-    (void)asx_ghost_check_task_transition(tid, t->state, to);
-    t->state = to;
+    asx_status st = asx_task_set_state_internal(t, tid, to);
+    if (st != ASX_OK) return st;
     t->cancel_phase = phase;
     w_st_ = asx_cancel_witness_advance(t->cancel_witness, phase);
     (void)w_st_;
     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                    asx_trace_task_transition_aux(from, to));
+    return ASX_OK;
 }
 
 /* -------------------------------------------------------------------
@@ -1081,8 +1084,8 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
     /* Transition Created → Running on first poll */
     if (t->state == ASX_TASK_CREATED) {
         asx_task_state from = t->state;
-        (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_RUNNING);
-        t->state = ASX_TASK_RUNNING;
+        st = asx_task_set_state_internal(t, tid, ASX_TASK_RUNNING);
+        if (st != ASX_OK) return st;
         asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                        asx_trace_task_transition_aux(from, ASX_TASK_RUNNING));
     }
@@ -1253,7 +1256,8 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
      * deferred cancel dispatches again; reentrant cancellation left over
      * gets the next step, before ready work. Then the step's draw. */
     asx_lab_drain_deferred_cancels();
-    asx_lab_admit_pending();
+    st = asx_lab_admit_pending();
+    if (st != ASX_OK) return st;
     asx_lab_drain_handle_cancels();
     asx_lab_drain_region_commands();
     asx_lab_drain_handle_cancels();
@@ -1455,11 +1459,14 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
                 (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED ||
                  t->cancel_unmaterialized) &&
                 t->cleanup_polls_remaining == 0) {
-                asx_task_materialize_cancel_internal(t);
+                st = asx_task_materialize_cancel_internal(t);
+                if (st != ASX_OK) return st;
                 if (t->state == ASX_TASK_CANCEL_REQUESTED) {
-                    sched_transition(t, tid, ASX_TASK_CANCELLING, ASX_CANCEL_PHASE_CANCELLING);
+                    st = sched_transition(t, tid, ASX_TASK_CANCELLING, ASX_CANCEL_PHASE_CANCELLING);
+                    if (st != ASX_OK) return st;
                 }
-                sched_transition(t, tid, ASX_TASK_FINALIZING, ASX_CANCEL_PHASE_FINALIZING);
+                st = sched_transition(t, tid, ASX_TASK_FINALIZING, ASX_CANCEL_PHASE_FINALIZING);
+                if (st != ASX_OK) return st;
                 st = sched_complete(t, tid, rslot, ASX_OUTCOME_CANCELLED,
                                     ASX_SCHED_EVENT_CANCEL_FORCED, round);
                 if (st != ASX_OK) return st;
