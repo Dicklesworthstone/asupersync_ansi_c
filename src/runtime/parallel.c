@@ -172,7 +172,11 @@ static uint32_t parallel_slot_locality_shard(uint16_t slot_idx) {
     uint32_t shard;
 
     if (slot_idx >= ASX_MAX_TASKS) { return 0u; }
-    if (locality->mode == ASX_PARALLEL_LOCALITY_COMPACT || locality->shard_count <= 1u) {
+    if (locality->mode == ASX_PARALLEL_LOCALITY_COMPACT || locality->shard_count <= 1u ||
+        locality->tasks_per_shard == 0u) {
+        /* tasks_per_shard is at least 1 once normalize_locality_config ran;
+         * an unnormalized config is treated as one shard, as the snapshot
+         * does (parallel_fill_locality_snapshot). */
         return 0u;
     }
 
