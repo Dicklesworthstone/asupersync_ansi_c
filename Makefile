@@ -1664,6 +1664,42 @@ canon-differential: $(CONFORMANCE_RUNNER)
 		--out $(BUILD_DIR)/canon/seed-$(CANON_SEED).jsonl
 	@$(CONFORMANCE_RUNNER) canon $(BUILD_DIR)/canon/seed-$(CANON_SEED).jsonl
 
+# fixtures-fresh — every checked-in Rust fixture is what the pinned
+# asupersync produces now through the current twin_run (bd-9kll.2.17): each
+# fixture's scenario is captured again and the two are compared without
+# their provenance (run id, toolchain, Cargo.lock digest). A twin_run change
+# that alters a projection then fails here, instead of leaving the C runtime
+# compared with an outdated capture. Needs cargo; CI runs it in the fuzz job.
+FIXTURES_FRESH_DIR := $(BUILD_DIR)/fixtures-fresh
+.PHONY: fixtures-fresh
+fixtures-fresh:
+	@echo "[asx] fixtures-fresh: capturing every v2 fixture's scenario again..."
+	@mkdir -p $(FIXTURES_FRESH_DIR)/capture $(FIXTURES_FRESH_DIR)/compare
+	@scenarios=""; \
+	for f in fixtures/rust_reference_v2/*.json; do \
+		id="$$(basename "$$f" .json)"; s="tests/conformance/scenarios_v2/$$id.json"; \
+		[ -f "$$s" ] || { echo "[asx] fixtures-fresh: FAIL: fixture $$id has no scenario $$s"; exit 1; }; \
+		scenarios="$$scenarios $$s"; \
+	done; \
+	$(TWIN_RUN) capture $$scenarios --out $(FIXTURES_FRESH_DIR)/capture >$(FIXTURES_FRESH_DIR)/capture.log 2>&1 || \
+		{ tail -5 $(FIXTURES_FRESH_DIR)/capture.log; echo "[asx] fixtures-fresh: FAIL: capture failed"; exit 1; }; \
+	stale=0; total=0; \
+	for f in fixtures/rust_reference_v2/*.json; do \
+		id="$$(basename "$$f" .json)"; total=$$((total + 1)); \
+		jq -S 'del(.provenance)' "$$f" >$(FIXTURES_FRESH_DIR)/compare/$$id.checked-in.json; \
+		jq -S 'del(.provenance)' $(FIXTURES_FRESH_DIR)/capture/$$id.json \
+			>$(FIXTURES_FRESH_DIR)/compare/$$id.fresh.json; \
+		if ! cmp -s $(FIXTURES_FRESH_DIR)/compare/$$id.checked-in.json \
+			$(FIXTURES_FRESH_DIR)/compare/$$id.fresh.json; then \
+			echo "[asx] fixtures-fresh: STALE $$id"; \
+			diff $(FIXTURES_FRESH_DIR)/compare/$$id.checked-in.json \
+				$(FIXTURES_FRESH_DIR)/compare/$$id.fresh.json | head -12; \
+			stale=$$((stale + 1)); \
+		fi; \
+	done; \
+	if [ "$$stale" -ne 0 ]; then echo "[asx] fixtures-fresh: FAIL ($$stale of $$total stale)"; exit 1; fi; \
+	echo "[asx] fixtures-fresh: PASS ($$total fixtures reproduced)"
+
 # check-rust-constants — the C runtime's kernel constants and defaults
 # against Rust's (bd-9kll.2.13). schemas/rust_kernel_constants.json holds
 # Rust's values, which `twin_run constants` reads from the pinned asupersync:

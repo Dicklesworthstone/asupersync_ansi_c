@@ -427,6 +427,7 @@ C-side gaps found and closed.
 ```bash
 make conformance        # executed C-vs-Rust comparison of every v2 fixture
 make fuzz-differential FUZZ_V2_SEED=7 FUZZ_V2_COUNT=200
+make fixtures-fresh        # every fixture reproduced by the pinned asupersync + current twin_run (cargo)
 make check-rust-constants  # C kernel constants vs schemas/rust_kernel_constants.json
 make rust-constants-fresh  # re-derive that document from the pinned asupersync (cargo)
 make fixture-integrity  # schema, provenance, digest recompute, codec round trip

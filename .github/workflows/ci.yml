@@ -1026,6 +1026,9 @@ jobs:
       - name: Rust kernel constants re-derived from the pinned asupersync
         run: make rust-constants-fresh
 
+      - name: Every Rust fixture reproduced by the pinned asupersync and current twin_run
+        run: make fixtures-fresh
+
       - name: Upload divergent scenarios
         if: failure()
         uses: actions/upload-artifact@v4
