@@ -378,6 +378,56 @@ TEST(spawned_child_inherits_the_quota_until_the_cleanup_phase_starts) {
     ASSERT_EQ(s.quota_b, UINT32_MAX);
 }
 
+static int budget_equal(const asx_budget *a, const asx_budget *b) {
+    return a->deadline == b->deadline && a->poll_quota == b->poll_quota &&
+           a->cost_quota == b->cost_quota && a->priority == b->priority;
+}
+
+/* Metamorphic M3 (bd-9kll.3.1): a region with budget b opened inside one
+ * with budget a holds meet(a, b), the budget of one region opened with
+ * meet(a, b), for every pair of the edge budgets (INFINITE, ZERO with its
+ * due-at-once deadline 0, NEW, quotas, deadlines, priorities); Rust's
+ * region table meets a child's budget with its parent's
+ * (runtime/region_table.rs:314). */
+TEST(nested_region_budgets_equal_their_meet) {
+    asx_budget s[7];
+    uint32_t i;
+    uint32_t j;
+    s[0] = asx_budget_infinite();
+    s[1] = asx_budget_zero();
+    s[2] = asx_budget_new();
+    s[3] = asx_budget_from_polls(7u);
+    s[4] = asx_budget_new();
+    s[4].deadline = 0u;
+    s[4].priority = 3u;
+    s[5] = asx_budget_infinite();
+    s[5].deadline = 500u;
+    s[5].cost_quota = 9u;
+    s[5].priority = 250u;
+    s[6] = asx_budget_from_polls(3u);
+    s[6].deadline = 1000u;
+    for (i = 0; i < 7u; i++) {
+        for (j = 0; j < 7u; j++) {
+            asx_region_id root;
+            asx_region_id outer;
+            asx_region_id nested;
+            asx_region_id single;
+            asx_budget met = asx_budget_meet(&s[i], &s[j]);
+            asx_budget got_nested;
+            asx_budget got_single;
+            setup();
+            ASSERT_EQ(asx_region_open(&root), ASX_OK);
+            ASSERT_EQ(asx_region_open_child_with_budget(root, &s[i], &outer), ASX_OK);
+            ASSERT_EQ(asx_region_open_child_with_budget(outer, &s[j], &nested), ASX_OK);
+            ASSERT_EQ(asx_region_open_child_with_budget(root, &met, &single), ASX_OK);
+            ASSERT_EQ(asx_region_get_budget(nested, &got_nested), ASX_OK);
+            ASSERT_EQ(asx_region_get_budget(single, &got_single), ASX_OK);
+            ASSERT_TRUE(budget_equal(&got_nested, &met));
+            ASSERT_TRUE(budget_equal(&got_single, &met));
+        }
+    }
+}
+
 /* Spawns one child with `lower` and one with `higher`, recording the budget
  * each starts with. */
 typedef struct {
@@ -945,6 +995,7 @@ int main(void) {
     RUN_TEST(consume_cost_rejects_stale_handle);
     RUN_TEST(spawned_child_inherits_the_quota_until_the_cleanup_phase_starts);
     RUN_TEST(spawn_budget_from_a_task_keeps_its_priority_and_clamps_the_rest);
+    RUN_TEST(nested_region_budgets_equal_their_meet);
     RUN_TEST(budgets_tighten_down_the_region_tree);
     RUN_TEST(region_deadline_bounds_tasks_spawned_into_it_from_a_task);
     RUN_TEST(reserve_ex_records_kind_and_holder);
