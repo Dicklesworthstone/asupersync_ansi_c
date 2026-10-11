@@ -45,4 +45,13 @@
 #endif
 #endif
 
+/* Discard the asx_status of an ASX_MUST_USE call on purpose. GCC does not
+ * let a (void) cast silence warn_unused_result, so the status goes into a
+ * scoped variable. */
+#define ASX_IGNORE_RESULT(expr)                                                                    \
+    do {                                                                                           \
+        asx_status asx_ignored_result_ = (expr);                                                   \
+        (void)asx_ignored_result_;                                                                 \
+    } while (0)
+
 #endif /* ASX_EXPORT_H */

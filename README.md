@@ -1781,6 +1781,8 @@ The test and example suites serve as executable documentation:
 
 ### Examples (<!-- fact:examples -->14<!-- /fact --> programs in `examples/`)
 
+`make examples` builds them with the warnings-as-errors policy into `build/examples/`; `make test-examples` (part of `make test`, and run in CI for the core and browser profiles) also runs each and fails if any scenario fails. `ex_browser_boundary` builds only with `PROFILE=BROWSER`, and `ex_quickstart`, which uses the blocking pool, only without it. To discard the status of an `ASX_MUST_USE` call on purpose, use `ASX_IGNORE_RESULT(expr)`: GCC does not let a `(void)` cast silence `warn_unused_result`.
+
 | Example | Demonstrates |
 |---|---|
 | `ex_quickstart.c` | Kernel lifecycle: region open, task spawn, scheduler run, quiescence, drain |

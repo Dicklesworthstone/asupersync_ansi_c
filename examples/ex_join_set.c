@@ -54,7 +54,11 @@ int main(void) {
             printf("SCENARIO join_set_example fail spawn_%u\n", i);
             return 1;
         }
-        asx_join_set_add(&js, tasks[i]);
+        st = asx_join_set_add(&js, tasks[i]);
+        if (st != ASX_OK) {
+            printf("SCENARIO join_set_example fail add_%u\n", i);
+            return 1;
+        }
     }
 
     printf("SCENARIO join_set_spawned pass\n");
@@ -68,16 +72,18 @@ int main(void) {
         if (st == ASX_OK) {
             printf("SCENARIO join_set_completed_%u pass\n", result.index);
         } else if (st == ASX_E_PENDING) {
+            /* Not every task is done yet: run the scheduler again; a run
+             * that cannot make progress ends the loop. */
             budget = asx_budget_from_polls(50);
-            asx_scheduler_run(region, &budget);
+            st = asx_scheduler_run(region, &budget);
+            if (st != ASX_OK) break;
         } else {
             break;
         }
     }
 
-    printf("SCENARIO join_set_all_done %s\n",
-           asx_join_set_is_empty(&js) ? "pass" : "fail");
+    printf("SCENARIO join_set_all_done %s\n", asx_join_set_is_empty(&js) ? "pass" : "fail");
 
     asx_runtime_shutdown(&rt);
-    return 0;
+    return asx_join_set_is_empty(&js) ? 0 : 1;
 }

@@ -98,6 +98,10 @@ jobs:
         id: test_browser_minimal_focused
         run: make test-browser-minimal-focused
 
+      - name: Shipped examples under the browser profile
+        id: test_browser_examples
+        run: make test-examples PROFILE=BROWSER BUILD_DIR=build/browser-examples
+
       - name: Bounded model-check (state machines)
         id: model_check
         run: make model-check
@@ -223,6 +227,10 @@ jobs:
       - name: API ergonomics vignettes
         id: vignette_tests
         run: make test-vignettes
+
+      - name: Shipped examples (built with -Werror, run)
+        id: example_tests
+        run: make test-examples
 
       - name: C conformance suites (codec, profile, parallel, misuse, resource pressure)
         id: conformance_c_tests

@@ -554,7 +554,7 @@ E2E_VERTICAL_SCRIPTS := \
 .PHONY: model-check fixture-integrity fixtures-promote test-gates test-capacity-x4 test-resource-classes
 .PHONY: print-capacity-macros capacity-table
 .PHONY: test-asan test-asan-live test-tsan
-.PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
+.PHONY: test test-unit test-combinator-contract test-actor-supervision-harness test-browser-focused test-browser-minimal-focused test-invariants test-conformance-c test-vignettes examples test-examples test-e2e test-e2e-vertical test-e2e-parallel test-e2e-posix-adapter test-e2e-network-surface test-e2e-actor-supervision wave-c-acceptance-demo test-abi-shim abi-check
 .PHONY: formal-cbmc formal-algebraic formal-tv formal-litmus formal-codegen formal-check
 .PHONY: check-evidence-bundle
 .PHONY: conformance codec-equivalence profile-parity parallel-parity crate-acceptance-gate resource-pressure-gate
@@ -823,7 +823,7 @@ model-check: $(MODEL_CHECK_BIN)
 # ---------------------------------------------------------------------------
 # test — run all test suites
 # ---------------------------------------------------------------------------
-test: test-unit test-invariants test-conformance-c test-vignettes
+test: test-unit test-invariants test-conformance-c test-vignettes test-examples
 	@echo "[asx] test: all suites passed"
 
 # ---------------------------------------------------------------------------
@@ -1195,6 +1195,43 @@ test-vignettes: $(VIGNETTE_TEST_BIN)
 		echo "[asx] test-vignettes: $$pass passed, $$fail failed"; \
 		[ $$fail -eq 0 ] || exit 1; \
 	fi
+
+# ---------------------------------------------------------------------------
+# examples / test-examples — every program in examples/ built under the
+# warnings-as-errors policy against libasx, then run; each exits 0 only when
+# all its scenarios pass. ex_browser_boundary checks the browser profile's
+# fail-closed gating, so only PROFILE=BROWSER builds it; ex_quickstart uses
+# the blocking pool, a native surface the browser profile removes.
+# ---------------------------------------------------------------------------
+EXAMPLE_SRC := $(sort $(wildcard examples/*.c))
+ifeq ($(PROFILE),BROWSER)
+EXAMPLE_SRC := $(filter-out examples/ex_quickstart.c,$(EXAMPLE_SRC))
+else
+EXAMPLE_SRC := $(filter-out examples/ex_browser_boundary.c,$(EXAMPLE_SRC))
+endif
+EXAMPLE_BIN := $(patsubst examples/%.c,$(BUILD_DIR)/examples/%,$(EXAMPLE_SRC))
+
+examples: $(EXAMPLE_BIN)
+
+$(BUILD_DIR)/examples/%: examples/%.c $(LIB_A)
+	@mkdir -p $(@D)
+	$(CC) $(VIGNETTE_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS)
+
+test-examples: $(EXAMPLE_BIN)
+	@echo "[asx] test-examples: running $(words $(EXAMPLE_BIN)) example(s)..."
+	@pass=0; fail=0; \
+	for t in $(EXAMPLE_BIN); do \
+		if $(TEST_EXEC) $$t >$$t.log 2>&1; then \
+			echo "  PASS $$(basename $$t)"; \
+			pass=$$((pass + 1)); \
+		else \
+			echo "  FAIL $$(basename $$t) (log $$t.log)"; \
+			tail -5 $$t.log; \
+			fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo "[asx] test-examples: $$pass passed, $$fail failed"; \
+	[ $$pass -gt 0 ] && [ $$fail -eq 0 ]
 
 # ---------------------------------------------------------------------------
 # test-abi-shim — consumer ABI/API stability verification (bd-56t.4)

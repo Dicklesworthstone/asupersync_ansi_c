@@ -5,9 +5,26 @@
  */
 
 #include "../../test_harness.h"
+#include <asx/asx_export.h>
 #include <asx/asx_status.h>
 
 TEST(ok_is_not_error) { ASSERT_FALSE(asx_is_error(ASX_OK)); }
+
+static int g_must_use_calls;
+
+ASX_MUST_USE static asx_status must_use_counted(void) {
+    g_must_use_calls++;
+    return ASX_E_CANCELLED;
+}
+
+/* ASX_IGNORE_RESULT discards an ASX_MUST_USE status where a (void) cast
+ * would not satisfy GCC's warn_unused_result: this file builds under
+ * -Werror, and the call still runs once. */
+TEST(ignore_result_discards_a_must_use_status) {
+    g_must_use_calls = 0;
+    ASX_IGNORE_RESULT(must_use_counted());
+    ASSERT_EQ(g_must_use_calls, 1);
+}
 
 TEST(errors_are_errors) {
     ASSERT_TRUE(asx_is_error(ASX_E_INVALID_ARGUMENT));
@@ -81,6 +98,7 @@ TEST(status_from_name_rejects_near_misses) {
 
 int main(void) {
     RUN_TEST(ok_is_not_error);
+    RUN_TEST(ignore_result_discards_a_must_use_status);
     RUN_TEST(errors_are_errors);
     RUN_TEST(status_str_ok);
     RUN_TEST(status_str_errors_not_null);
