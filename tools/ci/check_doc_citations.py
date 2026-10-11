@@ -12,6 +12,13 @@ lie within it. Paths under src/ that this repository lacks and that end in
 .rs or have no extension are the Rust reference's files and modules, and
 are skipped, as are bare file names.
 
+A citation tied to a C symbol, "`sym` (`path:N`)" or "`path:N` `sym`",
+must cite lines that mention the symbol whenever the cited file mentions
+it at all (bd-r3o5): line numbers drift as code moves, and a range that
+merely exists proves nothing. The error names the line that defines the
+symbol, or its only occurrence, when there is one. (A backticked word the
+file never mentions, such as a vocabulary term, is not a symbol here.)
+
 docs/FEATURE_PARITY.md is also checked as the parity tracker: every
 backticked fixture ID (`name-NNN`) must be a v2 fixture
 (fixtures/rust_reference_v2/<id>.json) or a legacy one (fixtures/
@@ -42,15 +49,80 @@ DEFAULT_DOCS = [
     "docs/EXISTING_ASUPERSYNC_STRUCTURE.md",
     "docs/LIFECYCLE_TRANSITION_TABLES.md",
 ]
+# Checked for symbol-tied citations only: its Rust column cites the Rust
+# repository's docs/ and tests/ by bare path, which check_paths would take
+# for this repository's (check_refinement_map.sh checks its rule IDs).
+SYMBOL_ONLY_DOCS = ["docs/C_REFINEMENT_MAP.md"]
 REPO_DIRS = ("src/", "include/", "tests/", "tools/", "docs/", "schemas/", "fixtures/", ".github/")
 PATH_RE = re.compile(r"`((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+|Makefile)(?::([0-9]+)(?:-([0-9]+))?)?`")
 FIXTURE_RE = re.compile(r"`([a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{3})`")
 V2_DIR = os.path.join(ROOT, "fixtures", "rust_reference_v2")
 
+# Symbol-tied citations of C files: "`sym` (`path:N[-M]`" and "`path:N[-M]` `sym`".
+_SYM = r"([A-Za-z_][A-Za-z0-9_]{2,})"
+_CITE = r"((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.[ch]):([0-9]+)(?:-([0-9]+))?"
+SYM_BEFORE_RE = re.compile(r"`" + _SYM + r"`,? \(`" + _CITE + r"`")
+SYM_AFTER_RE = re.compile(r"`" + _CITE + r"` `" + _SYM + r"`")
+TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Each captures the identifier a line defines.
+DEFINES_RE = (
+    re.compile(r"^[A-Za-z_][^;=(]*?\b([A-Za-z_][A-Za-z0-9_]*)\s*\("),  # function
+    re.compile(r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)"),  # macro
+    re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:=[^=]|,|$)"),  # enum constant
+    re.compile(r"^\s*}\s*([A-Za-z_][A-Za-z0-9_]*)\s*;"),  # typedef name
+)
+
 
 def line_count(path):
     with open(path, "rb") as f:
         return sum(1 for _ in f)
+
+
+def source_lines(path, cache):
+    """The file's lines and, per line, the identifiers it mentions."""
+    if path not in cache:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read().splitlines()
+        cache[path] = ([set(TOKEN_RE.findall(line)) for line in text], text)
+    return cache[path]
+
+
+def defines(line, sym):
+    for pattern in DEFINES_RE:
+        m = pattern.search(line)
+        if m and m.group(1) == sym:
+            return True
+    return False
+
+
+def symbol_home(tokens, text, sym):
+    """The line that defines `sym`, else its only occurrence, else None."""
+    hits = [i + 1 for i, toks in enumerate(tokens) if sym in toks]
+    defs = [h for h in hits if defines(text[h - 1], sym)]
+    if len(defs) == 1:
+        return defs[0]
+    return hits[0] if len(hits) == 1 else None
+
+
+def check_symbols(doc, text, errors):
+    cache = {}
+    for lineno, line in enumerate(text.splitlines(), 1):
+        tied = [(m.group(1), m.group(2), m.group(3), m.group(4)) for m in SYM_BEFORE_RE.finditer(line)]
+        tied += [(m.group(4), m.group(1), m.group(2), m.group(3)) for m in SYM_AFTER_RE.finditer(line)]
+        for sym, rel, first, last in tied:
+            path = os.path.join(ROOT, rel)
+            if not os.path.isfile(path):
+                continue  # reported by check_paths, or a Rust file
+            tokens, src = source_lines(path, cache)
+            if not any(sym in toks for toks in tokens):
+                continue  # not a symbol of that file
+            lo, hi = int(first), int(last) if last is not None else int(first)
+            if any(sym in tokens[i - 1] for i in range(max(lo, 1), min(hi, len(tokens)) + 1)):
+                continue
+            home = symbol_home(tokens, src, sym)
+            hint = f"; it is at {rel}:{home}" if home is not None else ""
+            errors.append(f"{doc}:{lineno}: cites {rel}:{first}{'-' + last if last else ''} for "
+                          f"`{sym}`, which those lines do not mention{hint}")
 
 
 def check_paths(doc, text, errors):
@@ -106,12 +178,14 @@ def check_parity_tracker(doc, text, errors):
 
 
 def main(argv):
-    docs = argv[1:] or DEFAULT_DOCS
+    docs = argv[1:] or DEFAULT_DOCS + SYMBOL_ONLY_DOCS
     errors = []
     for doc in docs:
         with open(os.path.join(ROOT, doc), encoding="utf-8") as f:
             text = f.read()
-        check_paths(doc, text, errors)
+        if doc not in SYMBOL_ONLY_DOCS:
+            check_paths(doc, text, errors)
+        check_symbols(doc, text, errors)
         if os.path.basename(doc) == "FEATURE_PARITY.md":
             check_parity_tracker(doc, text, errors)
     for e in errors:
@@ -119,7 +193,8 @@ def main(argv):
     if errors:
         print(f"check_doc_citations: FAIL ({len(errors)} unresolved citation(s))", file=sys.stderr)
         return 1
-    print(f"check_doc_citations: {len(docs)} doc(s), every cited path, line range and fixture resolves")
+    print(f"check_doc_citations: {len(docs)} doc(s), every cited path, line range, symbol and "
+          f"fixture resolves")
     return 0
 
 

@@ -72,7 +72,7 @@ The Rust channel uses **implicit state encoding** via atomic fields (no explicit
 
 **Monotonicity:** `receiver_dropped` goes `false -> true` once (comment at `mpsc.rs:304-305`; set by `Receiver::close`, `mpsc.rs:1698-1711`, and `Drop for Receiver`, `mpsc.rs:2122-2149`). `sender_count` is not decrement-only: `Sender::clone` increments it (`mpsc.rs:1231-1239`) and `WeakSender::upgrade` increments it but refuses to raise it from 0 (`mpsc.rs:1269-1300`). Once it reaches 0 it stays 0.
 
-**C status:** implemented with an explicit state enum, `ASX_CHANNEL_OPEN / SENDER_CLOSED / RECEIVER_CLOSED / FULLY_CLOSED` (`include/asx/core/channel.h:68-73`). C has one sender side and no sender count, clone or weak sender: `asx_channel_close_sender` moves `OPEN -> SENDER_CLOSED` or `RECEIVER_CLOSED -> FULLY_CLOSED`, and closing again returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:422-445`).
+**C status:** implemented with an explicit state enum, `ASX_CHANNEL_OPEN / SENDER_CLOSED / RECEIVER_CLOSED / FULLY_CLOSED` (`include/asx/core/channel.h:68-73`). C has one sender side and no sender count, clone or weak sender: `asx_channel_close_sender` moves `OPEN -> SENDER_CLOSED` or `RECEIVER_CLOSED -> FULLY_CLOSED`, and closing again returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:445-468`).
 
 ### 1.2 Capacity Model
 
@@ -106,7 +106,7 @@ Sender::reserve(cx) -> Reserve future -> Result<SendPermit, SendError<()>>
 
 A pending reserve re-checks cancellation after registering (`mpsc.rs:1020-1031`).
 
-**C status:** implemented. `asx_channel_reserve` (`src/channel/mpsc.c:848-868`) checks cancellation first (`channel_wait_cancelled`, `mpsc.c:839-846`), then `channel_reserve_impl` (`mpsc.c:543-616`): sender closed -> `ASX_E_INVALID_STATE` (`:552-555`), receiver closed -> `ASX_E_DISCONNECTED` (`:557-560`), a live producer queued ahead -> full (`:565-567`), no capacity -> full (`:569-576`). Full parks the task in the reserve wait queue and returns `ASX_E_PENDING` (`:535-541`, `:855`). Success registers a `SendPermit` obligation when the `Cx` has a task (`:859-866`). Rust parity: `mpsc-two-phase-send-recv-001`.
+**C status:** implemented. `asx_channel_reserve` (`src/channel/mpsc.c:900-920`) checks cancellation first (`channel_wait_cancelled`, `mpsc.c:839-846`), then `channel_reserve_impl` (`mpsc.c:543-616`): sender closed -> `ASX_E_INVALID_STATE` (`:552-555`), receiver closed -> `ASX_E_DISCONNECTED` (`:557-560`), a live producer queued ahead -> full (`:565-567`), no capacity -> full (`:569-576`). Full parks the task in the reserve wait queue and returns `ASX_E_PENDING` (`:535-541`, `:855`). Success registers a `SendPermit` obligation when the `Cx` has a task (`:859-866`). Rust parity: `mpsc-two-phase-send-recv-001`.
 
 #### Phase 2a: Send (Commit)
 
@@ -122,7 +122,7 @@ Neither is infallible: both run `try_send_deferred_wake` (`mpsc.rs:1588-1629`), 
 
 **Rust source:** `mpsc.rs:1565-1570` (`send`), `mpsc.rs:1574-1578` (`try_send`)
 
-**C status:** implemented. `asx_send_permit_send` (`src/channel/mpsc.c:639-694`) consumes the permit token (forged or stale permits are rejected), returns `ASX_E_DISCONNECTED` and aborts the obligation with `ASX_OBLIGATION_ABORT_ERROR` when the receiver is closed (`:663-669`), else enqueues (`:685-688`), commits the obligation (`:690`) and settles waiters (`:691`). C has no `Sender::try_send`; the conformance interpreter runs `try_send` as `asx_channel_try_reserve` plus `asx_send_permit_send` (`src/conformance/interpreter.c:1803-1816`).
+**C status:** implemented. `asx_send_permit_send` (`src/channel/mpsc.c:691-746`) consumes the permit token (forged or stale permits are rejected), returns `ASX_E_DISCONNECTED` and aborts the obligation with `ASX_OBLIGATION_ABORT_ERROR` when the receiver is closed (`:715-721`), else enqueues (`:737-739`), commits the obligation (`:742`) and settles waiters (`:743`). C has no `Sender::try_send`; the conformance interpreter runs `try_send` as `asx_channel_try_reserve` plus `asx_send_permit_send` (`src/conformance/interpreter.c:2381-2394`).
 
 #### Phase 2b: Abort (Rollback)
 
@@ -133,7 +133,7 @@ SendPermit::abort(self)
 - Marks the permit consumed, decrements `reserved`, records a cancellation event and wakes the head of the waiter queue (`release_capacity`, `mpsc.rs:1641-1653`)
 - Aborts the obligation with reason `Explicit` (`mpsc.rs:1633-1639`)
 
-**C status:** implemented. `asx_send_permit_abort` (`src/channel/mpsc.c:700-723`) returns the slot, aborts the obligation with `ASX_OBLIGATION_ABORT_EXPLICIT` (`:715`) and settles the wait queues (`:716`).
+**C status:** implemented. `asx_send_permit_abort` (`src/channel/mpsc.c:752-775`) returns the slot, aborts the obligation with `ASX_OBLIGATION_ABORT_EXPLICIT` (`:715`) and settles the wait queues (`:716`).
 
 #### RAII Drop Safety
 
@@ -199,7 +199,7 @@ try_recv() -> Result<T, RecvError>
 
 **Cancel safety:** the checkpoint runs before the pop, so a cancelled receive does not consume a message.
 
-**C status:** implemented. `asx_channel_recv` (`src/channel/mpsc.c:882-890`) checks cancellation first, then `channel_recv_impl` (`mpsc.c:739-806`): dequeue in FIFO order (`:748-764`), receiver closed -> `ASX_E_DISCONNECTED` (`:767-770`), sender closed with no outstanding permit -> `ASX_E_DISCONNECTED` (`:772-797`), else park and return `ASX_E_PENDING` (`:801-804`, `:889`). `asx_channel_try_recv` (`mpsc.c:808-810`) returns `ASX_E_WOULD_BLOCK` when empty; the conformance interpreter reports that as `ASX_E_CHANNEL_EMPTY` (`src/conformance/interpreter.c:1829`). Rust parity: `mpsc-recv-cancel-first-001` (a pending recv cancelled by the driver returns `ASX_E_CANCELLED`), `mpsc-try-ops-001` (`try_recv` on an empty channel, then `ASX_E_DISCONNECTED` after the sender closes and the queue drains).
+**C status:** implemented. `asx_channel_recv` (`src/channel/mpsc.c:938-946`) checks cancellation first, then `channel_recv_impl` (`mpsc.c:739-806`): dequeue in FIFO order (`:748-764`), receiver closed -> `ASX_E_DISCONNECTED` (`:767-770`), sender closed with no outstanding permit -> `ASX_E_DISCONNECTED` (`:772-797`), else park and return `ASX_E_PENDING` (`:801-804`, `:889`). `asx_channel_try_recv` (`mpsc.c:808-810`) returns `ASX_E_WOULD_BLOCK` when empty; the conformance interpreter reports that as `ASX_E_CHANNEL_EMPTY` (`src/conformance/interpreter.c:2407`). Rust parity: `mpsc-recv-cancel-first-001` (a pending recv cancelled by the driver returns `ASX_E_CANCELLED`), `mpsc-try-ops-001` (`try_recv` on an empty channel, then `ASX_E_DISCONNECTED` after the sender closes and the queue drains).
 
 ### 1.7 Error Taxonomy
 
@@ -238,7 +238,7 @@ try_recv() -> Result<T, RecvError>
 
 **Rust source:** `mpsc.rs:1061-1068` (reserve cancel), `mpsc.rs:1786-1797` (recv cancel)
 
-**C status:** implemented. `channel_wait_cancelled` (`src/channel/mpsc.c:839-846`) checks `asx_cx_checkpoint`, records the trace message `mpsc::reserve cancelled` or `mpsc::recv cancelled`, and withdraws the task from both wait queues, passing any wake it held on (`asx_channel_wait_cancel`, `mpsc.c:816-829`). Permit send and abort do not check cancellation (`mpsc.c:639-723`). Unit tests: `test_channel_wake.c` `cancelled_waiter_does_not_absorb_wake`, `test_mpsc.c` `cancelled_cx_wins_over_ready_channel_and_traces`. Rust parity: `mpsc-recv-cancel-first-001`. Reserve cancellation has no v2 fixture.
+**C status:** implemented. `channel_wait_cancelled` (`src/channel/mpsc.c:891-898`) checks `asx_cx_checkpoint`, records the trace message `mpsc::reserve cancelled` or `mpsc::recv cancelled`, and withdraws the task from both wait queues, passing any wake it held on (`asx_channel_wait_cancel`, `mpsc.c:816-829`). Permit send and abort do not check cancellation (`mpsc.c:639-723`). Unit tests: `test_channel_wake.c` `cancelled_waiter_does_not_absorb_wake`, `test_mpsc.c` `cancelled_cx_wins_over_ready_channel_and_traces`. Rust parity: `mpsc-recv-cancel-first-001`. Reserve cancellation has no v2 fixture.
 
 ### 1.9 Obligation Integration
 
@@ -254,7 +254,7 @@ The `session` module wraps the base channel with an `ObligationToken` per permit
 
 `#[must_use]` is on both `SendPermit` (`mpsc.rs:1460`) and `TrackedPermit` (`session.rs:404`). A base permit from `reserve`/`reserve_checked` carries a runtime obligation; one from `try_reserve` does not (doc comment `mpsc.rs:1467-1470`).
 
-**C status:** `TrackedSender`/`TrackedPermit` and the leak panic: spec (Rust) — not implemented in C (`src/channel/session.c` is a different, bidirectional session channel; `include/asx/core/session.h:1-14`). The base-permit obligation is implemented: `asx_send_permit` has an `obligation` field (`include/asx/core/channel.h:79-88`), registered by `asx_channel_reserve` (`src/channel/mpsc.c:859-866`), committed on send (`:690`), aborted `Explicit` on abort (`:715`) and `Error` on disconnect (`:667`). Rust parity: `mpsc-two-phase-send-recv-001` (its trace records `obligation.reserved` and `obligation.committed` of kind `SendPermit` for both sends).
+**C status:** `TrackedSender`/`TrackedPermit` and the leak panic: spec (Rust) — not implemented in C (`src/channel/session.c` is a different, bidirectional session channel; `include/asx/core/session.h:1-14`). The base-permit obligation is implemented: `asx_send_permit` has an `obligation` field (`include/asx/core/channel.h:79-88`), registered by `asx_channel_reserve` (`src/channel/mpsc.c:900-907`), committed on send (`:690`), aborted `Explicit` on abort (`:715`) and `Error` on disconnect (`:667`). Rust parity: `mpsc-two-phase-send-recv-001` (its trace records `obligation.reserved` and `obligation.committed` of kind `SendPermit` for both sends).
 
 ### 1.10 Close/Drain Semantics
 
