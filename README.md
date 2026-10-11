@@ -983,9 +983,9 @@ An obligation (send permit, ack, lease, I/O op, semaphore permit, transaction) i
 - They are **leaks**, whether or not the holder was cancelled: a Rust task body that ends holding an unresolved obligation token drops it, and the drop posts a leak. They are handled by the configured `leak_response`:
   - `LOG` (the default) warns.
   - `SILENT` records them.
-  - `RECOVER` aborts them with reason `LEAK_RECOVERED`.
+  - `RECOVER` aborts them with reason `ERROR`, as Rust's Recover does; they still count as leaks.
   - `PANIC` routes the leak through region fault containment, so FAIL_FAST surfaces `ASX_E_UNRESOLVED_OBLIGATIONS` from the scheduler.
-- `leak_escalation` switches to a stricter response once the leak count reaches a threshold.
+- `leak_escalation` switches to a stricter response once the leak count reaches a threshold. As in Rust, the leak that reaches it is the first one escalated.
 
 `asx_obligation_get_info` and `asx_obligation_leak_count` expose the results.
 

@@ -516,9 +516,10 @@ static asx_leak_response obligation_leak_batch_policy(uint64_t n) {
  * completion-time abort with Cancel (abort_orphaned_obligations_for_holder,
  * state.rs:8454) only reaches tokens that were never dropped, which C, with
  * no destructors, cannot tell apart. The leak policy then applies; RECOVER
- * aborts with ASX_OBLIGATION_ABORT_LEAK_RECOVERED. */
+ * aborts with ASX_OBLIGATION_ABORT_ERROR. */
 /* Leak the reserved obligation in slot `idx` under the active policy:
- * RECOVER aborts it with ASX_OBLIGATION_ABORT_LEAK_RECOVERED, the others
+ * RECOVER aborts it with ASX_OBLIGATION_ABORT_ERROR, as Rust's Recover
+ * aborts with ObligationAbortReason::Error (state.rs:5781-5797), the others
  * mark it LEAKED (vocabulary obligation.leaked, Rust ObligationLeak), LOG
  * also warning with `log_message`. Each leak is a batch of its own, as each
  * dropped token posts its own leak (state.rs:7036-7042): it is counted
@@ -533,9 +534,9 @@ static int obligation_leak_slot(uint32_t idx, const char *log_message) {
     asx_leak_response policy = obligation_leak_batch_policy(1u);
     o->counted = 0;
     if (policy == ASX_LEAK_RECOVER) {
-        /* Recovered leak: abort. */
+        /* Recovered leak: abort, still counted as a leak. */
         o->state = ASX_OBLIGATION_ABORTED;
-        o->abort_reason = ASX_OBLIGATION_ABORT_LEAK_RECOVERED;
+        o->abort_reason = ASX_OBLIGATION_ABORT_ERROR;
         asx_ghost_obligation_resolved(oid);
         (void)asx_event_emit(ASX_EVENT_OBLIGATION_ABORT, oid, 0u, ASX_OK);
         asx_trace_emit(ASX_TRACE_OBLIGATION_ABORT, oid, 0);
@@ -1718,8 +1719,8 @@ asx_status asx_obligation_abort_with_reason(asx_obligation_id id,
     asx_obligation_slot *o;
     asx_status st;
 
-    /* The reasons a caller may give (Rust ObligationAbortReason); NONE and
-     * LEAK_RECOVERED are the runtime's own. */
+    /* The reasons a caller may give (Rust ObligationAbortReason); NONE is
+     * the runtime's own. */
     if (reason != ASX_OBLIGATION_ABORT_EXPLICIT && reason != ASX_OBLIGATION_ABORT_CANCEL &&
         reason != ASX_OBLIGATION_ABORT_ERROR) {
         return ASX_E_INVALID_ARGUMENT;

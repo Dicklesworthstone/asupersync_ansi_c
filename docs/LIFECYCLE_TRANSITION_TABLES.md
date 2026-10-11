@@ -239,7 +239,7 @@ Rust `ObligationState` is at `src/record/obligation.rs:192`; C `asx_obligation_s
 |-------|-----------|-------------|
 | `Reserved` | `ASX_OBLIGATION_RESERVED` | Resource/promise reserved but not yet fulfilled; blocks region close |
 | `Committed` | `ASX_OBLIGATION_COMMITTED` | Terminal: obligation fulfilled successfully |
-| `Aborted` | `ASX_OBLIGATION_ABORTED` | Terminal: obligation released; Rust records an abort reason (Cancel, Error, Explicit; `src/record/obligation.rs:99`), as does C (`include/asx/runtime/runtime.h:684`, plus the C-only `LEAK_RECOVERED`) |
+| `Aborted` | `ASX_OBLIGATION_ABORTED` | Terminal: obligation released; Rust records an abort reason (Cancel, Error, Explicit; `src/record/obligation.rs:99`), as does C (`asx_obligation_abort_reason`, `include/asx/runtime/runtime.h`; a leak the RECOVER policy aborts gets `Error`, as in Rust) |
 | `Leaked` | `ASX_OBLIGATION_LEAKED` | Terminal (error): the holder completed, or dropped the token, without resolving it |
 
 ### 3.2 Legal Transitions
@@ -250,7 +250,7 @@ C's authority table is `src/core/transition_tables.c:65`.
 |------|----|---------|---------------|----------------|
 | `Reserved` | `Committed` | Rust `commit_obligation` (`src/runtime/state.rs:6534`); C `asx_obligation_commit` (`src/runtime/lifecycle.c:1367`) | Obligation `Reserved`. The spec also requires the caller to be the holder; Rust enforces that through the token-bound holder check, C does not check it (C_REFINEMENT_MAP row `rule.obligation.commit`, Partial) | Effect takes place; the region's pending count drops; C ghost monitor records the resolution |
 | `Reserved` | `Aborted` | Rust `abort_obligation` (`src/runtime/state.rs:6745`); C `asx_obligation_abort` / `asx_obligation_abort_with_reason` (`src/runtime/lifecycle.c:1391`, `src/runtime/lifecycle.c:1417`) | Obligation `Reserved` | Resource released, no effect; abort reason recorded |
-| `Reserved` | `Leaked` | The holder completes while holding it (Rust `audit_completion_obligation_leaks`, `src/runtime/state.rs:8341`; C `asx_task_resolve_held_obligations_internal`, `src/runtime/lifecycle.c:515`). Also: C `asx_obligation_drop` leaks at once (`src/runtime/lifecycle.c:1398`), as a dropped Rust token does; Rust's Finalizing leak audit (`src/runtime/state.rs:10271`) leaks what is still Reserved when no task is left | Holder Completed with the obligation still `Reserved` | Leak handled under the leak policy. Rust default is Panic (`src/runtime/state.rs:2338`); C default is LOG (`src/runtime/lifecycle.c:72`); RECOVER aborts with C's `ASX_OBLIGATION_ABORT_LEAK_RECOVERED` instead of marking Leaked (`src/runtime/lifecycle.c:493`). Drift recorded in C_REFINEMENT_MAP row `rule.obligation.leak` (`bd-9kll.3.6`) |
+| `Reserved` | `Leaked` | The holder completes while holding it (Rust `audit_completion_obligation_leaks`, `src/runtime/state.rs:8341`; C `asx_task_resolve_held_obligations_internal`, `src/runtime/lifecycle.c:515`). Also: C `asx_obligation_drop` leaks at once (`src/runtime/lifecycle.c:1398`), as a dropped Rust token does; Rust's Finalizing leak audit (`src/runtime/state.rs:10271`) leaks what is still Reserved when no task is left | Holder Completed with the obligation still `Reserved` | Leak handled under the leak policy. Rust default is Panic (`src/runtime/state.rs:2338`); C default is LOG (`src/runtime/lifecycle.c:72`). RECOVER aborts with Error instead of marking Leaked, in both. The default's drift is recorded in C_REFINEMENT_MAP row `rule.obligation.leak` (`bd-9kll.3.6`) |
 
 ### 3.3 Forbidden Transitions (Must-Fail)
 

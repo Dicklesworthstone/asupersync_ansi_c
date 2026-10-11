@@ -314,11 +314,11 @@ v4 does not define leak policies: v4 §3.4 LEAK says only "In lab: panic or reco
 | `Panic` | Marks each leak Leaked, logs, then panics | `ASX_LEAK_PANIC`: marks Leaked, then routes the fault through region containment (`:551-562`) |
 | `Log` | Marks Leaked and logs an error | `ASX_LEAK_LOG`: marks Leaked and logs a warning |
 | `Silent` | Marks Leaked | `ASX_LEAK_SILENT`: marks Leaked |
-| `Recover` | Aborts with `ObligationAbortReason::Error` instead of marking Leaked | `ASX_LEAK_RECOVER`: aborts with `ASX_OBLIGATION_ABORT_LEAK_RECOVERED` (`:500-508`) |
+| `Recover` | Aborts with `ObligationAbortReason::Error` instead of marking Leaked | `ASX_LEAK_RECOVER`: aborts with `ASX_OBLIGATION_ABORT_ERROR`, still counted as a leak (`obligation_leak_slot`, `src/runtime/lifecycle.c`) |
 
 Rust enum: `ObligationLeakResponse` (`src/runtime/config.rs:1319-1333`). Defaults: `Panic` in `RuntimeConfig` (`src/runtime/config.rs:2242`) and in `RuntimeState`'s internal constructor (`src/runtime/state.rs:2338`); the lab uses `Panic` when `panic_on_obligation_leak` is set and `Log` otherwise (`src/lab/runtime.rs:2435-2439`).
 
-**C status:** enum `asx_leak_response` (`include/asx/asx_config.h:530-535`), default `ASX_LEAK_LOG` (`src/runtime/lifecycle.c:72`, reset at `:147`). The default and the Recover abort reason differ from Rust: row `rule.obligation.leak` (bd-9kll.3.6). Rust parity under `Log`: `leak-policy-leak-reported-001` (`panic_on_leak: false`). Unit tests: `tests/unit/runtime/test_budget_obligation.c` `recover_policy_aborts_leaked_obligation`, `panic_policy_routes_leak_through_containment`.
+**C status:** enum `asx_leak_response` (`include/asx/asx_config.h:530-535`), default `ASX_LEAK_LOG` (`src/runtime/lifecycle.c:72`, reset at `:147`). The default differs from Rust: row `rule.obligation.leak` (bd-9kll.3.6, owner decision bd-9kll.2.19). The Recover abort reason is Rust's `Error` since bd-9kll.3.6. Rust parity under `Log`: `leak-policy-leak-reported-001` (`panic_on_leak: false`). Unit tests: `tests/unit/runtime/test_budget_obligation.c` `recover_policy_aborts_leaked_obligation`, `panic_policy_routes_leak_through_containment`.
 
 ### 5.2 Escalation Policy
 
@@ -333,7 +333,7 @@ typedef struct {
 } asx_leak_escalation_config;   /* include/asx/asx_config.h:544-548 */
 ```
 
-**C status:** implemented, but C compares the count before incrementing it (`asx_leak_policy_effective`, `src/runtime/lifecycle.c:471-476`, increment at `:499`): row `rule.obligation.leak` (bd-9kll.3.6). Test: `leak_escalation_switches_policy_at_threshold`.
+**C status:** implemented as in Rust: the count includes a leak before its response is picked (`obligation_leak_batch_policy`, `src/runtime/lifecycle.c`). Each C leak is a batch of one, as each dropped Rust token posts its own leak (`state.rs:7036-7042`); C has no destructors, so it cannot tell a dropped token from an obligation the completion audit batches (`state.rs:8354`). Tests: `leak_escalation_switches_policy_at_threshold`, `leak_escalation_threshold_zero_escalates_the_first_leak`.
 
 ### 5.3 Diagnostic Information
 

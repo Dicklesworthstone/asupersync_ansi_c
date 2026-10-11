@@ -668,8 +668,11 @@ ASX_API ASX_MUST_USE asx_status asx_task_mask_depth(asx_task_id id, uint32_t *ou
  * posts a Leak), handled by the runtime's leak_response policy: PANIC
  * (marked LEAKED, fault reported through the region's containment policy),
  * LOG (LEAKED + log record), SILENT (LEAKED), or RECOVER (aborted with
- * ASX_OBLIGATION_ABORT_LEAK_RECOVERED). The optional leak_escalation
- * threshold switches policy after N leaks.
+ * ASX_OBLIGATION_ABORT_ERROR, as Rust's Recover aborts with
+ * ObligationAbortReason::Error, runtime/state.rs:5781-5797; the leak is
+ * still counted by asx_obligation_leak_count). The optional leak_escalation
+ * threshold switches policy once N leaks are counted, the one reaching N
+ * included.
  * Obligations without a holder (reserved outside any task) are not
  * auto-resolved: an unresolved one blocks its region's finalization with
  * ASX_E_OBLIGATIONS_UNRESOLVED.
@@ -686,11 +689,10 @@ typedef enum {
 } asx_obligation_kind;
 
 typedef enum {
-    ASX_OBLIGATION_ABORT_NONE = 0,          /* not aborted */
-    ASX_OBLIGATION_ABORT_EXPLICIT = 1,      /* asx_obligation_abort() */
-    ASX_OBLIGATION_ABORT_CANCEL = 2,        /* aborted because of a cancellation */
-    ASX_OBLIGATION_ABORT_ERROR = 3,         /* aborted on an error path */
-    ASX_OBLIGATION_ABORT_LEAK_RECOVERED = 4 /* leak resolved by RECOVER policy */
+    ASX_OBLIGATION_ABORT_NONE = 0,     /* not aborted */
+    ASX_OBLIGATION_ABORT_EXPLICIT = 1, /* asx_obligation_abort() */
+    ASX_OBLIGATION_ABORT_CANCEL = 2,   /* aborted because of a cancellation */
+    ASX_OBLIGATION_ABORT_ERROR = 3     /* an error path, or a leak RECOVER aborted */
 } asx_obligation_abort_reason;
 
 typedef struct {
@@ -787,7 +789,7 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_abort(asx_obligation_id id);
  * with ObligationAbortReason): ASX_OBLIGATION_ABORT_EXPLICIT (what
  * asx_obligation_abort records), _CANCEL or _ERROR.
  * Returns the errors of asx_obligation_abort, or ASX_E_INVALID_ARGUMENT for
- * any other reason (NONE and LEAK_RECOVERED are recorded by the runtime).
+ * any other reason (NONE is the runtime's own).
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status
 asx_obligation_abort_with_reason(asx_obligation_id id, asx_obligation_abort_reason reason);
@@ -795,7 +797,7 @@ asx_obligation_abort_with_reason(asx_obligation_id id, asx_obligation_abort_reas
 /* Give up a reserved obligation unresolved, as dropping a Rust
  * ObligationToken does: it is leaked now, under the leak policy a leak at
  * its holder's completion would get (LEAKED; RECOVER aborts it with
- * ASX_OBLIGATION_ABORT_LEAK_RECOVERED; PANIC also routes the leak through
+ * ASX_OBLIGATION_ABORT_ERROR; PANIC also routes the leak through
  * the region's containment policy, surfaced by the scheduler).
  *
  * Preconditions: id must be a valid obligation handle in RESERVED state.

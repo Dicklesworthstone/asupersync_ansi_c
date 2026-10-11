@@ -547,7 +547,7 @@ void asx_region_trace_cancel_of_gone_internal(asx_region_id region,
 
 /* Resolve the obligations a completing task still holds, cancelled or
  * not, as leaks per the active policy (RECOVER aborts them with
- * LEAK_RECOVERED). Returns the number of leaks recorded. Sets
+ * ASX_OBLIGATION_ABORT_ERROR). Returns the number of leaks recorded. Sets
  * *out_fail_fast when the policy demands fail-fast containment. */
 uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *out_fail_fast);
 

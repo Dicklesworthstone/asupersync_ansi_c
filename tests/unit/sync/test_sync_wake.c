@@ -444,7 +444,7 @@ TEST(sem_permit_held_past_task_completion_is_leaked) {
 TEST(sem_permits_leaked_under_each_leak_policy) {
     /* bd-9kll.5.10: a crowd of holders ends keeping their permits. Each
      * permit's obligation is leaked once: LOG and SILENT mark it LEAKED,
-     * RECOVER aborts it (LEAK_RECOVERED). The count rises by one per
+     * RECOVER aborts it (reason Error, as Rust). The count rises by one per
      * permit, and the late releases return every permit. (PANIC's
      * containment is covered by test_budget_obligation.) */
     static const asx_leak_response policies[3] = {ASX_LEAK_LOG, ASX_LEAK_SILENT, ASX_LEAK_RECOVER};
@@ -474,7 +474,7 @@ TEST(sem_permits_leaked_under_each_leak_policy) {
             ASSERT_EQ(asx_obligation_get_info(g_sem[i].obligation, &info), ASX_OK);
             if (policies[p] == ASX_LEAK_RECOVER) {
                 ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
-                ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_LEAK_RECOVERED);
+                ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_ERROR);
             } else {
                 ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
             }

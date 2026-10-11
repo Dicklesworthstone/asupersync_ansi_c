@@ -600,7 +600,9 @@ TEST(drop_leaks_the_obligation_at_once_not_at_completion) {
     ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
 }
 
-TEST(drop_under_recover_aborts_with_leak_recovered) {
+TEST(drop_under_recover_aborts_with_error) {
+    /* Rust's Recover aborts the leak with ObligationAbortReason::Error
+     * (runtime/state.rs:5781-5797); it still counts as a leak. */
     asx_region_id r;
     asx_obligation_id ob;
     asx_obligation_info info;
@@ -611,7 +613,7 @@ TEST(drop_under_recover_aborts_with_leak_recovered) {
     ASSERT_EQ(asx_obligation_drop(ob), ASX_OK);
     ASSERT_EQ(asx_obligation_get_info(ob, &info), ASX_OK);
     ASSERT_EQ((int)info.state, (int)ASX_OBLIGATION_ABORTED);
-    ASSERT_EQ((int)info.abort_reason, (int)ASX_OBLIGATION_ABORT_LEAK_RECOVERED);
+    ASSERT_EQ((int)info.abort_reason, (int)ASX_OBLIGATION_ABORT_ERROR);
     ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
 }
 
@@ -675,7 +677,7 @@ TEST(recover_policy_aborts_leaked_obligation) {
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
     ASSERT_EQ(asx_obligation_get_info(s.ob, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
-    ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_LEAK_RECOVERED);
+    ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_ERROR);
     ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)1u);
 }
 
@@ -741,10 +743,10 @@ TEST(leak_escalation_switches_policy_at_threshold) {
     ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
     ASSERT_EQ(asx_obligation_get_info(s[1].ob, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
-    ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_LEAK_RECOVERED);
+    ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_ERROR);
     ASSERT_EQ(asx_obligation_get_info(s[2].ob, &info), ASX_OK);
     ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
-    ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_LEAK_RECOVERED);
+    ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_ERROR);
     ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)3u);
 }
 
@@ -772,7 +774,7 @@ TEST(leak_escalation_threshold_zero_escalates_the_first_leak) {
         ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
         ASSERT_EQ(asx_obligation_get_info(s.ob, &info), ASX_OK);
         ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
-        ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_LEAK_RECOVERED);
+        ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_ERROR);
     }
 }
 
@@ -816,7 +818,7 @@ int main(void) {
     RUN_TEST(reserve_outside_poll_has_no_holder);
     RUN_TEST(reserve_in_poll_binds_current_task_and_leaks_under_log);
     RUN_TEST(drop_leaks_the_obligation_at_once_not_at_completion);
-    RUN_TEST(drop_under_recover_aborts_with_leak_recovered);
+    RUN_TEST(drop_under_recover_aborts_with_error);
     RUN_TEST(drop_rejects_a_resolved_or_unknown_obligation);
     RUN_TEST(cancelled_holder_leaks_its_unresolved_obligation);
     RUN_TEST(recover_policy_aborts_leaked_obligation);

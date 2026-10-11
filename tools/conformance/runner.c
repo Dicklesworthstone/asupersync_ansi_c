@@ -558,8 +558,7 @@ static const ck_variant k_obligation_kinds[] = {
     {"SemaphorePermit", ASX_OBLIGATION_KIND_SEMAPHORE_PERMIT},
     {"Transaction", ASX_OBLIGATION_KIND_TRANSACTION},
 };
-/* C-only: ASX_OBLIGATION_ABORT_NONE (not aborted) and _LEAK_RECOVERED
- * (the RECOVER leak policy's abort). */
+/* C-only: ASX_OBLIGATION_ABORT_NONE (not aborted). */
 static const ck_variant k_abort_reasons[] = {
     {"Explicit", ASX_OBLIGATION_ABORT_EXPLICIT},
     {"Cancel", ASX_OBLIGATION_ABORT_CANCEL},

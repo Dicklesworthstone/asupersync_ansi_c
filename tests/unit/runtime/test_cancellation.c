@@ -1207,7 +1207,9 @@ TEST(obligation_abort_with_reason_records_it) {
     ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_LEASE, ASX_INVALID_ID, &a),
               ASX_OK);
     ASSERT_EQ(asx_obligation_reserve_ex(rid, ASX_OBLIGATION_KIND_ACK, ASX_INVALID_ID, &b), ASX_OK);
-    ASSERT_EQ(asx_obligation_abort_with_reason(a, ASX_OBLIGATION_ABORT_LEAK_RECOVERED),
+    ASSERT_EQ(asx_obligation_abort_with_reason(a, ASX_OBLIGATION_ABORT_NONE),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_obligation_abort_with_reason(a, (asx_obligation_abort_reason)4),
               ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_obligation_abort_with_reason(a, ASX_OBLIGATION_ABORT_ERROR), ASX_OK);
     ASSERT_EQ(asx_obligation_get_info(a, &info), ASX_OK);

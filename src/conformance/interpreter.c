@@ -527,8 +527,7 @@ static const char *abort_reason_name(asx_obligation_abort_reason r) {
     case ASX_OBLIGATION_ABORT_EXPLICIT: return "Explicit";
     case ASX_OBLIGATION_ABORT_CANCEL: return "Cancel";
     case ASX_OBLIGATION_ABORT_ERROR: return "Error";
-    case ASX_OBLIGATION_ABORT_NONE:
-    case ASX_OBLIGATION_ABORT_LEAK_RECOVERED: return NULL; /* no Rust counterpart */
+    case ASX_OBLIGATION_ABORT_NONE: return NULL; /* not aborted */
     }
     return NULL;
 }
