@@ -995,6 +995,136 @@ TEST(contended_mutex_counts_one_contention_per_park) {
 }
 
 /* ===================================================================
+ * Mutex lock_until (Rust Mutex::lock_until, sync/mutex.rs:207)
+ * =================================================================== */
+
+TEST(mutex_lock_until_past_its_deadline_times_out_even_when_free) {
+    /* Rust polls the deadline right after the checkpoint, before looking
+     * at the lock (LockFuture::poll_lock, sync/mutex.rs:560-564). */
+    asx_mutex_handle m;
+    asx_mutex_lock_waiter w;
+    asx_mutex_guard g;
+
+    ASSERT_TRUE(setup());
+    ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+    asx_runtime_virtual_advance(10u * MS);
+    ASSERT_EQ(asx_mutex_lock_until_begin(m, 10u * MS, &w), ASX_OK);
+    ASSERT_EQ(asx_mutex_poll_lock(&w, &g, NULL), ASX_E_TIMED_OUT);
+    ASSERT_FALSE(asx_mutex_is_locked(m));
+    ASSERT_EQ(asx_mutex_try_lock(m, &g), ASX_OK);
+    ASSERT_EQ(asx_mutex_unlock(g), ASX_OK);
+}
+
+TEST(mutex_lock_until_gives_up_and_a_handed_lock_passes_on) {
+    /* w1 (deadline 5 ms) and w2 queue behind a holder. Waiting past its
+     * deadline, w1 leaves the line and the unlock goes to w2. Again, with
+     * the lock handed to w1 before its deadline passes, w1's late poll
+     * times out and passes the lock to w2. */
+    asx_mutex_handle m;
+    asx_mutex_lock_waiter w1;
+    asx_mutex_lock_waiter w2;
+    asx_mutex_guard held;
+    asx_mutex_guard g;
+    int round;
+
+    ASSERT_TRUE(setup());
+    ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+    for (round = 0; round < 2; round++) {
+        asx_time start = asx_runtime_virtual_now();
+        ASSERT_EQ(asx_mutex_try_lock(m, &held), ASX_OK);
+        ASSERT_EQ(asx_mutex_lock_until_begin(m, start + 5u * MS, &w1), ASX_OK);
+        ASSERT_EQ(asx_mutex_lock_begin(m, &w2), ASX_OK);
+        ASSERT_EQ(asx_mutex_poll_lock(&w1, &g, NULL), ASX_E_PENDING);
+        ASSERT_EQ(asx_mutex_poll_lock(&w2, &g, NULL), ASX_E_PENDING);
+        if (round == 1) ASSERT_EQ(asx_mutex_unlock(held), ASX_OK); /* handed to w1 */
+        asx_runtime_virtual_advance(start + 5u * MS);              /* to the deadline */
+        ASSERT_EQ(asx_mutex_poll_lock(&w1, &g, NULL), ASX_E_TIMED_OUT);
+        if (round == 0) ASSERT_EQ(asx_mutex_unlock(held), ASX_OK);
+        ASSERT_EQ(asx_mutex_poll_lock(&w2, &g, NULL), ASX_OK);
+        ASSERT_EQ(asx_mutex_unlock(g), ASX_OK);
+        ASSERT_FALSE(asx_mutex_is_locked(m));
+    }
+}
+
+/* Holds a lock taken before the run for `hold_ns`, then unlocks it. */
+typedef struct {
+    asx_mutex_guard guard;
+    once_sleep hold;
+    uint64_t hold_ns;
+} lock_holder;
+
+static asx_status poll_lock_holder(void *ud, asx_task_id self) {
+    lock_holder *h = (lock_holder *)ud;
+    asx_status st = sleep_once(&h->hold, h->hold_ns, self);
+    if (st != ASX_OK) return st;
+    return asx_mutex_unlock(h->guard);
+}
+
+/* Waits for the mutex until `deadline`; records the result and when. */
+typedef struct {
+    asx_mutex_handle mutex;
+    asx_mutex_lock_waiter waiter;
+    asx_mutex_guard guard;
+    asx_time deadline;
+    int begun;
+    asx_status result;
+    asx_time at;
+    uint32_t polls;
+} lock_until_task;
+
+static asx_status poll_lock_until_task(void *ud, asx_task_id self) {
+    lock_until_task *u = (lock_until_task *)ud;
+    asx_status st;
+    (void)self;
+    u->polls++;
+    if (!u->begun) {
+        st = asx_mutex_lock_until_begin(u->mutex, u->deadline, &u->waiter);
+        if (st != ASX_OK) return st;
+        u->begun = 1;
+    }
+    st = asx_mutex_poll_lock(&u->waiter, &u->guard, NULL);
+    if (st == ASX_E_PENDING) return st;
+    u->result = st;
+    u->at = asx_runtime_virtual_now();
+    return st == ASX_OK ? asx_mutex_unlock(u->guard) : ASX_OK;
+}
+
+TEST(mutex_lock_until_wakes_its_task_at_the_deadline) {
+    /* The holder keeps the lock 10 ms; the waiter's deadline is 5 ms. The
+     * parked waiter is woken at 5 ms (Rust's deadline Sleep) and times
+     * out there; a second waiter with a 20 ms deadline gets the lock at
+     * 10 ms. */
+    static lock_holder h;
+    static lock_until_task u[2];
+    asx_mutex_handle m;
+    asx_task_id t;
+    asx_budget budget;
+
+    ASSERT_TRUE(setup());
+    memset(&h, 0, sizeof(h));
+    memset(u, 0, sizeof(u));
+    ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+    ASSERT_EQ(asx_mutex_try_lock(m, &h.guard), ASX_OK);
+    h.hold_ns = 10u * MS;
+    u[0].mutex = m;
+    u[0].deadline = 5u * MS;
+    u[1].mutex = m;
+    u[1].deadline = 20u * MS;
+    ASSERT_EQ(asx_task_spawn(g_region, poll_lock_holder, &h, &t), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_region, poll_lock_until_task, &u[0], &t), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_region, poll_lock_until_task, &u[1], &t), ASX_OK);
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+
+    ASSERT_EQ(u[0].result, ASX_E_TIMED_OUT);
+    ASSERT_EQ(u[0].at, (asx_time)(5u * MS));
+    ASSERT_EQ(u[0].polls, 2u);
+    ASSERT_EQ(u[1].result, ASX_OK);
+    ASSERT_EQ(u[1].at, (asx_time)(10u * MS));
+    ASSERT_FALSE(asx_mutex_is_locked(m));
+}
+
+/* ===================================================================
  * Close wakes every waiter
  * =================================================================== */
 
@@ -1696,6 +1826,9 @@ int main(void) {
     RUN_TEST(mutex_handoff_is_deterministic);
     RUN_TEST(mutex_flood_serves_every_waiter_in_arrival_order);
     RUN_TEST(mutex_unlock_hands_the_lock_to_a_cancel_pending_front_waiter);
+    RUN_TEST(mutex_lock_until_past_its_deadline_times_out_even_when_free);
+    RUN_TEST(mutex_lock_until_gives_up_and_a_handed_lock_passes_on);
+    RUN_TEST(mutex_lock_until_wakes_its_task_at_the_deadline);
     RUN_TEST(barrier_with_every_task_as_a_party_trips);
     RUN_TEST(barrier_rounds_trip_once_with_one_leader_each);
     RUN_TEST(contended_mutex_counts_one_contention_per_park);

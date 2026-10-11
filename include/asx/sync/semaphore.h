@@ -69,6 +69,8 @@ typedef struct {
     uint32_t waiter_slot;       /* wait-node index */
     uint16_t generation;        /* the semaphore's */
     uint16_t waiter_generation; /* the wait node's */
+    int has_deadline;           /* a mutex lock_until: give up at `deadline` */
+    asx_time deadline;          /* runtime-clock time */
 } asx_semaphore_waiter;
 
 /* -------------------------------------------------------------------

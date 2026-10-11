@@ -357,6 +357,8 @@ asx_status asx_semaphore_acquire_many_begin(asx_semaphore_handle handle, uint32_
     out->waiter_slot = i;
     out->generation = handle.generation;
     out->waiter_generation = sem_node(i)->generation;
+    out->has_deadline = 0;
+    out->deadline = 0u;
     return ASX_OK;
 }
 
@@ -490,6 +492,19 @@ asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphor
         }
     }
 
+    /* lock_until past its deadline (Rust LockFuture::poll_lock, after the
+     * checkpoint and before anything else, sync/mutex.rs:560-564): give
+     * up, passing a granted lock on, and fail with TimedOut, even when the
+     * lock is free. */
+    if (waiter->has_deadline) {
+        asx_time now;
+        if (asx_runtime_now_ns(&now) == ASX_OK && now >= waiter->deadline) {
+            sem_waiter_retire(s, i);
+            sem_dispatch_parked(s);
+            return ASX_E_TIMED_OUT;
+        }
+    }
+
     /* Poisoned (Rust's Lock future, after the checkpoint and before
      * looking at a grant, sync/mutex.rs:582-587): give up, passing a
      * granted lock on, and fail. */
@@ -517,8 +532,13 @@ asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphor
         return sem_hand_out(s, waiter, 1u, out, cx);
     }
 
-    /* Wait for a release; inside a scheduler poll, park until granted. */
+    /* Wait for a release; inside a scheduler poll, park until granted, and
+     * for lock_until wake at the deadline (Rust's deadline Sleep). */
     (void)asx_wait_park_current(&sem_node(i)->task);
+    if (waiter->has_deadline && asx_task_current() != ASX_INVALID_ID) {
+        asx_status a_st_ = asx_task_arm_timer(asx_task_current(), waiter->deadline);
+        (void)a_st_;
+    }
     return ASX_E_PENDING;
 }
 

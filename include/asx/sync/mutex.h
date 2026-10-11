@@ -66,8 +66,20 @@ ASX_API asx_status asx_mutex_try_lock(asx_mutex_handle handle, asx_mutex_guard *
 ASX_API ASX_MUST_USE asx_status asx_mutex_lock_begin(asx_mutex_handle handle,
                                                      asx_mutex_lock_waiter *out);
 
+/* Begin an async lock that gives up at runtime-clock time `deadline`
+ * (Rust Mutex::lock_until, sync/mutex.rs:207). Its polls check the
+ * deadline after the Cx checkpoint and before anything else: at or past
+ * it the waiter leaves the line (a lock already handed to it passes on)
+ * and the poll returns ASX_E_TIMED_OUT, even if the mutex is free (Rust
+ * LockError::TimedOut). A waiting poll inside a scheduler poll also wakes
+ * the task at the deadline. */
+ASX_API ASX_MUST_USE asx_status asx_mutex_lock_until_begin(asx_mutex_handle handle,
+                                                           asx_time deadline,
+                                                           asx_mutex_lock_waiter *out);
+
 /* Poll for lock. Returns ASX_OK + guard when acquired,
- * ASX_E_PENDING when waiting. Lockers are served in arrival (FIFO) order;
+ * ASX_E_PENDING when waiting, ASX_E_TIMED_OUT for a lock_until waiter at
+ * or past its deadline. Lockers are served in arrival (FIFO) order;
  * inside a scheduler poll an ASX_E_PENDING result parks the calling task
  * until the unlock that hands it the lock (or close). */
 ASX_API asx_status asx_mutex_poll_lock(asx_mutex_lock_waiter *waiter, asx_mutex_guard *out,

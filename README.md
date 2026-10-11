@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-1%2C985%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-1%2C986%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,985<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,986<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -51,7 +51,6 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 - **Not ported:**
   - actors: the plain `Actor` trait, system messages, overflow policies, names, monitors and links;
   - supervision: registries, dynamic supervisors with shared restart domains, restart storm detection, per-child shutdown budgets;
-  - sync: `Mutex::lock_until`;
   - I/O: kqueue, IOCP and io_uring reactors, and Windows native I/O.
 
   The module-by-module accounting is in [`docs/RUST_EXPORTED_SURFACE_INVENTORY.md`](docs/RUST_EXPORTED_SURFACE_INVENTORY.md) §11 and, per semantic unit, in [`docs/FEATURE_PARITY.md`](docs/FEATURE_PARITY.md).
@@ -60,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->1,985<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->1,986<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -1541,7 +1540,7 @@ All sync primitives are cooperative (no OS-level blocking), async-friendly (begi
 
 Waiters of every primitive and channel are nodes in one runtime-wide pool (`ASX_WAIT_NODE_CAPACITY`, four per task slot by default), so no primitive has a waiter limit of its own; as in Rust, whose waiter queues are unbounded, every task of the runtime can wait on one mutex and is served in arrival order. Only an exhausted pool is reported (`ASX_E_RESOURCE_EXHAUSTED` from a `*_begin`; a channel waiter yields and is re-polled instead), after the nodes of dead tasks have been reclaimed.
 
-**Mutex**: Cooperative mutual exclusion implemented as a semaphore with count 1. `try_lock()` returns immediately; `lock_begin()`/`poll_lock()` yield until available. No priority inheritance: a waiting task does not raise the lock holder's priority. Releasing the guard with `asx_mutex_unlock_poisoned()`, the analog of Rust's guard dropped during a panic, poisons the mutex: every later lock fails with `ASX_E_INVALID_STATE`, as Rust's `LockError::Poisoned`.
+**Mutex**: Cooperative mutual exclusion implemented as a semaphore with count 1. `try_lock()` returns immediately; `lock_begin()`/`poll_lock()` yield until available. `lock_until_begin()` is Rust's `Mutex::lock_until`: past its deadline the poll gives up with `ASX_E_TIMED_OUT` (checked before the lock, so even a free mutex times out then), passing on a lock already handed to it, and a waiting task is woken at the deadline. No priority inheritance: a waiting task does not raise the lock holder's priority. Releasing the guard with `asx_mutex_unlock_poisoned()`, the analog of Rust's guard dropped during a panic, poisons the mutex: every later lock fails with `ASX_E_INVALID_STATE`, as Rust's `LockError::Poisoned`.
 
 **Semaphore**: Counting permit system with configurable initial count, following Rust's `Semaphore`. An acquire takes one permit, or `n` at once with `asx_semaphore_acquire_many_begin` / `asx_semaphore_try_acquire_many` (all or nothing; the permit returns all `n` on release). Waiters queue in arrival order (a waiter joins the line at its first poll that has to wait), and only the front of the line takes permits: a release wakes the front waiter if it can now run, and that waiter, taking its permit, wakes the next. `try_acquire()` is non-blocking and fails while anyone is queued. `asx_semaphore_add_permits` grows the pool (saturating) and wakes the front waiter if it can now run; `asx_semaphore_forget` drops a permit without returning its permits, aborting its obligation. A permit value is released once (C cannot consume a permit the way Rust's drop does), and a second release or forget is refused with `ASX_E_INVALID_STATE`: the runtime recognizes a mutex guard whose hold of the lock ended (so a stale guard cannot unlock a later holder's lock), a permit whose obligation its release committed or its forget aborted, and any release that would return permits nobody holds. Integrates with the obligation system for permit tracking. (The mutex instead hands the lock straight to the front waiter on unlock, as Rust's `Mutex` does.)
 
@@ -2285,7 +2284,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->1,985<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->1,986<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

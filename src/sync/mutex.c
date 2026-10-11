@@ -36,6 +36,17 @@ asx_status asx_mutex_lock_begin(asx_mutex_handle handle, asx_mutex_lock_waiter *
     return asx_semaphore_acquire_begin(handle.sem, &out->waiter);
 }
 
+asx_status asx_mutex_lock_until_begin(asx_mutex_handle handle, asx_time deadline,
+                                      asx_mutex_lock_waiter *out) {
+    asx_status st;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_semaphore_acquire_begin(handle.sem, &out->waiter);
+    if (st != ASX_OK) return st;
+    out->waiter.has_deadline = 1;
+    out->waiter.deadline = deadline;
+    return ASX_OK;
+}
+
 asx_status asx_mutex_poll_lock(asx_mutex_lock_waiter *waiter, asx_mutex_guard *out, asx_cx *cx) {
     if (waiter == NULL || out == NULL) return ASX_E_INVALID_ARGUMENT;
     return asx_semaphore_poll_acquire(&waiter->waiter, &out->permit, cx);
