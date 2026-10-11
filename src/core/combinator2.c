@@ -846,11 +846,30 @@ asx_status asx_map_reduce_poll(void *user_data, asx_task_id self) {
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     if (state->done) return state->result;
 
-    /* Poll all incomplete branches */
+    /* Poll the incomplete branches in index order. The first failure stops
+     * the map-reduce (Rust's executing map-reduce stops admission and
+     * drains the rest, map_reduce.rs:7-11): the branches still pending are
+     * dropped, and that failure is the result, without a reduce. */
     completed = 0;
     for (i = 0; i < state->count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
-        if (!state->branches[i].done) { (void)branch_poll(&state->branches[i], self); }
+        if (!state->branches[i].done) {
+            asx_status st = branch_poll(&state->branches[i], self);
+            if (st != ASX_E_PENDING && st != ASX_OK) {
+                uint32_t j;
+                for (j = 0; j < state->count; j++) {
+                    /* ASX_CHECKPOINT_WAIVER("bounded drop loop") */
+                    if (!state->branches[j].done) {
+                        state->branches[j].done = 1;
+                        state->branches[j].result = ASX_E_CANCELLED;
+                        state->dropped++;
+                    }
+                }
+                state->result = st;
+                state->done = 1;
+                return st;
+            }
+        }
         if (state->branches[i].done) completed++;
     }
 
@@ -874,5 +893,5 @@ uint32_t asx_map_reduce_completed(const asx_map_reduce_state *state) {
         /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
         if (state->branches[i].done) count++;
     }
-    return count;
+    return count - state->dropped;
 }

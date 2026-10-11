@@ -356,12 +356,16 @@ ASX_API uint64_t asx_adaptive_hedge_delay(const asx_adaptive_hedge_policy *polic
 ASX_API uint32_t asx_adaptive_hedge_observations(const asx_adaptive_hedge_policy *policy);
 
 /* -------------------------------------------------------------------
- * MapReduce — parallel map + reduce
+ * MapReduce — map branches, then reduce their statuses
  *
- * Runs all map tasks concurrently (like join), then applies a
- * reduce function to combine results. Map tasks use standard
- * combinator poll functions. The reduce function is called once
- * after all maps complete.
+ * Polls every map branch inline, in index order (like join), and once all
+ * have succeeded calls reduce_fn once over their statuses; its status is
+ * the result. As Rust's executing map-reduce (combinator/map_reduce.rs:
+ * 1-12), the first failure stops it: the first branch to end with an
+ * error or ASX_E_CANCELLED ends the map-reduce with that status without a
+ * reduce, and the branches still pending are dropped as in race (never
+ * polled again, resolved ASX_E_CANCELLED; dropping them is cleanup, not
+ * another failure).
  * ------------------------------------------------------------------- */
 
 typedef asx_status (*asx_map_reduce_fn)(const asx_status *results, uint32_t count, void *user_data);
@@ -373,6 +377,7 @@ typedef struct {
     void *reduce_data;
     int done;
     asx_status result;
+    uint32_t dropped; /* branches dropped pending after the first failure */
 } asx_map_reduce_state;
 
 /* Initialize a map-reduce combinator with the given reduce function. */
@@ -386,7 +391,7 @@ ASX_API asx_status asx_map_reduce_add(asx_map_reduce_state *state, asx_combinato
 /* Poll function — compatible with asx_combinator_poll_fn. */
 ASX_API asx_status asx_map_reduce_poll(void *user_data, asx_task_id self);
 
-/* Get number of completed map branches. */
+/* Get number of map branches that completed (dropped ones excluded). */
 ASX_API uint32_t asx_map_reduce_completed(const asx_map_reduce_state *state);
 
 #ifdef __cplusplus

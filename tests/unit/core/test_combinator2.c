@@ -1055,13 +1055,74 @@ TEST(map_reduce_all_ok) {
     ASSERT_EQ(asx_map_reduce_completed(&ms), 3u);
 }
 
-TEST(map_reduce_reduce_sees_errors) {
+static int map_reduce_reduces;
+
+static asx_status reduce_counting(const asx_status *results, uint32_t count, void *user_data) {
+    (void)results;
+    (void)count;
+    (void)user_data;
+    map_reduce_reduces++;
+    return ASX_OK;
+}
+
+static asx_status poll_pending_counted(void *user_data, asx_task_id self) {
+    (void)self;
+    (*(int *)user_data)++;
+    return ASX_E_PENDING;
+}
+
+TEST(map_reduce_stops_at_the_first_failure) {
+    /* Rust's executing map-reduce stops at the first failure and drains
+     * the rest (map_reduce.rs:7-11): branch 1 fails while branch 0 is
+     * pending, so both pending branches are dropped (branch 2 is never
+     * polled), the failure is the result and nothing is reduced. */
     asx_map_reduce_state ms;
-    MUST_OK(asx_map_reduce_init(&ms, reduce_count_ok, NULL));
-    MUST_OK(asx_map_reduce_add(&ms, poll_ok, NULL));
+    int first_polls = 0;
+    int last_polls = 0;
+
+    map_reduce_reduces = 0;
+    MUST_OK(asx_map_reduce_init(&ms, reduce_counting, NULL));
+    MUST_OK(asx_map_reduce_add(&ms, poll_pending_counted, &first_polls));
     MUST_OK(asx_map_reduce_add(&ms, poll_fail, NULL));
-    /* reduce_count_ok returns error because not all OK */
+    MUST_OK(asx_map_reduce_add(&ms, poll_pending_counted, &last_polls));
     ASSERT_EQ(asx_map_reduce_poll(&ms, 0), ASX_E_INVALID_STATE);
+    ASSERT_EQ(first_polls, 1);
+    ASSERT_EQ(last_polls, 0);
+    ASSERT_EQ(map_reduce_reduces, 0);
+    ASSERT_EQ(asx_map_reduce_completed(&ms), 1u);
+    ASSERT_EQ(ms.dropped, 2u);
+    /* Decided: a repoll returns the failure without polling anything. */
+    ASSERT_EQ(asx_map_reduce_poll(&ms, 0), ASX_E_INVALID_STATE);
+    ASSERT_EQ(first_polls, 1);
+}
+
+TEST(map_reduce_stops_at_a_cancelled_branch) {
+    asx_map_reduce_state ms;
+    int polls = 0;
+
+    map_reduce_reduces = 0;
+    MUST_OK(asx_map_reduce_init(&ms, reduce_counting, NULL));
+    MUST_OK(asx_map_reduce_add(&ms, poll_ok, NULL));
+    MUST_OK(asx_map_reduce_add(&ms, poll_cancelled_count, &polls));
+    MUST_OK(asx_map_reduce_add(&ms, poll_ok, NULL));
+    ASSERT_EQ(asx_map_reduce_poll(&ms, 0), ASX_E_CANCELLED);
+    ASSERT_EQ(map_reduce_reduces, 0);
+    ASSERT_EQ(asx_map_reduce_completed(&ms), 2u);
+    ASSERT_EQ(ms.dropped, 1u);
+}
+
+TEST(map_reduce_reduces_once_all_succeed) {
+    asx_map_reduce_state ms;
+    int count = 0;
+
+    map_reduce_reduces = 0;
+    MUST_OK(asx_map_reduce_init(&ms, reduce_counting, NULL));
+    MUST_OK(asx_map_reduce_add(&ms, poll_ok, NULL));
+    MUST_OK(asx_map_reduce_add(&ms, poll_pending_then_ok, &count));
+    ASSERT_EQ(asx_map_reduce_poll(&ms, 0), ASX_E_PENDING);
+    ASSERT_EQ(map_reduce_reduces, 0);
+    ASSERT_EQ(asx_map_reduce_poll(&ms, 0), ASX_OK);
+    ASSERT_EQ(map_reduce_reduces, 1);
     ASSERT_EQ(asx_map_reduce_completed(&ms), 2u);
 }
 
@@ -1162,7 +1223,9 @@ int main(void) {
 
     /* MapReduce */
     RUN_TEST(map_reduce_all_ok);
-    RUN_TEST(map_reduce_reduce_sees_errors);
+    RUN_TEST(map_reduce_stops_at_the_first_failure);
+    RUN_TEST(map_reduce_stops_at_a_cancelled_branch);
+    RUN_TEST(map_reduce_reduces_once_all_succeed);
     RUN_TEST(map_reduce_empty);
     RUN_TEST(map_reduce_null_fails);
 
