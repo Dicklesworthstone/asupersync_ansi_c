@@ -1492,6 +1492,33 @@ async fn exec_step(
             };
             observe(&ctx.shared, me, idx, op, status, Value::Null);
         }
+        "mutex_lock_until" => {
+            let name = str_field(step, "mutex")?.to_string();
+            let SyncObj::Mutex(m) = sync_obj(&ctx.shared, step, "mutex")? else {
+                return Err(format!("{name:?} is not a mutex"));
+            };
+            let deadline = Time::from_nanos(u64_field(step, "deadline_ns")?);
+            // Its deadline Sleep's Timer events are named as a sleep's. The
+            // borrowed guard is not Send: it is dropped in the poll that
+            // takes it (DSL §3.7).
+            let locked = NamedSleep {
+                sleep: Some(Box::pin(m.lock_until(cx, deadline))),
+                buffer: cx.trace_buffer(),
+                shared: ctx.shared.clone(),
+                owner: me,
+                counter: &mut local.timers,
+                name: None,
+            }
+            .await;
+            let status = match locked {
+                Ok(guard) => {
+                    drop(guard);
+                    "ASX_OK"
+                }
+                Err(e) => lock_error_status(e),
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
         "rwlock_read" | "rwlock_write" => {
             let name = str_field(step, "rwlock")?.to_string();
             let SyncObj::RwLock(l) = sync_obj(&ctx.shared, step, "rwlock")? else {

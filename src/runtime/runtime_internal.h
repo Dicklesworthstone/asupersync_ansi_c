@@ -572,6 +572,16 @@ uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *ou
 void asx_obligation_set_drop_internal(asx_obligation_id id, asx_obligation_drop_fn fn, uint64_t a,
                                       uint64_t b);
 
+/* Poll a Rust Sleep for `deadline` on task `self`'s traced sleep timer
+ * without parking it (a wait with a deadline, such as the mutex's
+ * lock_until, parks on what it waits for). Returns 1 once the clock has
+ * reached `deadline`: a timer an earlier poll registered records its fire
+ * (Sleep::complete_ready_registration). Otherwise registers the timer once
+ * (timer.scheduled), arms the task's wake at `deadline` and returns 0.
+ * Outside a scheduler poll nothing is registered. Dropping the wait early
+ * is asx_task_cancel_timer (timer.cancelled). */
+int asx_task_poll_deadline_sleep_internal(asx_task_id self, asx_time deadline);
+
 /* Whether a pending cancel makes a completing task's outcome CANCELLED
  * (Rust classify_spawn_completion, task_handle.rs:173-202). A task spawned
  * from inside another task's poll (Rust cx.spawn,

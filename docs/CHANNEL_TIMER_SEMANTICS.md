@@ -122,7 +122,7 @@ Neither is infallible: both run `try_send_deferred_wake` (`mpsc.rs:1588-1629`), 
 
 **Rust source:** `mpsc.rs:1565-1570` (`send`), `mpsc.rs:1574-1578` (`try_send`)
 
-**C status:** implemented. `asx_send_permit_send` (`src/channel/mpsc.c:691-746`) consumes the permit token (forged or stale permits are rejected), returns `ASX_E_DISCONNECTED` and aborts the obligation with `ASX_OBLIGATION_ABORT_ERROR` when the receiver is closed (`:715-721`), else enqueues (`:737-739`), commits the obligation (`:742`) and settles waiters (`:743`). C has no `Sender::try_send`; the conformance interpreter runs `try_send` as `asx_channel_try_reserve` plus `asx_send_permit_send` (`src/conformance/interpreter.c:2389-2402`).
+**C status:** implemented. `asx_send_permit_send` (`src/channel/mpsc.c:691-746`) consumes the permit token (forged or stale permits are rejected), returns `ASX_E_DISCONNECTED` and aborts the obligation with `ASX_OBLIGATION_ABORT_ERROR` when the receiver is closed (`:715-721`), else enqueues (`:737-739`), commits the obligation (`:742`) and settles waiters (`:743`). C has no `Sender::try_send`; the conformance interpreter runs `try_send` as `asx_channel_try_reserve` plus `asx_send_permit_send` (`src/conformance/interpreter.c:2421-2434`).
 
 #### Phase 2b: Abort (Rollback)
 
@@ -199,7 +199,7 @@ try_recv() -> Result<T, RecvError>
 
 **Cancel safety:** the checkpoint runs before the pop, so a cancelled receive does not consume a message.
 
-**C status:** implemented. `asx_channel_recv` (`src/channel/mpsc.c:938-946`) checks cancellation first, then `channel_recv_impl` (`mpsc.c:739-806`): dequeue in FIFO order (`:748-764`), receiver closed -> `ASX_E_DISCONNECTED` (`:767-770`), sender closed with no outstanding permit -> `ASX_E_DISCONNECTED` (`:772-797`), else park and return `ASX_E_PENDING` (`:801-804`, `:889`). `asx_channel_try_recv` (`mpsc.c:808-810`) returns `ASX_E_WOULD_BLOCK` when empty; the conformance interpreter reports that as `ASX_E_CHANNEL_EMPTY` (`src/conformance/interpreter.c:2415`). Rust parity: `mpsc-recv-cancel-first-001` (a pending recv cancelled by the driver returns `ASX_E_CANCELLED`), `mpsc-try-ops-001` (`try_recv` on an empty channel, then `ASX_E_DISCONNECTED` after the sender closes and the queue drains).
+**C status:** implemented. `asx_channel_recv` (`src/channel/mpsc.c:938-946`) checks cancellation first, then `channel_recv_impl` (`mpsc.c:739-806`): dequeue in FIFO order (`:748-764`), receiver closed -> `ASX_E_DISCONNECTED` (`:767-770`), sender closed with no outstanding permit -> `ASX_E_DISCONNECTED` (`:772-797`), else park and return `ASX_E_PENDING` (`:801-804`, `:889`). `asx_channel_try_recv` (`mpsc.c:808-810`) returns `ASX_E_WOULD_BLOCK` when empty; the conformance interpreter reports that as `ASX_E_CHANNEL_EMPTY` (`src/conformance/interpreter.c:2447`). Rust parity: `mpsc-recv-cancel-first-001` (a pending recv cancelled by the driver returns `ASX_E_CANCELLED`), `mpsc-try-ops-001` (`try_recv` on an empty channel, then `ASX_E_DISCONNECTED` after the sender closes and the queue drains).
 
 ### 1.7 Error Taxonomy
 
@@ -426,7 +426,7 @@ TimerHandle { id: u64, generation: u64 }   // wheel.rs:225-228
 
 ## 3. Deterministic Scheduler Semantics
 
-**C status (whole section):** C does not port `three_lane.rs`. Rust parity runs use C's lab dispatch (`src/runtime/lab_dispatch.c`), which ports the Rust `LabRuntime` dispatch with one worker (`lab/runtime.rs` `pop_for_worker`, `:6324-6373`, over `priority.rs` lanes). Outside lab dispatch, `src/runtime/scheduler.c` polls runnable tasks in ascending arena order each round (`scheduler.c:1-22`, loop at `:1353`). The optional parallel profile (`src/runtime/parallel.c`) is a C design of its own, described where relevant below.
+**C status (whole section):** C does not port `three_lane.rs`. Rust parity runs use C's lab dispatch (`src/runtime/lab_dispatch.c`), which ports the Rust `LabRuntime` dispatch with one worker (`lab/runtime.rs` `pop_for_worker`, `:6324-6373`, over `priority.rs` lanes). Outside lab dispatch, `src/runtime/scheduler.c` polls runnable tasks in ascending arena order each round (`scheduler.c:1-22`, loop at `:1374`). The optional parallel profile (`src/runtime/parallel.c`) is a C design of its own, described where relevant below.
 
 ### 3.1 Three-Lane Architecture
 
@@ -467,7 +467,7 @@ next_task():
 run_loop_until (:5570): when next_task finds nothing, spin -> yield -> park (section 3.10)
 ```
 
-**C status:** spec (Rust) — not implemented in C. The C lab step (`src/runtime/scheduler.c:1182-1226`) follows `LabRuntime::step_inner` (`lab/runtime.rs:4480-`): drain admissions and commands, draw one RNG value (`lab/runtime.rs:4499`), process timers (`:4509-4511`), then pick a task. C does the same in that order (`scheduler.c:1199-1207`).
+**C status:** spec (Rust) — not implemented in C. The C lab step (`src/runtime/scheduler.c:1203-1247`) follows `LabRuntime::step_inner` (`lab/runtime.rs:4480-`): drain admissions and commands, draw one RNG value (`lab/runtime.rs:4499`), process timers (`:4509-4511`), then pick a task. C does the same in that order (`scheduler.c:1220-1228`).
 
 ### 3.3 Entry Ordering Contracts
 
@@ -573,7 +573,7 @@ When `next_task` finds nothing (`advance_empty_backoff`, `three_lane.rs:5517-552
 
 The park deadline is chosen from the timer-driver, local timed and global timed deadlines (`select_backoff_deadline`, `three_lane.rs:529-545`, called at `:5741-5746`); with no deadline the worker parks without a timeout (`:5814`).
 
-**C status:** spec (Rust) — not implemented in C. When every task is parked, the native C scheduler fires due timers, jumps a virtual clock to the earliest timer, or waits in the reactor hook until the deadline (`src/runtime/scheduler.c:11-19`; wait rounded up to whole ms at `:923`, capped by `ASX_SCHED_MAX_IDLE_WAIT_MS` = 1000, `:55`). The lab run moves the virtual clock to the next timer when nothing is scheduled (`scheduler.c:1271-1277`).
+**C status:** spec (Rust) — not implemented in C. When every task is parked, the native C scheduler fires due timers, jumps a virtual clock to the earliest timer, or waits in the reactor hook until the deadline (`src/runtime/scheduler.c:11-19`; wait rounded up to whole ms at `:944`, capped by `ASX_SCHED_MAX_IDLE_WAIT_MS` = 1000, `:55`). The lab run moves the virtual clock to the next timer when nothing is scheduled (`scheduler.c:1292-1298`).
 
 ---
 
@@ -609,7 +609,7 @@ The park deadline is chosen from the timer-driver, local timed and global timed 
 | No timers pending | The worker parks without a timeout (`three_lane.rs:5814`) |
 | Next timer deadline | Park timeout = time to the nearest timer/timed deadline (`three_lane.rs:5729-5758`) |
 
-**C status:** the lab fires due timers at the start of each step, before the pick (`src/runtime/scheduler.c:1204`), and the native scheduler at the start of each round (`scheduler.c:1346-1351`). C has no timed lane: a woken task is scheduled like any other wake.
+**C status:** the lab fires due timers at the start of each step, before the pick (`src/runtime/scheduler.c:1225`), and the native scheduler at the start of each round (`scheduler.c:1367-1372`). C has no timed lane: a woken task is scheduled like any other wake.
 
 ### 4.4 Channel <-> Scheduler
 
@@ -711,7 +711,7 @@ For deterministic parity with Rust, and the current C status of each:
 | Failure | Rust detection | Rust result | C (lab dispatch) |
 |---------|-----------|----------|---|
 | Cancel-streak limit hit | `cancel_streak >= effective_limit` (`three_lane.rs:6969-6972`) | Skip cancel lane, try timed/ready; fallback cancel if none | Ready lane first after 16 cancel dispatches (`lab_dispatch.c:380-400`) |
-| No tasks available | All lanes empty | Spin -> yield -> park (section 3.10) | Step dispatches nothing; the run auto-advances the clock or returns (`scheduler.c:1233-1287`) |
+| No tasks available | All lanes empty | Spin -> yield -> park (section 3.10) | Step dispatches nothing; the run auto-advances the clock or returns (`scheduler.c:1254-1308`) |
 | Work steal failure | All stealers empty | Continue to Phase 5 / backoff | Not applicable (one worker) |
 | Shutdown requested | Checked in `run_loop_until` (`three_lane.rs:5601`, `:5647`) | Exit loop | Not applicable |
 
@@ -772,7 +772,7 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 | `sc-governor-meet-001` | MeetDeadlines suggestion reorders timed > cancel | Governor | Not materialized; not implemented in C |
 | `sc-governor-drain-001` | DrainObligations doubles cancel-streak limit | Governor | Not materialized; not implemented in C |
 | `sc-certificate-001` | Identical traces produce identical witness hash | Replay | Not materialized; not implemented in C |
-| `sc-timer-phase0-001` | Expired timers processed before task dispatch | Phase ordering | Not materialized; no v2 fixture named for it (the C lab fires due timers before each pick, `scheduler.c:1204`) |
+| `sc-timer-phase0-001` | Expired timers processed before task dispatch | Phase ordering | Not materialized; no v2 fixture named for it (the C lab fires due timers before each pick, `scheduler.c:1225`) |
 
 ---
 
@@ -816,7 +816,7 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 | `INV-SC-04` | Cancel-streak limit prevents cancellation starvation | Fairness | Lab: 16, no doubling; `parallel.c`: 16 |
 | `INV-SC-05` | Same seed -> same work-steal choices | Determinism | Not implemented |
 | `INV-SC-06` | Identical certificate fields produce identical witness hash | Replay | Not implemented |
-| `INV-SC-07` | Phase 0 (timers) executes before task dispatch | Phase ordering | Lab: due timers fire before the pick (`scheduler.c:1204`) |
+| `INV-SC-07` | Phase 0 (timers) executes before task dispatch | Phase ordering | Lab: due timers fire before the pick (`scheduler.c:1225`) |
 | `INV-SC-08` | Governor suggestion affects lane order but not correctness | Safety | Not implemented (no governor) |
 
 ### 8.4 Coverage Matrix

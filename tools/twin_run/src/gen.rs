@@ -232,6 +232,12 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 return json!({"op": "join", "task": name});
             }
             11 if world.mutex => {
+                // A lock_until releases at once, so it holds nothing; its
+                // deadline lands before or after the scenario's waits.
+                if !held.mutex && rng.chance(25) {
+                    return json!({"op": "mutex_lock_until", "mutex": "m",
+                                  "deadline_ns": 50 * (1 + rng.below(20))});
+                }
                 held.mutex = !held.mutex;
                 return if held.mutex {
                     json!({"op": "mutex_lock", "mutex": "m"})

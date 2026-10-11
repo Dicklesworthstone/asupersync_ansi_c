@@ -129,19 +129,19 @@ Rust `TaskState` is at `src/record/task.rs:77` (the cancel states carry `reason`
 
 | # | From | To | Trigger | Preconditions | Postconditions |
 |---|------|----|---------|---------------|----------------|
-| T1 | `Created` | `Running` | Rust `start_running()` (`src/record/task.rs:1078`); C first poll (`src/runtime/scheduler.c:1033`) | state==Created | Task poll function invoked |
+| T1 | `Created` | `Running` | Rust `start_running()` (`src/record/task.rs:1078`); C first poll (`src/runtime/scheduler.c:1054`) | state==Created | Task poll function invoked |
 | T2 | `Created` | `CancelRequested` | Rust `request_cancel*` (`src/record/task.rs:803`) | state==Created | Cancel before first poll; Rust sets `cancel_epoch` to 1 (or adds 1 if it was set). C takes this edge in one step and traces it once (`src/runtime/cancellation.c:186`); a budget cancel that reaches the record of a task not yet polled takes it too (`src/runtime/cancellation.c:78`, Rust `reconcile_checkpoint_cancel`, `src/record/task.rs:1104`) |
 | T3 | `Created` | `Completed` | Rust `complete(outcome)` (`src/record/task.rs:1260`) | state==Created | Completion before any poll (for example a spawn-time error or panic). The C scheduler always takes T1 before it polls, so C never takes T3 |
 | T4 | `Running` | `CancelRequested` | Rust `request_cancel*` (`src/record/task.rs:803`); C `asx_task_cancel_reason_internal` (`src/runtime/cancellation.c:96`, first request at `src/runtime/cancellation.c:186`) | state==Running | Cancel delivered with the request's reason and cleanup budget. Rust: `cancel_epoch` 0 → 1. C: `cancel_epoch = 1` (`src/runtime/cancellation.c:204`) |
-| T5 | `Running` | `Completed` | Rust `complete(outcome)`; C `sched_complete` (`src/runtime/scheduler.c:741`) | state==Running | Normal completion, error, or panic |
+| T5 | `Running` | `Completed` | Rust `complete(outcome)`; C `sched_complete` (`src/runtime/scheduler.c:762`) | state==Running | Normal completion, error, or panic |
 | T6 | `CancelRequested` | `CancelRequested` | Rust `request_cancel*` (`src/record/task.rs:735`); C strengthen branch (`src/runtime/cancellation.c:147`) | state==CancelRequested | **Strengthening:** reason strengthened (§4.4), cleanup budgets met; not a new cancellation |
 | T7 | `CancelRequested` | `Cancelling` | Rust `acknowledge_cancel()` (`src/record/task.rs:1341`), from an unmasked checkpoint; C `asx_checkpoint` (`src/runtime/cancellation.c:512`) | state==CancelRequested and mask depth 0 | Rust: the cleanup budget becomes the task's budget and `polls_remaining` is set to its poll quota. C applies the cleanup budget after the acknowledging poll returns (`asx_task_apply_cleanup_budget_internal`, `src/runtime/lifecycle.c:465`) |
-| T8 | `CancelRequested` | `Completed` | Rust `complete(outcome)` | state==CancelRequested | Completion before acknowledgement. **The outcome is `Cancelled(reason)`, not the returned value**: Rust's `complete` maps `Ok`/`Err` in any cancel state to `Cancelled(reason)` and strengthens a `Cancelled` outcome with the task's reason; only `Panicked` passes through (`src/record/task.rs:1267`). C does the same (`asx_task_cancel_dominates_internal`, `src/runtime/scheduler.c:403`, used at `src/runtime/scheduler.c:1134` and `src/runtime/scheduler.c:1143`, and by the parallel scheduler). The one exception in both is a task spawned from inside another task's poll that acknowledged a cancel arriving after its first poll: it keeps its value (Rust `classify_spawn_completion`, `src/runtime/task_handle.rs:173`) |
+| T8 | `CancelRequested` | `Completed` | Rust `complete(outcome)` | state==CancelRequested | Completion before acknowledgement. **The outcome is `Cancelled(reason)`, not the returned value**: Rust's `complete` maps `Ok`/`Err` in any cancel state to `Cancelled(reason)` and strengthens a `Cancelled` outcome with the task's reason; only `Panicked` passes through (`src/record/task.rs:1267`). C does the same (`asx_task_cancel_dominates_internal`, `src/runtime/scheduler.c:403`, used at `src/runtime/scheduler.c:1155` and `src/runtime/scheduler.c:1164`, and by the parallel scheduler). The one exception in both is a task spawned from inside another task's poll that acknowledged a cancel arriving after its first poll: it keeps its value (Rust `classify_spawn_completion`, `src/runtime/task_handle.rs:173`) |
 | T9 | `Cancelling` | `Cancelling` | Rust `request_cancel*` (`src/record/task.rs:751`); C strengthen branch | state==Cancelling | **Strengthening:** as T6; in addition the met budget becomes the task's budget and `polls_remaining` takes the smaller quota (Rust `src/record/task.rs:769`; C `src/runtime/cancellation.c:147`) |
 | T10 | `Cancelling` | `Finalizing` | Rust `cleanup_done()` (`src/record/task.rs:1378`); C `asx_task_finalize` (`src/runtime/cancellation.c:662`) | state==Cancelling | Cleanup finished. Rust's lab takes this step when a task in a cancel state finishes its poll with `Ok` (Cancelling → Finalizing → Completed(Cancelled), `src/lab/runtime.rs:4876`); with any other result it calls `complete` (T11). C takes it only when the task calls `asx_task_finalize` (or under the opt-in hard bound); otherwise C completes a Cancelling task directly through T11 (Variant, C_REFINEMENT_MAP row `rule.cancel.drain`) |
 | T11 | `Cancelling` | `Completed` | Rust `complete(outcome)`; C `sched_complete` | state==Cancelling | `Ok`/`Err` become `Cancelled(reason)` as in T8; a panic stays `Panicked` |
 | T12 | `Finalizing` | `Finalizing` | Rust `request_cancel*` (`src/record/task.rs:777`); C strengthen branch | state==Finalizing | **Strengthening:** as T9 |
-| T13 | `Finalizing` | `Completed` | Rust `finalize_done()` (`src/record/task.rs:1416`); C completes a Finalizing task at its next dispatch (`src/runtime/scheduler.c:1218` lab, `src/runtime/scheduler.c:1370` round-robin) | state==Finalizing | Outcome `Cancelled(reason)`. Rust returns a `CancelWitness` with phase `Completed` (`finalize_done_with_witness`, `src/record/task.rs:1422`). C advances its witness to `Completed` and releases it (`src/runtime/scheduler.c:713`) |
+| T13 | `Finalizing` | `Completed` | Rust `finalize_done()` (`src/record/task.rs:1416`); C completes a Finalizing task at its next dispatch (`src/runtime/scheduler.c:1239` lab, `src/runtime/scheduler.c:1391` round-robin) | state==Finalizing | Outcome `Cancelled(reason)`. Rust returns a `CancelWitness` with phase `Completed` (`finalize_done_with_witness`, `src/record/task.rs:1422`). C advances its witness to `Completed` and releases it (`src/runtime/scheduler.c:734`) |
 
 **Strengthening semantics (T6, T9, T12):** These are not state changes. Rust strengthens the reason with `CancelReason::strengthen` (`src/types/cancel.rs:956`; order in §4.4) and meets the cleanup budgets with `Budget::combine` (min deadline, min poll and cost quota, max priority; `src/types/budget.rs:556`). Both leave `cancel_epoch` unchanged (C `src/runtime/cancellation.c:168`). In Rust the request reports "not newly cancelled" (`false`).
 
@@ -205,14 +205,14 @@ Completed         .        .        .           .           .           .
 
 ### 2.4 Task Poll Contract
 
-C has no `ASX_POLL_*` codes (the first extraction named some). A C poll function (`asx_task_poll_fn`, `include/asx/runtime/runtime.h:87`) returns an `asx_status`; the scheduler maps it in `sched_poll_slot` (`src/runtime/scheduler.c:1035`). Rust's equivalent is the `Poll` of the task's future plus the panic catch at the poll boundary.
+C has no `ASX_POLL_*` codes (the first extraction named some). A C poll function (`asx_task_poll_fn`, `include/asx/runtime/runtime.h:87`) returns an `asx_status`; the scheduler maps it in `sched_poll_slot` (`src/runtime/scheduler.c:1056`). Rust's equivalent is the `Poll` of the task's future plus the panic catch at the poll boundary.
 
 | Poll Return | Meaning | State Transition |
 |------------|---------|-----------------|
 | `ASX_E_PENDING` | Task yielded or parked; needs another poll | Remains in its current state |
-| `ASX_OK` | Task completed its work | `Completed(Ok)`, or `Completed(Cancelled)` when a pending cancel dominates (T8/T11; `src/runtime/scheduler.c:1113`) |
-| any other status | Task failed | `Completed(Err)` with the status recorded, or `Completed(Cancelled)` when a pending cancel dominates (`src/runtime/scheduler.c:1125`); the region's fault-containment policy then applies unless the task was cancelled |
-| (`asx_task_panic` called during the poll) | Task panicked | `Completed(Panicked)` whatever the poll returned, also over a pending cancel (`src/runtime/scheduler.c:1103`) |
+| `ASX_OK` | Task completed its work | `Completed(Ok)`, or `Completed(Cancelled)` when a pending cancel dominates (T8/T11; `src/runtime/scheduler.c:1134`) |
+| any other status | Task failed | `Completed(Err)` with the status recorded, or `Completed(Cancelled)` when a pending cancel dominates (`src/runtime/scheduler.c:1146`); the region's fault-containment policy then applies unless the task was cancelled |
+| (`asx_task_panic` called during the poll) | Task panicked | `Completed(Panicked)` whatever the poll returned, also over a pending cancel (`src/runtime/scheduler.c:1124`) |
 
 ### 2.5 Cancellation Observation Rules
 
@@ -222,7 +222,7 @@ C has no `ASX_POLL_*` codes (the first extraction named some). A C poll function
 2. The task acknowledges the cancel at a checkpoint: Rust `Cx::checkpoint` (`src/cx/cx.rs:2749`), C `asx_checkpoint` (`src/runtime/cancellation.c:512`). C has no `asx_is_cancelled` (the first extraction named one); `asx_task_get_cancel_reason` and `asx_task_get_cancel_phase` only read state
 3. Between `CancelRequested` and acknowledgement the task continues with its normal poll logic
 4. A checkpoint with mask depth 0 moves the task to `Cancelling` and its cleanup budget becomes its budget (T7). With mask depth > 0 the cancel stays pending and unacknowledged. Rust and C treat the mask as a nesting depth that unmask releases (`Cx::masked`, `src/cx/cx.rs:3315`; C `src/runtime/cancellation.c:580`, `asx_task_mask`/`asx_task_unmask` at `src/runtime/cancellation.c:629` and `src/runtime/cancellation.c:639`); the spec instead consumes one unit per masked checkpoint (Variant). The depth is bounded by 64 in both (`MAX_MASK_DEPTH`, `src/types/task_context.rs:673`; `ASX_MAX_MASK_DEPTH`, `include/asx/runtime/runtime.h:476`)
-5. The cleanup budget is advisory in Rust: a spent cleanup poll quota only strengthens the reason to `PollQuota` (lab, `src/lab/runtime.rs:4667`), and Rust never force-completes a task. C is the same by default; the opt-in `cleanup_hard_bound` force-completes with `Cancelled` (`src/runtime/scheduler.c:1387`; a deviation excluded from parity, `bd-9kll.3.2`)
+5. The cleanup budget is advisory in Rust: a spent cleanup poll quota only strengthens the reason to `PollQuota` (lab, `src/lab/runtime.rs:4667`), and Rust never force-completes a task. C is the same by default; the opt-in `cleanup_hard_bound` force-completes with `Cancelled` (`src/runtime/scheduler.c:1408`; a deviation excluded from parity, `bd-9kll.3.2`)
 6. A task that completes while `CancelRequested` (or later) does **not** keep its natural outcome: `Ok`/`Err` become `Cancelled(reason)` (T8). The exception is in T8
 
 ---
@@ -455,7 +455,7 @@ Each cancellation carries these operational fields:
 
 1. The cleanup budget is fixed by the request (per-kind table, §4.4) and becomes the task's budget when the cancel is acknowledged (T7); a later request during cleanup tightens it (T9/T12)
 2. The budget bounds cleanup polls (its poll quota; the per-kind budgets set no deadline or cost quota). The spec's `budget ∧ policy(reason)` with the region budget is not what either engine computes (C_REFINEMENT_MAP row `rule.cancel.request`)
-3. Exceeding it never force-completes a task in Rust: the lab strengthens the reason to `PollQuota` and the task runs on (`src/lab/runtime.rs:4667`). C behaves the same by default; only the opt-in `cleanup_hard_bound` force-completes (`src/runtime/scheduler.c:1387`, `bd-9kll.3.2`)
+3. Exceeding it never force-completes a task in Rust: the lab strengthens the reason to `PollQuota` and the task runs on (`src/lab/runtime.rs:4667`). C behaves the same by default; only the opt-in `cleanup_hard_bound` force-completes (`src/runtime/scheduler.c:1408`, `bd-9kll.3.2`)
 4. There is no `cleanup_budget_exceeded` flag in either engine (the first extraction described one). C's forced completion emits the scheduler event `ASX_SCHED_EVENT_CANCEL_FORCED`
 5. Cleanup budget exhaustion is deterministic for a fixed seed and schedule
 
@@ -565,7 +565,7 @@ For deterministic scheduling and replay. The first extraction gave the plan's ke
 | Context | Tie-Break Key | Ordering |
 |---------|--------------|----------|
 | Ready queue (Rust lab, C lab dispatch) | lane first (cancel lane while the cancel streak is below 16, then due timed, then ready, then fallback cancel), then highest priority, then `rng % n` over the top-priority group in generation order (at most 256 entries) | One xorshift64 draw per step from the scenario seed. Rust: `pop_for_worker` (`src/lab/runtime.rs:6324`), `tie_break_index` (`src/runtime/scheduler/priority.rs:417`). C: `asx_lab_pick` (`src/runtime/lab_dispatch.c:592`), tie-break `lab_pop` (`src/runtime/lab_dispatch.c:556`). C has no timed lane; Rust feeds its timed lane from no non-test code at `5e60b1c4c` |
-| Ready queue (C round-robin `asx_scheduler_run`) | task slot index | Ascending; no lanes, priority unused (`src/runtime/scheduler.c:1291`; `bd-9kll.4.6`) |
+| Ready queue (C round-robin `asx_scheduler_run`) | task slot index | Ascending; no lanes, priority unused (`src/runtime/scheduler.c:1312`; `bd-9kll.4.6`) |
 | Timer wheel | Rust: 1 ms tick, then insertion order within a wheel slot (a cascade from a higher level can put an earlier-registered timer after later ones). C lab: `(1 ms tick, registration)` (`src/runtime/scheduler.c:269`); C native task timers: `(exact deadline, arm sequence)` (`src/runtime/scheduler.c:101`) | Ascending (earlier = fires first). Same-tick ordering is recorded in `bd-9kll.7.1`; see `docs/CHANNEL_TIMER_SEMANTICS.md` |
 | Cancel propagation | Parents before descendants; sibling order differs between the engines (§4.9 item 2) | Deterministic tree walk order in each engine |
 | Event journal | C: monotonic trace `sequence` (`src/runtime/trace.c:219`) | Strictly monotonic per runtime. The conformance oracle compares the Foata-canonical trace, not raw order (C_REFINEMENT_MAP supplementary row "§1.8 independence / Foata") |
@@ -638,7 +638,7 @@ The Expected Result column gives C's actual status (verified in `src/runtime/lif
 
 ### 8.2 Resource Exhaustion Forbidden Behaviors
 
-These rows describe C's fixed-capacity resource plane; Rust allocates and has no counterpart. They were not re-verified in this pass, except: a full C lab lane makes the lab step fail with `ASX_E_RESOURCE_EXHAUSTED` (`src/runtime/scheduler.c:1232`), and a full `src/time/timer_wheel.c` table returns `ASX_E_RESOURCE_EXHAUSTED`.
+These rows describe C's fixed-capacity resource plane; Rust allocates and has no counterpart. They were not re-verified in this pass, except: a full C lab lane makes the lab step fail with `ASX_E_RESOURCE_EXHAUSTED` (`src/runtime/scheduler.c:1253`), and a full `src/time/timer_wheel.c` table returns `ASX_E_RESOURCE_EXHAUSTED`.
 
 | ID | Forbidden Behavior | Expected Result | Fixture Category |
 |----|-------------------|-----------------|------------------|

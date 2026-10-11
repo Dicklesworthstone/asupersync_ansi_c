@@ -1784,6 +1784,38 @@ static int exec_sync_wait(it_task *t, asx_task_id self, uint32_t step, uint32_t 
         }
         return 1;
     }
+    if (strcmp(op, "mutex_lock_until") == 0) {
+        /* Rust's lock_until guard is borrowed (not Send), so twin_run drops
+         * it in the poll that takes it: the lock is released at once. */
+        it_sync *s = sync_by_name(it_str(step, "mutex"), IT_SYNC_MUTEX);
+        asx_mutex_guard guard;
+        uint64_t deadline;
+        if (s == NULL || !asx_json_u64(g_in, asx_json_get(g_in, step, "deadline_ns"), &deadline)) {
+            it_fail_task(t, idx,
+                         "mutex_lock_until on an undeclared mutex (or without its deadline)");
+            *out = STEP_END;
+            return 1;
+        }
+        if (t->phase == 0u) {
+            if (asx_mutex_lock_until_begin(s->mutex, (asx_time)deadline, &t->wait.mutex) !=
+                ASX_OK) {
+                it_fail_task(t, idx, "asx_mutex_lock_until_begin failed");
+                *out = STEP_END;
+                return 1;
+            }
+            t->phase = 1u;
+        }
+        st = asx_mutex_poll_lock(&t->wait.mutex, &guard, &t->cx);
+        if (st == ASX_OK && asx_mutex_unlock(guard) != ASX_OK) {
+            it_fail_task(t, idx, "the unlock after mutex_lock_until failed");
+            *out = STEP_END;
+            return 1;
+        }
+        if (sync_wait(t, idx, op, st, cancel_mutex_wait, &t->wait.mutex) == WAIT_PENDING) {
+            *out = STEP_PENDING;
+        }
+        return 1;
+    }
     if (strcmp(op, "rwlock_read") == 0 || strcmp(op, "rwlock_write") == 0) {
         const char *name = it_str(step, "rwlock");
         it_sync *s = sync_by_name(name, IT_SYNC_RWLOCK);

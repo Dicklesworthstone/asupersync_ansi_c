@@ -337,6 +337,7 @@ Sync objects are declared at the top level:
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|
 | `mutex_lock` | `mutex` | `m.lock(&cx).await` (`sync/mutex.rs:191`), guard kept | `asx_mutex_lock_begin` + `asx_mutex_poll_lock` | while held, FIFO | Checked on every poll: `ASX_E_CANCELLED` even when free (`mutex.rs:554-558`). |
+| `mutex_lock_until` | `mutex`, `deadline_ns` | `m.lock_until(&cx, Time::from_nanos(deadline_ns)).await` (`sync/mutex.rs:207`); the guard (borrowed, not `Send`) is dropped in the poll that takes it | `asx_mutex_lock_until_begin` + `asx_mutex_poll_lock`, then `asx_mutex_unlock` | as `mutex_lock`, until the deadline | as `mutex_lock`. The deadline Sleep is polled right after the checkpoint (`mutex.rs:560-564`): `ASX_E_TIMED_OUT` at or past `deadline_ns`, even when the lock is free; before it, its timer is scheduled on the first poll and cancelled when the wait ends otherwise. |
 | `mutex_unlock` | `mutex` | `drop(guard)` (`:758`) | `asx_mutex_unlock` | no | ignored |
 | `rwlock_read` / `rwlock_write` | `rwlock` | `OwnedRwLockReadGuard::read(lock, &cx).await` / `OwnedRwLockWriteGuard::write(lock, &cx).await` (`sync/rwlock.rs:1155`, `:1212`), guard kept | `asx_rwlock_read_begin` / `asx_rwlock_write_begin` + `asx_rwlock_poll_read` / `asx_rwlock_poll_write` | while a writer holds or (for a read) waits; release order is bounded writer-preference by arrival (`release_writer`, `:531`) | Checked on every poll: `ASX_E_CANCELLED` (`:1339`, `:1464`). A granted lock the waiter gives up passes on. |
 | `rwlock_unlock` | `rwlock` | drops the task's most recent guard on the lock (`release_reader` / `release_writer`) | `asx_rwlock_read_unlock` / `asx_rwlock_write_unlock` | no | ignored |
@@ -603,6 +604,17 @@ Closed (each verified by a fixture that now matches):
   `sync-rwlock-poisoned-by-panic-001` (a read guard does not poison),
   `sync-rwlock-poisoned-wakes-queued-001`. Generated scenarios still never
   panic while holding a lock.
+
+- **Mutex lock_until** (bd-9kll.6.5): the deadline is a traced Sleep, as
+  Rust's `LockFuture` (`sync/mutex.rs:445-452`, `:517-523`): polled after
+  the checkpoint, it registers its timer on the first poll before the
+  deadline (`timer.scheduled`), fires when the wait times out, and is
+  cancelled when the wait ends otherwise (taken, cancelled, poisoned). A
+  deadline already due registers nothing. Fixtures
+  `sync-mutex-lock-until-001` (timeout while queued, a grant before the
+  deadline, a free lock past its deadline, a free lock before it) and
+  `sync-mutex-lock-until-cancel-001` (cancelled while queued); generated
+  scenarios use `mutex_lock_until` too.
 
 - **Race ties within one round** (bd-g652): Rust picks the winner among
   the members ready at the owner's poll with `cx.random_usize` over the

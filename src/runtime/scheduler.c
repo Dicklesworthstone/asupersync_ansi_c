@@ -556,40 +556,61 @@ asx_status asx_task_arm_timer(asx_task_id self, asx_time deadline) {
     return ASX_OK;
 }
 
+/* Register the task's traced sleep timer for `deadline` and arm its wake,
+ * as polling a pending Rust Sleep does; the caller decides whether to
+ * park. */
+static void sched_trace_sleep_timer(asx_task_id self, asx_task_slot *t, asx_time deadline) {
+    /* Registered once per deadline (re-polls of the same sleep add
+     * nothing); a new deadline drops the old timer first, as re-arming a
+     * Rust Sleep does (sleep.rs:985-988). */
+    if (t->traced_deadline != deadline) {
+        if (t->traced_deadline != 0u) {
+            asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, t->traced_deadline);
+        }
+        t->traced_deadline = deadline;
+        t->traced_waker_epoch = t->lab_waker_epoch;
+        asx_trace_emit(ASX_TRACE_TIMER_SET, (uint64_t)self, deadline);
+    } else if (asx_lab_dispatch_active() && t->traced_waker_epoch != t->lab_waker_epoch) {
+        /* Polled with a new waker (its priority changed): the Sleep moves
+         * its registration to the new waker, which cancels the old one and
+         * registers it afresh, behind the timers already registered
+         * (timer.update, time/sleep.rs:952-998). The same timer: the new
+         * registration is marked "rearm". */
+        asx_trace_payload rearm;
+        rearm.text = "rearm";
+        rearm.reason = NULL;
+        asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, deadline);
+        asx_trace_emit_payload_internal(ASX_TRACE_TIMER_SET, (uint64_t)self, deadline, &rearm);
+        t->traced_waker_epoch = t->lab_waker_epoch;
+        if (t->timer_pos != ASX_SLOT_NONE) timer_heap_remove_at(t->timer_pos);
+    }
+    timer_arm((uint32_t)(t - g_tasks), deadline);
+}
+
 asx_status asx_task_wait_until(asx_task_id self, asx_time deadline) {
     asx_task_slot *t;
     asx_time now = sched_now();
 
     if (now >= deadline) return ASX_OK;
     if (asx_task_slot_lookup(self, &t) == ASX_OK && t->in_poll) {
-        /* A traced sleep timer: registered once per deadline (re-polls of
-         * the same sleep add nothing); a new deadline drops the old timer
-         * first, as re-arming a Rust Sleep does (sleep.rs:985-988). */
-        if (t->traced_deadline != deadline) {
-            if (t->traced_deadline != 0u) {
-                asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, t->traced_deadline);
-            }
-            t->traced_deadline = deadline;
-            t->traced_waker_epoch = t->lab_waker_epoch;
-            asx_trace_emit(ASX_TRACE_TIMER_SET, (uint64_t)self, deadline);
-        } else if (asx_lab_dispatch_active() && t->traced_waker_epoch != t->lab_waker_epoch) {
-            /* Polled with a new waker (its priority changed): the Sleep
-             * moves its registration to the new waker, which cancels the
-             * old one and registers it afresh, behind the timers already
-             * registered (timer.update, time/sleep.rs:952-998). The same
-             * timer: the new registration is marked "rearm". */
-            asx_trace_payload rearm;
-            rearm.text = "rearm";
-            rearm.reason = NULL;
-            asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, deadline);
-            asx_trace_emit_payload_internal(ASX_TRACE_TIMER_SET, (uint64_t)self, deadline, &rearm);
-            t->traced_waker_epoch = t->lab_waker_epoch;
-            if (t->timer_pos != ASX_SLOT_NONE) timer_heap_remove_at(t->timer_pos);
-        }
-        timer_arm((uint32_t)(t - g_tasks), deadline);
+        sched_trace_sleep_timer(self, t, deadline);
         t->park_requested = 1;
     }
     return ASX_E_PENDING;
+}
+
+int asx_task_poll_deadline_sleep_internal(asx_task_id self, asx_time deadline) {
+    asx_task_slot *t;
+    if (sched_now() >= deadline) {
+        /* Ready: a sleep registered by an earlier poll records its fire. */
+        asx_status st = asx_task_complete_timer(self);
+        (void)st;
+        return 1;
+    }
+    if (asx_task_slot_lookup(self, &t) == ASX_OK && t->in_poll) {
+        sched_trace_sleep_timer(self, t, deadline);
+    }
+    return 0;
 }
 
 asx_status asx_task_cancel_timer(asx_task_id self) {

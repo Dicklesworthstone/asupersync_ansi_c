@@ -124,7 +124,8 @@
       {"$ref": "#/$defs/s_return"}, {"$ref": "#/$defs/s_masked"}, {"$ref": "#/$defs/s_join"},
       {"$ref": "#/$defs/s_open_region"}, {"$ref": "#/$defs/s_close_region"}, {"$ref": "#/$defs/s_group"},
       {"$ref": "#/$defs/s_quorum"}, {"$ref": "#/$defs/s_reserve_send"}, {"$ref": "#/$defs/s_chan_value_b"},
-      {"$ref": "#/$defs/s_chan_ref_b"}, {"$ref": "#/$defs/s_sync_ref_b"}, {"$ref": "#/$defs/s_sem_acquire"},
+      {"$ref": "#/$defs/s_chan_ref_b"}, {"$ref": "#/$defs/s_sync_ref_b"}, {"$ref": "#/$defs/s_mutex_lock_until"},
+      {"$ref": "#/$defs/s_sem_acquire"},
       {"$ref": "#/$defs/s_server_spawn"}, {"$ref": "#/$defs/s_cast"}, {"$ref": "#/$defs/s_call"},
       {"$ref": "#/$defs/s_server_ref"}, {"$ref": "#/$defs/s_supervise"}, {"$ref": "#/$defs/s_supervisor_join"}
     ]},
@@ -201,6 +202,8 @@
       {"required": ["op", "barrier"], "properties": {"op": {"const": "barrier_wait"}, "barrier": {"$ref": "#/$defs/name"}}},
       {"required": ["op", "notify"], "properties": {"op": {"const": "notify_wait"}, "notify": {"$ref": "#/$defs/name"}}}
     ], "properties": {"op": true, "mutex": true, "rwlock": true, "barrier": true, "notify": true}},
+    "s_mutex_lock_until": {"type": "object", "required": ["op", "mutex", "deadline_ns"], "additionalProperties": false,
+      "properties": {"op": {"const": "mutex_lock_until"}, "mutex": {"$ref": "#/$defs/name"}, "deadline_ns": {"$ref": "#/$defs/u64"}}},
     "s_sem_acquire": {"type": "object", "required": ["op", "semaphore", "count"], "additionalProperties": false,
       "properties": {"op": {"const": "sem_acquire"}, "semaphore": {"$ref": "#/$defs/name"}, "count": {"type": "integer", "minimum": 0}}},
     "s_sem_add_permits": {"type": "object", "required": ["op", "semaphore", "count"], "additionalProperties": false,

@@ -1089,16 +1089,46 @@ static asx_status poll_lock_until_task(void *ud, asx_task_id self) {
     return st == ASX_OK ? asx_mutex_unlock(u->guard) : ASX_OK;
 }
 
+/* The task's timer events, in order, as a kind letter, S(et), F(ire) or
+ * C(ancel), and the last digit of the deadline in ms. A handle carries
+ * the task's state, so events are matched by its index. */
+static void timer_events_of(asx_task_id task, char *out, size_t cap) {
+    uint32_t i;
+    size_t n = 0;
+    asx_trace_event ev;
+    for (i = 0; asx_trace_event_get(i, &ev) && n + 1u < cap; i++) {
+        char c;
+        if (asx_handle_index(ev.entity_id) != asx_handle_index(task)) continue;
+        if (ev.kind == ASX_TRACE_TIMER_SET) {
+            c = 'S';
+        } else if (ev.kind == ASX_TRACE_TIMER_FIRE) {
+            c = 'F';
+        } else if (ev.kind == ASX_TRACE_TIMER_CANCEL) {
+            c = 'C';
+        } else {
+            continue;
+        }
+        out[n++] = c;
+        if (n + 1u < cap) out[n++] = (char)('0' + (int)((ev.aux / MS) % 10u));
+    }
+    out[n] = '\0';
+}
+
 TEST(mutex_lock_until_wakes_its_task_at_the_deadline) {
     /* The holder keeps the lock 10 ms; the waiter's deadline is 5 ms. The
      * parked waiter is woken at 5 ms (Rust's deadline Sleep) and times
      * out there; a second waiter with a 20 ms deadline gets the lock at
-     * 10 ms. */
+     * 10 ms. Each waiter's Sleep registers its timer on the first poll
+     * (traced); the first's fires, the second's is dropped with its
+     * acquisition (Rust LockFuture::poll, sync/mutex.rs:519-523). */
     static lock_holder h;
     static lock_until_task u[2];
     asx_mutex_handle m;
     asx_task_id t;
+    asx_task_id t0;
+    asx_task_id t1;
     asx_budget budget;
+    char ev[16];
 
     ASSERT_TRUE(setup());
     memset(&h, 0, sizeof(h));
@@ -1111,8 +1141,8 @@ TEST(mutex_lock_until_wakes_its_task_at_the_deadline) {
     u[1].mutex = m;
     u[1].deadline = 20u * MS;
     ASSERT_EQ(asx_task_spawn(g_region, poll_lock_holder, &h, &t), ASX_OK);
-    ASSERT_EQ(asx_task_spawn(g_region, poll_lock_until_task, &u[0], &t), ASX_OK);
-    ASSERT_EQ(asx_task_spawn(g_region, poll_lock_until_task, &u[1], &t), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_region, poll_lock_until_task, &u[0], &t0), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_region, poll_lock_until_task, &u[1], &t1), ASX_OK);
     budget = asx_budget_from_polls(50);
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
 
@@ -1121,6 +1151,44 @@ TEST(mutex_lock_until_wakes_its_task_at_the_deadline) {
     ASSERT_EQ(u[0].polls, 2u);
     ASSERT_EQ(u[1].result, ASX_OK);
     ASSERT_EQ(u[1].at, (asx_time)(10u * MS));
+    ASSERT_FALSE(asx_mutex_is_locked(m));
+    timer_events_of(t0, ev, sizeof(ev));
+    ASSERT_STR_EQ(ev, "S5F5");
+    timer_events_of(t1, ev, sizeof(ev)); /* 20 ms: "0" */
+    ASSERT_STR_EQ(ev, "S0C0");
+}
+
+TEST(mutex_lock_until_acquired_at_once_drops_its_registered_timer) {
+    /* Free lock, deadline ahead: the first poll registers the Sleep (it is
+     * polled before the lock is looked at), then takes the lock and drops
+     * the Sleep, recording its cancel. A deadline already due on the first
+     * poll registers nothing. */
+    static lock_until_task u[2];
+    asx_mutex_handle m;
+    asx_task_id t0;
+    asx_task_id t1;
+    asx_budget budget;
+    char ev[16];
+
+    ASSERT_TRUE(setup());
+    memset(u, 0, sizeof(u));
+    ASSERT_EQ(asx_mutex_create(&m), ASX_OK);
+    u[0].mutex = m;
+    u[0].deadline = 3u * MS;
+    u[1].mutex = m;
+    u[1].deadline = 0u;
+    ASSERT_EQ(asx_task_spawn(g_region, poll_lock_until_task, &u[0], &t0), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_region, poll_lock_until_task, &u[1], &t1), ASX_OK);
+    budget = asx_budget_from_polls(20);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+
+    ASSERT_EQ(u[0].result, ASX_OK);
+    ASSERT_EQ(u[0].polls, 1u);
+    ASSERT_EQ(u[1].result, ASX_E_TIMED_OUT);
+    timer_events_of(t0, ev, sizeof(ev));
+    ASSERT_STR_EQ(ev, "S3C3");
+    timer_events_of(t1, ev, sizeof(ev));
+    ASSERT_STR_EQ(ev, "");
     ASSERT_FALSE(asx_mutex_is_locked(m));
 }
 
@@ -1829,6 +1897,7 @@ int main(void) {
     RUN_TEST(mutex_lock_until_past_its_deadline_times_out_even_when_free);
     RUN_TEST(mutex_lock_until_gives_up_and_a_handed_lock_passes_on);
     RUN_TEST(mutex_lock_until_wakes_its_task_at_the_deadline);
+    RUN_TEST(mutex_lock_until_acquired_at_once_drops_its_registered_timer);
     RUN_TEST(barrier_with_every_task_as_a_party_trips);
     RUN_TEST(barrier_rounds_trip_once_with_one_leader_each);
     RUN_TEST(contended_mutex_counts_one_contention_per_park);

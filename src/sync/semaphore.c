@@ -420,6 +420,25 @@ static asx_status sem_consume_grant(sem_slot *s, uint32_t i, const asx_semaphore
     return sem_hand_out(s, waiter, 1u, out, cx);
 }
 
+/* A lock_until wait that ends before its deadline drops its Sleep: a timer
+ * an earlier poll registered records its cancel, as Rust's LockFuture
+ * drops deadline_sleep once it completes (sync/mutex.rs:519-536). `task`
+ * is the waiting task, whose poll registered the timer. */
+static void sem_drop_deadline_sleep(const asx_semaphore_waiter *waiter, asx_task_id task) {
+    if (waiter->has_deadline && task != ASX_INVALID_ID) {
+        asx_status st = asx_task_cancel_timer(task);
+        (void)st;
+    }
+}
+
+/* Mutex: take the lock handed to this waiter. */
+static asx_status sem_take_grant(sem_slot *s, uint32_t i, const asx_semaphore_waiter *waiter,
+                                 asx_semaphore_permit *out, const asx_cx *cx) {
+    asx_status st = sem_consume_grant(s, i, waiter, out, cx);
+    sem_drop_deadline_sleep(waiter, asx_task_current());
+    return st;
+}
+
 asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphore_permit *out,
                                       asx_cx *cx) {
     sem_slot *s;
@@ -488,21 +507,21 @@ asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphor
             /* Give up: a granted permit passes to the next waiter. */
             sem_waiter_retire(s, i);
             sem_dispatch_parked(s);
+            sem_drop_deadline_sleep(waiter, asx_task_current());
             return cst;
         }
     }
 
-    /* lock_until past its deadline (Rust LockFuture::poll_lock, after the
-     * checkpoint and before anything else, sync/mutex.rs:560-564): give
-     * up, passing a granted lock on, and fail with TimedOut, even when the
-     * lock is free. */
-    if (waiter->has_deadline) {
-        asx_time now;
-        if (asx_runtime_now_ns(&now) == ASX_OK && now >= waiter->deadline) {
-            sem_waiter_retire(s, i);
-            sem_dispatch_parked(s);
-            return ASX_E_TIMED_OUT;
-        }
+    /* lock_until: its deadline Sleep is polled after the checkpoint and
+     * before anything else (Rust LockFuture::poll_lock,
+     * sync/mutex.rs:560-564). Due: give up, passing a granted lock on, and
+     * fail with TimedOut, even when the lock is free. Otherwise the Sleep
+     * registers its timer, traced as Rust's (once per wait). */
+    if (waiter->has_deadline &&
+        asx_task_poll_deadline_sleep_internal(asx_task_current(), waiter->deadline)) {
+        sem_waiter_retire(s, i);
+        sem_dispatch_parked(s);
+        return ASX_E_TIMED_OUT;
     }
 
     /* Poisoned (Rust's Lock future, after the checkpoint and before
@@ -511,17 +530,18 @@ asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphor
     if (s->poisoned) {
         sem_waiter_retire(s, i);
         sem_dispatch_parked(s);
+        sem_drop_deadline_sleep(waiter, asx_task_current());
         return ASX_E_INVALID_STATE;
     }
 
     /* Already acquired by a prior release? */
-    if ((sem_node(i)->flags & SEM_ACQUIRED) != 0u) return sem_consume_grant(s, i, waiter, out, cx);
+    if ((sem_node(i)->flags & SEM_ACQUIRED) != 0u) return sem_take_grant(s, i, waiter, out, cx);
 
     /* Settle the line: reclaim waiters of dead tasks (their grants return
      * to the pool) and hand pooled permits to parked waiters in order. */
     sem_reap(s);
     sem_dispatch_parked(s);
-    if ((sem_node(i)->flags & SEM_ACQUIRED) != 0u) return sem_consume_grant(s, i, waiter, out, cx);
+    if ((sem_node(i)->flags & SEM_ACQUIRED) != 0u) return sem_take_grant(s, i, waiter, out, cx);
 
     /* Take a pooled permit only when no earlier arrival is still waiting. */
     if (s->permits > 0 && sem_next_in_line(s, i)) {
@@ -529,22 +549,20 @@ asx_status asx_semaphore_poll_acquire(asx_semaphore_waiter *waiter, asx_semaphor
         sem_waiter_retire(s, i);
         /* Permits left over belong to the parked waiters behind us. */
         sem_dispatch_parked(s);
+        sem_drop_deadline_sleep(waiter, asx_task_current());
         return sem_hand_out(s, waiter, 1u, out, cx);
     }
 
-    /* Wait for a release; inside a scheduler poll, park until granted, and
-     * for lock_until wake at the deadline (Rust's deadline Sleep). */
+    /* Wait for a release; inside a scheduler poll, park until granted (a
+     * lock_until's Sleep also wakes the task at its deadline). */
     (void)asx_wait_park_current(&sem_node(i)->task);
-    if (waiter->has_deadline && asx_task_current() != ASX_INVALID_ID) {
-        asx_status a_st_ = asx_task_arm_timer(asx_task_current(), waiter->deadline);
-        (void)a_st_;
-    }
     return ASX_E_PENDING;
 }
 
 asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter) {
     sem_slot *s;
     uint32_t i;
+    asx_task_id owner;
     if (waiter == NULL) return ASX_E_INVALID_ARGUMENT;
     if (waiter->sem_slot >= ASX_SEMAPHORE_MAX) return ASX_E_INVALID_ARGUMENT;
     s = &g_slots[waiter->sem_slot];
@@ -557,9 +575,13 @@ asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter) {
         sem_leave(s, i);
         return ASX_OK;
     }
-    /* A lock already handed over goes back and on to the next waiter. */
+    /* A lock already handed over goes back and on to the next waiter; a
+     * lock_until's Sleep is dropped with the wait (its timer was
+     * registered by a poll that parked, naming the waiting task). */
+    owner = sem_node(i)->task;
     sem_waiter_retire(s, i);
     sem_dispatch_parked(s);
+    sem_drop_deadline_sleep(waiter, owner);
     return ASX_OK;
 }
 
