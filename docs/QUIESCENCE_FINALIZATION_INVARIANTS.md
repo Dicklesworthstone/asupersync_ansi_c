@@ -408,7 +408,7 @@ A finalizer task gets `finalizer_budget()` (poll quota 100, `src/record/finalize
 
 Correction: at `5e60b1c4c` this enum is stored in `FinalizerStack` (`src/record/finalizer.rs:199-204`) but no runtime code outside `src/record/finalizer.rs` reads it (`git grep` finds only the re-export in `src/record/mod.rs:20`), so the policy described here is not wired into finalizer execution.
 
-**C status:** `asx_finalizer_escalation` (`include/asx/asx_config.h:542-546`), default `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:775`), validated at `src/runtime/rt.c:157`, never otherwise read (bd-udlh).
+**C status:** `asx_finalizer_escalation` (`include/asx/asx_config.h:542-546`), default `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:779`), validated at `src/runtime/rt.c:157`, never otherwise read (bd-udlh).
 
 ### 6.6 Registration Rejection
 
@@ -830,7 +830,7 @@ All of these are declared in `include/asx/asx_status.h`. Codes the close and adm
 | `leak_escalation` | pointer (optional) | `NULL` | `Option<LeakEscalation>` | Read (section 5.2) |
 | `finalizer_poll_budget` | `uint32_t` | 100 (`src/runtime/hooks.c:773`) | `FINALIZER_POLL_BUDGET` 100 | Validated, otherwise unread (bd-udlh) |
 | `finalizer_time_budget_ns` | `uint64_t` | 5,000,000,000 (`src/runtime/hooks.c:774`) | `FINALIZER_TIME_BUDGET_NANOS` | Unread (bd-udlh) |
-| `finalizer_escalation` | enum | `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:775`) | `FinalizerEscalation`, not wired in Rust (section 6.5) | Validated, otherwise unread (bd-udlh) |
+| `finalizer_escalation` | enum | `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:779`) | `FinalizerEscalation`, not wired in Rust (section 6.5) | Validated, otherwise unread (bd-udlh) |
 | `max_cancel_chain_depth` | `uint16_t` | 16 (`src/runtime/hooks.c:776`) | `CancelAttributionConfig::DEFAULT_MAX_DEPTH` 16 (`src/types/cancel.rs:198`) | Validated non-zero (`src/runtime/rt.c:159`); no cancel code reads it |
 | `max_cancel_chain_memory` | `uint32_t` | 4096 (`src/runtime/hooks.c:777`) | `DEFAULT_MAX_MEMORY` 4096 (`src/types/cancel.rs:201`) | No cancel code reads it |
 
