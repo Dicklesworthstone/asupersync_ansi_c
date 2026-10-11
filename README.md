@@ -1060,12 +1060,7 @@ A Rust parity mismatch is a semantic drift bug in the C port, not an acceptable 
 
 The poll-based combinators (join, race, select, timeout, first_ok, quorum, race_timeout, retry, retry_timeout, bracket, pipeline, hedge, map_reduce) share the `asx_combinator_poll_fn` interface: each is a poll state machine that returns `ASX_E_PENDING` until terminal, then a final status. This uniformity means combinators compose naturally: a retry combinator can wrap a race combinator, which itself contains timeout-wrapped branches. Bulkhead and rate-limit are non-blocking admission counters (`asx_bulkhead_try_enter`, `asx_rate_limit_try_acquire`), not poll functions.
 
-The **loser-drain protocol** is central to race/select/quorum semantics. When a winner is decided:
-1. Each undecided branch receives exactly one final cooperative poll (cleanup opportunity).
-2. The branch is then resolved as `ASX_E_CANCELLED`, whatever the final poll returned.
-3. The combinator then returns the winner's result.
-
-This bounded drain prevents indefinite hangs on losing branches while giving them a chance to release resources. The drain is deterministic: same input, same drain order, same result.
+These combinators run their branches inline in the owner's task, like Rust's `Cx::race` / `Select` over futures, and like those they **drop** their losers rather than drain them. Once race, select or quorum is decided (or a race_timeout expires), every branch still pending is resolved as `ASX_E_CANCELLED` and never polled again; a branch holding resources must release them when its owner stops polling it. A race or select with no branches is pending until its owner task is cancelled. first_ok checkpoints the owner before each attempt and stops at a cancelled attempt. A timeout combinator that is still pending arms its owner's wake at the deadline, so it fires even while the inner work is parked.
 
 **Task groups** (`asx/runtime/task_group.h`) provide the full "losers are drained" guarantee over real spawned tasks, porting asupersync's `Scope::race_all` / `join_all` / `first_ok` / `quorum`. The owner drives the group with `asx_task_group_poll(&group, self)`; it parks, and members wake it as they complete. Once a race or quorum is decided, every unfinished member is cancelled with `RACE_LOST` and **awaited to completion** before the group resolves, so a loser's obligations, finalizers, and handles are resolved, never abandoned. Per mode, as in Rust:
 - `join_all` awaits its members one by one, in order, and the owner's cancel does not reach them (joins are uninterruptible).

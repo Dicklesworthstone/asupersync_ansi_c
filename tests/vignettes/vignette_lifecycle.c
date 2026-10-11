@@ -454,12 +454,13 @@ static int scenario_combinator_orchestration(void) {
         return 1;
     }
 
-    printf("  select: winner=%d loser_polls=%u drained=%u\n", asx_select_winner(&select),
-           loser_polls, select.drained);
+    printf("  select: winner=%d loser_polls=%u dropped=%u\n", asx_select_winner(&select),
+           loser_polls, select.dropped);
 
+    /* The loser is dropped, never polled: the winner came first. */
     if (asx_retry_attempts(&retry) != 3u || asx_pipeline_completed_stages(&pipeline) != 2u ||
         asx_join_outcome(&join).severity != ASX_OUTCOME_OK || asx_select_winner(&select) != 0 ||
-        loser_polls != 1u || select.drained != 1u) {
+        loser_polls != 0u || select.dropped != 1u) {
         printf("  FAIL: combinator orchestration produced unexpected state\n");
         return 1;
     }

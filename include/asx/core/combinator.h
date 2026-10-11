@@ -76,20 +76,28 @@ ASX_API asx_status asx_join_poll(void *user_data, asx_task_id self);
 ASX_API asx_outcome asx_join_outcome(const asx_join_state *state);
 
 /* -------------------------------------------------------------------
- * Race — wait for FIRST branch to complete, cancel losers
+ * Race — wait for FIRST branch to complete, drop the losers
  *
- * Returns the winning branch's terminal status.
- * The winner index is available via asx_race_winner().
- * Losers receive one final cooperative drain poll; if they remain
- * pending afterward, the combinator resolves them as ASX_E_CANCELLED.
+ * Rust's inline race (Cx::race over futures, cx/cx.rs:4316; SelectAll):
+ * branches are polled in order and the first to finish wins. The losers
+ * are dropped, not drained: they are never polled again and resolve as
+ * ASX_E_CANCELLED. A loser that holds resources must release them when
+ * its owner stops polling it. For "losers are cancelled and drained"
+ * (Rust race!, Cx::race_drained, Scope::race_all), race tasks with the
+ * task-group API (asx_task_group_*), which cancels each losing task and
+ * waits for it.
+ *
+ * Returns the winning branch's terminal status; the winner index is
+ * available via asx_race_winner(). With no branches the race is pending
+ * until the owner task is cancelled, then returns ASX_E_CANCELLED (Rust
+ * Cx::race on an empty list).
  * ------------------------------------------------------------------- */
 
 typedef struct {
     asx_combinator_branch branches[ASX_COMBINATOR_MAX_BRANCHES];
     uint32_t count;
-    int32_t winner; /* -1 until decided */
-    int draining;   /* 1 when cancelling losers */
-    uint32_t drained;
+    int32_t winner;   /* -1 until decided */
+    uint32_t dropped; /* losers dropped while pending */
 } asx_race_state;
 
 /* Initialize a race combinator. */
@@ -111,9 +119,10 @@ ASX_API asx_status asx_race_winner_result(const asx_race_state *state);
 /* -------------------------------------------------------------------
  * Select — poll all branches, return first ready
  *
- * Like race but uses round-robin fairness. Each poll cycle checks
- * all branches starting from a rotating offset, then gives losing
- * branches one final cooperative drain poll before cancelling them.
+ * Like race but uses round-robin fairness: each poll cycle checks all
+ * branches starting from a rotating offset. The losers are dropped as in
+ * race (never polled again, ASX_E_CANCELLED), and no branches means
+ * pending until the owner task is cancelled.
  * ------------------------------------------------------------------- */
 
 typedef struct {
@@ -121,8 +130,7 @@ typedef struct {
     uint32_t count;
     int32_t winner;
     uint32_t poll_offset; /* fairness rotation */
-    int draining;
-    uint32_t drained;
+    uint32_t dropped;     /* losers dropped while pending */
 } asx_select_state;
 
 /* Initialize a select combinator with round-robin fairness. */
@@ -164,15 +172,19 @@ ASX_API asx_status asx_timeout_combinator_poll(void *user_data, asx_task_id self
 /* -------------------------------------------------------------------
  * FirstOk — wait for first successful (ASX_OK) branch
  *
- * Tries branches in order. If a branch fails, tries the next.
- * Returns ASX_OK with the first success, or the last error
- * if all branches fail.
+ * Tries branches in order (Rust first_ok!, combinator/first_ok.rs:429).
+ * Before starting each branch it checkpoints the owner task: cancelled,
+ * it starts nothing more and returns ASX_E_CANCELLED. A branch that fails
+ * passes to the next, except a branch that ends ASX_E_CANCELLED, which
+ * stops the chain with that status. Returns ASX_OK with the first
+ * success, or the last error if all branches fail.
  * ------------------------------------------------------------------- */
 
 typedef struct {
     asx_combinator_branch branches[ASX_COMBINATOR_MAX_BRANCHES];
     uint32_t count;
     uint32_t current;      /* index of currently polling branch */
+    int started;           /* the current branch has been polled */
     int32_t winner;        /* -1 until success found */
     asx_status last_error; /* last error for fallback */
 } asx_first_ok_state;
@@ -195,6 +207,8 @@ ASX_API int32_t asx_first_ok_winner(const asx_first_ok_state *state);
  *
  * Returns ASX_OK when threshold is reached.
  * Returns error if too many branches fail to reach quorum.
+ * Once decided, the branches still pending are dropped as in race (never
+ * polled again, ASX_E_CANCELLED); the task-group quorum drains them.
  * ------------------------------------------------------------------- */
 
 typedef struct {
@@ -204,8 +218,7 @@ typedef struct {
     uint32_t ok_count;   /* successful completions */
     uint32_t fail_count; /* failed completions */
     int decided;         /* 1 when quorum reached or impossible */
-    int draining;
-    uint32_t drained;
+    uint32_t dropped;    /* pending branches dropped at the decision */
 } asx_quorum_state;
 
 /* Initialize a quorum combinator requiring threshold successes. */
@@ -262,8 +275,8 @@ static inline asx_cancel_token asx_cancel_token_none(void) {
  * Race with timeout — race all branches against a deadline
  *
  * Returns the winning branch's status if one completes before timeout.
- * Returns ASX_E_TIMED_OUT if deadline expires first.
- * All losers receive one cooperative drain poll before cancellation.
+ * Returns ASX_E_TIMED_OUT if deadline expires first, dropping every
+ * pending branch (Rust Cx::race_timeout drops the race future).
  * ------------------------------------------------------------------- */
 
 typedef struct {

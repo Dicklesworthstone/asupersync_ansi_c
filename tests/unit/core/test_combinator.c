@@ -139,9 +139,56 @@ TEST(join_overflow) {
 /* ------------------------------------------------------------------ */
 
 TEST(race_empty) {
+    /* Pending until the owner is cancelled; outside a task, never. */
     asx_race_state rs;
     MUST_OK(asx_race_init(&rs));
-    ASSERT_EQ(asx_race_poll(&rs, 0), ASX_OK);
+    ASSERT_EQ(asx_race_poll(&rs, 0), ASX_E_PENDING);
+    ASSERT_EQ(asx_race_poll(&rs, 0), ASX_E_PENDING);
+}
+
+/* Drives a combinator from a task's poll and records each result; the
+ * task itself ends OK (an error would count as a region fault). */
+typedef struct {
+    asx_combinator_poll_fn poll;
+    void *state;
+    uint32_t polls;
+    asx_status result;
+} combinator_task;
+
+static asx_status poll_combinator_task(void *user_data, asx_task_id self) {
+    combinator_task *c = (combinator_task *)user_data;
+    c->polls++;
+    c->result = c->poll(c->state, self);
+    return c->result == ASX_E_PENDING ? ASX_E_PENDING : ASX_OK;
+}
+
+TEST(race_empty_waits_for_the_owner_cancel) {
+    /* Rust Cx::race on an empty list (cx/cx.rs:4320-4331): the owner
+     * parks until a cancel, which its checkpoint observes. */
+    asx_race_state rs;
+    combinator_task c;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+
+    setup_runtime();
+    MUST_OK(asx_race_init(&rs));
+    memset(&c, 0, sizeof(c));
+    c.poll = asx_race_poll;
+    c.state = &rs;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_combinator_task, &c, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(c.polls, 1u);
+    ASSERT_EQ(c.result, ASX_E_PENDING);
+
+    ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_USER), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(c.polls, 2u);
+    ASSERT_EQ(c.result, ASX_E_CANCELLED);
+    teardown_runtime();
 }
 
 TEST(race_single) {
@@ -197,20 +244,42 @@ TEST(race_winner_result_failure) {
     ASSERT_EQ(asx_race_winner_result(&rs), ASX_E_TIMED_OUT);
 }
 
-TEST(race_drain_polls_loser_once_before_cancel) {
+TEST(race_drops_its_loser_without_another_poll) {
+    /* Rust's inline race drops the losers (Cx::race, cx/cx.rs:4316;
+     * SelectAll): a loser is polled while the race runs, never once a
+     * winner is in. */
+    asx_race_state rs;
+    uint32_t loser_polls = 0;
+    uint32_t c = 1;
+
+    MUST_OK(asx_race_init(&rs));
+    MUST_OK(asx_race_add(&rs, poll_count_pending, &loser_polls));
+    MUST_OK(asx_race_add(&rs, poll_pending_then_ok, &c));
+
+    ASSERT_EQ(asx_race_poll(&rs, 0), ASX_E_PENDING);
+    ASSERT_EQ(loser_polls, 1u);
+    ASSERT_EQ(asx_race_poll(&rs, 0), ASX_OK);
+    ASSERT_EQ(asx_race_winner(&rs), 1);
+    ASSERT_EQ(loser_polls, 2u); /* polled in that round, before the winner */
+    ASSERT_EQ(asx_race_poll(&rs, 0), ASX_OK);
+    ASSERT_EQ(loser_polls, 2u);
+    ASSERT_TRUE(rs.branches[0].done);
+    ASSERT_EQ(rs.branches[0].result, ASX_E_CANCELLED);
+    ASSERT_EQ(rs.dropped, 1u);
+}
+
+TEST(race_drops_a_loser_it_never_polled) {
     asx_race_state rs;
     uint32_t loser_polls = 0;
 
     MUST_OK(asx_race_init(&rs));
     MUST_OK(asx_race_add(&rs, poll_ok, NULL));
     MUST_OK(asx_race_add(&rs, poll_count_pending, &loser_polls));
-
     ASSERT_EQ(asx_race_poll(&rs, 0), ASX_OK);
     ASSERT_EQ(asx_race_winner(&rs), 0);
-    ASSERT_EQ(loser_polls, 1u);
-    ASSERT_TRUE(rs.branches[1].done);
+    ASSERT_EQ(loser_polls, 0u);
     ASSERT_EQ(rs.branches[1].result, ASX_E_CANCELLED);
-    ASSERT_EQ(rs.drained, 1u);
+    ASSERT_EQ(rs.dropped, 1u);
 }
 
 /* ------------------------------------------------------------------ */
@@ -218,9 +287,10 @@ TEST(race_drain_polls_loser_once_before_cancel) {
 /* ------------------------------------------------------------------ */
 
 TEST(select_empty) {
+    /* As race: pending until the owner is cancelled. */
     asx_select_state ss;
     MUST_OK(asx_select_init(&ss));
-    ASSERT_EQ(asx_select_poll(&ss, 0), ASX_OK);
+    ASSERT_EQ(asx_select_poll(&ss, 0), ASX_E_PENDING);
 }
 
 TEST(select_first_ready_wins) {
@@ -245,20 +315,25 @@ TEST(select_fairness_rotation) {
     ASSERT_EQ(asx_select_winner(&ss), 1);
 }
 
-TEST(select_drain_polls_loser_once_before_cancel) {
+TEST(select_drops_its_loser_without_another_poll) {
     asx_select_state ss;
     uint32_t loser_polls = 0;
+    uint32_t c = 1;
 
     MUST_OK(asx_select_init(&ss));
-    MUST_OK(asx_select_add(&ss, poll_ok, NULL));
     MUST_OK(asx_select_add(&ss, poll_count_pending, &loser_polls));
+    MUST_OK(asx_select_add(&ss, poll_pending_then_ok, &c));
 
-    ASSERT_EQ(asx_select_poll(&ss, 0), ASX_OK);
-    ASSERT_EQ(asx_select_winner(&ss), 0);
+    ASSERT_EQ(asx_select_poll(&ss, 0), ASX_E_PENDING);
     ASSERT_EQ(loser_polls, 1u);
-    ASSERT_TRUE(ss.branches[1].done);
-    ASSERT_EQ(ss.branches[1].result, ASX_E_CANCELLED);
-    ASSERT_EQ(ss.drained, 1u);
+    /* Rotated: branch 1 is polled first now, and wins. */
+    ASSERT_EQ(asx_select_poll(&ss, 0), ASX_OK);
+    ASSERT_EQ(asx_select_winner(&ss), 1);
+    ASSERT_EQ(asx_select_poll(&ss, 0), ASX_OK);
+    ASSERT_EQ(loser_polls, 1u);
+    ASSERT_TRUE(ss.branches[0].done);
+    ASSERT_EQ(ss.branches[0].result, ASX_E_CANCELLED);
+    ASSERT_EQ(ss.dropped, 1u);
 }
 
 /* ------------------------------------------------------------------ */
@@ -345,6 +420,55 @@ TEST(first_ok_pending_then_fail_then_ok) {
     ASSERT_EQ(asx_first_ok_winner(&fs), 1);
 }
 
+TEST(first_ok_stops_at_a_cancelled_attempt) {
+    /* A cancelled attempt stops the chain (first_ok.rs:475-484). */
+    asx_first_ok_state fs;
+    asx_status cancelled = ASX_E_CANCELLED;
+    uint32_t later_polls = 0;
+    MUST_OK(asx_first_ok_init(&fs));
+    MUST_OK(asx_first_ok_add(&fs, poll_fail, &cancelled));
+    MUST_OK(asx_first_ok_add(&fs, poll_count_pending, &later_polls));
+    ASSERT_EQ(asx_first_ok_poll(&fs, 0), ASX_E_CANCELLED);
+    ASSERT_EQ(asx_first_ok_poll(&fs, 0), ASX_E_CANCELLED);
+    ASSERT_EQ(later_polls, 0u);
+    ASSERT_EQ(asx_first_ok_winner(&fs), -1);
+}
+
+/* Fails after cancelling its own task. */
+static asx_status poll_cancel_owner_then_fail(void *user_data, asx_task_id self) {
+    asx_status st = asx_task_cancel(self, ASX_CANCEL_USER);
+    (void)user_data;
+    return st == ASX_OK ? ASX_E_INVALID_STATE : st;
+}
+
+TEST(first_ok_starts_no_attempt_once_its_owner_is_cancelled) {
+    /* first_ok! checkpoints before each attempt (first_ok.rs:440-459):
+     * the first attempt fails after cancelling the owner, so the second
+     * never starts and the chain ends cancelled. */
+    asx_first_ok_state fs;
+    combinator_task c;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+    uint32_t later_polls = 0;
+
+    setup_runtime();
+    MUST_OK(asx_first_ok_init(&fs));
+    MUST_OK(asx_first_ok_add(&fs, poll_cancel_owner_then_fail, NULL));
+    MUST_OK(asx_first_ok_add(&fs, poll_count_pending, &later_polls));
+    memset(&c, 0, sizeof(c));
+    c.poll = asx_first_ok_poll;
+    c.state = &fs;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_combinator_task, &c, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(c.polls, 1u);
+    ASSERT_EQ(c.result, ASX_E_CANCELLED);
+    ASSERT_EQ(later_polls, 0u);
+    teardown_runtime();
+}
+
 /* ------------------------------------------------------------------ */
 /* Quorum tests                                                        */
 /* ------------------------------------------------------------------ */
@@ -407,12 +531,67 @@ TEST(quorum_1_of_3_early_decide) {
     MUST_OK(asx_quorum_add(&qs, poll_ok, NULL));
     MUST_OK(asx_quorum_add(&qs, poll_forever, NULL));
     MUST_OK(asx_quorum_add(&qs, poll_forever, NULL));
-    /* First succeeds → quorum reached, others cancelled */
+    /* First succeeds → quorum reached, others dropped */
     ASSERT_EQ(asx_quorum_poll(&qs, 0), ASX_OK);
     ASSERT_EQ(asx_quorum_ok_count(&qs), 1u);
-    /* Other branches should be drained */
     ASSERT_TRUE(qs.branches[1].done);
     ASSERT_TRUE(qs.branches[2].done);
+    ASSERT_EQ(qs.dropped, 2u);
+}
+
+TEST(quorum_drops_the_pending_branches_once_decided) {
+    /* Each round polls every pending branch; the decision drops the rest,
+     * which are not polled again. */
+    asx_quorum_state qs;
+    uint32_t pending_polls = 0;
+    MUST_OK(asx_quorum_init(&qs, 1));
+    MUST_OK(asx_quorum_add(&qs, poll_ok, NULL));
+    MUST_OK(asx_quorum_add(&qs, poll_count_pending, &pending_polls));
+    ASSERT_EQ(asx_quorum_poll(&qs, 0), ASX_OK);
+    ASSERT_EQ(pending_polls, 1u);
+    ASSERT_EQ(asx_quorum_poll(&qs, 0), ASX_OK);
+    ASSERT_EQ(pending_polls, 1u);
+    ASSERT_EQ(qs.branches[1].result, ASX_E_CANCELLED);
+    ASSERT_EQ(qs.dropped, 1u);
+}
+
+/* ------------------------------------------------------------------ */
+/* Race with timeout                                                   */
+/* ------------------------------------------------------------------ */
+
+/* Parks its task and never completes. */
+static asx_status poll_park_forever(void *user_data, asx_task_id self) {
+    asx_status st = asx_task_park(self);
+    (void)user_data;
+    (void)st;
+    return ASX_E_PENDING;
+}
+
+TEST(race_timeout_wakes_a_parked_owner_at_its_deadline) {
+    /* The only branch parks its task; the pending race arms the owner's
+     * wake at the deadline (as the Sleep of Rust's timeout), which then
+     * times the race out and drops the branch. */
+    asx_race_timeout_state rts;
+    combinator_task c;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+
+    setup_runtime();
+    MUST_OK(asx_race_timeout_init(&rts, 5000000u));
+    MUST_OK(asx_race_timeout_add(&rts, poll_park_forever, NULL));
+    memset(&c, 0, sizeof(c));
+    c.poll = asx_race_timeout_poll;
+    c.state = &rts;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_combinator_task, &c, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(c.polls, 2u);
+    ASSERT_EQ(c.result, ASX_E_TIMED_OUT);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)5000000u);
+    ASSERT_EQ(rts.race.dropped, 1u);
+    teardown_runtime();
 }
 
 /* ------------------------------------------------------------------ */
@@ -433,18 +612,21 @@ int main(void) {
 
     /* Race */
     RUN_TEST(race_empty);
+    RUN_TEST(race_empty_waits_for_the_owner_cancel);
     RUN_TEST(race_single);
     RUN_TEST(race_first_wins);
     RUN_TEST(race_second_wins);
     RUN_TEST(race_both_pending);
     RUN_TEST(race_winner_result_failure);
-    RUN_TEST(race_drain_polls_loser_once_before_cancel);
+    RUN_TEST(race_drops_its_loser_without_another_poll);
+    RUN_TEST(race_drops_a_loser_it_never_polled);
+    RUN_TEST(race_timeout_wakes_a_parked_owner_at_its_deadline);
 
     /* Select */
     RUN_TEST(select_empty);
     RUN_TEST(select_first_ready_wins);
     RUN_TEST(select_fairness_rotation);
-    RUN_TEST(select_drain_polls_loser_once_before_cancel);
+    RUN_TEST(select_drops_its_loser_without_another_poll);
 
     /* Timeout */
     RUN_TEST(timeout_inner_completes_immediately);
@@ -458,6 +640,8 @@ int main(void) {
     RUN_TEST(first_ok_all_fail);
     RUN_TEST(first_ok_waits_for_pending);
     RUN_TEST(first_ok_pending_then_fail_then_ok);
+    RUN_TEST(first_ok_stops_at_a_cancelled_attempt);
+    RUN_TEST(first_ok_starts_no_attempt_once_its_owner_is_cancelled);
 
     /* Quorum */
     RUN_TEST(quorum_all_succeed);
@@ -467,6 +651,7 @@ int main(void) {
     RUN_TEST(quorum_zero_threshold_fails);
     RUN_TEST(quorum_null_fails);
     RUN_TEST(quorum_1_of_3_early_decide);
+    RUN_TEST(quorum_drops_the_pending_branches_once_decided);
 
     TEST_REPORT();
     return test_failures;

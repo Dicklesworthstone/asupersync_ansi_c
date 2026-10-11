@@ -5,12 +5,23 @@
  */
 
 #include <asx/core/combinator.h>
+#include <asx/runtime/runtime.h>
 #include <string.h>
 
 /* Suppress warn_unused_result on deadline disarm (fire-and-forget cleanup) */
 static void disarm_deadline(asx_deadline *dl) {
     asx_status st_ = asx_deadline_disarm(dl);
     (void)st_;
+}
+
+/* A timeout still pending wakes its owner at the deadline, as the Sleep of
+ * Rust's timeout does, so it fires even while the inner work is parked. */
+static void wake_at_deadline(asx_task_id self, const asx_deadline *dl) {
+    asx_time target = asx_deadline_target(dl);
+    if (target != 0u) {
+        asx_status st = asx_task_arm_timer(self, target);
+        (void)st; /* no runtime task: nothing to wake */
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -40,13 +51,32 @@ static asx_status branch_poll(asx_combinator_branch *b, asx_task_id self) {
     return st;
 }
 
-static void branch_cancel_after_final_poll(asx_combinator_branch *b, asx_task_id self) {
-    if (b->done) return;
-
-    if (b->poll_fn != NULL) { (void)b->poll_fn(b->user_data, self); }
-
+/* Drop a loser, as Rust's inline race drops a losing future (Cx::race,
+ * cx/cx.rs:4316): it is never polled again and resolves as cancelled.
+ * Returns 1 if it was still pending. */
+static int branch_drop(asx_combinator_branch *b) {
+    if (b->done) return 0;
     b->done = 1;
     b->result = ASX_E_CANCELLED;
+    return 1;
+}
+
+/* The owner task's checkpoint: nonzero once it observes a cancel (a mask
+ * defers it). A poll outside a runtime task never sees one. */
+static int owner_cancelled(asx_task_id self) {
+    asx_checkpoint_result cp;
+    return asx_checkpoint(self, &cp) == ASX_OK && cp.cancelled;
+}
+
+/* A race with no branches is pending until its owner is cancelled (Rust
+ * Cx::race on an empty list, cx/cx.rs:4320-4331); inside a poll it parks
+ * the owner, whom a cancel wakes. */
+static asx_status wait_for_owner_cancel(asx_task_id self) {
+    asx_status st;
+    if (owner_cancelled(self)) return ASX_E_CANCELLED;
+    st = asx_task_park(self);
+    (void)st; /* refused outside a scheduler poll */
+    return ASX_E_PENDING;
 }
 
 /* ------------------------------------------------------------------ */
@@ -114,8 +144,7 @@ asx_status asx_race_init(asx_race_state *state) {
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     state->count = 0;
     state->winner = -1;
-    state->draining = 0;
-    state->drained = 0;
+    state->dropped = 0;
     for (i = 0; i < ASX_COMBINATOR_MAX_BRANCHES; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded init over static array") */
         branch_init(&state->branches[i]);
@@ -138,37 +167,25 @@ asx_status asx_race_poll(void *user_data, asx_task_id self) {
     asx_status st;
 
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (state->count == 0) return ASX_OK;
+    if (state->count == 0) return wait_for_owner_cancel(self);
+    if (state->winner >= 0) return state->branches[state->winner].result;
 
-    /* Phase 1: poll until we find a winner */
-    if (state->winner < 0) {
-        for (i = 0; i < state->count; i++) {
-            /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
-            if (state->branches[i].done) continue;
-            st = branch_poll(&state->branches[i], self);
-            if (st != ASX_E_PENDING) {
-                state->winner = (int32_t)i;
-                state->draining = 1;
-                break;
-            }
+    /* Poll in order until one finishes; it wins and the rest are
+     * dropped. */
+    for (i = 0; i < state->count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
+        if (state->branches[i].done) continue;
+        st = branch_poll(&state->branches[i], self);
+        if (st != ASX_E_PENDING) {
+            state->winner = (int32_t)i;
+            break;
         }
-        if (state->winner < 0) return ASX_E_PENDING;
     }
-
-    /* Phase 2: drain losers with one final cooperative poll before
-     * resolving them as cancelled. */
-    if (state->draining) {
-        for (i = 0; i < state->count; i++) {
-            /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
-            if ((int32_t)i == state->winner) continue;
-            if (!state->branches[i].done) {
-                branch_cancel_after_final_poll(&state->branches[i], self);
-                state->drained++;
-            }
-        }
-        state->draining = 0;
+    if (state->winner < 0) return ASX_E_PENDING;
+    for (i = 0; i < state->count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded drop loop") */
+        state->dropped += (uint32_t)branch_drop(&state->branches[i]);
     }
-
     return state->branches[state->winner].result;
 }
 
@@ -192,8 +209,7 @@ asx_status asx_select_init(asx_select_state *state) {
     state->count = 0;
     state->winner = -1;
     state->poll_offset = 0;
-    state->draining = 0;
-    state->drained = 0;
+    state->dropped = 0;
     for (i = 0; i < ASX_COMBINATOR_MAX_BRANCHES; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded init over static array") */
         branch_init(&state->branches[i]);
@@ -217,41 +233,28 @@ asx_status asx_select_poll(void *user_data, asx_task_id self) {
     asx_status st;
 
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (state->count == 0) return ASX_OK;
+    if (state->count == 0) return wait_for_owner_cancel(self);
+    if (state->winner >= 0) return state->branches[state->winner].result;
 
-    /* Phase 1: round-robin poll for winner */
+    /* Round-robin poll for a winner; the rest are dropped. */
+    for (i = 0; i < state->count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
+        idx = (state->poll_offset + i) % state->count;
+        if (state->branches[idx].done) continue;
+        st = branch_poll(&state->branches[idx], self);
+        if (st != ASX_E_PENDING) {
+            state->winner = (int32_t)idx;
+            break;
+        }
+    }
     if (state->winner < 0) {
-        for (i = 0; i < state->count; i++) {
-            /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
-            idx = (state->poll_offset + i) % state->count;
-            if (state->branches[idx].done) continue;
-            st = branch_poll(&state->branches[idx], self);
-            if (st != ASX_E_PENDING) {
-                state->winner = (int32_t)idx;
-                state->draining = 1;
-                break;
-            }
-        }
-        if (state->winner < 0) {
-            state->poll_offset = (state->poll_offset + 1) % state->count;
-            return ASX_E_PENDING;
-        }
+        state->poll_offset = (state->poll_offset + 1) % state->count;
+        return ASX_E_PENDING;
     }
-
-    /* Phase 2: drain losers with one final cooperative poll before
-     * resolving them as cancelled. */
-    if (state->draining) {
-        for (i = 0; i < state->count; i++) {
-            /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
-            if ((int32_t)i == state->winner) continue;
-            if (!state->branches[i].done) {
-                branch_cancel_after_final_poll(&state->branches[i], self);
-                state->drained++;
-            }
-        }
-        state->draining = 0;
+    for (i = 0; i < state->count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded drop loop") */
+        state->dropped += (uint32_t)branch_drop(&state->branches[i]);
     }
-
     return state->branches[state->winner].result;
 }
 
@@ -315,6 +318,7 @@ asx_status asx_timeout_combinator_poll(void *user_data, asx_task_id self) {
         return ASX_E_TIMED_OUT;
     }
 
+    wake_at_deadline(self, &state->deadline);
     return ASX_E_PENDING;
 }
 
@@ -327,6 +331,7 @@ asx_status asx_first_ok_init(asx_first_ok_state *state) {
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     state->count = 0;
     state->current = 0;
+    state->started = 0;
     state->winner = -1;
     state->last_error = ASX_E_INVALID_STATE;
     for (i = 0; i < ASX_COMBINATOR_MAX_BRANCHES; i++) {
@@ -352,21 +357,34 @@ asx_status asx_first_ok_poll(void *user_data, asx_task_id self) {
 
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     if (state->count == 0) return ASX_E_INVALID_STATE;
+    if (state->winner >= 0) return ASX_OK;
 
     while (state->current < state->count) {
         /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
+        /* Never start an attempt once the owner is cancelled
+         * (first_ok.rs:440-459). */
+        if (!state->started) {
+            if (owner_cancelled(self)) {
+                state->last_error = ASX_E_CANCELLED;
+                state->current = state->count;
+                break;
+            }
+            state->started = 1;
+        }
         st = branch_poll(&state->branches[state->current], self);
         if (st == ASX_E_PENDING) return ASX_E_PENDING;
         if (st == ASX_OK) {
             state->winner = (int32_t)state->current;
             return ASX_OK;
         }
-        /* Branch failed — record error and move to next */
         state->last_error = st;
-        state->current++;
+        /* A cancelled attempt stops the chain (first_ok.rs:475-484); an
+         * error passes to the next. */
+        state->current = st == ASX_E_CANCELLED ? state->count : state->current + 1u;
+        state->started = 0;
     }
 
-    /* All branches failed */
+    /* Every attempt failed, or the chain stopped on a cancel */
     return state->last_error;
 }
 
@@ -388,8 +406,7 @@ asx_status asx_quorum_init(asx_quorum_state *state, uint32_t threshold) {
     state->ok_count = 0;
     state->fail_count = 0;
     state->decided = 0;
-    state->draining = 0;
-    state->drained = 0;
+    state->dropped = 0;
     for (i = 0; i < ASX_COMBINATOR_MAX_BRANCHES; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded init over static array") */
         branch_init(&state->branches[i]);
@@ -430,31 +447,16 @@ asx_status asx_quorum_poll(void *user_data, asx_task_id self) {
             }
         }
 
-        /* Check if quorum reached */
-        if (state->ok_count >= state->threshold) {
-            state->decided = 1;
-            state->draining = 1;
-        }
-
-        /* Check if quorum impossible */
+        /* Decided once the quorum is reached or can no longer be */
         remaining = state->count - state->ok_count - state->fail_count;
-        if (state->ok_count + remaining < state->threshold) {
+        if (state->ok_count >= state->threshold || state->ok_count + remaining < state->threshold) {
             state->decided = 1;
-            state->draining = 1;
-        }
-    }
-
-    /* Phase 2: drain remaining branches with one final cooperative poll,
-     * consistent with race and select drain semantics. */
-    if (state->draining) {
-        for (i = 0; i < state->count; i++) {
-            /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
-            if (!state->branches[i].done) {
-                branch_cancel_after_final_poll(&state->branches[i], self);
-                state->drained++;
+            /* The branches still pending are dropped, as race's losers */
+            for (i = 0; i < state->count; i++) {
+                /* ASX_CHECKPOINT_WAIVER("bounded drop loop") */
+                state->dropped += (uint32_t)branch_drop(&state->branches[i]);
             }
         }
-        state->draining = 0;
     }
 
     if (!state->decided) return ASX_E_PENDING;
@@ -499,7 +501,7 @@ asx_status asx_race_timeout_poll(void *user_data, asx_task_id self) {
 
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
 
-    /* Already timed out — return cached result without re-draining */
+    /* Already timed out: the cached result */
     if (state->timed_out) return ASX_E_TIMED_OUT;
 
     /* Lazy deadline init on first poll */
@@ -516,10 +518,10 @@ asx_status asx_race_timeout_poll(void *user_data, asx_task_id self) {
     if (asx_deadline_is_expired(&state->deadline)) {
         uint32_t i;
         state->timed_out = 1;
-        /* Drain all pending branches */
+        /* The race is dropped: every pending branch with it */
         for (i = 0; i < state->race.count; i++) {
-            /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
-            branch_cancel_after_final_poll(&state->race.branches[i], self);
+            /* ASX_CHECKPOINT_WAIVER("bounded drop loop") */
+            state->race.dropped += (uint32_t)branch_drop(&state->race.branches[i]);
         }
         return ASX_E_TIMED_OUT;
     }
@@ -538,13 +540,14 @@ asx_status asx_race_timeout_poll(void *user_data, asx_task_id self) {
         uint32_t i;
         state->timed_out = 1;
         for (i = 0; i < state->race.count; i++) {
-            /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
-            branch_cancel_after_final_poll(&state->race.branches[i], self);
+            /* ASX_CHECKPOINT_WAIVER("bounded drop loop") */
+            state->race.dropped += (uint32_t)branch_drop(&state->race.branches[i]);
         }
         disarm_deadline(&state->deadline);
         return ASX_E_TIMED_OUT;
     }
 
+    wake_at_deadline(self, &state->deadline);
     return ASX_E_PENDING;
 }
 
@@ -600,7 +603,10 @@ asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self) {
     /* Poll inner */
     st = branch_poll(&state->inner, self);
 
-    if (st == ASX_E_PENDING) return ASX_E_PENDING;
+    if (st == ASX_E_PENDING) {
+        wake_at_deadline(self, &state->deadline);
+        return ASX_E_PENDING;
+    }
 
     if (st == ASX_OK) {
         state->done = 1;
