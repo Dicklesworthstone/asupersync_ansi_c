@@ -649,8 +649,9 @@ Closed (each verified by a fixture that now matches):
 - **Region admission limits** for `region_limits`: `asx_region_set_limits`
   caps a region's live tasks, live child regions and pending obligations;
   an admission past a cap is refused with `ASX_E_ADMISSION_LIMIT` and
-  changes nothing (cleanup spawns into a Finalizing region are exempt, as
-  in Rust) (`region-limits-admission-001`, `region-limits-late-admission-001`;
+  changes nothing; a Finalizing region admits no task at all, as Rust
+  admits only its async finalizers' cleanup tasks there
+  (`region-limits-admission-001`, `region-limits-late-admission-001`;
   about one generated scenario in ten sets task, child and obligation
   limits; a spawn's `max_tasks` is checked at its admission, see Closed).
 

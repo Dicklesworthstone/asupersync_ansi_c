@@ -326,6 +326,9 @@ TEST(app_server_drains_on_real_sigterm) {
     config.poll_budget = 200;
     server.shutdown_signal = ASX_SIGNAL_TERM;
 
+    /* The app brings its own runtime: the earlier tests' one is shut down
+     * first (a second init while one is live is refused, bd-9kll.3.20). */
+    asx_runtime_shutdown(&g_rt);
     ASSERT_EQ(asx_app_init(&app, &config), ASX_OK);
     ASSERT_EQ(asx_signal_get_backend(), ASX_SIGNAL_BACKEND_NATIVE);
     ASSERT_EQ(asx_app_run_server(&app, &server, server_main_poll, &m, &report, NULL), ASX_EXIT_OK);

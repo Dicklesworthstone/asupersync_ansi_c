@@ -368,6 +368,16 @@ int asx_lab_entropy_index_internal(asx_task_slot *t, uint32_t bound, uint32_t *o
     }
 }
 
+int asx_task_random_u64_internal(asx_task_id self, uint64_t *out) {
+    asx_task_slot *t;
+    if (asx_task_slot_lookup(self, &t) != ASX_OK) return 0;
+    if (g_lab_active && t->lab_ent.state == ASX_LAB_ENTROPY_READY) {
+        *out = lab_xorshift(&t->lab_ent.rng);
+        return 1;
+    }
+    return asx_runtime_random_u64(out) == ASX_OK;
+}
+
 int asx_lab_dispatch_active(void) { return g_lab_active; }
 
 uint64_t asx_lab_step_begin_internal(void) { return ++g_lab_steps; }

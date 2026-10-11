@@ -64,10 +64,12 @@ typedef struct asx_codec_vtable {
 ASX_API void asx_codec_buffer_init(asx_codec_buffer *buf);
 ASX_API void asx_codec_buffer_reset(asx_codec_buffer *buf);
 
-/* Buffer append primitives */
+/* Append len bytes. Impossible sizes (including size_t overflow) and
+ * allocation failures return ASX_E_RESOURCE_EXHAUSTED without modifying
+ * the buffer. */
 ASX_API asx_status asx_codec_buffer_append_bytes(asx_codec_buffer *buf, const char *bytes,
                                                  size_t len);
-/* Decode a frame from the buffer using the codec. */
+/* Append a NUL-terminated string without its trailing NUL. */
 ASX_API asx_status asx_codec_buffer_append_cstr(asx_codec_buffer *buf, const char *text);
 ASX_API asx_status asx_codec_buffer_append_char(asx_codec_buffer *buf, char ch);
 ASX_API asx_status asx_codec_buffer_append_u64(asx_codec_buffer *buf, uint64_t value);

@@ -68,6 +68,12 @@ typedef struct {
      * ones. Descendants' reasons chain to their parent's via `cause`. */
     int cancel_requested;
     asx_cancel_reason cancel_reason;
+    /* Rust RegionRecord::close_outcome (record/region.rs:1139-1150): the
+     * outcome of every task that completed in the region, joined. A region
+     * that closes with none recorded reports Cancelled if it was cancelled,
+     * else Ok (complete_close's default, :1810-1823). */
+    int has_close_outcome;
+    asx_outcome close_outcome;
     /* Lab dispatch: the entropy of the region's principal, a child region a
      * task opened (Rust mints its Cx with a fork of the runtime source,
      * state.rs:5093); a task spawned into it forks from this. */
@@ -526,6 +532,10 @@ void asx_lab_entropy_first_poll_internal(asx_task_slot *t);
  * 1 and *out in [0, bound), or 0 when lab dispatch is off or the task has
  * no entropy (the caller decides deterministically then). bound > 0. */
 int asx_lab_entropy_index_internal(asx_task_slot *t, uint32_t bound, uint32_t *out);
+/* Rust's Cx::random_u64 (cx.rs:3585-3589) for task `self`: the task's
+ * stream under lab dispatch, else the runtime entropy hook. 1 and *out, or
+ * 0 when `self` is no live task (no Cx) or no entropy is available. */
+int asx_task_random_u64_internal(asx_task_id self, uint64_t *out);
 /* A cancel request's wake of the task's CancelTaskWaker; held back while a
  * region cancel batch is open. */
 void asx_lab_cancel_wake(asx_task_slot *t);
@@ -629,6 +639,12 @@ int asx_task_cancel_dominates_internal(const asx_task_slot *t);
  * obligation leak under the PANIC policy. ASX_OK when none is pending. */
 asx_status asx_runtime_take_pending_fault_internal(void);
 
+/* Leak-audit a finalizing region whose tasks are gone: every obligation of
+ * it still Reserved is leaked as one batch under the leak policy (Rust's
+ * Finalizing-arm audit). ASX_OK, or ASX_E_UNRESOLVED_OBLIGATIONS when the
+ * PANIC policy routed the leaks through the region's containment. */
+asx_status asx_region_audit_leaks_internal(asx_region_id region);
+
 /* Scheduler block handshake with cross-thread wakers (waker.c). Call
  * prepare right before a blocking reactor wait: it returns 0 (do not
  * block) when a waker is already signaled, else marks the scheduler as
@@ -639,7 +655,6 @@ void asx_waker_finish_block_internal(void);
 
 /* Reset private hook installation state during runtime teardown. */
 void asx_runtime_hooks_reset_internal(void);
-
 /* Invalidate the runtime object bootstrap token during explicit raw reset. */
 void asx_runtime_object_reset_internal(void);
 

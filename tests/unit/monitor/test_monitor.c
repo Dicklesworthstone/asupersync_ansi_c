@@ -238,6 +238,30 @@ static void test_monitor_stale_runtime_fails_closed(void) {
     asx_runtime_shutdown(&b);
 }
 
+static void test_monitor_copied_stale_runtime_fails_closed(void) {
+    asx_runtime a, b;
+    asx_monitor_policy policy;
+    asx_monitor_report report;
+    asx_evidence_sink sink;
+
+    /* Preserve the copied-object case as well as raw-reset invalidation. */
+    ASSERT(asx_runtime_init_default(&b) == ASX_OK, "first runtime initialized");
+    a = b;
+    asx_runtime_shutdown(&b);
+    ASSERT(asx_runtime_init_default(&b) == ASX_OK, "replacement runtime initialized");
+    asx_monitor_policy_init_default(&policy);
+    ASSERT(asx_monitor_evaluate(&a, &policy, &report, &sink) == ASX_OK,
+           "stale monitoring succeeds");
+    ASSERT(report.verdict == ASX_EVIDENCE_FAIL, "stale runtime verdict");
+    ASSERT(report.triggered_mask == 0u, "no threshold mask for stale runtime");
+    ASSERT(sink.count == 1u, "stale runtime evidence");
+    ASSERT(strcmp(sink.entries[0].source, "monitor:runtime") == 0, "stale evidence source");
+
+    asx_runtime_shutdown(&a);
+    ASSERT(asx_runtime_is_initialized(&b), "stale shutdown preserves replacement runtime");
+    asx_runtime_shutdown(&b);
+}
+
 int main(void) {
     printf("test_monitor:\n");
 
@@ -249,6 +273,7 @@ int main(void) {
     RUN(test_observability_capture);
     RUN(test_monitor_uninitialized_runtime_fails_closed);
     RUN(test_monitor_stale_runtime_fails_closed);
+    RUN(test_monitor_copied_stale_runtime_fails_closed);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

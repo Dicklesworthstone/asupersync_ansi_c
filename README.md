@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-1%2C998%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-2%2C004%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,998<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,004<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->1,998<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->2,004<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -149,10 +149,11 @@ int main(void) {
 
 See `examples/` for more: channel flow, actor supervision, cancellation draining, timers and budgets, trace replay, browser boundary, and network surface demos.
 
-The current runtime owns one process-wide kernel. Initializing another runtime
-while it is active returns `ASX_E_INVALID_STATE`, preserving the active work,
-hooks and destination object. Shut down the active runtime before starting
-another. Independent runtime-owned arenas and cross-runtime handle isolation
+The current runtime owns one process-wide kernel. Every init while it is active,
+including reinitializing the active object, returns `ASX_E_INVALID_STATE`,
+preserving the active work, hooks and destination object. Shut down the active
+runtime or explicitly reset the raw kernel before starting a replacement.
+Independent runtime-owned arenas and cross-runtime handle isolation
 remain architecture work in `bd-9kll.3.20`.
 
 ## Design Philosophy
@@ -979,7 +980,7 @@ Running → CancelRequested → Cancelling → Finalizing → Completed
 
 Each cancel carries an **origin attribution chain** (source region, source task, timestamp, message) so propagation can be traced across cancel waves. The chain is bounded to prevent unbounded allocation.
 
-Cancelling a region (`asx_cancel_propagate`, `asx_region_drain`) reaches its whole subtree: the root's tasks get the requested kind, descendants get `PARENT`. Draining closes the subtree parent-first, cancels and runs it to completion, then finalizes it deepest-first. A parked task is woken by its cancel.
+Explicit `asx_cancel_propagate(region, kind)` reaches the whole subtree: the root's tasks get the requested kind, descendants get `PARENT`. `asx_region_drain` currently uses `PARENT` for the root too; full body-driven close and separate root/child cancellation reasons remain a K4 gap (`bd-9kll.3.4`). Draining closes the subtree parent-first, cancels and runs it to completion, then finalizes it deepest-first. A parked task is woken by its cancel.
 
 **Masking** (`asx_task_mask` / `asx_task_unmask`, nestable to `ASX_MAX_MASK_DEPTH` = 64) defers acknowledgement for a critical section, such as committing a transaction or a finalizer. While a task is masked, `asx_checkpoint` reports `masked = 1` instead of `cancelled`, the cancel can still strengthen, and even the opt-in hard cleanup bound neither consumes cleanup polls nor force-completes the task. The cancel becomes observable at the first checkpoint after the depth returns to zero.
 
@@ -994,6 +995,8 @@ An obligation (send permit, ack, lease, I/O op, semaphore permit, transaction) i
   - `RECOVER` aborts them with reason `ERROR`, as Rust's Recover does; they still count as leaks.
   - `PANIC` routes the leak through region fault containment, so FAIL_FAST surfaces `ASX_E_UNRESOLVED_OBLIGATIONS` from the scheduler.
 - `leak_escalation` switches to a stricter response once the leak count reaches a threshold. As in Rust, the leak that reaches it is the first one escalated.
+
+A region's close follows Rust's finalization order: its cleanup stack drains (LIFO), any tasks spawned for explicit cleanup finish, then any obligation of the region still reserved (one with no holder, reserved outside a poll, for instance) is handled under the same leak policy as one batch, and the region closes. Under `PANIC` the close fails fast with `ASX_E_UNRESOLVED_OBLIGATIONS` first. `asx_region_get_close_outcome` reads a region's recorded close outcome, as Rust's `region_close_outcome` does: the outcomes of its tasks joined, including explicit cleanup tasks, or, if none completed, `CANCELLED` for a cancelled region and `OK` otherwise.
 
 `asx_obligation_get_info` and `asx_obligation_leak_count` expose the results.
 
@@ -1067,7 +1070,7 @@ A Rust parity mismatch is a semantic drift bug in the C port, not an acceptable 
 
 The poll-based combinators (join, race, select, timeout, first_ok, quorum, race_timeout, retry, retry_timeout, bracket, pipeline, hedge, map_reduce) share the `asx_combinator_poll_fn` interface: each is a poll state machine that returns `ASX_E_PENDING` until terminal, then a final status. This uniformity means combinators compose naturally: a retry combinator can wrap a race combinator, which itself contains timeout-wrapped branches. Bulkhead and rate-limit are non-blocking admission counters (`asx_bulkhead_try_enter`, `asx_rate_limit_try_acquire`), not poll functions.
 
-These combinators run their branches inline in the owner's task, like Rust's `Cx::race` / `Select` over futures, and like those they **drop** their losers rather than drain them. Once race, select or quorum is decided (or a race_timeout expires), every branch still pending is resolved as `ASX_E_CANCELLED` and never polled again; a branch holding resources must release them when its owner stops polling it. A race or select with no branches is pending until its owner task is cancelled. first_ok, retry and retry_timeout checkpoint the owner before each attempt and stop at a cancelled attempt; a failed retry attempt, like a completed pipeline stage, starts the next one in the same poll (retry has no backoff delay, unlike Rust's `RetryPolicy`). map_reduce runs every branch to completion and reduces their statuses, where Rust's executing map-reduce stops at the first failure. A timeout combinator that is still pending arms its owner's wake at the deadline, so it fires even while the inner work is parked. A branch that returns `ASX_E_CANCELLED` is Rust's `Outcome::Cancelled`: join ranks it above any other failure, and a quorum that can no longer be met returns `ASX_E_CANCELLED` if a branch did, else the first failed branch's status (Rust's `InsufficientSuccesses`); a quorum threshold above the branch count is `ASX_E_INVALID_ARGUMENT` before any branch runs.
+These combinators run their branches inline in the owner's task, like Rust's `Cx::race` / `Select` over futures, and like those they **drop** their losers rather than drain them. Once race, select or quorum is decided (or a race_timeout expires), every branch still pending is resolved as `ASX_E_CANCELLED` and never polled again; a branch holding resources must release them when its owner stops polling it. A race or select with no branches is pending until its owner task is cancelled. first_ok checkpoints the owner before each attempt and stops at a cancelled attempt, and a completed pipeline stage starts the next one in the same poll. retry is Rust's `retry` under a `RetryPolicy` (`asx_retry_policy`: attempts, initial and maximum delay, multiplier, jitter; `asx_retry_policy_new` gives Rust's defaults, `asx_retry_policy_immediate` no delay). Between attempts the owner sleeps on its traced timer for Rust's `calculate_delay` (`asx_retry_policy_delay`, bit-for-bit, the jitter seeded from the owner's entropy). A cancel before an attempt or during a delay ends the retry cancelled, and a cancelled attempt is not retried. retry_timeout is Rust's `timeout(retry(...))`. map_reduce stops at the first failing branch, as Rust's executing map-reduce does: the branches still pending are dropped and that failure is the result. Once every branch has succeeded, the reduce runs once over their statuses. A timeout combinator that is still pending arms its owner's wake at the deadline, so it fires even while the inner work is parked. A branch that returns `ASX_E_CANCELLED` is Rust's `Outcome::Cancelled`: join ranks it above any other failure, and a quorum that can no longer be met returns `ASX_E_CANCELLED` if a branch did, else the first failed branch's status (Rust's `InsufficientSuccesses`); a quorum threshold above the branch count is `ASX_E_INVALID_ARGUMENT` before any branch runs.
 
 **Task groups** (`asx/runtime/task_group.h`) provide the full "losers are drained" guarantee over real spawned tasks, porting asupersync's `Scope::race_all` / `join_all` / `first_ok` / `quorum`. The owner drives the group with `asx_task_group_poll(&group, self)`; it parks, and members wake it as they complete. Once a race or quorum is decided, every unfinished member is cancelled with `RACE_LOST` and **awaited to completion** before the group resolves, so a loser's obligations, finalizers, and handles are resolved, never abandoned. Per mode, as in Rust:
 - `join_all` awaits its members one by one, in order, and the owner's cancel does not reach them (joins are uninterruptible).
@@ -1480,11 +1483,11 @@ asx_status hold_both(asx_region_id region, void *file, void *lock) {
 }
 ```
 
-Each entry carries a generation counter so stale cleanup handles cannot accidentally fire against a recycled slot. Handles are local to the region where they were registered. Registration requires an Open region and is bounded by `ASX_CLEANUP_STACK_CAPACITY`; exhaustion leaves the stack unchanged. When the region reaches Finalizing, callbacks run before checking leftover obligations, so a finalizer can resolve a reservation before closure. Recursive drain of that region returns `ASX_E_PENDING` until its active callbacks return. A standalone `asx_cleanup_stack` also supports deterministic reuse; callback-time pushes are rejected and recursive stack drains are no-ops.
+Each entry carries a generation counter so stale cleanup handles cannot accidentally fire against a recycled slot. Handles are local to the region where they were registered. Registration requires an Open region and is bounded by `ASX_CLEANUP_STACK_CAPACITY`; exhaustion leaves the stack unchanged. When the region reaches Finalizing, callbacks run before its leak-policy audit, so a finalizer can resolve a reservation before closure. Recursive drain of that region returns `ASX_E_PENDING` until its active callbacks return. Traversal uses call-local handles and validates them again, so callbacks may drain or cancel unrelated regions without corrupting the outer walk. A standalone `asx_cleanup_stack` also supports deterministic reuse; callback-time pushes are rejected and recursive stack drains are no-ops. Quiescence condition Q4 checks that no cleanup entries remain.
 
 Ordinary `asx_task_spawn` and `asx_task_spawn_captured` accept only Open regions. A finalizer can use `asx_task_spawn_cleanup` or `asx_task_spawn_cleanup_captured` to start required cleanup in Finalizing. Those tasks bypass the region's live-task quota in Finalizing, remain bounded by the task/capture arenas, and delay closure until they complete. Resuming region drain runs them without issuing another drain cancellation. Work spawned from a task already executing cancellation cleanup keeps the inherited deadline, cost quota and priority, with an unbounded inherited poll quota. These synchronous callbacks and explicit tasks do not yet provide Rust's serialized, masked async-finalizer barrier or timeout escalation.
 
-Handlers on a region's stack always run, LIFO, before the region closes; for a stack you own, `asx_cleanup_drain()` gives the same deterministic order.
+`asx_region_defer_sync(region, fn, user_data)` registers a handler on a region's own stack, as Rust's `Scope::defer_sync` does. It is accepted while the region is OPEN and refused (`ASX_E_REGION_CLOSED`) once it is closing. The region's handlers run once, LIFO, when it finalizes, after its tasks and child regions are done and before its leak audit and close. A handler may spawn cleanup work into the region; the close then waits for it. For a stack you own, `asx_cleanup_drain()` gives the same deterministic order.
 
 ## Outcome Severity Lattice
 
@@ -2212,6 +2215,15 @@ Provide the required hook families through `asx_runtime_hooks`,
 `asx_runtime_builder_set_*_hooks()`, or the freestanding patterns exercised in
 `tests/vignettes/vignette_hooks.c`.
 
+### Runtime init returns `ASX_E_INVALID_STATE`
+
+Another runtime object is still initialized. The runtime's state (arenas,
+hooks, scheduler) is process-wide, so initializing a second runtime would
+destroy the first one's regions and tasks; the call refuses and changes
+nothing. Shut the live runtime down first (`asx_runtime_shutdown`; tests may
+use `asx_runtime_reset`). Initializing the live runtime object itself again
+restarts it.
+
 ### Non-deterministic replay mismatch
 
 Determinism can be broken by non-seeded entropy or profile mismatch.
@@ -2303,7 +2315,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->1,998<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->2,004<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

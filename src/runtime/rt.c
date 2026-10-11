@@ -184,6 +184,8 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
     /* Step 2: validate hooks */
     st = asx_runtime_hooks_validate(hooks, ASX_DETERMINISTIC);
     if (st != ASX_OK) return st;
+    /* Initialization accepts an uninitialized destination: do not inspect
+     * its bytes to authorize replacing the active process-wide runtime. */
     if (g_active_rt_generation != 0u) return ASX_E_INVALID_STATE;
     /* Step 3: reset all internal state (deterministic clean slate) */
     asx_runtime_reset();

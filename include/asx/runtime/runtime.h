@@ -1203,17 +1203,53 @@ ASX_API int asx_region_is_quiescent(asx_region_id id);
  *
  * Preconditions: id must be a valid region handle; budget must not be NULL.
  * Postconditions: on success, region reaches CLOSED state; all tasks
- *   completed; cleanup destructors called in LIFO order.
+ *   completed; finalizers (asx_region_defer_sync) run in LIFO order; then
+ *   any obligation still Reserved leaked under the leak policy.
  * Returns ASX_OK on success, ASX_E_NOT_FOUND if id is invalid,
  *   ASX_E_INVALID_ARGUMENT if budget is NULL,
  *   the scheduler's status when its run stops early (for example
  *   ASX_E_POLL_BUDGET_EXHAUSTED, ASX_E_TIMED_OUT, ASX_E_WOULD_BLOCK),
  *   ASX_E_QUIESCENCE_TASKS_LIVE if tasks are still live after the run,
  *   ASX_E_PENDING while the region is closing but still waiting for
- *   child regions to close.
+ *   child regions to close, ASX_E_UNRESOLVED_OBLIGATIONS when the PANIC
+ *   leak policy fails the close's leak audit (the region stays
+ *   Finalizing; a later drain closes it).
  * Thread-safety: not thread-safe; single-threaded mode only.
  * See: API_MISUSE_CATALOG.md § Region Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_region_drain(asx_region_id id, asx_budget *budget);
+
+/* A synchronous region finalizer: called once with its user_data. */
+typedef void (*asx_region_finalizer_fn)(void *user_data);
+
+/* Register a synchronous finalizer for a region, as Rust's
+ * Scope::defer_sync does (RuntimeState::register_sync_finalizer,
+ * runtime/state.rs:9046). It runs once when the region finalizes, after
+ * its tasks and child regions are done: the region's finalizers run in
+ * LIFO order, before the close's leak audit. A finalizer may spawn
+ * cleanup work into the region; the close then waits for it. Registration
+ * is accepted only while the region is Open (Rust refuses a closing or
+ * closed region).
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if fn is NULL, a lookup error for
+ * a bad handle, ASX_E_REGION_CLOSED once closing or closed,
+ * ASX_E_REGION_POISONED if poisoned, or ASX_E_RESOURCE_EXHAUSTED when the
+ * finalizer stack (capacity ASX_CLEANUP_STACK_CAPACITY) is full.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_region_defer_sync(asx_region_id region,
+                                                      asx_region_finalizer_fn fn, void *user_data);
+
+/* Read a region's close outcome, as Rust's
+ * RuntimeState::region_close_outcome does (runtime/state.rs:3743): the
+ * outcomes of the tasks that completed in it, joined (asx_outcome_join:
+ * the most severe wins). A Closed region with no task outcome recorded
+ * reports Cancelled if it was cancelled, else Ok (RegionRecord::
+ * complete_close's default, record/region.rs:1810-1823): a cancelled region
+ * whose tasks all completed Ok reports Ok, as in Rust.
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if out is NULL, a lookup error for
+ * a bad handle, or ASX_E_NOT_FOUND while the region is not Closed and none
+ * of its tasks has completed.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_region_get_close_outcome(asx_region_id region,
+                                                             asx_outcome *out);
 
 /* -------------------------------------------------------------------
  * Drain progress and quiescence evidence (bd-1eqo.5.2)
@@ -1275,7 +1311,9 @@ ASX_API ASX_MUST_USE asx_status asx_quiescence_check_detailed(asx_region_id id,
 
 /* Reset all runtime state (test support only).
  * Clears lifecycle arenas plus global scheduler/parallel/channel/timer/
- * trace/telemetry/adapter/fault-injection diagnostic state.
+ * trace/telemetry/adapter/fault-injection diagnostic state and the hooks.
+ * The runtime object that was initialized is not any more, and
+ * asx_runtime_init may start another.
  * Not for production use. */
 ASX_API void asx_runtime_reset(void);
 

@@ -85,8 +85,10 @@ TEST(region_finalizing_admits_only_cleanup_work) {
 TEST(region_closing_and_draining_reject_all_admission) {
     /* CLOSING and DRAINING reject both task and strict admission. */
     ASSERT_TRUE(!asx_region_can_accept_work(ASX_REGION_CLOSING));
+    ASSERT_TRUE(!asx_region_can_accept_cleanup_work(ASX_REGION_CLOSING));
     ASSERT_TRUE(!asx_region_can_spawn(ASX_REGION_CLOSING));
     ASSERT_TRUE(!asx_region_can_accept_work(ASX_REGION_DRAINING));
+    ASSERT_TRUE(!asx_region_can_accept_cleanup_work(ASX_REGION_DRAINING));
     ASSERT_TRUE(!asx_region_can_spawn(ASX_REGION_DRAINING));
 }
 

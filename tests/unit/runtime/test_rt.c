@@ -372,7 +372,6 @@ TEST(stale_runtime_reports_uninitialized_after_new_init) {
 
     MUST_OK(asx_runtime_init_default(&a));
     ASSERT_TRUE(asx_runtime_is_initialized(&a));
-
     asx_runtime_reset(); /* Explicit teardown permits the new singleton. */
     MUST_OK(asx_runtime_init_default(&b));
     ASSERT_FALSE(asx_runtime_is_initialized(&a));
@@ -382,6 +381,73 @@ TEST(stale_runtime_reports_uninitialized_after_new_init) {
 
     asx_runtime_shutdown(&a);
     ASSERT_TRUE(asx_runtime_is_initialized(&b));
+    asx_runtime_shutdown(&b);
+}
+
+TEST(second_init_is_refused_while_a_runtime_is_live) {
+    /* bd-9kll.3.20: the runtime state is process-wide, so a second
+     * runtime's init would destroy the live one's regions and tasks. It is
+     * refused and changes nothing; after the live one shuts down it
+     * succeeds, and the old object is stale. */
+    asx_runtime a, b;
+    asx_runtime_config out;
+    asx_region_id r;
+    asx_region_state rs;
+
+    MUST_OK(asx_runtime_init_default(&a));
+    ASSERT_TRUE(asx_runtime_is_initialized(&a));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+
+    memset(&b, 0, sizeof(b));
+    ASSERT_EQ(asx_runtime_init_default(&b), ASX_E_INVALID_STATE);
+    ASSERT_FALSE(asx_runtime_is_initialized(&b));
+    ASSERT_TRUE(asx_runtime_is_initialized(&a));
+    ASSERT_EQ(asx_region_get_state(r, &rs), ASX_OK); /* a's region survived */
+    ASSERT_EQ(rs, ASX_REGION_OPEN);
+    ASSERT_EQ(asx_runtime_get_config(&a, &out), ASX_OK);
+
+    asx_runtime_shutdown(&a);
+    MUST_OK(asx_runtime_init_default(&b));
+    ASSERT_TRUE(asx_runtime_is_initialized(&b));
+    ASSERT_FALSE(asx_runtime_is_initialized(&a));
+    ASSERT_EQ(asx_runtime_get_config(&a, &out), ASX_E_INVALID_STATE);
+    asx_runtime_shutdown(&b);
+}
+
+TEST(explicit_shutdown_permits_runtime_restart) {
+    /* Active self-init preserves live work; explicit teardown permits a
+     * fresh generation with empty runtime state. */
+    asx_runtime a;
+    asx_region_id r;
+    asx_region_state state;
+    uint32_t gen;
+
+    MUST_OK(asx_runtime_init_default(&a));
+    gen = a.generation;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_runtime_init_default(&a), ASX_E_INVALID_STATE);
+    ASSERT_TRUE(asx_runtime_is_initialized(&a));
+    ASSERT_EQ(a.generation, gen);
+    ASSERT_EQ(asx_region_get_state(r, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_REGION_OPEN);
+    asx_runtime_shutdown(&a);
+    ASSERT_EQ(asx_runtime_init_default(&a), ASX_OK);
+    ASSERT_TRUE(asx_runtime_is_initialized(&a));
+    ASSERT_TRUE(a.generation > gen);
+    ASSERT_EQ(asx_runtime_region_count(&a), 0u);
+    asx_runtime_shutdown(&a);
+}
+
+TEST(runtime_reset_releases_the_live_runtime) {
+    /* asx_runtime_reset destroys the runtime state and its hooks: the
+     * runtime that was live is no longer initialized, and another may be. */
+    asx_runtime a, b;
+
+    MUST_OK(asx_runtime_init_default(&a));
+    asx_runtime_reset();
+    ASSERT_FALSE(asx_runtime_is_initialized(&a));
+    memset(&b, 0, sizeof(b));
+    ASSERT_EQ(asx_runtime_init_default(&b), ASX_OK);
     asx_runtime_shutdown(&b);
 }
 
@@ -416,15 +482,17 @@ TEST(shutdown_double_safe) {
 TEST(stale_shutdown_does_not_tear_down_active_runtime) {
     asx_runtime a, b;
     asx_runtime_config out;
+    asx_runtime stale;
 
     MUST_OK(asx_runtime_init_default(&a));
-    asx_runtime_reset();
+    stale = a; /* a copy of the live object, stale once a shuts down */
+    asx_runtime_shutdown(&a);
     MUST_OK(asx_runtime_init_default(&b));
 
-    ASSERT_FALSE(asx_runtime_is_initialized(&a));
+    ASSERT_FALSE(asx_runtime_is_initialized(&stale));
     ASSERT_TRUE(asx_runtime_is_initialized(&b));
 
-    asx_runtime_shutdown(&a);
+    asx_runtime_shutdown(&stale);
 
     ASSERT_TRUE(asx_runtime_is_initialized(&b));
     ASSERT_EQ(asx_runtime_get_config(&b, &out), ASX_OK);
@@ -1352,7 +1420,10 @@ int main(void) {
     RUN_TEST(init_invalid_leak_escalation_config_fails);
     RUN_TEST(init_success);
     RUN_TEST(init_generation_increments);
+    RUN_TEST(second_init_is_refused_while_a_runtime_is_live);
     RUN_TEST(stale_runtime_reports_uninitialized_after_new_init);
+    RUN_TEST(explicit_shutdown_permits_runtime_restart);
+    RUN_TEST(runtime_reset_releases_the_live_runtime);
     RUN_TEST(shutdown_clears_state);
     RUN_TEST(shutdown_null_safe);
     RUN_TEST(shutdown_double_safe);

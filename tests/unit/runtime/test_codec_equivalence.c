@@ -317,6 +317,44 @@ TEST(equiv_semantic_key_rejects_null) {
     asx_codec_buffer_reset(&buf);
 }
 
+TEST(codec_buffer_rejects_size_overflow_when_empty) {
+    asx_codec_buffer buf;
+    asx_codec_buffer_init(&buf);
+    ASSERT_EQ(asx_codec_buffer_append_bytes(&buf, "x", SIZE_MAX), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_TRUE(buf.data == NULL);
+    ASSERT_EQ(buf.len, 0u);
+    ASSERT_EQ(buf.cap, 0u);
+    /* Even a saturated public length cannot represent its trailing NUL. */
+    buf.len = SIZE_MAX;
+    ASSERT_EQ(asx_codec_buffer_append_bytes(&buf, "", 0u), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(buf.len, SIZE_MAX);
+    ASSERT_TRUE(buf.data == NULL);
+    ASSERT_EQ(buf.cap, 0u);
+    asx_codec_buffer_reset(&buf);
+}
+
+TEST(codec_buffer_size_overflow_preserves_existing_storage) {
+    asx_codec_buffer buf;
+    char *before_data;
+    size_t before_cap;
+    asx_codec_buffer_init(&buf);
+    ASSERT_EQ(asx_codec_buffer_append_cstr(&buf, "prefix"), ASX_OK);
+    before_data = buf.data;
+    before_cap = buf.cap;
+    ASSERT_EQ(asx_codec_buffer_append_bytes(&buf, "x", SIZE_MAX), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_codec_buffer_append_bytes(&buf, "x", SIZE_MAX - buf.len),
+              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_codec_buffer_append_bytes(&buf, "x", SIZE_MAX - buf.len - 1u),
+              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_TRUE(buf.data == before_data);
+    ASSERT_EQ(buf.len, 6u);
+    ASSERT_EQ(buf.cap, before_cap);
+    ASSERT_STR_EQ(buf.data, "prefix");
+    ASSERT_EQ(asx_codec_buffer_append_cstr(&buf, "!"), ASX_OK);
+    ASSERT_STR_EQ(buf.data, "prefix!");
+    asx_codec_buffer_reset(&buf);
+}
+
 TEST(equiv_cross_codec_verify_rejects_null) {
     ASSERT_EQ(asx_codec_cross_codec_verify(NULL, NULL), ASX_E_INVALID_ARGUMENT);
 }
@@ -327,7 +365,9 @@ TEST(equiv_cross_codec_verify_clears_report_on_early_failure) {
 
     asx_canonical_fixture_init(&fixture);
     report.count = 1u;
-    strcpy(report.diffs[0].field_name, "stale_field");
+    ASSERT_EQ(snprintf(report.diffs[0].field_name, sizeof(report.diffs[0].field_name), "%s",
+                       "stale_field"),
+              11);
 
     ASSERT_EQ(asx_codec_cross_codec_verify(&fixture, &report), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(report.count, (uint32_t)0);
@@ -446,6 +486,8 @@ int main(void) {
     /* Null argument handling */
     RUN_TEST(equiv_semantic_eq_rejects_null);
     RUN_TEST(equiv_semantic_key_rejects_null);
+    RUN_TEST(codec_buffer_rejects_size_overflow_when_empty);
+    RUN_TEST(codec_buffer_size_overflow_preserves_existing_storage);
     RUN_TEST(equiv_cross_codec_verify_rejects_null);
     RUN_TEST(equiv_cross_codec_verify_clears_report_on_early_failure);
 

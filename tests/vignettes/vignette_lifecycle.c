@@ -363,6 +363,7 @@ static int scenario_capability_wrapped_scope(void) {
 static int scenario_combinator_orchestration(void) {
     asx_status st;
     asx_retry_state retry;
+    asx_retry_policy retry_policy;
     asx_pipeline_state pipeline;
     asx_join_state join;
     asx_select_state select;
@@ -374,7 +375,8 @@ static int scenario_combinator_orchestration(void) {
 
     asx_runtime_reset();
 
-    st = asx_retry_init(&retry, poll_fail_twice_then_ok, &retry_failures, 5);
+    retry_policy = asx_retry_policy_immediate(6);
+    st = asx_retry_init(&retry, poll_fail_twice_then_ok, &retry_failures, &retry_policy);
     if (st != ASX_OK) {
         printf("  FAIL: asx_retry_init returned %s\n", asx_status_str(st));
         return 1;

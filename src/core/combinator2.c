@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include <asx/core/combinator2.h>
 #include <asx/runtime/runtime.h>
 #include <string.h>
@@ -46,67 +47,240 @@ static int owner_cancelled(asx_task_id self) {
 /* Retry                                                               */
 /* ------------------------------------------------------------------ */
 
+asx_retry_policy asx_retry_policy_new(void) {
+    asx_retry_policy p;
+    p.max_attempts = 3u;
+    p.initial_delay_ns = UINT64_C(100000000); /* 100 ms */
+    p.max_delay_ns = UINT64_C(30000000000);   /* 30 s */
+    p.multiplier = 2.0;
+    p.jitter = 0.1;
+    return p;
+}
+
+asx_retry_policy asx_retry_policy_immediate(uint32_t max_attempts) {
+    asx_retry_policy p;
+    p.max_attempts = max_attempts > 0u ? max_attempts : 1u;
+    p.initial_delay_ns = 0u;
+    p.max_delay_ns = 0u;
+    p.multiplier = 1.0;
+    p.jitter = 0.0;
+    return p;
+}
+
+/* Nonzero for a finite double (NaN and the infinities give NaN here). */
+static int retry_finite(double x) { return x - x == 0.0; }
+
+/* f64::powi as Rust compiles it (compiler-builtins __powidf2): square and
+ * multiply over the exponent's bits, the exponent capped at i32::MAX
+ * (retry.rs:221). */
+static double retry_powi(double a, uint32_t exponent) {
+    double r = 1.0;
+    uint32_t b = exponent > (uint32_t)INT32_MAX ? (uint32_t)INT32_MAX : exponent;
+    for (;;) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most 31 exponent bits");
+        if ((b & 1u) != 0u) r *= a;
+        b >>= 1;
+        if (b == 0u) break;
+        a *= a;
+    }
+    return r;
+}
+
+/* DetRng::new(seed) and its first next_u64 (util/det_rng.rs:63-68,
+ * 129-158, 267-276): seed correction, then one xorshift64 step. */
+static uint64_t retry_det_rng_first(uint64_t seed) {
+    uint64_t x = seed;
+    if (x == 0u) {
+        x = 1u;
+    } else if (x == UINT64_C(0xFFFFFFFFFFFFFFFF) || x == UINT64_C(0x00000000FFFFFFFF) ||
+               x == UINT64_C(0xFFFFFFFF00000000) || x == UINT64_C(0x5555555555555555) ||
+               x == UINT64_C(0xAAAAAAAAAAAAAAAA)) {
+        x += UINT64_C(0x9E3779B97F4A7C15);
+    }
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    return x;
+}
+
+uint64_t asx_retry_policy_delay(const asx_retry_policy *policy, uint32_t attempt,
+                                const uint64_t *jitter_seed) {
+    uint32_t exponent;
+    double factor = 1.0;
+    int factor_infinite = 0;
+    double initial;
+    double base;
+    double max_nanos;
+    double capped;
+    double final_nanos;
+
+    if (policy == NULL || attempt == 0u) return 0u;
+
+    /* multiplier^(attempt - 1); an invalid multiplier or an overflow is an
+     * infinite factor. */
+    exponent = attempt - 1u;
+    if (exponent != 0u) {
+        if (policy->multiplier <= 0.0 || !retry_finite(policy->multiplier)) {
+            factor_infinite = 1;
+        } else {
+            factor = retry_powi(policy->multiplier, exponent);
+            if (!retry_finite(factor)) factor_infinite = 1;
+        }
+    }
+
+    /* The initial delay as f64: exact up to 2^53 ns, else through
+     * Duration::as_secs_f64 (retry.rs:233-238). */
+    if (policy->initial_delay_ns <= (UINT64_C(1) << 53)) {
+        initial = (double)policy->initial_delay_ns;
+    } else {
+        initial = ((double)(policy->initial_delay_ns / UINT64_C(1000000000)) +
+                   (double)(policy->initial_delay_ns % UINT64_C(1000000000)) / 1000000000.0) *
+                  1000000000.0;
+    }
+
+    /* A zero initial delay stays zero at every attempt (retry.rs:240-245);
+     * an infinite base caps at max_delay. */
+    max_nanos = (double)policy->max_delay_ns;
+    if (policy->initial_delay_ns == 0u) {
+        base = 0.0;
+        capped = base < max_nanos ? base : max_nanos;
+    } else if (factor_infinite) {
+        capped = max_nanos;
+    } else {
+        base = initial * factor;
+        capped = base < max_nanos ? base : max_nanos;
+    }
+
+    /* Jitter: capped * (1 + u * jitter), u the DetRng draw scaled to [0, 1]
+     * (retry.rs:256-279). */
+    final_nanos = capped;
+    if (policy->jitter > 0.0 && jitter_seed != NULL) {
+        uint64_t r = retry_det_rng_first(*jitter_seed);
+        double normalized = r == UINT64_MAX ? 1.0 : (double)r / (double)UINT64_MAX;
+        double result = capped * (1.0 + normalized * policy->jitter);
+        if (retry_finite(result)) final_nanos = result;
+    }
+
+    /* clamp_nanos_f64 (retry.rs:284-294). */
+    if (!retry_finite(final_nanos) || final_nanos <= 0.0) return 0u;
+    if (final_nanos >= (double)UINT64_MAX) return UINT64_MAX;
+    return (uint64_t)final_nanos;
+}
+
+/* RetryPolicy::validate (retry.rs:158-170): a NaN multiplier passes it, as
+ * in Rust (calculate_delay then caps every retry at max_delay). */
+static int retry_policy_valid(const asx_retry_policy *p) {
+    if (p->max_attempts == 0u) return 0;
+    if (p->multiplier < 1.0) return 0;
+    if (!(p->jitter >= 0.0 && p->jitter <= 1.0)) return 0;
+    return 1;
+}
+
 asx_status asx_retry_init(asx_retry_state *state, asx_combinator_poll_fn poll_fn, void *user_data,
-                          uint32_t max_retries) {
+                          const asx_retry_policy *policy) {
     if (state == NULL || poll_fn == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (policy != NULL && !retry_policy_valid(policy)) return ASX_E_INVALID_ARGUMENT;
+    memset(state, 0, sizeof(*state));
     state->poll_fn = poll_fn;
     state->user_data = user_data;
-    state->max_retries = max_retries;
-    state->attempt = 0;
+    state->policy = policy != NULL ? *policy : asx_retry_policy_new();
+    state->phase = ASX_RETRY_IDLE;
     state->last_error = ASX_OK;
-    state->done = 0;
     state->result = ASX_E_PENDING;
-    state->running = 0;
-
-    /* Set up first attempt */
     branch_init(&state->inner);
-    state->inner.poll_fn = poll_fn;
-    state->inner.user_data = user_data;
+    return ASX_OK;
+}
+
+static asx_status retry_finish(asx_retry_state *state, asx_status result) {
+    state->phase = ASX_RETRY_DONE;
+    state->result = result;
+    return result;
+}
+
+/* Idle -> the next attempt: RetryState::next_attempt (retry.rs:676-693)
+ * with a DetRng seeded from the owner's entropy, drawn on every Idle pass
+ * as Rust's Cx::current().map(|c| DetRng::new(c.random_u64())) is (none
+ * outside a task). The first attempt has no delay. */
+static asx_status retry_start_next(asx_retry_state *state, asx_task_id self) {
+    uint64_t seed = 0;
+    int have_seed = asx_task_random_u64_internal(self, &seed);
+    uint64_t delay;
+    asx_time now = 0;
+
+    state->attempt++;
+    delay = state->attempt == 1u ? 0u
+                                 : asx_retry_policy_delay(&state->policy, state->attempt - 1u,
+                                                          have_seed ? &seed : NULL);
+    if (delay == 0u) {
+        branch_init(&state->inner);
+        state->inner.poll_fn = state->poll_fn;
+        state->inner.user_data = state->user_data;
+        state->phase = ASX_RETRY_POLLING;
+        return ASX_OK;
+    }
+    state->total_delay_ns =
+        UINT64_MAX - state->total_delay_ns < delay ? UINT64_MAX : state->total_delay_ns + delay;
+    /* Sleep::after(now, delay): the deadline saturates. */
+    if (asx_runtime_now_ns(&now) != ASX_OK) now = 0;
+    {
+        asx_status st =
+            asx_sleep_init_until(&state->sleep,
+                                 UINT64_MAX - now < delay ? (asx_time)UINT64_MAX : now + delay);
+        (void)st; /* state is non-NULL */
+    }
+    state->phase = ASX_RETRY_SLEEPING;
     return ASX_OK;
 }
 
 asx_status asx_retry_poll(void *user_data, asx_task_id self) {
     asx_retry_state *state = (asx_retry_state *)user_data;
     asx_status st;
+    int cancelled;
 
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (state->done) return state->result;
+    if (state->phase == ASX_RETRY_DONE) return state->result;
 
-    /* Rust's Retry future with a zero-delay policy (combinator/retry.rs:
-     * 837-967): the owner's checkpoint before each attempt stops the retry
-     * cancelled (an attempt already running continues); a failed attempt
-     * starts the next one in the same poll while attempts remain; an
-     * attempt that ends cancelled ends the retry, not retried. */
+    /* Rust's Retry::poll (retry.rs:837-967). */
     for (;;) {
-        /* ASX_CHECKPOINT_WAIVER("bounded: max_retries + 1 attempts") */
-        if (!state->running && owner_cancelled(self)) {
-            state->done = 1;
-            state->result = ASX_E_CANCELLED;
-            return ASX_E_CANCELLED;
+        ASX_CHECKPOINT_WAIVER("bounded: max_attempts attempts, each pass advances the phase");
+        /* Every pass checkpoints the owner first, also while an attempt
+         * runs (the attempt is not stopped: it observes the cancel itself). */
+        cancelled = owner_cancelled(self);
+        switch (state->phase) {
+        case ASX_RETRY_IDLE:
+            if (cancelled) return retry_finish(state, ASX_E_CANCELLED);
+            st = retry_start_next(state, self);
+            if (st != ASX_OK) return retry_finish(state, st);
+            break;
+        case ASX_RETRY_SLEEPING:
+            if (cancelled) {
+                /* The abandoned Sleep cancels its timer (dropping it). */
+                st = asx_task_cancel_timer(self);
+                (void)st;
+                return retry_finish(state, ASX_E_CANCELLED);
+            }
+            st = asx_sleep_poll(&state->sleep, self);
+            if (st == ASX_E_PENDING) return ASX_E_PENDING;
+            if (st != ASX_OK) return retry_finish(state, st);
+            /* A Sleep also completes early on a cancel of its task: that
+             * must not start another attempt (retry.rs:899-907). */
+            if (owner_cancelled(self)) return retry_finish(state, ASX_E_CANCELLED);
+            branch_init(&state->inner);
+            state->inner.poll_fn = state->poll_fn;
+            state->inner.user_data = state->user_data;
+            state->phase = ASX_RETRY_POLLING;
+            break;
+        case ASX_RETRY_POLLING:
+            st = branch_poll(&state->inner, self);
+            if (st == ASX_E_PENDING) return ASX_E_PENDING;
+            if (st == ASX_OK || st == ASX_E_CANCELLED) return retry_finish(state, st);
+            /* Err: retried while attempts remain (AlwaysRetry). */
+            state->last_error = st;
+            if (state->attempt >= state->policy.max_attempts) return retry_finish(state, st);
+            state->phase = ASX_RETRY_IDLE;
+            break;
+        case ASX_RETRY_DONE: return state->result;
         }
-        state->running = 1;
-        st = branch_poll(&state->inner, self);
-        if (st == ASX_E_PENDING) return ASX_E_PENDING;
-        state->running = 0;
-        state->attempt++;
-
-        if (st == ASX_OK || st == ASX_E_CANCELLED) {
-            state->done = 1;
-            state->result = st;
-            return st;
-        }
-
-        /* Failed — try again? */
-        state->last_error = st;
-        if (state->attempt > state->max_retries) {
-            /* Exhausted retries */
-            state->done = 1;
-            state->result = state->last_error;
-            return state->last_error;
-        }
-        branch_init(&state->inner);
-        state->inner.poll_fn = state->poll_fn;
-        state->inner.user_data = state->user_data;
     }
 }
 
@@ -115,9 +289,86 @@ uint32_t asx_retry_attempts(const asx_retry_state *state) {
     return state->attempt;
 }
 
+uint64_t asx_retry_total_delay_ns(const asx_retry_state *state) {
+    if (state == NULL) return 0;
+    return state->total_delay_ns;
+}
+
 asx_status asx_retry_last_error(const asx_retry_state *state) {
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     return state->last_error;
+}
+
+/* ------------------------------------------------------------------ */
+/* Retry with timeout                                                  */
+/* ------------------------------------------------------------------ */
+
+asx_status asx_retry_timeout_init(asx_retry_timeout_state *state, asx_combinator_poll_fn poll_fn,
+                                  void *user_data, const asx_retry_policy *policy,
+                                  uint64_t timeout_ns) {
+    asx_status st;
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_retry_init(&state->retry, poll_fn, user_data, policy);
+    if (st != ASX_OK) return st;
+    memset(&state->deadline, 0, sizeof(state->deadline));
+    state->timeout_ns = timeout_ns;
+    state->deadline_initialized = 0;
+    state->done = 0;
+    state->result = ASX_E_PENDING;
+    return ASX_OK;
+}
+
+static asx_status retry_timeout_finish(asx_retry_timeout_state *state, asx_status result) {
+    asx_status st = asx_deadline_disarm(&state->deadline);
+    (void)st;
+    state->done = 1;
+    state->result = result;
+    return result;
+}
+
+asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self) {
+    asx_retry_timeout_state *state = (asx_retry_timeout_state *)user_data;
+    asx_status st;
+    asx_time target;
+
+    if (state == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (state->done) return state->result;
+
+    /* The deadline is fixed at the first poll. */
+    if (!state->deadline_initialized) {
+        st = asx_deadline_after(&state->deadline, state->timeout_ns);
+        if (st != ASX_OK) memset(&state->deadline, 0, sizeof(state->deadline));
+        state->deadline_initialized = 1;
+    }
+
+    /* Past it, the retry is abandoned without another poll (Rust's timeout
+     * drops it): a pending delay's sleep cancels its timer. */
+    if (asx_deadline_is_expired(&state->deadline)) {
+        if (state->retry.phase == ASX_RETRY_SLEEPING) {
+            st = asx_task_cancel_timer(self);
+            (void)st;
+        }
+        state->retry.phase = ASX_RETRY_DONE;
+        state->retry.result = ASX_E_TIMED_OUT;
+        return retry_timeout_finish(state, ASX_E_TIMED_OUT);
+    }
+
+    st = asx_retry_poll(&state->retry, self);
+    if (st != ASX_E_PENDING) return retry_timeout_finish(state, st);
+
+    /* Still pending: wake the owner at the deadline, as the timeout's
+     * Sleep does, so it fires while the retry is parked. */
+    target = asx_deadline_target(&state->deadline);
+    if (target != 0u) {
+        st = asx_task_arm_timer(self, target);
+        (void)st; /* no runtime task: nothing to wake */
+    }
+    return ASX_E_PENDING;
+}
+
+uint32_t asx_retry_timeout_attempts(const asx_retry_timeout_state *state) {
+    if (state == NULL) return 0;
+    return state->retry.attempt;
 }
 
 /* ------------------------------------------------------------------ */
@@ -595,11 +846,30 @@ asx_status asx_map_reduce_poll(void *user_data, asx_task_id self) {
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     if (state->done) return state->result;
 
-    /* Poll all incomplete branches */
+    /* Poll the incomplete branches in index order. The first failure stops
+     * the map-reduce (Rust's executing map-reduce stops admission and
+     * drains the rest, map_reduce.rs:7-11): the branches still pending are
+     * dropped, and that failure is the result, without a reduce. */
     completed = 0;
     for (i = 0; i < state->count; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded poll loop") */
-        if (!state->branches[i].done) { (void)branch_poll(&state->branches[i], self); }
+        if (!state->branches[i].done) {
+            asx_status st = branch_poll(&state->branches[i], self);
+            if (st != ASX_E_PENDING && st != ASX_OK) {
+                uint32_t j;
+                for (j = 0; j < state->count; j++) {
+                    /* ASX_CHECKPOINT_WAIVER("bounded drop loop") */
+                    if (!state->branches[j].done) {
+                        state->branches[j].done = 1;
+                        state->branches[j].result = ASX_E_CANCELLED;
+                        state->dropped++;
+                    }
+                }
+                state->result = st;
+                state->done = 1;
+                return st;
+            }
+        }
         if (state->branches[i].done) completed++;
     }
 
@@ -623,5 +893,5 @@ uint32_t asx_map_reduce_completed(const asx_map_reduce_state *state) {
         /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
         if (state->branches[i].done) count++;
     }
-    return count;
+    return count - state->dropped;
 }

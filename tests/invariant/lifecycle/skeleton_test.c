@@ -262,12 +262,18 @@ TEST(region_drain_propagates_budget_exhaustion) {
     ASSERT_EQ(st, ASX_E_POLL_BUDGET_EXHAUSTED);
 }
 
-TEST(region_drain_blocks_unresolved_obligations) {
+TEST(region_drain_leak_audits_unresolved_obligations) {
+    /* Rust's Finalizing arm leak-audits an obligation still Reserved once
+     * no task is left, then closes (runtime/state.rs:10266-10317): the
+     * drain closes the region and the obligation ends Leaked (default
+     * LOG policy), counted once. */
     asx_region_id rid;
     asx_obligation_id oid;
+    asx_obligation_state ostate;
     asx_region_state rstate;
     asx_budget budget;
     asx_status st;
+    uint64_t leaks_before = asx_obligation_leak_count();
 
     st = asx_region_open(&rid);
     ASSERT_EQ(st, ASX_OK);
@@ -275,19 +281,17 @@ TEST(region_drain_blocks_unresolved_obligations) {
 
     budget = asx_budget_infinite();
     st = asx_region_drain(rid, &budget);
-    ASSERT_EQ(st, ASX_E_OBLIGATIONS_UNRESOLVED);
-
-    st = asx_region_get_state(rid, &rstate);
-    ASSERT_EQ(st, ASX_OK);
-    ASSERT_EQ(rstate, ASX_REGION_FINALIZING);
-
-    ASSERT_EQ(asx_obligation_abort(oid), ASX_OK);
-    st = asx_region_drain(rid, &budget);
     ASSERT_EQ(st, ASX_OK);
 
     st = asx_region_get_state(rid, &rstate);
     ASSERT_EQ(st, ASX_OK);
     ASSERT_EQ(rstate, ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_obligation_get_state(oid, &ostate), ASX_OK);
+    ASSERT_EQ(ostate, ASX_OBLIGATION_LEAKED);
+    ASSERT_EQ(asx_obligation_leak_count(), leaks_before + 1u);
+    /* A leaked obligation cannot be resolved afterwards (Rust
+     * ObligationAlreadyResolved, runtime/obligation_table.rs:577). */
+    ASSERT_EQ(asx_obligation_abort(oid), ASX_E_OBLIGATION_ALREADY_RESOLVED);
 }
 
 TEST(quiescence_after_drain) {
@@ -489,7 +493,7 @@ int main(void) {
     asx_runtime_reset();
     RUN_TEST(region_drain_propagates_budget_exhaustion);
     asx_runtime_reset();
-    RUN_TEST(region_drain_blocks_unresolved_obligations);
+    RUN_TEST(region_drain_leak_audits_unresolved_obligations);
     asx_runtime_reset();
     RUN_TEST(quiescence_after_drain);
     asx_runtime_reset();

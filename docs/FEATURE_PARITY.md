@@ -41,9 +41,12 @@ Rust parity for those additions. Separately, ten admission predicates are
 captured by calling the pinned Rust `RegionState` methods and compared with the
 actual C predicates by `make check-rust-constants`; planted ordinary/cleanup
 Finalizing drift is rejected. This verifies the fixed admission policy, not
-end-to-end finalizer execution. Body-driven close outcomes, finalization-time
-leak-policy auditing and masked, serialized async finalizers remain open in
-`bd-9kll.3.4`; the admission fixture requirement remains open in `bd-9kll.3.5`.
+end-to-end finalizer execution. Region close outcomes now aggregate completed
+task outcomes, and finalization audits unresolved obligations under the leak
+policy after callbacks and cleanup tasks finish. Body-driven close, explicit
+root-versus-descendant cancellation reasons, outcome payloads and masked,
+serialized async finalizers remain open in `bd-9kll.3.4`; the admission fixture
+requirement remains open in `bd-9kll.3.5`.
 
 The interim K18 guard also rejects a second initialization before resetting
 the active singleton. `conflicting_init_preserves_live_runtime_and_destination`

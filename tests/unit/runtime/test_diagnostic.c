@@ -235,6 +235,7 @@ static void test_inspect_stale_runtime_fails_closed(void) {
     /* A raw reset invalidates A's generation without rewriting its object. */
     asx_runtime_reset();
     MUST_OK(asx_runtime_init_default(&b));
+    MUST_OK(asx_region_open(&region));
 
     MUST_OK(asx_inspect(&a, &rpt));
     ASSERT(!rpt.initialized, "stale runtime not initialized");
@@ -253,6 +254,39 @@ static void test_inspect_stale_runtime_fails_closed(void) {
     ASSERT(!rpt.any_poisoned, "stale poisoned flag fail closed");
 
     asx_runtime_shutdown(&a);
+    asx_runtime_shutdown(&b);
+}
+
+static void test_inspect_copied_stale_runtime_fails_closed(void) {
+    asx_runtime a, b;
+    asx_inspection_report rpt;
+    asx_region_id region;
+
+    /* A copied object stays stale after its live source is shut down. */
+    ASSERT(asx_runtime_init_default(&b) == ASX_OK, "first runtime initialized");
+    a = b;
+    asx_runtime_shutdown(&b);
+    ASSERT(asx_runtime_init_default(&b) == ASX_OK, "replacement runtime initialized");
+    ASSERT(asx_region_open(&region) == ASX_OK, "replacement region created");
+
+    ASSERT(asx_inspect(&a, &rpt) == ASX_OK, "stale inspection succeeds");
+    ASSERT(!rpt.initialized, "stale runtime not initialized");
+    ASSERT(rpt.regions.active_count == 0, "stale regions fail closed");
+    ASSERT(rpt.tasks.active_count == 0, "stale tasks fail closed");
+    ASSERT(rpt.obligations.active_count == 0, "stale obligations fail closed");
+    ASSERT(rpt.io_driver.active_count == 0, "stale io fail closed");
+    ASSERT(rpt.blocking.active_count == 0, "stale blocking fail closed");
+    ASSERT(rpt.trace.event_count == 0, "stale trace count fail closed");
+    ASSERT(rpt.trace.digest == 0u, "stale trace digest fail closed");
+    ASSERT(rpt.ghosts.violation_count == 0, "stale ghosts fail closed");
+    ASSERT(rpt.telemetry_emitted == 0u, "stale telemetry fail closed");
+    ASSERT(rpt.telemetry_digest == 0u, "stale telemetry digest fail closed");
+    ASSERT(rpt.event_log_count == 0u, "stale event log fail closed");
+    ASSERT(rpt.event_log_digest == 0u, "stale event log digest fail closed");
+    ASSERT(!rpt.any_poisoned, "stale poisoned flag fail closed");
+
+    asx_runtime_shutdown(&a);
+    ASSERT(asx_runtime_is_initialized(&b), "stale shutdown preserves replacement runtime");
     asx_runtime_shutdown(&b);
 }
 
@@ -498,6 +532,7 @@ int main(void) {
     RUN(test_inspect_null_args);
     RUN(test_inspect_uninitialized);
     RUN(test_inspect_stale_runtime_fails_closed);
+    RUN(test_inspect_copied_stale_runtime_fails_closed);
 
     /* Evidence sink */
     RUN(test_evidence_init);
