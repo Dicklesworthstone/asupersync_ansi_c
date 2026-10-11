@@ -380,8 +380,36 @@ typedef struct {
     uint64_t u;        /* CK_U64; CK_BOOL as 0/1 */
     char s[160];       /* CK_STR: the value; CK_NA: why C has no counterpart */
     const char *known; /* a recorded difference: its bead or reason */
+    int as_set;        /* CK_STR from a list: compare the names sorted */
     int seen;
 } ck_entry;
+
+#define CK_NAMES_MAX 32u
+
+/* `n` names joined by commas into `out`, sorted first when `sort`.
+ * Returns 0 when they do not fit. */
+static int ck_join(const char **names, size_t n, int sort, char *out, size_t cap) {
+    size_t i;
+    size_t used = 0;
+    if (sort) {
+        for (i = 1; i < n; i++) {
+            const char *x = names[i];
+            size_t j = i;
+            while (j > 0u && strcmp(names[j - 1u], x) > 0) {
+                names[j] = names[j - 1u];
+                j--;
+            }
+            names[j] = x;
+        }
+    }
+    out[0] = '\0';
+    for (i = 0; i < n; i++) {
+        int w = snprintf(out + used, cap - used, "%s%s", i > 0u ? "," : "", names[i]);
+        if (w < 0 || (size_t)w >= cap - used) return 0;
+        used += (size_t)w;
+    }
+    return 1;
+}
 
 #define CK_CAP 128u
 static ck_entry g_ck[CK_CAP];
@@ -475,6 +503,105 @@ static const struct {
     {"LinkedExit", ASX_CANCEL_LINKED_EXIT},
 };
 #define K_CANCEL_KINDS (sizeof(k_cancel_kinds) / sizeof(k_cancel_kinds[0]))
+
+typedef struct {
+    const char *rust; /* Rust's variant name */
+    int c;            /* the C enumerator */
+} ck_variant;
+
+#define CK_COUNT(a) (sizeof(a) / sizeof((a)[0]))
+
+/* The Rust names of a C enum's variants in C's declaration order, or
+ * sorted when only the set matters. C-only enumerators are not in `v`. */
+static void ck_variants(const char *key, const ck_variant *v, size_t n, int as_set) {
+    const char *names[CK_NAMES_MAX];
+    size_t count = 0;
+    size_t i;
+    int c;
+    ck_entry *e;
+    for (c = 0; c < 64 && count < n && count < CK_NAMES_MAX; c++) {
+        for (i = 0; i < n; i++) {
+            if (v[i].c == c && count < CK_NAMES_MAX) names[count++] = v[i].rust;
+        }
+    }
+    e = ck_add(key, CK_STR);
+    if (e == NULL) return;
+    e->as_set = as_set;
+    if (count != n || !ck_join(names, count, as_set, e->s, sizeof(e->s))) g_ck_overflow = 1;
+}
+
+static const ck_variant k_task_states[] = {
+    {"Created", ASX_TASK_CREATED},
+    {"Running", ASX_TASK_RUNNING},
+    {"CancelRequested", ASX_TASK_CANCEL_REQUESTED},
+    {"Cancelling", ASX_TASK_CANCELLING},
+    {"Finalizing", ASX_TASK_FINALIZING},
+    {"Completed", ASX_TASK_COMPLETED},
+};
+static const ck_variant k_region_states[] = {
+    {"Open", ASX_REGION_OPEN},         {"Closing", ASX_REGION_CLOSING},
+    {"Draining", ASX_REGION_DRAINING}, {"Finalizing", ASX_REGION_FINALIZING},
+    {"Closed", ASX_REGION_CLOSED},
+};
+static const ck_variant k_obligation_states[] = {
+    {"Reserved", ASX_OBLIGATION_RESERVED},
+    {"Committed", ASX_OBLIGATION_COMMITTED},
+    {"Aborted", ASX_OBLIGATION_ABORTED},
+    {"Leaked", ASX_OBLIGATION_LEAKED},
+};
+/* C-only: ASX_OBLIGATION_KIND_GENERIC (no kind given). */
+static const ck_variant k_obligation_kinds[] = {
+    {"SendPermit", ASX_OBLIGATION_KIND_SEND_PERMIT},
+    {"Ack", ASX_OBLIGATION_KIND_ACK},
+    {"Lease", ASX_OBLIGATION_KIND_LEASE},
+    {"IoOp", ASX_OBLIGATION_KIND_IO_OP},
+    {"SemaphorePermit", ASX_OBLIGATION_KIND_SEMAPHORE_PERMIT},
+    {"Transaction", ASX_OBLIGATION_KIND_TRANSACTION},
+};
+/* C-only: ASX_OBLIGATION_ABORT_NONE (not aborted) and _LEAK_RECOVERED
+ * (the RECOVER leak policy's abort). */
+static const ck_variant k_abort_reasons[] = {
+    {"Explicit", ASX_OBLIGATION_ABORT_EXPLICIT},
+    {"Cancel", ASX_OBLIGATION_ABORT_CANCEL},
+    {"Error", ASX_OBLIGATION_ABORT_ERROR},
+};
+static const ck_variant k_cancel_phases[] = {
+    {"Requested", ASX_CANCEL_PHASE_REQUESTED},
+    {"Cancelling", ASX_CANCEL_PHASE_CANCELLING},
+    {"Finalizing", ASX_CANCEL_PHASE_FINALIZING},
+    {"Completed", ASX_CANCEL_PHASE_COMPLETED},
+};
+static const ck_variant k_leak_responses[] = {
+    {"Panic", ASX_LEAK_PANIC},
+    {"Log", ASX_LEAK_LOG},
+    {"Silent", ASX_LEAK_SILENT},
+    {"Recover", ASX_LEAK_RECOVER},
+};
+static const ck_variant k_finalizer_escalations[] = {
+    {"Soft", ASX_FINALIZER_SOFT},
+    {"BoundedLog", ASX_FINALIZER_BOUNDED_LOG},
+    {"BoundedPanic", ASX_FINALIZER_BOUNDED_PANIC},
+};
+static const ck_variant k_restart_policies[] = {
+    {"OneForOne", ASX_SUPERVISOR_ONE_FOR_ONE},
+    {"OneForAll", ASX_SUPERVISOR_ONE_FOR_ALL},
+    {"RestForOne", ASX_SUPERVISOR_REST_FOR_ONE},
+};
+static const ck_variant k_escalation_policies[] = {
+    {"Stop", ASX_ESCALATION_STOP},
+    {"Escalate", ASX_ESCALATION_ESCALATE},
+    {"ResetCounter", ASX_ESCALATION_RESET_COUNTER},
+};
+static const ck_variant k_backoffs[] = {
+    {"None", ASX_RESTART_BACKOFF_NONE},
+    {"Fixed", ASX_RESTART_BACKOFF_FIXED},
+    {"Exponential", ASX_RESTART_BACKOFF_EXPONENTIAL},
+};
+static const ck_variant k_restart_modes[] = {
+    {"Permanent", ASX_CHILD_PERMANENT},
+    {"Transient", ASX_CHILD_TRANSIENT},
+    {"Temporary", ASX_CHILD_TEMPORARY},
+};
 
 static const char *leak_name(asx_leak_response r) {
     switch (r) {
@@ -609,6 +736,25 @@ static void ck_build(void) {
     ck_u64("lab.region_command_batch", (uint64_t)LAB_REGION_BATCH);
     ck_u64("rwlock.max_consecutive_writers", (uint64_t)RW_MAX_WRITER_STREAK);
 
+    /* Enum variants: in declaration order where the order means something
+     * (states, phases, and policies whose ordinals C keeps), as a set where
+     * only the variants do (kinds and abort reasons, encoded by name). */
+    ck_variants("task_state.variants", k_task_states, CK_COUNT(k_task_states), 0);
+    ck_variants("region_state.variants", k_region_states, CK_COUNT(k_region_states), 0);
+    ck_variants("obligation_state.variants", k_obligation_states, CK_COUNT(k_obligation_states), 0);
+    ck_variants("obligation_kind.variants", k_obligation_kinds, CK_COUNT(k_obligation_kinds), 1);
+    ck_variants("obligation_abort_reason.variants", k_abort_reasons, CK_COUNT(k_abort_reasons), 1);
+    ck_variants("cancel_phase.variants", k_cancel_phases, CK_COUNT(k_cancel_phases), 0);
+    ck_variants("leak_response.variants", k_leak_responses, CK_COUNT(k_leak_responses), 0);
+    ck_variants("finalizer_escalation.variants", k_finalizer_escalations,
+                CK_COUNT(k_finalizer_escalations), 0);
+    ck_variants("supervision.restart_policy.variants", k_restart_policies,
+                CK_COUNT(k_restart_policies), 0);
+    ck_variants("supervision.escalation_policy.variants", k_escalation_policies,
+                CK_COUNT(k_escalation_policies), 0);
+    ck_variants("supervision.backoff.variants", k_backoffs, CK_COUNT(k_backoffs), 0);
+    ck_variants("supervision.restart_mode.variants", k_restart_modes, CK_COUNT(k_restart_modes), 0);
+
     /* Recorded differences. */
     ck_known("cancel_kind.variants", "bd-9kll.2.18: C declares LinkedExit seventh");
     ck_known("cancel_kind.ParentCancelled.ordinal", "bd-9kll.2.18");
@@ -654,20 +800,19 @@ static int ck_equal(uint32_t v, const ck_entry *e) {
     case CK_STR:
         if (t == ASX_JSON_STRING) return strcmp(asx_json_string(&g_fixture, v), e->s) == 0;
         if (t == ASX_JSON_ARRAY) {
+            const char *names[CK_NAMES_MAX];
             char joined[160];
-            size_t used = 0;
+            size_t n = 0;
             uint32_t m;
-            joined[0] = '\0';
             for (m = asx_json_item(&g_fixture, v, 0); m != ASX_JSON_NONE;
                  m = g_fixture.nodes[m].next) {
-                const char *s = asx_json_string(&g_fixture, m);
-                int n;
-                if (s == NULL) return 0;
-                n = snprintf(joined + used, sizeof(joined) - used, "%s%s", used > 0u ? "," : "", s);
-                if (n < 0 || (size_t)n >= sizeof(joined) - used) return 0;
-                used += (size_t)n;
+                if (n >= CK_NAMES_MAX) return 0;
+                names[n] = asx_json_string(&g_fixture, m);
+                if (names[n] == NULL) return 0;
+                n++;
             }
-            return strcmp(joined, e->s) == 0;
+            return ck_join(names, n, e->as_set, joined, sizeof(joined)) &&
+                   strcmp(joined, e->s) == 0;
         }
         return 0;
     case CK_NA: return 0;

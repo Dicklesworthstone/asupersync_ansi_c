@@ -1694,7 +1694,10 @@ rust-constants-fresh:
 		echo "[asx] rust-constants-fresh: PASS ($(RUST_CONSTANTS) is current)"; \
 	else \
 		echo "[asx] rust-constants-fresh: FAIL: $(RUST_CONSTANTS) differs from the pinned asupersync"; \
-		diff $(RUST_CONSTANTS) $(BUILD_DIR)/rust_kernel_constants.json | head -40; \
+		jq -S . $(RUST_CONSTANTS) >$(BUILD_DIR)/rust_kernel_constants.checked-in.json; \
+		jq -S . $(BUILD_DIR)/rust_kernel_constants.json >$(BUILD_DIR)/rust_kernel_constants.derived.json; \
+		diff $(BUILD_DIR)/rust_kernel_constants.checked-in.json \
+			$(BUILD_DIR)/rust_kernel_constants.derived.json | head -60; \
 		exit 1; \
 	fi
 

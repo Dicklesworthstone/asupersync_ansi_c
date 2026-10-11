@@ -24,6 +24,59 @@ use asupersync::types::{
 use serde_json::{Map, Value, json};
 use syn::visit::Visit;
 
+/// Enums whose variants C mirrors: (key, file under src/, enum name). The
+/// value is the variant names in declaration order.
+const ENUMS: &[(&str, &str, &str)] = &[
+    ("task_state.variants", "record/task.rs", "TaskState"),
+    ("region_state.variants", "record/region.rs", "RegionState"),
+    (
+        "obligation_state.variants",
+        "record/obligation.rs",
+        "ObligationState",
+    ),
+    (
+        "obligation_kind.variants",
+        "record/obligation.rs",
+        "ObligationKind",
+    ),
+    (
+        "obligation_abort_reason.variants",
+        "record/obligation.rs",
+        "ObligationAbortReason",
+    ),
+    ("cancel_phase.variants", "types/cancel.rs", "CancelPhase"),
+    (
+        "leak_response.variants",
+        "runtime/config.rs",
+        "ObligationLeakResponse",
+    ),
+    (
+        "finalizer_escalation.variants",
+        "record/finalizer.rs",
+        "FinalizerEscalation",
+    ),
+    (
+        "supervision.restart_policy.variants",
+        "supervision.rs",
+        "RestartPolicy",
+    ),
+    (
+        "supervision.escalation_policy.variants",
+        "supervision.rs",
+        "EscalationPolicy",
+    ),
+    (
+        "supervision.backoff.variants",
+        "supervision.rs",
+        "BackoffStrategy",
+    ),
+    (
+        "supervision.restart_mode.variants",
+        "supervision.rs",
+        "ManagedRestartMode",
+    ),
+];
+
 /// Private constants: (key, file under src/, const name).
 const PRIVATE: &[(&str, &str, &str)] = &[
     (
@@ -346,6 +399,20 @@ pub fn constants(crate_dir: &Path, rev: &str) -> Result<Value, String> {
         json!(format!("{:?}", FinalizerEscalation::default())),
         "FinalizerEscalation::default()",
     );
+
+    for (key, file, name) in ENUMS {
+        let ast = parse(crate_dir, file)?;
+        let mut finder = EnumFinder { name, found: None };
+        finder.visit_file(&ast);
+        let (variants, line) = finder
+            .found
+            .ok_or_else(|| format!("src/{file} declares no enum {name}"))?;
+        doc.put(
+            key,
+            json!(variants),
+            &format!("src/{file}:{line} enum {name}"),
+        );
+    }
 
     for (key, file, name) in PRIVATE {
         let ast = parse(crate_dir, file)?;
