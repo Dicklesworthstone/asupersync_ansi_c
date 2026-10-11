@@ -77,29 +77,85 @@ TEST(retry_fail_then_succeed) {
     int count = 0;
     MUST_OK(asx_retry_init(&rs, poll_fail_n_then_ok, &count, 5));
 
-    /* First attempt: fails (count=1) */
-    ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_E_PENDING);
-
-    /* Second attempt: fails (count=2) */
-    ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_E_PENDING);
-
-    /* Third attempt: succeeds (count=3) */
+    /* Two attempts fail and the third succeeds, all in one poll: Rust's
+     * zero-delay Retry starts the next attempt at once (retry.rs:928-940). */
     ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_OK);
     ASSERT_EQ(asx_retry_attempts(&rs), 3u);
+    ASSERT_EQ(count, 3);
 }
 
 TEST(retry_exhausted) {
     asx_retry_state rs;
     MUST_OK(asx_retry_init(&rs, poll_fail, NULL, 2));
 
-    /* Attempt 1: fail */
-    ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_E_PENDING);
-    /* Attempt 2: fail */
-    ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_E_PENDING);
-    /* Attempt 3: fail — exhausted */
+    /* Three attempts fail in one poll: exhausted */
     ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_retry_attempts(&rs), 3u);
     ASSERT_EQ(asx_retry_last_error(&rs), ASX_E_INVALID_STATE);
+}
+
+static asx_status poll_cancelled_count(void *user_data, asx_task_id self) {
+    int *count = (int *)user_data;
+    (void)self;
+    (*count)++;
+    return ASX_E_CANCELLED;
+}
+
+TEST(retry_stops_at_a_cancelled_attempt) {
+    /* An attempt that ends cancelled ends the retry (retry.rs:945-948). */
+    asx_retry_state rs;
+    int count = 0;
+    MUST_OK(asx_retry_init(&rs, poll_cancelled_count, &count, 3));
+    ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_E_CANCELLED);
+    ASSERT_EQ(asx_retry_poll(&rs, 0), ASX_E_CANCELLED);
+    ASSERT_EQ(count, 1);
+    ASSERT_EQ(asx_retry_attempts(&rs), 1u);
+}
+
+/* Fails after cancelling its own task, counting its attempts. */
+static asx_status poll_cancel_owner_then_fail(void *user_data, asx_task_id self) {
+    int *count = (int *)user_data;
+    asx_status st = asx_task_cancel(self, ASX_CANCEL_USER);
+    (*count)++;
+    return st == ASX_OK ? ASX_E_INVALID_STATE : st;
+}
+
+typedef struct {
+    asx_retry_state rs;
+    uint32_t polls;
+    asx_status result;
+} retry_task;
+
+/* Drives a retry from a task's poll; the task itself ends OK. */
+static asx_status poll_retry_task(void *user_data, asx_task_id self) {
+    retry_task *rt = (retry_task *)user_data;
+    rt->polls++;
+    rt->result = asx_retry_poll(&rt->rs, self);
+    return rt->result == ASX_E_PENDING ? ASX_E_PENDING : ASX_OK;
+}
+
+TEST(retry_starts_no_attempt_once_its_owner_is_cancelled) {
+    /* Rust's Retry checkpoints the owner before each attempt
+     * (retry.rs:842-863): the first attempt fails after cancelling the
+     * owner, so no second attempt starts and the retry ends cancelled. */
+    static retry_task rt;
+    asx_runtime runtime;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+    int count = 0;
+
+    MUST_OK(asx_runtime_init_default(&runtime));
+    memset(&rt, 0, sizeof(rt));
+    MUST_OK(asx_retry_init(&rt.rs, poll_cancel_owner_then_fail, &count, 3));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_retry_task, &rt, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(rt.polls, 1u);
+    ASSERT_EQ(rt.result, ASX_E_CANCELLED);
+    ASSERT_EQ(count, 1);
+    asx_runtime_reset();
 }
 
 TEST(retry_zero_retries) {
@@ -205,6 +261,10 @@ TEST(bracket_acquire_fails_no_release) {
     ASSERT_TRUE(bracket_acquire_called);
     ASSERT_FALSE(bracket_use_called);
     ASSERT_FALSE(bracket_release_called); /* nothing to clean up */
+    /* Done: a later poll reports the same failure, not success. */
+    ASSERT_EQ(asx_bracket_poll(&bs, 0), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_bracket_current_phase(&bs), ASX_BRACKET_PHASE_DONE);
+    ASSERT_FALSE(bracket_release_called);
 }
 
 TEST(bracket_phase_tracking) {
@@ -250,17 +310,11 @@ TEST(pipeline_three_stages) {
     MUST_OK(asx_pipeline_add_stage(&ps, poll_count, &c2));
     MUST_OK(asx_pipeline_add_stage(&ps, poll_count, &c3));
 
-    /* First poll runs stage 0, then returns pending for stage 1 */
-    ASSERT_EQ(asx_pipeline_poll(&ps, 0), ASX_E_PENDING);
-    ASSERT_EQ(c1, 1);
-    ASSERT_EQ(c2, 0);
-
-    /* Second poll runs stage 1 */
-    ASSERT_EQ(asx_pipeline_poll(&ps, 0), ASX_E_PENDING);
-    ASSERT_EQ(c2, 1);
-
-    /* Third poll runs stage 2 */
+    /* One poll runs all three stages, each starting as the one before it
+     * completes (Rust's pipeline! awaits them in one async block). */
     ASSERT_EQ(asx_pipeline_poll(&ps, 0), ASX_OK);
+    ASSERT_EQ(c1, 1);
+    ASSERT_EQ(c2, 1);
     ASSERT_EQ(c3, 1);
     ASSERT_EQ(asx_pipeline_completed_stages(&ps), 3u);
 }
@@ -405,7 +459,9 @@ TEST(integration_join_with_retry_and_pipeline) {
     MUST_OK(asx_join_add(&join, asx_retry_poll, &retry));
     MUST_OK(asx_join_add(&join, asx_pipeline_poll, &pipeline));
 
-    ASSERT_EQ(asx_join_poll(&join, 0), ASX_E_PENDING);
+    /* Poll 1: the retry's three attempts run (two fail, the third
+     * succeeds); the pipeline's first stage is pending. Poll 2: that stage
+     * completes and the second runs at once. */
     ASSERT_EQ(asx_join_poll(&join, 0), ASX_E_PENDING);
     ASSERT_EQ(asx_join_poll(&join, 0), ASX_OK);
 
@@ -745,6 +801,8 @@ int main(void) {
     RUN_TEST(retry_success_first_try);
     RUN_TEST(retry_fail_then_succeed);
     RUN_TEST(retry_exhausted);
+    RUN_TEST(retry_stops_at_a_cancelled_attempt);
+    RUN_TEST(retry_starts_no_attempt_once_its_owner_is_cancelled);
     RUN_TEST(retry_zero_retries);
     RUN_TEST(retry_with_pending_inner);
     RUN_TEST(retry_null_fails);

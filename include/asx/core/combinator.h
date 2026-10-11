@@ -305,8 +305,11 @@ ASX_API asx_status asx_race_timeout_poll(void *user_data, asx_task_id self);
 /* -------------------------------------------------------------------
  * Retry with timeout — retry with per-overall-operation deadline
  *
- * Retries up to max_retries on failure. If the total elapsed time
- * exceeds timeout_ns, stops retrying and returns ASX_E_TIMED_OUT.
+ * Retries up to max_retries on failure, as asx_retry (the next attempt
+ * in the same poll; a cancel of the owner before an attempt, or an attempt
+ * returning ASX_E_CANCELLED, ends it with ASX_E_CANCELLED). If the total
+ * elapsed time exceeds timeout_ns, stops retrying and returns
+ * ASX_E_TIMED_OUT.
  * ------------------------------------------------------------------- */
 
 typedef struct {
@@ -320,6 +323,7 @@ typedef struct {
     asx_deadline deadline;
     uint64_t timeout_ns;
     int deadline_initialized;
+    int running; /* 1 while the current attempt is pending */
     asx_combinator_branch inner;
 } asx_retry_timeout_state;
 

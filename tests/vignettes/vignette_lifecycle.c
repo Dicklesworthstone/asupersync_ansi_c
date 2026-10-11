@@ -413,14 +413,13 @@ static int scenario_combinator_orchestration(void) {
         return 1;
     }
 
+    /* Poll 1: the retry's three attempts run (each failure starts the next
+     * attempt in the same poll, as Rust's zero-delay Retry); the
+     * pipeline's first stage is pending. Poll 2: it completes and the
+     * second stage runs at once. */
     st = asx_join_poll(&join, 0);
     if (st != ASX_E_PENDING) {
         printf("  FAIL: first join_poll returned %s\n", asx_status_str(st));
-        return 1;
-    }
-    st = asx_join_poll(&join, 0);
-    if (st != ASX_E_PENDING) {
-        printf("  FAIL: second join_poll returned %s\n", asx_status_str(st));
         return 1;
     }
     st = asx_join_poll(&join, 0);

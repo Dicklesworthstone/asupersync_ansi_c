@@ -35,6 +35,13 @@ static asx_status branch_poll(asx_combinator_branch *b, asx_task_id self) {
     return st;
 }
 
+/* The owner task's checkpoint: nonzero once it observes a cancel (a mask
+ * defers it). A poll outside a runtime task never sees one. */
+static int owner_cancelled(asx_task_id self) {
+    asx_checkpoint_result cp;
+    return asx_checkpoint(self, &cp) == ASX_OK && cp.cancelled;
+}
+
 /* ------------------------------------------------------------------ */
 /* Retry                                                               */
 /* ------------------------------------------------------------------ */
@@ -49,6 +56,7 @@ asx_status asx_retry_init(asx_retry_state *state, asx_combinator_poll_fn poll_fn
     state->last_error = ASX_OK;
     state->done = 0;
     state->result = ASX_E_PENDING;
+    state->running = 0;
 
     /* Set up first attempt */
     branch_init(&state->inner);
@@ -64,33 +72,42 @@ asx_status asx_retry_poll(void *user_data, asx_task_id self) {
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     if (state->done) return state->result;
 
-    st = branch_poll(&state->inner, self);
-
-    if (st == ASX_E_PENDING) return ASX_E_PENDING;
-
-    if (st == ASX_OK) {
-        state->done = 1;
-        state->result = ASX_OK;
+    /* Rust's Retry future with a zero-delay policy (combinator/retry.rs:
+     * 837-967): the owner's checkpoint before each attempt stops the retry
+     * cancelled (an attempt already running continues); a failed attempt
+     * starts the next one in the same poll while attempts remain; an
+     * attempt that ends cancelled ends the retry, not retried. */
+    for (;;) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: max_retries + 1 attempts") */
+        if (!state->running && owner_cancelled(self)) {
+            state->done = 1;
+            state->result = ASX_E_CANCELLED;
+            return ASX_E_CANCELLED;
+        }
+        state->running = 1;
+        st = branch_poll(&state->inner, self);
+        if (st == ASX_E_PENDING) return ASX_E_PENDING;
+        state->running = 0;
         state->attempt++;
-        return ASX_OK;
-    }
 
-    /* Failed — try again? */
-    state->last_error = st;
-    state->attempt++;
+        if (st == ASX_OK || st == ASX_E_CANCELLED) {
+            state->done = 1;
+            state->result = st;
+            return st;
+        }
 
-    if (state->attempt <= state->max_retries) {
-        /* Reset inner for next attempt */
+        /* Failed — try again? */
+        state->last_error = st;
+        if (state->attempt > state->max_retries) {
+            /* Exhausted retries */
+            state->done = 1;
+            state->result = state->last_error;
+            return state->last_error;
+        }
         branch_init(&state->inner);
         state->inner.poll_fn = state->poll_fn;
         state->inner.user_data = state->user_data;
-        return ASX_E_PENDING;
     }
-
-    /* Exhausted retries */
-    state->done = 1;
-    state->result = state->last_error;
-    return state->last_error;
 }
 
 uint32_t asx_retry_attempts(const asx_retry_state *state) {
@@ -139,8 +156,12 @@ asx_status asx_bracket_poll(void *user_data, asx_task_id self) {
         st = state->acquire_fn(state->user_data, self);
         if (st == ASX_E_PENDING) return ASX_E_PENDING;
         if (st != ASX_OK) {
+            /* Acquire failed: no cleanup, and every later poll reports the
+             * same error (before, a re-poll returned ASX_OK). */
+            state->use_result = st;
+            state->phase = ASX_BRACKET_PHASE_DONE;
             state->done = 1;
-            return st; /* acquire failed, no cleanup needed */
+            return st;
         }
         state->phase = ASX_BRACKET_PHASE_USE;
         /* fall through to use */
@@ -218,27 +239,32 @@ asx_status asx_pipeline_poll(void *user_data, asx_task_id self) {
         state->active.result = ASX_E_PENDING;
     }
 
-    st = branch_poll(&state->active, self);
-    if (st == ASX_E_PENDING) return ASX_E_PENDING;
+    /* Rust's pipeline! awaits each stage in turn in one async block
+     * (combinator/pipeline.rs:1770-1782): a stage that completes starts
+     * the next in the same poll; a failed stage stops the chain. */
+    for (;;) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: stage_count <= ASX_PIPELINE_MAX_STAGES") */
+        st = branch_poll(&state->active, self);
+        if (st == ASX_E_PENDING) return ASX_E_PENDING;
 
-    state->last_status = st;
+        state->last_status = st;
 
-    if (st != ASX_OK) {
-        state->done = 1;
-        return st;
+        if (st != ASX_OK) {
+            state->done = 1;
+            return st;
+        }
+
+        state->current++;
+        if (state->current >= state->stage_count) {
+            state->done = 1;
+            return ASX_OK;
+        }
+
+        /* Set up next stage */
+        branch_init(&state->active);
+        state->active.poll_fn = state->stages[state->current];
+        state->active.user_data = state->stage_data[state->current];
     }
-
-    state->current++;
-    if (state->current >= state->stage_count) {
-        state->done = 1;
-        return ASX_OK;
-    }
-
-    /* Set up next stage */
-    branch_init(&state->active);
-    state->active.poll_fn = state->stages[state->current];
-    state->active.user_data = state->stage_data[state->current];
-    return ASX_E_PENDING;
 }
 
 uint32_t asx_pipeline_completed_stages(const asx_pipeline_state *state) {

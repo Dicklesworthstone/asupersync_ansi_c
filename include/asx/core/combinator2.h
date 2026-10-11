@@ -28,9 +28,10 @@ extern "C" {
  * Retry — poll inner with configurable retry on failure
  *
  * On failure, resets the inner branch and retries up to max_retries
- * times. An optional backoff_ns is added between retries (requires
- * runtime time support for actual delay; walking skeleton just
- * re-polls immediately).
+ * times, the next attempt starting in the same poll (Rust's Retry with a
+ * zero-delay policy; backoff delays are not ported). The owner's
+ * checkpoint before each attempt ends the retry with ASX_E_CANCELLED, as
+ * does an attempt that returns ASX_E_CANCELLED (it is not retried).
  * ------------------------------------------------------------------- */
 
 typedef struct {
@@ -41,6 +42,7 @@ typedef struct {
     asx_status last_error;       /* last failure status */
     int done;                    /* 1 when decided */
     asx_status result;           /* final result */
+    int running;                 /* 1 while the current attempt is pending */
     asx_combinator_branch inner; /* current attempt branch */
 } asx_retry_state;
 
@@ -104,7 +106,8 @@ ASX_API asx_bracket_phase asx_bracket_current_phase(const asx_bracket_state *sta
  * Pipeline — sequential chain of transform stages
  *
  * Each stage is polled in order. When stage N completes with ASX_OK,
- * stage N+1 begins. If any stage fails, the pipeline stops.
+ * stage N+1 begins in the same poll (Rust's pipeline! awaits the stages
+ * in one async block). If any stage fails, the pipeline stops.
  * ------------------------------------------------------------------- */
 
 #ifndef ASX_PIPELINE_MAX_STAGES

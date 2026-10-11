@@ -591,6 +591,7 @@ asx_status asx_retry_timeout_init(asx_retry_timeout_state *state, asx_combinator
     state->result = ASX_E_PENDING;
     state->timeout_ns = timeout_ns;
     state->deadline_initialized = 0;
+    state->running = 0;
 
     state->inner.poll_fn = poll_fn;
     state->inner.user_data = user_data;
@@ -614,56 +615,56 @@ asx_status asx_retry_timeout_poll(void *user_data, asx_task_id self) {
         state->deadline_initialized = 1;
     }
 
-    /* Check overall timeout */
-    if (asx_deadline_is_expired(&state->deadline)) {
-        state->done = 1;
-        state->result = ASX_E_TIMED_OUT;
-        disarm_deadline(&state->deadline);
-        return ASX_E_TIMED_OUT;
-    }
-
-    /* Poll inner */
-    st = branch_poll(&state->inner, self);
-
-    if (st == ASX_E_PENDING) {
-        wake_at_deadline(self, &state->deadline);
-        return ASX_E_PENDING;
-    }
-
-    if (st == ASX_OK) {
-        state->done = 1;
-        state->result = ASX_OK;
+    /* As asx_retry (Rust's zero-delay Retry, combinator/retry.rs:837-967)
+     * under an overall deadline: the owner's checkpoint before each
+     * attempt ends it cancelled, an attempt that ends cancelled is not
+     * retried, and a failed attempt starts the next one in the same poll
+     * unless the deadline has passed. */
+    for (;;) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: max_retries + 1 attempts") */
+        if (asx_deadline_is_expired(&state->deadline)) {
+            state->done = 1;
+            state->result = ASX_E_TIMED_OUT;
+            disarm_deadline(&state->deadline);
+            return ASX_E_TIMED_OUT;
+        }
+        if (!state->running && owner_cancelled(self)) {
+            state->done = 1;
+            state->result = ASX_E_CANCELLED;
+            disarm_deadline(&state->deadline);
+            return ASX_E_CANCELLED;
+        }
+        state->running = 1;
+        st = branch_poll(&state->inner, self);
+        if (st == ASX_E_PENDING) {
+            wake_at_deadline(self, &state->deadline);
+            return ASX_E_PENDING;
+        }
+        state->running = 0;
         state->attempt++;
-        disarm_deadline(&state->deadline);
-        return ASX_OK;
+
+        if (st == ASX_OK || st == ASX_E_CANCELLED) {
+            state->done = 1;
+            state->result = st;
+            disarm_deadline(&state->deadline);
+            return st;
+        }
+
+        /* Failure — try retry */
+        state->last_error = st;
+        if (state->attempt > state->max_retries) {
+            state->done = 1;
+            state->result = state->last_error;
+            disarm_deadline(&state->deadline);
+            return state->last_error;
+        }
+
+        /* Reset inner for next attempt */
+        state->inner.poll_fn = state->poll_fn;
+        state->inner.user_data = state->user_data;
+        state->inner.result = ASX_E_PENDING;
+        state->inner.done = 0;
     }
-
-    /* Failure — try retry */
-    state->last_error = st;
-    state->attempt++;
-
-    if (state->attempt > state->max_retries) {
-        state->done = 1;
-        state->result = state->last_error;
-        disarm_deadline(&state->deadline);
-        return state->last_error;
-    }
-
-    /* Check timeout before retrying */
-    if (asx_deadline_is_expired(&state->deadline)) {
-        state->done = 1;
-        state->result = ASX_E_TIMED_OUT;
-        disarm_deadline(&state->deadline);
-        return ASX_E_TIMED_OUT;
-    }
-
-    /* Reset inner for next attempt */
-    state->inner.poll_fn = state->poll_fn;
-    state->inner.user_data = state->user_data;
-    state->inner.result = ASX_E_PENDING;
-    state->inner.done = 0;
-
-    return ASX_E_PENDING;
 }
 
 uint32_t asx_retry_timeout_attempts(const asx_retry_timeout_state *state) {

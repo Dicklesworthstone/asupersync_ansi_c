@@ -106,10 +106,8 @@ TEST(retry_timeout_fail_then_succeed) {
     asx_retry_timeout_state state;
     asx_status st;
     MUST_OK(asx_retry_timeout_init(&state, poll_fail_then_ok, &count, 3, 1000000000ULL));
-    /* First poll fails, resets for retry */
-    st = asx_retry_timeout_poll(&state, 1);
-    ASSERT_EQ(st, ASX_E_PENDING);
-    /* Second poll succeeds */
+    /* The first attempt fails and the second, started in the same poll as
+     * Rust's zero-delay Retry starts it, succeeds. */
     st = asx_retry_timeout_poll(&state, 1);
     ASSERT_EQ(st, ASX_OK);
     ASSERT_EQ(asx_retry_timeout_attempts(&state), 2u);
