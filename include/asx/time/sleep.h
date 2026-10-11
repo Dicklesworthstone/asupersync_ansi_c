@@ -73,10 +73,13 @@ ASX_API asx_status asx_sleep_poll(void *user_data, asx_task_id self);
 /* -------------------------------------------------------------------
  * Timeout
  *
- * Wraps an inner poll function with a deadline. If the inner function
- * completes (returns ASX_OK) before the deadline, the timeout
- * returns ASX_OK. If the deadline expires first, returns
- * ASX_E_TIMED_OUT.
+ * Wraps an inner poll function with a deadline, as Rust's TimeoutFuture
+ * (time/timeout_future.rs:286-315). Past the deadline (now > deadline) it
+ * returns ASX_E_TIMED_OUT without polling the inner function. Otherwise
+ * it polls the inner function first, so work that completes exactly at
+ * the deadline wins, and it times out at the deadline only if that work
+ * is still pending. A poll after it completed returns ASX_E_TIMED_OUT
+ * (Rust's fail-closed repoll).
  * ------------------------------------------------------------------- */
 
 typedef struct {
@@ -86,6 +89,7 @@ typedef struct {
     asx_task_poll_fn inner_poll; /* wrapped poll function */
     void *inner_data;            /* wrapped poll user_data */
     int inner_done;              /* 1 if inner returned ASX_OK */
+    int completed;               /* 1 once a poll returned other than ASX_E_PENDING */
 } asx_timeout_state;
 
 /* Initialize a timeout state wrapping an inner poll function.

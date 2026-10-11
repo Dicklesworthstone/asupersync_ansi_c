@@ -187,8 +187,8 @@ observes `ASX_E_NOT_FOUND`: the abort consumed the token.
 | `checkpoint` | `on_cancel`: `"return"` (default) or `"continue"` | `cx.checkpoint()` (`cx.rs:2749`) | `asx_checkpoint(self, &cr)` | no | Acknowledges the cancel and returns `ASX_E_CANCELLED`. With `"return"` the program ends; with `"continue"` it goes on. A masked task gets `ASX_OK`. |
 | `sleep` | `ns` | `time::sleep(cx.now(), Duration::from_nanos(ns)).await` (`time/sleep.rs:1182`) | `asx_task_wait_until(self, now + ns)` | until virtual time ≥ now+ns | If the kind is neither `Timeout` nor `Deadline` and the task is unmasked, the step checkpoints (acknowledging) and completes early with `ASX_OK`. If it is first polled after the cancel, it takes one extra scheduler trip (`sleep.rs:789-812`). Otherwise it keeps sleeping. |
 | `sleep_until` | `at_ns` | `time::sleep_until(Time::from_nanos(at_ns)).await` (`sleep.rs:1203`) | `asx_task_wait_until(self, at_ns)` | until virtual time ≥ at_ns | as `sleep` |
-| `trace` | `message` | `cx.trace(message)` (`cx.rs:3362`) | emits vocabulary `user.trace` (C gap, §7) | no | ignored |
-| `return` | `outcome`: `{"tag":"ok"}`, `{"tag":"err","status":S}` or `{"tag":"panicked","message":M}` | body returns `Outcome::Ok(())` / `Outcome::Err(code)`, or `panic!(M)` | poll function completes with the outcome (C gap for panicked, §7) | no | The cancellation-wins rule above applies. |
+| `trace` | `message` | `cx.trace(message)` (`cx.rs:3362`) | `asx_trace_user(self, message)`: vocabulary `user.trace` | no | ignored |
+| `return` | `outcome`: `{"tag":"ok"}`, `{"tag":"err","status":S}` or `{"tag":"panicked","message":M}` | body returns `Outcome::Ok(())` / `Outcome::Err(code)`, or `panic!(M)` | poll function completes with the outcome; panicked through `asx_task_panic(self, M)` | no | The cancellation-wins rule above applies. |
 
 ### 3.2 Masking
 
@@ -205,7 +205,7 @@ so a blocking step inside `masked` is a schema error.
 |---|---|---|---|---|---|
 | `reserve` | `kind` (`SendPermit`, `Ack`, `Lease`, `IoOp`, `SemaphorePermit`, `Transaction`), `as` | `cx.try_register_obligation_checked(kind, cx.task_id())` → `Ok(Some(token))` (`cx.rs:1746`) | `asx_obligation_reserve_ex(own_region, kind, self, &id)` | no | Ignored. A region that is no longer Open gives `ASX_E_REGION_CLOSED` (Rust `ObligationAdmissionError::RegionClosed`, `runtime/obligation_mailbox.rs:68`). |
 | `commit` | `obligation` | `token.commit()` (`obligation_mailbox.rs:879`) | `asx_obligation_commit(id)` | no | ignored |
-| `abort` | `obligation`, `reason` (`Cancel`, `Error`, `Explicit`) | `token.abort(reason)` (`:888`) | `asx_obligation_abort(id)` plus reason (C gap, §7) | no | ignored |
+| `abort` | `obligation`, `reason` (`Cancel`, `Error`, `Explicit`) | `token.abort(reason)` (`:888`) | `asx_obligation_abort_with_reason(id, reason)` | no | ignored |
 | `leak` | `obligation` | `drop(token)`, which posts a Leak (`:897`) | `asx_obligation_drop(id)`: leaked when the poll returns, under the leak policy | no | ignored |
 
 `kind` is required: C's `ASX_OBLIGATION_KIND_GENERIC` has no Rust counterpart
@@ -308,13 +308,13 @@ interpreter (C). Values are unsigned 64-bit integers; C channels carry
 | `reserve_send` | `channel`, `as` | `tx.reserve(&cx).await` (`channel/mpsc.rs:637`) | `asx_channel_reserve(id, cx, &permit)` until done | while full, FIFO | Checked on every poll: `ASX_E_CANCELLED` even when there is room (`mpsc.rs:1061`). The permit registers a `SendPermit` obligation. |
 | `permit_send` | `permit`, `value` | `permit.send(v)` (`:1565`) | `asx_send_permit_send(&permit, v)` | no | ignored |
 | `permit_abort` | `permit` | `permit.abort()` (`:1633`) | `asx_send_permit_abort(&permit)` | no | ignored. The obligation is aborted with reason `Explicit`. |
-| `send` | `channel`, `value` | `tx.send(&cx, v).await` (`:715`) | send without registering an obligation (C gap, §7) | while full | `ASX_E_CANCELLED`. No obligation and no trace event. |
+| `send` | `channel`, `value` | `tx.send(&cx, v).await` (`:715`) | `asx_channel_send(ch, &cx, v)`: no obligation, as Rust's transient permit | while full | `ASX_E_CANCELLED`. No obligation and no trace event. |
 | `try_send` | `channel`, `value` | `tx.try_send(v)` (`:773`) | `asx_channel_try_reserve` + `asx_send_permit_send`, without an obligation | no | ignored. Full gives `ASX_E_CHANNEL_FULL`. |
 | `recv` | `channel` | `rx.recv(&cx).await` (`:1719`) | `asx_channel_recv(id, cx, &v)` until done | while empty | Checked first: `ASX_E_CANCELLED` even when a value is queued (`:1786`). The observation `value` is the received integer. |
 | `try_recv` | `channel` | `rx.try_recv()` (`:1956`) | `asx_channel_try_recv` (never parks) | no | ignored. Empty gives `ASX_E_CHANNEL_EMPTY`; closed gives `ASX_E_DISCONNECTED`. |
 | `close_sender` | `channel` | `drop(tx)` (`:1241`) | `asx_channel_close_sender` | no | ignored |
 | `close_receiver` | `channel` | `drop(rx)` (`:2122`) | `asx_channel_close_receiver` | no | ignored |
-| `oneshot_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/oneshot.rs:556`): reserves a SendPermit, traces `"oneshot::reserve creating permit"`, commits | `asx_oneshot_try_send` plus the obligation and trace (C gap, §7) | no | Checked first: `ASX_E_CANCELLED`. |
+| `oneshot_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/oneshot.rs:556`): reserves a SendPermit, traces `"oneshot::reserve creating permit"`, commits | `asx_oneshot_send(&tx, &cx, v)`: reserves the SendPermit obligation, traces, commits | no | Checked first: `ASX_E_CANCELLED`. |
 | `oneshot_recv` | `channel` | `rx.recv(&cx).await` (`oneshot.rs:1250`): traces `"oneshot::recv received value"` / `"…channel closed"` | `asx_oneshot_recv(rx, cx, &v)` until done | until sent or dropped | `ASX_E_CANCELLED`, tracing `"oneshot::recv cancelled while waiting"`. |
 | `broadcast_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/broadcast.rs:494`) | `asx_broadcast_send` | no | `ASX_E_CANCELLED` (`broadcast.rs:418`) |
 | `broadcast_recv` | `channel` | `rx.recv(&cx).await` (`:894`) | `asx_broadcast_recv(rx, cx, &v)` until done | while empty | `ASX_E_CANCELLED`. Lagged gives `ASX_E_LAGGED` with `value` = n. |

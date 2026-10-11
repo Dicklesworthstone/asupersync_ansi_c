@@ -189,6 +189,67 @@ TEST(timeout_expires_before_inner) {
     teardown();
 }
 
+/* The clock at `now_ns`, fixed: each query returns it until moved. */
+static void clock_at(asx_time now_ns) { asx_vtime_init(&g_vt, now_ns, 0u); }
+
+/* Rust's TimeoutFuture (time/timeout_future.rs:286-315): completed work
+ * wins at the deadline exactly; the inner function is polled first. */
+TEST(timeout_at_the_deadline_prefers_completed_work) {
+    asx_timeout_state ts;
+    setup();
+    clock_at(0);
+    g_inner_count = 0;
+    g_inner_limit = 2;
+    MUST_OK(asx_timeout_init(&ts, 5000000ULL, poll_n_then_ok, NULL)); /* deadline 5 ms */
+    ASSERT_EQ(asx_timeout_poll(&ts, ASX_INVALID_ID), ASX_E_PENDING);
+    clock_at(5000000ULL);
+    ASSERT_EQ(asx_timeout_poll(&ts, ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(g_inner_count, 2);
+    ASSERT_EQ(ts.inner_done, 1);
+    teardown();
+}
+
+TEST(timeout_at_the_deadline_with_pending_work_times_out) {
+    asx_timeout_state ts;
+    setup();
+    clock_at(0);
+    g_inner_count = 0;
+    g_inner_limit = 100;
+    MUST_OK(asx_timeout_init(&ts, 5000000ULL, poll_n_then_ok, NULL));
+    ASSERT_EQ(asx_timeout_poll(&ts, ASX_INVALID_ID), ASX_E_PENDING);
+    clock_at(5000000ULL);
+    ASSERT_EQ(asx_timeout_poll(&ts, ASX_INVALID_ID), ASX_E_TIMED_OUT);
+    ASSERT_EQ(g_inner_count, 2); /* polled once more, at the deadline */
+    teardown();
+}
+
+TEST(timeout_past_the_deadline_does_not_poll_the_inner) {
+    asx_timeout_state ts;
+    setup();
+    clock_at(0);
+    g_inner_count = 0;
+    g_inner_limit = 2;
+    MUST_OK(asx_timeout_init(&ts, 5000000ULL, poll_n_then_ok, NULL));
+    ASSERT_EQ(asx_timeout_poll(&ts, ASX_INVALID_ID), ASX_E_PENDING);
+    clock_at(5000001ULL);
+    ASSERT_EQ(asx_timeout_poll(&ts, ASX_INVALID_ID), ASX_E_TIMED_OUT);
+    ASSERT_EQ(g_inner_count, 1); /* the inner that would complete is not polled */
+    teardown();
+}
+
+TEST(timeout_repoll_after_completion_fails_closed) {
+    asx_timeout_state ts;
+    setup();
+    clock_at(0);
+    g_inner_count = 0;
+    g_inner_limit = 1;
+    MUST_OK(asx_timeout_init(&ts, 5000000ULL, poll_n_then_ok, NULL));
+    ASSERT_EQ(asx_timeout_poll(&ts, ASX_INVALID_ID), ASX_OK);
+    ASSERT_EQ(asx_timeout_poll(&ts, ASX_INVALID_ID), ASX_E_TIMED_OUT);
+    ASSERT_EQ(g_inner_count, 1);
+    teardown();
+}
+
 /* ------------------------------------------------------------------ */
 /* Interval init tests                                                 */
 /* ------------------------------------------------------------------ */
@@ -311,6 +372,10 @@ int main(void) {
     RUN_TEST(timeout_poll_null_fails);
     RUN_TEST(timeout_inner_completes_before_deadline);
     RUN_TEST(timeout_expires_before_inner);
+    RUN_TEST(timeout_at_the_deadline_prefers_completed_work);
+    RUN_TEST(timeout_at_the_deadline_with_pending_work_times_out);
+    RUN_TEST(timeout_past_the_deadline_does_not_poll_the_inner);
+    RUN_TEST(timeout_repoll_after_completion_fails_closed);
 
     /* Interval init */
     RUN_TEST(interval_init_null_fails);

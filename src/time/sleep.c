@@ -132,23 +132,31 @@ asx_status asx_timeout_poll(void *user_data, asx_task_id self) {
         s->initialized = 1;
     }
 
-    /* Check deadline first */
+    /* A repoll after completion fails closed (TimeoutFuture::poll). */
+    if (s->completed) return ASX_E_TIMED_OUT;
+
     st = asx_runtime_now_ns(&now);
     if (st != ASX_OK) return st;
 
-    if (asx_deadline_is_expired_at(&s->deadline, now)) {
-        if (!s->inner_done) { return ASX_E_TIMED_OUT; }
-        return ASX_OK;
+    /* Past the deadline: timed out without polling the inner function. */
+    if (now > asx_deadline_target(&s->deadline)) {
+        (void)asx_deadline_is_expired_at(&s->deadline, now); /* latches expired */
+        s->completed = 1;
+        return ASX_E_TIMED_OUT;
     }
 
-    /* Poll the inner function */
-    if (!s->inner_done) {
-        inner_st = s->inner_poll(s->inner_data, self);
-        if (inner_st == ASX_OK) {
-            s->inner_done = 1;
-            return ASX_OK;
-        }
-        if (inner_st != ASX_E_PENDING) return inner_st;
+    /* Completed work wins at the deadline exactly: poll it first. */
+    inner_st = s->inner_poll(s->inner_data, self);
+    if (inner_st != ASX_E_PENDING) {
+        s->completed = 1;
+        if (inner_st == ASX_OK) s->inner_done = 1;
+        return inner_st;
+    }
+
+    /* Still pending at the deadline: timed out. */
+    if (asx_deadline_is_expired_at(&s->deadline, now)) {
+        s->completed = 1;
+        return ASX_E_TIMED_OUT;
     }
 
     /* Inner is pending: guarantee a wake at the deadline without parking

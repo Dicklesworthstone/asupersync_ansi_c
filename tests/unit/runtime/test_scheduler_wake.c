@@ -309,7 +309,10 @@ TEST(timeout_fires_for_parked_inner) {
     ASSERT_EQ(asx_outcome_severity_of(&out), ASX_OUTCOME_ERR);
     ASSERT_EQ(asx_task_get_error(t, &err), ASX_OK);
     ASSERT_EQ(err, ASX_E_TIMED_OUT);
-    ASSERT_EQ(f->inner.polls, 1u); /* parked inner polled once, then timed out */
+    /* The parked inner is polled once, and again at the deadline wake:
+     * work completing exactly at the deadline would win (Rust's
+     * TimeoutFuture polls it before the deadline sleep). */
+    ASSERT_EQ(f->inner.polls, 2u);
     ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)(25u * MS));
 }
 
