@@ -259,13 +259,16 @@ void asx_runtime_virtual_advance(asx_time to) {
 
 void asx_runtime_virtual_set_internal(asx_time to) { g_virtual_now = to; }
 
+/* The default seeded entropy stream (an LCG; real deployments install
+ * their own source). It restarts with the runtime, as the virtual clock
+ * does, so every runtime of a deterministic build draws the same values. */
+#define ASX_DEFAULT_ENTROPY_SEED 0x5DEECE66DULL
+static uint64_t g_seeded_entropy = ASX_DEFAULT_ENTROPY_SEED;
+
 static uint64_t default_seeded_entropy(void *ctx) {
-    /* Deterministic PRNG: simple counter-based default.
-     * Real deployments should provide a proper seeded PRNG. */
-    static uint64_t state = 0x5DEECE66DULL;
     (void)ctx;
-    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
-    return state;
+    g_seeded_entropy = g_seeded_entropy * 6364136223846793005ULL + 1442695040888963407ULL;
+    return g_seeded_entropy;
 }
 
 static asx_status default_ghost_reactor_wait(void *ctx, uint64_t logical_step,
@@ -287,6 +290,7 @@ void asx_runtime_hooks_reset_internal(void) {
     memset(&g_hooks, 0, sizeof(g_hooks));
     g_hooks_installed = 0;
     g_virtual_now = 0;
+    g_seeded_entropy = ASX_DEFAULT_ENTROPY_SEED;
 }
 
 /* ------------------------------------------------------------------ */

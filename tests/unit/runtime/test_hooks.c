@@ -318,6 +318,27 @@ TEST(runtime_reset_clears_installed_hooks) {
     ASSERT_TRUE(asx_runtime_get_hooks() == NULL);
 }
 
+TEST(default_entropy_restarts_with_the_runtime) {
+    /* The default seeded stream restarts with each runtime, as the virtual
+     * clock does: two runtimes in one process draw the same values. */
+    asx_runtime_hooks hooks;
+    uint64_t first[3];
+    uint64_t again[3];
+    uint32_t i;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+    for (i = 0; i < 3u; i++) ASSERT_EQ(asx_runtime_random_u64(&first[i]), ASX_OK);
+    ASSERT_TRUE(first[0] != first[1] && first[1] != first[2]);
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+    for (i = 0; i < 3u; i++) ASSERT_EQ(asx_runtime_random_u64(&again[i]), ASX_OK);
+    for (i = 0; i < 3u; i++) ASSERT_EQ(again[i], first[i]);
+    asx_runtime_reset();
+}
+
 /* ------------------------------------------------------------------ */
 /* Allocator seal                                                      */
 /* ------------------------------------------------------------------ */
@@ -990,6 +1011,7 @@ int main(void) {
     RUN_TEST(set_hooks_installs_and_get_retrieves);
     asx_runtime_reset();
     RUN_TEST(runtime_reset_clears_installed_hooks);
+    RUN_TEST(default_entropy_restarts_with_the_runtime);
 
     /* Allocator seal */
     asx_runtime_reset();
