@@ -106,8 +106,8 @@ uint64_t asx_task_next_member_seq_internal(void) { return ++g_member_seq; }
  * ------------------------------------------------------------------- */
 
 void asx_runtime_reset(void) {
-    uint32_t i;
-    uint32_t j;
+    uint32_t i, j;
+    asx_runtime_object_reset_internal();
     for (i = 0; i < ASX_MAX_REGIONS; i++) {
         g_regions[i].state = ASX_REGION_OPEN;
         g_regions[i].parent_id = ASX_INVALID_ID;
@@ -1049,6 +1049,25 @@ asx_status asx_region_close(asx_region_id id) {
     return ASX_OK;
 }
 
+asx_status asx_region_register_finalizer(asx_region_id id, asx_cleanup_fn fn, void *user_data,
+                                         asx_cleanup_handle *out_handle) {
+    asx_region_slot *r;
+    asx_status st;
+    if (fn == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
+    if (r->poisoned) return ASX_E_REGION_POISONED;
+    if (r->state != ASX_REGION_OPEN) return ASX_E_REGION_CLOSED;
+    return asx_cleanup_push(&r->cleanup, fn, user_data, out_handle);
+}
+
+asx_status asx_region_unregister_finalizer(asx_region_id id, asx_cleanup_handle handle) {
+    asx_region_slot *r;
+    asx_status st = asx_region_slot_lookup(id, &r);
+    if (st != ASX_OK) return st;
+    return asx_cleanup_pop(&r->cleanup, handle);
+}
+
 asx_status asx_region_get_state(asx_region_id id, asx_region_state *out_state) {
     asx_region_slot *r;
     asx_status st;
@@ -1125,8 +1144,8 @@ void asx_task_release_capture_internal(asx_task_slot *task) {
  * Task lifecycle
  * ------------------------------------------------------------------- */
 
-asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *user_data,
-                          asx_task_id *out_id) {
+static asx_status task_spawn_impl(asx_region_id region, asx_task_poll_fn poll_fn, void *user_data,
+                                  asx_task_id *out_id, int cleanup_only) {
     asx_region_slot *r;
     asx_status st;
     uint32_t idx;
@@ -1142,10 +1161,10 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     if (st != ASX_OK) return st;
     if (r->poisoned) return ASX_E_REGION_POISONED;
 
-    /* Finalizing regions may still spawn cleanup tasks; broader admissions
-     * like obligations remain OPEN-only. A rejected spawn is Rust's
-     * SpawnError::RegionClosed ("closed or draining"; vocabulary §5). */
-    if (!asx_region_can_accept_work(r->state)) {
+    /* Rust RegionState distinguishes normal work from required cleanup.
+     * Only the explicit cleanup entry may admit into Finalizing. */
+    if (!(cleanup_only ? asx_region_can_accept_cleanup_work(r->state)
+                       : asx_region_can_accept_work(r->state))) {
         if (deferred) asx_lab_defer_refused_admission();
         return ASX_E_REGION_CLOSED;
     }
@@ -1154,7 +1173,7 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
      * exempt (record/region.rs add_task_internal). A deferred spawn is
      * checked at its admission instead (asx_lab_admit_pending): tasks that
      * complete before it, the spawner included, no longer count. */
-    if (!deferred && r->state != ASX_REGION_FINALIZING &&
+    if (!deferred && !(cleanup_only && r->state == ASX_REGION_FINALIZING) &&
         asx_region_live_admitted_internal(r) >= r->limits.max_tasks) {
         return ASX_E_ADMISSION_LIMIT;
     }
@@ -1169,6 +1188,7 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     g_tasks[idx].outcome = asx_outcome_make(ASX_OUTCOME_OK);
     g_tasks[idx].alive = 1;
     g_tasks[idx].detached = 0;
+    g_tasks[idx].cleanup_only = cleanup_only ? 1u : 0u;
     /* Created by the host: Rust's RuntimeState::create_task, whose task
      * takes exactly the budget it is given (state.rs:4461, 4274-4275); the
      * region's budget is not met into it. */
@@ -1255,6 +1275,16 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     return ASX_OK;
 }
 
+asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *user_data,
+                          asx_task_id *out_id) {
+    return task_spawn_impl(region, poll_fn, user_data, out_id, 0);
+}
+
+asx_status asx_task_spawn_cleanup(asx_region_id region, asx_task_poll_fn poll_fn, void *user_data,
+                                  asx_task_id *out_id) {
+    return task_spawn_impl(region, poll_fn, user_data, out_id, 1);
+}
+
 asx_status asx_task_admission_status(asx_task_id id) {
     asx_task_slot *t;
     asx_status st = asx_task_slot_lookup(id, &t);
@@ -1291,9 +1321,10 @@ void asx_task_refuse_admission_internal(asx_task_slot *t, asx_region_slot *r, as
     asx_region_settle_internal(region);
 }
 
-asx_status asx_task_spawn_captured(asx_region_id region, asx_task_poll_fn poll_fn,
-                                   uint32_t state_size, asx_task_state_dtor_fn state_dtor,
-                                   asx_task_id *out_id, void **out_state) {
+static asx_status task_spawn_captured_impl(asx_region_id region, asx_task_poll_fn poll_fn,
+                                           uint32_t state_size, asx_task_state_dtor_fn state_dtor,
+                                           asx_task_id *out_id, void **out_state,
+                                           int cleanup_only) {
     asx_region_slot *r;
     asx_task_slot *t;
     asx_status st;
@@ -1305,13 +1336,17 @@ asx_status asx_task_spawn_captured(asx_region_id region, asx_task_poll_fn poll_f
 
     st = asx_region_slot_lookup(region, &r);
     if (st != ASX_OK) return st;
-    if (!asx_region_can_accept_work(r->state)) return ASX_E_REGION_CLOSED;
+    if (r->poisoned) return ASX_E_REGION_POISONED;
+    if (!(cleanup_only ? asx_region_can_accept_cleanup_work(r->state)
+                       : asx_region_can_accept_work(r->state))) {
+        return ASX_E_REGION_CLOSED;
+    }
 
     captured = asx_region_capture_alloc(r, state_size, &old_capture_used);
     if (captured == NULL) return ASX_E_RESOURCE_EXHAUSTED;
     memset(captured, 0, state_size);
 
-    st = asx_task_spawn(region, poll_fn, captured, out_id);
+    st = task_spawn_impl(region, poll_fn, captured, out_id, cleanup_only);
     if (st != ASX_OK) {
         r->capture_used = old_capture_used;
         return st;
@@ -1328,6 +1363,18 @@ asx_status asx_task_spawn_captured(asx_region_id region, asx_task_poll_fn poll_f
     t->captured_dtor = state_dtor;
     *out_state = captured;
     return ASX_OK;
+}
+
+asx_status asx_task_spawn_captured(asx_region_id region, asx_task_poll_fn poll_fn,
+                                   uint32_t state_size, asx_task_state_dtor_fn state_dtor,
+                                   asx_task_id *out_id, void **out_state) {
+    return task_spawn_captured_impl(region, poll_fn, state_size, state_dtor, out_id, out_state, 0);
+}
+
+asx_status asx_task_spawn_cleanup_captured(asx_region_id region, asx_task_poll_fn poll_fn,
+                                           uint32_t state_size, asx_task_state_dtor_fn state_dtor,
+                                           asx_task_id *out_id, void **out_state) {
+    return task_spawn_captured_impl(region, poll_fn, state_size, state_dtor, out_id, out_state, 1);
 }
 
 asx_status asx_task_get_state(asx_task_id id, asx_task_state *out_state) {

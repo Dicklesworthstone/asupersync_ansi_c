@@ -15,6 +15,7 @@ use std::path::Path;
 use asupersync::lab::{LabConfig, LabRuntime};
 use asupersync::record::FinalizerEscalation;
 use asupersync::record::finalizer::{FINALIZER_POLL_BUDGET, FINALIZER_TIME_BUDGET_NANOS};
+use asupersync::record::region::RegionState;
 use asupersync::runtime::RuntimeConfig;
 use asupersync::supervision::{BackoffStrategy, SupervisionConfig};
 use asupersync::time::TimerWheelConfig;
@@ -200,6 +201,27 @@ pub fn constants(crate_dir: &Path, rev: &str) -> Result<Value, String> {
         ));
     }
     let mut doc = Doc(Map::new());
+
+    // Fixed admission policy, evaluated through the linked Rust crate.
+    // These are direct predicate witnesses, not LabRuntime DSL executions.
+    for (name, state) in [
+        ("Open", RegionState::Open),
+        ("Closing", RegionState::Closing),
+        ("Draining", RegionState::Draining),
+        ("Finalizing", RegionState::Finalizing),
+        ("Closed", RegionState::Closed),
+    ] {
+        doc.put(
+            &format!("region_state.{name}.can_accept_work"),
+            json!(state.can_accept_work()),
+            &format!("RegionState::{name}.can_accept_work()"),
+        );
+        doc.put(
+            &format!("region_state.{name}.can_accept_cleanup_work"),
+            json!(state.can_accept_cleanup_work()),
+            &format!("RegionState::{name}.can_accept_cleanup_work()"),
+        );
+    }
 
     // CancelKind: declaration order from the source; each variant's values
     // from the linked crate (its serde name, discriminant, severity and the

@@ -41,6 +41,7 @@ void asx_cleanup_init(asx_cleanup_stack *stack) {
     }
     stack->count = 0;
     stack->drained = 0;
+    stack->draining = 0;
 }
 
 asx_status asx_cleanup_push(asx_cleanup_stack *stack, asx_cleanup_fn fn, void *user_data,
@@ -48,6 +49,7 @@ asx_status asx_cleanup_push(asx_cleanup_stack *stack, asx_cleanup_fn fn, void *u
     uint32_t idx;
 
     if (stack == NULL || fn == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (stack->draining) return ASX_E_INVALID_STATE;
 
     if (stack->drained && stack->count == 0) {
         /* Allow deterministic reuse after a prior full drain. */
@@ -90,23 +92,23 @@ asx_status asx_cleanup_pop(asx_cleanup_stack *stack, asx_cleanup_handle handle) 
 }
 
 void asx_cleanup_drain(asx_cleanup_stack *stack) {
-    uint32_t i;
     if (stack == NULL) return;
-    if (stack->drained) return;
+    if (stack->drained || stack->draining) return;
+    stack->draining = 1;
 
-    /* Drain in LIFO order: highest index first */
-    i = stack->count;
-    while (i > 0) {
+    /* Retire each entry before calling it: recursive drain must not call
+     * it again, and callback-time pops may tighten the remaining depth. */
+    while (stack->count > 0u) {
+        uint32_t i = --stack->count;
+        asx_cleanup_fn fn = stack->fns[i];
+        void *data = stack->data[i];
         /* ASX_CHECKPOINT_WAIVER: bounded by count <= ASX_CLEANUP_STACK_CAPACITY */
-        i--;
-        if (stack->fns[i] != NULL) {
-            stack->fns[i](stack->data[i]);
-            stack->fns[i] = NULL;
-            stack->data[i] = NULL;
-        }
+        stack->fns[i] = NULL;
+        stack->data[i] = NULL;
+        if (fn != NULL) fn(data);
     }
 
-    stack->count = 0;
+    stack->draining = 0;
     stack->drained = 1;
 }
 

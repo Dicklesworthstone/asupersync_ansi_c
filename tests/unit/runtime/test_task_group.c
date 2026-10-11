@@ -23,6 +23,7 @@ static void setup(void) {
     asx_runtime_config cfg;
     asx_runtime_hooks hooks;
     asx_status st;
+    if (asx_runtime_is_initialized(&g_rt)) asx_runtime_shutdown(&g_rt);
     asx_runtime_config_init(&cfg);
     st = asx_runtime_hooks_init(&hooks);
     if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);

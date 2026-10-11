@@ -222,8 +222,11 @@ static void test_monitor_stale_runtime_fails_closed(void) {
     asx_monitor_report report;
     asx_evidence_sink sink;
 
-    MUST_OK(asx_runtime_init_default(&a));
-    MUST_OK(asx_runtime_init_default(&b));
+    ASSERT(asx_runtime_init_default(&a) == ASX_OK, "first runtime initialized");
+    /* Intentionally retain a's generation across a raw kernel reset so
+     * this test exercises stale-object diagnostics, not conflicting init. */
+    asx_runtime_reset();
+    ASSERT(asx_runtime_init_default(&b) == ASX_OK, "replacement runtime initialized");
     asx_monitor_policy_init_default(&policy);
     MUST_OK(asx_monitor_evaluate(&a, &policy, &report, &sink));
 

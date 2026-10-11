@@ -4128,6 +4128,9 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
         it_fail("scenario seed must be an unsigned integer", NULL);
         return ASX_E_INVALID_ARGUMENT;
     }
+    /* Each scenario owns its bootstrap object. End the previous scenario
+     * explicitly; initialization must not reset someone else's runtime. */
+    asx_runtime_shutdown(&g_rt);
     asx_runtime_config_init(&cfg);
     st = asx_runtime_hooks_init(&hooks);
     if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);

@@ -18,6 +18,7 @@
 #include <asx/asx_status.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
+#include <asx/core/cleanup.h>
 #include <asx/core/outcome.h>
 
 #ifdef __cplusplus
@@ -162,6 +163,27 @@ ASX_API ASX_MUST_USE asx_status asx_region_open_child(asx_region_id parent,
  * See: API_MISUSE_CATALOG.md § Region Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_region_close(asx_region_id id);
 
+/* Register a synchronous region finalizer. Callbacks run exactly once in
+ * reverse registration order after child tasks/regions complete, before
+ * checking leftover obligations. Registration requires an OPEN, unpoisoned
+ * region, a non-NULL callback and output handle. Returns the region lookup
+ * error, ASX_E_REGION_CLOSED, ASX_E_REGION_POISONED, or
+ * ASX_E_RESOURCE_EXHAUSTED when ASX_CLEANUP_STACK_CAPACITY is reached.
+ * The handle belongs to this region; user_data is borrowed and must remain
+ * valid until the callback runs or is unregistered. Callbacks may resolve
+ * obligations and spawn explicit cleanup tasks, whose completion delays
+ * closure. They must return normally; this API supplies no async barrier. */
+ASX_API ASX_MUST_USE asx_status asx_region_register_finalizer(asx_region_id id, asx_cleanup_fn fn,
+                                                              void *user_data,
+                                                              asx_cleanup_handle *out_handle);
+
+/* Cancel a pending finalizer without running it. The handle must come from
+ * registration in this same region. Returns ASX_E_NOT_FOUND once the entry
+ * has run, was removed, or was replaced; a stale region fails lookup.
+ * May also be used during finalization to cancel a later callback. */
+ASX_API ASX_MUST_USE asx_status asx_region_unregister_finalizer(asx_region_id id,
+                                                                asx_cleanup_handle handle);
+
 /* Query the current state of a region.
  *
  * Preconditions: out_state must not be NULL; id must be a valid handle.
@@ -228,7 +250,7 @@ ASX_API ASX_MUST_USE asx_status asx_region_contain_fault(asx_region_id id, asx_s
  * Preconditions: region must be OPEN and not poisoned; poll_fn must
  *   not be NULL; out_id must not be NULL.
  * Postconditions: on success, *out_id holds a valid task handle in
- *   PENDING state; task is queued for scheduling.
+ *   CREATED state; task is queued for scheduling.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if poll_fn or
  *   out_id is NULL, ASX_E_NOT_FOUND if region is invalid,
  *   ASX_E_STALE_HANDLE if generation mismatch,
@@ -240,6 +262,19 @@ ASX_API ASX_MUST_USE asx_status asx_region_contain_fault(asx_region_id id, asx_s
  * See: API_MISUSE_CATALOG.md § Task Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn,
                                                void *user_data, asx_task_id *out_id);
+
+/* Spawn required cleanup work. Unlike ordinary spawn, accepts OPEN or
+ * FINALIZING regions. Only FINALIZING cleanup bypasses the region's
+ * max_tasks limit; the physical task arena limit still applies.
+ * Other errors and borrowed user_data ownership match asx_task_spawn.
+ * Work spawned by a task in cancellation cleanup inherits its deadline,
+ * cost quota and priority, with an unbounded poll quota: the parent's
+ * cleanup poll quota bounds only the parent's own drain.
+ * Region drain waits for these tasks and does not re-cancel work admitted
+ * during FINALIZING. Explicit task cancellation still applies normally. */
+ASX_API ASX_MUST_USE asx_status asx_task_spawn_cleanup(asx_region_id region,
+                                                       asx_task_poll_fn poll_fn, void *user_data,
+                                                       asx_task_id *out_id);
 
 /* Spawn a task with captured state allocated from the region arena.
  * The returned state pointer is stable for the task lifetime and is
@@ -262,6 +297,13 @@ ASX_API ASX_MUST_USE asx_status asx_task_spawn_captured(asx_region_id region,
                                                         uint32_t state_size,
                                                         asx_task_state_dtor_fn state_dtor,
                                                         asx_task_id *out_id, void **out_state);
+
+/* Region-owned captured state for cleanup-only work. Admission matches
+ * asx_task_spawn_cleanup; capture/destructor ownership and failure atomicity
+ * match asx_task_spawn_captured. Both output pointers are required. */
+ASX_API ASX_MUST_USE asx_status asx_task_spawn_cleanup_captured(
+    asx_region_id region, asx_task_poll_fn poll_fn, uint32_t state_size,
+    asx_task_state_dtor_fn state_dtor, asx_task_id *out_id, void **out_state);
 
 /* -------------------------------------------------------------------
  * Budgets (deadlines, poll quotas, cost quotas)

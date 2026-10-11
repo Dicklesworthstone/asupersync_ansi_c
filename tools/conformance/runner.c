@@ -43,6 +43,7 @@
 #include <asx/asx_config.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
+#include <asx/core/transition.h>
 #include <asx/runtime/lab.h>
 #include <asx/runtime/runtime.h>
 #include <asx/time/timer_wheel.h>
@@ -705,6 +706,17 @@ static void ck_build(void) {
 
     g_ck_n = 0;
     g_ck_overflow = 0;
+
+    /* Evaluate the actual C policy against linked-Rust predicate captures. */
+    for (i = 0; i < (uint32_t)(sizeof(k_region_states) / sizeof(k_region_states[0])); i++) {
+        asx_region_state state = (asx_region_state)k_region_states[i].c;
+        (void)snprintf(key, sizeof(key), "region_state.%s.can_accept_work",
+                       k_region_states[i].rust);
+        ck_bool(key, asx_region_can_accept_work(state));
+        (void)snprintf(key, sizeof(key), "region_state.%s.can_accept_cleanup_work",
+                       k_region_states[i].rust);
+        ck_bool(key, asx_region_can_accept_cleanup_work(state));
+    }
 
     /* CancelKind: C's declaration order, by Rust name, then each kind. */
     order[0] = '\0';

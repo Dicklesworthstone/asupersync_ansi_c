@@ -785,7 +785,8 @@ void asx_lab_admit_pending(void) {
                 /* Rust's admit_spawn_record_in: a region that no longer
                  * accepts work refuses the spawn before the task table is
                  * touched (SpawnError::RegionClosed). */
-                if (!asx_region_can_accept_work(r->state)) {
+                if (!(t->cleanup_only ? asx_region_can_accept_cleanup_work(r->state)
+                                      : asx_region_can_accept_work(r->state))) {
                     asx_task_refuse_admission_internal(t, r, ASX_E_REGION_CLOSED);
                     lab_apply_handle_cancels_for(g_lab_admit[i]);
                     continue;
@@ -796,7 +797,7 @@ void asx_lab_admit_pending(void) {
                  * the record it inserted and refuses the spawn
                  * (SpawnError::RegionAtCapacity); cleanup work in a
                  * Finalizing region is exempt. */
-                if (r->state != ASX_REGION_FINALIZING &&
+                if (!(t->cleanup_only && r->state == ASX_REGION_FINALIZING) &&
                     asx_region_live_admitted_internal(r) > r->limits.max_tasks) {
                     asx_lab_task_retired_internal(t);
                     asx_task_refuse_admission_internal(t, r, ASX_E_ADMISSION_LIMIT);

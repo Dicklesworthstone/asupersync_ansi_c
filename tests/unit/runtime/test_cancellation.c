@@ -34,6 +34,7 @@ static asx_status reset_with_hard_cleanup_bound(void) {
     asx_runtime_config cfg;
     asx_runtime_hooks hooks;
     asx_status st;
+    asx_runtime_shutdown(&rt);
     asx_runtime_config_init(&cfg);
     cfg.cleanup_hard_bound = 1u;
     st = asx_runtime_hooks_init(&hooks);

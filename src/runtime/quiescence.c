@@ -74,6 +74,9 @@ static int asx_region_has_uncancelled_tasks(asx_region_id id) {
         if (!t->alive) continue;
         if (t->region != id) continue;
         if (asx_task_is_terminal(t->state)) continue;
+        if (t->cleanup_only && g_regions[asx_handle_slot(id)].state == ASX_REGION_FINALIZING) {
+            continue;
+        }
         if (!t->cancel_pending) return 1;
     }
 
@@ -215,8 +218,6 @@ asx_status asx_quiescence_check_detailed(asx_region_id id, asx_quiescence_report
  * exhaustion, call it again to continue.
  * ------------------------------------------------------------------- */
 
-static uint32_t g_drain_slots[ASX_MAX_REGIONS];
-
 static asx_status asx_region_set_state(asx_region_id id, asx_region_slot *r, asx_region_state to) {
     asx_status st;
     (void)asx_ghost_check_region_transition(id, r->state, to);
@@ -246,17 +247,18 @@ static asx_status asx_region_finalize_one(asx_region_id id, asx_region_slot *r) 
     }
 
     if (r->state == ASX_REGION_FINALIZING) {
+        /* A callback may resolve an obligation, recursively advancing this
+         * region. Its active drain owns finalization until every callback
+         * has returned, even when the remaining stack is already empty. */
+        if (r->cleanup.draining) return ASX_E_PENDING;
+        asx_cleanup_drain(&r->cleanup);
+        if (r->task_count > 0u) return ASX_E_QUIESCENCE_TASKS_LIVE;
+
         st = asx_region_obligations_resolved(id);
         if (st != ASX_OK) return st;
 
         /* Ghost linearity monitor: check for leaked obligations before close */
         (void)asx_ghost_check_obligation_leaks(id);
-
-        /* Drain cleanup stack in LIFO order before closing. Finalizers are
-         * allowed to spawn cleanup tasks in FINALIZING, so we must confirm
-         * the region is still task-free before sealing it CLOSED. */
-        asx_cleanup_drain(&r->cleanup);
-        if (r->task_count > 0u) return ASX_E_QUIESCENCE_TASKS_LIVE;
 
         st = asx_region_set_state(id, r, ASX_REGION_CLOSED);
         if (st != ASX_OK) return st;
@@ -301,27 +303,32 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
     uint32_t i;
     uint32_t live;
     int need_cancel = 0;
+    uint32_t drain_slots[ASX_MAX_REGIONS];
+    asx_region_id drain_regions[ASX_MAX_REGIONS];
 
     if (budget == NULL) return ASX_E_INVALID_ARGUMENT;
 
     st = asx_region_slot_lookup(id, &r);
     if (st != ASX_OK) return st;
     if (r->state == ASX_REGION_CLOSED) return ASX_OK;
+    if (r->cleanup.draining) return ASX_E_PENDING;
 
-    n = asx_region_subtree_internal(id, g_drain_slots, ASX_MAX_REGIONS);
+    /* Call-local: a finalizer may drain an unrelated region recursively. */
+    n = asx_region_subtree_internal(id, drain_slots, ASX_MAX_REGIONS);
 
     /* Step 1: close every open region in the subtree (parent-first). */
     for (i = 0; i < n; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
-        asx_region_slot *rs = &g_regions[g_drain_slots[i]];
+        asx_region_slot *rs = &g_regions[drain_slots[i]];
+        drain_regions[i] = asx_region_handle_for_slot(drain_slots[i]);
         if (rs->state == ASX_REGION_OPEN) {
-            st = asx_region_set_state(asx_region_handle_for_slot(g_drain_slots[i]), rs,
+            st = asx_region_set_state(asx_region_handle_for_slot(drain_slots[i]), rs,
                                       ASX_REGION_CLOSING);
             if (st != ASX_OK) return st;
             need_cancel = 1;
         }
         if (rs->task_count > 0u &&
-            asx_region_has_uncancelled_tasks(asx_region_handle_for_slot(g_drain_slots[i]))) {
+            asx_region_has_uncancelled_tasks(asx_region_handle_for_slot(drain_slots[i]))) {
             need_cancel = 1;
         }
     }
@@ -335,22 +342,28 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
     live = 0;
     for (i = 0; i < n; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
-        live += g_regions[g_drain_slots[i]].task_count;
+        asx_region_slot *rs;
+        if (asx_region_slot_lookup(drain_regions[i], &rs) == ASX_OK) live += rs->task_count;
     }
     if (live > 0u) {
         st = asx_scheduler_run(id, budget);
         if (st != ASX_OK) return st;
         for (i = 0; i < n; i++) {
             ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
-            if (g_regions[g_drain_slots[i]].task_count > 0u) return ASX_E_QUIESCENCE_TASKS_LIVE;
+            asx_region_slot *rs;
+            if (asx_region_slot_lookup(drain_regions[i], &rs) == ASX_OK && rs->task_count > 0u) {
+                return ASX_E_QUIESCENCE_TASKS_LIVE;
+            }
         }
     }
 
-    /* Step 4: finalize bottom-up so children close before parents. */
+    /* Step 4: finalize bottom-up so children close before parents. Validate
+     * the original handles: callbacks may recycle a closed sibling's slot. */
     for (i = n; i > 0u; i--) {
         ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
-        uint32_t slot = g_drain_slots[i - 1u];
-        st = asx_region_finalize_one(asx_region_handle_for_slot(slot), &g_regions[slot]);
+        asx_region_slot *rs;
+        if (asx_region_slot_lookup(drain_regions[i - 1u], &rs) != ASX_OK) continue;
+        st = asx_region_finalize_one(drain_regions[i - 1u], rs);
         if (st != ASX_OK) return st;
     }
 

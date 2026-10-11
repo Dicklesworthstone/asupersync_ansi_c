@@ -76,6 +76,16 @@ edit changed_value.json '.constants["timer.max_duration_ns"].value = 86400000000
 run_case changed_value_fails nonzero 'FAIL timer\.max_duration_ns: rust=86400000000000' \
     "$WORK/changed_value.json"
 
+edit ordinary_finalizing.json '.constants["region_state.Finalizing.can_accept_work"].value = true'
+run_case ordinary_finalizing_admission_drift_fails nonzero \
+    'FAIL region_state\.Finalizing\.can_accept_work: rust=true c=false' \
+    "$WORK/ordinary_finalizing.json"
+
+edit cleanup_finalizing.json '.constants["region_state.Finalizing.can_accept_cleanup_work"].value = false'
+run_case cleanup_finalizing_admission_drift_fails nonzero \
+    'FAIL region_state\.Finalizing\.can_accept_cleanup_work: rust=false c=true' \
+    "$WORK/cleanup_finalizing.json"
+
 edit stale_known.json '.constants["lab.default.panic_on_obligation_leak"].value = false'
 run_case stale_known_entry_fails nonzero \
     'FAIL lab\.default\.panic_on_obligation_leak: .*now equals rust' "$WORK/stale_known.json"

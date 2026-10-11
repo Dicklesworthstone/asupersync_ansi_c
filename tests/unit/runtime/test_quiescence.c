@@ -72,7 +72,44 @@ static void cleanup_spawn_immediate_task(void *ctx) {
 
     if (spawn == NULL) return;
     spawn->task_id = ASX_INVALID_ID;
-    spawn->spawn_status = asx_task_spawn(spawn->region, poll_complete, NULL, &spawn->task_id);
+    spawn->spawn_status =
+        asx_task_spawn_cleanup(spawn->region, poll_complete, NULL, &spawn->task_id);
+}
+
+typedef struct {
+    int *polls;
+    int *drops;
+} captured_cleanup_state;
+
+typedef struct {
+    cleanup_spawn_task_ctx spawn;
+    int polls;
+    int drops;
+} captured_cleanup_ctx;
+
+static asx_status poll_captured_cleanup(void *data, asx_task_id self) {
+    captured_cleanup_state *state = (captured_cleanup_state *)data;
+    (void)self;
+    (*state->polls)++;
+    return ASX_OK;
+}
+
+static void drop_captured_cleanup(void *data, uint32_t size) {
+    captured_cleanup_state *state = (captured_cleanup_state *)data;
+    if (size == sizeof(*state)) (*state->drops)++;
+}
+
+static void finalizer_spawn_captured_cleanup(void *data) {
+    captured_cleanup_ctx *ctx = (captured_cleanup_ctx *)data;
+    captured_cleanup_state *state = NULL;
+    ctx->spawn.spawn_status =
+        asx_task_spawn_cleanup_captured(ctx->spawn.region, poll_captured_cleanup, sizeof(*state),
+                                        drop_captured_cleanup, &ctx->spawn.task_id,
+                                        (void **)&state);
+    if (ctx->spawn.spawn_status == ASX_OK) {
+        state->polls = &ctx->polls;
+        state->drops = &ctx->drops;
+    }
 }
 
 static void log_child_summary(const char *label, asx_region_id parent,
@@ -198,6 +235,7 @@ TEST(region_drain_finalizer_spawned_task_requires_followup_drain) {
     asx_cleanup_handle handle = ASX_CLEANUP_INVALID;
     cleanup_spawn_task_ctx spawn_ctx;
     asx_task_state task_state;
+    asx_outcome outcome;
     asx_budget budget;
 
     asx_runtime_reset();
@@ -208,7 +246,7 @@ TEST(region_drain_finalizer_spawned_task_requires_followup_drain) {
     spawn_ctx.region = rid;
     spawn_ctx.spawn_status = ASX_E_INVALID_STATE;
     spawn_ctx.task_id = ASX_INVALID_ID;
-    ASSERT_EQ(asx_cleanup_push(&region->cleanup, cleanup_spawn_immediate_task, &spawn_ctx, &handle),
+    ASSERT_EQ(asx_region_register_finalizer(rid, cleanup_spawn_immediate_task, &spawn_ctx, &handle),
               ASX_OK);
 
     budget = asx_budget_from_polls(8);
@@ -224,6 +262,8 @@ TEST(region_drain_finalizer_spawned_task_requires_followup_drain) {
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
     ASSERT_EQ(asx_task_get_state(spawn_ctx.task_id, &task_state), ASX_OK);
     ASSERT_EQ(task_state, ASX_TASK_COMPLETED);
+    ASSERT_EQ(asx_task_get_outcome(spawn_ctx.task_id, &outcome), ASX_OK);
+    ASSERT_EQ(asx_outcome_severity_of(&outcome), ASX_OUTCOME_OK);
     ASSERT_EQ(region->state, ASX_REGION_CLOSED);
     ASSERT_EQ(asx_quiescence_check(rid), ASX_OK);
 }
@@ -239,7 +279,8 @@ TEST(finalizing_region_allows_cleanup_task_spawn) {
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
     region->state = ASX_REGION_FINALIZING;
 
-    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_E_REGION_CLOSED);
+    ASSERT_EQ(asx_task_spawn_cleanup(rid, poll_complete, NULL, &tid), ASX_OK);
     ASSERT_EQ(region->task_count, 1u);
 }
 
@@ -255,12 +296,41 @@ TEST(finalizing_region_allows_captured_cleanup_task_spawn) {
     ASSERT_EQ(asx_region_slot_lookup(rid, &region), ASX_OK);
     region->state = ASX_REGION_FINALIZING;
 
-    ASSERT_EQ(asx_task_spawn_captured(rid, poll_complete, sizeof(*captured), NULL, &tid,
-                                      (void **)&captured),
+    ASSERT_EQ(asx_task_spawn_cleanup_captured(rid, poll_complete, sizeof(*captured), NULL, &tid,
+                                              (void **)&captured),
               ASX_OK);
     ASSERT_TRUE(captured != NULL);
     ASSERT_EQ(*captured, 0u);
     ASSERT_EQ(region->task_count, 1u);
+}
+
+TEST(public_finalizer_captured_cleanup_executes_and_drops_once) {
+    captured_cleanup_ctx ctx;
+    asx_cleanup_handle handle;
+    asx_budget budget;
+    asx_outcome outcome;
+    asx_runtime_reset();
+    memset(&ctx, 0, sizeof(ctx));
+    ASSERT_EQ(asx_region_open(&ctx.spawn.region), ASX_OK);
+    ASSERT_EQ(asx_region_register_finalizer(ctx.spawn.region, finalizer_spawn_captured_cleanup,
+                                            &ctx, &handle),
+              ASX_OK);
+    budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_region_drain(ctx.spawn.region, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
+    ASSERT_EQ(ctx.spawn.spawn_status, ASX_OK);
+    ASSERT_EQ(ctx.polls, 0);
+    ASSERT_EQ(ctx.drops, 0);
+    ASSERT_EQ(asx_region_drain(ctx.spawn.region, &budget), ASX_OK);
+    ASSERT_EQ(ctx.polls, 1);
+    ASSERT_EQ(ctx.drops, 1);
+    ASSERT_EQ(asx_task_get_outcome(ctx.spawn.task_id, &outcome), ASX_OK);
+    ASSERT_EQ(asx_outcome_severity_of(&outcome), ASX_OUTCOME_OK);
+    ASSERT_EQ(asx_quiescence_check(ctx.spawn.region), ASX_OK);
+    ASSERT_EQ(asx_region_drain(ctx.spawn.region, &budget), ASX_OK);
+    ASSERT_EQ(ctx.polls, 1);
+    ASSERT_EQ(ctx.drops, 1);
+    asx_runtime_reset();
+    ASSERT_EQ(ctx.drops, 1);
 }
 
 TEST(finalizing_region_still_rejects_obligation_reserve) {
@@ -1165,7 +1235,335 @@ TEST(drain_full_lifecycle_tasks_obligations_cleanup) {
     ASSERT_EQ(asx_quiescence_check(rid), ASX_OK);
 }
 
+/* Admission expectations are the pinned Rust RegionState predicates
+ * (record/region.rs:140-151). State injection exercises transient phases;
+ * the finalizer tests below reach FINALIZING through the public close path. */
+TEST(task_spawn_admission_matrix) {
+    unsigned state;
+    unsigned cleanup;
+    unsigned captured;
+    for (state = ASX_REGION_OPEN; state <= ASX_REGION_CLOSED; state++) {
+        for (cleanup = 0u; cleanup < 2u; cleanup++) {
+            for (captured = 0u; captured < 2u; captured++) {
+                asx_region_id rid;
+                asx_region_slot *r;
+                asx_task_id tid = ASX_INVALID_ID;
+                void *data = NULL;
+                asx_status st;
+                int accepts =
+                    state == ASX_REGION_OPEN || (cleanup && state == ASX_REGION_FINALIZING);
+                asx_runtime_reset();
+                ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+                ASSERT_EQ(asx_region_slot_lookup(rid, &r), ASX_OK);
+                r->state = (asx_region_state)state;
+                if (captured) {
+                    st = cleanup
+                             ? asx_task_spawn_cleanup_captured(rid, poll_complete, 4u, NULL, &tid,
+                                                               &data)
+                             : asx_task_spawn_captured(rid, poll_complete, 4u, NULL, &tid, &data);
+                } else {
+                    st = cleanup ? asx_task_spawn_cleanup(rid, poll_complete, NULL, &tid)
+                                 : asx_task_spawn(rid, poll_complete, NULL, &tid);
+                }
+                ASSERT_EQ(st, accepts ? ASX_OK : ASX_E_REGION_CLOSED);
+                ASSERT_EQ(r->task_count, accepts ? 1u : 0u);
+                ASSERT_EQ(r->capture_used, accepts && captured ? 8u : 0u);
+                if (!accepts) {
+                    ASSERT_EQ(tid, ASX_INVALID_ID);
+                    ASSERT_TRUE(data == NULL);
+                }
+            }
+        }
+    }
+}
+
+TEST(cleanup_spawn_limits_and_failure_atomicity) {
+    asx_region_id rid;
+    asx_region_slot *r;
+    asx_region_limits limits;
+    asx_task_id tid = ASX_INVALID_ID;
+    void *data = NULL;
+    uint32_t i;
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(rid, &r), ASX_OK);
+    ASSERT_EQ(asx_region_get_limits(rid, &limits), ASX_OK);
+    limits.max_tasks = 0u;
+    ASSERT_EQ(asx_region_set_limits(rid, &limits), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_cleanup(rid, poll_complete, NULL, &tid), ASX_E_ADMISSION_LIMIT);
+    ASSERT_EQ(asx_task_spawn_cleanup_captured(rid, poll_complete, 4u, NULL, &tid, &data),
+              ASX_E_ADMISSION_LIMIT);
+    ASSERT_EQ(r->capture_used, 0u);
+    ASSERT_EQ(r->task_count, 0u);
+    ASSERT_EQ(tid, ASX_INVALID_ID);
+    ASSERT_TRUE(data == NULL);
+
+    r->state = ASX_REGION_FINALIZING;
+    ASSERT_EQ(asx_task_spawn_cleanup_captured(rid, poll_complete,
+                                              ASX_REGION_CAPTURE_ARENA_BYTES + 1u, NULL, &tid,
+                                              &data),
+              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(r->capture_used, 0u);
+    for (i = 0u; i < ASX_MAX_TASKS; i++) {
+        ASSERT_EQ(asx_task_spawn_cleanup(rid, poll_complete, NULL, &tid), ASX_OK);
+    }
+    tid = ASX_INVALID_ID;
+    ASSERT_EQ(asx_task_spawn_cleanup_captured(rid, poll_complete, 4u, NULL, &tid, &data),
+              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(r->task_count, ASX_MAX_TASKS);
+    ASSERT_EQ(r->capture_used, 0u);
+    ASSERT_EQ(tid, ASX_INVALID_ID);
+    ASSERT_TRUE(data == NULL);
+}
+
+TEST(cleanup_spawn_invalid_arguments_and_poison) {
+    asx_region_id rid;
+    asx_task_id tid = ASX_INVALID_ID;
+    void *data = NULL;
+    asx_runtime_reset();
+    ASSERT_EQ(asx_task_spawn_cleanup(ASX_INVALID_ID, poll_complete, NULL, &tid), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_cleanup(rid, NULL, NULL, &tid), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_task_spawn_cleanup(rid, poll_complete, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_task_spawn_cleanup_captured(rid, poll_complete, 0u, NULL, &tid, &data),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_task_spawn_cleanup_captured(rid, poll_complete, 4u, NULL, &tid, NULL),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_poison(rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_cleanup(rid, poll_complete, NULL, &tid), ASX_E_REGION_POISONED);
+    ASSERT_EQ(asx_task_spawn_cleanup_captured(rid, poll_complete, 4u, NULL, &tid, &data),
+              ASX_E_REGION_POISONED);
+    ASSERT_EQ(tid, ASX_INVALID_ID);
+    ASSERT_TRUE(data == NULL);
+}
+
+typedef struct {
+    asx_region_id region;
+    asx_region_id other;
+    asx_obligation_id obligation;
+    asx_status commit;
+    asx_status recursive_drain;
+    asx_status other_drain;
+    asx_region_state after_commit;
+    int calls;
+} public_finalizer_ctx;
+
+static void finalizer_resolve_and_drain(void *data) {
+    public_finalizer_ctx *ctx = (public_finalizer_ctx *)data;
+    asx_budget budget = asx_budget_from_polls(8u);
+    ctx->calls++;
+    ctx->commit = asx_obligation_commit(ctx->obligation);
+    if (asx_region_get_state(ctx->region, &ctx->after_commit) != ASX_OK) {
+        ctx->after_commit = ASX_REGION_OPEN;
+    }
+    ctx->recursive_drain = asx_region_drain(ctx->region, &budget);
+    ctx->other_drain = asx_region_drain(ctx->other, &budget);
+}
+
+TEST(public_finalizer_resolves_obligation_before_close_and_handles_reentrancy) {
+    public_finalizer_ctx ctx;
+    asx_region_id parent;
+    asx_region_id child;
+    asx_cleanup_handle handle;
+    asx_budget budget;
+    asx_region_state state;
+    int remaining_calls = 0;
+    asx_runtime_reset();
+    memset(&ctx, 0, sizeof(ctx));
+    ASSERT_EQ(asx_region_open(&ctx.region), ASX_OK);
+    parent = ctx.region;
+    ASSERT_EQ(asx_region_open_child(ctx.region, &child), ASX_OK);
+    ASSERT_EQ(asx_region_open(&ctx.other), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(child, &ctx.obligation), ASX_OK);
+    ctx.region = child;
+    ASSERT_EQ(asx_region_register_finalizer(child, cleanup_mark, &remaining_calls, &handle),
+              ASX_OK);
+    ASSERT_EQ(asx_region_register_finalizer(child, finalizer_resolve_and_drain, &ctx, &handle),
+              ASX_OK);
+    budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_region_drain(parent, &budget), ASX_OK);
+    ASSERT_EQ(ctx.commit, ASX_OK);
+    ASSERT_EQ(ctx.after_commit, ASX_REGION_FINALIZING);
+    ASSERT_EQ(ctx.recursive_drain, ASX_E_PENDING);
+    ASSERT_EQ(ctx.other_drain, ASX_OK);
+    ASSERT_EQ(ctx.calls, 1);
+    ASSERT_EQ(remaining_calls, 1);
+    ASSERT_EQ(asx_region_get_state(parent, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_quiescence_check(ctx.region), ASX_OK);
+    ASSERT_EQ(asx_region_drain(parent, &budget), ASX_OK);
+    ASSERT_EQ(ctx.calls, 1);
+}
+
+TEST(public_finalizer_capacity_unregistration_and_errors) {
+    asx_region_id rid;
+    asx_cleanup_handle handle = ASX_CLEANUP_INVALID;
+    asx_cleanup_handle old_handle;
+    asx_budget budget;
+    uint32_t i;
+    int calls = 0;
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_register_finalizer(ASX_INVALID_ID, cleanup_mark, &calls, &handle),
+              ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_register_finalizer(rid, NULL, &calls, &handle), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_register_finalizer(rid, cleanup_mark, &calls, NULL),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_region_register_finalizer(rid, cleanup_mark, &calls, &old_handle), ASX_OK);
+    ASSERT_EQ(asx_region_unregister_finalizer(rid, old_handle), ASX_OK);
+    for (i = 0u; i < ASX_CLEANUP_STACK_CAPACITY; i++) {
+        ASSERT_EQ(asx_region_register_finalizer(rid, cleanup_mark, &calls, &handle), ASX_OK);
+    }
+    ASSERT_EQ(asx_region_unregister_finalizer(rid, old_handle), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_region_register_finalizer(rid, cleanup_mark, &calls, &handle),
+              ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_region_unregister_finalizer(rid, handle), ASX_OK);
+    budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    ASSERT_EQ(calls, ASX_CLEANUP_STACK_CAPACITY - 1u);
+    ASSERT_EQ(asx_region_register_finalizer(rid, cleanup_mark, &calls, &handle),
+              ASX_E_REGION_CLOSED);
+    ASSERT_EQ(asx_region_unregister_finalizer(rid, handle), ASX_E_NOT_FOUND);
+}
+
+typedef struct {
+    asx_region_id other;
+    asx_cancel_reason reason;
+    asx_status status;
+    int calls;
+} finalizer_cancel_ctx;
+
+static void finalizer_cancel_other_tree(void *data) {
+    finalizer_cancel_ctx *ctx = (finalizer_cancel_ctx *)data;
+    ctx->calls++;
+    ctx->status = asx_region_cancel(ctx->other, &ctx->reason, NULL);
+}
+
+TEST(public_finalizer_nested_cancel_preserves_outer_subtree) {
+    finalizer_cancel_ctx ctx;
+    asx_region_id parent;
+    asx_region_id first;
+    asx_region_id second;
+    asx_region_id other_children[2];
+    asx_cleanup_handle handle;
+    uint32_t children = 0u;
+    uint32_t i;
+    asx_runtime_reset();
+    memset(&ctx, 0, sizeof(ctx));
+    ASSERT_EQ(asx_region_open(&parent), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(parent, &first), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(parent, &second), ASX_OK);
+    ASSERT_EQ(asx_region_open(&ctx.other), ASX_OK);
+    /* R1 has four region slots. Exercise nested cancellation there too;
+     * with six available slots, the second tree overwrites every entry of
+     * the original three-region propagation scratch in the old code. */
+    for (i = 4u; i < ASX_MAX_REGIONS && children < 2u; i++) {
+        ASSERT_EQ(asx_region_open_child(ctx.other, &other_children[children]), ASX_OK);
+        children++;
+    }
+    ctx.reason.kind = ASX_CANCEL_USER;
+    ctx.reason.origin_region = parent;
+    ctx.reason.origin_task = ASX_INVALID_ID;
+    /* Cancel visits the last child first; its callback must not replace
+     * the outer walk before the older sibling has been finalized. */
+    ASSERT_EQ(asx_region_register_finalizer(second, finalizer_cancel_other_tree, &ctx, &handle),
+              ASX_OK);
+    ASSERT_EQ(asx_region_cancel(parent, &ctx.reason, NULL), ASX_OK);
+    ASSERT_EQ(ctx.calls, 1);
+    ASSERT_EQ(ctx.status, ASX_OK);
+    ASSERT_EQ(asx_quiescence_check(first), ASX_OK);
+    ASSERT_EQ(asx_quiescence_check(second), ASX_OK);
+    ASSERT_EQ(asx_quiescence_check(parent), ASX_OK);
+    for (i = 0u; i < children; i++) { ASSERT_EQ(asx_quiescence_check(other_children[i]), ASX_OK); }
+    ASSERT_EQ(asx_quiescence_check(ctx.other), ASX_OK);
+}
+
+#ifndef ASX_DEBUG_QUARANTINE
+typedef struct {
+    asx_region_id replacement;
+    asx_task_id task;
+    asx_task_id first_task;
+    asx_status open_status;
+    asx_status spawn_status;
+    asx_status join_status;
+    int polls;
+} finalizer_recycle_ctx;
+
+static asx_status poll_replacement_region(void *data, asx_task_id self) {
+    finalizer_recycle_ctx *ctx = (finalizer_recycle_ctx *)data;
+    (void)self;
+    ctx->polls++;
+    return ASX_OK;
+}
+
+static void finalizer_recycle_closed_sibling(void *data) {
+    finalizer_recycle_ctx *ctx = (finalizer_recycle_ctx *)data;
+    asx_outcome outcome;
+    ctx->join_status = asx_task_join(ctx->first_task, &outcome);
+    ctx->open_status = asx_region_open(&ctx->replacement);
+    if (ctx->open_status == ASX_OK) {
+        ctx->spawn_status =
+            asx_task_spawn(ctx->replacement, poll_replacement_region, ctx, &ctx->task);
+    }
+}
+
+TEST(public_finalizer_recycled_sibling_does_not_extend_outer_drain) {
+    finalizer_recycle_ctx ctx;
+    asx_region_id parent, first, second, extra;
+    asx_task_id second_task;
+    asx_cleanup_handle handle;
+    asx_region_state state;
+    asx_budget budget;
+    asx_outcome outcome;
+    uint32_t i;
+    asx_runtime_reset();
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.replacement = ASX_INVALID_ID;
+    ctx.task = ASX_INVALID_ID;
+    ctx.spawn_status = ASX_E_PENDING;
+    ASSERT_EQ(asx_region_open(&parent), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(parent, &first), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(parent, &second), ASX_OK);
+    for (i = 3u; i < ASX_MAX_REGIONS; i++) { ASSERT_EQ(asx_region_open(&extra), ASX_OK); }
+    ASSERT_EQ(asx_task_spawn(first, poll_complete, NULL, &ctx.first_task), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(second, poll_complete, NULL, &second_task), ASX_OK);
+    /* The first task completes before its sibling. Retire its joinable
+     * record in the sibling's finalizer, then recycle the closed region
+     * for an unrelated root with live work while the outer scheduler runs. */
+    ASSERT_EQ(asx_region_register_finalizer(second, finalizer_recycle_closed_sibling, &ctx,
+                                            &handle),
+              ASX_OK);
+    budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_region_drain(parent, &budget), ASX_OK);
+    ASSERT_EQ(ctx.join_status, ASX_OK);
+    ASSERT_EQ(ctx.open_status, ASX_OK);
+    ASSERT_EQ(ctx.spawn_status, ASX_OK);
+    ASSERT_EQ(asx_handle_slot(ctx.replacement), asx_handle_slot(first));
+    ASSERT_EQ(asx_region_get_state(parent, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_region_get_state(first, &state), ASX_E_STALE_HANDLE);
+    ASSERT_EQ(asx_region_get_state(ctx.replacement, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_REGION_OPEN);
+    ASSERT_EQ(ctx.polls, 0);
+    budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_scheduler_run(ctx.replacement, &budget), ASX_OK);
+    ASSERT_EQ(ctx.polls, 1);
+    ASSERT_EQ(asx_task_get_outcome(ctx.task, &outcome), ASX_OK);
+    ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
+}
+#endif
+
 int main(void) {
+    RUN_TEST(task_spawn_admission_matrix);
+    RUN_TEST(cleanup_spawn_limits_and_failure_atomicity);
+    RUN_TEST(cleanup_spawn_invalid_arguments_and_poison);
+    RUN_TEST(public_finalizer_resolves_obligation_before_close_and_handles_reentrancy);
+    RUN_TEST(public_finalizer_capacity_unregistration_and_errors);
+    RUN_TEST(public_finalizer_captured_cleanup_executes_and_drops_once);
+    RUN_TEST(public_finalizer_nested_cancel_preserves_outer_subtree);
+#ifndef ASX_DEBUG_QUARANTINE
+    RUN_TEST(public_finalizer_recycled_sibling_does_not_extend_outer_drain);
+#endif
     fprintf(stderr, "=== test_quiescence ===\n");
 
     asx_runtime_reset();

@@ -23,6 +23,7 @@ static asx_status setup_with_cleanup_bound(uint32_t hard_bound) {
     asx_runtime_config cfg;
     asx_runtime_hooks hooks;
     asx_status st;
+    asx_runtime_shutdown(&g_rt);
     asx_runtime_config_init(&cfg);
     cfg.cleanup_hard_bound = hard_bound;
     st = asx_runtime_hooks_init(&hooks);

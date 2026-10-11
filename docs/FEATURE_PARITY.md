@@ -2,7 +2,7 @@
 
 > **Bead:** `bd-296.3`
 > **Status:** Semantic-unit parity tracker with acceptance-test mapping
-> **Last updated:** 2026-10-10 (bd-9kll.1.8) - status cells re-derived from evidence; retired the 2026-03-12 conformance claim
+> **Last updated:** 2026-10-11 (bd-9kll.3.4, bd-9kll.3.5) - public synchronous finalizers and explicit cleanup admission implemented; remaining parity gaps retained
 
 This matrix tracks canonical semantic units, their source-of-truth extraction status, and required acceptance coverage before parity can be declared complete.
 
@@ -25,6 +25,32 @@ This matrix tracks canonical semantic units, their source-of-truth extraction st
 Evidence cited in status cells: unit test files under `tests/`, fixture names
 under `fixtures/rust_reference_v2/`, and CI run 38051289151 (all jobs passed
 at commit `cd69958`; see section 5).
+
+The 2026-10-11 lifecycle implementation adds public region finalizer
+registration/unregistration and separate ordinary/cleanup spawn APIs, including
+captured cleanup state. Ordinary admission is Open-only; cleanup admission is
+Open or Finalizing, with the region task-limit exception only in Finalizing.
+Unit tests exercise every state and both spawn forms, deferred admission,
+cleanup-budget inheritance, failure atomicity, callback-before-ledger ordering,
+exactly-once reentrant cleanup, and cleanup task execution through region close
+(`tests/unit/runtime/test_quiescence.c`, `tests/unit/runtime/test_lab_dispatch.c`,
+`tests/unit/runtime/test_budget_obligation.c`, `tests/unit/core/test_cleanup.c`).
+These are C runtime tests. DSL v2 still cannot express finalizer registration or
+cleanup spawning, so the existing lifecycle fixture cells do not establish
+Rust parity for those additions. Separately, ten admission predicates are
+captured by calling the pinned Rust `RegionState` methods and compared with the
+actual C predicates by `make check-rust-constants`; planted ordinary/cleanup
+Finalizing drift is rejected. This verifies the fixed admission policy, not
+end-to-end finalizer execution. Body-driven close outcomes, finalization-time
+leak-policy auditing and masked, serialized async finalizers remain open in
+`bd-9kll.3.4`; the admission fixture requirement remains open in `bd-9kll.3.5`.
+
+The interim K18 guard also rejects a second initialization before resetting
+the active singleton. `conflicting_init_preserves_live_runtime_and_destination`
+in `tests/unit/runtime/test_rt.c` verifies preserved runtime/destination bytes,
+hooks, a live obligation and an actually executed task after the refusal.
+Explicit teardown permits reinitialization. Independent runtime-owned storage
+and cross-runtime handle isolation remain open in `bd-9kll.3.20`.
 
 ## 2. Canonical Unit Matrix
 

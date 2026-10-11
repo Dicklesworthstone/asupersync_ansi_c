@@ -232,6 +232,8 @@ static void test_inspect_stale_runtime_fails_closed(void) {
 
     MUST_OK(asx_runtime_init_default(&a));
     MUST_OK(asx_region_open(&region));
+    /* A raw reset invalidates A's generation without rewriting its object. */
+    asx_runtime_reset();
     MUST_OK(asx_runtime_init_default(&b));
 
     MUST_OK(asx_inspect(&a, &rpt));

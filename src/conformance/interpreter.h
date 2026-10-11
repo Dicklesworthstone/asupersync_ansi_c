@@ -26,7 +26,9 @@
  * failed must_fail expectation returns a non-OK status with a message in
  * `error`; *out_root is then unset and the run proves nothing.
  *
- * Resets the (global) runtime first. `in` must outlive the call. */
+ * Shuts down its previous scenario runtime before initializing a fresh
+ * singleton. An independently active runtime makes initialization fail.
+ * `in` must outlive the call. */
 ASX_MUST_USE asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario,
                                             asx_json_doc *out, uint32_t *out_root, char *error,
                                             size_t error_cap);

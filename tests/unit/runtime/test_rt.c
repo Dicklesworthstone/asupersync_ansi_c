@@ -310,6 +310,62 @@ TEST(init_generation_increments) {
     asx_runtime_shutdown(&b);
 }
 
+static asx_status poll_preserved_task(void *data, asx_task_id self) {
+    int *polls = (int *)data;
+    (void)self;
+    (*polls)++;
+    return ASX_OK;
+}
+
+TEST(conflicting_init_preserves_live_runtime_and_destination) {
+    asx_runtime a, b, before_a, before_b;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks, after_hooks;
+    asx_region_id region;
+    asx_task_id task;
+    asx_obligation_id obligation;
+    asx_obligation_state obligation_state;
+    asx_budget run;
+    asx_outcome outcome;
+    int polls = 0;
+    asx_runtime_reset();
+    make_valid_config(&cfg);
+    make_valid_hooks(&hooks);
+    MUST_OK(asx_runtime_init(&a, &cfg, &hooks));
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, poll_preserved_task, &polls, &task), ASX_OK);
+    ASSERT_EQ(asx_obligation_reserve(region, &obligation), ASX_OK);
+    memset(&b, 0, sizeof(b));
+    b.generation = 42u;
+    memcpy(&before_a, &a, sizeof(a));
+    memcpy(&before_b, &b, sizeof(b));
+    cfg.size = 0u;
+    ASSERT_EQ(asx_runtime_init(&b, &cfg, &hooks), ASX_E_INVALID_ARGUMENT);
+    make_valid_config(&cfg);
+    hooks.allocator.malloc_fn = NULL;
+    ASSERT_EQ(asx_runtime_init(&b, &cfg, &hooks), ASX_E_INVALID_ARGUMENT);
+    make_valid_hooks(&hooks);
+    ASSERT_EQ(asx_runtime_init(&b, &cfg, &hooks), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_runtime_init(&a, &cfg, &hooks), ASX_E_INVALID_STATE);
+    ASSERT_EQ(memcmp(&a, &before_a, sizeof(a)), 0);
+    ASSERT_EQ(memcmp(&b, &before_b, sizeof(b)), 0);
+    ASSERT_TRUE(asx_runtime_is_initialized(&a));
+    ASSERT_EQ(asx_runtime_get_hooks_from(&a, &after_hooks), ASX_OK);
+    ASSERT_TRUE(after_hooks.allocator.malloc_fn == hooks.allocator.malloc_fn);
+    ASSERT_EQ(asx_obligation_get_state(obligation, &obligation_state), ASX_OK);
+    ASSERT_EQ(obligation_state, ASX_OBLIGATION_RESERVED);
+    ASSERT_EQ(asx_obligation_commit(obligation), ASX_OK);
+    run = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_scheduler_run(region, &run), ASX_OK);
+    ASSERT_EQ(polls, 1);
+    ASSERT_EQ(asx_task_get_outcome(task, &outcome), ASX_OK);
+    ASSERT_EQ(asx_outcome_severity_of(&outcome), ASX_OUTCOME_OK);
+    asx_runtime_shutdown(&a);
+    MUST_OK(asx_runtime_init(&b, &cfg, &hooks));
+    ASSERT_TRUE(asx_runtime_is_initialized(&b));
+    asx_runtime_shutdown(&b);
+}
+
 TEST(stale_runtime_reports_uninitialized_after_new_init) {
     asx_runtime a, b;
     asx_runtime_config out;
@@ -317,6 +373,7 @@ TEST(stale_runtime_reports_uninitialized_after_new_init) {
     MUST_OK(asx_runtime_init_default(&a));
     ASSERT_TRUE(asx_runtime_is_initialized(&a));
 
+    asx_runtime_reset(); /* Explicit teardown permits the new singleton. */
     MUST_OK(asx_runtime_init_default(&b));
     ASSERT_FALSE(asx_runtime_is_initialized(&a));
     ASSERT_TRUE(asx_runtime_is_initialized(&b));
@@ -361,6 +418,7 @@ TEST(stale_shutdown_does_not_tear_down_active_runtime) {
     asx_runtime_config out;
 
     MUST_OK(asx_runtime_init_default(&a));
+    asx_runtime_reset();
     MUST_OK(asx_runtime_init_default(&b));
 
     ASSERT_FALSE(asx_runtime_is_initialized(&a));
@@ -1269,6 +1327,7 @@ TEST(full_roundtrip) {
 /* ------------------------------------------------------------------ */
 
 int main(void) {
+    RUN_TEST(conflicting_init_preserves_live_runtime_and_destination);
     fprintf(stderr, "=== test_rt ===\n");
 
     /* Config validation */

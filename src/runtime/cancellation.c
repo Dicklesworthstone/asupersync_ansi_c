@@ -520,6 +520,7 @@ asx_status asx_region_cancel(asx_region_id region, const asx_cancel_reason *reas
     uint32_t r;
     uint32_t n;
     uint32_t count;
+    asx_region_id settle_regions[ASX_MAX_REGIONS];
     asx_status st;
 
     if (reason == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -536,6 +537,8 @@ asx_status asx_region_cancel(asx_region_id region, const asx_cancel_reason *reas
         asx_region_slot *rs = &g_regions[slot];
         asx_region_id rid = asx_region_handle_for_slot(slot);
         asx_trace_payload payload;
+
+        settle_regions[r] = rid;
 
         if (r == 0u) {
             g_propagate_reasons[0] = *reason;
@@ -569,12 +572,15 @@ asx_status asx_region_cancel(asx_region_id region, const asx_cancel_reason *reas
     count = cancel_subtree_tasks(n);
 
     /* Third pass: regions already without live work finalize now; the
-     * others close as their last task completes. */
+     * others close as their last task completes. A finalizer may cancel
+     * another tree, reusing propagation scratch, so use call-local handles
+     * and validate them again in case a closed slot has been reclaimed. */
     for (r = 0; r < n; r++) {
         ASX_CHECKPOINT_WAIVER("bounded: n <= ASX_MAX_REGIONS");
-        asx_region_slot *rs = &g_regions[g_propagate_slots[r]];
+        asx_region_slot *rs;
+        if (asx_region_slot_lookup(settle_regions[r], &rs) != ASX_OK) continue;
         if (rs->task_count == 0u && rs->child_count == 0u) {
-            asx_region_advance_internal(asx_region_handle_for_slot(g_propagate_slots[r]));
+            asx_region_advance_internal(settle_regions[r]);
         }
     }
 

@@ -140,6 +140,7 @@ typedef struct {
      * value it returns after acknowledging a cancel that came after its
      * first poll; others are cancellation-dominant. */
     uint8_t spawned_in_poll;
+    uint8_t cleanup_only; /* explicit cleanup admission, preserved through the lab mailbox */
     uint8_t first_polled;
     uint8_t cancel_before_first_poll;
     /* Lab dispatch (lab_dispatch.c): scheduled on a lane; the priority of
@@ -638,6 +639,9 @@ void asx_waker_finish_block_internal(void);
 
 /* Reset private hook installation state during runtime teardown. */
 void asx_runtime_hooks_reset_internal(void);
+
+/* Invalidate the runtime object bootstrap token during explicit raw reset. */
+void asx_runtime_object_reset_internal(void);
 
 /* ------------------------------------------------------------------ */
 /* Constants pinned to Rust's (asupersync 5e60b1c4c). The values are     */

@@ -22,6 +22,7 @@ static asx_status setup_with_policy(asx_leak_response response,
     asx_runtime_config cfg;
     asx_runtime_hooks hooks;
     asx_status st;
+    if (asx_runtime_is_initialized(&g_rt)) asx_runtime_shutdown(&g_rt);
     asx_runtime_config_init(&cfg);
     cfg.leak_response = response;
     cfg.leak_escalation = escalation;
@@ -331,6 +332,7 @@ typedef struct {
     uint32_t polls;
     uint32_t quota_a;
     uint32_t quota_b;
+    int cleanup_only;
 } inherit_state;
 
 static asx_status poll_inheritor(void *ud, asx_task_id self) {
@@ -342,13 +344,15 @@ static asx_status poll_inheritor(void *ud, asx_task_id self) {
     if (s->polls == 1u) {
         if (asx_task_cancel(self, ASX_CANCEL_USER) != ASX_OK) return ASX_E_INVALID_STATE;
         if (asx_checkpoint(self, &cr) != ASX_OK || !cr.cancelled) return ASX_E_INVALID_STATE;
-        if (asx_task_spawn(s->region, poll_complete, NULL, &child) != ASX_OK) {
+        if ((s->cleanup_only ? asx_task_spawn_cleanup(s->region, poll_complete, NULL, &child)
+                             : asx_task_spawn(s->region, poll_complete, NULL, &child)) != ASX_OK) {
             return ASX_E_INVALID_STATE;
         }
         if (asx_task_get_budget(child, &b) == ASX_OK) s->quota_a = b.poll_quota;
         return ASX_E_PENDING;
     }
-    if (asx_task_spawn(s->region, poll_complete, NULL, &child) != ASX_OK)
+    if ((s->cleanup_only ? asx_task_spawn_cleanup(s->region, poll_complete, NULL, &child)
+                         : asx_task_spawn(s->region, poll_complete, NULL, &child)) != ASX_OK)
         return ASX_E_INVALID_STATE;
     if (asx_task_get_budget(child, &b) == ASX_OK) s->quota_b = b.poll_quota;
     return ASX_OK;
@@ -375,6 +379,26 @@ TEST(spawned_child_inherits_the_quota_until_the_cleanup_phase_starts) {
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
     ASSERT_EQ(s.polls, 2u);
     ASSERT_EQ(s.quota_a, 4u); /* 5 minus the poll that spawned it */
+    ASSERT_EQ(s.quota_b, UINT32_MAX);
+}
+
+TEST(cleanup_spawn_inherits_without_the_parents_cleanup_poll_quota) {
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget tb;
+    asx_budget run;
+    inherit_state s;
+    setup();
+    memset(&s, 0, sizeof(s));
+    s.cleanup_only = 1;
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    s.region = r;
+    tb = asx_budget_from_polls(5);
+    ASSERT_EQ(asx_task_spawn_with_budget(r, poll_inheritor, &s, &tb, &t), ASX_OK);
+    run = asx_budget_from_polls(20);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+    ASSERT_EQ(s.polls, 2u);
+    ASSERT_EQ(s.quota_a, 4u);
     ASSERT_EQ(s.quota_b, UINT32_MAX);
 }
 
@@ -994,6 +1018,7 @@ int main(void) {
     RUN_TEST(cost_charge_the_quota_cannot_cover_is_refused_and_cancels_nothing);
     RUN_TEST(consume_cost_rejects_stale_handle);
     RUN_TEST(spawned_child_inherits_the_quota_until_the_cleanup_phase_starts);
+    RUN_TEST(cleanup_spawn_inherits_without_the_parents_cleanup_poll_quota);
     RUN_TEST(spawn_budget_from_a_task_keeps_its_priority_and_clamps_the_rest);
     RUN_TEST(nested_region_budgets_equal_their_meet);
     RUN_TEST(budgets_tighten_down_the_region_tree);

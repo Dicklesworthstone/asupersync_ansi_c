@@ -6,6 +6,7 @@
 
 #include "test_harness.h"
 #include <asx/core/cleanup.h>
+#include <string.h>
 
 /* ---- Test helpers ---- */
 
@@ -233,6 +234,52 @@ TEST(cleanup_user_data_passed_through) {
 
 TEST(cleanup_pop_null_stack) { ASSERT_EQ(asx_cleanup_pop(NULL, 0), ASX_E_INVALID_ARGUMENT); }
 
+typedef struct {
+    asx_cleanup_stack *stack;
+    asx_cleanup_handle self;
+    asx_cleanup_handle other;
+    int calls;
+    asx_status self_pop;
+    asx_status other_pop;
+    asx_status push;
+    asx_cleanup_handle pushed;
+} reentrant_cleanup;
+
+static void drain_from_callback(void *data) {
+    reentrant_cleanup *r = (reentrant_cleanup *)data;
+    r->calls++;
+    r->self_pop = asx_cleanup_pop(r->stack, r->self);
+    /* Bound the recursion even in a broken implementation. */
+    if (r->calls == 1) asx_cleanup_drain(r->stack);
+    r->other_pop = asx_cleanup_pop(r->stack, r->other);
+    r->push = asx_cleanup_push(r->stack, increment_counter, &r->calls, &r->pushed);
+}
+
+TEST(cleanup_recursive_drain_retires_before_callback) {
+    asx_cleanup_stack s;
+    reentrant_cleanup r;
+    int other_calls = 0;
+    asx_cleanup_init(&s);
+    memset(&r, 0, sizeof(r));
+    r.stack = &s;
+    r.pushed = ASX_CLEANUP_INVALID;
+    ASSERT_EQ(asx_cleanup_push(&s, increment_counter, &other_calls, &r.other), ASX_OK);
+    ASSERT_EQ(asx_cleanup_push(&s, drain_from_callback, &r, &r.self), ASX_OK);
+    asx_cleanup_drain(&s);
+    ASSERT_EQ(r.calls, 1);
+    ASSERT_EQ(r.self_pop, ASX_E_NOT_FOUND);
+    ASSERT_EQ(r.other_pop, ASX_OK);
+    ASSERT_EQ(other_calls, 0);
+    ASSERT_EQ(r.push, ASX_E_INVALID_STATE);
+    ASSERT_EQ(r.pushed, ASX_CLEANUP_INVALID);
+    ASSERT_EQ(asx_cleanup_pending(&s), 0u);
+    asx_cleanup_drain(&s);
+    ASSERT_EQ(r.calls, 1);
+    ASSERT_EQ(asx_cleanup_push(&s, increment_counter, &other_calls, &r.other), ASX_OK);
+    asx_cleanup_drain(&s);
+    ASSERT_EQ(other_calls, 1);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_cleanup ===\n");
     RUN_TEST(cleanup_init_empty);
@@ -254,6 +301,7 @@ int main(void) {
     RUN_TEST(cleanup_init_null_is_safe);
     RUN_TEST(cleanup_user_data_passed_through);
     RUN_TEST(cleanup_pop_null_stack);
+    RUN_TEST(cleanup_recursive_drain_retires_before_callback);
     TEST_REPORT();
     return test_failures;
 }

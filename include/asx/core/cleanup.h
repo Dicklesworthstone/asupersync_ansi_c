@@ -45,8 +45,9 @@ typedef struct {
     asx_cleanup_fn fns[ASX_CLEANUP_STACK_CAPACITY];
     void *data[ASX_CLEANUP_STACK_CAPACITY];
     uint16_t generations[ASX_CLEANUP_STACK_CAPACITY];
-    uint32_t count;   /* stack depth / high-water slot + 1 */
-    uint32_t drained; /* 1 after drain has run */
+    uint32_t count;    /* stack depth / high-water slot + 1 */
+    uint32_t drained;  /* 1 after drain has run */
+    uint32_t draining; /* 1 while callbacks run; nested drain is a no-op */
 } asx_cleanup_stack;
 
 /* Initialize a cleanup stack to empty state. */
@@ -54,6 +55,7 @@ ASX_API void asx_cleanup_init(asx_cleanup_stack *stack);
 
 /* Register a cleanup action. Returns a handle for later pop/cancel.
  * Returns ASX_E_RESOURCE_EXHAUSTED if the stack is full.
+ * Returns ASX_E_INVALID_STATE during a drain (no callback-time pushes).
  * The cleanup_fn will be called during drain if not popped first. */
 ASX_API ASX_MUST_USE asx_status asx_cleanup_push(asx_cleanup_stack *stack, asx_cleanup_fn fn,
                                                  void *user_data, asx_cleanup_handle *out_handle);
@@ -67,7 +69,8 @@ ASX_API ASX_MUST_USE asx_status asx_cleanup_pop(asx_cleanup_stack *stack,
 /* Drain all remaining (un-popped) entries in LIFO order.
  * Each cleanup function is called exactly once. After drain,
  * the stack is empty. Calling drain on an already-drained
- * stack is a no-op. */
+ * stack is a no-op, as is a recursive drain from a cleanup callback.
+ * A callback may pop another pending entry to cancel that action. */
 ASX_API void asx_cleanup_drain(asx_cleanup_stack *stack);
 
 /* Query the number of un-popped entries remaining. */

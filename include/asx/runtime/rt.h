@@ -55,7 +55,7 @@ typedef struct {
  * Performs the full bootstrap sequence:
  *   1. Validate config (size field, bounds)
  *   2. Validate hooks (deterministic constraints)
- *   3. Reset all internal state (arenas, scheduler, trace, etc.)
+ *   3. Refuse a conflicting init, then reset internal state
  *   4. Install hooks
  *   5. Mark runtime as initialized
  *
@@ -63,8 +63,13 @@ typedef struct {
  *   config->size must equal sizeof(asx_runtime_config).
  * Postconditions: runtime is initialized and ready for use.
  * Returns ASX_OK on success,
- *   ASX_E_INVALID_ARGUMENT if any pointer is NULL or config->size is wrong,
- *   ASX_E_HOOK_INVALID if hook validation fails.
+ *   ASX_E_INVALID_ARGUMENT for invalid config, pointers or incomplete hooks,
+ *   ASX_E_DETERMINISM_VIOLATION for incompatible deterministic hooks,
+ *   ASX_E_PERMISSION_DENIED for an unsupported I/O backend, or
+ *   ASX_E_INVALID_STATE while a runtime already owns the singleton.
+ * Failed initialization preserves the active runtime and destination bytes.
+ * Shut down the active runtime before initializing another; independent
+ * runtime-owned storage is not implemented yet.
  *
  * Thread-safety: not thread-safe. */
 ASX_API ASX_MUST_USE asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,

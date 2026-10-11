@@ -74,10 +74,11 @@ TEST(region_spawn_after_close_rejected) {
     ASSERT_EQ(asx_task_spawn(rid, poll_ok, NULL, &tid), ASX_E_REGION_CLOSED);
 }
 
-TEST(region_finalizing_admits_work_but_not_strict_spawn) {
-    /* FINALIZING allows task admission (can_accept_work) but rejects
-     * strict admission (can_spawn) used by obligations/child regions. */
-    ASSERT_TRUE(asx_region_can_accept_work(ASX_REGION_FINALIZING));
+TEST(region_finalizing_admits_only_cleanup_work) {
+    /* Rust 5e60b1c4c record/region.rs:140-151: only explicit cleanup
+     * admission may reopen the task barrier during FINALIZING. */
+    ASSERT_TRUE(!asx_region_can_accept_work(ASX_REGION_FINALIZING));
+    ASSERT_TRUE(asx_region_can_accept_cleanup_work(ASX_REGION_FINALIZING));
     ASSERT_TRUE(!asx_region_can_spawn(ASX_REGION_FINALIZING));
 }
 
@@ -279,7 +280,7 @@ int main(void) {
     RUN_TEST(region_double_close_rejected);
     RUN_TEST(region_close_on_invalid_handle_rejected);
     RUN_TEST(region_spawn_after_close_rejected);
-    RUN_TEST(region_finalizing_admits_work_but_not_strict_spawn);
+    RUN_TEST(region_finalizing_admits_only_cleanup_work);
     RUN_TEST(region_closing_and_draining_reject_all_admission);
     RUN_TEST(region_obligation_after_close_rejected);
     RUN_TEST(region_spawn_after_poison_rejected);

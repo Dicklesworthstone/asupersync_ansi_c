@@ -184,11 +184,9 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
     /* Step 2: validate hooks */
     st = asx_runtime_hooks_validate(hooks, ASX_DETERMINISTIC);
     if (st != ASX_OK) return st;
-
+    if (g_active_rt_generation != 0u) return ASX_E_INVALID_STATE;
     /* Step 3: reset all internal state (deterministic clean slate) */
     asx_runtime_reset();
-    g_active_rt_generation = 0u;
-    g_active_io_backend = ASX_IO_BACKEND_GHOST;
 
     /* Step 4: install hooks */
     st = asx_runtime_set_hooks(hooks);
@@ -294,8 +292,6 @@ void asx_runtime_shutdown(asx_runtime *rt) {
         asx_blocking_pool_shutdown();
 #endif
         asx_runtime_reset();
-        g_active_rt_generation = 0u;
-        g_active_io_backend = ASX_IO_BACKEND_GHOST;
     }
     memset(rt, 0, sizeof(*rt));
 }
@@ -453,3 +449,10 @@ asx_io_backend asx_runtime_io_backend(const asx_runtime *rt) {
 }
 
 asx_io_backend asx_runtime_active_io_backend_selected(void) { return g_active_io_backend; }
+
+/* Raw reset is an explicit teardown, including the singleton bootstrap token.
+ * Independent runtime-owned state remains a separate architecture change. */
+void asx_runtime_object_reset_internal(void) {
+    g_active_rt_generation = 0u;
+    g_active_io_backend = ASX_IO_BACKEND_GHOST;
+}

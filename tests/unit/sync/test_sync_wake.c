@@ -37,6 +37,7 @@ static int setup_with_leak_response(asx_leak_response leak_response) {
     asx_runtime_config cfg;
     asx_runtime_hooks hooks;
     asx_status st;
+    if (asx_runtime_is_initialized(&g_rt)) asx_runtime_shutdown(&g_rt);
     asx_runtime_config_init(&cfg);
     cfg.leak_response = leak_response;
     st = asx_runtime_hooks_init(&hooks);

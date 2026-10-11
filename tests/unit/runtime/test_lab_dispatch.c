@@ -25,6 +25,7 @@ static asx_status setup(void) {
     asx_runtime_config cfg;
     asx_runtime_hooks hooks;
     asx_status st;
+    if (asx_runtime_is_initialized(&g_rt)) asx_runtime_shutdown(&g_rt);
     asx_runtime_config_init(&cfg);
     st = asx_runtime_hooks_init(&hooks);
     if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);
@@ -803,6 +804,7 @@ typedef struct {
     asx_region_id into;
     uint32_t spawns;
     int cancel_into; /* cancel `into` right after spawning (synchronously) */
+    int cleanup_only;
     asx_task_id kids[3];
     asx_status spawned[3];
     asx_status pending[3]; /* asx_task_admission_status right after the spawn */
@@ -822,7 +824,9 @@ static asx_status poll_admitter(void *ud, asx_task_id self) {
     uint32_t i;
     (void)self;
     for (i = 0; i < a->spawns; i++) {
-        a->spawned[i] = asx_task_spawn(a->into, poll_counted_kid, NULL, &a->kids[i]);
+        a->spawned[i] = a->cleanup_only
+                            ? asx_task_spawn_cleanup(a->into, poll_counted_kid, NULL, &a->kids[i])
+                            : asx_task_spawn(a->into, poll_counted_kid, NULL, &a->kids[i]);
         a->pending[i] = asx_task_admission_status(a->kids[i]);
     }
     if (a->cancel_into) {
@@ -1105,6 +1109,41 @@ TEST(spawn_into_a_region_closed_before_admission_is_refused) {
     ASSERT_TRUE(asx_runtime_is_quiescent(&g_rt));
 }
 
+TEST(deferred_cleanup_admission_preserves_finalizing_quota_exception) {
+    asx_region_id r;
+    asx_region_id c;
+    asx_region_slot *region;
+    asx_region_limits limits;
+    asx_task_id ta;
+    asx_budget run;
+    asx_outcome outcome;
+    admitter a;
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(3u), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(r, &c), ASX_OK);
+    ASSERT_EQ(asx_region_get_limits(c, &limits), ASX_OK);
+    limits.max_tasks = 0u;
+    ASSERT_EQ(asx_region_set_limits(c, &limits), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(c, &region), ASX_OK);
+    region->state = ASX_REGION_FINALIZING;
+    memset(&a, 0, sizeof(a));
+    a.into = c;
+    a.spawns = 1u;
+    a.cleanup_only = 1;
+    g_kid_polls = 0;
+    ASSERT_EQ(asx_task_spawn(r, poll_admitter, &a, &ta), ASX_OK);
+    run = asx_budget_from_polls(20u);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+    ASSERT_EQ(a.spawned[0], ASX_OK);
+    ASSERT_EQ(a.pending[0], ASX_E_PENDING);
+    ASSERT_EQ(asx_task_admission_status(a.kids[0]), ASX_OK);
+    ASSERT_EQ(g_kid_polls, 1u);
+    ASSERT_EQ(asx_task_get_outcome(a.kids[0], &outcome), ASX_OK);
+    ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
+    ASSERT_EQ(region->state, ASX_REGION_CLOSED);
+}
+
 TEST(admission_status_of_a_bad_handle_is_a_lookup_error) {
     ASSERT_EQ(setup(), ASX_OK);
     ASSERT_TRUE(asx_task_admission_status(ASX_INVALID_ID) != ASX_OK);
@@ -1152,6 +1191,7 @@ int main(void) {
     RUN_TEST(a_permit_registration_past_the_limit_is_refused_at_the_drain);
     RUN_TEST(spawn_limit_is_checked_at_the_next_step_admission);
     RUN_TEST(spawn_into_a_region_closed_before_admission_is_refused);
+    RUN_TEST(deferred_cleanup_admission_preserves_finalizing_quota_exception);
     RUN_TEST(admission_status_of_a_bad_handle_is_a_lookup_error);
     RUN_TEST(use_lab_dispatch_requires_no_live_task);
 
