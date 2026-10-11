@@ -5,6 +5,7 @@
 > **Status:** Reference for what the Rust code does, with a **C status** line in each section saying what the C port implements and where. "spec (Rust) — not implemented in C" means no C code implements that behaviour.
 > **Rust baseline commit:** `5e60b1c4c` (asupersync). Every Rust `file:line` below was re-read at this commit with `git -C /dp/asupersync show 5e60b1c4c:<path>`.
 > **Last verified:** 2026-10-10 (bd-9kll.1.8)
+> **C anchor refresh:** Scheduler, lifecycle, parallel and lab-dispatch anchors below were checked against the merged 2026-10-11 working tree. This refresh supplies source references, not additional Rust execution evidence.
 > **Purpose:** Semantic contracts for the MPSC channel, the hierarchical timer wheel and the multi-worker scheduler, and the C port's status for each.
 
 ---
@@ -426,7 +427,7 @@ TimerHandle { id: u64, generation: u64 }   // wheel.rs:225-228
 
 ## 3. Deterministic Scheduler Semantics
 
-**C status (whole section):** C does not port `three_lane.rs`. Rust parity runs use C's lab dispatch (`src/runtime/lab_dispatch.c`), which ports the Rust `LabRuntime` dispatch with one worker (`lab/runtime.rs` `pop_for_worker`, `:6324-6373`, over `priority.rs` lanes). Outside lab dispatch, `src/runtime/scheduler.c` polls runnable tasks in ascending arena order each round (`scheduler.c:1-22`, loop at `:1386`). The optional parallel profile (`src/runtime/parallel.c`) is a C design of its own, described where relevant below.
+**C status (whole section):** C does not port `three_lane.rs`. Rust parity runs use C's lab dispatch (`src/runtime/lab_dispatch.c`), which ports the Rust `LabRuntime` dispatch with one worker (`lab/runtime.rs` `pop_for_worker`, `:6324-6373`, over `priority.rs` lanes). Outside lab dispatch, `src/runtime/scheduler.c` polls runnable tasks in ascending arena order each round (`scheduler.c:1-22`, loop at `:1424`). The optional parallel profile (`src/runtime/parallel.c`) is a C design of its own, described where relevant below.
 
 ### 3.1 Three-Lane Architecture
 
@@ -447,7 +448,7 @@ The Rust multi-worker scheduler has three priority lanes:
 | `DrainObligations` | Cancel > Timed > Ready (cancel-streak limit doubled, `:6960-6965`) |
 | `DrainRegions` | Cancel > Timed > Ready (cancel-streak limit doubled) |
 
-**C status:** spec (Rust) — not implemented in C. The C lab has a cancel lane and a ready lane and no governor (`src/runtime/lab_dispatch.c:380-400`). Rust's `LabRuntime::pop_for_worker` also checks a timed lane (`lab/runtime.rs:6347-6353`), but in `src/lab` nothing outside tests feeds it: `schedule_timed` (`lab/runtime.rs:6242`) is called only at `:7658` and `:7723`, inside the `#[cfg(test)]` module that starts at `:6691`. `parallel.c` polls its lanes in the order cancel, ready, timed (`src/runtime/parallel.c:709-713`), which differs from Rust's cancel > timed > ready. Rust parity of cancel-lane-first in the lab: `lab-dispatch-cancel-waker-once-001` (a task is dispatched once on the cancel lane, then on the ready lane).
+**C status:** spec (Rust) — not implemented in C. The C lab has a cancel lane and a ready lane and no governor (`src/runtime/lab_dispatch.c:608-628`). Rust's `LabRuntime::pop_for_worker` also checks a timed lane (`lab/runtime.rs:6347-6353`), but in `src/lab` nothing outside tests feeds it: `schedule_timed` (`lab/runtime.rs:6242`) is called only at `:7658` and `:7723`, inside the `#[cfg(test)]` module that starts at `:6691`. `parallel.c` polls its lanes in the order cancel, ready, timed (`src/runtime/parallel.c:713-717`), which differs from Rust's cancel > timed > ready. Rust parity of cancel-lane-first in the lab: `lab-dispatch-cancel-waker-once-001` (a task is dispatched once on the cancel lane, then on the ready lane).
 
 ### 3.2 Scheduler Loop
 
@@ -467,7 +468,7 @@ next_task():
 run_loop_until (:5570): when next_task finds nothing, spin -> yield -> park (section 3.10)
 ```
 
-**C status:** spec (Rust) — not implemented in C. The C lab step (`src/runtime/scheduler.c:1215-1259`) follows `LabRuntime::step_inner` (`lab/runtime.rs:4480-`): drain admissions and commands, draw one RNG value (`lab/runtime.rs:4499`), process timers (`:4509-4511`), then pick a task. C does the same in that order (`scheduler.c:1232-1240`).
+**C status:** spec (Rust) — not implemented in C. The C lab step (`src/runtime/scheduler.c:1239-1289`) follows `LabRuntime::step_inner` (`lab/runtime.rs:4480-`): drain admissions and commands, draw one RNG value (`lab/runtime.rs:4499`), process timers (`:4509-4511`), then pick a task. C does the same in that order (`scheduler.c:1258-1270`).
 
 ### 3.3 Entry Ordering Contracts
 
@@ -493,13 +494,13 @@ Compare:
 
 **Rust source:** `priority.rs:54-75`
 
-**C status:** implemented for the lab's cancel and ready lanes. A `lab_entry` holds `{slot, task_gen, priority, gen}` (`src/runtime/lab_dispatch.c:43-48`); lanes keep entries in push order, which is generation order, and a pop takes the highest-priority group (`lab_dispatch.c:344-378`). Each entry's generation comes from one counter (`:255`, `:309`), so generations never tie and the task-id key is never needed. There are no timed-lane entries in C.
+**C status:** implemented for the lab's cancel and ready lanes. A `lab_entry` holds `{slot, task_gen, priority, gen}` (`src/runtime/lab_dispatch.c:43-48`); lanes keep entries in push order, which is generation order, and a pop takes the highest-priority group (`lab_dispatch.c:566-606`). Each entry's generation comes from one counter (`:439`, `:531`), so generations never tie and the task-id key is never needed. There are no timed-lane entries in C.
 
 ### 3.4 Generation Counter (FIFO Guarantee)
 
 Each `Scheduler` (`priority.rs`, re-exported as `PriorityScheduler` in `scheduler/mod.rs:74`) keeps `next_generation: u64` (`priority.rs:329`), incremented by 1 per insertion (`next_gen`, `priority.rs:485-489`). The global `TimedQueue` keeps its own counter (`global_injector.rs:194-200`).
 
-**C status:** implemented for the lab: one counter `g_lab_next_gen` for both lanes (`src/runtime/lab_dispatch.c:58`, `:255`, `:309`).
+**C status:** implemented for the lab: one counter `g_lab_next_gen` for both lanes (`src/runtime/lab_dispatch.c:85`, `:439`, `:531`).
 
 ### 3.5 RNG-Based Deterministic Tie-Breaking
 
@@ -513,7 +514,7 @@ This is used by the cancel lane (`pop_cancel_with_rng`, `priority.rs:674-685`), 
 
 RNG sources: each `three_lane` worker has `DetRng::new(worker_id)` (`three_lane.rs:2365`) and draws once per `next_task` Phase 2 (`:7014`). The `LabRuntime` has one `DetRng` seeded from the config seed (`lab/runtime.rs:2426`, `lab/config.rs:437-439`) and draws once per step (`lab/runtime.rs:4499`). `DetRng::next_u64` is xorshift64 (`util/det_rng.rs:267-275`).
 
-**C status:** implemented for the lab. `asx_scheduler_use_lab_dispatch` seeds a xorshift64 with the scenario seed and remaps degenerate seeds as `DetRng::new` does (`src/runtime/lab_dispatch.c:210-239`); `lab_pop` picks `group[r % n]` among up to 256 highest-priority entries in generation order (`lab_dispatch.c:344-378`). Per-worker RNGs: not implemented (one worker). Rust parity: `lab-dispatch-tie-break-001` (four tasks contend for a one-permit semaphore at time 0; the seeded tie-break decides which takes it first), `scheduler-yield-interleave-001` (dispatch order follows the seed). Unit tests: `tests/unit/runtime/test_lab_dispatch.c` `rng_replicates_rust_xorshift64`, `ties_are_broken_by_the_step_value_in_generation_order`.
+**C status:** implemented for the lab. `asx_scheduler_use_lab_dispatch` seeds a xorshift64 with the scenario seed (`src/runtime/lab_dispatch.c:410-420`) and remaps degenerate seeds as `DetRng::new` does (`src/runtime/lab_dispatch.c:275-294`); `lab_pop` picks `group[r % n]` among up to 256 highest-priority entries in generation order (`lab_dispatch.c:566-606`). Per-worker RNGs: not implemented (one worker). Rust parity: `lab-dispatch-tie-break-001` (four tasks contend for a one-permit semaphore at time 0; the seeded tie-break decides which takes it first), `scheduler-yield-interleave-001` (dispatch order follows the seed). Unit tests: `tests/unit/runtime/test_lab_dispatch.c` `rng_replicates_rust_xorshift64`, `ties_are_broken_by_the_step_value_in_generation_order`.
 
 ### 3.6 Work Stealing
 
@@ -529,7 +530,7 @@ steal_task(stealers, rng):
   return None
 ```
 
-**C status:** spec (Rust) — not implemented in C. Lab dispatch has one worker. `parallel.c` moves a task to a worker chosen by a per-lane round-robin cursor and counts that as a steal (`parallel_select_worker`, `src/runtime/parallel.c:354-381`); it uses no RNG and not the power-of-two-choices rule.
+**C status:** spec (Rust) — not implemented in C. Lab dispatch has one worker. `parallel.c` moves a task to a worker chosen by a per-lane round-robin cursor and counts that as a steal (`parallel_select_worker`, `src/runtime/parallel.c:358-385`); it uses no RNG and not the power-of-two-choices rule.
 
 ### 3.7 Cancel-Streak Fairness
 
@@ -538,7 +539,7 @@ steal_task(stealers, rng):
 - When the streak reaches the effective limit the cancel lane is skipped (`:6969-6972`); if no other lane has work, Phase 5 dispatches one cancel task and sets the streak to 1 (`:7086-7100`)
 - The streak resets to 0 on a timed or ready dispatch (`:7306-7326`) and after backoff/park (`:5830-5833`)
 
-**C status:** implemented in the lab as `LabRuntime` does it, without governor doubling: the cancel lane is served while the streak is below 16 (`LAB_CANCEL_STREAK_LIMIT`, `src/runtime/lab_dispatch.c:41`), then the ready lane (streak reset to 0), then the cancel lane again with the streak set to 1 (`lab_dispatch.c:380-400`), as in `lab/runtime.rs:6324-6373`. No v2 scenario description mentions the streak limit; whether any fixture reaches 16 consecutive cancel dispatches was not checked. `parallel.c` has its own limit of 16 (`src/runtime/parallel.c:64`, `:917-925`, setter `:1285`).
+**C status:** implemented in the lab as `LabRuntime` does it, without governor doubling: the cancel lane is served while the streak is below 16 (`LAB_CANCEL_STREAK_LIMIT`, `src/runtime/runtime_internal.h:695`), then the ready lane (streak reset to 0), then the cancel lane again with the streak set to 1 (`lab_dispatch.c:608-628`), as in `lab/runtime.rs:6324-6373`. No v2 scenario description mentions the streak limit; whether any fixture reaches 16 consecutive cancel dispatches was not checked. `parallel.c` has its own limit of 16 (`src/runtime/parallel.c:64`, `:934-942`, setter `:1303`).
 
 ### 3.8 Fairness Certificate and Replay
 
@@ -559,7 +560,7 @@ The scheduler produces a `PreemptionFairnessCertificate` (renamed from `Fairness
 | `IntrusiveStack` | Local fast ready (`intrusive.rs:378-`) | LIFO pop for the owner (`:576`), FIFO steal (`:612-`) |
 | `ScheduledSet` | Membership tracking (`priority.rs:84-96`) | Dense generation tags with a `DetHashSet` overflow |
 
-**C status:** the lab lanes are bounded arrays of `LAB_LANE_CAP = 8 * ASX_MAX_TASKS` entries in push order (`src/runtime/lab_dispatch.c:39`, `:51-54`); a full lane makes the run fail with `ASX_E_RESOURCE_EXHAUSTED` instead of dropping an entry (`lab_dispatch.c:27-29`, `:247-250`). No global injector or intrusive stack.
+**C status:** the lab lanes are bounded arrays of `LAB_LANE_CAP = 8 * ASX_MAX_TASKS` entries in push order (`src/runtime/lab_dispatch.c:39`, `:51-54`); a full lane makes the run fail with `ASX_E_RESOURCE_EXHAUSTED` instead of dropping an entry (`lab_dispatch.c:27-29`, `:429-440`). No global injector or intrusive stack.
 
 ### 3.10 Backoff/Park Behavior
 
@@ -573,7 +574,7 @@ When `next_task` finds nothing (`advance_empty_backoff`, `three_lane.rs:5517-552
 
 The park deadline is chosen from the timer-driver, local timed and global timed deadlines (`select_backoff_deadline`, `three_lane.rs:529-545`, called at `:5741-5746`); with no deadline the worker parks without a timeout (`:5814`).
 
-**C status:** spec (Rust) — not implemented in C. When every task is parked, the native C scheduler fires due timers, jumps a virtual clock to the earliest timer, or waits in the reactor hook until the deadline (`src/runtime/scheduler.c:11-19`; wait rounded up to whole ms at `:954`, capped by `ASX_SCHED_MAX_IDLE_WAIT_MS` = 1000, `:55`). The lab run moves the virtual clock to the next timer when nothing is scheduled (`scheduler.c:1304-1310`).
+**C status:** spec (Rust) — not implemented in C. When every task is parked, the native C scheduler fires due timers, jumps a virtual clock to the earliest timer, or waits in the reactor hook until the deadline (`src/runtime/scheduler.c:11-19`; wait converted to whole ms at `:983-1019`, capped by `ASX_SCHED_MAX_IDLE_WAIT_MS` = 1000, `:55`). The lab run moves the virtual clock to the next timer when nothing is scheduled (`scheduler.c:1342-1349`).
 
 ---
 
@@ -588,7 +589,7 @@ The park deadline is chosen from the timer-driver, local timed and global timed 
 | Region closing with channel open | No channel code refers to regions: `mpsc.rs` mentions regions only in a doc comment (`:649`) |
 | Permit dropped unresolved | `TrackedPermit` panics (section 1.9). Base `SendPermit` releases the slot and aborts its runtime obligation with reason `Cancel` (`mpsc.rs:1663-1673`) |
 
-**C status:** cancellation rows implemented (section 1.8). A C channel records its region and requires it to be open at creation (`src/channel/mpsc.c:388-390`); region close does not touch channels (the only channel call in `src/runtime/lifecycle.c` is `asx_channel_reset()` at `:162`). Rust parity: `mpsc-recv-cancel-first-001`.
+**C status:** cancellation rows implemented (section 1.8). A C channel records its region and requires it to be open at creation (`src/channel/mpsc.c:388-390`); region close does not touch channels (the only channel call in `src/runtime/lifecycle.c` is `asx_channel_reset()` at `:187`). Rust parity: `mpsc-recv-cancel-first-001`.
 
 ### 4.2 Timer <-> Cancellation
 
@@ -609,7 +610,7 @@ The park deadline is chosen from the timer-driver, local timed and global timed 
 | No timers pending | The worker parks without a timeout (`three_lane.rs:5814`) |
 | Next timer deadline | Park timeout = time to the nearest timer/timed deadline (`three_lane.rs:5729-5758`) |
 
-**C status:** the lab fires due timers at the start of each step, before the pick (`src/runtime/scheduler.c:1237`), and the native scheduler at the start of each round (`scheduler.c:1379-1384`). C has no timed lane: a woken task is scheduled like any other wake.
+**C status:** the lab fires due timers at the start of each step, before the pick (`src/runtime/scheduler.c:1267`), and the native scheduler at the start of each round (`scheduler.c:1417-1422`). C has no timed lane: a woken task is scheduled like any other wake.
 
 ### 4.4 Channel <-> Scheduler
 
@@ -663,7 +664,7 @@ The generation key orders the heaps; a pop with an RNG hint (Phase 2 of `next_ta
 
 ### 5.2 Determinism Invariants
 
-1. **Same seed -> same execution order:** RNG decisions use `DetRng`: one per `three_lane` worker seeded with the worker id (`three_lane.rs:2365`), one per `LabRuntime` seeded with the config seed (`lab/runtime.rs:2426`). C lab: one xorshift64 seeded with the scenario seed (`src/runtime/lab_dispatch.c:210-239`).
+1. **Same seed -> same execution order:** RNG decisions use `DetRng`: one per `three_lane` worker seeded with the worker id (`three_lane.rs:2365`), one per `LabRuntime` seeded with the config seed (`lab/runtime.rs:2426`). C lab: one xorshift64 seeded with the scenario seed (`src/runtime/lab_dispatch.c:410-423`).
 2. **Same inputs -> same outputs:** a general claim about all hot-path data structures; not verified in this pass.
 3. **Generation monotonicity:** lane generations are `u64` counters incremented by 1 (`priority.rs:485-489`); timer generations use `wrapping_add` (`wheel.rs:551-552`).
 4. **Wrap safety:** timer ids are slab indices and generations wrap (`wheel.rs:550-566`); see section 2.6.
@@ -675,7 +676,7 @@ For deterministic parity with Rust, and the current C status of each:
 
 1. Channel waiter queue MUST be FIFO by arrival with head-only handoff — **implemented** (`src/sync/wait_queue.h:23`, `src/channel/mpsc.c:358-365`).
 2. Equal-deadline timers MUST fire in insertion order — **implemented** in `timer_wheel.c` (`:230-248`) and, for lab sleeps, as (1 ms tick, registration) (`src/runtime/scheduler.c:256-325`); the hierarchical wheel itself is not ported.
-3. Scheduler entries MUST carry a generation from one counter and order by priority then generation — **implemented for the lab's cancel and ready lanes** (`src/runtime/lab_dispatch.c:245-256`, `:344-378`); no timed lane.
+3. Scheduler entries MUST carry a generation from one counter and order by priority then generation — **implemented for the lab's cancel and ready lanes** (`src/runtime/lab_dispatch.c:429-440`, `:566-606`); no timed lane.
 4. RNG MUST be seeded as Rust seeds it — **implemented for the lab's single RNG** (`lab_dispatch.c:210-239`); per-worker RNGs are not implemented.
 5. Work stealing MUST follow `stealing.rs` — **not implemented**.
 6. A fairness certificate MUST produce the same witness hash for the same dispatch counts — **not implemented**.
@@ -711,7 +712,7 @@ For deterministic parity with Rust, and the current C status of each:
 | Failure | Rust detection | Rust result | C (lab dispatch) |
 |---------|-----------|----------|---|
 | Cancel-streak limit hit | `cancel_streak >= effective_limit` (`three_lane.rs:6969-6972`) | Skip cancel lane, try timed/ready; fallback cancel if none | Ready lane first after 16 cancel dispatches (`lab_dispatch.c:380-400`) |
-| No tasks available | All lanes empty | Spin -> yield -> park (section 3.10) | Step dispatches nothing; the run auto-advances the clock or returns (`scheduler.c:1266-1320`) |
+| No tasks available | All lanes empty | Spin -> yield -> park (section 3.10) | Step dispatches nothing; the run auto-advances the clock or returns (`scheduler.c:1270-1324`) |
 | Work steal failure | All stealers empty | Continue to Phase 5 / backoff | Not applicable (one worker) |
 | Shutdown requested | Checked in `run_loop_until` (`three_lane.rs:5601`, `:5647`) | Exit loop | Not applicable |
 
@@ -772,7 +773,7 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 | `sc-governor-meet-001` | MeetDeadlines suggestion reorders timed > cancel | Governor | Not materialized; not implemented in C |
 | `sc-governor-drain-001` | DrainObligations doubles cancel-streak limit | Governor | Not materialized; not implemented in C |
 | `sc-certificate-001` | Identical traces produce identical witness hash | Replay | Not materialized; not implemented in C |
-| `sc-timer-phase0-001` | Expired timers processed before task dispatch | Phase ordering | Not materialized; no v2 fixture named for it (the C lab fires due timers before each pick, `scheduler.c:1237`) |
+| `sc-timer-phase0-001` | Expired timers processed before task dispatch | Phase ordering | Not materialized; no v2 fixture named for it (the C lab fires due timers before each pick, `scheduler.c:1240`) |
 
 ---
 
@@ -816,7 +817,7 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 | `INV-SC-04` | Cancel-streak limit prevents cancellation starvation | Fairness | Lab: 16, no doubling; `parallel.c`: 16 |
 | `INV-SC-05` | Same seed -> same work-steal choices | Determinism | Not implemented |
 | `INV-SC-06` | Identical certificate fields produce identical witness hash | Replay | Not implemented |
-| `INV-SC-07` | Phase 0 (timers) executes before task dispatch | Phase ordering | Lab: due timers fire before the pick (`scheduler.c:1237`) |
+| `INV-SC-07` | Phase 0 (timers) executes before task dispatch | Phase ordering | Lab: due timers fire before the pick (`scheduler.c:1240`) |
 | `INV-SC-08` | Governor suggestion affects lane order but not correctness | Safety | Not implemented (no governor) |
 
 ### 8.4 Coverage Matrix

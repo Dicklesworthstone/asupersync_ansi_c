@@ -1,14 +1,51 @@
 # Reality Check and Bridge Plan: `asx` vs asupersync v0.6.0
 
-> **Current assessment:** 2026-10-11
+> **Audit snapshot:** 2026-10-11
 > **Audited C revision:** `1df1808d51ae5ca90c2fdd0c6a351e77091b9c3c` (`main`)
 > **Pinned Rust authority:** `5e60b1c4c53d62aaddae68de3ee7de4732f1755b`
 > **Verdict:** a working, substantially tested C runtime with a real Rust lab oracle;
 > the complete kernel milestone and release-readiness contract remain unmet.
-> **Reading rule:** this assessment supersedes the earlier current-state findings below.
-> Earlier dates, counts, divergences and line numbers are historical evidence, not present status.
+> **Reading rule:** the implementation update below supersedes the affected audit findings.
+> The remaining assessment is bound to its audited revision; earlier dates, counts,
+> divergences and line numbers are historical evidence, not present status.
 
-## Current assessment: what the evidence actually establishes
+## Implementation update after the audit
+
+The implementation increment in `1972ba5` and `82e26eb` connects the existing cleanup
+machinery to public synchronous finalizer registration and borrowed/captured cleanup-task
+APIs. Ordinary work is admitted only in Open regions; explicit cleanup is admitted in
+Open or Finalizing, with physical arena limits preserved. Finalizers run in LIFO order
+exactly once. Closure waits for their cleanup tasks before auditing reserved obligations.
+Nested drain/cancel traversal retains original handle generations so recycled slots cannot
+pull unrelated replacement work into the old subtree.
+
+Concurrent work integrated from `e47575d` supplies recorded task close outcomes, the
+policy-based region leak audit, `defer_sync`, retry/backoff, and map-reduce short-circuiting.
+The active-runtime initialization guard refuses self or second-object initialization before
+resetting live work; explicit shutdown/raw reset permits a new runtime. This protects the
+current singleton and does not supply independently owned runtime storage. The later
+`d66f6e0` increment checks task lifecycle transitions in every build and propagates refusal
+through scheduler, cancellation, parallel and lab-admission paths. Fresh/reset slot
+initialization remains a direct Created write.
+
+Strict GCC and Clang runs each execute 164 unit binaries successfully. ASan/UBSan and
+each resource class R1/R2/R3 also pass the 164-binary suite; the full invariant,
+C-conformance, vignette and example suites pass. The unchanged Rust scenario corpus still
+compares **131/131**, and live POSIX smoke executes **31/31** without skips. Ten freshly
+captured linked-Rust admission predicates are primitive witnesses, not finalizer DSL
+coverage. Codec append overflow bug `bd-2ozl` is independently reviewed at exact
+`82e26ebc855ca45f16f2a2df343e2ac2d8565659` and closed: the old regression crashed,
+while the guarded append preserves the buffer and permits a subsequent normal append.
+Native 32-bit execution was unavailable in this local increment.
+
+Original K4/K5/K18/K19 acceptance remains open: body-driven close/reason/payload semantics,
+serialized masked asynchronous finalization, actual Rust cleanup/admission DSL witnesses,
+independent runtime storage and cross-runtime handles, and runtime borrow/affinity/determinism
+monitor integration. Granular completed/pending work and revision-bound evidence remain on
+those original Beads. This increment establishes no new performance, physical-device,
+full runtime profile/codec, or release-readiness claim.
+
+## Assessment at the audited revision
 
 The important change since October 8 is that the oracle now runs real code. The C interpreter
 executes scenarios against the runtime, and `twin_run` captures the corresponding pinned Rust
@@ -60,14 +97,14 @@ dashboard reports pass with zero alerts despite the SLO failure; it must not ser
 release-readiness verdict. Diagnose costs and runner variance before changing budgets, and
 retain the baseline's `approval_required` governance.
 
-### Vision checklist, reconciled against current code
+### Vision checklist at the audited revision
 
 `WORKING` means the stated narrow behavior has executed evidence. `PARTIAL` means real code
 exists but a required behavior or proof remains. `UNPROVEN` means the claimed evidence is
 insufficient. `DEFERRED` is explicit scope, not completion. These categories do not form a
 defensible project completion percentage.
 
-| Goal | Promise source | Current status and evidence | Remaining coverage |
+| Goal | Promise source | Audit status and evidence | Remaining coverage |
 |---|---|---|---|
 | V1 Outcome lattice and payload-preserving joins | Plan §6.1 | PARTIAL: severity/left bias tested; public `asx_outcome` lacks reason/panic payload required for full joins | `bd-9kll.3.14`, `.12.1` |
 | V2 Budget algebra and exhaustion | Plan §6.2 | WORKING for tested meet/quota/deadline cases; current oracle detects the old priority defect as a mutant | Broader law witnesses `.2.14`, `.2.8` |
@@ -114,13 +151,13 @@ defensible project completion percentage.
 | V43 Complete public-item/claim evidence inventory | Plan §9.4; parity governance | PARTIAL: semantic-unit/rule maps exist, but no complete machine-checked FeatureUniverse or weekly truth ratchet | `.18.2`–`.18.4` |
 | V44 Adaptive/vertical acceleration | Plan §6.11, §7.9, §19.3 | WORKING as caller-fed/pure instrumentation components; runtime-wide adaptation and research levers remain DEFERRED | `bd-udlh`, `.18.3`; research needs measured EV and parity evidence before promotion |
 
-The 47-row refinement map currently records **28 Implemented, 4 Variant, 14 Partial, 1 Missing**.
+At the audited revision, the 47-row refinement map recorded **28 Implemented, 4 Variant, 14 Partial, 1 Missing**.
 It is a useful rule index, not an estimate that the product is 28/47 complete. Its commit/count
 anchors predate the current 131-fixture corpus, and some Implemented rows explicitly disclose
 important caveats. An inventory row plus a passing fixture is weaker than full precondition,
 postcondition and progress evidence.
 
-### The gaps that matter most
+### Highest-impact gaps found at the audited revision
 
 **Lifecycle closure is still the central semantic blocker.** `src/runtime/quiescence.c` checks
 Reserved obligations before draining the region cleanup stack. Rust's close runs finalizers,
@@ -752,10 +789,10 @@ equal. Two guards:
 - **Anytime-valid monitoring.** Long fuzz campaigns monitor the divergence rate with an e-process
   (p₀ = 1e-6, λ = 0.9, α = 1e-3 for software invariants). They stop on evidence by Ville's
   inequality, with no fixed-horizon multiple-testing problem.
-- **Negative-evidence ledgers.** Keep `docs/progress/conformance-negative-results.md`,
-  `perf-negative-results.md` and `surface-deferrals.md`. Every rejected hypothesis, reverted fix
-  or waived divergence gets an entry with a concrete retry-condition predicate. AGENTS.md requires
-  grepping them before starting parity or perf work.
+- **Negative-evidence ledgers (archived proposal, not implemented).** The earlier plan named
+  docs/progress/conformance-negative-results.md, perf-negative-results.md and surface-deferrals.md
+  for rejected hypotheses and retry conditions. Those proposed ledgers are unavailable in the
+  current checkout, and the current AGENTS.md does not require them. They supply no evidence.
 
 ---
 
@@ -808,7 +845,7 @@ Y*, T*, A*, L*, R*, P*, E*, X*) are referenced by the beads.
     1644), and compile all samples in CI.
   - Resolve the 12 contradictions (CLI, epoll, walking skeleton, multi-thread dispatch, wasm,
     win32, parity claims, resource classes, `make check` vs `check-ci`, e2e counts, the
-    `include/asx/channel` path, stale register rows).
+    nonexistent channel-directory reference (public API: `include/asx/core/channel.h`), stale register rows).
   - Rewrite the "full semantic model" and Rust comparison table claims honestly.
   - Add a generated "Parity status vs asupersync 0.6.0" table, sourced from the oracle report.
   - *Success:* a doc lint compiles the samples and checks the counts. No contradiction remains.
@@ -1336,7 +1373,8 @@ minimization of violations.
 - **G2.** Weekly "reality ratchet" report, generated: per-rule refinement status, per-unit parity
   lower bounds, surface coverage (FeatureUniverse), CI health, open drift deltas. Published as an
   artifact and summarized in the README parity table.
-- **G3.** FeatureUniverse (`tools/surface/feature_universe.json`).
+- **G3.** FeatureUniverse (archived proposed path tools/surface/feature_universe.json;
+  unavailable in the current checkout).
   - Every Rust 0.6.0 public item in kernel-scope modules is marked
     `present|partial|missing|excluded|n/a`, with weights summing to 1.0 per family.
   - Generated by the syn extractor (§4.1).

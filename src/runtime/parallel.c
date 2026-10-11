@@ -808,6 +808,19 @@ static asx_status parallel_return_budget(uint32_t round) {
     return ASX_E_POLL_BUDGET_EXHAUSTED;
 }
 
+/* A task transition refused (asx_task_set_state_internal) stops the run:
+ * the task keeps its state, the workers drain, and the refusal is
+ * returned. */
+static asx_status parallel_return_refused(asx_status st) {
+    uint32_t i;
+    for (i = 0; i < g_config.worker_count;
+         i++) { /* ASX_CHECKPOINT_WAIVER("bounded by ASX_MAX_WORKERS validation") */
+        g_workers[i].lifecycle = ASX_WORKER_DRAINING;
+    }
+    parallel_commit_worker_event(0u);
+    return st;
+}
+
 static asx_status parallel_return_quiescent(uint32_t round) {
     parallel_mark_workers_drained();
     parallel_commit_worker_event(0u);
@@ -976,11 +989,12 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     (t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_CANCEL_REQUESTED ||
                      t->cancel_unmaterialized) &&
                     t->cleanup_polls_remaining == 0) {
-                    asx_task_materialize_cancel_internal(t);
+                    st = asx_task_materialize_cancel_internal(t);
+                    if (st != ASX_OK) return parallel_return_refused(st);
                     if (t->state == ASX_TASK_CANCEL_REQUESTED) {
                         asx_task_state from = t->state;
-                        (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_CANCELLING);
-                        t->state = ASX_TASK_CANCELLING;
+                        st = asx_task_set_state_internal(t, tid, ASX_TASK_CANCELLING);
+                        if (st != ASX_OK) return parallel_return_refused(st);
                         t->cancel_phase = ASX_CANCEL_PHASE_CANCELLING;
                         {
                             asx_status w_st_ =
@@ -993,8 +1007,8 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     }
                     {
                         asx_task_state from = t->state;
-                        (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_FINALIZING);
-                        t->state = ASX_TASK_FINALIZING;
+                        st = asx_task_set_state_internal(t, tid, ASX_TASK_FINALIZING);
+                        if (st != ASX_OK) return parallel_return_refused(st);
                         t->cancel_phase = ASX_CANCEL_PHASE_FINALIZING;
                         {
                             asx_status w_st_ =
@@ -1007,9 +1021,9 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     }
                     {
                         asx_task_state from = t->state;
+                        st = asx_task_set_state_internal(t, tid, ASX_TASK_COMPLETED);
+                        if (st != ASX_OK) return parallel_return_refused(st);
                         asx_task_complete_cx_reason_internal(t);
-                        (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
-                        t->state = ASX_TASK_COMPLETED;
                         t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
                         {
                             asx_status w_st_ =
@@ -1039,9 +1053,9 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
 
                 if (t->state == ASX_TASK_FINALIZING) {
                     asx_task_state from = t->state;
+                    st = asx_task_set_state_internal(t, tid, ASX_TASK_COMPLETED);
+                    if (st != ASX_OK) return parallel_return_refused(st);
                     asx_task_complete_cx_reason_internal(t);
-                    (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
-                    t->state = ASX_TASK_COMPLETED;
                     t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
                     {
                         asx_status w_st_ = asx_cancel_witness_advance(t->cancel_witness,
@@ -1073,8 +1087,8 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                 /* Transition Created → Running */
                 if (t->state == ASX_TASK_CREATED) {
                     asx_task_state from = t->state;
-                    (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_RUNNING);
-                    t->state = ASX_TASK_RUNNING;
+                    st = asx_task_set_state_internal(t, tid, ASX_TASK_RUNNING);
+                    if (st != ASX_OK) return parallel_return_refused(st);
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                    asx_trace_task_transition_aux(from, ASX_TASK_RUNNING));
                 }
@@ -1120,9 +1134,9 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
 
                 if (poll_result == ASX_OK) {
                     asx_task_state from = t->state;
+                    st = asx_task_set_state_internal(t, tid, ASX_TASK_COMPLETED);
+                    if (st != ASX_OK) return parallel_return_refused(st);
                     asx_task_complete_cx_reason_internal(t);
-                    (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
-                    t->state = ASX_TASK_COMPLETED;
                     if (t->cancel_pending) {
                         t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
                         {
@@ -1160,10 +1174,10 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                      * scheduler.c). */
                     int panicked = t->panicked;
                     int was_cancelled = !panicked && asx_task_cancel_dominates_internal(t);
+                    st = asx_task_set_state_internal(t, tid, ASX_TASK_COMPLETED);
+                    if (st != ASX_OK) return parallel_return_refused(st);
                     if (!panicked && !was_cancelled) t->last_error = poll_result;
                     asx_task_complete_cx_reason_internal(t);
-                    (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
-                    t->state = ASX_TASK_COMPLETED;
                     if (t->cancel_pending) {
                         t->cancel_phase = ASX_CANCEL_PHASE_COMPLETED;
                         {
