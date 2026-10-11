@@ -96,6 +96,7 @@ static const char *severity_str(asx_doctor_severity sev) {
     case ASX_DOCTOR_OK: return "OK";
     case ASX_DOCTOR_WARN: return "WARN";
     case ASX_DOCTOR_FAIL: return "FAIL";
+    case ASX_DOCTOR_SKIP: return "SKIP";
     }
     return "??";
 }
@@ -105,6 +106,7 @@ static asx_status validate_doctor_report(const asx_doctor_report *report) {
     uint32_t pass_count = 0u;
     uint32_t warn_count = 0u;
     uint32_t fail_count = 0u;
+    uint32_t skip_count = 0u;
 
     if (report == NULL) return ASX_E_INVALID_ARGUMENT;
     if (report->check_count > ASX_DOCTOR_MAX_CHECKS) return ASX_E_INVALID_ARGUMENT;
@@ -113,11 +115,12 @@ static asx_status validate_doctor_report(const asx_doctor_report *report) {
         case ASX_DOCTOR_OK: pass_count++; break;
         case ASX_DOCTOR_WARN: warn_count++; break;
         case ASX_DOCTOR_FAIL: fail_count++; break;
+        case ASX_DOCTOR_SKIP: skip_count++; break;
         default: return ASX_E_INVALID_ARGUMENT;
         }
     }
     if (report->pass_count != pass_count || report->warn_count != warn_count ||
-        report->fail_count != fail_count) {
+        report->fail_count != fail_count || report->skip_count != skip_count) {
         return ASX_E_INVALID_ARGUMENT;
     }
     return ASX_OK;
@@ -233,7 +236,9 @@ asx_status asx_report_doctor_text(const asx_doctor_report *report, asx_report_bu
     asx_report_buf_append_u32(out, report->warn_count);
     asx_report_buf_append(out, " warn, ");
     asx_report_buf_append_u32(out, report->fail_count);
-    asx_report_buf_append(out, " fail)\n");
+    asx_report_buf_append(out, " fail, ");
+    asx_report_buf_append_u32(out, report->skip_count);
+    asx_report_buf_append(out, " skip)\n");
 
     return ASX_OK;
 }
@@ -272,6 +277,8 @@ asx_status asx_report_doctor_json(const asx_doctor_report *report, asx_report_bu
     asx_report_buf_append_u32(out, report->warn_count);
     asx_report_buf_append(out, ",\"fail\":");
     asx_report_buf_append_u32(out, report->fail_count);
+    asx_report_buf_append(out, ",\"skip\":");
+    asx_report_buf_append_u32(out, report->skip_count);
     asx_report_buf_append(out, "}");
 
     return ASX_OK;

@@ -119,21 +119,14 @@ static int cmd_info(void) {
 
 static int cmd_doctor(int json_output) {
     asx_runtime rt;
-    asx_runtime_config cfg;
-    asx_runtime_hooks hooks;
     asx_doctor_report report;
     asx_status st;
     uint32_t i;
 
-    /* Initialize runtime for diagnostic */
-    asx_runtime_config_init(&cfg);
-    st = asx_runtime_hooks_init(&hooks);
-    if (st != ASX_OK) {
-        fprintf(stderr, "asx doctor: hooks init failed: %s\n", asx_status_str(st));
-        return 1;
-    }
-
-    st = asx_runtime_init(&rt, &cfg, &hooks);
+    /* The build's default runtime: on a live POSIX build that is the real
+     * platform (monotonic clock, OS entropy, epoll/poll reactor, worker
+     * threads), which the probes then exercise. */
+    st = asx_runtime_init_default(&rt);
     if (st != ASX_OK) {
         fprintf(stderr, "asx doctor: runtime init failed: %s\n", asx_status_str(st));
         return 1;
@@ -142,6 +135,7 @@ static int cmd_doctor(int json_output) {
     /* Run diagnostics */
     memset(&report, 0, sizeof(report));
     st = asx_doctor_run(&rt, &report);
+    if (st == ASX_OK) st = asx_doctor_probe(&rt, &report);
     asx_runtime_shutdown(&rt);
 
     if (st != ASX_OK) {
@@ -156,6 +150,7 @@ static int cmd_doctor(int json_output) {
             const asx_doctor_check_result *c = &report.checks[i];
             const char *sev = c->severity == ASX_DOCTOR_OK     ? "ok"
                               : c->severity == ASX_DOCTOR_WARN ? "warn"
+                              : c->severity == ASX_DOCTOR_SKIP ? "skip"
                                                                : "fail";
             if (i > 0) printf(",");
             printf("{\"name\":\"%s\",\"severity\":\"%s\",\"message\":\"%s\","
@@ -163,18 +158,21 @@ static int cmd_doctor(int json_output) {
                    c->name ? c->name : "", sev, c->message ? c->message : "", (unsigned)c->value,
                    (unsigned)c->capacity);
         }
-        printf("],\"pass\":%u,\"warn\":%u,\"fail\":%u,\"healthy\":%s}\n",
+        printf("],\"pass\":%u,\"warn\":%u,\"fail\":%u,\"skip\":%u,\"healthy\":%s}\n",
                (unsigned)report.pass_count, (unsigned)report.warn_count,
-               (unsigned)report.fail_count, asx_doctor_is_healthy(&report) ? "true" : "false");
+               (unsigned)report.fail_count, (unsigned)report.skip_count,
+               asx_doctor_is_healthy(&report) ? "true" : "false");
     } else {
         /* Text output */
-        printf("asx doctor: %u checks (%u pass, %u warn, %u fail)\n", (unsigned)report.check_count,
-               (unsigned)report.pass_count, (unsigned)report.warn_count,
-               (unsigned)report.fail_count);
+        printf("asx doctor: %u checks (%u pass, %u warn, %u fail, %u skip)\n",
+               (unsigned)report.check_count, (unsigned)report.pass_count,
+               (unsigned)report.warn_count, (unsigned)report.fail_count,
+               (unsigned)report.skip_count);
         for (i = 0; i < report.check_count; i++) {
             const asx_doctor_check_result *c = &report.checks[i];
             const char *icon = c->severity == ASX_DOCTOR_OK     ? "PASS"
                                : c->severity == ASX_DOCTOR_WARN ? "WARN"
+                               : c->severity == ASX_DOCTOR_SKIP ? "SKIP"
                                                                 : "FAIL";
             printf("  %s: %s", icon, c->name ? c->name : "?");
             if (c->message && c->message[0]) printf(" — %s", c->message);

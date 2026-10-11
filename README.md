@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-1%2C992%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-1%2C993%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,992<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,993<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->1,992<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->1,993<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -1584,15 +1584,23 @@ The monitor queries the runtime inspection report, computes utilization percenta
 
 ## Doctor: Runtime Health Diagnosis
 
-`asx_doctor_run()` checks a runtime you pass it; the `asx doctor` command of the in-tree CLI (`make cli`) runs the same checks on a fresh runtime of its own build:
+`asx_doctor_run()` checks a runtime you pass it, and `asx_doctor_probe()` then exercises the platform behind it. The `asx doctor` command of the in-tree CLI (`make cli`) runs both on the default runtime of its build (`asx_runtime_init_default`, which on a live POSIX build means the real clock, entropy, reactor and worker threads):
 
 1. Is the runtime initialized?
-2. Region/task/obligation/IO/blocking utilization: OK up to 75%, WARN above 75%, FAIL at capacity. The I/O and blocking checks report OK when the profile has no such surface.
+2. Region/task/obligation/IO/blocking utilization: OK up to 75%, WARN above 75%, FAIL at capacity. The I/O and blocking checks report SKIP when the profile has no such surface.
 3. Safety profile (debug, hardened or release).
 4. Containment policy (fail-fast, poison-region or error-only).
 5. Which network backend is active (`net`: native OS sockets or the in-memory transport).
+6. Platform probes (`asx_doctor_probe`):
+   - `clock`: reads never go backwards, and a real clock advances.
+   - `entropy`: two draws differ.
+   - `socket`: a TCP listener binds on loopback.
+   - `reactor`: a loopback TCP echo between two tasks completes, each task parked on its socket until the reactor wakes it.
+   - `blocking_job`: a task parks on a blocking-pool job and gets its result.
 
-Ghost violations, deadline misses and watchdog violations are monitor checks (above), not doctor checks. The report renders as text or JSON (`asx_report_doctor_text`, `asx_report_doctor_json`, `asx doctor --json`). Each check produces a named finding with severity, message, current value, and capacity.
+   A probe the build cannot run reports SKIP. A deterministic build has no OS sockets or readiness, so there `socket` and `reactor` are SKIP and the blocking job runs inline. The probe tasks run under a scheduler run bounded by `ASX_DOCTOR_PROBE_TIMEOUT_NS` (2 s), so a reactor that never delivers readiness FAILs `reactor` rather than hanging.
+
+A SKIP never makes a report unhealthy: `asx_doctor_is_healthy` counts FAILs only. Ghost violations, deadline misses and watchdog violations are monitor checks (above), not doctor checks. The report renders as text or JSON (`asx_report_doctor_text`, `asx_report_doctor_json`, `asx doctor --json`). Each check produces a named finding with severity, message, current value, and capacity.
 
 ## Native I/O: Sockets, DNS, Files, Processes, Signals
 
@@ -2282,7 +2290,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->1,992<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->1,993<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

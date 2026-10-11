@@ -261,6 +261,39 @@ static void test_doctor_render_rejects_invalid_severity(void) {
            "doctor json rejects invalid severity");
 }
 
+/* A SKIP renders as such, is counted, and leaves the overall verdict OK. */
+static void test_doctor_render_skip(void) {
+    asx_doctor_report doctor;
+    asx_report_buf buf;
+
+    memset(&doctor, 0, sizeof(doctor));
+    doctor.check_count = 2u;
+    doctor.checks[0].severity = ASX_DOCTOR_OK;
+    doctor.checks[0].name = "clock";
+    doctor.checks[0].message = "virtual clock";
+    doctor.checks[1].severity = ASX_DOCTOR_SKIP;
+    doctor.checks[1].name = "reactor";
+    doctor.checks[1].message = "ghost reactor";
+    doctor.pass_count = 1u;
+    doctor.skip_count = 1u;
+
+    asx_report_buf_init(&buf);
+    MUST_OK(asx_report_doctor_text(&doctor, &buf));
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "[SKIP] reactor") != NULL, "text marks the skip");
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "Overall: OK") != NULL, "a skip is not a failure");
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "1 skip") != NULL, "text counts the skip");
+
+    asx_report_buf_init(&buf);
+    MUST_OK(asx_report_doctor_json(&doctor, &buf));
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "\"severity\":\"SKIP\"") != NULL, "json marks skip");
+    ASSERT(strstr(asx_report_buf_cstr(&buf), "\"skip\":1") != NULL, "json counts the skip");
+
+    doctor.skip_count = 0u;
+    asx_report_buf_init(&buf);
+    ASSERT(asx_report_doctor_json(&doctor, &buf) == ASX_E_INVALID_ARGUMENT,
+           "doctor json rejects a skip count that does not match");
+}
+
 /* ================================================================== */
 /* Evidence rendering                                                 */
 /* ================================================================== */
@@ -587,6 +620,7 @@ int main(void) {
     RUN(test_doctor_render_rejects_oversized_check_count);
     RUN(test_doctor_render_rejects_inconsistent_counters);
     RUN(test_doctor_render_rejects_invalid_severity);
+    RUN(test_doctor_render_skip);
 
     /* Evidence rendering */
     RUN(test_evidence_text);

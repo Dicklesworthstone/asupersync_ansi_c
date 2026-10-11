@@ -603,9 +603,9 @@ build-browser:
 	@$(MAKE) build PROFILE=BROWSER
 
 cli: $(LIB_A) src/cli/main.c
-	@mkdir -p build/bin
-	$(CC) $(ALL_CFLAGS) -o build/bin/asx src/cli/main.c $(LIB_A) $(LDFLAGS)
-	@echo "[asx] cli binary: build/bin/asx"
+	@mkdir -p $(BUILD_DIR)/bin
+	$(CC) $(ALL_CFLAGS) -o $(BUILD_DIR)/bin/asx src/cli/main.c $(LIB_A) $(LDFLAGS)
+	@echo "[asx] cli binary: $(BUILD_DIR)/bin/asx"
 
 # Rust-parity oracle runner (bridge W1.5/W1.6): executes DSL v2 scenarios
 # through this runtime and compares them with Rust captures. It links a

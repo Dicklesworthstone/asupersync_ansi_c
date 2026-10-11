@@ -13,6 +13,9 @@
 #include <asx/signal/signal.h>
 #include <stdio.h>
 #include <string.h>
+#if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
+#include <asx/platform/posix.h>
+#endif
 
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES
 /* ------------------------------------------------------------------ */
@@ -1197,12 +1200,182 @@ static void test_doctor_check_fields(void) {
     ASSERT(strcmp(report.checks[4].name, "io_driver") == 0, "io driver check present");
     ASSERT(strcmp(report.checks[5].name, "blocking") == 0, "blocking check present");
 
-    /* pass + warn + fail should equal check_count */
-    ASSERT(report.pass_count + report.warn_count + report.fail_count == report.check_count,
+    /* pass + warn + fail + skip should equal check_count */
+    ASSERT(report.pass_count + report.warn_count + report.fail_count + report.skip_count ==
+               report.check_count,
            "counts sum to total");
 
     asx_runtime_shutdown(&rt);
 }
+
+static const asx_doctor_check_result *find_check(const asx_doctor_report *report,
+                                                 const char *name) {
+    uint32_t i;
+    for (i = 0; i < report->check_count; i++) {
+        if (strcmp(report->checks[i].name, name) == 0) return &report->checks[i];
+    }
+    return NULL;
+}
+
+/* bd-9kll.10.8: the probes exercise the platform behind the default
+ * runtime. A live POSIX build passes each against the OS; a deterministic
+ * build has no OS sockets or readiness and says so (SKIP, not PASS). */
+static void test_doctor_probe_exercises_the_platform(void) {
+    asx_runtime rt;
+    asx_doctor_report report;
+    const asx_doctor_check_result *c;
+    uint32_t regions_before;
+    uint32_t tasks_before;
+
+    ASSERT(asx_runtime_init_default(&rt) == ASX_OK, "init");
+    ASSERT(asx_doctor_run(&rt, &report) == ASX_OK, "doctor run");
+    regions_before = asx_runtime_region_count(&rt);
+    tasks_before = asx_runtime_task_count(&rt);
+    ASSERT(asx_doctor_probe(&rt, &report) == ASX_OK, "probe ran");
+    ASSERT(report.check_count == 14u, "five probe checks appended");
+    ASSERT(strcmp(report.checks[9].name, "clock") == 0, "clock probe");
+    ASSERT(strcmp(report.checks[10].name, "entropy") == 0, "entropy probe");
+    ASSERT(strcmp(report.checks[11].name, "socket") == 0, "socket probe");
+    ASSERT(strcmp(report.checks[12].name, "reactor") == 0, "reactor probe");
+    ASSERT(strcmp(report.checks[13].name, "blocking_job") == 0, "blocking probe");
+    ASSERT(report.pass_count + report.warn_count + report.fail_count + report.skip_count ==
+               report.check_count,
+           "counts sum to total");
+    ASSERT(asx_doctor_is_healthy(&report), "healthy");
+#if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
+    ASSERT(report.skip_count == 0u && report.warn_count == 0u, "every probe ran and passed");
+    ASSERT(strstr(find_check(&report, "clock")->message, "monotonic") != NULL, "real clock");
+    c = find_check(&report, "reactor");
+    ASSERT(c->severity == ASX_DOCTOR_OK, "loopback echo through the reactor");
+    ASSERT(c->value > 0u, "the echo tasks parked on their sockets");
+    c = find_check(&report, "blocking_job");
+    ASSERT(strstr(c->message, "worker-thread") != NULL, "job ran on a pool thread");
+#elif ASX_DETERMINISTIC
+    ASSERT(find_check(&report, "socket")->severity == ASX_DOCTOR_SKIP, "no OS sockets");
+    ASSERT(find_check(&report, "reactor")->severity == ASX_DOCTOR_SKIP, "no OS readiness");
+    c = find_check(&report, "clock");
+    ASSERT(c->severity == ASX_DOCTOR_OK && strstr(c->message, "virtual") != NULL, "virtual clock");
+    ASSERT(find_check(&report, "entropy")->severity == ASX_DOCTOR_OK, "seeded entropy");
+    c = find_check(&report, "blocking_job");
+    ASSERT(c->severity == ASX_DOCTOR_OK && strstr(c->message, "inline") != NULL,
+           "blocking job ran inline");
+#else
+    c = find_check(&report, "clock");
+    ASSERT(c != NULL && c->severity == ASX_DOCTOR_OK, "clock probe passes");
+#endif
+    /* No live task, socket registration or closing region is left (a
+     * closed region keeps its arena slot until an open reuses it). */
+    ASSERT(asx_runtime_region_count(&rt) <= regions_before + 1u, "one probe region at most");
+    ASSERT(asx_runtime_task_count(&rt) == tasks_before, "probe tasks gone");
+    ASSERT(asx_runtime_is_quiescent(&rt), "runtime quiescent after the probe");
+    asx_runtime_shutdown(&rt);
+}
+
+static void test_doctor_probe_argument_and_state_errors(void) {
+    asx_runtime rt;
+    asx_doctor_report report;
+
+    memset(&rt, 0, sizeof(rt));
+    memset(&report, 0, sizeof(report));
+    ASSERT(asx_doctor_probe(NULL, &report) == ASX_E_INVALID_ARGUMENT, "null rt");
+    ASSERT(asx_doctor_probe(&rt, NULL) == ASX_E_INVALID_ARGUMENT, "null report");
+    ASSERT(asx_doctor_probe(&rt, &report) == ASX_E_INVALID_STATE, "uninitialized runtime");
+    ASSERT(asx_runtime_init_default(&rt) == ASX_OK, "init");
+    report.check_count = ASX_DOCTOR_MAX_CHECKS - 4u; /* room for four checks, not five */
+    ASSERT(asx_doctor_probe(&rt, &report) == ASX_E_RESOURCE_EXHAUSTED, "no room");
+    ASSERT(report.check_count == ASX_DOCTOR_MAX_CHECKS - 4u, "report untouched");
+    asx_runtime_shutdown(&rt);
+}
+
+#if ASX_DETERMINISTIC
+/* The probes fail what they check: an entropy source stuck on one value,
+ * and a clock that steps backwards (fault injection). */
+static void test_doctor_probe_fails_on_constant_entropy(void) {
+    asx_runtime rt;
+    asx_doctor_report report;
+    asx_fault_injection f;
+    asx_status st;
+    const asx_doctor_check_result *c;
+
+    ASSERT(asx_runtime_init_default(&rt) == ASX_OK, "init");
+    memset(&report, 0, sizeof(report));
+    memset(&f, 0, sizeof(f));
+    f.kind = ASX_FAULT_ENTROPY_CONST;
+    f.param = 42u;
+    (void)asx_fault_clear();
+    ASSERT(asx_fault_inject(&f) == ASX_OK, "inject constant entropy");
+    st = asx_doctor_probe(&rt, &report);
+    (void)asx_fault_clear();
+    ASSERT(st == ASX_OK, "probe ran");
+    c = find_check(&report, "entropy");
+    ASSERT(c != NULL && c->severity == ASX_DOCTOR_FAIL, "constant entropy fails");
+    ASSERT(!asx_doctor_is_healthy(&report), "unhealthy");
+    asx_runtime_shutdown(&rt);
+}
+
+static void test_doctor_probe_fails_on_clock_reversal(void) {
+    asx_runtime rt;
+    asx_doctor_report report;
+    asx_fault_injection f;
+    asx_status st;
+    const asx_doctor_check_result *c;
+
+    ASSERT(asx_runtime_init_default(&rt) == ASX_OK, "init");
+    memset(&report, 0, sizeof(report));
+    memset(&f, 0, sizeof(f));
+    f.kind = ASX_FAULT_CLOCK_SKEW; /* the first read runs 1 us ahead, the next does not */
+    f.param = 1000u;
+    f.trigger_count = 1u;
+    (void)asx_fault_clear();
+    ASSERT(asx_fault_inject(&f) == ASX_OK, "inject one skewed read");
+    st = asx_doctor_probe(&rt, &report);
+    (void)asx_fault_clear();
+    ASSERT(st == ASX_OK, "probe ran");
+    c = find_check(&report, "clock");
+    ASSERT(c != NULL && c->severity == ASX_DOCTOR_FAIL, "clock reversal fails");
+    ASSERT(strcmp(c->message, "clock went backwards") == 0, "names the reversal");
+    asx_runtime_shutdown(&rt);
+}
+#endif
+
+#if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
+static asx_reactor_poll_fn g_real_reactor_poll;
+
+/* Polls the real reactor but drops every readiness event. */
+static asx_status deaf_reactor_poll(void *ctx, uint32_t timeout_ms, asx_reactor_event *events,
+                                    uint32_t max_events, uint32_t *out_count) {
+    asx_status st = g_real_reactor_poll(ctx, timeout_ms, events, max_events, out_count);
+    if (out_count != NULL) *out_count = 0u;
+    return st;
+}
+
+/* A reactor that never reports readiness fails the echo (at the probe
+ * deadline), and the probe still leaves no task behind. */
+static void test_doctor_probe_fails_on_deaf_reactor(void) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_doctor_report report;
+    const asx_doctor_check_result *c;
+
+    asx_runtime_config_init(&cfg);
+    ASSERT(asx_posix_hooks_install(&hooks) == ASX_OK, "posix hooks");
+    g_real_reactor_poll = hooks.reactor.poll_fn;
+    hooks.reactor.poll_fn = deaf_reactor_poll;
+    ASSERT(asx_runtime_init(&rt, &cfg, &hooks) == ASX_OK, "init with a deaf reactor");
+    memset(&report, 0, sizeof(report));
+    ASSERT(asx_doctor_probe(&rt, &report) == ASX_OK, "probe ran");
+    c = find_check(&report, "socket");
+    ASSERT(c != NULL && c->severity == ASX_DOCTOR_OK, "the socket still binds");
+    c = find_check(&report, "reactor");
+    ASSERT(c != NULL && c->severity == ASX_DOCTOR_FAIL, "deaf reactor fails the echo");
+    ASSERT(strcmp(c->message, "loopback echo timed out") == 0, "names the timeout");
+    ASSERT(!asx_doctor_is_healthy(&report), "unhealthy");
+    ASSERT(asx_runtime_task_count(&rt) == 0u, "the cancelled probe tasks are gone");
+    ASSERT(asx_runtime_is_quiescent(&rt), "runtime quiescent after the cancelled probe");
+    asx_runtime_shutdown(&rt);
+}
+#endif
 #else
 static int g_pass, g_fail;
 
@@ -1313,6 +1486,15 @@ int main(void) {
     RUN(test_doctor_uninitialized_runtime);
     RUN(test_doctor_null_args);
     RUN(test_doctor_check_fields);
+    RUN(test_doctor_probe_exercises_the_platform);
+    RUN(test_doctor_probe_argument_and_state_errors);
+#if ASX_DETERMINISTIC
+    RUN(test_doctor_probe_fails_on_constant_entropy);
+    RUN(test_doctor_probe_fails_on_clock_reversal);
+#endif
+#if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
+    RUN(test_doctor_probe_fails_on_deaf_reactor);
+#endif
 #else
     RUN(test_app_surface_compile_time_hidden_in_browser);
 #endif

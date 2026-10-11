@@ -14,7 +14,7 @@ e2e_init "cli-smoke" "E2E-CLI"
 
 # Build the CLI binary
 CLI_BIN="${E2E_BUILD_DIR}/bin/asx"
-if ! (cd "$E2E_PROJECT_ROOT" && make cli 2>"${E2E_ARTIFACT_DIR}/cli_build.log"); then
+if ! (cd "$E2E_PROJECT_ROOT" && make cli BUILD_DIR="$E2E_BUILD_DIR" 2>"${E2E_ARTIFACT_DIR}/cli_build.log"); then
     e2e_scenario "cli_smoke.build" "make cli failed" "fail"
     e2e_finish
     exit $?
@@ -49,6 +49,18 @@ if grep -q "PASS:" "${E2E_ARTIFACT_DIR}/doctor.txt"; then
     e2e_scenario "cli_smoke.doctor_text_format" "" "pass"
 else
     e2e_scenario "cli_smoke.doctor_text_format" "no PASS: lines" "fail"
+fi
+
+# Scenario: doctor runs the platform probes (bd-9kll.10.8), each with a
+# verdict line; a probe the build cannot run is a SKIP, never a PASS
+missing=""
+for probe in clock entropy socket reactor blocking_job; do
+    grep -Eq "^  (PASS|SKIP): ${probe} — " "${E2E_ARTIFACT_DIR}/doctor.txt" || missing="$missing $probe"
+done
+if [ -z "$missing" ]; then
+    e2e_scenario "cli_smoke.doctor_probes" "" "pass"
+else
+    e2e_scenario "cli_smoke.doctor_probes" "no verdict for:$missing" "fail"
 fi
 
 # Scenario: doctor --format=json produces valid JSON
