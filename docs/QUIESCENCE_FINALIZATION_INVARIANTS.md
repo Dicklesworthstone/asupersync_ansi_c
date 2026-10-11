@@ -143,8 +143,8 @@ Summary. v4 enters Draining whenever a child *task* is still live (CLOSE-CANCEL-
 
 | Predicate | Rust (`src/record/region.rs`) | True when | Rust uses it for | C (`src/core/transition_tables.c`) |
 |-----------|------|-----------|------------------|---|
-| `can_spawn()` | `:130` | `Open` | child-region admission (`add_child`, `:1343-1373`) | `asx_region_can_spawn` (`:87`), `Open`; used for obligation reserve (`src/runtime/lifecycle.c:1380`); child regions test `state != OPEN` directly (`src/runtime/lifecycle.c:831`) |
-| `can_accept_work()` | `:140` | `Open` only. Correction: Finalizing is excluded (doc comment `:134-139`) | normal task admission (`add_task`, `:1430-1432`), obligation reserve (`try_reserve_obligation`, `:1449-1472`) | `asx_region_can_accept_work` (`:89-91`) is `Open` or `Finalizing`, used by every spawn (`src/runtime/lifecycle.c:1093`, `:1191`); differs from Rust: row `rule.ownership.spawn` (bd-9kll.3.5) |
+| `can_spawn()` | `:130` | `Open` | child-region admission (`add_child`, `:1343-1373`) | `asx_region_can_spawn` (`:87`), `Open`; used for obligation reserve (`src/runtime/lifecycle.c:1390`); child regions test `state != OPEN` directly (`src/runtime/lifecycle.c:839`) |
+| `can_accept_work()` | `:140` | `Open` only. Correction: Finalizing is excluded (doc comment `:134-139`) | normal task admission (`add_task`, `:1430-1432`), obligation reserve (`try_reserve_obligation`, `:1449-1472`) | `asx_region_can_accept_work` (`:89-91`) is `Open` or `Finalizing`, used by every spawn (`src/runtime/lifecycle.c:1103`, `:1201`); differs from Rust: row `rule.ownership.spawn` (bd-9kll.3.5) |
 | `can_accept_cleanup_work()` | `:150` | `Open` or `Finalizing` | cleanup-task admission (`add_cleanup_task`, `:1438-1440`), used for finalizer tasks (`src/runtime/state.rs:4314`) | no separate predicate |
 | `is_closing()` | `:162` | `Closing`, `Draining`, `Finalizing` | finalizer registration rejection (`src/runtime/state.rs:9057`, `:9110`); runtime quiescence (`:7409`) | `asx_region_is_closing` (`:93-95`) |
 | `is_terminal()` | `:124` | `Closed` | heap-allocation rejection (`heap_alloc`, `:1575-1604`) | `asx_region_is_terminal` (`:97`) |
@@ -190,15 +190,15 @@ Corrections to the earlier version: step 2 no longer executes sync finalizers in
 
 Summary. In Rust the children are cancelled by `RuntimeState::cancel_request` (`src/runtime/state.rs:7547-7553`, core `cancel_request_in` from `:7625`), which also moves each Open region of the subtree to Closing (`begin_close_without_subscriber`, `:7779`). Each task gets its reason's cleanup budget (`CancelReason::cleanup_budget`, `src/types/cancel.rs:1027-1043`), met with a region shutdown-budget ceiling when one is set (`src/runtime/state.rs:7832-7833`). The scheduler drives the cancelled tasks; each completion re-runs the advance walk (section 2.3), and the region advances once its tasks are unlinked and its child regions closed.
 
-**C status:** `asx_region_cancel` (`src/runtime/cancellation.c:517-583`) does the same three steps in C (region pass, task pass, then advance of idle regions). `asx_region_close` alone (`src/runtime/lifecycle.c:978-997`) moves Open to Closing and cancels nothing; `asx_region_close_request` (`:918-921`) cancels with the close reason. `asx_region_drain` cancels the subtree's tasks with ParentCancelled through `asx_cancel_propagate` (`src/runtime/quiescence.c:333`), not with a requested kind (bd-9kll.3.4).
+**C status:** `asx_region_cancel` (`src/runtime/cancellation.c:517-583`) does the same three steps in C (region pass, task pass, then advance of idle regions). `asx_region_close` alone (`src/runtime/lifecycle.c:988-1007`) moves Open to Closing and cancels nothing; `asx_region_close_request` (`:928-931`) cancels with the close reason. `asx_region_drain` cancels the subtree's tasks with ParentCancelled through `asx_cancel_propagate` (`src/runtime/quiescence.c:333`), not with a requested kind (bd-9kll.3.4).
 
 ### 2.5 Complete Close Implementation
 
-> **Superseded by** v4 §3.3 CLOSE-COMPLETE (rule `rule.region.close_complete`, #26). **C status:** see `C_REFINEMENT_MAP.md` row `rule.region.close_complete` (Partial: C records no close outcome).
+> **Superseded by** v4 §3.3 CLOSE-COMPLETE (rule `rule.region.close_complete`, #26). **C status:** see `C_REFINEMENT_MAP.md` row `rule.region.close_complete` (Partial: the close outcome is a severity, without finalizer outcomes or payloads).
 
 Summary of Rust `RegionRecord::complete_close` (`src/record/region.rs:1786-1862`): under the record's write lock it requires Finalizing (`:1792`), re-checks no children, no tasks, no pending or unapplied obligations, no finalizers and no pending spawns (`:1796-1808`), defaults the close outcome to `Cancelled(reason)` when the region was cancelled and `Ok` otherwise (`:1820-1825`), CASes Finalizing → Closed (`:1827-1829`), reclaims the heap (`:1833`), stores the close receipt and wakes the close waiters (`:1846-1853`). The earlier snippet (calling `clear_heap` and returning after a bare quiescence check) no longer matches the code.
 
-**C status:** `asx_region_finalize_one` (`src/runtime/quiescence.c:230`), in its Finalizing branch (`:248-267`), follows Rust's order: it drains the cleanup stack (`:254`), re-checks that no task is live (`:255`), runs the ghost leak check (`:258`), leak-audits the obligations still Reserved (`:259`, section 4.3), sets Closed (`:262`), unlinks from the parent (`:264`), emits `region.closed` (`:265`) and wakes close waiters (`:266`). No close outcome is computed or stored.
+**C status:** `asx_region_finalize_one` (`src/runtime/quiescence.c:230`), in its Finalizing branch (`:248-267`), follows Rust's order: it drains the cleanup stack (`:254`), re-checks that no task is live (`:255`), runs the ghost leak check (`:258`), leak-audits the obligations still Reserved (`:259`, section 4.3), sets Closed (`:262`), unlinks from the parent (`:264`), emits `region.closed` (`:265`) and wakes close waiters (`:266`). The close outcome is the join of the region's task outcomes, recorded as each task completes, with complete_close's default when none was recorded (`asx_region_get_close_outcome`, `src/runtime/quiescence.c:383`).
 
 ---
 
@@ -252,7 +252,7 @@ Reserved ──(commit)──> Committed    (terminal)
 
 Summary. `ObligationToken` (`src/obligation/graded.rs:874-875`) is `#[must_use]` and is consumed by `commit()`/`abort()`. Correction to the earlier version: a double resolution does not always panic. Through the runtime, it is an error: `ObligationTable::commit` returns `ErrorKind::ObligationAlreadyResolved` for a record that is no longer pending (`src/runtime/obligation_table.rs:576-578`; code `ASUP-E102`, `src/error.rs:73`, `:167`), and a commit after the region was finalized returns `RegionFinalized` (`src/runtime/obligation_table.rs:567-571`). Only the record-level methods `ObligationRecord::commit`/`abort`/`mark_leaked` assert and panic with "obligation already resolved" (`src/record/obligation.rs:391`).
 
-**C status:** Committed, Aborted and Leaked are absorbing in the transition table (`src/core/transition_tables.c:65-70`). A second commit or abort returns `ASX_E_OBLIGATION_ALREADY_RESOLVED`, as Rust's `ObligationAlreadyResolved` (`asx_obligation_commit`, `src/runtime/lifecycle.c:1543`; `asx_obligation_abort_with_reason`, `:1604`; C returned `ASX_E_INVALID_TRANSITION` until 2026-10-10, bd-91rf). Tests: `tests/invariant/lifecycle/test_lifecycle_legality.c` `obligation_double_commit_rejected`, `obligation_commit_then_abort_rejected`.
+**C status:** Committed, Aborted and Leaked are absorbing in the transition table (`src/core/transition_tables.c:65-70`). A second commit or abort returns `ASX_E_OBLIGATION_ALREADY_RESOLVED`, as Rust's `ObligationAlreadyResolved` (`asx_obligation_commit`, `src/runtime/lifecycle.c:1553`; `asx_obligation_abort_with_reason`, `:1614`; C returned `ASX_E_INVALID_TRANSITION` until 2026-10-10, bd-91rf). Tests: `tests/invariant/lifecycle/test_lifecycle_legality.c` `obligation_double_commit_rejected`, `obligation_commit_then_abort_rejected`.
 
 ### 4.2 Detection Point 1: Holder Completion and Token Drop
 
@@ -264,7 +264,7 @@ Summary. Rust has three paths, in this order:
 2. **Completion audit.** `task_completed` calls `audit_completion_obligation_leaks` (`src/runtime/state.rs:8341-8368`), which collects the holder's still-pending obligations (`collect_obligation_leaks_for_holder`, `:5606-5624`) and handles them under the leak policy, but only when the completion is not `Cancelled` (`:8351`).
 3. **Orphan abort.** Then `abort_orphaned_obligations_for_holder` (`:8453-8488`, called at `:8273` and `:8308`) aborts every obligation the holder still holds with reason `Cancel`, so a region is never stuck in Finalizing on them.
 
-**C status:** on holder completion, `asx_task_on_complete_internal` (`src/runtime/lifecycle.c:671`) calls `asx_task_resolve_held_obligations_internal` (`:590`), which leaks every still-Reserved plain held obligation under the leak policy (`obligation_leak_slot`, `:553`), cancelled holder or not. There is no orphan abort with `Cancel`. The comment at `src/runtime/lifecycle.c:511` explains why: Rust's orphan abort reaches only tokens that were never dropped, and C, with no destructors, cannot tell those apart from dropped ones. A tracked permit (send or semaphore) is taken as dropped with the body, as the interpreter's local drop and Rust's own Drop impls do: its resource goes back and its obligation is aborted with `Cancel` (send) or committed (semaphore), not leaked (`obligation_drop_permit`, `:568`). `asx_obligation_drop` (`:1795`) is the explicit drop path and leaks at once. Tests: `tests/unit/runtime/test_budget_obligation.c` `cancelled_holder_leaks_its_unresolved_obligation`, `drop_leaks_the_obligation_at_once_not_at_completion`. The `C_REFINEMENT_MAP.md` row `rule.obligation.leak` records the policy differences but not this one: when a *cancelled* holder completes while its token is still alive (not dropped), Rust skips the audit and aborts the obligation with `Cancel`, where C marks it Leaked. No v2 fixture is known to exercise that case (unverified).
+**C status:** on holder completion, `asx_task_on_complete_internal` (`src/runtime/lifecycle.c:671`) calls `asx_task_resolve_held_obligations_internal` (`:590`), which leaks every still-Reserved plain held obligation under the leak policy (`obligation_leak_slot`, `:553`), cancelled holder or not. There is no orphan abort with `Cancel`. The comment at `src/runtime/lifecycle.c:511` explains why: Rust's orphan abort reaches only tokens that were never dropped, and C, with no destructors, cannot tell those apart from dropped ones. A tracked permit (send or semaphore) is taken as dropped with the body, as the interpreter's local drop and Rust's own Drop impls do: its resource goes back and its obligation is aborted with `Cancel` (send) or committed (semaphore), not leaked (`obligation_drop_permit`, `:568`). `asx_obligation_drop` (`:1805`) is the explicit drop path and leaks at once. Tests: `tests/unit/runtime/test_budget_obligation.c` `cancelled_holder_leaks_its_unresolved_obligation`, `drop_leaks_the_obligation_at_once_not_at_completion`. The `C_REFINEMENT_MAP.md` row `rule.obligation.leak` records the policy differences but not this one: when a *cancelled* holder completes while its token is still alive (not dropped), Rust skips the audit and aborts the obligation with `Cancel`, where C marks it Leaked. No v2 fixture is known to exercise that case (unverified).
 
 ### 4.3 Detection Point 2: Region Finalization
 
@@ -282,7 +282,7 @@ Correction to the earlier version: the runtime's obligation table is not a `BTre
 
 `ObligationLedger` (`src/obligation/ledger.rs:441-443`) does use a `BTreeMap<ObligationId, ObligationRecord>`, but it is a separate component, not the table `RuntimeState` leak detection reads.
 
-**C status:** obligations live in a fixed slot array scanned in slot order (`src/runtime/quiescence.c:47-60`). A holder's obligations are a singly linked list with each new reservation prepended (`src/runtime/lifecycle.c:1397-1402`), so completion leaks them newest first (`:516-536`), where Rust's completion audit goes oldest first. Whether any fixture can observe the order of two leaks from one holder is unverified.
+**C status:** obligations live in a fixed slot array scanned in slot order (`src/runtime/quiescence.c:47-60`). A holder's obligations are a singly linked list with each new reservation prepended (`src/runtime/lifecycle.c:1407-1412`), so completion leaks them newest first (`:516-536`), where Rust's completion audit goes oldest first. Whether any fixture can observe the order of two leaks from one holder is unverified.
 
 ### 4.5 Reentrance Guard
 
@@ -299,7 +299,7 @@ Correction to the earlier version: `handling_leaks` is a nesting depth (`usize`,
 
 Rust (`src/runtime/state.rs:5726-5732`): if the effective response is `Panic` and `std::thread::panicking()` is true, the response is downgraded to `Log`.
 
-**C status:** not applicable. C's PANIC policy does not abort the process: it marks the obligation Leaked and routes the fault through the region containment policy (`asx_region_contain_fault`, `src/runtime/lifecycle.c:590-601` and `:1037-1058`). There is no `asx_panicking` flag.
+**C status:** not applicable. C's PANIC policy does not abort the process: it marks the obligation Leaked and routes the fault through the region containment policy (`asx_region_contain_fault`, `src/runtime/lifecycle.c:590-601` and `:1047-1068`). There is no `asx_panicking` flag.
 
 ---
 
@@ -420,7 +420,7 @@ Registration is rejected once the region has begun closing or is closed: `regist
 
 Rust admits cleanup tasks into a Finalizing region through `add_cleanup_task` (`src/record/region.rs:1438-1440`; predicate `can_accept_cleanup_work`, `:150`), and such a task bypasses `max_tasks` (`:1408`). Normal spawns are refused in Finalizing (`can_accept_work` is Open only, `:134-142`), as are child regions (`:1341-1354`) and obligation reserves (`:1449-1457`). A finalizing region closes only after its tasks are unlinked (`task_count() == 0`, `src/runtime/state.rs:9747-9751`).
 
-**C status:** every spawn is admitted into a Finalizing region and is exempt from `max_tasks` (`src/runtime/lifecycle.c:1195-1210`): row `rule.ownership.spawn` (bd-9kll.3.5). A cleanup callback that spawns a task makes `asx_region_finalize_one` return `ASX_E_QUIESCENCE_TASKS_LIVE` after the drain (`src/runtime/quiescence.c:254-255`); a later drain closes the region (test `tests/unit/runtime/test_quiescence.c` `region_drain_finalizer_spawned_task_requires_followup_drain`). Child regions and obligation reserves are refused in Finalizing (`src/runtime/lifecycle.c:831`, `:1380`; test `finalizing_region_still_rejects_obligation_reserve`).
+**C status:** every spawn is admitted into a Finalizing region and is exempt from `max_tasks` (`src/runtime/lifecycle.c:1205-1220`): row `rule.ownership.spawn` (bd-9kll.3.5). A cleanup callback that spawns a task makes `asx_region_finalize_one` return `ASX_E_QUIESCENCE_TASKS_LIVE` after the drain (`src/runtime/quiescence.c:254-255`); a later drain closes the region (test `tests/unit/runtime/test_quiescence.c` `region_drain_finalizer_spawned_task_requires_followup_drain`). Child regions and obligation reserves are refused in Finalizing (`src/runtime/lifecycle.c:839`, `:1390`; test `finalizing_region_still_rejects_obligation_reserve`).
 
 ---
 
@@ -455,7 +455,7 @@ Rust `Budget::combine_untraced` (`src/types/budget.rs:556-570`); `meet` is `comb
 
 This is a C design from the port plan (Section 6.8.D), not a Rust structure. The plan's four points and their status:
 
-1. "Every reserve/acquire registers a cleanup action at acquisition time": **not implemented.** `asx_obligation_reserve_impl` (`src/runtime/lifecycle.c:1634-1683`) registers none; per-task stacks do not exist (`include/asx/core/cleanup.h:8-9` defers them).
+1. "Every reserve/acquire registers a cleanup action at acquisition time": **not implemented.** `asx_obligation_reserve_impl` (`src/runtime/lifecycle.c:1644-1693`) registers none; per-task stacks do not exist (`include/asx/core/cleanup.h:8-9` defers them).
 2. "commit/abort pops entries": **not implemented** for obligations; `asx_cleanup_pop` exists (`include/asx/core/cleanup.h:61-65`).
 3. "During finalization, unresolved entries are drained LIFO": **implemented** for the per-region stack (`src/runtime/quiescence.c:254`, `src/core/cleanup.c:92-111`). Applications register entries with `asx_region_defer_sync`, Rust's `Scope::defer_sync`, while the region is Open (`src/runtime/quiescence.c:368`). Rust's async finalizers (`defer_async`, run as masked tasks under a budget) are not ported.
 4. "Discarding a token without resolution triggers detection during region finalization": C detects it at holder completion or `asx_obligation_drop` (section 4.2), and at finalization the close audit leaks what is still unresolved (section 4.3).
@@ -494,16 +494,16 @@ Rust admission (doc comment `src/record/region.rs:166-206`): (1) an atomic fast-
 
 `begin_close` makes the Open → Closing transition while holding the same write lock, so a locked re-check cannot see Open after close began (`:1682-1738`).
 
-**C status:** the kernel's admission checks run in one place each, without locks: `asx_task_spawn` (`src/runtime/lifecycle.c:1178-1195`), `asx_region_open_child` (`:828-836`), `asx_obligation_reserve_impl` (`:1376-1385`).
+**C status:** the kernel's admission checks run in one place each, without locks: `asx_task_spawn` (`src/runtime/lifecycle.c:1188-1205`), `asx_region_open_child` (`:836-844`), `asx_obligation_reserve_impl` (`:1386-1395`).
 
 ### 8.2 Admission Errors
 
 | Rust | When | C |
 |-------|------|--------|
-| `AdmissionError::Closed` (`src/record/region.rs:269-281`) | the predicate is false | `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:917`, `:1200`, `:1358`, `:1656`) |
-| `AdmissionError::LimitReached { kind, limit, live }` | a configured limit is reached | `ASX_E_ADMISSION_LIMIT` (`src/runtime/lifecycle.c:920`, `:1209`, `:1661`); limits set with `asx_region_set_limits` (`:958-966`); parity `region-limits-admission-001` |
+| `AdmissionError::Closed` (`src/record/region.rs:269-281`) | the predicate is false | `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:927`, `:1210`, `:1368`, `:1666`) |
+| `AdmissionError::LimitReached { kind, limit, live }` | a configured limit is reached | `ASX_E_ADMISSION_LIMIT` (`src/runtime/lifecycle.c:930`, `:1219`, `:1671`); limits set with `asx_region_set_limits` (`:968-976`); parity `region-limits-admission-001` |
 | `SpawnError::RegionNotFound` (`src/runtime/state.rs:1622-1660`) | stale or unknown region | `ASX_E_NOT_FOUND` or `ASX_E_STALE_HANDLE` (`asx_region_slot_lookup`, `src/runtime/lifecycle.c:207-225`) |
-| — | poisoned region | `ASX_E_REGION_POISONED` (`src/runtime/lifecycle.c:914`, `:1193`, `:1646`) |
+| — | poisoned region | `ASX_E_REGION_POISONED` (`src/runtime/lifecycle.c:924`, `:1203`, `:1656`) |
 
 `ASX_E_ADMISSION_CLOSED` (`include/asx/asx_status.h:40`) is not returned by the region, task or obligation kernel; other modules use it (for example `src/runtime/adapter.c`). `ASX_E_REGION_NOT_FOUND` (`include/asx/asx_status.h:36`) is not returned by any file under `src/`.
 
@@ -512,17 +512,17 @@ Rust admission (doc comment `src/record/region.rs:166-206`): (1) an atomic fast-
 | Operation | Rust: allowed states | C: allowed states |
 |-----------|---------------|-------|
 | Create child task | `Open`; cleanup tasks also in `Finalizing` | `Open` and `Finalizing` for every spawn (bd-9kll.3.5) |
-| Create child region | `Open` only | `Open` only (`src/runtime/lifecycle.c:831`) |
-| Reserve obligation | `Open` only | `Open` only (`src/runtime/lifecycle.c:1380`); parity `obligation-reserve-closed-region-must-fail-001` (Closing) |
+| Create child region | `Open` only | `Open` only (`src/runtime/lifecycle.c:839`) |
+| Reserve obligation | `Open` only | `Open` only (`src/runtime/lifecycle.c:1390`); parity `obligation-reserve-closed-region-must-fail-001` (Closing) |
 | Register finalizer | `Open` only (section 6.6) | no API |
 | Query status | Any | Any |
-| Region heap / arena | any state but `Closed` (`heap_alloc`) | the capture arena is reached only through `asx_task_spawn_captured`, so it follows spawn admission (`src/runtime/lifecycle.c:1191`) |
+| Region heap / arena | any state but `Closed` (`heap_alloc`) | the capture arena is reached only through `asx_task_spawn_captured`, so it follows spawn admission (`src/runtime/lifecycle.c:1201`) |
 
 ### 8.4 Spawn Error Variants
 
 Rust `SpawnError` (`src/runtime/state.rs:1622-1660`): `RuntimeUnavailable`, `RegionNotFound`, `RegionClosed`, `LocalSchedulerUnavailable`, `NameRegistrationFailed`, `RegionAtCapacity`, `AuthorizationDenied`, `AdmissionSlotAlreadyReserved`.
 
-**C status:** `asx_task_spawn` (`src/runtime/lifecycle.c:1178-1285`) returns `ASX_E_INVALID_ARGUMENT`, `ASX_E_NOT_FOUND` / `ASX_E_STALE_HANDLE`, `ASX_E_REGION_POISONED`, `ASX_E_REGION_CLOSED`, `ASX_E_ADMISSION_LIMIT`, or `ASX_E_RESOURCE_EXHAUSTED` when no task slot is free (`asx_task_slot_alloc`, `:395-410`). `ASX_E_REGION_AT_CAPACITY`, `ASX_E_SCHEDULER_UNAVAILABLE` and `ASX_E_NAME_CONFLICT` (`include/asx/asx_status.h:47`, `:46`, `:47`) are declared but not returned by any file under `src/`. Parity: `spawn-into-cancelled-region-step-001`, `region-lifecycle-closed-child-spawn-001` (`ASX_E_REGION_CLOSED`), `region-limits-admission-001` (`ASX_E_ADMISSION_LIMIT`).
+**C status:** `asx_task_spawn` (`src/runtime/lifecycle.c:1188-1295`) returns `ASX_E_INVALID_ARGUMENT`, `ASX_E_NOT_FOUND` / `ASX_E_STALE_HANDLE`, `ASX_E_REGION_POISONED`, `ASX_E_REGION_CLOSED`, `ASX_E_ADMISSION_LIMIT`, or `ASX_E_RESOURCE_EXHAUSTED` when no task slot is free (`asx_task_slot_alloc`, `:395-410`). `ASX_E_REGION_AT_CAPACITY`, `ASX_E_SCHEDULER_UNAVAILABLE` and `ASX_E_NAME_CONFLICT` (`include/asx/asx_status.h:47`, `:46`, `:47`) are declared but not returned by any file under `src/`. Parity: `spawn-into-cancelled-region-step-001`, `region-lifecycle-closed-child-spawn-001` (`ASX_E_REGION_CLOSED`), `region-limits-admission-001` (`ASX_E_ADMISSION_LIMIT`).
 
 ---
 
@@ -576,7 +576,7 @@ Rust: when a child region closes, it records its cleanup outcome and descendant 
 
 Rust `cancel_request_in`: the subtree is collected depth-first with an explicit stack (`collect_region_and_descendants_with_depth`, `src/runtime/state.rs:7904-7931`; children are pushed in membership order and therefore popped last-first), then stably sorted by depth (`:7653`). The first pass visits regions in that order (`:7665`), the second pass cancels each region's tasks in membership order (`:7811-7830`).
 
-**C status:** `asx_region_cancel` (`src/runtime/cancellation.c:517-583`) takes the subtree in Rust's order: a depth-first walk with a stack over `children[]`, then a stable sort by depth (`asx_region_subtree_internal`, `src/runtime/lifecycle.c:678-732`). It runs the region pass (`src/runtime/cancellation.c:529-566`), then the task pass (`cancel_subtree_tasks`, `:432-470`, each region's tasks in membership order), then advances idle regions (`:571-578`). Until 2026-10-10 C walked breadth-first in `children[]` order (bd-e038): with two or more child regions holding live tasks, the cancel-lane pushes came in a different order and the lab's seeded pick dispatched a different task. Fixtures `cancel-subtree-order-001` (three children, two with a child of their own) and `cancel-subtree-order-after-child-close-001` (four children, the second closed first) are Rust captures that the old walk fails.
+**C status:** `asx_region_cancel` (`src/runtime/cancellation.c:517-583`) takes the subtree in Rust's order: a depth-first walk with a stack over `children[]`, then a stable sort by depth (`asx_region_subtree_internal`, `src/runtime/lifecycle.c:678-740`). It runs the region pass (`src/runtime/cancellation.c:529-566`), then the task pass (`cancel_subtree_tasks`, `:432-470`, each region's tasks in membership order), then advances idle regions (`:571-578`). Until 2026-10-10 C walked breadth-first in `children[]` order (bd-e038): with two or more child regions holding live tasks, the cancel-lane pushes came in a different order and the lab's seeded pick dispatched a different task. Fixtures `cancel-subtree-order-001` (three children, two with a child of their own) and `cancel-subtree-order-after-child-close-001` (four children, the second closed first) are Rust captures that the old walk fails.
 
 ### 10.5 Task Completion Notification Order
 
@@ -670,10 +670,10 @@ The variant names were checked; the one-line statements are carried over from th
 | QF-003 | Close region with pending finalizers | Region stays Finalizing until each finalizer task completes (`:10247-10264`) | not applicable: cleanup callbacks run synchronously at close |
 | QF-004 | Close region with open child regions | Waits in Draining | Waits in Draining, `ASX_E_PENDING` (`src/runtime/quiescence.c:235-243`) |
 | QF-005 | Register finalizer after close initiated | `register_*_finalizer` returns `false` (`src/runtime/state.rs:9054-9060`, `:9107-9113`) | no registration API |
-| QF-006 | Spawn child region during `Finalizing` | `AdmissionError::Closed` (`src/record/region.rs:1341-1354`) | `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:917`); the earlier `ASX_E_ADMISSION_CLOSED` was wrong |
-| QF-007 | Reserve obligation during `Finalizing` | `AdmissionError::Closed` (`src/record/region.rs:1449-1457`) | `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1656`); test `finalizing_region_still_rejects_obligation_reserve` |
+| QF-006 | Spawn child region during `Finalizing` | `AdmissionError::Closed` (`src/record/region.rs:1341-1354`) | `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:927`); the earlier `ASX_E_ADMISSION_CLOSED` was wrong |
+| QF-007 | Reserve obligation during `Finalizing` | `AdmissionError::Closed` (`src/record/region.rs:1449-1457`) | `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1666`); test `finalizing_region_still_rejects_obligation_reserve` |
 | QF-008 | Double-resolve obligation | `ObligationAlreadyResolved` error through the runtime; panic only at record level (section 4.1) | `ASX_E_INVALID_TRANSITION` (section 4.1) |
-| QF-009 | Use region heap after `Closed` | `AdmissionError::Closed` from `heap_alloc` (`src/record/region.rs:1579-1589`) | `ASX_E_REGION_CLOSED` from `asx_task_spawn_captured` (`src/runtime/lifecycle.c:1344`) |
+| QF-009 | Use region heap after `Closed` | `AdmissionError::Closed` from `heap_alloc` (`src/record/region.rs:1579-1589`) | `ASX_E_REGION_CLOSED` from `asx_task_spawn_captured` (`src/runtime/lifecycle.c:1354`) |
 | QF-010 | Backward region state transition | CAS fails (`src/record/region.rs:310-319`) | `ASX_E_INVALID_TRANSITION` (`src/core/transition_tables.c:72-75`; the table at `:22-28`) |
 | QF-011 | Skip intermediate close state | No such CAS path exists | `ASX_E_INVALID_TRANSITION` (same table) |
 | QF-012 | Recursive leak detection | Allowed but deduplicated (`in_flight_leak_ids`) with deferred region advances (section 4.5) | Cannot happen (section 4.5) |
@@ -808,7 +808,7 @@ None of the candidate fixture IDs below exists in the repository: none is `fixtu
 | `ASX_E_ADMISSION_LIMIT` | Capacity limit reached | Yes |
 | `ASX_E_REGION_NOT_FOUND` | Stale/invalid region handle | No; C uses `ASX_E_NOT_FOUND` / `ASX_E_STALE_HANDLE` |
 | `ASX_E_REGION_CLOSED` | Admission refused by a closing or closed region | Yes |
-| `ASX_E_UNRESOLVED_OBLIGATIONS` | Obligations remain at close attempt | Only as the fault passed to region containment by the PANIC leak policy (`src/runtime/lifecycle.c:596`, `:1509`) |
+| `ASX_E_UNRESOLVED_OBLIGATIONS` | Obligations remain at close attempt | Only as the fault passed to region containment by the PANIC leak policy (`src/runtime/lifecycle.c:596`, `:1519`) |
 | `ASX_E_INCOMPLETE_CHILDREN` | Children not complete at close attempt | No (bd-udlh) |
 | `ASX_E_TASKS_STILL_ACTIVE` | Tasks remain active (quiescence check) | No (bd-udlh); C uses `ASX_E_QUIESCENCE_TASKS_LIVE` |
 | `ASX_E_OBLIGATIONS_UNRESOLVED` | Obligations remain (quiescence check) | Yes (`src/runtime/quiescence.c:55`) |

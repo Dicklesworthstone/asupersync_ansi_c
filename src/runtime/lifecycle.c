@@ -691,6 +691,14 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
     asx_task_join_wake_waiters_internal(task);
     task->parked = 0;
     asx_task_release_capture_internal(task);
+    if (region != NULL) {
+        /* Rust unlink_completed_task_from_region_in (state.rs:8509-8522):
+         * the task's outcome joins the region's close outcome. */
+        region->close_outcome = region->has_close_outcome
+                                    ? asx_outcome_join(&region->close_outcome, &task->outcome)
+                                    : task->outcome;
+        region->has_close_outcome = 1;
+    }
     if (region != NULL && region->task_count > 0u) region->task_count--;
     if (task->detached) { asx_task_slot_release((uint32_t)(task - g_tasks)); }
 }
@@ -879,6 +887,8 @@ static asx_status region_open_with_parent(asx_region_id parent, asx_region_id *o
     memset(&g_regions[idx].lab_principal, 0, sizeof(g_regions[idx].lab_principal));
     g_regions[idx].lab_pending_admissions = 0;
     g_regions[idx].capture_used = 0;
+    g_regions[idx].has_close_outcome = 0;
+    g_regions[idx].close_outcome = asx_outcome_make(ASX_OUTCOME_OK);
     g_regions[idx].cancel_requested = 0;
     g_regions[idx].cancel_reason.kind = ASX_CANCEL_USER;
     g_regions[idx].cancel_reason.origin_region = ASX_INVALID_ID;

@@ -1195,6 +1195,20 @@ typedef void (*asx_region_finalizer_fn)(void *user_data);
 ASX_API ASX_MUST_USE asx_status asx_region_defer_sync(asx_region_id region,
                                                       asx_region_finalizer_fn fn, void *user_data);
 
+/* Read a region's close outcome, as Rust's
+ * RuntimeState::region_close_outcome does (runtime/state.rs:3743): the
+ * outcomes of the tasks that completed in it, joined (asx_outcome_join:
+ * the most severe wins). A Closed region with no task outcome recorded
+ * reports Cancelled if it was cancelled, else Ok (RegionRecord::
+ * complete_close's default, record/region.rs:1810-1823): a cancelled region
+ * whose tasks all completed Ok reports Ok, as in Rust.
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if out is NULL, a lookup error for
+ * a bad handle, or ASX_E_NOT_FOUND while the region is not Closed and none
+ * of its tasks has completed.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_region_get_close_outcome(asx_region_id region,
+                                                             asx_outcome *out);
+
 /* -------------------------------------------------------------------
  * Drain progress and quiescence evidence (bd-1eqo.5.2)
  *

@@ -379,3 +379,21 @@ asx_status asx_region_defer_sync(asx_region_id region, asx_region_finalizer_fn f
     if (r->state != ASX_REGION_OPEN) return ASX_E_REGION_CLOSED;
     return asx_cleanup_push(&r->cleanup, fn, user_data, &h);
 }
+
+asx_status asx_region_get_close_outcome(asx_region_id region, asx_outcome *out) {
+    asx_region_slot *r;
+    asx_status st;
+
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(region, &r);
+    if (st != ASX_OK) return st;
+    if (r->has_close_outcome) {
+        *out = r->close_outcome;
+        return ASX_OK;
+    }
+    if (r->state != ASX_REGION_CLOSED) return ASX_E_NOT_FOUND;
+    /* complete_close's default, fixed once the region is Closed (its
+     * cancel state can no longer change). */
+    *out = asx_outcome_make(r->cancel_requested ? ASX_OUTCOME_CANCELLED : ASX_OUTCOME_OK);
+    return ASX_OK;
+}

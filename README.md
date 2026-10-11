@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-1%2C998%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-1%2C999%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,998<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,999<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->1,998<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->1,999<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -989,7 +989,7 @@ An obligation (send permit, ack, lease, I/O op, semaphore permit, transaction) i
   - `PANIC` routes the leak through region fault containment, so FAIL_FAST surfaces `ASX_E_UNRESOLVED_OBLIGATIONS` from the scheduler.
 - `leak_escalation` switches to a stricter response once the leak count reaches a threshold. As in Rust, the leak that reaches it is the first one escalated.
 
-A region's close runs in Rust's order: its cleanup stack drains (LIFO), then any obligation of the region still reserved (one with no holder, reserved outside a poll, for instance) is leaked under the same policy as one batch, and the region closes. Under `PANIC` the close fails fast with `ASX_E_UNRESOLVED_OBLIGATIONS` first.
+A region's close runs in Rust's order: its cleanup stack drains (LIFO), then any obligation of the region still reserved (one with no holder, reserved outside a poll, for instance) is leaked under the same policy as one batch, and the region closes. Under `PANIC` the close fails fast with `ASX_E_UNRESOLVED_OBLIGATIONS` first. `asx_region_get_close_outcome` reads a region's close outcome, as Rust's `region_close_outcome` does: the outcomes of its tasks joined, or, if none completed, `CANCELLED` for a cancelled region and `OK` otherwise.
 
 `asx_obligation_get_info` and `asx_obligation_leak_count` expose the results.
 
@@ -2292,7 +2292,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->1,998<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->1,999<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

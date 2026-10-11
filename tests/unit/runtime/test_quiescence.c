@@ -310,6 +310,107 @@ TEST(defer_sync_refused_once_the_region_is_closing) {
     ASSERT_EQ(asx_region_defer_sync(rid, finalizer_record_1, NULL), ASX_E_REGION_CLOSED);
 }
 
+/* -------------------------------------------------------------------
+ * asx_region_get_close_outcome: Rust's region_close_outcome (bd-9kll.3.4)
+ * ------------------------------------------------------------------- */
+
+static asx_status poll_fails(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    return ASX_E_INVALID_STATE;
+}
+
+static asx_status poll_completes(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    return ASX_OK;
+}
+
+TEST(close_outcome_joins_the_task_outcomes) {
+    /* Every completed task's outcome joins the region's (record_close_
+     * outcome, record/region.rs:1144-1150): Ok and Err give Err. */
+    asx_region_id rid;
+    asx_task_id t1;
+    asx_task_id t2;
+    asx_outcome o;
+    asx_budget budget;
+    asx_status st;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_get_close_outcome(rid, &o), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_task_spawn(rid, poll_completes, NULL, &t1), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_fails, NULL, &t2), ASX_OK);
+    budget = asx_budget_from_polls(16);
+    st = asx_scheduler_run(rid, &budget); /* the failure may surface (fail-fast) */
+    (void)st;
+    ASSERT_EQ(asx_region_get_close_outcome(rid, &o), ASX_OK); /* known before close */
+    ASSERT_EQ(o.severity, ASX_OUTCOME_ERR);
+    budget = asx_budget_infinite();
+    st = asx_region_drain(rid, &budget);
+    (void)st;
+    ASSERT_EQ(asx_region_get_close_outcome(rid, &o), ASX_OK);
+    ASSERT_EQ(o.severity, ASX_OUTCOME_ERR);
+}
+
+TEST(close_outcome_of_a_cancelled_empty_region_is_cancelled) {
+    /* complete_close's default (record/region.rs:1810-1823): no task
+     * outcome and a cancel reason give Cancelled; no cancel gives Ok. */
+    asx_region_id cancelled;
+    asx_region_id plain;
+    asx_cancel_reason reason;
+    asx_region_state rs;
+    asx_outcome o;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&cancelled), ASX_OK);
+    reason = asx_cancel_reason_default(ASX_CANCEL_USER, "test");
+    ASSERT_EQ(asx_region_cancel(cancelled, &reason, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_get_state(cancelled, &rs), ASX_OK);
+    ASSERT_EQ(rs, ASX_REGION_CLOSED); /* no live work: it finalizes at once */
+    ASSERT_EQ(asx_region_get_close_outcome(cancelled, &o), ASX_OK);
+    ASSERT_EQ(o.severity, ASX_OUTCOME_CANCELLED);
+
+    ASSERT_EQ(asx_region_open(&plain), ASX_OK);
+    ASSERT_EQ(asx_region_close(plain), ASX_OK);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(plain, &budget), ASX_OK);
+    ASSERT_EQ(asx_region_get_close_outcome(plain, &o), ASX_OK);
+    ASSERT_EQ(o.severity, ASX_OUTCOME_OK);
+}
+
+TEST(close_outcome_of_a_cancelled_region_keeps_its_task_outcomes) {
+    /* The cancel default applies only when no task outcome was recorded
+     * (get_or_insert, record/region.rs:1823): a task that completed Ok
+     * before the region was cancelled leaves it Ok, as in Rust. */
+    asx_region_id rid;
+    asx_task_id t;
+    asx_cancel_reason reason;
+    asx_outcome o;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_completes, NULL, &t), ASX_OK);
+    budget = asx_budget_from_polls(4);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    reason = asx_cancel_reason_default(ASX_CANCEL_USER, "test");
+    ASSERT_EQ(asx_region_cancel(rid, &reason, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_get_close_outcome(rid, &o), ASX_OK);
+    ASSERT_EQ(o.severity, ASX_OUTCOME_OK);
+}
+
+TEST(close_outcome_argument_errors) {
+    asx_region_id rid;
+    asx_outcome o;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_get_close_outcome(rid, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_NE(asx_region_get_close_outcome(ASX_INVALID_ID, &o), ASX_OK);
+}
+
 TEST(defer_sync_argument_errors_and_capacity) {
     asx_region_id rid;
     uint32_t i;
@@ -1280,6 +1381,10 @@ int main(void) {
     RUN_TEST(defer_sync_runs_after_the_region_tasks_complete);
     RUN_TEST(defer_sync_refused_once_the_region_is_closing);
     RUN_TEST(defer_sync_argument_errors_and_capacity);
+    RUN_TEST(close_outcome_joins_the_task_outcomes);
+    RUN_TEST(close_outcome_of_a_cancelled_empty_region_is_cancelled);
+    RUN_TEST(close_outcome_of_a_cancelled_region_keeps_its_task_outcomes);
+    RUN_TEST(close_outcome_argument_errors);
     asx_runtime_reset();
     RUN_TEST(finalizing_region_allows_cleanup_task_spawn);
     asx_runtime_reset();

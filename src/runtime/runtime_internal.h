@@ -68,6 +68,12 @@ typedef struct {
      * ones. Descendants' reasons chain to their parent's via `cause`. */
     int cancel_requested;
     asx_cancel_reason cancel_reason;
+    /* Rust RegionRecord::close_outcome (record/region.rs:1139-1150): the
+     * outcome of every task that completed in the region, joined. A region
+     * that closes with none recorded reports Cancelled if it was cancelled,
+     * else Ok (complete_close's default, :1810-1823). */
+    int has_close_outcome;
+    asx_outcome close_outcome;
     /* Lab dispatch: the entropy of the region's principal, a child region a
      * task opened (Rust mints its Cx with a fork of the runtime source,
      * state.rs:5093); a task spawned into it forks from this. */
