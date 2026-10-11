@@ -357,3 +357,25 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
 
     return ASX_OK;
 }
+
+/* -------------------------------------------------------------------
+ * Region finalizers: Rust's Scope::defer_sync
+ * (RuntimeState::register_sync_finalizer, runtime/state.rs:9046-9065).
+ * A finalizer is an entry of the region's cleanup stack, drained LIFO by
+ * asx_region_finalize_one before the leak audit.
+ * ------------------------------------------------------------------- */
+
+asx_status asx_region_defer_sync(asx_region_id region, asx_region_finalizer_fn fn,
+                                 void *user_data) {
+    asx_region_slot *r;
+    asx_cleanup_handle h;
+    asx_status st;
+
+    if (fn == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(region, &r);
+    if (st != ASX_OK) return st;
+    /* Rust accepts finalizers only while the region is neither closing
+     * nor terminal: Open. */
+    if (r->state != ASX_REGION_OPEN) return ASX_E_REGION_CLOSED;
+    return asx_cleanup_push(&r->cleanup, fn, user_data, &h);
+}

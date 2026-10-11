@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-1%2C997%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-1%2C998%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,997<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->1,998<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->1,997<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->1,998<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -1471,9 +1471,9 @@ asx_status hold_both(asx_cleanup_stack *cleanup, void *file, void *lock) {
 }
 ```
 
-Each entry carries a generation counter so stale cleanup handles cannot accidentally fire against a recycled slot. When a region reaches the FINALIZING state, its own cleanup stack is drained completely before transitioning to CLOSED, and quiescence condition Q4 verifies `asx_cleanup_pending() == 0`. There is no public call yet that registers a handler on a region's own stack, so application code keeps its own `asx_cleanup_stack` (as above) and calls `asx_cleanup_drain()` itself.
+Each entry carries a generation counter so stale cleanup handles cannot accidentally fire against a recycled slot. When a region reaches the FINALIZING state, its own cleanup stack is drained completely before transitioning to CLOSED, and quiescence condition Q4 verifies `asx_cleanup_pending() == 0`.
 
-Handlers on a region's stack always run, LIFO, before the region closes; for a stack you own, `asx_cleanup_drain()` gives the same deterministic order.
+`asx_region_defer_sync(region, fn, user_data)` registers a handler on a region's own stack, as Rust's `Scope::defer_sync` does. It is accepted while the region is OPEN and refused (`ASX_E_REGION_CLOSED`) once it is closing. The region's handlers run once, LIFO, when it finalizes, after its tasks and child regions are done and before its leak audit and close. A handler may spawn cleanup work into the region; the close then waits for it. For a stack you own, `asx_cleanup_drain()` gives the same deterministic order.
 
 ## Outcome Severity Lattice
 
@@ -2292,7 +2292,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->1,997<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->1,998<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

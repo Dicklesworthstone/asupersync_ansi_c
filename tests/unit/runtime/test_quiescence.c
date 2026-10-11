@@ -195,7 +195,6 @@ TEST(region_drain_budget_exhaustion_leaves_region_closing) {
 TEST(region_drain_finalizer_spawned_task_requires_followup_drain) {
     asx_region_id rid;
     asx_region_slot *region = NULL;
-    asx_cleanup_handle handle = ASX_CLEANUP_INVALID;
     cleanup_spawn_task_ctx spawn_ctx;
     asx_task_state task_state;
     asx_budget budget;
@@ -208,8 +207,7 @@ TEST(region_drain_finalizer_spawned_task_requires_followup_drain) {
     spawn_ctx.region = rid;
     spawn_ctx.spawn_status = ASX_E_INVALID_STATE;
     spawn_ctx.task_id = ASX_INVALID_ID;
-    ASSERT_EQ(asx_cleanup_push(&region->cleanup, cleanup_spawn_immediate_task, &spawn_ctx, &handle),
-              ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(rid, cleanup_spawn_immediate_task, &spawn_ctx), ASX_OK);
 
     budget = asx_budget_from_polls(8);
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
@@ -226,6 +224,104 @@ TEST(region_drain_finalizer_spawned_task_requires_followup_drain) {
     ASSERT_EQ(task_state, ASX_TASK_COMPLETED);
     ASSERT_EQ(region->state, ASX_REGION_CLOSED);
     ASSERT_EQ(asx_quiescence_check(rid), ASX_OK);
+}
+
+/* -------------------------------------------------------------------
+ * asx_region_defer_sync: Rust's Scope::defer_sync (bd-9kll.3.4)
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    int order[8];
+    int n;
+} finalizer_log;
+
+static finalizer_log g_finalizer_log;
+
+static void finalizer_record_1(void *ud) {
+    (void)ud;
+    if (g_finalizer_log.n < 8) g_finalizer_log.order[g_finalizer_log.n++] = 1;
+}
+static void finalizer_record_2(void *ud) {
+    (void)ud;
+    if (g_finalizer_log.n < 8) g_finalizer_log.order[g_finalizer_log.n++] = 2;
+}
+static void finalizer_record_3(void *ud) {
+    (void)ud;
+    if (g_finalizer_log.n < 8) g_finalizer_log.order[g_finalizer_log.n++] = 3;
+}
+
+TEST(defer_sync_finalizers_run_once_in_lifo_order_at_close) {
+    asx_region_id rid;
+    asx_region_state st;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    memset(&g_finalizer_log, 0, sizeof(g_finalizer_log));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(rid, finalizer_record_1, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(rid, finalizer_record_2, NULL), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(rid, finalizer_record_3, NULL), ASX_OK);
+    ASSERT_EQ(g_finalizer_log.n, 0); /* nothing runs before the region finalizes */
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_region_get_state(rid, &st), ASX_OK);
+    ASSERT_EQ(st, ASX_REGION_CLOSED);
+    ASSERT_EQ(g_finalizer_log.n, 3);
+    ASSERT_EQ(g_finalizer_log.order[0], 3);
+    ASSERT_EQ(g_finalizer_log.order[1], 2);
+    ASSERT_EQ(g_finalizer_log.order[2], 1);
+    /* A drain of the closed region runs nothing again. */
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    ASSERT_EQ(g_finalizer_log.n, 3);
+}
+
+TEST(defer_sync_runs_after_the_region_tasks_complete) {
+    /* Finalizers run in Finalizing, after the region's tasks are done
+     * (Rust register_sync_finalizer docs, runtime/state.rs:9032-9045). */
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_task_state ts;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    memset(&g_finalizer_log, 0, sizeof(g_finalizer_log));
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(rid, finalizer_record_1, NULL), ASX_OK);
+    budget = asx_budget_from_polls(16);
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_get_state(tid, &ts), ASX_OK);
+    ASSERT_EQ(ts, ASX_TASK_COMPLETED);
+    ASSERT_EQ(g_finalizer_log.n, 1);
+}
+
+TEST(defer_sync_refused_once_the_region_is_closing) {
+    /* Rust refuses a finalizer for a closing or terminal region
+     * (runtime/state.rs:9056-9062). */
+    asx_region_id rid;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_close(rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(rid, finalizer_record_1, NULL), ASX_E_REGION_CLOSED);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(rid, finalizer_record_1, NULL), ASX_E_REGION_CLOSED);
+}
+
+TEST(defer_sync_argument_errors_and_capacity) {
+    asx_region_id rid;
+    uint32_t i;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(rid, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_NE(asx_region_defer_sync(ASX_INVALID_ID, finalizer_record_1, NULL), ASX_OK);
+    for (i = 0; i < (uint32_t)ASX_CLEANUP_STACK_CAPACITY; i++) {
+        ASSERT_EQ(asx_region_defer_sync(rid, finalizer_record_1, NULL), ASX_OK);
+    }
+    ASSERT_EQ(asx_region_defer_sync(rid, finalizer_record_1, NULL), ASX_E_RESOURCE_EXHAUSTED);
 }
 
 TEST(finalizing_region_allows_cleanup_task_spawn) {
@@ -1180,6 +1276,10 @@ int main(void) {
     RUN_TEST(region_drain_budget_exhaustion_leaves_region_closing);
     asx_runtime_reset();
     RUN_TEST(region_drain_finalizer_spawned_task_requires_followup_drain);
+    RUN_TEST(defer_sync_finalizers_run_once_in_lifo_order_at_close);
+    RUN_TEST(defer_sync_runs_after_the_region_tasks_complete);
+    RUN_TEST(defer_sync_refused_once_the_region_is_closing);
+    RUN_TEST(defer_sync_argument_errors_and_capacity);
     asx_runtime_reset();
     RUN_TEST(finalizing_region_allows_cleanup_task_spawn);
     asx_runtime_reset();

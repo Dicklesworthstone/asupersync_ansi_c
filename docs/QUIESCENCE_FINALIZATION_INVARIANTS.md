@@ -457,7 +457,7 @@ This is a C design from the port plan (Section 6.8.D), not a Rust structure. The
 
 1. "Every reserve/acquire registers a cleanup action at acquisition time": **not implemented.** `asx_obligation_reserve_impl` (`src/runtime/lifecycle.c:1634-1683`) registers none; per-task stacks do not exist (`include/asx/core/cleanup.h:8-9` defers them).
 2. "commit/abort pops entries": **not implemented** for obligations; `asx_cleanup_pop` exists (`include/asx/core/cleanup.h:61-65`).
-3. "During finalization, unresolved entries are drained LIFO": **implemented** for the per-region stack (`src/runtime/quiescence.c:254`, `src/core/cleanup.c:92-111`).
+3. "During finalization, unresolved entries are drained LIFO": **implemented** for the per-region stack (`src/runtime/quiescence.c:254`, `src/core/cleanup.c:92-111`). Applications register entries with `asx_region_defer_sync`, Rust's `Scope::defer_sync`, while the region is Open (`src/runtime/quiescence.c:368`). Rust's async finalizers (`defer_async`, run as masked tasks under a budget) are not ported.
 4. "Discarding a token without resolution triggers detection during region finalization": C detects it at holder completion or `asx_obligation_drop` (section 4.2), and at finalization the close audit leaks what is still unresolved (section 4.3).
 
 ### 7.4 Force-Completion
@@ -795,7 +795,7 @@ None of the candidate fixture IDs below exists in the repository: none is `fixtu
 | C7 | Configurable leak response with escalation | Implemented with differences: default LOG, count checked before increment, Recover reason (section 5; bd-9kll.3.6) |
 | C8 | Finalizer LIFO with bounded budget | LIFO only, for the C cleanup stack; the budget fields are not read (sections 6.2, 6.4; bd-udlh) |
 | C9 | Cancel-masked async finalizers | Not implemented (section 6.3) |
-| C10 | Cleanup stack per task/region with LIFO drain | Per region only, with no public registration API (section 7.3) |
+| C10 | Cleanup stack per task/region with LIFO drain | Per region only; registered with `asx_region_defer_sync` (Rust `Scope::defer_sync`), synchronous only (section 7.3) |
 | C11 | Sorted obligation storage (BTreeMap equivalent) | Not applicable as stated: Rust's runtime table is an arena too (section 4.4). C scans slots in order; a holder's leaks go newest first |
 | C12 | Reentrance guard for leak detection | Not needed in the current code (section 4.5) |
 | C13 | Ghost monitors: debug builds only, zero-cost in release | Implemented (section 12.3) |
