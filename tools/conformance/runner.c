@@ -56,6 +56,7 @@
 static char g_file[FILE_CAP];
 static asx_json_doc g_fixture;
 static asx_json_doc g_run;
+static asx_json_doc g_digest;
 static char g_a[BYTES_CAP];
 static char g_b[BYTES_CAP];
 static char g_error[1024];
@@ -188,6 +189,47 @@ static void diff_dispatches(uint32_t want, uint32_t got) {
 
 typedef enum { CMP_PASS, CMP_FAIL, CMP_ERROR } cmp_result;
 
+/* Only a Rust capture is evidence (oracle self-test, bd-9kll.2.7): the
+ * fixture must name twin_run as its producer, and its semantic digest must
+ * recompute from its own trace, snapshot and observations, so a fixture
+ * written by another engine or edited after capture (to make C pass) is an
+ * ERROR, never a comparison. Returns 1 when authentic. */
+static int fixture_authentic(uint32_t root, const char *id) {
+    uint32_t prov = asx_json_get(&g_fixture, root, "provenance");
+    const char *producer =
+        prov != ASX_JSON_NONE ? asx_json_get_string(&g_fixture, prov, "producer") : NULL;
+    const char *want = asx_json_get_string(&g_fixture, root, "semantic_digest");
+    const char *vocabulary = asx_json_get_string(&g_fixture, root, "vocabulary");
+    char got[ASX_CANON_DIGEST_LEN];
+    uint32_t semantic;
+
+    if (producer == NULL || strcmp(producer, "tools/twin_run") != 0) {
+        fprintf(stdout, "ERROR %s: provenance.producer is not tools/twin_run: not a Rust capture\n",
+                id);
+        return 0;
+    }
+    asx_json_doc_init(&g_digest);
+    semantic = asx_json_new_object(&g_digest);
+    asx_json_set(&g_digest, semantic, "observations",
+                 asx_json_copy(&g_digest, &g_fixture,
+                               asx_json_get(&g_fixture, root, "observations")));
+    asx_json_set(&g_digest, semantic, "snapshot",
+                 asx_json_copy(&g_digest, &g_fixture, asx_json_get(&g_fixture, root, "snapshot")));
+    asx_json_set(&g_digest, semantic, "trace",
+                 asx_json_copy(&g_digest, &g_fixture, asx_json_get(&g_fixture, root, "trace")));
+    asx_json_set(&g_digest, semantic, "vocabulary",
+                 asx_json_new_string(&g_digest, vocabulary != NULL ? vocabulary : ""));
+    if (want == NULL || !asx_json_doc_ok(&g_digest) ||
+        asx_canon_digest(&g_digest, semantic, got) != ASX_OK || strcmp(want, got) != 0) {
+        fprintf(stdout,
+                "ERROR %s: semantic_digest does not recompute from the fixture's trace, snapshot "
+                "and observations (edited after capture?)\n",
+                id);
+        return 0;
+    }
+    return 1;
+}
+
 /* Run one fixture's scenario through C and compare. `mutate` corrupts the
  * expected trace first (the self-test). */
 static cmp_result compare_one(const char *path, int mutate) {
@@ -225,6 +267,7 @@ static cmp_result compare_one(const char *path, int mutate) {
                 path);
         return CMP_ERROR;
     }
+    if (!fixture_authentic(root, id)) return CMP_ERROR;
     if (mutate) {
         /* Rename the kind of the first event of the first layer. */
         uint32_t first = asx_json_item(&g_fixture, asx_json_item(&g_fixture, want_trace, 0), 0);

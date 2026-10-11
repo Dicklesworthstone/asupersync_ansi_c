@@ -149,6 +149,11 @@ calls `asx_codec_cross_codec_verify`. It is not evidence of Rust parity.
   fixtures fail). A mutant on the holder-completion path was not caught:
   the interpreter drops a task's remaining tokens itself before the task
   completes, so no fixture reaches `asx_task_resolve_held_obligations_internal`.
+- Only untouched Rust captures are compared: `asx-conformance` refuses (as
+  an ERROR) a fixture whose `provenance.producer` is not `tools/twin_run` or
+  whose `semantic_digest` does not recompute from its own trace, snapshot
+  and observations, so a fixture edited after capture cannot make C pass;
+  `tests/gates/test_fixture_authenticity.sh` checks both refusals.
 - `make fuzz-differential` (`Makefile:1590-1608`) generates DSL v2 scenarios
   with `twin_run generate`, captures them in Rust and compares the C run of
   each captured scenario the same way. CI job `fuzz-rust-differential` runs
