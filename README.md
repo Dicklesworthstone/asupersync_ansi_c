@@ -910,7 +910,7 @@ Region, task, obligation and channel lookups check the type tag, so type confusi
 
 ### Wake-Driven Deterministic Scheduler
 
-`asx_scheduler_run(region, budget)` drives a whole region **subtree**. Runnable tasks are polled in ascending arena index within each round, so the same tasks and seed produce identical event sequences across runs, platforms, and profiles.
+`asx_scheduler_run(region, budget)` drives a whole region **subtree**. Runnable tasks are polled in ascending arena index within each round, so the same tasks and seed produce identical event sequences across runs, platforms, and profiles. `ASX_OK` means every task in the subtree completed; the regions themselves stay open until `asx_region_close` or `asx_region_drain` closes them.
 
 `asx_scheduler_use_lab_dispatch(seed)` switches to the dispatch model of Rust asupersync's `LabRuntime` (one worker): each step draws one value from a seeded xorshift64 and polls a single task. The task comes from the cancel lane (up to 16 in a row) before the ready lane, at the highest priority, the step's value picking among equal-priority entries in wake order. Due timers wake their tasks in timer-wheel order. Each task also gets Rust's per-task entropy stream (a DetEntropy fork keyed by the task's id in a shadow of Rust's task arena), from which a race picks its winner among members ready in the same round, as Rust's `race_all` does. The conformance oracle runs every scenario this way, and with the same scenario and seed the C and Rust runs dispatch identically (`make conformance`, `make fuzz-differential`).
 

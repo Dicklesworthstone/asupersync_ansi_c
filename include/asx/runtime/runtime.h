@@ -854,7 +854,9 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_get_state(asx_obligation_id id,
  *   and must have remaining polls > 0.
  * Postconditions: tasks are polled in arena-index order; event log is
  *   populated; budget is decremented once per poll.
- * Returns ASX_OK when all tasks complete (quiescent),
+ * Returns ASX_OK when all tasks complete (quiescent); the regions stay
+ *   open, as after Rust's run_until_idle: asx_region_close or
+ *   asx_region_drain closes them,
  *   ASX_E_POLL_BUDGET_EXHAUSTED if polls ran out before completion,
  *   ASX_E_TIMED_OUT if the budget's deadline passed before completion
  *     (the deadline also bounds time spent blocked waiting for I/O,
