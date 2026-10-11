@@ -426,7 +426,7 @@ TimerHandle { id: u64, generation: u64 }   // wheel.rs:225-228
 
 ## 3. Deterministic Scheduler Semantics
 
-**C status (whole section):** C does not port `three_lane.rs`. Rust parity runs use C's lab dispatch (`src/runtime/lab_dispatch.c`), which ports the Rust `LabRuntime` dispatch with one worker (`lab/runtime.rs` `pop_for_worker`, `:6324-6373`, over `priority.rs` lanes). Outside lab dispatch, `src/runtime/scheduler.c` polls runnable tasks in ascending arena order each round (`scheduler.c:1-22`, loop at `:1385`). The optional parallel profile (`src/runtime/parallel.c`) is a C design of its own, described where relevant below.
+**C status (whole section):** C does not port `three_lane.rs`. Rust parity runs use C's lab dispatch (`src/runtime/lab_dispatch.c`), which ports the Rust `LabRuntime` dispatch with one worker (`lab/runtime.rs` `pop_for_worker`, `:6324-6373`, over `priority.rs` lanes). Outside lab dispatch, `src/runtime/scheduler.c` polls runnable tasks in ascending arena order each round (`scheduler.c:1-22`, loop at `:1386`). The optional parallel profile (`src/runtime/parallel.c`) is a C design of its own, described where relevant below.
 
 ### 3.1 Three-Lane Architecture
 
@@ -467,7 +467,7 @@ next_task():
 run_loop_until (:5570): when next_task finds nothing, spin -> yield -> park (section 3.10)
 ```
 
-**C status:** spec (Rust) — not implemented in C. The C lab step (`src/runtime/scheduler.c:1214-1258`) follows `LabRuntime::step_inner` (`lab/runtime.rs:4480-`): drain admissions and commands, draw one RNG value (`lab/runtime.rs:4499`), process timers (`:4509-4511`), then pick a task. C does the same in that order (`scheduler.c:1231-1239`).
+**C status:** spec (Rust) — not implemented in C. The C lab step (`src/runtime/scheduler.c:1215-1259`) follows `LabRuntime::step_inner` (`lab/runtime.rs:4480-`): drain admissions and commands, draw one RNG value (`lab/runtime.rs:4499`), process timers (`:4509-4511`), then pick a task. C does the same in that order (`scheduler.c:1232-1240`).
 
 ### 3.3 Entry Ordering Contracts
 
@@ -573,7 +573,7 @@ When `next_task` finds nothing (`advance_empty_backoff`, `three_lane.rs:5517-552
 
 The park deadline is chosen from the timer-driver, local timed and global timed deadlines (`select_backoff_deadline`, `three_lane.rs:529-545`, called at `:5741-5746`); with no deadline the worker parks without a timeout (`:5814`).
 
-**C status:** spec (Rust) — not implemented in C. When every task is parked, the native C scheduler fires due timers, jumps a virtual clock to the earliest timer, or waits in the reactor hook until the deadline (`src/runtime/scheduler.c:11-19`; wait rounded up to whole ms at `:953`, capped by `ASX_SCHED_MAX_IDLE_WAIT_MS` = 1000, `:55`). The lab run moves the virtual clock to the next timer when nothing is scheduled (`scheduler.c:1303-1309`).
+**C status:** spec (Rust) — not implemented in C. When every task is parked, the native C scheduler fires due timers, jumps a virtual clock to the earliest timer, or waits in the reactor hook until the deadline (`src/runtime/scheduler.c:11-19`; wait rounded up to whole ms at `:954`, capped by `ASX_SCHED_MAX_IDLE_WAIT_MS` = 1000, `:55`). The lab run moves the virtual clock to the next timer when nothing is scheduled (`scheduler.c:1304-1310`).
 
 ---
 
@@ -609,7 +609,7 @@ The park deadline is chosen from the timer-driver, local timed and global timed 
 | No timers pending | The worker parks without a timeout (`three_lane.rs:5814`) |
 | Next timer deadline | Park timeout = time to the nearest timer/timed deadline (`three_lane.rs:5729-5758`) |
 
-**C status:** the lab fires due timers at the start of each step, before the pick (`src/runtime/scheduler.c:1236`), and the native scheduler at the start of each round (`scheduler.c:1378-1383`). C has no timed lane: a woken task is scheduled like any other wake.
+**C status:** the lab fires due timers at the start of each step, before the pick (`src/runtime/scheduler.c:1237`), and the native scheduler at the start of each round (`scheduler.c:1379-1384`). C has no timed lane: a woken task is scheduled like any other wake.
 
 ### 4.4 Channel <-> Scheduler
 
@@ -711,7 +711,7 @@ For deterministic parity with Rust, and the current C status of each:
 | Failure | Rust detection | Rust result | C (lab dispatch) |
 |---------|-----------|----------|---|
 | Cancel-streak limit hit | `cancel_streak >= effective_limit` (`three_lane.rs:6969-6972`) | Skip cancel lane, try timed/ready; fallback cancel if none | Ready lane first after 16 cancel dispatches (`lab_dispatch.c:380-400`) |
-| No tasks available | All lanes empty | Spin -> yield -> park (section 3.10) | Step dispatches nothing; the run auto-advances the clock or returns (`scheduler.c:1265-1319`) |
+| No tasks available | All lanes empty | Spin -> yield -> park (section 3.10) | Step dispatches nothing; the run auto-advances the clock or returns (`scheduler.c:1266-1320`) |
 | Work steal failure | All stealers empty | Continue to Phase 5 / backoff | Not applicable (one worker) |
 | Shutdown requested | Checked in `run_loop_until` (`three_lane.rs:5601`, `:5647`) | Exit loop | Not applicable |
 
@@ -772,7 +772,7 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 | `sc-governor-meet-001` | MeetDeadlines suggestion reorders timed > cancel | Governor | Not materialized; not implemented in C |
 | `sc-governor-drain-001` | DrainObligations doubles cancel-streak limit | Governor | Not materialized; not implemented in C |
 | `sc-certificate-001` | Identical traces produce identical witness hash | Replay | Not materialized; not implemented in C |
-| `sc-timer-phase0-001` | Expired timers processed before task dispatch | Phase ordering | Not materialized; no v2 fixture named for it (the C lab fires due timers before each pick, `scheduler.c:1236`) |
+| `sc-timer-phase0-001` | Expired timers processed before task dispatch | Phase ordering | Not materialized; no v2 fixture named for it (the C lab fires due timers before each pick, `scheduler.c:1237`) |
 
 ---
 
@@ -816,7 +816,7 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 | `INV-SC-04` | Cancel-streak limit prevents cancellation starvation | Fairness | Lab: 16, no doubling; `parallel.c`: 16 |
 | `INV-SC-05` | Same seed -> same work-steal choices | Determinism | Not implemented |
 | `INV-SC-06` | Identical certificate fields produce identical witness hash | Replay | Not implemented |
-| `INV-SC-07` | Phase 0 (timers) executes before task dispatch | Phase ordering | Lab: due timers fire before the pick (`scheduler.c:1236`) |
+| `INV-SC-07` | Phase 0 (timers) executes before task dispatch | Phase ordering | Lab: due timers fire before the pick (`scheduler.c:1237`) |
 | `INV-SC-08` | Governor suggestion affects lane order but not correctness | Safety | Not implemented (no governor) |
 
 ### 8.4 Coverage Matrix

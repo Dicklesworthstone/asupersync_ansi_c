@@ -35,6 +35,20 @@ stated.
 | `MonitorCreated` (239), `MonitorDropped` (241), `DownDelivered` (243), `LinkCreated` (245), `LinkDropped` (247), `ExitDelivered` (249) | No production emitter at the pinned rev. | — (added with the actor/supervision vocabulary when Rust emits them). |
 | `BudgetInstalled` (256), `BudgetConsumed` (259) | Emitted only by web request regions (`src/web/request_region.rs:1069`, `:1108`). | Budget effects: task outcomes and statuses (`ASX_E_POLL_QUOTA_EXHAUSTED`, `ASX_E_COST_QUOTA_EXHAUSTED`, `ASX_E_TIMED_OUT`). |
 
+## Fields of projected events that are not compared
+
+`project_trace` (`tools/twin_run/src/run.rs`) projects each kind above from
+its `TraceData` (`/dp/asupersync/src/trace/event.rs:1545`) and drops these
+fields:
+
+| Data | Field | Why |
+|---|---|---|
+| `Obligation` | `state` | Implied by the event kind (reserve, commit, abort, leak). |
+| `Obligation` | `duration_ns` | The virtual time the obligation was held. C keeps no reserve time, so it is not compared; when obligations resolve is bounded by the trace's causal order and the dispatch schedule only. |
+| `Region` (close begin, closed) | `parent` | Carried by the region's `region.created`. |
+| `Timer` (fired, cancelled) | `deadline` | Carried by the `timer.scheduled` of the same name. |
+| `CancelReason` (every projected reason) | the cause chain's reasons, `truncated_at_depth` | Only the chain's length and `truncated` are compared. |
+
 ## C trace kinds that are not projected
 
 | C kind (`include/asx/runtime/trace.h`) | Why |

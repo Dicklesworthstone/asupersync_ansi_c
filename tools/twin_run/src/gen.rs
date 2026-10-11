@@ -213,6 +213,9 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 let mut s = json!({"op": "spawn", "as": name, "program": child_program(rng)});
                 if !held.regions.is_empty() && rng.chance(60) {
                     s["region"] = json!(rng.pick(&held.regions));
+                } else if rng.chance(15) {
+                    // cx.spawn_in(scope_with_budget): met with the spawner's.
+                    s["budget"] = some_budget(rng);
                 }
                 return s;
             }
@@ -322,7 +325,7 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 held.regions.push(name.clone());
                 let mut s = json!({"op": "open_region", "as": name});
                 if rng.chance(20) {
-                    s["budget"] = json!({"poll_quota": 2 + rng.below(6)});
+                    s["budget"] = some_budget(rng);
                 }
                 return s;
             }
@@ -554,11 +557,34 @@ fn critical_section(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> 
 }
 
 fn budget(rng: &mut Rng) -> Value {
-    if rng.chance(15) {
-        json!({"poll_quota": 2 + rng.below(6)})
+    if rng.chance(20) {
+        some_budget(rng)
     } else {
         Value::Null
     }
+}
+
+/// A poll quota, a deadline, or both, sometimes with a priority (which the
+/// lab schedules an admitted spawn at). A deadline of 0 is already due
+/// (Rust's `Some(Time::ZERO)`); the others land among the scenario's waits.
+fn some_budget(rng: &mut Rng) -> Value {
+    let kind = rng.below(3);
+    let mut b = json!({});
+    if kind != 1 {
+        b["poll_quota"] = json!(2 + rng.below(6));
+    }
+    if kind != 0 {
+        let deadline = if rng.chance(20) {
+            0
+        } else {
+            50 * (1 + rng.below(20))
+        };
+        b["deadline_ns"] = json!(deadline);
+    }
+    if rng.chance(30) {
+        b["priority"] = json!(rng.below(256));
+    }
+    b
 }
 
 /// Scenario `index` of the batch seeded `seed`.
@@ -578,7 +604,14 @@ pub fn scenario(seed: u64, index: u64) -> Value {
     let mut region_names = vec!["r.main"];
     if rng.chance(40) {
         let parent = if rng.chance(50) { "r.main" } else { "root" };
-        regions.push(json!({"name": "r.side", "parent": parent, "budget": null}));
+        // Its budget does not reach the tasks created in it, only the
+        // regions they open (create_task takes the task's own budget).
+        let side_budget = if rng.chance(25) {
+            some_budget(&mut rng)
+        } else {
+            Value::Null
+        };
+        regions.push(json!({"name": "r.side", "parent": parent, "budget": side_budget}));
         region_names.push("r.side");
         if parent == "r.main" && rng.chance(50) {
             regions.push(json!({"name": "r.side2", "parent": "r.main", "budget": null}));

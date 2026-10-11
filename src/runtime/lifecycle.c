@@ -1392,6 +1392,11 @@ asx_status asx_task_spawn_with_budget(asx_region_id region, asx_task_poll_fn pol
     if (st != ASX_OK) return st;
     if (budget != NULL) {
         t->budget = asx_budget_meet(&t->budget, budget);
+        /* From a task: Rust's cx.spawn_in(&cx.scope_with_budget(b)) clamps
+         * the deadline and quotas to the spawner's inherited budget but
+         * takes b's priority unclamped, boosting or lowering it
+         * (cx.rs:4547-4586; fuzz finding gen-247-192). */
+        if (t->spawned_in_poll) t->budget.priority = budget->priority;
         /* Lab dispatch: a host-created task's budget-deadline timer runs
          * on the met budget (a child's is armed at admission). */
         if (asx_lab_dispatch_active() && !t->spawned_in_poll) {

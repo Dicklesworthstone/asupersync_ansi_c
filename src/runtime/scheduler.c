@@ -770,8 +770,9 @@ static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_s
                                  uint32_t round) {
     asx_task_state from = t->state;
     asx_region_id region = t->region;
-    /* The outcome carries the Cx's reason (fuzz finding gen-145-163). */
-    asx_task_reconcile_cx_reason_internal(t);
+    /* The outcome carries the Cx's reason (fuzz findings gen-145-163,
+     * gen-294-194). */
+    asx_task_complete_cx_reason_internal(t);
     (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
     t->state = ASX_TASK_COMPLETED;
     if (asx_lab_dispatch_active()) asx_lab_task_retired_internal(t);

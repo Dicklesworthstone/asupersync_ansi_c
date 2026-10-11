@@ -222,7 +222,7 @@ ends holding tokens drops them first, as twin_run's locals do.
 
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|
-| `spawn` | `as`, `program`, optional `budget`, optional `region` (a child region this task opened) | `cx.spawn(…)` (`cx.rs:4880`). A `budget` uses `cx.spawn_in(&cx.scope_with_budget(b), …)` (`:4976`, `:4547`). `region` uses `child.cx().spawn(…)` (`cx/child_region.rs:334`). | `asx_task_spawn_with_budget(region, interpreter_poll, program, budget, &id)` | no | ignored. A region that is closing or closed refuses the child, observed as `ASX_E_REGION_CLOSED`: C refuses at the spawn; Rust accepts the spawn into its mailbox and admission refuses it later (`SpawnError::RegionClosed`, `runtime/state.rs:1702`), resolving the handle as `JoinError::Cancelled`, which twin_run projects onto the spawn step. A refused child has no trace events and no snapshot entry. |
+| `spawn` | `as`, `program`, optional `budget`, optional `region` (a child region this task opened) | `cx.spawn(…)` (`cx.rs:4880`). A `budget` uses `cx.spawn_in(&cx.scope_with_budget(b), …)` (`:4976`, `:4547`): its deadline and quotas are clamped to the spawner's, its priority is `b`'s. `region` uses `child.cx().spawn(…)` (`cx/child_region.rs:334`), and a `budget` beside it is ignored. | `asx_task_spawn_with_budget(region, interpreter_poll, program, budget, &id)` | no | ignored. A region that is closing or closed refuses the child, observed as `ASX_E_REGION_CLOSED`: C refuses at the spawn; Rust accepts the spawn into its mailbox and admission refuses it later (`SpawnError::RegionClosed`, `runtime/state.rs:1702`), resolving the handle as `JoinError::Cancelled`, which twin_run projects onto the spawn step. A refused child has no trace events and no snapshot entry. |
 | `join` | `task` | `handle.join(&cx).await` (`runtime/task_handle.rs:793`) | `asx_task_join_poll(self, target, &outcome)` until done | until the child completes | Ignored: join is uninterruptible (`task_handle.rs:1080-1126`). The observation `value` is the child's outcome (vocabulary §4); a refused child (`spawn` above) is observed as `ASX_E_REGION_CLOSED` with no value. |
 | `try_join` | `task` | `handle.try_join()` (`:863`) | `asx_task_join(target, &outcome)` | no | ignored. A running child gives `ASX_E_TASK_NOT_COMPLETED`; a refused child `ASX_E_REGION_CLOSED` once the next lab step's admission refused it, and before that (in the poll that spawned it) `ASX_E_TASK_NOT_COMPLETED`, as Rust's `try_join` reports not-ready while the admission is pending (`asx_task_refusal_delivered`). |
 | `abort_task` | `task`, `kind`, optional `message` | `handle.abort_with_reason(reason)` (`task_handle.rs:1005`), reason attributed to the requester (§4, "Reason attribution") | `asx_task_abort_request(target, &reason)` | no; the next lab step applies it (`drain_handle_cancel_requests`). A child spawned in the same step caches it until its admission, which queues it as one handle-cancel command behind those already queued (`runtime/spawn_mailbox.rs:629-660`). A refused child's handle only caches it: `ASX_OK`, and its spawn and joins then observe `ASX_E_REGION_CLOSED` (§4, `region_limits`). | ignored |
@@ -714,7 +714,12 @@ Closed (each verified by a fixture that now matches):
   poll (`classify_spawn_completion`, `runtime/task_handle.rs:173-200`). The
   snapshot shows the record (`budget-quota-after-deadline-cancel-001`,
   `budget-quota-cx-reason-reconciled-001`,
-  `budget-quota-cx-reason-at-completion-001`).
+  `budget-quota-cx-reason-at-completion-001`). The Cx takes a reason only
+  if it strengthens its own (`record/task.rs:839-850`), so on a tie (equal
+  severity and timestamp) the record and the Cx keep different reasons:
+  no cancel waker fires, and the outcome reports the Cx's
+  (`cancel-cx-reason-tie-keeps-own-001`,
+  `cancel-tie-outcome-keeps-cx-reason-001`).
 - **A region close wakes with the waiter's first waker** (fuzz finding
   gen-103-136): Rust's RegionQuiescence keeps every distinct waker it is
   polled with and wakes them in order, so a waiter re-polled at another

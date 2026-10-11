@@ -2520,8 +2520,10 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         child = add_task(name, lr != NULL ? lr->name : t->region_name,
                          lr != NULL ? lr->id : t->region, asx_json_get(g_in, step, "program"));
         if (child == NULL) return STEP_END;
+        /* A spawn into a held region is child.cx().spawn, which takes no
+         * budget (twin_run ignores one there, run.rs:1059-1069). */
         st = asx_task_spawn_with_budget(child->region, interp_poll, child,
-                                        has_budget ? &budget : NULL, &id);
+                                        has_budget && lr == NULL ? &budget : NULL, &id);
         if (st == ASX_OK) {
             child->id = id;
             child->spawned = 1;

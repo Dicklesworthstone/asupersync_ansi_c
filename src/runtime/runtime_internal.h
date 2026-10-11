@@ -410,11 +410,14 @@ typedef enum {
  * budgets met. No-op otherwise. */
 void asx_task_materialize_cancel_internal(asx_task_slot *t);
 
-/* Only the second half: a Cx reason ahead of the record strengthens it.
- * Also at completion, where Rust's outcome takes the Cx's reason sampled
- * at the terminal poll (classify_spawn_completion, runtime/
- * task_handle.rs:173-200). */
+/* Only the second half: a Cx reason ahead of the record strengthens it;
+ * the Cx keeps its own reason when a tie leaves the record's. */
 void asx_task_reconcile_cx_reason_internal(asx_task_slot *t);
+
+/* At completion: reconcile, then the record takes the Cx's own reason, as
+ * Rust's outcome takes the Cx's reason sampled at the terminal poll
+ * (classify_spawn_completion, runtime/task_handle.rs:173-200). */
+void asx_task_complete_cx_reason_internal(asx_task_slot *t);
 
 /* The task's cancel reason as its Cx sees it (Rust Cx::cancel_reason):
  * the record's, or the stronger budget reason not yet reconciled into it.

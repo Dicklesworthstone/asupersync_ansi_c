@@ -359,6 +359,66 @@ TEST(spawned_child_inherits_the_quota_until_the_cleanup_phase_starts) {
     ASSERT_EQ(s.quota_b, UINT32_MAX);
 }
 
+/* Spawns one child with `lower` and one with `higher`, recording the budget
+ * each starts with. */
+typedef struct {
+    asx_region_id region;
+    asx_budget lower;
+    asx_budget higher;
+    asx_budget got_lower;
+    asx_budget got_higher;
+    asx_status status;
+} budget_spawner_state;
+
+static asx_status poll_budget_spawner(void *ud, asx_task_id self) {
+    budget_spawner_state *s = (budget_spawner_state *)ud;
+    asx_task_id child;
+    (void)self;
+    s->status = asx_task_spawn_with_budget(s->region, poll_complete, NULL, &s->lower, &child);
+    if (s->status == ASX_OK) s->status = asx_task_get_budget(child, &s->got_lower);
+    if (s->status == ASX_OK) {
+        s->status = asx_task_spawn_with_budget(s->region, poll_complete, NULL, &s->higher, &child);
+    }
+    if (s->status == ASX_OK) s->status = asx_task_get_budget(child, &s->got_higher);
+    return ASX_OK;
+}
+
+/* Rust's cx.spawn_in(&cx.scope_with_budget(b)) (cx.rs:4547-4586): b's
+ * deadline and quotas are clamped to the spawner's budget, its priority is
+ * taken as given, lower or higher than the spawner's (fuzz finding
+ * gen-247-192). */
+TEST(spawn_budget_from_a_task_keeps_its_priority_and_clamps_the_rest) {
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget tb;
+    asx_budget run;
+    budget_spawner_state s;
+
+    setup();
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    s.region = r;
+    tb = asx_budget_new(); /* priority 128 */
+    tb.deadline = asx_runtime_virtual_now() + 10u * MS;
+    tb.poll_quota = 50u;
+    s.lower = asx_budget_new();
+    s.lower.deadline = asx_runtime_virtual_now() + 20u * MS; /* looser */
+    s.lower.poll_quota = 7u;                                 /* tighter */
+    s.lower.priority = 50u;
+    s.higher = asx_budget_new();
+    s.higher.priority = 250u;
+    ASSERT_EQ(asx_task_spawn_with_budget(r, poll_budget_spawner, &s, &tb, &t), ASX_OK);
+    run = asx_budget_from_polls(20);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+    ASSERT_EQ(s.status, ASX_OK);
+    ASSERT_EQ((int)s.got_lower.priority, 50);
+    ASSERT_EQ(s.got_lower.deadline, tb.deadline);
+    ASSERT_EQ(s.got_lower.poll_quota, 7u);
+    ASSERT_EQ((int)s.got_higher.priority, 250);
+    ASSERT_EQ(s.got_higher.deadline, tb.deadline);
+    ASSERT_EQ(s.got_higher.poll_quota, 49u); /* the spawner's, less the poll */
+}
+
 TEST(budgets_tighten_down_the_region_tree) {
     asx_region_id root;
     asx_region_id child;
@@ -864,6 +924,7 @@ int main(void) {
     RUN_TEST(cost_quota_exhaustion_cancels_with_cost_budget);
     RUN_TEST(consume_cost_rejects_stale_handle);
     RUN_TEST(spawned_child_inherits_the_quota_until_the_cleanup_phase_starts);
+    RUN_TEST(spawn_budget_from_a_task_keeps_its_priority_and_clamps_the_rest);
     RUN_TEST(budgets_tighten_down_the_region_tree);
     RUN_TEST(region_deadline_bounds_tasks_spawned_into_it_from_a_task);
     RUN_TEST(reserve_ex_records_kind_and_holder);

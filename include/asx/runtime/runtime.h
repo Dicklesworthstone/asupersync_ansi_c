@@ -282,9 +282,10 @@ ASX_API ASX_MUST_USE asx_status asx_task_spawn_captured(asx_region_id region,
 /* Spawn a task whose budget is meet(region budget, *budget).
  * Same contract and errors as asx_task_spawn; budget may be NULL
  * (unconstrained). Called by the host, the task's budget is exactly
- * `budget`, as Rust's RuntimeState::create_task; called from a task, it is
- * met with that task's budget (its own region) or the region's (a region
- * the task opened), as cx.spawn / child.cx().spawn. */
+ * `budget`, as Rust's RuntimeState::create_task; called from a task, its
+ * deadline and quotas are met with that task's budget (its own region) or
+ * the region's (a region the task opened), and its priority is `budget`'s,
+ * as cx.spawn_in(&cx.scope_with_budget(budget)). */
 ASX_API ASX_MUST_USE asx_status asx_task_spawn_with_budget(asx_region_id region,
                                                            asx_task_poll_fn poll_fn,
                                                            void *user_data,
