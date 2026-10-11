@@ -1410,6 +1410,133 @@ TEST(watch_changed_traces_each_rust_outcome) {
     ASSERT_TRUE(cap_user(5, tb, "watch::changed sender dropped"));
 }
 
+/* ===================================================================
+ * Permits dropped with their holder task
+ * =================================================================== */
+
+/* Reserve with the task's Cx and end holding the permit (sleeping first
+ * when `hold_ns`, so a cancel can end it), as a Rust body that returns
+ * with an unsent SendPermit in a local. */
+typedef struct {
+    asx_channel_id ch;
+    asx_oneshot_sender tx;
+    int oneshot;
+    uint64_t hold_ns;
+    asx_sleep_state hold;
+    int reserved;
+    asx_cx cx;
+    asx_send_permit permit;
+    asx_oneshot_permit oneshot_permit;
+} holder_state;
+
+static asx_status poll_permit_holder(void *ud, asx_task_id self) {
+    holder_state *h = (holder_state *)ud;
+    asx_status st;
+    if (!h->reserved) {
+        asx_cx_init(&h->cx, g_region, self, ASX_CAP_CANCEL_CHECK);
+        st = h->oneshot ? asx_oneshot_reserve(&h->tx, &h->cx, &h->oneshot_permit)
+                        : asx_channel_reserve(h->ch, &h->cx, &h->permit);
+        if (st != ASX_OK) return st;
+        h->reserved = 1;
+        if (h->hold_ns > 0u) {
+            st = asx_sleep_init(&h->hold, h->hold_ns);
+            if (st != ASX_OK) return st;
+        }
+    }
+    if (h->hold_ns > 0u) return asx_sleep_poll(&h->hold, self);
+    return ASX_OK;
+}
+
+static int send_permit_dropped(asx_obligation_id id, asx_task_id holder) {
+    asx_obligation_info info;
+    if (id == ASX_INVALID_ID || asx_obligation_get_info(id, &info) != ASX_OK) return 0;
+    return info.kind == ASX_OBLIGATION_KIND_SEND_PERMIT && info.state == ASX_OBLIGATION_ABORTED &&
+           info.abort_reason == ASX_OBLIGATION_ABORT_CANCEL &&
+           asx_handle_index(info.holder) == asx_handle_index(holder);
+}
+
+TEST(send_permits_held_at_completion_are_dropped_with_their_task) {
+    /* Rust drops an unsent SendPermit with the body's locals: its slot
+     * goes back and the obligation is aborted with Cancel
+     * (channel/mpsc.rs:1663-1673), cancelled holder or not; no leak. Two
+     * holders take both slots of a capacity-2 channel, one ends at once,
+     * the other is cancelled while it sleeps holding its permit; a parked
+     * producer then gets each slot back. The holders' spent permit values
+     * send nothing. */
+    static holder_state h[2];
+    asx_channel_id ch;
+    asx_task_id th[2];
+    asx_task_id tp;
+    asx_budget budget;
+    uint64_t leaks_before;
+    uint32_t len = 0;
+
+    ASSERT_TRUE(setup());
+    reset_fixtures();
+    memset(h, 0, sizeof(h));
+    leaks_before = asx_obligation_leak_count();
+    ASSERT_EQ(asx_channel_create(g_region, 2, &ch), ASX_OK);
+    h[0].ch = ch;
+    h[1].ch = ch;
+    h[1].hold_ns = 1000000u;
+    ASSERT_EQ(asx_task_spawn(g_region, poll_permit_holder, &h[0], &th[0]), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_region, poll_permit_holder, &h[1], &th[1]), ASX_OK);
+    budget = asx_budget_from_polls(2);
+    {
+        asx_status partial = asx_scheduler_run(g_region, &budget); /* stops at the budget */
+        (void)partial;
+    }
+    ASSERT_EQ(h[0].reserved + h[1].reserved, 2);
+
+    g_tx[0].ch = ch;
+    g_tx[0].to_send = 2;
+    g_tx[0].base = 40;
+    g_tx[0].use_cx = 1;
+    ASSERT_EQ(asx_task_spawn(g_region, poll_sender, &g_tx[0], &tp), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(th[1], ASX_CANCEL_USER), ASX_OK);
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+
+    ASSERT_EQ(g_tx[0].sent, 2u);
+    ASSERT_TRUE(send_permit_dropped(h[0].permit.obligation, th[0]));
+    ASSERT_TRUE(send_permit_dropped(h[1].permit.obligation, th[1]));
+    ASSERT_TRUE(task_cancelled(th[1]));
+    ASSERT_EQ(asx_obligation_leak_count(), leaks_before);
+    ASSERT_NE(asx_send_permit_send(&h[0].permit, 9u), ASX_OK);
+    asx_send_permit_abort(&h[1].permit);
+    ASSERT_EQ(asx_channel_queue_len(ch, &len), ASX_OK);
+    ASSERT_EQ(len, 2u);
+    ASSERT_EQ(asx_channel_reserved_count(ch, &len), ASX_OK);
+    ASSERT_EQ(len, 0u);
+}
+
+TEST(oneshot_permit_held_at_completion_is_dropped_with_its_task) {
+    /* Rust's oneshot SendPermit dropped unsent closes the channel and
+     * aborts its obligation with Cancel; the receiver then sees it closed.
+     * The spent permit value delivers nothing. */
+    static holder_state h;
+    asx_oneshot_receiver rx;
+    asx_task_id t;
+    asx_budget budget;
+    uint64_t v = 0;
+    uint64_t leaks_before;
+
+    ASSERT_TRUE(setup());
+    memset(&h, 0, sizeof(h));
+    leaks_before = asx_obligation_leak_count();
+    ASSERT_EQ(asx_oneshot_create(&h.tx, &rx), ASX_OK);
+    h.oneshot = 1;
+    ASSERT_EQ(asx_task_spawn(g_region, poll_permit_holder, &h, &t), ASX_OK);
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+
+    ASSERT_TRUE(send_permit_dropped(h.oneshot_permit.obligation, t));
+    ASSERT_EQ(asx_obligation_leak_count(), leaks_before);
+    ASSERT_NE(asx_oneshot_permit_send(&h.oneshot_permit, 7u), ASX_OK);
+    ASSERT_EQ(asx_oneshot_try_recv(&rx, &v), ASX_E_DISCONNECTED);
+    ASSERT_EQ(v, 0u);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_channel_wake ===\n");
 
@@ -1444,6 +1571,8 @@ int main(void) {
     RUN_TEST(oneshot_send_with_cx_traces_and_commits_a_send_permit);
     RUN_TEST(oneshot_cancelled_send_closes_and_value_beats_cancel_on_recv);
     RUN_TEST(oneshot_send_to_dropped_receiver_aborts_the_permit_with_error);
+    RUN_TEST(send_permits_held_at_completion_are_dropped_with_their_task);
+    RUN_TEST(oneshot_permit_held_at_completion_is_dropped_with_its_task);
     RUN_TEST(broadcast_send_checks_cancel_then_receivers_and_commits_a_permit);
     RUN_TEST(broadcast_recv_checks_cancel_first);
     RUN_TEST(watch_changed_traces_each_rust_outcome);

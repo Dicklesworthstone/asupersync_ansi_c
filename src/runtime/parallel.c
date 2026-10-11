@@ -1082,6 +1082,11 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
 
                 /* Poll the task */
                 if (t->cancel_pending) t->cancel_polled = 1;
+                if (!t->first_polled) {
+                    /* For the outcome rule (asx_task_cancel_dominates_internal). */
+                    t->first_polled = 1;
+                    t->cancel_before_first_poll = t->cancel_pending ? 1u : 0u;
+                }
                 asx_error_ledger_bind_task(tid);
                 poll_result = t->poll_fn(t->user_data, tid);
                 asx_error_ledger_bind_task(ASX_INVALID_ID);
@@ -1128,9 +1133,10 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                             (void)w_st_;
                         }
                     }
-                    t->outcome = asx_outcome_make(t->panicked         ? ASX_OUTCOME_PANICKED
-                                                  : t->cancel_pending ? ASX_OUTCOME_CANCELLED
-                                                                      : ASX_OUTCOME_OK);
+                    t->outcome = asx_outcome_make(t->panicked ? ASX_OUTCOME_PANICKED
+                                                  : asx_task_cancel_dominates_internal(t)
+                                                      ? ASX_OUTCOME_CANCELLED
+                                                      : ASX_OUTCOME_OK);
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
@@ -1145,6 +1151,13 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     continue;
                 } else if (poll_result != ASX_E_PENDING) {
                     asx_task_state from = t->state;
+                    /* Read before completion bookkeeping, which may release
+                     * the slot. A cancelled task's error is how it
+                     * acknowledged the cancel, not a fault (as in
+                     * scheduler.c). */
+                    int panicked = t->panicked;
+                    int was_cancelled = !panicked && asx_task_cancel_dominates_internal(t);
+                    if (!panicked && !was_cancelled) t->last_error = poll_result;
                     (void)asx_ghost_check_task_transition(tid, t->state, ASX_TASK_COMPLETED);
                     t->state = ASX_TASK_COMPLETED;
                     if (t->cancel_pending) {
@@ -1160,9 +1173,9 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                             (void)w_st_;
                         }
                     }
-                    t->outcome = asx_outcome_make(t->panicked         ? ASX_OUTCOME_PANICKED
-                                                  : t->cancel_pending ? ASX_OUTCOME_CANCELLED
-                                                                      : ASX_OUTCOME_ERR);
+                    t->outcome = asx_outcome_make(panicked        ? ASX_OUTCOME_PANICKED
+                                                  : was_cancelled ? ASX_OUTCOME_CANCELLED
+                                                                  : ASX_OUTCOME_ERR);
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
@@ -1175,7 +1188,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                     asx_region_settle_internal(
                         asx_region_handle_for_slot((uint32_t)(rslot - g_regions)));
 
-                    if (!t->panicked) {
+                    if (!panicked && !was_cancelled) {
                         asx_status fc_ = asx_region_contain_fault(region, poll_result);
                         if (fc_ != ASX_OK &&
                             asx_containment_policy_active() != ASX_CONTAIN_POISON_REGION) {

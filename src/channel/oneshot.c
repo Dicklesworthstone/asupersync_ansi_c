@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include "../sync/wait_queue.h"
 #include <asx/core/oneshot.h>
 #include <asx/runtime/runtime.h>
@@ -236,6 +237,22 @@ static void oneshot_trace(const asx_cx *cx, const char *message) {
     if (cx != NULL) asx_trace_user(cx->task_id, message);
 }
 
+/* A tracked permit dropped with its holder task, unsent (Rust oneshot
+ * SendPermit's Drop, oneshot.rs:774-799): the sending side goes away, so
+ * the receiver sees the channel closed, and the runtime then aborts the
+ * obligation with Cancel. The caller's permit value is spent: its send
+ * finds the channel no longer empty, its abort changes nothing. */
+static int oneshot_permit_drop(uint64_t slot, uint64_t generation) {
+    asx_oneshot_sender sender;
+    asx_oneshot_slot *s;
+    sender.slot = (uint32_t)slot;
+    sender.generation = (uint16_t)generation;
+    if (oneshot_sender_slot(&sender, &s) != ASX_OK || !s->reserved) return 0;
+    s->reserved = 0;
+    asx_oneshot_sender_drop(&sender);
+    return 0;
+}
+
 asx_status asx_oneshot_reserve(asx_oneshot_sender *sender, asx_cx *cx, asx_oneshot_permit *out) {
     asx_oneshot_slot *s;
     asx_status st;
@@ -260,12 +277,15 @@ asx_status asx_oneshot_reserve(asx_oneshot_sender *sender, asx_cx *cx, asx_onesh
     out->sender = *sender;
     out->live = 1;
     /* Registered after the permit exists (:519-528); a refusal leaves the
-     * permit untracked. */
+     * permit untracked. A tracked permit still held when its task
+     * completes is dropped with it. */
     if (cx != NULL && cx->task_id != ASX_INVALID_ID) {
         asx_obligation_id ob;
         if (asx_obligation_register(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id,
                                     &ob) == ASX_OK) {
             out->obligation = ob;
+            asx_obligation_set_drop_internal(ob, oneshot_permit_drop, (uint64_t)sender->slot,
+                                             (uint64_t)sender->generation);
         }
     }
     return ASX_OK;
@@ -283,7 +303,14 @@ static asx_oneshot_slot *oneshot_permit_take(asx_oneshot_permit *permit) {
 static void oneshot_permit_resolve(asx_oneshot_permit *permit, int delivered,
                                    asx_obligation_abort_reason reason) {
     asx_status st;
+    asx_obligation_state state;
     if (permit->obligation == ASX_INVALID_ID) return;
+    /* A permit dropped with its holder task was resolved then. */
+    if (asx_obligation_get_state(permit->obligation, &state) == ASX_OK &&
+        state != ASX_OBLIGATION_RESERVED) {
+        permit->obligation = ASX_INVALID_ID;
+        return;
+    }
     st = delivered ? asx_obligation_commit(permit->obligation)
                    : asx_obligation_abort_with_reason(permit->obligation, reason);
     (void)st; /* refused only for an obligation the runtime already resolved */

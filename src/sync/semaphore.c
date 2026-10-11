@@ -48,6 +48,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include "wait_queue.h"
 #include <asx/runtime/runtime.h>
 #include <asx/sync/semaphore.h>
@@ -208,20 +209,17 @@ static uint32_t sem_hold_serial(sem_slot *s) {
     return s->holder_serial;
 }
 
-/* A permit already released or forgotten. A mutex guard no longer holds
- * the lock; a semaphore permit's obligation was committed by its release
- * or aborted by forget (a leak RECOVER aborts with Error and leaves the
- * permit to release); otherwise its count exceeds what handed-out permits
+/* A permit already released, forgotten or dropped. A mutex guard no
+ * longer holds the lock; a tracked semaphore permit's obligation is
+ * resolved (committed by its release or its drop with the holder task,
+ * aborted by forget); otherwise its count exceeds what handed-out permits
  * still hold. */
 static int sem_permit_spent(const sem_slot *s, const asx_semaphore_permit *permit) {
-    asx_obligation_info info;
+    asx_obligation_state state;
     if (s->is_mutex) return permit->count != 1u || permit->serial != s->holder_serial;
     if (permit->obligation != ASX_INVALID_ID &&
-        asx_obligation_get_info(permit->obligation, &info) == ASX_OK &&
-        (info.state == ASX_OBLIGATION_COMMITTED ||
-         (info.state == ASX_OBLIGATION_ABORTED &&
-          info.abort_reason == ASX_OBLIGATION_ABORT_EXPLICIT))) {
-        return 1;
+        asx_obligation_get_state(permit->obligation, &state) == ASX_OK) {
+        return state != ASX_OBLIGATION_RESERVED;
     }
     return permit->count > s->outstanding;
 }
@@ -362,10 +360,33 @@ asx_status asx_semaphore_acquire_many_begin(asx_semaphore_handle handle, uint32_
     return ASX_OK;
 }
 
+/* A tracked permit dropped with its holder task (Rust SemaphorePermit's
+ * Drop, sync/semaphore.rs:1081): its permits go back to the pool as a
+ * release's do, and the drop commits the obligation. `slot_gen` packs the
+ * slot and its generation. The caller's permit value is spent. */
+static int sem_permit_drop(uint64_t slot_gen, uint64_t count) {
+    sem_slot *s;
+    uint32_t slot = (uint32_t)(slot_gen & 0xFFFFFFFFu);
+    if (slot >= ASX_SEMAPHORE_MAX) return 1;
+    s = &g_slots[slot];
+    if (!s->alive || s->generation != (uint16_t)(slot_gen >> 32) || count > s->outstanding) {
+        return 1;
+    }
+    s->outstanding -= (uint32_t)count;
+    sem_reap(s);
+    if (count > 0u) {
+        s->permits =
+            count > (uint64_t)(UINT32_MAX - s->permits) ? UINT32_MAX : s->permits + (uint32_t)count;
+        sem_wake_front(s);
+    }
+    return 1;
+}
+
 /* Fill the permit of `count` handed to an acquire polled with `cx`,
  * reserving its SemaphorePermit obligation for the Cx's task (a
  * semaphore's, not the mutex's). A refused reservation leaves the permit
- * untracked. */
+ * untracked. A tracked permit still held when its task completes is
+ * dropped with it. */
 static asx_status sem_hand_out(sem_slot *s, const asx_semaphore_waiter *waiter, uint32_t count,
                                asx_semaphore_permit *out, const asx_cx *cx) {
     s->outstanding += count;
@@ -379,6 +400,10 @@ static asx_status sem_hand_out(sem_slot *s, const asx_semaphore_waiter *waiter, 
         if (asx_obligation_register(cx->region_id, ASX_OBLIGATION_KIND_SEMAPHORE_PERMIT,
                                     cx->task_id, &id) == ASX_OK) {
             out->obligation = id;
+            asx_obligation_set_drop_internal(id, sem_permit_drop,
+                                             (uint64_t)out->sem_slot |
+                                                 ((uint64_t)out->generation << 32),
+                                             (uint64_t)count);
         }
     }
     return ASX_OK;
@@ -523,9 +548,8 @@ asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter) {
 /* ------------------------------------------------------------------ */
 
 /* Commit the permit's obligation, if it has one. Rust's permit drop
- * commits even when the semaphore is gone (sync/semaphore.rs:1274); a
- * permit whose task already completed was reported leaked and the commit
- * is refused harmlessly. */
+ * commits even when the semaphore is gone (sync/semaphore.rs:1274); an
+ * obligation the runtime already resolved refuses the commit harmlessly. */
 static void sem_commit_obligation(const asx_semaphore_permit *permit) {
     asx_status st;
     if (permit->obligation == ASX_INVALID_ID) return;

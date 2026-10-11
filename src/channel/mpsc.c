@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include "../sync/wait_queue.h"
 #include <asx/asx.h>
 #include <asx/core/channel.h>
@@ -773,6 +774,26 @@ void asx_send_permit_abort(asx_send_permit *permit) {
     }
 }
 
+/* A tracked permit dropped with its holder task, unsent (Rust SendPermit's
+ * Drop, mpsc.rs:1663-1673): the slot goes back as an abort gives it back,
+ * and the runtime then aborts the obligation with Cancel. The caller's
+ * permit value is spent: its token names no reservation any more, so a
+ * later send or abort of it changes nothing. */
+static int channel_permit_drop(uint64_t channel_id, uint64_t token) {
+    asx_channel_slot *s;
+    if (channel_slot_lookup((asx_channel_id)channel_id, &s) != ASX_OK) return 0;
+    if (channel_token_consume(s, (uint32_t)token) == ASX_OK) {
+#if ASX_CHANNEL_BACKEND_LOCKFREE
+        channel_lf_release_capacity(s);
+#endif
+        channel_settle(s);
+        if (s->state == ASX_CHANNEL_SENDER_CLOSED && s->recv_waiters.len > 0u) {
+            (void)asx_wait_queue_wake_all(&s->recv_waiters);
+        }
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Receive                                                            */
 /* ------------------------------------------------------------------ */
@@ -887,12 +908,16 @@ asx_status asx_channel_reserve(asx_channel_id id, asx_cx *cx, asx_send_permit *o
     if (st != ASX_OK) { return st; }
 
     /* Registered after the slot is claimed, as Rust's Reserve does
-     * (mpsc.rs:1116); a refusal leaves the permit untracked (:1180). */
+     * (mpsc.rs:1116); a refusal leaves the permit untracked (:1180). A
+     * tracked permit still held when its task completes is dropped with
+     * it. */
     if (cx != NULL && cx->task_id != ASX_INVALID_ID) {
         asx_obligation_id ob;
         if (asx_obligation_register(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id,
                                     &ob) == ASX_OK) {
             out->obligation = ob;
+            asx_obligation_set_drop_internal(ob, channel_permit_drop, (uint64_t)id,
+                                             (uint64_t)out->token);
         }
     }
     return ASX_OK;

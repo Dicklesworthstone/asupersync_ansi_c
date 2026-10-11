@@ -630,6 +630,44 @@ TEST(parallel_run_task_fails) {
     asx_parallel_reset();
 }
 
+/* Acknowledges its cancel by returning ASX_E_CANCELLED. */
+static asx_status poll_checkpoint_then_cancelled_error(void *data, asx_task_id self) {
+    asx_checkpoint_result cr;
+    (void)data;
+    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) return ASX_E_CANCELLED;
+    return ASX_E_PENDING;
+}
+
+TEST(parallel_cancelled_task_returning_its_error_is_not_a_fault) {
+    /* The error a cancelled task returns is how it acknowledged the
+     * cancel: it completes CANCELLED and nothing is contained, as in the
+     * single-threaded scheduler. Before, the parallel scheduler handed the
+     * error to fault containment (fail-fast returned it from the run, the
+     * poison policy poisoned the region). */
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    asx_outcome out;
+    int poisoned = 1;
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_cancelled_error, NULL, &tid), ASX_OK);
+    budget = asx_budget_from_polls(1);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_get_outcome(tid, &out), ASX_OK);
+    ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_CANCELLED);
+    ASSERT_EQ(asx_region_is_poisoned(rid, &poisoned), ASX_OK);
+    ASSERT_FALSE(poisoned);
+
+    asx_parallel_reset();
+}
+
 TEST(parallel_run_captured_state_dtor_on_complete) {
     asx_region_id rid;
     asx_task_id tid;
@@ -1613,6 +1651,7 @@ int main(void) {
     RUN_TEST(parallel_run_cancelled_task_sets_completed_cancel_phase);
     RUN_TEST(parallel_run_finalizing_task_sets_completed_cancel_phase);
     RUN_TEST(parallel_run_task_fails);
+    RUN_TEST(parallel_cancelled_task_returning_its_error_is_not_a_fault);
     RUN_TEST(parallel_run_captured_state_dtor_on_complete);
     RUN_TEST(parallel_run_budget_exhaustion);
     RUN_TEST(parallel_run_null_budget);

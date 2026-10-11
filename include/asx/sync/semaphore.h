@@ -43,8 +43,11 @@ typedef struct {
  * release (Rust sync/semaphore.rs:119, :1274). ASX_INVALID_ID when the
  * permit is untracked: try_acquire (no Cx), an acquire without a task Cx,
  * a mutex guard (Rust's Mutex has no obligation), or a refused
- * reservation. A permit still held when its task completes is reported
- * leaked by the runtime. `count` is the number of permits it holds (an
+ * reservation. A tracked permit still held when its task completes is
+ * dropped with it, as Rust drops the task body's locals: its permits go
+ * back to the pool, the obligation commits (SemaphorePermit's drop,
+ * sync/semaphore.rs:1081), and the permit value is spent. Nothing leaks.
+ * `count` is the number of permits it holds (an
  * acquire of n takes n at once); release returns them all. `serial`
  * names a mutex guard's hold of the lock (0 for a semaphore's permit):
  * only the current holder's guard unlocks. */
@@ -142,9 +145,10 @@ ASX_API asx_status asx_semaphore_acquire_cancel(asx_semaphore_waiter *waiter);
  * consumed by its drop); a second release is refused with
  * ASX_E_INVALID_STATE and nothing changes. The runtime knows a permit
  * was released when it is a mutex guard (its hold of the lock ended), a
- * permit whose obligation was committed or explicitly aborted (forget),
- * or one whose count exceeds what the semaphore's handed-out permits
- * still hold, so releases never return more permits than were handed out.
+ * tracked permit whose obligation is resolved (its release or its drop
+ * with the holder task committed it, forget aborted it), or one whose
+ * count exceeds what the semaphore's handed-out permits still hold, so
+ * releases never return more permits than were handed out.
  * An untracked permit's copy released while other permits are out is
  * beyond that check: release each permit value once. */
 ASX_API asx_status asx_semaphore_release(asx_semaphore_permit permit);

@@ -930,7 +930,7 @@ ASan/UBSan.
     `asx_spawn_blocking` completes synchronously, which is true only on CORE.
 - **RB7: the run budget's deadline is ignored while blocked in the reactor.**
   - `asx_scheduler_run(rid, &budget)` with a +200 ms deadline hung in `epoll_wait` (`sched_block`
-    at `scheduler.c:548`, called from `sched_idle` at `:595`).
+    at `scheduler.c:543`, called from `sched_idle` at `:590`).
   - *Fix:* bound the reactor wait by the run budget's deadline and return
     `ASX_E_POLL_BUDGET_EXHAUSTED`, or a deadline status, on time.
 - **RB8: ergonomics.**

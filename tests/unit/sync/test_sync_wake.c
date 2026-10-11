@@ -114,11 +114,13 @@ typedef struct {
     int begun;
     int acquired;
     int cancel_aware;
-    int abandon; /* complete without cancelling the queued acquire */
-    int use_cx;  /* poll the acquire with this task's Cx */
-    int keep;    /* complete still holding the permit */
+    int abandon;    /* complete without cancelling the queued acquire */
+    int use_cx;     /* poll the acquire with this task's Cx */
+    int keep;       /* complete still holding the permit */
+    int keep_token; /* with keep: also hold a plain obligation token */
     asx_cx cx;
     asx_obligation_id obligation; /* the permit's, as granted */
+    asx_obligation_id token;      /* the plain token (keep_token) */
     uint32_t polls;
     asx_status result;
 } sem_task;
@@ -161,7 +163,13 @@ static asx_status poll_sem_task(void *ud, asx_task_id self) {
     st = sleep_once(&s->hold, s->hold_for, self);
     if (st != ASX_OK) return st;
     g_holders--;
-    if (s->keep) return ASX_OK;
+    if (s->keep) {
+        if (s->keep_token) {
+            st = asx_obligation_register(g_region, ASX_OBLIGATION_KIND_GENERIC, self, &s->token);
+            if (st != ASX_OK) return st;
+        }
+        return ASX_OK;
+    }
     return asx_semaphore_release(s->permit);
 }
 
@@ -416,7 +424,7 @@ TEST(sem_permit_polled_with_cx_is_an_obligation_until_release) {
     ASSERT_EQ(asx_semaphore_available(h), 1u);
 }
 
-TEST(sem_permit_held_past_task_completion_is_leaked) {
+TEST(sem_permit_held_past_task_completion_is_dropped_with_it) {
     asx_semaphore_handle h;
     asx_task_id t;
     asx_budget budget;
@@ -433,20 +441,26 @@ TEST(sem_permit_held_past_task_completion_is_leaked) {
     budget = asx_budget_from_polls(50);
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
 
-    ASSERT_TRUE(sem_obligation_is(g_sem[0].obligation, t, ASX_OBLIGATION_LEAKED));
-    ASSERT_EQ(asx_obligation_leak_count(), leaks_before + 1u);
-    /* The late release still returns the permit; the commit is refused. */
-    ASSERT_EQ(asx_semaphore_release(g_sem[0].permit), ASX_OK);
+    /* The permit is dropped with its holder's body, as Rust drops the
+     * body's locals: its permit goes back and SemaphorePermit's drop
+     * commits the obligation (sync/semaphore.rs:1081); nothing leaks. The
+     * spent permit value cannot be released again. */
+    ASSERT_TRUE(sem_obligation_is(g_sem[0].obligation, t, ASX_OBLIGATION_COMMITTED));
+    ASSERT_EQ(asx_obligation_leak_count(), leaks_before);
     ASSERT_EQ(asx_semaphore_available(h), 1u);
-    ASSERT_TRUE(sem_obligation_is(g_sem[0].obligation, t, ASX_OBLIGATION_LEAKED));
+    ASSERT_EQ(asx_semaphore_release(g_sem[0].permit), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_semaphore_available(h), 1u);
 }
 
-TEST(sem_permits_leaked_under_each_leak_policy) {
-    /* bd-9kll.5.10: a crowd of holders ends keeping their permits. Each
-     * permit's obligation is leaked once: LOG and SILENT mark it LEAKED,
+TEST(sem_holders_ending_with_permits_and_tokens_under_each_leak_policy) {
+    /* bd-9kll.5.10: a crowd of holders ends keeping its permits and a
+     * plain obligation token each. Each permit is dropped with its
+     * holder's body (its permit returns, the drop commits it), under every
+     * policy; each token leaks once: LOG and SILENT mark it LEAKED,
      * RECOVER aborts it (reason Error, as Rust). The count rises by one per
-     * permit, and the late releases return every permit. (PANIC's
-     * containment is covered by test_budget_obligation.) */
+     * token, every permit is back, and the spent permit values cannot be
+     * released again. (PANIC's containment is covered by
+     * test_budget_obligation.) */
     static const asx_leak_response policies[3] = {ASX_LEAK_LOG, ASX_LEAK_SILENT, ASX_LEAK_RECOVER};
     asx_semaphore_handle h;
     asx_task_id t[8];
@@ -465,20 +479,24 @@ TEST(sem_permits_leaked_under_each_leak_policy) {
             g_sem[i].sem = h;
             g_sem[i].use_cx = 1;
             g_sem[i].keep = 1;
+            g_sem[i].keep_token = 1;
             ASSERT_EQ(asx_task_spawn(g_region, poll_sem_task, &g_sem[i], &t[i]), ASX_OK);
         }
         budget = asx_budget_from_polls(100);
         ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
         ASSERT_EQ(asx_obligation_leak_count(), leaks_before + 8u);
+        ASSERT_EQ(asx_semaphore_available(h), 8u);
         for (i = 0; i < 8u; i++) {
-            ASSERT_EQ(asx_obligation_get_info(g_sem[i].obligation, &info), ASX_OK);
+            ASSERT_TRUE(sem_obligation_is(g_sem[i].obligation, t[i], ASX_OBLIGATION_COMMITTED));
+            ASSERT_EQ(asx_obligation_get_info(g_sem[i].token, &info), ASX_OK);
+            ASSERT_EQ(info.kind, ASX_OBLIGATION_KIND_GENERIC);
             if (policies[p] == ASX_LEAK_RECOVER) {
                 ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
                 ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_ERROR);
             } else {
                 ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
             }
-            ASSERT_EQ(asx_semaphore_release(g_sem[i].permit), ASX_OK);
+            ASSERT_EQ(asx_semaphore_release(g_sem[i].permit), ASX_E_INVALID_STATE);
         }
         ASSERT_EQ(asx_semaphore_available(h), 8u);
     }
@@ -1670,8 +1688,8 @@ int main(void) {
     RUN_TEST(sem_cancel_pending_front_waiter_leaves_when_polled);
     RUN_TEST(sem_waiter_of_dead_task_is_reclaimed);
     RUN_TEST(sem_permit_polled_with_cx_is_an_obligation_until_release);
-    RUN_TEST(sem_permit_held_past_task_completion_is_leaked);
-    RUN_TEST(sem_permits_leaked_under_each_leak_policy);
+    RUN_TEST(sem_permit_held_past_task_completion_is_dropped_with_it);
+    RUN_TEST(sem_holders_ending_with_permits_and_tokens_under_each_leak_policy);
     RUN_TEST(untracked_permits_hold_no_obligation);
     RUN_TEST(tracked_permit_released_or_forgotten_once_while_others_are_out);
     RUN_TEST(mutex_handoff_between_three_tasks);

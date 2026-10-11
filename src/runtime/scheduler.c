@@ -398,14 +398,9 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->region_wait_region = ASX_INVALID_ID;
 }
 
-/* Whether a pending cancel makes a completing task's outcome CANCELLED
- * (Rust classify_spawn_completion, task_handle.rs:173-202). A task spawned
- * from inside another task's poll (Rust cx.spawn,
- * PreserveAcknowledgedCancellationResult) keeps the value it returned when
- * its cancel came after its first poll and it acknowledged it (a checkpoint
- * moved it to CANCELLING); C reasons are always attributed. Every other
- * task (Rust create_task) is cancellation-dominant (DSL v2 §2). */
-static int sched_cancel_dominates(const asx_task_slot *t) {
+/* Rust classify_spawn_completion (task_handle.rs:173-202); see
+ * runtime_internal.h. C reasons are always attributed. */
+int asx_task_cancel_dominates_internal(const asx_task_slot *t) {
     int acknowledged = t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_FINALIZING;
     if (!t->cancel_pending) return 0;
     return !(t->spawned_in_poll && !t->cancel_before_first_poll && acknowledged);
@@ -1136,7 +1131,8 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
         uint8_t prio = t->lab_waker_prio;
         *out_done = 1;
         st = sched_complete(t, tid, rslot,
-                            sched_cancel_dominates(t) ? ASX_OUTCOME_CANCELLED : ASX_OUTCOME_OK,
+                            asx_task_cancel_dominates_internal(t) ? ASX_OUTCOME_CANCELLED
+                                                                  : ASX_OUTCOME_OK,
                             ASX_SCHED_EVENT_COMPLETE, round);
         if (retired_wake) asx_lab_schedule_cancel_retired(i, task_gen, prio);
         return st;
@@ -1144,7 +1140,7 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
     if (poll_result != ASX_E_PENDING) {
         /* Failed — CANCELLED > ERR in the severity lattice, so a
          * dominating pending cancel wins. */
-        int was_cancelled = sched_cancel_dominates(t);
+        int was_cancelled = asx_task_cancel_dominates_internal(t);
         uint8_t prio = t->lab_waker_prio;
         if (!was_cancelled) t->last_error = poll_result;
         *out_done = 1;

@@ -83,7 +83,12 @@ typedef struct asx_send_permit {
     /* The permit's SendPermit obligation (asx_channel_reserve with a task
      * Cx), ASX_INVALID_ID when untracked (asx_channel_try_reserve, the
      * reserve inside asx_channel_send, or no task Cx), as Rust registers
-     * one only for `reserve(&cx)` (channel/mpsc.rs:1180-1196). */
+     * one only for `reserve(&cx)` (channel/mpsc.rs:1180-1196). A tracked
+     * permit still held when its task completes is dropped with it, as
+     * Rust drops the task body's locals (SendPermit's Drop,
+     * channel/mpsc.rs:1663-1673): its slot goes back, the obligation is
+     * aborted with Cancel, and the permit value is spent (a later send or
+     * abort of it changes nothing). */
     asx_obligation_id obligation;
 } asx_send_permit;
 

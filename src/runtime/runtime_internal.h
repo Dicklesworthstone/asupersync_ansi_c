@@ -224,6 +224,9 @@ typedef struct {
     uint8_t lab_ent_parent_region;
 } asx_task_slot;
 
+/* The drop of a permit an obligation tracks (asx_obligation_set_drop_internal). */
+typedef int (*asx_obligation_drop_fn)(uint64_t a, uint64_t b);
+
 typedef struct {
     asx_obligation_state state;
     asx_region_id region;
@@ -234,6 +237,11 @@ typedef struct {
     asx_task_id holder;                       /* ASX_INVALID_ID if unowned */
     uint32_t next_held;                       /* link in the holder's list */
     asx_obligation_abort_reason abort_reason; /* why it was aborted */
+    /* The permit's drop, run if its holder completes with the obligation
+     * still reserved (NULL: a plain obligation, which leaks then). */
+    asx_obligation_drop_fn drop_fn;
+    uint64_t drop_a;
+    uint64_t drop_b;
     /* Rust's obligation mailbox (bd-2fga): under lab dispatch the
      * operations made inside a poll are posts applied, in order, when the
      * poll returns. counted: it counts against its region's
@@ -546,10 +554,33 @@ void asx_region_trace_cancel_of_gone_internal(asx_region_id region,
                                               const asx_cancel_reason *reason);
 
 /* Resolve the obligations a completing task still holds, cancelled or
- * not, as leaks per the active policy (RECOVER aborts them with
- * ASX_OBLIGATION_ABORT_ERROR). Returns the number of leaks recorded. Sets
- * *out_fail_fast when the policy demands fail-fast containment. */
+ * not. A permit's obligation (one with a drop function) is dropped with
+ * the task's body, as Rust drops the body's locals: its resource goes back
+ * and the obligation is committed or aborted with Cancel, as that permit's
+ * Drop does. The others are leaks per the active policy (RECOVER aborts
+ * them with ASX_OBLIGATION_ABORT_ERROR). Returns the number of leaks
+ * recorded. Sets *out_fail_fast when the policy demands fail-fast
+ * containment. */
 uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *out_fail_fast);
+
+/* Attach the drop of the permit an obligation tracks: called with (a, b)
+ * when the obligation's holder completes with it still reserved, it gives
+ * the permit's resource back (channel capacity, semaphore permits) and
+ * returns 1 when Rust's drop of that permit commits the obligation
+ * (SemaphorePermit), 0 when it aborts it with Cancel (SendPermit). A
+ * resolved or unknown obligation is left alone. */
+void asx_obligation_set_drop_internal(asx_obligation_id id, asx_obligation_drop_fn fn, uint64_t a,
+                                      uint64_t b);
+
+/* Whether a pending cancel makes a completing task's outcome CANCELLED
+ * (Rust classify_spawn_completion, task_handle.rs:173-202). A task spawned
+ * from inside another task's poll (Rust cx.spawn,
+ * PreserveAcknowledgedCancellationResult) keeps the value it returned when
+ * its cancel came after its first poll and it acknowledged it (a checkpoint
+ * moved it to CANCELLING). Every other task (Rust create_task, a task
+ * group's member) is cancellation-dominant (DSL v2 §2). Both schedulers
+ * decide outcomes with it (scheduler.c, parallel.c). */
+int asx_task_cancel_dominates_internal(const asx_task_slot *t);
 
 /* Take (and clear) a fault raised during completion bookkeeping, e.g. an
  * obligation leak under the PANIC policy. ASX_OK when none is pending. */

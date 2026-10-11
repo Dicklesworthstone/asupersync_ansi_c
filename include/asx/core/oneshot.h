@@ -108,7 +108,11 @@ ASX_API ASX_MUST_USE asx_status asx_oneshot_try_recv(asx_oneshot_receiver *recei
 /* A reserved send (Rust oneshot::SendPermit, channel/oneshot.rs:690): it
  * holds the sending side until asx_oneshot_permit_send or
  * asx_oneshot_permit_abort, and the SendPermit obligation reserved for the
- * reserving Cx's task (ASX_INVALID_ID when untracked). */
+ * reserving Cx's task (ASX_INVALID_ID when untracked). A tracked permit
+ * still held when its task completes is dropped with it, as Rust drops
+ * the task body's locals: the sending side goes away (the receiver sees
+ * the channel closed), the obligation is aborted with Cancel, and the
+ * permit value is spent. */
 typedef struct {
     asx_oneshot_sender sender;
     asx_obligation_id obligation;

@@ -663,6 +663,15 @@ TEST(lab_group_members_refused_by_their_region_are_joined_cancelled) {
     ASSERT_EQ(o.group.count, 0u);
 }
 
+/* Rust refuses a quorum of 0 before spawning anything (cx/scope.rs:1831):
+ * C refuses it at init, before any member exists. */
+TEST(quorum_of_zero_is_refused_before_any_member) {
+    asx_task_group g;
+    ASSERT_EQ(asx_task_group_init(&g, ASX_TASK_GROUP_QUORUM, 0u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_task_group_init(&g, ASX_TASK_GROUP_QUORUM, 1u), ASX_OK);
+    ASSERT_EQ(asx_task_group_init(&g, ASX_TASK_GROUP_RACE, 0u), ASX_OK); /* ignored */
+}
+
 TEST(quorum_rejects_invalid_threshold_after_draining) {
     asx_region_id r;
     asx_task_id owner;
@@ -879,6 +888,7 @@ int main(void) {
     RUN_TEST(quorum_owner_cancel_drains_with_the_owner_reason);
     RUN_TEST(quorum_checkpoint_raises_the_owner_poll_quota);
     RUN_TEST(lab_group_members_refused_by_their_region_are_joined_cancelled);
+    RUN_TEST(quorum_of_zero_is_refused_before_any_member);
     RUN_TEST(quorum_rejects_invalid_threshold_after_draining);
     RUN_TEST(owner_cancel_drains_race_members_with_the_owner_reason);
     RUN_TEST(deadline_times_out_and_drains_members);

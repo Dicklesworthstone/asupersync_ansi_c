@@ -377,6 +377,10 @@ asx_status asx_task_group_init(asx_task_group *g, asx_task_group_mode mode, uint
     if ((int)mode < (int)ASX_TASK_GROUP_JOIN_ALL || (int)mode > (int)ASX_TASK_GROUP_QUORUM) {
         return ASX_E_INVALID_ARGUMENT;
     }
+    /* Rust refuses a quorum of 0 before spawning anything
+     * (QuorumError::InvalidQuorum, cx/scope.rs:1831); one above the member
+     * count is only known at the first poll. */
+    if (mode == ASX_TASK_GROUP_QUORUM && needed == 0u) return ASX_E_INVALID_ARGUMENT;
     memset(g, 0, sizeof(*g));
     g->mode = mode;
     g->needed = needed;

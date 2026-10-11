@@ -139,9 +139,13 @@ typedef struct {
     asx_cancel_reason refused_reason[ASX_TASK_GROUP_MAX];
 } asx_task_group;
 
-/* Initialize an empty group. `needed` is the QUORUM threshold (1..count,
- * checked at the first poll) and is ignored by the other modes.
- * Returns ASX_E_INVALID_ARGUMENT for NULL or an unknown mode. */
+/* Initialize an empty group. `needed` is the QUORUM threshold (1..count)
+ * and is ignored by the other modes. A quorum of 0 is refused here, before
+ * any member exists, as Rust refuses it before spawning; one above the
+ * member count is found at the first poll, which drains the members and
+ * reports ASX_E_INVALID_ARGUMENT.
+ * Returns ASX_E_INVALID_ARGUMENT for NULL, an unknown mode or a quorum of
+ * 0. */
 ASX_API ASX_MUST_USE asx_status asx_task_group_init(asx_task_group *g, asx_task_group_mode mode,
                                                     uint32_t needed);
 

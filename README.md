@@ -981,7 +981,8 @@ Cancelling a region (`asx_cancel_propagate`, `asx_region_drain`) reaches its who
 
 An obligation (send permit, ack, lease, I/O op, semaphore permit, transaction) is a linear resource that must be committed or aborted exactly once. Each records its **kind** and its **holder task**: `asx_obligation_reserve` binds the task being polled, and `asx_obligation_reserve_ex` takes an explicit kind and holder. When a holder completes with obligations still reserved, the runtime resolves them deterministically:
 
-- They are **leaks**, whether or not the holder was cancelled: a Rust task body that ends holding an unresolved obligation token drops it, and the drop posts a leak. They are handled by the configured `leak_response`:
+- A tracked **permit** (a send permit reserved with the task's Cx, a semaphore permit acquired with it) is dropped with its holder, as Rust drops the task body's locals: its channel slot or permits go back, and the obligation resolves as that permit's Rust `Drop` resolves it (a send permit aborts with `CANCEL`, a semaphore permit commits). The permit value is spent afterwards. Nothing leaks.
+- The other obligations are **leaks**, whether or not the holder was cancelled: a Rust task body that ends holding an unresolved obligation token drops it, and the drop posts a leak. They are handled by the configured `leak_response`:
   - `LOG` (the default) warns.
   - `SILENT` records them.
   - `RECOVER` aborts them with reason `ERROR`, as Rust's Recover does; they still count as leaks.

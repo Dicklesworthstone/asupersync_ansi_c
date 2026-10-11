@@ -507,16 +507,18 @@ static asx_leak_response obligation_leak_batch_policy(uint64_t n) {
     return g_leak_response;
 }
 
-/* A holder completed with obligations still reserved: each is a leak,
- * whether or not the holder was cancelled. This is Rust's common path: a
- * task body that ends holding an unresolved ObligationToken drops it, and
- * the drop posts a Leak (runtime/obligation_mailbox.rs:897) before the
- * completion phase runs, cancelled or not (fuzz finding gen-1-20 /
+/* A holder completed with obligations still reserved: each plain one is a
+ * leak, whether or not the holder was cancelled. This is Rust's common
+ * path: a task body that ends holding an unresolved ObligationToken drops
+ * it, and the drop posts a Leak (runtime/obligation_mailbox.rs:897) before
+ * the completion phase runs, cancelled or not (fuzz finding gen-1-20 /
  * gen-1-37, bd-ij9w; fixture obligation-cancelled-holder-leaks-001). Rust's
  * completion-time abort with Cancel (abort_orphaned_obligations_for_holder,
  * state.rs:8454) only reaches tokens that were never dropped, which C, with
  * no destructors, cannot tell apart. The leak policy then applies; RECOVER
- * aborts with ASX_OBLIGATION_ABORT_ERROR. */
+ * aborts with ASX_OBLIGATION_ABORT_ERROR. A permit's obligation is dropped
+ * with the body instead (obligation_drop_permit): its Drop gives the
+ * resource back and leaks nothing. */
 /* Leak the reserved obligation in slot `idx` under the active policy:
  * RECOVER aborts it with ASX_OBLIGATION_ABORT_ERROR, as Rust's Recover
  * aborts with ObligationAbortReason::Error (state.rs:5781-5797), the others
@@ -548,6 +550,36 @@ static int obligation_leak_slot(uint32_t idx, const char *log_message) {
     return policy == ASX_LEAK_PANIC;
 }
 
+static void obligation_apply_resolution(uint32_t idx, asx_obligation_state to);
+
+/* A permit dropped with its holder's body: its drop gives the resource
+ * back, then the obligation resolves as that permit's Rust Drop resolves
+ * it, applied at once (the holder's polls are over): SendPermit aborts
+ * with Cancel (channel/mpsc.rs:1663-1673, channel/oneshot.rs SendPermit
+ * drop), SemaphorePermit commits (sync/semaphore.rs:1081). No leak:
+ * Rust reports one only for a plain ObligationToken. */
+static void obligation_drop_permit(uint32_t idx) {
+    asx_obligation_slot *o = &g_obligations[idx];
+    asx_obligation_drop_fn fn = o->drop_fn;
+    asx_obligation_state to;
+    o->drop_fn = NULL;
+    to = fn(o->drop_a, o->drop_b) ? ASX_OBLIGATION_COMMITTED : ASX_OBLIGATION_ABORTED;
+    if (to == ASX_OBLIGATION_ABORTED) o->abort_reason = ASX_OBLIGATION_ABORT_CANCEL;
+    o->state = to;
+    o->counted = 0;
+    obligation_apply_resolution(idx, to);
+}
+
+void asx_obligation_set_drop_internal(asx_obligation_id id, asx_obligation_drop_fn fn, uint64_t a,
+                                      uint64_t b) {
+    asx_obligation_slot *o;
+    if (asx_obligation_slot_lookup(id, &o) != ASX_OK) return;
+    if (o->state != ASX_OBLIGATION_RESERVED) return;
+    o->drop_fn = fn;
+    o->drop_a = a;
+    o->drop_b = b;
+}
+
 uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *out_fail_fast) {
     uint32_t leaks = 0;
     uint32_t idx = task->first_held;
@@ -560,7 +592,9 @@ uint32_t asx_task_resolve_held_obligations_internal(asx_task_slot *task, int *ou
         uint32_t next = o->next_held;
 
         o->next_held = ASX_SLOT_NONE;
-        if (o->alive && o->state == ASX_OBLIGATION_RESERVED) {
+        if (o->alive && o->state == ASX_OBLIGATION_RESERVED && o->drop_fn != NULL) {
+            obligation_drop_permit(idx);
+        } else if (o->alive && o->state == ASX_OBLIGATION_RESERVED) {
             if (obligation_leak_slot(idx, "obligation leaked: holder task completed with it "
                                           "reserved") &&
                 out_fail_fast != NULL) {
@@ -1571,6 +1605,7 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
     g_obligations[idx].abort_reason = ASX_OBLIGATION_ABORT_NONE;
     g_obligations[idx].next_held = ASX_SLOT_NONE;
     g_obligations[idx].holder = ASX_INVALID_ID;
+    g_obligations[idx].drop_fn = NULL;
     g_obligations[idx].checked = checked ? 1u : 0u;
     g_obligations[idx].counted = (checked || !posting) ? 1u : 0u;
     g_obligations[idx].posts = 0;
