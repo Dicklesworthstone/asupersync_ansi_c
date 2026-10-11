@@ -3536,10 +3536,13 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
                 "k": "region.created", "region": region_name(&s, *region)?,
                 "parent": match parent { Some(p) => Value::String(region_name(&s, *p)?), None => Value::Null },
             }),
-            (K::RegionCloseBegin, TraceData::Region { region, .. }) => {
+            // Every field is named, so a field added on a re-pin fails to
+            // compile instead of being dropped; the ones ignored here are
+            // listed in docs/VOCABULARY_EXCLUSIONS.md (bd-9kll.2.7).
+            (K::RegionCloseBegin, TraceData::Region { region, parent: _ }) => {
                 json!({"k": "region.close_begin", "region": region_name(&s, *region)?})
             }
-            (K::RegionCloseComplete, TraceData::Region { region, .. }) => {
+            (K::RegionCloseComplete, TraceData::Region { region, parent: _ }) => {
                 json!({"k": "region.closed", "region": region_name(&s, *region)?})
             }
             (K::RegionCancelled, TraceData::RegionCancel { region, reason }) => {
@@ -3564,7 +3567,8 @@ fn project_trace(lab: &LabRuntime, shared: &SharedRef) -> RunResult<Projected> {
                     region,
                     kind,
                     abort_reason,
-                    ..
+                    state: _,
+                    duration_ns: _,
                 },
             ) => {
                 let holder = task_name(&s, *task)?;
