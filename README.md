@@ -973,7 +973,7 @@ Running → CancelRequested → Cancelling → Finalizing → Completed
 
 Each cancel carries an **origin attribution chain** (source region, source task, timestamp, message) so propagation can be traced across cancel waves. The chain is bounded to prevent unbounded allocation.
 
-Cancelling a region (`asx_cancel_propagate`, `asx_region_drain`) reaches its whole subtree: the root's tasks get the requested kind, descendants get `PARENT`. Draining closes the subtree parent-first, cancels and runs it to completion, then finalizes it deepest-first. A parked task is woken by its cancel.
+Cancelling a region (`asx_region_cancel` with a reason, `asx_cancel_propagate` with a kind) reaches its whole subtree: the root's tasks get the requested reason, descendants get `PARENT`. Draining (`asx_region_drain`) closes the subtree parent-first, cancels with `PARENT` the tasks not cancelled yet, runs it to completion, then finalizes it deepest-first; to drain with a reason, as Rust's region close command does, call `asx_region_cancel` first. A parked task is woken by its cancel.
 
 **Masking** (`asx_task_mask` / `asx_task_unmask`, nestable to `ASX_MAX_MASK_DEPTH` = 64) defers acknowledgement for a critical section, such as committing a transaction or a finalizer. While a task is masked, `asx_checkpoint` reports `masked = 1` instead of `cancelled`, the cancel can still strengthen, and even the opt-in hard cleanup bound neither consumes cleanup polls nor force-completes the task. The cancel becomes observable at the first checkpoint after the depth returns to zero.
 
