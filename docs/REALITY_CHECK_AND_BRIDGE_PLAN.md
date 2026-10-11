@@ -38,10 +38,20 @@ coverage. Codec append overflow bug `bd-2ozl` is independently reviewed at exact
 while the guarded append preserves the buffer and permits a subsequent normal append.
 Native 32-bit execution was unavailable in this local increment.
 
-Original K4/K5/K18/K19 acceptance remains open: body-driven close/reason/payload semantics,
+The subsequent `7a41f03` increment supplies explicit release callbacks for dropped inline
+combinator branches. Integration adds a real two-reservation channel test that reproduces
+map-reduce callback re-entry before the fix: an application release could re-poll abandoned
+branches or call the reducer after failure. The decision is now recorded before releases;
+both reservations are returned exactly once, nested polls observe the original failure, and
+no abandoned branch or reducer runs. This preserves the separate spawned-task loser-drain
+contract. The `bd156b3` close test also establishes requested root cancellation attribution
+and descendant Parent attribution through the public cancel-then-drain sequence.
+
+Original K4/K5/K11/K18/K19 acceptance remains open: body-driven close/payload semantics,
 serialized masked asynchronous finalization, actual Rust cleanup/admission DSL witnesses,
-independent runtime storage and cross-runtime handles, and runtime borrow/affinity/determinism
-monitor integration. Granular completed/pending work and revision-bound evidence remain on
+the complete inline-combinator contract and Rust witnesses, independent runtime storage and
+cross-runtime handles, and runtime borrow/affinity/determinism monitor integration.
+Granular completed/pending work and revision-bound evidence remain on
 those original Beads. This increment establishes no new performance, physical-device,
 full runtime profile/codec, or release-readiness claim.
 

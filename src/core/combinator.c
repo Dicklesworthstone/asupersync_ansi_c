@@ -33,6 +33,7 @@ static void branch_init(asx_combinator_branch *b) {
     b->user_data = NULL;
     b->result = ASX_E_PENDING;
     b->done = 0;
+    b->drop_fn = NULL;
 }
 
 static asx_status branch_poll(asx_combinator_branch *b, asx_task_id self) {
@@ -51,15 +52,20 @@ static asx_status branch_poll(asx_combinator_branch *b, asx_task_id self) {
     return st;
 }
 
-/* Drop a loser, as Rust's inline race drops a losing future (Cx::race,
- * cx/cx.rs:4316): it is never polled again and resolves as cancelled.
- * Returns 1 if it was still pending. */
-static int branch_drop(asx_combinator_branch *b) {
+/* Drop a branch that has not finished, as Rust's inline race drops a
+ * losing future (Cx::race, cx/cx.rs:4316): it is never polled again,
+ * resolves as `result`, and its drop_fn releases what it holds, once (the
+ * branch is marked done first, so a drop_fn that re-enters the combinator
+ * cannot drop it twice). Returns 1 if it was still pending. */
+static int branch_drop_as(asx_combinator_branch *b, asx_status result) {
     if (b->done) return 0;
     b->done = 1;
-    b->result = ASX_E_CANCELLED;
+    b->result = result;
+    if (b->drop_fn != NULL) b->drop_fn(b->user_data);
     return 1;
 }
+
+static int branch_drop(asx_combinator_branch *b) { return branch_drop_as(b, ASX_E_CANCELLED); }
 
 /* The owner task's checkpoint: nonzero once it observes a cancel (a mask
  * defers it). A poll outside a runtime task never sees one. */
@@ -297,11 +303,10 @@ asx_status asx_timeout_combinator_poll(void *user_data, asx_task_id self) {
         state->initialized = 1;
     }
 
-    /* Check deadline first */
+    /* Check deadline first: expired, the inner future is dropped */
     if (asx_deadline_is_expired(&state->deadline)) {
         state->timed_out = 1;
-        state->inner.done = 1;
-        state->inner.result = ASX_E_TIMED_OUT;
+        (void)branch_drop_as(&state->inner, ASX_E_TIMED_OUT);
         disarm_deadline(&state->deadline);
         return ASX_E_TIMED_OUT;
     }
@@ -316,8 +321,7 @@ asx_status asx_timeout_combinator_poll(void *user_data, asx_task_id self) {
     /* Re-check deadline after inner poll */
     if (asx_deadline_is_expired(&state->deadline)) {
         state->timed_out = 1;
-        state->inner.done = 1;
-        state->inner.result = ASX_E_TIMED_OUT;
+        (void)branch_drop_as(&state->inner, ASX_E_TIMED_OUT);
         disarm_deadline(&state->deadline);
         return ASX_E_TIMED_OUT;
     }
@@ -355,6 +359,15 @@ asx_status asx_first_ok_add(asx_first_ok_state *state, asx_combinator_poll_fn po
     return ASX_OK;
 }
 
+/* The chain ended at `from`: the branches it will not run are dropped. */
+static void first_ok_drop_from(asx_first_ok_state *state, uint32_t from) {
+    uint32_t i;
+    for (i = from; i < state->count; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded drop loop") */
+        (void)branch_drop(&state->branches[i]);
+    }
+}
+
 asx_status asx_first_ok_poll(void *user_data, asx_task_id self) {
     asx_first_ok_state *state = (asx_first_ok_state *)user_data;
     asx_status st;
@@ -370,6 +383,7 @@ asx_status asx_first_ok_poll(void *user_data, asx_task_id self) {
         if (!state->started) {
             if (owner_cancelled(self)) {
                 state->last_error = ASX_E_CANCELLED;
+                first_ok_drop_from(state, state->current);
                 state->current = state->count;
                 break;
             }
@@ -379,11 +393,13 @@ asx_status asx_first_ok_poll(void *user_data, asx_task_id self) {
         if (st == ASX_E_PENDING) return ASX_E_PENDING;
         if (st == ASX_OK) {
             state->winner = (int32_t)state->current;
+            first_ok_drop_from(state, state->current + 1u);
             return ASX_OK;
         }
         state->last_error = st;
         /* A cancelled attempt stops the chain (first_ok.rs:475-484); an
          * error passes to the next. */
+        if (st == ASX_E_CANCELLED) first_ok_drop_from(state, state->current + 1u);
         state->current = st == ASX_E_CANCELLED ? state->count : state->current + 1u;
         state->started = 0;
     }

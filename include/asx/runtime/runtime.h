@@ -1201,6 +1201,14 @@ ASX_API int asx_region_is_quiescent(asx_region_id id);
 /* Drain a region: run scheduler then close through to CLOSED.
  * This is the high-level "shut down cleanly" operation.
  *
+ * Drain closes every open region of the subtree and cancels the tasks not
+ * cancelled yet with ParentCancelled. For Rust's close command with a
+ * reason (close_region_command = cancel_request(reason), state.rs:4936),
+ * call asx_region_cancel(id, &reason, NULL) first: the region's tasks take
+ * that reason and its descendants' ParentCancelled, the region records it
+ * (its close outcome defaults to Cancelled), and drain then cancels nothing
+ * more, only runs the tasks out and closes.
+ *
  * Preconditions: id must be a valid region handle; budget must not be NULL.
  * Postconditions: on success, region reaches CLOSED state; all tasks
  *   completed; finalizers (asx_region_defer_sync) run in LIFO order; then

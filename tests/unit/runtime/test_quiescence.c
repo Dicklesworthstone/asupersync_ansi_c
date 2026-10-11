@@ -492,6 +492,42 @@ TEST(close_outcome_of_a_cancelled_region_keeps_its_task_outcomes) {
     ASSERT_EQ(o.severity, ASX_OUTCOME_OK);
 }
 
+TEST(drain_after_region_cancel_closes_with_the_requested_reason) {
+    /* Rust's close command is cancel_request(reason) (close_region_command,
+     * runtime/state.rs:4936-4940): the region's own tasks take that reason,
+     * descendants' tasks ParentCancelled. In C, asx_region_cancel then
+     * asx_region_drain: drain finds every task cancelled already and adds
+     * no PARENT cancel of its own, only runs them out and closes. */
+    asx_region_id rid;
+    asx_region_id child;
+    asx_task_id root_task;
+    asx_task_id child_task;
+    asx_cancel_reason reason;
+    asx_cancel_reason seen;
+    asx_outcome o;
+    asx_region_state rs;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(rid, &child), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &root_task), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(child, poll_checkpoint_then_complete, NULL, &child_task), ASX_OK);
+    reason = asx_cancel_reason_default(ASX_CANCEL_SHUTDOWN, NULL);
+    ASSERT_EQ(asx_region_cancel(rid, &reason, NULL), ASX_OK);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(asx_region_get_state(rid, &rs), ASX_OK);
+    ASSERT_EQ(rs, ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_task_get_cancel_reason(root_task, &seen), ASX_OK);
+    ASSERT_EQ((int)seen.kind, (int)ASX_CANCEL_SHUTDOWN);
+    ASSERT_EQ(asx_task_get_cancel_reason(child_task, &seen), ASX_OK);
+    ASSERT_EQ((int)seen.kind, (int)ASX_CANCEL_PARENT);
+    ASSERT_EQ(asx_region_get_close_outcome(rid, &o), ASX_OK);
+    ASSERT_EQ(o.severity, ASX_OUTCOME_CANCELLED);
+}
+
 TEST(close_outcome_argument_errors) {
     asx_region_id rid;
     asx_outcome o;
@@ -1936,6 +1972,7 @@ int main(void) {
     RUN_TEST(close_outcome_joins_the_task_outcomes);
     RUN_TEST(close_outcome_of_a_cancelled_empty_region_is_cancelled);
     RUN_TEST(close_outcome_of_a_cancelled_region_keeps_its_task_outcomes);
+    RUN_TEST(drain_after_region_cancel_closes_with_the_requested_reason);
     RUN_TEST(close_outcome_argument_errors);
     asx_runtime_reset();
     RUN_TEST(finalizing_region_refuses_task_spawn);
