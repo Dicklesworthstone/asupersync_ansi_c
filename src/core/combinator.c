@@ -120,7 +120,11 @@ asx_status asx_join_poll(void *user_data, asx_task_id self) {
         st = branch_poll(&state->branches[i], self);
         if (st != ASX_E_PENDING) {
             state->done_count++;
-            branch_outcome = asx_outcome_make((st == ASX_OK) ? ASX_OUTCOME_OK : ASX_OUTCOME_ERR);
+            /* A branch's ASX_E_CANCELLED is Rust's Outcome::Cancelled,
+             * which the lattice ranks above Err (combinator/join.rs:35-40). */
+            branch_outcome = asx_outcome_make(st == ASX_OK            ? ASX_OUTCOME_OK
+                                              : st == ASX_E_CANCELLED ? ASX_OUTCOME_CANCELLED
+                                                                      : ASX_OUTCOME_ERR);
             state->combined = asx_outcome_join(&state->combined, &branch_outcome);
         }
     }
@@ -407,6 +411,7 @@ asx_status asx_quorum_init(asx_quorum_state *state, uint32_t threshold) {
     state->fail_count = 0;
     state->decided = 0;
     state->dropped = 0;
+    state->failure = ASX_OK;
     for (i = 0; i < ASX_COMBINATOR_MAX_BRANCHES; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded init over static array") */
         branch_init(&state->branches[i]);
@@ -432,6 +437,9 @@ asx_status asx_quorum_poll(void *user_data, asx_task_id self) {
 
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     if (state->count == 0) return ASX_E_INVALID_ARGUMENT;
+    /* Rust's Scope::quorum refuses more needed than branches before
+     * running any (QuorumError::InvalidQuorum, cx/scope.rs:1831). */
+    if (state->threshold > state->count) return ASX_E_INVALID_ARGUMENT;
 
     /* Phase 1: poll until decided */
     if (!state->decided) {
@@ -451,6 +459,20 @@ asx_status asx_quorum_poll(void *user_data, asx_task_id self) {
         remaining = state->count - state->ok_count - state->fail_count;
         if (state->ok_count >= state->threshold || state->ok_count + remaining < state->threshold) {
             state->decided = 1;
+            /* Not met: Rust's quorum_to_result (combinator/quorum.rs:423-467)
+             * reports a branch's cancellation if there was one, else
+             * InsufficientSuccesses; C reports ASX_E_CANCELLED, else the
+             * first failed branch's status. */
+            for (i = 0; i < state->count; i++) {
+                /* ASX_CHECKPOINT_WAIVER("bounded scan of completed branches") */
+                st = state->branches[i].result;
+                if (!state->branches[i].done || st == ASX_OK) continue;
+                if (st == ASX_E_CANCELLED) {
+                    state->failure = st;
+                    break;
+                }
+                if (state->failure == ASX_OK) state->failure = st;
+            }
             /* The branches still pending are dropped, as race's losers */
             for (i = 0; i < state->count; i++) {
                 /* ASX_CHECKPOINT_WAIVER("bounded drop loop") */
@@ -461,7 +483,7 @@ asx_status asx_quorum_poll(void *user_data, asx_task_id self) {
 
     if (!state->decided) return ASX_E_PENDING;
 
-    return (state->ok_count >= state->threshold) ? ASX_OK : ASX_E_INVALID_STATE;
+    return (state->ok_count >= state->threshold) ? ASX_OK : state->failure;
 }
 
 uint32_t asx_quorum_ok_count(const asx_quorum_state *state) {

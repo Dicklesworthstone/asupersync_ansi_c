@@ -52,7 +52,8 @@ typedef struct {
  * Join — wait for ALL branches to complete
  *
  * Returns ASX_OK when all branches are done.
- * Combined outcome uses asx_outcome_join (max severity).
+ * Combined outcome uses asx_outcome_join (max severity): a branch's
+ * ASX_OK is OK, its ASX_E_CANCELLED is CANCELLED, any other status ERR.
  * ------------------------------------------------------------------- */
 
 typedef struct {
@@ -205,8 +206,11 @@ ASX_API int32_t asx_first_ok_winner(const asx_first_ok_state *state);
 /* -------------------------------------------------------------------
  * Quorum — wait for N-of-M branches to complete successfully
  *
- * Returns ASX_OK when threshold is reached.
- * Returns error if too many branches fail to reach quorum.
+ * Returns ASX_OK when threshold is reached. Once too many branches have
+ * failed to reach it, returns ASX_E_CANCELLED if a branch returned that
+ * (Rust's QuorumError::Cancelled), else the first failed branch's status
+ * (InsufficientSuccesses). A threshold above the branch count is
+ * ASX_E_INVALID_ARGUMENT at the first poll, before any branch runs.
  * Once decided, the branches still pending are dropped as in race (never
  * polled again, ASX_E_CANCELLED); the task-group quorum drains them.
  * ------------------------------------------------------------------- */
@@ -219,6 +223,7 @@ typedef struct {
     uint32_t fail_count; /* failed completions */
     int decided;         /* 1 when quorum reached or impossible */
     uint32_t dropped;    /* pending branches dropped at the decision */
+    asx_status failure;  /* the result when the quorum is not met */
 } asx_quorum_state;
 
 /* Initialize a quorum combinator requiring threshold successes. */

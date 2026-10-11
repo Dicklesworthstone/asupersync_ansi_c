@@ -124,6 +124,25 @@ TEST(join_with_failure) {
     ASSERT_EQ(asx_join_outcome(&js).severity, ASX_OUTCOME_ERR);
 }
 
+TEST(join_cancelled_branch_ranks_above_err) {
+    /* A cancelled branch is Rust's Outcome::Cancelled, above Err in the
+     * lattice (combinator/join.rs:35-40), whichever branch comes first. */
+    asx_join_state js;
+    asx_status fail_st = ASX_E_INVALID_STATE;
+    asx_status cancel_st = ASX_E_CANCELLED;
+    MUST_OK(asx_join_init(&js));
+    MUST_OK(asx_join_add(&js, poll_fail, &fail_st));
+    MUST_OK(asx_join_add(&js, poll_fail, &cancel_st));
+    ASSERT_EQ(asx_join_poll(&js, 0), ASX_OK);
+    ASSERT_EQ(asx_join_outcome(&js).severity, ASX_OUTCOME_CANCELLED);
+
+    MUST_OK(asx_join_init(&js));
+    MUST_OK(asx_join_add(&js, poll_fail, &cancel_st));
+    MUST_OK(asx_join_add(&js, poll_fail, &fail_st));
+    ASSERT_EQ(asx_join_poll(&js, 0), ASX_OK);
+    ASSERT_EQ(asx_join_outcome(&js).severity, ASX_OUTCOME_CANCELLED);
+}
+
 TEST(join_null_fails) { ASSERT_EQ(asx_join_init(NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(join_overflow) {
@@ -496,14 +515,43 @@ TEST(quorum_2_of_3) {
 
 TEST(quorum_impossible) {
     asx_quorum_state qs;
-    asx_status fail_st = ASX_E_INVALID_STATE;
+    asx_status first_st = ASX_E_TIMED_OUT;
+    asx_status second_st = ASX_E_INVALID_STATE;
     MUST_OK(asx_quorum_init(&qs, 3)); /* need 3 */
     MUST_OK(asx_quorum_add(&qs, poll_ok, NULL));
-    MUST_OK(asx_quorum_add(&qs, poll_fail, &fail_st));
-    MUST_OK(asx_quorum_add(&qs, poll_fail, &fail_st));
-    /* 1 ok + 2 fail = impossible to reach 3 */
-    ASSERT_EQ(asx_quorum_poll(&qs, 0), ASX_E_INVALID_STATE);
+    MUST_OK(asx_quorum_add(&qs, poll_fail, &first_st));
+    MUST_OK(asx_quorum_add(&qs, poll_fail, &second_st));
+    /* 1 ok + 2 fail = impossible to reach 3: Rust's InsufficientSuccesses,
+     * which C reports as the first failed branch's status. */
+    ASSERT_EQ(asx_quorum_poll(&qs, 0), ASX_E_TIMED_OUT);
     ASSERT_EQ(asx_quorum_ok_count(&qs), 1u);
+    ASSERT_EQ(asx_quorum_poll(&qs, 0), ASX_E_TIMED_OUT);
+}
+
+TEST(quorum_not_met_reports_a_cancelled_branch) {
+    /* Rust's quorum_to_result reports a branch's cancellation before the
+     * errors (combinator/quorum.rs:423-445). */
+    asx_quorum_state qs;
+    asx_status fail_st = ASX_E_INVALID_STATE;
+    asx_status cancel_st = ASX_E_CANCELLED;
+    MUST_OK(asx_quorum_init(&qs, 2));
+    MUST_OK(asx_quorum_add(&qs, poll_fail, &fail_st));
+    MUST_OK(asx_quorum_add(&qs, poll_fail, &cancel_st));
+    MUST_OK(asx_quorum_add(&qs, poll_ok, NULL));
+    ASSERT_EQ(asx_quorum_poll(&qs, 0), ASX_E_CANCELLED);
+    ASSERT_EQ(asx_quorum_fail_count(&qs), 2u);
+}
+
+TEST(quorum_threshold_above_branch_count_runs_nothing) {
+    /* Rust's Scope::quorum refuses needed > N before running any branch
+     * (QuorumError::InvalidQuorum, cx/scope.rs:1831). */
+    asx_quorum_state qs;
+    uint32_t polls = 0;
+    MUST_OK(asx_quorum_init(&qs, 3));
+    MUST_OK(asx_quorum_add(&qs, poll_count_pending, &polls));
+    MUST_OK(asx_quorum_add(&qs, poll_count_pending, &polls));
+    ASSERT_EQ(asx_quorum_poll(&qs, 0), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(polls, 0u);
 }
 
 TEST(quorum_waits_for_pending) {
@@ -607,6 +655,7 @@ int main(void) {
     RUN_TEST(join_two_immediate);
     RUN_TEST(join_waits_for_all);
     RUN_TEST(join_with_failure);
+    RUN_TEST(join_cancelled_branch_ranks_above_err);
     RUN_TEST(join_null_fails);
     RUN_TEST(join_overflow);
 
@@ -647,6 +696,8 @@ int main(void) {
     RUN_TEST(quorum_all_succeed);
     RUN_TEST(quorum_2_of_3);
     RUN_TEST(quorum_impossible);
+    RUN_TEST(quorum_not_met_reports_a_cancelled_branch);
+    RUN_TEST(quorum_threshold_above_branch_count_runs_nothing);
     RUN_TEST(quorum_waits_for_pending);
     RUN_TEST(quorum_zero_threshold_fails);
     RUN_TEST(quorum_null_fails);
