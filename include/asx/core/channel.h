@@ -104,9 +104,23 @@ typedef struct asx_send_permit {
 ASX_API ASX_MUST_USE asx_status asx_channel_create(asx_region_id region, uint32_t capacity,
                                                    asx_channel_id *out_id);
 
-/* Close the sender side. No new reserves will succeed.
- * Pending messages remain available for recv.
- * Open → SenderClosed; ReceiverClosed → FullyClosed. */
+/* Senders are counted, as Rust's Sender clones are (Sender::clone /
+ * Sender::drop, mpsc.rs:1231-1255): a channel starts with one sender, each
+ * producer that takes part calls asx_channel_sender_clone, and each one
+ * done calls asx_channel_close_sender. The sender side closes when the
+ * last one is dropped.
+ *
+ * Add a sender. Returns ASX_OK, ASX_E_INVALID_STATE once the sender side is
+ * closed (no live sender to clone), ASX_E_RESOURCE_EXHAUSTED when the count
+ * would overflow, or a lookup error. */
+ASX_API ASX_MUST_USE asx_status asx_channel_sender_clone(asx_channel_id id);
+
+/* Drop one sender. While others remain it only lowers the count. The last
+ * one closes the sender side: no new reserves succeed, pending messages
+ * remain available for recv, and waiting receivers are woken (a receive
+ * on the empty queue then reports ASX_E_DISCONNECTED).
+ * Open → SenderClosed; ReceiverClosed → FullyClosed. Returns
+ * ASX_E_INVALID_STATE once the sender side is closed. */
 ASX_API ASX_MUST_USE asx_status asx_channel_close_sender(asx_channel_id id);
 
 /* Close the receiver side. Pending messages are discarded.

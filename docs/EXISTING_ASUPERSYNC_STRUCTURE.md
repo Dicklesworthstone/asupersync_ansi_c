@@ -595,7 +595,7 @@ Implicit state encoding via atomic fields (no explicit state enum; `src/channel/
 | **Half-Closed (Tx)** | `receiver_dropped == false` AND `sender_count == 0` | All senders dropped; receiver drains |
 | **Closed** | `receiver_dropped == true` AND `sender_count == 0` | Both sides gone |
 
-`receiver_dropped` transitions `false -> true` exactly once (stores at `src/channel/mpsc.rs:830`, `src/channel/mpsc.rs:1705`, `src/channel/mpsc.rs:2130`). `sender_count` is **not** decrement-only (the first extraction said it was): `Sender::clone` increments it (`src/channel/mpsc.rs:1231`) and `WeakSender::upgrade` increments it but never raises it from 0 (`src/channel/mpsc.rs:1275`). Once it reaches 0 it stays 0. C has no sender count: `ASX_CHANNEL_SENDER_CLOSED` is terminal and a second close returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:464`; `bd-9kll.5.4`).
+`receiver_dropped` transitions `false -> true` exactly once (stores at `src/channel/mpsc.rs:830`, `src/channel/mpsc.rs:1705`, `src/channel/mpsc.rs:2130`). `sender_count` is **not** decrement-only (the first extraction said it was): `Sender::clone` increments it (`src/channel/mpsc.rs:1231`) and `WeakSender::upgrade` increments it but never raises it from 0 (`src/channel/mpsc.rs:1275`). Once it reaches 0 it stays 0. C has no sender count: `ASX_CHANNEL_SENDER_CLOSED` is terminal and a second close returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:495`; `bd-9kll.5.4`).
 
 ### 9.2 Capacity Model
 
@@ -611,7 +611,7 @@ Both queued messages AND reserved (uncommitted) permits consume capacity.
 
 **Rust evidence:** `src/channel/mpsc.rs:349` (`used_slots`, `has_capacity`), `src/channel/mpsc.rs:557` (factory; the zero-capacity assert is at `src/channel/mpsc.rs:565`). Rust also has `unbounded_channel` = `channel(usize::MAX)` (`src/channel/mpsc.rs:599`).
 
-**C:** capacity 0 or above `ASX_CHANNEL_MAX_CAPACITY` (64) returns `ASX_E_INVALID_ARGUMENT` instead of panicking (`src/channel/mpsc.c:384`), and a channel can only be created in an `Open` region (`src/channel/mpsc.c:388`). C has no unbounded channel. Recorded in `docs/CHANNEL_TIMER_SEMANTICS.md` §1.2 and §4.1 (`bd-9kll.5.7`).
+**C:** capacity 0 or above `ASX_CHANNEL_MAX_CAPACITY` (64) returns `ASX_E_INVALID_ARGUMENT` instead of panicking (`src/channel/mpsc.c:388`), and a channel can only be created in an `Open` region (`src/channel/mpsc.c:392`). C has no unbounded channel. Recorded in `docs/CHANNEL_TIMER_SEMANTICS.md` §1.2 and §4.1 (`bd-9kll.5.7`).
 
 ### 9.3 Two-Phase Send Protocol
 
@@ -627,7 +627,7 @@ reserve(&cx) -> Reserve future; Output = Result<SendPermit, SendError<()>>
 3. **First and capacity:** if the caller is first (no queued waiter, or its own token at the front) and `used_slots < capacity` -> `reserved += 1`, leave the queue, wake the next head if capacity remains, register the `SendPermit` obligation, return the permit (`src/channel/mpsc.rs:1081`, obligation at `src/channel/mpsc.rs:1116`)
 4. **Otherwise:** register or refresh its waker in the FIFO waiter queue and return `Poll::Pending` (`src/channel/mpsc.rs:1129`). A caller that is not first is registered, not just told Pending. There is no "monotonic waiter ID": waiters are `SlabToken`s in a `VecDeque` (`src/channel/mpsc.rs:279`)
 
-Only `reserve(&cx)` registers an obligation; `try_reserve` and `send` do not. C matches the order with two C-only codes: `ASX_E_INVALID_STATE` when the sender side is closed (`src/channel/mpsc.c:606`) before `ASX_E_DISCONNECTED` (`src/channel/mpsc.c:611`); cancellation is `ASX_E_CANCELLED` (`src/channel/mpsc.c:904`), and the obligation is registered after the slot is claimed (`src/channel/mpsc.c:916`). See `docs/CHANNEL_TIMER_SEMANTICS.md` §1.3.
+Only `reserve(&cx)` registers an obligation; `try_reserve` and `send` do not. C matches the order with two C-only codes: `ASX_E_INVALID_STATE` when the sender side is closed (`src/channel/mpsc.c:637`) before `ASX_E_DISCONNECTED` (`src/channel/mpsc.c:642`); cancellation is `ASX_E_CANCELLED` (`src/channel/mpsc.c:935`), and the obligation is registered after the slot is claimed (`src/channel/mpsc.c:947`). See `docs/CHANNEL_TIMER_SEMANTICS.md` §1.3.
 
 #### Phase 2a: Send (Commit)
 
@@ -638,7 +638,7 @@ SendPermit::try_send(self, value: T)                            // fails only if
 
 `send` is **not** infallible (the first extraction said it was; `src/channel/mpsc.rs:1565`). On success: marks permit consumed, decrements `reserved`, pushes value to back of queue, wakes receiver, and commits the permit's obligation; on disconnect the obligation is aborted with reason Error.
 
-**Rust evidence:** `src/channel/mpsc.rs:1565`–`src/channel/mpsc.rs:1629`. C: `asx_send_permit_send` (`src/channel/mpsc.c:691`).
+**Rust evidence:** `src/channel/mpsc.rs:1565`–`src/channel/mpsc.rs:1629`. C: `asx_send_permit_send` (`src/channel/mpsc.c:722`).
 
 #### Phase 2b: Abort (Rollback)
 
@@ -648,7 +648,7 @@ SendPermit::abort(self)
 
 Marks permit consumed, decrements `reserved`, aborts the obligation with reason Explicit, and wakes the head of the waiter queue (the head is woken, not removed).
 
-**Rust evidence:** `src/channel/mpsc.rs:1633`. C: `asx_send_permit_abort` (`src/channel/mpsc.c:752`).
+**Rust evidence:** `src/channel/mpsc.rs:1633`. C: `asx_send_permit_abort` (`src/channel/mpsc.c:783`).
 
 #### RAII Drop Safety
 
@@ -677,7 +677,7 @@ When channel is full (`used_slots >= capacity`):
 
 **Rust evidence:** `src/channel/mpsc.rs:374` (`has_waiting_sender`), `src/channel/mpsc.rs:732` (`try_reserve`), `src/channel/mpsc.rs:1129` (waiter registration)
 
-**C drift (not recorded elsewhere):** C's FIFO check counts only waiters whose task is Created or Running (`asx_wait_queue_live_ahead`, `src/sync/wait_queue.c:321`, used at `src/channel/mpsc.c:565`), so `try_reserve`/`reserve` can take a slot while a cancel-requested producer is queued ahead; Rust counts that producer. C's settle also wakes a cancel-pending head and the next live waiter together (`src/sync/wait_queue.c:286`), where Rust wakes only the head. Found by reading the code; not exercised by any fixture.
+**C drift (not recorded elsewhere):** C's FIFO check counts only waiters whose task is Created or Running (`asx_wait_queue_live_ahead`, `src/sync/wait_queue.c:321`, used at `src/channel/mpsc.c:596`), so `try_reserve`/`reserve` can take a slot while a cancel-requested producer is queued ahead; Rust counts that producer. C's settle also wakes a cancel-pending head and the next live waiter together (`src/sync/wait_queue.c:286`), where Rust wakes only the head. Found by reading the code; not exercised by any fixture.
 
 ### 9.5 Eviction Mode
 
@@ -708,7 +708,7 @@ Order (`poll_recv`, `src/channel/mpsc.rs:1786`):
 3. **Queue empty AND (all senders dropped OR receiver closed):** `RecvError::Disconnected` (`src/channel/mpsc.rs:1813`)
 4. **Otherwise:** register waker, return `Poll::Pending`
 
-`try_recv` (`src/channel/mpsc.rs:1956`) has no checkpoint and returns `Empty` or `Disconnected`. C: `asx_channel_recv` (`src/channel/mpsc.c:938`) and `channel_recv_impl` (`src/channel/mpsc.c:811`); C's `try_recv` returns `ASX_E_WOULD_BLOCK` for empty (`src/channel/mpsc.c:808`), and C keeps waiting when the sender is closed but permits are outstanding, a state Rust cannot reach (`bd-9kll.5.4`).
+`try_recv` (`src/channel/mpsc.rs:1956`) has no checkpoint and returns `Empty` or `Disconnected`. C: `asx_channel_recv` (`src/channel/mpsc.c:969`) and `channel_recv_impl` (`src/channel/mpsc.c:842`); C's `try_recv` returns `ASX_E_WOULD_BLOCK` for empty (`src/channel/mpsc.c:839`), and C keeps waiting when the sender is closed but permits are outstanding, a state Rust cannot reach (`bd-9kll.5.4`).
 
 **Cancel safety:** Cancelled receive does NOT consume a message (the checkpoint runs before the pop). Message remains for next receive.
 
@@ -738,12 +738,12 @@ Rust: `SendError` (`src/channel/mpsc.rs:111`), `RecvError` (`src/channel/mpsc.rs
 
 | Operation | Cancel Effect |
 |-----------|--------------|
-| `reserve()` poll | Returns `Cancelled`, no capacity consumed, waiter removed (C `src/channel/mpsc.c:852`) |
+| `reserve()` poll | Returns `Cancelled`, no capacity consumed, waiter removed (C `src/channel/mpsc.c:883`) |
 | `recv()` poll | Returns `Cancelled`, no message consumed |
 | `SendPermit::send()` | Not checked (already committed) |
 | `SendPermit::abort()` | Not checked (already releasing) |
 
-Waiter cleanup on cancel: the `Reserve` future's drop removes its `SlabToken` and passes the wake on only if it held a queue position, the receiver is alive and capacity is free (`src/channel/mpsc.rs:965`). C: `asx_channel_wait_cancel` (`src/channel/mpsc.c:868`).
+Waiter cleanup on cancel: the `Reserve` future's drop removes its `SlabToken` and passes the wake on only if it held a queue position, the receiver is alive and capacity is free (`src/channel/mpsc.rs:965`). C: `asx_channel_wait_cancel` (`src/channel/mpsc.c:899`).
 
 ### 9.9 Obligation Integration (Session Layer)
 
@@ -768,13 +768,13 @@ Rust: `src/channel/session.rs` (`TrackedSender`/`TrackedPermit` at `src/channel/
 4. Takes the queue via `mem::take()` — pending messages DROPPED (not delivered)
 5. After unlock: signals closed, wakes ALL waiting senders (they observe disconnect on next poll), then drops the items outside the lock
 
-`Receiver::close()` (`src/channel/mpsc.rs:1698`) is different: it sets `receiver_dropped` and wakes senders but keeps the queue receivable. C's `asx_channel_close_receiver` is the drop: it discards the queue and wakes both wait queues, and a second close returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:499`; `bd-9kll.5.4`). `asx_channel_seal` is `Receiver::close()`: it wakes the parked senders and keeps the queue receivable (`src/channel/mpsc.c:505`; `bd-g652`).
+`Receiver::close()` (`src/channel/mpsc.rs:1698`) is different: it sets `receiver_dropped` and wakes senders but keeps the queue receivable. C's `asx_channel_close_receiver` is the drop: it discards the queue and wakes both wait queues, and a second close returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:530`; `bd-9kll.5.4`). `asx_channel_seal` is `Receiver::close()`: it wakes the parked senders and keeps the queue receivable (`src/channel/mpsc.c:536`; `bd-g652`).
 
 **Last Sender Drop** (`src/channel/mpsc.rs:1241`):
 1. Decrements `sender_count` to 0
 2. Wakes receiver (will return `Disconnected` after draining remaining queue)
 
-C's `asx_channel_close_sender` (`src/channel/mpsc.c:445`) also wakes the reserve waiters.
+C's `asx_channel_close_sender` (`src/channel/mpsc.c:465`) also wakes the reserve waiters.
 
 ### 9.11 Ordering Guarantees
 
@@ -1064,9 +1064,9 @@ C lab lanes are static arrays of `8 * ASX_MAX_TASKS` entries; overflow fails the
 
 | Interaction | Behavior |
 |-------------|----------|
-| Task cancelled while reserve pending | `Reserve` future polls `checkpoint()` -> `SendError::Cancelled` (`src/channel/mpsc.rs:1061`). Waiter removed. No capacity consumed. The pending reserve is woken by the cancellation itself. C: `src/channel/mpsc.c:852` |
+| Task cancelled while reserve pending | `Reserve` future polls `checkpoint()` -> `SendError::Cancelled` (`src/channel/mpsc.rs:1061`). Waiter removed. No capacity consumed. The pending reserve is woken by the cancellation itself. C: `src/channel/mpsc.c:883` |
 | Task cancelled while recv pending | `poll_recv()` polls `checkpoint()` -> `RecvError::Cancelled`. No message consumed. Fixture `mpsc-recv-cancel-first-001` (empty channel, so preservation itself is not tested) |
-| Region closing with channel open | Channel continues operating; no channel state refers to regions. But a permit from `reserve(&cx)` holds a `SendPermit` obligation in `cx`'s region (`src/channel/mpsc.rs:1116`), which blocks or leaks at that region's close like any obligation. C also requires an `Open` region to create a channel (`src/channel/mpsc.c:388`) |
+| Region closing with channel open | Channel continues operating; no channel state refers to regions. But a permit from `reserve(&cx)` holds a `SendPermit` obligation in `cx`'s region (`src/channel/mpsc.rs:1116`), which blocks or leaks at that region's close like any obligation. C also requires an `Open` region to create a channel (`src/channel/mpsc.c:392`) |
 | Obligation leak on permit drop | `TrackedPermit` panics if dropped without send/abort. Base `SendPermit` aborts the slot and its runtime obligation with reason Cancel (not silently; `src/channel/mpsc.rs:1663`). C has no drop (§9.3) |
 
 ### 12.2 Timer <-> Cancellation
@@ -1111,7 +1111,7 @@ Rust only; C has no tracked permits (`bd-9kll.5.9`).
 | Channel send fails (Disconnected) | The channel returns `Err(Disconnected(value))`; the task's outcome is whatever its body returns |
 | Channel send cancelled | The channel returns `Err(SendError::Cancelled(value))`. The task ends `Cancelled` through the cancel protocol (T8/T11), not because of the channel error (the recv case is fixture `mpsc-recv-cancel-first-001`; no fixture for send) |
 | Timer fires deadline miss | Triggers cancellation with `Deadline` cancel kind (budget-deadline wake, `src/cx/cx.rs:357`; C `src/runtime/scheduler.c:224`) |
-| Budget exhaustion during channel ops | There is no budget logic in `src/channel/mpsc.rs` (the first extraction's "remaining aborted" is wrong). Exhaustion surfaces through `cx.checkpoint()` as `Cancelled` at reserve/recv; held permits are not aborted. C differs: `asx_cx_checkpoint` spends a poll unit when a budget is bound and returns `ASX_E_POLL_BUDGET_EXHAUSTED` (`src/cx/cx.c:432`), which the channel reports as `ASX_E_CANCELLED` (`src/channel/mpsc.c:904`); Rust's checkpoint spends no quota (`bd-9kll.3.8`) |
+| Budget exhaustion during channel ops | There is no budget logic in `src/channel/mpsc.rs` (the first extraction's "remaining aborted" is wrong). Exhaustion surfaces through `cx.checkpoint()` as `Cancelled` at reserve/recv; held permits are not aborted. C differs: `asx_cx_checkpoint` spends a poll unit when a budget is bound and returns `ASX_E_POLL_BUDGET_EXHAUSTED` (`src/cx/cx.c:432`), which the channel reports as `ASX_E_CANCELLED` (`src/channel/mpsc.c:935`); Rust's checkpoint spends no quota (`bd-9kll.3.8`) |
 
 ---
 
@@ -1279,7 +1279,7 @@ C codes from `include/asx/asx_status.h`; Rust equivalents in `docs/CANONICAL_VOC
 |-----------|-------------|
 | `ASX_E_INVALID_TRANSITION` (200) | Attempted illegal state transition (C tables); also C's result for a double obligation resolve |
 | `ASX_E_REGION_NOT_OPEN` (303) | Declared; never returned (admission failures return `ASX_E_REGION_CLOSED`) |
-| `ASX_E_REGION_CLOSED` (301) | Region not admitting the spawn, child region or obligation (creating a channel in a non-`Open` region returns `ASX_E_INVALID_STATE`, `src/channel/mpsc.c:390`) |
+| `ASX_E_REGION_CLOSED` (301) | Region not admitting the spawn, child region or obligation (creating a channel in a non-`Open` region returns `ASX_E_INVALID_STATE`, `src/channel/mpsc.c:394`) |
 | `ASX_E_ADMISSION_CLOSED` (304) | Not returned by the kernel admission paths (`src/runtime/lifecycle.c`); used by `src/runtime/parallel.c`, the adapters, the overload catalog and the circuit breaker |
 | `ASX_E_OBLIGATION_ALREADY_RESOLVED` (500) | Declared; never returned (Rust returns `ObligationAlreadyResolved`; C returns `ASX_E_INVALID_TRANSITION`) |
 | `ASX_E_OBLIGATION_LEAKED` | Does not exist in C |
@@ -1338,11 +1338,11 @@ These IDs are this document's own (they are also in `schemas/invariant_schema.js
 
 | ID | Invariant | Category | Status at `5e60b1c4c` / C |
 |----|-----------|----------|---------------------------|
-| `INV-CH-01` | `used_slots = queue.len() + reserved <= capacity` at all times | Capacity | Holds (`src/channel/mpsc.rs:349`); C `src/channel/mpsc.c:572` |
+| `INV-CH-01` | `used_slots = queue.len() + reserved <= capacity` at all times | Capacity | Holds (`src/channel/mpsc.rs:349`); C `src/channel/mpsc.c:603` |
 | `INV-CH-02` | Messages delivered in FIFO order | Ordering | Holds; C ring buffer |
 | `INV-CH-03` | Waiters serviced in FIFO order (arrival order in the token queue; there is no monotonic ID) | Fairness | Holds as corrected |
 | `INV-CH-04` | `try_reserve` returns `Full` when a live waiter is queued | Fairness | Holds in Rust; C ignores cancel-requested waiters (§9.4, unrecorded drift) |
-| `INV-CH-05` | Cancelled reserve does not consume capacity | Cancel safety | Holds (checkpoint before `reserved += 1`); C `src/channel/mpsc.c:852` |
+| `INV-CH-05` | Cancelled reserve does not consume capacity | Cancel safety | Holds (checkpoint before `reserved += 1`); C `src/channel/mpsc.c:883` |
 | `INV-CH-06` | Cancelled recv does not consume message | Cancel safety | Holds (checkpoint before pop) |
 | `INV-CH-07` | `receiver_dropped` monotone: `false -> true`, never reverses | State monotonicity | Holds; C closed states never reopen |
 | `INV-CH-08` | `sender_count` never rises from 0 (it is not decrement-only: clone and weak upgrade increment it) | State monotonicity | Corrected (`src/channel/mpsc.rs:1231`, `src/channel/mpsc.rs:1275`); C `SENDER_CLOSED` is terminal |

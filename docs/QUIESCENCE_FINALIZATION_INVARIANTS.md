@@ -551,7 +551,7 @@ v4 has no rule tying timers or channels to quiescence, and neither engine's quie
 
 ### 9.2 Channel Quiescence
 
-- An unresolved send permit is a pending obligation in both engines. Rust registers a `SendPermit` obligation through the `Cx` (`docs/CHANNEL_TIMER_SEMANTICS.md` §1.9); C's `asx_channel_reserve` (`src/channel/mpsc.c:900`) registers an `ASX_OBLIGATION_KIND_SEND_PERMIT` obligation (`:862`). Holder completion or explicit resolution normally clears it; remaining Reserved obligations are handled by the finalization leak-policy audit after callbacks and cleanup tasks finish (section 4.3).
+- An unresolved send permit is a pending obligation in both engines. Rust registers a `SendPermit` obligation through the `Cx` (`docs/CHANNEL_TIMER_SEMANTICS.md` §1.9); C's `asx_channel_reserve` (`src/channel/mpsc.c:931`) registers an `ASX_OBLIGATION_KIND_SEND_PERMIT` obligation (`:893`). Holder completion or explicit resolution normally clears it; remaining Reserved obligations are handled by the finalization leak-policy audit after callbacks and cleanup tasks finish (section 4.3).
 - The capacity invariant `queue_len + reserved <= capacity`: `docs/CHANNEL_TIMER_SEMANTICS.md` §1.2.
 - Queued messages do not affect quiescence in either engine; C region close does not touch channels (`docs/CHANNEL_TIMER_SEMANTICS.md` §4.1).
 

@@ -75,6 +75,10 @@ typedef struct {
     asx_region_id region;
     uint16_t generation;
     int alive;
+    /* Live senders (Rust ChannelShared::sender_count, mpsc.rs:302): 1 at
+     * create, +1 per asx_channel_sender_clone, -1 per
+     * asx_channel_close_sender; the sender side closes at 0. */
+    uint32_t sender_count;
 
     /* Bounded ring buffer */
     uint32_t capacity;
@@ -421,6 +425,7 @@ asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_chann
             s->state = ASX_CHANNEL_OPEN;
             s->region = region;
             s->alive = 1;
+            s->sender_count = 1u;
             s->capacity = capacity;
             s->queue_head = 0;
             s->queue_len = 0;
@@ -442,6 +447,21 @@ asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_chann
     return ASX_E_RESOURCE_EXHAUSTED;
 }
 
+asx_status asx_channel_sender_clone(asx_channel_id id) {
+    asx_channel_slot *s;
+    asx_status st;
+
+    st = channel_slot_lookup(id, &s);
+    if (st != ASX_OK) { return st; }
+    /* Only a live sender can be cloned (Rust Sender::clone, mpsc.rs:1231). */
+    if (s->state == ASX_CHANNEL_SENDER_CLOSED || s->state == ASX_CHANNEL_FULLY_CLOSED) {
+        return ASX_E_INVALID_STATE;
+    }
+    if (s->sender_count == UINT32_MAX) { return ASX_E_RESOURCE_EXHAUSTED; }
+    s->sender_count++;
+    return ASX_OK;
+}
+
 asx_status asx_channel_close_sender(asx_channel_id id) {
     asx_channel_slot *s;
     asx_status st;
@@ -449,12 +469,23 @@ asx_status asx_channel_close_sender(asx_channel_id id) {
     st = channel_slot_lookup(id, &s);
     if (st != ASX_OK) { return st; }
 
+    /* Rust Sender::drop (mpsc.rs:1241-1255): a sender that is not the last
+     * only lowers the count; the last one closes the sender side and wakes
+     * the receiver. */
+    if ((s->state == ASX_CHANNEL_OPEN || s->state == ASX_CHANNEL_RECEIVER_CLOSED) &&
+        s->sender_count > 1u) {
+        s->sender_count--;
+        return ASX_OK;
+    }
+
     switch (s->state) {
     case ASX_CHANNEL_OPEN:
+        s->sender_count = 0u;
         s->state = ASX_CHANNEL_SENDER_CLOSED;
         channel_wake_everyone(s);
         return ASX_OK;
     case ASX_CHANNEL_RECEIVER_CLOSED:
+        s->sender_count = 0u;
         s->state = ASX_CHANNEL_FULLY_CLOSED;
         channel_wake_everyone(s);
         /* Nobody waits on a fully closed channel again. */

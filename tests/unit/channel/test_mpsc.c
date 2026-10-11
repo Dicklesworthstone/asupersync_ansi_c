@@ -194,6 +194,58 @@ TEST(double_close_receiver) {
     ASSERT_EQ(asx_channel_close_receiver(ch), ASX_E_INVALID_STATE);
 }
 
+TEST(sender_side_closes_when_the_last_counted_sender_drops) {
+    /* Rust Sender::clone / Sender::drop (mpsc.rs:1231-1255): three senders,
+     * two dropped: still open, a send still goes through; the third drop
+     * closes the sender side, and the receiver drains then sees
+     * DISCONNECTED. */
+    asx_channel_id ch;
+    asx_channel_state st;
+    asx_send_permit p;
+    uint64_t val;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
+
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &st), ASX_OK);
+    ASSERT_EQ(st, ASX_CHANNEL_OPEN);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&p, 5u), ASX_OK);
+
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &st), ASX_OK);
+    ASSERT_EQ(st, ASX_CHANNEL_SENDER_CLOSED);
+    /* No sender is left to reserve with (reserve_after_sender_closed). */
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_OK);
+    ASSERT_EQ(val, 5u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_E_DISCONNECTED);
+
+    /* No live sender left to clone or drop. */
+    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_E_INVALID_STATE);
+}
+
+TEST(counted_senders_outlive_a_receiver_close) {
+    /* The receiver drops first; the channel becomes fully closed only when
+     * the last of two senders drops. */
+    asx_channel_id ch;
+    asx_channel_state st;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_close_receiver(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &st), ASX_OK);
+    ASSERT_EQ(st, ASX_CHANNEL_RECEIVER_CLOSED);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &st), ASX_OK);
+    ASSERT_EQ(st, ASX_CHANNEL_FULLY_CLOSED);
+}
+
 /* -------------------------------------------------------------------
  * Two-phase send: reserve + send
  * ------------------------------------------------------------------- */
@@ -1119,6 +1171,8 @@ int main(void) {
     RUN_TEST(close_receiver_then_sender);
     RUN_TEST(double_close_sender);
     RUN_TEST(double_close_receiver);
+    RUN_TEST(sender_side_closes_when_the_last_counted_sender_drops);
+    RUN_TEST(counted_senders_outlive_a_receiver_close);
 
     RUN_TEST(reserve_and_send_basic);
     RUN_TEST(fifo_ordering);
