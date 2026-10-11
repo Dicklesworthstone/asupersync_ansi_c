@@ -57,7 +57,7 @@ TEST(budget_new_and_from_polls_default_priority) {
     ASSERT_EQ(n.priority, (uint8_t)128);
     ASSERT_EQ(n.poll_quota, UINT32_MAX);
     ASSERT_EQ(n.cost_quota, UINT64_MAX);
-    ASSERT_EQ(n.deadline, (asx_time)0);
+    ASSERT_EQ(n.deadline, ASX_TIME_INFINITE); /* Rust Budget::new: deadline None */
     ASSERT_EQ(p.priority, (uint8_t)128);
     ASSERT_EQ(p.poll_quota, (uint32_t)7);
 }
@@ -110,8 +110,11 @@ TEST(budget_deadline) {
     ASSERT_FALSE(asx_budget_is_past_deadline(&b, 99));
     ASSERT_TRUE(asx_budget_is_past_deadline(&b, 100)); /* now == deadline */
     ASSERT_TRUE(asx_budget_is_past_deadline(&b, 101));
-    b.deadline = 0; /* unconstrained */
+    b.deadline = ASX_TIME_INFINITE; /* unconstrained (Rust None) */
     ASSERT_FALSE(asx_budget_is_past_deadline(&b, 999));
+    /* A deadline of 0 is a deadline (Rust Some(Time::ZERO)): due at once. */
+    b.deadline = 0;
+    ASSERT_TRUE(asx_budget_is_past_deadline(&b, 0));
 }
 
 TEST(budget_meet_associative) {
@@ -141,7 +144,7 @@ TEST(budget_meet_idempotent) {
 
 TEST(budget_infinite_fields) {
     asx_budget inf = asx_budget_infinite();
-    ASSERT_EQ(inf.deadline, (asx_time)0);
+    ASSERT_EQ(inf.deadline, ASX_TIME_INFINITE); /* Rust Budget::INFINITE: None */
     ASSERT_EQ(inf.poll_quota, UINT32_MAX);
     ASSERT_EQ(inf.cost_quota, UINT64_MAX);
     ASSERT_EQ(inf.priority, (uint8_t)0); /* Rust Budget::INFINITE */
@@ -153,6 +156,8 @@ TEST(budget_zero_fields) {
     ASSERT_EQ(zero.poll_quota, (uint32_t)0);
     ASSERT_EQ(zero.cost_quota, (uint64_t)0);
     ASSERT_EQ(zero.priority, (uint8_t)255); /* Rust Budget::ZERO */
+    ASSERT_EQ(zero.deadline, (asx_time)0);  /* Some(Time::ZERO): due at once */
+    ASSERT_TRUE(asx_budget_is_past_deadline(&zero, 0));
     ASSERT_TRUE(asx_budget_is_exhausted(&zero));
 }
 
@@ -172,10 +177,16 @@ TEST(budget_consume_cost_exact_boundary) {
 }
 
 TEST(budget_deadline_max) {
-    /* UINT64_MAX deadline */
+    /* UINT64_MAX (ASX_TIME_INFINITE) is no deadline: never past, and the
+     * meet keeps the other side's deadline (Rust None vs Some). */
     asx_budget b = {UINT64_MAX, 50, 1000, 128};
+    asx_budget c = {0, 50, 1000, 128};
+    asx_budget m;
     ASSERT_FALSE(asx_budget_is_past_deadline(&b, 0));
-    ASSERT_TRUE(asx_budget_is_past_deadline(&b, UINT64_MAX));
+    ASSERT_FALSE(asx_budget_is_past_deadline(&b, UINT64_MAX));
+    m = asx_budget_meet(&b, &c);
+    ASSERT_EQ(m.deadline, (asx_time)0);
+    ASSERT_TRUE(asx_budget_is_past_deadline(&m, 0));
 }
 
 int main(void) {

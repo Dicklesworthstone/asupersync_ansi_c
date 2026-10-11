@@ -206,7 +206,7 @@ If item 3 fails, Rust leak-audits the Reserved obligations (once no task is left
 |-----------|---------------|----------------|
 | Create child task | Rust: `Open` for normal tasks (`src/record/region.rs:140`), `Open`/`Finalizing` for cleanup tasks (`src/record/region.rs:150`). C: `Open`/`Finalizing` for every spawn (`src/core/transition_tables.c:89`) | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1150`) |
 | Create child region | `Open` | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:867`) |
-| Create obligation | `Open` | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1593`) |
+| Create obligation | `Open` | C `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1600`) |
 | Resolve obligation | `Open`, `Closing`, `Draining`, `Finalizing` | N/A while Reserved. Rust rejects a resolve after the region is finalized (`ErrorKind::RegionFinalized`, `src/runtime/obligation_table.rs:569`) |
 | Access arena | Not `Closed` | C `ASX_E_REGION_CLOSED` (only user: `asx_task_spawn_captured`, `src/runtime/lifecycle.c:1141`) |
 | Query status | Any | Fails only on a bad handle |
@@ -248,7 +248,7 @@ Completed         .        .        .           .           .           .
 
 | # | From | To | Trigger | Postconditions |
 |---|------|----|---------|----------------|
-| T1 | `Created` | `Running` | Rust `start_running()` (`src/record/task.rs:1078`); C first poll (`src/runtime/scheduler.c:1062`) | Task poll function invoked |
+| T1 | `Created` | `Running` | Rust `start_running()` (`src/record/task.rs:1078`); C first poll (`src/runtime/scheduler.c:1065`) | Task poll function invoked |
 | T2 | `Created` | `CancelRequested` | Rust `request_cancel*` (`src/record/task.rs:803`) | Cancel before first poll; Rust sets `cancel_epoch` to 1. C takes T2 in one step, as does a budget cancel that reaches the record of a task not yet polled (`src/runtime/cancellation.c:241`, `src/runtime/cancellation.c:101`) |
 | T3 | `Created` | `Completed` | Rust `complete(outcome)` (`src/record/task.rs:1260`) | Completion before any poll. C never takes T3 (the scheduler always takes T1 first) |
 | T4 | `Running` | `CancelRequested` | Rust `request_cancel*`; C `asx_task_cancel_reason_internal` (`src/runtime/cancellation.c:119`) | Cancel delivered; `cancel_epoch` becomes 1 (C `src/runtime/cancellation.c:259`) |
@@ -260,7 +260,7 @@ Completed         .        .        .           .           .           .
 | T10 | `Cancelling` | `Finalizing` | Rust `cleanup_done()` (`src/record/task.rs:1378`); C `asx_task_finalize` (`src/runtime/cancellation.c:718`) | Cleanup finished. Rust's lab takes it when a task in a cancel state finishes its poll with `Ok` (`src/lab/runtime.rs:4876`; other results go through T11); C only when the task calls `asx_task_finalize`, otherwise T11 (Variant, row `rule.cancel.drain`) |
 | T11 | `Cancelling` | `Completed` | `complete(outcome)` | `Ok`/`Err` become `Cancelled(reason)` as in T8; a panic stays `Panicked` |
 | T12 | `Finalizing` | `Finalizing` | `request_cancel*` (`src/record/task.rs:777`) | **Strengthening**: as T9 |
-| T13 | `Finalizing` | `Completed` | Rust `finalize_done()` (`src/record/task.rs:1416`); C at the next dispatch (`src/runtime/scheduler.c:1247`) | Rust returns a `CancelWitness` (phase Completed); outcome is `Cancelled(reason)` |
+| T13 | `Finalizing` | `Completed` | Rust `finalize_done()` (`src/record/task.rs:1416`); C at the next dispatch (`src/runtime/scheduler.c:1250`) | Rust returns a `CancelWitness` (phase Completed); outcome is `Cancelled(reason)` |
 
 **Strengthening (T6, T9, T12):** Not state changes. Cancel reason strengthened via `CancelReason::strengthen` (`src/types/cancel.rs:956`; §6.4). Cleanup budget combined via `Budget::combine` (min on deadline and quotas, max on priority). Both leave `cancel_epoch` unchanged (C `src/runtime/cancellation.c:223`).
 
@@ -281,7 +281,7 @@ Completed         .        .        .           .           .           .
 
 ### 4.6 Poll Contract
 
-C has no `ASX_POLL_*` codes. A C poll function (`asx_task_poll_fn`, `include/asx/runtime/runtime.h:87`) returns an `asx_status`, mapped in `sched_poll_slot` (`src/runtime/scheduler.c:1064`):
+C has no `ASX_POLL_*` codes. A C poll function (`asx_task_poll_fn`, `include/asx/runtime/runtime.h:87`) returns an `asx_status`, mapped in `sched_poll_slot` (`src/runtime/scheduler.c:1067`):
 
 | Poll Return | Meaning | State Effect |
 |------------|---------|-------------|
@@ -311,9 +311,9 @@ Rust `ObligationState`: `src/record/obligation.rs:192`. C `asx_obligation_state`
 
 | From | To | Trigger | Postconditions |
 |------|----|---------|----------------|
-| `Reserved` | `Committed` | Rust `commit_obligation` (`src/runtime/state.rs:6534`); C `asx_obligation_commit()` (`src/runtime/lifecycle.c:1404`) | Fulfilled; region pending count drops. The spec's holder-only precondition is not checked by C (row `rule.obligation.commit`, Partial) |
+| `Reserved` | `Committed` | Rust `commit_obligation` (`src/runtime/state.rs:6534`); C `asx_obligation_commit()` (`src/runtime/lifecycle.c:1411`) | Fulfilled; region pending count drops. The spec's holder-only precondition is not checked by C (row `rule.obligation.commit`, Partial) |
 | `Reserved` | `Aborted` | Rust `abort_obligation` (`src/runtime/state.rs:6745`); C `asx_obligation_abort()` / `asx_obligation_abort_with_reason()` | Released; abort reason recorded |
-| `Reserved` | `Leaked` | The holder completes while holding it (Rust `src/runtime/state.rs:8341`; C `src/runtime/lifecycle.c:584`), unless it tracks a permit, which C drops with the holder as Rust drops the body's locals (`src/runtime/lifecycle.c:562`); or C `asx_obligation_drop` (`src/runtime/lifecycle.c:1732`); Rust also leak-audits what is still Reserved in a Finalizing region with no task left | Leak handled under the leak policy: Rust default Panic (`src/runtime/state.rs:2338`), C default LOG (`src/runtime/lifecycle.c:93`); recorded drift `bd-9kll.3.6` |
+| `Reserved` | `Leaked` | The holder completes while holding it (Rust `src/runtime/state.rs:8341`; C `src/runtime/lifecycle.c:584`), unless it tracks a permit, which C drops with the holder as Rust drops the body's locals (`src/runtime/lifecycle.c:562`); or C `asx_obligation_drop` (`src/runtime/lifecycle.c:1739`); Rust also leak-audits what is still Reserved in a Finalizing region with no task left | Leak handled under the leak policy: Rust default Panic (`src/runtime/state.rs:2338`), C default LOG (`src/runtime/lifecycle.c:93`); recorded drift `bd-9kll.3.6` |
 
 ### 5.3 Forbidden Transitions (Must-Fail)
 
@@ -321,7 +321,7 @@ C never returns `ASX_E_OBLIGATION_ALREADY_RESOLVED` (declared, unused) and has n
 
 | From | To | Error |
 |------|----|-------|
-| `Committed` | any | C `ASX_E_INVALID_TRANSITION` (`src/runtime/lifecycle.c:1414`); Rust `ObligationAlreadyResolved` |
+| `Committed` | any | C `ASX_E_INVALID_TRANSITION` (`src/runtime/lifecycle.c:1421`); Rust `ObligationAlreadyResolved` |
 | `Aborted` | any | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` |
 | `Leaked` | any | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` |
 | `Reserved` | `Reserved` | `ASX_E_INVALID_TRANSITION` (table) |
@@ -332,7 +332,7 @@ Double-resolution is **not** idempotent by design; it indicates a logic error.
 
 > **Superseded by `asupersync_v4_formal_semantics.md` §3.4.4 and §3.4.6 (`inv.obligation.linear` #18, `inv.obligation.no_leak` #17); C status: see C_REFINEMENT_MAP.md rows `inv.obligation.linear` and `inv.obligation.no_leak`.** Neither engine keeps the bit ledger with a `popcnt` that the first extraction described.
 
-1. `reserve` creates a Reserved obligation (Rust table plus region pending count, `src/record/region.rs:1449`; C slot linked into the holder's held list, `src/runtime/lifecycle.c:1308`)
+1. `reserve` creates a Reserved obligation (Rust table plus region pending count, `src/record/region.rs:1449`; C slot linked into the holder's held list, `src/runtime/lifecycle.c:1315`)
 2. `commit`/`abort` resolve it exactly once (terminal states absorbing, `src/core/transition_tables.c:65`)
 3. Leaks are detected when the holder completes: each obligation it still holds becomes `Leaked`
 4. At region close Rust leak-audits what is still Reserved and closes; C refuses to close (`ASX_E_OBLIGATIONS_UNRESOLVED`, stays Finalizing; `bd-9kll.3.4`)
@@ -400,7 +400,7 @@ Severities and cleanup budgets match Rust exactly (`CancelKind::severity`, `src/
 - The winning reason replaces the old one whole (chains are not merged)
 - Severity is monotone non-decreasing across witness transitions
 
-**Budget combination (min-plus algebra):** Rust `Budget::combine` (`src/types/budget.rs:502`), C `asx_budget_meet` (`src/core/budget.c:49`).
+**Budget combination (min-plus algebra):** Rust `Budget::combine` (`src/types/budget.rs:502`), C `asx_budget_meet` (`src/core/budget.c:42`).
 - `combined_quota = min(quota1, quota2)` — tighter quota wins; the earlier finite deadline wins
 - `combined_priority = max(priority1, priority2)` — higher urgency wins
 - Combining never widens the cleanup allowance
@@ -530,11 +530,11 @@ Rust folds each completed task's and finalizer's outcome into the region's `clos
 asx_budget = (deadline, poll_quota, cost_quota, priority)
 ```
 
-Rust `Budget` (`src/types/budget.rs:177`): `deadline: Option<Time>`, `poll_quota: u32`, `cost_quota: Option<u64>`, `priority: u8`. C `asx_budget` (`include/asx/core/budget.h`) encodes "no deadline" as 0 and "no cost quota" as `UINT64_MAX` (`src/core/budget.c:18`).
+Rust `Budget` (`src/types/budget.rs:177`): `deadline: Option<Time>`, `poll_quota: u32`, `cost_quota: Option<u64>`, `priority: u8`. C `asx_budget` (`include/asx/core/budget.h`) encodes "no deadline" as `ASX_TIME_INFINITE` (`UINT64_MAX`, `src/core/budget.c:16`), so a deadline of 0 is Rust's `Some(Time::ZERO)`, due at once, and "no cost quota" as `UINT64_MAX` (`src/core/budget.c:18`).
 
 ### 8.2 Meet/Combine (Tightening)
 
-Componentwise tightening (Rust `Budget::combine`/`meet`, `src/types/budget.rs:502`, `src/types/budget.rs:592`; C `asx_budget_meet`, `src/core/budget.c:49`):
+Componentwise tightening (Rust `Budget::combine`/`meet`, `src/types/budget.rs:502`, `src/types/budget.rs:592`; C `asx_budget_meet`, `src/core/budget.c:42`):
 - `deadline = min(finite a, finite b)` — earliest finite deadline wins
 - `poll_quota = min(a, b)` — tighter quota wins
 - `cost_quota = min(finite a, finite b)` — tighter quota wins
@@ -543,7 +543,7 @@ Componentwise tightening (Rust `Budget::combine`/`meet`, `src/types/budget.rs:50
 ### 8.3 Identities
 
 - `INFINITE` is the identity for meet/tightening (combining with INFINITE preserves the other). Rust: no deadline, `u32::MAX` polls, no cost quota, **priority 0** (`src/types/budget.rs:222`); C `asx_budget_infinite` (`src/core/budget.c:14`)
-- `ZERO` is absorbing/tightest bound (combining with ZERO yields ZERO). Rust: deadline `Time::ZERO`, 0 polls, cost 0, **priority 255** (`src/types/budget.rs:230`). C `asx_budget_zero` uses deadline 1, because 0 means "no deadline" in C (`src/core/budget.c:23`)
+- `ZERO` is absorbing/tightest bound (combining with ZERO yields ZERO). Rust: deadline `Time::ZERO`, 0 polls, cost 0, **priority 255** (`src/types/budget.rs:230`). C `asx_budget_zero` has deadline 0 too (`src/core/budget.c:25`)
 - An ordinary budget (`Budget::new()`) has priority 128 and no limits (`src/types/budget.rs:252`; C `asx_budget_new`)
 
 ### 8.4 Exhaustion Predicates
@@ -551,7 +551,7 @@ Componentwise tightening (Rust `Budget::combine`/`meet`, `src/types/budget.rs:50
 | Predicate | Trigger | Behavior |
 |-----------|---------|----------|
 | Poll quota depletion | `poll_quota == 0` (Rust lab charges the poll before polling, `src/lab/runtime.rs:4664`) | Cancel with `PollQuota` kind; C `src/runtime/scheduler.c:779`, `src/runtime/cancellation.c:567` |
-| Cost quota depletion | Rust: the remaining cost quota is exactly 0 at a checkpoint (`Cx::checkpoint_budget_exhaustion`, `src/cx/cx.rs:3112`) | Cancel with `CostBudget` kind. C also cancels at once when a charge exceeds the remainder (`asx_task_consume_cost`, `src/runtime/lifecycle.c:1259`); open bead `bd-9kll.3.10` |
+| Cost quota depletion | Rust: the remaining cost quota is exactly 0 at a checkpoint (`Cx::checkpoint_budget_exhaustion`, `src/cx/cx.rs:3112`) | Cancel with `CostBudget` kind. C also cancels at once when a charge exceeds the remainder (`asx_task_consume_cost`, `src/runtime/lifecycle.c:1266`); open bead `bd-9kll.3.10` |
 | Deadline expiration | `now >= deadline` | Cancel with `Deadline` kind: the budget-deadline timer stamps it with the deadline (`src/cx/cx.rs:357`), a checkpoint with `now` (`src/cx/cx.rs:3122`); C does the same under lab dispatch (`src/runtime/scheduler.c:224`, `src/runtime/cancellation.c:567`) |
 
 ### 8.5 Consume Semantics
@@ -566,11 +566,11 @@ Consumption is **failure-atomic**:
 Rust Budget::consume_poll(&mut self) -> Option<u32>    // src/types/budget.rs:447
   if poll_quota > 0: old = poll_quota; poll_quota -= 1; return Some(old)
   else: return None                                    // no mutation
-C asx_budget_consume_poll(asx_budget *b) -> uint32_t   // src/core/budget.c:66
+C asx_budget_consume_poll(asx_budget *b) -> uint32_t   // src/core/budget.c:61
   returns the old quota, or 0 (no mutation) when it is already 0
 ```
 
-**Cost consume:** Rust `consume_cost(cost) -> bool` (`src/types/budget.rs:613`) and C `asx_budget_consume_cost` (`src/core/budget.c:71`) both return failure without mutation when the remainder is smaller than the charge, and success with no change when there is no cost quota.
+**Cost consume:** Rust `consume_cost(cost) -> bool` (`src/types/budget.rs:613`) and C `asx_budget_consume_cost` (`src/core/budget.c:66`) both return failure without mutation when the remainder is smaller than the charge, and success with no change when there is no cost quota.
 
 ---
 
@@ -905,7 +905,7 @@ Optional window-based coalescing (`CoalescingConfig`, defaults off, 1 ms window,
 
 ## 11. Deterministic Scheduler Semantics
 
-> **Partly superseded by `asupersync_v4_formal_semantics.md` §1.11 (lanes, [Implementation]), §2.4 (`SchedulerState`, normative: a task is in at most one lane, lanes have strict priority, timed ties broken deterministically), §3.0 `ENQUEUE` / `SCHEDULE-STEP` and §5 INV-SCHED-LANES (none in the Canonical Rule Index), with the "Scheduler fairness" `pick_next` pseudo-code and bounded-fairness lemma (explanatory only) and §6 PROG-CANCEL (`prog.cancel.drains` #9); C status: see C_REFINEMENT_MAP.md supplementary rows "§1.11 lanes, §3.0 ENQUEUE, §5 INV-SCHED-LANES" (Variant) and "§3.0 SCHEDULE-STEP" (Partial), and row `prog.cancel.drains` (Partial).** This section describes Rust's production multi-worker `ThreeLaneScheduler` (`src/runtime/scheduler/three_lane.rs`, "TL" below). **C does not port it.** C ports the single-worker `LabScheduler` of Rust's lab runtime (`src/lab/runtime.rs:6064`), which the fixtures capture: `src/runtime/lab_dispatch.c` has a cancel lane and a ready lane, the cancel-streak limit 16, one xorshift64 draw per step and the RNG tie-break, and no timed lane. C's round-robin `asx_scheduler_run` (`src/runtime/scheduler.c:1354`) has no lanes. C has no governor, work stealing, fairness certificate, adaptive streak or spin/yield/park; `docs/CHANNEL_TIMER_SEMANTICS.md` §3 records these as not implemented. Two Rust facts the spec text does not match: no non-test Rust code at `5e60b1c4c` feeds the timed lane (no caller of `inject_timed`, `schedule_local_timed` or the lab's `schedule_timed` outside tests was found), and the cancel-streak fallback contradicts §2.4's strict lane priority.
+> **Partly superseded by `asupersync_v4_formal_semantics.md` §1.11 (lanes, [Implementation]), §2.4 (`SchedulerState`, normative: a task is in at most one lane, lanes have strict priority, timed ties broken deterministically), §3.0 `ENQUEUE` / `SCHEDULE-STEP` and §5 INV-SCHED-LANES (none in the Canonical Rule Index), with the "Scheduler fairness" `pick_next` pseudo-code and bounded-fairness lemma (explanatory only) and §6 PROG-CANCEL (`prog.cancel.drains` #9); C status: see C_REFINEMENT_MAP.md supplementary rows "§1.11 lanes, §3.0 ENQUEUE, §5 INV-SCHED-LANES" (Variant) and "§3.0 SCHEDULE-STEP" (Partial), and row `prog.cancel.drains` (Partial).** This section describes Rust's production multi-worker `ThreeLaneScheduler` (`src/runtime/scheduler/three_lane.rs`, "TL" below). **C does not port it.** C ports the single-worker `LabScheduler` of Rust's lab runtime (`src/lab/runtime.rs:6064`), which the fixtures capture: `src/runtime/lab_dispatch.c` has a cancel lane and a ready lane, the cancel-streak limit 16, one xorshift64 draw per step and the RNG tie-break, and no timed lane. C's round-robin `asx_scheduler_run` (`src/runtime/scheduler.c:1357`) has no lanes. C has no governor, work stealing, fairness certificate, adaptive streak or spin/yield/park; `docs/CHANNEL_TIMER_SEMANTICS.md` §3 records these as not implemented. Two Rust facts the spec text does not match: no non-test Rust code at `5e60b1c4c` feeds the timed lane (no caller of `inject_timed`, `schedule_local_timed` or the lab's `schedule_timed` outside tests was found), and the cancel-streak fallback contradicts §2.4's strict lane priority.
 
 ### 11.1 Three-Lane Architecture
 
@@ -947,7 +947,7 @@ run_loop():
     Phase 6: Backoff/Park (spin -> yield -> park with timeout)
 ```
 
-C's lab step follows `LabRuntime::step_inner` instead: drain commands, one RNG draw (`src/lab/runtime.rs:4499`), fire due timers, pick (C `src/runtime/scheduler.c:1211`, `src/runtime/lab_dispatch.c:380`).
+C's lab step follows `LabRuntime::step_inner` instead: drain commands, one RNG draw (`src/lab/runtime.rs:4499`), fire due timers, pick (C `src/runtime/scheduler.c:1214`, `src/runtime/lab_dispatch.c:380`).
 
 ### 11.4 Entry Ordering
 
@@ -1033,7 +1033,7 @@ Production only (TL constants at `src/runtime/scheduler/three_lane.rs:195`):
 | Yield | 2 | Thread yield (OS scheduler cooperative) |
 | Park | until woken | Park only if `enable_parking` (default true). Timeout = min(timer-driver deadline, local timed, global timed); a follower uses only the local deadline; an already-due deadline parks 1 ns; no deadline parks without timeout (`src/runtime/scheduler/three_lane.rs:5814`). Before backoff, the I/O leader blocks in the reactor for up to 250 ms |
 
-C has none: native idle drains wakers, jumps the virtual clock or blocks for at most 1000 ms (`src/runtime/scheduler.c:961`); the lab auto-advances the clock.
+C has none: native idle drains wakers, jumps the virtual clock or blocks for at most 1000 ms (`src/runtime/scheduler.c:962`); the lab auto-advances the clock.
 
 ### 11.11 Queue Data Structures
 
@@ -1076,7 +1076,7 @@ C lab lanes are static arrays of `8 * ASX_MAX_TASKS` entries; overflow fails the
 | Interaction | Behavior |
 |-------------|----------|
 | Timer expires | `process_timers()` in Phase 0 (`src/runtime/scheduler/three_lane.rs:6914`; lab before the pick). Expired wakers called. Woken tasks go to the ready or cancel lane, never the timed lane. C: lab step and round-robin loop fire due timers before dispatch (`src/runtime/scheduler.c:512`) |
-| No timers pending | Production: the I/O leader waits in the reactor for at most 250 ms, others park without timeout (`src/runtime/scheduler/three_lane.rs:5814`). The lab never parks. C returns `ASX_E_WOULD_BLOCK` when nothing can wake a task, else blocks at most 1000 ms (`src/runtime/scheduler.c:961`) |
+| No timers pending | Production: the I/O leader waits in the reactor for at most 250 ms, others park without timeout (`src/runtime/scheduler/three_lane.rs:5814`). The lab never parks. C returns `ASX_E_WOULD_BLOCK` when nothing can wake a task, else blocks at most 1000 ms (`src/runtime/scheduler.c:962`) |
 | Next timer deadline | Production park timeout = min(timer-driver, local timed, global timed deadlines); a follower uses only the local one. C jumps the virtual clock or waits until the earlier of the next timer and the run deadline |
 
 ### 12.4 Channel <-> Scheduler
@@ -1460,7 +1460,7 @@ These IDs are this document's own (they are also in `schemas/invariant_schema.js
 |-----------|-------------|------------|
 | `budget-meet-identity-010` (legacy, exists) | INFINITE is meet identity | Legacy fixture only (see the section note); C test `tests/unit/core/test_budget.c` (`budget_infinite_is_identity`) |
 | budget-meet-absorbing-011 | ZERO is absorbing | C test `tests/unit/core/test_budget.c` (`budget_zero_is_absorbing`) |
-| budget-deadline-none-012 | None deadline handling | None identified |
+| budget-deadline-none-012 | None deadline handling | `budget-deadline-zero-001` (no deadline is never deadline-cancelled; a deadline of 0 is due at once) |
 | budget-consume-poll-013 | Poll quota consumption | `budget-poll-quota-exhaustion-001` |
 | budget-consume-cost-014 | Cost quota consumption | None (cost quota is not covered; `bd-9kll.3.10`) |
 | budget-deadline-boundary-015 | Deadline boundary behavior | `budget-deadline-sleep-checkpoint-001` |

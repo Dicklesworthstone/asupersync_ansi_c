@@ -399,7 +399,7 @@ Neither raw sequence is the parity key. The conformance runner compares the Foat
 effective_deadline = min(existing_deadline, new_deadline)
 ```
 
-Superseded by asupersync_v4_formal_semantics.md §5 INV-DEADLINE-MONOTONE (children's deadlines are tighter or equal); C status: see C_REFINEMENT_MAP.md row "§5 INV-DEADLINE-MONOTONE". The combine rule itself is v4 §1.4, which the spec marks [Explanatory]: componentwise min, except priority, which takes the max. Rust `Budget::combine` / `meet` (`src/types/budget.rs:502`, `:556-570`, `:592-594`); C `asx_budget_meet` (`src/core/budget.c:49-64`). It applies to region and task budgets; timers carry no budget.
+Superseded by asupersync_v4_formal_semantics.md §5 INV-DEADLINE-MONOTONE (children's deadlines are tighter or equal); C status: see C_REFINEMENT_MAP.md row "§5 INV-DEADLINE-MONOTONE". The combine rule itself is v4 §1.4, which the spec marks [Explanatory]: componentwise min, except priority, which takes the max. Rust `Budget::combine` / `meet` (`src/types/budget.rs:502`, `:556-570`, `:592-594`); C `asx_budget_meet` (`src/core/budget.c:42-59`). It applies to region and task budgets; timers carry no budget.
 
 ### 4.2 Budget-Timer Interaction
 
@@ -442,7 +442,7 @@ Rust's `Interval` (`src/time/interval.rs`) is a synchronous schedule the caller 
 
 Superseded for the lattice itself by asupersync_v4_formal_semantics.md §1.2 (`def.outcome.four_valued` #29, `def.outcome.severity_lattice` #30, `def.outcome.join_semantics` #31); C status: see C_REFINEMENT_MAP.md rows of the same names.
 
-Channel code sets no task outcome in either engine: the error is returned to the task body, which decides. Rust `mpsc.rs` uses `Outcome` only as the return type of `SendPermit::send`; `src/channel/mpsc.c` has no outcome code. In C, a poll function that returns an error completes its task `Err`, unless a pending cancel dominates, in which case the task completes `Cancelled` (`src/runtime/scheduler.c:1147-1155`). So a task that returns `ASX_E_CANCELLED` from a cancelled `recv` ends Cancelled, as in `mpsc-recv-cancel-first-001`, and one that returns `ASX_E_DISCONNECTED` ends Err. `ASX_E_CHANNEL_FULL`, `ASX_E_WOULD_BLOCK` and `ASX_E_PENDING` are not terminal: the caller retries or waits.
+Channel code sets no task outcome in either engine: the error is returned to the task body, which decides. Rust `mpsc.rs` uses `Outcome` only as the return type of `SendPermit::send`; `src/channel/mpsc.c` has no outcome code. In C, a poll function that returns an error completes its task `Err`, unless a pending cancel dominates, in which case the task completes `Cancelled` (`src/runtime/scheduler.c:1150-1158`). So a task that returns `ASX_E_CANCELLED` from a cancelled `recv` ends Cancelled, as in `mpsc-recv-cancel-first-001`, and one that returns `ASX_E_DISCONNECTED` ends Err. `ASX_E_CHANNEL_FULL`, `ASX_E_WOULD_BLOCK` and `ASX_E_PENDING` are not terminal: the caller retries or waits.
 
 ### 5.2 Timer Errors and Outcome Lattice
 

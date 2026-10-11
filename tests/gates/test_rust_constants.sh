@@ -76,9 +76,9 @@ edit changed_value.json '.constants["timer.max_duration_ns"].value = 86400000000
 run_case changed_value_fails nonzero 'FAIL timer\.max_duration_ns: rust=86400000000000' \
     "$WORK/changed_value.json"
 
-edit stale_known.json '.constants["budget.zero.deadline_ns"].value = 1'
-run_case stale_known_entry_fails nonzero 'FAIL budget\.zero\.deadline_ns: .*now equals rust' \
-    "$WORK/stale_known.json"
+edit stale_known.json '.constants["lab.default.panic_on_obligation_leak"].value = false'
+run_case stale_known_entry_fails nonzero \
+    'FAIL lab\.default\.panic_on_obligation_leak: .*now equals rust' "$WORK/stale_known.json"
 
 edit unknown_rust_key.json '.constants["lab.new_constant"] = {"value": 1, "source": "test"}'
 run_case undeclared_rust_constant_fails nonzero 'FAIL lab\.new_constant: .*no C counterpart' \

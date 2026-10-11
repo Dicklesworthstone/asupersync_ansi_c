@@ -41,7 +41,7 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->124<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
+  - `make conformance` runs <!-- fact:rust_fixtures -->125<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
   - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches, or is a recorded difference that names its bead.
@@ -932,17 +932,17 @@ Budgets are composable resource constraints with four dimensions: **deadline** (
 The key operation is the **meet** (componentwise tightening):
 
 ```
-meet(a, b).deadline   = min(a.deadline,   b.deadline)     // 0 = unconstrained
+meet(a, b).deadline   = min(a.deadline,   b.deadline)     // ASX_TIME_INFINITE = unconstrained
 meet(a, b).poll_quota = min(a.poll_quota, b.poll_quota)
 meet(a, b).cost_quota = min(a.cost_quota, b.cost_quota)   // UINT64_MAX = unconstrained
 meet(a, b).priority   = max(a.priority,   b.priority)     // most urgent wins
 ```
 
-As in Rust asupersync's `Budget::combine`, priority meets upward: `asx_budget_infinite()` has priority 0 (the identity), `asx_budget_zero()` has 255 (absorbing), and ordinary budgets (`asx_budget_new()`, `asx_budget_from_polls()`) default to 128. The default sweep scheduler does not yet order tasks by budget priority (tracked as bridge bead S5); lab dispatch does.
+A deadline of 0 is a deadline, due at once (Rust's `Some(Time::ZERO)`); only `ASX_TIME_INFINITE` means none. As in Rust asupersync's `Budget::combine`, priority meets upward: `asx_budget_infinite()` has priority 0 (the identity), `asx_budget_zero()` has 255 (absorbing), and ordinary budgets (`asx_budget_new()`, `asx_budget_from_polls()`) default to 128. The default sweep scheduler does not yet order tasks by budget priority (tracked as bridge bead S5); lab dispatch does.
 
 This means budgets compose correctly: if a task has a 100-poll budget and its region has a 50-poll budget, the effective budget is 50. Cleanup budgets for cancellation follow the same rule: each cancel request's cleanup budget is met into the task's (severity 5, SHUTDOWN, gets 50 cleanup polls; severity 0, USER, gets 1,000). When the task acknowledges its cancel at a checkpoint, the cleanup budget replaces its budget (no deadline or cost quota, the cleanup priority), as Rust's `acknowledge_cancel` does; a later request during cleanup replaces it again with the met budget. Read it with `asx_task_get_cleanup_budget`.
 
-Budgets are **enforced**, not advisory. Regions carry a budget that child regions (`asx_region_open_child_with_budget`) and tasks (`asx_task_spawn_with_budget`) inherit through the meet, so a child can only tighten it:
+Budgets are **enforced**, not advisory. Regions carry a budget that child regions (`asx_region_open_child_with_budget`) inherit through the meet, so a child can only tighten it. A task spawned from a task inherits its spawner's budget (or, spawned into a region the spawner opened, that region's); a task the host spawns takes only the budget it is given (`asx_task_spawn_with_budget`), as Rust's `create_task` does:
 
 | Dimension | Enforcement | Cancel kind |
 |---|---|---|

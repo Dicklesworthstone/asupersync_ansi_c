@@ -281,16 +281,21 @@ ASX_API ASX_MUST_USE asx_status asx_task_spawn_captured(asx_region_id region,
 
 /* Spawn a task whose budget is meet(region budget, *budget).
  * Same contract and errors as asx_task_spawn; budget may be NULL
- * (region budget only). */
+ * (unconstrained). Called by the host, the task's budget is exactly
+ * `budget`, as Rust's RuntimeState::create_task; called from a task, it is
+ * met with that task's budget (its own region) or the region's (a region
+ * the task opened), as cx.spawn / child.cx().spawn. */
 ASX_API ASX_MUST_USE asx_status asx_task_spawn_with_budget(asx_region_id region,
                                                            asx_task_poll_fn poll_fn,
                                                            void *user_data,
                                                            const asx_budget *budget,
                                                            asx_task_id *out_id);
 
-/* Open a child region whose budget is meet(parent budget, *budget); its
- * tasks and descendants inherit it (e.g. a deadline for a whole subtree).
- * Same contract and errors as asx_region_open_child; budget may be NULL. */
+/* Open a child region whose budget is meet(parent budget, *budget). Its
+ * child regions meet it, and a task spawns into it with it from another
+ * region (child.cx().spawn); a host-spawned task takes only its own budget
+ * (asx_task_spawn_with_budget). Same contract and errors as
+ * asx_region_open_child; budget may be NULL. */
 ASX_API ASX_MUST_USE asx_status asx_region_open_child_with_budget(asx_region_id parent,
                                                                   const asx_budget *budget,
                                                                   asx_region_id *out_child);

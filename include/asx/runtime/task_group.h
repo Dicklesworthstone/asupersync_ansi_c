@@ -112,7 +112,7 @@ typedef struct {
     int32_t winner;             /* RACE / FIRST_OK winner index, -1 if none */
     asx_cancel_kind drain_kind; /* cancel kind sent to unfinished members */
     asx_status result;          /* group result, final once DONE */
-    asx_time deadline;          /* 0 = none */
+    asx_time deadline;          /* ASX_TIME_INFINITE = none */
     uint8_t early;              /* resolved by cancel / deadline / bad quorum */
     /* FIRST_OK attempts (asx_task_group_add_attempt), spawned one at a
      * time: members[i] is valid for i < spawned. */
@@ -150,7 +150,7 @@ ASX_API ASX_MUST_USE asx_status asx_task_group_init(asx_task_group *g, asx_task_
                                                     uint32_t needed);
 
 /* Resolve the group as timed out if it is still undecided at `deadline`
- * (runtime clock; 0 clears). */
+ * (runtime clock; 0 is due at once, ASX_TIME_INFINITE clears). */
 ASX_API ASX_MUST_USE asx_status asx_task_group_set_deadline(asx_task_group *g, asx_time deadline);
 
 /* Adopt an already-spawned task as a member. The group owns its

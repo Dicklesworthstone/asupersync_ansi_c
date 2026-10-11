@@ -750,6 +750,50 @@ TEST(deadline_times_out_and_drains_members) {
     ASSERT_TRUE(asx_runtime_virtual_now() < 50u * MS);
 }
 
+TEST(deadline_zero_is_due_at_once) {
+    asx_region_id r;
+    asx_task_id owner;
+    asx_budget run;
+
+    /* 0 is a deadline (already passed), not "none": the group times out
+     * at its first poll, before the 50 ms member can win. */
+    setup();
+    member_init(0, 0, ASX_OK);
+    member_init(1, 50, ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 2, &owner), ASX_OK);
+    ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, 0u), ASX_OK);
+    run = asx_budget_from_polls(200);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+    ASSERT_TRUE(g_owner.done);
+    ASSERT_EQ(g_owner.result, ASX_E_TIMED_OUT);
+    ASSERT_EQ(g_m[0].kind, ASX_CANCEL_TIMEOUT);
+    ASSERT_EQ(g_m[1].kind, ASX_CANCEL_TIMEOUT);
+    ASSERT_TRUE(asx_runtime_virtual_now() < 50u * MS);
+}
+
+TEST(infinite_deadline_clears_the_deadline) {
+    asx_region_id r;
+    asx_task_id owner;
+    asx_budget run;
+
+    setup();
+    member_init(0, 0, ASX_OK);
+    member_init(1, 50, ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 2, &owner), ASX_OK);
+    ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, asx_runtime_virtual_now() + 5u * MS),
+              ASX_OK);
+    ASSERT_EQ(asx_task_group_set_deadline(&g_owner.group, ASX_TIME_INFINITE), ASX_OK);
+    run = asx_budget_from_polls(200);
+    ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
+    ASSERT_TRUE(g_owner.done);
+    ASSERT_EQ(g_owner.result, ASX_OK);
+    ASSERT_EQ(asx_task_group_winner(&g_owner.group), 1);
+    ASSERT_EQ(g_m[0].kind, ASX_CANCEL_RACE_LOST);
+    ASSERT_TRUE(asx_runtime_virtual_now() >= 50u * MS);
+}
+
 TEST(quorum_deadline_reports_threshold_timeout) {
     asx_region_id r;
     asx_task_id owner;
@@ -892,6 +936,8 @@ int main(void) {
     RUN_TEST(quorum_rejects_invalid_threshold_after_draining);
     RUN_TEST(owner_cancel_drains_race_members_with_the_owner_reason);
     RUN_TEST(deadline_times_out_and_drains_members);
+    RUN_TEST(deadline_zero_is_due_at_once);
+    RUN_TEST(infinite_deadline_clears_the_deadline);
     RUN_TEST(quorum_deadline_reports_threshold_timeout);
     RUN_TEST(explicit_group_cancel_drains_and_resolves_cancelled);
     RUN_TEST(group_api_validation);

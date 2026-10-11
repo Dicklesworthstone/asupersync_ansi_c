@@ -584,7 +584,7 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
      * cx.rs:3112-3130): a passed deadline is a DEADLINE candidate stamped
      * now, strengthening a cancel already pending; the budget-deadline
      * timer has stamped the first one with the deadline itself. */
-    if (t->budget.deadline != 0u && !asx_task_is_terminal(t->state) &&
+    if (t->budget.deadline != ASX_TIME_INFINITE && !asx_task_is_terminal(t->state) &&
         (asx_lab_dispatch_active() || !t->cancel_pending)) {
         asx_time now = asx_cancel_now_internal();
         if (now >= t->budget.deadline) {

@@ -507,12 +507,12 @@ static void ck_known(const char *key, const char *why) {
     g_ck_overflow = 1;
 }
 
-/* C's "unconstrained" encodings (deadline 0, cost UINT64_MAX) are Rust's
- * None. */
+/* C's "unconstrained" encodings (deadline ASX_TIME_INFINITE, cost
+ * UINT64_MAX) are Rust's None. */
 static void ck_budget(const char *prefix, asx_budget b) {
     char key[64];
     (void)snprintf(key, sizeof(key), "%s.deadline_ns", prefix);
-    if (b.deadline == 0u) {
+    if (b.deadline == ASX_TIME_INFINITE) {
         ck_null(key);
     } else {
         ck_u64(key, (uint64_t)b.deadline);
@@ -803,8 +803,6 @@ static void ck_build(void) {
     ck_known("cancel_kind.ResourceUnavailable.ordinal", "bd-9kll.2.18");
     ck_known("cancel_kind.Shutdown.ordinal", "bd-9kll.2.18");
     ck_known("cancel_kind.LinkedExit.ordinal", "bd-9kll.2.18");
-    ck_known("budget.zero.deadline_ns",
-             "accepted: C encodes no deadline as 0, so its earliest deadline is 1 ns");
     ck_known("runtime.default.obligation_leak_response", "bd-9kll.2.19: C defaults to Log");
     ck_known("lab.default.panic_on_obligation_leak", "bd-9kll.2.19");
 }

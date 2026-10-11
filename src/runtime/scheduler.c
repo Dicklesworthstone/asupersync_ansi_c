@@ -206,7 +206,7 @@ static void timer_arm(uint32_t idx, asx_time deadline) {
  * runtime/state.rs:4400-4403, 4892), a wheel timer behind those registered
  * before it. */
 void asx_lab_arm_budget_deadline_internal(asx_task_slot *t) {
-    if (t->budget.deadline == 0u) return;
+    if (t->budget.deadline == ASX_TIME_INFINITE) return;
     if (t->deadline_timer_armed) {
         /* The creation's budget, met after the task was armed: still the
          * one registration (asx_task_spawn_with_budget). */
@@ -229,7 +229,7 @@ static void lab_deadline_fire(uint32_t slot) {
     asx_status st;
     lab_deadline_disarm(t);
     if (!t->alive || asx_task_is_terminal(t->state) || t->cancel_pending) return;
-    if (t->budget.deadline == 0u || t->budget.deadline > at) return;
+    if (t->budget.deadline == ASX_TIME_INFINITE || t->budget.deadline > at) return;
     st = asx_task_cancel_budget_internal(asx_task_handle_for_slot(slot), ASX_CANCEL_DEADLINE, at);
     (void)st;
     t->cancel_wakers_pending = 0u;
@@ -795,7 +795,8 @@ static void sched_enforce_budget(asx_task_slot *t, asx_task_id tid, asx_time *no
     asx_status st;
     /* Under lab dispatch the budget-deadline timer cancels the task, as
      * Rust's lab does (lab_deadline_fire); it checks no deadline here. */
-    if (!asx_lab_dispatch_active() && !t->cancel_pending && t->budget.deadline != 0u) {
+    if (!asx_lab_dispatch_active() && !t->cancel_pending &&
+        t->budget.deadline != ASX_TIME_INFINITE) {
         if (!*have_now) {
             *now = sched_now();
             *have_now = 1;
@@ -958,11 +959,12 @@ static int sched_external_pending(void) {
     return sched_io_pending();
 }
 
-/* Milliseconds to block before `deadline` (0 = none), capped at
- * `cap_ms`; rounds up so a wake never lands just short of the deadline. */
+/* Milliseconds to block before `deadline` (ASX_TIME_INFINITE = none),
+ * capped at `cap_ms`; rounds up so a wake never lands just short of the
+ * deadline. */
 static uint32_t sched_ms_until(asx_time deadline, asx_time now, uint32_t cap_ms) {
     uint64_t wait_ms;
-    if (deadline == 0u) return cap_ms;
+    if (deadline == ASX_TIME_INFINITE) return cap_ms;
     if (now >= deadline) return 0u;
     wait_ms = ((deadline - now) + 999999u) / 1000000u;
     return wait_ms > cap_ms ? cap_ms : (uint32_t)wait_ms;
@@ -971,7 +973,8 @@ static uint32_t sched_ms_until(asx_time deadline, asx_time now, uint32_t cap_ms)
 /* Called when every live task in scope is parked. Returns ASX_OK if the
  * scheduler should run another round, ASX_E_WOULD_BLOCK if nothing can
  * wake the parked tasks. Blocking never extends past `run_deadline` (the
- * caller's run budget deadline, 0 = none); the round loop then reports
+ * caller's run budget deadline, ASX_TIME_INFINITE = none); the round loop
+ * then reports
  * ASX_E_TIMED_OUT. */
 static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time run_deadline,
                              int advance_clock) {
@@ -992,7 +995,7 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
     if (g_timer_heap_len > 0u) {
         asx_time next = g_tasks[g_timer_heap[0]].wake_at;
         asx_time target = next;
-        if (run_deadline != 0u && run_deadline < target) target = run_deadline;
+        if (run_deadline < target) target = run_deadline;
         now = sched_now();
         if (now < target && asx_runtime_clock_is_virtual()) {
             asx_runtime_virtual_advance(target);
@@ -1008,7 +1011,7 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
         /* ASX_ANALYZER_WAIVER("config-dependent: 0 without blocking pool/native I/O") */
     } else if (sched_external_pending()) {
         now = sched_now();
-        if (run_deadline != 0u && now >= run_deadline) return ASX_OK;
+        if (run_deadline != ASX_TIME_INFINITE && now >= run_deadline) return ASX_OK;
         sched_block(sched_ms_until(run_deadline, now, ASX_SCHED_MAX_IDLE_WAIT_MS));
         (void)sched_drain_wakers();
         now = sched_now();
@@ -1019,7 +1022,7 @@ static asx_status sched_idle(asx_time *last_idle_now, uint32_t *stall, asx_time 
     }
 
     /* The run deadline passed while idle: let the round loop report it. */
-    if (run_deadline != 0u && now >= run_deadline) return ASX_OK;
+    if (run_deadline != ASX_TIME_INFINITE && now >= run_deadline) return ASX_OK;
 
     /* Guard against a frozen custom clock: if repeated idle passes see no
      * clock movement, stop rather than spin. */
@@ -1198,7 +1201,7 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
     t->notified = 0;
     /* A parked task with a deadline must wake to be cancelled (under lab
      * dispatch its budget-deadline timer does it). */
-    if (!lab && t->parked && !t->cancel_pending && t->budget.deadline != 0u) {
+    if (!lab && t->parked && !t->cancel_pending && t->budget.deadline != ASX_TIME_INFINITE) {
         timer_arm(i, t->budget.deadline);
     }
     /* Opt-in hard bound's counter: each poll of a cancel-phase

@@ -180,7 +180,7 @@ TEST(unbounded_poll_quota_is_not_consumed) {
     ASSERT_EQ(asx_scheduler_run(r, &run), ASX_OK);
     ASSERT_EQ(asx_task_get_budget(t, &left), ASX_OK);
     ASSERT_EQ(left.poll_quota, UINT32_MAX);
-    ASSERT_EQ(left.deadline, (asx_time)0);
+    ASSERT_EQ(left.deadline, ASX_TIME_INFINITE);
 }
 
 typedef struct {
@@ -371,7 +371,7 @@ TEST(budgets_tighten_down_the_region_tree) {
     setup();
     ASSERT_EQ(asx_region_open(&root), ASX_OK);
     ASSERT_EQ(asx_region_get_budget(root, &got), ASX_OK);
-    ASSERT_EQ(got.deadline, (asx_time)0);
+    ASSERT_EQ(got.deadline, ASX_TIME_INFINITE);
     ASSERT_EQ(got.poll_quota, UINT32_MAX);
 
     b = asx_budget_infinite();
@@ -393,37 +393,81 @@ TEST(budgets_tighten_down_the_region_tree) {
     ASSERT_EQ(got.deadline, (asx_time)(100u * MS));
     ASSERT_EQ(got.poll_quota, UINT32_MAX);
 
-    /* Tasks inherit the region budget, met with their own. */
+    /* A task the host creates takes only its own budget, as Rust's
+     * RuntimeState::create_task (state.rs:4461): the region's is not met
+     * into it (tasks spawned from a task inherit, see below). */
     b = asx_budget_from_polls(50);
     ASSERT_EQ(asx_task_spawn_with_budget(grandchild, poll_complete, NULL, &b, &t), ASX_OK);
     ASSERT_EQ(asx_task_get_budget(t, &got), ASX_OK);
-    ASSERT_EQ(got.poll_quota, 7u);
-    ASSERT_EQ(got.deadline, (asx_time)(100u * MS));
+    ASSERT_EQ(got.poll_quota, 50u);
+    ASSERT_EQ(got.deadline, ASX_TIME_INFINITE);
 
     ASSERT_EQ(asx_region_get_budget(grandchild, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_EQ(asx_task_get_budget(t, NULL), ASX_E_INVALID_ARGUMENT);
 }
 
-TEST(region_deadline_cancels_its_tasks) {
+typedef struct {
+    asx_region_id region; /* the opener's own region */
+    asx_budget budget;    /* the child region's requested budget */
+    probe_state *probe;   /* the task it spawns into the child */
+    asx_task_id spawned;
+    asx_status status;
+} opener_state;
+
+/* Opens a child region with `budget`, spawns a probe into it, completes. */
+static asx_status poll_opener(void *ud, asx_task_id self) {
+    opener_state *s = (opener_state *)ud;
+    asx_region_id child = ASX_INVALID_ID;
+    s->status = asx_region_open_child_poll(self, s->region, &s->budget, &child);
+    if (s->status == ASX_OK) s->status = asx_task_spawn(child, poll_probe, s->probe, &s->spawned);
+    return ASX_OK;
+}
+
+TEST(region_deadline_bounds_tasks_spawned_into_it_from_a_task) {
     asx_region_id root;
     asx_region_id child;
-    asx_task_id t;
-    probe_state p;
+    asx_task_id host_task;
+    asx_task_id opener;
+    probe_state host_probe;
+    probe_state inner_probe;
+    opener_state o;
     asx_budget b;
+    asx_budget got;
     asx_budget run;
 
     setup();
-    memset(&p, 0, sizeof(p));
-    p.park = 1;
+    memset(&host_probe, 0, sizeof(host_probe));
+    memset(&inner_probe, 0, sizeof(inner_probe));
+    memset(&o, 0, sizeof(o));
+    host_probe.park = 1;
+    inner_probe.park = 1;
     ASSERT_EQ(asx_region_open(&root), ASX_OK);
-    b = asx_budget_infinite();
+    b = asx_budget_new();
     b.deadline = asx_runtime_virtual_now() + 3u * MS;
+
+    /* A host-spawned task takes only its own budget, as Rust's
+     * RuntimeState::create_task (state.rs:4461): the region's deadline does
+     * not reach it. */
     ASSERT_EQ(asx_region_open_child_with_budget(root, &b, &child), ASX_OK);
-    ASSERT_EQ(asx_task_spawn(child, poll_probe, &p, &t), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(child, poll_probe, &host_probe, &host_task), ASX_OK);
+    ASSERT_EQ(asx_task_get_budget(host_task, &got), ASX_OK);
+    ASSERT_EQ(got.deadline, ASX_TIME_INFINITE);
+
+    /* A task that opens a region with the deadline and spawns into it
+     * (child.cx().spawn) passes it on: that task is cancelled at 3 ms. */
+    o.region = root;
+    o.budget = b;
+    o.probe = &inner_probe;
+    o.spawned = ASX_INVALID_ID;
+    ASSERT_EQ(asx_task_spawn(root, poll_opener, &o, &opener), ASX_OK);
+    /* The host task stays parked past 3 ms: nothing cancels or wakes it. */
     run = asx_budget_from_polls(100);
-    ASSERT_EQ(asx_scheduler_run(root, &run), ASX_OK);
-    ASSERT_TRUE(p.saw_cancel);
-    ASSERT_EQ(p.kind, ASX_CANCEL_DEADLINE);
+    ASSERT_EQ(asx_scheduler_run(root, &run), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(o.status, ASX_OK);
+    ASSERT_TRUE(inner_probe.saw_cancel);
+    ASSERT_EQ(inner_probe.kind, ASX_CANCEL_DEADLINE);
+    ASSERT_TRUE(asx_runtime_virtual_now() >= b.deadline);
+    ASSERT_FALSE(host_probe.saw_cancel);
 }
 
 /* -------------------------------------------------------------------
@@ -821,7 +865,7 @@ int main(void) {
     RUN_TEST(consume_cost_rejects_stale_handle);
     RUN_TEST(spawned_child_inherits_the_quota_until_the_cleanup_phase_starts);
     RUN_TEST(budgets_tighten_down_the_region_tree);
-    RUN_TEST(region_deadline_cancels_its_tasks);
+    RUN_TEST(region_deadline_bounds_tasks_spawned_into_it_from_a_task);
     RUN_TEST(reserve_ex_records_kind_and_holder);
     RUN_TEST(reserve_ex_validates_arguments);
     RUN_TEST(reserve_holder_must_belong_to_the_region);

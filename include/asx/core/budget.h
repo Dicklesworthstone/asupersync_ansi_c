@@ -26,7 +26,9 @@
 
 /* Budget structure */
 typedef struct {
-    asx_time deadline; /* 0 = unconstrained */
+    /* ASX_TIME_INFINITE = unconstrained (Rust None); any other value is a
+     * deadline, 0 included (Rust Some(Time::ZERO): due at once). */
+    asx_time deadline;
     uint32_t poll_quota;
     uint64_t cost_quota; /* UINT64_MAX = unconstrained */
     uint8_t priority;    /* higher = more urgent; meet takes the max */

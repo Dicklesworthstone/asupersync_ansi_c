@@ -268,7 +268,7 @@ static void group_decide(asx_task_group *g, asx_task_slot *owner, asx_task_id se
         group_begin_drain(g, ASX_CANCEL_PARENT, ASX_E_CANCELLED, 1);
         return;
     }
-    if (g->deadline != 0u && group_now() >= g->deadline) {
+    if (g->deadline != ASX_TIME_INFINITE && group_now() >= g->deadline) {
         group_begin_drain(g, ASX_CANCEL_TIMEOUT,
                           g->mode == ASX_TASK_GROUP_QUORUM ? ASX_E_THRESHOLD_TIMEOUT
                                                            : ASX_E_TIMED_OUT,
@@ -314,14 +314,15 @@ static asx_status group_first_ok_poll(asx_task_group *g, asx_task_slot *owner, a
             group_collect(g, owner);
             if (!g->completed[cur]) {
                 /* A deadline ends the attempt with TIMEOUT. */
-                if (!g->forwarded && g->deadline != 0u && group_now() >= g->deadline) {
+                if (!g->forwarded && g->deadline != ASX_TIME_INFINITE &&
+                    group_now() >= g->deadline) {
                     st = asx_task_cancel(g->members[cur], ASX_CANCEL_TIMEOUT);
                     (void)st;
                     g->forwarded = 1u;
                     g->early = 1u;
                     g->result = ASX_E_TIMED_OUT;
                 }
-                if (g->deadline != 0u && !g->forwarded) {
+                if (g->deadline != ASX_TIME_INFINITE && !g->forwarded) {
                     st = asx_task_arm_timer(self, g->deadline);
                     (void)st;
                 }
@@ -388,6 +389,7 @@ asx_status asx_task_group_init(asx_task_group *g, asx_task_group_mode mode, uint
     g->winner = -1;
     g->drain_kind = ASX_CANCEL_RACE_LOST;
     g->result = ASX_E_PENDING;
+    g->deadline = ASX_TIME_INFINITE;
     return ASX_OK;
 }
 
@@ -526,7 +528,7 @@ asx_status asx_task_group_poll(asx_task_group *g, asx_task_id self) {
     }
 
     /* Still waiting: members wake the owner as they complete. */
-    if (g->phase == ASX_TASK_GROUP_COLLECTING && g->deadline != 0u) {
+    if (g->phase == ASX_TASK_GROUP_COLLECTING && g->deadline != ASX_TIME_INFINITE) {
         st = asx_task_arm_timer(self, g->deadline);
         (void)st;
     }

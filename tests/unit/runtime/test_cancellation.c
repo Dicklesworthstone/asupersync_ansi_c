@@ -1473,7 +1473,7 @@ TEST(acknowledgement_replaces_the_budget_with_the_cleanup_budget) {
     ASSERT_EQ(asx_task_get_budget(tid, &got), ASX_OK);
     ASSERT_EQ(got.poll_quota, 500u);
     ASSERT_EQ((int)got.priority, 210);
-    ASSERT_EQ(got.deadline, (asx_time)0);
+    ASSERT_EQ(got.deadline, ASX_TIME_INFINITE);
     ASSERT_EQ(got.cost_quota, UINT64_MAX);
     /* The next poll is charged to it. */
     budget = asx_budget_from_polls(1);

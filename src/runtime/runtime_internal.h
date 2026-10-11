@@ -52,8 +52,8 @@ typedef struct {
     int alive;                 /* 1 if slot in use */
     int poisoned;              /* 1 if region has been poisoned (containment) */
     asx_cleanup_stack cleanup; /* LIFO cleanup for finalization */
-    asx_budget budget;         /* inherited by tasks and child regions */
-    asx_region_limits limits;  /* admission limits (unlimited by default) */
+    asx_budget budget; /* met into child regions; tasks spawned into it from another region */
+    asx_region_limits limits; /* admission limits (unlimited by default) */
     /* Captured task state is carved at 8-byte offsets: the union keeps the
      * arena itself 8-byte aligned whatever fields precede it. */
     union {

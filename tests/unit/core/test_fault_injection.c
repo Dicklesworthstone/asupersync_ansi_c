@@ -144,10 +144,13 @@ TEST(fault_clock_zero_no_deadline) {
     ASSERT_EQ(asx_runtime_now_ns(&now), ASX_OK);
     ASSERT_EQ(now, (asx_time)0);
 
-    /* Budget with deadline=0 means unconstrained — never past */
+    /* An unconstrained budget (ASX_TIME_INFINITE) is never past, even at
+     * clock zero; a deadline of 0 is (Rust Some(Time::ZERO)). */
     budget = asx_budget_infinite();
-    ASSERT_EQ(budget.deadline, (asx_time)0);
+    ASSERT_EQ(budget.deadline, ASX_TIME_INFINITE);
     ASSERT_FALSE(asx_budget_is_past_deadline(&budget, now));
+    budget.deadline = 0u;
+    ASSERT_TRUE(asx_budget_is_past_deadline(&budget, now));
 }
 
 /* ---- Entropy fault injection ---- */

@@ -1169,7 +1169,10 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
     g_tasks[idx].outcome = asx_outcome_make(ASX_OUTCOME_OK);
     g_tasks[idx].alive = 1;
     g_tasks[idx].detached = 0;
-    g_tasks[idx].budget = r->budget;
+    /* Created by the host: Rust's RuntimeState::create_task, whose task
+     * takes exactly the budget it is given (state.rs:4461, 4274-4275); the
+     * region's budget is not met into it. */
+    g_tasks[idx].budget = asx_budget_infinite();
     g_tasks[idx].first_held = ASX_SLOT_NONE;
     asx_task_sched_init_internal(&g_tasks[idx]);
     memset(&g_tasks[idx].lab_ent, 0, sizeof(g_tasks[idx].lab_ent));
@@ -1204,6 +1207,10 @@ asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *
                  * applied after the poll, not at the checkpoint that
                  * acknowledges (fuzz gen-7-54, bd-ij9w). */
                 if (spawner->cleanup_applied) g_tasks[idx].budget.poll_quota = UINT32_MAX;
+            } else {
+                /* Into a region the spawner opened: child.cx().spawn, whose
+                 * Cx carries that region's budget. */
+                g_tasks[idx].budget = r->budget;
             }
         }
     }

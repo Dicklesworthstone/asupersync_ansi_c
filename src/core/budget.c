@@ -13,7 +13,7 @@
 
 asx_budget asx_budget_infinite(void) {
     asx_budget b;
-    b.deadline = 0; /* 0 = unconstrained */
+    b.deadline = ASX_TIME_INFINITE; /* unconstrained (Rust None) */
     b.poll_quota = UINT32_MAX;
     b.cost_quota = UINT64_MAX; /* unconstrained */
     b.priority = 0;
@@ -22,7 +22,7 @@ asx_budget asx_budget_infinite(void) {
 
 asx_budget asx_budget_zero(void) {
     asx_budget b;
-    b.deadline = 1; /* earliest possible (non-zero = has deadline) */
+    b.deadline = ASX_TIME_ZERO; /* Rust ZERO: Some(Time::ZERO), due at once */
     b.poll_quota = 0;
     b.cost_quota = 0;
     b.priority = 255;
@@ -39,18 +39,13 @@ static uint64_t min_u64(uint64_t a, uint64_t b) { return a < b ? a : b; }
 static uint32_t min_u32(uint32_t a, uint32_t b) { return a < b ? a : b; }
 static uint8_t max_u8(uint8_t a, uint8_t b) { return a > b ? a : b; }
 
-/* deadline meet: earliest finite deadline wins; 0 means unconstrained */
-static asx_time min_deadline(asx_time a, asx_time b) {
-    if (a == 0) return b;
-    if (b == 0) return a;
-    return a < b ? a : b;
-}
-
 asx_budget asx_budget_meet(const asx_budget *a, const asx_budget *b) {
     asx_budget result;
     if (a == NULL) return b != NULL ? *b : asx_budget_infinite();
     if (b == NULL) return *a;
-    result.deadline = min_deadline(a->deadline, b->deadline);
+    /* The earlier deadline wins; unconstrained is ASX_TIME_INFINITE, so
+     * the minimum needs no special case. */
+    result.deadline = min_u64(a->deadline, b->deadline);
     result.poll_quota = min_u32(a->poll_quota, b->poll_quota);
     result.cost_quota = min_u64(a->cost_quota, b->cost_quota);
 #ifdef ASX_MUTANT_BUDGET_PRIORITY_MIN
@@ -82,7 +77,7 @@ int asx_budget_is_exhausted(const asx_budget *b) {
 }
 
 int asx_budget_is_past_deadline(const asx_budget *b, asx_time now) {
-    if (b == NULL || b->deadline == 0) return 0; /* no deadline */
+    if (b == NULL || b->deadline == ASX_TIME_INFINITE) return 0; /* no deadline */
     return now >= b->deadline;
 }
 

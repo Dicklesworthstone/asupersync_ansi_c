@@ -163,8 +163,8 @@ TEST(auto_watchdog_checkpoint_001_budget_not_past_deadline) {
     budget.deadline = 200;
     ASSERT_FALSE(asx_budget_is_past_deadline(&budget, now));
 
-    /* Budget with zero deadline (unconstrained) — never past */
-    budget.deadline = ASX_TIME_ZERO;
+    /* Budget with no deadline (unconstrained) — never past */
+    budget.deadline = ASX_TIME_INFINITE;
     ASSERT_FALSE(asx_budget_is_past_deadline(&budget, now));
 }
 

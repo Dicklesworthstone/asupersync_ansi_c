@@ -128,12 +128,15 @@ TEST(cancel_cleanup_budget_all_kinds_valid) {
 /* Section 2: Budget deadline and consume semantics                   */
 /* ================================================================== */
 
-TEST(budget_deadline_zero_means_unconstrained) {
+TEST(budget_infinite_deadline_is_unconstrained) {
+    /* Rust Budget::INFINITE: deadline None (C: ASX_TIME_INFINITE), never
+     * past; a deadline of 0 is a real one (Some(Time::ZERO)). */
     asx_budget b = asx_budget_infinite();
-    ASSERT_EQ(b.deadline, (asx_time)0);
-    /* deadline=0 is never past */
+    ASSERT_EQ(b.deadline, ASX_TIME_INFINITE);
     ASSERT_FALSE(asx_budget_is_past_deadline(&b, 0));
     ASSERT_FALSE(asx_budget_is_past_deadline(&b, UINT64_MAX));
+    b.deadline = 0;
+    ASSERT_TRUE(asx_budget_is_past_deadline(&b, 0));
 }
 
 TEST(budget_deadline_finite_boundary) {
@@ -147,11 +150,11 @@ TEST(budget_deadline_finite_boundary) {
     ASSERT_TRUE(asx_budget_is_past_deadline(&b, 101));
 }
 
-TEST(budget_deadline_one) {
-    /* deadline=1 is the earliest finite deadline (used by budget_zero) */
+TEST(budget_zero_deadline_is_due_at_once) {
+    /* Rust Budget::ZERO: deadline Some(Time::ZERO), past at time 0. */
     asx_budget b = asx_budget_zero();
-    ASSERT_EQ(b.deadline, (asx_time)1);
-    ASSERT_FALSE(asx_budget_is_past_deadline(&b, 0));
+    ASSERT_EQ(b.deadline, (asx_time)0);
+    ASSERT_TRUE(asx_budget_is_past_deadline(&b, 0));
     ASSERT_TRUE(asx_budget_is_past_deadline(&b, 1));
 }
 
@@ -220,7 +223,7 @@ TEST(budget_is_exhausted_null) { ASSERT_TRUE(asx_budget_is_exhausted(NULL)); }
 TEST(budget_polls_null_safe) { ASSERT_EQ(asx_budget_polls(NULL), 0u); }
 
 TEST(budget_meet_deadline_unconstrained_identity) {
-    /* meet(deadline=0, deadline=X) = deadline=X */
+    /* meet(unconstrained, deadline=X) = deadline=X */
     asx_budget a = asx_budget_infinite();
     asx_budget b = asx_budget_infinite();
     asx_budget result;
@@ -576,9 +579,9 @@ int main(void) {
     RUN_TEST(cancel_cleanup_budget_all_kinds_valid);
 
     /* Budget deadline and consume tests */
-    RUN_TEST(budget_deadline_zero_means_unconstrained);
+    RUN_TEST(budget_infinite_deadline_is_unconstrained);
     RUN_TEST(budget_deadline_finite_boundary);
-    RUN_TEST(budget_deadline_one);
+    RUN_TEST(budget_zero_deadline_is_due_at_once);
     RUN_TEST(budget_is_past_deadline_null_safe);
     RUN_TEST(budget_consume_poll_decrement);
     RUN_TEST(budget_consume_poll_null_safe);
