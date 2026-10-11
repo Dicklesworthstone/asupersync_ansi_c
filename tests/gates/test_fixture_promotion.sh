@@ -64,7 +64,7 @@ check() {
     if [ "$rc" -eq 0 ]; then observed="exit0"; else observed="exit$rc"; fi
     if [ "$expect" = "0" ] && [ "$rc" -ne 0 ]; then status="fail"; fi
     if [ "$expect" = "nonzero" ] && [ "$rc" -eq 0 ]; then status="fail"; fi
-    if ! printf '%s\n' "$out" | grep -Eq "$pattern"; then status="fail"; fi
+    if ! grep -Eq -- "$pattern" <<<"$out"; then status="fail"; fi
     if [ "$extra" -ne 0 ]; then status="fail"; fi
     if [ "$status" = "pass" ]; then
         echo "  PASS: $name ($observed)"

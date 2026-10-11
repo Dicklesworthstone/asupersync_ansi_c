@@ -49,7 +49,7 @@ run_case() {
     status="pass"
     if [ "$expect" = "0" ] && [ "$rc" -ne 0 ]; then status="fail"; fi
     if [ "$expect" = "nonzero" ] && [ "$rc" -eq 0 ]; then status="fail"; fi
-    if ! printf '%s\n' "$out" | grep -Eq "$pattern"; then status="fail"; fi
+    if ! grep -Eq -- "$pattern" <<<"$out"; then status="fail"; fi
 
     if [ "$status" = "pass" ]; then
         echo "  PASS: $name ($observed)"
@@ -83,7 +83,7 @@ printf 'int  asx_gate_probe( void ){return 0;}\n' >"$WORK/bad/bad.c"
 printf 'int asx_gate_probe(void);\n' >"$WORK/good/good.c"
 probe="$(make --no-print-directory -C "$REPO_ROOT" format-check FORMAT_PATHS="$WORK/good" \
     FAIL_ON_MISSING_FORMATTER=0 2>&1)"
-if printf '%s\n' "$probe" | grep -q 'format-check: SKIP'; then
+if grep -q 'format-check: SKIP' <<<"$probe"; then
     if [ "$STRICT" = "1" ]; then
         echo "  FAIL: pinned clang-format unavailable under STRICT_GATES/CI"
         failures=$((failures + 1))
