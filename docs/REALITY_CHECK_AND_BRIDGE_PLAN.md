@@ -1,5 +1,337 @@
 # Reality Check and Bridge Plan: `asx` vs asupersync v0.6.0
 
+> **Current assessment:** 2026-10-11
+> **Audited C revision:** `1df1808d51ae5ca90c2fdd0c6a351e77091b9c3c` (`main`)
+> **Pinned Rust authority:** `5e60b1c4c53d62aaddae68de3ee7de4732f1755b`
+> **Verdict:** a working, substantially tested C runtime with a real Rust lab oracle;
+> the complete kernel milestone and release-readiness contract remain unmet.
+> **Reading rule:** this assessment supersedes the earlier current-state findings below.
+> Earlier dates, counts, divergences and line numbers are historical evidence, not present status.
+
+## Current assessment: what the evidence actually establishes
+
+The important change since October 8 is that the oracle now runs real code. The C interpreter
+executes scenarios against the runtime, and `twin_run` captures the corresponding pinned Rust
+`LabRuntime`. At the audited revision, all **131 captured fixtures** match their projected trace,
+snapshot, API observations and exact lab dispatch order. Fresh CI recaptures reproduce those
+fixtures. The original claims that conformance compares nothing and that CI has never passed
+are obsolete.
+
+That improvement does not establish full runtime equivalence. The oracle has an explicit
+vocabulary and a bounded scenario language. It does not observe region close outcomes,
+application-registered finalizers, every intermediate cancellation phase, arbitrary capability
+misuse or all native I/O inputs. Passing its entire corpus is meaningful evidence within that
+boundary. It cannot prove guarantees outside it.
+
+The project therefore delivers useful deterministic C execution and a working Linux native
+path, while still falling short of its strongest promises: complete lifecycle semantics,
+enforced authority at application boundaries, executed profile/codec equivalence, native
+record/replay, physical-router validation, and green performance/evidence gates. Optional
+multicore, Wasm and advanced systems protocols are separately scoped; their absence should not
+be confused with missing mandatory kernel guarantees.
+
+### Revision-bound evidence
+
+| Evidence | Observed result | What it establishes |
+|---|---|---|
+| [Primary CI run 38139207368](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38139207368) | All 30 jobs successful at `1df1808d` | Strict checks, unit/invariant/e2e lanes, GCC/Clang, MSVC CORE/WIN32, 32-bit x86, sanitizers and five QEMU ISAs actually execute |
+| Rust conformance in that run and a fresh local run | `compared=131 pass=131 fail=0 error=0` | Executed comparison of the current v2 corpus, including lab dispatch order |
+| Rust differential CI job | 200 generated scenarios pass; 100,000 canonical traces pass; all 131 fixtures recaptured | Real generated differential evidence; the canonicalizer count measures trace normalization, not 100,000 complete runtime scenarios |
+| Oracle mutants and gate negative controls in primary CI | Wrong budget priority, missing cancel strengthening, reversed dispatch and wrong obligation drop are detected; missing tools/unknown operations/empty corpora are rejected | The harness detects several deliberate semantic defects and vacuous-input failures |
+| Constants crosscheck | 94 comparable, 87 matching, 7 classified differences; 5 not applicable; 0 unclassified failures | Classified differences remain; this is not universal constant equality |
+| Local CORE validation | Strict build; 164 unit executables, 2 invariant executables, 6 C conformance executables, 12 vignettes and 13 examples all pass | Real public examples and current test suites run; executable counts are not assertion counts |
+| Local strict format/lint | clang-format 18.1.8 and cppcheck 2.22.0 pass | Missing local format tooling no longer silently counts as a pass |
+| Local `formal-check` | Six native CBMC-compatible harnesses, six algebraic suites, schema/codegen checks and litmus suite pass | Native enumeration/property checks work; CBMC itself was not invoked and the litmus run does not prove concurrent memory-model behavior |
+| Local live POSIX build and `asx doctor --json` | 14 checks pass, no warnings/failures/skips | Real loopback sockets, reactor wakeups, advancing monotonic clock, entropy and worker-thread completion work |
+| Local deterministic CORE doctor | 12 pass, 2 skip, healthy | OS socket/reactor probes are explicitly unavailable in this build; healthy is scoped to runnable checks |
+| [Performance run 38139207307](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38139207307) | Failure at the same C revision | Primary CI success does not imply the performance or release contract passes |
+
+The performance failure has three concrete causes:
+
+| CORE check | Actual | Limit | Result |
+|---|---:|---:|---|
+| `scheduler_single_task/p99_99_ns` | 19,187 ns | 15,000 ns | 4,187 ns over budget |
+| `scheduler_multi_task/p99_ns` | 11,682 ns | 10,000 ns | 1,682 ns over budget |
+| `baseline_not_stale` | 224 days, captured 2026-03-01 | 120 days | Stale |
+
+CORE reports 38/41 checks passing. Its failure causes later HFT and size/cold-start steps to be
+skipped. Those results are **unavailable**, not passing. The separately generated evidence
+dashboard reports pass with zero alerts despite the SLO failure; it must not serve as the
+release-readiness verdict. Diagnose costs and runner variance before changing budgets, and
+retain the baseline's `approval_required` governance.
+
+### Vision checklist, reconciled against current code
+
+`WORKING` means the stated narrow behavior has executed evidence. `PARTIAL` means real code
+exists but a required behavior or proof remains. `UNPROVEN` means the claimed evidence is
+insufficient. `DEFERRED` is explicit scope, not completion. These categories do not form a
+defensible project completion percentage.
+
+| Goal | Promise source | Current status and evidence | Remaining coverage |
+|---|---|---|---|
+| V1 Outcome lattice and payload-preserving joins | Plan §6.1 | PARTIAL: severity/left bias tested; public `asx_outcome` lacks reason/panic payload required for full joins | `bd-9kll.3.14`, `.12.1` |
+| V2 Budget algebra and exhaustion | Plan §6.2 | WORKING for tested meet/quota/deadline cases; current oracle detects the old priority defect as a mutant | Broader law witnesses `.2.14`, `.2.8` |
+| V3 Cancellation protocol and attribution | Plan §6.3 | PARTIAL: real reasons, cause chains and advisory cleanup are fixture-checked; ordinal/default-policy/phase coverage still differs | `.3.2`, `.3.6`, `.3.7`, `.2.18`, `.2.19` |
+| V4 Region body/close/drain/finalize | Plan §6.4 | PARTIAL: close progression works; body-driven close outcome, public finalizers and finalizer-before-leak ordering remain missing | `.3.4`, `.3.5` |
+| V5 Task lifecycle, checkpoint and masks | Plan §6.5 | PARTIAL: many current paths match Rust; intermediate Finalizing and the formal mask-monotonicity claim need explicit witnesses | `.3.2`, `.3.8`, new `.3.18`–`.3.19` |
+| V6 Obligation linearity and leak handling | Plan §6.6 | PARTIAL: real reserve/commit/abort/drop/leak captures pass; raw-ID commit lacks holder authorization and default leak policy is LOG | `.3.4`, `.3.6`, new `.3.16`–`.3.17` |
+| V7 Quiescence | Plan §6.7 | WORKING for exercised Q1–Q4 checks; complete close/termination contract is PARTIAL where unheld reservations can stall finalization | `.3.4`, `.2.14` |
+| V8 Wake-driven deterministic scheduling | README scheduler; Plan phase 5 | PARTIAL: lab lanes, seed/RNG and exact current dispatch order work; production sweep is a different scheduler | `.4.3`, `.4.4`, `.4.6`, `.4.7` |
+| V9 Trace/replay identity | Plan §6.8.3H | WORKING for deterministic scenario digests: every emitted event now updates the rolling hash, even after ring overwrite | Active `.10.1` needs evidence-based closure; native replay is V29 |
+| V10 Pinned Rust conformance | Plan §9 | WORKING for the 131-fixture vocabulary-v2 lab corpus; projection breadth is PARTIAL | `.2.6`–`.2.8`, `.3.15` |
+| V11 Differential fuzzing/minimization | Plan §10.6 | WORKING for current generated DSL comparisons and canonicalization; coverage-guided/parser/long-soak breadth is PARTIAL | `.2.10`, `bd-ij9w`, `.16.1`–`.16.3` |
+| V12 JSON/BIN semantic equivalence | Plan §7.7, §9.3 | PARTIAL: codec unit roundtrips work; the named equivalence gate compares recorded digests, and the scenario interpreter consumes JSON | `.2.9`: execute genuine binary semantic input |
+| V13 Cross-profile semantic equivalence | Plan §10.6 | PARTIAL: real cross-target and resource-pressure lanes exist; complete executed profiles × codecs × classes evidence is absent | `.2.9`, `.3.15`, `.12.1`–`.12.2` |
+| V14 Failure-atomic exhaustion | Plan §10.6 | WORKING for tested static admission/exhaustion paths; exhaustive boundary/fault-injection coverage remains PARTIAL | `.13`, `.3.15`, `.16` |
+| V15 R1/R2/R3 resource classes | README arenas; Plan §8.6 | WORKING: six principal arenas resize at build time; per-region limits reject admission atomically; other arena macros keep defaults | Inventory completeness `bd-t8if`; footprint `.13.3` |
+| V16 MPSC/oneshot/broadcast/watch/session | Plan phase 6; README channels | PARTIAL: exercised send/receive/cancel/wakeup cases pass; close/drop, broadcast extras, MPSC extras and tracked-session identity remain | `.5.4`, `.5.6`, `.5.7`, `.5.9` |
+| V17 Cooperative synchronization | README synchronization | WORKING for fixture-tested mutex/semaphore/barrier/notify behavior; unported extras remain scoped | Preserve current tests; public-item inventory `.18.3` |
+| V18 Timers/timeouts/intervals | Plan phase 5; README time | PARTIAL: many boundary cases now pass; standalone timer-wheel ordering/limits and single authority still need alignment | `.7.1`, `.7.4`, `.7.6` |
+| V19 Inline combinators | README composition | PARTIAL: inline losers are dropped, matching Rust Cx futures; retry backoff and map_reduce early error remain missing | Corrected `.3.11`, `bd-2cvl` |
+| V20 Spawned task groups | README task groups; structured concurrency contract | WORKING for captured race/join/first_ok/quorum/drain scenarios; broader law/outcome evidence remains PARTIAL | `.3.14`, `.12.1`–`.12.2`; verify old `.3.12` criteria before closure |
+| V21 Actors and supervision | README actor supervision | PARTIAL: genuine server and managed controller/generation tasks, restart windows/backoff and 3 policies are captured; registries/shared domains/system messages remain | `.8.3`, `.8.6`, `.8.7` |
+| V22 Native POSIX I/O | README native I/O | WORKING for Linux shipped sockets/reactor/DNS/files/processes/signals/HTTP/WS paths with current CI and live doctor evidence | Native replay `.11`; security `.16`; macOS backend `.17.4` |
+| V23 WIN32 profile | Plan §8.3 | WORKING for deterministic MSVC builds and clock/entropy hooks; native sockets/IOCP remain DEFERRED/PARTIAL | `.17.5` |
+| V24 Browser/Wasm | README limitations; optional plan §10.7.4 | DEFERRED: host-compiled profile gating exists; actual wasm32 execution is absent | `.15.4`, `.15.6`; not an initial kernel prerequisite by itself |
+| V25 Embedded matrix/device proof | Plan §10.6, §15 | PARTIAL: five real QEMU ISA lanes pass with Debian glibc; no verified physical OpenWrt/musl smoke artifact | `.15.6`, `.15.7`, new `.15.8`–`.15.9` |
+| V26 Compiler/ABI portability | Plan §10.6 | WORKING for the declared current GCC/Clang/MSVC, 32-bit and 64-bit CI lanes | Keep exact target/libc boundaries; this is not every OS/ABI combination |
+| V27 Tail-latency/jitter budgets | Plan §10.6 | PARTIAL / FAILING: real collection/gate; two CORE tails fail, baseline stale, HFT status skipped | `bd-o5zh`, corrected `.14.2` |
+| V28 Automotive deadline/watchdog/degraded behavior | Plan §8.8, §10.6 | PARTIAL: application-fed instruments and domain scenario tests work; runtime integration and complete evidence bundle are not established | `bd-udlh`, `.14.2`, `.18.3`, owner assurance decision |
+| V29 Crash/restart and native record/replay | Plan phase 7, §10.6 | PARTIAL: deterministic trace import/export continuity tests exist; complete native boundary journal/replay is absent | `.11.1`–`.11.4` |
+| V30 Formal assurance | Plan §10.7.3; README formal methods | PARTIAL: native harnesses pass; no actual bounded-checker/interleaving result or complete Lean/TLA crosswalk | `.2.14`, new `.2.20`; `.12` law witnesses |
+| V31 Kernel footprint/cold-start | Plan §11 | UNPROVEN against kernel-only target; CI size lane skipped and no isolated kernel target | `.13.3`, owner D6; archive measurement below is contextual only |
+| V32 Allocation discipline/static storage | Plan §7.5–§7.6 | WORKING for static kernel arenas and tested allocator seal; codec uses allocation and callers own some state | Preserve explicit ownership limits; instance isolation V40 |
+| V33 Comparable performance vs Rust | Plan optimization governance | NOT_STARTED as an executed same-host comparison; C-only benchmark numbers are available | `.14.1`, `.14.3` |
+| V34 Provenance/baseline/upstream drift | Plan §1.1, §9.5 | WORKING for current pinned capture/freshness checks; nightly comparison against upstream main is missing | `.2.11`, `.18.4` |
+| V35 Released/installed artifact verification | README installation; deployment runbook | PARTIAL: packaging/install helpers exist; release workflow is not bound to all required exact-SHA evidence; no published release observed at audit time | New `.18.5`–`.18.6` |
+| V36 Truthful documentation | AGENTS; README limitations | PARTIAL: README now states major limitations accurately; older report/spec/evidence tables and bead premises still carry historical claims | `.1.13`, `.18.2`–`.18.3`; this current assessment |
+| V37 Honest CI gates | AGENTS strict gates | WORKING for primary CI and observed negative controls; overall milestone/release readiness remains PARTIAL | `.1.12`, `.14.2`, new `.18.5`–`.18.6` |
+| V38 Advanced systems protocols | Plan waves C/D; deferred register | DEFERRED/MODEL-ONLY: TLS passthrough is plaintext; QUIC, gRPC, DB, messaging/distributed models are not interoperable production implementations | `.17.2`–`.17.7`; preserve honest labels |
+| V39 Explicit capability authority | Plan §6.8.4, §7.3; README Cx | PARTIAL: scopes check SPAWN; several carried bits and raw application operations bypass authority | Extended `.3.8`; holder tests `.3.16`–`.3.17` |
+| V40 Runtime-owned state/no implicit global runtime | Plan §7.3; architecture context rules | NOT_MET: global arenas/hooks; initializing B resets A; generation guards only protect stale wrappers | New `.3.20`–`.3.21` |
+| V41 Integrated guarantee substitutes | Plan §6.9–§6.10, §12 | PARTIAL: monitors/helpers exist; task transitions are observed rather than blocked, affinity/borrow/determinism coverage is caller-fed or incomplete | New `.3.22`–`.3.23` |
+| V42 Untrusted parser/security assurance | Plan §10.3, §12; security register | PARTIAL: sanitizer/static-analysis CI is real; parser differential harnesses, long soaks and secret-handling evidence are incomplete | `.16.1`–`.16.5` |
+| V43 Complete public-item/claim evidence inventory | Plan §9.4; parity governance | PARTIAL: semantic-unit/rule maps exist, but no complete machine-checked FeatureUniverse or weekly truth ratchet | `.18.2`–`.18.4` |
+| V44 Adaptive/vertical acceleration | Plan §6.11, §7.9, §19.3 | WORKING as caller-fed/pure instrumentation components; runtime-wide adaptation and research levers remain DEFERRED | `bd-udlh`, `.18.3`; research needs measured EV and parity evidence before promotion |
+
+The 47-row refinement map currently records **28 Implemented, 4 Variant, 14 Partial, 1 Missing**.
+It is a useful rule index, not an estimate that the product is 28/47 complete. Its commit/count
+anchors predate the current 131-fixture corpus, and some Implemented rows explicitly disclose
+important caveats. An inventory row plus a passing fixture is weaker than full precondition,
+postcondition and progress evidence.
+
+### The gaps that matter most
+
+**Lifecycle closure is still the central semantic blocker.** `src/runtime/quiescence.c` checks
+Reserved obligations before draining the region cleanup stack. Rust's close runs finalizers,
+then audits leftover obligations, then closes. The internal region cleanup stack has no public
+registration API; applications can only manage their own stack. Region slots carry no close
+outcome. Normal work can be admitted during Finalizing. These are real contract gaps outside
+what the current DSL demonstrates, already concentrated in `.3.4`/`.3.5`; their acceptance
+criteria now explicitly require public finalizers and observable close results.
+
+**Authority substitutes need to govern actual runtime operations.** Narrowing a Cx does not
+help when its timer/obligation/trace/cancel capability bits have no enforcement sites, or a raw
+API bypasses the Cx entirely. `asx_obligation_commit(id)` does not verify the caller is the
+holder. Debug transition/borrow/affinity/determinism helpers cannot substitute for Rust
+guarantees if runtime mutation paths do not use them. The new holder and integrated-guard
+tasks require real boundary tests and failure atomicity, including release configurations.
+
+**The explicit runtime object does not own independent runtime state.** `lifecycle.c` owns
+global arenas, `hooks.c` global hooks, and `asx_runtime_init` in `rt.c` resets them. A direct
+public-header consumer produced:
+
+```text
+before: a_initialized=1 regions=1
+after: a_initialized=0 b_initialized=1 regions=0 old_region_status=not found
+```
+
+The stale-generation guard is useful and documented, but it does not satisfy the architecture's
+no-implicit-global-runtime contract. New `.3.20`/`.3.21` stage this carefully: reject destructive
+second initialization atomically first, then introduce explicit owned storage and test isolation
+without weakening the freestanding/static-memory contract.
+
+**Proof breadth remains narrower than the claims.** `tools/conformance/runner.c` compares
+dispatch lists, not the full RNG/certificate/forced-replay protocol requested by `.4.8`/`.9.3`.
+Foata normalization intentionally discards some ordering. Vocabulary v2 omits intermediate task
+phase and region outcome observations. The named profile and codec gates still compare fixture
+records rather than executing the full promised matrix. The native CBMC-compatible tests call
+ordinary executables; bounded interleaving/solver evidence and conditional progress witnesses
+are distinct remaining deliverables.
+
+**Deployment evidence is incomplete even though portability evidence improved dramatically.**
+QEMU/glibc execution and MSVC builds are real, but the promoted embedded gate additionally
+requires musl/OpenWrt and a physical device. New `.15.8`/`.15.9` cover that gap without assuming
+hardware access. A local release CORE/JSON build's archive totals were 123 objects, 723,552 bytes
+text, 6,054 data and 4,730,308 bss. These are sums of all archive members, not the linked
+kernel-only image, so they neither prove nor disprove the `<64 KB` kernel target. They show why
+the build boundary and linked-image measurement must be settled in `.13.3` before claiming it.
+
+**Native replay and protocol names must keep their precise meanings.** Linux socket/reactor
+execution is real. Persisting a deterministic trace is not recording all native readiness,
+reads, accepts, signals, entropy, clocks and worker completions so a live failure can be replayed.
+That remains `.11.1`–`.11.4`. Likewise, plaintext TLS and local protocol models need explicit
+provider/model scope. They are not initial kernel parity evidence or interoperable services.
+
+### Would completing the existing backlog have finished the project?
+
+**Not as it stood at the start of this audit.** After reconciling the newer JSONL into the stale
+SQLite index, there were 770 issues: 662 closed, 106 open and 2 in progress. The open bridge
+program covered most known lifecycle, oracle, replay, parser, footprint, systems and governance
+work. It did not explicitly cover several architecture/authority guarantees or the physical
+router and exact-SHA release evidence requirements above. Some descriptions also prescribed
+obsolete work or the wrong inline-combinator contract.
+
+The reassessment adds **13 self-contained tasks**, six implementation/verification pairs plus
+one formal-evidence companion. It also corrects two existing task descriptions, adds targeted
+acceptance criteria to six tasks, records current evidence on active oracle/trace tasks, and
+connects verification tasks to milestone gates. All issue changes use `br`; no raw JSONL or
+database editing is used.
+
+| Gap newly made explicit | Implementation/contract task | Verification task |
+|---|---|---|
+| Obligation holder-bound commit/handoff | `bd-9kll.3.16` | `bd-9kll.3.17` |
+| Mask-monotonicity spec/Rust conflict | `bd-9kll.3.18` | `bd-9kll.3.19` |
+| Explicit runtime-owned state/isolation | `bd-9kll.3.20` | `bd-9kll.3.21` |
+| Integrated transition/ghost enforcement | `bd-9kll.3.22` | `bd-9kll.3.23` |
+| Actual musl/OpenWrt physical-device proof | `bd-9kll.15.8` | `bd-9kll.15.9` |
+| Exact-tagged-SHA release readiness/artifact verification | `bd-9kll.18.5` | `bd-9kll.18.6` |
+| Actual bounded-checker/progress evidence | Existing `bd-9kll.2.14`, extended | `bd-9kll.2.20` |
+
+Mask monotonicity is deliberately a contract ruling before a code change. The formal prose
+and both implementations differ; inventing a C restriction could introduce a semantic delta.
+The inline-combinator task `.3.11` now distinguishes Rust Cx dropping futures from Scope/task
+groups draining spawned losers, while retaining retry/backoff, map_reduce, resource release,
+empty-race and cancellation coverage. Performance task `.14.2` now addresses the existing red
+workflow and hidden skipped lanes rather than asking to add a workflow that already exists.
+
+The expanded backlog is sufficient as a bridge to the **declared kernel milestone**, provided
+its acceptance contracts are implemented and verified, decisions are recorded and mandatory
+hardware evidence is obtained. Closing those issue IDs without their evidence still would not
+finish the project. Full latest-upstream Rust surface parity, native multicore, Wasm and the
+unpromoted optimization research are separate scope decisions, not silently added release
+requirements. A FeatureUniverse/claim inventory remains necessary to bound future completion.
+
+### Execution order and stopping conditions
+
+1. **Preserve and finish the trustworthy oracle.** Verify the remaining original acceptance
+   criteria on `.10.1`, `.2.4`–`.2.7`, `.2.17` and `.4.2`; do not reimplement delivered code or
+   steal active assignments. Expand observations before declaring finalizers, close outcomes,
+   phase transitions or capability enforcement proven. Run the full current corpus as a
+   regression floor.
+2. **Finish kernel contracts and their actual enforcement.** Prioritize `.3.4`/`.3.5`, outcome
+   payloads `.3.14`, authority `.3.8`/`.3.16`, explicit state ownership `.3.20` and boundary guards
+   `.3.22`. Use pinned-source rulings for mask/cleanup variants and default leak policy; separate
+   resource-plane policy from semantic changes. Each correction lands with its witnesses.
+3. **Broaden evidence over the same contracts.** Execute profiles × real codecs × applicable
+   classes (`.2.9`, `.3.15`), forced schedule/certificate replay (`.4.8`, `.9.3`), metamorphic laws
+   (`.12`), actual bounded safety/progress evidence (`.2.14`, `.2.20`) and parser fuzzing (`.16`).
+   Start the hardware procedure and baseline measurements while independent implementation
+   proceeds; unavailable hardware is a pending gate, not a reason to block unrelated work.
+4. **Meet operational promises.** Complete native input record/replay and restart durability
+   (`.11`), representative linked-image footprint (`.13.3`) and governed latency/deadline gates
+   (`bd-o5zh`, `.14.2`). Keep every required lane observable even when another fails. Models and
+   optional backends retain explicit labels until their promised behavior has evidence.
+5. **Close the milestone through evidence, then validate a release candidate.** Require the
+   relevant test companions, physical-device proof, no unexplained semantic delta and exact-SHA
+   gate/artifact validation (`.18.5`/`.18.6`). Compile/run the installed consumer. Documentation
+   follows generated or cited evidence; release publication is a separate action.
+
+The owner-decision log records only the earlier DEC/PEND decisions; the bridge's D1–D7 are not
+all resolved there. Leak default, TLS provider/model scope, footprint boundary, unbounded queue
+policy and HFT/automotive assurance need concrete rulings. File deletion remains separately
+prohibited without written permission. None of those decisions is assumed by this assessment.
+No schedule estimate is justified by historical bead velocity alone.
+
+### Ambition and refinement record
+
+The skill's frozen bead-generation and refinement prompts were applied to this bridge scope.
+Three ambition passes preserved the initial kernel focus while strengthening the definition of
+delivery:
+
+- Pass 1 expanded visible end states into public lifecycle/finalizer and holder-authority
+  contracts; a projected terminal snapshot cannot hide missing application guarantees.
+- Pass 2 added runtime storage ownership and integrated enforcement; existing helper modules
+  cannot count as substitutes until their actual runtime boundaries use them.
+- Pass 3 made physical-device, baseline and exact-SHA installed-release evidence first-class
+  completion conditions, with independent result collection and negative controls.
+
+Five refinement passes followed:
+
+1. **Authority/contracts:** pinned Rust sources corrected the inline drop/drain premise and
+   identified the mask specification conflict; original functionality remained in scope.
+2. **Coverage:** cross-checked the vision and partial/missing refinement rules against open
+   tasks; extended existing lifecycle/Cx/formal/codec/inventory tasks instead of duplicating them.
+3. **Dependencies:** verification companions block M-gamma, M-epsilon or M-zeta as appropriate;
+   implementation tasks do not depend on their own tests or their enclosing milestone.
+4. **Tests/evidence:** each new task specifies public-API unit/invariant/e2e cases, boundaries,
+   error/failure atomicity, negative controls, detailed JSONL and explicit unavailable/projection
+   limits. Proof counts, skipped lanes and archive sizes cannot be promoted to stronger claims.
+5. **Final consistency:** re-read the new tasks, check all references/dependency endpoints,
+   reconcile exported state and inspect `bv` metrics. No further scope or dependency correction
+   was identified; both `bv` and `br dep cycles` report no active cycle.
+
+After export the graph contains **783 issues: 662 closed, 119 open, 2 in progress**.
+`bv` reports 52 actionable and 69 dependency-blocked nonclosed issues, with no cycle. Its
+highest-centrality oracle tasks still have stale open/in-progress premises, so raw graph rank
+must be read alongside the observed implementation. Active ownership/status was preserved.
+
+### Reproduction, audit boundaries and handoff
+
+The local commands used isolated build directories and retained their artifacts:
+
+```sh
+make -j2 build test conformance formal-check cli \
+  BUILD_DIR=build/reality-check-20261011-core STRICT_GATES=1
+make format-check lint STRICT_GATES=1
+make -j2 build cli PROFILE=POSIX DETERMINISTIC=0 LDFLAGS='-lpthread -lrt' \
+  BUILD_DIR=build/reality-check-20261011-posix
+build/reality-check-20261011-core/bin/asx doctor --json
+build/reality-check-20261011-posix/bin/asx doctor --json
+make -j2 build BUILD_TYPE=release BUILD_DIR=build/reality-check-20261011-release
+br sync --flush-only
+bv --robot-triage
+bv --robot-insights
+br dep cycles --json
+```
+
+Heavy validation was first attempted through RCH. Source-authority/slot/queue constraints
+prevented remote execution, so the runs above used limited local parallelism. No C source,
+fixture expectation or performance budget was changed during this assessment. No repository
+files were deleted, no other agent's active task was closed, and existing untracked artifacts
+were kept.
+
+Local logs are retained under `/tmp/asx-reality-20261011-*`; build outputs are in the directories
+above. Remote matrix, differential-fuzz, fixture-freshness and gate-negative-control findings
+come from the cited same-revision CI logs, not from an assertion that every matrix was rerun
+locally. No physical device, actual CBMC solver, Wasm target or native record/replay was tested.
+The native doctor is a bounded integration probe, not a comprehensive HTTP/security soak.
+The documentation citation gate and `git diff --check` pass. UBS was invoked on the changed
+Markdown/JSONL files and returned exit 3 because it supports none of those file types; no
+scanner ran, and that result is not recorded as a bug-scan pass.
+
+The audit read AGENTS.md and README.md in full, extracted the main plan's mandatory/optional
+contracts, and cross-checked semantics, refinement, parity, provenance, deferred-surface,
+assurance, deployment and owner-decision documents against the relevant code and workflows.
+It is an evidence-based project assessment, not an exhaustive proof of every code path or all
+latest-upstream public items. That stronger inventory and proof burden remains explicit work.
+
+Beads initially had a stale SQLite index. Additive reconciliation imported 27 missing issues
+and updated 52 newer records from JSONL, deleting zero issues and preserving audit history.
+The final full export contains all 783 records. A concurrent read triggered a WAL recovery
+conflict; a subsequent sequential `br dep cycles` succeeded, and `br doctor` verified integrity
+and DB/JSONL agreement. Later DB-backed writes encountered the same admission error, so an
+optional reproduction comment was not added. JSONL-only reads still verify every new issue,
+and a before/after comparison confirms zero removed IDs, zero status changes and no lost
+comments. A later JSONL-only flush was a no-op, not another 783-record DB export. Doctor also
+reports retained recovery-artifact/gitignore warnings. Repairing the external Beads engine's
+read/write admission is a tooling follow-up; no database replacement or file cleanup was
+attempted under the integrity/no-deletion rules.
+
+---
+
+## Earlier audit and accumulated bridge design (historical findings)
+
 > **Date:** 2026-10-08
 > **C port HEAD:** `c808a6e` (main)
 > **Rust reference HEAD:** `/dp/asupersync` `5e60b1c4c` (Cargo version `0.6.0`, unreleased; crates.io max is `0.5.0`)
