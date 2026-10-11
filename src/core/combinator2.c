@@ -365,12 +365,29 @@ asx_status asx_hedge_init(asx_hedge_state *state, asx_combinator_poll_fn primary
     return ASX_OK;
 }
 
+/* The caller was cancelled: both attempts are dropped, never polled again,
+ * and the hedge ends ASX_E_CANCELLED with the primary as the deterministic
+ * representative, as Rust's finish_cancelled (combinator/hedge.rs:637-658). */
+static asx_status hedge_cancelled(asx_hedge_state *state) {
+    asx_status dd = asx_deadline_disarm(&state->deadline);
+    (void)dd;
+    state->phase = ASX_HEDGE_DECIDED;
+    state->winner = 0;
+    state->result = ASX_E_CANCELLED;
+    return ASX_E_CANCELLED;
+}
+
 asx_status asx_hedge_poll(void *user_data, asx_task_id self) {
     asx_hedge_state *state = (asx_hedge_state *)user_data;
     asx_status st;
 
     if (state == NULL) return ASX_E_INVALID_ARGUMENT;
     if (state->phase == ASX_HEDGE_DECIDED) return state->result;
+
+    /* Rust's HedgeFuture::poll (combinator/hedge.rs:682-783) checks the
+     * caller's cancel first, again before it starts the backup, and again
+     * before it returns Pending: a cancel drops both attempts. */
+    if (owner_cancelled(self)) return hedge_cancelled(state);
 
     if (state->phase == ASX_HEDGE_PRIMARY_ONLY) {
         /* Arm deadline on first poll */
@@ -409,15 +426,20 @@ asx_status asx_hedge_poll(void *user_data, asx_task_id self) {
                 asx_status dd_ = asx_deadline_disarm(&state->deadline);
                 (void)dd_;
             }
+            if (owner_cancelled(self)) return hedge_cancelled(state);
             state->phase = ASX_HEDGE_RACING;
             state->backup.poll_fn = state->backup_fn;
             state->backup.user_data = state->backup_data;
+            /* The primary was polled in this poll already: the backup
+             * runs next (hedge.rs:731-765). */
+            goto poll_backup;
         } else {
             /* The hedge delay wakes the owner, as the Sleep of Rust's hedge
              * does, so the backup starts on time even while the primary is
              * parked. */
             asx_status wake_st = asx_task_arm_timer(self, asx_deadline_target(&state->deadline));
             (void)wake_st; /* no runtime task: nothing to wake */
+            if (owner_cancelled(self)) return hedge_cancelled(state);
             return ASX_E_PENDING;
         }
     }
@@ -434,6 +456,7 @@ racing:
         }
     }
 
+poll_backup:
     if (!state->backup.done) {
         st = branch_poll(&state->backup, self);
         if (st != ASX_E_PENDING) {
@@ -444,6 +467,7 @@ racing:
         }
     }
 
+    if (owner_cancelled(self)) return hedge_cancelled(state);
     return ASX_E_PENDING;
 }
 

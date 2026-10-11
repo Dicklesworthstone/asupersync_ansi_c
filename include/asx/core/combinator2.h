@@ -197,7 +197,10 @@ ASX_API uint32_t asx_rate_limit_available(const asx_rate_limit_state *state);
  * Hedge — latency hedging (speculative execution)
  *
  * Start a primary task. If it does not complete within deadline_ns,
- * launch a backup. Return whichever completes first.
+ * launch a backup. Return whichever completes first. The owner's
+ * checkpoint at each poll, before the backup starts and before returning
+ * pending ends the hedge with ASX_E_CANCELLED, both attempts dropped
+ * (Rust's HedgeFuture; the winner reads as the primary).
  *
  * Phases:
  *   PRIMARY_ONLY — polling primary, deadline not expired

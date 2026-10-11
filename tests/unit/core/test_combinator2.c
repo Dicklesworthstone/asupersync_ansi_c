@@ -611,6 +611,9 @@ TEST(hedge_backup_wins_when_primary_pending) {
     /* With 0ns deadline, should go to RACING immediately */
     ASSERT_EQ(asx_hedge_poll(&hs, 0), ASX_OK);
     ASSERT_EQ(asx_hedge_winner(&hs), 1); /* backup won */
+    /* The primary is polled once in that poll, then the backup starts, as
+     * Rust's HedgeFuture (hedge.rs:698-765); before, it was polled twice. */
+    ASSERT_EQ(hedge_primary_pending_count, 1);
 }
 
 TEST(hedge_null_fails) {
@@ -720,6 +723,41 @@ TEST(hedge_delay_wakes_a_parked_owner) {
     ASSERT_EQ(h.result, ASX_OK);
     ASSERT_EQ(asx_hedge_winner(&h.hs), 1);
     ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)5000000u);
+    asx_runtime_reset();
+}
+
+/* Cancels its own task and stays pending. */
+static asx_status hedge_primary_cancels_owner(void *user_data, asx_task_id self) {
+    asx_status st = asx_task_cancel(self, ASX_CANCEL_USER);
+    (void)user_data;
+    (void)st;
+    return ASX_E_PENDING;
+}
+
+TEST(hedge_owner_cancel_drops_both_attempts) {
+    /* Rust's HedgeFuture observes the caller's cancel before returning
+     * Pending (hedge.rs:772-775): the primary cancels the owner, so the
+     * hedge ends cancelled in that poll and the backup never starts. */
+    static hedge_task h;
+    static int backup_polls;
+    asx_runtime rt;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget;
+
+    MUST_OK(asx_runtime_init_default(&rt));
+    memset(&h, 0, sizeof(h));
+    backup_polls = 0;
+    MUST_OK(asx_hedge_init(&h.hs, hedge_primary_cancels_owner, NULL, hedge_backup_counted,
+                           &backup_polls, 5000000ULL));
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_hedge_task, &h, &t), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(h.polls, 1u);
+    ASSERT_EQ(h.result, ASX_E_CANCELLED);
+    ASSERT_EQ(asx_hedge_current_phase(&h.hs), ASX_HEDGE_DECIDED);
+    ASSERT_EQ(backup_polls, 0);
     asx_runtime_reset();
 }
 
@@ -870,6 +908,7 @@ int main(void) {
     /* Last: installs a clock hook */
     RUN_TEST(hedge_waits_for_its_delay_after_long_uptime);
     RUN_TEST(hedge_delay_wakes_a_parked_owner);
+    RUN_TEST(hedge_owner_cancel_drops_both_attempts);
 
     TEST_REPORT();
     return test_failures;
