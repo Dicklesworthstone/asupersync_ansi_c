@@ -1770,6 +1770,22 @@ test-capacity-x4:
 		CFLAGS='$(CAPACITY_X4_CFLAGS)'
 	@echo "[asx] test-capacity-x4: PASS"
 
+# test-stress — the unit suite at stress scale under ASan+UBSan
+# (bd-9kll.5.10): the capacity macros of test-capacity-x4 with room for 1024
+# tasks. The crowd tests scale with ASX_MAX_TASKS, so here 1000 producers
+# share a capacity-8 channel with ~30% cancelled, 1023 waiters line up on a
+# mutex and on a notify, and 50 parties pass a barrier 20 times.
+STRESS_CFLAGS := \
+	$(filter-out -DASX_MAX_TASKS=% -DASX_MAX_OBLIGATIONS=% -DASX_WAIT_NODE_CAPACITY=%, \
+		$(CAPACITY_X4_CFLAGS)) \
+	-DASX_MAX_TASKS=1024u -DASX_MAX_OBLIGATIONS=2048u -DASX_WAIT_NODE_CAPACITY=4096u
+.PHONY: test-stress
+test-stress:
+	@echo "[asx] test-stress: unit suite with room for 1024 tasks, under ASan+UBSan..."
+	@$(SAN_ENV) $(MAKE) --no-print-directory test-unit BUILD_DIR=build/stress \
+		CFLAGS='$(STRESS_CFLAGS) $(SAN_ASAN_FLAGS)' LDFLAGS='$(SAN_ASAN_FLAGS)'
+	@echo "[asx] test-stress: PASS"
+
 # The capacity macros: CAPACITY_X4_CFLAGS's names. The README's capacity
 # table (make capacity-table) lists exactly these, and
 # tools/ci/capacity_table.sh fails if a guarded capacity macro is missing.

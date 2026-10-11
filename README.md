@@ -597,7 +597,11 @@ not listed or bound-checked here yet. The defaults below are a CORE build's,
 without a resource class. `ASX_MAX_WORKERS` depends on the profile (1 for
 FREESTANDING and BROWSER, 4 for EMBEDDED_ROUTER, 16 for HFT and AUTOMOTIVE,
 else 64).
-`make test-capacity-x4` runs the unit suite with each of these raised 4x. The table
+`make test-capacity-x4` runs the unit suite with each of these raised 4x.
+`make test-stress` runs it under ASan+UBSan with room for 1024 tasks. The crowd tests
+scale with `ASX_MAX_TASKS`, so in that build 1000 producers share a capacity-8 channel,
+about 30% of them cancelled, and about 1000 waiters line up on a mutex and on a notify.
+The table
 is generated: `make capacity-table` prints it, and `make lint-docs` fails if
 it drifts from the headers or a new capacity macro is missing.
 

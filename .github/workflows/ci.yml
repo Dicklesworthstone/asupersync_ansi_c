@@ -900,7 +900,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [test-asan, test-asan-live, test-tsan]
+        # test-stress: ASan+UBSan with room for 1024 tasks, so the crowd
+        # tests run 1000 producers and ~1000 waiters (bd-9kll.5.10).
+        target: [test-asan, test-asan-live, test-tsan, test-stress]
     steps:
       - uses: actions/checkout@v4
 

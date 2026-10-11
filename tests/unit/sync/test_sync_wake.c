@@ -33,11 +33,12 @@ static asx_region_id g_region;
 
 /* Virtual-clock runtime (default stub hooks), fresh sync arenas, and an
  * open region. */
-static int setup(void) {
+static int setup_with_leak_response(asx_leak_response leak_response) {
     asx_runtime_config cfg;
     asx_runtime_hooks hooks;
     asx_status st;
     asx_runtime_config_init(&cfg);
+    cfg.leak_response = leak_response;
     st = asx_runtime_hooks_init(&hooks);
     if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);
     asx_rwlock_reset();
@@ -45,6 +46,10 @@ static int setup(void) {
     asx_contended_mutex_reset();
     if (st == ASX_OK) st = asx_region_open(&g_region);
     return st == ASX_OK;
+}
+
+static int setup(void) {
+    return setup_with_leak_response(ASX_LEAK_LOG); /* asx_runtime_config_init's default */
 }
 
 static uint32_t polls_used(uint32_t start, const asx_budget *b) {
@@ -160,7 +165,7 @@ static asx_status poll_sem_task(void *ud, asx_task_id self) {
     return asx_semaphore_release(s->permit);
 }
 
-static sem_task g_sem[4];
+static sem_task g_sem[8];
 
 static void reset_sem_fixtures(void) {
     memset(g_sem, 0, sizeof(g_sem));
@@ -434,6 +439,49 @@ TEST(sem_permit_held_past_task_completion_is_leaked) {
     ASSERT_EQ(asx_semaphore_release(g_sem[0].permit), ASX_OK);
     ASSERT_EQ(asx_semaphore_available(h), 1u);
     ASSERT_TRUE(sem_obligation_is(g_sem[0].obligation, t, ASX_OBLIGATION_LEAKED));
+}
+
+TEST(sem_permits_leaked_under_each_leak_policy) {
+    /* bd-9kll.5.10: a crowd of holders ends keeping their permits. Each
+     * permit's obligation is leaked once: LOG and SILENT mark it LEAKED,
+     * RECOVER aborts it (LEAK_RECOVERED). The count rises by one per
+     * permit, and the late releases return every permit. (PANIC's
+     * containment is covered by test_budget_obligation.) */
+    static const asx_leak_response policies[3] = {ASX_LEAK_LOG, ASX_LEAK_SILENT, ASX_LEAK_RECOVER};
+    asx_semaphore_handle h;
+    asx_task_id t[8];
+    asx_budget budget;
+    asx_obligation_info info;
+    uint64_t leaks_before;
+    uint32_t p;
+    uint32_t i;
+
+    for (p = 0; p < 3u; p++) {
+        ASSERT_TRUE(setup_with_leak_response(policies[p]));
+        reset_sem_fixtures();
+        leaks_before = asx_obligation_leak_count();
+        ASSERT_EQ(asx_semaphore_create(8, &h), ASX_OK);
+        for (i = 0; i < 8u; i++) {
+            g_sem[i].sem = h;
+            g_sem[i].use_cx = 1;
+            g_sem[i].keep = 1;
+            ASSERT_EQ(asx_task_spawn(g_region, poll_sem_task, &g_sem[i], &t[i]), ASX_OK);
+        }
+        budget = asx_budget_from_polls(100);
+        ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+        ASSERT_EQ(asx_obligation_leak_count(), leaks_before + 8u);
+        for (i = 0; i < 8u; i++) {
+            ASSERT_EQ(asx_obligation_get_info(g_sem[i].obligation, &info), ASX_OK);
+            if (policies[p] == ASX_LEAK_RECOVER) {
+                ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
+                ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_LEAK_RECOVERED);
+            } else {
+                ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
+            }
+            ASSERT_EQ(asx_semaphore_release(g_sem[i].permit), ASX_OK);
+        }
+        ASSERT_EQ(asx_semaphore_available(h), 8u);
+    }
 }
 
 TEST(untracked_permits_hold_no_obligation) {
@@ -784,6 +832,66 @@ TEST(barrier_with_every_task_as_a_party_trips) {
     ASSERT_EQ(g_flood_barrier[FLOOD_TASKS - 1u].leader, 1);
 }
 
+/* Up to 50 parties pass a barrier 20 times (bd-9kll.5.10). */
+#define ROUND_PARTIES (FLOOD_TASKS < 50u ? FLOOD_TASKS : 50u)
+#define ROUNDS 20u
+
+typedef struct {
+    asx_barrier_handle barrier;
+    asx_barrier_waiter waiter;
+    int waiting;
+    uint32_t rounds;
+} round_barrier_task;
+
+static round_barrier_task g_round_barrier[50];
+static uint32_t g_round_leaders[ROUNDS];
+static uint32_t g_round_passed[ROUNDS];
+
+static asx_status poll_round_barrier_task(void *ud, asx_task_id self) {
+    round_barrier_task *s = (round_barrier_task *)ud;
+    asx_status st;
+    (void)self;
+    while (s->rounds < ROUNDS) {
+        if (!s->waiting) {
+            st = asx_barrier_wait_begin(s->barrier, &s->waiter);
+            if (st != ASX_OK) return st;
+            s->waiting = 1;
+        }
+        st = asx_barrier_poll_wait(&s->waiter, NULL);
+        if (st != ASX_OK) return st;
+        if (s->waiter.is_leader) g_round_leaders[s->rounds]++;
+        g_round_passed[s->rounds]++;
+        s->waiting = 0;
+        s->rounds++;
+    }
+    return ASX_OK;
+}
+
+TEST(barrier_rounds_trip_once_with_one_leader_each) {
+    asx_barrier_handle b;
+    asx_task_id t;
+    asx_budget budget;
+    uint32_t i;
+
+    ASSERT_TRUE(setup());
+    memset(g_round_barrier, 0, sizeof(g_round_barrier));
+    memset(g_round_leaders, 0, sizeof(g_round_leaders));
+    memset(g_round_passed, 0, sizeof(g_round_passed));
+    ASSERT_EQ(asx_barrier_create(ROUND_PARTIES, &b), ASX_OK);
+    for (i = 0; i < ROUND_PARTIES; i++) {
+        g_round_barrier[i].barrier = b;
+        ASSERT_EQ(asx_task_spawn(g_region, poll_round_barrier_task, &g_round_barrier[i], &t),
+                  ASX_OK);
+    }
+    budget = asx_budget_from_polls(4u * ROUND_PARTIES * ROUNDS);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+    for (i = 0; i < ROUNDS; i++) {
+        ASSERT_EQ(g_round_leaders[i], 1u);
+        ASSERT_EQ(g_round_passed[i], ROUND_PARTIES);
+    }
+    for (i = 0; i < ROUND_PARTIES; i++) { ASSERT_EQ(g_round_barrier[i].rounds, ROUNDS); }
+}
+
 typedef struct {
     asx_contended_mutex_handle mutex;
     asx_mutex_lock_waiter waiter;
@@ -948,6 +1056,70 @@ static asx_status poll_notify_task(void *ud, asx_task_id self) {
     if (st != ASX_OK) return st;
     s->notified = 1;
     return ASX_OK;
+}
+
+typedef struct {
+    asx_notify_handle h;
+    asx_notify_waiter w;
+    int begun;
+    uint32_t woken_as; /* 1-based position among the woken, 0 = not woken */
+} notify_order_task;
+
+static notify_order_task g_notify_crowd[ASX_MAX_TASKS];
+static uint32_t g_notify_woken;
+
+static asx_status poll_notify_order_task(void *ud, asx_task_id self) {
+    notify_order_task *s = (notify_order_task *)ud;
+    asx_status st;
+    (void)self;
+    if (!s->begun) {
+        st = asx_notify_wait_begin(s->h, &s->w);
+        if (st != ASX_OK) return st;
+        s->begun = 1;
+    }
+    st = asx_notify_poll_wait(&s->w, NULL);
+    if (st != ASX_OK) return st;
+    s->woken_as = ++g_notify_woken;
+    return ASX_OK;
+}
+
+TEST(notify_storms_lose_no_wakeup) {
+    /* bd-9kll.5.10. A notification before the wait is stored: 1000 rounds
+     * of notify_one then wait complete at once. A crowd of waiters that
+     * all parked first is woken by as many notify_one calls, each exactly
+     * once and in arrival order, and one more call is stored. */
+    asx_notify_handle h;
+    asx_notify_waiter w;
+    asx_task_id t;
+    asx_budget budget;
+    uint32_t i;
+
+    ASSERT_TRUE(setup());
+    ASSERT_EQ(asx_notify_create(&h), ASX_OK);
+    for (i = 0; i < 1000u; i++) {
+        ASSERT_EQ(asx_notify_one(h), ASX_OK);
+        ASSERT_EQ(asx_notify_wait_begin(h, &w), ASX_OK);
+        ASSERT_EQ(asx_notify_poll_wait(&w, NULL), ASX_OK);
+    }
+    ASSERT_EQ(asx_notify_stored_count(h), 0u);
+
+    memset(g_notify_crowd, 0, sizeof(g_notify_crowd));
+    g_notify_woken = 0;
+    for (i = 0; i < FLOOD_TASKS; i++) {
+        g_notify_crowd[i].h = h;
+        ASSERT_EQ(asx_task_spawn(g_region, poll_notify_order_task, &g_notify_crowd[i], &t), ASX_OK);
+    }
+    budget = asx_budget_from_polls(4u * FLOOD_TASKS);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK); /* all parked */
+    ASSERT_EQ(asx_notify_waiter_count(h), FLOOD_TASKS);
+    for (i = 0; i < FLOOD_TASKS; i++) { ASSERT_EQ(asx_notify_one(h), ASX_OK); }
+    budget = asx_budget_from_polls(4u * FLOOD_TASKS);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+    for (i = 0; i < FLOOD_TASKS; i++) { ASSERT_EQ(g_notify_crowd[i].woken_as, i + 1u); }
+    ASSERT_EQ(asx_notify_stored_count(h), 0u);
+    ASSERT_EQ(asx_notify_one(h), ASX_OK);
+    ASSERT_EQ(asx_notify_stored_count(h), 1u);
+    ASSERT_EQ(asx_notify_close(h), ASX_OK);
 }
 
 TEST(notify_one_wakes_oldest_and_passes_on_when_abandoned) {
@@ -1460,14 +1632,17 @@ int main(void) {
     RUN_TEST(sem_waiter_of_dead_task_is_reclaimed);
     RUN_TEST(sem_permit_polled_with_cx_is_an_obligation_until_release);
     RUN_TEST(sem_permit_held_past_task_completion_is_leaked);
+    RUN_TEST(sem_permits_leaked_under_each_leak_policy);
     RUN_TEST(untracked_permits_hold_no_obligation);
     RUN_TEST(mutex_handoff_between_three_tasks);
     RUN_TEST(mutex_handoff_is_deterministic);
     RUN_TEST(mutex_flood_serves_every_waiter_in_arrival_order);
     RUN_TEST(mutex_unlock_hands_the_lock_to_a_cancel_pending_front_waiter);
     RUN_TEST(barrier_with_every_task_as_a_party_trips);
+    RUN_TEST(barrier_rounds_trip_once_with_one_leader_each);
     RUN_TEST(contended_mutex_counts_one_contention_per_park);
     RUN_TEST(close_wakes_all_sync_waiters);
+    RUN_TEST(notify_storms_lose_no_wakeup);
     RUN_TEST(notify_one_wakes_oldest_and_passes_on_when_abandoned);
     RUN_TEST(rwlock_serves_the_line_in_arrival_order);
     RUN_TEST(rwlock_unlock_hands_the_lock_to_a_cancel_pending_front_writer);

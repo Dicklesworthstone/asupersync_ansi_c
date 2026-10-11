@@ -72,7 +72,7 @@ typedef struct {
     uint32_t polls;
     uint32_t want; /* messages to receive before completing */
     uint32_t got;
-    uint64_t values[64];
+    uint64_t values[1024];
     asx_status last; /* terminal status if not OK */
 } recv_state;
 
@@ -175,8 +175,13 @@ static asx_status poll_sender(void *ud, asx_task_id self) {
     return ASX_OK;
 }
 
+/* A crowd of producers as large as the task arena allows, up to 1000
+ * (make test-stress builds the suite with room for 1000; bd-9kll.5.10). */
+#define CROWD_MAX 1000u
+#define CROWD ((uint32_t)ASX_MAX_TASKS - 2u < CROWD_MAX ? (uint32_t)ASX_MAX_TASKS - 2u : CROWD_MAX)
+
 static recv_state g_rx[4];
-static send_state g_tx[40];
+static send_state g_tx[CROWD_MAX];
 
 static void reset_fixtures(void) {
     memset(g_rx, 0, sizeof(g_rx));
@@ -597,6 +602,71 @@ TEST(cancel_storm_on_full_channel_keeps_fifo_progress) {
     ASSERT_EQ(k, 0u);
 }
 
+TEST(crowd_on_a_small_channel_with_a_third_cancelled_keeps_fifo) {
+    /* A crowd of producers on a capacity-8 channel: eight send at once,
+     * the rest park in arrival order. About 30% of the parked ones are
+     * cancelled (a fixed pseudo-random pick); each leaves the line on its
+     * own, the others send in arrival order, nothing stalls and every
+     * permit is committed (bd-9kll.5.10). */
+    asx_channel_id ch;
+    static asx_task_id t[CROWD_MAX];
+    static uint8_t cancelled[CROWD_MAX];
+    asx_task_id rx;
+    asx_budget budget;
+    uint64_t lcg = 0x5DEECE66Du;
+    uint64_t leaks_before;
+    uint32_t survivors = 0;
+    uint32_t i;
+    uint32_t k = 0;
+
+    ASSERT_TRUE(setup());
+    reset_fixtures();
+    memset(cancelled, 0, sizeof(cancelled));
+    leaks_before = asx_obligation_leak_count();
+    ASSERT_EQ(asx_channel_create(g_region, 8, &ch), ASX_OK);
+    for (i = 0; i < CROWD; i++) {
+        g_tx[i].ch = ch;
+        g_tx[i].to_send = 1;
+        g_tx[i].base = i;
+        g_tx[i].use_cx = 1;
+        ASSERT_EQ(asx_task_spawn(g_region, poll_sender, &g_tx[i], &t[i]), ASX_OK);
+    }
+    budget = asx_budget_from_polls(4u * CROWD);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK); /* the rest parked */
+
+    for (i = 8; i < CROWD; i++) {
+        lcg = lcg * 6364136223846793005u + 1442695040888963407u;
+        if ((lcg >> 33) % 10u < 3u) {
+            ASSERT_EQ(asx_task_cancel(t[i], ASX_CANCEL_USER), ASX_OK);
+            cancelled[i] = 1;
+        } else {
+            survivors++;
+        }
+    }
+    g_rx[0].ch = ch;
+    g_rx[0].want = (CROWD < 8u ? CROWD : 8u) + survivors;
+    ASSERT_EQ(asx_task_spawn(g_region, poll_receiver, &g_rx[0], &rx), ASX_OK);
+    budget = asx_budget_from_polls(8u * CROWD);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+
+    ASSERT_EQ(g_rx[0].got, g_rx[0].want);
+    for (i = 0; i < CROWD; i++) {
+        if (cancelled[i]) {
+            ASSERT_EQ(g_tx[i].sent, 0u);
+            ASSERT_EQ(g_tx[i].last, ASX_E_CANCELLED);
+            ASSERT_TRUE(task_cancelled(t[i]));
+        } else {
+            ASSERT_EQ(g_tx[i].sent, 1u);
+            ASSERT_EQ(g_rx[0].values[k], (uint64_t)i); /* arrival order */
+            k++;
+        }
+    }
+    ASSERT_EQ(k, g_rx[0].got);
+    ASSERT_EQ(asx_channel_queue_len(ch, &k), ASX_OK);
+    ASSERT_EQ(k, 0u);
+    ASSERT_EQ(asx_obligation_leak_count(), leaks_before);
+}
+
 TEST(cancel_pending_front_producer_keeps_its_place) {
     /* A producer whose task has a cancel request keeps its place at the
      * front of the reserve line until its next poll, as a Rust waiter stays
@@ -930,6 +1000,53 @@ TEST(watch_publish_wakes_receivers) {
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
     for (i = 0; i < 2u; i++) {
         ASSERT_EQ(r[i].polls, 3u);
+        ASSERT_EQ(r[i].result, ASX_E_DISCONNECTED);
+    }
+}
+
+TEST(watch_receivers_see_each_burst_once_and_no_phantom_change) {
+    /* Every receiver a watch allows waits for changes; each of 20 bursts
+     * of sends is one change per receiver, carrying the burst's last value,
+     * and a run with no send polls nobody (bd-9kll.5.10). */
+    asx_watch_sender tx;
+    watch_rx_state r[ASX_WATCH_MAX_RECEIVERS];
+    asx_task_id t;
+    asx_budget budget;
+    uint32_t burst;
+    uint32_t i;
+
+    ASSERT_TRUE(setup());
+    memset(r, 0, sizeof(r));
+    ASSERT_EQ(asx_watch_create(0u, &tx, &r[0].rx), ASX_OK);
+    for (i = 1; i < ASX_WATCH_MAX_RECEIVERS; i++) {
+        ASSERT_EQ(asx_watch_subscribe(&tx, &r[i].rx), ASX_OK);
+    }
+    for (i = 0; i < ASX_WATCH_MAX_RECEIVERS; i++) {
+        ASSERT_EQ(asx_task_spawn(g_region, poll_watch_rx, &r[i], &t), ASX_OK);
+    }
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
+
+    for (burst = 1; burst <= 20u; burst++) {
+        ASSERT_EQ(asx_watch_send(&tx, 10u * burst), ASX_OK);
+        ASSERT_EQ(asx_watch_send(&tx, 10u * burst + 1u), ASX_OK);
+        budget = asx_budget_from_polls(100);
+        ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
+        ASSERT_EQ(polls_used(100, &budget), (uint32_t)ASX_WATCH_MAX_RECEIVERS);
+        for (i = 0; i < ASX_WATCH_MAX_RECEIVERS; i++) {
+            ASSERT_EQ(r[i].changes, burst);
+            ASSERT_EQ(r[i].value, (uint64_t)(10u * burst + 1u));
+        }
+        /* No send, no change: nobody is polled. */
+        budget = asx_budget_from_polls(100);
+        ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
+        ASSERT_EQ(polls_used(100, &budget), 0u);
+    }
+    asx_watch_sender_drop(&tx);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+    for (i = 0; i < ASX_WATCH_MAX_RECEIVERS; i++) {
+        ASSERT_EQ(r[i].changes, 20u);
         ASSERT_EQ(r[i].result, ASX_E_DISCONNECTED);
     }
 }
@@ -1312,6 +1429,7 @@ int main(void) {
     RUN_TEST_IF(MANY_PRODUCERS + 1 <= ASX_MAX_TASKS,
                 cancel_storm_on_full_channel_keeps_fifo_progress,
                 "the task arena holds fewer tasks than the producers");
+    RUN_TEST(crowd_on_a_small_channel_with_a_third_cancelled_keeps_fifo);
     RUN_TEST(cancel_pending_front_producer_keeps_its_place);
     RUN_TEST(masked_producer_is_not_cancelled_until_unmask);
     RUN_TEST(try_ops_outside_scheduler_never_park);
@@ -1319,6 +1437,7 @@ int main(void) {
     RUN_TEST(oneshot_receiver_parks_until_send_or_drop);
     RUN_TEST(broadcast_send_wakes_every_receiver);
     RUN_TEST(watch_publish_wakes_receivers);
+    RUN_TEST(watch_receivers_see_each_burst_once_and_no_phantom_change);
     RUN_TEST(watch_poll_changed_outside_scheduler);
     RUN_TEST(session_directions_wake_each_other);
     RUN_TEST(session_drop_wakes_receiver);
