@@ -982,6 +982,17 @@ fn exec_sync(
                 return Ok(Flow::Return(Body::Ok));
             }
         }
+        "is_cancel_requested" => {
+            let requested = cx.is_cancel_requested();
+            observe(
+                &ctx.shared,
+                me,
+                idx,
+                label,
+                "ASX_OK",
+                Value::Bool(requested),
+            );
+        }
         "trace" => {
             cx.trace(str_field(step, "message")?);
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);

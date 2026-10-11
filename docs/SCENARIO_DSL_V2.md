@@ -185,6 +185,7 @@ observes `ASX_E_NOT_FOUND`: the abort consumed the token.
 |---|---|---|---|---|---|
 | `yield` | — | `runtime::yield_now().await` (`runtime/yield_now.rs:36`) | return `ASX_E_PENDING` with the task left runnable | once | ignored |
 | `checkpoint` | `on_cancel`: `"return"` (default) or `"continue"` | `cx.checkpoint()` (`cx.rs:2749`) | `asx_checkpoint(self, &cr)` | no | Acknowledges the cancel and returns `ASX_E_CANCELLED`. With `"return"` the program ends; with `"continue"` it goes on. A masked task gets `ASX_OK`. |
+| `is_cancel_requested` | — | `cx.is_cancel_requested()` (`cx.rs:2641`) | `asx_cx_is_cancelled(&cx)` with the task's Cx | no | Observes `ASX_OK` with `value` `true` once a cancel was requested of the task, a budget cancel a checkpoint raised included, masked or not; acknowledges nothing. |
 | `sleep` | `ns` | `time::sleep(cx.now(), Duration::from_nanos(ns)).await` (`time/sleep.rs:1182`) | `asx_task_wait_until(self, now + ns)` | until virtual time ≥ now+ns | If the kind is neither `Timeout` nor `Deadline` and the task is unmasked, the step checkpoints (acknowledging) and completes early with `ASX_OK`. If it is first polled after the cancel, it takes one extra scheduler trip (`sleep.rs:789-812`). Otherwise it keeps sleeping. |
 | `sleep_until` | `at_ns` | `time::sleep_until(Time::from_nanos(at_ns)).await` (`sleep.rs:1203`) | `asx_task_wait_until(self, at_ns)` | until virtual time ≥ at_ns | as `sleep` |
 | `trace` | `message` | `cx.trace(message)` (`cx.rs:3362`) | `asx_trace_user(self, message)`: vocabulary `user.trace` | no | ignored |

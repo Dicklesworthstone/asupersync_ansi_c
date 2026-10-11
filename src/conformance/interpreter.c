@@ -2170,6 +2170,14 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         observe_status(t, idx, label, ASX_OK);
         return STEP_NEXT;
     }
+    if (strcmp(op, "is_cancel_requested") == 0) {
+        /* cx.is_cancel_requested() (cx.rs:2641): the task's Cx, read only. */
+        asx_cx cx;
+        (void)asx_cx_init(&cx, t->region, self, ASX_CAP_CANCEL_CHECK);
+        observe(t, idx, label, status_node(ASX_OK),
+                asx_json_new_bool(g_out, asx_cx_is_cancelled(&cx) ? 1 : 0));
+        return STEP_NEXT;
+    }
     if (strcmp(op, "trace") == 0) {
         const char *message = it_str(step, "message");
         if (message == NULL) {

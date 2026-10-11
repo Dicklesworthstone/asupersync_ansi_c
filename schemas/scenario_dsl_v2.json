@@ -110,7 +110,8 @@
     ]},
     "program": {"type": "array", "items": {"$ref": "#/$defs/step"}},
     "nonblocking_step": {"oneOf": [
-      {"$ref": "#/$defs/s_checkpoint"}, {"$ref": "#/$defs/s_trace"}, {"$ref": "#/$defs/s_reserve"},
+      {"$ref": "#/$defs/s_checkpoint"}, {"$ref": "#/$defs/s_is_cancel_requested"},
+      {"$ref": "#/$defs/s_trace"}, {"$ref": "#/$defs/s_reserve"},
       {"$ref": "#/$defs/s_obligation_ref"}, {"$ref": "#/$defs/s_abort"}, {"$ref": "#/$defs/s_try_join"},
       {"$ref": "#/$defs/s_abort_task"}, {"$ref": "#/$defs/s_spawn"}, {"$ref": "#/$defs/s_permit_send"},
       {"$ref": "#/$defs/s_permit_ref"}, {"$ref": "#/$defs/s_chan_value_nb"}, {"$ref": "#/$defs/s_chan_ref_nb"},
@@ -130,6 +131,8 @@
     "s_bare": {"type": "object", "required": ["op"], "additionalProperties": false, "properties": {"op": {"const": "yield"}}},
     "s_checkpoint": {"type": "object", "required": ["op"], "additionalProperties": false,
       "properties": {"op": {"const": "checkpoint"}, "on_cancel": {"enum": ["return", "continue"]}}},
+    "s_is_cancel_requested": {"type": "object", "required": ["op"], "additionalProperties": false,
+      "properties": {"op": {"const": "is_cancel_requested"}}},
     "s_sleep": {"type": "object", "required": ["op", "ns"], "additionalProperties": false,
       "properties": {"op": {"const": "sleep"}, "ns": {"$ref": "#/$defs/u64"}}},
     "s_sleep_until": {"type": "object", "required": ["op", "at_ns"], "additionalProperties": false,

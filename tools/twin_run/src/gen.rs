@@ -264,8 +264,13 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
             }
             14 => {
                 held.messages += 1;
+                // A mask hides a cancel from the checkpoint, not from
+                // is_cancel_requested; the checkpoint may raise a budget
+                // cancel the second look sees.
                 return json!({"op": "masked", "steps": [
+                    {"op": "is_cancel_requested"},
                     {"op": "checkpoint", "on_cancel": "continue"},
+                    {"op": "is_cancel_requested"},
                     {"op": "trace", "message": format!("{me}:m{}", held.messages)},
                 ]});
             }

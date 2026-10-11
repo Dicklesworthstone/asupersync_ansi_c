@@ -122,7 +122,7 @@ Neither is infallible: both run `try_send_deferred_wake` (`mpsc.rs:1588-1629`), 
 
 **Rust source:** `mpsc.rs:1565-1570` (`send`), `mpsc.rs:1574-1578` (`try_send`)
 
-**C status:** implemented. `asx_send_permit_send` (`src/channel/mpsc.c:691-746`) consumes the permit token (forged or stale permits are rejected), returns `ASX_E_DISCONNECTED` and aborts the obligation with `ASX_OBLIGATION_ABORT_ERROR` when the receiver is closed (`:715-721`), else enqueues (`:737-739`), commits the obligation (`:742`) and settles waiters (`:743`). C has no `Sender::try_send`; the conformance interpreter runs `try_send` as `asx_channel_try_reserve` plus `asx_send_permit_send` (`src/conformance/interpreter.c:2381-2394`).
+**C status:** implemented. `asx_send_permit_send` (`src/channel/mpsc.c:691-746`) consumes the permit token (forged or stale permits are rejected), returns `ASX_E_DISCONNECTED` and aborts the obligation with `ASX_OBLIGATION_ABORT_ERROR` when the receiver is closed (`:715-721`), else enqueues (`:737-739`), commits the obligation (`:742`) and settles waiters (`:743`). C has no `Sender::try_send`; the conformance interpreter runs `try_send` as `asx_channel_try_reserve` plus `asx_send_permit_send` (`src/conformance/interpreter.c:2389-2402`).
 
 #### Phase 2b: Abort (Rollback)
 
@@ -199,7 +199,7 @@ try_recv() -> Result<T, RecvError>
 
 **Cancel safety:** the checkpoint runs before the pop, so a cancelled receive does not consume a message.
 
-**C status:** implemented. `asx_channel_recv` (`src/channel/mpsc.c:938-946`) checks cancellation first, then `channel_recv_impl` (`mpsc.c:739-806`): dequeue in FIFO order (`:748-764`), receiver closed -> `ASX_E_DISCONNECTED` (`:767-770`), sender closed with no outstanding permit -> `ASX_E_DISCONNECTED` (`:772-797`), else park and return `ASX_E_PENDING` (`:801-804`, `:889`). `asx_channel_try_recv` (`mpsc.c:808-810`) returns `ASX_E_WOULD_BLOCK` when empty; the conformance interpreter reports that as `ASX_E_CHANNEL_EMPTY` (`src/conformance/interpreter.c:2407`). Rust parity: `mpsc-recv-cancel-first-001` (a pending recv cancelled by the driver returns `ASX_E_CANCELLED`), `mpsc-try-ops-001` (`try_recv` on an empty channel, then `ASX_E_DISCONNECTED` after the sender closes and the queue drains).
+**C status:** implemented. `asx_channel_recv` (`src/channel/mpsc.c:938-946`) checks cancellation first, then `channel_recv_impl` (`mpsc.c:739-806`): dequeue in FIFO order (`:748-764`), receiver closed -> `ASX_E_DISCONNECTED` (`:767-770`), sender closed with no outstanding permit -> `ASX_E_DISCONNECTED` (`:772-797`), else park and return `ASX_E_PENDING` (`:801-804`, `:889`). `asx_channel_try_recv` (`mpsc.c:808-810`) returns `ASX_E_WOULD_BLOCK` when empty; the conformance interpreter reports that as `ASX_E_CHANNEL_EMPTY` (`src/conformance/interpreter.c:2415`). Rust parity: `mpsc-recv-cancel-first-001` (a pending recv cancelled by the driver returns `ASX_E_CANCELLED`), `mpsc-try-ops-001` (`try_recv` on an empty channel, then `ASX_E_DISCONNECTED` after the sender closes and the queue drains).
 
 ### 1.7 Error Taxonomy
 
