@@ -78,6 +78,7 @@ const char *asx_subsystem_name(asx_subsystem_id id) {
 /* ------------------------------------------------------------------ */
 
 void asx_perf_snapshot_build(asx_perf_snapshot *snap) {
+    uint64_t emitted;
     uint32_t count;
     uint32_t i;
 
@@ -99,7 +100,12 @@ void asx_perf_snapshot_build(asx_perf_snapshot *snap) {
         }
     }
 
-    snap->total_events = count;
+    /* The ring keeps only the latest events: the subsystem counters cover
+     * that window, while the emitted total and the rolling digest cover
+     * the whole trace. */
+    emitted = asx_trace_emitted_total();
+    snap->total_events = emitted > (uint64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)emitted;
+    snap->window_events = count;
     snap->trace_digest = asx_trace_digest();
 }
 

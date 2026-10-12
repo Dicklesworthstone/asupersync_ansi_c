@@ -1472,7 +1472,7 @@ The telemetry digest (FNV-1a mixing, `asx_telemetry_digest()`) is updated regard
 
 ## Regression Localization
 
-When a trace digest changes between versions, `asx_regression_localize()` points at the subsystem that diverged. It partitions events by subsystem (scheduler, lifecycle, obligation, channel, timer; other kinds count as unknown), counts events and sums auxiliary data per partition, then compares a baseline snapshot with the current one. The result is an `asx_regression_report`: whether it regressed, the first divergent trace event, and up to `ASX_MAX_SUSPECTS` suspects, each with an event delta, an aux delta and a 0-100 blame score. For example, a report might read:
+When a trace digest changes between versions, `asx_regression_localize()` points at the subsystem that diverged. It partitions the trace ring's retained events by subsystem (scheduler, lifecycle, obligation, channel, timer; other kinds count as unknown), counts events and sums auxiliary data per partition, then compares a baseline snapshot with the current one. A snapshot also records the exact number of events emitted and the rolling trace digest, which cover the whole trace; the per-subsystem figures cover only the ring's most recent `ASX_TRACE_CAPACITY` events (`window_events`), so a divergence that happened before the window shows as a digest change with no blame split. The result is an `asx_regression_report`: whether it regressed, the first divergent trace event, and up to `ASX_MAX_SUSPECTS` suspects, each with an event delta, an aux delta and a 0-100 blame score. For example, a report might read:
 
 ```
 regressed: 1
@@ -1488,7 +1488,7 @@ The hindsight ring buffer (256 entries) records the runtime's nondeterministic i
 
 When a replay diverges from the expected path, the hindsight log shows where nondeterminism entered. `asx_hindsight_check_divergence()` compares the log's digest with an expected one; flush the log (`asx_hindsight_flush_json()`) and compare it with the baseline run's to read something like "at trace sequence 847 the entropy draw returned 0x1f3a, where the baseline shows 0x7c2b."
 
-The log has its own digest (FNV-1a mixing from the asx digest seed) for that comparison.
+The log has its own digest (FNV-1a mixing from the asx digest seed) for that comparison. Like the trace digest it is rolling: each entry is folded in when it is logged, so the digest covers every entry since the last reset, including those the 256-entry ring has already overwritten.
 
 ## Per-Profile Overload Policies
 

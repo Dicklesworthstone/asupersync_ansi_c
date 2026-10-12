@@ -168,7 +168,12 @@ ASX_API const char *asx_trace_schema_compat_str(asx_trace_schema_compat compat);
  * resets it with asx_trace_reset().
  * ------------------------------------------------------------------- */
 
-/* Emit a trace event. Thread-safe: none (single-threaded runtime). */
+/* Emit a trace event: it takes the next sequence, is folded into the
+ * rolling digest and the per-kind totals, and overwrites the oldest
+ * ring slot once the ring is full. Live builds serialise emitters with a
+ * lock (channel producers and the blocking pool emit too); a
+ * single-thread build has a single writer and no lock. The readers below
+ * take no lock: use them once emitting threads are quiet. */
 ASX_API void asx_trace_emit(asx_trace_event_kind kind, uint64_t entity_id, uint64_t aux);
 
 /* Emit an ASX_TRACE_USER event for `task` carrying `message` (Rust

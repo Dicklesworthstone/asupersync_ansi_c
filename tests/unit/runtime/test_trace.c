@@ -1068,6 +1068,141 @@ TEST(trace_import_rejects_inconsistent_truncation) {
     g_long_trace_buf[13] = 0u;
 }
 
+/* RB1 at scale: 100k events, far past the ring. Identical runs digest
+ * identically; a change at event 5000 (long dropped from the ring), at the
+ * last event, or between neighbours changes the digest. */
+TEST(trace_digest_100k_events_stable_and_perturbation_sensitive) {
+    const uint32_t cap = (uint32_t)ASX_TRACE_CAPACITY;
+    const uint32_t total = 100000u > cap * 4u ? 100000u : cap * 4u;
+    uint64_t base = trace_digest_of_run(total, UINT32_MAX);
+
+    ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)total);
+    ASSERT_EQ(asx_trace_event_count(), cap);
+    ASSERT_EQ(asx_trace_dropped(), (uint64_t)total - (uint64_t)cap);
+
+    ASSERT_EQ(trace_digest_of_run(total, UINT32_MAX), base);
+    ASSERT_TRUE(trace_digest_of_run(total, 5000u) != base);
+    ASSERT_TRUE(trace_digest_of_run(total, total - 1u) != base);
+    ASSERT_TRUE(trace_digest_of_run(total, 5000u) != trace_digest_of_run(total, 5001u));
+}
+
+/* RB1 end to end: a real scheduler swarm (regions of tasks, each leaving a
+ * user trace message) that overflows the ring several times over. The
+ * perturbation is a different message from one task wave; the digest and
+ * the replay verdict must see it wherever it lands, including in waves
+ * whose events the ring no longer holds. */
+static const char *g_swarm_message = "swarm-a";
+
+static asx_status poll_swarm_task(void *data, asx_task_id self) {
+    (void)data;
+    asx_trace_user(self, g_swarm_message);
+    return ASX_OK;
+}
+
+static asx_status swarm_wave(void) {
+    enum { tasks_per_wave = 4 }; /* fits the smallest resource class (16 tasks) */
+    asx_region_id rid;
+    asx_budget budget;
+    asx_task_id tid;
+    asx_status st;
+    uint32_t i;
+
+    st = asx_region_open(&rid);
+    if (st != ASX_OK) return st;
+    for (i = 0; i < (uint32_t)tasks_per_wave; i++) {
+        st = asx_task_spawn(rid, poll_swarm_task, NULL, &tid);
+        if (st != ASX_OK) return st;
+    }
+    budget = asx_budget_infinite();
+    st = asx_scheduler_run(rid, &budget);
+    if (st != ASX_OK) return st;
+    budget = asx_budget_infinite();
+    return asx_region_drain(rid, &budget);
+}
+
+/* Run `waves` waves from a fresh runtime; wave `perturb_wave` (if it is
+ * below `waves`) leaves a different message. */
+static asx_status swarm_run(uint32_t waves, uint32_t perturb_wave, uint64_t *digest_out) {
+    uint32_t w;
+    asx_status st;
+
+    asx_runtime_reset();
+    asx_ghost_reset();
+    asx_trace_reset();
+    for (w = 0; w < waves; w++) {
+        g_swarm_message = (w == perturb_wave) ? "swarm-late-b" : "swarm-a";
+        st = swarm_wave();
+        if (st != ASX_OK) return st;
+    }
+    g_swarm_message = "swarm-a";
+    *digest_out = asx_trace_digest();
+    return ASX_OK;
+}
+
+TEST(trace_runtime_swarm_digest_and_replay_see_perturbation_beyond_ring) {
+    uint64_t base = 0, again = 0, late = 0, mid = 0, first = 0;
+    uint64_t per_wave;
+    uint32_t waves;
+    uint32_t written = 0;
+    asx_trace_event ev;
+    asx_replay_result r;
+
+    /* One wave tells how many events a wave emits; size the swarm to
+     * overflow the ring three times over. */
+    ASSERT_EQ(swarm_run(1u, UINT32_MAX, &base), ASX_OK);
+    per_wave = asx_trace_emitted_total();
+    ASSERT_TRUE(per_wave > 0u);
+    waves = (uint32_t)(((uint64_t)ASX_TRACE_CAPACITY * 3u) / per_wave) + 2u;
+
+    ASSERT_EQ(swarm_run(waves, UINT32_MAX, &base), ASX_OK);
+    ASSERT_TRUE(asx_trace_emitted_total() > (uint64_t)ASX_TRACE_CAPACITY * 3u);
+    ASSERT_TRUE(asx_trace_dropped() > 0u);
+    ASSERT_EQ(asx_trace_event_count(), (uint32_t)ASX_TRACE_CAPACITY);
+    ASSERT_TRUE(!asx_trace_event_get_seq(0u, &ev)); /* wave 0 left the ring */
+    ASSERT_EQ(asx_trace_export_binary(g_long_trace_buf, sizeof(g_long_trace_buf), &written),
+              ASX_OK);
+
+    /* Same swarm again: same digest, and the persisted trace is continuous */
+    ASSERT_EQ(swarm_run(waves, UINT32_MAX, &again), ASX_OK);
+    ASSERT_EQ(again, base);
+    ASSERT_EQ(asx_trace_continuity_check(g_long_trace_buf, written), ASX_OK);
+
+    /* A perturbation in the last, middle and first wave: three different
+     * digests, all different from the base */
+    ASSERT_EQ(swarm_run(waves, waves - 1u, &late), ASX_OK);
+    ASSERT_EQ(swarm_run(waves, waves / 2u, &mid), ASX_OK);
+    ASSERT_EQ(swarm_run(waves, 0u, &first), ASX_OK);
+    ASSERT_TRUE(late != base);
+    ASSERT_TRUE(mid != base);
+    ASSERT_TRUE(first != base);
+    ASSERT_TRUE(late != mid);
+    ASSERT_TRUE(mid != first);
+    ASSERT_TRUE(late != first);
+
+    /* The first-wave perturbation is outside the ring window on both
+     * sides: only the rolling digest can reveal it. */
+    ASSERT_TRUE(!asx_trace_event_get_seq(0u, &ev));
+    ASSERT_EQ(asx_trace_import_binary(g_long_trace_buf, written), ASX_OK);
+    r = asx_replay_verify();
+    ASSERT_EQ(r.result, ASX_REPLAY_DIGEST_MISMATCH);
+    ASSERT_EQ(r.expected_digest, base);
+    ASSERT_EQ(r.actual_digest, first);
+    asx_replay_clear_reference();
+
+    /* The last-wave perturbation sits inside the window (a wave fits the
+     * ring in every resource class): replay names the event itself. */
+    ASSERT_TRUE(per_wave <= (uint64_t)ASX_TRACE_CAPACITY);
+    ASSERT_EQ(swarm_run(waves, waves - 1u, &late), ASX_OK);
+    ASSERT_EQ(asx_trace_import_binary(g_long_trace_buf, written), ASX_OK);
+    r = asx_replay_verify();
+    ASSERT_EQ(r.result, ASX_REPLAY_AUX_MISMATCH);
+    ASSERT_TRUE((uint64_t)r.divergence_index >= asx_trace_dropped());
+    ASSERT_TRUE((uint64_t)r.divergence_index < asx_trace_emitted_total());
+    ASSERT_TRUE(asx_trace_event_get_seq(r.divergence_index, &ev));
+    ASSERT_EQ(ev.kind, ASX_TRACE_USER);
+    asx_replay_clear_reference();
+}
+
 /* ---- Digest sensitivity to aux ---- */
 
 TEST(trace_digest_sensitive_to_aux) {
@@ -1214,6 +1349,8 @@ int main(void) {
     RUN_TEST(trace_kind_totals_exact_beyond_capacity);
     RUN_TEST(trace_truncated_export_roundtrip_and_continuity);
     RUN_TEST(trace_import_rejects_inconsistent_truncation);
+    RUN_TEST(trace_digest_100k_events_stable_and_perturbation_sensitive);
+    RUN_TEST(trace_runtime_swarm_digest_and_replay_see_perturbation_beyond_ring);
     RUN_TEST(trace_digest_sensitive_to_aux);
     RUN_TEST(trace_digest_sensitive_to_entity_id);
     RUN_TEST(trace_digest_sensitive_to_order);

@@ -154,6 +154,55 @@ TEST(snapshot_classifies_cancel_transitions) {
 
 TEST(snapshot_null_safety) { asx_perf_snapshot_build(NULL); /* should not crash */ }
 
+/* RB1: the ring keeps only the latest events. The subsystem counters cover
+ * that window, while total_events and the digest cover the whole trace. */
+TEST(snapshot_total_events_exact_beyond_capacity) {
+    asx_perf_snapshot snap;
+    const uint32_t cap = (uint32_t)ASX_TRACE_CAPACITY;
+    uint64_t window_aux = 0u;
+    uint32_t i;
+
+    asx_trace_reset();
+    emit_scheduler_events(cap * 3u);
+    asx_perf_snapshot_build(&snap);
+
+    ASSERT_EQ(snap.total_events, cap * 3u);
+    ASSERT_EQ(snap.window_events, cap);
+    ASSERT_EQ(snap.subsystems[ASX_SUBSYS_SCHEDULER].event_count, cap);
+    /* aux of event i is i; the window is events [2*cap, 3*cap) */
+    for (i = cap * 2u; i < cap * 3u; i++) window_aux += (uint64_t)i;
+    ASSERT_EQ(snap.subsystems[ASX_SUBSYS_SCHEDULER].total_aux, window_aux);
+    ASSERT_EQ(snap.trace_digest, asx_trace_digest());
+}
+
+TEST(snapshot_digest_and_regression_see_divergence_before_the_window) {
+    asx_perf_snapshot baseline;
+    asx_perf_snapshot current;
+    asx_regression_report report;
+    const uint32_t cap = (uint32_t)ASX_TRACE_CAPACITY;
+    uint32_t i;
+
+    asx_trace_reset();
+    emit_scheduler_events(cap * 3u);
+    asx_perf_snapshot_build(&baseline);
+
+    /* Same run, except event 1 (long gone from the ring) has another aux */
+    asx_trace_reset();
+    for (i = 0; i < cap * 3u; i++) {
+        asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, i == 1u ? 999u : (uint64_t)i);
+    }
+    asx_perf_snapshot_build(&current);
+
+    /* Windows are identical; only the rolling digest differs */
+    ASSERT_EQ(current.total_events, baseline.total_events);
+    ASSERT_EQ(current.subsystems[ASX_SUBSYS_SCHEDULER].total_aux,
+              baseline.subsystems[ASX_SUBSYS_SCHEDULER].total_aux);
+    ASSERT_TRUE(current.trace_digest != baseline.trace_digest);
+
+    asx_regression_localize(&baseline, &current, NULL, &report);
+    ASSERT_EQ(report.regressed, 1);
+}
+
 /* ------------------------------------------------------------------ */
 /* Test: regression localization                                       */
 /* ------------------------------------------------------------------ */
@@ -500,6 +549,8 @@ int main(void) {
     RUN_TEST(snapshot_accumulates_aux);
     RUN_TEST(snapshot_classifies_cancel_transitions);
     RUN_TEST(snapshot_null_safety);
+    RUN_TEST(snapshot_total_events_exact_beyond_capacity);
+    RUN_TEST(snapshot_digest_and_regression_see_divergence_before_the_window);
 
     /* Regression */
     RUN_TEST(no_regression_on_identical_snapshots);

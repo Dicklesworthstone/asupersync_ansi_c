@@ -50,14 +50,15 @@ typedef enum {
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    uint32_t event_count; /* trace events attributed to this subsystem */
-    uint64_t total_aux;   /* sum of aux payloads (subsystem-specific) */
+    uint32_t event_count; /* retained-window trace events attributed to this subsystem */
+    uint64_t total_aux;   /* sum of their aux payloads (subsystem-specific) */
 } asx_subsys_counters;
 
 typedef struct {
     asx_subsys_counters subsystems[ASX_SUBSYS_COUNT];
-    uint32_t total_events;
-    uint64_t trace_digest;
+    uint32_t total_events;  /* events emitted since trace reset (exact; saturates) */
+    uint32_t window_events; /* events the subsystem counters cover: the retained ring */
+    uint64_t trace_digest;  /* rolling digest over every emitted event */
 } asx_perf_snapshot;
 
 /* ------------------------------------------------------------------ */
@@ -113,7 +114,11 @@ typedef struct {
 /* ------------------------------------------------------------------ */
 
 /* Build a performance snapshot from the current trace ring.
- * Classifies each event by subsystem and accumulates counters. */
+ * Classifies each retained event by subsystem and accumulates counters.
+ * The per-subsystem counters cover the retained window only
+ * (window_events == min(total_events, ASX_TRACE_CAPACITY)); total_events
+ * and trace_digest cover every emitted event, so a divergence outside
+ * the window still shows as a digest change without a blame split. */
 ASX_API void asx_perf_snapshot_build(asx_perf_snapshot *snap);
 
 /* Compare two snapshots and produce a regression report.

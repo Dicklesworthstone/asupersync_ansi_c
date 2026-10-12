@@ -181,6 +181,55 @@ TEST(telemetry_digest_identical_across_tiers) {
     ASSERT_EQ(d_ops, d_ultra);
 }
 
+/* RB1: the tier-independent digest covers every emitted event, far past
+ * what any trace ring holds. ULTRA_MIN stores nothing and still reaches
+ * the FORENSIC digest, which is also the trace's own rolling digest. */
+static uint64_t telemetry_stream(asx_telemetry_tier tier, uint32_t total, uint32_t perturb_at) {
+    uint32_t i;
+
+    asx_telemetry_reset();
+    asx_trace_reset();
+    if (asx_telemetry_set_tier(tier) != ASX_OK) return 0u;
+    for (i = 0; i < total; i++) {
+        asx_trace_event_kind kind = (i % 3u == 0u) ? ASX_TRACE_SCHED_POLL : ASX_TRACE_TASK_SPAWN;
+        asx_telemetry_emit(kind, (uint64_t)i, i == perturb_at ? (uint64_t)0xBADu : 0u);
+    }
+    return asx_telemetry_digest();
+}
+
+TEST(telemetry_digest_identical_across_tiers_beyond_trace_capacity) {
+    const uint32_t total = (uint32_t)ASX_TRACE_CAPACITY * 5u;
+    uint64_t d_forensic, d_ops, d_ultra;
+
+    d_forensic = telemetry_stream(ASX_TELEMETRY_FORENSIC, total, UINT32_MAX);
+    ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)total);
+    ASSERT_TRUE(asx_trace_dropped() > 0u);
+    /* Every event went through the trace, so its digest is the same fold */
+    ASSERT_EQ(d_forensic, asx_trace_digest());
+
+    d_ops = telemetry_stream(ASX_TELEMETRY_OPS_LIGHT, total, UINT32_MAX);
+    ASSERT_TRUE(asx_trace_emitted_total() < (uint64_t)total); /* polls filtered */
+    ASSERT_TRUE(asx_trace_emitted_total() > 0u);
+
+    d_ultra = telemetry_stream(ASX_TELEMETRY_ULTRA_MIN, total, UINT32_MAX);
+    ASSERT_EQ(asx_trace_emitted_total(), (uint64_t)0);
+    ASSERT_EQ(asx_trace_event_count(), (uint32_t)0);
+    ASSERT_EQ(asx_telemetry_emitted_count(), total);
+
+    ASSERT_EQ(d_ops, d_forensic);
+    ASSERT_EQ(d_ultra, d_forensic);
+
+    /* A late perturbation is visible at every tier, including the one
+     * that retains nothing */
+    ASSERT_TRUE(telemetry_stream(ASX_TELEMETRY_FORENSIC, total, total - 1u) != d_forensic);
+    ASSERT_TRUE(telemetry_stream(ASX_TELEMETRY_OPS_LIGHT, total, total - 1u) != d_forensic);
+    ASSERT_TRUE(telemetry_stream(ASX_TELEMETRY_ULTRA_MIN, total, total - 1u) != d_forensic);
+    ASSERT_TRUE(telemetry_stream(ASX_TELEMETRY_ULTRA_MIN, total, 0u) != d_forensic);
+
+    asx_telemetry_reset();
+    asx_trace_reset();
+}
+
 TEST(telemetry_digest_deterministic_across_runs) {
     uint64_t d1, d2;
 
@@ -340,6 +389,7 @@ int main(void) {
     RUN_TEST(telemetry_ops_light_filters_polls);
     RUN_TEST(telemetry_ultra_min_stores_nothing);
     RUN_TEST(telemetry_digest_identical_across_tiers);
+    RUN_TEST(telemetry_digest_identical_across_tiers_beyond_trace_capacity);
     RUN_TEST(telemetry_digest_deterministic_across_runs);
     RUN_TEST(telemetry_digest_differs_on_different_input);
     RUN_TEST(telemetry_digest_empty_is_fnv_offset);

@@ -20,13 +20,63 @@
 #include <string.h>
 
 /* -------------------------------------------------------------------
+ * FNV-1a mixing for the rolling digest
+ *
+ * The seed is the asx digest seed shared with the trace and telemetry
+ * digests (the FxHash multiplier constant, not the FNV-1a offset basis);
+ * only the mixing step is FNV-1a.
+ * ------------------------------------------------------------------- */
+
+#define ASX_HINDSIGHT_DIGEST_SEED 0x517cc1b727220a95ULL
+
+static uint64_t hs_fnv1a_mix(uint64_t hash, const void *data, uint32_t len) {
+    const uint8_t *p = (const uint8_t *)data;
+    uint32_t i;
+
+    for (i = 0; i < len; i++) {
+        hash ^= (uint64_t)p[i];
+        hash *= 0x00000100000001B3ULL;
+    }
+    return hash;
+}
+
+static uint64_t hs_fnv1a_mix_u32(uint64_t hash, uint32_t v) {
+    uint8_t bytes[4];
+    bytes[0] = (uint8_t)(v & 0xFFu);
+    bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
+    bytes[2] = (uint8_t)((v >> 16) & 0xFFu);
+    bytes[3] = (uint8_t)((v >> 24) & 0xFFu);
+    return hs_fnv1a_mix(hash, bytes, 4);
+}
+
+static uint64_t hs_fnv1a_mix_u64(uint64_t hash, uint64_t v) {
+    uint8_t bytes[8];
+    bytes[0] = (uint8_t)(v & 0xFFu);
+    bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
+    bytes[2] = (uint8_t)((v >> 16) & 0xFFu);
+    bytes[3] = (uint8_t)((v >> 24) & 0xFFu);
+    bytes[4] = (uint8_t)((v >> 32) & 0xFFu);
+    bytes[5] = (uint8_t)((v >> 40) & 0xFFu);
+    bytes[6] = (uint8_t)((v >> 48) & 0xFFu);
+    bytes[7] = (uint8_t)((v >> 56) & 0xFFu);
+    return hs_fnv1a_mix(hash, bytes, 8);
+}
+
+/* -------------------------------------------------------------------
  * Ring buffer state
+ *
+ * The ring keeps the most recent ASX_HINDSIGHT_CAPACITY events. The
+ * digest is rolling: every logged event is folded into it as it is
+ * logged, so it covers the whole log however many events the ring has
+ * already overwritten. For a log that fits in the ring it equals a fold
+ * over the stored events.
  * ------------------------------------------------------------------- */
 
 static asx_hindsight_event g_ring[ASX_HINDSIGHT_CAPACITY];
 static uint32_t g_write_index;   /* next slot to write (wrapping) */
 static uint32_t g_total_count;   /* total events ever logged */
 static uint32_t g_next_sequence; /* monotonic per-event sequence */
+static uint64_t g_digest_state = ASX_HINDSIGHT_DIGEST_SEED;
 
 /* Default flush policy: both triggers enabled */
 static asx_hindsight_policy g_policy = {1, 1};
@@ -40,6 +90,7 @@ void asx_hindsight_init(void) {
     g_write_index = 0;
     g_total_count = 0;
     g_next_sequence = 0;
+    g_digest_state = ASX_HINDSIGHT_DIGEST_SEED;
 }
 
 void asx_hindsight_reset(void) { asx_hindsight_init(); }
@@ -60,6 +111,13 @@ void asx_hindsight_log(asx_nd_event_kind kind, uint64_t entity_id, uint64_t obse
     /* Sequence of the next trace event (low 32 bits, matching the trace
      * event sequence field), so the link survives ring wrap-around. */
     e->trace_seq = (uint32_t)(asx_trace_emitted_total() & 0xFFFFFFFFu);
+
+    /* Field order is part of the digest contract. */
+    g_digest_state = hs_fnv1a_mix_u32(g_digest_state, e->sequence);
+    g_digest_state = hs_fnv1a_mix_u32(g_digest_state, (uint32_t)e->kind);
+    g_digest_state = hs_fnv1a_mix_u64(g_digest_state, e->entity_id);
+    g_digest_state = hs_fnv1a_mix_u64(g_digest_state, e->observed_value);
+    g_digest_state = hs_fnv1a_mix_u32(g_digest_state, e->trace_seq);
 
     g_write_index++;
     if (g_total_count < UINT32_MAX) g_total_count++;
@@ -224,63 +282,10 @@ asx_status asx_hindsight_flush_json(asx_hindsight_flush_buffer *out) {
 }
 
 /* -------------------------------------------------------------------
- * FNV-1a digest
+ * Rolling digest
  * ------------------------------------------------------------------- */
 
-static uint64_t hs_fnv1a_mix(uint64_t hash, const void *data, uint32_t len) {
-    const uint8_t *p = (const uint8_t *)data;
-    uint32_t i;
-
-    for (i = 0; i < len; i++) {
-        hash ^= (uint64_t)p[i];
-        hash *= 0x00000100000001B3ULL;
-    }
-    return hash;
-}
-
-static uint64_t hs_fnv1a_mix_u32(uint64_t hash, uint32_t v) {
-    uint8_t bytes[4];
-    bytes[0] = (uint8_t)(v & 0xFFu);
-    bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
-    bytes[2] = (uint8_t)((v >> 16) & 0xFFu);
-    bytes[3] = (uint8_t)((v >> 24) & 0xFFu);
-    return hs_fnv1a_mix(hash, bytes, 4);
-}
-
-static uint64_t hs_fnv1a_mix_u64(uint64_t hash, uint64_t v) {
-    uint8_t bytes[8];
-    bytes[0] = (uint8_t)(v & 0xFFu);
-    bytes[1] = (uint8_t)((v >> 8) & 0xFFu);
-    bytes[2] = (uint8_t)((v >> 16) & 0xFFu);
-    bytes[3] = (uint8_t)((v >> 24) & 0xFFu);
-    bytes[4] = (uint8_t)((v >> 32) & 0xFFu);
-    bytes[5] = (uint8_t)((v >> 40) & 0xFFu);
-    bytes[6] = (uint8_t)((v >> 48) & 0xFFu);
-    bytes[7] = (uint8_t)((v >> 56) & 0xFFu);
-    return hs_fnv1a_mix(hash, bytes, 8);
-}
-
-uint64_t asx_hindsight_digest(void) {
-    uint64_t hash = 0x517cc1b727220a95ULL;
-    uint32_t readable;
-    uint32_t i;
-    asx_hindsight_event ev;
-
-    readable = asx_hindsight_readable_count();
-
-    for (i = 0; i < readable; i++) {
-        uint32_t k;
-        if (!asx_hindsight_get(i, &ev)) break;
-        k = (uint32_t)ev.kind;
-        hash = hs_fnv1a_mix_u32(hash, ev.sequence);
-        hash = hs_fnv1a_mix_u32(hash, k);
-        hash = hs_fnv1a_mix_u64(hash, ev.entity_id);
-        hash = hs_fnv1a_mix_u64(hash, ev.observed_value);
-        hash = hs_fnv1a_mix_u32(hash, ev.trace_seq);
-    }
-
-    return hash;
-}
+uint64_t asx_hindsight_digest(void) { return g_digest_state; }
 
 /* -------------------------------------------------------------------
  * Flush on divergence

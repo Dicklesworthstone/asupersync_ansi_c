@@ -267,6 +267,72 @@ TEST(hindsight_digest_differs_on_different_input) {
     ASSERT_TRUE(d1 != d2);
 }
 
+/* RB1: the digest is rolling, so it covers every logged event and not
+ * just the ring's readable window. */
+static uint64_t hindsight_digest_of_run(uint32_t total, uint32_t perturb_at) {
+    uint32_t i;
+
+    asx_hindsight_reset();
+    asx_trace_reset();
+    for (i = 0; i < total; i++) {
+        asx_hindsight_log(ASX_ND_CLOCK_READ, (uint64_t)i,
+                          i == perturb_at ? (uint64_t)0xBADu : (uint64_t)i);
+    }
+    return asx_hindsight_digest();
+}
+
+TEST(hindsight_digest_covers_events_beyond_capacity) {
+    const uint32_t cap = (uint32_t)ASX_HINDSIGHT_CAPACITY;
+    const uint32_t total = cap * 4u;
+    uint64_t base = hindsight_digest_of_run(total, UINT32_MAX);
+
+    ASSERT_TRUE(asx_hindsight_overflowed());
+    ASSERT_EQ(asx_hindsight_total_count(), total);
+    ASSERT_EQ(asx_hindsight_readable_count(), cap);
+
+    /* Identical long runs digest identically */
+    ASSERT_EQ(hindsight_digest_of_run(total, UINT32_MAX), base);
+    /* A change in an overwritten event, just past the first wrap, or at
+     * the end changes the digest; so does a different length */
+    ASSERT_TRUE(hindsight_digest_of_run(total, 0u) != base);
+    ASSERT_TRUE(hindsight_digest_of_run(total, cap + 1u) != base);
+    ASSERT_TRUE(hindsight_digest_of_run(total, total - 1u) != base);
+    ASSERT_TRUE(hindsight_digest_of_run(total + 1u, UINT32_MAX) != base);
+}
+
+/* FNV-1a step over the `width` little-endian bytes of v. */
+static uint64_t hs_ref_fnv_le(uint64_t hash, uint64_t v, uint32_t width) {
+    uint32_t i;
+    for (i = 0; i < width; i++) {
+        hash ^= (v >> (8u * i)) & 0xFFu;
+        hash *= 0x00000100000001B3ULL;
+    }
+    return hash;
+}
+
+TEST(hindsight_digest_within_capacity_is_fold_of_readable_events) {
+    uint64_t expected = 0x517cc1b727220a95ULL;
+    uint32_t i;
+
+    asx_hindsight_reset();
+    asx_trace_reset();
+    for (i = 0; i < 40u; i++) {
+        asx_hindsight_event ev;
+
+        /* Interleave trace events so trace_seq takes several values */
+        if (i % 3u == 0u) asx_trace_emit(ASX_TRACE_SCHED_POLL, (uint64_t)i, 0);
+        asx_hindsight_log((i % 2u == 0u) ? ASX_ND_CLOCK_READ : ASX_ND_ENTROPY_READ,
+                          (uint64_t)i << 20, ~(uint64_t)i);
+        ASSERT_TRUE(asx_hindsight_get(i, &ev));
+        expected = hs_ref_fnv_le(expected, ev.sequence, 4u);
+        expected = hs_ref_fnv_le(expected, (uint32_t)ev.kind, 4u);
+        expected = hs_ref_fnv_le(expected, ev.entity_id, 8u);
+        expected = hs_ref_fnv_le(expected, ev.observed_value, 8u);
+        expected = hs_ref_fnv_le(expected, ev.trace_seq, 4u);
+    }
+    ASSERT_EQ(asx_hindsight_digest(), expected);
+}
+
 /* ---- JSON flush ---- */
 
 TEST(hindsight_flush_json_empty) {
@@ -622,6 +688,8 @@ int main(void) {
     RUN_TEST(hindsight_digest_empty_is_fnv_offset);
     RUN_TEST(hindsight_digest_deterministic);
     RUN_TEST(hindsight_digest_differs_on_different_input);
+    RUN_TEST(hindsight_digest_covers_events_beyond_capacity);
+    RUN_TEST(hindsight_digest_within_capacity_is_fold_of_readable_events);
     RUN_TEST(hindsight_flush_json_empty);
     RUN_TEST(hindsight_flush_json_with_events);
     RUN_TEST(hindsight_flush_json_null_rejected);

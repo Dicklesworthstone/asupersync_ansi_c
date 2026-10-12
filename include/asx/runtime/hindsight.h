@@ -133,7 +133,10 @@ ASX_API int asx_hindsight_get(uint32_t index, asx_hindsight_event *out);
  * Returns ASX_OK on success. Does not clear the ring. */
 ASX_API asx_status asx_hindsight_flush_json(asx_hindsight_flush_buffer *out);
 
-/* Compute FNV-1a digest over the ring contents (for replay identity). */
+/* Rolling FNV-1a digest over every event logged since the last reset,
+ * including events the ring has already overwritten (for replay
+ * identity). For a log that fits in the ring it equals a fold over the
+ * readable events in order. */
 ASX_API uint64_t asx_hindsight_digest(void);
 
 /* -------------------------------------------------------------------
