@@ -1000,6 +1000,32 @@ TEST(mask_depth_is_bounded) {
     ASSERT_EQ(asx_task_mask(ASX_INVALID_ID), ASX_E_NOT_FOUND);
 }
 
+TEST(mask_refuses_a_completed_task_and_a_handle_from_a_reset_runtime) {
+    /* bd-9kll.3.19: a completed task cannot enter a critical section (Rust
+     * has no Cx to mask once the body returned), and a handle the runtime
+     * no longer holds is refused, its depth unread. */
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    uint32_t depth = 7u;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &tid), ASX_OK);
+    budget = asx_budget_from_polls(4);
+    ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_mask(tid), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_task_mask_depth(tid, &depth), ASX_OK);
+    ASSERT_EQ(depth, 0u);
+
+    asx_runtime_reset();
+    ASSERT_NE(asx_task_mask(tid), ASX_OK);
+    ASSERT_NE(asx_task_unmask(tid), ASX_OK);
+    depth = 7u;
+    ASSERT_NE(asx_task_mask_depth(tid, &depth), ASX_OK);
+    ASSERT_EQ(depth, 7u);
+}
+
 TEST(checkpoint_observes_budget_deadline_inline) {
     asx_region_id rid;
     asx_task_id tid;
@@ -1789,6 +1815,7 @@ int main(void) {
     RUN_TEST(masked_task_is_not_force_completed);
     RUN_TEST(unmasked_task_is_force_completed_by_cleanup_budget);
     RUN_TEST(mask_depth_is_bounded);
+    RUN_TEST(mask_refuses_a_completed_task_and_a_handle_from_a_reset_runtime);
     RUN_TEST(checkpoint_observes_budget_deadline_inline);
     RUN_TEST(region_cancel_closes_subtree_and_chains_parent_reasons);
     RUN_TEST(region_cancel_of_an_idle_region_finalizes_at_once);
