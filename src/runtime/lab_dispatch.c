@@ -1361,19 +1361,17 @@ asx_status asx_lab_finish_forced_schedule_recording(uint64_t config_hash, int qu
     return ASX_OK;
 }
 
-asx_status asx_lab_run_forced_schedule(const asx_forced_schedule *schedule, asx_region_id region,
-                                       const asx_forced_run_config *config,
-                                       asx_forced_report *report, asx_forced_error *err) {
+/* Install `schedule` as the source of every later lab pick. Everything
+ * that steps the lab until asx_lab_forced_schedule_end() takes its tasks
+ * from the schedule: a runner that drives the scheduler its own way (the
+ * conformance interpreter runs to idle between script ops, then with timer
+ * auto-advance) installs it, runs, and ends it. */
+asx_status asx_lab_forced_schedule_begin(const asx_forced_schedule *schedule,
+                                         const asx_forced_run_config *config,
+                                         asx_forced_error *err) {
     asx_forced_error local;
     asx_forced_error *e = err != NULL ? err : &local;
-    asx_budget budget;
     asx_status st;
-    uint64_t limit;
-    int caller_limited;
-    uint32_t consumed;
-    uint64_t steps;
-    uint64_t now;
-    int quiescent;
 
     memset(e, 0, sizeof(*e));
     if (schedule == NULL) return ASX_E_INVALID_ARGUMENT;
@@ -1391,44 +1389,65 @@ asx_status asx_lab_run_forced_schedule(const asx_forced_schedule *schedule, asx_
         e->actual = schedule->seed;
         return ASX_E_INVALID_ARGUMENT;
     }
-
-    /* Rust steps while steps < terminal_steps, and refuses the work limit
-     * only when it stops the run short of that. The budget counts steps. */
-    caller_limited =
-        config != NULL && config->max_steps != 0u && config->max_steps < schedule->terminal_steps;
-    limit = caller_limited ? config->max_steps : schedule->terminal_steps;
-    if (limit == 0u) limit = 1u;
-    budget = asx_budget_from_polls(limit > (uint64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)limit);
-
     g_lab_forced = schedule;
     g_lab_forced_cfg = config;
     g_lab_forced_next = 0u;
     memset(&g_lab_forced_err, 0, sizeof(g_lab_forced_err));
+    return ASX_OK;
+}
 
-    st = asx_scheduler_run(region, &budget);
+/* Rust's LabRuntime::is_quiescent, as the conformance snapshot has it:
+ * nothing scheduled, every task terminal, no region still closing, no
+ * obligation reserved. An open region with finished work is quiescent. */
+static int lab_is_quiescent(void) {
+    uint32_t i;
 
-    consumed = g_lab_forced_next;
-    steps = g_lab_steps;
-    now = (uint64_t)lab_clock_now();
-    quiescent = asx_quiescence_check(region) == ASX_OK;
+    if (g_lab_scheduled > 0u || g_lab_admit_n > 0u || g_lab_rcmd_n > 0u || g_lab_hc_n > 0u ||
+        g_lab_deferred_n > 0u) {
+        return 0;
+    }
+    for (i = 0; i < g_task_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        if (g_tasks[i].alive && !asx_task_is_terminal(g_tasks[i].state)) return 0;
+    }
+    for (i = 0; i < g_region_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_region_count <= ASX_MAX_REGIONS");
+        if (g_regions[i].alive && g_regions[i].state != ASX_REGION_OPEN &&
+            g_regions[i].state != ASX_REGION_CLOSED) {
+            return 0;
+        }
+    }
+    for (i = 0; i < g_obligation_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_obligation_count <= ASX_MAX_OBLIGATIONS");
+        if (g_obligations[i].alive && g_obligations[i].state == ASX_OBLIGATION_RESERVED) return 0;
+    }
+    return 1;
+}
+
+/* Take the schedule off and judge the run against it, as Rust's
+ * run_forced_schedule does after its loop. `run_status` is what the
+ * scheduler run returned; a divergence the pick recorded wins over it. */
+static asx_status lab_forced_finish(asx_status run_status, int work_limited, uint64_t limit,
+                                    asx_forced_report *report, asx_forced_error *e) {
+    const asx_forced_schedule *schedule = g_lab_forced;
+    uint32_t consumed = g_lab_forced_next;
+    uint64_t steps = g_lab_steps;
+    uint64_t now = (uint64_t)lab_clock_now();
+    int quiescent = lab_is_quiescent();
+
     *e = g_lab_forced_err;
     g_lab_forced = NULL;
     g_lab_forced_cfg = NULL;
 
     if (e->kind != ASX_FORCED_OK) return ASX_E_REPLAY_MISMATCH;
-    if (st == ASX_E_POLL_BUDGET_EXHAUSTED) {
-        if (caller_limited) {
-            e->kind = ASX_FORCED_E_WORK_LIMIT;
-            e->step = steps;
-            e->expected = limit;
-            e->actual = steps;
-            return ASX_E_REPLAY_MISMATCH;
-        }
-        /* The receipt's terminal step is reached: the checks below decide
-         * whether the run ended where the receipt says. */
-        st = ASX_OK;
+    if (work_limited) {
+        e->kind = ASX_FORCED_E_WORK_LIMIT;
+        e->step = steps;
+        e->expected = limit;
+        e->actual = steps;
+        return ASX_E_REPLAY_MISMATCH;
     }
-    if (st != ASX_OK) return st;
+    if (run_status != ASX_OK) return run_status;
     if (consumed != schedule->dispatch_count || !quiescent) {
         e->kind = ASX_FORCED_E_SCHEDULE_EXHAUSTED;
         e->index = consumed;
@@ -1437,11 +1456,20 @@ asx_status asx_lab_run_forced_schedule(const asx_forced_schedule *schedule, asx_
         e->actual = consumed;
         return ASX_E_REPLAY_MISMATCH;
     }
-    if (steps != schedule->terminal_steps || now != schedule->terminal_nanos) {
+    if (steps != schedule->terminal_steps) {
         e->kind = ASX_FORCED_E_TERMINAL_MISMATCH;
+        e->index = 0u; /* the step count */
         e->step = steps;
         e->expected = schedule->terminal_steps;
         e->actual = steps;
+        return ASX_E_REPLAY_MISMATCH;
+    }
+    if (now != schedule->terminal_nanos) {
+        e->kind = ASX_FORCED_E_TERMINAL_MISMATCH;
+        e->index = 1u; /* the clock */
+        e->step = steps;
+        e->expected = schedule->terminal_nanos;
+        e->actual = now;
         return ASX_E_REPLAY_MISMATCH;
     }
     if (g_lab_cert != schedule->terminal_schedule_hash) {
@@ -1458,4 +1486,76 @@ asx_status asx_lab_run_forced_schedule(const asx_forced_schedule *schedule, asx_
         report->schedule_hash = g_lab_cert;
     }
     return ASX_OK;
+}
+
+asx_status asx_lab_forced_schedule_end(asx_forced_report *report, asx_forced_error *err) {
+    asx_forced_error local;
+    asx_forced_error *e = err != NULL ? err : &local;
+
+    memset(e, 0, sizeof(*e));
+    if (g_lab_forced == NULL) return ASX_E_INVALID_STATE;
+    return lab_forced_finish(ASX_OK, 0, 0u, report, e);
+}
+
+asx_status asx_lab_run_forced_schedule(const asx_forced_schedule *schedule, asx_region_id region,
+                                       const asx_forced_run_config *config,
+                                       asx_forced_report *report, asx_forced_error *err) {
+    asx_forced_error local;
+    asx_forced_error *e = err != NULL ? err : &local;
+    asx_budget budget;
+    asx_status st;
+    uint64_t limit;
+    int caller_limited;
+
+    st = asx_lab_forced_schedule_begin(schedule, config, e);
+    if (st != ASX_OK) return st;
+
+    /* Rust steps while steps < terminal_steps, and refuses the work limit
+     * only when it stops the run short of that. The budget counts steps. */
+    caller_limited =
+        config != NULL && config->max_steps != 0u && config->max_steps < schedule->terminal_steps;
+    limit = caller_limited ? config->max_steps : schedule->terminal_steps;
+    if (limit == 0u) limit = 1u;
+    budget = asx_budget_from_polls(limit > (uint64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)limit);
+
+    st = asx_scheduler_run(region, &budget);
+    if (st == ASX_E_POLL_BUDGET_EXHAUSTED) {
+        /* The receipt's terminal step is reached unless the caller cut the
+         * run short: the checks in finish decide whether it ended there. */
+        return lab_forced_finish(ASX_OK, caller_limited, limit, report, e);
+    }
+    return lab_forced_finish(st, 0, limit, report, e);
+}
+
+const char *asx_forced_error_kind_name(asx_forced_error_kind kind) {
+    switch (kind) {
+    case ASX_FORCED_OK: return "ok";
+    case ASX_FORCED_E_TRUNCATED: return "truncated";
+    case ASX_FORCED_E_MAGIC: return "magic";
+    case ASX_FORCED_E_ARTIFACT_VERSION: return "artifact_version";
+    case ASX_FORCED_E_SCHEMA_VERSION: return "schema_version";
+    case ASX_FORCED_E_BYTE_LIMIT: return "byte_limit";
+    case ASX_FORCED_E_DISPATCH_LIMIT: return "dispatch_limit";
+    case ASX_FORCED_E_TRAILING_BYTES: return "trailing_bytes";
+    case ASX_FORCED_E_CHECKSUM: return "checksum";
+    case ASX_FORCED_E_LANE_TAG: return "lane_tag";
+    case ASX_FORCED_E_BOOL_TAG: return "bool_tag";
+    case ASX_FORCED_E_STEP_ORDER: return "step_order";
+    case ASX_FORCED_E_TIME_ORDER: return "time_order";
+    case ASX_FORCED_E_PARTIAL_SOURCE: return "partial_source";
+    case ASX_FORCED_E_SEED_MISMATCH: return "seed_mismatch";
+    case ASX_FORCED_E_NOT_PRISTINE: return "not_pristine";
+    case ASX_FORCED_E_WORK_LIMIT: return "work_limit";
+    case ASX_FORCED_E_EARLY_RUNNABLE: return "early_runnable";
+    case ASX_FORCED_E_STEP_MISMATCH: return "step_mismatch";
+    case ASX_FORCED_E_TIME_MISMATCH: return "time_mismatch";
+    case ASX_FORCED_E_TASK_UNAVAILABLE: return "task_unavailable";
+    case ASX_FORCED_E_LANE_MISMATCH: return "lane_mismatch";
+    case ASX_FORCED_E_LANE_UNSUPPORTED: return "lane_unsupported";
+    case ASX_FORCED_E_WORKER_MISMATCH: return "worker_mismatch";
+    case ASX_FORCED_E_SCHEDULE_EXHAUSTED: return "schedule_exhausted";
+    case ASX_FORCED_E_TERMINAL_MISMATCH: return "terminal_mismatch";
+    case ASX_FORCED_E_CERTIFICATE_MISMATCH: return "certificate_mismatch";
+    }
+    return "unknown";
 }

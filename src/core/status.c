@@ -677,6 +677,7 @@ void asx_error_ledger_reset(void) {
     uint32_t i;
 
     for (i = 0; i < g_task_ledger_hwm; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: g_task_ledger_hwm <= ASX_ERROR_LEDGER_TASK_SLOTS") */
         asx_task_ledger_clear(&g_task_ledgers[i], ASX_INVALID_ID);
     }
     g_task_ledger_hwm = 0;

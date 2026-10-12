@@ -2082,6 +2082,95 @@ TEST(forced_schedule_divergences_report_their_step_and_leave_the_task_unpolled) 
     ASSERT_EQ(strcmp(g_order, "BC"), 0);
 }
 
+/* A runner that drives the scheduler its own way (the conformance
+ * interpreter runs to idle, then with timer auto-advance): begin, any
+ * number of scheduler runs, end. */
+TEST(forced_schedule_begin_end_replays_a_runner_driven_run) {
+    asx_forced_dispatch d[8];
+    asx_forced_schedule s;
+    asx_forced_error err;
+    asx_forced_report rep;
+    asx_budget budget;
+    fs_scene sc;
+
+    ASSERT_TRUE(fs_scene_record(&s, d));
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    memset(&rep, 0, sizeof(rep));
+    ASSERT_EQ(asx_lab_forced_schedule_begin(&s, NULL, &err), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run_until_idle(sc.region, &budget), ASX_OK);
+    ASSERT_EQ(strcmp(g_order, "BCAB"), 0);
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_scheduler_run(sc.region, &budget), ASX_OK);
+    ASSERT_EQ(asx_lab_forced_schedule_end(&rep, &err), ASX_OK);
+    ASSERT_EQ(rep.dispatches, 4u);
+    ASSERT_EQ(rep.steps, (uint64_t)4u);
+    ASSERT_EQ(rep.schedule_hash, s.terminal_schedule_hash);
+
+    /* the schedule is off again */
+    ASSERT_EQ(asx_lab_forced_schedule_end(&rep, &err), ASX_E_INVALID_STATE);
+}
+
+TEST(forced_schedule_begin_end_reports_the_divergence_that_stopped_the_run) {
+    asx_forced_dispatch d[8];
+    asx_forced_schedule s;
+    asx_forced_error err;
+    asx_forced_report rep;
+    asx_budget budget;
+    fs_scene sc;
+    asx_status st;
+
+    ASSERT_TRUE(fs_scene_record(&s, d));
+    d[1].task = (uint64_t)(ASX_MAX_TASKS - 1u) << 32; /* never spawned */
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_forced_schedule_begin(&s, NULL, &err), ASX_OK);
+    budget = asx_budget_from_polls(100);
+    st = asx_scheduler_run_until_idle(sc.region, &budget);
+    ASSERT_TRUE(st != ASX_OK);
+    ASSERT_EQ(strcmp(g_order, "B"), 0);
+    ASSERT_EQ(asx_lab_forced_schedule_end(&rep, &err), ASX_E_REPLAY_MISMATCH);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_TASK_UNAVAILABLE);
+    ASSERT_EQ(err.index, 1u);
+    ASSERT_EQ(err.step, (uint64_t)2u);
+}
+
+TEST(forced_schedule_begin_refuses_a_second_schedule_and_another_seed) {
+    asx_forced_dispatch d[8];
+    asx_forced_schedule s;
+    asx_forced_error err;
+    asx_forced_report rep;
+    fs_scene sc;
+
+    ASSERT_TRUE(fs_scene_record(&s, d));
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_forced_schedule_end(&rep, &err), ASX_E_INVALID_STATE); /* none installed */
+    ASSERT_EQ(asx_lab_forced_schedule_begin(&s, NULL, &err), ASX_OK);
+    ASSERT_EQ(asx_lab_forced_schedule_begin(&s, NULL, &err), ASX_E_INVALID_STATE);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_NOT_PRISTINE);
+
+    /* a fresh lab with another seed refuses a schedule of seed 42 */
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(7u), ASX_OK);
+    ASSERT_EQ(asx_lab_forced_schedule_begin(&s, NULL, &err), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_SEED_MISMATCH);
+}
+
+TEST(forced_error_kinds_have_distinct_names) {
+    uint32_t a;
+    uint32_t b;
+
+    for (a = (uint32_t)ASX_FORCED_OK; a <= (uint32_t)ASX_FORCED_E_CERTIFICATE_MISMATCH; a++) {
+        const char *na = asx_forced_error_kind_name((asx_forced_error_kind)a);
+        ASSERT_TRUE(na != NULL && strcmp(na, "unknown") != 0);
+        for (b = a + 1u; b <= (uint32_t)ASX_FORCED_E_CERTIFICATE_MISMATCH; b++) {
+            const char *nb = asx_forced_error_kind_name((asx_forced_error_kind)b);
+            ASSERT_TRUE(strcmp(na, nb) != 0);
+        }
+    }
+    ASSERT_EQ(strcmp(asx_forced_error_kind_name(ASX_FORCED_E_TASK_UNAVAILABLE), "task_unavailable"),
+              0);
+}
+
 TEST(forced_schedule_refuses_a_run_that_is_not_pristine_or_has_another_seed) {
     asx_forced_dispatch d[8];
     asx_forced_schedule s;
@@ -2167,6 +2256,10 @@ int main(void) {
     RUN_TEST(forced_schedule_overrides_the_seeded_pick);
     RUN_TEST(forced_schedule_resolver_maps_recorded_task_ids);
     RUN_TEST(forced_schedule_divergences_report_their_step_and_leave_the_task_unpolled);
+    RUN_TEST(forced_schedule_begin_end_replays_a_runner_driven_run);
+    RUN_TEST(forced_schedule_begin_end_reports_the_divergence_that_stopped_the_run);
+    RUN_TEST(forced_schedule_begin_refuses_a_second_schedule_and_another_seed);
+    RUN_TEST(forced_error_kinds_have_distinct_names);
     RUN_TEST(forced_schedule_refuses_a_run_that_is_not_pristine_or_has_another_seed);
 
     TEST_REPORT();

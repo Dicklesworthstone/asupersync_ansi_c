@@ -1288,6 +1288,7 @@ void asx_channel_reset(void) {
     uint32_t i;
 
     for (i = 0; i < g_channel_hwm; i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: g_channel_hwm <= ASX_MAX_CHANNELS") */
         if (g_channels[i].alive) { g_channels[i].generation++; }
         g_channels[i].alive = 0;
         g_channels[i].state = ASX_CHANNEL_OPEN;

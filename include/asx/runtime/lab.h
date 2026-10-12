@@ -353,12 +353,14 @@ ASX_API ASX_MUST_USE asx_status asx_forced_schedule_decode(const uint8_t *bytes,
                                                            asx_forced_schedule *out,
                                                            asx_forced_error *err);
 
-/* Rust's ScheduleCertificate of the lab run so far, and how many
- * dispatches it folds (0 and 0 before the first). Folded at every pick of
- * the lab dispatcher (asx_scheduler_use_lab_dispatch), whether or not
- * anything records; the same value Rust reports as `certificate_hash`
- * and `decisions` for the same schedule. */
+/* Rust's ScheduleCertificate of the lab run so far (0 before the first
+ * dispatch). Folded at every pick of the lab dispatcher
+ * (asx_scheduler_use_lab_dispatch), whether or not anything records; the
+ * same value Rust reports as `certificate_hash` for the same schedule. */
 ASX_API uint64_t asx_scheduler_schedule_certificate(void);
+
+/* How many dispatches the certificate folds so far: Rust's `decisions`.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API uint64_t asx_scheduler_schedule_decisions(void);
 
 /* Rust's start_forced_schedule_recording / finish_forced_schedule_recording
@@ -416,6 +418,25 @@ ASX_API ASX_MUST_USE asx_status asx_lab_run_forced_schedule(const asx_forced_sch
                                                             const asx_forced_run_config *config,
                                                             asx_forced_report *report,
                                                             asx_forced_error *err);
+
+/* The same replay for a runner that drives the scheduler its own way (to
+ * idle between script ops, then with timer auto-advance, as the
+ * conformance interpreter does): begin installs the schedule on a fresh
+ * lab dispatcher (same checks and statuses as above), every lab step until
+ * end takes its task from it, and end takes it off and judges the run:
+ * ASX_OK with *report, or ASX_E_REPLAY_MISMATCH with the first divergence
+ * (a divergence ends the scheduler run early with that status). The run
+ * must end quiescent in Rust's sense: nothing scheduled, every task
+ * terminal, no region closing, no obligation reserved (an open region
+ * with finished work counts). */
+ASX_API ASX_MUST_USE asx_status asx_lab_forced_schedule_begin(const asx_forced_schedule *schedule,
+                                                              const asx_forced_run_config *config,
+                                                              asx_forced_error *err);
+ASX_API ASX_MUST_USE asx_status asx_lab_forced_schedule_end(asx_forced_report *report,
+                                                            asx_forced_error *err);
+
+/* A stable lowercase name for an error kind ("task_unavailable", ...). */
+ASX_API const char *asx_forced_error_kind_name(asx_forced_error_kind kind);
 
 #ifdef __cplusplus
 }
