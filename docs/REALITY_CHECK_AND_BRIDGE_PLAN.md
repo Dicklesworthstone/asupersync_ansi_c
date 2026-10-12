@@ -247,8 +247,12 @@ pass. Root and independent replays pass the preserved 8,000 inputs and 43 minima
 Independent native before controls fail only the two new broadcast copy/capacity
 cases (30/32) and the later-poll broadcast case (31/32); the observer case also
 passes the old runtime and is not credited as a negative control. R1 and explicit
-seven-credit execution pass. Original `bd-6ncn` stays in progress pending its
-separate historical seed-1100/1101 inputs and 23 quota minima.
+seven-credit execution pass. Original `bd-6ncn` is independently closed at
+`74e5d4a0` after recovering and byte-checking its separate historical
+seed-1100/1101 inputs and 23 quota minima. Genuine Rust recaptures all 400
+original inputs; independent GCC/Clang and root's own C runner pass both
+200-case batches and the explicit 23 original minimized captures. The older
+worker data and failure classifications remain preserved.
 The old MPSC test's mistaken empty status
 and the draft's state-bearing full-handle comparison were corrected from the
 documented API and genuine scheduler observations, with failures retained.
@@ -266,8 +270,22 @@ issue, preserving all other records, comments, labels and dependencies.
 The first hosted push at `74e5d4a0` passes format, cppcheck, API documentation
 and checkpoint coverage, then fails the commit evidence block because its
 repository proof paths, `TRC-*` identifier and generated-artifact paths were
-omitted. Downstream CI jobs do not run. The follow-up evidence record must pass
-the full original pushed range before a CI retry is credited. The same source's
+omitted. Downstream CI jobs do not run. Follow-up `aecbf6bf` passes the full
+original `093f6184..aecbf6bf` range with all six repository proof paths and the
+three traceability IDs resolved; no gate change or history rewrite is used.
+The hosted retry's check, native32 and both MSVC lanes pass. Its conformance
+job then exposes a second omission: the two named actor/race scenario rule
+lists are empty, violating the existing schema's minimum of one rule. Original
+`bd-aioq` is reopened rather than hiding that failure. Applicable rule tags are
+added manually to those two inputs, and genuine Rust recapture preserves every
+runtime result, digest, dispatch, trace, observation and snapshot. Only the
+rule metadata and capture provenance change; all 165 other captures remain
+byte-identical. The historical SHA values above identify the retained original
+captures; corrected fresh actor/race captures have SHA-256
+`6c3f48e7c9630b315999c64eee1468b070931f856778029400086c9563068c0c` and
+`1f1f3d9bd6568f647c835a03be0aa2bcfb2108d97aea2ebe050f031da1e4aaef`.
+Independent final schema/capture acceptance and hosted retry remain pending.
+The same runtime source's
 actual [performance run 38248217460](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38248217460)
 executes both CORE and HFT: each passes all 34 latency checks but fails one stale
 baseline check (225/224 days, limit 120). Size/cold-start is 5/10: archive
@@ -302,9 +320,12 @@ Current original-task execution checklist (verification still in progress):
 - [x] Run final broadcast repair at `74e5d4a0` through strict compilers, full suites, sanitizers, 167 captures, profiles/codecs and original 8,000/43 comparisons.
 - [x] Independently review/reexecute final broadcast copy, exhaustion, later-poll cleanup and real observer behavior; preserve the genuine before failures.
 - [x] Independently close original `bd-o9oc` after genuine old-Rust five-case reproduction and corrected full-campaign execution.
-- [ ] Replay the original quota issue's separate seed-1100/1101 inputs and identify/replay all 23 quota minima without replacing the original inputs.
-- [ ] Obtain independent original `bd-6ncn` acceptance, then close only that bug if its original criteria are met.
-- [ ] Correct the commit evidence record, verify the complete original pushed range and inspect the subsequent actual hosted CI results.
+- [x] Replay the original quota issue's separate seed-1100/1101 inputs and identify/replay all 23 quota minima without replacing the original inputs.
+- [x] Obtain independent original `bd-6ncn` acceptance and close that original bug at `74e5d4a0`.
+- [x] Correct the commit evidence record, verify the complete original pushed range and inspect the actual hosted retry, including its subsequent schema failure.
+- [x] Reopen original `bd-aioq`, add the applicable existing rule tags and genuinely recapture the two named witnesses without changing expected runtime results or the schema.
+- [ ] Independently verify final scenario schema, fixture integrity, fresh recapture and all 167 comparisons, then reclose original `bd-aioq` only when those criteria pass.
+- [ ] Inspect the next actual hosted CI after the schema correction; keep any pending or failed lane explicit.
 - [ ] Publish all accepted increments on main, preserve concurrent work and synchronize the required legacy mirror.
 
 K4, typed outcomes/factories, serialized asynchronous finalization, independent
