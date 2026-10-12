@@ -1609,6 +1609,33 @@ bench: bench-build
 	@$(BENCH_BIN)
 	@echo "[asx] bench: complete"
 
+# ---------------------------------------------------------------------------
+# test-ct-timing: dudect-style Welch t-test of asx_crypto_ct_equal and
+# asx_crypto_ct_is_zero (bd-9kll.16.5). Not part of `make test`: timing
+# statistics are noisy on shared machines. Exits 0 only if no leak is found
+# and the harness flags its own deliberately leaky control; 1 on a leak; 2
+# when the control is not flagged (inconclusive). CT_ARGS passes
+# --samples N / --attempts N / --seed N.
+# ---------------------------------------------------------------------------
+CT_DIR := $(BUILD_DIR)/ct
+CT_SRC := tests/security/ct_compare_dudect.c
+CT_BIN := $(CT_DIR)/ct_compare_dudect
+
+CT_CFLAGS := -std=c99 -Wall -Wextra -Wpedantic -Werror -O2 -Wno-unused-parameter \
+             $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF)
+
+.PHONY: test-ct-timing
+
+$(CT_BIN): $(CT_SRC) $(LIB_A) | $(CT_DIR)
+	$(CC) $(CT_CFLAGS) -o $@ $< $(LIB_A) $(ALL_LDFLAGS) -lm
+
+$(CT_DIR):
+	@mkdir -p $@
+
+test-ct-timing: $(CT_BIN)
+	@echo "[asx] test-ct-timing: dudect-style timing check of the constant-time helpers..."
+	@$(CT_BIN) $(CT_ARGS)
+
 bench-json:
 	@$(MAKE) --no-print-directory bench-build >&2
 	@$(BENCH_BIN) --json

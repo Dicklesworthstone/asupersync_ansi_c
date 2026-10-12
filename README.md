@@ -536,6 +536,15 @@ make bench
 make bench PROFILE=EMBEDDED_ROUTER
 ```
 
+### `make test-ct-timing`
+
+A dudect-style timing check of the constant-time helpers `asx_crypto_ct_equal` and `asx_crypto_ct_is_zero` (`tests/security/ct_compare_dudect.c`): the functions are timed on two classes of input (equal buffers against buffers that differ in the first byte, and against buffers that differ in every byte), the slowest outliers are cropped, and Welch's t-test compares the two timing distributions (`|t| > 10` is a leak). The same experiment times a deliberately leaky early-exit comparison and requires it to be flagged: if the control is not flagged the harness reports inconclusive (exit 2) and its verdict on the library means nothing on that machine. It is not part of `make test` because timing statistics are noisy on shared or virtualized hosts; run it on a quiet one.
+
+```bash
+make test-ct-timing
+make test-ct-timing CT_ARGS="--samples 100000 --attempts 5"
+```
+
 ### `make release-artifacts`
 
 Produce deterministic artifact bundles and integrity metadata.
