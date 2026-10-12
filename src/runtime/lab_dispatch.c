@@ -409,6 +409,9 @@ int asx_lab_dispatch_overflowed(void) { return g_lab_overflow; }
 
 asx_status asx_scheduler_use_lab_dispatch(uint64_t seed) {
     uint32_t i;
+    /* A refused spawn can retain its captured actor cell without a live
+     * task slot. Do not erase its admission ticket by reseeding. */
+    if (g_lab_admit_n > 0u) return ASX_E_INVALID_STATE;
     for (i = 0; i < g_task_count; i++) {
         ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
         if (g_tasks[i].alive) return ASX_E_INVALID_STATE;

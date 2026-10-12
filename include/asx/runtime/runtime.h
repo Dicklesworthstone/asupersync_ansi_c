@@ -977,8 +977,8 @@ ASX_API ASX_MUST_USE asx_status asx_scheduler_run_until_idle(asx_region_id regio
  * steps. Same scenario and seed, same dispatch order as the Rust lab
  * (bd-9kll.4.2). It stays on until asx_runtime_reset or asx_runtime_init.
  *
- * Preconditions: no task is alive yet.
- * Returns ASX_OK, or ASX_E_INVALID_STATE if a task is alive.
+ * Preconditions: no task is alive and no spawn admission is pending.
+ * Returns ASX_OK, or ASX_E_INVALID_STATE when either precondition fails.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_scheduler_use_lab_dispatch(uint64_t seed);
 

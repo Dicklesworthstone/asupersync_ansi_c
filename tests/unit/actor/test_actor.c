@@ -395,6 +395,77 @@ static void test_refused_server_reply_does_not_repoll_following_sleep(void) {
     asx_lab_shutdown(&g_refused_lab);
 }
 
+typedef struct {
+    asx_region_id region;
+    asx_actor_handle server;
+    rec_state state;
+    uint32_t polls;
+    asx_status spawn_status;
+} refused_spawn_client;
+
+static asx_status refused_spawn_poll(void *user_data, asx_task_id self) {
+    refused_spawn_client *c = (refused_spawn_client *)user_data;
+    (void)self;
+    c->polls++;
+    if (c->polls == 1u) return ASX_E_PENDING;
+    c->spawn_status = asx_actor_spawn(&c->server, c->region, &g_rec, &c->state, 1u);
+    return c->spawn_status;
+}
+
+/* A completed caller leaves a real refused admission for the next lab
+ * step. There is no live task after the host consumes its outcome, but
+ * that step still owns the server's captured cell and its cleanup. */
+static void test_reseed_refuses_pending_actor_admission_then_cleanup_completes(void) {
+    refused_spawn_client c;
+    asx_task_id task = ASX_INVALID_ID;
+    asx_budget budget;
+    asx_outcome body = {ASX_OUTCOME_OK};
+    asx_outcome outcome;
+    asx_lab_config config;
+
+    setup();
+    asx_lab_config_init(&config);
+    config.seed = 42u;
+    ASSERT(asx_lab_init(&g_refused_lab, &config) == ASX_OK, "real lab runtime");
+    ASSERT(asx_region_open(&g_root) == ASX_OK, "root after lab initialization");
+    ASSERT(asx_scheduler_use_lab_dispatch(42u) == ASX_OK, "initial dispatch admission");
+    memset(&c, 0, sizeof(c));
+    c.region = child_region();
+    c.spawn_status = ASX_E_PENDING;
+    ASSERT(asx_task_spawn(c.region, refused_spawn_poll, &c, &task) == ASX_OK, "real caller");
+    budget = asx_budget_from_polls(1u);
+    ASSERT(asx_scheduler_run_until_idle(g_root, &budget) == ASX_E_POLL_BUDGET_EXHAUSTED &&
+               c.polls == 1u,
+           "one actual caller poll before body close");
+    ASSERT(asx_region_close_with_outcome(c.region, &body, NULL) == ASX_OK,
+           "normal body closes admission without cancelling caller");
+    budget = asx_budget_from_polls(1u);
+    ASSERT(asx_scheduler_run_until_idle(g_root, &budget) == ASX_E_POLL_BUDGET_EXHAUSTED &&
+               c.polls == 2u && c.spawn_status == ASX_OK,
+           "completed caller genuinely creates a refused server");
+    ASSERT(asx_task_join(task, &outcome) == ASX_OK && outcome.severity == ASX_OUTCOME_OK,
+           "host consumes the last live task");
+    ASSERT(asx_actor_get_state(c.server) == ASX_ACTOR_CREATED &&
+               asx_actor_join(c.server, NULL) == ASX_E_PENDING,
+           "server cleanup still awaits real admission delivery");
+    ASSERT(asx_scheduler_use_lab_dispatch(43u) == ASX_E_INVALID_STATE,
+           "reseed cannot erase a pending captured actor cell");
+    ASSERT(asx_actor_get_state(c.server) == ASX_ACTOR_CREATED &&
+               asx_actor_join(c.server, NULL) == ASX_E_PENDING,
+           "refused reseed preserves the queued lifecycle");
+    budget = asx_budget_from_polls(100u);
+    ASSERT(asx_scheduler_run_until_idle(g_root, &budget) == ASX_OK,
+           "ordinary next lab step delivers the refusal");
+    ASSERT(asx_actor_get_state(c.server) == ASX_ACTOR_STOPPED &&
+               asx_actor_join(c.server, NULL) == ASX_E_CANCELLED,
+           "actual admission cleanup resolves the join");
+    ASSERT(c.state.init_called == 0 && c.state.calls == 0u && c.state.term_called == 0,
+           "refused server runs no user callbacks");
+    ASSERT(asx_scheduler_use_lab_dispatch(43u) == ASX_OK,
+           "reseed succeeds after all pending admissions settle");
+    asx_lab_shutdown(&g_refused_lab);
+}
+
 /* ------------------------------------------------------------------ */
 /* Init and the message loop                                           */
 /* ------------------------------------------------------------------ */
@@ -782,6 +853,7 @@ int main(void) {
     RUN(test_spawn_arena_exhaustion);
     RUN(test_spawn_refused_by_region_limit);
     RUN(test_refused_server_reply_does_not_repoll_following_sleep);
+    RUN(test_reseed_refuses_pending_actor_admission_then_cleanup_completes);
 
     RUN(test_init_runs_once_on_first_poll);
     RUN(test_try_cast_delivers_in_order);
