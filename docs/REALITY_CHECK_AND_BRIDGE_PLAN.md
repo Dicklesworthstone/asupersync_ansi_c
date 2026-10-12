@@ -386,7 +386,15 @@ reject it if any changes. The schema and full denominator remain unchanged.
 - [x] Execute actual Make-target Rust capture and fresh C comparison over all 200 inputs; all pass. Repeat/changed-seed control passes 1,001/1,001; the actual priority mutant fails 75/200 with no ERROR, then a 61-to-5-operation witness freshly recaptures and passes clean C while failing the mutant. Parser-only test doubles remain excluded from parity evidence.
 - [x] Demonstrate actual old-generator Make failure before capture and genuine missing-checker failure before generation; preserve the old consumer's 200 successful captures followed by its identifier authentication failure.
 - [x] Independently review exact `cdc48ebf` against the explicitly amended current criteria and close only original `bd-58jc` (PinkOwl, comment 252, `2026-10-12T13:54:08.038125176Z`). The original literal-input condition remains explicitly unfulfilled for three inputs; every other issue and prior history is preserved.
-- [ ] Publish the accepted repair, synchronize the legacy mirror and primary checkout, and inspect actual hosted CI outcomes.
+- [x] Publish accepted generator source/tracker through `e692f03a` on main and its required mirror, and fast-forward the primary checkout while preserving all six preexisting untracked artifacts.
+- [x] Inspect completed hosted CI: all 30 jobs pass in run `38260004069` at `e692f03a`, including the actual Rust fuzz pipeline and its newly required validator. Separate Perf Gates `38260003925` fails CORE/HFT/size/dashboard; primary CI is not a green release verdict.
+
+That actual performance run is CORE 36/41 (four numeric jitter/tail failures
+plus stale baseline), HFT 40/41 (all 34 numeric checks pass, baseline stale)
+and size/cold-start 7/10 (archive/text/BSS fail; all cold-start checks pass).
+Its manifest binds `e692f03a` and run tag `38260003925-1`. These are different
+measurements from the earlier `84ca5f40` run; neither is discarded or
+credited as a source optimization. All original limits remain intact.
 
 Root reexecutes the final commands and an independent reviewer separately
 executes the shared immutable Rust build, full input/schema checks, 200 live
@@ -402,14 +410,41 @@ performance remain unfinished.
 
 - [x] Read the original acceptance, inspect the actual digest hot path and preserve the latest failing hosted reports.
 - [x] Claim the original Bead for a bounded, exact-digest experiment; keep its three-green-push acceptance intact.
-- [ ] Build an isolated candidate that coalesces the poll event's sequence and zero-kind bytes, preserving their exact FNV recurrence.
-- [ ] Interleave actual before/candidate scheduler measurements on one CPU; reject inconclusive benefit or a material regression.
-- [ ] Execute byte-loop digest, beyond-ring, replay, observer and telemetry checks plus all 167 canonical comparisons.
-- [ ] Independently review and land only a measured, semantics-preserving benefit; retain failed or inconclusive trials.
+- [x] Build the isolated poll-fold candidate with strict GCC release flags and preserve both immutable products.
+- [x] Run ten alternating before/candidate measurement pairs on CPU 55. Medians of per-run p50 values improve 3.29% for multi-task and 4.21% for multi-round, each in all ten pairs; these are not pooled raw-sample percentiles.
+- [x] Execute byte-loop/ring/replay/observer, telemetry, Lab, budget, MPSC and broadcast cases, plus 167 comparisons per actual release R3 library via explicitly labeled strict Debug front-ends.
+- [x] Reject the candidate for landing: multi-task p99.9 rises 2.11%, channel-send 5.37% and quiescence 12.20%; the no-material-regression condition is inconclusive. Preserve all reports and the warmup pair, make no extra rounds and grant no shipped-performance credit.
 
 The experiment does not refresh a baseline, raise a budget or replace the
 digest function. Landing a narrow optimization would not close original
-`bd-o5zh` or P2.
+`bd-o5zh` or P2. The isolated rejected source and all evidence remain in
+`/data/tmp/asx-o5zh-sage-cdc48-Vtl8di`; neither root source nor the published
+runtime contains the experiment.
+Original `bd-o5zh` returns to OPEN after the concluded experiment, with all
+original acceptance and evidence retained; it remains ready for further work.
+
+### Strict release conformance CLI, `bd-mxeq`
+
+The performance experiment exposes a real default GCC release-build failure:
+the constants diagnostic's intentionally clipped `snprintf` fails
+`-Werror=format-truncation`. Track it separately as a concrete build bug,
+not a performance improvement. The source repair expresses the same clipped
+prefix with a cap-zero guard, `memcpy` and an explicit terminator, preserving
+the comparison policy and all runtime/fixture bytes.
+
+- [x] Preserve the actual strict GCC release before failure and claim the concrete bug.
+- [x] Manually repair only the diagnostic helper; pinned formatting and supported scanner have no critical findings.
+- [x] Run full local build/format/lint/test/integrity, all 11 gate scripts and documentation checks at the frozen `e8b0fe63` candidate; all pass.
+- [x] Build and run the actual strict Clang release front-end/runtime over all 167 canonical fixtures; all pass.
+- [x] Finish actual strict GCC release build and 167 comparisons; all pass with unchanged warnings. Root and independent GCC products both hash to `821458b7647ad9f3b1a1d5fed36d6b6511fcfddf919ddcc6b971a6eead974c27`.
+- [x] Compare actual old Debug and corrected Clang release normal/2,048-byte malformed diagnostics byte-for-byte; statuses remain 0/1, with exactly one malformed-value failure.
+- [x] Verify matching normal/malformed diagnostics and corrupted-expectation controls on GCC and Clang. Genuine old optimized GCC compilation fails on the preserved warning; malformed-value controls are not runtime parity credit. Root's initial nonexistent-fixture probe is preserved/excluded, followed by the actual valid corruption control.
+- [x] Obtain independent exact-`e8b0fe63` acceptance and close only `bd-mxeq` (PinkOwl, comment 254, `2026-10-12T14:32:55.501804516Z`); all other issue rows and prior history are unchanged.
+- [ ] Publish/synchronize the accepted release-CLI repair and inspect its own hosted outcomes; the prior generator CI does not certify a newer SHA. Original performance/full-project acceptance stays unfinished.
+
+Current tracker after these narrow closures still has 115 unfinished items.
+No kernel-completion, physical-device, all-performance-green or release claim
+follows from these repairs.
 
 ## Assessment at the audited revision
 
