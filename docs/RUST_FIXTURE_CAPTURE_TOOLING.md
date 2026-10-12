@@ -27,7 +27,7 @@ Subcommands (`tools/twin_run/src/main.rs:23-29`, dispatch at `main.rs:155-249`):
 | `twin_run minimize <scenario.json> --runner <asx-conformance> --out <dir>` | Delta-debugging reducer for a scenario whose Rust capture the C runtime FAILs: deletes tasks, script entries, program steps and declarations while Rust still runs the scenario and C still FAILs in the same part of the comparison. Writes the reduced scenario (`<id>-min`) and its Rust fixture. | `minimize.rs:1-17`, `minimize.rs:192-201`; `main.rs:221-247` |
 | `twin_run trace <scenario.json>` | Prints the raw lab trace of one scenario, for diagnosing a divergence. | `main.rs:174-201` |
 
-Fixture contents (`tools/twin_run/src/run.rs:2034-2051`): `schema`
+Fixture contents (`tools/twin_run/src/run.rs:2035-2052`): `schema`
 (`asx.fixture.v2`), `scenario_id`, the embedded `scenario`, `vocabulary`,
 `trace`, `snapshot`, `observations`, `trace_digest`, `snapshot_digest`,
 `semantic_digest`, and `schedule` (`certificate_hash`, `decisions`,
@@ -133,7 +133,7 @@ None of these subcommands, outputs or the seed derivation exist in
 `tools/fixture_capture`, and its provenance block has none of those four
 fields (section 3). Neither tool has a `replay-check` step that re-runs a
 capture and compares digests; `twin_run` records the lab's forced schedule in
-`schedule.forced_schedule` (`run.rs:1948-1961`) but does not replay it.
+`schedule.forced_schedule` (`run.rs:1949-1962`) but does not replay it.
 
 ## 6. Schemas
 

@@ -2768,6 +2768,34 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         observe_status(t, idx, label, st);
         return STEP_NEXT;
     }
+    if (strcmp(op, "masked") == 0) {
+        /* Cx::masked (cx.rs:3315). A masked step inside masked nests; each
+         * inner observation's op is its path, e.g. masked/2/masked/1/checkpoint
+         * (DSL §3.2). */
+        uint32_t steps = asx_json_get(g_in, step, "steps");
+        uint32_t n = asx_json_count(g_in, steps);
+        uint32_t j;
+        step_result r = STEP_NEXT;
+        if (asx_task_mask(self) != ASX_OK) {
+            it_fail_task(t, idx, "asx_task_mask failed");
+            return STEP_END;
+        }
+        for (j = 0; j < n && r == STEP_NEXT; j++) {
+            uint32_t inner = asx_json_item(g_in, steps, j);
+            char inner_label[512];
+            const char *inner_op = it_str(inner, "op");
+            int len = snprintf(inner_label, sizeof(inner_label), "%s/%u/%s", label,
+                               (unsigned)(j + 1u), inner_op != NULL ? inner_op : "");
+            if (len < 0 || (size_t)len >= sizeof(inner_label)) {
+                it_fail_task(t, idx, "masked nesting too deep for its label");
+                r = STEP_END;
+                break;
+            }
+            r = exec_sync(t, self, inner, idx, inner_label);
+        }
+        if (asx_task_unmask(self) != ASX_OK) it_fail_task(t, idx, "asx_task_unmask failed");
+        return r;
+    }
     {
         char what[160];
         (void)snprintf(what, sizeof(what), "op \"%s\" is not interpreted (or blocks inside masked)",
@@ -3317,26 +3345,6 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         }
         observe_status(t, idx, op, ASX_OK);
         return STEP_END;
-    }
-    if (strcmp(op, "masked") == 0) {
-        uint32_t steps = asx_json_get(g_in, step, "steps");
-        uint32_t n = asx_json_count(g_in, steps);
-        uint32_t j;
-        step_result r = STEP_NEXT;
-        if (asx_task_mask(self) != ASX_OK) {
-            it_fail_task(t, idx, "asx_task_mask failed");
-            return STEP_END;
-        }
-        for (j = 0; j < n && r == STEP_NEXT; j++) {
-            uint32_t inner = asx_json_item(g_in, steps, j);
-            char label[96];
-            const char *inner_op = it_str(inner, "op");
-            (void)snprintf(label, sizeof(label), "masked/%u/%s", (unsigned)(j + 1u),
-                           inner_op != NULL ? inner_op : "");
-            r = exec_sync(t, self, inner, idx, label);
-        }
-        if (asx_task_unmask(self) != ASX_OK) it_fail_task(t, idx, "asx_task_unmask failed");
-        return r;
     }
     if (strcmp(op, "join") == 0) {
         it_task *target = task_by_name(it_str(step, "task"));

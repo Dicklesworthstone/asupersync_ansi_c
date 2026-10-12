@@ -151,7 +151,8 @@ Rust that is an `async` body; in C, a poll function with a program counter.
   - `step` is the 1-based index in the program, and `op` is the step's op.
   - A `masked` step produces one observation per inner step, all with the
     `masked` step's index and with `op` = `masked/<j>/<inner op>`, where j
-    is 1-based.
+    is 1-based. A `masked` step inside one extends the path, so a step in
+    a nested mask is observed as e.g. `masked/2/masked/1/checkpoint`.
   - Programs of spawned children and of group members are separate tasks
     with their own names, so their steps are observed under those names.
   - A step that never runs (because the program ended earlier) produces
@@ -197,7 +198,7 @@ observes `ASX_E_NOT_FOUND`: the abort consumed the token.
 
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|
-| `masked` | `steps` | `cx.masked(\|\| { …steps… })` (`cx.rs:3315`) | `asx_task_mask(self)`; steps; `asx_task_unmask(self)` | no: `steps` may contain only non-blocking steps | Inside, `checkpoint` returns `ASX_OK` (`rule.cancel.checkpoint_masked`). Nesting deeper than 64 is a harness error (`cx.rs:3323`). |
+| `masked` | `steps` | `cx.masked(\|\| { …steps… })` (`cx.rs:3315`) | `asx_task_mask(self)`; steps; `asx_task_unmask(self)` | no: `steps` may contain only non-blocking steps, `masked` among them | Inside, `checkpoint` returns `ASX_OK` (`rule.cancel.checkpoint_masked`), also after a nested `masked` ends while an outer one still holds (`cancel-masked-nested-001`). Nesting deeper than 64 is a harness error (`cx.rs:3323`), but the C scenario parser's JSON depth limit (64 levels) stops a document at about 29 nested masks first. |
 
 Rust has no mask that spans an await (`MaskGuard` is private, `cx.rs:706`),
 so a blocking step inside `masked` is a schema error.
@@ -768,7 +769,9 @@ Closed (each verified by a fixture that now matches):
 - **Cancel wakes, masking and Notify**: a cancel wakes a parked task once;
   a masked task does not observe its cancel; Notify skips only
   cancel-aware doomed waiters (`cancel-masked-checkpoint-001`,
-  `cancel-strengthen-severity-001`).
+  `cancel-strengthen-severity-001`). Masks nest as a depth count, so the
+  cancel is observed only once the outermost one ends
+  (`cancel-masked-nested-001`; the generator nests masks at times).
 - **Closed-region admission** reports `ASX_E_REGION_CLOSED`
   (`obligation-reserve-closed-region-must-fail-001`).
 

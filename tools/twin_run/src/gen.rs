@@ -279,12 +279,25 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 // A mask hides a cancel from the checkpoint, not from
                 // is_cancel_requested; the checkpoint may raise a budget
                 // cancel the second look sees.
-                return json!({"op": "masked", "steps": [
-                    {"op": "is_cancel_requested"},
-                    {"op": "checkpoint", "on_cancel": "continue"},
-                    {"op": "is_cancel_requested"},
-                    {"op": "trace", "message": format!("{me}:m{}", held.messages)},
-                ]});
+                let mut steps = vec![
+                    json!({"op": "is_cancel_requested"}),
+                    json!({"op": "checkpoint", "on_cancel": "continue"}),
+                    json!({"op": "is_cancel_requested"}),
+                ];
+                // Sometimes masks nest: releasing an inner one leaves the
+                // outer in force, so the checkpoint after it still passes.
+                if rng.chance(25) {
+                    let mut inner = json!({"op": "masked", "steps": [{"op": "checkpoint", "on_cancel": "continue"}]});
+                    for _ in 0..rng.below(2) {
+                        inner = json!({"op": "masked", "steps": [
+                            inner, {"op": "checkpoint", "on_cancel": "continue"},
+                        ]});
+                    }
+                    steps.push(inner);
+                    steps.push(json!({"op": "checkpoint", "on_cancel": "continue"}));
+                }
+                steps.push(json!({"op": "trace", "message": format!("{me}:m{}", held.messages)}));
+                return json!({"op": "masked", "steps": steps});
             }
             15 => {
                 if let Some((ch, producer, consumer)) = &world.mpsc {

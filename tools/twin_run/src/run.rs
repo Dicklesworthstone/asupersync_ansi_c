@@ -1471,6 +1471,23 @@ fn exec_sync(
             };
             observe(&ctx.shared, me, idx, label, status, Value::Null);
         }
+        // A masked step inside masked nests; each inner observation's op is
+        // its path, e.g. masked/2/masked/1/checkpoint (DSL §3.2).
+        "masked" => {
+            let steps = step
+                .get("steps")
+                .and_then(Value::as_array)
+                .ok_or("masked without steps")?;
+            return cx.masked(|| -> RunResult<Flow> {
+                for (j, inner) in steps.iter().enumerate() {
+                    let path = format!("{label}/{}/{}", j + 1, str_field(inner, "op")?);
+                    if let Flow::Return(body) = exec_sync(cx, ctx, local, idx, &path, inner)? {
+                        return Ok(Flow::Return(body));
+                    }
+                }
+                Ok(Flow::Continue)
+            });
+        }
         other => {
             return Err(format!("op {other:?} is not interpreted yet (increment 3)"));
         }
@@ -1815,22 +1832,6 @@ async fn exec_step(
                 "panicked" => std::panic::panic_any(str_field(outcome, "message")?.to_string()),
                 other => return Err(format!("unknown outcome tag {other:?}")),
             }));
-        }
-        "masked" => {
-            let steps = step
-                .get("steps")
-                .and_then(Value::as_array)
-                .ok_or("masked without steps")?;
-            let result = cx.masked(|| -> RunResult<Flow> {
-                for (j, inner) in steps.iter().enumerate() {
-                    let label = format!("masked/{}/{}", j + 1, str_field(inner, "op")?);
-                    if let Flow::Return(body) = exec_sync(cx, ctx, local, idx, &label, inner)? {
-                        return Ok(Flow::Return(body));
-                    }
-                }
-                Ok(Flow::Continue)
-            });
-            return result;
         }
         // Task groups (DSL §3.5).
         "race" | "join_all" => {
