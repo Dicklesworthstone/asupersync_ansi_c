@@ -239,11 +239,41 @@ physical credits independent of the ledger, authenticates the serial and
 channel binding before settlement, and drops task-associated credits on
 completion. Three native copy/exhaustion/observer cases extend broadcast 29 to 32; three
 lab cases extend 29 to 32 and execute ten actual send/abort/disconnect/holder
-subscenarios. The repaired draft passes both programs and all 167 canonical
-fixtures. Final committed-source and independent acceptance remain pending;
-original `bd-6ncn` stays in progress. The old MPSC test's mistaken empty status
+subscenarios. The committed repair at `74e5d4a0` passes both programs and all 167
+canonical fixtures. Fresh strict GCC, Clang and genuine native32 builds each
+pass all 164 unit programs and the core suites; ASan/UBSan, all eleven gate
+controls, eight executed profile builds and JSON/BIN build-mode execution also
+pass. Root and independent replays pass the preserved 8,000 inputs and 43 minima.
+Independent native before controls fail only the two new broadcast copy/capacity
+cases (30/32) and the later-poll broadcast case (31/32); the observer case also
+passes the old runtime and is not credited as a negative control. R1 and explicit
+seven-credit execution pass. Original `bd-6ncn` stays in progress pending its
+separate historical seed-1100/1101 inputs and 23 quota minima.
+The old MPSC test's mistaken empty status
 and the draft's state-bearing full-handle comparison were corrected from the
 documented API and genuine scheduler observations, with failures retained.
+
+Original `bd-o9oc` is independently closed at the same `74e5d4a0` source.
+A fresh genuine pre-fix Rust producer reproduces dispatch gaps on all five
+original class-B inputs; the corrected producer passes the same five. Independent
+execution also passes 167 fresh recaptures, the 167 accepted fixtures, seed 9's
+200 inputs and the complete 8,000/43 set. Root reexecutes the five before/after
+comparisons with its own fresh final C runner. The independent verifier uses a
+shared fresh C build and the common genuine Rust producer; neither is counted
+as an additional independent Rust build. Closure changes only that original
+issue, preserving all other records, comments, labels and dependencies.
+
+The first hosted push at `74e5d4a0` passes format, cppcheck, API documentation
+and checkpoint coverage, then fails the commit evidence block because its
+repository proof paths, `TRC-*` identifier and generated-artifact paths were
+omitted. Downstream CI jobs do not run. The follow-up evidence record must pass
+the full original pushed range before a CI retry is credited. The same source's
+actual [performance run 38248217460](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38248217460)
+executes both CORE and HFT: each passes all 34 latency checks but fails one stale
+baseline check (225/224 days, limit 120). Size/cold-start is 5/10: archive
+1,602,150 bytes, text 733,104 bytes, BSS 4,887,172 bytes, first-task p99 21,705 ns
+and init p99 21,473 ns exceed their existing limits. These failures remain;
+archive-wide BSS is not an executed application's measured device RAM.
 
 Current original-task execution checklist (verification still in progress):
 
@@ -269,8 +299,12 @@ Current original-task execution checklist (verification still in progress):
 - [x] Reproduce the original quota-refused semaphore/reply bugs against fresh pre-fix source; retain the real reply hang as an ERROR rather than relabel it FAIL.
 - [x] Add real later-poll MPSC/oneshot/broadcast send, abort and disconnect cases with a checked lease filling the quota; also exercise broadcast holder completion.
 - [x] Reproduce and repair spent broadcast copy publication with independent physical credits; add real capacity exhaustion, unchanged-output and slot-reuse checks.
-- [ ] Run final broadcast repair through strict compilers, full suites, sanitizers, 167 captures, profiles/codecs and original 8,000/43 comparisons.
-- [ ] Obtain independent original `bd-6ncn` and `bd-o9oc` acceptance, then close only those bugs whose original criteria are met.
+- [x] Run final broadcast repair at `74e5d4a0` through strict compilers, full suites, sanitizers, 167 captures, profiles/codecs and original 8,000/43 comparisons.
+- [x] Independently review/reexecute final broadcast copy, exhaustion, later-poll cleanup and real observer behavior; preserve the genuine before failures.
+- [x] Independently close original `bd-o9oc` after genuine old-Rust five-case reproduction and corrected full-campaign execution.
+- [ ] Replay the original quota issue's separate seed-1100/1101 inputs and identify/replay all 23 quota minima without replacing the original inputs.
+- [ ] Obtain independent original `bd-6ncn` acceptance, then close only that bug if its original criteria are met.
+- [ ] Correct the commit evidence record, verify the complete original pushed range and inspect the subsequent actual hosted CI results.
 - [ ] Publish all accepted increments on main, preserve concurrent work and synchronize the required legacy mirror.
 
 K4, typed outcomes/factories, serialized asynchronous finalization, independent
