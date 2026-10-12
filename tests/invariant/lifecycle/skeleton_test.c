@@ -265,15 +265,19 @@ TEST(region_drain_propagates_budget_exhaustion) {
 TEST(region_drain_leak_audits_unresolved_obligations) {
     /* Rust's Finalizing arm leak-audits an obligation still Reserved once
      * no task is left, then closes (runtime/state.rs:10266-10317): the
-     * drain closes the region and the obligation ends Leaked (default
-     * LOG policy), counted once. */
+     * drain closes the region and the obligation ends Leaked (LOG policy,
+     * named here: the default is PANIC, which fails the close instead),
+     * counted once. */
     asx_region_id rid;
     asx_obligation_id oid;
     asx_obligation_state ostate;
     asx_region_state rstate;
     asx_budget budget;
     asx_status st;
-    uint64_t leaks_before = asx_obligation_leak_count();
+    uint64_t leaks_before;
+
+    asx_runtime_set_leak_policy_internal(ASX_LEAK_LOG, NULL);
+    leaks_before = asx_obligation_leak_count();
 
     st = asx_region_open(&rid);
     ASSERT_EQ(st, ASX_OK);

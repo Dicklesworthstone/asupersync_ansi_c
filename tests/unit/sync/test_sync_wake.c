@@ -50,7 +50,10 @@ static int setup_with_leak_response(asx_leak_response leak_response) {
 }
 
 static int setup(void) {
-    return setup_with_leak_response(ASX_LEAK_LOG); /* asx_runtime_config_init's default */
+    /* LOG, named: the tests here let permit holders complete with tokens
+     * unresolved and check what the leak does; the default (PANIC) would
+     * fail those runs instead. */
+    return setup_with_leak_response(ASX_LEAK_LOG);
 }
 
 static uint32_t polls_used(uint32_t start, const asx_budget *b) {

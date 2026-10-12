@@ -1745,6 +1745,8 @@ TEST(region_leak_audit_runs_after_cleanup_task_leaves_obligation_reserved) {
     asx_obligation_state state;
     asx_budget budget;
     asx_runtime_reset();
+    /* LOG named: under the default PANIC the audit fails the close. */
+    asx_runtime_set_leak_policy_internal(ASX_LEAK_LOG, NULL);
     memset(&ctx, 0, sizeof(ctx));
     ASSERT_EQ(asx_region_open(&ctx.region), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(ctx.region, &ctx.obligation), ASX_OK);

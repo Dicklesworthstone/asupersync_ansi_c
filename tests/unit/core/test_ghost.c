@@ -10,6 +10,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../../../src/runtime/runtime_internal.h"
 #include "test_harness.h"
 #include <asx/asx.h>
 #include <asx/core/ghost.h>
@@ -343,6 +344,8 @@ TEST(ghost_integration_lifecycle_obligation_leak_on_drain) {
     asx_obligation_id oid;
     asx_budget budget;
     asx_runtime_reset();
+    /* LOG named: under the default PANIC the close fails instead. */
+    asx_runtime_set_leak_policy_internal(ASX_LEAK_LOG, NULL);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(rid, &oid), ASX_OK);

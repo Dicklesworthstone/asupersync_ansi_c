@@ -25,6 +25,10 @@ static void setup(void) {
     asx_status st;
     if (asx_runtime_is_initialized(&g_rt)) asx_runtime_shutdown(&g_rt);
     asx_runtime_config_init(&cfg);
+    /* The tests here that let a member complete holding an obligation
+     * check that the leak is recorded and the run goes on: LOG, named,
+     * because the default (PANIC) fails the run. */
+    cfg.leak_response = ASX_LEAK_LOG;
     st = asx_runtime_hooks_init(&hooks);
     if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);
     (void)st;
