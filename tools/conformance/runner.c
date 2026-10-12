@@ -852,11 +852,16 @@ static void ck_build(void) {
 
 /* The JSON value as C text, for messages. */
 static void ck_rust_text(uint32_t v, char *buf, size_t cap) {
+    size_t n;
     if (!canonical(&g_fixture, v, g_a)) {
         (void)snprintf(buf, cap, "?");
         return;
     }
-    (void)snprintf(buf, cap, "%s", g_a);
+    if (cap == 0u) return;
+    n = strlen(g_a);
+    if (n >= cap) n = cap - 1u;
+    memcpy(buf, g_a, n);
+    buf[n] = '\0';
 }
 
 static void ck_c_text(const ck_entry *e, char *buf, size_t cap) {
