@@ -653,7 +653,7 @@ C asx_budget_consume_poll(asx_budget *b) -> uint32_t   // src/core/budget.c:61
 
 ### 9.1 Channel State Model
 
-Implicit state encoding via atomic fields (no explicit state enum; `src/channel/mpsc.rs:297`). C uses an explicit enum `asx_channel_state` (`include/asx/core/channel.h:63`).
+Implicit state encoding via atomic fields (no explicit state enum; `src/channel/mpsc.rs:297`). C uses an explicit enum `asx_channel_state` (`include/asx/core/channel.h:74`).
 
 | Implicit State | Condition | Description |
 |----------------|-----------|-------------|
@@ -694,7 +694,7 @@ reserve(&cx) -> Reserve future; Output = Result<SendPermit, SendError<()>>
 3. **First and capacity:** if the caller is first (no queued waiter, or its own token at the front) and `used_slots < capacity` -> `reserved += 1`, leave the queue, wake the next head if capacity remains, register the `SendPermit` obligation, return the permit (`src/channel/mpsc.rs:1081`, obligation at `src/channel/mpsc.rs:1116`)
 4. **Otherwise:** register or refresh its waker in the FIFO waiter queue and return `Poll::Pending` (`src/channel/mpsc.rs:1129`). A caller that is not first is registered, not just told Pending. There is no "monotonic waiter ID": waiters are `SlabToken`s in a `VecDeque` (`src/channel/mpsc.rs:279`)
 
-Only `reserve(&cx)` registers an obligation; `try_reserve` and `send` do not. C matches the order with two C-only codes: `ASX_E_INVALID_STATE` when the sender side is closed (`src/channel/mpsc.c:659`) before `ASX_E_DISCONNECTED` (`src/channel/mpsc.c:664`); cancellation is `ASX_E_CANCELLED` (`src/channel/mpsc.c:1039`), and the obligation is registered after the slot is claimed (`src/channel/mpsc.c:1051-1055`). A narrowed C context still observes its task's cancellation: `asx_cx_checkpoint` requires no cancellation capability (`src/cx/cx.c:416-427`). See `docs/CHANNEL_TIMER_SEMANTICS.md` §1.3.
+Only `reserve(&cx)` registers an obligation; `try_reserve` and `send` do not. C matches the order with two C-only codes: `ASX_E_INVALID_STATE` when the sender side is closed (`src/channel/mpsc.c:795`) before `ASX_E_DISCONNECTED` (`src/channel/mpsc.c:800`); cancellation is `ASX_E_CANCELLED` (`src/channel/mpsc.c:1266`), and the obligation is registered after the slot is claimed (`src/channel/mpsc.c:1277-1281`). A narrowed C context still observes its task's cancellation: `asx_cx_checkpoint` requires no cancellation capability (`src/cx/cx.c:416-427`). See `docs/CHANNEL_TIMER_SEMANTICS.md` §1.3.
 
 #### Phase 2a: Send (Commit)
 
@@ -705,7 +705,7 @@ SendPermit::try_send(self, value: T)                            // fails only if
 
 `send` is **not** infallible (the first extraction said it was; `src/channel/mpsc.rs:1565`). On success: marks permit consumed, decrements `reserved`, pushes value to back of queue, wakes receiver, and commits the permit's obligation; on disconnect the obligation is aborted with reason Error.
 
-**Rust evidence:** `src/channel/mpsc.rs:1565`–`src/channel/mpsc.rs:1629`. C: `asx_send_permit_send` (`src/channel/mpsc.c:750`).
+**Rust evidence:** `src/channel/mpsc.rs:1565`–`src/channel/mpsc.rs:1629`. C: `asx_send_permit_send` (`src/channel/mpsc.c:886`).
 
 #### Phase 2b: Abort (Rollback)
 
@@ -715,7 +715,7 @@ SendPermit::abort(self)
 
 Marks permit consumed, decrements `reserved`, aborts the obligation with reason Explicit, and wakes the head of the waiter queue (the head is woken, not removed).
 
-**Rust evidence:** `src/channel/mpsc.rs:1633`. C: `asx_send_permit_abort` (`src/channel/mpsc.c:848`).
+**Rust evidence:** `src/channel/mpsc.rs:1633`. C: `asx_send_permit_abort` (`src/channel/mpsc.c:984`).
 
 #### RAII Drop Safety
 
@@ -760,7 +760,7 @@ send_evict_oldest(value: T) -> Result<Option<T>, SendError<T>>
 | All capacity is reserved (no committed entries) | `Err(Full(value))` — cannot evict reserved slots |
 | Receiver dropped | `Err(Disconnected(value))` (checked first) |
 
-**Rust evidence:** `src/channel/mpsc.rs:860`–`src/channel/mpsc.rs:936`. C: `asx_channel_send_evict_oldest` (`src/channel/mpsc.c:998-1002`) is `asx_channel_send_evict_oldest_where` (`src/channel/mpsc.c:1008-1074`) with a predicate that accepts everything, as Rust's is; the same outcomes, and the predicate form evicts the oldest accepted message on both backends (`docs/CHANNEL_TIMER_SEMANTICS.md` §1.5, `bd-9kll.8.3`). Rust parity: `mpsc-send-evict-oldest-001`.
+**Rust evidence:** `src/channel/mpsc.rs:860`–`src/channel/mpsc.rs:936`. C: `asx_channel_send_evict_oldest` (`src/channel/mpsc.c:1093-1097`) is `asx_channel_send_evict_oldest_where` (`src/channel/mpsc.c:1103-1169`) with a predicate that accepts everything, as Rust's is; the same outcomes, and the predicate form evicts the oldest accepted message on both backends (`docs/CHANNEL_TIMER_SEMANTICS.md` §1.5, `bd-9kll.8.3`). Rust parity: `mpsc-send-evict-oldest-001`.
 
 ### 9.6 Receive Semantics
 
@@ -775,9 +775,9 @@ Order (`poll_recv`, `src/channel/mpsc.rs:1786`):
 3. **Queue empty AND (all senders dropped OR receiver closed):** `RecvError::Disconnected` (`src/channel/mpsc.rs:1813`)
 4. **Otherwise:** register waker, return `Poll::Pending`
 
-`try_recv` (`src/channel/mpsc.rs:1956`) has no checkpoint and returns `Empty` or `Disconnected`. C: `asx_channel_recv` (`src/channel/mpsc.c:1073`) and `channel_recv_impl` (`src/channel/mpsc.c:965`); C's `try_recv` returns `ASX_E_WOULD_BLOCK` for empty (`src/channel/mpsc.c:991`), and C keeps waiting when the sender is closed but permits are outstanding, a state Rust cannot reach (`bd-9kll.5.4`).
+`try_recv` (`src/channel/mpsc.rs:1956`) has no checkpoint and returns `Empty` or `Disconnected`. C: `asx_channel_recv` (`src/channel/mpsc.c:1300`) and `channel_recv_impl` (`src/channel/mpsc.c:1192`); C's `try_recv` returns `ASX_E_WOULD_BLOCK` for empty (`src/channel/mpsc.c:1218`), and C keeps waiting when the sender is closed but permits are outstanding, a state Rust cannot reach (`bd-9kll.5.4`).
 
-`recv_many(cx, buffer, limit)` (`src/channel/mpsc.rs:1754`, `poll_recv_many` `src/channel/mpsc.rs:1867`): `limit` 0 is `Ok(0)` before the checkpoint; then the checkpoint (trace `mpsc::recv_many cancelled`); then up to `limit` messages oldest first, waking one queued sender per freed slot; empty with no sender left or the receiver closed is `Ok(0)`, not `Disconnected`. C: `asx_channel_recv_many` (`src/channel/mpsc.c:1085`). `Sender::closed()` (`src/channel/mpsc_closed.rs:39`) waits for the receiver's close or drop, without a `Cx`. C: `asx_channel_closed` (`src/channel/mpsc.c:1128`). Rust parity: `mpsc-recv-many-001`, `mpsc-recv-many-wakes-each-freed-slot-001`, `mpsc-closed-001` (`bd-9kll.5.7`).
+`recv_many(cx, buffer, limit)` (`src/channel/mpsc.rs:1754`, `poll_recv_many` `src/channel/mpsc.rs:1867`): `limit` 0 is `Ok(0)` before the checkpoint; then the checkpoint (trace `mpsc::recv_many cancelled`); then up to `limit` messages oldest first, waking one queued sender per freed slot; empty with no sender left or the receiver closed is `Ok(0)`, not `Disconnected`. C: `asx_channel_recv_many` (`src/channel/mpsc.c:1312`). `Sender::closed()` (`src/channel/mpsc_closed.rs:39`) waits for the receiver's close or drop, without a `Cx`. C: `asx_channel_closed` (`src/channel/mpsc.c:1355`). Rust parity: `mpsc-recv-many-001`, `mpsc-recv-many-wakes-each-freed-slot-001`, `mpsc-closed-001` (`bd-9kll.5.7`).
 
 **Cancel safety:** Cancelled receive does NOT consume a message (the checkpoint runs before the pop). Message remains for next receive.
 
@@ -812,7 +812,7 @@ Rust: `SendError` (`src/channel/mpsc.rs:111`), `RecvError` (`src/channel/mpsc.rs
 | `SendPermit::send()` | Not checked (already committed) |
 | `SendPermit::abort()` | Not checked (already releasing) |
 
-Waiter cleanup on cancel: the `Reserve` future's drop removes its `SlabToken` and passes the wake on only if it held a queue position, the receiver is alive and capacity is free (`src/channel/mpsc.rs:965`). C: `asx_channel_wait_cancel` (`src/channel/mpsc.c:1002`).
+Waiter cleanup on cancel: the `Reserve` future's drop removes its `SlabToken` and passes the wake on only if it held a queue position, the receiver is alive and capacity is free (`src/channel/mpsc.rs:965`). C: `asx_channel_wait_cancel` (`src/channel/mpsc.c:1229`).
 
 ### 9.9 Obligation Integration (Session Layer)
 
@@ -837,13 +837,13 @@ Rust: `src/channel/session.rs` (`TrackedSender`/`TrackedPermit` at `src/channel/
 4. Takes the queue via `mem::take()` — pending messages DROPPED (not delivered)
 5. After unlock: signals closed, wakes ALL waiting senders (they observe disconnect on next poll), then drops the items outside the lock
 
-`Receiver::close()` (`src/channel/mpsc.rs:1698`) is different: it sets `receiver_dropped` and wakes senders but keeps the queue receivable. C's `asx_channel_close_receiver` is the drop: it discards the queue, also after a seal (Rust's drop takes it, `src/channel/mpsc.rs:2138`), and wakes both wait queues, and a second drop returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:533`; `bd-9kll.5.4`). `asx_channel_seal` is `Receiver::close()`: it wakes the parked senders and keeps the queue receivable (`src/channel/mpsc.c:556`; `bd-g652`; fixture `mpsc-seal-drains-001`).
+`Receiver::close()` (`src/channel/mpsc.rs:1698`) is different: it sets `receiver_dropped` and wakes senders but keeps the queue receivable. C's `asx_channel_close_receiver` is the drop: it discards the queue, also after a seal (Rust's drop takes it, `src/channel/mpsc.rs:2138`), and wakes both wait queues, and a second drop returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:665`; `bd-9kll.5.4`). `asx_channel_seal` is `Receiver::close()`: it wakes the parked senders and keeps the queue receivable (`src/channel/mpsc.c:688`; `bd-g652`; fixture `mpsc-seal-drains-001`).
 
 **Last Sender Drop** (`src/channel/mpsc.rs:1241`):
 1. Decrements `sender_count` to 0
 2. Wakes receiver (will return `Disconnected` after draining remaining queue)
 
-C's `asx_channel_close_sender` (`src/channel/mpsc.c:491`) also wakes the reserve waiters when the last sender closes the sender side (`src/channel/mpsc.c:501-521`); a non-last sender drop only decrements the count.
+C's `asx_channel_close_sender` (`src/channel/mpsc.c:646`) and `asx_channel_sender_drop` (`:620`) also wake the reserve waiters when the last sender closes the sender side (`channel_sender_dropped`, `src/channel/mpsc.c:590-615`); a non-last sender drop only decrements the count, and a second drop of one sender is refused without changing it.
 
 ### 9.11 Ordering Guarantees
 

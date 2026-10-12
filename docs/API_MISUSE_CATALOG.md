@@ -109,6 +109,8 @@ records.
 | `asx_channel_create(rid, 0, &c)` | Zero capacity | ASX_E_INVALID_ARGUMENT | test_api_misuse:channel_create_zero_capacity |
 | `asx_channel_create(rid, 16, NULL)` | NULL output | ASX_E_INVALID_ARGUMENT | test_api_misuse:channel_create_null_output |
 | `asx_channel_close_sender(cid)` x2 | Double close sender | ASX_E_INVALID_STATE | test_api_misuse:channel_double_close_sender |
+| `asx_channel_close_sender(cid)` x2 with a clone alive | Double close of the creator's sender | ASX_E_INVALID_STATE; the clone's sender is not removed | test_mpsc:a_double_close_of_one_sender_cannot_remove_another_producers |
+| `asx_channel_sender_drop(&s)` x2, or of a copy | Double drop of a cloned sender | ASX_E_INVALID_STATE; the count is unchanged | test_mpsc:a_second_drop_of_a_clone_is_refused_whether_by_handle_or_copy |
 | `asx_channel_close_receiver(cid)` x2 | Double close receiver | ASX_E_INVALID_STATE | test_api_misuse:channel_double_close_receiver |
 | `asx_channel_try_reserve(closed, &p)` | Reserve on closed | ASX_E_DISCONNECTED | test_api_misuse:channel_reserve_after_close |
 | `asx_channel_try_recv(INVALID_ID, &v)` | Invalid handle | ASX_E_INVALID_ARGUMENT | test_api_misuse:channel_recv_invalid_handle |
