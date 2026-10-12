@@ -2087,7 +2087,7 @@ fuzz-counterexample-replay: fuzz-build
 # $(CC) and the strict flags, without libFuzzer, and runs every seed once.
 # ---------------------------------------------------------------------------
 FUZZ_PARSER_TARGETS := HTTP_REQUEST HTTP_RESPONSE WEBSOCKET BASE64 CODEC_JSON CODEC_BIN \
-                       WEB_QUERY RAPTORQ_OTI FRAME_CODECS RESOLVE_HOST JSON_READER
+                       WEB_QUERY RAPTORQ_OTI RAPTORQ_DECODE FRAME_CODECS RESOLVE_HOST JSON_READER
 FUZZ_PARSERS_CC ?= clang
 FUZZ_PARSERS_DIR := build/fuzz-parsers
 FUZZ_PARSERS_SECONDS ?= 60
