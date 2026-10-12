@@ -162,13 +162,11 @@ static void e2e_actor_terminate(void *state, asx_status reason, asx_actor_handle
 
 static asx_actor_behavior e2e_actor_behavior(void) {
     asx_actor_behavior behavior;
+    memset(&behavior, 0, sizeof(behavior)); /* every optional hook NULL, REJECT overflow */
     behavior.init = e2e_actor_init;
     behavior.handle_cast = e2e_actor_cast;
     behavior.handle_call = e2e_actor_call;
     behavior.terminate = e2e_actor_terminate;
-    behavior.on_start_budget = NULL;
-    behavior.on_stop_budget = NULL;
-    behavior.cast_overflow_policy = ASX_ACTOR_OVERFLOW_REJECT;
     return behavior;
 }
 

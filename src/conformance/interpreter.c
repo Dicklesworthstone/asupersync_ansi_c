@@ -3092,26 +3092,28 @@ static asx_budget probe_stop_budget(void *state) {
 }
 
 static const asx_actor_behavior g_counter_behavior = {
-    NULL, counter_cast, counter_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT};
+    NULL, counter_cast, counter_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT, NULL};
 /* `latest`: a counter that drops its oldest queued cast when full. */
 static const asx_actor_behavior g_latest_behavior = {
-    NULL, counter_cast, counter_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_DROP_OLDEST};
+    NULL, counter_cast, counter_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_DROP_OLDEST, NULL};
 static const asx_actor_behavior g_budgets_behavior = {probe_init,
                                                       counter_cast,
                                                       counter_call,
                                                       probe_terminate,
                                                       probe_start_budget,
                                                       NULL,
-                                                      ASX_ACTOR_OVERFLOW_REJECT};
+                                                      ASX_ACTOR_OVERFLOW_REJECT,
+                                                      NULL};
 static const asx_actor_behavior g_budgets_stop_behavior = {probe_init,
                                                            counter_cast,
                                                            counter_call,
                                                            probe_terminate,
                                                            probe_start_budget,
                                                            probe_stop_budget,
-                                                           ASX_ACTOR_OVERFLOW_REJECT};
+                                                           ASX_ACTOR_OVERFLOW_REJECT,
+                                                           NULL};
 static const asx_actor_behavior g_echo_behavior = {
-    NULL, NULL, echo_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT};
+    NULL, NULL, echo_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT, NULL};
 
 static it_server *server_by_name(const char *name) {
     uint32_t i;

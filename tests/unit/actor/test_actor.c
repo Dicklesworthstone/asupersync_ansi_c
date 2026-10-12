@@ -141,7 +141,7 @@ static void rec_terminate(void *state, asx_status reason, asx_actor_handle self)
 }
 
 static const asx_actor_behavior g_rec = {
-    rec_init, rec_cast, rec_call, rec_terminate, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT};
+    rec_init, rec_cast, rec_call, rec_terminate, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT, NULL};
 
 static asx_actor_handle spawn_rec(asx_region_id region, rec_state *state, uint32_t capacity) {
     asx_actor_handle h;
@@ -156,7 +156,7 @@ static asx_actor_handle spawn_rec(asx_region_id region, rec_state *state, uint32
 /* A client task running a short script of server operations          */
 /* ------------------------------------------------------------------ */
 
-typedef enum { CL_CAST, CL_CALL, CL_STOP_JOIN } cl_kind;
+typedef enum { CL_CAST, CL_CALL, CL_STOP_JOIN, CL_INFO } cl_kind;
 
 typedef struct {
     cl_kind kind;
@@ -183,6 +183,7 @@ static asx_status client_poll(void *user_data, asx_task_id self) {
         asx_status st = ASX_E_INVALID_STATE;
         switch (s->kind) {
         case CL_CAST: st = asx_actor_cast(c->server, &c->cx, s->arg, &c->op); break;
+        case CL_INFO: st = asx_actor_send_info(c->server, &c->cx, s->arg, &c->op); break;
         case CL_CALL: st = asx_actor_call(c->server, &c->cx, s->arg, &c->op, &s->reply); break;
         case CL_STOP_JOIN:
             if (!c->stop_sent) {
@@ -1141,6 +1142,228 @@ static void test_release_resolves_the_lease_when_the_entry_is_gone(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Info messages and the system lane (gen_server.rs:836-923, :2110)    */
+/* ------------------------------------------------------------------ */
+
+/* Records, in one sequence, what its handlers are given: a cast as 1000 +
+ * its value, a user info as 2000 + its value, a system message as 3000 +
+ * its reference. */
+typedef struct {
+    uint64_t seq[40];
+    uint32_t n;
+    asx_actor_info_msg last_system;
+    uint32_t systems;
+    int fail_on_system; /* handle_info fails on a system message */
+} inf_state;
+
+static void inf_push(inf_state *s, uint64_t v) {
+    if (s->n < 40u) s->seq[s->n] = v;
+    s->n++;
+}
+
+static asx_status inf_cast(void *state, uint64_t msg, asx_actor_handle self) {
+    (void)self;
+    inf_push((inf_state *)state, 1000u + msg);
+    return ASX_OK;
+}
+
+static asx_status inf_info(void *state, const asx_actor_info_msg *m, asx_actor_handle self) {
+    inf_state *s = (inf_state *)state;
+    (void)self;
+    if (m->kind == ASX_ACTOR_INFO_USER) {
+        inf_push(s, 2000u + m->value);
+        return ASX_OK;
+    }
+    s->last_system = *m;
+    s->systems++;
+    inf_push(s, 3000u + m->ref);
+    return s->fail_on_system ? ASX_E_INVALID_STATE : ASX_OK;
+}
+
+static const asx_actor_behavior g_inf = {
+    NULL, inf_cast, NULL, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT, inf_info};
+
+static asx_actor_handle spawn_inf(asx_region_id region, inf_state *state, uint32_t capacity) {
+    asx_actor_handle h;
+    memset(state, 0, sizeof(*state));
+    h.slot = UINT32_MAX;
+    h.generation = 0;
+    MUST_OK(asx_actor_spawn(&h, region, &g_inf, state, capacity));
+    return h;
+}
+
+static asx_actor_info_msg down_msg(uint64_t ref, asx_task_id monitored) {
+    asx_actor_info_msg m;
+    memset(&m, 0, sizeof(m));
+    m.kind = ASX_ACTOR_INFO_DOWN;
+    m.ref = ref;
+    m.task = monitored;
+    m.vt = 7u;
+    m.reason = asx_outcome_make(ASX_OUTCOME_OK);
+    return m;
+}
+
+static void test_info_and_casts_are_served_in_arrival_order(void) {
+    inf_state s;
+    asx_actor_handle h;
+    setup();
+    h = spawn_inf(g_root, &s, 4);
+    MUST_OK(asx_actor_try_cast(h, 1));
+    MUST_OK(asx_actor_try_info(h, 2));
+    MUST_OK(asx_actor_try_cast(h, 3));
+    MUST_OK(asx_actor_try_info(h, 4));
+    run(g_root);
+    ASSERT(s.n == 4u, "all four were served");
+    ASSERT(s.seq[0] == 1001u && s.seq[1] == 2002u && s.seq[2] == 1003u && s.seq[3] == 2004u,
+           "in arrival order, info messages as USER info to handle_info");
+}
+
+static void test_a_system_message_goes_ahead_of_a_full_mailbox(void) {
+    inf_state s;
+    asx_actor_handle h;
+    asx_actor_info_msg m;
+    setup();
+    h = spawn_inf(g_root, &s, 1);
+    MUST_OK(asx_actor_try_cast(h, 1));
+    ASSERT(asx_actor_try_cast(h, 2) == ASX_E_CHANNEL_FULL, "the mailbox is full");
+    m = down_msg(9u, fake_task(5));
+    ASSERT(asx_actor_system_push(h, &m) == ASX_OK, "a full mailbox never loses a system message");
+    run(g_root);
+    ASSERT(s.n == 2u && s.seq[0] == 3009u && s.seq[1] == 1001u,
+           "the DOWN is taken before the queued cast");
+    ASSERT(s.last_system.kind == ASX_ACTOR_INFO_DOWN && s.last_system.task == fake_task(5) &&
+               s.last_system.vt == 7u && s.last_system.reason.severity == ASX_OUTCOME_OK,
+           "its fields reach handle_info");
+}
+
+static void test_a_system_message_wakes_a_parked_server(void) {
+    inf_state s;
+    asx_actor_handle h;
+    asx_actor_info_msg m;
+    setup();
+    h = spawn_inf(g_root, &s, 2);
+    run(g_root);
+    ASSERT(s.n == 0u && asx_actor_get_state(h) == ASX_ACTOR_RUNNING, "parked in its receive");
+    m = down_msg(4u, fake_task(1));
+    MUST_OK(asx_actor_system_push(h, &m));
+    run(g_root);
+    ASSERT(s.n == 1u && s.seq[0] == 3004u, "the push woke it and it served the message");
+}
+
+static void test_the_system_lane_is_bounded_and_fifo(void) {
+    inf_state s;
+    asx_actor_handle h;
+    asx_actor_info_msg m;
+    uint32_t i;
+    setup();
+    h = spawn_inf(g_root, &s, 2);
+    for (i = 0; i < ASX_ACTOR_SYSTEM_LANE_CAPACITY; i++) {
+        m = down_msg(i + 1u, fake_task(1));
+        ASSERT(asx_actor_system_push(h, &m) == ASX_OK, "pushes up to the lane's capacity");
+    }
+    m = down_msg(99u, fake_task(1));
+    ASSERT(asx_actor_system_push(h, &m) == ASX_E_RESOURCE_EXHAUSTED, "the next is refused");
+    run(g_root);
+    ASSERT(s.n == ASX_ACTOR_SYSTEM_LANE_CAPACITY, "every waiting message was served");
+    for (i = 0; i < ASX_ACTOR_SYSTEM_LANE_CAPACITY && i < 40u; i++) {
+        ASSERT(s.seq[i] == 3001u + i, "in the order they were pushed");
+    }
+}
+
+static void test_a_graceful_stop_serves_the_lane_then_the_mailbox(void) {
+    inf_state s;
+    asx_actor_handle h;
+    asx_actor_info_msg m;
+    setup();
+    h = spawn_inf(g_root, &s, 4);
+    MUST_OK(asx_actor_try_cast(h, 1));
+    m = down_msg(5u, fake_task(1));
+    MUST_OK(asx_actor_system_push(h, &m));
+    MUST_OK(asx_actor_stop(h));
+    run(g_root);
+    ASSERT(s.n == 2u && s.seq[0] == 3005u && s.seq[1] == 1001u,
+           "the system message first, then the cast, before it stops");
+    ASSERT(!asx_actor_is_alive(h), "stopped");
+}
+
+static void test_a_cancelled_server_does_not_handle_its_lane(void) {
+    inf_state s;
+    asx_actor_handle h;
+    asx_actor_info_msg m;
+    asx_region_id sr;
+    setup();
+    sr = child_region();
+    h = spawn_inf(sr, &s, 4);
+    MUST_OK(asx_actor_try_info(h, 1));
+    m = down_msg(6u, fake_task(1));
+    MUST_OK(asx_actor_system_push(h, &m));
+    cancel(sr);
+    run(g_root);
+    ASSERT(s.n == 0u, "cancelled: neither the info nor the system message is handled");
+    ASSERT(!asx_actor_is_alive(h) && asx_actor_exit_reason(h) == ASX_E_CANCELLED, "and it stopped");
+}
+
+static void test_a_failing_handler_drops_the_lane_and_closes_it(void) {
+    inf_state s;
+    asx_actor_handle h;
+    asx_actor_info_msg m;
+    setup();
+    h = spawn_inf(g_root, &s, 4);
+    s.fail_on_system = 1;
+    m = down_msg(1u, fake_task(1));
+    MUST_OK(asx_actor_system_push(h, &m));
+    m = down_msg(2u, fake_task(1));
+    MUST_OK(asx_actor_system_push(h, &m));
+    run(g_root);
+    ASSERT(s.systems == 1u, "the first failed the server; the second was never handled");
+    ASSERT(asx_actor_get_state(h) == ASX_ACTOR_STOPPED && task_outcome(h) == ASX_OUTCOME_PANICKED,
+           "its task completed PANICKED");
+    m = down_msg(3u, fake_task(1));
+    ASSERT(asx_actor_system_push(h, &m) == ASX_E_DISCONNECTED,
+           "a stopped server drops what it is sent");
+}
+
+static void test_try_info_statuses(void) {
+    inf_state s;
+    asx_actor_handle h;
+    asx_actor_handle stale;
+    setup();
+    h = spawn_inf(g_root, &s, 1);
+    ASSERT(asx_actor_try_info(h, 1) == ASX_OK, "room");
+    ASSERT(asx_actor_try_info(h, 2) == ASX_E_CHANNEL_FULL, "a full mailbox");
+    run(g_root);
+    MUST_OK(asx_actor_stop(h));
+    ASSERT(asx_actor_try_info(h, 3) == ASX_E_DISCONNECTED, "a stopping server");
+    stale = h;
+    stale.generation++;
+    ASSERT(asx_actor_try_info(stale, 1) == ASX_E_INVALID_ARGUMENT, "a stale handle");
+}
+
+static void test_send_info_from_a_task(void) {
+    inf_state s;
+    asx_actor_handle h;
+    client c;
+    asx_region_id r;
+    uint64_t users_before;
+    setup();
+    r = child_region();
+    h = spawn_inf(r, &s, 2);
+    memset(&c, 0, sizeof(c));
+    client_add(&c, CL_INFO, 7u);
+    client_add(&c, CL_STOP_JOIN, 0u);
+    client_add(&c, CL_INFO, 8u);
+    client_start(&c, h, r);
+    users_before = asx_trace_kind_total(ASX_TRACE_USER);
+    run(r);
+    ASSERT(c.steps[0].status == ASX_OK, "an info send to a running server");
+    ASSERT(s.n == 1u && s.seq[0] == 2007u, "reached handle_info as a USER message");
+    ASSERT(c.steps[1].status == ASX_OK, "the server stopped and joined");
+    ASSERT(c.steps[2].status == ASX_E_DISCONNECTED, "an info to a stopped server is refused");
+    ASSERT(asx_trace_kind_total(ASX_TRACE_USER) > users_before,
+           "the server's loop and the rejection left user traces");
+}
+
+/* ------------------------------------------------------------------ */
 /* CastOverflowPolicy::DropOldest (gen_server.rs:1305-1360)            */
 /* ------------------------------------------------------------------ */
 
@@ -1366,9 +1589,10 @@ static const asx_actor_behavior g_bud = {bud_init,
                                          bud_terminate,
                                          bud_start_budget,
                                          bud_stop_budget,
-                                         ASX_ACTOR_OVERFLOW_REJECT};
+                                         ASX_ACTOR_OVERFLOW_REJECT,
+                                         NULL};
 static const asx_actor_behavior g_bud_default = {
-    bud_init, bud_cast, NULL, bud_terminate, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT};
+    bud_init, bud_cast, NULL, bud_terminate, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT, NULL};
 
 /* A task the host spawns takes the infinite budget: the region's is not met
  * into it (Rust's create_task, lifecycle.c). A server a task spawns in the
@@ -1688,6 +1912,16 @@ int main(void) {
     RUN(test_release_name_waits_for_the_server_to_finish);
     RUN(test_abort_lease_frees_the_name_without_stopping_the_server);
     RUN(test_release_resolves_the_lease_when_the_entry_is_gone);
+
+    RUN(test_info_and_casts_are_served_in_arrival_order);
+    RUN(test_a_system_message_goes_ahead_of_a_full_mailbox);
+    RUN(test_a_system_message_wakes_a_parked_server);
+    RUN(test_the_system_lane_is_bounded_and_fifo);
+    RUN(test_a_graceful_stop_serves_the_lane_then_the_mailbox);
+    RUN(test_a_cancelled_server_does_not_handle_its_lane);
+    RUN(test_a_failing_handler_drops_the_lane_and_closes_it);
+    RUN(test_try_info_statuses);
+    RUN(test_send_info_from_a_task);
 
     RUN(test_drop_oldest_evicts_the_oldest_cast_to_make_room);
     RUN(test_reject_policy_never_evicts);

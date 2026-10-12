@@ -12,17 +12,20 @@
  *      first ("gen_server::init_skipped_cancelled"), else
  *      "gen_server::init" and the init callback (Rust on_start);
  *   2. the message loop: a cancel check at the top of each round
- *      ("gen_server::cancel_requested" ends it), then a receive: casts and
- *      calls are dispatched in arrival order, a call's reply committed
+ *      ("gen_server::cancel_requested" ends it), then the system lane (a
+ *      DOWN or trapped EXIT the runtime delivered, ahead of the mailbox),
+ *      else a receive: casts, calls and info messages are dispatched in
+ *      arrival order, a call's reply committed
  *      ("gen_server::reply_committed", or "gen_server::reply_caller_gone"
  *      when the caller stopped waiting); every 8 messages the task yields
  *      ("gen_server::yield_after_ready_batch"). The loop ends when the
  *      receive is cancelled ("gen_server::recv_cancelled") or the mailbox
  *      is empty after a stop request ("gen_server::mailbox_disconnected");
  *   3. the stop: the server is Stopping, the mailbox is sealed and drained
- *      under a cancellation mask: queued calls get no reply
- *      ("gen_server::drain_abort_call"), queued casts are handled unless
- *      the server was cancelled; "gen_server::yield_during_drain" every 8
+ *      under a cancellation mask, the system lane's messages first: queued
+ *      calls get no reply ("gen_server::drain_abort_call"), queued casts,
+ *      info and system messages are handled unless the server was
+ *      cancelled; "gen_server::yield_during_drain" every 8
  *      and "gen_server::mailbox_drained" when anything was drained;
  *   4. "gen_server::terminate", the terminate callback (Rust on_stop), and
  *      the server is Stopped.
@@ -56,6 +59,7 @@
 #include <asx/asx_status.h>
 #include <asx/core/channel.h>
 #include <asx/core/oneshot.h>
+#include <asx/core/outcome.h>
 #include <asx/cx/cx.h>
 
 #ifdef __cplusplus
@@ -75,6 +79,16 @@ extern "C" {
 #endif
 #if (ASX_ACTOR_MAILBOX_CAPACITY) > (ASX_CHANNEL_MAX_CAPACITY)
 #error "ASX_ACTOR_MAILBOX_CAPACITY must not exceed ASX_CHANNEL_MAX_CAPACITY"
+#endif
+
+/* The system messages (DOWN, EXIT, TIMEOUT) one server can have waiting.
+ * Rust's lane is unbounded; a monitor or link is refused past this, so a
+ * delivery never finds the lane full. */
+#ifndef ASX_ACTOR_SYSTEM_LANE_CAPACITY
+#define ASX_ACTOR_SYSTEM_LANE_CAPACITY 16u
+#endif
+#if (ASX_ACTOR_SYSTEM_LANE_CAPACITY) < 1
+#error "ASX_ACTOR_SYSTEM_LANE_CAPACITY must be at least 1"
 #endif
 
 /* -------------------------------------------------------------------
@@ -113,6 +127,9 @@ typedef enum {
  *               polls, no deadline or cost limit, priority 128.
  * cast_overflow_policy: what asx_actor_try_cast does when the mailbox is
  *               full (Rust cast_overflow_policy, :603). Zero is REJECT.
+ * handle_info:  an info message (optional: Rust's default does nothing).
+ *               A failing handler is the C form of a Rust panic, as a
+ *               failing cast handler is.
  *
  * init, handle_cast, handle_call and terminate receive the user state and
  * the server's own handle; the budget callbacks only the user state.
@@ -136,6 +153,29 @@ typedef enum {
     ASX_ACTOR_OVERFLOW_DROP_OLDEST = 1 /* evict the oldest queued cast */
 } asx_actor_overflow_policy;
 
+/* Info messages (Rust GenServer::Info, handle_info, gen_server.rs:560): the
+ * out-of-band channel of a server. A USER message is what asx_actor_send_info
+ * and asx_actor_try_info carry; DOWN, EXIT and TIMEOUT are Rust's SystemMsg
+ * (:307), which the runtime delivers (asx_actor_system_push). */
+typedef enum {
+    ASX_ACTOR_INFO_USER = 0,
+    ASX_ACTOR_INFO_DOWN = 1,   /* a monitor fired */
+    ASX_ACTOR_INFO_EXIT = 2,   /* a trapped link exit */
+    ASX_ACTOR_INFO_TIMEOUT = 3 /* a deterministic timeout tick */
+} asx_actor_info_kind;
+
+typedef struct {
+    asx_actor_info_kind kind;
+    uint64_t value;     /* USER: the message; TIMEOUT: the timeout id */
+    asx_time vt;        /* DOWN: completion time; EXIT: exit time; TIMEOUT: tick time */
+    asx_task_id task;   /* DOWN: the monitored task; EXIT: the task that exited */
+    asx_outcome reason; /* DOWN, EXIT: why it ended (Rust DownReason) */
+    uint64_t ref;       /* DOWN: the monitor reference; EXIT: the link reference */
+} asx_actor_info_msg;
+
+typedef asx_status (*asx_actor_info_fn)(void *state, const asx_actor_info_msg *msg,
+                                        asx_actor_handle self);
+
 typedef struct {
     asx_actor_init_fn init;
     asx_actor_cast_fn handle_cast;
@@ -144,6 +184,7 @@ typedef struct {
     asx_actor_budget_fn on_start_budget;
     asx_actor_budget_fn on_stop_budget;
     asx_actor_overflow_policy cast_overflow_policy;
+    asx_actor_info_fn handle_info;
 } asx_actor_behavior;
 
 /* The progress of one cast or call. Zero it (or ASX_ACTOR_OP_INIT) before
@@ -237,6 +278,20 @@ ASX_API ASX_MUST_USE asx_status asx_actor_try_cast(asx_actor_handle actor, uint6
 /* Casts evicted under ASX_ACTOR_OVERFLOW_DROP_OLDEST (Rust
  * GenServerHandle::evicted_count, :1649). 0 for a stale handle. */
 ASX_API uint64_t asx_actor_evicted_count(asx_actor_handle actor);
+
+/* `h.info(&cx, msg)` (:1363), one poll, like asx_actor_cast: a cancelled Cx
+ * gives ASX_E_CANCELLED (no trace), a stopping or stopped server
+ * ASX_E_DISCONNECTED ("gen_server::info_rejected_stopped"); then the send,
+ * ASX_E_PENDING while the mailbox is full, ending ASX_OK, ASX_E_CANCELLED
+ * or ASX_E_DISCONNECTED. The server's handle_info gets an
+ * ASX_ACTOR_INFO_USER message carrying `msg`, in arrival order with casts
+ * and calls. */
+ASX_API ASX_MUST_USE asx_status asx_actor_send_info(asx_actor_handle actor, asx_cx *cx,
+                                                    uint64_t msg, asx_actor_op *op);
+
+/* `h.try_info(msg)` (:1393): ASX_OK, ASX_E_CHANNEL_FULL when the mailbox is
+ * full, ASX_E_DISCONNECTED when the server stops or stopped. Never waits. */
+ASX_API ASX_MUST_USE asx_status asx_actor_try_info(asx_actor_handle actor, uint64_t msg);
 
 /* `h.call(&cx, request)` (:1171), one poll; *out_reply is written on
  * ASX_OK. Checks first: a cancelled Cx gives ASX_E_CANCELLED
@@ -400,6 +455,19 @@ ASX_API ASX_MUST_USE asx_status asx_named_actor_abort_lease(asx_named_actor *nam
 /* -------------------------------------------------------------------
  * Runtime integration
  * ------------------------------------------------------------------- */
+
+/* The runtime's delivery of a DOWN, EXIT or TIMEOUT message (Rust
+ * SystemLane::push, :869). The server's system lane is outside its bounded
+ * mailbox, so a full mailbox never loses one: the server takes these ahead
+ * of the mailbox, and drains what is left, ahead of the mailbox, when it
+ * stops (handle_info runs for them unless the server was cancelled).
+ * ASX_E_DISCONNECTED once the server has stopped (Rust drops the message),
+ * ASX_E_RESOURCE_EXHAUSTED when ASX_ACTOR_SYSTEM_LANE_CAPACITY messages
+ * are waiting (Rust's lane is unbounded: whoever establishes monitors and
+ * links bounds them to this), ASX_E_INVALID_ARGUMENT for a stale handle or
+ * a NULL message. */
+ASX_API ASX_MUST_USE asx_status asx_actor_system_push(asx_actor_handle actor,
+                                                      const asx_actor_info_msg *msg);
 
 /* The runtime calls this when a task finishes. A server whose task
  * finished without reaching Stopped (its admission was refused, or it was

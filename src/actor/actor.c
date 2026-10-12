@@ -22,7 +22,7 @@
 /* Internal types                                                      */
 /* ------------------------------------------------------------------ */
 
-typedef enum { ENV_CAST = 1, ENV_CALL = 2 } actor_env_kind;
+typedef enum { ENV_CAST = 1, ENV_CALL = 2, ENV_INFO = 3 } actor_env_kind;
 
 typedef struct {
     uint8_t kind; /* 0: free */
@@ -72,6 +72,13 @@ typedef struct {
     asx_budget phase_original;
     asx_budget phase_baseline;
     uint64_t evicted; /* casts evicted under DROP_OLDEST */
+    /* The system lane (Rust SystemLane, gen_server.rs:836): DOWN and EXIT
+     * messages the runtime delivers outside the bounded mailbox, a FIFO
+     * the loop takes ahead of it. Closed once the server stops. */
+    asx_actor_info_msg system[ASX_ACTOR_SYSTEM_LANE_CAPACITY];
+    uint32_t system_head;
+    uint32_t system_count;
+    int system_closed;
 } asx_actor_slot;
 
 static asx_actor_slot g_actors[ASX_MAX_ACTORS];
@@ -128,7 +135,28 @@ static asx_actor_handle actor_handle_of(const asx_actor_slot *s) {
 }
 
 static void cx_trace(const asx_cx *cx, const char *message) {
-    if (cx != NULL && cx->task_id != ASX_INVALID_ID) asx_trace_user(cx->task_id, message);
+    if (message != NULL && cx != NULL && cx->task_id != ASX_INVALID_ID) {
+        asx_trace_user(cx->task_id, message);
+    }
+}
+
+/* The system lane. */
+static int lane_pop(asx_actor_slot *s, asx_actor_info_msg *out) {
+    if (s->system_count == 0u) return 0;
+    *out = s->system[s->system_head];
+    s->system_head = (s->system_head + 1u) % ASX_ACTOR_SYSTEM_LANE_CAPACITY;
+    s->system_count--;
+    return 1;
+}
+
+/* SystemLane::close (:914) for a server that panicked or can no longer run
+ * (:2457): no handler runs, so the lane's messages are dropped and no more
+ * are taken. A server that stops normally only seals its lane (see
+ * actor_begin_stop), and the drain takes what it holds. */
+static void lane_discard(asx_actor_slot *s) {
+    s->system_closed = 1;
+    s->system_head = 0u;
+    s->system_count = 0u;
 }
 
 static int cx_cancelled(asx_cx *cx) { return cx != NULL && asx_cx_checkpoint(cx) != ASX_OK; }
@@ -187,6 +215,7 @@ static void actor_publish(asx_actor_slot *s) {
 static void actor_cell_drop(asx_actor_slot *s) {
     if (!s->ran) s->exit_reason = ASX_E_CANCELLED;
     actor_discard_mailbox(s);
+    lane_discard(s);
     actor_publish(s);
 }
 
@@ -281,6 +310,12 @@ static asx_status actor_start(asx_actor_slot *s) {
     return st;
 }
 
+/* handle_info (:563): the default does nothing. */
+static asx_status actor_handle_info(asx_actor_slot *s, const asx_actor_info_msg *msg) {
+    if (s->behavior.handle_info == NULL) return ASX_OK;
+    return s->behavior.handle_info(s->user_state, msg, actor_handle_of(s));
+}
+
 /* dispatch_envelope (:2227): a call's reply is sent as Reply::send does
  * (:660); a failed handler drops it while panicking, aborting it. */
 static asx_status actor_dispatch(asx_actor_slot *s, const actor_envelope *env) {
@@ -291,6 +326,13 @@ static asx_status actor_dispatch(asx_actor_slot *s, const actor_envelope *env) {
     if (e.kind == ENV_CAST) {
         if (s->behavior.handle_cast == NULL) return ASX_OK;
         return s->behavior.handle_cast(s->user_state, e.payload, actor_handle_of(s));
+    }
+    if (e.kind == ENV_INFO) {
+        asx_actor_info_msg info;
+        memset(&info, 0, sizeof(info));
+        info.kind = ASX_ACTOR_INFO_USER;
+        info.value = e.payload;
+        return actor_handle_info(s, &info);
     }
     /* No handle_call: Rust's handle_call that drops its reply, whose drop
      * bomb panics the server. */
@@ -322,6 +364,22 @@ static asx_status actor_serve(asx_actor_slot *s, asx_task_id self) {
                 return ASX_OK;
             }
             s->phase = PH_RECV;
+        }
+        /* DOWN notifications and trapped exit signals go first (:2110): the
+         * lane is outside the mailbox, so a full mailbox never delays one. */
+        {
+            asx_actor_info_msg sys;
+            if (lane_pop(s, &sys)) {
+                s->phase = PH_TOP;
+                st = actor_handle_info(s, &sys);
+                if (st != ASX_OK) return st;
+                if (++s->batch >= ACTOR_YIELD_INTERVAL) {
+                    s->batch = 0;
+                    cx_trace(&s->cx, "gen_server::yield_after_ready_batch");
+                    return ASX_E_PENDING;
+                }
+                continue;
+            }
         }
         st = asx_channel_recv(s->mailbox, &s->cx, &v);
         if (st == ASX_E_PENDING) {
@@ -367,23 +425,46 @@ static void actor_begin_stop(asx_actor_slot *s, asx_task_id self) {
     s->masked = asx_task_mask(self) == ASX_OK;
     st = asx_channel_seal(s->mailbox);
     (void)st; /* open until now: the cell holds a sender */
+    /* The lane stops taking messages; what it holds is drained first
+     * (SystemLane::close returns it, :2176). */
+    s->system_closed = 1;
     s->batch = 0;
     s->phase = PH_DRAIN;
 }
 
-/* The drain (:2172-2206). ASX_E_PENDING: yielding; ASX_OK: empty;
- * anything else: a cast handler failed. */
+/* The drain (:2172-2206): the system lane's messages first, then the
+ * mailbox. ASX_E_PENDING: yielding; ASX_OK: empty; anything else: a cast or
+ * info handler failed. */
 static asx_status actor_drain(asx_actor_slot *s) {
-    uint64_t v;
-    actor_envelope env;
-    while (asx_channel_try_recv(s->mailbox, &v) == ASX_OK) {
-        if (!env_take(s, v, &env)) return ASX_E_INVALID_STATE;
-        if (env.kind == ENV_CALL) {
-            asx_oneshot_permit_abort(&env.reply);
-            cx_trace(&s->cx, "gen_server::drain_abort_call");
-        } else if (!s->aborted && s->behavior.handle_cast != NULL) {
-            asx_status st = s->behavior.handle_cast(s->user_state, env.payload, actor_handle_of(s));
-            if (st != ASX_OK) return st;
+    for (;;) {
+        uint64_t v;
+        actor_envelope env;
+        asx_actor_info_msg sys;
+        if (lane_pop(s, &sys)) {
+            if (!s->aborted) {
+                asx_status st = actor_handle_info(s, &sys);
+                if (st != ASX_OK) return st;
+            }
+        } else if (asx_channel_try_recv(s->mailbox, &v) == ASX_OK) {
+            if (!env_take(s, v, &env)) return ASX_E_INVALID_STATE;
+            if (env.kind == ENV_CALL) {
+                asx_oneshot_permit_abort(&env.reply);
+                cx_trace(&s->cx, "gen_server::drain_abort_call");
+            } else if (!s->aborted) {
+                asx_status st = ASX_OK;
+                if (env.kind == ENV_INFO) {
+                    asx_actor_info_msg info;
+                    memset(&info, 0, sizeof(info));
+                    info.kind = ASX_ACTOR_INFO_USER;
+                    info.value = env.payload;
+                    st = actor_handle_info(s, &info);
+                } else if (s->behavior.handle_cast != NULL) {
+                    st = s->behavior.handle_cast(s->user_state, env.payload, actor_handle_of(s));
+                }
+                if (st != ASX_OK) return st;
+            }
+        } else {
+            return ASX_OK;
         }
         s->drained++;
         if (++s->batch >= ACTOR_YIELD_INTERVAL) {
@@ -392,7 +473,6 @@ static asx_status actor_drain(asx_actor_slot *s) {
             return ASX_E_PENDING;
         }
     }
-    return ASX_OK;
 }
 
 static void actor_unmask(asx_actor_slot *s, asx_task_id self) {
@@ -408,6 +488,7 @@ static asx_status actor_fail(asx_actor_slot *s, asx_task_id self, asx_status why
     s->exit_reason = why;
     s->panicked = 1;
     actor_discard_mailbox(s);
+    lane_discard(s); /* no handler runs after a panic (:2457) */
     actor_unmask(s, self);
     actor_publish(s);
     return asx_task_panic(self, "gen_server callback failed") == ASX_OK ? ASX_OK : why;
@@ -516,6 +597,9 @@ asx_status asx_actor_spawn(asx_actor_handle *out, asx_region_id region,
     s->panicked = 0;
     s->exit_reason = ASX_OK;
     s->evicted = 0u;
+    s->system_head = 0u;
+    s->system_count = 0u;
+    s->system_closed = 0;
 
     *out = actor_handle_of(s);
     return ASX_OK;
@@ -598,7 +682,20 @@ asx_status asx_actor_exit_reason(asx_actor_handle actor) {
 /* Messages                                                            */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_actor_cast(asx_actor_handle actor, asx_cx *cx, uint64_t msg, asx_actor_op *op) {
+/* The traces a send's refusals leave: a cast's (:1268) and an info's
+ * (:1363) differ, a NULL one leaving none. */
+typedef struct {
+    const char *cancelled;      /* the caller's Cx was cancelled */
+    const char *stopped;        /* the server is stopping or stopped */
+    const char *send_cancelled; /* the wait for room was cancelled */
+    const char *send_failed;    /* the mailbox closed */
+} send_traces;
+
+/* `h.cast(&cx, msg)` and `h.info(&cx, msg)`, one poll: the checks, then
+ * sender.send(cx, envelope) (:1285), which takes no obligation
+ * (TransientReserve). */
+static asx_status actor_send(asx_actor_handle actor, asx_cx *cx, actor_env_kind kind, uint64_t msg,
+                             asx_actor_op *op, const send_traces *traces) {
     asx_actor_slot *s;
     uint32_t e;
     asx_status st;
@@ -609,18 +706,17 @@ asx_status asx_actor_cast(asx_actor_handle actor, asx_cx *cx, uint64_t msg, asx_
 
     if (op->phase == OP_CHECK) {
         if (cx_cancelled(cx)) {
-            cx_trace(cx, "gen_server::cast_rejected_cancelled");
+            cx_trace(cx, traces->cancelled);
             return ASX_E_CANCELLED;
         }
         if (actor_stopping(s)) {
-            cx_trace(cx, "gen_server::cast_rejected_stopped");
+            cx_trace(cx, traces->stopped);
             return ASX_E_DISCONNECTED;
         }
         op->phase = OP_SEND;
     }
-    /* sender.send(cx, envelope) (:1285): no obligation (TransientReserve). */
     if (!env_alloc(s, &e)) return ASX_E_RESOURCE_EXHAUSTED;
-    s->envelopes[e].kind = ENV_CAST;
+    s->envelopes[e].kind = (uint8_t)kind;
     s->envelopes[e].payload = msg;
     st = asx_channel_send(s->mailbox, cx, (uint64_t)e);
     if (st == ASX_OK) {
@@ -634,11 +730,48 @@ asx_status asx_actor_cast(asx_actor_handle actor, asx_cx *cx, uint64_t msg, asx_
     }
     op->phase = OP_DONE;
     if (st == ASX_E_CANCELLED) {
-        cx_trace(cx, "gen_server::cast_send_cancelled");
+        cx_trace(cx, traces->send_cancelled);
         return ASX_E_CANCELLED;
     }
-    cx_trace(cx, "gen_server::cast_send_failed");
+    cx_trace(cx, traces->send_failed);
     return ASX_E_DISCONNECTED;
+}
+
+asx_status asx_actor_cast(asx_actor_handle actor, asx_cx *cx, uint64_t msg, asx_actor_op *op) {
+    static const send_traces traces = {"gen_server::cast_rejected_cancelled",
+                                       "gen_server::cast_rejected_stopped",
+                                       "gen_server::cast_send_cancelled",
+                                       "gen_server::cast_send_failed"};
+    return actor_send(actor, cx, ENV_CAST, msg, op, &traces);
+}
+
+/* Info sends leave one trace: a stopped server's rejection (:1375); a
+ * cancelled caller and a failed send return without (:1364, :1380). */
+asx_status asx_actor_send_info(asx_actor_handle actor, asx_cx *cx, uint64_t msg, asx_actor_op *op) {
+    static const send_traces traces = {NULL, "gen_server::info_rejected_stopped", NULL, NULL};
+    return actor_send(actor, cx, ENV_INFO, msg, op, &traces);
+}
+
+/* try_send of one envelope without an obligation (try_cast's Reject path
+ * and try_info, :1314, :1402). */
+static asx_status actor_try_send(asx_actor_slot *s, actor_env_kind kind, uint64_t msg) {
+    asx_send_permit permit;
+    uint32_t e;
+    asx_status st = asx_channel_try_reserve(s->mailbox, &permit);
+    if (st == ASX_E_CHANNEL_FULL) return ASX_E_CHANNEL_FULL;
+    if (st != ASX_OK) return ASX_E_DISCONNECTED;
+    if (!env_alloc(s, &e)) {
+        asx_send_permit_abort(&permit);
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+    s->envelopes[e].kind = (uint8_t)kind;
+    s->envelopes[e].payload = msg;
+    st = asx_send_permit_send(&permit, (uint64_t)e);
+    if (st != ASX_OK) {
+        s->envelopes[e].kind = 0u;
+        return ASX_E_DISCONNECTED;
+    }
+    return ASX_OK;
 }
 
 /* The DropOldest predicate (:1321): only a queued cast may be evicted, so
@@ -677,29 +810,37 @@ static asx_status try_cast_drop_oldest(asx_actor_slot *s, uint64_t msg) {
 
 asx_status asx_actor_try_cast(asx_actor_handle actor, uint64_t msg) {
     asx_actor_slot *s = actor_lookup(actor);
-    asx_send_permit permit;
-    uint32_t e;
-    asx_status st;
 
     if (s == NULL) return ASX_E_INVALID_ARGUMENT;
     if (actor_stopping(s)) return ASX_E_DISCONNECTED;
     if (s->behavior.cast_overflow_policy == ASX_ACTOR_OVERFLOW_DROP_OLDEST) {
         return try_cast_drop_oldest(s, msg);
     }
-    st = asx_channel_try_reserve(s->mailbox, &permit);
-    if (st == ASX_E_CHANNEL_FULL) return ASX_E_CHANNEL_FULL;
-    if (st != ASX_OK) return ASX_E_DISCONNECTED;
-    if (!env_alloc(s, &e)) {
-        asx_send_permit_abort(&permit);
-        return ASX_E_RESOURCE_EXHAUSTED;
-    }
-    s->envelopes[e].kind = ENV_CAST;
-    s->envelopes[e].payload = msg;
-    st = asx_send_permit_send(&permit, (uint64_t)e);
-    if (st != ASX_OK) {
-        s->envelopes[e].kind = 0u;
-        return ASX_E_DISCONNECTED;
-    }
+    return actor_try_send(s, ENV_CAST, msg);
+}
+
+asx_status asx_actor_try_info(asx_actor_handle actor, uint64_t msg) {
+    asx_actor_slot *s = actor_lookup(actor);
+
+    if (s == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (actor_stopping(s)) return ASX_E_DISCONNECTED;
+    return actor_try_send(s, ENV_INFO, msg);
+}
+
+asx_status asx_actor_system_push(asx_actor_handle actor, const asx_actor_info_msg *msg) {
+    asx_actor_slot *s = actor_lookup(actor);
+    asx_status st;
+
+    if (s == NULL || msg == NULL) return ASX_E_INVALID_ARGUMENT;
+    /* Dropped once the server has stopped (:872). */
+    if (s->state == ASX_ACTOR_STOPPED || s->system_closed) return ASX_E_DISCONNECTED;
+    if (s->system_count >= ASX_ACTOR_SYSTEM_LANE_CAPACITY) return ASX_E_RESOURCE_EXHAUSTED;
+    s->system[(s->system_head + s->system_count) % ASX_ACTOR_SYSTEM_LANE_CAPACITY] = *msg;
+    s->system_count++;
+    /* Wake it: a server parked in its mailbox's receive takes the message
+     * at its next poll, as it does a stop. */
+    st = asx_channel_wake_receiver(s->mailbox);
+    (void)st; /* the mailbox exists while the server does */
     return ASX_OK;
 }
 

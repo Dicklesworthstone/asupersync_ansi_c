@@ -89,13 +89,10 @@ static void echo_terminate(void *state, asx_status reason, asx_actor_handle self
 
 static asx_actor_behavior echo_behavior(void) {
     asx_actor_behavior behavior;
-    behavior.init = NULL;
+    memset(&behavior, 0, sizeof(behavior)); /* every optional hook NULL, REJECT overflow */
     behavior.handle_cast = echo_cast;
     behavior.handle_call = echo_call;
     behavior.terminate = echo_terminate;
-    behavior.on_start_budget = NULL;
-    behavior.on_stop_budget = NULL;
-    behavior.cast_overflow_policy = ASX_ACTOR_OVERFLOW_REJECT;
     return behavior;
 }
 
