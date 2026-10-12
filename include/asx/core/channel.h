@@ -129,9 +129,11 @@ ASX_API ASX_MUST_USE asx_status asx_channel_sender_clone(asx_channel_id id);
  * ASX_E_INVALID_STATE once the sender side is closed. */
 ASX_API ASX_MUST_USE asx_status asx_channel_close_sender(asx_channel_id id);
 
-/* Close the receiver side. Pending messages are discarded.
- * Future sends via permits return ASX_E_DISCONNECTED.
- * Open → ReceiverClosed; SenderClosed → FullyClosed. */
+/* Drop the receiver (Rust's Receiver::drop, mpsc.rs:2122). Pending
+ * messages are discarded, also after asx_channel_seal. Future sends via
+ * permits return ASX_E_DISCONNECTED.
+ * Open → ReceiverClosed; SenderClosed → FullyClosed; a sealed channel's
+ * state stays. Returns ASX_E_INVALID_STATE once the receiver was dropped. */
 ASX_API ASX_MUST_USE asx_status asx_channel_close_receiver(asx_channel_id id);
 
 /* Close the channel from the receiver side, keeping its queue: Rust's
@@ -141,7 +143,10 @@ ASX_API ASX_MUST_USE asx_status asx_channel_close_receiver(asx_channel_id id);
  * receivable, then receives see ASX_E_DISCONNECTED. Tasks waiting in
  * asx_channel_closed are woken too.
  * Open → ReceiverClosed; SenderClosed → FullyClosed. Returns
- * ASX_E_INVALID_STATE when the receiver side is already closed. */
+ * ASX_E_INVALID_STATE when the receiver side is already closed: a second
+ * seal (Rust's close() then returns without effect) or a seal after the
+ * receiver's drop. Dropping the receiver later still discards what the
+ * queue holds. */
 ASX_API ASX_MUST_USE asx_status asx_channel_seal(asx_channel_id id);
 
 /* Wake a task parked in asx_channel_recv without enqueueing anything

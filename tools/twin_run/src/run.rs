@@ -472,6 +472,9 @@ struct Local {
     /// interpreter closes them in the same order.
     mpsc_tx: BTreeMap<String, Box<mpsc::Sender<u64>>>,
     mpsc_rx: BTreeMap<String, mpsc::Receiver<u64>>,
+    /// Receivers this task sealed (`rx.close()`); a second seal is outside
+    /// the DSL (§3.6).
+    sealed: HashSet<String>,
     oneshot_tx: BTreeMap<String, oneshot::Sender<u64>>,
     oneshot_rx: BTreeMap<String, oneshot::Receiver<u64>>,
     broadcast_tx: BTreeMap<String, broadcast::Sender<u64>>,
@@ -1398,6 +1401,17 @@ fn exec_sync(
         }
         "close_receiver" => {
             local.close(str_field(step, "channel")?, false)?;
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
+        // rx.close() (mpsc.rs:1698): unlike close_receiver (the drop), the
+        // receiver stays held and the queue receivable.
+        "seal" => {
+            let ch = str_field(step, "channel")?;
+            if local.sealed.contains(ch) {
+                return Err(format!("a second seal of {ch:?} (outside DSL §3.6)"));
+            }
+            local.receiver(ch)?.close();
+            local.sealed.insert(ch.to_string());
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
         // Non-blocking oneshot, broadcast and watch sends (DSL §3.6).

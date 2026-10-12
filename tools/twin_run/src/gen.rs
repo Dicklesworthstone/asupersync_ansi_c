@@ -132,6 +132,8 @@ struct Held {
     sends: u32,
     /// This task closed its end of the mpsc channel.
     closed: bool,
+    /// This consumer sealed its mpsc receiver (rx.close()) and still holds it.
+    sealed: bool,
     /// This task used its end of the oneshot (it sends or receives once).
     oneshot_used: bool,
     /// This task waited at the barrier (each party arrives once).
@@ -337,6 +339,12 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                         return json!({"op": "reserve_send", "channel": ch, "as": format!("{me}.p{}", held.reserves)});
                     }
                     if me == consumer {
+                        // rx.close(): sends fail from now on, the queue stays
+                        // receivable (a later close_receiver discards it).
+                        if !held.sealed && rng.chance(8) {
+                            held.sealed = true;
+                            return json!({"op": "seal", "channel": ch});
+                        }
                         // A batch of up to 3 (0 returns at once).
                         if rng.chance(20) {
                             return json!({"op": "recv_many", "channel": ch, "limit": rng.below(4)});

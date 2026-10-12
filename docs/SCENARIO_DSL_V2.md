@@ -356,7 +356,8 @@ its body, drops its own clone; the sender side closes at the last one
 | `recv_many` | `channel`, `limit` | `rx.recv_many(&cx, &mut buf, limit).await` (`:1754`) | `asx_channel_recv_many(id, cx, buf, limit, &n)` until done | while empty | Checked first, after a `limit` of 0 (which gives `[]` at once): `ASX_E_CANCELLED`, tracing `"mpsc::recv_many cancelled"` (`:1882`). The observation `value` is the array of received integers, oldest first; a channel that can get no more messages gives `ASX_OK` with `[]`. |
 | `closed` | `channel` (the sender's) | `tx.closed().await` (`channel/mpsc_closed.rs:39`) | `asx_channel_closed` until done | until the receiver is closed or dropped | ignored: no `Cx`. Queued messages and reservations are untouched. |
 | `close_sender` | `channel` | `drop(tx)` (`:1241`) | `asx_channel_close_sender` | no | ignored |
-| `close_receiver` | `channel` | `drop(rx)` (`:2122`) | `asx_channel_close_receiver` | no | ignored |
+| `close_receiver` | `channel` | `drop(rx)` (`:2122`) | `asx_channel_close_receiver` | no | ignored. Discards what the queue holds, also after a `seal`. |
+| `seal` | `channel` (mpsc, the receiver's) | `rx.close()` (`:1698`) | `asx_channel_seal` | no | ignored. Sends and reservations fail with `ASX_E_DISCONNECTED` and parked producers and `closed` waiters wake; the receiver stays held and the queue receivable, then receives see `ASX_E_DISCONNECTED` (`mpsc-seal-drains-001`). A second `seal` is a harness error: Rust's `close()` would return without effect, C's `asx_channel_seal` refuses it. |
 | `oneshot_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/oneshot.rs:556`): reserves a SendPermit, traces `"oneshot::reserve creating permit"`, commits | `asx_oneshot_send(&tx, &cx, v)`: reserves the SendPermit obligation, traces, commits | no | Checked first: `ASX_E_CANCELLED`. |
 | `oneshot_recv` | `channel` | `rx.recv(&cx).await` (`oneshot.rs:1250`): traces `"oneshot::recv received value"` / `"…channel closed"` | `asx_oneshot_recv(rx, cx, &v)` until done | until sent or dropped | `ASX_E_CANCELLED`, tracing `"oneshot::recv cancelled while waiting"`. |
 | `oneshot_poll_closed` | `channel`, `end` (`sender` / `receiver`) | `poll_fn(\|c\| tx.poll_closed(c)).await` / the receiver's (`oneshot.rs:619`, `:1373`) | `asx_oneshot_poll_closed` / `asx_oneshot_receiver_poll_closed` until done | the sender's until the receiver is dropped; the receiver's until the channel is closed (sender gone, no permit, no value) | ignored: no `Cx`. The sender's wait is woken only by the receiver drop; the receiver's by the close and by the value received, never by a send. |
@@ -743,6 +744,11 @@ Closed (each verified by a fixture that now matches):
   `asx_channel_recv_many` (one parked producer woken per freed slot) and
   `asx_channel_closed` (woken by `asx_channel_seal` and
   `asx_channel_close_receiver`). Generated scenarios use all three.
+- **`seal`** (bd-9kll.5.4): Rust's `rx.close()` as `asx_channel_seal`
+  (`mpsc-seal-drains-001`; generated consumers seal at times and keep
+  receiving). The receiver's drop after a seal now discards the queue, as
+  Rust's does; C had kept it, so a sealed channel dropped with messages
+  queued never freed its slot.
 - **Owner-cancelled race and quorum take the owner Cx's reason**
   (bd-lfwh, bd-uyd3): Rust's `cx.cancel_reason()`, which can be ahead of
   the task record's after a tie (`race-owner-cancel-cx-reason-001`,

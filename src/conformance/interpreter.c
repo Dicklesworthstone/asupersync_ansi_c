@@ -2536,6 +2536,23 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         observe_status(t, idx, label, ASX_OK);
         return STEP_NEXT;
     }
+    if (strcmp(op, "seal") == 0) {
+        /* rx.close() (mpsc.rs:1698): unlike close_receiver (the drop), the
+         * receiver stays held and the queue receivable. asx_channel_seal
+         * refuses only a second seal, which is outside the DSL (§3.6). */
+        const char *ch = it_str(step, "channel");
+        it_channel *c = channel_by_name(ch);
+        if (c == NULL || owned_receiver(t, ch, IT_CH_MPSC) == NULL) {
+            it_fail_task(t, idx, "seal of an mpsc receiver this task does not own");
+            return STEP_END;
+        }
+        if (asx_channel_seal(c->id) != ASX_OK) {
+            it_fail_task(t, idx, "a second seal (outside DSL §3.6)");
+            return STEP_END;
+        }
+        observe_status(t, idx, label, ASX_OK);
+        return STEP_NEXT;
+    }
     /* Oneshot queries (DSL §3.6): tx.is_closed() / rx.is_closed()
      * (oneshot.rs:596, :1357) and rx.is_ready() (:1350), observed as a
      * boolean value. */

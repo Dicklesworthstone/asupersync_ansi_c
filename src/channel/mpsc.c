@@ -79,6 +79,10 @@ typedef struct {
      * create, +1 per asx_channel_sender_clone, -1 per
      * asx_channel_close_sender; the sender side closes at 0. */
     uint32_t sender_count;
+    /* The receiver was dropped (asx_channel_close_receiver). A seal closes
+     * the receiver side but keeps the receiver (Rust's close vs drop,
+     * mpsc.rs:1698, :2122). */
+    int receiver_dropped;
 
     /* Bounded ring buffer */
     uint32_t capacity;
@@ -447,6 +451,7 @@ asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_chann
             s->region = region;
             s->alive = 1;
             s->sender_count = 1u;
+            s->receiver_dropped = 0;
             s->capacity = capacity;
             s->queue_head = 0;
             s->queue_len = 0;
@@ -525,33 +530,27 @@ asx_status asx_channel_close_receiver(asx_channel_id id) {
 
     st = channel_slot_lookup(id, &s);
     if (st != ASX_OK) { return st; }
+    if (s->receiver_dropped) { return ASX_E_INVALID_STATE; }
 
-    switch (s->state) {
-    case ASX_CHANNEL_OPEN: s->state = ASX_CHANNEL_RECEIVER_CLOSED;
-#if ASX_CHANNEL_BACKEND_LOCKFREE
-        channel_lf_discard_committed(s);
-#else
-        s->queue_len = 0;
-        s->queue_head = 0;
-#endif
-        channel_wake_everyone(s);
-        return ASX_OK;
-    case ASX_CHANNEL_SENDER_CLOSED: s->state = ASX_CHANNEL_FULLY_CLOSED;
-#if ASX_CHANNEL_BACKEND_LOCKFREE
-        channel_lf_discard_committed(s);
-#else
-        s->queue_len = 0;
-        s->queue_head = 0;
-#endif
-        channel_wake_everyone(s);
-        /* Nobody waits on a fully closed channel again. */
-        channel_waiters_init(s);
-        return ASX_OK;
-    case ASX_CHANNEL_RECEIVER_CLOSED:
-    case ASX_CHANNEL_FULLY_CLOSED: return ASX_E_INVALID_STATE;
+    /* Rust's Receiver::drop (mpsc.rs:2122-2148) closes the receiver side
+     * unless a close() (asx_channel_seal) already did, and discards the
+     * queue either way: a sealed channel's undrained messages go too. */
+    s->receiver_dropped = 1;
+    if (s->state == ASX_CHANNEL_OPEN) {
+        s->state = ASX_CHANNEL_RECEIVER_CLOSED;
+    } else if (s->state == ASX_CHANNEL_SENDER_CLOSED) {
+        s->state = ASX_CHANNEL_FULLY_CLOSED;
     }
-
-    return ASX_E_INVALID_STATE;
+#if ASX_CHANNEL_BACKEND_LOCKFREE
+    channel_lf_discard_committed(s);
+#else
+    s->queue_len = 0;
+    s->queue_head = 0;
+#endif
+    channel_wake_everyone(s);
+    /* Nobody waits on a fully closed channel again. */
+    if (s->state == ASX_CHANNEL_FULLY_CLOSED) channel_waiters_init(s);
+    return ASX_OK;
 }
 
 asx_status asx_channel_seal(asx_channel_id id) {
@@ -1157,6 +1156,7 @@ void asx_channel_reset(void) {
         if (g_channels[i].alive) { g_channels[i].generation++; }
         g_channels[i].alive = 0;
         g_channels[i].state = ASX_CHANNEL_OPEN;
+        g_channels[i].receiver_dropped = 0;
         g_channels[i].queue_head = 0;
         g_channels[i].queue_len = 0;
         channel_atomic_store(&g_channels[i].reserved, 0u);
