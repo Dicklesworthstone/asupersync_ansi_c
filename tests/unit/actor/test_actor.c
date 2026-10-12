@@ -1232,6 +1232,69 @@ static void test_forged_and_reset_handles_are_rejected(void) {
     ASSERT(asx_actor_try_cast(h, 1) == ASX_E_INVALID_ARGUMENT, "stale after reset");
 }
 
+/* asx_actor_reset() (through asx_runtime_reset) clears only the slots spawn
+ * selected since the last reset. After an epoch that leaves evictions
+ * counted and a server panicked, a server spawned into any of those slots
+ * starts clean, whatever footprint the epochs before and after had. */
+#define ACTOR_EPOCH_MAX ((uint32_t)(ASX_MAX_ACTORS < 6u ? ASX_MAX_ACTORS : 6u))
+
+static void actor_epoch_dirty(uint32_t n, rec_state *st, asx_actor_handle *hs) {
+    uint32_t i;
+    uint32_t k;
+
+    for (i = 0; i < n; i++) {
+        if (i % 2u == 0u) {
+            hs[i] = spawn_rec_policy(g_root, &st[i], 2, ASX_ACTOR_OVERFLOW_DROP_OLDEST);
+            for (k = 1u; k <= 4u; k++) MUST_OK(asx_actor_try_cast(hs[i], k));
+        } else {
+            hs[i] = spawn_rec(g_root, &st[i], 4);
+            st[i].fail_cast_at = 1;
+            MUST_OK(asx_actor_try_cast(hs[i], 1));
+        }
+    }
+    run(g_root);
+}
+
+/* n servers in the first n slots: Created, no exit reason, nothing
+ * evicted, nothing queued, and none has run anything but its own init. */
+static int actor_epoch_fresh(uint32_t n) {
+    static rec_state st[ACTOR_EPOCH_MAX];
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        asx_actor_handle h = spawn_rec_policy(g_root, &st[i], 2, ASX_ACTOR_OVERFLOW_DROP_OLDEST);
+        if (!asx_actor_is_alive(h)) return 0;
+        if (asx_actor_get_state(h) != ASX_ACTOR_CREATED) return 0;
+        if (asx_actor_exit_reason(h) != ASX_OK) return 0;
+        if (asx_actor_evicted_count(h) != 0u) return 0;
+        if (asx_actor_mailbox_count(h) != 0u) return 0;
+    }
+    run(g_root);
+    for (i = 0; i < n; i++) {
+        if (st[i].init_called != 1 || st[i].casts != 0u) return 0;
+    }
+    return 1;
+}
+
+static void test_reset_after_heavy_use_leaves_no_stale_state(void) {
+    static rec_state dirty[ACTOR_EPOCH_MAX];
+    asx_actor_handle hs[ACTOR_EPOCH_MAX];
+    uint32_t pass;
+
+    /* heavy, light, heavy */
+    for (pass = 0; pass < 3u; pass++) {
+        uint32_t n = (pass == 1u) ? 2u : ACTOR_EPOCH_MAX;
+
+        setup();
+        actor_epoch_dirty(n, dirty, hs);
+        ASSERT(asx_actor_evicted_count(hs[0]) == 2u, "dirty: evictions counted");
+        ASSERT(asx_actor_exit_reason(hs[1]) == ASX_E_INVALID_STATE, "dirty: a panicked server");
+
+        setup(); /* asx_runtime_reset clears the actor table */
+        ASSERT(actor_epoch_fresh(ACTOR_EPOCH_MAX), "servers spawned after the reset start clean");
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -1284,6 +1347,7 @@ int main(void) {
     RUN(test_skipped_init_does_not_ask_for_the_start_budget);
 
     RUN(test_forged_and_reset_handles_are_rejected);
+    RUN(test_reset_after_heavy_use_leaves_no_stale_state);
 
     printf("\n  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

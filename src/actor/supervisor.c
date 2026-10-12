@@ -196,6 +196,10 @@ typedef struct {
 } sup_slot;
 
 static sup_slot g_sups[ASX_MAX_SUPERVISORS];
+/* One past the highest slot supervisor start selected since the last
+ * reset; slots from here up hold only their generation, so the reset
+ * clears only the prefix. */
+static uint32_t g_sup_hwm;
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -1489,6 +1493,7 @@ asx_status asx_supervisor_spawn(asx_supervisor_handle *out, asx_region_id region
     }
 
     s = &g_sups[idx];
+    if (idx >= g_sup_hwm) g_sup_hwm = idx + 1u;
     {
         uint32_t generation = next_gen(s->generation);
         memset(s, 0, sizeof(*s));
@@ -1603,9 +1608,12 @@ int asx_supervisor_finished(asx_supervisor_handle sup) {
 
 void asx_supervisor_reset(void) {
     uint32_t i;
-    for (i = 0; i < ASX_MAX_SUPERVISORS; i++) {
+    /* Only the slots start selected since the last reset were written; the
+     * generations survive the reset, as before. */
+    for (i = 0; i < g_sup_hwm; i++) {
         uint32_t generation = g_sups[i].generation;
         memset(&g_sups[i], 0, sizeof(g_sups[i]));
         g_sups[i].generation = generation;
     }
+    g_sup_hwm = 0u;
 }

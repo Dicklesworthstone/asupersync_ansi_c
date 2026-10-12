@@ -75,6 +75,9 @@ typedef struct {
 } asx_actor_slot;
 
 static asx_actor_slot g_actors[ASX_MAX_ACTORS];
+/* One past the highest slot spawn selected since the last reset; slots from
+ * here up are all zero, so the reset clears only the prefix. */
+static uint32_t g_actor_hwm;
 
 /* Servers spawned and not yet Stopped: asx_actor_task_finished runs on
  * every task completion and returns at once while there are none. */
@@ -479,6 +482,7 @@ asx_status asx_actor_spawn(asx_actor_handle *out, asx_region_id region,
     tid = ASX_INVALID_ID;
     st = asx_task_spawn(region, actor_poll, (void *)(uintptr_t)idx, &tid);
     s = &g_actors[idx];
+    if (idx >= g_actor_hwm) g_actor_hwm = idx + 1u;
     s->refusal = 0u;
     if (st != ASX_OK) {
         /* Under lab dispatch Rust's handle exists anyway; its task's
@@ -838,6 +842,9 @@ void asx_actor_task_finished(asx_task_id task) {
 }
 
 void asx_actor_reset(void) {
-    memset(g_actors, 0, sizeof(g_actors));
+    /* Only the slots spawn selected since the last reset were written;
+     * the rest of the table is still all zero. */
+    memset(g_actors, 0, (size_t)g_actor_hwm * sizeof(g_actors[0]));
+    g_actor_hwm = 0u;
     g_live_servers = 0;
 }

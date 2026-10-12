@@ -722,6 +722,55 @@ static void test_backoff_delays_the_restart(void) {
 /* Handles                                                             */
 /* ------------------------------------------------------------------ */
 
+/* n supervisors run one after another in one runtime, each with a child
+ * that fails and is restarted once: each takes the next free slot, ends,
+ * and reports the same counters. */
+static int supervisor_epoch(uint32_t n) {
+    static owner o[2];
+    static behaviour b[2];
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        memset(&b[i], 0, sizeof(b[i]));
+        b[i].result = ASX_E_INVALID_STATE;
+        owner_init(&o[i], 1);
+        o[i].cfg.name = (i == 0u) ? "sup0" : "sup1";
+        add_child(&o[i], "worker", ASX_CHILD_TRANSIENT, &b[i]);
+        run_owner(&o[i]);
+        if (o[i].spawn_st != ASX_OK || !o[i].joined || o[i].join_st != ASX_OK) return 0;
+        if (o[i].h.slot != i) return 0;
+        if (b[i].started != 2u) return 0;
+        if (o[i].report.restart_batches != 1u || o[i].report.started != 2u ||
+            o[i].report.joined != 2u) {
+            return 0;
+        }
+        if (asx_supervisor_is_alive(o[i].h) || !asx_supervisor_finished(o[i].h)) return 0;
+    }
+    return 1;
+}
+
+/* asx_supervisor_reset() (through asx_runtime_reset) clears only the slots
+ * start selected since the last reset. After heavy and light epochs the
+ * supervisors spawned next are the first in their slots with no counts or
+ * state of their predecessors. */
+static void test_reset_after_heavy_use_leaves_no_stale_state(void) {
+    uint32_t pass;
+
+    /* two supervisors, each a region plus two child generations, and the
+     * root and owner regions */
+    if ((unsigned)ASX_MAX_REGIONS < 8u) {
+        printf("  SKIP: needs 8 regions, this build has %u\n", (unsigned)ASX_MAX_REGIONS);
+        g_skip++;
+        return;
+    }
+    for (pass = 0; pass < 3u; pass++) {
+        setup();
+        ASSERT(supervisor_epoch(pass == 1u ? 1u : 2u), "the epoch before the reset runs");
+        setup();
+        ASSERT(supervisor_epoch(2u), "after the reset: first slots, counts from zero");
+    }
+}
+
 static void test_handles(void) {
     owner o;
     behaviour b;
@@ -774,6 +823,7 @@ int main(void) {
     RUN(test_restart_without_its_dependency_fails);
     RUN(test_backoff_delays_the_restart);
 
+    RUN(test_reset_after_heavy_use_leaves_no_stale_state);
     RUN(test_handles);
 
     printf("\n  %d passed, %d failed, %d skipped\n", g_pass, g_fail, g_skip);
