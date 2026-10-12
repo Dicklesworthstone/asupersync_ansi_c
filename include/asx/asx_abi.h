@@ -36,7 +36,9 @@
  * ## Forward-compatible evolution
  *
  * - Config structs use size-field pattern: set cfg.size = sizeof(cfg)
- *   before passing to library. Library detects old layouts and adapts.
+ *   before passing to library (the *_init functions do). A size other
+ *   than the library's own is refused with ASX_E_INVALID_ARGUMENT
+ *   (rt.c, hooks.c); older layouts are not adapted.
  * - New enum values may be appended (never inserted or reordered)
  * - New error codes added within existing families
  * - New functions may be added without breaking ABI
