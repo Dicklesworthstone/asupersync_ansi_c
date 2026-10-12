@@ -42,6 +42,7 @@ typedef struct {
     uint32_t polls;
     int cancelled;
     asx_cancel_kind kind;
+    asx_cancel_reason observed_reason;
     uint32_t done_seq; /* global completion order */
     asx_region_id region;
     int hold_obligation; /* reserve an obligation on the first poll */
@@ -60,6 +61,8 @@ static asx_status poll_member(void *ud, asx_task_id self) {
         if (st != ASX_OK) return st;
     }
     if (asx_checkpoint(self, &cp) == ASX_OK && cp.cancelled) {
+        st = asx_task_get_cancel_reason(self, &m->observed_reason);
+        if (st != ASX_OK) return st;
         if (!m->cancelled) {
             m->cancelled = 1;
             m->kind = cp.kind;
@@ -285,6 +288,105 @@ TEST(race_winner_failure_is_group_result) {
     out = asx_task_group_outcome(&g_owner.group);
     ASSERT_EQ(asx_outcome_severity_of(&out), ASX_OUTCOME_ERR);
     ASSERT_TRUE(g_m[1].cancelled);
+}
+
+/* Scope::race_all aborts its unfinished losers with the default
+ * CancelReason::race_loser, not a direct request stamped at this poll
+ * (pinned cx/scope.rs:1429-1433; types/cancel.rs:596-605, 640-643). */
+TEST(race_loser_abort_uses_default_attribution) {
+    asx_region_id root, r;
+    asx_task_id owner;
+    asx_budget run;
+    asx_outcome outcome;
+    asx_status status;
+
+    setup();
+    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(root, &r), ASX_OK);
+    member_init(0, 1, ASX_OK);
+    member_init(1, 0, ASX_OK);
+    g_m[1].cleanup_polls = 2u;
+    ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 2, &owner), ASX_OK);
+    run = asx_budget_from_polls(200u);
+    ASSERT_EQ(asx_scheduler_run(root, &run), ASX_OK);
+
+    ASSERT_TRUE(g_owner.done);
+    ASSERT_EQ(g_owner.result, ASX_OK);
+    ASSERT_EQ(asx_task_group_winner(&g_owner.group), 0);
+    ASSERT_TRUE(g_m[1].cancelled);
+    ASSERT_EQ(g_m[1].observed_reason.kind, ASX_CANCEL_RACE_LOST);
+    ASSERT_EQ(g_m[1].observed_reason.timestamp, (asx_time)1000000000u);
+    ASSERT_EQ(asx_handle_index(g_m[1].observed_reason.origin_region), asx_handle_index(root));
+    ASSERT_EQ(g_m[1].observed_reason.origin_task, ASX_INVALID_ID);
+    ASSERT_TRUE(g_m[1].observed_reason.message == NULL);
+    ASSERT_TRUE(g_m[1].observed_reason.cause == NULL);
+    ASSERT_EQ(g_m[1].cleanup_polls, 0u);
+    ASSERT_TRUE(g_owner.done_seq > max_member_seq(2u));
+    ASSERT_EQ(asx_task_group_member_result(&g_owner.group, 1u, &outcome, &status), ASX_OK);
+    ASSERT_EQ(outcome.severity, ASX_OUTCOME_CANCELLED);
+    ASSERT_EQ(status, ASX_E_CANCELLED);
+    ASSERT_EQ(asx_task_join(owner, &outcome), ASX_OK);
+    ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
+    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+    run = asx_budget_from_polls(20u);
+    ASSERT_EQ(asx_region_drain(root, &run), ASX_OK);
+    ASSERT_EQ(asx_quiescence_check(root), ASX_OK);
+}
+
+/* The real fuzz witness finishes a body with Err, then selects a cancelled
+ * race winner before its last sibling has drained. FailFast and RaceLost
+ * have equal severity: a poll-time direct request would incorrectly win
+ * the timestamp tie and publish another cancellation wake. */
+TEST(race_loser_abort_preserves_equal_severity_fail_fast) {
+    asx_region_id root, r;
+    asx_task_id owner;
+    asx_budget run;
+    asx_cancel_reason reason;
+    asx_outcome outcome;
+    asx_status status;
+
+    setup();
+    ASSERT_EQ(asx_region_open(&root), ASX_OK);
+    ASSERT_EQ(asx_region_open_child(root, &r), ASX_OK);
+    member_init(0, 1, ASX_OK);
+    member_init(1, 0, ASX_OK);
+    g_m[1].cleanup_polls = 3u;
+    ASSERT_EQ(spawn_group(r, ASX_TASK_GROUP_RACE, 0, 2, &owner), ASX_OK);
+    run = asx_budget_from_polls(3u);
+    ASSERT_EQ(asx_scheduler_run(root, &run), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_TRUE(!g_owner.done);
+    ASSERT_EQ(g_m[0].polls, 1u);
+    ASSERT_EQ(g_m[1].polls, 1u);
+    memset(&reason, 0, sizeof(reason));
+    reason.kind = ASX_CANCEL_FAIL_FAST;
+    reason.origin_region = r;
+    reason.timestamp = (asx_time)1000000000u;
+    ASSERT_EQ(asx_task_cancel_with_reason(g_owner.group.members[1], &reason), ASX_OK);
+    asx_runtime_virtual_advance(1u * MS);
+    run = asx_budget_from_polls(200u);
+    ASSERT_EQ(asx_scheduler_run(root, &run), ASX_OK);
+
+    ASSERT_TRUE(g_owner.done);
+    ASSERT_EQ(g_owner.result, ASX_OK);
+    ASSERT_EQ(asx_task_group_winner(&g_owner.group), 0);
+    ASSERT_TRUE(g_m[1].cancelled);
+    ASSERT_EQ(g_m[1].observed_reason.kind, ASX_CANCEL_FAIL_FAST);
+    ASSERT_EQ(g_m[1].observed_reason.timestamp, reason.timestamp);
+    ASSERT_EQ(g_m[1].observed_reason.origin_region, reason.origin_region);
+    ASSERT_EQ(g_m[1].observed_reason.origin_task, reason.origin_task);
+    ASSERT_TRUE(g_m[1].observed_reason.message == NULL);
+    ASSERT_TRUE(g_m[1].observed_reason.cause == NULL);
+    ASSERT_EQ(g_m[1].cleanup_polls, 0u);
+    ASSERT_TRUE(g_owner.done_seq > max_member_seq(2u));
+    ASSERT_EQ(asx_task_group_member_result(&g_owner.group, 1u, &outcome, &status), ASX_OK);
+    ASSERT_EQ(outcome.severity, ASX_OUTCOME_CANCELLED);
+    ASSERT_EQ(status, ASX_E_CANCELLED);
+    ASSERT_EQ(asx_task_join(owner, &outcome), ASX_OK);
+    ASSERT_EQ(outcome.severity, ASX_OUTCOME_OK);
+    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)0u);
+    run = asx_budget_from_polls(20u);
+    ASSERT_EQ(asx_region_drain(root, &run), ASX_OK);
+    ASSERT_EQ(asx_quiescence_check(root), ASX_OK);
 }
 
 TEST(race_same_round_completion_picks_lowest_index) {
@@ -920,6 +1022,8 @@ int main(void) {
     RUN_TEST(empty_join_all_resolves_immediately);
     RUN_TEST(race_cancels_and_drains_losers_before_resolving);
     RUN_TEST(race_winner_failure_is_group_result);
+    RUN_TEST(race_loser_abort_uses_default_attribution);
+    RUN_TEST(race_loser_abort_preserves_equal_severity_fail_fast);
     RUN_TEST(race_same_round_completion_picks_lowest_index);
     RUN_TEST(race_loser_obligations_are_leaked_before_resolve);
     RUN_TEST(first_ok_skips_failures);

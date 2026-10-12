@@ -152,12 +152,16 @@ static void group_send_cancels(asx_task_group *g) {
         if (g->completed[i] || g->cancel_sent[i]) continue;
         if ((g->mode == ASX_TASK_GROUP_QUORUM &&
              (g->owner_cancelled || g->drain_kind == ASX_CANCEL_RACE_LOST)) ||
-            (g->mode == ASX_TASK_GROUP_RACE && g->owner_cancelled)) {
+            (g->mode == ASX_TASK_GROUP_RACE &&
+             (g->owner_cancelled || (g->winner >= 0 && g->drain_kind == ASX_CANCEL_RACE_LOST)))) {
             /* Rust's quorum drains with handle aborts: the caller's reason,
              * or CancelReason::quorum_met() (race_loser, default
              * attribution) (cx/scope.rs:1878-1891). An owner-cancelled race
              * aborts every unfinished member with the owner's own reason
-             * (drain_owner_cancelled_race, :969-973). */
+             * (drain_owner_cancelled_race, :969-973). A selected race winner
+             * drains its unfinished losers with the default race-loser
+             * reason through those same handles (race_all, :1429-1433),
+             * not a direct cancellation stamped at the current poll. */
             asx_cancel_reason r = g->owner_cancelled
                                       ? g->owner_reason
                                       : asx_cancel_reason_default(ASX_CANCEL_RACE_LOST, NULL);
