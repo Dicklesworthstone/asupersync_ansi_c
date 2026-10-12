@@ -1349,11 +1349,18 @@ fn exec_sync(
                 .broadcast_tx
                 .get(ch)
                 .ok_or_else(|| format!("this task does not own the broadcast sender of {ch:?}"))?;
-            let status = match tx.send(cx, u64_field(step, "value")?) {
-                Ok(_) => "ASX_OK",
-                Err(e) => broadcast_send_status(&e),
-            };
-            observe(&ctx.shared, me, idx, label, status, Value::Null);
+            // The value is the number of receivers reached (broadcast.rs:494).
+            match tx.send(cx, u64_field(step, "value")?) {
+                Ok(n) => observe(&ctx.shared, me, idx, label, "ASX_OK", json!(n)),
+                Err(e) => observe(
+                    &ctx.shared,
+                    me,
+                    idx,
+                    label,
+                    broadcast_send_status(&e),
+                    Value::Null,
+                ),
+            }
         }
         "watch_send" => {
             let ch = str_field(step, "channel")?;
@@ -2598,8 +2605,10 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
             }
             Ok(names)
         };
-        if decl.get("senders").is_some() && str_field(decl, "type")? != "mpsc" {
-            return Err("only an mpsc channel takes senders".to_string());
+        if decl.get("senders").is_some()
+            && !matches!(str_field(decl, "type")?, "mpsc" | "broadcast")
+        {
+            return Err("only an mpsc or a broadcast channel takes senders".to_string());
         }
         match str_field(decl, "type")? {
             "mpsc" => {
@@ -2622,6 +2631,9 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
                     give(sub, Endpoint::BroadcastRx(tx.subscribe()));
                 }
                 give(&subs[0], Endpoint::BroadcastRx(rx));
+                for extra in extra_senders()? {
+                    give(&extra, Endpoint::BroadcastTx(tx.clone()));
+                }
                 give(str_field(decl, "sender")?, Endpoint::BroadcastTx(tx));
             }
             "watch" => {

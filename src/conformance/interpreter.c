@@ -221,14 +221,14 @@ typedef struct {
     it_ch_type type;
     asx_channel_id id; /* mpsc */
     asx_oneshot_sender oneshot;
-    asx_broadcast_sender broadcast;
     asx_watch_sender watch;
     /* Its senders, each with its owner (index in g_tasks): the declared
-     * `sender`, then for an mpsc the `senders` clones (Rust
-     * Sender::clone at setup). */
+     * `sender`, then for an mpsc or a broadcast the `senders` clones (Rust
+     * Sender::clone at setup). A broadcast sender is a handle per owner. */
     struct {
         uint32_t task;
         int open;
+        asx_broadcast_sender broadcast;
     } senders[IT_MAX_SENDERS];
     uint32_t n_senders;
     it_receiver receivers[IT_MAX_SUBSCRIBERS];
@@ -1151,7 +1151,9 @@ static void close_endpoint(it_channel *c, it_receiver *r, uint32_t owner) {
         switch (c->type) {
         case IT_CH_MPSC: st = asx_channel_close_sender(c->id); break;
         case IT_CH_ONESHOT: asx_oneshot_sender_drop(&c->oneshot); break;
-        case IT_CH_BROADCAST: asx_broadcast_sender_drop(&c->broadcast); break;
+        case IT_CH_BROADCAST:
+            if (k >= 0) asx_broadcast_sender_drop(&c->senders[k].broadcast);
+            break;
         case IT_CH_WATCH: asx_watch_sender_drop(&c->watch); break;
         case IT_CH_TYPES: break;
         }
@@ -2524,7 +2526,14 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             /* Rust's send consumes the sender */
             c->senders[sender_slot(c, (uint32_t)(t - g_tasks))].open = 0;
         } else if (type == IT_CH_BROADCAST) {
-            st = asx_broadcast_send(&c->broadcast, &t->cx, v);
+            /* tx.send(&cx, v) (broadcast.rs:494) returns the receivers it
+             * reached: the observation's value. */
+            uint32_t reached = 0;
+            int k = sender_slot(c, (uint32_t)(t - g_tasks));
+            st = asx_broadcast_send(&c->senders[k].broadcast, &t->cx, v, &reached);
+            observe(t, idx, label, status_node(st),
+                    st == ASX_OK ? asx_json_new_u64(g_out, reached) : ASX_JSON_NONE);
+            return STEP_NEXT;
         } else {
             /* Rust's watch send takes no Cx (watch.rs:488). */
             st = asx_watch_send(&c->watch, v);
@@ -3411,19 +3420,27 @@ static uint32_t channel_receivers(uint32_t d, int subscribed, it_channel *c) {
     return n;
 }
 
-/* An mpsc's optional `senders`: more top-level tasks, each given a clone of
- * the sender at setup, in order (twin_run: tx.clone(); C:
- * asx_channel_sender_clone). Returns 0 on a bad list. */
+/* An mpsc's or a broadcast's optional `senders`: more top-level tasks, each
+ * given a clone of the sender at setup, in order (twin_run: tx.clone(); C:
+ * asx_channel_sender_clone / asx_broadcast_sender_clone). Returns 0 on a
+ * bad list. */
 static int channel_extra_senders(uint32_t d, it_channel *c) {
     uint32_t list = asx_json_get(g_in, d, "senders");
     uint32_t k;
     uint32_t n = asx_json_count(g_in, list);
     if (n == 0u) return 1;
-    if (c->type != IT_CH_MPSC || 1u + n > IT_MAX_SENDERS) return 0;
+    if ((c->type != IT_CH_MPSC && c->type != IT_CH_BROADCAST) || 1u + n > IT_MAX_SENDERS) {
+        return 0;
+    }
     for (k = 0; k < n; k++) {
         it_task *owner = task_by_name(asx_json_string(g_in, asx_json_item(g_in, list, k)));
+        asx_status st;
         if (owner == NULL || sender_slot(c, (uint32_t)(owner - g_tasks)) >= 0) return 0;
-        if (asx_channel_sender_clone(c->id) != ASX_OK) return 0;
+        st = c->type == IT_CH_MPSC
+                 ? asx_channel_sender_clone(c->id)
+                 : asx_broadcast_sender_clone(&c->senders[0].broadcast,
+                                              &c->senders[c->n_senders].broadcast);
+        if (st != ASX_OK) return 0;
         c->senders[c->n_senders].task = (uint32_t)(owner - g_tasks);
         c->senders[c->n_senders].open = 1;
         c->n_senders++;
@@ -3481,10 +3498,11 @@ static void setup_channels(uint32_t scenario, asx_region_id root) {
         } else if (strcmp(type, "broadcast") == 0) {
             c->type = IT_CH_BROADCAST;
             if (asx_json_u64(g_in, asx_json_get(g_in, d, "capacity"), &n) && n <= UINT32_MAX) {
-                st = asx_broadcast_create((uint32_t)n, &c->broadcast, &c->receivers[0].broadcast);
+                st = asx_broadcast_create((uint32_t)n, &c->senders[0].broadcast,
+                                          &c->receivers[0].broadcast);
             }
             for (k = 1; st == ASX_OK && k < c->n_receivers; k++) {
-                st = asx_broadcast_subscribe(&c->broadcast, &c->receivers[k].broadcast);
+                st = asx_broadcast_subscribe(&c->senders[0].broadcast, &c->receivers[k].broadcast);
             }
         } else if (strcmp(type, "watch") == 0) {
             c->type = IT_CH_WATCH;
@@ -3500,7 +3518,8 @@ static void setup_channels(uint32_t scenario, asx_region_id root) {
             return;
         }
         if (!channel_extra_senders(d, c)) {
-            it_fail("channel senders must be distinct top-level tasks of an mpsc", name);
+            it_fail("channel senders must be distinct top-level tasks of an mpsc or a broadcast",
+                    name);
             return;
         }
     }

@@ -304,12 +304,13 @@ Each endpoint is moved into its owner's body (Rust) or bound to the owner's
 interpreter (C). Values are unsigned 64-bit integers; C channels carry
 `uint64_t`.
 
-An mpsc may list more producers in `senders` (top-level tasks, distinct from
-`sender` and each other): each gets a clone of the sender at setup, in
-order (Rust `tx.clone()`, `channel/mpsc.rs:1231`; C
-`asx_channel_sender_clone`). Each owner's `close_sender`, or the end of its
-body, drops its own clone; the sender side closes at the last one
-(`Sender::drop`, `:1241-1255`).
+An mpsc or a broadcast may list more producers in `senders` (top-level
+tasks, distinct from `sender` and each other): each gets a clone of the
+sender at setup, in order (Rust `tx.clone()`, `channel/mpsc.rs:1231`,
+`channel/broadcast.rs:577`; C `asx_channel_sender_clone`,
+`asx_broadcast_sender_clone`). Each owner's `close_sender`, or the end of
+its body, drops its own clone; the sender side closes at the last one
+(`Sender::drop`, `mpsc.rs:1241-1255`, `broadcast.rs:586-608`).
 
 ```json
 {"name": "ch.jobs", "type": "mpsc", "capacity": 2, "sender": "t.a", "senders": ["t.b"], "receiver": "t.r"}
@@ -334,7 +335,7 @@ body, drops its own clone; the sender side closes at the last one
 | `oneshot_poll_closed` | `channel`, `end` (`sender` / `receiver`) | `poll_fn(\|c\| tx.poll_closed(c)).await` / the receiver's (`oneshot.rs:619`, `:1373`) | `asx_oneshot_poll_closed` / `asx_oneshot_receiver_poll_closed` until done | the sender's until the receiver is dropped; the receiver's until the channel is closed (sender gone, no permit, no value) | ignored: no `Cx`. The sender's wait is woken only by the receiver drop; the receiver's by the close and by the value received, never by a send. |
 | `oneshot_is_closed` | `channel`, `end` | `tx.is_closed()` (`:596`) / `rx.is_closed()` (`:1357`) | `asx_oneshot_sender_is_closed` / `asx_oneshot_receiver_is_closed` | no | ignored. Observes `ASX_OK` with a boolean `value`. |
 | `oneshot_is_ready` | `channel` (the receiver's) | `rx.is_ready()` (`:1350`) | `asx_oneshot_receiver_is_ready` | no | ignored. Observes `ASX_OK` with a boolean `value`. |
-| `broadcast_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/broadcast.rs:494`) | `asx_broadcast_send` | no | `ASX_E_CANCELLED` (`broadcast.rs:418`) |
+| `broadcast_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/broadcast.rs:494`) | `asx_broadcast_send` | no | `ASX_E_CANCELLED` (`broadcast.rs:418`). The observation `value` is the number of receivers reached; no receiver left gives `ASX_E_DISCONNECTED` (Rust `Closed`). |
 | `broadcast_recv` | `channel` | `rx.recv(&cx).await` (`:894`) | `asx_broadcast_recv(rx, cx, &v)` until done | while empty | `ASX_E_CANCELLED`. Lagged gives `ASX_E_LAGGED` with `value` = n. |
 | `watch_send` | `channel`, `value` | `tx.send(v)` (`channel/watch.rs:488`) | `asx_watch_send` | no | ignored (no `Cx`) |
 | `watch_changed` | `channel` | `rx.changed(&cx).await` (`:722`), then `borrow_and_update` (`:917`) | `asx_watch_poll_changed` / `asx_watch_recv` | until a newer version | `ASX_E_CANCELLED` (`:736`). The `value` is the new value. |
@@ -699,7 +700,12 @@ Closed (each verified by a fixture that now matches):
   `recv_many`, `closed` (bd-9kll.5.7): `asx_channel_send_evict_oldest`,
   `asx_channel_recv_many` (one parked producer woken per freed slot) and
   `asx_channel_closed` (woken by `asx_channel_seal` and
-  `asx_channel_close_receiver`).
+  `asx_channel_close_receiver`). Generated scenarios use all three.
+- **Broadcast senders, receiver counts and wake order** (bd-9kll.5.6):
+  broadcast `senders` clones; `broadcast_send` observes the receivers it
+  reached; parked receivers are woken in the order of Rust's waker Arena
+  slots, not arrival order (`broadcast-senders-receiver-count-001`,
+  `broadcast-wake-order-slot-reuse-001`, from fuzz case gen-622-10).
 
 - **Channel obligations and cancel traces**: `asx_channel_reserve` with a
   task Cx registers a `SendPermit` (committed by send, aborted `Explicit`

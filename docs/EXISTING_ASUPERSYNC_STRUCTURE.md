@@ -1505,7 +1505,7 @@ These IDs are this document's own (they are also in `schemas/invariant_schema.js
 | channel-evict-reserved-007 | Evict with all reserved -> Full | `mpsc-send-evict-oldest-001` |
 | channel-evict-committed-008 | Evict oldest committed | `mpsc-send-evict-oldest-001` |
 
-Channel fixtures that do exist in v2: `mpsc-two-phase-send-recv-001`, `mpsc-try-ops-001`, `mpsc-recv-cancel-first-001`, `lab-dispatch-mpsc-disconnect-order-001`, `oneshot-send-recv-001`, `broadcast-fanout-001`, `watch-changed-001`. The legacy corpus has `channel-two-phase-send-recv-001`, `channel-fifo-ordering-002` and `channel-backpressure-full-003` (`a9e737d8`; not run by `make conformance`).
+Channel fixtures that do exist in v2 include `mpsc-two-phase-send-recv-001`, `mpsc-try-ops-001`, `mpsc-recv-cancel-first-001`, `lab-dispatch-mpsc-disconnect-order-001`, `mpsc-counted-senders-close-at-last-drop-001`, `mpsc-send-evict-oldest-001`, `mpsc-recv-many-001`, `mpsc-recv-many-wakes-each-freed-slot-001`, `mpsc-closed-001`, `oneshot-send-recv-001`, `broadcast-fanout-001`, `broadcast-senders-receiver-count-001`, `broadcast-wake-order-slot-reuse-001`, `watch-changed-001`. The legacy corpus has `channel-two-phase-send-recv-001`, `channel-fifo-ordering-002` and `channel-backpressure-full-003` (`a9e737d8`; not run by `make conformance`).
 
 ### 19.8 Timer Fixtures
 
@@ -1599,7 +1599,7 @@ The first extraction said the C port introduces one semantic strengthening over 
 
 ### Source-to-Fixture Provenance Map Summary
 
-`docs/SOURCE_TO_FIXTURE_PROVENANCE_MAP.md` (truth-passed 2026-10-10) has 38 provenance rows: 4 `mapped`, 20 `partial`, 14 `unmapped` (its section 6). The first extraction's table below claimed 33 rows, all `mapped`, covering ~112 fixture IDs; most of those IDs were never captured (section 19). The table is kept with the statuses taken from the current map.
+`docs/SOURCE_TO_FIXTURE_PROVENANCE_MAP.md` (truth-passed 2026-10-10, channel rows updated 2026-10-11) has 38 provenance rows: 4 `mapped`, 23 `partial`, 11 `unmapped` (its section 6). The first extraction's table below claimed 33 rows, all `mapped`, covering ~112 fixture IDs; most of those IDs were never captured (section 19). The table is kept with the statuses taken from the current map.
 
 | Domain | Prov IDs | Rows | Fixture IDs | Status (provenance map, 2026-10-10) |
 |--------|----------|------|-------------|--------|
@@ -1610,7 +1610,7 @@ The first extraction said the C port introduces one semantic strengthening over 
 | Task | TASK-001 | 1 | v2 task fixtures | partial |
 | Obligation | OBLIGATION-001 | 1 | v2 obligation fixtures | partial |
 | Handle | HANDLE-001 | 1 | none in v2 | unmapped |
-| Channel | CHANNEL-001..007 | 7 | v2 mpsc/oneshot/broadcast/watch fixtures | 5 partial, 2 unmapped |
+| Channel | CHANNEL-001..007 | 7 | v2 mpsc/oneshot/broadcast/watch fixtures | partial |
 | Timer | TIMER-001..008 | 8 | v2 timer fixtures cover the first tick only | 2 partial, 6 unmapped |
 | Scheduler | SCHEDULER-001..006 | 6 | v2 lab-dispatch fixtures | 3 partial, 3 unmapped |
 | Quiescence | QUIESCENCE-001 | 1 | v2 `quiescent` flag | partial |

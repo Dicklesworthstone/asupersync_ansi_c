@@ -145,7 +145,7 @@ asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value);
 asx_status asx_channel_recv(asx_channel_id id, asx_cx *cx, uint64_t *out_value);
 ```
 
-**C status:** implemented. `asx_channel_recv` (`src/channel/mpsc.c:1048-1056`) checks cancellation first, then `channel_recv_impl` (`src/channel/mpsc.c:940-967`): FIFO dequeue (`:949-953`); receiver closed, or sender closed and no outstanding permit -> `ASX_E_DISCONNECTED` (`:955-958`); otherwise park and return `ASX_E_PENDING`. `asx_channel_recv_many` (`src/channel/mpsc.c:1060-1101`) is Rust's `recv_many`: up to `limit` messages oldest first, one parked producer woken per freed slot, and `ASX_OK` with none once no message can arrive. `asx_channel_try_recv` returns `ASX_E_WOULD_BLOCK` when empty; the conformance interpreter reports that as `ASX_E_CHANNEL_EMPTY` (`src/conformance/interpreter.c:2577`). Rust parity: `mpsc-recv-cancel-first-001`, `mpsc-try-ops-001`, `mpsc-two-phase-send-recv-001`.
+**C status:** implemented. `asx_channel_recv` (`src/channel/mpsc.c:1048-1056`) checks cancellation first, then `channel_recv_impl` (`src/channel/mpsc.c:940-967`): FIFO dequeue (`:949-953`); receiver closed, or sender closed and no outstanding permit -> `ASX_E_DISCONNECTED` (`:955-958`); otherwise park and return `ASX_E_PENDING`. `asx_channel_recv_many` (`src/channel/mpsc.c:1060-1101`) is Rust's `recv_many`: up to `limit` messages oldest first, one parked producer woken per freed slot, and `ASX_OK` with none once no message can arrive. `asx_channel_try_recv` returns `ASX_E_WOULD_BLOCK` when empty; the conformance interpreter reports that as `ASX_E_CHANNEL_EMPTY` (`src/conformance/interpreter.c:2586`). Rust parity: `mpsc-recv-cancel-first-001`, `mpsc-try-ops-001`, `mpsc-two-phase-send-recv-001`.
 
 ### 1.5 Backpressure Behavior
 
@@ -157,7 +157,7 @@ asx_status asx_channel_recv(asx_channel_id id, asx_cx *cx, uint64_t *out_value);
 
 Rust: `try_reserve` returns `Full` while `has_waiting_sender()` (`src/channel/mpsc.rs:732-754`, `:374-377`); `try_send` (`src/channel/mpsc.rs:773-794`) applies the same rule. **Key fairness rule:** a non-waiting reserve never jumps the waiter queue, even when capacity is free.
 
-**C status:** implemented (`src/channel/mpsc.c:724-726`). C has no `Sender::try_send`; the conformance interpreter runs it as `asx_channel_try_reserve` plus `asx_send_permit_send` (`src/conformance/interpreter.c:2535-2548`). Who counts as queued is the same in both: Rust's queue keeps every registered waiter until its `Reserve` is polled or dropped (`prune_stale_waiter_front` drops only removed registrations, `src/channel/mpsc.rs:363-377`), so a cancel-requested or masked waiter still blocks `try_reserve`; C's `asx_wait_queue_live_ahead` counts every waiter whose task has not finished (`src/sync/wait_queue.c:344-357`, `:43-58`). See §7.4.
+**C status:** implemented (`src/channel/mpsc.c:724-726`). C has no `Sender::try_send`; the conformance interpreter runs it as `asx_channel_try_reserve` plus `asx_send_permit_send` (`src/conformance/interpreter.c:2544-2557`). Who counts as queued is the same in both: Rust's queue keeps every registered waiter until its `Reserve` is polled or dropped (`prune_stale_waiter_front` drops only removed registrations, `src/channel/mpsc.rs:363-377`), so a cancel-requested or masked waiter still blocks `try_reserve`; C's `asx_wait_queue_live_ahead` counts every waiter whose task has not finished (`src/sync/wait_queue.c:344-357`, `:43-58`). See §7.4.
 
 ### 1.6 FIFO Ordering Guarantees
 

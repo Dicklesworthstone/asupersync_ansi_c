@@ -4,16 +4,21 @@
  * A broadcast channel delivers each sent message to all active
  * receivers. Uses a shared ring buffer with per-receiver read cursors.
  *
- * Semantics:
- *   - Single sender, multiple receivers
- *   - FIFO ordering per receiver
+ * Semantics (Rust channel/broadcast.rs):
+ *   - Counted senders and receivers: asx_broadcast_sender_clone and
+ *     asx_broadcast_receiver_clone add one, the drops remove one, as
+ *     Rust's Sender / Receiver clones (:577-608, :1073-1105). Each handle
+ *     is one endpoint: copying the struct does not clone it, and a dropped
+ *     handle is refused afterwards. The receivers see the channel closed
+ *     once the last sender is dropped and they have read everything.
+ *   - FIFO ordering per receiver; message indices are 64-bit (:198)
  *   - Bounded capacity: a send never fails for space; it overwrites the
  *     oldest message
  *   - Lagging receivers: when a receiver falls behind by more than capacity,
- *     its next recv returns ASX_E_LAGGED and the cursor advances to the
- *     oldest available message
+ *     its next recv returns ASX_E_LAGGED with the number missed and the
+ *     cursor advances to the oldest available message
  *
- * Walking skeleton: single-threaded, non-blocking.
+ * Single-threaded (scheduler thread).
  *
  * SPDX-License-Identifier: MIT
  */
@@ -54,13 +59,25 @@ extern "C" {
 typedef struct {
     uint32_t slot;
     uint16_t generation;
+    int dropped; /* 1 once asx_broadcast_sender_drop released this sender */
 } asx_broadcast_sender;
 
 typedef struct {
     uint32_t slot;
     uint16_t generation;
-    uint32_t cursor; /* next message sequence to read */
+    int dropped;     /* 1 once asx_broadcast_receiver_drop released it */
+    uint64_t cursor; /* index of the next message to read */
 } asx_broadcast_receiver;
+
+/* A reserved send (Rust broadcast SendPermit, :610). It holds no ring
+ * space (a broadcast never waits for room), only the SendPermit
+ * obligation of the reserving Cx's task, if any. */
+typedef struct {
+    uint32_t slot;
+    uint16_t generation;
+    int consumed;                 /* 1 once sent or aborted */
+    asx_obligation_id obligation; /* ASX_INVALID_ID when untracked */
+} asx_broadcast_permit;
 
 /* -------------------------------------------------------------------
  * API: Lifecycle
@@ -73,33 +90,73 @@ ASX_API ASX_MUST_USE asx_status asx_broadcast_create(uint32_t capacity,
                                                      asx_broadcast_sender *out_sender,
                                                      asx_broadcast_receiver *out_receiver);
 
-/* Subscribe a new receiver to a broadcast.
+/* Subscribe a new receiver to a broadcast (Rust Sender::subscribe, :556).
  * New receivers start from the next message (no backfill).
- * Returns ASX_OK on success. */
+ * Returns ASX_OK on success, ASX_E_INVALID_STATE for a dropped sender,
+ * ASX_E_RESOURCE_EXHAUSTED at ASX_BROADCAST_MAX_RECEIVERS. */
 ASX_API ASX_MUST_USE asx_status asx_broadcast_subscribe(const asx_broadcast_sender *sender,
                                                         asx_broadcast_receiver *out_receiver);
 
-/* Drop the sender. Receivers can drain remaining messages. */
+/* Clone a sender (Rust Sender::clone, :577): one more live sender.
+ * Returns ASX_E_INVALID_STATE for a dropped one. */
+ASX_API ASX_MUST_USE asx_status asx_broadcast_sender_clone(const asx_broadcast_sender *sender,
+                                                           asx_broadcast_sender *out_sender);
+
+/* Clone a receiver (Rust Receiver::clone, :1073): a new receiver at the
+ * same cursor, which reads the same remaining messages. Returns
+ * ASX_E_INVALID_STATE for a dropped one, ASX_E_RESOURCE_EXHAUSTED at
+ * ASX_BROADCAST_MAX_RECEIVERS. */
+ASX_API ASX_MUST_USE asx_status asx_broadcast_receiver_clone(const asx_broadcast_receiver *receiver,
+                                                             asx_broadcast_receiver *out_receiver);
+
+/* Drop a sender (Rust Sender::drop, :586). The last one closes the
+ * channel and wakes the parked receivers, which drain what remains and
+ * then see ASX_E_DISCONNECTED. A second drop of the same handle does
+ * nothing. */
 ASX_API void asx_broadcast_sender_drop(asx_broadcast_sender *sender);
 
-/* Drop a receiver. */
+/* Drop a receiver (Rust Receiver::drop, :1089). With none left, sends
+ * report ASX_E_DISCONNECTED. A second drop of the same handle does
+ * nothing. */
 ASX_API void asx_broadcast_receiver_drop(asx_broadcast_receiver *receiver);
 
 /* -------------------------------------------------------------------
  * API: Send
  * ------------------------------------------------------------------- */
 
-/* Send a value to all receivers (Rust `tx.send(&cx, v)`,
- * channel/broadcast.rs:494). The ring never refuses a send: the oldest
- * message is overwritten and a receiver that falls behind sees
- * ASX_E_LAGGED. Cancellation is checked first: a cancelled Cx gives
- * ASX_E_CANCELLED (no trace, :418). With no live receiver the send fails
- * with ASX_E_DISCONNECTED (Rust Closed, :423). Otherwise a Cx with a task
- * reserves a SendPermit obligation that the delivery commits (:430, :719).
- * A NULL cx skips the cancellation check and the obligation.
- * Returns ASX_E_INVALID_STATE if the sender was dropped. */
-ASX_API ASX_MUST_USE asx_status asx_broadcast_send(asx_broadcast_sender *sender, asx_cx *cx,
-                                                   uint64_t value);
+/* Reserve a send (Rust `tx.reserve(&cx)`, channel/broadcast.rs:409).
+ * Never waits: a broadcast overwrites instead of filling up.
+ * Cancellation is checked first: a cancelled Cx gives ASX_E_CANCELLED (no
+ * trace, :418). With no live receiver it fails with ASX_E_DISCONNECTED
+ * (Rust Closed, :423). Otherwise a Cx with a task registers a SendPermit
+ * obligation (:430), committed by asx_broadcast_permit_send and aborted
+ * with Cancel by asx_broadcast_permit_abort or when the task completes
+ * still holding it (the permit's drop, :624). A NULL cx skips the
+ * cancellation check and the obligation.
+ * Returns ASX_E_INVALID_STATE for a dropped sender. */
+ASX_API ASX_MUST_USE asx_status asx_broadcast_reserve(const asx_broadcast_sender *sender,
+                                                      asx_cx *cx, asx_broadcast_permit *out_permit);
+
+/* Send through a permit (Rust SendPermit::send, :709): commits its
+ * obligation, then publishes `value` to the receivers live now and sets
+ * *out_receivers (may be NULL) to their number. If every receiver dropped
+ * after the reserve, nothing is published and the count is 0 (still
+ * ASX_OK: the permit was honoured). Returns ASX_E_INVALID_STATE for a
+ * consumed permit, or when the last sender dropped since the reserve (a
+ * Rust permit borrows its sender, so C refuses that and aborts the
+ * obligation with Cancel). */
+ASX_API ASX_MUST_USE asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit,
+                                                          uint64_t value, uint32_t *out_receivers);
+
+/* Give a permit up unsent: its obligation is aborted with Cancel, as the
+ * Rust permit's drop does. A consumed permit is left alone. */
+ASX_API void asx_broadcast_permit_abort(asx_broadcast_permit *permit);
+
+/* Send a value to all receivers (Rust `tx.send(&cx, v)`, :494): reserve,
+ * then send through the permit. Statuses as the two; *out_receivers (may
+ * be NULL) is the number of receivers that were live at the publication. */
+ASX_API ASX_MUST_USE asx_status asx_broadcast_send(const asx_broadcast_sender *sender, asx_cx *cx,
+                                                   uint64_t value, uint32_t *out_receivers);
 
 /* -------------------------------------------------------------------
  * API: Receive
@@ -128,11 +185,11 @@ ASX_API ASX_MUST_USE asx_status asx_broadcast_recv(asx_broadcast_receiver *recei
  * API: Query
  * ------------------------------------------------------------------- */
 
-/* Get the number of active receivers. */
+/* Get the number of active receivers (Rust Sender::receiver_count, :528). */
 ASX_API uint32_t asx_broadcast_receiver_count(const asx_broadcast_sender *sender);
 
-/* Get the total number of messages sent (monotonic sequence). */
-ASX_API uint32_t asx_broadcast_total_sent(const asx_broadcast_sender *sender);
+/* Get the total number of messages published (monotonic, 64-bit). */
+ASX_API uint64_t asx_broadcast_total_sent(const asx_broadcast_sender *sender);
 
 /* -------------------------------------------------------------------
  * Reset (test support)

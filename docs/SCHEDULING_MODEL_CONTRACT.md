@@ -184,7 +184,7 @@ generation order.
 
 | Event | Call | Priority |
 |---|---|---|
-| Driver task creation | `schedule(t, 0)` (twin_run run.rs:1679) | 0, whatever the budget |
+| Driver task creation | `schedule(t, 0)` (twin_run run.rs:1686) | 0, whatever the budget |
 | `Cx::spawn` child | Admitted at the next step: `schedule(t, budget.priority)` | Inherited budget priority; with `cx.spawn_in(&cx.scope_with_budget(b))`, `b`'s priority unclamped (`src/cx/cx.rs:4547-4586`; `spawn-budget-priority-unclamped-001`) |
 | Waker wake (timer fire, channel, notify, join) | `schedule(t, waker.priority)`, on the ready lane | Priority of the poll that registered that waker: usually the task's last poll; for a join or a sleep timer, the poll that last polled it (see Join registrations, Timer registrations); for a region close, the first poll that waited: RegionQuiescence keeps every distinct waker and wakes them in order, so the first schedules the task (`cx/child_region.rs:560-571`; `region-close-wakes-first-waker-001`) |
 | `yield_now` | Wake during the poll, then Pending | Current poll's priority |

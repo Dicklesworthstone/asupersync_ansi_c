@@ -919,7 +919,7 @@ TEST(broadcast_send_wakes_every_receiver) {
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
 
-    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 7u), ASX_OK);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 7u, NULL), ASX_OK);
     budget = asx_budget_from_polls(100);
     ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_E_WOULD_BLOCK);
     ASSERT_EQ(polls_used(100, &budget), 3u);
@@ -1324,20 +1324,22 @@ TEST(broadcast_send_checks_cancel_then_receivers_and_commits_a_permit) {
     asx_cx a;
     asx_task_id ta;
     uint64_t v = 0;
+    uint32_t reached = 99u;
 
     ASSERT_TRUE(setup());
     ta = cx_task(&a);
     ASSERT_EQ(asx_broadcast_create(2u, &tx, &rx), ASX_OK);
     capture(1);
-    ASSERT_EQ(asx_broadcast_send(&tx, &a, 1u), ASX_OK);
+    ASSERT_EQ(asx_broadcast_send(&tx, &a, 1u, &reached), ASX_OK);
     capture(0);
+    ASSERT_EQ(reached, 1u);
     ASSERT_EQ(g_ncap, 2u);
     ASSERT_TRUE(cap_permit(0, ASX_TRACE_OBLIGATION_RESERVE, ta, ASX_OBLIGATION_ABORT_NONE));
     ASSERT_TRUE(cap_permit(1, ASX_TRACE_OBLIGATION_COMMIT, ta, ASX_OBLIGATION_ABORT_NONE));
     /* Lag: two more sends into capacity 2 drop the first; the receiver
      * learns how many it missed (Rust Lagged(n)). */
-    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 2u), ASX_OK);
-    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 3u), ASX_OK);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 2u, NULL), ASX_OK);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 3u, NULL), ASX_OK);
     ASSERT_EQ(asx_broadcast_recv(&rx, NULL, &v), ASX_E_LAGGED);
     ASSERT_EQ(v, 1u);
     ASSERT_EQ(asx_broadcast_recv(&rx, NULL, &v), ASX_OK);
@@ -1345,13 +1347,50 @@ TEST(broadcast_send_checks_cancel_then_receivers_and_commits_a_permit) {
     /* Cancelled: no trace on the send side, nothing published. */
     ASSERT_EQ(asx_task_cancel(ta, ASX_CANCEL_USER), ASX_OK);
     capture(1);
-    ASSERT_EQ(asx_broadcast_send(&tx, &a, 4u), ASX_E_CANCELLED);
+    ASSERT_EQ(asx_broadcast_send(&tx, &a, 4u, NULL), ASX_E_CANCELLED);
     capture(0);
     ASSERT_EQ(g_ncap, 0u);
     ASSERT_EQ(asx_broadcast_total_sent(&tx), 3u);
     /* No receiver left: Rust's Closed. */
     asx_broadcast_receiver_drop(&rx);
-    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 5u), ASX_E_DISCONNECTED);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 5u, &reached), ASX_E_DISCONNECTED);
+    ASSERT_EQ(reached, 0u);
+}
+
+TEST(broadcast_permit_commits_on_send_and_aborts_with_cancel_unsent) {
+    /* Rust's broadcast SendPermit (broadcast.rs:610-630, :709-719): the
+     * send commits the obligation, even when every receiver dropped after
+     * the reserve (nothing is published then, count 0); a permit given up
+     * unsent is aborted with Cancel. */
+    asx_broadcast_sender tx;
+    asx_broadcast_receiver rx;
+    asx_broadcast_permit p;
+    asx_cx a;
+    asx_task_id ta;
+    uint32_t reached = 99u;
+
+    ASSERT_TRUE(setup());
+    ta = cx_task(&a);
+    ASSERT_EQ(asx_broadcast_create(2u, &tx, &rx), ASX_OK);
+    capture(1);
+    ASSERT_EQ(asx_broadcast_reserve(&tx, &a, &p), ASX_OK);
+    asx_broadcast_permit_abort(&p);
+    capture(0);
+    ASSERT_EQ(g_ncap, 2u);
+    ASSERT_TRUE(cap_permit(0, ASX_TRACE_OBLIGATION_RESERVE, ta, ASX_OBLIGATION_ABORT_CANCEL));
+    ASSERT_TRUE(cap_permit(1, ASX_TRACE_OBLIGATION_ABORT, ta, ASX_OBLIGATION_ABORT_CANCEL));
+    ASSERT_EQ(asx_broadcast_total_sent(&tx), 0u);
+    ASSERT_EQ(asx_broadcast_permit_send(&p, 1u, &reached), ASX_E_INVALID_STATE);
+
+    ASSERT_EQ(asx_broadcast_reserve(&tx, &a, &p), ASX_OK);
+    asx_broadcast_receiver_drop(&rx);
+    capture(1);
+    ASSERT_EQ(asx_broadcast_permit_send(&p, 2u, &reached), ASX_OK);
+    capture(0);
+    ASSERT_EQ(reached, 0u);
+    ASSERT_EQ(g_ncap, 1u);
+    ASSERT_TRUE(cap_permit(0, ASX_TRACE_OBLIGATION_COMMIT, ta, ASX_OBLIGATION_ABORT_NONE));
+    ASSERT_EQ(asx_broadcast_total_sent(&tx), 0u);
 }
 
 TEST(broadcast_recv_checks_cancel_first) {
@@ -1365,7 +1404,7 @@ TEST(broadcast_recv_checks_cancel_first) {
     tb = cx_task(&b);
     ASSERT_EQ(asx_broadcast_create(4u, &tx, &rx), ASX_OK);
     ASSERT_EQ(asx_broadcast_recv(&rx, &b, &v), ASX_E_PENDING);
-    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 7u), ASX_OK);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 7u, NULL), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tb, ASX_CANCEL_USER), ASX_OK);
     capture(1);
     ASSERT_EQ(asx_broadcast_recv(&rx, &b, &v), ASX_E_CANCELLED);
@@ -1421,13 +1460,16 @@ TEST(watch_changed_traces_each_rust_outcome) {
 typedef struct {
     asx_channel_id ch;
     asx_oneshot_sender tx;
+    asx_broadcast_sender btx;
     int oneshot;
+    int broadcast;
     uint64_t hold_ns;
     asx_sleep_state hold;
     int reserved;
     asx_cx cx;
     asx_send_permit permit;
     asx_oneshot_permit oneshot_permit;
+    asx_broadcast_permit broadcast_permit;
 } holder_state;
 
 static asx_status poll_permit_holder(void *ud, asx_task_id self) {
@@ -1435,8 +1477,9 @@ static asx_status poll_permit_holder(void *ud, asx_task_id self) {
     asx_status st;
     if (!h->reserved) {
         asx_cx_init(&h->cx, g_region, self, ASX_CAP_NONE);
-        st = h->oneshot ? asx_oneshot_reserve(&h->tx, &h->cx, &h->oneshot_permit)
-                        : asx_channel_reserve(h->ch, &h->cx, &h->permit);
+        st = h->oneshot     ? asx_oneshot_reserve(&h->tx, &h->cx, &h->oneshot_permit)
+             : h->broadcast ? asx_broadcast_reserve(&h->btx, &h->cx, &h->broadcast_permit)
+                            : asx_channel_reserve(h->ch, &h->cx, &h->permit);
         if (st != ASX_OK) return st;
         h->reserved = 1;
         if (h->hold_ns > 0u) {
@@ -1538,6 +1581,31 @@ TEST(oneshot_permit_held_at_completion_is_dropped_with_its_task) {
     ASSERT_EQ(v, 0u);
 }
 
+TEST(broadcast_permit_held_at_completion_is_dropped_with_its_task) {
+    /* Rust's broadcast SendPermit dropped unsent aborts its obligation with
+     * Cancel (broadcast.rs:624-630): no leak, nothing published. */
+    static holder_state h;
+    asx_broadcast_receiver rx;
+    asx_task_id t;
+    asx_budget budget;
+    uint64_t v = 0;
+    uint64_t leaks_before;
+
+    ASSERT_TRUE(setup());
+    memset(&h, 0, sizeof(h));
+    leaks_before = asx_obligation_leak_count();
+    ASSERT_EQ(asx_broadcast_create(2u, &h.btx, &rx), ASX_OK);
+    h.broadcast = 1;
+    ASSERT_EQ(asx_task_spawn(g_region, poll_permit_holder, &h, &t), ASX_OK);
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_scheduler_run(g_region, &budget), ASX_OK);
+
+    ASSERT_TRUE(send_permit_dropped(h.broadcast_permit.obligation, t));
+    ASSERT_EQ(asx_obligation_leak_count(), leaks_before);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &v), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_broadcast_total_sent(&h.btx), 0u);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_channel_wake ===\n");
 
@@ -1574,7 +1642,9 @@ int main(void) {
     RUN_TEST(oneshot_send_to_dropped_receiver_aborts_the_permit_with_error);
     RUN_TEST(send_permits_held_at_completion_are_dropped_with_their_task);
     RUN_TEST(oneshot_permit_held_at_completion_is_dropped_with_its_task);
+    RUN_TEST(broadcast_permit_held_at_completion_is_dropped_with_its_task);
     RUN_TEST(broadcast_send_checks_cancel_then_receivers_and_commits_a_permit);
+    RUN_TEST(broadcast_permit_commits_on_send_and_aborts_with_cancel_unsent);
     RUN_TEST(broadcast_recv_checks_cancel_first);
     RUN_TEST(watch_changed_traces_each_rust_outcome);
 

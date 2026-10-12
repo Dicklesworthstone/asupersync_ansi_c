@@ -62,7 +62,7 @@ TEST(send_and_recv_single) {
     uint64_t val;
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
-    MUST_OK(asx_broadcast_send(&tx, NULL, 42));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 42, NULL));
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)42);
 }
@@ -73,9 +73,9 @@ TEST(fifo_ordering) {
     uint64_t val;
     setup();
     MUST_OK(asx_broadcast_create(8, &tx, &rx));
-    MUST_OK(asx_broadcast_send(&tx, NULL, 1));
-    MUST_OK(asx_broadcast_send(&tx, NULL, 2));
-    MUST_OK(asx_broadcast_send(&tx, NULL, 3));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 1, NULL));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 2, NULL));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 3, NULL));
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)1);
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
@@ -91,6 +91,28 @@ TEST(recv_empty_returns_would_block) {
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_E_WOULD_BLOCK);
+}
+
+TEST(send_returns_the_live_receiver_count) {
+    /* Rust send / SendPermit::send return the receivers live at the
+     * publication (broadcast.rs:494, :709); none left is Closed. */
+    asx_broadcast_sender tx;
+    asx_broadcast_receiver rx1, rx2, rx3;
+    uint32_t reached = 99u;
+    setup();
+    MUST_OK(asx_broadcast_create(4, &tx, &rx1));
+    MUST_OK(asx_broadcast_subscribe(&tx, &rx2));
+    MUST_OK(asx_broadcast_subscribe(&tx, &rx3));
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 1, &reached), ASX_OK);
+    ASSERT_EQ(reached, 3u);
+    asx_broadcast_receiver_drop(&rx2);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 2, &reached), ASX_OK);
+    ASSERT_EQ(reached, 2u);
+    asx_broadcast_receiver_drop(&rx1);
+    asx_broadcast_receiver_drop(&rx3);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 3, &reached), ASX_E_DISCONNECTED);
+    ASSERT_EQ(reached, 0u);
+    ASSERT_EQ(asx_broadcast_total_sent(&tx), 2u);
 }
 
 /* ------------------------------------------------------------------ */
@@ -113,7 +135,7 @@ TEST(all_receivers_get_message) {
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx1));
     MUST_OK(asx_broadcast_subscribe(&tx, &rx2));
-    MUST_OK(asx_broadcast_send(&tx, NULL, 99));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 99, NULL));
     ASSERT_EQ(asx_broadcast_try_recv(&rx1, &v1), ASX_OK);
     ASSERT_EQ(asx_broadcast_try_recv(&rx2, &v2), ASX_OK);
     ASSERT_EQ(v1, (uint64_t)99);
@@ -126,8 +148,8 @@ TEST(late_subscriber_no_backfill) {
     uint64_t val;
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx1));
-    MUST_OK(asx_broadcast_send(&tx, NULL, 1));
-    MUST_OK(asx_broadcast_send(&tx, NULL, 2));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 1, NULL));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 2, NULL));
     /* rx2 subscribes after messages sent */
     MUST_OK(asx_broadcast_subscribe(&tx, &rx2));
     /* rx2 should not see old messages */
@@ -135,6 +157,28 @@ TEST(late_subscriber_no_backfill) {
     /* rx1 should still see them */
     ASSERT_EQ(asx_broadcast_try_recv(&rx1, &val), ASX_OK);
     ASSERT_EQ(val, (uint64_t)1);
+}
+
+TEST(receiver_clone_reads_the_same_remaining_messages) {
+    /* Rust Receiver::clone (broadcast.rs:1073) copies the cursor and adds
+     * a receiver. */
+    asx_broadcast_sender tx;
+    asx_broadcast_receiver rx, copy;
+    uint64_t val;
+    setup();
+    MUST_OK(asx_broadcast_create(4, &tx, &rx));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 1, NULL));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 2, NULL));
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
+    ASSERT_EQ(val, (uint64_t)1);
+    ASSERT_EQ(asx_broadcast_receiver_clone(&rx, &copy), ASX_OK);
+    ASSERT_EQ(asx_broadcast_receiver_count(&tx), 2u);
+    ASSERT_EQ(asx_broadcast_try_recv(&copy, &val), ASX_OK);
+    ASSERT_EQ(val, (uint64_t)2);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
+    ASSERT_EQ(val, (uint64_t)2);
+    asx_broadcast_receiver_drop(&rx);
+    ASSERT_EQ(asx_broadcast_receiver_clone(&rx, &copy), ASX_E_INVALID_STATE);
 }
 
 /* ------------------------------------------------------------------ */
@@ -149,7 +193,7 @@ TEST(lagging_receiver_gets_lagged) {
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
     /* Send more than capacity without rx reading */
-    for (i = 0; i < 8; i++) { MUST_OK(asx_broadcast_send(&tx, NULL, i + 1)); }
+    for (i = 0; i < 8; i++) { MUST_OK(asx_broadcast_send(&tx, NULL, i + 1, NULL)); }
     /* Receiver has lagged */
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_E_LAGGED);
     /* After lag, cursor is advanced — next recv should succeed */
@@ -158,8 +202,25 @@ TEST(lagging_receiver_gets_lagged) {
     ASSERT_TRUE(val >= 5);
 }
 
+TEST(lag_reports_the_number_missed_then_the_oldest_kept) {
+    /* Rust try_recv: Lagged(earliest - next_index), the cursor moves to the
+     * earliest message kept (broadcast.rs:847-853). */
+    asx_broadcast_sender tx;
+    asx_broadcast_receiver rx;
+    uint64_t val = 0;
+    uint64_t i;
+    setup();
+    MUST_OK(asx_broadcast_create(4, &tx, &rx));
+    for (i = 1; i <= 9; i++) { MUST_OK(asx_broadcast_send(&tx, NULL, i, NULL)); }
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_E_LAGGED);
+    ASSERT_EQ(val, (uint64_t)5);
+    ASSERT_EQ(rx.cursor, (uint64_t)5);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
+    ASSERT_EQ(val, (uint64_t)6);
+}
+
 /* ------------------------------------------------------------------ */
-/* Disconnection                                                       */
+/* Disconnection and counted senders                                   */
 /* ------------------------------------------------------------------ */
 
 TEST(sender_drop_drain_then_disconnected) {
@@ -168,7 +229,7 @@ TEST(sender_drop_drain_then_disconnected) {
     uint64_t val;
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
-    MUST_OK(asx_broadcast_send(&tx, NULL, 10));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 10, NULL));
     asx_broadcast_sender_drop(&tx);
     /* Can still drain remaining messages */
     ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
@@ -183,28 +244,122 @@ TEST(send_after_sender_drop_fails) {
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
     asx_broadcast_sender_drop(&tx);
-    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 1), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 1, NULL), ASX_E_INVALID_STATE);
+}
+
+TEST(senders_are_counted_and_the_last_drop_closes) {
+    /* Rust Sender::clone / drop (broadcast.rs:577-608): the channel closes
+     * at the last sender's drop. A dropped handle is refused, a second drop
+     * of it changes nothing. */
+    asx_broadcast_sender tx, tx2, tx3;
+    asx_broadcast_receiver rx, rx2;
+    uint64_t val;
+    setup();
+    MUST_OK(asx_broadcast_create(4, &tx, &rx));
+    ASSERT_EQ(asx_broadcast_sender_clone(&tx, &tx2), ASX_OK);
+    asx_broadcast_sender_drop(&tx);
+    asx_broadcast_sender_drop(&tx); /* no second decrement */
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(asx_broadcast_send(&tx, NULL, 1, NULL), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_broadcast_sender_clone(&tx, &tx3), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_broadcast_subscribe(&tx, &rx2), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_broadcast_send(&tx2, NULL, 7, NULL), ASX_OK);
+    asx_broadcast_sender_drop(&tx2);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
+    ASSERT_EQ(val, (uint64_t)7);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_E_DISCONNECTED);
 }
 
 TEST(receiver_drop_decrements_count) {
     asx_broadcast_sender tx;
     asx_broadcast_receiver rx;
+    uint64_t val;
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
     ASSERT_EQ(asx_broadcast_receiver_count(&tx), 1u);
     asx_broadcast_receiver_drop(&rx);
     ASSERT_EQ(asx_broadcast_receiver_count(&tx), 0u);
+    asx_broadcast_receiver_drop(&rx); /* no second decrement */
+    ASSERT_EQ(asx_broadcast_receiver_count(&tx), 0u);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_E_INVALID_STATE);
+}
+
+/* ------------------------------------------------------------------ */
+/* Permits                                                             */
+/* ------------------------------------------------------------------ */
+
+TEST(permit_sends_once_and_abort_publishes_nothing) {
+    asx_broadcast_sender tx;
+    asx_broadcast_receiver rx;
+    asx_broadcast_permit p;
+    uint32_t reached = 99u;
+    uint64_t val;
+    setup();
+    MUST_OK(asx_broadcast_create(4, &tx, &rx));
+    ASSERT_EQ(asx_broadcast_reserve(&tx, NULL, &p), ASX_OK);
+    ASSERT_EQ(p.obligation, ASX_INVALID_ID); /* no Cx: untracked */
+    ASSERT_EQ(asx_broadcast_permit_send(&p, 5, &reached), ASX_OK);
+    ASSERT_EQ(reached, 1u);
+    ASSERT_EQ(asx_broadcast_permit_send(&p, 6, &reached), ASX_E_INVALID_STATE);
+    asx_broadcast_permit_abort(&p); /* consumed: no effect */
+    ASSERT_EQ(asx_broadcast_reserve(&tx, NULL, &p), ASX_OK);
+    asx_broadcast_permit_abort(&p);
+    ASSERT_EQ(asx_broadcast_total_sent(&tx), 1u);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_OK);
+    ASSERT_EQ(val, (uint64_t)5);
+    ASSERT_EQ(asx_broadcast_try_recv(&rx, &val), ASX_E_WOULD_BLOCK);
+}
+
+TEST(permit_after_the_receivers_or_the_last_sender_left) {
+    /* Every receiver gone since the reserve: ASX_OK, 0 reached, nothing
+     * published (broadcast.rs:715-728). The last sender gone: refused (a
+     * Rust permit borrows its sender). */
+    asx_broadcast_sender tx;
+    asx_broadcast_receiver rx, rx2;
+    asx_broadcast_permit p;
+    uint32_t reached = 99u;
+    setup();
+    MUST_OK(asx_broadcast_create(4, &tx, &rx));
+    ASSERT_EQ(asx_broadcast_reserve(&tx, NULL, &p), ASX_OK);
+    asx_broadcast_receiver_drop(&rx);
+    ASSERT_EQ(asx_broadcast_permit_send(&p, 1, &reached), ASX_OK);
+    ASSERT_EQ(reached, 0u);
+    ASSERT_EQ(asx_broadcast_total_sent(&tx), 0u);
+    ASSERT_EQ(asx_broadcast_reserve(&tx, NULL, &p), ASX_E_DISCONNECTED);
+
+    MUST_OK(asx_broadcast_subscribe(&tx, &rx2));
+    ASSERT_EQ(asx_broadcast_reserve(&tx, NULL, &p), ASX_OK);
+    asx_broadcast_sender_drop(&tx);
+    ASSERT_EQ(asx_broadcast_permit_send(&p, 2, &reached), ASX_E_INVALID_STATE);
+    ASSERT_EQ(reached, 0u);
 }
 
 /* ------------------------------------------------------------------ */
 /* Null safety                                                         */
 /* ------------------------------------------------------------------ */
 
-TEST(send_null_fails) { ASSERT_EQ(asx_broadcast_send(NULL, NULL, 1), ASX_E_INVALID_ARGUMENT); }
+TEST(send_null_fails) {
+    ASSERT_EQ(asx_broadcast_send(NULL, NULL, 1, NULL), ASX_E_INVALID_ARGUMENT);
+}
 
 TEST(recv_null_fails) {
     uint64_t val;
     ASSERT_EQ(asx_broadcast_try_recv(NULL, &val), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(clone_and_permit_null_fail) {
+    asx_broadcast_sender tx;
+    asx_broadcast_receiver rx;
+    asx_broadcast_permit p;
+    setup();
+    MUST_OK(asx_broadcast_create(4, &tx, &rx));
+    ASSERT_EQ(asx_broadcast_sender_clone(NULL, &tx), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_broadcast_sender_clone(&tx, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_broadcast_receiver_clone(NULL, &rx), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_broadcast_reserve(&tx, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_broadcast_reserve(NULL, NULL, &p), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_broadcast_permit_send(NULL, 1, NULL), ASX_E_INVALID_ARGUMENT);
+    asx_broadcast_permit_abort(NULL);
 }
 
 TEST(receiver_count_null_zero) { ASSERT_EQ(asx_broadcast_receiver_count(NULL), 0u); }
@@ -220,8 +375,8 @@ TEST(total_sent_increments) {
     asx_broadcast_receiver rx;
     setup();
     MUST_OK(asx_broadcast_create(4, &tx, &rx));
-    MUST_OK(asx_broadcast_send(&tx, NULL, 1));
-    MUST_OK(asx_broadcast_send(&tx, NULL, 2));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 1, NULL));
+    MUST_OK(asx_broadcast_send(&tx, NULL, 2, NULL));
     ASSERT_EQ(asx_broadcast_total_sent(&tx), 2u);
 }
 
@@ -241,19 +396,27 @@ int main(void) {
     RUN_TEST(send_and_recv_single);
     RUN_TEST(fifo_ordering);
     RUN_TEST(recv_empty_returns_would_block);
+    RUN_TEST(send_returns_the_live_receiver_count);
 
     RUN_TEST(subscribe_creates_receiver);
     RUN_TEST(all_receivers_get_message);
     RUN_TEST(late_subscriber_no_backfill);
+    RUN_TEST(receiver_clone_reads_the_same_remaining_messages);
 
     RUN_TEST(lagging_receiver_gets_lagged);
+    RUN_TEST(lag_reports_the_number_missed_then_the_oldest_kept);
 
     RUN_TEST(sender_drop_drain_then_disconnected);
     RUN_TEST(send_after_sender_drop_fails);
+    RUN_TEST(senders_are_counted_and_the_last_drop_closes);
     RUN_TEST(receiver_drop_decrements_count);
+
+    RUN_TEST(permit_sends_once_and_abort_publishes_nothing);
+    RUN_TEST(permit_after_the_receivers_or_the_last_sender_left);
 
     RUN_TEST(send_null_fails);
     RUN_TEST(recv_null_fails);
+    RUN_TEST(clone_and_permit_null_fail);
     RUN_TEST(receiver_count_null_zero);
     RUN_TEST(total_sent_null_zero);
 

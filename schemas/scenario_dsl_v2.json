@@ -97,7 +97,9 @@
                       "sender": {"$ref": "#/$defs/name"}, "receiver": {"$ref": "#/$defs/name"}}},
       {"type": "object", "required": ["name", "type", "capacity", "sender", "subscribers"], "additionalProperties": false,
        "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"const": "broadcast"}, "capacity": {"type": "integer", "minimum": 1},
-                      "sender": {"$ref": "#/$defs/name"}, "subscribers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/name"}}}},
+                      "sender": {"$ref": "#/$defs/name"},
+                      "senders": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/name"}},
+                      "subscribers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/name"}}}},
       {"type": "object", "required": ["name", "type", "initial", "sender", "subscribers"], "additionalProperties": false,
        "properties": {"name": {"$ref": "#/$defs/name"}, "type": {"const": "watch"}, "initial": {"$ref": "#/$defs/u64"},
                       "sender": {"$ref": "#/$defs/name"}, "subscribers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/name"}}}}
