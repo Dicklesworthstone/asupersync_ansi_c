@@ -21,6 +21,7 @@
 #ifndef ASX_REMOTE_REMOTE_H
 #define ASX_REMOTE_REMOTE_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -92,10 +93,6 @@ ASX_API int asx_remote_handle_is_terminal(const asx_remote_handle *h);
 /* Remote message — serializable request/response envelope             */
 /* ------------------------------------------------------------------ */
 
-#ifndef ASX_REMOTE_MSG_PAYLOAD_SIZE
-#define ASX_REMOTE_MSG_PAYLOAD_SIZE 256u
-#endif
-
 typedef enum {
     ASX_REMOTE_MSG_SPAWN = 0,
     ASX_REMOTE_MSG_CANCEL = 1,
@@ -164,9 +161,6 @@ ASX_API int asx_idempotency_record_expired(const asx_idempotency_record *rec, ui
 /* Idempotency store — bounded cache of idempotency records            */
 /* ------------------------------------------------------------------ */
 
-#ifndef ASX_IDEMPOTENCY_STORE_CAPACITY
-#define ASX_IDEMPOTENCY_STORE_CAPACITY 16u
-#endif
 #if (ASX_IDEMPOTENCY_STORE_CAPACITY) < 1
 #error "ASX_IDEMPOTENCY_STORE_CAPACITY must be at least 1"
 #endif
@@ -193,10 +187,6 @@ ASX_API uint32_t asx_idempotency_store_evict_expired(asx_idempotency_store *stor
 /* ------------------------------------------------------------------ */
 /* Saga — multi-step compensating transaction coordination             */
 /* ------------------------------------------------------------------ */
-
-#ifndef ASX_SAGA_MAX_STEPS
-#define ASX_SAGA_MAX_STEPS 8u
-#endif
 
 typedef asx_status (*asx_saga_step_fn)(void *user_data);
 typedef asx_status (*asx_saga_compensate_fn)(void *user_data);
@@ -321,10 +311,6 @@ typedef struct {
 /* ------------------------------------------------------------------ */
 /* Remote execution report — operator-facing diagnostic artifact       */
 /* ------------------------------------------------------------------ */
-
-#ifndef ASX_REMOTE_REPORT_TEXT_SIZE
-#define ASX_REMOTE_REPORT_TEXT_SIZE 256u
-#endif
 
 typedef struct {
     uint64_t request_id;

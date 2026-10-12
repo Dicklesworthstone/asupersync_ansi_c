@@ -14,6 +14,7 @@
 #ifndef ASX_CORE_DET_HASH_H
 #define ASX_CORE_DET_HASH_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <stdint.h>
@@ -25,10 +26,6 @@ extern "C" {
 /* -------------------------------------------------------------------
  * Capacity
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_DET_HASH_MAX_ENTRIES
-#define ASX_DET_HASH_MAX_ENTRIES 64u
-#endif
 
 /* Load factor threshold (numerator/16). Rehash when load exceeds 12/16 = 75%. */
 #define ASX_DET_HASH_LOAD_NUM 12u

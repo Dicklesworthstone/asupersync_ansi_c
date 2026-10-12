@@ -721,7 +721,7 @@ lint-docs: $(LIB_A)
 	@echo "[asx] lint-docs: checking public API documentation coverage..."
 	@./tools/ci/check_api_docs.sh
 	@echo "[asx] lint-docs: compiling the README's C samples..."
-	@./tools/ci/check_readme_samples.sh README.md $(LIB_A) $(BUILD_DIR)/readme_samples
+	@CC="$(CC)" ./tools/ci/check_readme_samples.sh README.md $(LIB_A) $(BUILD_DIR)/readme_samples $(OPT_FLAGS) $(BITS_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) $(CLASS_DEF) $(CFLAGS) $(ALL_LDFLAGS)
 	@echo "[asx] lint-docs: checking the README's inventory numbers..."
 	@./tools/ci/check_readme_facts.sh README.md
 	@echo "[asx] lint-docs: checking the C refinement map against the v4 rule index..."
@@ -823,7 +823,7 @@ model-check: $(MODEL_CHECK_BIN)
 # ---------------------------------------------------------------------------
 # test — run all test suites
 # ---------------------------------------------------------------------------
-test: test-unit test-invariants test-conformance-c test-vignettes test-examples fuzz-parsers-replay
+test: test-unit test-invariants test-conformance-c test-vignettes test-examples fuzz-parsers-replay test-config-fingerprint
 	@echo "[asx] test: all suites passed"
 
 # ---------------------------------------------------------------------------
@@ -1238,9 +1238,13 @@ test-examples: $(EXAMPLE_BIN)
 # ---------------------------------------------------------------------------
 ABI_SHIM_SRC := tests/abi/consumer_shim.c
 ABI_SHIM_BIN := $(TEST_DIR)/abi/consumer_shim
+ABI_HOST_OBJ := $(TEST_DIR)/abi/matched_host.o
 
-$(ABI_SHIM_BIN): $(ABI_SHIM_SRC) $(LIB_A) | $(TEST_DIR)/abi
-	$(CC) -std=c99 -Wall -Wextra -Wpedantic -Werror $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) -o $@ $< $(LIB_A)
+$(ABI_HOST_OBJ): $(ABI_SHIM_SRC) $(LIB_A) | $(TEST_DIR)/abi
+	$(CC) $(ALL_CFLAGS) -DASX_ABI_MATCHED_HOST -c -o $@ $<
+
+$(ABI_SHIM_BIN): $(ABI_SHIM_SRC) $(ABI_HOST_OBJ) $(LIB_A) | $(TEST_DIR)/abi
+	$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $< $(ABI_HOST_OBJ) $(LIB_A)
 
 $(TEST_DIR)/abi:
 	@mkdir -p $@
@@ -1249,6 +1253,59 @@ test-abi-shim: $(ABI_SHIM_BIN)
 	@echo "[asx] test-abi-shim: running consumer ABI/API stability shim..."
 	@$(ABI_SHIM_BIN)
 	@echo "[asx] test-abi-shim: PASS"
+
+# Compile external consumers separately from the unchanged library. Their
+# ordinary config/hook/builder preparation and all four creation paths must
+# refuse mismatched builds before touching any object or surrounding canary.
+.PHONY: test-config-fingerprint
+test-config-fingerprint: test-abi-shim
+	@set -eu; \
+	for knob in ASX_MAX_REGION_CHILDREN ASX_MAX_REGIONS ASX_MAX_TASKS \
+	    ASX_MAX_OBLIGATIONS ASX_MAX_TIMERS ASX_MAX_CHANNELS ASX_MAX_MASK_DEPTH \
+	    ASX_MAX_CANCEL_WITNESSES ASX_MAX_WORKERS ASX_MAX_IO_TOKENS \
+	    ASX_MAX_DEADLINE_MONITORS ASX_MAX_WAKERS ASX_MAX_BLOCKING_TASKS \
+	    ASX_MAX_SUSPECTS ASX_MAX_ONESHOTS ASX_MAX_BROADCASTS ASX_MAX_WATCHES \
+	    ASX_MAX_SESSIONS ASX_MAX_EPOCHS ASX_MAX_EPOCH_OBSERVERS ASX_MAX_ACTORS \
+	    ASX_MAX_SUPERVISORS ASX_MAX_SIGNAL_SUBSCRIPTIONS ASX_MAX_TCP_LISTENERS \
+	    ASX_MAX_TCP_STREAMS ASX_MAX_UDP_SOCKETS ASX_MAX_UNIX_LISTENERS \
+	    ASX_MAX_UNIX_STREAMS ASX_MAX_UNIX_DGRAM_SOCKETS ASX_MAX_PIPES \
+	    ASX_MAX_TLS_STREAMS ASX_MAX_WS_CONNECTIONS ASX_MAX_QUIC_CONNECTIONS \
+	    ASX_MAX_QUIC_STREAMS ASX_MAX_PROCESSES ASX_MAX_FS_ENTRIES \
+	    ASX_MAX_OPEN_FILES ASX_MAX_OPEN_DIRS; do \
+	    bin="$(TEST_DIR)/abi/mismatch-$$knob"; \
+	    echo "[asx] config mismatch control: $$knob"; \
+	    $(CC) $(ALL_CFLAGS) -U$$knob -D$$knob=999u $(ALL_LDFLAGS) \
+	        -o "$$bin" $(ABI_SHIM_SRC) $(ABI_HOST_OBJ) $(LIB_A); \
+	    "$$bin" --expect-mismatch; \
+	done; \
+	for variant in profile codec codec-none codec-both determinism ghost buffer trace packing enums browser-minimal; do \
+	    case "$$variant" in \
+	        profile) if [ "$(PROFILE)" = CORE ]; then other=POSIX; else other=CORE; fi; \
+	            flags="-UASX_PROFILE_$(PROFILE) -DASX_PROFILE_$$other" ;; \
+	        codec) if [ "$(CODEC)" = JSON ]; then other=BIN; else other=JSON; fi; \
+	            flags="-UASX_CODEC_$(CODEC) -DASX_CODEC_$$other" ;; \
+	        codec-none) flags="-UASX_CODEC_JSON -UASX_CODEC_BIN" ;; \
+	        codec-both) flags="-DASX_CODEC_JSON -DASX_CODEC_BIN" ;; \
+	        determinism) if [ "$(DETERMINISTIC)" = 1 ]; then other=0; else other=1; fi; \
+	            flags="-UASX_DETERMINISTIC -DASX_DETERMINISTIC=$$other" ;; \
+	        ghost) if [ "$$($(ABI_SHIM_BIN) --ghost-enabled)" = 0 ]; then other=1; else other=0; fi; \
+	            flags="-UASX_DEBUG_GHOST -DASX_DEBUG_GHOST=$$other" ;; \
+	        buffer) flags="-UASX_BUF_CAPACITY -DASX_BUF_CAPACITY=8193u" ;; \
+	        trace) flags="-UASX_TRACE_CAPACITY -DASX_TRACE_CAPACITY=2049u" ;; \
+	        packing) flags="-fpack-struct=1" ;; \
+	        enums) flags="-fshort-enums" ;; \
+	        browser-minimal) \
+	            if [ "$(PROFILE)" = BROWSER ]; then \
+	                if [ "$$($(ABI_SHIM_BIN) --browser-io-enabled)" = 0 ]; then other=EXTENDED; else other=MINIMAL; fi; \
+	                flags="-UASX_BROWSER_PROFILE_MINIMAL -UASX_BROWSER_PROFILE_EXTENDED -DASX_BROWSER_PROFILE_$$other"; \
+	            else flags="-UASX_PROFILE_$(PROFILE) -DASX_PROFILE_BROWSER -DASX_BROWSER_PROFILE_MINIMAL"; fi ;; \
+	    esac; \
+	    bin="$(TEST_DIR)/abi/mismatch-$$variant"; \
+	    echo "[asx] config mismatch control: $$variant"; \
+	    $(CC) $(ALL_CFLAGS) $$flags $(ALL_LDFLAGS) -o "$$bin" $(ABI_SHIM_SRC) $(ABI_HOST_OBJ) $(LIB_A); \
+	    "$$bin" --expect-mismatch; \
+	done; \
+	echo "[asx] test-config-fingerprint: matching consumer and 49 mismatched builds PASS"
 
 # ---------------------------------------------------------------------------
 # abi-check — ABI break detection gate (bd-56t.4)
@@ -1824,7 +1881,7 @@ test-gates:
 	@echo "[asx] test-gates: running gate negative controls..."
 	@for t in tests/gates/*.sh; do \
 		echo "  RUN  $$t"; \
-		bash "$$t" || exit 1; \
+		ASX_CONFORMANCE_RUNNER="$(abspath $(CONFORMANCE_RUNNER))" bash "$$t" || exit 1; \
 	done
 	@echo "[asx] test-gates: PASS"
 

@@ -199,6 +199,7 @@ const char *asx_status_str(asx_status s) {
     case ASX_E_REPLAY_MISMATCH: return "replay continuity mismatch";
     case ASX_E_CONFIG_FROZEN: return "config field is frozen";
     case ASX_E_CONFIG_RESTART_REQ: return "config field requires restart";
+    case ASX_E_CONFIG_MISMATCH: return "application/library configuration mismatch";
     case ASX_E_PERMISSION_DENIED: return "capability not granted";
     default: return "unknown status";
     }
@@ -279,6 +280,7 @@ static const asx_status_name_entry g_status_names[] = {
     ASX_STATUS_NAME_ENTRY(ASX_E_REPLAY_MISMATCH),
     ASX_STATUS_NAME_ENTRY(ASX_E_CONFIG_FROZEN),
     ASX_STATUS_NAME_ENTRY(ASX_E_CONFIG_RESTART_REQ),
+    ASX_STATUS_NAME_ENTRY(ASX_E_CONFIG_MISMATCH),
     ASX_STATUS_NAME_ENTRY(ASX_E_PERMISSION_DENIED),
 };
 
@@ -373,7 +375,8 @@ asx_error_category asx_status_category(asx_status s) {
     case ASX_E_CORRUPTED_SYMBOL: return ASX_ERROR_CATEGORY_EQUIVALENCE;
     case ASX_E_REPLAY_MISMATCH: return ASX_ERROR_CATEGORY_REPLAY;
     case ASX_E_CONFIG_FROZEN:
-    case ASX_E_CONFIG_RESTART_REQ: return ASX_ERROR_CATEGORY_CONFIG;
+    case ASX_E_CONFIG_RESTART_REQ:
+    case ASX_E_CONFIG_MISMATCH: return ASX_ERROR_CATEGORY_CONFIG;
     case ASX_E_PERMISSION_DENIED: return ASX_ERROR_CATEGORY_PERMISSION;
     default: return ASX_ERROR_CATEGORY_GENERAL;
     }
@@ -472,6 +475,7 @@ asx_recoverability asx_status_recoverability(asx_status s) {
     case ASX_E_CHANNEL_EMPTY:
     case ASX_E_CONFIG_FROZEN:
     case ASX_E_CONFIG_RESTART_REQ: return ASX_RECOVERABILITY_CONTEXT_DEPENDENT;
+    case ASX_E_CONFIG_MISMATCH: return ASX_RECOVERABILITY_PERMANENT;
     default: return ASX_RECOVERABILITY_CONTEXT_DEPENDENT;
     }
 }
@@ -545,7 +549,8 @@ asx_recovery_action asx_status_recovery_action(asx_status s) {
     case ASX_E_DETERMINISM_VIOLATION:
     case ASX_E_ALLOCATOR_SEALED:
     case ASX_E_CONFIG_FROZEN:
-    case ASX_E_CONFIG_RESTART_REQ: return ASX_RECOVERY_INSPECT_CONFIGURATION;
+    case ASX_E_CONFIG_RESTART_REQ:
+    case ASX_E_CONFIG_MISMATCH: return ASX_RECOVERY_INSPECT_CONFIGURATION;
     case ASX_E_STALE_HANDLE:
     case ASX_E_AFFINITY_TRANSFER_REQUIRED:
     case ASX_E_AFFINITY_NOT_BOUND: return ASX_RECOVERY_REINITIALIZE_CONTEXT;
@@ -630,6 +635,7 @@ asx_backoff_hint asx_status_backoff_hint(asx_status s) {
     case ASX_E_REPLAY_MISMATCH:
     case ASX_E_CONFIG_FROZEN:
     case ASX_E_CONFIG_RESTART_REQ:
+    case ASX_E_CONFIG_MISMATCH:
     case ASX_E_PERMISSION_DENIED: return asx_backoff_hint_none();
     case ASX_E_WOULD_BLOCK:
     case ASX_E_CHANNEL_FULL:

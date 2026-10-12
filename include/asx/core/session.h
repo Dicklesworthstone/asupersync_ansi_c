@@ -19,6 +19,7 @@
 #ifndef ASX_CORE_SESSION_H
 #define ASX_CORE_SESSION_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -28,12 +29,6 @@
 extern "C" {
 #endif
 
-#ifndef ASX_MAX_SESSIONS
-#define ASX_MAX_SESSIONS 8u
-#endif
-#ifndef ASX_SESSION_MAX_CAPACITY
-#define ASX_SESSION_MAX_CAPACITY 16u
-#endif
 #if (ASX_MAX_SESSIONS) < 1 || (ASX_SESSION_MAX_CAPACITY) < 1
 #error "ASX_MAX_SESSIONS and ASX_SESSION_MAX_CAPACITY must be at least 1"
 #endif

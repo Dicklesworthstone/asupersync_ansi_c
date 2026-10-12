@@ -71,10 +71,6 @@ typedef struct {
  * Application config
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_APP_DEFAULT_POLL_BUDGET
-#define ASX_APP_DEFAULT_POLL_BUDGET 10000u
-#endif
-
 typedef struct {
     const char *name;     /* application name for diagnostics */
     uint32_t poll_budget; /* max polls per run (0 = ASX_APP_DEFAULT_POLL_BUDGET) */
@@ -121,7 +117,42 @@ typedef struct {
 /* Initialize an application with the given config.
  * Sets up the runtime, opens a root region, and prepares for
  * task execution. */
-ASX_API ASX_MUST_USE asx_status asx_app_init(asx_app *app, const asx_app_config *config);
+ASX_API ASX_MUST_USE asx_status asx_app_init_checked(asx_app *app, const asx_app_config *config,
+                                                     uint64_t application_fingerprint);
+#define asx_app_init(app, config) asx_app_init_checked((app), (config), ASX_APP_CONFIG_FINGERPRINT)
+
+/* Include the app-specific object/config layout in its constructor identity. */
+static inline uint64_t asx_header_app_fingerprint(void) {
+    typedef struct {
+        char pad;
+        asx_app value;
+    } app_alignment;
+    typedef struct {
+        char pad;
+        asx_app_config value;
+    } config_alignment;
+    static const uint64_t values[] = {
+        sizeof(asx_app),
+        offsetof(app_alignment, value),
+        offsetof(asx_app, config),
+        offsetof(asx_app, runtime),
+        offsetof(asx_app, region),
+        offsetof(asx_app, initialized),
+        offsetof(asx_app, exit_code),
+        sizeof(asx_app_config),
+        offsetof(config_alignment, value),
+        offsetof(asx_app_config, name),
+        offsetof(asx_app_config, poll_budget),
+    };
+    uint64_t fingerprint = ASX_CONFIG_FINGERPRINT;
+    size_t i;
+    for (i = 0u; i < sizeof(values) / sizeof(values[0]); i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded application bootstrap layout facts") */
+        fingerprint = (fingerprint ^ values[i]) * UINT64_C(1099511628211);
+    }
+    return fingerprint;
+}
+#define ASX_APP_CONFIG_FINGERPRINT (asx_header_app_fingerprint())
 
 /* Parse CLI arguments into an args struct.
  * Recognizes: run, doctor, replay, --seed=N, --verbose, --help.

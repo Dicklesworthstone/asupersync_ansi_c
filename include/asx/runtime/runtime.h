@@ -41,31 +41,6 @@ extern "C" {
 
 /* A build-time resource class (ASX_RESOURCE_CLASS, asx_config.h) sizes
  * the arenas it does not find set explicitly. */
-#ifndef ASX_MAX_REGIONS
-#ifdef ASX_CLASS_MAX_REGIONS
-#define ASX_MAX_REGIONS ASX_CLASS_MAX_REGIONS
-#else
-#define ASX_MAX_REGIONS 8
-#endif
-#endif
-#ifndef ASX_MAX_TASKS
-#ifdef ASX_CLASS_MAX_TASKS
-#define ASX_MAX_TASKS ASX_CLASS_MAX_TASKS
-#else
-#define ASX_MAX_TASKS 64
-#endif
-#endif
-#ifndef ASX_MAX_OBLIGATIONS
-#ifdef ASX_CLASS_MAX_OBLIGATIONS
-#define ASX_MAX_OBLIGATIONS ASX_CLASS_MAX_OBLIGATIONS
-#else
-#define ASX_MAX_OBLIGATIONS 128
-#endif
-#endif
-#ifndef ASX_REGION_CAPTURE_ARENA_BYTES
-#define ASX_REGION_CAPTURE_ARENA_BYTES 16384u
-#endif
-
 #if (ASX_MAX_REGIONS) < 1 || (ASX_MAX_REGIONS) > 65535
 #error "ASX_MAX_REGIONS must be in [1, 65535]"
 #endif
@@ -526,9 +501,6 @@ typedef struct {
 } asx_checkpoint_result;
 
 /* Maximum nesting of asx_task_mask() sections (INV-MASK-BOUNDED). */
-#ifndef ASX_MAX_MASK_DEPTH
-#define ASX_MAX_MASK_DEPTH 64u
-#endif
 #if (ASX_MAX_MASK_DEPTH) < 1
 #error "ASX_MAX_MASK_DEPTH must be at least 1"
 #endif

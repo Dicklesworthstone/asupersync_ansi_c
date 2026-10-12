@@ -35,7 +35,7 @@ The Rust channel has no state enum. State is derived from two atomics in `Channe
 | `ReceiverClosed` | `receiver_dropped == true` | Receiver dropped or `Receiver::close()` called; sends fail |
 | `FullyClosed` | `sender_count == 0 && receiver_dropped` | Both sides gone |
 
-**C status:** an explicit enum (`include/asx/core/channel.h:68-73`):
+**C status:** an explicit enum (`include/asx/core/channel.h:58-63`):
 
 ```c
 typedef enum {
@@ -46,7 +46,7 @@ typedef enum {
 } asx_channel_state;
 ```
 
-C starts with one sender reference (`src/channel/mpsc.c:453`); `asx_channel_sender_clone` increments a live sender count (`src/channel/mpsc.c:476-489`), and each participating producer drops one reference with `asx_channel_close_sender`, the last closing the sender side (`src/channel/mpsc.c:491-525`). A bare uncounted channel id represents a weak sender, upgraded with the same clone operation, which refuses at zero (`include/asx/core/channel.h:107-122`). C supplies no Rust type-level sender ownership; any task holding the channel id may reserve on it. A drained `FULLY_CLOSED` slot may be reused by a later `asx_channel_create` under a new generation (`src/channel/mpsc.c:441-449`); stale handles are refused with `ASX_E_STALE_HANDLE` (`src/channel/mpsc.c:130`).
+C starts with one sender reference (`src/channel/mpsc.c:453`); `asx_channel_sender_clone` increments a live sender count (`src/channel/mpsc.c:476-489`), and each participating producer drops one reference with `asx_channel_close_sender`, the last closing the sender side (`src/channel/mpsc.c:491-525`). A bare uncounted channel id represents a weak sender, upgraded with the same clone operation, which refuses at zero (`include/asx/core/channel.h:97-112`). C supplies no Rust type-level sender ownership; any task holding the channel id may reserve on it. A drained `FULLY_CLOSED` slot may be reused by a later `asx_channel_create` under a new generation (`src/channel/mpsc.c:441-449`); stale handles are refused with `ASX_E_STALE_HANDLE` (`src/channel/mpsc.c:130`).
 
 ### 1.2 Legal State Transitions
 
@@ -75,7 +75,7 @@ Rust: `Sender::reserve(&cx)` (`src/channel/mpsc.rs:637`) returns a `Reserve` fut
 3. The caller is the head of the waiter queue (or the queue is empty) and `used_slots < capacity` -> `reserved += 1`, leave the queue, wake the next waiter if capacity remains (`:1081-1101`), then register a `SendPermit` obligation through `cx` (`:1116-1119`).
 4. Otherwise register or refresh the waker in the FIFO waiter queue and return `Poll::Pending` (`:1146-1170`).
 
-C signature (`include/asx/core/channel.h:242-243`):
+C signature (`include/asx/core/channel.h:232-233`):
 
 ```c
 asx_status asx_channel_reserve(asx_channel_id id, asx_cx *cx, asx_send_permit *out);
@@ -100,13 +100,13 @@ Rust: `SendPermit::send` returns `Outcome<(), SendError<T>>` and `SendPermit::tr
 
 The send cannot fail for lack of capacity: the slot was reserved.
 
-C signature (`include/asx/core/channel.h:188`):
+C signature (`include/asx/core/channel.h:178`):
 
 ```c
 asx_status asx_send_permit_send(asx_send_permit *permit, uint64_t value);
 ```
 
-**C status:** implemented; messages are `uint64_t` tokens. An already consumed permit returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:758`); a mismatched tracked credit is refused before capacity or ledger mutation (`:759-764`), and a forged or stale physical token is refused (`:772-776`). Receiver closed -> obligation aborted with `ASX_OBLIGATION_ABORT_ERROR`, `ASX_E_DISCONNECTED` (`:780-786`). Otherwise the value is enqueued (`:802-804`), the obligation committed (`:807`) and the wait lines settled (`:808`). C also has `asx_channel_send(id, cx, value)` (`include/asx/core/channel.h:248`, `src/channel/mpsc.c:1061-1071`), Rust's `Sender::send(&cx, v)` (`src/channel/mpsc.rs:715`): a reserve with no obligation, then a commit.
+**C status:** implemented; messages are `uint64_t` tokens. An already consumed permit returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:758`); a mismatched tracked credit is refused before capacity or ledger mutation (`:759-764`), and a forged or stale physical token is refused (`:772-776`). Receiver closed -> obligation aborted with `ASX_OBLIGATION_ABORT_ERROR`, `ASX_E_DISCONNECTED` (`:780-786`). Otherwise the value is enqueued (`:802-804`), the obligation committed (`:807`) and the wait lines settled (`:808`). C also has `asx_channel_send(id, cx, value)` (`include/asx/core/channel.h:238`, `src/channel/mpsc.c:1061-1071`), Rust's `Sender::send(&cx, v)` (`src/channel/mpsc.rs:715`): a reserve with no obligation, then a commit.
 
 Tracked permit settlement validates physical channel/token ownership through `asx_obligation_check_token_internal` (`src/runtime/lifecycle.c:1962-1982`) and resolves through `asx_obligation_resolve_token_internal` (`src/runtime/lifecycle.c:1984-2003`), called by `channel_permit_resolve` (`src/channel/mpsc.c:736-748`). A genuine permit may move to another task without transferring its original ledger holder or region. Raw owned-obligation IDs still require the actual holder's poll (`asx_obligation_check_access_internal`, `src/runtime/lifecycle.c:1924-1960`); an ID alone cannot authenticate a physical permit. These C guards do not supply Rust type-level consumption or new handoff fixture evidence.
 
@@ -114,7 +114,7 @@ Tracked permit settlement validates physical channel/token ownership through `as
 
 Rust: `SendPermit::abort` (`src/channel/mpsc.rs:1633-1639`) marks the permit consumed, releases the slot through `release_capacity` (decrements `reserved`, records a cancellation, wakes the head waiter; `:1641-1653`) and aborts the obligation with reason `Explicit`.
 
-C signature (`include/asx/core/channel.h:192`):
+C signature (`include/asx/core/channel.h:182`):
 
 ```c
 void asx_send_permit_abort(asx_send_permit *permit);
@@ -140,7 +140,7 @@ Rust: `Receiver::recv(&cx)` (`src/channel/mpsc.rs:1719`) polls `poll_recv` (`src
 
 `try_recv` (`src/channel/mpsc.rs:1956-1983`) returns `RecvError::Empty` instead of waiting. `Disconnected` is reported only once the queue is empty: messages committed before the last sender dropped are drained first.
 
-C signatures (`include/asx/core/channel.h:220`, `:252-253`):
+C signatures (`include/asx/core/channel.h:210`, `:242-243`):
 
 ```c
 asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value);
@@ -184,7 +184,7 @@ C unit tests: `tests/unit/channel/test_mpsc.c` `fifo_ordering`; `tests/unit/chan
 
 Rust error enums: `SendError` (`src/channel/mpsc.rs:111-118`), `RecvError` (`src/channel/mpsc.rs:182-189`). Rust errors carry the unsent value; C errors carry none. `ASX_E_CHANNEL_EMPTY` (`include/asx/asx_status.h:69`) is not returned by `src/channel/mpsc.c`.
 
-**Construction constraint:** Rust panics on `capacity == 0` (`assert!` at `src/channel/mpsc.rs:565`); `unbounded_channel` is `channel(usize::MAX)` (`src/channel/mpsc.rs:599-600`). C returns `ASX_E_INVALID_ARGUMENT` for 0 or above `ASX_CHANNEL_MAX_CAPACITY` (default 64, `include/asx/core/channel.h:57-59`; check at `src/channel/mpsc.c:430`), refuses a closed region with `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:434-439`; a closing one is accepted, as Rust's channels belong to no region) and has no unbounded channel.
+**Construction constraint:** Rust panics on `capacity == 0` (`assert!` at `src/channel/mpsc.rs:565`); `unbounded_channel` is `channel(usize::MAX)` (`src/channel/mpsc.rs:599-600`). C returns `ASX_E_INVALID_ARGUMENT` for 0 or above `ASX_CHANNEL_MAX_CAPACITY` (default 64, `include/asx/asx_config.h:362-363`; check at `src/channel/mpsc.c:430`), refuses a closed region with `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:434-439`; a closing one is accepted, as Rust's channels belong to no region) and has no unbounded channel.
 
 ### 1.8 Close Semantics
 
@@ -255,7 +255,7 @@ asynchronous-finalizer barrier.
 
 ## 2. Timer Wheel Semantics
 
-**C status (whole section):** the Rust hierarchical wheel is not ported. `src/time/timer_wheel.c` is a flat arena of `ASX_MAX_TIMERS` slots (default 128, `include/asx/time/timer_wheel.h:27-35`); its header calls the hierarchical wheel a future upgrade (`src/time/timer_wheel.c:1-10`). Its only runtime users are the deadline helpers (`src/time/deadline.c:45`, `:57`), and no runtime code calls `asx_timer_collect_expired` (only tests do); those deadlines are checked by time comparison (`asx_deadline_is_expired_at`, `src/time/deadline.c:78-86`). Task sleeps use the scheduler's timer min-heap keyed by (deadline, arm sequence) (`src/runtime/scheduler.c:100-105`); under lab dispatch due timers fire in (1 ms tick, registration) order to match the Rust wheel (`timers_fire_wheel_order`, `src/runtime/scheduler.c:256-324`).
+**C status (whole section):** the Rust hierarchical wheel is not ported. `src/time/timer_wheel.c` is a flat arena of `ASX_MAX_TIMERS` slots (default 128, `include/asx/asx_config.h:277-283`); its header calls the hierarchical wheel a future upgrade (`src/time/timer_wheel.c:1-10`). Its only runtime users are the deadline helpers (`src/time/deadline.c:45`, `:57`), and no runtime code calls `asx_timer_collect_expired` (only tests do); those deadlines are checked by time comparison (`asx_deadline_is_expired_at`, `src/time/deadline.c:78-86`). Task sleeps use the scheduler's timer min-heap keyed by (deadline, arm sequence) (`src/runtime/scheduler.c:100-105`); under lab dispatch due timers fire in (1 ms tick, registration) order to match the Rust wheel (`timers_fire_wheel_order`, `src/runtime/scheduler.c:256-324`).
 
 ### 2.1 Timer Wheel Structure
 
@@ -282,14 +282,14 @@ Rust (`src/time/wheel.rs:515-566`):
 3. Placement (`insert_entry_at`, `src/time/wheel.rs:710-754`): `deadline <= current` -> the `ready` vector; `delta >= max_range` -> overflow; otherwise the **finest** level whose range covers `delta` (levels are tried from L0 up), where a level-0 tick at or before the current tick goes to `ready` (`:735-741`).
 4. Returns `TimerHandle { id, generation }` (`src/time/wheel.rs:225-228`).
 
-C signature (`include/asx/time/timer_wheel.h:72-73`):
+C signature (`include/asx/time/timer_wheel.h:68-69`):
 
 ```c
 asx_status asx_timer_register(asx_timer_wheel *wheel, asx_time deadline,
                               void *waker_data, asx_timer_handle *out_handle);
 ```
 
-**C status:** partly implemented (`src/time/timer_wheel.c:139-168`). `ASX_E_TIMER_DURATION_EXCEEDED` when `deadline - current > max_duration` (`:118-121`, `:145`); the default maximum is Rust's 7 days (`ASX_TIMER_MAX_DURATION_NS`, `include/asx/time/timer_wheel.h:38-40`; 24 h before 2026-10-10), and there is no clamping `register`. A registration takes the first dead slot or a new one (`:147-164`) and fails with `ASX_E_RESOURCE_EXHAUSTED` when every slot is live (`:162`). Each arm records a monotonic `insertion_seq` and advances the slot's 32-bit generation (`:124-137`). The handle is `{ slot, generation }`, both `uint32_t` (`include/asx/time/timer_wheel.h:47-50`). No levels, ready vector or overflow heap.
+**C status:** partly implemented (`src/time/timer_wheel.c:139-168`). `ASX_E_TIMER_DURATION_EXCEEDED` when `deadline - current > max_duration` (`:118-121`, `:145`); the default maximum is Rust's 7 days (`ASX_TIMER_MAX_DURATION_NS`, `include/asx/time/timer_wheel.h:31-33`; 24 h before 2026-10-10), and there is no clamping `register`. A registration takes the first dead slot or a new one (`:147-164`) and fails with `ASX_E_RESOURCE_EXHAUSTED` when every slot is live (`:162`). Each arm records a monotonic `insertion_seq` and advances the slot's 32-bit generation (`:124-137`). The handle is `{ slot, generation }`, both `uint32_t` (`include/asx/time/timer_wheel.h:42-45`). No levels, ready vector or overflow heap.
 
 ### 2.3 Timer Firing
 
@@ -301,7 +301,7 @@ Rust `collect_expired` (`src/time/wheel.rs:699-703`):
 
 Fire criterion: `entry.deadline <= now` (inclusive), subject to the coalescing hold.
 
-C signature (`include/asx/time/timer_wheel.h:111-112`):
+C signature (`include/asx/time/timer_wheel.h:101-102`):
 
 ```c
 uint32_t asx_timer_collect_expired(asx_timer_wheel *wheel, asx_time now,
@@ -320,7 +320,7 @@ Rust `cancel` (`src/time/wheel.rs:577-597`):
 
 A stale handle whose `id` was reused fails because the slab entry holds the new generation.
 
-C signature (`include/asx/time/timer_wheel.h:90`):
+C signature (`include/asx/time/timer_wheel.h:84`):
 
 ```c
 int asx_timer_cancel(asx_timer_wheel *wheel, const asx_timer_handle *handle);
@@ -330,7 +330,7 @@ int asx_timer_cancel(asx_timer_wheel *wheel, const asx_timer_handle *handle);
 
 **Update is cancel + re-register.** Rust `TimerDriver::update` (`src/time/driver.rs:522-540`) cancels the old handle and, only if that cancel succeeded, registers the new timer with `register` (which clamps); a stale handle leaves the wheel untouched and is returned as is. The slab reuses the freed `id`, so the replacement gets the same `id` with a new generation.
 
-C signature (`include/asx/time/timer_wheel.h:131-134`):
+C signature (`include/asx/time/timer_wheel.h:123-126`):
 
 ```c
 asx_status asx_timer_update(asx_timer_wheel *wheel, const asx_timer_handle *old_handle,
@@ -441,11 +441,11 @@ Rust's `Interval` (`src/time/interval.rs`) is a synchronous schedule the caller 
 
 | Resource | Rust | C |
 |----------|------|---|
-| Timer capacity | No limit (slab) | `ASX_MAX_TIMERS` live timers (default 128, `include/asx/time/timer_wheel.h:27-35`); then `ASX_E_RESOURCE_EXHAUSTED` from `asx_timer_register`. The earlier `max_timer_nodes` config field does not exist |
+| Timer capacity | No limit (slab) | `ASX_MAX_TIMERS` live timers (default 128, `include/asx/asx_config.h:277-283`); then `ASX_E_RESOURCE_EXHAUSTED` from `asx_timer_register`. The earlier `max_timer_nodes` config field does not exist |
 | Task timers | One per task | One heap entry per task slot (`g_timer_heap[ASX_MAX_TASKS]`, `src/runtime/scheduler.c:91`) |
 | Timer duration | `TimerDurationExceeded` (try_register) or clamp | `ASX_E_TIMER_DURATION_EXCEEDED` |
 | Channel capacity | `Full` (try) or wait | `ASX_E_CHANNEL_FULL` (try) or park with `ASX_E_PENDING` |
-| Channel count / size | Unbounded | `ASX_MAX_CHANNELS` slots (default 16, `include/asx/core/channel.h:50-56`; `asx_channel_create` returns `ASX_E_RESOURCE_EXHAUSTED`, `src/channel/mpsc.c:473`); capacity at most `ASX_CHANNEL_MAX_CAPACITY` (64) |
+| Channel count / size | Unbounded | `ASX_MAX_CHANNELS` slots (default 16, `include/asx/asx_config.h:284-290`; `asx_channel_create` returns `ASX_E_RESOURCE_EXHAUSTED`, `src/channel/mpsc.c:473`); capacity at most `ASX_CHANNEL_MAX_CAPACITY` (64, `include/asx/asx_config.h:362-363`) |
 | Waiter nodes | Unbounded queues | One pool of `ASX_WAIT_NODE_CAPACITY` nodes, `4 * ASX_MAX_TASKS` by default (`src/sync/wait_queue.h:88-90`); on exhaustion a waiter is not parked and is re-polled each round (`src/sync/wait_queue.h:49-51`) |
 
 ---
@@ -550,7 +550,7 @@ None of the candidate IDs below exists as `fixtures/rust_reference_v2/<id>.json`
 
 ### 7.2 Timer Wheel C Design Notes
 
-1. **Fixed-size arena:** `ASX_MAX_TIMERS` slots (`include/asx/time/timer_wheel.h:27-35`); there is no `max_timer_nodes` config field.
+1. **Fixed-size arena:** `ASX_MAX_TIMERS` slots (`include/asx/asx_config.h:277-283`); there is no `max_timer_nodes` config field.
 2. **Generation-safe handles:** `{ slot, generation }`, both `uint32_t`, looked up by direct slot index, not a hash map (`src/time/timer_wheel.c:174-192`).
 3. **Deterministic tie-break:** (deadline, insertion_seq) sort at collection (`src/time/timer_wheel.c:230-248`).
 4. **Occupied bitmap:** not implemented (flat scan).
@@ -594,14 +594,14 @@ yet"), but waiting is wake-driven, mirroring Rust's waker registration
 | No registration outside a poll | Callers outside a scheduler poll are never queued or parked. |
 | Wake on state change | A commit wakes one parked receiver per committed message; a dequeue or abort wakes the head of the producer line (`src/channel/mpsc.c:386-393`); a batch receive wakes one producer per freed slot (`src/channel/mpsc.c:1104-1114`). Closing the receiver or dropping the last sender wakes every waiter (`channel_wake_everyone`, `src/channel/mpsc.c:413-417`). A non-last sender drop only decrements its reference count (`src/channel/mpsc.c:501-505`). |
 | FIFO + no queue jumping | Waiters are served in arrival order. As in Rust (`try_reserve`, `src/channel/mpsc.rs:732-754`), `asx_channel_try_reserve` reports `ASX_E_CHANNEL_FULL` while a producer whose task has not finished is parked ahead of the caller, even with free capacity; a cancel-requested producer counts, as in Rust (section 7.4). |
-| Drop of a wait future | `asx_channel_wait_cancel(id, task)` (`include/asx/core/channel.h:288`) withdraws a task that stops waiting (select branch lost, timeout); a wake it held passes to the next waiter. A task that ends while still queued is withdrawn the same way when it finishes (`asx_wait_task_finished`, called from task completion), so a cancelled waiter that never polls again needs no explicit call either (`src/sync/wait_queue.h:144-150`). |
+| Drop of a wait future | `asx_channel_wait_cancel(id, task)` (`include/asx/core/channel.h:278`) withdraws a task that stops waiting (select branch lost, timeout); a wake it held passes to the next waiter. A task that ends while still queued is withdrawn the same way when it finishes (`asx_wait_task_finished`, called from task completion), so a cancelled waiter that never polls again needs no explicit call either (`src/sync/wait_queue.h:144-150`). |
 | Queue capacity | A queue has no limit of its own (Rust's waiter queues are unbounded): waiters are nodes in the runtime's shared pool (`ASX_WAIT_NODE_CAPACITY`, four per task slot by default, `src/sync/wait_queue.h:88-90`). Only if the pool is exhausted, after the nodes of dead tasks are reclaimed, is a waiter not parked: it yields and is re-polled each round (degraded to polling, never a lost wakeup). |
 | Determinism | Queue order and wake order depend only on the call sequence (`src/sync/wait_queue.h:63-64`). Runnable tasks are then polled in arena order by `asx_scheduler_run`, or in the seeded lab order under lab dispatch. With every task parked and no wake source, `asx_scheduler_run` returns `ASX_E_WOULD_BLOCK` instead of spinning to budget exhaustion (`src/runtime/scheduler.c:11-19`). |
 | Threading | Wait queues are scheduler-thread state (like `asx_task_wake`). Foreign-thread producers of the lock-free backend only reach queue code when a scheduler task is parked on that channel and must not race with it (`src/sync/wait_queue.h:66-69`). |
 
 The same contract covers oneshot/broadcast/watch/session receives (send or
 drop wakes every parked receiver task; `asx_watch_poll_changed`,
-`include/asx/core/watch.h:124`, is the wake-driven form of watch
+`include/asx/core/watch.h:122`, is the wake-driven form of watch
 `changed()`), and the sync primitives in `src/sync/`. Their policies follow
 their Rust counterparts and are not all plain arrival order: the semaphore
 serves the front of its line, a release waking the front waiter only and
@@ -610,7 +610,7 @@ each acquire waking the next, and cancel-pending waiters keep their place
 whatever its cancel state (`src/sync/semaphore.c:22-30`); the rwlock follows
 Rust's writer-preference grant policy with bounded reader admission
 (`src/sync/rwlock.c:1-26`); notify, barrier trip, async
-`asx_once_get_or_init` (`include/asx/sync/once.h:70`) and pool checkout,
+`asx_once_get_or_init` (`include/asx/sync/once.h:66`) and pool checkout,
 with the same no-queue-jumping window for the pool (`src/sync/pool.c:166`).
 The shared mechanism lives in `src/sync/wait_queue.h` and
 `src/sync/wait_queue.c`. Rust parity: `sync-waiters-unbounded-001` (34

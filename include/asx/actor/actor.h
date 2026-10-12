@@ -44,6 +44,7 @@
 #ifndef ASX_ACTOR_ACTOR_H
 #define ASX_ACTOR_ACTOR_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -59,18 +60,10 @@ extern "C" {
  * Arena limits
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_MAX_ACTORS
-#define ASX_MAX_ACTORS 16u
-#endif
-
 /* The largest mailbox capacity a spawn may ask for. Rust takes any and
  * defaults GenServers to 64 (DEFAULT_GENSERVER_MAILBOX_CAPACITY,
  * gen_server.rs:2071; checked by make check-rust-constants). Each server
  * reserves an envelope table of this size plus one. */
-#ifndef ASX_ACTOR_MAILBOX_CAPACITY
-#define ASX_ACTOR_MAILBOX_CAPACITY 64u
-#endif
-
 #if (ASX_MAX_ACTORS) < 1 || (ASX_ACTOR_MAILBOX_CAPACITY) < 1
 #error "ASX_MAX_ACTORS and ASX_ACTOR_MAILBOX_CAPACITY must be at least 1"
 #endif

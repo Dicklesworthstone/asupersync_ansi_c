@@ -19,6 +19,7 @@
 #ifndef ASX_RUNTIME_PARALLEL_H
 #define ASX_RUNTIME_PARALLEL_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -33,18 +34,6 @@ extern "C" {
 /* -------------------------------------------------------------------
  * Lane capacity limits
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_MAX_WORKERS
-#if defined(ASX_PROFILE_FREESTANDING) || defined(ASX_PROFILE_BROWSER)
-#define ASX_MAX_WORKERS 1u
-#elif defined(ASX_PROFILE_EMBEDDED_ROUTER)
-#define ASX_MAX_WORKERS 4u
-#elif defined(ASX_PROFILE_HFT) || defined(ASX_PROFILE_AUTOMOTIVE)
-#define ASX_MAX_WORKERS 16u
-#else
-#define ASX_MAX_WORKERS 64u
-#endif
-#endif
 
 #if ASX_MAX_WORKERS < 1u
 #error "ASX_MAX_WORKERS must be at least 1"
@@ -61,10 +50,6 @@ extern "C" {
 
 #define ASX_PARALLEL_GENERIC_TARGET_WORKERS 64u
 #define ASX_PARALLEL_MAX_LOCALITY_SHARDS ASX_MAX_WORKERS
-#define ASX_MAX_LANES 3u /* READY, CANCEL, TIMED */
-#ifndef ASX_LANE_TASK_CAPACITY
-#define ASX_LANE_TASK_CAPACITY 64u
-#endif
 #if (ASX_LANE_TASK_CAPACITY) < 1
 #error "ASX_LANE_TASK_CAPACITY must be at least 1"
 #endif

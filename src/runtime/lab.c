@@ -45,12 +45,14 @@ static uint64_t lab_entropy_u64(void *ctx) {
 /* Lab config                                                          */
 /* ------------------------------------------------------------------ */
 
-void asx_lab_config_init(asx_lab_config *cfg) {
-    if (cfg == NULL) return;
+asx_status asx_lab_config_init_checked(asx_lab_config *cfg, uint64_t application_fingerprint) {
+    if (application_fingerprint != ASX_LAB_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (cfg == NULL) return ASX_E_INVALID_ARGUMENT;
     cfg->seed = 42u; /* Rust LabConfig::default() (lab/config.rs:444) */
     cfg->start_time_ns = 0;
     cfg->max_polls = 1024;
     cfg->auto_advance = 0u;
+    return ASX_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -79,9 +81,11 @@ static asx_status lab_bootstrap_runtime(asx_lab *lab) {
     return ASX_OK;
 }
 
-asx_status asx_lab_init(asx_lab *lab, const asx_lab_config *cfg) {
+asx_status asx_lab_init_checked(asx_lab *lab, const asx_lab_config *cfg,
+                                uint64_t application_fingerprint) {
     asx_status st;
 
+    if (application_fingerprint != ASX_LAB_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
     if (lab == NULL || cfg == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(lab, 0, sizeof(*lab));
@@ -108,14 +112,17 @@ void asx_lab_shutdown(asx_lab *lab) {
     }
 }
 
-void asx_lab_reset(asx_lab *lab) {
+asx_status asx_lab_reset_checked(asx_lab *lab, uint64_t application_fingerprint) {
     asx_status st;
 
-    if (lab == NULL || !lab->initialized) return;
+    if (application_fingerprint != ASX_LAB_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (lab == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (!lab->initialized) return ASX_E_INVALID_STATE;
     asx_runtime_shutdown(&lab->rt);
     lab->entropy_state = lab->config.seed;
     st = lab_bootstrap_runtime(lab);
     if (st != ASX_OK) lab->initialized = 0;
+    return st;
 }
 
 /* ------------------------------------------------------------------ */

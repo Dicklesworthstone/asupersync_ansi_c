@@ -370,7 +370,9 @@ static int fault_should_fire(asx_fault_injection *f, uint32_t call_number) {
 /* Hook initialization                                                */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_runtime_hooks_init(asx_runtime_hooks *hooks) {
+asx_status asx_runtime_hooks_init_checked(asx_runtime_hooks *hooks,
+                                          uint64_t application_fingerprint) {
+    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
     if (!hooks) return ASX_E_INVALID_ARGUMENT;
     memset(hooks, 0, sizeof(*hooks));
 
@@ -761,8 +763,10 @@ asx_status asx_runtime_log_write(int level, const char *message) {
 /* Config initialization                                              */
 /* ------------------------------------------------------------------ */
 
-void asx_runtime_config_init(asx_runtime_config *cfg) {
-    if (!cfg) return;
+asx_status asx_runtime_config_init_checked(asx_runtime_config *cfg,
+                                           uint64_t application_fingerprint) {
+    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
+    if (!cfg) return ASX_E_INVALID_ARGUMENT;
     memset(cfg, 0, sizeof(*cfg));
     cfg->size = (uint32_t)sizeof(*cfg);
 #if defined(ASX_PROFILE_EMBEDDED_ROUTER) || defined(ASX_PROFILE_HFT)
@@ -780,6 +784,7 @@ void asx_runtime_config_init(asx_runtime_config *cfg) {
     cfg->max_cancel_chain_depth = 16;
     cfg->max_cancel_chain_memory = 4096;
     cfg->cleanup_hard_bound = 0;
+    return ASX_OK;
 }
 
 const char *asx_io_backend_str(asx_io_backend backend) {

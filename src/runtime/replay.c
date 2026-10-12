@@ -38,9 +38,11 @@ asx_status asx_snapshot_take(const asx_lab *lab, asx_snapshot_id *out) {
     return ASX_E_RESOURCE_EXHAUSTED;
 }
 
-asx_status asx_snapshot_restore(asx_lab *lab, asx_snapshot_id id) {
+asx_status asx_snapshot_restore_checked(asx_lab *lab, asx_snapshot_id id,
+                                        uint64_t application_fingerprint) {
     asx_snapshot *snap;
     asx_status st;
+    if (application_fingerprint != ASX_LAB_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
     if (lab == NULL) return ASX_E_INVALID_ARGUMENT;
     if (id.slot >= ASX_SNAPSHOT_MAX) return ASX_E_INVALID_ARGUMENT;
     snap = &g_snapshots[id.slot];
@@ -49,7 +51,7 @@ asx_status asx_snapshot_restore(asx_lab *lab, asx_snapshot_id id) {
     /* Rebuild the embedded lab runtime so deterministic hooks remain installed
      * after restore, then apply the saved PRNG and virtual-time state. */
     asx_lab_shutdown(lab);
-    st = asx_lab_init(lab, &snap->config);
+    st = asx_lab_init_checked(lab, &snap->config, application_fingerprint);
     if (st != ASX_OK) return st;
     lab->entropy_state = snap->entropy_state;
     asx_runtime_virtual_set_internal(snap->current_time);

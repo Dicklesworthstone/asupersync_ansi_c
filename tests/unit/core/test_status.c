@@ -24,6 +24,23 @@ TEST(status_is_error) {
     ASSERT_TRUE(asx_is_error(ASX_E_RESOURCE_EXHAUSTED));
 }
 
+TEST(config_mismatch_has_actionable_taxonomy) {
+    asx_status parsed = ASX_OK;
+    asx_backoff_hint hint;
+
+    ASSERT_STR_EQ(asx_status_str(ASX_E_CONFIG_MISMATCH),
+                  "application/library configuration mismatch");
+    ASSERT_STR_EQ(asx_status_name(ASX_E_CONFIG_MISMATCH), "ASX_E_CONFIG_MISMATCH");
+    ASSERT_TRUE(asx_status_from_name("ASX_E_CONFIG_MISMATCH", &parsed));
+    ASSERT_EQ(parsed, ASX_E_CONFIG_MISMATCH);
+    ASSERT_EQ(asx_status_category(parsed), ASX_ERROR_CATEGORY_CONFIG);
+    ASSERT_EQ(asx_status_recoverability(parsed), ASX_RECOVERABILITY_PERMANENT);
+    ASSERT_EQ(asx_status_recovery_action(parsed), ASX_RECOVERY_INSPECT_CONFIGURATION);
+    ASSERT_FALSE(asx_status_is_retryable(parsed));
+    hint = asx_status_backoff_hint(parsed);
+    ASSERT_EQ(hint.initial_delay_ms, 0u);
+}
+
 TEST(status_category_maps_public_taxonomy) {
     ASSERT_EQ((int)asx_status_category(ASX_OK), (int)ASX_ERROR_CATEGORY_NONE);
     ASSERT_EQ((int)asx_status_category(ASX_E_INVALID_ARGUMENT), (int)ASX_ERROR_CATEGORY_GENERAL);
@@ -88,6 +105,7 @@ int main(void) {
     RUN_TEST(status_ok_str);
     RUN_TEST(status_error_strs);
     RUN_TEST(status_is_error);
+    RUN_TEST(config_mismatch_has_actionable_taxonomy);
     RUN_TEST(status_category_maps_public_taxonomy);
     RUN_TEST(status_recoverability_classifies_retryability);
     RUN_TEST(status_recovery_actions_expose_guidance);

@@ -45,7 +45,10 @@ extern "C" {
  *   - blocking: bounded pthread worker queue for live-mode blocking submit
  *
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if hooks is NULL. */
-ASX_API ASX_MUST_USE asx_status asx_posix_hooks_install(asx_runtime_hooks *hooks);
+ASX_API ASX_MUST_USE asx_status asx_posix_hooks_install_checked(asx_runtime_hooks *hooks,
+                                                                uint64_t application_fingerprint);
+#define asx_posix_hooks_install(hooks)                                                             \
+    asx_posix_hooks_install_checked((hooks), ASX_CONFIG_FINGERPRINT)
 
 /* Register (arm) a POSIX file descriptor with the reactor context installed
  * in hooks.reactor.ctx. interest is a nonzero mask of ASX_POSIX_REACTOR_*

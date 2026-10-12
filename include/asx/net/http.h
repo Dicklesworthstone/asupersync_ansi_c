@@ -125,18 +125,6 @@ ASX_API const char *asx_http_version_str(asx_http_version ver);
  * HTTP headers
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_HTTP_MAX_HEADERS
-#define ASX_HTTP_MAX_HEADERS 16u
-#endif
-
-#ifndef ASX_HTTP_HEADER_NAME_MAX
-#define ASX_HTTP_HEADER_NAME_MAX 64u
-#endif
-
-#ifndef ASX_HTTP_HEADER_VALUE_MAX
-#define ASX_HTTP_HEADER_VALUE_MAX 256u
-#endif
-
 typedef struct {
     char name[ASX_HTTP_HEADER_NAME_MAX];
     char value[ASX_HTTP_HEADER_VALUE_MAX];
@@ -178,10 +166,6 @@ ASX_API int asx_http_headers_keep_alive(const asx_http_headers *hdrs, asx_http_v
  * HTTP body
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_HTTP_BODY_MAX
-#define ASX_HTTP_BODY_MAX 4096u
-#endif
-
 typedef enum {
     ASX_HTTP_BODY_EMPTY = 0,
     ASX_HTTP_BODY_BYTES = 1,
@@ -217,10 +201,6 @@ ASX_API ASX_MUST_USE asx_status asx_http_body_append(asx_http_body *body, const 
  * HTTP request
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_HTTP_URI_MAX
-#define ASX_HTTP_URI_MAX 256u
-#endif
-
 typedef struct {
     asx_http_method method;
     char uri[ASX_HTTP_URI_MAX];
@@ -249,46 +229,6 @@ ASX_API void asx_http_response_init(asx_http_response *resp, asx_http_status sta
 /* -------------------------------------------------------------------
  * Web router, middleware, extractors, sessions, static, SSE, multipart
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_HTTP_MAX_ROUTES
-#define ASX_HTTP_MAX_ROUTES 16u
-#endif
-
-#ifndef ASX_HTTP_MAX_ROUTE_MIDDLEWARE
-#define ASX_HTTP_MAX_ROUTE_MIDDLEWARE 8u
-#endif
-
-#ifndef ASX_HTTP_MAX_PATH_PARAMS
-#define ASX_HTTP_MAX_PATH_PARAMS 8u
-#endif
-
-#ifndef ASX_HTTP_PARAM_NAME_MAX
-#define ASX_HTTP_PARAM_NAME_MAX 32u
-#endif
-
-#ifndef ASX_HTTP_PARAM_VALUE_MAX
-#define ASX_HTTP_PARAM_VALUE_MAX 128u
-#endif
-
-#ifndef ASX_HTTP_COOKIE_VALUE_MAX
-#define ASX_HTTP_COOKIE_VALUE_MAX 128u
-#endif
-
-#ifndef ASX_HTTP_SECURITY_PURPOSE_MAX
-#define ASX_HTTP_SECURITY_PURPOSE_MAX 32u
-#endif
-
-#ifndef ASX_HTTP_MULTIPART_PARTS_MAX
-#define ASX_HTTP_MULTIPART_PARTS_MAX 8u
-#endif
-
-#ifndef ASX_HTTP_MULTIPART_DATA_MAX
-#define ASX_HTTP_MULTIPART_DATA_MAX 512u
-#endif
-
-#ifndef ASX_HTTP_MULTIPART_FILENAME_MAX
-#define ASX_HTTP_MULTIPART_FILENAME_MAX 64u
-#endif
 
 typedef struct {
     char name[ASX_HTTP_PARAM_NAME_MAX];
@@ -425,32 +365,8 @@ ASX_API asx_status asx_http_parse_multipart(const asx_http_request *req,
  * =================================================================== */
 
 /* Maximum number of header + trailer fields one parser instance can index. */
-#ifndef ASX_HTTP_PARSER_MAX_FIELDS
-#define ASX_HTTP_PARSER_MAX_FIELDS 64u
-#endif
-
 /* Default parser limits (see asx_http_limits_init). */
-#ifndef ASX_HTTP_DEFAULT_MAX_START_LINE
-#define ASX_HTTP_DEFAULT_MAX_START_LINE 8192u
-#endif
-
-#ifndef ASX_HTTP_DEFAULT_MAX_HEADER_BYTES
-#define ASX_HTTP_DEFAULT_MAX_HEADER_BYTES 16384u
-#endif
-
-#ifndef ASX_HTTP_DEFAULT_MAX_CHUNK_LINE
-#define ASX_HTTP_DEFAULT_MAX_CHUNK_LINE 1024u
-#endif
-
-#ifndef ASX_HTTP_DEFAULT_MAX_BODY
-#define ASX_HTTP_DEFAULT_MAX_BODY 16777216u /* 16 MiB */
-#endif
-
 /* Leading empty lines tolerated before a start line (RFC 9112 section 2.2). */
-#ifndef ASX_HTTP_MAX_LEADING_EMPTY_LINES
-#define ASX_HTTP_MAX_LEADING_EMPTY_LINES 4u
-#endif
-
 /* Configurable fail-closed parser limits. */
 typedef struct {
     uint32_t max_start_line;   /* request-line / status-line bytes, excluding CRLF */
@@ -802,27 +718,9 @@ ASX_API ASX_MUST_USE asx_status asx_http_format_date(uint64_t unix_seconds, char
  * ------------------------------------------------------------------- */
 
 /* Per-connection head scratch (start line + fields + trailers). */
-#ifndef ASX_HTTP_CONN_HEAD_MAX
-#define ASX_HTTP_CONN_HEAD_MAX 8192u
-#endif
-
 /* Serialized head staging capacity (bodies are written zero-copy). */
-#ifndef ASX_HTTP_CONN_TX_MAX
-#define ASX_HTTP_CONN_TX_MAX                                                                       \
-    ((ASX_HTTP_MAX_HEADERS * (ASX_HTTP_HEADER_NAME_MAX + ASX_HTTP_HEADER_VALUE_MAX + 4u)) +        \
-     ASX_HTTP_URI_MAX + 512u)
-#endif
-
 /* Client transmit staging: request head + one inline body + chunk framing. */
-#ifndef ASX_HTTP_CLIENT_TX_MAX
-#define ASX_HTTP_CLIENT_TX_MAX (ASX_HTTP_CONN_TX_MAX + ASX_HTTP_BODY_MAX + 64u)
-#endif
-
 /* Maximum interim (1xx) responses a client skips before failing closed. */
-#ifndef ASX_HTTP_CLIENT_MAX_INFORMATIONAL
-#define ASX_HTTP_CLIENT_MAX_INFORMATIONAL 8u
-#endif
-
 /* Streaming body sink: receives decoded body bytes instead of the inline
  * body. Returning non-OK aborts the message (server answers 500 and closes). */
 typedef asx_status (*asx_http_body_sink_fn)(void *ctx, const uint8_t *data, uint32_t len);
@@ -998,13 +896,6 @@ ASX_API int asx_http_server_conn_is_idle(const asx_http_server_conn *c);
 /* Connection slots of an asx_http_server (each holds an
  * asx_http_server_conn, about 38 KB). The live limit is also bounded by the
  * asx_server's max_connections. */
-#ifndef ASX_HTTP_SERVER_MAX_CONNS
-#if defined(ASX_PROFILE_EMBEDDED_ROUTER) || defined(ASX_PROFILE_FREESTANDING)
-#define ASX_HTTP_SERVER_MAX_CONNS 4u
-#else
-#define ASX_HTTP_SERVER_MAX_CONNS 16u
-#endif
-#endif
 #if (ASX_HTTP_SERVER_MAX_CONNS) < 1
 #error "ASX_HTTP_SERVER_MAX_CONNS must be at least 1"
 #endif
@@ -1048,10 +939,6 @@ ASX_API uint32_t asx_http_server_requests_served(const asx_http_server *hs);
 /* -------------------------------------------------------------------
  * HTTP connection pool
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_HTTP_POOL_MAX_CONNECTIONS
-#define ASX_HTTP_POOL_MAX_CONNECTIONS 8u
-#endif
 
 typedef enum {
     ASX_HTTP_POOL_CONN_IDLE = 0,

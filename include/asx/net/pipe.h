@@ -11,6 +11,7 @@
 #ifndef ASX_NET_PIPE_H
 #define ASX_NET_PIPE_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
@@ -20,9 +21,6 @@
 extern "C" {
 #endif
 
-#ifndef ASX_MAX_PIPES
-#define ASX_MAX_PIPES 8u
-#endif
 #if (ASX_MAX_PIPES) < 1
 #error "ASX_MAX_PIPES must be at least 1"
 #endif

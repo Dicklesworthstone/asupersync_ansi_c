@@ -22,28 +22,27 @@
 extern "C" {
 #endif
 
-typedef enum {
-    ASX_RUNTIME_PRESET_DEFAULT = 0,
-    ASX_RUNTIME_PRESET_CURRENT_THREAD = 1,
-    ASX_RUNTIME_PRESET_LOW_LATENCY = 2,
-    ASX_RUNTIME_PRESET_HIGH_THROUGHPUT = 3
-} asx_runtime_preset;
-
-typedef struct {
-    asx_runtime_config config;
-    asx_runtime_hooks hooks;
-    asx_runtime_preset preset;
-} asx_runtime_builder;
-
 /* Initialize the builder with default config + deterministic-safe hooks. */
-ASX_API ASX_MUST_USE asx_status asx_runtime_builder_init(asx_runtime_builder *builder);
+ASX_API ASX_MUST_USE asx_status asx_runtime_builder_init_checked(asx_runtime_builder *builder,
+                                                                 uint64_t application_fingerprint);
+#define asx_runtime_builder_init(builder)                                                          \
+    asx_runtime_builder_init_checked((builder), ASX_CONFIG_FINGERPRINT)
 
 /* Preset initializers. These all call asx_runtime_builder_init first. */
-ASX_API ASX_MUST_USE asx_status
-asx_runtime_builder_init_current_thread(asx_runtime_builder *builder);
-ASX_API ASX_MUST_USE asx_status asx_runtime_builder_init_low_latency(asx_runtime_builder *builder);
-ASX_API ASX_MUST_USE asx_status
-asx_runtime_builder_init_high_throughput(asx_runtime_builder *builder);
+ASX_API ASX_MUST_USE asx_status asx_runtime_builder_init_current_thread_checked(
+    asx_runtime_builder *builder, uint64_t application_fingerprint);
+#define asx_runtime_builder_init_current_thread(builder)                                           \
+    asx_runtime_builder_init_current_thread_checked((builder), ASX_CONFIG_FINGERPRINT)
+/* Initialize the low-latency preset, refusing incompatible application builds. */
+ASX_API ASX_MUST_USE asx_status asx_runtime_builder_init_low_latency_checked(
+    asx_runtime_builder *builder, uint64_t application_fingerprint);
+#define asx_runtime_builder_init_low_latency(builder)                                              \
+    asx_runtime_builder_init_low_latency_checked((builder), ASX_CONFIG_FINGERPRINT)
+/* Initialize the high-throughput preset, refusing incompatible application builds. */
+ASX_API ASX_MUST_USE asx_status asx_runtime_builder_init_high_throughput_checked(
+    asx_runtime_builder *builder, uint64_t application_fingerprint);
+#define asx_runtime_builder_init_high_throughput(builder)                                          \
+    asx_runtime_builder_init_high_throughput_checked((builder), ASX_CONFIG_FINGERPRINT)
 
 /* Query the builder's active preset.
  * Returns ASX_RUNTIME_PRESET_DEFAULT for NULL or malformed builders. */
@@ -130,9 +129,13 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_builder_apply_env(asx_runtime_builde
                                                               const char *prefix);
 
 /* Build a runtime from the builder's stored config/hooks.
- * Returns ASX_E_INVALID_STATE for an uninitialized or malformed builder. */
-ASX_API ASX_MUST_USE asx_status asx_runtime_builder_build(const asx_runtime_builder *builder,
-                                                          asx_runtime *out_runtime);
+ * Returns ASX_E_CONFIG_MISMATCH before reading the builder or writing the
+ * runtime if the application's build differs from the library, or
+ * ASX_E_INVALID_STATE for an uninitialized or malformed builder. */
+ASX_API ASX_MUST_USE asx_status asx_runtime_builder_build_checked(
+    const asx_runtime_builder *builder, asx_runtime *out_runtime, uint64_t application_fingerprint);
+#define asx_runtime_builder_build(builder, out_runtime)                                            \
+    asx_runtime_builder_build_checked((builder), (out_runtime), ASX_CONFIG_FINGERPRINT)
 
 #ifdef __cplusplus
 }

@@ -41,30 +41,6 @@ extern "C" {
 
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES
 
-#ifndef ASX_FS_PATH_MAX
-#define ASX_FS_PATH_MAX 192u
-#endif
-
-#ifndef ASX_FS_NAME_MAX
-#define ASX_FS_NAME_MAX 256u
-#endif
-
-#ifndef ASX_MAX_FS_ENTRIES
-#define ASX_MAX_FS_ENTRIES 16u
-#endif
-
-#ifndef ASX_MAX_OPEN_FILES
-#define ASX_MAX_OPEN_FILES 16u
-#endif
-
-#ifndef ASX_MAX_OPEN_DIRS
-#define ASX_MAX_OPEN_DIRS 8u
-#endif
-
-#ifndef ASX_FS_FILE_CAPACITY
-#define ASX_FS_FILE_CAPACITY 1024u
-#endif
-
 #if (ASX_MAX_FS_ENTRIES) < 1 || (ASX_FS_FILE_CAPACITY) < 1
 #error "ASX_MAX_FS_ENTRIES and ASX_FS_FILE_CAPACITY must be at least 1"
 #endif

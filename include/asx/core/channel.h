@@ -47,16 +47,6 @@ extern "C" {
 /* Capacity limits (walking skeleton: fixed-size arenas)              */
 /* ------------------------------------------------------------------ */
 
-#ifndef ASX_MAX_CHANNELS
-#ifdef ASX_CLASS_MAX_CHANNELS /* a build-time resource class (asx_config.h) */
-#define ASX_MAX_CHANNELS ASX_CLASS_MAX_CHANNELS
-#else
-#define ASX_MAX_CHANNELS 16u
-#endif
-#endif
-#ifndef ASX_CHANNEL_MAX_CAPACITY
-#define ASX_CHANNEL_MAX_CAPACITY 64u
-#endif
 #if (ASX_MAX_CHANNELS) < 1 || (ASX_CHANNEL_MAX_CAPACITY) < 1
 #error "ASX_MAX_CHANNELS and ASX_CHANNEL_MAX_CAPACITY must be at least 1"
 #endif

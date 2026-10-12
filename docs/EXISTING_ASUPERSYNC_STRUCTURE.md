@@ -296,6 +296,16 @@ C's runtime transitions after slot initialization use `asx_task_set_state_intern
 
 ### 4.5 Cancellation Observation Rules
 
+**C bootstrap boundary (RB8):** application and library compile-time settings
+are compared before runtime creation or preparatory config/hook/builder
+initialization accesses caller objects. `ASX_CONFIG_FINGERPRINT` is computed
+from the application's effective limits and bootstrap layout, not fetched
+from the library. An incompatible build returns `ASX_E_CONFIG_MISMATCH` and
+preserves active singleton work. ABI major 2 requires the checked entry points;
+there are no unchecked legacy exports. This is a C configuration safety
+contract, not a change to Rust task/cancellation semantics or a proof of
+independently owned runtime storage.
+
 > **Superseded by `asupersync_v4_formal_semantics.md` §3.2 `CANCEL-ACKNOWLEDGE` (`rule.cancel.acknowledge` #2), `CHECKPOINT-MASKED` (`rule.cancel.checkpoint_masked` #10) and §6 PROG-CANCEL (`prog.cancel.drains` #9); C status: see C_REFINEMENT_MAP.md rows `rule.cancel.acknowledge`, `rule.cancel.checkpoint_masked` (Variant) and `prog.cancel.drains` (Partial).**
 
 1. A cancel request moves the task to `CancelRequested` and wakes it so it can reach a checkpoint
@@ -426,7 +436,7 @@ No `None` phase. Rust produces no witness while `cancel_epoch == 0` (`src/record
 
 ### 6.2 Legal Phase Transitions
 
-Rust (`validate_transition`, `src/types/cancel.rs:382`): valid when task, region and epoch match, `next.phase.rank() >= prev.phase.rank()`, and severity does not decrease. Same-phase pairs are strengthening. Skip transitions (e.g., `Requested -> Completed`) are allowed because rank is non-decreasing. C's `asx_cancel_witness_advance` (`src/core/cancel.c:148`) accepts only a strictly larger phase, so it rejects a same-phase advance (`bd-9kll.3.7`).
+Rust (`validate_transition`, `src/types/cancel.rs:382`): valid when task, region and epoch match, `next.phase.rank() >= prev.phase.rank()`, and severity does not decrease. Same-phase pairs are strengthening. Skip transitions (e.g., `Requested -> Completed`) are allowed because rank is non-decreasing. C's `asx_cancel_witness_advance` (`src/core/cancel.c:145`) accepts only a strictly larger phase, so it rejects a same-phase advance (`bd-9kll.3.7`).
 
 ### 6.3 Forbidden Phase Transitions
 
@@ -643,7 +653,7 @@ C asx_budget_consume_poll(asx_budget *b) -> uint32_t   // src/core/budget.c:61
 
 ### 9.1 Channel State Model
 
-Implicit state encoding via atomic fields (no explicit state enum; `src/channel/mpsc.rs:297`). C uses an explicit enum `asx_channel_state` (`include/asx/core/channel.h:73`).
+Implicit state encoding via atomic fields (no explicit state enum; `src/channel/mpsc.rs:297`). C uses an explicit enum `asx_channel_state` (`include/asx/core/channel.h:63`).
 
 | Implicit State | Condition | Description |
 |----------------|-----------|-------------|

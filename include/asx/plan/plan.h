@@ -17,6 +17,7 @@
 #ifndef ASX_PLAN_PLAN_H
 #define ASX_PLAN_PLAN_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/core/circuit_breaker.h>
@@ -30,19 +31,6 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 /* Capacity limits                                                     */
 /* ------------------------------------------------------------------ */
-
-#ifndef ASX_PLAN_MAX_NODES
-#define ASX_PLAN_MAX_NODES 64u
-#endif
-#ifndef ASX_PLAN_MAX_CHILDREN
-#define ASX_PLAN_MAX_CHILDREN 8u
-#endif
-#ifndef ASX_PLAN_MAX_LABEL
-#define ASX_PLAN_MAX_LABEL 32u
-#endif
-#ifndef ASX_PLAN_MAX_STEPS
-#define ASX_PLAN_MAX_STEPS 32u
-#endif
 
 /* ------------------------------------------------------------------ */
 /* Plan node types                                                     */

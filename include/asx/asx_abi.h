@@ -62,7 +62,7 @@ extern "C" {
  * that break callers linked against a previous version.
  * ----------------------------------------------------------------------- */
 
-#define ASX_ABI_VERSION_MAJOR 1
+#define ASX_ABI_VERSION_MAJOR 2
 #define ASX_ABI_VERSION_MINOR 0
 #define ASX_ABI_VERSION_PATCH 0
 
@@ -100,7 +100,7 @@ extern "C" {
  * the headers they are building against are ABI-compatible with the
  * library version they expect:
  *
- *   ASX_ABI_CHECK(1);   // require ABI major version 1
+ *   ASX_ABI_CHECK(2);   // require ABI major version 2
  *
  * This prevents silent ABI mismatches when upgrading.
  * ----------------------------------------------------------------------- */

@@ -37,15 +37,6 @@ extern "C" {
 /* Runtime object                                                      */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    asx_runtime_config config;
-    asx_runtime_hooks hooks;
-    asx_leak_escalation_config leak_escalation_storage;
-    uint32_t generation; /* nonzero when initialized */
-    int initialized;     /* guard flag */
-    int has_leak_escalation;
-} asx_runtime;
-
 /* ------------------------------------------------------------------ */
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
@@ -53,7 +44,7 @@ typedef struct {
 /* Initialize a runtime with explicit configuration and hooks.
  *
  * Performs the full bootstrap sequence:
- *   1. Validate config (size field, bounds)
+ *   1. Match the application's build fingerprint, then validate config
  *   2. Validate hooks (deterministic constraints)
  *   3. Refuse a conflicting init, then reset internal state
  *   4. Install hooks
@@ -63,6 +54,7 @@ typedef struct {
  *   config->size must equal sizeof(asx_runtime_config).
  * Postconditions: runtime is initialized and ready for use.
  * Returns ASX_OK on success,
+ *   ASX_E_CONFIG_MISMATCH for incompatible application/library builds,
  *   ASX_E_INVALID_ARGUMENT for invalid config, pointers or incomplete hooks,
  *   ASX_E_DETERMINISM_VIOLATION for incompatible deterministic hooks,
  *   ASX_E_PERMISSION_DENIED for an unsupported I/O backend, or
@@ -72,8 +64,12 @@ typedef struct {
  * runtime-owned storage is not implemented yet.
  *
  * Thread-safety: not thread-safe. */
-ASX_API ASX_MUST_USE asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
-                                                 const asx_runtime_hooks *hooks);
+ASX_API ASX_MUST_USE asx_status asx_runtime_init_checked(asx_runtime *rt,
+                                                         const asx_runtime_config *config,
+                                                         const asx_runtime_hooks *hooks,
+                                                         uint64_t application_fingerprint);
+#define asx_runtime_init(rt, config, hooks)                                                        \
+    asx_runtime_init_checked((rt), (config), (hooks), ASX_CONFIG_FINGERPRINT)
 
 /* Initialize a runtime with all defaults (profile-appropriate config,
  * safe default hooks). Convenience wrapper over asx_runtime_init.
@@ -83,7 +79,9 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_init(asx_runtime *rt, const asx_runt
  * Returns ASX_OK on success.
  *
  * Thread-safety: not thread-safe. */
-ASX_API ASX_MUST_USE asx_status asx_runtime_init_default(asx_runtime *rt);
+ASX_API ASX_MUST_USE asx_status asx_runtime_init_default_checked(asx_runtime *rt,
+                                                                 uint64_t application_fingerprint);
+#define asx_runtime_init_default(rt) asx_runtime_init_default_checked((rt), ASX_CONFIG_FINGERPRINT)
 
 /* Initialize a runtime from builder defaults plus environment overrides.
  *
@@ -97,7 +95,11 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_init_default(asx_runtime *rt);
  * not initialize the runtime object.
  *
  * Thread-safety: not thread-safe. */
-ASX_API ASX_MUST_USE asx_status asx_runtime_init_from_env(asx_runtime *rt, const char *prefix);
+ASX_API ASX_MUST_USE asx_status asx_runtime_init_from_env_checked(asx_runtime *rt,
+                                                                  const char *prefix,
+                                                                  uint64_t application_fingerprint);
+#define asx_runtime_init_from_env(rt, prefix)                                                      \
+    asx_runtime_init_from_env_checked((rt), (prefix), ASX_CONFIG_FINGERPRINT)
 
 /* Shut down a runtime, resetting all internal state.
  * After shutdown, the runtime must be re-initialized before use.

@@ -28,14 +28,6 @@ extern "C" {
  * Arena limits
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_POOL_MAX
-#define ASX_POOL_MAX 8u
-#endif
-
-#ifndef ASX_POOL_MAX_RESOURCES
-#define ASX_POOL_MAX_RESOURCES 16u
-#endif
-
 /* -------------------------------------------------------------------
  * Factory and health check function types
  * ------------------------------------------------------------------- */

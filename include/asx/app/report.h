@@ -14,6 +14,7 @@
 #define ASX_APP_REPORT_H
 
 #include <asx/app/doctor.h>
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/runtime/diagnostic.h>
@@ -27,10 +28,6 @@ extern "C" {
 /* -------------------------------------------------------------------
  * Report output buffer (fixed-size, no allocation)
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_REPORT_BUF_SIZE
-#define ASX_REPORT_BUF_SIZE 4096u
-#endif
 
 typedef struct {
     char data[ASX_REPORT_BUF_SIZE];

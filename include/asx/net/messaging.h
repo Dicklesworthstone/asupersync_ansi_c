@@ -25,26 +25,6 @@ extern "C" {
  * Messaging limits
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_MSG_MAX_PAYLOAD
-#define ASX_MSG_MAX_PAYLOAD 1024u
-#endif
-
-#ifndef ASX_MSG_MAX_TOPIC_LEN
-#define ASX_MSG_MAX_TOPIC_LEN 64u
-#endif
-
-#ifndef ASX_MSG_MAX_TOPICS
-#define ASX_MSG_MAX_TOPICS 8u
-#endif
-
-#ifndef ASX_MSG_QUEUE_DEPTH
-#define ASX_MSG_QUEUE_DEPTH 16u
-#endif
-
-#ifndef ASX_MSG_MAX_SUBSCRIBERS
-#define ASX_MSG_MAX_SUBSCRIBERS 8u
-#endif
-
 typedef enum { ASX_MSG_BACKEND_MEMORY = 0, ASX_MSG_BACKEND_KAFKA = 1 } asx_msg_backend;
 
 /* -------------------------------------------------------------------

@@ -85,10 +85,6 @@ typedef struct {
     uint32_t parent_generation;
 } asx_cx_wrapper;
 
-#ifndef ASX_CX_MACAROON_MAX_CAVEATS
-#define ASX_CX_MACAROON_MAX_CAVEATS 8u
-#endif
-
 #define ASX_CX_MACAROON_SIG_SIZE 32u
 
 /* Capability macaroon (HMAC chain, Birgisson et al. 2014):

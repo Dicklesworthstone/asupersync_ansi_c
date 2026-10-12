@@ -35,10 +35,6 @@ extern "C" {
  * Snapshot — save and restore lab state
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_SNAPSHOT_MAX
-#define ASX_SNAPSHOT_MAX 8u
-#endif
-
 typedef struct {
     asx_lab_config config;  /* saved lab config */
     uint64_t entropy_state; /* saved PRNG state */
@@ -55,7 +51,10 @@ ASX_API ASX_MUST_USE asx_status asx_snapshot_take(const asx_lab *lab, asx_snapsh
 
 /* Restore a lab to a previously saved snapshot, including rebuilding the
  * embedded deterministic runtime hooks before reinstating saved lab state. */
-ASX_API asx_status asx_snapshot_restore(asx_lab *lab, asx_snapshot_id id);
+ASX_API asx_status asx_snapshot_restore_checked(asx_lab *lab, asx_snapshot_id id,
+                                                uint64_t application_fingerprint);
+#define asx_snapshot_restore(lab, id)                                                              \
+    asx_snapshot_restore_checked((lab), (id), ASX_LAB_CONFIG_FINGERPRINT)
 
 /* Discard a snapshot. */
 ASX_API asx_status asx_snapshot_discard(asx_snapshot_id id);
@@ -110,10 +109,6 @@ ASX_API ASX_MUST_USE asx_status asx_replay_render_current_diff_json(asx_report_b
 /* -------------------------------------------------------------------
  * Oracle suite — run multiple oracles and collect results
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_ORACLE_SUITE_MAX
-#define ASX_ORACLE_SUITE_MAX 8u
-#endif
 
 typedef struct {
     asx_oracle_fn oracles[ASX_ORACLE_SUITE_MAX];

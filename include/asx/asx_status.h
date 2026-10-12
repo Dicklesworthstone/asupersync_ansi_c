@@ -114,9 +114,10 @@ typedef enum {
     /* Trace/replay errors (15xx) */
     ASX_E_REPLAY_MISMATCH = 1500, /* replay continuity check failed */
 
-    /* 16xx: config reload errors */
+    /* 16xx: configuration errors */
     ASX_E_CONFIG_FROZEN = 1600,      /* attempted to change frozen field */
     ASX_E_CONFIG_RESTART_REQ = 1601, /* field requires restart to change */
+    ASX_E_CONFIG_MISMATCH = 1602,    /* incompatible application/library build */
 
     /* Permission / capability errors (17xx) */
     ASX_E_PERMISSION_DENIED = 1700 /* capability not granted */

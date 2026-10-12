@@ -7,6 +7,7 @@
 #ifndef ASX_OBSERVABILITY_OBSERVABILITY_H
 #define ASX_OBSERVABILITY_OBSERVABILITY_H
 
+#include <asx/asx_config.h>
 #include <asx/evidence_sink/evidence_sink.h>
 #include <asx/runtime/diagnostic.h>
 
@@ -30,14 +31,6 @@ ASX_API ASX_MUST_USE asx_status asx_observability_capture(const asx_runtime *rt,
 /* -------------------------------------------------------------------
  * Metrics — counter/gauge/histogram primitives
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_METRICS_MAX_ENTRIES
-#define ASX_METRICS_MAX_ENTRIES 32u
-#endif
-
-#ifndef ASX_METRICS_NAME_MAX
-#define ASX_METRICS_NAME_MAX 64u
-#endif
 
 typedef enum {
     ASX_METRIC_COUNTER = 0,

@@ -22,6 +22,7 @@
 #ifndef ASX_STREAM_STREAM_H
 #define ASX_STREAM_STREAM_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -417,10 +418,6 @@ ASX_API void asx_stream_fuse_init(asx_stream *s, asx_stream_fuse_state *state, a
 /* Chunks combinator — batches items into fixed-size groups           */
 /* ------------------------------------------------------------------ */
 
-#ifndef ASX_STREAM_CHUNK_MAX
-#define ASX_STREAM_CHUNK_MAX 16u
-#endif
-
 typedef struct {
     void *items[ASX_STREAM_CHUNK_MAX];
     size_t count;
@@ -531,10 +528,6 @@ ASX_API void asx_stream_flat_map_init(asx_stream *s, asx_stream_flat_map_state *
 /* ------------------------------------------------------------------ */
 /* Window combinator — sliding window of items                        */
 /* ------------------------------------------------------------------ */
-
-#ifndef ASX_STREAM_WINDOW_MAX
-#define ASX_STREAM_WINDOW_MAX 16u
-#endif
 
 typedef struct {
     void *items[ASX_STREAM_WINDOW_MAX];

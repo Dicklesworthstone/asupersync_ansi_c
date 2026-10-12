@@ -19,6 +19,7 @@
 #ifndef ASX_CORE_ONESHOT_H
 #define ASX_CORE_ONESHOT_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -28,9 +29,6 @@
 extern "C" {
 #endif
 
-#ifndef ASX_MAX_ONESHOTS
-#define ASX_MAX_ONESHOTS 32u
-#endif
 #if (ASX_MAX_ONESHOTS) < 1
 #error "ASX_MAX_ONESHOTS must be at least 1"
 #endif

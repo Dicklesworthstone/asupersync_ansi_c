@@ -31,6 +31,7 @@
 #ifndef ASX_NET_WEBSOCKET_H
 #define ASX_NET_WEBSOCKET_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/net/net.h>
@@ -46,30 +47,10 @@ extern "C" {
  * ------------------------------------------------------------------- */
 
 /* Capacity of the per-engine message reassembly buffer (bytes). */
-#ifndef ASX_WS_MAX_MESSAGE
-#define ASX_WS_MAX_MESSAGE 16384u
-#endif
-
 /* Capacity of the per-engine outgoing byte buffer. Must hold one
  * max-size frame plus pending control frames. */
-#ifndef ASX_WS_TX_CAPACITY
-#define ASX_WS_TX_CAPACITY (ASX_WS_MAX_MESSAGE + 512u)
-#endif
-
 /* Maximum size of an HTTP handshake message (request or response). */
-#ifndef ASX_WS_HANDSHAKE_MAX
-#define ASX_WS_HANDSHAKE_MAX 4096u
-#endif
-
 /* Capacity for a comma-separated subprotocol list (including NUL). */
-#ifndef ASX_WS_PROTOCOLS_MAX
-#define ASX_WS_PROTOCOLS_MAX 128u
-#endif
-
-#ifndef ASX_MAX_WS_CONNECTIONS
-#define ASX_MAX_WS_CONNECTIONS 8u
-#endif
-
 /* 14: the longest frame header (2 + 8-byte length + 4-byte mask). */
 #if (ASX_WS_TX_CAPACITY) < (ASX_WS_MAX_MESSAGE) + 14
 #error "ASX_WS_TX_CAPACITY must hold one max-size frame (ASX_WS_MAX_MESSAGE + 14)"

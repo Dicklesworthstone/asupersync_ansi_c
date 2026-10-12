@@ -17,6 +17,7 @@
 #ifndef ASX_CORE_SYMBOL_H
 #define ASX_CORE_SYMBOL_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <stdint.h>
@@ -32,9 +33,6 @@ extern "C" {
 typedef uint16_t asx_symbol_id;
 
 #define ASX_SYMBOL_INVALID ((asx_symbol_id)0)
-#ifndef ASX_SYMBOL_REGISTRY_CAPACITY
-#define ASX_SYMBOL_REGISTRY_CAPACITY 256u
-#endif
 #if (ASX_SYMBOL_REGISTRY_CAPACITY) < 1 || (ASX_SYMBOL_REGISTRY_CAPACITY) > 65535
 #error "ASX_SYMBOL_REGISTRY_CAPACITY must be 1..65535 (IDs are uint16_t, 0 is invalid)"
 #endif

@@ -16,6 +16,7 @@
 #ifndef ASX_RUNTIME_DIAGNOSTIC_H
 #define ASX_RUNTIME_DIAGNOSTIC_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -139,9 +140,6 @@ typedef struct {
 } asx_evidence_entry;
 
 /* Evidence sink capacity */
-#ifndef ASX_EVIDENCE_SINK_CAPACITY
-#define ASX_EVIDENCE_SINK_CAPACITY 64u
-#endif
 #if (ASX_EVIDENCE_SINK_CAPACITY) < 1
 #error "ASX_EVIDENCE_SINK_CAPACITY must be at least 1"
 #endif

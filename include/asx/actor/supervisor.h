@@ -64,6 +64,7 @@
 #ifndef ASX_ACTOR_SUPERVISOR_H
 #define ASX_ACTOR_SUPERVISOR_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -79,34 +80,16 @@ extern "C" {
  * Limits
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_MAX_SUPERVISORS
-#define ASX_MAX_SUPERVISORS 8u
-#endif
 #if (ASX_MAX_SUPERVISORS) < 1
 #error "ASX_MAX_SUPERVISORS must be at least 1"
 #endif
 
-#ifndef ASX_SUPERVISOR_MAX_CHILDREN
-#define ASX_SUPERVISOR_MAX_CHILDREN 8u
-#endif
 #if (ASX_SUPERVISOR_MAX_CHILDREN) < 1
 #error "ASX_SUPERVISOR_MAX_CHILDREN must be at least 1"
 #endif
 
-#ifndef ASX_SUPERVISOR_MAX_DEPS
-#define ASX_SUPERVISOR_MAX_DEPS 4u
-#endif
-
 /* Supervisor and child names, terminator included. */
-#ifndef ASX_SUPERVISOR_NAME_MAX
-#define ASX_SUPERVISOR_NAME_MAX 32u
-#endif
-
 /* The most restart batches a window can hold (max_restarts' bound). */
-#ifndef ASX_SUPERVISOR_MAX_RESTARTS
-#define ASX_SUPERVISOR_MAX_RESTARTS 32u
-#endif
-
 /* -------------------------------------------------------------------
  * Policies
  * ------------------------------------------------------------------- */

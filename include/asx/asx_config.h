@@ -11,11 +11,17 @@
 #ifndef ASX_CONFIG_H
 #define ASX_CONFIG_H
 
+#include <asx/asx_abi.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* -------------------------------------------------------------------
  * Checkpoint-coverage waiver annotations (bd-66l.6)
@@ -242,6 +248,665 @@ ASX_API asx_resource_limits asx_resource_limits_for_class(asx_resource_class cls
 #else
 #error "ASX_RESOURCE_CLASS must be 1 (R1), 2 (R2) or 3 (R3)"
 #endif
+#endif
+
+/* Effective resource and public-layout defaults are resolved here, before
+ * any individual module header is included. Applications including only
+ * runtime/rt.h therefore use the same values as umbrella consumers. */
+#ifndef ASX_MAX_REGIONS
+#ifdef ASX_CLASS_MAX_REGIONS
+#define ASX_MAX_REGIONS ASX_CLASS_MAX_REGIONS
+#else
+#define ASX_MAX_REGIONS 8
+#endif
+#endif
+#ifndef ASX_MAX_TASKS
+#ifdef ASX_CLASS_MAX_TASKS
+#define ASX_MAX_TASKS ASX_CLASS_MAX_TASKS
+#else
+#define ASX_MAX_TASKS 64
+#endif
+#endif
+#ifndef ASX_MAX_OBLIGATIONS
+#ifdef ASX_CLASS_MAX_OBLIGATIONS
+#define ASX_MAX_OBLIGATIONS ASX_CLASS_MAX_OBLIGATIONS
+#else
+#define ASX_MAX_OBLIGATIONS 128
+#endif
+#endif
+#ifndef ASX_MAX_TIMERS
+#ifdef ASX_CLASS_MAX_TIMERS
+#define ASX_MAX_TIMERS ASX_CLASS_MAX_TIMERS
+#else
+#define ASX_MAX_TIMERS 128u
+#endif
+#endif
+#ifndef ASX_MAX_CHANNELS
+#ifdef ASX_CLASS_MAX_CHANNELS
+#define ASX_MAX_CHANNELS ASX_CLASS_MAX_CHANNELS
+#else
+#define ASX_MAX_CHANNELS 16u
+#endif
+#endif
+#ifndef ASX_TRACE_CAPACITY
+#ifdef ASX_CLASS_MAX_TRACE_EVENTS
+#define ASX_TRACE_CAPACITY ASX_CLASS_MAX_TRACE_EVENTS
+#else
+#define ASX_TRACE_CAPACITY 1024u
+#endif
+#endif
+#ifndef ASX_REGION_CAPTURE_ARENA_BYTES
+#define ASX_REGION_CAPTURE_ARENA_BYTES 16384u
+#endif
+#ifndef ASX_MAX_MASK_DEPTH
+#define ASX_MAX_MASK_DEPTH 64u
+#endif
+#ifndef ASX_MAX_CANCEL_WITNESSES
+#define ASX_MAX_CANCEL_WITNESSES 64u
+#endif
+#ifndef ASX_CLEANUP_STACK_CAPACITY
+#define ASX_CLEANUP_STACK_CAPACITY 32
+#endif
+#ifndef ASX_MAX_WORKERS
+#if defined(ASX_PROFILE_FREESTANDING) || defined(ASX_PROFILE_BROWSER)
+#define ASX_MAX_WORKERS 1u
+#elif defined(ASX_PROFILE_EMBEDDED_ROUTER)
+#define ASX_MAX_WORKERS 4u
+#elif defined(ASX_PROFILE_HFT) || defined(ASX_PROFILE_AUTOMOTIVE)
+#define ASX_MAX_WORKERS 16u
+#else
+#define ASX_MAX_WORKERS 64u
+#endif
+#endif
+#define ASX_MAX_LANES 3u /* READY, CANCEL, TIMED */
+#ifndef ASX_LANE_TASK_CAPACITY
+#define ASX_LANE_TASK_CAPACITY 64u
+#endif
+#ifndef ASX_MAX_IO_TOKENS
+#define ASX_MAX_IO_TOKENS 64u
+#endif
+#ifndef ASX_MAX_DEADLINE_MONITORS
+#define ASX_MAX_DEADLINE_MONITORS 32u
+#endif
+#ifndef ASX_MAX_WAKERS
+#define ASX_MAX_WAKERS 64u
+#endif
+#ifndef ASX_MAX_BLOCKING_TASKS
+#define ASX_MAX_BLOCKING_TASKS 16u
+#endif
+#ifndef ASX_MAX_SUSPECTS
+#define ASX_MAX_SUSPECTS 4u
+#endif
+#ifndef ASX_EVIDENCE_SINK_CAPACITY
+#define ASX_EVIDENCE_SINK_CAPACITY 64u
+#endif
+#ifndef ASX_HINDSIGHT_CAPACITY
+#define ASX_HINDSIGHT_CAPACITY 256u
+#endif
+#define ASX_HINDSIGHT_FLUSH_BUFFER_SIZE 8192u
+#define ASX_SNAPSHOT_BUFFER_SIZE 4096u
+#ifndef ASX_SNAPSHOT_MAX
+#define ASX_SNAPSHOT_MAX 8u
+#endif
+#ifndef ASX_ORACLE_SUITE_MAX
+#define ASX_ORACLE_SUITE_MAX 8u
+#endif
+#ifndef ASX_LAB_MAX_STEPS
+#define ASX_LAB_MAX_STEPS 32u
+#endif
+#ifndef ASX_TASK_GROUP_MAX
+#define ASX_TASK_GROUP_MAX 16u
+#endif
+
+/* Core containers, capability contexts and synchronization resources. */
+#ifndef ASX_CHANNEL_MAX_CAPACITY
+#define ASX_CHANNEL_MAX_CAPACITY 64u
+#endif
+#ifndef ASX_MAX_ONESHOTS
+#define ASX_MAX_ONESHOTS 32u
+#endif
+#ifndef ASX_MAX_BROADCASTS
+#define ASX_MAX_BROADCASTS 8u
+#endif
+#ifndef ASX_BROADCAST_MAX_CAPACITY
+#define ASX_BROADCAST_MAX_CAPACITY 32u
+#endif
+#ifndef ASX_MAX_WATCHES
+#define ASX_MAX_WATCHES 16u
+#endif
+#ifndef ASX_MAX_SESSIONS
+#define ASX_MAX_SESSIONS 8u
+#endif
+#ifndef ASX_SESSION_MAX_CAPACITY
+#define ASX_SESSION_MAX_CAPACITY 16u
+#endif
+#ifndef ASX_MAX_EPOCHS
+#define ASX_MAX_EPOCHS 16u
+#endif
+#ifndef ASX_MAX_EPOCH_OBSERVERS
+#define ASX_MAX_EPOCH_OBSERVERS 8u
+#endif
+#ifndef ASX_AFFINITY_TABLE_CAPACITY
+#define ASX_AFFINITY_TABLE_CAPACITY 256u
+#endif
+#ifndef ASX_SYMBOL_REGISTRY_CAPACITY
+#define ASX_SYMBOL_REGISTRY_CAPACITY 256u
+#endif
+#ifndef ASX_GHOST_RING_CAPACITY
+#define ASX_GHOST_RING_CAPACITY 64u
+#endif
+#ifndef ASX_GHOST_BORROW_TABLE_CAPACITY
+#define ASX_GHOST_BORROW_TABLE_CAPACITY 128u
+#endif
+#ifndef ASX_GHOST_DETERMINISM_CAPACITY
+#define ASX_GHOST_DETERMINISM_CAPACITY 256u
+#endif
+#ifndef ASX_DET_HASH_MAX_ENTRIES
+#define ASX_DET_HASH_MAX_ENTRIES 64u
+#endif
+#ifndef ASX_COMBINATOR_MAX_BRANCHES
+#define ASX_COMBINATOR_MAX_BRANCHES 8u
+#endif
+#ifndef ASX_JOIN_SET_MAX_TASKS
+#define ASX_JOIN_SET_MAX_TASKS 16u
+#endif
+#ifndef ASX_PIPELINE_MAX_STAGES
+#define ASX_PIPELINE_MAX_STAGES 8u
+#endif
+#ifndef ASX_ADAPTIVE_HEDGE_WINDOW
+#define ASX_ADAPTIVE_HEDGE_WINDOW 64u
+#endif
+#ifndef ASX_CX_MACAROON_MAX_CAVEATS
+#define ASX_CX_MACAROON_MAX_CAVEATS 8u
+#endif
+#ifndef ASX_SEMAPHORE_MAX
+#define ASX_SEMAPHORE_MAX 16u
+#endif
+#ifndef ASX_CONTENDED_MUTEX_MAX
+#define ASX_CONTENDED_MUTEX_MAX 16u
+#endif
+#ifndef ASX_NOTIFY_MAX
+#define ASX_NOTIFY_MAX 16u
+#endif
+#ifndef ASX_BARRIER_MAX
+#define ASX_BARRIER_MAX 8u
+#endif
+#ifndef ASX_RWLOCK_MAX
+#define ASX_RWLOCK_MAX 16u
+#endif
+#ifndef ASX_ONCE_MAX
+#define ASX_ONCE_MAX 16u
+#endif
+#ifndef ASX_POOL_MAX
+#define ASX_POOL_MAX 8u
+#endif
+#ifndef ASX_POOL_MAX_RESOURCES
+#define ASX_POOL_MAX_RESOURCES 16u
+#endif
+
+/* Actor, service, stream, plan and application layouts. */
+#ifndef ASX_MAX_ACTORS
+#define ASX_MAX_ACTORS 16u
+#endif
+#ifndef ASX_ACTOR_MAILBOX_CAPACITY
+#define ASX_ACTOR_MAILBOX_CAPACITY 64u
+#endif
+#ifndef ASX_MAX_SUPERVISORS
+#define ASX_MAX_SUPERVISORS 8u
+#endif
+#ifndef ASX_SUPERVISOR_MAX_CHILDREN
+#define ASX_SUPERVISOR_MAX_CHILDREN 8u
+#endif
+#ifndef ASX_SUPERVISOR_MAX_DEPS
+#define ASX_SUPERVISOR_MAX_DEPS 4u
+#endif
+#ifndef ASX_SUPERVISOR_NAME_MAX
+#define ASX_SUPERVISOR_NAME_MAX 32u
+#endif
+#ifndef ASX_SUPERVISOR_MAX_RESTARTS
+#define ASX_SUPERVISOR_MAX_RESTARTS 32u
+#endif
+#ifndef ASX_GEN_SERVER_MAILBOX_SIZE
+#define ASX_GEN_SERVER_MAILBOX_SIZE 16u
+#endif
+#ifndef ASX_GEN_SERVER_MAX_INSTANCES
+#define ASX_GEN_SERVER_MAX_INSTANCES 8u
+#endif
+#ifndef ASX_MAX_SIGNAL_SUBSCRIPTIONS
+#define ASX_MAX_SIGNAL_SUBSCRIPTIONS 16u
+#endif
+#ifndef ASX_BUF_CAPACITY
+#define ASX_BUF_CAPACITY 4096u
+#endif
+#ifndef ASX_SERVICE_BUFFER_CAPACITY
+#define ASX_SERVICE_BUFFER_CAPACITY 8u
+#endif
+#ifndef ASX_SERVICE_BUILDER_MAX_LAYERS
+#define ASX_SERVICE_BUILDER_MAX_LAYERS 8u
+#endif
+#ifndef ASX_SERVICE_LB_MAX_BACKENDS
+#define ASX_SERVICE_LB_MAX_BACKENDS 8u
+#endif
+#ifndef ASX_WORK_POOL_MAX_ITEMS
+#define ASX_WORK_POOL_MAX_ITEMS 16u
+#endif
+#ifndef ASX_SCATTER_GATHER_MAX_ITEMS
+#define ASX_SCATTER_GATHER_MAX_ITEMS 8u
+#endif
+#ifndef ASX_SPORK_PIPELINE_MAX_STAGES
+#define ASX_SPORK_PIPELINE_MAX_STAGES 8u
+#endif
+#ifndef ASX_STREAM_CHUNK_MAX
+#define ASX_STREAM_CHUNK_MAX 16u
+#endif
+#ifndef ASX_STREAM_WINDOW_MAX
+#define ASX_STREAM_WINDOW_MAX 16u
+#endif
+#ifndef ASX_PLAN_MAX_NODES
+#define ASX_PLAN_MAX_NODES 64u
+#endif
+#ifndef ASX_PLAN_MAX_CHILDREN
+#define ASX_PLAN_MAX_CHILDREN 8u
+#endif
+#ifndef ASX_PLAN_MAX_LABEL
+#define ASX_PLAN_MAX_LABEL 32u
+#endif
+#ifndef ASX_PLAN_MAX_STEPS
+#define ASX_PLAN_MAX_STEPS 32u
+#endif
+#ifndef ASX_METRICS_MAX_ENTRIES
+#define ASX_METRICS_MAX_ENTRIES 32u
+#endif
+#ifndef ASX_METRICS_NAME_MAX
+#define ASX_METRICS_NAME_MAX 64u
+#endif
+#ifndef ASX_DOCTOR_MAX_CHECKS
+#define ASX_DOCTOR_MAX_CHECKS 16u
+#endif
+#ifndef ASX_DOCTOR_PROBE_TIMEOUT_NS
+#define ASX_DOCTOR_PROBE_TIMEOUT_NS ((asx_time)2000000000u)
+#endif
+#ifndef ASX_REPORT_BUF_SIZE
+#define ASX_REPORT_BUF_SIZE 4096u
+#endif
+#ifndef ASX_APP_DEFAULT_POLL_BUDGET
+#define ASX_APP_DEFAULT_POLL_BUDGET 10000u
+#endif
+
+/* Network, file-system and process resources and public buffers. */
+#ifndef ASX_MAX_TCP_LISTENERS
+#define ASX_MAX_TCP_LISTENERS 4u
+#endif
+#ifndef ASX_MAX_TCP_STREAMS
+#define ASX_MAX_TCP_STREAMS 16u
+#endif
+#ifndef ASX_MAX_UDP_SOCKETS
+#define ASX_MAX_UDP_SOCKETS 16u
+#endif
+#ifndef ASX_RESOLVE_MAX_RESULTS
+#define ASX_RESOLVE_MAX_RESULTS 4u
+#endif
+#ifndef ASX_RESOLVER_CACHE_CAPACITY
+#define ASX_RESOLVER_CACHE_CAPACITY 8u
+#endif
+#ifndef ASX_RESOLVER_HOST_CAPACITY
+#define ASX_RESOLVER_HOST_CAPACITY 256u /* DNS names are at most 253 octets */
+#endif
+#ifndef ASX_RESOLVE_MAX_INFLIGHT
+#define ASX_RESOLVE_MAX_INFLIGHT 8u /* concurrent native lookups */
+#endif
+#ifndef ASX_UNIX_PATH_MAX
+#define ASX_UNIX_PATH_MAX 108u
+#endif
+#ifndef ASX_MAX_UNIX_LISTENERS
+#define ASX_MAX_UNIX_LISTENERS 4u
+#endif
+#ifndef ASX_MAX_UNIX_STREAMS
+#define ASX_MAX_UNIX_STREAMS 16u
+#endif
+#ifndef ASX_MAX_UNIX_DGRAM_SOCKETS
+#define ASX_MAX_UNIX_DGRAM_SOCKETS 8u
+#endif
+#ifndef ASX_ANCILLARY_MAX_FDS
+#define ASX_ANCILLARY_MAX_FDS 8u
+#endif
+#ifndef ASX_MAX_PIPES
+#define ASX_MAX_PIPES 8u
+#endif
+#ifndef ASX_TLS_MAX_HOSTNAME
+#define ASX_TLS_MAX_HOSTNAME 64u
+#endif
+#ifndef ASX_TLS_MAX_ALPN
+#define ASX_TLS_MAX_ALPN 4u
+#endif
+#ifndef ASX_TLS_ALPN_MAX_LEN
+#define ASX_TLS_ALPN_MAX_LEN 16u
+#endif
+#ifndef ASX_MAX_TLS_STREAMS
+#define ASX_MAX_TLS_STREAMS 8u
+#endif
+#ifndef ASX_WS_MAX_MESSAGE
+#define ASX_WS_MAX_MESSAGE 16384u
+#endif
+#ifndef ASX_WS_TX_CAPACITY
+#define ASX_WS_TX_CAPACITY (ASX_WS_MAX_MESSAGE + 512u)
+#endif
+#ifndef ASX_WS_HANDSHAKE_MAX
+#define ASX_WS_HANDSHAKE_MAX 4096u
+#endif
+#ifndef ASX_WS_PROTOCOLS_MAX
+#define ASX_WS_PROTOCOLS_MAX 128u
+#endif
+#ifndef ASX_MAX_WS_CONNECTIONS
+#define ASX_MAX_WS_CONNECTIONS 8u
+#endif
+#ifndef ASX_MAX_QUIC_CONNECTIONS
+#define ASX_MAX_QUIC_CONNECTIONS 4u
+#endif
+#ifndef ASX_MAX_QUIC_STREAMS
+#define ASX_MAX_QUIC_STREAMS 16u
+#endif
+#ifndef ASX_QUIC_MAX_DGRAM
+#define ASX_QUIC_MAX_DGRAM 1200u
+#endif
+#ifndef ASX_HTTP_MAX_HEADERS
+#define ASX_HTTP_MAX_HEADERS 16u
+#endif
+#ifndef ASX_HTTP_HEADER_NAME_MAX
+#define ASX_HTTP_HEADER_NAME_MAX 64u
+#endif
+#ifndef ASX_HTTP_HEADER_VALUE_MAX
+#define ASX_HTTP_HEADER_VALUE_MAX 256u
+#endif
+#ifndef ASX_HTTP_BODY_MAX
+#define ASX_HTTP_BODY_MAX 4096u
+#endif
+#ifndef ASX_HTTP_URI_MAX
+#define ASX_HTTP_URI_MAX 256u
+#endif
+#ifndef ASX_HTTP_MAX_ROUTES
+#define ASX_HTTP_MAX_ROUTES 16u
+#endif
+#ifndef ASX_HTTP_MAX_ROUTE_MIDDLEWARE
+#define ASX_HTTP_MAX_ROUTE_MIDDLEWARE 8u
+#endif
+#ifndef ASX_HTTP_MAX_PATH_PARAMS
+#define ASX_HTTP_MAX_PATH_PARAMS 8u
+#endif
+#ifndef ASX_HTTP_PARAM_NAME_MAX
+#define ASX_HTTP_PARAM_NAME_MAX 32u
+#endif
+#ifndef ASX_HTTP_PARAM_VALUE_MAX
+#define ASX_HTTP_PARAM_VALUE_MAX 128u
+#endif
+#ifndef ASX_HTTP_COOKIE_VALUE_MAX
+#define ASX_HTTP_COOKIE_VALUE_MAX 128u
+#endif
+#ifndef ASX_HTTP_SECURITY_PURPOSE_MAX
+#define ASX_HTTP_SECURITY_PURPOSE_MAX 32u
+#endif
+#ifndef ASX_HTTP_MULTIPART_PARTS_MAX
+#define ASX_HTTP_MULTIPART_PARTS_MAX 8u
+#endif
+#ifndef ASX_HTTP_MULTIPART_DATA_MAX
+#define ASX_HTTP_MULTIPART_DATA_MAX 512u
+#endif
+#ifndef ASX_HTTP_MULTIPART_FILENAME_MAX
+#define ASX_HTTP_MULTIPART_FILENAME_MAX 64u
+#endif
+#ifndef ASX_HTTP_PARSER_MAX_FIELDS
+#define ASX_HTTP_PARSER_MAX_FIELDS 64u
+#endif
+#ifndef ASX_HTTP_DEFAULT_MAX_START_LINE
+#define ASX_HTTP_DEFAULT_MAX_START_LINE 8192u
+#endif
+#ifndef ASX_HTTP_DEFAULT_MAX_HEADER_BYTES
+#define ASX_HTTP_DEFAULT_MAX_HEADER_BYTES 16384u
+#endif
+#ifndef ASX_HTTP_DEFAULT_MAX_CHUNK_LINE
+#define ASX_HTTP_DEFAULT_MAX_CHUNK_LINE 1024u
+#endif
+#ifndef ASX_HTTP_DEFAULT_MAX_BODY
+#define ASX_HTTP_DEFAULT_MAX_BODY 16777216u /* 16 MiB */
+#endif
+#ifndef ASX_HTTP_MAX_LEADING_EMPTY_LINES
+#define ASX_HTTP_MAX_LEADING_EMPTY_LINES 4u
+#endif
+#ifndef ASX_HTTP_CONN_HEAD_MAX
+#define ASX_HTTP_CONN_HEAD_MAX 8192u
+#endif
+#ifndef ASX_HTTP_CONN_TX_MAX
+#define ASX_HTTP_CONN_TX_MAX                                                                       \
+    ((ASX_HTTP_MAX_HEADERS * (ASX_HTTP_HEADER_NAME_MAX + ASX_HTTP_HEADER_VALUE_MAX + 4u)) +        \
+     ASX_HTTP_URI_MAX + 512u)
+#endif
+#ifndef ASX_HTTP_CLIENT_TX_MAX
+#define ASX_HTTP_CLIENT_TX_MAX (ASX_HTTP_CONN_TX_MAX + ASX_HTTP_BODY_MAX + 64u)
+#endif
+#ifndef ASX_HTTP_CLIENT_MAX_INFORMATIONAL
+#define ASX_HTTP_CLIENT_MAX_INFORMATIONAL 8u
+#endif
+#ifndef ASX_HTTP_SERVER_MAX_CONNS
+#if defined(ASX_PROFILE_EMBEDDED_ROUTER) || defined(ASX_PROFILE_FREESTANDING)
+#define ASX_HTTP_SERVER_MAX_CONNS 4u
+#else
+#define ASX_HTTP_SERVER_MAX_CONNS 16u
+#endif
+#endif
+#ifndef ASX_HTTP_POOL_MAX_CONNECTIONS
+#define ASX_HTTP_POOL_MAX_CONNECTIONS 8u
+#endif
+#ifndef ASX_GRPC_MSG_MAX
+#define ASX_GRPC_MSG_MAX 4096u
+#endif
+#ifndef ASX_GRPC_MAX_METADATA
+#define ASX_GRPC_MAX_METADATA 8u
+#endif
+#ifndef ASX_GRPC_METADATA_KEY_MAX
+#define ASX_GRPC_METADATA_KEY_MAX 64u
+#endif
+#ifndef ASX_GRPC_METADATA_VALUE_MAX
+#define ASX_GRPC_METADATA_VALUE_MAX 128u
+#endif
+#ifndef ASX_GRPC_MAX_METHODS
+#define ASX_GRPC_MAX_METHODS 16u
+#endif
+#ifndef ASX_GRPC_METHOD_NAME_MAX
+#define ASX_GRPC_METHOD_NAME_MAX 128u
+#endif
+#ifndef ASX_GRPC_SERVICE_NAME_MAX
+#define ASX_GRPC_SERVICE_NAME_MAX 128u
+#endif
+#ifndef ASX_GRPC_MAX_SERVICES
+#define ASX_GRPC_MAX_SERVICES 8u
+#endif
+#ifndef ASX_GRPC_MAX_HEALTH_ENTRIES
+#define ASX_GRPC_MAX_HEALTH_ENTRIES 8u
+#endif
+#ifndef ASX_MSG_MAX_PAYLOAD
+#define ASX_MSG_MAX_PAYLOAD 1024u
+#endif
+#ifndef ASX_MSG_MAX_TOPIC_LEN
+#define ASX_MSG_MAX_TOPIC_LEN 64u
+#endif
+#ifndef ASX_MSG_MAX_TOPICS
+#define ASX_MSG_MAX_TOPICS 8u
+#endif
+#ifndef ASX_MSG_QUEUE_DEPTH
+#define ASX_MSG_QUEUE_DEPTH 16u
+#endif
+#ifndef ASX_MSG_MAX_SUBSCRIBERS
+#define ASX_MSG_MAX_SUBSCRIBERS 8u
+#endif
+#ifndef ASX_DIST_MAX_NODES
+#define ASX_DIST_MAX_NODES 8u
+#endif
+#ifndef ASX_DIST_MAX_PARTITIONS
+#define ASX_DIST_MAX_PARTITIONS 16u
+#endif
+#ifndef ASX_DIST_NODE_NAME_MAX
+#define ASX_DIST_NODE_NAME_MAX 32u
+#endif
+#ifndef ASX_DIST_SNAPSHOT_DATA_MAX
+#define ASX_DIST_SNAPSHOT_DATA_MAX 1024u
+#endif
+#ifndef ASX_DIST_MAX_SNAPSHOTS
+#define ASX_DIST_MAX_SNAPSHOTS 8u
+#endif
+#ifndef ASX_DIST_HASH_RING_SIZE
+#define ASX_DIST_HASH_RING_SIZE 64u
+#endif
+#ifndef ASX_DB_MAX_CONNECTIONS
+#define ASX_DB_MAX_CONNECTIONS 4u
+#endif
+#ifndef ASX_DB_MAX_COLUMNS
+#define ASX_DB_MAX_COLUMNS 16u
+#endif
+#ifndef ASX_DB_MAX_ROWS
+#define ASX_DB_MAX_ROWS 64u
+#endif
+#ifndef ASX_DB_COLUMN_NAME_MAX
+#define ASX_DB_COLUMN_NAME_MAX 32u
+#endif
+#ifndef ASX_DB_CELL_MAX
+#define ASX_DB_CELL_MAX 128u
+#endif
+#ifndef ASX_DB_QUERY_MAX
+#define ASX_DB_QUERY_MAX 512u
+#endif
+#ifndef ASX_DB_DSN_MAX
+#define ASX_DB_DSN_MAX 128u
+#endif
+#ifndef ASX_SERVER_MAX_CONNECTIONS
+#define ASX_SERVER_MAX_CONNECTIONS 16u
+#endif
+#ifndef ASX_MEM_TRANSPORT_MAX_CONNS
+#define ASX_MEM_TRANSPORT_MAX_CONNS 16u
+#endif
+#ifndef ASX_MEM_TRANSPORT_MAX_LISTENERS
+#define ASX_MEM_TRANSPORT_MAX_LISTENERS 4u
+#endif
+#ifndef ASX_MEM_TRANSPORT_BUF_SIZE
+#define ASX_MEM_TRANSPORT_BUF_SIZE 1024u
+#endif
+#ifndef ASX_RECONNECT_TRANSPORT_MAX_ADDR
+#define ASX_RECONNECT_TRANSPORT_MAX_ADDR 64u
+#endif
+#ifndef ASX_WEB_MAX_ROUTES
+#define ASX_WEB_MAX_ROUTES 32u
+#endif
+#ifndef ASX_WEB_PATH_MAX
+#define ASX_WEB_PATH_MAX 128u
+#endif
+#ifndef ASX_WEB_MAX_MIDDLEWARE
+#define ASX_WEB_MAX_MIDDLEWARE 8u
+#endif
+#ifndef ASX_WEB_MAX_QUERY_PARAMS
+#define ASX_WEB_MAX_QUERY_PARAMS 16u
+#endif
+#ifndef ASX_WEB_PARAM_KEY_MAX
+#define ASX_WEB_PARAM_KEY_MAX 64u
+#endif
+#ifndef ASX_WEB_PARAM_VALUE_MAX
+#define ASX_WEB_PARAM_VALUE_MAX 256u
+#endif
+#ifndef ASX_WEB_MAX_SESSIONS
+#define ASX_WEB_MAX_SESSIONS 16u
+#endif
+#ifndef ASX_WEB_SESSION_ID_LEN
+#define ASX_WEB_SESSION_ID_LEN 32u
+#endif
+#ifndef ASX_WEB_SESSION_MAX_DATA
+#define ASX_WEB_SESSION_MAX_DATA 512u
+#endif
+#ifndef ASX_WEB_SSE_MAX_EVENTS
+#define ASX_WEB_SSE_MAX_EVENTS 16u
+#endif
+#ifndef ASX_WEB_SSE_DATA_MAX
+#define ASX_WEB_SSE_DATA_MAX 256u
+#endif
+#ifndef ASX_WEB_SSE_EVENT_NAME_MAX
+#define ASX_WEB_SSE_EVENT_NAME_MAX 32u
+#endif
+#ifndef ASX_WEB_MAX_MULTIPART_PARTS
+#define ASX_WEB_MAX_MULTIPART_PARTS 8u
+#endif
+#ifndef ASX_WEB_MULTIPART_NAME_MAX
+#define ASX_WEB_MULTIPART_NAME_MAX 64u
+#endif
+#ifndef ASX_WEB_MULTIPART_FILENAME_MAX
+#define ASX_WEB_MULTIPART_FILENAME_MAX 128u
+#endif
+#ifndef ASX_WEB_MULTIPART_DATA_MAX
+#define ASX_WEB_MULTIPART_DATA_MAX 4096u
+#endif
+#ifndef ASX_WEB_CORS_MAX_ORIGINS
+#define ASX_WEB_CORS_MAX_ORIGINS 8u
+#endif
+#ifndef ASX_WEB_CORS_ORIGIN_MAX
+#define ASX_WEB_CORS_ORIGIN_MAX 128u
+#endif
+#ifndef ASX_WEB_CSRF_TOKEN_LEN
+#define ASX_WEB_CSRF_TOKEN_LEN 32u
+#endif
+#ifndef ASX_WEB_MAX_STATIC_FILES
+#define ASX_WEB_MAX_STATIC_FILES 16u
+#endif
+#ifndef ASX_MAX_PROCESSES
+#define ASX_MAX_PROCESSES 8u
+#endif
+#ifndef ASX_PROCESS_WAIT_MAX_POLLS
+#define ASX_PROCESS_WAIT_MAX_POLLS 10000u
+#endif
+#ifndef ASX_PROCESS_PROGRAM_MAX
+#define ASX_PROCESS_PROGRAM_MAX 96u
+#endif
+#ifndef ASX_PROCESS_MAX_ARGS
+#define ASX_PROCESS_MAX_ARGS 16u
+#endif
+#ifndef ASX_PROCESS_ARG_MAX
+#define ASX_PROCESS_ARG_MAX 128u
+#endif
+#ifndef ASX_PROCESS_MAX_ENV
+#define ASX_PROCESS_MAX_ENV 16u
+#endif
+#ifndef ASX_PROCESS_ENV_MAX
+#define ASX_PROCESS_ENV_MAX 128u
+#endif
+#ifndef ASX_PROCESS_OUTPUT_MAX
+#define ASX_PROCESS_OUTPUT_MAX 4096u
+#endif
+#ifndef ASX_FS_PATH_MAX
+#define ASX_FS_PATH_MAX 192u
+#endif
+#ifndef ASX_FS_NAME_MAX
+#define ASX_FS_NAME_MAX 256u
+#endif
+#ifndef ASX_MAX_FS_ENTRIES
+#define ASX_MAX_FS_ENTRIES 16u
+#endif
+#ifndef ASX_MAX_OPEN_FILES
+#define ASX_MAX_OPEN_FILES 16u
+#endif
+#ifndef ASX_MAX_OPEN_DIRS
+#define ASX_MAX_OPEN_DIRS 8u
+#endif
+#ifndef ASX_FS_FILE_CAPACITY
+#define ASX_FS_FILE_CAPACITY 1024u
+#endif
+
+/* Remote message and transaction layouts. */
+#ifndef ASX_REMOTE_MSG_PAYLOAD_SIZE
+#define ASX_REMOTE_MSG_PAYLOAD_SIZE 256u
+#endif
+#ifndef ASX_IDEMPOTENCY_STORE_CAPACITY
+#define ASX_IDEMPOTENCY_STORE_CAPACITY 16u
+#endif
+#ifndef ASX_SAGA_MAX_STEPS
+#define ASX_SAGA_MAX_STEPS 8u
+#endif
+#ifndef ASX_REMOTE_REPORT_TEXT_SIZE
+#define ASX_REMOTE_REPORT_TEXT_SIZE 256u
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -577,8 +1242,36 @@ typedef struct {
     uint32_t cleanup_hard_bound;
 } asx_runtime_config;
 
-/* Initialize config with profile-appropriate defaults */
-ASX_API void asx_runtime_config_init(asx_runtime_config *cfg);
+/* Runtime and builder layouts are available to configuration-only consumers
+ * so construction can compare the same app/library layout fingerprint. */
+typedef struct {
+    asx_runtime_config config;
+    asx_runtime_hooks hooks;
+    asx_leak_escalation_config leak_escalation_storage;
+    uint32_t generation; /* nonzero when initialized */
+    int initialized;     /* guard flag */
+    int has_leak_escalation;
+} asx_runtime;
+
+typedef enum {
+    ASX_RUNTIME_PRESET_DEFAULT = 0,
+    ASX_RUNTIME_PRESET_CURRENT_THREAD = 1,
+    ASX_RUNTIME_PRESET_LOW_LATENCY = 2,
+    ASX_RUNTIME_PRESET_HIGH_THROUGHPUT = 3
+} asx_runtime_preset;
+
+typedef struct {
+    asx_runtime_config config;
+    asx_runtime_hooks hooks;
+    asx_runtime_preset preset;
+} asx_runtime_builder;
+
+/* Initialize config with profile-appropriate defaults. Mismatched builds
+ * return ASX_E_CONFIG_MISMATCH without writing cfg; NULL returns
+ * ASX_E_INVALID_ARGUMENT. Check the result before using the config. */
+ASX_API asx_status asx_runtime_config_init_checked(asx_runtime_config *cfg,
+                                                   uint64_t application_fingerprint);
+#define asx_runtime_config_init(cfg) asx_runtime_config_init_checked((cfg), ASX_CONFIG_FINGERPRINT)
 
 /* Get a human-readable IO backend name. */
 ASX_API ASX_MUST_USE const char *asx_io_backend_str(asx_io_backend backend);
@@ -592,7 +1285,10 @@ ASX_API ASX_MUST_USE asx_status asx_runtime_config_set_io_backend(asx_runtime_co
 
 /* Initialize hook table with safe defaults.
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if hooks is NULL. */
-ASX_API asx_status asx_runtime_hooks_init(asx_runtime_hooks *hooks);
+ASX_API asx_status asx_runtime_hooks_init_checked(asx_runtime_hooks *hooks,
+                                                  uint64_t application_fingerprint);
+#define asx_runtime_hooks_init(hooks)                                                              \
+    asx_runtime_hooks_init_checked((hooks), ASX_CONFIG_FINGERPRINT)
 
 /* Validate hooks under deterministic/non-deterministic policy.
  * Returns ASX_OK if valid, ASX_E_HOOK_INVALID if constraints violated. */
@@ -675,5 +1371,465 @@ ASX_API void asx_runtime_reactor_notify(void);
  * Returns ASX_E_HOOK_MISSING if the runtime hook table is not installed.
  * Returns ASX_OK with no side effects when hooks are installed but no log sink is configured. */
 ASX_API asx_status asx_runtime_log_write(int level, const char *message);
+
+/* Application-side build identity. The ordered effective integer values
+ * and bootstrap layout facts are folded without allocation or runtime
+ * state. This detects accidental build mismatches; it is not authentication.
+ * Keep all resource defaults above represented here when adding a knob. */
+static inline uint64_t asx_header_config_fingerprint(void) {
+    typedef struct {
+        char pad;
+        uint64_t value;
+    } u64_alignment;
+    typedef struct {
+        char pad;
+        void *value;
+    } pointer_alignment;
+    typedef struct {
+        char pad;
+        asx_alloc_fn value;
+    } function_alignment;
+    typedef struct {
+        char pad;
+        asx_runtime_config value;
+    } config_alignment;
+    typedef struct {
+        char pad;
+        asx_runtime_hooks value;
+    } hooks_alignment;
+    typedef struct {
+        char pad;
+        asx_runtime value;
+    } runtime_alignment;
+    typedef struct {
+        char pad;
+        asx_runtime_builder value;
+    } builder_alignment;
+    typedef struct {
+        char pad;
+        asx_leak_escalation_config value;
+    } leak_alignment;
+    typedef struct {
+        char pad;
+        asx_allocator_hooks value;
+    } allocator_alignment;
+    typedef struct {
+        char pad;
+        asx_clock_hooks value;
+    } clock_alignment;
+    typedef struct {
+        char pad;
+        asx_entropy_hooks value;
+    } entropy_alignment;
+    typedef struct {
+        char pad;
+        asx_reactor_hooks value;
+    } reactor_alignment;
+    typedef struct {
+        char pad;
+        asx_blocking_hooks value;
+    } blocking_alignment;
+    typedef struct {
+        char pad;
+        asx_log_hooks value;
+    } log_alignment;
+    static const uint64_t values[] = {
+        ASX_ABI_VERSION,
+        CHAR_BIT,
+        sizeof(int),
+        sizeof(unsigned int),
+        sizeof(long),
+        sizeof(size_t),
+        sizeof(uint32_t),
+        sizeof(uint64_t),
+        sizeof(void *),
+        sizeof(asx_alloc_fn),
+        sizeof(asx_status),
+        sizeof(asx_resource_class),
+        sizeof(asx_runtime_preset),
+        sizeof(asx_wait_policy),
+        sizeof(asx_io_backend),
+        sizeof(asx_leak_response),
+        sizeof(asx_finalizer_escalation),
+        offsetof(u64_alignment, value),
+        offsetof(pointer_alignment, value),
+        offsetof(function_alignment, value),
+#if defined(ASX_PROFILE_CORE)
+        1u,
+#else
+        0u,
+#endif
+#if defined(ASX_PROFILE_POSIX)
+        1u,
+#else
+        0u,
+#endif
+#if defined(ASX_PROFILE_WIN32)
+        1u,
+#else
+        0u,
+#endif
+#if defined(ASX_PROFILE_FREESTANDING)
+        1u,
+#else
+        0u,
+#endif
+#if defined(ASX_PROFILE_EMBEDDED_ROUTER)
+        1u,
+#else
+        0u,
+#endif
+#if defined(ASX_PROFILE_HFT)
+        1u,
+#else
+        0u,
+#endif
+#if defined(ASX_PROFILE_AUTOMOTIVE)
+        1u,
+#else
+        0u,
+#endif
+#if defined(ASX_PROFILE_PARALLEL)
+        1u,
+#else
+        0u,
+#endif
+#if defined(ASX_PROFILE_BROWSER)
+        1u,
+#else
+        0u,
+#endif
+#if defined(ASX_CODEC_BIN)
+        1u,
+#else
+        0u,
+#endif
+#if defined(ASX_CODEC_JSON)
+        1u,
+#else
+        0u,
+#endif
+#if defined(ASX_DEBUG) && ASX_DEBUG
+        1u,
+#else
+        0u,
+#endif
+#if defined(ASX_DEBUG_GHOST) && ASX_DEBUG_GHOST
+        1u,
+#else
+        0u,
+#endif
+#ifdef ASX_RESOURCE_CLASS
+        ASX_RESOURCE_CLASS,
+#else
+        0u,
+#endif
+        ASX_DETERMINISTIC,
+        ASX_SAFETY_PROFILE_SELECTED,
+        ASX_HAS_BROWSER_IO,
+        ASX_HAS_BROWSER_TRACE,
+        ASX_MAX_REGION_CHILDREN,
+        ASX_MAX_REGIONS,
+        ASX_MAX_TASKS,
+        ASX_MAX_OBLIGATIONS,
+        ASX_MAX_TIMERS,
+        ASX_MAX_CHANNELS,
+        ASX_TRACE_CAPACITY,
+        ASX_REGION_CAPTURE_ARENA_BYTES,
+        ASX_MAX_MASK_DEPTH,
+        ASX_MAX_CANCEL_WITNESSES,
+        ASX_CLEANUP_STACK_CAPACITY,
+        ASX_MAX_WORKERS,
+        ASX_MAX_LANES,
+        ASX_LANE_TASK_CAPACITY,
+        ASX_MAX_IO_TOKENS,
+        ASX_MAX_DEADLINE_MONITORS,
+        ASX_MAX_WAKERS,
+        ASX_MAX_BLOCKING_TASKS,
+        ASX_MAX_SUSPECTS,
+        ASX_EVIDENCE_SINK_CAPACITY,
+        ASX_HINDSIGHT_CAPACITY,
+        ASX_HINDSIGHT_FLUSH_BUFFER_SIZE,
+        ASX_SNAPSHOT_BUFFER_SIZE,
+        ASX_SNAPSHOT_MAX,
+        ASX_ORACLE_SUITE_MAX,
+        ASX_LAB_MAX_STEPS,
+        ASX_TASK_GROUP_MAX,
+        ASX_CHANNEL_MAX_CAPACITY,
+        ASX_MAX_ONESHOTS,
+        ASX_MAX_BROADCASTS,
+        ASX_BROADCAST_MAX_CAPACITY,
+        ASX_MAX_WATCHES,
+        ASX_MAX_SESSIONS,
+        ASX_SESSION_MAX_CAPACITY,
+        ASX_MAX_EPOCHS,
+        ASX_MAX_EPOCH_OBSERVERS,
+        ASX_AFFINITY_TABLE_CAPACITY,
+        ASX_SYMBOL_REGISTRY_CAPACITY,
+        ASX_GHOST_RING_CAPACITY,
+        ASX_GHOST_BORROW_TABLE_CAPACITY,
+        ASX_GHOST_DETERMINISM_CAPACITY,
+        ASX_DET_HASH_MAX_ENTRIES,
+        ASX_COMBINATOR_MAX_BRANCHES,
+        ASX_JOIN_SET_MAX_TASKS,
+        ASX_PIPELINE_MAX_STAGES,
+        ASX_ADAPTIVE_HEDGE_WINDOW,
+        ASX_CX_MACAROON_MAX_CAVEATS,
+        ASX_SEMAPHORE_MAX,
+        ASX_CONTENDED_MUTEX_MAX,
+        ASX_NOTIFY_MAX,
+        ASX_BARRIER_MAX,
+        ASX_RWLOCK_MAX,
+        ASX_ONCE_MAX,
+        ASX_POOL_MAX,
+        ASX_POOL_MAX_RESOURCES,
+        ASX_MAX_ACTORS,
+        ASX_ACTOR_MAILBOX_CAPACITY,
+        ASX_MAX_SUPERVISORS,
+        ASX_SUPERVISOR_MAX_CHILDREN,
+        ASX_SUPERVISOR_MAX_DEPS,
+        ASX_SUPERVISOR_NAME_MAX,
+        ASX_SUPERVISOR_MAX_RESTARTS,
+        ASX_GEN_SERVER_MAILBOX_SIZE,
+        ASX_GEN_SERVER_MAX_INSTANCES,
+        ASX_MAX_SIGNAL_SUBSCRIPTIONS,
+        ASX_BUF_CAPACITY,
+        ASX_SERVICE_BUFFER_CAPACITY,
+        ASX_SERVICE_BUILDER_MAX_LAYERS,
+        ASX_SERVICE_LB_MAX_BACKENDS,
+        ASX_WORK_POOL_MAX_ITEMS,
+        ASX_SCATTER_GATHER_MAX_ITEMS,
+        ASX_SPORK_PIPELINE_MAX_STAGES,
+        ASX_STREAM_CHUNK_MAX,
+        ASX_STREAM_WINDOW_MAX,
+        ASX_PLAN_MAX_NODES,
+        ASX_PLAN_MAX_CHILDREN,
+        ASX_PLAN_MAX_LABEL,
+        ASX_PLAN_MAX_STEPS,
+        ASX_METRICS_MAX_ENTRIES,
+        ASX_METRICS_NAME_MAX,
+        ASX_DOCTOR_MAX_CHECKS,
+        ASX_DOCTOR_PROBE_TIMEOUT_NS,
+        ASX_REPORT_BUF_SIZE,
+        ASX_APP_DEFAULT_POLL_BUDGET,
+        ASX_MAX_TCP_LISTENERS,
+        ASX_MAX_TCP_STREAMS,
+        ASX_MAX_UDP_SOCKETS,
+        ASX_RESOLVE_MAX_RESULTS,
+        ASX_RESOLVER_CACHE_CAPACITY,
+        ASX_RESOLVER_HOST_CAPACITY,
+        ASX_RESOLVE_MAX_INFLIGHT,
+        ASX_UNIX_PATH_MAX,
+        ASX_MAX_UNIX_LISTENERS,
+        ASX_MAX_UNIX_STREAMS,
+        ASX_MAX_UNIX_DGRAM_SOCKETS,
+        ASX_ANCILLARY_MAX_FDS,
+        ASX_MAX_PIPES,
+        ASX_TLS_MAX_HOSTNAME,
+        ASX_TLS_MAX_ALPN,
+        ASX_TLS_ALPN_MAX_LEN,
+        ASX_MAX_TLS_STREAMS,
+        ASX_WS_MAX_MESSAGE,
+        ASX_WS_TX_CAPACITY,
+        ASX_WS_HANDSHAKE_MAX,
+        ASX_WS_PROTOCOLS_MAX,
+        ASX_MAX_WS_CONNECTIONS,
+        ASX_MAX_QUIC_CONNECTIONS,
+        ASX_MAX_QUIC_STREAMS,
+        ASX_QUIC_MAX_DGRAM,
+        ASX_HTTP_MAX_HEADERS,
+        ASX_HTTP_HEADER_NAME_MAX,
+        ASX_HTTP_HEADER_VALUE_MAX,
+        ASX_HTTP_BODY_MAX,
+        ASX_HTTP_URI_MAX,
+        ASX_HTTP_MAX_ROUTES,
+        ASX_HTTP_MAX_ROUTE_MIDDLEWARE,
+        ASX_HTTP_MAX_PATH_PARAMS,
+        ASX_HTTP_PARAM_NAME_MAX,
+        ASX_HTTP_PARAM_VALUE_MAX,
+        ASX_HTTP_COOKIE_VALUE_MAX,
+        ASX_HTTP_SECURITY_PURPOSE_MAX,
+        ASX_HTTP_MULTIPART_PARTS_MAX,
+        ASX_HTTP_MULTIPART_DATA_MAX,
+        ASX_HTTP_MULTIPART_FILENAME_MAX,
+        ASX_HTTP_PARSER_MAX_FIELDS,
+        ASX_HTTP_DEFAULT_MAX_START_LINE,
+        ASX_HTTP_DEFAULT_MAX_HEADER_BYTES,
+        ASX_HTTP_DEFAULT_MAX_CHUNK_LINE,
+        ASX_HTTP_DEFAULT_MAX_BODY,
+        ASX_HTTP_MAX_LEADING_EMPTY_LINES,
+        ASX_HTTP_CONN_HEAD_MAX,
+        ASX_HTTP_CONN_TX_MAX,
+        ASX_HTTP_CLIENT_TX_MAX,
+        ASX_HTTP_CLIENT_MAX_INFORMATIONAL,
+        ASX_HTTP_SERVER_MAX_CONNS,
+        ASX_HTTP_POOL_MAX_CONNECTIONS,
+        ASX_GRPC_MSG_MAX,
+        ASX_GRPC_MAX_METADATA,
+        ASX_GRPC_METADATA_KEY_MAX,
+        ASX_GRPC_METADATA_VALUE_MAX,
+        ASX_GRPC_MAX_METHODS,
+        ASX_GRPC_METHOD_NAME_MAX,
+        ASX_GRPC_SERVICE_NAME_MAX,
+        ASX_GRPC_MAX_SERVICES,
+        ASX_GRPC_MAX_HEALTH_ENTRIES,
+        ASX_MSG_MAX_PAYLOAD,
+        ASX_MSG_MAX_TOPIC_LEN,
+        ASX_MSG_MAX_TOPICS,
+        ASX_MSG_QUEUE_DEPTH,
+        ASX_MSG_MAX_SUBSCRIBERS,
+        ASX_DIST_MAX_NODES,
+        ASX_DIST_MAX_PARTITIONS,
+        ASX_DIST_NODE_NAME_MAX,
+        ASX_DIST_SNAPSHOT_DATA_MAX,
+        ASX_DIST_MAX_SNAPSHOTS,
+        ASX_DIST_HASH_RING_SIZE,
+        ASX_DB_MAX_CONNECTIONS,
+        ASX_DB_MAX_COLUMNS,
+        ASX_DB_MAX_ROWS,
+        ASX_DB_COLUMN_NAME_MAX,
+        ASX_DB_CELL_MAX,
+        ASX_DB_QUERY_MAX,
+        ASX_DB_DSN_MAX,
+        ASX_SERVER_MAX_CONNECTIONS,
+        ASX_MEM_TRANSPORT_MAX_CONNS,
+        ASX_MEM_TRANSPORT_MAX_LISTENERS,
+        ASX_MEM_TRANSPORT_BUF_SIZE,
+        ASX_RECONNECT_TRANSPORT_MAX_ADDR,
+        ASX_WEB_MAX_ROUTES,
+        ASX_WEB_PATH_MAX,
+        ASX_WEB_MAX_MIDDLEWARE,
+        ASX_WEB_MAX_QUERY_PARAMS,
+        ASX_WEB_PARAM_KEY_MAX,
+        ASX_WEB_PARAM_VALUE_MAX,
+        ASX_WEB_MAX_SESSIONS,
+        ASX_WEB_SESSION_ID_LEN,
+        ASX_WEB_SESSION_MAX_DATA,
+        ASX_WEB_SSE_MAX_EVENTS,
+        ASX_WEB_SSE_DATA_MAX,
+        ASX_WEB_SSE_EVENT_NAME_MAX,
+        ASX_WEB_MAX_MULTIPART_PARTS,
+        ASX_WEB_MULTIPART_NAME_MAX,
+        ASX_WEB_MULTIPART_FILENAME_MAX,
+        ASX_WEB_MULTIPART_DATA_MAX,
+        ASX_WEB_CORS_MAX_ORIGINS,
+        ASX_WEB_CORS_ORIGIN_MAX,
+        ASX_WEB_CSRF_TOKEN_LEN,
+        ASX_WEB_MAX_STATIC_FILES,
+        ASX_MAX_PROCESSES,
+        ASX_PROCESS_WAIT_MAX_POLLS,
+        ASX_PROCESS_PROGRAM_MAX,
+        ASX_PROCESS_MAX_ARGS,
+        ASX_PROCESS_ARG_MAX,
+        ASX_PROCESS_MAX_ENV,
+        ASX_PROCESS_ENV_MAX,
+        ASX_PROCESS_OUTPUT_MAX,
+        ASX_FS_PATH_MAX,
+        ASX_FS_NAME_MAX,
+        ASX_MAX_FS_ENTRIES,
+        ASX_MAX_OPEN_FILES,
+        ASX_MAX_OPEN_DIRS,
+        ASX_FS_FILE_CAPACITY,
+        ASX_REMOTE_MSG_PAYLOAD_SIZE,
+        ASX_IDEMPOTENCY_STORE_CAPACITY,
+        ASX_SAGA_MAX_STEPS,
+        ASX_REMOTE_REPORT_TEXT_SIZE,
+        ASX_ERROR_LEDGER_DEPTH,
+        ASX_ERROR_LEDGER_TASK_SLOTS,
+        sizeof(asx_runtime_config),
+        offsetof(config_alignment, value),
+        offsetof(asx_runtime_config, size),
+        offsetof(asx_runtime_config, wait_policy),
+        offsetof(asx_runtime_config, io_backend),
+        offsetof(asx_runtime_config, leak_response),
+        offsetof(asx_runtime_config, leak_escalation),
+        offsetof(asx_runtime_config, finalizer_poll_budget),
+        offsetof(asx_runtime_config, finalizer_time_budget_ns),
+        offsetof(asx_runtime_config, finalizer_escalation),
+        offsetof(asx_runtime_config, max_cancel_chain_depth),
+        offsetof(asx_runtime_config, max_cancel_chain_memory),
+        offsetof(asx_runtime_config, cleanup_hard_bound),
+        sizeof(asx_runtime_hooks),
+        offsetof(hooks_alignment, value),
+        offsetof(asx_runtime_hooks, allocator),
+        offsetof(asx_runtime_hooks, clock),
+        offsetof(asx_runtime_hooks, entropy),
+        offsetof(asx_runtime_hooks, reactor),
+        offsetof(asx_runtime_hooks, blocking),
+        offsetof(asx_runtime_hooks, log),
+        offsetof(asx_runtime_hooks, deterministic_seeded_prng),
+        offsetof(asx_runtime_hooks, allocator_sealed),
+        sizeof(asx_runtime),
+        offsetof(runtime_alignment, value),
+        offsetof(asx_runtime, config),
+        offsetof(asx_runtime, hooks),
+        offsetof(asx_runtime, leak_escalation_storage),
+        offsetof(asx_runtime, generation),
+        offsetof(asx_runtime, initialized),
+        offsetof(asx_runtime, has_leak_escalation),
+        sizeof(asx_runtime_builder),
+        offsetof(builder_alignment, value),
+        offsetof(asx_runtime_builder, config),
+        offsetof(asx_runtime_builder, hooks),
+        offsetof(asx_runtime_builder, preset),
+        sizeof(asx_leak_escalation_config),
+        offsetof(leak_alignment, value),
+        offsetof(asx_leak_escalation_config, threshold),
+        offsetof(asx_leak_escalation_config, escalate_to),
+        sizeof(asx_allocator_hooks),
+        offsetof(allocator_alignment, value),
+        offsetof(asx_allocator_hooks, ctx),
+        offsetof(asx_allocator_hooks, malloc_fn),
+        offsetof(asx_allocator_hooks, realloc_fn),
+        offsetof(asx_allocator_hooks, free_fn),
+        sizeof(asx_clock_hooks),
+        offsetof(clock_alignment, value),
+        offsetof(asx_clock_hooks, ctx),
+        offsetof(asx_clock_hooks, now_ns_fn),
+        offsetof(asx_clock_hooks, logical_now_ns_fn),
+        sizeof(asx_entropy_hooks),
+        offsetof(entropy_alignment, value),
+        offsetof(asx_entropy_hooks, ctx),
+        offsetof(asx_entropy_hooks, random_u64_fn),
+        sizeof(asx_reactor_hooks),
+        offsetof(reactor_alignment, value),
+        offsetof(asx_reactor_hooks, ctx),
+        offsetof(asx_reactor_hooks, wait_fn),
+        offsetof(asx_reactor_hooks, ghost_wait_fn),
+        offsetof(asx_reactor_hooks, register_fn),
+        offsetof(asx_reactor_hooks, deregister_fn),
+        offsetof(asx_reactor_hooks, poll_fn),
+        offsetof(asx_reactor_hooks, notify_fn),
+        sizeof(asx_blocking_hooks),
+        offsetof(blocking_alignment, value),
+        offsetof(asx_blocking_hooks, ctx),
+        offsetof(asx_blocking_hooks, submit_fn),
+        offsetof(asx_blocking_hooks, shutdown_fn),
+        offsetof(asx_blocking_hooks, capacity_fn),
+        sizeof(asx_log_hooks),
+        offsetof(log_alignment, value),
+        offsetof(asx_log_hooks, ctx),
+        offsetof(asx_log_hooks, write_fn),
+    };
+    uint64_t digest = UINT64_C(14695981039346656037);
+    size_t i;
+
+    for (i = 0u; i < sizeof(values) / sizeof(values[0]); i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded compile-time build identity values") */
+        digest ^= values[i];
+        digest *= UINT64_C(1099511628211);
+    }
+    return digest;
+}
+
+#define ASX_CONFIG_FINGERPRINT (asx_header_config_fingerprint())
+
+/* The library's independently compiled build identity. Compare with the
+ * header expression for diagnostics; checked constructors do this for you. */
+ASX_API uint64_t asx_runtime_config_fingerprint(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* ASX_CONFIG_H */

@@ -151,9 +151,11 @@ asx_status asx_app_parse_args(asx_app_args *args, int argc, const char **argv) {
 /* Application lifecycle                                               */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_app_init(asx_app *app, const asx_app_config *config) {
+asx_status asx_app_init_checked(asx_app *app, const asx_app_config *config,
+                                uint64_t application_fingerprint) {
     asx_status st;
 
+    if (application_fingerprint != ASX_APP_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
     if (app == NULL || config == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(app, 0, sizeof(*app));

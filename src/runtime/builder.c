@@ -14,9 +14,11 @@
 
 static int builder_surface_ready(const asx_runtime_builder *builder);
 
-static asx_status builder_init_common(asx_runtime_builder *builder, asx_runtime_preset preset) {
+static asx_status builder_init_common(asx_runtime_builder *builder, asx_runtime_preset preset,
+                                      uint64_t application_fingerprint) {
     asx_status st;
 
+    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
     if (builder == NULL) return ASX_E_INVALID_ARGUMENT;
 
     memset(builder, 0, sizeof(*builder));
@@ -271,14 +273,16 @@ static int builder_surface_ready(const asx_runtime_builder *builder) {
     return asx_runtime_hooks_validate(&builder->hooks, ASX_DETERMINISTIC) == ASX_OK;
 }
 
-asx_status asx_runtime_builder_init(asx_runtime_builder *builder) {
-    return builder_init_common(builder, ASX_RUNTIME_PRESET_DEFAULT);
+asx_status asx_runtime_builder_init_checked(asx_runtime_builder *builder,
+                                            uint64_t application_fingerprint) {
+    return builder_init_common(builder, ASX_RUNTIME_PRESET_DEFAULT, application_fingerprint);
 }
 
-asx_status asx_runtime_builder_init_current_thread(asx_runtime_builder *builder) {
+asx_status asx_runtime_builder_init_current_thread_checked(asx_runtime_builder *builder,
+                                                           uint64_t application_fingerprint) {
     asx_status st;
 
-    st = builder_init_common(builder, ASX_RUNTIME_PRESET_CURRENT_THREAD);
+    st = builder_init_common(builder, ASX_RUNTIME_PRESET_CURRENT_THREAD, application_fingerprint);
     if (st != ASX_OK) return st;
 
     builder->config.wait_policy = ASX_WAIT_BUSY_SPIN;
@@ -287,10 +291,11 @@ asx_status asx_runtime_builder_init_current_thread(asx_runtime_builder *builder)
     return ASX_OK;
 }
 
-asx_status asx_runtime_builder_init_low_latency(asx_runtime_builder *builder) {
+asx_status asx_runtime_builder_init_low_latency_checked(asx_runtime_builder *builder,
+                                                        uint64_t application_fingerprint) {
     asx_status st;
 
-    st = builder_init_common(builder, ASX_RUNTIME_PRESET_LOW_LATENCY);
+    st = builder_init_common(builder, ASX_RUNTIME_PRESET_LOW_LATENCY, application_fingerprint);
     if (st != ASX_OK) return st;
 
     builder->config.wait_policy = ASX_WAIT_BUSY_SPIN;
@@ -302,10 +307,11 @@ asx_status asx_runtime_builder_init_low_latency(asx_runtime_builder *builder) {
     return ASX_OK;
 }
 
-asx_status asx_runtime_builder_init_high_throughput(asx_runtime_builder *builder) {
+asx_status asx_runtime_builder_init_high_throughput_checked(asx_runtime_builder *builder,
+                                                            uint64_t application_fingerprint) {
     asx_status st;
 
-    st = builder_init_common(builder, ASX_RUNTIME_PRESET_HIGH_THROUGHPUT);
+    st = builder_init_common(builder, ASX_RUNTIME_PRESET_HIGH_THROUGHPUT, application_fingerprint);
     if (st != ASX_OK) return st;
 
     builder->config.wait_policy = ASX_WAIT_SLEEP;
@@ -594,13 +600,17 @@ asx_status asx_runtime_builder_apply_env(asx_runtime_builder *builder, const cha
     return ASX_OK;
 }
 
-asx_status asx_runtime_builder_build(const asx_runtime_builder *builder, asx_runtime *out_runtime) {
+asx_status asx_runtime_builder_build_checked(const asx_runtime_builder *builder,
+                                             asx_runtime *out_runtime,
+                                             uint64_t application_fingerprint) {
     asx_status st;
 
+    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
     if (builder == NULL || out_runtime == NULL) return ASX_E_INVALID_ARGUMENT;
 
     st = asx_runtime_builder_validate(builder);
     if (st != ASX_OK) return st;
 
-    return asx_runtime_init(out_runtime, &builder->config, &builder->hooks);
+    return asx_runtime_init_checked(out_runtime, &builder->config, &builder->hooks,
+                                    application_fingerprint);
 }

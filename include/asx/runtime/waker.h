@@ -15,6 +15,7 @@
 #ifndef ASX_RUNTIME_WAKER_H
 #define ASX_RUNTIME_WAKER_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -23,9 +24,6 @@
 extern "C" {
 #endif
 
-#ifndef ASX_MAX_WAKERS
-#define ASX_MAX_WAKERS 64u
-#endif
 #if (ASX_MAX_WAKERS) < 1
 #error "ASX_MAX_WAKERS must be at least 1"
 #endif

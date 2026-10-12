@@ -170,10 +170,14 @@ asx_status asx_runtime_config_validate(const asx_runtime_config *config) {
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
-                            const asx_runtime_hooks *hooks) {
+uint64_t asx_runtime_config_fingerprint(void) { return ASX_CONFIG_FINGERPRINT; }
+
+asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *config,
+                                    const asx_runtime_hooks *hooks,
+                                    uint64_t application_fingerprint) {
     asx_status st;
 
+    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
     if (rt == NULL || config == NULL || hooks == NULL) return ASX_E_INVALID_ARGUMENT;
 
     /* Step 1: validate config */
@@ -248,11 +252,12 @@ asx_status asx_runtime_init(asx_runtime *rt, const asx_runtime_config *config,
     return ASX_OK;
 }
 
-asx_status asx_runtime_init_default(asx_runtime *rt) {
+asx_status asx_runtime_init_default_checked(asx_runtime *rt, uint64_t application_fingerprint) {
     asx_runtime_config config;
     asx_runtime_hooks hooks;
     asx_status st;
 
+    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
     if (rt == NULL) return ASX_E_INVALID_ARGUMENT;
 
     asx_runtime_config_init(&config);
@@ -266,13 +271,15 @@ asx_status asx_runtime_init_default(asx_runtime *rt) {
 #endif
     if (st != ASX_OK) return st;
 
-    return asx_runtime_init(rt, &config, &hooks);
+    return asx_runtime_init_checked(rt, &config, &hooks, application_fingerprint);
 }
 
-asx_status asx_runtime_init_from_env(asx_runtime *rt, const char *prefix) {
+asx_status asx_runtime_init_from_env_checked(asx_runtime *rt, const char *prefix,
+                                             uint64_t application_fingerprint) {
     asx_runtime_builder builder;
     asx_status st;
 
+    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
     if (rt == NULL) return ASX_E_INVALID_ARGUMENT;
 
     st = asx_runtime_builder_init(&builder);
@@ -281,7 +288,7 @@ asx_status asx_runtime_init_from_env(asx_runtime *rt, const char *prefix) {
     st = asx_runtime_builder_apply_env(&builder, prefix);
     if (st != ASX_OK) return st;
 
-    return asx_runtime_builder_build(&builder, rt);
+    return asx_runtime_builder_build_checked(&builder, rt, application_fingerprint);
 }
 
 void asx_runtime_shutdown(asx_runtime *rt) {

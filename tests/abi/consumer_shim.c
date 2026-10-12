@@ -27,6 +27,67 @@
 /* Only public headers — simulates an external consumer */
 #include <asx/asx.h>
 
+asx_status asx_abi_host_start(void);
+asx_status asx_abi_host_finish(void);
+
+#ifdef ASX_ABI_MATCHED_HOST
+
+/* This translation unit is compiled with the library's options, while the
+ * consumer below is compiled independently with a deliberate mismatch. */
+static asx_runtime host_runtime;
+static asx_region_id host_region;
+static asx_task_id host_task;
+static asx_obligation_id host_obligation;
+static unsigned int host_polls;
+
+static asx_status host_poll(void *user_data, asx_task_id self) {
+    (void)user_data;
+    (void)self;
+    host_polls++;
+    return asx_obligation_abort(host_obligation);
+}
+
+asx_status asx_abi_host_start(void) {
+    asx_status st;
+    host_polls = 0u;
+    st = asx_runtime_init_default(&host_runtime);
+    if (st != ASX_OK) return st;
+    st = asx_region_open(&host_region);
+    if (st != ASX_OK) return st;
+    st = asx_task_spawn(host_region, host_poll, NULL, &host_task);
+    if (st != ASX_OK) return st;
+    return asx_obligation_reserve(host_region, &host_obligation);
+}
+
+asx_status asx_abi_host_finish(void) {
+    asx_task_state task_state;
+    asx_obligation_state obligation_state;
+    asx_budget budget;
+    asx_status st;
+
+    if (!asx_runtime_is_initialized(&host_runtime) || host_polls != 0u) return ASX_E_INVALID_STATE;
+    st = asx_task_get_state(host_task, &task_state);
+    if (st != ASX_OK || task_state != ASX_TASK_CREATED) return ASX_E_INVALID_STATE;
+    st = asx_obligation_get_state(host_obligation, &obligation_state);
+    if (st != ASX_OK || obligation_state != ASX_OBLIGATION_RESERVED) return ASX_E_INVALID_STATE;
+    budget = asx_budget_from_polls(64u);
+    st = asx_scheduler_run(host_region, &budget);
+    if (st != ASX_OK || host_polls != 1u) return ASX_E_INVALID_STATE;
+    st = asx_task_get_state(host_task, &task_state);
+    if (st != ASX_OK || task_state != ASX_TASK_COMPLETED) return ASX_E_INVALID_STATE;
+    st = asx_obligation_get_state(host_obligation, &obligation_state);
+    if (st != ASX_OK || obligation_state != ASX_OBLIGATION_ABORTED) return ASX_E_INVALID_STATE;
+    st = asx_region_close(host_region);
+    if (st != ASX_OK) return st;
+    budget = asx_budget_from_polls(64u);
+    st = asx_region_drain(host_region, &budget);
+    if (st != ASX_OK || !asx_runtime_is_quiescent(&host_runtime)) return ASX_E_INVALID_STATE;
+    asx_runtime_shutdown(&host_runtime);
+    return ASX_OK;
+}
+
+#else
+
 static int failures = 0;
 static int passes = 0;
 
@@ -67,7 +128,7 @@ static void test_abi_version(void) {
     SHIM_CHECK(ASX_API_VERSION_PATCH >= 0, "API patch defined");
 
     /* ABI check macro compiles */
-    ASX_ABI_CHECK(1);
+    ASX_ABI_CHECK(2);
 }
 
 /* --- Handle type sizes --- */
@@ -167,10 +228,11 @@ static void test_symbol_resolution(void) {
     SHIM_CHECK(asx_handle_is_valid(ASX_INVALID_ID) == 0, "invalid handle not valid");
 
     /* Runtime object surface */
-    SHIM_CHECK(asx_runtime_init != NULL, "asx_runtime_init resolves");
-    SHIM_CHECK(asx_runtime_init_default != NULL, "asx_runtime_init_default resolves");
+    SHIM_CHECK(asx_runtime_init_checked != NULL, "asx_runtime_init_checked resolves");
+    SHIM_CHECK(asx_runtime_init_default_checked != NULL,
+               "asx_runtime_init_default_checked resolves");
     SHIM_CHECK(asx_runtime_shutdown != NULL, "asx_runtime_shutdown resolves");
-    SHIM_CHECK(asx_runtime_config_init != NULL, "asx_runtime_config_init resolves");
+    SHIM_CHECK(asx_runtime_config_init_checked != NULL, "asx_runtime_config_init_checked resolves");
 
     /* Actor + supervision surface */
     SHIM_CHECK(asx_actor_spawn != NULL, "asx_actor_spawn resolves");
@@ -383,9 +445,183 @@ static void test_actor_surface_smoke(void) {
 
 /* --- Main --- */
 
-int main(void) {
+static void test_runtime_creation_fingerprint(void) {
+    asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_runtime_builder builder;
+    asx_region_id region;
+    asx_task_id task;
+    asx_task_state state;
+    asx_budget budget;
+    asx_status st;
+    unsigned int path;
+
+    SHIM_CHECK(ASX_CONFIG_FINGERPRINT == asx_runtime_config_fingerprint(),
+               "application and library fingerprints match");
+    SHIM_CHECK(asx_runtime_config_init(&cfg) == ASX_OK, "matching config initializes");
+    SHIM_CHECK(asx_runtime_hooks_init(&hooks) == ASX_OK, "matching hooks initialize");
+    SHIM_CHECK(asx_runtime_builder_init(&builder) == ASX_OK, "matching builder initializes");
+    for (path = 0u; path < 4u; path++) {
+        if (path == 0u)
+            st = asx_runtime_init(&rt, &cfg, &hooks);
+        else if (path == 1u)
+            st = asx_runtime_init_default(&rt);
+        else if (path == 2u)
+            st = asx_runtime_init_from_env(&rt, "ASX_ABI_CONSUMER_");
+        else
+            st = asx_runtime_builder_build(&builder, &rt);
+        SHIM_CHECK(st == ASX_OK, "matching creation path starts runtime");
+        if (st != ASX_OK) continue;
+        SHIM_CHECK(asx_region_open(&region) == ASX_OK, "creation path opens region");
+        SHIM_CHECK(asx_task_spawn(region, noop_poll, NULL, &task) == ASX_OK,
+                   "creation path spawns real task");
+        budget = asx_budget_from_polls(64u);
+        SHIM_CHECK(asx_scheduler_run(region, &budget) == ASX_OK,
+                   "creation path executes scheduler");
+        SHIM_CHECK(asx_task_get_state(task, &state) == ASX_OK && state == ASX_TASK_COMPLETED,
+                   "creation path completes task");
+        SHIM_CHECK(asx_region_close(region) == ASX_OK, "creation path closes region");
+        budget = asx_budget_from_polls(64u);
+        SHIM_CHECK(asx_region_drain(region, &budget) == ASX_OK, "creation path drains region");
+        SHIM_CHECK(asx_runtime_is_quiescent(&rt), "creation path reaches quiescence");
+        asx_runtime_shutdown(&rt);
+    }
+}
+
+static void test_mismatched_creation(void) {
+    /* Surround every object with canaries. In particular, run the ordinary
+     * preparatory constructors: a packed consumer must be refused before
+     * any library-sized memset or field access, not only at final init. */
+    struct {
+        unsigned char before[32];
+        asx_runtime rt;
+        asx_runtime_config cfg;
+        asx_runtime_hooks hooks;
+        asx_runtime_builder builder;
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+        asx_app app;
+        asx_app_config app_config;
+#endif
+#ifdef ASX_RUNTIME_LAB_H
+        asx_lab lab;
+        asx_lab_config lab_config;
+#endif
+        unsigned char after[32];
+    } objects;
+    unsigned char saved[sizeof(objects)];
+
+    memset(&objects, 0xa5, sizeof(objects));
+    memcpy(saved, &objects, sizeof(objects));
+    SHIM_CHECK(asx_abi_host_start() == ASX_OK,
+               "matching host starts a runtime with a live task and reserved obligation");
+    SHIM_CHECK(ASX_CONFIG_FINGERPRINT != asx_runtime_config_fingerprint(),
+               "separately compiled consumer fingerprint differs");
+    SHIM_CHECK(asx_runtime_config_init(&objects.cfg) == ASX_E_CONFIG_MISMATCH,
+               "mismatched config constructor refuses");
+    SHIM_CHECK(asx_runtime_hooks_init(&objects.hooks) == ASX_E_CONFIG_MISMATCH,
+               "mismatched hook constructor refuses");
+    SHIM_CHECK(asx_runtime_builder_init(&objects.builder) == ASX_E_CONFIG_MISMATCH,
+               "mismatched default builder constructor refuses");
+    SHIM_CHECK(asx_runtime_builder_init_current_thread(&objects.builder) == ASX_E_CONFIG_MISMATCH,
+               "mismatched current-thread builder constructor refuses");
+    SHIM_CHECK(asx_runtime_builder_init_low_latency(&objects.builder) == ASX_E_CONFIG_MISMATCH,
+               "mismatched low-latency builder constructor refuses");
+    SHIM_CHECK(asx_runtime_builder_init_high_throughput(&objects.builder) == ASX_E_CONFIG_MISMATCH,
+               "mismatched high-throughput builder constructor refuses");
+    SHIM_CHECK(asx_runtime_init(&objects.rt, &objects.cfg, &objects.hooks) == ASX_E_CONFIG_MISMATCH,
+               "mismatched explicit creation refuses");
+    SHIM_CHECK(asx_runtime_init_default(&objects.rt) == ASX_E_CONFIG_MISMATCH,
+               "mismatched default creation refuses");
+    SHIM_CHECK(asx_runtime_init_from_env(&objects.rt, "ASX_ABI_CONSUMER_") == ASX_E_CONFIG_MISMATCH,
+               "mismatched environment creation refuses");
+    SHIM_CHECK(asx_runtime_builder_build(&objects.builder, &objects.rt) == ASX_E_CONFIG_MISMATCH,
+               "mismatched builder creation refuses");
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+    SHIM_CHECK(asx_app_init(&objects.app, &objects.app_config) == ASX_E_CONFIG_MISMATCH,
+               "mismatched application creation refuses");
+#endif
+#ifdef ASX_RUNTIME_LAB_H
+    SHIM_CHECK(asx_lab_config_init(&objects.lab_config) == ASX_E_CONFIG_MISMATCH,
+               "mismatched lab config constructor refuses");
+    SHIM_CHECK(asx_lab_init(&objects.lab, &objects.lab_config) == ASX_E_CONFIG_MISMATCH,
+               "mismatched lab creation refuses");
+    SHIM_CHECK(asx_lab_reset(&objects.lab) == ASX_E_CONFIG_MISMATCH,
+               "mismatched lab reconstruction refuses");
+    {
+        asx_snapshot_id invalid_snapshot = {UINT32_MAX};
+        SHIM_CHECK(asx_snapshot_restore(&objects.lab, invalid_snapshot) == ASX_E_CONFIG_MISMATCH,
+                   "mismatched snapshot reconstruction refuses before inspecting lab or ID");
+    }
+#endif
+    SHIM_CHECK(memcmp(saved, &objects, sizeof(objects)) == 0,
+               "mismatched constructors preserve every object and both canaries");
+    SHIM_CHECK(asx_abi_host_finish() == ASX_OK,
+               "matching host preserves its live work, completes task and resolves obligation");
+}
+
+static void test_higher_level_creation(void) {
+#if ASX_HAS_NATIVE_RUNTIME_SURFACES
+    asx_app app;
+    asx_app_config app_config = {"fingerprint", 64u};
+    SHIM_CHECK(asx_app_init(&app, &app_config) == ASX_OK, "matching application starts");
+    SHIM_CHECK(asx_app_run(&app, noop_poll, NULL) == ASX_EXIT_OK,
+               "matching application executes main task");
+    asx_app_shutdown(&app);
+#endif
+#ifdef ASX_RUNTIME_LAB_H
+    {
+        asx_lab lab;
+        asx_lab_config config;
+        asx_snapshot_id snapshot;
+        asx_region_id region;
+        asx_task_id task;
+        asx_task_state state;
+        asx_budget budget;
+        SHIM_CHECK(asx_lab_config_init(&config) == ASX_OK, "matching lab config initializes");
+        SHIM_CHECK(asx_lab_init(&lab, &config) == ASX_OK, "matching lab starts");
+        SHIM_CHECK(asx_snapshot_take(&lab, &snapshot) == ASX_OK, "matching lab saves snapshot");
+        SHIM_CHECK(asx_snapshot_restore(&lab, snapshot) == ASX_OK,
+                   "matching snapshot reconstructs lab");
+        SHIM_CHECK(asx_lab_reset(&lab) == ASX_OK, "matching lab resets");
+        SHIM_CHECK(asx_region_open(&region) == ASX_OK, "reconstructed lab opens region");
+        SHIM_CHECK(asx_task_spawn(region, noop_poll, NULL, &task) == ASX_OK,
+                   "reconstructed lab spawns task");
+        budget = asx_budget_from_polls(64u);
+        SHIM_CHECK(asx_lab_run(&lab, region, &budget) == ASX_OK, "reconstructed lab executes task");
+        SHIM_CHECK(asx_task_get_state(task, &state) == ASX_OK && state == ASX_TASK_COMPLETED,
+                   "reconstructed lab completes task");
+        SHIM_CHECK(asx_region_close(region) == ASX_OK, "reconstructed lab closes region");
+        budget = asx_budget_from_polls(64u);
+        SHIM_CHECK(asx_region_drain(region, &budget) == ASX_OK && asx_runtime_is_quiescent(&lab.rt),
+                   "reconstructed lab drains to quiescence");
+        SHIM_CHECK(asx_snapshot_discard(snapshot) == ASX_OK, "snapshot is released");
+        asx_lab_shutdown(&lab);
+    }
+#endif
+}
+
+int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--ghost-enabled") == 0) {
+#if defined(ASX_DEBUG_GHOST) && ASX_DEBUG_GHOST
+        puts("1");
+#else
+        puts("0");
+#endif
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--browser-io-enabled") == 0) {
+        printf("%d\n", ASX_HAS_BROWSER_IO);
+        return 0;
+    }
     fprintf(stderr, "[asx-consumer-shim] ABI/API stability consumer shim test (bd-56t.4)\n\n");
 
+    if (argc == 2 && strcmp(argv[1], "--expect-mismatch") == 0) {
+        test_mismatched_creation();
+        fprintf(stderr, "[asx-consumer-shim] mismatch: %d passed, %d failed\n", passes, failures);
+        return failures > 0 ? 1 : 0;
+    }
+    if (argc != 1) return 2;
     test_abi_version();
     test_handle_sizes();
     test_frozen_enums();
@@ -394,8 +630,13 @@ int main(void) {
     test_typed_symbol_surface();
     test_lifecycle_smoke();
     test_actor_surface_smoke();
+    asx_runtime_reset();
+    test_runtime_creation_fingerprint();
+    test_higher_level_creation();
 
     fprintf(stderr, "\n[asx-consumer-shim] %d passed, %d failed\n", passes, failures);
 
     return failures > 0 ? 1 : 0;
 }
+
+#endif /* ASX_ABI_MATCHED_HOST */

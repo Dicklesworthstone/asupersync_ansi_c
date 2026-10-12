@@ -49,7 +49,10 @@ extern "C" {
  * with deterministic shutdown/drain semantics lands.
  *
  * Returns ASX_OK on success, ASX_E_INVALID_ARGUMENT if hooks is NULL. */
-ASX_API ASX_MUST_USE asx_status asx_win32_hooks_install(asx_runtime_hooks *hooks);
+ASX_API ASX_MUST_USE asx_status asx_win32_hooks_install_checked(asx_runtime_hooks *hooks,
+                                                                uint64_t application_fingerprint);
+#define asx_win32_hooks_install(hooks)                                                             \
+    asx_win32_hooks_install_checked((hooks), ASX_CONFIG_FINGERPRINT)
 
 /* Legacy external-linkage clock/entropy primitives. Prefer using
  * asx_win32_hooks_install() which sets all hooks at once. */

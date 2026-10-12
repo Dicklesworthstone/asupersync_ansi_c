@@ -308,7 +308,7 @@ table covers all 67 C codes. Each row is one of three things:
 | `ASX_E_OBJECT_MISMATCH` (1402) | `ErrorKind::ObjectMismatch` | exact |
 | `ASX_E_CORRUPTED_SYMBOL` (1403) | `ErrorKind::CorruptedSymbol` | exact |
 | `ASX_E_REPLAY_MISMATCH` (1500) | — | C-only |
-| `ASX_E_CONFIG_FROZEN`, `ASX_E_CONFIG_RESTART_REQ` (1600–1601) | `ErrorKind::ConfigError` | lossy |
+| `ASX_E_CONFIG_FROZEN`, `ASX_E_CONFIG_RESTART_REQ`, `ASX_E_CONFIG_MISMATCH` (1600–1602) | `ErrorKind::ConfigError` | lossy; build mismatch is a C startup error outside scenario execution |
 | `ASX_E_PERMISSION_DENIED` (1700) | — | C-only: capability masks (Rust's `Cx::spawn` mask returns `RuntimeUnavailable`, row 401) |
 
 Rust values reachable through DSL v2 that have no row above, and how they

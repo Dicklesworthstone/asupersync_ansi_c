@@ -26,6 +26,7 @@
 #ifndef ASX_CORE_BROADCAST_H
 #define ASX_CORE_BROADCAST_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -35,12 +36,6 @@
 extern "C" {
 #endif
 
-#ifndef ASX_MAX_BROADCASTS
-#define ASX_MAX_BROADCASTS 8u
-#endif
-#ifndef ASX_BROADCAST_MAX_CAPACITY
-#define ASX_BROADCAST_MAX_CAPACITY 32u
-#endif
 #if (ASX_MAX_BROADCASTS) < 1 || (ASX_BROADCAST_MAX_CAPACITY) < 1
 #error "ASX_MAX_BROADCASTS and ASX_BROADCAST_MAX_CAPACITY must be at least 1"
 #endif

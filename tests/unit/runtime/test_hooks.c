@@ -922,16 +922,13 @@ TEST(fault_entropy_const_overrides) {
 /* Config init                                                         */
 /* ------------------------------------------------------------------ */
 
-TEST(config_init_null_safe) {
-    /* Should not crash */
-    asx_runtime_config_init(NULL);
-}
+TEST(config_init_null_safe) { ASSERT_EQ(asx_runtime_config_init(NULL), ASX_E_INVALID_ARGUMENT); }
 
 TEST(config_init_sets_defaults) {
     asx_runtime_config cfg;
     memset(&cfg, 0xFF, sizeof(cfg));
 
-    asx_runtime_config_init(&cfg);
+    ASSERT_EQ(asx_runtime_config_init(&cfg), ASX_OK);
     ASSERT_EQ(cfg.size, (uint32_t)sizeof(cfg));
     ASSERT_EQ(cfg.leak_response, (asx_leak_response)ASX_LEAK_LOG);
     ASSERT_EQ(cfg.finalizer_poll_budget, 100u);

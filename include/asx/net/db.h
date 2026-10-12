@@ -26,34 +26,6 @@ extern "C" {
  * Database configuration and types
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_DB_MAX_CONNECTIONS
-#define ASX_DB_MAX_CONNECTIONS 4u
-#endif
-
-#ifndef ASX_DB_MAX_COLUMNS
-#define ASX_DB_MAX_COLUMNS 16u
-#endif
-
-#ifndef ASX_DB_MAX_ROWS
-#define ASX_DB_MAX_ROWS 64u
-#endif
-
-#ifndef ASX_DB_COLUMN_NAME_MAX
-#define ASX_DB_COLUMN_NAME_MAX 32u
-#endif
-
-#ifndef ASX_DB_CELL_MAX
-#define ASX_DB_CELL_MAX 128u
-#endif
-
-#ifndef ASX_DB_QUERY_MAX
-#define ASX_DB_QUERY_MAX 512u
-#endif
-
-#ifndef ASX_DB_DSN_MAX
-#define ASX_DB_DSN_MAX 128u
-#endif
-
 typedef enum {
     ASX_DB_TYPE_NULL = 0,
     ASX_DB_TYPE_INT = 1,

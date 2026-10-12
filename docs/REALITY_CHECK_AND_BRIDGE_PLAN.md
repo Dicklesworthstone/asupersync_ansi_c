@@ -440,11 +440,35 @@ the comparison policy and all runtime/fixture bytes.
 - [x] Compare actual old Debug and corrected Clang release normal/2,048-byte malformed diagnostics byte-for-byte; statuses remain 0/1, with exactly one malformed-value failure.
 - [x] Verify matching normal/malformed diagnostics and corrupted-expectation controls on GCC and Clang. Genuine old optimized GCC compilation fails on the preserved warning; malformed-value controls are not runtime parity credit. Root's initial nonexistent-fixture probe is preserved/excluded, followed by the actual valid corruption control.
 - [x] Obtain independent exact-`e8b0fe63` acceptance and close only `bd-mxeq` (PinkOwl, comment 254, `2026-10-12T14:32:55.501804516Z`); all other issue rows and prior history are unchanged.
-- [ ] Publish/synchronize the accepted release-CLI repair and inspect its own hosted outcomes; the prior generator CI does not certify a newer SHA. Original performance/full-project acceptance stays unfinished.
+- [x] Publish/synchronize `2aed8d54` to both remote branches and the primary checkout; its own hosted main CI `38265458208` completes all 30 jobs successfully. Its separate performance run `38265458215` fails. Original performance/full-project acceptance stays unfinished.
 
 Current tracker after these narrow closures still has 115 unfinished items.
 No kernel-completion, physical-device, all-performance-green or release claim
 follows from these repairs.
+
+### Application/library configuration identity, `bd-9kll.10.8`
+
+The remaining RB8 gap is startup with incompatible application and library
+compile-time options. Keep the original examples, doctor and scheduler
+documentation criteria intact. Preserve the config/hooks struct layouts;
+replace unchecked creation exports with checked entry points under ABI major 2.
+Public header macros pass the application's fingerprint through explicit,
+default, environment and builder initialization. Rejection must precede all
+object reads/writes and singleton changes. This does not provide independent
+runtime-owned storage or change canonical scenario semantics.
+
+- [x] Claim the original Bead; record the direct ABI decision and complete original criteria.
+- [x] Add checked creation entry points and actionable configuration-mismatch status.
+- [x] Centralize 206 effective resource/layout values manually, preserving classes and overrides; fixed lanes and diagnostic buffers stay fixed.
+- [x] Bind profile, codec, determinism, ghost mode, every ASX_MAX, public layout limits and complete bootstrap size/alignment/member offsets to the application fingerprint.
+- [x] Guard preparatory config/hooks/all builder preset constructors and platform hook installers too; packed caller objects must be refused before library-sized writes. Config init now returns a status; unchecked legacy exports are removed.
+- [x] Draft matching external consumers execute real tasks through all four creation paths.
+- [x] Draft 47 separately compiled mismatched consumers each pass all 14 assertions, including canaries and complete object preservation. Effective ghost/browser settings select the opposite variant; no warnings or assertions are suppressed.
+- [x] Every draft mismatch runs with a separately compiled matching host holding a live task and reserved obligation, then executes completion/abort/closure/quiescence. The literal wrong-stamp unit is additional coverage, not the mixed-translation-unit proof.
+- [ ] Repair the original custom-BUILD_DIR constants-control runner path without changing assertions; execute its eight controls in both layouts.
+- [ ] Run strict GCC/Clang, full core tests, all 167 canonical comparisons, pinned format/lint, fixture/document integrity and all gate controls.
+- [ ] Reverify strict example builds, CORE doctor and actual live POSIX platform probes against the original acceptance criteria.
+- [ ] Obtain independent exact-revision review, close only fully completed original RB8, synchronize Beads and publish.
 
 ## Assessment at the audited revision
 

@@ -73,7 +73,7 @@ The Rust channel uses **implicit state encoding** via atomic fields (no explicit
 
 **Monotonicity:** `receiver_dropped` goes `false -> true` once (comment at `mpsc.rs:304-305`; set by `Receiver::close`, `mpsc.rs:1698-1711`, and `Drop for Receiver`, `mpsc.rs:2122-2149`). `sender_count` is not decrement-only: `Sender::clone` increments it (`mpsc.rs:1231-1239`) and `WeakSender::upgrade` increments it but refuses to raise it from 0 (`mpsc.rs:1269-1300`). Once it reaches 0 it stays 0.
 
-**C status:** implemented with an explicit state enum, `ASX_CHANNEL_OPEN / SENDER_CLOSED / RECEIVER_CLOSED / FULLY_CLOSED` (`include/asx/core/channel.h:68-73`). The channel starts with one sender (`src/channel/mpsc.c:453`); `asx_channel_sender_clone` adds one while the sender side is live and refuses once the count reached 0 (`src/channel/mpsc.c:476-489`). Keeping the bare channel id without counting it represents a weak sender; upgrading uses the same clone operation, including after the receiver closes (`include/asx/core/channel.h:107-122`). Each `asx_channel_close_sender` drops one reference: only the last moves `OPEN -> SENDER_CLOSED` or `RECEIVER_CLOSED -> FULLY_CLOSED`, and a drop after the sender side has closed returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:491-525`). C supplies no Rust type-level sender ownership. The scenario `mpsc-counted-senders-close-at-last-drop-001` records a first producer's drop, a second producer's later successful send, and disconnect only after the last sender drops.
+**C status:** implemented with an explicit state enum, `ASX_CHANNEL_OPEN / SENDER_CLOSED / RECEIVER_CLOSED / FULLY_CLOSED` (`include/asx/core/channel.h:58-63`). The channel starts with one sender (`src/channel/mpsc.c:453`); `asx_channel_sender_clone` adds one while the sender side is live and refuses once the count reached 0 (`src/channel/mpsc.c:476-489`). Keeping the bare channel id without counting it represents a weak sender; upgrading uses the same clone operation, including after the receiver closes (`include/asx/core/channel.h:97-112`). Each `asx_channel_close_sender` drops one reference: only the last moves `OPEN -> SENDER_CLOSED` or `RECEIVER_CLOSED -> FULLY_CLOSED`, and a drop after the sender side has closed returns `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:491-525`). C supplies no Rust type-level sender ownership. The scenario `mpsc-counted-senders-close-at-last-drop-001` records a first producer's drop, a second producer's later successful send, and disconnect only after the last sender drops.
 
 ### 1.2 Capacity Model
 
@@ -89,7 +89,7 @@ Both queued messages and reserved (uncommitted) permits consume capacity.
 
 **Rust source:** `mpsc.rs:564-579` (`channel`, `assert!(capacity > 0)` at `:565`), `mpsc.rs:351-359` (`used_slots`, `has_capacity`), `mpsc.rs:307-309` (write-once `capacity`). `unbounded_channel` is `channel(usize::MAX)` (`mpsc.rs:599-600`).
 
-**C status:** implemented. Capacity 0 or above `ASX_CHANNEL_MAX_CAPACITY` (default 64, `include/asx/core/channel.h:57-59`) returns `ASX_E_INVALID_ARGUMENT` instead of panicking (`src/channel/mpsc.c:430`). A reserve is refused when `queue_len + reserved >= capacity` (`mpsc.c:677-679`; lock-free backend `mpsc.c:675`, `channel_lf_claim_capacity`). There is no unbounded channel. Unit tests: `tests/unit/channel/test_mpsc.c` `capacity_enforcement`, `capacity_mixed_reserved_and_queued`, `create_zero_capacity`.
+**C status:** implemented. Capacity 0 or above `ASX_CHANNEL_MAX_CAPACITY` (default 64, `include/asx/asx_config.h:362-363`) returns `ASX_E_INVALID_ARGUMENT` instead of panicking (`src/channel/mpsc.c:430`). A reserve is refused when `queue_len + reserved >= capacity` (`mpsc.c:677-679`; lock-free backend `mpsc.c:675`, `channel_lf_claim_capacity`). There is no unbounded channel. Unit tests: `tests/unit/channel/test_mpsc.c` `capacity_enforcement`, `capacity_mixed_reserved_and_queued`, `create_zero_capacity`.
 
 ### 1.3 Two-Phase Send Protocol (Reserve/Send/Abort)
 
@@ -270,7 +270,7 @@ The `session` module wraps the base channel with an `ObligationToken` per permit
 
 `#[must_use]` is on both `SendPermit` (`mpsc.rs:1460`) and `TrackedPermit` (`session.rs:404`). A base permit from `reserve`/`reserve_checked` carries a runtime obligation; one from `try_reserve` does not (doc comment `mpsc.rs:1467-1470`).
 
-**C status:** `TrackedSender`/`TrackedPermit` and the leak panic: spec (Rust) — not implemented in C (`src/channel/session.c` is a different, bidirectional session channel; `include/asx/core/session.h:1-14`). The base-permit obligation is implemented: `asx_send_permit` has an `obligation` field (`include/asx/core/channel.h:79-93`), registered by `asx_channel_reserve` (`src/channel/mpsc.c:1035-1059`), committed on send (`:807`), aborted `Explicit` on abort (`:848-850`) and `Error` on disconnect (`:784`). Rust parity: `mpsc-two-phase-send-recv-001` (its trace records `obligation.reserved` and `obligation.committed` of kind `SendPermit` for both sends).
+**C status:** `TrackedSender`/`TrackedPermit` and the leak panic: spec (Rust) — not implemented in C (`src/channel/session.c` is a different, bidirectional session channel; `include/asx/core/session.h:1-14`). The base-permit obligation is implemented: `asx_send_permit` has an `obligation` field (`include/asx/core/channel.h:69-83`), registered by `asx_channel_reserve` (`src/channel/mpsc.c:1035-1059`), committed on send (`:807`), aborted `Explicit` on abort (`:848-850`) and `Error` on disconnect (`:784`). Rust parity: `mpsc-two-phase-send-recv-001` (its trace records `obligation.reserved` and `obligation.committed` of kind `SendPermit` for both sends).
 
 Typed permit settlement authenticates the channel/token binding through `asx_obligation_check_token_internal` (`src/runtime/lifecycle.c:1962-1982`) and resolves through `asx_obligation_resolve_token_internal` (`src/runtime/lifecycle.c:1984-2003`), as called by `channel_permit_resolve` (`src/channel/mpsc.c:736-748`). A genuine permit may move to another task while retaining its original holder's ledger liability; a plain move does not transfer that holder or region. Raw owned-obligation IDs retain holder-poll authority checks (`asx_obligation_check_access_internal`, `src/runtime/lifecycle.c:1924-1960`); knowing an ID alone does not authenticate a physical permit. This is C source evidence, not Rust type-level or new handoff fixture coverage.
 
@@ -317,7 +317,7 @@ The receiver drains queued messages after all senders drop: `Ok(value)` until th
 
 ## 2. Timer Wheel Semantics
 
-**C status (whole section):** the Rust hierarchical wheel is not ported. `src/time/timer_wheel.c` is a flat arena of `ASX_MAX_TIMERS` slots (default 128, `include/asx/time/timer_wheel.h:27-32`); its header says the hierarchical wheel is a future upgrade (`timer_wheel.c:1-10`). Its only users are deadline helpers (`src/time/deadline.c:45`, `:57`). Task sleeps do not use it: they use the scheduler's timer min-heap keyed by (deadline, arm sequence) (`src/runtime/scheduler.c:21-22`, `:101-106`), and under lab dispatch due sleep timers fire in (1 ms tick, registration) order to match the Rust wheel (`scheduler.c:256-325`; the comment there limits this to timers within level 0's 256 ms).
+**C status (whole section):** the Rust hierarchical wheel is not ported. `src/time/timer_wheel.c` is a flat arena of `ASX_MAX_TIMERS` slots (default 128, `include/asx/asx_config.h:277-283`); its header says the hierarchical wheel is a future upgrade (`timer_wheel.c:1-10`). Its only users are deadline helpers (`src/time/deadline.c:45`, `:57`). Task sleeps do not use it: they use the scheduler's timer min-heap keyed by (deadline, arm sequence) (`src/runtime/scheduler.c:21-22`, `:101-106`), and under lab dispatch due sleep timers fire in (1 ms tick, registration) order to match the Rust wheel (`scheduler.c:256-325`; the comment there limits this to timers within level 0's 256 ms).
 
 ### 2.1 Structure: 4-Level Hierarchical Wheel
 
@@ -350,7 +350,7 @@ TimerEntry {             // wheel.rs:245-250
 
 Active timers are tracked in `active: slab::Slab<u64>` indexed by `id` and holding the generation (`wheel.rs:258`, field at `:396`), not in a `HashMap`.
 
-**C status:** `asx_timer_slot { deadline, waker_data, insertion_seq, generation (uint32_t), alive }` (`src/time/timer_wheel.c:26-32`); handle `{ slot, generation }`, both `uint32_t` (`include/asx/time/timer_wheel.h:48-51`).
+**C status:** `asx_timer_slot { deadline, waker_data, insertion_seq, generation (uint32_t), alive }` (`src/time/timer_wheel.c:26-32`); handle `{ slot, generation }`, both `uint32_t` (`include/asx/time/timer_wheel.h:42-45`).
 
 ### 2.3 Insert Semantics
 
@@ -370,7 +370,7 @@ register(deadline, waker) -> TimerHandle
 
 **Duplicate handling:** no deduplication. Timers with the same deadline in the same slot keep `Vec::push` order.
 
-**C status:** partly implemented. `asx_timer_register` (`src/time/timer_wheel.c:139-168`) returns `ASX_E_TIMER_DURATION_EXCEEDED` when `deadline - current > max_duration` (`:118-121`, `:145`); the default maximum is Rust's 7 days (`ASX_TIMER_MAX_DURATION_NS`, `include/asx/time/timer_wheel.h:38-40`; 24 h before 2026-10-10), and `asx_timer_set_max_duration` changes it (`timer_wheel.c:302-305`). There is no clamping variant. A registration takes the first dead slot or a new one (`:147-164`) and fails with `ASX_E_RESOURCE_EXHAUSTED` when every slot is live (`:162`); it records a monotonic `insertion_seq` and advances the slot's generation (`:124-137`). No levels, ready vector or overflow heap. Unit tests: `tests/unit/time/test_timer_wheel.c` `timer_duration_exceeded`, `timer_resource_exhaustion`, `timer_slot_recycling_after_cancel`.
+**C status:** partly implemented. `asx_timer_register` (`src/time/timer_wheel.c:139-168`) returns `ASX_E_TIMER_DURATION_EXCEEDED` when `deadline - current > max_duration` (`:118-121`, `:145`); the default maximum is Rust's 7 days (`ASX_TIMER_MAX_DURATION_NS`, `include/asx/time/timer_wheel.h:31-33`; 24 h before 2026-10-10), and `asx_timer_set_max_duration` changes it (`timer_wheel.c:302-305`). There is no clamping variant. A registration takes the first dead slot or a new one (`:147-164`) and fails with `ASX_E_RESOURCE_EXHAUSTED` when every slot is live (`:162`); it records a monotonic `insertion_seq` and advances the slot's generation (`:124-137`). No levels, ready vector or overflow heap. Unit tests: `tests/unit/time/test_timer_wheel.c` `timer_duration_exceeded`, `timer_resource_exhaustion`, `timer_slot_recycling_after_cancel`.
 
 ### 2.4 Fire Semantics
 
@@ -428,7 +428,7 @@ TimerHandle { id: u64, generation: u64 }   // wheel.rs:225-228
 
 **Rust source:** `wheel.rs:80-105` (`TimerWheelConfig`), `wheel.rs:137-165` (`CoalescingConfig`)
 
-**C status:** only a maximum duration, default 7 days, Rust's `max_timer_duration` (`include/asx/time/timer_wheel.h:38-40`; 24 h before 2026-10-10), settable with `asx_timer_set_max_duration` (`src/time/timer_wheel.c:302-305`).
+**C status:** only a maximum duration, default 7 days, Rust's `max_timer_duration` (`include/asx/time/timer_wheel.h:31-33`; 24 h before 2026-10-10), settable with `asx_timer_set_max_duration` (`src/time/timer_wheel.c:302-305`).
 
 ### 2.8 Timer Ordering Within Deadline
 

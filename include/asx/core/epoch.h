@@ -14,6 +14,7 @@
 #ifndef ASX_CORE_EPOCH_H
 #define ASX_CORE_EPOCH_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -24,12 +25,6 @@
 extern "C" {
 #endif
 
-#ifndef ASX_MAX_EPOCHS
-#define ASX_MAX_EPOCHS 16u
-#endif
-#ifndef ASX_MAX_EPOCH_OBSERVERS
-#define ASX_MAX_EPOCH_OBSERVERS 8u
-#endif
 #if (ASX_MAX_EPOCHS) < 1 || (ASX_MAX_EPOCH_OBSERVERS) < 1
 #error "ASX_MAX_EPOCHS and ASX_MAX_EPOCH_OBSERVERS must be at least 1"
 #endif

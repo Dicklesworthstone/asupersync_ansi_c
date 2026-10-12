@@ -24,13 +24,6 @@ extern "C" {
 
 /* Maximum number of concurrent timers in the wheel (a build-time resource
  * class sizes it when not set explicitly, asx_config.h) */
-#ifndef ASX_MAX_TIMERS
-#ifdef ASX_CLASS_MAX_TIMERS
-#define ASX_MAX_TIMERS ASX_CLASS_MAX_TIMERS
-#else
-#define ASX_MAX_TIMERS 128u
-#endif
-#endif
 #if (ASX_MAX_TIMERS) < 1
 #error "ASX_MAX_TIMERS must be at least 1"
 #endif

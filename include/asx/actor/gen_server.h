@@ -11,6 +11,7 @@
 #ifndef ASX_ACTOR_GEN_SERVER_H
 #define ASX_ACTOR_GEN_SERVER_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -18,14 +19,6 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif
-
-#ifndef ASX_GEN_SERVER_MAILBOX_SIZE
-#define ASX_GEN_SERVER_MAILBOX_SIZE 16u
-#endif
-
-#ifndef ASX_GEN_SERVER_MAX_INSTANCES
-#define ASX_GEN_SERVER_MAX_INSTANCES 8u
 #endif
 
 /* -------------------------------------------------------------------

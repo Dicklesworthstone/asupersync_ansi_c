@@ -70,6 +70,7 @@
 #ifndef ASX_RUNTIME_TASK_GROUP_H
 #define ASX_RUNTIME_TASK_GROUP_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -78,10 +79,6 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif
-
-#ifndef ASX_TASK_GROUP_MAX
-#define ASX_TASK_GROUP_MAX 16u
 #endif
 
 typedef enum {

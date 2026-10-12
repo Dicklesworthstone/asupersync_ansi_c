@@ -11,6 +11,7 @@
 #ifndef ASX_NET_QUIC_H
 #define ASX_NET_QUIC_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
@@ -34,20 +35,8 @@ typedef enum {
 
 typedef enum { ASX_QUIC_STREAM_BIDI = 0, ASX_QUIC_STREAM_UNI = 1 } asx_quic_stream_type;
 
-#ifndef ASX_MAX_QUIC_CONNECTIONS
-#define ASX_MAX_QUIC_CONNECTIONS 4u
-#endif
-
-#ifndef ASX_MAX_QUIC_STREAMS
-#define ASX_MAX_QUIC_STREAMS 16u
-#endif
-
 #if (ASX_MAX_QUIC_CONNECTIONS) < 1 || (ASX_MAX_QUIC_STREAMS) < 1
 #error "ASX_MAX_QUIC_CONNECTIONS and ASX_MAX_QUIC_STREAMS must be at least 1"
-#endif
-
-#ifndef ASX_QUIC_MAX_DGRAM
-#define ASX_QUIC_MAX_DGRAM 1200u
 #endif
 
 /* -------------------------------------------------------------------

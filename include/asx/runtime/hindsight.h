@@ -16,6 +16,7 @@
 #ifndef ASX_RUNTIME_HINDSIGHT_H
 #define ASX_RUNTIME_HINDSIGHT_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -28,9 +29,6 @@ extern "C" {
  * Hindsight ring capacity (configurable at init time)
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_HINDSIGHT_CAPACITY
-#define ASX_HINDSIGHT_CAPACITY 256u
-#endif
 #if (ASX_HINDSIGHT_CAPACITY) < 1
 #error "ASX_HINDSIGHT_CAPACITY must be at least 1"
 #endif
@@ -89,8 +87,6 @@ typedef struct {
  * Receives the ring contents on flush. Fixed-size buffer avoids
  * dynamic allocation; JSON serialization writes into this.
  * ------------------------------------------------------------------- */
-
-#define ASX_HINDSIGHT_FLUSH_BUFFER_SIZE 8192u
 
 typedef struct {
     char data[ASX_HINDSIGHT_FLUSH_BUFFER_SIZE];

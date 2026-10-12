@@ -24,6 +24,7 @@
 #ifndef ASX_TRANSPORT_TRANSPORT_H
 #define ASX_TRANSPORT_TRANSPORT_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <stddef.h>
@@ -136,18 +137,6 @@ ASX_API asx_status asx_transport_close_listener(asx_transport *t, asx_transport_
 /* ------------------------------------------------------------------ */
 
 /* Arena limits for the memory transport. */
-#ifndef ASX_MEM_TRANSPORT_MAX_CONNS
-#define ASX_MEM_TRANSPORT_MAX_CONNS 16u
-#endif
-
-#ifndef ASX_MEM_TRANSPORT_MAX_LISTENERS
-#define ASX_MEM_TRANSPORT_MAX_LISTENERS 4u
-#endif
-
-#ifndef ASX_MEM_TRANSPORT_BUF_SIZE
-#define ASX_MEM_TRANSPORT_BUF_SIZE 1024u
-#endif
-
 typedef struct {
     uint8_t buf[ASX_MEM_TRANSPORT_BUF_SIZE];
     size_t head;  /* read offset */
@@ -251,10 +240,6 @@ ASX_API void asx_framed_transport_reset(asx_framed_transport_state *state);
 /* ------------------------------------------------------------------ */
 /* Reconnecting transport — reconnect on disconnect                    */
 /* ------------------------------------------------------------------ */
-
-#ifndef ASX_RECONNECT_TRANSPORT_MAX_ADDR
-#define ASX_RECONNECT_TRANSPORT_MAX_ADDR 64u
-#endif
 
 typedef struct {
     asx_transport inner;

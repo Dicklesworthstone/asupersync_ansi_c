@@ -209,7 +209,7 @@ Completed         .        .        .           .           .           .
 
 ### 2.4 Task Poll Contract
 
-C has no `ASX_POLL_*` codes (the first extraction named some). A C poll function (`asx_task_poll_fn`, `include/asx/runtime/runtime.h:88`) returns an `asx_status`; the scheduler maps it in `sched_poll_slot` (`src/runtime/scheduler.c:1071`). Rust's equivalent is the `Poll` of the task's future plus the panic catch at the poll boundary.
+C has no `ASX_POLL_*` codes (the first extraction named some). A C poll function (`asx_task_poll_fn`, `include/asx/runtime/runtime.h:63`) returns an `asx_status`; the scheduler maps it in `sched_poll_slot` (`src/runtime/scheduler.c:1071`). Rust's equivalent is the `Poll` of the task's future plus the panic catch at the poll boundary.
 
 | Poll Return | Meaning | State Transition |
 |------------|---------|-----------------|
@@ -225,7 +225,7 @@ C has no `ASX_POLL_*` codes (the first extraction named some). A C poll function
 1. A cancel request moves the task to `CancelRequested` (T2/T4) and wakes it so that it can reach a checkpoint (Rust cancel wakers; C `src/runtime/cancellation.c:307`)
 2. The task acknowledges the cancel at a checkpoint: Rust `Cx::checkpoint` (`src/cx/cx.rs:2749`), C `asx_checkpoint` (`src/runtime/cancellation.c:615`). C has no `asx_is_cancelled` (the first extraction named one); `asx_task_get_cancel_reason` and `asx_task_get_cancel_phase` only read state
 3. Between `CancelRequested` and acknowledgement the task continues with its normal poll logic
-4. A checkpoint with mask depth 0 moves the task to `Cancelling` and its cleanup budget becomes its budget (T7). With mask depth > 0 the cancel stays pending and unacknowledged. Rust and C treat the mask as a nesting depth that unmask releases (`Cx::masked`, `src/cx/cx.rs:3315`; C `src/runtime/cancellation.c:683`, `asx_task_mask`/`asx_task_unmask` at `src/runtime/cancellation.c:734` and `src/runtime/cancellation.c:746`); the spec instead consumes one unit per masked checkpoint (Variant). The depth is bounded by 64 in both (`MAX_MASK_DEPTH`, `src/types/task_context.rs:673`; `ASX_MAX_MASK_DEPTH` (`include/asx/runtime/runtime.h:530`))
+4. A checkpoint with mask depth 0 moves the task to `Cancelling` and its cleanup budget becomes its budget (T7). With mask depth > 0 the cancel stays pending and unacknowledged. Rust and C treat the mask as a nesting depth that unmask releases (`Cx::masked`, `src/cx/cx.rs:3315`; C `src/runtime/cancellation.c:683`, `asx_task_mask`/`asx_task_unmask` at `src/runtime/cancellation.c:734` and `src/runtime/cancellation.c:746`); the spec instead consumes one unit per masked checkpoint (Variant). The depth is bounded by 64 in both (`MAX_MASK_DEPTH`, `src/types/task_context.rs:673`; `ASX_MAX_MASK_DEPTH` (`include/asx/asx_config.h:302`))
 5. The cleanup budget is advisory in Rust: a spent cleanup poll quota only strengthens the reason to `PollQuota` (lab, `src/lab/runtime.rs:4667`), and Rust never force-completes a task. C is the same by default; the opt-in `cleanup_hard_bound` force-completes with `Cancelled` (`src/runtime/scheduler.c:1424`; a deviation excluded from parity, `bd-9kll.3.2`)
 6. A task that completes while `CancelRequested` (or later) does **not** keep its natural outcome: `Ok`/`Err` become `Cancelled(reason)` (T8). The exception is in T8
 
@@ -257,7 +257,7 @@ serialized asynchronous-finalizer barrier.
 
 ### 3.1 States
 
-Rust `ObligationState` is at `src/record/obligation.rs:192`; C `asx_obligation_state` is at `include/asx/asx_ids.h:127`. Rust kinds (`src/record/obligation.rs:54`) are SendPermit, Ack, Lease, IoOp, SemaphorePermit and Transaction (the spec lists the first four); C has the same six plus `ASX_OBLIGATION_KIND_GENERIC` (`include/asx/runtime/runtime.h:743`).
+Rust `ObligationState` is at `src/record/obligation.rs:192`; C `asx_obligation_state` is at `include/asx/asx_ids.h:127`. Rust kinds (`src/record/obligation.rs:54`) are SendPermit, Ack, Lease, IoOp, SemaphorePermit and Transaction (the spec lists the first four); C has the same six plus `ASX_OBLIGATION_KIND_GENERIC` (`include/asx/runtime/runtime.h:715`).
 
 | State | Enum Value | Description |
 |-------|-----------|-------------|
@@ -340,7 +340,7 @@ Rust `CancelPhase` and its rank are at `src/types/cancel.rs:295` and `src/types/
 | `Finalizing` | 2 | `ASX_CANCEL_PHASE_FINALIZING` | Cleanup done; the task is running finalizers |
 | `Completed` | 3 | `ASX_CANCEL_PHASE_COMPLETED` | Task completed with a `Cancelled` outcome |
 
-**Note:** There is no `None` phase. Rust's `TaskRecord::cancel_witness` returns no witness while `cancel_epoch == 0` and none for a task that completed with a non-`Cancelled` outcome (`src/record/task.rs:1053`). The first witness of a stream must carry a non-zero epoch (`validate_initial`, `src/types/cancel.rs:369`). C creates a witness slot on the first cancel of a task (`asx_cancel_witness_create`, `src/core/cancel.c:121`, called from `src/runtime/cancellation.c:147`).
+**Note:** There is no `None` phase. Rust's `TaskRecord::cancel_witness` returns no witness while `cancel_epoch == 0` and none for a task that completed with a non-`Cancelled` outcome (`src/record/task.rs:1053`). The first witness of a stream must carry a non-zero epoch (`validate_initial`, `src/types/cancel.rs:369`). C creates a witness slot on the first cancel of a task (`asx_cancel_witness_create`, `src/core/cancel.c:118`, called from `src/runtime/cancellation.c:147`).
 
 ### 4.2 Legal Phase Transitions
 
@@ -349,7 +349,7 @@ Rust's `CancelWitness::validate_transition` (`src/types/cancel.rs:382`) accepts 
 | From | To | Trigger | Preconditions | Postconditions |
 |------|----|---------|---------------|----------------|
 | (initial) | `Requested` | First cancel request (T2/T4) | Target not terminal | Rust: `cancel_epoch` becomes non-zero. C: witness slot created in phase `Requested` |
-| `Requested` | `Requested` | Further request (T6) | Already CancelRequested | Strengthening only. C's `asx_cancel_witness_advance` is not called for it, and would reject a same-phase advance (`src/core/cancel.c:154`) |
+| `Requested` | `Requested` | Further request (T6) | Already CancelRequested | Strengthening only. C's `asx_cancel_witness_advance` is not called for it, and would reject a same-phase advance (`src/core/cancel.c:151`) |
 | `Requested` | `Cancelling` | Acknowledgement at an unmasked checkpoint (T7) | Mask depth 0 | Cleanup budget becomes the task's budget |
 | `Requested` | `Finalizing` | none | — | Rank-legal for the validator, but no runtime path produces it (Rust and C both forbid the task pair CancelRequested → Finalizing) |
 | `Requested` | `Completed` | Target completes before acknowledging (T8) | — | Outcome `Cancelled(reason)` (not the natural outcome; T8), so the final witness has phase `Completed`. A panic yields `Panicked` and no final witness |
@@ -362,7 +362,7 @@ Rust's `CancelWitness::validate_transition` (`src/types/cancel.rs:382`) accepts 
 
 ### 4.3 Forbidden Phase Transitions
 
-Phase transitions where `next.phase.rank() < prev.phase.rank()`. Rust reports `CancelWitnessError::PhaseRegression` (`src/types/cancel.rs:414`). C never returns `ASX_E_WITNESS_PHASE_REGRESSION` (declared, unused): `asx_cancel_witness_advance` returns `ASX_E_INVALID_TRANSITION` for any advance that does not strictly increase the phase, a repeated phase included (`src/core/cancel.c:154`). Recorded in `bd-9kll.3.7` ("Witness: no region or epoch; rejects a repeated phase").
+Phase transitions where `next.phase.rank() < prev.phase.rank()`. Rust reports `CancelWitnessError::PhaseRegression` (`src/types/cancel.rs:414`). C never returns `ASX_E_WITNESS_PHASE_REGRESSION` (declared, unused): `asx_cancel_witness_advance` returns `ASX_E_INVALID_TRANSITION` for any advance that does not strictly increase the phase, a repeated phase included (`src/core/cancel.c:151`). Recorded in `bd-9kll.3.7` ("Witness: no region or epoch; rejects a repeated phase").
 
 | From | To | Expected Error | Rationale |
 |------|----|----------------|-----------|
@@ -375,7 +375,7 @@ Phase transitions where `next.phase.rank() < prev.phase.rank()`. Rust reports `C
 
 **Note:** The cancellation protocol does NOT have a `None` phase state. In Rust, phase skips (e.g., `Requested` -> `Completed`) pass `validate_transition` because the rank does not decrease; C's advance also accepts a skip, since it only requires a strictly larger phase.
 
-**Additionally forbidden (Rust):** a witness pair whose reason severity decreases (`CancelWitnessError::ReasonWeakened`), or whose task, region or epoch differ (`TaskMismatch`, `RegionMismatch`, `EpochMismatch`). C has no witness-to-witness validator: its witness slot holds only an id, the phase and the reason (`src/core/cancel.c:98`), and the `ASX_E_WITNESS_*` codes are never returned.
+**Additionally forbidden (Rust):** a witness pair whose reason severity decreases (`CancelWitnessError::ReasonWeakened`), or whose task, region or epoch differ (`TaskMismatch`, `RegionMismatch`, `EpochMismatch`). C has no witness-to-witness validator: its witness slot holds only an id, the phase and the reason (`src/core/cancel.c:95-101`), and the `ASX_E_WITNESS_*` codes are never returned.
 
 ### 4.4 Cancellation Kinds (11 Variants with Severity Ladder)
 
@@ -410,7 +410,7 @@ Severities and cleanup budgets match Rust exactly: `CancelKind::severity` (`src/
 
 ### 4.5 Cancellation Witness Structure
 
-Rust's witness (`CancelWitness`, `src/types/cancel.rs:323`) carries the fields below. C's witness slot (`src/core/cancel.c:98`) holds only an id, the phase and the reason; it has no task, region or epoch field (`bd-9kll.3.7`).
+Rust's witness (`CancelWitness`, `src/types/cancel.rs:323`) carries the fields below. C's witness slot (`src/core/cancel.c:95-101`) holds only an id, the phase and the reason; it has no task, region or epoch field (`bd-9kll.3.7`).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -450,7 +450,7 @@ A witness transition from `prev` to `next` is valid when ALL hold. The checks ar
 **Chain limits (configurable):**
 - Rust `CancelAttributionConfig` (`src/types/cancel.rs:184`): `max_chain_depth` default 16, `max_chain_memory` default 4096 bytes, estimated at 80 bytes per reason plus 8 bytes per link (`src/types/cancel.rs:237`, `src/types/cancel.rs:244`)
 - Rust truncates in `with_cause_limited` (`src/types/cancel.rs:706`), setting `truncated` and `truncated_at_depth`
-- C never truncates: its chains are links to stored region reasons, and the `max_cancel_chain_depth` / `max_cancel_chain_memory` config fields are validated (`src/runtime/rt.c:164`) but not used by cancellation (`bd-9kll.3.7`, "the config knobs do nothing")
+- C never truncates: its chains are links to stored region reasons. `max_cancel_chain_depth` is validated as non-zero (`src/runtime/rt.c:163`), but neither it nor `max_cancel_chain_memory` is used by cancellation (`bd-9kll.3.7`, "the config knobs do nothing")
 
 ### 4.8 Cancellation Metadata (Legacy Section)
 

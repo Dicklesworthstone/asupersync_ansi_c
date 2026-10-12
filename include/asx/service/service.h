@@ -22,6 +22,7 @@
 #ifndef ASX_SERVICE_SERVICE_H
 #define ASX_SERVICE_SERVICE_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/plan/plan.h>
@@ -109,9 +110,6 @@ ASX_API uint32_t asx_service_rate_limit_remaining(const asx_service_rate_limit_s
 /* Buffer middleware — buffers requests when inner is not ready        */
 /* ------------------------------------------------------------------ */
 
-#ifndef ASX_SERVICE_BUFFER_CAPACITY
-#define ASX_SERVICE_BUFFER_CAPACITY 8u
-#endif
 #if (ASX_SERVICE_BUFFER_CAPACITY) < 1
 #error "ASX_SERVICE_BUFFER_CAPACITY must be at least 1"
 #endif
@@ -160,10 +158,6 @@ typedef struct {
 /* ------------------------------------------------------------------ */
 
 /* Maximum middleware layers in a builder chain. */
-#ifndef ASX_SERVICE_BUILDER_MAX_LAYERS
-#define ASX_SERVICE_BUILDER_MAX_LAYERS 8u
-#endif
-
 typedef enum {
     ASX_SERVICE_LAYER_TIMEOUT = 0,
     ASX_SERVICE_LAYER_RETRY = 1,
@@ -310,10 +304,6 @@ ASX_API void asx_service_filter_init(asx_service *svc, asx_service_filter_state 
 /* ------------------------------------------------------------------ */
 /* Load-balance middleware — round-robin across multiple backends      */
 /* ------------------------------------------------------------------ */
-
-#ifndef ASX_SERVICE_LB_MAX_BACKENDS
-#define ASX_SERVICE_LB_MAX_BACKENDS 8u
-#endif
 
 typedef struct {
     asx_service backends[ASX_SERVICE_LB_MAX_BACKENDS];

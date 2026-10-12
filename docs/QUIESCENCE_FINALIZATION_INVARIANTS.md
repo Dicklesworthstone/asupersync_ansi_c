@@ -49,7 +49,7 @@ Summary. v4 §1.12 defines `Quiescent(r)` with three conjuncts: every child task
 
 **C status:** `asx_region_is_quiescent` takes a region handle, not a record pointer: `int asx_region_is_quiescent(asx_region_id id)` (`src/runtime/quiescence.c:159-164`) returns the `quiescent` flag of the detailed report. `asx_quiescence_check` (`src/runtime/quiescence.c:144-157`) is the status-returning form: `ASX_E_QUIESCENCE_NOT_REACHED` unless the region is `CLOSED` or while its cleanup stack has entries, `ASX_E_QUIESCENCE_TASKS_LIVE` while tasks are live, `ASX_E_OBLIGATIONS_UNRESOLVED` while an obligation is Reserved. Unlike Rust's structural predicate, C's is true only for a `CLOSED` region, and its Q4 is the C cleanup stack (section 7.3), not a finalizer task list. Unit tests: `tests/unit/runtime/test_quiescence.c` `quiescence_detailed_fully_quiescent`, `quiescence_detailed_live_tasks_q1_fails`, `quiescence_detailed_open_child_q2_fails`, `quiescence_detailed_unresolved_obligations_q3_fails`, `quiescence_detailed_undrained_cleanup_q4_fails`.
 
-`r->task_count` is the region's live-task count (`src/runtime/runtime_internal.h:49`), decremented when a task completes (`src/runtime/lifecycle.c:720`). It differs from `asx_runtime_task_count()` (`src/runtime/rt.c:366-369`), which returns the number of allocated task slots (`g_task_live`, incremented at slot allocation, `src/runtime/lifecycle.c:451`, decremented at release, `:347`), so it can include completed tasks whose slots have not been released.
+`r->task_count` is the region's live-task count (`src/runtime/runtime_internal.h:49`), decremented when a task completes (`src/runtime/lifecycle.c:720`). It differs from `asx_runtime_task_count()` (`src/runtime/rt.c:373-376`), which returns the number of allocated task slots (`g_task_live`, incremented at slot allocation, `src/runtime/lifecycle.c:451`, decremented at release, `:347`), so it can include completed tasks whose slots have not been released.
 
 ### 1.2 Runtime-Level Quiescence
 
@@ -67,7 +67,7 @@ Rust `RuntimeState::is_quiescent` (`src/runtime/state.rs:7364-7382`; body `is_qu
 
 Correction to the earlier version: RQ5 is not "all regions Closed". `is_closing()` is true only for Closing, Draining and Finalizing (`src/record/region.rs:162-164`), so an `Open` region does not make the runtime non-quiescent. The v2 fixtures show this. Their `quiescent` flag is `LabRuntime::is_quiescent` (`tools/twin_run/src/run.rs:4118` in the current local producer), which is `RuntimeState::is_quiescent` plus an empty spawn mailbox and no pending obligation posts (`src/lab/runtime.rs:3069-3073`). In 63 of the 67 Rust-captured snapshots (counted 2026-10-10) the run ends `quiescent: true` with at least one region still Open, for example `cancel-strengthen-severity-001`, whose region `root` is Open.
 
-**C status:** `asx_runtime_is_quiescent` (`src/runtime/rt.c:381-394`) follows RQ1-RQ5: no live task (`:83-94`, RQ1), no Reserved obligation (`:71-81`, RQ2), no I/O registration (`:386`, RQ4), no region with a pending cleanup entry (`:96-106`, RQ5's finalizers), no region Closing, Draining or Finalizing (`runtime_has_closing_region`, `:108-122`, RQ5) and, under lab dispatch, empty spawn-admission and cancel-command mailboxes (`:389-392`, RQ3 and RQ5's pending spawns). An idle Open region is quiescent, as in Rust. Until 2026-10-10 the C predicate required every live region `CLOSED` (bd-me9t); `tests/unit/runtime/test_rt.c` now checks the Open, closing and pending-lab-command cases. Outside lab dispatch C has no deferred spawn or cancel queue: both apply at the call. Under lab dispatch C queues a poll's obligation operations and applies them when the poll returns, as Rust's mailbox does (bd-2fga), so between polls no obligation is unapplied and Rust's `unapplied_obligation_count` has no C counterpart to check. The conformance oracle still computes the snapshot's `quiescent` flag itself (`build_snapshot`, `src/conformance/interpreter.c:4076`), failing it for a region that is still closing (`src/conformance/interpreter.c:4169-4171`).
+**C status:** `asx_runtime_is_quiescent` (`src/runtime/rt.c:388-401`) follows RQ1-RQ5: no live task (`:83-94`, RQ1), no Reserved obligation (`:71-81`, RQ2), no I/O registration (`:393`, RQ4), no region with a pending cleanup entry (`:96-106`, RQ5's finalizers), no region Closing, Draining or Finalizing (`runtime_has_closing_region`, `:108-122`, RQ5) and, under lab dispatch, empty spawn-admission and cancel-command mailboxes (`:396-399`, RQ3 and RQ5's pending spawns). An idle Open region is quiescent, as in Rust. Until 2026-10-10 the C predicate required every live region `CLOSED` (bd-me9t); `tests/unit/runtime/test_rt.c` now checks the Open, closing and pending-lab-command cases. Outside lab dispatch C has no deferred spawn or cancel queue: both apply at the call. Under lab dispatch C queues a poll's obligation operations and applies them when the poll returns, as Rust's mailbox does (bd-2fga), so between polls no obligation is unapplied and Rust's `unapplied_obligation_count` has no C counterpart to check. The conformance oracle still computes the snapshot's `quiescent` flag itself (`build_snapshot`, `src/conformance/interpreter.c:4076`), failing it for a region that is still closing (`src/conformance/interpreter.c:4169-4171`).
 
 ### 1.3 Formal Proofs (Lean4)
 
@@ -333,7 +333,7 @@ v4 does not define leak policies: v4 §3.4 LEAK says only "In lab: panic or reco
 
 Rust enum: `ObligationLeakResponse` (`src/runtime/config.rs:1319-1333`). Defaults: `Panic` in `RuntimeConfig` (`src/runtime/config.rs:2242`) and in `RuntimeState`'s internal constructor (`src/runtime/state.rs:2338`); the lab uses `Panic` when `panic_on_obligation_leak` is set and `Log` otherwise (`src/lab/runtime.rs:2435-2439`).
 
-**C status:** enum `asx_leak_response` (`include/asx/asx_config.h:530-535`), default `ASX_LEAK_LOG` (`src/runtime/lifecycle.c:96`, reset at `:180`). The default differs from Rust: row `rule.obligation.leak` (bd-9kll.3.6, owner decision bd-9kll.2.19). The Recover abort reason is Rust's `Error` since bd-9kll.3.6. Rust parity under `Log`: `leak-policy-leak-reported-001` (`panic_on_leak: false`). Unit tests: `tests/unit/runtime/test_budget_obligation.c` `recover_policy_aborts_leaked_obligation`, `panic_policy_routes_leak_through_containment`.
+**C status:** enum `asx_leak_response` (`include/asx/asx_config.h:1195-1200`), default `ASX_LEAK_LOG` (`src/runtime/lifecycle.c:96`, reset at `:180`). The default differs from Rust: row `rule.obligation.leak` (bd-9kll.3.6, owner decision bd-9kll.2.19). The Recover abort reason is Rust's `Error` since bd-9kll.3.6. Rust parity under `Log`: `leak-policy-leak-reported-001` (`panic_on_leak: false`). Unit tests: `tests/unit/runtime/test_budget_obligation.c` `recover_policy_aborts_leaked_obligation`, `panic_policy_routes_leak_through_containment`.
 
 ### 5.2 Escalation Policy
 
@@ -345,7 +345,7 @@ C:
 typedef struct {
     uint64_t threshold;
     asx_leak_response escalate_to;
-} asx_leak_escalation_config;   /* include/asx/asx_config.h:544-548 */
+} asx_leak_escalation_config;   /* include/asx/asx_config.h:1210-1213 */
 ```
 
 **C status:** the count includes the whole leak batch before its response is picked (`obligation_leak_batch_policy`, `src/runtime/lifecycle.c:520-525`). Explicit token-drop and holder-completion leaks are counted individually, as each dropped Rust token posts its own leak (`state.rs:7036-7042`); C has no destructors, so it cannot tell a dropped token from an obligation Rust's completion audit batches (`state.rs:8354`). The finalization audit counts all remaining Reserved obligations together before choosing one policy response (`src/runtime/lifecycle.c:656-668`). Tests: `leak_escalation_switches_policy_at_threshold`, `leak_escalation_threshold_zero_escalates_the_first_leak`, `region_close_leak_audit_is_one_batch`.
@@ -375,7 +375,7 @@ pub enum Finalizer {
 
 Correction to the earlier version: both kinds normally run as masked finalizer tasks. The scheduler pops the top entry and wraps a `Sync` finalizer in an async block (`drain_ready_async_finalizers_in`, `src/runtime/state.rs:8578-8651`, wrapping at `:8612`), then spawns it with `spawn_finalizer_task_in` (`:8857-9028`). Sync finalizers run inline only on the fallback path taken when a finalizer task cannot start (`drive_failed_start_async_finalizer_inline`, `:8664`, using `run_sync_finalizers_tracked`, `:9518`). The enum's doc comment ("runs directly on scheduler thread", `src/record/finalizer.rs:18`) is accurate only for that fallback path.
 
-**C status:** public synchronous region finalizers are implemented through `asx_region_register_finalizer` (`src/runtime/lifecycle.c:1189-1199`) and `asx_region_unregister_finalizer` (`src/runtime/lifecycle.c:1201-1206`); `asx_region_defer_sync` shares the registration checks (`src/runtime/quiescence.c:407-411`). They use the region's `asx_cleanup_stack` (`include/asx/core/cleanup.h:43-51`) and run inside `asx_region_finalize_one` (`src/runtime/quiescence.c:231-270`), before its leak-policy audit. User data is borrowed until the callback runs or is unregistered (`include/asx/runtime/runtime.h:166-185`). The Rust masked task and async finalizer contract remains unimplemented. DSL v2 has no finalizer op, so no Rust-captured fixture exercises these public APIs.
+**C status:** public synchronous region finalizers are implemented through `asx_region_register_finalizer` (`src/runtime/lifecycle.c:1189-1199`) and `asx_region_unregister_finalizer` (`src/runtime/lifecycle.c:1201-1206`); `asx_region_defer_sync` shares the registration checks (`src/runtime/quiescence.c:407-411`). They use the region's `asx_cleanup_stack` (`include/asx/core/cleanup.h:41-49`) and run inside `asx_region_finalize_one` (`src/runtime/quiescence.c:231-270`), before its leak-policy audit. User data is borrowed until the callback runs or is unregistered (`include/asx/runtime/runtime.h:144-160`). The Rust masked task and async finalizer contract remains unimplemented. DSL v2 has no finalizer op, so no Rust-captured fixture exercises these public APIs.
 
 ### 6.2 Execution Order
 
@@ -411,7 +411,7 @@ impl Future for MaskedFinalizer {
 
 A finalizer task gets `finalizer_budget()` (poll quota 100, `src/record/finalizer.rs:53-78`) with a deadline 5 s after it is spawned (`src/runtime/state.rs:8879-8882`), and is wrapped in `BudgetedFinalizer` (`:8923-8928`), which enforces a region shutdown ceiling when one is set (`src/record/finalizer.rs:402-431`). What happens when a finalizer task overruns the 100-poll quota was not traced (unverified).
 
-**C status:** `asx_runtime_config.finalizer_poll_budget` and `finalizer_time_budget_ns` exist (`include/asx/asx_config.h:562-563`, defaults 100 and 5 s at `src/runtime/hooks.c:777-778`); `rt.c` rejects a zero poll budget (`src/runtime/rt.c:164`), but no C code reads either field otherwise (open bead bd-udlh).
+**C status:** `asx_runtime_config.finalizer_poll_budget` and `finalizer_time_budget_ns` exist (`include/asx/asx_config.h:1227-1228`, defaults 100 and 5 s at `src/runtime/hooks.c:781-782`); `rt.c` rejects a zero poll budget (`src/runtime/rt.c:164`), but no C code reads either field otherwise (open bead bd-udlh).
 
 ### 6.5 Finalizer Escalation Policies
 
@@ -423,13 +423,13 @@ A finalizer task gets `finalizer_budget()` (poll quota 100, `src/record/finalize
 
 Correction: at `5e60b1c4c` this enum is stored in `FinalizerStack` (`src/record/finalizer.rs:199-204`) but no runtime code outside `src/record/finalizer.rs` reads it (`git grep` finds only the re-export in `src/record/mod.rs:20`), so the policy described here is not wired into finalizer execution.
 
-**C status:** `asx_finalizer_escalation` (`include/asx/asx_config.h:542-546`), default `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:779`), validated at `src/runtime/rt.c:162`, never otherwise read (bd-udlh).
+**C status:** `asx_finalizer_escalation` (`include/asx/asx_config.h:1203-1207`), default `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:783`), validated at `src/runtime/rt.c:161-162`, never otherwise read (bd-udlh).
 
 ### 6.6 Registration Rejection
 
 Registration is rejected once the region has begun closing or is closed: `register_sync_finalizer` (`src/runtime/state.rs:9054-9060`) and `register_async_finalizer` (`:9107-9113`) return `false` when `is_closing() || is_terminal()`. `RegionRecord::add_finalizer` itself does not check the state (`src/record/region.rs:1525-1528`).
 
-**C status:** `asx_region_register_finalizer` rejects a poisoned region with `ASX_E_REGION_POISONED` and any state other than Open with `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1189-1199`). `asx_region_defer_sync` delegates to that registration and preserves its errors (`src/runtime/quiescence.c:407-411`). The bounded stack rejects a null callback or output and reports capacity exhaustion. `asx_region_unregister_finalizer` (`src/runtime/lifecycle.c:1201-1206`) cancels a pending entry without running it, including during another callback; a consumed, removed or replaced handle returns `ASX_E_NOT_FOUND`. The lower-level `asx_cleanup_push` (`include/asx/core/cleanup.h:60-61`) operates on a stack and checks no region state. Test: `public_finalizer_capacity_unregistration_and_errors` in `tests/unit/runtime/test_quiescence.c`.
+**C status:** `asx_region_register_finalizer` rejects a poisoned region with `ASX_E_REGION_POISONED` and any state other than Open with `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1189-1199`). `asx_region_defer_sync` delegates to that registration and preserves its errors (`src/runtime/quiescence.c:407-411`). The bounded stack rejects a null callback or output and reports capacity exhaustion. `asx_region_unregister_finalizer` (`src/runtime/lifecycle.c:1201-1206`) cancels a pending entry without running it, including during another callback; a consumed, removed or replaced handle returns `ASX_E_NOT_FOUND`. The lower-level `asx_cleanup_push` (`include/asx/core/cleanup.h:58-59`) operates on a stack and checks no region state. Test: `public_finalizer_capacity_unregistration_and_errors` in `tests/unit/runtime/test_quiescence.c`.
 
 ### 6.7 Finalizer-Spawned Tasks
 
@@ -471,7 +471,7 @@ Rust `Budget::combine_untraced` (`src/types/budget.rs:556-570`); `meet` is `comb
 This is a C design from the port plan (Section 6.8.D), not a Rust structure. The plan's four points and their status:
 
 1. "Every reserve/acquire registers a cleanup action at acquisition time": **not implemented.** `asx_obligation_reserve_impl` (`src/runtime/lifecycle.c:1787-1845`) registers none; per-task stacks do not exist (`include/asx/core/cleanup.h:8-9` defers them). Users may explicitly register region callbacks that resolve acquired obligations through the public API (section 6.1).
-2. "commit/abort pops entries": **not implemented** for obligations; `asx_cleanup_pop` exists (`include/asx/core/cleanup.h:66-67`), and `asx_region_unregister_finalizer` exposes removal of a pending region callback.
+2. "commit/abort pops entries": **not implemented** for obligations; `asx_cleanup_pop` exists (`include/asx/core/cleanup.h:64-65`), and `asx_region_unregister_finalizer` exposes removal of a pending region callback.
 3. "During finalization, unresolved entries are drained LIFO": **implemented** for the publicly registrable per-region stack (`src/runtime/quiescence.c:254`, `src/core/cleanup.c:94-113`), before its leak-policy audit. Applications register entries with `asx_region_register_finalizer` or `asx_region_defer_sync`, Rust's `Scope::defer_sync`, while the region is Open (`src/runtime/quiescence.c:379-383`). Rust's serialized masked async-finalizer barrier is not ported.
 4. "Discarding a token without resolution triggers detection during region finalization": C detects it at holder completion or `asx_obligation_drop` (section 4.2), and at finalization the close audit handles what remains unresolved after callbacks and cleanup tasks finish (section 4.3).
 
@@ -479,7 +479,7 @@ This is a C design from the port plan (Section 6.8.D), not a Rust structure. The
 
 Correction to the earlier version: Rust never force-completes a task whose cleanup exceeds its budget, and has no `cleanup_budget_exceeded` flag (`git grep` finds no such identifier at `5e60b1c4c`). In the lab, a poll with no poll quota left only strengthens the task's cancel reason to `PollQuota` (`src/lab/runtime.rs:4663-4671`). The multi-worker scheduler does not charge a task in its cancellation cleanup phase at all: its cleanup budget stays advisory (`consume_budget_poll` and its doc comment, `src/runtime/scheduler/three_lane.rs:1266-1301`). v4 §3.2.3 is a proof sketch that assumes sufficient budgets, and v4 §6 PROG-CANCEL lists the premises (rule `prog.cancel.drains`, #9; C status row `prog.cancel.drains`, Partial).
 
-**C status:** the default matches Rust (`cleanup_hard_bound = 0`, `src/runtime/hooks.c:782`; semantics in `include/asx/asx_config.h:567-577`). With the opt-in hard bound, the round-robin scheduler force-completes a cancelled, unmasked task whose cleanup polls are spent as Cancelled with `ASX_SCHED_EVENT_CANCEL_FORCED` (`src/runtime/scheduler.c:1458-1475`), a deliberate deviation excluded from parity. It sets no extra flag, and it does not force-abort obligations: completion goes through `sched_complete` (`src/runtime/scheduler.c:770`), whose completion hook (`:785`) leaks still-held obligations under the leak policy (section 4.2).
+**C status:** the default matches Rust (`cleanup_hard_bound = 0`, `src/runtime/hooks.c:786`; semantics in `include/asx/asx_config.h:1232-1242`). With the opt-in hard bound, the round-robin scheduler force-completes a cancelled, unmasked task whose cleanup polls are spent as Cancelled with `ASX_SCHED_EVENT_CANCEL_FORCED` (`src/runtime/scheduler.c:1458-1475`), a deliberate deviation excluded from parity. It sets no extra flag, and it does not force-abort obligations: completion goes through `sched_complete` (`src/runtime/scheduler.c:770`), whose completion hook (`:785`) leaks still-held obligations under the leak policy (section 4.2).
 
 ### 7.5 Exhaustion During Cleanup
 
@@ -548,7 +548,7 @@ v4 has no rule tying timers or channels to quiescence, and neither engine's quie
 ### 9.1 Timer Quiescence
 
 - Rust `RuntimeState::is_quiescent` has no timer conjunct (`src/runtime/state.rs:7400-7413`). In the lab, a pending sleep is completed by auto-advancing virtual time; parity `quiescence-pending-timer-001` (a task sleeps 500 ns, the finish phase advances to the timer, the run ends quiescent with no timer pending).
-- C `asx_runtime_is_quiescent` has no timer conjunct either (`src/runtime/rt.c:381-394`). A completing task's sleep timer is disarmed (`asx_task_timer_disarm_internal`, called at `src/runtime/lifecycle.c:702`).
+- C `asx_runtime_is_quiescent` has no timer conjunct either (`src/runtime/rt.c:388-401`). A completing task's sleep timer is disarmed (`asx_task_timer_disarm_internal`, called at `src/runtime/lifecycle.c:702`).
 - Stale-handle cancellation and equal-deadline ordering: see `docs/CHANNEL_TIMER_SEMANTICS.md` §2.5, §2.6 and §2.8.
 
 ### 9.2 Channel Quiescence
@@ -670,7 +670,7 @@ The variant names were checked; the one-line statements are carried over from th
 
 ### 12.3 Ghost Monitor Integration (Debug Builds)
 
-**C status:** the ghost monitors are compiled in when `ASX_DEBUG_GHOST` is defined, which `ASX_DEBUG` turns on unless `ASX_DEBUG_GHOST_DISABLE` is set (`include/asx/core/ghost.h:28-33`). Otherwise every ghost entry point is a macro stub with no cost (`include/asx/core/ghost.h:187-214`). The `ASX_GHOST_CHECK_*` macros of the earlier version do not exist. On the close path the monitors are called through `asx_ghost_check_region_transition` (`src/runtime/quiescence.c:223`) and `asx_ghost_check_obligation_leaks` (`:261`).
+**C status:** the ghost monitors are compiled in when `ASX_DEBUG_GHOST` is defined, which `ASX_DEBUG` turns on unless `ASX_DEBUG_GHOST_DISABLE` is set (`include/asx/core/ghost.h:28-33`). Otherwise every ghost entry point is a macro stub with no cost (`include/asx/core/ghost.h:179-206`). The `ASX_GHOST_CHECK_*` macros of the earlier version do not exist. On the close path the monitors are called through `asx_ghost_check_region_transition` (`src/runtime/quiescence.c:223`) and `asx_ghost_check_obligation_leaks` (`:261`).
 
 ---
 
@@ -843,13 +843,13 @@ All of these are declared in `include/asx/asx_status.h`. Codes the close and adm
 |-------------|------|---------|---|---|
 | `leak_response` | enum | `ASX_LEAK_LOG` (`src/runtime/lifecycle.c:96`) | `ObligationLeakResponse`, default `Panic` (section 5.1) | Read by the leak path; default differs (bd-9kll.3.6) |
 | `leak_escalation` | pointer (optional) | `NULL` | `Option<LeakEscalation>` | Read (section 5.2) |
-| `finalizer_poll_budget` | `uint32_t` | 100 (`src/runtime/hooks.c:777`) | `FINALIZER_POLL_BUDGET` 100 | Validated, otherwise unread (bd-udlh) |
-| `finalizer_time_budget_ns` | `uint64_t` | 5,000,000,000 (`src/runtime/hooks.c:778`) | `FINALIZER_TIME_BUDGET_NANOS` | Unread (bd-udlh) |
-| `finalizer_escalation` | enum | `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:779`) | `FinalizerEscalation`, not wired in Rust (section 6.5) | Validated, otherwise unread (bd-udlh) |
-| `max_cancel_chain_depth` | `uint16_t` | 16 (`src/runtime/hooks.c:780`) | `CancelAttributionConfig::DEFAULT_MAX_DEPTH` 16 (`src/types/cancel.rs:198`) | Validated non-zero (`src/runtime/rt.c:163`); no cancel code reads it |
-| `max_cancel_chain_memory` | `uint32_t` | 4096 (`src/runtime/hooks.c:781`) | `DEFAULT_MAX_MEMORY` 4096 (`src/types/cancel.rs:201`) | No cancel code reads it |
+| `finalizer_poll_budget` | `uint32_t` | 100 (`src/runtime/hooks.c:781`) | `FINALIZER_POLL_BUDGET` 100 | Validated, otherwise unread (bd-udlh) |
+| `finalizer_time_budget_ns` | `uint64_t` | 5,000,000,000 (`src/runtime/hooks.c:782`) | `FINALIZER_TIME_BUDGET_NANOS` | Unread (bd-udlh) |
+| `finalizer_escalation` | enum | `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:783`) | `FinalizerEscalation`, not wired in Rust (section 6.5) | Validated, otherwise unread (bd-udlh) |
+| `max_cancel_chain_depth` | `uint16_t` | 16 (`src/runtime/hooks.c:784`) | `CancelAttributionConfig::DEFAULT_MAX_DEPTH` 16 (`src/types/cancel.rs:198`) | Validated non-zero (`src/runtime/rt.c:163`); no cancel code reads it |
+| `max_cancel_chain_memory` | `uint32_t` | 4096 (`src/runtime/hooks.c:785`) | `DEFAULT_MAX_MEMORY` 4096 (`src/types/cancel.rs:201`) | No cancel code reads it |
 
-Field declarations: `include/asx/asx_config.h:560-566`. The earlier names `max_chain_depth` / `max_chain_memory` are `max_cancel_chain_depth` / `max_cancel_chain_memory` in C.
+Field declarations: `include/asx/asx_config.h:1225-1231`. The earlier names `max_chain_depth` / `max_chain_memory` are `max_cancel_chain_depth` / `max_cancel_chain_memory` in C.
 
 ### 15.4 Invariant Schema Mapping
 

@@ -105,6 +105,7 @@ TEST(cancel_severity_out_of_range_clamps) {
     ASSERT_EQ(asx_cancel_severity((asx_cancel_kind)11), (int)5);
     ASSERT_EQ(asx_cancel_severity((asx_cancel_kind)100), (int)5);
     ASSERT_EQ(asx_cancel_severity((asx_cancel_kind)255), (int)5);
+    ASSERT_EQ(asx_cancel_severity((asx_cancel_kind)-1), (int)5);
 }
 
 TEST(cancel_strengthen_equal_severity_same_timestamp) {

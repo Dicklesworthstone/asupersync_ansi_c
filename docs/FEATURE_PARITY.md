@@ -125,6 +125,20 @@ hooks, a live obligation and an actually executed task after the refusal.
 Explicit teardown permits reinitialization. Independent runtime-owned storage
 and cross-runtime handle isolation remain open in `bd-9kll.3.20`.
 
+RB8 adds application/library build identity at runtime creation and its
+config, hook and builder preparation calls. `ASX_CONFIG_FINGERPRINT` folds
+effective resource limits, profile/codec/determinism/ghost settings and
+bootstrap sizes, alignments and member offsets in the application translation
+unit. ABI major 2 replaces unchecked creation symbols with fingerprint-taking
+entries; incompatible builds return `ASX_E_CONFIG_MISMATCH` before object
+access or singleton mutation. Matching consumers execute actual tasks through
+explicit, default, environment and builder creation. Separately compiled
+mismatched consumers retain their object bytes and canaries, while a matching
+host retains and completes its task and resolves its reserved obligation
+(`tests/abi/consumer_shim.c`, `make test-config-fingerprint`). This detects
+accidental build mismatch; callers must check constructor errors before using
+objects, and the fingerprint is not an authentication mechanism.
+
 ## 2. Canonical Unit Matrix
 
 | Unit ID | Semantic Unit | Canonical Source Artifacts | Acceptance Test Obligations | Must-Fail / Negative Obligations | Current Status | Primary Bead(s) |

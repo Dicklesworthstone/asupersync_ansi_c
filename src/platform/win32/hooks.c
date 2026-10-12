@@ -187,7 +187,9 @@ static void win32_log_stderr(void *ctx, int level, const char *message) {
 /* Install function                                                    */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_win32_hooks_install(asx_runtime_hooks *hooks) {
+asx_status asx_win32_hooks_install_checked(asx_runtime_hooks *hooks,
+                                           uint64_t application_fingerprint) {
+    if (application_fingerprint != ASX_CONFIG_FINGERPRINT) return ASX_E_CONFIG_MISMATCH;
     if (hooks == NULL) return ASX_E_INVALID_ARGUMENT;
 
     /* Start from safe defaults */

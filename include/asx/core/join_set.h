@@ -12,6 +12,7 @@
 #ifndef ASX_CORE_JOIN_SET_H
 #define ASX_CORE_JOIN_SET_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -20,10 +21,6 @@
 
 #ifdef __cplusplus
 extern "C" {
-#endif
-
-#ifndef ASX_JOIN_SET_MAX_TASKS
-#define ASX_JOIN_SET_MAX_TASKS 16u
 #endif
 
 typedef struct {

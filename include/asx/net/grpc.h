@@ -54,10 +54,6 @@ ASX_API const char *asx_grpc_code_str(asx_grpc_code code);
  * gRPC codec (protobuf-style encode/decode abstraction)
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_GRPC_MSG_MAX
-#define ASX_GRPC_MSG_MAX 4096u
-#endif
-
 typedef struct {
     uint8_t data[ASX_GRPC_MSG_MAX];
     uint32_t len;
@@ -72,18 +68,6 @@ ASX_API asx_status asx_grpc_message_set(asx_grpc_message *msg, const void *data,
 /* -------------------------------------------------------------------
  * gRPC metadata (key-value pairs on calls)
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_GRPC_MAX_METADATA
-#define ASX_GRPC_MAX_METADATA 8u
-#endif
-
-#ifndef ASX_GRPC_METADATA_KEY_MAX
-#define ASX_GRPC_METADATA_KEY_MAX 64u
-#endif
-
-#ifndef ASX_GRPC_METADATA_VALUE_MAX
-#define ASX_GRPC_METADATA_VALUE_MAX 128u
-#endif
 
 typedef struct {
     char key[ASX_GRPC_METADATA_KEY_MAX];
@@ -107,18 +91,6 @@ ASX_API const char *asx_grpc_metadata_get(const asx_grpc_metadata *md, const cha
 /* -------------------------------------------------------------------
  * gRPC method and service definition
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_GRPC_MAX_METHODS
-#define ASX_GRPC_MAX_METHODS 16u
-#endif
-
-#ifndef ASX_GRPC_METHOD_NAME_MAX
-#define ASX_GRPC_METHOD_NAME_MAX 128u
-#endif
-
-#ifndef ASX_GRPC_SERVICE_NAME_MAX
-#define ASX_GRPC_SERVICE_NAME_MAX 128u
-#endif
 
 typedef enum {
     ASX_GRPC_METHOD_UNARY = 0,
@@ -156,10 +128,6 @@ ASX_API asx_status asx_grpc_service_add_unary(asx_grpc_service *svc, const char 
 /* -------------------------------------------------------------------
  * gRPC server
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_GRPC_MAX_SERVICES
-#define ASX_GRPC_MAX_SERVICES 8u
-#endif
 
 typedef struct {
     asx_grpc_service services[ASX_GRPC_MAX_SERVICES];
@@ -209,10 +177,6 @@ typedef enum {
     ASX_GRPC_HEALTH_NOT_SERVING = 2,
     ASX_GRPC_HEALTH_SERVICE_UNKNOWN = 3
 } asx_grpc_health_status;
-
-#ifndef ASX_GRPC_MAX_HEALTH_ENTRIES
-#define ASX_GRPC_MAX_HEALTH_ENTRIES 8u
-#endif
 
 typedef struct {
     char service[ASX_GRPC_SERVICE_NAME_MAX];

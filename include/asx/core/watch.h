@@ -19,6 +19,7 @@
 #ifndef ASX_CORE_WATCH_H
 #define ASX_CORE_WATCH_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -28,9 +29,6 @@
 extern "C" {
 #endif
 
-#ifndef ASX_MAX_WATCHES
-#define ASX_MAX_WATCHES 16u
-#endif
 #if (ASX_MAX_WATCHES) < 1
 #error "ASX_MAX_WATCHES must be at least 1"
 #endif

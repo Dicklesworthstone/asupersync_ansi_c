@@ -12,6 +12,7 @@
 #ifndef ASX_NET_DISTRIBUTED_H
 #define ASX_NET_DISTRIBUTED_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <stdint.h>
@@ -23,30 +24,6 @@ extern "C" {
 /* -------------------------------------------------------------------
  * Limits
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_DIST_MAX_NODES
-#define ASX_DIST_MAX_NODES 8u
-#endif
-
-#ifndef ASX_DIST_MAX_PARTITIONS
-#define ASX_DIST_MAX_PARTITIONS 16u
-#endif
-
-#ifndef ASX_DIST_NODE_NAME_MAX
-#define ASX_DIST_NODE_NAME_MAX 32u
-#endif
-
-#ifndef ASX_DIST_SNAPSHOT_DATA_MAX
-#define ASX_DIST_SNAPSHOT_DATA_MAX 1024u
-#endif
-
-#ifndef ASX_DIST_MAX_SNAPSHOTS
-#define ASX_DIST_MAX_SNAPSHOTS 8u
-#endif
-
-#ifndef ASX_DIST_HASH_RING_SIZE
-#define ASX_DIST_HASH_RING_SIZE 64u
-#endif
 
 /* -------------------------------------------------------------------
  * Node membership

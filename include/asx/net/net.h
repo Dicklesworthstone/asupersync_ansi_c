@@ -12,6 +12,7 @@
 #ifndef ASX_NET_NET_H
 #define ASX_NET_NET_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/bytes/buf.h>
@@ -59,39 +60,11 @@ ASX_API int asx_socket_addr_eq(const asx_socket_addr *a, const asx_socket_addr *
  * Arena limits
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_MAX_TCP_LISTENERS
-#define ASX_MAX_TCP_LISTENERS 4u
-#endif
-
-#ifndef ASX_MAX_TCP_STREAMS
-#define ASX_MAX_TCP_STREAMS 16u
-#endif
-
-#ifndef ASX_MAX_UDP_SOCKETS
-#define ASX_MAX_UDP_SOCKETS 16u
-#endif
-
-#ifndef ASX_RESOLVE_MAX_RESULTS
-#define ASX_RESOLVE_MAX_RESULTS 4u
-#endif
-
-#ifndef ASX_RESOLVER_CACHE_CAPACITY
-#define ASX_RESOLVER_CACHE_CAPACITY 8u
-#endif
-
-#ifndef ASX_RESOLVER_HOST_CAPACITY
-#define ASX_RESOLVER_HOST_CAPACITY 256u /* DNS names are at most 253 octets */
-#endif
-
 #if (ASX_MAX_TCP_LISTENERS) < 1 || (ASX_MAX_TCP_STREAMS) < 1 || (ASX_MAX_UDP_SOCKETS) < 1
 #error "ASX_MAX_TCP_LISTENERS, ASX_MAX_TCP_STREAMS and ASX_MAX_UDP_SOCKETS must be at least 1"
 #endif
 #if (ASX_RESOLVER_CACHE_CAPACITY) < 1 || (ASX_RESOLVER_HOST_CAPACITY) < 1
 #error "ASX_RESOLVER_CACHE_CAPACITY and ASX_RESOLVER_HOST_CAPACITY must be at least 1"
-#endif
-
-#ifndef ASX_RESOLVE_MAX_INFLIGHT
-#define ASX_RESOLVE_MAX_INFLIGHT 8u /* concurrent native lookups */
 #endif
 
 /* -------------------------------------------------------------------
@@ -428,10 +401,6 @@ ASX_API ASX_MUST_USE asx_status asx_udp_connect_host(asx_udp_socket socket, asx_
  * Unix-domain socket address
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_UNIX_PATH_MAX
-#define ASX_UNIX_PATH_MAX 108u
-#endif
-
 typedef struct {
     char path[ASX_UNIX_PATH_MAX];
     uint8_t has_path;
@@ -446,18 +415,6 @@ ASX_API int asx_unix_addr_eq(const asx_unix_addr *a, const asx_unix_addr *b);
 /* -------------------------------------------------------------------
  * Unix-domain arena limits
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_MAX_UNIX_LISTENERS
-#define ASX_MAX_UNIX_LISTENERS 4u
-#endif
-
-#ifndef ASX_MAX_UNIX_STREAMS
-#define ASX_MAX_UNIX_STREAMS 16u
-#endif
-
-#ifndef ASX_MAX_UNIX_DGRAM_SOCKETS
-#define ASX_MAX_UNIX_DGRAM_SOCKETS 8u
-#endif
 
 #if (ASX_MAX_UNIX_LISTENERS) < 1 || (ASX_MAX_UNIX_STREAMS) < 1
 #error "ASX_MAX_UNIX_LISTENERS and ASX_MAX_UNIX_STREAMS must be at least 1"
@@ -559,10 +516,6 @@ ASX_API int asx_unix_dgram_is_alive(asx_unix_dgram socket);
  * descriptors alongside stream/datagram I/O. In the deterministic
  * core, descriptors are modeled as uint32_t tokens.
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_ANCILLARY_MAX_FDS
-#define ASX_ANCILLARY_MAX_FDS 8u
-#endif
 
 typedef struct {
     uint32_t fds[ASX_ANCILLARY_MAX_FDS];

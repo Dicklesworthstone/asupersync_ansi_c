@@ -21,6 +21,7 @@
 #ifndef ASX_CORE_GHOST_H
 #define ASX_CORE_GHOST_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -51,9 +52,6 @@ typedef enum {
 /* Violation record                                                    */
 /* ------------------------------------------------------------------ */
 
-#ifndef ASX_GHOST_RING_CAPACITY
-#define ASX_GHOST_RING_CAPACITY 64u
-#endif
 #if (ASX_GHOST_RING_CAPACITY) < 1
 #error "ASX_GHOST_RING_CAPACITY must be at least 1"
 #endif
@@ -125,9 +123,6 @@ ASX_API ASX_MUST_USE const char *asx_ghost_violation_kind_str(asx_ghost_violatio
 /* --- Borrow ledger --- */
 
 /* Maximum number of handles tracked simultaneously. */
-#ifndef ASX_GHOST_BORROW_TABLE_CAPACITY
-#define ASX_GHOST_BORROW_TABLE_CAPACITY 128u
-#endif
 #if (ASX_GHOST_BORROW_TABLE_CAPACITY) < 1
 #error "ASX_GHOST_BORROW_TABLE_CAPACITY must be at least 1"
 #endif
@@ -156,9 +151,6 @@ ASX_API ASX_MUST_USE int asx_ghost_borrow_is_exclusive(uint64_t entity_id);
 /* --- Determinism monitor --- */
 
 /* Maximum events tracked per determinism check window. */
-#ifndef ASX_GHOST_DETERMINISM_CAPACITY
-#define ASX_GHOST_DETERMINISM_CAPACITY 256u
-#endif
 #if (ASX_GHOST_DETERMINISM_CAPACITY) < 1
 #error "ASX_GHOST_DETERMINISM_CAPACITY must be at least 1"
 #endif

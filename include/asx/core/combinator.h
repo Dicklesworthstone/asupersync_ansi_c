@@ -14,6 +14,7 @@
 #ifndef ASX_CORE_COMBINATOR_H
 #define ASX_CORE_COMBINATOR_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -32,10 +33,6 @@ extern "C" {
 /* -------------------------------------------------------------------
  * Maximum branches per combinator
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_COMBINATOR_MAX_BRANCHES
-#define ASX_COMBINATOR_MAX_BRANCHES 8u
-#endif
 
 /* -------------------------------------------------------------------
  * Branch — a single inner future

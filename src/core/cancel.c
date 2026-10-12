@@ -88,9 +88,6 @@ asx_cancel_reason asx_cancel_strengthen(const asx_cancel_reason *a, const asx_ca
  * is deferred to Phase 4.
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_MAX_CANCEL_WITNESSES
-#define ASX_MAX_CANCEL_WITNESSES 64u
-#endif
 #if (ASX_MAX_CANCEL_WITNESSES) < 1
 #error "ASX_MAX_CANCEL_WITNESSES must be at least 1"
 #endif

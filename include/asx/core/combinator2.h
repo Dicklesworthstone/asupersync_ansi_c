@@ -15,6 +15,7 @@
 #ifndef ASX_CORE_COMBINATOR2_H
 #define ASX_CORE_COMBINATOR2_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_ids.h>
 #include <asx/asx_status.h>
@@ -194,10 +195,6 @@ ASX_API asx_bracket_phase asx_bracket_current_phase(const asx_bracket_state *sta
  * in one async block). If any stage fails, the pipeline stops.
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_PIPELINE_MAX_STAGES
-#define ASX_PIPELINE_MAX_STAGES 8u
-#endif
-
 typedef struct {
     asx_combinator_poll_fn stages[ASX_PIPELINE_MAX_STAGES];
     void *stage_data[ASX_PIPELINE_MAX_STAGES];
@@ -335,10 +332,6 @@ ASX_API int asx_hedge_winner(const asx_hedge_state *state);
  * of the sliding window, providing a finite-sample guarantee that the
  * hedge fires only on true statistical outliers.
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_ADAPTIVE_HEDGE_WINDOW
-#define ASX_ADAPTIVE_HEDGE_WINDOW 64u
-#endif
 
 typedef struct {
     uint64_t history[ASX_ADAPTIVE_HEDGE_WINDOW]; /* circular buffer of latencies (ns) */

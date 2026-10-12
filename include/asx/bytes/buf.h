@@ -14,6 +14,7 @@
 #ifndef ASX_BYTES_BUF_H
 #define ASX_BYTES_BUF_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <stddef.h>
@@ -27,9 +28,6 @@ extern "C" {
  * Compile-time buffer capacity
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_BUF_CAPACITY
-#define ASX_BUF_CAPACITY 4096u
-#endif
 #if (ASX_BUF_CAPACITY) < 1
 #error "ASX_BUF_CAPACITY must be at least 1"
 #endif

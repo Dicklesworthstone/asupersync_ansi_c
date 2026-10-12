@@ -224,6 +224,45 @@ TEST(init_null_rt_fails) {
     ASSERT_EQ(asx_runtime_init(NULL, &cfg, &hooks), ASX_E_INVALID_ARGUMENT);
 }
 
+TEST(mismatched_creation_preserves_live_work_and_all_objects) {
+    asx_runtime active, destination;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_runtime_builder builder;
+    unsigned char saved[sizeof(destination)];
+    asx_region_id region;
+    asx_task_id task;
+    asx_task_state state;
+    asx_budget budget;
+    uint64_t mismatch = ASX_CONFIG_FINGERPRINT ^ UINT64_C(1);
+
+    ASSERT_EQ(asx_runtime_init_default(&active), ASX_OK);
+    ASSERT_EQ(asx_region_open(&region), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(region, dummy_poll, NULL, &task), ASX_OK);
+    ASSERT_EQ(asx_runtime_config_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    memset(&destination, 0xa5, sizeof(destination));
+    memcpy(saved, &destination, sizeof(destination));
+
+    ASSERT_EQ(asx_runtime_init_checked(&destination, &cfg, &hooks, mismatch),
+              ASX_E_CONFIG_MISMATCH);
+    ASSERT_EQ(asx_runtime_init_default_checked(&destination, mismatch), ASX_E_CONFIG_MISMATCH);
+    ASSERT_EQ(asx_runtime_init_from_env_checked(&destination, "ASX_RT_TEST_", mismatch),
+              ASX_E_CONFIG_MISMATCH);
+    ASSERT_EQ(asx_runtime_builder_build_checked(&builder, &destination, mismatch),
+              ASX_E_CONFIG_MISMATCH);
+    ASSERT_TRUE(memcmp(saved, &destination, sizeof(destination)) == 0);
+    ASSERT_TRUE(asx_runtime_is_initialized(&active));
+    ASSERT_EQ(asx_task_get_state(task, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_TASK_CREATED);
+    budget = asx_budget_from_polls(64u);
+    ASSERT_EQ(asx_scheduler_run(region, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_get_state(task, &state), ASX_OK);
+    ASSERT_EQ(state, ASX_TASK_COMPLETED);
+    asx_runtime_shutdown(&active);
+}
+
 TEST(init_null_config_fails) {
     asx_runtime rt;
     asx_runtime_hooks hooks;
@@ -1412,6 +1451,7 @@ int main(void) {
 
     /* Init/shutdown lifecycle */
     RUN_TEST(init_null_rt_fails);
+    RUN_TEST(mismatched_creation_preserves_live_work_and_all_objects);
     RUN_TEST(init_null_config_fails);
     RUN_TEST(init_null_hooks_fails);
     RUN_TEST(init_bad_config_fails);

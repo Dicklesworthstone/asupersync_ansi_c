@@ -58,7 +58,9 @@ typedef struct {
 } asx_lab_config;
 
 /* Initialize config with defaults. */
-ASX_API void asx_lab_config_init(asx_lab_config *cfg);
+ASX_API asx_status asx_lab_config_init_checked(asx_lab_config *cfg,
+                                               uint64_t application_fingerprint);
+#define asx_lab_config_init(cfg) asx_lab_config_init_checked((cfg), ASX_LAB_CONFIG_FINGERPRINT)
 
 /* -------------------------------------------------------------------
  * Lab runtime
@@ -73,14 +75,51 @@ typedef struct {
 
 /* Initialize the lab runtime with deterministic config.
  * Sets up virtual time, seeded entropy, and runtime hooks. */
-ASX_API ASX_MUST_USE asx_status asx_lab_init(asx_lab *lab, const asx_lab_config *cfg);
+ASX_API ASX_MUST_USE asx_status asx_lab_init_checked(asx_lab *lab, const asx_lab_config *cfg,
+                                                     uint64_t application_fingerprint);
+#define asx_lab_init(lab, cfg) asx_lab_init_checked((lab), (cfg), ASX_LAB_CONFIG_FINGERPRINT)
+
+/* The lab's own public object/config layout joins the runtime build identity. */
+static inline uint64_t asx_header_lab_fingerprint(void) {
+    typedef struct {
+        char pad;
+        asx_lab value;
+    } lab_alignment;
+    typedef struct {
+        char pad;
+        asx_lab_config value;
+    } config_alignment;
+    static const uint64_t values[] = {
+        sizeof(asx_lab),
+        offsetof(lab_alignment, value),
+        offsetof(asx_lab, rt),
+        offsetof(asx_lab, config),
+        offsetof(asx_lab, entropy_state),
+        offsetof(asx_lab, initialized),
+        sizeof(asx_lab_config),
+        offsetof(config_alignment, value),
+        offsetof(asx_lab_config, seed),
+        offsetof(asx_lab_config, start_time_ns),
+        offsetof(asx_lab_config, max_polls),
+        offsetof(asx_lab_config, auto_advance),
+    };
+    uint64_t fingerprint = ASX_CONFIG_FINGERPRINT;
+    size_t i;
+    for (i = 0u; i < sizeof(values) / sizeof(values[0]); i++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded lab bootstrap layout facts") */
+        fingerprint = (fingerprint ^ values[i]) * UINT64_C(1099511628211);
+    }
+    return fingerprint;
+}
+#define ASX_LAB_CONFIG_FINGERPRINT (asx_header_lab_fingerprint())
 
 /* Shut down the lab runtime and restore hooks. */
 ASX_API void asx_lab_shutdown(asx_lab *lab);
 
 /* Reset the lab runtime to initial state (preserves config) and
  * re-bootstrap the deterministic runtime hook table. */
-ASX_API void asx_lab_reset(asx_lab *lab);
+ASX_API asx_status asx_lab_reset_checked(asx_lab *lab, uint64_t application_fingerprint);
+#define asx_lab_reset(lab) asx_lab_reset_checked((lab), ASX_LAB_CONFIG_FINGERPRINT)
 
 /* -------------------------------------------------------------------
  * Time control
@@ -118,10 +157,6 @@ ASX_API ASX_MUST_USE asx_status asx_lab_run(asx_lab *lab, asx_region_id region, 
 typedef asx_status (*asx_lab_step_fn)(asx_lab *lab, void *user_data);
 
 /* Scenario definition: a sequence of steps. */
-#ifndef ASX_LAB_MAX_STEPS
-#define ASX_LAB_MAX_STEPS 32u
-#endif
-
 typedef struct {
     const char *name;
     asx_lab_step_fn steps[ASX_LAB_MAX_STEPS];

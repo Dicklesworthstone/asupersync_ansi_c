@@ -33,10 +33,6 @@ typedef enum {
     ASX_SERVER_STATE_STOPPED = 3
 } asx_server_state;
 
-#ifndef ASX_SERVER_MAX_CONNECTIONS
-#define ASX_SERVER_MAX_CONNECTIONS 16u
-#endif
-
 typedef struct {
     uint32_t max_connections; /* at most ASX_SERVER_MAX_CONNECTIONS */
     /* How long a graceful shutdown waits for connections to finish before

@@ -12,6 +12,7 @@
 #ifndef ASX_NET_WEB_H
 #define ASX_NET_WEB_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/net/http.h>
@@ -24,14 +25,6 @@ extern "C" {
 /* -------------------------------------------------------------------
  * Router
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_WEB_MAX_ROUTES
-#define ASX_WEB_MAX_ROUTES 32u
-#endif
-
-#ifndef ASX_WEB_PATH_MAX
-#define ASX_WEB_PATH_MAX 128u
-#endif
 
 /* Handler callback: receives request, writes response. Returns status. */
 typedef asx_status (*asx_web_handler_fn)(const asx_http_request *req, asx_http_response *resp,
@@ -72,10 +65,6 @@ ASX_API asx_status asx_web_router_dispatch(const asx_web_router *router,
  * Middleware
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_WEB_MAX_MIDDLEWARE
-#define ASX_WEB_MAX_MIDDLEWARE 8u
-#endif
-
 /* Middleware callback: may modify request/response, calls next via chain. */
 typedef asx_status (*asx_web_middleware_fn)(const asx_http_request *req, asx_http_response *resp,
                                             void *user_data, asx_web_handler_fn next,
@@ -109,18 +98,6 @@ ASX_API asx_status asx_web_middleware_run(const asx_web_middleware_stack *stack,
  * Request extraction
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_WEB_MAX_QUERY_PARAMS
-#define ASX_WEB_MAX_QUERY_PARAMS 16u
-#endif
-
-#ifndef ASX_WEB_PARAM_KEY_MAX
-#define ASX_WEB_PARAM_KEY_MAX 64u
-#endif
-
-#ifndef ASX_WEB_PARAM_VALUE_MAX
-#define ASX_WEB_PARAM_VALUE_MAX 256u
-#endif
-
 typedef struct {
     char key[ASX_WEB_PARAM_KEY_MAX];
     char value[ASX_WEB_PARAM_VALUE_MAX];
@@ -146,18 +123,6 @@ ASX_API const char *asx_web_extract_content_type(const asx_http_request *req);
 /* -------------------------------------------------------------------
  * Session
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_WEB_MAX_SESSIONS
-#define ASX_WEB_MAX_SESSIONS 16u
-#endif
-
-#ifndef ASX_WEB_SESSION_ID_LEN
-#define ASX_WEB_SESSION_ID_LEN 32u
-#endif
-
-#ifndef ASX_WEB_SESSION_MAX_DATA
-#define ASX_WEB_SESSION_MAX_DATA 512u
-#endif
 
 typedef struct {
     char id[ASX_WEB_SESSION_ID_LEN + 1];
@@ -200,18 +165,6 @@ ASX_API asx_status asx_web_session_destroy(asx_web_session_store *store, const c
  * Server-Sent Events (SSE)
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_WEB_SSE_MAX_EVENTS
-#define ASX_WEB_SSE_MAX_EVENTS 16u
-#endif
-
-#ifndef ASX_WEB_SSE_DATA_MAX
-#define ASX_WEB_SSE_DATA_MAX 256u
-#endif
-
-#ifndef ASX_WEB_SSE_EVENT_NAME_MAX
-#define ASX_WEB_SSE_EVENT_NAME_MAX 32u
-#endif
-
 typedef struct {
     char event[ASX_WEB_SSE_EVENT_NAME_MAX];
     char data[ASX_WEB_SSE_DATA_MAX];
@@ -245,22 +198,6 @@ ASX_API int asx_web_sse_is_open(const asx_web_sse_stream *stream);
 /* -------------------------------------------------------------------
  * Multipart form parsing
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_WEB_MAX_MULTIPART_PARTS
-#define ASX_WEB_MAX_MULTIPART_PARTS 8u
-#endif
-
-#ifndef ASX_WEB_MULTIPART_NAME_MAX
-#define ASX_WEB_MULTIPART_NAME_MAX 64u
-#endif
-
-#ifndef ASX_WEB_MULTIPART_FILENAME_MAX
-#define ASX_WEB_MULTIPART_FILENAME_MAX 128u
-#endif
-
-#ifndef ASX_WEB_MULTIPART_DATA_MAX
-#define ASX_WEB_MULTIPART_DATA_MAX 4096u
-#endif
 
 typedef struct {
     char name[ASX_WEB_MULTIPART_NAME_MAX];
@@ -296,14 +233,6 @@ ASX_API const asx_web_multipart_part *asx_web_multipart_get(const asx_web_multip
  * CORS
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_WEB_CORS_MAX_ORIGINS
-#define ASX_WEB_CORS_MAX_ORIGINS 8u
-#endif
-
-#ifndef ASX_WEB_CORS_ORIGIN_MAX
-#define ASX_WEB_CORS_ORIGIN_MAX 128u
-#endif
-
 typedef struct {
     char allowed_origins[ASX_WEB_CORS_MAX_ORIGINS][ASX_WEB_CORS_ORIGIN_MAX];
     uint32_t origin_count;
@@ -328,10 +257,6 @@ ASX_API asx_status asx_web_cors_apply(const asx_web_cors_config *cfg, const char
  * CSRF protection
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_WEB_CSRF_TOKEN_LEN
-#define ASX_WEB_CSRF_TOKEN_LEN 32u
-#endif
-
 typedef struct {
     char token[ASX_WEB_CSRF_TOKEN_LEN + 1];
 } asx_web_csrf;
@@ -354,10 +279,6 @@ ASX_API int asx_web_csrf_validate(const asx_web_csrf *csrf, const char *submitte
 /* -------------------------------------------------------------------
  * Static file serving (deterministic model)
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_WEB_MAX_STATIC_FILES
-#define ASX_WEB_MAX_STATIC_FILES 16u
-#endif
 
 typedef struct {
     char path[ASX_WEB_PATH_MAX];

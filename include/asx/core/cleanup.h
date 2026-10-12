@@ -14,6 +14,7 @@
 #ifndef ASX_CORE_CLEANUP_H
 #define ASX_CORE_CLEANUP_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <stdint.h>
@@ -23,9 +24,6 @@ extern "C" {
 #endif
 
 /* Maximum entries per cleanup stack (walking skeleton) */
-#ifndef ASX_CLEANUP_STACK_CAPACITY
-#define ASX_CLEANUP_STACK_CAPACITY 32
-#endif
 #if (ASX_CLEANUP_STACK_CAPACITY) < 1
 #error "ASX_CLEANUP_STACK_CAPACITY must be at least 1"
 #endif

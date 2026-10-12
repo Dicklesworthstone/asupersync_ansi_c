@@ -49,19 +49,8 @@ extern "C" {
 
 #if ASX_HAS_NATIVE_RUNTIME_SURFACES
 
-#ifndef ASX_MAX_PROCESSES
-#define ASX_MAX_PROCESSES 8u
-#endif
 #if (ASX_MAX_PROCESSES) < 1
 #error "ASX_MAX_PROCESSES must be at least 1"
-#endif
-
-#ifndef ASX_PROCESS_WAIT_MAX_POLLS
-#define ASX_PROCESS_WAIT_MAX_POLLS 10000u
-#endif
-
-#ifndef ASX_PROCESS_PROGRAM_MAX
-#define ASX_PROCESS_PROGRAM_MAX 96u
 #endif
 
 /* Conventional signal numbers reported by the MEMORY backend. */
@@ -106,22 +95,6 @@ ASX_API asx_process_backend asx_process_get_backend(void);
 /* -------------------------------------------------------------------
  * Process command builder
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_PROCESS_MAX_ARGS
-#define ASX_PROCESS_MAX_ARGS 16u
-#endif
-
-#ifndef ASX_PROCESS_ARG_MAX
-#define ASX_PROCESS_ARG_MAX 128u
-#endif
-
-#ifndef ASX_PROCESS_MAX_ENV
-#define ASX_PROCESS_MAX_ENV 16u
-#endif
-
-#ifndef ASX_PROCESS_ENV_MAX
-#define ASX_PROCESS_ENV_MAX 128u
-#endif
 
 typedef enum {
     ASX_PROCESS_STDIO_INHERIT = 0,
@@ -265,10 +238,6 @@ ASX_API ASX_MUST_USE asx_status asx_process_stderr_read(asx_process_handle proce
 /* -------------------------------------------------------------------
  * Process output capture
  * ------------------------------------------------------------------- */
-
-#ifndef ASX_PROCESS_OUTPUT_MAX
-#define ASX_PROCESS_OUTPUT_MAX 4096u
-#endif
 
 typedef struct {
     int32_t exit_code;

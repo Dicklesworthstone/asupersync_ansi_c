@@ -12,6 +12,7 @@
 #ifndef ASX_APP_DOCTOR_H
 #define ASX_APP_DOCTOR_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <asx/runtime/rt.h>
@@ -48,10 +49,6 @@ typedef struct {
  * Doctor report
  * ------------------------------------------------------------------- */
 
-#ifndef ASX_DOCTOR_MAX_CHECKS
-#define ASX_DOCTOR_MAX_CHECKS 16u
-#endif
-
 typedef struct {
     asx_doctor_check_result checks[ASX_DOCTOR_MAX_CHECKS];
     uint32_t check_count;
@@ -63,10 +60,6 @@ typedef struct {
 
 /* Upper bound on the scheduler run that drives the probe tasks of
  * asx_doctor_probe (runtime clock nanoseconds). */
-#ifndef ASX_DOCTOR_PROBE_TIMEOUT_NS
-#define ASX_DOCTOR_PROBE_TIMEOUT_NS ((asx_time)2000000000u)
-#endif
-
 /* -------------------------------------------------------------------
  * Doctor API
  * ------------------------------------------------------------------- */

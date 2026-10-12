@@ -42,21 +42,6 @@ typedef enum {
     ASX_TLS_ROOT_SOURCE_WEBPKI = 2
 } asx_tls_root_source;
 
-#ifndef ASX_TLS_MAX_HOSTNAME
-#define ASX_TLS_MAX_HOSTNAME 64u
-#endif
-
-#ifndef ASX_TLS_MAX_ALPN
-#define ASX_TLS_MAX_ALPN 4u
-#endif
-
-#ifndef ASX_TLS_ALPN_MAX_LEN
-#define ASX_TLS_ALPN_MAX_LEN 16u
-#endif
-
-#ifndef ASX_MAX_TLS_STREAMS
-#define ASX_MAX_TLS_STREAMS 8u
-#endif
 #if (ASX_MAX_TLS_STREAMS) < 1
 #error "ASX_MAX_TLS_STREAMS must be at least 1"
 #endif

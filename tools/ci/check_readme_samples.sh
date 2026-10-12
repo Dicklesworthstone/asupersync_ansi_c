@@ -8,7 +8,10 @@
 # preceded by a line starting "<!-- readme-c: excerpt" quotes code from a
 # header and is skipped.
 #
-# usage: tools/ci/check_readme_samples.sh <README.md> <libasx.a> <work-dir>
+# usage: tools/ci/check_readme_samples.sh <README.md> <libasx.a> <work-dir> [library-build-flags...]
+# The Makefile supplies its actual compiler/build flags so linked examples
+# use the same build identity as the library. Missing/mismatched options are
+# still rejected by runtime construction, not bypassed by this checker.
 # =============================================================================
 set -euo pipefail
 
@@ -16,7 +19,8 @@ readme=${1:?usage: check_readme_samples.sh <README.md> <libasx.a> <work-dir>}
 lib=${2:?missing libasx.a}
 work=${3:?missing work dir}
 cc=${CC:-cc}
-flags=(-std=c99 -Wall -Wextra -Wpedantic -Werror -Iinclude)
+shift 3
+flags=(-std=c99 -Wall -Wextra -Wpedantic -Werror -Iinclude "$@")
 
 mkdir -p "$work"
 # One file per fence: sample-NN.c (or .excerpt) plus "NN <first README line>"

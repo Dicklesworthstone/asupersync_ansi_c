@@ -16,6 +16,7 @@
 #ifndef ASX_SPORK_SPORK_H
 #define ASX_SPORK_SPORK_H
 
+#include <asx/asx_config.h>
 #include <asx/asx_export.h>
 #include <asx/asx_status.h>
 #include <stddef.h>
@@ -48,10 +49,6 @@ ASX_API ASX_MUST_USE asx_status asx_work_item_execute(asx_work_item *item);
 /* ------------------------------------------------------------------ */
 /* Work pool — bounded set of parallel work items                      */
 /* ------------------------------------------------------------------ */
-
-#ifndef ASX_WORK_POOL_MAX_ITEMS
-#define ASX_WORK_POOL_MAX_ITEMS 16u
-#endif
 
 typedef struct {
     asx_work_item items[ASX_WORK_POOL_MAX_ITEMS];
@@ -114,10 +111,6 @@ ASX_API size_t asx_parallel_map_completed(const asx_parallel_map_state *state);
 /* Scatter-gather — distribute work and collect results                */
 /* ------------------------------------------------------------------ */
 
-#ifndef ASX_SCATTER_GATHER_MAX_ITEMS
-#define ASX_SCATTER_GATHER_MAX_ITEMS 8u
-#endif
-
 typedef struct {
     asx_work_fn fn;
     void *user_data;
@@ -151,10 +144,6 @@ ASX_API uint32_t asx_scatter_gather_gathered(const asx_scatter_gather *sg);
 /* Spork pipeline — sequential stage composition                       */
 /* (Prefixed to avoid collision with core combinator pipeline.)        */
 /* ------------------------------------------------------------------ */
-
-#ifndef ASX_SPORK_PIPELINE_MAX_STAGES
-#define ASX_SPORK_PIPELINE_MAX_STAGES 8u
-#endif
 
 typedef asx_status (*asx_spork_stage_fn)(void *input, void *output, void *user_data);
 

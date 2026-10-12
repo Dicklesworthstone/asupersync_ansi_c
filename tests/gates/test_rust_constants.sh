@@ -38,7 +38,7 @@ if ! make --no-print-directory -C "$REPO_ROOT" conformance-runner >"$WORK/build.
     log_case build "exit0" "build-failed" "fail" "$WORK/build.log"
     exit 1
 fi
-RUNNER="$REPO_ROOT/build/bin/asx-conformance"
+RUNNER="${ASX_CONFORMANCE_RUNNER:-$REPO_ROOT/build/bin/asx-conformance}"
 
 # run_case <name> <expected exit: 0|nonzero> <expected output regex> <document>
 run_case() {

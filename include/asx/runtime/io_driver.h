@@ -35,9 +35,6 @@ extern "C" {
 #endif
 
 #if ASX_HAS_NATIVE_IO_DRIVER
-#ifndef ASX_MAX_IO_TOKENS
-#define ASX_MAX_IO_TOKENS 64u
-#endif
 #if (ASX_MAX_IO_TOKENS) < 1
 #error "ASX_MAX_IO_TOKENS must be at least 1"
 #endif
