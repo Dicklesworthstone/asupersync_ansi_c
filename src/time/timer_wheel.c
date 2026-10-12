@@ -634,7 +634,10 @@ static void tw_reset_state(asx_timer_wheel *w) {
         ASX_CHECKPOINT_WAIVER("bounded: TW_LEVELS * TW_SLOTS iterations");
         w->cursor[level] = 0u;
         memset(w->occupied[level], 0, sizeof(w->occupied[level]));
-        for (slot = 0u; slot < TW_SLOTS; slot++) { tw_list_clear(&w->bucket[level][slot]); }
+        for (slot = 0u; slot < TW_SLOTS; slot++) {
+            ASX_CHECKPOINT_WAIVER("bounded: TW_SLOTS constant");
+            tw_list_clear(&w->bucket[level][slot]);
+        }
     }
     tw_list_clear(&w->ready);
     w->max_timer_duration_ns = ASX_TIMER_MAX_DURATION_NS;
@@ -754,7 +757,7 @@ static int tw_handle_is_live(const asx_timer_wheel *w, const asx_timer_handle *h
 }
 
 int asx_timer_cancel(asx_timer_wheel *wheel, const asx_timer_handle *handle) {
-    tw_entry *e;
+    const tw_entry *e;
 
     if (wheel == NULL || handle == NULL) return 0;
     if (!tw_handle_is_live(wheel, handle)) return 0;
