@@ -427,6 +427,145 @@ TEST(chain_bound_with_no_room_keeps_no_cause) {
     asx_cancel_chain_limits_reset_internal();
 }
 
+/* ------------------------------------------------------------------ */
+/* Witness values (Rust CancelWitness, types/cancel.rs:323-412)         */
+/* ------------------------------------------------------------------ */
+
+static asx_cancel_witness_info winfo(asx_task_id task, asx_region_id region, uint32_t epoch,
+                                     asx_cancel_phase phase, asx_cancel_kind kind) {
+    asx_cancel_witness_info w;
+    memset(&w, 0, sizeof w);
+    w.task = task;
+    w.region = region;
+    w.epoch = epoch;
+    w.phase = phase;
+    w.reason.kind = kind;
+    w.reason.origin_task = ASX_INVALID_ID;
+    w.reason.timestamp = 1u;
+    return w;
+}
+
+TEST(witness_validate_transition_ok) {
+    /* cancel_witness_validate_transition_ok (cancel.rs:2585) */
+    asx_cancel_witness_info w1 = winfo(7, 3, 1, ASX_CANCEL_PHASE_REQUESTED, ASX_CANCEL_TIMEOUT);
+    asx_cancel_witness_info w2 = winfo(7, 3, 1, ASX_CANCEL_PHASE_CANCELLING, ASX_CANCEL_TIMEOUT);
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&w1, &w2), ASX_OK);
+}
+
+TEST(witness_validate_transition_with_no_previous_is_ok) {
+    /* cancel_witness_validate_transition_none_prev (cancel.rs:2604) */
+    asx_cancel_witness_info w = winfo(7, 3, 1, ASX_CANCEL_PHASE_REQUESTED, ASX_CANCEL_TIMEOUT);
+    ASSERT_EQ(asx_cancel_witness_validate_transition(NULL, &w), ASX_OK);
+}
+
+TEST(witness_validate_phase_regression) {
+    /* cancel_witness_validate_phase_regression (cancel.rs:2616) */
+    asx_cancel_witness_info w1 = winfo(7, 3, 1, ASX_CANCEL_PHASE_CANCELLING, ASX_CANCEL_TIMEOUT);
+    asx_cancel_witness_info w2 = winfo(7, 3, 1, ASX_CANCEL_PHASE_REQUESTED, ASX_CANCEL_TIMEOUT);
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&w1, &w2), ASX_E_WITNESS_PHASE_REGRESSION);
+}
+
+TEST(witness_validate_allows_an_equal_phase_while_advance_stays_strict) {
+    /* validate_transition refuses only `next.rank < prev.rank`
+     * (cancel.rs:397); the step API still refuses a repeated phase, which
+     * the formal harness pins. */
+    asx_cancel_witness_info w1 = winfo(7, 3, 1, ASX_CANCEL_PHASE_FINALIZING, ASX_CANCEL_TIMEOUT);
+    asx_cancel_witness_info w2 = winfo(7, 3, 1, ASX_CANCEL_PHASE_FINALIZING, ASX_CANCEL_TIMEOUT);
+    asx_cancel_witness_id w = ASX_INVALID_ID;
+    asx_cancel_reason reason = {ASX_CANCEL_USER, 0, 0, 1, "eq", NULL, 0};
+
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&w1, &w2), ASX_OK);
+
+    ASSERT_EQ(asx_cancel_witness_create(&w, 1, &reason), ASX_OK);
+    ASSERT_EQ(asx_cancel_witness_advance(w, ASX_CANCEL_PHASE_CANCELLING), ASX_OK);
+    ASSERT_EQ(asx_cancel_witness_advance(w, ASX_CANCEL_PHASE_CANCELLING), ASX_E_INVALID_TRANSITION);
+    asx_cancel_witness_release(w);
+}
+
+TEST(witness_validate_identity_must_match_in_rusts_order) {
+    /* Same task, region and epoch (cancel.rs:387-395); the first rule that
+     * fails is the one reported. */
+    asx_cancel_witness_info prev = winfo(7, 3, 1, ASX_CANCEL_PHASE_REQUESTED, ASX_CANCEL_USER);
+    asx_cancel_witness_info next = prev;
+
+    next.task = 8;
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&prev, &next), ASX_E_WITNESS_TASK_MISMATCH);
+
+    next = prev;
+    next.region = 4;
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&prev, &next), ASX_E_WITNESS_REGION_MISMATCH);
+
+    next = prev;
+    next.epoch = 2;
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&prev, &next), ASX_E_WITNESS_EPOCH_MISMATCH);
+
+    /* Task before region before epoch before phase before reason: all five
+     * differ here and the task is the one reported. */
+    next = winfo(8, 4, 2, ASX_CANCEL_PHASE_REQUESTED, ASX_CANCEL_USER);
+    prev.phase = ASX_CANCEL_PHASE_COMPLETED;
+    prev.reason.kind = ASX_CANCEL_SHUTDOWN;
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&prev, &next), ASX_E_WITNESS_TASK_MISMATCH);
+    next.task = prev.task;
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&prev, &next), ASX_E_WITNESS_REGION_MISMATCH);
+    next.region = prev.region;
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&prev, &next), ASX_E_WITNESS_EPOCH_MISMATCH);
+    next.epoch = prev.epoch;
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&prev, &next), ASX_E_WITNESS_PHASE_REGRESSION);
+    next.phase = prev.phase;
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&prev, &next), ASX_E_WITNESS_REASON_WEAKENED);
+}
+
+TEST(witness_validate_reason_may_strengthen_but_not_weaken) {
+    /* next.reason.severity() < prev.reason.severity() is ReasonWeakened
+     * (cancel.rs:403-408); equal severity (Timeout, Deadline) and a
+     * stronger kind are fine. */
+    asx_cancel_witness_info a = winfo(7, 3, 1, ASX_CANCEL_PHASE_CANCELLING, ASX_CANCEL_SHUTDOWN);
+    asx_cancel_witness_info b = winfo(7, 3, 1, ASX_CANCEL_PHASE_CANCELLING, ASX_CANCEL_USER);
+
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&a, &b), ASX_E_WITNESS_REASON_WEAKENED);
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&b, &a), ASX_OK);
+
+    a = winfo(7, 3, 1, ASX_CANCEL_PHASE_CANCELLING, ASX_CANCEL_TIMEOUT);
+    b = winfo(7, 3, 1, ASX_CANCEL_PHASE_CANCELLING, ASX_CANCEL_DEADLINE);
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&a, &b), ASX_OK);
+}
+
+TEST(witness_validate_initial_refuses_epoch_zero) {
+    /* validate_initial (cancel.rs:369-373): epoch 0 is "no cancel ever
+     * requested". */
+    asx_cancel_witness_info w = winfo(7, 3, 0, ASX_CANCEL_PHASE_REQUESTED, ASX_CANCEL_USER);
+
+    ASSERT_EQ(asx_cancel_witness_validate_initial(&w), ASX_E_INVALID_TRANSITION);
+    w.epoch = 1;
+    ASSERT_EQ(asx_cancel_witness_validate_initial(&w), ASX_OK);
+}
+
+TEST(witness_validation_rejects_null_arguments) {
+    asx_cancel_witness_info w = winfo(7, 3, 1, ASX_CANCEL_PHASE_REQUESTED, ASX_CANCEL_USER);
+    asx_cancel_witness_info out;
+
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&w, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cancel_witness_validate_initial(NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cancel_witness_info_get(ASX_INVALID_ID, &out), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_cancel_witness_info_get(1, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(witness_of_a_task_the_runtime_does_not_hold_has_no_region_or_epoch) {
+    asx_cancel_witness_id w = ASX_INVALID_ID;
+    asx_cancel_reason reason = {ASX_CANCEL_TIMEOUT, 0, 0, 5, "ghost", NULL, 0};
+    asx_cancel_witness_info info;
+
+    ASSERT_EQ(asx_cancel_witness_create(&w, 4242, &reason), ASX_OK);
+    ASSERT_EQ(asx_cancel_witness_info_get(w, &info), ASX_OK);
+    ASSERT_EQ(info.task, (asx_task_id)4242);
+    ASSERT_EQ(info.region, ASX_INVALID_ID);
+    ASSERT_EQ(info.epoch, 0u);
+    ASSERT_EQ((int)info.phase, (int)ASX_CANCEL_PHASE_REQUESTED);
+    ASSERT_EQ((int)info.reason.kind, (int)ASX_CANCEL_TIMEOUT);
+    asx_cancel_witness_release(w);
+    ASSERT_EQ(asx_cancel_witness_info_get(w, &info), ASX_E_NOT_FOUND);
+}
+
 TEST(callers_own_chain_is_counted_whole) {
     /* Rust's with_cause sets no bound: only a chain the runtime built and
      * flagged truncated is cut. A hand-linked chain counts every link. */
@@ -474,6 +613,17 @@ int main(void) {
     RUN_TEST(chain_is_cut_at_a_configured_memory_bound);
     RUN_TEST(chain_bound_with_no_room_keeps_no_cause);
     RUN_TEST(callers_own_chain_is_counted_whole);
+
+    /* Witness values and Rust's validation rules */
+    RUN_TEST(witness_validate_transition_ok);
+    RUN_TEST(witness_validate_transition_with_no_previous_is_ok);
+    RUN_TEST(witness_validate_phase_regression);
+    RUN_TEST(witness_validate_allows_an_equal_phase_while_advance_stays_strict);
+    RUN_TEST(witness_validate_identity_must_match_in_rusts_order);
+    RUN_TEST(witness_validate_reason_may_strengthen_but_not_weaken);
+    RUN_TEST(witness_validate_initial_refuses_epoch_zero);
+    RUN_TEST(witness_validation_rejects_null_arguments);
+    RUN_TEST(witness_of_a_task_the_runtime_does_not_hold_has_no_region_or_epoch);
 
     /* Witness lifecycle */
     RUN_TEST(witness_create_and_query_phase);

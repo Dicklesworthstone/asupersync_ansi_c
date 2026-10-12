@@ -375,7 +375,7 @@ Phase transitions where `next.phase.rank() < prev.phase.rank()`. Rust reports `C
 
 **Note:** The cancellation protocol does NOT have a `None` phase state. In Rust, phase skips (e.g., `Requested` -> `Completed`) pass `validate_transition` because the rank does not decrease; C's advance also accepts a skip, since it only requires a strictly larger phase.
 
-**Additionally forbidden (Rust):** a witness pair whose reason severity decreases (`CancelWitnessError::ReasonWeakened`), or whose task, region or epoch differ (`TaskMismatch`, `RegionMismatch`, `EpochMismatch`). C has no witness-to-witness validator: its witness slot holds only an id, the phase and the reason (`src/core/cancel.c:95-101`), and the `ASX_E_WITNESS_*` codes are never returned.
+**Additionally forbidden (Rust):** a witness pair whose reason severity decreases (`CancelWitnessError::ReasonWeakened`), or whose task, region or epoch differ (`TaskMismatch`, `RegionMismatch`, `EpochMismatch`). C has `asx_cancel_witness_validate_transition` (`src/core/cancel.c`), which returns `ASX_E_WITNESS_TASK_MISMATCH`, `_REGION_MISMATCH`, `_EPOCH_MISMATCH`, `_PHASE_REGRESSION` and `_REASON_WEAKENED` in Rust's order; `asx_cancel_witness_advance` stays the strict step API.
 
 ### 4.4 Cancellation Kinds (11 Variants with Severity Ladder)
 
@@ -410,7 +410,7 @@ Severities and cleanup budgets match Rust exactly: `CancelKind::severity` (`src/
 
 ### 4.5 Cancellation Witness Structure
 
-Rust's witness (`CancelWitness`, `src/types/cancel.rs:323`) carries the fields below. C's witness slot (`src/core/cancel.c:95-101`) holds only an id, the phase and the reason; it has no task, region or epoch field (`bd-9kll.3.7`).
+Rust's witness (`CancelWitness`, `src/types/cancel.rs:323`) carries the fields below. C's witness slot (`asx_witness_slot` in `src/core/cancel.c`) holds the id, task, region, epoch, phase and reason: the runtime creates it after it sets the epoch, from the task record, and `asx_cancel_witness_info_get` reads it (a task the runtime holds no record of has region `ASX_INVALID_ID` and epoch 0).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -428,10 +428,10 @@ A witness transition from `prev` to `next` is valid when ALL hold. The checks ar
 |------|-------|-------------------|
 | Same task | `prev.task_id == next.task_id` | Rust `TaskMismatch` (C code `ASX_E_WITNESS_TASK_MISMATCH`, unused) |
 | Same region | `prev.region_id == next.region_id` | Rust `RegionMismatch` (C code `ASX_E_WITNESS_REGION_MISMATCH`, unused) |
-| Same epoch | `prev.epoch == next.epoch` | Rust `EpochMismatch` (C code `ASX_E_WITNESS_EPOCH_MISMATCH`, unused) |
-| Phase monotone | `next.phase.rank >= prev.phase.rank` | Rust `PhaseRegression`; C `asx_cancel_witness_advance` returns `ASX_E_INVALID_TRANSITION` and also rejects an equal phase |
-| Severity monotone | `next.reason.severity >= prev.reason.severity` | Rust `ReasonWeakened` (C code `ASX_E_WITNESS_REASON_WEAKENED`, unused) |
-| Initial epoch | first witness has `epoch != 0` | Rust `InitialEpochZero` (`src/types/cancel.rs:369`); no C counterpart |
+| Same epoch | `prev.epoch == next.epoch` | Rust `EpochMismatch` (C `ASX_E_WITNESS_EPOCH_MISMATCH` from `asx_cancel_witness_validate_transition`) |
+| Phase monotone | `next.phase.rank >= prev.phase.rank` | Rust `PhaseRegression`; C `asx_cancel_witness_validate_transition` returns `ASX_E_WITNESS_PHASE_REGRESSION` and allows an equal phase; `asx_cancel_witness_advance` returns `ASX_E_INVALID_TRANSITION` and also rejects an equal phase (the step API, pinned by the formal harness) |
+| Severity monotone | `next.reason.severity >= prev.reason.severity` | Rust `ReasonWeakened` (C `ASX_E_WITNESS_REASON_WEAKENED` from `asx_cancel_witness_validate_transition`) |
+| Initial epoch | first witness has `epoch != 0` | Rust `InitialEpochZero` (`src/types/cancel.rs:369`); C `asx_cancel_witness_validate_initial` returns `ASX_E_INVALID_TRANSITION` |
 
 ### 4.7 Attribution Chain
 
@@ -723,7 +723,7 @@ Each transition rule and forbidden behavior maps to candidate fixture IDs for co
 | task-lifecycle-009 | Attempted skip transition (Running -> Cancelling) | Must fail (must go through CancelRequested) | C test `tests/unit/core/test_transition.c` |
 | task-lifecycle-010 | Completed is absorbing: all transitions from Completed rejected | Must fail for all 6 possible targets | C test `tests/unit/core/test_transition.c` (`task_completed_absorbing`) |
 | task-lifecycle-011 | Acknowledgement applies the cleanup budget | T7 | C test `tests/unit/runtime/test_cancellation.c` (`acknowledgement_replaces_the_budget_with_the_cleanup_budget`); `budget-inherit-before-cleanup-001` (cleanup starts after the acknowledging poll) |
-| task-lifecycle-012 | finalize_done() produces CancelWitness | T13: witness with task_id, region_id, epoch, phase | None; the C witness has no task, region or epoch (§4.5) |
+| task-lifecycle-012 | finalize_done() produces CancelWitness | T13: witness with task_id, region_id, epoch, phase | `tests/unit/runtime/test_cancellation.c::witness_of_a_cancelled_task_carries_its_task_region_and_epoch`; the fixture vocabulary has no witness (§4.5) |
 | task-lifecycle-013 | cancel_epoch set only by the first cancel | Epoch 0 then 1, constant on strengthening | No fixture (the epoch is not in the vocabulary); `tests/unit/runtime/test_cancellation.c::cancel_created_task_goes_straight_to_cancel_requested` |
 
 ### 9.3 Obligation Fixtures

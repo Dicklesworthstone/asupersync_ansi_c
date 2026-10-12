@@ -1648,6 +1648,48 @@ TEST(region_cancel_records_one_request_per_newly_cancelled_task) {
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)1u);
 }
 
+TEST(witness_of_a_cancelled_task_carries_its_task_region_and_epoch) {
+    /* Rust's CancelWitness carries task_id, region_id and epoch
+     * (types/cancel.rs:323-338); the runtime creates its witnesses from the
+     * task record after it sets the epoch (record/task.rs:805-809). The
+     * acknowledgement advances the phase, and validate_transition accepts
+     * that and refuses the way back. */
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_task_slot *slot;
+    asx_checkpoint_result cr;
+    asx_cancel_witness_info before;
+    asx_cancel_witness_info after;
+    asx_budget budget;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_forever, NULL, &tid), ASX_OK);
+    budget = asx_budget_from_polls(1);
+    SCHED_RUN_IGNORE(rid, &budget);
+
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
+    ASSERT_EQ(asx_task_slot_lookup(tid, &slot), ASX_OK);
+    ASSERT_EQ(asx_cancel_witness_info_get(slot->cancel_witness, &before), ASX_OK);
+    ASSERT_EQ(before.task, tid);
+    ASSERT_EQ(before.region, rid);
+    ASSERT_EQ(before.epoch, 1u);
+    ASSERT_EQ((int)before.phase, (int)ASX_CANCEL_PHASE_REQUESTED);
+    ASSERT_EQ((int)before.reason.kind, (int)ASX_CANCEL_USER);
+    ASSERT_EQ(asx_cancel_witness_validate_initial(&before), ASX_OK);
+
+    ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
+    ASSERT_TRUE(cr.cancelled);
+    ASSERT_EQ(asx_cancel_witness_info_get(slot->cancel_witness, &after), ASX_OK);
+    ASSERT_EQ(after.task, tid);
+    ASSERT_EQ(after.region, rid);
+    ASSERT_EQ(after.epoch, 1u);
+    ASSERT_EQ((int)after.phase, (int)ASX_CANCEL_PHASE_CANCELLING);
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&before, &after), ASX_OK);
+    ASSERT_EQ(asx_cancel_witness_validate_transition(&after, &before),
+              ASX_E_WITNESS_PHASE_REGRESSION);
+}
+
 TEST(runtime_config_installs_the_chain_bounds_and_reset_restores_the_defaults) {
     /* asx_runtime_config.max_cancel_chain_depth is what the runtime cuts
      * chains at once it is initialised with it (bd-9kll.3.7), and a runtime
@@ -2376,6 +2418,7 @@ int main(void) {
     RUN_TEST(region_cancel_of_an_idle_region_finalizes_at_once);
     RUN_TEST(cancel_strengthen_replaces_the_whole_reason_and_records_no_event);
     RUN_TEST(region_cancel_records_one_request_per_newly_cancelled_task);
+    RUN_TEST(witness_of_a_cancelled_task_carries_its_task_region_and_epoch);
     RUN_TEST(runtime_config_installs_the_chain_bounds_and_reset_restores_the_defaults);
     RUN_TEST(region_cancel_cuts_the_cause_chain_at_the_chain_bound);
     RUN_TEST(spawned_child_that_acknowledges_a_later_cancel_keeps_its_value);

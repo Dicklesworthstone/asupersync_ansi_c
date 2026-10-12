@@ -1375,6 +1375,16 @@ ASX_API ASX_MUST_USE asx_status asx_quiescence_check_detailed(asx_region_id id,
  * Not for production use. */
 ASX_API void asx_runtime_reset(void);
 
+/* The region a task belongs to. Returns ASX_OK, ASX_E_INVALID_ARGUMENT if
+ * out is NULL, or a lookup error for a bad handle. */
+ASX_API ASX_MUST_USE asx_status asx_task_get_region(asx_task_id id, asx_region_id *out);
+
+/* A task's cancel epoch (Rust CancelWitness::epoch, record/task.rs:805-809):
+ * 0 until a cancel is first requested, then 1; a repeated or strengthening
+ * request leaves it. Returns ASX_OK, ASX_E_INVALID_ARGUMENT if out is NULL,
+ * or a lookup error for a bad handle. */
+ASX_API ASX_MUST_USE asx_status asx_task_get_cancel_epoch(asx_task_id id, uint32_t *out);
+
 #ifdef __cplusplus
 }
 #endif

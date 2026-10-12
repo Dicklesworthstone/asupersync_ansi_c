@@ -872,3 +872,23 @@ asx_status asx_task_complete_state_internal(asx_task_slot *t, asx_task_id tid,
     *out_from = t->state;
     return asx_task_set_state_internal(t, tid, ASX_TASK_COMPLETED);
 }
+
+asx_status asx_task_get_region(asx_task_id id, asx_region_id *out) {
+    asx_task_slot *t;
+    asx_status st;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
+    *out = t->region;
+    return ASX_OK;
+}
+
+asx_status asx_task_get_cancel_epoch(asx_task_id id, uint32_t *out) {
+    asx_task_slot *t;
+    asx_status st;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_task_slot_lookup(id, &t);
+    if (st != ASX_OK) return st;
+    *out = t->cancel_epoch;
+    return ASX_OK;
+}

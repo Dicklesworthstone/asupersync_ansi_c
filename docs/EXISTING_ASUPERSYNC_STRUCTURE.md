@@ -436,7 +436,7 @@ No `None` phase. Rust produces no witness while `cancel_epoch == 0` (`src/record
 
 ### 6.2 Legal Phase Transitions
 
-Rust (`validate_transition`, `src/types/cancel.rs:382`): valid when task, region and epoch match, `next.phase.rank() >= prev.phase.rank()`, and severity does not decrease. Same-phase pairs are strengthening. Skip transitions (e.g., `Requested -> Completed`) are allowed because rank is non-decreasing. C's `asx_cancel_witness_advance` (`src/core/cancel.c:145`) accepts only a strictly larger phase, so it rejects a same-phase advance (`bd-9kll.3.7`).
+Rust (`validate_transition`, `src/types/cancel.rs:382`): valid when task, region and epoch match, `next.phase.rank() >= prev.phase.rank()`, and severity does not decrease. Same-phase pairs are strengthening. Skip transitions (e.g., `Requested -> Completed`) are allowed because rank is non-decreasing. C's `asx_cancel_witness_advance` (`src/core/cancel.c:154`) is the strict step API and accepts only a strictly larger phase; the Rust rule is `asx_cancel_witness_validate_transition`, which allows an equal phase and reports `ASX_E_WITNESS_TASK_MISMATCH`, `_REGION_MISMATCH`, `_EPOCH_MISMATCH`, `_PHASE_REGRESSION` and `_REASON_WEAKENED` (`bd-9kll.3.7`).
 
 ### 6.3 Forbidden Phase Transitions
 
@@ -491,7 +491,7 @@ A transition from `prev` to `next` is valid when ALL hold (Rust `validate_transi
 |------|-------|-------------------|
 | Same task | `prev.task_id == next.task_id` | Rust `TaskMismatch` (C `ASX_E_WITNESS_TASK_MISMATCH`, unused) |
 | Same region | `prev.region_id == next.region_id` | Rust `RegionMismatch` (C `ASX_E_WITNESS_REGION_MISMATCH`, unused) |
-| Same epoch | `prev.epoch == next.epoch` | Rust `EpochMismatch` (C `ASX_E_WITNESS_EPOCH_MISMATCH`, unused) |
+| Same epoch | `prev.epoch == next.epoch` | Rust `EpochMismatch` (C `ASX_E_WITNESS_EPOCH_MISMATCH` from `asx_cancel_witness_validate_transition`) |
 | Phase monotone | `next.phase.rank >= prev.phase.rank` | Rust `PhaseRegression`; C `ASX_E_INVALID_TRANSITION`, also for an equal phase |
 | Severity monotone | `next.reason.severity >= prev.reason.severity` | Rust `ReasonWeakened` (C `ASX_E_WITNESS_REASON_WEAKENED`, unused) |
 
@@ -1362,11 +1362,11 @@ C codes from `include/asx/asx_status.h`; Rust equivalents in `docs/CANONICAL_VOC
 | `ASX_E_REGIONS_NOT_CLOSED` (902) | Declared; never returned; region checks return `ASX_E_QUIESCENCE_NOT_REACHED` (904) |
 | `ASX_E_TIMERS_PENDING` (801) | Declared; never returned |
 | `ASX_E_CHANNEL_NOT_DRAINED` (703) | Declared; never returned |
-| `ASX_E_WITNESS_TASK_MISMATCH` (603) | Declared; never returned |
-| `ASX_E_WITNESS_REGION_MISMATCH` (604) | Declared; never returned |
-| `ASX_E_WITNESS_EPOCH_MISMATCH` (605) | Declared; never returned |
-| `ASX_E_WITNESS_PHASE_REGRESSION` (601) | Declared; never returned (C witness advance returns `ASX_E_INVALID_TRANSITION`) |
-| `ASX_E_WITNESS_REASON_WEAKENED` (602) | Declared; never returned |
+| `ASX_E_WITNESS_TASK_MISMATCH` (603) | Returned by `asx_cancel_witness_validate_transition` |
+| `ASX_E_WITNESS_REGION_MISMATCH` (604) | Returned by `asx_cancel_witness_validate_transition` |
+| `ASX_E_WITNESS_EPOCH_MISMATCH` (605) | Returned by `asx_cancel_witness_validate_transition` |
+| `ASX_E_WITNESS_PHASE_REGRESSION` (601) | Returned by `asx_cancel_witness_validate_transition` (the step API `asx_cancel_witness_advance` returns `ASX_E_INVALID_TRANSITION`) |
+| `ASX_E_WITNESS_REASON_WEAKENED` (602) | Returned by `asx_cancel_witness_validate_transition` |
 
 ---
 
@@ -1480,7 +1480,7 @@ These IDs are this document's own (they are also in `schemas/invariant_schema.js
 | task-lifecycle-009 | Skip transition must fail | C test `tests/unit/core/test_transition.c` |
 | task-lifecycle-010 | Completed is absorbing: all transitions rejected | C test `tests/unit/core/test_transition.c` (`task_completed_absorbing`) |
 | task-lifecycle-011 | acknowledge_cancel() returns reason and applies budget | C test `tests/unit/runtime/test_cancellation.c` (`acknowledgement_replaces_the_budget_with_the_cleanup_budget`); `budget-inherit-before-cleanup-001` |
-| task-lifecycle-012 | finalize_done() produces CancelWitness | None (the C witness has no task, region or epoch) |
+| task-lifecycle-012 | finalize_done() produces CancelWitness | `tests/unit/runtime/test_cancellation.c::witness_of_a_cancelled_task_carries_its_task_region_and_epoch` (no fixture: the vocabulary has no witness) |
 | task-lifecycle-013 | cancel_epoch set only by the first cancel | No fixture (the epoch is not in the vocabulary); `tests/unit/runtime/test_cancellation.c::cancel_created_task_goes_straight_to_cancel_requested` |
 
 ### 19.3 Obligation Fixtures

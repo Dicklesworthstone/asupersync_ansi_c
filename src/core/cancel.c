@@ -96,6 +96,9 @@ typedef struct {
     asx_cancel_witness_id id;
     asx_cancel_phase phase;
     asx_cancel_reason reason;
+    asx_task_id task;     /* the task cancelled (Rust CancelWitness::task_id) */
+    asx_region_id region; /* its region (region_id); ASX_INVALID_ID if unknown */
+    uint32_t epoch;       /* its cancel epoch (epoch); 0 if unknown */
     uint16_t generation;
     int active;
 } asx_witness_slot;
@@ -122,7 +125,6 @@ asx_status asx_cancel_witness_create(asx_cancel_witness_id *out, asx_task_id tas
 
     if (out == NULL || reason == NULL) return ASX_E_INVALID_ARGUMENT;
     *out = ASX_INVALID_ID;
-    (void)task;
 
     /* Find free slot */
     for (i = 0; i < ASX_MAX_CANCEL_WITNESSES; i++) {
@@ -133,6 +135,13 @@ asx_status asx_cancel_witness_create(asx_cancel_witness_id *out, asx_task_id tas
             s->id = (asx_cancel_witness_id)g_witness_next_id++;
             s->phase = ASX_CANCEL_PHASE_REQUESTED;
             s->reason = *reason;
+            /* The identity Rust's witness carries, read from the runtime's
+             * task record: a task the runtime holds no record for has
+             * none. The runtime creates its witnesses after it sets the
+             * epoch. */
+            s->task = task;
+            if (asx_task_get_region(task, &s->region) != ASX_OK) s->region = ASX_INVALID_ID;
+            if (asx_task_get_cancel_epoch(task, &s->epoch) != ASX_OK) s->epoch = 0u;
             s->active = 1;
             if (i >= g_witness_count) g_witness_count = i + 1;
             *out = s->id;
@@ -306,4 +315,44 @@ void asx_cancel_reason_with_cause_limited(asx_cancel_reason *r, const asx_cancel
         return;
     }
     r->cause = (asx_cancel_reason *)cause;
+}
+
+/* -------------------------------------------------------------------
+ * Witness values (Rust CancelWitness, types/cancel.rs:323-412)
+ * ------------------------------------------------------------------- */
+
+asx_status asx_cancel_witness_info_get(asx_cancel_witness_id w, asx_cancel_witness_info *out) {
+    asx_witness_slot *s;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    s = witness_find(w);
+    if (s == NULL) return ASX_E_NOT_FOUND;
+    out->task = s->task;
+    out->region = s->region;
+    out->epoch = s->epoch;
+    out->phase = s->phase;
+    out->reason = s->reason;
+    return ASX_OK;
+}
+
+asx_status asx_cancel_witness_validate_initial(const asx_cancel_witness_info *w) {
+    if (w == NULL) return ASX_E_INVALID_ARGUMENT;
+    /* validate_initial (:369-373): epoch 0 is the "no cancel ever
+     * requested" sentinel. */
+    if (w->epoch == 0u) return ASX_E_INVALID_TRANSITION;
+    return ASX_OK;
+}
+
+asx_status asx_cancel_witness_validate_transition(const asx_cancel_witness_info *prev,
+                                                  const asx_cancel_witness_info *next) {
+    if (next == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (prev == NULL) return ASX_OK;
+    /* validate_transition (:382-411), in Rust's order. */
+    if (prev->task != next->task) return ASX_E_WITNESS_TASK_MISMATCH;
+    if (prev->region != next->region) return ASX_E_WITNESS_REGION_MISMATCH;
+    if (prev->epoch != next->epoch) return ASX_E_WITNESS_EPOCH_MISMATCH;
+    if ((int)next->phase < (int)prev->phase) return ASX_E_WITNESS_PHASE_REGRESSION;
+    if (asx_cancel_severity(next->reason.kind) < asx_cancel_severity(prev->reason.kind)) {
+        return ASX_E_WITNESS_REASON_WEAKENED;
+    }
+    return ASX_OK;
 }

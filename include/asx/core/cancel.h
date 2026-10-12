@@ -146,4 +146,48 @@ ASX_API const char *asx_cancel_kind_str(asx_cancel_kind kind);
 /* Return the human-readable name for a cancel phase. */
 ASX_API const char *asx_cancel_phase_str(asx_cancel_phase phase);
 
+/* -------------------------------------------------------------------
+ * Witness values and Rust's validation rules
+ *
+ * Rust's CancelWitness (types/cancel.rs:323-412) is a value: task, region,
+ * cancel epoch, phase and reason, and validate_transition is the rule
+ * between two of them. A C witness slot carries the same five, read from
+ * the runtime's task record when the witness is created (region
+ * ASX_INVALID_ID and epoch 0 for a task the runtime holds no record of).
+ * asx_cancel_witness_advance stays the strict step API (a phase moves
+ * forward and never repeats); the validation below is Rust's rule between
+ * two observed witnesses, where an equal phase is allowed.
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    asx_task_id task;
+    asx_region_id region;
+    uint32_t epoch;
+    asx_cancel_phase phase;
+    asx_cancel_reason reason;
+} asx_cancel_witness_info;
+
+/* The witness's task, region, epoch, phase and reason.
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if out is NULL, or
+ * ASX_E_NOT_FOUND for an invalid or released witness. */
+ASX_API ASX_MUST_USE asx_status asx_cancel_witness_info_get(asx_cancel_witness_id w,
+                                                            asx_cancel_witness_info *out);
+
+/* Rust CancelWitness::validate_initial (types/cancel.rs:369-373): the first
+ * witness of a task's stream must carry a non-zero epoch (epoch 0 means no
+ * cancel was ever requested). Returns ASX_OK, ASX_E_INVALID_TRANSITION for
+ * epoch 0 (Rust's InitialEpochZero) or ASX_E_INVALID_ARGUMENT for NULL. */
+ASX_API ASX_MUST_USE asx_status
+asx_cancel_witness_validate_initial(const asx_cancel_witness_info *w);
+
+/* Rust CancelWitness::validate_transition (types/cancel.rs:382-411): between
+ * `prev` (NULL for the first) and `next`, the same task, region and epoch,
+ * a phase that does not regress (an equal phase is fine) and a reason whose
+ * severity does not weaken, reported in that order as
+ * ASX_E_WITNESS_TASK_MISMATCH, _REGION_MISMATCH, _EPOCH_MISMATCH,
+ * _PHASE_REGRESSION or _REASON_WEAKENED (Rust's CancelWitnessError). Returns
+ * ASX_OK when valid, ASX_E_INVALID_ARGUMENT for a NULL next. */
+ASX_API ASX_MUST_USE asx_status asx_cancel_witness_validate_transition(
+    const asx_cancel_witness_info *prev, const asx_cancel_witness_info *next);
+
 #endif /* ASX_CORE_CANCEL_H */
