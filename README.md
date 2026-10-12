@@ -841,10 +841,11 @@ for the same workflow SHA and run, and checks the recorded step outcomes.
 Failed or missing evidence yields `fail` or `incomplete`; passing this perf
 scope still leaves full release readiness incomplete.
 
-As of 2026-10-12, hosted revision `ec5f8b4` passes 39/41 CORE checks:
-`scheduler_multi_round` p99 is 18,214 ns against 15,000 ns, and the baseline
-is 225 days old against a 120-day limit. Hosted verification of the new
-collection workflow is pending. Baselines and budgets remain unchanged;
+As of 2026-10-12, hosted revision `84ca5f40` passes 39/41 CORE and 38/41
+HFT checks; both profiles execute. CORE's single-task p99.99 is 20,388 ns
+against 15,000 ns. HFT's pressure and timer-cancel p99.9 exceed their limits,
+and both baselines exceed the unchanged 120-day freshness limit.
+Size/cold-start passes 3/10 checks. Baselines and budgets remain unchanged;
 P2 remains in progress, including raw-sample/profile evidence, governed
 baseline refresh and automotive acceptance. See
 `docs/REALITY_CHECK_AND_BRIDGE_PLAN.md` for revision-bound results and limits.
@@ -1134,7 +1135,9 @@ Ending early drains members the same way:
 | group deadline | `TIMEOUT` | `ASX_E_TIMED_OUT` (`ASX_E_THRESHOLD_TIMEOUT` for quorum) |
 | `asx_task_group_cancel` | the requested kind | `ASX_E_CANCELLED` |
 
-Members of a race completing in the same round are tie-broken by lowest index, so results are deterministic. Rust breaks that tie with the owner's entropy instead, an open divergence (bd-g652).
+Under lab dispatch, a race selects among ready members using the owner's
+per-task entropy, matching Rust's `race_all`; it draws even when only one
+member is ready. Outside lab dispatch it selects the first ready member.
 
 **Outcome aggregation** in join uses a severity lattice: `Ok < Err < Cancelled < Panicked`. The combined outcome of a join is the maximum severity across all branches. This means a join of (Ok, Ok, Err) produces Err, and a join of (Ok, Cancelled) produces Cancelled.
 

@@ -838,6 +838,12 @@ pub fn scenario(seed: u64, index: u64) -> Value {
         if rng.chance(70) {
             op["max_obligations"] = json!(rng.below(3));
         }
+        // Keep the script's run-to-idle boundary when no limit was drawn,
+        // but express its no-op with a schema-valid zero-time advance.
+        // Do not redraw: later operations must keep the same RNG stream.
+        if op.as_object().is_some_and(|fields| fields.len() == 2) {
+            op = json!({"op": "advance", "ns": 0});
+        }
         script.push(json!({"at_ns": 0, "op": op}));
     }
     for _ in 0..rng.below(3) {

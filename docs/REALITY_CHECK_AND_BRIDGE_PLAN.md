@@ -288,14 +288,26 @@ Independent final schema/capture acceptance passes at `84ca5f40`: both C
 compilers compare all 167 accepted and independently recaptured fixtures;
 the old schema failure is reproduced and retained. Original `bd-aioq` is
 reclosed normally with its original criteria and audit history preserved.
-Hosted retry has 29 successful jobs and one pending job at this observation.
-The same runtime source's
+The completed [hosted retry 38250744794](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38250744794)
+at `84ca5f40` passes all 30 primary CI jobs, including live Rust differential,
+strict checks, MSVC, native32, sanitizers and five QEMU ISAs. This covers that
+published source, not the unpublished generator repair below or physical devices.
+The same runtime source's earlier
 actual [performance run 38248217460](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38248217460)
 executes both CORE and HFT: each passes all 34 latency checks but fails one stale
 baseline check (225/224 days, limit 120). Size/cold-start is 5/10: archive
 1,602,150 bytes, text 733,104 bytes, BSS 4,887,172 bytes, first-task p99 21,705 ns
 and init p99 21,473 ns exceed their existing limits. These failures remain;
 archive-wide BSS is not an executed application's measured device RAM.
+The later [performance run 38250744836](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38250744836)
+at `84ca5f40` is also failing: CORE 39/41 (single-task p99.99 20,388 > 15,000 ns
+and stale baseline), HFT 38/41 (pressure p99.9 13,405 > 10,500 ns, timer-cancel
+p99.9 10,370 > 10,000 ns and stale baseline), and size/cold-start 3/10.
+Its seven size/cold-start failures are archive/text/BSS, init and first-task
+p99 (28,904/29,364 > 15,000 ns), and init/first-task jitter (821 > 500 ns and
+843 > 700 ns). Both profiles execute without skips. The differing timing
+results remain bound to their actual runs; neither establishes an optimization
+or satisfies original `bd-o5zh`'s three-green-push acceptance.
 
 Current original-task execution checklist (verification still in progress):
 
@@ -329,8 +341,8 @@ Current original-task execution checklist (verification still in progress):
 - [x] Correct the commit evidence record, verify the complete original pushed range and inspect the actual hosted retry, including its subsequent schema failure.
 - [x] Reopen original `bd-aioq`, add the applicable existing rule tags and genuinely recapture the two named witnesses without changing expected runtime results or the schema.
 - [x] Independently verify final scenario schema, fixture integrity, fresh recapture and all 167 comparisons, then reclose original `bd-aioq` at `84ca5f40`.
-- [ ] Inspect the next actual hosted CI after the schema correction; keep any pending or failed lane explicit.
-- [ ] Publish all accepted increments on main, preserve concurrent work and synchronize the required legacy mirror.
+- [x] Inspect the completed schema-correction CI: all 30 jobs pass at `84ca5f40`; retain the separately failing performance run.
+- [x] Publish the accepted runtime/schema increments through `84ca5f40` on main and the required legacy mirror, preserving concurrent work.
 
 K4, typed outcomes/factories, serialized asynchronous finalization, independent
 runtime storage, native replay, physical-device validation and P2 remain open.
@@ -344,12 +356,21 @@ normative schema. Two actual outputs from the retained genuine producer fail
 the pinned validator with four metadata errors. The differential-fuzz target
 previously captured those inputs without validating their declared schema.
 
-The next bounded repair changes only generated metadata, gives IDs a valid
+The initial bounded repair changes generated metadata, gives IDs a valid
 three-digit suffix for every index, derives filenames from those IDs and adds
 strict validation before capture. The actual repeat/changed-seed control keeps
 its full denominator and checks executable inputs; both fuzz workflows install
 the already pinned validator. Original campaign data and all canonical captures
-remain untouched. Native producer and independent acceptance are pending.
+remain untouched. The actual native metadata-only producer compiles, but
+independent validation of all 1,001 seed-9 outputs finds three further schema
+defects at indices 276, 676 and 940: `region_limits` contains no limits.
+The original input-identity condition excluding only ID/rules therefore
+cannot pass for a schema-valid repair of those three objects. That failed
+condition is recorded explicitly in the original Bead. The next candidate
+replaces only those bare operations with zero-time advances, preserving every
+RNG draw, program, script position/timestamp and run-to-idle boundary. Require
+genuine before/after equality of all canonical runtime and schedule fields;
+reject it if any changes. The schema and full denominator remain unchanged.
 
 - [x] Reproduce invalid metadata with the genuine retained generator and unchanged pinned schema.
 - [x] Create/claim `bd-58jc`; repair rule metadata and IDs without changing RNG draws or generated operations.
@@ -358,8 +379,10 @@ remain untouched. Native producer and independent acceptance are pending.
 - [x] Install the same checker pin in push/nightly fuzz jobs; preserve counts, timeouts and the existing capture policy.
 - [x] Update the existing real repeat/changed-input control for the corrected names without relaxing its assertions.
 - [x] Run draft strict C build/test/format/lint/schema/documentation/integrity gates; review the scanner's Makefile comment misclassification separately from the supported Rust/Bash scan.
-- [ ] Compile the actual corrected Rust producer against the pinned dependency and retain its immutable binary and source binding.
-- [ ] Validate all 200 seed-9 outputs and a 1,001-input boundary batch; compare old/new executable inputs excluding only ID/rule metadata.
+- [x] Compile and preserve the metadata-only native draft against the pinned dependency; retain its three full-batch schema failures.
+- [ ] Compile and freeze the zero-time-advance candidate; the earlier metadata-only binary cannot certify this source.
+- [ ] Validate all 200 seed-9 outputs and all 1,001 boundary inputs; enumerate exactly the three bare-operation substitutions and otherwise require old/new input identity excluding only ID/rules.
+- [ ] Compare genuine before/after native runtime and schedule fields for all three normalized operations; retain the failed original metadata-only identity claim explicitly.
 - [ ] Execute actual Rust capture and C comparison over all 200 generated inputs; retain repeat/changed-seed and planted-runtime-mutant controls.
 - [ ] Demonstrate that old invalid generation and a missing validator fail before capture.
 - [ ] Independently review the exact source and close only `bd-58jc` after all original criteria pass.
