@@ -2888,8 +2888,69 @@ static asx_status echo_call(void *state, uint64_t request, uint64_t *reply, asx_
     return ASX_OK;
 }
 
+/* `budgets`: a counter whose start and stop hooks trace the task budget
+ * they run under (twin_run's probe_trace, the same text). Its init phase
+ * is 7 polls at priority 200; the stop phase is the default
+ * (Budget::MINIMAL) for `budgets` and 42 polls at priority 250 for
+ * `budgets_stop`. */
+static void budget_probe_trace(asx_actor_handle self, const char *hook) {
+    asx_task_id task = ASX_INVALID_ID;
+    asx_budget budget;
+    char message[64];
+    if (asx_actor_task_id(self, &task) != ASX_OK || asx_task_get_budget(task, &budget) != ASX_OK) {
+        it_fail("budget probe: the server's task budget is unreadable", hook);
+        return;
+    }
+    (void)snprintf(message, sizeof(message), "probe:%s polls=%lu priority=%u", hook,
+                   (unsigned long)budget.poll_quota, (unsigned)budget.priority);
+    asx_trace_user(task, message);
+}
+
+static asx_status probe_init(void *state, asx_actor_handle self) {
+    (void)state;
+    budget_probe_trace(self, "start");
+    return ASX_OK;
+}
+
+static void probe_terminate(void *state, asx_status reason, asx_actor_handle self) {
+    (void)state;
+    (void)reason;
+    budget_probe_trace(self, "stop");
+}
+
+static asx_budget probe_start_budget(void *state) {
+    asx_budget budget = asx_budget_from_polls(7u);
+    (void)state;
+    budget.priority = 200u;
+    return budget;
+}
+
+static asx_budget probe_stop_budget(void *state) {
+    asx_budget budget = asx_budget_from_polls(42u);
+    (void)state;
+    budget.priority = 250u;
+    return budget;
+}
+
 static const asx_actor_behavior g_counter_behavior = {
     NULL, counter_cast, counter_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT};
+/* `latest`: a counter that drops its oldest queued cast when full. */
+static const asx_actor_behavior g_latest_behavior = {
+    NULL, counter_cast, counter_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_DROP_OLDEST};
+static const asx_actor_behavior g_budgets_behavior = {probe_init,
+                                                      counter_cast,
+                                                      counter_call,
+                                                      probe_terminate,
+                                                      probe_start_budget,
+                                                      NULL,
+                                                      ASX_ACTOR_OVERFLOW_REJECT};
+static const asx_actor_behavior g_budgets_stop_behavior = {probe_init,
+                                                           counter_cast,
+                                                           counter_call,
+                                                           probe_terminate,
+                                                           probe_start_budget,
+                                                           probe_stop_budget,
+                                                           ASX_ACTOR_OVERFLOW_REJECT};
 static const asx_actor_behavior g_echo_behavior = {
     NULL, NULL, echo_call, NULL, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT};
 
@@ -2902,7 +2963,8 @@ static it_server *server_by_name(const char *name) {
     return NULL;
 }
 
-/* server_spawn, cast, call and server_stop. Returns 0 for other ops. */
+/* server_spawn, cast, try_cast, call, server_evicted and server_stop.
+ * Returns 0 for other ops. */
 static int exec_server(it_task *t, uint32_t step, uint32_t idx, const char *op, step_result *out) {
     asx_status st;
     it_server *srv;
@@ -2915,6 +2977,11 @@ static int exec_server(it_task *t, uint32_t step, uint32_t idx, const char *op, 
         const asx_actor_behavior *b = NULL;
         uint64_t mailbox = 0;
         if (behavior != NULL && strcmp(behavior, "counter") == 0) b = &g_counter_behavior;
+        if (behavior != NULL && strcmp(behavior, "latest") == 0) b = &g_latest_behavior;
+        if (behavior != NULL && strcmp(behavior, "budgets") == 0) b = &g_budgets_behavior;
+        if (behavior != NULL && strcmp(behavior, "budgets_stop") == 0) {
+            b = &g_budgets_stop_behavior;
+        }
         if (behavior != NULL && strcmp(behavior, "echo") == 0) b = &g_echo_behavior;
         if (name == NULL || b == NULL ||
             !asx_json_u64(g_in, asx_json_get(g_in, step, "mailbox"), &mailbox) ||
@@ -2955,13 +3022,32 @@ static int exec_server(it_task *t, uint32_t step, uint32_t idx, const char *op, 
         observe_status(t, idx, op, st);
         return 1;
     }
-    if (strcmp(op, "cast") != 0 && strcmp(op, "call") != 0 && strcmp(op, "server_stop") != 0) {
+    if (strcmp(op, "cast") != 0 && strcmp(op, "call") != 0 && strcmp(op, "server_stop") != 0 &&
+        strcmp(op, "try_cast") != 0 && strcmp(op, "server_evicted") != 0) {
         return 0;
     }
     srv = server_by_name(it_str(step, "server"));
     if (srv == NULL || srv->released) {
         it_fail_task(t, idx, "unknown or stopped server");
         *out = STEP_END;
+        return 1;
+    }
+    if (strcmp(op, "try_cast") == 0) {
+        /* h.try_cast(msg) (gen_server.rs:1305): never waits and never
+         * checks the task's cancellation. */
+        uint64_t value = 0;
+        if (!asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &value)) {
+            it_fail_task(t, idx, "try_cast without a value");
+            *out = STEP_END;
+            return 1;
+        }
+        observe_status(t, idx, op, asx_actor_try_cast(srv->handle, value));
+        return 1;
+    }
+    if (strcmp(op, "server_evicted") == 0) {
+        /* h.evicted_count() (:1153): the casts DropOldest evicted. */
+        observe(t, idx, op, status_node(ASX_OK),
+                asx_json_new_u64(g_out, asx_actor_evicted_count(srv->handle)));
         return 1;
     }
     if (t->phase == 0u) {

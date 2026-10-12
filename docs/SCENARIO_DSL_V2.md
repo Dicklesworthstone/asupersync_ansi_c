@@ -404,9 +404,21 @@ These steps use built-in behaviours, so programs never define handlers.
 - **`counter`:** state is a u64 starting at 0; a cast adds its value; a call
   returns the state.
 - **`echo`:** a call returns its request; a cast does nothing.
+- **`latest`:** a `counter` whose `cast_overflow_policy` is `DropOldest`
+  (`gen_server.rs:212`): `try_cast` into a full mailbox evicts the oldest
+  queued cast instead of refusing.
+- **`budgets`:** a `counter` whose `on_start_budget` is 7 polls at priority
+  200 and whose `on_stop_budget` is the trait's default (`Budget::MINIMAL`,
+  100 polls at priority 128). Its start and stop hooks trace the task
+  budget they run under, `probe:start polls=<n> priority=<p>` and
+  `probe:stop polls=<n> priority=<p>`, so a budget the phase installed (met
+  with the task's, `gen_server.rs:96-160`) shows in the trace.
+- **`budgets_stop`:** `budgets` with `on_stop_budget` 42 polls at priority
+  250.
 
-Neither behaviour defines `on_start` or `on_stop`, so the trace shows the
-server loop's own `gen_server::*` user traces (`include/asx/actor/actor.h`).
+`counter` and `echo` define no `on_start` or `on_stop`, so their trace shows
+the server loop's own `gen_server::*` user traces
+(`include/asx/actor/actor.h`).
 A server is only usable by the task that spawned it (twin_run keeps the
 handle in that task's locals), and its task is named by `as`. Its
 snapshot outcome is its join's (vocabulary §6).
@@ -415,6 +427,8 @@ snapshot outcome is its join's (vocabulary §6).
 |---|---|---|---|---|---|
 | `server_spawn` | `as`, `behavior`, `mailbox` | `cx.spawn_gen_server(server, cap)` (`gen_server.rs:2511`) | `asx_actor_spawn(&h, own_region, behavior, state, mailbox)` | no | ignored; a spawn its admission refuses is `ASX_OK`, its server never runs |
 | `cast` | `server`, `value` | `h.cast(&cx, msg).await` (`gen_server.rs:1268`) | `asx_actor_cast(h, &cx, value, &op)` | while the mailbox is full | Checked first: `ASX_E_CANCELLED`; a stopping server: `ASX_E_DISCONNECTED`. |
+| `try_cast` | `server`, `value` | `h.try_cast(msg)` (`:1305`): applies the server's overflow policy, never waits | `asx_actor_try_cast(h, value)` | no | ignored (it checks no cancellation). Status: `ASX_OK`, `ASX_E_CHANNEL_FULL` (Reject policy, full mailbox), `ASX_E_DISCONNECTED` (a stopping server). Under `DropOldest` a full mailbox evicts the oldest queued cast and succeeds, tracing `gen_server::cast_evicted_oldest` on the calling task. |
+| `server_evicted` | `server` | `h.evicted_count()` (`:1153`) | `asx_actor_evicted_count(h)` | no | ignored. The observation `value` is the number of casts evicted under `DropOldest`. |
 | `call` | `server`, `request` | `h.call(&cx, req).await` (`:1171`) | `asx_actor_call(h, &cx, request, &op, &reply)` | until the reply arrives | Checked first: `ASX_E_CANCELLED`; a stopping server: `ASX_E_DISCONNECTED`; a dropped call: `ASX_E_INVALID_STATE` (NoReply). The caller must not be in `"root"` (Rust rejects root-region callers, `gen_server.rs:1086-1094`); both interpreters reject such a scenario as a scenario error before running it. |
 | `server_stop` | `server` | `h.stop()` (`:1453`), then `h.join(&cx)` (`:1489`) | `asx_actor_stop`, then `asx_actor_join` | until its task finished | ignored; a server that never ran: `ASX_E_CANCELLED`. Later steps may not name the server. |
 | `supervise` | `as`, `policy` (`one_for_one`, `one_for_all`, `rest_for_one`), optional `escalation` (`stop`, the default, or `escalate`), `max_restarts` (at most 32), `window_ns`, `children` (1 to 8 `{name, mode: permanent\|transient\|temporary, program}`) | `SupervisorBuilder::new(name).with_restart_policy(p)`, one `.child(ChildSpec::new(child, …))` each, `.compile()?` (`supervision.rs:894`, `:924`, `:655`, `:973`); `.bind_managed(bindings, SupervisionConfig::new(max, window).with_restart_policy(p).with_escalation(e))` (`:2093`, `:470`, `:491`, `:505`) with one `ManagedChildBinding::new(child, mode, factory)` each (`:1900`); then `ManagedSupervisor::spawn(&cx)` (`:3497`), which twin_run performs itself to keep the report | `asx_supervisor_spawn(&h, own_region, &config, specs, n)`, the config's backoff and budget left at `asx_supervisor_config_init`'s (Rust's defaults) | no | ignored |

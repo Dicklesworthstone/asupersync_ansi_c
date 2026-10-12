@@ -19,7 +19,9 @@ use asupersync::channel::{broadcast, mpsc, oneshot, watch};
 use asupersync::combinator::first_ok::FirstOkError;
 use asupersync::combinator::quorum::QuorumError;
 use asupersync::cx::{ChildRegion, ChildRegionSpec};
-use asupersync::gen_server::{CallError, CastError, GenServer, GenServerHandle, Reply, SystemMsg};
+use asupersync::gen_server::{
+    CallError, CastError, CastOverflowPolicy, GenServer, GenServerHandle, Reply, SystemMsg,
+};
 use asupersync::lab::{LabConfig, LabRuntime};
 use asupersync::record::task::TaskState;
 use asupersync::record::{ObligationAbortReason, ObligationKind, RegionLimits};
@@ -659,15 +661,70 @@ impl ServerName {
 /// The DSL's built-in GenServer behaviours (§3.8): `counter` keeps a u64
 /// that a cast adds to and a call returns; `echo` replies to a call with
 /// its request. Both keep the trait's defaults (budgets, Reject overflow,
-/// no-op info); their start and stop hooks only record their ids.
-struct CounterServer(u64, ServerName);
+/// no-op info); their start and stop hooks only record their ids. The
+/// other counters of the family differ from `counter` in one trait hook.
+struct CounterServer(u64, ServerName, CounterKind);
 struct EchoServer(ServerName);
+
+/// Which `counter` behaviour a [`CounterServer`] is (DSL §3.8).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CounterKind {
+    /// `counter`: the trait's defaults.
+    Plain,
+    /// `latest`: `cast_overflow_policy` is `DropOldest`.
+    Latest,
+    /// `budgets`: `on_start_budget` is 7 polls at priority 200 and
+    /// `on_stop_budget` the trait's default (`Budget::MINIMAL`); the start
+    /// and stop hooks trace the budget they run under.
+    Budgets,
+    /// `budgets_stop`: as `budgets`, with `on_stop_budget` 42 polls at
+    /// priority 250.
+    BudgetsStop,
+}
+
+impl CounterKind {
+    fn traces_budget(self) -> bool {
+        matches!(self, Self::Budgets | Self::BudgetsStop)
+    }
+}
+
+/// The budget a `budgets` server's hook runs under, as the trace the hook
+/// emits: the same text in C's interpreter.
+fn probe_trace(cx: &Cx, hook: &str) {
+    let budget = cx.budget();
+    cx.trace(&format!(
+        "probe:{hook} polls={} priority={}",
+        budget.poll_quota, budget.priority
+    ));
+}
 
 impl GenServer for CounterServer {
     type Call = u64;
     type Reply = u64;
     type Cast = u64;
     type Info = SystemMsg;
+
+    fn on_start_budget(&self) -> Budget {
+        if self.2.traces_budget() {
+            Budget::new().with_poll_quota(7).with_priority(200)
+        } else {
+            Budget::INFINITE
+        }
+    }
+
+    fn on_stop_budget(&self) -> Budget {
+        match self.2 {
+            CounterKind::BudgetsStop => Budget::new().with_poll_quota(42).with_priority(250),
+            _ => Budget::MINIMAL,
+        }
+    }
+
+    fn cast_overflow_policy(&self) -> CastOverflowPolicy {
+        match self.2 {
+            CounterKind::Latest => CastOverflowPolicy::DropOldest,
+            _ => CastOverflowPolicy::Reject,
+        }
+    }
 
     fn handle_call(
         &mut self,
@@ -690,11 +747,17 @@ impl GenServer for CounterServer {
 
     fn on_start(&mut self, cx: &Cx) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         self.1.record(cx);
+        if self.2.traces_budget() {
+            probe_trace(cx, "start");
+        }
         Box::pin(async {})
     }
 
     fn on_stop(&mut self, cx: &Cx) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         self.1.record(cx);
+        if self.2.traces_budget() {
+            probe_trace(cx, "stop");
+        }
         Box::pin(async {})
     }
 }
@@ -2095,14 +2158,22 @@ async fn exec_step(
                 name: name.clone(),
                 shared: Arc::clone(&ctx.shared),
             };
-            let spawned = match str_field(step, "behavior")? {
-                "counter" => cx
-                    .spawn_gen_server(CounterServer(0, named), mailbox)
+            let behavior = str_field(step, "behavior")?;
+            let counter_kind = match behavior {
+                "counter" => Some(CounterKind::Plain),
+                "latest" => Some(CounterKind::Latest),
+                "budgets" => Some(CounterKind::Budgets),
+                "budgets_stop" => Some(CounterKind::BudgetsStop),
+                _ => None,
+            };
+            let spawned = match (counter_kind, behavior) {
+                (Some(kind), _) => cx
+                    .spawn_gen_server(CounterServer(0, named, kind), mailbox)
                     .map(|h| (h.task_id(), Server::Counter(h))),
-                "echo" => cx
+                (None, "echo") => cx
                     .spawn_gen_server(EchoServer(named), mailbox)
                     .map(|h| (h.task_id(), Server::Echo(h))),
-                other => return Err(format!("unknown behavior {other:?}")),
+                (None, other) => return Err(format!("unknown behavior {other:?}")),
             };
             let (task, server) = spawned.map_err(|e| format!("server_spawn failed: {e:?}"))?;
             {
@@ -2132,6 +2203,41 @@ async fn exec_step(
                 Err(CastError::Cancelled(_)) => "ASX_E_CANCELLED",
             };
             observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "try_cast" => {
+            // `h.try_cast(msg)` (gen_server.rs:1305): never waits, never
+            // checks cancellation, and applies the server's overflow policy.
+            let name = str_field(step, "server")?;
+            let value = u64_field(step, "value")?;
+            let result = match local
+                .servers
+                .get(name)
+                .ok_or_else(|| format!("unknown server {name:?}"))?
+            {
+                Server::Counter(h) => h.try_cast(value),
+                Server::Echo(h) => h.try_cast(value),
+            };
+            let status = match result {
+                Ok(()) => "ASX_OK",
+                Err(CastError::Full) => "ASX_E_CHANNEL_FULL",
+                Err(CastError::ServerStopped) => "ASX_E_DISCONNECTED",
+                Err(CastError::Cancelled(_)) => "ASX_E_CANCELLED",
+            };
+            observe(&ctx.shared, me, idx, op, status, Value::Null);
+        }
+        "server_evicted" => {
+            // `h.evicted_count()` (gen_server.rs:1153): the observation's
+            // value is the number of casts evicted under DropOldest.
+            let name = str_field(step, "server")?;
+            let evicted = match local
+                .servers
+                .get(name)
+                .ok_or_else(|| format!("unknown server {name:?}"))?
+            {
+                Server::Counter(h) => h.evicted_count(),
+                Server::Echo(h) => h.evicted_count(),
+            };
+            observe(&ctx.shared, me, idx, op, "ASX_OK", json!(evicted));
         }
         "call" => {
             let name = str_field(step, "server")?;
