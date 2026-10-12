@@ -30,6 +30,9 @@
  *   ASX_FUZZ_WEB_QUERY      URI query string parser
  *   ASX_FUZZ_RAPTORQ_OTI    RaptorQ OTI decoder and block layout; a decoded
  *                           OTI re-serializes to the same 12 bytes
+ *   ASX_FUZZ_RAPTORQ_DECODE RaptorQ block decoder fed received symbols
+ *                           (any ESI, any bytes); with the encoder's
+ *                           symbols a decode gives the source back
  *   ASX_FUZZ_FRAME_CODECS   length-delimited (1, 2, 4-byte length) and
  *                           line frame decoders
  *   ASX_FUZZ_RESOLVE_HOST   host resolution of literals: IPv4 dotted quads,
@@ -449,6 +452,113 @@ static void fuzz_one(const uint8_t *data, size_t size) {
             fuzz_fail("raptorq block covers more than K * T bytes");
         }
     }
+}
+
+#elif defined(ASX_FUZZ_RAPTORQ_DECODE)
+
+#include <asx/raptorq/raptorq.h>
+
+/* Small blocks keep the solver fast. */
+#define RQ_MAX_K 24u
+#define RQ_MAX_T 16u
+#define RQ_MAX_RECEIVED 64u
+
+/* Input: K, symbol size T, mode, then 3-byte little-endian ESIs. With an
+ * odd mode each ESI is followed by up to T symbol bytes, as a peer may
+ * send anything. With an even mode the symbols are the encoder's for a
+ * source block derived from the header: a decode that succeeds must give
+ * that block back, and one with every source symbol must succeed (the
+ * code is systematic, RFC 6330 section 5.3.3.4). */
+static void fuzz_one(const uint8_t *data, size_t size) {
+    uint8_t source[RQ_MAX_K * RQ_MAX_T];
+    uint8_t out[RQ_MAX_K * RQ_MAX_T];
+    uint8_t again[RQ_MAX_K * RQ_MAX_T];
+    uint8_t sym[RQ_MAX_T];
+    asx_raptorq_decoder dec;
+    asx_raptorq_encoder enc;
+    size_t ws_size = 0;
+    size_t enc_size = 0;
+    size_t pos = 3u;
+    size_t block;
+    size_t i;
+    void *ws;
+    void *enc_ws = NULL;
+    uint32_t k;
+    uint32_t t;
+    uint32_t received = 0;
+    uint32_t sources = 0;
+    int encoded;
+    asx_status st;
+
+    if (size < 3u) return;
+    k = 1u + data[0] % RQ_MAX_K;
+    t = 1u + data[1] % RQ_MAX_T;
+    encoded = (data[2] & 1u) == 0u;
+    block = (size_t)k * t;
+    if (asx_raptorq_decoder_workspace_size(k, t, RQ_MAX_RECEIVED, &ws_size) != ASX_OK) {
+        fuzz_fail("raptorq decoder workspace size refused");
+    }
+    ws = malloc(ws_size);
+    if (ws == NULL) return;
+    if (asx_raptorq_decoder_init(&dec, k, t, RQ_MAX_RECEIVED, ws, ws_size) != ASX_OK) {
+        fuzz_fail("raptorq decoder refused its queried workspace");
+    }
+    if (encoded) {
+        for (i = 0; i < block; i++) source[i] = (uint8_t)(data[i % 3u] * 31u + i * 7u + 1u);
+        if (asx_raptorq_encoder_workspace_size(k, t, &enc_size) != ASX_OK) {
+            fuzz_fail("raptorq encoder workspace size refused");
+        }
+        enc_ws = malloc(enc_size);
+        if (enc_ws == NULL) {
+            free(ws);
+            return;
+        }
+        if (asx_raptorq_encoder_init(&enc, k, t, source, block, enc_ws, enc_size) != ASX_OK) {
+            fuzz_fail("raptorq encoder refused a valid block");
+        }
+    }
+    while (received < RQ_MAX_RECEIVED && pos + 3u <= size) {
+        uint32_t esi = (uint32_t)data[pos] | ((uint32_t)data[pos + 1u] << 8) |
+                       ((uint32_t)data[pos + 2u] << 16);
+        pos += 3u;
+        if (encoded) {
+            /* The source symbols and the first repair symbols. */
+            esi %= k + 40u;
+            if (asx_raptorq_encoder_symbol(&enc, esi, sym, t) != ASX_OK) {
+                fuzz_fail("raptorq encoder refused an ESI");
+            }
+        } else {
+            size_t n = size - pos < t ? size - pos : t;
+            memset(sym, 0, sizeof(sym));
+            memcpy(sym, data + pos, n);
+            pos += n;
+        }
+        st = asx_raptorq_decoder_add_symbol(&dec, esi, sym, t);
+        if (st == ASX_OK) {
+            received++;
+            if (esi < k) sources++;
+        } else if (st != ASX_E_DUPLICATE_SYMBOL) {
+            fuzz_fail("raptorq decoder refused a valid symbol");
+        }
+    }
+    st = asx_raptorq_decoder_decode(&dec, out, block);
+    if (st == ASX_OK) {
+        touch(out, block);
+        if (encoded && memcmp(out, source, block) != 0) {
+            fuzz_fail("raptorq decoded block is not the source");
+        }
+        /* The stored symbols are kept: decoding again gives the same block. */
+        if (asx_raptorq_decoder_decode(&dec, again, block) != ASX_OK ||
+            memcmp(again, out, block) != 0) {
+            fuzz_fail("raptorq second decode differs");
+        }
+    } else if (st != ASX_E_RESOURCE_EXHAUSTED) {
+        fuzz_fail("raptorq decode failed other than for too few symbols");
+    } else if (encoded && sources == k) {
+        fuzz_fail("raptorq decode failed with every source symbol received");
+    }
+    free(enc_ws);
+    free(ws);
 }
 
 #elif defined(ASX_FUZZ_FRAME_CODECS)

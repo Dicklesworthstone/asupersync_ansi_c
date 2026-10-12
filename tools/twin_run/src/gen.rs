@@ -132,6 +132,8 @@ struct Held {
     sends: u32,
     /// This task closed its end of the mpsc channel.
     closed: bool,
+    /// This consumer sealed its mpsc receiver (rx.close()) and still holds it.
+    sealed: bool,
     /// This task used its end of the oneshot (it sends or receives once).
     oneshot_used: bool,
     /// This task waited at the barrier (each party arrives once).
@@ -279,12 +281,25 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 // A mask hides a cancel from the checkpoint, not from
                 // is_cancel_requested; the checkpoint may raise a budget
                 // cancel the second look sees.
-                return json!({"op": "masked", "steps": [
-                    {"op": "is_cancel_requested"},
-                    {"op": "checkpoint", "on_cancel": "continue"},
-                    {"op": "is_cancel_requested"},
-                    {"op": "trace", "message": format!("{me}:m{}", held.messages)},
-                ]});
+                let mut steps = vec![
+                    json!({"op": "is_cancel_requested"}),
+                    json!({"op": "checkpoint", "on_cancel": "continue"}),
+                    json!({"op": "is_cancel_requested"}),
+                ];
+                // Sometimes masks nest: releasing an inner one leaves the
+                // outer in force, so the checkpoint after it still passes.
+                if rng.chance(25) {
+                    let mut inner = json!({"op": "masked", "steps": [{"op": "checkpoint", "on_cancel": "continue"}]});
+                    for _ in 0..rng.below(2) {
+                        inner = json!({"op": "masked", "steps": [
+                            inner, {"op": "checkpoint", "on_cancel": "continue"},
+                        ]});
+                    }
+                    steps.push(inner);
+                    steps.push(json!({"op": "checkpoint", "on_cancel": "continue"}));
+                }
+                steps.push(json!({"op": "trace", "message": format!("{me}:m{}", held.messages)}));
+                return json!({"op": "masked", "steps": steps});
             }
             15 => {
                 if let Some((ch, producer, consumer)) = &world.mpsc {
@@ -324,6 +339,12 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                         return json!({"op": "reserve_send", "channel": ch, "as": format!("{me}.p{}", held.reserves)});
                     }
                     if me == consumer {
+                        // rx.close(): sends fail from now on, the queue stays
+                        // receivable (a later close_receiver discards it).
+                        if !held.sealed && rng.chance(8) {
+                            held.sealed = true;
+                            return json!({"op": "seal", "channel": ch});
+                        }
                         // A batch of up to 3 (0 returns at once).
                         if rng.chance(20) {
                             return json!({"op": "recv_many", "channel": ch, "limit": rng.below(4)});

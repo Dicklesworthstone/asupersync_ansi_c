@@ -118,12 +118,13 @@
       {"$ref": "#/$defs/s_abort_task"}, {"$ref": "#/$defs/s_spawn"}, {"$ref": "#/$defs/s_permit_send"},
       {"$ref": "#/$defs/s_permit_ref"}, {"$ref": "#/$defs/s_chan_value_nb"}, {"$ref": "#/$defs/s_chan_ref_nb"},
       {"$ref": "#/$defs/s_sync_ref_nb"}, {"$ref": "#/$defs/s_sem_add_permits"},
-      {"$ref": "#/$defs/s_cancel_region"}, {"$ref": "#/$defs/s_oneshot_query"}
+      {"$ref": "#/$defs/s_cancel_region"}, {"$ref": "#/$defs/s_oneshot_query"},
+      {"$ref": "#/$defs/s_masked"}
     ]},
     "step": {"oneOf": [
       {"$ref": "#/$defs/nonblocking_step"},
       {"$ref": "#/$defs/s_bare"}, {"$ref": "#/$defs/s_sleep"}, {"$ref": "#/$defs/s_sleep_until"},
-      {"$ref": "#/$defs/s_return"}, {"$ref": "#/$defs/s_masked"}, {"$ref": "#/$defs/s_join"},
+      {"$ref": "#/$defs/s_return"}, {"$ref": "#/$defs/s_join"},
       {"$ref": "#/$defs/s_open_region"}, {"$ref": "#/$defs/s_close_region"}, {"$ref": "#/$defs/s_group"},
       {"$ref": "#/$defs/s_quorum"}, {"$ref": "#/$defs/s_reserve_send"}, {"$ref": "#/$defs/s_chan_value_b"},
       {"$ref": "#/$defs/s_chan_ref_b"}, {"$ref": "#/$defs/s_recv_many"}, {"$ref": "#/$defs/s_oneshot_poll_closed"},
@@ -192,7 +193,7 @@
     "s_chan_value_b": {"type": "object", "required": ["op", "channel", "value"], "additionalProperties": false,
       "properties": {"op": {"const": "send"}, "channel": {"$ref": "#/$defs/name"}, "value": {"$ref": "#/$defs/u64"}}},
     "s_chan_ref_nb": {"type": "object", "required": ["op", "channel"], "additionalProperties": false,
-      "properties": {"op": {"enum": ["try_recv", "close_sender", "close_receiver"]}, "channel": {"$ref": "#/$defs/name"}}},
+      "properties": {"op": {"enum": ["try_recv", "close_sender", "close_receiver", "seal"]}, "channel": {"$ref": "#/$defs/name"}}},
     "s_chan_ref_b": {"type": "object", "required": ["op", "channel"], "additionalProperties": false,
       "properties": {"op": {"enum": ["recv", "closed", "oneshot_recv", "broadcast_recv", "watch_changed"]}, "channel": {"$ref": "#/$defs/name"}}},
     "s_recv_many": {"type": "object", "required": ["op", "channel", "limit"], "additionalProperties": false,

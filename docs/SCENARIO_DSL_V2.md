@@ -151,7 +151,8 @@ Rust that is an `async` body; in C, a poll function with a program counter.
   - `step` is the 1-based index in the program, and `op` is the step's op.
   - A `masked` step produces one observation per inner step, all with the
     `masked` step's index and with `op` = `masked/<j>/<inner op>`, where j
-    is 1-based.
+    is 1-based. A `masked` step inside one extends the path, so a step in
+    a nested mask is observed as e.g. `masked/2/masked/1/checkpoint`.
   - Programs of spawned children and of group members are separate tasks
     with their own names, so their steps are observed under those names.
   - A step that never runs (because the program ended earlier) produces
@@ -197,7 +198,7 @@ observes `ASX_E_NOT_FOUND`: the abort consumed the token.
 
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|
-| `masked` | `steps` | `cx.masked(\|\| { …steps… })` (`cx.rs:3315`) | `asx_task_mask(self)`; steps; `asx_task_unmask(self)` | no: `steps` may contain only non-blocking steps | Inside, `checkpoint` returns `ASX_OK` (`rule.cancel.checkpoint_masked`). Nesting deeper than 64 is a harness error (`cx.rs:3323`). |
+| `masked` | `steps` | `cx.masked(\|\| { …steps… })` (`cx.rs:3315`) | `asx_task_mask(self)`; steps; `asx_task_unmask(self)` | no: `steps` may contain only non-blocking steps, `masked` among them | Inside, `checkpoint` returns `ASX_OK` (`rule.cancel.checkpoint_masked`), also after a nested `masked` ends while an outer one still holds (`cancel-masked-nested-001`). Nesting deeper than 64 is a harness error (`cx.rs:3323`), but the C scenario parser's JSON depth limit (64 levels) stops a document at about 29 nested masks first. |
 
 Rust has no mask that spans an await (`MaskGuard` is private, `cx.rs:706`),
 so a blocking step inside `masked` is a schema error.
@@ -355,7 +356,8 @@ its body, drops its own clone; the sender side closes at the last one
 | `recv_many` | `channel`, `limit` | `rx.recv_many(&cx, &mut buf, limit).await` (`:1754`) | `asx_channel_recv_many(id, cx, buf, limit, &n)` until done | while empty | Checked first, after a `limit` of 0 (which gives `[]` at once): `ASX_E_CANCELLED`, tracing `"mpsc::recv_many cancelled"` (`:1882`). The observation `value` is the array of received integers, oldest first; a channel that can get no more messages gives `ASX_OK` with `[]`. |
 | `closed` | `channel` (the sender's) | `tx.closed().await` (`channel/mpsc_closed.rs:39`) | `asx_channel_closed` until done | until the receiver is closed or dropped | ignored: no `Cx`. Queued messages and reservations are untouched. |
 | `close_sender` | `channel` | `drop(tx)` (`:1241`) | `asx_channel_close_sender` | no | ignored |
-| `close_receiver` | `channel` | `drop(rx)` (`:2122`) | `asx_channel_close_receiver` | no | ignored |
+| `close_receiver` | `channel` | `drop(rx)` (`:2122`) | `asx_channel_close_receiver` | no | ignored. Discards what the queue holds, also after a `seal`. |
+| `seal` | `channel` (mpsc, the receiver's) | `rx.close()` (`:1698`) | `asx_channel_seal` | no | ignored. Sends and reservations fail with `ASX_E_DISCONNECTED` and parked producers and `closed` waiters wake; the receiver stays held and the queue receivable, then receives see `ASX_E_DISCONNECTED` (`mpsc-seal-drains-001`). A second `seal` is a harness error: Rust's `close()` would return without effect, C's `asx_channel_seal` refuses it. |
 | `oneshot_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/oneshot.rs:556`): reserves a SendPermit, traces `"oneshot::reserve creating permit"`, commits | `asx_oneshot_send(&tx, &cx, v)`: reserves the SendPermit obligation, traces, commits | no | Checked first: `ASX_E_CANCELLED`. |
 | `oneshot_recv` | `channel` | `rx.recv(&cx).await` (`oneshot.rs:1250`): traces `"oneshot::recv received value"` / `"…channel closed"` | `asx_oneshot_recv(rx, cx, &v)` until done | until sent or dropped | `ASX_E_CANCELLED`, tracing `"oneshot::recv cancelled while waiting"`. |
 | `oneshot_poll_closed` | `channel`, `end` (`sender` / `receiver`) | `poll_fn(\|c\| tx.poll_closed(c)).await` / the receiver's (`oneshot.rs:619`, `:1373`) | `asx_oneshot_poll_closed` / `asx_oneshot_receiver_poll_closed` until done | the sender's until the receiver is dropped; the receiver's until the channel is closed (sender gone, no permit, no value) | ignored: no `Cx`. The sender's wait is woken only by the receiver drop; the receiver's by the close and by the value received, never by a send. |
@@ -742,6 +744,11 @@ Closed (each verified by a fixture that now matches):
   `asx_channel_recv_many` (one parked producer woken per freed slot) and
   `asx_channel_closed` (woken by `asx_channel_seal` and
   `asx_channel_close_receiver`). Generated scenarios use all three.
+- **`seal`** (bd-9kll.5.4): Rust's `rx.close()` as `asx_channel_seal`
+  (`mpsc-seal-drains-001`; generated consumers seal at times and keep
+  receiving). The receiver's drop after a seal now discards the queue, as
+  Rust's does; C had kept it, so a sealed channel dropped with messages
+  queued never freed its slot.
 - **Owner-cancelled race and quorum take the owner Cx's reason**
   (bd-lfwh, bd-uyd3): Rust's `cx.cancel_reason()`, which can be ahead of
   the task record's after a tie (`race-owner-cancel-cx-reason-001`,
@@ -768,7 +775,9 @@ Closed (each verified by a fixture that now matches):
 - **Cancel wakes, masking and Notify**: a cancel wakes a parked task once;
   a masked task does not observe its cancel; Notify skips only
   cancel-aware doomed waiters (`cancel-masked-checkpoint-001`,
-  `cancel-strengthen-severity-001`).
+  `cancel-strengthen-severity-001`). Masks nest as a depth count, so the
+  cancel is observed only once the outermost one ends
+  (`cancel-masked-nested-001`; the generator nests masks at times).
 - **Closed-region admission** reports `ASX_E_REGION_CLOSED`
   (`obligation-reserve-closed-region-must-fail-001`).
 

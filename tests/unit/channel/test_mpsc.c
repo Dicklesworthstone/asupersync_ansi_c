@@ -1316,6 +1316,33 @@ TEST(sealed_channel_slot_is_not_reused_until_drained) {
     ASSERT_EQ(v, 9u);
 }
 
+TEST(receiver_drop_after_seal_discards_the_queue_and_frees_the_slot) {
+    /* Rust's Receiver::drop after close() takes the queue (mpsc.rs:2138).
+     * C kept it: a sealed channel whose receiver and last sender were
+     * dropped with messages queued held its slot for good. */
+    asx_channel_id ch;
+    asx_channel_id other;
+    uint32_t len = 99u;
+    uint64_t v = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 9u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 10u), ASX_OK);
+    ASSERT_EQ(asx_channel_seal(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_close_receiver(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_queue_len(ch, &len), ASX_OK);
+    ASSERT_EQ(len, 0u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_E_DISCONNECTED);
+    /* A second drop, and a seal after the drop, are refused. */
+    ASSERT_EQ(asx_channel_close_receiver(ch), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_seal(ch), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    /* Fully closed and empty, the slot is handed out again: the old
+     * handle is stale. */
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &other), ASX_OK);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_E_STALE_HANDLE);
+}
+
 static uint32_t g_recv_polls;
 static asx_channel_id g_recv_ch;
 
@@ -1861,6 +1888,7 @@ int main(void) {
     RUN_TEST(cancelled_cx_wins_over_ready_channel_and_traces);
     RUN_TEST(seal_keeps_the_queue_receivable);
     RUN_TEST(sealed_channel_slot_is_not_reused_until_drained);
+    RUN_TEST(receiver_drop_after_seal_discards_the_queue_and_frees_the_slot);
     RUN_TEST(wake_receiver_repolls_a_parked_receiver);
     RUN_TEST(create_accepts_a_closing_region);
     RUN_TEST(evict_oldest_sends_without_eviction_while_there_is_room);

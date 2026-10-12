@@ -2536,6 +2536,23 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         observe_status(t, idx, label, ASX_OK);
         return STEP_NEXT;
     }
+    if (strcmp(op, "seal") == 0) {
+        /* rx.close() (mpsc.rs:1698): unlike close_receiver (the drop), the
+         * receiver stays held and the queue receivable. asx_channel_seal
+         * refuses only a second seal, which is outside the DSL (§3.6). */
+        const char *ch = it_str(step, "channel");
+        it_channel *c = channel_by_name(ch);
+        if (c == NULL || owned_receiver(t, ch, IT_CH_MPSC) == NULL) {
+            it_fail_task(t, idx, "seal of an mpsc receiver this task does not own");
+            return STEP_END;
+        }
+        if (asx_channel_seal(c->id) != ASX_OK) {
+            it_fail_task(t, idx, "a second seal (outside DSL §3.6)");
+            return STEP_END;
+        }
+        observe_status(t, idx, label, ASX_OK);
+        return STEP_NEXT;
+    }
     /* Oneshot queries (DSL §3.6): tx.is_closed() / rx.is_closed()
      * (oneshot.rs:596, :1357) and rx.is_ready() (:1350), observed as a
      * boolean value. */
@@ -2767,6 +2784,34 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         }
         observe_status(t, idx, label, st);
         return STEP_NEXT;
+    }
+    if (strcmp(op, "masked") == 0) {
+        /* Cx::masked (cx.rs:3315). A masked step inside masked nests; each
+         * inner observation's op is its path, e.g. masked/2/masked/1/checkpoint
+         * (DSL §3.2). */
+        uint32_t steps = asx_json_get(g_in, step, "steps");
+        uint32_t n = asx_json_count(g_in, steps);
+        uint32_t j;
+        step_result r = STEP_NEXT;
+        if (asx_task_mask(self) != ASX_OK) {
+            it_fail_task(t, idx, "asx_task_mask failed");
+            return STEP_END;
+        }
+        for (j = 0; j < n && r == STEP_NEXT; j++) {
+            uint32_t inner = asx_json_item(g_in, steps, j);
+            char inner_label[512];
+            const char *inner_op = it_str(inner, "op");
+            int len = snprintf(inner_label, sizeof(inner_label), "%s/%u/%s", label,
+                               (unsigned)(j + 1u), inner_op != NULL ? inner_op : "");
+            if (len < 0 || (size_t)len >= sizeof(inner_label)) {
+                it_fail_task(t, idx, "masked nesting too deep for its label");
+                r = STEP_END;
+                break;
+            }
+            r = exec_sync(t, self, inner, idx, inner_label);
+        }
+        if (asx_task_unmask(self) != ASX_OK) it_fail_task(t, idx, "asx_task_unmask failed");
+        return r;
     }
     {
         char what[160];
@@ -3317,26 +3362,6 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
         }
         observe_status(t, idx, op, ASX_OK);
         return STEP_END;
-    }
-    if (strcmp(op, "masked") == 0) {
-        uint32_t steps = asx_json_get(g_in, step, "steps");
-        uint32_t n = asx_json_count(g_in, steps);
-        uint32_t j;
-        step_result r = STEP_NEXT;
-        if (asx_task_mask(self) != ASX_OK) {
-            it_fail_task(t, idx, "asx_task_mask failed");
-            return STEP_END;
-        }
-        for (j = 0; j < n && r == STEP_NEXT; j++) {
-            uint32_t inner = asx_json_item(g_in, steps, j);
-            char label[96];
-            const char *inner_op = it_str(inner, "op");
-            (void)snprintf(label, sizeof(label), "masked/%u/%s", (unsigned)(j + 1u),
-                           inner_op != NULL ? inner_op : "");
-            r = exec_sync(t, self, inner, idx, label);
-        }
-        if (asx_task_unmask(self) != ASX_OK) it_fail_task(t, idx, "asx_task_unmask failed");
-        return r;
     }
     if (strcmp(op, "join") == 0) {
         it_task *target = task_by_name(it_str(step, "task"));

@@ -197,7 +197,9 @@ TEST(retry_policy_constructors_are_rusts) {
     ASSERT_EQ(p.initial_delay_ns, (uint64_t)100000000u);
     ASSERT_EQ(p.max_delay_ns, UINT64_C(30000000000));
     ASSERT_TRUE(p.multiplier == 2.0);
-    /* Compare the stored double, including when x87 evaluates literals wider. */
+    /* The cast rounds the literal to double: x87 (-m32) evaluates a bare
+     * 0.1 at long double precision (FLT_EVAL_METHOD 2), and the stored
+     * double never equals that. */
     ASSERT_TRUE(p.jitter == (double)0.1);
     p = asx_retry_policy_immediate(0);
     ASSERT_EQ(p.max_attempts, 1u); /* max(1) */

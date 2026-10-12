@@ -9,6 +9,7 @@
 
 #include "../../../src/runtime/runtime_internal.h"
 #include "../../test_harness.h"
+#include "../../test_log.h"
 #include <asx/asx.h>
 #include <asx/core/cancel.h>
 #include <asx/core/ghost.h>
@@ -1912,6 +1913,7 @@ TEST(scheduler_refuses_to_complete_a_task_whose_state_is_corrupt) {
 }
 
 int main(void) {
+    test_log_open("unit", "runtime/cancellation", "test_cancellation");
     fprintf(stderr, "=== test_cancellation (runtime) ===\n");
 
     RUN_TEST(cancel_running_task_transitions_to_cancel_requested);
@@ -1972,5 +1974,6 @@ int main(void) {
     RUN_TEST(scheduler_refuses_to_complete_a_task_whose_state_is_corrupt);
 
     TEST_REPORT();
+    test_log_close();
     return test_failures;
 }

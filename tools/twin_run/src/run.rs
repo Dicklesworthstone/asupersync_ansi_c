@@ -472,6 +472,9 @@ struct Local {
     /// interpreter closes them in the same order.
     mpsc_tx: BTreeMap<String, Box<mpsc::Sender<u64>>>,
     mpsc_rx: BTreeMap<String, mpsc::Receiver<u64>>,
+    /// Receivers this task sealed (`rx.close()`); a second seal is outside
+    /// the DSL (§3.6).
+    sealed: HashSet<String>,
     oneshot_tx: BTreeMap<String, oneshot::Sender<u64>>,
     oneshot_rx: BTreeMap<String, oneshot::Receiver<u64>>,
     broadcast_tx: BTreeMap<String, broadcast::Sender<u64>>,
@@ -1400,6 +1403,17 @@ fn exec_sync(
             local.close(str_field(step, "channel")?, false)?;
             observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
         }
+        // rx.close() (mpsc.rs:1698): unlike close_receiver (the drop), the
+        // receiver stays held and the queue receivable.
+        "seal" => {
+            let ch = str_field(step, "channel")?;
+            if local.sealed.contains(ch) {
+                return Err(format!("a second seal of {ch:?} (outside DSL §3.6)"));
+            }
+            local.receiver(ch)?.close();
+            local.sealed.insert(ch.to_string());
+            observe(&ctx.shared, me, idx, label, "ASX_OK", Value::Null);
+        }
         // Non-blocking oneshot, broadcast and watch sends (DSL §3.6).
         "oneshot_is_closed" | "oneshot_is_ready" => {
             let ch = str_field(step, "channel")?;
@@ -1470,6 +1484,23 @@ fn exec_sync(
                 Err(watch::SendError::Closed(_)) => "ASX_E_DISCONNECTED",
             };
             observe(&ctx.shared, me, idx, label, status, Value::Null);
+        }
+        // A masked step inside masked nests; each inner observation's op is
+        // its path, e.g. masked/2/masked/1/checkpoint (DSL §3.2).
+        "masked" => {
+            let steps = step
+                .get("steps")
+                .and_then(Value::as_array)
+                .ok_or("masked without steps")?;
+            return cx.masked(|| -> RunResult<Flow> {
+                for (j, inner) in steps.iter().enumerate() {
+                    let path = format!("{label}/{}/{}", j + 1, str_field(inner, "op")?);
+                    if let Flow::Return(body) = exec_sync(cx, ctx, local, idx, &path, inner)? {
+                        return Ok(Flow::Return(body));
+                    }
+                }
+                Ok(Flow::Continue)
+            });
         }
         other => {
             return Err(format!("op {other:?} is not interpreted yet (increment 3)"));
@@ -1815,22 +1846,6 @@ async fn exec_step(
                 "panicked" => std::panic::panic_any(str_field(outcome, "message")?.to_string()),
                 other => return Err(format!("unknown outcome tag {other:?}")),
             }));
-        }
-        "masked" => {
-            let steps = step
-                .get("steps")
-                .and_then(Value::as_array)
-                .ok_or("masked without steps")?;
-            let result = cx.masked(|| -> RunResult<Flow> {
-                for (j, inner) in steps.iter().enumerate() {
-                    let label = format!("masked/{}/{}", j + 1, str_field(inner, "op")?);
-                    if let Flow::Return(body) = exec_sync(cx, ctx, local, idx, &label, inner)? {
-                        return Ok(Flow::Return(body));
-                    }
-                }
-                Ok(Flow::Continue)
-            });
-            return result;
         }
         // Task groups (DSL §3.5).
         "race" | "join_all" => {

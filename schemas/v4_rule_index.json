@@ -118,7 +118,7 @@
       "construct": "INV-MASK-BOUNDED (only decreases at CHECKPOINT-MASKED)",
       "kind": "invariant",
       "index_line": 39,
-      "scenario_tag": null
+      "scenario_tag": "inv.cancel.mask_monotone"
     },
     {
       "name": "rule.obligation.reserve",
