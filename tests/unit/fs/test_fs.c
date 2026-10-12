@@ -181,12 +181,13 @@ TEST(file_trunc_requires_write_access) {
  * survives, and a fresh file at an old path starts empty. */
 #define FS_EPOCH_MAX ((uint32_t)(ASX_MAX_FS_ENTRIES < 12u ? ASX_MAX_FS_ENTRIES : 12u))
 
-static void fs_epoch_path(asx_fs_path *path, uint32_t i) {
+/* 1 when the path was built. */
+static int fs_epoch_path(asx_fs_path *path, uint32_t i) {
     char text[16];
     (void)memcpy(text, "/tmp/epoch-00", 14u);
     text[11] = (char)('0' + (int)(i / 10u));
     text[12] = (char)('0' + (int)(i % 10u));
-    (void)asx_fs_path_from_cstr(path, text);
+    return asx_fs_path_from_cstr(path, text) == ASX_OK;
 }
 
 /* n files with content, closed (the entries stay in the in-memory fs) */
@@ -199,7 +200,7 @@ static int fs_epoch_dirty(uint32_t n) {
         asx_buf payload = asx_buf_from_cstr("stale-bytes");
         uint32_t written = 0u;
 
-        fs_epoch_path(&path, i);
+        if (!fs_epoch_path(&path, i)) return 0;
         if (asx_fs_file_open(&file, &path,
                              ASX_FS_OPEN_CREATE | ASX_FS_OPEN_READ | ASX_FS_OPEN_WRITE) != ASX_OK) {
             return 0;
@@ -219,7 +220,7 @@ static int fs_epoch_fresh(uint32_t n) {
         asx_file_handle file;
         asx_fs_metadata meta;
 
-        fs_epoch_path(&path, i);
+        if (!fs_epoch_path(&path, i)) return 0;
         if (asx_fs_file_open(&file, &path, ASX_FS_OPEN_READ) == ASX_OK) return 0;
         if (asx_fs_file_open(&file, &path,
                              ASX_FS_OPEN_CREATE | ASX_FS_OPEN_READ | ASX_FS_OPEN_WRITE) != ASX_OK) {
