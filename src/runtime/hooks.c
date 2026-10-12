@@ -490,7 +490,8 @@ asx_status asx_runtime_hooks_validate(const asx_runtime_hooks *hooks, int determ
         if (!hooks->clock.logical_now_ns_fn) return ASX_E_DETERMINISM_VIOLATION;
 
         /* Deterministic mode forbids ambient entropy unless seeded PRNG is configured */
-        if (hooks->entropy.random_u64_fn && !hooks->deterministic_seeded_prng)
+        if ((hooks->entropy.random_u64_fn || hooks->entropy.try_u64_fn) &&
+            !hooks->deterministic_seeded_prng)
             return ASX_E_DETERMINISM_VIOLATION;
 
         /* Ghost reactor required if reactor is configured in deterministic mode */
@@ -654,6 +655,11 @@ asx_status asx_runtime_now_ns(asx_time *out_now) {
     return ASX_OK;
 }
 
+/* Whether the installed entropy family has any source. */
+static int entropy_source_installed(void) {
+    return g_hooks.entropy.random_u64_fn != NULL || g_hooks.entropy.try_u64_fn != NULL;
+}
+
 asx_status asx_runtime_random_u64(uint64_t *out_value) {
     uint32_t i;
 
@@ -664,12 +670,21 @@ asx_status asx_runtime_random_u64(uint64_t *out_value) {
     /* Deterministic builds require an explicit seeded entropy stream.
      * Missing or unseeded entropy is a runtime configuration error, not a
      * simple absent optional hook. */
-    if (!g_hooks.deterministic_seeded_prng || !g_hooks.entropy.random_u64_fn)
+    if (!g_hooks.deterministic_seeded_prng || !entropy_source_installed())
         return ASX_E_INVALID_STATE;
 #else
-    if (!g_hooks.entropy.random_u64_fn) return ASX_E_HOOK_MISSING;
+    if (!entropy_source_installed()) return ASX_E_HOOK_MISSING;
 #endif
-    *out_value = g_hooks.entropy.random_u64_fn(g_hooks.entropy.ctx);
+    if (g_hooks.entropy.try_u64_fn != NULL) {
+        /* A source that can fail says so: the caller gets its status and
+         * *out_value is left alone, never a stand-in value. */
+        uint64_t value = 0;
+        asx_status st = g_hooks.entropy.try_u64_fn(g_hooks.entropy.ctx, &value);
+        if (st != ASX_OK) return st;
+        *out_value = value;
+    } else {
+        *out_value = g_hooks.entropy.random_u64_fn(g_hooks.entropy.ctx);
+    }
 
     /* Apply entropy fault injection */
     for (i = 0; i < g_fault_count; i++) {
@@ -684,6 +699,30 @@ asx_status asx_runtime_random_u64(uint64_t *out_value) {
     asx_hindsight_log(ASX_ND_ENTROPY_READ, 0, *out_value);
 
     return ASX_OK;
+}
+
+asx_status asx_runtime_random_secure_u64(uint64_t *out_value) {
+    if (!out_value) return ASX_E_INVALID_ARGUMENT;
+    if (!g_hooks_installed) return ASX_E_HOOK_MISSING;
+
+#if !ASX_DETERMINISTIC
+    /* A live build never answers a security draw from the default hook
+     * table's built-in PRNG: its seed is a public constant and it restarts
+     * with the runtime, so every value is recomputable. A profile that
+     * installs no platform source (FREESTANDING, EMBEDDED_ROUTER, HFT,
+     * AUTOMOTIVE) is refused here instead of handing out WebSocket keys,
+     * session IDs and CSRF tokens anyone can compute. A source the
+     * application installs, the platform's or its own, is the
+     * application's to vouch for: deterministic_seeded_prng is not
+     * consulted, because it stays 1 from the defaults even when an OS
+     * source was installed through a single hook family. */
+    if (!entropy_source_installed()) return ASX_E_HOOK_MISSING;
+    if (g_hooks.entropy.try_u64_fn == NULL &&
+        g_hooks.entropy.random_u64_fn == default_seeded_entropy) {
+        return ASX_E_HOOK_INVALID;
+    }
+#endif
+    return asx_runtime_random_u64(out_value);
 }
 
 asx_status asx_runtime_reactor_wait(uint32_t timeout_ms, uint32_t *out_ready_count,

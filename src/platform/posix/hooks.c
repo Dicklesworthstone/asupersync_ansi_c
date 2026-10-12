@@ -19,6 +19,7 @@
 
 #include <asx/asx_config.h>
 #include <asx/platform/posix.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -79,18 +80,39 @@ static asx_time posix_logical_clock(void *ctx) {
 /* Entropy hooks                                                       */
 /* ------------------------------------------------------------------ */
 
-static uint64_t posix_entropy_u64(void *ctx) {
+/* One interrupted call is retried, a few times at most: an EINTR is not an
+ * entropy failure and must not surface as one. */
+#define ASX_POSIX_ENTROPY_RETRIES 4u
+
+/* The OS source: getrandom(2) or getentropy(3), then /dev/urandom. When
+ * none of them delivers, the failure is returned. A value derived from the
+ * pid and the clock is not entropy, and the keys, session IDs and tokens
+ * drawn from this source must not silently become guessable because the
+ * kernel interface was unavailable. */
+static asx_status posix_entropy_try_u64(void *ctx, uint64_t *out) {
     uint64_t value = 0;
+    unsigned int attempt;
     (void)ctx;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
 #if defined(ASX_HAS_GETRANDOM)
-    {
+    for (attempt = 0u; attempt < ASX_POSIX_ENTROPY_RETRIES; attempt++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: ASX_POSIX_ENTROPY_RETRIES attempts") */
         long ret = syscall(SYS_getrandom, &value, sizeof(value), 0);
-        if (ret == (long)sizeof(value)) return value;
+        if (ret == (long)sizeof(value)) {
+            *out = value;
+            return ASX_OK;
+        }
+        if (ret >= 0 || errno != EINTR) break;
     }
 #elif defined(ASX_HAS_GETENTROPY)
-    {
-        if (getentropy(&value, sizeof(value)) == 0) return value;
+    for (attempt = 0u; attempt < ASX_POSIX_ENTROPY_RETRIES; attempt++) {
+        /* ASX_CHECKPOINT_WAIVER("bounded: ASX_POSIX_ENTROPY_RETRIES attempts") */
+        if (getentropy(&value, sizeof(value)) == 0) {
+            *out = value;
+            return ASX_OK;
+        }
+        if (errno != EINTR) break;
     }
 #endif
 
@@ -98,22 +120,30 @@ static uint64_t posix_entropy_u64(void *ctx) {
     {
         int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
         if (fd >= 0) {
-            ssize_t n = read(fd, &value, sizeof(value));
+            ssize_t n = -1;
+            for (attempt = 0u; attempt < ASX_POSIX_ENTROPY_RETRIES; attempt++) {
+                /* ASX_CHECKPOINT_WAIVER("bounded: ASX_POSIX_ENTROPY_RETRIES attempts") */
+                n = read(fd, &value, sizeof(value));
+                if (n >= 0 || errno != EINTR) break;
+            }
             close(fd);
-            if (n == (ssize_t)sizeof(value)) return value;
+            if (n == (ssize_t)sizeof(value)) {
+                *out = value;
+                return ASX_OK;
+            }
         }
     }
 
-    /* Last resort: hash of pid + timestamp (not cryptographic) */
-    {
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        {
-            uint64_t pid_val = (uint64_t)(unsigned int)getpid();
-            uint64_t ns_val = (uint64_t)(unsigned long)ts.tv_nsec;
-            value = pid_val * 6364136223846793005ULL + ns_val * 1442695040888963407ULL;
-        }
-    }
+    return ASX_E_HOOK_MISSING;
+}
+
+/* The infallible form of the same source, for code that reads the hook
+ * table directly. It has no way to report a failure, so it reports it as
+ * the one value no draw should be mistaken for: 0. Every runtime draw goes
+ * through posix_entropy_try_u64 and sees the status instead. */
+static uint64_t posix_entropy_u64(void *ctx) {
+    uint64_t value = 0;
+    if (posix_entropy_try_u64(ctx, &value) != ASX_OK) return 0u;
     return value;
 }
 
@@ -740,6 +770,7 @@ asx_status asx_posix_hooks_install_checked(asx_runtime_hooks *hooks,
     hooks->clock.now_ns_fn = posix_wall_clock;
     hooks->clock.logical_now_ns_fn = posix_logical_clock;
     hooks->entropy.random_u64_fn = posix_entropy_u64;
+    hooks->entropy.try_u64_fn = posix_entropy_try_u64;
     hooks->log.write_fn = posix_log_stderr;
 
     /* Reactor: epoll on Linux, poll(2) elsewhere; one-shot fd readiness */

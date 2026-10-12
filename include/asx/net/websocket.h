@@ -20,8 +20,12 @@
  *      asx_tcp_stream with the poll-based read/write API from net.h.
  *
  * Masking keys and the client handshake nonce come from a configurable
- * random source; by default the runtime entropy hook whitened through
- * SHA-256 (deterministic when the hook is seeded).
+ * random source; by default the runtime's secure draw
+ * (asx_runtime_random_secure_u64) whitened through SHA-256. Deterministic
+ * builds draw from the seeded stream. A live build whose hook table holds
+ * only the built-in seeded PRNG fails closed: the draw's status
+ * (ASX_E_HOOK_INVALID, ASX_E_HOOK_MISSING) reaches the caller and no key
+ * or frame is produced.
  *
  * Thread safety: none; engines and connection slots are single-threaded.
  *
@@ -208,7 +212,7 @@ typedef asx_status (*asx_ws_random_fn)(void *ctx, uint8_t *out, uint32_t len);
 typedef struct {
     asx_ws_role role;
     uint32_t max_message;       /* 0 or > ASX_WS_MAX_MESSAGE -> ASX_WS_MAX_MESSAGE */
-    asx_ws_random_fn random_fn; /* NULL -> whitened runtime entropy hook */
+    asx_ws_random_fn random_fn; /* NULL -> whitened secure runtime draw */
     void *random_ctx;
     const char *host;      /* client: Host header (required unless skip_handshake) */
     const char *path;      /* client: request target, default "/" */

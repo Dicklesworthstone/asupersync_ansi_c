@@ -25,6 +25,9 @@
 #if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
 #include <asx/platform/posix.h>
 #endif
+#if defined(ASX_PROFILE_WIN32) && !ASX_DETERMINISTIC
+#include <asx/platform/win32.h>
+#endif
 
 asx_io_backend asx_runtime_active_io_backend_selected(void);
 
@@ -264,6 +267,22 @@ asx_status asx_runtime_init_default_checked(asx_runtime *rt, uint64_t applicatio
     /* Live POSIX builds default to the real platform: monotonic clock,
      * OS entropy, epoll/poll readiness reactor, blocking pool. */
     st = asx_posix_hooks_install_checked(&hooks, application_fingerprint);
+#elif defined(ASX_PROFILE_WIN32) && !ASX_DETERMINISTIC
+    /* Live WIN32 defaults take the platform's entropy (BCryptGenRandom),
+     * so the WebSocket keys, session IDs and CSRF tokens drawn from the
+     * runtime are not the default table's fixed-seed PRNG. Its clocks and
+     * reactor stay the table's. Profiles with no platform source keep the
+     * default table, and their security draws are refused
+     * (asx_runtime_random_secure_u64). */
+    st = asx_runtime_hooks_init_checked(&hooks, application_fingerprint);
+    if (st == ASX_OK) {
+        asx_runtime_hooks win32_hooks;
+        st = asx_win32_hooks_install_checked(&win32_hooks, application_fingerprint);
+        if (st == ASX_OK) {
+            hooks.entropy = win32_hooks.entropy;
+            hooks.deterministic_seeded_prng = win32_hooks.deterministic_seeded_prng;
+        }
+    }
 #else
     st = asx_runtime_hooks_init_checked(&hooks, application_fingerprint);
 #endif

@@ -98,6 +98,28 @@ TEST(win32_entropy_primitive_produces_sample) {
     ASSERT_TRUE(sample != 0u);
 }
 
+TEST(win32_install_provides_fallible_bcrypt_entropy) {
+    asx_runtime_hooks hooks;
+    uint64_t first = 0u;
+    uint64_t next = 0u;
+    int differs = 0;
+    unsigned int i;
+
+    ASSERT_EQ(asx_win32_hooks_install(&hooks), ASX_OK);
+    ASSERT_TRUE(hooks.entropy.try_u64_fn != NULL);
+
+    /* BCryptGenRandom answers ASX_OK with values that vary... */
+    ASSERT_EQ(hooks.entropy.try_u64_fn(hooks.entropy.ctx, &first), ASX_OK);
+    for (i = 0; i < 64u && !differs; ++i) {
+        ASSERT_EQ(hooks.entropy.try_u64_fn(hooks.entropy.ctx, &next), ASX_OK);
+        differs = (next != first);
+    }
+    ASSERT_TRUE(differs);
+
+    /* ...and refuses a missing destination instead of drawing. */
+    ASSERT_EQ(hooks.entropy.try_u64_fn(hooks.entropy.ctx, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
 #endif
 
 int main(void) {
@@ -110,6 +132,7 @@ int main(void) {
     RUN_TEST(win32_reactor_zero_timeout_reports_no_ready_events);
     RUN_TEST(win32_ghost_reactor_reports_no_ready_events);
     RUN_TEST(win32_entropy_primitive_produces_sample);
+    RUN_TEST(win32_install_provides_fallible_bcrypt_entropy);
 #endif
     TEST_REPORT();
     return test_failures;

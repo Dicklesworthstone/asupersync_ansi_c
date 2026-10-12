@@ -278,10 +278,12 @@ void asx_web_session_store_init(asx_web_session_store *store) {
 static const char k_web_session_label[] = "asupersync::web::session-id:v1";
 static const char k_web_csrf_label[] = "asupersync::web::csrf-token:v1";
 
-/* The runtime entropy hook is the explicit entropy provider boundary. */
+/* The runtime entropy hook is the explicit entropy provider boundary. A
+ * session ID or CSRF token is a secret, so the draw is the runtime's
+ * secure one: a live build with no real entropy source fails closed. */
 static asx_status web_runtime_entropy(void *ctx, uint64_t *out) {
     (void)ctx;
-    return asx_runtime_random_u64(out);
+    return asx_runtime_random_secure_u64(out);
 }
 
 /* Write hex_len unpredictable lowercase hex chars plus NUL into out:

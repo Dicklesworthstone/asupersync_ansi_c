@@ -717,6 +717,195 @@ TEST(random_u64_dispatches_to_hook) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Fallible entropy source and secure draws (bd-9kll.16.5)             */
+/* ------------------------------------------------------------------ */
+
+#define SECURE_SENTINEL UINT64_C(0xA5A5A5A5A5A5A5A5)
+#define TRY_VALUE UINT64_C(0x1122334455667788)
+
+static asx_status g_try_status;
+static int g_try_calls;
+
+static asx_status test_try_entropy(void *ctx, uint64_t *out) {
+    (void)ctx;
+    g_try_calls++;
+    if (g_try_status != ASX_OK) return g_try_status;
+    *out = TRY_VALUE;
+    return ASX_OK;
+}
+
+/* Hooks whose fallible source answers with `try_status`, next to an
+ * infallible stand-in (test_entropy) that must never answer a draw. */
+static asx_status install_fallible_hooks(asx_status try_status) {
+    asx_runtime_hooks hooks;
+    asx_status st = asx_runtime_hooks_init(&hooks);
+    if (st != ASX_OK) return st;
+    hooks.entropy.random_u64_fn = test_entropy;
+    hooks.entropy.try_u64_fn = test_try_entropy;
+    hooks.deterministic_seeded_prng = 1;
+    g_try_status = try_status;
+    g_try_calls = 0;
+    reset_counters();
+    return asx_runtime_set_hooks(&hooks);
+}
+
+TEST(random_u64_prefers_fallible_source) {
+    uint64_t v = 0;
+
+    asx_runtime_reset();
+    ASSERT_EQ(install_fallible_hooks(ASX_OK), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_OK);
+    ASSERT_EQ(v, (uint64_t)TRY_VALUE);
+    ASSERT_EQ(g_try_calls, 1);
+    ASSERT_EQ(g_entropy_count, 0);
+}
+
+TEST(random_u64_reports_fallible_source_failure) {
+    uint64_t v = SECURE_SENTINEL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(install_fallible_hooks(ASX_E_RESOURCE_EXHAUSTED), ASX_OK);
+    /* The source's own status reaches the caller, no value is invented,
+     * and the infallible hook is not consulted as a stand-in. */
+    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
+    ASSERT_EQ(g_try_calls, 1);
+    ASSERT_EQ(g_entropy_count, 0);
+}
+
+TEST(hooks_validate_treats_fallible_source_as_entropy) {
+    asx_runtime_hooks hooks;
+
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.entropy.random_u64_fn = NULL;
+    hooks.entropy.try_u64_fn = test_try_entropy;
+    hooks.deterministic_seeded_prng = 0;
+    /* Deterministic mode forbids an unseeded source, however it is
+     * installed; live mode accepts it. */
+    ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 1), ASX_E_DETERMINISM_VIOLATION);
+    ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 0), ASX_OK);
+    hooks.deterministic_seeded_prng = 1;
+    ASSERT_EQ(asx_runtime_hooks_validate(&hooks, 1), ASX_OK);
+}
+
+TEST(secure_draw_rejects_null_and_missing_hooks) {
+    uint64_t v = SECURE_SENTINEL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
+    ASSERT_EQ(install_test_hooks(), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(secure_draw_serves_fallible_source) {
+    uint64_t v = 0;
+
+    asx_runtime_reset();
+    ASSERT_EQ(install_fallible_hooks(ASX_OK), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
+    ASSERT_EQ(v, (uint64_t)TRY_VALUE);
+    ASSERT_EQ(g_entropy_count, 0);
+}
+
+TEST(secure_draw_reports_fallible_source_failure) {
+    uint64_t v = SECURE_SENTINEL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(install_fallible_hooks(ASX_E_HOOK_MISSING), ASX_OK);
+    /* An OS source that failed is a status, never a guessable key. */
+    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
+    ASSERT_EQ(g_entropy_count, 0);
+}
+
+#if ASX_DETERMINISTIC
+TEST(secure_draw_keeps_seeded_stream_in_deterministic_builds) {
+    asx_runtime_hooks hooks;
+    uint64_t general = 0;
+    uint64_t secure = 0;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_u64(&general), ASX_OK);
+
+    /* The same default table, restarted: the secure draw is the first
+     * value of the same seeded stream, which replay depends on. */
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(&secure), ASX_OK);
+    ASSERT_EQ(secure, general);
+}
+#else
+TEST(secure_draw_refuses_builtin_seeded_prng_in_live_builds) {
+    asx_runtime_hooks hooks;
+    uint64_t v = SECURE_SENTINEL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    /* This is what a live FREESTANDING / EMBEDDED_ROUTER / HFT / AUTOMOTIVE
+     * runtime holds: the fixed-seed PRNG. Its draws are refused with a
+     * typed status and write nothing... */
+    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_INVALID);
+    ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
+    /* ...while the general draw still serves callers that do not protect
+     * anything with it. */
+    ASSERT_EQ(asx_runtime_random_u64(&v), ASX_OK);
+}
+
+TEST(secure_draw_refuses_when_no_source_in_live_builds) {
+    asx_runtime_hooks hooks;
+    uint64_t v = SECURE_SENTINEL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.entropy.random_u64_fn = NULL;
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
+}
+
+TEST(secure_draw_serves_application_source_in_live_builds) {
+    uint64_t v = 0;
+
+    asx_runtime_reset();
+    reset_counters();
+    /* An application's own source (an infallible hook here, installed
+     * over the defaults the way builder entropy hooks are) is its own to
+     * vouch for: it is served, and consulted. */
+    ASSERT_EQ(install_test_hooks(), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
+    ASSERT_EQ(v, (uint64_t)0xCAFEBABEu);
+    ASSERT_TRUE(g_entropy_count > 0);
+}
+
+TEST(default_init_security_draw_follows_the_profile_in_live_builds) {
+    asx_runtime rt;
+    uint64_t v = SECURE_SENTINEL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_init_default(&rt), ASX_OK);
+#if defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_WIN32)
+    /* The live POSIX default installs the OS source; the live WIN32
+     * default installs BCryptGenRandom. */
+    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
+    ASSERT_TRUE(v != (uint64_t)SECURE_SENTINEL);
+#else
+    /* CORE, FREESTANDING, EMBEDDED_ROUTER, HFT and AUTOMOTIVE install no
+     * platform source: the runtime holds the built-in PRNG, and security
+     * draws are refused rather than answered with its predictable stream. */
+    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_INVALID);
+    ASSERT_EQ(v, (uint64_t)SECURE_SENTINEL);
+#endif
+    asx_runtime_shutdown(&rt);
+}
+#endif
+
+/* ------------------------------------------------------------------ */
 /* Reactor dispatch                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -1063,6 +1252,33 @@ int main(void) {
     RUN_TEST(random_u64_missing_entropy_stream_is_refused);
     asx_runtime_reset();
     RUN_TEST(random_u64_dispatches_to_hook);
+
+    /* Fallible entropy source and secure draws (bd-9kll.16.5) */
+    asx_runtime_reset();
+    RUN_TEST(random_u64_prefers_fallible_source);
+    asx_runtime_reset();
+    RUN_TEST(random_u64_reports_fallible_source_failure);
+    asx_runtime_reset();
+    RUN_TEST(hooks_validate_treats_fallible_source_as_entropy);
+    asx_runtime_reset();
+    RUN_TEST(secure_draw_rejects_null_and_missing_hooks);
+    asx_runtime_reset();
+    RUN_TEST(secure_draw_serves_fallible_source);
+    asx_runtime_reset();
+    RUN_TEST(secure_draw_reports_fallible_source_failure);
+#if ASX_DETERMINISTIC
+    asx_runtime_reset();
+    RUN_TEST(secure_draw_keeps_seeded_stream_in_deterministic_builds);
+#else
+    asx_runtime_reset();
+    RUN_TEST(secure_draw_refuses_builtin_seeded_prng_in_live_builds);
+    asx_runtime_reset();
+    RUN_TEST(secure_draw_refuses_when_no_source_in_live_builds);
+    asx_runtime_reset();
+    RUN_TEST(secure_draw_serves_application_source_in_live_builds);
+    asx_runtime_reset();
+    RUN_TEST(default_init_security_draw_follows_the_profile_in_live_builds);
+#endif
 
     /* Reactor dispatch */
     asx_runtime_reset();

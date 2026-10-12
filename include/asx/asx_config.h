@@ -1039,6 +1039,12 @@ typedef void (*asx_free_fn)(void *ctx, void *ptr);
 typedef asx_time (*asx_clock_now_ns_fn)(void *ctx);
 typedef uint64_t (*asx_entropy_u64_fn)(void *ctx);
 
+/* Fallible entropy source: writes one word to *out and returns ASX_OK, or
+ * returns the status that says why the source could not produce one, with
+ * *out untouched. A real (OS or hardware) source reports its failure here
+ * instead of inventing a value. */
+typedef asx_status (*asx_entropy_try_u64_fn)(void *ctx, uint64_t *out);
+
 typedef asx_status (*asx_reactor_wait_fn)(void *ctx, uint32_t timeout_ms, uint32_t *ready_count);
 typedef asx_status (*asx_ghost_reactor_wait_fn)(void *ctx, uint64_t logical_step,
                                                 uint32_t *ready_count);
@@ -1090,6 +1096,11 @@ typedef struct {
 typedef struct {
     void *ctx;
     asx_entropy_u64_fn random_u64_fn;
+    /* Optional fallible form of the source. When set it supplies every
+     * runtime draw (asx_runtime_random_u64 and _secure_u64) and a source
+     * failure reaches the caller; random_u64_fn then only serves code that
+     * reads the hook table directly. The platform hooks install both. */
+    asx_entropy_try_u64_fn try_u64_fn;
 } asx_entropy_hooks;
 
 typedef struct {
@@ -1335,11 +1346,28 @@ ASX_API asx_time asx_runtime_virtual_now(void);
 /* Advance virtual time to `to` (no-op if `to` is not in the future). */
 ASX_API void asx_runtime_virtual_advance(asx_time to);
 
-/* Read random u64 via the configured deterministic entropy stream.
- * Returns ASX_OK on success, ASX_E_HOOK_MISSING if hooks are not installed,
- * and ASX_E_INVALID_STATE when the active hook table does not provide a
- * deterministic entropy source. */
+/* Read random u64 via the configured entropy stream.
+ * Returns ASX_OK on success, ASX_E_HOOK_MISSING if hooks are not installed
+ * (or, in a live build, no entropy hook is), ASX_E_INVALID_STATE when a
+ * deterministic build's hook table does not provide a deterministic entropy
+ * source, and the source's own status when a fallible source
+ * (asx_entropy_hooks.try_u64_fn) fails, with *out_value untouched. */
 ASX_API asx_status asx_runtime_random_u64(uint64_t *out_value);
+
+/* Read a random u64 that protects something: a WebSocket client key or
+ * frame mask, a session ID, a CSRF token. Live builds (ASX_DETERMINISTIC=0)
+ * never answer from the default hook table's built-in fixed-seed PRNG
+ * (asx_runtime_hooks_init): their draws fail closed, with a status and
+ * *out_value untouched, instead of returning a value anyone can recompute:
+ *   ASX_E_HOOK_MISSING  no entropy hook installed, or the source reports it
+ *                       is unavailable (an OS failure surfaces here);
+ *   ASX_E_HOOK_INVALID  the installed source is that built-in PRNG.
+ * Profiles with no platform source (FREESTANDING, EMBEDDED_ROUTER, HFT,
+ * AUTOMOTIVE) install one through the hook table or the builder. A source
+ * the application installs is its own to vouch for. Deterministic builds
+ * keep the seeded stream by design (replay needs it) and behave as
+ * asx_runtime_random_u64. */
+ASX_API ASX_MUST_USE asx_status asx_runtime_random_secure_u64(uint64_t *out_value);
 /* Wait for reactor readiness. Returns ready count via out_ready_count.
  * Prefers the native reactor wait hook when one is installed; otherwise,
  * deterministic builds fall back to the ghost reactor hook.
@@ -1791,6 +1819,7 @@ static inline uint64_t asx_header_config_fingerprint(void) {
         offsetof(entropy_alignment, value),
         offsetof(asx_entropy_hooks, ctx),
         offsetof(asx_entropy_hooks, random_u64_fn),
+        offsetof(asx_entropy_hooks, try_u64_fn),
         sizeof(asx_reactor_hooks),
         offsetof(reactor_alignment, value),
         offsetof(asx_reactor_hooks, ctx),

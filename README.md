@@ -730,7 +730,7 @@ it drifts from the headers or a new capacity macro is missing.
 |---|---|---|
 | `ASX_PROFILE_CORE` | General-purpose (default) | Deterministic single-thread kernel, no OS assumptions |
 | `ASX_PROFILE_POSIX` | Linux (CI-tested); other POSIX systems through the poll(2) fallback, untested | Live builds (`DETERMINISTIC=0`): epoll/poll(2) readiness reactor, pthread blocking pool, native sockets, files, processes and signals. Deterministic builds keep the in-memory backends |
-| `ASX_PROFILE_WIN32` | Windows (MSVC) | QueryPerformanceCounter clock, BCrypt entropy in live builds, debugger/stderr logging. No native I/O yet: no sockets or IOCP (the reactor is a timed sleep that reports no readiness), no blocking pool, and net/fs run on the in-memory backends |
+| `ASX_PROFILE_WIN32` | Windows (MSVC) | BCrypt entropy in live builds (the default init installs it); QueryPerformanceCounter clock and debugger/stderr logging through `asx_win32_hooks_install`. No native I/O yet: no sockets or IOCP (the reactor is a timed sleep that reports no readiness), no blocking pool, and net/fs run on the in-memory backends |
 | `ASX_PROFILE_FREESTANDING` | Bare-metal/embedded | User-supplied hooks, no FS/network assumptions |
 | `ASX_PROFILE_EMBEDDED_ROUTER` | OpenWrt/router-class | 4-worker cap, reject-at-75% overload policy. Arena sizes come from `RESOURCE_CLASS`, not the profile. No native OS I/O. CI runs its unit suite and the Rust fixtures under QEMU on five ISAs |
 | `ASX_PROFILE_HFT` | High-frequency trading | 16-worker cap, shed-oldest overload policy; pairs with the HFT instrumentation module (latency histograms, jitter), which the application feeds |
@@ -1829,6 +1829,20 @@ The **audit runner** (`asx_ambient_audit`) walks a hand-maintained catalog of am
 - **Pristine list** (`asx_audit_pristine_modules`): modules meant to use no ambient authority.
 
 The catalog exempts the clock and entropy providers: the POSIX and Win32 runtime hooks (`src/platform/*/hooks.c`), which deterministic builds and the lab replace with a virtual clock and a seeded PRNG, and the test-log helper's wall-clock timestamps. `make lint` scans the source (`tools/ci/check_ambient_authority.py`): it fails on an ambient clock or entropy call (`clock_gettime`, `time`, `rand`, `getrandom`, `/dev/urandom`, `QueryPerformanceCounter`, `BCryptGenRandom` and the like) in any file the catalog does not exempt, and on a catalog or pristine-list path that does not exist.
+
+### Secrets Need Real Entropy
+
+WebSocket client keys and frame masks, web session IDs and CSRF tokens protect something, so they are drawn with `asx_runtime_random_secure_u64()`, not the general `asx_runtime_random_u64()`. In a deterministic build both read the seeded stream, which replay needs. In a live build (`DETERMINISTIC=0`) the secure draw never answers from the default hook table's built-in PRNG, whose seed is a public constant: it fails closed with a status and writes nothing.
+
+| Live-build hook table | Secure draw |
+|---|---|
+| POSIX default (`asx_runtime_init_default`): `getrandom(2)` / `getentropy(3)` / `/dev/urandom` | served |
+| WIN32 default: `BCryptGenRandom` | served |
+| A source the application installs (hook table or builder entropy hooks) | served; the application vouches for it |
+| CORE, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE defaults, a runtime built by the builder without entropy hooks | `ASX_E_HOOK_INVALID` |
+| No entropy hook, or the OS source failed | `ASX_E_HOOK_MISSING` |
+
+An OS failure is reported, not papered over: `asx_entropy_hooks.try_u64_fn` is the fallible form of the source, and the platform hooks have no pid-and-clock fallback. The WebSocket engine, `asx_web_session_create()` and `asx_web_csrf_init()` return the draw's status with nothing created (no handshake request, no queued frame, no session, an empty CSRF token).
 
 ## Lab Runtime: Deterministic Test Execution
 

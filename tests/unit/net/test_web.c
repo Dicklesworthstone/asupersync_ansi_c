@@ -574,6 +574,92 @@ TEST(csrf_init_fails_closed_without_entropy) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Secure draws (bd-9kll.16.5)                                         */
+/* ------------------------------------------------------------------ */
+
+static asx_status web_failing_try_entropy(void *ctx, uint64_t *out) {
+    (void)ctx;
+    (void)out;
+    return ASX_E_HOOK_MISSING;
+}
+
+static uint32_t active_session_count(const asx_web_session_store *store) {
+    uint32_t i;
+    uint32_t n = 0u;
+    for (i = 0u; i < ASX_WEB_MAX_SESSIONS; i++) {
+        if (store->sessions[i].active) n++;
+    }
+    return n;
+}
+
+TEST(session_and_csrf_report_os_entropy_failure) {
+    asx_runtime_hooks hooks;
+    asx_web_session_store store;
+    asx_web_csrf csrf;
+    char id[ASX_WEB_SESSION_ID_LEN + 1];
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.entropy.try_u64_fn = web_failing_try_entropy;
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    /* The OS source failed: no session is claimed, no sequence number is
+     * consumed, no ID is written... */
+    asx_web_session_store_init(&store);
+    id[0] = '\0';
+    ASSERT_EQ(asx_web_session_create(&store, id, sizeof(id)), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(active_session_count(&store), 0u);
+    ASSERT_EQ(store.next_seq, 1u); /* the init value: none consumed */
+    ASSERT_EQ(id[0], '\0');
+
+    /* ...and a CSRF token is empty and never validates. */
+    ASSERT_EQ(asx_web_csrf_init(&csrf), ASX_E_HOOK_MISSING);
+    ASSERT_STR_EQ(asx_web_csrf_token(&csrf), "");
+    ASSERT_FALSE(asx_web_csrf_validate(&csrf, ""));
+}
+
+#if !ASX_DETERMINISTIC
+TEST(session_and_csrf_refuse_builtin_seeded_prng_in_live_builds) {
+    asx_runtime_hooks hooks;
+    asx_web_session_store store;
+    asx_web_csrf csrf;
+    char id[ASX_WEB_SESSION_ID_LEN + 1];
+
+    /* The default hook table, as a live profile with no platform source
+     * holds it: session IDs and CSRF tokens would be recomputable. */
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    asx_web_session_store_init(&store);
+    id[0] = '\0';
+    ASSERT_EQ(asx_web_session_create(&store, id, sizeof(id)), ASX_E_HOOK_INVALID);
+    ASSERT_EQ(active_session_count(&store), 0u);
+    ASSERT_EQ(store.next_seq, 1u); /* the init value: none consumed */
+    ASSERT_EQ(id[0], '\0');
+
+    ASSERT_EQ(asx_web_csrf_init(&csrf), ASX_E_HOOK_INVALID);
+    ASSERT_STR_EQ(asx_web_csrf_token(&csrf), "");
+    ASSERT_FALSE(asx_web_csrf_validate(&csrf, ""));
+}
+
+TEST(session_and_csrf_serve_application_entropy_in_live_builds) {
+    asx_web_session_store store;
+    asx_web_csrf csrf;
+    char id[ASX_WEB_SESSION_ID_LEN + 1];
+
+    /* install_seeded_entropy installs the test's own source over the
+     * defaults: an application's source is served in live builds. */
+    install_seeded_entropy(7u);
+    asx_web_session_store_init(&store);
+    ASSERT_EQ(asx_web_session_create(&store, id, sizeof(id)), ASX_OK);
+    ASSERT_TRUE(is_lower_hex(id, ASX_WEB_SESSION_ID_LEN));
+    ASSERT_EQ(asx_web_csrf_init(&csrf), ASX_OK);
+    ASSERT_TRUE(is_lower_hex(asx_web_csrf_token(&csrf), ASX_WEB_CSRF_TOKEN_LEN));
+}
+#endif
+
+/* ------------------------------------------------------------------ */
 /* Static file tests                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -676,6 +762,11 @@ int main(void) {
     RUN_TEST(csrf_successive_tokens_differ);
     RUN_TEST(csrf_reject_bad_token);
     RUN_TEST(csrf_init_fails_closed_without_entropy);
+    RUN_TEST(session_and_csrf_report_os_entropy_failure);
+#if !ASX_DETERMINISTIC
+    RUN_TEST(session_and_csrf_refuse_builtin_seeded_prng_in_live_builds);
+    RUN_TEST(session_and_csrf_serve_application_entropy_in_live_builds);
+#endif
 
     /* Static files */
     RUN_TEST(static_add_and_serve);

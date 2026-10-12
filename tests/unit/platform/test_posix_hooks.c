@@ -232,6 +232,55 @@ TEST(posix_entropy_distribution_uniqueness) {
     fprintf(stderr, "    entropy uniqueness: %u/64 unique\n", unique_count);
 }
 
+TEST(posix_install_provides_fallible_entropy) {
+    asx_runtime_hooks hooks;
+    uint64_t first = 0;
+    uint64_t next = 0;
+    int differs = 0;
+    unsigned int i;
+
+    ASSERT_EQ(install_posix_hooks(&hooks), ASX_OK);
+    ASSERT_TRUE(hooks.entropy.try_u64_fn != NULL);
+
+    /* The OS source answers ASX_OK with values that vary... */
+    ASSERT_EQ(hooks.entropy.try_u64_fn(hooks.entropy.ctx, &first), ASX_OK);
+    for (i = 0; i < 64u && !differs; ++i) {
+        ASSERT_EQ(hooks.entropy.try_u64_fn(hooks.entropy.ctx, &next), ASX_OK);
+        differs = (next != first);
+    }
+    ASSERT_TRUE(differs);
+
+    /* ...and refuses a missing destination instead of drawing. */
+    ASSERT_EQ(hooks.entropy.try_u64_fn(hooks.entropy.ctx, NULL), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(posix_runtime_security_draw_comes_from_os_source) {
+    asx_runtime_hooks hooks;
+    uint64_t first = 0;
+    uint64_t next = 0;
+    int differs = 0;
+    unsigned int i;
+
+    asx_runtime_reset();
+    ASSERT_EQ(install_posix_hooks(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    /* Live and deterministic builds alike: the platform source is a real
+     * source, so its security draws are served and are not a replayable
+     * stream. */
+    ASSERT_EQ(asx_runtime_random_secure_u64(&first), ASX_OK);
+    for (i = 0; i < 64u && !differs; ++i) {
+        ASSERT_EQ(asx_runtime_random_secure_u64(&next), ASX_OK);
+        differs = (next != first);
+    }
+    ASSERT_TRUE(differs);
+
+    /* Reset must restore the pristine table: a second runtime in the same
+     * process does not inherit this one's source. */
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_random_secure_u64(&next), ASX_E_HOOK_MISSING);
+}
+
 #if defined(__linux__)
 #include <unistd.h>
 
@@ -317,6 +366,8 @@ int main(void) {
     RUN_TEST(posix_wall_clock_plausibility);
     RUN_TEST(posix_entropy_100_samples_no_errors);
     RUN_TEST(posix_entropy_distribution_uniqueness);
+    RUN_TEST(posix_install_provides_fallible_entropy);
+    RUN_TEST(posix_runtime_security_draw_comes_from_os_source);
 #if defined(__linux__)
     RUN_TEST(posix_reactor_lifecycle_pipe);
     RUN_TEST(posix_reactor_registration_fails_closed_for_bad_inputs);

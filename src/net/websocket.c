@@ -637,9 +637,13 @@ static asx_status ws_queue_frame(asx_ws_engine *ws, uint32_t opcode, int fin,
 /* Engine: lifecycle                                                   */
 /* ------------------------------------------------------------------ */
 
+/* The client key and every frame mask protect the connection (RFC 6455
+ * 4.1, 5.3), so they come from the runtime's secure draw: a live build
+ * with no real entropy source fails closed here instead of masking with a
+ * stream anyone can recompute. */
 static asx_status ws_runtime_entropy(void *ctx, uint64_t *out) {
     (void)ctx;
-    return asx_runtime_random_u64(out);
+    return asx_runtime_random_secure_u64(out);
 }
 
 /* Default random source: runtime entropy hook whitened via SHA-256. */

@@ -142,12 +142,15 @@ typedef struct {
 ASX_API void asx_web_session_store_init(asx_web_session_store *store);
 
 /* Create a new session and copy its ID (ASX_WEB_SESSION_ID_LEN lowercase hex
- * chars + NUL) into out_id. IDs are unpredictable: 256 bits from the runtime
- * entropy hook are whitened with SHA-256 and expanded with HKDF-SHA256 bound
- * to the store's sequence number (deterministic when the hook is seeded).
+ * chars + NUL) into out_id. IDs are unpredictable: 256 bits from the runtime's
+ * secure draw (asx_runtime_random_secure_u64) are whitened with SHA-256 and
+ * expanded with HKDF-SHA256 bound to the store's sequence number
+ * (deterministic builds draw from the seeded stream).
  * Returns ASX_OK, ASX_E_INVALID_ARGUMENT, ASX_E_BUFFER_TOO_SMALL,
  * ASX_E_RESOURCE_EXHAUSTED (store full or repeated ID collision), or the
- * entropy hook status (e.g. ASX_E_HOOK_MISSING) with the store unchanged. */
+ * secure draw's status with the store unchanged: ASX_E_HOOK_INVALID when a
+ * live build holds only the built-in seeded PRNG, ASX_E_HOOK_MISSING when
+ * no entropy source is installed or the OS source failed. */
 ASX_API asx_status asx_web_session_create(asx_web_session_store *store, char *out_id,
                                           uint32_t id_capacity);
 
@@ -262,11 +265,14 @@ typedef struct {
 } asx_web_csrf;
 
 /* Initialize CSRF state with a fresh unpredictable token
- * (ASX_WEB_CSRF_TOKEN_LEN lowercase hex chars) derived from the runtime
- * entropy hook through SHA-256 whitening and HKDF-SHA256. Deterministic
- * builds stay reproducible because the hook is seeded there.
- * Returns ASX_OK, ASX_E_INVALID_ARGUMENT for NULL, or the entropy hook
- * status; on failure the token is empty and never validates. */
+ * (ASX_WEB_CSRF_TOKEN_LEN lowercase hex chars) derived from the runtime's
+ * secure draw (asx_runtime_random_secure_u64) through SHA-256 whitening and
+ * HKDF-SHA256. Deterministic builds stay reproducible because the hook is
+ * seeded there; a live build holding only the built-in seeded PRNG fails
+ * closed.
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT for NULL, or the secure draw's
+ * status (ASX_E_HOOK_INVALID, ASX_E_HOOK_MISSING); on failure the token is
+ * empty and never validates. */
 ASX_API ASX_MUST_USE asx_status asx_web_csrf_init(asx_web_csrf *csrf);
 
 /* Get the current CSRF token. */

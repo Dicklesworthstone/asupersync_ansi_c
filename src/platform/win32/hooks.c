@@ -77,21 +77,31 @@ static asx_time win32_logical_clock(void *ctx) {
 /* Entropy hook                                                        */
 /* ------------------------------------------------------------------ */
 
-static uint64_t win32_entropy_u64(void *ctx) {
+/* BCryptGenRandom is the source. When it fails the failure is returned: a
+ * value built from the process id and the performance counter is not
+ * entropy, and the keys, session IDs and tokens drawn from this source must
+ * not silently become guessable. */
+static asx_status win32_entropy_try_u64(void *ctx, uint64_t *out) {
     unsigned char bytes[sizeof(uint64_t)];
     uint64_t value = 0;
     NTSTATUS status;
     (void)ctx;
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
 
     status = BCryptGenRandom(NULL, bytes, (ULONG)sizeof(bytes), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-    if (BCRYPT_SUCCESS(status)) {
-        memcpy(&value, bytes, sizeof(value));
-        return value;
-    }
+    if (!BCRYPT_SUCCESS(status)) return ASX_E_HOOK_MISSING;
+    memcpy(&value, bytes, sizeof(value));
+    *out = value;
+    return ASX_OK;
+}
 
-    /* Fallback keeps the hook non-zero even if BCrypt is unavailable. */
-    value = (uint64_t)GetCurrentProcessId() << 32;
-    value ^= (uint64_t)win32_qpc_now_ns(NULL);
+/* The infallible form of the same source, for code that reads the hook
+ * table or asx_win32_entropy_u64 directly. It cannot report a failure, so
+ * it returns 0 for one. Every runtime draw goes through
+ * win32_entropy_try_u64 and sees the status instead. */
+static uint64_t win32_entropy_u64(void *ctx) {
+    uint64_t value = 0;
+    if (win32_entropy_try_u64(ctx, &value) != ASX_OK) return 0u;
     return value;
 }
 
@@ -206,6 +216,7 @@ asx_status asx_win32_hooks_install_checked(asx_runtime_hooks *hooks,
      * hook would mislabel ambient entropy as replay-safe. */
 #else
     hooks->entropy.random_u64_fn = win32_entropy_u64;
+    hooks->entropy.try_u64_fn = win32_entropy_try_u64;
     hooks->deterministic_seeded_prng = 0u;
 #endif
 

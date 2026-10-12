@@ -55,10 +55,30 @@ static asx_status failing_random(void *ctx, uint8_t *out, uint32_t len) {
     return ASX_E_HOOK_MISSING;
 }
 
+#if !ASX_DETERMINISTIC
+/* A live build refuses security draws from the default hook table's
+ * built-in seeded PRNG (asx_runtime_random_secure_u64), so the e2e tests
+ * that let the engine draw its own client key and masks install a source
+ * of their own, as an application installs the platform's. */
+static uint64_t live_test_entropy(void *ctx) {
+    static uint64_t state = UINT64_C(0x243F6A8885A308D3);
+    uint64_t z;
+    (void)ctx;
+    state += UINT64_C(0x9E3779B97F4A7C15);
+    z = state;
+    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
+    return z ^ (z >> 31);
+}
+#endif
+
 static void install_entropy(void) {
     asx_runtime_hooks hooks;
     asx_runtime_reset();
     (void)asx_runtime_hooks_init(&hooks);
+#if !ASX_DETERMINISTIC
+    hooks.entropy.random_u64_fn = live_test_entropy;
+#endif
     (void)asx_runtime_set_hooks(&hooks);
 }
 
@@ -634,6 +654,118 @@ TEST(engine_init_validates_config) {
 }
 
 /* ================================================================== */
+/* Default random source: the runtime's secure draw (bd-9kll.16.5)     */
+/* ================================================================== */
+
+static asx_status failing_try_entropy(void *ctx, uint64_t *out) {
+    (void)ctx;
+    (void)out;
+    return ASX_E_HOOK_MISSING;
+}
+
+static void install_default_hooks(void) {
+    asx_runtime_hooks hooks;
+    asx_runtime_reset();
+    (void)asx_runtime_hooks_init(&hooks);
+    (void)asx_runtime_set_hooks(&hooks);
+}
+
+static asx_ws_config default_random_client_config(void) {
+    asx_ws_config cfg;
+    asx_ws_config_init(&cfg, ASX_WS_ROLE_CLIENT);
+    cfg.host = "server.example.com";
+    cfg.path = "/chat";
+    return cfg;
+}
+
+TEST(client_engine_default_random_reports_entropy_source_failure) {
+    asx_runtime_hooks hooks;
+    asx_ws_config cfg = default_random_client_config();
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.entropy.try_u64_fn = failing_try_entropy;
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    /* The OS source failed: the handshake stops with its status, and no
+     * request carrying a made-up key is queued. */
+    ASSERT_EQ(asx_ws_engine_init(&g_cli, &cfg), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(asx_ws_engine_state(&g_cli), ASX_WS_STATE_CLOSED);
+    ASSERT_EQ(asx_ws_engine_output(&g_cli, NULL), 0u);
+}
+
+TEST(client_engine_masking_key_failure_queues_no_frame) {
+    asx_runtime_hooks hooks;
+    asx_ws_config cfg;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    hooks.entropy.try_u64_fn = failing_try_entropy;
+    ASSERT_EQ(asx_runtime_set_hooks(&hooks), ASX_OK);
+
+    asx_ws_config_init(&cfg, ASX_WS_ROLE_CLIENT);
+    cfg.skip_handshake = 1; /* open at once: the first draw is a frame mask */
+    ASSERT_EQ(asx_ws_engine_init(&g_cli, &cfg), ASX_OK);
+    ASSERT_EQ(asx_ws_engine_send(&g_cli, ASX_WS_OPCODE_TEXT, k_hello, 5u), ASX_E_HOOK_MISSING);
+    ASSERT_EQ(asx_ws_engine_output(&g_cli, NULL), 0u);
+}
+
+#if ASX_DETERMINISTIC
+TEST(client_engine_default_random_is_the_seeded_stream_in_deterministic_builds) {
+    asx_ws_config cfg = default_random_client_config();
+    uint8_t first[512];
+    const uint8_t *p = NULL;
+    uint32_t first_len;
+    uint32_t len;
+
+    install_default_hooks();
+    ASSERT_EQ(asx_ws_engine_init(&g_cli, &cfg), ASX_OK);
+    first_len = asx_ws_engine_output(&g_cli, &p);
+    ASSERT_TRUE(first_len > 0u && first_len <= sizeof(first));
+    memcpy(first, p, first_len);
+
+    /* The same seeded stream restarts with the runtime: replay of a
+     * deterministic run sees the same key. */
+    install_default_hooks();
+    ASSERT_EQ(asx_ws_engine_init(&g_cli, &cfg), ASX_OK);
+    len = asx_ws_engine_output(&g_cli, &p);
+    ASSERT_EQ(len, first_len);
+    ASSERT_TRUE(memcmp(first, p, len) == 0);
+}
+#else
+TEST(client_engine_refuses_builtin_seeded_prng_in_live_builds) {
+    asx_ws_config cfg = default_random_client_config();
+
+    install_default_hooks();
+    /* A live runtime holding only the built-in PRNG must not mint a
+     * handshake key anyone can recompute. */
+    ASSERT_EQ(asx_ws_engine_init(&g_cli, &cfg), ASX_E_HOOK_INVALID);
+    ASSERT_EQ(asx_ws_engine_state(&g_cli), ASX_WS_STATE_CLOSED);
+    ASSERT_EQ(asx_ws_engine_output(&g_cli, NULL), 0u);
+}
+
+TEST(client_engine_refuses_to_mask_with_builtin_seeded_prng_in_live_builds) {
+    asx_ws_config cfg;
+
+    install_default_hooks();
+    asx_ws_config_init(&cfg, ASX_WS_ROLE_CLIENT);
+    cfg.skip_handshake = 1;
+    ASSERT_EQ(asx_ws_engine_init(&g_cli, &cfg), ASX_OK);
+    ASSERT_EQ(asx_ws_engine_send(&g_cli, ASX_WS_OPCODE_TEXT, k_hello, 5u), ASX_E_HOOK_INVALID);
+    ASSERT_EQ(asx_ws_engine_output(&g_cli, NULL), 0u);
+}
+
+TEST(client_engine_serves_application_entropy_in_live_builds) {
+    asx_ws_config cfg = default_random_client_config();
+
+    install_entropy();
+    ASSERT_EQ(asx_ws_engine_init(&g_cli, &cfg), ASX_OK);
+    ASSERT_TRUE(output_starts_with(&g_cli, "GET /chat HTTP/1.1\r\n"));
+    ASSERT_TRUE(output_contains(&g_cli, "Sec-WebSocket-Key: "));
+}
+#endif
+
+/* ================================================================== */
 /* Engine receive path                                                 */
 /* ================================================================== */
 
@@ -1192,6 +1324,15 @@ int main(void) {
     RUN_TEST(client_engine_handshake_and_trailing_frame);
     RUN_TEST(client_engine_rejects_invalid_responses);
     RUN_TEST(engine_init_validates_config);
+    RUN_TEST(client_engine_default_random_reports_entropy_source_failure);
+    RUN_TEST(client_engine_masking_key_failure_queues_no_frame);
+#if ASX_DETERMINISTIC
+    RUN_TEST(client_engine_default_random_is_the_seeded_stream_in_deterministic_builds);
+#else
+    RUN_TEST(client_engine_refuses_builtin_seeded_prng_in_live_builds);
+    RUN_TEST(client_engine_refuses_to_mask_with_builtin_seeded_prng_in_live_builds);
+    RUN_TEST(client_engine_serves_application_entropy_in_live_builds);
+#endif
 
     /* Engine receive path */
     RUN_TEST(server_engine_reassembles_masked_fragments_with_interleaved_ping);
