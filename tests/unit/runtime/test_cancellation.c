@@ -112,7 +112,11 @@ TEST(cancel_running_task_transitions_to_cancel_requested) {
  * Test: cancel a Created (not yet polled) task
  * ------------------------------------------------------------------- */
 
-/* The task-transition events traced for `tid` from event `from` on. */
+/* The task-transition events traced for `tid` from event `from` on. A
+ * handle carries the task's state when it was packed, so the spawn-time
+ * handle and the one the scheduler traces a later transition with differ in
+ * their state mask: identity is the type tag and the generation-tagged
+ * slot. */
 static uint32_t task_transitions_since(uint32_t from, asx_task_id tid, uint64_t *out,
                                        uint32_t cap) {
     uint32_t i;
@@ -120,7 +124,11 @@ static uint32_t task_transitions_since(uint32_t from, asx_task_id tid, uint64_t 
     asx_trace_event ev;
     for (i = from; i < asx_trace_event_count(); i++) {
         if (!asx_trace_event_get(i, &ev)) continue;
-        if (ev.kind != ASX_TRACE_TASK_TRANSITION || ev.entity_id != (uint64_t)tid) continue;
+        if (ev.kind != ASX_TRACE_TASK_TRANSITION ||
+            asx_handle_type_tag(ev.entity_id) != asx_handle_type_tag(tid) ||
+            asx_handle_index(ev.entity_id) != asx_handle_index(tid)) {
+            continue;
+        }
         if (n < cap) out[n] = ev.aux;
         n++;
     }
