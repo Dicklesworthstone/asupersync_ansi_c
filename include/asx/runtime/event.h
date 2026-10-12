@@ -96,22 +96,46 @@ ASX_API const char *asx_event_kind_str(asx_event_kind kind);
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    uint32_t first_divergence_index; /* index of first mismatched event */
-    asx_event_record expected;       /* what was expected */
-    asx_event_record actual;         /* what was observed */
-    int diverged;                    /* 1 if mismatch found */
-    int count_mismatch;              /* 1 if event counts differ */
-    uint32_t expected_count;
-    uint32_t actual_count;
+    /* Index of the first differing event when one of the compared events
+     * differs; otherwise (the total or the chain differs) the first index
+     * not compared, the runs differing at or after it. */
+    uint32_t first_divergence_index;
+    asx_event_record expected; /* what was expected (a differing event) */
+    asx_event_record actual;   /* what was observed */
+    int diverged;              /* 1 if any mismatch was found */
+    int count_mismatch;        /* 1 if the total number of events differs */
+    int chain_mismatch;        /* 1 if the rolling hash chains differ */
+    uint32_t expected_count;   /* events the expected run emitted */
+    uint32_t actual_count;     /* events this run emitted, stored or not */
+    uint64_t expected_chain;
+    uint64_t actual_chain;
+    uint32_t compared; /* events compared one by one (the stored window) */
 } asx_replay_divergence;
 
 /*
- * Compare recorded events against an expected sequence.
- * Returns ASX_OK if identical, ASX_E_EQUIVALENCE_MISMATCH if not.
- * Populates divergence with first-divergence diagnostics.
+ * Verify this run against a reference run.
+ *
+ * The log stores only the first ASX_EVENT_LOG_CAPACITY events of a run;
+ * the count and the hash chain cover every event it emitted. So a run is
+ * verified by three things together, and ASX_OK needs all of them:
+ *   - the total number of events (`expected_total`, the reference run's
+ *     asx_event_log_count());
+ *   - the rolling hash chain (`expected_chain`, its asx_event_hash_chain()),
+ *     which covers each event's kind, entity and sequence, stored or not,
+ *     but not its parent or status;
+ *   - the stored events, compared one by one: `expected` holds the first
+ *     `expected_events` (<= expected_total) events of the reference run,
+ *     of which min(expected_events, stored) are compared.
+ * A reference prefix that matches therefore does not verify a run that
+ * emits more or different events after it: the total or the chain differs.
+ * Returns ASX_OK if all three agree, ASX_E_EQUIVALENCE_MISMATCH if not
+ * (with the first differing stored event in `divergence`, or the first
+ * index not compared), ASX_E_INVALID_ARGUMENT for bad arguments.
  */
 ASX_API ASX_MUST_USE asx_status asx_event_replay_verify(const asx_event_record *expected,
-                                                        uint32_t expected_count,
+                                                        uint32_t expected_events,
+                                                        uint32_t expected_total,
+                                                        uint64_t expected_chain,
                                                         asx_replay_divergence *divergence);
 
 #ifdef __cplusplus

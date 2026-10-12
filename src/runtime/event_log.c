@@ -183,29 +183,30 @@ asx_status asx_event_log_to_json(asx_codec_buffer *out) {
 /* Replay verification                                                 */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_event_replay_verify(const asx_event_record *expected, uint32_t expected_count,
+asx_status asx_event_replay_verify(const asx_event_record *expected, uint32_t expected_events,
+                                   uint32_t expected_total, uint64_t expected_chain,
                                    asx_replay_divergence *divergence) {
     uint32_t i;
-    uint32_t actual_count;
+    uint32_t window;
     uint32_t compare_limit;
 
     if (divergence == NULL) return ASX_E_INVALID_ARGUMENT;
-    if (expected == NULL && expected_count > 0) return ASX_E_INVALID_ARGUMENT;
-
     memset(divergence, 0, sizeof(*divergence));
+    if (expected == NULL && expected_events > 0) return ASX_E_INVALID_ARGUMENT;
+    if (expected_events > expected_total) return ASX_E_INVALID_ARGUMENT;
 
-    actual_count = g_event_count;
-    if (actual_count > ASX_EVENT_LOG_CAPACITY) { actual_count = ASX_EVENT_LOG_CAPACITY; }
+    /* The log stores the first ASX_EVENT_LOG_CAPACITY events; the count
+     * and the hash chain cover every event emitted. */
+    window = g_event_count < ASX_EVENT_LOG_CAPACITY ? g_event_count : ASX_EVENT_LOG_CAPACITY;
+    divergence->expected_count = expected_total;
+    divergence->actual_count = g_event_count;
+    divergence->expected_chain = expected_chain;
+    divergence->actual_chain = g_hash_chain;
+    divergence->count_mismatch = expected_total != g_event_count;
+    divergence->chain_mismatch = expected_chain != g_hash_chain;
 
-    /* Check count mismatch */
-    if (expected_count != actual_count) {
-        divergence->count_mismatch = 1;
-        divergence->expected_count = expected_count;
-        divergence->actual_count = actual_count;
-    }
-
-    /* Compare events up to the shorter sequence */
-    compare_limit = expected_count < actual_count ? expected_count : actual_count;
+    compare_limit = expected_events < window ? expected_events : window;
+    divergence->compared = compare_limit;
 
     for (i = 0; i < compare_limit; i++) {
         /* ASX_CHECKPOINT_WAIVER("bounded aggregation") */
@@ -223,8 +224,9 @@ asx_status asx_event_replay_verify(const asx_event_record *expected, uint32_t ex
         }
     }
 
-    /* If counts differ but all compared events matched, report mismatch */
-    if (divergence->count_mismatch) {
+    /* Every compared event matched. A different total or chain means the
+     * runs differ at or after the first event not compared. */
+    if (divergence->count_mismatch || divergence->chain_mismatch) {
         divergence->diverged = 1;
         divergence->first_divergence_index = compare_limit;
         return ASX_E_EQUIVALENCE_MISMATCH;

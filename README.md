@@ -1037,7 +1037,7 @@ The cancellation state machine progresses through four phases:
 Running → CancelRequested → Cancelling → Finalizing → Completed
 ```
 
-A task that acknowledges its cancel and then returns finishes through `Finalizing`: the scheduler takes it Cancelling → Finalizing → Completed in the step that sees the return, as Rust's `cleanup_done` then `finalize_done` do, and the runtime trace records each transition. A task that panics completes straight from Cancelling. Canonical vocabulary v2 has no task-state event, so a Rust-captured fixture sees only a task's end state; `tests/unit/runtime/test_cancellation.c` asserts the traced transitions (`natural_return_after_acknowledge_completes_through_finalizing` and its three siblings). The parallel scheduler (`src/runtime/parallel.c`) still completes such a task straight from Cancelling.
+A task that acknowledges its cancel and then returns finishes through `Finalizing`: the scheduler takes it Cancelling → Finalizing → Completed in the step that sees the return, as Rust's `cleanup_done` then `finalize_done` do, and the runtime trace records each transition. A task that panics completes straight from Cancelling. Canonical vocabulary v2 has no task-state event, so a Rust-captured fixture sees only a task's end state; `tests/unit/runtime/test_cancellation.c` asserts the traced transitions (`natural_return_after_acknowledge_completes_through_finalizing` and its three siblings); the sweep, lab-dispatch and parallel schedulers all take this path.
 
 Each cancel carries an **origin attribution chain** (source region, source task, timestamp, message) so propagation can be traced across cancel waves. The chain is bounded as Rust's is: a descendant's reason keeps at most 15 causes (16 reasons, an estimated 4096 bytes), and a chain cut at the bound is flagged `truncated`. `asx_cancel_reason_chain_links` counts a reason's links.
 
@@ -1140,6 +1140,8 @@ Two deterministic runs with the same scenario, profile, seed, and runtime versio
 - `make codec-equivalence` executes the v2 Rust captures in JSON and BIN builds and compares recorded legacy digests. Both builds still take JSON scenario input; this checks runtime build modes and trace encoding, not a binary v2 scenario transport. `make profile-parity` executes the same captures under eight host profiles.
 
 A Rust parity mismatch is a semantic drift bug in the C port, not an acceptable variation.
+
+The separate event log (`asx_event_emit`, `src/runtime/event_log.c`) stores the first 512 events of a run; its total count and rolling hash chain cover every event. `asx_event_replay_verify` takes the reference run's total and chain along with its stored events, so a run that matches the stored prefix but emits more, fewer or different events after it does not verify.
 
 ### Combinator Composition Model
 
