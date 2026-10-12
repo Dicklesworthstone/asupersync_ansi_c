@@ -310,6 +310,10 @@ typedef struct {
 } it_event;
 
 static const asx_json_doc *g_in;
+/* A private copy of the input document, which g_in points at for the whole
+ * run: a supervised child's program is rewritten into it for each
+ * generation (DSL 3.8), so the caller's const document is never touched. */
+static asx_json_doc g_work;
 static asx_json_doc *g_out;
 static uint32_t g_observations;
 
@@ -776,15 +780,153 @@ static it_task *generation_entry(it_supervisor *sv, const char *child, unsigned 
     return t;
 }
 
+/* ------------------------------------------------------------------ */
+/* Per-generation name scoping (DSL 3.8)                               */
+/* ------------------------------------------------------------------ */
+
+/* Every generation of a supervised child runs its program again, so the
+ * names the program creates would repeat. Each generation instead gets a
+ * copy of the program in which every name its steps create (`as` of
+ * spawn, open_region, server_spawn and supervise) is "<generation>/<as>",
+ * as are the references to those names (`task`, `region`, `server`,
+ * `supervisor`). A name the program does not create (a scenario-level
+ * region, task or resource) is left alone. twin_run's scope_program does
+ * the same to the same JSON. */
+#define IT_SCOPE_MAX_NAMES 32u
+
+typedef struct {
+    const char *scope;
+    const char *names[IT_SCOPE_MAX_NAMES];
+    uint32_t n;
+} it_scope;
+
+static int scope_creates(const char *op) {
+    return op != NULL && (strcmp(op, "spawn") == 0 || strcmp(op, "open_region") == 0 ||
+                          strcmp(op, "server_spawn") == 0 || strcmp(op, "supervise") == 0);
+}
+
+static int scope_refers(const char *key) {
+    return strcmp(key, "task") == 0 || strcmp(key, "region") == 0 || strcmp(key, "server") == 0 ||
+           strcmp(key, "supervisor") == 0;
+}
+
+static int scope_is_local(const it_scope *sc, const char *name) {
+    uint32_t i;
+    for (i = 0; i < sc->n; i++) {
+        if (strcmp(sc->names[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+/* The names the steps of `program` create, into `sc`: those of member
+ * programs, masked steps and spawned children's programs included, but not
+ * those of a nested supervisor's children, which run generations of their
+ * own and are scoped by them. 0 when there are too many. */
+static int scope_collect(uint32_t program, it_scope *sc) {
+    uint32_t count = asx_json_count(g_in, program);
+    uint32_t i;
+    for (i = 0; i < count; i++) {
+        uint32_t step = asx_json_item(g_in, program, i);
+        const char *op = it_str(step, "op");
+        const char *as = it_str(step, "as");
+        uint32_t members = asx_json_get(g_in, step, "members");
+        uint32_t steps = asx_json_get(g_in, step, "steps");
+        uint32_t child = asx_json_get(g_in, step, "program");
+        uint32_t k;
+        if (scope_creates(op) && as != NULL) {
+            if (sc->n >= IT_SCOPE_MAX_NAMES) return 0;
+            sc->names[sc->n++] = as;
+        }
+        if (members != ASX_JSON_NONE) {
+            for (k = 0; k < asx_json_count(g_in, members); k++) {
+                if (!scope_collect(asx_json_item(g_in, members, k), sc)) return 0;
+            }
+        }
+        if (steps != ASX_JSON_NONE && !scope_collect(steps, sc)) return 0;
+        if (op != NULL && strcmp(op, "spawn") == 0 && child != ASX_JSON_NONE &&
+            !scope_collect(child, sc)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static uint32_t scope_steps(uint32_t program, const it_scope *sc);
+
+static uint32_t scope_name(const it_scope *sc, const char *name) {
+    char buf[200];
+    int len = snprintf(buf, sizeof(buf), "%s/%s", sc->scope, name);
+    if (len < 0 || (size_t)len >= sizeof(buf)) return ASX_JSON_NONE;
+    return asx_json_new_string_len(&g_work, buf, (size_t)len);
+}
+
+/* A copy of one step with its names scoped. */
+static uint32_t scope_step(uint32_t step, const it_scope *sc) {
+    uint32_t out = asx_json_new_object(&g_work);
+    const char *op = it_str(step, "op");
+    uint32_t count = asx_json_count(g_in, step);
+    uint32_t i;
+    for (i = 0; i < count; i++) {
+        uint32_t value = asx_json_item(g_in, step, i);
+        const char *key = asx_json_key(g_in, value);
+        const char *s = asx_json_string(g_in, value);
+        uint32_t copy;
+        if (key == NULL) continue;
+        if (s != NULL && strcmp(key, "as") == 0 && scope_creates(op)) {
+            copy = scope_name(sc, s);
+        } else if (s != NULL && scope_refers(key) && scope_is_local(sc, s)) {
+            copy = scope_name(sc, s);
+        } else if (strcmp(key, "members") == 0) {
+            uint32_t k;
+            copy = asx_json_new_array(&g_work);
+            for (k = 0; k < asx_json_count(g_in, value); k++) {
+                asx_json_push(&g_work, copy, scope_steps(asx_json_item(g_in, value, k), sc));
+            }
+        } else if (strcmp(key, "steps") == 0 ||
+                   (strcmp(key, "program") == 0 && op != NULL && strcmp(op, "spawn") == 0)) {
+            copy = scope_steps(value, sc);
+        } else {
+            copy = asx_json_copy(&g_work, g_in, value);
+        }
+        asx_json_set(&g_work, out, key, copy);
+    }
+    return out;
+}
+
+/* A copy of an array of steps with its names scoped. */
+static uint32_t scope_steps(uint32_t program, const it_scope *sc) {
+    uint32_t out = asx_json_new_array(&g_work);
+    uint32_t count = asx_json_count(g_in, program);
+    uint32_t i;
+    for (i = 0; i < count; i++) {
+        asx_json_push(&g_work, out, scope_step(asx_json_item(g_in, program, i), sc));
+    }
+    return out;
+}
+
 /* A supervised child's start function: its generation runs the child's
- * program. */
+ * program, with the names it creates scoped under the generation's. */
 static asx_status it_start_generation(void *user_data, const asx_supervisor_generation *gen,
                                       asx_task_poll_fn *out_poll, void **out_data) {
     const it_sup_child *c = (const it_sup_child *)user_data;
     it_task *t = generation_entry(&g_sups[c->sup], c->name, (unsigned long long)gen->number,
                                   gen->region, gen->task);
+    it_scope sc;
     if (t == NULL) return ASX_E_RESOURCE_EXHAUSTED;
     t->program = c->program;
+    sc.scope = t->name;
+    sc.n = 0u;
+    if (!scope_collect(c->program, &sc)) {
+        it_fail("a supervised child's program creates too many names", t->name);
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+    if (sc.n > 0u) {
+        t->program = scope_steps(c->program, &sc);
+        if (t->program == ASX_JSON_NONE || !asx_json_doc_ok(&g_work)) {
+            it_fail("a generation's scoped program does not fit the document pool", t->name);
+            return ASX_E_RESOURCE_EXHAUSTED;
+        }
+    }
     *out_poll = interp_poll;
     *out_data = t;
     return ASX_OK;
@@ -3231,29 +3373,6 @@ static uint32_t report_node(const it_supervisor *sv, const asx_supervisor_report
     return o;
 }
 
-/* The first step in a program, or in the member programs of its steps,
- * that names a task, region, server or supervisor by `as` (DSL §3.8):
- * every generation of a supervised child runs its program again, so such
- * a name would repeat. NULL if none. */
-static const char *naming_step(uint32_t program) {
-    uint32_t i;
-    for (i = 0; i < asx_json_count(g_in, program); i++) {
-        uint32_t step = asx_json_item(g_in, program, i);
-        const char *op = it_str(step, "op");
-        uint32_t members = asx_json_get(g_in, step, "members");
-        uint32_t m;
-        if (op != NULL && (strcmp(op, "spawn") == 0 || strcmp(op, "open_region") == 0 ||
-                           strcmp(op, "server_spawn") == 0 || strcmp(op, "supervise") == 0)) {
-            return op;
-        }
-        for (m = 0; m < asx_json_count(g_in, members); m++) {
-            const char *nested = naming_step(asx_json_item(g_in, members, m));
-            if (nested != NULL) return nested;
-        }
-    }
-    return NULL;
-}
-
 /* A completed controller's outcome is its join's (vocabulary §6): ok once
  * it published its report, else its task's (cancelled before it ran). */
 static uint32_t supervisor_outcome_node(const it_supervisor *sv) {
@@ -3329,13 +3448,6 @@ static int exec_supervisor(it_task *t, asx_task_id self, uint32_t step, uint32_t
                 (restart == ASX_CHILD_PERMANENT && strcmp(mode, "permanent") != 0) ||
                 asx_json_type_of(g_in, program) != ASX_JSON_ARRAY) {
                 it_fail_task(t, idx, "a supervised child needs a name, a mode and a program");
-                *out = STEP_END;
-                return 1;
-            }
-            if (naming_step(program) != NULL) {
-                it_fail_task(t, idx,
-                             "a supervised child's program names an entity a restart "
-                             "would name again");
                 *out = STEP_END;
                 return 1;
             }
@@ -3486,7 +3598,23 @@ static step_result exec_step(it_task *t, asx_task_id self, uint32_t step, uint32
                 it_fail_task(t, idx, "return err needs an error status name");
                 return STEP_END;
             }
+            if (t->supervised && err == ASX_E_CANCELLED) {
+                /* A generation's body ending ASX_E_CANCELLED is Outcome::
+                 * Cancelled (supervisor.h), which `err` is not (DSL 3.8). */
+                it_fail_task(t, idx,
+                             "a supervised child returns Cancelled with tag cancelled, not err");
+                return STEP_END;
+            }
             t->end = err;
+        } else if (strcmp(tag, "cancelled") == 0) {
+            /* The factory future's Outcome::Cancelled(reason): only a
+             * supervised generation's body has one (DSL 3.8). The body ends
+             * ASX_E_CANCELLED and the supervisor builds the reason. */
+            if (!t->supervised) {
+                it_fail_task(t, idx, "return cancelled outside a supervised child's program");
+                return STEP_END;
+            }
+            t->end = ASX_E_CANCELLED;
         } else if (strcmp(tag, "panicked") == 0) {
             /* The step is a panic: the observation is recorded first, as in
              * Rust where the step's observation precedes panic_any. The
@@ -4556,7 +4684,8 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
     asx_status st;
 
     if (in == NULL || out == NULL || out_root == NULL) return ASX_E_INVALID_ARGUMENT;
-    g_in = in;
+    memcpy(&g_work, in, sizeof(g_work));
+    g_in = &g_work;
     g_out = out;
     g_error = error;
     g_error_cap = error_cap;

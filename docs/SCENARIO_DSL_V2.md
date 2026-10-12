@@ -491,13 +491,33 @@ snapshot outcome is its join's (vocabulary §6).
 A supervised child's program runs once per generation, as the task
 `<supervisor>/<child>#<n>` in a region of the same name (vocabulary §2);
 its `return` is the generation's outcome (`ok`, `err` with the step's
-status, or `panicked`, which both engines catch inside the generation),
-and a program that ends without one returns `ok`. Every generation reruns
-the same program, so it may not use `spawn`, `open_region`,
-`server_spawn` or `supervise`, also in group members: their `as` names
-would repeat. Both interpreters reject such a scenario as a scenario
-error. Group members are named after the generation, so groups are
-allowed.
+status, `cancelled`, or `panicked`, which both engines catch inside the
+generation), and a program that ends without one returns `ok`.
+`return cancelled` is the factory future's `Outcome::Cancelled(reason)`
+(`ManagedRestartMode::eligible`, `supervision.rs:1833-1844`, does not
+replace a transient child for it) and is defined only in a supervised
+child's own program; a group member's, or any other task's, is a scenario
+error. Its reason is `cx.cancel_reason()` when a cancel reached the
+generation, else `CancelReason::with_origin(User, <generation region>,
+now).with_task(<generation task>)` (§4, "Reason attribution"). In C the body
+ends `ASX_E_CANCELLED` (`include/asx/actor/supervisor.h`), so a supervised
+child's `return err` with status `ASX_E_CANCELLED` is a scenario error too:
+the two outcomes would be the same status.
+
+Every generation reruns the same program, so the names it creates would
+repeat. A generation's program may use `spawn`, `open_region`,
+`server_spawn` and `supervise` (nested supervision trees included); each
+name it creates with `as` is scoped under the generation's name,
+`<supervisor>/<child>#<n>/<as>`, and the references to such a name in
+the same program (`task`, `region`, `server`, `supervisor`) are scoped
+alike, wherever they sit: in group members, `masked` steps and spawned
+children's programs. A name the program does not create (a scenario-level
+region, task or resource) is left alone. A nested supervisor's children
+are scoped by their own generations, whose names start with the nested
+supervisor's scoped name. Both interpreters rewrite the program the same
+way when the generation starts (twin_run's `scope_program`, the
+interpreter's `scope_steps`). Group members are named after the
+generation, so groups are allowed.
 
 The `supervisor_join` value is
 `{"outcome", "started", "joined", "restart_batches", "escalations", "children"}`:
@@ -546,6 +566,7 @@ way asupersync's own request paths build one:
 | driver `cancel_region`, `close_region` | the target region | none |
 | driver `cancel_task` | the target task's region | none |
 | step `abort_task`, `cancel_region` | the requesting task's region | the requesting task |
+| supervised child `return cancelled`, with no cancel pending | the generation's region | the generation's task |
 
 `CancelReason::new(kind)` must not be used. It is a testing default that
 stamps `RegionId::testing_default()` and a fixed 1 s timestamp

@@ -90,7 +90,8 @@
       {"type": "object", "required": ["tag", "status"], "additionalProperties": false,
        "properties": {"tag": {"const": "err"}, "status": {"$ref": "#/$defs/status"}}},
       {"type": "object", "required": ["tag", "message"], "additionalProperties": false,
-       "properties": {"tag": {"const": "panicked"}, "message": {"type": "string"}}}
+       "properties": {"tag": {"const": "panicked"}, "message": {"type": "string"}}},
+      {"type": "object", "required": ["tag"], "additionalProperties": false, "properties": {"tag": {"const": "cancelled"}}}
     ]},
     "channel_decl": {"oneOf": [
       {"type": "object", "required": ["name", "type", "capacity", "sender", "receiver"], "additionalProperties": false,
