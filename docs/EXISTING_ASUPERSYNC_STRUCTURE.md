@@ -678,7 +678,7 @@ Both queued messages AND reserved (uncommitted) permits consume capacity.
 
 **Rust evidence:** `src/channel/mpsc.rs:349` (`used_slots`, `has_capacity`), `src/channel/mpsc.rs:557` (factory; the zero-capacity assert is at `src/channel/mpsc.rs:565`). Rust also has `unbounded_channel` = `channel(usize::MAX)` (`src/channel/mpsc.rs:599`).
 
-**C:** capacity 0 or above `ASX_CHANNEL_MAX_CAPACITY` (64) returns `ASX_E_INVALID_ARGUMENT` instead of panicking (`src/channel/mpsc.c:430`). The original audit's Open-only creation claim is stale: creation rejects only `Closed` (`src/channel/mpsc.c:439`), permitting a closing task to create its mailbox, as Rust's channels belong to no region. C has no unbounded channel. Recorded in `docs/CHANNEL_TIMER_SEMANTICS.md` §1.2 and §4.1 (`bd-9kll.5.7`).
+**C:** capacity 0 or above `ASX_CHANNEL_MAX_CAPACITY` (64) returns `ASX_E_INVALID_ARGUMENT` instead of panicking (`src/channel/mpsc.c:430`). The original audit's Open-only creation claim is stale: creation rejects only `Closed` (`src/channel/mpsc.c:439`), permitting a closing task to create its mailbox, as Rust's channels belong to no region. `asx_channel_create_unbounded` is `unbounded_channel`, bounded only by the channel's arena slice and refused where the profile's catalog entry forbids unbounded queues (DEC-008, `bd-9kll.5.7`). Recorded in `docs/CHANNEL_TIMER_SEMANTICS.md` §1.2 and §4.1.
 
 ### 9.3 Two-Phase Send Protocol
 

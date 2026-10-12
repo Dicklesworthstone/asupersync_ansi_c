@@ -37,6 +37,8 @@
 #include <asx/asx.h>
 #include <asx/core/channel.h>
 #include <asx/platform/atomics.h>
+#include <asx/runtime/overload_catalog.h>
+#include <asx/runtime/profile_compat.h>
 #include <asx/runtime/runtime.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
 #include <asx/runtime/trace.h>
@@ -83,6 +85,10 @@ typedef struct {
      * the receiver side but keeps the receiver (Rust's close vs drop,
      * mpsc.rs:1698, :2122). */
     int receiver_dropped;
+    /* Created by asx_channel_create_unbounded: its senders never wait. The
+     * ring is the channel's whole arena slice, and exhausting it is
+     * ASX_E_RESOURCE_EXHAUSTED rather than a full channel to park on. */
+    int unbounded;
 
     /* Bounded ring buffer */
     uint32_t capacity;
@@ -424,7 +430,8 @@ static void channel_wake_everyone(asx_channel_slot *s) {
 /* Channel lifecycle                                                  */
 /* ------------------------------------------------------------------ */
 
-asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_channel_id *out_id) {
+static asx_status channel_create_impl(asx_region_id region, uint32_t capacity, int unbounded,
+                                      asx_channel_id *out_id) {
     uint16_t i;
     asx_channel_slot *s;
     asx_region_state region_state;
@@ -457,6 +464,7 @@ asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_chann
             s->alive = 1;
             s->sender_count = 1u;
             s->receiver_dropped = 0;
+            s->unbounded = unbounded;
             s->capacity = capacity;
             s->queue_head = 0;
             s->queue_len = 0;
@@ -476,6 +484,30 @@ asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_chann
     }
 
     return ASX_E_RESOURCE_EXHAUSTED;
+}
+
+asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_channel_id *out_id) {
+    return channel_create_impl(region, capacity, 0, out_id);
+}
+
+/* Rust's unbounded_channel is channel(usize::MAX) (mpsc.rs:599-618): the
+ * C channel's arena slice stands for it. A profile whose overload catalog
+ * entry forbids unbounded queues refuses (DEC-008). */
+asx_status asx_channel_create_unbounded(asx_region_id region, asx_channel_id *out_id) {
+    const asx_overload_catalog_entry *entry = NULL;
+
+    if (out_id == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (asx_overload_catalog_get(asx_profile_active(), &entry) == ASX_OK && entry != NULL &&
+        (entry->forbidden & ASX_FORBID_UNBOUNDED_QUEUE) != 0u) {
+        return ASX_E_PERMISSION_DENIED;
+    }
+    return channel_create_impl(region, ASX_CHANNEL_MAX_CAPACITY, 1, out_id);
+}
+
+int asx_channel_is_unbounded(asx_channel_id id) {
+    asx_channel_slot *s;
+    if (channel_slot_lookup(id, &s) != ASX_OK) { return 0; }
+    return s->unbounded != 0;
 }
 
 asx_status asx_channel_sender_clone(asx_channel_id id) {
@@ -643,6 +675,10 @@ asx_status asx_channel_reserved_count(asx_channel_id id, uint32_t *out) {
  * can no longer act on. A try_reserve never parks (Rust try_reserve and
  * try_send never register a waker, mpsc.rs:732-797). */
 static asx_status channel_reserve_full(asx_channel_slot *s, int park) {
+    /* An unbounded channel's senders never wait (Rust's UnboundedSender has
+     * no backpressure, mpsc.rs:1313-1400): its arena used up is
+     * exhaustion, refused with nothing changed and nothing queued. */
+    if (s->unbounded) { return ASX_E_RESOURCE_EXHAUSTED; }
     if (park) {
         channel_settle(s);
         (void)asx_wait_queue_park_current(&s->reserve_waiters);
@@ -985,6 +1021,9 @@ asx_status asx_channel_send_evict_oldest_where(asx_channel_id id, uint64_t value
     st = channel_slot_lookup(id, &s);
     if (st != ASX_OK) { return st; }
 
+    /* Rust's UnboundedSender has no send_evict_oldest. */
+    if (s->unbounded) { return ASX_E_INVALID_STATE; }
+
     if (s->state == ASX_CHANNEL_SENDER_CLOSED || s->state == ASX_CHANNEL_FULLY_CLOSED) {
         return ASX_E_INVALID_STATE;
     }
@@ -1225,6 +1264,9 @@ asx_status asx_channel_closed(asx_channel_id id) {
     st = channel_slot_lookup(id, &s);
     if (st != ASX_OK) { return st; }
 
+    /* Rust's UnboundedSender has no closed(). */
+    if (s->unbounded) { return ASX_E_INVALID_STATE; }
+
     if (s->state == ASX_CHANNEL_SENDER_CLOSED || s->state == ASX_CHANNEL_FULLY_CLOSED) {
         asx_wait_queue_leave_current(&s->closed_waiters);
         return ASX_E_INVALID_STATE;
@@ -1250,6 +1292,7 @@ void asx_channel_reset(void) {
         g_channels[i].alive = 0;
         g_channels[i].state = ASX_CHANNEL_OPEN;
         g_channels[i].receiver_dropped = 0;
+        g_channels[i].unbounded = 0;
         g_channels[i].queue_head = 0;
         g_channels[i].queue_len = 0;
         channel_atomic_store(&g_channels[i].reserved, 0u);

@@ -184,7 +184,7 @@ C unit tests: `tests/unit/channel/test_mpsc.c` `fifo_ordering`; `tests/unit/chan
 
 Rust error enums: `SendError` (`src/channel/mpsc.rs:111-118`), `RecvError` (`src/channel/mpsc.rs:182-189`). Rust errors carry the unsent value; C errors carry none. `ASX_E_CHANNEL_EMPTY` (`include/asx/asx_status.h:69`) is not returned by `src/channel/mpsc.c`.
 
-**Construction constraint:** Rust panics on `capacity == 0` (`assert!` at `src/channel/mpsc.rs:565`); `unbounded_channel` is `channel(usize::MAX)` (`src/channel/mpsc.rs:599-600`). C returns `ASX_E_INVALID_ARGUMENT` for 0 or above `ASX_CHANNEL_MAX_CAPACITY` (default 64, `include/asx/asx_config.h:362-363`; check at `src/channel/mpsc.c:430`), refuses a closed region with `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:434-439`; a closing one is accepted, as Rust's channels belong to no region) and has no unbounded channel.
+**Construction constraint:** Rust panics on `capacity == 0` (`assert!` at `src/channel/mpsc.rs:565`); `unbounded_channel` is `channel(usize::MAX)` (`src/channel/mpsc.rs:599-600`). C returns `ASX_E_INVALID_ARGUMENT` for 0 or above `ASX_CHANNEL_MAX_CAPACITY` (default 64, `include/asx/asx_config.h:362-363`; check at `src/channel/mpsc.c:430`), refuses a closed region with `ASX_E_INVALID_STATE` (`src/channel/mpsc.c:434-439`; a closing one is accepted, as Rust's channels belong to no region). `asx_channel_create_unbounded` is `unbounded_channel` (DEC-008): bounded only by the channel's arena slice, `ASX_CHANNEL_MAX_CAPACITY`, where using it up is `ASX_E_RESOURCE_EXHAUSTED` (failure-atomic, never a wait), and refused with `ASX_E_PERMISSION_DENIED` in a profile whose overload catalog entry declares `ASX_FORBID_UNBOUNDED_QUEUE`.
 
 ### 1.8 Close Semantics
 

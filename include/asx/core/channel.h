@@ -94,6 +94,32 @@ typedef struct asx_send_permit {
 ASX_API ASX_MUST_USE asx_status asx_channel_create(asx_region_id region, uint32_t capacity,
                                                    asx_channel_id *out_id);
 
+/* Create an unbounded channel (Rust unbounded_channel, mpsc.rs:599-618,
+ * `channel(usize::MAX)`): its senders never wait for capacity. In a bounded
+ * runtime "unbounded" means bounded only by the arena: the channel has the
+ * whole of its arena slice, ASX_CHANNEL_MAX_CAPACITY messages (a build-time
+ * macro), and when that is used up a reserve or send fails with
+ * ASX_E_RESOURCE_EXHAUSTED, failure-atomically (the queue, the reservations
+ * and the caller's value are untouched), instead of ASX_E_CHANNEL_FULL or a
+ * parked sender. Nothing ever queues on its reserve line.
+ *
+ * Everything else is the bounded channel: the two-phase protocol, counted
+ * senders, seal, recv_many, FIFO order. Rust's UnboundedSender has no
+ * send_evict_oldest and no closed(); asx_channel_send_evict_oldest(_where)
+ * and asx_channel_closed refuse an unbounded channel with
+ * ASX_E_INVALID_STATE.
+ *
+ * Refused with ASX_E_PERMISSION_DENIED in a profile whose overload catalog
+ * entry declares ASX_FORBID_UNBOUNDED_QUEUE (overload_catalog.h): a profile
+ * capability, not a semantic fork (docs/OWNER_DECISION_LOG.md DEC-008).
+ * Otherwise as asx_channel_create. */
+ASX_API ASX_MUST_USE asx_status asx_channel_create_unbounded(asx_region_id region,
+                                                             asx_channel_id *out_id);
+
+/* Whether `id` names a live channel created unbounded (0 for any other
+ * handle, stale or not). */
+ASX_API int asx_channel_is_unbounded(asx_channel_id id);
+
 /* Senders are counted, as Rust's Sender clones are (Sender::clone /
  * Sender::drop, mpsc.rs:1231-1255): a channel starts with one sender, each
  * producer that takes part calls asx_channel_sender_clone, and each one

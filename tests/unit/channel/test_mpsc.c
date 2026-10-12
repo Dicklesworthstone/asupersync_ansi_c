@@ -12,6 +12,8 @@
 #include <asx/asx.h>
 #include <asx/core/channel.h>
 #include <asx/platform/atomics.h>
+#include <asx/runtime/overload_catalog.h>
+#include <asx/runtime/profile_compat.h>
 #include <asx/runtime/runtime.h>
 #include <asx/runtime/trace.h>
 #include <string.h>
@@ -2091,6 +2093,205 @@ TEST(weak_sender_upgrade_is_a_counted_clone) {
 }
 
 /* -------------------------------------------------------------------
+ * Unbounded channels (Rust unbounded_channel, mpsc.rs:599-618;
+ * docs/OWNER_DECISION_LOG.md DEC-008)
+ *
+ * Bounded only by the arena: the channel has its whole arena slice,
+ * ASX_CHANNEL_MAX_CAPACITY messages, and using it up is
+ * ASX_E_RESOURCE_EXHAUSTED, failure-atomically, never a full channel to
+ * park on. A profile whose catalog entry forbids unbounded queues refuses
+ * the creation.
+ * ------------------------------------------------------------------- */
+
+/* Whether the active profile's catalog entry lets an unbounded channel be
+ * created. */
+static int unbounded_allowed(void) {
+    const asx_overload_catalog_entry *e = NULL;
+    if (asx_overload_catalog_get(asx_profile_active(), &e) != ASX_OK || e == NULL) return 1;
+    return (e->forbidden & ASX_FORBID_UNBOUNDED_QUEUE) == 0u;
+}
+
+TEST(unbounded_creation_follows_the_profile_catalog) {
+    asx_channel_id ch;
+    asx_status st;
+    setup();
+    ASSERT_EQ(asx_channel_create_unbounded(g_rid, NULL), ASX_E_INVALID_ARGUMENT);
+    st = asx_channel_create_unbounded(g_rid, &ch);
+    if (unbounded_allowed()) {
+        ASSERT_EQ(st, ASX_OK);
+        ASSERT_EQ(asx_channel_is_unbounded(ch), 1);
+    } else {
+        ASSERT_EQ(st, ASX_E_PERMISSION_DENIED);
+    }
+}
+
+/* The catalog is what decides: every profile that declares the flag refuses
+ * and every other accepts (the active profile is checked above; this reads
+ * the table the creation consults). */
+TEST(unbounded_catalog_flags_the_constrained_profiles) {
+    uint32_t i;
+    uint32_t forbidding = 0u;
+    for (i = 0u; i < (uint32_t)ASX_PROFILE_ID_COUNT; i++) {
+        const asx_overload_catalog_entry *e = NULL;
+        ASSERT_EQ(asx_overload_catalog_get((asx_profile_id)i, &e), ASX_OK);
+        if ((e->forbidden & ASX_FORBID_UNBOUNDED_QUEUE) != 0u) forbidding++;
+    }
+    /* The router, browser, freestanding and HFT entries declare it. */
+    ASSERT_TRUE(forbidding >= 3u);
+}
+
+TEST(unbounded_reports_only_for_unbounded_channels) {
+    asx_channel_id bounded;
+    asx_channel_id ub;
+    asx_channel_id reused;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &bounded), ASX_OK);
+    ASSERT_EQ(asx_channel_is_unbounded(bounded), 0);
+    ASSERT_EQ(asx_channel_is_unbounded(ASX_INVALID_ID), 0);
+    if (!unbounded_allowed()) return;
+    ASSERT_EQ(asx_channel_create_unbounded(g_rid, &ub), ASX_OK);
+    ASSERT_EQ(asx_channel_is_unbounded(ub), 1);
+    ASSERT_EQ(asx_channel_is_unbounded(bounded), 0);
+    /* A recycled slot does not keep the flag: a drained, fully closed
+     * channel's slot is reused by the next create. */
+    ASSERT_EQ(asx_channel_close_receiver(ub), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(ub), ASX_OK);
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &reused), ASX_OK);
+    ASSERT_EQ(asx_channel_is_unbounded(reused), 0);
+    ASSERT_EQ(asx_channel_is_unbounded(ub), 0);
+}
+
+TEST(unbounded_takes_its_arena_then_exhausts_without_changing_anything) {
+    asx_channel_id ch;
+    asx_send_permit p;
+    uint64_t v = 0;
+    uint32_t len = 0;
+    uint32_t reserved = 0;
+    uint32_t i;
+    setup();
+    if (!unbounded_allowed()) return;
+    ASSERT_EQ(asx_channel_create_unbounded(g_rid, &ch), ASX_OK);
+    for (i = 0u; i < (uint32_t)ASX_CHANNEL_MAX_CAPACITY; i++) {
+        ASSERT_EQ(asx_channel_send(ch, NULL, (uint64_t)i + 1u), ASX_OK);
+    }
+    ASSERT_EQ(asx_channel_queue_len(ch, &len), ASX_OK);
+    ASSERT_EQ(len, (uint32_t)ASX_CHANNEL_MAX_CAPACITY);
+
+    /* Exhausted: reserve and send refuse with the arena's status, not the
+     * full-channel status or a wait. */
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 999u), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_channel_reserve(ch, NULL, &p), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_channel_queue_len(ch, &len), ASX_OK);
+    ASSERT_EQ(len, (uint32_t)ASX_CHANNEL_MAX_CAPACITY);
+    ASSERT_EQ(asx_channel_reserved_count(ch, &reserved), ASX_OK);
+    ASSERT_EQ(reserved, 0u);
+
+    /* FIFO is intact and a freed slot is usable again. */
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 1u);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 1000u), ASX_OK);
+    for (i = 2u; i <= (uint32_t)ASX_CHANNEL_MAX_CAPACITY; i++) {
+        ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+        ASSERT_EQ(v, (uint64_t)i);
+    }
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 1000u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_E_WOULD_BLOCK);
+}
+
+/* Reservations count against the arena: with every slot reserved the next
+ * reserve is exhaustion, and an abort frees a slot. */
+TEST(unbounded_reservations_use_the_arena_and_abort_returns_it) {
+    asx_channel_id ch;
+    asx_send_permit p[ASX_CHANNEL_MAX_CAPACITY];
+    asx_send_permit extra;
+    uint32_t i;
+    setup();
+    if (!unbounded_allowed()) return;
+    ASSERT_EQ(asx_channel_create_unbounded(g_rid, &ch), ASX_OK);
+    for (i = 0u; i < (uint32_t)ASX_CHANNEL_MAX_CAPACITY; i++) {
+        ASSERT_EQ(asx_channel_try_reserve(ch, &p[i]), ASX_OK);
+    }
+    ASSERT_EQ(asx_channel_try_reserve(ch, &extra), ASX_E_RESOURCE_EXHAUSTED);
+    asx_send_permit_abort(&p[0]);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &extra), ASX_OK);
+    asx_send_permit_abort(&extra);
+    for (i = 1u; i < (uint32_t)ASX_CHANNEL_MAX_CAPACITY; i++) { asx_send_permit_abort(&p[i]); }
+}
+
+/* Rust's UnboundedSender has neither send_evict_oldest nor closed(). */
+TEST(unbounded_refuses_the_bounded_only_operations) {
+    asx_channel_id ch;
+    uint64_t evicted_value = 0;
+    int evicted = 0;
+    setup();
+    if (!unbounded_allowed()) return;
+    ASSERT_EQ(asx_channel_create_unbounded(g_rid, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send_evict_oldest(ch, 1u, &evicted, &evicted_value), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_closed(ch), ASX_E_INVALID_STATE);
+}
+
+/* The rest of the channel is the bounded one: counted senders, seal, drop. */
+TEST(unbounded_keeps_the_bounded_lifecycle) {
+    asx_channel_id ch;
+    uint64_t v = 0;
+    setup();
+    if (!unbounded_allowed()) return;
+    ASSERT_EQ(asx_channel_create_unbounded(g_rid, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 5u), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 6u), ASX_OK);
+    ASSERT_EQ(asx_channel_seal(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 7u), ASX_E_DISCONNECTED);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 5u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 6u);
+}
+
+typedef struct {
+    asx_channel_id ch;
+    asx_status last;
+    uint32_t sent;
+    uint32_t polls;
+} unbounded_overfill;
+
+/* Fills the arena from inside a poll, then sends once more. A bounded
+ * channel would park the task here (and the run would block); an unbounded
+ * one never parks: the send returns the arena's status and the task
+ * finishes. */
+static asx_status poll_unbounded_overfill(void *data, asx_task_id self) {
+    unbounded_overfill *st = (unbounded_overfill *)data;
+    asx_cx cx;
+    uint32_t i;
+    st->polls++;
+    if (asx_cx_init(&cx, g_rid, self, ASX_CAP_NONE) != ASX_OK) return ASX_E_INVALID_STATE;
+    for (i = 0u; i < (uint32_t)ASX_CHANNEL_MAX_CAPACITY; i++) {
+        if (asx_channel_send(st->ch, &cx, (uint64_t)i + 1u) != ASX_OK) return ASX_E_INVALID_STATE;
+        st->sent++;
+    }
+    st->last = asx_channel_send(st->ch, &cx, 999u);
+    return ASX_OK;
+}
+
+TEST(unbounded_sender_in_a_poll_never_parks) {
+    static unbounded_overfill st;
+    asx_task_id t;
+    asx_budget budget = asx_budget_from_polls(8u);
+    setup();
+    if (!unbounded_allowed()) return;
+    memset(&st, 0, sizeof(st));
+    ASSERT_EQ(asx_channel_create_unbounded(g_rid, &st.ch), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_unbounded_overfill, &st, &t), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(g_rid, &budget), ASX_OK);
+    ASSERT_EQ(st.polls, 1u);
+    ASSERT_EQ(st.sent, (uint32_t)ASX_CHANNEL_MAX_CAPACITY);
+    ASSERT_EQ(st.last, ASX_E_RESOURCE_EXHAUSTED);
+}
+
+/* -------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------- */
 
@@ -2197,6 +2398,14 @@ int main(void) {
     RUN_TEST(closed_is_woken_by_the_receiver_drop_and_withdrawable);
     RUN_TEST(closed_refuses_without_a_live_sender);
     RUN_TEST(weak_sender_upgrade_is_a_counted_clone);
+    RUN_TEST(unbounded_creation_follows_the_profile_catalog);
+    RUN_TEST(unbounded_catalog_flags_the_constrained_profiles);
+    RUN_TEST(unbounded_reports_only_for_unbounded_channels);
+    RUN_TEST(unbounded_takes_its_arena_then_exhausts_without_changing_anything);
+    RUN_TEST(unbounded_reservations_use_the_arena_and_abort_returns_it);
+    RUN_TEST(unbounded_refuses_the_bounded_only_operations);
+    RUN_TEST(unbounded_keeps_the_bounded_lifecycle);
+    RUN_TEST(unbounded_sender_in_a_poll_never_parks);
 
     TEST_REPORT();
     return test_failures;
