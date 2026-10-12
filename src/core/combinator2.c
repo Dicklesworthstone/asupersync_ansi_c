@@ -145,6 +145,7 @@ uint64_t asx_retry_policy_delay(const asx_retry_policy *policy, uint32_t attempt
     if (policy->initial_delay_ns <= (UINT64_C(1) << 53)) {
         initial = (double)policy->initial_delay_ns;
     } else {
+        /* ASX_ANALYZER_WAIVER("Rust Duration::as_secs_f64: integer seconds + remainder") */
         initial = ((double)(policy->initial_delay_ns / UINT64_C(1000000000)) +
                    (double)(policy->initial_delay_ns % UINT64_C(1000000000)) / 1000000000.0) *
                   1000000000.0;
@@ -212,8 +213,8 @@ static asx_status retry_finish(asx_retry_state *state, asx_status result) {
 /* Idle -> the next attempt: RetryState::next_attempt (retry.rs:676-693)
  * with a DetRng seeded from the owner's entropy, drawn on every Idle pass
  * as Rust's Cx::current().map(|c| DetRng::new(c.random_u64())) is (none
- * outside a task). The first attempt has no delay. */
-static asx_status retry_start_next(asx_retry_state *state, asx_task_id self) {
+ * outside a task). The first attempt has no delay. It cannot fail. */
+static void retry_start_next(asx_retry_state *state, asx_task_id self) {
     uint64_t seed = 0;
     int have_seed = asx_task_random_u64_internal(self, &seed);
     uint64_t delay;
@@ -229,7 +230,7 @@ static asx_status retry_start_next(asx_retry_state *state, asx_task_id self) {
         state->inner.user_data = state->user_data;
         state->inner.drop_fn = state->drop_fn;
         state->phase = ASX_RETRY_POLLING;
-        return ASX_OK;
+        return;
     }
     state->total_delay_ns =
         UINT64_MAX - state->total_delay_ns < delay ? UINT64_MAX : state->total_delay_ns + delay;
@@ -242,7 +243,6 @@ static asx_status retry_start_next(asx_retry_state *state, asx_task_id self) {
         (void)st; /* state is non-NULL */
     }
     state->phase = ASX_RETRY_SLEEPING;
-    return ASX_OK;
 }
 
 asx_status asx_retry_poll(void *user_data, asx_task_id self) {
@@ -262,8 +262,7 @@ asx_status asx_retry_poll(void *user_data, asx_task_id self) {
         switch (state->phase) {
         case ASX_RETRY_IDLE:
             if (cancelled) return retry_finish(state, ASX_E_CANCELLED);
-            st = retry_start_next(state, self);
-            if (st != ASX_OK) return retry_finish(state, st);
+            retry_start_next(state, self);
             break;
         case ASX_RETRY_SLEEPING:
             if (cancelled) {
