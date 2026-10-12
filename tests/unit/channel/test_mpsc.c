@@ -1147,6 +1147,412 @@ TEST(create_accepts_a_closing_region) {
 }
 
 /* -------------------------------------------------------------------
+ * send_evict_oldest (mpsc.rs:872)
+ * ------------------------------------------------------------------- */
+
+TEST(evict_oldest_sends_without_eviction_while_there_is_room) {
+    asx_channel_id ch;
+    uint64_t evicted_value = 77u;
+    uint64_t v = 0;
+    uint32_t len = 0;
+    int evicted = 1;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send_evict_oldest(ch, 5u, &evicted, &evicted_value), ASX_OK);
+    ASSERT_EQ(evicted, 0);
+    ASSERT_EQ(asx_channel_queue_len(ch, &len), ASX_OK);
+    ASSERT_EQ(len, 1u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 5u);
+}
+
+TEST(evict_oldest_replaces_the_oldest_message_when_full) {
+    /* Full: the oldest committed message is returned and the new one goes
+     * to the back, keeping FIFO order for the rest. */
+    asx_channel_id ch;
+    uint64_t evicted_value = 0;
+    uint64_t v = 0;
+    int evicted = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 3, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 1u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 2u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 3u), ASX_OK);
+    ASSERT_EQ(asx_channel_send_evict_oldest(ch, 4u, &evicted, &evicted_value), ASX_OK);
+    ASSERT_EQ(evicted, 1);
+    ASSERT_EQ(evicted_value, 1u);
+    ASSERT_EQ(asx_channel_send_evict_oldest(ch, 5u, &evicted, &evicted_value), ASX_OK);
+    ASSERT_EQ(evicted, 1);
+    ASSERT_EQ(evicted_value, 2u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 3u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 4u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 5u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_E_WOULD_BLOCK);
+}
+
+TEST(evict_oldest_never_evicts_a_reserved_slot) {
+    /* Reserved slots are not messages: with every slot reserved the send
+     * is refused; with one committed message beside a reservation, that
+     * message goes and the permit still owns its slot. */
+    asx_channel_id ch;
+    asx_send_permit p;
+    asx_send_permit q;
+    uint64_t evicted_value = 0;
+    uint64_t v = 0;
+    uint32_t reserved = 0;
+    int evicted = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &q), ASX_OK);
+    ASSERT_EQ(asx_channel_send_evict_oldest(ch, 9u, &evicted, &evicted_value), ASX_E_CHANNEL_FULL);
+    ASSERT_EQ(asx_send_permit_send(&q, 1u), ASX_OK);
+    ASSERT_EQ(asx_channel_send_evict_oldest(ch, 2u, &evicted, &evicted_value), ASX_OK);
+    ASSERT_EQ(evicted, 1);
+    ASSERT_EQ(evicted_value, 1u);
+    ASSERT_EQ(asx_channel_reserved_count(ch, &reserved), ASX_OK);
+    ASSERT_EQ(reserved, 1u);
+    ASSERT_EQ(asx_send_permit_send(&p, 3u), ASX_OK);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 2u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 3u);
+}
+
+TEST(evict_oldest_errors) {
+    asx_channel_id ch;
+    asx_channel_id gone;
+    uint64_t evicted_value = 0;
+    uint64_t v = 0;
+    int evicted = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send_evict_oldest(ch, 1u, NULL, &evicted_value), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_send_evict_oldest(ch, 1u, &evicted, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_send_evict_oldest(ASX_INVALID_ID, 1u, &evicted, &evicted_value),
+              ASX_E_INVALID_ARGUMENT);
+    /* A sealed receiver refuses, and the queue it keeps is not touched. */
+    ASSERT_EQ(asx_channel_send(ch, NULL, 4u), ASX_OK);
+    ASSERT_EQ(asx_channel_seal(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send_evict_oldest(ch, 1u, &evicted, &evicted_value), ASX_E_DISCONNECTED);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 4u);
+    /* No live sender left. */
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &gone), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(gone), ASX_OK);
+    ASSERT_EQ(asx_channel_send_evict_oldest(gone, 1u, &evicted, &evicted_value),
+              ASX_E_INVALID_STATE);
+}
+
+/* A producer task: yields `delay` polls, then sends `value` with
+ * asx_channel_send, parking while the channel is full. */
+typedef struct {
+    uint32_t delay;
+    uint64_t value;
+    uint32_t polls;
+} mpsc_producer;
+
+static asx_channel_id g_prod_ch;
+
+static asx_status poll_producer(void *ud, asx_task_id self) {
+    mpsc_producer *p = (mpsc_producer *)ud;
+    (void)self;
+    p->polls++;
+    if (p->delay > 0u) {
+        p->delay--;
+        return ASX_E_PENDING;
+    }
+    return asx_channel_send(g_prod_ch, NULL, p->value) == ASX_OK ? ASX_OK : ASX_E_PENDING;
+}
+
+TEST(evict_oldest_refuses_a_slot_a_parked_producer_owns) {
+    /* A dequeue frees a slot for the parked producer: send_evict_oldest
+     * reports Full and evicts nothing although messages are queued
+     * (mpsc.rs:906-911). */
+    mpsc_producer prod = {0u, 8u, 0u};
+    asx_task_id t;
+    uint64_t evicted_value = 0;
+    uint64_t v = 0;
+    uint32_t len = 0;
+    int evicted = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &g_prod_ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(g_prod_ch, NULL, 1u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(g_prod_ch, NULL, 2u), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_producer, &prod, &t), ASX_OK);
+    run_region();
+    ASSERT_EQ(prod.polls, 1u); /* parked on the full channel */
+    ASSERT_EQ(asx_channel_try_recv(g_prod_ch, &v), ASX_OK);
+    ASSERT_EQ(v, 1u);
+    ASSERT_EQ(asx_channel_send_evict_oldest(g_prod_ch, 9u, &evicted, &evicted_value),
+              ASX_E_CHANNEL_FULL);
+    ASSERT_EQ(asx_channel_queue_len(g_prod_ch, &len), ASX_OK);
+    ASSERT_EQ(len, 1u);
+    run_region();
+    ASSERT_EQ(prod.polls, 2u);
+    ASSERT_EQ(asx_channel_try_recv(g_prod_ch, &v), ASX_OK);
+    ASSERT_EQ(v, 2u);
+    ASSERT_EQ(asx_channel_try_recv(g_prod_ch, &v), ASX_OK);
+    ASSERT_EQ(v, 8u);
+}
+
+/* -------------------------------------------------------------------
+ * recv_many (mpsc.rs:1754, poll :1867)
+ * ------------------------------------------------------------------- */
+
+TEST(recv_many_takes_up_to_limit_oldest_first) {
+    asx_channel_id ch;
+    uint64_t buf[4] = {0u, 0u, 0u, 0u};
+    uint32_t n = 99u;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 1u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 2u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 3u), ASX_OK);
+    ASSERT_EQ(asx_channel_recv_many(ch, NULL, buf, 2u, &n), ASX_OK);
+    ASSERT_EQ(n, 2u);
+    ASSERT_EQ(buf[0], 1u);
+    ASSERT_EQ(buf[1], 2u);
+    ASSERT_EQ(asx_channel_recv_many(ch, NULL, buf, 4u, &n), ASX_OK);
+    ASSERT_EQ(n, 1u);
+    ASSERT_EQ(buf[0], 3u);
+    /* Empty and open: not yet. */
+    ASSERT_EQ(asx_channel_recv_many(ch, NULL, buf, 4u, &n), ASX_E_PENDING);
+    ASSERT_EQ(n, 0u);
+}
+
+TEST(recv_many_limit_zero_returns_before_the_cancel_check) {
+    /* limit 0 is Ready(Ok(0)) before the checkpoint (mpsc.rs:1874); any
+     * other limit sees the cancel first, traced, leaving the queue. */
+    asx_channel_id ch;
+    asx_cx cx;
+    asx_task_id t;
+    uint64_t buf[2] = {0u, 0u};
+    uint32_t n = 99u;
+    setup();
+    t = cx_task(&cx);
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 6u), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(t, ASX_CANCEL_USER), ASX_OK);
+    ASSERT_EQ(asx_channel_recv_many(ch, &cx, NULL, 0u, &n), ASX_OK);
+    ASSERT_EQ(n, 0u);
+    asx_trace_set_observer(observe_last, NULL);
+    ASSERT_EQ(asx_channel_recv_many(ch, &cx, buf, 2u, &n), ASX_E_CANCELLED);
+    ASSERT_TRUE(last_event_is_user_trace(t, "mpsc::recv_many cancelled"));
+    asx_trace_set_observer(NULL, NULL);
+    ASSERT_EQ(asx_channel_recv_many(ch, NULL, buf, 2u, &n), ASX_OK);
+    ASSERT_EQ(n, 1u);
+    ASSERT_EQ(buf[0], 6u);
+}
+
+TEST(recv_many_reports_zero_once_no_message_can_arrive) {
+    /* Closed and drained is Ok(0), not Disconnected (mpsc.rs:1909-1917);
+     * an outstanding permit can still commit, so it waits for it. */
+    asx_channel_id ch;
+    asx_channel_id sealed;
+    asx_send_permit p;
+    uint64_t buf[2] = {0u, 0u};
+    uint32_t n = 99u;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_recv_many(ch, NULL, buf, 2u, &n), ASX_E_PENDING);
+    asx_send_permit_abort(&p);
+    ASSERT_EQ(asx_channel_recv_many(ch, NULL, buf, 2u, &n), ASX_OK);
+    ASSERT_EQ(n, 0u);
+
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &sealed), ASX_OK);
+    ASSERT_EQ(asx_channel_send(sealed, NULL, 7u), ASX_OK);
+    ASSERT_EQ(asx_channel_seal(sealed), ASX_OK);
+    ASSERT_EQ(asx_channel_recv_many(sealed, NULL, buf, 2u, &n), ASX_OK);
+    ASSERT_EQ(n, 1u);
+    ASSERT_EQ(buf[0], 7u);
+    ASSERT_EQ(asx_channel_recv_many(sealed, NULL, buf, 2u, &n), ASX_OK);
+    ASSERT_EQ(n, 0u);
+}
+
+TEST(recv_many_argument_errors) {
+    asx_channel_id ch;
+    uint64_t buf[1] = {0u};
+    uint32_t n = 0u;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_recv_many(ch, NULL, buf, 1u, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_recv_many(ch, NULL, NULL, 1u, &n), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_recv_many(ASX_INVALID_ID, NULL, buf, 1u, &n), ASX_E_INVALID_ARGUMENT);
+}
+
+static uint64_t g_batch[4];
+static uint32_t g_batch_len;
+static uint32_t g_batch_polls;
+
+static asx_status poll_recv_many(void *ud, asx_task_id self) {
+    asx_status st;
+    (void)ud;
+    (void)self;
+    g_batch_polls++;
+    st = asx_channel_recv_many(g_recv_ch, NULL, g_batch, 4u, &g_batch_len);
+    return st == ASX_E_PENDING ? ASX_E_PENDING : ASX_OK;
+}
+
+TEST(recv_many_parks_and_takes_the_whole_batch_when_woken) {
+    asx_task_id t;
+    setup();
+    g_batch_polls = 0;
+    g_batch_len = 0;
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &g_recv_ch), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_recv_many, NULL, &t), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_batch_polls, 1u);
+    ASSERT_EQ(asx_channel_send(g_recv_ch, NULL, 1u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(g_recv_ch, NULL, 2u), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_batch_polls, 2u);
+    ASSERT_EQ(g_batch_len, 2u);
+    ASSERT_EQ(g_batch[0], 1u);
+    ASSERT_EQ(g_batch[1], 2u);
+
+    /* The last sender's drop wakes a parked batch with 0 messages. */
+    g_batch_polls = 0;
+    g_batch_len = 99u;
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_recv_many, NULL, &t), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_batch_polls, 1u);
+    ASSERT_EQ(asx_channel_close_sender(g_recv_ch), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_batch_polls, 2u);
+    ASSERT_EQ(g_batch_len, 0u);
+}
+
+TEST(recv_many_wakes_one_parked_producer_per_freed_slot) {
+    /* Rust wakes min(freed, free) queued producers
+     * (sender_wakers_for_freed_slots, mpsc.rs:402-423); only the head of
+     * the line may claim (:1081-1086), and its claim wakes the next. P2
+     * sits before P1 in the task table but parks after it: woken together,
+     * P2 polls first, is refused behind P1, and claims after P1's cascade:
+     * two polls. A batch that woke only the head would give it one. */
+    mpsc_producer p2 = {1u, 20u, 0u};
+    mpsc_producer p1 = {0u, 10u, 0u};
+    asx_task_id t1;
+    asx_task_id t2;
+    uint64_t buf[2] = {0u, 0u};
+    uint64_t v = 0;
+    uint32_t n = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &g_prod_ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(g_prod_ch, NULL, 1u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(g_prod_ch, NULL, 2u), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_producer, &p2, &t2), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_producer, &p1, &t1), ASX_OK);
+    run_region();
+    ASSERT_EQ(p1.polls, 1u); /* parked first */
+    ASSERT_EQ(p2.polls, 2u); /* yielded once, then parked behind P1 */
+    p1.polls = 0;
+    p2.polls = 0;
+
+    ASSERT_EQ(asx_channel_recv_many(g_prod_ch, NULL, buf, 2u, &n), ASX_OK);
+    ASSERT_EQ(n, 2u);
+    run_region();
+    ASSERT_EQ(p1.polls, 1u);
+    ASSERT_EQ(p2.polls, 2u);
+    ASSERT_EQ(asx_channel_try_recv(g_prod_ch, &v), ASX_OK);
+    ASSERT_EQ(v, 10u);
+    ASSERT_EQ(asx_channel_try_recv(g_prod_ch, &v), ASX_OK);
+    ASSERT_EQ(v, 20u);
+}
+
+/* -------------------------------------------------------------------
+ * closed (mpsc_closed.rs:39)
+ * ------------------------------------------------------------------- */
+
+static uint32_t g_closed_polls;
+static asx_status g_closed_status;
+
+static asx_status poll_closed(void *ud, asx_task_id self) {
+    (void)ud;
+    (void)self;
+    g_closed_polls++;
+    g_closed_status = asx_channel_closed(g_recv_ch);
+    return g_closed_status == ASX_E_PENDING ? ASX_E_PENDING : ASX_OK;
+}
+
+TEST(closed_waits_for_the_receiver_and_ignores_messages) {
+    /* A send or a receive does not wake it; the receiver's close does, and
+     * the queued message stays receivable. */
+    asx_task_id t;
+    uint64_t v = 0;
+    setup();
+    g_closed_polls = 0;
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &g_recv_ch), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_closed, NULL, &t), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_closed_polls, 1u);
+    ASSERT_EQ(asx_channel_send(g_recv_ch, NULL, 3u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(g_recv_ch, NULL, 4u), ASX_OK);
+    ASSERT_EQ(asx_channel_try_recv(g_recv_ch, &v), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_closed_polls, 1u);
+    ASSERT_EQ(asx_channel_seal(g_recv_ch), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_closed_polls, 2u);
+    ASSERT_EQ(g_closed_status, ASX_OK);
+    ASSERT_EQ(asx_channel_try_recv(g_recv_ch, &v), ASX_OK);
+    ASSERT_EQ(v, 4u);
+    /* Already closed: ready at once. */
+    ASSERT_EQ(asx_channel_closed(g_recv_ch), ASX_OK);
+}
+
+TEST(closed_is_woken_by_the_receiver_drop_and_withdrawable) {
+    asx_task_id t;
+    asx_task_id w;
+    setup();
+    g_closed_polls = 0;
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &g_recv_ch), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_closed, NULL, &w), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_closed_polls, 1u);
+    /* Withdrawn (its future dropped): the close no longer polls it. */
+    ASSERT_EQ(asx_channel_wait_cancel(g_recv_ch, w), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(g_rid, poll_closed, NULL, &t), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_closed_polls, 2u);
+    ASSERT_EQ(asx_channel_close_receiver(g_recv_ch), ASX_OK);
+    run_region();
+    ASSERT_EQ(g_closed_polls, 3u);
+    ASSERT_EQ(g_closed_status, ASX_OK);
+}
+
+TEST(closed_refuses_without_a_live_sender) {
+    asx_channel_id ch;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_closed(ch), ASX_E_PENDING); /* no task: nothing parks */
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_closed(ch), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_closed(ASX_INVALID_ID), ASX_E_INVALID_ARGUMENT);
+}
+
+TEST(weak_sender_upgrade_is_a_counted_clone) {
+    /* WeakSender::upgrade (mpsc.rs:1275) succeeds while a sender lives,
+     * even after the receiver closed, and fails once the count hit 0. */
+    asx_channel_id ch;
+    asx_channel_state cs;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_close_receiver(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &cs), ASX_OK);
+    ASSERT_EQ(cs, ASX_CHANNEL_RECEIVER_CLOSED);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_E_INVALID_STATE);
+}
+
+/* -------------------------------------------------------------------
  * main
  * ------------------------------------------------------------------- */
 
@@ -1226,6 +1632,21 @@ int main(void) {
     RUN_TEST(sealed_channel_slot_is_not_reused_until_drained);
     RUN_TEST(wake_receiver_repolls_a_parked_receiver);
     RUN_TEST(create_accepts_a_closing_region);
+    RUN_TEST(evict_oldest_sends_without_eviction_while_there_is_room);
+    RUN_TEST(evict_oldest_replaces_the_oldest_message_when_full);
+    RUN_TEST(evict_oldest_never_evicts_a_reserved_slot);
+    RUN_TEST(evict_oldest_errors);
+    RUN_TEST(evict_oldest_refuses_a_slot_a_parked_producer_owns);
+    RUN_TEST(recv_many_takes_up_to_limit_oldest_first);
+    RUN_TEST(recv_many_limit_zero_returns_before_the_cancel_check);
+    RUN_TEST(recv_many_reports_zero_once_no_message_can_arrive);
+    RUN_TEST(recv_many_argument_errors);
+    RUN_TEST(recv_many_parks_and_takes_the_whole_batch_when_woken);
+    RUN_TEST(recv_many_wakes_one_parked_producer_per_freed_slot);
+    RUN_TEST(closed_waits_for_the_receiver_and_ignores_messages);
+    RUN_TEST(closed_is_woken_by_the_receiver_drop_and_withdrawable);
+    RUN_TEST(closed_refuses_without_a_live_sender);
+    RUN_TEST(weak_sender_upgrade_is_a_counted_clone);
 
     TEST_REPORT();
     return test_failures;

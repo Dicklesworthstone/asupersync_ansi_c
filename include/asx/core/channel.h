@@ -110,6 +110,12 @@ ASX_API ASX_MUST_USE asx_status asx_channel_create(asx_region_id region, uint32_
  * done calls asx_channel_close_sender. The sender side closes when the
  * last one is dropped.
  *
+ * A Rust WeakSender (Sender::downgrade, mpsc.rs:941) needs no C object:
+ * keep the channel id without counting it, and upgrade it (:1275) with
+ * asx_channel_sender_clone, which likewise succeeds while any sender is
+ * alive, even after the receiver closed, and refuses once the count
+ * reached zero.
+ *
  * Add a sender. Returns ASX_OK, ASX_E_INVALID_STATE once the sender side is
  * closed (no live sender to clone), ASX_E_RESOURCE_EXHAUSTED when the count
  * would overflow, or a lookup error. */
@@ -132,7 +138,8 @@ ASX_API ASX_MUST_USE asx_status asx_channel_close_receiver(asx_channel_id id);
  * `rx.close()` (mpsc.rs:1698), where asx_channel_close_receiver is the
  * receiver's drop. Later reservations and permit sends see
  * ASX_E_DISCONNECTED and parked producers are woken; queued messages stay
- * receivable, then receives see ASX_E_DISCONNECTED.
+ * receivable, then receives see ASX_E_DISCONNECTED. Tasks waiting in
+ * asx_channel_closed are woken too.
  * Open → ReceiverClosed; SenderClosed → FullyClosed. Returns
  * ASX_E_INVALID_STATE when the receiver side is already closed. */
 ASX_API ASX_MUST_USE asx_status asx_channel_seal(asx_channel_id id);
@@ -179,6 +186,22 @@ ASX_API ASX_MUST_USE asx_status asx_send_permit_send(asx_send_permit *permit, ui
  * Returns the capacity to the pool. */
 ASX_API void asx_send_permit_abort(asx_send_permit *permit);
 
+/* Send `value`, evicting the oldest queued message if the channel is full
+ * (Rust send_evict_oldest, mpsc.rs:872, the DropOldest backpressure
+ * policy). Never parks, takes no permit and registers no obligation.
+ * Returns ASX_OK with *out_evicted = 0 when there was room, or
+ *   *out_evicted = 1 and *out_value = the evicted message when the oldest
+ *   committed message made room for it (reserved slots are never evicted).
+ * Returns ASX_E_CHANNEL_FULL, evicting nothing, when a parked producer
+ *   owns the free slot (as try_reserve) or every slot is reserved.
+ * Returns ASX_E_DISCONNECTED if the receiver is closed.
+ * Returns ASX_E_INVALID_STATE if the sender side is closed.
+ * Lock-free backend: an eviction dequeues, so call it on the receiver's
+ *   (scheduler) thread. */
+ASX_API ASX_MUST_USE asx_status asx_channel_send_evict_oldest(asx_channel_id id, uint64_t value,
+                                                              int *out_evicted,
+                                                              uint64_t *out_value);
+
 /* ------------------------------------------------------------------ */
 /* Receive API                                                        */
 /* ------------------------------------------------------------------ */
@@ -223,6 +246,30 @@ ASX_API ASX_MUST_USE asx_status asx_channel_send(asx_channel_id id, asx_cx *cx, 
  * ASX_E_PENDING for empty. */
 ASX_API ASX_MUST_USE asx_status asx_channel_recv(asx_channel_id id, asx_cx *cx,
                                                  uint64_t *out_value);
+
+/* `rx.recv_many(&cx, &mut buf, limit)` (mpsc.rs:1754, poll :1867): move up
+ * to `limit` queued messages, oldest first, into out_values[0..*out_count).
+ * `limit` 0 returns ASX_OK with 0 at once, before the cancellation check.
+ * Otherwise the cancellation check comes first (trace "mpsc::recv_many
+ * cancelled"); then whatever is queued is taken, freeing that many slots
+ * (one parked producer is woken per freed slot); an empty channel that can
+ * get no more messages (receiver closed, or every sender gone with no
+ * permit outstanding) gives ASX_OK with *out_count = 0, not an error; an
+ * empty open one gives ASX_E_PENDING, parking the task as asx_channel_recv
+ * does. out_values must hold `limit` messages. */
+ASX_API ASX_MUST_USE asx_status asx_channel_recv_many(asx_channel_id id, asx_cx *cx,
+                                                      uint64_t *out_values, uint32_t limit,
+                                                      uint32_t *out_count);
+
+/* `tx.closed().await` (mpsc_closed.rs:39): ASX_OK once the receiver has
+ * closed (asx_channel_seal) or dropped (asx_channel_close_receiver), with
+ * no capacity reserved and queued messages left alone; ASX_E_PENDING
+ * before, parking the calling task until that happens. Takes no Cx: the
+ * wait observes channel closure, not cancellation (a task that stops
+ * waiting calls asx_channel_wait_cancel).
+ * Returns ASX_E_INVALID_STATE if the sender side is closed (no sender is
+ * left to wait with). */
+ASX_API ASX_MUST_USE asx_status asx_channel_closed(asx_channel_id id);
 
 /* Withdraw `task` from this channel's recv and reserve wait queues — the
  * analog of dropping a Rust recv/reserve future. Call it when a task that

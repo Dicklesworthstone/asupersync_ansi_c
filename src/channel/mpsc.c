@@ -98,6 +98,7 @@ typedef struct {
     /* Parked tasks (scheduler-thread state; FIFO by arrival) */
     asx_wait_queue recv_waiters;    /* waiting for a committed message */
     asx_wait_queue reserve_waiters; /* waiting for free capacity */
+    asx_wait_queue closed_waiters;  /* senders waiting for the receiver to close */
 } asx_channel_slot;
 
 static asx_channel_slot g_channels[ASX_MAX_CHANNELS];
@@ -302,7 +303,9 @@ static asx_status channel_lf_enqueue(asx_channel_slot *s, uint64_t value) {
     return ASX_OK;
 }
 
-static asx_status channel_lf_dequeue(asx_channel_slot *s, uint64_t *out_value) {
+/* Take the oldest committed message. `release` 0 keeps its capacity
+ * claimed for the caller (an eviction hands the slot to the new message). */
+static asx_status channel_lf_dequeue(asx_channel_slot *s, uint64_t *out_value, int release) {
     asx_channel_lf_cell *cell;
     uint32_t seq;
     int32_t diff;
@@ -317,11 +320,25 @@ static asx_status channel_lf_dequeue(asx_channel_slot *s, uint64_t *out_value) {
     asx_atomic_u32_store(&cell->sequence, s->lf_queue.dequeue_pos + s->capacity);
     s->lf_queue.dequeue_pos++;
     (void)channel_atomic_dec(&s->lf_queue.committed);
-    channel_lf_release_capacity(s);
+    if (release) channel_lf_release_capacity(s);
 
     return ASX_OK;
 }
 #endif
+
+/* Take the oldest committed message (FIFO head) into *out_value, freeing
+ * its slot. Returns 0 when none is ready. Receiver-side operation. */
+static int channel_take_oldest(asx_channel_slot *s, uint64_t *out_value) {
+#if ASX_CHANNEL_BACKEND_LOCKFREE
+    return channel_lf_dequeue(s, out_value, 1) == ASX_OK;
+#else
+    if (s->queue_len == 0u) return 0;
+    *out_value = s->queue[s->queue_head];
+    s->queue_head = (s->queue_head + 1u) % s->capacity;
+    s->queue_len--;
+    return 1;
+#endif
+}
 
 /* ------------------------------------------------------------------ */
 /* Wait queues                                                        */
@@ -329,10 +346,11 @@ static asx_status channel_lf_dequeue(asx_channel_slot *s, uint64_t *out_value) {
 
 static void channel_reap_queue(asx_wait_queue *q);
 
-/* Empty both queues, returning their nodes to the pool. */
+/* Empty every queue, returning their nodes to the pool. */
 static void channel_waiters_init(asx_channel_slot *s) {
     asx_wait_queue_init(&s->recv_waiters, channel_reap_queue);
     asx_wait_queue_init(&s->reserve_waiters, channel_reap_queue);
+    asx_wait_queue_init(&s->closed_waiters, channel_reap_queue);
 }
 
 /* Committed messages ready for try_recv. */
@@ -378,7 +396,9 @@ static void channel_reap_queue(asx_wait_queue *q) {
     for (i = 0; i < ASX_MAX_CHANNELS; i++) {
         asx_channel_slot *s = &g_channels[i];
         ASX_CHECKPOINT_WAIVER("bounded: ASX_MAX_CHANNELS constant");
-        if (q != &s->recv_waiters && q != &s->reserve_waiters) continue;
+        if (q != &s->recv_waiters && q != &s->reserve_waiters && q != &s->closed_waiters) {
+            continue;
+        }
         asx_wait_queue_drop_dead(q);
         channel_settle(s);
         return;
@@ -389,6 +409,7 @@ static void channel_reap_queue(asx_wait_queue *q) {
 static void channel_wake_everyone(asx_channel_slot *s) {
     if (s->recv_waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->recv_waiters);
     if (s->reserve_waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->reserve_waiters);
+    if (s->closed_waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->closed_waiters);
 }
 
 /* ------------------------------------------------------------------ */
@@ -546,9 +567,11 @@ asx_status asx_channel_seal(asx_channel_id id) {
     case ASX_CHANNEL_RECEIVER_CLOSED:
     case ASX_CHANNEL_FULLY_CLOSED: return ASX_E_INVALID_STATE;
     }
-    /* Rust's close wakes the parked producers only; the receiver is the
-     * caller (mpsc.rs:1698-1711). The queue stays receivable. */
+    /* Rust's close wakes the parked producers and the closed() observers
+     * only; the receiver is the caller (mpsc.rs:1698-1711). The queue stays
+     * receivable. */
     if (s->reserve_waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->reserve_waiters);
+    if (s->closed_waiters.len > 0u) (void)asx_wait_queue_wake_all(&s->closed_waiters);
     return ASX_OK;
 }
 
@@ -826,6 +849,74 @@ static int channel_permit_drop(uint64_t channel_id, uint64_t token) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Send, evicting the oldest message when full                        */
+/* ------------------------------------------------------------------ */
+
+/* Rust send_evict_oldest (mpsc.rs:872, :897-934): a free slot owned by a
+ * parked producer refuses; any other free slot takes the value; a full
+ * channel evicts its oldest committed message, never a reserved slot. */
+asx_status asx_channel_send_evict_oldest(asx_channel_id id, uint64_t value, int *out_evicted,
+                                         uint64_t *out_value) {
+    asx_channel_slot *s;
+    asx_status st;
+    uint64_t oldest = 0u;
+    int evicted = 0;
+#if !ASX_CHANNEL_BACKEND_LOCKFREE
+    uint32_t write_pos;
+#endif
+
+    if (out_evicted == NULL || out_value == NULL) { return ASX_E_INVALID_ARGUMENT; }
+
+    st = channel_slot_lookup(id, &s);
+    if (st != ASX_OK) { return st; }
+
+    if (s->state == ASX_CHANNEL_SENDER_CLOSED || s->state == ASX_CHANNEL_FULLY_CLOSED) {
+        return ASX_E_INVALID_STATE;
+    }
+    if (s->state == ASX_CHANNEL_RECEIVER_CLOSED) { return ASX_E_DISCONNECTED; }
+
+    if (channel_free_capacity(s) > 0u) {
+        /* The free slot is the parked producer's: nothing is evicted. */
+        if (s->reserve_waiters.len > 0u && asx_wait_queue_live_ahead(&s->reserve_waiters) > 0u) {
+            return ASX_E_CHANNEL_FULL;
+        }
+#if ASX_CHANNEL_BACKEND_LOCKFREE
+        if (!channel_lf_claim_capacity(s)) { return ASX_E_CHANNEL_FULL; }
+#endif
+    } else {
+        /* Every slot holds a committed message or a reservation: the oldest
+         * message makes room; with all of them reserved there is none. */
+#if ASX_CHANNEL_BACKEND_LOCKFREE
+        if (channel_lf_dequeue(s, &oldest, 0) != ASX_OK) { return ASX_E_CHANNEL_FULL; }
+#else
+        if (!channel_take_oldest(s, &oldest)) { return ASX_E_CHANNEL_FULL; }
+#endif
+        evicted = 1;
+    }
+
+#if ASX_CHANNEL_BACKEND_LOCKFREE
+    /* The claimed capacity guarantees the cell (the consumer frees a cell
+     * before its capacity). */
+    st = channel_lf_enqueue(s, value);
+    if (st != ASX_OK) {
+        channel_lf_release_capacity(s);
+        channel_settle(s);
+        return st;
+    }
+#else
+    write_pos = (s->queue_head + s->queue_len) % s->capacity;
+    s->queue[write_pos] = value;
+    s->queue_len++;
+#endif
+    asx_trace_emit(ASX_TRACE_CHANNEL_SEND, (uint64_t)id, value);
+    channel_settle(s); /* one more message for a parked receiver */
+
+    *out_evicted = evicted;
+    *out_value = oldest;
+    return ASX_OK;
+}
+
+/* ------------------------------------------------------------------ */
 /* Receive                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -834,6 +925,13 @@ static int channel_permit_drop(uint64_t channel_id, uint64_t token) {
 static void channel_recv_done(asx_channel_slot *s) {
     asx_wait_queue_leave_current(&s->recv_waiters);
     channel_settle(s);
+}
+
+/* An empty queue that can get no more messages: the receiver is closed,
+ * or the sender side is and no outstanding permit can still commit. */
+static int channel_drained_for_good(asx_channel_slot *s) {
+    if (s->state == ASX_CHANNEL_RECEIVER_CLOSED || s->state == ASX_CHANNEL_FULLY_CLOSED) return 1;
+    return s->state == ASX_CHANNEL_SENDER_CLOSED && channel_atomic_load(&s->reserved) == 0u;
 }
 
 /* Receive one message. Empty: a waiting receive (asx_channel_recv) parks
@@ -848,35 +946,15 @@ static asx_status channel_recv_impl(asx_channel_id id, uint64_t *out_value, int 
     st = channel_slot_lookup(id, &s);
     if (st != ASX_OK) { return st; }
 
-#if ASX_CHANNEL_BACKEND_LOCKFREE
-    st = channel_lf_dequeue(s, out_value);
-    if (st == ASX_OK) {
+    if (channel_take_oldest(s, out_value)) {
         asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)id, *out_value);
         channel_recv_done(s);
         return ASX_OK;
     }
-    if (st != ASX_E_WOULD_BLOCK) { return st; }
-#else
-    if (s->queue_len > 0) {
-        *out_value = s->queue[s->queue_head];
-        s->queue_head = (s->queue_head + 1u) % s->capacity;
-        s->queue_len--;
-        asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)id, *out_value);
-        channel_recv_done(s);
-        return ASX_OK;
-    }
-#endif
 
-    if (s->state == ASX_CHANNEL_RECEIVER_CLOSED || s->state == ASX_CHANNEL_FULLY_CLOSED) {
+    if (channel_drained_for_good(s)) {
         asx_wait_queue_leave_current(&s->recv_waiters);
         return ASX_E_DISCONNECTED;
-    }
-
-    if (s->state == ASX_CHANNEL_SENDER_CLOSED) {
-        if (channel_atomic_load(&s->reserved) == 0u) {
-            asx_wait_queue_leave_current(&s->recv_waiters);
-            return ASX_E_DISCONNECTED;
-        }
     }
 
     /* Empty: park until a commit (or a close). Settling first re-issues any
@@ -906,6 +984,7 @@ asx_status asx_channel_wait_cancel(asx_channel_id id, asx_task_id task) {
 
     removed = asx_wait_queue_remove(&s->recv_waiters, task);
     removed |= asx_wait_queue_remove(&s->reserve_waiters, task);
+    removed |= asx_wait_queue_remove(&s->closed_waiters, task);
     /* A wake the withdrawn task held goes to the next waiter in line. */
     if (removed) channel_settle(s);
     return ASX_OK;
@@ -974,6 +1053,71 @@ asx_status asx_channel_recv(asx_channel_id id, asx_cx *cx, uint64_t *out_value) 
 
     st = channel_recv_impl(id, out_value, 1);
     return st == ASX_E_WOULD_BLOCK ? ASX_E_PENDING : st;
+}
+
+/* Rust poll_recv_many (mpsc.rs:1867-1940): limit 0 first, then the
+ * cancellation check, then a batch, a drained-for-good 0, or a park. */
+asx_status asx_channel_recv_many(asx_channel_id id, asx_cx *cx, uint64_t *out_values,
+                                 uint32_t limit, uint32_t *out_count) {
+    asx_channel_slot *s;
+    asx_status st;
+    uint32_t n = 0u;
+
+    if (out_count == NULL || (limit > 0u && out_values == NULL)) { return ASX_E_INVALID_ARGUMENT; }
+    *out_count = 0u;
+
+    st = channel_slot_lookup(id, &s);
+    if (st != ASX_OK) { return st; }
+    if (limit == 0u) { return ASX_OK; }
+    if (channel_wait_cancelled(id, cx, "mpsc::recv_many cancelled")) { return ASX_E_CANCELLED; }
+
+    while (n < limit && channel_take_oldest(s, &out_values[n])) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most the channel capacity is queued");
+        asx_trace_emit(ASX_TRACE_CHANNEL_RECV, (uint64_t)id, out_values[n]);
+        n++;
+    }
+    if (n > 0u) {
+        uint32_t free_slots;
+        channel_recv_done(s);
+        /* One parked producer per freed slot, as far as capacity is free
+         * (sender_wakers_for_freed_slots, mpsc.rs:402-423). */
+        free_slots = channel_free_capacity(s);
+        if (n > 1u && s->reserve_waiters.len > 0u) {
+            (void)asx_wait_queue_settle(&s->reserve_waiters, n < free_slots ? n : free_slots);
+        }
+        *out_count = n;
+        return ASX_OK;
+    }
+
+    /* Empty for good: zero messages, not an error (mpsc.rs:1909-1917). */
+    if (channel_drained_for_good(s)) {
+        asx_wait_queue_leave_current(&s->recv_waiters);
+        return ASX_OK;
+    }
+
+    channel_settle(s);
+    (void)asx_wait_queue_park_current(&s->recv_waiters);
+    return ASX_E_PENDING;
+}
+
+asx_status asx_channel_closed(asx_channel_id id) {
+    asx_channel_slot *s;
+    asx_status st;
+
+    st = channel_slot_lookup(id, &s);
+    if (st != ASX_OK) { return st; }
+
+    if (s->state == ASX_CHANNEL_SENDER_CLOSED || s->state == ASX_CHANNEL_FULLY_CLOSED) {
+        asx_wait_queue_leave_current(&s->closed_waiters);
+        return ASX_E_INVALID_STATE;
+    }
+    /* Sender::is_closed is the receiver's close or drop (mpsc.rs:799). */
+    if (s->state == ASX_CHANNEL_RECEIVER_CLOSED) {
+        asx_wait_queue_leave_current(&s->closed_waiters);
+        return ASX_OK;
+    }
+    (void)asx_wait_queue_park_current(&s->closed_waiters);
+    return ASX_E_PENDING;
 }
 
 /* ------------------------------------------------------------------ */

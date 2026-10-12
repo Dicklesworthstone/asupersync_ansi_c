@@ -1499,6 +1499,55 @@ static int exec_channel_wait(it_task *t, uint32_t step, uint32_t idx, const char
         channel_received(t, idx, op, st, st == ASX_OK, v, out);
         return 1;
     }
+    if (strcmp(op, "recv_many") == 0) {
+        it_channel *c = channel_by_name(ch);
+        uint64_t batch[ASX_CHANNEL_MAX_CAPACITY];
+        uint64_t limit = 0;
+        uint32_t n = 0;
+        uint32_t list;
+        uint32_t i;
+        if (c == NULL || owned_receiver(t, ch, IT_CH_MPSC) == NULL ||
+            !asx_json_u64(g_in, asx_json_get(g_in, step, "limit"), &limit)) {
+            it_fail_task(t, idx, "recv_many needs an owned receiver and a limit");
+            *out = STEP_END;
+            return 1;
+        }
+        /* rx.recv_many(&cx, &mut buf, limit) (mpsc.rs:1754): a batch is at
+         * most what is queued, which the channel capacity bounds. */
+        st = asx_channel_recv_many(c->id, &t->cx, batch,
+                                   limit < ASX_CHANNEL_MAX_CAPACITY ? (uint32_t)limit
+                                                                    : ASX_CHANNEL_MAX_CAPACITY,
+                                   &n);
+        if (st == ASX_E_PENDING) {
+            *out = STEP_PENDING;
+            return 1;
+        }
+        if (st != ASX_OK) {
+            observe_status(t, idx, op, st);
+            return 1;
+        }
+        list = asx_json_new_array(g_out);
+        for (i = 0; i < n; i++) asx_json_push(g_out, list, asx_json_new_u64(g_out, batch[i]));
+        observe(t, idx, op, status_node(st), list);
+        return 1;
+    }
+    if (strcmp(op, "closed") == 0) {
+        it_channel *c = owned_sender(t, ch, IT_CH_MPSC);
+        if (c == NULL) {
+            it_fail_task(t, idx, "closed needs an owned sender");
+            *out = STEP_END;
+            return 1;
+        }
+        /* tx.closed().await (mpsc_closed.rs:39): no Cx, so a cancel does
+         * not end the wait. */
+        st = asx_channel_closed(c->id);
+        if (st == ASX_E_PENDING) {
+            *out = STEP_PENDING;
+            return 1;
+        }
+        observe_status(t, idx, op, st);
+        return 1;
+    }
     return 0;
 }
 
@@ -2496,6 +2545,22 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         st = asx_channel_try_reserve(c->id, &permit);
         if (st == ASX_OK) st = asx_send_permit_send(&permit, v);
         observe_status(t, idx, label, st);
+        return STEP_NEXT;
+    }
+    if (strcmp(op, "send_evict_oldest") == 0) {
+        it_channel *c = owned_sender(t, it_str(step, "channel"), IT_CH_MPSC);
+        uint64_t v = 0;
+        uint64_t oldest = 0;
+        int evicted = 0;
+        if (c == NULL || !asx_json_u64(g_in, asx_json_get(g_in, step, "value"), &v)) {
+            it_fail_task(t, idx, "send_evict_oldest needs an owned sender and a value");
+            return STEP_END;
+        }
+        /* tx.send_evict_oldest(v) (mpsc.rs:872): never parks; the value is
+         * the evicted message, if any. */
+        st = asx_channel_send_evict_oldest(c->id, v, &evicted, &oldest);
+        observe(t, idx, label, status_node(st),
+                st == ASX_OK && evicted ? asx_json_new_u64(g_out, oldest) : ASX_JSON_NONE);
         return STEP_NEXT;
     }
     if (strcmp(op, "try_recv") == 0) {

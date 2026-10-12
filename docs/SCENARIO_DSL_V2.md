@@ -324,6 +324,9 @@ body, drops its own clone; the sender side closes at the last one
 | `try_send` | `channel`, `value` | `tx.try_send(v)` (`:773`) | `asx_channel_try_reserve` + `asx_send_permit_send`, without an obligation | no | ignored. Full gives `ASX_E_CHANNEL_FULL`. |
 | `recv` | `channel` | `rx.recv(&cx).await` (`:1719`) | `asx_channel_recv(id, cx, &v)` until done | while empty | Checked first: `ASX_E_CANCELLED` even when a value is queued (`:1786`). The observation `value` is the received integer. |
 | `try_recv` | `channel` | `rx.try_recv()` (`:1956`) | `asx_channel_try_recv` (never parks) | no | ignored. Empty gives `ASX_E_CHANNEL_EMPTY`; closed gives `ASX_E_DISCONNECTED`. |
+| `send_evict_oldest` | `channel`, `value` | `tx.send_evict_oldest(v)` (`:872`) | `asx_channel_send_evict_oldest` (never parks, no permit) | no | ignored. The observation `value` is the evicted message, or null when there was room. A free slot owned by a parked producer, or a channel whose every slot is reserved, gives `ASX_E_CHANNEL_FULL`. |
+| `recv_many` | `channel`, `limit` | `rx.recv_many(&cx, &mut buf, limit).await` (`:1754`) | `asx_channel_recv_many(id, cx, buf, limit, &n)` until done | while empty | Checked first, after a `limit` of 0 (which gives `[]` at once): `ASX_E_CANCELLED`, tracing `"mpsc::recv_many cancelled"` (`:1882`). The observation `value` is the array of received integers, oldest first; a channel that can get no more messages gives `ASX_OK` with `[]`. |
+| `closed` | `channel` (the sender's) | `tx.closed().await` (`channel/mpsc_closed.rs:39`) | `asx_channel_closed` until done | until the receiver is closed or dropped | ignored: no `Cx`. Queued messages and reservations are untouched. |
 | `close_sender` | `channel` | `drop(tx)` (`:1241`) | `asx_channel_close_sender` | no | ignored |
 | `close_receiver` | `channel` | `drop(rx)` (`:2122`) | `asx_channel_close_receiver` | no | ignored |
 | `oneshot_send` | `channel`, `value` | `tx.send(&cx, v)` (`channel/oneshot.rs:556`): reserves a SendPermit, traces `"oneshot::reserve creating permit"`, commits | `asx_oneshot_send(&tx, &cx, v)`: reserves the SendPermit obligation, traces, commits | no | Checked first: `ASX_E_CANCELLED`. |
@@ -692,6 +695,11 @@ Closed (each verified by a fixture that now matches):
   `oneshot-closed-cancelled-send-001`; a send wakes no closed waiter,
   `oneshot-closed-send-no-wake-001`). Generated scenarios use the three
   steps before an end is used.
+- **Mpsc evict-oldest, batch receive and closed wait**: `send_evict_oldest`,
+  `recv_many`, `closed` (bd-9kll.5.7): `asx_channel_send_evict_oldest`,
+  `asx_channel_recv_many` (one parked producer woken per freed slot) and
+  `asx_channel_closed` (woken by `asx_channel_seal` and
+  `asx_channel_close_receiver`).
 
 - **Channel obligations and cancel traces**: `asx_channel_reserve` with a
   task Cx registers a `SendPermit` (committed by send, aborted `Explicit`

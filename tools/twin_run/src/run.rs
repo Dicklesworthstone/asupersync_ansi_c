@@ -1260,6 +1260,21 @@ fn exec_sync(
             };
             observe(&ctx.shared, me, idx, label, status, Value::Null);
         }
+        "send_evict_oldest" => {
+            // Never parks; the value is the evicted message, if any.
+            let (tx, _) = local.lend(str_field(step, "channel")?)?;
+            match tx.send_evict_oldest(u64_field(step, "value")?) {
+                Ok(evicted) => observe(&ctx.shared, me, idx, label, "ASX_OK", json!(evicted)),
+                Err(e) => observe(
+                    &ctx.shared,
+                    me,
+                    idx,
+                    label,
+                    send_error_status(&e),
+                    Value::Null,
+                ),
+            }
+        }
         "try_recv" => {
             let rx = local.receiver(str_field(step, "channel")?)?;
             match rx.try_recv() {
@@ -1456,6 +1471,22 @@ async fn exec_step(
                 Ok(v) => observe(&ctx.shared, me, idx, op, "ASX_OK", json!(v)),
                 Err(e) => observe(&ctx.shared, me, idx, op, recv_error_status(e), Value::Null),
             }
+        }
+        "recv_many" => {
+            let limit = usize::try_from(u64_field(step, "limit")?)
+                .map_err(|_| "recv_many limit does not fit usize".to_string())?;
+            let rx = local.receiver(str_field(step, "channel")?)?;
+            let mut batch = Vec::new();
+            match rx.recv_many(cx, &mut batch, limit).await {
+                Ok(_) => observe(&ctx.shared, me, idx, op, "ASX_OK", json!(batch)),
+                Err(e) => observe(&ctx.shared, me, idx, op, recv_error_status(e), Value::Null),
+            }
+        }
+        "closed" => {
+            // No Cx: closure, not cancellation, ends the wait (mpsc_closed.rs:39).
+            let (tx, _) = local.lend(str_field(step, "channel")?)?;
+            tx.closed().await;
+            observe(&ctx.shared, me, idx, op, "ASX_OK", Value::Null);
         }
         // Blocking oneshot, broadcast and watch receives (DSL §3.6).
         "oneshot_poll_closed" => {
