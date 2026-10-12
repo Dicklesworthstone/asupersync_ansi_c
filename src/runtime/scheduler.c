@@ -1167,9 +1167,16 @@ static asx_status sched_poll_slot(uint32_t i, asx_region_slot *rslot, uint32_t r
     t->notified = 0;
     /* A parked task with a deadline must wake to be cancelled (under lab
      * dispatch its budget-deadline timer does it). */
+#ifndef ASX_MUTANT_SWEEP_PARKED_DEADLINE_NO_WAKE
+    /* Oracle self-test mutant (tests/gates/test_oracle_mutants.sh, sweep
+     * mode): the parked task is never woken at its deadline, so it is
+     * cancelled only when its own wake comes. Lab dispatch never runs this
+     * line, so only the sweep comparison can see it. Never in a release
+     * build. */
     if (!lab && t->parked && !t->cancel_pending && t->budget.deadline != ASX_TIME_INFINITE) {
         timer_arm(i, t->budget.deadline);
     }
+#endif
     /* Opt-in hard bound's counter: each poll of a cancel-phase
      * task consumes one cleanup unit. Masked polls do not
      * count: the cancel is not yet acknowledged. */
