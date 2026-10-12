@@ -28,8 +28,9 @@
 //! rwlock crowd can run 16 writer hand-offs in a row and reach the forced
 //! reader turn (bd-rm2d).
 //!
-//! Channels and sync: besides mpsc (send / try_send / reserve with
-//! permit_send or permit_abort, recv / try_recv, close of either end),
+//! Channels and sync: besides mpsc (send / try_send / send_evict_oldest /
+//! reserve with permit_send or permit_abort, the sender's closed wait,
+//! recv / try_recv / recv_many, close of either end),
 //! a scenario may connect its tasks with a oneshot, a broadcast or a watch
 //! channel and declare a barrier, whose waits may fall short of its
 //! parties.
@@ -303,6 +304,15 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                         if rng.chance(25) {
                             return json!({"op": "try_send", "channel": ch, "value": held.sends});
                         }
+                        // Drop-oldest: never parks, evicts when full.
+                        if rng.chance(15) {
+                            return json!({"op": "send_evict_oldest", "channel": ch, "value": held.sends});
+                        }
+                        // Waits for the receiver's drop, at the latest the
+                        // consumer's body end (a distinct task).
+                        if rng.chance(5) {
+                            return json!({"op": "closed", "channel": ch});
+                        }
                         if rng.chance(50) {
                             return json!({"op": "send", "channel": ch, "value": held.sends});
                         }
@@ -312,6 +322,10 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                         return json!({"op": "reserve_send", "channel": ch, "as": format!("{me}.p{}", held.reserves)});
                     }
                     if me == consumer {
+                        // A batch of up to 3 (0 returns at once).
+                        if rng.chance(20) {
+                            return json!({"op": "recv_many", "channel": ch, "limit": rng.below(4)});
+                        }
                         let op = if rng.chance(30) { "try_recv" } else { "recv" };
                         return json!({"op": op, "channel": ch});
                     }
