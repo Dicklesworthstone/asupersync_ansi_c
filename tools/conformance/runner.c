@@ -231,6 +231,36 @@ static int fixture_authentic(uint32_t root, const char *id) {
     return 1;
 }
 
+/* Binary codec round trip of the run just executed (bd-9kll.2.9): the
+ * runtime's own trace exported in the binary format must import back
+ * and verify against itself (asx_trace_continuity_check), and the same
+ * buffer with one event byte flipped must be refused. Returns 0 and
+ * prints why on failure. */
+static int trace_binary_round_trip(const char *id) {
+    static uint8_t buf[ASX_TRACE_BINARY_HEADER + ASX_TRACE_BINARY_EVENT * ASX_TRACE_CAPACITY];
+    uint32_t len = 0;
+    asx_status st = asx_trace_export_binary(buf, (uint32_t)sizeof(buf), &len);
+    if (st != ASX_OK) {
+        fprintf(stdout, "FAIL %s: binary trace export: %s\n", id, asx_status_name(st));
+        return 0;
+    }
+    st = asx_trace_continuity_check(buf, len);
+    if (st != ASX_OK) {
+        fprintf(stdout, "FAIL %s: binary trace round trip: %s\n", id, asx_status_name(st));
+        return 0;
+    }
+    if (len > ASX_TRACE_BINARY_HEADER) {
+        buf[len - 1u] = (uint8_t)(buf[len - 1u] ^ 0xFFu);
+        st = asx_trace_continuity_check(buf, len);
+        buf[len - 1u] = (uint8_t)(buf[len - 1u] ^ 0xFFu);
+        if (st == ASX_OK) {
+            fprintf(stdout, "FAIL %s: a corrupted binary trace was accepted\n", id);
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* Run one fixture's scenario through C and compare. `mutate` corrupts the
  * expected trace first (the self-test). */
 static cmp_result compare_one(const char *path, int mutate) {
@@ -285,6 +315,7 @@ static cmp_result compare_one(const char *path, int mutate) {
         fprintf(stdout, "ERROR %s: C run failed: %s\n", id, g_error[0] != '\0' ? g_error : "?");
         return CMP_ERROR;
     }
+    if (!trace_binary_round_trip(id)) ok = 0;
 
     if (!same_part(want_trace, asx_json_get(&g_run, run, "trace"))) {
         ok = 0;

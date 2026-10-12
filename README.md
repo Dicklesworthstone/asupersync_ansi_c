@@ -445,7 +445,9 @@ make test-gates         # negative controls: the gates must reject bad fixtures,
 
 Execute every Rust-captured v2 fixture through C runtimes built with the
 JSON and with the BIN codec (`make codec-equivalence-exec`, each in its own
-`build/parity/` directory); both must match the Rust captures. Then compare
+`build/parity/` directory); both must match the Rust captures, and every
+run's own trace must survive the binary trace format (export, import and
+verify against itself; a copy with one byte flipped must be refused). Then compare
 the semantic digests recorded in the JSON and BIN files of each fixture in
 `fixtures/rust_reference/`; the C codec round trip is also checked by `make
 fixture-integrity` and by `make test-conformance-c`.
