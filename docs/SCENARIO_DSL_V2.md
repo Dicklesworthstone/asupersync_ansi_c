@@ -752,6 +752,15 @@ Closed (each verified by a fixture that now matches):
   receiving). The receiver's drop after a seal now discards the queue, as
   Rust's does; C had kept it, so a sealed channel dropped with messages
   queued never freed its slot.
+- **A permit whose obligation `max_obligations` refused is untracked**:
+  the post drain releases the refused reservation's slot, and the permit's
+  token check (`asx_obligation_check_token_internal`) treats an id with
+  no obligation behind it as untracked, so semaphore releases, oneshot
+  sends and channel and broadcast permits settle physically as Rust's do.
+  819502b's check had refused them, which held semaphore permits and lost
+  GenServer replies under a quota (`obligation-quota-refused-semaphore-permit-releases-001`,
+  `obligation-quota-refused-call-reply-delivered-001`; fuzz seeds
+  1100-1238).
 - **Owner-cancelled race and quorum take the owner Cx's reason**
   (bd-lfwh, bd-uyd3): Rust's `cx.cancel_reason()`, which can be ahead of
   the task record's after a tie (`race-owner-cancel-cx-reason-001`,
