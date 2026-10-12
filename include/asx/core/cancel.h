@@ -89,10 +89,10 @@ ASX_API void asx_cancel_reason_with_cause_limited(asx_cancel_reason *r,
  * links. Walk a chain with this count, not until `cause` is NULL. */
 ASX_API uint32_t asx_cancel_reason_chain_links(const asx_cancel_reason *r);
 
-/* The runtime installs its config's bounds at init and the defaults (16
- * reasons, 4096 bytes) return at reset. Set them through
- * asx_runtime_config; applications do not call these. */
+/* The runtime installs asx_runtime_config's chain bounds at init; set them
+ * through the config, applications do not call this. */
 ASX_API void asx_cancel_chain_limits_set_internal(uint32_t max_depth, uint32_t max_memory);
+/* The defaults (16 reasons, 4096 bytes) return at runtime reset. */
 ASX_API void asx_cancel_chain_limits_reset_internal(void);
 
 /* -------------------------------------------------------------------
