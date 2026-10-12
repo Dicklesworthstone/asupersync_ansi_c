@@ -32,6 +32,8 @@
  *                           OTI re-serializes to the same 12 bytes
  *   ASX_FUZZ_FRAME_CODECS   length-delimited (1, 2, 4-byte length) and
  *                           line frame decoders
+ *   ASX_FUZZ_RESOLVE_HOST   host resolution of literals: IPv4 dotted quads,
+ *                           IPv6 text form (brackets, "::", IPv4 tail)
  *   ASX_FUZZ_JSON_READER    the conformance JSON reader (scenario and
  *                           fixture files)
  *
@@ -502,6 +504,34 @@ static void fuzz_one(const uint8_t *data, size_t size) {
         drain_frames(&lines, asx_lines_decode);
         pos += n;
     }
+}
+
+#elif defined(ASX_FUZZ_RESOLVE_HOST)
+
+#include <asx/net/net.h>
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    asx_resolve_options opts;
+    asx_resolve_result res;
+    char *host;
+    uint8_t mode;
+    if (size < 1u || size > 1024u) return;
+    mode = data[0];
+    host = dup_text(data + 1, size - 1u);
+    if (host == NULL) return;
+    /* Literals and "localhost" resolve in every build; anything else is
+     * ASX_E_NOT_FOUND without the native backend (no network here). */
+    asx_resolve_options_init(&opts, (uint16_t)(mode * 257u));
+    opts.allow_ipv4 = (uint8_t)((mode & 1u) || !(mode & 2u));
+    opts.allow_ipv6 = (uint8_t)((mode & 2u) || !(mode & 1u));
+    opts.preferred_family = (mode & 4u) ? ASX_AF_INET6 : ASX_AF_INET4;
+    if (asx_resolve_host(&res, host, &opts) == ASX_OK) {
+        if (res.count == 0u || res.count > ASX_RESOLVE_MAX_RESULTS) {
+            fuzz_fail("resolve result count");
+        }
+        touch(res.addrs, res.count * sizeof(res.addrs[0]));
+    }
+    free(host);
 }
 
 #elif defined(ASX_FUZZ_JSON_READER)

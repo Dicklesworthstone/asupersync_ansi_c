@@ -482,7 +482,7 @@ UBSan (`tests/fuzz/fuzz_parsers.c`, one binary per parser): the HTTP/1.1
 request and response parsers with multipart forms, the WebSocket handshake,
 frame header and engine, strict Base64, the JSON and binary fixture codecs,
 URI query strings, the RaptorQ OTI, the length-delimited and line frame
-decoders, and the conformance JSON reader. Each runs `FUZZ_PARSERS_SECONDS`
+decoders, IPv4/IPv6 literal host resolution, and the conformance JSON reader. Each runs `FUZZ_PARSERS_SECONDS`
 (default 60) from the seeds in `tests/fuzz/parsers_seeds/`. Where a parser
 has an exact inverse the harness also checks the round trip: strict Base64
 decoding accepts only canonical text, a decoded OTI re-serializes to its
