@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-2%2C018%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-2%2C019%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-226%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,018<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->226<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,019<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->226<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -41,7 +41,7 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->162<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
+  - `make conformance` runs <!-- fact:rust_fixtures -->165<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
   - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches, or is a recorded difference that names its bead.
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->2,018<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->2,019<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -895,7 +895,7 @@ make conformance        # Rust parity: every v2 fixture executed in C and compar
 make fuzz-differential  # Seeded Rust-vs-C differential fuzzing (needs Rust)
 make test-fuzz-differential # Live Rust oracle, planted C mutation and minimizer controls
 make codec-equivalence  # JSON vs BIN digests recorded in fixtures (runtime not executed)
-make profile-parity     # Cross-profile digests recorded in fixtures (runtime not executed)
+make profile-parity     # Rust fixtures executed in eight host profiles, plus recorded legacy digests
 make fuzz-smoke         # C determinism and crash checks only
 make formal-check       # Transition harnesses + algebraic + litmus (native; no CBMC run)
 make ci-embedded-matrix # Cross-target embedded builds (size/layout rows; not run)
@@ -1103,7 +1103,7 @@ for each emitted event, for each byte of
 
 Two deterministic runs with the same scenario, profile, seed, and runtime version must produce identical trace digests; this is the C runtime's self-consistency check. The parity gates use other digests:
 - Rust parity (`make conformance`) compares the canonical vocabulary-v2 trace, snapshot and observations of each scenario exactly (`src/conformance/`, SHA-256 over canonical JSON for digests).
-- `make codec-equivalence` and `make profile-parity` compare the SHA-256 `semantic_digest` values recorded in the fixture files, without running the runtime.
+- `make codec-equivalence` compares the SHA-256 `semantic_digest` values recorded in the legacy fixture files. `make profile-parity` also executes the v2 Rust captures under eight host profiles and compares each build's canonical output with Rust.
 
 A Rust parity mismatch is a semantic drift bug in the C port, not an acceptable variation.
 
@@ -1618,7 +1618,7 @@ Waiters of every primitive and channel are nodes in one runtime-wide pool (`ASX_
 
 **Semaphore**: Counting permit system with configurable initial count, following Rust's `Semaphore`. An acquire takes one permit, or `n` at once with `asx_semaphore_acquire_many_begin` / `asx_semaphore_try_acquire_many` (all or nothing; the permit returns all `n` on release). Waiters queue in arrival order (a waiter joins the line at its first poll that has to wait), and only the front of the line takes permits: a release wakes the front waiter if it can now run, and that waiter, taking its permit, wakes the next. `try_acquire()` is non-blocking and fails while anyone is queued. `asx_semaphore_add_permits` grows the pool (saturating) and wakes the front waiter if it can now run; `asx_semaphore_forget` drops a permit without returning its permits, aborting its obligation. A permit value is released once (C cannot consume a permit the way Rust's drop does), and a second release or forget is refused with `ASX_E_INVALID_STATE`: the runtime recognizes a mutex guard whose hold of the lock ended (so a stale guard cannot unlock a later holder's lock), a permit whose obligation its release committed or its forget aborted, and any release that would return permits nobody holds. Integrates with the obligation system for permit tracking. (The mutex instead hands the lock straight to the front waiter on unlock, as Rust's `Mutex` does.)
 
-**RwLock**: Many readers or one writer, following Rust's `RwLock` and its bounded writer-preference policy. A read or write takes the lock at its first poll if it can (a read when no writer holds or waits for it, a write when nobody holds it and no writer is queued); otherwise it joins the line and waits for a grant. A writer's release serves the oldest queued writer unless readers queued before it, who go first; the last reader's release serves the oldest queued writer; after 16 writer hand-offs in a row while a reader waits, the oldest queued reader gets a turn. Grants go to the front of the line even when its task has a cancel request pending; that waiter gives the lock back at its next poll. `try_read` / `try_write` fail while a writer waits. A write guard released with `asx_rwlock_write_unlock_poisoned()` (Rust's write guard dropped during a panic) poisons the lock: it wakes every queued waiter, and every later read or write fails with `ASX_E_INVALID_STATE`; read guards never poison. Unlike Rust, a write guard cannot be downgraded.
+**RwLock**: Many readers or one writer, following Rust's `RwLock` and its bounded writer-preference policy. A read or write takes the lock at its first poll if it can (a read when no writer holds or waits for it, a write when nobody holds it and no writer is queued); otherwise it joins the line and waits for a grant. A writer's release serves the oldest queued writer unless readers queued before it, who go first; the last reader's release serves the oldest queued writer; after 16 writer hand-offs in a row while a reader waits, the oldest queued reader gets a turn. Grants go to the front of the line even when its task has a cancel request pending; that waiter gives the lock back at its next poll. `try_read` / `try_write` fail while a writer waits. A write guard released with `asx_rwlock_write_unlock_poisoned()` (Rust's write guard dropped during a panic) poisons the lock: it wakes every queued waiter, and every later read or write fails with `ASX_E_INVALID_STATE`; read guards never poison. `asx_rwlock_downgrade()` turns a write guard into a read guard with no window in between, as Rust's `downgrade`: the readers queued before the first queued writer are admitted with it.
 
 **Barrier**: N-way rendezvous with leader election, following Rust's `Barrier`. A waiter arrives at its first `poll_wait` (not at `wait_begin`), after the Cx checkpoint that every poll starts with, so an already-cancelled task never arrives. All N must arrive before any proceed; the arrival that completes N trips the barrier and is elected leader (`is_leader = 1`), and the next arrival starts a new round. Cancel-safe: a cancelled waiter withdraws its arrival without tripping the barrier, unless its round already tripped, in which case release wins and the wait succeeds.
 
@@ -2226,7 +2226,7 @@ pushes and PRs:
 | `unit-invariant` | unit, invariant and vignette suites; C conformance suites; ABI check; formal harnesses (natively compiled, see Formal Verification); the unit suite with every capacity macro raised 4x and built for each resource class; the resource-pressure gate |
 | `e2e` | every e2e family (`tests/e2e/run_all.sh`, including HTTP on real sockets, browser, CLI and examples smoke), then the vertical lanes (HFT, automotive, continuity, router/market/fault bursts) |
 | `conformance` | oracle schemas, fixture integrity, gate negative controls, recorded codec digests, and the Rust-captured fixtures executed in C and compared |
-| `profile-parity` | recorded cross-profile digests (not executed), and the parallel-worker parity scenarios executed at worker counts 1, 2, 8 and 64 |
+| `profile-parity` | every v2 Rust fixture executed under eight host profiles, recorded legacy digests, and parallel-worker parity scenarios executed at worker counts 1, 2, 8 and 64 |
 | `fuzz-parity` | fuzz smoke and artifact validation |
 | `fuzz-rust-differential` | 200 generated scenarios (a fixed seed, so a regression gate) executed by asupersync's LabRuntime (`tools/twin_run`) and by the C runtime, which must match each one exactly; divergences are reduced by `twin_run minimize` and uploaded. The nightly workflow explores new seeds daily |
 | `compiler-matrix` | GCC and Clang × CORE/POSIX/FREESTANDING/EMBEDDED_ROUTER, plus Clang 21 on CORE and POSIX; the POSIX legs also run the live unit suite and native I/O |
@@ -2259,10 +2259,10 @@ larger class (`make RESOURCE_CLASS=2` or `3`) or raise the specific
 
 ### `profile-parity` fails between `core` and `embedded_router`
 
-`make profile-parity` compares the digests recorded for each profile variant
-of a fixture in `fixtures/rust_reference/`, so a failure means those recorded
-digests disagree. To check executed behavior on a profile, run the Rust
-fixtures under it, e.g. `make conformance PROFILE=EMBEDDED_ROUTER`.
+`make profile-parity` executes the Rust-captured v2 fixtures under eight host
+profiles and also compares recorded legacy digests in `fixtures/rust_reference/`.
+Inspect the failing lane to distinguish runtime drift from inconsistent legacy
+records. To isolate executed router behavior, run `make conformance PROFILE=EMBEDDED_ROUTER`.
 
 ```bash
 make profile-parity
@@ -2390,7 +2390,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->2,018<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->2,019<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

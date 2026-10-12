@@ -648,7 +648,9 @@ void asx_obligation_set_drop_internal(asx_obligation_id id, asx_obligation_drop_
 /* A genuine owned permit may move while retaining its original holder's
  * liability (Rust ObligationToken). These private boundaries authenticate
  * its primitive-specific resource binding; a raw obligation ID is not
- * sufficient. They do not transfer holder or region ownership. */
+ * sufficient. They do not transfer holder or region ownership. An id with
+ * no obligation behind it (a reservation the post drain refused) checks
+ * ASX_OK: the permit is untracked and nothing is resolved. */
 ASX_MUST_USE asx_status asx_obligation_check_token_internal(asx_obligation_id id,
                                                             asx_obligation_drop_fn fn, uint64_t a,
                                                             uint64_t b, uint32_t serial);

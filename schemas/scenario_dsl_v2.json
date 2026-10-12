@@ -200,7 +200,7 @@
       "properties": {"op": {"const": "recv_many"}, "channel": {"$ref": "#/$defs/name"}, "limit": {"type": "integer", "minimum": 0}}},
     "s_sync_ref_nb": {"type": "object", "additionalProperties": false, "oneOf": [
       {"required": ["op", "mutex"], "properties": {"op": {"const": "mutex_unlock"}, "mutex": {"$ref": "#/$defs/name"}}},
-      {"required": ["op", "rwlock"], "properties": {"op": {"const": "rwlock_unlock"}, "rwlock": {"$ref": "#/$defs/name"}}},
+      {"required": ["op", "rwlock"], "properties": {"op": {"enum": ["rwlock_unlock", "rwlock_downgrade"]}, "rwlock": {"$ref": "#/$defs/name"}}},
       {"required": ["op", "semaphore"], "properties": {"op": {"enum": ["sem_release", "sem_forget"]}, "semaphore": {"$ref": "#/$defs/name"}}},
       {"required": ["op", "notify"], "properties": {"op": {"enum": ["notify_one", "notify_all"]}, "notify": {"$ref": "#/$defs/name"}}}
     ], "properties": {"op": true, "mutex": true, "rwlock": true, "semaphore": true, "notify": true}},

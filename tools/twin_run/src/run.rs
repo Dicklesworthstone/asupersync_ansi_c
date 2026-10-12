@@ -53,8 +53,12 @@ struct Shared {
     /// Canonical (admitted) task ids; see `resolve_admissions`.
     task_ids: HashMap<String, TaskId>,
     task_names: HashMap<TaskId, String>,
-    /// Real task-record contexts, including declared tasks not yet polled.
+    /// Real task-record contexts, including declared tasks not yet polled,
+    /// of the tasks a `handoff` names as its destination only.
     task_contexts: HashMap<String, Cx>,
+    /// Every task a `handoff` step names as its destination
+    /// (`handoff_destinations`).
+    handoff_destinations: HashSet<String>,
     /// Weak references only: the destination future owns incoming tokens,
     /// including before its first poll, and drops them with its body.
     obligation_tokens: HashMap<String, Weak<Mutex<HashMap<String, ObligationToken>>>>,
@@ -427,6 +431,28 @@ fn finish_outcomes(s: &mut Shared) -> RunResult<()> {
         s.observations[index]["value"] = value;
     }
     Ok(())
+}
+
+/// Every task a `handoff` step anywhere in the scenario names as its
+/// destination.
+fn handoff_destinations(scenario: &Value) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut stack = vec![scenario];
+    while let Some(node) = stack.pop() {
+        match node {
+            Value::Object(map) => {
+                if map.get("op").and_then(Value::as_str) == Some("handoff")
+                    && let Some(task) = map.get("task").and_then(Value::as_str)
+                {
+                    out.insert(task.to_string());
+                }
+                stack.extend(map.values());
+            }
+            Value::Array(items) => stack.extend(items.iter()),
+            _ => {}
+        }
+    }
+    out
 }
 
 fn harness_error(shared: &SharedRef, msg: String) {
@@ -950,7 +976,9 @@ fn run_program(
     // constructing its future, before its first poll.
     {
         let mut s = lock(&ctx.shared);
-        s.task_contexts.insert(ctx.me.clone(), cx.clone());
+        if s.handoff_destinations.contains(&ctx.me) {
+            s.task_contexts.insert(ctx.me.clone(), cx.clone());
+        }
         s.obligation_tokens
             .insert(ctx.me.clone(), Arc::downgrade(&ctx.tokens));
     }
@@ -1282,6 +1310,29 @@ fn exec_sync(
                     "ASX_OK"
                 }
                 None => NOT_HELD, // its rwlock_read / rwlock_write failed (DSL §3)
+            };
+            observe(&ctx.shared, me, idx, label, status, Value::Null);
+        }
+        "rwlock_downgrade" => {
+            // The task's most recent write guard on the lock becomes a read
+            // guard in place (OwnedRwLockWriteGuard::downgrade,
+            // sync/rwlock.rs:1287).
+            let name = str_field(step, "rwlock")?;
+            let held = local.rw_guards.get_mut(name).and_then(|guards| {
+                let i = guards
+                    .iter()
+                    .rposition(|g| matches!(g, RwGuard::Write(_)))?;
+                Some((guards, i))
+            });
+            let status = match held {
+                Some((guards, i)) => {
+                    let RwGuard::Write(write) = guards.remove(i) else {
+                        return Err("rposition found no write guard".to_string());
+                    };
+                    guards.insert(i, RwGuard::Read(write.downgrade()));
+                    "ASX_OK"
+                }
+                None => NOT_HELD, // no write guard held on it (DSL §3)
             };
             observe(&ctx.shared, me, idx, label, status, Value::Null);
         }
@@ -2685,6 +2736,11 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
     lab.start_forced_schedule_recording(1 << 20)
         .map_err(|e| format!("{e:?}"))?;
     let shared: SharedRef = Arc::new(Mutex::new(Shared::default()));
+    // Only a handoff's destination needs its Cx held (to try_transfer to
+    // it). Holding any other task's would keep its CxInner alive after it
+    // completes, so an abort of the finished task would still queue a
+    // cancel command and spend a lab step a plain program does not.
+    lock(&shared).handoff_destinations = handoff_destinations(scenario);
 
     // Channels (DSL §3.6): each endpoint goes to its owner's body.
     let mut endpoints: HashMap<String, Vec<(String, Endpoint)>> = HashMap::new();
@@ -2890,7 +2946,9 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
             .ok_or_else(|| format!("task {name} has no runtime context"))?;
         lab.scheduler.lock().schedule(task_id, 0);
         let mut s = lock(&shared);
-        s.task_contexts.insert(name.clone(), task_cx);
+        if s.handoff_destinations.contains(&name) {
+            s.task_contexts.insert(name.clone(), task_cx);
+        }
         s.task_ids.insert(name.clone(), task_id);
         s.task_names.insert(task_id, name.clone());
         s.handles.insert(name, handle);

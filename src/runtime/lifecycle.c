@@ -1964,6 +1964,12 @@ asx_status asx_obligation_check_token_internal(asx_obligation_id id, asx_obligat
     asx_obligation_slot *o;
     asx_region_slot *region;
     asx_status st = asx_obligation_slot_lookup(id, &o);
+    /* No obligation behind the id: the post drain refused the permit's
+     * reservation against max_obligations and released its slot
+     * (asx_obligation_drain_posts_internal). The permit is untracked, as
+     * Rust's whose registration was refused, and settles physically with
+     * nothing to resolve; its primitive still authenticates it. */
+    if (st == ASX_E_NOT_FOUND || st == ASX_E_STALE_HANDLE) return ASX_OK;
     if (st != ASX_OK) return st;
     if (fn == NULL || o->drop_a != a || o->drop_b != b || o->drop_serial != serial ||
         (o->drop_fn != fn && (o->state == ASX_OBLIGATION_RESERVED || o->drop_fn != NULL))) {

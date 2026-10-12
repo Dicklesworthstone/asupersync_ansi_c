@@ -149,6 +149,17 @@ ASX_API asx_status asx_rwlock_read_unlock(asx_rwlock_read_guard guard);
 /* Release a write lock. May wake waiting readers or a writer. */
 ASX_API asx_status asx_rwlock_write_unlock(asx_rwlock_write_guard guard);
 
+/* Turn a write lock into a read lock with no window in between (Rust
+ * RwLockWriteGuard::downgrade, rwlock.rs:1110-1143): the write guard is
+ * spent and *out_read is the read guard to release with
+ * asx_rwlock_read_unlock. The queued readers that arrived before the
+ * first queued writer (all of them when no writer is queued) are granted
+ * the lock with it; a queued writer keeps waiting.
+ * Returns ASX_E_INVALID_ARGUMENT for a NULL out_read, ASX_E_STALE_HANDLE
+ * for an unknown lock, ASX_E_INVALID_STATE when it is not write-locked. */
+ASX_API ASX_MUST_USE asx_status asx_rwlock_downgrade(asx_rwlock_write_guard guard,
+                                                     asx_rwlock_read_guard *out_read);
+
 /* Release a write lock as Rust's RwLockWriteGuard does when dropped while
  * its task panics (rwlock.rs:1083-1090): the lock is poisoned, then
  * released, waking every queued waiter. From then on try_read, try_write

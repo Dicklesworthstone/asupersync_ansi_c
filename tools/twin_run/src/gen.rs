@@ -466,6 +466,11 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
             }
             23 => return json!({"op": "sleep_until", "at_ns": 50 * (1 + rng.below(12))}),
             24 if world.rwlock => {
+                // A held guard is sometimes downgraded first (a read guard
+                // has nothing to downgrade: ASX_E_NOT_FOUND in both).
+                if held.rw && rng.chance(25) {
+                    return json!({"op": "rwlock_downgrade", "rwlock": "rw"});
+                }
                 held.rw = !held.rw;
                 return if held.rw {
                     rw_acquire(rng)
@@ -579,7 +584,13 @@ fn critical_section(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> 
             json!({"op": "rwlock_unlock", "rwlock": "rw"}),
         ),
     };
+    let is_write = acquire["op"] == "rwlock_write";
     let mut steps = vec![acquire];
+    // A writer sometimes downgrades at once: the readers queued ahead of
+    // the first queued writer then run beside it.
+    if is_write && rng.chance(30) {
+        steps.push(json!({"op": "rwlock_downgrade", "rwlock": "rw"}));
+    }
     for _ in 0..1 + rng.below(3) {
         steps.push(match rng.below(3) {
             0 => json!({"op": "yield"}),

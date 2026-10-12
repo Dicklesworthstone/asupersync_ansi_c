@@ -47,7 +47,10 @@
  * readers then writers, granting nothing. try_read / try_write, and every
  * poll after its Cx checkpoint, then fail with ASX_E_INVALID_STATE (Rust
  * RwLockError::Poisoned). A read guard never poisons.
- * Not ported: write-guard downgrade.
+ *
+ * Downgrade (asx_rwlock_downgrade, RwLockWriteGuard::downgrade,
+ * rwlock.rs:1110-1143): the writer becomes one reader without releasing,
+ * and the readers queued before the first queued writer join it.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -497,6 +500,24 @@ asx_status asx_rwlock_write_unlock(asx_rwlock_write_guard guard) {
     s->write_locked = 0;
     rw_reap(s);
     rw_after_writer(s);
+    return ASX_OK;
+}
+
+asx_status asx_rwlock_downgrade(asx_rwlock_write_guard guard, asx_rwlock_read_guard *out_read) {
+    rw_slot *s;
+    if (out_read == NULL) return ASX_E_INVALID_ARGUMENT;
+    s = slot_lookup(guard.rw_slot, guard.generation);
+    if (s == NULL) return ASX_E_STALE_HANDLE;
+    if (!s->write_locked) return ASX_E_INVALID_STATE;
+
+    rw_reap(s);
+    /* writer_active -> one reader, then take_eligible_reader_waiters; a
+     * reader admitted resets the writer streak (rwlock.rs:1120-1134). */
+    s->write_locked = 0;
+    s->readers = 1u;
+    if (rw_grant_readers(s, 0) > 0u) s->writer_streak = 0;
+    out_read->rw_slot = guard.rw_slot;
+    out_read->generation = guard.generation;
     return ASX_OK;
 }
 
