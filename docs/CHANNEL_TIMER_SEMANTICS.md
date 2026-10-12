@@ -465,7 +465,7 @@ The Rust multi-worker scheduler has three priority lanes:
 | `DrainObligations` | Cancel > Timed > Ready (cancel-streak limit doubled, `:6960-6965`) |
 | `DrainRegions` | Cancel > Timed > Ready (cancel-streak limit doubled) |
 
-**C status:** spec (Rust) — not implemented in C. The C lab has a cancel lane and a ready lane and no governor (`src/runtime/lab_dispatch.c:611-631`). Rust's `LabRuntime::pop_for_worker` also checks a timed lane (`lab/runtime.rs:6347-6353`), but in `src/lab` nothing outside tests feeds it: `schedule_timed` (`lab/runtime.rs:6242`) is called only at `:7658` and `:7723`, inside the `#[cfg(test)]` module that starts at `:6691`. `parallel.c` polls its lanes in the order cancel, ready, timed (`src/runtime/parallel.c:713-717`), which differs from Rust's cancel > timed > ready. Rust parity of cancel-lane-first in the lab: `lab-dispatch-cancel-waker-once-001` (a task is dispatched once on the cancel lane, then on the ready lane).
+**C status:** spec (Rust) — not implemented in C. The C lab has a cancel lane and a ready lane and no governor (`src/runtime/lab_dispatch.c:611-631`). Rust's `LabRuntime::pop_for_worker` also checks a timed lane (`lab/runtime.rs:6347-6353`), but in `src/lab` nothing outside tests feeds it: `schedule_timed` (`lab/runtime.rs:6242`) is called only at `:7658` and `:7723`, inside the `#[cfg(test)]` module that starts at `:6691`. `parallel.c` polls its lanes in Rust's order, cancel, timed, ready (`g_priority_order` in `src/runtime/parallel.c`, bd-9kll.4.7); its timed lane dispatches the earliest due deadline (the task's armed timer or budget deadline) and consumes the entry. The sweep scheduler (`scheduler.c`, non-lab) dispatches the cancel lane before ready work and orders both by priority (bd-9kll.4.6). Rust parity of cancel-lane-first in the lab: `lab-dispatch-cancel-waker-once-001` (a task is dispatched once on the cancel lane, then on the ready lane).
 
 ### 3.2 Scheduler Loop
 
@@ -780,9 +780,9 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 
 | Fixture ID | Description | Tests | Status |
 |------------|-------------|-------|--------|
-| `sc-lane-priority-001` | Cancel dispatched before timed before ready | Lane ordering | Not materialized; partly covered by `lab-dispatch-cancel-waker-once-001` (cancel lane before ready lane; C has no timed lane) |
+| `sc-lane-priority-001` | Cancel dispatched before timed before ready | Lane ordering | Not materialized; partly covered by `lab-dispatch-cancel-waker-once-001` (cancel lane before ready lane; the C lab has no timed lane). `parallel.c` has one: `parallel_lanes_dispatch_cancel_then_timed_then_ready` (C only) |
 | `sc-fifo-priority-001` | Equal priority tasks dispatched in insertion order | FIFO | Not materialized; under lab dispatch equal-priority tasks are picked by RNG, not FIFO |
-| `sc-edf-001` | Timed tasks dispatched earliest-deadline-first | EDF | Not materialized; no timed lane in C |
+| `sc-edf-001` | Timed tasks dispatched earliest-deadline-first | EDF | Not materialized as a fixture (Rust's lab never feeds its timed lane at the pinned rev; the C lab has none). `parallel.c` has an EDF timed lane: `parallel_timed_lane_dispatches_earliest_deadline_first`, `parallel_timed_task_waits_for_its_deadline` (C only) |
 | `sc-edf-fifo-001` | Equal deadline timed tasks dispatched FIFO | EDF + FIFO | Not materialized; no timed lane in C |
 | `sc-rng-tiebreak-001` | RNG tie-breaking deterministic with seed | Determinism | Not materialized; covered by `lab-dispatch-tie-break-001`, `scheduler-yield-interleave-001` |
 | `sc-steal-001` | Work stealing follows RNG-seeded order | Stealing | Not materialized; not implemented in C |
@@ -828,7 +828,7 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 
 | ID | Invariant | Category | C |
 |----|-----------|----------|---|
-| `INV-SC-01` | Cancel lane dispatched before timed before ready (default) | Lane priority | Lab: cancel before ready, no timed lane; `parallel.c`: cancel, ready, timed |
+| `INV-SC-01` | Cancel lane dispatched before timed before ready (default) | Lane priority | Lab: cancel before ready, no timed lane; sweep: cancel before ready, by priority; `parallel.c`: cancel, timed, ready |
 | `INV-SC-02` | Equal-priority entries are heap-ordered by generation; RNG-hinted pops choose among them by `rng % count` | Ordering | Lab: RNG pick in generation order (`lab_dispatch.c:569-609`) |
 | `INV-SC-03` | Equal-deadline timed entries ordered by generation | EDF ordering | Not implemented |
 | `INV-SC-04` | Cancel-streak limit prevents cancellation starvation | Fairness | Lab: 16, no doubling; `parallel.c`: 16 |

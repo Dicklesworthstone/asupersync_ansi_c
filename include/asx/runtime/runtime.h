@@ -888,8 +888,12 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_get_state(asx_obligation_id id,
  * Scheduler
  *
  * The scheduler drives every task in the region *subtree* (the region
- * and all of its descendants), in ascending arena-index order within a
- * round. Scheduling is wake-driven:
+ * and all of its descendants). Within a round it polls the cancel lane
+ * first (tasks with a cancel request, by cleanup priority), then the other
+ * tasks by budget priority, higher first; within one priority in ascending
+ * arena-index order. After 16 cancel-lane polls in a row it polls one
+ * ready task, as Rust's three-lane scheduler does (cancel_streak_limit).
+ * Scheduling is wake-driven:
  *
  *   - a task that returns ASX_E_PENDING stays runnable and is re-polled
  *     next round (cooperative yield), UNLESS it called asx_task_park()
@@ -913,7 +917,8 @@ ASX_API ASX_MUST_USE asx_status asx_obligation_get_state(asx_obligation_id id,
  *
  * Preconditions: region must be a valid handle; budget must not be NULL
  *   and must have remaining polls > 0.
- * Postconditions: tasks are polled in arena-index order; event log is
+ * Postconditions: tasks are polled cancel lane first, then by budget
+ *   priority, in arena-index order within a priority; event log is
  *   populated; budget is decremented once per poll.
  * Returns ASX_OK when all tasks complete (quiescent); the regions stay
  *   open, as after Rust's run_until_idle: asx_region_close or
@@ -1156,8 +1161,9 @@ ASX_API ASX_MUST_USE asx_status asx_task_get_error(asx_task_id id, asx_status *o
  * are deterministic for identical input and seed — suitable for
  * replay identity verification.
  *
- * Tie-break rule: tasks are polled in arena index order within a
- * round. Index order is stable and deterministic.
+ * Tie-break rule: within a round tasks are polled cancel lane first, then
+ * by budget priority; arena index order breaks ties within a priority.
+ * The order is stable and deterministic.
  * ------------------------------------------------------------------- */
 
 typedef enum {
