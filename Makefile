@@ -1526,7 +1526,8 @@ bench: bench-build
 	@$(BENCH_BIN)
 	@echo "[asx] bench: complete"
 
-bench-json: bench-build
+bench-json:
+	@$(MAKE) --no-print-directory bench-build >&2
 	@$(BENCH_BIN) --json
 
 parallel-bench-json:
