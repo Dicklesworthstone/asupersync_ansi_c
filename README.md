@@ -1989,8 +1989,11 @@ make fuzz-nightly        # 100,000 iterations (nightly)
 Durable counterexamples live in `fixtures/fuzz_counterexamples/` with schema
 `asx.fuzz_counterexample.v1`. Add minimized C sanitizer crashes or determinism
 failures there after triage; every fixture records the deterministic input
-seed, expected C exit and summary counters, and minimization metadata. Live
-DSL v2 Rust-vs-C counterexamples use `fixtures/fuzz_counterexamples_v2/`.
+seed, expected C exit and summary counters, and minimization metadata.
+`make fuzz-minimize` retains live DSL v2 counterexamples under
+`build/fuzz_v2/seed-<seed>/minimized/`. After fixing a divergence, its genuine
+Rust regression capture goes into `fixtures/rust_reference_v2/` and its input
+into `tests/conformance/scenarios_v2/`.
 
 Resource-pressure scenarios live in `fixtures/resource_pressure/` with schema
 `asx.resource_pressure.failure_atomic_scenarios.v1`. Each listed scenario must

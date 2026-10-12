@@ -19,6 +19,6 @@
     "minimized": false,
     "minimizer": "tests/fuzz/fuzz_minimize.c",
     "minimal_input_digest": null,
-    "notes": "Add minimized C sanitizer crashes or determinism failures with the same schema and expected C counters. Live DSL v2 Rust-vs-C counterexamples use fixtures/fuzz_counterexamples_v2."
+    "notes": "Add minimized C sanitizer crashes or determinism failures with the same schema and expected C counters. make fuzz-minimize retains live DSL v2 Rust-vs-C counterexamples under build/fuzz_v2/seed-<seed>/minimized; fixed divergences become genuine regression captures in fixtures/rust_reference_v2."
   }
 }
