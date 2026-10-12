@@ -1608,6 +1608,404 @@ TEST(parallel_commit_authority_snapshot_tracks_single_commit_stream) {
 }
 
 /* ================================================================
+ * Lane order, EDF timed lane, parked tasks (bd-9kll.4.7)
+ *
+ * Rust's three-lane scheduler dispatches cancel, then timed (earliest
+ * deadline first, and only once due), then ready (three_lane.rs:3,
+ * priority.rs:54-79, 546-560), and polls a task again only when woken.
+ * ================================================================ */
+
+typedef struct {
+    int id;
+    int polls;
+    int yield_polls;    /* ASX_E_PENDING for this many polls, then ASX_OK */
+    asx_task_id victim; /* cancelled by this task's first poll */
+} order_task;
+
+static asx_status poll_order_yield_cancel(void *data, asx_task_id self) {
+    order_task *s = (order_task *)data;
+    (void)self;
+    if (g_poll_order_count < 8u) {
+        g_poll_order[g_poll_order_count] = s->id;
+        g_poll_order_count++;
+    }
+    s->polls++;
+    if (s->victim != ASX_INVALID_ID) {
+        asx_status st = asx_task_cancel(s->victim, ASX_CANCEL_USER);
+        (void)st;
+        s->victim = ASX_INVALID_ID;
+    }
+    return s->polls <= s->yield_polls ? ASX_E_PENDING : ASX_OK;
+}
+
+static asx_budget budget_with_deadline(asx_time deadline) {
+    asx_budget b = asx_budget_new();
+    b.deadline = deadline;
+    return b;
+}
+
+TEST(parallel_lanes_dispatch_cancel_then_timed_then_ready) {
+    asx_region_id rid;
+    asx_task_id ready_t, timed_t, cancel_t;
+    asx_budget budget;
+    asx_budget due = budget_with_deadline(0u);
+    asx_parallel_config cfg = default_config();
+    poll_order_state ready_s = {1};
+    poll_order_state timed_s = {2};
+    poll_order_state cancel_s = {3};
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    /* The ready task is spawned first and the cancel task last, so any
+     * arena-order or ready-first dispatch shows. */
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &ready_s, &ready_t), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_record_order, &timed_s, &due, &timed_t), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &cancel_s, &cancel_t), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(timed_t), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(cancel_t, ASX_CANCEL_USER), ASX_OK);
+
+    budget = asx_budget_from_polls(30);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(g_poll_order_count, 3u);
+    ASSERT_EQ(g_poll_order[0], 3); /* cancel */
+    ASSERT_EQ(g_poll_order[1], 2); /* timed, due */
+    ASSERT_EQ(g_poll_order[2], 1); /* ready */
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_timed_lane_dispatches_earliest_deadline_first) {
+    asx_region_id rid;
+    asx_task_id t[4];
+    asx_budget budget;
+    asx_budget b30 = budget_with_deadline(30u);
+    asx_budget b10 = budget_with_deadline(10u);
+    asx_budget b20 = budget_with_deadline(20u);
+    asx_parallel_config cfg = default_config();
+    poll_order_state s[4];
+    uint32_t i;
+
+    reset_all();
+    for (i = 0; i < 4u; i++) { s[i].id = (int)i + 1; }
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    /* Deadlines 30, 10, 20, 10: injected in that order. */
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_record_order, &s[0], &b30, &t[0]), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_record_order, &s[1], &b10, &t[1]), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_record_order, &s[2], &b20, &t[2]), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_record_order, &s[3], &b10, &t[3]), ASX_OK);
+    for (i = 0; i < 4u; i++) { ASSERT_EQ(asx_inject_timed(t[i]), ASX_OK); }
+
+    /* Every deadline is due. */
+    ASSERT_TRUE(asx_runtime_clock_is_virtual());
+    asx_runtime_virtual_advance(30u);
+
+    budget = asx_budget_from_polls(20);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    ASSERT_EQ(g_poll_order_count, 4u);
+    ASSERT_EQ(g_poll_order[0], 2); /* deadline 10, injected first of the two */
+    ASSERT_EQ(g_poll_order[1], 4); /* deadline 10, injected second */
+    ASSERT_EQ(g_poll_order[2], 3); /* deadline 20 */
+    ASSERT_EQ(g_poll_order[3], 1); /* deadline 30 */
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_timed_task_waits_for_its_deadline) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_budget b100 = budget_with_deadline(100u);
+    asx_parallel_config cfg = default_config();
+    poll_order_state s = {1};
+
+    reset_all();
+    ASSERT_TRUE(asx_runtime_clock_is_virtual());
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_record_order, &s, &b100, &tid), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(tid), ASX_OK);
+
+    /* The clock is at 0: the entry is not due, and nothing else can run. */
+    budget = asx_budget_from_polls(5);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(g_poll_order_count, 0u);
+
+    asx_runtime_virtual_advance(99u);
+    budget = asx_budget_from_polls(5);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(g_poll_order_count, 0u);
+
+    asx_runtime_virtual_advance(100u);
+    budget = asx_budget_from_polls(5);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(g_poll_order_count, 1u);
+    ASSERT_EQ(g_poll_order[0], 1);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_timed_task_with_armed_timer_runs_at_the_timer) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    poll_order_state s = {1};
+
+    reset_all();
+    ASSERT_TRUE(asx_runtime_clock_is_virtual());
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &s, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_arm_timer(tid, 50u), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(tid), ASX_OK);
+
+    /* Nothing is runnable at time 0; the run idles, the virtual clock
+     * jumps to the timer, and the task is due. Its fired timer has left
+     * the heap, so the deadline it carried into the lane is what keeps it
+     * due. */
+    budget = asx_budget_from_polls(5);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(g_poll_order_count, 1u);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)50u);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_timed_dispatch_consumes_the_lane_entry) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_budget due = budget_with_deadline(0u);
+    asx_parallel_config cfg = default_config();
+    asx_lane_state ls;
+    asx_scheduling_metrics metrics;
+    order_task s;
+
+    reset_all();
+    memset(&s, 0, sizeof(s));
+    s.id = 1;
+    s.yield_polls = 5;
+    s.victim = ASX_INVALID_ID;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_order_yield_cancel, &s, &due, &tid), ASX_OK);
+    ASSERT_EQ(asx_inject_timed(tid), ASX_OK);
+
+    /* Two polls: the timed dispatch, then the task as ready work. */
+    budget = asx_budget_from_polls(2);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(s.polls, 2);
+
+    ASSERT_EQ(asx_lane_get_state(ASX_LANE_TIMED, &ls), ASX_OK);
+    ASSERT_EQ(ls.task_count, 0u);
+    ASSERT_EQ(asx_lane_get_state(ASX_LANE_READY, &ls), ASX_OK);
+    ASSERT_EQ(ls.task_count, 1u);
+    ASSERT_EQ(asx_parallel_get_metrics(&metrics), ASX_OK);
+    ASSERT_EQ(metrics.timed_dispatches, 1u);
+    ASSERT_EQ(metrics.ready_dispatches, 1u);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_cancel_requested_mid_run_is_dispatched_from_the_cancel_lane) {
+    asx_region_id rid;
+    asx_task_id killer_t, y_t, z_t;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    order_task killer;
+    order_task y;
+    order_task z;
+
+    reset_all();
+    memset(&killer, 0, sizeof(killer));
+    memset(&y, 0, sizeof(y));
+    memset(&z, 0, sizeof(z));
+    killer.id = 3;
+    killer.victim = ASX_INVALID_ID;
+    y.id = 1;
+    y.yield_polls = 2;
+    y.victim = ASX_INVALID_ID;
+    z.id = 2;
+    z.yield_polls = 2;
+    z.victim = ASX_INVALID_ID;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_order_yield_cancel, &killer, &killer_t), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_order_yield_cancel, &y, &y_t), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_order_yield_cancel, &z, &z_t), ASX_OK);
+    killer.victim = z_t;
+
+    budget = asx_budget_from_polls(30);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    /* Round 0: killer (cancels z), y, z. From round 1 on z is cancel
+     * work: it goes before y. Left in the ready lane it would follow y. */
+    ASSERT_EQ(g_poll_order_count, 7u);
+    ASSERT_EQ(g_poll_order[0], 3);
+    ASSERT_EQ(g_poll_order[1], 1);
+    ASSERT_EQ(g_poll_order[2], 2);
+    ASSERT_EQ(g_poll_order[3], 2);
+    ASSERT_EQ(g_poll_order[4], 1);
+    ASSERT_EQ(g_poll_order[5], 2);
+    ASSERT_EQ(g_poll_order[6], 1);
+
+    asx_parallel_reset();
+}
+
+typedef struct {
+    int polls;
+    int go;
+} park_state;
+
+/* Waits for `go`: parks itself after arranging nothing but the host's
+ * wake (asx_task_wake from outside the run). */
+static asx_status poll_park_until_go(void *data, asx_task_id self) {
+    park_state *s = (park_state *)data;
+    asx_status st;
+    s->polls++;
+    if (s->go) { return ASX_OK; }
+    st = asx_task_park(self);
+    (void)st;
+    return ASX_E_PENDING;
+}
+
+/* Wakes itself, then parks: the wake arrived before the poll returned, so
+ * the park is void and the task stays runnable. */
+static asx_status poll_wake_self_then_park(void *data, asx_task_id self) {
+    park_state *s = (park_state *)data;
+    asx_status st;
+    s->polls++;
+    if (s->polls >= 2) { return ASX_OK; }
+    st = asx_task_wake(self);
+    (void)st;
+    st = asx_task_park(self);
+    (void)st;
+    return ASX_E_PENDING;
+}
+
+TEST(parallel_parked_task_is_not_polled_until_woken) {
+    asx_region_id rid;
+    asx_task_id parked_t, done_t;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    park_state s;
+
+    reset_all();
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_park_until_go, &s, &parked_t), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_complete, NULL, &done_t), ASX_OK);
+
+    /* The parked task is polled once; the other completes; then nothing
+     * can wake the parked one, which the run reports instead of spinning
+     * its poll budget away. */
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(s.polls, 1);
+    ASSERT_EQ(asx_budget_polls(&budget), 48u);
+
+    /* Still parked on another run: no poll. */
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(s.polls, 1);
+
+    /* A wake makes it runnable again. */
+    s.go = 1;
+    ASSERT_EQ(asx_task_wake(parked_t), ASX_OK);
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(s.polls, 2);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_wake_before_the_poll_returns_voids_the_park) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    park_state s;
+
+    reset_all();
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_wake_self_then_park, &s, &tid), ASX_OK);
+
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(s.polls, 2);
+
+    asx_parallel_reset();
+}
+
+typedef struct {
+    int polls;
+    asx_time deadline;
+} sleep_state;
+
+static asx_status poll_sleep_until(void *data, asx_task_id self) {
+    sleep_state *s = (sleep_state *)data;
+    s->polls++;
+    return asx_task_wait_until(self, s->deadline);
+}
+
+TEST(parallel_sleeping_task_is_woken_by_its_timer) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    sleep_state s;
+
+    reset_all();
+    ASSERT_TRUE(asx_runtime_clock_is_virtual());
+    s.polls = 0;
+    s.deadline = 50u;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_until, &s, &tid), ASX_OK);
+
+    /* First poll arms the timer and parks; the run idles, the virtual
+     * clock jumps to the deadline, the timer wakes the task, and its
+     * second poll completes. Two polls, however large the budget. */
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(s.polls, 2);
+    ASSERT_EQ(asx_runtime_virtual_now(), (asx_time)50u);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_run_stops_at_the_budget_deadline_while_idle) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    sleep_state s;
+
+    reset_all();
+    ASSERT_TRUE(asx_runtime_clock_is_virtual());
+    s.polls = 0;
+    s.deadline = 1000u;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_sleep_until, &s, &tid), ASX_OK);
+
+    /* The sleeper wakes at 1000; the run's own deadline is 200. */
+    budget = asx_budget_from_polls(100);
+    budget.deadline = 200u;
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_TIMED_OUT);
+    ASSERT_EQ(s.polls, 1);
+
+    asx_parallel_reset();
+}
+
+/* ================================================================
  * main
  * ================================================================ */
 
@@ -1676,6 +2074,18 @@ int main(void) {
     RUN_TEST_IF(ASX_MAX_WORKERS >= 2u, timed_equal_deadline_wakers_preserve_fire_order,
                 "needs 2 workers");
     RUN_TEST_IF(ASX_MAX_WORKERS >= 2u, reactor_readiness_promotes_timed_waker, "needs 2 workers");
+
+    /* Lane order (cancel > timed > ready), EDF timed lane, parked tasks */
+    RUN_TEST(parallel_lanes_dispatch_cancel_then_timed_then_ready);
+    RUN_TEST(parallel_timed_lane_dispatches_earliest_deadline_first);
+    RUN_TEST(parallel_timed_task_waits_for_its_deadline);
+    RUN_TEST(parallel_timed_task_with_armed_timer_runs_at_the_timer);
+    RUN_TEST(parallel_timed_dispatch_consumes_the_lane_entry);
+    RUN_TEST(parallel_cancel_requested_mid_run_is_dispatched_from_the_cancel_lane);
+    RUN_TEST(parallel_parked_task_is_not_polled_until_woken);
+    RUN_TEST(parallel_wake_before_the_poll_returns_voids_the_park);
+    RUN_TEST(parallel_sleeping_task_is_woken_by_its_timer);
+    RUN_TEST(parallel_run_stops_at_the_budget_deadline_while_idle);
 
     /* Worker routing */
     RUN_TEST_IF(ASX_MAX_WORKERS >= 4u, parallel_multi_worker_steals_preserve_completion,

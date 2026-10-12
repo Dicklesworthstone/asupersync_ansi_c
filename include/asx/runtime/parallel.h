@@ -60,7 +60,16 @@ extern "C" {
  * Tasks are assigned to lanes by their work class:
  *   READY  — tasks with no pending cancel or timer dependency
  *   CANCEL — tasks in cancel phase (CancelRequested, Cancelling)
- *   TIMED  — tasks blocked on timer deadlines
+ *   TIMED  — tasks that run at a deadline: the earlier of the task's armed
+ *            wake timer and its budget deadline. A run dispatches a timed
+ *            task once its deadline is due, earliest first (equal
+ *            deadlines in the order they entered the lane); a task with
+ *            neither waits there until a waker promotes it to READY. A
+ *            dispatch consumes the entry: the task is READY work after.
+ *
+ * A run dispatches the lanes in Rust's three-lane order, cancel > timed >
+ * ready (three_lane.rs), and never polls a parked task (one that returned
+ * ASX_E_PENDING after arranging a wake, asx_task_park) until it is woken.
  * ------------------------------------------------------------------- */
 
 typedef enum { ASX_LANE_READY = 0, ASX_LANE_CANCEL = 1, ASX_LANE_TIMED = 2 } asx_lane_class;
@@ -71,7 +80,7 @@ typedef enum { ASX_LANE_READY = 0, ASX_LANE_CANCEL = 1, ASX_LANE_TIMED = 2 } asx
  * Controls how poll budget is distributed across lanes:
  *   ROUND_ROBIN — each lane gets equal share per round
  *   WEIGHTED    — lanes get budget proportional to assigned weights
- *   PRIORITY    — cancel lane drains first, then ready, then timed
+ *   PRIORITY    — cancel lane drains first, then timed, then ready
  * ------------------------------------------------------------------- */
 
 typedef enum {
@@ -265,8 +274,16 @@ ASX_API uint32_t asx_parallel_worker_count(void);
  * In single-worker mode (worker_count=1), produces identical event
  * streams to asx_scheduler_run() for deterministic parity.
  *
+ * Parked tasks are not polled until woken. When nothing can be polled the
+ * run idles as asx_scheduler_run does: due task timers fire, the virtual
+ * clock jumps to the earliest armed timer, and pending I/O or a real clock
+ * is waited on (bounded by the budget's deadline).
+ *
  * Returns ASX_OK when all tasks complete,
  *   ASX_E_POLL_BUDGET_EXHAUSTED if budget runs out,
+ *   ASX_E_TIMED_OUT if the budget's deadline passed before completion,
+ *   ASX_E_WOULD_BLOCK if every remaining task is parked and no timer, waker
+ *     or I/O registration can wake any of them,
  *   ASX_E_INVALID_ARGUMENT if budget is NULL.
  *
  * Fairness guarantee: no lane is starved for more than
@@ -297,7 +314,8 @@ ASX_API uint32_t asx_parallel_max_starvation(void);
  * Returns ASX_E_INVALID_ARGUMENT for malformed/stale/non-task handles. */
 ASX_API ASX_MUST_USE asx_status asx_inject_cancel(asx_task_id tid);
 
-/* Inject a task into the timed lane (deadline-ordered).
+/* Inject a task into the timed lane (deadline-ordered: the earlier of the
+ * task's armed wake timer and its budget deadline, see asx_lane_class).
  * Used for tasks blocked on timer deadlines.
  * Returns ASX_E_INVALID_ARGUMENT for malformed/stale/non-task handles. */
 ASX_API ASX_MUST_USE asx_status asx_inject_timed(asx_task_id tid);
