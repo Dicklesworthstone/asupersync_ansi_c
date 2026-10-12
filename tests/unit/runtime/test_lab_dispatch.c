@@ -25,13 +25,16 @@
 
 static asx_runtime g_rt;
 
-/* A runtime on the virtual clock (default stub hooks). */
+/* A runtime on the virtual clock (default stub hooks). The obligation post
+ * tests below end with a task completing while it holds a checked
+ * obligation, so the leak response is LOG explicitly, not the default. */
 static asx_status setup(void) {
     asx_runtime_config cfg;
     asx_runtime_hooks hooks;
     asx_status st;
     if (asx_runtime_is_initialized(&g_rt)) asx_runtime_shutdown(&g_rt);
     asx_runtime_config_init(&cfg);
+    cfg.leak_response = ASX_LEAK_LOG;
     st = asx_runtime_hooks_init(&hooks);
     if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);
     return st;
