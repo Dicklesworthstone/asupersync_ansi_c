@@ -475,9 +475,8 @@ make profile-parity
 ### `make fuzz-smoke`
 
 Run the C fuzz harness's smoke lane (`tests/fuzz/fuzz_differential.c`):
-self-consistency and crash freedom of the C runtime. It compares against Rust
-only when given `RUST_FUZZ_BINARY=...`; Rust-vs-C differential fuzzing proper
-is `make fuzz-differential`.
+self-consistency and crash checks of the C runtime. This lane measures only
+C behavior; Rust-vs-C differential fuzzing is `make fuzz-differential`.
 
 ```bash
 make fuzz-smoke
@@ -505,13 +504,12 @@ make fuzz-parsers-smoke FUZZ_PARSERS_SECONDS=300
 ### `make fuzz-counterexample-replay`
 
 Replay the durable minimized fuzz counterexample corpus. The gate runs each
-fixture with deterministic seeds, checks the C fuzz harness summary counters,
-optionally compares a Rust reference binary when provided, and writes a
+fixture with deterministic seeds, checks the C fuzz harness exit and summary counters,
+requires every requested iteration to complete, and writes a
 machine-readable report under `build/fuzz/counterexamples/`.
 
 ```bash
 make fuzz-counterexample-replay
-make fuzz-counterexample-replay RUST_FUZZ_BINARY=tools/rust_fuzz_target/target/release/rust_fuzz_target
 ```
 
 ### `make resource-pressure-gate`
@@ -880,9 +878,10 @@ make fixture-integrity  # Fixture schema, provenance, digest recompute, codec ro
 make test-gates         # Gate negative controls (bad fixtures rejected, planted bugs caught)
 make conformance        # Rust parity: every v2 fixture executed in C and compared
 make fuzz-differential  # Seeded Rust-vs-C differential fuzzing (needs Rust)
+make test-fuzz-differential # Live Rust oracle, planted C mutation and minimizer controls
 make codec-equivalence  # JSON vs BIN digests recorded in fixtures (runtime not executed)
 make profile-parity     # Cross-profile digests recorded in fixtures (runtime not executed)
-make fuzz-smoke         # C fuzz harness smoke (Rust comparison only with RUST_FUZZ_BINARY)
+make fuzz-smoke         # C determinism and crash checks only
 make formal-check       # Transition harnesses + algebraic + litmus (native; no CBMC run)
 make ci-embedded-matrix # Cross-target embedded builds (size/layout rows; not run)
 make test-unit TARGET=mips-linux-gnu PROFILE=EMBEDDED_ROUTER BUILD_DIR=build/qemu-mips \
@@ -1967,7 +1966,17 @@ The C fuzz harness (`tests/fuzz/fuzz_differential.c`) generates random operation
 
 1. **Self-consistency**: Running the same scenario with the same seed produces identical semantic digests.
 2. **Mutant robustness**: each scenario is mutated (remove, duplicate, swap, change kind, tweak argument, insert, change index) and run twice; both runs must match, and a crash aborts the run. The fuzz build (`-O2 -DNDEBUG`) has no sanitizers, so undefined behavior that does not crash goes undetected (CI's `sanitizers` job runs the unit suite, not the fuzzer, under ASan/UBSan).
-3. **Rust parity**: only with `--rust-binary`; otherwise the summary reports the comparison as skipped. Rust-vs-C differential fuzzing proper is `make fuzz-differential`, which runs generated DSL v2 scenarios in asupersync itself (twin_run) and in C, and compares them exactly.
+
+These C checks do not measure Rust parity. `make fuzz-differential` runs
+generated DSL v2 scenarios in asupersync itself (`tools/twin_run`) and in C,
+then compares the same canonical outputs exactly.
+
+`make test-fuzz-differential` checks live Rust captures against both the clean
+C runtime and a budget-priority mutant, then requires a reduced counterexample
+to pass the clean runtime and fail the mutant. The old
+`tools/rust_fuzz_target` crate is retained as historical source and deliberately
+refuses to compile: its digest used a different projection from C and could
+not establish semantic parity.
 
 The fuzzer covers cancellation, timers, channels, obligations, budget exhaustion, region lifecycle, and quiescence. A companion minimizer (`fuzz_minimize.c`) performs delta-minimization on failing cases to produce minimal reproducing scenarios.
 
@@ -1978,10 +1987,10 @@ make fuzz-nightly        # 100,000 iterations (nightly)
 ```
 
 Durable counterexamples live in `fixtures/fuzz_counterexamples/` with schema
-`asx.fuzz_counterexample.v1`. Add minimized sanitizer crashes or Rust-vs-C
-divergences there after triage; every fixture records the deterministic input
-seed, expected summary counters, Rust-reference requirement, and minimization
-metadata.
+`asx.fuzz_counterexample.v1`. Add minimized C sanitizer crashes or determinism
+failures there after triage; every fixture records the deterministic input
+seed, expected C exit and summary counters, and minimization metadata. Live
+DSL v2 Rust-vs-C counterexamples use `fixtures/fuzz_counterexamples_v2/`.
 
 Resource-pressure scenarios live in `fixtures/resource_pressure/` with schema
 `asx.resource_pressure.failure_atomic_scenarios.v1`. Each listed scenario must
@@ -2334,7 +2343,7 @@ Two ways, both blocking in CI:
 
 Both cover what the scenario language can express (`docs/SCENARIO_DSL_V2.md`
 §6 lists what it cannot, §7 the open C-side gaps). `make fuzz-smoke` is
-different: it checks C self-determinism, and its Rust comparison is optional.
+different: it checks C self-determinism and crashes only, with no Rust comparison.
 
 ### Is deterministic mode slower?
 

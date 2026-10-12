@@ -1037,6 +1037,9 @@ jobs:
             exit 1
           fi
 
+      - name: Live differential oracle detects and minimizes a runtime mutation
+        run: make test-fuzz-differential
+
       - name: Trace canonicalizer differential (seed 9, 100000 traces)
         run: make canon-differential CANON_SEED=9 CANON_COUNT=100000
 
@@ -1051,7 +1054,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-rust-differential-${{ github.run_id }}
-          path: build/fuzz_v2/
+          path: |
+            build/fuzz_v2/
+            build/fuzz-live-control/
+            build/fuzz-generator-control/
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------

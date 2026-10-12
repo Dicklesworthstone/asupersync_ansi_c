@@ -1,5 +1,5 @@
 /*
- * fuzz_differential.c — differential fuzz harness for scenario DSL mutations
+ * fuzz_differential.c — C determinism and mutation fuzz harness
  *
  * Bead: bd-1md.3
  *
@@ -7,7 +7,8 @@
  * against the C runtime, and verifies:
  *   1. Deterministic self-consistency (same seed → same results)
  *   2. No crashes or undefined behavior under mutation
- *   3. Semantic digest comparison against Rust reference fixtures (when available)
+ * Rust parity uses make fuzz-differential: one canonical DSL v2 projection
+ * executed by twin_run and asx-conformance. This harness checks C only.
  *
  * Coverage strategy: cancellation, timer, channel, obligation, budget exhaustion,
  * region lifecycle, and quiescence boundary conditions.
@@ -18,8 +19,6 @@
  *     --iterations <n>      Number of fuzz iterations (default: 1000)
  *     --max-ops <n>         Max ops per scenario (default: 64)
  *     --mutations <n>       Mutations per scenario (default: 4)
- *     --fixtures-dir <dir>  Path to Rust reference fixtures (optional)
- *     --rust-binary <path>  Rust fuzz target for live C-vs-Rust comparison
  *     --report <path>       JSONL report output path (default: stdout)
  *     --smoke               CI smoke mode (100 iterations, fast)
  *     --nightly             Nightly mode (100000 iterations)
@@ -815,32 +814,19 @@ static void fuzz_report_mismatch(FILE *out, const char *kind, uint64_t iteration
     fflush(out);
 }
 
-/* Without --rust-binary no Rust comparison runs: the summary says so
- * (rust_comparison "skipped", rust_divergences null) instead of reporting a
- * zero that was never measured. */
 static void fuzz_report_summary(FILE *out, uint64_t initial_seed, uint64_t iterations,
-                                uint64_t determinism_failures, uint64_t crash_count, int have_rust,
-                                uint64_t rust_divergences, double duration_sec) {
-    char divergences[32];
-    if (have_rust) {
-        (void)snprintf(divergences, sizeof(divergences), "%llu",
-                       (unsigned long long)rust_divergences);
-    } else {
-        (void)snprintf(divergences, sizeof(divergences), "null");
-    }
+                                uint64_t determinism_failures, uint64_t crash_count,
+                                double duration_sec) {
     fprintf(out,
             "{\"kind\":\"summary\","
             "\"initial_seed\":%llu,"
             "\"iterations\":%llu,"
             "\"determinism_failures\":%llu,"
             "\"crashes\":%llu,"
-            "\"rust_comparison\":\"%s\","
-            "\"rust_divergences\":%s,"
             "\"duration_sec\":%.3f,"
             "\"iterations_per_sec\":%.1f}\n",
             (unsigned long long)initial_seed, (unsigned long long)iterations,
-            (unsigned long long)determinism_failures, (unsigned long long)crash_count,
-            have_rust ? "ran" : "skipped", divergences, duration_sec,
+            (unsigned long long)determinism_failures, (unsigned long long)crash_count, duration_sec,
             iterations > 0 ? (double)iterations / duration_sec : 0.0);
     fflush(out);
 }
@@ -862,176 +848,6 @@ static int fuzz_mkdir_p(const char *path) {
         }
     }
     return 0;
-}
-
-/* Forward declaration — defined in CLI section below */
-static uint64_t parse_u64(const char *s);
-
-/* ===================================================================
- * Rust binary comparison (--rust-binary mode)
- *
- * Invokes the Rust fuzz target with --digest-seeds to get per-scenario
- * digests, then compares against C-side digests during the fuzz loop.
- * =================================================================== */
-
-typedef struct {
-    uint64_t *scenario_seeds; /* scenario_seed from Rust output */
-    uint64_t *rust_digests;   /* digest from Rust output */
-    uint64_t count;
-    uint64_t capacity;
-} fuzz_rust_digests;
-
-static void fuzz_rust_digests_init(fuzz_rust_digests *rd, uint64_t cap) {
-    rd->scenario_seeds = (uint64_t *)malloc(cap * sizeof(uint64_t));
-    rd->rust_digests = (uint64_t *)malloc(cap * sizeof(uint64_t));
-    rd->count = 0u;
-    rd->capacity = cap;
-}
-
-static void fuzz_rust_digests_free(fuzz_rust_digests *rd) {
-    free(rd->scenario_seeds);
-    free(rd->rust_digests);
-    rd->scenario_seeds = NULL;
-    rd->rust_digests = NULL;
-    rd->count = 0u;
-}
-
-static uint64_t parse_hex_u64(const char *s) {
-    uint64_t v = 0u;
-    while (*s != '\0' && *s != '\n' && *s != '\r') {
-        uint64_t d;
-        if (*s >= '0' && *s <= '9')
-            d = (uint64_t)(*s - '0');
-        else if (*s >= 'a' && *s <= 'f')
-            d = (uint64_t)(*s - 'a' + 10);
-        else if (*s >= 'A' && *s <= 'F')
-            d = (uint64_t)(*s - 'A' + 10);
-        else
-            break;
-        v = (v << 4) | d;
-        s++;
-    }
-    return v;
-}
-
-/* Write a scenario to the Rust binary's stdin in text format:
- * "scenario_seed op_count kind0 a0 b0 u32_0 u64_0 kind1 a1 b1 u32_1 u64_1 ...\n"
- */
-static void fuzz_write_scenario(FILE *pipe, const fuzz_scenario *sc) {
-    uint32_t i;
-    fprintf(pipe, "%llu %u", (unsigned long long)sc->seed, sc->op_count);
-    for (i = 0u; i < sc->op_count; i++) {
-        fprintf(pipe, " %u %u %u %u %llu", (uint32_t)sc->ops[i].kind, sc->ops[i].idx_a,
-                sc->ops[i].idx_b, sc->ops[i].arg_u32, (unsigned long long)sc->ops[i].arg_u64);
-    }
-    fprintf(pipe, "\n");
-}
-
-/* Read one digest line from the Rust binary's stdout: "seed\tdigest_hex\n" */
-static int fuzz_read_rust_digest(FILE *pipe, uint64_t *seed_out, uint64_t *digest_out) {
-    char line[256];
-    char *tab;
-    if (fgets(line, sizeof(line), pipe) == NULL) return -1;
-    tab = strchr(line, '\t');
-    if (tab == NULL) return -1;
-    *tab = '\0';
-    *seed_out = parse_u64(line);
-    *digest_out = parse_hex_u64(tab + 1);
-    return 0;
-}
-
-/* Batch-invoke Rust binary: write all scenarios, read all digests.
- * Uses a pre-generated array of scenarios. */
-static int fuzz_invoke_rust_binary(const char *binary_path, const fuzz_scenario *scenarios,
-                                   uint64_t count, fuzz_rust_digests *out) {
-    char cmd[1024];
-    FILE *pipe_in;
-    FILE *pipe_out;
-    int in_fd[2], out_fd[2];
-    pid_t pid;
-    uint64_t i;
-
-    /* Use two-pipe fork+exec for bidirectional communication */
-    if (pipe(in_fd) != 0 || pipe(out_fd) != 0) {
-        fprintf(stderr, "[fuzz] error: pipe creation failed\n");
-        return -1;
-    }
-
-    pid = fork();
-    if (pid < 0) {
-        fprintf(stderr, "[fuzz] error: fork failed\n");
-        return -1;
-    }
-
-    if (pid == 0) {
-        /* Child: Rust binary */
-        close(in_fd[1]);    /* close write end of stdin pipe */
-        close(out_fd[0]);   /* close read end of stdout pipe */
-        dup2(in_fd[0], 0);  /* stdin from pipe */
-        dup2(out_fd[1], 1); /* stdout to pipe */
-        close(in_fd[0]);
-        close(out_fd[1]);
-
-        snprintf(cmd, sizeof(cmd), "%s", binary_path);
-        execlp(binary_path, binary_path, "--digest-seeds", (char *)NULL);
-        fprintf(stderr, "[fuzz] error: exec failed: %s\n", binary_path);
-        _exit(127);
-    }
-
-    /* Parent */
-    close(in_fd[0]);  /* close read end of stdin pipe */
-    close(out_fd[1]); /* close write end of stdout pipe */
-
-    pipe_in = fdopen(in_fd[1], "w");
-    pipe_out = fdopen(out_fd[0], "r");
-
-    if (pipe_in == NULL || pipe_out == NULL) {
-        fprintf(stderr, "[fuzz] error: fdopen failed\n");
-        if (pipe_in) fclose(pipe_in);
-        if (pipe_out) fclose(pipe_out);
-        return -1;
-    }
-
-    /* Write all scenarios to Rust stdin */
-    for (i = 0u; i < count; i++) { fuzz_write_scenario(pipe_in, &scenarios[i]); }
-    fclose(pipe_in); /* signal EOF to Rust */
-
-    /* Read all digests from Rust stdout */
-    for (i = 0u; i < count && out->count < out->capacity; i++) {
-        uint64_t rseed, rdigest;
-        if (fuzz_read_rust_digest(pipe_out, &rseed, &rdigest) != 0) break;
-        out->scenario_seeds[out->count] = rseed;
-        out->rust_digests[out->count] = rdigest;
-        out->count++;
-    }
-
-    fclose(pipe_out);
-    {
-        int status;
-        waitpid(pid, &status, 0);
-        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-            fprintf(stderr, "[fuzz] warning: rust binary exited with status %d\n",
-                    WIFEXITED(status) ? WEXITSTATUS(status) : -1);
-        }
-    }
-
-    return 0;
-}
-
-static void fuzz_report_rust_divergence(FILE *out, uint64_t iteration, uint64_t scenario_seed,
-                                        uint64_t c_digest, uint64_t rust_digest,
-                                        const fuzz_scenario *sc, const fuzz_execution *exec) {
-    fprintf(out,
-            "{\"kind\":\"rust_divergence\","
-            "\"iteration\":%llu,"
-            "\"seed\":%llu,"
-            "\"c_digest\":\"%016llx\","
-            "\"rust_digest\":\"%016llx\"",
-            (unsigned long long)iteration, (unsigned long long)scenario_seed,
-            (unsigned long long)c_digest, (unsigned long long)rust_digest);
-    if (sc != NULL && exec != NULL) { fuzz_dump_scenario_ops(out, sc, exec); }
-    fprintf(out, "}\n");
-    fflush(out);
 }
 
 /* ===================================================================
@@ -1114,8 +930,6 @@ typedef struct {
     uint64_t iterations;
     uint32_t max_ops;
     uint32_t mutations_per_scenario;
-    const char *fixtures_dir;
-    const char *rust_binary;
     const char *report_path;
     const char *minimize_binary;
     const char *findings_dir;
@@ -1127,8 +941,6 @@ static void fuzz_config_defaults(fuzz_config *cfg) {
     cfg->iterations = 1000u;
     cfg->max_ops = 64u;
     cfg->mutations_per_scenario = 4u;
-    cfg->fixtures_dir = NULL;
-    cfg->rust_binary = NULL;
     cfg->report_path = NULL;
     cfg->minimize_binary = NULL;
     cfg->findings_dir = "fuzz_findings/minimized";
@@ -1141,14 +953,10 @@ static int fuzz_run(const fuzz_config *cfg) {
     uint64_t iter;
     uint64_t determinism_failures = 0u;
     uint64_t crash_count = 0u;
-    uint64_t rust_divergences = 0u;
-    fuzz_rust_digests rust_digests;
-    int have_rust = 0;
     double start_time;
     double end_time;
     int exit_code = 0;
 
-    memset(&rust_digests, 0, sizeof(rust_digests));
     fuzz_rng_seed(&rng, cfg->initial_seed);
 
     report = stdout;
@@ -1161,7 +969,7 @@ static int fuzz_run(const fuzz_config *cfg) {
     }
 
     fprintf(stderr,
-            "[fuzz] differential fuzz harness (bd-1md.3)\n"
+            "[fuzz] C determinism and mutation fuzz harness (bd-1md.3)\n"
             "[fuzz] seed=%llu iterations=%llu max_ops=%u mutations=%u\n",
             (unsigned long long)cfg->initial_seed, (unsigned long long)cfg->iterations,
             cfg->max_ops, cfg->mutations_per_scenario);
@@ -1169,56 +977,6 @@ static int fuzz_run(const fuzz_config *cfg) {
     /* ---- Create findings directory if --minimize specified ---- */
     if (cfg->minimize_binary != NULL && fuzz_mkdir_p(cfg->findings_dir) != 0) {
         fprintf(stderr, "[fuzz] warning: cannot create findings dir: %s\n", cfg->findings_dir);
-    }
-
-    /* ---- Pre-compute Rust digests if --rust-binary specified ---- */
-    if (cfg->rust_binary != NULL) {
-        fuzz_scenario *pre_scenarios;
-        fuzz_rng pre_rng;
-
-        fprintf(stderr, "[fuzz] pre-generating %llu scenarios for Rust comparison...\n",
-                (unsigned long long)cfg->iterations);
-
-        pre_scenarios = (fuzz_scenario *)malloc((size_t)cfg->iterations * sizeof(fuzz_scenario));
-        if (pre_scenarios == NULL) {
-            fprintf(stderr, "[fuzz] error: cannot allocate scenario buffer\n");
-            if (report != stdout) fclose(report);
-            return 1;
-        }
-
-        /* Generate scenarios using same seed — must produce same RNG sequence
-         * as the main loop below (which also starts with fuzz_rng_seed(&rng, initial_seed)).
-         * We use a separate RNG copy since the main loop's RNG also advances
-         * during mutation. The pre_rng only advances during generation. */
-        fuzz_rng_seed(&pre_rng, cfg->initial_seed);
-        {
-            uint64_t pi;
-            for (pi = 0u; pi < cfg->iterations; pi++) {
-                fuzz_generate_scenario(&pre_rng, &pre_scenarios[pi], cfg->max_ops);
-                /* Advance RNG past mutation phase to stay in sync with main loop */
-                {
-                    fuzz_scenario pre_mutated;
-                    uint32_t pm;
-                    memcpy(&pre_mutated, &pre_scenarios[pi], sizeof(fuzz_scenario));
-                    for (pm = 0u; pm < cfg->mutations_per_scenario && pm < 16u; pm++) {
-                        fuzz_mutate(&pre_rng, &pre_mutated);
-                    }
-                }
-            }
-        }
-
-        fprintf(stderr, "[fuzz] invoking rust binary: %s\n", cfg->rust_binary);
-        fuzz_rust_digests_init(&rust_digests, cfg->iterations);
-        if (fuzz_invoke_rust_binary(cfg->rust_binary, pre_scenarios, cfg->iterations,
-                                    &rust_digests) == 0) {
-            have_rust = 1;
-            fprintf(stderr, "[fuzz] got %llu Rust digests\n",
-                    (unsigned long long)rust_digests.count);
-        } else {
-            fprintf(stderr, "[fuzz] warning: rust binary invocation failed\n");
-        }
-
-        free(pre_scenarios);
     }
 
     start_time = fuzz_clock_sec();
@@ -1285,32 +1043,6 @@ static int fuzz_run(const fuzz_config *cfg) {
             }
         }
 
-        /* ---- Phase 3: Rust comparison (if --rust-binary) ---- */
-        if (have_rust && iter < rust_digests.count) {
-            /* Verify scenario seeds match (grammar determinism) */
-            if (rust_digests.scenario_seeds[iter] != base_scenario.seed) {
-                fprintf(stderr,
-                        "[fuzz] GRAMMAR MISMATCH iter=%llu: "
-                        "C_seed=%llu Rust_seed=%llu\n",
-                        (unsigned long long)iter, (unsigned long long)base_scenario.seed,
-                        (unsigned long long)rust_digests.scenario_seeds[iter]);
-                rust_divergences++;
-            } else if (exec_a.digest != rust_digests.rust_digests[iter]) {
-                rust_divergences++;
-                fuzz_report_rust_divergence(report, iter, base_scenario.seed, exec_a.digest,
-                                            rust_digests.rust_digests[iter], &base_scenario,
-                                            &exec_a);
-                if (cfg->verbose) {
-                    fprintf(stderr,
-                            "[fuzz] RUST DIVERGENCE iter=%llu seed=%llu "
-                            "c=%016llx rust=%016llx\n",
-                            (unsigned long long)iter, (unsigned long long)base_scenario.seed,
-                            (unsigned long long)exec_a.digest,
-                            (unsigned long long)rust_digests.rust_digests[iter]);
-                }
-            }
-        }
-
         /* Progress reporting */
         if (cfg->verbose && (iter % 100u == 0u)) {
             double elapsed = fuzz_clock_sec() - start_time;
@@ -1324,7 +1056,7 @@ static int fuzz_run(const fuzz_config *cfg) {
     end_time = fuzz_clock_sec();
 
     fuzz_report_summary(report, cfg->initial_seed, cfg->iterations, determinism_failures,
-                        crash_count, have_rust, rust_divergences, end_time - start_time);
+                        crash_count, end_time - start_time);
 
     fprintf(stderr,
             "[fuzz] complete: %llu iterations in %.3fs (%.1f/s)\n"
@@ -1332,26 +1064,14 @@ static int fuzz_run(const fuzz_config *cfg) {
             (unsigned long long)cfg->iterations, end_time - start_time,
             (double)cfg->iterations / (end_time - start_time),
             (unsigned long long)determinism_failures, (unsigned long long)crash_count);
-    if (have_rust) {
-        fprintf(stderr, "[fuzz] rust_divergences=%llu\n", (unsigned long long)rust_divergences);
-    } else {
-        fprintf(stderr, "[fuzz] rust_comparison=skipped (no --rust-binary): this run checks "
-                        "C determinism and crashes only\n");
-    }
+    fprintf(stderr, "[fuzz] Rust parity: use make fuzz-differential (live DSL v2 oracle)\n");
 
     if (determinism_failures > 0u || crash_count > 0u) {
         fprintf(stderr, "[fuzz] FAIL: issues detected\n");
         exit_code = 1;
-    } else if (rust_divergences > 0u) {
-        fprintf(stderr, "[fuzz] DIVERGENCE: %llu Rust-vs-C divergences\n",
-                (unsigned long long)rust_divergences);
-        /* Divergences are informational, not failures (runtimes may differ) */
     } else {
-        fprintf(stderr, "[fuzz] PASS: no determinism failures or crashes%s\n",
-                have_rust ? ", no Rust divergences" : "");
+        fprintf(stderr, "[fuzz] PASS: no C determinism failures or crashes\n");
     }
-
-    if (have_rust) { fuzz_rust_digests_free(&rust_digests); }
 
     if (report != stdout) { fclose(report); }
 
@@ -1386,10 +1106,6 @@ int main(int argc, char **argv) {
             cfg.max_ops = (uint32_t)parse_u64(argv[++i]);
         } else if (strcmp(argv[i], "--mutations") == 0 && i + 1 < argc) {
             cfg.mutations_per_scenario = (uint32_t)parse_u64(argv[++i]);
-        } else if (strcmp(argv[i], "--fixtures-dir") == 0 && i + 1 < argc) {
-            cfg.fixtures_dir = argv[++i];
-        } else if (strcmp(argv[i], "--rust-binary") == 0 && i + 1 < argc) {
-            cfg.rust_binary = argv[++i];
         } else if (strcmp(argv[i], "--minimize") == 0 && i + 1 < argc) {
             cfg.minimize_binary = argv[++i];
         } else if (strcmp(argv[i], "--findings-dir") == 0 && i + 1 < argc) {
@@ -1413,8 +1129,6 @@ int main(int argc, char **argv) {
                 "  --iterations <n>      Number of fuzz iterations (default: 1000)\n"
                 "  --max-ops <n>         Max ops per scenario (default: 64)\n"
                 "  --mutations <n>       Mutations per scenario (default: 4)\n"
-                "  --fixtures-dir <dir>  Path to Rust reference fixtures\n"
-                "  --rust-binary <path>  Path to Rust fuzz target for live comparison\n"
                 "  --minimize <path>     Path to fuzz_minimize binary (auto-minimize divergences)\n"
                 "  --findings-dir <dir>  Directory for minimized scenarios (default: "
                 "fuzz_findings)\n"

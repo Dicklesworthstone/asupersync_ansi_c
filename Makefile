@@ -1647,7 +1647,7 @@ conformance: $(CONFORMANCE_RUNNER)
 FUZZ_V2_SEED ?= 1
 FUZZ_V2_COUNT ?= 100
 FUZZ_V2_DIR := $(BUILD_DIR)/fuzz_v2/seed-$(FUZZ_V2_SEED)
-TWIN_RUN := cargo run --release --locked --quiet --manifest-path tools/twin_run/Cargo.toml --
+TWIN_RUN := $(if $(ASX_TWIN_BIN),$(ASX_TWIN_BIN),cargo run --release --locked --quiet --manifest-path tools/twin_run/Cargo.toml --)
 
 .PHONY: fuzz-differential
 fuzz-differential: $(CONFORMANCE_RUNNER)
@@ -1683,6 +1683,25 @@ fuzz-minimize: $(CONFORMANCE_RUNNER)
 		$(TWIN_RUN) minimize $(FUZZ_V2_DIR)/scenarios/$$id.json --runner $(CONFORMANCE_RUNNER) \
 			--out $(FUZZ_V2_DIR)/minimized || exit 1; \
 	done
+
+# Reproduce the live oracle's positive and planted-negative controls. The
+# mutation changes runtime budget priority; it is built in a separate tree.
+# Both runners execute actual Rust captures, and a reduced counterexample
+# must pass the clean runtime and fail the mutant. No digest-only oracle.
+FUZZ_V2_MUTANT_DIR ?= $(BUILD_DIR)/fuzz-priority-mutant
+.PHONY: test-fuzz-differential
+test-fuzz-differential: $(CONFORMANCE_RUNNER)
+	@$(MAKE) --no-print-directory conformance-runner BUILD_DIR="$(FUZZ_V2_MUTANT_DIR)" \
+		CFLAGS='$(CFLAGS) -DASX_MUTANT_BUDGET_PRIORITY_MIN'
+	@if [ -z "$(ASX_TWIN_BIN)" ]; then \
+		cargo build --release --locked --manifest-path tools/twin_run/Cargo.toml --bin twin_run; \
+	fi
+	@ASX_TWIN_BIN="$(if $(ASX_TWIN_BIN),$(ASX_TWIN_BIN),$(CURDIR)/tools/twin_run/target/release/twin_run)" \
+		ASX_C_RUNNER="$(abspath $(CONFORMANCE_RUNNER))" \
+		ASX_MUTANT_C_RUNNER="$(abspath $(FUZZ_V2_MUTANT_DIR))/bin/asx-conformance" \
+		BUILD_DIR="$(abspath $(BUILD_DIR))" bash tests/fuzz/test_differential_rust_mode.sh
+	@ASX_TWIN_BIN="$(if $(ASX_TWIN_BIN),$(ASX_TWIN_BIN),$(CURDIR)/tools/twin_run/target/release/twin_run)" \
+		BUILD_DIR="$(abspath $(BUILD_DIR))" bash tests/fuzz/test_cross_determinism.sh
 
 # ---------------------------------------------------------------------------
 # canon-differential — the two trace canonicalizers agree (bd-9kll.9.1):
@@ -2004,23 +2023,22 @@ crate-acceptance-gate:
 # ---------------------------------------------------------------------------
 # fuzz — differential fuzzing harness (bd-1md.3)
 #
-# Generates random scenario DSL mutations, executes against C runtime,
-# and verifies deterministic self-consistency. Compares against Rust
-# reference fixtures when available.
+# Generates random operation mutations against the C runtime and verifies
+# deterministic self-consistency. Rust parity is fuzz-differential (DSL v2).
 #
 # Usage:
 #   make fuzz-build              # Build the fuzz harness
 #   make fuzz-smoke              # CI smoke (100 iterations)
 #   make fuzz-nightly            # Nightly (100000 iterations)
 #   make fuzz-run FUZZ_ARGS="--seed 42 --iterations 5000"
-#   make fuzz-smoke RUST_FUZZ_BINARY=path/to/rust_fuzz_target  # With Rust comparison
 # ---------------------------------------------------------------------------
 FUZZ_DIR := $(BUILD_DIR)/fuzz
 FUZZ_SRC := tests/fuzz/fuzz_differential.c
 FUZZ_BIN := $(FUZZ_DIR)/fuzz_differential
 FUZZ_ARGS ?=
-RUST_FUZZ_BINARY ?=
-FUZZ_RUST_FLAG := $(if $(RUST_FUZZ_BINARY),--rust-binary $(RUST_FUZZ_BINARY),)
+ifneq ($(strip $(RUST_FUZZ_BINARY)),)
+$(error RUST_FUZZ_BINARY is retired: use make fuzz-differential for live Rust/C parity)
+endif
 ASX_GIT_COMMIT ?= $(shell git -C $(CURDIR) show -s --format=%H HEAD 2>/dev/null || true)
 
 FUZZ_CFLAGS := -std=c99 -Wall -Wextra -Wpedantic -Werror \
@@ -2041,19 +2059,19 @@ $(FUZZ_DIR):
 	@mkdir -p $@
 
 fuzz-smoke: fuzz-build
-	@echo "[asx] fuzz-smoke: differential fuzzing smoke test..."
-	@$(FUZZ_BIN) --smoke $(FUZZ_RUST_FLAG)
+	@echo "[asx] fuzz-smoke: C determinism and mutation smoke test..."
+	@$(FUZZ_BIN) --smoke
 
 fuzz-nightly: fuzz-build
-	@echo "[asx] fuzz-nightly: differential fuzzing nightly run..."
-	@$(FUZZ_BIN) --nightly --verbose $(FUZZ_RUST_FLAG)
+	@echo "[asx] fuzz-nightly: C determinism and mutation nightly run..."
+	@$(FUZZ_BIN) --nightly --verbose
 
 fuzz-run: fuzz-build
-	@$(FUZZ_BIN) $(FUZZ_ARGS) $(FUZZ_RUST_FLAG)
+	@$(FUZZ_BIN) $(FUZZ_ARGS)
 
 fuzz-counterexample-replay: fuzz-build
-	@echo "[asx] fuzz-counterexample-replay: replaying minimized differential corpus..."
-	@ASX_GIT_COMMIT="$(ASX_GIT_COMMIT)" RUST_FUZZ_BINARY="$(RUST_FUZZ_BINARY)" bash tools/ci/replay_fuzz_counterexamples.sh
+	@echo "[asx] fuzz-counterexample-replay: replaying the C determinism/crash corpus..."
+	@ASX_GIT_COMMIT="$(ASX_GIT_COMMIT)" BUILD_DIR="$(BUILD_DIR)" bash tools/ci/replay_fuzz_counterexamples.sh
 
 # ---------------------------------------------------------------------------
 # fuzz-parsers — libFuzzer harnesses for the parsers of untrusted input
@@ -2446,8 +2464,10 @@ help:
 	@echo "  profile-parity     Cross-profile semantic digest parity"
 	@echo "  parallel-parity    Single-vs-multi-worker semantic digest parity"
 	@echo "  crate-acceptance-gate Aggregate final crate-level parity evidence"
-	@echo "  fuzz-smoke         Differential fuzzing smoke test"
-	@echo "  fuzz-counterexample-replay Replay minimized differential fuzz corpus"
+	@echo "  fuzz-smoke         C determinism and mutation smoke test"
+	@echo "  fuzz-differential  Live Rust/C scenario comparison"
+	@echo "  test-fuzz-differential Detect and minimize a runtime mutation"
+	@echo "  fuzz-counterexample-replay Replay C determinism/crash counterexamples"
 	@echo "  minimize-selftest  Counterexample minimizer self-test"
 	@echo "  ci-embedded-matrix Cross-target embedded builds (Linux-musl)"
 	@echo "  embedded-portability-proof Compact EMBEDDED_ROUTER/R1 portability proof"

@@ -63,12 +63,12 @@ Resource-pressure fixture shape:
 |-------|-------|
 | **Gate ID** | `GATE-FUZZ` |
 | **Plan ref** | Section 10.6 item 3 |
-| **Makefile targets** | `fuzz-differential` (Rust vs C, CI: seed 9 x 200 per push as a regression gate; nightly: 3 new seeds x 200 daily), `fuzz-minimize`; C-only: `fuzz-smoke` (CI, 100 iterations), `fuzz-counterexample-replay`, `fuzz-nightly` (nightly, 100K iterations), `minimize-selftest` |
+| **Makefile targets** | `fuzz-differential` (Rust vs C, CI: seed 9 x 200 per push as a regression gate; nightly: 3 new seeds x 200 daily), `fuzz-minimize`, `test-fuzz-differential` (200 live captures, runtime mutation detection and reduction); C-only: `fuzz-smoke` (CI, 100 iterations), `fuzz-counterexample-replay`, `fuzz-nightly` (nightly, 100K iterations), `minimize-selftest` |
 | **CI job** | `fuzz-rust-differential` (Rust vs C), `fuzz-parity` (C-only smoke and corpus replay) |
 | **Scripts** | `tools/twin_run` (`generate`, `capture`, `minimize`), `build/bin/asx-conformance compare`; C-only: `tests/fuzz/fuzz_differential.c`, `tests/fuzz/fuzz_minimize.c`, `tools/ci/replay_fuzz_counterexamples.sh` |
 | **Artifacts** | `build/fuzz_v2/seed-<seed>/{scenarios,fixtures,compare.log,minimized}`; C-only: `build/fuzz/fuzz_differential`, `build/fuzz/fuzz_minimize`, `fixtures/fuzz_counterexamples/*.json`, `build/fuzz/counterexamples/*/fuzz_counterexample_replay_report.json` |
 | **Pass criteria** | Rust vs C: twin_run generates seeded DSL v2 scenarios, runs them in asupersync's LabRuntime at the pinned rev, and the C runtime (lab dispatch, same seed) must match every captured one exactly (trace, snapshot, observations, dispatch order); at least 90% must be captured. C-only: smoke passes (100 scenario mutations self-consistent, which compares C with C), counterexample replay verifies expected counters, nightly passes (100K). |
-| **Rerun** | `make fuzz-differential FUZZ_V2_SEED=<seed> FUZZ_V2_COUNT=200` (printed by the job), `make fuzz-smoke`, `make fuzz-counterexample-replay` |
+| **Rerun** | `make fuzz-differential FUZZ_V2_SEED=<seed> FUZZ_V2_COUNT=200` (printed by the job), `make test-fuzz-differential`, `make fuzz-smoke`, `make fuzz-counterexample-replay` |
 | **Failure action** | Rust vs C: `make fuzz-minimize FUZZ_V2_SEED=<seed>` reduces each divergence to a 1-minimal scenario; fix the C side (or the oracle projection, if the defect is there). C-only: `make minimize-run MIN_ARGS="--failure-digest <digest>"`. |
 
 Counterexample corpus fixture shape:
@@ -81,10 +81,8 @@ Counterexample corpus fixture shape:
   "expected": {
     "c_exit_code": 0,
     "determinism_failures": 0,
-    "crashes": 0,
-    "rust_divergences": 0
+    "crashes": 0
   },
-  "rust_reference": {"mode": "optional|required|disabled"},
   "minimization": {
     "source": "seeded-smoke",
     "source_failure_class": "none",
@@ -93,6 +91,13 @@ Counterexample corpus fixture shape:
   }
 }
 ```
+
+The C-only corpus does not carry Rust expectations. The old independent
+digest executable and `--rust-binary` mode are retired because the two
+digests used different projections. `test-fuzz-differential` executes real
+Rust fixtures through a clean C runner and an isolated budget-priority
+mutant. It requires a smaller live counterexample that passes the clean
+runner and fails the mutant; missing tools or incomplete captures fail.
 
 ### 1.4 Embedded Target Matrix Gate
 

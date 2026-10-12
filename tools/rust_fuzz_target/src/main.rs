@@ -1,4 +1,9 @@
-//! rust_fuzz_target — Rust-side differential fuzz target
+//! Retired independent-digest experiment. Source is retained under the
+//! repository's no-file-deletion policy; it is not an oracle or build target.
+//! The live differential path uses tools/twin_run and asx-conformance over
+//! the same canonical DSL v2 projection (make fuzz-differential).
+//!
+//! Historical implementation follows for review until deletion is authorized.
 //!
 //! Implements the same xoshiro256** PRNG, FNV-1a hasher, op grammar, and scenario
 //! generation as the C fuzz harness (tests/fuzz/fuzz_differential.c), executing
@@ -14,6 +19,10 @@
 //!   rust_fuzz_target --dump-scenario --seed <u64> [--max-ops <n>]
 //!
 //! Bead: bd-rkql.3
+
+compile_error!(
+    "rust_fuzz_target is retired: its digest is incomparable with C; use make fuzz-differential"
+);
 
 use asupersync::lab::config::LabConfig;
 use asupersync::lab::runtime::LabRuntime;

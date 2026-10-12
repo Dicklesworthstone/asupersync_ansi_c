@@ -1,14 +1,14 @@
 #!/bin/bash
-# gate_fuzz.sh — GATE-FUZZ CI gate for differential fuzzing
+# gate_fuzz.sh — GATE-FUZZ CI gate for C determinism and crash checks
 #
 # Wraps the Makefile fuzz targets with tier-based iteration budgets,
-# optional Rust binary comparison, and structured JSONL output.
+# C self-consistency checks and structured JSONL output. Rust parity runs
+# separately through make fuzz-differential and the live twin_run DSL oracle.
 #
 # Usage:
 #   tools/ci/gate_fuzz.sh --tier smoke              # CI: 100 iterations, <60s
 #   tools/ci/gate_fuzz.sh --tier nightly             # Nightly: 100K iterations
 #   tools/ci/gate_fuzz.sh --tier release             # Release: 500K iterations
-#   tools/ci/gate_fuzz.sh --tier smoke --rust-binary path/to/binary
 #   tools/ci/gate_fuzz.sh --tier smoke --report /tmp/fuzz.jsonl
 #
 # Bead: bd-rkql.7
@@ -20,29 +20,27 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Defaults
 TIER="smoke"
-RUST_BINARY=""
 REPORT_PATH=""
 MINIMIZE_BINARY=""
 VERBOSE=0
+BUILD_DIR="${BUILD_DIR:-$PROJECT_ROOT/build}"
+if [[ "$BUILD_DIR" != /* ]]; then
+    BUILD_DIR="$PROJECT_ROOT/$BUILD_DIR"
+fi
 
 # Tier iteration budgets
 TIER_SMOKE=100
 TIER_NIGHTLY=100000
 TIER_RELEASE=500000
 
-# Default Rust binary location
-DEFAULT_RUST_BIN="$PROJECT_ROOT/tools/rust_fuzz_target/target/release/rust_fuzz_target"
-
 usage() {
     cat <<EOF
-GATE-FUZZ — Differential fuzzing CI gate
+GATE-FUZZ — C determinism and crash CI gate
 
 Usage: $(basename "$0") [OPTIONS]
 
 Options:
   --tier <smoke|nightly|release>   Iteration budget tier (default: smoke)
-  --rust-binary <path>             Path to Rust fuzz target binary
-  --auto-rust                      Auto-detect Rust binary at default location
   --minimize <path>                Path to fuzz_minimize binary
   --report <path>                  JSONL report output path
   --verbose                        Verbose output
@@ -61,10 +59,6 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --tier)
             TIER="$2"; shift 2 ;;
-        --rust-binary)
-            RUST_BINARY="$2"; shift 2 ;;
-        --auto-rust)
-            RUST_BINARY="$DEFAULT_RUST_BIN"; shift ;;
         --minimize)
             MINIMIZE_BINARY="$2"; shift 2 ;;
         --report)
@@ -88,58 +82,45 @@ esac
 
 # Build fuzz harness
 echo "[gate-fuzz] Building fuzz harness..."
-make -C "$PROJECT_ROOT" fuzz-build 2>&1 | tail -1
+make -C "$PROJECT_ROOT" -j2 BUILD_DIR="$BUILD_DIR" fuzz-build
 
-FUZZ_BIN="$PROJECT_ROOT/build/fuzz/fuzz_differential"
+FUZZ_BIN="$BUILD_DIR/fuzz/fuzz_differential"
 if [ ! -x "$FUZZ_BIN" ]; then
     echo "[gate-fuzz] ERROR: fuzz_differential not found at $FUZZ_BIN" >&2
     exit 1
 fi
 
 # Build minimizer if requested
-MIN_BIN="$PROJECT_ROOT/build/fuzz/fuzz_minimize"
+MIN_BIN="$BUILD_DIR/fuzz/fuzz_minimize"
 if [ -n "$MINIMIZE_BINARY" ]; then
     MIN_BIN="$MINIMIZE_BINARY"
 elif [ -z "$MINIMIZE_BINARY" ]; then
     # Auto-build minimizer if source exists
     if [ -f "$PROJECT_ROOT/tests/fuzz/fuzz_minimize.c" ]; then
-        make -C "$PROJECT_ROOT" minimize-build 2>&1 | tail -1
+        make -C "$PROJECT_ROOT" -j2 BUILD_DIR="$BUILD_DIR" minimize-build
         if [ -x "$MIN_BIN" ]; then
             MINIMIZE_BINARY="$MIN_BIN"
         fi
     fi
 fi
 
-# Check Rust binary availability
-RUST_MODE="skip"
-if [ -n "$RUST_BINARY" ]; then
-    if [ -x "$RUST_BINARY" ]; then
-        RUST_MODE="active"
-    else
-        echo "[gate-fuzz] SKIP: Rust binary not found at $RUST_BINARY"
-        RUST_MODE="skip"
-        RUST_BINARY=""
-    fi
+if [ -n "$MINIMIZE_BINARY" ] && [ ! -x "$MINIMIZE_BINARY" ]; then
+    echo "[gate-fuzz] ERROR: minimizer is not executable: $MINIMIZE_BINARY" >&2
+    exit 1
 fi
 
 # Set up report path
-TMPDIR_WORK="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR_WORK"' EXIT
-
 if [ -z "$REPORT_PATH" ]; then
+    TMPDIR_WORK="$(mktemp -d)"
     REPORT_PATH="$TMPDIR_WORK/gate_fuzz_report.jsonl"
 fi
 
 # Emit gate header as JSONL
 START_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-echo "[gate-fuzz] tier=$TIER iterations=$ITERATIONS rust=$RUST_MODE"
+echo "[gate-fuzz] tier=$TIER iterations=$ITERATIONS checks=C-determinism,crashes"
 
 # Construct fuzz command
 FUZZ_CMD=("$FUZZ_BIN" --iterations "$ITERATIONS" --report "$REPORT_PATH")
-
-if [ -n "$RUST_BINARY" ]; then
-    FUZZ_CMD+=(--rust-binary "$RUST_BINARY")
-fi
 
 if [ -n "$MINIMIZE_BINARY" ]; then
     FUZZ_CMD+=(--minimize "$MINIMIZE_BINARY")
@@ -152,80 +133,72 @@ fi
 # Run the fuzzer
 echo "[gate-fuzz] Running: ${FUZZ_CMD[*]}"
 FUZZ_EXIT=0
-"${FUZZ_CMD[@]}" 2>&1 || FUZZ_EXIT=$?
+"${FUZZ_CMD[@]}" || FUZZ_EXIT=$?
 
 END_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-# Parse the summary from the report
-if [ -f "$REPORT_PATH" ]; then
-    SUMMARY_LINE=$(command grep '"kind":"summary"' "$REPORT_PATH" 2>/dev/null || true)
-fi
+# Require one valid summary and the entire requested budget before passing.
+python3 -I - "$REPORT_PATH" "$TIER" "$ITERATIONS" "$FUZZ_EXIT" "$START_TS" "$END_TS" <<'PY'
+import json, math, sys
+report, tier, iterations, fuzz_exit, start_ts, end_ts = sys.argv[1:]
+iterations, fuzz_exit = int(iterations), int(fuzz_exit)
+summary = {}
+reason = "all C checks passed"
+passed = False
+try:
+    with open(report) as stream:
+        records = [json.loads(line) for line in stream if line.strip()]
+    summaries = [record for record in records if record.get('kind') == 'summary']
+    if len(summaries) != 1:
+        raise ValueError("expected exactly one fuzz summary")
+    summary = summaries[0]
+    for key in ('iterations', 'determinism_failures', 'crashes'):
+        value = summary.get(key)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"invalid summary {key}")
+    rate = summary.get('iterations_per_sec')
+    if type(rate) not in (int, float) or not math.isfinite(rate) or rate < 0:
+        raise ValueError("invalid summary iterations_per_sec")
+    if summary['iterations'] != iterations or iterations <= 0:
+        reason = "fuzzer did not complete the requested iteration budget"
+    elif fuzz_exit != 0:
+        reason = f"fuzz_differential exited with code {fuzz_exit}"
+    elif summary['determinism_failures'] != 0:
+        reason = f"{summary['determinism_failures']} determinism failure(s)"
+    elif summary['crashes'] != 0:
+        reason = f"{summary['crashes']} crash(es)"
+    else:
+        passed = True
+except (OSError, ValueError, AttributeError) as error:
+    reason = f"invalid or missing fuzz report: {error}"
+    print(f"[gate-fuzz] {reason}", file=sys.stderr)
 
-# Emit gate JSONL verdict
-GATE_PASS=true
-GATE_REASON="all checks passed"
-
-if [ "$FUZZ_EXIT" -ne 0 ]; then
-    GATE_PASS=false
-    GATE_REASON="fuzz_differential exited with code $FUZZ_EXIT"
-fi
-
-# Check for determinism failures or crashes in summary
-if [ -n "${SUMMARY_LINE:-}" ]; then
-    DET_FAILURES=$(echo "$SUMMARY_LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); print(d.get('determinism_failures',0))" 2>/dev/null || echo "0")
-    CRASHES=$(echo "$SUMMARY_LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); print(d.get('crashes',0))" 2>/dev/null || echo "0")
-    # null when no Rust comparison ran (rust_comparison "skipped"); kept as
-    # null, never coerced to a measured 0.
-    RUST_DIV=$(echo "$SUMMARY_LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); v=d.get('rust_divergences'); print('null' if v is None else v)" 2>/dev/null || echo "null")
-    ITERS_SEC=$(echo "$SUMMARY_LINE" | python3 -c "import json,sys; d=json.loads(sys.stdin.readline()); print(d.get('iterations_per_sec',0))" 2>/dev/null || echo "0")
-
-    if [ "$DET_FAILURES" -gt 0 ] 2>/dev/null; then
-        GATE_PASS=false
-        GATE_REASON="$DET_FAILURES determinism failure(s)"
-    fi
-    if [ "$CRASHES" -gt 0 ] 2>/dev/null; then
-        GATE_PASS=false
-        GATE_REASON="$CRASHES crash(es)"
-    fi
-fi
-
-# Emit structured gate result
-GATE_JSON=$(python3 -c "
-import json, sys
 d = {
     'kind': 'gate_fuzz_result',
-    'tier': '$TIER',
-    'iterations': $ITERATIONS,
-    'rust_mode': '$RUST_MODE',
-    'gate_pass': $( [ "$GATE_PASS" = "true" ] && echo "True" || echo "False" ),
-    'reason': '$GATE_REASON',
-    'start_ts': '$START_TS',
-    'end_ts': '$END_TS',
-    'determinism_failures': int('${DET_FAILURES:-0}'),
-    'crashes': int('${CRASHES:-0}'),
-    'rust_divergences': None if '${RUST_DIV:-null}' == 'null' else int('${RUST_DIV:-null}'),
-    'iterations_per_sec': float('${ITERS_SEC:-0}'),
-    'report_path': '$REPORT_PATH'
+    'tier': tier,
+    'iterations': iterations,
+    'completed_iterations': summary.get('iterations'),
+    'gate_pass': passed,
+    'reason': reason,
+    'start_ts': start_ts,
+    'end_ts': end_ts,
+    'determinism_failures': summary.get('determinism_failures'),
+    'crashes': summary.get('crashes'),
+    'iterations_per_sec': summary.get('iterations_per_sec'),
+    'report_path': report
 }
-print(json.dumps(d))
-")
-
-echo "$GATE_JSON" >> "$REPORT_PATH"
-
-# Print verdict
-if [ "$GATE_PASS" = "true" ]; then
-    echo ""
-    echo "[gate-fuzz] PASS: $TIER tier ($ITERATIONS iterations, rust=$RUST_MODE)"
-    if [ -n "${ITERS_SEC:-}" ]; then
-        echo "[gate-fuzz] Performance: ${ITERS_SEC} iterations/sec"
-    fi
-    if [ "$RUST_MODE" = "active" ] && [ "${RUST_DIV:-0}" = "0" ]; then
-        echo "[gate-fuzz] Rust comparison: 0 divergences"
-    fi
-    exit 0
-else
-    echo ""
-    echo "[gate-fuzz] FAIL: $GATE_REASON"
-    echo "[gate-fuzz] Report: $REPORT_PATH"
-    exit 1
-fi
+try:
+    with open(report, 'a') as stream:
+        stream.write(json.dumps(d) + '\n')
+except OSError as error:
+    passed = False
+    reason = f"cannot write gate verdict: {error}"
+    print(f"[gate-fuzz] {reason}", file=sys.stderr)
+if passed:
+    print(f"[gate-fuzz] PASS: {tier} tier ({iterations} C iterations)")
+    print(f"[gate-fuzz] Performance: {summary['iterations_per_sec']} iterations/sec")
+else:
+    print(f"[gate-fuzz] FAIL: {reason}")
+print(f"[gate-fuzz] Report: {report}")
+sys.exit(0 if passed else 1)
+PY

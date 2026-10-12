@@ -1,59 +1,86 @@
-#!/bin/bash
-# test_cross_determinism.sh — Verify C and Rust fuzz grammars produce identical scenarios
-#
-# Generates scenarios from both C and Rust for seeds 0..N-1, compares op sequences.
-# Exit 0 if all match, exit 1 on first mismatch.
-#
-# Usage: tests/fuzz/test_cross_determinism.sh [num_seeds]
-# Default: 1000 seeds
-#
-# Bead: bd-rkql.6
+#!/usr/bin/env bash
+# bd-ij9w: test the actual twin_run scenario DSL generator, not a parallel grammar.
+# Usage: tests/fuzz/test_cross_determinism.sh [count] (default: 1000).
+# ASX_TWIN_BIN must name an executable producer; BUILD_DIR retains all artifacts.
+# ASX_DIFF_SEED defaults to 9; ASX_DIFF_OTHER_SEED defaults to its u64 successor.
 
 set -euo pipefail
 
-NUM_SEEDS="${1:-1000}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-C_GEN="$SCRIPT_DIR/generate_grammar_vectors_jsonl"
-RUST_GEN="$PROJECT_ROOT/tools/rust_fuzz_target/target/release/rust_fuzz_target"
+BUILD_ROOT="${BUILD_DIR:-$PROJECT_ROOT/build}"
+case "$BUILD_ROOT" in /*) ;; *) BUILD_ROOT="$PROJECT_ROOT/$BUILD_ROOT" ;; esac
+COUNT="${1:-${ASX_DIFF_COUNT:-1000}}"
+SEED="${ASX_DIFF_SEED:-9}"
 
-TMPDIR_WORK="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR_WORK"' EXIT
-
-C_OUT="$TMPDIR_WORK/c_vectors.jsonl"
-RUST_OUT="$TMPDIR_WORK/rust_vectors.jsonl"
-
-# --- Build C generator (JSONL mode) ---
-echo "[cross-det] Building C JSONL generator..."
-/usr/bin/gcc -std=c99 -Wall -Wextra -Werror -pedantic \
-    -o "$C_GEN" "$SCRIPT_DIR/generate_grammar_vectors_jsonl.c" 2>&1
-
-# --- Build Rust generator ---
-echo "[cross-det] Building Rust fuzz target..."
-(cd "$PROJECT_ROOT/tools/rust_fuzz_target" && cargo build --release --quiet 2>&1)
-
-# --- Generate C vectors ---
-echo "[cross-det] Generating C vectors for seeds 0..$((NUM_SEEDS - 1))..."
-"$C_GEN" "$NUM_SEEDS" > "$C_OUT"
-
-# --- Generate Rust vectors ---
-echo "[cross-det] Generating Rust vectors for seeds 0..$((NUM_SEEDS - 1))..."
-"$RUST_GEN" --verify-grammar-batch "$NUM_SEEDS" > "$RUST_OUT"
-
-# --- Compare ---
-C_LINES=$(wc -l < "$C_OUT")
-RUST_LINES=$(wc -l < "$RUST_OUT")
-
-if [ "$C_LINES" != "$RUST_LINES" ]; then
-    echo "[cross-det] FAIL: line count mismatch: C=$C_LINES Rust=$RUST_LINES"
-    exit 1
+fail() { printf '[cross-det] FAIL: %s\n' "$*" >&2; exit 1; }
+[ "$#" -le 1 ] || fail "usage: $0 [count]"
+if [ -z "${ASX_TWIN_BIN:-}" ] || [ ! -f "$ASX_TWIN_BIN" ] || [ ! -x "$ASX_TWIN_BIN" ]; then
+    fail "ASX_TWIN_BIN must name an executable file"
 fi
+case "$ASX_TWIN_BIN" in /*) ;; *) ASX_TWIN_BIN="$PWD/$ASX_TWIN_BIN" ;; esac
+for tool in python3 tee mktemp; do
+    command -v "$tool" || fail "required tool unavailable: $tool"
+done
+[[ "$COUNT" =~ ^[1-9][0-9]*$ ]] || fail "invalid count: $COUNT"
+[[ "$SEED" =~ ^(0|[1-9][0-9]*)$ ]] || fail "invalid ASX_DIFF_SEED: $SEED"
+OTHER_SEED="${ASX_DIFF_OTHER_SEED:-$(python3 -I - "$SEED" <<'PY'
+import sys
+print((int(sys.argv[1]) + 1) % 2**64)
+PY
+)}"
+[[ "$OTHER_SEED" =~ ^(0|[1-9][0-9]*)$ ]] || fail "invalid ASX_DIFF_OTHER_SEED: $OTHER_SEED"
+python3 -I - "$SEED" "$OTHER_SEED" <<'PY'
+import sys
+seed, other = map(int, sys.argv[1:])
+assert 0 <= seed < 2**64 and 0 <= other < 2**64, 'seeds must fit u64'
+assert seed != other, 'changed-seed control requires distinct seeds'
+PY
 
-if diff -q "$C_OUT" "$RUST_OUT" > /dev/null 2>&1; then
-    echo "[cross-det] PASS: $NUM_SEEDS seeds — all scenarios identical"
-    exit 0
-else
-    echo "[cross-det] FAIL: differences found"
-    diff --unified=0 "$C_OUT" "$RUST_OUT" | head -40
-    exit 1
-fi
+mkdir -p "$BUILD_ROOT/fuzz-generator-control"
+RUN_DIR="$(mktemp -d "$BUILD_ROOT/fuzz-generator-control/seed-$SEED-XXXXXXXX")"
+printf '[cross-det] retained artifacts: %s\n' "$RUN_DIR"
+run_logged() {
+    local log="$1"
+    local -a pipeline_status
+    shift
+    if "$@" 2>&1 | tee "$log"; then
+        pipeline_status=("${PIPESTATUS[@]}")
+    else
+        pipeline_status=("${PIPESTATUS[@]}")
+    fi
+    [ "${pipeline_status[1]}" -eq 0 ] || fail "could not retain complete log: $log"
+    return "${pipeline_status[0]}"
+}
+run_logged "$RUN_DIR/first.log" "$ASX_TWIN_BIN" generate --seed "$SEED" --count "$COUNT" --out "$RUN_DIR/first"
+run_logged "$RUN_DIR/repeat.log" "$ASX_TWIN_BIN" generate --seed "$SEED" --count "$COUNT" --out "$RUN_DIR/repeat"
+run_logged "$RUN_DIR/changed.log" "$ASX_TWIN_BIN" generate --seed "$OTHER_SEED" --count "$COUNT" --out "$RUN_DIR/changed"
+python3 -I - "$RUN_DIR" "$SEED" "$OTHER_SEED" "$COUNT" <<'PY'
+import json
+from pathlib import Path
+import sys
+run = Path(sys.argv[1])
+seed, other, count = map(int, sys.argv[2:])
+for directory, batch_seed in [('first', seed), ('repeat', seed), ('changed', other)]:
+    expected = {f'gen-{batch_seed}-{index}.json' for index in range(count)}
+    actual = {path.name for path in (run / directory).glob('*.json')}
+    assert actual == expected, f'{directory}: incomplete or extra scenario outputs'
+changed = 0
+for index in range(count):
+    name = f'gen-{seed}-{index}.json'
+    first = (run / 'first' / name).read_bytes()
+    repeat = (run / 'repeat' / name).read_bytes()
+    assert first == repeat, f'same-seed generated bytes differ: {name}'
+    original = json.loads(first)
+    alternate = json.loads((run / 'changed' / f'gen-{other}-{index}.json').read_bytes())
+    assert original['schema'] == alternate['schema'] == 'asx.scenario.v2'
+    assert original['id'] == f'gen-{seed}-{index}' and alternate['id'] == f'gen-{other}-{index}'
+    # Labels and the Lab seed alone must not satisfy the changed-input control.
+    for label in ['id', 'description', 'seed']:
+        original.pop(label, None)
+        alternate.pop(label, None)
+    changed += original != alternate
+assert changed > 0, 'changed seed did not change the generated DSL operations'
+print(f'[cross-det] PASS: {count} exact same-seed repeats; {changed}/{count} changed DSL inputs')
+PY
+printf '[cross-det] generator evidence retained: %s\n' "$RUN_DIR"

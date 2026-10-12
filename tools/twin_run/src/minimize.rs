@@ -16,6 +16,7 @@
 //! once the divergence is understood. `candidate.json` in the output
 //! directory is the last fixture compared.
 
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
@@ -88,6 +89,47 @@ fn capture(scenario: &Value, provenance: &Value) -> Option<Value> {
     Some(fixture)
 }
 
+/// A completed single-fixture comparison. A PASS or an interpreter ERROR is
+/// not a semantic reproduction. Inconsistent status/output is a broken
+/// runner, not a candidate the minimizer may accept or silently discard.
+fn comparison_kind(code: Option<i32>, stdout: &str, id: &str) -> Result<Option<String>, String> {
+    let results: Vec<&str> = stdout
+        .lines()
+        .filter(|line| {
+            line.starts_with("PASS ") || line.starts_with("FAIL ") || line.starts_with("ERROR ")
+        })
+        .collect();
+    let summaries: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.starts_with("asx-conformance: "))
+        .collect();
+    if results.len() != 1 || summaries.len() != 1 {
+        return Err("runner must report exactly one result and one comparison summary".into());
+    }
+    let result = results[0];
+    let summary = summaries[0];
+    if code == Some(0)
+        && result.starts_with(&format!("PASS {id} sha256:"))
+        && summary == "asx-conformance: compared=1 pass=1 fail=0 error=0"
+    {
+        return Ok(None);
+    }
+    if code == Some(1)
+        && result.starts_with(&format!("ERROR {id}: "))
+        && summary == "asx-conformance: compared=1 pass=0 fail=0 error=1"
+    {
+        return Ok(None);
+    }
+    if code == Some(1)
+        && summary == "asx-conformance: compared=1 pass=0 fail=1 error=0"
+        && let Some(what) = result.strip_prefix(&format!("FAIL {id}: "))
+        && let Some(kind) = what.split_whitespace().next()
+    {
+        return Ok(Some(kind.to_string()));
+    }
+    Err("runner exit status, scenario id, result and comparison summary disagree".into())
+}
+
 /// The part of the comparison that differs ("trace", "snapshot...", ...) when
 /// the C runtime FAILs `fixture`; None when it passes or reports ERROR.
 fn c_divergence(fixture: &Value, runner: &Path, work: &Path) -> Result<Option<String>, String> {
@@ -100,12 +142,36 @@ fn c_divergence(fixture: &Value, runner: &Path, work: &Path) -> Result<Option<St
         .arg(&file)
         .output()
         .map_err(|e| format!("cannot run {}: {e}", runner.display()))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.lines().find_map(|line| {
-        let rest = line.strip_prefix("FAIL ")?;
-        let (_, what) = rest.split_once(": ")?;
-        Some(what.split_whitespace().next().unwrap_or("").to_string())
-    }))
+    let id = fixture["scenario_id"]
+        .as_str()
+        .ok_or("captured fixture has no scenario_id")?;
+    let log_path = work.join("runner.log");
+    let mut log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("cannot open {}: {e}", log_path.display()))?;
+    writeln!(log, "scenario={id} status={}\nstdout:", output.status)
+        .and_then(|()| log.write_all(&output.stdout))
+        .and_then(|()| writeln!(log, "\nstderr:"))
+        .and_then(|()| log.write_all(&output.stderr))
+        .and_then(|()| writeln!(log))
+        .map_err(|e| format!("cannot retain {}: {e}", log_path.display()))?;
+    let stdout = std::str::from_utf8(&output.stdout).map_err(|e| {
+        format!(
+            "runner stdout is not UTF-8: {e}; see {}",
+            log_path.display()
+        )
+    })?;
+    comparison_kind(output.status.code(), stdout, id).map_err(|e| {
+        format!(
+            "{e}; runner={} status={}; see {}\nstderr: {}",
+            runner.display(),
+            output.status,
+            log_path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
 }
 
 fn count_deletable(doc: &Value) -> usize {
@@ -178,6 +244,40 @@ pub fn minimize(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn comparator_accepts_completed_pass_fail_and_interpreter_error() {
+        let pass = "PASS x sha256:abc\nasx-conformance: compared=1 pass=1 fail=0 error=0\n";
+        let fail = "FAIL x: trace\n  first_diff: event\nasx-conformance: compared=1 pass=0 fail=1 error=0\n";
+        let error = "ERROR x: C run failed: unsupported op\nasx-conformance: compared=1 pass=0 fail=0 error=1\n";
+        assert_eq!(comparison_kind(Some(0), pass, "x"), Ok(None));
+        assert_eq!(
+            comparison_kind(Some(1), fail, "x"),
+            Ok(Some("trace".into()))
+        );
+        assert_eq!(comparison_kind(Some(1), error, "x"), Ok(None));
+    }
+
+    #[test]
+    fn comparator_rejects_incomplete_inconsistent_and_crashed_runs() {
+        let fail = "FAIL x: snapshot\nasx-conformance: compared=1 pass=0 fail=1 error=0\n";
+        for code in [Some(0), Some(2), Some(127), None] {
+            assert!(comparison_kind(code, fail, "x").is_err());
+        }
+        for output in [
+            "",
+            "FAIL x: snapshot\n",
+            "asx-conformance: compared=0 pass=0 fail=0 error=0\n",
+            "FAIL x: \nasx-conformance: compared=1 pass=0 fail=1 error=0\n",
+            "FAIL x: snapshot\nasx-conformance: compared=2 pass=0 fail=2 error=0\n",
+            "FAIL x: snapshot\nasx-conformance: compared=1 pass=0 fail=0 error=1\n",
+            "FAIL x: trace\nFAIL x: snapshot\nasx-conformance: compared=1 pass=0 fail=1 error=0\n",
+            "FAIL x: trace\nasx-conformance: compared=1 pass=0 fail=1 error=0\nasx-conformance: compared=1 pass=0 fail=1 error=0\n",
+        ] {
+            assert!(comparison_kind(Some(1), output, "x").is_err());
+        }
+        assert!(comparison_kind(Some(1), fail, "other-scenario").is_err());
+    }
 
     fn paths(doc: &Value) -> Vec<String> {
         let mut out = Vec::new();

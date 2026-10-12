@@ -3,6 +3,7 @@ name = "rust-fuzz-target"
 version = "0.1.0"
 edition = "2024"
 publish = false
+description = "Retired incompatible-digest experiment; use tools/twin_run for live Rust/C parity"
 
 [[bin]]
 name = "rust_fuzz_target"

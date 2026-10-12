@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# replay_fuzz_counterexamples.sh - replay durable differential-fuzz corpus cases
+# replay_fuzz_counterexamples.sh - replay durable C determinism/crash corpus cases
 #
 # Replays minimized fuzz and sanitizer counterexamples through the C fuzz
-# harness, optionally enabling a Rust reference binary when available. Each
+# harness. Rust parity uses make fuzz-differential with twin_run. Each
 # fixture is fail-closed: parse errors, missing fields, command failures, and
 # mismatched expected counters fail the gate and still emit a JSON report.
 #
@@ -14,9 +14,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 CORPUS_DIR="${REPO_ROOT}/fixtures/fuzz_counterexamples"
-REPORT_ROOT="${REPO_ROOT}/build/fuzz/counterexamples"
-FUZZ_BIN="${REPO_ROOT}/build/fuzz/fuzz_differential"
-RUST_BINARY="${RUST_FUZZ_BINARY:-}"
+BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build}"
+if [[ "$BUILD_DIR" != /* ]]; then
+    BUILD_DIR="$REPO_ROOT/$BUILD_DIR"
+fi
+REPORT_ROOT="${BUILD_DIR}/fuzz/counterexamples"
+FUZZ_BIN="${BUILD_DIR}/fuzz/fuzz_differential"
 RUN_ID="fuzz-counterexample-replay-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 WORK_DIR=""
 CASES_FILE=""
@@ -31,7 +34,6 @@ Options:
   --corpus-dir <dir>     Corpus directory (default: fixtures/fuzz_counterexamples)
   --report-root <dir>    Report root (default: build/fuzz/counterexamples)
   --fuzz-bin <path>      fuzz_differential binary (default: build/fuzz/fuzz_differential)
-  --rust-binary <path>   Optional Rust reference fuzz binary
   --run-id <id>          Stable run id for report paths
   -h, --help             Show this help
 USAGE
@@ -42,7 +44,6 @@ while [ $# -gt 0 ]; do
         --corpus-dir) CORPUS_DIR="$2"; shift 2 ;;
         --report-root) REPORT_ROOT="$2"; shift 2 ;;
         --fuzz-bin) FUZZ_BIN="$2"; shift 2 ;;
-        --rust-binary) RUST_BINARY="$2"; shift 2 ;;
         --run-id) RUN_ID="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "[asx] fuzz-counterexample-replay: unknown option '$1'" >&2; usage; exit 2 ;;
@@ -97,26 +98,17 @@ finish_report() {
     local status="$1"
     local diagnostic="${2:-}"
     local git_commit
-    local rust_status
     local case_count
     local fail_count
 
     if [ -n "${ASX_GIT_COMMIT:-}" ]; then
         git_commit="$ASX_GIT_COMMIT"
     else
-        git_commit="$(git -C "$REPO_ROOT" show -s --format=%H HEAD 2>/dev/null || git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
-    fi
-    rust_status="not_requested"
-    if [ -n "$RUST_BINARY" ]; then
-        if [ -x "$RUST_BINARY" ]; then
-            rust_status="available"
-        else
-            rust_status="missing"
-        fi
+        git_commit="$(git -C "$REPO_ROOT" show -s --format=%H HEAD || git -C "$REPO_ROOT" rev-parse HEAD || echo unknown)"
     fi
 
-    case_count="$(jq -s 'length' "$CASES_FILE" 2>/dev/null || echo 0)"
-    fail_count="$(jq -s '[.[] | select(.status != "pass")] | length' "$CASES_FILE" 2>/dev/null || echo 0)"
+    case_count="$(jq -s 'length' "$CASES_FILE")"
+    fail_count="$(jq -s '[.[] | select(.status != "pass")] | length' "$CASES_FILE")"
 
     jq -s \
         --arg schema "asx.fuzz_counterexample_replay.v1" \
@@ -127,8 +119,6 @@ finish_report() {
         --arg git_commit "$git_commit" \
         --arg corpus_dir "$CORPUS_DIR" \
         --arg fuzz_bin "$FUZZ_BIN" \
-        --arg rust_binary "$RUST_BINARY" \
-        --arg rust_status "$rust_status" \
         --argjson case_count "$case_count" \
         --argjson fail_count "$fail_count" \
         '{
@@ -139,7 +129,7 @@ finish_report() {
           generated_at: $generated_at,
           git: {commit: $git_commit},
           corpus: {dir: $corpus_dir, case_count: $case_count, failure_count: $fail_count},
-          harness: {fuzz_bin: $fuzz_bin, rust_binary: (if $rust_binary == "" then null else $rust_binary end), rust_status: $rust_status},
+          harness: {fuzz_bin: $fuzz_bin, checks: "C determinism and crashes"},
           cases: .
         }' "$CASES_FILE" >"$SUMMARY_FILE"
 
@@ -161,13 +151,11 @@ record_case() {
     local c_exit_code="${12}"
     local determinism_failures="${13}"
     local crashes="${14}"
-    local rust_divergences="${15}"
-    local expected_exit="${16}"
-    local expected_det="${17}"
-    local expected_crashes="${18}"
-    local expected_rust="${19}"
-    local fixture_digest="${20}"
-    local minimization_json="${21}"
+    local expected_exit="${15}"
+    local expected_det="${16}"
+    local expected_crashes="${17}"
+    local fixture_digest="${18}"
+    local minimization_json="${19}"
 
     jq -cn \
         --arg status "$status" \
@@ -186,11 +174,9 @@ record_case() {
         --argjson c_exit_code "$c_exit_code" \
         --argjson determinism_failures "$determinism_failures" \
         --argjson crashes "$crashes" \
-        --argjson rust_divergences "$rust_divergences" \
         --argjson expected_exit "$expected_exit" \
         --argjson expected_det "$expected_det" \
         --argjson expected_crashes "$expected_crashes" \
-        --argjson expected_rust "$expected_rust" \
         '{
           scenario_id: $scenario_id,
           status: $status,
@@ -202,14 +188,12 @@ record_case() {
           expected: {
             c_exit_code: $expected_exit,
             determinism_failures: $expected_det,
-            crashes: $expected_crashes,
-            rust_divergences: $expected_rust
+            crashes: $expected_crashes
           },
           actual: {
             c_exit_code: $c_exit_code,
             determinism_failures: $determinism_failures,
-            crashes: $crashes,
-            rust_divergences: $rust_divergences
+            crashes: $crashes
           },
           command: $command,
           report_path: $report_path,
@@ -240,6 +224,7 @@ fi
 for fixture in "${FIXTURES[@]}"; do
     fixture_digest="$(sha256_file "$fixture")"
     fixture_config="$(jq -ec '
+      def nonnegative_integer: type == "number" and . >= 0 and . == floor;
       if .schema != "asx.fuzz_counterexample.v1" then
         error("unsupported fixture schema")
       elif (.scenario_id | type) != "string" or (.scenario_id | length) == 0 then
@@ -248,18 +233,24 @@ for fixture in "${FIXTURES[@]}"; do
         error("missing input.seed")
       elif (.input.iterations | type) != "number" then
         error("missing input.iterations")
+      elif .input.iterations <= 0 or .input.iterations != (.input.iterations | floor) then
+        error("input.iterations must be a positive integer")
       elif (.input.max_ops | type) != "number" then
         error("missing input.max_ops")
       elif (.input.mutations | type) != "number" then
         error("missing input.mutations")
+      elif ([.input.seed, .input.max_ops, .input.mutations] |
+            all(.[]; nonnegative_integer) | not) then
+        error("input fields must be nonnegative integers")
       elif (.expected.c_exit_code | type) != "number" then
         error("missing expected.c_exit_code")
       elif (.expected.determinism_failures | type) != "number" then
         error("missing expected.determinism_failures")
       elif (.expected.crashes | type) != "number" then
         error("missing expected.crashes")
-      elif (.expected.rust_divergences | type) != "number" then
-        error("missing expected.rust_divergences")
+      elif ([.expected.c_exit_code, .expected.determinism_failures, .expected.crashes] |
+            all(.[]; nonnegative_integer) | not) then
+        error("expected C counters must be nonnegative integers")
       elif (.minimization.source | type) != "string" then
         error("missing minimization.source")
       elif (.minimization.source_failure_class | type) != "string" then
@@ -274,15 +265,13 @@ for fixture in "${FIXTURES[@]}"; do
           expected_exit: .expected.c_exit_code,
           expected_det: .expected.determinism_failures,
           expected_crashes: .expected.crashes,
-          expected_rust: .expected.rust_divergences,
-          rust_mode: (.rust_reference.mode // "optional"),
           input: .input,
           minimization: .minimization
         }
       end
-    ' "$fixture" 2>/dev/null)" || {
+    ' "$fixture")" || {
         record_case "fail" "$fixture" "unknown" "0" 0 0 0 0 "jq fixture contract" "" \
-            "missing or invalid fixture fields" 2 0 0 0 0 0 0 0 "$fixture_digest" '{}'
+            "missing or invalid fixture fields" 2 0 0 0 0 0 "$fixture_digest" '{}'
         fail_gate "fixture parse failed"
     }
 
@@ -294,59 +283,45 @@ for fixture in "${FIXTURES[@]}"; do
     expected_exit="$(printf '%s\n' "$fixture_config" | jq -r '.expected_exit')"
     expected_det="$(printf '%s\n' "$fixture_config" | jq -r '.expected_det')"
     expected_crashes="$(printf '%s\n' "$fixture_config" | jq -r '.expected_crashes')"
-    expected_rust="$(printf '%s\n' "$fixture_config" | jq -r '.expected_rust')"
-    rust_mode="$(printf '%s\n' "$fixture_config" | jq -r '.rust_mode')"
     input_json="$(printf '%s\n' "$fixture_config" | jq -c '.input')"
     input_digest="$(sha256_text "$input_json")"
     minimization_json="$(printf '%s\n' "$fixture_config" | jq -c '.minimization')"
     minimization_source="$(printf '%s\n' "$minimization_json" | jq -r '.source')"
     minimization_failure="$(printf '%s\n' "$minimization_json" | jq -r '.source_failure_class')"
 
-    case "$rust_mode" in
-        optional|required|disabled) ;;
-        *)
-            record_case "fail" "$fixture" "$scenario_id" "0" "$seed" "$iterations" "$max_ops" \
-                "$mutations" "jq .rust_reference.mode" "" "invalid rust_reference.mode" 2 0 0 0 \
-                "$expected_exit" "$expected_det" "$expected_crashes" "$expected_rust" \
-                "$fixture_digest" "$minimization_json"
-            fail_gate "fixture rust_reference.mode invalid"
-            ;;
-    esac
-
     case_report="${WORK_DIR}/${scenario_id}.jsonl"
     command_text="${FUZZ_BIN} --seed ${seed} --iterations ${iterations} --max-ops ${max_ops} --mutations ${mutations} --report ${case_report}"
     cmd=("$FUZZ_BIN" --seed "$seed" --iterations "$iterations" --max-ops "$max_ops" --mutations "$mutations" --report "$case_report")
 
-    if [ "$rust_mode" = "required" ]; then
-        if [ -z "$RUST_BINARY" ] || [ ! -x "$RUST_BINARY" ]; then
-            record_case "fail" "$fixture" "$scenario_id" "$input_digest" "$seed" "$iterations" \
-                "$max_ops" "$mutations" "$command_text" "$case_report" \
-                "Rust reference binary required but unavailable" 2 0 0 0 "$expected_exit" \
-                "$expected_det" "$expected_crashes" "$expected_rust" "$fixture_digest" \
-                "$minimization_json"
-            fail_gate "required Rust reference binary unavailable"
-        fi
-    fi
-
-    if [ "$rust_mode" != "disabled" ] && [ -n "$RUST_BINARY" ] && [ -x "$RUST_BINARY" ]; then
-        cmd+=(--rust-binary "$RUST_BINARY")
-        command_text="${command_text} --rust-binary ${RUST_BINARY}"
-    fi
-
     c_exit=0
-    "${cmd[@]}" >/dev/null 2>&1 || c_exit=$?
-
-    summary="$(jq -sc 'map(select(.kind == "summary")) | last // {}' "$case_report" 2>/dev/null || echo '{}')"
-    actual_det="$(printf '%s\n' "$summary" | jq -r '.determinism_failures // -1')"
-    actual_crashes="$(printf '%s\n' "$summary" | jq -r '.crashes // -1')"
-    # Without a Rust binary the fuzzer reports rust_comparison "skipped" and
-    # rust_divergences null: there is no count to check (-1 = not measured).
-    rust_comparison="$(printf '%s\n' "$summary" | jq -r '.rust_comparison // "ran"')"
-    actual_rust="$(printf '%s\n' "$summary" | jq -r '.rust_divergences // -1')"
+    "${cmd[@]}" || c_exit=$?
 
     diagnostic=""
     status="pass"
-    if [ "$c_exit" -ne "$expected_exit" ]; then
+    summary="$(jq -esc --argjson iterations "$iterations" '
+      map(select(.kind == "summary")) |
+      if length != 1 then error("expected exactly one fuzz summary")
+      elif (.[0].iterations | type) != "number" or .[0].iterations != $iterations then
+        error("fuzzer did not complete the requested iteration budget")
+      elif (.[0].determinism_failures | type) != "number" or
+           .[0].determinism_failures < 0 or
+           .[0].determinism_failures != (.[0].determinism_failures | floor) then
+        error("invalid determinism failure count")
+      elif (.[0].crashes | type) != "number" or .[0].crashes < 0 or
+           .[0].crashes != (.[0].crashes | floor) then
+        error("invalid crash count")
+      else .[0] end
+    ' "$case_report")" || {
+        summary='{}'
+        status="fail"
+        diagnostic="missing or invalid fuzz summary"
+    }
+    actual_det="$(printf '%s\n' "$summary" | jq -r '.determinism_failures // -1')"
+    actual_crashes="$(printf '%s\n' "$summary" | jq -r '.crashes // -1')"
+
+    if [ "$status" != "pass" ]; then
+        : # Preserve the summary diagnostic instead of comparing sentinel values.
+    elif [ "$c_exit" -ne "$expected_exit" ]; then
         status="fail"
         diagnostic="exit code mismatch"
     elif [ "$actual_det" -ne "$expected_det" ]; then
@@ -355,15 +330,12 @@ for fixture in "${FIXTURES[@]}"; do
     elif [ "$actual_crashes" -ne "$expected_crashes" ]; then
         status="fail"
         diagnostic="crash count mismatch"
-    elif [ "$rust_comparison" = "ran" ] && [ "$actual_rust" -ne "$expected_rust" ]; then
-        status="fail"
-        diagnostic="Rust divergence count mismatch"
     fi
 
     record_case "$status" "$fixture" "$scenario_id" "$input_digest" "$seed" "$iterations" \
         "$max_ops" "$mutations" "$command_text" "$case_report" "$diagnostic" "$c_exit" \
-        "$actual_det" "$actual_crashes" "$actual_rust" "$expected_exit" "$expected_det" \
-        "$expected_crashes" "$expected_rust" "$fixture_digest" "$minimization_json"
+        "$actual_det" "$actual_crashes" "$expected_exit" "$expected_det" \
+        "$expected_crashes" "$fixture_digest" "$minimization_json"
 
     if [ "$status" != "pass" ]; then
         fail_gate "$scenario_id failed: $diagnostic"

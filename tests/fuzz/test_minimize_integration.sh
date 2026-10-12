@@ -8,6 +8,7 @@
 # 4. JSONL output is parseable
 # 5. seed+iteration replay path works
 # 6. End-to-end: fuzz_differential --minimize pipeline wired correctly
+# 7. C smoke summary contains only measured C checks
 #
 # Bead: bd-rkql.5
 
@@ -15,13 +16,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-MINIMIZE_BIN="$SCRIPT_DIR/fuzz_minimize"
-FUZZ_BIN="$SCRIPT_DIR/fuzz_differential"
-RUST_BIN="$PROJECT_ROOT/tools/rust_fuzz_target/target/release/rust_fuzz_target"
-JSONL_GEN="$SCRIPT_DIR/generate_grammar_vectors_jsonl"
+BUILD_DIR="${BUILD_DIR:-$PROJECT_ROOT/build}"
+if [[ "$BUILD_DIR" != /* ]]; then
+    BUILD_DIR="$PROJECT_ROOT/$BUILD_DIR"
+fi
+MINIMIZE_BIN="$BUILD_DIR/fuzz/fuzz_minimize"
+FUZZ_BIN="$BUILD_DIR/fuzz/fuzz_differential"
+JSONL_GEN="$BUILD_DIR/fuzz/generate_grammar_vectors_jsonl"
+
+make -C "$PROJECT_ROOT" -j2 BUILD_DIR="$BUILD_DIR" fuzz-build minimize-build
+"${CC:-cc}" -std=c99 -Wall -Wextra -Wpedantic -Werror -O2 \
+    -o "$JSONL_GEN" "$SCRIPT_DIR/generate_grammar_vectors_jsonl.c"
 
 TMPDIR_WORK="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR_WORK"' EXIT
 
 PASS=0
 FAIL=0
@@ -40,14 +47,16 @@ run_test() {
 
 # ---- Test 1: Self-tests ----
 test_selftests() {
-    "$MINIMIZE_BIN" --selftest 2>&1 | command grep -q "self-test 4 PASS"
+    local log="$TMPDIR_WORK/selftests.log"
+    "$MINIMIZE_BIN" --selftest 2>&1 | tee "$log" || return 1
+    command grep -q "self-test 4 PASS" "$log"
 }
 run_test "all built-in self-tests pass" test_selftests
 
 # ---- Test 2: stdin-scenario mode ----
 test_stdin_scenario() {
     # Generate a scenario and feed it to minimizer
-    "$JSONL_GEN" 1 | python3 -c "
+    "$JSONL_GEN" 1 | python3 -I -c "
 import json, sys
 sc = json.loads(sys.stdin.readline())
 kind_map = {'SpawnRegion':0,'CloseRegion':1,'PoisonRegion':2,'SpawnTask':3,'CancelTask':4,
@@ -61,9 +70,9 @@ for op in sc['ops']:
     parts.extend([str(kind_map[op['op']]), str(op['idx_a']), str(op['idx_b']),
                   str(op['arg_u32']), str(op['arg_u64'])])
 print(' '.join(parts))
-" | "$MINIMIZE_BIN" --stdin-scenario --output "$TMPDIR_WORK/test2.json" 2>/dev/null
+" | "$MINIMIZE_BIN" --stdin-scenario --output "$TMPDIR_WORK/test2.json" || return 1
     # Verify output file exists and is valid JSON
-    python3 -c "
+    python3 -I -c "
 import json
 with open('$TMPDIR_WORK/test2.json') as f:
     d = json.loads(f.read())
@@ -77,7 +86,7 @@ run_test "stdin-scenario produces valid output" test_stdin_scenario
 # ---- Test 3: JSONL output structure ----
 test_jsonl_fields() {
     # Self-test JSONL goes to stderr in verbose mode
-    "$MINIMIZE_BIN" --selftest --verbose 2>&1 | command grep 'minimized_scenario' | python3 -c "
+    "$MINIMIZE_BIN" --selftest --verbose 2>&1 | command grep 'minimized_scenario' | python3 -I -c "
 import json, sys
 lines = []
 for line in sys.stdin:
@@ -111,7 +120,7 @@ run_test "JSONL has all required fields" test_jsonl_fields
 
 # ---- Test 4: Self-test 3 reduction ratio ----
 test_reduction_ratio() {
-    "$MINIMIZE_BIN" --selftest --verbose 2>&1 | command grep 'minimized_scenario' | tail -1 | python3 -c "
+    "$MINIMIZE_BIN" --selftest --verbose 2>&1 | command grep 'minimized_scenario' | tail -1 | python3 -I -c "
 import json, sys
 d = json.loads(sys.stdin.readline())
 ratio = 1.0 - (d['minimized_ops'] / d['original_ops'])
@@ -123,8 +132,8 @@ run_test "self-test 3: >50% reduction" test_reduction_ratio
 # ---- Test 5: Pipeline wiring ----
 test_seed_iteration_replay() {
     "$MINIMIZE_BIN" --initial-seed 424242 --iteration 7 --output "$TMPDIR_WORK/test5.json" \
-        2>/dev/null
-    python3 -c "
+        || return 1
+    python3 -I -c "
 import json
 with open('$TMPDIR_WORK/test5.json') as f:
     d = json.loads(f.read())
@@ -139,30 +148,34 @@ run_test "seed+iteration replay produces valid output" test_seed_iteration_repla
 
 # ---- Test 6: Pipeline wiring ----
 test_pipeline_wiring() {
-    # Run differential harness with --minimize flag
+    local log="$TMPDIR_WORK/pipeline.log"
+    # Run the real C harness with --minimize flag.
     # Since there are no determinism failures, this just verifies the flag is accepted
-    "$FUZZ_BIN" --iterations 10 --minimize "$MINIMIZE_BIN" 2>&1 | \
-        command grep -q "PASS: no issues"
+    "$FUZZ_BIN" --iterations 10 --minimize "$MINIMIZE_BIN" 2>&1 | tee "$log" || return 1
+    command grep -q "PASS: no C determinism failures or crashes" "$log"
 }
-run_test "differential --minimize accepted" test_pipeline_wiring
+run_test "C smoke --minimize accepted" test_pipeline_wiring
 
-# ---- Test 6: Full pipeline with Rust binary ----
-if [ -x "$RUST_BIN" ]; then
-    test_full_pipeline() {
-        local report="$TMPDIR_WORK/full_report.jsonl"
-        "$FUZZ_BIN" --rust-binary "$RUST_BIN" --minimize "$MINIMIZE_BIN" \
-            --iterations 100 --report "$report" 2>/dev/null
-        # Verify summary is present and no crashes
-        command grep '"kind":"summary"' "$report" | python3 -c "
+# ---- Test 7: Full C pipeline (not Rust parity evidence) ----
+test_full_pipeline() {
+    local report="$TMPDIR_WORK/full_report.jsonl"
+    "$FUZZ_BIN" --minimize "$MINIMIZE_BIN" --iterations 100 --report "$report" \
+        || return 1
+    python3 -I - "$report" <<'PY'
 import json, sys
-d = json.loads(sys.stdin.readline())
+with open(sys.argv[1]) as stream:
+    records = [json.loads(line) for line in stream]
+summaries = [d for d in records if d['kind'] == 'summary']
+assert len(summaries) == 1
+d = summaries[0]
 assert d['determinism_failures'] == 0
 assert d['crashes'] == 0
 assert d['iterations'] == 100
-"
-    }
-    run_test "full pipeline: differential + rust + minimize" test_full_pipeline
-fi
+assert set(d) == {'kind', 'initial_seed', 'iterations', 'determinism_failures',
+                  'crashes', 'duration_sec', 'iterations_per_sec'}
+PY
+}
+run_test "full C determinism/crash pipeline with minimizer" test_full_pipeline
 
 echo ""
 echo "$((PASS + FAIL))/$((PASS + FAIL)) tests run: $PASS passed, $FAIL failed"
