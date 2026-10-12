@@ -7,11 +7,14 @@
 #include "../../test_harness.h"
 #include <asx/core/budget.h>
 #include <asx/cx/cx.h>
+#include <asx/runtime/runtime.h>
+#include <asx/runtime/trace.h>
 #include <asx/sync/barrier.h>
 #include <asx/sync/mutex.h>
 #include <asx/sync/notify.h>
 #include <asx/sync/once.h>
 #include <asx/sync/semaphore.h>
+#include <string.h>
 
 static asx_status st_sink_;
 #define MUST_OK(expr)                                                                              \
@@ -666,6 +669,232 @@ TEST(mutex_plain_unlock_does_not_poison) {
     ASSERT_EQ(asx_mutex_close(h), ASX_OK);
 }
 
+/* A live holder parks with a real tracked permit. Raw obligation IDs stay
+ * holder-bound; the owned permit may move without transferring liability. */
+typedef enum {
+    SYNC_ACCESS_RAW_COMMIT,
+    SYNC_ACCESS_RAW_ABORT,
+    SYNC_ACCESS_RAW_DROP,
+    SYNC_ACCESS_MOVE_RELEASE,
+    SYNC_ACCESS_MOVE_FORGET,
+    SYNC_ACCESS_POISON_FOREIGN_CREDIT
+} sync_access_operation;
+
+typedef struct {
+    asx_region_id region;
+    asx_semaphore_handle sem;
+    asx_mutex_handle mutex;
+    asx_semaphore_permit permit;
+    asx_mutex_guard guard;
+    sync_access_operation operation;
+    int ready;
+    int settle;
+    int settled;
+    asx_status holder_forged_attempted;
+    asx_status attempted;
+    asx_status settlement;
+} sync_access_case;
+
+static int sync_access_moves_permit(sync_access_operation operation) {
+    return operation == SYNC_ACCESS_MOVE_RELEASE || operation == SYNC_ACCESS_MOVE_FORGET;
+}
+
+static int sync_access_forgets_permit(sync_access_operation operation) {
+    return operation == SYNC_ACCESS_RAW_ABORT || operation == SYNC_ACCESS_MOVE_FORGET;
+}
+
+static asx_status poll_sync_access_holder(void *data, asx_task_id self) {
+    sync_access_case *c = (sync_access_case *)data;
+    asx_status st;
+    if (!c->ready) {
+        asx_cx cx;
+        asx_semaphore_waiter waiter;
+        st = asx_cx_init(&cx, c->region, self, ASX_CAP_CANCEL_CHECK);
+        if (st != ASX_OK) return st;
+        st = asx_semaphore_acquire_begin(c->sem, &waiter);
+        if (st != ASX_OK) return st;
+        st = asx_semaphore_poll_acquire(&waiter, &c->permit, &cx);
+        if (st != ASX_OK) return st;
+        if (c->permit.obligation == ASX_INVALID_ID) return ASX_E_INVALID_STATE;
+        if (c->operation == SYNC_ACCESS_POISON_FOREIGN_CREDIT) {
+            asx_mutex_guard forged;
+            st = asx_mutex_try_lock(c->mutex, &c->guard);
+            if (st != ASX_OK) return st;
+            /* Even the credit's actual holder cannot attach its semaphore
+             * obligation to a different resource's mutex guard. */
+            forged = c->guard;
+            forged.permit.obligation = c->permit.obligation;
+            c->holder_forged_attempted = asx_mutex_unlock_poisoned(forged);
+        }
+        c->ready = 1;
+    }
+    if (!c->settle) {
+        st = asx_task_park(self);
+        return st == ASX_OK ? ASX_E_PENDING : st;
+    }
+    if (c->operation == SYNC_ACCESS_POISON_FOREIGN_CREDIT) {
+        st = asx_mutex_unlock_poisoned(c->guard);
+        if (st != ASX_OK) return st;
+    }
+    c->settlement = sync_access_forgets_permit(c->operation) ? asx_semaphore_forget(c->permit)
+                                                             : asx_semaphore_release(c->permit);
+    c->settled = 1;
+    if (sync_access_moves_permit(c->operation)) {
+        return c->settlement == ASX_E_INVALID_STATE ? ASX_OK : ASX_E_INVALID_STATE;
+    }
+    return c->settlement;
+}
+
+static asx_status poll_sync_access_intruder(void *data, asx_task_id self) {
+    sync_access_case *c = (sync_access_case *)data;
+    (void)self;
+    switch (c->operation) {
+    case SYNC_ACCESS_RAW_COMMIT: c->attempted = asx_obligation_commit(c->permit.obligation); break;
+    case SYNC_ACCESS_RAW_ABORT: c->attempted = asx_obligation_abort(c->permit.obligation); break;
+    case SYNC_ACCESS_RAW_DROP: c->attempted = asx_obligation_drop(c->permit.obligation); break;
+    case SYNC_ACCESS_MOVE_RELEASE: c->attempted = asx_semaphore_release(c->permit); break;
+    case SYNC_ACCESS_MOVE_FORGET: c->attempted = asx_semaphore_forget(c->permit); break;
+    case SYNC_ACCESS_POISON_FOREIGN_CREDIT: {
+        /* Mutex guards are untracked. A real credit bound to another
+         * resource must not poison this mutex or consume that credit. */
+        asx_mutex_guard forged = c->guard;
+        forged.permit.obligation = c->permit.obligation;
+        c->attempted = asx_mutex_unlock_poisoned(forged);
+        break;
+    }
+    }
+    return ASX_OK;
+}
+
+static uint32_t sync_obligation_resolution_count(asx_obligation_id id) {
+    uint32_t i;
+    uint32_t n = 0;
+    asx_trace_event event;
+    for (i = 0; i < asx_trace_event_count(); i++) {
+        if (!asx_trace_event_get(i, &event) || event.entity_id != id) continue;
+        if (event.kind == ASX_TRACE_OBLIGATION_COMMIT || event.kind == ASX_TRACE_OBLIGATION_ABORT ||
+            event.kind == ASX_TRACE_OBLIGATION_LEAK) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static void check_sync_foreign_settlement(sync_access_operation operation) {
+    sync_access_case c;
+    asx_task_id owner;
+    asx_task_id intruder;
+    asx_obligation_info before;
+    asx_obligation_info after;
+    asx_budget budget;
+    uint64_t leaks;
+    uint32_t final_available;
+    int moved = sync_access_moves_permit(operation);
+    int forgotten = sync_access_forgets_permit(operation);
+
+    asx_runtime_reset();
+    setup();
+    memset(&c, 0, sizeof(c));
+    c.operation = operation;
+    ASSERT_EQ(asx_region_open(&c.region), ASX_OK);
+    ASSERT_EQ(asx_semaphore_create(1u, &c.sem), ASX_OK);
+    if (operation == SYNC_ACCESS_POISON_FOREIGN_CREDIT) {
+        ASSERT_EQ(asx_mutex_create(&c.mutex), ASX_OK);
+    }
+    ASSERT_EQ(asx_task_spawn(c.region, poll_sync_access_holder, &c, &owner), ASX_OK);
+    budget = asx_budget_from_polls(10u);
+    ASSERT_EQ(asx_scheduler_run(c.region, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_TRUE(c.ready);
+    ASSERT_EQ(asx_semaphore_available(c.sem), 0u);
+    ASSERT_EQ(asx_obligation_get_info(c.permit.obligation, &before), ASX_OK);
+    ASSERT_EQ(before.state, ASX_OBLIGATION_RESERVED);
+    ASSERT_EQ(before.kind, ASX_OBLIGATION_KIND_SEMAPHORE_PERMIT);
+    ASSERT_EQ(asx_handle_index(before.holder), asx_handle_index(owner));
+    ASSERT_EQ(sync_obligation_resolution_count(c.permit.obligation), 0u);
+    leaks = asx_obligation_leak_count();
+    if (operation == SYNC_ACCESS_POISON_FOREIGN_CREDIT) {
+        ASSERT_EQ(c.holder_forged_attempted, ASX_E_PERMISSION_DENIED);
+        ASSERT_TRUE(asx_mutex_is_locked(c.mutex));
+        ASSERT_FALSE(asx_mutex_is_poisoned(c.mutex));
+    }
+
+    ASSERT_EQ(asx_task_spawn(c.region, poll_sync_access_intruder, &c, &intruder), ASX_OK);
+    ASSERT_NE(asx_handle_index(owner), asx_handle_index(intruder));
+    budget = asx_budget_from_polls(10u);
+    ASSERT_EQ(asx_scheduler_run(c.region, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(c.attempted, moved ? ASX_OK : ASX_E_PERMISSION_DENIED);
+    final_available = forgotten ? 0u : 1u;
+    ASSERT_EQ(asx_semaphore_available(c.sem), moved ? final_available : 0u);
+    ASSERT_EQ(asx_obligation_get_info(c.permit.obligation, &after), ASX_OK);
+    ASSERT_EQ(after.kind, before.kind);
+    ASSERT_EQ(after.region, before.region);
+    ASSERT_EQ(after.holder, before.holder);
+    if (moved) {
+        ASSERT_EQ(after.state, forgotten ? ASX_OBLIGATION_ABORTED : ASX_OBLIGATION_COMMITTED);
+        if (forgotten) ASSERT_EQ(after.abort_reason, ASX_OBLIGATION_ABORT_EXPLICIT);
+    } else {
+        ASSERT_EQ(after.state, before.state);
+        ASSERT_EQ(after.abort_reason, before.abort_reason);
+    }
+    ASSERT_EQ(asx_obligation_leak_count(), leaks);
+    ASSERT_EQ(sync_obligation_resolution_count(c.permit.obligation), moved ? 1u : 0u);
+    if (operation == SYNC_ACCESS_POISON_FOREIGN_CREDIT) {
+        ASSERT_TRUE(asx_mutex_is_locked(c.mutex));
+        ASSERT_FALSE(asx_mutex_is_poisoned(c.mutex));
+    }
+
+    c.settle = 1;
+    ASSERT_EQ(asx_task_wake(owner), ASX_OK);
+    budget = asx_budget_from_polls(10u);
+    ASSERT_EQ(asx_scheduler_run(c.region, &budget), ASX_OK);
+    ASSERT_TRUE(c.settled);
+    ASSERT_EQ(c.settlement, moved ? ASX_E_INVALID_STATE : ASX_OK);
+    ASSERT_EQ(asx_obligation_get_info(c.permit.obligation, &after), ASX_OK);
+    ASSERT_EQ(after.holder, before.holder);
+    if (forgotten) {
+        ASSERT_EQ(after.state, ASX_OBLIGATION_ABORTED);
+        ASSERT_EQ(after.abort_reason, ASX_OBLIGATION_ABORT_EXPLICIT);
+    } else {
+        ASSERT_EQ(after.state, ASX_OBLIGATION_COMMITTED);
+    }
+    ASSERT_EQ(asx_semaphore_available(c.sem), final_available);
+    ASSERT_EQ(sync_obligation_resolution_count(c.permit.obligation), 1u);
+    ASSERT_EQ(asx_obligation_leak_count(), leaks);
+    ASSERT_EQ(asx_semaphore_release(c.permit), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_semaphore_forget(c.permit), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_semaphore_available(c.sem), final_available);
+    ASSERT_EQ(sync_obligation_resolution_count(c.permit.obligation), 1u);
+    if (operation == SYNC_ACCESS_POISON_FOREIGN_CREDIT) {
+        ASSERT_FALSE(asx_mutex_is_locked(c.mutex));
+        ASSERT_TRUE(asx_mutex_is_poisoned(c.mutex));
+        ASSERT_EQ(asx_mutex_unlock_poisoned(c.guard), ASX_E_INVALID_STATE);
+    }
+}
+
+TEST(tracked_permit_raw_commit_requires_holder_and_owner_can_release) {
+    check_sync_foreign_settlement(SYNC_ACCESS_RAW_COMMIT);
+}
+
+TEST(tracked_permit_raw_abort_requires_holder_and_owner_can_forget) {
+    check_sync_foreign_settlement(SYNC_ACCESS_RAW_ABORT);
+}
+
+TEST(tracked_permit_raw_drop_requires_holder_and_owner_can_release) {
+    check_sync_foreign_settlement(SYNC_ACCESS_RAW_DROP);
+}
+
+TEST(tracked_permit_moves_to_another_task_and_releases_once) {
+    check_sync_foreign_settlement(SYNC_ACCESS_MOVE_RELEASE);
+}
+
+TEST(tracked_permit_moves_to_another_task_and_forgets_once) {
+    check_sync_foreign_settlement(SYNC_ACCESS_MOVE_FORGET);
+}
+
+TEST(mutex_poisoned_release_rejects_foreign_credit_before_mutation) {
+    check_sync_foreign_settlement(SYNC_ACCESS_POISON_FOREIGN_CREDIT);
+}
+
 /* ================================================================== */
 /* Barrier tests                                                       */
 /* ================================================================== */
@@ -1052,6 +1281,12 @@ int main(void) {
     RUN_TEST(mutex_lock_cancel);
     RUN_TEST(mutex_unlock_poisoned_poisons);
     RUN_TEST(mutex_plain_unlock_does_not_poison);
+    RUN_TEST(tracked_permit_raw_commit_requires_holder_and_owner_can_release);
+    RUN_TEST(tracked_permit_raw_abort_requires_holder_and_owner_can_forget);
+    RUN_TEST(tracked_permit_raw_drop_requires_holder_and_owner_can_release);
+    RUN_TEST(tracked_permit_moves_to_another_task_and_releases_once);
+    RUN_TEST(tracked_permit_moves_to_another_task_and_forgets_once);
+    RUN_TEST(mutex_poisoned_release_rejects_foreign_credit_before_mutation);
 
     /* Barrier */
     RUN_TEST(barrier_create_close);

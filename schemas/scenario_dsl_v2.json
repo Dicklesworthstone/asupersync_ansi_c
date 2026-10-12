@@ -112,7 +112,7 @@
     "nonblocking_step": {"oneOf": [
       {"$ref": "#/$defs/s_checkpoint"}, {"$ref": "#/$defs/s_is_cancel_requested"},
       {"$ref": "#/$defs/s_trace"}, {"$ref": "#/$defs/s_reserve"},
-      {"$ref": "#/$defs/s_obligation_ref"}, {"$ref": "#/$defs/s_abort"}, {"$ref": "#/$defs/s_try_join"},
+      {"$ref": "#/$defs/s_obligation_ref"}, {"$ref": "#/$defs/s_abort"}, {"$ref": "#/$defs/s_handoff"}, {"$ref": "#/$defs/s_try_join"},
       {"$ref": "#/$defs/s_abort_task"}, {"$ref": "#/$defs/s_spawn"}, {"$ref": "#/$defs/s_permit_send"},
       {"$ref": "#/$defs/s_permit_ref"}, {"$ref": "#/$defs/s_chan_value_nb"}, {"$ref": "#/$defs/s_chan_ref_nb"},
       {"$ref": "#/$defs/s_sync_ref_nb"}, {"$ref": "#/$defs/s_sem_add_permits"},
@@ -152,6 +152,8 @@
       "properties": {"op": {"enum": ["commit", "leak"]}, "obligation": {"$ref": "#/$defs/name"}}},
     "s_abort": {"type": "object", "required": ["op", "obligation", "reason"], "additionalProperties": false,
       "properties": {"op": {"const": "abort"}, "obligation": {"$ref": "#/$defs/name"}, "reason": {"enum": ["Cancel", "Error", "Explicit"]}}},
+    "s_handoff": {"type": "object", "required": ["op", "obligation", "task", "as"], "additionalProperties": false,
+      "properties": {"op": {"const": "handoff"}, "obligation": {"$ref": "#/$defs/name"}, "task": {"$ref": "#/$defs/name"}, "as": {"$ref": "#/$defs/name"}}},
     "s_spawn": {"type": "object", "required": ["op", "as", "program"], "additionalProperties": false,
       "properties": {"op": {"const": "spawn"}, "as": {"$ref": "#/$defs/name"}, "program": {"$ref": "#/$defs/program"},
                      "budget": {"$ref": "#/$defs/budget"}, "region": {"$ref": "#/$defs/name"}}},

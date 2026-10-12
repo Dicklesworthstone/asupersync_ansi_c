@@ -13,6 +13,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "../runtime/runtime_internal.h"
 #include "../sync/wait_queue.h"
 #include <asx/core/broadcast.h>
 #include <asx/runtime/runtime.h>
@@ -182,7 +183,7 @@ asx_status asx_broadcast_send(asx_broadcast_sender *sender, asx_cx *cx, uint64_t
         asx_obligation_register(cx->region_id, ASX_OBLIGATION_KIND_SEND_PERMIT, cx->task_id, &ob) ==
             ASX_OK) {
         /* The permit's send commits before publishing (:719-724). */
-        asx_status cs = asx_obligation_commit(ob);
+        asx_status cs = asx_obligation_commit_created_internal(ob, cx->task_id, cx->region_id);
         (void)cs; /* reserved just above */
     }
 

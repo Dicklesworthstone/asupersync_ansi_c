@@ -57,7 +57,8 @@ typedef enum {
     ASX_TRACE_OBLIGATION_RESERVE = 0x20,
     ASX_TRACE_OBLIGATION_COMMIT = 0x21,
     ASX_TRACE_OBLIGATION_ABORT = 0x22,
-    ASX_TRACE_OBLIGATION_LEAK = 0x23, /* a holder completed with it still reserved */
+    ASX_TRACE_OBLIGATION_LEAK = 0x23,    /* a holder completed with it still reserved */
+    ASX_TRACE_OBLIGATION_HANDOFF = 0x24, /* entity: obligation, aux: new holder */
 
     /* Channel events (0x30–0x3F) */
     ASX_TRACE_CHANNEL_SEND = 0x30,
@@ -187,9 +188,19 @@ ASX_API void asx_trace_user(asx_task_id task, const char *message);
  * reason an ASX_TRACE_CANCEL_REQUEST or ASX_TRACE_REGION_CANCELLED event
  * was emitted with. Absent fields are NULL. */
 struct asx_cancel_reason;
+struct asx_obligation_info;
+typedef struct {
+    asx_task_id from_task;
+    asx_task_id to_task;
+    asx_region_id from_region;
+    asx_region_id to_region;
+} asx_trace_handoff;
+
 typedef struct {
     const char *text;
     const struct asx_cancel_reason *reason;
+    const asx_trace_handoff *handoff;             /* present only for OBLIGATION_HANDOFF */
+    const struct asx_obligation_info *obligation; /* original binding of a posted reserve */
 } asx_trace_payload;
 
 /* Streaming observer: called synchronously for every event after it is

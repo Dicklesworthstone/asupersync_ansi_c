@@ -208,6 +208,7 @@ so a blocking step inside `masked` is a schema error.
 | `commit` | `obligation` | `token.commit()` (`obligation_mailbox.rs:879`) | `asx_obligation_commit(id)` | no | ignored |
 | `abort` | `obligation`, `reason` (`Cancel`, `Error`, `Explicit`) | `token.abort(reason)` (`:888`) | `asx_obligation_abort_with_reason(id, reason)` | no | ignored |
 | `leak` | `obligation` | `drop(token)`, which posts a Leak (`:897`) | `asx_obligation_drop(id)`: leaked when the poll returns, under the leak policy | no | ignored |
+| `handoff` | `obligation`, destination `task`, destination-local `as` | `token.try_transfer(&destination_cx)` (`obligation_mailbox.rs:706`); refusal recovers the original token with `into_parts()` | `asx_obligation_handoff(id, destination)` | no | A cancelled destination refuses with `ASX_E_CANCELLED`, including after it completed. |
 
 `kind` is required: C's `ASX_OBLIGATION_KIND_GENERIC` has no Rust counterpart
 and is not allowed. Both runtimes apply a poll's obligation operations, in
@@ -217,6 +218,29 @@ commit, abort or drop of its token, count against the region's
 `max_obligations` at the call; a permit's registration (semaphore, channel,
 oneshot, a server call) and its resolutions count when applied. A body that
 ends holding tokens drops them first, as twin_run's locals do.
+
+An accepted `handoff` consumes the source-local name and delivers the same
+logical obligation under the destination-local name. The original canonical
+name (`source/oN`) stays unchanged. Destination token stores belong to their
+task futures, including before first poll; shared lookup holds only weak
+references. Destination body destruction therefore drops a received token
+with that body, rather than retaining it in the driver. An existing destination
+name is a harness error. A missing source-local token observes `ASX_E_NOT_FOUND`.
+Same-holder transfer refuses with `ASX_E_INVALID_ARGUMENT`; a completed
+uncancelled destination gives `ASX_E_INVALID_STATE`; closed destination
+admission gives `ASX_E_REGION_CLOSED`; a full cross-region quota gives
+`ASX_E_ADMISSION_LIMIT`. Refusal preserves the source token and emits no handoff.
+Same-region handoff reuses its existing quota credit. Declared tasks have
+their actual task-record Cx available before first poll; spawn-factory contexts
+are published when their admitted futures are constructed.
+
+The C raw-ID application API requires the actual holder's current poll.
+Tracked primitive credits instead require the genuine physical permit, which
+may move between tasks without changing holder liability, as a plain Rust
+owned-token move does. Only explicit checked-token handoff reassigns liability.
+Wrong-task raw-ID misuse is direct-C coverage: Rust's affine token API cannot
+express it. These captures cover the cooperative Lab model, not native
+concurrent transfer interleavings.
 
 ### 3.4 Spawning, joining, child regions
 

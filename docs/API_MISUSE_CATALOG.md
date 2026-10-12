@@ -84,6 +84,11 @@ records.
 | `asx_obligation_reserve(rid, NULL)` | NULL output | ASX_E_INVALID_ARGUMENT | test_safety_posture:null_out_pointers_rejected |
 | `asx_obligation_commit(oid)` x2 | Double commit | ASX_E_OBLIGATION_ALREADY_RESOLVED | test_safety_posture:obligation_double_commit_rejected |
 | `asx_obligation_abort(committed)` | Abort after commit | ASX_E_OBLIGATION_ALREADY_RESOLVED | test_safety_posture:obligation_commit_then_abort_rejected |
+| `asx_obligation_commit/abort/drop(held)` | Host or another task presents the raw ID | ASX_E_PERMISSION_DENIED; ledger/counts/trace unchanged | test_budget_obligation:non_holder_cannot_resolve_an_obligation_but_its_owner_can, host_raw_resolution_of_a_held_credit_is_failure_atomic |
+| `asx_obligation_commit/abort/drop(permit.obligation)` | Settle a bound primitive credit without its genuine permit | ASX_E_PERMISSION_DENIED; physical reservation unchanged | test_mpsc:tracked_permit_credit_rejects_wrong_task_before_holder_send, test_sync:tracked_permit_raw_commit_requires_holder_and_owner_can_release |
+| `asx_obligation_handoff(oid, holder)` | Same destination holder | ASX_E_INVALID_ARGUMENT; original token still usable | test_budget_obligation:handoff_same_holder_is_failure_atomic |
+| `asx_obligation_handoff(oid, destination)` | Cancelled destination, including already completed | ASX_E_CANCELLED | test_budget_obligation:handoff_cancelled_destination_is_failure_atomic |
+| `asx_obligation_handoff(oid, destination)` | Full cross-region destination quota | ASX_E_ADMISSION_LIMIT; ownership unchanged | test_budget_obligation:handoff_full_destination_preserves_both_region_counts |
 | `asx_obligation_reserve_ex(other_region, kind, holder, &o)` | Holder owned by another region (Rust TaskNotOwned) | ASX_E_INVALID_STATE | test_budget_obligation:reserve_holder_must_belong_to_the_region |
 | `asx_obligation_get_state(oid, NULL)` | NULL output | ASX_E_INVALID_ARGUMENT | test_safety_posture:null_out_pointers_rejected |
 

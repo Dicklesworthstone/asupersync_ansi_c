@@ -42,6 +42,10 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Private channel destruction boundary; importing runtime_internal.h
+ * would collide with this interpreter's independent scenario arenas. */
+void asx_send_permit_drop_internal(asx_send_permit *permit);
+
 /* ------------------------------------------------------------------ */
 /* Bounds                                                              */
 /* ------------------------------------------------------------------ */
@@ -286,7 +290,8 @@ typedef struct {
     uint64_t entity;
     uint64_t aux;
     asx_obligation_info obligation; /* obligation kinds */
-    it_reason reason;               /* CANCEL_REQUEST */
+    asx_trace_handoff handoff;
+    it_reason reason; /* CANCEL_REQUEST */
     int has_reason;
     uint32_t text_off; /* USER */
     uint32_t text_len;
@@ -921,6 +926,7 @@ static void it_observe(void *ctx, const asx_trace_event *ev, const asx_trace_pay
     case ASX_TRACE_OBLIGATION_COMMIT:
     case ASX_TRACE_OBLIGATION_ABORT:
     case ASX_TRACE_OBLIGATION_LEAK:
+    case ASX_TRACE_OBLIGATION_HANDOFF:
     case ASX_TRACE_TIMER_SET:
     case ASX_TRACE_TIMER_FIRE:
     case ASX_TRACE_TIMER_CANCEL:
@@ -941,9 +947,20 @@ static void it_observe(void *ctx, const asx_trace_event *ev, const asx_trace_pay
     e->text_off = IT_NO_TEXT;
     /* Capture what the event refers to now: the slot may be gone later. */
     if (ev->kind == ASX_TRACE_OBLIGATION_RESERVE || ev->kind == ASX_TRACE_OBLIGATION_COMMIT ||
-        ev->kind == ASX_TRACE_OBLIGATION_ABORT || ev->kind == ASX_TRACE_OBLIGATION_LEAK) {
-        if (asx_obligation_get_info((asx_obligation_id)ev->entity_id, &e->obligation) != ASX_OK) {
+        ev->kind == ASX_TRACE_OBLIGATION_ABORT || ev->kind == ASX_TRACE_OBLIGATION_LEAK ||
+        ev->kind == ASX_TRACE_OBLIGATION_HANDOFF) {
+        if (payload->obligation != NULL) {
+            e->obligation = *payload->obligation;
+        } else if (asx_obligation_get_info((asx_obligation_id)ev->entity_id, &e->obligation) !=
+                   ASX_OK) {
             it_fail("obligation event for an unreadable obligation", NULL);
+        }
+        if (ev->kind == ASX_TRACE_OBLIGATION_HANDOFF) {
+            if (payload->handoff == NULL) {
+                it_fail("handoff event without its ownership metadata", NULL);
+                return;
+            }
+            e->handoff = *payload->handoff;
         }
     } else if (ev->kind == ASX_TRACE_CANCEL_REQUEST || ev->kind == ASX_TRACE_REGION_CANCELLED) {
         /* The reason the event was emitted with, not a later strengthened
@@ -1113,16 +1130,8 @@ static it_receiver *owned_receiver(const it_task *t, const char *name, it_ch_typ
 /* Rust's SendPermit drop without send (mpsc.rs:1663): the slot is
  * released and the obligation aborted with reason Cancel, where an
  * explicit abort says Explicit; C has no destructor, so the interpreter
- * settles the obligation itself and releases the slot untracked. */
-static void drop_send_permit(asx_send_permit *permit) {
-    asx_obligation_id ob = permit->obligation;
-    asx_status st;
-    permit->obligation = ASX_INVALID_ID;
-    asx_send_permit_abort(permit);
-    if (ob == ASX_INVALID_ID) return;
-    st = asx_obligation_abort_with_reason(ob, ASX_OBLIGATION_ABORT_CANCEL);
-    (void)st;
-}
+ * uses the channel's authenticated permit destruction boundary. */
+static void drop_send_permit(asx_send_permit *permit) { asx_send_permit_drop_internal(permit); }
 
 /* Drop the sender of `c` (`r` NULL) or receiver `r`, as Rust drops the
  * endpoint. */
@@ -2260,6 +2269,46 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
             t->obligations[t->n_obligations].name = name;
             t->obligations[t->n_obligations].id = id;
             t->n_obligations++;
+        }
+        observe_status(t, idx, label, st);
+        return STEP_NEXT;
+    }
+    if (strcmp(op, "handoff") == 0) {
+        const char *name = it_str(step, "obligation");
+        const char *destination = it_str(step, "task");
+        const char *alias = it_str(step, "as");
+        it_local_obligation *o = local_obligation(t, name);
+        it_task *target = task_by_name(destination);
+        uint32_t slot = 0u;
+        if (name == NULL || destination == NULL || alias == NULL) {
+            it_fail_task(t, idx, "handoff needs obligation, task and as");
+            return STEP_END;
+        }
+        if (o == NULL || target == NULL) {
+            observe_status(t, idx, label, ASX_E_NOT_FOUND);
+            return STEP_NEXT;
+        }
+        if (target == t) {
+            st = asx_obligation_handoff(o->id, target->id);
+            observe_status(t, idx, label, st);
+            return STEP_NEXT;
+        }
+        if (local_obligation(target, alias) != NULL) {
+            it_fail_task(t, idx, "handoff destination token already exists");
+            return STEP_END;
+        }
+        while (slot < target->n_obligations && target->obligations[slot].name != NULL) slot++;
+        if (slot >= IT_MAX_LOCAL) {
+            it_fail_task(t, idx, "too many obligations in handoff destination");
+            return STEP_END;
+        }
+        st = asx_obligation_handoff(o->id, target->id);
+        if (st == ASX_OK) {
+            target->obligations[slot].name = alias;
+            target->obligations[slot].id = o->id;
+            if (slot == target->n_obligations) target->n_obligations++;
+            o->name = NULL;
+            o->id = ASX_INVALID_ID;
         }
         observe_status(t, idx, label, st);
         return STEP_NEXT;
@@ -3720,6 +3769,35 @@ static uint32_t project_events(uint32_t obligations) {
             } else {
                 asx_json_set(g_out, record, "abort_reason", asx_json_new_null(g_out));
             }
+            asx_json_set(g_out, obligations, name, record);
+            break;
+        }
+        case ASX_TRACE_OBLIGATION_HANDOFF: {
+            const it_task *from = task_by_id(e->handoff.from_task);
+            const it_task *to = task_by_id(e->handoff.to_task);
+            const char *kind = obligation_kind_name(e->obligation.kind);
+            const char *name;
+            uint32_t record;
+            if (from == NULL || to == NULL || kind == NULL) {
+                it_fail("handoff refers to unknown ownership", NULL);
+                break;
+            }
+            name = obligation_name((asx_obligation_id)e->entity, from);
+            ev = event_object("obligation.handoff");
+            asx_json_set(g_out, ev, "obligation", asx_json_new_string(g_out, name));
+            asx_json_set(g_out, ev, "from_task", asx_json_new_string(g_out, from->name));
+            asx_json_set(g_out, ev, "to_task", asx_json_new_string(g_out, to->name));
+            asx_json_set(g_out, ev, "from_region",
+                         asx_json_new_string(g_out, region_name_of(e->handoff.from_region)));
+            asx_json_set(g_out, ev, "to_region",
+                         asx_json_new_string(g_out, region_name_of(e->handoff.to_region)));
+            record = asx_json_new_object(g_out);
+            asx_json_set(g_out, record, "state", asx_json_new_string(g_out, "Reserved"));
+            asx_json_set(g_out, record, "kind", asx_json_new_string(g_out, kind));
+            asx_json_set(g_out, record, "holder", asx_json_new_string(g_out, to->name));
+            asx_json_set(g_out, record, "region",
+                         asx_json_new_string(g_out, region_name_of(e->handoff.to_region)));
+            asx_json_set(g_out, record, "abort_reason", asx_json_new_null(g_out));
             asx_json_set(g_out, obligations, name, record);
             break;
         }
