@@ -255,7 +255,7 @@ asynchronous-finalizer barrier.
 
 ## 2. Timer Wheel Semantics
 
-**C status (whole section):** the Rust hierarchical wheel is not ported. `src/time/timer_wheel.c` is a flat arena of `ASX_MAX_TIMERS` slots (default 128, `include/asx/asx_config.h:277-283`); its header calls the hierarchical wheel a future upgrade (`src/time/timer_wheel.c:1-10`). Its only runtime users are the deadline helpers (`src/time/deadline.c:45`, `:57`), and no runtime code calls `asx_timer_collect_expired` (only tests do); those deadlines are checked by time comparison (`asx_deadline_is_expired_at`, `src/time/deadline.c:78-86`). Task sleeps use the scheduler's timer min-heap keyed by (deadline, arm sequence) (`src/runtime/scheduler.c:100-105`); under lab dispatch due timers fire in (1 ms tick, registration) order to match the Rust wheel (`timers_fire_wheel_order`, `src/runtime/scheduler.c:256-324`).
+**C status (whole section):** ported (bd-9kll.7.1, bd-9kll.7.4). `src/time/timer_wheel.c` is a port of the Rust wheel (four levels of 256 slots, ready list, `cascade`, `refill_overflow`, `advance_to` with tick skipping, overflow heap) in a fixed arena. Two instances of it exist: the application wheel (`asx_timer_wheel_global`, `ASX_MAX_TIMERS` entries, default 128; the deadline helpers register in it, `src/time/deadline.c`, and the runtime never collects it, so those deadlines are checked by time comparison, `asx_deadline_is_expired_at`) and the scheduler's (`asx_timer_wheel_runtime`, two entries per task), which holds task sleeps and, under lab dispatch, budget deadlines (`timers_fire`, `src/runtime/scheduler.c`). Due timers wake in the wheel's order in every mode. Coalescing is not modelled.
 
 ### 2.1 Timer Wheel Structure
 
@@ -289,7 +289,7 @@ asx_status asx_timer_register(asx_timer_wheel *wheel, asx_time deadline,
                               void *waker_data, asx_timer_handle *out_handle);
 ```
 
-**C status:** partly implemented (`src/time/timer_wheel.c:139-168`). `ASX_E_TIMER_DURATION_EXCEEDED` when `deadline - current > max_duration` (`:118-121`, `:145`); the default maximum is Rust's 7 days (`ASX_TIMER_MAX_DURATION_NS`, `include/asx/time/timer_wheel.h:31-33`; 24 h before 2026-10-10), and there is no clamping `register`. A registration takes the first dead slot or a new one (`:147-164`) and fails with `ASX_E_RESOURCE_EXHAUSTED` when every slot is live (`:162`). Each arm records a monotonic `insertion_seq` and advances the slot's 32-bit generation (`:124-137`). The handle is `{ slot, generation }`, both `uint32_t` (`include/asx/time/timer_wheel.h:42-45`). No levels, ready vector or overflow heap.
+**C status:** implemented (`asx_timer_register`, `src/time/timer_wheel.c`). It is Rust's `register`: a deadline more than the maximum duration (default 7 days, `ASX_TIMER_MAX_DURATION_NS`; `asx_timer_set_max_duration`) past the wheel's time, whole milliseconds, is clamped to it. A registration takes the most recently released slot or a new one and fails with `ASX_E_RESOURCE_EXHAUSTED`, changing nothing, when every slot is live. Each arm records a registration sequence (the overflow heap's tie-break) and advances the slot's 32-bit generation. The handle is `{ slot, generation }`, both `uint32_t` (`include/asx/time/timer_wheel.h`). Placement follows `insert_entry_at`: ready list, overflow heap, or the finest level whose range holds the delta.
 
 ### 2.3 Timer Firing
 
@@ -308,7 +308,7 @@ uint32_t asx_timer_collect_expired(asx_timer_wheel *wheel, asx_time now,
                                    void **out_wakers, uint32_t max_wakers);
 ```
 
-**C status:** implemented in a different form (`src/time/timer_wheel.c:202-266`): scans live slots with `deadline <= now` (`:222`), sorts them by (deadline, insertion_seq) (`:230-248`) and fires at most `max_wakers` (`:251`); the rest stay live. No cascade, overflow promotion or coalescing. Rust parity of fire order for task sleeps (scheduler heap, not `timer_wheel.c`): `timers-same-deadline-001`, `lab-dispatch-timer-wheel-order-001`.
+**C status:** implemented without coalescing (`asx_timer_collect_expired`, `src/time/timer_wheel.c`): it brings the wheel to `now` with the same advance, cascade and overflow promotion, then drains the ready list in order, firing entries with `deadline <= now` up to `max_wakers`; later entries are re-inserted and due ones beyond capacity stay first in the list. Rust parity of fire order for task sleeps, which use the same wheel: `timers-same-deadline-001`, `lab-dispatch-timer-wheel-order-001`; written and pending capture: `timers-same-tick-registration-order-001`, `timers-cascade-order-001`, `timers-multi-level-storm-001`, `timers-beyond-wheel-horizon-001`.
 
 ### 2.4 Timer Cancellation (O(1) Logical Cancel)
 
@@ -326,7 +326,7 @@ C signature (`include/asx/time/timer_wheel.h:84`):
 int asx_timer_cancel(asx_timer_wheel *wheel, const asx_timer_handle *handle);
 ```
 
-**C status:** implemented without lazy storage (`src/time/timer_wheel.c:174-192`): checks the slot range, `alive` and the generation, then marks the slot dead and returns 1; otherwise 0. The slot is reused by a later registration. Unit tests: `tests/unit/time/test_timer_wheel.c` `timer_cancel_prevents_fire`, `timer_stale_handle_cancel_returns_false`, `timer_double_cancel_returns_false`.
+**C status:** implemented without lazy storage (`asx_timer_cancel`, `src/time/timer_wheel.c`): checks the slot range, liveness and the generation, then unlinks the entry from the ready list, its slot's list or the overflow heap, releases the slot and returns 1; otherwise 0. The slot is reused by the next registration. Unit tests: `tests/unit/time/test_timer_wheel.c` `timer_cancel_prevents_fire`, `timer_stale_handle_cancel_returns_false`, `timer_double_cancel_returns_false`, `timer_overflow_timer_can_be_cancelled`.
 
 **Update is cancel + re-register.** Rust `TimerDriver::update` (`src/time/driver.rs:522-540`) cancels the old handle and, only if that cancel succeeded, registers the new timer with `register` (which clamps); a stale handle leaves the wheel untouched and is returned as is. The slab reuses the freed `id`, so the replacement gets the same `id` with a new generation.
 
@@ -338,15 +338,15 @@ asx_status asx_timer_update(asx_timer_wheel *wheel, const asx_timer_handle *old_
                             asx_timer_handle *out_handle);
 ```
 
-**C status:** `asx_timer_update` (`src/time/timer_wheel.c:272-291`) refuses a stale handle with `ASX_E_STALE_HANDLE` and registers nothing (`:281-283`); a NULL old handle is a plain register (`:279`). A live timer is re-armed in its own slot under a new generation (`:289`), so a full arena cannot refuse an update. `ASX_E_TIMER_DURATION_EXCEEDED` is checked before anything changes (`:284`), where Rust's update would clamp. Unit tests: `timer_update_refuses_stale_handles_and_registers_nothing`, `timer_update_on_a_full_wheel_reuses_the_slot`, `timer_update_duration_failure_preserves_old_timer`.
+**C status:** `asx_timer_update` (`src/time/timer_wheel.c`) refuses a stale handle with `ASX_E_STALE_HANDLE` and registers nothing; a NULL old handle is a plain register. A live timer is cancelled and registered again into the freed slot under a new generation, behind the timers already registered, so a full arena cannot refuse an update. A deadline beyond the maximum is clamped, as Rust's update does. Unit tests: `timer_update_refuses_stale_handles_and_registers_nothing`, `timer_update_on_a_full_wheel_reuses_the_slot`, `timer_update_clamps_a_deadline_beyond_the_maximum`, `timer_update_moves_the_timer_behind_those_already_in_its_tick`.
 
 ### 2.5 Timer Error Conditions
 
 | Error | Rust | C |
 |-------|------|---|
-| Duration exceeded | `TimerDurationExceeded` from `try_register` (default max 7 days); `register` and `TimerDriver::update` clamp | `ASX_E_TIMER_DURATION_EXCEEDED` (`include/asx/asx_status.h:74`), default max 7 days as in Rust, settable with `asx_timer_set_max_duration` (`src/time/timer_wheel.c:302-305`); no clamping |
+| Duration exceeded | `TimerDurationExceeded` from `try_register` (default max 7 days); `register` and `TimerDriver::update` clamp | `register` and `update` clamp to the maximum, default 7 days as in Rust, settable with `asx_timer_set_max_duration`; no rejecting variant (`ASX_E_TIMER_DURATION_EXCEEDED` remains for `asx_deadline_after` overflowing `uint64_t`) |
 | Stale handle on cancel | `false` | 0 |
-| Capacity exhaustion | None: the slab grows | `ASX_E_RESOURCE_EXHAUSTED` when all `ASX_MAX_TIMERS` slots are live (`src/time/timer_wheel.c:162`) |
+| Capacity exhaustion | None: the slab grows | `ASX_E_RESOURCE_EXHAUSTED` when every arena slot is live (`ASX_MAX_TIMERS` for the application wheel; the scheduler's holds two per task and cannot fill) |
 
 **Wrapping:** Rust generations wrap as `u64` and ids are reused slab indices; the test `wheel_register_wraps_id_and_generation_without_immediate_collision` (`src/time/wheel.rs:1406-1437`) checks handles across a generation wrap. C generations are per slot, 32-bit, and skip 0 on wrap (`src/time/timer_wheel.c:54-58`); `asx_timer_wheel_reset` advances every slot's generation so handles from before a reset are stale (`src/time/timer_wheel.c:94-112`).
 
@@ -359,7 +359,7 @@ Rust:
 4. When `active` becomes empty, all storage is purged (`purge_inactive_storage`).
 5. Cascade re-inserts every live entry (`src/time/wheel.rs:877-882`), so it loses none.
 
-**C status:** 1 and 2 hold trivially (one slot per timer; `active_count`, `src/time/timer_wheel.c:38-45`); 3-5 do not apply (no stored entries outside the slots, no cascade).
+**C status:** 1 and 2 hold trivially (one slot per timer; `active_count`, `src/time/timer_wheel.c`); 3-5 hold by construction: a cancelled timer is removed from its list at once, so no stored entry is dead and a cascade moves only live ones.
 
 ---
 
@@ -381,7 +381,7 @@ The project plan's key `(lane_priority, logical_deadline, task_id, insertion_seq
 - Rust lanes order entries by priority, then generation, then task id, and every `LabRuntime` pop picks among equal-priority entries with `rng_hint % count` (`docs/CHANNEL_TIMER_SEMANTICS.md` §3.3-3.5).
 - C's lab dispatch ports that: entries `{slot, task_gen, priority, gen}`, one generation counter, a seeded xorshift64 pick among the top-priority group, a cancel lane and a ready lane and no timed lane (`src/runtime/lab_dispatch.c:43-48`, `:569-631`). Outside lab dispatch `src/runtime/scheduler.c` polls runnable tasks in arena order each round (`src/runtime/scheduler.c:1-22`).
 
-**Timer tie-break:** C fires equal-deadline timers in insertion order: `timer_wheel.c` by (deadline, insertion_seq) (`src/time/timer_wheel.c:230-248`), the scheduler heap by (deadline, arm sequence) (`src/runtime/scheduler.c:100-105`), and lab dispatch by (1 ms tick, registration) (`src/runtime/scheduler.c:256-324`), the last matching the Rust wheel's level-0 behaviour for timers within 256 ms (comment at `src/runtime/scheduler.c:256-265`). This is not stronger than Rust: Rust's order is also deterministic (section 3.1).
+**Timer tie-break:** C fires timers in the Rust wheel's order (a timer's 1 ms tick, then arrival at the slot) for the application wheel and for task sleeps alike, because both are the one ported wheel (`src/time/timer_wheel.c`; the scheduler's `timers_fire`, `src/runtime/scheduler.c`). It is not "equal deadlines in insertion order": a timer from a coarser level follows those already in its slot. This is not stronger than Rust: Rust's order is also deterministic (section 3.1).
 
 ### 3.3 Event Sequencing Contract
 
@@ -441,7 +441,7 @@ Rust's `Interval` (`src/time/interval.rs`) is a synchronous schedule the caller 
 
 | Resource | Rust | C |
 |----------|------|---|
-| Timer capacity | No limit (slab) | `ASX_MAX_TIMERS` live timers (default 128, `include/asx/asx_config.h:277-283`); then `ASX_E_RESOURCE_EXHAUSTED` from `asx_timer_register`. The earlier `max_timer_nodes` config field does not exist |
+| Timer capacity | No limit (slab) | `ASX_MAX_TIMERS` live timers in the application wheel (default 128, `include/asx/asx_config.h:277-283`); then `ASX_E_RESOURCE_EXHAUSTED` from `asx_timer_register`. The scheduler's wheel holds `2 * ASX_MAX_TASKS`, one wake and one budget-deadline timer per task. The earlier `max_timer_nodes` config field does not exist |
 | Task timers | One per task | One heap entry per task slot (`g_timer_heap[ASX_MAX_TASKS]`, `src/runtime/scheduler.c:91`) |
 | Timer duration | `TimerDurationExceeded` (try_register) or clamp | `ASX_E_TIMER_DURATION_EXCEEDED` |
 | Channel capacity | `Full` (try) or wait | `ASX_E_CHANNEL_FULL` (try) or park with `ASX_E_PENDING` |
@@ -470,7 +470,7 @@ Channel code sets no task outcome in either engine: the error is returned to the
 
 Per the plan's resource-contract engine (`PLAN_TO_PORT_ASUPERSYNC_TO_ANSI_C.md` "Risk 8: Resource-Exhaustion Undefined Behavior"):
 
-1. **Failure-atomic:** a channel or timer operation that fails for exhaustion must leave its structures unchanged. C: `asx_timer_register` checks duration and slot availability before arming (`src/time/timer_wheel.c:145-164`); `channel_reserve_impl` returns the claimed lock-free capacity when no permit token is free (`src/channel/mpsc.c:687-711`).
+1. **Failure-atomic:** a channel or timer operation that fails for exhaustion must leave its structures unchanged. C: `asx_timer_register` takes a slot before arming and returns `ASX_E_RESOURCE_EXHAUSTED` with the wheel unchanged when none is free (`src/time/timer_wheel.c`); `channel_reserve_impl` returns the claimed lock-free capacity when no permit token is free (`src/channel/mpsc.c:687-711`).
 2. **Deterministic error codes** for the same operation sequence and limits.
 3. **No silent degradation:** exhaustion is reported with an explicit code, with one designed exception: wait-node pool exhaustion degrades a waiter to polling instead of failing (`src/sync/wait_queue.h:49-51`).
 
@@ -522,7 +522,7 @@ None of the candidate IDs below exists as `fixtures/rust_reference_v2/<id>.json`
 | `tm-update-001` | Update timer deadline | Not materialized; no v2 fixture (C unit test `timer_update_cancels_old_and_registers_new`) |
 | `tm-exhaustion-001` | Timer pool limit | Not materialized; no v2 fixture (C unit test `timer_resource_exhaustion`) |
 | `tm-budget-001` | Budget deadline triggers cancellation | Not materialized; covered by `budget-deadline-sleep-checkpoint-001` |
-| `tm-duration-exceeded-001` | Register beyond max_timer_duration | Not materialized; no v2 fixture (C unit test `timer_duration_exceeded`) |
+| `tm-duration-exceeded-001` | Register beyond max_timer_duration (clamped) | Scenario `timers-beyond-wheel-horizon-001` written, capture pending; C unit tests `timer_beyond_max_duration_is_clamped_to_the_maximum`, `timer_default_max_duration_is_seven_days_and_clamps_beyond_it` |
 | `tm-generation-wrap-001` | Generation wrapping | Not materialized; no v2 fixture |
 
 ### 6.3 Integration Fixture Families
@@ -551,8 +551,8 @@ None of the candidate IDs below exists as `fixtures/rust_reference_v2/<id>.json`
 ### 7.2 Timer Wheel C Design Notes
 
 1. **Fixed-size arena:** `ASX_MAX_TIMERS` slots (`include/asx/asx_config.h:277-283`); there is no `max_timer_nodes` config field.
-2. **Generation-safe handles:** `{ slot, generation }`, both `uint32_t`, looked up by direct slot index, not a hash map (`src/time/timer_wheel.c:174-192`).
-3. **Deterministic tie-break:** (deadline, insertion_seq) sort at collection (`src/time/timer_wheel.c:230-248`).
+2. **Generation-safe handles:** `{ slot, generation }`, both `uint32_t`, looked up by direct slot index, not a hash map (`asx_timer_cancel`, `src/time/timer_wheel.c`).
+3. **Deterministic order:** the wheel's own: slot lists in arrival order, a ready list drained front to back, an overflow heap keyed by (deadline, registration sequence); no sort at collection (`src/time/timer_wheel.c`).
 4. **Occupied bitmap:** not implemented (flat scan).
 5. **Virtual clock:** the runtime's default clock hooks read a virtual counter that only moves when advanced (`src/runtime/hooks.c:238-260`); the scheduler jumps it to the next timer when every task is parked (`src/runtime/scheduler.c:11-19`).
 6. **Overflow handling:** not implemented.
@@ -573,8 +573,8 @@ The conformance runner compares C with the exact Rust capture, including the lab
 
 | Operation | Invalid handle | Stale handle (generation mismatch) |
 |-----------|---------------|-------------------------------------|
-| Timer cancel | 0 (`src/time/timer_wheel.c:178-184`) | 0 |
-| Timer update | NULL old handle: plain register; otherwise `ASX_E_STALE_HANDLE`, nothing registered (`src/time/timer_wheel.c:279-283`) | `ASX_E_STALE_HANDLE` |
+| Timer cancel | 0 (`asx_timer_cancel`) | 0 |
+| Timer update | NULL old handle: plain register; otherwise `ASX_E_STALE_HANDLE`, nothing registered (`asx_timer_update`) | `ASX_E_STALE_HANDLE` |
 | Permit send | Consumed permit: `ASX_E_INVALID_STATE`; mismatched credit or forged/stale token: refused (`src/channel/mpsc.c:757-776`) | Channel handle: `ASX_E_STALE_HANDLE` (`src/channel/mpsc.c:130`) |
 | Permit abort | Consumed, mismatched-credit or unknown permit: no-op (`src/channel/mpsc.c:821-838`) | No-op |
 

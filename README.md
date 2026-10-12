@@ -986,7 +986,7 @@ Each round:
 1. Polls every live, non-parked task in the subtree in index order. Deadline and poll-quota budgets are enforced before each poll, consuming one poll unit per call.
 2. Completes tasks that return a final status, recording the outcome by severity: PANICKED (`asx_task_panic`) > CANCELLED (a pending cancel dominates) > ERR > OK. A cancelled task's error is its acknowledgement and is not a fault.
 3. Never force-completes a cancelled task (as in Rust): a spent cleanup budget only strengthens its cancel reason to `POLL_QUOTA`. The opt-in `asx_runtime_config.cleanup_hard_bound` force-completes tasks whose cleanup polls are spent (masked tasks exempt), a deviation from Rust for deployments that need a hard bound.
-4. When nothing is runnable it **idles** instead of spinning: unpark cancelled tasks not yet polled since their cancel, drain wakers, fire due timers (an EDF heap keyed by `(deadline, sequence)`), and otherwise block in the reactor until I/O, a cross-thread wake, or the next timer. In deterministic builds the virtual clock jumps straight to the next timer. When nothing can ever wake the parked tasks, it returns `ASX_E_WOULD_BLOCK`.
+4. When nothing is runnable it **idles** instead of spinning: unpark cancelled tasks not yet polled since their cancel, drain wakers, fire due timers (the runtime timer wheel, in the order it wakes them), and otherwise block in the reactor until I/O, a cross-thread wake, or the next timer. In deterministic builds the virtual clock jumps straight to the next timer. When nothing can ever wake the parked tasks, it returns `ASX_E_WOULD_BLOCK`.
 5. Returns `ASX_OK` at quiescence, `ASX_E_POLL_BUDGET_EXHAUSTED` when the caller's poll budget runs out, or `ASX_E_TIMED_OUT` when its deadline passes.
 
 Tasks in the FINALIZING phase complete without consuming poll units, ensuring cleanup can finish even under tight budgets. Tasks can be joined (`asx_task_join_poll` parks until the target completes), watched (`asx_task_watch`, monitor semantics), or detached. Arena slots are recycled with generation bumps, so long-running servers do not exhaust the task, region, or obligation arenas.
@@ -1083,11 +1083,17 @@ Channel lifecycle flows through OPEN, SENDER_CLOSED, RECEIVER_CLOSED, and FULLY_
 
 ### Timer Wheel with Deterministic Ordering
 
-The timer wheel uses a flat arena of `ASX_MAX_TIMERS` slots with O(1) cancel via generation-safe handles. When timers are collected (deadline <= now), they are sorted by a composite key: **(deadline ascending, insertion_sequence ascending)**.
+The timer wheel (`src/time/timer_wheel.c`) is a port of Rust asupersync's `TimerWheel`: four levels of 256 slots (1 ms, 256 ms, 65.5 s and 4.66 h per slot), a ready list, and a deadline-ordered overflow heap for timers more than 24 hours out, all in a fixed arena with O(1) cancel via generation-safe handles. The scheduler's task timers (sleeps and lab budget deadlines) use one instance of it, sized for two timers per task; `asx_timer_wheel_global()` is a second instance for application code (`asx_deadline_arm`, `asx_timer_register`).
 
-The insertion sequence is a per-wheel monotonic counter incremented on every registration. This secondary key guarantees that timers with identical deadlines fire in FIFO registration order, which is critical for deterministic replay. Without this, hash-table iteration order or memory layout could cause non-determinism.
+What fires, and in which order, is a property of that structure, not of a sort by deadline:
 
-Duration validation rejects timers that would overflow `uint64_t` nanoseconds (`ASX_E_TIMER_DURATION_EXCEEDED`), preventing silent wraparound on extremely long timeouts.
+- A timer is filed by its deadline's **1 ms tick**. Timers in one tick fire in the order they reached the slot: registration order for timers placed directly, and a timer that came down from a coarser level (one registered 256 ms or more ahead) follows those already in the slot. A timer 5.7 ms out registered before one 5.2 ms out fires first when both come due in one collect, and the same 300 ms deadline registered at time 0 fires after one registered at 100 ms.
+- A deadline whose tick has already come goes straight to the ready list, behind the timers already there, so sub-millisecond deadlines fire in registration order.
+- A timer that is due but beyond the caller's collect capacity stays registered, in order, for the next collect.
+
+A registration more than the maximum timer duration (7 days, `asx_timer_set_max_duration`) past the wheel's time, measured in whole milliseconds, is **clamped** to that maximum as Rust's `register` does, not refused: the timer fires early and its owner registers again if the true deadline has not come (a sleeper re-polls and re-arms; a budget deadline is registered again for the real one). `ASX_E_TIMER_DURATION_EXCEEDED` remains for a `now + duration` that would overflow `uint64_t` nanoseconds. A full arena returns `ASX_E_RESOURCE_EXHAUSTED` and changes nothing.
+
+Differences from Rust that cannot change what fires or in which order: a cancelled timer leaves its slot at once (Rust discards it when the slot is visited), the arena is fixed (Rust's grows), and coalescing, off by default in Rust, is not modelled.
 
 ### Ghost Monitors (Debug-Mode Safety Net)
 
@@ -1218,7 +1224,7 @@ The kernel subsystems use fixed-size static arenas instead of dynamic allocation
 | Regions | `ASX_MAX_REGIONS` | Region lifecycle state |
 | Tasks | `ASX_MAX_TASKS` | Task state + poll function |
 | Obligations | `ASX_MAX_OBLIGATIONS` | Reserve/commit/abort state |
-| Timers | `ASX_MAX_TIMERS` | Deadline + waker + generation |
+| Timers | `ASX_MAX_TIMERS` (application wheel); the scheduler's wheel holds two per task (2 x `ASX_MAX_TASKS`) | Deadline + waker + generation + list links |
 | Channels (MPSC) | `ASX_MAX_CHANNELS` | Ring buffer + permits |
 | Blocking pool | `ASX_MAX_BLOCKING_TASKS` | Function + result + waker |
 | I/O registrations | `ASX_MAX_IO_TOKENS` | fd + interest mask + waker |

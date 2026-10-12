@@ -318,8 +318,11 @@ The priority changes when:
 - The lab checks no deadline at dispatch. A checkpoint past the deadline
   adds a Deadline candidate stamped now (`cx.rs:3112-3130`).
 - C: `asx_lab_arm_budget_deadline_internal`, `lab_deadline_fire`, and the
-  wheel-order firing in `timers_fire_wheel_order`. Found by the dispatch
-  comparison in fixture `budget-deadline-sleep-checkpoint-001`.
+  wheel-order firing in `timers_fire` (the runtime timer wheel, a port of
+  Rust's). A deadline past the wheel's 7-day horizon fires early and is
+  registered again, as `BudgetDeadlineWake` does (`cx.rs:340-351`). Found
+  by the dispatch comparison in fixture
+  `budget-deadline-sleep-checkpoint-001`.
 
 ### Region cancel order
 

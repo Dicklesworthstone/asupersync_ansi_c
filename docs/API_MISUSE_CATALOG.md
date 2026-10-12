@@ -166,7 +166,7 @@ records.
 | `asx_timer_register(NULL, d, ctx, &h)` | NULL wheel | ASX_E_INVALID_ARGUMENT | test_timer_wheel:timer_null_argument_rejection |
 | `asx_timer_register(w, d, ctx, NULL)` | NULL output | ASX_E_INVALID_ARGUMENT | test_timer_wheel:timer_null_argument_rejection |
 | `asx_timer_register()` at capacity | All slots full | ASX_E_RESOURCE_EXHAUSTED | test_timer_wheel:timer_resource_exhaustion |
-| `asx_timer_register(w, MAX, ctx, &h)` | Duration exceeded | ASX_E_TIMER_DURATION_EXCEEDED | test_timer_wheel:timer_duration_exceeded |
+| `asx_timer_register(w, MAX, ctx, &h)` | Duration beyond the 7-day maximum | ASX_OK, clamped to the maximum (the timer fires early; the owner re-checks) | test_timer_wheel:timer_beyond_max_duration_is_clamped_to_the_maximum, timer_default_max_duration_is_seven_days_and_clamps_beyond_it |
 | `asx_timer_cancel(NULL, &h)` | NULL wheel | returns false | test_timer_wheel:timer_null_argument_rejection |
 | `asx_timer_cancel(w, NULL)` | NULL handle | returns false | test_timer_wheel:timer_null_argument_rejection |
 | `asx_timer_cancel(w, &stale)` | Stale handle | returns false | test_timer_wheel:timer_stale_handle_cancel_returns_false |

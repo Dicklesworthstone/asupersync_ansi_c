@@ -889,7 +889,7 @@ TimerEntry {
 }
 ```
 
-(`src/time/wheel.rs:244`.) Active timers are tracked in a `slab::Slab<u64>` holding each timer's generation (`TimerActivityMap`, `src/time/wheel.rs:258`, field at `src/time/wheel.rs:396`); the timer id is the slab index. It is not a `HashMap` as the first extraction said. C: `asx_timer_slot {deadline, waker_data, insertion_seq, generation, alive}` (`src/time/timer_wheel.c:26`).
+(`src/time/wheel.rs:244`.) Active timers are tracked in a `slab::Slab<u64>` holding each timer's generation (`TimerActivityMap`, `src/time/wheel.rs:258`, field at `src/time/wheel.rs:396`); the timer id is the slab index. It is not a `HashMap` as the first extraction said. C: `tw_entry {deadline, waker_data, seq, generation, prev, next, heap_pos, where, level, slot}` (`src/time/timer_wheel.c`), an arena entry on exactly one list or heap.
 
 ### 10.3 Insert Semantics
 
@@ -907,7 +907,7 @@ register(deadline, waker) -> TimerHandle                                      //
 
 **Duplicate handling:** No deduplication. Multiple timers with same deadline stored in insertion order in same slot Vec (`src/time/wheel.rs:744`); see §10.7 for cascades.
 
-**Validation:** `try_register` returns `TimerDurationExceeded` if the duration is strictly greater than the configured max (default 7 days; `src/time/wheel.rs:536`). C: `asx_timer_register` rejects past the same 7 days (24 h before 2026-10-10) with `ASX_E_TIMER_DURATION_EXCEEDED` and has no clamping variant (`src/time/timer_wheel.c:145`); C task sleeps (the scheduler heap) have no limit at all; a full C table returns `ASX_E_RESOURCE_EXHAUSTED` (`src/time/timer_wheel.c:162`), where Rust's slab has no count limit.
+**Validation:** `try_register` returns `TimerDurationExceeded` if the duration is strictly greater than the configured max (default 7 days; `src/time/wheel.rs:536`). C: `asx_timer_register` is Rust's `register`: a deadline past the same 7 days is clamped to the maximum from the wheel's time (whole milliseconds), not refused; there is no rejecting variant. Task sleeps use the same wheel, so a sleep past 7 days fires early at the maximum and the sleeper re-arms for its real deadline, and a lab budget deadline that fires early is registered again (`lab_deadline_fire`, `src/runtime/scheduler.c`). A full arena returns `ASX_E_RESOURCE_EXHAUSTED` (`src/time/timer_wheel.c`), where Rust's slab has no count limit.
 
 **Generation tracking:** Each registration gets a generation (`wrapping_add(1)`, `src/time/wheel.rs:551`) and an id that is the slab index, reused after removal (`src/time/wheel.rs:554`). Only the generation wraps. C: a per-slot `uint32` generation that skips 0, plus a global u64 `insertion_seq`.
 
@@ -931,7 +931,7 @@ collect_expired(now) -> WakerBatch
 4. **Collect:** All live entries with `deadline <= now` added to waker batch (`drain_ready`, `src/time/wheel.rs:921`); later ones go back into the wheel. Fired entries leave `active`, and the wheel is purged when `active` becomes empty
 5. **Coalescing** (optional): when the current window holds a group, due timers in it are **held until the window end**; a coalesced timer never fires before its deadline (the first extraction said timers were "promoted" early)
 
-**Fire criterion:** `entry.deadline <= now` (inclusive — fires at or after deadline; `src/time/wheel.rs:948`), subject to the coalescing hold. C: `asx_timer_collect_expired` (`src/time/timer_wheel.c:202`) scans all live slots with `deadline <= now` (`src/time/timer_wheel.c:222`), sorts them and caps the batch at `max_wakers` (Rust's batch has no cap); the scheduler heap fires tasks with `wake_at <= now` (`src/runtime/scheduler.c:339`).
+**Fire criterion:** `entry.deadline <= now` (inclusive — fires at or after deadline; `src/time/wheel.rs:948`), subject to the coalescing hold. C: `asx_timer_collect_expired` (`src/time/timer_wheel.c`) advances the ported wheel and drains the ready list in order, firing entries with `deadline <= now` and caps the batch at `max_wakers` (Rust's batch has no cap; the rest stay due, in order); the scheduler's `timers_fire` (`src/runtime/scheduler.c`) collects from its own instance of the same wheel with a capacity of two timers per task, so it never caps.
 
 ### 10.5 Cancel Semantics (Lazy Deletion)
 
@@ -944,7 +944,7 @@ cancel(handle) -> bool     // src/time/wheel.rs:577
 3. **No immediate physical removal** from wheel slots — the entry is skipped at fire time via `is_live()` (`src/time/wheel.rs:1071`); but once cancellations since the last compaction exceed 2 × live + 1024, `compact_inactive_storage()` removes cancelled entries (`src/time/wheel.rs:588`, `src/time/wheel.rs:1116`)
 4. When all timers cancelled (`active` empty): `purge_inactive_storage()` clears all slot vectors and bitmaps (`src/time/wheel.rs:585`, `src/time/wheel.rs:1100`)
 
-C marks the slot dead at once and reuses it later (`asx_timer_cancel`, `src/time/timer_wheel.c:174`).
+C unlinks the entry from its list or the overflow heap at once and reuses the slot (`asx_timer_cancel`, `src/time/timer_wheel.c`).
 
 ### 10.6 Generation-Safe Handle Contract
 
@@ -967,7 +967,7 @@ C's handle is `{uint32 slot, uint32 generation}` (`include/asx/time/timer_wheel.
 | Same deadline, same slot | Insertion order | `Vec::push()` appends; iteration preserves. **Not across levels:** a timer registered ≥ 256 ms ahead sits in level 1 and is appended after later level-0 registrations when it cascades, so it fires after them |
 | Overflow heap | Deadline, then wrap-aware generation, then id (`src/time/wheel.rs:276`) | Only decides the order of promotion back into the wheel |
 
-C native mode and `src/time/timer_wheel.c` sort by exact deadline then insertion (`src/runtime/scheduler.c:101`, `src/time/timer_wheel.c:230`); C lab mode by (1 ms tick, registration) (`src/runtime/scheduler.c:266`). Recorded in `bd-9kll.7.1` and `docs/CHANNEL_TIMER_SEMANTICS.md` §2.8; the cascade exception above is not recorded there.
+C no longer sorts: `src/time/timer_wheel.c` is a port of this wheel and the scheduler's task timers are registrations in an instance of it (`timers_fire`, `src/runtime/scheduler.c`), so native mode, lab mode and the application wheel all fire in the wheel's order, including the cascade exception above (`timer_cascaded_from_coarser_level_follows_direct_timer_in_slot`; scenario `timers-cascade-order-001` pending capture). Recorded in `bd-9kll.7.1` and `docs/CHANNEL_TIMER_SEMANTICS.md` §2.8.
 
 ### 10.8 Coalescing
 
@@ -1422,7 +1422,7 @@ These IDs are this document's own (they are also in `schemas/invariant_schema.js
 
 | ID | Invariant | Category | Status at `5e60b1c4c` / C |
 |----|-----------|----------|---------------------------|
-| `INV-TM-01` | Cancel requires exact `(id, generation)` match | Handle safety | Holds (`src/time/wheel.rs:577`); C `src/time/timer_wheel.c:174` |
+| `INV-TM-01` | Cancel requires exact `(id, generation)` match | Handle safety | Holds (`src/time/wheel.rs:577`); C `asx_timer_cancel` (`src/time/timer_wheel.c`) |
 | `INV-TM-02` | Cancelled timers skipped at fire time via `is_live()` | Lazy deletion | Holds; compaction may also remove them earlier |
 | `INV-TM-03` | Same-deadline timers fire in insertion order | Ordering | Only within one slot or the ready list; a cascade from level 1 can put an earlier registration after later ones (§10.7). C enforces it unconditionally |
 | `INV-TM-04` | `try_register` rejects duration > `max_timer_duration` | Validation | Holds for `try_register`; the runtime path clamps instead. C rejects past 7 days, as `try_register`; C sleeps are unbounded |

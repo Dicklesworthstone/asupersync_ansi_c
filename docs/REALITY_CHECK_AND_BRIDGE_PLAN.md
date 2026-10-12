@@ -1855,7 +1855,7 @@ These complement the twin-run oracle. They run in plain C CI on every profile.
 | M5 | Profile substitution (CORE ↔ ROUTER ↔ HFT ↔ AUTO ↔ FREESTANDING) keeps the canonical digest when the scenario is within all class limits | real profile parity (replaces the fake gate) |
 | M6 | Encoding the *runtime-produced* trace JSON→BIN→JSON keeps the digest | real codec equivalence |
 | M7 | Changing worker count keeps the digest (exists: `parallel-parity`) | parallel semantic forks |
-| M8 | Scaling all durations by k (no overflow) keeps event order | timer-ordering arithmetic bugs |
+| M8 | Scaling all durations by an integer k (no overflow) keeps event order, for timers whose 1 ms ticks differ before and after scaling and that were registered at the same wheel time. Rust's wheel orders timers by tick, then by arrival at the slot, so scaling that puts two timers in one tick, splits a tick, or moves a timer to another level (and so its cascade order) legitimately reorders them; the generator scales by multiples of 1 ms and draws no two timers in one tick registered at different times (bd-9kll.7.1) | timer-ordering arithmetic bugs |
 | M9 | Record→replay keeps the digest (lab and native via RP) | replay holes |
 | M10 | Cancelling before the first poll, and cancelling at the first checkpoint, both yield Cancelled with the same reason kind | completion-policy drift (K3) |
 

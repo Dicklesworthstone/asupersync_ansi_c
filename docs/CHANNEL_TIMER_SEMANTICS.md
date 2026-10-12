@@ -317,7 +317,7 @@ The receiver drains queued messages after all senders drop: `Ok(value)` until th
 
 ## 2. Timer Wheel Semantics
 
-**C status (whole section):** the Rust hierarchical wheel is not ported. `src/time/timer_wheel.c` is a flat arena of `ASX_MAX_TIMERS` slots (default 128, `include/asx/asx_config.h:277-283`); its header says the hierarchical wheel is a future upgrade (`timer_wheel.c:1-10`). Its only users are deadline helpers (`src/time/deadline.c:45`, `:57`). Task sleeps do not use it: they use the scheduler's timer min-heap keyed by (deadline, arm sequence) (`src/runtime/scheduler.c:21-22`, `:101-106`), and under lab dispatch due sleep timers fire in (1 ms tick, registration) order to match the Rust wheel (`scheduler.c:256-325`; the comment there limits this to timers within level 0's 256 ms).
+**C status (whole section):** ported (bd-9kll.7.1, bd-9kll.7.4). `src/time/timer_wheel.c` is a port of the Rust wheel: four levels of 256 slots, a ready list, `cascade`, `refill_overflow`, `advance_to` with tick skipping, and a deadline-ordered overflow heap, in a fixed arena (`ASX_MAX_TIMERS` entries for the application instance, `asx_timer_wheel_global`, default 128, `include/asx/asx_config.h:277-283`). The scheduler's task timers (sleeps, and under lab dispatch budget deadlines) are registrations in a second instance, `asx_timer_wheel_runtime`, sized for two per task, so there is one timer structure and one order in every mode (`timers_fire`, `src/runtime/scheduler.c`). Coalescing (off by default in Rust) is not modelled; a cancelled timer leaves its slot at once instead of when the slot is visited, which cannot change what fires or in which order.
 
 ### 2.1 Structure: 4-Level Hierarchical Wheel
 
@@ -350,7 +350,7 @@ TimerEntry {             // wheel.rs:245-250
 
 Active timers are tracked in `active: slab::Slab<u64>` indexed by `id` and holding the generation (`wheel.rs:258`, field at `:396`), not in a `HashMap`.
 
-**C status:** `asx_timer_slot { deadline, waker_data, insertion_seq, generation (uint32_t), alive }` (`src/time/timer_wheel.c:26-32`); handle `{ slot, generation }`, both `uint32_t` (`include/asx/time/timer_wheel.h:42-45`).
+**C status:** `tw_entry { deadline, waker_data, seq, generation (uint32_t), prev, next, heap_pos, where, level, slot }` in `src/time/timer_wheel.c`: an arena entry is on exactly one of the ready list, a slot's list or the overflow heap, linked by 16-bit arena indices; handle `{ slot, generation }`, both `uint32_t` (`include/asx/time/timer_wheel.h`). Released slots are reused last-in-first-out, as the Rust slab hands a freed id to the next insert.
 
 ### 2.3 Insert Semantics
 
@@ -370,7 +370,7 @@ register(deadline, waker) -> TimerHandle
 
 **Duplicate handling:** no deduplication. Timers with the same deadline in the same slot keep `Vec::push` order.
 
-**C status:** partly implemented. `asx_timer_register` (`src/time/timer_wheel.c:139-168`) returns `ASX_E_TIMER_DURATION_EXCEEDED` when `deadline - current > max_duration` (`:118-121`, `:145`); the default maximum is Rust's 7 days (`ASX_TIMER_MAX_DURATION_NS`, `include/asx/time/timer_wheel.h:31-33`; 24 h before 2026-10-10), and `asx_timer_set_max_duration` changes it (`timer_wheel.c:302-305`). There is no clamping variant. A registration takes the first dead slot or a new one (`:147-164`) and fails with `ASX_E_RESOURCE_EXHAUSTED` when every slot is live (`:162`); it records a monotonic `insertion_seq` and advances the slot's generation (`:124-137`). No levels, ready vector or overflow heap. Unit tests: `tests/unit/time/test_timer_wheel.c` `timer_duration_exceeded`, `timer_resource_exhaustion`, `timer_slot_recycling_after_cancel`.
+**C status:** implemented. `asx_timer_register` is Rust's `register`: a deadline more than `max_timer_duration` past the wheel's time (whole milliseconds) is clamped to that maximum, not refused (default 7 days, `ASX_TIMER_MAX_DURATION_NS`; `asx_timer_set_max_duration` changes it). There is no `try_register` variant: no C caller needs the rejection, and Rust's runtime paths all use `register`. Placement is `insert_entry_at`: ready list, overflow heap past `min(max_wheel_duration, level-3 range)` (default 24 h, `ASX_TIMER_MAX_WHEEL_DURATION_NS`), else the finest level whose range holds the delta, with the level-0 same-tick rule. A full arena returns `ASX_E_RESOURCE_EXHAUSTED` and changes nothing; each arm advances the slot's generation. Unit tests (`tests/unit/time/test_timer_wheel.c`): `timer_beyond_max_duration_is_clamped_to_the_maximum`, `timer_default_max_duration_is_seven_days_and_clamps_beyond_it`, `timer_clamp_measures_from_wheel_time_in_whole_milliseconds`, `timer_resource_exhaustion`, `timer_slot_recycling_after_cancel`, `timer_overflow_timer_promotes_and_fires`.
 
 ### 2.4 Fire Semantics
 
@@ -387,7 +387,7 @@ collect_expired(now) -> WakerBatch
 
 **Fire criterion:** `entry.deadline <= now` (inclusive), subject to the coalescing hold above.
 
-**C status:** implemented in a different form. `asx_timer_collect_expired` (`src/time/timer_wheel.c:202-266`) scans live slots with `deadline <= now` (inclusive, `:222`), sorts them by (deadline, insertion_seq) (`:230-248`) and fires up to `max_wakers`. No cascade, overflow promotion or coalescing. Rust parity of fire order for task sleeps (scheduler heap, see the section note): `timers-same-deadline-001` (two sleeps to the same instant both fire), `lab-dispatch-timer-wheel-order-001` (timers registered out of deadline order that come due in one auto-advance wake their tasks in registration order). Cascade, overflow and coalescing have no fixture.
+**C status:** implemented without coalescing. `asx_timer_collect_expired` synchronizes the wheel to `now` (`advance_to`, `tick_level0`, `cascade`, `refill_overflow`, with the same tick skipping) and drains the ready list front to back, firing entries with `deadline <= now` (inclusive) up to the caller's `max_wakers`; a later one is re-inserted, and a due one beyond capacity stays at the front, in order. Rust parity of fire order for task sleeps (the scheduler uses the same wheel): `timers-same-deadline-001`, `lab-dispatch-timer-wheel-order-001` (timers registered out of deadline order that come due in one auto-advance wake their tasks in registration order). Scenarios written to cover what those do not, pending capture from Rust: `timers-same-tick-registration-order-001` (5.7 ms before 5.2 ms), `timers-cascade-order-001`, `timers-multi-level-storm-001` (cascades from levels 1 and 2, overflow promotion), `timers-beyond-wheel-horizon-001` (30 h and clamped 8 d). Unit tests: `timer_same_tick_fires_in_registration_order`, `timer_ticks_fire_in_tick_order`, `timer_cascaded_from_coarser_level_follows_direct_timer_in_slot`, `timer_in_coarse_levels_fires_at_its_deadline`, `timer_churn_never_fires_early_loses_none_and_next_deadline_matches_a_scan`. Coalescing has no C implementation and no fixture.
 
 ### 2.5 Cancel Semantics
 
@@ -402,7 +402,7 @@ cancel(handle) -> bool          // wheel.rs:577-597
 4. When `active` becomes empty, `purge_inactive_storage()` clears `ready`, the overflow heap, all slots and bitmaps (`wheel.rs:1100-1110`)
 5. Otherwise, once cancellations since the last compaction exceed `2 * live + COMPACTION_SLACK` (1024, `wheel.rs:47`), `compact_inactive_storage()` drops cancelled entries (`wheel.rs:1116-1140`)
 
-**C status:** implemented as an O(1) logical cancel without lazy storage: `asx_timer_cancel` (`src/time/timer_wheel.c:174-192`) checks the slot range, `alive` and the generation, then marks the slot dead; the slot is reused by a later registration (`:147-158`). There is no stored entry to purge or compact. Unit tests: `test_timer_wheel.c` `timer_cancel_prevents_fire`, `timer_stale_handle_cancel_returns_false`, `timer_double_cancel_returns_false`.
+**C status:** implemented as an O(1) cancel without lazy storage: `asx_timer_cancel` checks the slot range, liveness and the generation, then unlinks the entry from the ready list, its slot's list (clearing the occupied bit when the slot empties) or the overflow heap, and releases the slot for the next registration. There is no stored dead entry to purge or compact, which cannot change what fires or in which order. Unit tests: `test_timer_wheel.c` `timer_cancel_prevents_fire`, `timer_stale_handle_cancel_returns_false`, `timer_double_cancel_returns_false`, `timer_overflow_timer_can_be_cancelled`.
 
 ### 2.6 Generation-Safe Handle Contract
 
@@ -416,7 +416,7 @@ TimerHandle { id: u64, generation: u64 }   // wheel.rs:225-228
 - Cancel requires an exact `(id, generation)` match; a stale handle whose `id` was reused fails because the slab entry holds the new generation
 - The test `wheel_register_wraps_id_and_generation_without_immediate_collision` (`wheel.rs:1406-1437`) checks two handles across a generation wrap from `u64::MAX` to 0
 
-**C status:** implemented with 32-bit generations: every arm of a slot advances that slot's generation, skipping 0 on wrap (`src/time/timer_wheel.c:54-58`, `:129`), and `asx_timer_wheel_reset` advances every slot's generation so handles from before a reset are stale (`:94-112`). Unit tests: `timer_generation_increments_on_reuse`, `timer_stale_handle_rejected_after_reset`.
+**C status:** implemented with 32-bit generations: every arm of a slot advances that slot's generation, skipping 0 on wrap (`tw_next_generation`, `src/time/timer_wheel.c`), and `asx_timer_wheel_reset` advances every used slot's generation so handles from before a reset are stale. Unit tests: `timer_generation_increments_on_reuse`, `timer_stale_handle_rejected_after_reset`.
 
 ### 2.7 Configuration
 
@@ -428,7 +428,7 @@ TimerHandle { id: u64, generation: u64 }   // wheel.rs:225-228
 
 **Rust source:** `wheel.rs:80-105` (`TimerWheelConfig`), `wheel.rs:137-165` (`CoalescingConfig`)
 
-**C status:** only a maximum duration, default 7 days, Rust's `max_timer_duration` (`include/asx/time/timer_wheel.h:31-33`; 24 h before 2026-10-10), settable with `asx_timer_set_max_duration` (`src/time/timer_wheel.c:302-305`).
+**C status:** `max_timer_duration` is `ASX_TIMER_MAX_DURATION_NS`, default 7 days, settable per wheel with `asx_timer_set_max_duration`; `max_wheel_duration` is `ASX_TIMER_MAX_WHEEL_DURATION_NS`, 24 h, fixed. Coalescing is not configurable (not implemented).
 
 ### 2.8 Timer Ordering Within Deadline
 
@@ -438,7 +438,7 @@ TimerHandle { id: u64, generation: u64 }   // wheel.rs:225-228
 | Same deadline, same slot | Insertion order | `Vec::push()` appends; iteration preserves order |
 | Overflow heap | Deadline, then lower generation (wrapping signed difference), then id | `Ord for OverflowEntry` (`wheel.rs:276-294`) |
 
-**C status:** `timer_wheel.c` fires in (deadline, insertion_seq) order (`src/time/timer_wheel.c:230-248`; unit tests `timer_tiebreak_insertion_order`, `timer_deadline_plus_seq_tiebreak`). Task sleep timers: (deadline, arm sequence) heap order (`src/runtime/scheduler.c:101-106`), and (1 ms tick, registration) order under lab dispatch (`scheduler.c:269-307`).
+**C status:** the same structure, so the same order, for the application wheel and for task sleep timers: a timer's 1 ms tick, then its arrival at the slot (unit tests `timer_tiebreak_insertion_order`, `timer_same_tick_fires_in_registration_order`, `timer_interleaved_ticks_keep_registration_order_within_each`, `timer_ready_list_keeps_registration_order_across_equal_and_earlier_deadlines`, `timer_cascade_preserves_slot_order`). Overflow timers come out by deadline, then registration sequence (`tw_ovf_less`; Rust's generation order), tested by `timer_overflow_timers_fire_by_deadline_then_registration`.
 
 ---
 
@@ -669,8 +669,8 @@ The park deadline is chosen from the timer-driver, local timed and global timed 
 |--------|------------|---------------|--------------|---|
 | **Channel messages** | FIFO (`VecDeque`) | N/A | N/A | FIFO ring buffer (`mpsc.c:802-804`, `:339-342`) |
 | **Channel waiters** | FIFO (token queue) | N/A | N/A | FIFO by arrival (`wait_queue.h:23`) |
-| **Timer wheel (same slot)** | Insertion order (`Vec`) | N/A | N/A | `timer_wheel.c`: (deadline, insertion_seq); lab sleeps: (1 ms tick, registration) |
-| **Timer overflow heap** | Deadline | Generation (wrapping) | Id | Not implemented |
+| **Timer wheel (same slot)** | Insertion order (`Vec`) | N/A | N/A | Slot list order (registration, or cascade order), `timer_wheel.c`, for the application wheel and task sleeps alike |
+| **Timer overflow heap** | Deadline | Generation (wrapping) | Id | Deadline, then registration sequence (`tw_ovf_less`) |
 | **Scheduler cancel lane** | Priority (u8, higher first) | Generation | Task id | Lab: priority, then `r % n` in generation order |
 | **Scheduler timed lane** | Deadline (EDF) | Generation | Task id | Not implemented |
 | **Scheduler ready lane** | Priority (u8, higher first) | Generation | Task id | Lab: priority, then `r % n` in generation order |
@@ -692,7 +692,7 @@ The generation key orders the heaps; a pop with an RNG hint (Phase 2 of `next_ta
 For deterministic parity with Rust, and the current C status of each:
 
 1. Channel waiter queue MUST be FIFO by arrival with head-only handoff — **implemented** (`src/sync/wait_queue.h:23`, `src/channel/mpsc.c:386-393`).
-2. Equal-deadline timers MUST fire in insertion order — **implemented** in `timer_wheel.c` (`:230-248`) and, for lab sleeps, as (1 ms tick, registration) (`src/runtime/scheduler.c:256-325`); the hierarchical wheel itself is not ported.
+2. Timers MUST fire in the Rust wheel's order (1 ms tick, then arrival at the slot) — **implemented**: `timer_wheel.c` is a port of the hierarchical wheel and the scheduler's task timers use it (`src/runtime/scheduler.c`, `timers_fire`).
 3. Scheduler entries MUST carry a generation from one counter and order by priority then generation — **implemented for the lab's cancel and ready lanes** (`src/runtime/lab_dispatch.c:432-443`, `:569-609`); no timed lane.
 4. RNG MUST be seeded as Rust seeds it — **implemented for the lab's single RNG** (`lab_dispatch.c:275-294`, `:410-424`); per-worker RNGs are not implemented.
 5. Work stealing MUST follow `stealing.rs` — **not implemented**.
@@ -718,11 +718,11 @@ For deterministic parity with Rust, and the current C status of each:
 
 | Failure | Rust detection | Rust result | C |
 |---------|-----------|----------|---|
-| Duration exceeded | `deadline - current > max_timer_duration` (`wheel.rs:530-546`) | `TimerDurationExceeded` from `try_register`; `register` clamps | `ASX_E_TIMER_DURATION_EXCEEDED` (`timer_wheel.c:118-121`, `:145`), default max 7 days |
-| Cancel with stale handle | Generation mismatch in `active` (`wheel.rs:577-597`) | `false` | Returns 0 (`timer_wheel.c:174-192`) |
-| Cancel already-cancelled or fired timer | Id not in `active` | `false` | Returns 0 (slot not alive) |
-| Fire cancelled timer | `is_live()` false (`wheel.rs:1071-1075`) | Skipped | Dead slots are skipped (`timer_wheel.c:221`) |
-| Generation wrap | Wrapping `u64` generation with slab ids (`wheel.rs:550-566`) | Handles differ across the wrap (test `wheel.rs:1406-1437`) | 32-bit generation skipping 0 (`timer_wheel.c:54-58`) |
+| Duration exceeded | `deadline - current > max_timer_duration` (`wheel.rs:530-546`) | `TimerDurationExceeded` from `try_register`; `register` clamps | `asx_timer_register` clamps to the maximum (default 7 days); no rejecting variant |
+| Cancel with stale handle | Generation mismatch in `active` (`wheel.rs:577-597`) | `false` | Returns 0 (`asx_timer_cancel`) |
+| Cancel already-cancelled or fired timer | Id not in `active` | `false` | Returns 0 (slot not live) |
+| Fire cancelled timer | `is_live()` false (`wheel.rs:1071-1075`) | Skipped | Never reached: a cancelled timer leaves its list at once |
+| Generation wrap | Wrapping `u64` generation with slab ids (`wheel.rs:550-566`) | Handles differ across the wrap (test `wheel.rs:1406-1437`) | 32-bit generation skipping 0 (`tw_next_generation`) |
 
 ### 6.3 Scheduler Failure Paths
 
@@ -768,9 +768,9 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 | `tm-cancel-001` | Insert -> cancel -> advance -> not fired | Cancel | Not materialized; no direct v2 fixture (`lab-dispatch-waker-rearm-001` cancels and re-registers a sleep timer) |
 | `tm-cancel-stale-001` | Cancel with stale generation -> rejected | Invalid handle | Not materialized; no v2 fixture (C unit test `timer_stale_handle_cancel_returns_false`) |
 | `tm-cancel-reuse-001` | Same ID, different generation -> independent | Generation safety | Not materialized; no v2 fixture (C unit test `timer_generation_increments_on_reuse`) |
-| `tm-duration-exceeded-001` | Insert beyond max duration -> error | Validation | Not materialized; no v2 fixture (C unit tests `timer_duration_exceeded`, `timer_default_max_duration_is_seven_days`) |
-| `tm-cascade-001` | Level 0 wrap triggers Level 1 cascade | Cascade | Not materialized; not implemented in C |
-| `tm-overflow-001` | Far-future timer in overflow heap | Overflow | Not materialized; not implemented in C |
+| `tm-duration-exceeded-001` | Insert beyond max duration -> clamped (`register`) | Validation | Scenario `timers-beyond-wheel-horizon-001` written, capture pending; C unit tests `timer_beyond_max_duration_is_clamped_to_the_maximum`, `timer_default_max_duration_is_seven_days_and_clamps_beyond_it` |
+| `tm-cascade-001` | Level 0 wrap triggers Level 1 cascade | Cascade | Scenarios `timers-cascade-order-001`, `timers-multi-level-storm-001` written, capture pending; C unit test `timer_cascaded_from_coarser_level_follows_direct_timer_in_slot` |
+| `tm-overflow-001` | Far-future timer in overflow heap | Overflow | Scenarios `timers-beyond-wheel-horizon-001`, `timers-multi-level-storm-001` written, capture pending; C unit tests `timer_overflow_timer_promotes_and_fires`, `timer_overflow_timers_fire_by_deadline_then_registration` |
 | `tm-coalesce-001` | Timers within coalescing window fire together | Coalescing | Not materialized; not implemented in C |
 | `tm-wrap-001` | ID and generation u64 wrap without collision | Wrap safety | Not materialized; no v2 fixture |
 | `tm-purge-001` | All timers cancelled -> storage purged | Cleanup | Not materialized; not applicable to C (no lazy storage) |
@@ -815,14 +815,14 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 
 | ID | Invariant | Category | C |
 |----|-----------|----------|---|
-| `INV-TM-01` | Cancel requires exact `(id, generation)` match | Handle safety | Yes (`timer_wheel.c:174-192`) |
-| `INV-TM-02` | Cancelled timers silently skipped at fire time via `is_live()` | Lazy deletion | Cancel marks the slot dead at once; dead slots are skipped (`timer_wheel.c:221`) |
-| `INV-TM-03` | Same-deadline timers fire in insertion order | Ordering | Yes (`timer_wheel.c:230-248`) |
-| `INV-TM-04` | `try_register` rejects duration > `max_timer_duration`; `register` clamps | Validation | Rejects; default max 7 days, no clamping variant |
+| `INV-TM-01` | Cancel requires exact `(id, generation)` match | Handle safety | Yes (`asx_timer_cancel`) |
+| `INV-TM-02` | Cancelled timers silently skipped at fire time via `is_live()` | Lazy deletion | Cancel unlinks the entry at once, so none is reached at fire time |
+| `INV-TM-03` | Timers fire in the wheel's order: tick, then arrival at the slot | Ordering | Yes (ported wheel; `timer_same_tick_fires_in_registration_order`, `timer_cascaded_from_coarser_level_follows_direct_timer_in_slot`) |
+| `INV-TM-04` | `try_register` rejects duration > `max_timer_duration`; `register` clamps | Validation | `register` clamps (default 7 days); no rejecting variant |
 | `INV-TM-05` | All-cancelled triggers `purge_inactive_storage()`; many cancellations trigger compaction | Cleanup | Not applicable (no lazy storage) |
 | `INV-TM-06` | Generation wrap does not make handles collide (slab ids, wrapping `u64` generation) | Wrap safety | 32-bit generation skipping 0 |
-| `INV-TM-07` | Cascade respects generation: dead entries dropped during level promotion | Cascade safety | Not applicable (no cascade) |
-| `INV-TM-08` | Fire criterion: `entry.deadline <= now` (inclusive), except a coalescing hold | Fire semantics | Yes (`timer_wheel.c:222`) |
+| `INV-TM-07` | Cascade respects generation: dead entries dropped during level promotion | Cascade safety | Yes by construction: a cancelled timer is no longer in any slot when its level cascades |
+| `INV-TM-08` | Fire criterion: `entry.deadline <= now` (inclusive), except a coalescing hold | Fire semantics | Yes (`tw_drain_ready`), without the coalescing hold |
 
 ### 8.3 Scheduler Invariants
 
