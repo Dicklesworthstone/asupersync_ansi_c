@@ -55,6 +55,17 @@ asx_status asx_checkpoint(asx_task_id self, asx_checkpoint_result *out) {
     return ASX_OK;
 }
 
+/* Stub for asx_task_mask_depth, which Cx's checkpoint reads to defer a
+ * spent bound budget while the task is masked: unlike the checkpoint's
+ * own `masked`, it does not need a pending cancel. */
+asx_status asx_task_mask_depth(asx_task_id id, uint32_t *out_depth);
+asx_status asx_task_mask_depth(asx_task_id id, uint32_t *out_depth) {
+    if (out_depth == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (id == ASX_INVALID_ID || id != g_stub_task_id) return ASX_E_NOT_FOUND;
+    *out_depth = g_stub_mask_depth;
+    return ASX_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* Lifecycle tests                                                     */
 /* ------------------------------------------------------------------ */
@@ -702,17 +713,52 @@ TEST(checkpoint_cancelled_returns_cancelled) {
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
 }
 
-TEST(checkpoint_budget_exhaustion) {
+TEST(checkpoint_spends_no_poll_and_observes_a_spent_budget) {
+    /* Rust's checkpoint spends no poll: the poll's unit is charged when the
+     * task is polled, here by asx_cx_consume_poll, and the checkpoint turns
+     * a spent quota into a cancel (checkpoint_budget_exhaustion,
+     * cx.rs:3112-3160). */
     asx_cx cx;
     asx_budget b = asx_budget_from_polls(1);
     g_stub_task_id = 22;
     g_stub_task_state = ASX_TASK_RUNNING;
+    g_stub_mask_depth = 0;
     asx_cx_init(&cx, 1, 22, ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME);
     asx_cx_bind_budget(&cx, &b);
-    /* First checkpoint consumes the one poll */
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_OK);
-    /* Second checkpoint — budget exhausted */
-    ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_OK);
+    ASSERT_EQ(asx_budget_polls(&b), 1u);
+    ASSERT_EQ(asx_cx_consume_poll(&cx), ASX_OK);
+    ASSERT_EQ(asx_budget_polls(&b), 0u);
+    ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
+    ASSERT_EQ(asx_budget_polls(&b), 0u);
+}
+
+TEST(checkpoint_observes_a_spent_cost_quota) {
+    asx_cx cx;
+    asx_budget b = asx_budget_infinite();
+    g_stub_task_id = 24;
+    g_stub_task_state = ASX_TASK_RUNNING;
+    g_stub_mask_depth = 0;
+    b.cost_quota = 0u;
+    asx_cx_init(&cx, 1, 24, ASX_CAP_BUDGET_READ);
+    asx_cx_bind_budget(&cx, &b);
+    ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
+}
+
+TEST(checkpoint_defers_a_spent_budget_while_the_task_is_masked) {
+    /* A mask defers the checkpoint's delivery, not the exhaustion: with no
+     * cancel pending the stub task still reports a mask depth. */
+    asx_cx cx;
+    asx_budget b = asx_budget_zero();
+    g_stub_task_id = 25;
+    g_stub_task_state = ASX_TASK_RUNNING;
+    g_stub_mask_depth = 1;
+    asx_cx_init(&cx, 1, 25, ASX_CAP_BUDGET_READ);
+    asx_cx_bind_budget(&cx, &b);
+    ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_OK);
+    g_stub_mask_depth = 0;
+    ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
 }
 
 TEST(checkpoint_cancel_takes_priority_over_budget) {
@@ -825,7 +871,9 @@ int main(void) {
     RUN_TEST(checkpoint_null_fails);
     RUN_TEST(checkpoint_ok_no_cancel_no_budget);
     RUN_TEST(checkpoint_cancelled_returns_cancelled);
-    RUN_TEST(checkpoint_budget_exhaustion);
+    RUN_TEST(checkpoint_spends_no_poll_and_observes_a_spent_budget);
+    RUN_TEST(checkpoint_observes_a_spent_cost_quota);
+    RUN_TEST(checkpoint_defers_a_spent_budget_while_the_task_is_masked);
     RUN_TEST(checkpoint_cancel_takes_priority_over_budget);
 
     /* Status string */

@@ -187,9 +187,10 @@ static void test_tcp_listener_poll_accept_with_cx_budget_checkpoint(void) {
 
     ASSERT(asx_tcp_listener_poll_accept_with_cx(listener, &stream, NULL, &cx) == ASX_E_PENDING,
            "first accept poll pending");
-    ASSERT(asx_tcp_listener_poll_accept_with_cx(listener, &stream, NULL, &cx) ==
-               ASX_E_POLL_BUDGET_EXHAUSTED,
-           "second accept poll exhausts budget");
+    /* The poll's unit is charged by the driver; the checkpoint only observes. */
+    MUST_OK(asx_cx_consume_poll(&cx));
+    ASSERT(asx_tcp_listener_poll_accept_with_cx(listener, &stream, NULL, &cx) == ASX_E_CANCELLED,
+           "second accept poll sees the spent budget as a cancel");
 
     asx_tcp_listener_close(listener);
 }
@@ -325,8 +326,9 @@ static void test_tcp_stream_poll_with_cx_budget_checkpoint(void) {
     asx_buf_mut_init(&dst);
     ASSERT(asx_tcp_stream_poll_read_with_cx(stream, &dst, &n, &cx) == ASX_E_PENDING,
            "first poll_read pending");
-    ASSERT(asx_tcp_stream_poll_read_with_cx(stream, &dst, &n, &cx) == ASX_E_POLL_BUDGET_EXHAUSTED,
-           "second poll_read exhausts budget");
+    MUST_OK(asx_cx_consume_poll(&cx));
+    ASSERT(asx_tcp_stream_poll_read_with_cx(stream, &dst, &n, &cx) == ASX_E_CANCELLED,
+           "second poll_read sees the spent budget as a cancel");
 
     src = asx_buf_from_cstr("hello");
     MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CHANNEL | ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME));
@@ -334,8 +336,9 @@ static void test_tcp_stream_poll_with_cx_budget_checkpoint(void) {
     MUST_OK(asx_cx_bind_budget(&cx, &budget));
     ASSERT(asx_tcp_stream_poll_write_with_cx(stream, &src, &n, &cx) == ASX_E_PENDING,
            "first poll_write pending");
-    ASSERT(asx_tcp_stream_poll_write_with_cx(stream, &src, &n, &cx) == ASX_E_POLL_BUDGET_EXHAUSTED,
-           "second poll_write exhausts budget");
+    MUST_OK(asx_cx_consume_poll(&cx));
+    ASSERT(asx_tcp_stream_poll_write_with_cx(stream, &src, &n, &cx) == ASX_E_CANCELLED,
+           "second poll_write sees the spent budget as a cancel");
 
     asx_tcp_stream_close(stream);
 }
@@ -497,8 +500,9 @@ static void test_udp_with_cx_budget_and_permission(void) {
     asx_buf_mut_init(&dst);
     ASSERT(asx_udp_poll_recv_with_cx(socket, &dst, &n, NULL, &cx) == ASX_E_PENDING,
            "udp recv with cx pending");
-    ASSERT(asx_udp_poll_recv_with_cx(socket, &dst, &n, NULL, &cx) == ASX_E_POLL_BUDGET_EXHAUSTED,
-           "udp recv checkpoint budget");
+    MUST_OK(asx_cx_consume_poll(&cx));
+    ASSERT(asx_udp_poll_recv_with_cx(socket, &dst, &n, NULL, &cx) == ASX_E_CANCELLED,
+           "udp recv checkpoint sees the spent budget");
 
     MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_NONE));
     ASSERT(asx_udp_poll_send_with_cx(socket, &src, &n, NULL, &cx) == ASX_E_PERMISSION_DENIED,

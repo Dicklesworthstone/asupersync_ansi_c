@@ -414,6 +414,9 @@ int asx_cx_is_cancelled(const asx_cx *cx) {
 }
 
 asx_status asx_cx_checkpoint(asx_cx *cx) {
+    asx_checkpoint_result cr;
+    uint32_t mask_depth = 0u;
+
     if (cx == NULL) return ASX_E_INVALID_ARGUMENT;
 
     /* Check cancellation first, as Rust's Cx::checkpoint does
@@ -423,13 +426,18 @@ asx_status asx_cx_checkpoint(asx_cx *cx) {
      * checkpoint needs no capability: a narrowed Cx still sees its
      * task's cancel. */
     if (cx->task_id != ASX_INVALID_ID) {
-        asx_checkpoint_result cr;
         if (asx_checkpoint(cx->task_id, &cr) == ASX_OK && cr.cancelled) return ASX_E_CANCELLED;
+        if (asx_task_mask_depth(cx->task_id, &mask_depth) != ASX_OK) mask_depth = 0u;
     }
 
-    /* Consume a poll tick if budget is bound */
-    if (cx->budget != NULL && asx_cx_has_cap(cx, ASX_CAP_BUDGET_CONSUME)) {
-        if (asx_budget_consume_poll(cx->budget) == 0u) return ASX_E_POLL_BUDGET_EXHAUSTED;
+    /* A budget bound with asx_cx_bind_budget is observed, never spent: the
+     * checkpoint costs no poll (Rust charges a poll's unit when the
+     * scheduler polls, and the checkpoint turns a spent poll or cost quota
+     * into a cancel, checkpoint_budget_exhaustion, cx.rs:3112-3160). A mask
+     * defers the delivery. Spend a poll with asx_cx_consume_poll. */
+    if (mask_depth == 0u && cx->budget != NULL &&
+        (cx->budget->poll_quota == 0u || cx->budget->cost_quota == 0u)) {
+        return ASX_E_CANCELLED;
     }
 
     return ASX_OK;

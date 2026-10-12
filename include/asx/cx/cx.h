@@ -283,9 +283,10 @@ ASX_API int asx_cx_is_cancelled(const asx_cx *cx);
  * task sees none. Needs no capability.
  * Returns ASX_OK if not cancelled, ASX_E_CANCELLED if cancel requested.
  * Should be called periodically in long-running operations.
- * Also consumes a poll from the budget bound with asx_cx_bind_budget (a
- * C-only budget, separate from the task's): ASX_E_POLL_BUDGET_EXHAUSTED
- * once it is spent, with ASX_CAP_BUDGET_CONSUME. */
+ * Spends no poll, as Rust's checkpoint spends none. A budget bound with
+ * asx_cx_bind_budget (C-only, separate from the task's) is observed: a
+ * spent poll or cost quota is ASX_E_CANCELLED, deferred while the task is
+ * masked. Spend a poll with asx_cx_consume_poll. */
 ASX_API asx_status asx_cx_checkpoint(asx_cx *cx);
 
 #ifdef __cplusplus

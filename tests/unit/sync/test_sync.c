@@ -1256,8 +1256,9 @@ TEST(notify_cx_budget_exhaustion) {
     MUST_OK(asx_notify_create(&h));
     MUST_OK(asx_notify_wait_begin(h, &w));
 
-    /* Poll should return budget exhausted via checkpoint */
-    ASSERT_EQ(asx_notify_poll_wait(&w, &cx), ASX_E_POLL_BUDGET_EXHAUSTED);
+    /* The checkpoint observes the spent budget as a cancel (Rust's
+     * checkpoint_budget_exhaustion), spending nothing */
+    ASSERT_EQ(asx_notify_poll_wait(&w, &cx), ASX_E_CANCELLED);
     /* Waiter should be cleaned up */
     ASSERT_EQ(asx_notify_waiter_count(h), 0u);
 
@@ -1280,7 +1281,7 @@ TEST(sem_cx_budget_exhaustion) {
     MUST_OK(asx_semaphore_try_acquire(h, &p));
     MUST_OK(asx_semaphore_acquire_begin(h, &w));
 
-    ASSERT_EQ(asx_semaphore_poll_acquire(&w, &p2, &cx), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(asx_semaphore_poll_acquire(&w, &p2, &cx), ASX_E_CANCELLED);
 
     MUST_OK(asx_semaphore_release(p));
     ASSERT_EQ(asx_semaphore_close(h), ASX_OK);
