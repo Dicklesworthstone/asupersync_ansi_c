@@ -51,6 +51,17 @@ extern "C" {
 #error "ASX_MAX_CHANNELS and ASX_CHANNEL_MAX_CAPACITY must be at least 1"
 #endif
 
+/* Live clones one channel tracks by identity (asx_channel_sender_clone),
+ * besides the creator's sender: the arena slice that tells a second drop of
+ * a clone from a first. Rust's Sender has no such limit; a clone past it is
+ * ASX_E_RESOURCE_EXHAUSTED. Override at build time. */
+#ifndef ASX_CHANNEL_MAX_SENDERS
+#define ASX_CHANNEL_MAX_SENDERS 16u
+#endif
+#if (ASX_CHANNEL_MAX_SENDERS) < 1
+#error "ASX_CHANNEL_MAX_SENDERS must be at least 1"
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Channel lifecycle states                                           */
 /* ------------------------------------------------------------------ */
@@ -81,6 +92,22 @@ typedef struct asx_send_permit {
      * abort of it changes nothing). */
     asx_obligation_id obligation;
 } asx_send_permit;
+
+/* ------------------------------------------------------------------ */
+/* Sender identity (a cloned Sender)                                  */
+/* ------------------------------------------------------------------ */
+
+/* A sender cloned from a channel (Rust Sender::clone, or the Sender that
+ * WeakSender::upgrade returns). Rust's Sender is an owned value, so one
+ * cannot be dropped twice; C names each clone so a second drop of it is
+ * refused and cannot take another producer's sender with it. `token` is
+ * the clone's identity within the channel, 0 once it is dropped. The
+ * channel's creator holds the first sender, implicitly, and drops it with
+ * asx_channel_close_sender. */
+typedef struct asx_channel_sender {
+    asx_channel_id channel;
+    uint32_t token;
+} asx_channel_sender;
 
 /* ------------------------------------------------------------------ */
 /* Channel lifecycle API                                              */
@@ -121,10 +148,12 @@ ASX_API ASX_MUST_USE asx_status asx_channel_create_unbounded(asx_region_id regio
 ASX_API int asx_channel_is_unbounded(asx_channel_id id);
 
 /* Senders are counted, as Rust's Sender clones are (Sender::clone /
- * Sender::drop, mpsc.rs:1231-1255): a channel starts with one sender, each
- * producer that takes part calls asx_channel_sender_clone, and each one
- * done calls asx_channel_close_sender. The sender side closes when the
- * last one is dropped.
+ * Sender::drop, mpsc.rs:1231-1255): a channel starts with one sender, the
+ * creator's; each further producer calls asx_channel_sender_clone and gets
+ * a sender of its own, and drops it with asx_channel_sender_drop. The
+ * sender side closes when the last one is dropped. A sender is dropped at
+ * most once: a second drop of it, or of the creator's, is refused and
+ * counts nothing, so one producer's double drop cannot remove another's.
  *
  * A Rust WeakSender (Sender::downgrade, mpsc.rs:941) needs no C object:
  * keep the channel id without counting it, and upgrade it (:1275) with
@@ -132,17 +161,30 @@ ASX_API int asx_channel_is_unbounded(asx_channel_id id);
  * alive, even after the receiver closed, and refuses once the count
  * reached zero.
  *
- * Add a sender. Returns ASX_OK, ASX_E_INVALID_STATE once the sender side is
- * closed (no live sender to clone), ASX_E_RESOURCE_EXHAUSTED when the count
- * would overflow, or a lookup error. */
-ASX_API ASX_MUST_USE asx_status asx_channel_sender_clone(asx_channel_id id);
+ * Add a sender and fill *out_sender with its identity. Returns ASX_OK,
+ * ASX_E_INVALID_STATE once the sender side is closed (no live sender to
+ * clone), ASX_E_RESOURCE_EXHAUSTED when ASX_CHANNEL_MAX_SENDERS clones are
+ * live, ASX_E_INVALID_ARGUMENT for a NULL out_sender, or a lookup error;
+ * on failure *out_sender and the count are untouched. */
+ASX_API ASX_MUST_USE asx_status asx_channel_sender_clone(asx_channel_id id,
+                                                         asx_channel_sender *out_sender);
 
-/* Drop one sender. While others remain it only lowers the count. The last
- * one closes the sender side: no new reserves succeed, pending messages
- * remain available for recv, and waiting receivers are woken (a receive
- * on the empty queue then reports ASX_E_DISCONNECTED).
+/* Drop a cloned sender (Rust Sender::drop, mpsc.rs:1241-1255). While
+ * others remain it only lowers the count; the last one closes the sender
+ * side, as asx_channel_close_sender describes. The handle is spent: its
+ * token is cleared, so a second drop of it, or of a copy, is
+ * ASX_E_INVALID_STATE with nothing changed. A lookup error for a channel
+ * that is gone. */
+ASX_API ASX_MUST_USE asx_status asx_channel_sender_drop(asx_channel_sender *sender);
+
+/* Drop the creator's sender, the one the channel was created with. While
+ * clones remain it only lowers the count. The last sender closes the
+ * sender side: no new reserves succeed, pending messages remain available
+ * for recv, and waiting receivers are woken (a receive on the empty queue
+ * then reports ASX_E_DISCONNECTED).
  * Open → SenderClosed; ReceiverClosed → FullyClosed. Returns
- * ASX_E_INVALID_STATE once the sender side is closed. */
+ * ASX_E_INVALID_STATE, nothing changed, once the creator's sender was
+ * dropped or the sender side is closed. */
 ASX_API ASX_MUST_USE asx_status asx_channel_close_sender(asx_channel_id id);
 
 /* Drop the receiver (Rust's Receiver::drop, mpsc.rs:2122). Pending

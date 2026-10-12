@@ -79,8 +79,16 @@ typedef struct {
     int alive;
     /* Live senders (Rust ChannelShared::sender_count, mpsc.rs:302): 1 at
      * create, +1 per asx_channel_sender_clone, -1 per
-     * asx_channel_close_sender; the sender side closes at 0. */
+     * asx_channel_close_sender / asx_channel_sender_drop; the sender side
+     * closes at 0. Rust's Sender is an owned value, dropped once; the
+     * identities below make that true here: the creator's sender is
+     * `primary_dropped` once dropped, and each live clone holds a nonzero
+     * token in `sender_tokens` until its drop clears it, so a second drop
+     * of either is refused before it can lower the count. */
     uint32_t sender_count;
+    int primary_dropped;
+    uint32_t sender_tokens[ASX_CHANNEL_MAX_SENDERS];
+    uint32_t next_sender_token;
     /* The receiver was dropped (asx_channel_close_receiver). A seal closes
      * the receiver side but keeps the receiver (Rust's close vs drop,
      * mpsc.rs:1698, :2122). */
@@ -146,6 +154,28 @@ static asx_status channel_slot_lookup(asx_channel_id id, asx_channel_slot **out)
 static asx_channel_id channel_make_handle(uint16_t slot_idx, uint16_t gen) {
     uint32_t index = asx_handle_pack_index(gen, slot_idx);
     return asx_handle_pack(ASX_TYPE_CHANNEL, 0, index);
+}
+
+/* A channel starts with its creator's sender and no clone. */
+static void channel_sender_ids_reset(asx_channel_slot *s) {
+    uint32_t i;
+
+    s->primary_dropped = 0;
+    s->next_sender_token = 1u;
+    for (i = 0; i < ASX_CHANNEL_MAX_SENDERS; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_CHANNEL_MAX_SENDERS constant");
+        s->sender_tokens[i] = 0u;
+    }
+}
+
+static int channel_sender_token_live(const asx_channel_slot *s, uint32_t token) {
+    uint32_t i;
+
+    for (i = 0; i < ASX_CHANNEL_MAX_SENDERS; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_CHANNEL_MAX_SENDERS constant");
+        if (s->sender_tokens[i] == token) { return 1; }
+    }
+    return 0;
 }
 
 static uint32_t channel_atomic_load(const asx_atomic_u32 *value) {
@@ -463,6 +493,7 @@ static asx_status channel_create_impl(asx_region_id region, uint32_t capacity, i
             s->region = region;
             s->alive = 1;
             s->sender_count = 1u;
+            channel_sender_ids_reset(s);
             s->receiver_dropped = 0;
             s->unbounded = unbounded;
             s->capacity = capacity;
@@ -510,9 +541,16 @@ int asx_channel_is_unbounded(asx_channel_id id) {
     return s->unbounded != 0;
 }
 
-asx_status asx_channel_sender_clone(asx_channel_id id) {
+/* Rust's Sender::clone (mpsc.rs:1231-1239) and WeakSender::upgrade
+ * (:1275): one more live sender, with an identity of its own. */
+asx_status asx_channel_sender_clone(asx_channel_id id, asx_channel_sender *out_sender) {
     asx_channel_slot *s;
     asx_status st;
+    uint32_t i;
+    uint32_t free_idx = ASX_CHANNEL_MAX_SENDERS;
+    uint32_t token = 0u;
+
+    if (out_sender == NULL) { return ASX_E_INVALID_ARGUMENT; }
 
     st = channel_slot_lookup(id, &s);
     if (st != ASX_OK) { return st; }
@@ -520,21 +558,36 @@ asx_status asx_channel_sender_clone(asx_channel_id id) {
     if (s->state == ASX_CHANNEL_SENDER_CLOSED || s->state == ASX_CHANNEL_FULLY_CLOSED) {
         return ASX_E_INVALID_STATE;
     }
-    if (s->sender_count == UINT32_MAX) { return ASX_E_RESOURCE_EXHAUSTED; }
+
+    for (i = 0; i < ASX_CHANNEL_MAX_SENDERS; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_CHANNEL_MAX_SENDERS constant");
+        if (s->sender_tokens[i] == 0u) {
+            free_idx = i;
+            break;
+        }
+    }
+    if (free_idx == ASX_CHANNEL_MAX_SENDERS) { return ASX_E_RESOURCE_EXHAUSTED; }
+
+    /* A token no live clone holds, nonzero (it wraps only after 2^32
+     * clones, and then skips any that is still live). */
+    for (i = 0; i <= ASX_CHANNEL_MAX_SENDERS && token == 0u; i++) {
+        uint32_t candidate = s->next_sender_token++;
+        ASX_CHECKPOINT_WAIVER("bounded: at most ASX_CHANNEL_MAX_SENDERS live tokens to skip");
+        if (candidate != 0u && !channel_sender_token_live(s, candidate)) { token = candidate; }
+    }
+    if (token == 0u) { return ASX_E_RESOURCE_EXHAUSTED; }
+
+    s->sender_tokens[free_idx] = token;
     s->sender_count++;
+    out_sender->channel = id;
+    out_sender->token = token;
     return ASX_OK;
 }
 
-asx_status asx_channel_close_sender(asx_channel_id id) {
-    asx_channel_slot *s;
-    asx_status st;
-
-    st = channel_slot_lookup(id, &s);
-    if (st != ASX_OK) { return st; }
-
-    /* Rust Sender::drop (mpsc.rs:1241-1255): a sender that is not the last
-     * only lowers the count; the last one closes the sender side and wakes
-     * the receiver. */
+/* One sender is gone (Rust Sender::drop, mpsc.rs:1241-1255): a sender that
+ * is not the last only lowers the count; the last one closes the sender
+ * side and wakes the receiver. */
+static asx_status channel_sender_dropped(asx_channel_slot *s) {
     if ((s->state == ASX_CHANNEL_OPEN || s->state == ASX_CHANNEL_RECEIVER_CLOSED) &&
         s->sender_count > 1u) {
         s->sender_count--;
@@ -559,6 +612,48 @@ asx_status asx_channel_close_sender(asx_channel_id id) {
     }
 
     return ASX_E_INVALID_STATE;
+}
+
+/* Drop a cloned sender. Its token must be live: a second drop of the same
+ * handle, or of a copy of it, finds none and is refused with the count
+ * untouched, so it cannot remove another producer's sender. */
+asx_status asx_channel_sender_drop(asx_channel_sender *sender) {
+    asx_channel_slot *s;
+    asx_status st;
+    uint32_t i;
+
+    if (sender == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (sender->token == 0u) { return ASX_E_INVALID_STATE; }
+
+    st = channel_slot_lookup(sender->channel, &s);
+    if (st != ASX_OK) { return st; }
+
+    for (i = 0; i < ASX_CHANNEL_MAX_SENDERS; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: ASX_CHANNEL_MAX_SENDERS constant");
+        if (s->sender_tokens[i] == sender->token) { break; }
+    }
+    if (i == ASX_CHANNEL_MAX_SENDERS) { return ASX_E_INVALID_STATE; }
+
+    st = channel_sender_dropped(s);
+    if (st != ASX_OK) { return st; }
+    s->sender_tokens[i] = 0u;
+    sender->token = 0u;
+    return ASX_OK;
+}
+
+/* Drop the creator's sender, once. A second call is refused with the count
+ * untouched: it must not take a clone's sender with it. */
+asx_status asx_channel_close_sender(asx_channel_id id) {
+    asx_channel_slot *s;
+    asx_status st;
+
+    st = channel_slot_lookup(id, &s);
+    if (st != ASX_OK) { return st; }
+    if (s->primary_dropped) { return ASX_E_INVALID_STATE; }
+
+    st = channel_sender_dropped(s);
+    if (st == ASX_OK) { s->primary_dropped = 1; }
+    return st;
 }
 
 asx_status asx_channel_close_receiver(asx_channel_id id) {
@@ -1293,6 +1388,7 @@ void asx_channel_reset(void) {
         g_channels[i].alive = 0;
         g_channels[i].state = ASX_CHANNEL_OPEN;
         g_channels[i].receiver_dropped = 0;
+        channel_sender_ids_reset(&g_channels[i]);
         g_channels[i].unbounded = 0;
         g_channels[i].queue_head = 0;
         g_channels[i].queue_len = 0;

@@ -197,27 +197,29 @@ TEST(double_close_receiver) {
 }
 
 TEST(sender_side_closes_when_the_last_counted_sender_drops) {
-    /* Rust Sender::clone / Sender::drop (mpsc.rs:1231-1255): three senders,
-     * two dropped: still open, a send still goes through; the third drop
-     * closes the sender side, and the receiver drains then sees
-     * DISCONNECTED. */
+    /* Rust Sender::clone / Sender::drop (mpsc.rs:1231-1255): three senders
+     * (the creator's and two clones), two dropped: still open, a send still
+     * goes through; the third drop closes the sender side, and the receiver
+     * drains then sees DISCONNECTED. */
     asx_channel_id ch;
+    asx_channel_sender a;
+    asx_channel_sender b;
     asx_channel_state st;
     asx_send_permit p;
     uint64_t val;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
-    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
-    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &a), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &b), ASX_OK);
 
     ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
-    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_drop(&a), ASX_OK);
     ASSERT_EQ(asx_channel_get_state(ch, &st), ASX_OK);
     ASSERT_EQ(st, ASX_CHANNEL_OPEN);
     ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_OK);
     ASSERT_EQ(asx_send_permit_send(&p, 5u), ASX_OK);
 
-    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_drop(&b), ASX_OK);
     ASSERT_EQ(asx_channel_get_state(ch, &st), ASX_OK);
     ASSERT_EQ(st, ASX_CHANNEL_SENDER_CLOSED);
     /* No sender is left to reserve with (reserve_after_sender_closed). */
@@ -227,7 +229,7 @@ TEST(sender_side_closes_when_the_last_counted_sender_drops) {
     ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_E_DISCONNECTED);
 
     /* No live sender left to clone or drop. */
-    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &a), ASX_E_INVALID_STATE);
     ASSERT_EQ(asx_channel_close_sender(ch), ASX_E_INVALID_STATE);
 }
 
@@ -235,15 +237,16 @@ TEST(counted_senders_outlive_a_receiver_close) {
     /* The receiver drops first; the channel becomes fully closed only when
      * the last of two senders drops. */
     asx_channel_id ch;
+    asx_channel_sender s;
     asx_channel_state st;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
-    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &s), ASX_OK);
     ASSERT_EQ(asx_channel_close_receiver(ch), ASX_OK);
     ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
     ASSERT_EQ(asx_channel_get_state(ch, &st), ASX_OK);
     ASSERT_EQ(st, ASX_CHANNEL_RECEIVER_CLOSED);
-    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_drop(&s), ASX_OK);
     ASSERT_EQ(asx_channel_get_state(ch, &st), ASX_OK);
     ASSERT_EQ(st, ASX_CHANNEL_FULLY_CLOSED);
 }
@@ -2080,16 +2083,148 @@ TEST(weak_sender_upgrade_is_a_counted_clone) {
     /* WeakSender::upgrade (mpsc.rs:1275) succeeds while a sender lives,
      * even after the receiver closed, and fails once the count hit 0. */
     asx_channel_id ch;
+    asx_channel_sender upgraded;
+    asx_channel_sender late;
     asx_channel_state cs;
     setup();
     ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
     ASSERT_EQ(asx_channel_close_receiver(ch), ASX_OK);
-    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &upgraded), ASX_OK);
     ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
     ASSERT_EQ(asx_channel_get_state(ch, &cs), ASX_OK);
     ASSERT_EQ(cs, ASX_CHANNEL_RECEIVER_CLOSED);
+    ASSERT_EQ(asx_channel_sender_drop(&upgraded), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &late), ASX_E_INVALID_STATE);
+}
+
+/* -------------------------------------------------------------------
+ * Sender identity (bd-9kll.5.12): Rust's Sender is an owned value, dropped
+ * once. Each clone has an identity of its own, so one producer's double
+ * drop cannot remove another producer's sender.
+ * ------------------------------------------------------------------- */
+
+TEST(a_double_close_of_one_sender_cannot_remove_another_producers) {
+    /* Producers A (the creator's sender) and B (a clone). A closes twice:
+     * the second close is refused and B's sender is intact, so the channel
+     * stays open and B can still send; it closes when B drops too. */
+    asx_channel_id ch;
+    asx_channel_sender b;
+    asx_channel_state cs;
+    asx_send_permit p;
+    uint64_t v = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &b), ASX_OK);
+
     ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
-    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_get_state(ch, &cs), ASX_OK);
+    ASSERT_EQ(cs, ASX_CHANNEL_OPEN);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&p, 9u), ASX_OK);
+
+    ASSERT_EQ(asx_channel_sender_drop(&b), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &cs), ASX_OK);
+    ASSERT_EQ(cs, ASX_CHANNEL_SENDER_CLOSED);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 9u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_E_DISCONNECTED);
+}
+
+TEST(a_second_drop_of_a_clone_is_refused_whether_by_handle_or_copy) {
+    asx_channel_id ch;
+    asx_channel_sender b;
+    asx_channel_sender b_copy;
+    asx_channel_sender c;
+    asx_channel_state cs;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &b), ASX_OK);
+    b_copy = b;
+
+    ASSERT_EQ(asx_channel_sender_drop(&b), ASX_OK);
+    ASSERT_EQ(b.token, 0u); /* the handle is spent */
+    ASSERT_EQ(asx_channel_sender_drop(&b), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_sender_drop(&b_copy), ASX_E_INVALID_STATE);
+
+    /* Nothing was counted: the creator's sender is still the live one, and a
+     * clone still works. */
+    ASSERT_EQ(asx_channel_get_state(ch, &cs), ASX_OK);
+    ASSERT_EQ(cs, ASX_CHANNEL_OPEN);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &c), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &cs), ASX_OK);
+    ASSERT_EQ(cs, ASX_CHANNEL_OPEN); /* c is live */
+    ASSERT_EQ(asx_channel_sender_drop(&c), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &cs), ASX_OK);
+    ASSERT_EQ(cs, ASX_CHANNEL_SENDER_CLOSED);
+}
+
+TEST(clones_have_distinct_identities_up_to_the_limit) {
+    asx_channel_id ch;
+    asx_channel_sender s[ASX_CHANNEL_MAX_SENDERS];
+    asx_channel_sender extra;
+    asx_channel_sender again;
+    uint32_t i;
+    uint32_t j;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    for (i = 0u; i < (uint32_t)ASX_CHANNEL_MAX_SENDERS; i++) {
+        ASSERT_EQ(asx_channel_sender_clone(ch, &s[i]), ASX_OK);
+        ASSERT_TRUE(s[i].token != 0u);
+        for (j = 0u; j < i; j++) { ASSERT_TRUE(s[j].token != s[i].token); }
+    }
+
+    /* Past the limit: refused, the caller's handle and the count untouched. */
+    extra.channel = ASX_INVALID_ID;
+    extra.token = 77u;
+    ASSERT_EQ(asx_channel_sender_clone(ch, &extra), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(extra.token, 77u);
+
+    /* A dropped clone's place is reusable, under a fresh identity. */
+    ASSERT_EQ(asx_channel_sender_drop(&s[3]), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &again), ASX_OK);
+    for (i = 0u; i < (uint32_t)ASX_CHANNEL_MAX_SENDERS; i++) {
+        if (i != 3u) { ASSERT_TRUE(again.token != s[i].token); }
+    }
+}
+
+TEST(a_sender_handle_outlives_its_channel_as_stale) {
+    asx_channel_id ch;
+    asx_channel_id next;
+    asx_channel_sender s;
+    asx_channel_sender kept;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &s), ASX_OK);
+    kept = s;
+    ASSERT_EQ(asx_channel_close_receiver(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_drop(&s), ASX_OK);
+
+    /* The fully closed, drained channel's slot is reused by the next one;
+     * the kept handle names the old one. */
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &next), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_drop(&kept), ASX_E_STALE_HANDLE);
+    ASSERT_EQ(asx_channel_sender_clone(next, &s), ASX_OK);
+}
+
+TEST(sender_identity_argument_errors) {
+    asx_channel_id ch;
+    asx_channel_sender s;
+    asx_channel_sender spent;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_sender_clone(ASX_INVALID_ID, &s), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_sender_drop(NULL), ASX_E_INVALID_ARGUMENT);
+    memset(&spent, 0, sizeof(spent));
+    ASSERT_EQ(asx_channel_sender_drop(&spent), ASX_E_INVALID_STATE);
+    /* A token no clone of the channel holds. */
+    spent.channel = ch;
+    spent.token = 12345u;
+    ASSERT_EQ(asx_channel_sender_drop(&spent), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
 }
 
 /* -------------------------------------------------------------------
@@ -2235,11 +2370,12 @@ TEST(unbounded_refuses_the_bounded_only_operations) {
 /* The rest of the channel is the bounded one: counted senders, seal, drop. */
 TEST(unbounded_keeps_the_bounded_lifecycle) {
     asx_channel_id ch;
+    asx_channel_sender extra;
     uint64_t v = 0;
     setup();
     if (!unbounded_allowed()) return;
     ASSERT_EQ(asx_channel_create_unbounded(g_rid, &ch), ASX_OK);
-    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch, &extra), ASX_OK);
     ASSERT_EQ(asx_channel_send(ch, NULL, 5u), ASX_OK);
     ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
     ASSERT_EQ(asx_channel_send(ch, NULL, 6u), ASX_OK);
@@ -2398,6 +2534,11 @@ int main(void) {
     RUN_TEST(closed_is_woken_by_the_receiver_drop_and_withdrawable);
     RUN_TEST(closed_refuses_without_a_live_sender);
     RUN_TEST(weak_sender_upgrade_is_a_counted_clone);
+    RUN_TEST(a_double_close_of_one_sender_cannot_remove_another_producers);
+    RUN_TEST(a_second_drop_of_a_clone_is_refused_whether_by_handle_or_copy);
+    RUN_TEST(clones_have_distinct_identities_up_to_the_limit);
+    RUN_TEST(a_sender_handle_outlives_its_channel_as_stale);
+    RUN_TEST(sender_identity_argument_errors);
     RUN_TEST(unbounded_creation_follows_the_profile_catalog);
     RUN_TEST(unbounded_catalog_flags_the_constrained_profiles);
     RUN_TEST(unbounded_reports_only_for_unbounded_channels);

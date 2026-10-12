@@ -234,8 +234,8 @@ typedef struct {
         uint32_t task;
         int open;
         asx_broadcast_sender broadcast;
-    } senders[IT_MAX_SENDERS];
         asx_channel_sender mpsc; /* a clone's identity; slot 0 is the creator's */
+    } senders[IT_MAX_SENDERS];
     uint32_t n_senders;
     it_receiver receivers[IT_MAX_SUBSCRIBERS];
     uint32_t n_receivers;
