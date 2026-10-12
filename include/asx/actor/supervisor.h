@@ -148,7 +148,15 @@ typedef struct {
 /* Called inside a generation's task at its first poll (Rust
  * ManagedChildFactory::start): set *out_poll and *out_data to the body the
  * task then polls with the task's own id. A status other than ASX_OK is
- * the factory panicking. */
+ * the factory panicking.
+ *
+ * The body's status is the generation's outcome, as the factory future's
+ * Outcome<(), E> is in Rust: ASX_OK is Ok; ASX_E_PENDING is not finished;
+ * ASX_E_CANCELLED is Outcome::Cancelled, which ManagedRestartMode::eligible
+ * does not replace a Transient child for, with the reason of the cancel
+ * that reached the task (cx.cancel_reason()) or, when none did, a User
+ * reason attributed to the generation's region and task; any other status
+ * is Outcome::Err(status), and a panic is Outcome::Panicked. */
 typedef asx_status (*asx_child_start_fn)(void *user_data, const asx_supervisor_generation *gen,
                                          asx_task_poll_fn *out_poll, void **out_data);
 

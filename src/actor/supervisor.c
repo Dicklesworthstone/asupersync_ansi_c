@@ -67,6 +67,7 @@ typedef struct {
     asx_outcome_severity terminal_outcome;
     asx_status terminal_status;
     const char *terminal_panic;
+    asx_cancel_reason terminal_reason; /* CANCELLED only: zero otherwise */
     int terminal_shutdown;
     int shutdown_requested;
     int has_waiter;
@@ -444,12 +445,14 @@ static void gen_wake_waiter(sup_gen *g) {
 }
 
 static void gen_publish(sup_gen *g, asx_outcome_severity outcome, asx_status status,
-                        const char *panic_message) {
+                        const char *panic_message, const asx_cancel_reason *reason) {
     g->has_terminal = 1;
     g->terminal_at = sup_now();
     g->terminal_outcome = outcome;
     g->terminal_status = status;
     g->terminal_panic = panic_message;
+    memset(&g->terminal_reason, 0, sizeof(g->terminal_reason));
+    if (reason != NULL) g->terminal_reason = *reason;
     g->terminal_shutdown = g->shutdown_requested;
 }
 
@@ -480,7 +483,7 @@ static asx_status gen_poll(void *user_data, asx_task_id self) {
         g->started = 1;
         gen_wake_waiter(g);
         if (st != ASX_OK || g->body == NULL) {
-            gen_publish(g, ASX_OUTCOME_PANICKED, ASX_OK, "child start function failed");
+            gen_publish(g, ASX_OUTCOME_PANICKED, ASX_OK, "child start function failed", NULL);
             return ASX_OK;
         }
     }
@@ -488,11 +491,28 @@ static asx_status gen_poll(void *user_data, asx_task_id self) {
     /* The body's panic is caught (CatchUnwind, :2700): the generation's
      * task completes normally. */
     if (asx_task_slot_lookup(self, &t) == ASX_OK && asx_task_catch_panic_internal(t, &message)) {
-        gen_publish(g, ASX_OUTCOME_PANICKED, ASX_OK, message);
+        gen_publish(g, ASX_OUTCOME_PANICKED, ASX_OK, message, NULL);
         return ASX_OK;
     }
     if (st == ASX_E_PENDING) return ASX_E_PENDING;
-    gen_publish(g, st == ASX_OK ? ASX_OUTCOME_OK : ASX_OUTCOME_ERR, st, NULL);
+    if (st == ASX_E_CANCELLED) {
+        /* Rust's factory future returns Outcome::Cancelled(reason), which
+         * ManagedRestartMode::eligible does not restart a Transient child
+         * for. The reason is the task's own (cx.cancel_reason()) when a
+         * cancel reached it, else a User reason attributed to this
+         * generation: its region and task, stamped now (the DSL's
+         * `return cancelled`, vocabulary 3.8). */
+        asx_cancel_reason reason;
+        if (asx_task_get_cx_cancel_reason_internal(self, &reason) != ASX_OK) {
+            reason = asx_cancel_reason_default(ASX_CANCEL_USER, NULL);
+            if (asx_task_slot_lookup(self, &t) == ASX_OK) reason.origin_region = t->region;
+            reason.origin_task = self;
+            reason.timestamp = sup_now();
+        }
+        gen_publish(g, ASX_OUTCOME_CANCELLED, ASX_OK, NULL, &reason);
+        return ASX_OK;
+    }
+    gen_publish(g, st == ASX_OK ? ASX_OUTCOME_OK : ASX_OUTCOME_ERR, st, NULL, NULL);
     return ASX_OK;
 }
 
@@ -579,6 +599,7 @@ static void gen_joined(sup_slot *s, uint32_t pos, const sup_join *j) {
         c.outcome = g->terminal_outcome;
         c.status = g->terminal_status;
         c.panic_message = g->terminal_panic;
+        c.cancel_reason = g->terminal_reason;
         c.shutdown_requested_before_completion = g->terminal_shutdown;
     } else if (j->outcome == ASX_OUTCOME_CANCELLED) {
         c.completed_at = sup_now();

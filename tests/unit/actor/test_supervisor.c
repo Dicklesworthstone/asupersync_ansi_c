@@ -69,7 +69,7 @@ typedef struct {
     asx_status result;      /* the body's end status (ASX_OK: ok) */
     uint64_t fail_below;    /* generations numbered below this end with result */
     asx_status later;       /* ...and later ones with this one */
-    int block;              /* wait until cancelled, then end ASX_E_CANCELLED */
+    int block;              /* wait until cancelled, then end with result, or ASX_E_CANCELLED */
     int blind;              /* wait until woken, then end with result, never checking */
     int panic;              /* panic instead of ending */
     int fail_start;         /* the start function fails */
@@ -103,7 +103,9 @@ static asx_status body_poll(void *user_data, asx_task_id self) {
     const behaviour *b = bd->b;
     if (b->block) {
         asx_checkpoint_result cr;
-        if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) return ASX_E_CANCELLED;
+        if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) {
+            return b->result != ASX_OK ? b->result : ASX_E_CANCELLED;
+        }
         MUST_OK(asx_task_park(self));
         return ASX_E_PENDING;
     }
@@ -471,10 +473,12 @@ static void test_restarts_age_out_of_the_window(void) {
  * Rust (ManagedRestartMode::eligible): the task's join is Cancelled when
  * the cancel dominates a return the body never acknowledged, and such a
  * child is not replaced, even when that return was an error. A body that
- * observed the cancel and returned
- * ASX_E_CANCELLED returned an error, which its acknowledged cancel does not
- * dominate (Rust's join gives the user's return), so it is replaced; and a
- * permanent child is replaced either way. */
+ * observed the cancel and returned an error status other than
+ * ASX_E_CANCELLED returned an error, which its acknowledged cancel does
+ * not dominate (Rust's join gives the user's return), so it is replaced.
+ * One that returned ASX_E_CANCELLED returned Outcome::Cancelled (the next
+ * tests), which a transient child is not replaced for. A permanent child
+ * is replaced either way. */
 static void test_cancelled_transient_child_is_not_restarted(void) {
     owner o;
     behaviour b;
@@ -499,6 +503,7 @@ static void test_cancelled_transient_child_is_not_restarted(void) {
     setup();
     memset(&b, 0, sizeof(b));
     b.block = 1;
+    b.result = ASX_E_INVALID_STATE;
     owner_init(&o, 1);
     o.victim = &b;
     o.cancel_after = 6;
@@ -507,7 +512,7 @@ static void test_cancelled_transient_child_is_not_restarted(void) {
     run_owner(&o);
     ASSERT(o.cancel_st == ASX_OK && o.joined, "cancelled, then the supervisor aborted");
     ASSERT(b.started == 2u && o.report.restart_batches == 1u,
-           "an acknowledged cancel's ASX_E_CANCELLED is an error: replaced");
+           "an acknowledged cancel that returns an error is an error: replaced");
 
     setup();
     memset(&b, 0, sizeof(b));
@@ -521,6 +526,67 @@ static void test_cancelled_transient_child_is_not_restarted(void) {
     run_owner(&o);
     ASSERT(o.cancel_st == ASX_OK && o.joined, "cancelled, then the supervisor aborted");
     ASSERT(b.started == 2u && o.report.restart_batches == 1u, "a permanent one is replaced");
+}
+
+/* bd-9kll.8.7: a body that ends with ASX_E_CANCELLED returned Rust's
+ * Outcome::Cancelled(reason) (the factory future's output), which
+ * ManagedRestartMode::eligible does not replace a transient child for
+ * (supervision.rs:1833-1844). The reason is the task's own when a cancel
+ * reached it, else a User reason attributed to the generation. */
+static void test_a_body_returning_cancelled_is_not_an_error(void) {
+    owner o;
+    behaviour b;
+    const asx_supervisor_completion *c;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_E_CANCELLED;
+    owner_init(&o, 3);
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && b.started == 1u && o.report.restart_batches == 0u,
+           "a transient child that returned Cancelled is not replaced");
+    c = completion_of(&o, 0);
+    ASSERT(c != NULL && c->outcome == ASX_OUTCOME_CANCELLED, "its outcome is Cancelled");
+    ASSERT(c->task_outcome == ASX_OUTCOME_OK, "its task itself completed ok");
+    ASSERT(c->cancel_reason.kind == ASX_CANCEL_USER, "the reason is a User cancel");
+    ASSERT(c->cancel_reason.origin_task == c->generation.task,
+           "attributed to the generation's task");
+    ASSERT(c->cancel_reason.origin_region == c->generation.region, "and to its region");
+    ASSERT(o.report.outcome == ASX_OUTCOME_OK, "the supervisor stopped normally");
+}
+
+static void test_a_permanent_child_is_replaced_after_returning_cancelled(void) {
+    owner o;
+    behaviour b;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.result = ASX_E_CANCELLED;
+    owner_init(&o, 1);
+    add_child(&o, "worker", ASX_CHILD_PERMANENT, &b);
+    run_owner(&o);
+    ASSERT(o.joined && b.started == 2u && o.report.restart_batches == 1u,
+           "a permanent child is replaced after any end");
+    ASSERT(completion_of(&o, 0)->outcome == ASX_OUTCOME_CANCELLED, "each ended Cancelled");
+}
+
+static void test_a_cancel_the_body_acknowledged_keeps_its_reason(void) {
+    owner o;
+    behaviour b;
+    const asx_supervisor_completion *c;
+    setup();
+    memset(&b, 0, sizeof(b));
+    b.block = 1; /* observes the cancel and ends with ASX_E_CANCELLED */
+    owner_init(&o, 3);
+    o.victim = &b;
+    o.cancel_after = 6;
+    add_child(&o, "worker", ASX_CHILD_TRANSIENT, &b);
+    run_owner(&o);
+    ASSERT(o.cancel_st == ASX_OK && o.joined, "the generation's task was cancelled");
+    ASSERT(b.started == 1u && o.report.restart_batches == 0u,
+           "it acknowledged with Cancelled: a transient child is not replaced");
+    c = completion_of(&o, 0);
+    ASSERT(c != NULL && c->outcome == ASX_OUTCOME_CANCELLED, "its outcome is Cancelled");
+    ASSERT(c->cancel_reason.kind == ASX_CANCEL_USER, "with the reason of the cancel it saw");
 }
 
 static void test_escalate_cancels_the_owner_region(void) {
@@ -811,6 +877,9 @@ int main(void) {
     RUN(test_reset_counter_keeps_restarting);
     RUN(test_restarts_age_out_of_the_window);
     RUN(test_cancelled_transient_child_is_not_restarted);
+    RUN(test_a_body_returning_cancelled_is_not_an_error);
+    RUN(test_a_permanent_child_is_replaced_after_returning_cancelled);
+    RUN(test_a_cancel_the_body_acknowledged_keeps_its_reason);
     RUN(test_escalate_cancels_the_owner_region);
 
     RUN(test_one_for_all_restarts_the_siblings);
