@@ -58,8 +58,8 @@ Rust-captured cleanup-spawn or finalizer API witness.
 
 The inline-combinator release update from `7a41f03` adds explicit `drop_fn`
 callbacks. Integration records map-reduce's terminal failure before those
-application releases (`src/core/combinator2.c:889`): re-entry into
-`asx_map_reduce_poll` (`src/core/combinator2.c:869`) returns the original error
+application releases (`src/core/combinator2.c:888`): re-entry into
+`asx_map_reduce_poll` (`src/core/combinator2.c:868`) returns the original error
 without polling abandoned work or invoking the reducer. The C test
 `tests/unit/core/test_combinator2.c::map_reduce_caches_failure_before_reentrant_resource_release`
 checks two real channel reservations returned exactly once and subsequent
