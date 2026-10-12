@@ -10,13 +10,13 @@
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
 ![Public API declarations](https://img.shields.io/badge/public%20API-2%2C005%20declarations-blue)
-![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
+![C test programs](https://img.shields.io/badge/tests-226%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,005<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,005<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->226<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -69,7 +69,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 | **<!-- fact:status_codes -->66<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
-| **<!-- fact:test_programs -->225<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->164<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->4<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
+| **<!-- fact:test_programs -->226<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->164<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
 | **Cross-profile checks** | Profiles are meant to change limits and defaults, never semantics. CI executes the Rust-captured fixtures under CORE, under EMBEDDED_ROUTER on five ISAs (QEMU) and on 32-bit x86; `make profile-parity` compares the digests recorded per profile in the fixture set |
 
 The current repository is library-first: it ships the static library, public
@@ -475,6 +475,25 @@ is `make fuzz-differential`.
 make fuzz-smoke
 ```
 
+### `make fuzz-parsers-smoke`
+
+Fuzz the parsers that take untrusted input with libFuzzer under ASan and
+UBSan (`tests/fuzz/fuzz_parsers.c`, one binary per parser): the HTTP/1.1
+request and response parsers with multipart forms, the WebSocket handshake,
+frame header and engine, strict Base64, the JSON and binary fixture codecs,
+URI query strings, the RaptorQ OTI, the length-delimited and line frame
+decoders, and the conformance JSON reader. Each runs `FUZZ_PARSERS_SECONDS`
+(default 60) from the seeds in `tests/fuzz/parsers_seeds/`. Where a parser
+has an exact inverse the harness also checks the round trip: strict Base64
+decoding accepts only canonical text, a decoded OTI re-serializes to its
+input, a decoded fixture re-encodes and decodes again. It needs clang with
+libFuzzer (`FUZZ_PARSERS_CC`). `make test` runs every seed through the same
+harnesses built with the regular compiler (`make fuzz-parsers-replay`).
+
+```bash
+make fuzz-parsers-smoke FUZZ_PARSERS_SECONDS=300
+```
+
 ### `make fuzz-counterexample-replay`
 
 Replay the durable minimized fuzz counterexample corpus. The gate runs each
@@ -790,7 +809,7 @@ The tree holds <!-- fact:header_files -->127<!-- /fact --> public headers
 C sources (<!-- fact:sources_core -->19<!-- /fact --> in `core/`,
 <!-- fact:sources_runtime -->39<!-- /fact --> in `runtime/`,
 <!-- fact:sources_platform -->7<!-- /fact --> in `platform/`),
-<!-- fact:test_programs -->225<!-- /fact --> C test programs and
+<!-- fact:test_programs -->226<!-- /fact --> C test programs and
 <!-- fact:examples -->14<!-- /fact --> examples (`make lint-docs` checks these numbers
 against `tools/count_inventory.sh`).
 
@@ -825,7 +844,7 @@ make profile-parity
 
 ## Testing and Quality Gates
 
-`asx` currently ships with <!-- fact:test_programs -->225<!-- /fact --> tracked C test programs across 7 categories in
+`asx` currently ships with <!-- fact:test_programs -->226<!-- /fact --> tracked C test programs across 7 categories in
 the checked-in `tests/` tree. Individual assertion counts evolve over time; see
 `tests/TEST.md` for the current indexed suite inventory and per-suite case
 totals where tracked.
@@ -837,7 +856,7 @@ totals where tracked.
 | **Invariant tests** | <!-- fact:test_invariant -->3<!-- /fact --> | Lifecycle transition legality, quiescence, obligation linearity |
 | **API vignettes** | <!-- fact:test_vignettes -->12<!-- /fact --> | Ergonomics and usage pattern demonstrations |
 | **Conformance** | <!-- fact:test_conformance -->6<!-- /fact --> | Codec round-trip equivalence, profile-variant fixture equivalence, parallel worker-count parity, API misuse, resource-pressure failure atomicity (the Rust parity runner is `tools/conformance/runner.c`) |
-| **Fuzz** | <!-- fact:test_fuzz -->4<!-- /fact --> | C fuzz harness, minimizer, grammar vector generators (Rust-vs-C fuzzing is `make fuzz-differential`, driven by `tools/twin_run`) |
+| **Fuzz** | <!-- fact:test_fuzz -->5<!-- /fact --> | C fuzz harness, minimizer, grammar vector generators (Rust-vs-C fuzzing is `make fuzz-differential`, driven by `tools/twin_run`) |
 | **Formal verification** | <!-- fact:test_formal -->13<!-- /fact --> | Algebraic property suites, CBMC-compatible transition harnesses (run natively, not under CBMC), litmus tests |
 
 Gate commands (the CI table below says which jobs run which):

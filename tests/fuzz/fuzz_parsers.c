@@ -1,0 +1,560 @@
+/*
+ * fuzz_parsers.c — fuzz harnesses for the parsers of untrusted input
+ * (bd-9kll.16.1, SEC1).
+ *
+ * One source, one binary per parser: build with -DASX_FUZZ_<TARGET> (make
+ * fuzz-parsers builds them all with clang -fsanitize=fuzzer,address,
+ * undefined against a library instrumented the same way). Each target hands
+ * the input to one parser the way a peer or a file would, in chunks of
+ * varying size, and reads back every result the parser produces, so the
+ * sanitizers see each byte it hands out. Where a parser has an exact
+ * inverse, the round trip is checked too, and a mismatch aborts.
+ *
+ * Built with -DASX_FUZZ_STANDALONE the file has its own main, which runs
+ * each file named on the command line once: committed regression inputs run
+ * under any compiler, without libFuzzer.
+ *
+ * Targets:
+ *   ASX_FUZZ_HTTP_REQUEST   HTTP/1.1 request parser (incremental feed,
+ *                           pipelining, chunked bodies, trailers), then the
+ *                           collect path and the multipart form parser
+ *   ASX_FUZZ_HTTP_RESPONSE  HTTP/1.1 response parser, for GET, HEAD and
+ *                           CONNECT requests
+ *   ASX_FUZZ_WEBSOCKET      frame header decoder, and the WebSocket engine
+ *                           (handshake or open, client or server role)
+ *   ASX_FUZZ_BASE64         strict Base64 decoder, all three variants;
+ *                           decode then encode gives the input back
+ *   ASX_FUZZ_CODEC_JSON     canonical fixture JSON decoder; a decoded
+ *                           fixture re-encodes and decodes again
+ *   ASX_FUZZ_CODEC_BIN      canonical fixture binary view decoder
+ *   ASX_FUZZ_WEB_QUERY      URI query string parser
+ *   ASX_FUZZ_RAPTORQ_OTI    RaptorQ OTI decoder and block layout; a decoded
+ *                           OTI re-serializes to the same 12 bytes
+ *   ASX_FUZZ_FRAME_CODECS   length-delimited (1, 2, 4-byte length) and
+ *                           line frame decoders
+ *   ASX_FUZZ_JSON_READER    the conformance JSON reader (scenario and
+ *                           fixture files)
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <asx/asx.h>
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
+
+/* The helpers below are shared; each target uses some of them. */
+#if defined(__GNUC__) || defined(__clang__)
+#define FUZZ_HELPER static __attribute__((unused))
+#else
+#define FUZZ_HELPER static
+#endif
+
+/* Read every byte of [p, p+n): ASan reports a byte that is not readable. */
+static volatile uint8_t g_sink;
+FUZZ_HELPER void touch(const void *p, size_t n) {
+    const uint8_t *b = (const uint8_t *)p;
+    size_t i;
+    uint8_t acc = 0;
+    for (i = 0; i < n; i++) acc = (uint8_t)(acc ^ b[i]);
+    g_sink = acc;
+}
+
+FUZZ_HELPER void touch_str(const char *s) {
+    if (s != NULL) touch(s, strlen(s) + 1u);
+}
+
+/* A violated property of a parser: abort, which the fuzzer reports. */
+FUZZ_HELPER void fuzz_fail(const char *what) {
+    fprintf(stderr, "fuzz_parsers: property violated: %s\n", what);
+    abort();
+}
+
+/* Chunk sizes vary with the input's first byte: 1..8 bytes, or the rest. */
+FUZZ_HELPER uint32_t next_chunk(uint8_t mode, uint32_t pos, uint32_t left) {
+    uint32_t n;
+    if ((mode & 0x80u) != 0u) return left;
+    n = ((uint32_t)(mode & 0x07u) + pos) % 8u + 1u;
+    return n < left ? n : left;
+}
+
+/* NUL-terminated copy of the input, for text parsers. */
+FUZZ_HELPER char *dup_text(const uint8_t *data, size_t size) {
+    char *s = (char *)malloc(size + 1u);
+    if (s == NULL) return NULL;
+    if (size > 0u) memcpy(s, data, size);
+    s[size] = '\0';
+    return s;
+}
+
+#if defined(ASX_FUZZ_HTTP_REQUEST) || defined(ASX_FUZZ_HTTP_RESPONSE)
+
+#include <asx/net/http.h>
+
+static uint8_t g_head[8192];
+
+static void touch_head(const asx_http_parser *p) {
+    uint32_t i;
+    const char *name;
+    const char *value;
+    touch_str(asx_http_parser_target(p));
+    touch_str(asx_http_parser_reason(p));
+    for (i = 0; i < asx_http_parser_header_count(p); i++) {
+        if (asx_http_parser_header_at(p, i, &name, &value) == ASX_OK) {
+            touch_str(name);
+            touch_str(value);
+        }
+    }
+    touch_str(asx_http_parser_header(p, "content-length"));
+    g_sink = (uint8_t)(asx_http_parser_content_length(p) + (uint64_t)asx_http_parser_keep_alive(p) +
+                       (uint64_t)asx_http_parser_body_framing(p));
+}
+
+static void touch_trailers(const asx_http_parser *p) {
+    uint32_t i;
+    const char *name;
+    const char *value;
+    for (i = 0; i < asx_http_parser_trailer_count(p); i++) {
+        if (asx_http_parser_trailer_at(p, i, &name, &value) == ASX_OK) {
+            touch_str(name);
+            touch_str(value);
+        }
+    }
+}
+
+/* Feed the input in chunks, draining events after each one; a parser that
+ * keeps returning events without consuming input is a livelock. */
+static void fuzz_http_parser(asx_http_parse_kind kind, uint8_t mode, const uint8_t *data,
+                             uint32_t size) {
+    asx_http_parser p;
+    asx_http_event ev;
+    uint32_t pos = 0;
+    uint32_t guard = 4u * size + 64u;
+    static const asx_http_method answered[3] = {ASX_HTTP_GET, ASX_HTTP_HEAD, ASX_HTTP_CONNECT};
+
+    if (asx_http_parser_init(&p, kind, NULL, g_head, (uint32_t)sizeof(g_head)) != ASX_OK) {
+        fuzz_fail("http parser init");
+    }
+    if (kind == ASX_HTTP_PARSE_RESPONSE) {
+        asx_http_parser_set_request_method(&p, answered[(mode >> 3) % 3u]);
+    }
+    while (pos < size) {
+        uint32_t n = next_chunk(mode, pos, size - pos);
+        const uint8_t *chunk = data + pos;
+        uint32_t left = n;
+        for (;;) {
+            uint32_t consumed = 0;
+            if (guard-- == 0u) fuzz_fail("http parser makes no progress");
+            if (asx_http_parser_feed(&p, chunk, left, &consumed, &ev) != ASX_OK) return;
+            if (consumed > left) fuzz_fail("http parser consumed more than it was given");
+            if (ev.kind == ASX_HTTP_EVENT_BODY) touch(ev.data, ev.len);
+            if (ev.kind == ASX_HTTP_EVENT_HEAD) touch_head(&p);
+            if (ev.kind == ASX_HTTP_EVENT_MESSAGE_COMPLETE) touch_trailers(&p);
+            chunk += consumed;
+            left -= consumed;
+            if (ev.kind == ASX_HTTP_EVENT_NONE) break;
+            if (asx_http_parser_is_upgraded(&p)) return;
+        }
+        pos += n;
+    }
+    if (asx_http_parser_finish(&p, &ev) == ASX_OK && ev.kind == ASX_HTTP_EVENT_MESSAGE_COMPLETE) {
+        touch_trailers(&p);
+    }
+}
+
+#if defined(ASX_FUZZ_HTTP_REQUEST)
+
+static asx_http_request g_req;
+static asx_http_multipart_form g_form;
+
+/* The convenience path: collect whole requests, then parse each body as a
+ * multipart form. */
+static void fuzz_http_collect(const uint8_t *data, uint32_t size) {
+    asx_http_parser p;
+    uint32_t pos = 0;
+    uint32_t guard = size + 8u;
+    if (asx_http_parser_init(&p, ASX_HTTP_PARSE_REQUEST, NULL, g_head, (uint32_t)sizeof(g_head)) !=
+        ASX_OK) {
+        fuzz_fail("http parser init");
+    }
+    while (pos <= size) {
+        uint32_t consumed = 0;
+        int complete = 0;
+        uint32_t i;
+        if (guard-- == 0u) fuzz_fail("http collect makes no progress");
+        memset(&g_req, 0, sizeof(g_req));
+        if (asx_http_parser_collect_request(&p, data + pos, size - pos, &consumed, &g_req,
+                                            &complete) != ASX_OK) {
+            return;
+        }
+        if (consumed > size - pos) fuzz_fail("http collect consumed more than it was given");
+        pos += consumed;
+        if (!complete) return;
+        touch(&g_req, sizeof(g_req));
+        if (asx_http_parse_multipart(&g_req, &g_form) == ASX_OK) {
+            if (g_form.count > ASX_HTTP_MULTIPART_PARTS_MAX) fuzz_fail("multipart part count");
+            for (i = 0; i < g_form.count; i++) {
+                if (g_form.parts[i].data_len > ASX_HTTP_MULTIPART_DATA_MAX) {
+                    fuzz_fail("multipart part length");
+                }
+                touch(g_form.parts[i].data, g_form.parts[i].data_len);
+                touch_str(g_form.parts[i].name);
+                touch_str(g_form.parts[i].filename);
+            }
+        }
+        if (consumed == 0u) return;
+    }
+}
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    if (size < 1u || size > (1u << 20)) return;
+    fuzz_http_parser(ASX_HTTP_PARSE_REQUEST, data[0], data + 1, (uint32_t)(size - 1u));
+    fuzz_http_collect(data + 1, (uint32_t)(size - 1u));
+}
+
+#else /* ASX_FUZZ_HTTP_RESPONSE */
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    if (size < 1u || size > (1u << 20)) return;
+    fuzz_http_parser(ASX_HTTP_PARSE_RESPONSE, data[0], data + 1, (uint32_t)(size - 1u));
+}
+
+#endif
+
+#elif defined(ASX_FUZZ_WEBSOCKET)
+
+#include <asx/net/websocket.h>
+
+static asx_ws_engine g_ws;
+static uint8_t g_msg[ASX_WS_MAX_MESSAGE];
+
+/* A fixed random source: the fuzzer drives the input, not the masks. */
+static asx_status fixed_random(void *ctx, uint8_t *out, uint32_t len) {
+    (void)ctx;
+    memset(out, 0x5a, len);
+    return ASX_OK;
+}
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    asx_ws_config cfg;
+    asx_ws_frame_header h;
+    uint8_t mode;
+    uint32_t pos = 0;
+    uint32_t guard;
+
+    if (size < 1u || size > (1u << 20)) return;
+    mode = data[0];
+    data++;
+    size--;
+
+    /* The header decoder alone, on the raw bytes. */
+    if (asx_ws_header_decode(data, (uint32_t)size, &h) == ASX_OK) {
+        if (h.header_len > size) fuzz_fail("ws header longer than the input");
+        g_sink = (uint8_t)(asx_ws_header_check(&h, ASX_WS_ROLE_SERVER) +
+                           asx_ws_header_check(&h, ASX_WS_ROLE_CLIENT));
+    }
+
+    /* The engine: client or server, with or without the opening handshake. */
+    asx_ws_config_init(&cfg, (mode & 1u) ? ASX_WS_ROLE_SERVER : ASX_WS_ROLE_CLIENT);
+    cfg.random_fn = fixed_random;
+    cfg.host = "fuzz.example";
+    cfg.path = "/chat";
+    cfg.protocols = (mode & 4u) ? "chat, superchat" : NULL;
+    cfg.skip_handshake = (mode & 2u) ? 1 : 0;
+    if (asx_ws_engine_init(&g_ws, &cfg) != ASX_OK) return;
+    guard = 4u * (uint32_t)size + 64u;
+    while (pos < (uint32_t)size) {
+        uint32_t n = next_chunk(mode, pos, (uint32_t)size - pos);
+        uint32_t consumed = 0;
+        asx_ws_opcode op;
+        uint32_t len = 0;
+        if (guard-- == 0u) fuzz_fail("ws engine makes no progress");
+        if (asx_ws_engine_feed(&g_ws, data + pos, n, &consumed) != ASX_OK) return;
+        if (consumed > n) fuzz_fail("ws engine consumed more than it was given");
+        while (asx_ws_engine_recv(&g_ws, &op, g_msg, (uint32_t)sizeof(g_msg), &len) == ASX_OK) {
+            if (len > sizeof(g_msg)) fuzz_fail("ws message longer than the buffer");
+            touch(g_msg, len);
+            if (guard-- == 0u) fuzz_fail("ws engine returns messages forever");
+        }
+        /* Unconsumed bytes wait for the messages above to be drained. */
+        pos += consumed;
+        if (consumed == 0u && n > 0u) {
+            uint32_t retry = 0;
+            if (asx_ws_engine_feed(&g_ws, data + pos, n, &retry) != ASX_OK || retry == 0u) return;
+            pos += retry;
+        }
+    }
+}
+
+#elif defined(ASX_FUZZ_BASE64)
+
+#include <asx/security/crypto.h>
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    asx_base64_variant variant;
+    uint8_t *out;
+    char *again;
+    size_t n = 0;
+    size_t m = 0;
+    const char *text;
+    size_t text_len;
+
+    if (size < 1u || size > (1u << 16)) return;
+    variant = (asx_base64_variant)(data[0] % 3u);
+    text = (const char *)(data + 1);
+    text_len = size - 1u;
+    out = (uint8_t *)malloc(text_len + 1u);
+    again = (char *)malloc(text_len + 2u);
+    if (out == NULL || again == NULL) {
+        free(out);
+        free(again);
+        return;
+    }
+    if (asx_base64_decode(variant, text, text_len, out, text_len + 1u, &n) == ASX_OK) {
+        /* Strict decoding accepts only the canonical encoding: encoding the
+         * result gives the input back. */
+        if (n > text_len) fuzz_fail("base64 decoded more bytes than characters");
+        if (asx_base64_encode(variant, out, n, again, text_len + 2u, &m) != ASX_OK) {
+            fuzz_fail("base64 re-encode of a decoded value");
+        }
+        if (m != text_len || memcmp(again, text, text_len) != 0) {
+            fuzz_fail("base64 decode accepted a non-canonical encoding");
+        }
+    }
+    free(out);
+    free(again);
+}
+
+#elif defined(ASX_FUZZ_CODEC_JSON)
+
+#include <asx/codec/codec.h>
+
+static asx_canonical_fixture g_fixture;
+static asx_canonical_fixture g_fixture2;
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    char *json;
+    asx_codec_buffer buf;
+    if (size > (1u << 20)) return;
+    json = dup_text(data, size);
+    if (json == NULL) return;
+    asx_canonical_fixture_init(&g_fixture);
+    if (asx_codec_decode_fixture_json(json, &g_fixture) == ASX_OK) {
+        /* What decodes, re-encodes; and the encoding decodes again. */
+        asx_codec_buffer_init(&buf);
+        if (asx_codec_encode_fixture_json(&g_fixture, &buf) != ASX_OK) {
+            fuzz_fail("codec json re-encode of a decoded fixture");
+        }
+        asx_canonical_fixture_init(&g_fixture2);
+        if (asx_codec_decode_fixture_json(buf.data, &g_fixture2) != ASX_OK) {
+            fuzz_fail("codec json decode of its own encoding");
+        }
+        asx_canonical_fixture_reset(&g_fixture2);
+        asx_codec_buffer_reset(&buf);
+    }
+    asx_canonical_fixture_reset(&g_fixture);
+    free(json);
+}
+
+#elif defined(ASX_FUZZ_CODEC_BIN)
+
+#include <asx/codec/codec.h>
+
+static void touch_slice(asx_codec_slice s) {
+    if (s.ptr != NULL) touch(s.ptr, s.len);
+}
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    asx_codec_bin_fixture_view view;
+    if (size > (1u << 20)) return;
+    asx_codec_bin_fixture_view_init(&view);
+    if (asx_codec_decode_fixture_bin_view(data, size, &view) == ASX_OK) {
+        const uint8_t *lo = data;
+        const uint8_t *hi = data + size;
+        const asx_codec_slice *s[3];
+        size_t i;
+        s[0] = &view.input_json;
+        s[1] = &view.expected_events_json;
+        s[2] = &view.semantic_digest;
+        for (i = 0; i < 3u; i++) {
+            const uint8_t *p = (const uint8_t *)s[i]->ptr;
+            if (p != NULL && (p < lo || p + s[i]->len > hi)) {
+                fuzz_fail("codec bin view slice outside the payload");
+            }
+        }
+        touch_slice(view.profile);
+        touch_slice(view.input_json);
+        touch_slice(view.expected_events_json);
+        touch_slice(view.expected_final_snapshot_json);
+        touch_slice(view.expected_error_codes_json);
+        touch_slice(view.semantic_digest);
+        touch_slice(view.rust_baseline_commit);
+        touch_slice(view.capture_run_id);
+    }
+}
+
+#elif defined(ASX_FUZZ_WEB_QUERY)
+
+#include <asx/net/web.h>
+
+static asx_web_query g_query;
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    char *uri;
+    uint32_t i;
+    if (size > (1u << 16)) return;
+    uri = dup_text(data, size);
+    if (uri == NULL) return;
+    if (asx_web_query_parse(&g_query, uri) == ASX_OK) {
+        if (g_query.count > ASX_WEB_MAX_QUERY_PARAMS) fuzz_fail("query param count");
+        for (i = 0; i < g_query.count; i++) {
+            if (memchr(g_query.params[i].key, '\0', sizeof(g_query.params[i].key)) == NULL ||
+                memchr(g_query.params[i].value, '\0', sizeof(g_query.params[i].value)) == NULL) {
+                fuzz_fail("query param not NUL-terminated");
+            }
+            touch_str(g_query.params[i].key);
+            touch_str(g_query.params[i].value);
+        }
+    }
+    free(uri);
+}
+
+#elif defined(ASX_FUZZ_RAPTORQ_OTI)
+
+#include <asx/raptorq/raptorq.h>
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    asx_raptorq_oti oti;
+    uint8_t again[ASX_RAPTORQ_OTI_SIZE];
+    uint32_t sbn;
+    if (size < ASX_RAPTORQ_OTI_SIZE) return;
+    if (asx_raptorq_oti_deserialize(data, &oti) != ASX_OK) return;
+    if (asx_raptorq_oti_validate(&oti) != ASX_OK) fuzz_fail("raptorq decoded OTI is invalid");
+    if (asx_raptorq_oti_serialize(&oti, again) != ASX_OK ||
+        memcmp(again, data, ASX_RAPTORQ_OTI_SIZE) != 0) {
+        fuzz_fail("raptorq OTI does not re-serialize to its input");
+    }
+    /* Every source block of the object has a layout inside it. */
+    for (sbn = 0; sbn < 256u; sbn++) {
+        asx_raptorq_block_layout layout;
+        if (asx_raptorq_oti_block_layout(&oti, sbn, &layout) != ASX_OK) break;
+        if (layout.length > (uint64_t)layout.source_symbols * layout.symbol_size) {
+            fuzz_fail("raptorq block covers more than K * T bytes");
+        }
+    }
+}
+
+#elif defined(ASX_FUZZ_FRAME_CODECS)
+
+#include <asx/bytes/buf.h>
+#include <asx/bytes/codec.h>
+
+static asx_buf_mut g_buf;
+
+static void drain_frames(void *state,
+                         asx_decode_result (*decode)(void *, asx_buf_mut *, asx_frame *)) {
+    uint32_t guard = ASX_BUF_CAPACITY + 8u;
+    for (;;) {
+        asx_frame f;
+        asx_decode_result r = decode(state, &g_buf, &f);
+        if (guard-- == 0u) fuzz_fail("frame decoder makes no progress");
+        if (r != ASX_DECODE_FRAME) return;
+        if (f.len > ASX_BUF_CAPACITY) fuzz_fail("frame longer than the buffer");
+        touch(f.data, f.len);
+    }
+}
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    static const uint8_t field_sizes[3] = {1u, 2u, 4u};
+    asx_length_delimited_codec ld;
+    asx_lines_codec lines;
+    uint8_t mode;
+    uint32_t pos = 0;
+    if (size < 1u) return;
+    mode = data[0];
+    data++;
+    size--;
+    if (size > ASX_BUF_CAPACITY) size = ASX_BUF_CAPACITY;
+
+    if (asx_length_delimited_codec_init_with(&ld, field_sizes[mode % 3u],
+                                             (mode & 0x40u) ? 64u : 0u) != ASX_OK) {
+        return;
+    }
+    asx_buf_mut_init(&g_buf);
+    while (pos < (uint32_t)size) {
+        uint32_t n = next_chunk(mode, pos, (uint32_t)size - pos);
+        if (asx_buf_mut_put(&g_buf, data + pos, n) != ASX_OK) break;
+        drain_frames(&ld, asx_length_delimited_decode);
+        pos += n;
+    }
+
+    asx_lines_codec_init_with(&lines, (mode & 0x20u) ? 16u : 0u);
+    asx_buf_mut_init(&g_buf);
+    pos = 0;
+    while (pos < (uint32_t)size) {
+        uint32_t n = next_chunk(mode, pos, (uint32_t)size - pos);
+        if (asx_buf_mut_put(&g_buf, data + pos, n) != ASX_OK) break;
+        drain_frames(&lines, asx_lines_decode);
+        pos += n;
+    }
+}
+
+#elif defined(ASX_FUZZ_JSON_READER)
+
+#include "../../src/conformance/json.h"
+
+static asx_json_doc g_doc;
+
+static void fuzz_one(const uint8_t *data, size_t size) {
+    uint32_t root = 0;
+    if (size > (1u << 20)) return;
+    if (asx_json_parse(&g_doc, (const char *)data, size, &root) == ASX_OK) {
+        uint32_t i;
+        uint32_t n = asx_json_count(&g_doc, root);
+        for (i = 0; i < n; i++) touch_str(asx_json_string(&g_doc, asx_json_item(&g_doc, root, i)));
+    }
+}
+
+#else
+#error "define one ASX_FUZZ_<TARGET> (see the header comment)"
+#endif
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    fuzz_one(data, size);
+    return 0;
+}
+
+#ifdef ASX_FUZZ_STANDALONE
+/* Run each file named on the command line once (regression inputs). */
+int main(int argc, char **argv) {
+    int i;
+    for (i = 1; i < argc; i++) {
+        FILE *f = fopen(argv[i], "rb");
+        uint8_t *buf;
+        long len;
+        if (f == NULL) {
+            fprintf(stderr, "fuzz_parsers: cannot open %s\n", argv[i]);
+            return 2;
+        }
+        if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
+            fclose(f);
+            return 2;
+        }
+        buf = (uint8_t *)malloc((size_t)len + 1u);
+        if (buf == NULL || fread(buf, 1, (size_t)len, f) != (size_t)len) {
+            free(buf);
+            fclose(f);
+            return 2;
+        }
+        fclose(f);
+        (void)LLVMFuzzerTestOneInput(buf, (size_t)len);
+        free(buf);
+    }
+    return 0;
+}
+#endif
