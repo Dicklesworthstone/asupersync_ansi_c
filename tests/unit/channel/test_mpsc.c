@@ -194,6 +194,58 @@ TEST(double_close_receiver) {
     ASSERT_EQ(asx_channel_close_receiver(ch), ASX_E_INVALID_STATE);
 }
 
+TEST(sender_side_closes_when_the_last_counted_sender_drops) {
+    /* Rust Sender::clone / Sender::drop (mpsc.rs:1231-1255): three senders,
+     * two dropped: still open, a send still goes through; the third drop
+     * closes the sender side, and the receiver drains then sees
+     * DISCONNECTED. */
+    asx_channel_id ch;
+    asx_channel_state st;
+    asx_send_permit p;
+    uint64_t val;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
+
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &st), ASX_OK);
+    ASSERT_EQ(st, ASX_CHANNEL_OPEN);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_OK);
+    ASSERT_EQ(asx_send_permit_send(&p, 5u), ASX_OK);
+
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &st), ASX_OK);
+    ASSERT_EQ(st, ASX_CHANNEL_SENDER_CLOSED);
+    /* No sender is left to reserve with (reserve_after_sender_closed). */
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_OK);
+    ASSERT_EQ(val, 5u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &val), ASX_E_DISCONNECTED);
+
+    /* No live sender left to clone or drop. */
+    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_E_INVALID_STATE);
+}
+
+TEST(counted_senders_outlive_a_receiver_close) {
+    /* The receiver drops first; the channel becomes fully closed only when
+     * the last of two senders drops. */
+    asx_channel_id ch;
+    asx_channel_state st;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_sender_clone(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_close_receiver(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &st), ASX_OK);
+    ASSERT_EQ(st, ASX_CHANNEL_RECEIVER_CLOSED);
+    ASSERT_EQ(asx_channel_close_sender(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_get_state(ch, &st), ASX_OK);
+    ASSERT_EQ(st, ASX_CHANNEL_FULLY_CLOSED);
+}
+
 /* -------------------------------------------------------------------
  * Two-phase send: reserve + send
  * ------------------------------------------------------------------- */
@@ -839,7 +891,7 @@ static asx_status poll_idle(void *ud, asx_task_id self) {
 static asx_task_id cx_task(asx_cx *cx) {
     asx_task_id t = ASX_INVALID_ID;
     CH_IGNORE(asx_task_spawn(g_rid, poll_idle, NULL, &t));
-    asx_cx_init(cx, g_rid, t, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(cx, g_rid, t, ASX_CAP_NONE);
     return t;
 }
 
@@ -877,7 +929,7 @@ static void check_tracked_permit_commit(asx_channel_id ch, asx_task_id t) {
     asx_send_permit p;
     asx_cx cx;
     uint64_t v = 0;
-    ASSERT_EQ(asx_cx_init(&cx, g_rid, t, ASX_CAP_CANCEL_CHECK), ASX_OK);
+    ASSERT_EQ(asx_cx_init(&cx, g_rid, t, ASX_CAP_NONE), ASX_OK);
     ASSERT_EQ(asx_channel_reserve(ch, &cx, &p), ASX_OK);
     ASSERT_TRUE(obligation_is(p.obligation, t, ASX_OBLIGATION_RESERVED, ASX_OBLIGATION_ABORT_NONE));
     {
@@ -910,7 +962,7 @@ static void check_tracked_permit_abort_and_disconnect(asx_channel_id ch, asx_tas
     asx_obligation_id ob1;
     asx_obligation_id ob2;
     asx_cx cx;
-    ASSERT_EQ(asx_cx_init(&cx, g_rid, t, ASX_CAP_CANCEL_CHECK), ASX_OK);
+    ASSERT_EQ(asx_cx_init(&cx, g_rid, t, ASX_CAP_NONE), ASX_OK);
     ASSERT_EQ(asx_channel_reserve(ch, &cx, &p1), ASX_OK);
     ASSERT_EQ(asx_channel_reserve(ch, &cx, &p2), ASX_OK);
     ob1 = p1.obligation;
@@ -958,7 +1010,7 @@ static void check_tracked_permit_holder(tracked_permit_misuse *ctx, asx_task_id 
     uint32_t reserved;
     ASSERT_EQ(asx_handle_index(self), asx_handle_index(ctx->holder));
     if (ctx->phase == 0u) {
-        ASSERT_EQ(asx_cx_init(&cx, g_rid, self, ASX_CAP_CANCEL_CHECK), ASX_OK);
+        ASSERT_EQ(asx_cx_init(&cx, g_rid, self, ASX_CAP_NONE), ASX_OK);
         ASSERT_EQ(asx_channel_reserve(ctx->channel, &cx, &ctx->permit), ASX_OK);
         ctx->obligation = ctx->permit.obligation;
         ASSERT_TRUE(obligation_is(ctx->obligation, self, ASX_OBLIGATION_RESERVED,
@@ -1157,7 +1209,7 @@ TEST(untracked_reserves_register_no_obligation) {
     uint64_t v = 0;
     setup();
     (void)cx_task(&cx);
-    asx_cx_init(&no_task, g_rid, ASX_INVALID_ID, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&no_task, g_rid, ASX_INVALID_ID, ASX_CAP_NONE);
     ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(g_rid, &probe), ASX_OK);
 
@@ -1345,6 +1397,8 @@ int main(void) {
     RUN_TEST(close_receiver_then_sender);
     RUN_TEST(double_close_sender);
     RUN_TEST(double_close_receiver);
+    RUN_TEST(sender_side_closes_when_the_last_counted_sender_drops);
+    RUN_TEST(counted_senders_outlive_a_receiver_close);
 
     RUN_TEST(reserve_and_send_basic);
     RUN_TEST(fifo_ordering);

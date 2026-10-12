@@ -419,7 +419,7 @@ asx_status asx_actor_spawn(asx_actor_handle *out, asx_region_id region,
     s->behavior = *behavior;
     s->user_state = state;
     s->task_id = tid;
-    (void)asx_cx_init(&s->cx, region, tid, ASX_CAP_CANCEL_CHECK);
+    (void)asx_cx_init(&s->cx, region, tid, ASX_CAP_NONE);
     s->mailbox = mailbox;
     s->phase = PH_START;
     s->batch = 0;

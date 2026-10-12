@@ -134,6 +134,9 @@ static void sleep_ms(long ms) {
 }
 
 static int setup(void) {
+    /* asx_runtime_init refuses while a runtime is active: end the previous
+     * test's first (a no-op before the first test). */
+    asx_runtime_shutdown(&g_rt);
     if (asx_runtime_init_default(&g_rt) != ASX_OK) return 0;
     return asx_process_get_backend() == ASX_PROCESS_BACKEND_NATIVE;
 }

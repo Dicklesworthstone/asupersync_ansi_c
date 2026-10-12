@@ -617,15 +617,25 @@ TEST(random_u64_no_state_returns_zero) {
 
 TEST(is_cancelled_null_returns_zero) { ASSERT_FALSE(asx_cx_is_cancelled(NULL)); }
 
-TEST(is_cancelled_no_cap_returns_zero) {
+TEST(cancel_observation_needs_no_capability) {
+    /* Rust's Cx::is_cancel_requested and Cx::checkpoint need no
+     * capability: a Cx narrowed to nothing still sees its task's cancel.
+     * Before, a Cx without the CANCEL_CHECK bit was blind to it, so a
+     * narrowed child's channel and sync waits never observed a cancel. */
+    asx_cx parent;
     asx_cx cx;
-    asx_cx_init(&cx, 1, 1, ASX_CAP_NONE);
-    ASSERT_FALSE(asx_cx_is_cancelled(&cx));
+    g_stub_task_id = 14;
+    g_stub_task_state = ASX_TASK_CANCEL_REQUESTED;
+    asx_cx_init(&parent, 1, 14, ASX_CAP_CLOCK_READ);
+    ASSERT_EQ(asx_cx_narrow(&parent, &cx, ASX_CAP_NONE), ASX_OK);
+    ASSERT_EQ(asx_cx_caps(&cx), ASX_CAP_NONE);
+    ASSERT_TRUE(asx_cx_is_cancelled(&cx));
+    ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
 }
 
 TEST(is_cancelled_no_task_returns_zero) {
     asx_cx cx;
-    asx_cx_init(&cx, 1, ASX_INVALID_ID, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, 1, ASX_INVALID_ID, ASX_CAP_NONE);
     ASSERT_FALSE(asx_cx_is_cancelled(&cx));
 }
 
@@ -633,7 +643,7 @@ TEST(is_cancelled_running_returns_zero) {
     asx_cx cx;
     g_stub_task_id = 10;
     g_stub_task_state = ASX_TASK_RUNNING;
-    asx_cx_init(&cx, 1, 10, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, 1, 10, ASX_CAP_NONE);
     ASSERT_FALSE(asx_cx_is_cancelled(&cx));
 }
 
@@ -641,7 +651,7 @@ TEST(is_cancelled_cancel_requested_returns_nonzero) {
     asx_cx cx;
     g_stub_task_id = 11;
     g_stub_task_state = ASX_TASK_CANCEL_REQUESTED;
-    asx_cx_init(&cx, 1, 11, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, 1, 11, ASX_CAP_NONE);
     ASSERT_TRUE(asx_cx_is_cancelled(&cx));
 }
 
@@ -654,7 +664,7 @@ TEST(is_cancelled_sees_the_cancel_of_a_masked_task) {
     g_stub_task_id = 13;
     g_stub_task_state = ASX_TASK_CANCEL_REQUESTED;
     g_stub_mask_depth = 1;
-    asx_cx_init(&cx, 1, 13, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, 1, 13, ASX_CAP_NONE);
     ASSERT_TRUE(asx_cx_is_cancelled(&cx));
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_OK);
     g_stub_mask_depth = 0;
@@ -666,7 +676,7 @@ TEST(is_cancelled_cancelling_returns_nonzero) {
     asx_cx cx;
     g_stub_task_id = 12;
     g_stub_task_state = ASX_TASK_CANCELLING;
-    asx_cx_init(&cx, 1, 12, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, 1, 12, ASX_CAP_NONE);
     ASSERT_TRUE(asx_cx_is_cancelled(&cx));
 }
 
@@ -680,7 +690,7 @@ TEST(checkpoint_ok_no_cancel_no_budget) {
     asx_cx cx;
     g_stub_task_id = 20;
     g_stub_task_state = ASX_TASK_RUNNING;
-    asx_cx_init(&cx, 1, 20, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, 1, 20, ASX_CAP_NONE);
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_OK);
 }
 
@@ -688,7 +698,7 @@ TEST(checkpoint_cancelled_returns_cancelled) {
     asx_cx cx;
     g_stub_task_id = 21;
     g_stub_task_state = ASX_TASK_CANCEL_REQUESTED;
-    asx_cx_init(&cx, 1, 21, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, 1, 21, ASX_CAP_NONE);
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
 }
 
@@ -697,7 +707,7 @@ TEST(checkpoint_budget_exhaustion) {
     asx_budget b = asx_budget_from_polls(1);
     g_stub_task_id = 22;
     g_stub_task_state = ASX_TASK_RUNNING;
-    asx_cx_init(&cx, 1, 22, ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME);
+    asx_cx_init(&cx, 1, 22, ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME);
     asx_cx_bind_budget(&cx, &b);
     /* First checkpoint consumes the one poll */
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_OK);
@@ -710,7 +720,7 @@ TEST(checkpoint_cancel_takes_priority_over_budget) {
     asx_budget b = asx_budget_from_polls(0);
     g_stub_task_id = 23;
     g_stub_task_state = ASX_TASK_CANCEL_REQUESTED;
-    asx_cx_init(&cx, 1, 23, ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME);
+    asx_cx_init(&cx, 1, 23, ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME);
     asx_cx_bind_budget(&cx, &b);
     /* Cancel should be checked before budget */
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
@@ -804,7 +814,7 @@ int main(void) {
 
     /* Cancellation */
     RUN_TEST(is_cancelled_null_returns_zero);
-    RUN_TEST(is_cancelled_no_cap_returns_zero);
+    RUN_TEST(cancel_observation_needs_no_capability);
     RUN_TEST(is_cancelled_no_task_returns_zero);
     RUN_TEST(is_cancelled_running_returns_zero);
     RUN_TEST(is_cancelled_cancel_requested_returns_nonzero);

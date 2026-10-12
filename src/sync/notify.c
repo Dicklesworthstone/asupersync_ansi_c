@@ -27,7 +27,7 @@
 
 /* Waiter record flags: how it was notified (only notify_one
  * notifications are passed on), and whether it was last polled with a
- * cancel-checking Cx. */
+ * Cx (which checks the task's cancel). */
 #define NOTIFY_KIND_MASK 0x3u
 #define NOTIFY_NONE 0u
 #define NOTIFY_ONE 1u
@@ -251,7 +251,7 @@ asx_status asx_notify_poll_wait(asx_notify_waiter *waiter, asx_cx *cx) {
     if (w == NULL) return ASX_E_INVALID_STATE;
 
     /* Cx cancellation/budget checkpoint */
-    if (cx != NULL && asx_cx_has_cap(cx, ASX_CAP_CANCEL_CHECK)) {
+    if (cx != NULL) {
         w->flags |= NOTIFY_CANCEL_AWARE;
     } else {
         w->flags = (uint8_t)(w->flags & ~NOTIFY_CANCEL_AWARE);

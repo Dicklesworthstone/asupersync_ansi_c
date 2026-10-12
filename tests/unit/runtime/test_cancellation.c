@@ -863,6 +863,63 @@ TEST(mask_defers_checkpoint_acknowledgement) {
     ASSERT_EQ((int)cr.phase, (int)ASX_CANCEL_PHASE_CANCELLING);
 }
 
+TEST(mask_depth_is_a_nesting_depth_not_a_consumed_deferral_budget) {
+    /* bd-9kll.3.18 witness for inv.cancel.mask_monotone (#12). The formal
+     * model's mask is a deferral budget that only a masked checkpoint
+     * lowers (Step.cancelMasked, formal/lean/Asupersync.lean:453-463).
+     * Rust implements a nesting depth instead: Cx::masked raises it with no
+     * state check, only the 64 bound (cx/cx.rs:3315-3333), and
+     * MaskGuard::drop lowers it (cx/cx.rs:710-715). C is the same. This
+     * test fixes what holds: the depth may grow after a cancel is requested
+     * and again after it is acknowledged, a masked checkpoint leaves it
+     * unchanged, and the cancel is acknowledged once every mask is
+     * released. Eventual delivery therefore assumes every masked section
+     * ends. */
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_checkpoint_result cr;
+    uint32_t depth;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
+
+    /* Nesting after the request is accepted, as Rust's Cx::masked. */
+    ASSERT_EQ(asx_task_mask(tid), ASX_OK);
+    ASSERT_EQ(asx_task_mask(tid), ASX_OK);
+    ASSERT_EQ(asx_task_mask_depth(tid, &depth), ASX_OK);
+    ASSERT_EQ(depth, 2u);
+
+    /* A masked checkpoint defers and consumes nothing. */
+    ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
+    ASSERT_EQ(cr.cancelled, 0);
+    ASSERT_EQ(cr.masked, 1);
+    ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
+    ASSERT_EQ(cr.masked, 1);
+    ASSERT_EQ(asx_task_mask_depth(tid, &depth), ASX_OK);
+    ASSERT_EQ(depth, 2u);
+
+    /* Released one level: still deferred; at 0 the cancel is
+     * acknowledged. */
+    ASSERT_EQ(asx_task_unmask(tid), ASX_OK);
+    ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
+    ASSERT_EQ(cr.cancelled, 0);
+    ASSERT_EQ(asx_task_unmask(tid), ASX_OK);
+    ASSERT_EQ(asx_checkpoint(tid, &cr), ASX_OK);
+    ASSERT_EQ(cr.cancelled, 1);
+    ASSERT_EQ((int)cr.phase, (int)ASX_CANCEL_PHASE_CANCELLING);
+
+    /* After acknowledgement the depth can grow again (cleanup code may
+     * mask, as in Rust): the depth is not monotone during cancel
+     * processing. */
+    ASSERT_EQ(asx_task_mask(tid), ASX_OK);
+    ASSERT_EQ(asx_task_mask_depth(tid, &depth), ASX_OK);
+    ASSERT_EQ(depth, 1u);
+    ASSERT_EQ(asx_task_unmask(tid), ASX_OK);
+    ASSERT_EQ(asx_task_unmask(tid), ASX_E_INVALID_STATE); /* no underflow */
+}
+
 typedef struct {
     uint32_t polls;
     uint32_t unmask_at;
@@ -1230,7 +1287,7 @@ TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline) {
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_task_spawn(rid, poll_pending, NULL, &tid), ASX_OK);
     ASSERT_EQ(asx_task_cancel(tid, ASX_CANCEL_USER), ASX_OK);
-    asx_cx_init(&cx, rid, tid, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, rid, tid, ASX_CAP_NONE);
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
     ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
     ASSERT_EQ((int)state, (int)ASX_TASK_CANCELLING);
@@ -1239,7 +1296,7 @@ TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline) {
     b.deadline = 1u; /* already passed: the clock is past 1 ns */
     asx_runtime_virtual_advance(10u);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &b, &late), ASX_OK);
-    asx_cx_init(&cx, rid, late, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, rid, late, ASX_CAP_NONE);
     ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
     ASSERT_EQ(asx_task_get_cancel_reason(late, &got), ASX_OK);
     ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_DEADLINE);
@@ -1271,12 +1328,12 @@ TEST(cx_is_cancelled_reports_whether_a_cancel_was_requested) {
     ASSERT_EQ(asx_scheduler_run(rid, &budget), ASX_OK);
     ASSERT_EQ(asx_task_get_state(done, &state), ASX_OK);
     ASSERT_EQ((int)state, (int)ASX_TASK_COMPLETED);
-    asx_cx_init(&cx, rid, done, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, rid, done, ASX_CAP_NONE);
     ASSERT_FALSE(asx_cx_is_cancelled(&cx));
 
     ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &masked), ASX_OK);
     ASSERT_EQ(asx_task_mask(masked), ASX_OK);
-    asx_cx_init(&cx, rid, masked, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, rid, masked, ASX_CAP_NONE);
     ASSERT_FALSE(asx_cx_is_cancelled(&cx));
     ASSERT_EQ(asx_task_cancel(masked, ASX_CANCEL_USER), ASX_OK);
     ASSERT_TRUE(asx_cx_is_cancelled(&cx));
@@ -1293,7 +1350,7 @@ TEST(cx_is_cancelled_reports_whether_a_cancel_was_requested) {
     asx_runtime_virtual_advance(10u);
     ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &b, &late), ASX_OK);
     ASSERT_EQ(asx_task_mask(late), ASX_OK);
-    asx_cx_init(&cx, rid, late, ASX_CAP_CANCEL_CHECK);
+    asx_cx_init(&cx, rid, late, ASX_CAP_NONE);
     ASSERT_FALSE(asx_cx_is_cancelled(&cx));
     ASSERT_EQ(asx_checkpoint(late, &cr), ASX_OK);
     ASSERT_FALSE(cr.cancelled);
@@ -1728,6 +1785,7 @@ int main(void) {
     RUN_TEST(checkpoint_null_result_rejected);
     RUN_TEST(cancel_phase_null_output_rejected);
     RUN_TEST(mask_defers_checkpoint_acknowledgement);
+    RUN_TEST(mask_depth_is_a_nesting_depth_not_a_consumed_deferral_budget);
     RUN_TEST(masked_task_is_not_force_completed);
     RUN_TEST(unmasked_task_is_force_completed_by_cleanup_budget);
     RUN_TEST(mask_depth_is_bounded);

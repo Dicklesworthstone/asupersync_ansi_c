@@ -709,7 +709,7 @@ static asx_status poll_sync_access_holder(void *data, asx_task_id self) {
     if (!c->ready) {
         asx_cx cx;
         asx_semaphore_waiter waiter;
-        st = asx_cx_init(&cx, c->region, self, ASX_CAP_CANCEL_CHECK);
+        st = asx_cx_init(&cx, c->region, self, ASX_CAP_NONE);
         if (st != ASX_OK) return st;
         st = asx_semaphore_acquire_begin(c->sem, &waiter);
         if (st != ASX_OK) return st;

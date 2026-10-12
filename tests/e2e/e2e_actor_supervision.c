@@ -197,7 +197,7 @@ static int start_caller(e2e_caller *c, asx_actor_handle server, asx_region_id pa
     c->status = ASX_E_PENDING;
     if (asx_region_open_child(parent, &child) != ASX_OK) return 0;
     if (asx_task_spawn(child, e2e_caller_poll, c, &id) != ASX_OK) return 0;
-    return asx_cx_init(&c->cx, child, id, ASX_CAP_CANCEL_CHECK) == ASX_OK;
+    return asx_cx_init(&c->cx, child, id, ASX_CAP_NONE) == ASX_OK;
 }
 
 static int run_actor_lifecycle(unsigned long long *digest) {

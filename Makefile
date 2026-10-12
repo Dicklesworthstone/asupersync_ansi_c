@@ -823,7 +823,7 @@ model-check: $(MODEL_CHECK_BIN)
 # ---------------------------------------------------------------------------
 # test — run all test suites
 # ---------------------------------------------------------------------------
-test: test-unit test-invariants test-conformance-c test-vignettes test-examples
+test: test-unit test-invariants test-conformance-c test-vignettes test-examples fuzz-parsers-replay
 	@echo "[asx] test: all suites passed"
 
 # ---------------------------------------------------------------------------
@@ -2024,6 +2024,62 @@ fuzz-run: fuzz-build
 fuzz-counterexample-replay: fuzz-build
 	@echo "[asx] fuzz-counterexample-replay: replaying minimized differential corpus..."
 	@ASX_GIT_COMMIT="$(ASX_GIT_COMMIT)" RUST_FUZZ_BINARY="$(RUST_FUZZ_BINARY)" bash tools/ci/replay_fuzz_counterexamples.sh
+
+# ---------------------------------------------------------------------------
+# fuzz-parsers — libFuzzer harnesses for the parsers of untrusted input
+# (bd-9kll.16.1): tests/fuzz/fuzz_parsers.c, one binary per target (its header
+# lists them), built with clang against a library instrumented for the fuzzer
+# and ASan+UBSan. fuzz-parsers-smoke runs each for FUZZ_PARSERS_SECONDS,
+# starting from the committed seeds (tests/fuzz/parsers_seeds/<TARGET>); a
+# crash, a sanitizer report, a timeout or a violated property fails it, and
+# libFuzzer leaves the input (crash-*, timeout-*) in
+# build/fuzz-parsers/run/<TARGET>. A found input is committed as a seed once
+# fixed. fuzz-parsers-replay (in make test) builds the same harnesses with
+# $(CC) and the strict flags, without libFuzzer, and runs every seed once.
+# ---------------------------------------------------------------------------
+FUZZ_PARSER_TARGETS := HTTP_REQUEST HTTP_RESPONSE WEBSOCKET BASE64 CODEC_JSON CODEC_BIN \
+                       WEB_QUERY RAPTORQ_OTI FRAME_CODECS JSON_READER
+FUZZ_PARSERS_CC ?= clang
+FUZZ_PARSERS_DIR := build/fuzz-parsers
+FUZZ_PARSERS_SECONDS ?= 60
+FUZZ_PARSERS_SEEDS := tests/fuzz/parsers_seeds
+FUZZ_PARSERS_SAN := -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+
+.PHONY: fuzz-parsers fuzz-parsers-smoke fuzz-parsers-replay
+fuzz-parsers:
+	@$(MAKE) --no-print-directory $(FUZZ_PARSERS_DIR)/lib/libasx.a BUILD_DIR=$(FUZZ_PARSERS_DIR) \
+		CC=$(FUZZ_PARSERS_CC) CFLAGS='-fsanitize=fuzzer-no-link $(FUZZ_PARSERS_SAN)'
+	@mkdir -p $(FUZZ_PARSERS_DIR)/bin
+	@for t in $(FUZZ_PARSER_TARGETS); do \
+		$(FUZZ_PARSERS_CC) $(STD_FLAGS) -g -O1 $(INC_FLAGS) $(PROFILE_DEF) $(CODEC_DEF) $(DET_DEF) \
+			$(CLASS_DEF) $(filter -D%,$(OPT_FLAGS)) -DASX_FUZZ_$$t -fsanitize=fuzzer $(FUZZ_PARSERS_SAN) \
+			-o $(FUZZ_PARSERS_DIR)/bin/$$t tests/fuzz/fuzz_parsers.c \
+			$(FUZZ_PARSERS_DIR)/lib/libasx.a || exit 1; \
+	done
+	@echo "[asx] fuzz-parsers: $(words $(FUZZ_PARSER_TARGETS)) harnesses in $(FUZZ_PARSERS_DIR)/bin"
+
+fuzz-parsers-smoke: fuzz-parsers
+	@for t in $(FUZZ_PARSER_TARGETS); do \
+		run=$(FUZZ_PARSERS_DIR)/run/$$t; mkdir -p $$run/corpus; \
+		cp $(FUZZ_PARSERS_SEEDS)/$$t/* $$run/corpus/ || exit 1; \
+		echo "[asx] fuzz-parsers-smoke: $$t for $(FUZZ_PARSERS_SECONDS) s"; \
+		( cd $$run && ../../bin/$$t -max_total_time=$(FUZZ_PARSERS_SECONDS) -timeout=10 \
+			-rss_limit_mb=2048 -print_final_stats=1 corpus >>log.txt 2>&1 ) || \
+			{ tail -40 $$run/log.txt; echo "[asx] fuzz-parsers-smoke: FAIL $$t (inputs in $$run)"; exit 1; }; \
+		grep -E 'number_of_executed_units' $$run/log.txt | tail -1; \
+	done
+	@echo "[asx] fuzz-parsers-smoke: PASS ($(words $(FUZZ_PARSER_TARGETS)) parsers)"
+
+fuzz-parsers-replay: $(LIB_A)
+	@mkdir -p $(BUILD_DIR)/fuzz-parsers-replay
+	@for t in $(FUZZ_PARSER_TARGETS); do \
+		$(CC) $(ALL_CFLAGS) -DASX_FUZZ_STANDALONE -DASX_FUZZ_$$t \
+			-o $(BUILD_DIR)/fuzz-parsers-replay/$$t tests/fuzz/fuzz_parsers.c $(LIB_A) \
+			$(ALL_LDFLAGS) || exit 1; \
+		$(TEST_EXEC) $(BUILD_DIR)/fuzz-parsers-replay/$$t $(FUZZ_PARSERS_SEEDS)/$$t/* || \
+			{ echo "[asx] fuzz-parsers-replay: FAIL $$t"; exit 1; }; \
+	done
+	@echo "[asx] fuzz-parsers-replay: $(words $(FUZZ_PARSER_TARGETS)) harnesses ran their seeds"
 
 # ---------------------------------------------------------------------------
 # minimize — deterministic counterexample minimizer (bd-1md.4)

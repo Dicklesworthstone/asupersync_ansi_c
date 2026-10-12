@@ -205,13 +205,13 @@ TEST(scope_spawn_with_cx_binds_spawned_task) {
     asx_cx child_cx;
     setup();
     MUST_OK(asx_scope_init(&scope, g_rid, &g_cx, asx_budget_infinite()));
-    ASSERT_EQ(asx_scope_spawn_with_cx(&scope, ASX_CAP_CLOCK_READ | ASX_CAP_CANCEL_CHECK,
+    ASSERT_EQ(asx_scope_spawn_with_cx(&scope, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY,
                                       poll_immediate_ok, NULL, &h, &child_cx),
               ASX_OK);
     ASSERT_EQ(asx_cx_region(&child_cx), g_rid);
     ASSERT_EQ(asx_cx_task(&child_cx), h.task_id);
     ASSERT_TRUE(asx_cx_has_cap(&child_cx, ASX_CAP_CLOCK_READ));
-    ASSERT_TRUE(asx_cx_has_cap(&child_cx, ASX_CAP_CANCEL_CHECK));
+    ASSERT_TRUE(asx_cx_has_cap(&child_cx, ASX_CAP_ENTROPY));
     ASSERT_FALSE(asx_cx_has_cap(&child_cx, ASX_CAP_SPAWN));
     teardown();
 }

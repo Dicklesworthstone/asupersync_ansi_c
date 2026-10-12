@@ -108,7 +108,7 @@ TEST(local_scope_spawn_with_cx_binds_child) {
     asx_cx child_cx;
     setup();
     MUST_OK(asx_local_scope_init(&scope, g_rid, &g_cx, asx_budget_infinite()));
-    ASSERT_EQ(asx_local_scope_spawn_with_cx(&scope, ASX_CAP_CLOCK_READ | ASX_CAP_CANCEL_CHECK,
+    ASSERT_EQ(asx_local_scope_spawn_with_cx(&scope, ASX_CAP_CLOCK_READ | ASX_CAP_ENTROPY,
                                             poll_immediate_ok, NULL, &handle, &child_cx),
               ASX_OK);
     ASSERT_EQ(asx_cx_region(&child_cx), g_rid);

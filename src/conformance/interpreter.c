@@ -210,6 +210,7 @@ typedef struct {
 typedef enum { IT_CH_MPSC, IT_CH_ONESHOT, IT_CH_BROADCAST, IT_CH_WATCH, IT_CH_TYPES } it_ch_type;
 
 #define IT_MAX_SUBSCRIBERS 8u
+#define IT_MAX_SENDERS 8u
 
 typedef struct {
     uint32_t task; /* owner, index in g_tasks */
@@ -226,8 +227,14 @@ typedef struct {
     asx_oneshot_sender oneshot;
     asx_broadcast_sender broadcast;
     asx_watch_sender watch;
-    uint32_t sender; /* owner, index in g_tasks */
-    int sender_open;
+    /* Its senders, each with its owner (index in g_tasks): the declared
+     * `sender`, then for an mpsc the `senders` clones (Rust
+     * Sender::clone at setup). */
+    struct {
+        uint32_t task;
+        int open;
+    } senders[IT_MAX_SENDERS];
+    uint32_t n_senders;
     it_receiver receivers[IT_MAX_SUBSCRIBERS];
     uint32_t n_receivers;
 } it_channel;
@@ -754,7 +761,7 @@ static it_task *generation_entry(it_supervisor *sv, const char *child, unsigned 
     t->id = task;
     t->spawned = 1;
     t->supervised = 1;
-    (void)asx_cx_init(&t->cx, region, task, ASX_CAP_CANCEL_CHECK);
+    (void)asx_cx_init(&t->cx, region, task, ASX_CAP_NONE);
     return t;
 }
 
@@ -1106,12 +1113,21 @@ static it_channel *channel_by_name(const char *name) {
     return NULL;
 }
 
-/* The channel `name` of `type` if task `t` owns its still-open sender,
+/* The index in c->senders of task `me`'s still-open sender, or -1. */
+static int sender_slot(const it_channel *c, uint32_t me) {
+    uint32_t i;
+    for (i = 0; i < c->n_senders; i++) {
+        if (c->senders[i].task == me && c->senders[i].open) return (int)i;
+    }
+    return -1;
+}
+
+/* The channel `name` of `type` if task `t` owns a still-open sender of it,
  * else NULL: an endpoint is usable only in its owner's body (DSL §3.6). */
 static it_channel *owned_sender(const it_task *t, const char *name, it_ch_type type) {
     it_channel *c = channel_by_name(name);
-    if (c == NULL || c->type != type || !c->sender_open) return NULL;
-    return c->sender == (uint32_t)(t - g_tasks) ? c : NULL;
+    if (c == NULL || c->type != type) return NULL;
+    return sender_slot(c, (uint32_t)(t - g_tasks)) >= 0 ? c : NULL;
 }
 
 /* Task `t`'s still-open receiver on channel `name` of `type`, else NULL. */
@@ -1133,12 +1149,14 @@ static it_receiver *owned_receiver(const it_task *t, const char *name, it_ch_typ
  * uses the channel's authenticated permit destruction boundary. */
 static void drop_send_permit(asx_send_permit *permit) { asx_send_permit_drop_internal(permit); }
 
-/* Drop the sender of `c` (`r` NULL) or receiver `r`, as Rust drops the
- * endpoint. */
-static void close_endpoint(it_channel *c, it_receiver *r) {
+/* Drop task `owner`'s sender of `c` (`r` NULL) or receiver `r`, as Rust
+ * drops the endpoint: an mpsc sender lowers the sender count, which
+ * closes the sender side at the last one. */
+static void close_endpoint(it_channel *c, it_receiver *r, uint32_t owner) {
     asx_status st = ASX_OK;
     if (r == NULL) {
-        c->sender_open = 0;
+        int k = sender_slot(c, owner);
+        if (k >= 0) c->senders[k].open = 0;
         switch (c->type) {
         case IT_CH_MPSC: st = asx_channel_close_sender(c->id); break;
         case IT_CH_ONESHOT: asx_oneshot_sender_drop(&c->oneshot); break;
@@ -1210,7 +1228,7 @@ static it_channel *next_owned(uint32_t me, it_ch_type type, int sender, it_recei
         if (c->type != type) continue;
         if (best != NULL && strcmp(c->name, best->name) >= 0) continue;
         if (sender) {
-            if (c->sender != me || !c->sender_open) continue;
+            if (sender_slot(c, me) < 0) continue;
         } else {
             for (k = 0; k < c->n_receivers && mine == NULL; k++) {
                 if (c->receivers[k].task == me && c->receivers[k].open) mine = &c->receivers[k];
@@ -1301,7 +1319,7 @@ static void drop_locals(it_task *t) {
                 it_receiver *r;
                 it_channel *c = next_owned(me, (it_ch_type)type, sender, &r);
                 if (c == NULL) break;
-                close_endpoint(c, r);
+                close_endpoint(c, r, me);
             }
         }
     }
@@ -1544,7 +1562,7 @@ static int spawn_group_members(it_task *t, uint32_t step, uint32_t idx) {
         }
         m->id = id;
         m->spawned = 1;
-        (void)asx_cx_init(&m->cx, m->region, id, ASX_CAP_CANCEL_CHECK);
+        (void)asx_cx_init(&m->cx, m->region, id, ASX_CAP_NONE);
     }
     return 1;
 }
@@ -1563,7 +1581,7 @@ static void bind_attempts(it_task *t) {
         }
         m->id = t->group.members[i];
         m->spawned = 1;
-        (void)asx_cx_init(&m->cx, m->region, m->id, ASX_CAP_CANCEL_CHECK);
+        (void)asx_cx_init(&m->cx, m->region, m->id, ASX_CAP_NONE);
     }
 }
 
@@ -2044,7 +2062,7 @@ static void exec_race_deadline(it_task *t, asx_task_id self, uint32_t step, uint
         } else {
             w->id = id;
             w->spawned = 1;
-            (void)asx_cx_init(&w->cx, w->region, id, ASX_CAP_CANCEL_CHECK);
+            (void)asx_cx_init(&w->cx, w->region, id, ASX_CAP_NONE);
         }
         t->race_wrapper_task = (uint32_t)(w - g_tasks);
         t->race_deadline = now + d;
@@ -2237,7 +2255,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
     if (strcmp(op, "is_cancel_requested") == 0) {
         /* cx.is_cancel_requested() (cx.rs:2641): the task's Cx, read only. */
         asx_cx cx;
-        (void)asx_cx_init(&cx, t->region, self, ASX_CAP_CANCEL_CHECK);
+        (void)asx_cx_init(&cx, t->region, self, ASX_CAP_NONE);
         observe(t, idx, label, status_node(ASX_OK),
                 asx_json_new_bool(g_out, asx_cx_is_cancelled(&cx) ? 1 : 0));
         return STEP_NEXT;
@@ -2462,7 +2480,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
                 return STEP_END;
             }
         }
-        close_endpoint(c, r);
+        close_endpoint(c, r, (uint32_t)(t - g_tasks));
         observe_status(t, idx, label, ASX_OK);
         return STEP_NEXT;
     }
@@ -2503,7 +2521,8 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         }
         if (type == IT_CH_ONESHOT) {
             st = asx_oneshot_send(&c->oneshot, &t->cx, v);
-            c->sender_open = 0; /* Rust's send consumes the sender */
+            /* Rust's send consumes the sender */
+            c->senders[sender_slot(c, (uint32_t)(t - g_tasks))].open = 0;
         } else if (type == IT_CH_BROADCAST) {
             st = asx_broadcast_send(&c->broadcast, &t->cx, v);
         } else {
@@ -2576,7 +2595,7 @@ static step_result exec_sync(it_task *t, asx_task_id self, uint32_t step, uint32
         if (st == ASX_OK) {
             child->id = id;
             child->spawned = 1;
-            (void)asx_cx_init(&child->cx, child->region, id, ASX_CAP_CANCEL_CHECK);
+            (void)asx_cx_init(&child->cx, child->region, id, ASX_CAP_NONE);
         } else {
             child->refused = st;
             child->refusal = asx_scheduler_last_spawn_refusal();
@@ -3376,6 +3395,26 @@ static uint32_t channel_receivers(uint32_t d, int subscribed, it_channel *c) {
     return n;
 }
 
+/* An mpsc's optional `senders`: more top-level tasks, each given a clone of
+ * the sender at setup, in order (twin_run: tx.clone(); C:
+ * asx_channel_sender_clone). Returns 0 on a bad list. */
+static int channel_extra_senders(uint32_t d, it_channel *c) {
+    uint32_t list = asx_json_get(g_in, d, "senders");
+    uint32_t k;
+    uint32_t n = asx_json_count(g_in, list);
+    if (n == 0u) return 1;
+    if (c->type != IT_CH_MPSC || 1u + n > IT_MAX_SENDERS) return 0;
+    for (k = 0; k < n; k++) {
+        it_task *owner = task_by_name(asx_json_string(g_in, asx_json_item(g_in, list, k)));
+        if (owner == NULL || sender_slot(c, (uint32_t)(owner - g_tasks)) >= 0) return 0;
+        if (asx_channel_sender_clone(c->id) != ASX_OK) return 0;
+        c->senders[c->n_senders].task = (uint32_t)(owner - g_tasks);
+        c->senders[c->n_senders].open = 1;
+        c->n_senders++;
+    }
+    return 1;
+}
+
 /* Channels (DSL §3.6), each endpoint bound to its owner, a top-level task.
  * Broadcast and watch subscribers after the first subscribe at setup,
  * before any send, as twin_run does. mpsc channels live in the root
@@ -3406,8 +3445,9 @@ static void setup_channels(uint32_t scenario, asx_region_id root) {
         c = &g_channels[g_n_channels++];
         memset(c, 0, sizeof(*c));
         c->name = name;
-        c->sender = (uint32_t)(tx - g_tasks);
-        c->sender_open = 1;
+        c->senders[0].task = (uint32_t)(tx - g_tasks);
+        c->senders[0].open = 1;
+        c->n_senders = 1u;
         subscribed = strcmp(type, "broadcast") == 0 || strcmp(type, "watch") == 0;
         c->n_receivers = channel_receivers(d, subscribed, c);
         if (c->n_receivers == 0u) {
@@ -3441,6 +3481,10 @@ static void setup_channels(uint32_t scenario, asx_region_id root) {
         }
         if (st != ASX_OK) {
             it_fail("cannot create channel (unknown type or bad parameters)", name);
+            return;
+        }
+        if (!channel_extra_senders(d, c)) {
+            it_fail("channel senders must be distinct top-level tasks of an mpsc", name);
             return;
         }
     }
@@ -4312,7 +4356,7 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
         }
         t->id = id;
         t->spawned = 1;
-        (void)asx_cx_init(&t->cx, t->region, id, ASX_CAP_CANCEL_CHECK);
+        (void)asx_cx_init(&t->cx, t->region, id, ASX_CAP_NONE);
     }
 
     if (!g_failed) setup_channels(scenario, root);

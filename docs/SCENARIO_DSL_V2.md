@@ -43,8 +43,10 @@ Companion files:
 
 - **`unit`** names the semantic unit (W1.7, bd-9kll.2.8): `budget`, `cancel`,
   `task_lifecycle`, `region_lifecycle`, `obligation`, `quiescence`,
-  `scheduler`, `timers`, `mpsc`, `oneshot`, `broadcast`, `watch`, `sync`,
+  `scheduler`, `timers`, `channel`, `mpsc`, `oneshot`, `broadcast`, `watch`, `sync`,
   `combinators`, `task_groups`, `actor`, `supervision` or `leak_policy`.
+  `channel` groups channel-family scenarios; the specific primitive labels
+  remain available. An mpsc declaration admits at most seven extra senders.
 - **`rules`** lists the canonical rule IDs exercised, taken from the Canonical
   Rule Index of `/dp/asupersync/asupersync_v4_formal_semantics.md` (lines
   23-73, for example `rule.cancel.request`). The coverage report (W1.7)
@@ -327,6 +329,17 @@ Channels are declared at the top level, so endpoints have owners:
 Each endpoint is moved into its owner's body (Rust) or bound to the owner's
 interpreter (C). Values are unsigned 64-bit integers; C channels carry
 `uint64_t`.
+
+An mpsc may list more producers in `senders` (top-level tasks, distinct from
+`sender` and each other): each gets a clone of the sender at setup, in
+order (Rust `tx.clone()`, `channel/mpsc.rs:1231`; C
+`asx_channel_sender_clone`). Each owner's `close_sender`, or the end of its
+body, drops its own clone; the sender side closes at the last one
+(`Sender::drop`, `:1241-1255`).
+
+```json
+{"name": "ch.jobs", "type": "mpsc", "capacity": 2, "sender": "t.a", "senders": ["t.b"], "receiver": "t.r"}
+```
 
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|

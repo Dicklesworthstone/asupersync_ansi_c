@@ -247,7 +247,7 @@ static asx_task_id cx_task(asx_cx *cx) {
     setup();
     MUST_OK(asx_region_open(&r));
     MUST_OK(asx_task_spawn(r, poll_idle, NULL, &t));
-    MUST_OK(asx_cx_init(cx, r, t, ASX_CAP_CANCEL_CHECK));
+    MUST_OK(asx_cx_init(cx, r, t, ASX_CAP_NONE));
     return t;
 }
 
@@ -273,7 +273,7 @@ static void check_tracked_permit_resolution(asx_region_id region, asx_task_id se
     asx_oneshot_permit p;
     asx_obligation_id ob;
     uint64_t value = 0u;
-    ASSERT_EQ(asx_cx_init(&cx, region, self, ASX_CAP_CANCEL_CHECK), ASX_OK);
+    ASSERT_EQ(asx_cx_init(&cx, region, self, ASX_CAP_NONE), ASX_OK);
 
     ASSERT_EQ(asx_oneshot_create(&tx, &rx), ASX_OK);
     ASSERT_EQ(asx_oneshot_reserve(&tx, &cx, &p), ASX_OK);
@@ -334,7 +334,7 @@ static void check_tracked_oneshot_holder(tracked_oneshot_misuse *ctx, asx_task_i
     asx_obligation_info info;
     ASSERT_EQ(asx_handle_index(self), asx_handle_index(ctx->holder));
     if (ctx->phase == 0u) {
-        ASSERT_EQ(asx_cx_init(&cx, ctx->region, self, ASX_CAP_CANCEL_CHECK), ASX_OK);
+        ASSERT_EQ(asx_cx_init(&cx, ctx->region, self, ASX_CAP_NONE), ASX_OK);
         ASSERT_EQ(asx_oneshot_reserve(&ctx->sender, &cx, &ctx->permit), ASX_OK);
         ctx->obligation = ctx->permit.obligation;
         ASSERT_TRUE(

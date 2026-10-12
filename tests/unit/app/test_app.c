@@ -182,9 +182,7 @@ static void test_tcp_listener_poll_accept_with_cx_budget_checkpoint(void) {
     asx_budget budget = asx_budget_from_polls(1);
 
     MUST_OK(asx_tcp_listener_bind(&listener, &addr));
-    MUST_OK(asx_cx_init(&cx, 1, 1,
-                        ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
-                            ASX_CAP_BUDGET_CONSUME));
+    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CHANNEL | ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME));
     MUST_OK(asx_cx_bind_budget(&cx, &budget));
 
     ASSERT(asx_tcp_listener_poll_accept_with_cx(listener, &stream, NULL, &cx) == ASX_E_PENDING,
@@ -321,9 +319,7 @@ static void test_tcp_stream_poll_with_cx_budget_checkpoint(void) {
     asx_budget budget = asx_budget_from_polls(1);
 
     MUST_OK(asx_tcp_connect(&stream, &addr));
-    MUST_OK(asx_cx_init(&cx, 1, 1,
-                        ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
-                            ASX_CAP_BUDGET_CONSUME));
+    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CHANNEL | ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME));
     MUST_OK(asx_cx_bind_budget(&cx, &budget));
 
     asx_buf_mut_init(&dst);
@@ -333,9 +329,7 @@ static void test_tcp_stream_poll_with_cx_budget_checkpoint(void) {
            "second poll_read exhausts budget");
 
     src = asx_buf_from_cstr("hello");
-    MUST_OK(asx_cx_init(&cx, 1, 1,
-                        ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
-                            ASX_CAP_BUDGET_CONSUME));
+    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CHANNEL | ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME));
     budget = asx_budget_from_polls(1);
     MUST_OK(asx_cx_bind_budget(&cx, &budget));
     ASSERT(asx_tcp_stream_poll_write_with_cx(stream, &src, &n, &cx) == ASX_E_PENDING,
@@ -355,7 +349,7 @@ static void test_tcp_stream_poll_with_cx_permission_denied(void) {
     asx_cx cx;
 
     MUST_OK(asx_tcp_connect(&stream, &addr));
-    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CANCEL_CHECK));
+    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_NONE));
 
     asx_buf_mut_init(&dst);
     ASSERT(asx_tcp_stream_poll_read_with_cx(stream, &dst, &n, &cx) == ASX_E_PERMISSION_DENIED,
@@ -498,9 +492,7 @@ static void test_udp_with_cx_budget_and_permission(void) {
     MUST_OK(asx_udp_bind(&socket, &local));
     MUST_OK(asx_udp_connect(socket, &peer));
 
-    MUST_OK(asx_cx_init(&cx, 1, 1,
-                        ASX_CAP_CHANNEL | ASX_CAP_CANCEL_CHECK | ASX_CAP_BUDGET_READ |
-                            ASX_CAP_BUDGET_CONSUME));
+    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CHANNEL | ASX_CAP_BUDGET_READ | ASX_CAP_BUDGET_CONSUME));
     MUST_OK(asx_cx_bind_budget(&cx, &budget));
     asx_buf_mut_init(&dst);
     ASSERT(asx_udp_poll_recv_with_cx(socket, &dst, &n, NULL, &cx) == ASX_E_PENDING,
@@ -508,7 +500,7 @@ static void test_udp_with_cx_budget_and_permission(void) {
     ASSERT(asx_udp_poll_recv_with_cx(socket, &dst, &n, NULL, &cx) == ASX_E_POLL_BUDGET_EXHAUSTED,
            "udp recv checkpoint budget");
 
-    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_CANCEL_CHECK));
+    MUST_OK(asx_cx_init(&cx, 1, 1, ASX_CAP_NONE));
     ASSERT(asx_udp_poll_send_with_cx(socket, &src, &n, NULL, &cx) == ASX_E_PERMISSION_DENIED,
            "udp send with cx requires channel cap");
 

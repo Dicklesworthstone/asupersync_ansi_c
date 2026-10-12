@@ -1,0 +1,10 @@
+€POST /form HTTP/1.1
+Host: a
+Content-Type: multipart/form-data; boundary=XyZ
+Content-Length: 98
+
+--XyZ
+Content-Disposition: form-data; name="f"; filename="a.txt"
+
+hello
+--XyZ--

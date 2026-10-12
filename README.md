@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-2%2C005%20declarations-blue)
-![C test programs](https://img.shields.io/badge/tests-225%20programs-brightgreen)
+![Public API declarations](https://img.shields.io/badge/public%20API-2%2C006%20declarations-blue)
+![C test programs](https://img.shields.io/badge/tests-226%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,005<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->225<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,006<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->226<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -41,7 +41,7 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->142<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
+  - `make conformance` runs <!-- fact:rust_fixtures -->144<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
   - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches, or is a recorded difference that names its bead.
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->2,005<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->2,006<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -69,7 +69,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 | **<!-- fact:status_codes -->66<!-- /fact --> typed error codes with recovery guidance** | Each error has a category, recoverability class, recovery action, and backoff hints |
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
-| **<!-- fact:test_programs -->225<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->164<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->4<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
+| **<!-- fact:test_programs -->226<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->164<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
 | **Cross-profile checks** | Profiles are meant to change limits and defaults, never semantics. CI executes the Rust-captured fixtures under CORE, under EMBEDDED_ROUTER on five ISAs (QEMU) and on 32-bit x86; `make profile-parity` compares the digests recorded per profile in the fixture set |
 
 The current repository is library-first: it ships the static library, public
@@ -475,6 +475,25 @@ is `make fuzz-differential`.
 make fuzz-smoke
 ```
 
+### `make fuzz-parsers-smoke`
+
+Fuzz the parsers that take untrusted input with libFuzzer under ASan and
+UBSan (`tests/fuzz/fuzz_parsers.c`, one binary per parser): the HTTP/1.1
+request and response parsers with multipart forms, the WebSocket handshake,
+frame header and engine, strict Base64, the JSON and binary fixture codecs,
+URI query strings, the RaptorQ OTI, the length-delimited and line frame
+decoders, and the conformance JSON reader. Each runs `FUZZ_PARSERS_SECONDS`
+(default 60) from the seeds in `tests/fuzz/parsers_seeds/`. Where a parser
+has an exact inverse the harness also checks the round trip: strict Base64
+decoding accepts only canonical text, a decoded OTI re-serializes to its
+input, a decoded fixture re-encodes and decodes again. It needs clang with
+libFuzzer (`FUZZ_PARSERS_CC`). `make test` runs every seed through the same
+harnesses built with the regular compiler (`make fuzz-parsers-replay`).
+
+```bash
+make fuzz-parsers-smoke FUZZ_PARSERS_SECONDS=300
+```
+
 ### `make fuzz-counterexample-replay`
 
 Replay the durable minimized fuzz counterexample corpus. The gate runs each
@@ -790,7 +809,7 @@ The tree holds <!-- fact:header_files -->127<!-- /fact --> public headers
 C sources (<!-- fact:sources_core -->19<!-- /fact --> in `core/`,
 <!-- fact:sources_runtime -->39<!-- /fact --> in `runtime/`,
 <!-- fact:sources_platform -->7<!-- /fact --> in `platform/`),
-<!-- fact:test_programs -->225<!-- /fact --> C test programs and
+<!-- fact:test_programs -->226<!-- /fact --> C test programs and
 <!-- fact:examples -->14<!-- /fact --> examples (`make lint-docs` checks these numbers
 against `tools/count_inventory.sh`).
 
@@ -825,7 +844,7 @@ make profile-parity
 
 ## Testing and Quality Gates
 
-`asx` currently ships with <!-- fact:test_programs -->225<!-- /fact --> tracked C test programs across 7 categories in
+`asx` currently ships with <!-- fact:test_programs -->226<!-- /fact --> tracked C test programs across 7 categories in
 the checked-in `tests/` tree. Individual assertion counts evolve over time; see
 `tests/TEST.md` for the current indexed suite inventory and per-suite case
 totals where tracked.
@@ -837,7 +856,7 @@ totals where tracked.
 | **Invariant tests** | <!-- fact:test_invariant -->3<!-- /fact --> | Lifecycle transition legality, quiescence, obligation linearity |
 | **API vignettes** | <!-- fact:test_vignettes -->12<!-- /fact --> | Ergonomics and usage pattern demonstrations |
 | **Conformance** | <!-- fact:test_conformance -->6<!-- /fact --> | Codec round-trip equivalence, profile-variant fixture equivalence, parallel worker-count parity, API misuse, resource-pressure failure atomicity (the Rust parity runner is `tools/conformance/runner.c`) |
-| **Fuzz** | <!-- fact:test_fuzz -->4<!-- /fact --> | C fuzz harness, minimizer, grammar vector generators (Rust-vs-C fuzzing is `make fuzz-differential`, driven by `tools/twin_run`) |
+| **Fuzz** | <!-- fact:test_fuzz -->5<!-- /fact --> | C fuzz harness, minimizer, grammar vector generators (Rust-vs-C fuzzing is `make fuzz-differential`, driven by `tools/twin_run`) |
 | **Formal verification** | <!-- fact:test_formal -->13<!-- /fact --> | Algebraic property suites, CBMC-compatible transition harnesses (run natively, not under CBMC), litmus tests |
 
 Gate commands (the CI table below says which jobs run which):
@@ -1212,7 +1231,7 @@ The compiler sees a flat switch statement, with no hidden allocations, no platfo
 
 ### MPSC (Multi-Producer, Single-Consumer)
 
-The primary message-passing channel. Uses the two-phase reserve/send protocol described in the internal design section. Capacity is set per channel at creation, up to `ASX_CHANNEL_MAX_CAPACITY` (64 unless overridden at build time); FIFO ordering, permit-token-based backpressure.
+The primary message-passing channel. Uses the two-phase reserve/send protocol described in the internal design section. Capacity is set per channel at creation, up to `ASX_CHANNEL_MAX_CAPACITY` (64 unless overridden at build time); FIFO ordering, permit-token-based backpressure. Senders are counted as Rust's `Sender` clones are: a channel starts with one, `asx_channel_sender_clone()` adds a producer, and `asx_channel_close_sender()` drops one; the sender side closes when the last is dropped, and the receiver then drains the queue and sees `ASX_E_DISCONNECTED`. `asx_channel_seal()` is Rust's `Receiver::close` (later sends refused, the queue kept); `asx_channel_close_receiver()` is the receiver's drop (the queue discarded).
 
 ### Oneshot (Single-Value, Single-Use)
 
@@ -1284,7 +1303,7 @@ asx_status no_spawn_cx(const asx_cx *parent_cx, asx_cx *child_cx) {
 }
 ```
 
-Scopes bind a capability context to a region for spawning child tasks. The `ASX_CAP_SPAWN` capability is required to build a scope: `asx_scope_init()` refuses a context without it (`ASX_E_PERMISSION_DENIED`), and `asx_scope_spawn()` returns `ASX_E_INVALID_STATE` for a scope lacking it, so no task creates children through a scope unless its parent granted that capability. The plain `asx_task_spawn()` checks no capability. Today the context's own operations check their bits (cancel check, budget read/consume, clock read, entropy) and `src/net/net.c` checks `ASX_CAP_CHANNEL`; `ASX_CAP_TIMER`, `ASX_CAP_OBLIGATION`, `ASX_CAP_TRACE` and `ASX_CAP_CANCEL_REQUEST` are carried and narrowed but not yet checked by the timer, obligation, trace or cancel APIs.
+Scopes bind a capability context to a region for spawning child tasks. The `ASX_CAP_SPAWN` capability is required to build a scope: `asx_scope_init()` refuses a context without it (`ASX_E_PERMISSION_DENIED`), and `asx_scope_spawn()` returns `ASX_E_INVALID_STATE` for a scope lacking it, so no task creates children through a scope unless its parent granted that capability. The plain `asx_task_spawn()` checks no capability. Observing cancellation is not a capability, as in Rust (`Cx::checkpoint` and `Cx::is_cancel_requested` need none): `asx_cx_checkpoint()` and `asx_cx_is_cancelled()` work on any Cx with a task, so narrowing a child's context cannot leave its channel and sync waits blind to a cancel. Today the context's own operations check their bits (budget read/consume, clock read, entropy) and `src/net/net.c` checks `ASX_CAP_CHANNEL`; `ASX_CAP_TIMER`, `ASX_CAP_OBLIGATION`, `ASX_CAP_TRACE` and `ASX_CAP_CANCEL_REQUEST` are carried and narrowed but not yet checked by the timer, obligation, trace or cancel APIs.
 
 An `asx_cx` is a plain struct the caller owns; its budget, clock and entropy pointers borrow caller-owned storage, so creating or narrowing one allocates nothing. The design mirrors Rust's ownership-based authority model, adapted for C's manual lifetime management.
 
@@ -2315,7 +2334,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->2,005<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->2,006<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,

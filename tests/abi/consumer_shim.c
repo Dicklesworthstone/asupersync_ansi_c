@@ -345,7 +345,7 @@ static void test_actor_surface_smoke(void) {
     caller.status = ASX_E_PENDING;
     st = asx_region_open_child(rid, &callers);
     if (st == ASX_OK) st = asx_task_spawn(callers, shim_caller_poll, &caller, &caller_id);
-    if (st == ASX_OK) st = asx_cx_init(&caller.cx, callers, caller_id, ASX_CAP_CANCEL_CHECK);
+    if (st == ASX_OK) st = asx_cx_init(&caller.cx, callers, caller_id, ASX_CAP_NONE);
     SHIM_CHECK(st == ASX_OK, "caller task spawns in a child region");
 
     budget = asx_budget_from_polls(16u);

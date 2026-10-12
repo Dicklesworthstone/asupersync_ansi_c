@@ -195,7 +195,7 @@ static void scenario_actor_mailbox_roundtrip(void) {
     caller.status = ASX_E_PENDING;
     SCENARIO_CHECK(asx_task_spawn(callers, caller_poll, &caller, &caller_id) == ASX_OK,
                    "caller_spawn");
-    SCENARIO_CHECK(asx_cx_init(&caller.cx, callers, caller_id, ASX_CAP_CANCEL_CHECK) == ASX_OK,
+    SCENARIO_CHECK(asx_cx_init(&caller.cx, callers, caller_id, ASX_CAP_NONE) == ASX_OK,
                    "caller_cx");
 
     pump_region(region, 8u);
