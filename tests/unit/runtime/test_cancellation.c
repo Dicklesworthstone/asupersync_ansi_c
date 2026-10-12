@@ -1648,6 +1648,47 @@ TEST(region_cancel_records_one_request_per_newly_cancelled_task) {
     ASSERT_EQ(asx_trace_kind_total(ASX_TRACE_CANCEL_REQUEST), (uint64_t)1u);
 }
 
+TEST(runtime_config_installs_the_chain_bounds_and_reset_restores_the_defaults) {
+    /* asx_runtime_config.max_cancel_chain_depth is what the runtime cuts
+     * chains at once it is initialised with it (bd-9kll.3.7), and a runtime
+     * reset returns Rust's defaults (CancelAttributionConfig::default()). */
+    static asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_region_id rid[4];
+    asx_cancel_reason got;
+    asx_cancel_reason req;
+    uint32_t i;
+
+    asx_runtime_shutdown(&rt);
+    ASSERT_EQ(asx_runtime_config_init(&cfg), ASX_OK);
+    cfg.max_cancel_chain_depth = 2u;
+    ASSERT_EQ(asx_runtime_hooks_init(&hooks), ASX_OK);
+    ASSERT_EQ(asx_runtime_init(&rt, &cfg, &hooks), ASX_OK);
+
+    ASSERT_EQ(asx_region_open(&rid[0]), ASX_OK);
+    for (i = 1; i < 4u; i++) { ASSERT_EQ(asx_region_open_child(rid[i - 1u], &rid[i]), ASX_OK); }
+    req = test_reason(ASX_CANCEL_USER, rid[0], 7u, NULL);
+    ASSERT_EQ(asx_region_cancel(rid[0], &req, NULL), ASX_OK);
+    for (i = 0; i < 4u; i++) {
+        ASSERT_EQ(asx_region_get_cancel_reason(rid[i], &got), ASX_OK);
+        ASSERT_EQ(asx_cancel_reason_chain_links(&got), i < 1u ? i : 1u);
+        ASSERT_EQ(got.truncated, i >= 2u ? 1 : 0);
+    }
+
+    /* The same tree under the defaults is not cut. */
+    asx_runtime_reset();
+    ASSERT_EQ(asx_region_open(&rid[0]), ASX_OK);
+    for (i = 1; i < 4u; i++) { ASSERT_EQ(asx_region_open_child(rid[i - 1u], &rid[i]), ASX_OK); }
+    req = test_reason(ASX_CANCEL_USER, rid[0], 7u, NULL);
+    ASSERT_EQ(asx_region_cancel(rid[0], &req, NULL), ASX_OK);
+    for (i = 0; i < 4u; i++) {
+        ASSERT_EQ(asx_region_get_cancel_reason(rid[i], &got), ASX_OK);
+        ASSERT_EQ(asx_cancel_reason_chain_links(&got), i);
+        ASSERT_EQ(got.truncated, 0);
+    }
+}
+
 TEST(region_cancel_cuts_the_cause_chain_at_the_chain_bound) {
     /* Rust bounds a subtree's chain with CancelAttributionConfig when it
      * builds each descendant's reason (state.rs:7744, with_cause_limited,
@@ -2335,6 +2376,7 @@ int main(void) {
     RUN_TEST(region_cancel_of_an_idle_region_finalizes_at_once);
     RUN_TEST(cancel_strengthen_replaces_the_whole_reason_and_records_no_event);
     RUN_TEST(region_cancel_records_one_request_per_newly_cancelled_task);
+    RUN_TEST(runtime_config_installs_the_chain_bounds_and_reset_restores_the_defaults);
     RUN_TEST(region_cancel_cuts_the_cause_chain_at_the_chain_bound);
     RUN_TEST(spawned_child_that_acknowledges_a_later_cancel_keeps_its_value);
     RUN_TEST(spawned_child_cancelled_before_its_first_poll_is_cancelled);

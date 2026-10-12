@@ -245,6 +245,8 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
     runtime_config_copy(rt, config);
     asx_runtime_set_leak_policy_internal(config->leak_response, config->leak_escalation);
     asx_runtime_set_cleanup_hard_bound_internal(config->cleanup_hard_bound != 0u);
+    asx_cancel_chain_limits_set_internal(config->max_cancel_chain_depth,
+                                         config->max_cancel_chain_memory);
     rt->hooks = *hooks;
     rt->generation = g_rt_generation++;
     rt->initialized = 1;
