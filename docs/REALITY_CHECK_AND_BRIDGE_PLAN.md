@@ -474,8 +474,8 @@ runtime-owned storage or change canonical scenario semantics.
 - [x] Freeze `2030ceb0`; root fresh GCC/Clang release R3 and genuine i386 each execute all 49 mismatch builds and 167 canonical comparisons. Minimal-browser Clang executes 49 applicable controls and all 10 supported examples. Full local 164-unit/core/format/lint/integrity/11-gate/docs checks pass at this exact source.
 - [x] PinkOwl independently accepts every original criterion at clean `2030ceb0`: fresh CORE/Ghost0, live POSIX and minimal-browser each execute 49 controls, matching consumers 144/144/130, examples 13/13/10; app suites 69/68, actual doctor probes, 167 canonical comparisons and all 11 custom-layout gate scripts pass. Genuine old Ghost0 output fails both new field assertions; three hidden API compile controls reject. Native browser/WASM and Windows execution are not claimed.
 - [x] PinkOwl closes only original RB8 at `2026-10-12T16:24:56.597187013Z`, binding original acceptance to `2030ceb0`; independent evidence is on hz3 at `/tmp/asx-rb8-pink-2030-proof-20261012`. The tracker now has 114 unfinished items.
-- [x] Publish/synchronize `e08cacb3` to both remote branches and the primary checkout; all six pre-existing untracked artifacts remain. Its own main CI `38277425775` and performance run `38277425798` are observed in progress, not passing evidence.
-- [ ] Observe the publication's own hosted CI and performance outcomes; older successful CI does not certify this source.
+- [x] Publish/synchronize `e08cacb3` to both remote branches and the primary checkout; all six pre-existing untracked artifacts remain.
+- [x] Observe its own completed main CI `38277425775`: 29 jobs pass, E2E fails. Its separate performance run `38277425798` fails. The actual E2E defects are repaired below; neither this publication nor older green CI is all-green evidence for the follow-up.
 
 The live POSIX doctor is observed reading OS entropy successfully; its entropy
 hook still has a PID/time fallback if all OS sources fail. Unavailable-source
@@ -493,7 +493,9 @@ fingerprints, object layout, refusal ordering or the 49 controls.
 
 - [x] Measure and retain the actual object-size cost; no footprint/performance-green claim.
 - [x] Share the immutable library-side table through the existing exported getter, now colocated with hook/config preparation. App/lab layout folding accepts a base stamp; public macros still supply their independently computed application base, while library creation passes its own base. No runtime cache or ambient selector is introduced; tests/fixtures/thresholds are unchanged.
-- [ ] Measure identical-toolchain before/after size and execute matching/mismatch, strict full-suite and canonical controls before landing; keep broad P2 open.
+- [x] Independently compare the preserved `2030ceb0` and freshly built `78a280eb` CORE GCC15 release R3 products: archive text 770,387 -> 757,053 bytes (-13,334), archive file 1,642,864 -> 1,629,584 bytes (-13,280); data/BSS unchanged. Linked CLI text falls 5,224 bytes and runner text 8,080 bytes. These bounded footprint measurements do not certify latency, cold start, or the broader P2 contract.
+- [x] Root fresh `8ba3a53e` GCC15, Clang21 and genuine GCC i386 each execute 49 controls and all 167 canonical comparisons. Independent `78a280eb` CORE matching consumer has 144 assertions; optimized MINIMAL has 130 plus all 49 mismatch/live-work controls and ten supported examples. Full local strict build/164-unit/core/format/lint/integrity/11-gate/docs checks pass. Older source results and final-source results are labeled separately.
+- [ ] Publish the verified source and original tracker updates together; keep broad P2 in progress.
 
 ### Discovered integration/build regressions, `bd-kpr4` and `bd-6e4j`
 
@@ -508,8 +510,8 @@ warning policy unchanged.
 - [x] Claim `bd-kpr4` with the actual failure and complete positive acceptance criteria.
 - [x] Give native-host its intended CORE/JSON/determinism0 library and truthful family metadata in an isolated build directory.
 - [x] Build automotive-watchdog's declared profile/codec/determinism in an isolated directory before compiling its caller. Original C bodies and runtime-exit guards remain required; one actual library-build check is added. Initial 10/9 successful-case predictions were wrong: independent exact `78a280eb` actually executes native-host 14/14 and automotive-watchdog 8/8. Earlier failures short-circuited native subchecks and added runtime-exit failures; inspect the actual scenario IDs, never alter machinery to force a count.
-- [ ] Re-execute both original failures and corrected families, then all 26 canonical families with manifests and raw stderr.
-- [ ] Obtain independent exact-source acceptance and close only the concrete E2E wiring bug.
+- [x] Preserve the genuine hosted failures and independently re-execute the repaired families at exact `78a280eb`: native-host 14/14 and automotive-watchdog 8/8. Both root and independent full suites finish 26/26 families, exit 0, with manifests and raw logs. Each JSONL `_summary` row is reporting, not another scenario.
+- [x] PinkOwl accepts the unchanged `78a280eb` script/runtime components at final `1be49a4e` and closes only `bd-kpr4`, comment 260, `2026-10-12T17:35:19.129958773Z`. Original hosted failures and acceptance criteria remain; no SLO/full-release claim.
 
 Independent strict GCC15 release BROWSER MINIMAL R3 compilation also finds
 an existing `parallel_select_worker` array-bounds warning. The same actual
@@ -521,11 +523,19 @@ is credited as profile execution.
 - [x] Clamp dispatch's active worker count to the compiled capacity, as its existing owner/shard helpers do. Valid initialized configurations already meet this bound, preserving their scheduling behavior.
 - [x] Independent exact `78a280eb` optimized GCC minimal-browser build executes 49 controls and ten examples, with the original array-bounds failure retained. Its runner separately fails because constants reporting constructs unavailable public Lab factories; preserve that failure too.
 - [x] Guard only the two unavailable public Lab-default observations in constants reporting, with explicit N/A reasons under the minimal profile. CORE still constructs its actual Lab defaults; internal scheduling constants and every runtime comparison remain unchanged. This is required to complete the original 167-scenario criterion, not a replacement by full-browser results.
-- [ ] Fresh strict GCC release minimal-browser full build, 49 mismatch/live-task controls and all 167 canonical scenarios must execute successfully.
-- [ ] Run existing strict core/unit/invariant gates and obtain independent exact-source acceptance before closing the concrete build bug.
+- [x] Fresh strict GCC15 release MINIMAL runtime/CLI at `78a280eb` executes 49 mismatch/live-task controls and ten supported examples. Root and independent fresh `1be49a4e` MINIMAL runners each link their preserved, verified `78a280eb` R3 library and execute 167/167 canonical scenarios. Runtime/header/test bytes are identical between these commits; this is explicitly composite evidence, not a newly rebuilt `1be49a4e` library.
+- [x] Both MINIMAL runners detect a genuine mutated trace expectation. Constants report 102 compared, 96 equal, six classified differences, seven explicitly N/A, zero failures; only two unavailable public Lab defaults become N/A. CORE retains actual factory observations, all kernel comparisons and negative controls.
+- [x] Existing strict local core/unit/invariant/format/lint/integrity and all 11 gate scripts pass; the final runner's CORE 167 comparisons and documentation checks pass too.
+- [x] PinkOwl accepts final `1be49a4e`, independently executes the unchanged original eight CORE constants controls, and closes `bd-6e4j`, comment 261, `2026-10-12T17:36:01.647967185Z`. Composite runtime reuse and all actual older compile/runner/setup failures remain explicit; full-browser results are not substituted. Durable independent evidence is on hz3 at `/tmp/asx-fps-pink-1be-proof-20261012` and locally under `/data/tmp/asx-fps-pink-78-essential-20261012` plus the final runner archive.
+- [ ] Publish the completed fixes, synchronize both remote branches and the primary checkout, and observe the new publication's own hosted CI/performance outcome.
 
-The two newly observed bugs make the current unfinished count 116; completing
-them would restore 114. Broad P2 and the other original milestones stay open.
+The two independently accepted closures restore the current unfinished count
+to 114 (106 open, eight in progress). Root verifies that the other 798 issue
+rows and all 259 prior comments/136 prior events remain unchanged. Broad P2
+and the other original milestones stay open. Root durable final execution
+evidence is `/data/tmp/asx-fp-wiring-root-final-essential-20261012.tar.gz` on
+both local and hz3, SHA-256
+`88fb8798c16ee1590712afafdaafc8172e19e32a73bc05039fe7c8da4d4416fb`.
 
 ## Assessment at the audited revision
 
