@@ -770,9 +770,9 @@ static void sched_cancel_phase_complete(asx_task_slot *t) {
 static asx_status sched_complete(asx_task_slot *t, asx_task_id tid, asx_region_slot *rslot,
                                  asx_outcome_severity severity, asx_scheduler_event_kind ev,
                                  uint32_t round) {
-    asx_task_state from = t->state;
+    asx_task_state from;
     asx_region_id region = t->region;
-    asx_status st = asx_task_set_state_internal(t, tid, ASX_TASK_COMPLETED);
+    asx_status st = asx_task_complete_state_internal(t, tid, &from);
     if (st != ASX_OK) return st;
     /* The outcome carries the Cx's reason (fuzz findings gen-145-163,
      * gen-294-194). */

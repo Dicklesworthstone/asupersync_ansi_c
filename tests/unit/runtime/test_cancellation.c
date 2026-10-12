@@ -458,6 +458,166 @@ TEST(cancelled_task_completion_gets_cancelled_outcome) {
 }
 
 /* -------------------------------------------------------------------
+ * Tests: the acknowledged cancel's path to Completed, observed as real
+ * task-state transitions.
+ *
+ * Rust ends a task that acknowledged its cancel and then returns with
+ * cleanup_done() (Cancelling -> Finalizing) and finalize_done()
+ * (Finalizing -> Completed(Cancelled)) in the same step it observes the
+ * return (record/task.rs:1378, :1416; lab/runtime.rs:4862-4888,
+ * runtime/scheduler/worker.rs:686-696, three_lane.rs:9320-9326). A task
+ * that ends Panicked or Err goes through record.complete(), straight
+ * from Cancelling. Canonical vocabulary v2 has no task-state event, so
+ * a Rust-captured fixture cannot tell the two paths apart (a snapshot
+ * sees only the end state): the runtime's task-transition trace is the
+ * witness, and these tests are its only parity check.
+ * ------------------------------------------------------------------- */
+
+/* Acknowledges the cancel, then ends the task with `*(asx_status *)data`
+ * (the poll's return) after the optional extra step. */
+typedef struct {
+    asx_status ret;
+    int finalize_first;
+    int panic_first;
+} ack_then_return_cfg;
+
+static asx_status poll_ack_then_return(void *data, asx_task_id self) {
+    const ack_then_return_cfg *cfg = (const ack_then_return_cfg *)data;
+    asx_checkpoint_result cr;
+    if (asx_checkpoint(self, &cr) != ASX_OK || !cr.cancelled) return ASX_E_PENDING;
+    if (cfg->finalize_first) {
+        asx_status st = asx_task_finalize(self);
+        if (st != ASX_OK) return st;
+    }
+    if (cfg->panic_first) {
+        asx_status st = asx_task_panic(self, "panic during cleanup");
+        if (st != ASX_OK) return st;
+    }
+    return cfg->ret;
+}
+
+/* Runs one task to completion through an acknowledged cancel, and leaves
+ * its post-cancel task transitions in `seen` (count in *out_n). */
+static asx_status run_acknowledged_cancel(const ack_then_return_cfg *cfg, asx_task_id *out_tid,
+                                          uint64_t *seen, uint32_t cap, uint32_t *out_n) {
+    asx_region_id rid;
+    asx_budget budget;
+    asx_status st;
+    uint32_t mark;
+
+    asx_runtime_reset();
+    st = asx_region_open(&rid);
+    if (st != ASX_OK) return st;
+    st = asx_task_spawn(rid, poll_ack_then_return, (void *)cfg, out_tid);
+    if (st != ASX_OK) return st;
+    budget = asx_budget_from_polls(1);
+    SCHED_RUN_IGNORE(rid, &budget); /* Created -> Running; the poll is pending */
+    st = asx_task_cancel(*out_tid, ASX_CANCEL_USER);
+    if (st != ASX_OK) return st;
+    mark = asx_trace_event_count();
+    budget = asx_budget_from_polls(10);
+    SCHED_RUN_IGNORE(rid, &budget);
+    *out_n = task_transitions_since(mark, *out_tid, seen, cap);
+    return ASX_OK;
+}
+
+TEST(natural_return_after_acknowledge_completes_through_finalizing) {
+    ack_then_return_cfg cfg;
+    asx_task_id tid;
+    asx_task_state state;
+    asx_cancel_phase phase;
+    asx_outcome out;
+    uint64_t seen[8];
+    uint32_t n = 0;
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.ret = ASX_OK;
+    ASSERT_EQ(run_acknowledged_cancel(&cfg, &tid, seen, 8u, &n), ASX_OK);
+
+    ASSERT_EQ(n, (uint32_t)3u);
+    ASSERT_EQ(seen[0], TRANSITION_AUX(ASX_TASK_CANCEL_REQUESTED, ASX_TASK_CANCELLING));
+    ASSERT_EQ(seen[1], TRANSITION_AUX(ASX_TASK_CANCELLING, ASX_TASK_FINALIZING));
+    ASSERT_EQ(seen[2], TRANSITION_AUX(ASX_TASK_FINALIZING, ASX_TASK_COMPLETED));
+    ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
+    ASSERT_EQ((int)state, (int)ASX_TASK_COMPLETED);
+    ASSERT_EQ(asx_task_get_cancel_phase(tid, &phase), ASX_OK);
+    ASSERT_EQ((int)phase, (int)ASX_CANCEL_PHASE_COMPLETED);
+    ASSERT_EQ(asx_task_get_outcome(tid, &out), ASX_OK);
+    ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_CANCELLED);
+}
+
+TEST(error_return_after_acknowledge_completes_cancelled_through_finalizing) {
+    /* Rust's task wrapper reports Ok(()) whatever the body returned, so an
+     * acknowledged cancel's task finalizes whichever way the body ends
+     * (lab/runtime.rs:4918 "create_task wraps user futures to always
+     * return Outcome::Ok(())"); the C poll's error is how the task
+     * acknowledged, not a fault. */
+    ack_then_return_cfg cfg;
+    asx_task_id tid;
+    asx_outcome out;
+    uint64_t seen[8];
+    uint32_t n = 0;
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.ret = ASX_E_CANCELLED;
+    ASSERT_EQ(run_acknowledged_cancel(&cfg, &tid, seen, 8u, &n), ASX_OK);
+
+    ASSERT_EQ(n, (uint32_t)3u);
+    ASSERT_EQ(seen[0], TRANSITION_AUX(ASX_TASK_CANCEL_REQUESTED, ASX_TASK_CANCELLING));
+    ASSERT_EQ(seen[1], TRANSITION_AUX(ASX_TASK_CANCELLING, ASX_TASK_FINALIZING));
+    ASSERT_EQ(seen[2], TRANSITION_AUX(ASX_TASK_FINALIZING, ASX_TASK_COMPLETED));
+    ASSERT_EQ(asx_task_get_outcome(tid, &out), ASX_OK);
+    ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_CANCELLED);
+}
+
+TEST(finalizing_is_entered_once_when_the_task_finalizes_itself) {
+    /* The task calls asx_task_finalize() before it returns: the completion
+     * adds no second Cancelling -> Finalizing step (Rust's cleanup_done
+     * is a no-op outside Cancelling, task.rs:1378-1400). */
+    ack_then_return_cfg cfg;
+    asx_task_id tid;
+    asx_outcome out;
+    uint64_t seen[8];
+    uint32_t n = 0;
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.ret = ASX_OK;
+    cfg.finalize_first = 1;
+    ASSERT_EQ(run_acknowledged_cancel(&cfg, &tid, seen, 8u, &n), ASX_OK);
+
+    ASSERT_EQ(n, (uint32_t)3u);
+    ASSERT_EQ(seen[0], TRANSITION_AUX(ASX_TASK_CANCEL_REQUESTED, ASX_TASK_CANCELLING));
+    ASSERT_EQ(seen[1], TRANSITION_AUX(ASX_TASK_CANCELLING, ASX_TASK_FINALIZING));
+    ASSERT_EQ(seen[2], TRANSITION_AUX(ASX_TASK_FINALIZING, ASX_TASK_COMPLETED));
+    ASSERT_EQ(asx_task_get_outcome(tid, &out), ASX_OK);
+    ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_CANCELLED);
+}
+
+TEST(panic_during_cleanup_completes_straight_from_cancelling) {
+    /* A panic is Outcome::Panicked at the poll boundary and ends the task
+     * with record.complete(), a direct Cancelling -> Completed that the
+     * transition table allows for an error or panic during cleanup
+     * (record/task.rs:160-161, :175; lab/runtime.rs:4899). It never
+     * finalizes, and it dominates the cancel in the outcome. */
+    ack_then_return_cfg cfg;
+    asx_task_id tid;
+    asx_outcome out;
+    uint64_t seen[8];
+    uint32_t n = 0;
+
+    memset(&cfg, 0, sizeof cfg);
+    cfg.ret = ASX_OK;
+    cfg.panic_first = 1;
+    ASSERT_EQ(run_acknowledged_cancel(&cfg, &tid, seen, 8u, &n), ASX_OK);
+
+    ASSERT_EQ(n, (uint32_t)2u);
+    ASSERT_EQ(seen[0], TRANSITION_AUX(ASX_TASK_CANCEL_REQUESTED, ASX_TASK_CANCELLING));
+    ASSERT_EQ(seen[1], TRANSITION_AUX(ASX_TASK_CANCELLING, ASX_TASK_COMPLETED));
+    ASSERT_EQ(asx_task_get_outcome(tid, &out), ASX_OK);
+    ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_PANICKED);
+}
+
+/* -------------------------------------------------------------------
  * Test: cleanup budget exhaustion forces task completion (opt-in hard
  * bound only; Rust never force-completes)
  * ------------------------------------------------------------------- */
@@ -2100,6 +2260,10 @@ int main(void) {
     RUN_TEST(cancel_propagation_cancels_all_tasks_in_region);
     RUN_TEST(cancel_propagation_skips_completed_tasks);
     RUN_TEST(cancelled_task_completion_gets_cancelled_outcome);
+    RUN_TEST(natural_return_after_acknowledge_completes_through_finalizing);
+    RUN_TEST(error_return_after_acknowledge_completes_cancelled_through_finalizing);
+    RUN_TEST(finalizing_is_entered_once_when_the_task_finalizes_itself);
+    RUN_TEST(panic_during_cleanup_completes_straight_from_cancelling);
     RUN_TEST(cleanup_budget_exhaustion_forces_completion);
     RUN_TEST(cancel_forced_event_emitted);
     RUN_TEST(cancel_phase_query_tracks_progression);

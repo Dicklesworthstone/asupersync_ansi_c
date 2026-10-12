@@ -848,3 +848,27 @@ asx_status asx_task_get_cancel_phase(asx_task_id id, asx_cancel_phase *out) {
     *out = t->cancel_phase;
     return ASX_OK;
 }
+
+/* -------------------------------------------------------------------
+ * Completion of a cancelled task
+ * ------------------------------------------------------------------- */
+
+/* An acknowledged cancel's task ends Cancelling -> Finalizing ->
+ * Completed(Cancelled): Rust's cleanup_done then finalize_done, in the
+ * step that sees the task return (lab/runtime.rs:4862-4888,
+ * runtime/scheduler/worker.rs:686-696, three_lane.rs:9320-9326). The walk
+ * follows the record's state, not the result the join reports: a spawned
+ * child that keeps its value (classify_spawn_completion) still finalizes.
+ * A panic ends through record.complete(), which Cancelling allows
+ * directly; a task that finalized itself, or never acknowledged, is not
+ * Cancelling and goes straight on. */
+asx_status asx_task_complete_state_internal(asx_task_slot *t, asx_task_id tid,
+                                            asx_task_state *out_from) {
+    asx_status st;
+    if (!t->panicked && t->state == ASX_TASK_CANCELLING) {
+        st = asx_task_finalize(tid);
+        if (st != ASX_OK) return st;
+    }
+    *out_from = t->state;
+    return asx_task_set_state_internal(t, tid, ASX_TASK_COMPLETED);
+}

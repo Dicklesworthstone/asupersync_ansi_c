@@ -1037,6 +1037,8 @@ The cancellation state machine progresses through four phases:
 Running → CancelRequested → Cancelling → Finalizing → Completed
 ```
 
+A task that acknowledges its cancel and then returns finishes through `Finalizing`: the scheduler takes it Cancelling → Finalizing → Completed in the step that sees the return, as Rust's `cleanup_done` then `finalize_done` do, and the runtime trace records each transition. A task that panics completes straight from Cancelling. Canonical vocabulary v2 has no task-state event, so a Rust-captured fixture sees only a task's end state; `tests/unit/runtime/test_cancellation.c` asserts the traced transitions (`natural_return_after_acknowledge_completes_through_finalizing` and its three siblings). The parallel scheduler (`src/runtime/parallel.c`) still completes such a task straight from Cancelling.
+
 Each cancel carries an **origin attribution chain** (source region, source task, timestamp, message) so propagation can be traced across cancel waves. The chain is bounded to prevent unbounded allocation.
 
 Cancelling a region (`asx_region_cancel` with a reason, `asx_cancel_propagate` with a kind) reaches its whole subtree: the root's tasks get the requested reason, descendants get `PARENT`. Draining (`asx_region_drain`) closes the subtree parent-first, cancels with `PARENT` the tasks not cancelled yet, runs it to completion, then finalizes it deepest-first; to drain with a reason, as Rust's region close command does, call `asx_region_cancel` first. A parked task is woken by its cancel.

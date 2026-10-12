@@ -738,4 +738,10 @@ void asx_runtime_object_reset_internal(void);
 /* Drop broadcast credits even when their ledger registration was refused. */
 void asx_broadcast_task_finished_internal(asx_task_id task);
 
+/* Write COMPLETED for a task whose poll ended (cancellation.c): a task that
+ * acknowledged a cancel first goes Cancelling -> Finalizing, as Rust's lab
+ * does; *out_from is the state it completes from. */
+ASX_MUST_USE asx_status asx_task_complete_state_internal(asx_task_slot *t, asx_task_id tid,
+                                                         asx_task_state *out_from);
+
 #endif /* ASX_RUNTIME_INTERNAL_H */
