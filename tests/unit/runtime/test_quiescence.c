@@ -402,6 +402,277 @@ TEST(defer_sync_refused_once_the_region_is_closing) {
 }
 
 /* -------------------------------------------------------------------
+ * asx_region_defer_async: Rust's Scope::defer_async (bd-9kll.3.24)
+ * ------------------------------------------------------------------- */
+
+typedef struct {
+    int id;
+    int polls_to_finish; /* PENDING until this many polls, then complete */
+    int polls;
+    asx_task_id task;
+    uint32_t mask_depth; /* the mask depth its first poll saw */
+    asx_task_state state;
+    asx_status ordinary_spawn;
+    asx_status cleanup_spawn;
+} async_fin;
+
+static int g_async_events[16];
+static int g_async_event_n;
+
+static void async_event(int e) {
+    if (g_async_event_n < 16) g_async_events[g_async_event_n++] = e;
+}
+
+/* Event id*10 on its first poll, id*10+1 on its last. */
+static asx_status async_fin_poll(void *ud, asx_task_id self) {
+    async_fin *f = (async_fin *)ud;
+    if (f->polls == 0) {
+        asx_status st = asx_task_mask_depth(self, &f->mask_depth);
+        (void)st;
+        f->task = self;
+        async_event(f->id * 10);
+    }
+    f->polls++;
+    if (f->polls < f->polls_to_finish) return ASX_E_PENDING;
+    async_event(f->id * 10 + 1);
+    return ASX_OK;
+}
+
+static void async_sync_finalizer(void *ud) { async_event(*(int *)ud); }
+
+/* A finalizer that tries to spawn work into its own FINALIZING region. */
+static asx_status async_fin_spawner_poll(void *ud, asx_task_id self) {
+    async_fin *f = (async_fin *)ud;
+    asx_task_id child = ASX_INVALID_ID;
+    asx_region_id region;
+    asx_status st = asx_task_get_region(self, &region);
+    if (st != ASX_OK) return st;
+    f->ordinary_spawn = asx_task_spawn(region, poll_complete, NULL, &child);
+    f->cleanup_spawn = asx_task_spawn_cleanup(region, poll_complete, NULL, &child);
+    f->polls++;
+    return ASX_OK;
+}
+
+/* A runtime whose config carries the finalizer budget and escalation. */
+static asx_status init_with_finalizer_budget(uint32_t polls, asx_finalizer_escalation esc) {
+    static asx_runtime rt;
+    asx_runtime_config cfg;
+    asx_runtime_hooks hooks;
+    asx_status st;
+    if (asx_runtime_is_initialized(&rt)) asx_runtime_shutdown(&rt);
+    asx_runtime_config_init(&cfg);
+    cfg.finalizer_poll_budget = polls;
+    cfg.finalizer_escalation = esc;
+    st = asx_runtime_hooks_init(&hooks);
+    if (st == ASX_OK) st = asx_runtime_init(&rt, &cfg, &hooks);
+    return st;
+}
+
+TEST(defer_async_finalizer_runs_as_a_masked_cleanup_task_before_close) {
+    asx_region_id rid;
+    asx_region_state rs;
+    asx_budget budget;
+    async_fin f;
+    asx_outcome out;
+
+    asx_runtime_reset();
+    memset(&f, 0, sizeof(f));
+    f.id = 1;
+    f.polls_to_finish = 3;
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_OK);
+    ASSERT_EQ(f.polls, 0); /* nothing runs before the region finalizes */
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_region_get_state(rid, &rs), ASX_OK);
+    ASSERT_EQ(rs, ASX_REGION_CLOSED);
+    ASSERT_EQ(f.polls, 3);
+    ASSERT_EQ(f.mask_depth, 1u);
+    ASSERT_NE(f.task, ASX_INVALID_ID);
+    ASSERT_EQ(asx_task_get_state(f.task, &f.state), ASX_OK);
+    ASSERT_EQ(f.state, ASX_TASK_COMPLETED);
+    ASSERT_EQ(asx_task_get_outcome(f.task, &out), ASX_OK);
+    ASSERT_EQ(out.severity, ASX_OUTCOME_OK);
+    ASSERT_EQ(asx_region_get_close_outcome(rid, &out), ASX_OK);
+    ASSERT_EQ(out.severity, ASX_OUTCOME_OK);
+}
+
+TEST(defer_async_finalizers_run_one_at_a_time_in_lifo_order_with_sync_ones) {
+    asx_region_id rid;
+    asx_budget budget;
+    async_fin first;
+    async_fin third;
+    int sync_mark = 2;
+
+    asx_runtime_reset();
+    g_async_event_n = 0;
+    memset(&first, 0, sizeof(first));
+    memset(&third, 0, sizeof(third));
+    first.id = 1;
+    first.polls_to_finish = 2;
+    third.id = 3;
+    third.polls_to_finish = 2;
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &first), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(rid, async_sync_finalizer, &sync_mark), ASX_OK);
+    ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &third), ASX_OK);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    /* LIFO: the last registered runs first and finishes before the next one
+     * starts (the barrier); the sync one runs between the two. */
+    ASSERT_EQ(g_async_event_n, 5);
+    ASSERT_EQ(g_async_events[0], 30);
+    ASSERT_EQ(g_async_events[1], 31);
+    ASSERT_EQ(g_async_events[2], 2);
+    ASSERT_EQ(g_async_events[3], 10);
+    ASSERT_EQ(g_async_events[4], 11);
+    ASSERT_EQ(asx_cleanup_pending(&g_regions[asx_handle_slot(rid)].cleanup), 0u);
+}
+
+TEST(defer_async_region_finalizing_refuses_ordinary_spawn_but_takes_cleanup) {
+    asx_region_id rid;
+    asx_region_state rs;
+    asx_budget budget;
+    async_fin f;
+
+    asx_runtime_reset();
+    memset(&f, 0, sizeof(f));
+    f.ordinary_spawn = ASX_OK;
+    f.cleanup_spawn = ASX_E_INVALID_STATE;
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_async(rid, async_fin_spawner_poll, &f), ASX_OK);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    ASSERT_EQ(f.ordinary_spawn, ASX_E_REGION_CLOSED);
+    ASSERT_EQ(f.cleanup_spawn, ASX_OK);
+    /* The close waited for the cleanup task the finalizer spawned. */
+    ASSERT_EQ(asx_region_get_state(rid, &rs), ASX_OK);
+    ASSERT_EQ(rs, ASX_REGION_CLOSED);
+}
+
+TEST(defer_async_runs_after_the_region_tasks_complete) {
+    asx_region_id rid;
+    asx_task_id tid;
+    asx_budget budget;
+    async_fin f;
+    asx_task_state ts;
+
+    asx_runtime_reset();
+    memset(&f, 0, sizeof(f));
+    f.id = 1;
+    f.polls_to_finish = 1;
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_checkpoint_then_complete, NULL, &tid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_OK);
+    budget = asx_budget_from_polls(32);
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_get_state(tid, &ts), ASX_OK);
+    ASSERT_EQ(ts, ASX_TASK_COMPLETED);
+    ASSERT_EQ(f.polls, 1);
+}
+
+TEST(defer_async_wait_closed_drives_a_region_with_nothing_but_finalizers) {
+    asx_region_id rid;
+    asx_region_state rs;
+    asx_budget budget;
+    async_fin f;
+
+    asx_runtime_reset();
+    memset(&f, 0, sizeof(f));
+    f.id = 1;
+    f.polls_to_finish = 2;
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_OK);
+    ASSERT_EQ(asx_region_close(rid), ASX_OK);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_wait_closed(rid, &budget), ASX_OK);
+    ASSERT_EQ(asx_region_get_state(rid, &rs), ASX_OK);
+    ASSERT_EQ(rs, ASX_REGION_CLOSED);
+    ASSERT_EQ(f.polls, 2);
+}
+
+TEST(defer_async_default_escalation_lets_a_finalizer_run_past_its_poll_budget) {
+    asx_region_id rid;
+    asx_budget budget;
+    async_fin f;
+    asx_outcome out;
+    asx_finalizer_escalation modes[2];
+    uint32_t m;
+
+    modes[0] = ASX_FINALIZER_BOUNDED_LOG;
+    modes[1] = ASX_FINALIZER_SOFT;
+    for (m = 0; m < 2u; m++) {
+        ASSERT_EQ(init_with_finalizer_budget(3u, modes[m]), ASX_OK);
+        memset(&f, 0, sizeof(f));
+        f.id = 1;
+        f.polls_to_finish = 6;
+        ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+        ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_OK);
+        budget = asx_budget_infinite();
+        ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+        /* Rust's finalizer budget is advisory: it runs to completion, Ok. */
+        ASSERT_EQ(f.polls, 6);
+        ASSERT_EQ(asx_task_get_outcome(f.task, &out), ASX_OK);
+        ASSERT_EQ(out.severity, ASX_OUTCOME_OK);
+        ASSERT_EQ(asx_region_get_close_outcome(rid, &out), ASX_OK);
+        ASSERT_EQ(out.severity, ASX_OUTCOME_OK);
+    }
+}
+
+TEST(defer_async_bounded_panic_retires_the_finalizer_panicked_at_its_poll_budget) {
+    asx_region_id rid;
+    asx_region_state rs;
+    asx_budget budget;
+    async_fin f;
+    asx_outcome out;
+
+    ASSERT_EQ(init_with_finalizer_budget(3u, ASX_FINALIZER_BOUNDED_PANIC), ASX_OK);
+    memset(&f, 0, sizeof(f));
+    f.id = 1;
+    f.polls_to_finish = 10;
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_OK);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    /* Three polls were its budget; the fourth never reached the finalizer. */
+    ASSERT_EQ(f.polls, 3);
+    ASSERT_EQ(asx_region_get_state(rid, &rs), ASX_OK);
+    ASSERT_EQ(rs, ASX_REGION_CLOSED);
+    ASSERT_EQ(asx_task_get_outcome(f.task, &out), ASX_OK);
+    ASSERT_EQ(out.severity, ASX_OUTCOME_PANICKED);
+    ASSERT_EQ(asx_region_get_close_outcome(rid, &out), ASX_OK);
+    ASSERT_EQ(out.severity, ASX_OUTCOME_PANICKED);
+}
+
+TEST(defer_async_argument_errors_and_registration_states) {
+    asx_region_id rid;
+    asx_budget budget;
+    async_fin f;
+    uint32_t i;
+
+    asx_runtime_reset();
+    memset(&f, 0, sizeof(f));
+    f.polls_to_finish = 1;
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_async(rid, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_NE(asx_region_defer_async(ASX_INVALID_ID, async_fin_poll, &f), ASX_OK);
+    for (i = 0; i < ASX_CLEANUP_STACK_CAPACITY; i++) {
+        ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_OK);
+    }
+    ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_region_close(rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_E_REGION_CLOSED);
+    budget = asx_budget_infinite();
+    ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
+    ASSERT_EQ(f.polls, (int)ASX_CLEANUP_STACK_CAPACITY);
+    ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_E_REGION_CLOSED);
+
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_poison(rid), ASX_OK);
+    ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_E_REGION_POISONED);
+}
+
+/* -------------------------------------------------------------------
  * asx_region_get_close_outcome: Rust's region_close_outcome (bd-9kll.3.4)
  * ------------------------------------------------------------------- */
 
@@ -2519,6 +2790,14 @@ int main(void) {
     RUN_TEST(defer_sync_runs_after_the_region_tasks_complete);
     RUN_TEST(defer_sync_refused_once_the_region_is_closing);
     RUN_TEST(defer_sync_argument_errors_and_capacity);
+    RUN_TEST(defer_async_finalizer_runs_as_a_masked_cleanup_task_before_close);
+    RUN_TEST(defer_async_finalizers_run_one_at_a_time_in_lifo_order_with_sync_ones);
+    RUN_TEST(defer_async_region_finalizing_refuses_ordinary_spawn_but_takes_cleanup);
+    RUN_TEST(defer_async_runs_after_the_region_tasks_complete);
+    RUN_TEST(defer_async_wait_closed_drives_a_region_with_nothing_but_finalizers);
+    RUN_TEST(defer_async_default_escalation_lets_a_finalizer_run_past_its_poll_budget);
+    RUN_TEST(defer_async_bounded_panic_retires_the_finalizer_panicked_at_its_poll_budget);
+    RUN_TEST(defer_async_argument_errors_and_registration_states);
     RUN_TEST(close_outcome_joins_the_task_outcomes);
     RUN_TEST(close_outcome_of_a_cancelled_empty_region_is_cancelled);
     RUN_TEST(close_outcome_of_a_cancelled_region_keeps_its_task_outcomes);

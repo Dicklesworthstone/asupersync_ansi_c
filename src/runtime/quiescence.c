@@ -244,6 +244,7 @@ static asx_status asx_region_finalize_one(asx_region_id id, asx_region_slot *r) 
         }
         st = asx_region_set_state(id, r, ASX_REGION_FINALIZING);
         if (st != ASX_OK) return st;
+        asx_region_finalizing_enter_internal(id);
     }
 
     if (r->state == ASX_REGION_FINALIZING) {
@@ -251,7 +252,12 @@ static asx_status asx_region_finalize_one(asx_region_id id, asx_region_slot *r) 
          * region. Its active drain owns finalization until every callback
          * has returned, even when the remaining stack is already empty. */
         if (r->cleanup.draining) return ASX_E_PENDING;
+        /* The running async finalizer is the LIFO barrier: nothing beneath
+         * it runs before it retires. An async entry on top ends the drain;
+         * it runs as a task the next lab step spawns (the admission). */
+        if (r->finalizer.active) return ASX_E_QUIESCENCE_TASKS_LIVE;
         asx_cleanup_drain(&r->cleanup);
+        if (asx_cleanup_async_pending(&r->cleanup) > 0u) return ASX_E_PENDING;
         if (r->task_count > 0u) return ASX_E_QUIESCENCE_TASKS_LIVE;
 
         /* Audit only after finalizers and their cleanup tasks have finished,
@@ -261,6 +267,7 @@ static asx_status asx_region_finalize_one(asx_region_id id, asx_region_slot *r) 
         if (st != ASX_OK) return st;
         st = asx_region_set_state(id, r, ASX_REGION_CLOSED);
         if (st != ASX_OK) return st;
+        asx_region_finalizing_leave_internal(id);
         asx_region_unlink_from_parent(id, r);
         asx_trace_emit(ASX_TRACE_REGION_CLOSED, id, 0);
         asx_region_wake_close_waiters_internal(id);
@@ -295,10 +302,15 @@ void asx_region_advance_internal(asx_region_id id) {
     }
 }
 
-/* Shared execution/finalization machinery. The caller has already chosen
- * whether to cancel; retries here never request or strengthen cancellation. */
-static asx_status asx_region_run_to_closed(asx_region_id id, asx_budget *budget,
-                                           const asx_region_id *drain_regions, uint32_t n) {
+/* One pass of the shared execution/finalization machinery. The caller has
+ * already chosen whether to cancel; retries here never request or strengthen
+ * cancellation. force_run runs the scheduler even with no live task, for the
+ * async finalizers that finalization found. A region whose async finalizer
+ * is outstanding is no error when `retry` is given: *retry is set and the
+ * caller makes another pass, which runs the finalizers. */
+static asx_status asx_region_close_pass(asx_region_id id, asx_budget *budget,
+                                        const asx_region_id *drain_regions, uint32_t n,
+                                        int force_run, int *retry) {
     asx_status st;
     uint32_t i;
     uint32_t live;
@@ -310,7 +322,7 @@ static asx_status asx_region_run_to_closed(asx_region_id id, asx_budget *budget,
         asx_region_slot *rs;
         if (asx_region_slot_lookup(drain_regions[i], &rs) == ASX_OK) live += rs->task_count;
     }
-    if (live > 0u) {
+    if (live > 0u || force_run) {
         st = asx_scheduler_run(id, budget);
         if (st != ASX_OK) return st;
         for (i = 0; i < n; i++) {
@@ -329,10 +341,31 @@ static asx_status asx_region_run_to_closed(asx_region_id id, asx_budget *budget,
         asx_region_slot *rs;
         if (asx_region_slot_lookup(drain_regions[i - 1u], &rs) != ASX_OK) continue;
         st = asx_region_finalize_one(drain_regions[i - 1u], rs);
-        if (st != ASX_OK) return st;
+        if (st != ASX_OK) {
+            /* An ancestor of a region with a finalizer outstanding waits
+             * for it in DRAINING (PENDING): it too is for the next pass. */
+            if (retry != NULL && (asx_region_finalizer_outstanding_internal(rs) ||
+                                  (*retry && st == ASX_E_PENDING))) {
+                *retry = 1;
+                continue;
+            }
+            return st;
+        }
     }
 
     return ASX_OK;
+}
+
+/* Shared execution/finalization machinery: a pass, and a second one when
+ * finalization left async finalizers to run. The scheduler spawns and runs
+ * every finalizer of the subtree in its own run, so two passes always
+ * suffice (a finalizer cannot register another: its region is not Open). */
+static asx_status asx_region_run_to_closed(asx_region_id id, asx_budget *budget,
+                                           const asx_region_id *drain_regions, uint32_t n) {
+    int retry = 0;
+    asx_status st = asx_region_close_pass(id, budget, drain_regions, n, 0, &retry);
+    if (st != ASX_OK || !retry) return st;
+    return asx_region_close_pass(id, budget, drain_regions, n, 1, NULL);
 }
 
 asx_status asx_region_wait_closed(asx_region_id id, asx_budget *budget) {
@@ -431,4 +464,179 @@ asx_status asx_region_get_close_outcome(asx_region_id region, asx_outcome *out) 
         *out = asx_outcome_make(ASX_OUTCOME_OK);
     }
     return ASX_OK;
+}
+
+/* -------------------------------------------------------------------
+ * Async finalizers: Rust's Scope::defer_async
+ * (RuntimeState::register_async_finalizer, runtime/state.rs:9101) and the
+ * lab's schedule_async_finalizers (drain_ready_async_finalizers,
+ * state.rs:8540).
+ *
+ * An async finalizer is an async entry of the region's cleanup stack. Once
+ * the region is FINALIZING, finalization drains the sync entries above it
+ * and stops there. The next lab step then spawns it as the region's cleanup
+ * task (asx_region_admit_finalizers_internal): masked, with the finalizer
+ * budget, and at most one per region (region->finalizer.active, Rust's
+ * active_async_finalizers barrier). When it completes, finalization goes on
+ * with the entries beneath it, and the region closes once the stack is
+ * empty. Unlike Rust, which also promotes its sync finalizers to tasks, a
+ * sync finalizer runs inline in the drain (asx_region_defer_sync).
+ * ------------------------------------------------------------------- */
+
+/* Rust's finalizing_regions (state.rs:2101): the regions in FINALIZING, as
+ * region slots, in the order they entered it (push, :10241); a close
+ * swap-removes its entry (:10340). */
+static uint32_t g_finalizing[ASX_MAX_REGIONS];
+static uint32_t g_finalizing_count;
+
+/* The finalizer budget and escalation of asx_runtime_config. The defaults
+ * are Rust's constants (FINALIZER_POLL_BUDGET and FINALIZER_TIME_BUDGET_NANOS,
+ * record/finalizer.rs:42-45). */
+static uint32_t g_finalizer_poll_budget = 100u;
+static uint64_t g_finalizer_time_budget_ns = 5000000000u;
+static asx_finalizer_escalation g_finalizer_escalation = ASX_FINALIZER_BOUNDED_LOG;
+
+void asx_region_finalizers_reset_internal(void) {
+    g_finalizing_count = 0u;
+    g_finalizer_poll_budget = 100u;
+    g_finalizer_time_budget_ns = 5000000000u;
+    g_finalizer_escalation = ASX_FINALIZER_BOUNDED_LOG;
+}
+
+void asx_region_finalizer_config_set_internal(uint32_t poll_budget, uint64_t time_budget_ns,
+                                              asx_finalizer_escalation escalation) {
+    g_finalizer_poll_budget = poll_budget;
+    g_finalizer_time_budget_ns = time_budget_ns;
+    g_finalizer_escalation = escalation;
+}
+
+void asx_region_finalizing_enter_internal(asx_region_id id) {
+    if (g_finalizing_count < ASX_MAX_REGIONS) {
+        g_finalizing[g_finalizing_count++] = (uint32_t)asx_handle_slot(id);
+    }
+}
+
+void asx_region_finalizing_leave_internal(asx_region_id id) {
+    uint32_t i;
+    for (i = 0; i < g_finalizing_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_finalizing_count <= ASX_MAX_REGIONS");
+        if (g_finalizing[i] != (uint32_t)asx_handle_slot(id)) continue;
+        g_finalizing[i] = g_finalizing[--g_finalizing_count];
+        return;
+    }
+}
+
+int asx_region_finalizer_outstanding_internal(const asx_region_slot *r) {
+    return r->finalizer.active || asx_cleanup_async_pending(&r->cleanup) > 0u;
+}
+
+int asx_region_finalizers_pending_internal(void) {
+    uint32_t i;
+    for (i = 0; i < g_finalizing_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_finalizing_count <= ASX_MAX_REGIONS");
+        const asx_region_slot *r = &g_regions[g_finalizing[i]];
+        if (r->alive && !r->poisoned && r->state == ASX_REGION_FINALIZING &&
+            asx_region_finalizer_outstanding_internal(r)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void asx_region_finalizer_task_done_internal(asx_region_slot *r, const asx_task_slot *task) {
+    if (r->finalizer.active && r->finalizer.task_slot == (uint32_t)(task - g_tasks)) {
+        r->finalizer.active = 0;
+    }
+}
+
+/* The finalizer task's poll function: the finalizer's own, counted against
+ * its budget. user_data is the region slot, which outlives the task: the
+ * region cannot close before its finalizer task completes.
+ *
+ * The budget is advisory in Rust: the task's Cx sees it spent, but the
+ * finalizer is masked and runs on (its region shutdown ceiling is the only
+ * enforcement, BudgetedFinalizer, record/finalizer.rs:423-640, set by a
+ * close with a budget that this runtime has no counterpart of). The
+ * escalation is read the same way: ASX_FINALIZER_BOUNDED_LOG notes the
+ * first poll past the budget in the log, SOFT stays silent, and the opt-in
+ * BOUNDED_PANIC completes the finalizer PANICKED at that poll instead. */
+static asx_status asx_finalizer_task_poll(void *user_data, asx_task_id self) {
+    asx_region_slot *r = (asx_region_slot *)user_data;
+    asx_region_finalizer *f = &r->finalizer;
+    int spent = f->polls >= f->poll_budget || asx_cancel_now_internal() >= f->deadline;
+
+    if (spent && !f->exhausted) {
+        f->exhausted = 1;
+        if (g_finalizer_escalation != ASX_FINALIZER_SOFT) {
+            (void)asx_runtime_log_write(ASX_LOG_WARN, "async finalizer ran past its budget");
+        }
+    }
+    if (spent && g_finalizer_escalation == ASX_FINALIZER_BOUNDED_PANIC) {
+        return asx_task_panic(self, "async finalizer exceeded its budget");
+    }
+    f->polls++;
+    return f->poll(f->data, self);
+}
+
+uint32_t asx_region_admit_finalizers_internal(void) {
+    uint32_t admitted = 0u;
+    uint32_t i;
+
+    for (i = 0; i < g_finalizing_count; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_finalizing_count <= ASX_MAX_REGIONS");
+        asx_region_slot *r = &g_regions[g_finalizing[i]];
+        asx_cleanup_poll_fn poll = NULL;
+        void *data = NULL;
+        asx_budget budget;
+        asx_task_id tid;
+        asx_status st;
+        asx_time now;
+
+        if (!r->alive || r->poisoned || r->state != ASX_REGION_FINALIZING) continue;
+        if (r->finalizer.active || r->cleanup.draining) continue;
+        if (asx_cleanup_take_async(&r->cleanup, &poll, &data) != ASX_OK) continue;
+
+        /* finalizer_budget().with_deadline(now + FINALIZER_TIME_BUDGET_NANOS)
+         * (state.rs:8878-8881): the poll quota, priority 128, the deadline. */
+        now = asx_cancel_now_internal();
+        budget = asx_budget_from_polls(g_finalizer_poll_budget);
+        budget.deadline = g_finalizer_time_budget_ns > UINT64_MAX - now
+                              ? UINT64_MAX
+                              : now + g_finalizer_time_budget_ns;
+        r->finalizer.active = 1;
+        r->finalizer.poll = poll;
+        r->finalizer.data = data;
+        r->finalizer.polls = 0u;
+        r->finalizer.poll_budget = g_finalizer_poll_budget;
+        r->finalizer.deadline = budget.deadline;
+        r->finalizer.exhausted = 0;
+        st = asx_task_spawn_finalizer_internal(asx_region_handle_for_slot(g_finalizing[i]),
+                                               asx_finalizer_task_poll, r, &budget, &tid);
+        if (st != ASX_OK) {
+            /* Rust keeps the barrier and re-queues the finalizer when its
+             * task cannot be created (state.rs:8629-8645): it is spawned by
+             * a later step. It was just taken, so the stack has room. */
+            asx_cleanup_handle h;
+            r->finalizer.active = 0;
+            st = asx_cleanup_push_async(&r->cleanup, poll, data, &h);
+            (void)st;
+            continue;
+        }
+        r->finalizer.task_slot = (uint32_t)asx_handle_slot(tid);
+        admitted++;
+    }
+    return admitted;
+}
+
+asx_status asx_region_defer_async(asx_region_id region, asx_task_poll_fn poll_fn, void *user_data) {
+    asx_region_slot *r;
+    asx_cleanup_handle h;
+    asx_status st;
+
+    if (poll_fn == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_slot_lookup(region, &r);
+    if (st != ASX_OK) return st;
+    if (r->poisoned) return ASX_E_REGION_POISONED;
+    if (r->state != ASX_REGION_OPEN) return ASX_E_REGION_CLOSED;
+    return asx_cleanup_push_async(&r->cleanup, poll_fn, user_data, &h);
 }

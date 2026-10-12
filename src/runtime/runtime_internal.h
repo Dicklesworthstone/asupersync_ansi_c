@@ -42,6 +42,23 @@ typedef struct {
     uint8_t state;
 } asx_lab_entropy;
 
+/* A region's async finalizer in flight (Rust active_async_finalizers, the
+ * LIFO barrier of runtime/state.rs drain_ready_async_finalizers): the
+ * masked cleanup task running the finalizer popped off the cleanup stack.
+ * The next finalizer waits for it. The task's poll function is a trampoline
+ * over this record, which counts its polls against the finalizer budget
+ * (asx_runtime_config.finalizer_poll_budget / _time_budget_ns). */
+typedef struct {
+    int active;               /* 1 while the finalizer task is live */
+    uint32_t task_slot;       /* its slot, valid while active */
+    asx_cleanup_poll_fn poll; /* the finalizer's own poll function */
+    void *data;               /* its context */
+    uint32_t polls;           /* polls the finalizer has been given */
+    uint32_t poll_budget;     /* polls allowed; the config's, at admission */
+    asx_time deadline;        /* its absolute time budget, at admission */
+    int exhausted;            /* its budget was found spent (escalated once) */
+} asx_region_finalizer;
+
 typedef struct {
     asx_region_state state;
     asx_region_id parent_id;
@@ -84,6 +101,8 @@ typedef struct {
      * checks max_tasks against the admitted ones only, as Rust's mailbox
      * admission counts the region's live members. */
     uint32_t lab_pending_admissions;
+    /* The async finalizer running as this region's cleanup task, if any. */
+    asx_region_finalizer finalizer;
 } asx_region_slot;
 
 typedef struct {
@@ -148,6 +167,10 @@ typedef struct {
      * first poll; others are cancellation-dominant. */
     uint8_t spawned_in_poll;
     uint8_t cleanup_only; /* explicit cleanup admission, preserved through the lab mailbox */
+    /* A region's async finalizer task (asx_task_spawn_finalizer_internal):
+     * its outcome is what its poll returned, as Rust's finalizer future's
+     * Outcome is, whatever cancel or budget exhaustion it was masked from. */
+    uint8_t finalizer;
     uint8_t first_polled;
     uint8_t cancel_before_first_poll;
     /* Lab dispatch (lab_dispatch.c): scheduled on a lane; the priority of
@@ -770,5 +793,36 @@ void asx_broadcast_task_finished_internal(asx_task_id task);
  * does; *out_from is the state it completes from. */
 ASX_MUST_USE asx_status asx_task_complete_state_internal(asx_task_slot *t, asx_task_id tid,
                                                          asx_task_state *out_from);
+
+/* Async finalizers (quiescence.c). A region in FINALIZING runs the async
+ * entries of its cleanup stack one at a time, each as a masked cleanup task:
+ * Rust's schedule_async_finalizers, which the lab runs in every step after
+ * its timers and before its pick (lab/runtime.rs:4509-4513). Spawns the next
+ * finalizer of every FINALIZING region that has none running, in the order
+ * the regions entered FINALIZING; returns how many it spawned. */
+uint32_t asx_region_admit_finalizers_internal(void);
+/* Whether any FINALIZING region still has an async finalizer to run or
+ * running: the run is not quiescent while there is one. */
+int asx_region_finalizers_pending_internal(void);
+/* A region enters FINALIZING (finalizing_regions.push) or leaves it for
+ * CLOSED (swap_remove), by id. */
+void asx_region_finalizing_enter_internal(asx_region_id id);
+void asx_region_finalizing_leave_internal(asx_region_id id);
+/* Whether the region has an async finalizer running or still to run. */
+int asx_region_finalizer_outstanding_internal(const asx_region_slot *r);
+/* A task of the region completed: if it was the region's finalizer task,
+ * the barrier lifts. */
+void asx_region_finalizer_task_done_internal(asx_region_slot *r, const asx_task_slot *task);
+/* The finalizer budget and escalation (asx_runtime_config); set by init and
+ * reload, back to the defaults by asx_runtime_reset. */
+void asx_region_finalizer_config_set_internal(uint32_t poll_budget, uint64_t time_budget_ns,
+                                              asx_finalizer_escalation escalation);
+void asx_region_finalizers_reset_internal(void);
+/* Spawn a region's finalizer as its cleanup task (lifecycle.c): into a
+ * FINALIZING region, with `budget`, masked, at the budget's priority. */
+ASX_MUST_USE asx_status asx_task_spawn_finalizer_internal(asx_region_id region,
+                                                          asx_task_poll_fn poll_fn, void *user_data,
+                                                          const asx_budget *budget,
+                                                          asx_task_id *out_id);
 
 #endif /* ASX_RUNTIME_INTERNAL_H */

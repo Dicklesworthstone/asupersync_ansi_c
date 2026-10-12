@@ -339,11 +339,11 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->region_wait_prio = 0;
 }
 
-/* Rust classify_spawn_completion (task_handle.rs:173-202); see
- * runtime_internal.h. C reasons are always attributed. */
+/* Rust classify_spawn_completion (task_handle.rs:173-202); see runtime_internal.h.
+ * C reasons are always attributed; a finalizer task keeps what its poll returned. */
 int asx_task_cancel_dominates_internal(const asx_task_slot *t) {
     int acknowledged = t->state == ASX_TASK_CANCELLING || t->state == ASX_TASK_FINALIZING;
-    if (!t->cancel_pending) return 0;
+    if (!t->cancel_pending || t->finalizer) return 0;
     return !(t->spawned_in_poll && !t->cancel_before_first_poll && acknowledged);
 }
 
@@ -1220,10 +1220,9 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
     uint64_t lab_step = asx_lab_step_begin_internal();
 
     *out_dispatched = 0;
-    /* step_inner (LR:4481-4500): deferred cancel dispatches, spawn
-     * admissions, handle aborts, region commands, handle aborts again,
-     * deferred cancel dispatches again; reentrant cancellation left over
-     * gets the next step, before ready work. Then the step's draw. */
+    /* step_inner (LR:4481-4500): deferred cancel dispatches, spawn admissions, handle aborts,
+     * region commands, handle aborts again, deferred cancel dispatches again; reentrant
+     * cancellation left over gets the next step. Then the draw, timers, finalizer spawns. */
     asx_lab_drain_deferred_cancels();
     st = asx_lab_admit_pending();
     if (st != ASX_OK) return st;
@@ -1235,6 +1234,7 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
     r = asx_lab_rng_next();
     if (sched_timers_pending()) (void)timers_fire(sched_now());
     (void)sched_drain_wakers();
+    (void)asx_region_admit_finalizers_internal(); /* schedule_async_finalizers, LR:4513 */
     if (asx_lab_dispatch_overflowed()) return ASX_E_RESOURCE_EXHAUSTED;
     if (asx_lab_forced_active()) {
         /* A recorded schedule names the task (run_forced_schedule,
@@ -1307,7 +1307,7 @@ static asx_status sched_lab_run(asx_budget *budget, int advance_clock) {
             }
             continue;
         }
-        if (sched_live_tasks() == 0u) {
+        if (sched_live_tasks() == 0u && !asx_region_finalizers_pending_internal()) {
             sched_emit(ASX_SCHED_EVENT_QUIESCENT, ASX_INVALID_ID, step);
             asx_trace_emit(ASX_TRACE_SCHED_QUIESCENT, ASX_INVALID_ID, step);
             return ASX_OK;
@@ -1651,7 +1651,8 @@ static asx_status sched_run(asx_region_id region, asx_budget *budget, int advanc
             }
         }
 
-        /* No active tasks left — quiescent */
+        /* No active tasks left: quiescent, unless a finalizer was just spawned */
+        if (active == 0 && asx_region_admit_finalizers_internal() > 0u) continue;
         if (active == 0) {
             sched_emit(ASX_SCHED_EVENT_QUIESCENT, ASX_INVALID_ID, round);
             asx_trace_emit(ASX_TRACE_SCHED_QUIESCENT, ASX_INVALID_ID, round);

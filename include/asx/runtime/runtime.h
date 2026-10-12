@@ -1300,6 +1300,34 @@ typedef void (*asx_region_finalizer_fn)(void *user_data);
 ASX_API ASX_MUST_USE asx_status asx_region_defer_sync(asx_region_id region,
                                                       asx_region_finalizer_fn fn, void *user_data);
 
+/* Register an async finalizer for a region, as Rust's Scope::defer_async
+ * does (RuntimeState::register_async_finalizer, runtime/state.rs:9101).
+ * `poll_fn` is a task poll function: when the region finalizes, after its
+ * tasks and child regions are done and the finalizers registered later have
+ * retired, the runtime spawns it as the region's cleanup task and polls it
+ * (ASX_OK completes it, ASX_E_PENDING yields or parks it, as for any task)
+ * until it completes. Exactly one finalizer of a region runs at a time, in
+ * LIFO order, and the region closes only once all of them have.
+ *
+ * The task runs masked, so the region's cancellation never interrupts it,
+ * with the budget (asx_runtime_config.finalizer_poll_budget, priority 128
+ * and a deadline finalizer_time_budget_ns after it is spawned) and under
+ * the escalation the runtime config names. In the lab, it is spawned in the
+ * step that finds the region FINALIZING, after that step's timers and
+ * before its pick (Rust's schedule_async_finalizers, lab/runtime.rs:4513).
+ * A finalizer that runs out of budget keeps running (the budget is advisory,
+ * as in Rust) unless the escalation is ASX_FINALIZER_BOUNDED_PANIC, an
+ * opt-in with no Rust counterpart: the task then completes PANICKED.
+ * Registration is accepted only while the region is Open, as for
+ * asx_region_defer_sync, whose entries share the stack and the order.
+ * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if poll_fn is NULL, a lookup
+ * error for a bad handle, ASX_E_REGION_CLOSED once closing or closed,
+ * ASX_E_REGION_POISONED if poisoned, or ASX_E_RESOURCE_EXHAUSTED when the
+ * finalizer stack (capacity ASX_CLEANUP_STACK_CAPACITY) is full.
+ * Thread-safety: not thread-safe; single-threaded mode only. */
+ASX_API ASX_MUST_USE asx_status asx_region_defer_async(asx_region_id region,
+                                                       asx_task_poll_fn poll_fn, void *user_data);
+
 /* Read a region's close outcome, as Rust's
  * RuntimeState::region_close_outcome does (runtime/state.rs:3743): the
  * outcomes of the tasks that completed in it, joined (asx_outcome_join:

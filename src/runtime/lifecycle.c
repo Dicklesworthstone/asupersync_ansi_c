@@ -183,6 +183,7 @@ void asx_runtime_reset(void) {
     g_cleanup_hard_bound = 0;
     g_member_seq = 0;
     asx_cancel_chain_limits_reset_internal();
+    asx_region_finalizers_reset_internal();
     /* Reset ghost safety monitors */
     asx_ghost_reset();
     asx_scheduler_event_reset();
@@ -753,6 +754,7 @@ void asx_task_on_complete_internal(asx_task_slot *task, asx_region_slot *region)
                                     ? asx_outcome_join(&region->close_outcome, &task->outcome)
                                     : task->outcome;
         region->has_close_outcome = 1;
+        asx_region_finalizer_task_done_internal(region, task);
     }
     if (region != NULL && region->task_count > 0u) region->task_count--;
     if (task->detached) { asx_task_slot_release((uint32_t)(task - g_tasks)); }
@@ -941,6 +943,7 @@ static asx_status region_open_with_parent(asx_region_id parent, asx_region_id *o
     g_regions[idx].limits.max_obligations = ASX_REGION_UNLIMITED;
     memset(&g_regions[idx].lab_principal, 0, sizeof(g_regions[idx].lab_principal));
     g_regions[idx].lab_pending_admissions = 0;
+    memset(&g_regions[idx].finalizer, 0, sizeof(g_regions[idx].finalizer));
     g_regions[idx].capture_used = 0;
     g_regions[idx].has_close_outcome = 0;
     g_regions[idx].close_outcome = asx_outcome_make(ASX_OUTCOME_OK);
@@ -1318,8 +1321,13 @@ void asx_task_release_capture_internal(asx_task_slot *task) {
  * Task lifecycle
  * ------------------------------------------------------------------- */
 
+/* finalizer_budget non-NULL: the task is a region's async finalizer (Rust's
+ * cleanup task, create_task_infrastructure_in with cleanup_task set,
+ * runtime/state.rs:4235-4401): cleanup work with that budget, masked, and
+ * scheduled at the budget's priority without a deadline timer of its own. */
 static asx_status task_spawn_impl(asx_region_id region, asx_task_poll_fn poll_fn, void *user_data,
-                                  asx_task_id *out_id, int cleanup_only) {
+                                  asx_task_id *out_id, int cleanup_only,
+                                  const asx_budget *finalizer_budget) {
     asx_region_slot *r;
     asx_status st;
     uint32_t idx;
@@ -1363,12 +1371,15 @@ static asx_status task_spawn_impl(asx_region_id region, asx_task_poll_fn poll_fn
     g_tasks[idx].alive = 1;
     g_tasks[idx].detached = 0;
     g_tasks[idx].cleanup_only = cleanup_only ? 1u : 0u;
+    g_tasks[idx].finalizer = finalizer_budget != NULL ? 1u : 0u;
     /* Created by the host: Rust's RuntimeState::create_task, whose task
      * takes exactly the budget it is given (state.rs:4461, 4274-4275); the
      * region's budget is not met into it. */
-    g_tasks[idx].budget = asx_budget_infinite();
+    g_tasks[idx].budget = finalizer_budget != NULL ? *finalizer_budget : asx_budget_infinite();
     g_tasks[idx].first_held = ASX_SLOT_NONE;
     asx_task_sched_init_internal(&g_tasks[idx]);
+    /* MaskedFinalizer holds its mask from the first poll to completion. */
+    if (finalizer_budget != NULL) g_tasks[idx].mask_depth = 1u;
     memset(&g_tasks[idx].lab_ent, 0, sizeof(g_tasks[idx].lab_ent));
     g_tasks[idx].lab_rust_index = 0;
     g_tasks[idx].lab_rust_gen = 0;
@@ -1430,8 +1441,9 @@ static asx_status task_spawn_impl(asx_region_id region, asx_task_poll_fn poll_fn
             asx_lab_defer_admission(&g_tasks[idx]);
         } else {
             asx_lab_entropy_direct_internal(&g_tasks[idx]);
-            asx_lab_arm_budget_deadline_internal(&g_tasks[idx]);
-            asx_lab_schedule(&g_tasks[idx], 0u);
+            if (finalizer_budget == NULL) asx_lab_arm_budget_deadline_internal(&g_tasks[idx]);
+            asx_lab_schedule(&g_tasks[idx],
+                             finalizer_budget != NULL ? finalizer_budget->priority : 0u);
         }
     }
 
@@ -1453,12 +1465,19 @@ static asx_status task_spawn_impl(asx_region_id region, asx_task_poll_fn poll_fn
 
 asx_status asx_task_spawn(asx_region_id region, asx_task_poll_fn poll_fn, void *user_data,
                           asx_task_id *out_id) {
-    return task_spawn_impl(region, poll_fn, user_data, out_id, 0);
+    return task_spawn_impl(region, poll_fn, user_data, out_id, 0, NULL);
 }
 
 asx_status asx_task_spawn_cleanup(asx_region_id region, asx_task_poll_fn poll_fn, void *user_data,
                                   asx_task_id *out_id) {
-    return task_spawn_impl(region, poll_fn, user_data, out_id, 1);
+    return task_spawn_impl(region, poll_fn, user_data, out_id, 1, NULL);
+}
+
+asx_status asx_task_spawn_finalizer_internal(asx_region_id region, asx_task_poll_fn poll_fn,
+                                             void *user_data, const asx_budget *budget,
+                                             asx_task_id *out_id) {
+    if (budget == NULL) return ASX_E_INVALID_ARGUMENT;
+    return task_spawn_impl(region, poll_fn, user_data, out_id, 1, budget);
 }
 
 asx_status asx_task_admission_status(asx_task_id id) {
@@ -1527,7 +1546,7 @@ static asx_status task_spawn_captured_impl(asx_region_id region, asx_task_poll_f
     if (captured == NULL) return ASX_E_RESOURCE_EXHAUSTED;
     memset(captured, 0, state_size);
 
-    st = task_spawn_impl(region, poll_fn, captured, out_id, cleanup_only);
+    st = task_spawn_impl(region, poll_fn, captured, out_id, cleanup_only, NULL);
     if (st != ASX_OK) {
         r->capture_used = old_capture_used;
         return st;

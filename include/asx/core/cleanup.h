@@ -16,6 +16,7 @@
 
 #include <asx/asx_config.h>
 #include <asx/asx_export.h>
+#include <asx/asx_ids.h>
 #include <asx/asx_status.h>
 #include <stdint.h>
 
@@ -38,9 +39,17 @@ typedef uint32_t asx_cleanup_handle;
 /* Sentinel for invalid cleanup handle */
 #define ASX_CLEANUP_INVALID ((asx_cleanup_handle)UINT32_MAX)
 
-/* Cleanup stack (fixed-size, walking skeleton) */
+/* Async cleanup action (a region's async finalizer, Rust's
+ * Scope::defer_async): a task poll function. A drain never calls it inline;
+ * asx_cleanup_take_async hands it back so the caller can run it to
+ * completion as a task. */
+typedef asx_status (*asx_cleanup_poll_fn)(void *user_data, asx_task_id self);
+
+/* Cleanup stack (fixed-size, walking skeleton). An entry is sync (fns[i])
+ * or async (polls[i]); a resolved or retired entry has both NULL. */
 typedef struct {
     asx_cleanup_fn fns[ASX_CLEANUP_STACK_CAPACITY];
+    asx_cleanup_poll_fn polls[ASX_CLEANUP_STACK_CAPACITY];
     void *data[ASX_CLEANUP_STACK_CAPACITY];
     uint16_t generations[ASX_CLEANUP_STACK_CAPACITY];
     uint32_t count;    /* stack depth / high-water slot + 1 */
@@ -58,21 +67,42 @@ ASX_API void asx_cleanup_init(asx_cleanup_stack *stack);
 ASX_API ASX_MUST_USE asx_status asx_cleanup_push(asx_cleanup_stack *stack, asx_cleanup_fn fn,
                                                  void *user_data, asx_cleanup_handle *out_handle);
 
+/* Register an async cleanup action (Rust's Scope::defer_async). It shares
+ * the LIFO order and the handle space of the sync entries, but a drain never
+ * calls it: the drain stops with the entry on top, and the owner takes it
+ * with asx_cleanup_take_async to run it as a task.
+ * Same errors as asx_cleanup_push. */
+ASX_API ASX_MUST_USE asx_status asx_cleanup_push_async(asx_cleanup_stack *stack,
+                                                       asx_cleanup_poll_fn poll_fn, void *user_data,
+                                                       asx_cleanup_handle *out_handle);
+
 /* Pop (resolve) a cleanup entry by handle. The cleanup function
  * will NOT be called during drain. Returns ASX_E_NOT_FOUND if
  * the handle is invalid or already popped. */
 ASX_API ASX_MUST_USE asx_status asx_cleanup_pop(asx_cleanup_stack *stack,
                                                 asx_cleanup_handle handle);
 
-/* Drain all remaining (un-popped) entries in LIFO order.
- * Each cleanup function is called exactly once. After drain,
- * the stack is empty. Calling drain on an already-drained
- * stack is a no-op, as is a recursive drain from a cleanup callback.
- * A callback may pop another pending entry to cancel that action. */
+/* Drain remaining (un-popped) entries in LIFO order. Each sync cleanup
+ * function is called exactly once. The drain stops, leaving it and every
+ * entry beneath it pending, when an async entry reaches the top; the stack
+ * counts as drained only once it is empty. Calling drain on an
+ * already-drained stack is a no-op, as is a recursive drain from a cleanup
+ * callback. A callback may pop another pending entry to cancel that action. */
 ASX_API void asx_cleanup_drain(asx_cleanup_stack *stack);
+
+/* Take the async entry on top of the stack: retire it and return its poll
+ * function and context. Returns ASX_E_NOT_FOUND when the top entry is sync
+ * or the stack is empty, and ASX_E_NOT_FOUND during a drain callback.
+ * Call it after asx_cleanup_drain stops. */
+ASX_API ASX_MUST_USE asx_status asx_cleanup_take_async(asx_cleanup_stack *stack,
+                                                       asx_cleanup_poll_fn *out_poll,
+                                                       void **out_data);
 
 /* Query the number of un-popped entries remaining. */
 ASX_API uint32_t asx_cleanup_pending(const asx_cleanup_stack *stack);
+
+/* Query how many of the un-popped entries are async. */
+ASX_API uint32_t asx_cleanup_async_pending(const asx_cleanup_stack *stack);
 
 #ifdef __cplusplus
 }

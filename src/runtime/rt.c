@@ -247,6 +247,9 @@ asx_status asx_runtime_init_checked(asx_runtime *rt, const asx_runtime_config *c
     asx_runtime_set_cleanup_hard_bound_internal(config->cleanup_hard_bound != 0u);
     asx_cancel_chain_limits_set_internal(config->max_cancel_chain_depth,
                                          config->max_cancel_chain_memory);
+    asx_region_finalizer_config_set_internal(config->finalizer_poll_budget,
+                                             config->finalizer_time_budget_ns,
+                                             config->finalizer_escalation);
     rt->hooks = *hooks;
     rt->generation = g_rt_generation++;
     rt->initialized = 1;
@@ -377,6 +380,9 @@ asx_status asx_runtime_reload_config(asx_runtime *rt, const asx_runtime_config *
 
     runtime_config_copy(rt, proposed);
     asx_runtime_set_leak_policy_internal(proposed->leak_response, proposed->leak_escalation);
+    asx_region_finalizer_config_set_internal(proposed->finalizer_poll_budget,
+                                             proposed->finalizer_time_budget_ns,
+                                             proposed->finalizer_escalation);
     return ASX_OK;
 }
 

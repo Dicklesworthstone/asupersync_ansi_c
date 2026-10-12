@@ -280,6 +280,127 @@ TEST(cleanup_recursive_drain_retires_before_callback) {
     ASSERT_EQ(other_calls, 1);
 }
 
+static asx_status async_poll_stub(void *user_data, asx_task_id self) {
+    (void)user_data;
+    (void)self;
+    return ASX_OK;
+}
+
+TEST(cleanup_async_entry_stops_drain_in_lifo_order) {
+    asx_cleanup_stack s;
+    asx_cleanup_handle h;
+    asx_cleanup_poll_fn poll = NULL;
+    void *data = NULL;
+    int ids[3] = {10, 20, 30};
+    int marker = 0;
+
+    reset_tracker();
+    asx_cleanup_init(&s);
+    ASSERT_EQ(asx_cleanup_push(&s, track_cleanup, &ids[0], &h), ASX_OK);
+    ASSERT_EQ(asx_cleanup_push_async(&s, async_poll_stub, &marker, &h), ASX_OK);
+    ASSERT_EQ(asx_cleanup_push(&s, track_cleanup, &ids[2], &h), ASX_OK);
+    ASSERT_EQ(asx_cleanup_pending(&s), (uint32_t)3);
+
+    /* The sync entry above the async one runs; the async entry ends the drain. */
+    asx_cleanup_drain(&s);
+    ASSERT_EQ(g_call_count, 1);
+    ASSERT_EQ(g_call_order[0], 30);
+    ASSERT_EQ(asx_cleanup_pending(&s), (uint32_t)2);
+
+    /* A drain with the async entry still on top is a no-op. */
+    asx_cleanup_drain(&s);
+    ASSERT_EQ(g_call_count, 1);
+
+    ASSERT_EQ(asx_cleanup_take_async(&s, &poll, &data), ASX_OK);
+    ASSERT_TRUE(poll == async_poll_stub);
+    ASSERT_TRUE(data == &marker);
+    ASSERT_EQ(asx_cleanup_pending(&s), (uint32_t)1);
+
+    /* The entry beneath runs on the next drain, which then empties the stack. */
+    asx_cleanup_drain(&s);
+    ASSERT_EQ(g_call_count, 2);
+    ASSERT_EQ(g_call_order[1], 10);
+    ASSERT_EQ(asx_cleanup_pending(&s), (uint32_t)0);
+    ASSERT_EQ(asx_cleanup_take_async(&s, &poll, &data), ASX_E_NOT_FOUND);
+}
+
+TEST(cleanup_take_async_needs_async_top) {
+    asx_cleanup_stack s;
+    asx_cleanup_handle h;
+    asx_cleanup_poll_fn poll = NULL;
+    void *data = NULL;
+
+    asx_cleanup_init(&s);
+    ASSERT_EQ(asx_cleanup_take_async(&s, &poll, &data), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_cleanup_take_async(NULL, &poll, &data), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cleanup_take_async(&s, NULL, &data), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cleanup_take_async(&s, &poll, NULL), ASX_E_INVALID_ARGUMENT);
+
+    ASSERT_EQ(asx_cleanup_push(&s, increment_counter, NULL, &h), ASX_OK);
+    ASSERT_EQ(asx_cleanup_take_async(&s, &poll, &data), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_cleanup_pending(&s), (uint32_t)1);
+}
+
+TEST(cleanup_push_async_rejects_bad_arguments) {
+    asx_cleanup_stack s;
+    asx_cleanup_handle h;
+    asx_cleanup_init(&s);
+    ASSERT_EQ(asx_cleanup_push_async(NULL, async_poll_stub, NULL, &h), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cleanup_push_async(&s, NULL, NULL, &h), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cleanup_push_async(&s, async_poll_stub, NULL, NULL), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_cleanup_pending(&s), (uint32_t)0);
+}
+
+TEST(cleanup_async_entry_pops_by_handle) {
+    asx_cleanup_stack s;
+    asx_cleanup_handle h;
+    asx_cleanup_poll_fn poll = NULL;
+    void *data = NULL;
+
+    asx_cleanup_init(&s);
+    ASSERT_EQ(asx_cleanup_push_async(&s, async_poll_stub, NULL, &h), ASX_OK);
+    ASSERT_EQ(asx_cleanup_pending(&s), (uint32_t)1);
+    ASSERT_EQ(asx_cleanup_pop(&s, h), ASX_OK);
+    ASSERT_EQ(asx_cleanup_pending(&s), (uint32_t)0);
+    ASSERT_EQ(asx_cleanup_pop(&s, h), ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_cleanup_take_async(&s, &poll, &data), ASX_E_NOT_FOUND);
+
+    /* A taken entry can no longer be popped. */
+    ASSERT_EQ(asx_cleanup_push_async(&s, async_poll_stub, NULL, &h), ASX_OK);
+    ASSERT_EQ(asx_cleanup_take_async(&s, &poll, &data), ASX_OK);
+    ASSERT_EQ(asx_cleanup_pop(&s, h), ASX_E_NOT_FOUND);
+}
+
+typedef struct {
+    asx_cleanup_stack *stack;
+    asx_status take;
+} take_in_callback;
+
+static void take_from_callback(void *data) {
+    take_in_callback *t = (take_in_callback *)data;
+    asx_cleanup_poll_fn poll = NULL;
+    void *d = NULL;
+    t->take = asx_cleanup_take_async(t->stack, &poll, &d);
+}
+
+TEST(cleanup_take_async_refused_during_drain_callback) {
+    asx_cleanup_stack s;
+    asx_cleanup_handle h;
+    take_in_callback t;
+    asx_cleanup_poll_fn poll = NULL;
+    void *data = NULL;
+
+    asx_cleanup_init(&s);
+    t.stack = &s;
+    t.take = ASX_OK;
+    ASSERT_EQ(asx_cleanup_push_async(&s, async_poll_stub, NULL, &h), ASX_OK);
+    ASSERT_EQ(asx_cleanup_push(&s, take_from_callback, &t, &h), ASX_OK);
+    asx_cleanup_drain(&s);
+    ASSERT_EQ(t.take, ASX_E_NOT_FOUND);
+    /* The async entry was not consumed by the callback. */
+    ASSERT_EQ(asx_cleanup_take_async(&s, &poll, &data), ASX_OK);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_cleanup ===\n");
     RUN_TEST(cleanup_init_empty);
@@ -302,6 +423,11 @@ int main(void) {
     RUN_TEST(cleanup_user_data_passed_through);
     RUN_TEST(cleanup_pop_null_stack);
     RUN_TEST(cleanup_recursive_drain_retires_before_callback);
+    RUN_TEST(cleanup_async_entry_stops_drain_in_lifo_order);
+    RUN_TEST(cleanup_take_async_needs_async_top);
+    RUN_TEST(cleanup_push_async_rejects_bad_arguments);
+    RUN_TEST(cleanup_async_entry_pops_by_handle);
+    RUN_TEST(cleanup_take_async_refused_during_drain_callback);
     TEST_REPORT();
     return test_failures;
 }
