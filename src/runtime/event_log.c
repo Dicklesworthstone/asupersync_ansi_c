@@ -58,7 +58,11 @@ static uint64_t fnv_u64(uint64_t h, uint64_t v) {
 /* ------------------------------------------------------------------ */
 
 void asx_event_log_reset(void) {
-    memset(g_event_log, 0, sizeof(g_event_log));
+    /* Records are written only at indices below the count, so only that
+     * prefix (at most the capacity) is dirty. */
+    uint32_t used = g_event_count < ASX_EVENT_LOG_CAPACITY ? g_event_count : ASX_EVENT_LOG_CAPACITY;
+
+    memset(g_event_log, 0, (size_t)used * sizeof(g_event_log[0]));
     g_event_count = 0;
     g_hash_chain = FNV_OFFSET;
 }

@@ -419,6 +419,10 @@ typedef struct {
 } udp_socket_slot;
 
 static udp_socket_slot g_udp_sockets[ASX_MAX_UDP_SOCKETS];
+/* One past the highest slot allocated since the last asx_net_reset(); slots
+ * from here up are still all zero. The TCP tables keep the same bound in
+ * g_listener_count / g_stream_count. */
+static uint32_t g_udp_hwm;
 static uint16_t g_next_ephemeral_port = 49152u;
 
 /* ------------------------------------------------------------------ */
@@ -1159,6 +1163,7 @@ asx_status asx_udp_bind_with_cx(asx_udp_socket *out, const asx_socket_addr *addr
     if (idx >= ASX_MAX_UDP_SOCKETS) return ASX_E_RESOURCE_EXHAUSTED;
 
     s = &g_udp_sockets[idx];
+    if (idx >= g_udp_hwm) g_udp_hwm = idx + 1u;
     {
         /* Advance (not reset) the generation so stale handles fail. */
         uint32_t gen_ = s->generation;
@@ -1776,6 +1781,7 @@ typedef struct {
 } unix_listener_slot;
 
 static unix_listener_slot g_unix_listeners[ASX_MAX_UNIX_LISTENERS];
+static uint32_t g_unix_listener_hwm; /* as g_udp_hwm */
 
 /* ------------------------------------------------------------------ */
 /* Unix-domain stream arena                                            */
@@ -1794,6 +1800,7 @@ typedef struct {
 } unix_stream_slot;
 
 static unix_stream_slot g_unix_streams[ASX_MAX_UNIX_STREAMS];
+static uint32_t g_unix_stream_hwm; /* as g_udp_hwm */
 
 /* ------------------------------------------------------------------ */
 /* Unix-domain datagram arena                                          */
@@ -1817,6 +1824,7 @@ typedef struct {
 } unix_dgram_slot;
 
 static unix_dgram_slot g_unix_dgrams[ASX_MAX_UNIX_DGRAM_SOCKETS];
+static uint32_t g_unix_dgram_hwm; /* as g_udp_hwm */
 
 /* ------------------------------------------------------------------ */
 /* Unix-domain helpers                                                 */
@@ -1897,6 +1905,7 @@ static asx_status unix_stream_alloc(const asx_unix_addr *local, const asx_unix_a
     if (idx >= ASX_MAX_UNIX_STREAMS) return ASX_E_RESOURCE_EXHAUSTED;
 
     s = &g_unix_streams[idx];
+    if (idx >= g_unix_stream_hwm) g_unix_stream_hwm = idx + 1u;
     {
         /* Advance (not reset) the generation so stale handles fail. */
         uint32_t gen_ = s->generation;
@@ -1941,6 +1950,7 @@ asx_status asx_unix_listener_bind(asx_unix_listener *out, const asx_unix_addr *a
     if (idx >= ASX_MAX_UNIX_LISTENERS) return ASX_E_RESOURCE_EXHAUSTED;
 
     s = &g_unix_listeners[idx];
+    if (idx >= g_unix_listener_hwm) g_unix_listener_hwm = idx + 1u;
     {
         /* Advance (not reset) the generation so stale handles fail. */
         uint32_t gen_ = s->generation;
@@ -2142,6 +2152,7 @@ asx_status asx_unix_dgram_bind(asx_unix_dgram *out, const asx_unix_addr *addr) {
     if (idx >= ASX_MAX_UNIX_DGRAM_SOCKETS) return ASX_E_RESOURCE_EXHAUSTED;
 
     s = &g_unix_dgrams[idx];
+    if (idx >= g_unix_dgram_hwm) g_unix_dgram_hwm = idx + 1u;
     {
         /* Advance (not reset) the generation so stale handles fail. */
         uint32_t gen_ = s->generation;
@@ -2410,13 +2421,21 @@ void asx_net_reset(void) {
     asx_native_net_reset();
 #endif
     g_net_backend = ASX_NET_DEFAULT_BACKEND;
-    memset(g_listeners, 0, sizeof(g_listeners));
+    /* Clear only the slots allocated since the last reset. A slot at or
+     * above its table's high-water mark was never allocated, so it is
+     * still all zero, exactly as a full clear would leave it. The tables
+     * run to hundreds of KB and this is on the runtime's cold-start path. */
+    memset(g_listeners, 0, (size_t)g_listener_count * sizeof(g_listeners[0]));
     g_listener_count = 0u;
-    memset(g_streams, 0, sizeof(g_streams));
+    memset(g_streams, 0, (size_t)g_stream_count * sizeof(g_streams[0]));
     g_stream_count = 0u;
-    memset(g_udp_sockets, 0, sizeof(g_udp_sockets));
+    memset(g_udp_sockets, 0, (size_t)g_udp_hwm * sizeof(g_udp_sockets[0]));
+    g_udp_hwm = 0u;
     g_next_ephemeral_port = 49152u;
-    memset(g_unix_listeners, 0, sizeof(g_unix_listeners));
-    memset(g_unix_streams, 0, sizeof(g_unix_streams));
-    memset(g_unix_dgrams, 0, sizeof(g_unix_dgrams));
+    memset(g_unix_listeners, 0, (size_t)g_unix_listener_hwm * sizeof(g_unix_listeners[0]));
+    g_unix_listener_hwm = 0u;
+    memset(g_unix_streams, 0, (size_t)g_unix_stream_hwm * sizeof(g_unix_streams[0]));
+    g_unix_stream_hwm = 0u;
+    memset(g_unix_dgrams, 0, (size_t)g_unix_dgram_hwm * sizeof(g_unix_dgrams[0]));
+    g_unix_dgram_hwm = 0u;
 }

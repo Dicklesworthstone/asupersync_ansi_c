@@ -176,6 +176,82 @@ TEST(file_trunc_requires_write_access) {
     ASSERT_EQ(asx_fs_file_close(file), ASX_OK);
 }
 
+/* asx_fs_reset() clears only the entries created since the last reset (a
+ * high-water mark). After an epoch of any footprint, no file or content
+ * survives, and a fresh file at an old path starts empty. */
+#define FS_EPOCH_MAX ((uint32_t)(ASX_MAX_FS_ENTRIES < 12u ? ASX_MAX_FS_ENTRIES : 12u))
+
+static void fs_epoch_path(asx_fs_path *path, uint32_t i) {
+    char text[16];
+    (void)memcpy(text, "/tmp/epoch-00", 14u);
+    text[11] = (char)('0' + (int)(i / 10u));
+    text[12] = (char)('0' + (int)(i % 10u));
+    (void)asx_fs_path_from_cstr(path, text);
+}
+
+/* n files with content, closed (the entries stay in the in-memory fs) */
+static int fs_epoch_dirty(uint32_t n) {
+    uint32_t i;
+
+    for (i = 0u; i < n; i++) {
+        asx_fs_path path;
+        asx_file_handle file;
+        asx_buf payload = asx_buf_from_cstr("stale-bytes");
+        uint32_t written = 0u;
+
+        fs_epoch_path(&path, i);
+        if (asx_fs_file_open(&file, &path,
+                             ASX_FS_OPEN_CREATE | ASX_FS_OPEN_READ | ASX_FS_OPEN_WRITE) != ASX_OK) {
+            return 0;
+        }
+        if (asx_fs_file_poll_write(file, &payload, &written) != ASX_OK) return 0;
+        if (asx_fs_file_close(file) != ASX_OK) return 0;
+    }
+    return 1;
+}
+
+/* the same n paths: absent until created, and created empty */
+static int fs_epoch_fresh(uint32_t n) {
+    uint32_t i;
+
+    for (i = 0u; i < n; i++) {
+        asx_fs_path path;
+        asx_file_handle file;
+        asx_fs_metadata meta;
+
+        fs_epoch_path(&path, i);
+        if (asx_fs_file_open(&file, &path, ASX_FS_OPEN_READ) == ASX_OK) return 0;
+        if (asx_fs_file_open(&file, &path,
+                             ASX_FS_OPEN_CREATE | ASX_FS_OPEN_READ | ASX_FS_OPEN_WRITE) != ASX_OK) {
+            return 0;
+        }
+        if (asx_fs_metadata_query(&path, &meta) != ASX_OK) return 0;
+        if (meta.size != 0u) return 0;
+        if (asx_fs_file_close(file) != ASX_OK) return 0;
+    }
+    return 1;
+}
+
+TEST(fs_reset_after_heavy_use_leaves_no_stale_state) {
+    asx_fs_reset();
+    ASSERT_TRUE(fs_epoch_dirty(FS_EPOCH_MAX));
+    asx_fs_reset();
+    ASSERT_TRUE(fs_epoch_fresh(FS_EPOCH_MAX));
+
+    /* a light epoch dirties only the low entries; the high ones were cleared
+     * by the reset before and must still be clean */
+    asx_fs_reset();
+    ASSERT_TRUE(fs_epoch_dirty(2u));
+    asx_fs_reset();
+    ASSERT_TRUE(fs_epoch_fresh(FS_EPOCH_MAX));
+
+    asx_fs_reset();
+    ASSERT_TRUE(fs_epoch_dirty(FS_EPOCH_MAX));
+    asx_fs_reset();
+    ASSERT_TRUE(fs_epoch_fresh(FS_EPOCH_MAX));
+    asx_fs_reset();
+}
+
 #else
 
 TEST(fs_surface_compile_time_hidden_in_browser) {
@@ -198,6 +274,7 @@ int main(void) {
     RUN_TEST(fs_reset_invalidates_handles);
     RUN_TEST(fs_reset_reuse_bumps_generation);
     RUN_TEST(file_trunc_requires_write_access);
+    RUN_TEST(fs_reset_after_heavy_use_leaves_no_stale_state);
 #else
     RUN_TEST(fs_surface_compile_time_hidden_in_browser);
 #endif

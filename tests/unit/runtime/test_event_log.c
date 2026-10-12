@@ -275,6 +275,45 @@ TEST(runtime_reset_clears_event_log) {
     ASSERT_EQ(asx_event_log_count(), 0u);
 }
 
+/* The reset clears only the stored prefix. After the log filled and its
+ * count ran past the capacity, a short run must read back, and chain, as
+ * it does on a fresh log. */
+TEST(event_log_reset_after_overflow_matches_fresh_log) {
+    asx_event_record rec;
+    uint64_t fresh_chain;
+    uint32_t i;
+
+    asx_event_log_reset();
+    asx_event_emit(ASX_EVENT_REGION_OPEN, 7, 0, ASX_OK);
+    asx_event_emit(ASX_EVENT_TASK_SPAWN, 8, 7, ASX_OK);
+    fresh_chain = asx_event_hash_chain();
+
+    asx_event_log_reset();
+    for (i = 0; i < (uint32_t)ASX_EVENT_LOG_CAPACITY + 5u; i++) {
+        asx_event_emit(ASX_EVENT_TASK_POLL, (uint64_t)i, 1, ASX_E_INVALID_STATE);
+    }
+    ASSERT_EQ(asx_event_log_count(), (uint32_t)ASX_EVENT_LOG_CAPACITY + 5u);
+    ASSERT_FALSE(asx_event_log_get((uint32_t)ASX_EVENT_LOG_CAPACITY, &rec));
+    ASSERT_TRUE(asx_event_log_get((uint32_t)ASX_EVENT_LOG_CAPACITY - 1u, &rec));
+    ASSERT_EQ(rec.entity_id, (uint64_t)ASX_EVENT_LOG_CAPACITY - 1u);
+
+    asx_event_log_reset();
+    ASSERT_EQ(asx_event_log_count(), 0u);
+    ASSERT_FALSE(asx_event_log_get(0u, &rec));
+    ASSERT_EQ(asx_event_hash_chain(), 14695981039346656037ULL);
+
+    asx_event_emit(ASX_EVENT_REGION_OPEN, 7, 0, ASX_OK);
+    asx_event_emit(ASX_EVENT_TASK_SPAWN, 8, 7, ASX_OK);
+    ASSERT_EQ(asx_event_hash_chain(), fresh_chain);
+    ASSERT_TRUE(asx_event_log_get(0u, &rec));
+    ASSERT_EQ(rec.entity_id, 7u);
+    ASSERT_EQ(rec.status, ASX_OK);
+    ASSERT_TRUE(asx_event_log_get(1u, &rec));
+    ASSERT_EQ(rec.entity_id, 8u);
+    ASSERT_EQ(rec.parent_id, 7u);
+    ASSERT_FALSE(asx_event_log_get(2u, &rec));
+}
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
@@ -318,6 +357,8 @@ int main(void) {
     RUN_TEST(event_log_to_json_null_returns_error);
     asx_runtime_reset();
     RUN_TEST(runtime_reset_clears_event_log);
+    asx_runtime_reset();
+    RUN_TEST(event_log_reset_after_overflow_matches_fresh_log);
 
     TEST_REPORT();
     return test_failures;

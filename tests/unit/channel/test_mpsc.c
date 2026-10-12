@@ -877,6 +877,75 @@ TEST(reset_clears_all) {
     ASSERT_NE(asx_channel_get_state(ch, &st), ASX_OK);
 }
 
+/* asx_channel_reset() visits only the slots created since the last reset.
+ * After epochs of different footprint, a channel created in any slot must
+ * start empty with all its capacity and no outstanding permit. */
+#define CH_EPOCH_MAX ((uint32_t)(ASX_MAX_CHANNELS < 6u ? ASX_MAX_CHANNELS : 6u))
+
+/* n channels with three queued values and one reserved permit each */
+static int ch_epoch_dirty(uint32_t n) {
+    uint32_t i;
+    uint32_t k;
+
+    for (i = 0u; i < n; i++) {
+        asx_channel_id ch;
+        asx_send_permit p;
+
+        if (asx_channel_create(g_rid, 4, &ch) != ASX_OK) return 0;
+        for (k = 0u; k < 3u; k++) {
+            if (asx_channel_try_reserve(ch, &p) != ASX_OK) return 0;
+            if (asx_send_permit_send(&p, 100u + k) != ASX_OK) return 0;
+        }
+        if (asx_channel_try_reserve(ch, &p) != ASX_OK) return 0;
+    }
+    return 1;
+}
+
+/* n channels that are empty, open, with their full capacity free */
+static int ch_epoch_fresh(uint32_t n) {
+    uint32_t i;
+    uint32_t k;
+
+    for (i = 0u; i < n; i++) {
+        asx_channel_id ch;
+        asx_channel_state state;
+        asx_send_permit p;
+        uint32_t len = 99u;
+        uint32_t reserved = 99u;
+        uint64_t val = 0u;
+
+        if (asx_channel_create(g_rid, 4, &ch) != ASX_OK) return 0;
+        if (asx_channel_get_state(ch, &state) != ASX_OK || state != ASX_CHANNEL_OPEN) return 0;
+        if (asx_channel_queue_len(ch, &len) != ASX_OK || len != 0u) return 0;
+        if (asx_channel_reserved_count(ch, &reserved) != ASX_OK || reserved != 0u) return 0;
+        if (asx_channel_try_recv(ch, &val) != ASX_E_WOULD_BLOCK) return 0;
+        for (k = 0u; k < 4u; k++) {
+            if (asx_channel_try_reserve(ch, &p) != ASX_OK) return 0;
+        }
+        if (asx_channel_try_reserve(ch, &p) == ASX_OK) return 0; /* capacity is 4, not more */
+    }
+    return 1;
+}
+
+TEST(reset_after_heavy_use_leaves_no_stale_state) {
+    setup();
+    ASSERT_TRUE(ch_epoch_dirty(CH_EPOCH_MAX));
+    asx_channel_reset();
+    ASSERT_TRUE(ch_epoch_fresh(CH_EPOCH_MAX));
+
+    /* a light epoch dirties only the low slots; the high ones were cleared
+     * by the reset before and must still be clean */
+    asx_channel_reset();
+    ASSERT_TRUE(ch_epoch_dirty(2u));
+    asx_channel_reset();
+    ASSERT_TRUE(ch_epoch_fresh(CH_EPOCH_MAX));
+
+    asx_channel_reset();
+    ASSERT_TRUE(ch_epoch_dirty(CH_EPOCH_MAX));
+    asx_channel_reset();
+    ASSERT_TRUE(ch_epoch_fresh(CH_EPOCH_MAX));
+}
+
 /* -------------------------------------------------------------------
  * Cx-aware waits (Rust reserve / send / recv) and SendPermit obligations
  * ------------------------------------------------------------------- */
@@ -1877,6 +1946,7 @@ int main(void) {
     RUN_TEST(stale_permit_copy_cannot_send);
 
     RUN_TEST(reset_clears_all);
+    RUN_TEST(reset_after_heavy_use_leaves_no_stale_state);
 
     RUN_TEST(reserve_with_cx_registers_send_permit_committed_by_send);
     RUN_TEST(reserved_permit_abort_and_disconnect_abort_the_obligation);

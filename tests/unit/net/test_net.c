@@ -860,6 +860,200 @@ TEST(net_reset_clears_all_state) {
     ASSERT_FALSE(asx_udp_is_alive(sock));
 }
 
+/* asx_net_reset() clears only the slots used since the last reset (a
+ * high-water mark per table). Each epoch below leaves sockets open with
+ * queued data, peer links and bound addresses; after the reset a fresh
+ * socket in any of those slots must see none of it, whatever footprint
+ * the epochs before and after had. */
+
+#define NET_EPOCH_MAX 6u
+
+/* UDP: socket 0 is connected to socket 1 and has queued two datagrams on
+ * each of sockets 1..n-1. All stay open. */
+static int net_dirty_udp(uint32_t n) {
+    asx_udp_socket socks[NET_EPOCH_MAX];
+    asx_socket_addr peer = asx_socket_addr_loopback(9201u);
+    uint8_t payload[] = "stale";
+    asx_buf src = asx_buf_from(payload, 5);
+    uint32_t written = 0u;
+    uint32_t i;
+
+    for (i = 0u; i < n; i++) {
+        asx_socket_addr a = asx_socket_addr_loopback((uint16_t)(9200u + i));
+        if (asx_udp_bind(&socks[i], &a) != ASX_OK) return 0;
+    }
+    if (n > 1u && asx_udp_connect(socks[0], &peer) != ASX_OK) return 0;
+    for (i = 1u; i < n; i++) {
+        asx_socket_addr dest = asx_socket_addr_loopback((uint16_t)(9200u + i));
+        if (asx_udp_poll_send(socks[0], &src, &written, &dest) != ASX_OK) return 0;
+        if (asx_udp_poll_send(socks[0], &src, &written, &dest) != ASX_OK) return 0;
+    }
+    return 1;
+}
+
+/* n fresh UDP sockets: nothing queued, no peer, sending needs a destination */
+static int net_udp_fresh(uint32_t n) {
+    uint8_t payload[] = "x";
+    asx_buf src = asx_buf_from(payload, 1);
+    uint32_t i;
+
+    for (i = 0u; i < n; i++) {
+        asx_udp_socket sock;
+        asx_socket_addr a = asx_socket_addr_loopback((uint16_t)(9300u + i));
+        asx_socket_addr out;
+        asx_buf_mut dst;
+        uint32_t got = 0u;
+        uint32_t written = 0u;
+
+        if (asx_udp_bind(&sock, &a) != ASX_OK) return 0;
+        asx_buf_mut_init(&dst);
+        if (asx_udp_poll_recv(sock, &dst, &got, NULL) != ASX_E_PENDING) return 0;
+        if (asx_udp_peer_addr(sock, &out) == ASX_OK) return 0;
+        if (asx_udp_poll_send(sock, &src, &written, NULL) != ASX_E_INVALID_ARGUMENT) return 0;
+    }
+    return 1;
+}
+
+/* TCP: a listener with n connections, one unaccepted, unread data on the
+ * accepted ones. */
+static int net_dirty_tcp(uint32_t n) {
+    asx_tcp_listener lis;
+    asx_socket_addr addr = asx_socket_addr_loopback(9400u);
+    uint8_t payload[] = "stale";
+    asx_buf src = asx_buf_from(payload, 5);
+    uint32_t i;
+
+    if (asx_tcp_listener_bind(&lis, &addr) != ASX_OK) return 0;
+    for (i = 0u; i < n; i++) {
+        asx_tcp_stream client, accepted;
+        uint32_t written = 0u;
+
+        if (asx_tcp_connect(&client, &addr) != ASX_OK) return 0;
+        if (i + 1u == n) break; /* leave this one in the accept queue */
+        if (asx_tcp_listener_poll_accept(lis, &accepted, NULL) != ASX_OK) return 0;
+        if (asx_tcp_stream_poll_write(client, &src, &written) != ASX_OK) return 0;
+    }
+    return 1;
+}
+
+static int net_tcp_fresh(void) {
+    asx_tcp_listener lis;
+    asx_tcp_stream client, accepted;
+    asx_socket_addr addr = asx_socket_addr_loopback(9400u);
+    asx_buf_mut dst;
+    uint32_t got = 0u;
+
+    /* The port namespace is empty again, and nothing waits to be accepted */
+    if (asx_tcp_listener_bind(&lis, &addr) != ASX_OK) return 0;
+    if (asx_tcp_listener_poll_accept(lis, &accepted, NULL) != ASX_E_PENDING) return 0;
+    if (asx_tcp_connect(&client, &addr) != ASX_OK) return 0;
+    if (asx_tcp_listener_poll_accept(lis, &accepted, NULL) != ASX_OK) return 0;
+    asx_buf_mut_init(&dst);
+    if (asx_tcp_stream_poll_read(accepted, &dst, &got) != ASX_E_PENDING) return 0;
+    asx_buf_mut_init(&dst);
+    if (asx_tcp_stream_poll_read(client, &dst, &got) != ASX_E_PENDING) return 0;
+    return 1;
+}
+
+/* Unix domain: a listener with a connected pair holding unread data, and
+ * n datagram sockets with a datagram queued on each of 1..n-1. */
+static int net_dirty_unix(uint32_t n) {
+    asx_unix_listener lis;
+    asx_unix_stream client, accepted;
+    asx_unix_addr laddr;
+    asx_unix_dgram socks[NET_EPOCH_MAX];
+    asx_unix_addr addrs[NET_EPOCH_MAX];
+    uint8_t payload[] = "stale";
+    asx_buf src = asx_buf_from(payload, 5);
+    uint32_t written = 0u;
+    uint32_t i;
+
+    asx_unix_addr_from_path(&laddr, "/tmp/rb_stale_listener.sock");
+    if (asx_unix_listener_bind(&lis, &laddr) != ASX_OK) return 0;
+    if (asx_unix_connect(&client, &laddr) != ASX_OK) return 0;
+    if (asx_unix_listener_poll_accept(lis, &accepted) != ASX_OK) return 0;
+    if (asx_unix_stream_poll_write(client, &src, &written) != ASX_OK) return 0;
+
+    for (i = 0u; i < n; i++) {
+        char path[40];
+        (void)memcpy(path, "/tmp/rb_stale_dgram_0.sock", 27u);
+        path[20] = (char)('0' + (int)i);
+        asx_unix_addr_from_path(&addrs[i], path);
+        if (asx_unix_dgram_bind(&socks[i], &addrs[i]) != ASX_OK) return 0;
+    }
+    for (i = 1u; i < n; i++) {
+        if (asx_unix_dgram_poll_send(socks[0], &src, &written, &addrs[i]) != ASX_OK) return 0;
+    }
+    return 1;
+}
+
+static int net_unix_fresh(uint32_t n) {
+    asx_unix_listener lis;
+    asx_unix_stream client, accepted;
+    asx_unix_addr laddr;
+    asx_buf_mut dst;
+    uint32_t got = 0u;
+    uint32_t i;
+
+    /* The same path binds again and starts with an empty accept queue */
+    asx_unix_addr_from_path(&laddr, "/tmp/rb_stale_listener.sock");
+    if (asx_unix_listener_bind(&lis, &laddr) != ASX_OK) return 0;
+    if (asx_unix_listener_poll_accept(lis, &accepted) != ASX_E_PENDING) return 0;
+    if (asx_unix_connect(&client, &laddr) != ASX_OK) return 0;
+    if (asx_unix_listener_poll_accept(lis, &accepted) != ASX_OK) return 0;
+    asx_buf_mut_init(&dst);
+    if (asx_unix_stream_poll_read(accepted, &dst, &got) != ASX_E_PENDING) return 0;
+
+    for (i = 0u; i < n; i++) {
+        asx_unix_dgram sock;
+        asx_unix_addr a;
+        char path[40];
+
+        (void)memcpy(path, "/tmp/rb_stale_dgram_0.sock", 27u);
+        path[20] = (char)('0' + (int)i);
+        asx_unix_addr_from_path(&a, path);
+        if (asx_unix_dgram_bind(&sock, &a) != ASX_OK) return 0;
+        asx_buf_mut_init(&dst);
+        if (asx_unix_dgram_poll_recv(sock, &dst, &got, NULL) != ASX_E_PENDING) return 0;
+    }
+    return 1;
+}
+
+TEST(net_reset_after_heavy_use_leaves_no_stale_state) {
+    /* heavy epoch, then a reset that must clear every slot it used */
+    asx_net_reset();
+    ASSERT_TRUE(net_dirty_udp(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_dirty_tcp(4u));
+    ASSERT_TRUE(net_dirty_unix(NET_EPOCH_MAX));
+    asx_net_reset();
+    ASSERT_TRUE(net_udp_fresh(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_tcp_fresh());
+    ASSERT_TRUE(net_unix_fresh(NET_EPOCH_MAX));
+
+    /* a light epoch only dirties the low slots; the reset clears those and
+     * the high slots, cleared by the reset before, are still clean */
+    asx_net_reset();
+    ASSERT_TRUE(net_dirty_udp(2u));
+    ASSERT_TRUE(net_dirty_tcp(2u));
+    ASSERT_TRUE(net_dirty_unix(2u));
+    asx_net_reset();
+    ASSERT_TRUE(net_udp_fresh(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_tcp_fresh());
+    ASSERT_TRUE(net_unix_fresh(NET_EPOCH_MAX));
+
+    /* and heavy again after the light one */
+    asx_net_reset();
+    ASSERT_TRUE(net_dirty_udp(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_dirty_tcp(4u));
+    ASSERT_TRUE(net_dirty_unix(NET_EPOCH_MAX));
+    asx_net_reset();
+    ASSERT_TRUE(net_udp_fresh(NET_EPOCH_MAX));
+    ASSERT_TRUE(net_tcp_fresh());
+    ASSERT_TRUE(net_unix_fresh(NET_EPOCH_MAX));
+
+    asx_net_reset();
+}
+
 /* ------------------------------------------------------------------ */
 /* Unix-domain address tests                                           */
 /* ------------------------------------------------------------------ */
@@ -1339,6 +1533,7 @@ int main(void) {
 
     /* Reset */
     RUN_TEST(net_reset_clears_all_state);
+    RUN_TEST(net_reset_after_heavy_use_leaves_no_stale_state);
 
     TEST_REPORT();
     return test_failures;

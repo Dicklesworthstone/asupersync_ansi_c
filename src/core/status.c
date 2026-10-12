@@ -19,6 +19,12 @@ typedef struct asx_task_ledger {
 static asx_task_ledger g_task_ledgers[ASX_ERROR_LEDGER_TASK_SLOTS];
 static asx_task_ledger g_fallback_ledger;
 static asx_task_id g_bound_task = ASX_INVALID_ID;
+/* One past the highest g_task_ledgers slot recorded into since the last
+ * reset, and whether the fallback ledger was. Every ledger beyond these is
+ * still in its cleared state (all zero, owner ASX_INVALID_ID), so a reset
+ * clears only what was touched. */
+static uint32_t g_task_ledger_hwm;
+static int g_fallback_ledger_dirty;
 
 static const char *g_must_use_surfaces[] = {"asx_region_transition_check",
                                             "asx_task_transition_check",
@@ -86,6 +92,12 @@ static void asx_error_ledger_record_impl(asx_task_id task_id, asx_status status,
     if (status == ASX_OK) { return; }
 
     ledger = asx_error_ledger_slot_for_task(task_id);
+    if (ledger == &g_fallback_ledger) {
+        g_fallback_ledger_dirty = 1;
+    } else {
+        uint32_t end = (uint32_t)(ledger - g_task_ledgers) + 1u;
+        if (end > g_task_ledger_hwm) { g_task_ledger_hwm = end; }
+    }
     if (ledger->owner != task_id) { asx_task_ledger_clear(ledger, task_id); }
 
     index = ledger->write_index;
@@ -664,10 +676,14 @@ int asx_status_is_cancel(asx_status s) {
 void asx_error_ledger_reset(void) {
     uint32_t i;
 
-    for (i = 0; i < ASX_ERROR_LEDGER_TASK_SLOTS; i++) {
+    for (i = 0; i < g_task_ledger_hwm; i++) {
         asx_task_ledger_clear(&g_task_ledgers[i], ASX_INVALID_ID);
     }
-    asx_task_ledger_clear(&g_fallback_ledger, ASX_INVALID_ID);
+    g_task_ledger_hwm = 0;
+    if (g_fallback_ledger_dirty) {
+        asx_task_ledger_clear(&g_fallback_ledger, ASX_INVALID_ID);
+        g_fallback_ledger_dirty = 0;
+    }
     g_bound_task = ASX_INVALID_ID;
 }
 

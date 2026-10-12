@@ -107,6 +107,10 @@ typedef struct {
 
 static asx_channel_slot g_channels[ASX_MAX_CHANNELS];
 static uint32_t g_channel_count;
+/* One past the highest slot created since the last reset. A slot from here
+ * up was never created, so it is not alive and asx_channel_create()
+ * initialises every field it uses: the reset need not visit it. */
+static uint32_t g_channel_hwm;
 
 /* ------------------------------------------------------------------ */
 /* Internal helpers                                                   */
@@ -444,6 +448,7 @@ asx_status asx_channel_create(asx_region_id region, uint32_t capacity, asx_chann
         if (!g_channels[i].alive || (g_channels[i].state == ASX_CHANNEL_FULLY_CLOSED &&
                                      channel_message_count(&g_channels[i]) == 0u)) {
             s = &g_channels[i];
+            if ((uint32_t)i >= g_channel_hwm) { g_channel_hwm = (uint32_t)i + 1u; }
 
             s->generation++;
             if (s->generation == 0) s->generation = 1;
@@ -1150,9 +1155,9 @@ asx_status asx_channel_closed(asx_channel_id id) {
 /* ------------------------------------------------------------------ */
 
 void asx_channel_reset(void) {
-    uint16_t i;
+    uint32_t i;
 
-    for (i = 0; i < ASX_MAX_CHANNELS; i++) {
+    for (i = 0; i < g_channel_hwm; i++) {
         if (g_channels[i].alive) { g_channels[i].generation++; }
         g_channels[i].alive = 0;
         g_channels[i].state = ASX_CHANNEL_OPEN;
@@ -1168,5 +1173,6 @@ void asx_channel_reset(void) {
 #endif
         channel_waiters_init(&g_channels[i]);
     }
+    g_channel_hwm = 0;
     g_channel_count = 0;
 }

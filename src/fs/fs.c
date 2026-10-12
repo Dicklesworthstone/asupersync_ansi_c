@@ -76,6 +76,9 @@ typedef struct {
 } asx_open_dir_slot;
 
 static asx_fs_entry_slot g_entries[ASX_MAX_FS_ENTRIES];
+/* One past the highest g_entries slot created since the last reset; slots
+ * from here up are still all zero, so a reset clears only the prefix. */
+static uint32_t g_entries_hwm;
 static asx_open_file_slot g_open_files[ASX_MAX_OPEN_FILES];
 static asx_open_dir_slot g_open_dirs[ASX_MAX_OPEN_DIRS];
 static uint64_t g_fs_mod_counter;
@@ -175,6 +178,7 @@ static asx_status fs_mem_create_entry(const asx_fs_path *path, asx_fs_entry_kind
     int idx = fs_mem_free_entry_slot();
     if (idx < 0) return ASX_E_RESOURCE_EXHAUSTED;
     memset(&g_entries[idx], 0, sizeof(g_entries[idx]));
+    if ((uint32_t)idx >= g_entries_hwm) g_entries_hwm = (uint32_t)idx + 1u;
     g_entries[idx].alive = 1;
     g_entries[idx].linked = 1;
     g_entries[idx].kind = kind;
@@ -973,7 +977,8 @@ void asx_fs_reset(void) {
     asx_native_fs_reset();
 #endif
     g_fs_backend = ASX_FS_DEFAULT_BACKEND;
-    memset(g_entries, 0, sizeof(g_entries));
+    memset(g_entries, 0, (size_t)g_entries_hwm * sizeof(g_entries[0]));
+    g_entries_hwm = 0u;
     g_fs_mod_counter = 0u;
     for (i = 0; i < ASX_MAX_OPEN_FILES; i++) {
         uint32_t generation = asx_fs_next_generation(g_open_files[i].generation);
