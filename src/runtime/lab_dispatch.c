@@ -774,8 +774,11 @@ asx_status asx_lab_admit_pending(void) {
         asx_task_slot *t;
         ASX_CHECKPOINT_WAIVER("bounded: admissions <= ASX_MAX_TASKS");
         if (g_lab_admit[i] & LAB_ADMIT_REFUSAL) {
-            /* Refused: its join resolves, waking the joiner's waker. */
-            lab_refusal *rf = &g_lab_refusal[g_lab_admit[i] & ~LAB_ADMIT_REFUSAL];
+            /* Drop captured actor endpoints before resolving the refused
+             * handle, as Rust drops the spawn payload before its slot. */
+            uint32_t refusal = g_lab_admit[i] & ~LAB_ADMIT_REFUSAL;
+            lab_refusal *rf = &g_lab_refusal[refusal];
+            asx_actor_refusal_delivered_internal(refusal + 1u);
             rf->delivered = 1u;
             if (rf->has_waiter) {
                 asx_task_slot *w = &g_tasks[rf->waiter];

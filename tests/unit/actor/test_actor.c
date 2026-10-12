@@ -13,7 +13,9 @@
 #include <asx/actor/actor.h>
 #include <asx/core/budget.h>
 #include <asx/core/cancel.h>
+#include <asx/runtime/lab.h>
 #include <asx/runtime/runtime.h>
+#include <asx/time/sleep.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -274,6 +276,123 @@ static void test_spawn_refused_by_region_limit(void) {
     MUST_OK(asx_region_set_limits(g_root, &limits));
     ASSERT(asx_actor_spawn(&h, g_root, &g_rec, &s, 2) == ASX_OK,
            "the refused spawn kept no actor slot or mailbox");
+}
+
+typedef struct {
+    asx_cx cx;
+    asx_actor_handle server;
+    rec_state state;
+    asx_actor_op op;
+    asx_sleep_state sleep;
+    uint32_t phase;
+    uint32_t polls;
+    asx_status spawn_status;
+    asx_status call_status;
+} refused_call_client;
+
+static asx_lab g_refused_lab;
+
+static asx_status refused_call_poll(void *user_data, asx_task_id self) {
+    refused_call_client *c = (refused_call_client *)user_data;
+    asx_status st;
+    uint64_t reply = 0;
+
+    c->polls++;
+    if (c->phase == 0u) {
+        st = asx_sleep_poll(&c->sleep, self);
+        if (st != ASX_OK) return st;
+        c->phase = 1u;
+    }
+    if (c->phase == 1u) {
+        c->spawn_status = asx_actor_spawn(&c->server, c->cx.region_id, &g_rec, &c->state, 1u);
+        if (c->spawn_status != ASX_OK) return c->spawn_status;
+        c->phase = 2u;
+    }
+    if (c->phase == 2u) {
+        st = asx_actor_call(c->server, &c->cx, 49u, &c->op, &reply);
+        if (st == ASX_E_PENDING) return st;
+        c->call_status = st;
+        st = asx_sleep_init(&c->sleep, 150u);
+        if (st != ASX_OK) return st;
+        c->phase = 3u;
+    }
+    return asx_sleep_poll(&c->sleep, self);
+}
+
+/* Real minimized Rust witness gen-1238-119-min: a normal body return
+ * closes admission without cancelling its caller. Dropping the refused
+ * server must wake the reply before that caller resumes, so the reply
+ * cannot leave an in-poll wake queued behind its following sleep. */
+static void test_refused_server_reply_does_not_repoll_following_sleep(void) {
+    refused_call_client c;
+    asx_region_id region;
+    asx_task_id task = ASX_INVALID_ID;
+    asx_dispatch_record dispatches[8];
+    asx_budget budget;
+    asx_outcome body = {ASX_OUTCOME_OK};
+    asx_outcome outcome;
+    asx_lab_config config;
+    uint32_t i;
+
+    setup();
+    asx_lab_config_init(&config);
+    config.seed = 502117u;
+    ASSERT(asx_lab_init(&g_refused_lab, &config) == ASX_OK, "real virtual-clock runtime");
+    ASSERT(asx_region_open(&g_root) == ASX_OK, "root in the initialized lab");
+    region = child_region();
+    ASSERT(asx_scheduler_use_lab_dispatch(config.seed) == ASX_OK, "the real witness dispatch seed");
+    memset(&c, 0, sizeof(c));
+    c.spawn_status = ASX_E_PENDING;
+    c.call_status = ASX_E_PENDING;
+    ASSERT(asx_sleep_init(&c.sleep, 150u) == ASX_OK, "first genuine sleep");
+    ASSERT(asx_task_spawn(region, refused_call_poll, &c, &task) == ASX_OK, "live caller");
+    ASSERT(asx_cx_init(&c.cx, region, task, ASX_CAP_NONE) == ASX_OK, "caller's context");
+    memset(dispatches, 0, sizeof(dispatches));
+    asx_scheduler_record_dispatches(dispatches, 8u);
+    budget = asx_budget_from_polls(100u);
+    ASSERT(asx_scheduler_run_until_idle(g_root, &budget) == ASX_E_PENDING,
+           "caller sleeps at time zero");
+    ASSERT(c.polls == 1u, "exactly the initial sleep poll");
+    asx_runtime_virtual_advance(250u);
+    ASSERT(asx_lab_advance_to_next_timer(&g_refused_lab, NULL) == ASX_OK,
+           "the actual first timer wakes the caller at the driver time");
+    ASSERT(asx_region_close_with_outcome(region, &body, NULL) == ASX_OK,
+           "normal body return closes without cancellation");
+    budget = asx_budget_from_polls(100u);
+    ASSERT(asx_scheduler_run_until_idle(g_root, &budget) == ASX_E_PENDING,
+           "caller waits for its following sleep");
+    ASSERT(c.spawn_status == ASX_OK && c.call_status == ASX_E_INVALID_STATE,
+           "refused server's queued reply was genuinely aborted");
+    ASSERT(c.polls == 3u && asx_scheduler_dispatches_recorded() == 3u,
+           "reply cleanup leaves no extra caller poll at time 250");
+    ASSERT(asx_actor_get_state(c.server) == ASX_ACTOR_STOPPED &&
+               asx_actor_mailbox_count(c.server) == 0u,
+           "refusal dropped the real server cell and its queued envelope");
+    ASSERT(c.state.init_called == 0 && c.state.calls == 0u && c.state.term_called == 0,
+           "a refused server never runs user callbacks");
+    ASSERT(asx_actor_join(c.server, &c.cx) == ASX_E_CANCELLED &&
+               asx_actor_join(c.server, &c.cx) == ASX_E_CANCELLED,
+           "repeated lookup and join preserve the refused outcome");
+    budget = asx_budget_from_polls(100u);
+    ASSERT(asx_scheduler_run(g_root, &budget) == ASX_OK, "the actual timer completes the caller");
+    ASSERT(c.polls == 4u && asx_scheduler_dispatches_recorded() == 4u,
+           "only four dispatches, as captured from Rust");
+    ASSERT(dispatches[0].at == 0u && dispatches[1].at == 250u && dispatches[2].at == 250u &&
+               dispatches[3].at == 400u,
+           "captured dispatch times 0,250,250,400");
+    for (i = 0; i < 4u; i++) {
+        ASSERT(asx_handle_type_tag(dispatches[i].task) == ASX_TYPE_TASK &&
+                   asx_handle_index(dispatches[i].task) == asx_handle_index(task) &&
+                   dispatches[i].lane == ASX_DISPATCH_LANE_READY &&
+                   dispatches[i].step == (uint64_t)(i + 1u),
+               "every numbered ready dispatch belongs to the caller's live generation");
+    }
+    ASSERT(asx_task_get_outcome(task, &outcome) == ASX_OK && outcome.severity == ASX_OUTCOME_OK,
+           "body close did not cancel the caller");
+    budget = asx_budget_from_polls(100u);
+    ASSERT(asx_region_wait_closed(region, &budget) == ASX_OK && asx_obligation_leak_count() == 0u,
+           "real reply settlement permits a leak-free close");
+    asx_lab_shutdown(&g_refused_lab);
 }
 
 /* ------------------------------------------------------------------ */
@@ -662,6 +781,7 @@ int main(void) {
     RUN(test_spawn_rejects_bad_arguments);
     RUN(test_spawn_arena_exhaustion);
     RUN(test_spawn_refused_by_region_limit);
+    RUN(test_refused_server_reply_does_not_repoll_following_sleep);
 
     RUN(test_init_runs_once_on_first_poll);
     RUN(test_try_cast_delivers_in_order);

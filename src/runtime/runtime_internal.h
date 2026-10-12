@@ -536,6 +536,9 @@ void asx_lab_defer_refused_admission(void);
 /* Register `t`, at its current poll's waker priority, to be woken when
  * the refusal is delivered (one registration per refusal: the latest). */
 void asx_lab_refusal_watch(uint32_t ticket, const asx_task_slot *t);
+/* Drop a refused actor's captured mailbox/replies before its handle is
+ * resolved and its waiter wakes. Consumes only the matching live ticket. */
+void asx_actor_refusal_delivered_internal(uint32_t ticket);
 int asx_lab_admissions_pending(void);
 /* Admits the queued spawns. Fails only when a refused admission's task
  * transition is refused (asx_task_set_state_internal): that error, with

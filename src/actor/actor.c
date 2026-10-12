@@ -93,16 +93,12 @@ static uint32_t next_gen(uint32_t g) {
 
 static void actor_cell_drop(asx_actor_slot *s);
 
-/* Look up a handle's server, applying a refusal delivered since. */
+/* Look up the live generation of a handle's server. */
 static asx_actor_slot *actor_lookup(asx_actor_handle h) {
     asx_actor_slot *s;
     if (h.slot >= ASX_MAX_ACTORS) return NULL;
     s = &g_actors[h.slot];
     if (!s->in_use || s->generation != h.generation) return NULL;
-    if (s->refusal != 0u && s->state != ASX_ACTOR_STOPPED &&
-        asx_task_refusal_delivered(s->refusal)) {
-        actor_cell_drop(s);
-    }
     return s;
 }
 
@@ -113,7 +109,7 @@ static void actor_await_refusal(const asx_actor_slot *s) {
     asx_status st;
     if (s->refusal == 0u || s->state == ASX_ACTOR_STOPPED || self == ASX_INVALID_ID) return;
     st = asx_task_await_refusal(self, s->refusal);
-    (void)st; /* pending: parked; delivered: the next lookup drops the cell */
+    (void)st; /* pending: parked; delivered: admission already dropped the cell */
 }
 
 static asx_actor_handle actor_handle_of(const asx_actor_slot *s) {
@@ -184,6 +180,23 @@ static void actor_cell_drop(asx_actor_slot *s) {
     if (!s->ran) s->exit_reason = ASX_E_CANCELLED;
     actor_discard_mailbox(s);
     actor_publish(s);
+}
+
+/* Rust drops a refused spawn's captured cell before resolving its handle
+ * (spawn_mailbox.rs:1394-1414). Abort replies here, before the caller's
+ * next poll, so their wake is coalesced with the refusal wake rather than
+ * left queued behind a later sleep in that poll. */
+void asx_actor_refusal_delivered_internal(uint32_t ticket) {
+    uint32_t i;
+    if (ticket == 0u || g_live_servers == 0u) return;
+    for (i = 0; i < ASX_MAX_ACTORS; i++) {
+        asx_actor_slot *s = &g_actors[i];
+        if (!s->in_use || s->refusal != ticket) continue;
+        /* Consume the association before dropping endpoints: later
+         * delivery or a reused actor slot cannot repeat this cleanup. */
+        s->refusal = 0u;
+        if (s->state != ASX_ACTOR_STOPPED) actor_cell_drop(s);
+    }
 }
 
 /* ------------------------------------------------------------------ */
