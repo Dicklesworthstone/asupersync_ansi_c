@@ -760,7 +760,7 @@ send_evict_oldest(value: T) -> Result<Option<T>, SendError<T>>
 | All capacity is reserved (no committed entries) | `Err(Full(value))` — cannot evict reserved slots |
 | Receiver dropped | `Err(Disconnected(value))` (checked first) |
 
-**Rust evidence:** `src/channel/mpsc.rs:860`–`src/channel/mpsc.rs:936`. C: `asx_channel_send_evict_oldest` (`src/channel/mpsc.c:857-916`) with the same outcomes; the predicate form `send_evict_oldest_where` is not ported (`docs/CHANNEL_TIMER_SEMANTICS.md` §1.5, `bd-9kll.5.7`). Rust parity: `mpsc-send-evict-oldest-001`.
+**Rust evidence:** `src/channel/mpsc.rs:860`–`src/channel/mpsc.rs:936`. C: `asx_channel_send_evict_oldest` (`src/channel/mpsc.c:998-1002`) is `asx_channel_send_evict_oldest_where` (`src/channel/mpsc.c:1008-1074`) with a predicate that accepts everything, as Rust's is; the same outcomes, and the predicate form evicts the oldest accepted message on both backends (`docs/CHANNEL_TIMER_SEMANTICS.md` §1.5, `bd-9kll.8.3`). Rust parity: `mpsc-send-evict-oldest-001`.
 
 ### 9.6 Receive Semantics
 
