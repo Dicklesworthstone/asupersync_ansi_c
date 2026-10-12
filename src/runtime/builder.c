@@ -11,6 +11,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
+#include <asx/platform/posix.h>
+#endif
+#if defined(ASX_PROFILE_WIN32) && !ASX_DETERMINISTIC
+#include <asx/platform/win32.h>
+#endif
 
 static int builder_surface_ready(const asx_runtime_builder *builder);
 
@@ -25,6 +31,20 @@ static asx_status builder_init_common(asx_runtime_builder *builder, asx_runtime_
     asx_runtime_config_init_checked(&builder->config, application_fingerprint);
     st = asx_runtime_hooks_init_checked(&builder->hooks, application_fingerprint);
     if (st != ASX_OK) return st;
+#if defined(ASX_PROFILE_POSIX) && !ASX_DETERMINISTIC
+    /* A live build's builder takes the platform's entropy, as the default
+     * init does, so a runtime built from it serves WebSocket keys, session
+     * IDs and CSRF tokens (asx_runtime_random_secure_u64) instead of
+     * refusing them for want of a source. Only the entropy: the clocks, the
+     * reactor and the worker pool stay the defaults, and the application
+     * sets those through the hook setters. */
+    st = asx_posix_entropy_hooks(&builder->hooks.entropy);
+    if (st != ASX_OK) return st;
+#elif defined(ASX_PROFILE_WIN32) && !ASX_DETERMINISTIC
+    st = asx_win32_entropy_hooks(&builder->hooks.entropy);
+    if (st != ASX_OK) return st;
+    builder->hooks.deterministic_seeded_prng = 0u;
+#endif
     builder->preset = preset;
     return ASX_OK;
 }

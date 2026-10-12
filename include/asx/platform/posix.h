@@ -50,6 +50,14 @@ ASX_API ASX_MUST_USE asx_status asx_posix_hooks_install_checked(asx_runtime_hook
 #define asx_posix_hooks_install(hooks)                                                             \
     asx_posix_hooks_install_checked((hooks), ASX_CONFIG_FINGERPRINT)
 
+/* The platform's entropy source alone, as an entropy hook family: the same
+ * OS source asx_posix_hooks_install installs (getrandom(2) with a
+ * /dev/urandom fallback, fallible through try_u64_fn), without its
+ * reactor, worker pool or clocks. For a hook table assembled by hand or by
+ * the runtime builder, which takes it in live builds.
+ * Returns ASX_OK, or ASX_E_INVALID_ARGUMENT if out is NULL. */
+ASX_API ASX_MUST_USE asx_status asx_posix_entropy_hooks(asx_entropy_hooks *out);
+
 /* Register (arm) a POSIX file descriptor with the reactor context installed
  * in hooks.reactor.ctx. interest is a nonzero mask of ASX_POSIX_REACTOR_*
  * bits. Readiness is one-shot: the fd reports once, then must be armed

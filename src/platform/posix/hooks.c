@@ -147,6 +147,14 @@ static uint64_t posix_entropy_u64(void *ctx) {
     return value;
 }
 
+asx_status asx_posix_entropy_hooks(asx_entropy_hooks *out) {
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    out->random_u64_fn = posix_entropy_u64;
+    out->try_u64_fn = posix_entropy_try_u64;
+    return ASX_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* Reactor (epoll on Linux, poll(2) elsewhere)                         */
 /*                                                                     */

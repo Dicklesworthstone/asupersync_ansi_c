@@ -7,6 +7,7 @@
 #include "../../test_harness.h"
 #include <asx/runtime/builder.h>
 #include <asx/runtime/rt.h>
+#include <asx/runtime/runtime.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -392,6 +393,72 @@ TEST(build_roundtrip_works) {
     asx_runtime_shutdown(&rt);
 }
 
+#if !ASX_DETERMINISTIC
+/* Live builds (bd-9kll.16.5): a runtime built by the builder must serve a
+ * secure draw from a real source or refuse it with a status, never answer
+ * from the default hook table's fixed-seed PRNG. */
+
+#define BUILDER_SENTINEL UINT64_C(0xA5A5A5A5A5A5A5A5)
+
+TEST(builder_runtime_secure_draw_follows_the_profile) {
+    asx_runtime_builder builder;
+    asx_runtime rt;
+    uint64_t v = BUILDER_SENTINEL;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_build(&builder, &rt), ASX_OK);
+#if defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_WIN32)
+    /* The builder takes the platform's entropy, as the default init does. */
+    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
+    ASSERT_TRUE(v != BUILDER_SENTINEL);
+#else
+    /* No platform source in this profile: refused, not served from the
+     * default PRNG, until the application installs one. */
+    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_E_HOOK_INVALID);
+    ASSERT_EQ(v, BUILDER_SENTINEL);
+#endif
+    asx_runtime_shutdown(&rt);
+}
+
+TEST(builder_entropy_hooks_serve_secure_draws) {
+    asx_runtime_builder builder;
+    asx_runtime rt;
+    asx_entropy_hooks entropy;
+    uint64_t seed = 456u;
+    uint64_t v = 0u;
+
+    asx_runtime_reset();
+    ASSERT_EQ(asx_runtime_builder_init(&builder), ASX_OK);
+    memset(&entropy, 0, sizeof(entropy));
+    entropy.ctx = &seed;
+    entropy.random_u64_fn = fake_entropy;
+    ASSERT_EQ(asx_runtime_builder_set_entropy_hooks(&builder, &entropy), ASX_OK);
+    ASSERT_EQ(asx_runtime_builder_build(&builder, &rt), ASX_OK);
+
+    /* The source the application installed is served, on every profile:
+     * installing entropy is how a profile with no platform source (and an
+     * application that wants its own) gets secure draws. */
+    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
+    ASSERT_EQ(v, (uint64_t)456u);
+    asx_runtime_shutdown(&rt);
+}
+
+#if defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_WIN32)
+TEST(init_from_env_runtime_serves_secure_draws) {
+    asx_runtime rt;
+    uint64_t v = BUILDER_SENTINEL;
+
+    asx_runtime_reset();
+    clear_builder_test_env();
+    ASSERT_EQ(asx_runtime_init_from_env(&rt, NULL), ASX_OK);
+    ASSERT_EQ(asx_runtime_random_secure_u64(&v), ASX_OK);
+    ASSERT_TRUE(v != BUILDER_SENTINEL);
+    asx_runtime_shutdown(&rt);
+}
+#endif
+#endif
+
 TEST(build_null_fails) {
     asx_runtime_builder builder;
     asx_runtime rt;
@@ -561,6 +628,13 @@ int main(void) {
     RUN_TEST(validate_rejects_bad_builder_config);
     RUN_TEST(validate_rejects_invalid_enum_fields);
     RUN_TEST(build_roundtrip_works);
+#if !ASX_DETERMINISTIC
+    RUN_TEST(builder_runtime_secure_draw_follows_the_profile);
+    RUN_TEST(builder_entropy_hooks_serve_secure_draws);
+#if defined(ASX_PROFILE_POSIX) || defined(ASX_PROFILE_WIN32)
+    RUN_TEST(init_from_env_runtime_serves_secure_draws);
+#endif
+#endif
     RUN_TEST(build_null_fails);
     RUN_TEST(apply_env_null_builder_fails);
     RUN_TEST(apply_env_no_variables_is_noop);

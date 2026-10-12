@@ -54,6 +54,14 @@ ASX_API ASX_MUST_USE asx_status asx_win32_hooks_install_checked(asx_runtime_hook
 #define asx_win32_hooks_install(hooks)                                                             \
     asx_win32_hooks_install_checked((hooks), ASX_CONFIG_FINGERPRINT)
 
+/* The platform's entropy source alone, as an entropy hook family:
+ * BCryptGenRandom, fallible through try_u64_fn, without the clocks or the
+ * reactor of asx_win32_hooks_install. For a hook table assembled by hand or
+ * by the runtime builder, which takes it in live builds (with
+ * deterministic_seeded_prng cleared, as asx_win32_hooks_install does).
+ * Returns ASX_OK, or ASX_E_INVALID_ARGUMENT if out is NULL. */
+ASX_API ASX_MUST_USE asx_status asx_win32_entropy_hooks(asx_entropy_hooks *out);
+
 /* Legacy external-linkage clock/entropy primitives. Prefer using
  * asx_win32_hooks_install() which sets all hooks at once. */
 ASX_API asx_time asx_win32_qpc_now_ns(void *ctx);
