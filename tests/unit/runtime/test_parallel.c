@@ -2118,6 +2118,7 @@ typedef struct {
     asx_region_id region;
     asx_task_id child;
     int child_polls;
+    int parent_polls;
 } spawner_state;
 
 /* Acknowledges a cancel and still returns normally. */
@@ -2130,10 +2131,18 @@ static asx_status poll_child_ack_then_ok(void *data, asx_task_id self) {
     return ASX_E_PENDING;
 }
 
-static asx_status poll_spawn_child(void *data, asx_task_id self) {
+/* First poll: spawn the child and yield. Second: cancel it and finish. */
+static asx_status poll_spawn_then_cancel_child(void *data, asx_task_id self) {
     spawner_state *s = (spawner_state *)data;
+    asx_status st;
     (void)self;
-    return asx_task_spawn(s->region, poll_child_ack_then_ok, &s->child_polls, &s->child);
+    s->parent_polls++;
+    if (s->parent_polls == 1) {
+        st = asx_task_spawn(s->region, poll_child_ack_then_ok, &s->child_polls, &s->child);
+        if (st != ASX_OK) { return st; }
+        return ASX_E_PENDING;
+    }
+    return asx_task_cancel(s->child, ASX_CANCEL_USER);
 }
 
 TEST(parallel_spawned_child_that_acknowledges_a_cancel_and_returns_keeps_its_value) {
@@ -2153,25 +2162,158 @@ TEST(parallel_spawned_child_that_acknowledges_a_cancel_and_returns_keeps_its_val
     ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     s.region = rid;
-    ASSERT_EQ(asx_task_spawn(rid, poll_spawn_child, &s, &parent_t), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_spawn_then_cancel_child, &s, &parent_t), ASX_OK);
 
-    /* The parent's poll spawns the child. */
-    budget = asx_budget_from_polls(10);
-    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
-    ASSERT_TRUE(s.child != ASX_INVALID_ID);
-
-    /* The child polls once, uncancelled. */
-    budget = asx_budget_from_polls(1);
-    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
-    ASSERT_EQ(s.child_polls, 1);
-
-    /* Cancelled now, it acknowledges at its checkpoint and returns. */
-    ASSERT_EQ(asx_task_cancel(s.child, ASX_CANCEL_USER), ASX_OK);
-    budget = asx_budget_from_polls(10);
+    /* One run: the parent spawns the child (polled this round, once,
+     * uncancelled), cancels it next round, and the child acknowledges at
+     * its checkpoint and returns. */
+    budget = asx_budget_from_polls(20);
     ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
     ASSERT_EQ(s.child_polls, 2);
     ASSERT_EQ(asx_task_get_outcome(s.child, &out), ASX_OK);
     ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_OK);
+
+    asx_parallel_reset();
+}
+
+/* ---- Tasks spawned during a run (bd-9kll.4.11) ------------------------
+ *
+ * A run classifies the region's tasks once, at its start; a task a poll
+ * spawns joins a lane as it is created. */
+
+typedef struct {
+    asx_region_id region;
+    int child_yields; /* the child yields this many polls before it ends */
+    int child_polls;
+    asx_task_id child;
+} spawn_and_finish_state;
+
+static asx_status poll_yield_counted(void *data, asx_task_id self) {
+    spawn_and_finish_state *s = (spawn_and_finish_state *)data;
+    (void)self;
+    s->child_polls++;
+    return s->child_polls <= s->child_yields ? ASX_E_PENDING : ASX_OK;
+}
+
+/* Spawns the child and completes at once. */
+static asx_status poll_spawn_child_and_finish(void *data, asx_task_id self) {
+    spawn_and_finish_state *s = (spawn_and_finish_state *)data;
+    (void)self;
+    return asx_task_spawn(s->region, poll_yield_counted, s, &s->child);
+}
+
+TEST(parallel_run_does_not_return_ok_while_a_spawned_child_is_live) {
+    asx_region_id rid;
+    asx_task_id parent_t;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    spawn_and_finish_state s;
+    asx_task_state state;
+
+    reset_all();
+    memset(&s, 0, sizeof(s));
+    s.child_yields = 3;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    s.region = rid;
+    ASSERT_EQ(asx_task_spawn(rid, poll_spawn_child_and_finish, &s, &parent_t), ASX_OK);
+
+    /* The parent is done after its first poll. The run must still poll the
+     * child to its end before it says OK (without admission it returned OK
+     * with the child never polled). */
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(s.child_polls, 4);
+    ASSERT_EQ(asx_task_get_state(s.child, &state), ASX_OK);
+    ASSERT_EQ((int)state, (int)ASX_TASK_COMPLETED);
+    ASSERT_EQ(asx_lane_total_tasks(), 0u);
+
+    asx_parallel_reset();
+}
+
+typedef struct {
+    asx_region_id region;
+    order_task a;
+    order_task b;
+    asx_task_id a_id;
+    asx_task_id b_id;
+    int polls;
+} family_state;
+
+static asx_status poll_spawn_family(void *data, asx_task_id self) {
+    family_state *s = (family_state *)data;
+    asx_status st;
+    (void)self;
+    s->polls++;
+    if (s->polls > 1) { return ASX_OK; }
+    st = asx_task_spawn(s->region, poll_order_yield_cancel, &s->a, &s->a_id);
+    if (st != ASX_OK) { return st; }
+    st = asx_task_spawn(s->region, poll_order_yield_cancel, &s->b, &s->b_id);
+    if (st != ASX_OK) { return st; }
+    st = asx_task_cancel(s->b_id, ASX_CANCEL_USER);
+    if (st != ASX_OK) { return st; }
+    return ASX_E_PENDING;
+}
+
+TEST(parallel_child_cancelled_after_admission_is_dispatched_from_the_cancel_lane) {
+    asx_region_id rid;
+    asx_task_id parent_t;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    family_state s;
+
+    reset_all();
+    memset(&s, 0, sizeof(s));
+    s.a.id = 1;
+    s.a.yield_polls = 1;
+    s.a.victim = ASX_INVALID_ID;
+    s.b.id = 2;
+    s.b.yield_polls = 1;
+    s.b.victim = ASX_INVALID_ID;
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    s.region = rid;
+    ASSERT_EQ(asx_task_spawn(rid, poll_spawn_family, &s, &parent_t), ASX_OK);
+
+    budget = asx_budget_from_polls(50);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    /* Round 0: the parent spawns a and b and cancels b; both are admitted
+     * and polled in order. Round 1: b is cancel work and goes before a. */
+    ASSERT_EQ(g_poll_order_count, 4u);
+    ASSERT_EQ(g_poll_order[0], 1);
+    ASSERT_EQ(g_poll_order[1], 2);
+    ASSERT_EQ(g_poll_order[2], 2);
+    ASSERT_EQ(g_poll_order[3], 1);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_spawn_outside_a_run_is_not_admitted_until_the_next_run) {
+    asx_region_id rid;
+    asx_task_id first_t, second_t;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    poll_order_state s1 = {1};
+    poll_order_state s2 = {2};
+
+    reset_all();
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &s1, &first_t), ASX_OK);
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(g_poll_order_count, 1u);
+
+    /* No run is in progress: the spawn path must not touch the lanes. */
+    ASSERT_EQ(asx_task_spawn(rid, poll_record_order, &s2, &second_t), ASX_OK);
+    ASSERT_EQ(asx_lane_total_tasks(), 0u);
+    ASSERT_EQ(g_poll_order_count, 1u);
+
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(g_poll_order_count, 2u);
+    ASSERT_EQ(g_poll_order[1], 2);
 
     asx_parallel_reset();
 }
@@ -2260,6 +2402,9 @@ int main(void) {
     RUN_TEST(parallel_task_blocked_in_channel_recv_is_not_polled_until_a_send_wakes_it);
     RUN_TEST(parallel_blocked_receiver_with_no_sender_would_block_until_a_send);
     RUN_TEST(parallel_spawned_child_that_acknowledges_a_cancel_and_returns_keeps_its_value);
+    RUN_TEST(parallel_run_does_not_return_ok_while_a_spawned_child_is_live);
+    RUN_TEST(parallel_child_cancelled_after_admission_is_dispatched_from_the_cancel_lane);
+    RUN_TEST(parallel_spawn_outside_a_run_is_not_admitted_until_the_next_run);
 
     /* Worker routing */
     RUN_TEST_IF(ASX_MAX_WORKERS >= 4u, parallel_multi_worker_steals_preserve_completion,

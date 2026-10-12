@@ -1134,13 +1134,62 @@ static uint64_t asx_trace_task_transition_aux(asx_task_state from, asx_task_stat
 }
 
 /* -------------------------------------------------------------------
+ * Tasks admitted during a run
+ *
+ * A run classifies the region's tasks into lanes once, at its start. A
+ * task a poll spawns into the region joins a lane as it is created: the
+ * spawn path calls asx_parallel_task_admitted_internal, which appends it
+ * in O(1) (an array append and a counter), so a round never rescans the
+ * task arena. A task that cannot be admitted (lane full, or admission
+ * enforced) is not dropped silently: the run stops at the next round with
+ * that status.
+ * ------------------------------------------------------------------- */
+
+static int g_run_active;
+static asx_region_id g_run_region;
+static asx_status g_run_admission_status;
+
+void asx_parallel_task_admitted_internal(uint32_t slot_idx) {
+    const asx_task_slot *t;
+    asx_lane_class lc;
+    lane_internal *l;
+    asx_status st;
+    uint32_t owner;
+
+    if (!g_run_active || slot_idx >= ASX_MAX_TASKS) { return; }
+    t = &g_tasks[slot_idx];
+    if (!t->alive || t->region != g_run_region || asx_task_is_terminal(t->state)) { return; }
+
+    /* A reused slot carries nothing of its last task. */
+    parallel_clear_task_routing((uint16_t)slot_idx);
+    lc = t->cancel_pending ? ASX_LANE_CANCEL : ASX_LANE_READY;
+    l = &g_lanes[(int)lc];
+    if (l->count >= ASX_LANE_TASK_CAPACITY) {
+        st = ASX_E_RESOURCE_EXHAUSTED;
+    } else {
+        st = parallel_observe_lane_admission(l->count + 1u);
+    }
+    if (st != ASX_OK) {
+        if (g_run_admission_status == ASX_OK) { g_run_admission_status = st; }
+        return;
+    }
+
+    l->tasks[l->count] = asx_handle_pack(ASX_TYPE_TASK, (uint16_t)(1u << (unsigned)t->state),
+                                         asx_handle_pack_index(t->generation, (uint16_t)slot_idx));
+    l->count++;
+    parallel_note_assignment((uint16_t)slot_idx, lc);
+    owner = parallel_seed_task_owner((uint16_t)slot_idx);
+    if (owner < ASX_MAX_WORKERS) { g_worker_lane_depths[owner][(int)lc]++; }
+}
+
+/* -------------------------------------------------------------------
  * Parallel scheduler run
  *
  * Polls tasks lane-by-lane according to fairness policy.
  * In single-worker mode, produces deterministic event streams.
  * ------------------------------------------------------------------- */
 
-asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
+static asx_status parallel_run_impl(asx_region_id region, asx_budget *budget) {
     asx_region_slot *rslot;
     asx_status st;
     uint32_t round;
@@ -1207,6 +1256,12 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
         asx_trace_emit(ASX_TRACE_SCHED_ROUND, ASX_INVALID_ID, round);
 
         if (asx_budget_is_exhausted(budget)) { return parallel_return_budget(round); }
+
+        /* A task a poll spawned could not join a lane: the run cannot
+         * finish without it, so it does not claim to have. */
+        if (g_run_admission_status != ASX_OK) {
+            return parallel_return_refused(g_run_admission_status);
+        }
 
         /* The run budget's deadline bounds the whole run, including time
          * spent waiting for a timer or I/O (as the sweep scheduler). */
@@ -1628,6 +1683,19 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
             return parallel_return_budget(round);
         }
     }
+}
+
+asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
+    asx_status st;
+
+    /* A poll cannot start a run inside the run: the lanes are the run's. */
+    if (g_run_active) { return ASX_E_INVALID_STATE; }
+    g_run_region = region;
+    g_run_admission_status = ASX_OK;
+    g_run_active = 1;
+    st = parallel_run_impl(region, budget);
+    g_run_active = 0;
+    return st;
 }
 
 /* -------------------------------------------------------------------
