@@ -1623,6 +1623,221 @@ TEST(evict_oldest_refuses_a_slot_a_parked_producer_owns) {
 }
 
 /* -------------------------------------------------------------------
+ * send_evict_oldest_where (mpsc.rs:889-936)
+ *
+ * The same results hold on the ring backend and the lock-free one: the
+ * batch builds this file in a default build and with
+ * PROFILE=POSIX ASX_LOCKFREE_SINGLE_THREAD=0.
+ * ------------------------------------------------------------------- */
+
+/* Accepts the multiples of `multiple` and records what it was asked. */
+typedef struct {
+    uint64_t multiple;
+    uint64_t asked[8];
+    uint32_t n_asked;
+} evict_probe;
+
+static int evict_multiples(void *ctx, uint64_t value) {
+    evict_probe *p = (evict_probe *)ctx;
+    if (p->n_asked < 8u) p->asked[p->n_asked] = value;
+    p->n_asked++;
+    return value % p->multiple == 0u;
+}
+
+TEST(evict_where_takes_the_oldest_accepted_message_and_keeps_the_order) {
+    /* Move the head off slot 0 first, so the queue wraps the ring. */
+    asx_channel_id ch;
+    evict_probe probe;
+    uint64_t evicted_value = 0;
+    uint64_t v = 0;
+    uint32_t len = 0;
+    int evicted = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 4, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 90u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 91u), ASX_OK);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 7u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 10u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 9u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 20u), ASX_OK);
+
+    /* Full: 7 10 9 20. The oldest multiple of 10 is the second message; it
+     * is the one evicted, the predicate is asked oldest first and stops at
+     * the first accepted, and the rest keep their order. */
+    memset(&probe, 0, sizeof(probe));
+    probe.multiple = 10u;
+    ASSERT_EQ(asx_channel_send_evict_oldest_where(ch, 11u, evict_multiples, &probe, &evicted,
+                                                  &evicted_value),
+              ASX_OK);
+    ASSERT_EQ(evicted, 1);
+    ASSERT_EQ(evicted_value, 10u);
+    ASSERT_EQ(probe.n_asked, 2u);
+    ASSERT_EQ(probe.asked[0], 7u);
+    ASSERT_EQ(probe.asked[1], 10u);
+    ASSERT_EQ(asx_channel_queue_len(ch, &len), ASX_OK);
+    ASSERT_EQ(len, 4u);
+
+    /* Now 7 9 20 11: the accepted message is the third, the one before it
+     * stays ahead of the newcomer. */
+    memset(&probe, 0, sizeof(probe));
+    probe.multiple = 10u;
+    ASSERT_EQ(asx_channel_send_evict_oldest_where(ch, 12u, evict_multiples, &probe, &evicted,
+                                                  &evicted_value),
+              ASX_OK);
+    ASSERT_EQ(evicted, 1);
+    ASSERT_EQ(evicted_value, 20u);
+    ASSERT_EQ(probe.n_asked, 3u);
+
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 7u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 9u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 11u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 12u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_E_WOULD_BLOCK);
+}
+
+TEST(evict_where_evicting_the_head_is_evict_oldest) {
+    asx_channel_id ch;
+    evict_probe probe;
+    uint64_t evicted_value = 0;
+    uint64_t v = 0;
+    int evicted = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 4u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 5u), ASX_OK);
+    memset(&probe, 0, sizeof(probe));
+    probe.multiple = 2u;
+    ASSERT_EQ(asx_channel_send_evict_oldest_where(ch, 6u, evict_multiples, &probe, &evicted,
+                                                  &evicted_value),
+              ASX_OK);
+    ASSERT_EQ(evicted, 1);
+    ASSERT_EQ(evicted_value, 4u);
+    ASSERT_EQ(probe.n_asked, 1u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 5u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 6u);
+}
+
+TEST(evict_where_with_no_accepted_message_is_full_and_changes_nothing) {
+    asx_channel_id ch;
+    evict_probe probe;
+    uint64_t evicted_value = 0;
+    uint64_t v = 0;
+    uint32_t len = 0;
+    int evicted = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 3, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 1u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 3u), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 5u), ASX_OK);
+    memset(&probe, 0, sizeof(probe));
+    probe.multiple = 2u;
+    ASSERT_EQ(asx_channel_send_evict_oldest_where(ch, 7u, evict_multiples, &probe, &evicted,
+                                                  &evicted_value),
+              ASX_E_CHANNEL_FULL);
+    ASSERT_EQ(probe.n_asked, 3u);
+    ASSERT_EQ(asx_channel_queue_len(ch, &len), ASX_OK);
+    ASSERT_EQ(len, 3u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 1u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 3u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 5u);
+}
+
+TEST(evict_where_with_room_sends_without_asking) {
+    asx_channel_id ch;
+    evict_probe probe;
+    uint64_t evicted_value = 77u;
+    uint64_t v = 0;
+    int evicted = 1;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 3, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 2u), ASX_OK);
+    memset(&probe, 0, sizeof(probe));
+    probe.multiple = 2u;
+    ASSERT_EQ(asx_channel_send_evict_oldest_where(ch, 8u, evict_multiples, &probe, &evicted,
+                                                  &evicted_value),
+              ASX_OK);
+    ASSERT_EQ(evicted, 0);
+    ASSERT_EQ(probe.n_asked, 0u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 2u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 8u);
+}
+
+TEST(evict_where_never_evicts_a_reserved_slot_nor_a_refused_message) {
+    /* A reservation beside one message the predicate refuses: the channel
+     * is full and nothing may go. Once the message is one it accepts, it
+     * goes and the permit still owns its slot. */
+    asx_channel_id ch;
+    asx_send_permit p;
+    evict_probe probe;
+    uint64_t evicted_value = 0;
+    uint64_t v = 0;
+    uint32_t reserved = 0;
+    int evicted = 0;
+    setup();
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_try_reserve(ch, &p), ASX_OK);
+    ASSERT_EQ(asx_channel_send(ch, NULL, 3u), ASX_OK);
+    memset(&probe, 0, sizeof(probe));
+    probe.multiple = 2u;
+    ASSERT_EQ(asx_channel_send_evict_oldest_where(ch, 9u, evict_multiples, &probe, &evicted,
+                                                  &evicted_value),
+              ASX_E_CHANNEL_FULL);
+    ASSERT_EQ(asx_channel_reserved_count(ch, &reserved), ASX_OK);
+    ASSERT_EQ(reserved, 1u);
+    probe.multiple = 3u;
+    probe.n_asked = 0u;
+    ASSERT_EQ(asx_channel_send_evict_oldest_where(ch, 9u, evict_multiples, &probe, &evicted,
+                                                  &evicted_value),
+              ASX_OK);
+    ASSERT_EQ(evicted, 1);
+    ASSERT_EQ(evicted_value, 3u);
+    ASSERT_EQ(asx_send_permit_send(&p, 4u), ASX_OK);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 9u);
+    ASSERT_EQ(asx_channel_try_recv(ch, &v), ASX_OK);
+    ASSERT_EQ(v, 4u);
+}
+
+TEST(evict_where_errors) {
+    asx_channel_id ch;
+    evict_probe probe;
+    uint64_t evicted_value = 0;
+    int evicted = 0;
+    setup();
+    memset(&probe, 0, sizeof(probe));
+    probe.multiple = 1u;
+    ASSERT_EQ(asx_channel_create(g_rid, 2, &ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send_evict_oldest_where(ch, 1u, NULL, &probe, &evicted, &evicted_value),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_send_evict_oldest_where(ch, 1u, evict_multiples, &probe, NULL,
+                                                  &evicted_value),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_send_evict_oldest_where(ch, 1u, evict_multiples, &probe, &evicted, NULL),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_send_evict_oldest_where(ASX_INVALID_ID, 1u, evict_multiples, &probe,
+                                                  &evicted, &evicted_value),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_channel_seal(ch), ASX_OK);
+    ASSERT_EQ(asx_channel_send_evict_oldest_where(ch, 1u, evict_multiples, &probe, &evicted,
+                                                  &evicted_value),
+              ASX_E_DISCONNECTED);
+    ASSERT_EQ(probe.n_asked, 0u);
+}
+
+/* -------------------------------------------------------------------
  * recv_many (mpsc.rs:1754, poll :1867)
  * ------------------------------------------------------------------- */
 
@@ -1966,6 +2181,12 @@ int main(void) {
     RUN_TEST(evict_oldest_never_evicts_a_reserved_slot);
     RUN_TEST(evict_oldest_errors);
     RUN_TEST(evict_oldest_refuses_a_slot_a_parked_producer_owns);
+    RUN_TEST(evict_where_takes_the_oldest_accepted_message_and_keeps_the_order);
+    RUN_TEST(evict_where_evicting_the_head_is_evict_oldest);
+    RUN_TEST(evict_where_with_no_accepted_message_is_full_and_changes_nothing);
+    RUN_TEST(evict_where_with_room_sends_without_asking);
+    RUN_TEST(evict_where_never_evicts_a_reserved_slot_nor_a_refused_message);
+    RUN_TEST(evict_where_errors);
     RUN_TEST(recv_many_takes_up_to_limit_oldest_first);
     RUN_TEST(recv_many_limit_zero_returns_before_the_cancel_check);
     RUN_TEST(recv_many_reports_zero_once_no_message_can_arrive);

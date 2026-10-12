@@ -882,11 +882,96 @@ static int channel_permit_drop(uint64_t channel_id, uint64_t token) {
 /* Send, evicting the oldest message when full                        */
 /* ------------------------------------------------------------------ */
 
-/* Rust send_evict_oldest (mpsc.rs:872, :897-934): a free slot owned by a
- * parked producer refuses; any other free slot takes the value; a full
- * channel evicts its oldest committed message, never a reserved slot. */
+#if ASX_CHANNEL_BACKEND_LOCKFREE
+/* Remove the oldest committed message `pred` accepts, wherever it sits
+ * (Rust's queue.iter().position(&mut predicate) and remove(index),
+ * mpsc.rs:910-918). The cells from dequeue_pos up to the first one a
+ * producer has claimed but not committed hold the committed messages in
+ * FIFO order. Only the consumer touches them: a producer works on the
+ * cell at enqueue_pos alone, and a cell below it keeps its sequence
+ * number (position + 1) for as long as it holds a message. So the
+ * messages ahead of the removed one move one cell toward the tail, which
+ * keeps every sequence number valid, and the head cell is freed exactly
+ * as a dequeue frees it. `release` 0 keeps the capacity claimed for the
+ * caller (the eviction hands the slot to the new message). Consumer
+ * thread only. Returns ASX_E_WOULD_BLOCK when no committed message is
+ * accepted. */
+static asx_status channel_lf_dequeue_where(asx_channel_slot *s, asx_channel_evict_pred_fn pred,
+                                           void *ctx, uint64_t *out_value, int release) {
+    uint32_t head = s->lf_queue.dequeue_pos;
+    uint32_t found = 0u;
+    uint32_t i;
+
+    for (;;) {
+        uint32_t pos = head + found;
+        asx_channel_lf_cell *cell = &s->lf_queue.cells[pos % s->capacity];
+        ASX_CHECKPOINT_WAIVER("bounded: the committed prefix is at most the channel capacity");
+        if (asx_atomic_u32_load(&cell->sequence) != pos + 1u) { return ASX_E_WOULD_BLOCK; }
+        asx_atomic_fence_acquire();
+        if (pred(ctx, cell->value)) { break; }
+        found++;
+    }
+
+    *out_value = s->lf_queue.cells[(head + found) % s->capacity].value;
+    for (i = found; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most the channel capacity cells move");
+        s->lf_queue.cells[(head + i) % s->capacity].value =
+            s->lf_queue.cells[(head + i - 1u) % s->capacity].value;
+    }
+    asx_atomic_u32_store(&s->lf_queue.cells[head % s->capacity].sequence, head + s->capacity);
+    s->lf_queue.dequeue_pos = head + 1u;
+    (void)channel_atomic_dec(&s->lf_queue.committed);
+    if (release) channel_lf_release_capacity(s);
+
+    return ASX_OK;
+}
+#else
+/* The ring backend's form of the above: the messages ahead of the
+ * removed one move one slot toward the tail and the head slot is freed. */
+static int channel_take_oldest_where(asx_channel_slot *s, asx_channel_evict_pred_fn pred, void *ctx,
+                                     uint64_t *out_value) {
+    uint32_t found;
+    uint32_t i;
+
+    for (found = 0u; found < s->queue_len; found++) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most the channel capacity committed messages");
+        if (pred(ctx, s->queue[(s->queue_head + found) % s->capacity])) { break; }
+    }
+    if (found >= s->queue_len) { return 0; }
+
+    *out_value = s->queue[(s->queue_head + found) % s->capacity];
+    for (i = found; i > 0u; i--) {
+        ASX_CHECKPOINT_WAIVER("bounded: at most the channel capacity slots move");
+        s->queue[(s->queue_head + i) % s->capacity] =
+            s->queue[(s->queue_head + i - 1u) % s->capacity];
+    }
+    s->queue_head = (s->queue_head + 1u) % s->capacity;
+    s->queue_len--;
+    return 1;
+}
+#endif
+
+/* `send_evict_oldest(v)` is `send_evict_oldest_where(v, |_| true)`
+ * (mpsc.rs:872-874). */
+static int channel_evict_any(void *ctx, uint64_t value) {
+    (void)ctx;
+    (void)value;
+    return 1;
+}
+
 asx_status asx_channel_send_evict_oldest(asx_channel_id id, uint64_t value, int *out_evicted,
                                          uint64_t *out_value) {
+    return asx_channel_send_evict_oldest_where(id, value, channel_evict_any, NULL, out_evicted,
+                                               out_value);
+}
+
+/* Rust send_evict_oldest_where (mpsc.rs:889-936): a free slot owned by a
+ * parked producer refuses; any other free slot takes the value; a full
+ * channel evicts its oldest committed message that `pred` accepts, never
+ * a reserved slot, and refuses when there is none. */
+asx_status asx_channel_send_evict_oldest_where(asx_channel_id id, uint64_t value,
+                                               asx_channel_evict_pred_fn pred, void *ctx,
+                                               int *out_evicted, uint64_t *out_value) {
     asx_channel_slot *s;
     asx_status st;
     uint64_t oldest = 0u;
@@ -895,7 +980,7 @@ asx_status asx_channel_send_evict_oldest(asx_channel_id id, uint64_t value, int 
     uint32_t write_pos;
 #endif
 
-    if (out_evicted == NULL || out_value == NULL) { return ASX_E_INVALID_ARGUMENT; }
+    if (pred == NULL || out_evicted == NULL || out_value == NULL) { return ASX_E_INVALID_ARGUMENT; }
 
     st = channel_slot_lookup(id, &s);
     if (st != ASX_OK) { return st; }
@@ -915,11 +1000,14 @@ asx_status asx_channel_send_evict_oldest(asx_channel_id id, uint64_t value, int 
 #endif
     } else {
         /* Every slot holds a committed message or a reservation: the oldest
-         * message makes room; with all of them reserved there is none. */
+         * message `pred` accepts makes room; with all of them reserved, or
+         * none accepted, there is none. */
 #if ASX_CHANNEL_BACKEND_LOCKFREE
-        if (channel_lf_dequeue(s, &oldest, 0) != ASX_OK) { return ASX_E_CHANNEL_FULL; }
+        if (channel_lf_dequeue_where(s, pred, ctx, &oldest, 0) != ASX_OK) {
+            return ASX_E_CHANNEL_FULL;
+        }
 #else
-        if (!channel_take_oldest(s, &oldest)) { return ASX_E_CHANNEL_FULL; }
+        if (!channel_take_oldest_where(s, pred, ctx, &oldest)) { return ASX_E_CHANNEL_FULL; }
 #endif
         evicted = 1;
     }

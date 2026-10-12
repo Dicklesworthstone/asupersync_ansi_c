@@ -197,6 +197,26 @@ ASX_API ASX_MUST_USE asx_status asx_channel_send_evict_oldest(asx_channel_id id,
                                                               int *out_evicted,
                                                               uint64_t *out_value);
 
+/* Whether a queued message may be evicted: nonzero allows it. It runs
+ * once per queued message, oldest first, and must not use the channel. */
+typedef int (*asx_channel_evict_pred_fn)(void *ctx, uint64_t value);
+
+/* Send `value`, evicting the oldest queued message `pred` accepts if the
+ * channel is full (Rust send_evict_oldest_where, mpsc.rs:889-936; a queued
+ * call a GenServer must keep is protected this way). As
+ * asx_channel_send_evict_oldest, which is this with a predicate that
+ * accepts everything, except that the evicted message is the oldest
+ * accepted one wherever it sits: the messages behind it keep their order.
+ * Returns ASX_E_CHANNEL_FULL, evicting nothing, also when a full channel
+ * holds no accepted message. ASX_E_INVALID_ARGUMENT for a NULL pred.
+ * Both backends give the same result; the lock-free backend must be
+ * called on the receiver's (scheduler) thread. */
+ASX_API ASX_MUST_USE asx_status asx_channel_send_evict_oldest_where(asx_channel_id id,
+                                                                    uint64_t value,
+                                                                    asx_channel_evict_pred_fn pred,
+                                                                    void *ctx, int *out_evicted,
+                                                                    uint64_t *out_value);
+
 /* ------------------------------------------------------------------ */
 /* Receive API                                                        */
 /* ------------------------------------------------------------------ */
