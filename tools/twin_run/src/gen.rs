@@ -117,6 +117,13 @@ struct World {
 struct Held {
     obligations: Vec<String>,
     children: Vec<String>,
+    /// How many of `children` (a prefix: they are spawned in order and
+    /// joined from the front) were spawned before this task's latest
+    /// yielding step, so the lab has processed their admission. A child
+    /// spawned in the current poll is not aborted yet: Rust's handle of an
+    /// aborted spawn still pending admission never resolves when the
+    /// region closes first, which twin_run cannot capture (bd-c129).
+    settled: usize,
     /// Child regions opened and not closed yet (at most one at a time).
     regions: Vec<String>,
     opened: u32,
@@ -187,8 +194,14 @@ fn rw_acquire(rng: &mut Rng) -> Value {
 fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
     loop {
         match rng.below(29) {
-            0 | 1 => return json!({"op": "yield"}),
-            2 | 3 => return sleep_step(rng),
+            0 | 1 => {
+                held.settled = held.children.len();
+                return json!({"op": "yield"});
+            }
+            2 | 3 => {
+                held.settled = held.children.len();
+                return sleep_step(rng);
+            }
             4 | 5 => return checkpoint_step(rng),
             6 => {
                 held.messages += 1;
@@ -225,13 +238,17 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 return s;
             }
             10 if !held.children.is_empty() => {
-                // An aborted child stays joinable.
-                if rng.chance(30) {
-                    let i = usize::try_from(rng.below(held.children.len() as u64)).unwrap_or(0);
+                // An aborted child stays joinable. Only a child spawned
+                // before the task's latest yielding step is aborted: see
+                // `Held::settled`.
+                let abort = rng.chance(30);
+                if abort && held.settled > 0 {
+                    let i = usize::try_from(rng.below(held.settled as u64)).unwrap_or(0);
                     return json!({"op": "abort_task", "task": held.children[i],
                                   "kind": *rng.pick(&CANCEL_KINDS)});
                 }
                 let name = held.children.remove(0);
+                held.settled = held.settled.saturating_sub(1);
                 // try_join consumes the handle whether or not the child is
                 // done (a running child gives TASK_NOT_COMPLETED).
                 if rng.chance(25) {
