@@ -31,7 +31,8 @@
 //! Channels and sync: besides mpsc (send / try_send / send_evict_oldest /
 //! reserve with permit_send or permit_abort, the sender's closed wait,
 //! recv / try_recv / recv_many, close of either end),
-//! a scenario may connect its tasks with a oneshot, a broadcast or a watch
+//! a scenario may connect its tasks with a oneshot, a broadcast (sometimes
+//! with a second sender, a subscriber holding a clone) or a watch
 //! channel and declare a barrier, whose waits may fall short of its
 //! parties.
 //!
@@ -104,8 +105,9 @@ struct World {
     mpsc: Option<(String, String, String)>,
     /// (channel, sender task, receiver task)
     oneshot: Option<(String, String, String)>,
-    /// (channel, sender task, subscriber tasks)
-    broadcast: Option<(String, String, Vec<String>)>,
+    /// (channel, sender task, subscriber tasks, a subscriber that also
+    /// holds a sender clone)
+    broadcast: Option<(String, String, Vec<String>, Option<String>)>,
     /// (channel, sender task, subscriber tasks)
     watch: Option<(String, String, Vec<String>)>,
 }
@@ -415,8 +417,9 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 }
             }
             20 => {
-                if let Some((ch, sender, subscribers)) = &world.broadcast {
-                    if me == sender {
+                if let Some((ch, sender, subscribers, extra)) = &world.broadcast {
+                    // The extra sender is also a subscriber: it sends half the time.
+                    if me == sender || (extra.as_deref() == Some(me) && rng.chance(50)) {
                         held.sends += 1;
                         return json!({"op": "broadcast_send", "channel": ch, "value": held.sends});
                     }
@@ -670,8 +673,17 @@ pub fn scenario(seed: u64, index: u64) -> Value {
                 .then(|| ("ch".to_string(), tasks[0].clone(), tasks[1].clone())),
             oneshot: (several && rng.chance(15))
                 .then(|| ("os".to_string(), last.clone(), tasks[0].clone())),
-            broadcast: (several && rng.chance(15))
-                .then(|| ("bc".to_string(), tasks[0].clone(), tasks[1..].to_vec())),
+            // Sometimes the last task also holds a sender clone: the
+            // channel then closes at the later of the two senders' drops.
+            broadcast: (several && rng.chance(15)).then(|| {
+                let extra = rng.chance(30).then(|| last.clone());
+                (
+                    "bc".to_string(),
+                    tasks[0].clone(),
+                    tasks[1..].to_vec(),
+                    extra,
+                )
+            }),
             watch: (several && rng.chance(15)).then(|| ("wt".to_string(), last, others)),
         }
     };
@@ -701,11 +713,13 @@ pub fn scenario(seed: u64, index: u64) -> Value {
     if let Some((ch, tx, rx)) = &world.oneshot {
         channels.push(json!({"name": ch, "type": "oneshot", "sender": tx, "receiver": rx}));
     }
-    if let Some((ch, tx, subs)) = &world.broadcast {
-        channels.push(
-            json!({"name": ch, "type": "broadcast", "capacity": 1 + rng.below(3),
-                             "sender": tx, "subscribers": subs}),
-        );
+    if let Some((ch, tx, subs, extra)) = &world.broadcast {
+        let mut decl = json!({"name": ch, "type": "broadcast", "capacity": 1 + rng.below(3),
+                              "sender": tx, "subscribers": subs});
+        if let Some(extra) = extra {
+            decl["senders"] = json!([extra]);
+        }
+        channels.push(decl);
     }
     if let Some((ch, tx, subs)) = &world.watch {
         channels.push(
