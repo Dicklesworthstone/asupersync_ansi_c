@@ -148,7 +148,9 @@ ASX_API ASX_MUST_USE asx_status asx_broadcast_reserve(const asx_broadcast_sender
  * Rust permit borrows its sender, so C refuses that and aborts the
  * obligation with Cancel). A genuine permit may move to another caller;
  * changing its tracked resource binding is refused before consumption or
- * publication. Raw obligation IDs cannot settle tracked permits. */
+ * publication. A retained copy whose credit was sent, aborted or dropped
+ * with its holder returns ASX_E_OBLIGATION_ALREADY_RESOLVED without publishing.
+ * Raw obligation IDs cannot settle tracked permits. */
 ASX_API ASX_MUST_USE asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit,
                                                           uint64_t value, uint32_t *out_receivers);
 

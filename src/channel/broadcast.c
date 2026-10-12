@@ -400,7 +400,9 @@ asx_status asx_broadcast_permit_send(asx_broadcast_permit *permit, uint64_t valu
         st = asx_obligation_check_token_internal(permit->obligation, broadcast_permit_drop,
                                                  (uint64_t)permit->slot,
                                                  (uint64_t)permit->generation, permit->serial);
-        if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return st;
+        /* Broadcast holds no physical reservation to reject a spent copy.
+         * Its tracked credit must still be Reserved before publication. */
+        if (st != ASX_OK) return st;
     }
     permit->consumed = 1;
 
@@ -451,7 +453,7 @@ void asx_broadcast_permit_abort(asx_broadcast_permit *permit) {
         st = asx_obligation_check_token_internal(permit->obligation, broadcast_permit_drop,
                                                  (uint64_t)permit->slot,
                                                  (uint64_t)permit->generation, permit->serial);
-        if (st != ASX_OK && st != ASX_E_OBLIGATION_ALREADY_RESOLVED) return;
+        if (st != ASX_OK) return;
     }
     permit->consumed = 1;
     if (permit->obligation != ASX_INVALID_ID) {
