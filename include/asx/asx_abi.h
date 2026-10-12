@@ -62,7 +62,10 @@ extern "C" {
  * that break callers linked against a previous version.
  * ----------------------------------------------------------------------- */
 
-#define ASX_ABI_VERSION_MAJOR 2
+/* Major 3: cancel-kind ordinals follow Rust's CancelKind (DEC-006) and the
+ * entropy hooks gain a fallible draw (try_u64_fn). Major 2: checked creation
+ * entry points that take the application fingerprint. */
+#define ASX_ABI_VERSION_MAJOR 3
 #define ASX_ABI_VERSION_MINOR 0
 #define ASX_ABI_VERSION_PATCH 0
 
@@ -100,7 +103,7 @@ extern "C" {
  * the headers they are building against are ABI-compatible with the
  * library version they expect:
  *
- *   ASX_ABI_CHECK(2);   // require ABI major version 2
+ *   ASX_ABI_CHECK(3);   // require ABI major version 3
  *
  * This prevents silent ABI mismatches when upgrading.
  * ----------------------------------------------------------------------- */

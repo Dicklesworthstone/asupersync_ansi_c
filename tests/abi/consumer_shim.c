@@ -138,7 +138,7 @@ static void test_abi_version(void) {
     SHIM_CHECK(ASX_API_VERSION_PATCH >= 0, "API patch defined");
 
     /* ABI check macro compiles */
-    ASX_ABI_CHECK(2);
+    ASX_ABI_CHECK(3);
 }
 
 /* --- Handle type sizes --- */

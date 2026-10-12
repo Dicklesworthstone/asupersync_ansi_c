@@ -129,7 +129,7 @@ RB8 adds application/library build identity at runtime creation and its
 config, hook and builder preparation calls. `ASX_CONFIG_FINGERPRINT` folds
 effective resource limits, profile/codec/determinism/ghost settings and
 bootstrap sizes, alignments and member offsets in the application translation
-unit. ABI major 2 replaces unchecked creation symbols with fingerprint-taking
+unit. ABI major 2 replaced unchecked creation symbols with fingerprint-taking
 entries; incompatible builds return `ASX_E_CONFIG_MISMATCH` before object
 access or singleton mutation. Matching consumers execute actual tasks through
 explicit, default, environment and builder creation. Separately compiled

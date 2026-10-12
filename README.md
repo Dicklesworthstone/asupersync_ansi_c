@@ -580,8 +580,8 @@ constructor results before using their objects. `asx_runtime_config_init()`
 and `asx_lab_config_init()` / `asx_lab_reset()` now return statuses too.
 `asx_runtime_config_fingerprint()` exposes the library's value for diagnosis;
 it should equal the header expression.
-ABI major 2 uses the checked entry points; applications must rebuild against
-these headers. The fingerprint detects accidental configuration mismatch.
+ABI major 3 (like 2 before it) uses the checked entry points; applications must
+rebuild against these headers. The fingerprint detects accidental configuration mismatch.
 
 ```c
 #include <asx/asx.h>

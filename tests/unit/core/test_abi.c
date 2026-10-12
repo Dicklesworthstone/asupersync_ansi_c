@@ -24,7 +24,7 @@ TEST(abi_composite_version_matches_formula) {
 }
 
 TEST(abi_check_macro_compiles_for_current_major) {
-    ASX_ABI_CHECK(2);
+    ASX_ABI_CHECK(3);
     ASSERT_TRUE(1);
 }
 

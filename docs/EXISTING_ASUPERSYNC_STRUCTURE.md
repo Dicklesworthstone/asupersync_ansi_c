@@ -301,7 +301,7 @@ are compared before runtime creation or preparatory config/hook/builder
 initialization accesses caller objects. `ASX_CONFIG_FINGERPRINT` is computed
 from the application's effective limits and bootstrap layout, not fetched
 from the library. An incompatible build returns `ASX_E_CONFIG_MISMATCH` and
-preserves active singleton work. ABI major 2 requires the checked entry points;
+preserves active singleton work. ABI major 2 and later require the checked entry points;
 there are no unchecked legacy exports. This is a C configuration safety
 contract, not a change to Rust task/cancellation semantics or a proof of
 independently owned runtime storage.
