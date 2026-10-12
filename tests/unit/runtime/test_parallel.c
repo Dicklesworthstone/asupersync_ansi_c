@@ -2005,6 +2005,177 @@ TEST(parallel_run_stops_at_the_budget_deadline_while_idle) {
     asx_parallel_reset();
 }
 
+/* ---- Primitives that park the current task ---------------------------
+ *
+ * Channels, mutexes and the like park their caller through
+ * asx_task_current(). A parallel poll is the current task, as the sweep's
+ * is, so a task blocked in one is skipped until the state change that
+ * satisfies it wakes it. */
+
+typedef struct {
+    asx_channel_id ch;
+    uint32_t polls;
+    uint32_t got;
+    uint64_t value;
+} chan_rx_state;
+
+static asx_status poll_chan_receiver(void *data, asx_task_id self) {
+    chan_rx_state *s = (chan_rx_state *)data;
+    asx_status st;
+    (void)self;
+    s->polls++;
+    st = asx_channel_recv(s->ch, NULL, &s->value); /* parks when empty */
+    if (st == ASX_E_PENDING) { return ASX_E_PENDING; }
+    if (st == ASX_OK) { s->got++; }
+    return ASX_OK;
+}
+
+typedef struct {
+    asx_channel_id ch;
+    int delay; /* polls spent yielding before the send */
+} chan_tx_state;
+
+static asx_status poll_chan_sender(void *data, asx_task_id self) {
+    chan_tx_state *s = (chan_tx_state *)data;
+    asx_status st;
+    (void)self;
+    if (s->delay > 0) {
+        s->delay--;
+        return ASX_E_PENDING; /* a yield: stays runnable */
+    }
+    st = asx_channel_send(s->ch, NULL, 42u);
+    return st;
+}
+
+TEST(parallel_task_blocked_in_channel_recv_is_not_polled_until_a_send_wakes_it) {
+    asx_region_id rid;
+    asx_task_id rx_t, tx_t;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    chan_rx_state rx;
+    chan_tx_state tx;
+
+    reset_all();
+    memset(&rx, 0, sizeof(rx));
+    memset(&tx, 0, sizeof(tx));
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_channel_create(rid, 4, &rx.ch), ASX_OK);
+    tx.ch = rx.ch;
+    tx.delay = 5;
+    /* The receiver is first in arena order, so it finds the channel empty. */
+    ASSERT_EQ(asx_task_spawn(rid, poll_chan_receiver, &rx, &rx_t), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_chan_sender, &tx, &tx_t), ASX_OK);
+
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+
+    /* Two receiver polls however long the sender yields: the one that
+     * parked it, and the one the send woke. Busy-polled it would be six. */
+    ASSERT_EQ(rx.polls, 2u);
+    ASSERT_EQ(rx.got, 1u);
+    ASSERT_EQ(rx.value, (uint64_t)42);
+
+    asx_parallel_reset();
+}
+
+TEST(parallel_blocked_receiver_with_no_sender_would_block_until_a_send) {
+    asx_region_id rid;
+    asx_task_id rx_t;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    chan_rx_state rx;
+
+    reset_all();
+    memset(&rx, 0, sizeof(rx));
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_channel_create(rid, 4, &rx.ch), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(rid, poll_chan_receiver, &rx, &rx_t), ASX_OK);
+
+    /* Nothing can wake it: one poll, then the run says so instead of
+     * spending the budget. */
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_WOULD_BLOCK);
+    ASSERT_EQ(rx.polls, 1u);
+    ASSERT_EQ(asx_budget_polls(&budget), 99u);
+
+    /* A send from outside the run wakes it. */
+    {
+        asx_send_permit permit;
+        ASSERT_EQ(asx_channel_try_reserve(rx.ch, &permit), ASX_OK);
+        ASSERT_EQ(asx_send_permit_send(&permit, 5u), ASX_OK);
+    }
+    budget = asx_budget_from_polls(100);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(rx.polls, 2u);
+    ASSERT_EQ(rx.value, (uint64_t)5);
+
+    asx_parallel_reset();
+}
+
+typedef struct {
+    asx_region_id region;
+    asx_task_id child;
+    int child_polls;
+} spawner_state;
+
+/* Acknowledges a cancel and still returns normally. */
+static asx_status poll_child_ack_then_ok(void *data, asx_task_id self) {
+    int *polls = (int *)data;
+    asx_checkpoint_result cr;
+    (*polls)++;
+    if (*polls == 1) { return ASX_E_PENDING; } /* first poll: no cancel yet */
+    if (asx_checkpoint(self, &cr) == ASX_OK && cr.cancelled) { return ASX_OK; }
+    return ASX_E_PENDING;
+}
+
+static asx_status poll_spawn_child(void *data, asx_task_id self) {
+    spawner_state *s = (spawner_state *)data;
+    (void)self;
+    return asx_task_spawn(s->region, poll_child_ack_then_ok, &s->child_polls, &s->child);
+}
+
+TEST(parallel_spawned_child_that_acknowledges_a_cancel_and_returns_keeps_its_value) {
+    /* Rust's classify_spawn_completion: a child spawned from a poll that
+     * acknowledged a cancel after its first poll and then returns Ok
+     * completes Ok, not Cancelled. The policy reads the task's state, so
+     * it has to be read before the completion walk moves it. */
+    asx_region_id rid;
+    asx_task_id parent_t;
+    asx_budget budget;
+    asx_parallel_config cfg = default_config();
+    spawner_state s;
+    asx_outcome out;
+
+    reset_all();
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(asx_parallel_init(&cfg), ASX_OK);
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    s.region = rid;
+    ASSERT_EQ(asx_task_spawn(rid, poll_spawn_child, &s, &parent_t), ASX_OK);
+
+    /* The parent's poll spawns the child. */
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_TRUE(s.child != ASX_INVALID_ID);
+
+    /* The child polls once, uncancelled. */
+    budget = asx_budget_from_polls(1);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(s.child_polls, 1);
+
+    /* Cancelled now, it acknowledges at its checkpoint and returns. */
+    ASSERT_EQ(asx_task_cancel(s.child, ASX_CANCEL_USER), ASX_OK);
+    budget = asx_budget_from_polls(10);
+    ASSERT_EQ(asx_parallel_run(rid, &budget), ASX_OK);
+    ASSERT_EQ(s.child_polls, 2);
+    ASSERT_EQ(asx_task_get_outcome(s.child, &out), ASX_OK);
+    ASSERT_EQ((int)out.severity, (int)ASX_OUTCOME_OK);
+
+    asx_parallel_reset();
+}
+
 /* ================================================================
  * main
  * ================================================================ */
@@ -2086,6 +2257,9 @@ int main(void) {
     RUN_TEST(parallel_wake_before_the_poll_returns_voids_the_park);
     RUN_TEST(parallel_sleeping_task_is_woken_by_its_timer);
     RUN_TEST(parallel_run_stops_at_the_budget_deadline_while_idle);
+    RUN_TEST(parallel_task_blocked_in_channel_recv_is_not_polled_until_a_send_wakes_it);
+    RUN_TEST(parallel_blocked_receiver_with_no_sender_would_block_until_a_send);
+    RUN_TEST(parallel_spawned_child_that_acknowledges_a_cancel_and_returns_keeps_its_value);
 
     /* Worker routing */
     RUN_TEST_IF(ASX_MAX_WORKERS >= 4u, parallel_multi_worker_steals_preserve_completion,

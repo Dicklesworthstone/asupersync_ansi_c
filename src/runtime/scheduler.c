@@ -461,6 +461,19 @@ uint32_t asx_scheduler_fire_due_timers_internal(void) { return timers_fire(sched
 
 asx_task_id asx_task_current(void) { return g_current_task; }
 
+/* Run `t`'s poll function as the current task, as the sweep does in
+ * sched_poll_slot: asx_task_current() names `tid` inside the call, which is
+ * what the primitives that park their caller (channels, mutexes, ...) key
+ * their wait lists on. For run loops other than the sweep's. */
+asx_status asx_task_poll_current_internal(asx_task_slot *t, asx_task_id tid) {
+    asx_task_id outer = g_current_task;
+    asx_status st;
+    g_current_task = tid;
+    st = t->poll_fn(t->user_data, tid);
+    g_current_task = outer;
+    return st;
+}
+
 asx_status asx_task_park(asx_task_id self) {
     asx_task_slot *t;
     asx_status st = asx_task_slot_lookup(self, &t);

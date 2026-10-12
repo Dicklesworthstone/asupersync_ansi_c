@@ -1440,7 +1440,7 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                 t->park_requested = 0;
                 t->notified = 0;
                 asx_error_ledger_bind_task(tid);
-                poll_result = t->poll_fn(t->user_data, tid);
+                poll_result = asx_task_poll_current_internal(t, tid);
                 asx_error_ledger_bind_task(ASX_INVALID_ID);
                 t->in_poll = 0;
                 g_task_polled_stamp[slot_idx] = g_round_stamp;
@@ -1471,8 +1471,12 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                 }
 
                 if (poll_result == ASX_OK) {
-                    asx_task_state from = t->state;
-                    st = asx_task_set_state_internal(t, tid, ASX_TASK_COMPLETED);
+                    asx_task_state from;
+                    /* Read before the completion walk, which moves the state
+                     * the spawn completion policy looks at, as the sweep
+                     * (sched_poll_slot) does. */
+                    int cancelled = !t->panicked && asx_task_cancel_dominates_internal(t);
+                    st = asx_task_complete_state_internal(t, tid, &from);
                     if (st != ASX_OK) return parallel_return_refused(st);
                     asx_task_complete_cx_reason_internal(t);
                     if (t->cancel_pending) {
@@ -1489,9 +1493,8 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                         }
                     }
                     t->outcome = asx_outcome_make(t->panicked ? ASX_OUTCOME_PANICKED
-                                                  : asx_task_cancel_dominates_internal(t)
-                                                      ? ASX_OUTCOME_CANCELLED
-                                                      : ASX_OUTCOME_OK);
+                                                  : cancelled ? ASX_OUTCOME_CANCELLED
+                                                              : ASX_OUTCOME_OK);
                     asx_trace_emit(ASX_TRACE_TASK_TRANSITION, (uint64_t)tid,
                                    asx_trace_task_transition_aux(from, ASX_TASK_COMPLETED));
                     parallel_task_leaves_worker_lane(worker_idx, (asx_lane_class)li);
@@ -1505,14 +1508,14 @@ asx_status asx_parallel_run(asx_region_id region, asx_budget *budget) {
                         asx_region_handle_for_slot((uint32_t)(rslot - g_regions)));
                     continue;
                 } else if (poll_result != ASX_E_PENDING) {
-                    asx_task_state from = t->state;
+                    asx_task_state from;
                     /* Read before completion bookkeeping, which may release
                      * the slot. A cancelled task's error is how it
                      * acknowledged the cancel, not a fault (as in
                      * scheduler.c). */
                     int panicked = t->panicked;
                     int was_cancelled = !panicked && asx_task_cancel_dominates_internal(t);
-                    st = asx_task_set_state_internal(t, tid, ASX_TASK_COMPLETED);
+                    st = asx_task_complete_state_internal(t, tid, &from);
                     if (st != ASX_OK) return parallel_return_refused(st);
                     if (!panicked && !was_cancelled) t->last_error = poll_result;
                     asx_task_complete_cx_reason_internal(t);

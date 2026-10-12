@@ -404,6 +404,12 @@ int asx_scheduler_next_timer_internal(asx_time *out_next);
  * Defined in scheduler.c. */
 uint32_t asx_scheduler_fire_due_timers_internal(void);
 
+/* Run `t`'s poll function as the current task (asx_task_current() names
+ * `tid` inside), as the sweep does, for a run loop of its own
+ * (asx_parallel_run). Returns the poll function's status. Defined in
+ * scheduler.c. */
+asx_status asx_task_poll_current_internal(asx_task_slot *t, asx_task_id tid);
+
 /* Set the runtime virtual clock, backwards too (a lab snapshot restore).
  * Defined in hooks.c. */
 void asx_runtime_virtual_set_internal(asx_time to);
