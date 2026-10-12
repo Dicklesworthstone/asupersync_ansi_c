@@ -57,17 +57,30 @@
 
 use serde_json::{Value, json};
 
-/// splitmix64: tiny, seedable, no dependency.
-pub struct Rng(u64);
+/// splitmix64: tiny, seedable, no dependency. It also carries the time
+/// quantum of the scenario it generates (see [`time_quantum`]): every
+/// generated time is a multiple of it, which does not draw from the stream.
+pub struct Rng {
+    state: u64,
+    /// The unit, in ns, that generated sleeps, deadlines and clock jumps
+    /// are multiples of. 50 unless the scenario draws another.
+    quantum: u64,
+}
+
+/// The base quantum: 50 ns, every generated time before the quantum existed.
+const BASE_QUANTUM: u64 = 50;
 
 impl Rng {
     pub fn new(seed: u64) -> Self {
-        Rng(seed)
+        Rng {
+            state: seed,
+            quantum: BASE_QUANTUM,
+        }
     }
 
     pub fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
@@ -86,6 +99,32 @@ impl Rng {
     fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
         &items[usize::try_from(self.below(items.len() as u64)).unwrap_or(0)]
     }
+}
+
+/// The time quantum of scenario `index` of batch `seed`, from a stream of
+/// its own so the main one (and so every scenario whose quantum is 50)
+/// stays byte-identical. The timer wheel is 4 levels of 256 slots of 1 ms
+/// ticks (a 256 ms first level), so the quanta are chosen to land timers in
+/// the same tick, in the next, across the 256 ms level boundary (a cascade),
+/// and in the upper levels and the overflow list:
+///
+/// | quantum | share | what a few sleeps reach |
+/// |---|---|---|
+/// | 50 ns | 60% | one tick: ordering within a bucket |
+/// | 1 ms | 15% | same-tick and next-tick timers |
+/// | 50 ms | 15% | the level 0/1 boundary and cascades |
+/// | 1 s | 7% | level 1 |
+/// | 100 s | 3% | levels 2 and 3, and past the wheel's horizon |
+fn time_quantum(seed: u64, index: u64) -> u64 {
+    let mut r = Rng::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ index ^ 0x7131_0001);
+    BASE_QUANTUM
+        * match r.below(100) {
+            0..=59 => 1,
+            60..=74 => 20_000,
+            75..=89 => 1_000_000,
+            90..=96 => 20_000_000,
+            _ => 2_000_000_000,
+        }
 }
 
 const CANCEL_KINDS: [&str; 4] = ["User", "Shutdown", "Timeout", "Deadline"];
@@ -155,7 +194,7 @@ struct Held {
 }
 
 fn sleep_step(rng: &mut Rng) -> Value {
-    json!({"op": "sleep", "ns": 50 * (1 + rng.below(6))})
+    json!({"op": "sleep", "ns": rng.quantum * (1 + rng.below(6))})
 }
 
 fn checkpoint_step(rng: &mut Rng) -> Value {
@@ -261,7 +300,7 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 // deadline lands before or after the scenario's waits.
                 if !held.mutex && rng.chance(25) {
                     return json!({"op": "mutex_lock_until", "mutex": "m",
-                                  "deadline_ns": 50 * (1 + rng.below(20))});
+                                  "deadline_ns": rng.quantum * (1 + rng.below(20))});
                 }
                 held.mutex = !held.mutex;
                 return if held.mutex {
@@ -406,7 +445,7 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                         // deadline wrapper's) entropy in both runtimes.
                         let mut s = json!({"op": "race", "members": members});
                         if rng.chance(25) {
-                            s["deadline_ns"] = json!(50 * (1 + rng.below(6)));
+                            s["deadline_ns"] = json!(rng.quantum * (1 + rng.below(6)));
                         }
                         s
                     }
@@ -481,7 +520,9 @@ fn step(rng: &mut Rng, world: &World, me: &str, held: &mut Held) -> Value {
                 held.barrier_waited = true;
                 return json!({"op": "barrier_wait", "barrier": "b"});
             }
-            23 => return json!({"op": "sleep_until", "at_ns": 50 * (1 + rng.below(12))}),
+            23 => {
+                return json!({"op": "sleep_until", "at_ns": rng.quantum * (1 + rng.below(12))});
+            }
             24 if world.rwlock => {
                 // A held guard is sometimes downgraded first (a read guard
                 // has nothing to downgrade: ASX_E_NOT_FOUND in both).
@@ -644,7 +685,7 @@ fn some_budget(rng: &mut Rng) -> Value {
         let deadline = if rng.chance(20) {
             0
         } else {
-            50 * (1 + rng.below(20))
+            rng.quantum * (1 + rng.below(20))
         };
         b["deadline_ns"] = json!(deadline);
     }
@@ -662,6 +703,7 @@ fn some_budget(rng: &mut Rng) -> Value {
 /// Scenario `index` of the batch seeded `seed`.
 pub fn scenario(seed: u64, index: u64) -> Value {
     let mut rng = Rng::new(seed ^ index.wrapping_mul(0xA24B_AED4_963E_E407));
+    rng.quantum = time_quantum(seed, index);
     // A crowd: more tasks than the C runtime once let wait on one mutex or
     // semaphore (16), all queueing on that lock (bd-9kll.5.1). Rust's
     // waiter queues are unbounded; C's must serve them the same way.
@@ -864,7 +906,7 @@ pub fn scenario(seed: u64, index: u64) -> Value {
         script.push(json!({"at_ns": 0, "op": op}));
     }
     for _ in 0..rng.below(3) {
-        at += 50 * rng.below(5);
+        at += rng.quantum * rng.below(5);
         let op = match rng.below(3) {
             0 => {
                 json!({"op": "cancel_task", "task": *rng.pick(&tasks), "kind": *rng.pick(&CANCEL_KINDS)})
@@ -872,7 +914,7 @@ pub fn scenario(seed: u64, index: u64) -> Value {
             1 => {
                 json!({"op": "cancel_region", "region": *rng.pick(&region_names), "kind": *rng.pick(&CANCEL_KINDS)})
             }
-            _ => json!({"op": "advance", "ns": 50 * (1 + rng.below(4))}),
+            _ => json!({"op": "advance", "ns": rng.quantum * (1 + rng.below(4))}),
         };
         script.push(json!({"at_ns": at, "op": op}));
     }
