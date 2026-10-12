@@ -68,7 +68,7 @@ project, run = map(Path, sys.argv[1:3])
 seed, count = map(int, sys.argv[3:5])
 lock = (project / 'tools/twin_run/Cargo.lock').read_bytes()
 pin = re.search(r'git\+https://github.com/Dicklesworthstone/asupersync[^\n]*#([0-9a-f]{40})', lock.decode()).group(1)
-ids = {f'gen-{seed}-{index}' for index in range(count)}
+ids = {f'gen-{seed}-{index}-001' for index in range(count)}
 capture_log = (run / 'capture.log').read_text()
 passed = re.findall(r'^PASS (\S+) sha256:[0-9a-f]{64}$', capture_log, re.M)
 assert len(passed) == count and set(passed) == ids, 'missing or duplicate Rust capture'
@@ -122,7 +122,7 @@ FAILED_ID="$(python3 -I - "$RUN_DIR/mutant.compare.log" <<'PY'
 from pathlib import Path
 import re
 import sys
-print(re.search(r'^FAIL (gen-[0-9]+-[0-9]+): ', Path(sys.argv[1]).read_text(), re.M).group(1))
+print(re.search(r'^FAIL (gen-[0-9]+-[0-9]+-001): ', Path(sys.argv[1]).read_text(), re.M).group(1))
 PY
 )"
 original="$RUN_DIR/scenarios/$FAILED_ID.json"
