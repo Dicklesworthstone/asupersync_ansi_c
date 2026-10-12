@@ -400,7 +400,7 @@ impl Future for MaskedFinalizer {
 }
 ```
 
-**C status:** not implemented. The C sketch in the earlier version (`asx_masked_finalizer_poll`, `asx_enter_cancel_mask`) names functions that do not exist. Public cleanup callbacks run synchronously without an automatically installed cancellation mask; explicit cleanup tasks have no dedicated masked finalizer wrapper.
+**C status:** implemented for async finalizers (`asx_region_defer_async`, `bd-9kll.3.24`). The finalizer task is created with mask depth 1 (`task_spawn_impl`, `src/runtime/lifecycle.c`, the `finalizer_budget` argument), which holds from its first poll to its completion as `MaskedFinalizer`'s does, so a checkpoint inside it returns Ok under any cancel or budget cancel, and its outcome is what its poll returned (`finalizer` task flag, `asx_task_cancel_dominates_internal`). The C sketch in the earlier version (`asx_masked_finalizer_poll`, `asx_enter_cancel_mask`) names functions that do not exist and are not needed. Synchronous callbacks still run inline in the region's drain with no installed mask (Rust promotes them to tasks too). Unit tests: `defer_async_finalizer_runs_as_a_masked_cleanup_task_before_close`; scenario `region-finalizer-masked-under-region-cancel-001` awaits its Rust capture.
 
 ### 6.4 Bounded Finalizer Budget
 
@@ -409,9 +409,9 @@ impl Future for MaskedFinalizer {
 | `FINALIZER_POLL_BUDGET` | 100 polls | `src/record/finalizer.rs:42` |
 | `FINALIZER_TIME_BUDGET_NANOS` | 5,000,000,000 (5 s) | `src/record/finalizer.rs:45` |
 
-A finalizer task gets `finalizer_budget()` (poll quota 100, `src/record/finalizer.rs:53-78`) with a deadline 5 s after it is spawned (`src/runtime/state.rs:8879-8882`), and is wrapped in `BudgetedFinalizer` (`:8923-8928`), which enforces a region shutdown ceiling when one is set (`src/record/finalizer.rs:402-431`). What happens when a finalizer task overruns the 100-poll quota was not traced (unverified).
+A finalizer task gets `finalizer_budget()` (poll quota 100, `src/record/finalizer.rs:53-78`) with a deadline 5 s after it is spawned (`src/runtime/state.rs:8879-8882`), and is wrapped in `BudgetedFinalizer` (`:8923-8928`), which enforces a region shutdown ceiling when one is set (`src/record/finalizer.rs:402-431`). An overrun is advisory at the task's own `Cx`: the lab charges one poll per poll and a poll past the quota raises a PollQuota cancel on the `Cx` (`src/lab/runtime.rs:4661-4669`); the finalizer is masked, so it is never delivered and the finalizer runs on. The deadline arms no timer for a cleanup task (`src/runtime/state.rs:4401`). Only the region's shutdown ceiling (`BudgetedFinalizer`, `src/record/finalizer.rs:423-640`) retires a finalizer for its budget, and it is `None` unless a close with a budget set it (`close_region_command_with_budget`, `src/runtime/state.rs:4938`); neither the lab's DSL close nor its cancel sets one.
 
-**C status:** `asx_runtime_config.finalizer_poll_budget` and `finalizer_time_budget_ns` exist (`include/asx/asx_config.h:1227-1228`, defaults 100 and 5 s at `src/runtime/hooks.c:785-786`); `rt.c` rejects a zero poll budget (`src/runtime/rt.c:164`), but no C code reads either field otherwise (open bead bd-udlh).
+**C status:** `asx_runtime_config.finalizer_poll_budget` and `finalizer_time_budget_ns` (`include/asx/asx_config.h:1227-1228`, defaults 100 and 5 s at `src/runtime/hooks.c:785-786`; `rt.c` rejects a zero poll budget) are installed by init and reload and read when an async finalizer is spawned (`asx_region_admit_finalizers_internal`, `src/runtime/quiescence.c`): the task's budget is that poll quota at priority 128 with that deadline after the spawn, so the advisory behavior above is the same in C. C has no region shutdown ceiling, so there is no counterpart of `BudgetedFinalizer`'s enforcement.
 
 ### 6.5 Finalizer Escalation Policies
 
@@ -423,7 +423,7 @@ A finalizer task gets `finalizer_budget()` (poll quota 100, `src/record/finalize
 
 Correction: at `5e60b1c4c` this enum is stored in `FinalizerStack` (`src/record/finalizer.rs:199-204`) but no runtime code outside `src/record/finalizer.rs` reads it (`git grep` finds only the re-export in `src/record/mod.rs:20`), so the policy described here is not wired into finalizer execution.
 
-**C status:** `asx_finalizer_escalation` (`include/asx/asx_config.h:1214-1218`), default `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:826`), validated at `src/runtime/rt.c:161-162`, never otherwise read (bd-udlh).
+**C status:** `asx_finalizer_escalation` (`include/asx/asx_config.h:1214-1218`), default `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:826`), validated at `src/runtime/rt.c:161-162`, installed at init and reload and read by an async finalizer task's poll (`asx_finalizer_task_poll`, `src/runtime/quiescence.c`) when it is polled past its poll budget or deadline: `SOFT` does nothing, `BOUNDED_LOG` (the default) writes one log line and lets it run on, as Rust's masked finalizer does, and `BOUNDED_PANIC` is a C-only opt-in that completes the task PANICKED at that poll. Rust has no counterpart of the third; the first two are Rust's behavior, since it never consults the enum.
 
 ### 6.6 Registration Rejection
 
@@ -761,9 +761,9 @@ None of the candidate fixture IDs below exists in the repository: none is `fixtu
 | Fixture ID | Description | Invariants | Status |
 |-----------|-------------|------------|--------|
 | `finalizer-001` | Sync finalizer runs | Execution order | Not materialized; no DSL v2 finalizer op |
-| `finalizer-002` | Async finalizer runs as masked task | Cancel masking | Not materialized; no DSL v2 finalizer op |
+| `finalizer-002` | Async finalizer runs as masked task | Cancel masking | Scenario `region-finalizer-masked-under-region-cancel-001` written (`regions[].finalizers`); not yet captured from Rust |
 | `finalizer-003` | LIFO execution order | Reverse registration | Not materialized (C unit test `cleanup_drain_lifo_order`) |
-| `finalizer-004` | Finalizer poll budget exceeded | Budget enforcement | Not materialized |
+| `finalizer-004` | Finalizer poll budget exceeded | Budget enforcement | Scenario `region-finalizer-poll-budget-advisory-001` written: the budget is advisory, so it observes the finalizer running on; not yet captured from Rust |
 | `finalizer-005` | Finalizer time budget exceeded | Budget enforcement | Not materialized |
 | `finalizer-006` | BoundedLog escalation (default) | Escalation policy | Not materialized; the policy is not wired at `5e60b1c4c` (section 6.5) |
 | `finalizer-007` | Soft escalation (wait indefinitely) | Escalation policy | Not materialized; as `finalizer-006` |
@@ -808,8 +808,8 @@ None of the candidate fixture IDs below exists in the repository: none is `fixtu
 | C5 | Double guard on Finalizing→Closed | Not implemented: one check sequence (section 3.1) |
 | C6 | Leak detection at task completion and region finalization | Implemented at holder completion, explicit drop and finalization after callbacks and cleanup tasks finish (sections 4.2-4.3); this does not complete full body-driven close (bd-9kll.3.4) |
 | C7 | Configurable leak response with escalation | Implemented with default LOG; escalation includes the current leak and Recover uses Error (section 5; bd-9kll.3.6) |
-| C8 | Finalizer LIFO with bounded budget | LIFO only, for the C cleanup stack; the budget fields are not read (sections 6.2, 6.4; bd-udlh) |
-| C9 | Cancel-masked async finalizers | Not implemented (section 6.3) |
+| C8 | Finalizer LIFO with bounded budget | LIFO for the C cleanup stack; an async finalizer task carries the budget fields (poll quota, deadline, advisory as in Rust) and the escalation is read (sections 6.2, 6.4, 6.5; bd-9kll.3.24). No region shutdown ceiling |
+| C9 | Cancel-masked async finalizers | Implemented for `asx_region_defer_async` (section 6.3; bd-9kll.3.24); Rust-capture of its scenarios pending |
 | C10 | Cleanup stack per task/region with LIFO drain | Per region only; public registration/unregistration, `asx_region_defer_sync` (Rust `Scope::defer_sync`) and reentrant synchronous LIFO drain are implemented (sections 6.1-6.2, 7.3) |
 | C11 | Sorted obligation storage (BTreeMap equivalent) | Not applicable as stated: Rust's runtime table is an arena too (section 4.4). C scans slots in order; a holder's leaks go newest first |
 | C12 | Reentrance guard for leak detection | Not needed in the current code (section 4.5) |

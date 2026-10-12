@@ -1393,9 +1393,9 @@ retry may omit the original reason. Supply a reason only for a cancelled
 body. That outcome selects the close path and is not joined into
 `asx_region_get_close_outcome`, which aggregates completed child-task outcomes.
 These C outcomes carry severity only. The scope wraps a region supplied by
-the caller; it does not yet provide Rust's child-region factory, typed body
-result or serialized, masked async-finalizer barrier (`bd-9kll.3.4`,
-`bd-9kll.3.14`).
+the caller; it does not yet provide Rust's child-region factory or typed body
+result (`bd-9kll.3.4`, `bd-9kll.3.14`). Async finalizers are registered on the
+region with `asx_region_defer_async` (see Cleanup Stacks).
 
 An `asx_cx` is a plain struct the caller owns; its budget, clock and entropy pointers borrow caller-owned storage, so creating or narrowing one allocates nothing. The design mirrors Rust's ownership-based authority model, adapted for C's manual lifetime management.
 
@@ -1465,11 +1465,11 @@ Combined with fault injection (`ASX_FAULT_CLOCK_SKEW`, `ASX_FAULT_CLOCK_REVERSE`
 **Reloadable at runtime** (no restart needed):
 - `leak_response`, `leak_escalation` — panic, log, silent, or recover on detected leaks
 - `wait_policy` — busy-spin, yield, or sleep (resource-plane only)
-- `finalizer_poll_budget` — cleanup poll cap
-- `finalizer_time_budget_ns` — cleanup time cap
+- `finalizer_poll_budget` — poll quota of an async finalizer's task
+- `finalizer_time_budget_ns` — its deadline, after its spawn
 - `finalizer_escalation` — soft, bounded-log, or bounded-panic
 
-Today only the leak fields change behavior; `wait_policy` and the `finalizer_*` fields are validated and stored, but nothing reads them yet.
+Today the leak fields and the `finalizer_*` fields (read when a finalizer is spawned, so a reload applies to finalizers spawned afterwards) change behavior; `wait_policy` is validated and stored, but nothing reads it yet.
 
 **Rejected** (require restart):
 - `max_cancel_chain_depth`, `max_cancel_chain_memory` — existing in-flight chains may exceed new limits
@@ -1597,9 +1597,11 @@ asx_status hold_both(asx_region_id region, void *file, void *lock) {
 
 Each entry carries a generation counter so stale cleanup handles cannot accidentally fire against a recycled slot. Handles are local to the region where they were registered. Registration requires an Open region and is bounded by `ASX_CLEANUP_STACK_CAPACITY`; exhaustion leaves the stack unchanged. When the region reaches Finalizing, callbacks run before its leak-policy audit, so a finalizer can resolve a reservation before closure. Recursive drain of that region returns `ASX_E_PENDING` until its active callbacks return. Traversal uses call-local handles and validates them again, so callbacks may drain or cancel unrelated regions without corrupting the outer walk. A standalone `asx_cleanup_stack` also supports deterministic reuse; callback-time pushes are rejected and recursive stack drains are no-ops. Quiescence condition Q4 checks that no cleanup entries remain.
 
-Ordinary `asx_task_spawn` and `asx_task_spawn_captured` accept only Open regions. A finalizer can use `asx_task_spawn_cleanup` or `asx_task_spawn_cleanup_captured` to start required cleanup in Finalizing. Those tasks bypass the region's live-task quota in Finalizing, remain bounded by the task/capture arenas, and delay closure until they complete. Resuming region drain runs them without issuing another drain cancellation. Work spawned from a task already executing cancellation cleanup keeps the inherited deadline, cost quota and priority, with an unbounded inherited poll quota. These synchronous callbacks and explicit tasks do not yet provide Rust's serialized, masked async-finalizer barrier or timeout escalation.
+Ordinary `asx_task_spawn` and `asx_task_spawn_captured` accept only Open regions. A finalizer can use `asx_task_spawn_cleanup` or `asx_task_spawn_cleanup_captured` to start required cleanup in Finalizing. Those tasks bypass the region's live-task quota in Finalizing, remain bounded by the task/capture arenas, and delay closure until they complete. Resuming region drain runs them without issuing another drain cancellation. Work spawned from a task already executing cancellation cleanup keeps the inherited deadline, cost quota and priority, with an unbounded inherited poll quota.
 
 `asx_region_defer_sync(region, fn, user_data)` registers a handler on a region's own stack, as Rust's `Scope::defer_sync` does. It is accepted while the region is OPEN and refused (`ASX_E_REGION_CLOSED`) once it is closing. The region's handlers run once, LIFO, when it finalizes, after its tasks and child regions are done and before its leak audit and close. A handler may spawn cleanup work into the region; the close then waits for it. For a stack you own, `asx_cleanup_drain()` gives the same deterministic order.
+
+`asx_region_defer_async(region, poll_fn, user_data)` registers an async finalizer, as Rust's `Scope::defer_async` does: `poll_fn` is a task poll function, and it shares the stack and the LIFO order with the sync handlers. When the region is FINALIZING the sync entries above it run, and the runtime then spawns it as the region's cleanup task, **one finalizer at a time**: the next is spawned only after the previous task completed. The task is masked from its first poll to its end, so the region's cancellation never interrupts it, and its outcome is whatever its poll returned. The lab spawns it in the step that finds the region FINALIZING, after that step's timers and before its pick (Rust's `schedule_async_finalizers`); the sweep scheduler spawns it once no task is left to run. Its budget is `finalizer_poll_budget` polls at priority 128 with a deadline `finalizer_time_budget_ns` after the spawn, the defaults being Rust's constants (100, 5 s). As in Rust the budget is advisory: a masked finalizer that outlasts it runs on, `ASX_FINALIZER_BOUNDED_LOG` (the default) noting its first excess poll in the log and `ASX_FINALIZER_SOFT` staying silent. `ASX_FINALIZER_BOUNDED_PANIC` is an opt-in with no Rust counterpart: the finalizer is completed PANICKED at that poll. Not yet as Rust: a sync handler runs inline in the drain, where Rust also spawns it as a task; the region shutdown ceiling that Rust's `BudgetedFinalizer` enforces has no C counterpart; and `asx_parallel_run` spawns no finalizer, so a parallel run leaves them to the close that follows (`bd-9kll.3.24`).
 
 ## Outcome Severity Lattice
 

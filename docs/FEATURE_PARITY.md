@@ -92,6 +92,17 @@ budget escalation remain unproven or absent; original `bd-9kll.3.4` stays
 open. No target-device or complete Scope claim follows from host-profile runs.
 The admission fixture requirement remains open in `bd-9kll.3.5`.
 
+Async finalizers (`bd-9kll.3.24`): `asx_region_defer_async` registers a
+finalizer that the runtime spawns, once its region is Finalizing, as the
+region's masked cleanup task, one at a time and last registered first,
+with the finalizer budget; DSL v2 gains `regions[].finalizers`, and six
+scenarios (order, the Finalizing-admission must-fail, poll and time budget
+advisory, child before parent, masked under a region cancel) are written for
+Rust capture. This is unit-tested C behavior, not parity: no Rust capture of
+them exists yet, a sync callback still runs inline where Rust spawns a task,
+and the region shutdown ceiling Rust's `BudgetedFinalizer` enforces has no C
+counterpart.
+
 The synchronous cancellation guard
 `asx_task_masked` (`src/runtime/cancellation.c:755`) calls its body once within one admitted mask
 level and releases that level on every normal C return, including an error or

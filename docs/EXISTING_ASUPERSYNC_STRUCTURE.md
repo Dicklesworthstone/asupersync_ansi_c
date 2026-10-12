@@ -1289,7 +1289,7 @@ The Expected Result column gives C's actual status (and Rust's where it differs 
 
 | ID | Behavior | Expected Result | Category |
 |----|---------|-----------------|----------|
-| FB-001 | Create child task in non-`Open` region | `ASX_E_REGION_CLOSED` (was `ASX_E_REGION_NOT_OPEN`, which C never returns); C still admits spawns in `Finalizing` (`bd-9kll.3.5`) | region-gate |
+| FB-001 | Create child task in non-`Open` region | `ASX_E_REGION_CLOSED` (was `ASX_E_REGION_NOT_OPEN`, which C never returns); C refuses a normal spawn in `Finalizing` and admits only explicit cleanup tasks there, finalizer tasks included (`bd-9kll.3.5`; scenario `region-finalizer-spawn-refused-must-fail-001` awaits its Rust capture) | region-gate |
 | FB-002 | Create obligation in non-`Open` region | `ASX_E_REGION_CLOSED` (fixture `obligation-reserve-closed-region-must-fail-001`) | region-gate |
 | FB-003 | Double-commit obligation | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` (`ASX_E_OBLIGATION_ALREADY_RESOLVED` is never returned by C) | obligation-linearity |
 | FB-004 | Double-abort obligation | C `ASX_E_INVALID_TRANSITION`; Rust `ObligationAlreadyResolved` | obligation-linearity |
