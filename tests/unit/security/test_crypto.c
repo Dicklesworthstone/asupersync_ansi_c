@@ -132,6 +132,52 @@ TEST(sha256_final_wipes_context) {
     ASSERT_TRUE(asx_crypto_ct_is_zero(&ctx, sizeof(ctx)));
 }
 
+/* A finished context holds the message schedule and chaining state of
+ * whatever was hashed, which can be a secret: reading the caller's context
+ * back after `final` must give zeros, for every hash and for the keyed
+ * HMAC context (whose pad blocks are the key itself). */
+TEST(sha1_final_wipes_context) {
+    asx_sha1_ctx ctx;
+    uint8_t d[ASX_SHA1_DIGEST_SIZE];
+
+    asx_sha1_init(&ctx);
+    asx_sha1_update(&ctx, "secret", 6u);
+    asx_sha1_final(&ctx, d);
+    ASSERT_TRUE(asx_crypto_ct_is_zero(&ctx, sizeof(ctx)));
+    ASSERT_FALSE(asx_crypto_ct_is_zero(d, sizeof(d))); /* the digest itself is not wiped */
+}
+
+TEST(sha512_final_wipes_context) {
+    asx_sha512_ctx ctx;
+    uint8_t d[ASX_SHA512_DIGEST_SIZE];
+
+    asx_sha512_init(&ctx);
+    asx_sha512_update(&ctx, "secret", 6u);
+    asx_sha512_final(&ctx, d);
+    ASSERT_TRUE(asx_crypto_ct_is_zero(&ctx, sizeof(ctx)));
+    ASSERT_FALSE(asx_crypto_ct_is_zero(d, sizeof(d)));
+}
+
+TEST(hmac_final_wipes_the_keyed_context) {
+    static const uint8_t long_key[100] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+    asx_hmac_sha256_ctx ctx;
+    uint8_t mac[ASX_HMAC_SHA256_SIZE];
+
+    /* A key within the block size is padded into the context directly... */
+    asx_hmac_sha256_init(&ctx, "an-hmac-key", 11u);
+    asx_hmac_sha256_update(&ctx, "message", 7u);
+    asx_hmac_sha256_final(&ctx, mac);
+    ASSERT_TRUE(asx_crypto_ct_is_zero(&ctx, sizeof(ctx)));
+    ASSERT_FALSE(asx_crypto_ct_is_zero(mac, sizeof(mac)));
+
+    /* ...and a longer one is hashed first: its digest is key material too. */
+    asx_hmac_sha256_init(&ctx, long_key, sizeof(long_key));
+    asx_hmac_sha256_update(&ctx, "message", 7u);
+    asx_hmac_sha256_final(&ctx, mac);
+    ASSERT_TRUE(asx_crypto_ct_is_zero(&ctx, sizeof(ctx)));
+    ASSERT_FALSE(asx_crypto_ct_is_zero(mac, sizeof(mac)));
+}
+
 /* ================================================================== */
 /* SHA-512                                                             */
 /* ================================================================== */
@@ -707,6 +753,9 @@ int main(void) {
     RUN_TEST(sha256_896_bit_message);
     RUN_TEST(sha256_million_a);
     RUN_TEST(sha256_final_wipes_context);
+    RUN_TEST(sha1_final_wipes_context);
+    RUN_TEST(sha512_final_wipes_context);
+    RUN_TEST(hmac_final_wipes_the_keyed_context);
 
     RUN_TEST(sha512_empty);
     RUN_TEST(sha512_abc);
