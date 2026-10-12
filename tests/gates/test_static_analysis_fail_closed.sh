@@ -15,8 +15,9 @@
 #   - analyzers missing, FAIL_ON_MISSING_LINTER=1   -> FAILS
 #   - analyzers missing, FAIL_ON_MISSING_LINTER=0   -> SKIP, PASSES
 #   - analyzer exits abnormally                     -> FAILS
+#   - diagnostic capture cannot store output        -> FAILS (both analyzers)
 #
-# No real analyzer runs, so this takes well under a second. Each run writes
+# No real analyzer runs. Each run writes
 # under build/test-gates/<run_id>/ and logs JSONL to build/test-logs/gates.jsonl.
 # Nothing is deleted.
 set -uo pipefail
@@ -84,7 +85,16 @@ run_case() {
     [ $# -gt 0 ] && shift
 
     local out rc observed status
-    out="$(env "${env_args[@]}" bash "$RUNNER" "$@" 2>&1)"
+    case "$name" in
+        cppcheck_capture_write_failure_fails|clang_tidy_capture_write_failure_fails)
+            # A real kernel file-size limit rejects writes while pipes remain
+            # usable. Ignoring SIGXFSZ lets an analyzer exit0 after a failed
+            # printf, reproducing the observed full-filesystem false PASS.
+            out="$(env "${env_args[@]}" bash -c \
+                'trap "" XFSZ; ulimit -f 0; exec bash "$@"' _ "$RUNNER" "$@" 2>&1)"
+            ;;
+        *) out="$(env "${env_args[@]}" bash "$RUNNER" "$@" 2>&1)" ;;
+    esac
     rc=$?
     printf '%s\n' "$out" >"$WORK/$name.log"
 
@@ -121,6 +131,10 @@ run_case missing_analyzers_skip_when_lenient 0 'static-analysis: PASS' \
     CPPCHECK= CLANG_TIDY= FAIL_ON_MISSING_LINTER=0 --
 run_case analyzer_crash_fails nonzero '1 analyzer error' \
     CPPCHECK=false CLANG_TIDY= FAIL_ON_MISSING_LINTER=0 --
+run_case cppcheck_capture_write_failure_fails nonzero 'cppcheck output capture exited' \
+    CPPCHECK="bash $WORK/cppcheck_plain.sh" CLANG_TIDY= FAIL_ON_MISSING_LINTER=0 --
+run_case clang_tidy_capture_write_failure_fails nonzero 'clang-tidy output capture exited' \
+    CPPCHECK= CLANG_TIDY="bash $WORK/tidy_stdout.sh" FAIL_ON_MISSING_LINTER=0 --
 
 # Validate only this run: older raw artifacts are preserved, including any
 # malformed records that previously exposed the unescaped-regex defect.
@@ -131,18 +145,18 @@ import sys
 prefix = '"run_id":' + json.dumps(sys.argv[2])
 with open(sys.argv[1]) as stream:
     rows = [json.loads(line) for line in stream if prefix in line]
-if len(rows) != 8:
-    raise ValueError(f"expected all eight actual controls, got {len(rows)}")
+if len(rows) != 10:
+    raise ValueError(f"expected all ten actual controls, got {len(rows)}")
 if any(row["suite"] != "static_analysis_fail_closed" or
        row["run_id"] != sys.argv[2] for row in rows):
     raise ValueError("record does not belong to the current static-analysis run")
 waived = next(row for row in rows if row["test"] == "waived_finding_passes")
 if waived["expected"] != r"0:cppcheck: 0 finding\(s\), 1 waived":
     raise ValueError("JSON encoding changed the original expected regex")
-print("all eight current-run records are valid JSON and preserve the expected regex")
+print("all ten current-run records are valid JSON and preserve the expected regex")
 PY
 then
-    echo "  PASS: current_run_jsonl_is_valid (8 records)"
+    echo "  PASS: current_run_jsonl_is_valid (10 records)"
 else
     cat "$WORK/jsonl.log" >&2
     echo "  FAIL: current_run_jsonl_is_valid (log $WORK/jsonl.log)"
@@ -151,7 +165,7 @@ fi
 
 echo ""
 if [ "$failures" -eq 0 ]; then
-    echo "test_static_analysis_fail_closed: PASS (8 cases)"
+    echo "test_static_analysis_fail_closed: PASS (10 cases)"
     exit 0
 fi
 echo "test_static_analysis_fail_closed: FAIL ($failures case(s))"

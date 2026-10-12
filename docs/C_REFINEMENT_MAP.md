@@ -51,7 +51,9 @@ the Rust-captured fixtures that exercise it, a status, and notes. Bead:
   may move to another task and settle without changing the original holder's
   liability. Holder completion and the finalization leak audit remain separate
   internal paths. Broadcast permits use the same resource-bound token
-  settlement (`src/channel/broadcast.c:400-428`).
+  settlement (`src/channel/broadcast.c:400-430`). Resolved tracked broadcast
+  credits are refused before publication, including retained copies after
+  send, abort or holder completion.
   `asx_obligation_handoff` (`src/runtime/lifecycle.c:2030`) explicitly changes a
   checked plain credit's holder and region, preserves its identity, reuses
   same-region quota and refuses a full destination before changing ownership.
@@ -66,9 +68,15 @@ the Rust-captured fixtures that exercise it, a status, and notes. Bead:
   Rule #14 stays Partial because legacy holderless credits can still be
   created and settled without a Running holder (`bd-9kll.3.4`, item 5).
   Held-credit and checked-handoff acceptance for `bd-9kll.3.16` and
-  `bd-9kll.3.17` must be rerun for the protected recovery merge; the prior
-  acceptance covered only `cb965250`. Canonical handoff captures are present,
-  but they do not change any historical corpus count or prove that new merge.
+  `bd-9kll.3.17` was independently verified at
+  `dbb3e4c5210620ac0da45e7da71b76aa77631fbf`: 293 focused tests, 153 canonical
+  and 153 fresh linked-Rust captures, and 24 actual host-profile runs with
+  12 matching repeat pairs. The captured corpus includes 12 handoff scenarios.
+  CORE, FREESTANDING and EMBEDDED_ROUTER were each built at R1 and R3; these
+  are native host executions. The copied-broadcast regression fails two tests
+  before the guard and passes after it. An isolated raw-authorization test
+  variant builds successfully and fails the named wrong-holder test.
+  No native32, device, general termination or complete formal-rule claim follows.
 - **Conformance evidence:** CI run `38022221848`, job `114126430466`, ran on
   `47e634b`. After the comparator's negative-control self-test, it printed
   `asx-conformance: compared=54 pass=54 fail=0 error=0`. Only that historical

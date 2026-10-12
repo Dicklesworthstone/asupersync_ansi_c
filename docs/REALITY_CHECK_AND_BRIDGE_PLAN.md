@@ -55,6 +55,53 @@ Granular completed/pending work and revision-bound evidence remain on
 those original Beads. This increment establishes no new performance, physical-device,
 full runtime profile/codec, or release-readiness claim.
 
+### Held-credit and handoff increment, 2026-10-12
+
+The runtime increment verified at `dbb3e4c5210620ac0da45e7da71b76aa77631fbf`
+closes the held-credit authorization and explicit transfer gap in original
+`bd-9kll.3.16` and its `.3.17` companion. Plain held IDs require the actual holder's
+poll and owning region. Genuine channel and sync permits instead authenticate
+their physical binding and may move without reassigning the original holder's
+liability. Explicit handoff moves checked plain credits and their region in
+place, reuses same-region quota, and refuses invalid destinations atomically.
+The scenario interpreter and real pinned Rust token transfer are connected to
+the canonical observation, ownership and trace projection.
+
+Recovery preserved the newer counted MPSC/broadcast endpoints, batch receives,
+closed waiting, eviction, task-group cancellation and executed trace codec
+checks. Independent review caught a new broadcast integration defect: a retained
+tracked permit copy could publish after its credit resolved. The strengthened
+tests fail before the fix; the corrected path rejects that copy and a permit
+retained after holder cleanup before publication.
+
+GCC and Clang each pass all 164 unit programs. Both compilers' fresh ASan/UBSan
+runs pass 293 focused cases. All 153 canonical fixtures match; a fresh producer
+linked to the pinned Rust runtime recaptures all 153 with equal non-provenance
+data. Twelve are new handoff witnesses. An incoming broadcast fixture exposes
+the genuine receiver count; this is supported by the fresh Rust capture, rather
+than a rewritten expected result to hide C drift. A separate live seed9 run
+captures and compares 200/200 generated scenarios successfully.
+
+Six actual native-host profile/class builds (CORE, FREESTANDING and
+EMBEDDED_ROUTER, each R1/R3) pass 59 budget and 29 broadcast cases per lane.
+Twenty-four seeded lifecycle runs produce 1,200 detail records and 12 identical
+repeat pairs after removing only run IDs. Full gate controls, pinned formatting,
+strict lint and fixture/document integrity pass. Earlier reset, stale-binary,
+space-exhaustion and failed review attempts remain recorded and excluded from
+successful evidence. Recovery used an isolated main checkout and preserved
+both histories.
+
+The authenticity gate rebuilds the selected runner and checks exact rejection
+exits. Gate JSONL fields are escaped and validated. A separate observed analyzer
+capture-write defect is tracked as `bd-6oht`: saving diagnostics must succeed
+independently of an analyzer's exit status.
+
+Formal rule14 remains Partial because holderless credits can still be created
+and settled without a Running holder, which belongs to original K4. The broader
+kernel, independent runtime storage, native ownership journal/replay, physical
+device, full runtime profile/codec, performance and release requirements above
+remain open. This increment does not claim project completion.
+
 ## Assessment at the audited revision
 
 The important change since October 8 is that the oracle now runs real code. The C interpreter

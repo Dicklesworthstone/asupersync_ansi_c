@@ -11,6 +11,7 @@
 # but empty means the pinned tool could not be resolved. A missing analyzer
 # is a SKIP unless FAIL_ON_MISSING_LINTER=1, and an analyzer that exits
 # abnormally is always a failure: no analyzer output is not a clean result.
+# Diagnostic capture errors also fail, even when the analyzer exits0.
 #
 # Exit 0 = pass, Exit 1 = violations, Exit 2 = usage/config error
 #
@@ -137,11 +138,12 @@ run_cppcheck() {
 
     local cppcheck_exit=0
     local tmpfile
+    local capture_status=()
     tmpfile=$(mktemp)
 
     # Findings go to stderr in a one-line template for machine parsing.
     # --error-exitcode=0 means a non-zero exit is cppcheck itself failing.
-    "${CPPCHECK_CMD[@]}" \
+    if "${CPPCHECK_CMD[@]}" \
         --quiet \
         --enable=warning,performance,portability,style \
         --std=c99 \
@@ -158,7 +160,15 @@ run_cppcheck() {
         --template='{file}:{line}:{severity}:{id}:{message}' \
         -I "$REPO_ROOT/include" \
         "${SCAN_DIRS[@]/#/$REPO_ROOT/}" \
-        2>"$tmpfile" || cppcheck_exit=$?
+        2>&1 | tee "$tmpfile" >/dev/null; then
+        capture_status=("${PIPESTATUS[@]}")
+    else
+        capture_status=("${PIPESTATUS[@]}")
+    fi
+    cppcheck_exit=${capture_status[0]}
+    if [[ ${capture_status[1]} -ne 0 ]]; then
+        tool_error "cppcheck output capture" "${capture_status[1]}"
+    fi
 
     local finding_count=0
     local waiver_count=0
@@ -195,7 +205,7 @@ run_cppcheck() {
         tool_error cppcheck "$cppcheck_exit"
     fi
 
-    rm -f "$tmpfile"
+    # Retain raw output, including partial diagnostic captures on I/O failure.
     CPPCHECK_FINDINGS=$finding_count
     CPPCHECK_WAIVERS=$waiver_count
 
@@ -216,6 +226,7 @@ run_clang_tidy() {
     local waiver_count=0
     local tidy_exit=0
     local tmpfile
+    local capture_status=()
     tmpfile=$(mktemp)
 
     # Build the list of source files
@@ -238,12 +249,20 @@ run_clang_tidy() {
     # bugprone-branch-clone is excluded: the exhaustive enum switches here list
     # every enumerator on purpose so -Wswitch flags a newly added value, which
     # merging identical case bodies would defeat.
-    "${CLANG_TIDY_CMD[@]}" \
+    if "${CLANG_TIDY_CMD[@]}" \
         --checks='-*,bugprone-*,cert-*,misc-*,performance-*,portability-*,-bugprone-easily-swappable-parameters,-bugprone-branch-clone,-cert-dcl37-c,-cert-dcl51-c,-cert-err33-c,-misc-unused-parameters,-misc-include-cleaner' \
         "${src_files[@]}" \
         -- -std=c99 -I"$REPO_ROOT/include" \
            -DASX_PROFILE_CORE -DASX_CODEC_JSON -DASX_DETERMINISTIC=1 \
-        >"$tmpfile" 2>&1 || tidy_exit=$?
+        2>&1 | tee "$tmpfile" >/dev/null; then
+        capture_status=("${PIPESTATUS[@]}")
+    else
+        capture_status=("${PIPESTATUS[@]}")
+    fi
+    tidy_exit=${capture_status[0]}
+    if [[ ${capture_status[1]} -ne 0 ]]; then
+        tool_error "clang-tidy output capture" "${capture_status[1]}"
+    fi
 
     while IFS= read -r line; do
         if [[ "$line" =~ ^[^:]+:[0-9]+:[0-9]+:\ (warning|error): ]]; then
@@ -276,7 +295,7 @@ run_clang_tidy() {
         tool_error clang-tidy "$tidy_exit"
     fi
 
-    rm -f "$tmpfile"
+    # Retain raw output, including partial diagnostic captures on I/O failure.
     CLANG_TIDY_FINDINGS=$finding_count
     CLANG_TIDY_WAIVERS=$waiver_count
 
