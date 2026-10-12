@@ -188,6 +188,36 @@ static void diff_dispatches(uint32_t want, uint32_t got) {
     }
 }
 
+/* The lab's ScheduleCertificate (bd-9kll.4.8): a running hash of every
+ * dispatch's Rust arena id, lane and step (runtime/scheduler/priority.rs,
+ * ScheduleCertificate::record). The dispatch strings name tasks by scenario
+ * name, so two runs can agree on them and still have polled different arena
+ * slots; the certificate also counts the dispatches. Returns 1 when the run's
+ * hash and count equal the fixture's, else prints both and returns 0. */
+static int certificate_matches(const char *id, uint32_t want_schedule, uint32_t run) {
+    const char *want_hash = asx_json_get_string(&g_fixture, want_schedule, "certificate_hash");
+    const char *got_hash = asx_json_get_string(&g_run, run, "certificate_hash");
+    uint64_t want_n = 0u;
+    uint64_t got_n = 0u;
+    int have_want_n =
+        asx_json_u64(&g_fixture, asx_json_get(&g_fixture, want_schedule, "decisions"), &want_n);
+    int have_got_n = asx_json_u64(&g_run, asx_json_get(&g_run, run, "decisions"), &got_n);
+
+    if (want_hash == NULL || !have_want_n) {
+        fprintf(stdout, "FAIL %s: fixture has no schedule.certificate_hash / decisions\n", id);
+        return 0;
+    }
+    if (got_hash == NULL || !have_got_n) {
+        fprintf(stdout, "FAIL %s: the C run produced no schedule certificate\n", id);
+        return 0;
+    }
+    if (strcmp(want_hash, got_hash) == 0 && want_n == got_n) return 1;
+    fprintf(stdout, "FAIL %s: schedule certificate\n", id);
+    fprintf(stdout, "    rust: %s (%llu decisions)\n", want_hash, (unsigned long long)want_n);
+    fprintf(stdout, "    c:    %s (%llu decisions)\n", got_hash, (unsigned long long)got_n);
+    return 0;
+}
+
 typedef enum { CMP_PASS, CMP_FAIL, CMP_ERROR } cmp_result;
 
 /* Only a Rust capture is evidence (oracle self-test, bd-9kll.2.7): the
@@ -258,6 +288,163 @@ static int trace_binary_round_trip(const char *id) {
             return 0;
         }
     }
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Replaying Rust's schedule in C (bd-9kll.9.3, bd-9kll.4.8)           */
+/* ------------------------------------------------------------------ */
+
+#define FORCED_MAX_DISPATCHES 16384u
+#define FORCED_NAME_CAP 64u
+#define FORCED_MAX_BYTES                                                                           \
+    (ASX_FORCED_SCHEDULE_HEADER_BYTES +                                                            \
+     FORCED_MAX_DISPATCHES * ASX_FORCED_SCHEDULE_DISPATCH_BYTES +                                  \
+     ASX_FORCED_SCHEDULE_TERMINAL_BYTES + ASX_FORCED_SCHEDULE_CHECKSUM_BYTES)
+
+static asx_forced_dispatch g_forced_storage[FORCED_MAX_DISPATCHES];
+static uint8_t g_forced_bytes[FORCED_MAX_BYTES];
+static uint8_t g_forced_again[FORCED_MAX_BYTES];
+static char g_forced_names[FORCED_MAX_DISPATCHES][FORCED_NAME_CAP];
+static const char *g_forced_name_ptrs[FORCED_MAX_DISPATCHES];
+static unsigned g_forced_replayed;
+static unsigned g_forced_unavailable;
+
+static int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
+/* The bytes of a lowercase hex string; 0 when it is not one that fits. */
+static size_t hex_decode(const char *hex, uint8_t *out, size_t cap) {
+    size_t n = strlen(hex);
+    size_t i;
+    if (n == 0u || n % 2u != 0u || n / 2u > cap) return 0u;
+    for (i = 0; i < n / 2u; i++) {
+        int hi = hex_nibble(hex[2u * i]);
+        int lo = hex_nibble(hex[2u * i + 1u]);
+        if (hi < 0 || lo < 0) return 0u;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return n / 2u;
+}
+
+/* The task of a "<step>@<ns> <task> <lane>" dispatch string. */
+static int dispatch_task_name(const char *s, char *out, size_t cap) {
+    const char *p = strchr(s, ' ');
+    const char *q;
+    size_t n;
+    if (p == NULL) return 0;
+    p++;
+    q = strchr(p, ' ');
+    if (q == NULL) return 0;
+    n = (size_t)(q - p);
+    if (n == 0u || n >= cap) return 0;
+    memcpy(out, p, n);
+    out[n] = '\0';
+    return 1;
+}
+
+/* Replay the fixture's recorded Rust schedule on the C lab: every step's
+ * task comes from the schedule (found by the name its dispatch string
+ * gives), and the run must end where Rust's receipt says and project the
+ * fixture's semantic digest. Also checks the artifact against itself: it
+ * decodes, re-encodes to the same bytes, its terminal hash is the
+ * fixture's certificate_hash and C's fold over its dispatches, and its
+ * dispatches are the fixture's dispatch list. Returns 1 when all hold (or
+ * the source was not quiescent and Rust wrote no schedule), else prints
+ * why and returns 0. */
+static int forced_replay(const char *id, uint32_t root, uint32_t scenario, uint32_t schedule,
+                         uint32_t dispatches) {
+    const char *hex = asx_json_get_string(&g_fixture, schedule, "forced_schedule");
+    const char *want_cert = asx_json_get_string(&g_fixture, schedule, "certificate_hash");
+    const char *want_sem = asx_json_get_string(&g_fixture, root, "semantic_digest");
+    asx_forced_decode_limits limits;
+    asx_forced_schedule sched;
+    asx_forced_error ferr;
+    size_t len;
+    size_t again_len = 0;
+    uint32_t run = ASX_JSON_NONE;
+    uint32_t n;
+    uint32_t i;
+    char cert[17];
+    const char *got_sem;
+    asx_status st;
+
+    if (hex == NULL) {
+        g_forced_unavailable++;
+        return 1;
+    }
+    len = hex_decode(hex, g_forced_bytes, sizeof(g_forced_bytes));
+    if (len == 0u) {
+        fprintf(stdout, "FAIL %s: schedule.forced_schedule is not hex bytes that fit\n", id);
+        return 0;
+    }
+    limits.max_encoded_bytes = sizeof(g_forced_bytes);
+    limits.max_dispatches = FORCED_MAX_DISPATCHES;
+    memset(&ferr, 0, sizeof(ferr));
+    st = asx_forced_schedule_decode(g_forced_bytes, len, &limits, g_forced_storage,
+                                    FORCED_MAX_DISPATCHES, &sched, &ferr);
+    if (st != ASX_OK) {
+        fprintf(stdout, "FAIL %s: Rust's forced schedule does not decode: %s\n", id,
+                asx_forced_error_kind_name(ferr.kind));
+        return 0;
+    }
+    st = asx_forced_schedule_encode(&sched, g_forced_again, sizeof(g_forced_again), &again_len,
+                                    &ferr);
+    if (st != ASX_OK || again_len != len || memcmp(g_forced_again, g_forced_bytes, len) != 0) {
+        fprintf(stdout, "FAIL %s: Rust's forced schedule does not re-encode to the same bytes\n",
+                id);
+        return 0;
+    }
+    (void)snprintf(cert, sizeof(cert), "%016llx", (unsigned long long)sched.terminal_schedule_hash);
+    if (want_cert != NULL && strcmp(cert, want_cert) != 0) {
+        fprintf(stdout,
+                "FAIL %s: forced schedule's terminal hash %s is not the fixture's "
+                "certificate_hash %s\n",
+                id, cert, want_cert);
+        return 0;
+    }
+    if (asx_forced_schedule_certificate(sched.dispatches, sched.dispatch_count) !=
+        sched.terminal_schedule_hash) {
+        fprintf(stdout,
+                "FAIL %s: C's certificate fold over Rust's dispatches is not Rust's terminal "
+                "hash\n",
+                id);
+        return 0;
+    }
+    n = asx_json_count(&g_fixture, dispatches);
+    if (n != sched.dispatch_count) {
+        fprintf(stdout, "FAIL %s: schedule.dispatches has %u entries, the forced schedule %u\n", id,
+                (unsigned)n, (unsigned)sched.dispatch_count);
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        const char *d = dispatch_at(&g_fixture, dispatches, i);
+        if (d == NULL || !dispatch_task_name(d, g_forced_names[i], FORCED_NAME_CAP)) {
+            fprintf(stdout, "FAIL %s: schedule.dispatches[%u] names no task\n", id, (unsigned)i);
+            return 0;
+        }
+        g_forced_name_ptrs[i] = g_forced_names[i];
+    }
+
+    asx_conformance_force_schedule(&sched, g_forced_name_ptrs);
+    asx_json_doc_init(&g_digest);
+    st = asx_conformance_run(&g_fixture, scenario, &g_digest, &run, g_error, sizeof(g_error));
+    asx_conformance_force_schedule(NULL, NULL);
+    if (st != ASX_OK) {
+        fprintf(stdout, "FAIL %s: replaying Rust's schedule in C: %s\n", id,
+                g_error[0] != '\0' ? g_error : "?");
+        return 0;
+    }
+    got_sem = asx_json_get_string(&g_digest, run, "semantic_digest");
+    if (got_sem == NULL || want_sem == NULL || strcmp(got_sem, want_sem) != 0) {
+        fprintf(stdout, "FAIL %s: replaying Rust's schedule in C: semantic digest %s, Rust's %s\n",
+                id, got_sem != NULL ? got_sem : "?", want_sem != NULL ? want_sem : "?");
+        return 0;
+    }
+    g_forced_replayed++;
     return 1;
 }
 
@@ -360,6 +547,19 @@ static cmp_result compare_one(const char *path, int mutate) {
         if (ok) fprintf(stdout, "FAIL %s: dispatches\n", id);
         ok = 0;
         diff_dispatches(want_dispatches, asx_json_get(&g_run, run, "dispatches"));
+    }
+    if (!certificate_matches(id, schedule, run)) ok = 0;
+    if (!mutate) {
+        /* Rust's own schedule, replayed in C (bd-9kll.9.3). It runs last:
+         * it replaces the runtime and `g_digest`, not `g_run`. */
+        int scheduling_only = ok;
+        if (!forced_replay(id, root, scenario, schedule, want_dispatches)) {
+            ok = 0;
+        } else if (!scheduling_only) {
+            fprintf(stdout,
+                    "    under Rust's own schedule C's run is exact: the difference above is in "
+                    "scheduling alone\n");
+        }
     }
     if (ok) {
         fprintf(stdout, "PASS %s %s\n", id, asx_json_get_string(&g_run, run, "semantic_digest"));
@@ -1032,7 +1232,9 @@ int main(int argc, char **argv) {
         case CMP_ERROR: error++; break;
         }
     }
-    fprintf(stdout, "asx-conformance: compared=%u pass=%u fail=%u error=%u\n", (unsigned)(argc - 2),
-            pass, fail, error);
+    fprintf(stdout,
+            "asx-conformance: compared=%u pass=%u fail=%u error=%u forced_replayed=%u "
+            "forced_unavailable=%u\n",
+            (unsigned)(argc - 2), pass, fail, error, g_forced_replayed, g_forced_unavailable);
     return (fail == 0u && error == 0u) ? 0 : 1;
 }

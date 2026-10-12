@@ -36,6 +36,7 @@
 #include <asx/sync/semaphore.h>
 #include <asx/time/sleep.h>
 #define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
+#include <asx/runtime/lab.h>
 #include <asx/runtime/trace.h>
 #undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 
@@ -334,6 +335,14 @@ static uint32_t g_n_events;
 
 /* The lab's dispatches (asx_scheduler_record_dispatches). */
 static asx_dispatch_record g_dispatches[IT_MAX_DISPATCHES];
+
+/* A recorded schedule to replay instead of the seeded picker, and the
+ * scenario task name of each of its dispatches (asx_conformance_force_
+ * schedule); g_forced_on while it is installed on the lab. */
+static const asx_forced_schedule *g_forced = NULL;
+static const char *const *g_forced_names = NULL;
+static asx_forced_run_config g_forced_cfg;
+static int g_forced_on = 0;
 static char g_text[IT_TEXT_CAP];
 static uint32_t g_text_used;
 
@@ -3733,6 +3742,50 @@ static void setup_channels(uint32_t scenario, asx_region_id root) {
     }
 }
 
+void asx_conformance_force_schedule(const asx_forced_schedule *schedule, const char *const *names) {
+    g_forced = schedule;
+    g_forced_names = names;
+}
+
+/* A recorded task id to the scenario task that plays it: the name the
+ * fixture's dispatch list gives the dispatch it first appears in. */
+static asx_status forced_resolve(void *ctx, uint64_t compact_task, asx_task_id *out) {
+    uint32_t i;
+    (void)ctx;
+    if (g_forced == NULL || g_forced_names == NULL) return ASX_E_NOT_FOUND;
+    for (i = 0; i < g_forced->dispatch_count; i++) {
+        const it_task *t;
+        if (g_forced->dispatches[i].task != compact_task) continue;
+        t = task_by_name(g_forced_names[i]);
+        if (t == NULL || !t->spawned) return ASX_E_NOT_FOUND;
+        *out = t->id;
+        return ASX_OK;
+    }
+    return ASX_E_NOT_FOUND;
+}
+
+/* Fail the run with what a replay diverged on. */
+static void forced_report(const asx_forced_error *ferr) {
+    char buf[192];
+    (void)snprintf(buf, sizeof(buf), "%s at step %llu (dispatch %u): expected %llu, got %llu",
+                   asx_forced_error_kind_name(ferr->kind), (unsigned long long)ferr->step,
+                   (unsigned)ferr->index, (unsigned long long)ferr->expected,
+                   (unsigned long long)ferr->actual);
+    it_fail("forced schedule diverged", buf);
+}
+
+/* Take a replay off the lab after a scheduler run stopped on it. */
+static void forced_fail(void) {
+    asx_forced_error ferr;
+    memset(&ferr, 0, sizeof(ferr));
+    g_forced_on = 0;
+    if (asx_lab_forced_schedule_end(NULL, &ferr) == ASX_OK) {
+        it_fail("scheduler stopped on a replay mismatch the lab did not record", NULL);
+        return;
+    }
+    forced_report(&ferr);
+}
+
 /* Run the scheduler the way the lab runs: to idle (or quiescence), whatever
  * a task returns. Under fail-fast containment (the DEBUG safety profile)
  * asx_scheduler_run hands a task's error status back to its caller as soon
@@ -3750,6 +3803,10 @@ static void run_scheduler(it_run_fn run, asx_region_id root, asx_budget *budget,
     for (;;) {
         asx_status st = run(root, budget);
         if (st == ASX_OK || st == ASX_E_PENDING || st == ASX_E_WOULD_BLOCK) return;
+        if (g_forced_on && st == ASX_E_REPLAY_MISMATCH) {
+            forced_fail();
+            return;
+        }
         if (st == ASX_E_POLL_BUDGET_EXHAUSTED) {
             it_fail("lab.max_steps exceeded", where);
             return;
@@ -4539,6 +4596,20 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
         return st;
     }
     asx_scheduler_record_dispatches(g_dispatches, IT_MAX_DISPATCHES);
+    g_forced_on = 0;
+    if (g_forced != NULL) {
+        /* Replay the recorded schedule: every lab step takes its task from
+         * it, the scenario's tasks found by name. */
+        asx_forced_error ferr;
+        memset(&g_forced_cfg, 0, sizeof(g_forced_cfg));
+        g_forced_cfg.resolve = forced_resolve;
+        st = asx_lab_forced_schedule_begin(g_forced, &g_forced_cfg, &ferr);
+        if (st != ASX_OK) {
+            it_fail("forced schedule refused", asx_forced_error_kind_name(ferr.kind));
+            return st;
+        }
+        g_forced_on = 1;
+    }
     asx_trace_set_observer(it_observe, NULL);
     g_observations = asx_json_new_array(out);
 
@@ -4655,6 +4726,16 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
 
     /* Finish (DSL §2): run to quiescence with timer auto-advance. */
     if (!g_failed) run_scheduler(asx_scheduler_run, root, &budget, "run_with_auto_advance");
+    if (!g_failed && g_forced_on) {
+        /* The run must end where the schedule's receipt says: every
+         * dispatch consumed, quiescent, same step and clock, same
+         * certificate. */
+        asx_forced_error ferr;
+        asx_forced_report frep;
+        memset(&ferr, 0, sizeof(ferr));
+        g_forced_on = 0;
+        if (asx_lab_forced_schedule_end(&frep, &ferr) != ASX_OK) forced_report(&ferr);
+    }
     asx_trace_set_observer(NULL, NULL);
     if (g_failed) return ASX_E_INVALID_STATE;
 
@@ -4688,6 +4769,16 @@ asx_status asx_conformance_run(const asx_json_doc *in, uint32_t scenario, asx_js
     asx_json_set(out, result, "snapshot", snapshot);
     asx_json_set(out, result, "observations", observations);
     asx_json_set(out, result, "dispatches", dispatches);
+    {
+        /* Rust's ScheduleCertificate and its decision count (bd-9kll.4.8),
+         * compared with the fixture's schedule.certificate_hash/decisions. */
+        char cert[17];
+        (void)snprintf(cert, sizeof(cert), "%016llx",
+                       (unsigned long long)asx_scheduler_schedule_certificate());
+        asx_json_set(out, result, "certificate_hash", asx_json_new_string(out, cert));
+        asx_json_set(out, result, "decisions",
+                     asx_json_new_u64(out, asx_scheduler_schedule_decisions()));
+    }
     set_digest(result, "trace_digest", trace);
     set_digest(result, "snapshot_digest", snapshot);
     set_digest(result, "semantic_digest", semantic);
