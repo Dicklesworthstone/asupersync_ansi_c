@@ -1026,6 +1026,134 @@ TEST(mask_refuses_a_completed_task_and_a_handle_from_a_reset_runtime) {
     ASSERT_EQ(depth, 7u);
 }
 
+/* A worker doing nested masked work: masks twice on its first poll,
+ * releases the inner mask at poll `inner_off` and the outer at
+ * `outer_off` (0: never), checkpoints every poll and records its depth. */
+typedef struct {
+    uint32_t polls;
+    uint32_t inner_off;
+    uint32_t outer_off;
+    uint32_t observed_at; /* poll whose checkpoint acknowledged the cancel */
+    uint32_t masked_checkpoints;
+    uint32_t depth_log[16];
+} nested_mask_worker;
+
+static asx_status poll_nested_mask_worker(void *data, asx_task_id self) {
+    nested_mask_worker *w = (nested_mask_worker *)data;
+    asx_checkpoint_result cr;
+    uint32_t depth = 0;
+    w->polls++;
+    if (w->polls == 1u && (asx_task_mask(self) != ASX_OK || asx_task_mask(self) != ASX_OK)) {
+        return ASX_E_INVALID_STATE;
+    }
+    if (w->polls == w->inner_off && asx_task_unmask(self) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (w->polls == w->outer_off && asx_task_unmask(self) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (asx_task_mask_depth(self, &depth) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (w->polls <= 16u) w->depth_log[w->polls - 1u] = depth;
+    if (asx_checkpoint(self, &cr) != ASX_OK) return ASX_E_INVALID_STATE;
+    if (cr.masked) w->masked_checkpoints++;
+    if (cr.cancelled) {
+        w->observed_at = w->polls;
+        return ASX_OK;
+    }
+    return ASX_E_PENDING;
+}
+
+/* Joins `target` and records what the join saw. */
+typedef struct {
+    asx_task_id target;
+    const nested_mask_worker *worker;
+    int joined;
+    uint32_t worker_polls_at_join;
+    asx_outcome outcome;
+} mask_joiner;
+
+static asx_status poll_mask_joiner(void *data, asx_task_id self) {
+    mask_joiner *j = (mask_joiner *)data;
+    asx_status st = asx_task_join_poll(self, j->target, &j->outcome);
+    if (st == ASX_E_PENDING) return ASX_E_PENDING;
+    j->joined = st == ASX_OK;
+    j->worker_polls_at_join = j->worker->polls;
+    return ASX_OK;
+}
+
+/* Spawn the worker and its joiner, give the worker its first (masking)
+ * poll, then cancel it and run. */
+static void run_nested_mask_scenario(nested_mask_worker *w, mask_joiner *j, asx_task_id *wid) {
+    asx_region_id rid;
+    asx_task_id jid;
+    asx_budget budget;
+    asx_status st;
+    asx_runtime_reset();
+    st = asx_region_open(&rid);
+    if (st == ASX_OK) st = asx_task_spawn(rid, poll_nested_mask_worker, w, wid);
+    j->target = *wid;
+    j->worker = w;
+    if (st == ASX_OK) st = asx_task_spawn(rid, poll_mask_joiner, j, &jid);
+    budget = asx_budget_from_polls(2);
+    if (st == ASX_OK) ASX_IGNORE_RESULT(asx_scheduler_run(rid, &budget)); /* stops at the budget */
+    if (st == ASX_OK) st = asx_task_cancel(*wid, ASX_CANCEL_USER);
+    budget = asx_budget_from_polls(100);
+    if (st == ASX_OK) ASX_IGNORE_RESULT(asx_scheduler_run(rid, &budget));
+}
+
+TEST(nested_masked_work_drains_after_the_outer_mask_while_a_joiner_waits) {
+    /* bd-9kll.3.19: a worker cancelled inside two nested masks keeps
+     * working (each masked checkpoint defers and consumes nothing,
+     * Cx::masked nesting, cx/cx.rs:3315-3333), releases the inner mask
+     * (still deferred), then the outer, and its next checkpoint
+     * acknowledges: it completes Cancelled. A task joining it waits all
+     * along and sees that outcome only once the worker has finished. */
+    static nested_mask_worker w;
+    static mask_joiner j;
+    asx_task_id wid = ASX_INVALID_ID;
+    asx_outcome out;
+    static const uint32_t expected_depths[7] = {2u, 2u, 2u, 1u, 1u, 1u, 0u};
+    uint32_t i;
+
+    memset(&w, 0, sizeof(w));
+    memset(&j, 0, sizeof(j));
+    w.inner_off = 4u;
+    w.outer_off = 7u;
+    run_nested_mask_scenario(&w, &j, &wid);
+
+    ASSERT_EQ(w.polls, 7u);
+    ASSERT_EQ(w.observed_at, 7u);
+    ASSERT_EQ(w.masked_checkpoints, 5u); /* polls 2..6: cancel pending, masked */
+    for (i = 0; i < 7u; i++) ASSERT_EQ(w.depth_log[i], expected_depths[i]);
+    /* The join took the worker's outcome (a joined task's handle is spent). */
+    ASSERT_NE(asx_task_get_outcome(wid, &out), ASX_OK);
+    ASSERT_TRUE(j.joined);
+    ASSERT_EQ(j.worker_polls_at_join, 7u);
+    ASSERT_EQ(asx_outcome_severity_of(&j.outcome), ASX_OUTCOME_CANCELLED);
+}
+
+TEST(a_mask_never_released_keeps_the_cancel_out_and_the_joiner_waiting) {
+    /* Negative control for the test above: delivery assumes every masked
+     * section ends. With the outer mask never released (a leaked
+     * restoration) the cancel is never acknowledged, the cleanup bound
+     * does not interrupt the masked work, and the join never resolves:
+     * finite completion is a property of the program, not a liveness
+     * guarantee of the runtime. */
+    static nested_mask_worker w;
+    static mask_joiner j;
+    asx_task_id wid = ASX_INVALID_ID;
+    uint32_t depth = 0;
+
+    memset(&w, 0, sizeof(w));
+    memset(&j, 0, sizeof(j));
+    w.inner_off = 4u;
+    w.outer_off = 0u;
+    run_nested_mask_scenario(&w, &j, &wid);
+
+    ASSERT_EQ(w.observed_at, 0u);
+    ASSERT_TRUE(w.polls > 7u);
+    ASSERT_EQ(w.masked_checkpoints, w.polls - 1u);
+    ASSERT_EQ(asx_task_mask_depth(wid, &depth), ASX_OK);
+    ASSERT_EQ(depth, 1u);
+    ASSERT_TRUE(!j.joined);
+}
+
 TEST(checkpoint_observes_budget_deadline_inline) {
     asx_region_id rid;
     asx_task_id tid;
@@ -1816,6 +1944,8 @@ int main(void) {
     RUN_TEST(unmasked_task_is_force_completed_by_cleanup_budget);
     RUN_TEST(mask_depth_is_bounded);
     RUN_TEST(mask_refuses_a_completed_task_and_a_handle_from_a_reset_runtime);
+    RUN_TEST(nested_masked_work_drains_after_the_outer_mask_while_a_joiner_waits);
+    RUN_TEST(a_mask_never_released_keeps_the_cancel_out_and_the_joiner_waiting);
     RUN_TEST(checkpoint_observes_budget_deadline_inline);
     RUN_TEST(region_cancel_closes_subtree_and_chains_parent_reasons);
     RUN_TEST(region_cancel_of_an_idle_region_finalizes_at_once);
