@@ -542,12 +542,39 @@ static asx_leak_response obligation_leak_batch_policy(uint64_t n) {
  * ObligationAbortReason::Error (state.rs:5781-5797), the others mark it
  * LEAKED (vocabulary obligation.leaked, Rust ObligationLeak). Returns 1
  * when the policy (PANIC) demands fail-fast containment. */
+/* The runtime's clock, read without the side effects of
+ * asx_runtime_now_ns (its fault-injection call counts and the hindsight
+ * log): an obligation's held time is bookkeeping and must not shift
+ * either. Deterministic builds read the logical clock, as the scheduler's
+ * own reading does, so the value is the virtual time Rust's lab reports. */
+static asx_time obligation_clock(void) {
+    const asx_runtime_hooks *hooks = asx_runtime_get_hooks();
+    if (hooks != NULL) {
+#if ASX_DETERMINISTIC
+        if (hooks->clock.logical_now_ns_fn != NULL) {
+            return hooks->clock.logical_now_ns_fn(hooks->clock.ctx);
+        }
+#endif
+        if (hooks->clock.now_ns_fn != NULL) return hooks->clock.now_ns_fn(hooks->clock.ctx);
+    }
+    return asx_runtime_virtual_now();
+}
+
+/* How long the obligation has been held, as of the resolution being
+ * applied (Rust's held_duration_ns = now - reserved_at). Taken before the
+ * resolution's trace event, so an observer reads it with the event. */
+static void obligation_note_held(asx_obligation_slot *o) {
+    asx_time now = obligation_clock();
+    o->held_ns = now >= o->reserved_at ? now - o->reserved_at : 0u;
+}
+
 static int obligation_leak_apply(uint32_t idx, asx_leak_response policy) {
     asx_obligation_slot *o = &g_obligations[idx];
     asx_obligation_id oid =
         asx_handle_pack(ASX_TYPE_OBLIGATION, (uint16_t)(1u << (unsigned)ASX_OBLIGATION_RESERVED),
                         asx_handle_pack_index(o->generation, (uint16_t)idx));
     o->counted = 0;
+    obligation_note_held(o);
     if (policy == ASX_LEAK_RECOVER) {
         /* Recovered leak: abort, still counted as a leak. */
         o->state = ASX_OBLIGATION_ABORTED;
@@ -1685,6 +1712,9 @@ static void obligation_apply_reserve(uint32_t idx, const asx_obligation_info *or
     asx_obligation_id id = obligation_handle(idx);
     asx_region_id region = original != NULL ? original->region : g_obligations[idx].region;
     asx_trace_payload payload = {0};
+    /* Rust stamps the record when the reserve is applied: a posted
+     * reserve's clock is the end of its poll, not the call. */
+    g_obligations[idx].reserved_at = obligation_clock();
     asx_ghost_obligation_reserved(id);
     (void)asx_event_emit(ASX_EVENT_OBLIGATION_CREATE, id, (uint64_t)region, ASX_OK);
     payload.obligation = original;
@@ -1693,6 +1723,7 @@ static void obligation_apply_reserve(uint32_t idx, const asx_obligation_info *or
 
 static void obligation_apply_resolution(uint32_t idx, asx_obligation_state to) {
     asx_obligation_id id = obligation_handle(idx);
+    obligation_note_held(&g_obligations[idx]);
     (void)asx_ghost_check_obligation_transition(id, ASX_OBLIGATION_RESERVED, to);
     asx_ghost_obligation_resolved(id);
     if (to == ASX_OBLIGATION_COMMITTED) {
@@ -1727,6 +1758,7 @@ static void obligation_post(ob_post_kind kind, uint32_t idx) {
     g_ob_posts[g_ob_post_n].reservation.region = g_obligations[idx].region;
     g_ob_posts[g_ob_post_n].reservation.holder = g_obligations[idx].holder;
     g_ob_posts[g_ob_post_n].reservation.abort_reason = g_obligations[idx].abort_reason;
+    g_ob_posts[g_ob_post_n].reservation.held_ns = 0u;
     g_ob_post_n++;
     g_obligations[idx].posts++;
 }
@@ -1829,6 +1861,8 @@ static asx_status asx_obligation_reserve_impl(asx_region_id region, asx_obligati
     g_obligations[idx].checked = checked ? 1u : 0u;
     g_obligations[idx].counted = (checked || !posting) ? 1u : 0u;
     g_obligations[idx].posts = 0;
+    g_obligations[idx].reserved_at = 0u; /* stamped when the reserve is applied */
+    g_obligations[idx].held_ns = 0u;
     if (holder_slot != NULL) {
         /* Link into the holder's held list (resolved at its completion). */
         g_obligations[idx].holder = holder;
@@ -1898,6 +1932,7 @@ asx_status asx_obligation_get_info(asx_obligation_id id, asx_obligation_info *ou
     out->region = o->region;
     out->holder = o->holder;
     out->abort_reason = o->abort_reason;
+    out->held_ns = o->held_ns;
     return ASX_OK;
 }
 

@@ -282,6 +282,14 @@ typedef struct {
     uint8_t counted;
     uint8_t checked;
     uint8_t posts;
+    /* Rust ObligationRecord::reserved_at and the duration its commit, abort
+     * or leak event carries (runtime/state.rs:5597, held_duration_ns =
+     * now - reserved_at): the clock when the reserve was applied (a posted
+     * reserve is applied at the end of its poll), and how long the
+     * obligation had been held when its resolution was applied. held_ns is
+     * 0 while it is reserved. */
+    asx_time reserved_at;
+    asx_time held_ns;
 } asx_obligation_slot;
 
 /* Free-list terminator for arena slot links. */

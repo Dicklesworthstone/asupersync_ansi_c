@@ -734,6 +734,12 @@ typedef struct asx_obligation_info {
     asx_region_id region;
     asx_task_id holder; /* ASX_INVALID_ID if unowned */
     asx_obligation_abort_reason abort_reason;
+    /* How long the obligation was held, in the runtime clock's nanoseconds:
+     * from the moment its reserve was applied to the moment its commit,
+     * abort or leak was (Rust's duration_ns on those trace events). 0 while
+     * it is still RESERVED. Virtual time in a deterministic build, so it is
+     * replayable there. */
+    asx_time held_ns;
 } asx_obligation_info;
 
 /* Reserve an obligation with an explicit kind and holder task.
