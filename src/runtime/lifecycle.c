@@ -525,23 +525,6 @@ static asx_leak_response obligation_leak_batch_policy(uint64_t n) {
     return g_leak_response;
 }
 
-/* A holder completed with obligations still reserved: each plain one is a
- * leak, whether or not the holder was cancelled. This is Rust's common
- * path: a task body that ends holding an unresolved ObligationToken drops
- * it, and the drop posts a Leak (runtime/obligation_mailbox.rs:897) before
- * the completion phase runs, cancelled or not (fuzz finding gen-1-20 /
- * gen-1-37, bd-ij9w; fixture obligation-cancelled-holder-leaks-001). Rust's
- * completion-time abort with Cancel (abort_orphaned_obligations_for_holder,
- * state.rs:8454) only reaches tokens that were never dropped, which C, with
- * no destructors, cannot tell apart. The leak policy then applies; RECOVER
- * aborts with ASX_OBLIGATION_ABORT_ERROR. A permit's obligation is dropped
- * with the body instead (obligation_drop_permit): its Drop gives the
- * resource back and leaks nothing. */
-/* Leak the reserved obligation in slot `idx` under `policy`: RECOVER
- * aborts it with ASX_OBLIGATION_ABORT_ERROR, as Rust's Recover aborts with
- * ObligationAbortReason::Error (state.rs:5781-5797), the others mark it
- * LEAKED (vocabulary obligation.leaked, Rust ObligationLeak). Returns 1
- * when the policy (PANIC) demands fail-fast containment. */
 /* The runtime's clock, read without the side effects of
  * asx_runtime_now_ns (its fault-injection call counts and the hindsight
  * log): an obligation's held time is bookkeeping and must not shift
@@ -568,6 +551,23 @@ static void obligation_note_held(asx_obligation_slot *o) {
     o->held_ns = now >= o->reserved_at ? now - o->reserved_at : 0u;
 }
 
+/* A holder completed with obligations still reserved: each plain one is a
+ * leak, whether or not the holder was cancelled. This is Rust's common
+ * path: a task body that ends holding an unresolved ObligationToken drops
+ * it, and the drop posts a Leak (runtime/obligation_mailbox.rs:897) before
+ * the completion phase runs, cancelled or not (fuzz finding gen-1-20 /
+ * gen-1-37, bd-ij9w; fixture obligation-cancelled-holder-leaks-001). Rust's
+ * completion-time abort with Cancel (abort_orphaned_obligations_for_holder,
+ * state.rs:8454) only reaches tokens that were never dropped, which C, with
+ * no destructors, cannot tell apart. The leak policy then applies; RECOVER
+ * aborts with ASX_OBLIGATION_ABORT_ERROR. A permit's obligation is dropped
+ * with the body instead (obligation_drop_permit): its Drop gives the
+ * resource back and leaks nothing. */
+/* Leak the reserved obligation in slot `idx` under `policy`: RECOVER
+ * aborts it with ASX_OBLIGATION_ABORT_ERROR, as Rust's Recover aborts with
+ * ObligationAbortReason::Error (state.rs:5781-5797), the others mark it
+ * LEAKED (vocabulary obligation.leaked, Rust ObligationLeak). Returns 1
+ * when the policy (PANIC) demands fail-fast containment. */
 static int obligation_leak_apply(uint32_t idx, asx_leak_response policy) {
     asx_obligation_slot *o = &g_obligations[idx];
     asx_obligation_id oid =
