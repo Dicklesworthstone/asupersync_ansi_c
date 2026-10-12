@@ -92,6 +92,59 @@ The lab charges one `poll_quota` unit per poll (`lab/runtime.rs:4664`). An
 exhausted quota or a passed deadline is turned into a cancel by the next
 `checkpoint` (`cx/cx.rs:3112-3160`).
 
+### Region finalizers
+
+A `regions` entry may declare `finalizers`, async finalizers registered on
+that region (Rust `Scope::defer_async`):
+
+```json
+{"name": "r.a", "parent": "root", "budget": null,
+ "finalizers": [
+   {"name": "f.close", "program": [{"op": "yield"}, {"op": "sleep", "ns": 1000}]},
+   {"name": "f.flush", "program": []}
+ ]}
+```
+
+- **`name`** is the finalizer task's canonical name (vocabulary §2) and
+  must be unique with every other region, task and finalizer name.
+- **`program`** is an ordinary task program (§3), run with the finalizer
+  task's own `Cx`. Rust's finalizer future takes none, so the harness
+  reads it ambiently: the lab installs the polled task's Cx for the poll
+  (`Cx::current()`, `lab/runtime.rs:4735`).
+- **Registration.** At setup, right after the region is created and before
+  any task, each entry is registered in array order: Rust
+  `lab.state.register_async_finalizer(region, future)`
+  (`runtime/state.rs:9101`; refused unless the region is neither closing
+  nor closed), C `asx_region_defer_async(region, poll, data)`. The
+  finalizer stack is LIFO, so the last entry declared runs first.
+- **Execution.** When the region reaches Finalizing (its tasks and child
+  regions are done), its finalizers run **one at a time**, each as a
+  **masked task of that region**: Rust `drain_ready_async_finalizers`
+  (`runtime/state.rs:8578`), called by the lab step after timers and I/O
+  and before the pick (`lab/runtime.rs:4513`), which spawns the top
+  finalizer with `spawn_finalizer_task_in` (`state.rs:8857`): admitted as
+  cleanup work, budget `finalizer_budget()` (poll quota 100, priority
+  128) with a deadline 5 s after the spawn
+  (`FINALIZER_POLL_BUDGET`, `FINALIZER_TIME_BUDGET_NANOS`,
+  `record/finalizer.rs:42-70`), scheduled at that priority, mask depth 1
+  for its whole run (`MaskedFinalizer`, `state.rs:1781`). The next
+  finalizer is spawned at a later step, after this one's task completed.
+  The region closes when its stack is empty and its tasks are done.
+- **Admission.** A normal spawn into a Finalizing region is refused
+  (`SpawnError::RegionClosed`, `record/region.rs:134-142`, Rust commit
+  `59bdc2baa`): a finalizer program that `spawn`s a child observes the
+  refusal through `join` as `ASX_E_REGION_CLOSED` (§3.4), the child has no
+  trace events and no snapshot entry. The finalizer's own task is admitted
+  as cleanup work, and a task it never completes keeps the region
+  Finalizing.
+- **Observations and projection.** Each executed finalizer step is one
+  observation under the finalizer's name (§2). The finalizer task is a
+  task of the region: `task.spawned` and `task.completed` carry its
+  name, and the snapshot lists it with its state and outcome. Its outcome
+  follows the ordinary rules: a budget cancel (poll quota, deadline) is
+  raised and not delivered while the mask holds, so a finalizer that
+  outlasts its budget still runs to its end.
+
 ## 2. Execution model
 
 The driver runs a scenario in four phases.
@@ -336,7 +389,8 @@ tasks, distinct from `sender` and each other): each gets a clone of the
 sender at setup, in order (Rust `tx.clone()`, `channel/mpsc.rs:1231`,
 `channel/broadcast.rs:577`; C `asx_channel_sender_clone`,
 `asx_broadcast_sender_clone`). Each owner's `close_sender`, or the end of
-its body, drops its own clone; the sender side closes at the last one
+its body, drops its own clone (C `asx_channel_sender_drop` by the clone's
+identity, `asx_channel_close_sender` for the declared sender); the sender side closes at the last one
 (`Sender::drop`, `mpsc.rs:1241-1255`, `broadcast.rs:586-608`).
 
 ```json

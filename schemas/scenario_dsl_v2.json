@@ -21,7 +21,13 @@
     },
     "regions": {"type": "array", "items": {
       "type": "object", "required": ["name", "parent", "budget"], "additionalProperties": false,
-      "properties": {"name": {"$ref": "#/$defs/name"}, "parent": {"$ref": "#/$defs/name"}, "budget": {"$ref": "#/$defs/budget_or_null"}}
+      "properties": {
+        "name": {"$ref": "#/$defs/name"}, "parent": {"$ref": "#/$defs/name"}, "budget": {"$ref": "#/$defs/budget_or_null"},
+        "finalizers": {"type": "array", "items": {
+          "type": "object", "required": ["name", "program"], "additionalProperties": false,
+          "properties": {"name": {"$ref": "#/$defs/name"}, "program": {"$ref": "#/$defs/program"}}
+        }}
+      }
     }},
     "channels": {"type": "array", "items": {"$ref": "#/$defs/channel_decl"}},
     "sync": {"type": "array", "items": {"$ref": "#/$defs/sync_decl"}},
