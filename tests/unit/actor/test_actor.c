@@ -1370,10 +1370,41 @@ static const asx_actor_behavior g_bud = {bud_init,
 static const asx_actor_behavior g_bud_default = {
     bud_init, bud_cast, NULL, bud_terminate, NULL, NULL, ASX_ACTOR_OVERFLOW_REJECT};
 
-static asx_region_id budgeted_region(const asx_budget *budget) {
-    asx_region_id r = ASX_INVALID_ID;
-    MUST_OK(asx_region_open_child_with_budget(g_root, budget, &r));
-    return r;
+/* A task the host spawns takes the infinite budget: the region's is not met
+ * into it (Rust's create_task, lifecycle.c). A server a task spawns in the
+ * task's own region takes the spawner's current budget (cx.spawn's
+ * inherited budget, cx.rs:2504), so a budget under test is given to a
+ * spawner. The state's task id is set before the server's first poll,
+ * which its budget callbacks read. */
+typedef struct {
+    asx_region_id region;
+    const asx_actor_behavior *behavior;
+    bud_state *state;
+    asx_actor_handle handle;
+    asx_status status;
+} bud_spawner;
+
+static asx_status bud_spawner_poll(void *user_data, asx_task_id self) {
+    bud_spawner *sp = (bud_spawner *)user_data;
+    (void)self;
+    sp->status = asx_actor_spawn(&sp->handle, sp->region, sp->behavior, sp->state, 4);
+    return ASX_OK;
+}
+
+static asx_actor_handle spawn_bud_budgeted(asx_region_id region, const asx_actor_behavior *behavior,
+                                           bud_state *state, const asx_budget *budget) {
+    static bud_spawner sp;
+    asx_task_id spawner = ASX_INVALID_ID;
+    memset(&sp, 0, sizeof(sp));
+    sp.region = region;
+    sp.behavior = behavior;
+    sp.state = state;
+    sp.handle.slot = UINT32_MAX;
+    MUST_OK(asx_task_spawn_with_budget(region, bud_spawner_poll, &sp, budget, &spawner));
+    run_one_poll(region); /* the spawner's poll: the server is spawned, not yet run */
+    MUST_OK(sp.status);
+    MUST_OK(asx_actor_task_id(sp.handle, &state->task));
+    return sp.handle;
 }
 
 static asx_actor_handle spawn_bud(asx_region_id region, const asx_actor_behavior *behavior,
@@ -1392,20 +1423,20 @@ static asx_actor_handle spawn_bud(asx_region_id region, const asx_actor_behavior
 static void test_start_budget_tightens_init_and_is_restored(void) {
     bud_state s;
     asx_actor_handle h;
-    asx_budget region_budget = asx_budget_from_polls(1000u);
+    asx_budget task_budget = asx_budget_from_polls(1000u);
     asx_budget before_cast;
     asx_region_id r;
 
     setup();
     memset(&s, 0, sizeof(s));
-    region_budget.cost_quota = 100u;
-    r = budgeted_region(&region_budget);
+    task_budget.cost_quota = 100u;
+    r = child_region();
     s.start_phase = asx_budget_from_polls(7u);
     s.start_phase.priority = 200u;
     s.start_phase.cost_quota = 10u;
     s.stop_phase = asx_budget_infinite();
     s.init_cost = 3u;
-    h = spawn_bud(r, &g_bud, &s);
+    h = spawn_bud_budgeted(r, &g_bud, &s, &task_budget);
     run(r);
 
     ASSERT(s.start_budget_calls == 1 && s.init_calls == 1,
@@ -1435,15 +1466,15 @@ static void test_start_budget_tightens_init_and_is_restored(void) {
 static void test_start_budget_never_loosens_the_task_budget(void) {
     bud_state s;
     asx_actor_handle h;
-    asx_budget region_budget = asx_budget_from_polls(50u);
+    asx_budget task_budget = asx_budget_from_polls(50u);
     asx_region_id r;
 
     setup();
     memset(&s, 0, sizeof(s));
-    r = budgeted_region(&region_budget);
+    r = child_region();
     s.start_phase = asx_budget_from_polls(500u);
     s.stop_phase = asx_budget_infinite();
-    h = spawn_bud(r, &g_bud, &s);
+    h = spawn_bud_budgeted(r, &g_bud, &s, &task_budget);
     (void)h;
     run(r);
     ASSERT(s.init_calls == 1, "init ran");
@@ -1473,16 +1504,16 @@ static void test_stop_budget_defaults_to_minimal(void) {
 static void test_custom_stop_budget_is_met_with_the_task_budget(void) {
     bud_state s;
     asx_actor_handle h;
-    asx_budget region_budget = asx_budget_from_polls(100000u);
+    asx_budget task_budget = asx_budget_from_polls(100000u);
     asx_region_id r;
 
     setup();
     memset(&s, 0, sizeof(s));
-    r = budgeted_region(&region_budget);
+    r = child_region();
     s.start_phase = asx_budget_infinite();
     s.stop_phase = asx_budget_from_polls(42u);
     s.stop_phase.priority = 250u;
-    h = spawn_bud(r, &g_bud, &s);
+    h = spawn_bud_budgeted(r, &g_bud, &s, &task_budget);
     run(r);
     MUST_OK(asx_actor_stop(h));
     run(r);
@@ -1495,15 +1526,15 @@ static void test_custom_stop_budget_is_met_with_the_task_budget(void) {
 static void test_stop_budget_never_loosens_the_task_budget(void) {
     bud_state s;
     asx_actor_handle h;
-    asx_budget region_budget = asx_budget_from_polls(30u);
+    asx_budget task_budget = asx_budget_from_polls(30u);
     asx_region_id r;
 
     setup();
     memset(&s, 0, sizeof(s));
-    r = budgeted_region(&region_budget);
+    r = child_region();
     s.start_phase = asx_budget_infinite();
     s.stop_phase = asx_budget_from_polls(500u);
-    h = spawn_bud(r, &g_bud, &s);
+    h = spawn_bud_budgeted(r, &g_bud, &s, &task_budget);
     run(r);
     MUST_OK(asx_actor_stop(h));
     run(r);
