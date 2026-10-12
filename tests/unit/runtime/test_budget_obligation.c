@@ -1724,6 +1724,82 @@ TEST(region_close_leak_audit_is_one_batch) {
     ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)2u);
 }
 
+TEST(leak_policy_matrix_follows_rusts_count_then_pick_rule) {
+    /* handle_obligation_leaks adds the batch to the cumulative count, then
+     * picks one response for the whole batch: the escalation's if the
+     * count has reached its threshold (a threshold of 0 is 1), else the
+     * base (runtime/state.rs:5711-5721; config.rs:1354). Every base
+     * policy and escalation target x threshold {0, 1, 3} x batch size
+     * {1, 3} x leaks already counted {0, 2}; a close audit is one batch.
+     * RECOVER aborts with Error (still counted); the others mark Leaked. */
+    static const struct {
+        asx_leak_response base;
+        asx_leak_response to;
+    } pairs[] = {{ASX_LEAK_SILENT, ASX_LEAK_RECOVER},
+                 {ASX_LEAK_LOG, ASX_LEAK_RECOVER},
+                 {ASX_LEAK_RECOVER, ASX_LEAK_SILENT}};
+    static const uint64_t thresholds[] = {0u, 1u, 3u};
+    static const uint32_t batches[] = {1u, 3u};
+    static const uint32_t priors[] = {0u, 2u};
+    uint32_t p;
+    uint32_t t;
+    uint32_t b;
+    uint32_t c;
+
+    for (p = 0; p < 3u; p++) {
+        for (t = 0; t < 3u; t++) {
+            for (b = 0; b < 2u; b++) {
+                for (c = 0; c < 2u; c++) {
+                    asx_leak_escalation_config esc;
+                    asx_region_id prior_region;
+                    asx_region_id r;
+                    asx_obligation_id ob[3];
+                    asx_obligation_info info;
+                    asx_leak_response effective;
+                    asx_budget run;
+                    uint32_t i;
+                    uint64_t effective_threshold = thresholds[t] == 0u ? 1u : thresholds[t];
+                    int escalated = (uint64_t)(priors[c] + batches[b]) >= effective_threshold;
+
+                    esc.threshold = thresholds[t];
+                    esc.escalate_to = pairs[p].to;
+                    ASSERT_EQ(setup_with_policy(pairs[p].base, &esc), ASX_OK);
+
+                    if (priors[c] > 0u) {
+                        ASSERT_EQ(asx_region_open(&prior_region), ASX_OK);
+                        for (i = 0; i < priors[c]; i++) {
+                            ASSERT_EQ(asx_obligation_reserve(prior_region, &ob[i]), ASX_OK);
+                        }
+                        run = asx_budget_infinite();
+                        ASSERT_EQ(asx_region_drain(prior_region, &run), ASX_OK);
+                        ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)priors[c]);
+                    }
+
+                    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+                    for (i = 0; i < batches[b]; i++) {
+                        ASSERT_EQ(asx_obligation_reserve(r, &ob[i]), ASX_OK);
+                    }
+                    run = asx_budget_infinite();
+                    ASSERT_EQ(asx_region_drain(r, &run), ASX_OK);
+
+                    effective = escalated ? pairs[p].to : pairs[p].base;
+                    for (i = 0; i < batches[b]; i++) {
+                        ASSERT_EQ(asx_obligation_get_info(ob[i], &info), ASX_OK);
+                        if (effective == ASX_LEAK_RECOVER) {
+                            ASSERT_EQ(info.state, ASX_OBLIGATION_ABORTED);
+                            ASSERT_EQ(info.abort_reason, ASX_OBLIGATION_ABORT_ERROR);
+                        } else {
+                            ASSERT_EQ(info.state, ASX_OBLIGATION_LEAKED);
+                        }
+                    }
+                    /* Counted either way, the recovered ones included. */
+                    ASSERT_EQ(asx_obligation_leak_count(), (uint64_t)(priors[c] + batches[b]));
+                }
+            }
+        }
+    }
+}
+
 TEST(region_close_leak_audit_under_panic_fails_before_closing) {
     /* PANIC: Rust marks them leaked, then fails fast before the region
      * closes (state.rs:5735-5756). The leaked obligation no longer holds
@@ -1843,6 +1919,7 @@ int main(void) {
     RUN_TEST(runtime_reset_clears_leak_count);
     RUN_TEST(region_close_leak_audits_obligations_still_reserved);
     RUN_TEST(region_close_leak_audit_is_one_batch);
+    RUN_TEST(leak_policy_matrix_follows_rusts_count_then_pick_rule);
     RUN_TEST(region_close_leak_audit_under_panic_fails_before_closing);
     RUN_TEST(region_close_runs_finalizers_before_the_leak_audit);
 
