@@ -52,7 +52,7 @@ Evidence:
 - zero capacity panics at construction (`assert!(capacity > 0)`, `mpsc.rs:565`)
 - regression tests (`mpsc_tests.rs`): `capacity_invariant_across_reserve_send_abort` (`:2363`), `send_evict_oldest_returns_full_when_all_capacity_reserved` (`:2145`), `send_evict_oldest_evicts_committed_not_reserved` (`:2180`)
 
-**C status:** implemented. A reserve is refused when `queue_len + reserved >= capacity` (`channel_reserve_impl`, `src/channel/mpsc.c:626-628`; lock-free backend `src/channel/mpsc.c:624`). Capacity 0 or above `ASX_CHANNEL_MAX_CAPACITY` (default 64, `include/asx/core/channel.h:57-59`) returns `ASX_E_INVALID_ARGUMENT` instead of panicking (`src/channel/mpsc.c:408`). C has no unbounded channel (Rust's `unbounded_channel` is `channel(usize::MAX)`). Unit tests: `tests/unit/channel/test_mpsc.c` `capacity_enforcement`, `capacity_mixed_reserved_and_queued`, `capacity_invariant_interleaves_send_abort`, `create_zero_capacity`.
+**C status:** implemented. A reserve is refused when `queue_len + reserved >= capacity` (`channel_reserve_impl`, `src/channel/mpsc.c:678-680`; lock-free backend `src/channel/mpsc.c:676`). Capacity 0 or above `ASX_CHANNEL_MAX_CAPACITY` (default 64, `include/asx/core/channel.h:57-59`) returns `ASX_E_INVALID_ARGUMENT` instead of panicking (`src/channel/mpsc.c:426`). C has no unbounded channel (Rust's `unbounded_channel` is `channel(usize::MAX)`). Unit tests: `tests/unit/channel/test_mpsc.c` `capacity_enforcement`, `capacity_mixed_reserved_and_queued`, `capacity_invariant_interleaves_send_abort`, `create_zero_capacity`.
 
 ### 2.2 Two-Phase Obligation Protocol
 
@@ -87,7 +87,7 @@ Evidence:
 
 - tests (`mpsc_tests.rs`): `try_reserve_respects_fifo_over_capacity` (`:2404`), `try_reserve_full_when_waiter_queued` (`:1947`), `try_send_respects_queued_waiter_fifo` (`:672`)
 
-**C status:** implemented. Parked producers wait in `reserve_waiters`, a wait queue that is FIFO by arrival and keeps a re-polling waiter's position (`src/sync/wait_queue.h:23-24`). A reserve reports full while a producer whose task has not finished, cancel-requested ones included, is queued ahead of the caller (`asx_wait_queue_live_ahead`, `src/channel/mpsc.c:636`; contract `src/sync/wait_queue.h:44-48`). After each state change `channel_settle` hands free capacity to the head of the line only (`src/channel/mpsc.c:382-389`). Unit tests: `tests/unit/channel/test_channel_wake.c` `try_reserve_never_jumps_parked_producer`, `reserve_waiters_served_in_arrival_order_deterministically`, `full_channel_parks_producers_and_dequeue_wakes_one`. No v2 fixture has more than one producer on a channel, so FIFO order among several parked producers is not fixture-checked; `mpsc-two-phase-send-recv-001` (capacity 1) checks one producer waiting for the consumer.
+**C status:** implemented. Parked producers wait in `reserve_waiters`, a wait queue that is FIFO by arrival and keeps a re-polling waiter's position (`src/sync/wait_queue.h:23-24`). A reserve reports full while a producer whose task has not finished, cancel-requested ones included, is queued ahead of the caller (`asx_wait_queue_live_ahead`, `src/channel/mpsc.c:671`; contract `src/sync/wait_queue.h:44-48`). After each state change `channel_settle` hands free capacity to the head of the line only (`src/channel/mpsc.c:382-389`). Unit tests: `tests/unit/channel/test_channel_wake.c` `try_reserve_never_jumps_parked_producer`, `reserve_waiters_served_in_arrival_order_deterministically`, `full_channel_parks_producers_and_dequeue_wakes_one`. Rust parity: `mpsc-two-phase-send-recv-001` (capacity 1) checks one producer waiting for the consumer; `mpsc-recv-many-wakes-each-freed-slot-001` checks two parked producers served in arrival order, both woken by a batch receive that frees two slots.
 
 ### 2.4 Cancellation and Disconnect Behavior
 
@@ -202,7 +202,7 @@ Required tie-break and ordering rules, with their status:
 
 1. Channel sender waiters are FIFO; non-blocking reserve must not queue-jump. Rust: section 2.3. C: implemented (section 2.3).
 2. Two-phase obligations are linear: every reserve resolves exactly once as commit or abort. Rust: section 2.2 (an unsent drop is an abort). C: send and abort are implemented; an unresolved permit is not aborted at drop (section 2.2).
-3. Receiver delivery order is FIFO for committed queue entries. Rust: `VecDeque` `push_back`/`pop_front` (`mpsc.rs:1616`, `:1801`). C: ring buffer (`src/channel/mpsc.c:739-742`, `:802-818`); unit test `test_mpsc.c` `fifo_ordering`.
+3. Receiver delivery order is FIFO for committed queue entries. Rust: `VecDeque` `push_back`/`pop_front` (`mpsc.rs:1616`, `:1801`). C: ring buffer (`src/channel/mpsc.c:791-793`, `:335-338`); unit test `test_mpsc.c` `fifo_ordering`.
 4. Equal-deadline timer ordering must be deterministic and insertion-stable. Rust: `TimerHeap` (section 3.1) and the wheel's ready vector (section 3.2). C: section 3.1.
 5. Timer cancellation must be generation-safe (stale handles fail, live handles remain valid). Rust and C: section 3.2.
 6. Coalescing must be deterministic for a fixed logical-time input stream. Rust: the hold rule depends only on the timers and `now` (section 3.3). C: no coalescing.
