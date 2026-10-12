@@ -284,7 +284,11 @@ byte-identical. The historical SHA values above identify the retained original
 captures; corrected fresh actor/race captures have SHA-256
 `6c3f48e7c9630b315999c64eee1468b070931f856778029400086c9563068c0c` and
 `1f1f3d9bd6568f647c835a03be0aa2bcfb2108d97aea2ebe050f031da1e4aaef`.
-Independent final schema/capture acceptance and hosted retry remain pending.
+Independent final schema/capture acceptance passes at `84ca5f40`: both C
+compilers compare all 167 accepted and independently recaptured fixtures;
+the old schema failure is reproduced and retained. Original `bd-aioq` is
+reclosed normally with its original criteria and audit history preserved.
+Hosted retry has 29 successful jobs and one pending job at this observation.
 The same runtime source's
 actual [performance run 38248217460](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38248217460)
 executes both CORE and HFT: each passes all 34 latency checks but fails one stale
@@ -324,13 +328,42 @@ Current original-task execution checklist (verification still in progress):
 - [x] Obtain independent original `bd-6ncn` acceptance and close that original bug at `74e5d4a0`.
 - [x] Correct the commit evidence record, verify the complete original pushed range and inspect the actual hosted retry, including its subsequent schema failure.
 - [x] Reopen original `bd-aioq`, add the applicable existing rule tags and genuinely recapture the two named witnesses without changing expected runtime results or the schema.
-- [ ] Independently verify final scenario schema, fixture integrity, fresh recapture and all 167 comparisons, then reclose original `bd-aioq` only when those criteria pass.
+- [x] Independently verify final scenario schema, fixture integrity, fresh recapture and all 167 comparisons, then reclose original `bd-aioq` at `84ca5f40`.
 - [ ] Inspect the next actual hosted CI after the schema correction; keep any pending or failed lane explicit.
 - [ ] Publish all accepted increments on main, preserve concurrent work and synchronize the required legacy mirror.
 
 K4, typed outcomes/factories, serialized asynchronous finalization, independent
 runtime storage, native replay, physical-device validation and P2 remain open.
 The completed narrow increments do not satisfy those broader contracts.
+
+### Generated-input schema repair, `bd-58jc`
+
+The named-witness failure exposed an upstream cause in the generator itself:
+it emits empty rule lists and IDs such as `gen-9-0`, violating the unchanged
+normative schema. Two actual outputs from the retained genuine producer fail
+the pinned validator with four metadata errors. The differential-fuzz target
+previously captured those inputs without validating their declared schema.
+
+The next bounded repair changes only generated metadata, gives IDs a valid
+three-digit suffix for every index, derives filenames from those IDs and adds
+strict validation before capture. The actual repeat/changed-seed control keeps
+its full denominator and checks executable inputs; both fuzz workflows install
+the already pinned validator. Original campaign data and all canonical captures
+remain untouched. Native producer and independent acceptance are pending.
+
+- [x] Reproduce invalid metadata with the genuine retained generator and unchanged pinned schema.
+- [x] Create/claim `bd-58jc`; repair rule metadata and IDs without changing RNG draws or generated operations.
+- [x] Derive emitted filenames from the generated ID so capture and minimization paths agree.
+- [x] Require the pinned validator and validate generated scenarios before Rust capture.
+- [x] Install the same checker pin in push/nightly fuzz jobs; preserve counts, timeouts and the existing capture policy.
+- [x] Update the existing real repeat/changed-input control for the corrected names without relaxing its assertions.
+- [x] Run draft strict C build/test/format/lint/schema/documentation/integrity gates; review the scanner's Makefile comment misclassification separately from the supported Rust/Bash scan.
+- [ ] Compile the actual corrected Rust producer against the pinned dependency and retain its immutable binary and source binding.
+- [ ] Validate all 200 seed-9 outputs and a 1,001-input boundary batch; compare old/new executable inputs excluding only ID/rule metadata.
+- [ ] Execute actual Rust capture and C comparison over all 200 generated inputs; retain repeat/changed-seed and planted-runtime-mutant controls.
+- [ ] Demonstrate that old invalid generation and a missing validator fail before capture.
+- [ ] Independently review the exact source and close only `bd-58jc` after all original criteria pass.
+- [ ] Publish the accepted repair, synchronize the legacy mirror and primary checkout, and inspect actual hosted CI outcomes.
 
 ## Assessment at the audited revision
 

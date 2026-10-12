@@ -1653,8 +1653,12 @@ TWIN_RUN := $(if $(ASX_TWIN_BIN),$(ASX_TWIN_BIN),cargo run --release --locked --
 .PHONY: fuzz-differential
 fuzz-differential: $(CONFORMANCE_RUNNER)
 	@echo "[asx] fuzz-differential: seed=$(FUZZ_V2_SEED) count=$(FUZZ_V2_COUNT)"
+	@if [ -z "$(CHECK_JSONSCHEMA)" ]; then \
+		echo "[asx] fuzz-differential: FAIL (check-jsonschema $(CHECK_JSONSCHEMA_VERSION) not found and no uvx)"; exit 1; \
+	fi
 	@mkdir -p $(FUZZ_V2_DIR)
 	@$(TWIN_RUN) generate --seed $(FUZZ_V2_SEED) --count $(FUZZ_V2_COUNT) --out $(FUZZ_V2_DIR)/scenarios
+	@$(CHECK_JSONSCHEMA) --schemafile schemas/scenario_dsl_v2.json $(FUZZ_V2_DIR)/scenarios/*.json
 	@$(TWIN_RUN) capture $(FUZZ_V2_DIR)/scenarios/*.json --out $(FUZZ_V2_DIR)/fixtures > $(FUZZ_V2_DIR)/capture.log || true
 	@tail -1 $(FUZZ_V2_DIR)/capture.log
 	@grep -q '^twin_run capture: ' $(FUZZ_V2_DIR)/capture.log || \

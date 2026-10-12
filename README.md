@@ -892,7 +892,7 @@ make test-e2e           # Every e2e family (tests/e2e/run_all.sh)
 make fixture-integrity  # Fixture schema, provenance, digest recompute, codec round trip
 make test-gates         # Gate negative controls (bad fixtures rejected, planted bugs caught)
 make conformance        # Rust parity: every v2 fixture executed in C and compared
-make fuzz-differential  # Seeded Rust-vs-C differential fuzzing (needs Rust)
+make fuzz-differential  # Seeded Rust-vs-C fuzzing (needs Rust + pinned schema validator)
 make test-fuzz-differential # Live Rust oracle, planted C mutation and minimizer controls
 make codec-equivalence  # Rust fixtures executed in JSON/BIN builds, plus recorded legacy digests
 make profile-parity     # Rust fixtures executed in eight host profiles, plus recorded legacy digests
@@ -2015,7 +2015,11 @@ The C fuzz harness (`tests/fuzz/fuzz_differential.c`) generates random operation
 
 These C checks do not measure Rust parity. `make fuzz-differential` runs
 generated DSL v2 scenarios in asupersync itself (`tools/twin_run`) and in C,
-then compares the same canonical outputs exactly.
+then compares the same canonical outputs exactly. The target first validates
+generated inputs against the normative scenario schema with
+`check-jsonschema==0.38.2` (or its pinned `uvx` invocation); missing validation
+tooling or invalid inputs fail before capture. Generated IDs and filenames
+include the required three-digit suffix without limiting the requested count.
 
 `make test-fuzz-differential` checks live Rust captures against both the clean
 C runtime and a budget-priority mutant, then requires a reduced counterexample

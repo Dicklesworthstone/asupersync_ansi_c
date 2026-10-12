@@ -856,10 +856,10 @@ pub fn scenario(seed: u64, index: u64) -> Value {
 
     json!({
         "schema": "asx.scenario.v2",
-        "id": format!("gen-{seed}-{index}"),
+        "id": format!("gen-{seed}-{index}-001"),
         "description": "generated (twin_run generate, bd-ij9w)",
         "unit": "scheduler",
-        "rules": [],
+        "rules": ["inv.determinism.replayable"],
         "seed": rng.next_u64() % 1_000_000,
         "lab": {"max_steps": 2000},
         "regions": regions,

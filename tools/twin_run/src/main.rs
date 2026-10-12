@@ -41,7 +41,11 @@ fn generate(seed: u64, count: u64, out: &PathBuf) -> ExitCode {
     }
     for index in 0..count {
         let scenario = scenario_gen::scenario(seed, index);
-        let file = out.join(format!("gen-{seed}-{index}.json"));
+        let Some(id) = scenario["id"].as_str() else {
+            eprintln!("twin_run: generated scenario {index} lacks a string ID");
+            return ExitCode::from(1);
+        };
+        let file = out.join(format!("{id}.json"));
         let text = match canon::canonical_json(&scenario) {
             Ok(t) => t,
             Err(err) => {
