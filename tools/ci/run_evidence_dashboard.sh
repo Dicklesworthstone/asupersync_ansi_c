@@ -20,7 +20,7 @@
 #
 # Exit codes:
 #   0: dashboard generated (or no strict regression failure)
-#   1: strict mode + regression alerts detected
+#   1: strict mode + high alerts or failed/incomplete required perf evidence
 #   2: usage/config error
 #
 # SPDX-License-Identifier: MIT
@@ -43,6 +43,11 @@ LEDGER_FILE="$PERF_DIR/evidence_ledger_${RUN_ID}.json"
 TREND_FILE="$PERF_DIR/latency_trend_${RUN_ID}.json"
 BENCH_JSON=""
 ADAPTIVE_LEDGER_JSON=""
+CORE_SLO_REPORT="$PERF_DIR/slo_gate_report.json"
+HFT_SLO_REPORT="$PERF_DIR/slo_gate_hft_report.json"
+SIZE_REPORT="$PERF_DIR/size_gate_report.json"
+PERF_MANIFEST="$REPO_ROOT/build/ci-manifests/perf-tail-deadline.manifest.json"
+EXPECTED_SHA="${GITHUB_SHA:-}"
 STRICT=0
 
 usage() {
@@ -55,11 +60,16 @@ Options:
   --fuzz-dir <dir>              Fuzz summary directory
   --bench-json <file>           Benchmark JSON input file
   --adaptive-ledger-json <file> Adaptive ledger input file (optional)
+  --core-slo-report <file>      Required CORE SLO report
+  --hft-slo-report <file>       Required HFT SLO report
+  --size-report <file>          Required CORE size/cold-start report
+  --perf-manifest <file>        Actual perf step outcomes and artifact hashes
+  --expected-sha <sha>          Required revision (default: GITHUB_SHA or HEAD)
   --history-file <file>         Append-only history JSONL file
   --dashboard-out <file>        Dashboard JSON output path
   --ledger-out <file>           Snapshot JSON output path
   --trend-out <file>            Trend JSON output path
-  --strict                      Exit 1 when high-severity alerts exist
+  --strict                      Require complete passing perf evidence and no high alerts
   --help                        Show this help
 USAGE
     exit 2
@@ -90,6 +100,17 @@ while [ $# -gt 0 ]; do
         --adaptive-ledger-json)
             [ $# -ge 2 ] || usage
             ADAPTIVE_LEDGER_JSON="$2"
+            shift 2
+            ;;
+        --core-slo-report|--hft-slo-report|--size-report|--perf-manifest|--expected-sha)
+            [ $# -ge 2 ] || usage
+            case "$1" in
+                --core-slo-report) CORE_SLO_REPORT="$2" ;;
+                --hft-slo-report) HFT_SLO_REPORT="$2" ;;
+                --size-report) SIZE_REPORT="$2" ;;
+                --perf-manifest) PERF_MANIFEST="$2" ;;
+                --expected-sha) EXPECTED_SHA="$2" ;;
+            esac
             shift 2
             ;;
         --history-file)
@@ -143,7 +164,11 @@ if [ -z "$BENCH_JSON" ]; then
 fi
 
 if [ -z "$ADAPTIVE_LEDGER_JSON" ]; then
-    ADAPTIVE_LEDGER_JSON="$(ls -1t "$PERF_DIR"/evidence_ledger_*.json 2>/dev/null | head -n 1 || true)"
+    for candidate in "$PERF_DIR"/evidence_ledger_*.json; do
+        if [ -f "$candidate" ] && { [ -z "$ADAPTIVE_LEDGER_JSON" ] || [ "$candidate" -nt "$ADAPTIVE_LEDGER_JSON" ]; }; then
+            ADAPTIVE_LEDGER_JSON="$candidate"
+        fi
+    done
 fi
 
 latest_mode_summary() {
@@ -158,19 +183,15 @@ latest_mode_summary() {
     return 1
 }
 
-read_json_or_null() {
-    local file="$1"
-    if [ -n "$file" ] && [ -f "$file" ]; then
-        jq -c '.' "$file" 2>/dev/null || echo 'null'
-    else
-        echo 'null'
-    fi
-}
-
 conformance_summary_file="$(latest_mode_summary "conformance" || true)"
 codec_summary_file="$(latest_mode_summary "codec-equivalence" || true)"
 profile_summary_file="$(latest_mode_summary "profile-parity" || true)"
-fuzz_summary_file="$(ls -1t "$FUZZ_DIR"/*.summary.json 2>/dev/null | head -n 1 || true)"
+fuzz_summary_file=""
+for candidate in "$FUZZ_DIR"/*.summary.json; do
+    if [ -f "$candidate" ] && { [ -z "$fuzz_summary_file" ] || [ "$candidate" -nt "$fuzz_summary_file" ]; }; then
+        fuzz_summary_file="$candidate"
+    fi
+done
 
 conformance_json='null'
 codec_json='null'
@@ -285,6 +306,176 @@ adaptive_metrics_json="$(jq -cn \
 ')"
 
 git_sha="$(git -C "$REPO_ROOT" rev-parse --verify HEAD 2>/dev/null || echo "unknown")"
+[ -n "$EXPECTED_SHA" ] || EXPECTED_SHA="$git_sha"
+
+# Performance readiness comes from actual gates, not absence of trend alerts.
+# This bounded scope does not establish semantic, automotive or embedded release proof.
+perf_evidence_json="$(python3 -I - "$REPO_ROOT" "$RUN_ID" "$EXPECTED_SHA" \
+    "$PERF_MANIFEST" "$CORE_SLO_REPORT" "$HFT_SLO_REPORT" "$SIZE_REPORT" <<'PY'
+from datetime import datetime
+import hashlib
+import json
+from pathlib import Path
+import re
+import sys
+
+root, run_id, expected_sha, manifest_path, core_path, hft_path, size_path = sys.argv[1:]
+issues = []
+reports = {}
+required_steps = ['checkout', 'dependencies', 'perf-evidence-controls',
+                  'release-build', 'bench', 'bench-json', 'validate-bench-artifacts',
+                  'slo-gate-core', 'hft-build', 'hft-bench-json', 'slo-gate-hft', 'size-gate']
+
+def issue(check, detail, status='fail'):
+    issues.append({'check': check, 'status': status, 'detail': detail})
+
+def path(value):
+    result = Path(value)
+    return result if result.is_absolute() else Path(root) / result
+
+def load(value, label):
+    try:
+        result = json.loads(path(value).read_text())
+        if not isinstance(result, dict):
+            raise ValueError('report must be a JSON object')
+        return result
+    except FileNotFoundError:
+        issue(label, f'missing required artifact: {value}', 'incomplete')
+    except (OSError, ValueError) as error:
+        issue(label, f'invalid required artifact: {value}: {error}')
+        print(f'[asx] evidence-dashboard: {label}: {error}', file=sys.stderr)
+    return None
+
+def bind_file(binding, actual, label):
+    if not isinstance(binding, dict) or not binding.get('path') or not binding.get('sha256'):
+        issue(label, 'manifest lacks artifact path/hash binding', 'incomplete')
+        return
+    if path(binding['path']).resolve() != path(actual).resolve():
+        issue(label, 'manifest path does not name the consumed artifact')
+        return
+    try:
+        digest = hashlib.sha256(path(actual).read_bytes()).hexdigest()
+    except OSError as error:
+        issue(label, f'cannot read bound artifact: {error}', 'incomplete')
+        return
+    if digest != binding['sha256']:
+        issue(label, 'artifact bytes do not match manifest hash')
+
+if not re.fullmatch(r'[0-9a-f]{40}', expected_sha):
+    issue('expected_revision', 'a full committed git SHA is required')
+manifest = load(manifest_path, 'perf_manifest')
+if manifest is not None:
+    if manifest.get('sha') != expected_sha:
+        issue('manifest_revision', 'manifest SHA differs from expected revision')
+    if manifest.get('run_tag') != run_id:
+        issue('manifest_run', 'manifest run differs from requested run')
+    if manifest.get('status') == 'fail':
+        issue('manifest_result', 'actual perf lane reported failure')
+    steps = manifest.get('steps', [])
+    if not isinstance(steps, list):
+        steps = []
+        issue('perf_steps', 'steps must be an array')
+    for name in required_steps:
+        found = [step for step in steps if isinstance(step, dict) and step.get('id') == name]
+        if len(found) != 1:
+            issue(name, 'required step missing or duplicated', 'incomplete')
+        elif found[0].get('outcome') != 'success':
+            outcome = found[0].get('outcome', 'missing')
+            issue(name, f'required step outcome: {outcome}',
+                  'fail' if outcome == 'failure' else 'incomplete')
+    builds = manifest.get('build_dirs', {})
+    if not isinstance(builds, dict) or not builds.get('CORE') or not builds.get('HFT'):
+        issue('profile_builds', 'separate CORE and HFT build directories required', 'incomplete')
+        builds = {}
+    elif path(builds['CORE']).resolve() == path(builds['HFT']).resolve():
+        issue('profile_builds', 'CORE and HFT share a build directory')
+    library = manifest.get('core_library', {})
+    if not isinstance(library, dict) or not library.get('path'):
+        issue('core_library', 'bound CORE library missing', 'incomplete')
+    if builds.get('CORE') and isinstance(library, dict):
+        expected_lib = path(builds['CORE']) / 'lib/libasx.a'
+        if not library.get('path') or path(library['path']).resolve() != expected_lib.resolve():
+            issue('core_library', 'size library must come from the CORE build directory')
+        else:
+            bind_file(library, library['path'], 'core_library')
+
+for label, report_path, profile, schema, report_run in [
+    ('CORE', core_path, 'CORE', 'asx.slo_gate_report.v1', run_id),
+    ('HFT', hft_path, 'HFT', 'asx.slo_gate_report.v1', run_id + '-hft'),
+    ('size', size_path, 'CORE', 'asx.size_gate_report.v1', run_id),
+]:
+    report = load(report_path, label)
+    if report is None:
+        continue
+    reports[label] = {'artifact': report_path, 'status': report.get('status'),
+                      'summary': report.get('summary'), 'violations': report.get('violations', []),
+                      'validation_failures': report.get('validation_failures', [])}
+    if manifest is not None:
+        bindings = manifest.get('reports', {})
+        bind_file(bindings.get(label) if isinstance(bindings, dict) else None, report_path, label + '_bytes')
+    if report.get('schema') != schema or report.get('profile') != profile or report.get('run_id') != report_run:
+        issue(label + '_identity', 'schema, profile or run ID differs from required evidence')
+    summary = report.get('summary', {})
+    if not isinstance(summary, dict):
+        summary = {}
+    counts = [summary.get(key) for key in ['total', 'passed', 'failed', 'skipped']]
+    if not all(type(value) is int and value >= 0 for value in counts) or not counts[0] or counts[0] != sum(counts[1:]):
+        issue(label + '_counts', 'missing, zero-run or inconsistent gate counts')
+    else:
+        if counts[2] > 0 or report.get('status') == 'fail':
+            issue(label + '_result', 'actual gate reported a failure')
+        elif counts[3] > 0 or report.get('status') == 'skip':
+            issue(label + '_result', 'required gate skipped evidence', 'incomplete')
+        elif report.get('status') != 'pass':
+            issue(label + '_result', 'required gate has no passing status', 'incomplete')
+    if label != 'size':
+        dimensions = [summary.get(key) for key in ['slo_total', 'slo_failed', 'validation_total', 'validation_failed']]
+        if not all(type(value) is int and value >= 0 for value in dimensions) or dimensions[0] <= 0 or dimensions[2] <= 0:
+            issue(label + '_counts', 'missing numeric SLO or baseline-validation counts')
+        elif summary.get('total') != dimensions[0] + dimensions[2] or summary.get('failed') != dimensions[1] + dimensions[3]:
+            issue(label + '_counts', 'gate dimensions contradict summary')
+        validation = report.get('baseline_validation', {})
+        if not isinstance(validation, dict) or validation.get('status') != 'pass':
+            issue(label + '_baseline', 'baseline validation did not pass')
+        else:
+            checks = validation.get('checks', [])
+            age = [check for check in checks if isinstance(check, dict) and check.get('check') == 'baseline_not_stale'] if isinstance(checks, list) else []
+            if len(age) != 1 or age[0].get('passed') is not True:
+                issue(label + '_freshness', 'fresh baseline evidence missing or rejected')
+            try:
+                captured = datetime.fromisoformat(age[0]['captured_at'].replace('Z', '+00:00'))
+                generated = datetime.fromisoformat(report['generated_at'].replace('Z', '+00:00'))
+                elapsed = (generated - captured).days
+                if not 0 <= elapsed <= age[0]['max_age_days']:
+                    issue(label + '_freshness', 'baseline was stale at gate evaluation')
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+                issue(label + '_freshness', 'invalid baseline age evidence')
+        if type(summary.get('slo_total')) is not int or summary['slo_total'] <= 0:
+            issue(label + '_metrics', 'no actual numeric SLO checks')
+    else:
+        cold = report.get('measured', {}).get('cold_start') if isinstance(report.get('measured'), dict) else None
+        if not isinstance(cold, dict) or type(cold.get('samples')) is not int or cold['samples'] <= 0:
+            issue('size_cold_start', 'required measured cold-start evidence missing', 'incomplete')
+        if manifest is not None:
+            library = manifest.get('core_library', {})
+            source = report.get('sources', {}).get('lib') if isinstance(report.get('sources'), dict) else None
+            if not source or not isinstance(library, dict) or path(source).resolve() != path(library.get('path', '')).resolve():
+                issue('size_library', 'size report did not measure the bound CORE library')
+
+    passes, violations = report.get('passes'), report.get('violations')
+    if not isinstance(passes, list) or not isinstance(violations, list):
+        issue(label + '_checks', 'actual gate check records missing')
+    elif label == 'size' and (len(passes) != summary.get('passed') or len(violations) != summary.get('failed')):
+        issue(label + '_checks', 'check records contradict size counts')
+    elif label != 'size' and (len(violations) != summary.get('slo_failed') or len(passes) != summary.get('slo_total', 0) - summary.get('slo_failed', 0)):
+        issue(label + '_checks', 'check records contradict SLO counts')
+
+status = 'fail' if any(item['status'] == 'fail' for item in issues) else 'incomplete' if issues else 'pass'
+print(json.dumps({'status': status, 'scope': 'CORE/HFT SLO and CORE size/cold-start',
+                  'expected_sha': expected_sha, 'manifest': manifest_path, 'required_steps': required_steps,
+                  'reports': reports, 'issues': issues}))
+PY
+)"
 
 snapshot_json="$(jq -cn \
     --arg run_id "$RUN_ID" \
@@ -301,7 +492,8 @@ snapshot_json="$(jq -cn \
     --argjson profile "$profile_json" \
     --argjson fuzz "$fuzz_json" \
     --argjson bench "$bench_metrics_json" \
-    --argjson adaptive "$adaptive_metrics_json" '
+    --argjson adaptive "$adaptive_metrics_json" \
+    --argjson perf_evidence "$perf_evidence_json" '
     {
       kind: "evidence_snapshot",
       run_id: $run_id,
@@ -334,7 +526,8 @@ snapshot_json="$(jq -cn \
           null
         end
       ),
-      adaptive: $adaptive
+      adaptive: $adaptive,
+      perf_evidence: $perf_evidence
     }')"
 
 if ! grep -Eq "\"run_id\"[[:space:]]*:[[:space:]]*\"$RUN_ID\"" "$HISTORY_FILE"; then
@@ -363,7 +556,8 @@ dashboard_json="$(jq -cn \
     --arg trend_file "$TREND_FILE" \
     --arg ledger_file "$LEDGER_FILE" \
     --arg dashboard_file "$DASHBOARD_FILE" \
-    --argjson history "$history_json" '
+    --argjson history "$history_json" \
+    --argjson current "$snapshot_json" '
     def median:
       if length == 0 then null
       else (sort | .[(length - 1) / 2 | floor])
@@ -408,8 +602,8 @@ dashboard_json="$(jq -cn \
 
     ($history | sort_by(.generated_ts)) as $h |
     ($h | length) as $count |
-    ($h[-1] // null) as $latest |
-    ($h[0:-1]) as $prev |
+    $current as $latest |
+    ($h | map(select(.run_id != $run_id))) as $prev |
     ($prev | map(.perf.tail.p99_ns // null) | map(select(. != null)) | .[-20:]) as $prev_p99 |
     ($prev | map(.perf.tail.p99_9_ns // null) | map(select(. != null)) | .[-20:]) as $prev_p99_9 |
     ($prev | map(.perf.tail.p99_99_ns // null) | map(select(. != null)) | .[-20:]) as $prev_p99_99 |
@@ -492,12 +686,17 @@ dashboard_json="$(jq -cn \
         high: (.alerts | map(select(.severity == "high")) | length),
         warn: (.alerts | map(select(.severity == "warn")) | length)
       }
+    | .perf_readiness = $latest.perf_evidence.status
+    | .perf_evidence = $latest.perf_evidence
     | .release_readiness = (
-        if .alert_counts.high > 0 then "fail"
-        elif .alert_counts.warn > 0 then "warn"
-        else "pass"
-        end
+        if .alert_counts.high > 0 or .perf_readiness == "fail" then "fail"
+        else "incomplete" end
       )
+    | .release_scope = {
+        full_release_proof: false,
+        evaluated: "CORE/HFT SLO and CORE size/cold-start",
+        remaining: "semantic gates, embedded targets, automotive and other release acceptance"
+      }
     | .artifacts = {
         snapshot: $ledger_file,
         dashboard: $dashboard_file,
@@ -524,22 +723,26 @@ jq -cn \
     trend_file: $trend_file,
     snapshot: $snapshot,
     release_readiness: $dashboard.release_readiness,
+    perf_readiness: $dashboard.perf_readiness,
     alert_counts: $dashboard.alert_counts
   }' > "$LEDGER_FILE"
 
 alerts_total="$(jq -r '.alerts | length' "$DASHBOARD_FILE")"
 alerts_high="$(jq -r '.alert_counts.high' "$DASHBOARD_FILE")"
 status="$(jq -r '.release_readiness' "$DASHBOARD_FILE")"
+perf_status="$(jq -r '.perf_readiness' "$DASHBOARD_FILE")"
 
-echo "[asx] evidence-dashboard: status=$status alerts=$alerts_total high=$alerts_high dashboard=$DASHBOARD_FILE" >&2
+echo "[asx] evidence-dashboard: release=$status perf=$perf_status alerts=$alerts_total high=$alerts_high dashboard=$DASHBOARD_FILE" >&2
 echo "[asx] evidence-dashboard: ledger=$LEDGER_FILE trend=$TREND_FILE history=$HISTORY_FILE" >&2
 
 if [ "$alerts_total" -gt 0 ]; then
     jq -r '.alerts[] | "  - [" + .severity + "] " + .metric + " current=" + (.current|tostring) + " baseline=" + (.baseline|tostring)' "$DASHBOARD_FILE" >&2
 fi
 
-if [ "$STRICT" = "1" ] && [ "$alerts_high" -gt 0 ]; then
-    echo "[asx] evidence-dashboard: FAIL (strict mode with high-severity alerts)" >&2
+jq -r '.perf_evidence.issues[] | "  - [" + .status + "] " + .check + ": " + .detail' "$DASHBOARD_FILE" >&2
+
+if [ "$STRICT" = "1" ] && { [ "$alerts_high" -gt 0 ] || [ "$perf_status" != "pass" ]; }; then
+    echo "[asx] evidence-dashboard: FAIL (strict mode requires passing applicable perf evidence)" >&2
     exit 1
 fi
 

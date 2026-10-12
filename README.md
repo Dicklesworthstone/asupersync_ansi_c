@@ -830,9 +830,24 @@ Design properties (these describe the code; none of them is a benchmark result):
 - deterministic exhaustion behavior at each resource class's limits.
 
 Library size and RAM use are not published as measurements here. The perf
-workflow (`.github/workflows/perf.yml`, pushes to `main`) checks the CORE
-release `libasx.a` against the size budgets in
-`tools/ci/size_cold_start_baselines.json`.
+workflow (`.github/workflows/perf.yml`, pushes to `main`) uses separate
+`build/perf-core` and `build/perf-hft` directories. A CORE SLO failure no
+longer suppresses HFT or CORE size/cold-start collection when their build
+and benchmark prerequisites succeed. Size checks measure the CORE release
+`libasx.a` against `tools/ci/size_cold_start_baselines.json`.
+The dashboard (`tools/ci/run_evidence_dashboard.sh`) consumes the actual
+CORE/HFT SLO and CORE size reports, verifies their bytes against the manifest
+for the same workflow SHA and run, and checks the recorded step outcomes.
+Failed or missing evidence yields `fail` or `incomplete`; passing this perf
+scope still leaves full release readiness incomplete.
+
+As of 2026-10-12, hosted revision `ec5f8b4` passes 39/41 CORE checks:
+`scheduler_multi_round` p99 is 18,214 ns against 15,000 ns, and the baseline
+is 225 days old against a 120-day limit. Hosted verification of the new
+collection workflow is pending. Baselines and budgets remain unchanged;
+P2 remains in progress, including raw-sample/profile evidence, governed
+baseline refresh and automotive acceptance. See
+`docs/REALITY_CHECK_AND_BRIDGE_PLAN.md` for revision-bound results and limits.
 
 Recommended benchmark flow:
 

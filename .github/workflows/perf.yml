@@ -26,28 +26,42 @@ jobs:
   perf-tail-deadline:
     name: "perf: tail-latency + deadline gates"
     runs-on: ubuntu-latest
+    env:
+      CORE_BUILD_DIR: build/perf-core
+      HFT_BUILD_DIR: build/perf-hft
     steps:
       - uses: actions/checkout@v4
+        id: checkout
 
       - name: Install dependencies
+        id: dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq jq
 
+      - name: Test performance evidence controls
+        id: test_perf_evidence
+        if: always() && steps.dependencies.outcome == 'success'
+        run: bash tests/gates/test_perf_evidence.sh
+
       - name: Build (release)
         id: build_release
-        run: make release
+        if: always() && steps.dependencies.outcome == 'success'
+        run: make release PROFILE=CORE BUILD_DIR="${CORE_BUILD_DIR}"
 
       - name: Run benchmarks
         id: run_bench
-        run: make bench
+        if: always() && steps.build_release.outcome == 'success'
+        run: make bench PROFILE=CORE BUILD_DIR="${CORE_BUILD_DIR}"
 
       - name: Run benchmarks (JSON output)
         id: run_bench_json
-        run: make bench-json > bench-results.json
+        if: always() && steps.build_release.outcome == 'success'
+        run: make bench-json PROFILE=CORE BUILD_DIR="${CORE_BUILD_DIR}" > bench-results.json
 
       - name: Validate benchmark artifacts
         id: validate_manifest
+        if: always() && steps.run_bench_json.outcome == 'success'
         run: |
           if [ ! -s bench-results.json ]; then
             echo "[asx] perf: FAIL — bench-results.json missing or empty" >&2
@@ -56,6 +70,7 @@ jobs:
 
       - name: Evaluate SLO gates
         id: slo_gate
+        if: always() && steps.validate_manifest.outcome == 'success'
         run: |
           mkdir -p build/perf
           tools/ci/evaluate_slo_gates.sh \
@@ -66,14 +81,17 @@ jobs:
 
       - name: Build (HFT profile)
         id: build_hft
-        run: make release PROFILE=HFT
+        if: always() && steps.dependencies.outcome == 'success'
+        run: make release PROFILE=HFT BUILD_DIR="${HFT_BUILD_DIR}"
 
       - name: Run benchmarks (HFT JSON)
         id: run_bench_hft
-        run: make bench-json PROFILE=HFT > bench-results-hft.json
+        if: always() && steps.build_hft.outcome == 'success'
+        run: make bench-json PROFILE=HFT BUILD_DIR="${HFT_BUILD_DIR}" > bench-results-hft.json
 
       - name: Evaluate HFT SLO gates
         id: slo_gate_hft
+        if: always() && steps.run_bench_hft.outcome == 'success'
         run: |
           mkdir -p build/perf
           tools/ci/evaluate_slo_gates.sh \
@@ -85,22 +103,15 @@ jobs:
 
       - name: Evaluate size and cold-start gates
         id: size_gate
+        if: always() && steps.build_release.outcome == 'success' && steps.run_bench_json.outcome == 'success'
         run: |
           mkdir -p build/perf
           tools/ci/evaluate_size_gates.sh \
-            --lib build/lib/libasx.a \
+            --lib "${CORE_BUILD_DIR}/lib/libasx.a" \
             --bench-json bench-results.json \
             --output build/perf/size_gate_report.json \
             --run-id "${{ env.ASX_CI_RUN_TAG }}" \
             --strict
-
-      - name: Run evidence dashboard
-        id: evidence_dashboard
-        if: always() && steps.run_bench_json.outcome == 'success'
-        run: |
-          tools/ci/run_evidence_dashboard.sh \
-            --bench-json bench-results.json \
-            --run-id "${{ env.ASX_CI_RUN_TAG }}"
 
       - name: Emit perf lane manifest
         if: always()
@@ -110,33 +121,57 @@ jobs:
           first_failure=""
           rerun=""
 
-          if [ "${{ steps.build_release.outcome }}" = "failure" ]; then
+          if [ "${{ steps.checkout.outcome }}" = "failure" ]; then
+            first_failure="checkout"
+            rerun="git status"
+          elif [ "${{ steps.dependencies.outcome }}" = "failure" ]; then
+            first_failure="dependencies"
+            rerun="sudo apt-get install -y -qq jq"
+          elif [ "${{ steps.test_perf_evidence.outcome }}" = "failure" ]; then
+            first_failure="perf-evidence-controls"
+            rerun="bash tests/gates/test_perf_evidence.sh"
+          elif [ "${{ steps.build_release.outcome }}" = "failure" ]; then
             first_failure="release-build"
-            rerun="make release"
+            rerun="make release PROFILE=CORE BUILD_DIR=build/perf-core"
           elif [ "${{ steps.run_bench.outcome }}" = "failure" ]; then
             first_failure="bench"
-            rerun="make bench"
+            rerun="make bench PROFILE=CORE BUILD_DIR=build/perf-core"
           elif [ "${{ steps.run_bench_json.outcome }}" = "failure" ]; then
             first_failure="bench-json"
-            rerun="make bench-json > bench-results.json"
+            rerun="make bench-json PROFILE=CORE BUILD_DIR=build/perf-core > bench-results.json"
           elif [ "${{ steps.validate_manifest.outcome }}" = "failure" ]; then
             first_failure="validate-bench-artifacts"
             rerun="ls -l bench-results.json"
           elif [ "${{ steps.slo_gate.outcome }}" = "failure" ]; then
             first_failure="slo-gate-core"
             rerun="tools/ci/evaluate_slo_gates.sh --bench-json bench-results.json --strict"
+          elif [ "${{ steps.build_hft.outcome }}" = "failure" ]; then
+            first_failure="hft-build"
+            rerun="make release PROFILE=HFT BUILD_DIR=build/perf-hft"
+          elif [ "${{ steps.run_bench_hft.outcome }}" = "failure" ]; then
+            first_failure="hft-bench-json"
+            rerun="make bench-json PROFILE=HFT BUILD_DIR=build/perf-hft"
           elif [ "${{ steps.slo_gate_hft.outcome }}" = "failure" ]; then
             first_failure="slo-gate-hft"
             rerun="tools/ci/evaluate_slo_gates.sh --bench-json bench-results-hft.json --profile HFT --strict"
           elif [ "${{ steps.size_gate.outcome }}" = "failure" ]; then
             first_failure="size-gate"
-            rerun="tools/ci/evaluate_size_gates.sh --lib build/lib/libasx.a --bench-json bench-results.json --strict"
+            rerun="tools/ci/evaluate_size_gates.sh --lib build/perf-core/lib/libasx.a --bench-json bench-results.json --strict"
           fi
 
           status="pass"
           if [ -n "$first_failure" ]; then
             status="fail"
           fi
+
+          binding() {
+            local file="$1"
+            local digest=""
+            if [ -f "$file" ]; then
+              digest="$(sha256sum "$file" | cut -d' ' -f1)"
+            fi
+            jq -cn --arg path "$file" --arg sha256 "$digest" '{path:$path,sha256:$sha256}'
+          }
 
           jq -n \
             --arg lane "$lane" \
@@ -145,15 +180,26 @@ jobs:
             --arg workflow "${{ github.workflow }}" \
             --arg sha "${{ github.sha }}" \
             --arg ref "${{ github.ref }}" \
+            --arg checkout_outcome "${{ steps.checkout.outcome }}" \
+            --arg dependencies_outcome "${{ steps.dependencies.outcome }}" \
+            --arg control_outcome "${{ steps.test_perf_evidence.outcome }}" \
             --arg build_outcome "${{ steps.build_release.outcome }}" \
             --arg bench_outcome "${{ steps.run_bench.outcome }}" \
             --arg bench_json_outcome "${{ steps.run_bench_json.outcome }}" \
             --arg validate_outcome "${{ steps.validate_manifest.outcome }}" \
             --arg slo_outcome "${{ steps.slo_gate.outcome }}" \
+            --arg hft_build_outcome "${{ steps.build_hft.outcome }}" \
+            --arg hft_bench_outcome "${{ steps.run_bench_hft.outcome }}" \
             --arg slo_hft_outcome "${{ steps.slo_gate_hft.outcome }}" \
             --arg size_outcome "${{ steps.size_gate.outcome }}" \
             --arg first_failure "$first_failure" \
             --arg rerun "$rerun" \
+            --arg core_build_dir "$CORE_BUILD_DIR" \
+            --arg hft_build_dir "$HFT_BUILD_DIR" \
+            --argjson core_report "$(binding build/perf/slo_gate_report.json)" \
+            --argjson hft_report "$(binding build/perf/slo_gate_hft_report.json)" \
+            --argjson size_report "$(binding build/perf/size_gate_report.json)" \
+            --argjson core_library "$(binding "${CORE_BUILD_DIR}/lib/libasx.a")" \
             '{
               lane: $lane,
               status: $status,
@@ -161,17 +207,42 @@ jobs:
               workflow: $workflow,
               sha: $sha,
               ref: $ref,
+              build_dirs: {CORE:$core_build_dir,HFT:$hft_build_dir},
+              core_library: $core_library,
+              reports: {CORE:$core_report,HFT:$hft_report,size:$size_report},
               steps: [
-                {id: "release-build", outcome: $build_outcome, rerun: "make release"},
-                {id: "bench", outcome: $bench_outcome, rerun: "make bench"},
-                {id: "bench-json", outcome: $bench_json_outcome, rerun: "make bench-json > bench-results.json"},
+                {id: "checkout", outcome: $checkout_outcome, rerun: "git status"},
+                {id: "dependencies", outcome: $dependencies_outcome, rerun: "sudo apt-get install -y -qq jq"},
+                {id: "perf-evidence-controls", outcome: $control_outcome, rerun: "bash tests/gates/test_perf_evidence.sh"},
+                {id: "release-build", outcome: $build_outcome, rerun: "make release PROFILE=CORE BUILD_DIR=build/perf-core"},
+                {id: "bench", outcome: $bench_outcome, rerun: "make bench PROFILE=CORE BUILD_DIR=build/perf-core"},
+                {id: "bench-json", outcome: $bench_json_outcome, rerun: "make bench-json PROFILE=CORE BUILD_DIR=build/perf-core > bench-results.json"},
                 {id: "validate-bench-artifacts", outcome: $validate_outcome, rerun: "ls -l bench-results.json"},
                 {id: "slo-gate-core", outcome: $slo_outcome, rerun: "tools/ci/evaluate_slo_gates.sh --bench-json bench-results.json --strict"},
+                {id: "hft-build", outcome: $hft_build_outcome, rerun: "make release PROFILE=HFT BUILD_DIR=build/perf-hft"},
+                {id: "hft-bench-json", outcome: $hft_bench_outcome, rerun: "make bench-json PROFILE=HFT BUILD_DIR=build/perf-hft"},
                 {id: "slo-gate-hft", outcome: $slo_hft_outcome, rerun: "tools/ci/evaluate_slo_gates.sh --bench-json bench-results-hft.json --profile HFT --strict"},
-                {id: "size-gate", outcome: $size_outcome, rerun: "tools/ci/evaluate_size_gates.sh --lib build/lib/libasx.a --bench-json bench-results.json --strict"}
+                {id: "size-gate", outcome: $size_outcome, rerun: "tools/ci/evaluate_size_gates.sh --lib build/perf-core/lib/libasx.a --bench-json bench-results.json --strict"}
               ],
               first_failure: (if $first_failure == "" then null else {step: $first_failure, rerun: $rerun} end)
-            }' > "${ASX_CI_ARTIFACT_ROOT}/${lane}.manifest.json"
+            }
+            | .status = (if any(.steps[]; .outcome == "failure") then "fail"
+                         elif all(.steps[]; .outcome == "success") then "pass"
+                         else "incomplete" end)' > "${ASX_CI_ARTIFACT_ROOT}/${lane}.manifest.json"
+
+      - name: Run evidence dashboard
+        id: evidence_dashboard
+        if: always()
+        run: |
+          tools/ci/run_evidence_dashboard.sh \
+            --bench-json bench-results.json \
+            --core-slo-report build/perf/slo_gate_report.json \
+            --hft-slo-report build/perf/slo_gate_hft_report.json \
+            --size-report build/perf/size_gate_report.json \
+            --perf-manifest "${ASX_CI_ARTIFACT_ROOT}/perf-tail-deadline.manifest.json" \
+            --expected-sha "${{ github.sha }}" \
+            --run-id "${{ env.ASX_CI_RUN_TAG }}" \
+            --strict
 
       - name: Upload benchmark results
         if: always()
@@ -181,7 +252,11 @@ jobs:
           path: |
             bench-results.json
             bench-results-hft.json
-            build/bench/
+            build/perf-core/bench/
+            build/perf-core/lib/libasx.a
+            build/perf-core/.build-config
+            build/perf-hft/bench/
+            build/perf-hft/.build-config
             build/perf/
             tools/ci/artifacts/evidence/
             ${{ env.ASX_CI_ARTIFACT_ROOT }}/perf-tail-deadline.manifest.json

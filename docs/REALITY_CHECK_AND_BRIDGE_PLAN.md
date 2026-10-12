@@ -109,6 +109,37 @@ kernel, independent runtime storage, native ownership journal/replay, physical
 device, full runtime profile/codec, performance and release requirements above
 remain open. This increment does not claim project completion.
 
+### Performance evidence collection increment, 2026-10-12
+
+Hosted performance run
+[38215366626](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38215366626)
+at `ec5f8b4fc50f006835ab4e21f93a36ff8c700337` fails with 39/41 CORE checks
+passing. `scheduler_multi_round/p99_ns` is 18,214 ns against a 15,000 ns limit;
+the baseline is 225 days old against the unchanged 120-day limit. The hosted
+baseline run [38207309437](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38207309437)
+at `fad4731748552eaab54e159149499c4feaff66bc` and source run
+[38215071461](https://github.com/Dicklesworthstone/asupersync_ansi_c/actions/runs/38215071461)
+at `352b9372fe6a8261511b638b203156a732522c52` each pass all 34 numeric
+SLOs but fail baseline freshness (40/41 overall). These runs establish no
+performance improvement or green hosted performance verdict.
+
+The bounded local workflow repair separates CORE and HFT build directories
+and retains collection after an SLO failure when the relevant build and
+benchmark prerequisites succeed. `tools/ci/run_evidence_dashboard.sh` consumes
+actual CORE/HFT SLO and CORE size/cold-start reports bound by their byte hashes,
+run IDs and workflow SHA, along with the actual step outcomes and CORE library
+binding. It reports failed or incomplete perf evidence; even a perf-only pass
+leaves full release readiness incomplete. Hosted verification of this new
+workflow remains pending. Baselines, budgets and approval governance are
+unchanged.
+
+Static candidate `266611b9fcbec23d5390e033375c08a5644882e2` independently passes
+160 canonical comparisons, 59 authority cases and strict analyzers. Those
+checks do not establish hosted CI success or performance acceptance. Original
+P2 remains in progress: raw-sample/profile evidence, governed baseline refresh,
+automotive coverage and full P2 acceptance remain unfulfilled. Historical red
+metrics below retain their original revision scope.
+
 ## Assessment at the audited revision
 
 The important change since October 8 is that the oracle now runs real code. The C interpreter
