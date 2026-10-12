@@ -9,14 +9,14 @@
 ![C99](https://img.shields.io/badge/C-C99-00599C)
 ![No external deps](https://img.shields.io/badge/dependencies-none-brightgreen)
 ![Deterministic replay](https://img.shields.io/badge/replay-deterministic-orange)
-![Public API declarations](https://img.shields.io/badge/public%20API-2%2C020%20declarations-blue)
+![Public API declarations](https://img.shields.io/badge/public%20API-2%2C043%20declarations-blue)
 ![C test programs](https://img.shields.io/badge/tests-226%20programs-brightgreen)
 ![9 profiles](https://img.shields.io/badge/profiles-9%20deployment%20targets-blue)
 [![License: MIT+Rider](https://img.shields.io/badge/License-MIT%2BOpenAI%2FAnthropic%20Rider-blue.svg)](./LICENSE)
 
 </div>
 
-Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,020<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->226<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
+Portable, dependency-free async runtime in ANSI C with deterministic replay, strict resource contracts, and 9 deployment profiles spanning servers to low-cost routers. <!-- fact:api_declarations -->2,043<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> public header families, backed by <!-- fact:test_programs -->226<!-- /fact --> C test programs across unit, invariant, vignette, e2e, conformance, fuzz, and formal layers.
 
 <div align="center">
 <h3>Quick Source Build</h3>
@@ -59,7 +59,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 | Feature | What It Gives You |
 |---|---|
-| **<!-- fact:api_declarations -->2,020<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
+| **<!-- fact:api_declarations -->2,043<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact --> header families** | Async runtime API: scheduler, channels, sync primitives, actors, combinators, timers, codecs, diagnostics, and more |
 | **No external dependencies** | Pure C runtime core; ships into constrained and audited environments unchanged |
 | **Deterministic replay and trace hashing** | Deterministic builds replay a scenario exactly from its seed and input; trace digests let you diff behavior across builds, profiles, and codec modes |
 | **Structured cancellation with witness protocol** | 11 cancel kinds with severity lattice, witness phase tracking, and cleanup budgets (advisory as in Rust; an opt-in hard bound) |
@@ -2395,6 +2395,7 @@ Check whether `asx_deadline_monitor_check()` is being called frequently enough i
   first.
 - Native I/O ships only in live builds of the POSIX profile: an epoll reactor on Linux with a poll(2) fallback elsewhere (only Linux runs in CI), a pthread blocking pool, sockets, files, processes and signals. There is no kqueue, IOCP or io_uring backend (`ASX_IO_BACKEND_IO_URING` is refused with `ASX_E_PERMISSION_DENIED`). The other profiles, EMBEDDED_ROUTER, HFT and AUTOMOTIVE included, compile the native backends out: their net, fs, process and signal surfaces use the in-memory backends, and their reactor is the ghost reactor unless you install reactor hooks of your own.
 - WIN32 builds and passes its unit suite under MSVC in CI (deterministic builds), but has no native I/O: no sockets, no IOCP reactor (the reactor is a timed sleep), no blocking pool. See the win32 row of `docs/DEFERRED_STUBS_REGISTER.md` (`bd-v12u.3`).
+- TLS needs a provider, and none is built in. The core carries no cryptography: `asx_tls_connect` and `asx_tls_accept` refuse a configuration that names no `asx_tls_provider` (`ASX_E_HOOK_MISSING`), so nothing is sent in the clear under the name of TLS by default. The one provider in the tree, `asx_tls_null_provider()`, is a plaintext passthrough for tests and simulations: it performs no handshake, authenticates no peer and encrypts nothing, and a caller must select it with `asx_tls_config_set_provider`. A real TLS stack plugs in through the provider callbacks (handshake, read, write, shutdown, peer certificate); no such adapter ships yet (`bd-9kll.17.2`). Nothing else in the tree opens a TLS stream: the HTTP server and client speak plain TCP.
 - There is no WebAssembly build target. The BROWSER profile compiles natively with browser surface gating, and `tools/ci/wasm32_oracle_probe.sh`, which CI does not run, only test-compiles some sources for `wasm32-unknown-unknown` (`docs/WASM32_ORACLE_EVALUATION.md`).
 - Rust parity covers what the DSL v2 scenarios can express (see `make conformance`). Networking, files, processes, HTTP and live builds are not compared with Rust, and `docs/SCENARIO_DSL_V2.md` §7 lists the open C-side gaps.
 - Deterministic guarantees assume matching scenario, profile, seed, and compatible runtime version.
@@ -2443,7 +2444,7 @@ It has not been benchmarked against live builds here, and the two differ in more
 
 ### Can I embed this as a library without the CLI?
 
-Yes. The C API is first-class: <!-- fact:api_declarations -->2,020<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
+Yes. The C API is first-class: <!-- fact:api_declarations -->2,043<!-- /fact --> exported `ASX_API` declarations across <!-- fact:header_families -->38<!-- /fact -->
 public header families in the current `include/asx/` tree, and one umbrella
 `#include <asx/asx.h>`. The repository is library-first: `make install`
 installs only `libasx.a` and the headers. The `asx` CLI (`version`, `info`,
