@@ -4258,6 +4258,11 @@ static uint32_t project_events(uint32_t obligations) {
             asx_json_set(g_out, ev, "region",
                          asx_json_new_string(g_out, region_name_of(e->obligation.region)));
             asx_json_set(g_out, ev, "kind", asx_json_new_string(g_out, kind));
+            if (e->kind != ASX_TRACE_OBLIGATION_RESERVE) {
+                /* Rust's held duration (docs/CANONICAL_VOCABULARY_V2.md section 3) */
+                asx_json_set(g_out, ev, "duration_ns",
+                             asx_json_new_u64(g_out, e->obligation.held_ns));
+            }
             record = asx_json_new_object(g_out);
             asx_json_set(g_out, record, "state", asx_json_new_string(g_out, state));
             asx_json_set(g_out, record, "kind", asx_json_new_string(g_out, kind));
@@ -4722,6 +4727,17 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
      * explicitly; initialization must not reset someone else's runtime. */
     asx_runtime_shutdown(&g_rt);
     asx_runtime_config_init(&cfg);
+    /* DSL section 1: lab.panic_on_leak (default false) is
+     * LabConfig::panic_on_leak. The runtime's own default is PANIC (as
+     * Rust's), so a scenario that does not ask for it says LOG: a leak is
+     * reported and the run completes. */
+    {
+        int panic_on_leak = 0;
+        (void)asx_json_bool(in,
+                            asx_json_get(in, asx_json_get(in, scenario, "lab"), "panic_on_leak"),
+                            &panic_on_leak);
+        cfg.leak_response = panic_on_leak ? ASX_LEAK_PANIC : ASX_LEAK_LOG;
+    }
     st = asx_runtime_hooks_init(&hooks);
     if (st == ASX_OK) st = asx_runtime_init(&g_rt, &cfg, &hooks);
     if (st == ASX_OK && lab) st = asx_scheduler_use_lab_dispatch(seed);
