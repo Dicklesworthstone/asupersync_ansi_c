@@ -1362,10 +1362,10 @@ The capability context (`asx_cx`) carries the authority a task needs to operate:
 ```c
 #include <asx/asx.h>
 
-/* A child context for a worker that may spawn and set timers, and nothing
- * else the parent holds. */
+/* A child context for a worker that may spawn and read the clock, and
+ * nothing else the parent holds. */
 asx_status worker_cx(const asx_cx *parent_cx, asx_cx *child_cx) {
-    return asx_cx_narrow(parent_cx, child_cx, ASX_CAP_SPAWN | ASX_CAP_TIMER);
+    return asx_cx_narrow(parent_cx, child_cx, ASX_CAP_SPAWN | ASX_CAP_CLOCK_READ);
 }
 
 /* Or keep everything except the right to spawn. */
@@ -1374,7 +1374,7 @@ asx_status no_spawn_cx(const asx_cx *parent_cx, asx_cx *child_cx) {
 }
 ```
 
-Scopes bind a capability context to a region for spawning child tasks. The `ASX_CAP_SPAWN` capability is required to build a scope: `asx_scope_init()` refuses a context without it (`ASX_E_PERMISSION_DENIED`), and `asx_scope_spawn()` returns `ASX_E_INVALID_STATE` for a scope lacking it, so no task creates children through a scope unless its parent granted that capability. The plain `asx_task_spawn()` checks no capability. Observing cancellation is not a capability, as in Rust (`Cx::checkpoint` and `Cx::is_cancel_requested` need none): `asx_cx_checkpoint()` and `asx_cx_is_cancelled()` work on any Cx with a task, so narrowing a child's context cannot leave its channel and sync waits blind to a cancel. Today the context's own operations check their bits (budget read/consume, clock read, entropy) and `src/net/net.c` checks `ASX_CAP_CHANNEL`; `ASX_CAP_TIMER`, `ASX_CAP_OBLIGATION`, `ASX_CAP_TRACE` and `ASX_CAP_CANCEL_REQUEST` are carried and narrowed but not yet checked by the timer, obligation, trace or cancel APIs.
+Scopes bind a capability context to a region for spawning child tasks. The `ASX_CAP_SPAWN` capability is required to build a scope: `asx_scope_init()` refuses a context without it (`ASX_E_PERMISSION_DENIED`), and `asx_scope_spawn()` returns `ASX_E_INVALID_STATE` for a scope lacking it, so no task creates children through a scope unless its parent granted that capability. The plain `asx_task_spawn()` checks no capability. Observing cancellation is not a capability, as in Rust (`Cx::checkpoint` and `Cx::is_cancel_requested` need none): `asx_cx_checkpoint()` and `asx_cx_is_cancelled()` work on any Cx with a task, so narrowing a child's context cannot leave its channel and sync waits blind to a cancel. Six capability bits remain, and each has a checking site: `ASX_CAP_SPAWN`, `ASX_CAP_CLOCK_READ`, `ASX_CAP_ENTROPY` and `ASX_CAP_CHANNEL` (checked by the net layer) are Rust's SPAWN, TIME, RANDOM and IO; `ASX_CAP_BUDGET_READ` and `ASX_CAP_BUDGET_CONSUME` guard the C-only budget bound with `asx_cx_bind_budget()`. Rust has no REMOTE counterpart here. The timer, obligation, trace and cancel-request bits were removed: no API that takes a Cx creates timers, obligations, trace events or cancel requests, so nothing could check them, and Rust needs no capability for any of those. The raw kernel API (`asx_task_spawn`, `asx_timer_*`, `asx_obligation_reserve`, `asx_task_cancel`) takes no Cx and checks none.
 
 `asx_scope_finish(scope, body, cancel_reason)` closes the scope's existing
 region according to the body's outcome, then waits using the scope's budget.

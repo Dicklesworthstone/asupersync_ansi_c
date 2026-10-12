@@ -235,6 +235,7 @@ typedef struct {
         int open;
         asx_broadcast_sender broadcast;
     } senders[IT_MAX_SENDERS];
+        asx_channel_sender mpsc; /* a clone's identity; slot 0 is the creator's */
     uint32_t n_senders;
     it_receiver receivers[IT_MAX_SUBSCRIBERS];
     uint32_t n_receivers;
@@ -1159,7 +1160,12 @@ static void close_endpoint(it_channel *c, it_receiver *r, uint32_t owner) {
         int k = sender_slot(c, owner);
         if (k >= 0) c->senders[k].open = 0;
         switch (c->type) {
-        case IT_CH_MPSC: st = asx_channel_close_sender(c->id); break;
+        case IT_CH_MPSC:
+            /* Slot 0 is the declared sender, the creator's; the others are
+             * clones, each dropped by its own identity. */
+            st = k > 0 ? asx_channel_sender_drop(&c->senders[k].mpsc)
+                       : asx_channel_close_sender(c->id);
+            break;
         case IT_CH_ONESHOT: asx_oneshot_sender_drop(&c->oneshot); break;
         case IT_CH_BROADCAST:
             if (k >= 0) asx_broadcast_sender_drop(&c->senders[k].broadcast);
@@ -3639,7 +3645,7 @@ static int channel_extra_senders(uint32_t d, it_channel *c) {
         asx_status st;
         if (owner == NULL || sender_slot(c, (uint32_t)(owner - g_tasks)) >= 0) return 0;
         st = c->type == IT_CH_MPSC
-                 ? asx_channel_sender_clone(c->id)
+                 ? asx_channel_sender_clone(c->id, &c->senders[c->n_senders].mpsc)
                  : asx_broadcast_sender_clone(&c->senders[0].broadcast,
                                               &c->senders[c->n_senders].broadcast);
         if (st != ASX_OK) return 0;

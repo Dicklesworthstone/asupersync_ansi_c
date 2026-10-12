@@ -44,25 +44,26 @@ extern "C" {
 /* no flags set can only query identity and observe cancellation:      */
 /* cancellation is never a capability (Rust's Cx::checkpoint and       */
 /* is_cancel_requested need none), so narrowing a Cx cannot make it    */
-/* blind to its task's cancel. Bit 0 is unused (it was CANCEL_CHECK).  */
+/* blind to its task's cancel. SPAWN, CLOCK_READ, ENTROPY and CHANNEL  */
+/* are Rust's SPAWN, TIME, RANDOM and IO; the budget bits guard the    */
+/* C-only bound budget. Every bit has a checking site. Bits 0, 1 and   */
+/* 8-10 are unused: CANCEL_CHECK, CANCEL_REQUEST, TIMER, OBLIGATION    */
+/* and TRACE were removed, since no Cx-taking API existed to check     */
+/* them and Rust needs no capability for any of them.                  */
 /* ------------------------------------------------------------------ */
 
 typedef uint32_t asx_cap_flags;
 
 #define ASX_CAP_NONE ((asx_cap_flags)0)
-#define ASX_CAP_CANCEL_REQUEST ((asx_cap_flags)(1u << 1)) /* can request cancellation */
 #define ASX_CAP_BUDGET_READ ((asx_cap_flags)(1u << 2))    /* can read budget */
 #define ASX_CAP_BUDGET_CONSUME ((asx_cap_flags)(1u << 3)) /* can consume budget */
 #define ASX_CAP_CLOCK_READ ((asx_cap_flags)(1u << 4))     /* can read clock */
 #define ASX_CAP_ENTROPY ((asx_cap_flags)(1u << 5))        /* can draw entropy */
 #define ASX_CAP_SPAWN ((asx_cap_flags)(1u << 6))          /* can spawn tasks */
 #define ASX_CAP_CHANNEL ((asx_cap_flags)(1u << 7))        /* can use channels */
-#define ASX_CAP_TIMER ((asx_cap_flags)(1u << 8))          /* can register timers */
-#define ASX_CAP_OBLIGATION ((asx_cap_flags)(1u << 9))     /* can create obligations */
-#define ASX_CAP_TRACE ((asx_cap_flags)(1u << 10))         /* can emit trace events */
 
 /* All capabilities */
-#define ASX_CAP_ALL ((asx_cap_flags)0x7FEu)
+#define ASX_CAP_ALL ((asx_cap_flags)0xFCu)
 
 /* ------------------------------------------------------------------ */
 /* Cx type                                                             */
