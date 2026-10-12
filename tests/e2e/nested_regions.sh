@@ -138,7 +138,7 @@ fi
 DIGEST="$(printf '%s\n' "$OUTPUT" | awk '$1 == "DIGEST" { digest=$2 } END { print digest }')"
 
 if [ -n "$DIGEST" ]; then
-    e2e_scenario "nested_regions.trace_digest" "" "pass" "sha256:${DIGEST}"
+    e2e_scenario "nested_regions.trace_digest" "" "pass" "asx-fnv64:${DIGEST}"
 fi
 
 set +e

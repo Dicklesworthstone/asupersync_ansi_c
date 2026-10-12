@@ -41,7 +41,7 @@ make test
 The port targets asupersync commit `5e60b1c4c` (2026-10).
 
 - **Compared with the Rust runtime, and matching:**
-  - `make conformance` runs <!-- fact:rust_fixtures -->165<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
+  - `make conformance` runs <!-- fact:rust_fixtures -->166<!-- /fact --> scenarios captured from asupersync's `LabRuntime` (`fixtures/rust_reference_v2`) through the C runtime. Each must match the capture's trace class, final snapshot, step observations and lab dispatch order. Checked obligation handoff is included: same-region quota reuse, cross-region ownership changes, chained transfers, refusals and destination-body token drop.
   - CI also generates 200 scenarios on every push and compares the two runtimes live (`make fuzz-differential`, seed 9).
   - It checks that the two trace canonicalizers agree on 100,000 random traces (`make canon-differential`).
   - It compares the kernel constants and defaults no scenario observes, such as cancel-kind tables, budgets, the timer limit, supervision defaults and lab batch sizes, with Rust's (`make check-rust-constants`). `twin_run` reads Rust's values from the pinned crate into `schemas/rust_kernel_constants.json`. Each value matches, or is a recorded difference that names its bead.
@@ -894,7 +894,7 @@ make test-gates         # Gate negative controls (bad fixtures rejected, planted
 make conformance        # Rust parity: every v2 fixture executed in C and compared
 make fuzz-differential  # Seeded Rust-vs-C differential fuzzing (needs Rust)
 make test-fuzz-differential # Live Rust oracle, planted C mutation and minimizer controls
-make codec-equivalence  # JSON vs BIN digests recorded in fixtures (runtime not executed)
+make codec-equivalence  # Rust fixtures executed in JSON/BIN builds, plus recorded legacy digests
 make profile-parity     # Rust fixtures executed in eight host profiles, plus recorded legacy digests
 make fuzz-smoke         # C determinism and crash checks only
 make formal-check       # Transition harnesses + algebraic + litmus (native; no CBMC run)
@@ -1025,6 +1025,14 @@ Cancelling a region (`asx_region_cancel` with a reason, `asx_cancel_propagate` w
 
 **Masking** (`asx_task_mask` / `asx_task_unmask`, nestable to `ASX_MAX_MASK_DEPTH` = 64) defers acknowledgement for a critical section, such as committing a transaction or a finalizer. While a task is masked, `asx_checkpoint` reports `masked = 1` instead of `cancelled`, the cancel can still strengthen, and even the opt-in hard cleanup bound neither consumes cleanup polls nor force-completes the task. The cancel becomes observable at the first checkpoint after the depth returns to zero.
 
+`asx_task_masked(self, body, user_data)` runs a synchronous callback with one
+extra mask and releases that level whenever the callback returns, including
+an error or `ASX_E_PENDING`. Nested guards preserve the outer mask. Balance any
+additional raw masks inside the callback and return normally; a pending return
+does not hold the guard across polls, and `longjmp` cannot unwind it. Failed
+admission invokes no callback. The API returns the callback's status unless
+releasing the mask fails.
+
 ### Obligations: Holders and Leak Policy
 
 An obligation (send permit, ack, lease, I/O op, semaphore permit, transaction) is a linear resource that must be committed or aborted exactly once. Each records its **kind** and its **holder task**: `asx_obligation_reserve` binds the task being polled, and `asx_obligation_reserve_ex` takes an explicit kind and holder. When a holder completes with obligations still reserved, the runtime resolves them deterministically:
@@ -1103,7 +1111,7 @@ for each emitted event, for each byte of
 
 Two deterministic runs with the same scenario, profile, seed, and runtime version must produce identical trace digests; this is the C runtime's self-consistency check. The parity gates use other digests:
 - Rust parity (`make conformance`) compares the canonical vocabulary-v2 trace, snapshot and observations of each scenario exactly (`src/conformance/`, SHA-256 over canonical JSON for digests).
-- `make codec-equivalence` compares the SHA-256 `semantic_digest` values recorded in the legacy fixture files. `make profile-parity` also executes the v2 Rust captures under eight host profiles and compares each build's canonical output with Rust.
+- `make codec-equivalence` executes the v2 Rust captures in JSON and BIN builds and compares recorded legacy digests. Both builds still take JSON scenario input; this checks runtime build modes and trace encoding, not a binary v2 scenario transport. `make profile-parity` executes the same captures under eight host profiles.
 
 A Rust parity mismatch is a semantic drift bug in the C port, not an acceptable variation.
 
@@ -2270,9 +2278,10 @@ make profile-parity
 
 ### JSON and BIN outputs differ
 
-`make codec-equivalence` compares the digests recorded in the JSON and BIN
-files of each fixture; the C codec round trip itself is checked by
-`make fixture-integrity` and `make test-conformance-c`.
+`make codec-equivalence` executes the v2 Rust captures in both JSON and BIN
+builds and compares recorded legacy digests. Inspect the failing lane to
+identify runtime, trace-encoding or legacy-record differences. Fixture codec
+round trips are checked by `make fixture-integrity` and `make test-conformance-c`.
 
 ```bash
 make codec-equivalence
@@ -2360,7 +2369,7 @@ Not the kernel. Embedded profiles and resource classes change operational envelo
 
 ### Why both JSON and binary codecs?
 
-JSON is ideal for diagnostics, debugging, and diffing; binary is the compact encoding. Both encode the same canonical fixture model. The C codec round trips are checked by `make fixture-integrity` and `make test-conformance-c`; `make codec-equivalence` compares the digests recorded in the JSON and BIN fixture files.
+JSON is ideal for diagnostics, debugging, and diffing; binary is the compact encoding. Both encode the same canonical fixture model. The C codec round trips are checked by `make fixture-integrity` and `make test-conformance-c`; `make codec-equivalence` also executes the Rust captures in JSON and BIN builds. Those builds still consume JSON scenarios; binary v2 scenario transport remains open (`bd-9kll.2.9`).
 
 ### Can I run this on cheap routers?
 

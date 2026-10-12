@@ -123,7 +123,7 @@ Neither is infallible: both run `try_send_deferred_wake` (`mpsc.rs:1588-1629`), 
 
 **Rust source:** `mpsc.rs:1565-1570` (`send`), `mpsc.rs:1574-1578` (`try_send`)
 
-**C status:** implemented. `asx_send_permit_send` (`src/channel/mpsc.c:750-811`) authenticates the tracked credit's channel/token binding before consuming the permit (`:757-776`), returns `ASX_E_DISCONNECTED` and aborts the obligation with `ASX_OBLIGATION_ABORT_ERROR` when the receiver is closed (`:780-786`), else enqueues (`:802-804`), commits the obligation (`:807`) and settles waiters (`:808`). C has no `Sender::try_send`; the conformance interpreter runs `try_send` as `asx_channel_try_reserve` plus `asx_send_permit_send` (`src/conformance/interpreter.c:2629-2642`).
+**C status:** implemented. `asx_send_permit_send` (`src/channel/mpsc.c:750-811`) authenticates the tracked credit's channel/token binding before consuming the permit (`:757-776`), returns `ASX_E_DISCONNECTED` and aborts the obligation with `ASX_OBLIGATION_ABORT_ERROR` when the receiver is closed (`:780-786`), else enqueues (`:802-804`), commits the obligation (`:807`) and settles waiters (`:808`). C has no `Sender::try_send`; the conformance interpreter runs `try_send` as `asx_channel_try_reserve` plus `asx_send_permit_send` (`src/conformance/interpreter.c:2661-2674`).
 
 #### Phase 2b: Abort (Rollback)
 
@@ -200,7 +200,7 @@ try_recv() -> Result<T, RecvError>
 
 **Cancel safety:** the checkpoint runs before the pop, so a cancelled receive does not consume a message.
 
-**C status:** implemented. `asx_channel_recv` (`src/channel/mpsc.c:1073-1081`) checks cancellation first, then `channel_recv_impl` (`mpsc.c:965-992`): dequeue in FIFO order (`:974-978`), receiver closed, or sender closed with no outstanding permit -> `ASX_E_DISCONNECTED` (`:980-983`, `channel_drained_for_good`, `:957-960`), else park and return `ASX_E_PENDING` (`:987-991`, `:1080`). `asx_channel_try_recv` (`mpsc.c:994-996`) returns `ASX_E_WOULD_BLOCK` when empty; the conformance interpreter reports that as `ASX_E_CHANNEL_EMPTY` (`src/conformance/interpreter.c:2672`). Rust parity: `mpsc-recv-cancel-first-001` (a pending recv cancelled by the driver returns `ASX_E_CANCELLED`), `mpsc-try-ops-001` (`try_recv` on an empty channel, then `ASX_E_DISCONNECTED` after the sender closes and the queue drains).
+**C status:** implemented. `asx_channel_recv` (`src/channel/mpsc.c:1073-1081`) checks cancellation first, then `channel_recv_impl` (`mpsc.c:965-992`): dequeue in FIFO order (`:974-978`), receiver closed, or sender closed with no outstanding permit -> `ASX_E_DISCONNECTED` (`:980-983`, `channel_drained_for_good`, `:957-960`), else park and return `ASX_E_PENDING` (`:987-991`, `:1080`). `asx_channel_try_recv` (`mpsc.c:994-996`) returns `ASX_E_WOULD_BLOCK` when empty; the conformance interpreter reports that as `ASX_E_CHANNEL_EMPTY` (`src/conformance/interpreter.c:2704`). Rust parity: `mpsc-recv-cancel-first-001` (a pending recv cancelled by the driver returns `ASX_E_CANCELLED`), `mpsc-try-ops-001` (`try_recv` on an empty channel, then `ASX_E_DISCONNECTED` after the sender closes and the queue drains).
 
 **Batch receive** (`recv_many`, `mpsc.rs:1754`; `poll_recv_many`, `:1867-1952`): a `limit` of 0 is `Ok(0)` before anything else (`:1874-1876`); then the cancellation checkpoint (trace `mpsc::recv_many cancelled`, `:1881-1892`); then up to `limit` queued messages are drained oldest first, waking one queued producer per freed slot (`:1894-1907`); an empty queue with no sender left or the receiver closed is `Ok(0)`, not `Disconnected` (`:1909-1917`); otherwise the receiver registers and waits. **C status:** implemented, `asx_channel_recv_many` (`src/channel/mpsc.c:1085-1126`). Unit tests: `test_mpsc.c` `recv_many_*`. Rust parity: `mpsc-recv-many-001`, `mpsc-recv-many-wakes-each-freed-slot-001`.
 
@@ -244,6 +244,17 @@ try_recv() -> Result<T, RecvError>
 **Rust source:** `mpsc.rs:1061-1068` (reserve cancel), `mpsc.rs:1786-1797` (recv cancel)
 
 **C status:** implemented. `channel_wait_cancelled` (`src/channel/mpsc.c:1026-1033`) checks `asx_cx_checkpoint`, records the trace message `mpsc::reserve cancelled`, `mpsc::recv cancelled` or `mpsc::recv_many cancelled`, and withdraws the task from all three wait queues, passing any wake it held on (`asx_channel_wait_cancel`, `mpsc.c:1002-1016`). Cancellation observation requires no capability flag: the checkpoint observes the identified task's pending cancel before budget consumption (`src/cx/cx.c:416-435`); masking defers delivery but does not hide a recorded request from `asx_cx_is_cancel_requested` (`src/cx/cx.c:402-413`). Permit send and abort authenticate their physical binding without a cancellation checkpoint (`mpsc.c:750-850`). Unit tests: `test_channel_wake.c` `cancelled_waiter_does_not_absorb_wake`, `test_mpsc.c` `cancelled_cx_wins_over_ready_channel_and_traces`. Rust parity: `mpsc-recv-cancel-first-001`. Reserve cancellation has no v2 fixture.
+
+`asx_task_masked` (`src/runtime/cancellation.c:755`) adds a synchronous callback
+guard for a task's cancellation mask. It releases its level when the callback
+returns, including a channel poll returning `ASX_E_PENDING` or an error, and
+returns the body's status unless release fails; it does
+not retain the mask across the wait. An outer raw mask still requires explicit
+unmasking. Request visibility remains separate from checkpoint delivery, and
+nesting after a request or ACK is allowed as in Rust (#12 Variant).
+Callbacks must return and balance extra raw masks; no `longjmp` or unwind
+cleanup guarantee follows. See `docs/LIFECYCLE_TRANSITION_TABLES.md` §2.5 for
+the guarded-return tests and raw-mask-leak liveness boundary.
 
 ### 1.9 Obligation Integration
 
@@ -454,7 +465,7 @@ The Rust multi-worker scheduler has three priority lanes:
 | `DrainObligations` | Cancel > Timed > Ready (cancel-streak limit doubled, `:6960-6965`) |
 | `DrainRegions` | Cancel > Timed > Ready (cancel-streak limit doubled) |
 
-**C status:** spec (Rust) — not implemented in C. The C lab has a cancel lane and a ready lane and no governor (`src/runtime/lab_dispatch.c:608-628`). Rust's `LabRuntime::pop_for_worker` also checks a timed lane (`lab/runtime.rs:6347-6353`), but in `src/lab` nothing outside tests feeds it: `schedule_timed` (`lab/runtime.rs:6242`) is called only at `:7658` and `:7723`, inside the `#[cfg(test)]` module that starts at `:6691`. `parallel.c` polls its lanes in the order cancel, ready, timed (`src/runtime/parallel.c:713-717`), which differs from Rust's cancel > timed > ready. Rust parity of cancel-lane-first in the lab: `lab-dispatch-cancel-waker-once-001` (a task is dispatched once on the cancel lane, then on the ready lane).
+**C status:** spec (Rust) — not implemented in C. The C lab has a cancel lane and a ready lane and no governor (`src/runtime/lab_dispatch.c:611-631`). Rust's `LabRuntime::pop_for_worker` also checks a timed lane (`lab/runtime.rs:6347-6353`), but in `src/lab` nothing outside tests feeds it: `schedule_timed` (`lab/runtime.rs:6242`) is called only at `:7658` and `:7723`, inside the `#[cfg(test)]` module that starts at `:6691`. `parallel.c` polls its lanes in the order cancel, ready, timed (`src/runtime/parallel.c:713-717`), which differs from Rust's cancel > timed > ready. Rust parity of cancel-lane-first in the lab: `lab-dispatch-cancel-waker-once-001` (a task is dispatched once on the cancel lane, then on the ready lane).
 
 ### 3.2 Scheduler Loop
 
@@ -500,13 +511,13 @@ Compare:
 
 **Rust source:** `priority.rs:54-75`
 
-**C status:** implemented for the lab's cancel and ready lanes. A `lab_entry` holds `{slot, task_gen, priority, gen}` (`src/runtime/lab_dispatch.c:43-48`); lanes keep entries in push order, which is generation order, and a pop takes the highest-priority group (`lab_dispatch.c:566-606`). Each entry's generation comes from one counter (`:439`, `:531`), so generations never tie and the task-id key is never needed. There are no timed-lane entries in C.
+**C status:** implemented for the lab's cancel and ready lanes. A `lab_entry` holds `{slot, task_gen, priority, gen}` (`src/runtime/lab_dispatch.c:43-48`); lanes keep entries in push order, which is generation order, and a pop takes the highest-priority group (`lab_dispatch.c:569-609`). Each entry's generation comes from one counter (`:442`, `:534`), so generations never tie and the task-id key is never needed. There are no timed-lane entries in C.
 
 ### 3.4 Generation Counter (FIFO Guarantee)
 
 Each `Scheduler` (`priority.rs`, re-exported as `PriorityScheduler` in `scheduler/mod.rs:74`) keeps `next_generation: u64` (`priority.rs:329`), incremented by 1 per insertion (`next_gen`, `priority.rs:485-489`). The global `TimedQueue` keeps its own counter (`global_injector.rs:194-200`).
 
-**C status:** implemented for the lab: one counter `g_lab_next_gen` for both lanes (`src/runtime/lab_dispatch.c:85`, `:439`, `:531`).
+**C status:** implemented for the lab: one counter `g_lab_next_gen` for both lanes (`src/runtime/lab_dispatch.c:85`, `:442`, `:534`).
 
 ### 3.5 RNG-Based Deterministic Tie-Breaking
 
@@ -520,7 +531,7 @@ This is used by the cancel lane (`pop_cancel_with_rng`, `priority.rs:674-685`), 
 
 RNG sources: each `three_lane` worker has `DetRng::new(worker_id)` (`three_lane.rs:2365`) and draws once per `next_task` Phase 2 (`:7014`). The `LabRuntime` has one `DetRng` seeded from the config seed (`lab/runtime.rs:2426`, `lab/config.rs:437-439`) and draws once per step (`lab/runtime.rs:4499`). `DetRng::next_u64` is xorshift64 (`util/det_rng.rs:267-275`).
 
-**C status:** implemented for the lab. `asx_scheduler_use_lab_dispatch` seeds a xorshift64 with the scenario seed (`src/runtime/lab_dispatch.c:410-420`) and remaps degenerate seeds as `DetRng::new` does (`src/runtime/lab_dispatch.c:275-294`); `lab_pop` picks `group[r % n]` among up to 256 highest-priority entries in generation order (`lab_dispatch.c:566-606`). Per-worker RNGs: not implemented (one worker). Rust parity: `lab-dispatch-tie-break-001` (four tasks contend for a one-permit semaphore at time 0; the seeded tie-break decides which takes it first), `scheduler-yield-interleave-001` (dispatch order follows the seed). Unit tests: `tests/unit/runtime/test_lab_dispatch.c` `rng_replicates_rust_xorshift64`, `ties_are_broken_by_the_step_value_in_generation_order`.
+**C status:** implemented for the lab. `asx_scheduler_use_lab_dispatch` seeds a xorshift64 with the scenario seed (`src/runtime/lab_dispatch.c:410-424`) and remaps degenerate seeds as `DetRng::new` does (`src/runtime/lab_dispatch.c:275-294`); `lab_pop` picks `group[r % n]` among up to 256 highest-priority entries in generation order (`lab_dispatch.c:569-609`). Per-worker RNGs: not implemented (one worker). Rust parity: `lab-dispatch-tie-break-001` (four tasks contend for a one-permit semaphore at time 0; the seeded tie-break decides which takes it first), `scheduler-yield-interleave-001` (dispatch order follows the seed). Unit tests: `tests/unit/runtime/test_lab_dispatch.c` `rng_replicates_rust_xorshift64`, `ties_are_broken_by_the_step_value_in_generation_order`.
 
 ### 3.6 Work Stealing
 
@@ -545,7 +556,7 @@ steal_task(stealers, rng):
 - When the streak reaches the effective limit the cancel lane is skipped (`:6969-6972`); if no other lane has work, Phase 5 dispatches one cancel task and sets the streak to 1 (`:7086-7100`)
 - The streak resets to 0 on a timed or ready dispatch (`:7306-7326`) and after backoff/park (`:5830-5833`)
 
-**C status:** implemented in the lab as `LabRuntime` does it, without governor doubling: the cancel lane is served while the streak is below 16 (`LAB_CANCEL_STREAK_LIMIT`, `src/runtime/runtime_internal.h:728`), then the ready lane (streak reset to 0), then the cancel lane again with the streak set to 1 (`lab_dispatch.c:608-628`), as in `lab/runtime.rs:6324-6373`. No v2 scenario description mentions the streak limit; whether any fixture reaches 16 consecutive cancel dispatches was not checked. `parallel.c` has its own limit of 16 (`src/runtime/parallel.c:64`, `:934-942`, setter `:1303`).
+**C status:** implemented in the lab as `LabRuntime` does it, without governor doubling: the cancel lane is served while the streak is below 16 (`LAB_CANCEL_STREAK_LIMIT`, `src/runtime/runtime_internal.h:728`), then the ready lane (streak reset to 0), then the cancel lane again with the streak set to 1 (`lab_dispatch.c:611-631`), as in `lab/runtime.rs:6324-6373`. No v2 scenario description mentions the streak limit; whether any fixture reaches 16 consecutive cancel dispatches was not checked. `parallel.c` has its own limit of 16 (`src/runtime/parallel.c:64`, `:934-942`, setter `:1303`).
 
 ### 3.8 Fairness Certificate and Replay
 
@@ -566,7 +577,7 @@ The scheduler produces a `PreemptionFairnessCertificate` (renamed from `Fairness
 | `IntrusiveStack` | Local fast ready (`intrusive.rs:378-`) | LIFO pop for the owner (`:576`), FIFO steal (`:612-`) |
 | `ScheduledSet` | Membership tracking (`priority.rs:84-96`) | Dense generation tags with a `DetHashSet` overflow |
 
-**C status:** the lab lanes are bounded arrays of `LAB_LANE_CAP = 8 * ASX_MAX_TASKS` entries in push order (`src/runtime/lab_dispatch.c:39`, `:51-54`); a full lane makes the run fail with `ASX_E_RESOURCE_EXHAUSTED` instead of dropping an entry (`lab_dispatch.c:27-29`, `:429-440`). No global injector or intrusive stack.
+**C status:** the lab lanes are bounded arrays of `LAB_LANE_CAP = 8 * ASX_MAX_TASKS` entries in push order (`src/runtime/lab_dispatch.c:39`, `:51-54`); a full lane makes the run fail with `ASX_E_RESOURCE_EXHAUSTED` instead of dropping an entry (`lab_dispatch.c:27-29`, `:432-443`). No global injector or intrusive stack.
 
 ### 3.10 Backoff/Park Behavior
 
@@ -670,7 +681,7 @@ The generation key orders the heaps; a pop with an RNG hint (Phase 2 of `next_ta
 
 ### 5.2 Determinism Invariants
 
-1. **Same seed -> same execution order:** RNG decisions use `DetRng`: one per `three_lane` worker seeded with the worker id (`three_lane.rs:2365`), one per `LabRuntime` seeded with the config seed (`lab/runtime.rs:2426`). C lab: one xorshift64 seeded with the scenario seed (`src/runtime/lab_dispatch.c:410-423`).
+1. **Same seed -> same execution order:** RNG decisions use `DetRng`: one per `three_lane` worker seeded with the worker id (`three_lane.rs:2365`), one per `LabRuntime` seeded with the config seed (`lab/runtime.rs:2426`). C lab: one xorshift64 seeded with the scenario seed (`src/runtime/lab_dispatch.c:410-424`).
 2. **Same inputs -> same outputs:** a general claim about all hot-path data structures; not verified in this pass.
 3. **Generation monotonicity:** lane generations are `u64` counters incremented by 1 (`priority.rs:485-489`); timer generations use `wrapping_add` (`wheel.rs:551-552`).
 4. **Wrap safety:** timer ids are slab indices and generations wrap (`wheel.rs:550-566`); see section 2.6.
@@ -682,8 +693,8 @@ For deterministic parity with Rust, and the current C status of each:
 
 1. Channel waiter queue MUST be FIFO by arrival with head-only handoff — **implemented** (`src/sync/wait_queue.h:23`, `src/channel/mpsc.c:386-393`).
 2. Equal-deadline timers MUST fire in insertion order — **implemented** in `timer_wheel.c` (`:230-248`) and, for lab sleeps, as (1 ms tick, registration) (`src/runtime/scheduler.c:256-325`); the hierarchical wheel itself is not ported.
-3. Scheduler entries MUST carry a generation from one counter and order by priority then generation — **implemented for the lab's cancel and ready lanes** (`src/runtime/lab_dispatch.c:429-440`, `:566-606`); no timed lane.
-4. RNG MUST be seeded as Rust seeds it — **implemented for the lab's single RNG** (`lab_dispatch.c:275-294`, `:410-423`); per-worker RNGs are not implemented.
+3. Scheduler entries MUST carry a generation from one counter and order by priority then generation — **implemented for the lab's cancel and ready lanes** (`src/runtime/lab_dispatch.c:432-443`, `:569-609`); no timed lane.
+4. RNG MUST be seeded as Rust seeds it — **implemented for the lab's single RNG** (`lab_dispatch.c:275-294`, `:410-424`); per-worker RNGs are not implemented.
 5. Work stealing MUST follow `stealing.rs` — **not implemented**.
 6. A fairness certificate MUST produce the same witness hash for the same dispatch counts — **not implemented**.
 
@@ -717,7 +728,7 @@ For deterministic parity with Rust, and the current C status of each:
 
 | Failure | Rust detection | Rust result | C (lab dispatch) |
 |---------|-----------|----------|---|
-| Cancel-streak limit hit | `cancel_streak >= effective_limit` (`three_lane.rs:6969-6972`) | Skip cancel lane, try timed/ready; fallback cancel if none | Ready lane first after 16 cancel dispatches (`lab_dispatch.c:608-628`) |
+| Cancel-streak limit hit | `cancel_streak >= effective_limit` (`three_lane.rs:6969-6972`) | Skip cancel lane, try timed/ready; fallback cancel if none | Ready lane first after 16 cancel dispatches (`lab_dispatch.c:611-631`) |
 | No tasks available | All lanes empty | Spin -> yield -> park (section 3.10) | Step dispatches nothing; the run auto-advances the clock or returns (`scheduler.c:1270-1324`) |
 | Work steal failure | All stealers empty | Continue to Phase 5 / backoff | Not applicable (one worker) |
 | Shutdown requested | Checked in `run_loop_until` (`three_lane.rs:5601`, `:5647`) | Exit loop | Not applicable |
@@ -818,7 +829,7 @@ None of the 38 candidate IDs below exists in the repository: `grep -rl <id> fixt
 | ID | Invariant | Category | C |
 |----|-----------|----------|---|
 | `INV-SC-01` | Cancel lane dispatched before timed before ready (default) | Lane priority | Lab: cancel before ready, no timed lane; `parallel.c`: cancel, ready, timed |
-| `INV-SC-02` | Equal-priority entries are heap-ordered by generation; RNG-hinted pops choose among them by `rng % count` | Ordering | Lab: RNG pick in generation order (`lab_dispatch.c:566-606`) |
+| `INV-SC-02` | Equal-priority entries are heap-ordered by generation; RNG-hinted pops choose among them by `rng % count` | Ordering | Lab: RNG pick in generation order (`lab_dispatch.c:569-609`) |
 | `INV-SC-03` | Equal-deadline timed entries ordered by generation | EDF ordering | Not implemented |
 | `INV-SC-04` | Cancel-streak limit prevents cancellation starvation | Fairness | Lab: 16, no doubling; `parallel.c`: 16 |
 | `INV-SC-05` | Same seed -> same work-steal choices | Determinism | Not implemented |

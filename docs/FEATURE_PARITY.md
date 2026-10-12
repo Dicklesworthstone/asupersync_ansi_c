@@ -2,7 +2,7 @@
 
 > **Bead:** `bd-296.3`
 > **Status:** Semantic-unit parity tracker with acceptance-test mapping
-> **Last updated:** 2026-10-12 (bd-9kll.3.4, bd-9kll.3.5) - outcome-aware close/finish increment; remaining Scope, finalizer and admission parity gaps retained
+> **Last updated:** 2026-10-12 (bd-9kll.3.4, bd-9kll.3.5, bd-9kll.3.19) - outcome-aware close/finish and synchronous mask guard; remaining Scope, finalizer, admission and liveness gaps retained
 
 This matrix tracks canonical semantic units, their source-of-truth extraction status, and required acceptance coverage before parity can be declared complete.
 
@@ -92,6 +92,32 @@ budget escalation remain unproven or absent; original `bd-9kll.3.4` stays
 open. No target-device or complete Scope claim follows from host-profile runs.
 The admission fixture requirement remains open in `bd-9kll.3.5`.
 
+The synchronous cancellation guard
+`asx_task_masked` (`src/runtime/cancellation.c:755`) calls its body once within one admitted mask
+level and releases that level on every normal C return, including an error or
+`ASX_E_PENDING`. It returns the body's status unless release fails. Nested
+guards preserve outer levels when additional raw masks are balanced; a pending
+return keeps no guard across polls. A null body, stale or terminal handle, or
+an attempt to add level 65 from an existing depth 64 runs no callback. Raw masks still need explicit release, and callbacks
+must return normally; C promises neither `longjmp` cleanup nor Rust unwinding.
+Both raw masks and this guard admit nesting after cancellation request or ACK,
+following pinned Rust; formal rule #12 remains Variant.
+
+The returning-body, nested-error, outer-raw-mask and admission boundaries are
+checked by `tests/unit/runtime/test_cancellation.c`, including
+`masked_callback_restores_on_success_error_and_pending_returns` and
+`masked_callback_refuses_excess_depth_without_running_body`.
+The real worker/joiner scenarios in `tests/e2e/e2e_nested_regions.c` show restored
+nested guards, a raw-mask leak keeping cancel and join pending until explicit
+release, and depth-65 refusal without callback or trace mutation. The DSL
+interpreter uses the guard (`src/conformance/interpreter.c:2849`);
+`cancel-masked-checkpoint-001` and `cancel-masked-nested-001` exercise balanced
+normal scopes, not pending/error callback returns or depth 64.
+`tests/gates/test_oracle_mutants.sh` checks omitted guard restoration against
+the mask fixtures and excess-depth acceptance against the real public unit
+boundary. Original `bd-9kll.3.19` stays open: these bounded witnesses do not
+prove unconditional liveness, Rust unwinding or asynchronous finalizer barriers.
+
 The interim K18 guard also rejects a second initialization before resetting
 the active singleton. `conflicting_init_preserves_live_runtime_and_destination`
 in `tests/unit/runtime/test_rt.c` verifies preserved runtime/destination bytes,
@@ -104,7 +130,7 @@ and cross-runtime handle isolation remain open in `bd-9kll.3.20`.
 | Unit ID | Semantic Unit | Canonical Source Artifacts | Acceptance Test Obligations | Must-Fail / Negative Obligations | Current Status | Primary Bead(s) |
 |---|---|---|---|---|---|---|
 | `U-REG-TRANSITIONS` | Region lifecycle legality (`Open->...->Closed`) | `docs/LIFECYCLE_TRANSITION_TABLES.md` | region transition unit + invariant suites; close/drain/finalize scenarios | invalid regressions/skips return `ASX_E_INVALID_TRANSITION` | `conformance-passed` for the close/drain progression: `region-lifecycle-close-cancels-children-001`, `region-lifecycle-draining-with-child-region-001`, `region-lifecycle-cancel-propagates-001`. Illegal-transition rejection is unit-tested only (`tests/unit/core/test_transition.c`, `tests/invariant/lifecycle/test_lifecycle_legality.c`) | `bd-296.15`, `bd-hwb.3` |
-| `U-TASK-TRANSITIONS` | Task phase semantics + cancel checkpoints | `docs/LIFECYCLE_TRANSITION_TABLES.md` | task lifecycle fixtures; checkpoint/cancel observation tests | illegal backward/skip transitions rejected | `conformance-passed`: `task-lifecycle-spawn-join-001`, `cancel-masked-checkpoint-001`, `task-abort-next-step-001`; cancel visibility (`Cx::is_cancel_requested`) by `cancel-is-requested-001`, `budget-cancel-is-requested-001`. Illegal transitions are unit-tested only (`tests/unit/core/test_transition.c`) | `bd-296.15`, `bd-hwb.3` |
+| `U-TASK-TRANSITIONS` | Task phase semantics + cancel checkpoints | `docs/LIFECYCLE_TRANSITION_TABLES.md` | task lifecycle fixtures; checkpoint/cancel observation and synchronous masked-callback tests | illegal backward/skip transitions rejected; a depth-65 guard invokes no callback; raw masks require explicit release | `conformance-passed`: `task-lifecycle-spawn-join-001`, `cancel-masked-checkpoint-001`, `cancel-masked-nested-001`, `task-abort-next-step-001`; cancel visibility (`Cx::is_cancel_requested`) by `cancel-is-requested-001`, `budget-cancel-is-requested-001`. Callback error/pending restoration and the level-64/65 boundary are direct C tests; unconditional liveness remains unproven. Illegal transitions are unit-tested only (`tests/unit/core/test_transition.c`) | `bd-296.15`, `bd-hwb.3`, `bd-9kll.3.19` |
 | `U-OBLIGATION-LINEARITY` | Reserve/commit/abort/leak exactly-once contract | `docs/LIFECYCLE_TRANSITION_TABLES.md`, `docs/QUIESCENCE_FINALIZATION_INVARIANTS.md` | obligation lifecycle unit tests; leak-detection invariant tests | double resolve fails; unresolved finalization is surfaced | `conformance-passed`: `obligation-reserve-commit-001`, `obligation-abort-reasons-001`, `obligation-drop-leaks-at-once-001`. Double resolve is unit-tested only (`tests/unit/core/test_obligation.c:53`) | `bd-296.15`, `bd-296.18`, `bd-hwb.6` |
 | `U-CANCEL-WITNESS` | Cancellation witness phase/rank/severity monotonicity | `docs/LIFECYCLE_TRANSITION_TABLES.md` | cancel protocol fixtures incl. strengthen paths | phase regression and reason weakening fail deterministically | `conformance-passed` for reason strengthening: `cancel-strengthen-severity-001`, `task-abort-next-step-001`, `cancel-request-event-reason-001`. Witness phase/rank monotonicity is unit-tested only (`tests/unit/core/test_cancel.c`) | `bd-296.15`, `bd-hwb.2` |
 | `U-OUTCOME-LATTICE` | Outcome order and join semantics | `docs/EXISTING_ASUPERSYNC_STRUCTURE.md` | algebraic law fixtures; aggregation tests | severity/order violations are test-fail regressions | `impl-complete`: join and severity order unit-tested (`tests/unit/core/test_outcome.c:38-53`). `task-lifecycle-err-outcome-001` and `task-lifecycle-panic-001` check Err and Panicked outcomes against Rust; no fixture checks the lattice join, so its Rust parity is not fixture-checked | `bd-296.16`, `bd-hwb.1` |
@@ -116,7 +142,7 @@ and cross-runtime handle isolation remain open in `bd-9kll.3.20`.
 | `U-TIMER-HANDLE-SAFETY` | Generation-safe cancel handles | `docs/CHANNEL_TIMER_DETERMINISM.md` | stale-generation cancel tests | stale cancel mutating live timer state forbidden | `impl-complete`: `tests/unit/time/test_timer_wheel.c:136`, `:440`, `:521` (stale handles, generation reuse). Rust parity not fixture-checked | `bd-296.17`, `bd-2cw.4` |
 | `U-FINALIZATION-QUIESCENCE` | Quiescence criteria + finalization exit contract | `docs/QUIESCENCE_FINALIZATION_INVARIANTS.md` | close/quiescence invariants + shutdown scenarios | quiescence success with pending work forbidden | `conformance-passed`: `quiescence-pending-timer-001`, `region-lifecycle-close-cancels-children-001`, `budget-cancel-unacknowledged-stays-running-001` (a run that must end non-quiescent) | `bd-296.18`, `bd-2cw.6` |
 | `U-LEAK-DETECTION` | Deterministic unresolved-obligation leak surfacing | `docs/QUIESCENCE_FINALIZATION_INVARIANTS.md` | leak fixtures + finalization diagnostics | silent leak and unresolved-close acceptance forbidden | `conformance-passed`: `leak-policy-leak-reported-001`, `obligation-drop-leaks-at-once-001`, `obligation-cancelled-holder-leaks-001` | `bd-296.18`, `bd-hwb.6` |
-| `U-FORBIDDEN-CATALOG` | Explicit must-fail semantic catalog + IDs | `docs/FORBIDDEN_BEHAVIOR_CATALOG.md`, `docs/LIFECYCLE_TRANSITION_TABLES.md` | forbidden-path fixture family generation | missing expected failure outcome is parity break | `spec-reviewed`: the catalog exists (`docs/FORBIDDEN_BEHAVIOR_CATALOG.md`, 22 `FB-<area>-NNN` IDs; `docs/LIFECYCLE_TRANSITION_TABLES.md:555-569`, `FB-001`..`FB-015`), but no fixture, test or tool references these IDs (grep of `src`, `tests`, `tools`, `fixtures`, `schemas`), so the forbidden-path fixture family was not generated. One v2 must-fail fixture exists: `obligation-reserve-closed-region-must-fail-001` | `bd-296.5` |
+| `U-FORBIDDEN-CATALOG` | Explicit must-fail semantic catalog + IDs | `docs/FORBIDDEN_BEHAVIOR_CATALOG.md`, `docs/LIFECYCLE_TRANSITION_TABLES.md` | forbidden-path fixture family generation | missing expected failure outcome is parity break | `spec-reviewed`: the catalog exists (`docs/FORBIDDEN_BEHAVIOR_CATALOG.md`, 22 `FB-<area>-NNN` IDs; `docs/LIFECYCLE_TRANSITION_TABLES.md:649-663`, `FB-001`..`FB-015`), but no fixture, test or tool references these IDs (grep of `src`, `tests`, `tools`, `fixtures`, `schemas`), so the forbidden-path fixture family was not generated. One v2 must-fail fixture exists: `obligation-reserve-closed-region-must-fail-001` | `bd-296.5` |
 | `U-INVARIANT-SCHEMA` | Machine-readable transition/invariant schema | `schemas/invariant_schema.json`, `docs/INVARIANT_SCHEMA.md` | schema validation + generated legality tests | schema drift without fixture updates forbidden | `impl-complete`: `make formal-tv` runs `tools/ci/check_translation_validation.sh --strict` against `schemas/invariant_schema.json` (`Makefile:1281-1284`), as part of `make formal-check` in the CI unit job (`.github/workflows/ci.yml:236-237`). Rust parity: not applicable | `bd-296.4` |
 | `U-PROVENANCE-MAP` | Source->fixture->parity traceability mapping | `docs/SOURCE_TO_FIXTURE_PROVENANCE_MAP.md` | provenance integrity checks in CI docs/reporting | orphan fixture rows forbidden | `spec-reviewed`: truth pass 2026-10-10 found 4 of 38 rows mapped, 20 partial, 14 unmapped (see that document, section 6). Read by `tools/ci/generate_traceability_index.sh`; no CI check validates it | `bd-296.19` |
 | `U-ARCH-LAYERING` | C architecture boundaries from semantics | `docs/PROPOSED_ANSI_C_ARCHITECTURE.md` | architecture conformance review + scaffold checks | transliteration-only or hidden coupling forbidden | `spec-reviewed`: approved in `docs/PHASE1_SPEC_REVIEW_GATE.md` section 2.11. No automated layering check was found in `Makefile` or `tools/ci` | `bd-296.2`, `bd-ix8.1` |

@@ -159,6 +159,84 @@ P2 remains in progress: raw-sample/profile evidence, governed baseline refresh,
 automotive coverage and full P2 acceptance remain unfulfilled. Historical red
 metrics below retain their original revision scope.
 
+### Guarded masking and refused-actor cleanup increment, 2026-10-12
+
+The combined implementation at `f167ee927558affe33f95f12ad230918a7aae588`
+adds `asx_task_masked`: a synchronous callback holds one extra cancellation
+mask and releases that level on success, error or pending return. The existing
+scenario interpreter uses it for nested masked steps. Six new public-boundary
+cases bring the cancellation program to 62 cases. Three scheduler E2E cases
+exercise a cancelled worker and its parked joiner: nested error restoration,
+a raw mask that delays cancellation until explicitly released, and depth-65
+refusal without executing the callback. This is conditional on the callback
+returning and balancing additional raw masks; it supplies no across-poll guard,
+C unwinding guarantee or unconditional liveness proof.
+
+The actor increment moves a refused server's captured mailbox/reply cleanup
+to lab admission, before its handle resolves and wakes the caller. The genuine
+minimized `gen-1238-119-min` witness previously matched trace, snapshot and
+observations but dispatched the caller five times instead of Rust's four.
+The regression unit and witness now produce `0,250,250,400`, with no extra
+time-250 poll. This fixes runtime ordering rather than special-casing the
+scenario interpreter. Original `bd-aioq` remains in progress until its required
+minimized cases and original seeds 1200–1239 are checked with the corrected
+Rust producer; the original generator bytes and all body branches are preserved.
+
+Independent review of that timing fix found a reseed regression: after the
+last caller completed, `asx_scheduler_use_lab_dispatch` could erase its refused
+actor's pending admission without delivering cleanup. The actor's join then
+stayed pending even when the scheduler reported idle. The repair refuses a
+reseed while any spawn admission is pending; a new real caller/close/host-join
+test fails against `f167ee92` at that refusal assertion (25/26), then requires
+ordinary admission cleanup and a successful reseed after settlement. The
+earlier green source does not establish acceptance for this newly found path.
+
+Concurrent `093f6184` integration retains rwlock downgrade, quota-refused
+physical-permit settlement and the Rust oracle's context-lifetime fix. The
+corpus expands to 165 genuine captures. All 793 prior private Beads records and
+every prior/incoming comment survive normal import; three new bug records are
+added. GCC, Clang and genuine native 32-bit GCC each pass the 164-program unit
+suite and all other core suites at the combined source. The native32 expected
+double test correction is independently closed as `bd-2q1f` at `49451567`;
+its old source failed 63/64 cases and the corrected source passes 64/64.
+
+The named `actor-refused-reply-before-sleep-001` witness is now freshly
+captured by the corrected producer linked to pinned Rust `5e60b1c4c`, using
+nightly compiler `90850177249efe0321573c569aec5d12b257f8d6`. Its unedited
+capture has SHA-256 `cb5323d744e72ec6b222cc6c78f3336d7f5927de64646384218dd459d3bc0a72`
+and the four expected dispatches, bringing the corpus to 166. The preserved
+original 8,000 inputs include 988 Ok, 509 Cancelled, 277 Err and 252 Panicked
+finish operations; a regenerated restricted trial with no Err/Panicked was
+excluded. Fresh native Rust capture succeeds for all 8,000; the exact C runtime
+matches 7,999, with zero interpreter errors. The remaining case,
+`gen-1204-33`, differs only in cancellation dispatch order after an Err body
+closes a region containing race children and an actor. Genuine minimization
+reduces it from 54 to 16 elements; the minimized C replay still fails. Original
+`bd-aioq` remains open because its full campaign acceptance is unmet.
+
+Current original-task execution checklist (verification still in progress):
+
+- [x] Preserve earlier code, accepted fixture bytes, all issues/comments and failed trials.
+- [x] Add the guarded callback and wire the nested DSL to the real runtime API.
+- [x] Exercise success/error/pending returns, nesting, raw balance, invalid admission and depth limits.
+- [x] Catch skipped restoration with four real fixture failures and excess depth with a native unit failure.
+- [x] Execute five draft host profile/codec/class E2E lanes, each with 10 runtime cases, 13 harness checks and 32 actual detail records.
+- [x] Reproduce and fix refused-actor reply timing using the genuine minimized Rust witness and native caller/sleep test.
+- [x] Run combined strict GCC, Clang and native32 core suites; pinned formatting and strict lint pass.
+- [x] Pass combined-source ASan/UBSan, eight-profile execution and JSON/BIN build-mode execution over all 165 prior fixtures; binary v2 scenario transport remains open.
+- [x] Reexecute five exact `f167ee92` host E2E lanes, each with 10 runtime cases, 13 harness checks and 32 actual detail records.
+- [x] Capture the named actor regression with the current pinned Rust producer and preserve its unedited output.
+- [ ] Finish source-citation repair after the reseed change; initial gate failures and their corrected controls remain recorded.
+- [ ] Verify the pending-admission reseed repair and its before/after positive cleanup path at the final source.
+- [ ] Re-run final committed-source gates, the 166-fixture corpus and corrected E2E digest labels.
+- [x] Re-run the original all-body 8,000-input campaign and preserve its one remaining dispatch-order divergence.
+- [ ] Fix the minimized Err-close/race/actor cancellation ordering at its runtime source, then verify all 8,000 inputs again.
+- [ ] Obtain independent exact-source acceptance before closing original `bd-9kll.3.19` or `bd-aioq`.
+
+K4, typed outcomes/factories, serialized asynchronous finalization, independent
+runtime storage, native replay, physical-device validation and P2 remain open.
+The completed narrow increments do not satisfy those broader contracts.
+
 ## Assessment at the audited revision
 
 The important change since October 8 is that the oracle now runs real code. The C interpreter

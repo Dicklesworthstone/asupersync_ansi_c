@@ -147,7 +147,7 @@ asx_status asx_channel_try_recv(asx_channel_id id, uint64_t *out_value);
 asx_status asx_channel_recv(asx_channel_id id, asx_cx *cx, uint64_t *out_value);
 ```
 
-**C status:** implemented. `asx_channel_recv` (`src/channel/mpsc.c:1073-1081`) checks cancellation first, then `channel_recv_impl` (`src/channel/mpsc.c:965-992`): FIFO dequeue (`:974-978`); receiver closed, or sender closed and no outstanding permit -> `ASX_E_DISCONNECTED` (`:980-983`, `channel_drained_for_good`, `:957-960`); otherwise park and return `ASX_E_PENDING`. `asx_channel_recv_many` (`src/channel/mpsc.c:1085-1126`) is Rust's `recv_many`: up to `limit` messages oldest first, one parked producer woken per freed slot, and `ASX_OK` with none once no message can arrive. `asx_channel_try_recv` returns `ASX_E_WOULD_BLOCK` when empty; the conformance interpreter reports that as `ASX_E_CHANNEL_EMPTY` (`src/conformance/interpreter.c:2672`). Rust parity: `mpsc-recv-cancel-first-001`, `mpsc-try-ops-001`, `mpsc-two-phase-send-recv-001`, `mpsc-recv-many-001`, `mpsc-recv-many-wakes-each-freed-slot-001`.
+**C status:** implemented. `asx_channel_recv` (`src/channel/mpsc.c:1073-1081`) checks cancellation first, then `channel_recv_impl` (`src/channel/mpsc.c:965-992`): FIFO dequeue (`:974-978`); receiver closed, or sender closed and no outstanding permit -> `ASX_E_DISCONNECTED` (`:980-983`, `channel_drained_for_good`, `:957-960`); otherwise park and return `ASX_E_PENDING`. `asx_channel_recv_many` (`src/channel/mpsc.c:1085-1126`) is Rust's `recv_many`: up to `limit` messages oldest first, one parked producer woken per freed slot, and `ASX_OK` with none once no message can arrive. `asx_channel_try_recv` returns `ASX_E_WOULD_BLOCK` when empty; the conformance interpreter reports that as `ASX_E_CHANNEL_EMPTY` (`src/conformance/interpreter.c:2704`). Rust parity: `mpsc-recv-cancel-first-001`, `mpsc-try-ops-001`, `mpsc-two-phase-send-recv-001`, `mpsc-recv-many-001`, `mpsc-recv-many-wakes-each-freed-slot-001`.
 
 ### 1.5 Backpressure Behavior
 
@@ -159,7 +159,7 @@ asx_status asx_channel_recv(asx_channel_id id, asx_cx *cx, uint64_t *out_value);
 
 Rust: `try_reserve` returns `Full` while `has_waiting_sender()` (`src/channel/mpsc.rs:732-754`, `:374-377`); `try_send` (`src/channel/mpsc.rs:773-794`) applies the same rule. **Key fairness rule:** a non-waiting reserve never jumps the waiter queue, even when capacity is free.
 
-**C status:** implemented (`src/channel/mpsc.c:723-725`). C has no `Sender::try_send`; the conformance interpreter runs it as `asx_channel_try_reserve` plus `asx_send_permit_send` (`src/conformance/interpreter.c:2629-2642`). Rust's queue keeps every registered waiter until its `Reserve` is polled or dropped (`prune_stale_waiter_front` drops only removed registrations, `src/channel/mpsc.rs:363-377`), so a cancel-requested or masked waiter still blocks `try_reserve`. C's `asx_wait_queue_live_ahead` counts every unfinished task, including cancel-pending ones (`src/sync/wait_queue.c:344-357`, liveness classes `:43-58`); the waiter passes its wake on when its next poll observes cancellation or its task ends. See §7.4.
+**C status:** implemented (`src/channel/mpsc.c:723-725`). C has no `Sender::try_send`; the conformance interpreter runs it as `asx_channel_try_reserve` plus `asx_send_permit_send` (`src/conformance/interpreter.c:2661-2674`). Rust's queue keeps every registered waiter until its `Reserve` is polled or dropped (`prune_stale_waiter_front` drops only removed registrations, `src/channel/mpsc.rs:363-377`), so a cancel-requested or masked waiter still blocks `try_reserve`. C's `asx_wait_queue_live_ahead` counts every unfinished task, including cancel-pending ones (`src/sync/wait_queue.c:344-357`, liveness classes `:43-58`); the waiter passes its wake on when its next poll observes cancellation or its task ends. See §7.4.
 
 ### 1.6 FIFO Ordering Guarantees
 
@@ -228,6 +228,18 @@ Rust `Drop for Sender` (`src/channel/mpsc.rs:1241-1256`):
 | Permit send / abort | Not cancellation-checked (`src/channel/mpsc.rs:1588-1653`) | Binding-checked without a cancellation checkpoint (`src/channel/mpsc.c:750-850`) |
 
 The cancellation check itself is v4 §3.2 CANCEL-ACKNOWLEDGE at a checkpoint (`rule.cancel.acknowledge` #2; C status: C_REFINEMENT_MAP.md row `rule.cancel.acknowledge`). C cancellation observation needs no capability flag: `asx_cx_checkpoint` checks the identified task's cancellation before budget consumption (`src/cx/cx.c:416-435`); masking defers checkpoint delivery but does not hide a recorded request from `asx_cx_is_cancel_requested` (`src/cx/cx.c:402-413`). Rust parity: `mpsc-recv-cancel-first-001` (a pending recv cancelled by the driver returns `ASX_E_CANCELLED` and the task ends Cancelled). Reserve cancellation has no v2 fixture; C unit tests: `tests/unit/channel/test_channel_wake.c` `cancelled_waiter_does_not_absorb_wake`, `cancel_storm_on_full_channel_keeps_fifo_progress`, `masked_producer_is_not_cancelled_until_unmask`; `tests/unit/channel/test_mpsc.c` `cancelled_cx_wins_over_ready_channel_and_traces`.
+
+The synchronous callback guard `asx_task_masked` (`src/runtime/cancellation.c:755`)
+releases one admitted mask level on every returning body, including an error or
+`ASX_E_PENDING`, and returns the body's status unless release fails. A channel
+wait does not keep that guard across polls. Nested guards preserve outer levels
+when raw mask calls are balanced, and a leaked raw
+mask still defers delivery. Entry after request or ACK is allowed, as in pinned
+Rust; #12 remains Variant against the formal model. Callbacks must return and
+release extra raw masks, with no C `longjmp` or unwind cleanup promise.
+`docs/LIFECYCLE_TRANSITION_TABLES.md` §2.5 names the real return/join/depth tests
+and remaining conditional-liveness boundary. This guard supplies no serialized
+asynchronous-finalizer barrier.
 
 ### 1.10 Determinism Requirements
 
@@ -367,7 +379,7 @@ Superseded by asupersync_v4_formal_semantics.md §1.11 (Scheduler lanes) and §3
 
 The project plan's key `(lane_priority, logical_deadline, task_id, insertion_seq)` (`PLAN_TO_PORT_ASUPERSYNC_TO_ANSI_C.md` §6.8.3(H), line 471) is not what either engine implements:
 - Rust lanes order entries by priority, then generation, then task id, and every `LabRuntime` pop picks among equal-priority entries with `rng_hint % count` (`docs/CHANNEL_TIMER_SEMANTICS.md` §3.3-3.5).
-- C's lab dispatch ports that: entries `{slot, task_gen, priority, gen}`, one generation counter, a seeded xorshift64 pick among the top-priority group, a cancel lane and a ready lane and no timed lane (`src/runtime/lab_dispatch.c:43-48`, `:566-628`). Outside lab dispatch `src/runtime/scheduler.c` polls runnable tasks in arena order each round (`src/runtime/scheduler.c:1-22`).
+- C's lab dispatch ports that: entries `{slot, task_gen, priority, gen}`, one generation counter, a seeded xorshift64 pick among the top-priority group, a cancel lane and a ready lane and no timed lane (`src/runtime/lab_dispatch.c:43-48`, `:569-631`). Outside lab dispatch `src/runtime/scheduler.c` polls runnable tasks in arena order each round (`src/runtime/scheduler.c:1-22`).
 
 **Timer tie-break:** C fires equal-deadline timers in insertion order: `timer_wheel.c` by (deadline, insertion_seq) (`src/time/timer_wheel.c:230-248`), the scheduler heap by (deadline, arm sequence) (`src/runtime/scheduler.c:100-105`), and lab dispatch by (1 ms tick, registration) (`src/runtime/scheduler.c:256-324`), the last matching the Rust wheel's level-0 behaviour for timers within 256 ms (comment at `src/runtime/scheduler.c:256-265`). This is not stronger than Rust: Rust's order is also deterministic (section 3.1).
 

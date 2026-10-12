@@ -281,7 +281,7 @@ Completed         .        .        .           .           .           .
 | T7 | `CancelRequested` | `Cancelling` | Rust `acknowledge_cancel()` (`src/record/task.rs:1341`); C `asx_checkpoint` (`src/runtime/cancellation.c:615`) | Unmasked checkpoint; cleanup budget becomes the task's budget, `polls_remaining` set (C applies it after the acknowledging poll, `src/runtime/lifecycle.c:509`) |
 | T8 | `CancelRequested` | `Completed` | `complete(outcome)` | **Outcome is `Cancelled(reason)`**: Rust maps `Ok`/`Err` in any cancel state to `Cancelled(reason)` (`src/record/task.rs:1267`); C likewise (`asx_task_cancel_dominates_internal`, `src/runtime/scheduler.c:404`). `Panicked` passes through. Exception in both: a task spawned inside another task's poll that acknowledged a cancel arriving after its first poll keeps its value (Rust `classify_spawn_completion`, `src/runtime/task_handle.rs:173`) |
 | T9 | `Cancelling` | `Cancelling` | `request_cancel*` (`src/record/task.rs:751`) | **Strengthening**: as T6; the met budget also becomes the task's budget |
-| T10 | `Cancelling` | `Finalizing` | Rust `cleanup_done()` (`src/record/task.rs:1378`); C `asx_task_finalize` (`src/runtime/cancellation.c:767`) | Cleanup finished. Rust's lab takes it when a task in a cancel state finishes its poll with `Ok` (`src/lab/runtime.rs:4876`; other results go through T11); C only when the task calls `asx_task_finalize`, otherwise T11 (Variant, row `rule.cancel.drain`) |
+| T10 | `Cancelling` | `Finalizing` | Rust `cleanup_done()` (`src/record/task.rs:1378`); C `asx_task_finalize` (`src/runtime/cancellation.c:784`) | Cleanup finished. Rust's lab takes it when a task in a cancel state finishes its poll with `Ok` (`src/lab/runtime.rs:4876`; other results go through T11); C only when the task calls `asx_task_finalize`, otherwise T11 (Variant, row `rule.cancel.drain`) |
 | T11 | `Cancelling` | `Completed` | `complete(outcome)` | `Ok`/`Err` become `Cancelled(reason)` as in T8; a panic stays `Panicked` |
 | T12 | `Finalizing` | `Finalizing` | `request_cancel*` (`src/record/task.rs:777`) | **Strengthening**: as T9 |
 | T13 | `Finalizing` | `Completed` | Rust `finalize_done()` (`src/record/task.rs:1416`); C at the next dispatch (`src/runtime/scheduler.c:1254`) | Rust returns a `CancelWitness` (phase Completed); outcome is `Cancelled(reason)` |
@@ -304,6 +304,32 @@ C's runtime transitions after slot initialization use `asx_task_set_state_intern
 4. Once acknowledged at an unmasked checkpoint, the task transitions to `Cancelling` and its cleanup budget becomes its budget (`acknowledge_cancel`, `src/record/task.rs:1341`). Under a mask (depth > 0, bounded by 64 in both) the cancel stays pending; neither engine consumes mask per checkpoint as the spec does (Variant)
 5. A spent cleanup budget only strengthens the reason to `PollQuota` (lab, `src/lab/runtime.rs:4664`; advisory in production, `src/runtime/scheduler/three_lane.rs:1273`): Rust never force-completes a task. C's opt-in `cleanup_hard_bound` does (a deviation excluded from parity, bd-9kll.3.2)
 6. **A task that completes while `CancelRequested` (or later) does not keep its natural outcome: `Ok`/`Err` become `Cancelled(reason)`** (T8; the first extraction said the opposite). The exception is in T8
+
+The synchronous C guard `asx_task_masked` (`src/runtime/cancellation.c:755`;
+public contract `include/asx/runtime/runtime.h:702-712`) calls its body once
+under one additional mask level and releases that level on every C return,
+including an error or `ASX_E_PENDING`. It returns the body's status unless
+release fails. Nested guards preserve the outer depth when the body balances
+any additional raw masks. A null body or failed admission, including an attempt
+to add level 65 from an existing depth 64, invokes no body. A pending return
+does not retain the guard across polls.
+Callbacks must return normally; C makes no `longjmp` or unwinding guarantee.
+
+Raw `asx_task_mask`/`asx_task_unmask` still require explicit balance and may
+span polls. Like the pinned Rust `Cx::masked` (`src/cx/cx.rs:3315`), they allow
+new nesting after cancellation is requested or acknowledged. This is a
+nesting depth, not the formal model's consumed deferral budget (#12 Variant).
+Delivery still requires returning callbacks, release of every raw mask and a
+subsequent checkpoint. The real unit tests
+`tests/unit/runtime/test_cancellation.c::masked_callback_restores_on_success_error_and_pending_returns`,
+`tests/unit/runtime/test_cancellation.c::masked_callback_nested_error_restores_each_level_and_delivers_cancel`
+and `tests/unit/runtime/test_cancellation.c::masked_callback_refuses_excess_depth_without_running_body`
+cover returning callbacks and the public depth boundary.
+`tests/e2e/e2e_nested_regions.c` exercises a cancelled worker and a parked
+joiner: nested guards restore on early error, a leaked raw mask keeps both
+cancel acknowledgement and join pending until explicit release, and a
+depth-65 guard runs no callback. These finite runs do not establish
+unconditional liveness or the masked serialized async-finalizer barrier.
 
 ### 4.6 Poll Contract
 
@@ -381,7 +407,7 @@ Also not in the first extraction: Rust requires the holder to belong to the obli
 
 ## 6. Cancellation Protocol
 
-> **Superseded by `asupersync_v4_formal_semantics.md` §1.3 (`def.cancel.reason_kinds` #7, `def.cancel.severity_ordering` #8), §3.2 / §3.2.5 (`rule.cancel.request` #1 … `rule.cancel.finalize` #4, `inv.cancel.idempotence` #5, `rule.cancel.checkpoint_masked` #10), `strengthen` (`def.cancel.reason_ordering` #32), §5 INV-CANCEL-PROPAGATES (`inv.cancel.propagates_down` #6) and INV-MASK-BOUNDED (#11, #12); C status: see C_REFINEMENT_MAP.md rows `rule.cancel.request` … `inv.cancel.mask_monotone` (#12 Missing) and `def.cancel.reason_ordering`.** The witness (§6.1–§6.3, §6.5, §6.6) is a Rust runtime artifact the spec does not define (`CancelWitness`, `src/types/cancel.rs:323`); C has a reduced one. Full per-row citations: `docs/LIFECYCLE_TRANSITION_TABLES.md` §4.
+> **Superseded by `asupersync_v4_formal_semantics.md` §1.3 (`def.cancel.reason_kinds` #7, `def.cancel.severity_ordering` #8), §3.2 / §3.2.5 (`rule.cancel.request` #1 … `rule.cancel.finalize` #4, `inv.cancel.idempotence` #5, `rule.cancel.checkpoint_masked` #10), `strengthen` (`def.cancel.reason_ordering` #32), §5 INV-CANCEL-PROPAGATES (`inv.cancel.propagates_down` #6) and INV-MASK-BOUNDED (#11, #12); C status: see C_REFINEMENT_MAP.md rows `rule.cancel.request` … `inv.cancel.mask_monotone` (#12 Variant: Rust/C nesting differs from the formal consumed-budget model) and `def.cancel.reason_ordering`.** The witness (§6.1–§6.3, §6.5, §6.6) is a Rust runtime artifact the spec does not define (`CancelWitness`, `src/types/cancel.rs:323`); C has a reduced one. Full per-row citations: `docs/LIFECYCLE_TRANSITION_TABLES.md` §4.
 
 ### 6.1 Phases
 
