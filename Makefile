@@ -1923,9 +1923,39 @@ test-tsan:
 	@echo "[asx] test-tsan: PASS"
 
 # ---------------------------------------------------------------------------
+# Executed parity (bd-9kll.2.9): every Rust-captured v2 fixture runs through
+# the C runtime built for each profile (profile-parity-exec) and with the BIN
+# codec (codec-equivalence-exec), each build in its own BUILD_DIR under
+# build/parity/. Every build is compared with the same Rust captures, so all
+# passing means the profiles and codecs produce the same canonical trace,
+# snapshot, observations and dispatch order on the whole corpus. WIN32 is
+# not in the list: it needs a Windows toolchain (the MSVC lane).
+# The record checks after them (tools/ci/run_*.sh) still compare the digests
+# stored in the fixture files and write the artifacts CI collects.
+# ---------------------------------------------------------------------------
+PARITY_PROFILES ?= CORE POSIX FREESTANDING EMBEDDED_ROUTER HFT AUTOMOTIVE PARALLEL BROWSER
+
+.PHONY: profile-parity-exec codec-equivalence-exec
+profile-parity-exec:
+	@for p in $(PARITY_PROFILES); do \
+		echo "[asx] profile-parity-exec: $$p"; \
+		$(MAKE) --no-print-directory conformance PROFILE=$$p DETERMINISTIC=1 \
+			BUILD_DIR=build/parity/$$p || { echo "[asx] profile-parity-exec: FAIL $$p"; exit 1; }; \
+	done
+	@echo "[asx] profile-parity-exec: PASS ($(words $(PARITY_PROFILES)) profiles x $(words $(CONFORMANCE_V2_FIXTURES)) fixtures)"
+
+codec-equivalence-exec:
+	@for c in JSON BIN; do \
+		echo "[asx] codec-equivalence-exec: $$c"; \
+		$(MAKE) --no-print-directory conformance CODEC=$$c DETERMINISTIC=1 \
+			BUILD_DIR=build/parity/codec-$$c || { echo "[asx] codec-equivalence-exec: FAIL $$c"; exit 1; }; \
+	done
+	@echo "[asx] codec-equivalence-exec: PASS (JSON and BIN x $(words $(CONFORMANCE_V2_FIXTURES)) fixtures)"
+
+# ---------------------------------------------------------------------------
 # codec-equivalence — JSON vs BIN semantic digest parity
 # ---------------------------------------------------------------------------
-codec-equivalence: build
+codec-equivalence: build codec-equivalence-exec
 	@echo "[asx] codec-equivalence: JSON vs BIN parity check..."
 	@if [ -x tools/ci/run_codec_equivalence.sh ]; then \
 		tools/ci/run_codec_equivalence.sh; \
@@ -1939,7 +1969,7 @@ codec-equivalence: build
 # ---------------------------------------------------------------------------
 # profile-parity — cross-profile canonical digest parity
 # ---------------------------------------------------------------------------
-profile-parity: build
+profile-parity: build profile-parity-exec
 	@echo "[asx] profile-parity: cross-profile digest check..."
 	@if [ -x tools/ci/run_profile_parity.sh ]; then \
 		tools/ci/run_profile_parity.sh; \

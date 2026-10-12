@@ -70,7 +70,7 @@ The port targets asupersync commit `5e60b1c4c` (2026-10).
 | **Resource contracts instead of silent degradation** | Explicit memory/queue/timer ceilings with deterministic failure taxonomy per resource class (R1/R2/R3) |
 | **9 deployment profiles** | CORE, POSIX, WIN32, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL, BROWSER |
 | **<!-- fact:test_programs -->226<!-- /fact --> tracked C test programs across 7 categories** | <!-- fact:test_unit -->164<!-- /fact --> unit, <!-- fact:test_e2e -->23<!-- /fact --> e2e, <!-- fact:test_invariant -->3<!-- /fact --> invariant, <!-- fact:test_vignettes -->12<!-- /fact --> vignette, <!-- fact:test_conformance -->6<!-- /fact --> conformance, <!-- fact:test_fuzz -->5<!-- /fact --> fuzz, and <!-- fact:test_formal -->13<!-- /fact --> formal files in the current tree |
-| **Cross-profile checks** | Profiles are meant to change limits and defaults, never semantics. CI executes the Rust-captured fixtures under CORE, under EMBEDDED_ROUTER on five ISAs (QEMU) and on 32-bit x86; `make profile-parity` compares the digests recorded per profile in the fixture set |
+| **Cross-profile checks** | Profiles are meant to change limits and defaults, never semantics. `make profile-parity` executes every Rust-captured fixture under CORE, POSIX, FREESTANDING, EMBEDDED_ROUTER, HFT, AUTOMOTIVE, PARALLEL and BROWSER builds, each compared with the same Rust captures; CI also runs them under EMBEDDED_ROUTER on five ISAs (QEMU) and on 32-bit x86 |
 
 The current repository is library-first: it ships the static library, public
 headers, tests, examples, release-packaging machinery, the in-tree
@@ -443,9 +443,11 @@ make test-gates         # negative controls: the gates must reject bad fixtures,
 
 ### `make codec-equivalence`
 
-Compare the semantic digests recorded in the JSON and BIN files of each
-fixture in `fixtures/rust_reference/`. It reads the fixtures and does not
-execute the runtime; the C codec round trip is checked by `make
+Execute every Rust-captured v2 fixture through C runtimes built with the
+JSON and with the BIN codec (`make codec-equivalence-exec`, each in its own
+`build/parity/` directory); both must match the Rust captures. Then compare
+the semantic digests recorded in the JSON and BIN files of each fixture in
+`fixtures/rust_reference/`; the C codec round trip is also checked by `make
 fixture-integrity` and by `make test-conformance-c`.
 
 ```bash
@@ -454,11 +456,15 @@ make codec-equivalence
 
 ### `make profile-parity`
 
-Compare the semantic digests recorded for each profile variant of a fixture
-in `fixtures/rust_reference/`. Like `codec-equivalence`, it does not execute
-the runtime. Executed cross-profile evidence comes from `make conformance`
-run under several profiles and targets (see the CI table below) and from
-`make resource-pressure-gate`.
+Execute every Rust-captured v2 fixture through the C runtime built for each
+profile in `PARITY_PROFILES` (CORE, POSIX, FREESTANDING, EMBEDDED_ROUTER,
+HFT, AUTOMOTIVE, PARALLEL, BROWSER; `make profile-parity-exec`). Each build
+is compared with the same Rust captures, so all passing means the profiles
+produce the same canonical trace, snapshot, observations and dispatch order.
+A drift in one profile's build fails it (a scheduler mutant compiled into
+the HFT build alone fails 98 of 133 fixtures). Then the digests recorded per
+profile variant in `fixtures/rust_reference/` are compared. WIN32 needs a
+Windows toolchain and is covered by the MSVC lane.
 
 ```bash
 make profile-parity
@@ -715,7 +721,7 @@ it drifts from the headers or a new capacity macro is missing.
 | `ASX_PROFILE_PARALLEL` | Multi-core (planned) | Deterministic logical worker-lane scheduler (64-worker generic cap) that runs every lane on the calling thread; observe-only admission by default |
 | `ASX_PROFILE_BROWSER` | Browser/WebAssembly (no wasm32 build yet) | Native-only surfaces compiled out, browser boundary diagnostics; builds and runs natively today |
 
-Profiles are meant to control operational envelopes (limits, defaults, instrumentation), never semantic behavior. That is checked by executing the Rust-captured fixtures under CORE and EMBEDDED_ROUTER and by the resource-pressure gate; `make profile-parity` compares recorded digests only.
+Profiles are meant to control operational envelopes (limits, defaults, instrumentation), never semantic behavior. That is checked by executing the Rust-captured fixtures under every profile build (`make profile-parity`) and by the resource-pressure gate.
 
 ## Architecture
 
