@@ -17,8 +17,10 @@
 #include <asx/core/broadcast.h>
 #include <asx/core/channel.h>
 #include <asx/core/oneshot.h>
+#include <asx/runtime/lab.h>
 #include <asx/runtime/rt.h>
 #include <asx/runtime/runtime.h>
+#include <asx/security/crypto.h>
 #include <string.h>
 
 static asx_runtime g_rt;
@@ -1348,6 +1350,777 @@ TEST(use_lab_dispatch_requires_no_live_task) {
     ASSERT_EQ(asx_lab_dispatch_active(), 0);
 }
 
+/* ------------------------------------------------------------------ */
+/* Forced schedules (bd-9kll.9.3)                                      */
+/* ------------------------------------------------------------------ */
+
+/* Artifacts Rust recorded (twin_run, asupersync 5e60b1c4c), as stored in
+ * each fixture's schedule.forced_schedule; certificate_hash is the same
+ * fixture's schedule.certificate_hash. */
+
+/* fixtures/rust_reference_v2/budget-cancel-is-requested-001.json,
+ * certificate_hash 3cab0825147f5102 */
+static const char g_fixture_budget_cancel[] =
+    "415355504653430001000000010000002a0000000000000090d2dff9ac13f4de"
+    "0100000000000000000000000000000000000000020100000000000000000000"
+    "00000000000100000000000000000000000000000002517f142508ab3c010026"
+    "f516a32a53fdd583a15a3bb22b083ff0a43dacd96523100d2050780e9a7c37";
+
+/* fixtures/rust_reference_v2/obligation-cancelled-holder-leaks-001.json,
+ * certificate_hash 0f5abfedcc170262 */
+static const char g_fixture_cancel_lane[] =
+    "415355504653430001000000010000002a0000000000000090d2dff9ac13f4de"
+    "0200000000000000000000000000000000000000020100000000000000000000"
+    "0000000000000000000000000000000000000200000000000000320000000000"
+    "000002000000000000003200000000000000620217ccedbf5a0f010070dd1ff2"
+    "8ab8011fc346d4e08d775410dbe898d1c7b301675995a283a82e0235";
+
+/* fixtures/rust_reference_v2/sync-mutex-fifo-001.json,
+ * certificate_hash 3f9e6d4a78eeebef */
+static const char g_fixture_mutex_fifo[] =
+    "415355504653430001000000010000002a000000000000002b5a4cf3950579ae"
+    "0300000000000000000000000000000000000000020100000000000000000000"
+    "0000000000000000000000000000000000020200000000000000000000000000"
+    "0000000000000100000000000000020300000000000000000000000000000003"
+    "000000000000000000000000000000efebee784a6d9e3f01002405fdd5791a8b"
+    "4199f0d46363d6638b57a074aa1114620cac667f9fd229b9e8";
+
+#define FS_TEST_MAX_BYTES 512u
+#define FS_TEST_MAX_DISPATCHES 16u
+
+static size_t fs_hex_decode(const char *hex, uint8_t *out, size_t cap) {
+    size_t n = strlen(hex) / 2u;
+    size_t i;
+
+    if (n > cap) return 0u;
+    for (i = 0u; i < n; i++) {
+        unsigned hi = (unsigned)(hex[2u * i] <= '9' ? hex[2u * i] - '0' : hex[2u * i] - 'a' + 10);
+        unsigned lo = (unsigned)(hex[2u * i + 1u] <= '9' ? hex[2u * i + 1u] - '0'
+                                                         : hex[2u * i + 1u] - 'a' + 10);
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return n;
+}
+
+static asx_forced_decode_limits fs_limits(void) {
+    asx_forced_decode_limits l;
+    l.max_encoded_bytes = FS_TEST_MAX_BYTES;
+    l.max_dispatches = FS_TEST_MAX_DISPATCHES;
+    return l;
+}
+
+/* The checksum a canonical artifact carries, recomputed after a test edits
+ * a byte, so only the edit's own check can refuse it. */
+static void fs_restamp(uint8_t *bytes, size_t len) {
+    static const char domain[] = "asupersync.lab.forced-schedule.artifact.v1";
+    asx_sha256_ctx ctx;
+
+    asx_sha256_init(&ctx);
+    asx_sha256_update(&ctx, domain, sizeof(domain));
+    asx_sha256_update(&ctx, bytes, len - 32u);
+    asx_sha256_final(&ctx, bytes + len - 32u);
+}
+
+typedef struct {
+    const char *hex;
+    uint32_t count;
+    uint64_t certificate;
+    uint64_t config_hash;
+    uint64_t steps;
+    uint64_t nanos;
+} fs_fixture;
+
+TEST(forced_schedule_decodes_rust_recorded_artifacts_and_reproduces_their_certificate) {
+    static const fs_fixture fixtures[3] = {
+        {g_fixture_budget_cancel, 1u, UINT64_C(0x3cab0825147f5102), UINT64_C(0xdef413acf9dfd290),
+         1u, 0u},
+        {g_fixture_cancel_lane, 2u, UINT64_C(0x0f5abfedcc170262), UINT64_C(0xdef413acf9dfd290), 2u,
+         50u},
+        {g_fixture_mutex_fifo, 3u, UINT64_C(0x3f9e6d4a78eeebef), UINT64_C(0xae790595f34c5a2b), 3u,
+         0u},
+    };
+    uint32_t f;
+
+    for (f = 0u; f < 3u; f++) {
+        uint8_t bytes[FS_TEST_MAX_BYTES];
+        uint8_t again[FS_TEST_MAX_BYTES];
+        asx_forced_dispatch storage[FS_TEST_MAX_DISPATCHES];
+        asx_forced_decode_limits limits = fs_limits();
+        asx_forced_schedule s;
+        asx_forced_error err;
+        size_t len = fs_hex_decode(fixtures[f].hex, bytes, sizeof(bytes));
+        size_t out_len = 0u;
+
+        ASSERT_TRUE(len > 0u);
+        ASSERT_EQ(len, asx_forced_schedule_encoded_size(fixtures[f].count));
+        ASSERT_EQ(asx_forced_schedule_decode(bytes, len, &limits, storage, FS_TEST_MAX_DISPATCHES,
+                                             &s, &err),
+                  ASX_OK);
+        ASSERT_EQ(s.version, ASX_FORCED_SCHEDULE_SCHEMA_VERSION);
+        ASSERT_EQ(s.seed, (uint64_t)42u);
+        ASSERT_EQ(s.config_hash, fixtures[f].config_hash);
+        ASSERT_EQ(s.dispatch_count, fixtures[f].count);
+        ASSERT_EQ(s.terminal_steps, fixtures[f].steps);
+        ASSERT_EQ(s.terminal_nanos, fixtures[f].nanos);
+        ASSERT_EQ(s.terminal_quiescent, (uint8_t)1u);
+        ASSERT_EQ(s.truncated, (uint8_t)0u);
+
+        /* The certificate asx folds from the dispatches is Rust's. */
+        ASSERT_EQ(s.terminal_schedule_hash, fixtures[f].certificate);
+        ASSERT_EQ(asx_forced_schedule_certificate(s.dispatches, s.dispatch_count),
+                  fixtures[f].certificate);
+
+        /* And the canonical bytes round-trip exactly. */
+        ASSERT_EQ(asx_forced_schedule_encode(&s, again, sizeof(again), &out_len, &err), ASX_OK);
+        ASSERT_EQ(out_len, len);
+        ASSERT_EQ(memcmp(again, bytes, len), 0);
+    }
+}
+
+TEST(forced_schedule_decoded_dispatch_fields_match_the_recorded_run) {
+    uint8_t bytes[FS_TEST_MAX_BYTES];
+    asx_forced_dispatch storage[FS_TEST_MAX_DISPATCHES];
+    asx_forced_decode_limits limits = fs_limits();
+    asx_forced_schedule s;
+    asx_forced_error err;
+    size_t len = fs_hex_decode(g_fixture_mutex_fifo, bytes, sizeof(bytes));
+
+    ASSERT_EQ(asx_forced_schedule_decode(bytes, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_OK);
+    /* "1@0 t.a ready", "2@0 t.a ready", "3@0 t.b ready": arena index 0, 0, 1 */
+    ASSERT_EQ(s.dispatches[0].task, (uint64_t)0u);
+    ASSERT_EQ(s.dispatches[1].task, (uint64_t)0u);
+    ASSERT_EQ(s.dispatches[2].task, (uint64_t)1u << 32);
+    ASSERT_EQ(s.dispatches[0].lane, (uint8_t)ASX_FORCED_LANE_READY);
+    ASSERT_EQ(s.dispatches[0].at_step, (uint64_t)1u);
+    ASSERT_EQ(s.dispatches[1].at_step, (uint64_t)2u);
+    ASSERT_EQ(s.dispatches[2].at_step, (uint64_t)3u);
+    ASSERT_EQ(s.dispatches[2].worker, 0u);
+    ASSERT_EQ(s.dispatches[2].at_nanos, (uint64_t)0u);
+
+    /* The cancel lane tag and the virtual time of a timed cancel. */
+    len = fs_hex_decode(g_fixture_cancel_lane, bytes, sizeof(bytes));
+    ASSERT_EQ(asx_forced_schedule_decode(bytes, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_OK);
+    ASSERT_EQ(s.dispatches[1].lane, (uint8_t)ASX_FORCED_LANE_CANCEL);
+    ASSERT_EQ(s.dispatches[1].at_step, (uint64_t)2u);
+    ASSERT_EQ(s.dispatches[1].at_nanos, (uint64_t)50u);
+}
+
+TEST(forced_schedule_decode_refuses_what_rust_refuses) {
+    uint8_t good[FS_TEST_MAX_BYTES];
+    uint8_t bad[FS_TEST_MAX_BYTES];
+    asx_forced_dispatch storage[FS_TEST_MAX_DISPATCHES];
+    asx_forced_decode_limits limits = fs_limits();
+    asx_forced_schedule s;
+    asx_forced_error err;
+    size_t len = fs_hex_decode(g_fixture_mutex_fifo, good, sizeof(good));
+    const size_t terminal = 40u + 3u * 29u;
+
+    ASSERT_EQ(len, (size_t)185u);
+
+    /* A flipped payload byte: the checksum binds every field. */
+    memcpy(bad, good, len);
+    bad[50] ^= 0x01u;
+    ASSERT_EQ(asx_forced_schedule_decode(bad, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_CHECKSUM);
+
+    /* Short, long. */
+    ASSERT_EQ(asx_forced_schedule_decode(good, len - 1u, &limits, storage, FS_TEST_MAX_DISPATCHES,
+                                         &s, &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_TRUNCATED);
+    ASSERT_EQ(asx_forced_schedule_decode(good, 39u, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_TRUNCATED);
+    memcpy(bad, good, len);
+    bad[len] = 0u;
+    ASSERT_EQ(asx_forced_schedule_decode(bad, len + 1u, &limits, storage, FS_TEST_MAX_DISPATCHES,
+                                         &s, &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_TRAILING_BYTES);
+
+    /* Magic and versions are checked before the checksum. */
+    memcpy(bad, good, len);
+    bad[0] ^= 0xFFu;
+    ASSERT_EQ(asx_forced_schedule_decode(bad, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_MAGIC);
+    memcpy(bad, good, len);
+    bad[8] = 2u;
+    ASSERT_EQ(asx_forced_schedule_decode(bad, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_ARTIFACT_VERSION);
+    memcpy(bad, good, len);
+    bad[12] = 2u;
+    ASSERT_EQ(asx_forced_schedule_decode(bad, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_SCHEMA_VERSION);
+
+    /* Caller limits are checked before anything is read. */
+    limits.max_encoded_bytes = len - 1u;
+    ASSERT_EQ(asx_forced_schedule_decode(good, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_BYTE_LIMIT);
+    limits = fs_limits();
+    limits.max_dispatches = 2u;
+    ASSERT_EQ(asx_forced_schedule_decode(good, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_DISPATCH_LIMIT);
+    limits = fs_limits();
+    ASSERT_EQ(asx_forced_schedule_decode(good, len, &limits, storage, 2u, &s, &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_DISPATCH_LIMIT);
+
+    /* With a valid checksum, each remaining check refuses on its own. */
+    memcpy(bad, good, len);
+    bad[40u + 29u + 12u] = 9u; /* dispatch 1 lane */
+    fs_restamp(bad, len);
+    ASSERT_EQ(asx_forced_schedule_decode(bad, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_LANE_TAG);
+    ASSERT_EQ(err.index, 1u);
+
+    memcpy(bad, good, len);
+    bad[terminal + 24u] = 2u; /* quiescent flag */
+    fs_restamp(bad, len);
+    ASSERT_EQ(asx_forced_schedule_decode(bad, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_BOOL_TAG);
+
+    memcpy(bad, good, len);
+    bad[terminal + 25u] = 1u; /* truncated */
+    fs_restamp(bad, len);
+    ASSERT_EQ(asx_forced_schedule_decode(bad, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_PARTIAL_SOURCE);
+
+    memcpy(bad, good, len);
+    bad[terminal + 24u] = 0u; /* not quiescent */
+    fs_restamp(bad, len);
+    ASSERT_EQ(asx_forced_schedule_decode(bad, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_PARTIAL_SOURCE);
+
+    memcpy(bad, good, len);
+    bad[40u + 29u + 13u] = 1u; /* dispatch 1 at_step 2 -> 1: not increasing */
+    fs_restamp(bad, len);
+    ASSERT_EQ(asx_forced_schedule_decode(bad, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_STEP_ORDER);
+    ASSERT_EQ(err.index, 1u);
+
+    memcpy(bad, good, len);
+    bad[40u + 21u] = 5u; /* dispatch 0 at_nanos 5, dispatch 1 at 0: time moves back */
+    fs_restamp(bad, len);
+    ASSERT_EQ(asx_forced_schedule_decode(bad, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_TIME_ORDER);
+    ASSERT_EQ(err.index, 1u);
+
+    /* The untouched artifact still decodes (the edits above were copies). */
+    ASSERT_EQ(asx_forced_schedule_decode(good, len, &limits, storage, FS_TEST_MAX_DISPATCHES, &s,
+                                         &err),
+              ASX_OK);
+}
+
+TEST(forced_schedule_encode_refuses_partial_and_bad_input_and_sizes_its_output) {
+    asx_forced_dispatch d[2];
+    asx_forced_schedule s;
+    asx_forced_error err;
+    uint8_t out[FS_TEST_MAX_BYTES];
+    size_t need = 0u;
+
+    memset(d, 0, sizeof(d));
+    d[0].task = 0u;
+    d[0].lane = ASX_FORCED_LANE_READY;
+    d[0].at_step = 1u;
+    d[1].task = (uint64_t)1u << 32;
+    d[1].lane = ASX_FORCED_LANE_CANCEL;
+    d[1].at_step = 2u;
+    d[1].at_nanos = 7u;
+    memset(&s, 0, sizeof(s));
+    s.version = ASX_FORCED_SCHEDULE_SCHEMA_VERSION;
+    s.seed = 42u;
+    s.dispatches = d;
+    s.dispatch_count = 2u;
+    s.terminal_steps = 2u;
+    s.terminal_nanos = 7u;
+    s.terminal_quiescent = 1u;
+    s.terminal_schedule_hash = asx_forced_schedule_certificate(d, 2u);
+
+    ASSERT_EQ(asx_forced_schedule_encoded_size(0u), (size_t)98u);
+    ASSERT_EQ(asx_forced_schedule_encoded_size(2u), (size_t)156u);
+
+    ASSERT_EQ(asx_forced_schedule_encode(&s, out, 155u, &need, &err), ASX_E_BUFFER_TOO_SMALL);
+    ASSERT_EQ(need, (size_t)156u);
+    ASSERT_EQ(asx_forced_schedule_encode(&s, out, sizeof(out), &need, &err), ASX_OK);
+    ASSERT_EQ(need, (size_t)156u);
+
+    /* What it wrote decodes back to the same schedule. */
+    {
+        asx_forced_dispatch back[4];
+        asx_forced_schedule r;
+        asx_forced_decode_limits limits = fs_limits();
+
+        ASSERT_EQ(asx_forced_schedule_decode(out, need, &limits, back, 4u, &r, &err), ASX_OK);
+        ASSERT_EQ(r.dispatch_count, 2u);
+        ASSERT_EQ(r.terminal_schedule_hash, s.terminal_schedule_hash);
+        ASSERT_EQ(back[1].task, d[1].task);
+        ASSERT_EQ(back[1].lane, (uint8_t)ASX_FORCED_LANE_CANCEL);
+        ASSERT_EQ(back[1].at_nanos, (uint64_t)7u);
+    }
+
+    /* Rust's to_canonical_bytes refuses a partial receipt. */
+    s.truncated = 1u;
+    ASSERT_EQ(asx_forced_schedule_encode(&s, out, sizeof(out), &need, &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_PARTIAL_SOURCE);
+    s.truncated = 0u;
+    s.terminal_quiescent = 0u;
+    ASSERT_EQ(asx_forced_schedule_encode(&s, out, sizeof(out), &need, &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_PARTIAL_SOURCE);
+    s.terminal_quiescent = 1u;
+
+    d[1].at_step = 1u;
+    ASSERT_EQ(asx_forced_schedule_encode(&s, out, sizeof(out), &need, &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_STEP_ORDER);
+    d[1].at_step = 2u;
+    d[1].lane = 4u;
+    ASSERT_EQ(asx_forced_schedule_encode(&s, out, sizeof(out), &need, &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_LANE_TAG);
+    ASSERT_EQ(err.index, 1u);
+    d[1].lane = ASX_FORCED_LANE_CANCEL;
+    s.terminal_steps = 1u; /* last dispatch past the terminal step */
+    ASSERT_EQ(asx_forced_schedule_encode(&s, out, sizeof(out), &need, &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_PARTIAL_SOURCE);
+    ASSERT_EQ(asx_forced_schedule_encode(NULL, out, sizeof(out), &need, &err),
+              ASX_E_INVALID_ARGUMENT);
+}
+
+/* The seed-42 scene of ties_are_broken_by_the_step_value...: A, B (one
+ * yield), C host-spawned in that order. The seeded picker polls B, C, A, B
+ * in lab steps 1..4. */
+typedef struct {
+    probe a;
+    probe b;
+    probe c;
+    asx_task_id ta;
+    asx_task_id tb;
+    asx_task_id tc;
+    asx_region_id region;
+} fs_scene;
+
+static asx_status fs_scene_build(fs_scene *sc) {
+    asx_status st = setup();
+
+    if (st == ASX_OK) st = asx_scheduler_use_lab_dispatch(42u);
+    order_reset();
+    memset(sc, 0, sizeof(*sc));
+    sc->a.name = 'A';
+    sc->b.name = 'B';
+    sc->b.yields = 1u;
+    sc->c.name = 'C';
+    if (st == ASX_OK) st = asx_region_open(&sc->region);
+    if (st == ASX_OK) st = asx_task_spawn(sc->region, poll_probe, &sc->a, &sc->ta);
+    if (st == ASX_OK) st = asx_task_spawn(sc->region, poll_probe, &sc->b, &sc->tb);
+    if (st == ASX_OK) st = asx_task_spawn(sc->region, poll_probe, &sc->c, &sc->tc);
+    return st;
+}
+
+/* Record the seeded run into `schedule` (dispatches in `storage`). */
+static int fs_scene_record(asx_forced_schedule *schedule, asx_forced_dispatch *storage) {
+    fs_scene sc;
+    asx_budget budget = asx_budget_from_polls(100);
+
+    if (fs_scene_build(&sc) != ASX_OK) return 0;
+    if (asx_lab_start_forced_schedule_recording(storage, 8u) != ASX_OK) return 0;
+    if (asx_scheduler_run(sc.region, &budget) != ASX_OK) return 0;
+    if (strcmp(g_order, "BCAB") != 0) return 0;
+    return asx_lab_finish_forced_schedule_recording(UINT64_C(0xC0FFEE), 1, schedule) == ASX_OK;
+}
+
+TEST(forced_schedule_recording_captures_rust_arena_ids_and_the_running_certificate) {
+    asx_forced_dispatch d[8];
+    asx_forced_schedule s;
+
+    ASSERT_TRUE(fs_scene_record(&s, d));
+    ASSERT_EQ(s.dispatch_count, 4u);
+    ASSERT_EQ(s.seed, (uint64_t)42u);
+    ASSERT_EQ(s.config_hash, (uint64_t)0xC0FFEEu);
+    ASSERT_EQ(s.terminal_steps, (uint64_t)4u);
+    ASSERT_EQ(s.terminal_nanos, (uint64_t)0u);
+    ASSERT_EQ(s.terminal_quiescent, (uint8_t)1u);
+    ASSERT_EQ(s.terminal_schedule_hash, asx_forced_schedule_certificate(d, 4u));
+    ASSERT_EQ(s.terminal_schedule_hash, asx_scheduler_schedule_certificate());
+    ASSERT_EQ(asx_scheduler_schedule_decisions(), (uint64_t)4u);
+    /* B, C, A, B: arena indices 1, 2, 0, 1 (generation 0) */
+    ASSERT_EQ(d[0].task, (uint64_t)1u << 32);
+    ASSERT_EQ(d[1].task, (uint64_t)2u << 32);
+    ASSERT_EQ(d[2].task, (uint64_t)0u);
+    ASSERT_EQ(d[3].task, (uint64_t)1u << 32);
+    ASSERT_EQ(d[0].at_step, (uint64_t)1u);
+    ASSERT_EQ(d[3].at_step, (uint64_t)4u);
+    ASSERT_EQ(d[0].lane, (uint8_t)ASX_FORCED_LANE_READY);
+    ASSERT_EQ(asx_forced_schedule_validate(&s, NULL), ASX_OK);
+}
+
+/* The certificate folds at every pick whether or not anything records. */
+TEST(schedule_certificate_folds_without_a_recorder) {
+    fs_scene sc;
+    asx_budget budget = asx_budget_from_polls(100);
+    asx_forced_dispatch want[4];
+    uint32_t i;
+
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_scheduler_schedule_certificate(), (uint64_t)0u);
+    ASSERT_EQ(asx_scheduler_schedule_decisions(), (uint64_t)0u);
+    ASSERT_EQ(asx_scheduler_run(sc.region, &budget), ASX_OK);
+    ASSERT_EQ(strcmp(g_order, "BCAB"), 0);
+
+    /* B, C, A, B: arena indices 1, 2, 0, 1 on the ready lane, steps 1..4 */
+    memset(want, 0, sizeof(want));
+    want[0].task = (uint64_t)1u << 32;
+    want[1].task = (uint64_t)2u << 32;
+    want[2].task = 0u;
+    want[3].task = (uint64_t)1u << 32;
+    for (i = 0u; i < 4u; i++) {
+        want[i].lane = ASX_FORCED_LANE_READY;
+        want[i].at_step = (uint64_t)(i + 1u);
+    }
+    ASSERT_EQ(asx_scheduler_schedule_decisions(), (uint64_t)4u);
+    ASSERT_EQ(asx_scheduler_schedule_certificate(), asx_forced_schedule_certificate(want, 4u));
+
+    /* A new lab starts the count over. */
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_scheduler_schedule_certificate(), (uint64_t)0u);
+    ASSERT_EQ(asx_scheduler_schedule_decisions(), (uint64_t)0u);
+}
+
+/* Rust's arena hands a completed task's index to the next task with the
+ * generation advanced; the recorded id carries that, not the C slot's. */
+TEST(forced_schedule_recording_follows_rust_arena_index_reuse) {
+    asx_forced_dispatch d[4];
+    asx_forced_schedule s;
+    asx_region_id r;
+    asx_task_id t;
+    asx_budget budget = asx_budget_from_polls(20);
+    probe a = {'a', 0u, 0};
+    probe b = {'b', 0u, 0};
+
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_scheduler_use_lab_dispatch(42u), ASX_OK);
+    ASSERT_EQ(asx_lab_start_forced_schedule_recording(d, 4u), ASX_OK);
+    ASSERT_EQ(asx_region_open(&r), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_probe, &a, &t), ASX_OK);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(asx_task_spawn(r, poll_probe, &b, &t), ASX_OK);
+    budget = asx_budget_from_polls(20);
+    ASSERT_EQ(asx_scheduler_run(r, &budget), ASX_OK);
+    ASSERT_EQ(asx_lab_finish_forced_schedule_recording(0u, 1, &s), ASX_OK);
+    ASSERT_EQ(s.dispatch_count, 2u);
+    ASSERT_EQ(d[0].task, (uint64_t)0u);      /* index 0, generation 0 */
+    ASSERT_EQ(d[1].task, (uint64_t)0u | 1u); /* index 0 again, generation 1 */
+}
+
+TEST(forced_schedule_recording_refuses_misuse_and_overflow) {
+    asx_forced_dispatch d[2];
+    asx_forced_schedule s;
+    fs_scene sc;
+    asx_budget budget = asx_budget_from_polls(100);
+
+    /* off without the lab dispatcher */
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_lab_start_forced_schedule_recording(d, 2u), ASX_E_INVALID_STATE);
+
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_start_forced_schedule_recording(NULL, 2u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_lab_start_forced_schedule_recording(d, 0u), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(asx_lab_finish_forced_schedule_recording(0u, 1, &s), ASX_E_INVALID_STATE);
+    ASSERT_EQ(asx_lab_start_forced_schedule_recording(d, 2u), ASX_OK);
+    ASSERT_EQ(asx_lab_start_forced_schedule_recording(d, 2u), ASX_E_INVALID_STATE);
+
+    /* four dispatches into two entries: no partial receipt */
+    ASSERT_EQ(asx_scheduler_run(sc.region, &budget), ASX_OK);
+    ASSERT_EQ(asx_lab_finish_forced_schedule_recording(0u, 1, &s), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_lab_finish_forced_schedule_recording(0u, 1, &s), ASX_E_INVALID_STATE);
+
+    /* recording must start before the first step */
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    budget = asx_budget_from_polls(1);
+    ASSERT_EQ(asx_scheduler_run(sc.region, &budget), ASX_E_POLL_BUDGET_EXHAUSTED);
+    ASSERT_EQ(asx_lab_start_forced_schedule_recording(d, 2u), ASX_E_INVALID_STATE);
+}
+
+TEST(forced_schedule_replays_the_recorded_run_exactly) {
+    asx_forced_dispatch d[8];
+    asx_forced_schedule s;
+    asx_forced_error err;
+    asx_forced_report rep;
+    fs_scene sc;
+
+    ASSERT_TRUE(fs_scene_record(&s, d));
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    memset(&rep, 0, sizeof(rep));
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_OK);
+    ASSERT_EQ(strcmp(g_order, "BCAB"), 0);
+    ASSERT_EQ(rep.dispatches, 4u);
+    ASSERT_EQ(rep.steps, (uint64_t)4u);
+    ASSERT_EQ(rep.schedule_hash, s.terminal_schedule_hash);
+}
+
+/* The schedule, not the seeded picker, chooses: the same seed draws "BCAB",
+ * a schedule that swaps the first and third dispatches runs "ACBB" (its
+ * own certificate, recomputed) and succeeds. */
+TEST(forced_schedule_overrides_the_seeded_pick) {
+    asx_forced_dispatch d[8];
+    asx_forced_schedule s;
+    asx_forced_error err;
+    asx_forced_report rep;
+    fs_scene sc;
+    uint64_t t0;
+
+    ASSERT_TRUE(fs_scene_record(&s, d));
+    t0 = d[0].task;
+    d[0].task = d[2].task; /* A first */
+    d[2].task = t0;        /* B's first poll third */
+    s.terminal_schedule_hash = asx_forced_schedule_certificate(d, 4u);
+
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    memset(&rep, 0, sizeof(rep));
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_OK);
+    ASSERT_EQ(strcmp(g_order, "ACBB"), 0);
+    ASSERT_EQ(rep.dispatches, 4u);
+    ASSERT_EQ(rep.schedule_hash, s.terminal_schedule_hash);
+}
+
+static asx_status fs_resolve_table(void *ctx, uint64_t compact, asx_task_id *out) {
+    const fs_scene *sc = (const fs_scene *)ctx;
+
+    if (compact == ((uint64_t)40u << 32))
+        *out = sc->tb;
+    else if (compact == ((uint64_t)41u << 32))
+        *out = sc->tc;
+    else if (compact == ((uint64_t)42u << 32))
+        *out = sc->ta;
+    else
+        return ASX_E_NOT_FOUND;
+    return ASX_OK;
+}
+
+/* Task ids a schedule names need not be this run's arena slots: a resolver
+ * maps them (the harness maps Rust ids to tasks by name). */
+TEST(forced_schedule_resolver_maps_recorded_task_ids) {
+    asx_forced_dispatch d[8];
+    asx_forced_schedule s;
+    asx_forced_error err;
+    asx_forced_report rep;
+    asx_forced_run_config cfg;
+    fs_scene sc;
+
+    ASSERT_TRUE(fs_scene_record(&s, d));
+    /* B, C, A, B under invented ids 40 (B), 41 (C), 42 (A) */
+    d[0].task = (uint64_t)40u << 32;
+    d[1].task = (uint64_t)41u << 32;
+    d[2].task = (uint64_t)42u << 32;
+    d[3].task = (uint64_t)40u << 32;
+    s.terminal_schedule_hash = asx_forced_schedule_certificate(d, 4u);
+
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.resolve = fs_resolve_table;
+    cfg.resolve_ctx = &sc;
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, &cfg, &rep, &err), ASX_OK);
+    ASSERT_EQ(strcmp(g_order, "BCAB"), 0);
+
+    /* An id the resolver does not know is a task that is not runnable. */
+    d[1].task = (uint64_t)99u << 32;
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    cfg.resolve_ctx = &sc;
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, &cfg, &rep, &err), ASX_E_REPLAY_MISMATCH);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_TASK_UNAVAILABLE);
+    ASSERT_EQ(err.index, 1u);
+    ASSERT_EQ(err.step, (uint64_t)2u);
+}
+
+/* Each divergence ends the run at its own step, with that step's task left
+ * unpolled (g_order holds only what ran before it). */
+TEST(forced_schedule_divergences_report_their_step_and_leave_the_task_unpolled) {
+    asx_forced_dispatch d[8];
+    asx_forced_dispatch keep[8];
+    asx_forced_schedule s;
+    asx_forced_schedule base;
+    asx_forced_error err;
+    asx_forced_report rep;
+    fs_scene sc;
+    asx_forced_run_config cfg;
+    uint32_t i;
+
+    ASSERT_TRUE(fs_scene_record(&base, keep));
+    ASSERT_EQ(base.dispatch_count, 4u);
+
+    /* the recorded task is not runnable at step 2 */
+    memcpy(d, keep, sizeof(keep));
+    s = base;
+    s.dispatches = d;
+    d[1].task = (uint64_t)(ASX_MAX_TASKS - 1u) << 32; /* never spawned */
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_E_REPLAY_MISMATCH);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_TASK_UNAVAILABLE);
+    ASSERT_EQ(err.index, 1u);
+    ASSERT_EQ(err.step, (uint64_t)2u);
+    ASSERT_EQ(strcmp(g_order, "B"), 0);
+
+    /* runnable, but in the ready lane, not the cancel lane */
+    memcpy(d, keep, sizeof(keep));
+    d[0].lane = ASX_FORCED_LANE_CANCEL;
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_E_REPLAY_MISMATCH);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_LANE_MISMATCH);
+    ASSERT_EQ(err.index, 0u);
+    ASSERT_EQ(err.step, (uint64_t)1u);
+    ASSERT_EQ(g_order_n, 0u);
+
+    /* the timed and stolen lanes are not modelled by asx's lab */
+    memcpy(d, keep, sizeof(keep));
+    d[0].lane = ASX_FORCED_LANE_TIMED;
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_E_REPLAY_MISMATCH);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_LANE_UNSUPPORTED);
+    ASSERT_EQ(g_order_n, 0u);
+
+    /* one worker only */
+    memcpy(d, keep, sizeof(keep));
+    d[2].worker = 1u;
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_E_REPLAY_MISMATCH);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_WORKER_MISMATCH);
+    ASSERT_EQ(err.index, 2u);
+    ASSERT_EQ(err.step, (uint64_t)3u);
+
+    /* work is runnable before the first recorded step */
+    memcpy(d, keep, sizeof(keep));
+    for (i = 0u; i < 4u; i++) d[i].at_step += 2u;
+    s.terminal_steps = base.terminal_steps + 2u;
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_E_REPLAY_MISMATCH);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_EARLY_RUNNABLE);
+    ASSERT_EQ(err.index, 0u);
+    ASSERT_EQ(err.step, (uint64_t)1u);
+    ASSERT_EQ(err.expected, (uint64_t)3u);
+    ASSERT_EQ(g_order_n, 0u);
+    s.terminal_steps = base.terminal_steps;
+
+    /* the recorded virtual time is not the clock's */
+    memcpy(d, keep, sizeof(keep));
+    for (i = 0u; i < 4u; i++) d[i].at_nanos = 99u;
+    s.terminal_nanos = 99u;
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_E_REPLAY_MISMATCH);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_TIME_MISMATCH);
+    ASSERT_EQ(err.expected, (uint64_t)99u);
+    ASSERT_EQ(err.actual, (uint64_t)0u);
+    s.terminal_nanos = base.terminal_nanos;
+
+    /* work left after the last recorded dispatch */
+    memcpy(d, keep, sizeof(keep));
+    s.dispatch_count = 3u;
+    s.terminal_steps = 3u;
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_E_REPLAY_MISMATCH);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_SCHEDULE_EXHAUSTED);
+    ASSERT_EQ(err.index, 3u);          /* consumed */
+    ASSERT_EQ(err.step, (uint64_t)3u); /* the receipt's terminal step */
+    ASSERT_EQ(strcmp(g_order, "BCA"), 0);
+    s.dispatch_count = 4u;
+    s.terminal_steps = base.terminal_steps;
+
+    /* exact, but the run ends at another step than the receipt says */
+    s.terminal_steps = 9u;
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_E_REPLAY_MISMATCH);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_TERMINAL_MISMATCH);
+    ASSERT_EQ(err.expected, (uint64_t)9u);
+    ASSERT_EQ(err.actual, (uint64_t)4u);
+    s.terminal_steps = base.terminal_steps;
+
+    /* exact, but the receipt's schedule hash is not the run's */
+    s.terminal_schedule_hash ^= 1u;
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_E_REPLAY_MISMATCH);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_CERTIFICATE_MISMATCH);
+    ASSERT_EQ(err.expected, base.terminal_schedule_hash ^ 1u);
+    ASSERT_EQ(err.actual, base.terminal_schedule_hash);
+    s.terminal_schedule_hash = base.terminal_schedule_hash;
+
+    /* the caller's step limit */
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.max_steps = 2u;
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, &cfg, &rep, &err), ASX_E_REPLAY_MISMATCH);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_WORK_LIMIT);
+    ASSERT_EQ(strcmp(g_order, "BC"), 0);
+}
+
+TEST(forced_schedule_refuses_a_run_that_is_not_pristine_or_has_another_seed) {
+    asx_forced_dispatch d[8];
+    asx_forced_schedule s;
+    asx_forced_error err;
+    asx_forced_report rep;
+    fs_scene sc;
+
+    ASSERT_TRUE(fs_scene_record(&s, d));
+
+    /* another seed: the schedule is not for this run, nothing polls */
+    s.seed = 7u;
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_SEED_MISMATCH);
+    ASSERT_EQ(g_order_n, 0u);
+    s.seed = 42u;
+
+    /* a second replay on a run that already stepped */
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_E_INVALID_STATE);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_NOT_PRISTINE);
+
+    /* the seeded dispatcher is off */
+    ASSERT_EQ(setup(), ASX_OK);
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, ASX_INVALID_ID, NULL, &rep, &err),
+              ASX_E_INVALID_STATE);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_NOT_PRISTINE);
+
+    /* a malformed schedule is refused before anything runs */
+    ASSERT_EQ(asx_lab_run_forced_schedule(NULL, ASX_INVALID_ID, NULL, &rep, &err),
+              ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(fs_scene_build(&sc), ASX_OK);
+    s.truncated = 1u;
+    ASSERT_EQ(asx_lab_run_forced_schedule(&s, sc.region, NULL, &rep, &err), ASX_E_INVALID_ARGUMENT);
+    ASSERT_EQ(err.kind, ASX_FORCED_E_PARTIAL_SOURCE);
+    ASSERT_EQ(g_order_n, 0u);
+}
+
 int main(void) {
     fprintf(stderr, "=== test_lab_dispatch ===\n");
     RUN_TEST(rng_replicates_rust_xorshift64);
@@ -1382,6 +2155,19 @@ int main(void) {
     RUN_TEST(deferred_cleanup_admission_preserves_finalizing_quota_exception);
     RUN_TEST(admission_status_of_a_bad_handle_is_a_lookup_error);
     RUN_TEST(use_lab_dispatch_requires_no_live_task);
+    RUN_TEST(forced_schedule_decodes_rust_recorded_artifacts_and_reproduces_their_certificate);
+    RUN_TEST(forced_schedule_decoded_dispatch_fields_match_the_recorded_run);
+    RUN_TEST(forced_schedule_decode_refuses_what_rust_refuses);
+    RUN_TEST(forced_schedule_encode_refuses_partial_and_bad_input_and_sizes_its_output);
+    RUN_TEST(forced_schedule_recording_captures_rust_arena_ids_and_the_running_certificate);
+    RUN_TEST(schedule_certificate_folds_without_a_recorder);
+    RUN_TEST(forced_schedule_recording_follows_rust_arena_index_reuse);
+    RUN_TEST(forced_schedule_recording_refuses_misuse_and_overflow);
+    RUN_TEST(forced_schedule_replays_the_recorded_run_exactly);
+    RUN_TEST(forced_schedule_overrides_the_seeded_pick);
+    RUN_TEST(forced_schedule_resolver_maps_recorded_task_ids);
+    RUN_TEST(forced_schedule_divergences_report_their_step_and_leave_the_task_unpolled);
+    RUN_TEST(forced_schedule_refuses_a_run_that_is_not_pristine_or_has_another_seed);
 
     TEST_REPORT();
     return test_failures;

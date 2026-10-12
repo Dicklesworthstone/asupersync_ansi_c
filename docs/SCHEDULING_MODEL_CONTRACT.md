@@ -354,5 +354,32 @@ state.rs:7811-7830). The order is that of the cancel lane entries and the
      twin_run writes Rust's forced-schedule dispatches into each fixture
      (`schedule.dispatches`), and `asx-conformance compare` requires the
      two to match.
-   - Still open: Rust's `ScheduleCertificate` hash is not computed in C,
-     and no forced schedule is replayed across engines.
+   - Done (bd-9kll.9.3): Rust's `ScheduleCertificate` hash is computed in C
+     (`asx_forced_schedule_certificate`, the DetHasher fold of
+     priority.rs:1303-1315) and reproduces each recorded fixture's
+     `schedule.certificate_hash`. The canonical `ForcedSchedule` bytes
+     (lab/runtime.rs:364-405) are encoded and strictly decoded in C
+     (`asx_forced_schedule_encode` / `_decode`, SHA-256 bound), and
+     `asx_lab_run_forced_schedule` replays one on the lab dispatcher: the
+     recorded task is removed from its recorded lane before it is polled,
+     and a task that is not runnable, another lane, early work, a clock or
+     step off, or work after the last dispatch is a divergence reported
+     with its step and dispatch index (the `ForcedScheduleError` set of
+     lab/runtime.rs:728-1010). `config_hash` is Rust's LabConfig hash and
+     is carried, not checked. Task ids are Rust's CompactTaskId: the lab
+     dispatcher's arena shadow (`lab_rust_index` / `lab_rust_gen`, the
+     index reuse and generation bump of Rust's arena) names them, captured
+     at the pick (a retired task a cancel waker scheduled keeps its id in
+     its `lab_retired` record), and a replay finds the C task by that id
+     or through a caller resolver.
+   - The certificate folds at every pick, recorder or not
+     (`asx_scheduler_schedule_certificate` / `_decisions`);
+     `asx_lab_start_forced_schedule_recording` /
+     `_finish_forced_schedule_recording` are Rust's
+     start/finish_forced_schedule_recording (capture with Rust ids,
+     bind to the terminal step, clock and certificate).
+   - Still open: wiring a Rust-recorded schedule into the conformance
+     interpreter (name to task mapping, the resolver) and the C-to-Rust
+     direction, which needs twin_run to replay a C-recorded schedule with
+     `run_forced_schedule`. The timed and stolen lanes and more than one
+     worker are not modelled by asx's lab and are refused.

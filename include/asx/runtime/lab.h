@@ -34,6 +34,7 @@
 #include <asx/core/budget.h>
 #include <asx/core/outcome.h>
 #include <asx/runtime/rt.h>
+#include <asx/runtime/runtime.h>
 
 #if !defined(ASX_PROFILE_BROWSER) || ASX_HAS_BROWSER_TRACE ||                                      \
     defined(ASX_INTERNAL_TRACE_FAMILY_ACCESS)
@@ -204,6 +205,217 @@ ASX_API uint64_t asx_lab_random_u64(asx_lab *lab);
 
 /* Open a new region within the lab runtime context. */
 ASX_API ASX_MUST_USE asx_status asx_lab_open_region(asx_lab *lab, asx_region_id *out_id);
+
+/* -------------------------------------------------------------------
+ * Forced schedules (Rust ForcedSchedule, lab/runtime.rs, bd-9kll.9.3)
+ *
+ * A forced schedule is the exact dispatch projection of one lab run: for
+ * every step that polled a task, the task, its worker, its lane, the lab
+ * step and the virtual time, then the terminal step, time and schedule
+ * certificate. Rust writes it (finish_forced_schedule_recording) and
+ * replays it (run_forced_schedule); twin_run stores Rust's in each
+ * fixture's `schedule.forced_schedule`. asx reads and writes the same
+ * canonical bytes and replays one on its own lab dispatcher.
+ *
+ * Canonical bytes (little-endian, fixed width):
+ *   header   40: "ASUPFSC\0", u32 artifact version (1), u32 schema (1),
+ *                u64 seed, u64 config hash, u64 dispatch count
+ *   dispatch 29: u64 task, u32 worker, u8 lane, u64 at_step, u64 at_nanos
+ *   terminal 26: u64 steps, u64 nanos, u64 schedule hash,
+ *                u8 quiescent, u8 truncated
+ *   checksum 32: SHA-256 of "asupersync.lab.forced-schedule.artifact.v1\0"
+ *                followed by every byte before the checksum
+ * A task is Rust's CompactTaskId: (arena index << 32) | generation.
+ * ------------------------------------------------------------------- */
+
+#define ASX_FORCED_SCHEDULE_ARTIFACT_VERSION 1u
+#define ASX_FORCED_SCHEDULE_SCHEMA_VERSION 1u
+#define ASX_FORCED_SCHEDULE_HEADER_BYTES 40u
+#define ASX_FORCED_SCHEDULE_DISPATCH_BYTES 29u
+#define ASX_FORCED_SCHEDULE_TERMINAL_BYTES 26u
+#define ASX_FORCED_SCHEDULE_CHECKSUM_BYTES 32u
+
+/* Lane tags, as Rust's DispatchLane and asx_dispatch_record.lane. The C
+ * lab dispatcher feeds only the cancel and ready lanes (Rust's lab never
+ * feeds the timed lane at the pinned rev; Stolen needs more than one
+ * worker). */
+#define ASX_FORCED_LANE_CANCEL 0u
+#define ASX_FORCED_LANE_TIMED 1u
+#define ASX_FORCED_LANE_READY 2u
+#define ASX_FORCED_LANE_STOLEN 3u
+
+typedef struct {
+    uint64_t task; /* CompactTaskId: (arena index << 32) | generation */
+    uint32_t worker;
+    uint8_t lane; /* ASX_FORCED_LANE_* */
+    uint64_t at_step;
+    uint64_t at_nanos;
+} asx_forced_dispatch;
+
+typedef struct {
+    uint32_t version; /* schema, ASX_FORCED_SCHEDULE_SCHEMA_VERSION */
+    uint64_t seed;
+    uint64_t config_hash; /* Rust's LabConfig hash; carried, not checked by asx */
+    const asx_forced_dispatch *dispatches;
+    uint32_t dispatch_count;
+    uint64_t terminal_steps;
+    uint64_t terminal_nanos;
+    uint64_t terminal_schedule_hash;
+    uint8_t terminal_quiescent;
+    uint8_t truncated;
+} asx_forced_schedule;
+
+/* Why a schedule was refused to decode or encode, or where a replay
+ * diverged. `index` is the dispatch index, `step` the lab step (replay),
+ * `expected` and `actual` the values that differed (steps, times, hashes,
+ * counts, tags) when there are two. */
+typedef enum {
+    ASX_FORCED_OK = 0,
+    /* artifact */
+    ASX_FORCED_E_TRUNCATED,        /* fewer bytes than the shape needs */
+    ASX_FORCED_E_MAGIC,            /* not a forced-schedule artifact */
+    ASX_FORCED_E_ARTIFACT_VERSION, /* codec version unsupported */
+    ASX_FORCED_E_SCHEMA_VERSION,   /* projection schema unsupported */
+    ASX_FORCED_E_BYTE_LIMIT,       /* longer than the caller's limit */
+    ASX_FORCED_E_DISPATCH_LIMIT,   /* more dispatches than limit or storage */
+    ASX_FORCED_E_TRAILING_BYTES,   /* bytes beyond the checksum */
+    ASX_FORCED_E_CHECKSUM,         /* SHA-256 binding does not match */
+    ASX_FORCED_E_LANE_TAG,         /* unknown lane tag */
+    ASX_FORCED_E_BOOL_TAG,         /* a flag byte is not 0 or 1 */
+    ASX_FORCED_E_STEP_ORDER,       /* steps not strictly increasing from 1 */
+    ASX_FORCED_E_TIME_ORDER,       /* virtual time moved backwards */
+    ASX_FORCED_E_PARTIAL_SOURCE,   /* truncated or not quiescent, or ends past terminal */
+    /* replay */
+    ASX_FORCED_E_SEED_MISMATCH,       /* run seed differs from the schedule's */
+    ASX_FORCED_E_NOT_PRISTINE,        /* the lab already took steps */
+    ASX_FORCED_E_WORK_LIMIT,          /* step limit reached before the end */
+    ASX_FORCED_E_EARLY_RUNNABLE,      /* work was runnable before the next recorded step */
+    ASX_FORCED_E_STEP_MISMATCH,       /* the run passed the next recorded step */
+    ASX_FORCED_E_TIME_MISMATCH,       /* the clock differs from the recorded time */
+    ASX_FORCED_E_TASK_UNAVAILABLE,    /* the recorded task is not runnable at that step */
+    ASX_FORCED_E_LANE_MISMATCH,       /* runnable, but in another lane */
+    ASX_FORCED_E_LANE_UNSUPPORTED,    /* timed or stolen lane: not modelled by asx's lab */
+    ASX_FORCED_E_WORKER_MISMATCH,     /* asx's lab models one worker (0) */
+    ASX_FORCED_E_SCHEDULE_EXHAUSTED,  /* work left after the last recorded dispatch */
+    ASX_FORCED_E_TERMINAL_MISMATCH,   /* run ended at another step or time */
+    ASX_FORCED_E_CERTIFICATE_MISMATCH /* run's schedule hash differs */
+} asx_forced_error_kind;
+
+typedef struct {
+    asx_forced_error_kind kind;
+    uint32_t index;
+    uint64_t step;
+    uint64_t expected;
+    uint64_t actual;
+} asx_forced_error;
+
+typedef struct {
+    size_t max_encoded_bytes;
+    uint32_t max_dispatches;
+} asx_forced_decode_limits;
+
+/* Encoded size in bytes of a schedule with `dispatch_count` dispatches. */
+ASX_API size_t asx_forced_schedule_encoded_size(uint32_t dispatch_count);
+
+/* Rust ScheduleCertificate (runtime/scheduler/priority.rs): fold one
+ * dispatch into the running hash (start from 0). The hash is DetHasher::
+ * for_lab over (previous hash, arena index, generation, lane, step). */
+ASX_API uint64_t asx_forced_schedule_certificate_step(uint64_t previous, uint64_t compact_task,
+                                                      uint8_t lane, uint64_t step);
+
+/* The certificate over `count` dispatches in order. */
+ASX_API uint64_t asx_forced_schedule_certificate(const asx_forced_dispatch *dispatches,
+                                                 uint32_t count);
+
+/* Check a schedule's shape as Rust's validate_complete_forced_schedule_shape
+ * does: schema version, complete (not truncated, quiescent), strictly
+ * increasing steps and non-decreasing time, ending at or before the
+ * terminal step and time. ASX_OK, or ASX_E_INVALID_ARGUMENT with *err. */
+ASX_API ASX_MUST_USE asx_status asx_forced_schedule_validate(const asx_forced_schedule *schedule,
+                                                             asx_forced_error *err);
+
+/* Encode a complete schedule into `out` (capacity `cap`); *out_len is the
+ * size written, or needed when ASX_E_BUFFER_TOO_SMALL. */
+ASX_API ASX_MUST_USE asx_status asx_forced_schedule_encode(const asx_forced_schedule *schedule,
+                                                           uint8_t *out, size_t cap,
+                                                           size_t *out_len, asx_forced_error *err);
+
+/* Decode and strictly validate canonical bytes. The dispatches go into
+ * `storage` (capacity `storage_cap`), which `out->dispatches` then points
+ * to. Everything Rust's try_from_canonical_bytes refuses is refused, in
+ * the same order: length and limits before any dispatch is read, then
+ * checksum, lane and flag tags, ordering and completeness. ASX_OK, or
+ * ASX_E_INVALID_ARGUMENT with *err describing the first problem. */
+ASX_API ASX_MUST_USE asx_status asx_forced_schedule_decode(const uint8_t *bytes, size_t len,
+                                                           const asx_forced_decode_limits *limits,
+                                                           asx_forced_dispatch *storage,
+                                                           uint32_t storage_cap,
+                                                           asx_forced_schedule *out,
+                                                           asx_forced_error *err);
+
+/* Rust's ScheduleCertificate of the lab run so far, and how many
+ * dispatches it folds (0 and 0 before the first). Folded at every pick of
+ * the lab dispatcher (asx_scheduler_use_lab_dispatch), whether or not
+ * anything records; the same value Rust reports as `certificate_hash`
+ * and `decisions` for the same schedule. */
+ASX_API uint64_t asx_scheduler_schedule_certificate(void);
+ASX_API uint64_t asx_scheduler_schedule_decisions(void);
+
+/* Rust's start_forced_schedule_recording / finish_forced_schedule_recording
+ * (lab/runtime.rs:2618-2683). Start (after asx_scheduler_use_lab_dispatch,
+ * before the first step) captures every later dispatch, with the task's
+ * Rust arena id, into storage[0 .. capacity); finish binds the capture to
+ * the run's seed, terminal step, clock and certificate in *out, whose
+ * dispatches point at `storage`. `config_hash` is the caller's (Rust's is
+ * a LabConfig hash) and `quiescent` whether the run ended quiescent; a
+ * schedule that did not has no canonical bytes.
+ * ASX_E_INVALID_STATE when the lab dispatcher is off, already recording,
+ * or already stepped (start) or not recording (finish);
+ * ASX_E_RESOURCE_EXHAUSTED at finish when the run had more dispatches than
+ * `capacity` (Rust refuses a partial receipt too). */
+ASX_API ASX_MUST_USE asx_status
+asx_lab_start_forced_schedule_recording(asx_forced_dispatch *storage, uint32_t capacity);
+ASX_API ASX_MUST_USE asx_status asx_lab_finish_forced_schedule_recording(uint64_t config_hash,
+                                                                         int quiescent,
+                                                                         asx_forced_schedule *out);
+
+typedef struct {
+    uint32_t dispatches;     /* recorded dispatches consumed */
+    uint64_t steps;          /* lab steps taken */
+    uint64_t terminal_nanos; /* virtual time at the end */
+    uint64_t schedule_hash;  /* the run's certificate */
+} asx_forced_report;
+
+typedef struct {
+    /* Step limit for the run (0: the schedule's terminal step). */
+    uint64_t max_steps;
+    /* Maps a recorded task id to the task that plays it in this run, or
+     * NULL: the live task whose Rust arena id (the lab dispatcher keeps
+     * Rust's arena index and generation for every task) is the recorded
+     * one, or a retired task a cancel waker scheduled. */
+    asx_status (*resolve)(void *ctx, uint64_t compact_task, asx_task_id *out);
+    void *resolve_ctx;
+} asx_forced_run_config;
+
+/* Run the region's subtree on the lab dispatcher (asx_scheduler_use_lab_dispatch
+ * already called with the schedule's seed, nothing stepped yet), taking
+ * each step's task from the schedule instead of from the seeded picker:
+ * the recorded task is removed from its recorded lane before it is polled,
+ * and anything else (the task not runnable, in another lane, runnable work
+ * before or after the recorded dispatches, the clock or step off) is a
+ * divergence reported with its step and dispatch index, with the
+ * mismatching task left unpolled. At the end the step, time and
+ * certificate must equal the schedule's terminal receipt.
+ *
+ * ASX_OK on an exact replay; ASX_E_REPLAY_MISMATCH on a divergence;
+ * ASX_E_INVALID_ARGUMENT for a malformed schedule; ASX_E_INVALID_STATE
+ * when the lab dispatcher is off or has already stepped. *err (if
+ * non-NULL) says which; *report (if non-NULL) is set on success. */
+ASX_API ASX_MUST_USE asx_status asx_lab_run_forced_schedule(const asx_forced_schedule *schedule,
+                                                            asx_region_id region,
+                                                            const asx_forced_run_config *config,
+                                                            asx_forced_report *report,
+                                                            asx_forced_error *err);
 
 #ifdef __cplusplus
 }

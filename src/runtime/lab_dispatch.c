@@ -33,6 +33,9 @@
 
 #include "runtime_internal.h"
 #include <asx/core/transition.h>
+#define ASX_INTERNAL_TRACE_FAMILY_ACCESS 1
+#include <asx/runtime/lab.h>
+#undef ASX_INTERNAL_TRACE_FAMILY_ACCESS
 #include <asx/runtime/runtime.h>
 #include <string.h>
 
@@ -194,6 +197,7 @@ static uint32_t g_lab_cached_n = 0;
 typedef struct {
     uint32_t slot;
     uint16_t task_gen;
+    uint64_t rust_task; /* its CompactTaskId, kept past the slot's reuse */
 } lab_retired;
 
 static lab_retired g_lab_retired[LAB_RETIRED_CAP];
@@ -205,6 +209,32 @@ static uint64_t g_lab_steps = 0;
 static asx_dispatch_record *g_lab_rec = NULL;
 static uint32_t g_lab_rec_cap = 0;
 static uint32_t g_lab_rec_n = 0;
+
+/* Forced schedule replay (asx_lab_run_forced_schedule, bd-9kll.9.3): the
+ * seed asx_scheduler_use_lab_dispatch was given, and, while a replay runs,
+ * the schedule, the dispatches consumed, the running certificate, and the
+ * first divergence (kind ASX_FORCED_OK until there is one). */
+static uint64_t g_lab_seed = 0;
+static const asx_forced_schedule *g_lab_forced = NULL;
+static const asx_forced_run_config *g_lab_forced_cfg = NULL;
+static uint32_t g_lab_forced_next = 0;
+static asx_forced_error g_lab_forced_err;
+
+/* Rust's ScheduleCertificate and its decision count (priority.rs:1303),
+ * folded at every pick whether or not anything records; the CompactTaskId
+ * of the task being picked, set by the pick; and the forced-schedule
+ * recorder's buffer (asx_lab_start_forced_schedule_recording). */
+static uint64_t g_lab_cert = 0;
+static uint64_t g_lab_decisions = 0;
+static uint64_t g_lab_pick_task = 0;
+static asx_forced_dispatch *g_lab_frec = NULL;
+static uint32_t g_lab_frec_cap = 0;
+static uint32_t g_lab_frec_n = 0;
+
+/* A task's Rust arena id as Rust's CompactTaskId packs it. */
+static uint64_t lab_compact_task(const asx_task_slot *t) {
+    return ((uint64_t)t->lab_rust_index << 32) | (uint64_t)t->lab_rust_gen;
+}
 
 void asx_lab_dispatch_reset_internal(void) {
     g_lab_active = 0;
@@ -235,6 +265,17 @@ void asx_lab_dispatch_reset_internal(void) {
     g_lab_mailbox_ids = 0;
     g_lab_arena_len = 0;
     g_lab_arena_free = LAB_ARENA_NONE;
+    g_lab_seed = 0;
+    g_lab_forced = NULL;
+    g_lab_forced_cfg = NULL;
+    g_lab_forced_next = 0;
+    memset(&g_lab_forced_err, 0, sizeof(g_lab_forced_err));
+    g_lab_cert = 0;
+    g_lab_decisions = 0;
+    g_lab_pick_task = 0;
+    g_lab_frec = NULL;
+    g_lab_frec_cap = 0;
+    g_lab_frec_n = 0;
 }
 
 /* Insert task `t` into the arena shadow: its Rust index and generation. */
@@ -384,6 +425,20 @@ uint64_t asx_lab_step_begin_internal(void) { return ++g_lab_steps; }
 
 void asx_lab_record_dispatch_internal(uint32_t slot, uint16_t task_gen, int cancel_lane,
                                       uint64_t step, asx_time at) {
+    uint8_t lane = (uint8_t)(cancel_lane ? ASX_DISPATCH_LANE_CANCEL : ASX_DISPATCH_LANE_READY);
+
+    /* certificate.record(task, lane, steps) at the pick (LR:4632). */
+    g_lab_cert = asx_forced_schedule_certificate_step(g_lab_cert, g_lab_pick_task, lane, step);
+    g_lab_decisions++;
+    if (g_lab_frec_n < g_lab_frec_cap) {
+        asx_forced_dispatch *f = &g_lab_frec[g_lab_frec_n];
+        f->task = g_lab_pick_task;
+        f->worker = 0u;
+        f->lane = lane;
+        f->at_step = step;
+        f->at_nanos = (uint64_t)at;
+    }
+    if (g_lab_frec_n < UINT32_MAX) g_lab_frec_n++;
     if (g_lab_rec_n < g_lab_rec_cap) {
         asx_dispatch_record *d = &g_lab_rec[g_lab_rec_n];
         d->task = g_tasks[slot].generation == task_gen
@@ -419,6 +474,7 @@ asx_status asx_scheduler_use_lab_dispatch(uint64_t seed) {
     asx_lab_dispatch_reset_internal();
     g_lab_rng = lab_rng_seed(seed);
     g_lab_ent_seed = seed;
+    g_lab_seed = seed;
     g_lab_active = 1;
     return ASX_OK;
 }
@@ -520,6 +576,8 @@ void asx_lab_schedule_cancel_retired(uint32_t slot, uint16_t task_gen, uint8_t p
         }
         g_lab_retired[g_lab_retired_n].slot = slot;
         g_lab_retired[g_lab_retired_n].task_gen = task_gen;
+        /* Called as the task completes, while its slot still holds it. */
+        g_lab_retired[g_lab_retired_n].rust_task = lab_compact_task(&g_tasks[slot]);
         g_lab_retired_n++;
         g_lab_scheduled++;
     }
@@ -540,6 +598,7 @@ static int lab_retired_take(uint32_t slot, uint16_t task_gen) {
     for (k = 0; k < g_lab_retired_n; k++) {
         ASX_CHECKPOINT_WAIVER("bounded: g_lab_retired_n <= LAB_RETIRED_CAP");
         if (g_lab_retired[k].slot == slot && g_lab_retired[k].task_gen == task_gen) {
+            g_lab_pick_task = g_lab_retired[k].rust_task;
             g_lab_retired[k] = g_lab_retired[--g_lab_retired_n];
             g_lab_scheduled--;
             return 1;
@@ -594,6 +653,7 @@ static int lab_pop(lab_lane *lane, uint64_t r, uint32_t *out_slot, uint16_t *out
         e = lane->e[chosen];
         lab_remove_at(lane, chosen);
         if (lab_entry_live(&e)) {
+            g_lab_pick_task = lab_compact_task(&g_tasks[e.slot]);
             g_tasks[e.slot].lab_scheduled = 0u;
             g_lab_scheduled--;
             *out_slot = e.slot;
@@ -1058,4 +1118,344 @@ void asx_lab_drain_handle_cancels(void) {
         lab_apply_handle_cancel(&batch[i]);
     }
     asx_lab_cancel_batch_end();
+}
+
+/* ------------------------------------------------------------------ */
+/* Forced schedules (bd-9kll.9.3)                                      */
+/*                                                                     */
+/* Rust's run_forced_schedule (LR:2685, step_inner LR:4535-4605) takes  */
+/* each step's task from a recorded dispatch instead of the seeded      */
+/* picker: removed from the recorded lane, then polled. The RNG is      */
+/* still drawn each step (the caller does), but never consulted. Any    */
+/* mismatch ends the run with the task unpolled.                        */
+/* ------------------------------------------------------------------ */
+
+static int lab_retired_has(uint32_t slot, uint16_t task_gen) {
+    uint32_t k;
+    for (k = 0; k < g_lab_retired_n; k++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_lab_retired_n <= LAB_RETIRED_CAP");
+        if (g_lab_retired[k].slot == slot && g_lab_retired[k].task_gen == task_gen) return 1;
+    }
+    return 0;
+}
+
+/* The entry would be a pick: its task is scheduled, or it names a retired
+ * task still in the scheduled set. */
+static int lab_entry_runnable(const lab_entry *e) {
+    return lab_entry_live(e) || lab_retired_has(e->slot, e->task_gen);
+}
+
+static int lab_lane_runnable(const lab_lane *lane) {
+    uint32_t k;
+    for (k = 0; k < lane->n; k++) {
+        ASX_CHECKPOINT_WAIVER("bounded: lane length <= LAB_LANE_CAP");
+        if (lab_entry_runnable(&lane->e[k])) return 1;
+    }
+    return 0;
+}
+
+static int lab_lane_holds(const lab_lane *lane, uint32_t slot, uint16_t task_gen) {
+    uint32_t k;
+    for (k = 0; k < lane->n; k++) {
+        ASX_CHECKPOINT_WAIVER("bounded: lane length <= LAB_LANE_CAP");
+        if (lane->e[k].slot == slot && lane->e[k].task_gen == task_gen &&
+            lab_entry_runnable(&lane->e[k])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Remove the entry for (slot, task_gen) from the lane as a pick would: a
+ * live one leaves the scheduled set, a retired id leaves it as it is
+ * picked. 1 when there was one. */
+static int lab_take_exact(lab_lane *lane, uint32_t slot, uint16_t task_gen) {
+    uint32_t k;
+    for (k = 0; k < lane->n; k++) {
+        ASX_CHECKPOINT_WAIVER("bounded: lane length <= LAB_LANE_CAP");
+        if (lane->e[k].slot != slot || lane->e[k].task_gen != task_gen) continue;
+        if (lab_entry_live(&lane->e[k])) {
+            lab_remove_at(lane, k);
+            g_lab_pick_task = lab_compact_task(&g_tasks[slot]);
+            g_tasks[slot].lab_scheduled = 0u;
+            g_lab_scheduled--;
+            return 1;
+        }
+        if (lab_retired_has(slot, task_gen)) {
+            lab_remove_at(lane, k);
+            (void)lab_retired_take(slot, task_gen);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int asx_lab_forced_active(void) { return g_lab_forced != NULL; }
+
+static asx_status lab_forced_fail(asx_forced_error_kind kind, uint32_t index, uint64_t step,
+                                  uint64_t expected, uint64_t actual) {
+    if (g_lab_forced_err.kind == ASX_FORCED_OK) {
+        g_lab_forced_err.kind = kind;
+        g_lab_forced_err.index = index;
+        g_lab_forced_err.step = step;
+        g_lab_forced_err.expected = expected;
+        g_lab_forced_err.actual = actual;
+    }
+    return ASX_E_REPLAY_MISMATCH;
+}
+
+/* A recorded task id (CompactTaskId) to the slot and generation of the
+ * task that plays it. */
+static int lab_forced_resolve(uint64_t compact, uint32_t *slot, uint16_t *task_gen) {
+    uint32_t i;
+
+    if (g_lab_forced_cfg != NULL && g_lab_forced_cfg->resolve != NULL) {
+        asx_task_id id = ASX_INVALID_ID;
+        if (g_lab_forced_cfg->resolve(g_lab_forced_cfg->resolve_ctx, compact, &id) != ASX_OK) {
+            return 0;
+        }
+        if (!asx_handle_is_valid(id) || asx_handle_type_tag(id) != ASX_TYPE_TASK) return 0;
+        *slot = (uint32_t)asx_handle_slot(id);
+        *task_gen = asx_handle_generation(id);
+        return 1;
+    }
+    /* The lab's arena shadow: a live task by its Rust (index, generation),
+     * else a retired task a cancel waker scheduled. */
+    for (i = 0; i < g_task_count; i++) {
+        const asx_task_slot *t = &g_tasks[i];
+        ASX_CHECKPOINT_WAIVER("bounded: g_task_count <= ASX_MAX_TASKS");
+        if (t->alive && t->lab_rust_live && lab_compact_task(t) == compact) {
+            *slot = i;
+            *task_gen = t->generation;
+            return 1;
+        }
+    }
+    for (i = 0; i < g_lab_retired_n; i++) {
+        ASX_CHECKPOINT_WAIVER("bounded: g_lab_retired_n <= LAB_RETIRED_CAP");
+        if (g_lab_retired[i].rust_task == compact) {
+            *slot = g_lab_retired[i].slot;
+            *task_gen = g_lab_retired[i].task_gen;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The pick of lab step `step` at clock `now` while a schedule is forced:
+ * *out_picked is 1 with the task and lane, or 0 for a step with nothing to
+ * dispatch (the schedule has none due and nothing is runnable). A
+ * divergence is ASX_E_REPLAY_MISMATCH with the task left in its queue; it
+ * stays the answer for every later step. */
+asx_status asx_lab_forced_pick(uint64_t step, asx_time now, uint32_t *out_slot,
+                               uint16_t *out_task_gen, int *out_cancel_lane, int *out_picked) {
+    const asx_forced_schedule *s = g_lab_forced;
+    const asx_forced_dispatch *d;
+    uint32_t index = g_lab_forced_next;
+    uint32_t slot = 0u;
+    uint16_t task_gen = 0u;
+    int cancel;
+    lab_lane *lane;
+    lab_lane *other;
+
+    *out_picked = 0;
+    *out_cancel_lane = 0;
+    if (g_lab_forced_err.kind != ASX_FORCED_OK) return ASX_E_REPLAY_MISMATCH;
+
+    if (index >= s->dispatch_count) {
+        if (lab_lane_runnable(&g_lab_cancel) || lab_lane_runnable(&g_lab_ready)) {
+            return lab_forced_fail(ASX_FORCED_E_SCHEDULE_EXHAUSTED, index, step,
+                                   (uint64_t)s->dispatch_count, (uint64_t)index);
+        }
+        return ASX_OK;
+    }
+    d = &s->dispatches[index];
+
+    if (step < d->at_step) {
+        if (lab_lane_runnable(&g_lab_cancel) || lab_lane_runnable(&g_lab_ready)) {
+            return lab_forced_fail(ASX_FORCED_E_EARLY_RUNNABLE, index, step, d->at_step, step);
+        }
+        return ASX_OK;
+    }
+    if (step > d->at_step) {
+        return lab_forced_fail(ASX_FORCED_E_STEP_MISMATCH, index, step, d->at_step, step);
+    }
+    if ((uint64_t)now != d->at_nanos) {
+        return lab_forced_fail(ASX_FORCED_E_TIME_MISMATCH, index, step, d->at_nanos, (uint64_t)now);
+    }
+    if (d->worker != 0u) {
+        return lab_forced_fail(ASX_FORCED_E_WORKER_MISMATCH, index, step, 0u, (uint64_t)d->worker);
+    }
+    if (d->lane != ASX_FORCED_LANE_CANCEL && d->lane != ASX_FORCED_LANE_READY) {
+        return lab_forced_fail(ASX_FORCED_E_LANE_UNSUPPORTED, index, step, ASX_FORCED_LANE_READY,
+                               (uint64_t)d->lane);
+    }
+    cancel = d->lane == ASX_FORCED_LANE_CANCEL;
+    lane = cancel ? &g_lab_cancel : &g_lab_ready;
+    other = cancel ? &g_lab_ready : &g_lab_cancel;
+    if (!lab_forced_resolve(d->task, &slot, &task_gen)) {
+        return lab_forced_fail(ASX_FORCED_E_TASK_UNAVAILABLE, index, step, d->task, 0u);
+    }
+    if (!lab_take_exact(lane, slot, task_gen)) {
+        if (lab_lane_holds(other, slot, task_gen)) {
+            return lab_forced_fail(ASX_FORCED_E_LANE_MISMATCH, index, step, (uint64_t)d->lane,
+                                   cancel ? ASX_FORCED_LANE_READY : ASX_FORCED_LANE_CANCEL);
+        }
+        return lab_forced_fail(ASX_FORCED_E_TASK_UNAVAILABLE, index, step, d->task, 0u);
+    }
+
+    g_lab_streak = cancel ? g_lab_streak + 1u : 0u;
+    g_lab_forced_next = index + 1u;
+    *out_slot = slot;
+    *out_task_gen = task_gen;
+    *out_cancel_lane = cancel;
+    *out_picked = 1;
+    return ASX_OK;
+}
+
+static asx_time lab_clock_now(void) {
+    asx_time now = 0u;
+    if (asx_runtime_now_ns(&now) != ASX_OK) now = asx_runtime_virtual_now();
+    return now;
+}
+
+uint64_t asx_scheduler_schedule_certificate(void) { return g_lab_cert; }
+
+uint64_t asx_scheduler_schedule_decisions(void) { return g_lab_decisions; }
+
+/* Rust's start_forced_schedule_recording / finish_forced_schedule_recording
+ * (LR:2618-2683): capture each dispatch with the task's Rust arena id, then
+ * bind the capture to the run's terminal step, clock and certificate. */
+asx_status asx_lab_start_forced_schedule_recording(asx_forced_dispatch *storage,
+                                                   uint32_t capacity) {
+    if (storage == NULL || capacity == 0u) return ASX_E_INVALID_ARGUMENT;
+    if (!g_lab_active || g_lab_frec != NULL || g_lab_steps != 0u) return ASX_E_INVALID_STATE;
+    g_lab_frec = storage;
+    g_lab_frec_cap = capacity;
+    g_lab_frec_n = 0u;
+    return ASX_OK;
+}
+
+asx_status asx_lab_finish_forced_schedule_recording(uint64_t config_hash, int quiescent,
+                                                    asx_forced_schedule *out) {
+    uint32_t count;
+
+    if (out == NULL) return ASX_E_INVALID_ARGUMENT;
+    if (g_lab_frec == NULL) return ASX_E_INVALID_STATE;
+    count = g_lab_frec_n;
+    if (count > g_lab_frec_cap) {
+        /* The capture dropped dispatches: Rust refuses a partial receipt. */
+        g_lab_frec = NULL;
+        return ASX_E_RESOURCE_EXHAUSTED;
+    }
+    out->version = ASX_FORCED_SCHEDULE_SCHEMA_VERSION;
+    out->seed = g_lab_seed;
+    out->config_hash = config_hash;
+    out->dispatches = g_lab_frec;
+    out->dispatch_count = count;
+    out->terminal_steps = g_lab_steps;
+    out->terminal_nanos = (uint64_t)lab_clock_now();
+    out->terminal_schedule_hash = g_lab_cert;
+    out->terminal_quiescent = quiescent ? 1u : 0u;
+    out->truncated = 0u;
+    g_lab_frec = NULL;
+    return ASX_OK;
+}
+
+asx_status asx_lab_run_forced_schedule(const asx_forced_schedule *schedule, asx_region_id region,
+                                       const asx_forced_run_config *config,
+                                       asx_forced_report *report, asx_forced_error *err) {
+    asx_forced_error local;
+    asx_forced_error *e = err != NULL ? err : &local;
+    asx_budget budget;
+    asx_status st;
+    uint64_t limit;
+    int caller_limited;
+    uint32_t consumed;
+    uint64_t steps;
+    uint64_t now;
+    int quiescent;
+
+    memset(e, 0, sizeof(*e));
+    if (schedule == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_forced_schedule_validate(schedule, e);
+    if (st != ASX_OK) return st;
+    if (!g_lab_active || g_lab_steps != 0u || g_lab_forced != NULL) {
+        e->kind = ASX_FORCED_E_NOT_PRISTINE;
+        e->expected = 0u;
+        e->actual = g_lab_steps;
+        return ASX_E_INVALID_STATE;
+    }
+    if (g_lab_seed != schedule->seed) {
+        e->kind = ASX_FORCED_E_SEED_MISMATCH;
+        e->expected = g_lab_seed;
+        e->actual = schedule->seed;
+        return ASX_E_INVALID_ARGUMENT;
+    }
+
+    /* Rust steps while steps < terminal_steps, and refuses the work limit
+     * only when it stops the run short of that. The budget counts steps. */
+    caller_limited =
+        config != NULL && config->max_steps != 0u && config->max_steps < schedule->terminal_steps;
+    limit = caller_limited ? config->max_steps : schedule->terminal_steps;
+    if (limit == 0u) limit = 1u;
+    budget = asx_budget_from_polls(limit > (uint64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)limit);
+
+    g_lab_forced = schedule;
+    g_lab_forced_cfg = config;
+    g_lab_forced_next = 0u;
+    memset(&g_lab_forced_err, 0, sizeof(g_lab_forced_err));
+
+    st = asx_scheduler_run(region, &budget);
+
+    consumed = g_lab_forced_next;
+    steps = g_lab_steps;
+    now = (uint64_t)lab_clock_now();
+    quiescent = asx_quiescence_check(region) == ASX_OK;
+    *e = g_lab_forced_err;
+    g_lab_forced = NULL;
+    g_lab_forced_cfg = NULL;
+
+    if (e->kind != ASX_FORCED_OK) return ASX_E_REPLAY_MISMATCH;
+    if (st == ASX_E_POLL_BUDGET_EXHAUSTED) {
+        if (caller_limited) {
+            e->kind = ASX_FORCED_E_WORK_LIMIT;
+            e->step = steps;
+            e->expected = limit;
+            e->actual = steps;
+            return ASX_E_REPLAY_MISMATCH;
+        }
+        /* The receipt's terminal step is reached: the checks below decide
+         * whether the run ended where the receipt says. */
+        st = ASX_OK;
+    }
+    if (st != ASX_OK) return st;
+    if (consumed != schedule->dispatch_count || !quiescent) {
+        e->kind = ASX_FORCED_E_SCHEDULE_EXHAUSTED;
+        e->index = consumed;
+        e->step = steps;
+        e->expected = schedule->dispatch_count;
+        e->actual = consumed;
+        return ASX_E_REPLAY_MISMATCH;
+    }
+    if (steps != schedule->terminal_steps || now != schedule->terminal_nanos) {
+        e->kind = ASX_FORCED_E_TERMINAL_MISMATCH;
+        e->step = steps;
+        e->expected = schedule->terminal_steps;
+        e->actual = steps;
+        return ASX_E_REPLAY_MISMATCH;
+    }
+    if (g_lab_cert != schedule->terminal_schedule_hash) {
+        e->kind = ASX_FORCED_E_CERTIFICATE_MISMATCH;
+        e->step = steps;
+        e->expected = schedule->terminal_schedule_hash;
+        e->actual = g_lab_cert;
+        return ASX_E_REPLAY_MISMATCH;
+    }
+    if (report != NULL) {
+        report->dispatches = consumed;
+        report->steps = steps;
+        report->terminal_nanos = now;
+        report->schedule_hash = g_lab_cert;
+    }
+    return ASX_OK;
 }

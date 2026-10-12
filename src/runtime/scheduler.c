@@ -128,6 +128,17 @@ static void wake_timer_disarm(asx_task_slot *t) {
     (void)asx_timer_cancel(asx_timer_wheel_runtime(), &t->timer);
 }
 
+/* Whether a registration for `deadline` made now is past the wheel's
+ * maximum timer duration and so clamped: the timer fires early, at the
+ * horizon (Rust computes the same at registration, time/sleep.rs:935). */
+static uint8_t timer_past_horizon(asx_time deadline) {
+    asx_time now = sched_now();
+    asx_time end = now > UINT64_MAX - ASX_TIMER_MAX_DURATION_NS
+                       ? UINT64_MAX
+                       : now + ASX_TIMER_MAX_DURATION_NS;
+    return deadline > end ? 1u : 0u;
+}
+
 /* Whether any timer is registered. */
 static int sched_timers_pending(void) {
     return asx_timer_active_count(asx_timer_wheel_runtime()) > 0u;
@@ -168,6 +179,7 @@ static void timer_arm(uint32_t idx, asx_time deadline) {
      * deadline), which the runtime wheel has room for. */
     if (!timer_register(idx, TIMER_KIND_WAKE, deadline, &t->timer)) return;
     t->timer_armed = 1u;
+    t->timer_partial = timer_past_horizon(deadline);
     t->wake_at = deadline;
     t->timer_waker_prio = t->lab_waker_prio;
 }
@@ -291,6 +303,7 @@ void asx_task_sched_init_internal(asx_task_slot *task) {
     task->timer.slot = 0;
     task->timer.generation = 0;
     task->timer_armed = 0;
+    task->timer_partial = 0;
     task->deadline_timer_armed = 0;
     task->deadline_timer_at = 0;
     task->deadline_timer.slot = 0;
@@ -514,18 +527,24 @@ static void sched_trace_sleep_timer(asx_task_id self, asx_task_slot *t, asx_time
         t->traced_deadline = deadline;
         t->traced_waker_epoch = t->lab_waker_epoch;
         asx_trace_emit(ASX_TRACE_TIMER_SET, (uint64_t)self, deadline);
-    } else if (asx_lab_dispatch_active() && t->traced_waker_epoch != t->lab_waker_epoch) {
-        /* Polled with a new waker (its priority changed): the Sleep moves
-         * its registration to the new waker, which cancels the old one and
-         * registers it afresh, behind the timers already registered
-         * (timer.update, time/sleep.rs:952-998). The same timer: the new
-         * registration is marked "rearm". */
+    } else if ((t->timer_partial && !t->timer_armed && sched_now() < deadline) ||
+               (asx_lab_dispatch_active() && t->traced_waker_epoch != t->lab_waker_epoch)) {
+        /* Two cases register the sleep afresh, behind the timers already
+         * registered, as the same timer (the new registration is marked
+         * "rearm"):
+         * - polled with a new waker (its priority changed): the Sleep moves
+         *   its registration to the new waker (timer.update,
+         *   time/sleep.rs:952-998);
+         * - woken early by the wheel, which clamped the registration to its
+         *   horizon: the spent handle is cancelled and the remaining
+         *   duration registered (registered_partial, sleep.rs:854-872). */
         asx_trace_payload rearm = {0};
         rearm.text = "rearm";
         rearm.reason = NULL;
         asx_trace_emit(ASX_TRACE_TIMER_CANCEL, (uint64_t)self, deadline);
         asx_trace_emit_payload_internal(ASX_TRACE_TIMER_SET, (uint64_t)self, deadline, &rearm);
         t->traced_waker_epoch = t->lab_waker_epoch;
+        t->timer_partial = 0u;
         wake_timer_disarm(t);
     }
     timer_arm((uint32_t)(t - g_tasks), deadline);
@@ -1207,7 +1226,16 @@ static asx_status sched_lab_step(uint32_t step, int *out_dispatched) {
     if (sched_timers_pending()) (void)timers_fire(sched_now());
     (void)sched_drain_wakers();
     if (asx_lab_dispatch_overflowed()) return ASX_E_RESOURCE_EXHAUSTED;
-    if (!asx_lab_pick(r, &slot, &task_gen, &cancel_lane)) return ASX_OK;
+    if (asx_lab_forced_active()) {
+        /* A recorded schedule names the task (run_forced_schedule,
+         * LR:4540-4605); the draw above is made but not consulted. */
+        int picked = 0;
+        st = asx_lab_forced_pick(lab_step, sched_now(), &slot, &task_gen, &cancel_lane, &picked);
+        if (st != ASX_OK) return st;
+        if (!picked) return ASX_OK;
+    } else if (!asx_lab_pick(r, &slot, &task_gen, &cancel_lane)) {
+        return ASX_OK;
+    }
     *out_dispatched = 1;
     /* Recorded at the pick, before the poll (LR:4627-4644). */
     asx_lab_record_dispatch_internal(slot, task_gen, cancel_lane, lab_step, sched_now());

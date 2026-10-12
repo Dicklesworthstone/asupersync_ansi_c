@@ -196,6 +196,10 @@ typedef struct {
     asx_time wake_at;
     asx_timer_handle timer;
     uint8_t timer_armed;
+    /* The wake timer was registered for a deadline past the wheel's
+     * maximum timer duration, so it fires early, at that horizon, and the
+     * sleep registers again (Rust's registered_partial, time/sleep.rs:935). */
+    uint8_t timer_partial;
     /* Lab dispatch: the priority of the waker the timer was (re)armed
      * with, the waker of that poll. A Rust Sleep wakes the waker it last
      * registered, so a task polled again without re-polling its sleep (its
@@ -529,6 +533,13 @@ void asx_lab_schedule_cancel(asx_task_slot *t, uint8_t priority);
  * the slot's live task's, or a terminal task, is a retired task: its
  * dispatch polls nothing. */
 int asx_lab_pick(uint64_t r, uint32_t *out_slot, uint16_t *out_task_gen, int *out_cancel_lane);
+/* While a recorded schedule is replayed (asx_lab_run_forced_schedule), the
+ * step's pick comes from the schedule instead: *out_picked is 1 with the
+ * task and lane, or 0 for a step with nothing to dispatch. A divergence is
+ * ASX_E_REPLAY_MISMATCH with the task left unpolled. */
+int asx_lab_forced_active(void);
+asx_status asx_lab_forced_pick(uint64_t step, asx_time now, uint32_t *out_slot,
+                               uint16_t *out_task_gen, int *out_cancel_lane, int *out_picked);
 /* Arm a task's budget-deadline timer as Rust does when the task is created
  * or admitted (lab dispatch only; scheduler.c). */
 void asx_lab_arm_budget_deadline_internal(asx_task_slot *t);
