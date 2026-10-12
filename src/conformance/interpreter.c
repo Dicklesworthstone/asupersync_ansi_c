@@ -3740,6 +3740,35 @@ static asx_status interp_poll(void *user_data, asx_task_id self) {
     return ASX_OK;
 }
 
+/* A region finalizer's poll function (DSL §1 "Region finalizers"). The
+ * runtime spawns the finalizer's task when its region finalizes, so its
+ * entry learns the task's identity at its first poll. */
+static asx_status finalizer_poll(void *user_data, asx_task_id self) {
+    it_task *t = (it_task *)user_data;
+    if (!t->spawned) {
+        t->id = self;
+        t->spawned = 1;
+        (void)asx_cx_init(&t->cx, t->region, self, ASX_CAP_NONE);
+    }
+    return interp_poll(t, self);
+}
+
+/* The `finalizers` of the region declaration `r`, registered in array
+ * order: Rust Scope::defer_async, C asx_region_defer_async. */
+static void register_finalizers(uint32_t r, const char *region_name, asx_region_id id) {
+    uint32_t list = asx_json_get(g_in, r, "finalizers");
+    uint32_t k;
+    for (k = 0; k < asx_json_count(g_in, list) && !g_failed; k++) {
+        uint32_t f = asx_json_item(g_in, list, k);
+        it_task *t = add_task(it_str(f, "name"), region_name, id, asx_json_get(g_in, f, "program"));
+        if (t == NULL) return;
+        if (asx_region_defer_async(id, finalizer_poll, t) != ASX_OK) {
+            it_fail("cannot register finalizer", t->name);
+            return;
+        }
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Driver                                                              */
 /* ------------------------------------------------------------------ */
@@ -4831,7 +4860,7 @@ static asx_status conformance_run(const asx_json_doc *in, uint32_t scenario, asx
             it_fail("cannot open region", name);
             break;
         }
-        (void)add_region(name, parent->name, id);
+        if (add_region(name, parent->name, id)) register_finalizers(r, name, id);
     }
     list = asx_json_get(in, scenario, "tasks");
     for (i = 0; i < asx_json_count(in, list) && !g_failed; i++) {

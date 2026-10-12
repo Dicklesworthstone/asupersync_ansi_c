@@ -1,0 +1,31 @@
+{
+  "schema": "asx.scenario.v2",
+  "id": "region-finalizer-masked-under-region-cancel-001",
+  "description": "r.main is cancelled at 0; t.work ends, waking t.waiter, whose step keeps the lab stepping so f.slow is spawned and sleeps. A second cancel of the Finalizing region at 500 requests cancellation of the live finalizer task: it is masked for its whole run (MaskedFinalizer, state.rs:1781), so its sleep keeps sleeping to 1000, its checkpoint returns Ok, and the finalizer runs to its end.",
+  "unit": "region_lifecycle",
+  "rules": ["rule.cancel.checkpoint_masked", "rule.region.close_begin", "rule.region.close_complete", "inv.determinism.replayable"],
+  "seed": 42,
+  "lab": {"max_steps": 1000},
+  "regions": [
+    {"name": "r.main", "parent": "root", "budget": null,
+     "finalizers": [{"name": "f.slow", "program": [
+       {"op": "trace", "message": "slow start"},
+       {"op": "sleep", "ns": 1000},
+       {"op": "checkpoint", "on_cancel": "continue"},
+       {"op": "trace", "message": "slow end"}]}]},
+    {"name": "r.other", "parent": "root", "budget": null}
+  ],
+  "channels": [],
+  "sync": [{"name": "n.done", "type": "notify"}],
+  "tasks": [
+    {"name": "t.work", "region": "r.main", "budget": null,
+     "program": [{"op": "sleep", "ns": 100}, {"op": "notify_one", "notify": "n.done"}]},
+    {"name": "t.waiter", "region": "r.other", "budget": null,
+     "program": [{"op": "notify_wait", "notify": "n.done"}, {"op": "trace", "message": "woken"}]}
+  ],
+  "script": [
+    {"at_ns": 0, "op": {"op": "cancel_region", "region": "r.main", "kind": "User"}},
+    {"at_ns": 500, "op": {"op": "cancel_region", "region": "r.main", "kind": "Shutdown"}}
+  ],
+  "expect": {"kind": "ok"}
+}

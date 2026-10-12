@@ -1,0 +1,23 @@
+{
+  "schema": "asx.scenario.v2",
+  "id": "region-finalizer-time-budget-advisory-001",
+  "description": "A finalizer task's budget carries a deadline 5 s after its spawn (FINALIZER_TIME_BUDGET_NANOS, record/finalizer.rs:45), and a cleanup task arms no deadline timer (create_task_infrastructure_in, state.rs:4401). It sleeps 6 s: no cancel has been requested when it wakes; its masked checkpoint then evaluates the budget, raises the Deadline cancel on its Cx (cx.rs:3112-3160) and returns Ok, and the finalizer runs to its end.",
+  "unit": "region_lifecycle",
+  "rules": ["rule.cancel.checkpoint_masked", "rule.region.close_begin", "rule.region.close_complete", "inv.determinism.replayable"],
+  "seed": 42,
+  "lab": {"max_steps": 1000},
+  "regions": [{"name": "r.main", "parent": "root", "budget": null,
+    "finalizers": [
+      {"name": "f.slow", "program": [
+        {"op": "sleep", "ns": 6000000000},
+        {"op": "is_cancel_requested"},
+        {"op": "checkpoint", "on_cancel": "continue"},
+        {"op": "is_cancel_requested"},
+        {"op": "trace", "message": "ran past its time budget"}]}
+    ]}],
+  "channels": [], "sync": [],
+  "tasks": [{"name": "t.work", "region": "r.main", "budget": null,
+    "program": [{"op": "trace", "message": "work done"}]}],
+  "script": [{"at_ns": 0, "op": {"op": "finish_region", "region": "r.main", "body": "ok"}}],
+  "expect": {"kind": "ok"}
+}

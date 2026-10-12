@@ -1,0 +1,31 @@
+{
+  "schema": "asx.scenario.v2",
+  "id": "region-finalizer-poll-budget-advisory-001",
+  "description": "A finalizer task has a poll quota of 100 (FINALIZER_POLL_BUDGET, record/finalizer.rs:42). Its 100 yields spend it; the 101st poll is charged against an exhausted quota, which raises a PollQuota cancel on its Cx (lab/runtime.rs:4661-4669). The finalizer is masked, so it observes the request, its checkpoint returns Ok, and it runs to its end: the budget is advisory.",
+  "unit": "region_lifecycle",
+  "rules": ["rule.cancel.checkpoint_masked", "rule.region.close_begin", "rule.region.close_complete", "inv.determinism.replayable"],
+  "seed": 42,
+  "lab": {"max_steps": 1000},
+  "regions": [{"name": "r.main", "parent": "root", "budget": null,
+    "finalizers": [
+      {"name": "f.long", "program": [
+        {"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},
+        {"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},
+        {"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},
+        {"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},
+        {"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},
+        {"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},
+        {"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},
+        {"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},
+        {"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},
+        {"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},{"op": "yield"},
+        {"op": "is_cancel_requested"},
+        {"op": "checkpoint", "on_cancel": "continue"},
+        {"op": "trace", "message": "ran past its poll budget"}]}
+    ]}],
+  "channels": [], "sync": [],
+  "tasks": [{"name": "t.work", "region": "r.main", "budget": null,
+    "program": [{"op": "trace", "message": "work done"}]}],
+  "script": [{"at_ns": 0, "op": {"op": "finish_region", "region": "r.main", "body": "ok"}}],
+  "expect": {"kind": "ok"}
+}
