@@ -333,7 +333,7 @@ v4 does not define leak policies: v4 §3.4 LEAK says only "In lab: panic or reco
 
 Rust enum: `ObligationLeakResponse` (`src/runtime/config.rs:1319-1333`). Defaults: `Panic` in `RuntimeConfig` (`src/runtime/config.rs:2242`) and in `RuntimeState`'s internal constructor (`src/runtime/state.rs:2338`); the lab uses `Panic` when `panic_on_obligation_leak` is set and `Log` otherwise (`src/lab/runtime.rs:2435-2439`).
 
-**C status:** enum `asx_leak_response` (`include/asx/asx_config.h:1195-1200`), default `ASX_LEAK_LOG` (`src/runtime/lifecycle.c:96`, reset at `:180`). The default differs from Rust: row `rule.obligation.leak` (bd-9kll.3.6, owner decision bd-9kll.2.19). The Recover abort reason is Rust's `Error` since bd-9kll.3.6. Rust parity under `Log`: `leak-policy-leak-reported-001` (`panic_on_leak: false`). Unit tests: `tests/unit/runtime/test_budget_obligation.c` `recover_policy_aborts_leaked_obligation`, `panic_policy_routes_leak_through_containment`.
+**C status:** enum `asx_leak_response` (`include/asx/asx_config.h:1206-1211`), default `ASX_LEAK_LOG` (`src/runtime/lifecycle.c:96`, reset at `:180`). The default differs from Rust: row `rule.obligation.leak` (bd-9kll.3.6, owner decision bd-9kll.2.19). The Recover abort reason is Rust's `Error` since bd-9kll.3.6. Rust parity under `Log`: `leak-policy-leak-reported-001` (`panic_on_leak: false`). Unit tests: `tests/unit/runtime/test_budget_obligation.c` `recover_policy_aborts_leaked_obligation`, `panic_policy_routes_leak_through_containment`.
 
 ### 5.2 Escalation Policy
 
@@ -423,7 +423,7 @@ A finalizer task gets `finalizer_budget()` (poll quota 100, `src/record/finalize
 
 Correction: at `5e60b1c4c` this enum is stored in `FinalizerStack` (`src/record/finalizer.rs:199-204`) but no runtime code outside `src/record/finalizer.rs` reads it (`git grep` finds only the re-export in `src/record/mod.rs:20`), so the policy described here is not wired into finalizer execution.
 
-**C status:** `asx_finalizer_escalation` (`include/asx/asx_config.h:1203-1207`), default `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:787`), validated at `src/runtime/rt.c:161-162`, never otherwise read (bd-udlh).
+**C status:** `asx_finalizer_escalation` (`include/asx/asx_config.h:1214-1218`), default `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:826`), validated at `src/runtime/rt.c:161-162`, never otherwise read (bd-udlh).
 
 ### 6.6 Registration Rejection
 
@@ -845,7 +845,7 @@ All of these are declared in `include/asx/asx_status.h`. Codes the close and adm
 | `leak_escalation` | pointer (optional) | `NULL` | `Option<LeakEscalation>` | Read (section 5.2) |
 | `finalizer_poll_budget` | `uint32_t` | 100 (`src/runtime/hooks.c:785`) | `FINALIZER_POLL_BUDGET` 100 | Validated, otherwise unread (bd-udlh) |
 | `finalizer_time_budget_ns` | `uint64_t` | 5,000,000,000 (`src/runtime/hooks.c:786`) | `FINALIZER_TIME_BUDGET_NANOS` | Unread (bd-udlh) |
-| `finalizer_escalation` | enum | `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:787`) | `FinalizerEscalation`, not wired in Rust (section 6.5) | Validated, otherwise unread (bd-udlh) |
+| `finalizer_escalation` | enum | `ASX_FINALIZER_BOUNDED_LOG` (`src/runtime/hooks.c:826`) | `FinalizerEscalation`, not wired in Rust (section 6.5) | Validated, otherwise unread (bd-udlh) |
 | `max_cancel_chain_depth` | `uint16_t` | 16 (`src/runtime/hooks.c:788`) | `CancelAttributionConfig::DEFAULT_MAX_DEPTH` 16 (`src/types/cancel.rs:198`) | Validated non-zero (`src/runtime/rt.c:163`); no cancel code reads it |
 | `max_cancel_chain_memory` | `uint32_t` | 4096 (`src/runtime/hooks.c:789`) | `DEFAULT_MAX_MEMORY` 4096 (`src/types/cancel.rs:201`) | No cancel code reads it |
 
