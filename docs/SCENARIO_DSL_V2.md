@@ -304,6 +304,17 @@ Each endpoint is moved into its owner's body (Rust) or bound to the owner's
 interpreter (C). Values are unsigned 64-bit integers; C channels carry
 `uint64_t`.
 
+An mpsc may list more producers in `senders` (top-level tasks, distinct from
+`sender` and each other): each gets a clone of the sender at setup, in
+order (Rust `tx.clone()`, `channel/mpsc.rs:1231`; C
+`asx_channel_sender_clone`). Each owner's `close_sender`, or the end of its
+body, drops its own clone; the sender side closes at the last one
+(`Sender::drop`, `:1241-1255`).
+
+```json
+{"name": "ch.jobs", "type": "mpsc", "capacity": 2, "sender": "t.a", "senders": ["t.b"], "receiver": "t.r"}
+```
+
 | op | Fields | Rust | C | Blocks | Cancel |
 |---|---|---|---|---|---|
 | `reserve_send` | `channel`, `as` | `tx.reserve(&cx).await` (`channel/mpsc.rs:637`) | `asx_channel_reserve(id, cx, &permit)` until done | while full, FIFO | Checked on every poll: `ASX_E_CANCELLED` even when there is room (`mpsc.rs:1061`). The permit registers a `SendPermit` obligation. |

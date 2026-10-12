@@ -2548,9 +2548,34 @@ pub fn run_scenario_with(scenario: &Value, raw: Option<&mut Vec<String>>) -> Run
             usize::try_from(u64_field(decl, "capacity")?)
                 .map_err(|_| "capacity out of range".to_string())
         };
+        // An mpsc's optional `senders`: more tasks, each given a clone of the
+        // sender at setup (Sender::clone, mpsc.rs:1231), distinct from the
+        // declared sender and from each other.
+        let extra_senders = || -> RunResult<Vec<String>> {
+            let Some(list) = decl.get("senders") else {
+                return Ok(Vec::new());
+            };
+            let list = list.as_array().ok_or("senders is not a list")?;
+            let declared = str_field(decl, "sender")?;
+            let mut names: Vec<String> = Vec::new();
+            for v in list {
+                let n = v.as_str().ok_or("a sender is not a task name")?;
+                if n == declared || names.iter().any(|m| m == n) {
+                    return Err(format!("sender {n:?} listed twice"));
+                }
+                names.push(n.to_string());
+            }
+            Ok(names)
+        };
+        if decl.get("senders").is_some() && str_field(decl, "type")? != "mpsc" {
+            return Err("only an mpsc channel takes senders".to_string());
+        }
         match str_field(decl, "type")? {
             "mpsc" => {
                 let (tx, rx) = mpsc::channel::<u64>(capacity()?);
+                for extra in extra_senders()? {
+                    give(&extra, Endpoint::MpscTx(tx.clone()));
+                }
                 give(str_field(decl, "sender")?, Endpoint::MpscTx(tx));
                 give(str_field(decl, "receiver")?, Endpoint::MpscRx(rx));
             }
