@@ -1912,6 +1912,55 @@ TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline) {
     ASSERT_EQ((int)got.kind, (int)ASX_CANCEL_DEADLINE);
 }
 
+TEST(cx_checkpoint_turns_a_spent_quota_into_its_cancel_kind_unless_masked) {
+    /* Rust Cx::checkpoint (cx.rs:2749-2900, checkpoint_budget_exhaustion
+     * :3112-3160): a spent poll quota is a PollQuota cancel and a spent
+     * cost quota a CostBudget cancel, raised even inside a masked section
+     * and delivered only when the mask is gone. The checkpoint spends
+     * nothing: the budget it read is the one the task was spawned with. */
+    static const asx_cancel_kind kinds[2] = {ASX_CANCEL_POLL_QUOTA, ASX_CANCEL_COST_BUDGET};
+    uint32_t k;
+    uint32_t masked;
+
+    for (k = 0; k < 2u; k++) {
+        for (masked = 0; masked < 2u; masked++) {
+            asx_region_id rid;
+            asx_task_id tid;
+            asx_task_state state;
+            asx_cancel_reason got;
+            asx_budget b;
+            asx_cx cx;
+
+            asx_runtime_reset();
+            ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+            b = asx_budget_infinite();
+            if (k == 0u) {
+                b.poll_quota = 0u;
+            } else {
+                b.cost_quota = 0u;
+            }
+            ASSERT_EQ(asx_task_spawn_with_budget(rid, poll_pending, NULL, &b, &tid), ASX_OK);
+            asx_cx_init(&cx, rid, tid, ASX_CAP_NONE);
+            ASSERT_FALSE(asx_cx_is_cancelled(&cx));
+            if (masked) ASSERT_EQ(asx_task_mask(tid), ASX_OK);
+
+            if (masked) {
+                ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_OK);
+                ASSERT_TRUE(asx_cx_is_cancelled(&cx));
+                ASSERT_EQ(asx_task_unmask(tid), ASX_OK);
+            }
+            ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
+            ASSERT_TRUE(asx_cx_is_cancelled(&cx));
+            ASSERT_EQ(asx_task_get_cancel_reason(tid, &got), ASX_OK);
+            ASSERT_EQ((int)got.kind, (int)kinds[k]);
+            ASSERT_EQ(asx_task_get_state(tid, &state), ASX_OK);
+            ASSERT_EQ((int)state, (int)ASX_TASK_CANCELLING);
+            /* Repeating it is idempotent: still cancelled, nothing spent. */
+            ASSERT_EQ(asx_cx_checkpoint(&cx), ASX_E_CANCELLED);
+        }
+    }
+}
+
 TEST(cx_is_cancelled_reports_whether_a_cancel_was_requested) {
     /* Rust Cx::is_cancel_requested (cx.rs:2641) reads the Cx's
      * cancel_requested flag, set by a request and never cleared: false
@@ -2426,6 +2475,7 @@ int main(void) {
     RUN_TEST(spawned_child_that_never_acknowledges_is_cancelled);
     RUN_TEST(top_level_task_that_acknowledges_is_still_cancelled);
     RUN_TEST(cx_checkpoint_acknowledges_and_observes_a_passed_deadline);
+    RUN_TEST(cx_checkpoint_turns_a_spent_quota_into_its_cancel_kind_unless_masked);
     RUN_TEST(cx_is_cancelled_reports_whether_a_cancel_was_requested);
     RUN_TEST(budget_cancel_is_attributed_to_the_task_and_records_no_request);
     RUN_TEST(obligation_abort_with_reason_records_it);
