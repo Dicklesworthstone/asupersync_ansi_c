@@ -215,4 +215,22 @@ static inline void test_log_summary(int total, int passed, int failed) {
     fflush(tlog_fp);
 }
 
+/* -------------------------------------------------------------------
+ * test_harness.h hooks
+ *
+ * Bound here whichever header comes first: clang-format sorts
+ * test_harness.h ahead of this one, and the harness's own hooks are
+ * no-ops, which left every suite's log empty. They expand in RUN_TEST,
+ * where the harness's test_* state is in scope.
+ * ------------------------------------------------------------------- */
+
+#undef TEST_LOG_RESULT_
+#undef TEST_LOG_SKIP_
+#undef TEST_LOG_SUMMARY_
+#define TEST_LOG_RESULT_(name)                                                                     \
+    test_log_result(name, test_current_failed ? "fail" : "pass", test_fail_file, test_fail_line,   \
+                    test_fail_expr)
+#define TEST_LOG_SKIP_(name) test_log_result(name, "skip", NULL, 0, NULL)
+#define TEST_LOG_SUMMARY_() test_log_summary(test_count, test_count - test_failures, test_failures)
+
 #endif /* ASX_TEST_LOG_H */

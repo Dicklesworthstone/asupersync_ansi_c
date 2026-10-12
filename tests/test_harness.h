@@ -8,7 +8,8 @@
  *   When ASX_TEST_LOG_DIR is set (env or build/test-logs by default),
  *   the harness emits per-test JSONL records conforming to
  *   schemas/test_log.schema.json alongside the human-readable stderr
- *   output. Include test_log.h before this header to enable.
+ *   output. Include test_log.h (before or after this header) and call
+ *   test_log_open / test_log_close in main to enable.
  *
  * Usage:
  *   #include "test_harness.h"
@@ -89,14 +90,9 @@ static const char *test_fail_expr = NULL;
         }                                                                                          \
     } while (0)
 
-/* Structured log hook — no-op unless test_log.h is included before this. */
-#ifdef ASX_TEST_LOG_H
-#define TEST_LOG_RESULT_(name)                                                                     \
-    test_log_result(name, test_current_failed ? "fail" : "pass", test_fail_file, test_fail_line,   \
-                    test_fail_expr)
-#define TEST_LOG_SKIP_(name) test_log_result(name, "skip", NULL, 0, NULL)
-#define TEST_LOG_SUMMARY_() test_log_summary(test_count, test_count - test_failures, test_failures)
-#else
+/* Structured log hooks: no-ops unless test_log.h binds them (it does so
+ * whichever of the two headers comes first). */
+#ifndef TEST_LOG_RESULT_
 #define TEST_LOG_RESULT_(name) ((void)0)
 #define TEST_LOG_SKIP_(name) ((void)0)
 #define TEST_LOG_SUMMARY_() ((void)0)

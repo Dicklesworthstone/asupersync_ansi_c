@@ -105,6 +105,17 @@ FILE_COUNT=0
 for log_file in $LOG_FILES; do
     FILE_COUNT=$((FILE_COUNT + 1))
     LINE_NO=0
+    # A suite that opened its log and recorded nothing is not evidence: the
+    # harness hooks were compiled out of every suite that way, and this
+    # validator passed the empty files.
+    if ! grep -q '^{' "$log_file"; then
+        if [ "$STRICT" = "1" ]; then
+            echo "[asx] validate-test-logs: FAIL — $(basename "$log_file") has no records" >&2
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+        else
+            echo "[asx] validate-test-logs: WARN — $(basename "$log_file") has no records" >&2
+        fi
+    fi
     while IFS= read -r line || [ -n "$line" ]; do
         LINE_NO=$((LINE_NO + 1))
         # Skip empty lines
