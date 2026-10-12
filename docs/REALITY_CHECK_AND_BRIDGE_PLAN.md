@@ -207,12 +207,28 @@ capture has SHA-256 `cb5323d744e72ec6b222cc6c78f3336d7f5927de64646384218dd459d3b
 and the four expected dispatches, bringing the corpus to 166. The preserved
 original 8,000 inputs include 988 Ok, 509 Cancelled, 277 Err and 252 Panicked
 finish operations; a regenerated restricted trial with no Err/Panicked was
-excluded. Fresh native Rust capture succeeds for all 8,000; the exact C runtime
-matches 7,999, with zero interpreter errors. The remaining case,
+excluded. Fresh native Rust capture succeeds for all 8,000; the first combined
+C runtime matched 7,999, with zero interpreter errors. The remaining case,
 `gen-1204-33`, differs only in cancellation dispatch order after an Err body
 closes a region containing race children and an actor. Genuine minimization
-reduces it from 54 to 16 elements; the minimized C replay still fails. Original
-`bd-aioq` remains open because its full campaign acceptance is unmet.
+reduces it from 54 to 16 elements. The runtime now drains a natural race
+winner's unfinished losers through its existing owned-handle abort path, using
+Rust's default race-loser reason. A direct request had stamped the current poll
+time, incorrectly strengthened an existing FailFast reason and added another
+cancellation wake. Two native regression tests fail against the old library
+(28/30) and pass after the repair (30/30), including actual loser cleanup and
+the owner's completed join. The repaired runtime matches all 8,000 original
+inputs and all 43 preserved minimized inputs against fresh current Rust
+captures, with zero comparison failures or interpreter errors.
+
+The named `race-loser-abort-preserves-fail-fast-001` capture is copied unchanged
+from that same pinned producer, SHA-256
+`bc5a8b7cab2da624c84bb423e41cc245d145e0be95ca14e4d4e1f80fae3ad388`,
+bringing the canonical corpus to 167. Ten historical scratch captures differ
+from fresh captures in scheduling ordinals after the Rust producer's context
+lifetime repair; the old captures remain preserved and are not claimed to be
+byte-identical. Original `bd-aioq` remains in progress until the final committed
+source and its full campaign evidence receive independent acceptance.
 
 Current original-task execution checklist (verification still in progress):
 
@@ -226,11 +242,13 @@ Current original-task execution checklist (verification still in progress):
 - [x] Pass combined-source ASan/UBSan, eight-profile execution and JSON/BIN build-mode execution over all 165 prior fixtures; binary v2 scenario transport remains open.
 - [x] Reexecute five exact `f167ee92` host E2E lanes, each with 10 runtime cases, 13 harness checks and 32 actual detail records.
 - [x] Capture the named actor regression with the current pinned Rust producer and preserve its unedited output.
-- [ ] Finish source-citation repair after the reseed change; initial gate failures and their corrected controls remain recorded.
-- [ ] Verify the pending-admission reseed repair and its before/after positive cleanup path at the final source.
-- [ ] Re-run final committed-source gates, the 166-fixture corpus and corrected E2E digest labels.
+- [x] Finish source-citation repair after the reseed change; all 11 gate controls pass at `410870c7`, with initial failures preserved.
+- [x] Independently verify the pending-admission reseed repair at `410870c7`: actor 26/26, lab 29/29, and actual preserved cleanup followed by successful reseeding.
+- [x] Run strict GCC, Clang, native32 and all gates over 166 captures at `410870c7`; independently execute the five E2E lanes with corrected digest labels.
 - [x] Re-run the original all-body 8,000-input campaign and preserve its one remaining dispatch-order divergence.
-- [ ] Fix the minimized Err-close/race/actor cancellation ordering at its runtime source, then verify all 8,000 inputs again.
+- [x] Fix the minimized Err-close/race/actor cancellation ordering at its runtime source, then verify all 8,000 original inputs and all 43 minimized inputs again.
+- [x] Capture the named race regression from pinned Rust, preserve its unchanged fixture bytes, and retain both genuine native before/after failures.
+- [ ] Run final committed-source gates, sanitizers, the 167-fixture corpus, all profile/codec builds and final E2E source bindings after the race repair.
 - [ ] Obtain independent exact-source acceptance before closing original `bd-9kll.3.19` or `bd-aioq`.
 
 K4, typed outcomes/factories, serialized asynchronous finalization, independent
