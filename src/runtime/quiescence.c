@@ -437,10 +437,39 @@ asx_status asx_region_drain(asx_region_id id, asx_budget *budget) {
  * asx_region_finalize_one before the leak audit.
  * ------------------------------------------------------------------- */
 
+/* The checks both registrations (defer_sync, defer_async) share. Rust's
+ * Scope::defer_sync takes the region's own Scope and the runtime state, so
+ * only code that holds the region can register a finalizer on it: here the
+ * host (no task is polling) or a task of that region. Then the region must
+ * be neither poisoned nor closing (register_sync_finalizer returns false
+ * for a closing or terminal region, state.rs:9056-9062). */
+static asx_status asx_region_finalizer_target(asx_region_id region, asx_region_slot **out) {
+    asx_region_slot *r;
+    asx_task_slot *caller;
+    asx_task_id cur = asx_task_current();
+    asx_status st = asx_region_slot_lookup(region, &r);
+
+    if (st != ASX_OK) return st;
+    if (cur != ASX_INVALID_ID && asx_task_slot_lookup(cur, &caller) == ASX_OK &&
+        asx_handle_index(caller->region) != asx_handle_index(region)) {
+        return ASX_E_PERMISSION_DENIED;
+    }
+    if (r->poisoned) return ASX_E_REGION_POISONED;
+    if (r->state != ASX_REGION_OPEN) return ASX_E_REGION_CLOSED;
+    *out = r;
+    return ASX_OK;
+}
+
 asx_status asx_region_defer_sync(asx_region_id region, asx_region_finalizer_fn fn,
                                  void *user_data) {
+    asx_region_slot *r;
     asx_cleanup_handle h;
-    return asx_region_register_finalizer(region, fn, user_data, &h);
+    asx_status st;
+
+    if (fn == NULL) return ASX_E_INVALID_ARGUMENT;
+    st = asx_region_finalizer_target(region, &r);
+    if (st != ASX_OK) return st;
+    return asx_cleanup_push(&r->cleanup, fn, user_data, &h);
 }
 
 asx_status asx_region_get_close_outcome(asx_region_id region, asx_outcome *out) {
@@ -634,9 +663,7 @@ asx_status asx_region_defer_async(asx_region_id region, asx_task_poll_fn poll_fn
     asx_status st;
 
     if (poll_fn == NULL) return ASX_E_INVALID_ARGUMENT;
-    st = asx_region_slot_lookup(region, &r);
+    st = asx_region_finalizer_target(region, &r);
     if (st != ASX_OK) return st;
-    if (r->poisoned) return ASX_E_REGION_POISONED;
-    if (r->state != ASX_REGION_OPEN) return ASX_E_REGION_CLOSED;
     return asx_cleanup_push_async(&r->cleanup, poll_fn, user_data, &h);
 }

@@ -138,27 +138,6 @@ ASX_API ASX_MUST_USE asx_status asx_region_open_child(asx_region_id parent,
  * See: API_MISUSE_CATALOG.md § Region Lifecycle. */
 ASX_API ASX_MUST_USE asx_status asx_region_close(asx_region_id id);
 
-/* Register a synchronous region finalizer. Callbacks run exactly once in
- * reverse registration order after child tasks/regions complete, before
- * checking leftover obligations. Registration requires an OPEN, unpoisoned
- * region, a non-NULL callback and output handle. Returns the region lookup
- * error, ASX_E_REGION_CLOSED, ASX_E_REGION_POISONED, or
- * ASX_E_RESOURCE_EXHAUSTED when ASX_CLEANUP_STACK_CAPACITY is reached.
- * The handle belongs to this region; user_data is borrowed and must remain
- * valid until the callback runs or is unregistered. Callbacks may resolve
- * obligations and spawn explicit cleanup tasks, whose completion delays
- * closure. They must return normally; this API supplies no async barrier. */
-ASX_API ASX_MUST_USE asx_status asx_region_register_finalizer(asx_region_id id, asx_cleanup_fn fn,
-                                                              void *user_data,
-                                                              asx_cleanup_handle *out_handle);
-
-/* Cancel a pending finalizer without running it. The handle must come from
- * registration in this same region. Returns ASX_E_NOT_FOUND once the entry
- * has run, was removed, or was replaced; a stale region fails lookup.
- * May also be used during finalization to cancel a later callback. */
-ASX_API ASX_MUST_USE asx_status asx_region_unregister_finalizer(asx_region_id id,
-                                                                asx_cleanup_handle handle);
-
 /* Query the current state of a region.
  *
  * Preconditions: out_state must not be NULL; id must be a valid handle.
@@ -1291,11 +1270,20 @@ typedef void (*asx_region_finalizer_fn)(void *user_data);
  * LIFO order, before the close's leak audit. A finalizer may spawn
  * cleanup work into the region; the close then waits for it. Registration
  * is accepted only while the region is Open (Rust refuses a closing or
- * closed region).
+ * closed region). It is the one registration of a sync finalizer: the
+ * callback runs once and user_data, borrowed, must stay valid until it
+ * does; an entry cannot be taken back (Rust has no such operation).
+ *
+ * Only code that holds the region can register: the host (no task is
+ * polling), or a task of that region. Rust's Scope::defer_sync takes the
+ * region's own Scope and the runtime state, so no other region's task
+ * reaches it. A task of another region is refused with
+ * ASX_E_PERMISSION_DENIED and the stack is left as it was.
  * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if fn is NULL, a lookup error for
- * a bad handle, ASX_E_REGION_CLOSED once closing or closed,
- * ASX_E_REGION_POISONED if poisoned, or ASX_E_RESOURCE_EXHAUSTED when the
- * finalizer stack (capacity ASX_CLEANUP_STACK_CAPACITY) is full.
+ * a bad handle, ASX_E_PERMISSION_DENIED as above, ASX_E_REGION_CLOSED once
+ * closing or closed, ASX_E_REGION_POISONED if poisoned, or
+ * ASX_E_RESOURCE_EXHAUSTED when the finalizer stack (capacity
+ * ASX_CLEANUP_STACK_CAPACITY) is full.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_region_defer_sync(asx_region_id region,
                                                       asx_region_finalizer_fn fn, void *user_data);
@@ -1318,12 +1306,14 @@ ASX_API ASX_MUST_USE asx_status asx_region_defer_sync(asx_region_id region,
  * A finalizer that runs out of budget keeps running (the budget is advisory,
  * as in Rust) unless the escalation is ASX_FINALIZER_BOUNDED_PANIC, an
  * opt-in with no Rust counterpart: the task then completes PANICKED.
- * Registration is accepted only while the region is Open, as for
- * asx_region_defer_sync, whose entries share the stack and the order.
+ * Registration is accepted only while the region is Open and only from the
+ * host or a task of that region, as for asx_region_defer_sync, whose
+ * entries share the stack and the order.
  * Returns ASX_OK, ASX_E_INVALID_ARGUMENT if poll_fn is NULL, a lookup
- * error for a bad handle, ASX_E_REGION_CLOSED once closing or closed,
- * ASX_E_REGION_POISONED if poisoned, or ASX_E_RESOURCE_EXHAUSTED when the
- * finalizer stack (capacity ASX_CLEANUP_STACK_CAPACITY) is full.
+ * error for a bad handle, ASX_E_PERMISSION_DENIED for a task of another
+ * region, ASX_E_REGION_CLOSED once closing or closed, ASX_E_REGION_POISONED
+ * if poisoned, or ASX_E_RESOURCE_EXHAUSTED when the finalizer stack
+ * (capacity ASX_CLEANUP_STACK_CAPACITY) is full.
  * Thread-safety: not thread-safe; single-threaded mode only. */
 ASX_API ASX_MUST_USE asx_status asx_region_defer_async(asx_region_id region,
                                                        asx_task_poll_fn poll_fn, void *user_data);

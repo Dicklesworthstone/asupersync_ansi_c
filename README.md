@@ -1579,23 +1579,17 @@ void release_file(void *file);
 void release_lock(void *lock);
 
 asx_status hold_both(asx_region_id region, void *file, void *lock) {
-    asx_cleanup_handle h_file;
-    asx_cleanup_handle h_lock;
-    asx_status st = asx_region_register_finalizer(region, release_file, file, &h_file);
-    if (st != ASX_OK) return st;
-    st = asx_region_register_finalizer(region, release_lock, lock, &h_lock);
-    if (st != ASX_OK) {
-        /* The caller still owns both resources if registration fails. */
-        asx_status undo = asx_region_unregister_finalizer(region, h_file);
-        if (undo != ASX_OK) return undo;
-    }
-    return st;
-    /* Region finalization calls release_lock(lock), then release_file(file).
-     * asx_region_unregister_finalizer(region, h) cancels an entry early. */
+    asx_status st = asx_region_defer_sync(region, release_file, file);
+    if (st != ASX_OK) return st; /* the caller still owns file and lock */
+    /* From here the region owns file: it releases it when it finalizes, and
+     * an entry cannot be taken back (Rust's Scope::defer_sync has no such
+     * operation). If this registration fails, the caller still owns lock. */
+    return asx_region_defer_sync(region, release_lock, lock);
+    /* Region finalization calls release_lock(lock), then release_file(file). */
 }
 ```
 
-Each entry carries a generation counter so stale cleanup handles cannot accidentally fire against a recycled slot. Handles are local to the region where they were registered. Registration requires an Open region and is bounded by `ASX_CLEANUP_STACK_CAPACITY`; exhaustion leaves the stack unchanged. When the region reaches Finalizing, callbacks run before its leak-policy audit, so a finalizer can resolve a reservation before closure. Recursive drain of that region returns `ASX_E_PENDING` until its active callbacks return. Traversal uses call-local handles and validates them again, so callbacks may drain or cancel unrelated regions without corrupting the outer walk. A standalone `asx_cleanup_stack` also supports deterministic reuse; callback-time pushes are rejected and recursive stack drains are no-ops. Quiescence condition Q4 checks that no cleanup entries remain.
+`asx_region_defer_sync` is the one way to register a handler on a region (and `asx_region_defer_async` the one for an async finalizer). Only code that holds the region can register: the host, or a task of that region, as in Rust where `Scope::defer_sync` needs the region's own `Scope` and the runtime state. A task of another region gets `ASX_E_PERMISSION_DENIED` and the stack is left as it was. A standalone `asx_cleanup_stack` (below the region API) still hands out generation-counted handles: each entry carries a generation counter so stale cleanup handles cannot accidentally fire against a recycled slot, and `asx_cleanup_pop` takes an entry back. A region's registration requires an Open region and is bounded by `ASX_CLEANUP_STACK_CAPACITY`; exhaustion leaves the stack unchanged. When the region reaches Finalizing, callbacks run before its leak-policy audit, so a finalizer can resolve a reservation before closure. Recursive drain of that region returns `ASX_E_PENDING` until its active callbacks return. Traversal uses call-local handles and validates them again, so callbacks may drain or cancel unrelated regions without corrupting the outer walk. A standalone `asx_cleanup_stack` also supports deterministic reuse; callback-time pushes are rejected and recursive stack drains are no-ops. Quiescence condition Q4 checks that no cleanup entries remain.
 
 Ordinary `asx_task_spawn` and `asx_task_spawn_captured` accept only Open regions. A finalizer can use `asx_task_spawn_cleanup` or `asx_task_spawn_cleanup_captured` to start required cleanup in Finalizing. Those tasks bypass the region's live-task quota in Finalizing, remain bounded by the task/capture arenas, and delay closure until they complete. Resuming region drain runs them without issuing another drain cancellation. Work spawned from a task already executing cancellation cleanup keeps the inherited deadline, cost quota and priority, with an unbounded inherited poll quota.
 

@@ -264,7 +264,6 @@ TEST(public_finalizer_cleanup_task_delays_close_until_it_completes) {
     asx_region_id rid;
     asx_region_slot *region = NULL;
     cleanup_spawn_task_ctx spawn_ctx;
-    asx_cleanup_handle handle;
     asx_task_state task_state;
     asx_outcome outcome;
     asx_budget budget;
@@ -275,8 +274,7 @@ TEST(public_finalizer_cleanup_task_delays_close_until_it_completes) {
     spawn_ctx.region = rid;
     spawn_ctx.spawn_status = ASX_E_INVALID_STATE;
     spawn_ctx.task_id = ASX_INVALID_ID;
-    ASSERT_EQ(asx_region_register_finalizer(rid, cleanup_spawn_immediate_task, &spawn_ctx, &handle),
-              ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(rid, cleanup_spawn_immediate_task, &spawn_ctx), ASX_OK);
     budget = asx_budget_from_polls(8);
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
     ASSERT_EQ(spawn_ctx.spawn_status, ASX_OK);
@@ -453,7 +451,17 @@ static asx_status async_fin_spawner_poll(void *ud, asx_task_id self) {
     return ASX_OK;
 }
 
-/* A runtime whose config carries the finalizer budget and escalation. */
+/* The log lines the finalizer escalation wrote. */
+static int g_fin_log_lines;
+
+static void fin_log_sink(void *ctx, int level, const char *message) {
+    (void)ctx;
+    (void)level;
+    if (message != NULL && strstr(message, "async finalizer") != NULL) g_fin_log_lines++;
+}
+
+/* A runtime whose config carries the finalizer budget and escalation, and
+ * whose log sink counts the finalizer's lines. */
 static asx_status init_with_finalizer_budget(uint32_t polls, asx_finalizer_escalation esc) {
     static asx_runtime rt;
     asx_runtime_config cfg;
@@ -464,6 +472,8 @@ static asx_status init_with_finalizer_budget(uint32_t polls, asx_finalizer_escal
     cfg.finalizer_poll_budget = polls;
     cfg.finalizer_escalation = esc;
     st = asx_runtime_hooks_init(&hooks);
+    hooks.log.write_fn = fin_log_sink;
+    g_fin_log_lines = 0;
     if (st == ASX_OK) st = asx_runtime_init(&rt, &cfg, &hooks);
     return st;
 }
@@ -610,8 +620,11 @@ TEST(defer_async_default_escalation_lets_a_finalizer_run_past_its_poll_budget) {
         ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_OK);
         budget = asx_budget_infinite();
         ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
-        /* Rust's finalizer budget is advisory: it runs to completion, Ok. */
+        /* Rust's finalizer budget is advisory: it runs to completion, Ok.
+         * BOUNDED_LOG notes the first poll past the budget once, SOFT is
+         * silent. */
         ASSERT_EQ(f.polls, 6);
+        ASSERT_EQ(g_fin_log_lines, modes[m] == ASX_FINALIZER_BOUNDED_LOG ? 1 : 0);
         ASSERT_EQ(asx_task_get_outcome(f.task, &out), ASX_OK);
         ASSERT_EQ(out.severity, ASX_OUTCOME_OK);
         ASSERT_EQ(asx_region_get_close_outcome(rid, &out), ASX_OK);
@@ -634,8 +647,10 @@ TEST(defer_async_bounded_panic_retires_the_finalizer_panicked_at_its_poll_budget
     ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
-    /* Three polls were its budget; the fourth never reached the finalizer. */
+    /* Three polls were its budget; the fourth never reached the finalizer,
+     * and the log noted it. */
     ASSERT_EQ(f.polls, 3);
+    ASSERT_EQ(g_fin_log_lines, 1);
     ASSERT_EQ(asx_region_get_state(rid, &rs), ASX_OK);
     ASSERT_EQ(rs, ASX_REGION_CLOSED);
     ASSERT_EQ(asx_task_get_outcome(f.task, &out), ASX_OK);
@@ -656,16 +671,24 @@ TEST(defer_async_argument_errors_and_registration_states) {
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_region_defer_async(rid, NULL, NULL), ASX_E_INVALID_ARGUMENT);
     ASSERT_NE(asx_region_defer_async(ASX_INVALID_ID, async_fin_poll, &f), ASX_OK);
+    /* The stack is full at its capacity. Its entries are never run: a
+     * resource class may have fewer tasks than the stack has entries. */
     for (i = 0; i < ASX_CLEANUP_STACK_CAPACITY; i++) {
         ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_OK);
     }
     ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_E_RESOURCE_EXHAUSTED);
+    ASSERT_EQ(asx_cleanup_async_pending(&g_regions[asx_handle_slot(rid)].cleanup),
+              (uint32_t)ASX_CLEANUP_STACK_CAPACITY);
     ASSERT_EQ(asx_region_close(rid), ASX_OK);
     ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_E_REGION_CLOSED);
+
+    /* A closed region refuses one too. */
+    ASSERT_EQ(asx_region_open(&rid), ASX_OK);
+    ASSERT_EQ(asx_region_close(rid), ASX_OK);
     budget = asx_budget_infinite();
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
-    ASSERT_EQ(f.polls, (int)ASX_CLEANUP_STACK_CAPACITY);
     ASSERT_EQ(asx_region_defer_async(rid, async_fin_poll, &f), ASX_E_REGION_CLOSED);
+    ASSERT_EQ(f.polls, 0);
 
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
     ASSERT_EQ(asx_region_poison(rid), ASX_OK);
@@ -869,14 +892,12 @@ TEST(finalizing_region_refuses_captured_task_spawn) {
 
 TEST(public_finalizer_captured_cleanup_executes_and_drops_once) {
     captured_cleanup_ctx ctx;
-    asx_cleanup_handle handle;
     asx_budget budget;
     asx_outcome outcome;
     asx_runtime_reset();
     memset(&ctx, 0, sizeof(ctx));
     ASSERT_EQ(asx_region_open(&ctx.spawn.region), ASX_OK);
-    ASSERT_EQ(asx_region_register_finalizer(ctx.spawn.region, finalizer_spawn_captured_cleanup,
-                                            &ctx, &handle),
+    ASSERT_EQ(asx_region_defer_sync(ctx.spawn.region, finalizer_spawn_captured_cleanup, &ctx),
               ASX_OK);
     budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_region_drain(ctx.spawn.region, &budget), ASX_E_QUIESCENCE_TASKS_LIVE);
@@ -1927,7 +1948,6 @@ TEST(public_finalizer_resolves_obligation_before_close_and_handles_reentrancy) {
     public_finalizer_ctx ctx;
     asx_region_id parent;
     asx_region_id child;
-    asx_cleanup_handle handle;
     asx_budget budget;
     asx_region_state state;
     int remaining_calls = 0;
@@ -1939,10 +1959,8 @@ TEST(public_finalizer_resolves_obligation_before_close_and_handles_reentrancy) {
     ASSERT_EQ(asx_region_open(&ctx.other), ASX_OK);
     ASSERT_EQ(asx_obligation_reserve(child, &ctx.obligation), ASX_OK);
     ctx.region = child;
-    ASSERT_EQ(asx_region_register_finalizer(child, cleanup_mark, &remaining_calls, &handle),
-              ASX_OK);
-    ASSERT_EQ(asx_region_register_finalizer(child, finalizer_resolve_and_drain, &ctx, &handle),
-              ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(child, cleanup_mark, &remaining_calls), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(child, finalizer_resolve_and_drain, &ctx), ASX_OK);
     budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_region_drain(parent, &budget), ASX_OK);
     ASSERT_EQ(ctx.commit, ASX_OK);
@@ -2050,35 +2068,78 @@ TEST(defer_sync_refuses_poisoned_region_without_registering_callback) {
     ASSERT_EQ(calls, 0);
 }
 
-TEST(public_finalizer_capacity_unregistration_and_errors) {
+TEST(public_finalizer_capacity_and_errors) {
     asx_region_id rid;
-    asx_cleanup_handle handle = ASX_CLEANUP_INVALID;
-    asx_cleanup_handle old_handle;
     asx_budget budget;
     uint32_t i;
     int calls = 0;
     asx_runtime_reset();
-    ASSERT_EQ(asx_region_register_finalizer(ASX_INVALID_ID, cleanup_mark, &calls, &handle),
-              ASX_E_NOT_FOUND);
+    ASSERT_EQ(asx_region_defer_sync(ASX_INVALID_ID, cleanup_mark, &calls), ASX_E_NOT_FOUND);
     ASSERT_EQ(asx_region_open(&rid), ASX_OK);
-    ASSERT_EQ(asx_region_register_finalizer(rid, NULL, &calls, &handle), ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_region_register_finalizer(rid, cleanup_mark, &calls, NULL),
-              ASX_E_INVALID_ARGUMENT);
-    ASSERT_EQ(asx_region_register_finalizer(rid, cleanup_mark, &calls, &old_handle), ASX_OK);
-    ASSERT_EQ(asx_region_unregister_finalizer(rid, old_handle), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(rid, NULL, &calls), ASX_E_INVALID_ARGUMENT);
     for (i = 0u; i < ASX_CLEANUP_STACK_CAPACITY; i++) {
-        ASSERT_EQ(asx_region_register_finalizer(rid, cleanup_mark, &calls, &handle), ASX_OK);
+        ASSERT_EQ(asx_region_defer_sync(rid, cleanup_mark, &calls), ASX_OK);
     }
-    ASSERT_EQ(asx_region_unregister_finalizer(rid, old_handle), ASX_E_NOT_FOUND);
-    ASSERT_EQ(asx_region_register_finalizer(rid, cleanup_mark, &calls, &handle),
-              ASX_E_RESOURCE_EXHAUSTED);
-    ASSERT_EQ(asx_region_unregister_finalizer(rid, handle), ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(rid, cleanup_mark, &calls), ASX_E_RESOURCE_EXHAUSTED);
     budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_region_drain(rid, &budget), ASX_OK);
-    ASSERT_EQ(calls, ASX_CLEANUP_STACK_CAPACITY - 1u);
-    ASSERT_EQ(asx_region_register_finalizer(rid, cleanup_mark, &calls, &handle),
-              ASX_E_REGION_CLOSED);
-    ASSERT_EQ(asx_region_unregister_finalizer(rid, handle), ASX_E_NOT_FOUND);
+    ASSERT_EQ(calls, (int)ASX_CLEANUP_STACK_CAPACITY);
+    ASSERT_EQ(asx_region_defer_sync(rid, cleanup_mark, &calls), ASX_E_REGION_CLOSED);
+}
+
+/* A task registering a finalizer, sync and async, on `target`. */
+typedef struct {
+    asx_region_id target;
+    asx_status sync_status;
+    asx_status async_status;
+    int calls;
+} register_from_task_ctx;
+
+static asx_status poll_register_finalizers(void *data, asx_task_id self) {
+    register_from_task_ctx *c = (register_from_task_ctx *)data;
+    (void)self;
+    c->sync_status = asx_region_defer_sync(c->target, cleanup_mark, &c->calls);
+    c->async_status = asx_region_defer_async(c->target, poll_complete, NULL);
+    return ASX_OK;
+}
+
+TEST(public_finalizer_registration_is_for_the_host_and_the_regions_own_tasks) {
+    /* Rust's Scope::defer_sync takes the region's own Scope and the runtime
+     * state: a task of another region cannot reach it, and a refusal leaves
+     * the stack as it was. */
+    asx_region_id mine;
+    asx_region_id other;
+    asx_task_id tid;
+    asx_region_slot *region = NULL;
+    asx_budget budget;
+    register_from_task_ctx foreign;
+    register_from_task_ctx own;
+
+    asx_runtime_reset();
+    memset(&foreign, 0, sizeof(foreign));
+    memset(&own, 0, sizeof(own));
+    ASSERT_EQ(asx_region_open(&mine), ASX_OK);
+    ASSERT_EQ(asx_region_open(&other), ASX_OK);
+    ASSERT_EQ(asx_region_slot_lookup(mine, &region), ASX_OK);
+    foreign.target = mine;
+    own.target = mine;
+    ASSERT_EQ(asx_task_spawn(other, poll_register_finalizers, &foreign, &tid), ASX_OK);
+    budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_scheduler_run(other, &budget), ASX_OK);
+    ASSERT_EQ(foreign.sync_status, ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(foreign.async_status, ASX_E_PERMISSION_DENIED);
+    ASSERT_EQ(asx_cleanup_pending(&region->cleanup), 0u);
+
+    ASSERT_EQ(asx_task_spawn(mine, poll_register_finalizers, &own, &tid), ASX_OK);
+    budget = asx_budget_from_polls(8u);
+    ASSERT_EQ(asx_scheduler_run(mine, &budget), ASX_OK);
+    ASSERT_EQ(own.sync_status, ASX_OK);
+    ASSERT_EQ(own.async_status, ASX_OK);
+    ASSERT_EQ(asx_cleanup_pending(&region->cleanup), 2u);
+    ASSERT_EQ(asx_cleanup_async_pending(&region->cleanup), 1u);
+
+    /* The host registers on any region it holds. */
+    ASSERT_EQ(asx_region_defer_sync(other, cleanup_mark, &own.calls), ASX_OK);
 }
 
 typedef struct {
@@ -2100,7 +2161,6 @@ TEST(public_finalizer_nested_cancel_preserves_outer_subtree) {
     asx_region_id first;
     asx_region_id second;
     asx_region_id other_children[2];
-    asx_cleanup_handle handle;
     uint32_t children = 0u;
     uint32_t i;
     asx_runtime_reset();
@@ -2121,8 +2181,7 @@ TEST(public_finalizer_nested_cancel_preserves_outer_subtree) {
     ctx.reason.origin_task = ASX_INVALID_ID;
     /* Cancel visits the last child first; its callback must not replace
      * the outer walk before the older sibling has been finalized. */
-    ASSERT_EQ(asx_region_register_finalizer(second, finalizer_cancel_other_tree, &ctx, &handle),
-              ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(second, finalizer_cancel_other_tree, &ctx), ASX_OK);
     ASSERT_EQ(asx_region_cancel(parent, &ctx.reason, NULL), ASX_OK);
     ASSERT_EQ(ctx.calls, 1);
     ASSERT_EQ(ctx.status, ASX_OK);
@@ -2166,7 +2225,6 @@ TEST(public_finalizer_recycled_sibling_does_not_extend_outer_drain) {
     finalizer_recycle_ctx ctx;
     asx_region_id parent, first, second, extra;
     asx_task_id second_task;
-    asx_cleanup_handle handle;
     asx_region_state state;
     asx_budget budget;
     asx_outcome outcome;
@@ -2185,9 +2243,7 @@ TEST(public_finalizer_recycled_sibling_does_not_extend_outer_drain) {
     /* The first task completes before its sibling. Retire its joinable
      * record in the sibling's finalizer, then recycle the closed region
      * for an unrelated root with live work while the outer scheduler runs. */
-    ASSERT_EQ(asx_region_register_finalizer(second, finalizer_recycle_closed_sibling, &ctx,
-                                            &handle),
-              ASX_OK);
+    ASSERT_EQ(asx_region_defer_sync(second, finalizer_recycle_closed_sibling, &ctx), ASX_OK);
     budget = asx_budget_from_polls(8u);
     ASSERT_EQ(asx_region_drain(parent, &budget), ASX_OK);
     ASSERT_EQ(ctx.join_status, ASX_OK);
@@ -2764,7 +2820,8 @@ int main(void) {
     RUN_TEST(region_leak_audit_waits_for_cleanup_task_resolution);
     RUN_TEST(region_leak_audit_runs_after_cleanup_task_leaves_obligation_reserved);
     RUN_TEST(defer_sync_refuses_poisoned_region_without_registering_callback);
-    RUN_TEST(public_finalizer_capacity_unregistration_and_errors);
+    RUN_TEST(public_finalizer_capacity_and_errors);
+    RUN_TEST(public_finalizer_registration_is_for_the_host_and_the_regions_own_tasks);
     RUN_TEST(public_finalizer_captured_cleanup_executes_and_drops_once);
     RUN_TEST(public_finalizer_nested_cancel_preserves_outer_subtree);
 #ifndef ASX_DEBUG_QUARANTINE

@@ -375,7 +375,7 @@ pub enum Finalizer {
 
 Correction to the earlier version: both kinds normally run as masked finalizer tasks. The scheduler pops the top entry and wraps a `Sync` finalizer in an async block (`drain_ready_async_finalizers_in`, `src/runtime/state.rs:8578-8651`, wrapping at `:8612`), then spawns it with `spawn_finalizer_task_in` (`:8857-9028`). Sync finalizers run inline only on the fallback path taken when a finalizer task cannot start (`drive_failed_start_async_finalizer_inline`, `:8664`, using `run_sync_finalizers_tracked`, `:9518`). The enum's doc comment ("runs directly on scheduler thread", `src/record/finalizer.rs:18`) is accurate only for that fallback path.
 
-**C status:** public synchronous region finalizers are implemented through `asx_region_register_finalizer` (`src/runtime/lifecycle.c:1189-1199`) and `asx_region_unregister_finalizer` (`src/runtime/lifecycle.c:1201-1206`); `asx_region_defer_sync` shares the registration checks (`src/runtime/quiescence.c:407-411`). They use the region's `asx_cleanup_stack` (`include/asx/core/cleanup.h:41-49`) and run inside `asx_region_finalize_one` (`src/runtime/quiescence.c:231-270`), before its leak-policy audit. User data is borrowed until the callback runs or is unregistered (`include/asx/runtime/runtime.h:144-160`). The Rust masked task and async finalizer contract remains unimplemented. DSL v2 has no finalizer op, so no Rust-captured fixture exercises these public APIs.
+**C status:** public synchronous region finalizers are implemented through `asx_region_defer_sync` (`src/runtime/quiescence.c`, the one registration of a sync finalizer, `bd-9kll.3.26`; the earlier `asx_region_register_finalizer` / `asx_region_unregister_finalizer` pair is gone, there being no Rust counterpart of taking an entry back). They use the region's `asx_cleanup_stack` (`include/asx/core/cleanup.h`) and run inside `asx_region_finalize_one` (`src/runtime/quiescence.c`), before its leak-policy audit. User data is borrowed until the callback runs. Async finalizers (`asx_region_defer_async`) run as the masked serialized cleanup tasks of section 6.3. A DSL v2 `regions[].finalizers` entry registers an async one; six scenarios await their Rust capture.
 
 ### 6.2 Execution Order
 
@@ -429,7 +429,7 @@ Correction: at `5e60b1c4c` this enum is stored in `FinalizerStack` (`src/record/
 
 Registration is rejected once the region has begun closing or is closed: `register_sync_finalizer` (`src/runtime/state.rs:9054-9060`) and `register_async_finalizer` (`:9107-9113`) return `false` when `is_closing() || is_terminal()`. `RegionRecord::add_finalizer` itself does not check the state (`src/record/region.rs:1525-1528`).
 
-**C status:** `asx_region_register_finalizer` rejects a poisoned region with `ASX_E_REGION_POISONED` and any state other than Open with `ASX_E_REGION_CLOSED` (`src/runtime/lifecycle.c:1189-1199`). `asx_region_defer_sync` delegates to that registration and preserves its errors (`src/runtime/quiescence.c:407-411`). The bounded stack rejects a null callback or output and reports capacity exhaustion. `asx_region_unregister_finalizer` (`src/runtime/lifecycle.c:1201-1206`) cancels a pending entry without running it, including during another callback; a consumed, removed or replaced handle returns `ASX_E_NOT_FOUND`. The lower-level `asx_cleanup_push` (`include/asx/core/cleanup.h:58-59`) operates on a stack and checks no region state. Test: `public_finalizer_capacity_unregistration_and_errors` in `tests/unit/runtime/test_quiescence.c`.
+**C status:** `asx_region_defer_sync` and `asx_region_defer_async` share one check (`asx_region_finalizer_target`, `src/runtime/quiescence.c`): the caller must be the host or a task of that region (`ASX_E_PERMISSION_DENIED` otherwise, stack unchanged; Rust's `Scope::defer_sync` takes the region's own `Scope` and the runtime state), a poisoned region gives `ASX_E_REGION_POISONED` and any state other than Open `ASX_E_REGION_CLOSED`. The bounded stack rejects a null callback and reports capacity exhaustion. The lower-level `asx_cleanup_push` (`include/asx/core/cleanup.h`) operates on a stack and checks no region state; `asx_cleanup_pop` takes an entry of a standalone stack back. Tests: `public_finalizer_capacity_and_errors` and `public_finalizer_registration_is_for_the_host_and_the_regions_own_tasks` in `tests/unit/runtime/test_quiescence.c`.
 
 ### 6.7 Finalizer-Spawned Tasks
 
@@ -471,8 +471,8 @@ Rust `Budget::combine_untraced` (`src/types/budget.rs:556-570`); `meet` is `comb
 This is a C design from the port plan (Section 6.8.D), not a Rust structure. The plan's four points and their status:
 
 1. "Every reserve/acquire registers a cleanup action at acquisition time": **not implemented.** `asx_obligation_reserve_impl` (`src/runtime/lifecycle.c:1787-1845`) registers none; per-task stacks do not exist (`include/asx/core/cleanup.h:8-9` defers them). Users may explicitly register region callbacks that resolve acquired obligations through the public API (section 6.1).
-2. "commit/abort pops entries": **not implemented** for obligations; `asx_cleanup_pop` exists (`include/asx/core/cleanup.h:64-65`), and `asx_region_unregister_finalizer` exposes removal of a pending region callback.
-3. "During finalization, unresolved entries are drained LIFO": **implemented** for the publicly registrable per-region stack (`src/runtime/quiescence.c:254`, `src/core/cleanup.c:94-113`), before its leak-policy audit. Applications register entries with `asx_region_register_finalizer` or `asx_region_defer_sync`, Rust's `Scope::defer_sync`, while the region is Open (`src/runtime/quiescence.c:379-383`). Rust's serialized masked async-finalizer barrier is not ported.
+2. "commit/abort pops entries": **not implemented** for obligations; `asx_cleanup_pop` exists (`include/asx/core/cleanup.h`) for a standalone stack; a region's finalizer cannot be taken back.
+3. "During finalization, unresolved entries are drained LIFO": **implemented** for the publicly registrable per-region stack (`src/runtime/quiescence.c:254`, `src/core/cleanup.c:94-113`), before its leak-policy audit. Applications register entries with `asx_region_defer_sync`, Rust's `Scope::defer_sync`, while the region is Open and from the host or a task of that region. Async entries (`asx_region_defer_async`) stop the drain and run as the serialized masked cleanup tasks of section 6.3.
 4. "Discarding a token without resolution triggers detection during region finalization": C detects it at holder completion or `asx_obligation_drop` (section 4.2), and at finalization the close audit handles what remains unresolved after callbacks and cleanup tasks finish (section 4.3).
 
 ### 7.4 Force-Completion
@@ -529,7 +529,7 @@ Rust admission (doc comment `src/record/region.rs:166-206`): (1) an atomic fast-
 | Create child task | `Open`; cleanup tasks also in `Finalizing` | normal spawn: `Open`; explicit cleanup spawn: `Open` and `Finalizing` (section 6.7) |
 | Create child region | `Open` only | `Open` only (`src/runtime/lifecycle.c:945`) |
 | Reserve obligation | `Open` only | `Open` only (`src/runtime/lifecycle.c:1809`); parity `obligation-reserve-closed-region-must-fail-001` (Closing) |
-| Register finalizer | `Open` only (section 6.6) | `Open` only through `asx_region_register_finalizer` (section 6.6) |
+| Register finalizer | `Open` only (section 6.6) | `Open` only through `asx_region_defer_sync` / `asx_region_defer_async`, from the host or a task of the region (section 6.6) |
 | Query status | Any | Any |
 | Region heap / arena | any state but `Closed` (`heap_alloc`) | captured spawn follows its normal or explicit cleanup predicate before allocating from the capture arena (`src/runtime/lifecycle.c:1482-1488`) |
 
@@ -768,7 +768,7 @@ None of the candidate fixture IDs below exists in the repository: none is `fixtu
 | `finalizer-006` | BoundedLog escalation (default) | Escalation policy | Not materialized; the policy is not wired at `5e60b1c4c` (section 6.5) |
 | `finalizer-007` | Soft escalation (wait indefinitely) | Escalation policy | Not materialized; as `finalizer-006` |
 | `finalizer-008` | BoundedPanic escalation | Escalation policy | Not materialized; as `finalizer-006` |
-| `finalizer-009` | Finalizer registration rejected after close | Admission gating | Not materialized; C unit tests `public_finalizer_capacity_unregistration_and_errors` and `defer_sync_refused_once_the_region_is_closing` check public registration after close |
+| `finalizer-009` | Finalizer registration rejected after close | Admission gating | Not materialized; C unit tests `public_finalizer_capacity_and_errors` and `defer_sync_refused_once_the_region_is_closing` check public registration after close |
 | `finalizer-010` | Finalizer spawns cleanup task | Task creation during Finalizing | Not materialized (C unit test `public_finalizer_cleanup_task_delays_close_until_it_completes`) |
 
 ### 14.5 Cleanup Budget Fixtures

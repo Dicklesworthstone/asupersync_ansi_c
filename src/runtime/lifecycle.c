@@ -1226,25 +1226,6 @@ asx_status asx_region_close_with_outcome(asx_region_id id, const asx_outcome *bo
     return ASX_E_INVALID_ARGUMENT;
 }
 
-asx_status asx_region_register_finalizer(asx_region_id id, asx_cleanup_fn fn, void *user_data,
-                                         asx_cleanup_handle *out_handle) {
-    asx_region_slot *r;
-    asx_status st;
-    if (fn == NULL || out_handle == NULL) return ASX_E_INVALID_ARGUMENT;
-    st = asx_region_slot_lookup(id, &r);
-    if (st != ASX_OK) return st;
-    if (r->poisoned) return ASX_E_REGION_POISONED;
-    if (r->state != ASX_REGION_OPEN) return ASX_E_REGION_CLOSED;
-    return asx_cleanup_push(&r->cleanup, fn, user_data, out_handle);
-}
-
-asx_status asx_region_unregister_finalizer(asx_region_id id, asx_cleanup_handle handle) {
-    asx_region_slot *r;
-    asx_status st = asx_region_slot_lookup(id, &r);
-    if (st != ASX_OK) return st;
-    return asx_cleanup_pop(&r->cleanup, handle);
-}
-
 asx_status asx_region_get_state(asx_region_id id, asx_region_state *out_state) {
     asx_region_slot *r;
     asx_status st;
